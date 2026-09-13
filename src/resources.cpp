@@ -1,4 +1,5 @@
 #include "resources.hpp"
+#include "checked_bounds.hpp"
 
 #include <algorithm>
 #include <array>
@@ -24,15 +25,15 @@ std::optional<ImagePixels> decodePngFromMemory(const void* data, std::size_t siz
   image.version = PNG_IMAGE_VERSION;
   if (!png_image_begin_read_from_memory(&image, data, size)) return std::nullopt;
   image.format = PNG_FORMAT_RGBA;
-  if (image.width == 0 || image.height == 0 || image.width > 8192 ||
-      image.height > 8192) {
+  const auto extent = checkedImageExtent(static_cast<int>(image.width), static_cast<int>(image.height));
+  if (!extent) {
     png_image_free(&image);
     return std::nullopt;
   }
   ImagePixels result;
-  result.width = static_cast<int>(image.width);
-  result.height = static_cast<int>(image.height);
-  result.rgba.resize(PNG_IMAGE_SIZE(image));
+  result.width = extent->width;
+  result.height = extent->height;
+  result.rgba.resize(extent->rgbaBytes);
   if (!png_image_finish_read(&image, nullptr, result.rgba.data(), 0, nullptr)) {
     png_image_free(&image);
     return std::nullopt;
@@ -65,17 +66,21 @@ std::optional<ImagePixels> decodeJpegFromMemory(const void* data, std::size_t si
   }
   jpeg_create_decompress(&decoder);
   jpeg_mem_src(&decoder, static_cast<const unsigned char*>(data), size);
-  if (jpeg_read_header(&decoder, TRUE) != JPEG_HEADER_OK ||
-      decoder.image_width == 0 || decoder.image_height == 0 ||
-      decoder.image_width > 8192 || decoder.image_height > 8192) {
+  if (jpeg_read_header(&decoder, TRUE) != JPEG_HEADER_OK) {
+    jpeg_destroy_decompress(&decoder);
+    return std::nullopt;
+  }
+  const auto extent = checkedImageExtent(
+      static_cast<int>(decoder.image_width),
+      static_cast<int>(decoder.image_height));
+  if (!extent) {
     jpeg_destroy_decompress(&decoder);
     return std::nullopt;
   }
   decoder.out_color_space = JCS_RGB;
   jpeg_start_decompress(&decoder);
-  const std::size_t width = decoder.output_width;
-  const std::size_t height = decoder.output_height;
-  const std::size_t rgbBytes = width * height * 3U;
+  const std::size_t width = static_cast<std::size_t>(extent->width);
+  const std::size_t rgbBytes = extent->rgbBytes;
   raw = static_cast<std::uint8_t*>(std::malloc(rgbBytes));
   if (!raw) {
     jpeg_destroy_decompress(&decoder);
@@ -89,9 +94,9 @@ std::optional<ImagePixels> decodeJpegFromMemory(const void* data, std::size_t si
   jpeg_destroy_decompress(&decoder);
 
   ImagePixels result;
-  result.width = static_cast<int>(width);
-  result.height = static_cast<int>(height);
-  result.rgba.resize(width * height * 4U);
+  result.width = extent->width;
+  result.height = extent->height;
+  result.rgba.resize(extent->rgbaBytes);
   for (std::size_t source = 0, destination = 0; source < rgbBytes;
        source += 3U, destination += 4U) {
     result.rgba[destination] = raw[source];
@@ -116,14 +121,19 @@ std::optional<ImagePixels> decodeMemory(const void* data, std::size_t size) {
 }
 
 std::optional<ImagePixels> decodeImage(const std::filesystem::path& path) {
-  std::ifstream file(path, std::ios::binary | std::ios::ate);
-  if (!file.is_open()) return std::nullopt;
-  const auto size = file.tellg();
-  if (size <= 0) return std::nullopt;
-  file.seekg(0, std::ios::beg);
-  std::vector<std::uint8_t> buffer(static_cast<std::size_t>(size));
-  if (!file.read(reinterpret_cast<char*>(buffer.data()), size)) return std::nullopt;
-  return decodeMemory(buffer.data(), buffer.size());
+  try {
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file.is_open()) return std::nullopt;
+    const auto size = file.tellg();
+    constexpr std::streamoff kMaxImageFileSize = 64 * 1024 * 1024;
+    if (size <= 0 || size > kMaxImageFileSize) return std::nullopt;
+    file.seekg(0, std::ios::beg);
+    std::vector<std::uint8_t> buffer(static_cast<std::size_t>(size));
+    if (!file.read(reinterpret_cast<char*>(buffer.data()), size)) return std::nullopt;
+    return decodeMemory(buffer.data(), buffer.size());
+  } catch (...) {
+    return std::nullopt;
+  }
 }
 }
 
@@ -131,6 +141,22 @@ ImageStore::~ImageStore() {
   for (auto& slot : slots_) {
     if (slot.live) glDeleteTextures(1, &slot.texture);
   }
+}
+
+ImageHandle ImageStore::fallbackHandle() {
+  if (fallbackHandle_ != 0 && lookup(fallbackHandle_)) return fallbackHandle_;
+  std::array<std::uint32_t, 16> checkerboard{};
+  for (int y = 0; y < 4; ++y) {
+    for (int x = 0; x < 4; ++x) {
+      const bool magenta = ((x ^ y) & 1) != 0;
+      checkerboard[static_cast<std::size_t>(y * 4 + x)] = magenta ? 0xffff00ffU : 0xff000000U;
+    }
+  }
+  auto created = createRgba(4, 4, checkerboard.data());
+  if (!created) return 0;
+  pin(created->handle);
+  fallbackHandle_ = created->handle;
+  return fallbackHandle_;
 }
 
 std::optional<ImagePixels> ImageStore::decodeMemory(const void* data, std::size_t size) {
@@ -235,7 +261,8 @@ const ImagePixels* ImageStore::readPixels(ImageHandle handle) const {
 
 std::optional<ImageInfo> ImageStore::createRgba(int width, int height,
                                                  const void* pixels) {
-  if (width <= 0 || height <= 0) return std::nullopt;
+  const auto extent = checkedImageExtent(width, height);
+  if (!extent) return std::nullopt;
   GLuint texture = 0;
   while (glGetError() != GL_NO_ERROR) {}
   glGenTextures(1, &texture);
@@ -273,7 +300,7 @@ std::optional<ImageInfo> ImageStore::createRgba(int width, int height,
   slot.cachedPixels.reset();
   slot.live = true;
   ++liveCount_;
-  gpuBytes_ += static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4U;
+  gpuBytes_ += extent->rgbaBytes;
   peakGpuBytes_ = std::max(peakGpuBytes_, gpuBytes_);
   return ImageInfo{makeHandle(index, slot.generation), width, height, texture};
 }
@@ -453,6 +480,7 @@ void ImageStore::destroySlot(std::size_t index) {
 }
 
 bool ImageStore::release(ImageHandle handle) {
+  if (fallbackHandle_ != 0 && handle == fallbackHandle_) return true;
   const auto info = lookup(handle);
   if (!info) return false;
   const std::size_t index = (handle & indexMask) - 1U;

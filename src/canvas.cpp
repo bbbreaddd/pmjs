@@ -1,4 +1,5 @@
 #include "canvas.hpp"
+#include "checked_bounds.hpp"
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -108,7 +109,7 @@ struct CanvasStore::FontState {
   }
 
   FT_Face face(const std::filesystem::path& path, int pixelSize) {
-    if (!library || pixelSize <= 0) return nullptr;
+    if (!library || pixelSize <= 0 || pixelSize > 256) return nullptr;
     const std::string key = path.string() + '\n' + std::to_string(pixelSize);
     if (const auto found = faces.find(key); found != faces.end()) return found->second;
     FT_Face created = nullptr;
@@ -125,7 +126,7 @@ struct CanvasStore::FontState {
                                     int pixelSize,
                                     char32_t codepoint,
                                     int strokeWidth) {
-    if (pixelSize <= 0 || strokeWidth < 0 || strokeWidth > 32) return nullptr;
+    if (pixelSize <= 0 || pixelSize > 256 || strokeWidth < 0 || strokeWidth > 32) return nullptr;
     const std::string fontKey = path.string() + '\n' + std::to_string(pixelSize);
     GlyphKey key{fontKey, codepoint, strokeWidth};
 
@@ -496,7 +497,8 @@ const CanvasStore::Surface* CanvasStore::lookup(CanvasHandle handle) const {
 }
 
 std::optional<CanvasInfo> CanvasStore::create(int width, int height) {
-  if (width <= 0 || height <= 0 || width > 8192 || height > 8192) return std::nullopt;
+  const auto extent = checkedImageExtent(width, height);
+  if (!extent) return std::nullopt;
   std::size_t index = 0;
   while (index < surfaces_.size() && surfaces_[index].live) ++index;
   if (index >= indexMask) return std::nullopt;
@@ -518,10 +520,8 @@ std::optional<CanvasInfo> CanvasStore::create(int width, int height) {
 
 std::optional<CanvasInfo> CanvasStore::createRgba(
     int width, int height, std::vector<std::uint8_t> pixels) {
-  const std::size_t expected = static_cast<std::size_t>(width) *
-                               static_cast<std::size_t>(height) * 4U;
-  if (width <= 0 || height <= 0 || width > 8192 || height > 8192 ||
-      pixels.size() != expected) return std::nullopt;
+  const auto extent = checkedImageExtent(width, height);
+  if (!extent || pixels.size() != extent->rgbaBytes) return std::nullopt;
   const auto image = images_.createRgba(width, height, pixels.data());
   if (!image) return std::nullopt;
   std::size_t index = 0;
@@ -788,16 +788,17 @@ std::optional<ImagePixels> CanvasStore::readPixels(CanvasHandle handle, int x,
                                                    int y, int width,
                                                    int height) {
   auto* surface = lookup(handle);
-  if (!surface || width <= 0 || height <= 0 || width > 8192 || height > 8192) {
+  const auto extent = checkedImageExtent(width, height);
+  if (!surface || !extent) {
     return std::nullopt;
   }
   if (surface->state == SurfaceState::Deferred && !realizeSurface(*surface)) {
     return std::nullopt;
   }
   ImagePixels result;
-  result.width = width;
-  result.height = height;
-  result.rgba.resize(static_cast<std::size_t>(width) * height * 4U);
+  result.width = extent->width;
+  result.height = extent->height;
+  result.rgba.resize(extent->rgbaBytes);
   for (int row = 0; row < height; ++row) {
     const int sourceY = y + row;
     if (sourceY < 0 || sourceY >= surface->height) continue;

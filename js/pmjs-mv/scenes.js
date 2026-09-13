@@ -39,6 +39,24 @@ if (typeof SceneManager !== 'undefined' && !SceneManager._pmjsFullPatched) {
         manager._stack.indexOf(retained.constructor) !== -1);
     }
 
+    function pmjsValidateRetainedSceneResume(manager, retained) {
+      if (!retained || typeof retained !== 'object') return false;
+      if (typeof Scene_Map !== 'undefined' && retained instanceof Scene_Map) {
+        if (retained._transfer && typeof $gamePlayer !== 'undefined' &&
+            $gamePlayer && typeof $gamePlayer.isTransferring === 'function' &&
+            !$gamePlayer.isTransferring()) {
+          try {
+            if (typeof nativeCompatibilityHit === 'function') {
+              nativeCompatibilityHit('scene.resume.stale_transfer',
+                'map=' + (typeof $gameMap !== 'undefined' && $gameMap && typeof $gameMap.mapId === 'function' ? $gameMap.mapId() : 0));
+            }
+          } catch (_) {}
+          return false;
+        }
+      }
+      return true;
+    }
+
     var _origGoto = SceneManager.goto;
     SceneManager.goto = function(sceneClass) {
       // A submenu push delegates through goto after placing the retained map's
@@ -164,6 +182,11 @@ if (typeof SceneManager !== 'undefined' && !SceneManager._pmjsFullPatched) {
         var retained = this._pmjsRetainedScene || this._pmjsRetainedMap;
         if (this._stack.length > 0 && retained &&
             this._stack[this._stack.length - 1] === retained.constructor) {
+          if (!pmjsValidateRetainedSceneResume(this, retained)) {
+            this._pmjsRetainedScene = null;
+            this._pmjsRetainedMap = null;
+            return _origPop.apply(this, arguments);
+          }
           this._pmjsRetainedScene = null;
           this._pmjsRetainedMap = null;
           this._stack.pop();

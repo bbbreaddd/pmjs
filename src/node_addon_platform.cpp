@@ -67,7 +67,13 @@ napi_value inputPressed(napi_env env, napi_callback_info info) try {
 
 napi_value inputState(napi_env env, napi_callback_info) try {
   return uint32(env, host(env).core.inputState());
-} catch (...) { return nullptr; }
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what());
+  return nullptr;
+} catch (...) {
+  napi_throw_error(env, nullptr, "inputState failed");
+  return nullptr;
+}
 
 napi_value injectInput(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info, 1);

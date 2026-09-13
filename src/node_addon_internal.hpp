@@ -27,10 +27,10 @@ namespace pmjs::addon {
 
 struct AsyncImageLoad;
 struct State {
-  State(const std::string& root, int width, int height,
+  State(const std::string& root, int initWidth, int initHeight,
         const std::string& assetRoot, const std::string& windowTitle,
         std::size_t imageWarmCacheBytes)
-      : core(root, width, height, windowTitle),
+      : core(root, initWidth, initHeight, windowTitle),
         width(core.width()), height(core.height()), platform(core.platform()),
         images(core.images()), canvases(core.canvases()),
         renderer(core.renderer()), vfs(core.vfs()) {
@@ -48,8 +48,8 @@ struct State {
       condition.notify_one();
       if (worker.joinable()) worker.join();
     }
-    void request(double timestamp) {
-      { std::lock_guard lock(mutex); requested = timestamp; }
+    void request(double targetTime) {
+      { std::lock_guard lock(mutex); requested = targetTime; }
       condition.notify_one();
     }
     std::optional<pmjs::VideoFrame> take() {
@@ -59,15 +59,15 @@ struct State {
     }
     void run() {
       while (true) {
-        double timestamp = 0;
+        double frameTimestamp = 0;
         {
           std::unique_lock lock(mutex);
           condition.wait(lock, [this] { return shuttingDown || requested.has_value(); });
           if (shuttingDown) return;
-          timestamp = *requested; requested.reset();
+          frameTimestamp = *requested; requested.reset();
         }
         std::string error;
-        auto frame = decoder->frame(timestamp, &error);
+        auto frame = decoder->frame(frameTimestamp, &error);
         if (!frame) {
           if (!error.empty()) std::cerr << "[pmjs-media] video decoder error: "
                                         << error << '\n';

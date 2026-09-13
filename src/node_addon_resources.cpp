@@ -36,9 +36,13 @@ struct AsyncImageLoad {
   std::optional<pmjs::ImagePixels> pixels;
 };
 
-void executeImageLoad(napi_env, void* opaque) {
+void executeImageLoad(napi_env, void* opaque) noexcept {
   auto* load = static_cast<AsyncImageLoad*>(opaque);
-  load->pixels = pmjs::ImageStore::decodeFile(load->path);
+  try {
+    load->pixels = pmjs::ImageStore::decodeFile(load->path);
+  } catch (...) {
+    load->pixels = std::nullopt;
+  }
 }
 
 void completeImageLoad(napi_env env, napi_status status, void* opaque) {

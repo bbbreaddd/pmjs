@@ -1,4 +1,5 @@
 #include "media_decoder.hpp"
+#include "checked_bounds.hpp"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -86,6 +87,16 @@ std::pair<int, Codec> decoder(AVFormatContext* format, AVMediaType type,
     return {-1, Codec{nullptr}};
   }
   return {index, std::move(context)};
+}
+
+bool timeToStreamTimestamp(double timestamp, AVRational timeBase, std::int64_t* outTarget) {
+  if (!std::isfinite(timestamp) || timestamp < 0.0) return false;
+  const double tb = av_q2d(timeBase);
+  if (tb <= 0.0 || !std::isfinite(tb)) return false;
+  const double rawTarget = timestamp / tb;
+  if (!std::isfinite(rawTarget) || rawTarget > 9e18) return false;
+  *outTarget = static_cast<std::int64_t>(rawTarget);
+  return true;
 }
 
 std::optional<std::uint64_t> metadataNumber(AVDictionary* first,
@@ -246,7 +257,11 @@ struct VideoDecoderSession::Impl {
   }
 
   bool seek(double timestamp, std::string* error) {
-    const auto target = static_cast<std::int64_t>(timestamp / av_q2d(stream->time_base));
+    std::int64_t target = 0;
+    if (!timeToStreamTimestamp(timestamp, stream->time_base, &target)) {
+      fail(error, "invalid seek timestamp or stream time base");
+      return false;
+    }
     const int result = av_seek_frame(format.get(), streamIndex, target,
                                      AVSEEK_FLAG_BACKWARD);
     if (result < 0) { fail(error, "video seek failed: " + ffError(result)); return false; }
@@ -264,7 +279,12 @@ struct VideoDecoderSession::Impl {
         const double timestamp = best == AV_NOPTS_VALUE ? 0.0
           : best * av_q2d(stream->time_base);
         lastTimestamp = timestamp;
-        const int width = decoded->width, height = decoded->height;
+        const auto extent = checkedImageExtent(decoded->width, decoded->height, 8192, 128 * 1024 * 1024);
+        if (!extent) {
+          fail(error, "invalid video frame dimensions");
+          return std::nullopt;
+        }
+        const int width = extent->width, height = extent->height;
         if (!scaler || scalerWidth != width || scalerHeight != height ||
             scalerFormat != decoded->format) {
           scaler.reset(sws_getContext(width, height,
@@ -367,7 +387,11 @@ struct AudioDecoderSession::Impl {
   }
 
   bool seek(double timestamp, std::string* error) {
-    const auto target = static_cast<std::int64_t>(timestamp / av_q2d(stream->time_base));
+    std::int64_t target = 0;
+    if (!timeToStreamTimestamp(timestamp, stream->time_base, &target)) {
+      fail(error, "invalid seek timestamp or stream time base");
+      return false;
+    }
     const int result = av_seek_frame(format.get(), streamIndex, target,
                                      AVSEEK_FLAG_BACKWARD);
     if (result < 0) { fail(error, "audio seek failed: " + ffError(result)); return false; }
@@ -491,7 +515,11 @@ std::optional<VideoFrame> MediaDecoder::decodeVideoFrame(
   if (!codec) return std::nullopt;
   auto* stream = format->streams[streamIndex];
   if (timestamp > 0.0) {
-    const std::int64_t target = static_cast<std::int64_t>(timestamp / av_q2d(stream->time_base));
+    std::int64_t target = 0;
+    if (!timeToStreamTimestamp(timestamp, stream->time_base, &target)) {
+      fail(error, "invalid seek timestamp or stream time base");
+      return std::nullopt;
+    }
     const int seek = av_seek_frame(format.get(), streamIndex, target, AVSEEK_FLAG_BACKWARD);
     if (seek < 0) { fail(error, "video seek failed: " + ffError(seek)); return std::nullopt; }
     avcodec_flush_buffers(codec.get());
@@ -507,8 +535,13 @@ std::optional<VideoFrame> MediaDecoder::decodeVideoFrame(
           const auto best = frame->best_effort_timestamp;
           const double frameTime = best == AV_NOPTS_VALUE ? 0.0 : best * av_q2d(stream->time_base);
           if (frameTime + 0.000001 < timestamp) continue;
-          VideoFrame output{codec->width, codec->height, frameTime, {}};
-          output.rgba.resize(static_cast<std::size_t>(output.width) * output.height * 4U);
+          const auto extent = checkedImageExtent(codec->width, codec->height, 8192, 128 * 1024 * 1024);
+          if (!extent) {
+            fail(error, "invalid video frame dimensions");
+            return std::nullopt;
+          }
+          VideoFrame output{extent->width, extent->height, frameTime, {}};
+          output.rgba.resize(extent->rgbaBytes);
           Sws scaler(sws_getContext(output.width, output.height, codec->pix_fmt,
             output.width, output.height, AV_PIX_FMT_RGBA, SWS_BILINEAR,
             nullptr, nullptr, nullptr), sws_freeContext);

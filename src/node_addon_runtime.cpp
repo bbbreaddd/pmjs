@@ -52,17 +52,35 @@ napi_value initialize(napi_env env, napi_callback_info info) try {
 
 napi_value pollEvents(napi_env env, napi_callback_info) try {
   return boolean(env, host(env).core.pollEvents());
-} catch (...) { return nullptr; }
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what());
+  return nullptr;
+} catch (...) {
+  napi_throw_error(env, nullptr, "pollEvents failed");
+  return nullptr;
+}
 
 napi_value finishLogicStep(napi_env env, napi_callback_info) try {
   host(env).platform.finishLogicStep();
   return undefined(env);
-} catch (...) { return nullptr; }
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what());
+  return nullptr;
+} catch (...) {
+  napi_throw_error(env, nullptr, "finishLogicStep failed");
+  return nullptr;
+}
 
 napi_value monotonicNow(napi_env env, napi_callback_info) try {
   const auto now = std::chrono::steady_clock::now().time_since_epoch();
   return number(env, std::chrono::duration<double, std::milli>(now).count());
-} catch (...) { return nullptr; }
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what());
+  return nullptr;
+} catch (...) {
+  napi_throw_error(env, nullptr, "monotonicNow failed");
+  return nullptr;
+}
 
 napi_value windowState(napi_env env, napi_callback_info) try {
   const auto& platform = host(env).platform;
@@ -73,7 +91,13 @@ napi_value windowState(napi_env env, napi_callback_info) try {
   check(env, napi_set_named_property(env, result, "visible",
     boolean(env, platform.windowVisible())), "cannot set window visibility state");
   return result;
-} catch (...) { return nullptr; }
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what());
+  return nullptr;
+} catch (...) {
+  napi_throw_error(env, nullptr, "windowState failed");
+  return nullptr;
+}
 
 napi_value presentation(napi_env env, napi_callback_info) try {
   State& value = host(env);
@@ -109,7 +133,13 @@ napi_value waitUntil(napi_env env, napi_callback_info info) try {
 napi_value beginFrame(napi_env env, napi_callback_info) try {
   host(env).renderer.beginFrame();
   return undefined(env);
-} catch (...) { return nullptr; }
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what());
+  return nullptr;
+} catch (...) {
+  napi_throw_error(env, nullptr, "beginFrame failed");
+  return nullptr;
+}
 
 napi_value present(napi_env env, napi_callback_info) try {
   State& value = host(env);
@@ -118,7 +148,13 @@ napi_value present(napi_env env, napi_callback_info) try {
   value.platform.swap();
   syncExternalMemory(env);
   return undefined(env);
-} catch (...) { return nullptr; }
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what());
+  return nullptr;
+} catch (...) {
+  napi_throw_error(env, nullptr, "present failed");
+  return nullptr;
+}
 
 napi_value renderFrame(napi_env env, napi_callback_info) try {
   State& value = host(env);
@@ -126,17 +162,35 @@ napi_value renderFrame(napi_env env, napi_callback_info) try {
   value.renderer.render();
   syncExternalMemory(env);
   return undefined(env);
-} catch (...) { return nullptr; }
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what());
+  return nullptr;
+} catch (...) {
+  napi_throw_error(env, nullptr, "renderFrame failed");
+  return nullptr;
+}
 
 napi_value swapFrame(napi_env env, napi_callback_info) try {
   host(env).platform.swap();
   return undefined(env);
-} catch (...) { return nullptr; }
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what());
+  return nullptr;
+} catch (...) {
+  napi_throw_error(env, nullptr, "swapFrame failed");
+  return nullptr;
+}
 
 napi_value finishGpuWork(napi_env env, napi_callback_info) try {
   host(env).platform.finishGpuWork();
   return undefined(env);
-} catch (...) { return nullptr; }
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what());
+  return nullptr;
+} catch (...) {
+  napi_throw_error(env, nullptr, "finishGpuWork failed");
+  return nullptr;
+}
 
 napi_value rendererStats(napi_env env, napi_callback_info) try {
   const auto& stats = host(env).renderer.stats();
@@ -220,7 +274,13 @@ napi_value rendererStats(napi_env env, napi_callback_info) try {
 napi_value quit(napi_env env, napi_callback_info) try {
   host(env).core.requestQuit();
   return undefined(env);
-} catch (...) { return nullptr; }
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what());
+  return nullptr;
+} catch (...) {
+  napi_throw_error(env, nullptr, "quit failed");
+  return nullptr;
+}
 
 napi_value environment(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 1);

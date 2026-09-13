@@ -183,7 +183,8 @@ bool Renderer::queueTiled(ImageHandle image,
 }
 
 std::uint32_t Renderer::createTileLayer(std::vector<TileLayerTile> tiles) {
-  if (tiles.empty()) return 0;
+  constexpr std::size_t kMaxTileCount = 65536U;
+  if (tiles.empty() || tiles.size() > kMaxTileCount) return 0;
   TileLayerResource layer;
   std::unordered_set<ImageHandle> uniqueImages;
   for (const auto& tile : tiles) {
@@ -202,7 +203,10 @@ std::uint32_t Renderer::createTileLayer(std::vector<TileLayerTile> tiles) {
   vertices.reserve(tiles.size() * 36U);
   for (const auto& tile : tiles) {
     const auto image = images_.lookup(tile.image);
-    if (!image) return 0;
+    if (!image) {
+      for (const auto retained : layer.images) images_.release(retained);
+      return 0;
+    }
     const float left = tile.position[0];
     const float top = tile.position[1];
     const float right = left + tile.source[2];
@@ -257,7 +261,8 @@ std::uint32_t Renderer::createMesh(
     bool triangleStrip) {
   const auto info = images_.lookup(image);
   if (!info || positions.size() < 6 || positions.size() % 2 != 0 ||
-      uvs.size() != positions.size() || indices.size() < 3) return 0;
+      uvs.size() != positions.size() || indices.size() < 3 ||
+      indices.size() > 65536U || positions.size() > 131072U) return 0;
   TileLayerResource mesh;
   if (!images_.retain(image)) return 0;
   mesh.images.push_back(image);

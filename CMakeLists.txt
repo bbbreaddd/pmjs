@@ -38,9 +38,17 @@ set(PMJS_RUNTIME_SOURCES
   src/media_decoder.cpp
   src/media_service.cpp)
 
+option(PMJS_ENABLE_WERROR "Treat compiler warnings as errors" OFF)
+option(PMJS_ENABLE_SANITIZERS "Build with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+
+set(PMJS_BASE_COMPILE_OPTIONS -Wall -Wextra -Wpedantic -Wshadow)
+if(PMJS_ENABLE_WERROR)
+  list(APPEND PMJS_BASE_COMPILE_OPTIONS -Werror)
+endif()
+
 add_library(pmjs_runtime STATIC ${PMJS_RUNTIME_SOURCES})
 target_include_directories(pmjs_runtime PUBLIC src)
-target_compile_options(pmjs_runtime PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(pmjs_runtime PRIVATE ${PMJS_BASE_COMPILE_OPTIONS})
 target_link_libraries(pmjs_runtime PUBLIC ${PMJS_PLATFORM_LIBS} PkgConfig::PNG
   PkgConfig::JPEG PkgConfig::FREETYPE ${PMJS_MEDIA_LIBS} m dl pthread)
 
@@ -58,9 +66,17 @@ add_library(pmjs_native MODULE
 target_include_directories(pmjs_native PRIVATE src)
 target_include_directories(pmjs_native SYSTEM PRIVATE "${PMJS_NODE_API_HEADERS}")
 target_compile_definitions(pmjs_native PRIVATE NODE_GYP_MODULE_NAME=pmjs_native NAPI_VERSION=8)
-target_compile_options(pmjs_native PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(pmjs_native PRIVATE ${PMJS_BASE_COMPILE_OPTIONS})
 target_link_libraries(pmjs_native PRIVATE pmjs_runtime)
 set_target_properties(pmjs_native PROPERTIES PREFIX "" SUFFIX ".node")
+
+if(PMJS_ENABLE_SANITIZERS)
+  set(PMJS_SANITIZER_FLAGS -fsanitize=address,undefined -fno-omit-frame-pointer)
+  target_compile_options(pmjs_runtime PRIVATE ${PMJS_SANITIZER_FLAGS})
+  target_link_options(pmjs_runtime PUBLIC ${PMJS_SANITIZER_FLAGS})
+  target_compile_options(pmjs_native PRIVATE ${PMJS_SANITIZER_FLAGS})
+  target_link_options(pmjs_native PUBLIC ${PMJS_SANITIZER_FLAGS})
+endif()
 
 include(CTest)
 if(BUILD_TESTING)
@@ -76,6 +92,7 @@ if(BUILD_TESTING)
   endfunction()
 
   pmjs_add_cpp_test(pmjs-vfs-test native-vfs test/vfs.cpp src/vfs.cpp)
+  pmjs_add_cpp_test(pmjs-checked-bounds-test native-checked-bounds test/checked-bounds.cpp)
   pmjs_add_cpp_test(pmjs-media-mix-test native-audio-mix-unit test/media-mix.cpp)
   add_executable(pmjs-platform-input-test test/platform-input.cpp src/platform.cpp)
   target_include_directories(pmjs-platform-input-test PRIVATE src)
@@ -94,6 +111,7 @@ if(BUILD_TESTING)
     add_test(NAME "js-${PMJS_TEST_NAME}" COMMAND ${NODE_EXECUTABLE} --test
       "${CMAKE_CURRENT_SOURCE_DIR}/${PMJS_JS_TEST}")
   endforeach()
+  file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   execute_process(COMMAND ${BASE64_EXECUTABLE} -d INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/fixture.png.b64" OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture.png" COMMAND_ERROR_IS_FATAL ANY)
   execute_process(COMMAND ${BASE64_EXECUTABLE} -d INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/fixture.jpg.b64" OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture.jpg" COMMAND_ERROR_IS_FATAL ANY)
   configure_file("${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture.png" "${CMAKE_CURRENT_BINARY_DIR}/test-assets/lease.png" COPYONLY)
