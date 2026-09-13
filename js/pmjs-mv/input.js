@@ -52,35 +52,6 @@ Input.update = function() {
   originalInputUpdate.call(this);
 };
 
-// Touch host bridge: synthesize TouchInput state from the same logical input
-// surface so menus and message windows remain touch-capable without DOM.
-if (typeof TouchInput !== 'undefined' && typeof TouchInput.update === 'function') {
-  var originalTouchUpdate = TouchInput.update;
-  var touchInjected = false;
-  // Native host does not yet expose absolute touch coordinates; keep pressure
-  // state in sync with the generic 'ok' action so press/click still triggers
-  // TouchInput._onTrigger/_onRelease paths for plugins that poll isPressed.
-  TouchInput.update = function() {
-    var pressed = false;
-    try { pressed = NativeHost.input.down('ok'); } catch (_) {}
-    if (pressed && !touchInjected) {
-      if (!this._screenPressed) {
-        this._screenPressed = true;
-        this._pressedTime = 0;
-        if (typeof this._onTrigger === 'function') this._onTrigger(0, 0);
-      }
-      touchInjected = true;
-    } else if (!pressed && touchInjected) {
-      if (this._screenPressed) {
-        this._screenPressed = false;
-        if (typeof this._onRelease === 'function') this._onRelease(0, 0);
-      }
-      touchInjected = false;
-    }
-    return originalTouchUpdate.call(this);
-  };
-}
-
 if (typeof WindowLayer !== 'undefined' &&
     WindowLayer.prototype && !WindowLayer.prototype._pmjsPatched) {
   var originalWindowLayerInitialize = WindowLayer.prototype.initialize;
