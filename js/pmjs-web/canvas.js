@@ -97,7 +97,7 @@ function canvasSourcePixels(source, nativeSource, operationId) {
     });
     return imagePixels;
   } finally {
-    NativeHost.canvas.release(temporary.handle);
+    releaseNativeResource(temporary, 'canvas');
   }
 }
 
@@ -459,11 +459,35 @@ function nativeCompatibilityHit(capability, detail) {
   }
 }
 
+// Release counters by cause. `sceneLifecycle` must stay zero: scene
+// termination must never release a canvas that outlived objects may use.
+var nativeCanvasReleaseStats = { explicit: 0, finalizer: 0, sceneLifecycle: 0 };
+function noteCanvasRelease(reason) {
+  try {
+    if (reason === 'explicit') nativeCanvasReleaseStats.explicit++;
+    else if (reason === 'finalizer') nativeCanvasReleaseStats.finalizer++;
+    else if (reason === 'scene-lifecycle') {
+      nativeCanvasReleaseStats.sceneLifecycle++;
+      try {
+        nativeCompatibilityHit('canvas.release.sceneLifecycle',
+          'total=' + nativeCanvasReleaseStats.sceneLifecycle);
+      } catch (_) {}
+      try {
+        if (typeof console !== 'undefined' && console.warn) {
+          console.warn('[pmjs] canvas released by scene lifecycle (ownership violation risk)');
+        }
+      } catch (_) {}
+    }
+  } catch (_) {}
+}
 var nativeResourceFinalizer = typeof FinalizationRegistry === 'function'
   ? new FinalizationRegistry(function(resource) {
       try {
         if (resource.kind === 'image') NativeHost.images.release(resource.handle);
-        else if (resource.kind === 'canvas') NativeHost.canvas.release(resource.handle);
+        else if (resource.kind === 'canvas') {
+          noteCanvasRelease('finalizer');
+          NativeHost.canvas.release(resource.handle);
+        }
       } catch (_) {}
     })
   : null;
@@ -478,8 +502,16 @@ function releaseNativeResource(resource, kind) {
   if (!resource) return;
   if (nativeResourceFinalizer) nativeResourceFinalizer.unregister(resource);
   if (kind === 'image') NativeHost.images.release(resource.handle);
-  else if (kind === 'canvas') NativeHost.canvas.release(resource.handle);
+  else if (kind === 'canvas') {
+    noteCanvasRelease('explicit');
+    NativeHost.canvas.release(resource.handle);
+  }
 }
+globalThis.__pmjsCanvasReleaseStats = function() {
+  return { explicit: nativeCanvasReleaseStats.explicit,
+    finalizer: nativeCanvasReleaseStats.finalizer,
+    sceneLifecycle: nativeCanvasReleaseStats.sceneLifecycle };
+};
 globalThis.__pmjsCompatibilityHits = function() {
   return Object.assign({}, nativeCompatibilityHits);
 };
@@ -674,7 +706,7 @@ function drawCanvasText(context, text, x, y, stroke, maxWidth) {
       temporary.height, placement.x - padding, placement.top - padding,
       temporary.width * horizontalScale, temporary.height);
   } finally {
-    NativeHost.canvas.release(temporary.handle);
+    releaseNativeResource(temporary, 'canvas');
   }
 }
 CanvasContext2D.prototype.fillText = function(text, x, y, maxWidth) {

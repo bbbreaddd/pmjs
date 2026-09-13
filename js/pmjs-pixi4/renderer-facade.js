@@ -381,7 +381,11 @@ function createNativePixiRenderer(width, height, options) {
             return NativeHost.canvas.readPixels(capture.handle, 0, 0,
               this.renderer.width, this.renderer.height);
           } finally {
-            NativeHost.canvas.release(capture.handle);
+            if (typeof releaseNativeResource === 'function') {
+              releaseNativeResource(capture, 'canvas');
+            } else {
+              NativeHost.canvas.release(capture.handle);
+            }
           }
         }
         var generated = null;
