@@ -1,0 +1,12 @@
+/.cache/
+/node_modules/
+/build/
+/build-*/
+/build-js/
+/dist/
+*.log
+*.trace.json
+*.cpuprofile
+*.prof
+captures/
+profiles/

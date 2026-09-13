@@ -1,0 +1,6 @@
+{
+  "name": "pmjs-native-runtime",
+  "private": true,
+  "scripts": { "lint": "eslint js runner tools test example" },
+  "devDependencies": { "eslint": "9.35.0", "globals": "16.3.0" }
+}
