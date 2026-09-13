@@ -13,9 +13,9 @@ RuntimeCore::RuntimeCore(const std::filesystem::path& root, int width, int heigh
       canvases_(images_), renderer_(width, height, images_), vfs_(root),
       media_(root) {}
 
-std::optional<ImageHandle> RuntimeCore::resolveImage(std::uint32_t handle) const {
+std::optional<ImageHandle> RuntimeCore::resolveImage(std::uint32_t handle) {
   return images_.lookup(handle) ? std::optional<ImageHandle>{handle}
-                                : canvases_.imageHandle(handle);
+                                : canvases_.prepareImage(handle);
 }
 
 bool RuntimeCore::submitScene(std::uint32_t version,

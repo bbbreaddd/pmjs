@@ -22,7 +22,7 @@ class RuntimeCore {
               const std::string& title);
 
   HostServices hostServices();
-  std::optional<ImageHandle> resolveImage(std::uint32_t handle) const;
+  std::optional<ImageHandle> resolveImage(std::uint32_t handle);
   bool submitScene(std::uint32_t version, const std::uint32_t* metadata,
                    std::size_t metadataCount, const float* values,
                    std::size_t valueCount, std::size_t nodeCount);

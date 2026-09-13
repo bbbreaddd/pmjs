@@ -118,12 +118,22 @@ napi_value canvasMemory(napi_env env, napi_callback_info) try {
     number(env, canvases.liveCount())), "cannot set live canvas count");
   check(env, napi_set_named_property(env, result, "liveBytes",
     number(env, canvases.cpuBytes())), "cannot set live canvas bytes");
+  check(env, napi_set_named_property(env, result, "cpuPixelBytes",
+    number(env, canvases.cpuBytes())), "cannot set cpu pixel bytes");
   check(env, napi_set_named_property(env, result, "capacityBytes",
     number(env, canvases.capacityBytes())), "cannot set canvas capacity bytes");
   check(env, napi_set_named_property(env, result, "peakLiveBytes",
     number(env, canvases.peakCpuBytes())), "cannot set peak canvas bytes");
   check(env, napi_set_named_property(env, result, "peakLiveCount",
     number(env, canvases.peakLiveCount())), "cannot set peak canvas count");
+  check(env, napi_set_named_property(env, result, "deferredCanvasCount",
+    number(env, canvases.deferredCanvasCount())), "cannot set deferred canvas count");
+  check(env, napi_set_named_property(env, result, "realizedCanvasCount",
+    number(env, canvases.realizedCanvasCount())), "cannot set realized canvas count");
+  check(env, napi_set_named_property(env, result, "deferredCommandCount",
+    number(env, canvases.deferredCommandCount())), "cannot set deferred command count");
+  check(env, napi_set_named_property(env, result, "deferredCommandBytes",
+    number(env, canvases.deferredCommandBytes())), "cannot set deferred command bytes");
   syncExternalMemory(env);
   return result;
 } catch (const std::exception& error) {
