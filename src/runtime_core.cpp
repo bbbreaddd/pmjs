@@ -22,15 +22,19 @@ bool RuntimeCore::submitScene(std::uint32_t version,
                               const std::uint32_t* metadata,
                               std::size_t metadataCount, const float* values,
                               std::size_t valueCount, std::size_t nodeCount) {
-  if (version != scene_packet::version || !metadata || !values ||
+  if (version != scene_packet::version ||
+      (nodeCount > 0 && (!metadata || !values)) ||
       nodeCount > scene_packet::maxNodes ||
       metadataCount < nodeCount * scene_packet::metadataStride ||
       valueCount < nodeCount * scene_packet::valueStride ||
       nodeCount * (scene_packet::metadataStride * sizeof(std::uint32_t) +
                    scene_packet::valueStride * sizeof(float)) >
         scene_packet::maxPacketBytes) return false;
-  sceneMetadataScratch_.assign(
-    metadata, metadata + nodeCount * scene_packet::metadataStride);
+  sceneMetadataScratch_.clear();
+  if (nodeCount > 0) {
+    sceneMetadataScratch_.assign(
+      metadata, metadata + nodeCount * scene_packet::metadataStride);
+  }
   for (std::size_t index = 0; index < nodeCount; ++index) {
     const std::size_t offset = index * scene_packet::metadataStride;
     const auto kind = static_cast<scene_packet::NodeKind>(
@@ -61,8 +65,13 @@ bool RuntimeCore::submitScene(std::uint32_t version,
     if (!image) return false;
     sceneMetadataScratch_[offset + 2] = *image;
   }
-  return renderer_.queueScene(version, sceneMetadataScratch_.data(),
-    sceneMetadataScratch_.size(), values, valueCount, nodeCount);
+  return renderer_.queueScene(
+    version,
+    nodeCount ? sceneMetadataScratch_.data() : nullptr,
+    sceneMetadataScratch_.size(),
+    values,
+    valueCount,
+    nodeCount);
 }
 
 bool RuntimeCore::pollEvents() {

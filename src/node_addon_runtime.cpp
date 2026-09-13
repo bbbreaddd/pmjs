@@ -144,6 +144,8 @@ napi_value rendererStats(napi_env env, napi_callback_info) try {
   check(env, napi_create_object(env, &result), "cannot create renderer stats");
   check(env, napi_set_named_property(env, result, "frames",
     number(env, static_cast<double>(stats.frames))), "cannot set renderer frames");
+  check(env, napi_set_named_property(env, result, "retainedFrames",
+    number(env, static_cast<double>(stats.retainedFrames))), "cannot set renderer retained frames");
   check(env, napi_set_named_property(env, result, "commands",
     number(env, static_cast<double>(stats.commands))), "cannot set renderer commands");
   check(env, napi_set_named_property(env, result, "drawCalls",

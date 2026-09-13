@@ -31,13 +31,16 @@ void applyBlendMode(BlendMode mode) {
 }  // namespace
 
 void Renderer::render() {
-  glBindFramebuffer(GL_FRAMEBUFFER, sceneFramebuffer_);
-  glViewport(0, 0, width_, height_);
-  glClearColor(clearColor_[0], clearColor_[1], clearColor_[2], clearColor_[3]);
-  glClear(GL_COLOR_BUFFER_BIT);
+  const bool shouldRenderScene =
+      sceneSubmittedThisFrame_ || offscreenRender_ || !hasValidSceneFrame_;
+  if (shouldRenderScene) {
+    glBindFramebuffer(GL_FRAMEBUFFER, sceneFramebuffer_);
+    glViewport(0, 0, width_, height_);
+    glClearColor(clearColor_[0], clearColor_[1], clearColor_[2], clearColor_[3]);
+    glClear(GL_COLOR_BUFFER_BIT);
 
-  vertices_.clear();
-  vertices_.reserve(frame_.commands.size() * 72);
+    vertices_.clear();
+    vertices_.reserve(frame_.commands.size() * 72);
   struct DrawOperation {
     std::uint32_t tileLayer = 0;
     std::uint32_t texture;
@@ -775,9 +778,16 @@ void Renderer::render() {
   }
   if (scissorActive) glDisable(GL_SCISSOR_TEST);
   applyBlendMode(BlendMode::normal);
-  ++stats_.frames;
   stats_.commands += frame_.commands.size();
   discardCommandsFrom(0);
+  if (!offscreenRender_ && sceneSubmittedThisFrame_) {
+    hasValidSceneFrame_ = true;
+  }
+} else {
+  discardCommandsFrom(0);
+  ++stats_.retainedFrames;
+}
+++stats_.frames;
 
   if (!offscreenRender_) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, sceneFramebuffer_);

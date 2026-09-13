@@ -13,18 +13,22 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
                           std::size_t metadataCount, const float* values,
                           std::size_t valueCount, std::size_t nodeCount) {
   using namespace scene_packet;
-  if (version != scene_packet::version || !metadata || !values ||
+  if (version != scene_packet::version ||
+      (nodeCount > 0 && (!metadata || !values)) ||
       nodeCount > maxNodes ||
       metadataCount < nodeCount * metadataStride ||
       valueCount < nodeCount * valueStride ||
       nodeCount * (metadataStride * sizeof(std::uint32_t) +
                    valueStride * sizeof(float)) > maxPacketBytes) return false;
 
-  for (std::size_t index = 0; index < nodeCount * valueStride; ++index) {
-    if (!std::isfinite(values[index])) return false;
+  if (nodeCount > 0) {
+    for (std::size_t index = 0; index < nodeCount * valueStride; ++index) {
+      if (!std::isfinite(values[index])) return false;
+    }
   }
 
   const std::size_t originalCommandCount = frame_.commands.size();
+  const bool originalSceneSubmitted = sceneSubmittedThisFrame_;
   const auto build = [&]() -> bool {
 
   struct SceneState {
@@ -374,12 +378,17 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
   };
 
   try {
-    if (build()) return true;
+    if (build()) {
+      sceneSubmittedThisFrame_ = true;
+      return true;
+    }
   } catch (...) {
     discardCommandsFrom(originalCommandCount);
+    sceneSubmittedThisFrame_ = originalSceneSubmitted;
     throw;
   }
   discardCommandsFrom(originalCommandCount);
+  sceneSubmittedThisFrame_ = originalSceneSubmitted;
   return false;
 }
 

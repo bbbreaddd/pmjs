@@ -67,6 +67,7 @@ struct RendererStats {
   static constexpr std::size_t filterKindCount =
     static_cast<std::size_t>(scene_packet::FilterKind::fxaa) + 1;
   std::uint64_t frames = 0;
+  std::uint64_t retainedFrames = 0;
   std::uint64_t commands = 0;
   std::uint64_t drawCalls = 0;
   std::uint64_t bufferUploads = 0;
@@ -163,6 +164,8 @@ class Renderer {
   int maxTextureSize_ = 0;
   ImageStore& images_;
   std::array<float, 4> clearColor_{0.0F, 0.0F, 0.0F, 1.0F};
+  bool sceneSubmittedThisFrame_ = false;
+  bool hasValidSceneFrame_ = false;
   FramePacket frame_;
   std::vector<float> vertices_;
   RendererStats stats_;

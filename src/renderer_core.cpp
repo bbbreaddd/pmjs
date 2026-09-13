@@ -33,6 +33,7 @@ void Renderer::resizeTargets(int width, int height) {
   textureRepeatState_.clear();
   width_ = width;
   height_ = height;
+  hasValidSceneFrame_ = false;
 
   const auto createTarget = [&](std::uint32_t& texture,
                                 std::uint32_t& framebuffer) {
@@ -83,6 +84,7 @@ bool Renderer::setScreenRenderSize(int width, int height) {
 }
 
 void Renderer::beginFrame() {
+  sceneSubmittedThisFrame_ = false;
   discardCommandsFrom(0);
   images_.update();
   queueWidth_ = width_;
@@ -113,6 +115,7 @@ void Renderer::queueQuad(float x, float y, float width, float height,
       {0, {width, 0, 0, height, x, y}, {0, 0, 1, 1}, {1, 1}, boundedColor,
        BlendMode::normal, false});
   frame_.commands.back().primitive = RenderCommand::Primitive::screenFill;
+  sceneSubmittedThisFrame_ = true;
 }
 
 bool Renderer::queueImage(ImageHandle image,
@@ -131,6 +134,7 @@ bool Renderer::queueImage(ImageHandle image,
   try {
     frame_.commands.push_back(
         {image, transform, source, {source[2], source[3]}, color, blendMode, false});
+    sceneSubmittedThisFrame_ = true;
   } catch (...) {
     images_.endUse(image);
     throw;
@@ -164,6 +168,7 @@ bool Renderer::queueTiled(ImageHandle image,
     frame_.commands.push_back(
         {image, transform, boundedSource, destination, color, blendMode, true});
     frame_.commands.back().primitive = RenderCommand::Primitive::tilingSprite;
+    sceneSubmittedThisFrame_ = true;
   } catch (...) {
     images_.endUse(image);
     throw;
@@ -329,6 +334,7 @@ bool Renderer::queueTileLayer(std::uint32_t layer,
   ++found->second.queuedReferences;
   try {
     frame_.commands.push_back(command);
+    sceneSubmittedThisFrame_ = true;
   } catch (...) {
     --found->second.queuedReferences;
     throw;
