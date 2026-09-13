@@ -152,6 +152,9 @@ if (typeof SceneManager !== 'undefined' && !SceneManager._pmjsFullPatched) {
           this._pmjsRetainedMap = null;
           this._stack.pop();
           retained.reused = true;
+          if (typeof Scene_Map !== 'undefined' && retained instanceof Scene_Map) {
+            retained._transfer = false;
+          }
           if (this._scene) { try { this._scene.stop(); } catch (_) {} }
           this._nextScene = retained;
           this._nextSceneSame = true;
@@ -206,6 +209,9 @@ if (typeof SceneManager !== 'undefined' && !SceneManager._pmjsFullPatched) {
             // Reattachment is one-shot; a later exit terminates normally.
             if (this._scene.attachReservation) this._scene.attachReservation();
             this._scene.reused = false;
+            if (typeof Scene_Map !== 'undefined' && this._scene instanceof Scene_Map) {
+              this._scene._transfer = false;
+            }
           }
           this._nextScene = null;
           this._sceneStarted = false;

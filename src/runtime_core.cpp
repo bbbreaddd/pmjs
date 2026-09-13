@@ -69,7 +69,7 @@ bool RuntimeCore::submitScene(std::uint32_t version,
     version,
     nodeCount ? sceneMetadataScratch_.data() : nullptr,
     sceneMetadataScratch_.size(),
-    values,
+    nodeCount ? values : nullptr,
     valueCount,
     nodeCount);
 }
