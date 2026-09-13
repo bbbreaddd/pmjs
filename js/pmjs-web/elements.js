@@ -254,9 +254,15 @@ function NativeImage() {
   this._src = '';
   this._nativeImage = null;
   this._loadGeneration = 0;
+  this._pmjsLoadFailed = false;
+  this._pmjsLoadError = null;
 }
 
 var pendingNativeImageLoads = 0;
+// EasyRPG-style: once a path fails, cache the failure so every subsequent
+// request for that path is immediately stable (no repeated decode attempts,
+// no first-request/second-request inconsistency).
+var failedAssetCache = new Map();
 
 NativeImage.prototype = Object.create(EventTarget.prototype);
 NativeImage.prototype.constructor = NativeImage;
@@ -288,6 +294,8 @@ Object.defineProperty(NativeImage.prototype, 'src', {
       .replace(/^\.\//, '');
     var image = this;
     image.complete = false;
+    image._pmjsLoadFailed = false;
+    image._pmjsLoadError = null;
     pendingTasks.push(function() {
       var generatedPrefix = 'generated-assets:/';
       var generated = path.indexOf(generatedPrefix) === 0;
@@ -297,10 +305,38 @@ Object.defineProperty(NativeImage.prototype, 'src', {
       var loadAsync = generated ? loader.loadImageAsync : loader.loadAsync;
       var retainCpuPixels = typeof globalThis.__pmjsShouldRetainImagePixels ===
         'function' && globalThis.__pmjsShouldRetainImagePixels(path);
+
+      // EasyRPG pattern: stable failure cache. If this path already failed,
+      // install the fallback immediately without re-hitting disk or the decoder.
+      var cachedFailure = failedAssetCache.get(path);
+      if (cachedFailure !== undefined) {
+        if (generation !== image._loadGeneration) return;
+        releaseNativeResource(image._nativeImage, 'image');
+        image._nativeImage = null;
+        try {
+          if (typeof NativeHost !== 'undefined' && NativeHost.images &&
+              typeof NativeHost.images.fallbackImage === 'function') {
+            image._nativeImage = trackNativeResource(NativeHost.images.fallbackImage(), 'image');
+          }
+        } catch (_) {}
+        // Keep dimensions at 0: preserve genuine browser failure semantics so
+        // RPG Maker sprite frame math (naturalWidth / columns) is not corrupted.
+        image.width = image.naturalWidth = 0;
+        image.height = image.naturalHeight = 0;
+        image.complete = true;
+        image._pmjsLoadFailed = true;
+        image._pmjsLoadError = cachedFailure;
+        if (typeof image.onerror === 'function') image.onerror({ type: 'error', target: image });
+        image.dispatchEvent({ type: 'error', target: image });
+        return;
+      }
+
       pendingNativeImageLoads++;
-      Promise.resolve(typeof loadAsync === 'function'
-        ? loadAsync.call(loader, relativePath, retainCpuPixels)
-        : load.call(loader, relativePath, retainCpuPixels)).then(function(result) {
+      new Promise(function(resolve) {
+        resolve(typeof loadAsync === 'function'
+          ? loadAsync.call(loader, relativePath, retainCpuPixels)
+          : load.call(loader, relativePath, retainCpuPixels));
+      }).then(function(result) {
         var loaded = trackNativeResource(result, 'image');
         if (generation !== image._loadGeneration) {
           releaseNativeResource(loaded, 'image');
@@ -311,19 +347,43 @@ Object.defineProperty(NativeImage.prototype, 'src', {
         image.width = image.naturalWidth = image._nativeImage.width;
         image.height = image.naturalHeight = image._nativeImage.height;
         image.complete = true;
+        image._pmjsLoadFailed = false;
+        image._pmjsLoadError = null;
         if (typeof image.onload === 'function') image.onload({ type: 'load', target: image });
         image.dispatchEvent({ type: 'load', target: image });
         if (typeof globalThis.__pmjsImageLoadCompleted === 'function') {
           globalThis.__pmjsImageLoadCompleted(image);
         }
       }, function(error) {
+        if (generation !== image._loadGeneration) return;
+        // On first failure: record in the stable failure cache (EasyRPG model)
+        // so subsequent requests for the same path are immediately consistent.
+        if (!failedAssetCache.has(path)) {
+          failedAssetCache.set(path, error);
+          console.warn('[pmjs] image load failed, rendering fallback checkerboard: ' + path +
+            (error ? ' (' + (error.message || error) + ')' : ''));
+        }
+        releaseNativeResource(image._nativeImage, 'image');
+        image._nativeImage = null;
+        try {
+          if (typeof NativeHost !== 'undefined' && NativeHost.images &&
+              typeof NativeHost.images.fallbackImage === 'function') {
+            image._nativeImage = trackNativeResource(NativeHost.images.fallbackImage(), 'image');
+          }
+        } catch (_) {}
+        // Keep dimensions at 0: preserve genuine browser failure semantics so
+        // RPG Maker sprite frame math (naturalWidth / columns) is not corrupted.
+        image.width = image.naturalWidth = 0;
+        image.height = image.naturalHeight = 0;
         image.complete = true;
+        image._pmjsLoadFailed = true;
+        image._pmjsLoadError = error;
         if (typeof image.onerror === 'function') image.onerror({ type: 'error', target: image });
         image.dispatchEvent({ type: 'error', target: image });
       }).then(function() { pendingNativeImageLoads--; },
-        function(error) {
+        function(err) {
           pendingNativeImageLoads--;
-          console.error(error && error.stack || error);
+          console.error(err && err.stack || err);
         });
     });
   }

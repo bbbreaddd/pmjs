@@ -155,8 +155,24 @@ ImageHandle ImageStore::fallbackHandle() {
   auto created = createRgba(4, 4, checkerboard.data());
   if (!created) return 0;
   pin(created->handle);
+  const std::size_t index = (created->handle & indexMask) - 1U;
+  slots_[index].references = 0;
   fallbackHandle_ = created->handle;
   return fallbackHandle_;
+}
+
+std::optional<ImageInfo> ImageStore::acquireFallback() {
+  auto handle = fallbackHandle();
+  if (handle == 0 || !retain(handle)) return std::nullopt;
+  ++fallbackUses_;
+  return lookup(handle);
+}
+
+std::size_t ImageStore::fallbackReferences() const {
+  if (fallbackHandle_ == 0) return 0;
+  const std::size_t index = (fallbackHandle_ & indexMask) - 1U;
+  if (index >= slots_.size() || !slots_[index].live) return 0;
+  return slots_[index].references;
 }
 
 std::optional<ImagePixels> ImageStore::decodeMemory(const void* data, std::size_t size) {
@@ -341,16 +357,24 @@ std::size_t ImageStore::warmCount() const {
 
 std::size_t ImageStore::pinnedBytes() const {
   std::size_t result = 0;
-  for (const auto& slot : slots_) {
-    if (slot.live && slot.pins != 0) result += residentBytes(slot);
+  for (std::size_t i = 0; i < slots_.size(); ++i) {
+    const auto& slot = slots_[i];
+    if (!slot.live || slot.pins == 0) continue;
+    const ImageHandle h = makeHandle(i, slot.generation);
+    if (h == fallbackHandle_) continue;  // store-internal; exclude from user metrics
+    result += residentBytes(slot);
   }
   return result;
 }
 
 std::size_t ImageStore::pinnedCount() const {
   std::size_t result = 0;
-  for (const auto& slot : slots_) {
-    if (slot.live && slot.pins != 0) ++result;
+  for (std::size_t i = 0; i < slots_.size(); ++i) {
+    const auto& slot = slots_[i];
+    if (!slot.live || slot.pins == 0) continue;
+    const ImageHandle h = makeHandle(i, slot.generation);
+    if (h == fallbackHandle_) continue;  // store-internal; exclude from user metrics
+    ++result;
   }
   return result;
 }
@@ -480,7 +504,6 @@ void ImageStore::destroySlot(std::size_t index) {
 }
 
 bool ImageStore::release(ImageHandle handle) {
-  if (fallbackHandle_ != 0 && handle == fallbackHandle_) return true;
   const auto info = lookup(handle);
   if (!info) return false;
   const std::size_t index = (handle & indexMask) - 1U;

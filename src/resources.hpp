@@ -78,6 +78,9 @@ class ImageStore {
   void update();
   std::optional<ImageInfo> lookup(ImageHandle handle) const;
   ImageHandle fallbackHandle();
+  std::optional<ImageInfo> acquireFallback();
+  std::uint64_t fallbackUses() const { return fallbackUses_; }
+  std::size_t fallbackReferences() const;
   std::size_t liveCount() const { return liveCount_; }
   std::size_t gpuBytes() const { return gpuBytes_; }
   std::size_t peakGpuBytes() const { return peakGpuBytes_; }
@@ -128,6 +131,7 @@ class ImageStore {
   std::uint64_t warmHits_ = 0;
   std::uint64_t budgetEvictions_ = 0;
   ImageHandle fallbackHandle_ = 0;
+  std::uint64_t fallbackUses_ = 0;
 };
 
 }  // namespace pmjs

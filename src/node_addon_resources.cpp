@@ -26,6 +26,18 @@ napi_value loadAssetImage(napi_env env, napi_callback_info info) try {
   napi_throw_error(env, nullptr, error.what()); return nullptr;
 }
 
+napi_value fallbackImage(napi_env env, napi_callback_info) try {
+  State& value = host(env);
+  auto info = value.images.acquireFallback();
+  if (!info) throw std::runtime_error("cannot acquire fallback image");
+  return imageInfo(env, info->handle, info->width, info->height);
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what()); return nullptr;
+} catch (...) {
+  napi_throw_error(env, nullptr, "fallbackImage failed"); return nullptr;
+}
+
+
 struct AsyncImageLoad {
   napi_env env = nullptr;
   napi_async_work work = nullptr;
@@ -216,7 +228,7 @@ napi_value touchImage(napi_env env, napi_callback_info info) try {
 napi_value imageMemory(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 1);
   auto& value = host(env);
-  const auto& images = value.images;
+  auto& images = value.images;
   std::size_t limit = 0;
   if (!args.empty()) limit = std::min<std::size_t>(100, asUint32(env, args[0]));
   napi_value result;
@@ -252,6 +264,12 @@ napi_value imageMemory(napi_env env, napi_callback_info info) try {
   check(env, napi_set_named_property(env, result, "coalescedRequests",
     number(env, value.imageDecodeRequestsCoalesced)),
     "cannot set coalesced image requests");
+  check(env, napi_set_named_property(env, result, "fallbackHandle",
+    uint32(env, images.fallbackHandle())), "cannot set fallback handle");
+  check(env, napi_set_named_property(env, result, "fallbackReferences",
+    number(env, images.fallbackReferences())), "cannot set fallback references");
+  check(env, napi_set_named_property(env, result, "fallbackUses",
+    number(env, images.fallbackUses())), "cannot set fallback uses");
   auto entries = limit ? images.memoryEntries() : std::vector<pmjs::ImageMemoryEntry>();
   std::sort(entries.begin(), entries.end(), [](const auto& left, const auto& right) {
     return left.gpuBytes + left.cpuBytes > right.gpuBytes + right.cpuBytes;
@@ -305,6 +323,7 @@ void registerResourceBindings(napi_env env, napi_value exports) {
   napi_value images = moduleObject(env);
   method(env, images, "load", loadImage);
   method(env, images, "loadAsync", loadImageAsync);
+  method(env, images, "fallbackImage", fallbackImage);
   method(env, images, "release", releaseImage);
   method(env, images, "pin", pinImage);
   method(env, images, "unpin", unpinImage);
