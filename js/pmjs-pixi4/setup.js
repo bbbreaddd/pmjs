@@ -91,6 +91,18 @@ function releaseNativeRenderCanvas(baseTexture) {
   baseTexture.__pmjsRenderCanvas = null;
   if (baseTexture.source === source) baseTexture.source = null;
 }
+if (PIXI.BaseTexture) {
+  (function() {
+    var destroy = PIXI.BaseTexture.prototype.destroy;
+    PIXI.BaseTexture.prototype.destroy = function() {
+      var source = this.source;
+      var result = destroy && destroy.apply(this, arguments);
+      if (source && source._pmjsOwnedTextureSource &&
+          source instanceof NativeImage) source.src = '';
+      return result;
+    };
+  })();
+}
 if (PIXI.BaseRenderTexture) {
   (function() {
     var destroy = PIXI.BaseRenderTexture.prototype.destroy;

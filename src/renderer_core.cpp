@@ -23,7 +23,10 @@ void Renderer::resizeTargets(int width, int height) {
     framebuffer = 0;
     texture = 0;
   };
+  const std::size_t targetCount = 4U + groupFramebuffers_.size();
+  stats_.rendererTargetDestroys += targetCount;
   destroyTarget(sceneTexture_, sceneFramebuffer_);
+  destroyTarget(offscreenTexture_, offscreenFramebuffer_);
   destroyTarget(filterTexture_, filterFramebuffer_);
   destroyTarget(bloomTexture_, bloomFramebuffer_);
   for (std::size_t index = 0; index < groupFramebuffers_.size(); ++index) {
@@ -49,11 +52,14 @@ void Renderer::resizeTargets(int width, int height) {
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                            GL_TEXTURE_2D, texture, 0);
+    ++stats_.framebufferChecks;
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
       throw std::runtime_error("resized renderer framebuffer is incomplete");
     }
+    ++stats_.rendererTargetCreates;
   };
   createTarget(sceneTexture_, sceneFramebuffer_);
+  createTarget(offscreenTexture_, offscreenFramebuffer_);
   createTarget(filterTexture_, filterFramebuffer_);
   createTarget(bloomTexture_, bloomFramebuffer_);
   for (std::size_t index = 0; index < groupFramebuffers_.size(); ++index) {
@@ -426,8 +432,73 @@ std::vector<std::uint8_t> Renderer::renderToRgba(int width, int height) {
   }
 }
 
+std::optional<ImageInfo> Renderer::renderToImage(int width, int height) {
+  if (width <= 0 || height <= 0 || width > maxTextureSize_ ||
+      height > maxTextureSize_) return std::nullopt;
+  if (width != width_ || height != height_) {
+    throw std::runtime_error(
+      "GPU render images currently require the active renderer dimensions");
+  }
+  const auto savedClearColor = clearColor_;
+  try {
+    offscreenRender_ = true;
+    clearColor_ = {0, 0, 0, 0};
+    render();
+    auto image = images_.createRgba(width_, height_, nullptr);
+    if (!image) throw std::runtime_error("cannot allocate GPU render image");
+    while (glGetError() != GL_NO_ERROR) {}
+    std::uint32_t destinationFramebuffer = 0;
+    glGenFramebuffers(1, &destinationFramebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, destinationFramebuffer);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, image->texture, 0);
+    ++stats_.framebufferChecks;
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+      glDeleteFramebuffers(1, &destinationFramebuffer);
+      images_.release(image->handle);
+      throw std::runtime_error("generated image framebuffer is incomplete");
+    }
+    constexpr std::array<float, 72> vertices = {
+      -1,  1, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1,
+       1,  1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1,
+       1, -1, 1, 0, 1, 1, 1, 1, 0, 0, 1, 1,
+      -1,  1, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1,
+       1, -1, 1, 0, 1, 1, 1, 1, 0, 0, 1, 1,
+      -1, -1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1,
+    };
+    glViewport(0, 0, width_, height_);
+    glDisable(GL_BLEND);
+    glUseProgram(generatedTextureProgram_);
+    glBindVertexArray(vertexArray_);
+    glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer_);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices.data(),
+                 GL_STREAM_DRAW);
+    ++stats_.bufferUploads;
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, offscreenTexture_);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    ++stats_.drawCalls;
+    glDeleteFramebuffers(1, &destinationFramebuffer);
+    if (glGetError() != GL_NO_ERROR) {
+      images_.release(image->handle);
+      throw std::runtime_error("cannot normalize GPU render image");
+    }
+    offscreenRender_ = false;
+    clearColor_ = savedClearColor;
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glEnable(GL_BLEND);
+    return image;
+  } catch (...) {
+    offscreenRender_ = false;
+    clearColor_ = savedClearColor;
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glEnable(GL_BLEND);
+    throw;
+  }
+}
+
 std::size_t Renderer::renderTargetBytes() const {
-  return static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_) * 28U;
+  return static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_) * 32U;
 }
 
 }  // namespace pmjs

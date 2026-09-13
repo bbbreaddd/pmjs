@@ -260,6 +260,16 @@ var pendingNativeImageLoads = 0;
 
 NativeImage.prototype = Object.create(EventTarget.prototype);
 NativeImage.prototype.constructor = NativeImage;
+function nativeImageFromResource(resource) {
+  if (!resource) return null;
+  var image = new NativeImage();
+  image._nativeImage = trackNativeResource(resource, 'image');
+  image._pmjsOwnedTextureSource = true;
+  image.width = image.naturalWidth = Number(resource.width) || 0;
+  image.height = image.naturalHeight = Number(resource.height) || 0;
+  image.complete = true;
+  return image;
+}
 Object.defineProperty(NativeImage.prototype, 'src', {
   get: function() { return this._src; },
   set: function(url) {

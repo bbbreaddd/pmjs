@@ -34,12 +34,23 @@ if (typeof SceneManager !== 'undefined' && !SceneManager._pmjsFullPatched) {
       } catch (_) {}
     }
 
+    function pmjsStackContainsRetainedScene(manager, retained) {
+      return !!(retained && manager && manager._stack &&
+        manager._stack.indexOf(retained.constructor) !== -1);
+    }
+
     var _origGoto = SceneManager.goto;
     SceneManager.goto = function(sceneClass) {
-      // A direct transition invalidates any scene retained for a menu return.
+      // A submenu push delegates through goto after placing the retained map's
+      // constructor on the stack. Preserve that instance until the matching
+      // pop; only a transition with no retained stack entry invalidates it.
       try {
-        this._pmjsRetainedScene = null;
-        this._pmjsRetainedMap = null;
+        var retained = this._pmjsRetainedScene || this._pmjsRetainedMap;
+        if (!pmjsStackContainsRetainedScene(this, retained) &&
+            sceneClass !== (retained && retained.constructor)) {
+          this._pmjsRetainedScene = null;
+          this._pmjsRetainedMap = null;
+        }
         pmjsDisposeRetainedTitle(this);
       } catch (_) {}
       var ret = _origGoto.apply(this, arguments);
@@ -58,6 +69,8 @@ if (typeof SceneManager !== 'undefined' && !SceneManager._pmjsFullPatched) {
     if (typeof SceneManager.clearStack === 'function') {
       var _origClearStack = SceneManager.clearStack;
       SceneManager.clearStack = function() {
+        this._pmjsRetainedScene = null;
+        this._pmjsRetainedMap = null;
         pmjsDisposeRetainedTitle(this);
         return _origClearStack.apply(this, arguments);
       };
@@ -121,8 +134,11 @@ if (typeof SceneManager !== 'undefined' && !SceneManager._pmjsFullPatched) {
           this._pmjsRetainedMap = outgoing;
           this._pmjsRetainedTitle = null;
         } else {
-          this._pmjsRetainedScene = null;
-          this._pmjsRetainedMap = null;
+          var retained = this._pmjsRetainedScene || this._pmjsRetainedMap;
+          if (!pmjsStackContainsRetainedScene(this, retained)) {
+            this._pmjsRetainedScene = null;
+            this._pmjsRetainedMap = null;
+          }
           this._pmjsRetainedTitle = null;
         }
       } catch (_) {}

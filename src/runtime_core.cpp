@@ -170,6 +170,14 @@ HostServices RuntimeCore::hostServices() {
     renderer_.beginFrame();
     return written;
   };
+  services.render.renderToImage = [this](int width, int height)
+      -> std::optional<HostServices::ImageInfo> {
+    canvases_.uploadDirty();
+    const auto image = renderer_.renderToImage(width, height);
+    renderer_.beginFrame();
+    if (!image) return std::nullopt;
+    return HostServices::ImageInfo{image->handle, image->width, image->height};
+  };
   services.scene.submit = [this](std::uint32_t version,
       const std::uint32_t* metadata, std::size_t metadataCount,
       const float* values, std::size_t valueCount, std::size_t nodeCount) {

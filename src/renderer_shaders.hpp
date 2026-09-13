@@ -828,6 +828,18 @@ constexpr const char* simpleFragmentSource = R"(
     outputColor.rgb *= outputColor.a;
   }
 )";
+constexpr const char* generatedTextureFragmentSource = R"(
+  #version 300 es
+  precision mediump float;
+  uniform sampler2D image;
+  in vec2 vertexUv;
+  out vec4 outputColor;
+  void main() {
+    vec4 color = texture(image, vec2(vertexUv.x, 1.0 - vertexUv.y));
+    if (color.a > 0.0) color.rgb /= color.a;
+    outputColor = color;
+  }
+)";
 constexpr const char* spriteEffectFragmentSource = R"(
   #version 300 es
   precision mediump float;

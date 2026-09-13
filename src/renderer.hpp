@@ -76,6 +76,13 @@ struct RendererStats {
   std::uint64_t tileDrawCalls = 0;
   std::uint64_t filterDrawCalls = 0;
   std::array<std::uint64_t, filterKindCount> filterApplications{};
+  std::uint64_t filterTargetAcquires = 0;
+  std::uint64_t filterTargetReuses = 0;
+  std::uint64_t rendererTargetCreates = 0;
+  std::uint64_t rendererTargetDestroys = 0;
+  std::uint64_t filterTargetClears = 0;
+  std::uint64_t framebufferChecks = 0;
+  std::uint64_t framebufferCopies = 0;
   std::uint64_t toneAdjustDrawCalls = 0;
   std::uint64_t spriteDrawCalls = 0;
   std::uint64_t tilingSpriteDrawCalls = 0;
@@ -130,6 +137,7 @@ class Renderer {
   std::vector<std::uint8_t> captureSceneRgba() const;
   std::vector<std::uint8_t> renderToRgba();
   std::vector<std::uint8_t> renderToRgba(int width, int height);
+  std::optional<ImageInfo> renderToImage(int width, int height);
   const RendererStats& stats() const { return stats_; }
   std::size_t renderTargetBytes() const;
 
@@ -172,6 +180,7 @@ class Renderer {
   std::uint32_t program_ = 0;
   std::uint32_t simpleProgram_ = 0;
   std::uint32_t spriteEffectProgram_ = 0;
+  std::uint32_t generatedTextureProgram_ = 0;
   int spriteEffectTextureSizeUniform_ = -1;
   int spriteEffectBlurUniform_ = -1;
   int spriteEffectMaskEnabledUniform_ = -1;
@@ -228,6 +237,8 @@ class Renderer {
   std::uint32_t whiteTexture_ = 0;
   std::uint32_t sceneFramebuffer_ = 0;
   std::uint32_t sceneTexture_ = 0;
+  std::uint32_t offscreenFramebuffer_ = 0;
+  std::uint32_t offscreenTexture_ = 0;
   std::uint32_t filterFramebuffer_ = 0;
   std::uint32_t filterTexture_ = 0;
   std::uint32_t bloomFramebuffer_ = 0;

@@ -50,6 +50,7 @@ struct HostServices {
     std::function<bool(int, int)> setRenderTargetSize;
     std::function<bool(int, int)> setScreenRenderSize;
     std::function<bool(std::uint32_t)> renderToCanvas;
+    std::function<std::optional<ImageInfo>(int, int)> renderToImage;
   } render;
 
   struct Scene {

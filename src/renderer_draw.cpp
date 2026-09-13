@@ -31,10 +31,14 @@ void applyBlendMode(BlendMode mode) {
 }  // namespace
 
 void Renderer::render() {
+  std::uint32_t& rootFramebuffer = offscreenRender_ ? offscreenFramebuffer_ :
+                                                      sceneFramebuffer_;
+  std::uint32_t& rootTexture = offscreenRender_ ? offscreenTexture_ :
+                                                  sceneTexture_;
   const bool shouldRenderScene =
       sceneSubmittedThisFrame_ || offscreenRender_ || !hasValidSceneFrame_;
   if (shouldRenderScene) {
-    glBindFramebuffer(GL_FRAMEBUFFER, sceneFramebuffer_);
+    glBindFramebuffer(GL_FRAMEBUFFER, rootFramebuffer);
     glViewport(0, 0, width_, height_);
     glClearColor(clearColor_[0], clearColor_[1], clearColor_[2], clearColor_[3]);
     glClear(GL_COLOR_BUFFER_BIT);
@@ -223,6 +227,10 @@ void Renderer::render() {
   applyBlendMode(activeBlend);
   for (const auto& operation : operations) {
     if (operation.action == RenderCommand::Action::filterBegin) {
+      ++stats_.filterTargetAcquires;
+      if (groupFramebuffers_[filterDepth] && groupTextures_[filterDepth]) {
+        ++stats_.filterTargetReuses;
+      }
       savedScissor[filterDepth] = operation.command->clipped;
       savedClip[filterDepth] = operation.command->clip;
       filterCommands[filterDepth] = operation.command;
@@ -234,6 +242,7 @@ void Renderer::render() {
       glViewport(0, 0, width_, height_);
       glClearColor(0, 0, 0, 0);
       glClear(GL_COLOR_BUFFER_BIT);
+      ++stats_.filterTargetClears;
       activeBlend = BlendMode::normal;
       applyBlendMode(activeBlend);
       ++filterDepth;
@@ -270,11 +279,12 @@ void Renderer::render() {
       const bool pictureBlend =
         filter.filterKind == scene_packet::FilterKind::pictureBlend;
       if (pictureBlend) {
-        glBindFramebuffer(GL_FRAMEBUFFER, filterDepth == 0 ? sceneFramebuffer_ :
+        glBindFramebuffer(GL_FRAMEBUFFER, filterDepth == 0 ? rootFramebuffer :
                           groupFramebuffers_[filterDepth - 1]);
         glActiveTexture(GL_TEXTURE3);
         glBindTexture(GL_TEXTURE_2D, filterTexture_);
         glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, width_, height_);
+        ++stats_.framebufferCopies;
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glUniform1i(bloomImageUniform_, 3);
@@ -542,7 +552,7 @@ void Renderer::render() {
           filter.filterParameters[0] == 0 ? 23 : 24);
       }
 
-      glBindFramebuffer(GL_FRAMEBUFFER, filterDepth == 0 ? sceneFramebuffer_ :
+      glBindFramebuffer(GL_FRAMEBUFFER, filterDepth == 0 ? rootFramebuffer :
                         groupFramebuffers_[filterDepth - 1]);
       glBindTexture(GL_TEXTURE_2D, compositeTexture);
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -589,7 +599,7 @@ void Renderer::render() {
       activeProgram = program_;
       glBindVertexArray(vertexArray_);
       glActiveTexture(GL_TEXTURE0);
-      glBindTexture(GL_TEXTURE_2D, filterDepth == 0 ? sceneTexture_ :
+      glBindTexture(GL_TEXTURE_2D, filterDepth == 0 ? rootTexture :
                     groupTextures_[filterDepth - 1]);
       glUniform2f(textureSizeUniform_, static_cast<float>(width_),
                   static_cast<float>(height_));
@@ -610,9 +620,9 @@ void Renderer::render() {
       ++stats_.filterDrawCalls;
       ++stats_.toneAdjustDrawCalls;
       if (filterDepth == 0) {
-        std::swap(sceneFramebuffer_, filterFramebuffer_);
-        std::swap(sceneTexture_, filterTexture_);
-        glBindFramebuffer(GL_FRAMEBUFFER, sceneFramebuffer_);
+        std::swap(rootFramebuffer, filterFramebuffer_);
+        std::swap(rootTexture, filterTexture_);
+        glBindFramebuffer(GL_FRAMEBUFFER, rootFramebuffer);
       } else {
         std::swap(groupFramebuffers_[filterDepth - 1], filterFramebuffer_);
         std::swap(groupTextures_[filterDepth - 1], filterTexture_);

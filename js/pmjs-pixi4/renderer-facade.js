@@ -415,6 +415,34 @@ function createNativePixiRenderer(width, height, options) {
         { a: 1, b: 0, c: 0, d: 1, tx: -region.x, ty: -region.y });
       return renderTexture;
     },
+    generateTextureGpu: function(displayObject, scaleMode, resolution, region) {
+      resolution = Math.max(0.000001, Number(resolution) || 1);
+      region = region || displayObject.getLocalBounds();
+      var targetWidth = Math.max(1, Math.ceil(region.width * resolution));
+      var targetHeight = Math.max(1, Math.ceil(region.height * resolution));
+      this.stage = displayObject;
+      this._lastObjectRendered = displayObject;
+      this.renderingToScreen = false;
+      this._nextTextureLocation = 0;
+      if (typeof this.emit === 'function') this.emit('prerender');
+      NativeHost.render.setRenderTargetSize(targetWidth, targetHeight);
+      var resolutionTransform = { a: resolution, b: 0, c: 0,
+        d: resolution, tx: -region.x * resolution, ty: -region.y * resolution };
+      renderNativeStage(displayObject, resolutionTransform, resolution,
+        this.roundPixels);
+      var resource = NativeHost.render.renderToImage(targetWidth, targetHeight);
+      var source = nativeImageFromResource(resource);
+      var baseTexture = new PIXI.BaseTexture(source, scaleMode, resolution);
+      baseTexture.width = region.width;
+      baseTexture.height = region.height;
+      baseTexture.realWidth = targetWidth;
+      baseTexture.realHeight = targetHeight;
+      var texture = new PIXI.Texture(baseTexture,
+        new PIXI.Rectangle(0, 0, region.width, region.height));
+      this.textureGC.update();
+      if (typeof this.emit === 'function') this.emit('postrender');
+      return texture;
+    },
     resize: function(width, height) {
       this.screen.width = Number(width) || 0;
       this.screen.height = Number(height) || 0;
@@ -666,4 +694,3 @@ PIXI.WebGLRenderer = NativePixiWebGLRenderer;
 PIXI.autoDetectRenderer = function(width, height, options) {
   return new NativePixiWebGLRenderer(width, height, options);
 };
-

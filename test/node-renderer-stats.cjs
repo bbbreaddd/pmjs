@@ -50,3 +50,9 @@ if (stats.toneAdjustDrawCalls !== 1 || stats.filterDrawCalls !== 2) {
   throw new Error('filter draw categories are inconsistent: ' +
     JSON.stringify(stats));
 }
+if (stats.filterTargetAcquires !== 1 || stats.filterTargetReuses !== 1 ||
+    stats.filterTargetClears !== 1 || stats.rendererTargetCreates < 8 ||
+    stats.rendererTargetDestroys !== 0 || stats.framebufferChecks < 8) {
+  throw new Error('filter target lifecycle counters are inconsistent: ' +
+    JSON.stringify(stats));
+}

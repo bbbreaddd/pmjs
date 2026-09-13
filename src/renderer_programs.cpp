@@ -59,6 +59,8 @@ Renderer::Renderer(int width, int height, ImageStore& images)
   using namespace renderer_shaders;
   program_ = linkProgram(vertexSource, fragmentSource);
   simpleProgram_ = linkProgram(vertexSource, simpleFragmentSource);
+  generatedTextureProgram_ = linkProgram(vertexSource,
+                                          generatedTextureFragmentSource);
   spriteEffectProgram_ = linkProgram(vertexSource, spriteEffectFragmentSource);
   spriteEffectTextureSizeUniform_ =
     glGetUniformLocation(spriteEffectProgram_, "textureSize");
@@ -166,11 +168,14 @@ Renderer::Renderer(int width, int height, ImageStore& images)
       glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
       glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                              GL_TEXTURE_2D, texture, 0);
+      ++stats_.framebufferChecks;
       if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
         throw std::runtime_error("renderer framebuffer is incomplete");
       }
+      ++stats_.rendererTargetCreates;
   };
   createTarget(sceneTexture_, sceneFramebuffer_);
+  createTarget(offscreenTexture_, offscreenFramebuffer_);
   createTarget(filterTexture_, filterFramebuffer_);
   createTarget(bloomTexture_, bloomFramebuffer_);
   for (std::size_t index = 0; index < groupFramebuffers_.size(); ++index) {
@@ -186,6 +191,8 @@ Renderer::~Renderer() {
   while (!tileLayers_.empty()) destroyTileLayer(tileLayers_.begin()->first);
   if (sceneFramebuffer_) glDeleteFramebuffers(1, &sceneFramebuffer_);
   if (sceneTexture_) glDeleteTextures(1, &sceneTexture_);
+  if (offscreenFramebuffer_) glDeleteFramebuffers(1, &offscreenFramebuffer_);
+  if (offscreenTexture_) glDeleteTextures(1, &offscreenTexture_);
   if (filterFramebuffer_) glDeleteFramebuffers(1, &filterFramebuffer_);
   if (filterTexture_) glDeleteTextures(1, &filterTexture_);
   if (bloomFramebuffer_) glDeleteFramebuffers(1, &bloomFramebuffer_);
@@ -199,6 +206,7 @@ Renderer::~Renderer() {
   if (vertexArray_) glDeleteVertexArrays(1, &vertexArray_);
   if (program_) glDeleteProgram(program_);
   if (simpleProgram_) glDeleteProgram(simpleProgram_);
+  if (generatedTextureProgram_) glDeleteProgram(generatedTextureProgram_);
   if (spriteEffectProgram_) glDeleteProgram(spriteEffectProgram_);
   if (tileProgram_) glDeleteProgram(tileProgram_);
 }

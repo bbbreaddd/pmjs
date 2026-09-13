@@ -175,6 +175,27 @@ napi_value rendererStats(napi_env env, napi_callback_info) try {
   }
   check(env, napi_set_named_property(env, result, "filterApplications",
     filterApplications), "cannot set filter application stats");
+  check(env, napi_set_named_property(env, result, "filterTargetAcquires",
+    number(env, static_cast<double>(stats.filterTargetAcquires))),
+    "cannot set filter target acquisitions");
+  check(env, napi_set_named_property(env, result, "filterTargetReuses",
+    number(env, static_cast<double>(stats.filterTargetReuses))),
+    "cannot set filter target reuses");
+  check(env, napi_set_named_property(env, result, "rendererTargetCreates",
+    number(env, static_cast<double>(stats.rendererTargetCreates))),
+    "cannot set renderer target creates");
+  check(env, napi_set_named_property(env, result, "rendererTargetDestroys",
+    number(env, static_cast<double>(stats.rendererTargetDestroys))),
+    "cannot set renderer target destroys");
+  check(env, napi_set_named_property(env, result, "filterTargetClears",
+    number(env, static_cast<double>(stats.filterTargetClears))),
+    "cannot set filter target clears");
+  check(env, napi_set_named_property(env, result, "framebufferChecks",
+    number(env, static_cast<double>(stats.framebufferChecks))),
+    "cannot set framebuffer checks");
+  check(env, napi_set_named_property(env, result, "framebufferCopies",
+    number(env, static_cast<double>(stats.framebufferCopies))),
+    "cannot set framebuffer copies");
   check(env, napi_set_named_property(env, result, "toneAdjustDrawCalls",
     number(env, static_cast<double>(stats.toneAdjustDrawCalls))),
     "cannot set tone adjust draws");

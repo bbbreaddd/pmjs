@@ -164,6 +164,22 @@ napi_value renderToCanvas(napi_env env, napi_callback_info info) try {
   napi_throw_range_error(env, nullptr, error.what()); return nullptr;
 }
 
+napi_value renderToImage(napi_env env, napi_callback_info info) try {
+  auto args = arguments(env, info, 2);
+  if (args.size() != 2) {
+    throw std::runtime_error("renderToImage requires width and height");
+  }
+  State& value = host(env);
+  value.canvases.uploadDirty();
+  const auto image = value.renderer.renderToImage(
+    asInt32(env, args[0]), asInt32(env, args[1]));
+  value.renderer.beginFrame();
+  if (!image) throw std::runtime_error("could not create GPU render image");
+  return imageInfo(env, image->handle, image->width, image->height);
+} catch (const std::exception& error) {
+  napi_throw_range_error(env, nullptr, error.what()); return nullptr;
+}
+
 napi_value submitScene(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 4);
   if (args.size() != 4) {
@@ -232,6 +248,7 @@ void registerGraphicsBindings(napi_env env, napi_value exports) {
   method(env, render, "createMesh", createMesh);
   method(env, render, "releaseMesh", releaseMesh);
   method(env, render, "renderToCanvas", renderToCanvas);
+  method(env, render, "renderToImage", renderToImage);
   method(env, render, "stats", rendererStats);
   napi_value scene = moduleObject(env);
   method(env, scene, "submit", submitScene);
