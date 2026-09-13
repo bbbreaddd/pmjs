@@ -18,6 +18,14 @@ function validate(options) {
       throw new Error(`${name} must be an integer between 1 and 16384`);
     }
   }
+  const configuredWarmBytes = options.imageWarmCacheBytes ??
+    process.env.PMJS_IMAGE_WARM_CACHE_BYTES;
+  const imageWarmCacheBytes = configuredWarmBytes === undefined ? undefined :
+    Number(configuredWarmBytes);
+  if (imageWarmCacheBytes !== undefined &&
+      (!Number.isSafeInteger(imageWarmCacheBytes) || imageWarmCacheBytes < 0)) {
+    throw new Error('imageWarmCacheBytes must be a non-negative safe integer');
+  }
   return {
     ...options,
     addon: path.resolve(options.addon),
@@ -25,6 +33,7 @@ function validate(options) {
     bootstrap: path.resolve(options.bootstrap),
     saveRoot: path.resolve(options.saveRoot),
     assetRoot: options.assetRoot ? path.resolve(options.assetRoot) : '',
+    ...(imageWarmCacheBytes === undefined ? {} : { imageWarmCacheBytes }),
     title: options.title || 'pmjs native runtime',
   };
 }
@@ -33,7 +42,9 @@ async function run(input, hooks = {}) {
   const options = validate(input);
   const native = options.native || require(options.addon);
   native.initialize({ gameRoot: options.gameRoot, assetRoot: options.assetRoot,
-    width: options.width, height: options.height, windowTitle: options.title });
+    width: options.width, height: options.height, windowTitle: options.title,
+    ...(options.imageWarmCacheBytes === undefined ? {} :
+      { imageWarmCacheBytes: options.imageWarmCacheBytes }) });
   native.storage = createStorage(options.saveRoot);
   native.runtime.now = () => performance.now();
   native.runtime.platform = () => ({ platform: process.platform, arch: process.arch });

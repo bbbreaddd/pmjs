@@ -59,9 +59,13 @@ void completeImageLoad(napi_env env, napi_status status, void* opaque) {
         ++ownerships;
       }
       if (retained) {
-        result = imageInfo(env, installed->handle, installed->width, installed->height);
         for (const auto deferred : load->deferreds) {
-          napi_resolve_deferred(env, deferred, result);
+          // Each retained native ownership needs its own JS wrapper. Sharing a
+          // wrapper also shares its FinalizationRegistry unregister token, so
+          // one explicit release can otherwise orphan the other ownerships.
+          napi_resolve_deferred(env, deferred,
+            imageInfo(env, installed->handle, installed->width,
+                      installed->height));
         }
         napi_delete_async_work(env, load->work);
         return;
@@ -175,6 +179,36 @@ napi_value releaseImage(napi_env env, napi_callback_info info) try {
   napi_throw_range_error(env, nullptr, error.what()); return nullptr;
 }
 
+napi_value pinImage(napi_env env, napi_callback_info info) try {
+  auto args = arguments(env, info, 1);
+  if (!host(env).images.pin(asUint32(env, args.at(0)))) {
+    throw std::runtime_error("invalid image");
+  }
+  return undefined(env);
+} catch (const std::exception& error) {
+  napi_throw_range_error(env, nullptr, error.what()); return nullptr;
+}
+
+napi_value unpinImage(napi_env env, napi_callback_info info) try {
+  auto args = arguments(env, info, 1);
+  if (!host(env).images.unpin(asUint32(env, args.at(0)))) {
+    throw std::runtime_error("invalid or unpinned image");
+  }
+  return undefined(env);
+} catch (const std::exception& error) {
+  napi_throw_range_error(env, nullptr, error.what()); return nullptr;
+}
+
+napi_value touchImage(napi_env env, napi_callback_info info) try {
+  auto args = arguments(env, info, 1);
+  if (!host(env).images.touch(asUint32(env, args.at(0)))) {
+    throw std::runtime_error("invalid image");
+  }
+  return undefined(env);
+} catch (const std::exception& error) {
+  napi_throw_range_error(env, nullptr, error.what()); return nullptr;
+}
+
 napi_value imageMemory(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 1);
   auto& value = host(env);
@@ -191,6 +225,22 @@ napi_value imageMemory(napi_env env, napi_callback_info info) try {
     number(env, images.peakGpuBytes())), "cannot set peak image GPU bytes");
   check(env, napi_set_named_property(env, result, "cpuBytes",
     number(env, images.cpuBytes())), "cannot set image CPU bytes");
+  check(env, napi_set_named_property(env, result, "warmBudgetBytes",
+    number(env, images.warmBudgetBytes())), "cannot set image warm budget");
+  check(env, napi_set_named_property(env, result, "warmBytes",
+    number(env, images.warmBytes())), "cannot set warm image bytes");
+  check(env, napi_set_named_property(env, result, "warmCount",
+    number(env, images.warmCount())), "cannot set warm image count");
+  check(env, napi_set_named_property(env, result, "pinnedBytes",
+    number(env, images.pinnedBytes())), "cannot set pinned image bytes");
+  check(env, napi_set_named_property(env, result, "pinnedCount",
+    number(env, images.pinnedCount())), "cannot set pinned image count");
+  check(env, napi_set_named_property(env, result, "cacheHits",
+    number(env, images.cacheHits())), "cannot set image cache hits");
+  check(env, napi_set_named_property(env, result, "warmHits",
+    number(env, images.warmHits())), "cannot set warm image hits");
+  check(env, napi_set_named_property(env, result, "budgetEvictions",
+    number(env, images.budgetEvictions())), "cannot set image budget evictions");
   check(env, napi_set_named_property(env, result, "pendingDecodeJobs",
     number(env, value.pendingImageLoads.size())), "cannot set pending image jobs");
   check(env, napi_set_named_property(env, result, "decodeJobs",
@@ -228,8 +278,12 @@ napi_value imageMemory(napi_env env, napi_callback_info info) try {
     napi_set_named_property(env, item, "height", number(env, entry.height));
     napi_set_named_property(env, item, "references", number(env, entry.references));
     napi_set_named_property(env, item, "inFlight", number(env, entry.inFlight));
+    napi_set_named_property(env, item, "pins", number(env, entry.pins));
     napi_set_named_property(env, item, "gpuBytes", number(env, entry.gpuBytes));
     napi_set_named_property(env, item, "cpuBytes", number(env, entry.cpuBytes));
+    napi_set_named_property(env, item, "lastUsedSerial",
+      number(env, entry.lastUsedSerial));
+    napi_set_named_property(env, item, "warm", boolean(env, entry.warm));
     check(env, napi_set_element(env, largest, index, item),
           "cannot append image memory entry");
   }
@@ -248,6 +302,9 @@ void registerResourceBindings(napi_env env, napi_value exports) {
   method(env, images, "load", loadImage);
   method(env, images, "loadAsync", loadImageAsync);
   method(env, images, "release", releaseImage);
+  method(env, images, "pin", pinImage);
+  method(env, images, "unpin", unpinImage);
+  method(env, images, "touch", touchImage);
   method(env, images, "memory", imageMemory);
   napi_value assets = moduleObject(env);
   method(env, assets, "loadImage", loadAssetImage);

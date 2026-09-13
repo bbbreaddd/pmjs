@@ -7,6 +7,9 @@ native.initialize({gameRoot:path.resolve(process.argv[3]),assetRoot:'',width:640
 async function main() {
   const ordinary = await native.images.loadAsync('fixture.png');
   let mem = native.images.memory(20);
+  if (mem.warmBudgetBytes !== 4 * 1024 * 1024) {
+    throw new Error(`expected default warm budget to be 4 MiB, got ${mem.warmBudgetBytes}`);
+  }
   let ordinaryEntry = mem.largest.find(e => e.handle === ordinary.handle);
   if (!ordinaryEntry) throw new Error('ordinary image entry missing from memory list');
   if (ordinaryEntry.cpuBytes !== 0) {

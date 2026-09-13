@@ -1,5 +1,6 @@
 #include "resources.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -203,8 +204,13 @@ std::optional<ImageInfo> ImageStore::acquireCached(
     const auto info = lookup(cached->second);
     if (info) {
       const std::size_t index = (cached->second & indexMask) - 1U;
+      const bool wasWarm = slots_[index].references == 0 &&
+        slots_[index].pins == 0 &&
+        slots_[index].inFlight.load(std::memory_order_acquire) == 0;
       ++slots_[index].references;
-      slots_[index].unreferencedFrames = 0;
+      markUsed(slots_[index]);
+      ++cacheHits_;
+      if (wasWarm) ++warmHits_;
       return info;
     }
     pathCache_.erase(cached);
@@ -259,7 +265,8 @@ std::optional<ImageInfo> ImageStore::createRgba(int width, int height,
   slot.height = height;
   slot.references = 1;
   slot.inFlight.store(0, std::memory_order_relaxed);
-  slot.unreferencedFrames = 0;
+  slot.pins = 0;
+  markUsed(slot);
   slot.cpuPixelFrames = 0;
   slot.retainCpuPixels = false;
   slot.cacheKey.clear();
@@ -279,6 +286,48 @@ std::size_t ImageStore::cpuBytes() const {
   return result;
 }
 
+std::size_t ImageStore::residentBytes(const Slot& slot) {
+  return static_cast<std::size_t>(slot.width) *
+      static_cast<std::size_t>(slot.height) * 4U +
+      (slot.cachedPixels ? slot.cachedPixels->rgba.capacity() : 0U);
+}
+
+std::size_t ImageStore::warmBytes() const {
+  std::size_t result = 0;
+  for (const auto& slot : slots_) {
+    if (slot.live && slot.references == 0 && slot.pins == 0 &&
+        slot.inFlight.load(std::memory_order_acquire) == 0 &&
+        !slot.cacheKey.empty()) result += residentBytes(slot);
+  }
+  return result;
+}
+
+std::size_t ImageStore::warmCount() const {
+  std::size_t result = 0;
+  for (const auto& slot : slots_) {
+    if (slot.live && slot.references == 0 && slot.pins == 0 &&
+        slot.inFlight.load(std::memory_order_acquire) == 0 &&
+        !slot.cacheKey.empty()) ++result;
+  }
+  return result;
+}
+
+std::size_t ImageStore::pinnedBytes() const {
+  std::size_t result = 0;
+  for (const auto& slot : slots_) {
+    if (slot.live && slot.pins != 0) result += residentBytes(slot);
+  }
+  return result;
+}
+
+std::size_t ImageStore::pinnedCount() const {
+  std::size_t result = 0;
+  for (const auto& slot : slots_) {
+    if (slot.live && slot.pins != 0) ++result;
+  }
+  return result;
+}
+
 std::vector<ImageMemoryEntry> ImageStore::memoryEntries() const {
   std::vector<ImageMemoryEntry> result;
   result.reserve(liveCount_);
@@ -286,9 +335,13 @@ std::vector<ImageMemoryEntry> ImageStore::memoryEntries() const {
     const auto& slot = slots_[index];
     if (!slot.live) continue;
     result.push_back({makeHandle(index, slot.generation), slot.width, slot.height,
-      slot.references, slot.inFlight.load(std::memory_order_acquire),
+      slot.references, slot.inFlight.load(std::memory_order_acquire), slot.pins,
       static_cast<std::size_t>(slot.width) * slot.height * 4U,
       slot.cachedPixels ? slot.cachedPixels->rgba.capacity() : 0U,
+      slot.lastUsedSerial,
+      slot.references == 0 && slot.pins == 0 &&
+        slot.inFlight.load(std::memory_order_acquire) == 0 &&
+        !slot.cacheKey.empty(),
       slot.cacheKey});
   }
   return result;
@@ -343,7 +396,36 @@ bool ImageStore::retain(ImageHandle handle) {
   if (!lookup(handle)) return false;
   const std::size_t index = (handle & indexMask) - 1U;
   ++slots_[index].references;
-  slots_[index].unreferencedFrames = 0;
+  markUsed(slots_[index]);
+  return true;
+}
+
+void ImageStore::markUsed(Slot& slot) {
+  slot.lastUsedSerial = ++useSerial_;
+}
+
+bool ImageStore::pin(ImageHandle handle) {
+  if (!lookup(handle)) return false;
+  auto& slot = slots_[(handle & indexMask) - 1U];
+  ++slot.pins;
+  markUsed(slot);
+  return true;
+}
+
+bool ImageStore::unpin(ImageHandle handle) {
+  if (!lookup(handle)) return false;
+  const std::size_t index = (handle & indexMask) - 1U;
+  auto& slot = slots_[index];
+  if (slot.pins == 0) return false;
+  --slot.pins;
+  if (slot.pins == 0 && slot.references == 0 && slot.cacheKey.empty() &&
+      slot.inFlight.load(std::memory_order_acquire) == 0) destroySlot(index);
+  return true;
+}
+
+bool ImageStore::touch(ImageHandle handle) {
+  if (!lookup(handle)) return false;
+  markUsed(slots_[(handle & indexMask) - 1U]);
   return true;
 }
 
@@ -358,7 +440,8 @@ void ImageStore::destroySlot(std::size_t index) {
   slot.height = 0;
   slot.references = 0;
   slot.inFlight.store(0, std::memory_order_relaxed);
-  slot.unreferencedFrames = 0;
+  slot.pins = 0;
+  slot.lastUsedSerial = 0;
   slot.cpuPixelFrames = 0;
   slot.retainCpuPixels = false;
   slot.cacheKey.clear();
@@ -377,11 +460,10 @@ bool ImageStore::release(ImageHandle handle) {
   if (slot.references == 0) return false;
   --slot.references;
   if (slot.references != 0) return true;
-  slot.unreferencedFrames = 0;
-  // File-backed image resources retain a five-update grace so a
-  // map flip can reclaim the same GPU texture without decoding and uploading
-  // it again. Anonymous RGBA surfaces remain explicitly owned and immediate.
-  if (slot.cacheKey.empty() &&
+  markUsed(slot);
+  // Anonymous RGBA surfaces cannot be reacquired by path, but explicit pins
+  // may still extend their lifetime.
+  if (slot.cacheKey.empty() && slot.pins == 0 &&
       slot.inFlight.load(std::memory_order_acquire) == 0) destroySlot(index);
   return true;
 }
@@ -402,14 +484,15 @@ bool ImageStore::endUse(ImageHandle handle) {
     slot.inFlight.store(0, std::memory_order_release);
     return false;
   }
-  if (previous == 1 && slot.references == 0 && slot.cacheKey.empty()) {
+  if (previous == 1 && slot.references == 0 && slot.pins == 0 &&
+      slot.cacheKey.empty()) {
     destroySlot(index);
   }
   return true;
 }
 
 void ImageStore::update() {
-  constexpr std::uint8_t graceFrames = 5;
+  std::size_t currentWarmBytes = 0;
   for (std::size_t index = 0; index < slots_.size(); ++index) {
     auto& slot = slots_[index];
     if (!slot.live) continue;
@@ -422,12 +505,32 @@ void ImageStore::update() {
         slot.cachedPixels.reset();
       }
     }
-    if (slot.references != 0 || slot.cacheKey.empty()) continue;
-    if (slot.inFlight.load(std::memory_order_acquire) != 0) {
-      slot.unreferencedFrames = 0;
-      continue;
+    if (slot.references == 0 && slot.pins == 0 && !slot.cacheKey.empty() &&
+        slot.inFlight.load(std::memory_order_acquire) == 0) {
+      currentWarmBytes += residentBytes(slot);
     }
-    if (++slot.unreferencedFrames >= graceFrames) destroySlot(index);
+  }
+  if (currentWarmBytes <= warmBudgetBytes_) return;
+  std::vector<std::pair<std::uint64_t, std::size_t>> warmEntries;
+  for (std::size_t index = 0; index < slots_.size(); ++index) {
+    const auto& slot = slots_[index];
+    if (slot.live && slot.references == 0 && slot.pins == 0 &&
+        !slot.cacheKey.empty() &&
+        slot.inFlight.load(std::memory_order_acquire) == 0) {
+      warmEntries.emplace_back(slot.lastUsedSerial, index);
+    }
+  }
+  std::sort(warmEntries.begin(), warmEntries.end());
+  for (const auto& entry : warmEntries) {
+    if (currentWarmBytes <= warmBudgetBytes_) break;
+    const std::size_t index = entry.second;
+    auto& slot = slots_[index];
+    if (!slot.live || slot.references != 0 || slot.pins != 0 ||
+        slot.cacheKey.empty() ||
+        slot.inFlight.load(std::memory_order_acquire) != 0) continue;
+    currentWarmBytes -= residentBytes(slot);
+    destroySlot(index);
+    ++budgetEvictions_;
   }
 }
 

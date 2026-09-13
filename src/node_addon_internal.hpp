@@ -28,11 +28,13 @@ namespace pmjs::addon {
 struct AsyncImageLoad;
 struct State {
   State(const std::string& root, int width, int height,
-        const std::string& assetRoot, const std::string& windowTitle)
+        const std::string& assetRoot, const std::string& windowTitle,
+        std::size_t imageWarmCacheBytes)
       : core(root, width, height, windowTitle),
         width(core.width()), height(core.height()), platform(core.platform()),
         images(core.images()), canvases(core.canvases()),
         renderer(core.renderer()), vfs(core.vfs()) {
+    images.setWarmBudgetBytes(imageWarmCacheBytes);
     if (!assetRoot.empty()) assets = std::make_unique<pmjs::Vfs>(assetRoot);
   }
 

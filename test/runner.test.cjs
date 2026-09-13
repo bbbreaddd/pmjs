@@ -24,12 +24,19 @@ function native(polls = [false]) {
 }
 
 test('CLI parses the documented options', () => {
-  const value = parse(['--addon','a','--game-root','g','--bootstrap','b','--save-root','s','--width','640','--height','480']);
+  const value = parse(['--addon','a','--game-root','g','--bootstrap','b','--save-root','s','--width','640','--height','480','--image-warm-cache-bytes','1024']);
   assert.equal(value.width, 640); assert.equal(value.height, 480);
+  assert.equal(value.imageWarmCacheBytes, 1024);
 });
 test('validation rejects missing paths and dimensions', () => {
   assert.throws(() => validate({}), /addon is required/);
   assert.throws(() => validate({ addon:'a', gameRoot:'g', bootstrap:'b', saveRoot:'s', width:0, height:1 }), /width/);
+  assert.throws(() => validate({ addon:'a', gameRoot:'g', bootstrap:'b', saveRoot:'s', width:1, height:1,
+    imageWarmCacheBytes: -1 }), /imageWarmCacheBytes/);
+  assert.equal(Object.hasOwn(validate({ addon:'a', gameRoot:'g', bootstrap:'b', saveRoot:'s',
+    width:1, height:1 }), 'imageWarmCacheBytes'), false);
+  assert.equal(validate({ addon:'a', gameRoot:'g', bootstrap:'b', saveRoot:'s', width:1, height:1,
+    imageWarmCacheBytes: 0 }).imageWarmCacheBytes, 0);
 });
 test('afterBootstrap runs once and Node jobs are not starved', async () => {
   const options = fixture('globalThis.__pmjsTick=()=>{};globalThis.__pmjsRender=()=>{};');

@@ -1,5 +1,9 @@
 #include "node_addon_internal.hpp"
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
 namespace pmjs::addon {
 napi_value initialize(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 1);
@@ -20,11 +24,26 @@ napi_value initialize(napi_env env, napi_callback_info info) try {
   }
   const auto assetRoot = hasProperty(env, options, "assetRoot")
     ? asString(env, property(env, options, "assetRoot")) : std::string();
+  std::size_t imageWarmCacheBytes = pmjs::ImageStore::defaultWarmBudgetBytes;
+  if (hasProperty(env, options, "imageWarmCacheBytes")) {
+    constexpr double maxSafeInteger = 9007199254740991.0;
+    const double maxCacheBytes = std::min(maxSafeInteger,
+      static_cast<double>(std::numeric_limits<std::size_t>::max()));
+    const double configured = asNumber(env, property(env, options,
+      "imageWarmCacheBytes"));
+    if (!std::isfinite(configured) || configured < 0 ||
+        std::floor(configured) != configured ||
+        configured > maxCacheBytes) {
+      throw std::runtime_error(
+        "imageWarmCacheBytes must be a non-negative safe integer");
+    }
+    imageWarmCacheBytes = static_cast<std::size_t>(configured);
+  }
   const auto title = asString(env, property(env, options, "windowTitle"));
   if (title.empty()) throw std::runtime_error("windowTitle must not be empty");
   state = std::make_unique<State>(
     asString(env, property(env, options, "gameRoot")), width, height,
-    assetRoot, title);
+    assetRoot, title, imageWarmCacheBytes);
   return undefined(env);
 } catch (const std::exception& error) {
   napi_throw_error(env, nullptr, error.what());

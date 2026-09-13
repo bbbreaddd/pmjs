@@ -9,6 +9,7 @@ function parse(argv) {
     ['--addon', 'addon'], ['--game-root', 'gameRoot'], ['--bootstrap', 'bootstrap'],
     ['--save-root', 'saveRoot'], ['--asset-root', 'assetRoot'], ['--title', 'title'],
     ['--width', 'width'], ['--height', 'height'],
+    ['--image-warm-cache-bytes', 'imageWarmCacheBytes'],
   ]);
   for (let index = 0; index < argv.length; index += 2) {
     const name = names.get(argv[index]);
@@ -17,6 +18,9 @@ function parse(argv) {
   }
   result.width = Number(result.width);
   result.height = Number(result.height);
+  if (result.imageWarmCacheBytes !== undefined) {
+    result.imageWarmCacheBytes = Number(result.imageWarmCacheBytes);
+  }
   return result;
 }
 

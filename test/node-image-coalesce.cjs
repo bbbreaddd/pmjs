@@ -17,6 +17,9 @@ async function main() {
   if (left.handle !== right.handle) {
     throw new Error('coalesced image requests resolved different handles');
   }
+  if (left === right) {
+    throw new Error('coalesced image owners shared one JavaScript wrapper');
+  }
   const loaded = native.images.memory(20);
   const entry = loaded.largest.find(item => item.handle === left.handle);
   if (loaded.pendingDecodeJobs !== 0 || !entry || entry.references !== 2) {

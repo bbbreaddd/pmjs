@@ -1,4 +1,17 @@
 // JavaScript cache eviction must also release the corresponding native image.
+if (typeof Bitmap !== 'undefined' && Bitmap.prototype._requestImage) {
+  var originalRequestImage = Bitmap.prototype._requestImage;
+  Bitmap.prototype._requestImage = function() {
+    var previousImage = this._image;
+    var result = originalRequestImage.apply(this, arguments);
+    if (typeof NativeImage !== 'undefined' && previousImage &&
+        previousImage !== this._image &&
+        previousImage instanceof NativeImage) {
+      try { previousImage.src = ''; } catch (_) {}
+    }
+    return result;
+  };
+}
 if (typeof Bitmap !== 'undefined' && Bitmap.prototype._clearImgInstance) {
   var originalClearImgInstance = Bitmap.prototype._clearImgInstance;
   Bitmap.prototype._clearImgInstance = function() {
@@ -35,6 +48,43 @@ if (typeof ImageCache !== 'undefined' && ImageCache.prototype._truncateCache) {
       nativeCompatibilityHit('imageCache.truncateError', e && e.message || '');
     }
     return originalImageCacheTruncate.apply(this, arguments);
+  };
+}
+
+// MV removes an outgoing map spriteset without destroying its Pixi tree.
+// Release host-owned retained geometry deterministically; JavaScript display
+// objects and shared textures remain intact for the engine's normal teardown.
+function pmjsReleaseRetainedMapResources(root, seen) {
+  if (!root) return 0;
+  seen = seen || [];
+  if (seen.indexOf(root) >= 0) return 0;
+  seen.push(root);
+  var released = 0;
+  if (root._pmjsNativeLayer) {
+    NativeHost.render.releaseTileLayer(root._pmjsNativeLayer);
+    root._pmjsNativeLayer = 0;
+    released++;
+  }
+  if (root.__pmjsNativeMesh) {
+    NativeHost.render.releaseMesh(root.__pmjsNativeMesh);
+    root.__pmjsNativeMesh = 0;
+    released++;
+  }
+  var children = root.children;
+  if (children && typeof children.length === 'number') {
+    for (var index = 0; index < children.length; index++) {
+      released += pmjsReleaseRetainedMapResources(children[index], seen);
+    }
+  }
+  return released;
+}
+if (typeof Scene_Map !== 'undefined' && Scene_Map.prototype &&
+    typeof Scene_Map.prototype.terminate === 'function') {
+  var originalMapTerminateForRetainedResources = Scene_Map.prototype.terminate;
+  Scene_Map.prototype.terminate = function() {
+    var result = originalMapTerminateForRetainedResources.apply(this, arguments);
+    pmjsReleaseRetainedMapResources(this._spriteset);
+    return result;
   };
 }
 // Window contents are canvas-backed and owned by their window. Release them

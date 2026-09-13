@@ -34,13 +34,18 @@ struct ImageMemoryEntry {
   int height = 0;
   std::uint32_t references = 0;
   std::uint32_t inFlight = 0;
+  std::uint32_t pins = 0;
   std::size_t gpuBytes = 0;
   std::size_t cpuBytes = 0;
+  std::uint64_t lastUsedSerial = 0;
+  bool warm = false;
   std::string path;
 };
 
 class ImageStore {
  public:
+  static constexpr std::size_t defaultWarmBudgetBytes = 4U * 1024U * 1024U;
+
   ImageStore() = default;
   ~ImageStore();
 
@@ -65,6 +70,9 @@ class ImageStore {
   bool retainCpuPixels(ImageHandle handle);
   bool retain(ImageHandle handle);
   bool release(ImageHandle handle);
+  bool pin(ImageHandle handle);
+  bool unpin(ImageHandle handle);
+  bool touch(ImageHandle handle);
   bool beginUse(ImageHandle handle);
   bool endUse(ImageHandle handle);
   void update();
@@ -73,6 +81,15 @@ class ImageStore {
   std::size_t gpuBytes() const { return gpuBytes_; }
   std::size_t peakGpuBytes() const { return peakGpuBytes_; }
   std::size_t cpuBytes() const;
+  void setWarmBudgetBytes(std::size_t bytes) { warmBudgetBytes_ = bytes; }
+  std::size_t warmBudgetBytes() const { return warmBudgetBytes_; }
+  std::size_t warmBytes() const;
+  std::size_t warmCount() const;
+  std::size_t pinnedBytes() const;
+  std::size_t pinnedCount() const;
+  std::uint64_t cacheHits() const { return cacheHits_; }
+  std::uint64_t warmHits() const { return warmHits_; }
+  std::uint64_t budgetEvictions() const { return budgetEvictions_; }
   std::vector<ImageMemoryEntry> memoryEntries() const;
 
  private:
@@ -83,11 +100,12 @@ class ImageStore {
     int height = 0;
     std::uint32_t references = 0;
     std::atomic<std::uint32_t> inFlight{0};
-    std::uint8_t unreferencedFrames = 0;
+    std::uint32_t pins = 0;
+    std::uint64_t lastUsedSerial = 0;
     mutable std::uint16_t cpuPixelFrames = 0;
     // Atlas CPU pixels are retained for the lifetime of the slot so blt()
-    // never pays a second disk open + PNG decode after a grace timer expires.
-    // Freed only in destroySlot alongside the GPU texture.
+    // never pays a second disk open + PNG decode. Freed only in destroySlot
+    // alongside the GPU texture.
     bool retainCpuPixels = false;
     std::string cacheKey;
     mutable std::optional<ImagePixels> cachedPixels;
@@ -95,12 +113,19 @@ class ImageStore {
   };
 
   static ImageHandle makeHandle(std::size_t index, std::uint16_t generation);
+  void markUsed(Slot& slot);
+  static std::size_t residentBytes(const Slot& slot);
   void destroySlot(std::size_t index);
   std::deque<Slot> slots_;
   std::unordered_map<std::string, ImageHandle> pathCache_;
   std::size_t liveCount_ = 0;
   std::size_t gpuBytes_ = 0;
   std::size_t peakGpuBytes_ = 0;
+  std::size_t warmBudgetBytes_ = defaultWarmBudgetBytes;
+  std::uint64_t useSerial_ = 0;
+  std::uint64_t cacheHits_ = 0;
+  std::uint64_t warmHits_ = 0;
+  std::uint64_t budgetEvictions_ = 0;
 };
 
 }  // namespace pmjs
