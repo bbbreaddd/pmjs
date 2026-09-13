@@ -303,6 +303,9 @@ Object.defineProperty(NativeImage.prototype, 'src', {
         image.complete = true;
         if (typeof image.onload === 'function') image.onload({ type: 'load', target: image });
         image.dispatchEvent({ type: 'load', target: image });
+        if (typeof globalThis.__pmjsImageLoadCompleted === 'function') {
+          globalThis.__pmjsImageLoadCompleted(image);
+        }
       }, function(error) {
         image.complete = true;
         if (typeof image.onerror === 'function') image.onerror({ type: 'error', target: image });

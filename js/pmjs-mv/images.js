@@ -24,10 +24,43 @@ if (typeof Bitmap !== 'undefined' && Bitmap.prototype._clearImgInstance) {
     return originalClearImgInstance.apply(this, arguments);
   };
 }
+
+if (typeof ImageCache !== 'undefined') {
+  var gameRequestedImageCachePixels = Number(ImageCache.limit);
+  if (!Number.isFinite(gameRequestedImageCachePixels) ||
+      gameRequestedImageCachePixels < 0) gameRequestedImageCachePixels = 0;
+  var configuredImageCacheMaxPixels = Number(pmjsGameConfig.imageCacheMaxPixels || 0);
+  try {
+    var environmentImageCacheMaxPixels = Number(
+      NativeHost.runtime.env('PMJS_IMAGE_CACHE_MAX_PIXELS') || 0);
+    if (Number.isSafeInteger(environmentImageCacheMaxPixels) &&
+        environmentImageCacheMaxPixels > 0) {
+      configuredImageCacheMaxPixels = environmentImageCacheMaxPixels;
+    }
+  } catch (_) {}
+  if (!Number.isSafeInteger(configuredImageCacheMaxPixels) ||
+      configuredImageCacheMaxPixels <= 0) configuredImageCacheMaxPixels = 0;
+  var effectiveImageCachePixels = function() {
+    if (!configuredImageCacheMaxPixels) return gameRequestedImageCachePixels;
+    return Math.min(gameRequestedImageCachePixels, configuredImageCacheMaxPixels);
+  };
+  Object.defineProperty(ImageCache, 'limit', {
+    configurable: true,
+    enumerable: true,
+    get: effectiveImageCachePixels,
+    set: function(value) {
+      value = Number(value);
+      if (Number.isFinite(value) && value >= 0) gameRequestedImageCachePixels = value;
+    }
+  });
+}
+
 if (typeof ImageCache !== 'undefined' && ImageCache.prototype._truncateCache) {
   var originalImageCacheTruncate = ImageCache.prototype._truncateCache;
   ImageCache.prototype._truncateCache = function() {
-    // Keep recently touched entries within the limit and never evict held items.
+    // MV's cache limit is measured in pixels. Cache eviction only relinquishes
+    // cache membership: a Sprite or plugin may still own the Bitmap and its
+    // NativeImage backing must remain valid until that Bitmap becomes unreachable.
     try {
       var items = this._items;
       var sizeLeft = ImageCache.limit;
@@ -36,11 +69,9 @@ if (typeof ImageCache !== 'undefined' && ImageCache.prototype._truncateCache) {
       sorted.forEach(function(item){
         if (sizeLeft > 0 || self._mustBeHeld(item)) {
           var bmp = item.bitmap;
-          sizeLeft -= bmp.width * bmp.height * 4;
+          sizeLeft -= bmp.width * bmp.height;
         } else {
           delete items[item.key];
-          // Clearing the source starts the native release grace period.
-          try { if (item.bitmap && item.bitmap._image instanceof NativeImage) item.bitmap._image.src = ''; } catch (_) {}
         }
       });
       return;
@@ -48,6 +79,34 @@ if (typeof ImageCache !== 'undefined' && ImageCache.prototype._truncateCache) {
       nativeCompatibilityHit('imageCache.truncateError', e && e.message || '');
     }
     return originalImageCacheTruncate.apply(this, arguments);
+  };
+}
+
+// Pending images must be held by MV's ImageCache. Once a Bitmap becomes ready,
+// coalesce cache reconsideration so a burst of async decodes causes one scan.
+var pmjsImageCacheTrimPending = false;
+function pmjsScheduleImageCacheTrim() {
+  if (pmjsImageCacheTrimPending) return;
+  pmjsImageCacheTrimPending = true;
+  Promise.resolve().then(function() {
+    pmjsImageCacheTrimPending = false;
+    try {
+      if (typeof ImageManager !== 'undefined' && ImageManager._imageCache &&
+          typeof ImageManager._imageCache._truncateCache === 'function') {
+        ImageManager._imageCache._truncateCache();
+      }
+    } catch (error) {
+      nativeCompatibilityHit('imageCache.completionTrimError', error && error.message || '');
+    }
+  });
+}
+globalThis.__pmjsImageLoadCompleted = pmjsScheduleImageCacheTrim;
+if (typeof Bitmap !== 'undefined' && Bitmap.prototype._onLoad) {
+  var originalBitmapOnLoadForImageCache = Bitmap.prototype._onLoad;
+  Bitmap.prototype._onLoad = function() {
+    var result = originalBitmapOnLoadForImageCache.apply(this, arguments);
+    pmjsScheduleImageCacheTrim();
+    return result;
   };
 }
 
