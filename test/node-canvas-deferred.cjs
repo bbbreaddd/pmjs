@@ -135,6 +135,7 @@ assert.equal(mem.liveBytes, 20 * 20 * 4);
 native.canvas.release(cWrite.handle);
 
 // 8. Scene submission with deferred canvas should realize and render
+const uploadsBeforeScene = native.images.memory(0);
 const c3 = native.canvas.create(32, 32);
 native.canvas.fillRect(c3.handle, 0, 0, 32, 32, 0x123456ff);
 mem = native.canvas.memory();
@@ -153,12 +154,32 @@ native.beginFrame();
 native.scene.submit(schema.version, metadata, values, 1);
 native.renderFrame();
 
+let uploads = native.images.memory(0);
+assert.ok(uploads.textureCreates >= uploadsBeforeScene.textureCreates + 1);
+assert.equal(uploads.textureFullUpdates, uploadsBeforeScene.textureFullUpdates);
+assert.equal(uploads.textureRegionUpdates,
+  uploadsBeforeScene.textureRegionUpdates);
+assert.ok(uploads.textureUploadBytes >=
+  uploadsBeforeScene.textureUploadBytes + 32 * 32 * 4);
+
 mem = native.canvas.memory();
 assert.equal(mem.liveBytes, 32 * 32 * 4, 'c3 should have been realized upon submitScene');
 
 const frame = native.canvas.captureScene();
 const sampled = native.canvas.pixel(frame.handle, 16, 16);
 assert.equal(sampled, 0x123456ff, 'Rendered frame should match canvas color');
+
+const uploadsBeforeMutation = native.images.memory(0);
+native.canvas.fillRect(c3.handle, 0, 0, 1, 1, 0xffffffff);
+native.beginFrame();
+native.renderFrame();
+uploads = native.images.memory(0);
+assert.equal(uploads.textureCreates, uploadsBeforeMutation.textureCreates);
+assert.equal(uploads.textureFullUpdates, uploadsBeforeMutation.textureFullUpdates);
+assert.equal(uploads.textureRegionUpdates,
+  uploadsBeforeMutation.textureRegionUpdates + 1);
+assert.equal(uploads.textureUploadBytes,
+  uploadsBeforeMutation.textureUploadBytes + 4);
 
 native.canvas.release(frame.handle);
 native.canvas.release(c3.handle);

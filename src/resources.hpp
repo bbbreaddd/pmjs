@@ -94,6 +94,10 @@ class ImageStore {
   std::uint64_t cacheHits() const { return cacheHits_; }
   std::uint64_t warmHits() const { return warmHits_; }
   std::uint64_t budgetEvictions() const { return budgetEvictions_; }
+  std::uint64_t textureCreates() const { return textureCreates_; }
+  std::uint64_t textureFullUpdates() const { return textureFullUpdates_; }
+  std::uint64_t textureRegionUpdates() const { return textureRegionUpdates_; }
+  std::uint64_t textureUploadBytes() const { return textureUploadBytes_; }
   std::vector<ImageMemoryEntry> memoryEntries() const;
 
  private:
@@ -130,6 +134,10 @@ class ImageStore {
   std::uint64_t cacheHits_ = 0;
   std::uint64_t warmHits_ = 0;
   std::uint64_t budgetEvictions_ = 0;
+  std::uint64_t textureCreates_ = 0;
+  std::uint64_t textureFullUpdates_ = 0;
+  std::uint64_t textureRegionUpdates_ = 0;
+  std::uint64_t textureUploadBytes_ = 0;
   ImageHandle fallbackHandle_ = 0;
   std::uint64_t fallbackUses_ = 0;
 };

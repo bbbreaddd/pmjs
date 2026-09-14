@@ -294,6 +294,9 @@ std::optional<ImageInfo> ImageStore::createRgba(int width, int height,
     if (texture) glDeleteTextures(1, &texture);
     return std::nullopt;
   }
+  ++textureCreates_;
+  textureUploadBytes_ += static_cast<std::uint64_t>(width) *
+      static_cast<std::uint64_t>(height) * 4U;
 
   std::size_t index = 0;
   while (index < slots_.size() && slots_[index].live) ++index;
@@ -406,7 +409,13 @@ bool ImageStore::updateRgba(ImageHandle handle, const void* pixels) {
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
   glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, info->width, info->height,
                   GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-  return glGetError() == GL_NO_ERROR;
+  const bool ok = glGetError() == GL_NO_ERROR;
+  if (ok) {
+    ++textureFullUpdates_;
+    textureUploadBytes_ += static_cast<std::uint64_t>(info->width) *
+        static_cast<std::uint64_t>(info->height) * 4U;
+  }
+  return ok;
 }
 
 bool ImageStore::updateRgbaRegion(ImageHandle handle, int x, int y, int width,
@@ -423,7 +432,13 @@ bool ImageStore::updateRgbaRegion(ImageHandle handle, int x, int y, int width,
   glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, width, height, GL_RGBA,
                   GL_UNSIGNED_BYTE, pixels);
   glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-  return glGetError() == GL_NO_ERROR;
+  const bool ok = glGetError() == GL_NO_ERROR;
+  if (ok) {
+    ++textureRegionUpdates_;
+    textureUploadBytes_ += static_cast<std::uint64_t>(width) *
+        static_cast<std::uint64_t>(height) * 4U;
+  }
+  return ok;
 }
 
 ImageHandle ImageStore::makeHandle(std::size_t index, std::uint16_t generation) {

@@ -257,6 +257,14 @@ napi_value imageMemory(napi_env env, napi_callback_info info) try {
     number(env, images.warmHits())), "cannot set warm image hits");
   check(env, napi_set_named_property(env, result, "budgetEvictions",
     number(env, images.budgetEvictions())), "cannot set image budget evictions");
+  check(env, napi_set_named_property(env, result, "textureCreates",
+    number(env, images.textureCreates())), "cannot set texture creates");
+  check(env, napi_set_named_property(env, result, "textureFullUpdates",
+    number(env, images.textureFullUpdates())), "cannot set texture full updates");
+  check(env, napi_set_named_property(env, result, "textureRegionUpdates",
+    number(env, images.textureRegionUpdates())), "cannot set texture region updates");
+  check(env, napi_set_named_property(env, result, "textureUploadBytes",
+    number(env, images.textureUploadBytes())), "cannot set texture upload bytes");
   check(env, napi_set_named_property(env, result, "pendingDecodeJobs",
     number(env, value.pendingImageLoads.size())), "cannot set pending image jobs");
   check(env, napi_set_named_property(env, result, "decodeJobs",
