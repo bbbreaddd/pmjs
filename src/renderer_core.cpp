@@ -277,13 +277,15 @@ std::uint32_t Renderer::createTileLayer(std::vector<TileLayerTile> tiles) {
   constexpr std::size_t kMaxTileCount = 65536U;
   if (tiles.empty() || tiles.size() > kMaxTileCount) return 0;
   TileLayerResource layer;
-  std::unordered_set<ImageHandle> uniqueImages;
+  std::unordered_map<ImageHandle, ImageInfo> imageInfo;
   for (const auto& tile : tiles) {
-    if (!images_.lookup(tile.image)) return 0;
-    uniqueImages.insert(tile.image);
+    if (imageInfo.find(tile.image) != imageInfo.end()) continue;
+    const auto image = images_.lookup(tile.image);
+    if (!image) return 0;
+    imageInfo.emplace(tile.image, *image);
   }
-  layer.images.reserve(uniqueImages.size());
-  for (const auto image : uniqueImages) {
+  layer.images.reserve(imageInfo.size());
+  for (const auto& [image, _] : imageInfo) {
     if (!images_.retain(image)) {
       for (const auto retained : layer.images) images_.release(retained);
       return 0;
@@ -293,11 +295,7 @@ std::uint32_t Renderer::createTileLayer(std::vector<TileLayerTile> tiles) {
   std::vector<float> vertices;
   vertices.reserve(tiles.size() * 36U);
   for (const auto& tile : tiles) {
-    const auto image = images_.lookup(tile.image);
-    if (!image) {
-      for (const auto retained : layer.images) images_.release(retained);
-      return 0;
-    }
+    const auto& image = imageInfo.at(tile.image);
     const float left = tile.position[0];
     const float top = tile.position[1];
     const float right = left + tile.source[2];
@@ -316,8 +314,8 @@ std::uint32_t Renderer::createTileLayer(std::vector<TileLayerTile> tiles) {
     append(left, top, sourceLeft, sourceTop);
     append(right, bottom, sourceRight, sourceBottom);
     append(left, bottom, sourceLeft, sourceBottom);
-    if (layer.batches.empty() || layer.batches.back().texture != image->texture) {
-      layer.batches.push_back({image->texture, image->width, image->height,
+    if (layer.batches.empty() || layer.batches.back().texture != image.texture) {
+      layer.batches.push_back({image.texture, image.width, image.height,
         static_cast<std::int32_t>(vertices.size() / 6U - 6U), 6});
     } else {
       layer.batches.back().count += 6;

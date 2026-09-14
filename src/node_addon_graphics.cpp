@@ -65,6 +65,22 @@ napi_value drawTiled(napi_env env, napi_callback_info info) try {
 }
 
 std::vector<float> floatVector(napi_env env, napi_value input) {
+  bool typed = false;
+  check(env, napi_is_typedarray(env, input, &typed), "expected numeric array");
+  if (typed) {
+    napi_typedarray_type type;
+    std::size_t length = 0;
+    void* data = nullptr;
+    napi_value arrayBuffer;
+    std::size_t byteOffset = 0;
+    check(env, napi_get_typedarray_info(env, input, &type, &length, &data,
+      &arrayBuffer, &byteOffset), "invalid numeric typed array");
+    if (type != napi_float32_array) {
+      throw std::runtime_error("expected Float32Array");
+    }
+    const auto* values = static_cast<const float*>(data);
+    return std::vector<float>(values, values + length);
+  }
   std::uint32_t length = 0;
   check(env, napi_get_array_length(env, input, &length), "expected numeric array");
   std::vector<float> result;
@@ -94,13 +110,19 @@ napi_value createTileLayer(napi_env env, napi_callback_info info) try {
   auto handles = uintVector(env, args.at(1));
   if (points.size() % 9 != 0) throw std::runtime_error("invalid tile records");
   State& value = host(env);
+  std::vector<pmjs::ImageHandle> images;
+  images.reserve(handles.size());
+  for (const auto handle : handles) {
+    auto image = resolveImage(value, handle);
+    if (!image) throw std::runtime_error("invalid tile image");
+    images.push_back(*image);
+  }
   std::vector<pmjs::TileLayerTile> tiles;
+  tiles.reserve(points.size() / 9U);
   for (std::size_t index = 0; index < points.size(); index += 9) {
     auto texture = static_cast<std::size_t>(points[index + 8]);
-    if (texture >= handles.size()) throw std::runtime_error("invalid texture index");
-    auto image = resolveImage(value, handles[texture]);
-    if (!image) throw std::runtime_error("invalid tile image");
-    tiles.push_back({*image, {points[index], points[index + 1], points[index + 4], points[index + 5]},
+    if (texture >= images.size()) throw std::runtime_error("invalid texture index");
+    tiles.push_back({images[texture], {points[index], points[index + 1], points[index + 4], points[index + 5]},
       {points[index + 2], points[index + 3]}, {points[index + 6], points[index + 7]}});
   }
   return uint32(env, value.renderer.createTileLayer(std::move(tiles)));

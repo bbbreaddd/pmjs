@@ -236,6 +236,78 @@ function nativeParticleValues(context, node, childIndex) {
   return value;
 }
 
+function nativePlainSpriteBinding(node) {
+  if (nativeSceneNodeRejected(node, null) || node.children && node.children.length ||
+      node.shader || node.mask || typeof node.updateChowRender === 'function' ||
+      nativeNodeRenderType(node) !== 'sprite' || nativeScenePictureBlend(node) >= 0) {
+    return null;
+  }
+  var filters = nativeSceneFilters(node);
+  if (filters && filters.some(function(filter) {
+    return filter && filter.enabled !== false;
+  })) return null;
+  var blendMode = nativeSceneBlendMode(node);
+  if (blendMode < 0) return null;
+  var texture = node.texture;
+  var base = texture && texture.baseTexture;
+  var source = base && base.source;
+  var nativeImage = source && (source._nativeImage || source._nativeCanvas);
+  var frame = texture && (texture._frame || texture.frame);
+  var rotation = ((Number(texture && texture.rotate) || 0) % 16 + 16) % 16;
+  var cpuTinted = node._tintTexture && texture &&
+    texture.baseTexture === node._tintTexture;
+  var tone = node._colorTone;
+  var blend = node._blendColor;
+  if (!nativeImage || !frame || frame.width <= 0 || frame.height <= 0 ||
+      rotation % 2 || cpuTinted ||
+      tone && (tone[0] || tone[1] || tone[2] || tone[3]) ||
+      blend && blend[3] > 0) return null;
+  return { node: node, texture: texture, base: base, nativeImage: nativeImage,
+    frame: frame, rotation: rotation, blendMode: blendMode };
+}
+
+function writeNativePlainSpriteSegment(bindings, parentIndex) {
+  nativeSceneSegmentStats.runs++;
+  nativeSceneSegmentStats.sprites += bindings.length;
+  for (var bindingIndex = 0; bindingIndex < bindings.length; bindingIndex++) {
+    var binding = bindings[bindingIndex];
+    var node = binding.node;
+    var transform = node.transform;
+    if (transform && typeof transform.updateLocalTransform === 'function') {
+      transform.updateLocalTransform();
+    }
+    var local = transform && transform.localTransform || nativeIdentityTransform;
+    var texture = binding.texture;
+    var frame = binding.frame;
+    var anchor = node.anchor || { x: 0, y: 0 };
+    var original = texture.orig || frame;
+    var trim = texture.trim;
+    var localX = trim ? trim.x - anchor.x * original.width : -anchor.x * original.width;
+    var localY = trim ? trim.y - anchor.y * original.height : -anchor.y * original.height;
+    var width = trim ? trim.width : original.width;
+    var height = trim ? trim.height : original.height;
+    var nodeIndex = nativeSceneRecord(parentIndex, 1, binding.nativeImage.handle,
+      node.tint === undefined ? 0xffffff : node.tint, binding.blendMode,
+      local, node.alpha, null, 0, null);
+    var metadataOffset = nodeIndex * nativeSceneMetadataStride;
+    var valueOffset = nodeIndex * nativeSceneValueStride;
+    nativeSceneValues[valueOffset + 7] = localX;
+    nativeSceneValues[valueOffset + 8] = localY;
+    nativeSceneMetadata[metadataOffset + 5] |= binding.rotation / 2 << 5;
+    if (PIXI.SCALE_MODES && binding.base.scaleMode === PIXI.SCALE_MODES.NEAREST) {
+      nativeSceneMetadata[metadataOffset + 5] |= 8;
+    }
+    if (nativeSceneRoundPixels) nativeSceneMetadata[metadataOffset + 5] |= 256;
+    var resolution = Math.max(0.000001, Number(binding.base.resolution) || 1);
+    nativeSceneValues[valueOffset + 9] = frame.x * resolution;
+    nativeSceneValues[valueOffset + 10] = frame.y * resolution;
+    nativeSceneValues[valueOffset + 11] = frame.width * resolution;
+    nativeSceneValues[valueOffset + 12] = frame.height * resolution;
+    nativeSceneValues[valueOffset + 13] = width;
+    nativeSceneValues[valueOffset + 14] = height;
+  }
+}
+
 function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
     particleContext) {
   if (!node || nativeSceneUnsupported) return;
@@ -532,10 +604,16 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
     // the same operation again in the native shader.
     var cpuTinted = !particleContext && node._tintTexture && texture &&
       texture.baseTexture === node._tintTexture;
+    if (cpuTinted && typeof nativeMaterializationStats !== 'undefined') {
+      nativeMaterializationStats.cpuTintedSprites++;
+    }
     var colorTone = particleContext || cpuTinted ? null : node._colorTone;
     var blendColor = particleContext || cpuTinted ? null : node._blendColor;
     if ((colorTone && (colorTone[0] || colorTone[1] || colorTone[2] ||
          colorTone[3])) || (blendColor && blendColor[3] > 0)) {
+      if (typeof nativeMaterializationStats !== 'undefined') {
+        nativeMaterializationStats.shaderToneSprites++;
+      }
       nativeSceneMetadata[nodeIndex * nativeSceneMetadataStride + 5] |= 16;
       for (var colorIndex = 0; colorIndex < 4; colorIndex++) {
         nativeSceneValues[valueOffset + 33 + colorIndex] =
@@ -661,6 +739,26 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
   var particleFrame = particleContainer ? nativeParticleFrameContext(node) : null;
   for (var index = 0; index < childLimit; index++) {
     if (nativeSceneTraversesChild(kind, node, node.children[index])) {
+      if (!particleFrame &&
+          nativePlainSpriteSegmentsEnabled &&
+          (typeof pmjsOptimizationEnabled !== 'function' ||
+            pmjsOptimizationEnabled('scene.plain-sprite-segment'))) {
+        var segment = [];
+        var segmentIndex = index;
+        while (segmentIndex < childLimit &&
+            nativeSceneTraversesChild(kind, node, node.children[segmentIndex])) {
+          var binding = nativePlainSpriteBinding(node.children[segmentIndex]);
+          if (!binding) break;
+          segment.push(binding);
+          segmentIndex++;
+        }
+        nativeSceneSegmentStats.candidates += segment.length;
+        if (segment.length >= 4) {
+          writeNativePlainSpriteSegment(segment, nodeIndex);
+          index = segmentIndex - 1;
+          continue;
+        }
+      }
       if (particleFrame) particleFrame.childIndex = index;
       writeNativeSceneNode(node.children[index], nodeIndex, null, null,
         particleFrame);

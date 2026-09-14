@@ -28,7 +28,8 @@ function stubCanvasContext(calls) {
 }
 
 function loadScenePrimitives({ disableOptimizations = [], env = {} } = {}) {
-  const calls = { createTileLayer: 0, releaseTileLayer: 0, createMesh: 0,
+  const calls = { createTileLayer: 0, tileLayerPoints: [],
+    releaseTileLayer: 0, createMesh: 0,
     releaseMesh: 0, putImageData: 0, fill: 0, getLocalBounds: 0 };
   let nextHandle = 1000;
   const context = {
@@ -38,7 +39,11 @@ function loadScenePrimitives({ disableOptimizations = [], env = {} } = {}) {
       runtime: { env(name) { return env[name]; } },
       scene: null,
       render: {
-        createTileLayer() { calls.createTileLayer++; return ++nextHandle; },
+        createTileLayer(points) {
+          calls.createTileLayer++;
+          calls.tileLayerPoints.push(points);
+          return ++nextHandle;
+        },
         releaseTileLayer() { calls.releaseTileLayer++; },
         createMesh() { calls.createMesh++; return ++nextHandle; },
         releaseMesh() { calls.releaseMesh++; },
@@ -100,6 +105,25 @@ test('tilemap.persistent-layer-cache reuses the compiled layer when enabled', ()
   assert.equal(calls.createTileLayer, 1);
   assert.equal(calls.releaseTileLayer, 0);
   assert.equal(first, second);
+});
+
+test('tilemap.bulk-layer-transfer stages records in a reusable Float32Array', () => {
+  const enabled = loadScenePrimitives();
+  const layer = tileLayer();
+  callIn(enabled.context, 'ensureNativeRectTileLayer(layer)', 'layer', layer);
+  const first = enabled.calls.tileLayerPoints[0];
+  assert.equal(Object.prototype.toString.call(first), '[object Float32Array]');
+  layer._pmjsNativeGeneration++;
+  layer.pointsBuf[0] = 4;
+  callIn(enabled.context, 'ensureNativeRectTileLayer(layer)', 'layer', layer);
+  assert.equal(enabled.calls.tileLayerPoints[1], first);
+  assert.equal(enabled.calls.tileLayerPoints[1][0], 4);
+
+  const disabled = loadScenePrimitives(
+    { disableOptimizations: ['tilemap.bulk-layer-transfer'] });
+  const ordinary = tileLayer();
+  callIn(disabled.context, 'ensureNativeRectTileLayer(layer)', 'layer', ordinary);
+  assert.equal(Array.isArray(disabled.calls.tileLayerPoints[0]), true);
 });
 
 test('tilemap.persistent-layer-cache recompiles every frame when disabled', () => {

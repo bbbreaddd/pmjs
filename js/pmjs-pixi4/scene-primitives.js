@@ -5,6 +5,9 @@ if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
   PMJS.optimizations.register({ id: 'tilemap.persistent-layer-cache',
     owner: 'pmjs-pixi4',
     fallback: 'recompile the native tile layer every frame from live pointsBuf' });
+  PMJS.optimizations.register({ id: 'tilemap.bulk-layer-transfer',
+    owner: 'pmjs-pixi4',
+    fallback: 'transfer tile records through ordinary JavaScript arrays' });
   PMJS.optimizations.register({ id: 'scene.tiling-texture-cache',
     owner: 'pmjs-pixi4',
     fallback: 're-rasterize the tiling source canvas on every use' });
@@ -12,6 +15,9 @@ if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
     fallback: 're-rasterize vector graphics on every use' });
   PMJS.optimizations.register({ id: 'scene.gpu-mesh-cache', owner: 'pmjs-pixi4',
     fallback: 're-upload the GPU mesh on every use' });
+  PMJS.optimizations.register({ id: 'scene.plain-sprite-segment',
+    owner: 'pmjs-pixi4',
+    fallback: 'encode each sprite through the generic recursive scene writer' });
 }
 
 var nativeTransformParent = new PIXI.Container();
@@ -24,6 +30,15 @@ var nativeTransformMs = 0;
 var nativeQueueMs = 0;
 var nativeStageSamples = 0;
 var nativeBlankTileHandle = 0;
+var nativeMaterializationStats = {
+  tilingDirect: 0, tilingHits: 0, tilingMisses: 0,
+  meshHits: 0, meshMisses: 0,
+  cpuTintedSprites: 0, shaderToneSprites: 0
+};
+var nativeSceneSegmentStats = { runs: 0, sprites: 0, candidates: 0 };
+var nativePlainSpriteSegmentsEnabled =
+  typeof pmjsOptimizationEnv === 'function' &&
+  pmjsOptimizationEnv('PMJS_SCENE_PLAIN_SPRITE_SEGMENT') === '1';
 
 function nativeBlankTile() {
   if (nativeBlankTileHandle) return nativeBlankTileHandle;
@@ -86,7 +101,12 @@ function ensureNativeTilingTexture(texture) {
   var resolution = Math.max(0.000001, Number(base.resolution) || 1);
   var fullTexture = !rotation && !trim && frame.x === 0 && frame.y === 0 &&
     frame.width === base.width && frame.height === base.height;
-  if (fullTexture) return { handle: nativeImage.handle, resolution: resolution };
+  if (fullTexture) {
+    if (typeof nativeMaterializationStats !== 'undefined') {
+      nativeMaterializationStats.tilingDirect++;
+    }
+    return { handle: nativeImage.handle, resolution: resolution };
+  }
   var signature = [nativeImage.handle, Number(texture._updateID) || 0,
     frame.x, frame.y, frame.width, frame.height, original.width, original.height,
     trim && trim.x, trim && trim.y, trim && trim.width, trim && trim.height,
@@ -95,8 +115,14 @@ function ensureNativeTilingTexture(texture) {
       texture.__pmjsTilingCanvasSignature === signature &&
       (typeof pmjsOptimizationEnabled !== 'function' ||
         pmjsOptimizationEnabled('scene.tiling-texture-cache'))) {
+    if (typeof nativeMaterializationStats !== 'undefined') {
+      nativeMaterializationStats.tilingHits++;
+    }
     return { handle: texture.__pmjsTilingCanvas._ensureNativeCanvas().handle,
       resolution: resolution };
+  }
+  if (typeof nativeMaterializationStats !== 'undefined') {
+    nativeMaterializationStats.tilingMisses++;
   }
   var width = Math.max(1, Math.ceil(original.width * resolution));
   var height = Math.max(1, Math.ceil(original.height * resolution));
@@ -257,7 +283,20 @@ function ensureNativeRectTileLayer(layer) {
     if (layer._pmjsNativeLayer) {
       NativeHost.render.releaseTileLayer(layer._pmjsNativeLayer);
     }
-    layer._pmjsNativeLayer = NativeHost.render.createTileLayer(points, handles);
+    var transferredPoints = points;
+    if (typeof pmjsOptimizationEnabled !== 'function' ||
+        pmjsOptimizationEnabled('tilemap.bulk-layer-transfer')) {
+      var staging = layer._pmjsNativePointStaging;
+      if (!staging || staging.length !== points.length) {
+        staging = layer._pmjsNativePointStaging = new Float32Array(points.length);
+      }
+      for (var pointIndex = 0; pointIndex < points.length; pointIndex++) {
+        staging[pointIndex] = points[pointIndex];
+      }
+      transferredPoints = staging;
+    }
+    layer._pmjsNativeLayer = NativeHost.render.createTileLayer(
+      transferredPoints, handles);
     layer._pmjsNativeCompiledGeneration = generation;
     layer._pmjsNativeTextureSignature = textureSignature;
   }
@@ -787,7 +826,13 @@ function ensureNativeGpuMesh(mesh) {
   if (mesh.__pmjsNativeMesh && mesh.__pmjsNativeMeshRevision === revision &&
       (typeof pmjsOptimizationEnabled !== 'function' ||
         pmjsOptimizationEnabled('scene.gpu-mesh-cache'))) {
+    if (typeof nativeMaterializationStats !== 'undefined') {
+      nativeMaterializationStats.meshHits++;
+    }
     return mesh.__pmjsNativeMesh;
+  }
+  if (typeof nativeMaterializationStats !== 'undefined') {
+    nativeMaterializationStats.meshMisses++;
   }
   if (mesh.__pmjsNativeMesh) NativeHost.render.releaseMesh(mesh.__pmjsNativeMesh);
   var nativeUvs = Array.prototype.slice.call(uvs);
