@@ -144,6 +144,18 @@ std::uint32_t MediaService::loadAudio(const std::string& path, std::string* erro
   impl_->voices.emplace(handle, std::move(voice));
   return handle;
 }
+std::uint32_t MediaService::loadAudioBytes(std::vector<std::uint8_t> bytes,
+                                           std::string* error) {
+  std::unique_ptr<AudioDecoderSession> decoder;
+  try { decoder = std::make_unique<AudioDecoderSession>(std::move(bytes)); }
+  catch (const std::exception& exception) { if (error) *error = exception.what(); return 0; }
+  auto voice = std::make_shared<Impl::Voice>(std::move(decoder));
+  std::lock_guard lock(impl_->mutex);
+  std::uint32_t handle = impl_->nextHandle++;
+  if (!handle) handle = impl_->nextHandle++;
+  impl_->voices.emplace(handle, std::move(voice));
+  return handle;
+}
 bool MediaService::play(std::uint32_t handle, bool loop, double offset) {
   auto voice = impl_->voice(handle);
   if (!voice || !std::isfinite(offset)) return false;

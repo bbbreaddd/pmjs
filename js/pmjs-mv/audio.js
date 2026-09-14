@@ -18,6 +18,8 @@ function NativeAudioBuffer(url) {
   this._wasPlaying = false;
   this._handle = 0;
   this._duration = 0;
+  this._loading = false;
+  this._loadGeneration = 0;
 
   this._gainNode = this;
   this.gain = this;
@@ -30,21 +32,91 @@ function NativeAudioBuffer(url) {
     : clean.replace(/^\.\//, '').replace(/^\/+/, '');
   if (path === '.') path = '';
 
-  if (NativeHost.media && path) {
-    try {
-      var loaded = NativeHost.media.loadAudio(path);
-      this._handle = loaded.handle;
-      this._duration = loaded.duration;
-    } catch (error) {
-      this._handle = 0;
-      this._hasError = true;
-      console.error('[pmjs-media] audio load failed path=' + path + ' error=' + error.message);
-    }
-  }
-  if (this._handle && nativeAudioFinalizer) {
-    nativeAudioFinalizer.register(this, this._handle, this);
+  if (NativeHost.media && typeof globalThis.pmjsIsObjectURL === 'function' &&
+      globalThis.pmjsIsObjectURL(this._url)) {
+    this._loadObjectUrl(this._url);
+  } else if (NativeHost.media && path && typeof Decrypter !== 'undefined' &&
+      Decrypter.hasEncryptedAudio) {
+    this._loadEncrypted(path);
+  } else if (NativeHost.media && path) {
+    this._loadPath(path);
   }
 }
+
+NativeAudioBuffer.prototype._install = function(loaded, generation) {
+  if (generation !== this._loadGeneration) {
+    NativeHost.media.releaseAudio(loaded.handle);
+    return;
+  }
+  this._handle = loaded.handle;
+  this._duration = loaded.duration;
+  this._loading = false;
+  if (nativeAudioFinalizer) nativeAudioFinalizer.register(this, this._handle, this);
+  var listeners = this._loadListeners.splice(0);
+  for (var index = 0; index < listeners.length; index++) listeners[index]();
+  if (this._autoPlay) {
+    this._updateParameters();
+    this._wasPlaying = NativeHost.media.playAudio(this._handle, this._loop, this._offset);
+  }
+};
+
+NativeAudioBuffer.prototype._failLoad = function(source, error, generation) {
+  if (generation !== undefined && generation !== this._loadGeneration) return;
+  this._loading = false;
+  this._hasError = true;
+  console.error('[pmjs-media] audio load failed source=' + source +
+    ' error=' + (error && error.message || error));
+};
+
+NativeAudioBuffer.prototype._loadPath = function(path) {
+  var generation = ++this._loadGeneration;
+  try { this._install(NativeHost.media.loadAudio(path), generation); }
+  catch (error) { this._failLoad(path, error, generation); }
+};
+
+NativeAudioBuffer.prototype._loadBytes = function(buffer, generation) {
+  if (generation === undefined) generation = ++this._loadGeneration;
+  if (generation !== this._loadGeneration) return;
+  try { this._install(NativeHost.media.loadAudioBytes(buffer), generation); }
+  catch (error) { this._failLoad('audio bytes', error, generation); }
+};
+
+NativeAudioBuffer.prototype._loadObjectUrl = function(url) {
+  var generation = ++this._loadGeneration;
+  this._loading = true;
+  var blob = typeof globalThis.pmjsResolveObjectURL === 'function'
+    ? globalThis.pmjsResolveObjectURL(url) : null;
+  if (!blob) { this._failLoad(url, new Error('object URL is unavailable'), generation); return; }
+  blob.arrayBuffer().then(function(buffer) {
+    if (generation !== this._loadGeneration) return;
+    this._loadBytes(buffer, generation);
+  }.bind(this)).catch(function(error) {
+    this._failLoad(url, error, generation);
+  }.bind(this));
+};
+
+NativeAudioBuffer.prototype._loadEncrypted = function(path) {
+  var generation = ++this._loadGeneration;
+  this._loading = true;
+  var encryptedPath = Decrypter.extToEncryptExt(path);
+  var request = new XMLHttpRequest();
+  request.open('GET', encryptedPath);
+  request.responseType = 'arraybuffer';
+  request.onload = function() {
+    try {
+      if (request.status >= 400) throw new Error('HTTP status ' + request.status);
+      var bytes = Decrypter.decryptArrayBuffer(request.response);
+      if (generation !== this._loadGeneration) return;
+      this._loadBytes(bytes, generation);
+    } catch (error) {
+      this._failLoad(encryptedPath, error, generation);
+    }
+  }.bind(this);
+  request.onerror = function() {
+    this._failLoad(encryptedPath, new Error('request failed'), generation);
+  }.bind(this);
+  request.send();
+};
 
 Object.defineProperties(NativeAudioBuffer.prototype, {
   url: {
@@ -103,7 +175,7 @@ NativeAudioBuffer.prototype._updateParameters = function() {
 };
 
 NativeAudioBuffer.prototype.isReady = function() {
-  return !this._hasError && (!!this._handle || !NativeHost.media);
+  return !this._loading && !this._hasError && (!!this._handle || !NativeHost.media);
 };
 
 NativeAudioBuffer.prototype.isError = function() {
@@ -137,6 +209,8 @@ NativeAudioBuffer.prototype.stop = function() {
 };
 
 NativeAudioBuffer.prototype.clear = function() {
+  this._loadGeneration++;
+  this._loading = false;
   this.stop();
   this._loadListeners.length = 0;
   this._stopListeners.length = 0;
@@ -196,6 +270,7 @@ NativeAudioBuffer.prototype._notifyStop = function() {
 };
 
 NativeAudioBuffer.prototype._poll = function() {
+  if (this._loading) return true;
   var playing = this.isPlaying();
   if (this._wasPlaying && !playing) this._notifyStop();
   this._wasPlaying = playing;

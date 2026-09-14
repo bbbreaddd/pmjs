@@ -1,6 +1,40 @@
 #include "node_addon_internal.hpp"
 
 namespace pmjs::addon {
+namespace {
+std::vector<std::uint8_t> audioBytes(napi_env env, napi_value value) {
+  bool isArrayBuffer = false;
+  check(env, napi_is_arraybuffer(env, value, &isArrayBuffer),
+        "cannot inspect encoded audio bytes");
+  void* data = nullptr;
+  std::size_t size = 0;
+  if (isArrayBuffer) {
+    check(env, napi_get_arraybuffer_info(env, value, &data, &size),
+          "cannot read encoded audio ArrayBuffer");
+  } else {
+    bool isTypedArray = false;
+    check(env, napi_is_typedarray(env, value, &isTypedArray),
+          "cannot inspect encoded audio bytes");
+    if (!isTypedArray) throw std::runtime_error("encoded audio must be an ArrayBuffer or Uint8Array");
+    napi_typedarray_type type;
+    napi_value arrayBuffer;
+    std::size_t offset = 0;
+    check(env, napi_get_typedarray_info(env, value, &type, &size, &data,
+                                       &arrayBuffer, &offset),
+          "cannot read encoded audio Uint8Array");
+    if (type != napi_uint8_array && type != napi_uint8_clamped_array) {
+      throw std::runtime_error("encoded audio must be an ArrayBuffer or Uint8Array");
+    }
+  }
+  constexpr std::size_t maxEncodedAudioBytes = 64U * 1024U * 1024U;
+  if (size == 0 || size > maxEncodedAudioBytes) {
+    throw std::runtime_error("encoded audio exceeds the 64 MiB limit or is empty");
+  }
+  const auto* begin = static_cast<const std::uint8_t*>(data);
+  return std::vector<std::uint8_t>(begin, begin + size);
+}
+}
+
 napi_value loadAudio(napi_env env, napi_callback_info info) try {
   auto a = arguments(env, info, 1); State& value = host(env);
   const auto path = value.vfs.resolve(asString(env, a.at(0)));
@@ -8,6 +42,20 @@ napi_value loadAudio(napi_env env, napi_callback_info info) try {
   std::string error;
   const auto handle = value.core.media().loadAudio(path->string(), &error);
   if (!handle) throw std::runtime_error(error.empty() ? "audio decode failed" : error);
+  napi_value result; napi_create_object(env, &result);
+  napi_set_named_property(env, result, "handle", uint32(env, handle));
+  napi_set_named_property(env, result, "duration",
+    number(env, value.core.media().duration(handle)));
+  return result;
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what()); return nullptr;
+}
+
+napi_value loadAudioBytes(napi_env env, napi_callback_info info) try {
+  auto a = arguments(env, info, 1); State& value = host(env);
+  std::string error;
+  const auto handle = value.core.media().loadAudioBytes(audioBytes(env, a.at(0)), &error);
+  if (!handle) throw std::runtime_error(error.empty() ? "audio byte decode failed" : error);
   napi_value result; napi_create_object(env, &result);
   napi_set_named_property(env, result, "handle", uint32(env, handle));
   napi_set_named_property(env, result, "duration",
@@ -148,6 +196,7 @@ napi_value releaseVideo(napi_env env, napi_callback_info info) try {
 void registerMediaBindings(napi_env env, napi_value exports) {
   napi_value media = moduleObject(env);
   method(env, media, "loadAudio", loadAudio);
+  method(env, media, "loadAudioBytes", loadAudioBytes);
   method(env, media, "playAudio", playAudio);
   method(env, media, "stopAudio", stopAudio);
   method(env, media, "setAudioParameters", setAudioParameters);

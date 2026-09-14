@@ -22,6 +22,10 @@
     return objectUrls.get(String(url)) || null;
   }
 
+  function isObjectURL(url) {
+    return String(url).indexOf('blob:pmjs/') === 0;
+  }
+
   if (typeof nativeUrl === 'function') {
     nativeUrl.createObjectURL = createObjectURL;
     nativeUrl.revokeObjectURL = revokeObjectURL;
@@ -31,5 +35,6 @@
       revokeObjectURL: revokeObjectURL
     };
   }
-  globalThis.__pmjsResolveObjectURL = resolveObjectURL;
+  globalThis.pmjsIsObjectURL = isObjectURL;
+  globalThis.pmjsResolveObjectURL = resolveObjectURL;
 })();

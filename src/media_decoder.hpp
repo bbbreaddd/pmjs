@@ -39,6 +39,7 @@ struct VideoFrame {
 class AudioDecoderSession {
  public:
   explicit AudioDecoderSession(const std::filesystem::path& path);
+  explicit AudioDecoderSession(std::vector<std::uint8_t> bytes);
   ~AudioDecoderSession();
   AudioDecoderSession(const AudioDecoderSession&) = delete;
   AudioDecoderSession& operator=(const AudioDecoderSession&) = delete;

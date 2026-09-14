@@ -289,7 +289,8 @@ Object.defineProperty(NativeImage.prototype, 'src', {
       this.complete = false;
       return;
     }
-    var objectUrl = source.indexOf('blob:pmjs/') === 0;
+    var objectUrl = typeof globalThis.pmjsIsObjectURL === 'function' &&
+      globalThis.pmjsIsObjectURL(source);
     var encodedPath = source.split('?')[0].replace(/%(?![0-9a-f]{2})/gi, '%25');
     var path = decodeURIComponent(encodedPath)
       .replace(/^file:\/\/\/game\//, '')
@@ -301,8 +302,8 @@ Object.defineProperty(NativeImage.prototype, 'src', {
     pendingTasks.push(function() {
       if (objectUrl) {
         pendingNativeImageLoads++;
-        var objectBlob = typeof globalThis.__pmjsResolveObjectURL === 'function'
-          ? globalThis.__pmjsResolveObjectURL(source) : null;
+        var objectBlob = typeof globalThis.pmjsResolveObjectURL === 'function'
+          ? globalThis.pmjsResolveObjectURL(source) : null;
         var objectLoad = objectBlob
           ? objectBlob.arrayBuffer().then(function(buffer) {
               var retain = typeof globalThis.__pmjsShouldRetainImagePixels === 'function' &&

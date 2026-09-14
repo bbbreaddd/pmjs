@@ -13,7 +13,9 @@ extern "C" {
 
 #include <algorithm>
 #include <charconv>
+#include <cerrno>
 #include <cmath>
+#include <cstring>
 #include <memory>
 #include <stdexcept>
 
@@ -42,11 +44,70 @@ using Frame = std::unique_ptr<AVFrame, FrameDeleter>;
 using Swr = std::unique_ptr<SwrContext, SwrDeleter>;
 using Sws = std::unique_ptr<SwsContext, decltype(&sws_freeContext)>;
 
+struct MemoryInput {
+  explicit MemoryInput(std::vector<std::uint8_t> source) : bytes(std::move(source)) {
+    constexpr int bufferSize = 32768;
+    auto* buffer = static_cast<unsigned char*>(av_malloc(bufferSize));
+    if (!buffer) throw std::runtime_error("cannot allocate media input buffer");
+    context = avio_alloc_context(buffer, bufferSize, 0, this, read, nullptr, seek);
+    if (!context) { av_free(buffer); throw std::runtime_error("cannot allocate media input"); }
+  }
+  ~MemoryInput() { avio_context_free(&context); }
+  MemoryInput(const MemoryInput&) = delete;
+  MemoryInput& operator=(const MemoryInput&) = delete;
+
+  static int read(void* opaque, std::uint8_t* output, int requested) {
+    auto& input = *static_cast<MemoryInput*>(opaque);
+    if (input.position >= input.bytes.size()) return AVERROR_EOF;
+    const auto count = std::min<std::size_t>(requested, input.bytes.size() - input.position);
+    std::memcpy(output, input.bytes.data() + input.position, count);
+    input.position += count;
+    return static_cast<int>(count);
+  }
+  static std::int64_t seek(void* opaque, std::int64_t offset, int whence) {
+    auto& input = *static_cast<MemoryInput*>(opaque);
+    if (whence == AVSEEK_SIZE) return static_cast<std::int64_t>(input.bytes.size());
+    const int origin = whence & ~AVSEEK_FORCE;
+    std::int64_t base = 0;
+    if (origin == SEEK_CUR) base = static_cast<std::int64_t>(input.position);
+    else if (origin == SEEK_END) base = static_cast<std::int64_t>(input.bytes.size());
+    else if (origin != SEEK_SET) return AVERROR(EINVAL);
+    if (offset < -base || offset > static_cast<std::int64_t>(input.bytes.size()) - base)
+      return AVERROR(EINVAL);
+    input.position = static_cast<std::size_t>(base + offset);
+    return static_cast<std::int64_t>(input.position);
+  }
+
+  std::vector<std::uint8_t> bytes;
+  std::size_t position = 0;
+  AVIOContext* context = nullptr;
+};
+
 Format open(const std::filesystem::path& path, std::string* error) {
   AVFormatContext* raw = nullptr;
   const int result = avformat_open_input(&raw, path.c_str(), nullptr, nullptr);
   if (result < 0) {
     fail(error, "cannot open media: " + ffError(result));
+    return nullptr;
+  }
+  Format format(raw);
+  const int info = avformat_find_stream_info(format.get(), nullptr);
+  if (info < 0) {
+    fail(error, "cannot inspect media streams: " + ffError(info));
+    return nullptr;
+  }
+  return format;
+}
+
+Format open(MemoryInput& input, std::string* error) {
+  AVFormatContext* raw = avformat_alloc_context();
+  if (!raw) { fail(error, "cannot allocate media context"); return nullptr; }
+  raw->pb = input.context;
+  raw->flags |= AVFMT_FLAG_CUSTOM_IO;
+  const int result = avformat_open_input(&raw, nullptr, nullptr, nullptr);
+  if (result < 0) {
+    if (raw) avformat_free_context(raw);
+    fail(error, "cannot open media bytes: " + ffError(result));
     return nullptr;
   }
   Format format(raw);
@@ -356,8 +417,23 @@ std::optional<VideoFrame> VideoDecoderSession::frame(double timestamp,
 struct AudioDecoderSession::Impl {
   explicit Impl(const std::filesystem::path& path) {
     std::string error;
-    format = open(path, &error);
-    if (!format) throw std::runtime_error(error);
+    auto opened = open(path, &error);
+    if (!opened) throw std::runtime_error(error);
+    initialize(std::move(opened));
+  }
+
+  explicit Impl(std::vector<std::uint8_t> bytes)
+      : memory(std::make_unique<MemoryInput>(std::move(bytes))) {
+    std::string error;
+    auto opened = open(*memory, &error);
+    if (!opened) throw std::runtime_error(error);
+    initialize(std::move(opened));
+  }
+
+  void initialize(Format openedFormat) {
+    if (!openedFormat) throw std::runtime_error("cannot open audio bytes");
+    format = std::move(openedFormat);
+    std::string error;
     auto opened = decoder(format.get(), AVMEDIA_TYPE_AUDIO, &error);
     streamIndex = opened.first; codec = std::move(opened.second);
     if (!codec) throw std::runtime_error(error);
@@ -473,6 +549,7 @@ struct AudioDecoderSession::Impl {
     }
   }
 
+  std::unique_ptr<MemoryInput> memory;
   Format format{nullptr}; Codec codec{nullptr}; Packet packet{nullptr};
   Frame frame{nullptr}; Swr resampler{nullptr}; AVStream* stream = nullptr;
   int streamIndex = -1; double durationSeconds = 0.0, discardUntil = 0.0;
@@ -482,6 +559,8 @@ struct AudioDecoderSession::Impl {
 
 AudioDecoderSession::AudioDecoderSession(const std::filesystem::path& path)
     : impl_(std::make_unique<Impl>(path)) {}
+AudioDecoderSession::AudioDecoderSession(std::vector<std::uint8_t> bytes)
+    : impl_(std::make_unique<Impl>(std::move(bytes))) {}
 AudioDecoderSession::~AudioDecoderSession() = default;
 double AudioDecoderSession::duration() const { return impl_->durationSeconds; }
 std::uint64_t AudioDecoderSession::loopStartFrame() const { return impl_->loopStart; }

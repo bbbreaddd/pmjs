@@ -51,11 +51,13 @@ test('object URLs retain blobs until revoked', async () => {
   const blob = new Blob([Uint8Array.from([1, 2, 3])]);
   const url = context.URL.createObjectURL(blob);
   assert.match(url, /^blob:pmjs\/\d+$/);
-  assert.equal(context.__pmjsResolveObjectURL(url), blob);
-  assert.equal(context.__pmjsResolveObjectURL(url), blob);
+  assert.equal(context.pmjsIsObjectURL(url), true);
+  assert.equal(context.pmjsResolveObjectURL(url), blob);
+  assert.equal(context.pmjsResolveObjectURL(url), blob);
 
   context.URL.revokeObjectURL(url);
-  assert.equal(context.__pmjsResolveObjectURL(url), null);
+  assert.equal(context.pmjsIsObjectURL(url), true);
+  assert.equal(context.pmjsResolveObjectURL(url), null);
 });
 
 test('object URL identities are not reused', () => {
