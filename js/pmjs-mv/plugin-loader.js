@@ -2,7 +2,8 @@
 
 (function() {
   function pmjsMvInstallPluginManagerHooks() {
-    if (typeof PluginManager === 'undefined') return;
+    if (typeof PluginManager === 'undefined') return false;
+    if (PluginManager._pmjsLifecycleInstalled) return true;
 
     PluginManager.loadScript = function(name) {
       NativeHost.runtime.loadScript(this._path + name);
@@ -36,6 +37,8 @@
         globalThis.pmjsRunHooks('pluginLoaded', loadedName);
       }, this);
     };
+    PluginManager._pmjsLifecycleInstalled = true;
+    return true;
   }
 
   pmjsMvInstallPluginManagerHooks();
@@ -45,6 +48,7 @@
   }
 
   function pmjsMvInitializePlugins() {
+    pmjsMvInstallPluginManagerHooks();
     globalThis.pmjsRunHooks('beforePlugins');
     if (typeof $plugins !== 'undefined' && Array.isArray($plugins)) {
       PluginManager.setup($plugins);

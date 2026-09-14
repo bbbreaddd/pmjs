@@ -45,6 +45,40 @@ test('two-pass PluginManager.setup allows cross-plugin parameter lookups', () =>
   assert.equal(context.PluginManager._scripts[1], 'PluginB');
 });
 
+test('plugin lifecycle hooks install after PluginManager becomes available', () => {
+  const loaded = [];
+  const context = {
+    NativeHost: { runtime: { loadScript(name) { loaded.push(name); } } }
+  };
+  context.globalThis = context;
+  vm.createContext(context);
+  const setupCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/setup.js'), 'utf8');
+  const pluginLoaderCode = fs.readFileSync(
+    path.join(jsDir, 'pmjs-mv/plugin-loader.js'), 'utf8');
+  vm.runInContext(setupCode, context);
+  vm.runInContext(pluginLoaderCode, context);
+
+  assert.equal(context.pmjsMvInstallPluginManagerHooks(), false);
+  context.PluginManager = {
+    _path: 'js/plugins/',
+    _scripts: [],
+    setParameters() {},
+    setup() { throw new Error('stock setup should be replaced'); }
+  };
+  const events = [];
+  context.pmjsRegisterHook('pluginLoaded', name => events.push(name));
+
+  assert.equal(context.pmjsMvInstallPluginManagerHooks(), true);
+  assert.equal(context.pmjsMvInstallPluginManagerHooks(), true);
+  context.PluginManager.setup([
+    { name: 'YED_Tiled', status: true, parameters: {} }
+  ]);
+
+  assert.deepEqual(loaded, ['js/plugins/YED_Tiled.js']);
+  assert.deepEqual(events, ['YED_Tiled']);
+  assert.equal(context.PluginManager._pmjsLifecycleInstalled, true);
+});
+
 test('document.currentScript stack exposes file:///game/ URL and restores on return and on error', () => {
   const scriptsLoaded = [];
   const context = {
