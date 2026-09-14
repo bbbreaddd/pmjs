@@ -38,6 +38,7 @@ void Renderer::render() {
   const bool shouldRenderScene =
       sceneSubmittedThisFrame_ || offscreenRender_ || !hasValidSceneFrame_;
   if (shouldRenderScene) {
+    if (!offscreenRender_) toneCompositionActive_ = false;
     glBindFramebuffer(GL_FRAMEBUFFER, rootFramebuffer);
     glViewport(0, 0, width_, height_);
     glClearColor(clearColor_[0], clearColor_[1], clearColor_[2], clearColor_[3]);
@@ -45,6 +46,34 @@ void Renderer::render() {
 
     vertices_.clear();
     vertices_.reserve(frame_.commands.size() * 72);
+  const RenderCommand* composedToneCommand = nullptr;
+  if (!offscreenRender_) {
+    std::size_t toneIndex = frame_.commands.size();
+    std::size_t toneCount = 0;
+    std::size_t filterDepthAtTone = 0;
+    std::size_t filterDepth = 0;
+    for (std::size_t index = 0; index < frame_.commands.size(); ++index) {
+      const RenderCommand& command = frame_.commands[index];
+      if (command.action == RenderCommand::Action::filterBegin) ++filterDepth;
+      if (command.appliesColorMatrix) {
+        toneIndex = index;
+        filterDepthAtTone = filterDepth;
+        ++toneCount;
+      }
+      if (command.action == RenderCommand::Action::filterEnd && filterDepth > 0) {
+        --filterDepth;
+      }
+    }
+    bool cleanTail = toneCount == 1 && filterDepthAtTone == 0;
+    for (std::size_t index = toneIndex + 1;
+         cleanTail && index < frame_.commands.size(); ++index) {
+      const RenderCommand& command = frame_.commands[index];
+      cleanTail = command.action == RenderCommand::Action::draw &&
+                  !command.appliesColorMatrix &&
+                  command.blendMode == BlendMode::normal;
+    }
+    if (cleanTail) composedToneCommand = &frame_.commands[toneIndex];
+  }
   struct DrawOperation {
     std::uint32_t tileLayer = 0;
     std::uint32_t texture;
@@ -592,6 +621,21 @@ void Renderer::render() {
       continue;
     }
     if (operation.matrixCommand) {
+      if (operation.matrixCommand == composedToneCommand) {
+        presentationColorMatrix_ = operation.matrixCommand->colorMatrix;
+        presentationColorMatrixAlpha_ = operation.matrixCommand->color[3];
+        toneCompositionActive_ = true;
+        glBindFramebuffer(GL_FRAMEBUFFER, toneOverlayFramebuffer_);
+        glViewport(0, 0, width_, height_);
+        glDisable(GL_SCISSOR_TEST);
+        scissorActive = false;
+        glClearColor(0, 0, 0, 0);
+        glClear(GL_COLOR_BUFFER_BIT);
+        activeBlend = BlendMode::normal;
+        glEnable(GL_BLEND);
+        applyBlendMode(activeBlend);
+        continue;
+      }
       glDisable(GL_BLEND);
       glBindFramebuffer(GL_FRAMEBUFFER, filterFramebuffer_);
       glViewport(0, 0, width_, height_);
@@ -800,13 +844,52 @@ void Renderer::render() {
 ++stats_.frames;
 
   if (!offscreenRender_) {
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, sceneFramebuffer_);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-    glBlitFramebuffer(0, 0, width_, height_, 0, 0,
-                      presentationWidth_, presentationHeight_,
-                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (toneCompositionActive_) {
+      drawToneComposition(0, presentationWidth_, presentationHeight_);
+      ++stats_.toneComposedPresentationFrames;
+    } else {
+      glBindFramebuffer(GL_READ_FRAMEBUFFER, sceneFramebuffer_);
+      glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+      glBlitFramebuffer(0, 0, width_, height_, 0, 0,
+                        presentationWidth_, presentationHeight_,
+                        GL_COLOR_BUFFER_BIT, GL_NEAREST);
+      glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
   }
+}
+
+void Renderer::drawToneComposition(std::uint32_t framebuffer,
+                                   int width, int height) {
+  glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+  glViewport(0, 0, width, height);
+  glDisable(GL_BLEND);
+  glDisable(GL_SCISSOR_TEST);
+  glUseProgram(presentationProgram_);
+  glBindVertexArray(vertexArray_);
+  glActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, sceneTexture_);
+  glUniform1i(presentationSceneUniform_, 0);
+  glActiveTexture(GL_TEXTURE1);
+  glBindTexture(GL_TEXTURE_2D, toneOverlayTexture_);
+  glUniform1i(presentationOverlayUniform_, 1);
+  glUniform1fv(presentationColorMatrixUniform_, 20,
+               presentationColorMatrix_.data());
+  glUniform1f(presentationColorMatrixAlphaUniform_,
+              presentationColorMatrixAlpha_);
+  glDrawArrays(GL_TRIANGLES, 0, 6);
+  ++stats_.drawCalls;
+  glActiveTexture(GL_TEXTURE0);
+  glEnable(GL_BLEND);
+  applyBlendMode(BlendMode::normal);
+}
+
+void Renderer::materializeToneComposition() {
+  if (!toneCompositionActive_) return;
+  drawToneComposition(filterFramebuffer_, width_, height_);
+  std::swap(sceneFramebuffer_, filterFramebuffer_);
+  std::swap(sceneTexture_, filterTexture_);
+  toneCompositionActive_ = false;
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 

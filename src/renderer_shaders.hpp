@@ -840,6 +840,43 @@ constexpr const char* generatedTextureFragmentSource = R"(
     outputColor = color;
   }
 )";
+constexpr const char* presentationVertexSource = R"(
+  #version 300 es
+  out vec2 vertexUv;
+  void main() {
+    const vec2 positions[6] = vec2[6](
+      vec2(-1.0,  1.0), vec2( 1.0,  1.0), vec2( 1.0, -1.0),
+      vec2(-1.0,  1.0), vec2( 1.0, -1.0), vec2(-1.0, -1.0));
+    const vec2 uvs[6] = vec2[6](
+      vec2(0.0, 1.0), vec2(1.0, 1.0), vec2(1.0, 0.0),
+      vec2(0.0, 1.0), vec2(1.0, 0.0), vec2(0.0, 0.0));
+    gl_Position = vec4(positions[gl_VertexID], 0.0, 1.0);
+    vertexUv = uvs[gl_VertexID];
+  }
+)";
+constexpr const char* presentationFragmentSource = R"(
+  #version 300 es
+  precision mediump float;
+  uniform sampler2D sceneImage;
+  uniform sampler2D overlayImage;
+  uniform float colorMatrix[20];
+  uniform float colorMatrixAlpha;
+  in vec2 vertexUv;
+  out vec4 outputColor;
+  void main() {
+    vec4 c = texture(sceneImage, vertexUv);
+    if (c.a > 0.0) c.rgb /= c.a;
+    vec4 adjusted;
+    adjusted.r = colorMatrix[0] * c.r + colorMatrix[1] * c.g + colorMatrix[2] * c.b + colorMatrix[3] * c.a + colorMatrix[4];
+    adjusted.g = colorMatrix[5] * c.r + colorMatrix[6] * c.g + colorMatrix[7] * c.b + colorMatrix[8] * c.a + colorMatrix[9];
+    adjusted.b = colorMatrix[10] * c.r + colorMatrix[11] * c.g + colorMatrix[12] * c.b + colorMatrix[13] * c.a + colorMatrix[14];
+    adjusted.a = colorMatrix[15] * c.r + colorMatrix[16] * c.g + colorMatrix[17] * c.b + colorMatrix[18] * c.a + colorMatrix[19];
+    vec3 rgb = mix(c.rgb, adjusted.rgb, colorMatrixAlpha) * adjusted.a;
+    vec4 toned = vec4(rgb, adjusted.a);
+    vec4 overlay = texture(overlayImage, vertexUv);
+    outputColor = overlay + toned * (1.0 - overlay.a);
+  }
+)";
 constexpr const char* spriteEffectFragmentSource = R"(
   #version 300 es
   precision mediump float;

@@ -61,6 +61,16 @@ Renderer::Renderer(int width, int height, ImageStore& images)
   simpleProgram_ = linkProgram(vertexSource, simpleFragmentSource);
   generatedTextureProgram_ = linkProgram(vertexSource,
                                           generatedTextureFragmentSource);
+  presentationProgram_ = linkProgram(presentationVertexSource,
+                                     presentationFragmentSource);
+  presentationSceneUniform_ =
+    glGetUniformLocation(presentationProgram_, "sceneImage");
+  presentationOverlayUniform_ =
+    glGetUniformLocation(presentationProgram_, "overlayImage");
+  presentationColorMatrixUniform_ =
+    glGetUniformLocation(presentationProgram_, "colorMatrix");
+  presentationColorMatrixAlphaUniform_ =
+    glGetUniformLocation(presentationProgram_, "colorMatrixAlpha");
   spriteEffectProgram_ = linkProgram(vertexSource, spriteEffectFragmentSource);
   spriteEffectTextureSizeUniform_ =
     glGetUniformLocation(spriteEffectProgram_, "textureSize");
@@ -177,6 +187,7 @@ Renderer::Renderer(int width, int height, ImageStore& images)
   createTarget(sceneTexture_, sceneFramebuffer_);
   createTarget(offscreenTexture_, offscreenFramebuffer_);
   createTarget(filterTexture_, filterFramebuffer_);
+  createTarget(toneOverlayTexture_, toneOverlayFramebuffer_);
   createTarget(bloomTexture_, bloomFramebuffer_);
   for (std::size_t index = 0; index < groupFramebuffers_.size(); ++index) {
     createTarget(groupTextures_[index], groupFramebuffers_[index]);
@@ -195,6 +206,8 @@ Renderer::~Renderer() {
   if (offscreenTexture_) glDeleteTextures(1, &offscreenTexture_);
   if (filterFramebuffer_) glDeleteFramebuffers(1, &filterFramebuffer_);
   if (filterTexture_) glDeleteTextures(1, &filterTexture_);
+  if (toneOverlayFramebuffer_) glDeleteFramebuffers(1, &toneOverlayFramebuffer_);
+  if (toneOverlayTexture_) glDeleteTextures(1, &toneOverlayTexture_);
   if (bloomFramebuffer_) glDeleteFramebuffers(1, &bloomFramebuffer_);
   if (bloomTexture_) glDeleteTextures(1, &bloomTexture_);
   glDeleteFramebuffers(static_cast<GLsizei>(groupFramebuffers_.size()),
@@ -207,6 +220,7 @@ Renderer::~Renderer() {
   if (program_) glDeleteProgram(program_);
   if (simpleProgram_) glDeleteProgram(simpleProgram_);
   if (generatedTextureProgram_) glDeleteProgram(generatedTextureProgram_);
+  if (presentationProgram_) glDeleteProgram(presentationProgram_);
   if (spriteEffectProgram_) glDeleteProgram(spriteEffectProgram_);
   if (tileProgram_) glDeleteProgram(tileProgram_);
 }

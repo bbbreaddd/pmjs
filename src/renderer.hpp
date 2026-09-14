@@ -84,6 +84,7 @@ struct RendererStats {
   std::uint64_t framebufferChecks = 0;
   std::uint64_t framebufferCopies = 0;
   std::uint64_t toneAdjustDrawCalls = 0;
+  std::uint64_t toneComposedPresentationFrames = 0;
   std::uint64_t spriteDrawCalls = 0;
   std::uint64_t tilingSpriteDrawCalls = 0;
   std::uint64_t screenFillDrawCalls = 0;
@@ -134,7 +135,7 @@ class Renderer {
                   const float* values, std::size_t valueCount,
                   std::size_t nodeCount);
   void render();
-  std::vector<std::uint8_t> captureSceneRgba() const;
+  std::vector<std::uint8_t> captureSceneRgba();
   std::vector<std::uint8_t> renderToRgba();
   std::vector<std::uint8_t> renderToRgba(int width, int height);
   std::optional<ImageInfo> renderToImage(int width, int height);
@@ -162,6 +163,8 @@ class Renderer {
   void discardCommandsFrom(std::size_t first);
   void destroyTileLayer(std::uint32_t handle);
   void resizeTargets(int width, int height);
+  void drawToneComposition(std::uint32_t framebuffer, int width, int height);
+  void materializeToneComposition();
 
   int width_;
   int height_;
@@ -181,6 +184,11 @@ class Renderer {
   std::uint32_t simpleProgram_ = 0;
   std::uint32_t spriteEffectProgram_ = 0;
   std::uint32_t generatedTextureProgram_ = 0;
+  std::uint32_t presentationProgram_ = 0;
+  int presentationSceneUniform_ = -1;
+  int presentationOverlayUniform_ = -1;
+  int presentationColorMatrixUniform_ = -1;
+  int presentationColorMatrixAlphaUniform_ = -1;
   int spriteEffectTextureSizeUniform_ = -1;
   int spriteEffectBlurUniform_ = -1;
   int spriteEffectMaskEnabledUniform_ = -1;
@@ -241,11 +249,16 @@ class Renderer {
   std::uint32_t offscreenTexture_ = 0;
   std::uint32_t filterFramebuffer_ = 0;
   std::uint32_t filterTexture_ = 0;
+  std::uint32_t toneOverlayFramebuffer_ = 0;
+  std::uint32_t toneOverlayTexture_ = 0;
   std::uint32_t bloomFramebuffer_ = 0;
   std::uint32_t bloomTexture_ = 0;
   std::array<std::uint32_t, scene_packet::maxFilterDepth> groupFramebuffers_{};
   std::array<std::uint32_t, scene_packet::maxFilterDepth> groupTextures_{};
   bool offscreenRender_ = false;
+  bool toneCompositionActive_ = false;
+  std::array<float, 20> presentationColorMatrix_{};
+  float presentationColorMatrixAlpha_ = 1.0F;
   std::uint32_t nextTileLayer_ = 1;
   std::unordered_map<std::uint32_t, TileLayerResource> tileLayers_;
   std::unordered_map<std::uint32_t, bool> textureRepeatState_;

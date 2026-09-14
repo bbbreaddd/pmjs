@@ -715,7 +715,8 @@ function collectNativeTilemaps(node, output) {
 }
 
 function renderNativeStage(stage, rootTransform, filterResolution, roundPixels) {
-  var stageStarted = automationProfiling ? performance.now() : 0;
+  var profiling = typeof automationProfiling !== 'undefined' && automationProfiling;
+  var stageStarted = profiling ? performance.now() : 0;
   nativeScreenOverlays.length = 0;
   nativeTileRects = 0;
   var parent = stage.parent;
@@ -742,7 +743,7 @@ function renderNativeStage(stage, rootTransform, filterResolution, roundPixels) 
       submitted = submitNativeScene(stage);
     }
   } finally {
-    if (automationProfiling) {
+    if (profiling) {
       nativeQueueMs += performance.now() - stageStarted;
       nativeStageSamples++;
     }

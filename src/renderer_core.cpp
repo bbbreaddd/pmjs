@@ -23,11 +23,12 @@ void Renderer::resizeTargets(int width, int height) {
     framebuffer = 0;
     texture = 0;
   };
-  const std::size_t targetCount = 4U + groupFramebuffers_.size();
+  const std::size_t targetCount = 5U + groupFramebuffers_.size();
   stats_.rendererTargetDestroys += targetCount;
   destroyTarget(sceneTexture_, sceneFramebuffer_);
   destroyTarget(offscreenTexture_, offscreenFramebuffer_);
   destroyTarget(filterTexture_, filterFramebuffer_);
+  destroyTarget(toneOverlayTexture_, toneOverlayFramebuffer_);
   destroyTarget(bloomTexture_, bloomFramebuffer_);
   for (std::size_t index = 0; index < groupFramebuffers_.size(); ++index) {
     destroyTarget(groupTextures_[index], groupFramebuffers_[index]);
@@ -37,6 +38,7 @@ void Renderer::resizeTargets(int width, int height) {
   width_ = width;
   height_ = height;
   hasValidSceneFrame_ = false;
+  toneCompositionActive_ = false;
 
   const auto createTarget = [&](std::uint32_t& texture,
                                 std::uint32_t& framebuffer) {
@@ -61,6 +63,7 @@ void Renderer::resizeTargets(int width, int height) {
   createTarget(sceneTexture_, sceneFramebuffer_);
   createTarget(offscreenTexture_, offscreenFramebuffer_);
   createTarget(filterTexture_, filterFramebuffer_);
+  createTarget(toneOverlayTexture_, toneOverlayFramebuffer_);
   createTarget(bloomTexture_, bloomFramebuffer_);
   for (std::size_t index = 0; index < groupFramebuffers_.size(); ++index) {
     createTarget(groupTextures_[index], groupFramebuffers_[index]);
@@ -370,7 +373,8 @@ void Renderer::destroyTileLayer(std::uint32_t layer) {
   tileLayers_.erase(found);
 }
 
-std::vector<std::uint8_t> Renderer::captureSceneRgba() const {
+std::vector<std::uint8_t> Renderer::captureSceneRgba() {
+  materializeToneComposition();
   std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width_) *
                                    static_cast<std::size_t>(height_) * 4U);
   glBindFramebuffer(GL_READ_FRAMEBUFFER, sceneFramebuffer_);
@@ -503,7 +507,7 @@ std::optional<ImageInfo> Renderer::renderToImage(int width, int height) {
 }
 
 std::size_t Renderer::renderTargetBytes() const {
-  return static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_) * 32U;
+  return static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_) * 36U;
 }
 
 }  // namespace pmjs

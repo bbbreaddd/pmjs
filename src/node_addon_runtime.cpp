@@ -253,6 +253,9 @@ napi_value rendererStats(napi_env env, napi_callback_info) try {
   check(env, napi_set_named_property(env, result, "toneAdjustDrawCalls",
     number(env, static_cast<double>(stats.toneAdjustDrawCalls))),
     "cannot set tone adjust draws");
+  check(env, napi_set_named_property(env, result, "toneComposedPresentationFrames",
+    number(env, static_cast<double>(stats.toneComposedPresentationFrames))),
+    "cannot set tone composed presentation frames");
   check(env, napi_set_named_property(env, result, "spriteDrawCalls",
     number(env, static_cast<double>(stats.spriteDrawCalls))),
     "cannot set renderer sprite draws");
