@@ -157,29 +157,31 @@ test('FPSMeter defines the standard method surface, returns this from methods, a
   }, /syntax error in broken fpsmeter/);
 });
 
-test('greenworks fallback provider defaults to truthful absence and activates only when requested or present', () => {
-  const unrequestedContext = {
-    pmjsGameConfig: {},
-    NativeHost: { fs: { exists: () => false } }
+test('greenworks compatibility registers its supported module aliases', () => {
+  const modules = {};
+  const context = {
+    console,
+    pmjsGameConfig: { steam: { provider: 'portable', appId: 123456 } },
+    pmjsAchievements: {
+      initialize: () => {},
+      names: () => ['test'],
+      isUnlocked: () => false,
+      setUnlocked: () => true,
+      getStat: () => 0,
+      setStat: () => true,
+      flush: () => true,
+    },
+    registerCommonJsModule(names, value) {
+      for (const name of names) modules[name] = value;
+    },
   };
-  vm.createContext(unrequestedContext);
+  vm.createContext(context);
   const compatCode = fs.readFileSync(path.join(jsDir, 'pmjs-plugins/greenworks/compat.js'), 'utf8');
-  vm.runInContext(compatCode, unrequestedContext);
-  assert.equal(unrequestedContext.__pmjsGreenworksCompat, undefined, 'Should not initialize compat when not present or requested');
-
-  const absentContext = {
-    pmjsGameConfig: {
-      steam: { appId: 123456 }
-    }
-  };
-  vm.createContext(absentContext);
-  vm.runInContext(compatCode, absentContext);
-
-  const gw = absentContext.__pmjsGreenworksCompat;
-  assert.ok(gw);
-  assert.equal(gw.init(), false);
-  assert.equal(gw.initAPI(), false);
-  assert.equal(gw.isSteamRunning(), false);
+  vm.runInContext(compatCode, context);
+  const gw = modules.greenworks;
+  assert.equal(modules['./greenworks'], gw);
+  assert.equal(gw.initAPI(), true);
+  assert.equal(gw.isSteamRunning(), true);
   assert.equal(gw.getSteamId().isValid, false);
   assert.equal(gw.isSubscribedApp(), false);
   assert.equal(gw.isGameOverlayEnabled(), false);
@@ -188,11 +190,11 @@ test('greenworks fallback provider defaults to truthful absence and activates on
 
   let achievementResult = null;
   gw.activateAchievement('test', (res) => { achievementResult = res; });
-  assert.equal(achievementResult, false);
+  assert.equal(achievementResult, true);
 
   let statsResult = null;
   gw.storeStats((res) => { statsResult = res; });
-  assert.equal(statsResult, false);
+  assert.equal(statsResult, true);
 });
 
 test('one physical host tick executes ticker, audio, video, and scheduled MV update', () => {

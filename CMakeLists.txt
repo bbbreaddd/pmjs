@@ -106,6 +106,7 @@ if(BUILD_TESTING)
       test/runtime-contract.test.cjs
       test/runner.test.cjs
       test/storage.test.cjs
+      test/achievements.test.cjs
       test/build-js-runtime.test.cjs
       test/mv-platform-semantics.test.cjs
       test/scheduler.test.cjs)
