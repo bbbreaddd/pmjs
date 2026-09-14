@@ -38,6 +38,7 @@ function resolveDefaults(input) {
       if (title === undefined && cfg.title) title = cfg.title;
       if (width === undefined && cfg.display && cfg.display.width) width = Number(cfg.display.width);
       if (height === undefined && cfg.display && cfg.display.height) height = Number(cfg.display.height);
+      assertDisableOptimizationsShape(cfg.disableOptimizations, configPath);
     }
   }
 
@@ -59,6 +60,15 @@ function resolveDefaults(input) {
   if (title === undefined) title = 'pmjs native runtime';
 
   return { ...input, width, height, title };
+}
+
+function assertDisableOptimizationsShape(value, configPath) {
+  if (value === undefined) return;
+  const ok = Array.isArray(value) && value.every(id => typeof id === 'string' && id) &&
+    new Set(value).size === value.length;
+  if (!ok) {
+    throw new Error(`disableOptimizations in ${configPath} must be an array of unique nonempty strings`);
+  }
 }
 
 function validate(input) {

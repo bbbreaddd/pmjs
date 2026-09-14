@@ -36,6 +36,18 @@ function insideRoot(input, label) {
   return resolved;
 }
 
+// Structural validation only: the runtime optimization registry remains the
+// single authority for which IDs exist. Unknown IDs fail at startup instead.
+function assertDisableOptimizationsShape(value, configPath) {
+  if (value === undefined) return;
+  const ok = Array.isArray(value) && value.every(id => typeof id === 'string' && id) &&
+    new Set(value).size === value.length;
+  if (!ok) {
+    console.error(`error: disableOptimizations in ${configPath} must be an array of unique nonempty strings`);
+    process.exit(1);
+  }
+}
+
 let output;
 if (profileArgument || path.isAbsolute(outputArgument)) {
   output = path.resolve(process.cwd(), outputArgument);
@@ -109,6 +121,7 @@ if (configArgument) {
   if (resolvedConfig.endsWith('.json')) {
     try {
       const parsed = JSON.parse(configText);
+      assertDisableOptimizationsShape(parsed.disableOptimizations, resolvedConfig);
       const generated = `globalThis.PMJS_GAME_CONFIG = ${JSON.stringify(parsed, null, 2)};\n`;
       bundleItems.push({ label: path.basename(resolvedConfig), inlineSource: generated });
     } catch (e) {

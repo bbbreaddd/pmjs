@@ -46,6 +46,36 @@ test('bundle generation supports --profile with JSON --config and --compat', () 
   assert.ok(compatIndex < bootstrapIndex, 'compat must precede bootstrap');
 });
 
+test('bundle validates disableOptimizations shape and orders the registry first', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-opt-config-'));
+  const good = path.join(tempDir, 'good.json');
+  const out = path.join(tempDir, 'out.js');
+  fs.writeFileSync(good, JSON.stringify({
+    title: 'Opt Title',
+    disableOptimizations: ['terrax.native-lighting'],
+  }));
+  childProcess.execFileSync(process.execPath,
+    [tool, '--profile', 'mv', '--config', good, '--output', out]);
+  const bundleContent = fs.readFileSync(out, 'utf8');
+  const configIndex = bundleContent.indexOf('PMJS_GAME_CONFIG');
+  const registryIndex = bundleContent.indexOf('BEGIN js/pmjs-core/optimizations.js');
+  const setupIndex = bundleContent.indexOf('BEGIN js/pmjs-mv/setup.js');
+  assert.ok(configIndex >= 0 && registryIndex > configIndex,
+    'registry must follow the injected config');
+  assert.ok(setupIndex > registryIndex, 'registry must precede consumers');
+
+  // Structural validation only: unknown-but-well-formed IDs build fine here
+  // and fail at runtime, where the registry is the single authority.
+  const badValues = [[''], [42], ['a', 'a'], 'terrax.native-lighting', [null]];
+  badValues.forEach((value, index) => {
+    const bad = path.join(tempDir, `bad-${index}.json`);
+    fs.writeFileSync(bad, JSON.stringify({ disableOptimizations: value }));
+    assert.throws(() => childProcess.execFileSync(process.execPath,
+      [tool, '--profile', 'mv', '--config', bad, '--output', out]),
+    /disableOptimizations/);
+  });
+});
+
 test('bundle generation rejects duplicate modules', () => {
   const root = path.resolve(__dirname, '..');
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-dupe-'));

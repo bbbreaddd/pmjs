@@ -13,6 +13,14 @@
 
   function dispatchWindowLoad() {
     globalThis.pmjsRunHooks('beforeBoot');
+    // beforeBoot is the last legal optimization-registration seam: adapters
+    // may register here once all plugins are composed. Finalize now, before
+    // game boot, so a requested disable that nobody registered fails fast
+    // instead of silently doing nothing. Registration freezes from here on.
+    if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
+        typeof PMJS.optimizations.finalize === 'function') {
+      PMJS.optimizations.finalize();
+    }
     if (typeof window.dispatchEvent === 'function') {
       window.dispatchEvent({ type: 'load', target: window });
     }

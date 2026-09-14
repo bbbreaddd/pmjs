@@ -1,3 +1,19 @@
+// Scene-writer caches owned by pmjs-pixi4. Each ID is gated at its narrow
+// cache-hit boundary below; the ordinary path re-derives the same records.
+if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
+    typeof PMJS.optimizations.register === 'function') {
+  PMJS.optimizations.register({ id: 'tilemap.persistent-layer-cache',
+    owner: 'pmjs-pixi4',
+    fallback: 'recompile the native tile layer every frame from live pointsBuf' });
+  PMJS.optimizations.register({ id: 'scene.tiling-texture-cache',
+    owner: 'pmjs-pixi4',
+    fallback: 're-rasterize the tiling source canvas on every use' });
+  PMJS.optimizations.register({ id: 'scene.graphics-cache', owner: 'pmjs-pixi4',
+    fallback: 're-rasterize vector graphics on every use' });
+  PMJS.optimizations.register({ id: 'scene.gpu-mesh-cache', owner: 'pmjs-pixi4',
+    fallback: 're-upload the GPU mesh on every use' });
+}
+
 var nativeTransformParent = new PIXI.Container();
 nativeTransformParent.worldAlpha = 1;
 nativeTransformParent.transform.worldTransform.identity();
@@ -76,7 +92,9 @@ function ensureNativeTilingTexture(texture) {
     trim && trim.x, trim && trim.y, trim && trim.width, trim && trim.height,
     rotation, resolution].join(':');
   if (texture.__pmjsTilingCanvas &&
-      texture.__pmjsTilingCanvasSignature === signature) {
+      texture.__pmjsTilingCanvasSignature === signature &&
+      (typeof pmjsOptimizationEnabled !== 'function' ||
+        pmjsOptimizationEnabled('scene.tiling-texture-cache'))) {
     return { handle: texture.__pmjsTilingCanvas._ensureNativeCanvas().handle,
       resolution: resolution };
   }
@@ -227,7 +245,14 @@ function ensureNativeRectTileLayer(layer) {
     handles.push(textureHandle);
   }
   var textureSignature = handles.join(':');
-  if (!layer._pmjsNativeLayer || layer._pmjsNativeCompiledGeneration !== generation ||
+  // Disabled means recompile every frame from the live records: no compiled
+  // generation is ever reused, while validation and texture eligibility above
+  // still apply. The previously retained handle is released before replacing
+  // it, so bypassing the cache cannot leak native layers.
+  var usePersistentCache = typeof pmjsOptimizationEnabled !== 'function' ||
+    pmjsOptimizationEnabled('tilemap.persistent-layer-cache');
+  if (!usePersistentCache || !layer._pmjsNativeLayer ||
+      layer._pmjsNativeCompiledGeneration !== generation ||
       layer._pmjsNativeTextureSignature !== textureSignature) {
     if (layer._pmjsNativeLayer) {
       NativeHost.render.releaseTileLayer(layer._pmjsNativeLayer);
@@ -631,7 +656,9 @@ function ensureNativeGraphics(graphics, maskOnly) {
   var canvasProperty = maskOnly ? '__pmjsGraphicsMaskCanvas' : '__pmjsGraphicsCanvas';
   var revisionProperty = maskOnly ? '__pmjsGraphicsMaskRevision' :
     '__pmjsGraphicsRevision';
-  if (graphics[canvasProperty] && graphics[revisionProperty] === revision) {
+  if (graphics[canvasProperty] && graphics[revisionProperty] === revision &&
+      (typeof pmjsOptimizationEnabled !== 'function' ||
+        pmjsOptimizationEnabled('scene.graphics-cache'))) {
     return graphics[canvasProperty];
   }
   var bounds = graphics.getLocalBounds();
@@ -757,7 +784,9 @@ function ensureNativeGpuMesh(mesh) {
     uvTransform && [uvTransform.a, uvTransform.b, uvTransform.c,
       uvTransform.d, uvTransform.tx, uvTransform.ty].join(',') || '',
     vertices.length, indices.length].join(':');
-  if (mesh.__pmjsNativeMesh && mesh.__pmjsNativeMeshRevision === revision) {
+  if (mesh.__pmjsNativeMesh && mesh.__pmjsNativeMeshRevision === revision &&
+      (typeof pmjsOptimizationEnabled !== 'function' ||
+        pmjsOptimizationEnabled('scene.gpu-mesh-cache'))) {
     return mesh.__pmjsNativeMesh;
   }
   if (mesh.__pmjsNativeMesh) NativeHost.render.releaseMesh(mesh.__pmjsNativeMesh);

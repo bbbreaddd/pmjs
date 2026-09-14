@@ -174,6 +174,18 @@ When extending the runtime for a new engine family or custom bundle, manifests c
 }
 ```
 
+### Per-optimization controls
+
+PMJS optimizations are enabled by default. Ports may disable specific
+optimizations when needed for compatibility:
+
+```json
+{
+  "disableOptimizations": [
+    "scene.graphics-cache"
+  ]
+}
+
 ### Third-party software
 
 PMJS uses the following software

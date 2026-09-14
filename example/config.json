@@ -6,5 +6,6 @@
   },
   "fonts": {
     "GameFont": "fonts/mplus-1m-regular.ttf"
-  }
+  },
+  "disableOptimizations": []
 }

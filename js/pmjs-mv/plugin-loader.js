@@ -50,6 +50,11 @@
       PluginManager.setup($plugins);
     }
     globalThis.pmjsRunHooks('afterPlugins');
+    // NOTE: the optimization registry is NOT finalized here. beforeBoot is
+    // the last legal optimization-registration seam; finalization happens
+    // after beforeBoot hooks complete (see bootstrap.js dispatchWindowLoad).
+    // Freezing here would reject adapters that register once all plugins
+    // are composed.
     if (typeof installNativeStorageManager === 'function') {
       installNativeStorageManager();
     }

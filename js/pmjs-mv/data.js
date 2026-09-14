@@ -1,3 +1,11 @@
+// Global-info memoization owned by pmjs-mv. Gated at the read below; the
+// ordinary path always calls through to the original implementation.
+if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
+    typeof PMJS.optimizations.register === 'function') {
+  PMJS.optimizations.register({ id: 'data.global-info-cache', owner: 'pmjs-mv',
+    fallback: 'read global info through the original DataManager implementation on every call' });
+}
+
 if (typeof Window_Base !== 'undefined' && Window_Base.prototype.update) {
   var originalWindowBaseUpdate = Window_Base.prototype.update;
   Window_Base.prototype.update = function() {
@@ -22,9 +30,11 @@ if (typeof DataManager !== 'undefined' &&
       !DataManager._pmjsGlobalCachePatched) {
     var originalLoadGlobalInfo = DataManager.loadGlobalInfo;
     DataManager.loadGlobalInfo = function() {
-      if (this._pmjsGlobalInfoCache) return this._pmjsGlobalInfoCache;
+      var useCache = typeof pmjsOptimizationEnabled !== 'function' ||
+        pmjsOptimizationEnabled('data.global-info-cache');
+      if (useCache && this._pmjsGlobalInfoCache) return this._pmjsGlobalInfoCache;
       var info = originalLoadGlobalInfo.apply(this, arguments);
-      this._pmjsGlobalInfoCache = info;
+      if (useCache) this._pmjsGlobalInfoCache = info;
       return info;
     };
     var originalSaveGlobalInfo = DataManager.saveGlobalInfo;

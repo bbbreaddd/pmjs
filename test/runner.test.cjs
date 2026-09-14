@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -89,6 +90,48 @@ test('validation rejects missing or malformed explicit config', () => {
     addon: 'a', gameRoot: tempDir, bootstrap: 'b', saveRoot: 's',
     config: badJs
   }), /error evaluating config file/);
+});
+test('validation rejects malformed disableOptimizations but keeps well-formed ports', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-runner-opt-'));
+  const bad = path.join(tempDir, 'bad.json');
+  fs.writeFileSync(bad, JSON.stringify({ disableOptimizations: ['terrax.native-lighting', 7] }));
+  assert.throws(() => validate({
+    addon: 'a', gameRoot: 'g', bootstrap: 'b', saveRoot: 's', config: bad,
+  }), /disableOptimizations/);
+
+  const good = path.join(tempDir, 'good.json');
+  fs.writeFileSync(good, JSON.stringify({ disableOptimizations: ['terrax.native-lighting'] }));
+  const value = validate({
+    addon: 'a', gameRoot: 'g', bootstrap: 'b', saveRoot: 's', config: good,
+  });
+  assert.equal(value.title, 'pmjs native runtime');
+});
+
+test('unknown port optimization IDs fail the run at startup', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-runner-unknown-opt-'));
+  const config = path.join(tempDir, 'config.json');
+  fs.writeFileSync(config, JSON.stringify({ disableOptimizations: ['terrax.nativeLight'] }));
+  const manifest = path.join(tempDir, 'manifest.json');
+  fs.writeFileSync(manifest, JSON.stringify({ modules: [
+    'js/pmjs-core/optimizations.js',
+    'js/pmjs-mv/setup.js',
+    'js/pmjs-mv/plugin-loader.js',
+  ] }));
+  const bootstrap = path.join(tempDir, 'bootstrap.js');
+  const tool = path.join(__dirname, '..', 'tools', 'build-js-runtime.mjs');
+  childProcess.execFileSync(process.execPath,
+    [tool, '--root', path.join(__dirname, '..'), '--manifest', manifest,
+      '--config', config, '--output', bootstrap]);
+  // Standard boot initializes plugins, runs the last registration seam
+  // (beforeBoot), then finalizes before game boot; finalization rejects
+  // the requested-but-unregistered ID. Mirrors bootstrap.js ordering.
+  fs.appendFileSync(bootstrap,
+    '\npmjsMvInitializePlugins();\npmjsRunHooks(\'beforeBoot\');\nPMJS.optimizations.finalize();\n');
+  const options = { addon: path.join(tempDir, 'addon.node'), gameRoot: tempDir,
+    bootstrap, saveRoot: path.join(tempDir, 'save'), width: 320, height: 240,
+    title: 'Test', config, native: native() };
+  options.native.runtime.env = () => '';
+  await assert.rejects(run(options), /Unknown PMJS optimization: terrax\.nativeLight/);
 });
 test('afterBootstrap runs once and Node jobs are not starved', async () => {
   const options = fixture('globalThis.__pmjsTick=()=>{};globalThis.__pmjsRender=()=>{};');
