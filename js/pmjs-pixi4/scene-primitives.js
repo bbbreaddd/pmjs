@@ -7,6 +7,19 @@ var nativeTileRebuilds = 0;
 var nativeTransformMs = 0;
 var nativeQueueMs = 0;
 var nativeStageSamples = 0;
+var nativeBlankTileHandle = 0;
+
+function nativeBlankTile() {
+  if (nativeBlankTileHandle) return nativeBlankTileHandle;
+  var canvas = new CanvasElement();
+  canvas.width = 1;
+  canvas.height = 1;
+  canvas.getContext('2d').clearRect(0, 0, 1, 1);
+  var native = canvas._ensureNativeCanvas();
+  if (!native) return 0;
+  nativeBlankTileHandle = native.handle;
+  return nativeBlankTileHandle;
+}
 
 function queueNativeSprite(sprite) {
   var texture = sprite.texture;
@@ -201,12 +214,17 @@ function ensureNativeRectTileLayer(layer) {
   var generation = layer._pmjsNativeGeneration || 0;
   var handles = [];
   for (var textureIndex = 0; textureIndex < textures.length; textureIndex++) {
-    var textureSource = textures[textureIndex] &&
-      textures[textureIndex].baseTexture && textures[textureIndex].baseTexture.source;
+    var texture = textures[textureIndex];
+    var textureSource = texture && texture.baseTexture && texture.baseTexture.source;
     var textureImage = textureSource &&
       (textureSource._nativeImage || textureSource._nativeCanvas);
-    if (!textureImage) return 0;
-    handles.push(textureImage.handle);
+    var textureHandle = textureImage && textureImage.handle;
+    if (!textureHandle) {
+      if (texture && texture.width > 1 && texture.height > 1) return 0;
+      textureHandle = nativeBlankTile();
+      if (!textureHandle) return 0;
+    }
+    handles.push(textureHandle);
   }
   var textureSignature = handles.join(':');
   if (!layer._pmjsNativeLayer || layer._pmjsNativeCompiledGeneration !== generation ||
