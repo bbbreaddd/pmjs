@@ -146,6 +146,77 @@ napi_value releaseMesh(napi_env env, napi_callback_info info) {
   return releaseTileLayer(env, info);
 }
 
+napi_value createPrimitiveSurface(napi_env env, napi_callback_info info) try {
+  auto args = arguments(env, info, 2);
+  if (args.size() != 2) throw std::runtime_error("primitive surface requires width and height");
+  const auto surface = host(env).renderer.createPrimitiveSurface(
+    asInt32(env, args[0]), asInt32(env, args[1]));
+  if (!surface) throw std::runtime_error("invalid primitive surface dimensions");
+  napi_value result;
+  check(env, napi_create_object(env, &result), "cannot create primitive surface result");
+  check(env, napi_set_named_property(env, result, "handle",
+    uint32(env, surface->handle)), "cannot set primitive surface handle");
+  check(env, napi_set_named_property(env, result, "image",
+    imageInfo(env, surface->image.handle, surface->image.width,
+      surface->image.height)), "cannot set primitive surface image");
+  return result;
+} catch (const std::exception& error) {
+  napi_throw_range_error(env, nullptr, error.what()); return nullptr;
+}
+
+napi_value renderPrimitiveSurface(napi_env env, napi_callback_info info) try {
+  auto args = arguments(env, info, 3);
+  if (args.size() != 3) {
+    throw std::runtime_error("primitive surface render requires handle, clear color, and records");
+  }
+  const auto clear = floatVector(env, args[1]);
+  const auto records = floatVector(env, args[2]);
+  constexpr std::size_t stride = 26;
+  if (clear.size() != 4 || records.size() % stride != 0 ||
+      records.size() / stride > 4096) {
+    throw std::runtime_error("invalid primitive surface records");
+  }
+  std::vector<pmjs::PrimitiveSurfacePrimitive> primitives;
+  primitives.reserve(records.size() / stride);
+  for (std::size_t offset = 0; offset < records.size(); offset += stride) {
+    pmjs::PrimitiveSurfacePrimitive primitive;
+    const int kind = static_cast<int>(records[offset]);
+    const int stopCount = static_cast<int>(records[offset + 9]);
+    const int blendMode = static_cast<int>(records[offset + 25]);
+    if (kind < 0 || kind > 1 || stopCount < 1 || stopCount > 3 ||
+        blendMode < 0 || blendMode > 1) {
+      throw std::runtime_error("invalid primitive surface primitive");
+    }
+    primitive.kind = static_cast<pmjs::PrimitiveSurfacePrimitive::Kind>(kind);
+    std::copy_n(records.begin() + offset + 1, 4, primitive.bounds.begin());
+    std::copy_n(records.begin() + offset + 5, 2, primitive.center.begin());
+    std::copy_n(records.begin() + offset + 7, 2, primitive.radii.begin());
+    primitive.stopCount = static_cast<std::uint8_t>(stopCount);
+    std::copy_n(records.begin() + offset + 10, 3, primitive.offsets.begin());
+    for (std::size_t stop = 0; stop < 3; ++stop) {
+      std::copy_n(records.begin() + offset + 13 + stop * 4, 4,
+                  primitive.colors[stop].begin());
+    }
+    primitive.composition = static_cast<pmjs::PrimitiveComposition>(blendMode);
+    primitives.push_back(primitive);
+  }
+  if (!host(env).renderer.renderPrimitiveSurface(asUint32(env, args[0]),
+      {clear[0], clear[1], clear[2], clear[3]}, primitives)) {
+    throw std::runtime_error("cannot render primitive surface");
+  }
+  return undefined(env);
+} catch (const std::exception& error) {
+  napi_throw_range_error(env, nullptr, error.what()); return nullptr;
+}
+
+napi_value releasePrimitiveSurface(napi_env env, napi_callback_info info) try {
+  auto args = arguments(env, info, 1);
+  return boolean(env,
+    host(env).renderer.releasePrimitiveSurface(asUint32(env, args.at(0))));
+} catch (const std::exception& error) {
+  napi_throw_type_error(env, nullptr, error.what()); return nullptr;
+}
+
 napi_value renderToCanvas(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 1);
   State& value = host(env);
@@ -282,6 +353,24 @@ void registerGraphicsBindings(napi_env env, napi_value exports) {
   method(env, render, "releaseTileLayer", releaseTileLayer);
   method(env, render, "createMesh", createMesh);
   method(env, render, "releaseMesh", releaseMesh);
+  method(env, render, "createPrimitiveSurface", createPrimitiveSurface);
+  method(env, render, "renderPrimitiveSurface", renderPrimitiveSurface);
+  method(env, render, "releasePrimitiveSurface", releasePrimitiveSurface);
+  napi_value primitiveSurfaceSchema = moduleObject(env);
+  napi_set_named_property(env, primitiveSurfaceSchema, "recordStride", uint32(env, 26));
+  napi_set_named_property(env, primitiveSurfaceSchema, "maxStops", uint32(env, 3));
+  napi_set_named_property(env, primitiveSurfaceSchema, "maxPrimitives", uint32(env, 4096));
+  napi_value primitiveKinds = moduleObject(env);
+  napi_set_named_property(env, primitiveKinds, "solidRect", uint32(env, 0));
+  napi_set_named_property(env, primitiveKinds, "concentricRadialGradient", uint32(env, 1));
+  napi_set_named_property(env, primitiveSurfaceSchema, "kinds", primitiveKinds);
+  napi_value primitiveCompositions = moduleObject(env);
+  napi_set_named_property(env, primitiveCompositions, "sourceOver", uint32(env, 0));
+  napi_set_named_property(env, primitiveCompositions, "additive", uint32(env, 1));
+  napi_set_named_property(env, primitiveSurfaceSchema, "compositions",
+                          primitiveCompositions);
+  napi_set_named_property(env, render, "primitiveSurfaceSchema",
+                          primitiveSurfaceSchema);
   method(env, render, "renderToCanvas", renderToCanvas);
   method(env, render, "renderToImage", renderToImage);
   method(env, render, "presentation", presentationGeometry);

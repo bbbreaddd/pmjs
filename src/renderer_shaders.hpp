@@ -1,6 +1,36 @@
 #pragma once
 
 namespace pmjs::renderer_shaders {
+constexpr const char* primitiveSurfaceFragmentSource = R"(
+  #version 300 es
+  precision mediump float;
+  uniform vec2 surfaceSize;
+  uniform int primitiveKind;
+  uniform vec2 center;
+  uniform vec2 radii;
+  uniform int stopCount;
+  uniform float stopOffsets[3];
+  uniform vec4 stopColors[3];
+  out vec4 outputColor;
+  void main() {
+    float amount = 0.0;
+    if (primitiveKind == 1) {
+      vec2 point = vec2(gl_FragCoord.x, surfaceSize.y - gl_FragCoord.y);
+      amount = clamp((distance(point, center) - radii.x) /
+        max(0.0001, radii.y - radii.x), 0.0, 1.0);
+    }
+    vec4 color = stopColors[0];
+    for (int index = 1; index < 3; ++index) {
+      if (index >= stopCount) break;
+      float span = stopOffsets[index] - stopOffsets[index - 1];
+      float mixAmount = clamp((amount - stopOffsets[index - 1]) /
+        max(0.0001, span), 0.0, 1.0);
+      color = mix(color, stopColors[index], mixAmount);
+      if (amount <= stopOffsets[index]) break;
+    }
+    outputColor = vec4(color.rgb * color.a, color.a);
+  }
+)";
 constexpr const char* vertexSource = R"(
   #version 300 es
   layout(location = 0) in vec2 position;

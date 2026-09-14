@@ -276,13 +276,38 @@ function canvasStyleRgba(style, x, y, alpha) {
       (style.pixels[pixelOffset + 2] << 8) |
       Math.round(style.pixels[pixelOffset + 3] * alpha)) >>> 0;
   }
-  if (!style || style._pmjsStyle !== 'linear-gradient') {
+  if (!style || (style._pmjsStyle !== 'linear-gradient' &&
+      style._pmjsStyle !== 'radial-gradient')) {
     return colorWithGlobalAlpha(style, alpha);
   }
   if (!style.stops.length) return 0;
-  var dx = style.x1 - style.x0, dy = style.y1 - style.y0;
-  var length = dx * dx + dy * dy;
-  var amount = length ? ((x - style.x0) * dx + (y - style.y0) * dy) / length : 0;
+  var amount;
+  if (style._pmjsStyle === 'radial-gradient') {
+    var centerDx = style.x1 - style.x0, centerDy = style.y1 - style.y0;
+    var radiusDelta = style.r1 - style.r0;
+    var pointX = x - style.x0, pointY = y - style.y0;
+    if (Math.abs(centerDx) < 0.000001 && Math.abs(centerDy) < 0.000001) {
+      amount = radiusDelta ?
+        (Math.sqrt(pointX * pointX + pointY * pointY) - style.r0) / radiusDelta : 0;
+    } else {
+      var quadraticA = centerDx * centerDx + centerDy * centerDy -
+        radiusDelta * radiusDelta;
+      var quadraticB = -2 * (pointX * centerDx + pointY * centerDy +
+        style.r0 * radiusDelta);
+      var quadraticC = pointX * pointX + pointY * pointY - style.r0 * style.r0;
+      var discriminant = quadraticB * quadraticB - 4 * quadraticA * quadraticC;
+      if (discriminant < 0) amount = 0;
+      else if (Math.abs(quadraticA) < 0.000001) {
+        amount = Math.abs(quadraticB) < 0.000001 ? 0 : -quadraticC / quadraticB;
+      } else {
+        amount = (-quadraticB + Math.sqrt(discriminant)) / (2 * quadraticA);
+      }
+    }
+  } else {
+    var dx = style.x1 - style.x0, dy = style.y1 - style.y0;
+    var length = dx * dx + dy * dy;
+    amount = length ? ((x - style.x0) * dx + (y - style.y0) * dy) / length : 0;
+  }
   amount = Math.max(0, Math.min(1, amount));
   var lower = style.stops[0], upper = style.stops[style.stops.length - 1];
   for (var index = 1; index < style.stops.length; index++) {
@@ -299,6 +324,25 @@ function canvasStyleRgba(style, x, y, alpha) {
   };
   return ((channel(24) << 24) | (channel(16) << 16) | (channel(8) << 8) |
     Math.round(channel(0) * Math.max(0, Math.min(1, alpha)))) >>> 0;
+}
+
+function fillAxisAlignedRadialGradient(context, rectangle, style) {
+  if (!style || style._pmjsStyle !== 'radial-gradient' ||
+      !style.nativeConcentric || !style.stops.length || context._clipPaths.length ||
+      (context.globalCompositeOperation !== 'source-over' &&
+       context.globalCompositeOperation !== 'lighter') ||
+      typeof NativeHost.canvas.fillRadialGradient !== 'function') return false;
+  var left = Math.floor(rectangle.x);
+  var top = Math.floor(rectangle.y);
+  var width = Math.ceil(rectangle.x + rectangle.width) - left;
+  var height = Math.ceil(rectangle.y + rectangle.height) - top;
+  NativeHost.canvas.fillRadialGradient(context.canvas._ensureNativeCanvas().handle,
+    left, top, width, height, style.x0, style.y0, style.r0, style.r1,
+    style.stops.map(function(stop) { return stop.offset; }),
+    style.stops.map(function(stop) {
+      return colorWithGlobalAlpha(stop.color, context.globalAlpha);
+    }), context.globalCompositeOperation === 'lighter');
+  return true;
 }
 
 function fillAxisAlignedLinearGradient(context, rectangle, style) {
@@ -568,6 +612,7 @@ CanvasContext2D.prototype.clearRect = function(x, y, width, height) {
 };
 CanvasContext2D.prototype.fillRect = function(x, y, width, height) {
   var rectangle = axisAlignedRect(this, x, y, width, height);
+  if (rectangle && fillAxisAlignedRadialGradient(this, rectangle, this.fillStyle)) return;
   if (rectangle && fillAxisAlignedLinearGradient(this, rectangle, this.fillStyle)) return;
   if (!rectangle || this._clipPaths.length || typeof this.fillStyle === 'object' ||
       this.globalCompositeOperation !== 'source-over') {
@@ -804,6 +849,35 @@ CanvasContext2D.prototype.createLinearGradient = function() {
   var second = transformedPoint(this, Number(arguments[2]), Number(arguments[3]));
   return { _pmjsStyle: 'linear-gradient', x0: first[0], y0: first[1],
     x1: second[0], y1: second[1], stops: [], addColorStop: function(offset, color) {
+      offset = Number(offset);
+      if (!isFinite(offset) || offset < 0 || offset > 1) throw new RangeError('invalid color stop');
+      colorToRgba(color);
+      this.stops.push({ offset: offset, color: color });
+      this.stops.sort(function(left, right) { return left.offset - right.offset; });
+    } };
+};
+CanvasContext2D.prototype.createRadialGradient = function(x0, y0, r0, x1, y1, r1) {
+  x0 = Number(x0); y0 = Number(y0); r0 = Number(r0);
+  x1 = Number(x1); y1 = Number(y1); r1 = Number(r1);
+  if (![x0, y0, r0, x1, y1, r1].every(Number.isFinite)) {
+    throw new TypeError('invalid radial gradient');
+  }
+  if (r0 < 0 || r1 < 0) throw new RangeError('negative radial gradient radius');
+  var first = transformedPoint(this, x0, y0);
+  var second = transformedPoint(this, x1, y1);
+  var transform = this._transform;
+  var scaleX = Math.hypot(transform[0], transform[1]);
+  var scaleY = Math.hypot(transform[2], transform[3]);
+  var uniformScale = Math.abs(scaleX - scaleY) < 0.000001 &&
+    Math.abs(transform[0] * transform[2] + transform[1] * transform[3]) < 0.000001;
+  var scale = Math.sqrt(Math.abs(transform[0] * transform[3] -
+    transform[1] * transform[2]));
+  return { _pmjsStyle: 'radial-gradient',
+    x0: first[0], y0: first[1], r0: r0 * scale,
+    x1: second[0], y1: second[1], r1: r1 * scale,
+    nativeConcentric: uniformScale && Math.abs(first[0] - second[0]) < 0.000001 &&
+      Math.abs(first[1] - second[1]) < 0.000001 && r1 > r0,
+    stops: [], addColorStop: function(offset, color) {
       offset = Number(offset);
       if (!isFinite(offset) || offset < 0 || offset > 1) throw new RangeError('invalid color stop');
       colorToRgba(color);

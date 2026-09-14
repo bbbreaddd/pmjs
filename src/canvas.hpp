@@ -45,6 +45,11 @@ class CanvasStore {
                                        std::vector<std::uint8_t> pixels);
   bool fillRect(CanvasHandle handle, int x, int y, int width, int height,
                 std::uint32_t rgba);
+  bool fillRadialGradient(CanvasHandle handle, int x, int y, int width, int height,
+                          float centerX, float centerY, float innerRadius,
+                          float outerRadius, const std::vector<float>& offsets,
+                          const std::vector<std::uint32_t>& colors,
+                          bool additive);
   bool clear(CanvasHandle handle);
   bool clearRect(CanvasHandle handle, int x, int y, int width, int height);
   bool drawImage(CanvasHandle destination, std::uint32_t source,
@@ -173,6 +178,8 @@ class CanvasStore {
 
   static void blendPixel(Surface& surface, int x, int y, std::uint32_t rgba,
                          std::uint8_t coverage);
+  static void blendPixelAdditive(Surface& surface, int x, int y,
+                                 std::uint32_t rgba);
   static void markDirty(Surface& surface, int x, int y, int width, int height);
 
   ImageStore& images_;

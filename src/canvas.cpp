@@ -565,6 +565,59 @@ bool CanvasStore::fillRect(CanvasHandle handle, int x, int y, int width, int hei
   return true;
 }
 
+bool CanvasStore::fillRadialGradient(
+    CanvasHandle handle, int x, int y, int width, int height,
+    float centerX, float centerY, float innerRadius, float outerRadius,
+    const std::vector<float>& offsets,
+    const std::vector<std::uint32_t>& colors, bool additive) {
+  auto* surface = lookup(handle);
+  if (!surface || offsets.empty() || offsets.size() != colors.size() ||
+      !std::isfinite(centerX) || !std::isfinite(centerY) ||
+      !std::isfinite(innerRadius) || !std::isfinite(outerRadius) ||
+      innerRadius < 0 || outerRadius <= innerRadius) return false;
+  float previousOffset = -1.0F;
+  for (const float offset : offsets) {
+    if (!std::isfinite(offset) || offset < 0.0F || offset > 1.0F ||
+        offset < previousOffset) return false;
+    previousOffset = offset;
+  }
+  if (surface->state == SurfaceState::Deferred && !realizeSurface(*surface)) return false;
+  const int left = std::clamp(x, 0, surface->width);
+  const int top = std::clamp(y, 0, surface->height);
+  const int right = static_cast<int>(std::clamp<std::int64_t>(
+    static_cast<std::int64_t>(x) + width, 0, surface->width));
+  const int bottom = static_cast<int>(std::clamp<std::int64_t>(
+    static_cast<std::int64_t>(y) + height, 0, surface->height));
+  const float radiusSpan = outerRadius - innerRadius;
+  for (int py = top; py < bottom; ++py) {
+    for (int px = left; px < right; ++px) {
+      const float dx = px + 0.5F - centerX;
+      const float dy = py + 0.5F - centerY;
+      const float amount = std::clamp((std::sqrt(dx * dx + dy * dy) - innerRadius) /
+                                      radiusSpan, 0.0F, 1.0F);
+      std::size_t upper = 0;
+      while (upper + 1 < offsets.size() && offsets[upper] < amount) ++upper;
+      const std::size_t lower = upper == 0 ? 0 : upper - 1;
+      const float span = offsets[upper] - offsets[lower];
+      const float mix = span > 0 ? std::clamp((amount - offsets[lower]) / span,
+                                             0.0F, 1.0F) : 0.0F;
+      const auto first = colors[lower];
+      const auto second = colors[upper];
+      const auto channel = [&](int shift) {
+        return static_cast<std::uint32_t>(std::lround(
+          ((first >> shift) & 255U) * (1.0F - mix) +
+          ((second >> shift) & 255U) * mix));
+      };
+      const std::uint32_t rgba = (channel(24) << 24) | (channel(16) << 16) |
+                                 (channel(8) << 8) | channel(0);
+      if (additive) blendPixelAdditive(*surface, px, py, rgba);
+      else blendPixel(*surface, px, py, rgba, 255);
+    }
+  }
+  markDirty(*surface, left, top, right - left, bottom - top);
+  return true;
+}
+
 bool CanvasStore::clear(CanvasHandle handle) {
   auto* surface = lookup(handle);
   if (!surface) return false;
@@ -681,6 +734,28 @@ void CanvasStore::blendPixel(Surface& surface, int x, int y, std::uint32_t rgba,
       surface.pixels[offset + channel] * destinationAlpha * inverse / 255U;
     surface.pixels[offset + channel] = outputAlpha == 0 ? 0 :
       static_cast<std::uint8_t>(premultiplied / outputAlpha);
+  }
+  surface.pixels[offset + 3] = static_cast<std::uint8_t>(outputAlpha);
+}
+
+void CanvasStore::blendPixelAdditive(Surface& surface, int x, int y,
+                                     std::uint32_t rgba) {
+  if (x < 0 || y < 0 || x >= surface.width || y >= surface.height) return;
+  const std::uint32_t sourceAlpha = rgba & 0xffU;
+  const std::size_t offset =
+    (static_cast<std::size_t>(y) * surface.width + x) * 4U;
+  const std::uint32_t destinationAlpha = surface.pixels[offset + 3];
+  const std::uint32_t outputAlpha = std::min(255U, sourceAlpha + destinationAlpha);
+  const std::uint8_t colors[3] = {
+    static_cast<std::uint8_t>((rgba >> 24U) & 0xffU),
+    static_cast<std::uint8_t>((rgba >> 16U) & 0xffU),
+    static_cast<std::uint8_t>((rgba >> 8U) & 0xffU),
+  };
+  for (int channel = 0; channel < 3; ++channel) {
+    const std::uint32_t premultiplied = colors[channel] * sourceAlpha +
+      surface.pixels[offset + channel] * destinationAlpha;
+    surface.pixels[offset + channel] = outputAlpha == 0 ? 0 :
+      static_cast<std::uint8_t>(std::min(255U, premultiplied / outputAlpha));
   }
   surface.pixels[offset + 3] = static_cast<std::uint8_t>(outputAlpha);
 }

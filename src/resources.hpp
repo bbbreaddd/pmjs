@@ -65,6 +65,8 @@ class ImageStore {
   std::optional<ImageInfo> installDecodedMemory(ImagePixels pixels,
                                                 bool retainCpuPixels = false);
   std::optional<ImageInfo> createRgba(int width, int height, const void* pixels);
+  // GPU-only image storage. readPixels() intentionally returns no CPU copy.
+  std::optional<ImageInfo> createRenderTarget(int width, int height);
   const ImagePixels* readPixels(ImageHandle handle) const;
   bool updateRgba(ImageHandle handle, const void* pixels);
   bool updateRgbaRegion(ImageHandle handle, int x, int y, int width, int height,

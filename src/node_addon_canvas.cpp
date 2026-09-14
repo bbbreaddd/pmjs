@@ -38,6 +38,41 @@ napi_value fillRect(napi_env env, napi_callback_info info) try {
   return undefined(env);
 } catch (const std::exception& error) { napi_throw_range_error(env,nullptr,error.what()); return nullptr; }
 
+napi_value fillRadialGradient(napi_env env, napi_callback_info info) try {
+  auto a = arguments(env, info, 12);
+  bool offsetsArray = false, colorsArray = false;
+  check(env, napi_is_array(env, a.at(9), &offsetsArray), "cannot inspect gradient stops");
+  check(env, napi_is_array(env, a.at(10), &colorsArray), "cannot inspect gradient colors");
+  if (!offsetsArray || !colorsArray) throw std::runtime_error("gradient stops must be arrays");
+  std::uint32_t offsetCount = 0, colorCount = 0;
+  check(env, napi_get_array_length(env, a.at(9), &offsetCount), "cannot read gradient stops");
+  check(env, napi_get_array_length(env, a.at(10), &colorCount), "cannot read gradient colors");
+  if (!offsetCount || offsetCount != colorCount || offsetCount > 64)
+    throw std::runtime_error("invalid gradient stops");
+  std::vector<float> offsets;
+  std::vector<std::uint32_t> colors;
+  offsets.reserve(offsetCount); colors.reserve(colorCount);
+  for (std::uint32_t index = 0; index < offsetCount; ++index) {
+    napi_value offset, color;
+    check(env, napi_get_element(env, a.at(9), index, &offset), "cannot read gradient stop");
+    check(env, napi_get_element(env, a.at(10), index, &color), "cannot read gradient color");
+    offsets.push_back(static_cast<float>(asNumber(env, offset)));
+    colors.push_back(asUint32(env, color));
+  }
+  if (!host(env).canvases.fillRadialGradient(
+        asUint32(env, a.at(0)), asInt32(env, a.at(1)), asInt32(env, a.at(2)),
+        asInt32(env, a.at(3)), asInt32(env, a.at(4)),
+        static_cast<float>(asNumber(env, a.at(5))),
+        static_cast<float>(asNumber(env, a.at(6))),
+        static_cast<float>(asNumber(env, a.at(7))),
+        static_cast<float>(asNumber(env, a.at(8))), offsets, colors,
+        asBoolean(env, a.at(11))))
+    throw std::runtime_error("invalid radial gradient");
+  return undefined(env);
+} catch (const std::exception& error) {
+  napi_throw_range_error(env, nullptr, error.what()); return nullptr;
+}
+
 napi_value clearCanvas(napi_env env, napi_callback_info info) try {
   auto a=arguments(env,info,1); if(!host(env).canvases.clear(asUint32(env,a.at(0)))) throw std::runtime_error("invalid canvas"); return undefined(env);
 } catch(const std::exception& error){napi_throw_range_error(env,nullptr,error.what());return nullptr;}
@@ -185,6 +220,7 @@ void registerCanvasBindings(napi_env env, napi_value exports) {
   method(env, canvas, "captureScene", captureScene);
   method(env, canvas, "captureDrawable", captureDrawable);
   method(env, canvas, "fillRect", fillRect);
+  method(env, canvas, "fillRadialGradient", fillRadialGradient);
   method(env, canvas, "clear", clearCanvas);
   method(env, canvas, "clearRect", clearRect);
   method(env, canvas, "drawImage", canvasDrawImage);

@@ -110,6 +110,7 @@ if(BUILD_TESTING)
       test/build-js-runtime.test.cjs
       test/object-urls.test.cjs
       test/mv-audio-object-url.test.cjs
+      test/canvas-gradients.test.cjs
       test/mv-platform-semantics.test.cjs
       test/scheduler.test.cjs)
     get_filename_component(PMJS_TEST_NAME "${PMJS_JS_TEST}" NAME_WE)
@@ -121,7 +122,7 @@ if(BUILD_TESTING)
   execute_process(COMMAND ${BASE64_EXECUTABLE} -d INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/fixture.jpg.b64" OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture.jpg" COMMAND_ERROR_IS_FATAL ANY)
   configure_file("${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture.png" "${CMAKE_CURRENT_BINARY_DIR}/test-assets/lease.png" COPYONLY)
   configure_file("${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture.png" "${CMAKE_CURRENT_BINARY_DIR}/test-assets/retained-fixture.png" COPYONLY)
-  foreach(PMJS_NODE_TEST IN ITEMS node-scene node-renderer-stats node-render-to-image node-image-coalesce node-image-retention node-image-warm-cache node-image-no-warm-cache node-image-fallback node-image-bytes node-audio-bytes node-canvas-deferred)
+  foreach(PMJS_NODE_TEST IN ITEMS node-scene node-renderer-stats node-render-to-image node-image-coalesce node-image-retention node-image-warm-cache node-image-no-warm-cache node-image-fallback node-image-bytes node-audio-bytes node-canvas-deferred node-canvas-radial-gradient node-primitive-surface)
     add_test(NAME ${PMJS_NODE_TEST} COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
       "${CMAKE_CURRENT_SOURCE_DIR}/test/${PMJS_NODE_TEST}.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
     set_tests_properties(${PMJS_NODE_TEST} PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")

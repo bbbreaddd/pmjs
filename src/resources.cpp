@@ -308,8 +308,10 @@ std::optional<ImageInfo> ImageStore::createRgba(int width, int height,
     return std::nullopt;
   }
   ++textureCreates_;
-  textureUploadBytes_ += static_cast<std::uint64_t>(width) *
-      static_cast<std::uint64_t>(height) * 4U;
+  if (pixels) {
+    textureUploadBytes_ += static_cast<std::uint64_t>(width) *
+        static_cast<std::uint64_t>(height) * 4U;
+  }
 
   std::size_t index = 0;
   while (index < slots_.size() && slots_[index].live) ++index;
@@ -335,6 +337,10 @@ std::optional<ImageInfo> ImageStore::createRgba(int width, int height,
   gpuBytes_ += extent->rgbaBytes;
   peakGpuBytes_ = std::max(peakGpuBytes_, gpuBytes_);
   return ImageInfo{makeHandle(index, slot.generation), width, height, texture};
+}
+
+std::optional<ImageInfo> ImageStore::createRenderTarget(int width, int height) {
+  return createRgba(width, height, nullptr);
 }
 
 std::size_t ImageStore::cpuBytes() const {

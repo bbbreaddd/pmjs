@@ -118,6 +118,28 @@ struct TileLayerTile {
   std::array<float, 2> animation{};
 };
 
+using PrimitiveSurfaceHandle = std::uint32_t;
+
+enum class PrimitiveComposition : std::uint8_t {
+  sourceOver = 0,
+  additive = 1,
+};
+
+struct PrimitiveSurfacePrimitive {
+  enum class Kind : std::uint8_t {
+    solidRect = 0,
+    concentricRadialGradient = 1,
+  };
+  Kind kind = Kind::solidRect;
+  std::array<float, 4> bounds{};
+  std::array<float, 2> center{};
+  std::array<float, 2> radii{};
+  std::array<float, 3> offsets{};
+  std::array<std::array<float, 4>, 3> colors{};
+  std::uint8_t stopCount = 0;
+  PrimitiveComposition composition = PrimitiveComposition::sourceOver;
+};
+
 class Renderer {
  public:
   Renderer(int width, int height, ImageStore& images);
@@ -152,6 +174,15 @@ class Renderer {
                       const std::array<float, 2>& animation, float alpha,
                       std::uint32_t tint, BlendMode blendMode);
   bool releaseTileLayer(std::uint32_t layer);
+  struct PrimitiveSurfaceInfo {
+    PrimitiveSurfaceHandle handle = 0;
+    ImageInfo image;
+  };
+  std::optional<PrimitiveSurfaceInfo> createPrimitiveSurface(int width, int height);
+  bool renderPrimitiveSurface(
+      PrimitiveSurfaceHandle handle, const std::array<float, 4>& clearColor,
+      const std::vector<PrimitiveSurfacePrimitive>& primitives);
+  bool releasePrimitiveSurface(PrimitiveSurfaceHandle handle);
   bool queueScene(std::uint32_t version, const std::uint32_t* metadata,
                   std::size_t metadataCount,
                   const float* values, std::size_t valueCount,
@@ -186,8 +217,20 @@ class Renderer {
     std::uint32_t queuedReferences = 0;
   };
 
+  struct PrimitiveSurfaceResource {
+    std::uint16_t generation = 1;
+    ImageHandle image = 0;
+    std::uint32_t framebuffer = 0;
+    int width = 0;
+    int height = 0;
+    bool live = false;
+  };
+
   void discardCommandsFrom(std::size_t first);
   void destroyTileLayer(std::uint32_t handle);
+  static PrimitiveSurfaceHandle makePrimitiveSurfaceHandle(
+      std::size_t index, std::uint16_t generation);
+  PrimitiveSurfaceResource* lookupPrimitiveSurface(PrimitiveSurfaceHandle handle);
   void resizeTargets(int width, int height);
   void drawToneComposition(std::uint32_t framebuffer, int viewportX,
                            int viewportY, int viewportWidth,
@@ -274,6 +317,14 @@ class Renderer {
   int tileMaskFrameUniform_ = -1;
   int tileMaskTextureSizeUniform_ = -1;
   int tileMaskScreenHeightUniform_ = -1;
+  std::uint32_t primitiveSurfaceProgram_ = 0;
+  int primitiveSurfaceSizeUniform_ = -1;
+  int primitiveSurfaceKindUniform_ = -1;
+  int primitiveSurfaceCenterUniform_ = -1;
+  int primitiveSurfaceRadiiUniform_ = -1;
+  int primitiveSurfaceStopCountUniform_ = -1;
+  int primitiveSurfaceOffsetsUniform_ = -1;
+  int primitiveSurfaceColorsUniform_ = -1;
   std::uint32_t vertexArray_ = 0;
   std::uint32_t vertexBuffer_ = 0;
   std::uint32_t whiteTexture_ = 0;
@@ -297,6 +348,7 @@ class Renderer {
   float presentationColorMatrixAlpha_ = 1.0F;
   std::uint32_t nextTileLayer_ = 1;
   std::unordered_map<std::uint32_t, TileLayerResource> tileLayers_;
+  std::vector<PrimitiveSurfaceResource> primitiveSurfaces_;
   std::unordered_map<std::uint32_t, bool> textureRepeatState_;
   std::unordered_map<std::uint32_t, bool> textureNearestState_;
 };
