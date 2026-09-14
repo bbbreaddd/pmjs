@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
 
 struct SDL_Window;
 struct _SDL_GameController;
@@ -24,6 +25,7 @@ class Platform {
   std::uint32_t inputState() const;
   bool windowFocused() const { return windowFocused_; }
   bool windowVisible() const { return windowVisible_; }
+  std::pair<int, int> drawableSize() const;
   void finishLogicStep();
   void finishGpuWork();
   void swap();
@@ -40,6 +42,10 @@ class Platform {
   std::uint16_t pressed_ = 0;
   bool hotkeyDown_ = false;
   bool startDown_ = false;
+  int windowWidth_ = 0;
+  int windowHeight_ = 0;
+  int displayWidth_ = -1;
+  int displayHeight_ = -1;
   bool windowFocused_ = true;
   bool windowVisible_ = true;
   bool swapIntervalAccepted_ = false;

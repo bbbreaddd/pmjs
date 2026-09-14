@@ -30,6 +30,7 @@ class RuntimeCore {
   bool pollEvents();
   bool running() const { return running_; }
   void requestQuit() { running_ = false; }
+  void syncDrawableSize();
   void injectInput(std::uint16_t input) { injectedInput_ = input; }
   std::uint32_t inputState() const;
 

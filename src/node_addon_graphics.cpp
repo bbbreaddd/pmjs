@@ -234,6 +234,41 @@ napi_value setScreenRenderSize(napi_env env, napi_callback_info info) try {
   return undefined(env);
 } catch(const std::exception& error){napi_throw_range_error(env,nullptr,error.what());return nullptr;}
 
+napi_value presentationGeometry(napi_env env, napi_callback_info) try {
+  State& value = host(env);
+  value.core.syncDrawableSize();
+  const auto geometry = value.renderer.presentationGeometry();
+  napi_value result;
+  check(env, napi_create_object(env, &result), "cannot create presentation geometry");
+  check(env, napi_set_named_property(env, result, "sourceWidth",
+    number(env, geometry.sourceWidth)), "cannot set source width");
+  check(env, napi_set_named_property(env, result, "sourceHeight",
+    number(env, geometry.sourceHeight)), "cannot set source height");
+  check(env, napi_set_named_property(env, result, "drawableWidth",
+    number(env, geometry.drawableWidth)), "cannot set drawable width");
+  check(env, napi_set_named_property(env, result, "drawableHeight",
+    number(env, geometry.drawableHeight)), "cannot set drawable height");
+  check(env, napi_set_named_property(env, result, "viewportX",
+    number(env, geometry.viewportX)), "cannot set viewport x");
+  check(env, napi_set_named_property(env, result, "viewportY",
+    number(env, geometry.viewportY)), "cannot set viewport y");
+  check(env, napi_set_named_property(env, result, "viewportWidth",
+    number(env, geometry.viewportWidth)), "cannot set viewport width");
+  check(env, napi_set_named_property(env, result, "viewportHeight",
+    number(env, geometry.viewportHeight)), "cannot set viewport height");
+  check(env, napi_set_named_property(env, result, "scale",
+    string(env, geometry.scaleMode == PresentScaleMode::integer ?
+      "integer" : "fit")), "cannot set scale mode");
+  check(env, napi_set_named_property(env, result, "filter",
+    string(env, geometry.filter == PresentFilter::linear ?
+      "linear" : "nearest")), "cannot set present filter");
+  const bool letterboxed = geometry.viewportWidth < geometry.drawableWidth ||
+      geometry.viewportHeight < geometry.drawableHeight;
+  check(env, napi_set_named_property(env, result, "letterboxed",
+    boolean(env, letterboxed)), "cannot set letterboxed flag");
+  return result;
+} catch(const std::exception& error){napi_throw_error(env,nullptr,error.what());return nullptr;}
+
 void registerGraphicsBindings(napi_env env, napi_value exports) {
   napi_value render = moduleObject(env);
   method(env, render, "setClearColor", setClearColor);
@@ -249,6 +284,7 @@ void registerGraphicsBindings(napi_env env, napi_value exports) {
   method(env, render, "releaseMesh", releaseMesh);
   method(env, render, "renderToCanvas", renderToCanvas);
   method(env, render, "renderToImage", renderToImage);
+  method(env, render, "presentation", presentationGeometry);
   method(env, render, "stats", rendererStats);
   napi_value scene = moduleObject(env);
   method(env, scene, "submit", submitScene);

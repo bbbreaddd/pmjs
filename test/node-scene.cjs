@@ -1,5 +1,6 @@
 'use strict';
 
+// Scene-only: renderScene/captureScene, no window presentation.
 const path = require('node:path');
 const native = require(path.resolve(process.argv[2]));
 native.initialize({
@@ -43,7 +44,7 @@ values.set([2, 2], 13);
 
 native.beginFrame();
 native.scene.submit(schema.version, metadata, values, 1);
-native.renderFrame();
+native.renderScene();
 const frame = native.canvas.captureScene();
 if ((native.canvas.pixel(frame.handle, 8, 8) >>> 8) === 0) {
   throw new Error('submitted sprite was not rendered');
@@ -57,7 +58,7 @@ if (stats1.frames !== 1 || stats1.commands !== 1 || stats1.drawCalls !== 1 || st
 
 // Frame 2: begin and render without submitting scene packet -> should retain previous scene
 native.beginFrame();
-native.renderFrame();
+native.renderScene();
 const frame2 = native.canvas.captureScene();
 if ((native.canvas.pixel(frame2.handle, 8, 8) >>> 8) === 0) {
   throw new Error('previous scene frame was not retained when no scene submitted');
@@ -87,7 +88,7 @@ try {
 if (!rejected) {
   throw new Error('invalid scene packet was unexpectedly accepted');
 }
-native.renderFrame();
+native.renderScene();
 const frame3 = native.canvas.captureScene();
 if ((native.canvas.pixel(frame3.handle, 8, 8) >>> 8) === 0) {
   throw new Error('frame was cleared to black after rejected scene submission');
@@ -97,7 +98,7 @@ native.canvas.release(frame3.handle);
 // Frame 4: explicitly submit empty scene (nodeCount = 0) -> should clear scene to black
 native.beginFrame();
 native.scene.submit(schema.version, new Uint32Array(0), new Float32Array(0), 0);
-native.renderFrame();
+native.renderScene();
 const frame4 = native.canvas.captureScene();
 if ((native.canvas.pixel(frame4.handle, 8, 8) >>> 8) !== 0) {
   throw new Error('explicitly submitted empty scene was not cleared to black');

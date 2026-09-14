@@ -52,6 +52,12 @@ Renderer::Renderer(int width, int height, ImageStore& images)
     : width_(width), height_(height), presentationWidth_(width),
       presentationHeight_(height), queueWidth_(width), queueHeight_(height),
       images_(images) {
+  presentation_.scaleMode = presentScaleModeFromEnvironment();
+  hasFilterOverride_ =
+      presentFilterOverrideFromEnvironment(&filterOverride_);
+  presentation_.drawableWidth = width;
+  presentation_.drawableHeight = height;
+  recomputePresentation();
   glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSize_);
   if (maxTextureSize_ <= 0) {
     throw std::runtime_error("cannot query GL_MAX_TEXTURE_SIZE");
@@ -163,6 +169,20 @@ Renderer::Renderer(int width, int height, ImageStore& images)
                GL_UNSIGNED_BYTE, &white);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glGenTextures(1, &blackTexture_);
+  glBindTexture(GL_TEXTURE_2D, blackTexture_);
+  constexpr std::uint8_t black[4] = {0, 0, 0, 255};
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA,
+               GL_UNSIGNED_BYTE, black);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glGenFramebuffers(1, &blackFramebuffer_);
+  glBindFramebuffer(GL_FRAMEBUFFER, blackFramebuffer_);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                         GL_TEXTURE_2D, blackTexture_, 0);
+  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+    throw std::runtime_error("letterbox framebuffer is incomplete");
+  }
 
   const auto createTarget = [&](std::uint32_t& texture,
                                   std::uint32_t& framebuffer) {
@@ -215,6 +235,8 @@ Renderer::~Renderer() {
   glDeleteTextures(static_cast<GLsizei>(groupTextures_.size()),
                    groupTextures_.data());
   if (whiteTexture_) glDeleteTextures(1, &whiteTexture_);
+  if (blackFramebuffer_) glDeleteFramebuffers(1, &blackFramebuffer_);
+  if (blackTexture_) glDeleteTextures(1, &blackTexture_);
   if (vertexBuffer_) glDeleteBuffers(1, &vertexBuffer_);
   if (vertexArray_) glDeleteVertexArrays(1, &vertexArray_);
   if (program_) glDeleteProgram(program_);

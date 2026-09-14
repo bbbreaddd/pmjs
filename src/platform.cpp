@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <sstream>
@@ -126,6 +127,30 @@ Platform::Platform(int width, int height, std::string title) {
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_AUDIO) != 0) {
     throw std::runtime_error(std::string("SDL_Init failed: ") + SDL_GetError());
   }
+  // Window is the physical drawable; the game size stays with the renderer.
+  std::pair<int, int> windowSize = {width, height};
+  const char* sizeOverride = std::getenv("PMJS_WINDOW_SIZE");
+  if (sizeOverride && *sizeOverride) {
+    int overrideWidth = 0, overrideHeight = 0;
+    char extra = '\0';
+    if (std::sscanf(sizeOverride, "%dx%d%c", &overrideWidth, &overrideHeight,
+                     &extra) != 2 ||
+        overrideWidth <= 0 || overrideHeight <= 0) {
+      SDL_Quit();
+      throw std::runtime_error("PMJS_WINDOW_SIZE must look like 640x480");
+    }
+    windowSize = {overrideWidth, overrideHeight};
+  } else {
+    SDL_Rect bounds{};
+    if (SDL_GetDisplayBounds(0, &bounds) == 0 && bounds.w > 0 &&
+        bounds.h > 0) {
+      windowSize = {bounds.w, bounds.h};
+      displayWidth_ = bounds.w;
+      displayHeight_ = bounds.h;
+    }
+  }
+  windowWidth_ = windowSize.first;
+  windowHeight_ = windowSize.second;
   for (int index = 0; index < SDL_NumJoysticks(); ++index) {
     if (!SDL_IsGameController(index)) continue;
     controller_ = SDL_GameControllerOpen(index);
@@ -142,7 +167,8 @@ Platform::Platform(int width, int height, std::string title) {
   SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);
 
   window_ = SDL_CreateWindow(title.c_str(), SDL_WINDOWPOS_CENTERED,
-                             SDL_WINDOWPOS_CENTERED, width, height,
+                             SDL_WINDOWPOS_CENTERED, windowWidth_,
+                             windowHeight_,
                              SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN);
   if (!window_) {
     SDL_Quit();
@@ -160,6 +186,11 @@ Platform::Platform(int width, int height, std::string title) {
     SDL_Quit();
     throw std::runtime_error(std::string("SDL_GL_CreateContext failed: ") + SDL_GetError());
   }
+  const auto drawable = drawableSize();
+  std::cout << "[pmjs] display=" << displayWidth_ << "x" << displayHeight_
+            << " window=" << windowWidth_ << "x" << windowHeight_
+            << " drawable=" << drawable.first << "x" << drawable.second
+            << '\n';
   SDL_ClearError();
   requestedSwapInterval_ = swapIntervalFromEnvironment();
   const int swapResult = SDL_GL_SetSwapInterval(requestedSwapInterval_);
@@ -261,6 +292,13 @@ void Platform::finishLogicStep() { pressed_ = 0; }
 void Platform::finishGpuWork() { glFinish(); }
 
 void Platform::swap() { SDL_GL_SwapWindow(window_); }
+
+std::pair<int, int> Platform::drawableSize() const {
+  int width = 0, height = 0;
+  SDL_GL_GetDrawableSize(window_, &width, &height);
+  if (width <= 0 || height <= 0) return {windowWidth_, windowHeight_};
+  return {width, height};
+}
 
 void Platform::printGraphicsDiagnostics() const {
   const auto glText = [](GLenum name) {

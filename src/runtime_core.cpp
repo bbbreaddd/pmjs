@@ -79,6 +79,11 @@ bool RuntimeCore::pollEvents() {
   return running_;
 }
 
+void RuntimeCore::syncDrawableSize() {
+  const auto size = platform_.drawableSize();
+  renderer_.setDrawableSize(size.first, size.second);
+}
+
 std::uint32_t RuntimeCore::inputState() const {
   return platform_.inputState() | static_cast<std::uint32_t>(injectedInput_);
 }

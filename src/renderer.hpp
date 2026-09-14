@@ -63,6 +63,24 @@ struct FramePacket {
   void clear() { commands.clear(); }
 };
 
+// `integer` falls back to `fit` when shrinking (floor of sub-1 is zero).
+enum class PresentScaleMode : std::uint8_t { fit, integer };
+
+enum class PresentFilter : std::uint8_t { nearest, linear };
+
+struct PresentationGeometry {
+  int sourceWidth = 0;
+  int sourceHeight = 0;
+  int drawableWidth = 0;
+  int drawableHeight = 0;
+  int viewportX = 0;
+  int viewportY = 0;
+  int viewportWidth = 0;
+  int viewportHeight = 0;
+  PresentScaleMode scaleMode = PresentScaleMode::fit;
+  PresentFilter filter = PresentFilter::nearest;
+};
+
 struct RendererStats {
   static constexpr std::size_t filterKindCount =
     static_cast<std::size_t>(scene_packet::FilterKind::fxaa) + 1;
@@ -85,6 +103,8 @@ struct RendererStats {
   std::uint64_t framebufferCopies = 0;
   std::uint64_t toneAdjustDrawCalls = 0;
   std::uint64_t toneComposedPresentationFrames = 0;
+  std::uint64_t scaledPresentationFrames = 0;
+  std::uint64_t presentationLetterboxedFrames = 0;
   std::uint64_t spriteDrawCalls = 0;
   std::uint64_t tilingSpriteDrawCalls = 0;
   std::uint64_t screenFillDrawCalls = 0;
@@ -109,6 +129,8 @@ class Renderer {
   void setClearColor(float red, float green, float blue, float alpha);
   bool setRenderTargetSize(int width, int height);
   bool setScreenRenderSize(int width, int height);
+  void setDrawableSize(int width, int height);
+  PresentationGeometry presentationGeometry() const { return presentation_; }
   void beginFrame();
   void queueQuad(float x, float y, float width, float height,
                  const std::array<float, 4>& color);
@@ -135,7 +157,11 @@ class Renderer {
                   const float* values, std::size_t valueCount,
                   std::size_t nodeCount);
   void render();
+  void renderScene();
+  void presentToDrawable();
   std::vector<std::uint8_t> captureSceneRgba();
+  // Window backbuffer readback, valid only before swap.
+  std::vector<std::uint8_t> captureDrawableRgba();
   std::vector<std::uint8_t> renderToRgba();
   std::vector<std::uint8_t> renderToRgba(int width, int height);
   std::optional<ImageInfo> renderToImage(int width, int height);
@@ -163,13 +189,21 @@ class Renderer {
   void discardCommandsFrom(std::size_t first);
   void destroyTileLayer(std::uint32_t handle);
   void resizeTargets(int width, int height);
-  void drawToneComposition(std::uint32_t framebuffer, int width, int height);
+  void drawToneComposition(std::uint32_t framebuffer, int viewportX,
+                           int viewportY, int viewportWidth,
+                           int viewportHeight);
   void materializeToneComposition();
+  void recomputePresentation();
+  static PresentScaleMode presentScaleModeFromEnvironment();
+  static bool presentFilterOverrideFromEnvironment(PresentFilter* filter);
 
   int width_;
   int height_;
   int presentationWidth_;
   int presentationHeight_;
+  PresentationGeometry presentation_;
+  bool hasFilterOverride_ = false;
+  PresentFilter filterOverride_ = PresentFilter::nearest;
   int queueWidth_;
   int queueHeight_;
   int maxTextureSize_ = 0;
@@ -243,6 +277,8 @@ class Renderer {
   std::uint32_t vertexArray_ = 0;
   std::uint32_t vertexBuffer_ = 0;
   std::uint32_t whiteTexture_ = 0;
+  std::uint32_t blackTexture_ = 0;
+  std::uint32_t blackFramebuffer_ = 0;
   std::uint32_t sceneFramebuffer_ = 0;
   std::uint32_t sceneTexture_ = 0;
   std::uint32_t offscreenFramebuffer_ = 0;

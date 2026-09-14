@@ -20,6 +20,18 @@ napi_value captureScene(napi_env env, napi_callback_info) try {
   napi_throw_error(env, nullptr, error.what()); return nullptr;
 }
 
+napi_value captureDrawable(napi_env env, napi_callback_info) try {
+  State& value = host(env);
+  value.core.syncDrawableSize();
+  const auto geometry = value.renderer.presentationGeometry();
+  auto canvas = value.canvases.createRgba(geometry.drawableWidth,
+    geometry.drawableHeight, value.renderer.captureDrawableRgba());
+  if (!canvas) throw std::runtime_error("drawable capture failed");
+  return imageInfo(env, canvas->handle, canvas->width, canvas->height);
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what()); return nullptr;
+}
+
 napi_value fillRect(napi_env env, napi_callback_info info) try {
   auto a = arguments(env, info, 6);
   if (!host(env).canvases.fillRect(asUint32(env,a.at(0)),asInt32(env,a.at(1)),asInt32(env,a.at(2)),asInt32(env,a.at(3)),asInt32(env,a.at(4)),asUint32(env,a.at(5)))) throw std::runtime_error("invalid canvas");
@@ -171,6 +183,7 @@ void registerCanvasBindings(napi_env env, napi_value exports) {
   napi_value canvas = moduleObject(env);
   method(env, canvas, "create", createCanvas);
   method(env, canvas, "captureScene", captureScene);
+  method(env, canvas, "captureDrawable", captureDrawable);
   method(env, canvas, "fillRect", fillRect);
   method(env, canvas, "clear", clearCanvas);
   method(env, canvas, "clearRect", clearRect);

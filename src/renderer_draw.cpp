@@ -31,6 +31,11 @@ void applyBlendMode(BlendMode mode) {
 }  // namespace
 
 void Renderer::render() {
+  renderScene();
+  presentToDrawable();
+}
+
+void Renderer::renderScene() {
   std::uint32_t& rootFramebuffer = offscreenRender_ ? offscreenFramebuffer_ :
                                                       sceneFramebuffer_;
   std::uint32_t& rootTexture = offscreenRender_ ? offscreenTexture_ :
@@ -842,10 +847,20 @@ void Renderer::render() {
   ++stats_.retainedFrames;
 }
 ++stats_.frames;
+}
 
-  if (!offscreenRender_) {
+void Renderer::presentToDrawable() {
+  if (offscreenRender_) return;
+  const bool identity = presentation_.viewportX == 0 &&
+      presentation_.viewportY == 0 &&
+      presentation_.viewportWidth == presentation_.drawableWidth &&
+      presentation_.viewportHeight == presentation_.drawableHeight &&
+      presentation_.drawableWidth == width_ &&
+      presentation_.drawableHeight == height_;
+  if (identity) {
     if (toneCompositionActive_) {
-      drawToneComposition(0, presentationWidth_, presentationHeight_);
+      drawToneComposition(0, 0, 0, presentationWidth_,
+                          presentationHeight_);
       ++stats_.toneComposedPresentationFrames;
     } else {
       glBindFramebuffer(GL_READ_FRAMEBUFFER, sceneFramebuffer_);
@@ -855,13 +870,53 @@ void Renderer::render() {
                         GL_COLOR_BUFFER_BIT, GL_NEAREST);
       glBindFramebuffer(GL_FRAMEBUFFER, 0);
     }
+    return;
+  }
+  ++stats_.scaledPresentationFrames;
+  if (presentation_.viewportWidth < presentation_.drawableWidth ||
+      presentation_.viewportHeight < presentation_.drawableHeight) {
+    ++stats_.presentationLetterboxedFrames;
+  }
+  const int drawableWidth = presentation_.drawableWidth;
+  const int drawableHeight = presentation_.drawableHeight;
+  const int destX = presentation_.viewportX;
+  const int destY = drawableHeight - presentation_.viewportY -
+      presentation_.viewportHeight;
+  const int destWidth = presentation_.viewportWidth;
+  const int destHeight = presentation_.viewportHeight;
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  glViewport(0, 0, drawableWidth, drawableHeight);
+  glDisable(GL_SCISSOR_TEST);
+  // Bars use a blit, not glClear: an unswapped window clear correlates
+  // with stale FBO readback under llvmpipe. Revisit with Mali evidence.
+  const bool fullWindow = destX == 0 && destY == 0 &&
+      destWidth == drawableWidth && destHeight == drawableHeight;
+  if (!fullWindow) {
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, blackFramebuffer_);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    glBlitFramebuffer(0, 0, 1, 1, 0, 0, drawableWidth, drawableHeight,
+                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+  }
+  if (toneCompositionActive_) {
+    drawToneComposition(0, destX, destY, destWidth, destHeight);
+    ++stats_.toneComposedPresentationFrames;
+  } else {
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, sceneFramebuffer_);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    glBlitFramebuffer(0, 0, width_, height_, destX, destY,
+                      destX + destWidth, destY + destHeight,
+                      GL_COLOR_BUFFER_BIT,
+                      presentation_.filter == PresentFilter::linear ?
+                        GL_LINEAR : GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
   }
 }
 
 void Renderer::drawToneComposition(std::uint32_t framebuffer,
-                                   int width, int height) {
+                                   int viewportX, int viewportY,
+                                   int viewportWidth, int viewportHeight) {
   glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
-  glViewport(0, 0, width, height);
+  glViewport(viewportX, viewportY, viewportWidth, viewportHeight);
   glDisable(GL_BLEND);
   glDisable(GL_SCISSOR_TEST);
   glUseProgram(presentationProgram_);
@@ -885,7 +940,7 @@ void Renderer::drawToneComposition(std::uint32_t framebuffer,
 
 void Renderer::materializeToneComposition() {
   if (!toneCompositionActive_) return;
-  drawToneComposition(filterFramebuffer_, width_, height_);
+  drawToneComposition(filterFramebuffer_, 0, 0, width_, height_);
   std::swap(sceneFramebuffer_, filterFramebuffer_);
   std::swap(sceneTexture_, filterTexture_);
   toneCompositionActive_ = false;

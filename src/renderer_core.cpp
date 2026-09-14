@@ -3,10 +3,97 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <cstdlib>
 #include <stdexcept>
+#include <string>
 #include <unordered_set>
 
 namespace pmjs {
+
+PresentScaleMode Renderer::presentScaleModeFromEnvironment() {
+  const char* value = std::getenv("PMJS_PRESENT_SCALE");
+  if (!value || !*value) return PresentScaleMode::fit;
+  const std::string text(value);
+  if (text == "fit") return PresentScaleMode::fit;
+  if (text == "integer") return PresentScaleMode::integer;
+  throw std::runtime_error("PMJS_PRESENT_SCALE must be fit or integer");
+}
+
+bool Renderer::presentFilterOverrideFromEnvironment(PresentFilter* filter) {
+  const char* value = std::getenv("PMJS_PRESENT_FILTER");
+  if (!value || !*value || std::string(value) == "auto") return false;
+  const std::string text(value);
+  if (text == "nearest") {
+    *filter = PresentFilter::nearest;
+    return true;
+  }
+  if (text == "linear") {
+    *filter = PresentFilter::linear;
+    return true;
+  }
+  throw std::runtime_error(
+    "PMJS_PRESENT_FILTER must be auto, nearest, or linear "
+    "(area/hermite need the phase-2 presentation shader)");
+}
+
+void Renderer::recomputePresentation() {
+  const int sourceWidth = width_;
+  const int sourceHeight = height_;
+  const int drawableWidth = presentation_.drawableWidth;
+  const int drawableHeight = presentation_.drawableHeight;
+  int viewportWidth = drawableWidth;
+  int viewportHeight = drawableHeight;
+  if (presentation_.scaleMode == PresentScaleMode::integer) {
+    const int scaleX = drawableWidth / sourceWidth;
+    const int scaleY = drawableHeight / sourceHeight;
+    const int scale = std::min(scaleX, scaleY);
+    if (scale >= 1) {
+      viewportWidth = sourceWidth * scale;
+      viewportHeight = sourceHeight * scale;
+    }
+  }
+  if (viewportWidth == drawableWidth && viewportHeight == drawableHeight) {
+    // Width constrained when drawableW/sourceW <= drawableH/sourceH.
+    const bool widthConstrained = static_cast<std::int64_t>(drawableWidth) *
+            sourceHeight <=
+        static_cast<std::int64_t>(drawableHeight) * sourceWidth;
+    if (widthConstrained) {
+      viewportWidth = drawableWidth;
+      viewportHeight = static_cast<int>(
+        (static_cast<std::int64_t>(sourceHeight) * drawableWidth +
+         sourceWidth / 2) / sourceWidth);
+    } else {
+      viewportHeight = drawableHeight;
+      viewportWidth = static_cast<int>(
+        (static_cast<std::int64_t>(sourceWidth) * drawableHeight +
+         sourceHeight / 2) / sourceHeight);
+    }
+  }
+  presentation_.sourceWidth = sourceWidth;
+  presentation_.sourceHeight = sourceHeight;
+  presentation_.viewportX = (drawableWidth - viewportWidth) / 2;
+  presentation_.viewportY = (drawableHeight - viewportHeight) / 2;
+  presentation_.viewportWidth = viewportWidth;
+  presentation_.viewportHeight = viewportHeight;
+  const bool integerMapping = viewportWidth % sourceWidth == 0 &&
+      viewportHeight % sourceHeight == 0 &&
+      viewportWidth / sourceWidth == viewportHeight / sourceHeight;
+  presentation_.filter = hasFilterOverride_ ? filterOverride_
+      : (integerMapping ? PresentFilter::nearest : PresentFilter::linear);
+}
+
+void Renderer::setDrawableSize(int width, int height) {
+  if (width <= 0 || height <= 0) return;
+  if (width == presentation_.drawableWidth &&
+      height == presentation_.drawableHeight) {
+    return;
+  }
+  presentation_.drawableWidth = width;
+  presentation_.drawableHeight = height;
+  recomputePresentation();
+}
+
 void Renderer::resizeTargets(int width, int height) {
   if (width == width_ && height == height_) return;
   if (width <= 0 || height <= 0) {
@@ -68,6 +155,7 @@ void Renderer::resizeTargets(int width, int height) {
   for (std::size_t index = 0; index < groupFramebuffers_.size(); ++index) {
     createTarget(groupTextures_[index], groupFramebuffers_[index]);
   }
+  recomputePresentation();
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
@@ -401,6 +489,30 @@ std::vector<std::uint8_t> Renderer::captureSceneRgba() {
         255U, (static_cast<std::uint32_t>(pixels[offset + channel]) * 255U +
                alpha / 2U) / alpha));
     }
+  }
+  return pixels;
+}
+
+std::vector<std::uint8_t> Renderer::captureDrawableRgba() {
+  const int width = presentation_.drawableWidth;
+  const int height = presentation_.drawableHeight;
+  std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width) *
+                                   static_cast<std::size_t>(height) * 4U);
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+  glReadBuffer(GL_BACK);
+  glPixelStorei(GL_PACK_ALIGNMENT, 1);
+  glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+
+  const std::size_t rowBytes = static_cast<std::size_t>(width) * 4U;
+  std::vector<std::uint8_t> row(rowBytes);
+  for (int y = 0; y < height / 2; ++y) {
+    auto top = pixels.begin() + static_cast<std::ptrdiff_t>(y) * rowBytes;
+    auto bottom = pixels.begin() +
+      static_cast<std::ptrdiff_t>(height - y - 1) * rowBytes;
+    std::copy(top, top + static_cast<std::ptrdiff_t>(rowBytes), row.begin());
+    std::copy(bottom, bottom + static_cast<std::ptrdiff_t>(rowBytes), top);
+    std::copy(row.begin(), row.end(), bottom);
   }
   return pixels;
 }

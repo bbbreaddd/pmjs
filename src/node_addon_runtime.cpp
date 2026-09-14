@@ -144,6 +144,7 @@ napi_value beginFrame(napi_env env, napi_callback_info) try {
 napi_value present(napi_env env, napi_callback_info) try {
   State& value = host(env);
   value.canvases.uploadDirty();
+  value.core.syncDrawableSize();
   value.renderer.render();
   value.platform.swap();
   syncExternalMemory(env);
@@ -159,6 +160,7 @@ napi_value present(napi_env env, napi_callback_info) try {
 napi_value renderFrame(napi_env env, napi_callback_info) try {
   State& value = host(env);
   value.canvases.uploadDirty();
+  value.core.syncDrawableSize();
   value.renderer.render();
   syncExternalMemory(env);
   return undefined(env);
@@ -167,6 +169,21 @@ napi_value renderFrame(napi_env env, napi_callback_info) try {
   return nullptr;
 } catch (...) {
   napi_throw_error(env, nullptr, "renderFrame failed");
+  return nullptr;
+}
+
+// Scene-only; never touches the window framebuffer.
+napi_value renderScene(napi_env env, napi_callback_info) try {
+  State& value = host(env);
+  value.canvases.uploadDirty();
+  value.renderer.renderScene();
+  syncExternalMemory(env);
+  return undefined(env);
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what());
+  return nullptr;
+} catch (...) {
+  napi_throw_error(env, nullptr, "renderScene failed");
   return nullptr;
 }
 
@@ -256,6 +273,12 @@ napi_value rendererStats(napi_env env, napi_callback_info) try {
   check(env, napi_set_named_property(env, result, "toneComposedPresentationFrames",
     number(env, static_cast<double>(stats.toneComposedPresentationFrames))),
     "cannot set tone composed presentation frames");
+  check(env, napi_set_named_property(env, result, "scaledPresentationFrames",
+    number(env, static_cast<double>(stats.scaledPresentationFrames))),
+    "cannot set scaled presentation frames");
+  check(env, napi_set_named_property(env, result, "presentationLetterboxedFrames",
+    number(env, static_cast<double>(stats.presentationLetterboxedFrames))),
+    "cannot set letterboxed presentation frames");
   check(env, napi_set_named_property(env, result, "spriteDrawCalls",
     number(env, static_cast<double>(stats.spriteDrawCalls))),
     "cannot set renderer sprite draws");
@@ -302,6 +325,7 @@ void registerRuntimeBindings(napi_env env, napi_value exports) {
   method(env, exports, "beginFrame", beginFrame);
   method(env, exports, "present", present);
   method(env, exports, "renderFrame", renderFrame);
+  method(env, exports, "renderScene", renderScene);
   method(env, exports, "finishGpuWork", finishGpuWork);
   method(env, exports, "swapFrame", swapFrame);
   napi_value runtime = moduleObject(env);

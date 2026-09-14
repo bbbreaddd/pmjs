@@ -123,4 +123,21 @@ if(BUILD_TESTING)
       "${CMAKE_CURRENT_SOURCE_DIR}/test/${PMJS_NODE_TEST}.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
     set_tests_properties(${PMJS_NODE_TEST} PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
   endforeach()
+  function(pmjs_add_presentation_test name game window scale expect)
+    add_test(NAME ${name} COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/node-presentation.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
+    set_tests_properties(${name} PROPERTIES ENVIRONMENT
+      "LIBGL_ALWAYS_SOFTWARE=1;PMJS_TEST_GAME=${game};PMJS_WINDOW_SIZE=${window};PMJS_PRESENT_SCALE=${scale};PMJS_TEST_EXPECT=${expect}")
+  endfunction()
+  pmjs_add_presentation_test(node-presentation-identity 640x480 640x480 "" "640,480,0,0,nearest,0")
+  pmjs_add_presentation_test(node-presentation-fit 816x624 640x480 "" "628,480,6,0,linear,1")
+  pmjs_add_presentation_test(node-presentation-integer-fallback 816x624 640x480 "integer" "628,480,6,0,linear,1")
+  pmjs_add_presentation_test(node-presentation-integer-upscale 320x240 640x480 "integer" "640,480,0,0,nearest,0")
+  pmjs_add_presentation_test(node-presentation-display 64x64 "" "" "auto")
+  pmjs_add_presentation_test(node-presentation-awkward 500x333 640x480 "" "640,426,0,27,linear,1")
+
+  add_test(NAME node-presentation-pixels COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-presentation-pixels.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
+  set_tests_properties(node-presentation-pixels PROPERTIES ENVIRONMENT
+    "LIBGL_ALWAYS_SOFTWARE=1;PMJS_TEST_GAME=816x624;PMJS_WINDOW_SIZE=640x480")
 endif()
