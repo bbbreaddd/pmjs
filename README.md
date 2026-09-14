@@ -35,10 +35,16 @@ test flow.
 
 ## Running PMJS
 
-First build a bootstrap bundle from a manifest:
+First build a bootstrap bundle from a manifest
 
 ```sh
-node tools/build-js-runtime.mjs --root . \
+# Standard RPG Maker MV runtime bundle:
+node tools/build-js-runtime.mjs \
+  --profile mv \
+  --output build-js/mv-core-bootstrap.js
+
+# Or minimal renderer smoke test:
+node tools/build-js-runtime.mjs \
   --manifest example/runtime-bundle.json \
   --output build-js/smoke.js
 ```
@@ -63,17 +69,110 @@ Runtime settings use the `PMJS_*` prefix. Renderer statistics, operation
 tracing, GPU profiling, and verbose compatibility diagnostics are opt-in and
 silent by default.
 
-JavaScript bundles load `pmjs-web`, then `pmjs-pixi4`, then `pmjs-mv`. Ports
-provide `PMJS_GAME_CONFIG` before these layers and load game-specific adapters
-afterward. Manifest order is part of the bundle interface.
+## Porting an RPG Maker MV Game
 
-Reusable integrations for third-party RPG Maker plugin families live under
-`js/pmjs-plugins/<family>/`. Ports include only the families used by their game,
-after both the plugin scripts and the relevant PMJS compatibility layer have
-loaded. Game-specific configuration and assets remain in the port adapter.
+In PMJS, **capabilities belong to the runtime and policy belongs to the port**.
+The supported native runtime handles physical frame pacing, FreeType font
+rendering, WebGL/Pixi rendering, audio playback, storage persistence, and
+two-pass plugin initialization.
 
-Platform provisioning and game-specific adapters live outside this reusable
-source tree.
+> A port must not enumerate internal runtime modules.
+> Runtime module composition belongs to PMJS profiles (`profiles/mv.json`).
+
+Most RPG Maker MV games require **zero custom runtime JavaScript**. A port
+consists of:
+
+1. **Game Configuration (`config.json`)** — Declarative game policy (title, display, fonts).
+2. **Platform Launcher (`run.sh`)** — Packaging script that builds the profile bundle and starts the runner.
+3. *(Optional)* **Game Compatibility (`compat.js`)** — Only needed if the game relies on engine-specific quirks that PMJS does not yet provide generically.
+
+### 1. Game Configuration (`config.json`)
+
+Declare game-specific metadata and font mappings before the runtime initializes.
+Configuration is pure data. See [`example/config.json`](example/config.json) for the template:
+
+```json
+{
+  "title": "My Game",
+  "display": {
+    "width": 816,
+    "height": 624
+  },
+  "fonts": {
+    "GameFont": "fonts/mplus-1m-regular.ttf"
+  }
+}
+```
+
+All other runtime knobs (texture cache budgets, title scenes, NW.js version emulation)
+provide sensible defaults and can be omitted unless tuning for specific constraints.
+
+### 2. Platform Launcher (`run.sh`)
+
+Assemble the standard MV runtime bundle using `--profile mv` and launch the native runner:
+
+```sh
+#!/usr/bin/env bash
+set -euo pipefail
+
+PORT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RUNTIME_DIR="${PORT_DIR}/../native-runtime" # Path to PMJS runtime
+
+BOOTSTRAP_OUTPUT="${PORT_DIR}/build/bootstrap.js"
+mkdir -p "$(dirname "$BOOTSTRAP_OUTPUT")" "${PORT_DIR}/saves"
+
+# 1. Build the bootstrap bundle from the canonical MV profile + declarative config
+node "$RUNTIME_DIR/tools/build-js-runtime.mjs" \
+  --profile mv \
+  --config "$PORT_DIR/config.json" \
+  --output "$BOOTSTRAP_OUTPUT"
+
+# 2. Launch the native engine (resolution and title resolve from config.json or package.json)
+node "$RUNTIME_DIR/runner/cli.cjs" \
+  --addon "$RUNTIME_DIR/build/pmjs_native.node" \
+  --game-root "${PORT_DIR}/gamedata" \
+  --bootstrap "$BOOTSTRAP_OUTPUT" \
+  --save-root "${PORT_DIR}/saves" \
+  --config "$PORT_DIR/config.json"
+```
+
+See [`example/run-game.sh`](example/run-game.sh) for the reference launcher.
+
+### 3. Optional Compatibility Code (`compat.js`)
+
+If a game requires custom patches, pass `--compat "$PORT_DIR/compat.js"` to the builder.
+Instead of relying on fragile file ordering, `compat.js` registers explicit lifecycle hooks:
+
+```js
+globalThis.PMJS_PORT_HOOKS = {
+  beforePlugins() {
+    // Executes before game plugins are evaluated
+  },
+  afterPlugins() {
+    // Executes after game plugins have loaded (e.g. patch plugin constructors)
+  },
+  beforeBoot() {
+    // Executes in window.onload immediately before SceneManager.run(Scene_Boot)
+  }
+};
+```
+
+---
+
+## Runtime Profiles & Architecture
+
+PMJS defines canonical module orderings in `profiles/`:
+- `profiles/mv.json`: Standard RPG Maker MV runtime composition (`pmjs-web`, `pmjs-pixi4`, `pmjs-mv`).
+
+When extending the runtime for a new engine family or custom bundle, manifests can extend a base profile:
+
+```json
+{
+  "extends": "mv",
+  "prepend": ["my-early-init.js"],
+  "append": ["my-custom-addon.js"]
+}
+```
 
 ### Third-party software
 

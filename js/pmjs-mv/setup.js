@@ -6,3 +6,5 @@ function warmIntl(config) {
 }
 
 warmIntl((globalThis.PMJS_GAME_CONFIG || {}).intlWarmup);
+
+globalThis.PMJS_PORT_HOOKS = globalThis.PMJS_PORT_HOOKS || {};

@@ -21,3 +21,67 @@ test('bundle generation is deterministic and confined to the explicit root', () 
     [tool, '--root', root, '--manifest', 'manifest.json', '--output', '../escape.js']),
   /output must be inside root/);
 });
+
+test('bundle generation supports --profile with JSON --config and --compat', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-profile-'));
+  const config = path.join(tempDir, 'config.json');
+  const compat = path.join(tempDir, 'compat.js');
+  const out = path.join(tempDir, 'out.js');
+  fs.writeFileSync(config, JSON.stringify({ title: 'JSON Title', display: { width: 960, height: 540 } }));
+  fs.writeFileSync(compat, 'globalThis.COMPAT_LOADED = true;\n');
+
+  const args = [tool, '--profile', 'mv', '--config', config, '--compat', compat, '--output', out];
+  childProcess.execFileSync(process.execPath, args);
+
+  const bundleContent = fs.readFileSync(out, 'utf8');
+  assert.match(bundleContent, /globalThis\.PMJS_GAME_CONFIG = \{/);
+  assert.match(bundleContent, /"title": "JSON Title"/);
+  assert.match(bundleContent, /\/\/ BEGIN compat\.js\nglobalThis\.COMPAT_LOADED = true;\n\/\/ END compat\.js/);
+
+  const configIndex = bundleContent.indexOf('PMJS_GAME_CONFIG');
+  const compatIndex = bundleContent.indexOf('COMPAT_LOADED');
+  const bootstrapIndex = bundleContent.indexOf('BEGIN js/pmjs-mv/bootstrap.js');
+
+  assert.ok(configIndex < compatIndex, 'config must precede compat');
+  assert.ok(compatIndex < bootstrapIndex, 'compat must precede bootstrap');
+});
+
+test('bundle generation rejects duplicate modules', () => {
+  const root = path.resolve(__dirname, '..');
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-dupe-'));
+  const manifest = path.join(tempDir, 'manifest.json');
+  const out = path.join(tempDir, 'out.js');
+
+  fs.writeFileSync(manifest, JSON.stringify({
+    extends: 'mv',
+    prepend: ['js/pmjs-core/operation-trace.js'] // already in mv.json!
+  }));
+
+  assert.throws(() => childProcess.execFileSync(process.execPath,
+    [tool, '--root', root, '--manifest', manifest, '--output', out]),
+  /duplicate module in profile\/manifest/);
+});
+
+test('manifest extends profile with custom modules', () => {
+  const root = path.resolve(__dirname, '..');
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-extends-'));
+  const manifest = path.join(tempDir, 'manifest.json');
+  const out = path.join(tempDir, 'out.js');
+  const customModule = path.join(root, 'custom-addon-temp.js');
+  fs.writeFileSync(customModule, '// custom addon\n');
+
+  fs.writeFileSync(manifest, JSON.stringify({
+    extends: 'mv',
+    prepend: ['custom-addon-temp.js']
+  }));
+
+  try {
+    const args = [tool, '--root', root, '--manifest', manifest, '--output', out];
+    childProcess.execFileSync(process.execPath, args);
+    const bundleContent = fs.readFileSync(out, 'utf8');
+    assert.match(bundleContent, /\/\/ BEGIN custom-addon-temp\.js/);
+    assert.match(bundleContent, /\/\/ BEGIN js\/pmjs-mv\/bootstrap\.js/);
+  } finally {
+    fs.unlinkSync(customModule);
+  }
+});

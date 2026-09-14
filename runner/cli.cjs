@@ -9,6 +9,7 @@ function parse(argv) {
     ['--addon', 'addon'], ['--game-root', 'gameRoot'], ['--bootstrap', 'bootstrap'],
     ['--save-root', 'saveRoot'], ['--asset-root', 'assetRoot'], ['--title', 'title'],
     ['--width', 'width'], ['--height', 'height'],
+    ['--config', 'config'],
     ['--image-warm-cache-bytes', 'imageWarmCacheBytes'],
   ]);
   for (let index = 0; index < argv.length; index += 2) {
@@ -16,8 +17,8 @@ function parse(argv) {
     if (!name || index + 1 >= argv.length) throw new Error(`invalid argument: ${argv[index]}`);
     result[name] = argv[index + 1];
   }
-  result.width = Number(result.width);
-  result.height = Number(result.height);
+  if (result.width !== undefined) result.width = Number(result.width);
+  if (result.height !== undefined) result.height = Number(result.height);
   if (result.imageWarmCacheBytes !== undefined) {
     result.imageWarmCacheBytes = Number(result.imageWarmCacheBytes);
   }

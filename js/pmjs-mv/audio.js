@@ -284,13 +284,3 @@ if (NativeHost.media) {
     }
   };
 }
-SceneManager.requestUpdate = function() {};
-SceneManager.catchException = function(error) { throw error; };
-window.onload();
-// The host owns the main loop, but plugins may use the secondary Pixi ticker.
-if (!SceneManager.ticker && PIXI.ticker && typeof PIXI.ticker.Ticker === 'function') {
-  SceneManager.ticker = new PIXI.ticker.Ticker();
-  SceneManager.ticker.autoStart = false;
-  SceneManager.ticker.stop();
-}
-nativeBootPhase('scene-boot-started');

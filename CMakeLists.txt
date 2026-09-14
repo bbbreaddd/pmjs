@@ -106,7 +106,9 @@ if(BUILD_TESTING)
       test/runtime-contract.test.cjs
       test/runner.test.cjs
       test/storage.test.cjs
-      test/build-js-runtime.test.cjs)
+      test/build-js-runtime.test.cjs
+      test/mv-platform-semantics.test.cjs
+      test/scheduler.test.cjs)
     get_filename_component(PMJS_TEST_NAME "${PMJS_JS_TEST}" NAME_WE)
     add_test(NAME "js-${PMJS_TEST_NAME}" COMMAND ${NODE_EXECUTABLE} --test
       "${CMAKE_CURRENT_SOURCE_DIR}/${PMJS_JS_TEST}")

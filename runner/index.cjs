@@ -6,7 +6,63 @@ const vm = require('node:vm');
 const { performance } = require('node:perf_hooks');
 const { createStorage } = require('./storage.cjs');
 
-function validate(options) {
+function resolveDefaults(input) {
+  let title = input.title;
+  let width = input.width;
+  let height = input.height;
+
+  if (input.config) {
+    const configPath = path.resolve(input.config);
+    if (!fs.existsSync(configPath)) {
+      throw new Error(`config file not found: ${configPath}`);
+    }
+    let cfg;
+    const configText = fs.readFileSync(configPath, 'utf8');
+    if (configPath.endsWith('.json')) {
+      try {
+        cfg = JSON.parse(configText);
+      } catch (err) {
+        throw new Error(`invalid JSON in config file ${configPath}: ${err.message}`);
+      }
+    } else {
+      const sandbox = { globalThis: {} };
+      sandbox.window = sandbox.globalThis;
+      try {
+        vm.runInNewContext(configText, sandbox);
+      } catch (err) {
+        throw new Error(`error evaluating config file ${configPath}: ${err.message}`);
+      }
+      cfg = sandbox.globalThis.PMJS_GAME_CONFIG;
+    }
+    if (cfg) {
+      if (title === undefined && cfg.title) title = cfg.title;
+      if (width === undefined && cfg.display && cfg.display.width) width = Number(cfg.display.width);
+      if (height === undefined && cfg.display && cfg.display.height) height = Number(cfg.display.height);
+    }
+  }
+
+  if (input.gameRoot) {
+    const pkgPath = path.join(path.resolve(input.gameRoot), 'package.json');
+    if (fs.existsSync(pkgPath)) {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+        if (title === undefined && pkg.window && pkg.window.title) title = pkg.window.title;
+        if (title === undefined && pkg.name) title = pkg.name;
+        if (width === undefined && pkg.window && pkg.window.width) width = Number(pkg.window.width);
+        if (height === undefined && pkg.window && pkg.window.height) height = Number(pkg.window.height);
+      } catch (_) {}
+    }
+  }
+
+  if (width === undefined) width = 816;
+  if (height === undefined) height = 624;
+  if (title === undefined) title = 'pmjs native runtime';
+
+  return { ...input, width, height, title };
+}
+
+function validate(input) {
+  const options = resolveDefaults(input);
   const requiredPaths = ['addon', 'gameRoot', 'bootstrap', 'saveRoot'];
   for (const name of requiredPaths) {
     if (typeof options[name] !== 'string' || !options[name]) {
@@ -34,7 +90,7 @@ function validate(options) {
     saveRoot: path.resolve(options.saveRoot),
     assetRoot: options.assetRoot ? path.resolve(options.assetRoot) : '',
     ...(imageWarmCacheBytes === undefined ? {} : { imageWarmCacheBytes }),
-    title: options.title || 'pmjs native runtime',
+    title: options.title,
   };
 }
 
@@ -56,6 +112,11 @@ async function run(input, hooks = {}) {
     if (source === null) throw new Error(`cannot load script: ${relative}`);
     return vm.runInThisContext(source, { filename: path.join(options.gameRoot, relative) });
   };
+  const hostProcess = process;
+  const hostSetTimeout = globalThis.setTimeout.bind(globalThis);
+  const hostClearTimeout = globalThis.clearTimeout.bind(globalThis);
+  const hostSetImmediate = typeof globalThis.setImmediate === 'function'
+    ? globalThis.setImmediate.bind(globalThis) : null;
   globalThis.NativeHost = { runtime: native.runtime, render: native.render,
     scene: native.scene, images: native.images, assets: native.assets, fs: native.fs,
     storage: native.storage, input: native.input, canvas: native.canvas, media: native.media };
@@ -78,31 +139,33 @@ async function run(input, hooks = {}) {
     throw error;
   }
 
-  const logicPeriod = 1000 / Number(process.env.PMJS_LOGIC_HZ || 60);
-  const renderPeriod = 1000 / Number(process.env.PMJS_RENDER_HZ || 60);
+  const logicPeriod = 1000 / Number(hostProcess.env.PMJS_LOGIC_HZ || 60);
+  const renderPeriod = 1000 / Number(hostProcess.env.PMJS_RENDER_HZ || 60);
   const period = Math.min(logicPeriod, renderPeriod);
   let deadline = native.runtime.monotonicNow() + period;
   console.log(`[pmjs] ready size=${options.width}x${options.height}`);
   return new Promise((resolve, reject) => {
     function schedule() {
       const delay = Math.max(0, deadline - native.runtime.monotonicNow());
-      if (delay < 1) setImmediate(tick); else setTimeout(tick, delay);
+      if (delay < 1 && hostSetImmediate) hostSetImmediate(tick);
+      else hostSetTimeout(tick, delay);
     }
     function tick() {
       try {
         if (!native.pollEvents()) { resolve(); return; }
-        globalThis.__pmjsTick(logicPeriod / 1000);
-        native.finishLogicStep();
+        const now = performance.now();
         native.beginFrame();
-        globalThis.__pmjsRender(performance.now() / 1000);
+        globalThis.__pmjsTick(now);
+        native.finishLogicStep();
+        globalThis.__pmjsRender(now);
         native.renderFrame();
         if (typeof globalThis.__pmjsAfterNativeRender === 'function') {
           globalThis.__pmjsAfterNativeRender();
         }
         native.swapFrame();
         deadline += period;
-        const now = native.runtime.monotonicNow();
-        if (deadline < now - period) deadline = now + period;
+        const monotonicNow = native.runtime.monotonicNow();
+        if (deadline < monotonicNow - period) deadline = monotonicNow + period;
         schedule();
       } catch (error) {
         try { native.runtime.quit(); } catch (_) {}

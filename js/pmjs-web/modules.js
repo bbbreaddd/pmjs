@@ -90,6 +90,11 @@ function requireModule(request, parentDirectory) {
   if (Object.prototype.hasOwnProperty.call(registeredCommonJsModules, request)) {
     return registeredCommonJsModules[request];
   }
+  if (request === 'greenworks' || request === 'greenworks.js' ||
+      request === './greenworks' || request === './greenworks.js' ||
+      request === './js/libs/greenworks' || request === './js/libs/greenworks.js') {
+    if (globalThis.__pmjsGreenworksCompat) return globalThis.__pmjsGreenworksCompat;
+  }
   if (request === 'buffer' || request === 'esprima') {
     throw new Error("Native module '" + request + "' is unavailable");
   }
@@ -101,10 +106,20 @@ function requireModule(request, parentDirectory) {
 
 globalThis.require = function(request) { return requireModule(request, '.'); };
 globalThis.nw = nativeNwGui;
+var hostProcessVersions = typeof process !== 'undefined' && process.versions ? process.versions : {};
+var nwCompatVersion = pmjsGameConfig.nwVersion || '0.29.0';
 globalThis.process = {
   platform: nativePlatform.platform,
   arch: nativePlatform.arch,
   env: { LOCALAPPDATA: '/save/', HOME: '/save' },
   mainModule: { filename: '/game/index.html' },
-  cwd: function() { return '/game'; }
+  cwd: function() { return '/game'; },
+  version: 'v' + (hostProcessVersions.node || '12.0.0'),
+  versions: {
+    node: hostProcessVersions.node || '12.0.0',
+    v8: hostProcessVersions.v8 || '8.0.0',
+    uv: hostProcessVersions.uv || '1.0.0',
+    nw: nwCompatVersion,
+    'node-webkit': nwCompatVersion
+  }
 };

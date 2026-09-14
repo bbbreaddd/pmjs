@@ -23,12 +23,14 @@ function native(polls = [false]) {
     render: {}, scene: {}, images: {}, assets: {}, input: {}, canvas: {}, media: {} };
 }
 
-test('CLI parses the documented options', () => {
-  const value = parse(['--addon','a','--game-root','g','--bootstrap','b','--save-root','s','--width','640','--height','480','--image-warm-cache-bytes','1024']);
+test('CLI parses the documented options including --config', () => {
+  const value = parse(['--addon','a','--game-root','g','--bootstrap','b','--save-root','s',
+    '--config','my-config.js','--width','640','--height','480','--image-warm-cache-bytes','1024']);
   assert.equal(value.width, 640); assert.equal(value.height, 480);
+  assert.equal(value.config, 'my-config.js');
   assert.equal(value.imageWarmCacheBytes, 1024);
 });
-test('validation rejects missing paths and dimensions', () => {
+test('validation rejects missing paths and invalid dimensions', () => {
   assert.throws(() => validate({}), /addon is required/);
   assert.throws(() => validate({ addon:'a', gameRoot:'g', bootstrap:'b', saveRoot:'s', width:0, height:1 }), /width/);
   assert.throws(() => validate({ addon:'a', gameRoot:'g', bootstrap:'b', saveRoot:'s', width:1, height:1,
@@ -37,6 +39,56 @@ test('validation rejects missing paths and dimensions', () => {
     width:1, height:1 }), 'imageWarmCacheBytes'), false);
   assert.equal(validate({ addon:'a', gameRoot:'g', bootstrap:'b', saveRoot:'s', width:1, height:1,
     imageWarmCacheBytes: 0 }).imageWarmCacheBytes, 0);
+});
+test('validation auto-detects title and dimensions from config or package.json', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-runner-config-'));
+  const configJson = path.join(tempDir, 'config.json');
+  fs.writeFileSync(configJson, JSON.stringify({
+    title: 'JSON Title',
+    display: { width: 1280, height: 720 }
+  }));
+  const v1 = validate({ addon: 'a', gameRoot: tempDir, bootstrap: 'b', saveRoot: 's', config: configJson });
+  assert.equal(v1.title, 'JSON Title');
+  assert.equal(v1.width, 1280);
+  assert.equal(v1.height, 720);
+
+  const pkgDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-runner-pkg-'));
+  fs.writeFileSync(path.join(pkgDir, 'package.json'), JSON.stringify({
+    name: 'Package Name',
+    window: { title: 'Package Window Title', width: 960, height: 540 }
+  }));
+  const v2 = validate({ addon: 'a', gameRoot: pkgDir, bootstrap: 'b', saveRoot: 's' });
+  assert.equal(v2.title, 'Package Window Title');
+  assert.equal(v2.width, 960);
+  assert.equal(v2.height, 540);
+
+  const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-runner-empty-'));
+  const v3 = validate({ addon: 'a', gameRoot: emptyDir, bootstrap: 'b', saveRoot: 's' });
+  assert.equal(v3.title, 'pmjs native runtime');
+  assert.equal(v3.width, 816);
+  assert.equal(v3.height, 624);
+});
+
+test('validation rejects missing or malformed explicit config', () => {
+  assert.throws(() => validate({
+    addon: 'a', gameRoot: 'g', bootstrap: 'b', saveRoot: 's',
+    config: '/nonexistent-config-file.json'
+  }), /config file not found/);
+
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-runner-bad-'));
+  const badJson = path.join(tempDir, 'bad.json');
+  fs.writeFileSync(badJson, '{ bad json');
+  assert.throws(() => validate({
+    addon: 'a', gameRoot: tempDir, bootstrap: 'b', saveRoot: 's',
+    config: badJson
+  }), /invalid JSON in config file/);
+
+  const badJs = path.join(tempDir, 'bad.js');
+  fs.writeFileSync(badJs, 'throw new Error("bad config eval");');
+  assert.throws(() => validate({
+    addon: 'a', gameRoot: tempDir, bootstrap: 'b', saveRoot: 's',
+    config: badJs
+  }), /error evaluating config file/);
 });
 test('afterBootstrap runs once and Node jobs are not starved', async () => {
   const options = fixture('globalThis.__pmjsTick=()=>{};globalThis.__pmjsRender=()=>{};');
