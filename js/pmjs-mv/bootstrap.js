@@ -12,10 +12,7 @@
   }
 
   function dispatchWindowLoad() {
-    var hooks = globalThis.PMJS_PORT_HOOKS;
-    if (hooks && typeof hooks.beforeBoot === 'function') {
-      hooks.beforeBoot();
-    }
+    globalThis.pmjsRunHooks('beforeBoot');
     if (typeof window.dispatchEvent === 'function') {
       window.dispatchEvent({ type: 'load', target: window });
     }

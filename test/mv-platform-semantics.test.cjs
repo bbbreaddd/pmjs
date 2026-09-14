@@ -20,7 +20,9 @@ test('two-pass PluginManager.setup allows cross-plugin parameter lookups', () =>
     }
   };
   vm.createContext(context);
+  const setupCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/setup.js'), 'utf8');
   const pluginLoaderCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/plugin-loader.js'), 'utf8');
+  vm.runInContext(setupCode, context);
   vm.runInContext(pluginLoaderCode, context);
 
   let p1SawP2Params = null;
@@ -277,7 +279,9 @@ test('bootstrap dispatches window load event listeners and window.onload', () =>
   listeners.push(() => { addEventListenerCalled = true; });
 
   vm.createContext(context);
+  const setupCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/setup.js'), 'utf8');
   const bootstrapCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/bootstrap.js'), 'utf8');
+  vm.runInContext(setupCode, context);
   vm.runInContext(bootstrapCode, context);
 
   assert.equal(typeof context.pmjsMvStart, 'function');
@@ -312,8 +316,10 @@ test('integrated stack: PluginManager.setup -> loadScript -> document.currentScr
   };
   vm.createContext(context);
 
+  const setupCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/setup.js'), 'utf8');
   const scriptLoaderCode = fs.readFileSync(path.join(jsDir, 'pmjs-web/script-loader.js'), 'utf8');
   const pluginLoaderCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/plugin-loader.js'), 'utf8');
+  vm.runInContext(setupCode, context);
   vm.runInContext(scriptLoaderCode, context);
   vm.runInContext(pluginLoaderCode, context);
 
@@ -333,7 +339,7 @@ test('integrated stack: PluginManager.setup -> loadScript -> document.currentScr
   assert.equal(loadedScripts[1].src, 'file:///game/js/plugins/PluginTwo.js');
 });
 
-test('PMJS_PORT_HOOKS lifecycle pulses beforePlugins, afterPlugins, and beforeBoot', () => {
+test('lifecycle pulses beforePlugins, afterPlugins, and beforeBoot', () => {
   const events = [];
   const sandbox = {
     globalThis: {},
@@ -372,11 +378,9 @@ test('PMJS_PORT_HOOKS lifecycle pulses beforePlugins, afterPlugins, and beforeBo
 
   vm.runInContext(setupCode, context);
   context.globalThis.PMJS_MANUAL_BOOTSTRAP = true;
-  context.globalThis.PMJS_PORT_HOOKS = {
-    beforePlugins() { events.push('beforePlugins'); },
-    afterPlugins() { events.push('afterPlugins'); },
-    beforeBoot() { events.push('beforeBoot'); }
-  };
+  context.globalThis.pmjsRegisterHook('beforePlugins', () => events.push('beforePlugins'));
+  context.globalThis.pmjsRegisterHook('afterPlugins', () => events.push('afterPlugins'));
+  context.globalThis.pmjsRegisterHook('beforeBoot', () => events.push('beforeBoot'));
 
   vm.runInContext(pluginLoaderCode, context);
   vm.runInContext(bootstrapCode, context);
@@ -392,4 +396,107 @@ test('PMJS_PORT_HOOKS lifecycle pulses beforePlugins, afterPlugins, and beforeBo
     'beforeBoot',
     'window.onload'
   ]);
+});
+
+test('pmjsRegisterHook registers multiple hooks in order', () => {
+  const events = [];
+  const sandbox = {
+    globalThis: {},
+    window: { addEventListener() {}, dispatchEvent() {}, onload: null },
+    document: {},
+    NativeHost: { runtime: { loadScript() {} } },
+    $plugins: [],
+    PluginManager: {
+      _scripts: [],
+      _path: 'js/plugins/',
+      loadScript() {},
+      setParameters() {},
+      setup() {}
+    }
+  };
+  sandbox.globalThis = sandbox;
+  const context = vm.createContext(sandbox);
+
+  const setupCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/setup.js'), 'utf8');
+  const pluginLoaderCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/plugin-loader.js'), 'utf8');
+
+  vm.runInContext(setupCode, context);
+  context.globalThis.pmjsRegisterHook('afterPlugins', () => events.push('hook-1'));
+  context.globalThis.pmjsRegisterHook('afterPlugins', () => events.push('hook-2'));
+
+  vm.runInContext(pluginLoaderCode, context);
+
+  context.pmjsMvInitializePlugins();
+
+  assert.deepEqual(events, ['hook-1', 'hook-2']);
+});
+
+test('pluginLoaded hooks fire in load order and stay generic', () => {
+  const events = [];
+  const sandbox = {
+    globalThis: {},
+    NativeHost: { runtime: { loadScript() {} } },
+    $plugins: [
+      { name: 'PluginA', status: true, parameters: {} },
+      { name: 'PluginB', status: true, parameters: {} }
+    ],
+    PluginManager: {
+      _scripts: [],
+      _path: 'js/plugins/',
+      loadScript() {},
+      setParameters() {},
+      setup() {}
+    }
+  };
+  sandbox.globalThis = sandbox;
+  const context = vm.createContext(sandbox);
+
+  const setupCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/setup.js'), 'utf8');
+  const pluginLoaderCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/plugin-loader.js'), 'utf8');
+
+  vm.runInContext(setupCode, context);
+  // The core never names community plugins; these registrations stand in
+  // for whatever a reusable integration or port adapter registers.
+  const onPlugin = (name, fn) => {
+    context.globalThis.pmjsRegisterHook('pluginLoaded', (loaded) => {
+      if (loaded === name) fn();
+    });
+  };
+  onPlugin('PluginA', () => events.push('a-1'));
+  onPlugin('PluginA', () => events.push('a-2'));
+  onPlugin('PluginB', () => events.push('b'));
+
+  vm.runInContext(pluginLoaderCode, context);
+
+  context.pmjsMvInitializePlugins();
+
+  assert.deepEqual(events, ['a-1', 'a-2', 'b']);
+  // Event arguments reach subscribers; unknown names are no-ops.
+  context.globalThis.pmjsRunHooks('pluginLoaded', 'Nobody');
+});
+
+test('hook arguments forward and failures never take down boot', () => {
+  const sandbox = { globalThis: {}, console };
+  sandbox.globalThis = sandbox;
+  const context = vm.createContext(sandbox);
+
+  const setupCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/setup.js'), 'utf8');
+  vm.runInContext(setupCode, context);
+
+  const seen = [];
+  context.globalThis.pmjsRegisterHook('pluginLoaded', (name) => seen.push(name));
+  context.globalThis.pmjsRunHooks('pluginLoaded', 'SomePlugin.js');
+  assert.deepEqual(seen, ['SomePlugin.js']);
+
+  // A throwing subscriber is logged and the rest still run, in every mode.
+  for (const devMode of [false, true]) {
+    let secondRan = false;
+    context.globalThis.PMJS_DEVELOPMENT_MODE = devMode;
+    context.globalThis.pmjsRegisterHook('pluginLoaded', () => {
+      throw new Error('boom');
+    });
+    context.globalThis.pmjsRegisterHook('pluginLoaded', () => { secondRan = true; });
+    context.globalThis.pmjsRunHooks('pluginLoaded', 'Flaky');
+    assert.equal(secondRan, true);
+  }
 });

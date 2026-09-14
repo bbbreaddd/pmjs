@@ -29,6 +29,11 @@
       pending.forEach(function(plugin) {
         this._scripts.push(plugin.name);
         this.loadScript(plugin.name + '.js');
+        // Once per enabled $plugins entry during setup; loadScript calls
+        // outside setup do not emit it. Fired here (not in loadScript)
+        // so port overrides keep the event.
+        var loadedName = String(plugin.name).replace(/\.js$/i, '');
+        globalThis.pmjsRunHooks('pluginLoaded', loadedName);
       }, this);
     };
   }
@@ -40,16 +45,11 @@
   }
 
   function pmjsMvInitializePlugins() {
-    var hooks = globalThis.PMJS_PORT_HOOKS;
-    if (hooks && typeof hooks.beforePlugins === 'function') {
-      hooks.beforePlugins();
-    }
+    globalThis.pmjsRunHooks('beforePlugins');
     if (typeof $plugins !== 'undefined' && Array.isArray($plugins)) {
       PluginManager.setup($plugins);
     }
-    if (hooks && typeof hooks.afterPlugins === 'function') {
-      hooks.afterPlugins();
-    }
+    globalThis.pmjsRunHooks('afterPlugins');
     if (typeof installNativeStorageManager === 'function') {
       installNativeStorageManager();
     }

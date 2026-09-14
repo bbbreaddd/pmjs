@@ -2,9 +2,6 @@ function nativeSceneFilter(node, activeFilters) {
   if (!activeFilters.length) {
     return { blur: 0, groups: [], unsupported: false };
   }
-  if (typeof globalThis.__pmjsPrepareSceneFilters === 'function') {
-    globalThis.__pmjsPrepareSceneFilters(node, activeFilters);
-  }
   var MvToneFilter = typeof ToneFilter === 'function' ? ToneFilter : null;
   var DisplacementFilter = PIXI.filters && PIXI.filters.DisplacementFilter;
   var NoiseFilter = PIXI.filters && PIXI.filters.NoiseFilter;
