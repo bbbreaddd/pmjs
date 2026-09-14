@@ -280,6 +280,7 @@ Object.defineProperty(NativeImage.prototype, 'src', {
   get: function() { return this._src; },
   set: function(url) {
     this._src = String(url);
+    var source = this._src;
     var generation = ++this._loadGeneration;
     if (!this._src) {
       releaseNativeResource(this._nativeImage, 'image');
@@ -288,7 +289,8 @@ Object.defineProperty(NativeImage.prototype, 'src', {
       this.complete = false;
       return;
     }
-    var encodedPath = this._src.split('?')[0].replace(/%(?![0-9a-f]{2})/gi, '%25');
+    var objectUrl = source.indexOf('blob:pmjs/') === 0;
+    var encodedPath = source.split('?')[0].replace(/%(?![0-9a-f]{2})/gi, '%25');
     var path = decodeURIComponent(encodedPath)
       .replace(/^file:\/\/\/game\//, '')
       .replace(/^\.\//, '');
@@ -297,6 +299,50 @@ Object.defineProperty(NativeImage.prototype, 'src', {
     image._pmjsLoadFailed = false;
     image._pmjsLoadError = null;
     pendingTasks.push(function() {
+      if (objectUrl) {
+        pendingNativeImageLoads++;
+        var objectBlob = typeof globalThis.__pmjsResolveObjectURL === 'function'
+          ? globalThis.__pmjsResolveObjectURL(source) : null;
+        var objectLoad = objectBlob
+          ? objectBlob.arrayBuffer().then(function(buffer) {
+              var retain = typeof globalThis.__pmjsShouldRetainImagePixels === 'function' &&
+                globalThis.__pmjsShouldRetainImagePixels(source);
+              return NativeHost.images.loadBytesAsync(buffer, retain);
+            })
+          : Promise.reject(new Error('object URL is unavailable'));
+        objectLoad.then(function(result) {
+          var loaded = trackNativeResource(result, 'image');
+          if (generation !== image._loadGeneration) {
+            releaseNativeResource(loaded, 'image');
+            return;
+          }
+          releaseNativeResource(image._nativeImage, 'image');
+          image._nativeImage = loaded;
+          image.width = image.naturalWidth = loaded.width;
+          image.height = image.naturalHeight = loaded.height;
+          image.complete = true;
+          if (typeof image.onload === 'function') image.onload({ type: 'load', target: image });
+          image.dispatchEvent({ type: 'load', target: image });
+          if (typeof globalThis.__pmjsImageLoadCompleted === 'function') {
+            globalThis.__pmjsImageLoadCompleted(image);
+          }
+        }, function(error) {
+          if (generation !== image._loadGeneration) return;
+          releaseNativeResource(image._nativeImage, 'image');
+          image._nativeImage = null;
+          image.width = image.naturalWidth = 0;
+          image.height = image.naturalHeight = 0;
+          image.complete = true;
+          image._pmjsLoadFailed = true;
+          image._pmjsLoadError = error;
+          if (typeof image.onerror === 'function') image.onerror({ type: 'error', target: image });
+          image.dispatchEvent({ type: 'error', target: image });
+        }).then(function() { pendingNativeImageLoads--; }, function(error) {
+          pendingNativeImageLoads--;
+          console.error(error && error.stack || error);
+        });
+        return;
+      }
       var generatedPrefix = 'generated-assets:/';
       var generated = path.indexOf(generatedPrefix) === 0;
       var relativePath = generated ? path.slice(generatedPrefix.length) : path;

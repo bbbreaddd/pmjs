@@ -62,6 +62,8 @@ class ImageStore {
   std::optional<ImageInfo> installDecoded(const std::filesystem::path& path,
                                           ImagePixels pixels,
                                           bool retainCpuPixels = false);
+  std::optional<ImageInfo> installDecodedMemory(ImagePixels pixels,
+                                                bool retainCpuPixels = false);
   std::optional<ImageInfo> createRgba(int width, int height, const void* pixels);
   const ImagePixels* readPixels(ImageHandle handle) const;
   bool updateRgba(ImageHandle handle, const void* pixels);

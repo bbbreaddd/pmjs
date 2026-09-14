@@ -225,6 +225,19 @@ std::optional<ImageInfo> ImageStore::installDecoded(
   return created;
 }
 
+std::optional<ImageInfo> ImageStore::installDecodedMemory(
+    ImagePixels pixels, bool retainCpuPixels) {
+  auto created = createRgba(pixels.width, pixels.height, pixels.rgba.data());
+  if (!created) return std::nullopt;
+  const std::size_t index = (created->handle & indexMask) - 1U;
+  slots_[index].retainCpuPixels = retainCpuPixels;
+  if (retainCpuPixels) {
+    slots_[index].cachedPixels = std::move(pixels);
+    slots_[index].cpuPixelFrames = 0;
+  }
+  return created;
+}
+
 bool ImageStore::retainCpuPixels(ImageHandle handle) {
   const auto info = lookup(handle);
   if (!info) return false;

@@ -1,6 +1,41 @@
 #include "node_addon_internal.hpp"
 
 namespace pmjs::addon {
+namespace {
+constexpr std::size_t maxEncodedImageBytes = 64U * 1024U * 1024U;
+
+std::vector<std::uint8_t> encodedImageBytes(napi_env env, napi_value value) {
+  bool isArrayBuffer = false;
+  check(env, napi_is_arraybuffer(env, value, &isArrayBuffer),
+        "cannot inspect encoded image bytes");
+  void* data = nullptr;
+  std::size_t size = 0;
+  if (isArrayBuffer) {
+    check(env, napi_get_arraybuffer_info(env, value, &data, &size),
+          "cannot read encoded image ArrayBuffer");
+  } else {
+    bool isTypedArray = false;
+    check(env, napi_is_typedarray(env, value, &isTypedArray),
+          "cannot inspect encoded image bytes");
+    if (!isTypedArray) throw std::runtime_error("encoded image must be an ArrayBuffer or Uint8Array");
+    napi_typedarray_type type;
+    napi_value arrayBuffer;
+    std::size_t offset = 0;
+    check(env, napi_get_typedarray_info(env, value, &type, &size, &data,
+                                       &arrayBuffer, &offset),
+          "cannot read encoded image Uint8Array");
+    if (type != napi_uint8_array && type != napi_uint8_clamped_array) {
+      throw std::runtime_error("encoded image must be an ArrayBuffer or Uint8Array");
+    }
+  }
+  if (size == 0 || size > maxEncodedImageBytes) {
+    throw std::runtime_error("encoded image exceeds the 64 MiB limit or is empty");
+  }
+  const auto* begin = static_cast<const std::uint8_t*>(data);
+  return std::vector<std::uint8_t>(begin, begin + size);
+}
+}
+
 napi_value loadImage(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 2);
   State& value = host(env);
@@ -8,6 +43,19 @@ napi_value loadImage(napi_env env, napi_callback_info info) try {
   const bool retainCpuPixels = args.size() > 1 && asBoolean(env, args.at(1));
   auto image = path ? value.images.loadPng(*path, retainCpuPixels) : std::nullopt;
   if (!image) throw std::runtime_error("cannot load image");
+  return imageInfo(env, image->handle, image->width, image->height);
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what()); return nullptr;
+}
+
+napi_value loadImageBytes(napi_env env, napi_callback_info info) try {
+  auto args = arguments(env, info, 2);
+  State& value = host(env);
+  auto bytes = encodedImageBytes(env, args.at(0));
+  auto pixels = pmjs::ImageStore::decodeMemory(bytes.data(), bytes.size());
+  auto image = pixels ? value.images.installDecodedMemory(
+    std::move(*pixels), args.size() > 1 && asBoolean(env, args.at(1))) : std::nullopt;
+  if (!image) throw std::runtime_error("cannot decode image bytes");
   return imageInfo(env, image->handle, image->width, image->height);
 } catch (const std::exception& error) {
   napi_throw_error(env, nullptr, error.what()); return nullptr;
@@ -47,6 +95,71 @@ struct AsyncImageLoad {
   bool retainCpuPixels = false;
   std::optional<pmjs::ImagePixels> pixels;
 };
+
+struct AsyncImageMemoryLoad {
+  napi_env env = nullptr;
+  napi_async_work work = nullptr;
+  napi_deferred deferred = nullptr;
+  std::vector<std::uint8_t> bytes;
+  bool retainCpuPixels = false;
+  std::optional<pmjs::ImagePixels> pixels;
+};
+
+void executeImageMemoryLoad(napi_env, void* opaque) noexcept {
+  auto* load = static_cast<AsyncImageMemoryLoad*>(opaque);
+  try {
+    load->pixels = pmjs::ImageStore::decodeMemory(load->bytes.data(), load->bytes.size());
+    std::vector<std::uint8_t>().swap(load->bytes);
+  } catch (...) {
+    load->pixels = std::nullopt;
+  }
+}
+
+void completeImageMemoryLoad(napi_env env, napi_status status, void* opaque) {
+  std::unique_ptr<AsyncImageMemoryLoad> load(static_cast<AsyncImageMemoryLoad*>(opaque));
+  napi_value result;
+  if (status == napi_ok && load->pixels) {
+    auto installed = state->images.installDecodedMemory(
+      std::move(*load->pixels), load->retainCpuPixels);
+    if (installed) {
+      napi_resolve_deferred(env, load->deferred,
+        imageInfo(env, installed->handle, installed->width, installed->height));
+      napi_delete_async_work(env, load->work);
+      return;
+    }
+  }
+  napi_value message;
+  napi_create_string_utf8(env, "cannot decode image bytes", NAPI_AUTO_LENGTH, &message);
+  napi_create_error(env, nullptr, message, &result);
+  napi_reject_deferred(env, load->deferred, result);
+  napi_delete_async_work(env, load->work);
+}
+
+napi_value loadImageBytesAsync(napi_env env, napi_callback_info info) try {
+  auto args = arguments(env, info, 2);
+  auto load = std::make_unique<AsyncImageMemoryLoad>();
+  load->env = env;
+  load->bytes = encodedImageBytes(env, args.at(0));
+  load->retainCpuPixels = args.size() > 1 && asBoolean(env, args.at(1));
+  napi_value promise;
+  check(env, napi_create_promise(env, &load->deferred, &promise),
+        "cannot create image byte promise");
+  napi_value name;
+  check(env, napi_create_string_utf8(env, "pmjs-image-byte-load", NAPI_AUTO_LENGTH,
+                                     &name), "cannot create image byte work name");
+  check(env, napi_create_async_work(env, nullptr, name, executeImageMemoryLoad,
+                                    completeImageMemoryLoad, load.get(), &load->work),
+        "cannot create image byte work");
+  const auto queued = napi_queue_async_work(env, load->work);
+  if (queued != napi_ok) {
+    napi_delete_async_work(env, load->work);
+    check(env, queued, "cannot queue image byte work");
+  }
+  load.release();
+  return promise;
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what()); return nullptr;
+}
 
 void executeImageLoad(napi_env, void* opaque) noexcept {
   auto* load = static_cast<AsyncImageLoad*>(opaque);
@@ -331,6 +444,8 @@ void registerResourceBindings(napi_env env, napi_value exports) {
   napi_value images = moduleObject(env);
   method(env, images, "load", loadImage);
   method(env, images, "loadAsync", loadImageAsync);
+  method(env, images, "loadBytes", loadImageBytes);
+  method(env, images, "loadBytesAsync", loadImageBytesAsync);
   method(env, images, "fallbackImage", fallbackImage);
   method(env, images, "release", releaseImage);
   method(env, images, "pin", pinImage);
