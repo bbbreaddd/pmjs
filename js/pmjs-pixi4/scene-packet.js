@@ -2,54 +2,6 @@ function nativeSceneTraversesChild(kind, node, child) {
   return kind !== 3 || child !== node._graphics;
 }
 
-function prepareNativeSceneNode(node) {
-  if (PIXI.Text && node instanceof PIXI.Text &&
-      typeof node.updateText === 'function') {
-    node.updateText(true);
-  }
-  if (PIXI.extras && PIXI.extras.BitmapText &&
-      node instanceof PIXI.extras.BitmapText &&
-      typeof node.validate === 'function') {
-    node.validate();
-  }
-  if (PIXI.mesh && PIXI.mesh.Mesh && node instanceof PIXI.mesh.Mesh &&
-      typeof node.refresh === 'function') {
-    node.refresh();
-  }
-  if (typeof Window === 'function' && node instanceof Window) {
-    node._updateCursor();
-    node._updateArrows();
-    node._updatePauseSign();
-    node._updateContents();
-  }
-  if (node instanceof Tilemap) {
-    var ox = node.roundPixels ? Math.floor(node.origin.x) : node.origin.x;
-    var oy = node.roundPixels ? Math.floor(node.origin.y) : node.origin.y;
-    var startX = Math.floor((ox - node._margin) / node._tileWidth);
-    var startY = Math.floor((oy - node._margin) / node._tileHeight);
-    node._updateLayerPositions(startX, startY);
-    var animationChanged = node._lastAnimationFrame !== undefined &&
-      node._lastAnimationFrame !== node.animationFrame;
-    if (node._needsRepaint || animationChanged ||
-        node._lastStartX !== startX || node._lastStartY !== startY) {
-      if (node._lastAnimationFrame !== undefined) {
-        node._frameUpdated = animationChanged;
-        node._lastAnimationFrame = node.animationFrame;
-      }
-      node._lastStartX = startX;
-      node._lastStartY = startY;
-      node._paintAllTiles(startX, startY);
-      node._needsRepaint = false;
-      nativeTileRebuilds++;
-    }
-    if (node._pmjsSortDirty) node._sortChildren();
-  }
-  if (node.origin && node.tilePosition) {
-    node.tilePosition.x = Math.round(-node.origin.x);
-    node.tilePosition.y = Math.round(-node.origin.y);
-  }
-}
-
 function nativeWindowClip(window) {
   var openness = Math.max(0, Math.min(255, Number(window._openness) || 0));
   var height = Math.max(0, Number(window.height) || 0) * openness / 255;
@@ -312,17 +264,7 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
     particleContext) {
   if (!node || nativeSceneUnsupported) return;
   if (nativeIsRectTileLayer(node)) {
-    var layerHandle = ensureNativeRectTileLayer(node);
-    if (!layerHandle) return;
-    var layerParent = node.parent || node;
-    var layerIndex = nativeSceneRecord(parentIndex, 4, layerHandle,
-      layerParent.tint === undefined ? 0xffffff : layerParent.tint,
-      layerParent.blendMode || 0, nativeIdentityTransform, 1, null, 0, null);
-    var layerValues = layerIndex * nativeSceneValueStride;
-    var animation = tileAnimationOffset(layerParent);
-    nativeSceneValues[layerValues + 15] = animation[0];
-    nativeSceneValues[layerValues + 16] = animation[1];
-    nativeTileRects += node.pointsBuf.length / 9;
+    writeNativeSceneRectTileLayer(node, parentIndex);
     return;
   }
   if (nativeSceneNodeRejected(node, particleContext)) return;
@@ -369,56 +311,29 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
     }
   }
   var pictureBlend = particleContext ? -1 : nativeScenePictureBlend(node);
-  var filterPlan = enabledFilterCount || node.mask || forcedMask || pictureBlend >= 0 ?
-    nativeSceneFilter(node, activeFilters) : nativeSceneNoFilterPlan;
+  // The mask is read once and shared by the boundary test and the resolver.
+  var nodeMask = node.mask || null;
+  var filterPlan;
+  var nativeClip;
+  var nativeMask;
+  if (nativeNodeNeedsAdvancedEffects(enabledFilterCount, nodeMask,
+      forcedMask, pictureBlend)) {
+    filterPlan = resolveNativeAdvancedEffects(node, particleContext,
+      activeFilters, nodeMask, forcedMask, pictureBlend, forcedClip);
+    if (!filterPlan) return;
+    nativeClip = nativeEffectClip;
+    nativeMask = nativeEffectAlphaMask;
+  } else {
+    // Simple lane: no enabled filters, masks, or picture-blend work means no
+    // filter planning, no mask planning, no bounds work, and no effect
+    // arrays or temporary objects. The shared frozen no-op plan is never
+    // mutated: masks and picture groups only exist on the advanced lane,
+    // which always plans fresh.
+    filterPlan = nativeSceneNoFilterPlan;
+    nativeClip = forcedClip;
+    nativeMask = null;
+  }
   var nativeBlur = filterPlan.blur;
-  if (filterPlan.unsupported) {
-    var filterNames = filterPlan.filters.map(function(filter) {
-      return filter && filter.constructor && filter.constructor.name || 'filter';
-    }).join(',');
-    nativeCompatibilityHit('render.filter',
-      (node.constructor && node.constructor.name || 'node') + ':' + filterNames);
-    nativeSceneUnsupported = true;
-    nativeSceneUnsupportedReason =
-      (node.constructor && node.constructor.name || 'node') + ':filter';
-    return;
-  }
-  // A scissor is exact only while no post-mask filter can expand or transform
-  // pixels. Pixi pops its mask before applying the filter chain.
-  var maskClip = !particleContext && node.mask && !filterPlan.groups.length ?
-    nativeRectangleMask(node.mask) : null;
-  var nativeClip = nativeIntersectClip(forcedClip, maskClip);
-  var nativeMask = !particleContext && node.mask && !maskClip ?
-    nativeAlphaMask(node.mask) : null;
-  if (!particleContext && node.mask && !nativeClip && !nativeMask) {
-    nativeCompatibilityHit('render.mask',
-      node.constructor && node.constructor.name || 'node');
-    nativeSceneUnsupported = true;
-    nativeSceneUnsupportedReason = (node.constructor && node.constructor.name || 'node') + ':mask';
-    return;
-  }
-  var nativeMasks = [];
-  if (nativeMask) nativeMasks.push(nativeMask);
-  if (forcedMask) nativeMasks.push(forcedMask);
-  for (var nativeMaskIndex = 0; nativeMaskIndex < nativeMasks.length;
-      nativeMaskIndex++) {
-    var currentMask = nativeMasks[nativeMaskIndex];
-    // Pixi pushes its filter target before its mask, then pops the mask before
-    // applying the filter chain. Since groups are emitted in reverse below,
-    // the mask belongs first in application order.
-    filterPlan.groups.unshift({ kind: 3, resource: currentMask.handle,
-      parameters: currentMask.transform.concat(currentMask.frame,
-        [currentMask.alpha, currentMask.usesRed ? 1 : 0,
-          currentMask.rotation, currentMask.size[0], currentMask.size[1]]) });
-  }
-  nativeMask = null;
-  // pixi-picture reads the destination after Pixi has rendered the complete
-  // filtered and masked sprite. Keeping this group last makes it outermost in
-  // the reverse-emitted native filter stack.
-  if (pictureBlend >= 0) {
-    filterPlan.groups.push({ kind: 26, resource: 0,
-      parameters: [pictureBlend] });
-  }
   var transform = node.transform;
   if (!particleContext && transform && typeof transform.updateLocalTransform === 'function') {
     transform.updateLocalTransform();
@@ -438,105 +353,39 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
   if (parentIndex === 0xffffffff && nativeSceneRootTransform !== nativeIdentityTransform) {
     local = nativeComposeTransform(nativeSceneRootTransform, local);
   }
-  var kind = 0;
-  var resource = 0;
   var tint = particleValues ? particleValues.tint :
     (node.tint === undefined ? 0xffffff : node.tint);
   if (particleContext) {
     tint = nativeMultiplyTint(tint, particleContext.container.tint);
   }
-  var frame = null;
-  var nativeImage = null;
-  var localX = 0;
-  var localY = 0;
-  var destinationWidth = 0;
-  var destinationHeight = 0;
-  var tilingResolution = 1;
-  var texture = null;
-  // ParticleRenderer uploads Sprite-shaped fields directly; it never dispatches
-  // a child's renderer plugin or traverses that child's descendants.
-  var renderType = particleValues ? 'sprite' : nativeNodeRenderType(node);
-
-  if (renderType === 'mesh') {
-    var meshHandle = ensureNativeGpuMesh(node);
-    if (!meshHandle) {
-      nativeCompatibilityHit('render.mesh', node.constructor && node.constructor.name || 'node');
-      nativeSceneUnsupported = true;
-      nativeSceneUnsupportedReason = (node.constructor && node.constructor.name || 'node') + ':mesh';
-      return;
-    }
-    kind = 8;
-    resource = meshHandle;
-    texture = node.texture;
-  } else if (renderType === 'graphics') {
-    var graphicsCanvas = ensureNativeGraphics(node);
-    if (graphicsCanvas) {
-      nativeImage = graphicsCanvas._ensureNativeCanvas();
-      kind = 1;
-      resource = nativeImage.handle;
-      localX = graphicsCanvas.__pmjsGraphicsOffsetX;
-      localY = graphicsCanvas.__pmjsGraphicsOffsetY;
-      frame = { x: 0, y: 0, width: graphicsCanvas.width,
-        height: graphicsCanvas.height };
-      destinationWidth = frame.width;
-      destinationHeight = frame.height;
-    } else if (node.__pmjsGraphicsUnsupported) {
-      nativeSceneUnsupported = true;
-      nativeSceneUnsupportedReason =
-        (node.constructor && node.constructor.name || 'Graphics') + ':graphics';
-      return;
-    }
-  } else if (renderType === 'screensprite') {
-    kind = 3;
-    tint = ((node._red || 0) << 16) | ((node._green || 0) << 8) |
-      (node._blue || 0);
-    nativeScreenOverlays.push([
-      node._red || 0, node._green || 0, node._blue || 0,
-      Math.round(node.alpha * 255)
-    ]);
-  } else if (renderType === 'tilingsprite') {
-    texture = node.texture;
-    var tilingRotation = ((Number(texture && texture.rotate) || 0) % 16 + 16) % 16;
-    if (tilingRotation % 2) {
-      nativeCompatibilityHit('render.texture-rotation', String(tilingRotation));
-      nativeSceneUnsupported = true;
-      nativeSceneUnsupportedReason = 'tiling-sprite:texture-rotation';
-      return;
-    }
-    var tilingTexture = ensureNativeTilingTexture(texture);
-    if (tilingTexture && node.width > 0 && node.height > 0) {
-      nativeImage = tilingTexture;
-      tilingResolution = tilingTexture.resolution;
-      kind = 2;
-      resource = tilingTexture.handle;
-      var tilingAnchor = node.anchor || { x: 0, y: 0 };
-      localX = -tilingAnchor.x * node.width;
-      localY = -tilingAnchor.y * node.height;
-      destinationWidth = node.width;
-      destinationHeight = node.height;
-    }
-  } else if (renderType === 'sprite' || renderType === 'picture' ||
-      renderType === 'weathersprite') {
-    texture = particleValues ? particleValues.texture : node.texture;
-    var sampledBaseTexture = particleContext && particleContext.baseTexture ||
-      texture && texture.baseTexture;
-    var source = sampledBaseTexture && sampledBaseTexture.source;
-    nativeImage = source && (source._nativeImage || source._nativeCanvas);
-    frame = texture && (texture._frame || texture.frame);
-    if (nativeImage && frame && frame.width > 0 && frame.height > 0) {
-      kind = 1;
-      resource = nativeImage.handle;
-      var anchor = particleValues ?
-        { x: particleValues.anchorX, y: particleValues.anchorY } :
-        (node.anchor || { x: 0, y: 0 });
-      var original = texture.orig || frame;
-      var trim = texture.trim;
-      localX = trim ? trim.x - anchor.x * original.width : -anchor.x * original.width;
-      localY = trim ? trim.y - anchor.y * original.height : -anchor.y * original.height;
-      destinationWidth = trim ? trim.width : original.width;
-      destinationHeight = trim ? trim.height : original.height;
-    }
-  }
+  // Classification runs after preparation, the render hook, effect discovery,
+  // and the transform refresh, in reference order: __pmjsNodeRenderType is
+  // arbitrary integration JavaScript and may inspect state derived by
+  // updateLocalTransform(). Particle children never dispatch a renderer
+  // plugin: they are sprite-shaped by contract.
+  var pipeType = particleValues ? 'sprite' : nativeNodeRenderType(node);
+  var pipeKind = particleValues ? PMJS_SCENE_KIND.SPRITE :
+    nativeSceneKindForType(pipeType);
+  // Fixed dispatch: one kind from the classifier, one encoder from the
+  // table. The resolved type string travels along so encoders never re-read
+  // node state.
+  resetNativeSceneEmission(tint);
+  writeNativeSceneKind(pipeKind, node, pipeType, particleContext,
+    particleValues);
+  if (nativeSceneEmission.aborted) return;
+  var kind = nativeSceneEmission.kind;
+  var resource = nativeSceneEmission.resource;
+  tint = nativeSceneEmission.tint;
+  var texture = nativeSceneEmission.texture;
+  var frame = nativeSceneEmission.frame;
+  var nativeImage = nativeSceneEmission.nativeImage;
+  var source = nativeSceneEmission.source;
+  var localX = nativeSceneEmission.localX;
+  var localY = nativeSceneEmission.localY;
+  var destinationWidth = nativeSceneEmission.destWidth;
+  var destinationHeight = nativeSceneEmission.destHeight;
+  var tilingResolution = nativeSceneEmission.tilingResolution;
+  var sampledBaseTexture = nativeSceneEmission.sampledBaseTexture;
 
   var filterGroups = filterPlan.groups || [];
   if (nativeSceneFilterDepth + filterGroups.length > 4) {
@@ -575,10 +424,10 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
         texture.baseTexture.scaleMode === PIXI.SCALE_MODES.NEAREST) {
       nativeSceneMetadata[nodeIndex * nativeSceneMetadataStride + 5] |= 8;
     }
-    // Pixi's WebGL ParticleRenderer does not use either renderer.roundPixels
-    // or ParticleContainer.roundPixels; the latter is CanvasRenderer-only.
+    // Pixi's particle renderer ignores roundPixels, and weather sprites
+    // never take the flag.
     if (nativeSceneRoundPixels && !particleContext &&
-        (renderType === 'sprite' || renderType === 'picture')) {
+        nativeSceneEmission.roundPixelsEligible) {
       nativeSceneMetadata[nodeIndex * nativeSceneMetadataStride + 5] |= 256;
     }
     nativeSceneValues[valueOffset + 9] = frame.x;
