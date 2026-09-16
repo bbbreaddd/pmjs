@@ -3,6 +3,7 @@
   "modules": [
     "js/pmjs-core/optimizations.js",
     "js/pmjs-mv/setup.js",
+    "js/pmjs-mv/autorun-events.js",
     "js/pmjs-core/operation-trace.js",
     "js/pmjs-web/runtime.js",
     "js/pmjs-web/scheduler.js",
