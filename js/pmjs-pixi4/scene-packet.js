@@ -623,7 +623,7 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
 }
 
 function submitNativeScene(stage) {
-  nativeSceneCount = 0;
+  resetNativeSceneRecords();
   nativeSceneFilterDepth = 0;
   nativeSceneUnsupported = false;
   nativeSceneUnsupportedReason = '';

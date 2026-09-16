@@ -8,6 +8,9 @@ if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
   PMJS.optimizations.register({ id: 'tilemap.bulk-layer-transfer',
     owner: 'pmjs-pixi4',
     fallback: 'transfer tile records through ordinary JavaScript arrays' });
+  PMJS.optimizations.register({ id: 'scene.record-bulk-clear',
+    owner: 'pmjs-pixi4',
+    fallback: 'explicit zero loop over record tail slots' });
   PMJS.optimizations.register({ id: 'scene.tiling-texture-cache',
     owner: 'pmjs-pixi4',
     fallback: 're-rasterize the tiling source canvas on every use' });
@@ -367,6 +370,7 @@ var nativeSceneMetadata = new Uint32Array(
 var nativeSceneValues = new Float32Array(
   nativeSceneCapacity * nativeSceneValueStride);
 var nativeSceneCount = 0;
+var nativeSceneBulkClear = false;
 var nativeSceneFilterDepth = 0;
 var nativeSceneUnsupported = false;
 var nativeSceneUnsupportedReason = '';
@@ -394,6 +398,17 @@ function growNativeScene() {
   var values = new Float32Array(nativeSceneCapacity * nativeSceneValueStride);
   values.set(nativeSceneValues);
   nativeSceneValues = values;
+}
+
+function resetNativeSceneRecords() {
+  nativeSceneBulkClear = typeof pmjsOptimizationEnabled !== 'function' ||
+    pmjsOptimizationEnabled('scene.record-bulk-clear');
+  // Count covers every record dirtied by the previous build, including fallback.
+  if (nativeSceneBulkClear && nativeSceneCount !== 0) {
+    nativeSceneValues.fill(0, 0,
+      nativeSceneCount * nativeSceneValueStride);
+  }
+  nativeSceneCount = 0;
 }
 
 // Pixi 4's public getter slices _filters, so using it while
@@ -531,7 +546,8 @@ function nativeSceneRecord(parentIndex, kind, resource, tint, blendMode,
   nativeSceneValues[valueOffset + 4] = local.tx;
   nativeSceneValues[valueOffset + 5] = local.ty;
   nativeSceneValues[valueOffset + 6] = alpha;
-  for (var offset = 7; offset < nativeSceneValueStride; offset++) {
+  if (!nativeSceneBulkClear) for (var offset = 7;
+      offset < nativeSceneValueStride; offset++) {
     nativeSceneValues[valueOffset + offset] = 0;
   }
   if (clip) {
