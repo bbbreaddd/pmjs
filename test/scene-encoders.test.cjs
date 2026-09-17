@@ -373,6 +373,68 @@ test('encoders observe state instead of advancing semantics', () => {
   });
 });
 
+test('MV preparation patches indexed YED animation without rebuilding tiles', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..',
+    'js/pmjs-mv/render-prepare.js'), 'utf8');
+  class Tilemap {}
+  const sandbox = { Tilemap, Window: function Window() {}, Math,
+    nativeTileRebuilds: 0 };
+  vm.createContext(sandbox);
+  vm.runInContext(source + '\nthis.prepare = prepareNativeMvSceneNode;', sandbox);
+
+  const pending = { 3: true };
+  const node = Object.assign(new Tilemap(), {
+    origin: { x: 0, y: 0 }, roundPixels: true,
+    _margin: 0, _tileWidth: 48, _tileHeight: 48,
+    _lastStartX: 0, _lastStartY: 0,
+    _lastAnimationFrame: 1, animationFrame: 2,
+    _needsRepaint: false,
+    _pmjsIndexedAnimation: true,
+    _needsAnimRepaint: true,
+    _pmjsChangedAnimKeys: pending,
+    _updateLayerPositions() {},
+    _paintAllTiles() { this.fullRepaints = (this.fullRepaints || 0) + 1; },
+    _paintAnimTiles(keys) { this.patched = keys; }
+  });
+
+  sandbox.prepare(node);
+
+  assert.equal(node.fullRepaints, undefined);
+  assert.equal(node.patched, pending);
+  assert.equal(node._pmjsChangedAnimKeys, null);
+  assert.equal(node._needsAnimRepaint, false);
+  assert.equal(node._lastAnimationFrame, 2);
+  assert.equal(node._frameUpdated, true);
+  assert.equal(sandbox.nativeTileRebuilds, 0);
+});
+
+test('MV preparation keeps animation-frame rebuilds for ordinary tilemaps', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..',
+    'js/pmjs-mv/render-prepare.js'), 'utf8');
+  class Tilemap {}
+  const sandbox = { Tilemap, Window: function Window() {}, Math,
+    nativeTileRebuilds: 0 };
+  vm.createContext(sandbox);
+  vm.runInContext(source + '\nthis.prepare = prepareNativeMvSceneNode;', sandbox);
+
+  const node = Object.assign(new Tilemap(), {
+    origin: { x: 0, y: 0 }, roundPixels: true,
+    _margin: 0, _tileWidth: 48, _tileHeight: 48,
+    _lastStartX: 0, _lastStartY: 0,
+    _lastAnimationFrame: 1, animationFrame: 2,
+    _needsRepaint: false,
+    _updateLayerPositions() {},
+    _paintAllTiles() { this.fullRepaints = (this.fullRepaints || 0) + 1; }
+  });
+
+  sandbox.prepare(node);
+
+  assert.equal(node.fullRepaints, 1);
+  assert.equal(node._lastAnimationFrame, 2);
+  assert.equal(node._frameUpdated, true);
+  assert.equal(sandbox.nativeTileRebuilds, 1);
+});
+
 test('filter parameter mutation re-renders without changing structure', () => {
   const harness = makeHarness();
   const { sandbox, sprite } = harness;
