@@ -32,7 +32,6 @@ Utils.isOptionValid = function(name) {
   return (!globalThis.AudioContext && name === 'noaudio') ||
     originalIsOptionValid.call(this, name);
 };
-Utils.canReadGameFiles = function() { return true; };
 
 var nativeFilterDescriptor = PIXI.DisplayObject &&
   Object.getOwnPropertyDescriptor(PIXI.DisplayObject.prototype, 'filters');

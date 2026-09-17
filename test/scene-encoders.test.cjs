@@ -12,6 +12,7 @@ const vm = require('node:vm');
 
 const WRITER_SOURCES = ['js/pmjs-pixi4/scene-primitives.js',
   'js/pmjs-pixi4/scene-filters.js', 'js/pmjs-pixi4/scene-packet.js',
+  'js/pmjs-mv/render-prepare.js',
   'js/pmjs-pixi4/scene-prepare.js', 'js/pmjs-pixi4/scene-classify.js',
   'js/pmjs-pixi4/scene-encoders.js', 'js/pmjs-pixi4/scene-effects.js'];
 
@@ -347,7 +348,8 @@ test('encoders observe state instead of advancing semantics', () => {
     return fs.readFileSync(path.join(__dirname, '..', relative), 'utf8');
   }
   const encoders = readModule('js/pmjs-pixi4/scene-encoders.js');
-  const prepare = readModule('js/pmjs-pixi4/scene-prepare.js');
+  const prepare = readModule('js/pmjs-mv/render-prepare.js') + '\n' +
+    readModule('js/pmjs-pixi4/scene-prepare.js');
   const classify = readModule('js/pmjs-pixi4/scene-classify.js');
   // Preparation-only calls must never appear in encoders.
   ['updateChowRender', '_paintAllTiles', '_sortChildren', 'updateText(',

@@ -134,19 +134,16 @@ if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
 
     mapProto.isSlippery._pmjsSlipperyTilesGuard = true;
     mapProto.__pmjsSlipperyTilesGuard = true;
-
-    try {
-      if (typeof console !== 'undefined' && console.log) {
-        console.log('[pmjs] slippery tiles guard installed=' +
-          Boolean(mapProto.__pmjsSlipperyTilesGuard));
-      }
-    } catch (_) {}
     return true;
+  }
+
+  function installAfterPlugin(name) {
+    if (String(name).toLowerCase() === 'yep_slipperytiles') install();
   }
 
   install();
   if (typeof globalThis.pmjsRegisterHook === 'function') {
-    globalThis.pmjsRegisterHook('pluginLoaded', install);
+    globalThis.pmjsRegisterHook('pluginLoaded', installAfterPlugin);
     globalThis.pmjsRegisterHook('beforeBoot', install);
   }
 })();

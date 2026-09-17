@@ -8,6 +8,8 @@ const path = require('node:path');
 
 const source = fs.readFileSync(
   path.resolve(__dirname, '../js/pmjs-web/object-urls.js'), 'utf8');
+const eventsSource = fs.readFileSync(
+  path.resolve(__dirname, '../js/pmjs-web/events.js'), 'utf8');
 const canvasSource = fs.readFileSync(
   path.resolve(__dirname, '../js/pmjs-web/canvas.js'), 'utf8');
 const elementsSource = fs.readFileSync(
@@ -33,6 +35,7 @@ function imageContext(loadBytesAsync) {
     }
   };
   vm.createContext(context);
+  vm.runInContext(eventsSource, context);
   vm.runInContext(canvasSource, context);
   vm.runInContext(source, context);
   vm.runInContext(elementsSource, context);

@@ -6,14 +6,6 @@ if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
     fallback: 'read global info through the original DataManager implementation on every call' });
 }
 
-if (typeof Window_Base !== 'undefined' && Window_Base.prototype.update) {
-  var originalWindowBaseUpdate = Window_Base.prototype.update;
-  Window_Base.prototype.update = function() {
-    if (!this.visible) return;
-    return originalWindowBaseUpdate.apply(this, arguments);
-  };
-}
-
 if (typeof DataManager !== 'undefined' &&
     typeof DataManager.isDatabaseLoaded === 'function') {
   var originalIsDatabaseLoaded = DataManager.isDatabaseLoaded;

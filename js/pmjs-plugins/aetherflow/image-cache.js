@@ -1,4 +1,5 @@
-if (typeof ImageCache !== 'undefined' && ImageCache.prototype.releaseItem) {
+if (typeof ImageCache !== 'undefined' && ImageCache.prototype.releaseItem &&
+    !ImageCache.prototype._pmjsAetherflowImageRelease) {
   var aetherflowReleaseImage = ImageCache.prototype.releaseItem;
   ImageCache.prototype.releaseItem = function(key) {
     var item = this._items && this._items[key];
@@ -7,4 +8,5 @@ if (typeof ImageCache !== 'undefined' && ImageCache.prototype.releaseItem) {
     }
     return aetherflowReleaseImage.apply(this, arguments);
   };
+  ImageCache.prototype._pmjsAetherflowImageRelease = true;
 }

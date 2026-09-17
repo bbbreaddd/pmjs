@@ -1,4 +1,5 @@
-if (typeof AudioManager !== 'undefined' && typeof NativeAudioBuffer === 'function') {
+if (typeof AudioManager !== 'undefined' && typeof NativeAudioBuffer === 'function' &&
+    !AudioManager._pmjsAetherflowNativeAudio) {
   if (AudioManager._cache && typeof AudioManager._cache.clear === 'function') {
     AudioManager._cache.clear();
   }
@@ -30,4 +31,6 @@ if (typeof AudioManager !== 'undefined' && typeof NativeAudioBuffer === 'functio
       return buffer;
     };
   }
+
+  AudioManager._pmjsAetherflowNativeAudio = true;
 }

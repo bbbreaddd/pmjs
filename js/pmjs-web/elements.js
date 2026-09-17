@@ -475,7 +475,6 @@ documentTarget.getElementsByTagName = function(tagName) {
   return elements;
 };
 
-globalThis.EventTarget = EventTarget;
 globalThis.HTMLCanvasElement = CanvasElement;
 globalThis.HTMLImageElement = NativeImage;
 globalThis.HTMLVideoElement = VideoElement;

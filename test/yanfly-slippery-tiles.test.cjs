@@ -34,8 +34,10 @@ function makeHost({
   stockMap = null,
 } = {}) {
   const calls = { regionId: 0, terrainTag: 0, isValid: 0, changeTileset: 0 };
+  const hooks = {};
   const context = {
     calls,
+    hooks,
     PMJS_GAME_CONFIG: { disableOptimizations },
     NativeHost: {
       runtime: {
@@ -52,7 +54,8 @@ function makeHost({
     $gameParty: {
       inBattle() { return false; }
     },
-    console: { log() {} }
+    console: { log() {} },
+    pmjsRegisterHook(name, callback) { hooks[name] = callback; }
   };
 
   if (stockMap) {
@@ -96,6 +99,20 @@ test('registers plugins.yanfly.slippery-tiles optimization', () => {
   const context = makeHost();
   assert.equal(context.PMJS.optimizations.isEnabled('plugins.yanfly.slippery-tiles'), true);
   assert.ok(context.PMJS.optimizations.ids().includes('plugins.yanfly.slippery-tiles'));
+});
+
+test('plugin lifecycle hook ignores unrelated plugins', () => {
+  const context = makeHost();
+  vm.runInContext(
+    `Game_Map.prototype.isSlippery = (${SLIPPERY_QUERY_SHAPE});` +
+    `delete Game_Map.prototype.__pmjsSlipperyTilesGuard;`, context);
+  const stock = context.Game_Map.prototype.isSlippery;
+
+  context.hooks.pluginLoaded('SomeOtherPlugin');
+  assert.equal(context.Game_Map.prototype.isSlippery, stock);
+  context.hooks.pluginLoaded('YEP_SlipperyTiles');
+  assert.notEqual(context.Game_Map.prototype.isSlippery, stock);
+  assert.equal(context.Game_Map.prototype.__pmjsSlipperyTilesGuard, true);
 });
 
 test('non-slippery Tiled map returns false before coordinate/region lookups', () => {
