@@ -26,10 +26,19 @@ if (typeof Graphics !== 'undefined') {
 var originalInputUpdate = Input.update;
 var nativeInputActions = ['left', 'right', 'up', 'down', 'ok', 'escape',
   'shift', 'control', 'tab', 'pageup', 'pagedown', 'debug'];
+// Keep native edge latches until this simulation step consumes them.
+function pmjsPollNativeAction(action) {
+  var held = NativeHost.input.down(action);
+  var edge = false;
+  try {
+    if (NativeHost.input.pressed) edge = NativeHost.input.pressed(action);
+  } catch (_) {}
+  return held || edge;
+}
 Input.update = function() {
   for (var index = 0; index < nativeInputActions.length; index++) {
     var action = nativeInputActions[index];
-    this._currentState[action] = NativeHost.input.down(action);
+    this._currentState[action] = pmjsPollNativeAction(action);
   }
   // Poll any plugin-registered keyMapper actions so custom bindings are not
   // silently dropped by the fixed action list.
@@ -37,7 +46,7 @@ Input.update = function() {
     for (var code in this.keyMapper) {
       var mapped = this.keyMapper[code];
       if (mapped && this._currentState[mapped] === undefined) {
-        this._currentState[mapped] = NativeHost.input.down(mapped);
+        this._currentState[mapped] = pmjsPollNativeAction(mapped);
       }
     }
   }
@@ -45,11 +54,14 @@ Input.update = function() {
     for (var button in this.gamepadMapper) {
       var buttonAction = this.gamepadMapper[button];
       if (buttonAction && this._currentState[buttonAction] === undefined) {
-        this._currentState[buttonAction] = NativeHost.input.down(buttonAction);
+        this._currentState[buttonAction] = pmjsPollNativeAction(buttonAction);
       }
     }
   }
   originalInputUpdate.call(this);
+  try {
+    if (NativeHost.input.consumePressed) NativeHost.input.consumePressed();
+  } catch (_) {}
 };
 
 if (typeof WindowLayer !== 'undefined' &&

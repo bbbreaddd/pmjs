@@ -25,6 +25,21 @@ int main() {
     return 1;
   }
   event = {};
+  event.type = SDL_KEYDOWN;
+  event.key.keysym.sym = SDLK_x;
+  event.key.repeat = 0;
+  if (SDL_PushEvent(&event) != 1 || !platform.pollEvents()) return 1;
+  constexpr std::uint32_t escapePressed = (1U << 5U) << 16U;
+  if ((platform.inputState() & escapePressed) == 0) {
+    std::cerr << "pressed edge was not latched\n";
+    return 1;
+  }
+  platform.consumePressed();
+  if ((platform.inputState() & escapePressed) != 0) {
+    std::cerr << "consumePressed did not clear the pressed edge\n";
+    return 1;
+  }
+  event = {};
   event.type = SDL_CONTROLLERBUTTONDOWN;
   event.cbutton.button = SDL_CONTROLLER_BUTTON_BACK;
   if (SDL_PushEvent(&event) != 1 || !platform.pollEvents()) return 1;

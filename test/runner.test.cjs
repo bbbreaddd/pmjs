@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { parse } = require('../runner/cli.cjs');
-const { run, validate } = require('../runner/index.cjs');
+const { run, validate, parseTimingConfig, resolveSwapDefault } = require('../runner/index.cjs');
 
 function fixture(source) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-runner-'));
@@ -145,6 +145,28 @@ test('afterBootstrap runs once and Node jobs are not starved', async () => {
   } });
   await job;
   assert.equal(hooked, 1);
+});
+test('timing config pins MV logic at 60 Hz and validates render rates', () => {
+  assert.deepEqual(parseTimingConfig({}), { logicHz: 60, renderHz: 60,
+    uncapped: false, renderPeriod: 1000 / 60 });
+  assert.equal(parseTimingConfig({ PMJS_RENDER_HZ: '30' }).renderPeriod, 1000 / 30);
+  assert.equal(parseTimingConfig({ PMJS_RENDER_HZ: '120' }).renderHz, 120);
+  const uncapped = parseTimingConfig({ PMJS_RENDER_HZ: '0' });
+  assert.equal(uncapped.uncapped, true);
+  assert.equal(parseTimingConfig({ PMJS_UNCAPPED: '1' }).uncapped, true);
+  assert.throws(() => parseTimingConfig({ PMJS_RENDER_HZ: '45' }), /PMJS_RENDER_HZ/);
+  assert.throws(() => parseTimingConfig({ PMJS_RENDER_HZ: 'abc' }), /PMJS_RENDER_HZ/);
+  assert.throws(() => parseTimingConfig({ PMJS_RENDER_HZ: '-60' }), /PMJS_RENDER_HZ/);
+  assert.throws(() => parseTimingConfig({ PMJS_LOGIC_HZ: '30' }), /PMJS_LOGIC_HZ/);
+  assert.deepEqual(parseTimingConfig({ PMJS_LOGIC_HZ: '60' }).logicHz, 60);
+});
+test('uncapped render defaults the swap interval to 0 unless set', () => {
+  assert.equal(resolveSwapDefault({}, parseTimingConfig({})), null);
+  assert.equal(resolveSwapDefault({ PMJS_SWAP_INTERVAL: '1' },
+    parseTimingConfig({ PMJS_RENDER_HZ: '0' })), null);
+  assert.equal(resolveSwapDefault({}, parseTimingConfig({ PMJS_RENDER_HZ: '0' })), '0');
+  assert.equal(resolveSwapDefault({ PMJS_SWAP_INTERVAL: '' },
+    parseTimingConfig({ PMJS_UNCAPPED: '1' })), '0');
 });
 test('bootstrap and tick failures reject the run', async () => {
   const bootstrap = fixture('throw new Error("bootstrap failure")');

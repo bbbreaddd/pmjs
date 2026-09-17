@@ -71,6 +71,52 @@ function assertDisableOptimizationsShape(value, configPath) {
   }
 }
 
+const PMJS_MV_LOGIC_HZ = 60;
+const PMJS_SUPPORTED_RENDER_HZ = [30, 60, 120];
+
+// MV logic is fixed at its authored 60 Hz; presentation is paced separately.
+function parseTimingConfig(env) {
+  const source = env || {};
+  if (source.PMJS_LOGIC_HZ !== undefined && source.PMJS_LOGIC_HZ !== '' &&
+      Number(source.PMJS_LOGIC_HZ) !== PMJS_MV_LOGIC_HZ) {
+    throw new Error(
+      `PMJS_LOGIC_HZ must be ${PMJS_MV_LOGIC_HZ} ` +
+      `(MV simulation is fixed at the authored rate): ${source.PMJS_LOGIC_HZ}`);
+  }
+  const uncappedFlag = source.PMJS_UNCAPPED === '1';
+  const raw = source.PMJS_RENDER_HZ;
+  if (raw === undefined || raw === '') {
+    if (uncappedFlag) return { logicHz: PMJS_MV_LOGIC_HZ, renderHz: 0, uncapped: true, renderPeriod: Infinity };
+    return { logicHz: PMJS_MV_LOGIC_HZ, renderHz: 60, uncapped: false,
+      renderPeriod: 1000 / 60 };
+  }
+  const renderHz = Number(raw);
+  if (renderHz === 0) {
+    return { logicHz: PMJS_MV_LOGIC_HZ, renderHz: 0, uncapped: true,
+      renderPeriod: Infinity };
+  }
+  if (!PMJS_SUPPORTED_RENDER_HZ.includes(renderHz)) {
+    throw new Error(
+      `PMJS_RENDER_HZ must be one of 0 (uncapped), ` +
+      `${PMJS_SUPPORTED_RENDER_HZ.join(', ')}: ${raw}`);
+  }
+  if (renderHz === 0 || uncappedFlag) {
+    return { logicHz: PMJS_MV_LOGIC_HZ, renderHz: 0, uncapped: true,
+      renderPeriod: Infinity };
+  }
+  return { logicHz: PMJS_MV_LOGIC_HZ, renderHz, uncapped: false,
+    renderPeriod: 1000 / renderHz };
+}
+
+function resolveSwapDefault(env, timing) {
+  const source = env || {};
+  if (timing.uncapped && (source.PMJS_SWAP_INTERVAL === undefined ||
+      source.PMJS_SWAP_INTERVAL === '')) {
+    return '0';
+  }
+  return null;
+}
+
 function validate(input) {
   const options = resolveDefaults(input);
   const requiredPaths = ['addon', 'gameRoot', 'bootstrap', 'saveRoot'];
@@ -106,6 +152,14 @@ function validate(input) {
 
 async function run(input, hooks = {}) {
   const options = validate(input);
+  const hostProcess = process;
+  // Platform reads the swap interval during construction.
+  const timing = parseTimingConfig(hostProcess.env);
+  const swapDefault = resolveSwapDefault(hostProcess.env, timing);
+  if (swapDefault !== null) {
+    hostProcess.env.PMJS_SWAP_INTERVAL = swapDefault;
+    console.log('[pmjs] uncapped render: defaulting PMJS_SWAP_INTERVAL=0 (was unset)');
+  }
   const native = options.native || require(options.addon);
   native.initialize({ gameRoot: options.gameRoot, assetRoot: options.assetRoot,
     width: options.width, height: options.height, windowTitle: options.title,
@@ -122,7 +176,6 @@ async function run(input, hooks = {}) {
     if (source === null) throw new Error(`cannot load script: ${relative}`);
     return vm.runInThisContext(source, { filename: path.join(options.gameRoot, relative) });
   };
-  const hostProcess = process;
   const hostSetTimeout = globalThis.setTimeout.bind(globalThis);
   const hostClearTimeout = globalThis.clearTimeout.bind(globalThis);
   const hostSetImmediate = typeof globalThis.setImmediate === 'function'
@@ -149,13 +202,15 @@ async function run(input, hooks = {}) {
     throw error;
   }
 
-  const logicPeriod = 1000 / Number(hostProcess.env.PMJS_LOGIC_HZ || 60);
-  const renderPeriod = 1000 / Number(hostProcess.env.PMJS_RENDER_HZ || 60);
-  const period = Math.min(logicPeriod, renderPeriod);
-  let deadline = native.runtime.monotonicNow() + period;
+  // Input edges are consumed by simulation steps, not presentation ticks.
+  const period = timing.renderPeriod;
+  let deadline = timing.uncapped ? 0 : native.runtime.monotonicNow() + period;
+  console.log(`[pmjs] timing logic_hz=${timing.logicHz} ` +
+    (timing.uncapped ? 'render_hz=uncapped' : `render_hz=${timing.renderHz}`));
   console.log(`[pmjs] ready size=${options.width}x${options.height}`);
   return new Promise((resolve, reject) => {
     function schedule() {
+      if (timing.uncapped) { hostSetImmediate(tick); return; }
       const delay = Math.max(0, deadline - native.runtime.monotonicNow());
       if (delay < 1 && hostSetImmediate) hostSetImmediate(tick);
       else hostSetTimeout(tick, delay);
@@ -166,16 +221,17 @@ async function run(input, hooks = {}) {
         const now = performance.now();
         native.beginFrame();
         globalThis.__pmjsTick(now);
-        native.finishLogicStep();
         globalThis.__pmjsRender(now);
         native.renderFrame();
         if (typeof globalThis.__pmjsAfterNativeRender === 'function') {
           globalThis.__pmjsAfterNativeRender();
         }
         native.swapFrame();
-        deadline += period;
-        const monotonicNow = native.runtime.monotonicNow();
-        if (deadline < monotonicNow - period) deadline = monotonicNow + period;
+        if (!timing.uncapped) {
+          deadline += period;
+          const monotonicNow = native.runtime.monotonicNow();
+          if (deadline < monotonicNow - period) deadline = monotonicNow + period;
+        }
         schedule();
       } catch (error) {
         try { native.runtime.quit(); } catch (_) {}
@@ -186,4 +242,5 @@ async function run(input, hooks = {}) {
   });
 }
 
-module.exports = { run, validate };
+module.exports = { run, validate, parseTimingConfig, resolveSwapDefault,
+  PMJS_MV_LOGIC_HZ, PMJS_SUPPORTED_RENDER_HZ };

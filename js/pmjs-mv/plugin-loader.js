@@ -62,6 +62,10 @@
     if (typeof installNativeStorageManager === 'function') {
       installNativeStorageManager();
     }
+    // Wrap the updateMain implementation selected by the plugins.
+    if (typeof pmjsMvInstallTimingContract === 'function') {
+      pmjsMvInstallTimingContract();
+    }
     if (typeof nativeBootPhase === 'function') {
       nativeBootPhase('plugins-loaded');
     }

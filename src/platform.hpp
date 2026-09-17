@@ -27,6 +27,8 @@ class Platform {
   bool windowVisible() const { return windowVisible_; }
   std::pair<int, int> drawableSize() const;
   void finishLogicStep();
+  // Clears edges consumed by a simulation step.
+  void consumePressed();
   void finishGpuWork();
   void swap();
   int requestedSwapInterval() const { return requestedSwapInterval_; }

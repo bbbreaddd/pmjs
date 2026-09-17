@@ -28,6 +28,7 @@
     "js/pmjs-mv/bitmap.js",
     "js/pmjs-mv/fpsmeter.js",
     "js/pmjs-mv/input.js",
+    "js/pmjs-mv/timing.js",
     "js/pmjs-mv/display.js",
     "js/pmjs-mv/render-prepare.js",
     "js/pmjs-mv/images.js",

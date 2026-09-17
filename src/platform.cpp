@@ -287,7 +287,9 @@ std::uint32_t Platform::inputState() const {
     (static_cast<std::uint32_t>(pressed_) << 16U);
 }
 
-void Platform::finishLogicStep() { pressed_ = 0; }
+void Platform::finishLogicStep() { consumePressed(); }
+
+void Platform::consumePressed() { pressed_ = 0; }
 
 void Platform::finishGpuWork() { glFinish(); }
 

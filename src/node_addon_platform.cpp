@@ -75,6 +75,13 @@ napi_value inputState(napi_env env, napi_callback_info) try {
   return nullptr;
 }
 
+napi_value inputConsumePressed(napi_env env, napi_callback_info) try {
+  host(env).platform.consumePressed();
+  return undefined(env);
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what()); return nullptr;
+}
+
 napi_value injectInput(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info, 1);
   host(env).core.injectInput(static_cast<std::uint16_t>(
@@ -96,6 +103,7 @@ void registerPlatformBindings(napi_env env, napi_value exports) {
   napi_value input = moduleObject(env);
   method(env, input, "down", inputDown);
   method(env, input, "pressed", inputPressed);
+  method(env, input, "consumePressed", inputConsumePressed);
   method(env, input, "state", inputState);
   method(env, input, "inject", injectInput);
   check(env, napi_set_named_property(env, exports, "fs", fs), "cannot export fs module");

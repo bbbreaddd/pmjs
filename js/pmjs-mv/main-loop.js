@@ -39,6 +39,11 @@
 
     updateNativeServices();
 
+    // Re-wrap late plugin replacements of updateMain.
+    if (typeof globalThis.pmjsMvEnsureTimingContract === 'function') {
+      globalThis.pmjsMvEnsureTimingContract();
+    }
+
     if (typeof globalThis.pmjsDrainScheduler === 'function') {
       globalThis.pmjsDrainScheduler(now);
     }
