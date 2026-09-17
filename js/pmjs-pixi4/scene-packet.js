@@ -119,7 +119,7 @@ function nativeSceneNodeRejected(node, particleContext) {
   // visibility/renderability, zero scale, and zero alpha do not affect which
   // slots are uploaded (static alpha may intentionally remain visible).
   if (particleContext) return false;
-  return (!node.visible || !node.renderable || node._hiding) ||
+  return (!node.visible || !node.renderable) ||
     node.alpha <= 0 ||
     typeof node._openness === 'number' && node._openness <= 0 ||
     !!(node.scale && (node.scale.x === 0 || node.scale.y === 0));
