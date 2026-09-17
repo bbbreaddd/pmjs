@@ -711,3 +711,152 @@ test('rect tile layers bypass rejection with retained records', () => {
   assert.deepEqual(packet.metadata.filter((_, index) => index % 7 === 0),
     [0, 0, 4]);
 });
+
+function trySubmitMaskStage(harness, stage) {
+  harness.submitted.length = 0;
+  harness.compatHits.length = 0;
+  const ok = harness.sandbox.submitNativeScene(stage);
+  return { ok, packet: harness.submitted[0] || null,
+    hits: harness.compatHits.slice() };
+}
+
+function alphaMaskGroups(packet) {
+  const groups = [];
+  for (let index = 0; index < packet.metadata.length; index += 7) {
+    if (packet.metadata[index] === 6 && packet.metadata[index + 4] === 3) {
+      groups.push(index / 7);
+    }
+  }
+  return groups;
+}
+
+function maskSprite(harness, width, height) {
+  const { sandbox, makeTexture } = harness;
+  const mask = new sandbox.PIXI.Sprite(makeTexture(width || 64, height || 64));
+  mask.visible = true;
+  return mask;
+}
+
+test('nested alpha masks stack without fallback', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const stage = new sandbox.PIXI.Container();
+  const maskA = maskSprite(harness);
+  const maskB = maskSprite(harness);
+  stage.addChild(maskA);
+  stage.addChild(maskB);
+  const outer = sprite();
+  outer.mask = maskA;
+  stage.addChild(outer);
+  const inner = sprite();
+  inner.mask = maskB;
+  outer.addChild(inner);
+  const result = trySubmitMaskStage(harness, stage);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.hits, []);
+  assert.equal(alphaMaskGroups(result.packet).length, 2);
+});
+
+test('rotated mask node stays on the alpha path', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const stage = new sandbox.PIXI.Container();
+  const mask = maskSprite(harness);
+  mask.x = 10;
+  mask.y = 20;
+  mask.transform.updateLocalTransform = function() {
+    this.localTransform = { a: 0, b: 1, c: -1, d: 0, tx: 10, ty: 20 };
+  };
+  stage.addChild(mask);
+  const masked = sprite();
+  masked.mask = mask;
+  stage.addChild(masked);
+  const result = trySubmitMaskStage(harness, stage);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.hits, []);
+  assert.equal(alphaMaskGroups(result.packet).length, 1);
+});
+
+test('mask and blur share one node without fallback', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const stage = new sandbox.PIXI.Container();
+  const mask = maskSprite(harness);
+  stage.addChild(mask);
+  const masked = sprite();
+  masked.mask = mask;
+  masked._filters = [new sandbox.PIXI.filters.BlurFilter(4, 1)];
+  stage.addChild(masked);
+  const result = trySubmitMaskStage(harness, stage);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.hits, []);
+  assert.equal(alphaMaskGroups(result.packet).length, 1);
+});
+
+test('one mask shared by sibling sprites emits per node', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const stage = new sandbox.PIXI.Container();
+  const mask = maskSprite(harness);
+  stage.addChild(mask);
+  const first = sprite();
+  first.mask = mask;
+  stage.addChild(first);
+  const second = sprite();
+  second.mask = mask;
+  stage.addChild(second);
+  const result = trySubmitMaskStage(harness, stage);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.hits, []);
+  assert.equal(alphaMaskGroups(result.packet).length, 2);
+});
+
+test('mask without pixels hides the node, not the frame', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const stage = new sandbox.PIXI.Container();
+  const empty = new sandbox.PIXI.Sprite(null);
+  empty.visible = true;
+  stage.addChild(empty);
+  const masked = sprite();
+  masked.mask = empty;
+  stage.addChild(masked);
+  const result = trySubmitMaskStage(harness, stage);
+  assert.equal(result.ok, true);
+  assert.equal(result.hits.length, 1);
+  assert.equal(result.hits[0][0], 'render.mask');
+  assert.equal(alphaMaskGroups(result.packet).length, 0);
+});
+
+test('rotated window children render unclipped', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const layer = new sandbox.WindowLayer();
+  const dialog = new sandbox.Window();
+  dialog._isWindow = true;
+  dialog.visible = true;
+  dialog._openness = 255;
+  dialog._updateCursor = () => {};
+  dialog._updateArrows = () => {};
+  dialog._updatePauseSign = () => {};
+  dialog._updateContents = () => {};
+  dialog.width = 400;
+  dialog.height = 150;
+  dialog.x = 100;
+  dialog.y = 400;
+  dialog.transform.updateLocalTransform = function() {
+    this.localTransform = { a: 0, b: 1, c: -1, d: 0, tx: 100, ty: 400 };
+  };
+  const bust = sprite();
+  bust.x = -60;
+  bust.y = -220;
+  dialog.addChild(bust);
+  layer.addChild(dialog);
+  const packet = submitOnly(harness, layer);
+  const flags = packet.metadata.filter((_, index) => index % 7 === 5);
+  assert.ok(flags.length >= 2);
+  for (const flag of flags) {
+    assert.equal(flag & 1, 0);
+  }
+  assert.equal(alphaMaskGroups(packet).length, 0);
+});

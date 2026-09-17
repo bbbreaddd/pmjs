@@ -44,10 +44,9 @@ function resolveNativeAdvancedEffects(node, particleContext, activeFilters,
   var nativeMask = !particleContext && nodeMask && !maskClip ?
     nativeAlphaMask(nodeMask) : null;
   if (!particleContext && nodeMask && !nativeClip && !nativeMask) {
+    // Stock hides content with a pixel-less mask; skip the node, not the frame.
     nativeCompatibilityHit('render.mask',
       node.constructor && node.constructor.name || 'node');
-    nativeSceneUnsupported = true;
-    nativeSceneUnsupportedReason = (node.constructor && node.constructor.name || 'node') + ':mask';
     return null;
   }
   var nativeMasks = [];

@@ -2,47 +2,6 @@ function nativeSceneTraversesChild(kind, node, child) {
   return kind !== 3 || child !== node._graphics;
 }
 
-function nativeWindowClip(window) {
-  var openness = Math.max(0, Math.min(255, Number(window._openness) || 0));
-  var height = Math.max(0, Number(window.height) || 0) * openness / 255;
-  var world = nativeMaskWorldTransform(window);
-  if (Math.abs(world.b) > 0.000001 || Math.abs(world.c) > 0.000001) return null;
-  var localTop = ((Number(window.height) || 0) - height) / 2;
-  var left = world.tx;
-  var right = world.tx + world.a * Math.max(0, Number(window.width) || 0);
-  var top = world.ty + world.d * localTop;
-  var bottom = world.ty + world.d * (localTop + height);
-  return { left: Math.min(left, right), top: Math.min(top, bottom),
-    right: Math.max(left, right), bottom: Math.max(top, bottom) };
-}
-
-var nativeWindowMaskCanvas = null;
-function nativeWindowMask(window) {
-  var openness = Math.max(0, Math.min(255, Number(window._openness) || 0));
-  var width = Math.max(0, Number(window.width) || 0);
-  var height = Math.max(0, Number(window.height) || 0) * openness / 255;
-  if (width <= 0 || height <= 0) return null;
-  var world = nativeMaskWorldTransform(window);
-  var determinant = world.a * world.d - world.b * world.c;
-  if (!Number.isFinite(determinant) || Math.abs(determinant) < 0.000001) return null;
-  var inverse = [world.d / determinant, -world.b / determinant,
-    -world.c / determinant, world.a / determinant, 0, 0];
-  inverse[4] = -(inverse[0] * world.tx + inverse[2] * world.ty);
-  inverse[5] = -(inverse[1] * world.tx + inverse[3] * world.ty);
-  var localTop = ((Number(window.height) || 0) - height) / 2;
-  if (!nativeWindowMaskCanvas) {
-    nativeWindowMaskCanvas = new CanvasElement();
-    nativeWindowMaskCanvas.width = 1;
-    nativeWindowMaskCanvas.height = 1;
-    nativeWindowMaskCanvas.getContext('2d').fillRect(0, 0, 1, 1);
-  }
-  return { handle: nativeWindowMaskCanvas._ensureNativeCanvas().handle,
-    transform: [inverse[0], inverse[1], inverse[2], inverse[3],
-      inverse[4], inverse[5] - localTop],
-    frame: [0, 0, 1, 1], alpha: 1, usesRed: false, rotation: 0,
-    size: [width, height] };
-}
-
 function nativeSceneBlendMode(node) {
   var mode = Number(node && node.blendMode) || 0;
   if (mode >= 0 && mode <= 3) return mode;
@@ -557,19 +516,7 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
           windowChild._openness > 0) {
         // Stock clips only the clear, never window children; openness is
         // already encoded via container scale and contents visibility.
-        if (nativeWindowClip(windowChild)) {
-          writeNativeSceneNode(windowChild, nodeIndex);
-        } else {
-          var windowMask = nativeWindowMask(windowChild);
-          if (!windowMask) {
-            nativeCompatibilityHit('render.window-mask',
-              windowChild.constructor && windowChild.constructor.name || 'window');
-            nativeSceneUnsupported = true;
-            nativeSceneUnsupportedReason = 'WindowLayer:window-mask';
-            return;
-          }
-          writeNativeSceneNode(windowChild, nodeIndex, null, windowMask);
-        }
+        writeNativeSceneNode(windowChild, nodeIndex);
       }
     }
     for (var otherIndex = 0; otherIndex < node.children.length; otherIndex++) {
