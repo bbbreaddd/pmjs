@@ -247,6 +247,15 @@ function queueNativeRectTileLayer(layer) {
   nativeTileRects += points.length / 9;
 }
 
+function nativeTilePointsUnchanged(layer, points) {
+  var staging = layer._pmjsNativePointStaging;
+  if (!staging || staging.length !== points.length) return false;
+  for (var index = 0; index < points.length; index++) {
+    if (staging[index] !== points[index]) return false;
+  }
+  return true;
+}
+
 function ensureNativeRectTileLayer(layer) {
   var points = layer.pointsBuf;
   var textures = layer.textures;
@@ -283,25 +292,33 @@ function ensureNativeRectTileLayer(layer) {
   if (!usePersistentCache || !layer._pmjsNativeLayer ||
       layer._pmjsNativeCompiledGeneration !== generation ||
       layer._pmjsNativeTextureSignature !== textureSignature) {
-    if (layer._pmjsNativeLayer) {
-      NativeHost.render.releaseTileLayer(layer._pmjsNativeLayer);
-    }
-    var transferredPoints = points;
-    if (typeof pmjsOptimizationEnabled !== 'function' ||
-        pmjsOptimizationEnabled('tilemap.bulk-layer-transfer')) {
-      var staging = layer._pmjsNativePointStaging;
-      if (!staging || staging.length !== points.length) {
-        staging = layer._pmjsNativePointStaging = new Float32Array(points.length);
+    if (usePersistentCache && layer._pmjsNativeLayer &&
+        layer._pmjsNativeTextureSignature === textureSignature &&
+        nativeTilePointsUnchanged(layer, points)) {
+      // Generation is only a dirty hint: repaints often rewrite identical
+      // points, so adopt it without tearing down the native layer.
+      layer._pmjsNativeCompiledGeneration = generation;
+    } else {
+      if (layer._pmjsNativeLayer) {
+        NativeHost.render.releaseTileLayer(layer._pmjsNativeLayer);
       }
-      for (var pointIndex = 0; pointIndex < points.length; pointIndex++) {
-        staging[pointIndex] = points[pointIndex];
+      var transferredPoints = points;
+      if (typeof pmjsOptimizationEnabled !== 'function' ||
+          pmjsOptimizationEnabled('tilemap.bulk-layer-transfer')) {
+        var staging = layer._pmjsNativePointStaging;
+        if (!staging || staging.length !== points.length) {
+          staging = layer._pmjsNativePointStaging = new Float32Array(points.length);
+        }
+        for (var pointIndex = 0; pointIndex < points.length; pointIndex++) {
+          staging[pointIndex] = points[pointIndex];
+        }
+        transferredPoints = staging;
       }
-      transferredPoints = staging;
+      layer._pmjsNativeLayer = NativeHost.render.createTileLayer(
+        transferredPoints, handles);
+      layer._pmjsNativeCompiledGeneration = generation;
+      layer._pmjsNativeTextureSignature = textureSignature;
     }
-    layer._pmjsNativeLayer = NativeHost.render.createTileLayer(
-      transferredPoints, handles);
-    layer._pmjsNativeCompiledGeneration = generation;
-    layer._pmjsNativeTextureSignature = textureSignature;
   }
   return layer._pmjsNativeLayer;
 }

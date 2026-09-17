@@ -136,6 +136,41 @@ test('tilemap.persistent-layer-cache recompiles every frame when disabled', () =
   assert.equal(calls.releaseTileLayer, 1);
 });
 
+test('tilemap generation bump with identical points skips recompile', () => {
+  const { context, calls } = loadScenePrimitives();
+  const layer = tileLayer();
+  const first = callIn(context, 'ensureNativeRectTileLayer(layer)', 'layer', layer);
+  assert.equal(calls.createTileLayer, 1);
+  // Animated repaints clear and rewrite identical points every tick.
+  layer._pmjsNativeGeneration++;
+  const second = callIn(context, 'ensureNativeRectTileLayer(layer)', 'layer', layer);
+  assert.equal(calls.createTileLayer, 1);
+  assert.equal(calls.releaseTileLayer, 0);
+  assert.equal(first, second);
+  // A real point change still recompiles.
+  layer._pmjsNativeGeneration++;
+  layer.pointsBuf[0] = 4;
+  const third = callIn(context, 'ensureNativeRectTileLayer(layer)', 'layer', layer);
+  assert.equal(calls.createTileLayer, 2);
+  assert.equal(calls.releaseTileLayer, 1);
+  assert.notEqual(third, first);
+  // A texture change still recompiles.
+  layer._pmjsNativeGeneration++;
+  layer.textures = [{ baseTexture: { source: { _nativeImage: { handle: 8 } } },
+    width: 16, height: 16 }];
+  callIn(context, 'ensureNativeRectTileLayer(layer)', 'layer', layer);
+  assert.equal(calls.createTileLayer, 3);
+  assert.equal(calls.releaseTileLayer, 2);
+
+  const disabled = loadScenePrimitives(
+    { disableOptimizations: ['tilemap.persistent-layer-cache'] });
+  const other = tileLayer();
+  callIn(disabled.context, 'ensureNativeRectTileLayer(other)', 'other', other);
+  other._pmjsNativeGeneration++;
+  callIn(disabled.context, 'ensureNativeRectTileLayer(other)', 'other', other);
+  assert.equal(disabled.calls.createTileLayer, 2);
+});
+
 test('tilemap layer keeps eligibility checks when enabled', () => {
   const { context, calls } = loadScenePrimitives();
   const empty = { pointsBuf: [], textures: [] };
