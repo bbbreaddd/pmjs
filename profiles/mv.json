@@ -13,6 +13,7 @@
     "js/pmjs-web/modules.js",
     "js/pmjs-plugins/greenworks/compat.js",
     "js/pmjs-plugins/steamworks/compat.js",
+    "js/pmjs-plugins/yanfly/slippery-tiles.js",
     "js/pmjs-web/canvas.js",
     "js/pmjs-web/object-urls.js",
     "js/pmjs-web/elements.js",
