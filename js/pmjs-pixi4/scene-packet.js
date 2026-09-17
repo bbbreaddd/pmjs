@@ -555,8 +555,11 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
       var windowChild = node.children[windowIndex];
       if (windowChild && windowChild._isWindow && windowChild.visible &&
           windowChild._openness > 0) {
-        var windowClip = nativeWindowClip(windowChild);
-        if (!windowClip) {
+        // Stock clips only the clear, never window children; openness is
+        // already encoded via container scale and contents visibility.
+        if (nativeWindowClip(windowChild)) {
+          writeNativeSceneNode(windowChild, nodeIndex);
+        } else {
           var windowMask = nativeWindowMask(windowChild);
           if (!windowMask) {
             nativeCompatibilityHit('render.window-mask',
@@ -566,8 +569,6 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
             return;
           }
           writeNativeSceneNode(windowChild, nodeIndex, null, windowMask);
-        } else {
-          writeNativeSceneNode(windowChild, nodeIndex, windowClip);
         }
       }
     }

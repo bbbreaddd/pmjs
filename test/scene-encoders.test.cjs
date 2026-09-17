@@ -651,8 +651,37 @@ test('forced clip and mask thread through traversal', () => {
   assert.equal(masked.metadata[0 * 7 + 2], 555);
 });
 
-test('particle children upload sprite fields without dispatch', () => {
+test('window children render unclipped like stock WindowLayer', () => {
   const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const layer = new sandbox.WindowLayer();
+  const dialog = new sandbox.Window();
+  dialog._isWindow = true;
+  dialog.visible = true;
+  dialog._openness = 255;
+  // Window preparation expects MV window methods.
+  dialog._updateCursor = () => {};
+  dialog._updateArrows = () => {};
+  dialog._updatePauseSign = () => {};
+  dialog._updateContents = () => {};
+  dialog.width = 400;
+  dialog.height = 150;
+  dialog.x = 100;
+  dialog.y = 400;
+  const bust = sprite();
+  bust.x = -60;
+  bust.y = -220;
+  dialog.addChild(bust);
+  layer.addChild(dialog);
+  const packet = submitOnly(harness, layer);
+  const flags = packet.metadata.filter((_, index) => index % 7 === 5);
+  assert.ok(flags.length >= 2);
+  for (const flag of flags) {
+    assert.equal(flag & 1, 0);
+  }
+});
+
+test('particle children upload sprite fields without dispatch', () => {  const harness = makeHarness();
   const { sandbox, sprite } = harness;
   const root = new sandbox.PIXI.Container();
   const container = new sandbox.PIXI.particles.ParticleContainer();
