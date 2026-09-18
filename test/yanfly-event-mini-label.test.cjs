@@ -40,7 +40,8 @@ function makeHost({
   taggedPages = [],
   env = {},
   disableOptimizations = [],
-  useAutonomousFallback = false
+  useAutonomousFallback = false,
+  classifyCounter = null
 } = {}) {
   const calls = { constructed: 0, original: 0 };
   const hooks = {};
@@ -79,6 +80,7 @@ function makeHost({
   if (!useAutonomousFallback) {
     context.__pmjsBuiltinRequire = () => ({
       pageHasMiniLabel(character) {
+        if (classifyCounter) classifyCounter.count++;
         const page = character.event().pages[character._pageIndex];
         return taggedPages.includes(page);
       }
@@ -168,6 +170,26 @@ test('page change from untagged to tagged constructs', () => {
   sprite.setupMiniLabel();
   assert.ok(sprite._miniLabel);
   assert.equal(context.calls.constructed, 1);
+});
+
+test('interleaved sprites on different pages classify once each', () => {
+  // A shared closure cache is defeated by interleaved multi-sprite updates:
+  // every sprite on a different page replaces the key and forces a
+  // re-classify on every frame. Per-sprite state classifies once per page.
+  const classifyCounter = { count: 0 };
+  const pageA = { id: 'a' };
+  const pageB = { id: 'b' };
+  const context = makeHost({ taggedPages: [], classifyCounter });
+  const spriteA = eventSprite(context, pageA).sprite;
+  const spriteB = eventSprite(context, pageB).sprite;
+  for (let i = 0; i < 3; i++) {
+    spriteA.setupMiniLabel();
+    spriteB.setupMiniLabel();
+  }
+  assert.equal(classifyCounter.count, 2);
+  assert.equal(spriteA._miniLabel, undefined);
+  assert.equal(spriteB._miniLabel, undefined);
+  assert.equal(context.calls.constructed, 0);
 });
 
 test('non-event characters keep the reference path', () => {

@@ -130,18 +130,18 @@
         fnBody(spriteProto.setupMiniLabel) !== KNOWN_BODY) return false;
 
     var original = spriteProto.setupMiniLabel;
-    var negative = { key: null, fresh: false };
 
     spriteProto.setupMiniLabel = function() {
       if (!this._miniLabel) {
         var key = pageKey(this._character);
         if (key !== undefined) {
-          if (!negative.fresh || negative.key !== key) {
+          var state = this._pmjsMiniLabelState;
+          if (!state || state.key !== key) {
             var tagged = classify(this._character);
             if (tagged === null) return original.apply(this, arguments);
-            negative = { key: key, fresh: true, tagged: tagged };
+            state = this._pmjsMiniLabelState = { key: key, tagged: tagged };
           }
-          if (negative.tagged === false) return;
+          if (state.tagged === false) return;
         }
       }
       return original.apply(this, arguments);
