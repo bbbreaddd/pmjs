@@ -3,13 +3,13 @@
 const assert = require('node:assert/strict');
 const childProcess = require('node:child_process');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const { temporaryDirectory } = require('./helpers/temp.cjs');
 
 const tool = path.resolve(__dirname, '../tools/build-js-runtime.mjs');
 test('bundle generation is deterministic and confined to the explicit root', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-bundle-'));
+  const root = temporaryDirectory('pmjs-bundle-');
   fs.writeFileSync(path.join(root, 'a.js'), 'one();\n');
   fs.writeFileSync(path.join(root, 'manifest.json'), JSON.stringify({ modules: ['a.js'] }));
   const args = [tool, '--root', root, '--manifest', 'manifest.json', '--output', 'out.js'];
@@ -23,7 +23,7 @@ test('bundle generation is deterministic and confined to the explicit root', () 
 });
 
 test('bundle generation supports --profile with JSON --config and --compat', () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-profile-'));
+  const tempDir = temporaryDirectory('pmjs-profile-');
   const config = path.join(tempDir, 'config.json');
   const compat = path.join(tempDir, 'compat.js');
   const out = path.join(tempDir, 'out.js');
@@ -47,7 +47,7 @@ test('bundle generation supports --profile with JSON --config and --compat', () 
 });
 
 test('bundle validates disableOptimizations shape and orders the registry first', () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-opt-config-'));
+  const tempDir = temporaryDirectory('pmjs-opt-config-');
   const good = path.join(tempDir, 'good.json');
   const out = path.join(tempDir, 'out.js');
   fs.writeFileSync(good, JSON.stringify({
@@ -78,7 +78,7 @@ test('bundle validates disableOptimizations shape and orders the registry first'
 
 test('bundle generation rejects duplicate modules', () => {
   const root = path.resolve(__dirname, '..');
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-dupe-'));
+  const tempDir = temporaryDirectory('pmjs-dupe-');
   const manifest = path.join(tempDir, 'manifest.json');
   const out = path.join(tempDir, 'out.js');
 
@@ -94,7 +94,7 @@ test('bundle generation rejects duplicate modules', () => {
 
 test('manifest extends profile with custom modules', () => {
   const root = path.resolve(__dirname, '..');
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-extends-'));
+  const tempDir = temporaryDirectory('pmjs-extends-');
   const manifest = path.join(tempDir, 'manifest.json');
   const out = path.join(tempDir, 'out.js');
   const customModule = path.join(root, 'custom-addon-temp.js');

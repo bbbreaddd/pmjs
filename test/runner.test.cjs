@@ -3,14 +3,14 @@
 const assert = require('node:assert/strict');
 const childProcess = require('node:child_process');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { parse } = require('../runner/cli.cjs');
 const { run, validate, parseTimingConfig, resolveSwapDefault } = require('../runner/index.cjs');
+const { temporaryDirectory } = require('./helpers/temp.cjs');
 
 function fixture(source) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-runner-'));
+  const root = temporaryDirectory('pmjs-runner-');
   const bootstrap = path.join(root, 'bootstrap.js');
   fs.writeFileSync(bootstrap, source);
   return { addon: path.join(root, 'addon.node'), gameRoot: root, bootstrap,
@@ -42,7 +42,7 @@ test('validation rejects missing paths and invalid dimensions', () => {
     imageWarmCacheBytes: 0 }).imageWarmCacheBytes, 0);
 });
 test('validation auto-detects title and dimensions from config or package.json', () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-runner-config-'));
+  const tempDir = temporaryDirectory('pmjs-runner-config-');
   const configJson = path.join(tempDir, 'config.json');
   fs.writeFileSync(configJson, JSON.stringify({
     title: 'JSON Title',
@@ -53,7 +53,7 @@ test('validation auto-detects title and dimensions from config or package.json',
   assert.equal(v1.width, 1280);
   assert.equal(v1.height, 720);
 
-  const pkgDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-runner-pkg-'));
+  const pkgDir = temporaryDirectory('pmjs-runner-pkg-');
   fs.writeFileSync(path.join(pkgDir, 'package.json'), JSON.stringify({
     name: 'Package Name',
     window: { title: 'Package Window Title', width: 960, height: 540 }
@@ -63,7 +63,7 @@ test('validation auto-detects title and dimensions from config or package.json',
   assert.equal(v2.width, 960);
   assert.equal(v2.height, 540);
 
-  const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-runner-empty-'));
+  const emptyDir = temporaryDirectory('pmjs-runner-empty-');
   const v3 = validate({ addon: 'a', gameRoot: emptyDir, bootstrap: 'b', saveRoot: 's' });
   assert.equal(v3.title, 'pmjs native runtime');
   assert.equal(v3.width, 816);
@@ -76,7 +76,7 @@ test('validation rejects missing or malformed explicit config', () => {
     config: '/nonexistent-config-file.json'
   }), /config file not found/);
 
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-runner-bad-'));
+  const tempDir = temporaryDirectory('pmjs-runner-bad-');
   const badJson = path.join(tempDir, 'bad.json');
   fs.writeFileSync(badJson, '{ bad json');
   assert.throws(() => validate({
@@ -92,7 +92,7 @@ test('validation rejects missing or malformed explicit config', () => {
   }), /error evaluating config file/);
 });
 test('validation rejects malformed disableOptimizations but keeps well-formed ports', () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-runner-opt-'));
+  const tempDir = temporaryDirectory('pmjs-runner-opt-');
   const bad = path.join(tempDir, 'bad.json');
   fs.writeFileSync(bad, JSON.stringify({ disableOptimizations: ['terrax.native-lighting', 7] }));
   assert.throws(() => validate({
@@ -108,7 +108,7 @@ test('validation rejects malformed disableOptimizations but keeps well-formed po
 });
 
 test('unknown port optimization IDs fail the run at startup', async () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-runner-unknown-opt-'));
+  const tempDir = temporaryDirectory('pmjs-runner-unknown-opt-');
   const config = path.join(tempDir, 'config.json');
   fs.writeFileSync(config, JSON.stringify({ disableOptimizations: ['terrax.nativeLight'] }));
   const manifest = path.join(tempDir, 'manifest.json');

@@ -2,13 +2,13 @@
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { createStorage } = require('../runner/storage.cjs');
+const { temporaryDirectory } = require('./helpers/temp.cjs');
 
 test('storage writes atomically and rejects paths outside its root', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-storage-'));
+  const root = temporaryDirectory('pmjs-storage-');
   const storage = createStorage(root);
   storage.writeText('slot/1.rpgsave', 'saved');
   assert.equal(storage.readText('slot/1.rpgsave'), 'saved');
