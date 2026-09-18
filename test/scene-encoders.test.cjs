@@ -758,6 +758,42 @@ test('particle children upload sprite fields without dispatch', () => {  const h
     { filterPlans: 0, rectMasks: 0, alphaMasks: 0 });
 });
 
+test('particle children carry tone and blend colors regardless of attachment timing', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const root = new sandbox.PIXI.Container();
+  const container = new sandbox.PIXI.particles.ParticleContainer();
+
+  // Child 1: tone applied before attachment
+  const childBefore = sprite();
+  childBefore._colorTone = [68, -34, 0, 255];
+  childBefore._blendColor = [255, 0, 0, 128];
+  container.addChild(childBefore);
+
+  // Child 2: added to container, then tone applied
+  const childAfter = sprite();
+  container.addChild(childAfter);
+  childAfter._colorTone = [-100, 50, 0, 64];
+  childAfter._blendColor = [0, 255, 0, 64];
+
+  root.addChild(container);
+  const packet = submitOnly(harness, root);
+
+  // Node 0: root, Node 1: container, Node 2: childBefore, Node 3: childAfter
+  assert.deepEqual(packet.metadata.filter((_, index) => index % 7 === 0),
+    [0, 0, 1, 1]);
+  assert.equal(packet.metadata[2 * 7 + 5] & 16, 16);
+  assert.equal(packet.metadata[3 * 7 + 5] & 16, 16);
+  assert.deepEqual(
+    [2 * 41 + 33, 2 * 41 + 34, 2 * 41 + 35, 2 * 41 + 36, 2 * 41 + 37, 2 * 41 + 40].map(offset =>
+      packet.values[offset]),
+    [68, -34, 0, 255, 255, 128].map(value => Math.fround(value / 255)));
+  assert.deepEqual(
+    [3 * 41 + 33, 3 * 41 + 34, 3 * 41 + 35, 3 * 41 + 36, 3 * 41 + 37, 3 * 41 + 40].map(offset =>
+      packet.values[offset]),
+    [-100, 50, 0, 64, 0, 64].map(value => Math.fround(value / 255)));
+});
+
 test('rect tile layers bypass rejection with retained records', () => {
   const harness = makeHarness();
   const { sandbox, makeTexture } = harness;

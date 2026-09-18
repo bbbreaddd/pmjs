@@ -410,13 +410,13 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
     // RPG Maker MV's Sprite._refresh replaces the base texture with
     // _tintTexture after applying these values to a CPU canvas. Do not apply
     // the same operation again in the native shader.
-    var cpuTinted = !particleContext && node._tintTexture && texture &&
+    var cpuTinted = node._tintTexture && texture &&
       texture.baseTexture === node._tintTexture;
     if (cpuTinted && typeof nativeMaterializationStats !== 'undefined') {
       nativeMaterializationStats.cpuTintedSprites++;
     }
-    var colorTone = particleContext || cpuTinted ? null : node._colorTone;
-    var blendColor = particleContext || cpuTinted ? null : node._blendColor;
+    var colorTone = cpuTinted ? null : node._colorTone;
+    var blendColor = cpuTinted ? null : node._blendColor;
     if ((colorTone && (colorTone[0] || colorTone[1] || colorTone[2] ||
          colorTone[3])) || (blendColor && blendColor[3] > 0)) {
       if (typeof nativeMaterializationStats !== 'undefined') {

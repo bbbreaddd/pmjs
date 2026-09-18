@@ -83,3 +83,49 @@ if (globalThis.Sprite && Sprite.prototype &&
   };
   Sprite.prototype._pmjsTraceExecuteTint = true;
 }
+
+if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
+    typeof PMJS.optimizations.register === 'function') {
+  PMJS.optimizations.register({
+    id: 'sprite.native-tint',
+    owner: 'pmjs-mv',
+    fallback: 'Stock Canvas 2D Sprite._executeTint pixel passes'
+  });
+}
+
+function installNativeSpriteTint() {
+  if (typeof Sprite === 'undefined' || !Sprite.prototype ||
+      typeof Sprite.prototype._refresh !== 'function' ||
+      Sprite.prototype._pmjsNativeSpriteTintInstalled) {
+    return false;
+  }
+  var stockRefresh = Sprite.prototype._refresh;
+  var neutralTone = [0, 0, 0, 0];
+  var neutralBlend = [0, 0, 0, 0];
+  Sprite.prototype._refresh = function() {
+    if (this._pmjsNativeSpriteTint !== false &&
+        (typeof pmjsOptimizationEnabled !== 'function' ||
+         pmjsOptimizationEnabled('sprite.native-tint'))) {
+      var tone = this._colorTone;
+      var blend = this._blendColor;
+      var hasTone = tone && (tone[0] || tone[1] || tone[2] || tone[3]);
+      var hasBlend = blend && blend[3] > 0;
+      if (hasTone || hasBlend) {
+        this._colorTone = neutralTone;
+        this._blendColor = neutralBlend;
+        try {
+          return stockRefresh.apply(this, arguments);
+        } finally {
+          this._colorTone = tone;
+          this._blendColor = blend;
+        }
+      }
+    }
+    return stockRefresh.apply(this, arguments);
+  };
+  Sprite.prototype._pmjsNativeSpriteTintInstalled = true;
+  return true;
+}
+
+installNativeSpriteTint();
+globalThis.pmjsInstallNativeSpriteTint = installNativeSpriteTint;

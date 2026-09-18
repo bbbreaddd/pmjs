@@ -782,13 +782,13 @@ constexpr const char* fragmentSource = R"(
       sampleColor.rgb *= 1.0 + (pixiFilterParameters[4] - 1.0) * power * fade;
     }
     if (spriteColorEnabled && sampleColor.a > 0.0) {
-      vec3 straightColor = clamp(sampleColor.rgb + spriteColorTone.rgb,
-                                 0.0, 1.0);
+      vec3 straightColor = sampleColor.rgb / sampleColor.a;
       float gray = dot(straightColor, vec3(0.299, 0.587, 0.114));
       straightColor = mix(straightColor, vec3(gray), spriteColorTone.a);
+      straightColor = clamp(straightColor + spriteColorTone.rgb, 0.0, 1.0);
       straightColor = mix(straightColor, spriteBlendColor.rgb,
                           spriteBlendColor.a);
-      sampleColor.rgb = straightColor;
+      sampleColor.rgb = straightColor * sampleColor.a;
     }
     outputColor = sampleColor * vertexColor;
     if (colorMatrixEnabled) {
@@ -950,13 +950,13 @@ constexpr const char* spriteEffectFragmentSource = R"(
         vertexUvClamp.xy, vertexUvClamp.zw)) * 0.049405;
     }
     if (spriteColorEnabled && sampleColor.a > 0.0) {
-      vec3 straightColor = clamp(sampleColor.rgb + spriteColorTone.rgb,
-                                 0.0, 1.0);
+      vec3 straightColor = sampleColor.rgb / sampleColor.a;
       float gray = dot(straightColor, vec3(0.299, 0.587, 0.114));
       straightColor = mix(straightColor, vec3(gray), spriteColorTone.a);
+      straightColor = clamp(straightColor + spriteColorTone.rgb, 0.0, 1.0);
       straightColor = mix(straightColor, spriteBlendColor.rgb,
                           spriteBlendColor.a);
-      sampleColor.rgb = straightColor;
+      sampleColor.rgb = straightColor * sampleColor.a;
     }
     outputColor = sampleColor * vertexColor;
     if (maskEnabled) {
