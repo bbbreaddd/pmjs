@@ -19,6 +19,10 @@ function nativeNodeNeedsAdvancedEffects(enabledFilterCount, nodeMask,
 var nativeEffectClip = null;
 var nativeEffectAlphaMask = null;
 
+function nativeFilterGroupPreservesTransparentBounds(group) {
+  return !!group && group.preservesTransparentBlack === true;
+}
+
 // Filter planning, then rectangle clips and alpha masks, then mask and
 // picture-blend groups around the node's own filter groups. Returns the
 // plan, or null when the node is rejected (flags already recorded).
@@ -36,9 +40,12 @@ function resolveNativeAdvancedEffects(node, particleContext, activeFilters,
       (node.constructor && node.constructor.name || 'node') + ':filter';
     return null;
   }
-  // A scissor is exact only while no post-mask filter can expand or transform
-  // pixels. Pixi pops its mask before applying the filter chain.
-  var maskClip = !particleContext && nodeMask && !filterPlan.groups.length ?
+  // A scissor is exact while no post-mask filter can expand or transform
+  // geometry (e.g. blur, displacement) or introduce alpha on transparent
+  // black pixels after the mask was popped.
+  var canKeepRectangleMask = !filterPlan.groups.length ||
+    filterPlan.groups.every(nativeFilterGroupPreservesTransparentBounds);
+  var maskClip = !particleContext && nodeMask && canKeepRectangleMask ?
     nativeRectangleMask(nodeMask) : null;
   var nativeClip = nativeIntersectClip(forcedClip, maskClip);
   var nativeMask = !particleContext && nodeMask && !maskClip ?

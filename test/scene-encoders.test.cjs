@@ -113,6 +113,18 @@ function makeHarness() {
       this.blur = blur; this.quality = quality || 1; this.enabled = true;
     }
   }
+  class ColorMatrixFilter {
+    constructor(matrix) {
+      this.matrix = matrix || [
+        1, 0, 0, 0, 0,
+        0, 1, 0, 0, 0,
+        0, 0, 1, 0, 0,
+        0, 0, 0, 1, 0
+      ];
+      this.alpha = 1;
+      this.enabled = true;
+    }
+  }
 
   function makeTexture(width, height) {
     const handle = nextHandle++;
@@ -144,7 +156,7 @@ function makeHarness() {
       extras: { TilingSprite }, mesh: { Mesh },
       particles: { ParticleContainer }, tilemap: {},
       SCALE_MODES: { LINEAR: 0, NEAREST: 1 },
-      filters: { BlurFilter }, DisplayObject: Container,
+      filters: { BlurFilter, ColorMatrixFilter }, DisplayObject: Container,
       Texture: { EMPTY: null } },
     ScreenSprite, Tilemap, Window, WindowLayer, CanvasElement,
     nativeCompatibilityHit(kind, detail) {
@@ -959,4 +971,88 @@ test('rotated window children render unclipped', () => {
     assert.equal(flag & 1, 0);
   }
   assert.equal(alphaMaskGroups(packet).length, 0);
+});
+
+test('rectangular mask with colorMatrix filter preserves scissor and avoids alphaMask', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const stage = new sandbox.PIXI.Container();
+  const masked = sprite();
+  const mask = new sandbox.PIXI.Graphics();
+  mask.graphicsData = [{ fill: true, fillColor: 0xffffff, fillAlpha: 1,
+    lineWidth: 0, holes: [],
+    shape: new sandbox.PIXI.Rectangle(0, 0, 100, 50) }];
+  mask._localBounds = { x: 0, y: 0, width: 100, height: 50 };
+  masked.mask = mask;
+  // Non-identity colorMatrix filter
+  const matrix = [
+    0.5, 0, 0, 0, 0,
+    0, 0.5, 0, 0, 0,
+    0, 0, 0.5, 0, 0,
+    0, 0, 0, 1, 0
+  ];
+  masked._filters = [new sandbox.PIXI.filters.ColorMatrixFilter(matrix)];
+  stage.addChild(masked);
+  const packet = submitOnly(harness, stage);
+  // Counts verify: filter was planned, rectangle mask was processed, but NO alphaMask was created.
+  assert.deepEqual(harness.counts,
+    { filterPlans: 1, rectMasks: 1, alphaMasks: 0 });
+  // Node tree: stage (container 0), filterBegin (6), masked sprite (1), filterEnd (7). No alphaMask (3).
+  assert.deepEqual(packet.metadata.filter((_, index) => index % 7 === 0),
+    [0, 6, 1, 7]);
+  // The filter marker is kind 25 (colorMatrix)
+  assert.equal(packet.metadata[1 * 7 + 4], 25);
+  // The masked sprite carries the scissor clip flag
+  assert.equal(packet.metadata[2 * 7 + 5] & 1, 1);
+  // And no alphaMask groups were generated
+  assert.equal(alphaMaskGroups(packet).length, 0);
+});
+
+test('rectangular mask with colorMatrix acquiring alpha (m19 !== 0) stays on alphaMask path', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const stage = new sandbox.PIXI.Container();
+  const masked = sprite();
+  const mask = new sandbox.PIXI.Graphics();
+  mask.graphicsData = [{ fill: true, fillColor: 0xffffff, fillAlpha: 1,
+    lineWidth: 0, holes: [],
+    shape: new sandbox.PIXI.Rectangle(0, 0, 100, 50) }];
+  mask._localBounds = { x: 0, y: 0, width: 100, height: 50 };
+  masked.mask = mask;
+  // ColorMatrix with m19 !== 0 (e.g. constant alpha offset that makes transparent pixels visible)
+  const matrix = [
+    1, 0, 0, 0, 0,
+    0, 1, 0, 0, 0,
+    0, 0, 1, 0, 0,
+    0, 0, 0, 1, 0.5
+  ];
+  masked._filters = [new sandbox.PIXI.filters.ColorMatrixFilter(matrix)];
+  stage.addChild(masked);
+  const packet = submitOnly(harness, stage);
+  // Counts verify: rectangle mask is NOT kept as scissor; falls back to alphaMask
+  assert.deepEqual(harness.counts,
+    { filterPlans: 1, rectMasks: 0, alphaMasks: 1 });
+  // Node tree: stage (0), colorMatrix (6), alphaMask (6), masked sprite (1), filterEnd (7), filterEnd (7)
+  assert.deepEqual(packet.metadata.filter((_, index) => index % 7 === 0),
+    [0, 6, 6, 1, 7, 7]);
+  assert.equal(alphaMaskGroups(packet).length, 1);
+});
+
+test('disjoint clip intersection normalizes to a zero-area clip without rejection', () => {
+  const harness = makeHarness();
+  const { sprite } = harness;
+  const stage = sprite();
+  const leftClip = { left: 0, top: 0, right: 50, bottom: 50 };
+  const rightClip = { left: 100, top: 100, right: 150, bottom: 150 };
+  const intersected = harness.sandbox.nativeIntersectClip(leftClip, rightClip);
+  assert.equal(intersected.left, 100);
+  assert.equal(intersected.top, 100);
+  assert.equal(intersected.right, 100);
+  assert.equal(intersected.bottom, 100);
+  // Valid zero-area clips submit cleanly without native rejection
+  const packet = directPacket(harness, stage, intersected, null);
+  assert.equal(packet.metadata[0 * 7 + 5] & 1, 1);
+  assert.deepEqual(
+    [packet.values[17], packet.values[18], packet.values[19], packet.values[20]],
+    [100, 100, 100, 100]);
 });

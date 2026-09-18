@@ -58,10 +58,13 @@ function nativeNodeRenderType(node) {
 function nativeIntersectClip(left, right) {
   if (!left) return right;
   if (!right) return left;
-  return { left: Math.max(left.left, right.left),
-    top: Math.max(left.top, right.top),
-    right: Math.min(left.right, right.right),
-    bottom: Math.min(left.bottom, right.bottom) };
+  var clipLeft = Math.max(left.left, right.left);
+  var clipTop = Math.max(left.top, right.top);
+  var clipRight = Math.min(left.right, right.right);
+  var clipBottom = Math.min(left.bottom, right.bottom);
+  if (clipRight < clipLeft) clipRight = clipLeft;
+  if (clipBottom < clipTop) clipBottom = clipTop;
+  return { left: clipLeft, top: clipTop, right: clipRight, bottom: clipBottom };
 }
 
 function nativeMultiplyTint(left, right) {

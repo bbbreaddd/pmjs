@@ -152,7 +152,8 @@ function nativeSceneFilter(node, activeFilters) {
         if (groupMatrixAlpha === undefined) groupMatrixAlpha = 1;
         groups.push({ kind: 25, resource: 0,
           parameters: Array.prototype.slice.call(groupMatrix).concat(
-            Number(groupMatrixAlpha)) });
+            Number(groupMatrixAlpha)),
+          preservesTransparentBlack: Number(groupMatrix[19]) === 0 });
         continue;
       }
       if (nativeFilterMatches(groupFilter, DisplacementFilter,
@@ -390,7 +391,7 @@ function nativeSceneFilter(node, activeFilters) {
         if (alphaValue === undefined) alphaValue = 1;
         groups.push({ kind: 20, resource: 0, parameters: [
           Math.max(0, Number(alphaValue) || 0)
-        ] });
+        ], preservesTransparentBlack: true });
         continue;
       }
       if (OldFilmFilter && groupFilter instanceof OldFilmFilter) {
