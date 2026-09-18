@@ -233,3 +233,154 @@ test('contract: install is a no-op without SceneManager', () => {
   assert.equal(ctx.pmjsMvInstallTimingContract(), false);
   assert.equal(ctx.pmjsMvEnsureTimingContract(), false);
 });
+
+test('phase-locked gate: 60 Hz with +/- 1.0 ms jitter never yields 0 or 2 steps', () => {
+  const ctx = loadTiming();
+  const state = ctx.pmjsMvCreateStepGate({ renderHz: 60, catchupMode: 'smooth' });
+  ctx.pmjsMvGateSteps(state, 0); // initial sync
+
+  const stepMs = 1000 / 60;
+  // Simulate 30 frames with random-like arrival jitter between -1.0 ms and +1.0 ms
+  const jitters = [-0.7, 0.8, -0.9, 0.5, -0.4, 0.9, -0.8, 0.2, -0.6, 0.7,
+                   -0.5, 0.6, -0.7, 0.4, -0.3, 0.8, -0.6, 0.3, -0.5, 0.7,
+                   -0.8, 0.5, -0.4, 0.6, -0.7, 0.3, -0.5, 0.6, -0.4, 0.5];
+  let time = 0;
+  for (let i = 0; i < jitters.length; i++) {
+    time = (i + 1) * stepMs + jitters[i];
+    const gated = ctx.pmjsMvGateSteps(state, time);
+    assert.equal(gated.steps, 1, `frame ${i} at ${time.toFixed(2)}ms expected 1 step, got ${gated.steps}`);
+    assert.equal(gated.overload, false);
+  }
+});
+
+test('phase-locked gate: smooth catchup rebases and avoids 2-step burst on 45 ms hitch', () => {
+  const ctx = loadTiming();
+  const state = ctx.pmjsMvCreateStepGate({ renderHz: 60, catchupMode: 'smooth' });
+  ctx.pmjsMvGateSteps(state, 0);
+
+  // Frame 1 normal
+  const f1 = ctx.pmjsMvGateSteps(state, 16.67);
+  assert.equal(f1.steps, 1);
+
+  // 45 ms hitch: time jumps from 16.67 to 61.67
+  const f2 = ctx.pmjsMvGateSteps(state, 61.67);
+  assert.equal(f2.steps, 1, 'smooth catchup must execute exactly 1 step on slow frame');
+  assert.equal(f2.overload, false);
+  assert.ok(f2.droppedMs > 0, `expected droppedMs > 0, got ${f2.droppedMs}`);
+
+  // Frame 3 returns to normal 16.67 ms cadence: should execute exactly 1 step (NO catchup burst)
+  const f3 = ctx.pmjsMvGateSteps(state, 61.67 + 16.67);
+  assert.equal(f3.steps, 1, 'subsequent frame must execute exactly 1 step without catchup burst');
+  assert.equal(f3.overload, false);
+});
+
+test('phase-locked gate: burst catchup mode permits up to 2 steps after hitch', () => {
+  const ctx = loadTiming();
+  const state = ctx.pmjsMvCreateStepGate({ renderHz: 60, catchupMode: 'burst' });
+  ctx.pmjsMvGateSteps(state, 0);
+
+  // Hitch of 40 ms
+  const gated = ctx.pmjsMvGateSteps(state, 40);
+  assert.equal(gated.steps, 2, 'burst mode should catch up up to BASE_MAX_STEPS_PER_FRAME');
+});
+
+test('phase-locked gate: PLL tracking keeps phase aligned under 59.94 Hz drift', () => {
+  const ctx = loadTiming();
+  const state = ctx.pmjsMvCreateStepGate({ renderHz: 60, catchupMode: 'smooth' });
+  ctx.pmjsMvGateSteps(state, 0);
+
+  // 59.94 Hz = 16.6833 ms per frame. Run 120 frames (~2 seconds).
+  const frameInterval = 1000 / 59.94;
+  let time = 0;
+  for (let i = 0; i < 120; i++) {
+    time += frameInterval;
+    const gated = ctx.pmjsMvGateSteps(state, time);
+    assert.equal(gated.steps, 1, `frame ${i} should yield 1 step under drift`);
+  }
+});
+
+test('phase-locked gate: 30 Hz render yields two 60 Hz logic steps per presentation slot', () => {
+  const ctx = loadTiming();
+  const state = ctx.pmjsMvCreateStepGate({ renderHz: 30 });
+  ctx.pmjsMvGateSteps(state, 0);
+
+  const slot30Ms = 1000 / 30;
+  // Frame 1
+  const f1 = ctx.pmjsMvGateSteps(state, slot30Ms);
+  assert.equal(f1.steps, 2, '30 Hz presentation must yield 2 logic steps');
+
+  // Frame 2
+  const f2 = ctx.pmjsMvGateSteps(state, 2 * slot30Ms);
+  assert.equal(f2.steps, 2, 'subsequent 30 Hz presentation must yield 2 logic steps');
+});
+
+test('phase-locked gate: 120 Hz render alternates 0 and 1 logic steps to maintain 60 Hz simulation', () => {
+  const ctx = loadTiming();
+  const state = ctx.pmjsMvCreateStepGate({ renderHz: 120 });
+  ctx.pmjsMvGateSteps(state, 0);
+
+  const slot120Ms = 1000 / 120;
+  const f1 = ctx.pmjsMvGateSteps(state, slot120Ms);
+  assert.equal(f1.steps, 0, 'first 120 Hz slot accumulates ~8.3 ms, yielding 0 steps');
+
+  const f2 = ctx.pmjsMvGateSteps(state, 2 * slot120Ms);
+  assert.equal(f2.steps, 1, 'second 120 Hz slot reaches ~16.7 ms, yielding 1 step');
+
+  const f3 = ctx.pmjsMvGateSteps(state, 3 * slot120Ms);
+  assert.equal(f3.steps, 0);
+
+  const f4 = ctx.pmjsMvGateSteps(state, 4 * slot120Ms);
+  assert.equal(f4.steps, 1);
+});
+
+test('phase-locked gate: reads globalThis.__pmjsTimingConfig when options omitted', () => {
+  const ctx = loadTiming((context) => {
+    context.globalThis.__pmjsTimingConfig = { renderHz: 30, catchupMode: 'burst' };
+  });
+  const state = ctx.pmjsMvCreateStepGate();
+  assert.equal(state.renderHz, 30);
+  assert.equal(state.catchupMode, 'burst');
+  ctx.pmjsMvGateSteps(state, 0);
+  const f1 = ctx.pmjsMvGateSteps(state, 1000 / 30);
+  assert.equal(f1.steps, 2);
+});
+
+test('phase-locked gate: 30 Hz burst catchup mode pays off debt at bounded rate of 3 steps/frame', () => {
+  const ctx = loadTiming();
+  const state = ctx.pmjsMvCreateStepGate({ renderHz: 30, catchupMode: 'burst' });
+  ctx.pmjsMvGateSteps(state, 0);
+
+  const slot30Ms = 1000 / 30;
+  // Normal frame 1: 2 steps
+  const f1 = ctx.pmjsMvGateSteps(state, slot30Ms);
+  assert.equal(f1.steps, 2);
+
+  // Hitch: missed 1 presentation slot (elapsed = 2 * slot30Ms = 66.67 ms).
+  // Total logic owed: 4 steps. With bounded catch-up (maxSteps = nominal 2 + 1 = 3):
+  // executes 3 steps, retains 1 step of debt in accMs (~16.67 ms).
+  const f2 = ctx.pmjsMvGateSteps(state, 3 * slot30Ms);
+  assert.equal(f2.steps, 3, 'burst at 30 Hz must execute max 3 steps on hitch');
+  assert.ok(Math.abs(state.accMs - (1000 / 60)) < 0.1, `expected ~16.67 ms debt, got ${state.accMs}`);
+
+  // Normal frame 3 (elapsed = 1 slot): adds 2 steps, total debt = 3 steps.
+  // Executes 3 steps, paying off all remaining debt!
+  const f3 = ctx.pmjsMvGateSteps(state, 4 * slot30Ms);
+  assert.equal(f3.steps, 3, 'burst at 30 Hz executes 3 steps to retire remaining debt');
+  assert.ok(Math.abs(state.accMs) < 0.1, `expected 0 debt, got ${state.accMs}`);
+
+  // Normal frame 4: back to nominal 2 steps.
+  const f4 = ctx.pmjsMvGateSteps(state, 5 * slot30Ms);
+  assert.equal(f4.steps, 2, 'subsequent frame returns to nominal 2 steps');
+});
+
+test('gate creation validates catchupMode and renderHz strictly', () => {
+  const ctx = loadTiming();
+  assert.throws(() => ctx.pmjsMvCreateStepGate({ catchupMode: 'smooh' }),
+    /catchupMode must be "smooth" or "burst"/);
+  assert.throws(() => ctx.pmjsMvCreateStepGate({ catchupMode: 'invalid' }),
+    /catchupMode must be "smooth" or "burst"/);
+  assert.throws(() => ctx.pmjsMvCreateStepGate({ renderHz: -60 }),
+    /renderHz must be a non-negative finite number/);
+  assert.throws(() => ctx.pmjsMvCreateStepGate({ renderHz: NaN }),
+    /renderHz must be a non-negative finite number/);
+});

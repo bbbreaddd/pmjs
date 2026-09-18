@@ -37,6 +37,58 @@ Bitmap.prototype.blur = function() {
   this._setDirty();
 };
 
+// Annotate native canvases with their source bitmap URL for diagnosis.
+var _Bitmap_createCanvas = Bitmap.prototype._createCanvas;
+if (typeof _Bitmap_createCanvas === 'function') {
+  Bitmap.prototype._createCanvas = function(width, height) {
+    if (!this.__canvas && typeof document !== 'undefined' && document.createElement) {
+      this.__canvas = document.createElement('canvas');
+      this.__canvas._pmjsBitmapUrl = this._url || null;
+    }
+    _Bitmap_createCanvas.call(this, width, height);
+    if (this.__canvas && !this.__canvas._pmjsBitmapUrl) {
+      this.__canvas._pmjsBitmapUrl = this._url || null;
+    }
+  };
+}
+
+// Register pristine blt fast path with PMJS optimizations registry.
+if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
+    typeof PMJS.optimizations.register === 'function') {
+  PMJS.optimizations.register({
+    id: 'bitmap.pristine-image-blt',
+    owner: 'pmjs-mv',
+    fallback: 'Draw via source._canvas materialization in stock Bitmap.prototype.blt'
+  });
+}
+
+// Blt avoids forcing source canvas realization when the source bitmap is a pristine image.
+var _Bitmap_blt = Bitmap.prototype.blt;
+if (typeof _Bitmap_blt === 'function') {
+  Bitmap.prototype.blt = function(source, sx, sy, sw, sh, dx, dy, dw, dh) {
+    dw = dw || sw;
+    dh = dh || sh;
+    if (source &&
+        (typeof pmjsOptimizationEnabled !== 'function' ||
+         pmjsOptimizationEnabled('bitmap.pristine-image-blt')) &&
+        source._image &&
+        !source.__canvas &&
+        !source.hue &&
+        !source._hue &&
+        sx >= 0 && sy >= 0 &&
+        sw > 0 && sh > 0 &&
+        dw > 0 && dh > 0 &&
+        sx + sw <= source.width &&
+        sy + sh <= source.height) {
+      this._context.globalCompositeOperation = 'source-over';
+      this._context.drawImage(source._image, sx, sy, sw, sh, dx, dy, dw, dh);
+      this._setDirty();
+      return;
+    }
+    return _Bitmap_blt.apply(this, arguments);
+  };
+}
+
 // MV text uses one native draw while the Canvas API remains available to plugins.
 Bitmap.prototype.drawText = function(text, x, y, maxWidth, lineHeight, align) {
   text = String(text);

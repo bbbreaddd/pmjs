@@ -42,15 +42,35 @@ function CanvasElement() {
 
 CanvasElement.prototype = Object.create(EventTarget.prototype);
 CanvasElement.prototype.constructor = CanvasElement;
+function isCanvasDiagnosticsEnabled() {
+  if (globalThis.__pmjsCanvasDiag) return true;
+  return typeof NativeHost !== 'undefined' &&
+    NativeHost.runtime &&
+    typeof NativeHost.runtime.env === 'function' &&
+    NativeHost.runtime.env('PMJS_CANVAS_DIAG') === '1';
+}
+
+function logCanvasCreation(width, height, url) {
+  var bytes = width * height * 4;
+  var tag = url ? (' url=' + url) : '';
+  console.log('[pmjs-canvas-diag] create ' + width + 'x' + height +
+    ' (' + (bytes / 1024).toFixed(1) + ' KB)' + tag);
+}
+
 CanvasElement.prototype._releaseNativeCanvas = function() {
   releaseNativeResource(this._nativeCanvas, 'canvas');
   this._nativeCanvas = null;
 };
 CanvasElement.prototype._ensureNativeCanvas = function() {
   if (!this._nativeCanvas) {
+    var width = Math.max(1, this.width);
+    var height = Math.max(1, this.height);
     this._nativeCanvas = trackNativeResource(
-      NativeHost.canvas.create(Math.max(1, this.width), Math.max(1, this.height)),
+      NativeHost.canvas.create(width, height),
       'canvas');
+    if (isCanvasDiagnosticsEnabled()) {
+      logCanvasCreation(width, height, this._pmjsBitmapUrl);
+    }
   }
   return this._nativeCanvas;
 };

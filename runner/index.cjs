@@ -83,17 +83,25 @@ function parseTimingConfig(env) {
       `PMJS_LOGIC_HZ must be ${PMJS_MV_LOGIC_HZ} ` +
       `(MV simulation is fixed at the authored rate): ${source.PMJS_LOGIC_HZ}`);
   }
+  const rawCatchup = source.PMJS_CATCHUP_MODE;
+  let catchupMode = 'burst';
+  if (rawCatchup !== undefined && rawCatchup !== '') {
+    if (rawCatchup !== 'smooth' && rawCatchup !== 'burst') {
+      throw new Error(`PMJS_CATCHUP_MODE must be 'smooth' or 'burst': ${rawCatchup}`);
+    }
+    catchupMode = rawCatchup;
+  }
   const uncappedFlag = source.PMJS_UNCAPPED === '1';
   const raw = source.PMJS_RENDER_HZ;
   if (raw === undefined || raw === '') {
-    if (uncappedFlag) return { logicHz: PMJS_MV_LOGIC_HZ, renderHz: 0, uncapped: true, renderPeriod: Infinity };
+    if (uncappedFlag) return { logicHz: PMJS_MV_LOGIC_HZ, renderHz: 0, uncapped: true, renderPeriod: Infinity, catchupMode };
     return { logicHz: PMJS_MV_LOGIC_HZ, renderHz: 60, uncapped: false,
-      renderPeriod: 1000 / 60 };
+      renderPeriod: 1000 / 60, catchupMode };
   }
   const renderHz = Number(raw);
   if (renderHz === 0) {
     return { logicHz: PMJS_MV_LOGIC_HZ, renderHz: 0, uncapped: true,
-      renderPeriod: Infinity };
+      renderPeriod: Infinity, catchupMode };
   }
   if (!PMJS_SUPPORTED_RENDER_HZ.includes(renderHz)) {
     throw new Error(
@@ -102,10 +110,10 @@ function parseTimingConfig(env) {
   }
   if (renderHz === 0 || uncappedFlag) {
     return { logicHz: PMJS_MV_LOGIC_HZ, renderHz: 0, uncapped: true,
-      renderPeriod: Infinity };
+      renderPeriod: Infinity, catchupMode };
   }
   return { logicHz: PMJS_MV_LOGIC_HZ, renderHz, uncapped: false,
-    renderPeriod: 1000 / renderHz };
+    renderPeriod: 1000 / renderHz, catchupMode };
 }
 
 function resolveSwapDefault(env, timing) {
@@ -185,6 +193,10 @@ async function run(input, hooks = {}) {
     storage: native.storage, input: native.input, canvas: native.canvas, media: native.media };
   globalThis.__pmjsBuiltinRequire = require;
   globalThis.__pmjsNativeRuntime = true;
+  globalThis.__pmjsTimingConfig = {
+    renderHz: timing.renderHz,
+    catchupMode: timing.catchupMode
+  };
   try {
     vm.runInThisContext(fs.readFileSync(options.bootstrap, 'utf8'), {
       filename: options.bootstrap, displayErrors: true,

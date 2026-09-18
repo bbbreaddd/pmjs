@@ -148,12 +148,15 @@ test('afterBootstrap runs once and Node jobs are not starved', async () => {
 });
 test('timing config pins MV logic at 60 Hz and validates render rates', () => {
   assert.deepEqual(parseTimingConfig({}), { logicHz: 60, renderHz: 60,
-    uncapped: false, renderPeriod: 1000 / 60 });
+    uncapped: false, renderPeriod: 1000 / 60, catchupMode: 'burst' });
   assert.equal(parseTimingConfig({ PMJS_RENDER_HZ: '30' }).renderPeriod, 1000 / 30);
   assert.equal(parseTimingConfig({ PMJS_RENDER_HZ: '120' }).renderHz, 120);
   const uncapped = parseTimingConfig({ PMJS_RENDER_HZ: '0' });
   assert.equal(uncapped.uncapped, true);
   assert.equal(parseTimingConfig({ PMJS_UNCAPPED: '1' }).uncapped, true);
+  assert.equal(parseTimingConfig({ PMJS_CATCHUP_MODE: 'smooth' }).catchupMode, 'smooth');
+  assert.equal(parseTimingConfig({ PMJS_CATCHUP_MODE: 'burst' }).catchupMode, 'burst');
+  assert.throws(() => parseTimingConfig({ PMJS_CATCHUP_MODE: 'smooh' }), /PMJS_CATCHUP_MODE/);
   assert.throws(() => parseTimingConfig({ PMJS_RENDER_HZ: '45' }), /PMJS_RENDER_HZ/);
   assert.throws(() => parseTimingConfig({ PMJS_RENDER_HZ: 'abc' }), /PMJS_RENDER_HZ/);
   assert.throws(() => parseTimingConfig({ PMJS_RENDER_HZ: '-60' }), /PMJS_RENDER_HZ/);
