@@ -1,6 +1,7 @@
 #pragma once
 
 #include "canvas.hpp"
+#include "dialog.hpp"
 #include "host_services.hpp"
 #include "media_service.hpp"
 #include "platform.hpp"
@@ -42,6 +43,7 @@ class RuntimeCore {
   Renderer& renderer() { return renderer_; }
   Vfs& vfs() { return vfs_; }
   MediaService& media() { return media_; }
+  Dialog& dialog() { return dialog_; }
 
  private:
   int width_;
@@ -52,6 +54,7 @@ class RuntimeCore {
   Renderer renderer_;
   Vfs vfs_;
   MediaService media_;
+  Dialog dialog_;
   std::uint16_t injectedInput_ = 0;
   bool running_ = true;
   std::vector<std::uint32_t> sceneMetadataScratch_;

@@ -22,6 +22,7 @@ class Platform {
   bool pollEvents();
   bool inputDown(const std::string& action) const;
   bool inputPressed(const std::string& action) const;
+  bool consumePress(const std::string& action);
   std::uint32_t inputState() const;
   bool windowFocused() const { return windowFocused_; }
   bool windowVisible() const { return windowVisible_; }

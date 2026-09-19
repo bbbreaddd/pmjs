@@ -198,6 +198,9 @@ class Renderer {
   std::optional<ImageInfo> renderToImage(int width, int height);
   const RendererStats& stats() const { return stats_; }
   std::size_t renderTargetBytes() const;
+  // Public for the modal overlay: snapshot, draw, discard back.
+  std::size_t commandCount() const;
+  void discardCommandsFrom(std::size_t first);
 
  private:
   struct TileBatch {
@@ -226,7 +229,6 @@ class Renderer {
     bool live = false;
   };
 
-  void discardCommandsFrom(std::size_t first);
   void destroyTileLayer(std::uint32_t handle);
   static PrimitiveSurfaceHandle makePrimitiveSurfaceHandle(
       std::size_t index, std::uint16_t generation);

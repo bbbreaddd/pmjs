@@ -468,6 +468,18 @@ function nativeCompatibilityHit(capability, detail) {
     throw new Error('unsupported native capability: ' + capability);
   }
 }
+// Never throws: reaching it means the runtime handled the call.
+function nativeCompatibilityObserved(capability, detail) {
+  var count = (nativeCompatibilityHits[capability] || 0) + 1;
+  nativeCompatibilityHits[capability] = count;
+  if (count !== 1) return;
+  var event = {
+    capability: capability,
+    detail: detail || '',
+    frame: typeof Graphics === 'function' ? Graphics.frameCount : 0
+  };
+  console.log('[pmjs-compat] ' + JSON.stringify(event));
+}
 
 // Release counters by cause. `sceneLifecycle` must stay zero: scene
 // termination must never release a canvas that outlived objects may use.

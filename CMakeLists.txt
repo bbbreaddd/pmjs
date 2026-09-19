@@ -28,6 +28,7 @@ set(PMJS_MEDIA_LIBS PkgConfig::AVFORMAT PkgConfig::AVCODEC PkgConfig::AVUTIL Pkg
 set(PMJS_RUNTIME_SOURCES
   src/runtime_core.cpp
   src/platform.cpp
+  src/dialog.cpp
   src/renderer_core.cpp
   src/renderer_draw.cpp
   src/renderer_programs.cpp
@@ -56,6 +57,7 @@ find_path(PMJS_NODE_API_HEADERS node_api.h PATHS /usr/include/node REQUIRED)
 add_library(pmjs_native MODULE
   src/node_addon.cpp
   src/node_addon_canvas.cpp
+  src/node_addon_dialog.cpp
   src/node_addon_common.cpp
   src/node_addon_entry.cpp
   src/node_addon_graphics.cpp
@@ -95,6 +97,13 @@ if(BUILD_TESTING)
   pmjs_add_cpp_test(pmjs-checked-bounds-test native-checked-bounds test/checked-bounds.cpp)
   pmjs_add_cpp_test(pmjs-media-mix-test native-audio-mix-unit test/media-mix.cpp)
   add_executable(pmjs-platform-input-test test/platform-input.cpp src/platform.cpp)
+  add_executable(pmjs-dialog-modal-test test/dialog-modal.cpp)
+  target_include_directories(pmjs-dialog-modal-test PRIVATE src)
+  target_compile_options(pmjs-dialog-modal-test PRIVATE -Wall -Wextra -Wpedantic)
+  target_link_libraries(pmjs-dialog-modal-test PRIVATE pmjs_runtime)
+  add_test(NAME native-dialog-modal COMMAND
+    ${XVFB_RUN} -a $<TARGET_FILE:pmjs-dialog-modal-test>)
+  set_tests_properties(native-dialog-modal PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
   target_include_directories(pmjs-platform-input-test PRIVATE src)
   target_compile_options(pmjs-platform-input-test PRIVATE -Wall -Wextra -Wpedantic)
   target_link_libraries(pmjs-platform-input-test PRIVATE ${PMJS_PLATFORM_LIBS})
@@ -112,6 +121,7 @@ if(BUILD_TESTING)
       test/mv-audio-object-url.test.cjs
       test/canvas-gradients.test.cjs
       test/mv-platform-semantics.test.cjs
+      test/pmjs-web-dialogs.test.cjs
       test/scheduler.test.cjs)
     get_filename_component(PMJS_TEST_NAME "${PMJS_JS_TEST}" NAME_WE)
     add_test(NAME "js-${PMJS_TEST_NAME}" COMMAND ${NODE_EXECUTABLE} --test

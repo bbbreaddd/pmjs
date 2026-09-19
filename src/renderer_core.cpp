@@ -188,8 +188,9 @@ void Renderer::beginFrame() {
   queueHeight_ = height_;
 }
 
-void Renderer::discardCommandsFrom(std::size_t first) {
-  while (frame_.commands.size() > first) {
+std::size_t Renderer::commandCount() const { return frame_.commands.size(); }
+
+void Renderer::discardCommandsFrom(std::size_t first) {  while (frame_.commands.size() > first) {
     const RenderCommand command = frame_.commands.back();
     frame_.commands.pop_back();
     if (command.image) images_.endUse(command.image);

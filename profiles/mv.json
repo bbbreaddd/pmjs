@@ -20,6 +20,7 @@
     "js/pmjs-plugins/olivia/horror-effects.js",
     "js/pmjs-plugins/terrax/lighting.js",
     "js/pmjs-web/canvas.js",
+    "js/pmjs-web/dialogs.js",
     "js/pmjs-web/object-urls.js",
     "js/pmjs-web/elements.js",
     "js/pmjs-web/script-loader.js",

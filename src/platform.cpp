@@ -289,6 +289,13 @@ std::uint32_t Platform::inputState() const {
 
 void Platform::finishLogicStep() { consumePressed(); }
 
+bool Platform::consumePress(const std::string& action) {
+  const std::uint16_t bit = actionBit(action);
+  if ((pressed_ & bit) == 0) return false;
+  pressed_ &= static_cast<std::uint16_t>(~bit);
+  return true;
+}
+
 void Platform::consumePressed() { pressed_ = 0; }
 
 void Platform::finishGpuWork() { glFinish(); }
