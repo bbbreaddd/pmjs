@@ -536,3 +536,235 @@ test('hook arguments forward and failures never take down boot', () => {
     assert.equal(secondRan, true);
   }
 });
+
+test('Scene_Map same-map transfer does not short-circuit through reuse and preserves stock transfer hooks', () => {
+  let pluginHookCalls = 0;
+  let playerTransferFinalized = false;
+
+  const player = {
+    _transferring: true,
+    _newMapId: 10,
+    _needsMapReload: false,
+    isTransferring() { return this._transferring; },
+    newMapId() { return this._newMapId; },
+    performTransfer() {
+      // Stock Game_Player.performTransfer clears transfer state
+      this._transferring = false;
+      playerTransferFinalized = true;
+    }
+  };
+
+  const map = {
+    _mapId: 10,
+    mapId() { return this._mapId; }
+  };
+
+  // Simulate an autosave plugin (e.g. FELSKI_AUTOSAVE) hooking Game_Player.performTransfer
+  const origPerformTransfer = player.performTransfer;
+  player.performTransfer = function() {
+    pluginHookCalls++;
+    return origPerformTransfer.apply(this, arguments);
+  };
+
+  function Scene_Base() {}
+  function Scene_Map() {
+    this._transfer = false;
+  }
+  Scene_Map.prototype = Object.create(Scene_Base.prototype);
+  Scene_Map.prototype.constructor = Scene_Map;
+  Scene_Map.prototype.updateTransferPlayer = function() {
+    if (player.isTransferring()) {
+      SceneManager.goto(Scene_Map);
+    }
+  };
+  Scene_Map.prototype.onMapLoaded = function() {
+    if (this._transfer) {
+      player.performTransfer();
+    }
+  };
+
+  const SceneManager = {
+    _scene: null,
+    _nextScene: null,
+    _nextSceneSame: false,
+    goto(sceneClass) {
+      const newScene = new sceneClass();
+      newScene._transfer = player.isTransferring();
+      this._nextScene = newScene;
+    }
+  };
+
+  const sandbox = {
+    Utils: {},
+    SceneManager: SceneManager,
+    Scene_Map: Scene_Map,
+    $gamePlayer: player,
+    $gameMap: map,
+    NativeHost: { runtime: {} },
+    nativeCompatibilityHit() {}
+  };
+  sandbox.globalThis = sandbox;
+  const context = vm.createContext(sandbox);
+  const scenesCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/scenes.js'), 'utf8');
+  vm.runInContext(scenesCode, context);
+
+  // Assert that shared pmjs-mv/scenes.js did NOT monkey-patch updateTransferPlayer
+  assert.equal(context.Scene_Map.prototype._pmjsTransferPatched, undefined);
+
+  // Execute updateTransferPlayer for same-map transfer (newMapId === curMapId === 10)
+  const currentMapScene = new context.Scene_Map();
+  currentMapScene.updateTransferPlayer();
+
+  // In stock MV, SceneManager.goto(Scene_Map) creates a new scene with _transfer = true
+  assert.ok(SceneManager._nextScene instanceof context.Scene_Map);
+  assert.equal(SceneManager._nextSceneSame, false, '_nextSceneSame must not be set on stock same-map transfer');
+  assert.equal(currentMapScene.reused, undefined, 'Scene_Map instance must not be marked reused by shared runtime');
+
+  // When next scene loads, onMapLoaded executes and triggers player.performTransfer()
+  SceneManager._nextScene.onMapLoaded();
+  assert.equal(pluginHookCalls, 1, 'Plugin performTransfer hook must execute exactly once');
+  assert.equal(playerTransferFinalized, true, 'Player transfer state must be finalized normally');
+  assert.equal(player.isTransferring(), false, 'Player isTransferring must be cleared');
+});
+
+test('Window_Base and Sprite_Base execute update without suppression', () => {
+  let windowUpdated = 0;
+  let spriteUpdated = 0;
+
+  function Window_Base() { this.visible = false; }
+  Window_Base.prototype.update = function() { windowUpdated++; };
+
+  function Sprite_Base() {}
+  Sprite_Base.prototype.update = function() { spriteUpdated++; };
+
+  function Sprite_Picture() { Sprite_Base.call(this); }
+  Sprite_Picture.prototype = Object.create(Sprite_Base.prototype);
+  Sprite_Picture.prototype.picture = function() { return null; };
+
+  const sandbox = {
+    Tilemap: function() {},
+    Window_Base: Window_Base,
+    Sprite_Base: Sprite_Base,
+    Sprite_Picture: Sprite_Picture
+  };
+  sandbox.Tilemap.prototype = {};
+  const context = vm.createContext(sandbox);
+  const displayCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/display.js'), 'utf8');
+  vm.runInContext(displayCode, context);
+
+  const win = new context.Window_Base();
+  win.update();
+  assert.equal(windowUpdated, 1, 'invisible Window_Base should not be suppressed');
+
+  const pic = new context.Sprite_Picture();
+  pic.update();
+  assert.equal(spriteUpdated, 1, 'Sprite_Picture with null picture should not be suppressed');
+});
+
+test('Bitmap.prototype.drawText installs native acceleration only for stock pipeline and respects overrides', () => {
+  let stockOutlineCalls = 0;
+  let customOutlineCalls = 0;
+  let nativeDrawCalls = 0;
+
+  function makeMockBitmapClass(customDrawText) {
+    function MockBitmap() {
+      this.width = 100;
+      this.height = 100;
+      this.fontSize = 16;
+      this.outlineWidth = 2;
+      this.outlineColor = '#000000';
+      this.textColor = '#ffffff';
+      this._context = {
+        globalAlpha: 1,
+        save() {},
+        restore() {},
+        strokeText() {},
+        fillText() {}
+      };
+      this._canvas = { _ensureNativeCanvas() { return { handle: 1 }; } };
+    }
+    MockBitmap.prototype._makeFontNameText = function() { return '16px sans-serif'; };
+    MockBitmap.prototype._setDirty = function() {};
+    MockBitmap.prototype._drawTextOutline = function(text, tx, ty, maxWidth) {
+      var context = this._context;
+      context.strokeStyle = this.outlineColor;
+      context.strokeText(text, tx, ty, maxWidth);
+      stockOutlineCalls++;
+    };
+    MockBitmap.prototype._drawTextBody = function(text, tx, ty, maxWidth) {
+      var context = this._context;
+      context.fillStyle = this.textColor;
+      context.fillText(text, tx, ty, maxWidth);
+    };
+    MockBitmap.prototype.drawText = customDrawText || function(text, x, y, maxWidth, lineHeight, align) {
+      if (text !== undefined) {
+        var tx = x;
+        var ty = y + lineHeight - (lineHeight - this.fontSize * 0.7) / 2;
+        var context = this._context;
+        var alpha = context.globalAlpha;
+        maxWidth = maxWidth || 0xffffffff;
+        context.save();
+        context.font = this._makeFontNameText();
+        this._drawTextOutline(text, tx, ty, maxWidth);
+        this._drawTextBody(text, tx, ty, maxWidth);
+        context.restore();
+        this._setDirty();
+      }
+    };
+    return MockBitmap;
+  }
+
+  function createContext(BitmapClass) {
+    nativeDrawCalls = 0;
+    const sandbox = {
+      Bitmap: BitmapClass,
+      Sprite: function() {},
+      Graphics: Object.assign(function() {}, { width: 100, height: 100 }),
+      Input: function() {},
+      contextFont: function() { return { path: 'font.ttf', size: 16 }; },
+      colorWithGlobalAlpha: function() { return 0xffffffff; },
+      nativeBootPhase: function() {},
+      NativeHost: {
+        runtime: { loadScript() {} },
+        render: {},
+        canvas: {
+          measureText: function() { return 50; },
+          drawText: function() { nativeDrawCalls++; }
+        }
+      }
+    };
+    const context = vm.createContext(sandbox);
+    const bitmapCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/bitmap.js'), 'utf8');
+    vm.runInContext(bitmapCode, context);
+    return context;
+  }
+
+  // 1. Stock method: recognizes stock pipeline fingerprint and installs native fast path
+  const StockBitmap = makeMockBitmapClass();
+  const stockContext = createContext(StockBitmap);
+  const stockBmp = new stockContext.Bitmap();
+  stockBmp.drawText('hello', 0, 0, 100, 20, 'left');
+  assert.equal(nativeDrawCalls > 0, true, 'stock methods should use native fast path');
+  assert.equal(stockOutlineCalls, 0, 'stock outline should not be called when native fast-path runs');
+
+  // 2. Pre-modified drawText (e.g. Bitmap Fonts plugin installed before PMJS):
+  // Does NOT match stock fingerprint, so native accelerator is NOT installed!
+  let pluginDrawCalls = 0;
+  const PreModifiedBitmap = makeMockBitmapClass(function(text) {
+    pluginDrawCalls++;
+    this._drawTextBody(text, 0, 0, 100);
+  });
+  const preModifiedContext = createContext(PreModifiedBitmap);
+  const preModifiedBmp = new preModifiedContext.Bitmap();
+  preModifiedBmp.drawText('custom');
+  assert.equal(pluginDrawCalls, 1, 'pre-modified drawText must not be replaced');
+  assert.equal(nativeDrawCalls, 0, 'native drawText must not run for non-stock pipeline');
+
+  // 3. Instance-level helper override on a stock bitmap: falls back to JavaScript implementation
+  const customBmp = new stockContext.Bitmap();
+  customBmp._drawTextOutline = function() { customOutlineCalls++; };
+  customBmp.drawText('hello', 0, 0, 100, 20, 'left');
+  assert.equal(customOutlineCalls, 1, 'overridden _drawTextOutline must be invoked via fallback');
+});
+
+

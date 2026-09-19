@@ -283,26 +283,6 @@ if (typeof SceneManager !== 'undefined' && !SceneManager._pmjsFullPatched) {
       this._isReturningFromMenu = false;
       return r;
     };
-    if (typeof Scene_Map !== 'undefined' && Scene_Map.prototype.updateTransferPlayer && !Scene_Map.prototype._pmjsTransferPatched) {
-      var _origUpdateTransfer = Scene_Map.prototype.updateTransferPlayer;
-      Scene_Map.prototype.updateTransferPlayer = function() {
-        try {
-          if ($gamePlayer.isTransferring()) {
-            var newMapId = $gamePlayer.newMapId();
-            var curMapId = $gameMap.mapId();
-            if (newMapId === curMapId && !$gamePlayer._needsMapReload) {
-              this.reused = true;
-              this.stop();
-              SceneManager._nextScene = this;
-              SceneManager._nextSceneSame = true;
-              return;
-            }
-          }
-        } catch (_) {}
-        return _origUpdateTransfer.apply(this, arguments);
-      };
-      Scene_Map.prototype._pmjsTransferPatched = true;
-    }
     SceneManager._pmjsFullPatched = true;
     nativeCompatibilityHit('scene.fullPatched', 'SceneManager map recycling + GC + isFocus');
   } catch (e) {

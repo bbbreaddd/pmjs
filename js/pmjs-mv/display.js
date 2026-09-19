@@ -31,26 +31,3 @@ Tilemap.prototype._sortChildren = function() {
   }
 };
 
-if (typeof Window_Base !== 'undefined' && Window_Base.prototype.update) {
-  var originalWindowBaseUpdate = Window_Base.prototype.update;
-  Window_Base.prototype.update = function() {
-    if (!this.visible) return;
-    return originalWindowBaseUpdate.apply(this, arguments);
-  };
-}
-
-if (typeof Sprite_Base !== 'undefined' && Sprite_Base.prototype.update) {
-  var originalSpriteBaseUpdate = Sprite_Base.prototype.update;
-  Sprite_Base.prototype.update = function() {
-    // Avoid updating Sprite_Base/Sprite_Picture without an assigned picture.
-    if (this instanceof Sprite_Picture) {
-      var picture = this.picture ? this.picture() : null;
-      if (!picture) {
-        this.visible = false;
-        return;
-      }
-      this.visible = true;
-    }
-    return originalSpriteBaseUpdate.apply(this, arguments);
-  };
-}
