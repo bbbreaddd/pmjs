@@ -272,3 +272,55 @@ test('scene.gpu-mesh-cache reuses the upload when enabled, re-uploads when disab
   assert.equal(disabled.calls.createMesh, 2);
   assert.equal(disabled.calls.releaseMesh, 1);
 });
+
+test('storage.read-burst-coalesce disables cleanly via optimization gate', () => {
+  const storageSource = fs.readFileSync(
+    path.join(runtimeRoot, 'js/pmjs-mv/storage.js'), 'utf8');
+
+  function makeStorageContext(disabled = false) {
+    let reads = 0;
+    const context = {
+      PMJS_GAME_CONFIG: disabled ? { disableOptimizations: ['storage.read-burst-coalesce'] } : {},
+      NativeHost: {
+        storage: {
+          exists: () => true,
+          readText: () => { reads++; return 'BASE64_DATA'; },
+          writeText: () => {},
+          remove: () => {},
+          rename: () => {}
+        }
+      },
+      StorageManager: {
+        isLocalMode: () => true,
+        localFilePath: () => '/save/global.rpgsave',
+        loadFromLocalFile: function(id) {
+          reads++;
+          return '{"test":1}';
+        },
+        localFileExists: () => true
+      },
+      LZString: {
+        decompressFromBase64: s => s
+      },
+      queueMicrotask: globalThis.queueMicrotask
+    };
+    context.globalThis = context;
+    vm.createContext(context);
+    vm.runInContext(optimizationsSource, context);
+    vm.runInContext(storageSource, context);
+    return { context, getReads: () => reads };
+  }
+
+  // Enabled: reads coalesce in synchronous burst
+  const enabled = makeStorageContext(false);
+  enabled.context.StorageManager.loadFromLocalFile(0);
+  enabled.context.StorageManager.loadFromLocalFile(0);
+  assert.equal(enabled.getReads(), 1, 'enabled read-burst-coalesce should coalesce reads to 1');
+
+  // Disabled: reads bypass burst cache every call
+  const disabled = makeStorageContext(true);
+  disabled.context.StorageManager.loadFromLocalFile(0);
+  disabled.context.StorageManager.loadFromLocalFile(0);
+  assert.equal(disabled.getReads(), 2, 'disabled read-burst-coalesce should read on every call');
+});
+

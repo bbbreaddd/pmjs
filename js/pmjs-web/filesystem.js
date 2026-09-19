@@ -192,6 +192,9 @@ var fsModule = {
     var writable = writablePath(path);
     if (writable === null || !NativeHost.storage) throw new Error('EACCES: ' + path);
     NativeHost.storage.writeText(writable, contents);
+    if (typeof globalThis.pmjsInvalidateStorageBurst === 'function') {
+      globalThis.pmjsInvalidateStorageBurst();
+    }
   },
   writeFile: function(path, contents, options, callback) {
     if (typeof options === 'function') { callback = options; options = null; }
@@ -214,6 +217,9 @@ var fsModule = {
     var writable = writablePath(path);
     if (writable === null || !NativeHost.storage) throw new Error('EACCES: ' + path);
     NativeHost.storage.remove(writable);
+    if (typeof globalThis.pmjsInvalidateStorageBurst === 'function') {
+      globalThis.pmjsInvalidateStorageBurst();
+    }
   },
   unlink: function(path, callback) {
     var error = null;
@@ -227,6 +233,9 @@ var fsModule = {
       throw new Error('EACCES: ' + from);
     }
     NativeHost.storage.rename(source, destination);
+    if (typeof globalThis.pmjsInvalidateStorageBurst === 'function') {
+      globalThis.pmjsInvalidateStorageBurst();
+    }
   },
   rename: function(from, to, callback) {
     var error = null;

@@ -767,4 +767,301 @@ test('Bitmap.prototype.drawText installs native acceleration only for stock pipe
   assert.equal(customOutlineCalls, 1, 'overridden _drawTextOutline must be invoked via fallback');
 });
 
+test('synchronous-burst storage read coalescing preserves stock DataManager object identity and coalesces storage I/O', async () => {
+  let storageReads = 0;
+  let storageStats = 0;
+  let lzDecompresses = 0;
+
+  const sampleGlobalData = {
+    1: { title: 'Save 1', playtime: '01:00:00' },
+    2: { title: 'Save 2', playtime: '02:00:00' }
+  };
+  const serializedJson = JSON.stringify(sampleGlobalData);
+
+  const mockStorage = {
+    exists(p) {
+      storageStats++;
+      // file 1 and 2 exist, others do not
+      if (p === 'save/file1.rpgsave' || p === 'file1.rpgsave') return true;
+      if (p === 'save/file2.rpgsave' || p === 'file2.rpgsave') return true;
+      if (p === 'save/global.rpgsave' || p === 'global.rpgsave') return true;
+      return false;
+    },
+    readText(p) {
+      storageReads++;
+      if (p === 'save/global.rpgsave' || p === 'global.rpgsave') {
+        return 'BASE64_MOCK_GLOBAL';
+      }
+      return null;
+    },
+    writeText() {},
+    remove() {},
+    rename() {}
+  };
+
+  const mockLZString = {
+    decompressFromBase64(str) {
+      lzDecompresses++;
+      if (str === 'BASE64_MOCK_GLOBAL') return serializedJson;
+      return null;
+    }
+  };
+
+  // Stock MV StorageManager methods
+  const StorageManager = {
+    isLocalMode() { return true; },
+    localFilePath(savefileId) {
+      if (savefileId === 0) return '/save/global.rpgsave';
+      return '/save/file' + savefileId + '.rpgsave';
+    },
+    load(savefileId) {
+      return this.loadFromLocalFile(savefileId);
+    },
+    loadFromLocalFile(savefileId) {
+      const p = this.localFilePath(savefileId);
+      const relative = p.startsWith('/save/') ? p.slice(6) : p;
+      const text = mockStorage.readText(relative);
+      return mockLZString.decompressFromBase64(text);
+    },
+    exists(savefileId) {
+      return this.localFileExists(savefileId);
+    },
+    localFileExists(savefileId) {
+      const p = this.localFilePath(savefileId);
+      const relative = p.startsWith('/save/') ? p.slice(6) : p;
+      return mockStorage.exists(relative);
+    },
+    saveToLocalFile(savefileId, json) {},
+    backup(savefileId) {},
+    remove(savefileId) {}
+  };
+
+  // Stock MV DataManager methods
+  const DataManager = {
+    maxSavefiles() { return 20; },
+    loadGlobalInfo() {
+      const json = StorageManager.load(0);
+      if (json) {
+        const globalInfo = JSON.parse(json);
+        for (let i = 1; i <= this.maxSavefiles(); i++) {
+          if (!StorageManager.exists(i)) {
+            delete globalInfo[i];
+          }
+        }
+        return globalInfo;
+      }
+      return [];
+    }
+  };
+
+  const sandbox = {
+    NativeHost: { storage: mockStorage },
+    StorageManager: StorageManager,
+    DataManager: DataManager,
+    LZString: mockLZString,
+    queueMicrotask: globalThis.queueMicrotask,
+    Promise: globalThis.Promise,
+    setTimeout: globalThis.setTimeout,
+    clearTimeout: globalThis.clearTimeout
+  };
+  sandbox.globalThis = sandbox;
+
+  const context = vm.createContext(sandbox);
+  const storageCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/storage.js'), 'utf8');
+  vm.runInContext(storageCode, context);
+
+  // 1. In a synchronous burst, multiple DataManager.loadGlobalInfo() calls execute
+  const a = context.DataManager.loadGlobalInfo();
+  const b = context.DataManager.loadGlobalInfo();
+
+  // Crucial invariant: distinct instances, no mutable object reference sharing
+  assert.notEqual(a, b, 'Each loadGlobalInfo call must return a fresh, distinct object reference');
+  assert.deepEqual(a, b, 'Contents should match');
+
+  // Verify mutation isolation: mutating a does not pollute b
+  a[1].title = 'Mutated by plugin';
+  assert.equal(b[1].title, 'Save 1', 'Mutating a must not affect b');
+
+  // Simulate 16 calls (like OMORI continue menu)
+  for (let i = 0; i < 14; i++) {
+    context.DataManager.loadGlobalInfo();
+  }
+
+  // Underneath, the 16 calls must coalesce storage I/O and decompression:
+  assert.equal(storageReads, 1, 'Only 1 storage read for the entire burst of 16 calls');
+  assert.equal(lzDecompresses, 1, 'Only 1 LZString decompression for the entire burst of 16 calls');
+  assert.equal(storageStats, 20, 'Only 20 exists stats (1..20) for the entire burst of 16 calls (not 320)');
+
+  // 2. Storage mutation immediately invalidates the burst cache
+  context.StorageManager.remove(1);
+  const c = context.DataManager.loadGlobalInfo();
+  assert.equal(storageReads, 2, 'Storage mutation must invalidate burst cache, causing fresh read');
+  assert.equal(lzDecompresses, 2, 'Storage mutation must invalidate burst cache, causing fresh decompression');
+  assert.equal(storageStats, 40, 'Storage mutation must invalidate burst cache, causing fresh stats');
+
+  // 3. Across microtasks, the burst cache clears automatically
+  await new Promise(resolve => queueMicrotask(resolve));
+  const d = context.DataManager.loadGlobalInfo();
+  assert.equal(storageReads, 3, 'New microtask turn must execute fresh storage read');
+  assert.equal(lzDecompresses, 3, 'New microtask turn must execute fresh decompression');
+  assert.equal(storageStats, 60, 'New microtask turn must execute fresh stats');
+});
+
+test('storage read coalescing runs underneath plugin wrappers and respects dynamic localFilePath', () => {
+  let physicalReads = 0;
+  let physicalStats = 0;
+  let pluginLoadCalls = 0;
+  let pluginExistsCalls = 0;
+
+  const mockStorage = {
+    exists(p) {
+      physicalStats++;
+      return true;
+    },
+    readText(p) {
+      physicalReads++;
+      return p.includes('profileA') ? '{"profile":"A"}' : '{"profile":"B"}';
+    },
+    writeText() {},
+    remove() {},
+    rename() {}
+  };
+
+  const mockLZString = {
+    decompressFromBase64(s) { return s; }
+  };
+
+  let activeProfile = 'profileA';
+
+  const StorageManager = {
+    isLocalMode() { return true; },
+    localFilePath(savefileId) {
+      if (savefileId < 0) return '/save/config.rpgsave';
+      if (savefileId === 0) return '/save/global.rpgsave';
+      return '/save/file' + savefileId + '.rpgsave';
+    },
+    load(savefileId) {
+      return this.loadFromLocalFile(savefileId);
+    },
+    loadFromLocalFile(savefileId) {
+      const p = this.localFilePath(savefileId).slice(6);
+      return mockLZString.decompressFromBase64(mockStorage.readText(p));
+    },
+    exists(savefileId) {
+      return this.localFileExists(savefileId);
+    },
+    localFileExists(savefileId) {
+      const p = this.localFilePath(savefileId).slice(6);
+      return mockStorage.exists(p);
+    },
+    saveToLocalFile() {},
+    backup() {},
+    remove() {}
+  };
+
+  // Stock MV DataManager.loadGlobalInfo: parses fresh objects on every call.
+  let jsonParses = 0;
+  const DataManager = {
+    maxSavefiles() { return 2; },
+    loadGlobalInfo() {
+      const json = StorageManager.load(0);
+      if (json) {
+        jsonParses++;
+        return JSON.parse(json);
+      }
+      return [];
+    }
+  };
+
+  const sandbox = {
+    NativeHost: { storage: mockStorage },
+    StorageManager: StorageManager,
+    DataManager: DataManager,
+    LZString: mockLZString,
+    queueMicrotask: globalThis.queueMicrotask,
+    Promise: globalThis.Promise,
+    setTimeout: globalThis.setTimeout,
+    clearTimeout: globalThis.clearTimeout
+  };
+  sandbox.globalThis = sandbox;
+
+  const context = vm.createContext(sandbox);
+  // PMJS installs on the stock base before game plugins during bootstrap.
+  const storageCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/storage.js'), 'utf8');
+  vm.runInContext(storageCode, context);
+
+  // A game plugin loads AFTER PMJS: it redirects save paths per profile and
+  // wraps the plugin-observable StorageManager surface with side effects.
+  context.StorageManager.localFilePath = function(savefileId) {
+    return '/save/' + activeProfile + '/file' + savefileId + '.rpgsave';
+  };
+  const origLoadFromLocalFile = context.StorageManager.loadFromLocalFile;
+  context.StorageManager.loadFromLocalFile = function(savefileId) {
+    pluginLoadCalls++;
+    return origLoadFromLocalFile.call(this, savefileId);
+  };
+
+  const origLocalFileExists = context.StorageManager.localFileExists;
+  context.StorageManager.localFileExists = function(savefileId) {
+    pluginExistsCalls++;
+    return origLocalFileExists.call(this, savefileId);
+  };
+
+  // 1. Verify plugin wrapper transparency:
+  // Redundant synchronous calls must execute the plugin wrapper every single time!
+  const res1 = context.StorageManager.load(1);
+  const res2 = context.StorageManager.load(1);
+
+  assert.equal(pluginLoadCalls, 2, 'Plugin wrapper must run on every single StorageManager.load call');
+  assert.equal(physicalReads, 1, 'Underneath, low-level physical disk read is coalesced to 1');
+  assert.equal(res1, '{"profile":"A"}');
+  assert.equal(res2, '{"profile":"A"}');
+
+  const ex1 = context.StorageManager.exists(1);
+  const ex2 = context.StorageManager.exists(1);
+  assert.equal(pluginExistsCalls, 2, 'Plugin wrapper must run on every single StorageManager.exists call');
+  assert.equal(physicalStats, 1, 'Underneath, physical stat is coalesced to 1');
+
+  // 1b. Full-stack certification: DataManager.loadGlobalInfo still executes
+  // every observable layer (plugin hooks + JSON.parse, fresh objects each
+  // time) while the physical read underneath coalesces.
+  const g1 = context.DataManager.loadGlobalInfo();
+  const g2 = context.DataManager.loadGlobalInfo();
+  assert.notEqual(g1, g2, 'Each loadGlobalInfo must return a fresh object');
+  assert.equal(jsonParses, 2, 'JSON.parse must run on every loadGlobalInfo call');
+  assert.equal(pluginLoadCalls, 4, 'Plugin load wrapper must run on every loadGlobalInfo call');
+  assert.equal(physicalReads, 2, 'Only one physical read for the new file0 path across both calls');
+
+  // 2. Dynamic path identity test:
+  // If localFilePath changes during the same burst (e.g. switching profile/directory),
+  // cache entries keyed by storagePath must NOT collide!
+  activeProfile = 'profileB';
+  const resB = context.StorageManager.load(1);
+  assert.equal(pluginLoadCalls, 5, 'Plugin wrapper runs on profile B call');
+  assert.equal(physicalReads, 3, 'Switching directory path must perform a physical read for new path');
+  assert.equal(resB, '{"profile":"B"}', 'Result must reflect profile B, not stale profile A');
+
+  // 3. Centralized low-level mutation test:
+  // Direct call to NativeHost.storage.writeText must bump generation and invalidate burst cache
+  mockStorage.writeText('profileB/file1.rpgsave', 'something');
+  const resAfterWrite = context.StorageManager.load(1);
+  assert.equal(pluginLoadCalls, 6);
+  assert.equal(physicalReads, 4, 'Direct NativeHost.storage write must invalidate read burst');
+
+  // 4. Post-plugin reinstall is a no-op: the plugin loader re-invokes the
+  // installer after PluginManager.setup, which must not reset plugin path
+  // overrides, unwrap plugin wrappers, or disturb the live burst.
+  vm.runInContext(storageCode, context);
+  assert.equal(
+    context.StorageManager.localFilePath(1),
+    '/save/profileB/file1.rpgsave',
+    'Reinstall must preserve the plugin localFilePath override');
+  const resReinstall = context.StorageManager.load(1);
+  assert.equal(pluginLoadCalls, 7, 'Plugin wrapper must still be outermost after reinstall');
+  assert.equal(resReinstall, '{"profile":"B"}');
+  assert.equal(physicalReads, 4, 'Live burst must survive reinstall (still a hit, no new physical read)');
+});
+
+
+
 
