@@ -1,5 +1,3 @@
-// Scene-writer caches owned by pmjs-pixi4. Each ID is gated at its narrow
-// cache-hit boundary below; the ordinary path re-derives the same records.
 if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
     typeof PMJS.optimizations.register === 'function') {
   PMJS.optimizations.register({ id: 'tilemap.persistent-layer-cache',
@@ -220,10 +218,6 @@ function tileAnimationOffset(layer) {
   return [horizontalFrame * tileWidth, (frame % 3) * tileHeight];
 }
 
-// RectTileLayer is intentionally `visible = false`: Pixi's parent
-// CompositeRectTileLayer invokes its renderer directly. Read the retained
-// nine-number tile records here so the native traversal preserves that
-// specialized rendering contract instead of discarding the map floor.
 function queueNativeRectTileLayer(layer) {
   var points = layer.pointsBuf;
   if (!points || !points.length) {
@@ -283,10 +277,7 @@ function ensureNativeRectTileLayer(layer) {
     handles.push(textureHandle);
   }
   var textureSignature = handles.join(':');
-  // Disabled means recompile every frame from the live records: no compiled
-  // generation is ever reused, while validation and texture eligibility above
-  // still apply. The previously retained handle is released before replacing
-  // it, so bypassing the cache cannot leak native layers.
+
   var usePersistentCache = typeof pmjsOptimizationEnabled !== 'function' ||
     pmjsOptimizationEnabled('tilemap.persistent-layer-cache');
   if (!usePersistentCache || !layer._pmjsNativeLayer ||
@@ -295,8 +286,7 @@ function ensureNativeRectTileLayer(layer) {
     if (usePersistentCache && layer._pmjsNativeLayer &&
         layer._pmjsNativeTextureSignature === textureSignature &&
         nativeTilePointsUnchanged(layer, points)) {
-      // Generation is only a dirty hint: repaints often rewrite identical
-      // points, so adopt it without tearing down the native layer.
+
       layer._pmjsNativeCompiledGeneration = generation;
     } else {
       if (layer._pmjsNativeLayer) {
@@ -327,10 +317,7 @@ function nativeIsRectTileLayer(node) {
   if (!node) return false;
   if (PIXI.tilemap && PIXI.tilemap.RectTileLayer &&
       node instanceof PIXI.tilemap.RectTileLayer) return true;
-  // Tilemap plugins can replace the exported constructor after creating
-  // their layers. Dispatch those retained layer records by behavior,
-  // not by a stale JS prototype identity. Composite layers do not expose both
-  // arrays and therefore remain containers whose children are traversed.
+
   return Array.isArray(node.pointsBuf) && Array.isArray(node.textures);
 }
 
@@ -389,9 +376,17 @@ var nativeSceneValues = new Float32Array(
 var nativeSceneCount = 0;
 var nativeSceneBulkClear = false;
 var nativeSceneFilterDepth = 0;
-var nativeSceneUnsupported = false;
-var nativeSceneUnsupportedReason = '';
-var nativeSceneReportedReason = '';
+var nativeSceneSkipped = [];
+
+function rejectNativeScene(node, capability, producer, reason) {
+  var record = { capability: capability, producer: String(producer),
+    nodeClass: node && node.constructor && node.constructor.name || '',
+    reason: reason };
+  nativeSceneSkipped.push(record);
+  if (typeof nativeCompatibilityHit === 'function') {
+    nativeCompatibilityHit(capability, record.producer + ': ' + reason);
+  }
+}
 var nativeSceneBackgroundColor = null;
 var nativeSceneFilterAccessCache = new WeakMap();
 var nativeScenePreviousMetadata = new Uint32Array(0);
@@ -420,7 +415,7 @@ function growNativeScene() {
 function resetNativeSceneRecords() {
   nativeSceneBulkClear = typeof pmjsOptimizationEnabled !== 'function' ||
     pmjsOptimizationEnabled('scene.record-bulk-clear');
-  // Count covers every record dirtied by the previous build, including fallback.
+
   if (nativeSceneBulkClear && nativeSceneCount !== 0) {
     nativeSceneValues.fill(0, 0,
       nativeSceneCount * nativeSceneValueStride);
@@ -428,10 +423,6 @@ function resetNativeSceneRecords() {
   nativeSceneCount = 0;
 }
 
-// Pixi 4's public getter slices _filters, so using it while
-// visiting every node creates a defensive array that this adapter only reads.
-// Preserve custom accessors, but use the pinned backing field for the standard
-// Pixi prototype chain.
 function nativeSceneFilters(node) {
   if (node.__pmjsNativeDirectFilters === true) return node._filters;
   if (node.__pmjsNativeDirectFilters === false) return node.filters;
@@ -463,8 +454,7 @@ function nativeSceneFilters(node) {
 }
 
 function nativeScenePacketHash(metadataWords, valueWords) {
-  // Two independent 32-bit streams provide a stable 64-bit diagnostic
-  // identity without BigInt arithmetic in the render hot path.
+
   var left = 0x811c9dc5;
   var right = 0x9e3779b9;
   var index;
@@ -589,9 +579,7 @@ function nativeSceneFilterMarker(kind, filterKind, resource, parameters,
       index * nativeSceneValueStride + 7);
     nativeSceneValues.set(parameters.slice(10, 21),
       index * nativeSceneValueStride + 22);
-    // Pixi's FilterManager reports logical filterArea dimensions even when
-    // the backing framebuffer is resolution-scaled. Preserve that distinction
-    // for native shaders instead of rewriting each filter's pixel uniforms.
+
     nativeSceneValues[index * nativeSceneValueStride + 33] =
       nativeSceneFilterResolution;
   }
@@ -606,6 +594,7 @@ function closeNativeSceneFilters(count, parentIndex, clip) {
 
 var nativeIdentityTransform = { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 };
 var nativeSceneRootTransform = nativeIdentityTransform;
+var nativeSceneRootUsesWorldTransform = false;
 var nativeSceneFilterResolution = 1;
 var nativeSceneRoundPixels = false;
 
@@ -627,10 +616,17 @@ function nativeMaskWorldTransform(mask) {
     chain.push(current);
     current = current.parent;
   }
+  var hasSceneRoot = current === nativeTransformParent;
   var world = nativeSceneRootTransform;
   for (var index = chain.length - 1; index >= 0; index--) {
     var transform = chain[index].transform;
     if (!transform) continue;
+    if (hasSceneRoot && nativeSceneRootUsesWorldTransform &&
+        index === chain.length - 1) {
+      world = nativeComposeTransform(world,
+        transform.worldTransform || nativeIdentityTransform);
+      continue;
+    }
     if (typeof transform.updateLocalTransform === 'function') {
       transform.updateLocalTransform();
     }
@@ -885,16 +881,8 @@ function ensureNativeGpuMesh(mesh) {
   return mesh.__pmjsNativeMesh;
 }
 
-// Dispatch the retained filter subset by constructor name. Keep
-// this escape hatch confined to that subset; optional Pixi extensions below
-// still require the constructor exported by the loaded plugin bundle.
 function nativeFilterMatches(filter, ctor, name) {
-  if (!filter) return false;
-  if (typeof ctor === 'function' && filter instanceof ctor) return true;
-  if (name !== 'ToneFilter' && name !== 'ColorMatrixFilter' &&
-      name !== 'DisplacementFilter' && name !== 'BlurFilter' &&
-      name !== 'NoiseFilter' && name !== 'GlitchFilter') return false;
-  return !!(filter.constructor && filter.constructor.name === name);
+  return !!filter && typeof ctor === 'function' && filter.constructor === ctor;
 }
 
 function nativeColorMatrixIsIdentity(values) {
@@ -906,3 +894,4 @@ function nativeColorMatrixIsIdentity(values) {
   }
   return true;
 }
+

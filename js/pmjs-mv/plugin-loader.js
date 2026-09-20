@@ -30,9 +30,7 @@
       pending.forEach(function(plugin) {
         this._scripts.push(plugin.name);
         this.loadScript(plugin.name + '.js');
-        // Once per enabled $plugins entry during setup; loadScript calls
-        // outside setup do not emit it. Fired here (not in loadScript)
-        // so port overrides keep the event.
+
         var loadedName = String(plugin.name).replace(/\.js$/i, '');
         globalThis.pmjsRunHooks('pluginLoaded', loadedName);
       }, this);
@@ -54,15 +52,12 @@
       PluginManager.setup($plugins);
     }
     globalThis.pmjsRunHooks('afterPlugins');
-    // NOTE: the optimization registry is NOT finalized here. beforeBoot is
-    // the last legal optimization-registration seam; finalization happens
-    // after beforeBoot hooks complete (see bootstrap.js dispatchWindowLoad).
-    // Freezing here would reject adapters that register once all plugins
-    // are composed.
+    if (globalThis.pmjsPixiRenderPreflight) globalThis.pmjsPixiRenderPreflight.scan();
+
     if (typeof installNativeStorageManager === 'function') {
       installNativeStorageManager();
     }
-    // Wrap the updateMain implementation selected by the plugins.
+
     if (typeof pmjsMvInstallTimingContract === 'function') {
       pmjsMvInstallTimingContract();
     }
@@ -75,3 +70,4 @@
   globalThis.pmjsMvLoadPluginManifest = pmjsMvLoadPluginManifest;
   globalThis.pmjsMvInitializePlugins = pmjsMvInitializePlugins;
 })();
+

@@ -1,14 +1,3 @@
-// Representation classification.
-// Performs no PMJS semantic mutation and writes no packet state.
-// Property access and integration hooks remain observable and must execute
-// in reference order.
-//
-// Unknown labels keep container behavior. That is the safe default for
-// custom plugin objects.
-
-// Native translation representations, not Pixi classes: several labels can
-// map to one representation (sprite, picture, and weather all encode as
-// sprites).
 var PMJS_SCENE_KIND = {
   CONTAINER: 0,
   SPRITE: 1,
@@ -33,9 +22,6 @@ function nativeSceneKindName(kind) {
   }
 }
 
-// String-to-kind map. The caller resolves the canonical string once, so
-// this adds no observable reads. GENERIC is reserved, never produced:
-// unknown and explicit-container labels take the container lane today.
 function nativeSceneKindForType(type) {
   switch (type) {
     case 'sprite':
@@ -59,11 +45,10 @@ function nativeSceneKindForType(type) {
 }
 
 function nativeSceneKind(node) {
-  // RECT_TILE_LAYER is a classification answer, not a dispatch target: the
-  // traversal pre-dispatches layers ahead of rejection, so the encoder
-  // switch never receives kind 6.
+
   if (typeof nativeIsRectTileLayer === 'function' && nativeIsRectTileLayer(node)) {
     return PMJS_SCENE_KIND.RECT_TILE_LAYER;
   }
   return nativeSceneKindForType(nativeNodeRenderType(node));
 }
+

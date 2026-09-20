@@ -5,9 +5,7 @@ function nativeSceneTraversesChild(kind, node, child) {
 function nativeSceneBlendMode(node) {
   var mode = Number(node && node.blendMode) || 0;
   if (mode >= 0 && mode <= 3) return mode;
-  // Pixi 4 maps these advanced modes to normal blending unless pixi-picture
-  // takes over. RPG Maker marks screen pictures with _isPicture, while the
-  // plugin's direct sprite classes use pluginName="picture".
+
   var pictureRenderer = node && (node.pluginName === 'picture' ||
     node.pluginName === 'sprite' && node._isPicture);
   if (pictureRenderer && (mode === 4 || mode === 9)) return 0;
@@ -37,12 +35,7 @@ function nativeNodeRenderType(node) {
   }
   if (type === 'tilingSprite') type = 'tilingsprite';
   if (type) {
-    type = String(type).toLowerCase();
-    if (type === 'sprite' || type === 'picture' || type === 'tilingsprite' ||
-        type === 'screensprite' || type === 'weathersprite' || type === 'mesh' ||
-        type === 'graphics' || type === 'tilemap') return type;
-    // Unknown renderer labels retain container semantics.
-    return 'container';
+    return String(type).toLowerCase();
   }
   if (typeof ScreenSprite === 'function' && node instanceof ScreenSprite) {
     return 'screensprite';
@@ -77,14 +70,29 @@ function nativeMultiplyTint(left, right) {
 
 function nativeSceneNodeRejected(node, particleContext) {
   if (!node) return true;
-  // Pixi's WebGL ParticleRenderer submits every slot in the batch. Child
-  // visibility/renderability, zero scale, and zero alpha do not affect which
-  // slots are uploaded (static alpha may intentionally remain visible).
+
   if (particleContext) return false;
   return (!node.visible || !node.renderable) ||
     node.alpha <= 0 ||
     typeof node._openness === 'number' && node._openness <= 0 ||
     !!(node.scale && (node.scale.x === 0 || node.scale.y === 0));
+}
+
+function nativeSceneRenderContract(node, kind, cached) {
+  var contracts = typeof PMJS !== 'undefined' && PMJS.rendererContracts;
+  var method = 'baseline unavailable';
+  if (contracts) {
+    method = cached ? contracts.proveCached(node, kind) :
+      contracts.prove(node, kind);
+  }
+  if (!method) return true;
+  var producer = node.constructor && node.constructor.name || 'node';
+  var reason = kind + ': ' +
+    (method === 'no native semantic contract' ||
+      method === 'native representation mismatch' ? method :
+      'custom Pixi render hook (' + method + ')');
+  rejectNativeScene(node, 'render.render-method', producer, reason);
+  return false;
 }
 
 function nativeParticleFrameContext(container) {
@@ -156,6 +164,10 @@ function nativePlainSpriteBinding(node) {
       nativeNodeRenderType(node) !== 'sprite' || nativeScenePictureBlend(node) >= 0) {
     return null;
   }
+  if (typeof PMJS === 'undefined' || !PMJS.rendererContracts ||
+      PMJS.rendererContracts.prove(node, 'sprite')) {
+    return null;
+  }
   var filters = nativeSceneFilters(node);
   if (filters && filters.some(function(filter) {
     return filter && filter.enabled !== false;
@@ -223,33 +235,70 @@ function writeNativePlainSpriteSegment(bindings, parentIndex) {
 }
 
 function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
-    particleContext) {
-  if (!node || nativeSceneUnsupported) return;
+    particleContext, forcedAlpha) {
+  if (!node) return;
   if (nativeIsRectTileLayer(node)) {
+    if (!nativeSceneRenderContract(node, 'recttilelayer')) return;
     writeNativeSceneRectTileLayer(node, parentIndex);
     return;
   }
   if (nativeSceneNodeRejected(node, particleContext)) return;
+  if (!particleContext && node._cacheAsBitmap &&
+      !node.__pmjsBuildingBitmapCache) {
+    var cacheKind = nativeSceneKindName(nativeSceneKindForType(
+      nativeNodeRenderType(node)));
+    if (!nativeSceneRenderContract(node, cacheKind, true)) return;
+    var cacheProducer = node.constructor && node.constructor.name || 'node';
+    var cachedSprite = node._cacheData && node._cacheData.sprite;
+    if (!cachedSprite) {
+      rejectNativeScene(node, 'render.cacheAsBitmap', cacheProducer,
+        'bitmap cache was not initialized before scene encoding');
+      return;
+    }
+    nativeCompatibilityObserved('render.cacheAsBitmap', cacheProducer);
+
+    var cachedTransform = node.transform;
+    if (cachedTransform && !nativeSceneRootUsesWorldTransform &&
+        typeof cachedTransform.updateLocalTransform === 'function') {
+      cachedTransform.updateLocalTransform();
+    }
+    var cachedLocal = cachedTransform &&
+      (parentIndex === 0xffffffff && nativeSceneRootUsesWorldTransform ?
+        cachedTransform.worldTransform : cachedTransform.localTransform) ||
+        nativeIdentityTransform;
+    if (parentIndex === 0xffffffff &&
+        nativeSceneRootTransform !== nativeIdentityTransform) {
+      cachedLocal = nativeComposeTransform(nativeSceneRootTransform,
+        cachedLocal);
+    }
+    var cacheParent = nativeSceneRecord(parentIndex, 0, 0, 0xffffff, 0,
+      cachedLocal, parentIndex === 0xffffffff &&
+        nativeSceneRootUsesWorldTransform ? node.worldAlpha : node.alpha,
+      null, 0, null);
+
+    writeNativeSceneNode(cachedSprite, cacheParent, null, null, null, 1);
+    return;
+  }
   var particleValues = particleContext ?
     nativeParticleValues(particleContext, node, particleContext.childIndex) : null;
+  if (parentIndex === 0xffffffff && nativeSceneRootUsesWorldTransform &&
+      !particleContext && forcedAlpha === undefined) {
+    forcedAlpha = node.worldAlpha;
+  }
   if (!particleContext && typeof globalThis.__pmjsBeforeRenderNode === 'function') {
     globalThis.__pmjsBeforeRenderNode(node);
   }
   if (!particleContext) prepareNativeSceneNode(node);
   if (!particleContext && node.shader) {
-    nativeCompatibilityHit('render.shader',
-      node.constructor && node.constructor.name || 'node');
-    nativeSceneUnsupported = true;
-    nativeSceneUnsupportedReason =
-      (node.constructor && node.constructor.name || 'node') + ':shader';
+    rejectNativeScene(node, 'render.shader',
+      node.shader.constructor && node.shader.constructor.name || 'shader',
+      (node.constructor && node.constructor.name || 'node') + ':shader');
     return;
   }
   var blendMode = nativeSceneBlendMode(particleContext || node);
   if (blendMode < 0) {
-    nativeCompatibilityHit('render.blend-mode', String(node.blendMode));
-    nativeSceneUnsupported = true;
-    nativeSceneUnsupportedReason =
-      (node.constructor && node.constructor.name || 'node') + ':blend=' + node.blendMode;
+    rejectNativeScene(node, 'render.blend-mode', node.blendMode,
+      (node.constructor && node.constructor.name || 'node') + ':blend=' + node.blendMode);
     return;
   }
   if (!particleContext && globalThis.__pmjsTrace && __pmjsTrace.active()) {
@@ -273,7 +322,7 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
     }
   }
   var pictureBlend = particleContext ? -1 : nativeScenePictureBlend(node);
-  // The mask is read once and shared by the boundary test and the resolver.
+
   var nodeMask = node.mask || null;
   var filterPlan;
   var nativeClip;
@@ -286,18 +335,16 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
     nativeClip = nativeEffectClip;
     nativeMask = nativeEffectAlphaMask;
   } else {
-    // Simple lane: no enabled filters, masks, or picture-blend work means no
-    // filter planning, no mask planning, no bounds work, and no effect
-    // arrays or temporary objects. The shared frozen no-op plan is never
-    // mutated: masks and picture groups only exist on the advanced lane,
-    // which always plans fresh.
+
     filterPlan = nativeSceneNoFilterPlan;
     nativeClip = forcedClip;
     nativeMask = null;
   }
   var nativeBlur = filterPlan.blur;
   var transform = node.transform;
-  if (!particleContext && transform && typeof transform.updateLocalTransform === 'function') {
+  if (!particleContext && transform &&
+      !(parentIndex === 0xffffffff && nativeSceneRootUsesWorldTransform) &&
+      typeof transform.updateLocalTransform === 'function') {
     transform.updateLocalTransform();
   }
   var local;
@@ -310,7 +357,9 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
       d: particleCos * particleValues.scaleY,
       tx: particleValues.x, ty: particleValues.y };
   } else {
-    local = transform && transform.localTransform || nativeIdentityTransform;
+    local = transform && (parentIndex === 0xffffffff &&
+      nativeSceneRootUsesWorldTransform ? transform.worldTransform :
+      transform.localTransform) || nativeIdentityTransform;
   }
   if (parentIndex === 0xffffffff && nativeSceneRootTransform !== nativeIdentityTransform) {
     local = nativeComposeTransform(nativeSceneRootTransform, local);
@@ -320,17 +369,19 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
   if (particleContext) {
     tint = nativeMultiplyTint(tint, particleContext.container.tint);
   }
-  // Classification runs after preparation, the render hook, effect discovery,
-  // and the transform refresh, in reference order: __pmjsNodeRenderType is
-  // arbitrary integration JavaScript and may inspect state derived by
-  // updateLocalTransform(). Particle children never dispatch a renderer
-  // plugin: they are sprite-shaped by contract.
+
   var pipeType = particleValues ? 'sprite' : nativeNodeRenderType(node);
   var pipeKind = particleValues ? PMJS_SCENE_KIND.SPRITE :
     nativeSceneKindForType(pipeType);
-  // Fixed dispatch: one kind from the classifier, one encoder from the
-  // table. The resolved type string travels along so encoders never re-read
-  // node state.
+  if (pipeKind === PMJS_SCENE_KIND.CONTAINER &&
+      pipeType !== 'container' && pipeType !== 'tilemap') {
+    rejectNativeScene(node, 'render.renderer-plugin', pipeType,
+      (node.constructor && node.constructor.name || 'node') + ':renderer=' + pipeType);
+    return;
+  }
+  if (!particleContext &&
+      !nativeSceneRenderContract(node, nativeSceneKindName(pipeKind))) return;
+
   resetNativeSceneEmission(tint);
   writeNativeSceneKind(pipeKind, node, pipeType, particleContext,
     particleValues);
@@ -351,14 +402,11 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
 
   var filterGroups = filterPlan.groups || [];
   if (nativeSceneFilterDepth + filterGroups.length > 4) {
-    nativeCompatibilityHit('render.filter-depth',
-      node.constructor && node.constructor.name || 'node');
-    nativeSceneUnsupported = true;
-    nativeSceneUnsupportedReason =
-      (node.constructor && node.constructor.name || 'node') + ':filter-depth';
+    rejectNativeScene(node, 'render.filter-depth', filterGroups.length,
+      (node.constructor && node.constructor.name || 'node') + ':filter-depth');
     return;
   }
-  // Nest in reverse so popping the stack applies Pixi's filters left-to-right.
+
   for (var filterIndex = filterGroups.length - 1; filterIndex >= 0; filterIndex--) {
     nativeSceneFilterMarker(6, filterGroups[filterIndex].kind,
       filterGroups[filterIndex].resource, filterGroups[filterIndex].parameters,
@@ -366,28 +414,30 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
   }
   nativeSceneFilterDepth += filterGroups.length;
 
+  if (kind === 1) {
+    var textureRotation = ((Number(texture && texture.rotate) || 0) % 16 + 16) % 16;
+    if (textureRotation % 2) {
+      rejectNativeScene(node, 'render.texture-rotation', textureRotation,
+        'sprite:texture-rotation');
+      return;
+    }
+  }
   var nodeIndex = nativeSceneRecord(parentIndex, kind, resource, tint,
-    blendMode, local, particleValues ? particleValues.alpha : node.alpha,
+    blendMode, local, particleValues ? particleValues.alpha :
+      forcedAlpha === undefined ? node.alpha : forcedAlpha,
     nativeClip, nativeBlur, nativeMask);
   var valueOffset = nodeIndex * nativeSceneValueStride;
   nativeSceneValues[valueOffset + 7] = localX;
   nativeSceneValues[valueOffset + 8] = localY;
   if (kind === 1) {
-    var textureRotation = ((Number(texture && texture.rotate) || 0) % 16 + 16) % 16;
-    if (textureRotation % 2) {
-      nativeCompatibilityHit('render.texture-rotation', String(textureRotation));
-      nativeSceneUnsupported = true;
-      nativeSceneUnsupportedReason = 'sprite:texture-rotation';
-      return;
-    }
+    textureRotation = ((Number(texture && texture.rotate) || 0) % 16 + 16) % 16;
     nativeSceneMetadata[nodeIndex * nativeSceneMetadataStride + 5] |=
       textureRotation / 2 << 5;
     if (texture && texture.baseTexture && PIXI.SCALE_MODES &&
         texture.baseTexture.scaleMode === PIXI.SCALE_MODES.NEAREST) {
       nativeSceneMetadata[nodeIndex * nativeSceneMetadataStride + 5] |= 8;
     }
-    // Pixi's particle renderer ignores roundPixels, and weather sprites
-    // never take the flag.
+
     if (nativeSceneRoundPixels && !particleContext &&
         nativeSceneEmission.roundPixelsEligible) {
       nativeSceneMetadata[nodeIndex * nativeSceneMetadataStride + 5] |= 256;
@@ -410,9 +460,7 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
     nativeSceneValues[valueOffset + 10] *= spriteResolution * particleSampleY;
     nativeSceneValues[valueOffset + 11] = frame.width * spriteResolution * particleSampleX;
     nativeSceneValues[valueOffset + 12] = frame.height * spriteResolution * particleSampleY;
-    // RPG Maker MV's Sprite._refresh replaces the base texture with
-    // _tintTexture after applying these values to a CPU canvas. Do not apply
-    // the same operation again in the native shader.
+
     var cpuTinted = node._tintTexture && texture &&
       texture.baseTexture === node._tintTexture;
     if (cpuTinted && typeof nativeMaterializationStats !== 'undefined') {
@@ -470,7 +518,8 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
         cpuTinted: !!cpuTinted,
         shaderTint: !!(nativeSceneMetadata[
           nodeIndex * nativeSceneMetadataStride + 5] & 16),
-        alpha: particleValues ? particleValues.alpha : node.alpha,
+        alpha: particleValues ? particleValues.alpha :
+          forcedAlpha === undefined ? node.alpha : forcedAlpha,
         blendMode: blendMode,
         transformA: local.a, transformB: local.b,
         transformC: local.c, transformD: local.d,
@@ -505,9 +554,7 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
     closeNativeSceneFilters(filterGroups.length, parentIndex, nativeClip);
     return;
   }
-  // ScreenSprite's Graphics child is its implementation detail. Kind 3 already
-  // represents the full-screen color, and traversing the child would allocate
-  // RPG Maker's intentionally oversized 6400x4800 zoom-safe rectangle.
+
   if (!node.children) {
     closeNativeSceneFilters(filterGroups.length, parentIndex, nativeClip);
     return;
@@ -517,8 +564,7 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
       var windowChild = node.children[windowIndex];
       if (windowChild && windowChild._isWindow && windowChild.visible &&
           windowChild._openness > 0) {
-        // Stock clips only the clear, never window children; openness is
-        // already encoded via container scale and contents visibility.
+
         writeNativeSceneNode(windowChild, nodeIndex);
       }
     }
@@ -573,33 +619,108 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
   closeNativeSceneFilters(filterGroups.length, parentIndex, nativeClip);
 }
 
-function submitNativeScene(stage) {
+function prepareNativeBitmapCaches(node, renderer, root) {
+  if (!node || nativeSceneNodeRejected(node, null)) return;
+  root = root || node;
+  if (node._cacheAsBitmap && node._cacheData && node._cacheData.sprite) return;
+  var children = node.children;
+  if (children) {
+    for (var index = 0; index < children.length; index++) {
+      prepareNativeBitmapCaches(children[index], renderer, root);
+    }
+  }
+  if (!node._cacheAsBitmap) return;
+  if (typeof node._initCachedDisplayObject !== 'function') {
+    throw new Error('Pixi bitmap cache initializer is unavailable');
+  }
+
+  var alpha = 1;
+  var ancestor = node;
+  while (ancestor) {
+    alpha *= ancestor.alpha === undefined ? 1 : ancestor.alpha;
+    if (ancestor === root) break;
+    ancestor = ancestor.parent;
+  }
+  node.worldAlpha = alpha;
+  node.__pmjsBuildingBitmapCache = true;
+  try {
+    node._initCachedDisplayObject(renderer);
+  } finally {
+    node.__pmjsBuildingBitmapCache = false;
+  }
+}
+
+function encodeNativeScene(stage) {
   resetNativeSceneRecords();
   nativeSceneFilterDepth = 0;
-  nativeSceneUnsupported = false;
-  nativeSceneUnsupportedReason = '';
+  nativeSceneSkipped.length = 0;
   if (nativeSceneBackgroundColor !== null) {
     nativeSceneRecord(0xffffffff, 3, 0, nativeSceneBackgroundColor,
       0, nativeIdentityTransform, 1, null, 0, null);
   }
   writeNativeSceneNode(stage, 0xffffffff);
-  if (nativeSceneUnsupported) {
-    if (nativeSceneUnsupportedReason !== nativeSceneReportedReason) {
-      nativeSceneReportedReason = nativeSceneUnsupportedReason;
-      nativeCompatibilityHit('render.sceneFallback', nativeSceneUnsupportedReason);
-    }
-    return false;
-  }
   traceNativeScenePacket();
+  return { ok: true, packet: { version: nativeScenePacketVersion,
+    metadata: nativeSceneMetadata, values: nativeSceneValues,
+    count: nativeSceneCount }, skipped: nativeSceneSkipped.slice() };
+}
+
+function submitNativeScene(stage) {
+  var result = encodeNativeScene(stage);
+  if (!NativeHost.scene) {
+    return { ok: false, skipped: result.skipped, failure: {
+      capability: 'render.scene-service', producer: 'NativeHost.scene',
+      nodeClass: '', reason: 'scene service unavailable' } };
+  }
   var submitStarted = globalThis.__pmjsTrace && __pmjsTrace.active() ?
     performance.now() : 0;
-  NativeHost.scene.submit(nativeScenePacketVersion, nativeSceneMetadata,
-    nativeSceneValues, nativeSceneCount);
+  try {
+    NativeHost.scene.submit(result.packet.version, result.packet.metadata,
+      result.packet.values, result.packet.count);
+  } catch (error) {
+    return { ok: false, skipped: result.skipped, failure: {
+      capability: 'render.scene-submit', producer: 'NativeHost.scene',
+      nodeClass: '', reason: String(error && error.message || error),
+      cause: error } };
+  }
   if (submitStarted) {
     __pmjsTrace.duration('phase', 'scene.native-submit', submitStarted,
       performance.now(), { records: nativeSceneCount });
   }
-  return true;
+  return { ok: true, count: result.packet.count, skipped: result.skipped };
+}
+
+function reportNativeSceneSkips(skipped, stage) {
+  if (!skipped || !skipped.length) return;
+  var frame = typeof Graphics !== 'undefined' &&
+    typeof Graphics.frameCount === 'number' ? Graphics.frameCount : -1;
+  var sceneName = '';
+  try {
+    var scene = typeof SceneManager !== 'undefined' && SceneManager._scene;
+    sceneName = scene && scene.constructor && scene.constructor.name || '';
+  } catch (_) {}
+  var mapId = -1;
+  try {
+    var map = typeof $gameMap !== 'undefined' && $gameMap;
+    mapId = map && typeof map.mapId === 'function' ? map.mapId() : -1;
+  } catch (_) {}
+  var details = skipped.map(function(skip) {
+    return { capability: skip.capability, producer: skip.producer,
+      reason: skip.reason, nodeClass: skip.nodeClass,
+      frame: frame, scene: sceneName, map: mapId };
+  });
+  var strict = NativeHost.runtime && NativeHost.runtime.env &&
+    (NativeHost.runtime.env('PMJS_STRICT_COMPAT') === '1' ||
+      NativeHost.runtime.env('PMJS_DIALOG_MODE') === 'headless' ||
+      NativeHost.runtime.env('PMJS_DIALOG_MODE') === 'strict');
+  if (strict) {
+    throw new Error('native scene skipped ' + skipped.length +
+      ' node(s): ' + JSON.stringify(details));
+  }
+  if (typeof pmjsLogTodo !== 'function') return;
+  details.forEach(function(detail) {
+    pmjsLogTodo(detail);
+  });
 }
 
 function collectNativeTilemaps(node, output) {
@@ -612,7 +733,8 @@ function collectNativeTilemaps(node, output) {
   return output;
 }
 
-function renderNativeStage(stage, rootTransform, filterResolution, roundPixels) {
+function renderNativeStage(stage, rootTransform, filterResolution, roundPixels,
+    skipUpdateTransform) {
   var profiling = typeof automationProfiling !== 'undefined' && automationProfiling;
   var stageStarted = profiling ? performance.now() : 0;
   nativeScreenOverlays.length = 0;
@@ -620,6 +742,7 @@ function renderNativeStage(stage, rootTransform, filterResolution, roundPixels) 
   var parent = stage.parent;
   stage.parent = nativeTransformParent;
   nativeSceneRootTransform = rootTransform || nativeIdentityTransform;
+  nativeSceneRootUsesWorldTransform = !!skipUpdateTransform;
   nativeSceneFilterResolution = Math.max(0.000001,
     Number(filterResolution) || 1);
   nativeSceneRoundPixels = !!roundPixels;
@@ -634,34 +757,39 @@ function renderNativeStage(stage, rootTransform, filterResolution, roundPixels) 
   var cameraX = map && map._displayX;
   var cameraY = map && map._displayY;
   var newStage = renderNativeStage._stage !== stage;
-  var submitted = false;
+  var submission = null;
   try {
     if (NativeHost.scene) {
       if (newStage) renderNativeStage._tilemaps = collectNativeTilemaps(stage, []);
-      submitted = submitNativeScene(stage);
+      submission = submitNativeScene(stage);
     }
+  } catch (error) {
+    renderNativeStage._ready = false;
+    throw error;
   } finally {
     if (profiling) {
       nativeQueueMs += performance.now() - stageStarted;
       nativeStageSamples++;
     }
     nativeSceneRootTransform = nativeIdentityTransform;
+    nativeSceneRootUsesWorldTransform = false;
     nativeSceneFilterResolution = 1;
     nativeSceneRoundPixels = false;
     parentWorld.identity();
     stage.parent = parent;
   }
-  if (submitted) {
-    renderNativeStage._ready = true;
-    renderNativeStage._stage = stage;
-    renderNativeStage._cameraX = cameraX;
-    renderNativeStage._cameraY = cameraY;
-    return;
+  if (!submission || !submission.ok) {
+
+    renderNativeStage._ready = false;
+    var failure = submission && submission.failure;
+    throw failure && failure.cause || new Error(
+      'native scene was not rendered: ' +
+      (failure && failure.reason || 'scene service unavailable'));
   }
-  // A rejected packet cannot fall back to a traversal with different transform,
-  // culling, and leaf-dispatch semantics.
+  reportNativeSceneSkips(submission.skipped, stage);
   renderNativeStage._ready = true;
   renderNativeStage._stage = stage;
   renderNativeStage._cameraX = cameraX;
   renderNativeStage._cameraY = cameraY;
 }
+

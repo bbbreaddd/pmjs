@@ -2,6 +2,7 @@
   "name": "mv",
   "modules": [
     "js/pmjs-core/optimizations.js",
+    "js/pmjs-core/log.js",
     "js/pmjs-mv/setup.js",
     "js/pmjs-mv/autorun-events.js",
     "js/pmjs-core/operation-trace.js",
@@ -38,6 +39,7 @@
     "js/pmjs-mv/data.js",
     "js/pmjs-mv/diagnostics.js",
     "js/pmjs-mv/plugin-loader.js",
+    "js/pmjs-pixi4/render-preflight.js",
     "js/pmjs-pixi4/scene-primitives.js",
     "js/pmjs-pixi4/scene-filters.js",
     "js/pmjs-pixi4/scene-packet.js",

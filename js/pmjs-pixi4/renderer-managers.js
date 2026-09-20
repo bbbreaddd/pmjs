@@ -180,6 +180,10 @@ function NativeFilterManager(renderer) {
   this._onPrerender = this.onPrerender.bind(this);
   if (typeof renderer.on === 'function') renderer.on('prerender', this._onPrerender);
 }
+Object.defineProperty(NativeFilterManager.prototype, 'filterStack', {
+  get: function() { return this.filterData.stack; },
+  set: function(value) { this.filterData.stack = value; }
+});
 NativeFilterManager.prototype.pushFilter = function(target, filters) {
   filters = filters || [];
   var sourceFrame = target && target.filterArea;
@@ -425,7 +429,9 @@ NativeObjectRenderer.prototype.stop = function() {};
 NativeObjectRenderer.prototype.flush = function() {};
 NativeObjectRenderer.prototype.render = function(displayObject) {
   nativeCompatibilityHit('renderer.object-plugin', this.name);
-  if (displayObject) queueNativeTree(displayObject);
+  throw new Error('native renderer plugin has no direct-call adapter: ' +
+    this.name + (displayObject && displayObject.constructor ?
+      ' (' + displayObject.constructor.name + ')' : ''));
 };
 NativeObjectRenderer.prototype.updateGraphics = function(graphics) {
   return ensureNativeGraphics(graphics, false);
@@ -441,12 +447,12 @@ function installNativeRendererPlugins(renderer) {
   };
   var registered = OriginalPixiWebGLRenderer.__plugins || {};
   Object.keys(registered).forEach(function(name) {
-    // Native input owns DOM interaction and accessibility manager behavior.
+
     if (name === 'extract' || name === 'prepare' ||
         name === 'interaction' || name === 'accessibility') return;
     plugins[name] = new NativeObjectRenderer(renderer, name);
   });
-  // pixi-tilemap registers before the native facade and expects this state slot.
+
   if (!plugins.tilemap) plugins.tilemap = new NativeObjectRenderer(renderer,
     'tilemap');
   return plugins;
@@ -489,3 +495,4 @@ NativeTextureGarbageCollector.prototype.unload = function(displayObject) {
     this.unload(children[index]);
   }
 };
+

@@ -54,7 +54,6 @@ void Renderer::recomputePresentation() {
     }
   }
   if (viewportWidth == drawableWidth && viewportHeight == drawableHeight) {
-    // Width constrained when drawableW/sourceW <= drawableH/sourceH.
     const bool widthConstrained = static_cast<std::int64_t>(drawableWidth) *
             sourceHeight <=
         static_cast<std::int64_t>(drawableHeight) * sourceWidth;
@@ -461,10 +460,11 @@ void Renderer::destroyTileLayer(std::uint32_t layer) {
 }
 
 std::vector<std::uint8_t> Renderer::captureSceneRgba() {
-  materializeToneComposition();
+  if (!offscreenRender_) materializeToneComposition();
   std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width_) *
                                    static_cast<std::size_t>(height_) * 4U);
-  glBindFramebuffer(GL_READ_FRAMEBUFFER, sceneFramebuffer_);
+  glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                    offscreenRender_ ? offscreenFramebuffer_ : sceneFramebuffer_);
   glReadBuffer(GL_COLOR_ATTACHMENT0);
   glPixelStorei(GL_PACK_ALIGNMENT, 1);
   glReadPixels(0, 0, width_, height_, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
@@ -526,24 +526,24 @@ std::vector<std::uint8_t> Renderer::renderToRgba() {
 }
 
 std::vector<std::uint8_t> Renderer::renderToRgba(int width, int height) {
-  if (width == width_ && height == height_) {
-    return renderToRgba();
-  }
   const int savedWidth = width_;
   const int savedHeight = height_;
   const auto savedClearColor = clearColor_;
+  const bool savedOffscreenRender = offscreenRender_;
   try {
-    resizeTargets(width, height);
+    if (width != width_ || height != height_) resizeTargets(width, height);
     offscreenRender_ = true;
     clearColor_ = {0, 0, 0, 0};
     render();
     auto pixels = captureSceneRgba();
-    offscreenRender_ = false;
+    offscreenRender_ = savedOffscreenRender;
     clearColor_ = savedClearColor;
-    resizeTargets(savedWidth, savedHeight);
+    if (width_ != savedWidth || height_ != savedHeight) {
+      resizeTargets(savedWidth, savedHeight);
+    }
     return pixels;
   } catch (...) {
-    offscreenRender_ = false;
+    offscreenRender_ = savedOffscreenRender;
     clearColor_ = savedClearColor;
     if (width_ != savedWidth || height_ != savedHeight) {
       resizeTargets(savedWidth, savedHeight);
@@ -621,4 +621,4 @@ std::size_t Renderer::renderTargetBytes() const {
   return static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_) * 36U;
 }
 
-}  // namespace pmjs
+}

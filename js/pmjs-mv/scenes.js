@@ -30,7 +30,7 @@ if (typeof SceneManager !== 'undefined' && !SceneManager._pmjsFullPatched) {
            isTitleScene(sceneClass);
   }
   SceneManager.isMajorScene = isMajorSceneTransition;
-  // Retention must not change MV's constructor-based scene stack.
+
   try {
     function pmjsDisposeRetainedTitle(manager) {
       try {
@@ -70,9 +70,7 @@ if (typeof SceneManager !== 'undefined' && !SceneManager._pmjsFullPatched) {
 
     var _origGoto = SceneManager.goto;
     SceneManager.goto = function(sceneClass) {
-      // A submenu push delegates through goto after placing the retained map's
-      // constructor on the stack. Preserve that instance until the matching
-      // pop; only a transition with no retained stack entry invalidates it.
+
       try {
         var retained = this._pmjsRetainedScene || this._pmjsRetainedMap;
         if (!pmjsStackContainsRetainedScene(this, retained) &&
@@ -83,7 +81,7 @@ if (typeof SceneManager !== 'undefined' && !SceneManager._pmjsFullPatched) {
         pmjsDisposeRetainedTitle(this);
       } catch (_) {}
       var ret = _origGoto.apply(this, arguments);
-      // Collect only after major transitions that do not retain a scene.
+
       try {
         if (!this._nextSceneSame && this._stack.length === 0 && !this._isReturningFromMenu &&
             !SceneManager._pmjsCompatibilityGc && isMajorSceneTransition(sceneClass) &&
@@ -105,8 +103,6 @@ if (typeof SceneManager !== 'undefined' && !SceneManager._pmjsFullPatched) {
       };
     }
 
-    // Menu pushes may retain a started map or configured title scene. Other
-    // transitions keep MV's constructor-based stack behavior.
     function pmjsRetainableMenuPush(manager, sceneClass) {
       try {
         if (typeof sceneClass !== 'function') return null;
@@ -133,7 +129,7 @@ if (typeof SceneManager !== 'undefined' && !SceneManager._pmjsFullPatched) {
     }
     var _origPush = SceneManager.push;
     SceneManager.push = function(sceneClass) {
-      // Decide before push delegates through goto, then record the retained scene.
+
       var outgoing = null;
       var retainMode = null;
       try {
@@ -212,7 +208,7 @@ if (typeof SceneManager !== 'undefined' && !SceneManager._pmjsFullPatched) {
         }
       } catch (_) {}
       var r = _origPop.apply(this, arguments);
-      // Preserve the empty-pop diagnostic without changing MV's result.
+
       try {
         if (this._stack.length === 0 && this._scene === null && typeof NativeHost !== 'undefined' && NativeHost.runtime && NativeHost.runtime.quit) {
           nativeCompatibilityHit('scene.exit', 'pop empty');
@@ -220,14 +216,14 @@ if (typeof SceneManager !== 'undefined' && !SceneManager._pmjsFullPatched) {
       } catch (_) {}
       return r;
     };
-    // Scene replacement must account for retained map and title instances.
+
     SceneManager.changeScene = function() {
       if (this.isSceneChanging() && !this.isCurrentSceneBusy()) {
         if (this._scene) {
           if (this._scene._pmjsSuspended) {
-            // A suspended title remains live and must not be terminated or detached.
+
           } else if (this._scene.reused) {
-            // A retained map stays attached to its resources for the return path.
+
             try { SceneManager.snapForBackground(); } catch (_) {}
           } else {
             this._scene.terminate();
@@ -238,7 +234,7 @@ if (typeof SceneManager !== 'undefined' && !SceneManager._pmjsFullPatched) {
         this._scene = this._nextScene;
         if (this._scene) {
           if (this._scene._pmjsWaking) {
-            // A suspended title has already completed creation and readiness.
+
             this._scene._pmjsWaking = false;
             this._scene._pmjsSuspended = false;
             if (this._scene.attachReservation) this._scene.attachReservation();
@@ -256,7 +252,7 @@ if (typeof SceneManager !== 'undefined' && !SceneManager._pmjsFullPatched) {
             if (this._scene.attachReservation) this._scene.attachReservation();
             this._scene.create();
           } else {
-            // Reattachment is one-shot; a later exit terminates normally.
+
             if (this._scene.attachReservation) this._scene.attachReservation();
             this._scene.reused = false;
             if (typeof Scene_Map !== 'undefined' && this._scene instanceof Scene_Map) {
@@ -284,8 +280,12 @@ if (typeof SceneManager !== 'undefined' && !SceneManager._pmjsFullPatched) {
       return r;
     };
     SceneManager._pmjsFullPatched = true;
-    nativeCompatibilityHit('scene.fullPatched', 'SceneManager map recycling + GC + isFocus');
+    if (typeof nativeCompatibilityObserved === 'function') {
+      nativeCompatibilityObserved('scene.fullPatched',
+        'SceneManager map recycling + GC + isFocus');
+    }
   } catch (e) {
     nativeCompatibilityHit('scene.fullPatchError', e && e.message || '');
   }
 }
+

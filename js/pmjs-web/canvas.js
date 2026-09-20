@@ -95,7 +95,7 @@ function compositeCanvasPixel(pixels, offset, sourceColors, sourceAlpha, operati
       var blended = source;
       if (operation === 'difference') blended = Math.abs(destination - source);
       else if (operation === 'saturation') {
-        // RPG Maker uses a white saturation fill to desaturate its sprite.
+
         var gray = pixels[offset] * 0.299 + pixels[offset + 1] * 0.587 +
           pixels[offset + 2] * 0.114;
         blended = gray;
@@ -465,10 +465,11 @@ function nativeCompatibilityHit(capability, detail) {
     console.log('[pmjs-compat] ' + JSON.stringify(event));
   }
   if (nativeCompatibilityStrict) {
-    throw new Error('unsupported native capability: ' + capability);
+    throw new Error('unsupported native capability: ' + capability +
+      (detail ? ': ' + String(detail) : ''));
   }
 }
-// Never throws: reaching it means the runtime handled the call.
+
 function nativeCompatibilityObserved(capability, detail) {
   var count = (nativeCompatibilityHits[capability] || 0) + 1;
   nativeCompatibilityHits[capability] = count;
@@ -481,8 +482,6 @@ function nativeCompatibilityObserved(capability, detail) {
   console.log('[pmjs-compat] ' + JSON.stringify(event));
 }
 
-// Release counters by cause. `sceneLifecycle` must stay zero: scene
-// termination must never release a canvas that outlived objects may use.
 var nativeCanvasReleaseStats = { explicit: 0, finalizer: 0, sceneLifecycle: 0 };
 function noteCanvasRelease(reason) {
   try {
@@ -713,7 +712,8 @@ function drawCanvasText(context, text, x, y, stroke, maxWidth) {
       !context._clipPaths.length && horizontalScale === 1) {
     NativeHost.canvas.drawText(context.canvas._ensureNativeCanvas().handle,
       placement.font.path, text, Math.round(placement.x + t[4]),
-      Math.round(placement.top + t[5]), placement.font.size, color, strokeWidth);
+      Math.round(placement.top + placement.font.size + t[5]),
+      placement.font.size, color, strokeWidth);
     return;
   }
   var padding = strokeWidth + 2;
@@ -722,7 +722,8 @@ function drawCanvasText(context, text, x, y, stroke, maxWidth) {
     Math.max(1, placement.font.size * 2 + padding * 2));
   try {
     NativeHost.canvas.drawText(temporary.handle, placement.font.path, text,
-      padding, padding, placement.font.size, colorToRgba(style), strokeWidth);
+      padding, padding + placement.font.size, placement.font.size,
+      colorToRgba(style), strokeWidth);
     var source = { width: temporary.width, height: temporary.height,
       _nativeCanvas: temporary };
     drawAffineImage(context, source, temporary, 0, 0, temporary.width,
@@ -921,3 +922,4 @@ CanvasContext2D.prototype.putImageData = function(imageData, x, y) {
   NativeHost.canvas.writePixels(canvas.handle, Math.floor(x) + sourceX,
     Math.floor(y) + sourceY, width, height, pixels);
 };
+

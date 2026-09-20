@@ -35,7 +35,7 @@ test('two-pass PluginManager.setup allows cross-plugin parameter lookups', () =>
   const samplePlugins = [
     { name: 'PluginA', status: true, description: '', parameters: { optA: '123' } },
     { name: 'PluginB', status: true, description: '', parameters: { optB: '456' } },
-    { name: 'PluginA', status: true, description: 'dup', parameters: { optA: 'dup' } } // duplicate
+    { name: 'PluginA', status: true, description: 'dup', parameters: { optA: 'dup' } }
   ];
 
   context.PluginManager.setup(samplePlugins);
@@ -130,9 +130,7 @@ test('document.currentScript stack exposes file:///game/ URL and restores on ret
   assert.equal(scriptsLoaded[3].currentScriptSrc, 'file:///game/inner.js');
   assert.equal(scriptsLoaded[4].path, 'outer.js-resumed');
   assert.equal(scriptsLoaded[4].currentScriptSrc, 'file:///game/outer.js');
-});
-
-test('process.versions and process.version reflect host Node and NW.js compatibility', () => {
+});test('process.versions and process.version reflect host Node and NW.js compatibility', () => {
   const context = {
     process: {
       platform: 'linux',
@@ -417,6 +415,9 @@ test('lifecycle pulses beforePlugins, afterPlugins, and beforeBoot', () => {
   context.globalThis.pmjsRegisterHook('beforePlugins', () => events.push('beforePlugins'));
   context.globalThis.pmjsRegisterHook('afterPlugins', () => events.push('afterPlugins'));
   context.globalThis.pmjsRegisterHook('beforeBoot', () => events.push('beforeBoot'));
+  context.globalThis.pmjsPixiRenderPreflight = {
+    scan() { events.push('pixi-preflight'); }
+  };
 
   vm.runInContext(pluginLoaderCode, context);
   vm.runInContext(bootstrapCode, context);
@@ -429,6 +430,7 @@ test('lifecycle pulses beforePlugins, afterPlugins, and beforeBoot', () => {
     'beforePlugins',
     'plugin-script-loaded',
     'afterPlugins',
+    'pixi-preflight',
     'beforeBoot',
     'window.onload'
   ]);
@@ -491,8 +493,7 @@ test('pluginLoaded hooks fire in load order and stay generic', () => {
   const pluginLoaderCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/plugin-loader.js'), 'utf8');
 
   vm.runInContext(setupCode, context);
-  // The core never names community plugins; these registrations stand in
-  // for whatever a reusable integration or port adapter registers.
+
   const onPlugin = (name, fn) => {
     context.globalThis.pmjsRegisterHook('pluginLoaded', (loaded) => {
       if (loaded === name) fn();
@@ -507,7 +508,7 @@ test('pluginLoaded hooks fire in load order and stay generic', () => {
   context.pmjsMvInitializePlugins();
 
   assert.deepEqual(events, ['a-1', 'a-2', 'b']);
-  // Event arguments reach subscribers; unknown names are no-ops.
+
   context.globalThis.pmjsRunHooks('pluginLoaded', 'Nobody');
 });
 
@@ -524,7 +525,6 @@ test('hook arguments forward and failures never take down boot', () => {
   context.globalThis.pmjsRunHooks('pluginLoaded', 'SomePlugin.js');
   assert.deepEqual(seen, ['SomePlugin.js']);
 
-  // A throwing subscriber is logged and the rest still run, in every mode.
   for (const devMode of [false, true]) {
     let secondRan = false;
     context.globalThis.PMJS_DEVELOPMENT_MODE = devMode;
@@ -548,7 +548,7 @@ test('Scene_Map same-map transfer does not short-circuit through reuse and prese
     isTransferring() { return this._transferring; },
     newMapId() { return this._newMapId; },
     performTransfer() {
-      // Stock Game_Player.performTransfer clears transfer state
+
       this._transferring = false;
       playerTransferFinalized = true;
     }
@@ -559,7 +559,6 @@ test('Scene_Map same-map transfer does not short-circuit through reuse and prese
     mapId() { return this._mapId; }
   };
 
-  // Simulate an autosave plugin (e.g. FELSKI_AUTOSAVE) hooking Game_Player.performTransfer
   const origPerformTransfer = player.performTransfer;
   player.performTransfer = function() {
     pluginHookCalls++;
@@ -608,19 +607,15 @@ test('Scene_Map same-map transfer does not short-circuit through reuse and prese
   const scenesCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/scenes.js'), 'utf8');
   vm.runInContext(scenesCode, context);
 
-  // Assert that shared pmjs-mv/scenes.js did NOT monkey-patch updateTransferPlayer
   assert.equal(context.Scene_Map.prototype._pmjsTransferPatched, undefined);
 
-  // Execute updateTransferPlayer for same-map transfer (newMapId === curMapId === 10)
   const currentMapScene = new context.Scene_Map();
   currentMapScene.updateTransferPlayer();
 
-  // In stock MV, SceneManager.goto(Scene_Map) creates a new scene with _transfer = true
   assert.ok(SceneManager._nextScene instanceof context.Scene_Map);
   assert.equal(SceneManager._nextSceneSame, false, '_nextSceneSame must not be set on stock same-map transfer');
   assert.equal(currentMapScene.reused, undefined, 'Scene_Map instance must not be marked reused by shared runtime');
 
-  // When next scene loads, onMapLoaded executes and triggers player.performTransfer()
   SceneManager._nextScene.onMapLoaded();
   assert.equal(pluginHookCalls, 1, 'Plugin performTransfer hook must execute exactly once');
   assert.equal(playerTransferFinalized, true, 'Player transfer state must be finalized normally');
@@ -739,7 +734,6 @@ test('Bitmap.prototype.drawText installs native acceleration only for stock pipe
     return context;
   }
 
-  // 1. Stock method: recognizes stock pipeline fingerprint and installs native fast path
   const StockBitmap = makeMockBitmapClass();
   const stockContext = createContext(StockBitmap);
   const stockBmp = new stockContext.Bitmap();
@@ -747,8 +741,6 @@ test('Bitmap.prototype.drawText installs native acceleration only for stock pipe
   assert.equal(nativeDrawCalls > 0, true, 'stock methods should use native fast path');
   assert.equal(stockOutlineCalls, 0, 'stock outline should not be called when native fast-path runs');
 
-  // 2. Pre-modified drawText (e.g. Bitmap Fonts plugin installed before PMJS):
-  // Does NOT match stock fingerprint, so native accelerator is NOT installed!
   let pluginDrawCalls = 0;
   const PreModifiedBitmap = makeMockBitmapClass(function(text) {
     pluginDrawCalls++;
@@ -760,7 +752,6 @@ test('Bitmap.prototype.drawText installs native acceleration only for stock pipe
   assert.equal(pluginDrawCalls, 1, 'pre-modified drawText must not be replaced');
   assert.equal(nativeDrawCalls, 0, 'native drawText must not run for non-stock pipeline');
 
-  // 3. Instance-level helper override on a stock bitmap: falls back to JavaScript implementation
   const customBmp = new stockContext.Bitmap();
   customBmp._drawTextOutline = function() { customOutlineCalls++; };
   customBmp.drawText('hello', 0, 0, 100, 20, 'left');
@@ -781,7 +772,7 @@ test('synchronous-burst storage read coalescing preserves stock DataManager obje
   const mockStorage = {
     exists(p) {
       storageStats++;
-      // file 1 and 2 exist, others do not
+
       if (p === 'save/file1.rpgsave' || p === 'file1.rpgsave') return true;
       if (p === 'save/file2.rpgsave' || p === 'file2.rpgsave') return true;
       if (p === 'save/global.rpgsave' || p === 'global.rpgsave') return true;
@@ -807,7 +798,6 @@ test('synchronous-burst storage read coalescing preserves stock DataManager obje
     }
   };
 
-  // Stock MV StorageManager methods
   const StorageManager = {
     isLocalMode() { return true; },
     localFilePath(savefileId) {
@@ -836,7 +826,6 @@ test('synchronous-burst storage read coalescing preserves stock DataManager obje
     remove(savefileId) {}
   };
 
-  // Stock MV DataManager methods
   const DataManager = {
     maxSavefiles() { return 20; },
     loadGlobalInfo() {
@@ -870,36 +859,29 @@ test('synchronous-burst storage read coalescing preserves stock DataManager obje
   const storageCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/storage.js'), 'utf8');
   vm.runInContext(storageCode, context);
 
-  // 1. In a synchronous burst, multiple DataManager.loadGlobalInfo() calls execute
   const a = context.DataManager.loadGlobalInfo();
   const b = context.DataManager.loadGlobalInfo();
 
-  // Crucial invariant: distinct instances, no mutable object reference sharing
   assert.notEqual(a, b, 'Each loadGlobalInfo call must return a fresh, distinct object reference');
   assert.deepEqual(a, b, 'Contents should match');
 
-  // Verify mutation isolation: mutating a does not pollute b
   a[1].title = 'Mutated by plugin';
   assert.equal(b[1].title, 'Save 1', 'Mutating a must not affect b');
 
-  // Simulate 16 calls (like OMORI continue menu)
   for (let i = 0; i < 14; i++) {
     context.DataManager.loadGlobalInfo();
   }
 
-  // Underneath, the 16 calls must coalesce storage I/O and decompression:
   assert.equal(storageReads, 1, 'Only 1 storage read for the entire burst of 16 calls');
   assert.equal(lzDecompresses, 1, 'Only 1 LZString decompression for the entire burst of 16 calls');
   assert.equal(storageStats, 20, 'Only 20 exists stats (1..20) for the entire burst of 16 calls (not 320)');
 
-  // 2. Storage mutation immediately invalidates the burst cache
   context.StorageManager.remove(1);
   const c = context.DataManager.loadGlobalInfo();
   assert.equal(storageReads, 2, 'Storage mutation must invalidate burst cache, causing fresh read');
   assert.equal(lzDecompresses, 2, 'Storage mutation must invalidate burst cache, causing fresh decompression');
   assert.equal(storageStats, 40, 'Storage mutation must invalidate burst cache, causing fresh stats');
 
-  // 3. Across microtasks, the burst cache clears automatically
   await new Promise(resolve => queueMicrotask(resolve));
   const d = context.DataManager.loadGlobalInfo();
   assert.equal(storageReads, 3, 'New microtask turn must execute fresh storage read');
@@ -959,7 +941,6 @@ test('storage read coalescing runs underneath plugin wrappers and respects dynam
     remove() {}
   };
 
-  // Stock MV DataManager.loadGlobalInfo: parses fresh objects on every call.
   let jsonParses = 0;
   const DataManager = {
     maxSavefiles() { return 2; },
@@ -986,12 +967,10 @@ test('storage read coalescing runs underneath plugin wrappers and respects dynam
   sandbox.globalThis = sandbox;
 
   const context = vm.createContext(sandbox);
-  // PMJS installs on the stock base before game plugins during bootstrap.
+
   const storageCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/storage.js'), 'utf8');
   vm.runInContext(storageCode, context);
 
-  // A game plugin loads AFTER PMJS: it redirects save paths per profile and
-  // wraps the plugin-observable StorageManager surface with side effects.
   context.StorageManager.localFilePath = function(savefileId) {
     return '/save/' + activeProfile + '/file' + savefileId + '.rpgsave';
   };
@@ -1007,8 +986,6 @@ test('storage read coalescing runs underneath plugin wrappers and respects dynam
     return origLocalFileExists.call(this, savefileId);
   };
 
-  // 1. Verify plugin wrapper transparency:
-  // Redundant synchronous calls must execute the plugin wrapper every single time!
   const res1 = context.StorageManager.load(1);
   const res2 = context.StorageManager.load(1);
 
@@ -1022,9 +999,6 @@ test('storage read coalescing runs underneath plugin wrappers and respects dynam
   assert.equal(pluginExistsCalls, 2, 'Plugin wrapper must run on every single StorageManager.exists call');
   assert.equal(physicalStats, 1, 'Underneath, physical stat is coalesced to 1');
 
-  // 1b. Full-stack certification: DataManager.loadGlobalInfo still executes
-  // every observable layer (plugin hooks + JSON.parse, fresh objects each
-  // time) while the physical read underneath coalesces.
   const g1 = context.DataManager.loadGlobalInfo();
   const g2 = context.DataManager.loadGlobalInfo();
   assert.notEqual(g1, g2, 'Each loadGlobalInfo must return a fresh object');
@@ -1032,25 +1006,17 @@ test('storage read coalescing runs underneath plugin wrappers and respects dynam
   assert.equal(pluginLoadCalls, 4, 'Plugin load wrapper must run on every loadGlobalInfo call');
   assert.equal(physicalReads, 2, 'Only one physical read for the new file0 path across both calls');
 
-  // 2. Dynamic path identity test:
-  // If localFilePath changes during the same burst (e.g. switching profile/directory),
-  // cache entries keyed by storagePath must NOT collide!
   activeProfile = 'profileB';
   const resB = context.StorageManager.load(1);
   assert.equal(pluginLoadCalls, 5, 'Plugin wrapper runs on profile B call');
   assert.equal(physicalReads, 3, 'Switching directory path must perform a physical read for new path');
   assert.equal(resB, '{"profile":"B"}', 'Result must reflect profile B, not stale profile A');
 
-  // 3. Centralized low-level mutation test:
-  // Direct call to NativeHost.storage.writeText must bump generation and invalidate burst cache
   mockStorage.writeText('profileB/file1.rpgsave', 'something');
   const resAfterWrite = context.StorageManager.load(1);
   assert.equal(pluginLoadCalls, 6);
   assert.equal(physicalReads, 4, 'Direct NativeHost.storage write must invalidate read burst');
 
-  // 4. Post-plugin reinstall is a no-op: the plugin loader re-invokes the
-  // installer after PluginManager.setup, which must not reset plugin path
-  // overrides, unwrap plugin wrappers, or disturb the live burst.
   vm.runInContext(storageCode, context);
   assert.equal(
     context.StorageManager.localFilePath(1),
@@ -1061,7 +1027,4 @@ test('storage read coalescing runs underneath plugin wrappers and respects dynam
   assert.equal(resReinstall, '{"profile":"B"}');
   assert.equal(physicalReads, 4, 'Live burst must survive reinstall (still a hit, no new physical read)');
 });
-
-
-
 

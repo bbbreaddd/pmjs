@@ -48,6 +48,9 @@ function createNativePixiRenderer(width, height, options) {
     screen: new PIXI.Rectangle(0, 0, width, height),
     rootRenderTarget: null,
     renderingToScreen: true,
+
+    emptyRenderer: { flush: function() {}, start: function() {},
+      stop: function() {} },
     currentRenderer: null,
     _nextTextureLocation: 0,
     _activeShader: null,
@@ -61,7 +64,7 @@ function createNativePixiRenderer(width, height, options) {
       if (this.currentRenderer && typeof this.currentRenderer.stop === 'function') {
         this.currentRenderer.stop();
       }
-      this.currentRenderer = nextRenderer || null;
+      this.currentRenderer = nextRenderer || this.emptyRenderer;
       if (this.currentRenderer && typeof this.currentRenderer.start === 'function') {
         this.currentRenderer.start();
       }
@@ -70,7 +73,7 @@ function createNativePixiRenderer(width, height, options) {
       if (this.currentRenderer && typeof this.currentRenderer.flush === 'function') {
         this.currentRenderer.flush();
       }
-      this.currentRenderer = null;
+      this.currentRenderer = this.emptyRenderer;
     },
     setBlendMode: function(blendMode) {
       this.state.setBlendMode(blendMode);
@@ -246,7 +249,16 @@ function createNativePixiRenderer(width, height, options) {
         if (this.boundTextures[index] === base) this.boundTextures[index] = null;
       }
     },
-    render: function(stage, renderTexture, clear, transform) {
+    render: function(stage, renderTexture, clear, transform,
+        skipUpdateTransform) {
+      if (!this._pmjsPreparingBitmapCache) {
+        this._pmjsPreparingBitmapCache = true;
+        try {
+          prepareNativeBitmapCaches(stage, this);
+        } finally {
+          this._pmjsPreparingBitmapCache = false;
+        }
+      }
       this.stage = stage;
       this._lastObjectRendered = stage;
       this.renderingToScreen = !renderTexture;
@@ -283,7 +295,8 @@ function createNativePixiRenderer(width, height, options) {
           d: resolution, tx: 0, ty: 0 };
         renderNativeStage(stage, transform ?
           nativeComposeTransform(resolutionTransform, transform) :
-          resolutionTransform, resolution, this.roundPixels);
+          resolutionTransform, resolution, this.roundPixels,
+          skipUpdateTransform);
         NativeHost.render.renderToCanvas(target._ensureNativeCanvas().handle);
         this.textureGC.update();
         if (typeof this.emit === 'function') this.emit('postrender');
@@ -296,7 +309,7 @@ function createNativePixiRenderer(width, height, options) {
         d: this.resolution, tx: 0, ty: 0 };
       renderNativeStage(stage, transform ?
         nativeComposeTransform(screenTransform, transform) : screenTransform,
-        this.resolution, this.roundPixels);
+        this.resolution, this.roundPixels, skipUpdateTransform);
       var video = Graphics._video;
       if (video && video._nativeCanvas && video.style.opacity > 0) {
         NativeHost.render.image(video._nativeCanvas.handle,
@@ -422,6 +435,7 @@ function createNativePixiRenderer(width, height, options) {
     generateTextureGpu: function(displayObject, scaleMode, resolution, region) {
       resolution = Math.max(0.000001, Number(resolution) || 1);
       region = region || displayObject.getLocalBounds();
+      prepareNativeBitmapCaches(displayObject, this);
       var targetWidth = Math.max(1, Math.ceil(region.width * resolution));
       var targetHeight = Math.max(1, Math.ceil(region.height * resolution));
       this.stage = displayObject;
@@ -496,6 +510,7 @@ function createNativePixiRenderer(width, height, options) {
       this.gl = null;
     }
   };
+  renderer.currentRenderer = renderer.emptyRenderer;
   if (PIXI.utils && typeof PIXI.utils.EventEmitter === 'function') {
     PIXI.utils.EventEmitter.call(renderer);
   }
@@ -583,8 +598,7 @@ function createNativePixiRenderer(width, height, options) {
     renderer: renderer,
     gl: renderer.gl,
     _managedTextures: [],
-    // Pixi 4 retains these legacy TextureManager stubs; binding is owned by
-    // WebGLRenderer.bindTexture in this release.
+
     bindTexture: function() {},
     getTexture: function() {},
     trackTexture: function(base) {
@@ -698,3 +712,4 @@ PIXI.WebGLRenderer = NativePixiWebGLRenderer;
 PIXI.autoDetectRenderer = function(width, height, options) {
   return new NativePixiWebGLRenderer(width, height, options);
 };
+

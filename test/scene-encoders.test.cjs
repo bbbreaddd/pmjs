@@ -1,16 +1,14 @@
 'use strict';
 
-// Scene-encoder regression tests: frozen oracle packet for plain
-// Containers/Sprites, structural canary (absent features add no work), and
-// one "active and correct" case per effect-lane feature. New compatibility
-// features extend this file with the same pair.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const WRITER_SOURCES = ['js/pmjs-pixi4/scene-primitives.js',
+const WRITER_SOURCES = ['js/pmjs-core/log.js',
+  'js/pmjs-pixi4/render-preflight.js',
+  'js/pmjs-pixi4/scene-primitives.js',
   'js/pmjs-pixi4/scene-filters.js', 'js/pmjs-pixi4/scene-packet.js',
   'js/pmjs-mv/render-prepare.js',
   'js/pmjs-pixi4/scene-prepare.js', 'js/pmjs-pixi4/scene-classify.js',
@@ -24,6 +22,7 @@ function loadWriterSources() {
 function makeHarness() {
   let nextHandle = 100;
   const compatHits = [];
+  const compatObserved = [];
   const submitted = [];
   const counts = { filterPlans: 0, rectMasks: 0, alphaMasks: 0 };
 
@@ -104,7 +103,7 @@ function makeHarness() {
       super(); this._red = 10; this._green = 20; this._blue = 30;
     }
   }
-  // Referenced by preparation but never instantiated by these fixtures.
+
   class Tilemap extends Container {}
   class Window extends Container {}
   class WindowLayer extends Container {}
@@ -162,6 +161,9 @@ function makeHarness() {
     nativeCompatibilityHit(kind, detail) {
       compatHits.push([kind, String(detail)]);
     },
+    nativeCompatibilityObserved(kind, detail) {
+      compatObserved.push([kind, String(detail)]);
+    },
     NativeHost: {
       scene: { schema: { version: 1, metadataStride: 7, valueStride: 41,
           transactionalSubmit: true },
@@ -200,7 +202,7 @@ function makeHarness() {
   function sprite(width, height) {
     return new sandbox.PIXI.Sprite(makeTexture(width || 32, height || 32));
   }
-  return { sandbox, submitted, compatHits, counts, makeTexture, sprite };
+  return { sandbox, submitted, compatHits, compatObserved, counts, makeTexture, sprite };
 }
 
 function buildPlainFixture(harness) {
@@ -222,15 +224,13 @@ function submitOnly(harness, stage) {
   harness.counts.filterPlans = 0;
   harness.counts.rectMasks = 0;
   harness.counts.alphaMasks = 0;
-  const ok = harness.sandbox.submitNativeScene(stage);
-  assert.equal(ok, true);
+  const result = harness.sandbox.submitNativeScene(stage);
+  assert.equal(result.ok, true);
   assert.equal(harness.submitted.length, 1);
   assert.deepEqual(harness.compatHits, []);
   return harness.submitted[0];
 }
 
-// Exact oracle for the plain fixture: root, inner, two sprites, deep
-// container, one sprite. Handles are allocated in build order.
 const EXPECTED_PLAIN_METADATA = [0, 4294967295, 0, 16777215, 0, 0, 0,
   0, 0, 0, 16777215, 0, 0, 0,
   1, 1, 100, 16777215, 0, 0, 0,
@@ -296,7 +296,7 @@ test('fixed representation table classifies every leaf without probing', () => {
       typeof writeNativeSceneKind].join(','),
     kinds: PMJS_SCENE_KIND
   })`, sandbox);
-  // Cross-realm structural read of the classifier.
+
   const table = JSON.parse(JSON.stringify(kinds));
   assert.deepEqual(table, { container: 0, sprite: 1, picture: 1, weather: 1,
     screen: 2, tiling: 3, graphics: 4, mesh: 5, rectLayer: 6, unknown: 0,
@@ -305,7 +305,7 @@ test('fixed representation table classifies every leaf without probing', () => {
       GRAPHICS: 4, MESH: 5, RECT_TILE_LAYER: 6, GENERIC: 7 } });
 });
 
-test('unknown representations take the container reference lane', () => {
+test('unknown renderer labels skip the node and submit siblings', () => {
   const harness = makeHarness();
   const { sandbox, sprite } = harness;
   const root = new sandbox.PIXI.Container();
@@ -313,13 +313,202 @@ test('unknown representations take the container reference lane', () => {
   custom.pluginName = 'customChaos';
   custom.addChild(sprite());
   root.addChild(custom);
-  const packet = submitOnly(harness, root);
-  // Container semantics with the same effect rule as containers: no effects
-  // means no planning. GENERIC stays reserved, never produced.
-  assert.deepEqual(packet.metadata.filter((_, index) => index % 7 === 0),
+  root.addChild(sprite());
+  const result = sandbox.submitNativeScene(root);
+  assert.equal(result.ok, true);
+  assert.equal(harness.submitted.length, 1);
+  assert.equal(result.skipped.length, 1);
+  assert.equal(result.skipped[0].capability, 'render.renderer-plugin');
+  assert.equal(result.skipped[0].producer, 'customchaos');
+  assert.equal(result.skipped[0].nodeClass, 'Sprite');
+  assert.deepEqual(harness.compatHits,
+    [['render.renderer-plugin', 'customchaos: Sprite:renderer=customchaos']]);
+
+  assert.deepEqual(harness.submitted[0].metadata.filter((_, index) => index % 7 === 0),
+    [0, 1]);
+});
+
+test('reached subclass and instance render hooks skip the node', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  class WeirdSprite extends sandbox.PIXI.Sprite {
+    _renderWebGL() {}
+  }
+  const root = new sandbox.PIXI.Container();
+  const subclass = new WeirdSprite(harness.makeTexture(32, 32));
+  root.addChild(subclass);
+  root.addChild(sprite());
+  let result = sandbox.submitNativeScene(root);
+  assert.equal(result.ok, true);
+  assert.equal(harness.submitted.length, 1);
+  assert.equal(result.skipped.length, 1);
+  assert.equal(result.skipped[0].capability, 'render.render-method');
+  assert.equal(result.skipped[0].nodeClass, 'WeirdSprite');
+
+  assert.deepEqual(harness.submitted[0].metadata.filter((_, index) => index % 7 === 0),
+    [0, 1]);
+
+  root.children.length = 0;
+  harness.submitted.length = 0;
+  const instance = sprite();
+  instance.renderWebGL = function() {};
+  root.addChild(instance);
+  result = sandbox.submitNativeScene(root);
+  assert.equal(result.ok, true);
+  assert.equal(result.skipped.length, 1);
+  assert.equal(result.skipped[0].nodeClass, 'Sprite');
+  assert.deepEqual(harness.submitted[0].metadata.filter((_, index) => index % 7 === 0),
+    [0]);
+});
+
+test('render contract checks later prototype patches', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const root = new sandbox.PIXI.Container();
+  const stock = sprite();
+  root.addChild(stock);
+  submitOnly(harness, root);
+  sandbox.PIXI.Sprite.prototype._renderWebGL = function() {};
+  const result = sandbox.submitNativeScene(root);
+  assert.equal(result.ok, true);
+  assert.equal(result.skipped.length, 1);
+  assert.equal(result.skipped[0].capability, 'render.render-method');
+  assert.deepEqual(harness.submitted[harness.submitted.length - 1].metadata
+    .filter((_, index) => index % 7 === 0), [0]);
+});
+
+test('plain sprite segments cannot bypass render contract proof', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const root = new sandbox.PIXI.Container();
+  for (let index = 0; index < 5; index++) root.addChild(sprite());
+  root.children[3]._renderWebGL = function() {};
+  sandbox.nativePlainSpriteSegmentsEnabled = true;
+  const result = sandbox.submitNativeScene(root);
+  assert.equal(result.ok, true);
+  assert.equal(result.skipped.length, 1);
+  assert.equal(result.skipped[0].capability, 'render.render-method');
+  assert.equal(result.skipped[0].nodeClass, 'Sprite');
+
+  assert.deepEqual(harness.submitted[0].metadata.filter((_, index) => index % 7 === 0),
+    [0, 1, 1, 1, 1]);
+});
+
+test('skipUpdateTransform uses the rendered root world transform', () => {
+  const harness = makeHarness();
+  const { sandbox } = harness;
+  const root = new sandbox.PIXI.Container();
+  root.x = 12;
+  root.transform.worldTransform.tx = 0;
+  sandbox.renderNativeStage(root,
+    { a: 1, b: 0, c: 0, d: 1, tx: 5, ty: 3 }, 1, false, true);
+  assert.equal(harness.submitted[0].values[4], 5);
+  assert.equal(harness.submitted[0].values[5], 3);
+  assert.equal(root.parent, null);
+  sandbox.renderNativeStage(root,
+    { a: 1, b: 0, c: 0, d: 1, tx: 5, ty: 3 }, 1, false, false);
+  assert.equal(harness.submitted[1].values[4], 17);
+  assert.equal(harness.submitted[1].values[5], 3);
+});
+
+test('an uninitialized bitmap cache skips the node instead of drawing live children', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const root = new sandbox.PIXI.Container();
+  const cached = new sandbox.PIXI.Container();
+  cached._cacheAsBitmap = true;
+  cached.addChild(sprite());
+  root.addChild(cached);
+  const result = sandbox.submitNativeScene(root);
+  assert.equal(result.ok, true);
+  assert.equal(harness.submitted.length, 1);
+  assert.equal(result.skipped.length, 1);
+  assert.equal(result.skipped[0].capability, 'render.cacheAsBitmap');
+  assert.deepEqual(harness.compatHits,
+    [['render.cacheAsBitmap',
+      'Container: bitmap cache was not initialized before scene encoding']]);
+
+  assert.deepEqual(harness.submitted[0].metadata.filter((_, index) => index % 7 === 0),
+    [0]);
+});
+
+test('bitmap cache uses one Pixi snapshot until the cache is disabled', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const root = new sandbox.PIXI.Container();
+  const cached = new sandbox.PIXI.Container();
+  const child = sprite();
+  const snapshot = sprite();
+  snapshot.alpha = 0.4;
+  cached.x = 12;
+  cached._cacheAsBitmap = true;
+  cached._cacheData = { sprite: null };
+  cached.addChild(child);
+  root.addChild(cached);
+  let builds = 0;
+  cached._initCachedDisplayObject = renderer => {
+    builds++;
+    assert.equal(cached.__pmjsBuildingBitmapCache, true);
+    assert.equal(renderer.render(cached), true);
+    cached._cacheData.sprite = snapshot;
+  };
+  const renderer = { render(node) {
+
+    const result = sandbox.encodeNativeScene(node);
+    assert.equal(result.ok, true);
+    return true;
+  } };
+  sandbox.prepareNativeBitmapCaches(root, renderer);
+  assert.equal(sandbox.submitNativeScene(root).ok, true);
+  const first = harness.submitted[0];
+  child.x = 100;
+  sandbox.prepareNativeBitmapCaches(root, renderer);
+  assert.equal(sandbox.submitNativeScene(root).ok, true);
+  const second = harness.submitted[1];
+  assert.equal(builds, 1);
+  assert.deepEqual(first, second);
+  assert.deepEqual(first.metadata.filter((_, index) => index % 7 === 0),
     [0, 0, 1]);
-  assert.deepEqual(harness.counts,
-    { filterPlans: 0, rectMasks: 0, alphaMasks: 0 });
+  assert.equal(first.values[41 + 4], 12);
+  assert.equal(first.values[2 * 41 + 6], 1);
+  cached.alpha = 0.6;
+  assert.equal(sandbox.submitNativeScene(root).ok, true);
+  assert.ok(Math.abs(harness.submitted[2].values[41 + 6] - 0.6) < 0.000001);
+  assert.equal(harness.submitted[2].values[2 * 41 + 6], 1);
+  assert.deepEqual(harness.compatObserved,
+    [['render.cacheAsBitmap', 'Container'],
+      ['render.cacheAsBitmap', 'Container'],
+      ['render.cacheAsBitmap', 'Container']]);
+  assert.deepEqual(harness.compatHits, []);
+});
+
+test('nested bitmap caches build inside out and draw the parent snapshot', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const root = new sandbox.PIXI.Container();
+  const outer = new sandbox.PIXI.Container();
+  const inner = new sandbox.PIXI.Container();
+  inner.addChild(sprite());
+  outer.addChild(inner);
+  root.addChild(outer);
+  const order = [];
+  for (const [name, node] of [['inner', inner], ['outer', outer]]) {
+    node._cacheAsBitmap = true;
+    node._cacheData = { sprite: null };
+    node._initCachedDisplayObject = renderer => {
+      order.push(name);
+      assert.equal(renderer.render(node), true);
+      node._cacheData.sprite = sprite();
+    };
+  }
+  const renderer = { render(node) {
+    return sandbox.encodeNativeScene(node).ok;
+  } };
+  sandbox.prepareNativeBitmapCaches(root, renderer);
+  assert.deepEqual(order, ['inner', 'outer']);
+  assert.equal(sandbox.submitNativeScene(root).ok, true);
+  assert.deepEqual(harness.submitted[0].metadata.filter(
+    (_, index) => index % 7 === 0), [0, 0, 1]);
 });
 
 test('active blur filter takes the advanced lane and stays correct', () => {
@@ -351,7 +540,7 @@ test('active rectangle mask resolves to a scissor without alpha work', () => {
   const packet = submitOnly(harness, root);
   assert.deepEqual(harness.counts,
     { filterPlans: 1, rectMasks: 1, alphaMasks: 0 });
-  // The masked leaf carries the scissor flag.
+
   assert.equal(packet.metadata[1 * 7 + 5] & 1, 1);
 });
 
@@ -363,7 +552,7 @@ test('encoders observe state instead of advancing semantics', () => {
   const prepare = readModule('js/pmjs-mv/render-prepare.js') + '\n' +
     readModule('js/pmjs-pixi4/scene-prepare.js');
   const classify = readModule('js/pmjs-pixi4/scene-classify.js');
-  // Preparation-only calls must never appear in encoders.
+
   ['updateChowRender', '_paintAllTiles', '_sortChildren', 'updateText(',
     '.validate(', '_updateCursor', '_updateArrows', '_updatePauseSign',
     '_updateContents', 'nativeSceneFilter(', 'nativeRectangleMask(',
@@ -371,13 +560,13 @@ test('encoders observe state instead of advancing semantics', () => {
     assert.ok(encoders.indexOf(forbidden) < 0,
       'scene-encoders.js must not advance semantics: ' + forbidden);
   });
-  // Preparation never encodes packets.
+
   ['nativeSceneRecord', 'nativeSceneFilterMarker', 'scene.submit',
     'filterPlan', 'nativeSceneEmission'].forEach(forbidden => {
     assert.ok(prepare.indexOf(forbidden) < 0,
       'scene-prepare.js must not encode packets: ' + forbidden);
   });
-  // Classification is pure observation: no preparation, no encoding.
+
   ['nativeSceneRecord', 'prepareNativeSceneNode', 'nativeSceneFilter(',
     'ensureNative'].forEach(forbidden => {
     assert.ok(classify.indexOf(forbidden) < 0,
@@ -462,26 +651,138 @@ test('filter parameter mutation re-renders without changing structure', () => {
   assert.deepEqual(
     first.metadata.filter((_, index) => index % 7 === 0),
     second.metadata.filter((_, index) => index % 7 === 0));
-  // The blur marker carries the mutated strength (blur/passes).
+
   assert.notDeepEqual(first.values, second.values);
   assert.equal(first.values[41 + 7], 2);
   assert.equal(second.values[41 + 7], 4);
 });
 
-test('unsupported filters fall back instead of emitting partial scenes', () => {
+test('unsupported filters skip the node and submit siblings', () => {
   const harness = makeHarness();
   const { sandbox, sprite } = harness;
   const root = new sandbox.PIXI.Container();
   const filtered = sprite();
   filtered._filters = [{ enabled: true }];
   root.addChild(filtered);
+  root.addChild(sprite());
   harness.submitted.length = 0;
   harness.compatHits.length = 0;
-  assert.equal(sandbox.submitNativeScene(root), false);
-  assert.equal(harness.submitted.length, 0);
+  const result = sandbox.submitNativeScene(root);
+  assert.equal(result.ok, true);
+  assert.equal(harness.submitted.length, 1);
+  assert.equal(result.skipped.length, 1);
+  assert.equal(result.skipped[0].capability, 'render.filter');
+  assert.equal(result.skipped[0].nodeClass, 'Sprite');
   assert.deepEqual(harness.compatHits,
-    [['render.filter', 'Sprite:Object'],
-      ['render.sceneFallback', 'Sprite:filter']]);
+    [['render.filter', 'Sprite: Object']]);
+
+  assert.deepEqual(harness.submitted[0].metadata.filter((_, index) => index % 7 === 0),
+    [0, 1]);
+});
+
+test('a filter with a built-in constructor name cannot impersonate its shader', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const root = new sandbox.PIXI.Container();
+  const impostor = class BlurFilter {
+    constructor() { this.enabled = true; this.blur = 3; this.quality = 1; }
+  };
+  const filtered = sprite();
+  filtered._filters = [new impostor()];
+  root.addChild(filtered);
+
+  const result = sandbox.submitNativeScene(root);
+  assert.equal(result.ok, true);
+  assert.equal(result.skipped.length, 1);
+  assert.equal(result.skipped[0].capability, 'render.filter');
+  assert.equal(result.skipped[0].producer, 'Sprite');
+  assert.equal(result.skipped[0].reason, 'BlurFilter');
+  assert.equal(harness.submitted.length, 1);
+});
+
+test('skipped nodes submit a degraded frame and keep readiness', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const root = new sandbox.PIXI.Container();
+  root.addChild(sprite());
+  sandbox.renderNativeStage(root);
+  assert.equal(harness.submitted.length, 1);
+  assert.equal(sandbox.renderNativeStage._ready, true);
+
+  const skipped = sprite();
+  skipped._filters = [{ enabled: true }];
+  root.addChild(skipped);
+  const parent = root.parent;
+  sandbox.renderNativeStage(root);
+  assert.equal(harness.submitted.length, 2,
+    'a degraded packet still replaces the last committed scene');
+  assert.equal(sandbox.renderNativeStage._ready, true);
+  assert.equal(root.parent, parent);
+  assert.deepEqual(harness.compatHits.slice(-1),
+    [['render.filter', 'Sprite: Object']]);
+});
+
+test('production skips log structured detail and never quit', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const root = new sandbox.PIXI.Container();
+  root.addChild(sprite());
+  const messages = [];
+  let quitCount = 0;
+  sandbox.NativeHost.runtime.quit = () => { quitCount++; };
+  sandbox.console = { ...console,
+    error(message) { messages.push(String(message)); } };
+  const filtered = sprite();
+  filtered._filters = [{ enabled: true }];
+  root.addChild(filtered);
+
+  sandbox.renderNativeStage(root);
+  sandbox.renderNativeStage(root);
+  assert.equal(harness.submitted.length, 2);
+  assert.equal(sandbox.renderNativeStage._ready, true);
+  assert.equal(quitCount, 0);
+  assert.equal(messages.length, 1,
+    'first occurrence logs once; repeats stay counted but quiet');
+  const logged = JSON.parse(messages[0].replace('[pmjs] unsupported render ', ''));
+  assert.equal(logged.capability, 'render.filter');
+  assert.equal(logged.nodeClass, 'Sprite');
+  assert.ok('frame' in logged && 'scene' in logged && 'map' in logged);
+});
+
+test('strict and headless skips throw with detail', () => {
+  for (const [setting, value] of [
+    ['PMJS_STRICT_COMPAT', '1'], ['PMJS_DIALOG_MODE', 'headless'],
+    ['PMJS_DIALOG_MODE', 'strict']
+  ]) {
+    const harness = makeHarness();
+    const { sandbox, sprite } = harness;
+    const root = new sandbox.PIXI.Container();
+    const filtered = sprite();
+    filtered._filters = [{ enabled: true }];
+    root.addChild(filtered);
+    sandbox.NativeHost.runtime.env = name =>
+      name === setting ? value : undefined;
+    sandbox.NativeHost.runtime.quit = () => { throw new Error('unexpected quit'); };
+    sandbox.NativeHost.dialog = { alert() { throw new Error('unexpected overlay'); } };
+
+    assert.throws(() => sandbox.renderNativeStage(root),
+      /native scene skipped 1 node\(s\).*render\.filter/);
+  }
+});
+
+test('native submit failure clears readiness and restores the stage parent', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const root = new sandbox.PIXI.Container();
+  root.addChild(sprite());
+  sandbox.renderNativeStage(root);
+  const parent = root.parent;
+  sandbox.NativeHost.scene.submit = () => { throw new Error('addon rejected packet'); };
+
+  assert.throws(() => sandbox.renderNativeStage(root), /addon rejected packet/);
+  assert.equal(sandbox.renderNativeStage._ready, false);
+  assert.equal(root.parent, parent);
+  assert.equal(harness.submitted.length, 1);
 });
 
 function directPacket(harness, node, clip, mask) {
@@ -504,7 +805,7 @@ function directPacket(harness, node, clip, mask) {
   return JSON.parse(JSON.stringify(result));
 }
 
-test('custom render hooks run in reference order', () => {
+test('custom type hooks cannot claim a mismatched representation', () => {
   const harness = makeHarness();
   const { sandbox, sprite } = harness;
   let hookCalls = 0;
@@ -526,12 +827,16 @@ test('custom render hooks run in reference order', () => {
   hooked.indices = new Uint16Array([0, 1, 2]);
   hooked.updateChowRender = function() { hookUpdated++; };
   root.addChild(hooked);
-  const packet = submitOnly(harness, root);
-  // The update hook runs once per node; the type hook selects the encoder.
+  const result = sandbox.submitNativeScene(root);
+
   assert.equal(hookCalls, 2);
   assert.equal(hookUpdated, 1);
-  assert.deepEqual(packet.metadata.filter((_, index) => index % 7 === 0),
-    [0, 8]);
+  assert.equal(result.ok, true);
+  assert.equal(result.skipped.length, 1);
+  assert.equal(result.skipped[0].capability, 'render.render-method');
+  assert.match(result.skipped[0].reason, /native representation mismatch/);
+  assert.deepEqual(harness.submitted[0].metadata.filter((_, index) => index % 7 === 0),
+    [0]);
 });
 
 test('custom type hook observes post-transform-update state', () => {
@@ -541,8 +846,7 @@ test('custom type hook observes post-transform-update state', () => {
   const node = sprite();
   node.x = 7;
   node.y = 3;
-  // Poison the cached local transform: the type hook must see the refreshed
-  // values written by updateLocalTransform(), not the stale cache.
+
   node.transform.localTransform = { a: 1, b: 0, c: 0, d: 1,
     tx: 12345, ty: 6789 };
   let observed = null;
@@ -595,12 +899,10 @@ test('classifier adds no label reads beyond type resolution', () => {
     return { plainResult, customPluginReads, customTypeReads, customKind };
   })()`, sandbox);
   const result = JSON.parse(JSON.stringify(counts));
-  // Reference resolution reads pluginName once and _pmjsType once for a
-  // plain node; classification must not observe either property again.
+
   assert.deepEqual(result.plainResult,
     { pluginReads: 1, typeReads: 1, plainKind: 0 });
-  // An explicit label short-circuits before _pmjsType, and the classifier
-  // never re-reads the label to decide container vs generic.
+
   assert.equal(result.customPluginReads, 1);
   assert.equal(result.customTypeReads, 0);
   assert.equal(result.customKind, 0);
@@ -701,8 +1003,7 @@ test('nested filter and mask stack both markers', () => {
   nested.mask = mask;
   root.addChild(nested);
   const packet = submitOnly(harness, root);
-  // Active filters disable the scissor shortcut (Pixi pops its mask before
-  // the filter chain), so the mask resolves as alpha work instead.
+
   assert.deepEqual(harness.counts,
     { filterPlans: 1, rectMasks: 0, alphaMasks: 1 });
   assert.deepEqual(packet.metadata.filter((_, index) => index % 7 === 0),
@@ -735,7 +1036,7 @@ test('window children render unclipped like stock WindowLayer', () => {
   dialog._isWindow = true;
   dialog.visible = true;
   dialog._openness = 255;
-  // Window preparation expects MV window methods.
+
   dialog._updateCursor = () => {};
   dialog._updateArrows = () => {};
   dialog._updatePauseSign = () => {};
@@ -776,13 +1077,11 @@ test('particle children carry tone and blend colors regardless of attachment tim
   const root = new sandbox.PIXI.Container();
   const container = new sandbox.PIXI.particles.ParticleContainer();
 
-  // Child 1: tone applied before attachment
   const childBefore = sprite();
   childBefore._colorTone = [68, -34, 0, 255];
   childBefore._blendColor = [255, 0, 0, 128];
   container.addChild(childBefore);
 
-  // Child 2: added to container, then tone applied
   const childAfter = sprite();
   container.addChild(childAfter);
   childAfter._colorTone = [-100, 50, 0, 64];
@@ -791,7 +1090,6 @@ test('particle children carry tone and blend colors regardless of attachment tim
   root.addChild(container);
   const packet = submitOnly(harness, root);
 
-  // Node 0: root, Node 1: container, Node 2: childBefore, Node 3: childAfter
   assert.deepEqual(packet.metadata.filter((_, index) => index % 7 === 0),
     [0, 0, 1, 1]);
   assert.equal(packet.metadata[2 * 7 + 5] & 16, 16);
@@ -819,7 +1117,7 @@ test('rect tile layers bypass rejection with retained records', () => {
   root.addChild(parent);
   parent.addChild(layer);
   const packet = submitOnly(harness, root);
-  // The invisible layer still emits; the visible parent groups it.
+
   assert.deepEqual(packet.metadata.filter((_, index) => index % 7 === 0),
     [0, 0, 4]);
 });
@@ -827,8 +1125,8 @@ test('rect tile layers bypass rejection with retained records', () => {
 function trySubmitMaskStage(harness, stage) {
   harness.submitted.length = 0;
   harness.compatHits.length = 0;
-  const ok = harness.sandbox.submitNativeScene(stage);
-  return { ok, packet: harness.submitted[0] || null,
+  const result = harness.sandbox.submitNativeScene(stage);
+  return { ok: result.ok, packet: harness.submitted[0] || null,
     hits: harness.compatHits.slice() };
 }
 
@@ -984,7 +1282,7 @@ test('rectangular mask with colorMatrix filter preserves scissor and avoids alph
     shape: new sandbox.PIXI.Rectangle(0, 0, 100, 50) }];
   mask._localBounds = { x: 0, y: 0, width: 100, height: 50 };
   masked.mask = mask;
-  // Non-identity colorMatrix filter
+
   const matrix = [
     0.5, 0, 0, 0, 0,
     0, 0.5, 0, 0, 0,
@@ -994,17 +1292,17 @@ test('rectangular mask with colorMatrix filter preserves scissor and avoids alph
   masked._filters = [new sandbox.PIXI.filters.ColorMatrixFilter(matrix)];
   stage.addChild(masked);
   const packet = submitOnly(harness, stage);
-  // Counts verify: filter was planned, rectangle mask was processed, but NO alphaMask was created.
+
   assert.deepEqual(harness.counts,
     { filterPlans: 1, rectMasks: 1, alphaMasks: 0 });
-  // Node tree: stage (container 0), filterBegin (6), masked sprite (1), filterEnd (7). No alphaMask (3).
+
   assert.deepEqual(packet.metadata.filter((_, index) => index % 7 === 0),
     [0, 6, 1, 7]);
-  // The filter marker is kind 25 (colorMatrix)
+
   assert.equal(packet.metadata[1 * 7 + 4], 25);
-  // The masked sprite carries the scissor clip flag
+
   assert.equal(packet.metadata[2 * 7 + 5] & 1, 1);
-  // And no alphaMask groups were generated
+
   assert.equal(alphaMaskGroups(packet).length, 0);
 });
 
@@ -1019,7 +1317,7 @@ test('rectangular mask with colorMatrix acquiring alpha (m19 !== 0) stays on alp
     shape: new sandbox.PIXI.Rectangle(0, 0, 100, 50) }];
   mask._localBounds = { x: 0, y: 0, width: 100, height: 50 };
   masked.mask = mask;
-  // ColorMatrix with m19 !== 0 (e.g. constant alpha offset that makes transparent pixels visible)
+
   const matrix = [
     1, 0, 0, 0, 0,
     0, 1, 0, 0, 0,
@@ -1029,10 +1327,10 @@ test('rectangular mask with colorMatrix acquiring alpha (m19 !== 0) stays on alp
   masked._filters = [new sandbox.PIXI.filters.ColorMatrixFilter(matrix)];
   stage.addChild(masked);
   const packet = submitOnly(harness, stage);
-  // Counts verify: rectangle mask is NOT kept as scissor; falls back to alphaMask
+
   assert.deepEqual(harness.counts,
     { filterPlans: 1, rectMasks: 0, alphaMasks: 1 });
-  // Node tree: stage (0), colorMatrix (6), alphaMask (6), masked sprite (1), filterEnd (7), filterEnd (7)
+
   assert.deepEqual(packet.metadata.filter((_, index) => index % 7 === 0),
     [0, 6, 6, 1, 7, 7]);
   assert.equal(alphaMaskGroups(packet).length, 1);
@@ -1049,10 +1347,11 @@ test('disjoint clip intersection normalizes to a zero-area clip without rejectio
   assert.equal(intersected.top, 100);
   assert.equal(intersected.right, 100);
   assert.equal(intersected.bottom, 100);
-  // Valid zero-area clips submit cleanly without native rejection
+
   const packet = directPacket(harness, stage, intersected, null);
   assert.equal(packet.metadata[0 * 7 + 5] & 1, 1);
   assert.deepEqual(
     [packet.values[17], packet.values[18], packet.values[19], packet.values[20]],
     [100, 100, 100, 100]);
 });
+

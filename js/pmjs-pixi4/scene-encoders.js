@@ -1,18 +1,3 @@
-// Representation encoders: one translator per prepared Pixi representation.
-// Effects are separate (scene-effects.js); a new filter never touches the
-// Sprite path.
-//
-// Encoders read current state and write records. They don't advance Pixi,
-// MV, or plugin semantics.
-//
-// Dispatch is a fixed table over PMJS_SCENE_KIND: the classifier resolves
-// one kind and the table calls that encoder directly. Kind 6 (rect tile
-// layer) never reaches dispatch because the traversal pre-dispatches layers
-// ahead of rejection.
-
-// Shared leaf-emission scratch, fully consumed (recorded) before child
-// traversal can reuse it. `type` is the resolved representation string, for
-// encoders that need variant detail without re-reading node state.
 var nativeSceneEmission = { kind: 0, resource: 0, tint: 0xffffff, texture: null,
   frame: null, nativeImage: null, source: null, localX: 0, localY: 0,
   destWidth: 0, destHeight: 0, tilingResolution: 1, sampledBaseTexture: null,
@@ -38,21 +23,17 @@ function resetNativeSceneEmission(tint) {
 
 function writeNativeSceneContainer(node, type, particleContext, particleValues,
     scratch) {
-  // Containers (including tilemap fallthrough) emit no leaf payload; the
-  // traversal still records the grouping node and walks its children.
+
 }
 
 function writeNativeSceneGeneric(node, type, particleContext, particleValues,
     scratch) {
-  // Reserved, never produced: unknown representations take the container
-  // lane today with full effect resolution, so custom behavior is never
-  // silently skipped.
+
 }
 
 function writeNativeSceneSprite(node, type, particleContext, particleValues,
     scratch) {
-  // Pixi's particle renderer ignores roundPixels, and weather sprites never
-  // take the roundPixels packet flag.
+
   scratch.roundPixelsEligible = type === 'sprite' || type === 'picture';
   var texture = particleValues ? particleValues.texture : node.texture;
   var sampledBaseTexture = particleContext && particleContext.baseTexture ||
@@ -60,7 +41,10 @@ function writeNativeSceneSprite(node, type, particleContext, particleValues,
   scratch.sampledBaseTexture = sampledBaseTexture;
   var source = sampledBaseTexture && sampledBaseTexture.source;
   scratch.source = source;
-  var nativeImage = source && (source._nativeImage || source._nativeCanvas);
+
+  var nativeImage = source && (source._nativeImage || source._nativeCanvas ||
+    typeof source._ensureNativeCanvas === 'function' &&
+      source._ensureNativeCanvas());
   var frame = texture && (texture._frame || texture.frame);
   if (nativeImage && frame && frame.width > 0 && frame.height > 0) {
     scratch.kind = 1;
@@ -98,9 +82,8 @@ function writeNativeSceneTilingSprite(node, type, particleContext,
   var texture = node.texture;
   var tilingRotation = ((Number(texture && texture.rotate) || 0) % 16 + 16) % 16;
   if (tilingRotation % 2) {
-    nativeCompatibilityHit('render.texture-rotation', String(tilingRotation));
-    nativeSceneUnsupported = true;
-    nativeSceneUnsupportedReason = 'tiling-sprite:texture-rotation';
+    rejectNativeScene(node, 'render.texture-rotation', tilingRotation,
+      'tiling-sprite:texture-rotation');
     scratch.aborted = true;
     return;
   }
@@ -135,9 +118,8 @@ function writeNativeSceneGraphics(node, type, particleContext, particleValues,
     scratch.destWidth = frame.width;
     scratch.destHeight = frame.height;
   } else if (node.__pmjsGraphicsUnsupported) {
-    nativeSceneUnsupported = true;
-    nativeSceneUnsupportedReason =
-      (node.constructor && node.constructor.name || 'Graphics') + ':graphics';
+    rejectNativeScene(node, 'render.graphics', type,
+      (node.constructor && node.constructor.name || 'Graphics') + ':graphics');
     scratch.aborted = true;
   }
 }
@@ -146,9 +128,8 @@ function writeNativeSceneMesh(node, type, particleContext, particleValues,
     scratch) {
   var meshHandle = ensureNativeGpuMesh(node);
   if (!meshHandle) {
-    nativeCompatibilityHit('render.mesh', node.constructor && node.constructor.name || 'node');
-    nativeSceneUnsupported = true;
-    nativeSceneUnsupportedReason = (node.constructor && node.constructor.name || 'node') + ':mesh';
+    rejectNativeScene(node, 'render.mesh', type,
+      (node.constructor && node.constructor.name || 'node') + ':mesh');
     scratch.aborted = true;
     return;
   }
@@ -157,9 +138,6 @@ function writeNativeSceneMesh(node, type, particleContext, particleValues,
   scratch.texture = node.texture;
 }
 
-// Pixi's CompositeRectTileLayer invokes the layer renderer directly, so the
-// retained tile records are read here instead of traversing the layer as a
-// container. Pre-dispatch ahead of rejection, never via classification.
 function writeNativeSceneRectTileLayer(node, parentIndex) {
   var layerHandle = ensureNativeRectTileLayer(node);
   if (!layerHandle) return;
@@ -188,3 +166,4 @@ function writeNativeSceneKind(kind, node, type, particleContext,
   return nativeSceneEncoders[kind](node, type, particleContext,
     particleValues, nativeSceneEmission);
 }
+

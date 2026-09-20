@@ -29,7 +29,7 @@ test('virtual file aliases are configured data', () => {
 test('registered CommonJS requests are exact and cannot be replaced', () => {
   const source = fs.readFileSync(path.join(runtimeRoot,
     'js/pmjs-web/modules.js'), 'utf8');
-  const end = source.indexOf('\nvar compatibilityNoop');
+  const end = source.indexOf('\nfunction compatibilityCountedNoop(');
   const context = { Array, Object, Error };
   vm.runInNewContext(source.slice(0, end) +
     '\nthis.contract = { registerCommonJsModule, registeredCommonJsModules };',

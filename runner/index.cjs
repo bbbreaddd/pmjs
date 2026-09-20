@@ -74,7 +74,6 @@ function assertDisableOptimizationsShape(value, configPath) {
 const PMJS_MV_LOGIC_HZ = 60;
 const PMJS_SUPPORTED_RENDER_HZ = [30, 60, 120];
 
-// MV logic is fixed at its authored 60 Hz; presentation is paced separately.
 function parseTimingConfig(env) {
   const source = env || {};
   if (source.PMJS_LOGIC_HZ !== undefined && source.PMJS_LOGIC_HZ !== '' &&
@@ -161,7 +160,7 @@ function validate(input) {
 async function run(input, hooks = {}) {
   const options = validate(input);
   const hostProcess = process;
-  // Platform reads the swap interval during construction.
+
   const timing = parseTimingConfig(hostProcess.env);
   const swapDefault = resolveSwapDefault(hostProcess.env, timing);
   if (swapDefault !== null) {
@@ -190,7 +189,8 @@ async function run(input, hooks = {}) {
     ? globalThis.setImmediate.bind(globalThis) : null;
   globalThis.NativeHost = { runtime: native.runtime, render: native.render,
     scene: native.scene, images: native.images, assets: native.assets, fs: native.fs,
-    storage: native.storage, input: native.input, canvas: native.canvas, media: native.media };
+    storage: native.storage, input: native.input, canvas: native.canvas,
+    media: native.media, dialog: native.dialog };
   globalThis.__pmjsBuiltinRequire = require;
   globalThis.__pmjsNativeRuntime = true;
   globalThis.__pmjsTimingConfig = {
@@ -214,7 +214,6 @@ async function run(input, hooks = {}) {
     throw error;
   }
 
-  // Input edges are consumed by simulation steps, not presentation ticks.
   const period = timing.renderPeriod;
   let deadline = timing.uncapped ? 0 : native.runtime.monotonicNow() + period;
   console.log(`[pmjs] timing logic_hz=${timing.logicHz} ` +
@@ -256,3 +255,4 @@ async function run(input, hooks = {}) {
 
 module.exports = { run, validate, parseTimingConfig, resolveSwapDefault,
   PMJS_MV_LOGIC_HZ, PMJS_SUPPORTED_RENDER_HZ };
+
