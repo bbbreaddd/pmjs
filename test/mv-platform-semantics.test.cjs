@@ -130,7 +130,50 @@ test('document.currentScript stack exposes file:///game/ URL and restores on ret
   assert.equal(scriptsLoaded[3].currentScriptSrc, 'file:///game/inner.js');
   assert.equal(scriptsLoaded[4].path, 'outer.js-resumed');
   assert.equal(scriptsLoaded[4].currentScriptSrc, 'file:///game/outer.js');
-});test('process.versions and process.version reflect host Node and NW.js compatibility', () => {
+});
+
+test('nw.gui stubs count their use without changing behavior', () => {
+  const hits = [];
+  const context = {
+    process: { platform: 'linux', arch: 'x64', versions: {} },
+    nativePlatform: { platform: 'linux', arch: 'x64' },
+    nativeLogicalWidth: 800,
+    nativeLogicalHeight: 600,
+    pmjsGameConfig: {},
+    nativeCompatibilityHit(capability, detail) {
+      hits.push([capability, String(detail)]);
+    }
+  };
+  vm.createContext(context);
+  const modulesCode = fs.readFileSync(path.join(jsDir, 'pmjs-web/modules.js'), 'utf8');
+  vm.runInContext(modulesCode, context);
+
+  const gui = context.require('nw.gui');
+  assert.equal(context.nw, gui);
+
+  assert.equal(gui.Window.get(), gui.Window.open());
+  assert.equal(gui.Menu().items.length, 0);
+  assert.equal(gui.MenuItem({ label: 'x' }).label, 'x');
+  assert.equal(gui.Clipboard.get().get(), '');
+  assert.equal(hits.length, 0);
+
+  gui.Window.get().show();
+  gui.Window.get().show();
+  gui.Shell.openExternal('https://example.com');
+  gui.Menu().append({});
+  gui.MenuItem({}).click();
+  gui.App.clearCache();
+  assert.deepEqual(hits, [
+    ['browser.nwGui', 'Window.show'],
+    ['browser.nwGui', 'Window.show'],
+    ['browser.nwGui', 'Shell.openExternal'],
+    ['browser.nwGui', 'Menu.append'],
+    ['browser.nwGui', 'MenuItem.click'],
+    ['browser.nwGui', 'App.clearCache']
+  ]);
+});
+
+test('process.versions and process.version reflect host Node and NW.js compatibility', () => {
   const context = {
     process: {
       platform: 'linux',

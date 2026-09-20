@@ -14,42 +14,76 @@ function registerCommonJsModule(names, exports) {
     registeredCommonJsModules[name] = exports;
   }
 }
-var compatibilityNoop = function() {};
+function compatibilityCountedNoop(method) {
+  return function() {
+    if (typeof nativeCompatibilityHit === 'function') {
+      nativeCompatibilityHit('browser.nwGui', method);
+    }
+  };
+}
 var nativeWindow = {
-  showDevTools: compatibilityNoop, closeDevTools: compatibilityNoop,
+  showDevTools: compatibilityCountedNoop('Window.showDevTools'),
+  closeDevTools: compatibilityCountedNoop('Window.closeDevTools'),
   isDevToolsOpen: function() { return false; },
-  close: function() { NativeHost.runtime.quit(); }, reload: compatibilityNoop,
-  focus: compatibilityNoop, blur: compatibilityNoop, show: compatibilityNoop,
-  hide: compatibilityNoop, maximize: compatibilityNoop, unmaximize: compatibilityNoop,
-  minimize: compatibilityNoop, restore: compatibilityNoop,
-  enterFullscreen: compatibilityNoop, leaveFullscreen: compatibilityNoop,
-  toggleFullscreen: compatibilityNoop, isFullscreen: true,
-  moveTo: compatibilityNoop, moveBy: compatibilityNoop,
-  resizeTo: compatibilityNoop, resizeBy: compatibilityNoop,
-  setPosition: compatibilityNoop, setMaximumSize: compatibilityNoop,
-  setMinimumSize: compatibilityNoop, setAlwaysOnTop: compatibilityNoop,
-  setShowInTaskbar: compatibilityNoop, setResizable: compatibilityNoop,
-  on: compatibilityNoop, once: compatibilityNoop,
-  removeListener: compatibilityNoop, removeAllListeners: compatibilityNoop,
+  close: function() { NativeHost.runtime.quit(); },
+  reload: compatibilityCountedNoop('Window.reload'),
+  focus: compatibilityCountedNoop('Window.focus'),
+  blur: compatibilityCountedNoop('Window.blur'),
+  show: compatibilityCountedNoop('Window.show'),
+  hide: compatibilityCountedNoop('Window.hide'),
+  maximize: compatibilityCountedNoop('Window.maximize'),
+  unmaximize: compatibilityCountedNoop('Window.unmaximize'),
+  minimize: compatibilityCountedNoop('Window.minimize'),
+  restore: compatibilityCountedNoop('Window.restore'),
+  enterFullscreen: compatibilityCountedNoop('Window.enterFullscreen'),
+  leaveFullscreen: compatibilityCountedNoop('Window.leaveFullscreen'),
+  toggleFullscreen: compatibilityCountedNoop('Window.toggleFullscreen'),
+  isFullscreen: true,
+  moveTo: compatibilityCountedNoop('Window.moveTo'),
+  moveBy: compatibilityCountedNoop('Window.moveBy'),
+  resizeTo: compatibilityCountedNoop('Window.resizeTo'),
+  resizeBy: compatibilityCountedNoop('Window.resizeBy'),
+  setPosition: compatibilityCountedNoop('Window.setPosition'),
+  setMaximumSize: compatibilityCountedNoop('Window.setMaximumSize'),
+  setMinimumSize: compatibilityCountedNoop('Window.setMinimumSize'),
+  setAlwaysOnTop: compatibilityCountedNoop('Window.setAlwaysOnTop'),
+  setShowInTaskbar: compatibilityCountedNoop('Window.setShowInTaskbar'),
+  setResizable: compatibilityCountedNoop('Window.setResizable'),
+  on: compatibilityCountedNoop('Window.on'),
+  once: compatibilityCountedNoop('Window.once'),
+  removeListener: compatibilityCountedNoop('Window.removeListener'),
+  removeAllListeners: compatibilityCountedNoop('Window.removeAllListeners'),
   zoomLevel: 0, X: 0, Y: 0, width: nativeLogicalWidth,
   height: nativeLogicalHeight, title: pmjsGameConfig.title || 'pmjs', menu: null
 };
 var nativeNwGui = {
   App: { argv: [], fullArgv: [], dataPath: '/save', manifest: {},
-    quit: function() { NativeHost.runtime.quit(); }, clearCache: compatibilityNoop,
-    crashBrowser: compatibilityNoop, setCrashDumpDir: compatibilityNoop,
-    on: compatibilityNoop },
+    quit: function() { NativeHost.runtime.quit(); },
+    clearCache: compatibilityCountedNoop('App.clearCache'),
+    crashBrowser: compatibilityCountedNoop('App.crashBrowser'),
+    setCrashDumpDir: compatibilityCountedNoop('App.setCrashDumpDir'),
+    on: compatibilityCountedNoop('App.on') },
   Window: { get: function() { return nativeWindow; },
     open: function() { return nativeWindow; } },
-  Screen: { Init: compatibilityNoop, on: compatibilityNoop },
-  Shell: { openExternal: compatibilityNoop, openItem: compatibilityNoop,
-    showItemInFolder: compatibilityNoop },
-  Menu: function() { return { append: compatibilityNoop, insert: compatibilityNoop,
-    remove: compatibilityNoop, createMacBuiltin: compatibilityNoop, items: [] }; },
-  MenuItem: function(options) { return Object.assign({ click: compatibilityNoop }, options); },
-  Tray: function() { return { remove: compatibilityNoop }; },
-  Clipboard: { get: function() { return { get: function() { return ''; },
-    set: compatibilityNoop, clear: compatibilityNoop }; } }
+  Screen: { Init: compatibilityCountedNoop('Screen.Init'),
+    on: compatibilityCountedNoop('Screen.on') },
+  Shell: { openExternal: compatibilityCountedNoop('Shell.openExternal'),
+    openItem: compatibilityCountedNoop('Shell.openItem'),
+    showItemInFolder: compatibilityCountedNoop('Shell.showItemInFolder') },
+  Menu: function() { return {
+    append: compatibilityCountedNoop('Menu.append'),
+    insert: compatibilityCountedNoop('Menu.insert'),
+    remove: compatibilityCountedNoop('Menu.remove'),
+    createMacBuiltin: compatibilityCountedNoop('Menu.createMacBuiltin'),
+    items: [] }; },
+  MenuItem: function(options) { return Object.assign(
+    { click: compatibilityCountedNoop('MenuItem.click') }, options); },
+  Tray: function() { return {
+    remove: compatibilityCountedNoop('Tray.remove') }; },
+  Clipboard: { get: function() { return {
+    get: function() { return ''; },
+    set: compatibilityCountedNoop('Clipboard.set'),
+    clear: compatibilityCountedNoop('Clipboard.clear') }; } }
 };
 function resolveModule(request, parentDirectory) {
   var base = request.charAt(0) === '.'
