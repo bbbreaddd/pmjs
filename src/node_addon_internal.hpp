@@ -57,17 +57,24 @@ struct State {
       if (!ready) return std::nullopt;
       auto result = std::move(ready); ready.reset(); return result;
     }
+    void recycle(std::vector<std::uint8_t> rgba) {
+      std::lock_guard lock(mutex);
+      if (rgba.capacity() > recycledRgba.capacity())
+        recycledRgba = std::move(rgba);
+    }
     void run() {
       while (true) {
         double frameTimestamp = 0;
+        std::vector<std::uint8_t> rgba;
         {
           std::unique_lock lock(mutex);
           condition.wait(lock, [this] { return shuttingDown || requested.has_value(); });
           if (shuttingDown) return;
           frameTimestamp = *requested; requested.reset();
+          rgba = std::move(recycledRgba);
         }
         std::string error;
-        auto frame = decoder->frame(frameTimestamp, &error);
+        auto frame = decoder->frame(frameTimestamp, std::move(rgba), &error);
         if (!frame) {
           if (!error.empty()) std::cerr << "[pmjs-media] video decoder error: "
                                         << error << '\n';
@@ -82,6 +89,7 @@ struct State {
     std::condition_variable condition;
     std::optional<double> requested;
     std::optional<pmjs::VideoFrame> ready;
+    std::vector<std::uint8_t> recycledRgba;
     std::thread worker;
     bool shuttingDown = false;
     std::uint32_t canvas = 0;

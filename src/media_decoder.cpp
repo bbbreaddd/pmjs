@@ -367,6 +367,7 @@ struct VideoDecoderSession::Impl {
   }
 
   std::optional<VideoFrame> convertCurrent(double timestamp,
+                                            std::vector<std::uint8_t> rgba,
                                             std::string* error) {
     const auto extent = checkedImageExtent(decoded->width, decoded->height,
                                             8192, 128 * 1024 * 1024);
@@ -388,8 +389,10 @@ struct VideoDecoderSession::Impl {
       fail(error, "cannot initialize video conversion");
       return std::nullopt;
     }
-    VideoFrame output{width, height, timestamp, {}};
-    output.rgba.resize(static_cast<std::size_t>(width) * height * 4U);
+    const auto rgbaBytes = static_cast<std::size_t>(width) * height * 4U;
+    if (rgba.capacity() < rgbaBytes) ++stats.rgbaAllocations;
+    rgba.resize(rgbaBytes);
+    VideoFrame output{width, height, timestamp, std::move(rgba)};
     std::uint8_t* planes[] = {output.rgba.data(), nullptr, nullptr, nullptr};
     int strides[] = {width * 4, 0, 0, 0};
     sws_scale(scaler.get(), decoded->data, decoded->linesize, 0, height,
@@ -416,6 +419,12 @@ VideoDecodeStats VideoDecoderSession::stats() const { return impl_->stats; }
 
 std::optional<VideoFrame> VideoDecoderSession::frame(double timestamp,
                                                      std::string* error) {
+  return frame(timestamp, {}, error);
+}
+
+std::optional<VideoFrame> VideoDecoderSession::frame(
+    double timestamp, std::vector<std::uint8_t> reusableRgba,
+    std::string* error) {
   if (!std::isfinite(timestamp) || timestamp < 0.0) {
     fail(error, "invalid video timestamp"); return std::nullopt;
   }
@@ -424,7 +433,8 @@ std::optional<VideoFrame> VideoDecoderSession::frame(double timestamp,
     if (!impl_->seek(timestamp, error)) return std::nullopt;
   while (auto decodedTimestamp = impl_->decodeNext(error)) {
     if (*decodedTimestamp + 0.000001 >= timestamp)
-      return impl_->convertCurrent(*decodedTimestamp, error);
+      return impl_->convertCurrent(*decodedTimestamp,
+                                   std::move(reusableRgba), error);
     av_frame_unref(impl_->decoded.get());
     ++impl_->stats.skippedFrames;
   }

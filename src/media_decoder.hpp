@@ -40,6 +40,7 @@ struct VideoDecodeStats {
   std::uint64_t decodedFrames = 0;
   std::uint64_t skippedFrames = 0;
   std::uint64_t convertedFrames = 0;
+  std::uint64_t rgbaAllocations = 0;
 };
 
 class AudioDecoderSession {
@@ -70,6 +71,9 @@ class VideoDecoderSession {
   const MediaInfo& info() const;
   VideoDecodeStats stats() const;
   std::optional<VideoFrame> frame(double timestamp,
+                                  std::string* error = nullptr);
+  std::optional<VideoFrame> frame(double timestamp,
+                                  std::vector<std::uint8_t> reusableRgba,
                                   std::string* error = nullptr);
 
  private:

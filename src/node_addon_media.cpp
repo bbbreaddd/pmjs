@@ -139,7 +139,7 @@ napi_value loadVideo(napi_env env, napi_callback_info info) try {
   if (!path) throw std::runtime_error("video path is outside the game root");
   std::string error;
   auto decoder = std::make_unique<pmjs::VideoDecoderSession>(*path);
-  const auto frame = decoder->frame(0.0, &error);
+  auto frame = decoder->frame(0.0, &error);
   if (!frame) throw std::runtime_error(error.empty() ? "video decode failed" : error);
   const auto canvas = value.canvases.createRgba(frame->width, frame->height, frame->rgba);
   if (!canvas) throw std::runtime_error("cannot allocate video surface");
@@ -149,6 +149,7 @@ napi_value loadVideo(napi_env env, napi_callback_info info) try {
   auto video = std::make_unique<State::Video>(std::move(decoder));
   video->canvas = canvas->handle; video->duration = duration;
   video->timestamp = frame->timestamp;
+  video->recycle(std::move(frame->rgba));
   value.videos.emplace(handle, std::move(video));
   napi_value result; napi_create_object(env, &result);
   napi_set_named_property(env, result, "handle", uint32(env, handle));
@@ -174,6 +175,7 @@ napi_value updateVideo(napi_env env, napi_callback_info info) try {
         throw std::runtime_error("video surface update failed");
       video.timestamp = frame->timestamp;
     }
+    video.recycle(std::move(frame->rgba));
   }
   video.request(timestamp);
   return number(env, video.timestamp);
