@@ -82,8 +82,7 @@ function writeNativeSceneTilingSprite(node, type, particleContext,
   var texture = node.texture;
   var tilingRotation = ((Number(texture && texture.rotate) || 0) % 16 + 16) % 16;
   if (tilingRotation % 2) {
-    rejectNativeScene(node, 'render.texture-rotation', tilingRotation,
-      'tiling-sprite:texture-rotation');
+    nativeCompatibilityHit('render.texture-rotation', String(tilingRotation));
     scratch.aborted = true;
     return;
   }
@@ -118,7 +117,7 @@ function writeNativeSceneGraphics(node, type, particleContext, particleValues,
     scratch.destWidth = frame.width;
     scratch.destHeight = frame.height;
   } else if (node.__pmjsGraphicsUnsupported) {
-    rejectNativeScene(node, 'render.graphics', type,
+    nativeCompatibilityHit('render.graphics',
       (node.constructor && node.constructor.name || 'Graphics') + ':graphics');
     scratch.aborted = true;
   }
@@ -128,7 +127,7 @@ function writeNativeSceneMesh(node, type, particleContext, particleValues,
     scratch) {
   var meshHandle = ensureNativeGpuMesh(node);
   if (!meshHandle) {
-    rejectNativeScene(node, 'render.mesh', type,
+    nativeCompatibilityHit('render.mesh',
       (node.constructor && node.constructor.name || 'node') + ':mesh');
     scratch.aborted = true;
     return;
@@ -140,7 +139,11 @@ function writeNativeSceneMesh(node, type, particleContext, particleValues,
 
 function writeNativeSceneRectTileLayer(node, parentIndex) {
   var layerHandle = ensureNativeRectTileLayer(node);
-  if (!layerHandle) return;
+  if (!layerHandle) {
+    nativeCompatibilityHit('render.tilemap',
+      (node.constructor && node.constructor.name || 'node') + ':layer-unrealized');
+    return;
+  }
   var layerParent = node.parent || node;
   var layerIndex = nativeSceneRecord(parentIndex, 4, layerHandle,
     layerParent.tint === undefined ? 0xffffff : layerParent.tint,

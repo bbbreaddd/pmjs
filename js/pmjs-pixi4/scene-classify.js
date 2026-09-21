@@ -9,19 +9,6 @@ var PMJS_SCENE_KIND = {
   GENERIC: 7
 };
 
-function nativeSceneKindName(kind) {
-  switch (kind) {
-    case PMJS_SCENE_KIND.SPRITE: return 'sprite';
-    case PMJS_SCENE_KIND.SCREEN_SPRITE: return 'screensprite';
-    case PMJS_SCENE_KIND.TILING_SPRITE: return 'tilingsprite';
-    case PMJS_SCENE_KIND.GRAPHICS: return 'graphics';
-    case PMJS_SCENE_KIND.MESH: return 'mesh';
-    case PMJS_SCENE_KIND.RECT_TILE_LAYER: return 'recttilelayer';
-    case PMJS_SCENE_KIND.GENERIC: return 'generic';
-    default: return 'container';
-  }
-}
-
 function nativeSceneKindForType(type) {
   switch (type) {
     case 'sprite':

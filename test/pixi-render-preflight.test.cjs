@@ -57,51 +57,34 @@ test('Pixi preflight inventories dormant registrations without strict failure', 
   vm.runInNewContext(source, sandbox);
   registered.unknown = function() {};
   assert.doesNotThrow(() => sandbox.pmjsPixiRenderPreflight.scan());
-
-  assert.equal(sandbox.PMJS.rendererPlugins, undefined);
-  assert.equal(typeof sandbox.PMJS.rendererContracts.register, 'undefined');
+  assert.equal(sandbox.PMJS, undefined);
 });
 
-test('cached nodes require the stock Pixi wrapper and a proven original hook', () => {
+test('patched tilemap composite hooks are reported, not gated', () => {
   class DisplayObject {}
-  DisplayObject.prototype.renderWebGL = function() {};
-  DisplayObject.prototype._renderCachedWebGL = function() {};
-  class Sprite extends DisplayObject {}
-  Sprite.prototype._renderWebGL = function() {};
-  const sandbox = { PIXI: { DisplayObject, Sprite,
-    WebGLRenderer: { __plugins: {} } },
-    nativeCompatibilityObserved() {} };
-  sandbox.globalThis = sandbox;
-  vm.runInNewContext(source, sandbox);
-  const node = new Sprite();
-  node._cacheData = { originalRenderWebGL: node.renderWebGL };
-  node.renderWebGL = node._renderCachedWebGL;
-  assert.equal(sandbox.PMJS.rendererContracts.proveCached(node, 'sprite'), '');
-  node._renderCachedWebGL = function() {};
-  assert.equal(sandbox.PMJS.rendererContracts.proveCached(node, 'sprite'),
-    'cached renderWebGL');
-  delete node._renderCachedWebGL;
-  node._cacheData.originalRenderWebGL = function() {};
-  assert.equal(sandbox.PMJS.rendererContracts.proveCached(node, 'sprite'),
-    'renderWebGL');
-});
-
-test('known Pixi class needs a matching native semantic contract', () => {
-  class DisplayObject {}
-  DisplayObject.prototype.renderWebGL = function() {};
   class Container extends DisplayObject {}
-  class Text extends Container {}
-  Text.prototype.renderWebGL = function() {};
-  const sandbox = { PIXI: { DisplayObject, Container, Text,
-    WebGLRenderer: { __plugins: {} } }, nativeCompatibilityObserved() {} };
+  class RectTileLayer extends Container {}
+  class CompositeRectTileLayer extends Container {}
+  CompositeRectTileLayer.prototype.renderWebGL = function() {};
+  const hits = [];
+  const sandbox = { PIXI: { DisplayObject, Container,
+    tilemap: { RectTileLayer, CompositeRectTileLayer },
+    WebGLRenderer: { __plugins: {} } },
+  nativeCompatibilityObserved(capability, detail) {
+    hits.push([capability, detail]);
+  } };
   sandbox.globalThis = sandbox;
   vm.runInNewContext(source, sandbox);
-  const contracts = sandbox.PMJS.rendererContracts;
-  assert.equal(contracts.prove(new DisplayObject(), 'container'),
-    'no native semantic contract');
-  assert.equal(contracts.prove(new Text(), 'container'),
-    'native representation mismatch');
-  assert.equal(contracts.prove(new Text(), 'sprite'), '');
+  sandbox.pmjsPixiRenderPreflight.scan();
+  assert.deepEqual(hits, []);
+  CompositeRectTileLayer.prototype.renderWebGL = function() {};
+  sandbox.pmjsPixiRenderPreflight.scan();
+  assert.deepEqual(Array.from(
+    sandbox.pmjsPixiRenderPreflight.report.renderMethodOverrides),
+  ['CompositeRectTileLayer.renderWebGL']);
+  assert.deepEqual(hits, [
+    ['render.renderMethodOverride', 'CompositeRectTileLayer.renderWebGL']
+  ]);
 });
 
 test('Text preparation follows Pixi render resolution before rasterization', () => {

@@ -18,9 +18,9 @@ function resolveNativeAdvancedEffects(node, particleContext, activeFilters,
     var filterNames = filterPlan.filters.map(function(filter) {
       return filter && filter.constructor && filter.constructor.name || 'filter';
     }).join(',');
-    rejectNativeScene(node, 'render.filter',
-      node.constructor && node.constructor.name || 'node', filterNames);
-    return null;
+    nativeCompatibilityHit('render.filter',
+      (node.constructor && node.constructor.name || 'node') + ':' + filterNames);
+    return { blur: 0, groups: [] };
   }
 
   var canKeepRectangleMask = !filterPlan.groups.length ||

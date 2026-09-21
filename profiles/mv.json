@@ -2,7 +2,6 @@
   "name": "mv",
   "modules": [
     "js/pmjs-core/optimizations.js",
-    "js/pmjs-core/log.js",
     "js/pmjs-mv/setup.js",
     "js/pmjs-mv/autorun-events.js",
     "js/pmjs-core/operation-trace.js",

@@ -6,8 +6,7 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const WRITER_SOURCES = ['js/pmjs-core/log.js',
-  'js/pmjs-pixi4/render-preflight.js',
+const WRITER_SOURCES = ['js/pmjs-pixi4/render-preflight.js',
   'js/pmjs-pixi4/scene-primitives.js',
   'js/pmjs-pixi4/scene-filters.js', 'js/pmjs-pixi4/scene-packet.js',
   'js/pmjs-mv/render-prepare.js',
@@ -23,6 +22,7 @@ function makeHarness() {
   let nextHandle = 100;
   const compatHits = [];
   const compatObserved = [];
+  const hitCounts = Object.create(null);
   const submitted = [];
   const counts = { filterPlans: 0, rectMasks: 0, alphaMasks: 0 };
 
@@ -158,8 +158,10 @@ function makeHarness() {
       filters: { BlurFilter, ColorMatrixFilter }, DisplayObject: Container,
       Texture: { EMPTY: null } },
     ScreenSprite, Tilemap, Window, WindowLayer, CanvasElement,
+    nativeCompatibilityHits: hitCounts,
     nativeCompatibilityHit(kind, detail) {
       compatHits.push([kind, String(detail)]);
+      hitCounts[kind] = (hitCounts[kind] || 0) + 1;
     },
     nativeCompatibilityObserved(kind, detail) {
       compatObserved.push([kind, String(detail)]);
@@ -225,7 +227,7 @@ function submitOnly(harness, stage) {
   harness.counts.rectMasks = 0;
   harness.counts.alphaMasks = 0;
   const result = harness.sandbox.submitNativeScene(stage);
-  assert.equal(result.ok, true);
+  assert.equal(result, true);
   assert.equal(harness.submitted.length, 1);
   assert.deepEqual(harness.compatHits, []);
   return harness.submitted[0];
@@ -305,7 +307,7 @@ test('fixed representation table classifies every leaf without probing', () => {
       GRAPHICS: 4, MESH: 5, RECT_TILE_LAYER: 6, GENERIC: 7 } });
 });
 
-test('unknown renderer labels skip the node and submit siblings', () => {
+test('unknown renderer labels render as containers and log the label', () => {
   const harness = makeHarness();
   const { sandbox, sprite } = harness;
   const root = new sandbox.PIXI.Container();
@@ -314,21 +316,57 @@ test('unknown renderer labels skip the node and submit siblings', () => {
   custom.addChild(sprite());
   root.addChild(custom);
   root.addChild(sprite());
-  const result = sandbox.submitNativeScene(root);
-  assert.equal(result.ok, true);
+  assert.equal(sandbox.submitNativeScene(root), true);
   assert.equal(harness.submitted.length, 1);
-  assert.equal(result.skipped.length, 1);
-  assert.equal(result.skipped[0].capability, 'render.renderer-plugin');
-  assert.equal(result.skipped[0].producer, 'customchaos');
-  assert.equal(result.skipped[0].nodeClass, 'Sprite');
   assert.deepEqual(harness.compatHits,
-    [['render.renderer-plugin', 'customchaos: Sprite:renderer=customchaos']]);
-
+    [['render.renderer-plugin', 'Sprite:renderer=customchaos:children=1']]);
   assert.deepEqual(harness.submitted[0].metadata.filter((_, index) => index % 7 === 0),
-    [0, 1]);
+    [0, 0, 1, 1]);
 });
 
-test('reached subclass and instance render hooks skip the node', () => {
+test('childless custom renderer labels log a visual leaf', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const root = new sandbox.PIXI.Container();
+  const custom = sprite();
+  custom.pluginName = 'customChaos';
+  root.addChild(custom);
+  assert.equal(sandbox.submitNativeScene(root), true);
+  assert.deepEqual(harness.compatHits,
+    [['render.renderer-plugin', 'Sprite:renderer=customchaos:visual-leaf']]);
+  assert.deepEqual(harness.submitted[0].metadata.filter((_, index) => index % 7 === 0),
+    [0, 0]);
+});
+
+test('rendered frames report exact versus degraded counts', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const root = new sandbox.PIXI.Container();
+  root.addChild(sprite());
+  sandbox.renderNativeStage(root);
+  assert.equal(sandbox.renderNativeStage._framesTotal, 1);
+  assert.equal(sandbox.renderNativeStage._framesDegraded || 0, 0);
+  const filtered = sprite();
+  filtered._filters = [{ enabled: true }];
+  root.addChild(filtered);
+  sandbox.renderNativeStage(root);
+  assert.equal(sandbox.renderNativeStage._framesTotal, 2);
+  assert.equal(sandbox.renderNativeStage._framesDegraded, 1);
+});
+
+test('unrealized tile layers log instead of vanishing silently', () => {
+  const harness = makeHarness();
+  const { sandbox } = harness;
+  const root = new sandbox.PIXI.Container();
+  const layer = { pointsBuf: [], textures: [], parent: null,
+    visible: true, renderable: true, alpha: 1 };
+  root.addChild(layer);
+  assert.equal(sandbox.submitNativeScene(root), true);
+  assert.deepEqual(harness.compatHits,
+    [['render.tilemap', 'Object:layer-unrealized']]);
+});
+
+test('custom render hooks do not affect native encoding', () => {
   const harness = makeHarness();
   const { sandbox, sprite } = harness;
   class WeirdSprite extends sandbox.PIXI.Sprite {
@@ -338,30 +376,22 @@ test('reached subclass and instance render hooks skip the node', () => {
   const subclass = new WeirdSprite(harness.makeTexture(32, 32));
   root.addChild(subclass);
   root.addChild(sprite());
-  let result = sandbox.submitNativeScene(root);
-  assert.equal(result.ok, true);
-  assert.equal(harness.submitted.length, 1);
-  assert.equal(result.skipped.length, 1);
-  assert.equal(result.skipped[0].capability, 'render.render-method');
-  assert.equal(result.skipped[0].nodeClass, 'WeirdSprite');
-
+  assert.equal(sandbox.submitNativeScene(root), true);
+  assert.deepEqual(harness.compatHits, []);
   assert.deepEqual(harness.submitted[0].metadata.filter((_, index) => index % 7 === 0),
-    [0, 1]);
-
+    [0, 1, 1]);
   root.children.length = 0;
   harness.submitted.length = 0;
   const instance = sprite();
   instance.renderWebGL = function() {};
   root.addChild(instance);
-  result = sandbox.submitNativeScene(root);
-  assert.equal(result.ok, true);
-  assert.equal(result.skipped.length, 1);
-  assert.equal(result.skipped[0].nodeClass, 'Sprite');
+  assert.equal(sandbox.submitNativeScene(root), true);
+  assert.deepEqual(harness.compatHits, []);
   assert.deepEqual(harness.submitted[0].metadata.filter((_, index) => index % 7 === 0),
-    [0]);
+    [0, 1]);
 });
 
-test('render contract checks later prototype patches', () => {
+test('late prototype patches do not affect native encoding', () => {
   const harness = makeHarness();
   const { sandbox, sprite } = harness;
   const root = new sandbox.PIXI.Container();
@@ -369,29 +399,23 @@ test('render contract checks later prototype patches', () => {
   root.addChild(stock);
   submitOnly(harness, root);
   sandbox.PIXI.Sprite.prototype._renderWebGL = function() {};
-  const result = sandbox.submitNativeScene(root);
-  assert.equal(result.ok, true);
-  assert.equal(result.skipped.length, 1);
-  assert.equal(result.skipped[0].capability, 'render.render-method');
+  assert.equal(sandbox.submitNativeScene(root), true);
+  assert.deepEqual(harness.compatHits, []);
   assert.deepEqual(harness.submitted[harness.submitted.length - 1].metadata
-    .filter((_, index) => index % 7 === 0), [0]);
+    .filter((_, index) => index % 7 === 0), [0, 1]);
 });
 
-test('plain sprite segments cannot bypass render contract proof', () => {
+test('plain sprite segments ignore render hooks', () => {
   const harness = makeHarness();
   const { sandbox, sprite } = harness;
   const root = new sandbox.PIXI.Container();
   for (let index = 0; index < 5; index++) root.addChild(sprite());
   root.children[3]._renderWebGL = function() {};
   sandbox.nativePlainSpriteSegmentsEnabled = true;
-  const result = sandbox.submitNativeScene(root);
-  assert.equal(result.ok, true);
-  assert.equal(result.skipped.length, 1);
-  assert.equal(result.skipped[0].capability, 'render.render-method');
-  assert.equal(result.skipped[0].nodeClass, 'Sprite');
-
+  assert.equal(sandbox.submitNativeScene(root), true);
+  assert.deepEqual(harness.compatHits, []);
   assert.deepEqual(harness.submitted[0].metadata.filter((_, index) => index % 7 === 0),
-    [0, 1, 1, 1, 1]);
+    [0, 1, 1, 1, 1, 1]);
 });
 
 test('skipUpdateTransform uses the rendered root world transform', () => {
@@ -411,7 +435,7 @@ test('skipUpdateTransform uses the rendered root world transform', () => {
   assert.equal(harness.submitted[1].values[5], 3);
 });
 
-test('an uninitialized bitmap cache skips the node instead of drawing live children', () => {
+test('an uninitialized bitmap cache draws live children and logs', () => {
   const harness = makeHarness();
   const { sandbox, sprite } = harness;
   const root = new sandbox.PIXI.Container();
@@ -419,17 +443,13 @@ test('an uninitialized bitmap cache skips the node instead of drawing live child
   cached._cacheAsBitmap = true;
   cached.addChild(sprite());
   root.addChild(cached);
-  const result = sandbox.submitNativeScene(root);
-  assert.equal(result.ok, true);
+  assert.equal(sandbox.submitNativeScene(root), true);
   assert.equal(harness.submitted.length, 1);
-  assert.equal(result.skipped.length, 1);
-  assert.equal(result.skipped[0].capability, 'render.cacheAsBitmap');
   assert.deepEqual(harness.compatHits,
     [['render.cacheAsBitmap',
-      'Container: bitmap cache was not initialized before scene encoding']]);
-
+      'Container: uninitialized cache, drawing live children']]);
   assert.deepEqual(harness.submitted[0].metadata.filter((_, index) => index % 7 === 0),
-    [0]);
+    [0, 0, 1]);
 });
 
 test('bitmap cache uses one Pixi snapshot until the cache is disabled', () => {
@@ -453,17 +473,16 @@ test('bitmap cache uses one Pixi snapshot until the cache is disabled', () => {
     cached._cacheData.sprite = snapshot;
   };
   const renderer = { render(node) {
-
-    const result = sandbox.encodeNativeScene(node);
-    assert.equal(result.ok, true);
+    const packet = sandbox.encodeNativeScene(node);
+    assert.ok(packet.count >= 0);
     return true;
   } };
   sandbox.prepareNativeBitmapCaches(root, renderer);
-  assert.equal(sandbox.submitNativeScene(root).ok, true);
+  assert.equal(sandbox.submitNativeScene(root), true);
   const first = harness.submitted[0];
   child.x = 100;
   sandbox.prepareNativeBitmapCaches(root, renderer);
-  assert.equal(sandbox.submitNativeScene(root).ok, true);
+  assert.equal(sandbox.submitNativeScene(root), true);
   const second = harness.submitted[1];
   assert.equal(builds, 1);
   assert.deepEqual(first, second);
@@ -472,7 +491,7 @@ test('bitmap cache uses one Pixi snapshot until the cache is disabled', () => {
   assert.equal(first.values[41 + 4], 12);
   assert.equal(first.values[2 * 41 + 6], 1);
   cached.alpha = 0.6;
-  assert.equal(sandbox.submitNativeScene(root).ok, true);
+  assert.equal(sandbox.submitNativeScene(root), true);
   assert.ok(Math.abs(harness.submitted[2].values[41 + 6] - 0.6) < 0.000001);
   assert.equal(harness.submitted[2].values[2 * 41 + 6], 1);
   assert.deepEqual(harness.compatObserved,
@@ -502,11 +521,12 @@ test('nested bitmap caches build inside out and draw the parent snapshot', () =>
     };
   }
   const renderer = { render(node) {
-    return sandbox.encodeNativeScene(node).ok;
+    sandbox.encodeNativeScene(node);
+    return true;
   } };
   sandbox.prepareNativeBitmapCaches(root, renderer);
   assert.deepEqual(order, ['inner', 'outer']);
-  assert.equal(sandbox.submitNativeScene(root).ok, true);
+  assert.equal(sandbox.submitNativeScene(root), true);
   assert.deepEqual(harness.submitted[0].metadata.filter(
     (_, index) => index % 7 === 0), [0, 0, 1]);
 });
@@ -657,7 +677,7 @@ test('filter parameter mutation re-renders without changing structure', () => {
   assert.equal(second.values[41 + 7], 4);
 });
 
-test('unsupported filters skip the node and submit siblings', () => {
+test('unsupported filters render unfiltered and log the filter', () => {
   const harness = makeHarness();
   const { sandbox, sprite } = harness;
   const root = new sandbox.PIXI.Container();
@@ -667,17 +687,12 @@ test('unsupported filters skip the node and submit siblings', () => {
   root.addChild(sprite());
   harness.submitted.length = 0;
   harness.compatHits.length = 0;
-  const result = sandbox.submitNativeScene(root);
-  assert.equal(result.ok, true);
+  assert.equal(sandbox.submitNativeScene(root), true);
   assert.equal(harness.submitted.length, 1);
-  assert.equal(result.skipped.length, 1);
-  assert.equal(result.skipped[0].capability, 'render.filter');
-  assert.equal(result.skipped[0].nodeClass, 'Sprite');
   assert.deepEqual(harness.compatHits,
-    [['render.filter', 'Sprite: Object']]);
-
+    [['render.filter', 'Sprite:Object']]);
   assert.deepEqual(harness.submitted[0].metadata.filter((_, index) => index % 7 === 0),
-    [0, 1]);
+    [0, 1, 1]);
 });
 
 test('a filter with a built-in constructor name cannot impersonate its shader', () => {
@@ -690,17 +705,15 @@ test('a filter with a built-in constructor name cannot impersonate its shader', 
   const filtered = sprite();
   filtered._filters = [new impostor()];
   root.addChild(filtered);
-
-  const result = sandbox.submitNativeScene(root);
-  assert.equal(result.ok, true);
-  assert.equal(result.skipped.length, 1);
-  assert.equal(result.skipped[0].capability, 'render.filter');
-  assert.equal(result.skipped[0].producer, 'Sprite');
-  assert.equal(result.skipped[0].reason, 'BlurFilter');
+  assert.equal(sandbox.submitNativeScene(root), true);
   assert.equal(harness.submitted.length, 1);
+  assert.deepEqual(harness.compatHits,
+    [['render.filter', 'Sprite:BlurFilter']]);
+  assert.deepEqual(harness.submitted[0].metadata.filter((_, index) => index % 7 === 0),
+    [0, 1]);
 });
 
-test('skipped nodes submit a degraded frame and keep readiness', () => {
+test('filtered scenes submit and keep readiness', () => {
   const harness = makeHarness();
   const { sandbox, sprite } = harness;
   const root = new sandbox.PIXI.Container();
@@ -708,48 +721,36 @@ test('skipped nodes submit a degraded frame and keep readiness', () => {
   sandbox.renderNativeStage(root);
   assert.equal(harness.submitted.length, 1);
   assert.equal(sandbox.renderNativeStage._ready, true);
-
-  const skipped = sprite();
-  skipped._filters = [{ enabled: true }];
-  root.addChild(skipped);
-  const parent = root.parent;
-  sandbox.renderNativeStage(root);
-  assert.equal(harness.submitted.length, 2,
-    'a degraded packet still replaces the last committed scene');
-  assert.equal(sandbox.renderNativeStage._ready, true);
-  assert.equal(root.parent, parent);
-  assert.deepEqual(harness.compatHits.slice(-1),
-    [['render.filter', 'Sprite: Object']]);
-});
-
-test('production skips log structured detail and never quit', () => {
-  const harness = makeHarness();
-  const { sandbox, sprite } = harness;
-  const root = new sandbox.PIXI.Container();
-  root.addChild(sprite());
-  const messages = [];
-  let quitCount = 0;
-  sandbox.NativeHost.runtime.quit = () => { quitCount++; };
-  sandbox.console = { ...console,
-    error(message) { messages.push(String(message)); } };
   const filtered = sprite();
   filtered._filters = [{ enabled: true }];
   root.addChild(filtered);
+  const parent = root.parent;
+  sandbox.renderNativeStage(root);
+  assert.equal(harness.submitted.length, 2);
+  assert.equal(sandbox.renderNativeStage._ready, true);
+  assert.equal(root.parent, parent);
+  assert.deepEqual(harness.compatHits.slice(-1),
+    [['render.filter', 'Sprite:Object']]);
+});
 
+test('production counts filter hits without quitting', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const root = new sandbox.PIXI.Container();
+  root.addChild(sprite());
+  sandbox.NativeHost.runtime.env = () => undefined;
+  const filtered = sprite();
+  filtered._filters = [{ enabled: true }];
+  root.addChild(filtered);
   sandbox.renderNativeStage(root);
   sandbox.renderNativeStage(root);
   assert.equal(harness.submitted.length, 2);
   assert.equal(sandbox.renderNativeStage._ready, true);
-  assert.equal(quitCount, 0);
-  assert.equal(messages.length, 1,
-    'first occurrence logs once; repeats stay counted but quiet');
-  const logged = JSON.parse(messages[0].replace('[pmjs] unsupported render ', ''));
-  assert.equal(logged.capability, 'render.filter');
-  assert.equal(logged.nodeClass, 'Sprite');
-  assert.ok('frame' in logged && 'scene' in logged && 'map' in logged);
+  assert.deepEqual(harness.compatHits,
+    [['render.filter', 'Sprite:Object'], ['render.filter', 'Sprite:Object']]);
 });
 
-test('strict and headless skips throw with detail', () => {
+test('strict and headless hits throw with the capability', () => {
   for (const [setting, value] of [
     ['PMJS_STRICT_COMPAT', '1'], ['PMJS_DIALOG_MODE', 'headless'],
     ['PMJS_DIALOG_MODE', 'strict']
@@ -762,11 +763,12 @@ test('strict and headless skips throw with detail', () => {
     root.addChild(filtered);
     sandbox.NativeHost.runtime.env = name =>
       name === setting ? value : undefined;
-    sandbox.NativeHost.runtime.quit = () => { throw new Error('unexpected quit'); };
-    sandbox.NativeHost.dialog = { alert() { throw new Error('unexpected overlay'); } };
-
+    sandbox.nativeCompatibilityHit = (kind, detail) => {
+      harness.compatHits.push([kind, String(detail)]);
+      throw new Error('unsupported native capability: ' + kind);
+    };
     assert.throws(() => sandbox.renderNativeStage(root),
-      /native scene skipped 1 node\(s\).*render\.filter/);
+      /unsupported native capability: render\.filter/);
   }
 });
 
@@ -805,7 +807,7 @@ function directPacket(harness, node, clip, mask) {
   return JSON.parse(JSON.stringify(result));
 }
 
-test('custom type hooks cannot claim a mismatched representation', () => {
+test('custom type hooks select the encoder while hooks run in order', () => {
   const harness = makeHarness();
   const { sandbox, sprite } = harness;
   let hookCalls = 0;
@@ -827,16 +829,12 @@ test('custom type hooks cannot claim a mismatched representation', () => {
   hooked.indices = new Uint16Array([0, 1, 2]);
   hooked.updateChowRender = function() { hookUpdated++; };
   root.addChild(hooked);
-  const result = sandbox.submitNativeScene(root);
-
+  assert.equal(sandbox.submitNativeScene(root), true);
   assert.equal(hookCalls, 2);
   assert.equal(hookUpdated, 1);
-  assert.equal(result.ok, true);
-  assert.equal(result.skipped.length, 1);
-  assert.equal(result.skipped[0].capability, 'render.render-method');
-  assert.match(result.skipped[0].reason, /native representation mismatch/);
+  assert.deepEqual(harness.compatHits, []);
   assert.deepEqual(harness.submitted[0].metadata.filter((_, index) => index % 7 === 0),
-    [0]);
+    [0, 8]);
 });
 
 test('custom type hook observes post-transform-update state', () => {
@@ -1126,7 +1124,7 @@ function trySubmitMaskStage(harness, stage) {
   harness.submitted.length = 0;
   harness.compatHits.length = 0;
   const result = harness.sandbox.submitNativeScene(stage);
-  return { ok: result.ok, packet: harness.submitted[0] || null,
+  return { ok: result === true, packet: harness.submitted[0] || null,
     hits: harness.compatHits.slice() };
 }
 

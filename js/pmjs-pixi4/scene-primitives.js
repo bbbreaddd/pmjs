@@ -376,16 +376,15 @@ var nativeSceneValues = new Float32Array(
 var nativeSceneCount = 0;
 var nativeSceneBulkClear = false;
 var nativeSceneFilterDepth = 0;
-var nativeSceneSkipped = [];
-
-function rejectNativeScene(node, capability, producer, reason) {
-  var record = { capability: capability, producer: String(producer),
-    nodeClass: node && node.constructor && node.constructor.name || '',
-    reason: reason };
-  nativeSceneSkipped.push(record);
-  if (typeof nativeCompatibilityHit === 'function') {
-    nativeCompatibilityHit(capability, record.producer + ': ' + reason);
-  }
+function nativeRenderHitCount() {
+  if (typeof nativeCompatibilityHits === 'undefined') return 0;
+  var total = 0;
+  Object.keys(nativeCompatibilityHits).forEach(function(capability) {
+    if (capability.indexOf('render.') === 0) {
+      total += nativeCompatibilityHits[capability];
+    }
+  });
+  return total;
 }
 var nativeSceneBackgroundColor = null;
 var nativeSceneFilterAccessCache = new WeakMap();
