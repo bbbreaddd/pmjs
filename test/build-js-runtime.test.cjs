@@ -20,6 +20,17 @@ function writeMvGame(root, { pixiVersion = '4.8.9', plugins = [] } = {}) {
     `var $plugins = ${JSON.stringify(plugins)};\n`);
   return game;
 }
+
+function writeMzGame(root, { pixiVersion = '5.3.12', plugins = [] } = {}) {
+  const game = path.join(root, 'game');
+  fs.mkdirSync(path.join(game, 'js', 'libs'), { recursive: true });
+  fs.writeFileSync(path.join(game, 'js', 'rmmz_core.js'), '// RPG Maker MZ v1.8.1\n');
+  fs.writeFileSync(path.join(game, 'js', 'libs', 'pixi.js'),
+    `PIXI.VERSION = '${pixiVersion}';\n`);
+  fs.writeFileSync(path.join(game, 'js', 'plugins.js'),
+    `var $plugins = ${JSON.stringify(plugins)};\n`);
+  return game;
+}
 test('bundle generation is deterministic and confined to the explicit root', () => {
   const root = temporaryDirectory('pmjs-bundle-');
   fs.writeFileSync(path.join(root, 'a.js'), 'one();\n');
@@ -240,6 +251,41 @@ test('--game composes the default capability bundle without a manifest', () => {
   const modules = JSON.parse(output);
   assert.ok(modules.some(entry => entry.module === 'js/pmjs-plugins/yed/tiled.js'));
   assert.equal(modules.at(-1).module, 'js/pmjs-mv/bootstrap.js');
+});
+
+test('--game composes the MZ profile with authored engine order and terminal bootstrap', () => {
+  const root = temporaryDirectory('pmjs-mz-game-');
+  const game = writeMzGame(root, {
+    plugins: [{ name: 'MZ_Only_Plugin', status: true }],
+  });
+  const output = childProcess.execFileSync(process.execPath,
+    [tool, '--root', root, '--game', game, '--print-modules']).toString();
+  const modules = JSON.parse(output).map(entry => entry.module);
+  const order = [
+    'js/pmjs-pixi5/setup.js',
+    'js/pmjs-mz/engine.js',
+    'js/pmjs-mz/plugin-loader.js',
+    'js/pmjs-mz/bootstrap.js',
+  ].map(module => modules.indexOf(module));
+  assert.ok(order.every(index => index >= 0));
+  assert.deepEqual([...order].sort((a, b) => a - b), order);
+  assert.equal(modules.at(-1), 'js/pmjs-mz/bootstrap.js');
+  assert.ok(!modules.some(module => module.startsWith('js/pmjs-mv/')));
+});
+
+test('MZ composition requires Pixi 5 and rejects MV plugin adapters', () => {
+  const root = temporaryDirectory('pmjs-mz-version-');
+  const game = writeMzGame(root, { pixiVersion: '4.8.9' });
+  assert.throws(() => childProcess.execFileSync(process.execPath,
+    [tool, '--root', root, '--game', game, '--output', 'out.js']),
+  /engine mz requires Pixi 5\.x; detected 4\.8\.9/);
+
+  fs.writeFileSync(path.join(game, 'js', 'libs', 'pixi.js'), "PIXI.VERSION = '5.3.12';\n");
+  const manifest = path.join(root, 'manifest.json');
+  fs.writeFileSync(manifest, JSON.stringify({ adapters: 'all' }));
+  assert.throws(() => childProcess.execFileSync(process.execPath,
+    [tool, '--root', root, '--manifest', manifest, '--game', game, '--output', 'out.js']),
+  /engine mz does not yet support plugin adapter selection/);
 });
 
 test('auto adapter overrides and Pixi compatibility use inspected evidence', () => {

@@ -1,0 +1,32 @@
+{
+  "modules": [
+    "js/pmjs-core/optimizations.js",
+    "js/pmjs-mz/setup.js",
+    "js/pmjs-core/operation-trace.js",
+    "js/pmjs-web/runtime.js",
+    "js/pmjs-web/scheduler.js",
+    "js/pmjs-web/events.js",
+    "js/pmjs-web/storage.js",
+    "js/pmjs-web/filesystem.js",
+    "js/pmjs-web/fonts.js",
+    "js/pmjs-core/achievements.js",
+    "js/pmjs-web/modules.js",
+    "js/pmjs-plugins/greenworks/compat.js",
+    "js/pmjs-plugins/steamworks/compat.js",
+    "js/pmjs-web/canvas.js",
+    "js/pmjs-web/dialogs.js",
+    "js/pmjs-web/object-urls.js",
+    "js/pmjs-web/elements.js",
+    "js/pmjs-web/script-loader.js",
+    "js/pmjs-web/requests.js",
+    "js/pmjs-pixi5/setup.js",
+    "js/pmjs-pixi5/scene.js",
+    "js/pmjs-pixi5/renderer.js",
+    "js/pmjs-mz/engine.js",
+    "js/pmjs-mz/platform.js",
+    "js/pmjs-mz/fonts.js",
+    "js/pmjs-mz/plugin-loader.js",
+    "js/pmjs-mz/main-loop.js",
+    "js/pmjs-mz/bootstrap.js"
+  ]
+}

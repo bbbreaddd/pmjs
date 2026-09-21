@@ -40,7 +40,8 @@ if (profileArgument && gameArgument) {
 const defaultRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const root = rootArgument ? path.resolve(process.cwd(), rootArgument) : defaultRoot;
 const supportedEngines = {
-  mv: { profile: 'mv', pixiMajor: 4 },
+  mv: { profile: 'mv', pixiMajor: 4, bootstrap: 'js/pmjs-mv/bootstrap.js', pluginAdapters: true },
+  mz: { profile: 'mz', pixiMajor: 5, bootstrap: 'js/pmjs-mz/bootstrap.js', pluginAdapters: false },
 };
 
 function insideRoot(input, label) {
@@ -204,12 +205,17 @@ function resolveCapabilityManifest(manifest, manifestPath) {
   const profile = loadProfile(profileName);
   const baseModules = profile.modules;
   const baseDir = profile.baseDir;
-  const bootstrap = 'js/pmjs-mv/bootstrap.js';
+  const bootstrap = engine.bootstrap;
   const bootstrapCount = baseModules.filter(module => module === bootstrap).length;
   if (bootstrapCount !== 1 || baseModules.at(-1) !== bootstrap) {
     throw new Error(`profile ${profileName} must contain ${bootstrap} exactly once as its final module`);
   }
-  const selected = adapterSelection(adaptersOption, registry, inspection, manifestPath);
+  if (!engine.pluginAdapters && adaptersOption !== 'auto' && adaptersOption !== 'none') {
+    throw new Error(`engine ${inspection.engine} does not yet support plugin adapter selection`);
+  }
+  const selected = engine.pluginAdapters
+    ? adapterSelection(adaptersOption, registry, inspection, manifestPath)
+    : [];
   const adapterModules = [];
   const adapterReport = [];
   for (const { plugin, modules } of selected) {
@@ -325,7 +331,8 @@ if (configArgument) {
 
 let compatInserted = false;
 for (const item of rawModules) {
-  if (compatArgument && !compatInserted && item.module === 'js/pmjs-mv/bootstrap.js') {
+  if (compatArgument && !compatInserted &&
+      (item.module === 'js/pmjs-mv/bootstrap.js' || item.module === 'js/pmjs-mz/bootstrap.js')) {
     const resolvedCompat = path.resolve(process.cwd(), compatArgument);
     if (!fs.existsSync(resolvedCompat)) {
       console.error(`error: compat file not found: ${resolvedCompat}`);

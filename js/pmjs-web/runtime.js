@@ -98,6 +98,8 @@ Object.defineProperty(globalThis, 'innerHeight', {
 globalThis.moveBy = function() {};
 globalThis.moveTo = function() {};
 globalThis.resizeBy = function() {};
+globalThis.scrollBy = function() {};
+globalThis.scrollTo = function() {};
 
 var legacyRegExpResult = null;
 var legacyRegExpInput = '';
