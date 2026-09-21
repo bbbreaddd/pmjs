@@ -35,19 +35,12 @@ test flow.
 
 ## Running PMJS
 
-First build a bootstrap bundle from a manifest
+First build a bootstrap bundle from the game directory:
 
 ```sh
-# Standard RPG Maker MV runtime bundle:
 node tools/build-js-runtime.mjs \
-  --profile mv \
-  --output build-js/mv-core-bootstrap.js
-
-# Or minimal renderer smoke test:
-node tools/build-js-runtime.mjs \
-  --manifest example/runtime-bundle.json \
-  --output build-js/smoke.js
-```
+  --game /path/to/game \
+  --output build-js/game-bootstrap.js
 
 Then start the runner:
 
@@ -109,7 +102,8 @@ provide sensible defaults and can be omitted unless tuning for specific constrai
 
 ### 2. Platform Launcher (`run.sh`)
 
-Assemble the standard MV runtime bundle using `--profile mv` and launch the native runner:
+Inspect the game, compose the MV runtime and relevant adapters, then launch the
+native runner:
 
 ```sh
 #!/usr/bin/env bash
@@ -121,9 +115,9 @@ RUNTIME_DIR="${PORT_DIR}/../native-runtime" # Path to PMJS runtime
 BOOTSTRAP_OUTPUT="${PORT_DIR}/build/bootstrap.js"
 mkdir -p "$(dirname "$BOOTSTRAP_OUTPUT")" "${PORT_DIR}/saves"
 
-# 1. Build the bootstrap bundle from the canonical MV profile + declarative config
+# 1. Build the bootstrap
 node "$RUNTIME_DIR/tools/build-js-runtime.mjs" \
-  --profile mv \
+  --game "$PORT_DIR/gamedata" \
   --config "$PORT_DIR/config.json" \
   --output "$BOOTSTRAP_OUTPUT"
 
@@ -155,23 +149,6 @@ globalThis.PMJS_PORT_HOOKS = {
     // Executes in window.onload immediately before SceneManager.run(Scene_Boot)
   }
 };
-```
-
----
-
-## Runtime Profiles & Architecture
-
-PMJS defines canonical module orderings in `profiles/`:
-- `profiles/mv.json`: Standard RPG Maker MV runtime composition (`pmjs-web`, `pmjs-pixi4`, `pmjs-mv`).
-
-When extending the runtime for a new engine family or custom bundle, manifests can extend a base profile:
-
-```json
-{
-  "extends": "mv",
-  "prepend": ["my-early-init.js"],
-  "append": ["my-custom-addon.js"]
-}
 ```
 
 ### Per-optimization controls

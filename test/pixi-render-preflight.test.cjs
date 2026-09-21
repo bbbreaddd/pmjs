@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
@@ -111,13 +112,23 @@ test('Pixi baseline loads before plugin setup, with scan after adapters', () => 
   const runtimeRoot = path.join(__dirname, '..');
   const generic = JSON.parse(fs.readFileSync(path.join(runtimeRoot,
     'profiles/mv.json'), 'utf8')).modules;
-  const omori = JSON.parse(fs.readFileSync(path.join(runtimeRoot,
-    '../ports/omori/port/native/runtime-bundle.json'), 'utf8')).modules;
   assert.ok(generic.indexOf('js/pmjs-pixi4/render-preflight.js') >
     generic.indexOf('js/pmjs-mv/plugin-loader.js'));
   assert.ok(generic.indexOf('js/pmjs-pixi4/render-preflight.js') <
     generic.indexOf('js/pmjs-mv/bootstrap.js'));
+  const repoRoot = path.join(runtimeRoot, '..');
+  const output = childProcess.execFileSync(process.execPath, [
+    path.join(runtimeRoot, 'tools/build-js-runtime.mjs'),
+    '--root', repoRoot,
+    '--manifest', 'ports/omori/port/native/runtime-bundle.json',
+    '--game', 'ports/omori/OMORI-decrypted',
+    '--print-modules',
+  ], { cwd: repoRoot }).toString();
+  const omori = JSON.parse(output)
+    .map(entry => entry.base === 'native-runtime'
+      ? `native-runtime/${entry.module}`
+      : entry.module);
   assert.ok(omori.indexOf('native-runtime/js/pmjs-pixi4/render-preflight.js') <
-    omori.indexOf('ports/omori/port/native/pmjs-omori/plugins.js'));
+    omori.indexOf('native-runtime/js/pmjs-mv/bootstrap.js'));
+  assert.ok(omori.indexOf('native-runtime/js/pmjs-mv/plugin-loader.js') >= 0);
 });
-

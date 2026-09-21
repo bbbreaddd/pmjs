@@ -117,6 +117,7 @@ if(BUILD_TESTING)
       test/storage.test.cjs
       test/achievements.test.cjs
       test/build-js-runtime.test.cjs
+      test/game-inspect.test.cjs
       test/object-urls.test.cjs
       test/mv-audio-object-url.test.cjs
       test/canvas-gradients.test.cjs

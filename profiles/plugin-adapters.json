@@ -1,0 +1,35 @@
+{
+  "adapters": [
+    {
+      "plugins": ["Olivia_HorrorEffects"],
+      "modules": ["js/pmjs-plugins/olivia/horror-effects.js"]
+    },
+    {
+      "plugins": ["YED_Tiled"],
+      "modules": ["js/pmjs-plugins/yed/tiled.js"]
+    },
+    {
+      "plugins": ["YEP_SlipperyTiles"],
+      "modules": ["js/pmjs-plugins/yanfly/slippery-tiles.js"]
+    },
+    {
+      "plugins": ["YEP_EventMiniLabel"],
+      "modules": ["js/pmjs-plugins/yanfly/event-mini-label.js"]
+    },
+    {
+      "plugins": ["Terrax_Lighting"],
+      "modules": ["js/pmjs-plugins/terrax/lighting.js"]
+    },
+    {
+      "plugins": ["Atlas Loader"],
+      "modules": ["js/pmjs-plugins/atlas-loader/image-retention.js"]
+    },
+    {
+      "plugins": ["Aetherflow_PreloadEverything"],
+      "modules": [
+        "js/pmjs-plugins/aetherflow/image-cache.js",
+        "js/pmjs-plugins/aetherflow/audio-cache.js"
+      ]
+    }
+  ]
+}

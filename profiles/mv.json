@@ -1,5 +1,4 @@
 {
-  "name": "mv",
   "modules": [
     "js/pmjs-core/optimizations.js",
     "js/pmjs-mv/setup.js",
@@ -15,11 +14,6 @@
     "js/pmjs-web/modules.js",
     "js/pmjs-plugins/greenworks/compat.js",
     "js/pmjs-plugins/steamworks/compat.js",
-    "js/pmjs-plugins/yanfly/slippery-tiles.js",
-    "js/pmjs-plugins/yanfly/event-mini-label.js",
-    "js/pmjs-plugins/yed/tiled.js",
-    "js/pmjs-plugins/olivia/horror-effects.js",
-    "js/pmjs-plugins/terrax/lighting.js",
     "js/pmjs-web/canvas.js",
     "js/pmjs-web/dialogs.js",
     "js/pmjs-web/object-urls.js",

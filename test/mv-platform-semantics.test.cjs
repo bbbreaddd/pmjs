@@ -1071,3 +1071,25 @@ test('storage read coalescing runs underneath plugin wrappers and respects dynam
   assert.equal(physicalReads, 4, 'Live burst must survive reinstall (still a hit, no new physical read)');
 });
 
+test('native renderer ownership is restored after game plugins compose', () => {
+  const source = fs.readFileSync(path.join(jsDir, 'pmjs-mv/renderer.js'), 'utf8');
+  const rendererInstaller = source.slice(0, source.indexOf('var originalIsOptionValid'));
+  const hooks = {};
+  const context = {
+    Graphics: { frameCount: 0 },
+    createNativePixiRenderer() { return { render() {}, gl: null }; },
+    pmjsRegisterHook(name, callback) { hooks[name] = callback; },
+  };
+  vm.createContext(context);
+  vm.runInContext(rendererInstaller, context);
+  const pluginCreateRenderer = function() {};
+  const pluginRender = function() {};
+  context.Graphics._createRenderer = pluginCreateRenderer;
+  context.Graphics.render = pluginRender;
+  hooks.afterPlugins();
+
+  assert.notEqual(context.Graphics._createRenderer, pluginCreateRenderer);
+  assert.notEqual(context.Graphics.render, pluginRender);
+  context.Graphics._createRenderer();
+  assert.equal(typeof context.Graphics._renderer.render, 'function');
+});

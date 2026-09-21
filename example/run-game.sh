@@ -14,10 +14,10 @@ BOOTSTRAP_OUTPUT="build-js/game-bootstrap.js"
 
 mkdir -p "$(dirname "$BOOTSTRAP_OUTPUT")" "$SAVE_ROOT"
 
-# Step 1: Assemble the JavaScript runtime bundle using the standard MV profile
+# Step 1: Inspect the game and assemble its shared runtime and plugin adapters
 echo "==> Building JS bootstrap bundle..."
 node tools/build-js-runtime.mjs \
-  --profile mv \
+  --game "$GAME_ROOT" \
   --config "${SCRIPT_DIR}/config.json" \
   --output "$BOOTSTRAP_OUTPUT"
 

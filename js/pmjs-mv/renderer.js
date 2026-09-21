@@ -1,31 +1,33 @@
-Graphics._createRenderer = function() {
-  // Let the port finalize plugin-owned renderer settings before replacement.
-  try {
-    if (typeof globalThis.__pmjsBeforeCreateRenderer === 'function') {
-      globalThis.__pmjsBeforeCreateRenderer.call(this);
-    }
-  } catch (_) {}
-  this._renderer = createNativePixiRenderer(this._width, this._height, {
-    view: this._canvas,
-    resolution: 1,
-    autoResize: false
-  });
-};
+function installNativeMvRenderer() {
+  Graphics._createRenderer = function() {
+    // Let the port finalize plugin-owned renderer settings before replacement.
+    try {
+      if (typeof globalThis.__pmjsBeforeCreateRenderer === 'function') {
+        globalThis.__pmjsBeforeCreateRenderer.call(this);
+      }
+    } catch (_) {}
+    this._renderer = createNativePixiRenderer(this._width, this._height, {
+      view: this._canvas,
+      resolution: 1,
+      autoResize: false
+    });
+  };
 
-// MV's browser renderer skips future renderer calls when one frame takes over
-// 15ms. Chromium keeps the previous compositor image in that case; pmjs owns
-// the physical frame loop, so an omitted call otherwise becomes an empty
-// command packet that clears the native scene target to black. Scheduling and
-// cadence belong to the native host—always produce the requested scene frame.
-Graphics.render = function(stage) {
-  if (stage) {
-    this._renderer.render(stage);
-    if (this._renderer.gl && this._renderer.gl.flush) this._renderer.gl.flush();
-  }
-  this._skipCount = 0;
-  this._rendered = true;
-  this.frameCount = (this.frameCount + 1) % 1024;
-};
+  Graphics.render = function(stage) {
+    if (stage) {
+      this._renderer.render(stage);
+      if (this._renderer.gl && this._renderer.gl.flush) this._renderer.gl.flush();
+    }
+    this._skipCount = 0;
+    this._rendered = true;
+    this.frameCount = (this.frameCount + 1) % 1024;
+  };
+}
+
+installNativeMvRenderer();
+if (typeof pmjsRegisterHook === 'function') {
+  pmjsRegisterHook('afterPlugins', installNativeMvRenderer);
+}
 var originalIsOptionValid = Utils.isOptionValid;
 Utils.isOptionValid = function(name) {
   return (!globalThis.AudioContext && name === 'noaudio') ||
