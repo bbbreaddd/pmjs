@@ -108,3 +108,61 @@ test('MV image cache retrims completed loads without destroying bitmap backing',
   assert.deepEqual(first.events, ['loaded']);
   assert.deepEqual(second.events, ['loaded']);
 });
+
+test('nativeCompatibilityHit logs on first hit, stacks on verbose, and throws on strict', () => {
+  const source = fs.readFileSync(path.join(runtimeRoot,
+    'js/pmjs-web/canvas.js'), 'utf8');
+  const start = source.indexOf('var nativeCompatibilityHits =');
+  const end = source.indexOf('\nfunction nativeCompatibilityObserved(');
+  const snippet = source.slice(start, end);
+
+  function runSnippet(env) {
+    const warnings = [];
+    const context = {
+      console: { warn: msg => warnings.push(msg), log: msg => warnings.push(msg) },
+      NativeHost: { runtime: { env: name => env[name] || '' } },
+      Error,
+    };
+    vm.runInNewContext(snippet, context);
+    return { context, warnings };
+  }
+
+  // Normal production: logs concise message once, silent on repeats
+  {
+    const { context, warnings } = runSnippet({});
+    context.nativeCompatibilityHit('filter.blur', 'radius=10');
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0], '[pmjs-compat] filter.blur: radius=10');
+
+    context.nativeCompatibilityHit('filter.blur', 'radius=20');
+    assert.equal(warnings.length, 1, 'subsequent occurrence should only increment counter');
+    assert.equal(context.nativeCompatibilityHits['filter.blur'], 2);
+
+    context.nativeCompatibilityHit('render.mask');
+    assert.equal(warnings.length, 2);
+    assert.equal(warnings[1], '[pmjs-compat] render.mask');
+  }
+
+  // Verbose: logs concise message and stack on first hit
+  {
+    const { context, warnings } = runSnippet({ PMJS_COMPAT_VERBOSE: '1' });
+    context.nativeCompatibilityHit('filter.kawase', 'kernels=3');
+    assert.equal(warnings.length, 2);
+    assert.equal(warnings[0], '[pmjs-compat] filter.kawase: kernels=3');
+    assert.match(warnings[1], /Error/);
+
+    context.nativeCompatibilityHit('filter.kawase', 'kernels=5');
+    assert.equal(warnings.length, 2);
+  }
+
+  // Strict: logs and throws
+  {
+    const { context, warnings } = runSnippet({ PMJS_STRICT_COMPAT: '1' });
+    assert.throws(
+      () => context.nativeCompatibilityHit('filter.glow', 'samples=8'),
+      /unsupported native capability: filter\.glow: samples=8/
+    );
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0], '[pmjs-compat] filter.glow: samples=8');
+  }
+});

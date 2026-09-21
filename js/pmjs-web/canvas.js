@@ -455,14 +455,19 @@ var nativeCompatibilityVerbose =
 function nativeCompatibilityHit(capability, detail) {
   var count = (nativeCompatibilityHits[capability] || 0) + 1;
   nativeCompatibilityHits[capability] = count;
-  if (count === 1 && nativeCompatibilityVerbose) {
-    var event = {
-      capability: capability,
-      detail: detail || '',
-      frame: typeof Graphics === 'function' ? Graphics.frameCount : 0
-    };
-    event.stack = new Error().stack || '';
-    console.log('[pmjs-compat] ' + JSON.stringify(event));
+  if (count === 1) {
+    var message = '[pmjs-compat] ' + capability + (detail ? ': ' + String(detail) : '');
+    if (typeof console !== 'undefined' && console.warn) {
+      console.warn(message);
+      if (nativeCompatibilityVerbose) {
+        console.warn(new Error().stack || '');
+      }
+    } else if (typeof console !== 'undefined' && console.log) {
+      console.log(message);
+      if (nativeCompatibilityVerbose) {
+        console.log(new Error().stack || '');
+      }
+    }
   }
   if (nativeCompatibilityStrict) {
     throw new Error('unsupported native capability: ' + capability +
