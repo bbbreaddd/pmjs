@@ -141,19 +141,20 @@ napi_value loadVideo(napi_env env, napi_callback_info info) try {
   auto decoder = std::make_unique<pmjs::VideoDecoderSession>(*path);
   auto frame = decoder->frame(0.0, &error);
   if (!frame) throw std::runtime_error(error.empty() ? "video decode failed" : error);
-  const auto canvas = value.canvases.createRgba(frame->width, frame->height, frame->rgba);
-  if (!canvas) throw std::runtime_error("cannot allocate video surface");
+  const auto image = value.images.createRgba(frame->width, frame->height,
+                                             frame->rgba.data());
+  if (!image) throw std::runtime_error("cannot allocate video texture");
   std::uint32_t handle = value.nextVideo++;
   if (!handle) handle = value.nextVideo++;
   const double duration = decoder->info().duration;
   auto video = std::make_unique<State::Video>(std::move(decoder));
-  video->canvas = canvas->handle; video->duration = duration;
+  video->image = image->handle; video->duration = duration;
   video->timestamp = frame->timestamp;
   video->recycle(std::move(frame->rgba));
   value.videos.emplace(handle, std::move(video));
   napi_value result; napi_create_object(env, &result);
   napi_set_named_property(env, result, "handle", uint32(env, handle));
-  napi_set_named_property(env, result, "canvas", uint32(env, canvas->handle));
+  napi_set_named_property(env, result, "image", uint32(env, image->handle));
   napi_set_named_property(env, result, "width", number(env, frame->width));
   napi_set_named_property(env, result, "height", number(env, frame->height));
   napi_set_named_property(env, result, "duration", number(env, duration));
@@ -170,9 +171,8 @@ napi_value updateVideo(napi_env env, napi_callback_info info) try {
   auto& video = *found->second;
   if (auto frame = video.take()) {
     if (frame->timestamp + 0.1 >= timestamp) {
-      if (!value.canvases.writePixels(video.canvas, 0, 0, frame->width,
-                                      frame->height, frame->rgba))
-        throw std::runtime_error("video surface update failed");
+      if (!value.images.updateRgba(video.image, frame->rgba.data()))
+        throw std::runtime_error("video texture update failed");
       video.timestamp = frame->timestamp;
     }
     video.recycle(std::move(frame->rgba));
@@ -187,7 +187,7 @@ napi_value releaseVideo(napi_env env, napi_callback_info info) try {
   auto a = arguments(env, info, 1); State& value = host(env);
   const auto found = value.videos.find(asUint32(env, a.at(0)));
   if (found == value.videos.end()) return boolean(env, false);
-  value.canvases.release(found->second->canvas);
+  value.images.release(found->second->image);
   value.videos.erase(found);
   return boolean(env, true);
 } catch (const std::exception& error) {

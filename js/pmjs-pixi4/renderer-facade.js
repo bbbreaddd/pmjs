@@ -316,10 +316,14 @@ function createNativePixiRenderer(width, height, options) {
         d: this.resolution, tx: 0, ty: 0 };
       renderNativeStage(stage, transform ?
         nativeComposeTransform(screenTransform, transform) : screenTransform,
-        this.resolution, this.roundPixels, skipUpdateTransform);
+      this.resolution, this.roundPixels, skipUpdateTransform);
       var video = Graphics._video;
-      if (video && video._nativeCanvas && video.style.opacity > 0) {
-        NativeHost.render.image(video._nativeCanvas.handle,
+      var videoTexture = video &&
+        (typeof video._pmjsNativeTextureSource === 'function' ?
+          video._pmjsNativeTextureSource() :
+          (video._nativeImage || video._nativeCanvas));
+      if (videoTexture && video.style.opacity > 0) {
+        NativeHost.render.image(videoTexture.handle,
           screenWidth / video.videoWidth, 0, 0,
           screenHeight / video.videoHeight, 0, 0,
           0, 0, video.videoWidth, video.videoHeight, 1, 0xffffff, 0);

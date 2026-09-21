@@ -162,7 +162,8 @@ var nativeVideoFinalizer = typeof FinalizationRegistry === 'function'
     }) : null;
 function VideoElement() {
   GenericElement.call(this, 'video');
-  this._src = ''; this._media = null; this._nativeCanvas = null;
+  this._src = ''; this._media = null;
+  this._nativeImage = null; this._nativeCanvas = null;
   this._currentTime = 0; this._startedAt = 0; this._startOffset = 0;
   this.duration = 0; this.videoWidth = 0; this.videoHeight = 0;
   this.width = 0; this.height = 0; this._volume = 1; this._playbackRate = 1;
@@ -237,7 +238,8 @@ VideoElement.prototype._releaseMedia = function() {
   if (nativeVideoFinalizer) nativeVideoFinalizer.unregister(this);
   if (this._media) NativeHost.media.releaseVideo(this._media.handle);
   if (this._audio) NativeHost.media.releaseAudio(this._audio.handle);
-  this._media = null; this._audio = null; this._nativeCanvas = null;
+  this._media = null; this._audio = null;
+  this._nativeImage = null; this._nativeCanvas = null;
   this.readyState = this.HAVE_NOTHING;
   this.duration = 0; this.videoWidth = 0; this.videoHeight = 0;
   this._currentTime = 0; this._startOffset = 0; this._decodedTime = undefined;
@@ -246,7 +248,7 @@ VideoElement.prototype._releaseMedia = function() {
   if (index >= 0) nativeVideos.splice(index, 1);
 };
 VideoElement.prototype._pmjsNativeTextureSource = function() {
-  return this._nativeCanvas;
+  return this._nativeImage || this._nativeCanvas;
 };
 VideoElement.prototype._loadNow = function() {
   this._releaseMedia();
@@ -261,8 +263,11 @@ VideoElement.prototype._loadNow = function() {
     if (nativeVideoFinalizer) nativeVideoFinalizer.register(this, {
       video: this._media.handle, audio: this._audio && this._audio.handle
     }, this);
-    this._nativeCanvas = { handle: this._media.canvas,
+    var nativeTexture = { handle: this._media.image !== undefined ?
+      this._media.image : this._media.canvas,
       width: this._media.width, height: this._media.height };
+    if (this._media.image !== undefined) this._nativeImage = nativeTexture;
+    else this._nativeCanvas = nativeTexture;
     this.videoWidth = this._media.width; this.videoHeight = this._media.height;
     if (!this.width) this.width = this.videoWidth;
     if (!this.height) this.height = this.videoHeight;

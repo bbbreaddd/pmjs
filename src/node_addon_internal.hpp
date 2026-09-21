@@ -92,7 +92,7 @@ struct State {
     std::vector<std::uint8_t> recycledRgba;
     std::thread worker;
     bool shuttingDown = false;
-    std::uint32_t canvas = 0;
+    pmjs::ImageHandle image = 0;
     double duration = 0.0;
     double timestamp = -1.0;
   };

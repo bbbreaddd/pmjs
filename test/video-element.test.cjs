@@ -11,7 +11,7 @@ const eventsSource = fs.readFileSync(
 const elementsSource = fs.readFileSync(
   path.resolve(__dirname, '../js/pmjs-web/elements.js'), 'utf8');
 
-function makeHarness() {
+function makeHarness(videoResource) {
   const calls = { loadVideo: [], releaseVideo: [], updateVideo: [] };
   let nextVideo = 10;
   const context = {
@@ -30,8 +30,9 @@ function makeHarness() {
         loadVideo(source) {
           calls.loadVideo.push(source);
           const handle = nextVideo++;
-          return { handle, canvas: 500 + handle, width: 960, height: 720,
-            duration: 12 };
+          const result = { handle, width: 960, height: 720, duration: 12 };
+          result[videoResource || 'image'] = 500 + handle;
+          return result;
         },
         releaseVideo(handle) { calls.releaseVideo.push(handle); },
         loadAudio() { throw new Error('no audio stream'); },
@@ -125,7 +126,7 @@ test('Pixi 4 VideoBaseTexture becomes valid without autoplay in the YSP sequence
   assert.equal(calls.loadVideo.length, 1);
 });
 
-test('video exposes one stable native canvas while decoded frames advance', () => {
+test('video exposes one stable native image while decoded frames advance', () => {
   const { context, calls } = makeHarness();
   const video = context.document.createElement('video');
   video.src = 'movies/Opening.mp4';
@@ -144,6 +145,17 @@ test('video exposes one stable native canvas while decoded frames advance', () =
   assert.ok(Math.abs(calls.updateVideo[0][1] - 0.11) < 0.000001);
   assert.ok(Math.abs(calls.updateVideo[1][1] - 0.223) < 0.000001);
   assert.equal(calls.loadVideo.length, 1);
+});
+
+test('video accepts the legacy native canvas contract', () => {
+  const { context } = makeHarness('canvas');
+  const video = context.document.createElement('video');
+  video.src = 'movies/Opening.mp4';
+  context.pendingTasks.splice(0).forEach(task => task());
+
+  assert.equal(video._pmjsNativeTextureSource().handle, 510);
+  assert.equal(video._nativeImage, null);
+  assert.equal(video._nativeCanvas.handle, 510);
 });
 
 test('removing video src releases media and load with no source stays empty', () => {

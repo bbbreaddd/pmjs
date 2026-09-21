@@ -665,8 +665,31 @@ function submitNativeScene(stage) {
   }
   var submitStarted = globalThis.__pmjsTrace && __pmjsTrace.active() ?
     performance.now() : 0;
-  NativeHost.scene.submit(packet.version, packet.metadata,
-    packet.values, packet.count);
+  try {
+    NativeHost.scene.submit(packet.version, packet.metadata,
+      packet.values, packet.count);
+  } catch (error) {
+    var resources = [];
+    for (var recordIndex = 0; recordIndex < packet.count; recordIndex++) {
+      var metadataOffset = recordIndex * nativeSceneMetadataStride;
+      var kind = packet.metadata[metadataOffset];
+      var resource = packet.metadata[metadataOffset + 2];
+      var mask = packet.metadata[metadataOffset + 6];
+      if (resource || mask) resources.push({ index: recordIndex, kind: kind,
+        resource: resource, mask: mask,
+        flags: packet.metadata[metadataOffset + 5] });
+    }
+    var videos = typeof nativeVideos === 'undefined' ? [] : nativeVideos.map(
+      function(video) {
+        var source = video._pmjsNativeTextureSource();
+        return { media: video._media && video._media.handle,
+          image: source && source.handle, readyState: video.readyState,
+          paused: video.paused };
+      });
+    console.error('[pmjs-scene] submit failed resources=' +
+      JSON.stringify(resources) + ' videos=' + JSON.stringify(videos));
+    throw error;
+  }
   if (submitStarted) {
     __pmjsTrace.duration('phase', 'scene.native-submit', submitStarted,
       performance.now(), { records: nativeSceneCount });

@@ -2,6 +2,7 @@
 #include "scene_packet.hpp"
 
 #include <cstdlib>
+#include <iostream>
 #include <utility>
 #include <vector>
 
@@ -48,7 +49,12 @@ bool RuntimeCore::submitScene(std::uint32_t version,
         ~scene_packet::kAllowedNodeFlags) return false;
     if (sceneMetadataScratch_[offset + 5] & scene_packet::NodeFlags::hasAlphaMask) {
       const auto mask = resolveImage(sceneMetadataScratch_[offset + 6]);
-      if (!mask) return false;
+      if (!mask) {
+        std::cerr << "[pmjs-scene] invalid alpha-mask handle="
+                  << sceneMetadataScratch_[offset + 6]
+                  << " node=" << index << '\n';
+        return false;
+      }
       sceneMetadataScratch_[offset + 6] = *mask;
     }
     if (kind == scene_packet::NodeKind::filterBegin &&
@@ -57,22 +63,38 @@ bool RuntimeCore::submitScene(std::uint32_t version,
          sceneMetadataScratch_[offset + 4] ==
            static_cast<std::uint32_t>(scene_packet::FilterKind::alphaMask))) {
       const auto image = resolveImage(sceneMetadataScratch_[offset + 2]);
-      if (!image) return false;
+      if (!image) {
+        std::cerr << "[pmjs-scene] invalid filter image handle="
+                  << sceneMetadataScratch_[offset + 2]
+                  << " node=" << index << '\n';
+        return false;
+      }
       sceneMetadataScratch_[offset + 2] = *image;
     }
     if (kind != scene_packet::NodeKind::sprite &&
         kind != scene_packet::NodeKind::tilingSprite) continue;
     const auto image = resolveImage(sceneMetadataScratch_[offset + 2]);
-    if (!image) return false;
+    if (!image) {
+      std::cerr << "[pmjs-scene] invalid sprite image handle="
+                << sceneMetadataScratch_[offset + 2]
+                << " node=" << index
+                << " kind=" << static_cast<std::uint32_t>(kind) << '\n';
+      return false;
+    }
     sceneMetadataScratch_[offset + 2] = *image;
   }
-  return renderer_.queueScene(
+  const bool queued = renderer_.queueScene(
     version,
     nodeCount ? sceneMetadataScratch_.data() : nullptr,
     sceneMetadataScratch_.size(),
     nodeCount ? values : nullptr,
     valueCount,
     nodeCount);
+  if (!queued) {
+    std::cerr << "[pmjs-scene] renderer rejected packet nodes="
+              << nodeCount << '\n';
+  }
+  return queued;
 }
 
 bool RuntimeCore::pollEvents() {
