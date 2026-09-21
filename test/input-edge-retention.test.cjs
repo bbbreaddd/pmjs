@@ -107,3 +107,23 @@ test('render-only frames do not consume the latch (no Input.update, no consume)'
   assert.equal(native.state.consumes, 0);
   assert.equal(native.state.pressed, true);
 });
+
+test('custom keyMapper and gamepadMapper actions emit compatibility hit and default false', () => {
+  const hits = [];
+  const native = latchedNative();
+  const ctx = loadInput(native);
+  ctx.nativeCompatibilityHit = (capability, detail) => {
+    hits.push([capability, detail]);
+  };
+  ctx.Input.keyMapper = { 65: 'specialAttack', 90: 'ok' };
+  ctx.Input.gamepadMapper = { 12: 'up', 15: 'turboFire' };
+
+  ctx.Input.update();
+
+  assert.equal(ctx.Input.isPressed('specialAttack'), false);
+  assert.equal(ctx.Input.isPressed('turboFire'), false);
+  assert.deepEqual(hits, [
+    ['input.customAction', 'keyMapper:specialAttack'],
+    ['input.customAction', 'gamepadMapper:turboFire']
+  ]);
+});

@@ -40,13 +40,14 @@ Input.update = function() {
     var action = nativeInputActions[index];
     this._currentState[action] = pmjsPollNativeAction(action);
   }
-  // Poll any plugin-registered keyMapper actions so custom bindings are not
-  // silently dropped by the fixed action list.
   if (this.keyMapper) {
     for (var code in this.keyMapper) {
       var mapped = this.keyMapper[code];
       if (mapped && this._currentState[mapped] === undefined) {
-        this._currentState[mapped] = pmjsPollNativeAction(mapped);
+        if (typeof nativeCompatibilityHit === 'function') {
+          nativeCompatibilityHit('input.customAction', 'keyMapper:' + mapped);
+        }
+        this._currentState[mapped] = false;
       }
     }
   }
@@ -54,7 +55,10 @@ Input.update = function() {
     for (var button in this.gamepadMapper) {
       var buttonAction = this.gamepadMapper[button];
       if (buttonAction && this._currentState[buttonAction] === undefined) {
-        this._currentState[buttonAction] = pmjsPollNativeAction(buttonAction);
+        if (typeof nativeCompatibilityHit === 'function') {
+          nativeCompatibilityHit('input.customAction', 'gamepadMapper:' + buttonAction);
+        }
+        this._currentState[buttonAction] = false;
       }
     }
   }
