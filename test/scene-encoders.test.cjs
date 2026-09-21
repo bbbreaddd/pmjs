@@ -564,6 +564,100 @@ test('active rectangle mask resolves to a scissor without alpha work', () => {
   assert.equal(packet.metadata[1 * 7 + 5] & 1, 1);
 });
 
+test('proven full-frame Sprite mask resolves to a scissor without alpha work', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const root = new sandbox.PIXI.Container();
+  const masked = sprite();
+  const mask = sprite(100, 92);
+  const source = mask.texture.baseTexture.source;
+  source.__pmjsContentRevision = 4;
+  source.__pmjsMaskProof = { kind: 'constant-mask-rect', x: 0, y: 0,
+    width: 100, height: 92, weight: 1, revision: 4 };
+  mask.x = 7;
+  mask.y = 25;
+  masked.mask = mask;
+  root.addChild(masked);
+  const packet = submitOnly(harness, root);
+  assert.deepEqual(harness.counts,
+    { filterPlans: 1, rectMasks: 1, alphaMasks: 0 });
+  assert.equal(packet.metadata[1 * 7 + 5] & 1, 1);
+  assert.deepEqual(packet.values.slice(1 * 41 + 17, 1 * 41 + 21),
+    [7, 25, 107, 117]);
+});
+
+test('uncertain Sprite masks retain the alpha-mask path', () => {
+  const cases = [
+    mask => { mask.texture.baseTexture.source.__pmjsContentRevision++; },
+    mask => { mask.alpha = 0.5; },
+    mask => { mask.texture.trim = { x: 0, y: 0, width: 100, height: 92 }; },
+    mask => { mask.texture.rotate = 2; },
+    mask => { mask.x = 0.5; }
+  ];
+  for (const change of cases) {
+    const harness = makeHarness();
+    const { sandbox, sprite } = harness;
+    const root = new sandbox.PIXI.Container();
+    const masked = sprite();
+    const mask = sprite(100, 92);
+    const source = mask.texture.baseTexture.source;
+    source.__pmjsContentRevision = 2;
+    source.__pmjsMaskProof = { kind: 'constant-mask-rect', x: 0, y: 0,
+      width: 100, height: 92, weight: 1, revision: 2 };
+    change(mask);
+    masked.mask = mask;
+    root.addChild(masked);
+    submitOnly(harness, root);
+    assert.deepEqual(harness.counts,
+      { filterPlans: 1, rectMasks: 1, alphaMasks: 1 });
+  }
+});
+
+test('Sprite rectangle masks resolve anchor, negative scale, and another parent branch', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const root = new sandbox.PIXI.Container();
+  const faceLayer = new sandbox.PIXI.Container();
+  const maskLayer = new sandbox.PIXI.Container();
+  const masked = sprite();
+  const mask = sprite(100, 92);
+  const source = mask.texture.baseTexture.source;
+  source.__pmjsContentRevision = 3;
+  source.__pmjsMaskProof = { kind: 'constant-mask-rect', x: 0, y: 0,
+    width: 100, height: 92, weight: 1, revision: 3 };
+  mask.anchor = { x: 0.5, y: 0.5 };
+  mask.transform.localTransform = { a: -1, b: 0, c: 0, d: 1, tx: 107, ty: 71 };
+  mask.transform.updateLocalTransform = function() {};
+  maskLayer.transform.localTransform = { a: 1, b: 0, c: 0, d: 1, tx: 10, ty: 20 };
+  maskLayer.transform.updateLocalTransform = function() {};
+  maskLayer.addChild(mask);
+  faceLayer.addChild(masked);
+  root.addChild(maskLayer);
+  root.addChild(faceLayer);
+  masked.mask = mask;
+  submitOnly(harness, root);
+  assert.deepEqual(harness.counts,
+    { filterPlans: 1, rectMasks: 1, alphaMasks: 0 });
+});
+
+test('disabled Sprite rectangle lowering retains the alpha-mask path', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  sandbox.pmjsOptimizationEnabled = id => id !== 'scene.solid-sprite-mask-clip';
+  const root = new sandbox.PIXI.Container();
+  const masked = sprite();
+  const mask = sprite(100, 92);
+  const source = mask.texture.baseTexture.source;
+  source.__pmjsContentRevision = 1;
+  source.__pmjsMaskProof = { kind: 'constant-mask-rect', x: 0, y: 0,
+    width: 100, height: 92, weight: 1, revision: 1 };
+  masked.mask = mask;
+  root.addChild(masked);
+  submitOnly(harness, root);
+  assert.deepEqual(harness.counts,
+    { filterPlans: 1, rectMasks: 1, alphaMasks: 1 });
+});
+
 test('encoders observe state instead of advancing semantics', () => {
   function readModule(relative) {
     return fs.readFileSync(path.join(__dirname, '..', relative), 'utf8');
@@ -1352,4 +1446,3 @@ test('disjoint clip intersection normalizes to a zero-area clip without rejectio
     [packet.values[17], packet.values[18], packet.values[19], packet.values[20]],
     [100, 100, 100, 100]);
 });
-

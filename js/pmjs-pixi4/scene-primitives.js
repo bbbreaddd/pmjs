@@ -19,6 +19,9 @@ if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
   PMJS.optimizations.register({ id: 'scene.plain-sprite-segment',
     owner: 'pmjs-pixi4',
     fallback: 'encode each sprite through the generic recursive scene writer' });
+  PMJS.optimizations.register({ id: 'scene.solid-sprite-mask-clip',
+    owner: 'pmjs-pixi4',
+    fallback: 'encode Sprite masks through the alpha-mask filter group' });
 }
 
 var nativeTransformParent = new PIXI.Container();
@@ -645,9 +648,84 @@ function nativeMaskWorldAlpha(mask) {
   return alpha;
 }
 
+function nativeSpriteMaskGeometry(mask) {
+  if (!mask || !(mask instanceof PIXI.Sprite)) return null;
+  var texture = mask.texture;
+  var baseTexture = texture && texture.baseTexture;
+  var baseSource = baseTexture && baseTexture.source;
+  var source = baseSource && (baseSource._nativeImage || baseSource._nativeCanvas);
+  var rawFrame = texture && (texture._frame || texture.frame);
+  var sourceWidth = baseSource && (baseSource.width || baseTexture.width);
+  var sourceHeight = baseSource && (baseSource.height || baseTexture.height);
+  var anchor = mask.anchor || { x: 0, y: 0 };
+  var original = texture && (texture.orig || rawFrame);
+  var trim = texture && texture.trim;
+  if (!source || !rawFrame || !sourceWidth || !sourceHeight || !original ||
+      !Number.isFinite(Number(anchor.x)) || !Number.isFinite(Number(anchor.y))) {
+    return null;
+  }
+  var localX = trim ? trim.x - anchor.x * original.width :
+    -anchor.x * original.width;
+  var localY = trim ? trim.y - anchor.y * original.height :
+    -anchor.y * original.height;
+  var localWidth = trim ? trim.width : original.width;
+  var localHeight = trim ? trim.height : original.height;
+  var resolution = Math.max(0.000001, Number(baseTexture.resolution) || 1);
+  if (![localX, localY, localWidth, localHeight, resolution].every(Number.isFinite) ||
+      localWidth <= 0 || localHeight <= 0) return null;
+  return { texture: texture, baseTexture: baseTexture, baseSource: baseSource,
+    source: source, rawFrame: rawFrame, original: original, trim: trim,
+    resolution: resolution, sourceWidth: sourceWidth, sourceHeight: sourceHeight,
+    localX: localX, localY: localY, localWidth: localWidth,
+    localHeight: localHeight, frame: { x: rawFrame.x * resolution,
+      y: rawFrame.y * resolution, width: rawFrame.width * resolution,
+      height: rawFrame.height * resolution } };
+}
+
+function nativeSpriteRectangleMask(mask) {
+  if (typeof pmjsOptimizationEnabled === 'function' &&
+      !pmjsOptimizationEnabled('scene.solid-sprite-mask-clip')) return null;
+  var geometry = nativeSpriteMaskGeometry(mask);
+  if (!geometry || geometry.trim || Number(geometry.texture.rotate) !== 0) return null;
+  var frame = geometry.rawFrame;
+  var original = geometry.original;
+  var baseTexture = geometry.baseTexture;
+  if (Number(frame.x) !== 0 || Number(frame.y) !== 0 ||
+      Number(frame.width) !== Number(baseTexture.width) ||
+      Number(frame.height) !== Number(baseTexture.height) ||
+      Number(original.width) !== Number(frame.width) ||
+      Number(original.height) !== Number(frame.height)) return null;
+  var proof = geometry.baseSource.__pmjsMaskProof;
+  if (!proof || proof.kind !== 'constant-mask-rect' || proof.weight !== 1 ||
+      proof.revision !== geometry.baseSource.__pmjsContentRevision ||
+      Number(proof.x) !== 0 || Number(proof.y) !== 0 ||
+      Number(proof.width) !== geometry.frame.width ||
+      Number(proof.height) !== geometry.frame.height) return null;
+  if (Math.abs(nativeMaskWorldAlpha(mask) - 1) > 0.000001) return null;
+  var world = nativeMaskWorldTransform(mask);
+  if (!world || ![world.a, world.b, world.c, world.d, world.tx, world.ty]
+      .every(Number.isFinite) || Math.abs(world.a) < 0.000001 ||
+      Math.abs(world.d) < 0.000001 || Math.abs(world.b) > 0.000001 ||
+      Math.abs(world.c) > 0.000001) return null;
+  var left = world.a * geometry.localX + world.tx;
+  var right = world.a * (geometry.localX + geometry.localWidth) + world.tx;
+  var top = world.d * geometry.localY + world.ty;
+  var bottom = world.d * (geometry.localY + geometry.localHeight) + world.ty;
+  if (![left, right, top, bottom].every(Number.isFinite) ||
+      [left, right, top, bottom].some(function(value) {
+        return Math.abs(value - Math.round(value)) > 0.000001;
+      })) return null;
+  return { left: Math.min(left, right), top: Math.min(top, bottom),
+    right: Math.max(left, right), bottom: Math.max(top, bottom) };
+}
+
 function nativeRectangleMask(mask) {
-  if (!mask || !PIXI.Graphics || !(mask instanceof PIXI.Graphics) ||
-      typeof mask.getBounds !== 'function') return null;
+  if (!mask) return null;
+  if (!PIXI.Graphics || !(mask instanceof PIXI.Graphics) ||
+      typeof mask.getBounds !== 'function') {
+    return typeof nativeSpriteRectangleMask === 'function' ?
+      nativeSpriteRectangleMask(mask) : null;
+  }
   var graphics = mask.graphicsData;
   var item = graphics && graphics.length === 1 ? graphics[0] : null;
   if (!item || !item.fill || item.lineWidth > 0 || item.holes && item.holes.length ||
@@ -804,25 +882,14 @@ function nativeAlphaMask(mask) {
       frame = { x: 0, y: 0, width: canvas.width, height: canvas.height };
     }
   } else if (mask instanceof PIXI.Sprite) {
-    var texture = mask.texture;
-    var baseSource = texture && texture.baseTexture && texture.baseTexture.source;
-    source = baseSource && (baseSource._nativeImage || baseSource._nativeCanvas);
-    frame = texture && (texture._frame || texture.frame);
-    var sourceWidth = baseSource && (baseSource.width || texture.baseTexture.width);
-    var sourceHeight = baseSource && (baseSource.height || texture.baseTexture.height);
-    if (!frame || !sourceWidth || !sourceHeight) return null;
-    var anchor = mask.anchor || { x: 0, y: 0 };
-    var original = texture.orig || frame;
-    var trim = texture.trim;
-    localX = trim ? trim.x - anchor.x * original.width : -anchor.x * original.width;
-    localY = trim ? trim.y - anchor.y * original.height : -anchor.y * original.height;
-    localWidth = trim ? trim.width : original.width;
-    localHeight = trim ? trim.height : original.height;
-    var maskResolution = Math.max(0.000001,
-      Number(texture.baseTexture.resolution) || 1);
-    frame = { x: frame.x * maskResolution, y: frame.y * maskResolution,
-      width: frame.width * maskResolution,
-      height: frame.height * maskResolution };
+    var geometry = nativeSpriteMaskGeometry(mask);
+    if (!geometry) return null;
+    source = geometry.source;
+    frame = geometry.frame;
+    localX = geometry.localX;
+    localY = geometry.localY;
+    localWidth = geometry.localWidth;
+    localHeight = geometry.localHeight;
   }
   if (!source || localWidth <= 0 || localHeight <= 0) return null;
   return { handle: source.handle, transform: [
@@ -893,4 +960,3 @@ function nativeColorMatrixIsIdentity(values) {
   }
   return true;
 }
-

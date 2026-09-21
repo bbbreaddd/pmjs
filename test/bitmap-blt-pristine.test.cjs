@@ -21,7 +21,14 @@ function setupEnvironment({ config = {}, env = {} } = {}) {
       _width: width || 0,
       _height: height || 0,
       _pmjsBitmapUrl: null,
+      __pmjsContentRevision: 0,
+      __pmjsMaskProof: null,
       drawCalls: [],
+      _ensureNativeCanvas() { return { handle: 1 }; },
+      _pmjsContentChanged() {
+        canvas.__pmjsContentRevision++;
+        canvas.__pmjsMaskProof = null;
+      },
       getContext(type) {
         if (type === '2d') {
           if (!canvas._context2d) {
@@ -29,8 +36,12 @@ function setupEnvironment({ config = {}, env = {} } = {}) {
               canvas,
               globalCompositeOperation: 'source-over',
               globalAlpha: 1,
+              _transform: [1, 0, 0, 1, 0, 0],
+              _clipPaths: [],
+              fillRect() { canvas._pmjsContentChanged(); },
               drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh) {
                 canvas.drawCalls.push({ img, sx, sy, sw, sh, dx, dy, dw, dh });
+                canvas._pmjsContentChanged();
               }
             };
           }
@@ -41,11 +52,11 @@ function setupEnvironment({ config = {}, env = {} } = {}) {
     };
     Object.defineProperty(canvas, 'width', {
       get() { return canvas._width; },
-      set(v) { canvas._width = v; }
+      set(v) { canvas._width = v; canvas._pmjsContentChanged(); }
     });
     Object.defineProperty(canvas, 'height', {
       get() { return canvas._height; },
-      set(v) { canvas._height = v; }
+      set(v) { canvas._height = v; canvas._pmjsContentChanged(); }
     });
     return canvas;
   }
@@ -119,6 +130,16 @@ function setupEnvironment({ config = {}, env = {} } = {}) {
     this._dirty = true;
   };
 
+  MockBitmap.prototype.fillRect = function(x, y, width, height, color) {
+    this._context.fillStyle = color;
+    this._context.fillRect(x, y, width, height);
+    this._setDirty();
+  };
+
+  MockBitmap.prototype.fillAll = function(color) {
+    this.fillRect(0, 0, this.width, this.height, color);
+  };
+
   MockBitmap.prototype.blt = function(source, sx, sy, sw, sh, dx, dy, dw, dh) {
     stockBltCalls++;
     dw = dw || sw;
@@ -152,6 +173,12 @@ function setupEnvironment({ config = {}, env = {} } = {}) {
       }
     },
     nativeBootPhase() {},
+    colorToRgba(color) {
+      if (color === 'white' || color === '#ffffff' ||
+          color === 'rgba(255, 255, 255, 1)') return 0xffffffff;
+      if (color === 'rgba(255, 255, 255, 0.5)') return 0xffffff80;
+      return 0x000000ff;
+    },
     Bitmap: MockBitmap,
     Sprite: function Sprite() {},
     Graphics: Object.assign(function Graphics() {}, { width: 816, height: 624, _renderer: null }),
@@ -338,4 +365,41 @@ test('URL attribution: lazily created canvases receive _pmjsBitmapUrl from sourc
   const canvas2 = bmp2._canvas;
   assert.ok(canvas2);
   assert.equal(canvas2._pmjsBitmapUrl, null);
+});
+
+test('unit full-bitmap fills establish revision-bound mask proof', () => {
+  const { Bitmap } = setupEnvironment();
+  const bitmap = new Bitmap(100, 92);
+  bitmap.fillAll('white');
+  assert.deepEqual({ ...bitmap._canvas.__pmjsMaskProof }, {
+    kind: 'constant-mask-rect', x: 0, y: 0, width: 100, height: 92,
+    weight: 1, revision: bitmap._canvas.__pmjsContentRevision
+  });
+  bitmap._context.fillRect(0, 0, 1, 1);
+  assert.equal(bitmap._canvas.__pmjsMaskProof, null);
+  bitmap.fillAll('white');
+  bitmap.blur();
+  assert.equal(bitmap._canvas.__pmjsMaskProof, null);
+});
+
+test('mask proof rejects partial, translucent, transformed, clipped, and composited fills', () => {
+  const { Bitmap } = setupEnvironment();
+  const bitmap = new Bitmap(100, 92);
+  const context = bitmap._context;
+  const reject = (prepare, color = 'white') => {
+    context.globalAlpha = 1;
+    context.globalCompositeOperation = 'source-over';
+    context._transform = [1, 0, 0, 1, 0, 0];
+    context._clipPaths = [];
+    prepare();
+    bitmap.fillRect(0, 0, 100, 92, color);
+    assert.equal(bitmap._canvas.__pmjsMaskProof, null);
+  };
+  bitmap.fillRect(0, 0, 99, 92, 'white');
+  assert.equal(bitmap._canvas.__pmjsMaskProof, null);
+  reject(() => {}, 'rgba(255, 255, 255, 0.5)');
+  reject(() => { context.globalAlpha = 0.5; });
+  reject(() => { context.globalCompositeOperation = 'copy'; });
+  reject(() => { context._transform[4] = 1; });
+  reject(() => { context._clipPaths.push({}); });
 });

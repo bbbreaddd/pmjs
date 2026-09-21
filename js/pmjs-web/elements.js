@@ -34,6 +34,8 @@ function CanvasElement() {
   EventTarget.call(this);
   this._width = 300;
   this._height = 150;
+  this.__pmjsContentRevision = 0;
+  this.__pmjsMaskProof = null;
   this.style = {};
   this.screencanvas = false;
   this._context2d = null;
@@ -42,6 +44,10 @@ function CanvasElement() {
 
 CanvasElement.prototype = Object.create(EventTarget.prototype);
 CanvasElement.prototype.constructor = CanvasElement;
+CanvasElement.prototype._pmjsContentChanged = function() {
+  this.__pmjsContentRevision++;
+  this.__pmjsMaskProof = null;
+};
 function isCanvasDiagnosticsEnabled() {
   if (globalThis.__pmjsCanvasDiag) return true;
   return typeof NativeHost !== 'undefined' &&
@@ -60,6 +66,7 @@ function logCanvasCreation(width, height, url) {
 CanvasElement.prototype._releaseNativeCanvas = function() {
   releaseNativeResource(this._nativeCanvas, 'canvas');
   this._nativeCanvas = null;
+  this._pmjsContentChanged();
 };
 CanvasElement.prototype._ensureNativeCanvas = function() {
   if (!this._nativeCanvas) {
@@ -76,11 +83,17 @@ CanvasElement.prototype._ensureNativeCanvas = function() {
 };
 Object.defineProperty(CanvasElement.prototype, 'width', {
   get: function() { return this._width; },
-  set: function(value) { this._width = Math.max(0, Number(value) | 0); this._releaseNativeCanvas(); }
+  set: function(value) {
+    this._width = Math.max(0, Number(value) | 0);
+    this._releaseNativeCanvas();
+  }
 });
 Object.defineProperty(CanvasElement.prototype, 'height', {
   get: function() { return this._height; },
-  set: function(value) { this._height = Math.max(0, Number(value) | 0); this._releaseNativeCanvas(); }
+  set: function(value) {
+    this._height = Math.max(0, Number(value) | 0);
+    this._releaseNativeCanvas();
+  }
 });
 CanvasElement.prototype.getContext = function(type) {
   if (type === '2d') {

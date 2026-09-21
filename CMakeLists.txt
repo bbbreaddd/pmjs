@@ -120,6 +120,7 @@ if(BUILD_TESTING)
       test/object-urls.test.cjs
       test/mv-audio-object-url.test.cjs
       test/canvas-gradients.test.cjs
+      test/canvas-content-revision.test.cjs
       test/mv-platform-semantics.test.cjs
       test/pmjs-web-dialogs.test.cjs
       test/fonts.test.cjs

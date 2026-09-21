@@ -298,6 +298,7 @@ function createNativePixiRenderer(width, height, options) {
           resolutionTransform, resolution, this.roundPixels,
           skipUpdateTransform);
         NativeHost.render.renderToCanvas(target._ensureNativeCanvas().handle);
+        target._pmjsContentChanged();
         this.textureGC.update();
         if (typeof this.emit === 'function') this.emit('postrender');
         return;
@@ -353,6 +354,7 @@ function createNativePixiRenderer(width, height, options) {
               renderCanvas._ensureNativeCanvas().handle,
               Math.floor(frame.x * renderResolution),
               Math.floor(frame.y * renderResolution), cropWidth, cropHeight));
+          croppedCanvas._pmjsContentChanged();
           return croppedCanvas;
         }
         if (PIXI.RenderTexture && target instanceof PIXI.RenderTexture) {
@@ -371,6 +373,7 @@ function createNativePixiRenderer(width, height, options) {
           screenCanvas.height = this.renderer.height;
           screenCanvas._nativeCanvas = trackNativeResource(
             NativeHost.canvas.captureScene(), 'canvas');
+          screenCanvas._pmjsContentChanged();
           return screenCanvas;
         }
         var renderTexture = this.renderer.generateTexture(target);
@@ -384,6 +387,7 @@ function createNativePixiRenderer(width, height, options) {
         canvas.height = height;
         NativeHost.canvas.writePixels(canvas._ensureNativeCanvas().handle,
           0, 0, width, height, pixels);
+        canvas._pmjsContentChanged();
         renderTexture.destroy(true);
         return canvas;
       },
@@ -712,4 +716,3 @@ PIXI.WebGLRenderer = NativePixiWebGLRenderer;
 PIXI.autoDetectRenderer = function(width, height, options) {
   return new NativePixiWebGLRenderer(width, height, options);
 };
-

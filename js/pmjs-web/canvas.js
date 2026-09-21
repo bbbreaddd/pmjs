@@ -937,3 +937,16 @@ CanvasContext2D.prototype.putImageData = function(imageData, x, y) {
     Math.floor(y) + sourceY, width, height, pixels);
 };
 
+[
+  'clearRect', 'fillRect', 'drawImage', 'fillText', 'strokeText',
+  'fill', 'stroke', 'putImageData'
+].forEach(function(method) {
+  var mutate = CanvasContext2D.prototype[method];
+  CanvasContext2D.prototype[method] = function() {
+    var result = mutate.apply(this, arguments);
+    if (this.canvas && typeof this.canvas._pmjsContentChanged === 'function') {
+      this.canvas._pmjsContentChanged();
+    }
+    return result;
+  };
+});
