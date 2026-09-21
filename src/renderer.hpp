@@ -297,6 +297,9 @@ class Renderer {
   int spriteEffectColorEnabledUniform_ = -1;
   int spriteEffectColorToneUniform_ = -1;
   int spriteEffectBlendColorUniform_ = -1;
+  int spriteEffectMatrixEnabledUniform_ = -1;
+  int spriteEffectMatrixUniform_ = -1;
+  int spriteEffectMatrixAlphaUniform_ = -1;
   int textureSizeUniform_ = -1;
   int blurUniform_ = -1;
   int blurDirectionUniform_ = -1;

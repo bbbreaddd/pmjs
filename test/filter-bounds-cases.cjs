@@ -7,6 +7,10 @@ const HALVE = [0.5, 0, 0, 0, 0,
   0, 0.5, 0, 0, 0,
   0, 0, 0.5, 0, 0,
   0, 0, 0, 1, 0, 1];
+const OFFSET_RED = [1, 0, 0, 0, 0.1,
+  0, 1, 0, 0, 0,
+  0, 0, 1, 0, 0,
+  0, 0, 0, 1, 0, 1];
 const IDENTITY_ALPHA_OFFSET = [1, 0, 0, 0, 0,
   0, 1, 0, 0, 0,
   0, 0, 1, 0, 0,
@@ -77,6 +81,23 @@ function sprite(stride, handle, x, y, tint) {
     values: spriteValues(stride, x, y, 2, 2) };
 }
 
+function additiveSprite(stride, handle, x, y) {
+  const record = sprite(stride, handle, x, y);
+  record.metadata[4] = 1;
+  return record;
+}
+
+function effectSprite(stride, handle, x, y) {
+  const record = sprite(stride, handle, x, y, 0x80ff80);
+  record.metadata[5] = (1 << 2) | (1 << 4);
+  record.metadata[6] = handle;
+  record.values[6] = 0.6;
+  record.values.set([1, 0, 0, 1, -x, -y], 22);
+  record.values.set([0.1, -0.05, 0.05, 0.25], 33);
+  record.values.set([0.2, 0.4, 0.6, 0.3], 37);
+  return record;
+}
+
 function filterBeginClipped(stride, kind, resource, params, clip) {
   const record = filterBegin(stride, kind, resource, params);
   record.metadata[5] |= 1;
@@ -92,6 +113,36 @@ function buildCases(stride, handle) {
       sprite(stride, handle, 6, 6),
       filterEnd(stride),
     ],
+    'preserving color matrix fallback': [
+      screenFill(stride, BG),
+      filterBeginClipped(stride, 25, 0, HALVE, [0, 0, 16, 16]),
+      sprite(stride, handle, 6, 6),
+      filterEnd(stride),
+    ],
+    'affine leaf color matrix': [
+      screenFill(stride, BG),
+      filterBegin(stride, 25, 0, OFFSET_RED),
+      sprite(stride, handle, 6, 6),
+      filterEnd(stride),
+    ],
+    'affine leaf color matrix fallback': [
+      screenFill(stride, BG),
+      filterBeginClipped(stride, 25, 0, OFFSET_RED, [0, 0, 16, 16]),
+      sprite(stride, handle, 6, 6),
+      filterEnd(stride),
+    ],
+    'effect leaf color matrix': [
+      screenFill(stride, BG),
+      filterBegin(stride, 25, 0, HALVE),
+      effectSprite(stride, handle, 6, 6),
+      filterEnd(stride),
+    ],
+    'effect leaf color matrix fallback': [
+      screenFill(stride, BG),
+      filterBeginClipped(stride, 25, 0, HALVE, [0, 0, 16, 16]),
+      effectSprite(stride, handle, 6, 6),
+      filterEnd(stride),
+    ],
     'non-preserving color matrix': [
       screenFill(stride, BG),
       filterBegin(stride, 25, 0, IDENTITY_ALPHA_OFFSET),
@@ -105,13 +156,20 @@ function buildCases(stride, handle) {
       sprite(stride, handle, 5, 5, 0x00ff00),
       filterEnd(stride),
     ],
+    'overlapping sprites fallback': [
+      screenFill(stride, BG),
+      filterBeginClipped(stride, 25, 0, HALVE, [0, 0, 16, 16]),
+      sprite(stride, handle, 4, 4),
+      sprite(stride, handle, 5, 5, 0x00ff00),
+      filterEnd(stride),
+    ],
     'sparse preserving color matrix': [
       screenFill(stride, BG),
-      filterBegin(stride, 25, 0, HALVE),
+      filterBeginClipped(stride, 25, 0, HALVE, [0, 0, 16, 16]),
       sprite(stride, handle, 1, 1),
       sprite(stride, handle, 13, 1),
       sprite(stride, handle, 1, 13),
-      sprite(stride, handle, 13, 13),
+      additiveSprite(stride, handle, 13, 13),
       filterEnd(stride),
       sprite(stride, handle, 8, 8, 0x00ff00),
     ],
@@ -187,6 +245,7 @@ module.exports = {
   BG,
   BG_RGBA,
   HALVE,
+  OFFSET_RED,
   IDENTITY_ALPHA_OFFSET,
   DIM_ADJUST,
   BLUR,

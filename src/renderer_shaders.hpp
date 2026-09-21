@@ -921,6 +921,9 @@ constexpr const char* spriteEffectFragmentSource = R"(
   uniform bool spriteColorEnabled;
   uniform vec4 spriteColorTone;
   uniform vec4 spriteBlendColor;
+  uniform bool colorMatrixEnabled;
+  uniform float colorMatrix[20];
+  uniform float colorMatrixAlpha;
   in vec2 vertexUv;
   in vec4 vertexColor;
   in vec4 vertexUvClamp;
@@ -971,6 +974,17 @@ constexpr const char* spriteEffectFragmentSource = R"(
       outputColor.a *= texture(maskImage, maskLocal / maskTextureSize).a;
     }
     outputColor.rgb *= outputColor.a;
+    if (colorMatrixEnabled) {
+      vec4 c = outputColor;
+      if (c.a > 0.0) c.rgb /= c.a;
+      vec4 adjusted;
+      adjusted.r = colorMatrix[0] * c.r + colorMatrix[1] * c.g + colorMatrix[2] * c.b + colorMatrix[3] * c.a + colorMatrix[4];
+      adjusted.g = colorMatrix[5] * c.r + colorMatrix[6] * c.g + colorMatrix[7] * c.b + colorMatrix[8] * c.a + colorMatrix[9];
+      adjusted.b = colorMatrix[10] * c.r + colorMatrix[11] * c.g + colorMatrix[12] * c.b + colorMatrix[13] * c.a + colorMatrix[14];
+      adjusted.a = colorMatrix[15] * c.r + colorMatrix[16] * c.g + colorMatrix[17] * c.b + colorMatrix[18] * c.a + colorMatrix[19];
+      vec3 rgb = mix(c.rgb, adjusted.rgb, colorMatrixAlpha) * adjusted.a;
+      outputColor = vec4(rgb, adjusted.a);
+    }
   }
 )";
 constexpr const char* tileFragmentSource = R"(

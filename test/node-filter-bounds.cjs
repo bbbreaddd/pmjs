@@ -118,6 +118,33 @@ function compareFullFrame(label) {
   }
 }
 
+function compareCases(actualLabel, referenceLabel, tolerance = 0) {
+  const capture = (label) => {
+    submit(built[label]);
+    const frame = native.canvas.captureScene();
+    try {
+      return Buffer.from(native.canvas.readPixels(frame.handle, 0, 0, 16, 16));
+    } finally {
+      native.canvas.release(frame.handle);
+    }
+  };
+  const actual = capture(actualLabel);
+  const reference = capture(referenceLabel);
+  let maxDelta = 0;
+  for (let index = 0; index < actual.length; index++) {
+    maxDelta = Math.max(maxDelta, Math.abs(actual[index] - reference[index]));
+  }
+  if (maxDelta > tolerance) {
+    let first = 0;
+    while (first < actual.length &&
+           Math.abs(actual[first] - reference[first]) <= tolerance) first++;
+    throw new Error(actualLabel + ': differs from ' + referenceLabel +
+      ' at byte ' + first + ' of ' + actual.length +
+      ' actual=' + actual[first] + ' reference=' + reference[first] +
+      ' maxDelta=' + maxDelta);
+  }
+}
+
 runCase('preserving color matrix', {
   pixels: [
     { x: 6, y: 6, rgba: cases.HALVED_FIXTURE },
@@ -126,9 +153,20 @@ runCase('preserving color matrix', {
     { x: 15, y: 15, rgba: cases.BG_RGBA },
     { x: 6, y: 8, rgba: cases.BG_RGBA },
   ],
-  boundedDelta: boundedBuild ? 1 : 0,
-  applications: { 25: 1 },
-  clears: 1,
+  boundedDelta: 0,
+  applications: { 25: 0 },
+  clears: 0,
+});
+
+runCase('preserving color matrix fallback', {
+  pixels: [
+    { x: 6, y: 6, rgba: cases.HALVED_FIXTURE },
+    { x: 7, y: 7, rgba: cases.HALVED_FIXTURE },
+    { x: 0, y: 0, rgba: cases.BG_RGBA },
+  ],
+  boundedDelta: 0,
+  applications: { 25: 0 },
+  clears: 0,
 });
 
 runCase('non-preserving color matrix', {
@@ -149,9 +187,9 @@ runCase('overlapping sprites', {
     { x: 3, y: 3, rgba: cases.BG_RGBA },
     { x: 7, y: 7, rgba: cases.BG_RGBA },
   ],
-  boundedDelta: boundedBuild ? 1 : 0,
-  applications: { 25: 1 },
-  clears: 1,
+  boundedDelta: 0,
+  applications: { 25: 0 },
+  clears: 0,
 });
 
 runCase('sparse preserving color matrix', {
@@ -159,7 +197,6 @@ runCase('sparse preserving color matrix', {
     { x: 1, y: 1, rgba: cases.HALVED_FIXTURE },
     { x: 14, y: 1, rgba: cases.HALVED_FIXTURE },
     { x: 1, y: 14, rgba: cases.HALVED_FIXTURE },
-    { x: 14, y: 14, rgba: cases.HALVED_FIXTURE },
     { x: 8, y: 8, rgba: [0, 51, 0, 255] },
   ],
   boundedDelta: boundedBuild ? 1 : 0,
@@ -216,9 +253,9 @@ runCase('clipped filter bounds', {
     { x: 6, y: 6, rgba: cases.HALVED_FIXTURE },
     { x: 0, y: 0, rgba: cases.BG_RGBA },
   ],
-  boundedDelta: boundedBuild ? 1 : 0,
-  applications: { 25: 1 },
-  clears: 1,
+  boundedDelta: 0,
+  applications: { 25: 0 },
+  clears: 0,
 });
 
 runCase('disjoint clip', {
@@ -226,9 +263,9 @@ runCase('disjoint clip', {
     { x: 10, y: 10, rgba: cases.BG_RGBA },
     { x: 0, y: 0, rgba: cases.BG_RGBA },
   ],
-  boundedDelta: boundedBuild ? 1 : 0,
-  applications: { 25: 1 },
-  clears: 1,
+  boundedDelta: 0,
+  applications: { 25: 0 },
+  clears: 0,
 });
 
 runCase('clipped color matrix with unboundable content', {
@@ -264,6 +301,12 @@ runCase('clipped unboundable nested inside bounded', {
 });
 
 compareFullFrame('preserving color matrix');
+compareCases('preserving color matrix', 'preserving color matrix fallback');
+compareCases('affine leaf color matrix', 'affine leaf color matrix fallback');
+// The FBO path quantizes the masked/tinted intermediate to RGBA8 before the
+// matrix pass; inline evaluation omits that round trip and can differ by 1 LSB.
+compareCases('effect leaf color matrix', 'effect leaf color matrix fallback', 1);
+compareCases('overlapping sprites', 'overlapping sprites fallback');
 compareFullFrame('sparse preserving color matrix');
 compareFullFrame('clipped color matrix with unboundable content');
 compareFullFrame('unboundable nested inside bounded');

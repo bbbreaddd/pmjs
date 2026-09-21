@@ -366,6 +366,101 @@ void Renderer::renderScene() {
     } else {
       filterBounds_.clear();
     }
+  std::vector<bool> inlineFilterBoundary(frame_.commands.size(), false);
+  std::vector<const RenderCommand*> inlineFilterMatrix(
+      frame_.commands.size(), nullptr);
+  std::vector<bool> inlineFilterClipped(frame_.commands.size(), false);
+  std::vector<std::array<int, 4>> inlineFilterClip(frame_.commands.size());
+  std::vector<std::size_t> filterDepthBefore(frame_.commands.size(), 0);
+  std::size_t scannedFilterDepth = 0;
+  for (std::size_t index = 0; index < frame_.commands.size(); ++index) {
+    const RenderCommand& command = frame_.commands[index];
+    if (command.action == RenderCommand::Action::filterEnd &&
+        scannedFilterDepth > 0) --scannedFilterDepth;
+    filterDepthBefore[index] = scannedFilterDepth;
+    if (command.action == RenderCommand::Action::filterBegin) {
+      ++scannedFilterDepth;
+    }
+  }
+  const auto preservesAlpha = [](const std::array<float, 21>& matrix) {
+    constexpr float epsilon = 0.000001F;
+    return std::abs(matrix[15]) <= epsilon &&
+           std::abs(matrix[16]) <= epsilon &&
+           std::abs(matrix[17]) <= epsilon &&
+           std::abs(matrix[18] - 1.0F) <= epsilon &&
+           std::abs(matrix[19]) <= epsilon;
+  };
+  const auto distributesOverSourceOver = [&](
+      const std::array<float, 21>& matrix) {
+    constexpr float epsilon = 0.000001F;
+    return preservesAlpha(matrix) &&
+           std::abs(matrix[3]) <= epsilon &&
+           std::abs(matrix[4]) <= epsilon &&
+           std::abs(matrix[8]) <= epsilon &&
+           std::abs(matrix[9]) <= epsilon &&
+           std::abs(matrix[13]) <= epsilon &&
+           std::abs(matrix[14]) <= epsilon;
+  };
+  for (std::size_t begin = 0; begin < frame_.commands.size(); ++begin) {
+    const RenderCommand& filter = frame_.commands[begin];
+    if (filter.action != RenderCommand::Action::filterBegin ||
+        filterDepthBefore[begin] != 0 ||
+        filter.filterKind != scene_packet::FilterKind::colorMatrix ||
+        !preservesAlpha(filter.filterParameters)) continue;
+    std::size_t depth = 1;
+    std::size_t end = begin;
+    std::vector<std::size_t> drawIndices;
+    bool eligible = true;
+    for (std::size_t index = begin + 1;
+         index < frame_.commands.size() && depth > 0; ++index) {
+      const RenderCommand& command = frame_.commands[index];
+      if (command.action == RenderCommand::Action::filterBegin) {
+        eligible = false;
+        ++depth;
+      } else if (command.action == RenderCommand::Action::filterEnd) {
+        --depth;
+        if (depth == 0) end = index;
+      } else if (depth == 1) {
+        const bool drawable = !command.appliesColorMatrix &&
+            command.tileLayer == 0 && command.image != 0 &&
+            (command.primitive == RenderCommand::Primitive::sprite ||
+             command.primitive == RenderCommand::Primitive::tilingSprite) &&
+            command.blendMode == BlendMode::normal;
+        if (!drawable) {
+          eligible = false;
+        } else {
+          drawIndices.push_back(index);
+        }
+      }
+    }
+    if (!eligible || end == begin || drawIndices.empty() ||
+        (drawIndices.size() > 1 &&
+         !distributesOverSourceOver(filter.filterParameters))) {
+      continue;
+    }
+    inlineFilterBoundary[begin] = true;
+    inlineFilterBoundary[end] = true;
+    for (const std::size_t drawIndex : drawIndices) {
+      inlineFilterMatrix[drawIndex] = &filter;
+      const RenderCommand& draw = frame_.commands[drawIndex];
+      if (filter.clipped && draw.clipped) {
+        inlineFilterClipped[drawIndex] = true;
+        inlineFilterClip[drawIndex] = {
+          std::max(filter.clip[0], draw.clip[0]),
+          std::max(filter.clip[1], draw.clip[1]),
+          std::min(filter.clip[2], draw.clip[2]),
+          std::min(filter.clip[3], draw.clip[3]),
+        };
+      } else if (filter.clipped) {
+        inlineFilterClipped[drawIndex] = true;
+        inlineFilterClip[drawIndex] = filter.clip;
+      } else if (draw.clipped) {
+        inlineFilterClipped[drawIndex] = true;
+        inlineFilterClip[drawIndex] = draw.clip;
+      }
+    }
+    begin = end;
+  }
   const RenderCommand* composedToneCommand = nullptr;
   if (!offscreenRender_) {
     std::size_t toneIndex = frame_.commands.size();
@@ -415,11 +510,15 @@ void Renderer::renderScene() {
     bool appliesSpriteColor = false;
     std::array<float, 4> colorTone{};
     std::array<float, 4> blendColor{};
+    const RenderCommand* inlineMatrix = nullptr;
     RenderCommand::Primitive primitive = RenderCommand::Primitive::sprite;
   };
   std::vector<DrawOperation> operations;
   std::size_t preparingFilterDepth = 0;
-  for (const RenderCommand& command : frame_.commands) {
+  for (std::size_t commandIndex = 0;
+       commandIndex < frame_.commands.size(); ++commandIndex) {
+    const RenderCommand& command = frame_.commands[commandIndex];
+    if (inlineFilterBoundary[commandIndex]) continue;
     if (command.action != RenderCommand::Action::draw) {
       if (command.action == RenderCommand::Action::filterEnd &&
           preparingFilterDepth > 0) --preparingFilterDepth;
@@ -529,6 +628,11 @@ void Renderer::renderScene() {
       p3[0], p3[1], uv3[0], uv3[1], color[0], color[1], color[2], color[3], u0, v0, u1, v1,
     };
     vertices_.insert(vertices_.end(), vertices.begin(), vertices.end());
+    const bool operationClipped = inlineFilterMatrix[commandIndex] ?
+        inlineFilterClipped[commandIndex] : command.clipped;
+    const std::array<int, 4>& operationClip =
+        inlineFilterMatrix[commandIndex] ? inlineFilterClip[commandIndex] :
+                                           command.clip;
     if (operations.empty() || operations.back().tileLayer != 0 ||
         operations.back().texture != texture ||
         operations.back().blendMode != command.blendMode ||
@@ -540,17 +644,19 @@ void Renderer::renderScene() {
         operations.back().appliesSpriteColor != command.appliesSpriteColor ||
         operations.back().colorTone != command.colorTone ||
         operations.back().blendColor != command.blendColor ||
+        operations.back().inlineMatrix != inlineFilterMatrix[commandIndex] ||
         operations.back().primitive != command.primitive ||
-        operations.back().clipped != command.clipped ||
-        (command.clipped && operations.back().clip != command.clip)) {
+        operations.back().clipped != operationClipped ||
+        (operationClipped && operations.back().clip != operationClip)) {
       operations.push_back({0, texture, command.blendMode, command.repeat,
         command.nearest,
         static_cast<GLsizei>(vertices_.size() / 12U - 6U), 6, nullptr,
-        command.clip, command.clipped, textureWidth, textureHeight,
+        operationClip, operationClipped, textureWidth, textureHeight,
         command.blur, command.maskImage, command.maskTransform});
       operations.back().appliesSpriteColor = command.appliesSpriteColor;
       operations.back().colorTone = command.colorTone;
       operations.back().blendColor = command.blendColor;
+      operations.back().inlineMatrix = inlineFilterMatrix[commandIndex];
       operations.back().primitive = command.primitive;
     } else {
       operations.back().count += 6;
@@ -1127,7 +1233,8 @@ void Renderer::renderScene() {
     }
 
     const bool simpleSprite = operation.blur <= 0 && operation.maskImage == 0 &&
-                              !operation.appliesSpriteColor;
+                              !operation.appliesSpriteColor &&
+                              operation.inlineMatrix == nullptr;
     const std::uint32_t spriteProgram = simpleSprite ? simpleProgram_ :
                                                      spriteEffectProgram_;
     if (activeProgram != spriteProgram) {
@@ -1157,6 +1264,14 @@ void Renderer::renderScene() {
       glUniform2f(spriteEffectTextureSizeUniform_, operation.textureWidth,
                   operation.textureHeight);
       glUniform1f(spriteEffectBlurUniform_, operation.blur);
+      glUniform1i(spriteEffectMatrixEnabledUniform_,
+                  operation.inlineMatrix ? 1 : 0);
+      if (operation.inlineMatrix) {
+        glUniform1fv(spriteEffectMatrixUniform_, 20,
+                     operation.inlineMatrix->filterParameters.data());
+        glUniform1f(spriteEffectMatrixAlphaUniform_,
+                    operation.inlineMatrix->filterParameters[20]);
+      }
     }
     if (!simpleSprite && operation.maskImage) {
       const auto mask = images_.lookup(operation.maskImage);

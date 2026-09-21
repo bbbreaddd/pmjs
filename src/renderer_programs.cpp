@@ -105,6 +105,12 @@ Renderer::Renderer(int width, int height, ImageStore& images)
     glGetUniformLocation(spriteEffectProgram_, "spriteColorTone");
   spriteEffectBlendColorUniform_ =
     glGetUniformLocation(spriteEffectProgram_, "spriteBlendColor");
+  spriteEffectMatrixEnabledUniform_ =
+    glGetUniformLocation(spriteEffectProgram_, "colorMatrixEnabled");
+  spriteEffectMatrixUniform_ =
+    glGetUniformLocation(spriteEffectProgram_, "colorMatrix");
+  spriteEffectMatrixAlphaUniform_ =
+    glGetUniformLocation(spriteEffectProgram_, "colorMatrixAlpha");
   textureSizeUniform_ = glGetUniformLocation(program_, "textureSize");
   blurUniform_ = glGetUniformLocation(program_, "blurRadius");
   blurDirectionUniform_ = glGetUniformLocation(program_, "blurDirection");
