@@ -185,6 +185,7 @@ optimizations when needed for compatibility:
     "scene.graphics-cache"
   ]
 }
+```
 
 ### Third-party software
 
