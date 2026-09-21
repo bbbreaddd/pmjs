@@ -190,10 +190,68 @@ napi_value canvasMemory(napi_env env, napi_callback_info) try {
     number(env, canvases.deferredCommandCount())), "cannot set deferred command count");
   check(env, napi_set_named_property(env, result, "deferredCommandBytes",
     number(env, canvases.deferredCommandBytes())), "cannot set deferred command bytes");
+  const auto gStats = canvases.glyphCacheStats();
+  check(env, napi_set_named_property(env, result, "glyphEntries",
+    number(env, gStats.glyphEntries)), "cannot set glyph entries");
+  check(env, napi_set_named_property(env, result, "glyphBytes",
+    number(env, gStats.glyphBytes)), "cannot set glyph bytes");
   syncExternalMemory(env);
   return result;
 } catch (const std::exception& error) {
   napi_throw_error(env, nullptr, "cannot create canvas memory state");
+  return nullptr;
+}
+
+napi_value canvasGlyphStats(napi_env env, napi_callback_info) try {
+  const auto stats = host(env).canvases.glyphCacheStats();
+  napi_value result;
+  check(env, napi_create_object(env, &result), "cannot create glyph stats object");
+  check(env, napi_set_named_property(env, result, "fontFaces",
+    number(env, stats.fontFaces)), "cannot set fontFaces");
+  check(env, napi_set_named_property(env, result, "fontStrikes",
+    number(env, stats.fontStrikes)), "cannot set fontStrikes");
+  check(env, napi_set_named_property(env, result, "glyphEntries",
+    number(env, stats.glyphEntries)), "cannot set glyphEntries");
+  check(env, napi_set_named_property(env, result, "glyphBytes",
+    number(env, stats.glyphBytes)), "cannot set glyphBytes");
+  check(env, napi_set_named_property(env, result, "maxGlyphBytes",
+    number(env, stats.maxGlyphBytes)), "cannot set maxGlyphBytes");
+  check(env, napi_set_named_property(env, result, "maxGlyphEntries",
+    number(env, stats.maxGlyphEntries)), "cannot set maxGlyphEntries");
+  check(env, napi_set_named_property(env, result, "glyphMetricHits",
+    number(env, stats.glyphMetricHits)), "cannot set glyphMetricHits");
+  check(env, napi_set_named_property(env, result, "glyphMetricMisses",
+    number(env, stats.glyphMetricMisses)), "cannot set glyphMetricMisses");
+  check(env, napi_set_named_property(env, result, "glyphMaskHits",
+    number(env, stats.glyphMaskHits)), "cannot set glyphMaskHits");
+  check(env, napi_set_named_property(env, result, "glyphMaskMisses",
+    number(env, stats.glyphMaskMisses)), "cannot set glyphMaskMisses");
+  check(env, napi_set_named_property(env, result, "strokeMaskHits",
+    number(env, stats.strokeMaskHits)), "cannot set strokeMaskHits");
+  check(env, napi_set_named_property(env, result, "strokeMaskMisses",
+    number(env, stats.strokeMaskMisses)), "cannot set strokeMaskMisses");
+  check(env, napi_set_named_property(env, result, "glyphEvictions",
+    number(env, stats.glyphEvictions)), "cannot set glyphEvictions");
+  check(env, napi_set_named_property(env, result, "freetypeLoadUs",
+    number(env, stats.freetypeLoadUs)), "cannot set freetypeLoadUs");
+  check(env, napi_set_named_property(env, result, "freetypeRenderUs",
+    number(env, stats.freetypeRenderUs)), "cannot set freetypeRenderUs");
+  check(env, napi_set_named_property(env, result, "strokeBuildUs",
+    number(env, stats.strokeBuildUs)), "cannot set strokeBuildUs");
+  check(env, napi_set_named_property(env, result, "glyphBlendUs",
+    number(env, stats.glyphBlendUs)), "cannot set glyphBlendUs");
+  return result;
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, "cannot get glyph stats");
+  return nullptr;
+}
+
+napi_value setGlyphCacheLimits(napi_env env, napi_callback_info info) try {
+  auto a = arguments(env, info, 2);
+  host(env).canvases.setGlyphCacheLimits(asUint32(env, a.at(0)), asUint32(env, a.at(1)));
+  return undefined(env);
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what());
   return nullptr;
 }
 
@@ -244,6 +302,8 @@ void registerCanvasBindings(napi_env env, napi_value exports) {
   method(env, canvas, "blur", blurCanvas);
   method(env, canvas, "release", releaseCanvas);
   method(env, canvas, "memory", canvasMemory);
+  method(env, canvas, "glyphStats", canvasGlyphStats);
+  method(env, canvas, "setGlyphCacheLimits", setGlyphCacheLimits);
   check(env, napi_set_named_property(env, exports, "canvas", canvas), "cannot export canvas module");
 }
 

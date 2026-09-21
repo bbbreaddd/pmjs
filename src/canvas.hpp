@@ -32,6 +32,31 @@ struct CanvasTextMetrics {
   int fontDescent = 0;
 };
 
+struct GlyphCacheStats {
+  std::size_t fontFaces = 0;
+  std::size_t fontStrikes = 0;
+  std::size_t glyphEntries = 0;
+  std::size_t glyphBytes = 0;
+  std::size_t maxGlyphBytes = 0;
+  std::size_t maxGlyphEntries = 0;
+
+  std::uint64_t glyphMetricHits = 0;
+  std::uint64_t glyphMetricMisses = 0;
+
+  std::uint64_t glyphMaskHits = 0;
+  std::uint64_t glyphMaskMisses = 0;
+
+  std::uint64_t strokeMaskHits = 0;
+  std::uint64_t strokeMaskMisses = 0;
+
+  std::uint64_t glyphEvictions = 0;
+
+  std::uint64_t freetypeLoadUs = 0;
+  std::uint64_t freetypeRenderUs = 0;
+  std::uint64_t strokeBuildUs = 0;
+  std::uint64_t glyphBlendUs = 0;
+};
+
 class CanvasStore {
  public:
   explicit CanvasStore(ImageStore& images);
@@ -87,6 +112,8 @@ class CanvasStore {
   std::size_t realizedCanvasCount() const;
   std::size_t deferredCommandCount() const;
   std::size_t deferredCommandBytes() const;
+  GlyphCacheStats glyphCacheStats() const;
+  void setGlyphCacheLimits(std::size_t maxBytes, std::size_t maxEntries);
 
  private:
   struct FontState;

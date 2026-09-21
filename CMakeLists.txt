@@ -145,7 +145,7 @@ if(BUILD_TESTING)
   foreach(PMJS_MASK_PNG IN ITEMS probe-content probe-mask-a probe-mask-b)
     execute_process(COMMAND ${BASE64_EXECUTABLE} -d INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/${PMJS_MASK_PNG}.png.b64" OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/${PMJS_MASK_PNG}.png" COMMAND_ERROR_IS_FATAL ANY)
   endforeach()
-  foreach(PMJS_NODE_TEST IN ITEMS node-scene node-mask-pixels node-renderer-stats node-render-to-image node-render-to-canvas node-image-coalesce node-image-retention node-image-warm-cache node-image-no-warm-cache node-image-fallback node-image-bytes node-audio-bytes node-video-texture node-canvas-deferred node-canvas-radial-gradient node-primitive-surface node-filter-bounds)
+  foreach(PMJS_NODE_TEST IN ITEMS node-scene node-mask-pixels node-renderer-stats node-render-to-image node-render-to-canvas node-image-coalesce node-image-retention node-image-warm-cache node-image-no-warm-cache node-image-fallback node-image-bytes node-audio-bytes node-video-texture node-canvas-deferred node-canvas-radial-gradient node-primitive-surface node-filter-bounds node-glyph-cache)
     add_test(NAME ${PMJS_NODE_TEST} COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
       "${CMAKE_CURRENT_SOURCE_DIR}/test/${PMJS_NODE_TEST}.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
     set_tests_properties(${PMJS_NODE_TEST} PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
