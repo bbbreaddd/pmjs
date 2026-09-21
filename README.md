@@ -187,6 +187,9 @@ optimizations when needed for compatibility:
 }
 ```
 
+> [!NOTE]
+> I do use AI for this project. No, I am not proud of it. It's still very early in development so it's likely going to be a mess. Don't expect much right now.
+
 ### Third-party software
 
 PMJS uses the following software
