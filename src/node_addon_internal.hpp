@@ -84,6 +84,9 @@ struct State {
     std::uint64_t jobsStarted() {
       std::lock_guard lock(mutex); return workerJobs;
     }
+    std::size_t queuedRawFrames() {
+      std::lock_guard lock(mutex); return rawQueueDepth;
+    }
     void recycle(std::vector<std::uint8_t> rgba) {
       std::lock_guard lock(mutex);
       if (rgba.capacity() > recycledRgba.capacity())
@@ -96,6 +99,20 @@ struct State {
         std::vector<std::uint8_t> rgba;
         {
           std::unique_lock lock(mutex);
+          if (!requested && !shuttingDown &&
+              decoder->queuedFrames() < 3 && !decoder->exhausted()) {
+            lock.unlock();
+            std::string error;
+            decoder->prefetchOne(&error);
+            const auto stats = decoder->stats();
+            const auto depth = decoder->queuedFrames();
+            if (!error.empty()) std::cerr << "[pmjs-media] video prefetch error: "
+                                          << error << '\n';
+            lock.lock();
+            decodeStats = stats;
+            rawQueueDepth = depth;
+            continue;
+          }
           condition.wait(lock, [this] { return shuttingDown || requested.has_value(); });
           if (shuttingDown) return;
           frameTimestamp = *requested; requested.reset();
@@ -114,16 +131,20 @@ struct State {
           recycle(std::move(rgba));
           std::lock_guard lock(mutex);
           decodeStats = stats;
+          rawQueueDepth = decoder->queuedFrames();
           continue;
         }
         std::lock_guard lock(mutex);
         decodeStats = stats;
+        rawQueueDepth = decoder->queuedFrames();
         if (generation != playbackGeneration) {
           if (frame->rgba.capacity() > recycledRgba.capacity())
             recycledRgba = std::move(frame->rgba);
           continue;
         }
         readyAt = std::chrono::steady_clock::now();
+        if (ready && ready->rgba.capacity() > recycledRgba.capacity())
+          recycledRgba = std::move(ready->rgba);
         ready = std::move(frame);
       }
     }
@@ -139,6 +160,7 @@ struct State {
     std::uint64_t requestsCoalesced = 0;
     std::uint64_t workerJobs = 0;
     std::uint64_t playbackGeneration = 0;
+    std::size_t rawQueueDepth = 0;
     std::thread worker;
     bool shuttingDown = false;
     pmjs::ImageHandle image = 0;

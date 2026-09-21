@@ -17,6 +17,7 @@ extern "C" {
 #include <cerrno>
 #include <cmath>
 #include <cstring>
+#include <deque>
 #include <memory>
 #include <stdexcept>
 
@@ -309,9 +310,8 @@ struct VideoDecoderSession::Impl {
     stream = format->streams[streamIndex];
     packet.reset(av_packet_alloc());
     decoded.reset(av_frame_alloc());
-    lookahead.reset(av_frame_alloc());
     selected.reset(av_frame_alloc());
-    if (!packet || !decoded || !lookahead || !selected)
+    if (!packet || !decoded || !selected)
       throw std::runtime_error("cannot allocate video buffers");
     info.container = format->iformat && format->iformat->name
       ? format->iformat->name : "unknown";
@@ -336,10 +336,10 @@ struct VideoDecoderSession::Impl {
     avcodec_flush_buffers(codec.get());
     av_packet_unref(packet.get());
     av_frame_unref(decoded.get());
-    av_frame_unref(lookahead.get());
     av_frame_unref(selected.get());
-    lookaheadTimestamp.reset();
-    sentEof = false; lastTimestamp = -1.0;
+    queued.clear();
+    sentEof = false; exhausted = false; lastTimestamp = -1.0;
+    hasPresentedFrame = false;
     ++stats.seeks;
     if (lastRequestedTimestamp && timestamp < *lastRequestedTimestamp)
       ++stats.backwardSeeks;
@@ -425,13 +425,16 @@ struct VideoDecoderSession::Impl {
   }
 
   Format format{nullptr}; Codec codec{nullptr}; Packet packet{nullptr};
-  Frame decoded{nullptr}; Frame lookahead{nullptr}; Frame selected{nullptr};
+  struct RawFrame { double timestamp; Frame frame; };
+  Frame decoded{nullptr}; Frame selected{nullptr};
+  std::deque<RawFrame> queued;
   Sws scaler{nullptr, sws_freeContext};
   AVStream* stream = nullptr; int streamIndex = -1;
   int scalerWidth = 0, scalerHeight = 0, scalerFormat = -1;
   double lastTimestamp = -1.0; bool sentEof = false;
   std::optional<double> lastRequestedTimestamp;
-  std::optional<double> lookaheadTimestamp;
+  bool exhausted = false;
+  bool hasPresentedFrame = false;
   bool countingAfterSeek = false;
   MediaInfo info;
   VideoDecodeStats stats;
@@ -442,6 +445,27 @@ VideoDecoderSession::VideoDecoderSession(const std::filesystem::path& path)
 VideoDecoderSession::~VideoDecoderSession() = default;
 const MediaInfo& VideoDecoderSession::info() const { return impl_->info; }
 VideoDecodeStats VideoDecoderSession::stats() const { return impl_->stats; }
+
+bool VideoDecoderSession::prefetchOne(std::string* error) {
+  if (impl_->exhausted || impl_->queued.size() >= 3) return false;
+  const auto timestamp = impl_->decodeNext(error);
+  if (!timestamp) { impl_->exhausted = true; return false; }
+  Frame raw{av_frame_alloc()};
+  if (!raw) { fail(error, "cannot allocate queued video frame");
+    impl_->exhausted = true; return false; }
+  av_frame_move_ref(raw.get(), impl_->decoded.get());
+  impl_->queued.push_back({*timestamp, std::move(raw)});
+  ++impl_->stats.prefetchedFrames;
+  impl_->stats.maxQueuedFrames = std::max<std::uint64_t>(
+    impl_->stats.maxQueuedFrames, impl_->queued.size());
+  return true;
+}
+
+std::size_t VideoDecoderSession::queuedFrames() const {
+  return impl_->queued.size();
+}
+
+bool VideoDecoderSession::exhausted() const { return impl_->exhausted; }
 
 std::optional<VideoFrame> VideoDecoderSession::frame(double timestamp,
                                                      std::string* error) {
@@ -464,33 +488,23 @@ std::optional<VideoFrame> VideoDecoderSession::frame(
   impl_->lastRequestedTimestamp = timestamp;
   av_frame_unref(impl_->selected.get());
   std::optional<double> selectedTimestamp;
-  if (impl_->lookaheadTimestamp) {
-    if (*impl_->lookaheadTimestamp <= timestamp + epsilon) {
-      selectedTimestamp = *impl_->lookaheadTimestamp;
-      av_frame_move_ref(impl_->selected.get(), impl_->lookahead.get());
-      impl_->lookaheadTimestamp.reset();
-    } else {
+  while (true) {
+    if (impl_->queued.empty() && !prefetchOne(error)) break;
+    if (impl_->queued.empty()) break;
+    if (impl_->queued.front().timestamp > timestamp + epsilon && selectedTimestamp)
+      break;
+    if (impl_->queued.front().timestamp > timestamp + epsilon &&
+        impl_->hasPresentedFrame && !selectedTimestamp) {
       ++impl_->stats.noNewFrameDue;
       return std::nullopt;
-    }
-  }
-  while (auto decodedTimestamp = impl_->decodeNext(error)) {
-    if (*decodedTimestamp > timestamp + epsilon && selectedTimestamp) {
-      av_frame_move_ref(impl_->lookahead.get(), impl_->decoded.get());
-      impl_->lookaheadTimestamp = *decodedTimestamp;
-      break;
-    }
-    if (*decodedTimestamp > timestamp + epsilon && !selectedTimestamp) {
-      selectedTimestamp = *decodedTimestamp;
-      av_frame_move_ref(impl_->selected.get(), impl_->decoded.get());
-      break;
     }
     if (selectedTimestamp) {
       av_frame_unref(impl_->selected.get());
       ++impl_->stats.skippedFrames;
     }
-    selectedTimestamp = *decodedTimestamp;
-    av_frame_move_ref(impl_->selected.get(), impl_->decoded.get());
+    selectedTimestamp = impl_->queued.front().timestamp;
+    av_frame_move_ref(impl_->selected.get(), impl_->queued.front().frame.get());
+    impl_->queued.pop_front();
   }
   if (!selectedTimestamp) {
     if (error && !error->empty()) return std::nullopt;
@@ -499,7 +513,10 @@ std::optional<VideoFrame> VideoDecoderSession::frame(
   }
   av_frame_move_ref(impl_->decoded.get(), impl_->selected.get());
   impl_->countingAfterSeek = false;
-  return impl_->convertCurrent(*selectedTimestamp, std::move(reusableRgba), error);
+  auto result = impl_->convertCurrent(*selectedTimestamp,
+                                      std::move(reusableRgba), error);
+  if (result) impl_->hasPresentedFrame = true;
+  return result;
 }
 
 struct AudioDecoderSession::Impl {

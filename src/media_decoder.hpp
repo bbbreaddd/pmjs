@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -46,6 +47,8 @@ struct VideoDecodeStats {
   std::uint64_t backwardSeeks = 0;
   std::uint64_t decodedAfterSeek = 0;
   std::uint64_t noNewFrameDue = 0;
+  std::uint64_t prefetchedFrames = 0;
+  std::uint64_t maxQueuedFrames = 0;
   double decodeMs = 0.0;
   double convertMs = 0.0;
 };
@@ -77,6 +80,9 @@ class VideoDecoderSession {
   VideoDecoderSession& operator=(const VideoDecoderSession&) = delete;
   const MediaInfo& info() const;
   VideoDecodeStats stats() const;
+  bool prefetchOne(std::string* error = nullptr);
+  std::size_t queuedFrames() const;
+  bool exhausted() const;
   std::optional<VideoFrame> frame(double timestamp,
                                   std::string* error = nullptr);
   std::optional<VideoFrame> frame(double timestamp,

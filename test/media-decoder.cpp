@@ -41,6 +41,17 @@ int main(int argc, char** argv) {
   }
 
   reusable = std::move(catchUp->rgba);
+  const auto beforePrefetch = decoder.stats();
+  while (decoder.queuedFrames() < 3 && decoder.prefetchOne(&error)) {}
+  const auto afterPrefetch = decoder.stats();
+  const auto newlyQueued = 3 - 1;
+  if (decoder.queuedFrames() != 3 || decoder.prefetchOne(&error) ||
+      afterPrefetch.prefetchedFrames != beforePrefetch.prefetchedFrames + newlyQueued ||
+      afterPrefetch.convertedFrames != beforePrefetch.convertedFrames ||
+      afterPrefetch.maxQueuedFrames != 3) {
+    std::cerr << "raw prefetch did not stay bounded or converted early\n";
+    return 1;
+  }
   const auto beforeRepeated = decoder.stats();
   if (decoder.frame(0.25, reusable, &error) ||
       decoder.stats().decodedFrames != beforeRepeated.decodedFrames ||
@@ -48,7 +59,15 @@ int main(int argc, char** argv) {
     std::cerr << "repeated request decoded or sought again\n";
     return 1;
   }
-  for (int tick = 16; tick <= 45; ++tick) {
+  auto due = decoder.frame(0.3, reusable, &error);
+  if (!due || due->timestamp < 0.299999 || due->timestamp > 0.300001 ||
+      decoder.stats().decodedFrames != beforeRepeated.decodedFrames ||
+      decoder.queuedFrames() != 2) {
+    std::cerr << "due frame was not served from prefetched YUV queue\n";
+    return 1;
+  }
+  reusable = std::move(due->rgba);
+  for (int tick = 19; tick <= 45; ++tick) {
     const double target = static_cast<double>(tick) / 60.0;
     auto frame = decoder.frame(target, reusable, &error);
     if (frame) {

@@ -31,6 +31,9 @@ void reportVideo(State::Video& video, double requestedPts) {
     << ",\"backwardSeeks\":" << (decode.backwardSeeks - video.reportedDecodeStats.backwardSeeks)
     << ",\"decodedAfterSeek\":" << (decode.decodedAfterSeek - video.reportedDecodeStats.decodedAfterSeek)
     << ",\"noNewFrameDue\":" << (decode.noNewFrameDue - video.reportedDecodeStats.noNewFrameDue)
+    << ",\"prefetched\":" << (decode.prefetchedFrames - video.reportedDecodeStats.prefetchedFrames)
+    << ",\"rawQueued\":" << video.queuedRawFrames()
+    << ",\"rawQueueMax\":" << decode.maxQueuedFrames
     << ",\"workerJobs\":" << (workerJobsTotal - video.reportedWorkerJobs)
     << ",\"requestsCoalesced\":" << (coalescedTotal - video.reportedCoalescedRequests)
     << ",\"uploaded\":" << uploaded << ",\"repeated\":" << repeated
