@@ -216,7 +216,7 @@ function createNativePixiRenderer(width, height, options) {
       var glTexture = base._glTextures[this.CONTEXT_UID];
       if (!glTexture) {
         var source = base.source;
-        var nativeSource = source && (source._nativeImage || source._nativeCanvas);
+        var nativeSource = nativeTextureSource(source);
         glTexture = base._glTextures[this.CONTEXT_UID] = {
           texture: nativeSource || null,
           touched: this.textureGC.count,
@@ -237,8 +237,7 @@ function createNativePixiRenderer(width, height, options) {
         };
       }
       var currentSource = base.source;
-      glTexture.texture = currentSource &&
-        (currentSource._nativeImage || currentSource._nativeCanvas) || null;
+      glTexture.texture = nativeTextureSource(currentSource);
       glTexture.width = Number(base.realWidth) ||
         (Number(base.width) || 0) * (Number(base.resolution) || 1);
       glTexture.height = Number(base.realHeight) ||

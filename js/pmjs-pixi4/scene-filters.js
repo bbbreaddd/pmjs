@@ -162,7 +162,7 @@ function nativeSceneFilter(node, activeFilters) {
         var mapTexture = maskSprite && maskSprite.texture;
         var mapSource = mapTexture && mapTexture.baseTexture &&
           mapTexture.baseTexture.source;
-        var mapImage = mapSource && (mapSource._nativeImage || mapSource._nativeCanvas);
+        var mapImage = nativeTextureSource(mapSource);
         var mapFrame = mapTexture && (mapTexture._frame || mapTexture.frame);
         var mapWorld = maskSprite && maskSprite.transform ?
           nativeMaskWorldTransform(maskSprite) : nativeIdentityTransform;

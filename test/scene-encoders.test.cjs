@@ -267,6 +267,27 @@ test('plain containers and sprites emit the frozen oracle packet', () => {
   assert.deepEqual(packet.values, EXPECTED_PLAIN_VALUES);
 });
 
+test('sprite textures accept the shared native raster source capability', () => {
+  const harness = makeHarness();
+  const { sandbox } = harness;
+  const source = {
+    width: 40,
+    height: 30,
+    _nativeCanvas: { handle: 666 },
+    _pmjsNativeTextureSource() { return { handle: 777 }; }
+  };
+  const frame = { x: 0, y: 0, width: 40, height: 30 };
+  const texture = { baseTexture: { source, resolution: 1, scaleMode: 0,
+      width: 40, height: 30 },
+    _frame: frame, frame, orig: frame, trim: null, rotate: 0, width: 40, height: 30 };
+  const root = new sandbox.PIXI.Container();
+  root.addChild(new sandbox.PIXI.Sprite(texture));
+
+  const packet = submitOnly(harness, root);
+  assert.equal(packet.count, 2);
+  assert.equal(packet.metadata[7 + 2], 777);
+});
+
 test('plain fixture performs no filter, mask, or effect work', () => {
   const harness = makeHarness();
   const packet = submitOnly(harness, buildPlainFixture(harness));

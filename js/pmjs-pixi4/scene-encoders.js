@@ -42,9 +42,7 @@ function writeNativeSceneSprite(node, type, particleContext, particleValues,
   var source = sampledBaseTexture && sampledBaseTexture.source;
   scratch.source = source;
 
-  var nativeImage = source && (source._nativeImage || source._nativeCanvas ||
-    typeof source._ensureNativeCanvas === 'function' &&
-      source._ensureNativeCanvas());
+  var nativeImage = nativeTextureSource(source);
   var frame = texture && (texture._frame || texture.frame);
   if (nativeImage && frame && frame.width > 0 && frame.height > 0) {
     scratch.kind = 1;
@@ -169,4 +167,3 @@ function writeNativeSceneKind(kind, node, type, particleContext,
   return nativeSceneEncoders[kind](node, type, particleContext,
     particleValues, nativeSceneEmission);
 }
-

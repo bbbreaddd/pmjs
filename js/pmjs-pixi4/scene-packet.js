@@ -156,7 +156,7 @@ function nativePlainSpriteBinding(node) {
   var texture = node.texture;
   var base = texture && texture.baseTexture;
   var source = base && base.source;
-  var nativeImage = source && (source._nativeImage || source._nativeCanvas);
+  var nativeImage = nativeTextureSource(source);
   var frame = texture && (texture._frame || texture.frame);
   var rotation = ((Number(texture && texture.rotate) || 0) % 16 + 16) % 16;
   var cpuTinted = node._tintTexture && texture &&
@@ -738,4 +738,3 @@ function renderNativeStage(stage, rootTransform, filterResolution, roundPixels,
   renderNativeStage._cameraX = cameraX;
   renderNativeStage._cameraY = cameraY;
 }
-

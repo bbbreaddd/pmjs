@@ -133,6 +133,15 @@ GenericElement.prototype.removeChild = function(child) {
 };
 GenericElement.prototype.setAttribute = function(name, value) { this[name] = String(value); };
 GenericElement.prototype.getAttribute = function(name) { return this[name] || null; };
+GenericElement.prototype.removeAttribute = function(name) {
+  name = String(name);
+  if (Object.prototype.hasOwnProperty.call(this, name)) {
+    delete this[name];
+    return;
+  }
+  var descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(this), name);
+  if (descriptor && descriptor.set) this[name] = '';
+};
 GenericElement.prototype.getElementsByTagName = function() { return []; };
 
 function AudioElement() {
@@ -158,13 +167,27 @@ function VideoElement() {
   this.duration = 0; this.videoWidth = 0; this.videoHeight = 0;
   this.width = 0; this.height = 0; this._volume = 1; this._playbackRate = 1;
   this.loop = false; this._muted = false; this.paused = true; this.ended = false;
-  this.readyState = 0; this.HAVE_ENOUGH_DATA = 4;
+  this.preload = 'auto'; this._loadGeneration = 0;
+  this.readyState = 0; this.HAVE_NOTHING = 0; this.HAVE_METADATA = 1;
+  this.HAVE_CURRENT_DATA = 2; this.HAVE_FUTURE_DATA = 3; this.HAVE_ENOUGH_DATA = 4;
 }
 VideoElement.prototype = Object.create(GenericElement.prototype);
 VideoElement.prototype.constructor = VideoElement;
 Object.defineProperty(VideoElement.prototype, 'src', {
   get: function() { return this._src; },
-  set: function(value) { this._src = String(value); }
+  set: function(value) {
+    this._src = String(value);
+    var video = this;
+    var generation = ++this._loadGeneration;
+    this._releaseMedia();
+    if (!this._src) {
+      return;
+    }
+    if (this.preload === 'none') return;
+    pendingTasks.push(function() {
+      if (generation === video._loadGeneration && video._src) video._loadNow();
+    });
+  }
 });
 Object.defineProperty(VideoElement.prototype, 'currentTime', {
   get: function() {
@@ -210,12 +233,26 @@ Object.defineProperty(VideoElement.prototype, 'volume', {
 VideoElement.prototype.canPlayType = function(type) {
   return /^video\//.test(String(type)) ? 'maybe' : '';
 };
-VideoElement.prototype.load = function() {
+VideoElement.prototype._releaseMedia = function() {
   if (nativeVideoFinalizer) nativeVideoFinalizer.unregister(this);
   if (this._media) NativeHost.media.releaseVideo(this._media.handle);
   if (this._audio) NativeHost.media.releaseAudio(this._audio.handle);
+  this._media = null; this._audio = null; this._nativeCanvas = null;
+  this.readyState = this.HAVE_NOTHING;
+  this.duration = 0; this.videoWidth = 0; this.videoHeight = 0;
+  this._currentTime = 0; this._startOffset = 0; this._decodedTime = undefined;
+  this.paused = true; this.ended = false;
+  var index = nativeVideos.indexOf(this);
+  if (index >= 0) nativeVideos.splice(index, 1);
+};
+VideoElement.prototype._pmjsNativeTextureSource = function() {
+  return this._nativeCanvas;
+};
+VideoElement.prototype._loadNow = function() {
+  this._releaseMedia();
   var source = this._src;
   if (!source && this.children.length) source = this.children[0].src || '';
+  if (!source) return;
   var encoded = source.split('?')[0].replace(/%(?![0-9a-f]{2})/gi, '%25');
   var path = decodeURIComponent(encoded).replace(/^file:\/\/\/game\//, '').replace(/^\.\//, '');
   try {
@@ -231,6 +268,7 @@ VideoElement.prototype.load = function() {
     if (!this.height) this.height = this.videoHeight;
     this.duration = this._media.duration; this.readyState = this.HAVE_ENOUGH_DATA;
     this.ended = false;
+    this.dispatchEvent({ type: 'loadedmetadata', target: this });
     if (typeof this.onloadeddata === 'function') this.onloadeddata({ type: 'loadeddata', target: this });
     this.dispatchEvent({ type: 'loadeddata', target: this });
     this.dispatchEvent({ type: 'canplay', target: this });
@@ -239,6 +277,10 @@ VideoElement.prototype.load = function() {
     if (typeof this.onerror === 'function') this.onerror({ type: 'error', target: this, error: error });
     this.dispatchEvent({ type: 'error', target: this, error: error });
   }
+};
+VideoElement.prototype.load = function() {
+  ++this._loadGeneration;
+  this._loadNow();
 };
 VideoElement.prototype.play = function() {
   if (!this._media) this.load();
@@ -270,7 +312,7 @@ VideoElement.prototype._update = function() {
       this.dispatchEvent({ type: 'ended', target: this }); return false;
     }
   }
-  var frameTime = Math.floor(time * 30) / 30;
+  var frameTime = time;
   if (frameTime !== this._decodedTime) {
     this._decodedTime = NativeHost.media.updateVideo(this._media.handle, frameTime);
   }

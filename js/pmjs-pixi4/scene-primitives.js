@@ -46,6 +46,19 @@ var nativePlainSpriteSegmentsEnabled =
   typeof pmjsOptimizationEnv === 'function' &&
   pmjsOptimizationEnv('PMJS_SCENE_PLAIN_SPRITE_SEGMENT') === '1';
 
+function nativeTextureSource(source) {
+  if (!source) return null;
+  if (typeof source._pmjsNativeTextureSource === 'function') {
+    return source._pmjsNativeTextureSource();
+  }
+  if (source._nativeImage) return source._nativeImage;
+  if (source._nativeCanvas) return source._nativeCanvas;
+  if (typeof source._ensureNativeCanvas === 'function') {
+    return source._ensureNativeCanvas();
+  }
+  return null;
+}
+
 function nativeBlankTile() {
   if (nativeBlankTileHandle) return nativeBlankTileHandle;
   var canvas = new CanvasElement();
@@ -72,7 +85,7 @@ function nativeRotatedTexturePoint(rotation, x, y) {
 function ensureNativeTilingTexture(texture) {
   var base = texture && texture.baseTexture;
   var source = base && base.source;
-  var nativeImage = source && (source._nativeImage || source._nativeCanvas);
+  var nativeImage = nativeTextureSource(source);
   var frame = texture && (texture._frame || texture.frame);
   if (!nativeImage || !frame || frame.width <= 0 || frame.height <= 0) return null;
   var rotation = ((Number(texture.rotate) || 0) % 16 + 16) % 16;
@@ -197,8 +210,7 @@ function ensureNativeRectTileLayer(layer) {
   for (var textureIndex = 0; textureIndex < textures.length; textureIndex++) {
     var texture = textures[textureIndex];
     var textureSource = texture && texture.baseTexture && texture.baseTexture.source;
-    var textureImage = textureSource &&
-      (textureSource._nativeImage || textureSource._nativeCanvas);
+    var textureImage = nativeTextureSource(textureSource);
     var textureHandle = textureImage && textureImage.handle;
     if (!textureHandle) {
       if (texture && texture.width > 1 && texture.height > 1) return 0;
@@ -563,7 +575,7 @@ function nativeSpriteMaskGeometry(mask) {
   var texture = mask.texture;
   var baseTexture = texture && texture.baseTexture;
   var baseSource = baseTexture && baseTexture.source;
-  var source = baseSource && (baseSource._nativeImage || baseSource._nativeCanvas);
+  var source = nativeTextureSource(baseSource);
   var rawFrame = texture && (texture._frame || texture.frame);
   var sourceWidth = baseSource && (baseSource.width || baseTexture.width);
   var sourceHeight = baseSource && (baseSource.height || baseTexture.height);
@@ -817,7 +829,7 @@ function ensureNativeGpuMesh(mesh) {
   var texture = mesh.texture;
   var baseTexture = texture && texture.baseTexture;
   var source = baseTexture && baseTexture.source;
-  var nativeSource = source && (source._nativeImage || source._nativeCanvas);
+  var nativeSource = nativeTextureSource(source);
   var vertices = mesh.vertices, uvs = mesh.uvs, indices = mesh.indices;
   if (!nativeSource || !vertices || !uvs || !indices) return 0;
   var uvTransform = mesh.uploadUvTransform && mesh._uvTransform &&
