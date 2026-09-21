@@ -31,17 +31,11 @@
   }
 
   function loadPluginManifest() {
-    NativeHost.runtime.loadScript('js/plugins.js');
+    globalThis.pmjsLoadRpgMakerPluginManifest();
   }
 
   function initializePlugins() {
-    installPluginManagerHooks();
-    globalThis.pmjsRunHooks('beforePlugins');
-    if (typeof $plugins !== 'undefined' && Array.isArray($plugins)) {
-      PluginManager.setup($plugins);
-    }
-    globalThis.pmjsRunHooks('afterPlugins');
-    if (typeof nativeBootPhase === 'function') nativeBootPhase('plugins-loaded');
+    globalThis.pmjsInitializeRpgMakerPlugins(installPluginManagerHooks);
   }
 
   globalThis.pmjsMzInstallPluginManagerHooks = installPluginManagerHooks;

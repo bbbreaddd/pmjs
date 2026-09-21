@@ -82,10 +82,13 @@ test('bundle validates disableOptimizations shape and orders the registry first'
   const bundleContent = fs.readFileSync(out, 'utf8');
   const configIndex = bundleContent.indexOf('PMJS_GAME_CONFIG');
   const registryIndex = bundleContent.indexOf('BEGIN js/pmjs-core/optimizations.js');
+  const lifecycleIndex = bundleContent.indexOf(
+    'BEGIN js/pmjs-rpgmaker/lifecycle.js');
   const setupIndex = bundleContent.indexOf('BEGIN js/pmjs-mv/setup.js');
   assert.ok(configIndex >= 0 && registryIndex > configIndex,
     'registry must follow the injected config');
-  assert.ok(setupIndex > registryIndex, 'registry must precede consumers');
+  assert.ok(lifecycleIndex > registryIndex && setupIndex > lifecycleIndex,
+    'registry and shared lifecycle must precede MV setup');
 
   // Structural validation only: unknown-but-well-formed IDs build fine here
   // and fail at runtime, where the registry is the single authority.
@@ -264,6 +267,7 @@ test('--game composes the MZ profile with authored engine order and terminal boo
   const order = [
     'js/pmjs-pixi5/setup.js',
     'js/pmjs-mz/engine.js',
+    'js/pmjs-rpgmaker/input.js',
     'js/pmjs-mz/plugin-loader.js',
     'js/pmjs-mz/bootstrap.js',
   ].map(module => modules.indexOf(module));
@@ -271,6 +275,15 @@ test('--game composes the MZ profile with authored engine order and terminal boo
   assert.deepEqual([...order].sort((a, b) => a - b), order);
   assert.equal(modules.at(-1), 'js/pmjs-mz/bootstrap.js');
   assert.ok(!modules.some(module => module.startsWith('js/pmjs-mv/')));
+});
+
+test('MV and MZ profiles compose only the shared input bridge', () => {
+  for (const profileName of ['mv', 'mz']) {
+    const profile = JSON.parse(fs.readFileSync(path.resolve(__dirname, '..',
+      'profiles', profileName + '.json'), 'utf8'));
+    assert.equal(profile.modules.filter(module => module.endsWith('/input.js'))
+      .join(','), 'js/pmjs-rpgmaker/input.js');
+  }
 });
 
 test('MZ composition requires Pixi 5 and rejects MV plugin adapters', () => {

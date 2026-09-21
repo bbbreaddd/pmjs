@@ -135,6 +135,9 @@ test('unknown port optimization IDs fail the run at startup', async () => {
   const manifest = path.join(tempDir, 'manifest.json');
   fs.writeFileSync(manifest, JSON.stringify({ modules: [
     'js/pmjs-core/optimizations.js',
+    'js/pmjs-rpgmaker/lifecycle.js',
+    'js/pmjs-rpgmaker/plugins.js',
+    'js/pmjs-rpgmaker/bootstrap.js',
     'js/pmjs-mv/setup.js',
     'js/pmjs-mv/plugin-loader.js',
   ] }));

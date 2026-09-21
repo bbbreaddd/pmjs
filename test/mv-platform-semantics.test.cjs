@@ -8,6 +8,13 @@ const path = require('node:path');
 
 const jsDir = path.resolve(__dirname, '../js');
 
+function readMvSetup() {
+  return fs.readFileSync(path.join(jsDir, 'pmjs-rpgmaker/lifecycle.js'), 'utf8') +
+    '\n' + fs.readFileSync(path.join(jsDir, 'pmjs-rpgmaker/plugins.js'), 'utf8') +
+    '\n' + fs.readFileSync(path.join(jsDir, 'pmjs-rpgmaker/bootstrap.js'), 'utf8') +
+    '\n' + fs.readFileSync(path.join(jsDir, 'pmjs-mv/setup.js'), 'utf8');
+}
+
 test('two-pass PluginManager.setup allows cross-plugin parameter lookups', () => {
   const context = {
     PluginManager: {
@@ -20,7 +27,7 @@ test('two-pass PluginManager.setup allows cross-plugin parameter lookups', () =>
     }
   };
   vm.createContext(context);
-  const setupCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/setup.js'), 'utf8');
+  const setupCode = readMvSetup();
   const pluginLoaderCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/plugin-loader.js'), 'utf8');
   vm.runInContext(setupCode, context);
   vm.runInContext(pluginLoaderCode, context);
@@ -52,7 +59,7 @@ test('plugin lifecycle hooks install after PluginManager becomes available', () 
   };
   context.globalThis = context;
   vm.createContext(context);
-  const setupCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/setup.js'), 'utf8');
+  const setupCode = readMvSetup();
   const pluginLoaderCode = fs.readFileSync(
     path.join(jsDir, 'pmjs-mv/plugin-loader.js'), 'utf8');
   vm.runInContext(setupCode, context);
@@ -281,7 +288,9 @@ test('one physical host tick executes ticker, audio, video, and scheduled MV upd
   let sceneUpdates = 0;
 
   const schedulerCode = fs.readFileSync(path.join(jsDir, 'pmjs-web/scheduler.js'), 'utf8');
-  const mainLoopCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/main-loop.js'), 'utf8');
+  const mainLoopCode = fs.readFileSync(
+    path.join(jsDir, 'pmjs-rpgmaker/main-loop.js'), 'utf8') + '\n' +
+    fs.readFileSync(path.join(jsDir, 'pmjs-mv/main-loop.js'), 'utf8');
 
   const context = {
     console: console,
@@ -356,7 +365,7 @@ test('bootstrap dispatches window load event listeners and window.onload', () =>
   listeners.push(() => { addEventListenerCalled = true; });
 
   vm.createContext(context);
-  const setupCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/setup.js'), 'utf8');
+  const setupCode = readMvSetup();
   const bootstrapCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/bootstrap.js'), 'utf8');
   vm.runInContext(setupCode, context);
   vm.runInContext(bootstrapCode, context);
@@ -393,7 +402,7 @@ test('integrated stack: PluginManager.setup -> loadScript -> document.currentScr
   };
   vm.createContext(context);
 
-  const setupCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/setup.js'), 'utf8');
+  const setupCode = readMvSetup();
   const scriptLoaderCode = fs.readFileSync(path.join(jsDir, 'pmjs-web/script-loader.js'), 'utf8');
   const pluginLoaderCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/plugin-loader.js'), 'utf8');
   vm.runInContext(setupCode, context);
@@ -449,7 +458,7 @@ test('lifecycle pulses beforePlugins, afterPlugins, and beforeBoot', () => {
   sandbox.globalThis = sandbox;
   const context = vm.createContext(sandbox);
 
-  const setupCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/setup.js'), 'utf8');
+  const setupCode = readMvSetup();
   const pluginLoaderCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/plugin-loader.js'), 'utf8');
   const bootstrapCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/bootstrap.js'), 'utf8');
 
@@ -498,7 +507,7 @@ test('pmjsRegisterHook registers multiple hooks in order', () => {
   sandbox.globalThis = sandbox;
   const context = vm.createContext(sandbox);
 
-  const setupCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/setup.js'), 'utf8');
+  const setupCode = readMvSetup();
   const pluginLoaderCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/plugin-loader.js'), 'utf8');
 
   vm.runInContext(setupCode, context);
@@ -532,7 +541,7 @@ test('pluginLoaded hooks fire in load order and stay generic', () => {
   sandbox.globalThis = sandbox;
   const context = vm.createContext(sandbox);
 
-  const setupCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/setup.js'), 'utf8');
+  const setupCode = readMvSetup();
   const pluginLoaderCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/plugin-loader.js'), 'utf8');
 
   vm.runInContext(setupCode, context);
@@ -560,7 +569,7 @@ test('hook arguments forward and failures never take down boot', () => {
   sandbox.globalThis = sandbox;
   const context = vm.createContext(sandbox);
 
-  const setupCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/setup.js'), 'utf8');
+  const setupCode = readMvSetup();
   vm.runInContext(setupCode, context);
 
   const seen = [];

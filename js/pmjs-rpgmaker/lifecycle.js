@@ -12,9 +12,9 @@
   function runHooks(name) {
     var args = Array.prototype.slice.call(arguments, 1);
     var hooks = registry[name] || [];
-    for (var i = 0; i < hooks.length; i++) {
+    for (var index = 0; index < hooks.length; index++) {
       try {
-        hooks[i].apply(null, args);
+        hooks[index].apply(null, args);
       } catch (error) {
         console.error('[pmjs] error running hook ' + name + ':', error);
       }

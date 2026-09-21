@@ -45,7 +45,8 @@ function loadInput(native) {
   context.globalThis = context;
   vm.createContext(context);
   vm.runInContext(
-    fs.readFileSync(path.join(__dirname, '../js/pmjs-mv/input.js'), 'utf8'), context);
+    fs.readFileSync(path.join(__dirname, '../js/pmjs-rpgmaker/input.js'), 'utf8'),
+    context);
   return context;
 }
 

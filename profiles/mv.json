@@ -1,6 +1,9 @@
 {
   "modules": [
     "js/pmjs-core/optimizations.js",
+    "js/pmjs-rpgmaker/lifecycle.js",
+    "js/pmjs-rpgmaker/plugins.js",
+    "js/pmjs-rpgmaker/bootstrap.js",
     "js/pmjs-mv/setup.js",
     "js/pmjs-mv/autorun-events.js",
     "js/pmjs-core/operation-trace.js",
@@ -24,7 +27,8 @@
     "js/pmjs-mv/bitmap.js",
     "js/pmjs-mv/fonts.js",
     "js/pmjs-mv/fpsmeter.js",
-    "js/pmjs-mv/input.js",
+    "js/pmjs-rpgmaker/input.js",
+    "js/pmjs-mv/engine.js",
     "js/pmjs-mv/timing.js",
     "js/pmjs-mv/display.js",
     "js/pmjs-mv/render-prepare.js",
@@ -46,6 +50,7 @@
     "js/pmjs-pixi4/renderer-facade.js",
     "js/pmjs-mv/renderer.js",
     "js/pmjs-mv/audio.js",
+    "js/pmjs-rpgmaker/main-loop.js",
     "js/pmjs-mv/main-loop.js",
     "js/pmjs-mv/bootstrap.js"
   ]

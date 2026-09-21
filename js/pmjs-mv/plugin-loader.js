@@ -42,16 +42,10 @@
   pmjsMvInstallPluginManagerHooks();
 
   function pmjsMvLoadPluginManifest() {
-    NativeHost.runtime.loadScript('js/plugins.js');
+    globalThis.pmjsLoadRpgMakerPluginManifest();
   }
 
-  function pmjsMvInitializePlugins() {
-    pmjsMvInstallPluginManagerHooks();
-    globalThis.pmjsRunHooks('beforePlugins');
-    if (typeof $plugins !== 'undefined' && Array.isArray($plugins)) {
-      PluginManager.setup($plugins);
-    }
-    globalThis.pmjsRunHooks('afterPlugins');
+  function afterPlugins() {
     if (globalThis.pmjsPixiRenderPreflight) globalThis.pmjsPixiRenderPreflight.scan();
 
     if (typeof installNativeStorageManager === 'function') {
@@ -61,13 +55,14 @@
     if (typeof pmjsMvInstallTimingContract === 'function') {
       pmjsMvInstallTimingContract();
     }
-    if (typeof nativeBootPhase === 'function') {
-      nativeBootPhase('plugins-loaded');
-    }
+  }
+
+  function pmjsMvInitializePlugins() {
+    globalThis.pmjsInitializeRpgMakerPlugins(
+      pmjsMvInstallPluginManagerHooks, afterPlugins);
   }
 
   globalThis.pmjsMvInstallPluginManagerHooks = pmjsMvInstallPluginManagerHooks;
   globalThis.pmjsMvLoadPluginManifest = pmjsMvLoadPluginManifest;
   globalThis.pmjsMvInitializePlugins = pmjsMvInitializePlugins;
 })();
-

@@ -6,7 +6,9 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const source = fs.readFileSync(path.resolve(__dirname,
+const sharedSource = fs.readFileSync(path.resolve(__dirname,
+  '../js/pmjs-rpgmaker/main-loop.js'), 'utf8');
+const mzSource = fs.readFileSync(path.resolve(__dirname,
   '../js/pmjs-mz/main-loop.js'), 'utf8');
 
 test('MZ host tick drains native services, pending work, and scheduler in order', () => {
@@ -26,7 +28,8 @@ test('MZ host tick drains native services, pending work, and scheduler in order'
     SceneManager: { _scene: null },
   });
   context.globalThis = context;
-  vm.runInContext(source, context, { filename: 'pmjs-mz/main-loop.js' });
+  vm.runInContext(sharedSource, context, { filename: 'pmjs-rpgmaker/main-loop.js' });
+  vm.runInContext(mzSource, context, { filename: 'pmjs-mz/main-loop.js' });
 
   context.__pmjsTick(25);
 

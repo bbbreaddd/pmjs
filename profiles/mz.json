@@ -1,7 +1,9 @@
 {
   "modules": [
     "js/pmjs-core/optimizations.js",
-    "js/pmjs-mz/setup.js",
+    "js/pmjs-rpgmaker/lifecycle.js",
+    "js/pmjs-rpgmaker/plugins.js",
+    "js/pmjs-rpgmaker/bootstrap.js",
     "js/pmjs-core/operation-trace.js",
     "js/pmjs-web/runtime.js",
     "js/pmjs-web/scheduler.js",
@@ -23,9 +25,11 @@
     "js/pmjs-pixi5/scene.js",
     "js/pmjs-pixi5/renderer.js",
     "js/pmjs-mz/engine.js",
+    "js/pmjs-rpgmaker/input.js",
     "js/pmjs-mz/platform.js",
     "js/pmjs-mz/fonts.js",
     "js/pmjs-mz/plugin-loader.js",
+    "js/pmjs-rpgmaker/main-loop.js",
     "js/pmjs-mz/main-loop.js",
     "js/pmjs-mz/bootstrap.js"
   ]

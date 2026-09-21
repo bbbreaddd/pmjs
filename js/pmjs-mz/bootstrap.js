@@ -2,13 +2,9 @@
 
 (function() {
   function start() {
-    globalThis.pmjsRunHooks('beforeBoot');
-    if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
-        typeof PMJS.optimizations.finalize === 'function') {
-      PMJS.optimizations.finalize();
-    }
+    globalThis.pmjsPrepareRpgMakerBoot();
     SceneManager.run(Scene_Boot);
-    if (typeof nativeBootPhase === 'function') nativeBootPhase('scene-boot-started');
+    globalThis.pmjsRpgMakerBootStarted();
   }
 
   globalThis.pmjsMzStart = start;
