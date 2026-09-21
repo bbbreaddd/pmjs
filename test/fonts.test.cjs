@@ -448,3 +448,95 @@ test('Plugin wrap ordering: PMJS drawText accelerated and wrapped by plugin font
   const width = bmp.measureTextWidth('Test Text');
   assert.equal(width > 0, true);
 });
+
+test('config.fonts acts as an override escape hatch against stylesheet font definitions', () => {
+  const { context } = createFontSandbox({
+    existingFiles: ['fonts/ConfigOverride.ttf', 'fonts/CssDefault.ttf'],
+    files: {
+      'fonts/gamefont.css': '@font-face {\n    font-family: GameFont;\n    src: url("CssDefault.ttf");\n}\n'
+    },
+    pmjsGameConfig: {
+      fonts: {
+        GameFont: 'fonts/ConfigOverride.ttf'
+      }
+    }
+  });
+
+  const mvFontsCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/fonts.js'), 'utf8');
+  vm.runInContext(mvFontsCode, context);
+
+  assert.equal(context.PMJS.fonts.isFamilyLoaded('GameFont'), true);
+  const resolved = context.PMJS.fonts.resolveDescriptor('24px GameFont');
+  assert.equal(resolved.faces[0].path, 'fonts/ConfigOverride.ttf');
+});
+
+test('Graphics.loadFont registers dynamic font automatically', () => {
+  const { context } = createFontSandbox({
+    existingFiles: ['fonts/DynamicFont.ttf']
+  });
+
+  context.Graphics = context.Graphics || {};
+  context.Graphics.loadFont = function(name, url) {};
+  const mvFontsCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/fonts.js'), 'utf8');
+  vm.runInContext(mvFontsCode, context);
+
+  context.Graphics.loadFont('DynamicFace', 'fonts/DynamicFont.ttf');
+
+  assert.equal(context.PMJS.fonts.isFamilyLoaded('DynamicFace'), true);
+  assert.equal(context.Graphics.isFontLoaded('DynamicFace'), true);
+  const resolved = context.PMJS.fonts.resolveDescriptor('16px DynamicFace');
+  assert.equal(resolved.faces[0].path, 'fonts/DynamicFont.ttf');
+});
+
+test('plugin replaces Graphics.loadFont and afterPlugins wraps replacement so dynamic font still registers', () => {
+  const hooks = {};
+  const { context } = createFontSandbox({
+    existingFiles: ['fonts/PluginLoadedFont.ttf']
+  });
+  context.pmjsRegisterHook = (name, fn) => { hooks[name] = fn; };
+  context.Graphics = context.Graphics || {};
+  context.Graphics.loadFont = function(name, url) {};
+  const mvFontsCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/fonts.js'), 'utf8');
+  vm.runInContext(mvFontsCode, context);
+
+  let pluginLoadCalled = 0;
+  context.Graphics.loadFont = function(name, url) {
+    pluginLoadCalled++;
+  };
+
+  assert.equal(typeof hooks.afterPlugins, 'function');
+  hooks.afterPlugins();
+
+  context.Graphics.loadFont('PluginFace', 'fonts/PluginLoadedFont.ttf');
+
+  assert.equal(pluginLoadCalled, 1, 'plugin replacement should have been invoked');
+  assert.equal(context.PMJS.fonts.isFamilyLoaded('PluginFace'), true, 'font should be registered in PMJS.fonts');
+  assert.equal(context.Graphics.isFontLoaded('PluginFace'), true, 'Graphics.isFontLoaded should report true');
+  const resolved = context.PMJS.fonts.resolveDescriptor('16px PluginFace');
+  assert.equal(resolved.faces[0].path, 'fonts/PluginLoadedFont.ttf');
+});
+
+test('Graphics.isFontLoaded falls back to a plugin result for fonts outside the PMJS registry', () => {
+  const { context } = createFontSandbox();
+  context.Graphics = {
+    isFontLoaded(name) { return name === 'PluginManagedFace'; }
+  };
+  const mvFontsCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/fonts.js'), 'utf8');
+  vm.runInContext(mvFontsCode, context);
+
+  assert.equal(context.Graphics.isFontLoaded('PluginManagedFace'), true);
+  assert.equal(context.Graphics.isFontLoaded('MissingFace'), false);
+});
+
+test('Graphics.isFontLoaded keeps PMJS ownership for a registered font that failed readiness', () => {
+  const { context } = createFontSandbox();
+  context.Graphics = {
+    isFontLoaded() { return true; }
+  };
+  const mvFontsCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/fonts.js'), 'utf8');
+  vm.runInContext(mvFontsCode, context);
+  context.PMJS.fonts.registerFace('BrokenFace', 'fonts/missing.ttf');
+
+  assert.equal(context.PMJS.fonts.hasFamily('BrokenFace'), true);
+  assert.equal(context.Graphics.isFontLoaded('BrokenFace'), false);
+});

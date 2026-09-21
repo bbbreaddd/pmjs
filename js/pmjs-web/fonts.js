@@ -78,12 +78,25 @@
     if (!normPath) return false;
 
     var key = normFamily.toLowerCase();
+    var existing = registeredFamilies[key];
+    if (existing && existing.isOverride && (options && (options.fromCss || options.fromGame))) {
+      return false;
+    }
+
+    var style = (options && options.style) || 'normal';
+    var weight = (options && options.weight) || 400;
+    if (existing && existing.path === normPath && existing.style === style &&
+        existing.weight === weight) {
+      return true;
+    }
+
     registeredFamilies[key] = {
       family: normFamily,
       path: normPath,
-      style: (options && options.style) || 'normal',
-      weight: (options && options.weight) || 400,
-      state: 'unknown'
+      style: style,
+      weight: weight,
+      state: 'unknown',
+      isOverride: !!(options && options.isOverride)
     };
 
     descriptorCache = Object.create(null);
@@ -107,7 +120,8 @@
     var options = {
       basePath: basePath,
       style: styleMatch ? styleMatch[1].trim().toLowerCase() : 'normal',
-      weight: weightMatch ? weightMatch[1].trim().toLowerCase() : 400
+      weight: weightMatch ? weightMatch[1].trim().toLowerCase() : 400,
+      fromCss: true
     };
 
     var urlRegex = /url\(\s*['"]?([^'")]+)['"]?\s*\)/gi;
@@ -136,7 +150,7 @@
     var fonts = config.fonts || {};
     Object.keys(fonts).forEach(function(family) {
       if (fonts[family]) {
-        registerFace(family, fonts[family]);
+        registerFace(family, fonts[family], { isOverride: true });
       }
     });
   }
@@ -185,6 +199,12 @@
     var entry = registeredFamilies[norm];
     if (!entry) return false;
     return ensureFaceReady(entry);
+  }
+
+  function hasFamily(family) {
+    if (!family) return false;
+    var key = String(family).trim().replace(/^['"]|['"]$/g, '').toLowerCase();
+    return Object.prototype.hasOwnProperty.call(registeredFamilies, key);
   }
 
   function parseDescriptor(fontString) {
@@ -301,6 +321,7 @@
     registerFace: registerFace,
     registerFontFaceRule: registerFontFaceRule,
     registerStylesheet: registerStylesheet,
+    hasFamily: hasFamily,
     isFamilyLoaded: isFamilyLoaded,
     parseDescriptor: parseDescriptor,
     resolveDescriptor: resolveDescriptor,

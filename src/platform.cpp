@@ -128,7 +128,15 @@ Platform::Platform(int width, int height, std::string title) {
     throw std::runtime_error(std::string("SDL_Init failed: ") + SDL_GetError());
   }
   // Window is the physical drawable; the game size stays with the renderer.
-  std::pair<int, int> windowSize = {width, height};
+  SDL_Rect bounds{};
+  if (SDL_GetDisplayBounds(0, &bounds) == 0 && bounds.w > 0 && bounds.h > 0) {
+    displayWidth_ = bounds.w;
+    displayHeight_ = bounds.h;
+  } else {
+    displayWidth_ = width;
+    displayHeight_ = height;
+  }
+  std::pair<int, int> windowSize = {displayWidth_, displayHeight_};
   const char* sizeOverride = std::getenv("PMJS_WINDOW_SIZE");
   if (sizeOverride && *sizeOverride) {
     int overrideWidth = 0, overrideHeight = 0;
@@ -140,14 +148,6 @@ Platform::Platform(int width, int height, std::string title) {
       throw std::runtime_error("PMJS_WINDOW_SIZE must look like 640x480");
     }
     windowSize = {overrideWidth, overrideHeight};
-  } else {
-    SDL_Rect bounds{};
-    if (SDL_GetDisplayBounds(0, &bounds) == 0 && bounds.w > 0 &&
-        bounds.h > 0) {
-      windowSize = {bounds.w, bounds.h};
-      displayWidth_ = bounds.w;
-      displayHeight_ = bounds.h;
-    }
   }
   windowWidth_ = windowSize.first;
   windowHeight_ = windowSize.second;
@@ -307,6 +307,12 @@ std::pair<int, int> Platform::drawableSize() const {
   SDL_GL_GetDrawableSize(window_, &width, &height);
   if (width <= 0 || height <= 0) return {windowWidth_, windowHeight_};
   return {width, height};
+}
+
+void Platform::setWindowTitle(const std::string& title) {
+  if (window_) {
+    SDL_SetWindowTitle(window_, title.c_str());
+  }
 }
 
 void Platform::printGraphicsDiagnostics() const {

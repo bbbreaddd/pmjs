@@ -1093,3 +1093,132 @@ test('native renderer ownership is restored after game plugins compose', () => {
   context.Graphics._createRenderer();
   assert.equal(typeof context.Graphics._renderer.render, 'function');
 });
+
+test('document.title and nw.Window.title read from and write to authoritative __pmjsGameInfo', () => {
+  const eventsCode = fs.readFileSync(path.join(jsDir, 'pmjs-web/events.js'), 'utf8');
+  const elementsCode = fs.readFileSync(path.join(jsDir, 'pmjs-web/elements.js'), 'utf8');
+  const modulesCode = fs.readFileSync(path.join(jsDir, 'pmjs-web/modules.js'), 'utf8');
+  const context = {
+    globalThis: {},
+    CanvasContext2D: function CanvasContext2D() {},
+    nativeWindowState: { focused: true, visible: true },
+    nativePlatform: { platform: 'linux', arch: 'x64' },
+    nativeLogicalWidth: 816,
+    nativeLogicalHeight: 624,
+    NativeHost: { runtime: { env() { return ''; }, quit() {} } },
+    __pmjsGameInfo: { title: 'Authoritative Game Title', width: 960, height: 720 },
+    pmjsGameConfig: { title: 'Fallback Config Title' },
+    __pmjsSetWindowTitle(value) { this.__pmjsGameInfo.title = String(value); }
+  };
+  context.window = context;
+  context.globalThis = context;
+  vm.createContext(context);
+  vm.runInContext(eventsCode, context);
+  vm.runInContext(elementsCode, context);
+  vm.runInContext(modulesCode, context);
+
+  assert.equal(context.document.title, 'Authoritative Game Title');
+  const nw = context.require('nw.gui');
+  assert.equal(nw.Window.get().title, 'Authoritative Game Title');
+
+  context.document.title = 'New Mutated Title';
+  assert.equal(context.__pmjsGameInfo.title, 'New Mutated Title');
+  assert.equal(nw.Window.get().title, 'New Mutated Title');
+});
+
+test('screen and nw.Window report host dimensions while innerWidth/innerHeight report logical viewport', () => {
+  const eventsCode = fs.readFileSync(path.join(jsDir, 'pmjs-web/events.js'), 'utf8');
+  const elementsCode = fs.readFileSync(path.join(jsDir, 'pmjs-web/elements.js'), 'utf8');
+  const runtimeCode = fs.readFileSync(path.join(jsDir, 'pmjs-web/runtime.js'), 'utf8');
+  const modulesCode = fs.readFileSync(path.join(jsDir, 'pmjs-web/modules.js'), 'utf8');
+  const windowTitles = [];
+  const context = {
+    globalThis: {},
+    CanvasContext2D: function CanvasContext2D() {},
+    NativeHost: {
+      runtime: {
+        now() { return 0; },
+        env() { return ''; },
+        quit() {},
+        displaySize() { return { width: 640, height: 480 }; },
+        setWindowTitle(title) { windowTitles.push(title); }
+      }
+    },
+    __pmjsGameInfo: {
+      title: 'Felvidek',
+      width: 960,
+      height: 720,
+      displayWidth: 640,
+      displayHeight: 480
+    }
+  };
+  context.window = context;
+  context.globalThis = context;
+  vm.createContext(context);
+  vm.runInContext(runtimeCode, context);
+  vm.runInContext(eventsCode, context);
+  vm.runInContext(elementsCode, context);
+  vm.runInContext(modulesCode, context);
+
+  // Screen reports physical display
+  assert.equal(context.screen.width, 640);
+  assert.equal(context.screen.height, 480);
+
+  // Viewport / inner window reports logical game dimensions
+  assert.equal(context.innerWidth, 960);
+  assert.equal(context.innerHeight, 720);
+
+  const nw = context.require('nw.gui');
+  const win = nw.Window.get();
+  assert.equal(win.width, 640);
+  assert.equal(win.height, 480);
+  assert.equal(win.title, 'Felvidek');
+
+  // NW window dimensions describe the native window and unsupported setters are no-ops.
+  win.width = 1000;
+  assert.equal(win.width, 640);
+  assert.equal(context.__pmjsGameInfo.width, 960);
+  assert.equal(context.innerWidth, 960);
+  assert.equal(context.screen.width, 640, 'screen.width remains physical display');
+
+  // Logical viewport dimensions are observational rather than resize commands.
+  assert.throws(() => { context.innerWidth = 1280; }, TypeError);
+  assert.equal(context.innerWidth, 960);
+  assert.equal(win.width, 640);
+  assert.equal(context.__pmjsGameInfo.width, 960);
+
+  // Title mutation propagates to NativeHost.runtime.setWindowTitle
+  context.document.title = 'Title Changed';
+  assert.equal(context.__pmjsGameInfo.title, 'Title Changed');
+  assert.equal(win.title, 'Title Changed');
+  assert.equal(windowTitles[windowTitles.length - 1], 'Title Changed');
+
+  win.title = 'Title Changed via NW';
+  assert.equal(context.__pmjsGameInfo.title, 'Title Changed via NW');
+  assert.equal(context.document.title, 'Title Changed via NW');
+  assert.equal(windowTitles[windowTitles.length - 1], 'Title Changed via NW');
+});
+
+test('Graphics._createRenderer uses the game-authored logical dimensions', () => {
+  const source = fs.readFileSync(path.join(jsDir, 'pmjs-mv/renderer.js'), 'utf8');
+  const rendererInstaller = source.slice(0, source.indexOf('var originalIsOptionValid'));
+  const createdSizes = [];
+  const context = {
+    Graphics: { _width: 960, _height: 720, frameCount: 0 },
+    __pmjsGameInfo: { width: 816, height: 624, title: 'Test' },
+    createNativePixiRenderer(w, h) {
+      createdSizes.push({ w, h });
+      return {
+        render() {},
+        gl: null
+      };
+    },
+    pmjsRegisterHook() {},
+  };
+  context.globalThis = context;
+  vm.createContext(context);
+  vm.runInContext(rendererInstaller, context);
+
+  context.Graphics._createRenderer();
+  assert.deepEqual(createdSizes, [{ w: 960, h: 720 }]);
+});

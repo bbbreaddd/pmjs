@@ -57,6 +57,13 @@
         pmjsGameConfig.fonts && pmjsGameConfig.fonts.GameFont) {
       candidates.push(String(pmjsGameConfig.fonts.GameFont));
     }
+    if (globalThis.PMJS && PMJS.fonts && typeof PMJS.fonts.resolveDescriptor === 'function') {
+      var resolvedGameFont = PMJS.fonts.resolveDescriptor('16px GameFont');
+      if (resolvedGameFont && resolvedGameFont.faces && resolvedGameFont.faces[0] &&
+          resolvedGameFont.faces[0].path) {
+        candidates.push(resolvedGameFont.faces[0].path);
+      }
+    }
     candidates.push('fonts/mplus-1m-regular.ttf', 'fonts/mplus-1mn-regular.ttf',
       'fonts/gamefont.ttf');
     for (var i = 0; i < candidates.length; i++) {

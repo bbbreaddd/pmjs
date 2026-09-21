@@ -65,9 +65,30 @@ test('validation auto-detects title and dimensions from config or package.json',
 
   const emptyDir = temporaryDirectory('pmjs-runner-empty-');
   const v3 = validate({ addon: 'a', gameRoot: emptyDir, bootstrap: 'b', saveRoot: 's' });
-  assert.equal(v3.title, 'pmjs native runtime');
+  assert.equal(v3.title, 'PMJS');
   assert.equal(v3.width, 816);
   assert.equal(v3.height, 624);
+
+  const sysDir = temporaryDirectory('pmjs-runner-sys-');
+  fs.mkdirSync(path.join(sysDir, 'data'));
+  fs.writeFileSync(path.join(sysDir, 'data', 'System.json'), JSON.stringify({
+    gameTitle: 'System Game Title'
+  }));
+  fs.writeFileSync(path.join(sysDir, 'package.json'), JSON.stringify({
+    name: 'Package Name',
+    window: { title: 'Package Window Title', width: 960, height: 720 }
+  }));
+  const v4 = validate({ addon: 'a', gameRoot: sysDir, bootstrap: 'b', saveRoot: 's' });
+  assert.equal(v4.title, 'System Game Title');
+  assert.equal(v4.width, 960);
+  assert.equal(v4.height, 720);
+
+  const pkgNameDir = temporaryDirectory('pmjs-runner-pkgname-');
+  fs.writeFileSync(path.join(pkgNameDir, 'package.json'), JSON.stringify({
+    name: 'Only Package Name'
+  }));
+  const v5 = validate({ addon: 'a', gameRoot: pkgNameDir, bootstrap: 'b', saveRoot: 's' });
+  assert.equal(v5.title, 'Only Package Name');
 });
 
 test('validation rejects missing or malformed explicit config', () => {
@@ -104,7 +125,7 @@ test('validation rejects malformed disableOptimizations but keeps well-formed po
   const value = validate({
     addon: 'a', gameRoot: 'g', bootstrap: 'b', saveRoot: 's', config: good,
   });
-  assert.equal(value.title, 'pmjs native runtime');
+  assert.equal(value.title, 'PMJS');
 });
 
 test('unknown port optimization IDs fail the run at startup', async () => {
@@ -142,6 +163,9 @@ test('afterBootstrap runs once and Node jobs are not starved', async () => {
     hooked++;
     assert.deepEqual(host.runtime.platform(),
       { platform: process.platform, arch: process.arch });
+    assert.deepEqual(globalThis.__pmjsGameInfo,
+      { title: 'Test', width: 320, height: 240, displayWidth: 640, displayHeight: 480 });
+    assert.equal(host.render.setLogicalSize, undefined);
   } });
   await job;
   assert.equal(hooked, 1);

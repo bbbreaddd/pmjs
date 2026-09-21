@@ -24,13 +24,77 @@ globalThis.__pmjsUpdateWindowState = function(state) {
   }
 };
 var pmjsGameConfig = globalThis.PMJS_GAME_CONFIG || {};
-var nativeLogicalWidth = Number(NativeHost.runtime.env('PMJS_GAME_WIDTH') || 640);
-var nativeLogicalHeight = Number(NativeHost.runtime.env('PMJS_GAME_HEIGHT') || 480);
+var nativeLogicalWidth = (globalThis.__pmjsGameInfo && Number(globalThis.__pmjsGameInfo.width)) ||
+  Number(NativeHost.runtime.env('PMJS_GAME_WIDTH') || 640);
+var nativeLogicalHeight = (globalThis.__pmjsGameInfo && Number(globalThis.__pmjsGameInfo.height)) ||
+  Number(NativeHost.runtime.env('PMJS_GAME_HEIGHT') || 480);
+function normalizeLogicalDimension(value) {
+  var number = Number(value);
+  if (!Number.isFinite(number) || number < 1 || number > 16384) {
+    throw new RangeError('logical viewport dimensions must be between 1 and 16384');
+  }
+  return Math.floor(number);
+}
+globalThis.__pmjsCommitLogicalSize = function(width, height) {
+  nativeLogicalWidth = normalizeLogicalDimension(width);
+  nativeLogicalHeight = normalizeLogicalDimension(height);
+  if (globalThis.__pmjsGameInfo) {
+    globalThis.__pmjsGameInfo.width = nativeLogicalWidth;
+    globalThis.__pmjsGameInfo.height = nativeLogicalHeight;
+  }
+};
+globalThis.__pmjsSetWindowTitle = function(value) {
+  var title = String(value);
+  if (globalThis.__pmjsGameInfo) globalThis.__pmjsGameInfo.title = title;
+  if (typeof NativeHost.runtime.setWindowTitle === 'function') {
+    NativeHost.runtime.setWindowTitle(title);
+  }
+};
+var nativeDisplayWidth = (globalThis.__pmjsGameInfo && Number(globalThis.__pmjsGameInfo.displayWidth)) ||
+  (typeof NativeHost !== 'undefined' && NativeHost.runtime &&
+   typeof NativeHost.runtime.displaySize === 'function' &&
+   Number(NativeHost.runtime.displaySize().width)) ||
+  Number(NativeHost.runtime.env('PMJS_SCREEN_WIDTH') || 640);
+var nativeDisplayHeight = (globalThis.__pmjsGameInfo && Number(globalThis.__pmjsGameInfo.displayHeight)) ||
+  (typeof NativeHost !== 'undefined' && NativeHost.runtime &&
+   typeof NativeHost.runtime.displaySize === 'function' &&
+   Number(NativeHost.runtime.displaySize().height)) ||
+  Number(NativeHost.runtime.env('PMJS_SCREEN_HEIGHT') || 480);
+var nativeWindowSize = typeof NativeHost.runtime.windowSize === 'function'
+  ? NativeHost.runtime.windowSize()
+  : { width: nativeDisplayWidth, height: nativeDisplayHeight };
+var nativeWindowWidth = Number(nativeWindowSize.width) || nativeDisplayWidth;
+var nativeWindowHeight = Number(nativeWindowSize.height) || nativeDisplayHeight;
 var nativePlatform = typeof NativeHost.runtime.platform === 'function'
   ? NativeHost.runtime.platform() : { platform: 'linux', arch: 'unknown' };
-globalThis.screen = { width: nativeLogicalWidth, height: nativeLogicalHeight };
-globalThis.innerWidth = nativeLogicalWidth;
-globalThis.innerHeight = nativeLogicalHeight;
+globalThis.screen = {
+  get width() {
+    return nativeDisplayWidth;
+  },
+  get height() {
+    return nativeDisplayHeight;
+  },
+  get availWidth() {
+    return nativeDisplayWidth;
+  },
+  get availHeight() {
+    return nativeDisplayHeight;
+  }
+};
+Object.defineProperty(globalThis, 'innerWidth', {
+  configurable: true,
+  enumerable: true,
+  get: function() {
+    return nativeLogicalWidth;
+  }
+});
+Object.defineProperty(globalThis, 'innerHeight', {
+  configurable: true,
+  enumerable: true,
+  get: function() {
+    return nativeLogicalHeight;
+  }
+});
 globalThis.moveBy = function() {};
 globalThis.moveTo = function() {};
 globalThis.resizeBy = function() {};

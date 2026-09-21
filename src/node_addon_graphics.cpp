@@ -319,13 +319,21 @@ napi_value submitScene(napi_env env, napi_callback_info info) try {
 }
 
 napi_value setScreenRenderSize(napi_env env, napi_callback_info info) try {
-  auto args=arguments(env,info,2);
-  if (args.size()!=2 || !host(env).renderer.setScreenRenderSize(
-      asInt32(env,args[0]),asInt32(env,args[1]))) {
+  auto args = arguments(env, info, 2);
+  if (args.size() != 2) throw std::runtime_error("invalid screen render size");
+  const int width = asInt32(env, args[0]);
+  const int height = asInt32(env, args[1]);
+  State& value = host(env);
+  if (!value.renderer.setScreenRenderSize(width, height)) {
     throw std::runtime_error("invalid screen render size");
   }
+  value.width = width;
+  value.height = height;
   return undefined(env);
-} catch(const std::exception& error){napi_throw_range_error(env,nullptr,error.what());return nullptr;}
+} catch (const std::exception& error) {
+  napi_throw_range_error(env, nullptr, error.what());
+  return nullptr;
+}
 
 napi_value presentationGeometry(napi_env env, napi_callback_info) try {
   State& value = host(env);

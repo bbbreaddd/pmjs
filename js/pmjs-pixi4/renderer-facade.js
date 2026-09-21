@@ -20,6 +20,13 @@ function createNativePixiRenderer(width, height, options) {
   var backingWidth = Math.max(1, Math.floor(width * resolution));
   var backingHeight = Math.max(1, Math.floor(height * resolution));
   var textureUnitCount = 32;
+  function publishRendererSize(renderer) {
+    if (typeof globalThis.__pmjsCommitLogicalSize === 'function') {
+      globalThis.__pmjsCommitLogicalSize(renderer.screen.width, renderer.screen.height);
+    }
+    NativeHost.render.setScreenRenderSize(renderer.width, renderer.height);
+  }
+
   var renderer = {
     type: PIXI.RENDERER_TYPE.WEBGL,
     options: options,
@@ -480,6 +487,7 @@ function createNativePixiRenderer(width, height, options) {
       }
       this.rootRenderTarget.resolution = this.resolution;
       this.rootRenderTarget.resize(width, height);
+      publishRendererSize(this);
     },
     textureGC: null,
     destroy: function(removeView) {

@@ -472,7 +472,17 @@ Object.defineProperty(NativeImage.prototype, 'src', {
 var documentTarget = new EventTarget();
 globalThis.document = documentTarget;
 documentTarget.readyState = 'complete';
-documentTarget.title = pmjsGameConfig.title || 'pmjs';
+Object.defineProperty(documentTarget, 'title', {
+  configurable: true,
+  enumerable: true,
+  get: function() {
+    return (globalThis.__pmjsGameInfo && globalThis.__pmjsGameInfo.title) ||
+      pmjsGameConfig.title || 'PMJS';
+  },
+  set: function(value) {
+    globalThis.__pmjsSetWindowTitle(value);
+  }
+});
 documentTarget.hasFocus = function() { return nativeWindowState.focused; };
 Object.defineProperty(documentTarget, 'hidden', {
   configurable: true,

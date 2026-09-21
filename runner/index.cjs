@@ -43,7 +43,19 @@ function resolveDefaults(input) {
   }
 
   if (input.gameRoot) {
-    const pkgPath = path.join(path.resolve(input.gameRoot), 'package.json');
+    const rootPath = path.resolve(input.gameRoot);
+    if (title === undefined) {
+      const systemPath = path.join(rootPath, 'data', 'System.json');
+      if (fs.existsSync(systemPath)) {
+        try {
+          const sys = JSON.parse(fs.readFileSync(systemPath, 'utf8'));
+          if (sys && typeof sys.gameTitle === 'string' && sys.gameTitle.trim()) {
+            title = sys.gameTitle.trim();
+          }
+        } catch (_) {}
+      }
+    }
+    const pkgPath = path.join(rootPath, 'package.json');
     if (fs.existsSync(pkgPath)) {
       try {
         const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
@@ -57,7 +69,7 @@ function resolveDefaults(input) {
 
   if (width === undefined) width = 816;
   if (height === undefined) height = 624;
-  if (title === undefined) title = 'pmjs native runtime';
+  if (title === undefined) title = 'PMJS';
 
   return { ...input, width, height, title };
 }
@@ -195,6 +207,12 @@ async function run(input, hooks = {}) {
   const hostClearTimeout = globalThis.clearTimeout.bind(globalThis);
   const hostSetImmediate = typeof globalThis.setImmediate === 'function'
     ? globalThis.setImmediate.bind(globalThis) : null;
+  const physicalDisplay = (native.runtime && typeof native.runtime.displaySize === 'function')
+    ? native.runtime.displaySize()
+    : {
+        width: Number(process.env.PMJS_SCREEN_WIDTH || 640),
+        height: Number(process.env.PMJS_SCREEN_HEIGHT || 480)
+      };
   globalThis.NativeHost = { runtime: native.runtime, render: native.render,
     scene: native.scene, images: native.images, assets: native.assets, fs: native.fs,
     storage: native.storage, input: native.input, canvas: native.canvas,
@@ -204,6 +222,13 @@ async function run(input, hooks = {}) {
   globalThis.__pmjsTimingConfig = {
     renderHz: timing.renderHz,
     catchupMode: timing.catchupMode
+  };
+  globalThis.__pmjsGameInfo = {
+    title: options.title,
+    width: options.width,
+    height: options.height,
+    displayWidth: physicalDisplay.width,
+    displayHeight: physicalDisplay.height
   };
   try {
     vm.runInThisContext(fs.readFileSync(options.bootstrap, 'utf8'), {

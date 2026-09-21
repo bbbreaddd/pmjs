@@ -14,12 +14,13 @@ function registerCommonJsModule(names, exports) {
     registeredCommonJsModules[name] = exports;
   }
 }
+function countNwCompatibilityUse(method) {
+  if (typeof nativeCompatibilityHit === 'function') {
+    nativeCompatibilityHit('browser.nwGui', method);
+  }
+}
 function compatibilityCountedNoop(method) {
-  return function() {
-    if (typeof nativeCompatibilityHit === 'function') {
-      nativeCompatibilityHit('browser.nwGui', method);
-    }
-  };
+  return function() { countNwCompatibilityUse(method); };
 }
 var nativeWindow = {
   showDevTools: compatibilityCountedNoop('Window.showDevTools'),
@@ -53,8 +54,26 @@ var nativeWindow = {
   once: compatibilityCountedNoop('Window.once'),
   removeListener: compatibilityCountedNoop('Window.removeListener'),
   removeAllListeners: compatibilityCountedNoop('Window.removeAllListeners'),
-  zoomLevel: 0, X: 0, Y: 0, width: nativeLogicalWidth,
-  height: nativeLogicalHeight, title: pmjsGameConfig.title || 'pmjs', menu: null
+  zoomLevel: 0, X: 0, Y: 0,
+  get width() {
+    return nativeWindowWidth;
+  },
+  set width(_) {
+    countNwCompatibilityUse('Window.width');
+  },
+  get height() {
+    return nativeWindowHeight;
+  },
+  set height(_) {
+    countNwCompatibilityUse('Window.height');
+  },
+  get title() {
+    return (globalThis.__pmjsGameInfo && globalThis.__pmjsGameInfo.title) || pmjsGameConfig.title || 'PMJS';
+  },
+  set title(v) {
+    globalThis.__pmjsSetWindowTitle(v);
+  },
+  menu: null
 };
 var nativeNwGui = {
   App: { argv: [], fullArgv: [], dataPath: '/save', manifest: {},

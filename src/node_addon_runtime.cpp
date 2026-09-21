@@ -321,6 +321,43 @@ napi_value environment(napi_env env, napi_callback_info info) try {
 }
 
 
+napi_value displaySize(napi_env env, napi_callback_info) try {
+  const auto& platform = host(env).platform;
+  napi_value result;
+  check(env, napi_create_object(env, &result), "cannot create display size");
+  check(env, napi_set_named_property(env, result, "width",
+    number(env, platform.displayWidth())), "cannot set display width");
+  check(env, napi_set_named_property(env, result, "height",
+    number(env, platform.displayHeight())), "cannot set display height");
+  return result;
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what());
+  return nullptr;
+}
+
+napi_value windowSize(napi_env env, napi_callback_info) try {
+  const auto& platform = host(env).platform;
+  napi_value result;
+  check(env, napi_create_object(env, &result), "cannot create window size");
+  check(env, napi_set_named_property(env, result, "width",
+    number(env, platform.windowWidth())), "cannot set window width");
+  check(env, napi_set_named_property(env, result, "height",
+    number(env, platform.windowHeight())), "cannot set window height");
+  return result;
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what());
+  return nullptr;
+}
+
+napi_value setWindowTitle(napi_env env, napi_callback_info info) try {
+  auto args = arguments(env, info, 1);
+  host(env).platform.setWindowTitle(asString(env, args.at(0)));
+  return undefined(env);
+} catch (const std::exception& error) {
+  napi_throw_type_error(env, nullptr, error.what());
+  return nullptr;
+}
+
 void registerRuntimeBindings(napi_env env, napi_value exports) {
   method(env, exports, "initialize", initialize);
   method(env, exports, "pollEvents", pollEvents);
@@ -338,6 +375,9 @@ void registerRuntimeBindings(napi_env env, napi_value exports) {
   method(env, runtime, "waitUntil", waitUntil);
   method(env, runtime, "presentation", presentation);
   method(env, runtime, "windowState", windowState);
+  method(env, runtime, "displaySize", displaySize);
+  method(env, runtime, "windowSize", windowSize);
+  method(env, runtime, "setWindowTitle", setWindowTitle);
   check(env, napi_set_named_property(env, exports, "runtime", runtime),
         "cannot export runtime module");
 }

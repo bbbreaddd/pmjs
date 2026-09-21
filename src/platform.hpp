@@ -27,6 +27,11 @@ class Platform {
   bool windowFocused() const { return windowFocused_; }
   bool windowVisible() const { return windowVisible_; }
   std::pair<int, int> drawableSize() const;
+  int windowWidth() const { return windowWidth_; }
+  int windowHeight() const { return windowHeight_; }
+  int displayWidth() const { return displayWidth_ > 0 ? displayWidth_ : windowWidth_; }
+  int displayHeight() const { return displayHeight_ > 0 ? displayHeight_ : windowHeight_; }
+  void setWindowTitle(const std::string& title);
   void finishLogicStep();
   // Clears edges consumed by a simulation step.
   void consumePressed();
