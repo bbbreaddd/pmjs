@@ -35,6 +35,196 @@ void Renderer::render() {
   presentToDrawable();
 }
 
+int Renderer::filterBoundsPadding(scene_packet::FilterKind kind,
+                                  const std::array<float, 21>& parameters) {
+  using scene_packet::FilterKind;
+  switch (kind) {
+    case FilterKind::colorMatrix:
+      return parameters[19] == 0.0F ? 0 : -1;
+    case FilterKind::adjustment:
+    case FilterKind::alpha:
+    case FilterKind::alphaMask:
+      return 0;
+    default:
+      return -1;
+  }
+}
+
+void Renderer::computeFilterContentBounds() {
+  filterBounds_.clear();
+  filterBounds_.resize(frame_.commands.size());
+  struct Accumulator {
+    std::size_t beginIndex = 0;
+    bool hasContent = false;
+    bool unbounded = false;
+    float minX = 0.0F;
+    float minY = 0.0F;
+    float maxX = 0.0F;
+    float maxY = 0.0F;
+  };
+  std::vector<Accumulator> stack;
+  const auto unite = [](Accumulator& acc, float x0, float y0, float x1,
+                        float y1) {
+    if (!acc.hasContent) {
+      acc.minX = x0;
+      acc.minY = y0;
+      acc.maxX = x1;
+      acc.maxY = y1;
+      acc.hasContent = true;
+      return;
+    }
+    acc.minX = std::min(acc.minX, x0);
+    acc.minY = std::min(acc.minY, y0);
+    acc.maxX = std::max(acc.maxX, x1);
+    acc.maxY = std::max(acc.maxY, y1);
+  };
+  for (std::size_t index = 0; index < frame_.commands.size(); ++index) {
+    const RenderCommand& command = frame_.commands[index];
+    if (command.action == RenderCommand::Action::filterBegin) {
+      Accumulator level;
+      level.beginIndex = index;
+      if (stack.size() >= scene_packet::maxFilterDepth) level.unbounded = true;
+      stack.push_back(level);
+      continue;
+    }
+    if (command.action == RenderCommand::Action::filterEnd) {
+      if (stack.empty()) continue;
+      const Accumulator level = stack.back();
+      stack.pop_back();
+      const RenderCommand& begun = frame_.commands[level.beginIndex];
+      FilterContentBounds& out = filterBounds_[level.beginIndex];
+      float ex0 = 0.0F;
+      float ey0 = 0.0F;
+      float ex1 = 0.0F;
+      float ey1 = 0.0F;
+      bool effective = false;
+      if (!level.hasContent && !level.unbounded) {
+        effective = true;
+      } else if (!level.unbounded &&
+                 filterBoundsPadding(begun.filterKind,
+                                     begun.filterParameters) == 0) {
+        ex0 = level.minX;
+        ey0 = level.minY;
+        ex1 = level.maxX;
+        ey1 = level.maxY;
+        effective = true;
+      } else if (begun.clipped) {
+        ex0 = static_cast<float>(begun.clip[0]);
+        ey0 = static_cast<float>(begun.clip[1]);
+        ex1 = static_cast<float>(begun.clip[2]);
+        ey1 = static_cast<float>(begun.clip[3]);
+        effective = true;
+      }
+      if (effective && begun.clipped) {
+        ex0 = std::max(ex0, static_cast<float>(begun.clip[0]));
+        ey0 = std::max(ey0, static_cast<float>(begun.clip[1]));
+        ex1 = std::min(ex1, static_cast<float>(begun.clip[2]));
+        ey1 = std::min(ey1, static_cast<float>(begun.clip[3]));
+      }
+      if (!effective) {
+        out.bounded = false;
+      } else {
+        out.bounded = true;
+        const float loX = std::clamp(ex0, -1000000.0F, 1000000.0F);
+        const float loY = std::clamp(ey0, -1000000.0F, 1000000.0F);
+        const float hiX = std::clamp(ex1, -1000000.0F, 1000000.0F);
+        const float hiY = std::clamp(ey1, -1000000.0F, 1000000.0F);
+        out.rect = {static_cast<int>(std::floor(loX)),
+                    static_cast<int>(std::floor(loY)),
+                    static_cast<int>(std::ceil(hiX)),
+                    static_cast<int>(std::ceil(hiY))};
+      }
+      if (!stack.empty()) {
+        Accumulator& parent = stack.back();
+        if (!effective) {
+          parent.unbounded = true;
+        } else if (ex0 < ex1 && ey0 < ey1) {
+          unite(parent, ex0, ey0, ex1, ey1);
+        }
+      }
+      continue;
+    }
+    if (stack.empty()) continue;
+    Accumulator& top = stack.back();
+    if (top.unbounded) continue;
+    if (command.appliesColorMatrix) {
+      top.unbounded = true;
+      continue;
+    }
+    if (command.tileLayer != 0 ||
+        command.primitive == RenderCommand::Primitive::tileLayer ||
+        command.primitive == RenderCommand::Primitive::mesh) {
+      top.unbounded = true;
+      continue;
+    }
+    if (command.primitive == RenderCommand::Primitive::screenFill) {
+      unite(top, 0.0F, 0.0F, static_cast<float>(width_),
+            static_cast<float>(height_));
+      continue;
+    }
+    const float dw = command.destination[0];
+    const float dh = command.destination[1];
+    if (!(dw > 0.0F) || !(dh > 0.0F)) continue;
+    const auto& t = command.transform;
+    const float x0 = t[4];
+    const float y0 = t[5];
+    const float x1 = t[0] * dw + t[4];
+    const float y1 = t[1] * dw + t[5];
+    const float x2 = t[0] * dw + t[2] * dh + t[4];
+    const float y2 = t[1] * dw + t[3] * dh + t[5];
+    const float x3 = t[2] * dh + t[4];
+    const float y3 = t[3] * dh + t[5];
+    if (!std::isfinite(x0) || !std::isfinite(y0) || !std::isfinite(x1) ||
+        !std::isfinite(y1) || !std::isfinite(x2) || !std::isfinite(y2) ||
+        !std::isfinite(x3) || !std::isfinite(y3)) {
+      top.unbounded = true;
+      continue;
+    }
+    unite(top, std::min(std::min(x0, x1), std::min(x2, x3)),
+          std::min(std::min(y0, y1), std::min(y2, y3)),
+          std::max(std::max(x0, x1), std::max(x2, x3)),
+          std::max(std::max(y0, y1), std::max(y2, y3)));
+  }
+  for (const auto& level : stack) {
+    filterBounds_[level.beginIndex].bounded = false;
+  }
+}
+
+bool Renderer::filterBoundsRect(const RenderCommand* filterBegin,
+                                std::array<int, 4>* rect) const {
+  if (!filterBoundsEnabled_ || filterBegin == nullptr || rect == nullptr) {
+    return false;
+  }
+  if (filterBegin < frame_.commands.data() ||
+      filterBegin >= frame_.commands.data() + frame_.commands.size()) {
+    return false;
+  }
+  const std::size_t index =
+      static_cast<std::size_t>(filterBegin - frame_.commands.data());
+  if (index >= filterBounds_.size() || !filterBounds_[index].bounded) {
+    return false;
+  }
+  const int pad = filterBoundsPadding(filterBegin->filterKind,
+                                        filterBegin->filterParameters);
+  if (pad < 0) return false;
+  int left = filterBounds_[index].rect[0] - pad;
+  int top = filterBounds_[index].rect[1] - pad;
+  int right = filterBounds_[index].rect[2] + pad;
+  int bottom = filterBounds_[index].rect[3] + pad;
+  left = std::clamp(left, 0, width_);
+  top = std::clamp(top, 0, height_);
+  right = std::clamp(right, 0, width_);
+  bottom = std::clamp(bottom, 0, height_);
+  if (filterBegin->clipped) {
+    left = std::max(left, filterBegin->clip[0]);
+    top = std::max(top, filterBegin->clip[1]);
+    right = std::min(right, filterBegin->clip[2]);
+    bottom = std::min(bottom, filterBegin->clip[3]);
+  }
+  *rect = {left, top, right, bottom};
+  return true;
+}
+
 void Renderer::renderScene() {
   std::uint32_t& rootFramebuffer = offscreenRender_ ? offscreenFramebuffer_ :
                                                       sceneFramebuffer_;
@@ -51,6 +241,11 @@ void Renderer::renderScene() {
 
     vertices_.clear();
     vertices_.reserve(frame_.commands.size() * 72);
+    if (filterBoundsEnabled_) {
+      computeFilterContentBounds();
+    } else {
+      filterBounds_.clear();
+    }
   const RenderCommand* composedToneCommand = nullptr;
   if (!offscreenRender_) {
     std::size_t toneIndex = frame_.commands.size();
@@ -265,8 +460,15 @@ void Renderer::renderScene() {
       if (groupFramebuffers_[filterDepth] && groupTextures_[filterDepth]) {
         ++stats_.filterTargetReuses;
       }
-      savedScissor[filterDepth] = operation.command->clipped;
-      savedClip[filterDepth] = operation.command->clip;
+      std::array<int, 4> boundedRect{};
+      const bool bounded = filterBoundsRect(operation.command, &boundedRect);
+      if (bounded) {
+        savedScissor[filterDepth] = true;
+        savedClip[filterDepth] = boundedRect;
+      } else {
+        savedScissor[filterDepth] = operation.command->clipped;
+        savedClip[filterDepth] = operation.command->clip;
+      }
       filterCommands[filterDepth] = operation.command;
       if (scissorActive) {
         glDisable(GL_SCISSOR_TEST);
@@ -274,6 +476,14 @@ void Renderer::renderScene() {
       }
       glBindFramebuffer(GL_FRAMEBUFFER, groupFramebuffers_[filterDepth]);
       glViewport(0, 0, width_, height_);
+      if (bounded) {
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(boundedRect[0], height_ - boundedRect[3],
+                  std::max(0, boundedRect[2] - boundedRect[0]),
+                  std::max(0, boundedRect[3] - boundedRect[1]));
+        scissorActive = true;
+        activeClip = boundedRect;
+      }
       glClearColor(0, 0, 0, 0);
       glClear(GL_COLOR_BUFFER_BIT);
       ++stats_.filterTargetClears;
@@ -286,6 +496,10 @@ void Renderer::renderScene() {
       --filterDepth;
       const RenderCommand& filter = *filterCommands[filterDepth];
       ++stats_.filterApplications[static_cast<std::size_t>(filter.filterKind)];
+      std::array<int, 4> boundedRect{};
+      if (filterBoundsRect(filterCommands[filterDepth], &boundedRect)) {
+        ++stats_.filterBoundedApplications;
+      }
       if (scissorActive) {
         glDisable(GL_SCISSOR_TEST);
         scissorActive = false;

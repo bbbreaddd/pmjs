@@ -99,6 +99,8 @@ struct RendererStats {
   std::uint64_t rendererTargetCreates = 0;
   std::uint64_t rendererTargetDestroys = 0;
   std::uint64_t filterTargetClears = 0;
+
+  std::uint64_t filterBoundedApplications = 0;
   std::uint64_t framebufferChecks = 0;
   std::uint64_t framebufferCopies = 0;
   std::uint64_t toneAdjustDrawCalls = 0;
@@ -229,6 +231,16 @@ class Renderer {
     bool live = false;
   };
 
+  struct FilterContentBounds {
+    bool bounded = false;
+    std::array<int, 4> rect{};
+  };
+
+  static int filterBoundsPadding(scene_packet::FilterKind kind,
+                                 const std::array<float, 21>& parameters);
+  void computeFilterContentBounds();
+  bool filterBoundsRect(const RenderCommand* filterBegin,
+                        std::array<int, 4>* rect) const;
   void destroyTileLayer(std::uint32_t handle);
   static PrimitiveSurfaceHandle makePrimitiveSurfaceHandle(
       std::size_t index, std::uint16_t generation);
@@ -259,6 +271,8 @@ class Renderer {
   FramePacket frame_;
   std::vector<float> vertices_;
   RendererStats stats_;
+  std::vector<FilterContentBounds> filterBounds_;
+  bool filterBoundsEnabled_ = true;
   std::uint32_t program_ = 0;
   std::uint32_t simpleProgram_ = 0;
   std::uint32_t spriteEffectProgram_ = 0;

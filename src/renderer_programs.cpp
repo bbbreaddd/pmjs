@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
@@ -56,6 +57,8 @@ Renderer::Renderer(int width, int height, ImageStore& images)
     : width_(width), height_(height), presentationWidth_(width),
       presentationHeight_(height), queueWidth_(width), queueHeight_(height),
       images_(images) {
+  const char* filterBounds = std::getenv("PMJS_FILTER_BOUNDS");
+  filterBoundsEnabled_ = !(filterBounds && std::string(filterBounds) == "0");
   presentation_.scaleMode = presentScaleModeFromEnvironment();
   hasFilterOverride_ =
       presentFilterOverrideFromEnvironment(&filterOverride_);
