@@ -39,7 +39,9 @@ var nativeMaterializationStats = {
   meshHits: 0, meshMisses: 0,
   cpuTintedSprites: 0, shaderToneSprites: 0
 };
-var nativeSceneSegmentStats = { runs: 0, sprites: 0, candidates: 0 };
+var nativeSceneSegmentStats = { runs: 0, sprites: 0, candidates: 0,
+  bindingProbes: 0, rejectedProbes: 0, abandonedRuns: 0, abandonedSprites: 0 };
+var nativeSceneSegmentTracing = false;
 var nativePlainSpriteSegmentsEnabled =
   typeof pmjsOptimizationEnv === 'function' &&
   pmjsOptimizationEnv('PMJS_SCENE_PLAIN_SPRITE_SEGMENT') === '1';
@@ -54,31 +56,6 @@ function nativeBlankTile() {
   if (!native) return 0;
   nativeBlankTileHandle = native.handle;
   return nativeBlankTileHandle;
-}
-
-function queueNativeSprite(sprite) {
-  var texture = sprite.texture;
-  var base = texture && texture.baseTexture;
-  var source = base && base.source;
-  var nativeImage = source && (source._nativeImage || source._nativeCanvas);
-  var frame = texture && (texture._frame || texture.frame);
-  if (!nativeImage || !frame || frame.width <= 0 || frame.height <= 0) return;
-
-  var transform = sprite.worldTransform;
-  var anchor = sprite.anchor || { x: 0, y: 0 };
-  var original = texture.orig || frame;
-  var trim = texture.trim;
-  var localX = trim ? trim.x - anchor.x * original.width : -anchor.x * original.width;
-  var localY = trim ? trim.y - anchor.y * original.height : -anchor.y * original.height;
-  var tx = transform.tx + transform.a * localX + transform.c * localY;
-  var ty = transform.ty + transform.b * localX + transform.d * localY;
-  var resolution = Math.max(0.000001, Number(base.resolution) || 1);
-  NativeHost.render.image(nativeImage.handle,
-    transform.a, transform.b, transform.c, transform.d, tx, ty,
-    frame.x * resolution, frame.y * resolution,
-    frame.width * resolution, frame.height * resolution,
-    sprite.worldAlpha, sprite.tint === undefined ? 0xffffff : sprite.tint,
-    sprite.blendMode || 0);
 }
 
 function nativeRotatedTexturePoint(rotation, x, y) {
@@ -173,32 +150,6 @@ function ensureNativeTilingTexture(texture) {
   return { handle: canvas._ensureNativeCanvas().handle, resolution: resolution };
 }
 
-function queueNativeTilingSprite(sprite) {
-  var texture = sprite.texture;
-  var tilingTexture = ensureNativeTilingTexture(texture);
-  if (!tilingTexture || sprite.width <= 0 || sprite.height <= 0) return;
-
-  var transform = sprite.worldTransform;
-  var anchor = sprite.anchor || { x: 0, y: 0 };
-  var tx = transform.tx - transform.a * anchor.x * sprite.width -
-    transform.c * anchor.y * sprite.height;
-  var ty = transform.ty - transform.b * anchor.x * sprite.width -
-    transform.d * anchor.y * sprite.height;
-  var tileScale = sprite.tileScale || { x: 1, y: 1 };
-  var scaleX = Math.abs(tileScale.x) > 0.000001 ? tileScale.x : 1;
-  var scaleY = Math.abs(tileScale.y) > 0.000001 ? tileScale.y : 1;
-  var tilingSource = nativeTilingSource(sprite, scaleX, scaleY);
-
-  NativeHost.render.tiled(tilingTexture.handle,
-    transform.a, transform.b, transform.c, transform.d, tx, ty,
-    tilingSource.x * tilingTexture.resolution,
-    tilingSource.y * tilingTexture.resolution,
-    tilingSource.width * tilingTexture.resolution,
-    tilingSource.height * tilingTexture.resolution,
-    sprite.width, sprite.height, sprite.worldAlpha,
-    sprite.tint === undefined ? 0xffffff : sprite.tint, sprite.blendMode || 0);
-}
-
 function nativeTilingSource(sprite, scaleX, scaleY) {
   if (sprite.origin && Number.isFinite(Number(sprite.origin.x)) &&
       Number.isFinite(Number(sprite.origin.y))) {
@@ -219,29 +170,6 @@ function tileAnimationOffset(layer) {
   var horizontalFrame = frame % 4;
   if (horizontalFrame === 3) horizontalFrame = 1;
   return [horizontalFrame * tileWidth, (frame % 3) * tileHeight];
-}
-
-function queueNativeRectTileLayer(layer) {
-  var points = layer.pointsBuf;
-  if (!points || !points.length) {
-    ensureNativeRectTileLayer(layer);
-    return;
-  }
-  var parent = layer.parent || layer;
-  var transform = parent.worldTransform || layer.worldTransform;
-  var animation = tileAnimationOffset(parent);
-  var alpha = parent.worldAlpha === undefined ? 1 : parent.worldAlpha;
-  var tint = parent.tint === undefined ? 0xffffff : parent.tint;
-  var blendMode = parent.blendMode || 0;
-
-  var layerHandle = ensureNativeRectTileLayer(layer);
-  if (!layerHandle) return;
-
-  NativeHost.render.drawTileLayer(layerHandle,
-    transform.a, transform.b, transform.c, transform.d,
-    transform.tx, transform.ty, animation[0], animation[1],
-    alpha, tint, blendMode);
-  nativeTileRects += points.length / 9;
 }
 
 function nativeTilePointsUnchanged(layer, points) {
@@ -322,42 +250,6 @@ function nativeIsRectTileLayer(node) {
       node instanceof PIXI.tilemap.RectTileLayer) return true;
 
   return Array.isArray(node.pointsBuf) && Array.isArray(node.textures);
-}
-
-function queueNativeObject(node) {
-  if (nativeIsRectTileLayer(node)) {
-    queueNativeRectTileLayer(node);
-    return false;
-  }
-  if (!node || !node.visible || !node.renderable || node.worldAlpha <= 0) return false;
-  if (typeof node._openness === 'number' && node._openness <= 0) return false;
-  var renderType = nativeNodeRenderType(node);
-  if (renderType === 'screensprite') {
-    var red = Math.max(0, Math.min(1, (node._red || 0) / 255));
-    var green = Math.max(0, Math.min(1, (node._green || 0) / 255));
-    var blue = Math.max(0, Math.min(1, (node._blue || 0) / 255));
-    NativeHost.render.quad(
-      0, 0, Graphics.width, Graphics.height, red, green, blue, node.worldAlpha);
-    nativeScreenOverlays.push([
-      Math.round(red * 255), Math.round(green * 255), Math.round(blue * 255),
-      Math.round(node.worldAlpha * 255)
-    ]);
-    return false;
-  }
-  if (renderType === 'tilingsprite') {
-    queueNativeTilingSprite(node);
-  } else if (renderType === 'sprite' || renderType === 'picture' ||
-      renderType === 'weathersprite') {
-    queueNativeSprite(node);
-  }
-  return true;
-}
-
-function queueNativeTree(node) {
-  if (!queueNativeObject(node) || !node.children) return;
-  for (var index = 0; index < node.children.length; index++) {
-    queueNativeTree(node.children[index]);
-  }
 }
 
 var nativeSceneSchema = NativeHost.scene && NativeHost.scene.schema;
@@ -521,7 +413,25 @@ function traceNativeScenePacket() {
     changedRecords: changedRecords,
     changedMetadataRecords: changedMetadataRecords,
     changedValueRecords: changedValueRecords,
-    firstChangedRecords: firstChangedRecords
+    firstChangedRecords: firstChangedRecords,
+    // Plain-segment accounting (cumulative since boot). The statistics are
+    // emitted only while tracing; the runs/sprites/candidates counters
+    // themselves remain always-on. candidates counts every probed binding
+    // including runs abandoned below the segment threshold, so
+    // candidates - sprites measures successfully-created-but-discarded
+    // bindings -- not total probe cost (see the gated counters below, which
+    // additionally count rejected eligibility probes and abandoned runs).
+    segmentRuns: nativeSceneSegmentStats.runs,
+    segmentSprites: nativeSceneSegmentStats.sprites,
+    segmentCandidates: nativeSceneSegmentStats.candidates,
+    // Gated counters: cumulative since boot but advancing only on
+    // submissions made while tracing was active. Together they separate
+    // valid-but-discarded speculative work (abandonedSprites) from
+    // eligibility checks that fail (rejectedProbes).
+    segmentBindingProbes: nativeSceneSegmentStats.bindingProbes,
+    segmentRejectedProbes: nativeSceneSegmentStats.rejectedProbes,
+    segmentAbandonedRuns: nativeSceneSegmentStats.abandonedRuns,
+    segmentAbandonedSprites: nativeSceneSegmentStats.abandonedSprites,
   });
   if (nativeScenePreviousMetadata.length < metadataLength) {
     nativeScenePreviousMetadata = new Uint32Array(metadataLength);

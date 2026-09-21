@@ -167,8 +167,17 @@ function nativePlainSpriteBinding(node) {
       rotation % 2 || cpuTinted ||
       tone && (tone[0] || tone[1] || tone[2] || tone[3]) ||
       blend && blend[3] > 0) return null;
+  var anchor = node.anchor || { x: 0, y: 0 };
+  var original = texture.orig || frame;
+  var trim = texture.trim;
   return { node: node, texture: texture, base: base, nativeImage: nativeImage,
-    frame: frame, rotation: rotation, blendMode: blendMode };
+    frame: frame, rotation: rotation, blendMode: blendMode,
+    localX: trim ? trim.x - anchor.x * original.width :
+      -anchor.x * original.width,
+    localY: trim ? trim.y - anchor.y * original.height :
+      -anchor.y * original.height,
+    width: trim ? trim.width : original.width,
+    height: trim ? trim.height : original.height };
 }
 
 function writeNativePlainSpriteSegment(bindings, parentIndex) {
@@ -182,15 +191,11 @@ function writeNativePlainSpriteSegment(bindings, parentIndex) {
       transform.updateLocalTransform();
     }
     var local = transform && transform.localTransform || nativeIdentityTransform;
-    var texture = binding.texture;
     var frame = binding.frame;
-    var anchor = node.anchor || { x: 0, y: 0 };
-    var original = texture.orig || frame;
-    var trim = texture.trim;
-    var localX = trim ? trim.x - anchor.x * original.width : -anchor.x * original.width;
-    var localY = trim ? trim.y - anchor.y * original.height : -anchor.y * original.height;
-    var width = trim ? trim.width : original.width;
-    var height = trim ? trim.height : original.height;
+    var localX = binding.localX;
+    var localY = binding.localY;
+    var width = binding.width;
+    var height = binding.height;
     var nodeIndex = nativeSceneRecord(parentIndex, 1, binding.nativeImage.handle,
       node.tint === undefined ? 0xffffff : node.tint, binding.blendMode,
       local, node.alpha, null, 0, null);
@@ -573,6 +578,10 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
         while (segmentIndex < childLimit &&
             nativeSceneTraversesChild(kind, node, node.children[segmentIndex])) {
           var binding = nativePlainSpriteBinding(node.children[segmentIndex]);
+          if (nativeSceneSegmentTracing) {
+            nativeSceneSegmentStats.bindingProbes++;
+            if (!binding) nativeSceneSegmentStats.rejectedProbes++;
+          }
           if (!binding) break;
           segment.push(binding);
           segmentIndex++;
@@ -582,6 +591,10 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
           writeNativePlainSpriteSegment(segment, nodeIndex);
           index = segmentIndex - 1;
           continue;
+        }
+        if (nativeSceneSegmentTracing && segment.length) {
+          nativeSceneSegmentStats.abandonedRuns++;
+          nativeSceneSegmentStats.abandonedSprites += segment.length;
         }
       }
       if (particleFrame) particleFrame.childIndex = index;
@@ -632,6 +645,8 @@ function prepareNativeBitmapCaches(node, renderer, root) {
 function encodeNativeScene(stage) {
   resetNativeSceneRecords();
   nativeSceneFilterDepth = 0;
+  nativeSceneSegmentTracing = !!(globalThis.__pmjsTrace &&
+    __pmjsTrace.active());
   if (nativeSceneBackgroundColor !== null) {
     nativeSceneRecord(0xffffffff, 3, 0, nativeSceneBackgroundColor,
       0, nativeIdentityTransform, 1, null, 0, null);
