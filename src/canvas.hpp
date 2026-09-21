@@ -64,6 +64,7 @@ class CanvasStore {
   std::optional<CanvasTextMetrics> measureTextMetrics(
     const std::filesystem::path& fontPath, const std::string& text,
     int pixelSize) const;
+  bool canLoadFont(const std::filesystem::path& fontPath);
   std::optional<std::uint32_t> pixel(CanvasHandle handle, int x, int y);
   std::optional<ImagePixels> readPixels(CanvasHandle handle, int x, int y,
                                         int width, int height);

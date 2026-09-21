@@ -10,6 +10,7 @@
 #include <cstring>
 #include <list>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace pmjs {
@@ -93,6 +94,7 @@ struct CanvasStore::FontState {
   static constexpr std::size_t kMaxCachedGlyphs = 2048;
 
   FT_Library library = nullptr;
+  std::unordered_set<std::string> failedPaths;
   std::unordered_map<std::string, FT_Face> faces;
   std::list<GlyphKey> lruOrder;
   std::unordered_map<GlyphKey, std::pair<CachedGlyph, std::list<GlyphKey>::iterator>, GlyphKeyHash> glyphCache;
@@ -103,19 +105,26 @@ struct CanvasStore::FontState {
     lruOrder.clear();
     for (auto& [key, face] : faces) {
       (void)key;
-      FT_Done_Face(face);
+      if (face) FT_Done_Face(face);
     }
     if (library) FT_Done_FreeType(library);
   }
 
   FT_Face face(const std::filesystem::path& path, int pixelSize) {
     if (!library || pixelSize <= 0 || pixelSize > 256) return nullptr;
-    const std::string key = path.string() + '\n' + std::to_string(pixelSize);
+    const std::string pathStr = path.string();
+    if (failedPaths.count(pathStr)) return nullptr;
+
+    const std::string key = pathStr + '\n' + std::to_string(pixelSize);
     if (const auto found = faces.find(key); found != faces.end()) return found->second;
     FT_Face created = nullptr;
-    if (FT_New_Face(library, path.c_str(), 0, &created) != 0) return nullptr;
+    if (FT_New_Face(library, path.c_str(), 0, &created) != 0) {
+      failedPaths.insert(pathStr);
+      return nullptr;
+    }
     if (FT_Set_Pixel_Sizes(created, 0, static_cast<FT_UInt>(pixelSize)) != 0) {
       FT_Done_Face(created);
+      faces.emplace(key, nullptr);
       return nullptr;
     }
     faces.emplace(key, created);
@@ -824,6 +833,10 @@ std::optional<CanvasTextMetrics> CanvasStore::measureTextMetrics(
   result.fontAscent = static_cast<int>(face->size->metrics.ascender >> 6);
   result.fontDescent = -static_cast<int>(face->size->metrics.descender >> 6);
   return result;
+}
+
+bool CanvasStore::canLoadFont(const std::filesystem::path& fontPath) {
+  return fonts_->face(fontPath, 16) != nullptr;
 }
 
 std::optional<std::uint32_t> CanvasStore::pixel(CanvasHandle handle,

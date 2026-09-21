@@ -480,7 +480,16 @@ documentTarget.createElement = function(tagName) {
   if (name === 'audio') return new AudioElement();
   if (name === 'video') return new VideoElement();
   var element = new GenericElement(tagName);
-  if (name === 'style') element.sheet = { insertRule: function() {} };
+  if (name === 'style') {
+    element.sheet = {
+      insertRule: function(rule) {
+        if (rule && globalThis.PMJS && PMJS.fonts &&
+            typeof PMJS.fonts.registerFontFaceRule === 'function') {
+          PMJS.fonts.registerFontFaceRule(rule);
+        }
+      }
+    };
+  }
   return element;
 };
 documentTarget.createTextNode = function(text) {

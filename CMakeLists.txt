@@ -122,6 +122,7 @@ if(BUILD_TESTING)
       test/canvas-gradients.test.cjs
       test/mv-platform-semantics.test.cjs
       test/pmjs-web-dialogs.test.cjs
+      test/fonts.test.cjs
       test/scheduler.test.cjs)
     get_filename_component(PMJS_TEST_NAME "${PMJS_JS_TEST}" NAME_WE)
     add_test(NAME "js-${PMJS_TEST_NAME}" COMMAND ${NODE_EXECUTABLE} --test

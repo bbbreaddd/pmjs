@@ -93,6 +93,15 @@ napi_value measureText(napi_env env, napi_callback_info info) try {
   auto a=arguments(env,info,3); State& value=host(env); auto path=value.vfs.resolve(asString(env,a.at(0))); auto width=path?value.canvases.measureText(*path,asString(env,a.at(1)),asInt32(env,a.at(2))):std::nullopt; if(!width) throw std::runtime_error("text measurement failed"); return number(env,*width);
 } catch(const std::exception& error){napi_throw_error(env,nullptr,error.what());return nullptr;}
 
+napi_value canLoadFont(napi_env env, napi_callback_info info) try {
+  auto a = arguments(env, info, 1);
+  State& value = host(env);
+  auto path = value.vfs.resolve(asString(env, a.at(0)));
+  return boolean(env, path ? value.canvases.canLoadFont(*path) : false);
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what()); return nullptr;
+}
+
 napi_value pixel(napi_env env, napi_callback_info info) try {
   auto a=arguments(env,info,3); auto value=host(env).canvases.pixel(asUint32(env,a.at(0)),asInt32(env,a.at(1)),asInt32(env,a.at(2))); if(!value) throw std::runtime_error("invalid pixel"); return uint32(env,*value);
 } catch(const std::exception& error){napi_throw_range_error(env,nullptr,error.what());return nullptr;}
@@ -227,6 +236,7 @@ void registerCanvasBindings(napi_env env, napi_value exports) {
   method(env, canvas, "drawText", drawText);
   method(env, canvas, "measureText", measureText);
   method(env, canvas, "measureTextMetrics", measureTextMetrics);
+  method(env, canvas, "canLoadFont", canLoadFont);
   method(env, canvas, "pixel", pixel);
   method(env, canvas, "readPixels", readCanvasPixels);
   method(env, canvas, "encodePng", encodeCanvasPng);

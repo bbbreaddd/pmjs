@@ -7,15 +7,6 @@ if (typeof Graphics !== 'undefined') {
   if (typeof Graphics._isVideoVisible !== 'function') {
     Graphics._isVideoVisible = function() { return false; };
   }
-  // Stock loading spinner is DOM-specific; native readiness is gated via
-  // image cache. Keep it as a no-op so Scene_Boot does not stall.
-  if (typeof Graphics.isFontLoaded === 'function') {
-    var originalIsFontLoaded = Graphics.isFontLoaded;
-    Graphics.isFontLoaded = function(name) {
-      if (name) return true;
-      try { return originalIsFontLoaded.call(this, name); } catch (_) { return true; }
-    };
-  }
   if (typeof Graphics.printError !== 'function') {
     Graphics.printError = function(name, message) {
       console.error('[pmjs] Graphics.printError ' + name + ': ' + message);

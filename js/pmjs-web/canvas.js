@@ -439,12 +439,21 @@ function colorWithGlobalAlpha(color, globalAlpha) {
 }
 
 function contextFont(context) {
-  var sizeMatch = /(\d+(?:\.\d+)?)px/.exec(context.font);
+  var fontStr = (context && typeof context === 'object') ? context.font : context;
+  if (globalThis.PMJS && PMJS.fonts && typeof PMJS.fonts.resolveDescriptor === 'function') {
+    var resolved = PMJS.fonts.resolveDescriptor(fontStr);
+    return {
+      path: (resolved.faces && resolved.faces[0] && resolved.faces[0].path) || 'fonts/gamefont.ttf',
+      size: resolved.size,
+      family: (resolved.faces && resolved.faces[0] && resolved.faces[0].family) || 'GameFont'
+    };
+  }
+  var sizeMatch = /(\d+(?:\.\d+)?)px/.exec(String(fontStr));
   var size = sizeMatch ? Math.max(1, Math.round(Number(sizeMatch[1]))) : 10;
-  var family = String(context.font).split(/\s+/).pop().replace(/["']/g, '');
-  var files = pmjsGameConfig.fonts || {};
-  return { path: files[family] || files.GameFont || 'fonts/gamefont.ttf',
-    size: size };
+  var config = globalThis.pmjsGameConfig || {};
+  var files = config.fonts || {};
+  var family = String(fontStr).split(/\s+/).pop().replace(/["']/g, '');
+  return { path: files[family] || files.GameFont || 'fonts/gamefont.ttf', size: size };
 }
 
 var nativeCompatibilityHits = Object.create(null);

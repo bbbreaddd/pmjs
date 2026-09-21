@@ -26,7 +26,6 @@ Graphics.render = function(stage) {
   this._rendered = true;
   this.frameCount = (this.frameCount + 1) % 1024;
 };
-Graphics.isFontLoaded = function() { return true; };
 var originalIsOptionValid = Utils.isOptionValid;
 Utils.isOptionValid = function(name) {
   return (!globalThis.AudioContext && name === 'noaudio') ||
