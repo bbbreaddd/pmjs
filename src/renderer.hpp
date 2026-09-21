@@ -234,6 +234,7 @@ class Renderer {
   struct FilterContentBounds {
     bool bounded = false;
     std::array<int, 4> rect{};
+    std::vector<std::array<int, 4>> regions;
   };
 
   static int filterBoundsPadding(scene_packet::FilterKind kind,
@@ -241,6 +242,9 @@ class Renderer {
   void computeFilterContentBounds();
   bool filterBoundsRect(const RenderCommand* filterBegin,
                         std::array<int, 4>* rect) const;
+  bool filterBoundsRegions(
+      const RenderCommand* filterBegin,
+      std::vector<std::array<int, 4>>* regions) const;
   void destroyTileLayer(std::uint32_t handle);
   static PrimitiveSurfaceHandle makePrimitiveSurfaceHandle(
       std::size_t index, std::uint16_t generation);

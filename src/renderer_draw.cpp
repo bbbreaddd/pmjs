@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <unordered_set>
 
 namespace pmjs {
@@ -51,6 +52,7 @@ int Renderer::filterBoundsPadding(scene_packet::FilterKind kind,
 }
 
 void Renderer::computeFilterContentBounds() {
+  constexpr std::size_t maxRegions = 8;
   filterBounds_.clear();
   filterBounds_.resize(frame_.commands.size());
   struct Accumulator {
@@ -61,6 +63,7 @@ void Renderer::computeFilterContentBounds() {
     float minY = 0.0F;
     float maxX = 0.0F;
     float maxY = 0.0F;
+    std::vector<std::array<float, 4>> regions;
   };
   std::vector<Accumulator> stack;
   const auto unite = [](Accumulator& acc, float x0, float y0, float x1,
@@ -71,12 +74,75 @@ void Renderer::computeFilterContentBounds() {
       acc.maxX = x1;
       acc.maxY = y1;
       acc.hasContent = true;
-      return;
+    } else {
+      acc.minX = std::min(acc.minX, x0);
+      acc.minY = std::min(acc.minY, y0);
+      acc.maxX = std::max(acc.maxX, x1);
+      acc.maxY = std::max(acc.maxY, y1);
     }
-    acc.minX = std::min(acc.minX, x0);
-    acc.minY = std::min(acc.minY, y0);
-    acc.maxX = std::max(acc.maxX, x1);
-    acc.maxY = std::max(acc.maxY, y1);
+    if (x0 < x1 && y0 < y1) acc.regions.push_back({x0, y0, x1, y1});
+  };
+  const auto compactRegions = [](std::vector<std::array<float, 4>>& regions) {
+    const auto overlapsOrTouches = [](const auto& a, const auto& b) {
+      return a[0] <= b[2] && b[0] <= a[2] &&
+             a[1] <= b[3] && b[1] <= a[3];
+    };
+    const auto merge = [](const auto& a, const auto& b) {
+      return std::array<float, 4>{std::min(a[0], b[0]),
+                                  std::min(a[1], b[1]),
+                                  std::max(a[2], b[2]),
+                                  std::max(a[3], b[3])};
+    };
+    bool changed = true;
+    while (changed) {
+      changed = false;
+      for (std::size_t left = 0; left < regions.size() && !changed; ++left) {
+        for (std::size_t right = left + 1; right < regions.size(); ++right) {
+          if (!overlapsOrTouches(regions[left], regions[right])) continue;
+          regions[left] = merge(regions[left], regions[right]);
+          regions.erase(regions.begin() + static_cast<std::ptrdiff_t>(right));
+          changed = true;
+          break;
+        }
+      }
+    }
+    while (regions.size() > maxRegions) {
+      std::size_t bestLeft = 0;
+      std::size_t bestRight = 1;
+      float bestWaste = std::numeric_limits<float>::infinity();
+      for (std::size_t left = 0; left < regions.size(); ++left) {
+        for (std::size_t right = left + 1; right < regions.size(); ++right) {
+          const auto joined = merge(regions[left], regions[right]);
+          const auto area = [](const auto& rect) {
+            return (rect[2] - rect[0]) * (rect[3] - rect[1]);
+          };
+          const float waste = area(joined) - area(regions[left]) -
+                              area(regions[right]);
+          if (waste < bestWaste) {
+            bestWaste = waste;
+            bestLeft = left;
+            bestRight = right;
+          }
+        }
+      }
+      regions[bestLeft] = merge(regions[bestLeft], regions[bestRight]);
+      regions.erase(regions.begin() +
+                    static_cast<std::ptrdiff_t>(bestRight));
+      changed = true;
+      while (changed) {
+        changed = false;
+        for (std::size_t left = 0; left < regions.size() && !changed; ++left) {
+          for (std::size_t right = left + 1; right < regions.size(); ++right) {
+            if (!overlapsOrTouches(regions[left], regions[right])) continue;
+            regions[left] = merge(regions[left], regions[right]);
+            regions.erase(regions.begin() +
+                          static_cast<std::ptrdiff_t>(right));
+            changed = true;
+            break;
+          }
+        }
+      }
+    }
   };
   for (std::size_t index = 0; index < frame_.commands.size(); ++index) {
     const RenderCommand& command = frame_.commands[index];
@@ -133,6 +199,27 @@ void Renderer::computeFilterContentBounds() {
                     static_cast<int>(std::floor(loY)),
                     static_cast<int>(std::ceil(hiX)),
                     static_cast<int>(std::ceil(hiY))};
+        auto regions = level.regions;
+        compactRegions(regions);
+        for (const auto& region : regions) {
+          int left = static_cast<int>(std::floor(region[0]));
+          int top = static_cast<int>(std::floor(region[1]));
+          int right = static_cast<int>(std::ceil(region[2]));
+          int bottom = static_cast<int>(std::ceil(region[3]));
+          if (begun.clipped) {
+            left = std::max(left, begun.clip[0]);
+            top = std::max(top, begun.clip[1]);
+            right = std::min(right, begun.clip[2]);
+            bottom = std::min(bottom, begun.clip[3]);
+          }
+          left = std::clamp(left, 0, width_);
+          top = std::clamp(top, 0, height_);
+          right = std::clamp(right, 0, width_);
+          bottom = std::clamp(bottom, 0, height_);
+          if (left < right && top < bottom) {
+            out.regions.push_back({left, top, right, bottom});
+          }
+        }
       }
       if (!stack.empty()) {
         Accumulator& parent = stack.back();
@@ -188,6 +275,34 @@ void Renderer::computeFilterContentBounds() {
   for (const auto& level : stack) {
     filterBounds_[level.beginIndex].bounded = false;
   }
+}
+
+bool Renderer::filterBoundsRegions(
+    const RenderCommand* filterBegin,
+    std::vector<std::array<int, 4>>* regions) const {
+  if (regions == nullptr || filterBegin == nullptr ||
+      filterBegin->filterKind != scene_packet::FilterKind::colorMatrix ||
+      filterBoundsPadding(filterBegin->filterKind,
+                          filterBegin->filterParameters) != 0) {
+    return false;
+  }
+  std::array<int, 4> aabb{};
+  if (!filterBoundsRect(filterBegin, &aabb)) return false;
+  const std::size_t index = static_cast<std::size_t>(
+      filterBegin - frame_.commands.data());
+  if (index >= filterBounds_.size() ||
+      filterBounds_[index].regions.size() < 2) return false;
+  std::uint64_t regionArea = 0;
+  for (const auto& region : filterBounds_[index].regions) {
+    regionArea += static_cast<std::uint64_t>(region[2] - region[0]) *
+                  static_cast<std::uint64_t>(region[3] - region[1]);
+  }
+  const std::uint64_t aabbArea =
+      static_cast<std::uint64_t>(std::max(0, aabb[2] - aabb[0])) *
+      static_cast<std::uint64_t>(std::max(0, aabb[3] - aabb[1]));
+  if (aabbArea == 0 || regionArea * 4 >= aabbArea * 3) return false;
+  *regions = filterBounds_[index].regions;
+  return true;
 }
 
 bool Renderer::filterBoundsRect(const RenderCommand* filterBegin,
@@ -453,6 +568,8 @@ void Renderer::renderScene() {
   std::array<bool, scene_packet::maxFilterDepth> savedScissor{};
   std::array<std::array<int, 4>, scene_packet::maxFilterDepth> savedClip{};
   std::array<int, 4> activeClip{};
+  std::array<std::vector<std::array<int, 4>>, scene_packet::maxFilterDepth>
+      filterRegions{};
   applyBlendMode(activeBlend);
   for (const auto& operation : operations) {
     if (operation.action == RenderCommand::Action::filterBegin) {
@@ -462,6 +579,9 @@ void Renderer::renderScene() {
       }
       std::array<int, 4> boundedRect{};
       const bool bounded = filterBoundsRect(operation.command, &boundedRect);
+      filterRegions[filterDepth].clear();
+      const bool multiRegion = filterBoundsRegions(
+          operation.command, &filterRegions[filterDepth]);
       if (bounded) {
         savedScissor[filterDepth] = true;
         savedClip[filterDepth] = boundedRect;
@@ -476,7 +596,7 @@ void Renderer::renderScene() {
       }
       glBindFramebuffer(GL_FRAMEBUFFER, groupFramebuffers_[filterDepth]);
       glViewport(0, 0, width_, height_);
-      if (bounded) {
+      if (bounded && !multiRegion) {
         glEnable(GL_SCISSOR_TEST);
         glScissor(boundedRect[0], height_ - boundedRect[3],
                   std::max(0, boundedRect[2] - boundedRect[0]),
@@ -485,8 +605,20 @@ void Renderer::renderScene() {
         activeClip = boundedRect;
       }
       glClearColor(0, 0, 0, 0);
-      glClear(GL_COLOR_BUFFER_BIT);
-      ++stats_.filterTargetClears;
+      if (multiRegion) {
+        glEnable(GL_SCISSOR_TEST);
+        for (const auto& region : filterRegions[filterDepth]) {
+          glScissor(region[0], height_ - region[3],
+                    region[2] - region[0], region[3] - region[1]);
+          glClear(GL_COLOR_BUFFER_BIT);
+          ++stats_.filterTargetClears;
+        }
+        glDisable(GL_SCISSOR_TEST);
+        scissorActive = false;
+      } else {
+        glClear(GL_COLOR_BUFFER_BIT);
+        ++stats_.filterTargetClears;
+      }
       activeBlend = BlendMode::normal;
       applyBlendMode(activeBlend);
       ++filterDepth;
@@ -817,17 +949,37 @@ void Renderer::renderScene() {
         glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA,
                             GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
       }
-      scissorActive = savedScissor[filterDepth];
-      activeClip = savedClip[filterDepth];
-      if (scissorActive) {
+      if (!filterRegions[filterDepth].empty()) {
         glEnable(GL_SCISSOR_TEST);
-        glScissor(activeClip[0], height_ - activeClip[3],
-                  std::max(0, activeClip[2] - activeClip[0]),
-                  std::max(0, activeClip[3] - activeClip[1]));
+        for (const auto& region : filterRegions[filterDepth]) {
+          glScissor(region[0], height_ - region[3],
+                    region[2] - region[0], region[3] - region[1]);
+          glDrawArrays(GL_TRIANGLES, operation.first, operation.count);
+          ++stats_.drawCalls;
+          ++stats_.filterDrawCalls;
+        }
+        scissorActive = savedScissor[filterDepth];
+        activeClip = savedClip[filterDepth];
+        if (scissorActive) {
+          glScissor(activeClip[0], height_ - activeClip[3],
+                    std::max(0, activeClip[2] - activeClip[0]),
+                    std::max(0, activeClip[3] - activeClip[1]));
+        } else {
+          glDisable(GL_SCISSOR_TEST);
+        }
+      } else {
+        scissorActive = savedScissor[filterDepth];
+        activeClip = savedClip[filterDepth];
+        if (scissorActive) {
+          glEnable(GL_SCISSOR_TEST);
+          glScissor(activeClip[0], height_ - activeClip[3],
+                    std::max(0, activeClip[2] - activeClip[0]),
+                    std::max(0, activeClip[3] - activeClip[1]));
+        }
+        glDrawArrays(GL_TRIANGLES, operation.first, operation.count);
+        ++stats_.drawCalls;
+        ++stats_.filterDrawCalls;
       }
-      glDrawArrays(GL_TRIANGLES, operation.first, operation.count);
-      ++stats_.drawCalls;
-      ++stats_.filterDrawCalls;
       if (pictureBlend) glEnable(GL_BLEND);
       glUniform1i(displacementEnabledUniform_, 0);
       glUniform1i(noiseGlitchEnabledUniform_, 0);
@@ -889,7 +1041,8 @@ void Renderer::renderScene() {
       } else {
         std::swap(groupFramebuffers_[filterDepth - 1], filterFramebuffer_);
         std::swap(groupTextures_[filterDepth - 1], filterTexture_);
-        glBindFramebuffer(GL_FRAMEBUFFER, groupFramebuffers_[filterDepth - 1]);
+        glBindFramebuffer(GL_FRAMEBUFFER,
+                          groupFramebuffers_[filterDepth - 1]);
       }
       glEnable(GL_BLEND);
       applyBlendMode(activeBlend);

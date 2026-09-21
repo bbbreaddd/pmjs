@@ -98,6 +98,16 @@ function buildCases(stride, handle) {
       sprite(stride, handle, 5, 5, 0x00ff00),
       filterEnd(stride),
     ],
+    'sparse preserving color matrix': [
+      screenFill(stride, BG),
+      filterBegin(stride, 25, 0, HALVE),
+      sprite(stride, handle, 1, 1),
+      sprite(stride, handle, 13, 1),
+      sprite(stride, handle, 1, 13),
+      sprite(stride, handle, 13, 13),
+      filterEnd(stride),
+      sprite(stride, handle, 8, 8, 0x00ff00),
+    ],
     'adjustment filter': [
       screenFill(stride, BG),
       filterBegin(stride, 8, 0, DIM_ADJUST),

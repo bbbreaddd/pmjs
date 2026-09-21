@@ -154,6 +154,19 @@ runCase('overlapping sprites', {
   clears: 1,
 });
 
+runCase('sparse preserving color matrix', {
+  pixels: [
+    { x: 1, y: 1, rgba: cases.HALVED_FIXTURE },
+    { x: 14, y: 1, rgba: cases.HALVED_FIXTURE },
+    { x: 1, y: 14, rgba: cases.HALVED_FIXTURE },
+    { x: 14, y: 14, rgba: cases.HALVED_FIXTURE },
+    { x: 8, y: 8, rgba: [0, 51, 0, 255] },
+  ],
+  boundedDelta: boundedBuild ? 1 : 0,
+  applications: { 25: 1 },
+  clears: boundedBuild ? 4 : 1,
+});
+
 runCase('adjustment filter', {
   pixels: [
     { x: 10, y: 10, rgba: cases.HALVED_FIXTURE },
@@ -239,6 +252,7 @@ runCase('clipped unboundable nested inside bounded', {
 });
 
 compareFullFrame('preserving color matrix');
+compareFullFrame('sparse preserving color matrix');
 compareFullFrame('unboundable nested inside bounded');
 compareFullFrame('clipped unboundable nested inside bounded');
 
