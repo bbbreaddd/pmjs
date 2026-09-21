@@ -332,7 +332,7 @@ struct VideoDecoderSession::Impl {
     return true;
   }
 
-  std::optional<VideoFrame> next(std::string* error) {
+  std::optional<double> decodeNext(std::string* error) {
     while (true) {
       int result = avcodec_receive_frame(codec.get(), decoded.get());
       if (result >= 0) {
@@ -340,28 +340,8 @@ struct VideoDecoderSession::Impl {
         const double timestamp = best == AV_NOPTS_VALUE ? 0.0
           : best * av_q2d(stream->time_base);
         lastTimestamp = timestamp;
-        const auto extent = checkedImageExtent(decoded->width, decoded->height, 8192, 128 * 1024 * 1024);
-        if (!extent) {
-          fail(error, "invalid video frame dimensions");
-          return std::nullopt;
-        }
-        const int width = extent->width, height = extent->height;
-        if (!scaler || scalerWidth != width || scalerHeight != height ||
-            scalerFormat != decoded->format) {
-          scaler.reset(sws_getContext(width, height,
-            static_cast<AVPixelFormat>(decoded->format), width, height,
-            AV_PIX_FMT_RGBA, SWS_BILINEAR, nullptr, nullptr, nullptr));
-          scalerWidth = width; scalerHeight = height; scalerFormat = decoded->format;
-        }
-        if (!scaler) { fail(error, "cannot initialize video conversion"); return std::nullopt; }
-        VideoFrame output{width, height, timestamp, {}};
-        output.rgba.resize(static_cast<std::size_t>(width) * height * 4U);
-        std::uint8_t* planes[] = {output.rgba.data(), nullptr, nullptr, nullptr};
-        int strides[] = {width * 4, 0, 0, 0};
-        sws_scale(scaler.get(), decoded->data, decoded->linesize, 0, height,
-                  planes, strides);
-        av_frame_unref(decoded.get());
-        return output;
+        ++stats.decodedFrames;
+        return timestamp;
       }
       if (result != AVERROR(EAGAIN) && result != AVERROR_EOF) {
         fail(error, "video decode failed: " + ffError(result)); return std::nullopt;
@@ -386,18 +366,53 @@ struct VideoDecoderSession::Impl {
     }
   }
 
+  std::optional<VideoFrame> convertCurrent(double timestamp,
+                                            std::string* error) {
+    const auto extent = checkedImageExtent(decoded->width, decoded->height,
+                                            8192, 128 * 1024 * 1024);
+    if (!extent) {
+      av_frame_unref(decoded.get());
+      fail(error, "invalid video frame dimensions");
+      return std::nullopt;
+    }
+    const int width = extent->width, height = extent->height;
+    if (!scaler || scalerWidth != width || scalerHeight != height ||
+        scalerFormat != decoded->format) {
+      scaler.reset(sws_getContext(width, height,
+        static_cast<AVPixelFormat>(decoded->format), width, height,
+        AV_PIX_FMT_RGBA, SWS_BILINEAR, nullptr, nullptr, nullptr));
+      scalerWidth = width; scalerHeight = height; scalerFormat = decoded->format;
+    }
+    if (!scaler) {
+      av_frame_unref(decoded.get());
+      fail(error, "cannot initialize video conversion");
+      return std::nullopt;
+    }
+    VideoFrame output{width, height, timestamp, {}};
+    output.rgba.resize(static_cast<std::size_t>(width) * height * 4U);
+    std::uint8_t* planes[] = {output.rgba.data(), nullptr, nullptr, nullptr};
+    int strides[] = {width * 4, 0, 0, 0};
+    sws_scale(scaler.get(), decoded->data, decoded->linesize, 0, height,
+              planes, strides);
+    av_frame_unref(decoded.get());
+    ++stats.convertedFrames;
+    return output;
+  }
+
   Format format{nullptr}; Codec codec{nullptr}; Packet packet{nullptr};
   Frame decoded{nullptr}; Sws scaler{nullptr, sws_freeContext};
   AVStream* stream = nullptr; int streamIndex = -1;
   int scalerWidth = 0, scalerHeight = 0, scalerFormat = -1;
   double lastTimestamp = -1.0; bool sentEof = false;
   MediaInfo info;
+  VideoDecodeStats stats;
 };
 
 VideoDecoderSession::VideoDecoderSession(const std::filesystem::path& path)
     : impl_(std::make_unique<Impl>(path)) {}
 VideoDecoderSession::~VideoDecoderSession() = default;
 const MediaInfo& VideoDecoderSession::info() const { return impl_->info; }
+VideoDecodeStats VideoDecoderSession::stats() const { return impl_->stats; }
 
 std::optional<VideoFrame> VideoDecoderSession::frame(double timestamp,
                                                      std::string* error) {
@@ -407,8 +422,11 @@ std::optional<VideoFrame> VideoDecoderSession::frame(double timestamp,
   if (impl_->lastTimestamp > timestamp ||
       (impl_->lastTimestamp >= 0.0 && timestamp > impl_->lastTimestamp + 2.0))
     if (!impl_->seek(timestamp, error)) return std::nullopt;
-  while (auto result = impl_->next(error)) {
-    if (result->timestamp + 0.000001 >= timestamp) return result;
+  while (auto decodedTimestamp = impl_->decodeNext(error)) {
+    if (*decodedTimestamp + 0.000001 >= timestamp)
+      return impl_->convertCurrent(*decodedTimestamp, error);
+    av_frame_unref(impl_->decoded.get());
+    ++impl_->stats.skippedFrames;
   }
   fail(error, "video contains no frame at requested timestamp");
   return std::nullopt;

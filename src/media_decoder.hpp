@@ -36,6 +36,12 @@ struct VideoFrame {
   std::vector<std::uint8_t> rgba;
 };
 
+struct VideoDecodeStats {
+  std::uint64_t decodedFrames = 0;
+  std::uint64_t skippedFrames = 0;
+  std::uint64_t convertedFrames = 0;
+};
+
 class AudioDecoderSession {
  public:
   explicit AudioDecoderSession(const std::filesystem::path& path);
@@ -62,6 +68,7 @@ class VideoDecoderSession {
   VideoDecoderSession(const VideoDecoderSession&) = delete;
   VideoDecoderSession& operator=(const VideoDecoderSession&) = delete;
   const MediaInfo& info() const;
+  VideoDecodeStats stats() const;
   std::optional<VideoFrame> frame(double timestamp,
                                   std::string* error = nullptr);
 
