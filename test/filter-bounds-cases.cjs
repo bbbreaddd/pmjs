@@ -64,6 +64,13 @@ function filterEnd(stride) {
     values: baseValues(stride) };
 }
 
+function toneAdjust(stride, params) {
+  const values = baseValues(stride);
+  values.set(params.slice(0, 20), 7);
+  return { metadata: new Uint32Array(beginRecord(5, NO_PARENT, 0, 0xffffff,
+    0, 0, 0)), values };
+}
+
 function sprite(stride, handle, x, y, tint) {
   return { metadata: new Uint32Array(beginRecord(1, NO_PARENT, handle,
     tint === undefined ? 0xffffff : tint, 0, 0)),
@@ -144,6 +151,16 @@ function buildCases(stride, handle) {
       screenFill(stride, BG),
       filterBeginClipped(stride, 25, 0, HALVE, [0, 0, 2, 2]),
       sprite(stride, handle, 10, 10),
+      filterEnd(stride),
+    ],
+    'clipped color matrix with unboundable content': [
+      screenFill(stride, BG),
+      filterBeginClipped(stride, 25, 0, HALVE, [0, 0, 16, 16]),
+      sprite(stride, handle, 1, 1),
+      sprite(stride, handle, 13, 1),
+      toneAdjust(stride, HALVE),
+      sprite(stride, handle, 1, 13),
+      sprite(stride, handle, 13, 13),
       filterEnd(stride),
     ],
     'unboundable nested inside bounded': [

@@ -164,6 +164,8 @@ void Renderer::computeFilterContentBounds() {
       float ex1 = 0.0F;
       float ey1 = 0.0F;
       bool effective = false;
+      const bool regionsValid = !level.unbounded &&
+          filterBoundsPadding(begun.filterKind, begun.filterParameters) == 0;
       if (!level.hasContent && !level.unbounded) {
         effective = true;
       } else if (!level.unbounded &&
@@ -191,6 +193,7 @@ void Renderer::computeFilterContentBounds() {
         out.bounded = false;
       } else {
         out.bounded = true;
+        out.regionsValid = regionsValid;
         const float loX = std::clamp(ex0, -1000000.0F, 1000000.0F);
         const float loY = std::clamp(ey0, -1000000.0F, 1000000.0F);
         const float hiX = std::clamp(ex1, -1000000.0F, 1000000.0F);
@@ -199,7 +202,8 @@ void Renderer::computeFilterContentBounds() {
                     static_cast<int>(std::floor(loY)),
                     static_cast<int>(std::ceil(hiX)),
                     static_cast<int>(std::ceil(hiY))};
-        auto regions = level.regions;
+        auto regions = regionsValid ? level.regions :
+                                      std::vector<std::array<float, 4>>{};
         compactRegions(regions);
         for (const auto& region : regions) {
           int left = static_cast<int>(std::floor(region[0]));
@@ -291,6 +295,7 @@ bool Renderer::filterBoundsRegions(
   const std::size_t index = static_cast<std::size_t>(
       filterBegin - frame_.commands.data());
   if (index >= filterBounds_.size() ||
+      !filterBounds_[index].regionsValid ||
       filterBounds_[index].regions.size() < 2) return false;
   std::uint64_t regionArea = 0;
   for (const auto& region : filterBounds_[index].regions) {
@@ -606,19 +611,11 @@ void Renderer::renderScene() {
       }
       glClearColor(0, 0, 0, 0);
       if (multiRegion) {
-        glEnable(GL_SCISSOR_TEST);
-        for (const auto& region : filterRegions[filterDepth]) {
-          glScissor(region[0], height_ - region[3],
-                    region[2] - region[0], region[3] - region[1]);
-          glClear(GL_COLOR_BUFFER_BIT);
-          ++stats_.filterTargetClears;
-        }
         glDisable(GL_SCISSOR_TEST);
         scissorActive = false;
-      } else {
-        glClear(GL_COLOR_BUFFER_BIT);
-        ++stats_.filterTargetClears;
       }
+      glClear(GL_COLOR_BUFFER_BIT);
+      ++stats_.filterTargetClears;
       activeBlend = BlendMode::normal;
       applyBlendMode(activeBlend);
       ++filterDepth;

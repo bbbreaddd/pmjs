@@ -164,7 +164,7 @@ runCase('sparse preserving color matrix', {
   ],
   boundedDelta: boundedBuild ? 1 : 0,
   applications: { 25: 1 },
-  clears: boundedBuild ? 4 : 1,
+  clears: 1,
 });
 
 runCase('adjustment filter', {
@@ -231,6 +231,18 @@ runCase('disjoint clip', {
   clears: 1,
 });
 
+runCase('clipped color matrix with unboundable content', {
+  pixels: [
+    { x: 1, y: 1, rgba: [64, 13, 26, 255] },
+    { x: 14, y: 1, rgba: [64, 13, 26, 255] },
+    { x: 1, y: 14, rgba: cases.HALVED_FIXTURE },
+    { x: 14, y: 14, rgba: cases.HALVED_FIXTURE },
+  ],
+  boundedDelta: boundedBuild ? 1 : 0,
+  applications: { 25: 1 },
+  clears: 1,
+});
+
 runCase('unboundable nested inside bounded', {
   pixels: [
     { x: 15, y: 15, rgba: cases.BG_RGBA },
@@ -253,6 +265,7 @@ runCase('clipped unboundable nested inside bounded', {
 
 compareFullFrame('preserving color matrix');
 compareFullFrame('sparse preserving color matrix');
+compareFullFrame('clipped color matrix with unboundable content');
 compareFullFrame('unboundable nested inside bounded');
 compareFullFrame('clipped unboundable nested inside bounded');
 

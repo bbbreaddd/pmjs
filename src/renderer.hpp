@@ -233,6 +233,7 @@ class Renderer {
 
   struct FilterContentBounds {
     bool bounded = false;
+    bool regionsValid = false;
     std::array<int, 4> rect{};
     std::vector<std::array<int, 4>> regions;
   };
