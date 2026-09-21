@@ -43,6 +43,7 @@ async function main() {
   if (imagesReleased.liveCount !== imagesBefore.liveCount) {
     throw new Error('video texture was not released');
   }
+
   console.log('[pmjs-node-video-texture] ready');
 }
 

@@ -2,6 +2,64 @@
 
 namespace pmjs::addon {
 namespace {
+using Clock = std::chrono::steady_clock;
+
+void reportVideo(State::Video& video, double requestedPts) {
+  if (!video.telemetryEnabled) return;
+  const auto now = Clock::now();
+  const double interval = std::chrono::duration<double>(now - video.reportStarted).count();
+  if (interval < 1.0) return;
+  const auto decode = video.workerStats();
+  const auto requests = video.requests - video.reportedRequests;
+  const auto uploaded = video.uploadedFrames - video.reportedUploadedFrames;
+  const auto repeated = video.repeatedFrames - video.reportedRepeatedFrames;
+  const auto late = video.lateFrames - video.reportedLateFrames;
+  const auto staleReadyDrops = video.staleReadyDrops - video.reportedStaleReadyDrops;
+  const auto bytes = video.uploadBytes - video.reportedUploadBytes;
+  const auto workerJobsTotal = video.jobsStarted();
+  const auto coalescedTotal = video.coalescedRequests();
+  const double uploadMs = video.textureUploadMs - video.reportedUploadMs;
+  const double workerWaitTotal = video.workerQueueMs();
+  const double workerWaitMs = workerWaitTotal - video.reportedWorkerWaitMs;
+  const double readyWaitMs = video.readyWaitMs - video.reportedReadyWaitMs;
+  std::cerr << "[pmjs-video] {\"path\":\"image\",\"sourceFps\":" << video.sourceFps
+    << ",\"requested\":" << requests
+    << ",\"decoded\":" << (decode.decodedFrames - video.reportedDecodeStats.decodedFrames)
+    << ",\"skipped\":" << (decode.skippedFrames - video.reportedDecodeStats.skippedFrames)
+    << ",\"converted\":" << (decode.convertedFrames - video.reportedDecodeStats.convertedFrames)
+    << ",\"seeks\":" << (decode.seeks - video.reportedDecodeStats.seeks)
+    << ",\"backwardSeeks\":" << (decode.backwardSeeks - video.reportedDecodeStats.backwardSeeks)
+    << ",\"decodedAfterSeek\":" << (decode.decodedAfterSeek - video.reportedDecodeStats.decodedAfterSeek)
+    << ",\"noNewFrameDue\":" << (decode.noNewFrameDue - video.reportedDecodeStats.noNewFrameDue)
+    << ",\"workerJobs\":" << (workerJobsTotal - video.reportedWorkerJobs)
+    << ",\"requestsCoalesced\":" << (coalescedTotal - video.reportedCoalescedRequests)
+    << ",\"uploaded\":" << uploaded << ",\"repeated\":" << repeated
+    << ",\"lateUploaded\":" << late
+    << ",\"staleReadyDrops\":" << staleReadyDrops
+    << ",\"requestedPts\":" << requestedPts
+    << ",\"readyPts\":" << video.timestamp
+    << ",\"lagMs\":" << std::max(0.0, (requestedPts - video.timestamp) * 1000.0)
+    << ",\"decodeMs\":" << (decode.decodeMs - video.reportedDecodeStats.decodeMs)
+    << ",\"convertMs\":" << (decode.convertMs - video.reportedDecodeStats.convertMs)
+    << ",\"workerWaitMs\":" << workerWaitMs
+    << ",\"readyWaitMs\":" << readyWaitMs
+    << ",\"uploadMs\":" << uploadMs
+    << ",\"uploadMiB\":" << (static_cast<double>(bytes) / (1024.0 * 1024.0))
+    << "}\n";
+  video.reportStarted = now; video.reportedDecodeStats = decode;
+  video.reportedRequests = video.requests;
+  video.reportedUploadedFrames = video.uploadedFrames;
+  video.reportedRepeatedFrames = video.repeatedFrames;
+  video.reportedLateFrames = video.lateFrames;
+  video.reportedStaleReadyDrops = video.staleReadyDrops;
+  video.reportedUploadBytes = video.uploadBytes;
+  video.reportedWorkerJobs = workerJobsTotal;
+  video.reportedCoalescedRequests = coalescedTotal;
+  video.reportedUploadMs = video.textureUploadMs;
+  video.reportedWorkerWaitMs = workerWaitTotal;
+  video.reportedReadyWaitMs = video.readyWaitMs;
+}
+
 std::vector<std::uint8_t> audioBytes(napi_env env, napi_value value) {
   bool isArrayBuffer = false;
   check(env, napi_is_arraybuffer(env, value, &isArrayBuffer),
@@ -142,13 +200,17 @@ napi_value loadVideo(napi_env env, napi_callback_info info) try {
   auto frame = decoder->frame(0.0, &error);
   if (!frame) throw std::runtime_error(error.empty() ? "video decode failed" : error);
   const auto image = value.images.createRgba(frame->width, frame->height,
-                                             frame->rgba.data());
+                                              frame->rgba.data());
   if (!image) throw std::runtime_error("cannot allocate video texture");
   std::uint32_t handle = value.nextVideo++;
   if (!handle) handle = value.nextVideo++;
   const double duration = decoder->info().duration;
+  const double sourceFps = decoder->info().videoFrameRate;
   auto video = std::make_unique<State::Video>(std::move(decoder));
-  video->image = image->handle; video->duration = duration;
+  video->image = image->handle;
+  video->telemetryEnabled = std::getenv("PMJS_VIDEO_TELEMETRY") &&
+    std::string(std::getenv("PMJS_VIDEO_TELEMETRY")) == "1";
+  video->duration = duration; video->sourceFps = sourceFps;
   video->timestamp = frame->timestamp;
   video->recycle(std::move(frame->rgba));
   value.videos.emplace(handle, std::move(video));
@@ -169,15 +231,30 @@ napi_value updateVideo(napi_env env, napi_callback_info info) try {
   if (found == value.videos.end()) throw std::runtime_error("invalid video handle");
   const double timestamp = asNumber(env, a.at(1));
   auto& video = *found->second;
+  if (video.lastRequestedTimestamp >= 0.0 &&
+      (timestamp + 0.000001 < video.lastRequestedTimestamp ||
+       timestamp > video.lastRequestedTimestamp + 2.0)) {
+    video.resetForSeek();
+    video.timestamp = -1.0;
+  }
+  video.lastRequestedTimestamp = timestamp;
+  ++video.requests;
   if (auto frame = video.take()) {
-    if (frame->timestamp + 0.1 >= timestamp) {
+    if (frame->timestamp > video.timestamp + 0.000001) {
+      if (frame->timestamp + 0.1 < timestamp) ++video.lateFrames;
+      const auto started = Clock::now();
       if (!value.images.updateRgba(video.image, frame->rgba.data()))
         throw std::runtime_error("video texture update failed");
+      video.textureUploadMs += std::chrono::duration<double, std::milli>(
+        Clock::now() - started).count();
+      ++video.uploadedFrames;
+      video.uploadBytes += static_cast<std::uint64_t>(frame->width) * frame->height * 4U;
       video.timestamp = frame->timestamp;
-    }
+    } else ++video.staleReadyDrops;
     video.recycle(std::move(frame->rgba));
-  }
+  } else ++video.repeatedFrames;
   video.request(timestamp);
+  reportVideo(video, timestamp);
   return number(env, video.timestamp);
 } catch (const std::exception& error) {
   napi_throw_error(env, nullptr, error.what()); return nullptr;

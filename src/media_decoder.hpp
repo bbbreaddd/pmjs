@@ -18,6 +18,7 @@ struct MediaInfo {
   int audioChannels = 0;
   int videoWidth = 0;
   int videoHeight = 0;
+  double videoFrameRate = 0.0;
 };
 
 struct DecodedAudio {
@@ -41,6 +42,12 @@ struct VideoDecodeStats {
   std::uint64_t skippedFrames = 0;
   std::uint64_t convertedFrames = 0;
   std::uint64_t rgbaAllocations = 0;
+  std::uint64_t seeks = 0;
+  std::uint64_t backwardSeeks = 0;
+  std::uint64_t decodedAfterSeek = 0;
+  std::uint64_t noNewFrameDue = 0;
+  double decodeMs = 0.0;
+  double convertMs = 0.0;
 };
 
 class AudioDecoderSession {
@@ -73,7 +80,7 @@ class VideoDecoderSession {
   std::optional<VideoFrame> frame(double timestamp,
                                   std::string* error = nullptr);
   std::optional<VideoFrame> frame(double timestamp,
-                                  std::vector<std::uint8_t> reusableRgba,
+                                  std::vector<std::uint8_t>& reusableRgba,
                                   std::string* error = nullptr);
 
  private:
