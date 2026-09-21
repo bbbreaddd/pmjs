@@ -124,6 +124,14 @@ function resolveSwapDefault(env, timing) {
   return null;
 }
 
+function advanceDeadline(deadline, now, period) {
+  let next = deadline + period;
+  if (next < now - period) {
+    next += Math.floor((now - next) / period) * period;
+  }
+  return next;
+}
+
 function validate(input) {
   const options = resolveDefaults(input);
   const requiredPaths = ['addon', 'gameRoot', 'bootstrap', 'saveRoot'];
@@ -239,9 +247,8 @@ async function run(input, hooks = {}) {
         }
         native.swapFrame();
         if (!timing.uncapped) {
-          deadline += period;
           const monotonicNow = native.runtime.monotonicNow();
-          if (deadline < monotonicNow - period) deadline = monotonicNow + period;
+          deadline = advanceDeadline(deadline, monotonicNow, period);
         }
         schedule();
       } catch (error) {
@@ -253,6 +260,5 @@ async function run(input, hooks = {}) {
   });
 }
 
-module.exports = { run, validate, parseTimingConfig, resolveSwapDefault,
+module.exports = { run, validate, parseTimingConfig, resolveSwapDefault, advanceDeadline,
   PMJS_MV_LOGIC_HZ, PMJS_SUPPORTED_RENDER_HZ };
-

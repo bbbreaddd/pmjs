@@ -234,7 +234,7 @@ test('contract: install is a no-op without SceneManager', () => {
   assert.equal(ctx.pmjsMvEnsureTimingContract(), false);
 });
 
-test('phase-locked gate: 60 Hz with +/- 1.0 ms jitter never yields 0 or 2 steps', () => {
+test('wall-clock gate: 60 Hz jitter preserves elapsed simulation time', () => {
   const ctx = loadTiming();
   const state = ctx.pmjsMvCreateStepGate({ renderHz: 60, catchupMode: 'smooth' });
   ctx.pmjsMvGateSteps(state, 0); // initial sync
@@ -245,15 +245,18 @@ test('phase-locked gate: 60 Hz with +/- 1.0 ms jitter never yields 0 or 2 steps'
                    -0.5, 0.6, -0.7, 0.4, -0.3, 0.8, -0.6, 0.3, -0.5, 0.7,
                    -0.8, 0.5, -0.4, 0.6, -0.7, 0.3, -0.5, 0.6, -0.4, 0.5];
   let time = 0;
+  let steps = 0;
   for (let i = 0; i < jitters.length; i++) {
     time = (i + 1) * stepMs + jitters[i];
     const gated = ctx.pmjsMvGateSteps(state, time);
-    assert.equal(gated.steps, 1, `frame ${i} at ${time.toFixed(2)}ms expected 1 step, got ${gated.steps}`);
+    steps += gated.steps;
     assert.equal(gated.overload, false);
+    assert.equal(gated.droppedMs, 0);
   }
+  assert.ok(steps >= 29 && steps <= 30, `expected elapsed-time step count, got ${steps}`);
 });
 
-test('phase-locked gate: smooth catchup rebases and avoids 2-step burst on 45 ms hitch', () => {
+test('wall-clock gate: smooth catchup advances ordinary 45 ms elapsed time', () => {
   const ctx = loadTiming();
   const state = ctx.pmjsMvCreateStepGate({ renderHz: 60, catchupMode: 'smooth' });
   ctx.pmjsMvGateSteps(state, 0);
@@ -264,17 +267,47 @@ test('phase-locked gate: smooth catchup rebases and avoids 2-step burst on 45 ms
 
   // 45 ms hitch: time jumps from 16.67 to 61.67
   const f2 = ctx.pmjsMvGateSteps(state, 61.67);
-  assert.equal(f2.steps, 1, 'smooth catchup must execute exactly 1 step on slow frame');
+  assert.equal(f2.steps, 2, 'ordinary elapsed time must advance two authored steps');
   assert.equal(f2.overload, false);
-  assert.ok(f2.droppedMs > 0, `expected droppedMs > 0, got ${f2.droppedMs}`);
+  assert.equal(f2.droppedMs, 0);
 
-  // Frame 3 returns to normal 16.67 ms cadence: should execute exactly 1 step (NO catchup burst)
+  // The fractional 11.67 ms remainder is retained across the next frame.
   const f3 = ctx.pmjsMvGateSteps(state, 61.67 + 16.67);
   assert.equal(f3.steps, 1, 'subsequent frame must execute exactly 1 step without catchup burst');
   assert.equal(f3.overload, false);
 });
 
-test('phase-locked gate: burst catchup mode permits up to 2 steps after hitch', () => {
+test('wall-clock gate: smooth catchup drops only debt beyond its step bound', () => {
+  const ctx = loadTiming();
+  const state = ctx.pmjsMvCreateStepGate({ renderHz: 60, catchupMode: 'smooth' });
+  ctx.pmjsMvGateSteps(state, 0);
+
+  const gated = ctx.pmjsMvGateSteps(state, 100);
+  assert.equal(gated.steps, 2);
+  assert.equal(gated.overload, false);
+  assert.ok(Math.abs(gated.droppedMs - 4 * 1000 / 60) < 0.01,
+    `expected four excess steps to be dropped, got ${gated.droppedMs} ms`);
+  assert.ok(state.accMs < 0.01, `expected only fractional debt, got ${state.accMs} ms`);
+});
+
+test('wall-clock gate: sustained 30 Hz arrivals preserve fixed-60 simulation', () => {
+  const ctx = loadTiming();
+  const state = ctx.pmjsMvCreateStepGate({ renderHz: 60, catchupMode: 'smooth' });
+  ctx.pmjsMvGateSteps(state, 0);
+
+  const interval = 1000 / 30;
+  let steps = 0;
+  let droppedMs = 0;
+  for (let frame = 1; frame <= 300; frame++) {
+    const gated = ctx.pmjsMvGateSteps(state, frame * interval);
+    steps += gated.steps;
+    droppedMs += gated.droppedMs;
+  }
+  assert.ok(steps >= 599 && steps <= 600, `expected about 600 steps, got ${steps}`);
+  assert.ok(droppedMs < 0.01, `ordinary elapsed time was discarded: ${droppedMs} ms`);
+});
+
+test('wall-clock gate: burst catchup mode permits up to 2 steps after hitch', () => {
   const ctx = loadTiming();
   const state = ctx.pmjsMvCreateStepGate({ renderHz: 60, catchupMode: 'burst' });
   ctx.pmjsMvGateSteps(state, 0);
@@ -284,7 +317,7 @@ test('phase-locked gate: burst catchup mode permits up to 2 steps after hitch', 
   assert.equal(gated.steps, 2, 'burst mode should catch up up to BASE_MAX_STEPS_PER_FRAME');
 });
 
-test('phase-locked gate: PLL tracking keeps phase aligned under 59.94 Hz drift', () => {
+test('wall-clock gate: 59.94 Hz arrivals preserve the authored step rate', () => {
   const ctx = loadTiming();
   const state = ctx.pmjsMvCreateStepGate({ renderHz: 60, catchupMode: 'smooth' });
   ctx.pmjsMvGateSteps(state, 0);
@@ -299,7 +332,7 @@ test('phase-locked gate: PLL tracking keeps phase aligned under 59.94 Hz drift',
   }
 });
 
-test('phase-locked gate: 30 Hz render yields two 60 Hz logic steps per presentation slot', () => {
+test('wall-clock gate: 30 Hz render yields two 60 Hz logic steps per arrival', () => {
   const ctx = loadTiming();
   const state = ctx.pmjsMvCreateStepGate({ renderHz: 30 });
   ctx.pmjsMvGateSteps(state, 0);
@@ -314,7 +347,7 @@ test('phase-locked gate: 30 Hz render yields two 60 Hz logic steps per presentat
   assert.equal(f2.steps, 2, 'subsequent 30 Hz presentation must yield 2 logic steps');
 });
 
-test('phase-locked gate: 120 Hz render alternates 0 and 1 logic steps to maintain 60 Hz simulation', () => {
+test('wall-clock gate: 120 Hz render alternates 0 and 1 logic steps to maintain 60 Hz simulation', () => {
   const ctx = loadTiming();
   const state = ctx.pmjsMvCreateStepGate({ renderHz: 120 });
   ctx.pmjsMvGateSteps(state, 0);
@@ -333,7 +366,7 @@ test('phase-locked gate: 120 Hz render alternates 0 and 1 logic steps to maintai
   assert.equal(f4.steps, 1);
 });
 
-test('phase-locked gate: reads globalThis.__pmjsTimingConfig when options omitted', () => {
+test('wall-clock gate: reads globalThis.__pmjsTimingConfig when options omitted', () => {
   const ctx = loadTiming((context) => {
     context.globalThis.__pmjsTimingConfig = { renderHz: 30, catchupMode: 'burst' };
   });
@@ -345,7 +378,7 @@ test('phase-locked gate: reads globalThis.__pmjsTimingConfig when options omitte
   assert.equal(f1.steps, 2);
 });
 
-test('phase-locked gate: 30 Hz burst catchup mode pays off debt at bounded rate of 3 steps/frame', () => {
+test('wall-clock gate: 30 Hz burst catchup mode pays off debt at bounded rate of 3 steps/frame', () => {
   const ctx = loadTiming();
   const state = ctx.pmjsMvCreateStepGate({ renderHz: 30, catchupMode: 'burst' });
   ctx.pmjsMvGateSteps(state, 0);

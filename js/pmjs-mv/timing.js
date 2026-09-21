@@ -53,67 +53,27 @@
     }
     var elapsed = nowMs - state.clockMs;
 
-    // Fixed presentation rate: phase-locked presentation slots feeding 60 Hz simulation debt.
-    if (state.renderHz && state.renderHz > 0) {
-      var slotMs = state.slotMs || (1000 / state.renderHz);
-      if (elapsed >= MAX_DEBT_MS) {
-        state.clockMs = nowMs;
-        state.accMs = 0;
-        return { steps: 0, feedMs: 0, overload: true, droppedMs: elapsed };
-      }
-      var slots = Math.round(elapsed / slotMs);
-      if (slots <= 0) {
-        return { steps: 0, feedMs: 0, overload: false, droppedMs: 0 };
-      }
-
-      var droppedMs = 0;
-      var effectiveSlots = slots;
-      if (slots === 1) {
-        // Normal 1-slot progression: PLL nudge tracks fractional display frequency drift.
-        state.clockMs += slotMs + 0.05 * (nowMs - (state.clockMs + slotMs));
-      } else {
-        // Multi-slot hitch (slots > 1)
-        if (state.catchupMode === 'smooth') {
-          // Smooth mode: drop missed presentation slots and rebase clock to prevent catchup bursting.
-          effectiveSlots = 1;
-          droppedMs = (slots - 1) * slotMs;
-          state.clockMs = nowMs;
-        } else {
-          // Burst mode (stock fidelity): accumulate all elapsed slots into simulation debt.
-          state.clockMs += slots * slotMs + 0.05 * (nowMs - (state.clockMs + slots * slotMs));
-        }
-      }
-
-      state.accMs += effectiveSlots * slotMs;
-      if (state.accMs >= MAX_DEBT_MS) {
-        droppedMs += state.accMs;
-        state.accMs = 0;
-        return { steps: 0, feedMs: 0, overload: true, droppedMs: droppedMs };
-      }
-
-      var nominalSteps = Math.ceil(slotMs / STEP_MS);
-      var maxSteps = Math.max(BASE_MAX_STEPS_PER_FRAME, nominalSteps + 1);
-      var fullSteps = Math.floor((state.accMs + 1e-4) / STEP_MS);
-      var steps = Math.min(maxSteps, fullSteps);
-      state.accMs -= steps * STEP_MS;
-      var feedMs = steps > 0 ? (steps * STEP_MS + 0.001) : 0;
-      return { steps: steps, feedMs: feedMs, overload: false, droppedMs: droppedMs };
-    }
-
-    // Default: unconstrained presentation rate with wall-clock accumulator.
     var total = state.accMs + elapsed;
-    if (total >= MAX_DEBT_MS) {
+    if (elapsed >= MAX_DEBT_MS || total >= MAX_DEBT_MS) {
       state.clockMs = nowMs;
       state.accMs = 0;
       return { steps: 0, feedMs: 0, overload: true, droppedMs: total };
     }
-    var full = Math.floor(total / STEP_MS);
-    var steps = full > BASE_MAX_STEPS_PER_FRAME ? BASE_MAX_STEPS_PER_FRAME : full;
-    var frac = total - full * STEP_MS;
+    var slotMs = state.slotMs || 0;
+    var nominalSteps = slotMs > 0 ? Math.ceil(slotMs / STEP_MS) : 1;
+    var maxSteps = Math.max(BASE_MAX_STEPS_PER_FRAME, nominalSteps + 1);
+    var full = Math.floor((total + 1e-4) / STEP_MS);
+    var steps = full > maxSteps ? maxSteps : full;
+    var frac = Math.max(0, total - full * STEP_MS);
+    var droppedMs = 0;
     state.clockMs = nowMs;
-    state.accMs = total - steps * STEP_MS;
-    return { steps: steps, feedMs: steps * STEP_MS + frac,
-      overload: false, droppedMs: 0 };
+    state.accMs = Math.max(0, total - steps * STEP_MS);
+    if (state.catchupMode === 'smooth' && full > steps) {
+      droppedMs = (full - steps) * STEP_MS;
+      state.accMs = frac;
+    }
+    return { steps: steps, feedMs: steps > 0 ? steps * STEP_MS + frac : 0,
+      overload: false, droppedMs: droppedMs };
   }
 
   function pmjsMvReportOverload(droppedMs) {

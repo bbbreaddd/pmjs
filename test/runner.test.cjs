@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const { parse } = require('../runner/cli.cjs');
-const { run, validate, parseTimingConfig, resolveSwapDefault } = require('../runner/index.cjs');
+const { run, validate, parseTimingConfig, resolveSwapDefault, advanceDeadline } = require('../runner/index.cjs');
 const { temporaryDirectory } = require('./helpers/temp.cjs');
 
 function fixture(source) {
@@ -170,6 +170,13 @@ test('uncapped render defaults the swap interval to 0 unless set', () => {
   assert.equal(resolveSwapDefault({}, parseTimingConfig({ PMJS_RENDER_HZ: '0' })), '0');
   assert.equal(resolveSwapDefault({ PMJS_SWAP_INTERVAL: '' },
     parseTimingConfig({ PMJS_UNCAPPED: '1' })), '0');
+});
+test('overdue scheduler skips expired deadlines without adding a full-period sleep', () => {
+  const period = 1000 / 60;
+  assert.ok(advanceDeadline(0, 32, period) <= 32);
+  assert.ok(advanceDeadline(0, 40, period) <= 40);
+  assert.ok(advanceDeadline(0, 100, period) <= 100);
+  assert.equal(advanceDeadline(0, 10, period), period);
 });
 test('bootstrap and tick failures reject the run', async () => {
   const bootstrap = fixture('throw new Error("bootstrap failure")');
