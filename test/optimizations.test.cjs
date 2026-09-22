@@ -209,3 +209,43 @@ test('consumers without the registry module default to enabled', () => {
     context);
   assert.equal(enabled, true);
 });
+
+test('owners can refuse an unrecognized shape with a reason', () => {
+  const { PMJS } = loadRegistry({ config: {}, env: {} });
+  registerOwnerIds(PMJS, sceneIds);
+  assert.equal(PMJS.optimizations.refuse('scene.graphics-cache', 'unknown setter shape'), 'refusal');
+  assert.equal(PMJS.optimizations.isEnabled('scene.graphics-cache'), false);
+  assert.equal(PMJS.optimizations.reason('scene.graphics-cache'),
+    'refused: unknown setter shape');
+  assert.equal(PMJS.optimizations.isEnabled('scene.gpu-mesh-cache'), true);
+  const dump = PMJS.optimizations.dump();
+  assert.equal(dump.find(entry => entry.id === 'scene.graphics-cache').refusalReason,
+    'unknown setter shape');
+  assert.equal(dump.find(entry => entry.id === 'scene.gpu-mesh-cache').refusalReason, null);
+});
+
+test('boot diagnostics report refusal and finalization freezes refusal', () => {
+  const { PMJS, logs } = loadRegistry({
+    config: {}, env: { PMJS_BOOT_DIAGNOSTICS: '1' },
+  });
+  registerOwnerIds(PMJS, sceneIds);
+  PMJS.optimizations.refuse('scene.graphics-cache', 'unknown setter shape');
+  PMJS.optimizations.finalize();
+  assert.ok(logs.includes('[pmjs-opt] scene.graphics-cache refused: unknown setter shape'));
+  assert.throws(() => PMJS.optimizations.refuse('scene.gpu-mesh-cache', 'late'),
+    /finalized; cannot refuse/);
+  assert.equal(PMJS.optimizations.isEnabled('scene.gpu-mesh-cache'), true);
+});
+
+test('refusal keeps an earlier disable cause and validates input', () => {
+  const { PMJS } = loadRegistry({
+    config: { disableOptimizations: ['scene.graphics-cache'] }, env: {},
+  });
+  registerOwnerIds(PMJS, sceneIds);
+  assert.equal(PMJS.optimizations.refuse('scene.graphics-cache', 'unknown shape'), 'port');
+  assert.equal(PMJS.optimizations.reason('scene.graphics-cache'), 'disabled by port');
+  assert.throws(() => PMJS.optimizations.refuse('scene.graphics-cache', ''),
+    /nonempty string reason/);
+  assert.throws(() => PMJS.optimizations.refuse('no.such.id', 'reason'),
+    /Unknown PMJS optimization/);
+});

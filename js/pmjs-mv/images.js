@@ -1,27 +1,32 @@
-// JavaScript cache eviction must also release the corresponding native image.
-if (typeof Bitmap !== 'undefined' && Bitmap.prototype._requestImage) {
-  var originalRequestImage = Bitmap.prototype._requestImage;
-  Bitmap.prototype._requestImage = function() {
-    var previousImage = this._image;
-    var result = originalRequestImage.apply(this, arguments);
-    if (typeof NativeImage !== 'undefined' && previousImage &&
-        previousImage !== this._image &&
-        previousImage instanceof NativeImage) {
-      try { previousImage.src = ''; } catch (_) {}
-    }
-    return result;
+function pmjsBitmapRequestImageWrap() {  return function(guestRequestImage) {
+    var wrapped = function() {
+      var previousImage = this._image;
+      var result = guestRequestImage.apply(this, arguments);
+      if (typeof NativeImage !== 'undefined' && previousImage &&
+          previousImage !== this._image &&
+          previousImage instanceof NativeImage) {
+        try { previousImage.src = ''; } catch (_) {}
+      }
+      return result;
+    };
+    wrapped._pmjsNativeImageRelease = true;
+    return wrapped;
   };
 }
-if (typeof Bitmap !== 'undefined' && Bitmap.prototype._clearImgInstance) {
-  var originalClearImgInstance = Bitmap.prototype._clearImgInstance;
-  Bitmap.prototype._clearImgInstance = function() {
-    try {
-      if (this._image && this._image instanceof NativeImage) {
-        try { this._image.src = ''; } catch (_) {}
-      }
-    } catch (_) {}
-    nativeCompatibilityHit('bitmap._clearImgInstance');
-    return originalClearImgInstance.apply(this, arguments);
+
+function pmjsBitmapClearImgInstanceWrap() {
+  return function(guestClearImgInstance) {
+    var wrapped = function() {
+      try {
+        if (this._image && this._image instanceof NativeImage) {
+          try { this._image.src = ''; } catch (_) {}
+        }
+      } catch (_) {}
+      nativeCompatibilityHit('bitmap._clearImgInstance');
+      return guestClearImgInstance.apply(this, arguments);
+    };
+    wrapped._pmjsNativeImageRelease = true;
+    return wrapped;
   };
 }
 
@@ -56,30 +61,40 @@ if (typeof ImageCache !== 'undefined') {
 }
 
 if (typeof ImageCache !== 'undefined' && ImageCache.prototype._truncateCache) {
-  var originalImageCacheTruncate = ImageCache.prototype._truncateCache;
-  ImageCache.prototype._truncateCache = function() {
-    // MV's cache limit is measured in pixels. Cache eviction only relinquishes
-    // cache membership: a Sprite or plugin may still own the Bitmap and its
-    // NativeImage backing must remain valid until that Bitmap becomes unreachable.
-    try {
-      var items = this._items;
-      var sizeLeft = ImageCache.limit;
-      var sorted = Object.keys(items).map(function(k){ return items[k]; }).sort(function(a,b){ return b.touch - a.touch; });
-      var self = this;
-      sorted.forEach(function(item){
-        if (sizeLeft > 0 || self._mustBeHeld(item)) {
-          var bmp = item.bitmap;
-          sizeLeft -= bmp.width * bmp.height;
-        } else {
-          delete items[item.key];
-        }
-      });
-      return;
-    } catch (e) {
-      nativeCompatibilityHit('imageCache.truncateError', e && e.message || '');
-    }
-    return originalImageCacheTruncate.apply(this, arguments);
-  };
+  var pmjsImageCacheTruncateMethods = globalThis.PMJS && globalThis.PMJS.methods;
+  if (pmjsImageCacheTruncateMethods &&
+      typeof pmjsImageCacheTruncateMethods.own === 'function') {
+    pmjsImageCacheTruncateMethods.own({
+      key: 'ImageCache._truncateCache',
+      id: 'pmjs.mv.image-cache-budget',
+      getTarget: function() { return ImageCache.prototype || null; },
+      method: '_truncateCache',
+      replace: function(guestTruncate) {
+        var wrapped = function() {
+          try {
+            var items = this._items;
+            var sizeLeft = ImageCache.limit;
+            var sorted = Object.keys(items).map(function(k){ return items[k]; }).sort(function(a,b){ return b.touch - a.touch; });
+            var self = this;
+            sorted.forEach(function(item){
+              if (sizeLeft > 0 || self._mustBeHeld(item)) {
+                var bmp = item.bitmap;
+                sizeLeft -= bmp.width * bmp.height;
+              } else {
+                delete items[item.key];
+              }
+            });
+            return;
+          } catch (e) {
+            nativeCompatibilityHit('imageCache.truncateError', e && e.message || '');
+          }
+          return guestTruncate.apply(this, arguments);
+        };
+        wrapped._pmjsImageCacheBudget = true;
+        return wrapped;
+      }
+    });
+  }
 }
 
 // Pending images must be held by MV's ImageCache. Once a Bitmap becomes ready,
@@ -101,14 +116,46 @@ function pmjsScheduleImageCacheTrim() {
   });
 }
 globalThis.__pmjsImageLoadCompleted = pmjsScheduleImageCacheTrim;
-if (typeof Bitmap !== 'undefined' && Bitmap.prototype._onLoad) {
-  var originalBitmapOnLoadForImageCache = Bitmap.prototype._onLoad;
-  Bitmap.prototype._onLoad = function() {
-    var result = originalBitmapOnLoadForImageCache.apply(this, arguments);
-    pmjsScheduleImageCacheTrim();
-    return result;
-  };
-}
+
+(function pmjsRegisterBitmapImageHooks() {
+  var methods = globalThis.PMJS && globalThis.PMJS.methods;
+  if (!methods || typeof methods.wrap !== 'function') return;
+  methods.wrap({
+    key: 'Bitmap._requestImage',
+    id: 'pmjs.mv.native-image-release',
+    getTarget: function() {
+      return (typeof Bitmap !== 'undefined' && Bitmap.prototype) || null;
+    },
+    method: '_requestImage',
+    wrap: pmjsBitmapRequestImageWrap()
+  });
+  methods.wrap({
+    key: 'Bitmap._clearImgInstance',
+    id: 'pmjs.mv.native-image-release',
+    getTarget: function() {
+      return (typeof Bitmap !== 'undefined' && Bitmap.prototype) || null;
+    },
+    method: '_clearImgInstance',
+    wrap: pmjsBitmapClearImgInstanceWrap()
+  });
+  methods.wrap({
+    key: 'Bitmap._onLoad',
+    id: 'pmjs.mv.image-cache-trim',
+    getTarget: function() {
+      return (typeof Bitmap !== 'undefined' && Bitmap.prototype) || null;
+    },
+    method: '_onLoad',
+    wrap: function(guestOnLoad) {
+      var wrapped = function() {
+        var result = guestOnLoad.apply(this, arguments);
+        pmjsScheduleImageCacheTrim();
+        return result;
+      };
+      wrapped._pmjsImageCacheTrim = true;
+      return wrapped;
+    }
+  });
+})();
 
 // MV removes an outgoing map spriteset without destroying its Pixi tree.
 // Release host-owned retained geometry deterministically; JavaScript display

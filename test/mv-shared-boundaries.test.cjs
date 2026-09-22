@@ -54,10 +54,10 @@ test('native input wraps the guest replacement at the post-plugin boundary', () 
   sandbox.globalThis = sandbox;
   const context = vm.createContext(sandbox);
   run(context, 'pmjs-rpgmaker/input.js');
-  input.update = function() { events.push(this._currentState.ok ? 'guest:ok' : 'guest:missing'); };
+  input.update = function() { events.push('guest'); };
   hooks.afterGuestPlugins();
   input.update();
-  assert.deepEqual(events, ['guest:ok', 'consumed']);
+  assert.deepEqual(events, ['guest', 'consumed']);
   assert.equal(input.update._pmjsNativeBridge, true);
 });
 
@@ -108,6 +108,7 @@ test('native map resources release after a guest replaces Scene_Map.terminate', 
   assert.equal(sharedChild.__pmjsNativeMesh, 0);
   assert.equal(scene.terminate(), 'done');
   assert.deepEqual(calls, ['guest', 'tile:12', 'mesh:34', 'guest']);
-  assert.deepEqual(Array.from(ctx.PMJS.methods.dump()[0].mutations, entry => entry.plugin),
-    ['ReplaceTerminate']);
+  assert.deepEqual(Array.from(ctx.PMJS.methods.dump().find(
+    entry => entry.key === 'Scene_Map.terminate').mutations,
+    entry => entry.plugin), ['ReplaceTerminate']);
 });

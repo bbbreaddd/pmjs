@@ -27,6 +27,21 @@ test('wrap installs once around the final guest method', () => {
   assert.deepEqual([...ctx.PMJS.methods.install()], []);
 });
 
+test('wrap sees a guest replacement made after registration', () => {
+  const ctx = context();
+  vm.runInContext(`
+    function Target() {}
+    Target.prototype.foo = function() { return 'stock'; };
+    globalThis.Target = Target;
+    PMJS.methods.wrap({ key: 'Target.foo', id: 'pmjs.target',
+      getTarget: () => Target.prototype, method: 'foo',
+      wrap: guestFoo => function() { return 'pmjs:' + guestFoo.apply(this, arguments); } });
+    Target.prototype.foo = function() { return 'plugin'; };
+  `, ctx);
+  ctx.PMJS.methods.install();
+  assert.equal(vm.runInContext('new Target().foo()', ctx), 'pmjs:plugin');
+});
+
 test('owner replaces the final guest method', () => {
   const target = { render() { return 'guest'; } };
   const ctx = context({ target });
@@ -70,4 +85,46 @@ test('plugin mutation audit records mutator and failure', () => {
   target.update = function() {};
   ctx.PMJS.methods.endPlugin(token, { error: new Error('boom') });
   assert.deepEqual(method(ctx, 'K.update').mutations, [{ plugin: 'Changer', failed: true }]);
+});
+
+test('wrap composes around subclass methods capturing the parent', () => {
+  const ctx = context();
+  vm.runInContext(`
+    function Base() {}
+    Base.prototype.foo = function() { return ['stock']; };
+    function Child() {}
+    Child.prototype = Object.create(Base.prototype);
+    globalThis.Child = Child;
+    // Simulated guest plugin: capture the inherited method, then override.
+    var captured = Child.prototype.foo;
+    Child.prototype.foo = function() {
+      return ['plugin'].concat(captured.call(this));
+    };
+    PMJS.methods.wrap({ key: 'Child.foo', id: 'pmjs.child',
+      getTarget: () => Child.prototype, method: 'foo',
+      wrap: next => function() {
+        return ['pmjs'].concat(next.call(this));
+      } });
+  `, ctx);
+  ctx.PMJS.methods.install();
+  assert.deepEqual([...vm.runInContext('new Child().foo()', ctx)], [
+    'pmjs', 'plugin', 'stock',
+  ]);
+});
+
+test('dump reports owner, state, and mutation attribution', () => {
+  const target = { update() { return 'guest'; } };
+  const ctx = context({ target });
+  vm.runInContext(`PMJS.methods.wrap({ key: 'K.update', id: 'pmjs.k',
+    getTarget: () => target, method: 'update', wrap: next => next })`, ctx);
+  const token = ctx.PMJS.methods.beginPlugin('Changer');
+  target.update = function() { return 'changed'; };
+  ctx.PMJS.methods.endPlugin(token);
+  ctx.PMJS.methods.install();
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.PMJS.methods.dump())), [{
+    key: 'K.update', id: 'pmjs.k', mode: 'wrap',
+    state: 'installed', reason: 'installed',
+    mutations: [{ plugin: 'Changer', failed: false }],
+  }]);
+  assert.equal(target.update(), 'changed');
 });

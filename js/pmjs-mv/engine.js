@@ -16,21 +16,38 @@ if (typeof Graphics !== 'undefined') {
   }
 }
 
-if (typeof WindowLayer !== 'undefined' &&
-    WindowLayer.prototype && !WindowLayer.prototype._pmjsPatched) {
-  var originalWindowLayerInitialize = WindowLayer.prototype.initialize;
-  WindowLayer.prototype.initialize = function() {
-    originalWindowLayerInitialize.call(this);
-    // The native renderer uses scissor/mask directly and keeps voidFilter as the only
-    // filter on the layer. Stock allocates a temp canvas/sprite; discard it.
-    this._tempCanvas = null;
-    this._renderSprite = null;
-    if (typeof WindowLayer.voidFilter !== 'undefined') {
-      this.filters = [WindowLayer.voidFilter];
-    }
+function pmjsWindowLayerInitializeWrap() {
+  return function(guestInitialize) {
+    var wrapped = function() {
+      var result = guestInitialize.apply(this, arguments);
+      // The native renderer uses scissor/mask directly and keeps voidFilter as the only
+      // filter on the layer. Stock allocates a temp canvas/sprite; discard it.
+      this._tempCanvas = null;
+      this._renderSprite = null;
+      if (typeof WindowLayer.voidFilter !== 'undefined') {
+        this.filters = [WindowLayer.voidFilter];
+      }
+      return result;
+    };
+    wrapped._pmjsWindowLayer = true;
+    return wrapped;
   };
-  WindowLayer.prototype._pmjsPatched = true;
 }
+
+(function pmjsRegisterWindowLayerHook() {
+  var methods = globalThis.PMJS && globalThis.PMJS.methods;
+  if (!methods || typeof methods.wrap !== 'function') return;
+  methods.wrap({
+    key: 'WindowLayer.initialize',
+    id: 'pmjs.mv.window-layer',
+    getTarget: function() {
+      return (typeof WindowLayer !== 'undefined' &&
+        WindowLayer.prototype) || null;
+    },
+    method: 'initialize',
+    wrap: pmjsWindowLayerInitializeWrap()
+  });
+})();
 
 NativeHost.runtime.loadScript('js/rpg_managers.js');
 NativeHost.runtime.loadScript('js/rpg_objects.js');

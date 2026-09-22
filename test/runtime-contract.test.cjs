@@ -44,6 +44,8 @@ test('registered CommonJS requests are exact and cannot be replaced', () => {
 test('MV image cache retrims completed loads without destroying bitmap backing', async () => {
   const source = fs.readFileSync(path.join(runtimeRoot,
     'js/pmjs-mv/images.js'), 'utf8');
+  const methodsSource = fs.readFileSync(path.join(runtimeRoot,
+    'js/pmjs-core/methods.js'), 'utf8');
   const end = source.indexOf('\n// MV removes an outgoing map spriteset');
   class Bitmap {
     _onLoad() {
@@ -57,10 +59,11 @@ test('MV image cache retrims completed loads without destroying bitmap backing',
       this.trimCount = 0;
     }
     _mustBeHeld(item) { return Boolean(item.held); }
-    _truncateCache() { this.trimCount++; }
+    _truncateCache() { return ++this.trimCount; }
   }
   ImageCache.limit = 100;
   const cache = new ImageCache();
+  const compatibilityHits = [];
   const retainedSource = { src: 'retained.png' };
   cache._items = {
     recent: { key: 'recent', touch: 2,
@@ -77,9 +80,13 @@ test('MV image cache retrims completed loads without destroying bitmap backing',
     pmjsGameConfig: { imageCacheMaxPixels: 64 },
     NativeHost: { runtime: { env() { return ''; } } },
     Promise,
-    nativeCompatibilityHit() {},
+    nativeCompatibilityHit(...args) { compatibilityHits.push(args); },
   };
+  vm.runInNewContext(methodsSource, context, { filename: 'methods.js' });
   vm.runInNewContext(source.slice(0, end), context, { filename: 'images.js' });
+  context.PMJS.methods.install();
+  assert.equal(context.PMJS.methods.dump().find(entry =>
+    entry.key === 'ImageCache._truncateCache').mode, 'own');
   assert.equal(ImageCache.limit, 64);
   ImageCache.limit = 50;
   assert.equal(ImageCache.limit, 50);
@@ -107,6 +114,11 @@ test('MV image cache retrims completed loads without destroying bitmap backing',
   assert.equal(cache.trimCount, 1);
   assert.deepEqual(first.events, ['loaded']);
   assert.deepEqual(second.events, ['loaded']);
+
+  cache._items = null;
+  assert.equal(cache._truncateCache(), 3);
+  assert.equal(cache.trimCount, 3);
+  assert.equal(compatibilityHits.at(-1)[0], 'imageCache.truncateError');
 });
 
 test('nativeCompatibilityHit logs on first hit, stacks on verbose, and throws on strict', () => {
