@@ -168,7 +168,7 @@ function VideoElement() {
   this.duration = 0; this.videoWidth = 0; this.videoHeight = 0;
   this.width = 0; this.height = 0; this._volume = 1; this._playbackRate = 1;
   this.loop = false; this._muted = false; this.paused = true; this.ended = false;
-  this.preload = 'auto'; this._loadGeneration = 0;
+  this.preload = 'auto'; this._loadGeneration = 0; this._playGeneration = 0;
   this.readyState = 0; this.HAVE_NOTHING = 0; this.HAVE_METADATA = 1;
   this.HAVE_CURRENT_DATA = 2; this.HAVE_FUTURE_DATA = 3; this.HAVE_ENOUGH_DATA = 4;
 }
@@ -288,6 +288,7 @@ VideoElement.prototype.load = function() {
   this._loadNow();
 };
 VideoElement.prototype.play = function() {
+  ++this._playGeneration;
   if (!this._media) this.load();
   this.paused = false; this.ended = false; this._startOffset = this._currentTime;
   this._startedAt = performance.now();
@@ -314,7 +315,8 @@ VideoElement.prototype._update = function() {
       this._currentTime = this.duration; this.paused = true; this.ended = true;
       if (this._audio) NativeHost.media.stopAudio(this._audio.handle);
       if (typeof this.onended === 'function') this.onended({ type: 'ended', target: this });
-      this.dispatchEvent({ type: 'ended', target: this }); return false;
+      this.dispatchEvent({ type: 'ended', target: this });
+      return !this.paused && !!this._media;
     }
   }
   var frameTime = time;

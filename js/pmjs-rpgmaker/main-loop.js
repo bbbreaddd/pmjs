@@ -7,16 +7,26 @@
     if (Array.isArray(globalThis.nativeAudioBuffers)) {
       for (var audioIndex = nativeAudioBuffers.length - 1;
           audioIndex >= 0; audioIndex--) {
-        if (!nativeAudioBuffers[audioIndex]._poll()) {
-          nativeAudioBuffers.splice(audioIndex, 1);
+        var audio = nativeAudioBuffers[audioIndex];
+        if (!audio) continue;
+        var audioGeneration = audio._playGeneration;
+        if (!audio._poll() && audio._playGeneration === audioGeneration) {
+          var currentAudioIndex = nativeAudioBuffers.indexOf(audio);
+          if (currentAudioIndex >= 0) nativeAudioBuffers.splice(currentAudioIndex, 1);
         }
       }
     }
     if (Array.isArray(globalThis.nativeVideos)) {
       for (var videoIndex = nativeVideos.length - 1;
           videoIndex >= 0; videoIndex--) {
-        if (!nativeVideos[videoIndex]._update()) {
-          nativeVideos.splice(videoIndex, 1);
+        var video = nativeVideos[videoIndex];
+        if (!video) continue;
+        var videoPlayGeneration = video._playGeneration;
+        var videoLoadGeneration = video._loadGeneration;
+        if (!video._update() && video._playGeneration === videoPlayGeneration &&
+            video._loadGeneration === videoLoadGeneration) {
+          var currentVideoIndex = nativeVideos.indexOf(video);
+          if (currentVideoIndex >= 0) nativeVideos.splice(currentVideoIndex, 1);
         }
       }
     }

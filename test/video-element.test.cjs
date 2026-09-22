@@ -10,6 +10,8 @@ const eventsSource = fs.readFileSync(
   path.resolve(__dirname, '../js/pmjs-web/events.js'), 'utf8');
 const elementsSource = fs.readFileSync(
   path.resolve(__dirname, '../js/pmjs-web/elements.js'), 'utf8');
+const mainLoopSource = fs.readFileSync(
+  path.resolve(__dirname, '../js/pmjs-rpgmaker/main-loop.js'), 'utf8');
 
 function makeHarness(videoResource) {
   const calls = { loadVideo: [], releaseVideo: [], updateVideo: [] };
@@ -156,6 +158,33 @@ test('video accepts the legacy native canvas contract', () => {
   assert.equal(video._pmjsNativeTextureSource().handle, 510);
   assert.equal(video._nativeImage, null);
   assert.equal(video._nativeCanvas.handle, 510);
+});
+
+test('an ended handler can start another source without losing video updates', () => {
+  const { context, calls } = makeHarness();
+  vm.runInContext(mainLoopSource, context);
+  const video = context.document.createElement('video');
+  video.src = 'movies/one.webm';
+  context.pendingTasks.splice(0).forEach(task => task());
+  let completions = 0;
+  video.onended = () => {
+    completions++;
+    if (completions === 1) {
+      video.src = 'movies/two.webm';
+      video.play();
+    }
+  };
+  video.play();
+  video._startedAt = -12000;
+  context.pmjsRunRpgMakerTick(1);
+  assert.equal(video.src, 'movies/two.webm');
+  assert.equal(video.paused, false);
+  assert.equal(context.nativeVideos.includes(video), true);
+  context.pmjsRunRpgMakerTick(2);
+  assert.equal(calls.updateVideo.at(-1)[0], 11);
+  video._startedAt = -12000;
+  context.pmjsRunRpgMakerTick(3);
+  assert.equal(completions, 2);
 });
 
 test('removing video src releases media and load with no source stays empty', () => {

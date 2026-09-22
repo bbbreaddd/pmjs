@@ -20,6 +20,7 @@ function NativeAudioBuffer(url) {
   this._duration = 0;
   this._loading = false;
   this._loadGeneration = 0;
+  this._playGeneration = 0;
 
   this._gainNode = this;
   this.gain = this;
@@ -191,6 +192,7 @@ NativeAudioBuffer.prototype.bufferSize = function() {
 };
 
 NativeAudioBuffer.prototype.play = function(loop, offset) {
+  ++this._playGeneration;
   this._loop = !!loop;
   this._autoPlay = true;
   this._offset = Math.max(0, Number(offset) || 0);
@@ -272,7 +274,11 @@ NativeAudioBuffer.prototype._notifyStop = function() {
 NativeAudioBuffer.prototype._poll = function() {
   if (this._loading) return true;
   var playing = this.isPlaying();
-  if (this._wasPlaying && !playing) this._notifyStop();
+  if (this._wasPlaying && !playing) {
+    this._wasPlaying = false;
+    this._notifyStop();
+    playing = this.isPlaying();
+  }
   this._wasPlaying = playing;
   return playing;
 };

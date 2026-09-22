@@ -10,6 +10,8 @@ const objectUrlSource = fs.readFileSync(
   path.resolve(__dirname, '../js/pmjs-web/object-urls.js'), 'utf8');
 const audioSource = fs.readFileSync(
   path.resolve(__dirname, '../js/pmjs-mv/audio.js'), 'utf8');
+const mainLoopSource = fs.readFileSync(
+  path.resolve(__dirname, '../js/pmjs-rpgmaker/main-loop.js'), 'utf8');
 
 function contextFor(decrypter, XMLHttpRequest) {
   const loadedBytes = [];
@@ -104,4 +106,30 @@ test('clearing an in-flight object URL load skips native decoding', async () => 
   assert.deepEqual(context.released, []);
   assert.equal(audio._handle, 0);
   assert.equal(audio.isReady(), false);
+});
+
+test('a stop listener can restart audio without losing completion polling', () => {
+  const context = contextFor({ hasEncryptedAudio: false });
+  let playing = false;
+  context.NativeHost.media.playAudio = () => { playing = true; return true; };
+  context.NativeHost.media.audioIsPlaying = () => playing;
+  vm.runInContext(mainLoopSource, context);
+  const audio = new context.WebAudio('');
+  audio._handle = 1;
+  let completions = 0;
+  audio.addStopListener(() => {
+    completions++;
+    audio.play(false, 0);
+    audio.addStopListener(() => { completions++; });
+  });
+  audio.play(false, 0);
+  playing = false;
+  context.pmjsRunRpgMakerTick(1);
+  assert.equal(playing, true);
+  assert.equal(audio._wasPlaying, true);
+  assert.equal(context.nativeAudioBuffers.includes(audio), true);
+  playing = false;
+  context.pmjsRunRpgMakerTick(2);
+  assert.equal(completions, 2);
+  assert.equal(context.nativeAudioBuffers.includes(audio), false);
 });
