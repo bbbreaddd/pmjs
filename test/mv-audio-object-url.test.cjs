@@ -34,6 +34,7 @@ function contextFor(decrypter, XMLHttpRequest) {
           return { handle: loadedBytes.length, duration: 1.5 };
         },
         playAudio: function() { return true; },
+        stopAudio: function() {},
         setAudioParameters: function() {},
         audioIsPlaying: function() { return false; },
         releaseAudio: function(handle) { released.push(handle); },
@@ -132,4 +133,53 @@ test('a stop listener can restart audio without losing completion polling', () =
   context.pmjsRunRpgMakerTick(2);
   assert.equal(completions, 2);
   assert.equal(context.nativeAudioBuffers.includes(audio), false);
+});
+
+test('fade-out cancels autoplay while an object URL is loading', async () => {
+  const context = contextFor({ hasEncryptedAudio: false });
+  const calls = [];
+  context.NativeHost.media.playAudio = () => { calls.push('play'); return true; };
+  const url = context.URL.createObjectURL(new Blob([Uint8Array.from([1])]));
+  const audio = new context.WebAudio(url);
+  audio.play(false, 0);
+  audio.fadeOut(1);
+  await settle();
+  assert.equal(audio.isReady(), true);
+  assert.deepEqual(calls, []);
+  assert.equal(audio._autoPlay, false);
+});
+
+test('pending fade-in starts after native play and before load listeners', async () => {
+  const context = contextFor({ hasEncryptedAudio: false });
+  const calls = [];
+  context.NativeHost.media.playAudio = () => { calls.push('play'); return true; };
+  context.NativeHost.media.fadeAudio = (_handle, from, to, duration) => {
+    calls.push(['fade', from, to, duration]);
+  };
+  const url = context.URL.createObjectURL(new Blob([Uint8Array.from([1])]));
+  const audio = new context.WebAudio(url);
+  audio.play(false, 0);
+  audio.fadeIn(2);
+  audio.addLoadListener(() => calls.push('loaded'));
+  await settle();
+  assert.deepEqual(calls, ['play', ['fade', 0, 1, 2], 'loaded']);
+});
+
+test('stop before load drains listeners and cancels later playback', async () => {
+  const context = contextFor({ hasEncryptedAudio: false });
+  let starts = 0;
+  context.NativeHost.media.playAudio = () => { starts++; return true; };
+  const url = context.URL.createObjectURL(new Blob([Uint8Array.from([1])]));
+  const audio = new context.WebAudio(url);
+  let stops = 0;
+  audio.addStopListener(() => { stops++; });
+  audio.play(false, 0);
+  audio.stop();
+  assert.equal(stops, 1);
+  assert.equal(audio._stopListeners.length, 0);
+  await settle();
+  assert.equal(starts, 0);
+  audio.play(false, 0);
+  audio.stop();
+  assert.equal(stops, 1, 'cancelled listener must not fire during later playback');
 });

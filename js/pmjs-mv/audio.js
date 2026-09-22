@@ -11,6 +11,7 @@ function NativeAudioBuffer(url) {
   this._pan = 0;
   this._loop = false;
   this._autoPlay = false;
+  this._pendingFadeIn = null;
   this._offset = 0;
   this._stopListeners = [];
   this._loadListeners = [];
@@ -53,12 +54,16 @@ NativeAudioBuffer.prototype._install = function(loaded, generation) {
   this._duration = loaded.duration;
   this._loading = false;
   if (nativeAudioFinalizer) nativeAudioFinalizer.register(this, this._handle, this);
-  var listeners = this._loadListeners.splice(0);
-  for (var index = 0; index < listeners.length; index++) listeners[index]();
   if (this._autoPlay) {
     this._updateParameters();
     this._wasPlaying = NativeHost.media.playAudio(this._handle, this._loop, this._offset);
+    if (this._pendingFadeIn !== null) {
+      NativeHost.media.fadeAudio(this._handle, 0, 1, this._pendingFadeIn, false);
+    }
   }
+  this._pendingFadeIn = null;
+  var listeners = this._loadListeners.splice(0);
+  for (var index = 0; index < listeners.length; index++) listeners[index]();
 };
 
 NativeAudioBuffer.prototype._failLoad = function(source, error, generation) {
@@ -203,11 +208,11 @@ NativeAudioBuffer.prototype.play = function(loop, offset) {
 };
 
 NativeAudioBuffer.prototype.stop = function() {
-  var wasPlaying = this._wasPlaying || this.isPlaying();
   if (this._handle && NativeHost.media) NativeHost.media.stopAudio(this._handle);
   this._wasPlaying = false;
   this._autoPlay = false;
-  if (wasPlaying) this._notifyStop();
+  this._pendingFadeIn = null;
+  this._notifyStop();
 };
 
 NativeAudioBuffer.prototype.clear = function() {
@@ -235,13 +240,17 @@ NativeAudioBuffer.prototype.seek = function() {
 };
 
 NativeAudioBuffer.prototype.fadeIn = function(duration) {
+  var time = Math.max(0, Number(duration) || 0);
   if (this._handle && NativeHost.media) {
-    NativeHost.media.fadeAudio(this._handle, 0, 1,
-      Math.max(0, Number(duration) || 0), false);
+    NativeHost.media.fadeAudio(this._handle, 0, 1, time, false);
+  } else if (this._autoPlay) {
+    this._pendingFadeIn = time;
   }
 };
 
 NativeAudioBuffer.prototype.fadeOut = function(duration) {
+  this._autoPlay = false;
+  this._pendingFadeIn = null;
   if (this._handle && NativeHost.media) {
     NativeHost.media.fadeAudio(this._handle, -1, 0,
       Math.max(0, Number(duration) || 0), true);
