@@ -65,14 +65,21 @@
   }
 
   function installTerraxLightingFastPaths() {
-    if (typeof Spriteset_Map === 'undefined' ||
-        typeof Spriteset_Map.prototype.createLightmask !== 'function' ||
-        Spriteset_Map.prototype.createLightmask._pmjsTerraxGuard) return false;
-
     var useNativeLighting = PMJS.optimizations.isEnabled('terrax.native-lighting');
-    if (!useNativeLighting ||
-        !looksLikeKnownCreateLightmask(
-          Spriteset_Map.prototype.createLightmask)) return false;
+    if (!useNativeLighting) return false;
+    if (typeof Spriteset_Map === 'undefined' ||
+        typeof Spriteset_Map.prototype.createLightmask !== 'function') {
+      PMJS.optimizations.refuse('terrax.native-lighting',
+        'Terrax createLightmask method unavailable');
+      return false;
+    }
+    if (Spriteset_Map.prototype.createLightmask._pmjsTerraxGuard) return true;
+    if (!looksLikeKnownCreateLightmask(
+        Spriteset_Map.prototype.createLightmask)) {
+      PMJS.optimizations.refuse('terrax.native-lighting',
+        'unrecognized Terrax createLightmask method composition');
+      return false;
+    }
     var useGpuLighting = useNativeLighting && typeof NativeHost !== 'undefined' &&
       NativeHost.render &&
       typeof NativeHost.render.createPrimitiveSurface === 'function' &&
@@ -231,11 +238,8 @@
     return true;
   }
 
-  PMJS.phases.on('afterGuestPlugins', 'pmjs.adapter.terrax-lighting', function() {
-    installTerraxLightingFastPaths();
-    PMJS.phases.on('beforeBoot', 'pmjs.adapter.terrax-lighting',
-      installTerraxLightingFastPaths);
-  });
+  PMJS.phases.on('afterGuestPlugins', 'pmjs.adapter.terrax-lighting',
+    installTerraxLightingFastPaths);
 
   globalThis.pmjsInstallTerraxLightingFastPaths = installTerraxLightingFastPaths;
 })();

@@ -101,13 +101,16 @@ function ensureNativeTilingTexture(texture) {
     }
     return { handle: nativeImage.handle, resolution: resolution };
   }
-  var signature = [nativeImage.handle, Number(texture._updateID) || 0,
+  var sourceRevision = source && source.__pmjsContentRevision;
+  var cacheable = !(source && typeof source._ensureNativeCanvas === 'function') ||
+    typeof sourceRevision === 'number';
+  var signature = [nativeImage.handle, sourceRevision, Number(texture._updateID) || 0,
     frame.x, frame.y, frame.width, frame.height, original.width, original.height,
     trim && trim.x, trim && trim.y, trim && trim.width, trim && trim.height,
     rotation, resolution].join(':');
   if (texture.__pmjsTilingCanvas &&
       texture.__pmjsTilingCanvasSignature === signature &&
-      PMJS.optimizations.isEnabled('scene.tiling-texture-cache')) {
+      cacheable && PMJS.optimizations.isEnabled('scene.tiling-texture-cache')) {
     if (typeof nativeMaterializationStats !== 'undefined') {
       nativeMaterializationStats.tilingHits++;
     }
@@ -185,10 +188,10 @@ function tileAnimationOffset(layer) {
 }
 
 function nativeTilePointsUnchanged(layer, points) {
-  var staging = layer._pmjsNativePointStaging;
-  if (!staging || staging.length !== points.length) return false;
+  var snapshot = layer._pmjsNativePointSnapshot;
+  if (!snapshot || snapshot.length !== points.length) return false;
   for (var index = 0; index < points.length; index++) {
-    if (staging[index] !== points[index]) return false;
+    if (snapshot[index] !== points[index]) return false;
   }
   return true;
 }
@@ -202,6 +205,7 @@ function ensureNativeRectTileLayer(layer) {
       layer._pmjsNativeLayer = 0;
     }
     layer._pmjsNativeTextureSignature = '';
+    layer._pmjsNativePointSnapshot = null;
     return 0;
   }
   var generation = layer._pmjsNativeGeneration || 0;
@@ -221,12 +225,15 @@ function ensureNativeRectTileLayer(layer) {
   var textureSignature = handles.join(':');
 
   var usePersistentCache = PMJS.optimizations.isEnabled('tilemap.persistent-layer-cache');
+  var pointsUnchanged = usePersistentCache && layer._pmjsNativeLayer &&
+    nativeTilePointsUnchanged(layer, points);
   if (!usePersistentCache || !layer._pmjsNativeLayer ||
       layer._pmjsNativeCompiledGeneration !== generation ||
-      layer._pmjsNativeTextureSignature !== textureSignature) {
+      layer._pmjsNativeTextureSignature !== textureSignature ||
+      !pointsUnchanged) {
     if (usePersistentCache && layer._pmjsNativeLayer &&
         layer._pmjsNativeTextureSignature === textureSignature &&
-        nativeTilePointsUnchanged(layer, points)) {
+        pointsUnchanged) {
 
       layer._pmjsNativeCompiledGeneration = generation;
     } else {
@@ -246,6 +253,7 @@ function ensureNativeRectTileLayer(layer) {
       }
       layer._pmjsNativeLayer = NativeHost.render.createTileLayer(
         transferredPoints, handles);
+      layer._pmjsNativePointSnapshot = usePersistentCache ? points.slice() : null;
       layer._pmjsNativeCompiledGeneration = generation;
       layer._pmjsNativeTextureSignature = textureSignature;
     }

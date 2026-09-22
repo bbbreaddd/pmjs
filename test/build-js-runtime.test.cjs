@@ -189,14 +189,14 @@ test('capability manifest supports explicit adapter selection', () => {
   const game = writeMvGame(root);
   const manifest = path.join(root, 'manifest.json');
   fs.writeFileSync(manifest, JSON.stringify({
-    adapters: ['Aetherflow_PreloadEverything'],
+    adapters: ['YED_Tiled'],
   }));
   const out = path.join(root, 'out.js');
   childProcess.execFileSync(process.execPath,
     [tool, '--root', root, '--manifest', manifest, '--game', game, '--output', out]);
   const bundleContent = fs.readFileSync(out, 'utf8');
-  assert.match(bundleContent, /BEGIN js\/pmjs-plugins\/aetherflow\/image-cache\.js/);
-  assert.match(bundleContent, /BEGIN js\/pmjs-plugins\/aetherflow\/audio-cache\.js/);
+  assert.match(bundleContent, /BEGIN js\/pmjs-plugins\/yed\/tiled\.js/);
+  assert.doesNotMatch(bundleContent, /BEGIN js\/pmjs-plugins\/aetherflow\//);
   fs.writeFileSync(manifest, JSON.stringify({
     adapters: ['No_Such_Plugin'],
   }));
@@ -220,7 +220,7 @@ test('adapter modes are deterministic with and without game evidence', () => {
   run('--game', game, '--output', out);
   const allBundle = fs.readFileSync(out, 'utf8');
   assert.match(allBundle, /BEGIN js\/pmjs-plugins\/yed\/tiled\.js/);
-  assert.match(allBundle, /BEGIN js\/pmjs-plugins\/aetherflow\/audio-cache\.js/);
+  assert.doesNotMatch(allBundle, /BEGIN js\/pmjs-plugins\/aetherflow\//);
 
   fs.writeFileSync(manifest, JSON.stringify({ adapters: 'none' }));
   run('--game', game, '--output', out);
@@ -306,7 +306,7 @@ test('auto adapter overrides and Pixi compatibility use inspected evidence', () 
   fs.writeFileSync(manifest, JSON.stringify({
     adapters: {
       mode: 'auto',
-      include: ['Aetherflow_PreloadEverything'],
+      include: ['YEP_EventMiniLabel'],
       exclude: ['YED_Tiled'],
     },
   }));
@@ -315,7 +315,7 @@ test('auto adapter overrides and Pixi compatibility use inspected evidence', () 
     [tool, '--root', root, '--manifest', manifest, '--game', game, '--output', out]);
   const bundle = fs.readFileSync(out, 'utf8');
   assert.doesNotMatch(bundle, /BEGIN js\/pmjs-plugins\/yed\/tiled\.js/);
-  assert.match(bundle, /BEGIN js\/pmjs-plugins\/aetherflow\/image-cache\.js/);
+  assert.match(bundle, /BEGIN js\/pmjs-plugins\/yanfly\/event-mini-label\.js/);
 
   fs.writeFileSync(path.join(game, 'js', 'libs', 'pixi.js'), "PIXI.VERSION = '5.3.0';\n");
   assert.throws(() => childProcess.execFileSync(process.execPath,

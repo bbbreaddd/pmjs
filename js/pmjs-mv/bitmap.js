@@ -139,85 +139,92 @@ if (typeof _Bitmap_blt === 'function') {
 // JavaScript implementation when overridden by plugins (e.g. Bitmap Fonts).
 (function installNativeDrawText() {
   if (typeof Bitmap === 'undefined' || !Bitmap.prototype) return;
-  var originalDrawText = Bitmap.prototype.drawText;
-  var originalOutline = Bitmap.prototype._drawTextOutline;
-  var originalBody = Bitmap.prototype._drawTextBody;
+  PMJS.optimizations.register({ id: 'bitmap.native-draw-text', owner: 'pmjs-mv',
+    fallback: 'stock MV Canvas fillText and strokeText' });
+  function activateNativeDrawText() {
+    if (!PMJS.optimizations.isEnabled('bitmap.native-draw-text')) return;
+    var originalDrawText = Bitmap.prototype.drawText;
+    var originalOutline = Bitmap.prototype._drawTextOutline;
+    var originalBody = Bitmap.prototype._drawTextBody;
 
-  function normalizedSource(fn) {
-    if (typeof fn !== 'function') return '';
-    try {
-      return Function.prototype.toString.call(fn).replace(/\s+/g, '');
-    } catch (_) {
-      return '';
-    }
-  }
-
-  function isStockTextPipeline(drawFn, outlineFn, bodyFn) {
-    var drawSrc = normalizedSource(drawFn);
-    var outlineSrc = normalizedSource(outlineFn);
-    var bodySrc = normalizedSource(bodyFn);
-
-    // Stock RPG Maker MV drawText delegates directly to _drawTextOutline and _drawTextBody
-    var drawMatches = drawSrc.indexOf('this._drawTextOutline(') !== -1 &&
-      drawSrc.indexOf('this._drawTextBody(') !== -1 &&
-      drawSrc.indexOf('this._makeFontNameText()') !== -1 &&
-      drawSrc.indexOf('this._setDirty()') !== -1;
-
-    var outlineMatches = outlineSrc.indexOf('context.strokeText(') !== -1 &&
-      outlineSrc.indexOf('this.outlineColor') !== -1;
-
-    var bodyMatches = bodySrc.indexOf('context.fillText(') !== -1 &&
-      bodySrc.indexOf('this.textColor') !== -1;
-
-    return drawMatches && outlineMatches && bodyMatches;
-  }
-
-  // If Bitmap.prototype.drawText was already modified before PMJS installs,
-  // or outline/body are non-stock, do not install the native accelerator.
-  if (!isStockTextPipeline(originalDrawText, originalOutline, originalBody)) {
-    return;
-  }
-
-  Bitmap.prototype.drawText = function(text, x, y, maxWidth, lineHeight, align) {
-    if (this._drawTextOutline !== originalOutline ||
-        this._drawTextBody !== originalBody) {
-      return originalDrawText.apply(this, arguments);
+    function normalizedSource(fn) {
+      if (typeof fn !== 'function') return '';
+      try {
+        return Function.prototype.toString.call(fn).replace(/\s+/g, '');
+      } catch (_) {
+        return '';
+      }
     }
 
-    text = String(text);
-    if (this._blockTextDrawing || y >= this.height) return;
+    function isStockTextPipeline(drawFn, outlineFn, bodyFn) {
+      var drawSrc = normalizedSource(drawFn);
+      var outlineSrc = normalizedSource(outlineFn);
+      var bodySrc = normalizedSource(bodyFn);
 
-    x = Math.floor(x);
-    y = Math.floor(y);
-    maxWidth = Math.max(0, Math.floor(maxWidth || 0));
-    lineHeight = Math.floor(lineHeight);
+      // Stock RPG Maker MV drawText delegates directly to _drawTextOutline and _drawTextBody
+      var drawMatches = drawSrc.indexOf('this._drawTextOutline(') !== -1 &&
+        drawSrc.indexOf('this._drawTextBody(') !== -1 &&
+        drawSrc.indexOf('this._makeFontNameText()') !== -1 &&
+        drawSrc.indexOf('this._setDirty()') !== -1;
 
-    var descriptor = this._makeFontNameText();
-    var context = this._context;
-    var font = contextFont({ font: descriptor });
-    var measured = NativeHost.canvas.measureText(font.path, text, font.size);
-    var renderedWidth = maxWidth > 0 ? Math.min(measured, maxWidth + 1) : measured;
-    var tx = x;
-    if (align === 'center') tx += maxWidth / 2 - renderedWidth / 2;
-    else if (align === 'right') tx += maxWidth - renderedWidth;
+      var outlineMatches = outlineSrc.indexOf('context.strokeText(') !== -1 &&
+        outlineSrc.indexOf('this.outlineColor') !== -1;
 
-    // The native rasterizer expects an integral baseline offset.
-    var baseline = y + lineHeight -
-      Math.floor((lineHeight - this.fontSize * 0.7) / 2);
-    var canvas = this._canvas._ensureNativeCanvas();
-    var paintAlpha = context.globalAlpha;
-    if (this.outlineWidth > 0) {
+      var bodyMatches = bodySrc.indexOf('context.fillText(') !== -1 &&
+        bodySrc.indexOf('this.textColor') !== -1;
+
+      return drawMatches && outlineMatches && bodyMatches;
+    }
+
+    // If Bitmap.prototype.drawText was already modified before PMJS installs,
+    // or outline/body are non-stock, do not install the native accelerator.
+    if (!isStockTextPipeline(originalDrawText, originalOutline, originalBody)) {
+      PMJS.optimizations.refuse('bitmap.native-draw-text',
+        'unrecognized Bitmap text method composition');
+      return;
+    }
+
+    Bitmap.prototype.drawText = function(text, x, y, maxWidth, lineHeight, align) {
+      if (this._drawTextOutline !== originalOutline ||
+          this._drawTextBody !== originalBody || maxWidth ||
+          (align && align !== 'left')) {
+        return originalDrawText.apply(this, arguments);
+      }
+
+      text = String(text);
+      if (this._blockTextDrawing || y >= this.height) return;
+
+      x = Math.floor(x);
+      y = Math.floor(y);
+      lineHeight = Math.floor(lineHeight);
+
+      var descriptor = this._makeFontNameText();
+      var context = this._context;
+      var font = contextFont({ font: descriptor });
+      // The native rasterizer expects an integral baseline offset.
+      var baseline = y + lineHeight -
+        Math.floor((lineHeight - this.fontSize * 0.7) / 2);
+      var canvas = this._canvas._ensureNativeCanvas();
+      var paintAlpha = context.globalAlpha;
+      if (this.outlineWidth > 0) {
+        NativeHost.canvas.drawText(canvas.handle, font.path, text,
+          x, baseline, font.size,
+          colorWithGlobalAlpha(this.outlineColor, paintAlpha),
+          Math.max(0, Math.floor(this.outlineWidth)));
+      }
       NativeHost.canvas.drawText(canvas.handle, font.path, text,
-        Math.floor(tx), baseline, font.size,
-        colorWithGlobalAlpha(this.outlineColor, paintAlpha),
-        Math.max(0, Math.floor(this.outlineWidth)));
-    }
-    NativeHost.canvas.drawText(canvas.handle, font.path, text,
-      Math.floor(tx), baseline, font.size,
-      colorWithGlobalAlpha(this.textColor, paintAlpha), 0);
-    pmjsBitmapCanvasChanged(this);
-    this._setDirty();
-  };
+        x, baseline, font.size,
+        colorWithGlobalAlpha(this.textColor, paintAlpha), 0);
+      pmjsBitmapCanvasChanged(this);
+      this._setDirty();
+    };
+  }
+  if (PMJS.phases && typeof PMJS.phases.on === 'function') {
+    PMJS.phases.on('afterGuestPlugins', 'pmjs.mv.native-draw-text',
+      activateNativeDrawText);
+  } else {
+    activateNativeDrawText();
+  }
 })();
 
 

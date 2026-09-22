@@ -15,6 +15,10 @@ function loadTiming(extra) {
   context.globalThis = context;
   if (extra) extra(context);
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname,
+    '../js/pmjs-core/config.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname,
+    '../js/pmjs-core/optimizations.js'), 'utf8'), context);
   vm.runInContext(code, context);
   return context;
 }
@@ -151,6 +155,17 @@ test('contract: stock-shaped updateMain is bounded to 2 steps at 30 Hz', () => {
   assert.equal(ctx.SceneManager.renders, 2); // one presentation per call
 });
 
+test('contract: disabled policy leaves guest updateMain unchanged', () => {
+  const ctx = loadTiming((context) => {
+    context.PMJS_GAME_CONFIG = { disableOptimizations: ['mv.logic-timing-contract'] };
+  });
+  ctx.SceneManager = stockShapedScene();
+  const guestUpdateMain = ctx.SceneManager.updateMain;
+  assert.equal(ctx.pmjsMvInstallTimingContract(), false);
+  assert.equal(ctx.SceneManager.updateMain, guestUpdateMain);
+  assert.equal(ctx.PMJS.optimizations.isEnabled('mv.logic-timing-contract'), false);
+});
+
 test('contract: 300 ms stall executes zero catch-up steps then recovers', () => {
   const ctx = loadTiming();
   const logs = [];
@@ -204,6 +219,7 @@ test('contract: direct-stepping override is refused, never wrapped', () => {
   assert.equal(ctx.pmjsMvInstallTimingContract(), false);
   assert.equal(ctx.SceneManager.updateMain._pmjsTimingWrapped, undefined);
   assert.equal(ctx.__pmjsTimingFallback, 'unrecognized-updateMain');
+  assert.equal(ctx.PMJS.optimizations.isEnabled('mv.logic-timing-contract'), false);
   assert.ok(logs.some((line) => line.includes('timing-contract refused')));
   assert.equal(ctx.pmjsMvEnsureTimingContract(), false);
   assert.equal(ctx.SceneManager.updateMain._pmjsTimingWrapped, undefined);

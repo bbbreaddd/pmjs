@@ -122,6 +122,16 @@ if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
     owner: 'pmjs-mv',
     fallback: 'Stock Canvas 2D Sprite._executeTint pixel passes'
   });
+  if (PMJS.phases && typeof PMJS.phases.on === 'function') {
+    PMJS.phases.on('afterGuestPlugins', 'pmjs.mv.native-sprite-tint-proof', function() {
+      var changed = PMJS.methods.dump().some(function(record) {
+        return (record.key === 'Sprite._refresh' ||
+          record.key === 'Sprite._executeTint') && record.mutations.length > 0;
+      });
+      if (changed) PMJS.optimizations.refuse('sprite.native-tint',
+        'guest changed Sprite._refresh or Sprite._executeTint');
+    });
+  }
 }
 
 PMJS.methods.wrap({
@@ -135,7 +145,8 @@ PMJS.methods.wrap({
     var neutralTone = [0, 0, 0, 0];
     var neutralBlend = [0, 0, 0, 0];
     return function() {
-      if (this._pmjsNativeSpriteTint !== false &&
+      if (Object.getPrototypeOf(this) === Sprite.prototype &&
+          this._pmjsNativeSpriteTint !== false &&
           PMJS.optimizations.isEnabled('sprite.native-tint')) {
         var tone = this._colorTone;
         var blend = this._blendColor;

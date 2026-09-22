@@ -376,7 +376,7 @@ test('YED adapter activates on its trigger plugin and ignores others', () => {
   assert.equal(sandbox.TiledTilemap.prototype._paintAllTiles, paintAllTiles);
 });
 
-test('YED integration installs per plugin so later extensions wrap optimized behavior', () => {
+test('YED integration checks the final guest method composition', () => {
   const sandbox = {
     console,
     comparePmjsTilemapChildren: () => 0,
@@ -406,16 +406,18 @@ test('YED integration installs per plugin so later extensions wrap optimized beh
   sandbox.Spriteset_Map.prototype._updateHideOnLevel = function() {};
 
   sandbox.PMJS.plugins.execute('YED_Tiled', function() {});
-  assert.equal(sandbox.TiledTilemap.prototype._pmjsIndexedPaintLoops, true);
+  assert.equal(sandbox.TiledTilemap.prototype._pmjsIndexedPaintLoops, undefined);
 
-  // A later extension wraps the already-optimized repaint naturally.
-  const optimized = sandbox.TiledTilemap.prototype._paintAllTiles;
+  const original = sandbox.TiledTilemap.prototype._paintAllTiles;
   let extensionCalls = 0;
   sandbox.TiledTilemap.prototype._paintAllTiles = function extensionWrapper(
       startX, startY) {
     extensionCalls++;
-    return optimized.apply(this, arguments);
+    return original.apply(this, arguments);
   };
+  sandbox.PMJS.phases.emit('afterGuestPlugins');
+  assert.equal(sandbox.PMJS.optimizations.reason('tilemap.yed-indexed-paint-loops'),
+    'refused: unrecognized YED tilemap method composition');
 
   const tilemap = {
     _priorityTiles: [],
@@ -427,7 +429,7 @@ test('YED integration installs per plugin so later extensions wrap optimized beh
   };
   sandbox.TiledTilemap.prototype._paintAllTiles.call(tilemap, 0, 0);
   assert.equal(extensionCalls, 1);
-  assert.equal(tilemap._pmjsPriorityRepaintGeneration, 1);
+  assert.equal(tilemap._pmjsPriorityRepaintGeneration, undefined);
 });
 
 function faithfulPaintTile(layer, startX, startY, x, y) {
@@ -839,10 +841,12 @@ test('indexed-animation switch restores full animation repainting', () => {
   assert.equal(TiledTilemap.prototype._pmjsIndexedPaintLoops, true);
 });
 
-test('paint-loop switch leaves the complete YED implementation untouched', () => {
-  const { TiledTilemap } = makeAnimatedTilemap({
+test('paint-loop switch refuses dependent indexed animation', () => {
+  const { TiledTilemap, context } = makeAnimatedTilemap({
     disableOptimizations: ['tilemap.yed-indexed-paint-loops']
   });
+  assert.equal(context.PMJS.optimizations.reason('tilemap.yed-indexed-animation'),
+    'refused: requires tilemap.yed-indexed-paint-loops');
   assert.equal(TiledTilemap.prototype._pmjsIndexedPaintLoops, undefined);
   assert.equal(TiledTilemap.prototype._pmjsIndexedAnimation, undefined);
   assert.equal(TiledTilemap.prototype._paintAllTiles, faithfulPaintAllTiles);

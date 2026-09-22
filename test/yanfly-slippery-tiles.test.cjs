@@ -102,6 +102,7 @@ function makeHost({
   vm.runInContext(moduleSource, context, { filename: 'slippery-tiles.js' });
   if (autoActivate) {
     context.PMJS.plugins.execute('YEP_SlipperyTiles', function() {});
+    context.PMJS.phases.emit('afterGuestPlugins');
   }
   return context;
 }
@@ -122,6 +123,7 @@ test('plugin lifecycle hook ignores unrelated plugins', () => {
   context.PMJS.plugins.execute('SomeOtherPlugin', function() {});
   assert.equal(context.Game_Map.prototype.isSlippery, stock);
   context.PMJS.plugins.execute('YEP_SlipperyTiles', function() {});
+  context.PMJS.phases.emit('afterGuestPlugins');
   assert.notEqual(context.Game_Map.prototype.isSlippery, stock);
   assert.equal(context.Game_Map.prototype.__pmjsSlipperyTilesGuard, true);
 });

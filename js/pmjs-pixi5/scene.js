@@ -63,10 +63,13 @@
         frame.height === baseHeight) {
       return { handle: native.handle, resolution: resolution };
     }
-    var signature = [native.handle, Number(texture._updateID) || 0,
+    var sourceRevision = source && source.__pmjsContentRevision;
+    var cacheable = !(source && typeof source._ensureNativeCanvas === 'function') ||
+      typeof sourceRevision === 'number';
+    var signature = [native.handle, sourceRevision, Number(texture._updateID) || 0,
       frame.x, frame.y, frame.width, frame.height, resolution].join(':');
     if (texture.__pmjsPixi5TilingCanvas &&
-        texture.__pmjsPixi5TilingSignature === signature) {
+        texture.__pmjsPixi5TilingSignature === signature && cacheable) {
       return { handle: texture.__pmjsPixi5TilingCanvas
         ._ensureNativeCanvas().handle, resolution: resolution };
     }

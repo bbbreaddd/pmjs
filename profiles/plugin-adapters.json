@@ -23,13 +23,6 @@
     {
       "plugins": ["Atlas Loader"],
       "modules": ["js/pmjs-plugins/atlas-loader/image-retention.js"]
-    },
-    {
-      "plugins": ["Aetherflow_PreloadEverything"],
-      "modules": [
-        "js/pmjs-plugins/aetherflow/image-cache.js",
-        "js/pmjs-plugins/aetherflow/audio-cache.js"
-      ]
     }
   ]
 }

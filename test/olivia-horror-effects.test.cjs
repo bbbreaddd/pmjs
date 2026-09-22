@@ -187,6 +187,8 @@ test('Olivia adapter activates on its trigger plugin and ignores others', () => 
   assert.equal(sandbox.Sprite.prototype.updateHorrorEffects, before);
 
   sandbox.PMJS.plugins.execute('Olivia_HorrorEffects', function() {});
+  assert.equal(sandbox.Sprite.prototype.updateHorrorEffects, before);
+  sandbox.PMJS.phases.emit('afterGuestPlugins');
   assert.notEqual(sandbox.Sprite.prototype.updateHorrorEffects, before);
   assert.equal(sandbox.Sprite.prototype._pmjsOliviaInstalled, true);
 });

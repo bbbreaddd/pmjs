@@ -14,7 +14,8 @@ const rendererSource = fs.readFileSync(
 const methodsSource = fs.readFileSync(
   path.join(runtimeRoot, 'js/pmjs-core/methods.js'), 'utf8');
 
-function setupEnvironment({ config = {}, env = {}, beforeInstall } = {}) {
+function setupEnvironment({ config = {}, env = {}, beforeInstall,
+  afterRegister } = {}) {
   const context = {
     console: { log() {} },
     PMJS_GAME_CONFIG: config,
@@ -142,8 +143,13 @@ function setupEnvironment({ config = {}, env = {}, beforeInstall } = {}) {
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-core/config.js'), 'utf8'), context);
   vm.runInContext(optimizationsSource, context, { filename: 'optimizations.js' });
+  vm.runInContext(fs.readFileSync(path.join(runtimeRoot,
+    'js/pmjs-rpgmaker/lifecycle.js'), 'utf8'), context,
+  { filename: 'lifecycle.js' });
   vm.runInContext(methodsSource, context, { filename: 'methods.js' });
   vm.runInContext(rendererSource, context, { filename: 'renderer.js' });
+  if (afterRegister) afterRegister(context);
+  context.PMJS.phases.emit('afterGuestPlugins');
   context.PMJS.methods.install();
   return context;
 }
@@ -152,6 +158,24 @@ test('sprite.native-tint registers and defaults to enabled', () => {
   const ctx = setupEnvironment();
   assert.equal(ctx.PMJS.optimizations.isEnabled('sprite.native-tint'), true);
   assert.equal(ctx.PMJS.optimizations.reason('sprite.native-tint'), 'enabled');
+});
+
+test('guest _executeTint mutation refuses native tint and runs CPU tint', () => {
+  const ctx = setupEnvironment({ afterRegister(context) {
+    const token = context.PMJS.methods.beginPlugin('GuestTint');
+    const original = context.Sprite.prototype._executeTint;
+    context.Sprite.prototype._executeTint = function() {
+      this.guestTintCalls = (this.guestTintCalls || 0) + 1;
+      return original.apply(this, arguments);
+    };
+    context.PMJS.methods.endPlugin(token);
+  } });
+  assert.match(ctx.PMJS.optimizations.reason('sprite.native-tint'),
+    /refused: guest changed/);
+  const sprite = new ctx.Sprite(new ctx.Bitmap(20, 20));
+  sprite._colorTone = [20, 0, 0, 0];
+  sprite._refresh();
+  assert.equal(sprite.guestTintCalls, 1);
 });
 
 test('sprite.native-tint disables via PMJS_DISABLE_OPT', () => {
@@ -438,13 +462,13 @@ test('pixel parity: shader formula matches Canvas 2D tint within 1 LSB across to
   }
 });
 
-test('picture and character sprite subclasses bypass CPU tint across multiple tone/blend updates', () => {
+test('unrecognized sprite subclasses retain CPU tint across tone updates', () => {
   const ctx = setupEnvironment();
   function Sprite_Picture() {
     ctx.Sprite.apply(this, arguments);
   }
   Sprite_Picture.prototype = Object.create(ctx.Sprite.prototype);
-  Sprite_Picture.prototype.constructor = Sprite_Picture;
+  Sprite_Picture.prototype.constructor = ctx.Sprite;
 
   const bitmap = new ctx.Bitmap(816, 624);
   const picture = new Sprite_Picture(bitmap);
@@ -461,9 +485,8 @@ test('picture and character sprite subclasses bypass CPU tint across multiple to
     picture._refresh();
   }
 
-  assert.equal(picture.executeTintCalls, 0);
-  assert.equal(picture.texture.baseTexture, bitmap.baseTexture);
-  assert.equal(picture.texture.frame, picture._realFrame);
+  assert.ok(picture.executeTintCalls > 0);
+  assert.equal(picture.texture.baseTexture, picture._tintTexture);
   assert.equal(picture.texture.frame.width, 816);
   assert.equal(picture.texture.frame.height, 624);
 });

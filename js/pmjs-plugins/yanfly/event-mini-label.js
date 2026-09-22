@@ -123,9 +123,17 @@
 
     var spriteProto = typeof Sprite_Character !== 'undefined' &&
       Sprite_Character.prototype ? Sprite_Character.prototype : null;
-    if (!spriteProto || spriteProto.__pmjsMiniLabelCache ||
-        typeof spriteProto.setupMiniLabel !== 'function' ||
-        fnBody(spriteProto.setupMiniLabel) !== KNOWN_BODY) return false;
+    if (!spriteProto || typeof spriteProto.setupMiniLabel !== 'function') {
+      PMJS.optimizations.refuse('plugins.yanfly.event-mini-label',
+        'Yanfly setupMiniLabel method unavailable');
+      return false;
+    }
+    if (spriteProto.__pmjsMiniLabelCache) return true;
+    if (fnBody(spriteProto.setupMiniLabel) !== KNOWN_BODY) {
+      PMJS.optimizations.refuse('plugins.yanfly.event-mini-label',
+        'unrecognized Yanfly setupMiniLabel method composition');
+      return false;
+    }
 
     var original = spriteProto.setupMiniLabel;
 
@@ -153,8 +161,8 @@
 
   PMJS.plugins.onLoaded('YEP_EventMiniLabel',
     'pmjs.adapter.yanfly-event-mini-label', function() {
-      install();
-      PMJS.phases.on('beforeBoot', 'pmjs.adapter.yanfly-event-mini-label', install);
+      PMJS.phases.on('afterGuestPlugins',
+        'pmjs.adapter.yanfly-event-mini-label', install);
     });
 
   globalThis.pmjsInstallEventMiniLabelFastPath = install;

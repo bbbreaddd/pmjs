@@ -106,6 +106,28 @@ test('tilemap.persistent-layer-cache reuses the compiled layer when enabled', ()
   assert.equal(first, second);
 });
 
+test('tilemap cache sees direct pointsBuf mutation without a generation bump', () => {
+  const { context, calls } = loadScenePrimitives();
+  const layer = tileLayer();
+  callIn(context, 'ensureNativeRectTileLayer(layer)', 'layer', layer);
+  layer.pointsBuf[0] = 17;
+  callIn(context, 'ensureNativeRectTileLayer(layer)', 'layer', layer);
+  assert.equal(calls.createTileLayer, 2);
+  assert.equal(calls.tileLayerPoints[1][0], 17);
+});
+
+test('persistent tile cache works with bulk transfer disabled', () => {
+  const { context, calls } = loadScenePrimitives(
+    { disableOptimizations: ['tilemap.bulk-layer-transfer'] });
+  const layer = tileLayer();
+  callIn(context, 'ensureNativeRectTileLayer(layer)', 'layer', layer);
+  callIn(context, 'ensureNativeRectTileLayer(layer)', 'layer', layer);
+  assert.equal(calls.createTileLayer, 1);
+  layer.pointsBuf[0] = 17;
+  callIn(context, 'ensureNativeRectTileLayer(layer)', 'layer', layer);
+  assert.equal(calls.createTileLayer, 2);
+});
+
 test('tilemap.bulk-layer-transfer stages records in a reusable Float32Array', () => {
   const enabled = loadScenePrimitives();
   const layer = tileLayer();
@@ -204,6 +226,20 @@ test('scene.tiling-texture-cache rasterizes once when enabled, always when disab
   callIn(disabled.context, 'ensureNativeTilingTexture(other)', 'other', other);
   callIn(disabled.context, 'ensureNativeTilingTexture(other)', 'other', other);
   assert.equal(disabled.calls.putImageData, 2);
+});
+
+test('tiling texture cache invalidates when canvas pixels change', () => {
+  const { context, calls } = loadScenePrimitives();
+  const texture = tilingTexture();
+  const source = texture.baseTexture.source;
+  source.__pmjsContentRevision = 1;
+  source._ensureNativeCanvas = function() { return source._nativeImage; };
+  callIn(context, 'ensureNativeTilingTexture(texture)', 'texture', texture);
+  callIn(context, 'ensureNativeTilingTexture(texture)', 'texture', texture);
+  assert.equal(calls.putImageData, 1);
+  source.__pmjsContentRevision++;
+  callIn(context, 'ensureNativeTilingTexture(texture)', 'texture', texture);
+  assert.equal(calls.putImageData, 2);
 });
 
 function vectorGraphics() {

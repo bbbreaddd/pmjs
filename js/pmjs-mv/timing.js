@@ -3,6 +3,12 @@
 // MV logic stays at its authored 60 Hz while presentation is paced separately.
 
 (function() {
+  var timingOptimizationId = 'mv.logic-timing-contract';
+  PMJS.optimizations.register({
+    id: timingOptimizationId,
+    owner: 'pmjs-mv/timing',
+    fallback: 'leave final guest SceneManager.updateMain unchanged'
+  });
   var PMJS_MV_LOGIC_HZ = 60;
   var STEP_MS = 1000 / PMJS_MV_LOGIC_HZ;
   var MAX_DEBT_MS = 250;
@@ -121,12 +127,15 @@
   }
 
   function pmjsMvInstallTimingContract(options) {
+    if (!PMJS.optimizations.isEnabled(timingOptimizationId)) return false;
     if (typeof SceneManager === 'undefined' || !SceneManager) return false;
     if (typeof SceneManager.updateMain !== 'function') return false;
     if (SceneManager.updateMain._pmjsTimingWrapped) return true;
     if (SceneManager.updateMain._pmjsTimingRefused) return false;
     if (!pmjsMvRecognizesUpdateMain(SceneManager.updateMain)) {
       pmjsMvRefuseTimingContract('unrecognized-updateMain');
+      PMJS.optimizations.refuse(timingOptimizationId,
+        'unrecognized SceneManager.updateMain composition');
       return false;
     }
     var original = SceneManager.updateMain;

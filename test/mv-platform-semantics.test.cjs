@@ -758,6 +758,8 @@ test('Bitmap.prototype.drawText installs native acceleration only for stock pipe
       }
     };
     const context = vm.createContext(sandbox);
+    context.PMJS = { config: {} };
+    vm.runInContext(fs.readFileSync(path.join(jsDir, 'pmjs-core/optimizations.js'), 'utf8'), context);
     const bitmapCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/bitmap.js'), 'utf8');
     vm.runInContext(bitmapCode, context);
     return context;
@@ -766,9 +768,16 @@ test('Bitmap.prototype.drawText installs native acceleration only for stock pipe
   const StockBitmap = makeMockBitmapClass();
   const stockContext = createContext(StockBitmap);
   const stockBmp = new stockContext.Bitmap();
-  stockBmp.drawText('hello', 0, 0, 100, 20, 'left');
+  stockBmp.drawText('hello', 0, 0, 0, 20, 'left');
   assert.equal(nativeDrawCalls > 0, true, 'stock methods should use native fast path');
   assert.equal(stockOutlineCalls, 0, 'stock outline should not be called when native fast-path runs');
+  nativeDrawCalls = 0;
+  stockBmp.drawText('constrained', 0, 0, 12, 20, 'left');
+  assert.equal(nativeDrawCalls, 0, 'constrained text must keep Canvas maxWidth');
+  assert.equal(stockOutlineCalls, 1);
+  stockBmp.drawText('centered', 0, 0, 0, 20, 'center');
+  assert.equal(nativeDrawCalls, 0, 'unconstrained alignment must keep stock positioning');
+  assert.equal(stockOutlineCalls, 2);
 
   let pluginDrawCalls = 0;
   const PreModifiedBitmap = makeMockBitmapClass(function(text) {

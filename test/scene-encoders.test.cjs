@@ -890,7 +890,26 @@ test('strict and headless hits throw with the capability', () => {
     };
     assert.throws(() => sandbox.renderNativeStage(root),
       /unsupported native capability: render\.filter/);
+    assert.equal(harness.submitted.length, 0);
+    assert.equal(sandbox.renderNativeStage._ready, false);
   }
+});
+
+test('PMJS_STRICT_COMPAT rejects an unsupported filter before submission', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  sandbox.NativeHost.runtime.env = name =>
+    name === 'PMJS_STRICT_COMPAT' ? '1' : undefined;
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..',
+    'js/pmjs-core/compatibility.js'), 'utf8'), sandbox);
+  const root = new sandbox.PIXI.Container();
+  const filtered = sprite();
+  filtered._filters = [{ enabled: true }];
+  root.addChild(filtered);
+  assert.throws(() => sandbox.renderNativeStage(root),
+    /unsupported native capability: render\.filter/);
+  assert.equal(harness.submitted.length, 0);
+  assert.equal(sandbox.renderNativeStage._ready, false);
 });
 
 test('native submit failure clears readiness and restores the stage parent', () => {

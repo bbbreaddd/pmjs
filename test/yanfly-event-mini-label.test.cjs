@@ -99,6 +99,7 @@ function makeHost({
 
   vm.runInContext(moduleSource, context, { filename: 'event-mini-label.js' });
   context.PMJS.plugins.execute('YEP_EventMiniLabel', function() {});
+  context.PMJS.phases.emit('afterGuestPlugins');
   return context;
 }
 

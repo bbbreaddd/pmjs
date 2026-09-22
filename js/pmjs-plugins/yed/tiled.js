@@ -190,11 +190,21 @@
     if (!tiledProto || tiledProto._pmjsIndexedPaintLoops) return true;
 
     if (!looksLikeKnownYedImplementation(tiledProto)) {
+      PMJS.optimizations.refuse('tilemap.yed-indexed-paint-loops',
+        'unrecognized YED tilemap method composition');
+      PMJS.optimizations.refuse('tilemap.yed-indexed-animation',
+        'unrecognized YED tilemap method composition');
       return false;
     }
 
     var useIndexedPaintLoops = PMJS.optimizations.isEnabled('tilemap.yed-indexed-paint-loops');
-    if (!useIndexedPaintLoops) return true;
+    if (!useIndexedPaintLoops) {
+      if (PMJS.optimizations.isEnabled('tilemap.yed-indexed-animation')) {
+        PMJS.optimizations.refuse('tilemap.yed-indexed-animation',
+          'requires tilemap.yed-indexed-paint-loops');
+      }
+      return true;
+    }
 
     tiledProto._compareChildOrder = compareYedTiledChildren;
 
@@ -341,6 +351,10 @@
 
     var useIndexedAnimation = PMJS.optimizations.isEnabled('tilemap.yed-indexed-animation');
 
+    if (useIndexedAnimation && !looksLikeKnownYedIndexedAnimation(tiledProto)) {
+      PMJS.optimizations.refuse('tilemap.yed-indexed-animation',
+        'unrecognized YED animation method composition');
+    }
     if (useIndexedAnimation && looksLikeKnownYedIndexedAnimation(tiledProto)) {
       tiledProto._paintTile = function(layer, startX, startY, x, y) {
         var mx = x + startX;
@@ -654,25 +668,18 @@
 
   globalThis.pmjsInstallYedTiledFastPaths = installYedTiledFastPaths;
 
-  function installYedTiledInstanceHook() {
-    if (typeof Spriteset_Map !== 'function') return false;
-    var spritesetProto = Spriteset_Map.prototype;
-    if (!spritesetProto || spritesetProto._pmjsYedInstanceHook ||
-        typeof spritesetProto.createTilemap !== 'function') return false;
-    var createTilemap = spritesetProto.createTilemap;
-    spritesetProto.createTilemap = function() {
-      var result = createTilemap.apply(this, arguments);
-      var constructor = this._tilemap && this._tilemap.constructor;
-      installYedTiledFastPaths(constructor);
-      return result;
-    };
-    spritesetProto._pmjsYedInstanceHook = true;
-    return true;
-  }
-
   function activateYedTiled() {
-    if (!installYedTiledFastPaths()) installYedTiledInstanceHook();
+    if (typeof globalThis.TiledTilemap !== 'function') {
+      PMJS.optimizations.refuse('tilemap.yed-indexed-paint-loops',
+        'YED tilemap constructor unavailable after guest plugins');
+      PMJS.optimizations.refuse('tilemap.yed-indexed-animation',
+        'YED tilemap constructor unavailable after guest plugins');
+      return;
+    }
+    installYedTiledFastPaths();
   }
 
-  PMJS.plugins.onLoaded('YED_Tiled', 'pmjs.adapter.yed-tiled', activateYedTiled);
+  PMJS.plugins.onLoaded('YED_Tiled', 'pmjs.adapter.yed-tiled', function() {
+    PMJS.phases.on('afterGuestPlugins', 'pmjs.adapter.yed-tiled', activateYedTiled);
+  });
 })();

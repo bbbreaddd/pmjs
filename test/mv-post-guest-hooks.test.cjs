@@ -62,10 +62,11 @@ test('Bitmap image hooks wrap the final guest implementation', () => {
   assert.equal(other.cleared, 1);
 });
 
-test('WindowLayer initialize keeps guest behavior with native setup', () => {
+test('engine leaves guest WindowLayer initialize and filters untouched', () => {
   function WindowLayer() {}
   WindowLayer.prototype.initialize = function(value) {
     this.guestInit = value;
+    this.filters = [{ guest: true }];
     return 'guest result';
   };
   WindowLayer.voidFilter = { void: true };
@@ -74,9 +75,8 @@ test('WindowLayer initialize keeps guest behavior with native setup', () => {
     NativeHost: { runtime: { loadScript() {} } },
   });
   const source = fs.readFileSync(path.join(root, 'js/pmjs-mv/engine.js'), 'utf8');
-  vm.runInContext(slice(source, 'function pmjsWindowLayerInitializeWrap',
-    "\nNativeHost.runtime.loadScript('js/rpg_managers.js');"), ctx,
-  { filename: 'engine-windowlayer.js' });
+  const guestInitialize = WindowLayer.prototype.initialize;
+  vm.runInContext(source, ctx, { filename: 'engine.js' });
   ctx.PMJS.methods.install();
 
   const layer = new WindowLayer();
@@ -84,9 +84,11 @@ test('WindowLayer initialize keeps guest behavior with native setup', () => {
   layer._renderSprite = {};
   assert.equal(layer.initialize('plugin argument'), 'guest result');
   assert.equal(layer.guestInit, 'plugin argument');
-  assert.equal(layer._tempCanvas, null);
-  assert.equal(layer._renderSprite, null);
-  assert.deepEqual(JSON.parse(JSON.stringify(layer.filters)), [{ void: true }]);
+  assert.ok(layer._tempCanvas);
+  assert.ok(layer._renderSprite);
+  assert.equal(WindowLayer.prototype.initialize, guestInitialize);
+  assert.deepEqual(JSON.parse(JSON.stringify(layer.filters)),
+    [{ guest: true }]);
 });
 
 test('trace _executeTint observes without replacing guest behavior', () => {

@@ -93,11 +93,19 @@ if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
 
     var mapProto = typeof Game_Map !== 'undefined' &&
       Game_Map.prototype ? Game_Map.prototype : null;
-    if (!mapProto || mapProto.__pmjsSlipperyTilesGuard ||
-        typeof mapProto.isSlippery !== 'function' ||
-        typeof mapProto.setup !== 'function') return false;
+    if (!mapProto || typeof mapProto.isSlippery !== 'function' ||
+        typeof mapProto.setup !== 'function') {
+      PMJS.optimizations.refuse('plugins.yanfly.slippery-tiles',
+        'Yanfly map methods unavailable');
+      return false;
+    }
+    if (mapProto.__pmjsSlipperyTilesGuard) return true;
 
-    if (fnBody(mapProto.isSlippery) !== KNOWN_SLIPPERY_QUERY) return false;
+    if (fnBody(mapProto.isSlippery) !== KNOWN_SLIPPERY_QUERY) {
+      PMJS.optimizations.refuse('plugins.yanfly.slippery-tiles',
+        'unrecognized Yanfly isSlippery method composition');
+      return false;
+    }
 
     var originalIsSlippery = mapProto.isSlippery;
     var originalSetup = mapProto.setup;
@@ -138,7 +146,7 @@ if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
 
   PMJS.plugins.onLoaded('YEP_SlipperyTiles',
     'pmjs.adapter.yanfly-slippery-tiles', function() {
-      install();
-      PMJS.phases.on('beforeBoot', 'pmjs.adapter.yanfly-slippery-tiles', install);
+      PMJS.phases.on('afterGuestPlugins',
+        'pmjs.adapter.yanfly-slippery-tiles', install);
     });
 })();

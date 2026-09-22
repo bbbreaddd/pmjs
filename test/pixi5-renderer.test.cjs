@@ -292,6 +292,27 @@ test('Pixi 5 scene encoder isolates atlas frames used by TilingSprite', () => {
     [0, 96, 96, 96, 0, 0, 96, 96]);
 });
 
+test('Pixi 5 tiling cache invalidates when its canvas source changes', () => {
+  const fixture = createContext();
+  runModule(fixture.context, 'js/pmjs-pixi5/scene.js');
+  runModule(fixture.context, 'js/pmjs-pixi5/renderer.js');
+  const app = new fixture.context.PIXI.Application({ width: 100, height: 50 });
+  const source = { _nativeCanvas: { handle: 73 }, __pmjsContentRevision: 1,
+    _ensureNativeCanvas() { return this._nativeCanvas; } };
+  const texture = {
+    baseTexture: { resource: { source }, width: 192, height: 192,
+      resolution: 1, scaleMode: 0 },
+    frame: { x: 0, y: 96, width: 96, height: 96 }, trim: null, rotate: 0,
+  };
+  app.stage.addChild(new fixture.context.PIXI.TilingSprite(texture, 80, 40));
+  app.render();
+  app.render();
+  assert.equal(texture.__pmjsPixi5TilingCanvas.drawCalls.length, 1);
+  source.__pmjsContentRevision++;
+  app.render();
+  assert.equal(texture.__pmjsPixi5TilingCanvas.drawCalls.length, 2);
+});
+
 test('Pixi 5 scene encoder omits non-drawable transform subtrees', () => {
   const fixture = createContext();
   runModule(fixture.context, 'js/pmjs-pixi5/scene.js');

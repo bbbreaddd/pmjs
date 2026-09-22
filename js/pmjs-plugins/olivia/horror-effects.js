@@ -119,7 +119,11 @@
         !globalThis.Olivia.HorrorEffects) return false;
     var proto = Sprite.prototype;
     if (!proto || proto._pmjsOliviaInstalled) return true;
-    if (typeof proto.updateHorrorEffects !== 'function') return false;
+    if (typeof proto.updateHorrorEffects !== 'function') {
+      PMJS.optimizations.refuse('plugins.olivia.horror-effects',
+        'Olivia updateHorrorEffects method unavailable');
+      return false;
+    }
 
     if (!PMJS.optimizations.isEnabled('plugins.olivia.horror-effects')) {
       return false;
@@ -226,14 +230,21 @@
       }
     }
 
-    if (!integrated) return false;
+    if (!integrated) {
+      PMJS.optimizations.refuse('plugins.olivia.horror-effects',
+        'unrecognized Olivia method composition');
+      return false;
+    }
     proto._pmjsOliviaInstalled = true;
     proto._pmjsOliviaFastPaths = true;
     return true;
   }
 
   PMJS.plugins.onLoaded('Olivia_HorrorEffects', 'pmjs.adapter.olivia-horror',
-    installOliviaHorrorEffects);
+    function() {
+      PMJS.phases.on('afterGuestPlugins', 'pmjs.adapter.olivia-horror',
+        installOliviaHorrorEffects);
+    });
 
   globalThis.pmjsInstallOliviaHorrorEffects = installOliviaHorrorEffects;
   globalThis.pmjsInstallOliviaHorrorFastPaths = installOliviaHorrorEffects;

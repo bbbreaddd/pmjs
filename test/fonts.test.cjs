@@ -365,12 +365,13 @@ test('Multiple dynamic faces and font stack with spaces', () => {
   assert.equal(resolvedC.path, 'fonts/CustomFont_C.ttf');
 });
 
-test('Plugin wrap ordering: PMJS drawText accelerated and wrapped by plugin font selector', () => {
+test('post-guest text activation refuses a plugin-wrapped font selector', () => {
   const { context, drawCalls } = createFontSandbox({
     existingFiles: ['fonts/PrimaryFont.ttf', 'fonts/SecondaryFont.ttf']
   });
 
   context.colorWithGlobalAlpha = () => 0xffffffff;
+  let stockFills = 0;
 
   function MockBitmap() {
     this.width = 100;
@@ -385,7 +386,7 @@ test('Plugin wrap ordering: PMJS drawText accelerated and wrapped by plugin font
       save() {},
       restore() {},
       strokeText() {},
-      fillText() {},
+      fillText() { stockFills++; },
       measureText: function() { return { width: 42 }; }
     };
     this._canvas = { _ensureNativeCanvas() { return { handle: 1 }; } };
@@ -434,21 +435,27 @@ test('Plugin wrap ordering: PMJS drawText accelerated and wrapped by plugin font
   context.Input = function() {};
 
   const bitmapCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/bitmap.js'), 'utf8');
+  vm.runInContext(fs.readFileSync(path.join(jsDir, 'pmjs-core/optimizations.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(jsDir, 'pmjs-rpgmaker/lifecycle.js'), 'utf8'), context);
   vm.runInContext(bitmapCode, context);
 
   context.PMJS.fonts.registerFace('customFace', 'fonts/PrimaryFont.ttf');
 
-  const capturedPmjsDrawText = context.Bitmap.prototype.drawText;
+  const capturedGuestDrawText = context.Bitmap.prototype.drawText;
   context.Bitmap.prototype.drawText = function(text, x, y, maxWidth, lineHeight, align) {
     this.fontFace = 'customFace';
-    capturedPmjsDrawText.call(this, text, x, y, maxWidth, lineHeight, align);
+    capturedGuestDrawText.call(this, text, x, y, maxWidth, lineHeight, align);
   };
+  context.PMJS.phases.emit('afterGuestPlugins');
+  assert.match(context.PMJS.optimizations.reason('bitmap.native-draw-text'),
+    /refused: unrecognized Bitmap text method composition/);
 
   const bmp = new context.Bitmap();
-  bmp.drawText('Test Text', 0, 0, 100, 20, 'left');
+  bmp.drawText('Test Text', 0, 0, 0, 20, 'left');
 
-  assert.equal(drawCalls.length, 2);
-  assert.equal(drawCalls[0].fontPath, 'fonts/PrimaryFont.ttf');
+  assert.equal(drawCalls.length, 0);
+  assert.equal(stockFills, 1);
+  assert.equal(bmp.fontFace, 'customFace');
 
   bmp.fontFace = 'customFace';
   const width = bmp.measureTextWidth('Test Text');
