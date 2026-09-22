@@ -217,14 +217,16 @@ test('YED level hiding reruns only when level or repaint generation changes', ()
   context.TiledTilemap.prototype._paintTilesLayer = faithfulPaintTilesLayer;
   vm.createContext(context);
   let calls = 0;
-  context.Spriteset_Map.prototype._updateHideOnLevel = function() { calls++; };
+  vm.runInContext('Spriteset_Map.prototype._updateHideOnLevel = function() {' +
+    ' this._tilemap.hideOnLevel($gameMap.currentMapLevel); };', context);
   loadRegistrySupport(context);
   vm.runInContext(source, context,
     { filename: 'js/pmjs-plugins/yed/tiled.js' });
   context.pmjsInstallYedTiledFastPaths();
 
   const instance = new context.Spriteset_Map();
-  instance._tilemap = { _pmjsPriorityRepaintGeneration: 1 };
+  instance._tilemap = { _pmjsPriorityRepaintGeneration: 1,
+    hideOnLevel() { calls++; } };
 
   instance._updateHideOnLevel();
   instance._updateHideOnLevel();
@@ -272,6 +274,37 @@ test('YED fast paths refuse to overwrite unknown or composed implementations', (
   assert.equal(context.TiledTilemap.prototype._paintTilesLayer,
     context.saved.tiles);
   assert.equal(context.TiledTilemap.prototype._compareChildOrder, undefined);
+});
+
+test('YED paint optimization preserves a composed child comparator', () => {
+  function customOrder() { return -1; }
+  const { context, installed } = installInContext(ctx => {
+    ctx.TiledTilemap = function TiledTilemap() {};
+    ctx.TiledTilemap.prototype._paintAllTiles = faithfulPaintAllTiles;
+    ctx.TiledTilemap.prototype._updateLayerPositions = faithfulUpdateLayerPositions;
+    ctx.TiledTilemap.prototype._paintObjectLayers = faithfulPaintObjectLayers;
+    ctx.TiledTilemap.prototype._paintTilesLayer = faithfulPaintTilesLayer;
+    ctx.TiledTilemap.prototype._compareChildOrder = customOrder;
+    ctx.Spriteset_Map = function Spriteset_Map() {};
+  });
+  assert.equal(installed, false);
+  assert.equal(context.TiledTilemap.prototype._compareChildOrder, customOrder);
+  assert.equal(context.TiledTilemap.prototype._paintAllTiles, faithfulPaintAllTiles);
+});
+
+test('YED paint optimization leaves a composed level hiding method in place', () => {
+  function customHide() { this.extraWork = true; }
+  const { context, installed } = installInContext(ctx => {
+    ctx.TiledTilemap = function TiledTilemap() {};
+    ctx.TiledTilemap.prototype._paintAllTiles = faithfulPaintAllTiles;
+    ctx.TiledTilemap.prototype._updateLayerPositions = faithfulUpdateLayerPositions;
+    ctx.TiledTilemap.prototype._paintObjectLayers = faithfulPaintObjectLayers;
+    ctx.TiledTilemap.prototype._paintTilesLayer = faithfulPaintTilesLayer;
+    ctx.Spriteset_Map = function Spriteset_Map() {};
+    ctx.Spriteset_Map.prototype._updateHideOnLevel = customHide;
+  });
+  assert.equal(installed, true);
+  assert.equal(context.Spriteset_Map.prototype._updateHideOnLevel, customHide);
 });
 
 test('YED fast paths refuse modified implementations that only keep loose tokens', () => {
@@ -322,12 +355,24 @@ test('YED fast paths refuse modified implementations that only keep loose tokens
 
 test('YED fast paths install when recognized as known YED implementation', () => {
   const { context, installed } = installInContext(ctx => {
+    function knownChildOrder(a, b) {
+      if ((a.z || 0) !== (b.z || 0)) {
+        return (a.z || 0) - (b.z || 0);
+      } else if ((a.y || 0) !== (b.y || 0)) {
+        return (a.y || 0) - (b.y || 0);
+      } else if ((a.priority || 0) !== (b.priority || 0)) {
+        return (a.priority || 0) - (b.priority || 0);
+      } else {
+        return a.spriteId - b.spriteId;
+      }
+    }
     ctx.TiledTilemap = function TiledTilemap() {};
     ctx.TiledTilemap.prototype._paintAllTiles = faithfulPaintAllTiles;
     ctx.TiledTilemap.prototype._updateLayerPositions =
       faithfulUpdateLayerPositions;
     ctx.TiledTilemap.prototype._paintObjectLayers = faithfulPaintObjectLayers;
     ctx.TiledTilemap.prototype._paintTilesLayer = faithfulPaintTilesLayer;
+    ctx.TiledTilemap.prototype._compareChildOrder = knownChildOrder;
     ctx.Spriteset_Map = function Spriteset_Map() {};
     ctx.Spriteset_Map.prototype._updateHideOnLevel = function() {};
   });

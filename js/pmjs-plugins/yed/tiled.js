@@ -168,6 +168,27 @@
            looksLikeKnownYedPaintTilesLayer(tiledProto._paintTilesLayer);
   }
 
+  function looksLikeKnownYedChildOrder(fn) {
+    if (fn === undefined) return true;
+    if (typeof fn !== 'function' || isGuarded(fn)) return false;
+    var body = fnSource(fn);
+    body = body.slice(body.indexOf('{') + 1, body.lastIndexOf('}'));
+    return body.replace(/\s+/g, '') ===
+      'if((a.z||0)!==(b.z||0)){return(a.z||0)-(b.z||0);}' +
+      'elseif((a.y||0)!==(b.y||0)){return(a.y||0)-(b.y||0);}' +
+      'elseif((a.priority||0)!==(b.priority||0)){' +
+      'return(a.priority||0)-(b.priority||0);}' +
+      'else{returna.spriteId-b.spriteId;}';
+  }
+
+  function looksLikeKnownYedHideOnLevel(fn) {
+    if (typeof fn !== 'function') return false;
+    var body = fnSource(fn);
+    body = body.slice(body.indexOf('{') + 1, body.lastIndexOf('}'));
+    return body.replace(/\s+/g, '') ===
+      'this._tilemap.hideOnLevel($gameMap.currentMapLevel);';
+  }
+
   function looksLikeKnownYedIndexedAnimation(tiledProto) {
     return typeof tiledProto._paintTile === 'function' &&
            looksLikeKnownYedPaintTile(tiledProto._paintTile) &&
@@ -189,7 +210,8 @@
     var tiledProto = tiledConstructor.prototype;
     if (!tiledProto || tiledProto._pmjsIndexedPaintLoops) return true;
 
-    if (!looksLikeKnownYedImplementation(tiledProto)) {
+    if (!looksLikeKnownYedImplementation(tiledProto) ||
+        !looksLikeKnownYedChildOrder(tiledProto._compareChildOrder)) {
       PMJS.optimizations.refuse('tilemap.yed-indexed-paint-loops',
         'unrecognized YED tilemap method composition');
       PMJS.optimizations.refuse('tilemap.yed-indexed-animation',
@@ -204,6 +226,13 @@
           'requires tilemap.yed-indexed-paint-loops');
       }
       return true;
+    }
+
+    var useIndexedAnimation = PMJS.optimizations.isEnabled('tilemap.yed-indexed-animation');
+    if (useIndexedAnimation && !looksLikeKnownYedIndexedAnimation(tiledProto)) {
+      PMJS.optimizations.refuse('tilemap.yed-indexed-animation',
+        'unrecognized YED animation method composition');
+      useIndexedAnimation = false;
     }
 
     tiledProto._compareChildOrder = compareYedTiledChildren;
@@ -349,13 +378,7 @@
     tiledProto._paintAllTiles._pmjsYedGuard = true;
     tiledProto._pmjsIndexedPaintLoops = true;
 
-    var useIndexedAnimation = PMJS.optimizations.isEnabled('tilemap.yed-indexed-animation');
-
-    if (useIndexedAnimation && !looksLikeKnownYedIndexedAnimation(tiledProto)) {
-      PMJS.optimizations.refuse('tilemap.yed-indexed-animation',
-        'unrecognized YED animation method composition');
-    }
-    if (useIndexedAnimation && looksLikeKnownYedIndexedAnimation(tiledProto)) {
+    if (useIndexedAnimation) {
       tiledProto._paintTile = function(layer, startX, startY, x, y) {
         var mx = x + startX;
         var my = y + startY;
@@ -634,7 +657,8 @@
       tiledProto._pmjsIndexedAnimation = true;
     }
 
-    if (typeof Spriteset_Map.prototype._updateHideOnLevel === 'function' &&
+    if (looksLikeKnownYedHideOnLevel(
+          Spriteset_Map.prototype._updateHideOnLevel) &&
         !Spriteset_Map.prototype._pmjsStateDrivenHideOnLevel) {
       var updateHideOnLevel = Spriteset_Map.prototype._updateHideOnLevel;
       Spriteset_Map.prototype._updateHideOnLevel = function() {

@@ -32,60 +32,6 @@ if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
     'return slipTiles.contains(tagId); ' +
     '} return false;';
 
-  function mapLevelCanBeSlippery(map, level) {
-    var tileset = typeof map.tileset === 'function' ? map.tileset() : null;
-    if (!tileset || !Array.isArray(tileset.slippery)) {
-      return true; // Not ready or unknown shape, fail-safe to reference behavior
-    }
-
-    var slipTiles = tileset.slippery;
-    if (slipTiles.length > 0) {
-      return true; // Tileset declares slippery terrain tags
-    }
-
-    var slipRegion = (typeof Yanfly !== 'undefined' && Yanfly.Param && Yanfly.Param.SlipRegion) || 0;
-    if (slipRegion === 0) {
-      return false; // Neither tileset tags nor region configured
-    }
-
-    // Tiled maps (YED_Tiled)
-    if (typeof map.isTiledMap === 'function' && map.isTiledMap()) {
-      if (!Array.isArray(map._regions)) {
-        return true; // Not initialized yet, fail-safe
-      }
-      var targetLevel = level !== undefined ? level : (map.currentMapLevel || 0);
-      var regionMap = map._regions[targetLevel];
-      if (!Array.isArray(regionMap) || regionMap.length === 0) {
-        return true; // Level region layer not ready, fail-safe
-      }
-      for (var i = 0; i < regionMap.length; i++) {
-        if (regionMap[i] === slipRegion) {
-          return true; // Slippery region exists on this level
-        }
-      }
-      return false; // Zero slippery regions on this level
-    }
-
-    // Stock RPG Maker MV maps
-    var dataMap = typeof globalThis !== 'undefined' ? globalThis.$dataMap : null;
-    if (dataMap && Array.isArray(dataMap.data) && typeof map.width === 'function' && typeof map.height === 'function') {
-      var width = map.width();
-      var height = map.height();
-      var layerSize = width * height;
-      if (layerSize > 0 && dataMap.data.length >= layerSize * 6) {
-        var regionOffset = layerSize * 5;
-        for (var j = 0; j < layerSize; j++) {
-          if (dataMap.data[regionOffset + j] === slipRegion) {
-            return true;
-          }
-        }
-        return false;
-      }
-    }
-
-    return true; // Unknown map structure fallback
-  }
-
   function install() {
     if (!PMJS.optimizations.isEnabled('plugins.yanfly.slippery-tiles')) {
       return false;
@@ -93,8 +39,7 @@ if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
 
     var mapProto = typeof Game_Map !== 'undefined' &&
       Game_Map.prototype ? Game_Map.prototype : null;
-    if (!mapProto || typeof mapProto.isSlippery !== 'function' ||
-        typeof mapProto.setup !== 'function') {
+    if (!mapProto || typeof mapProto.isSlippery !== 'function') {
       PMJS.optimizations.refuse('plugins.yanfly.slippery-tiles',
         'Yanfly map methods unavailable');
       return false;
@@ -108,36 +53,30 @@ if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
     }
 
     var originalIsSlippery = mapProto.isSlippery;
-    var originalSetup = mapProto.setup;
+    var stockContains = Array.prototype.contains;
+    var nativeIndexOf = Array.prototype.indexOf;
+    var knownContains = typeof stockContains === 'function' &&
+      fnBody(stockContains) === 'return this.indexOf(element) >= 0;' &&
+      /\[native code\]/.test(Function.prototype.toString.call(nativeIndexOf));
+    if (!knownContains || typeof Yanfly === 'undefined' || !Yanfly.Param ||
+        Yanfly.Param.SlipRegion !== 0) {
+      PMJS.optimizations.refuse('plugins.yanfly.slippery-tiles',
+        'slippery region or array membership composition requires guest query');
+      return false;
+    }
 
     mapProto.isSlippery = function(mx, my) {
-      var level = this.currentMapLevel || 0;
-      var cache = this._pmjsSlipperyCache;
-      if (!cache) {
-        cache = this._pmjsSlipperyCache = {};
-      }
-      var canSlip = cache[level];
-      if (canSlip === undefined) {
-        canSlip = cache[level] = mapLevelCanBeSlippery(this, level);
-      }
-      if (canSlip === false) {
-        return false;
+      if (Yanfly.Param.SlipRegion === 0 &&
+          Array.prototype.contains === stockContains &&
+          Array.prototype.indexOf === nativeIndexOf) {
+        var tileset = this.tileset();
+        var slipTiles = tileset && tileset.slippery;
+        if (Array.isArray(slipTiles) && slipTiles.length === 0 &&
+            slipTiles.contains === stockContains &&
+            slipTiles.indexOf === nativeIndexOf) return false;
       }
       return originalIsSlippery.call(this, mx, my);
     };
-
-    mapProto.setup = function() {
-      this._pmjsSlipperyCache = null;
-      return originalSetup.apply(this, arguments);
-    };
-
-    if (typeof mapProto.changeTileset === 'function') {
-      var originalChangeTileset = mapProto.changeTileset;
-      mapProto.changeTileset = function(tilesetId) {
-        this._pmjsSlipperyCache = null;
-        return originalChangeTileset.apply(this, arguments);
-      };
-    }
 
     mapProto.isSlippery._pmjsSlipperyTilesGuard = true;
     mapProto.__pmjsSlipperyTilesGuard = true;

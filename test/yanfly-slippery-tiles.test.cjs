@@ -71,11 +71,8 @@ function makeHost({
     this._regions = regions || [new Array(100).fill(0)];
     this._tiled = isTiled;
     this._tileset = {
-      slippery: Array.isArray(tilesetSlip) ? tilesetSlip.slice() : []
+      slippery: new context.Array(...(Array.isArray(tilesetSlip) ? tilesetSlip : []))
     };
-    if (!this._tileset.slippery.contains) {
-      this._tileset.slippery.contains = function(v) { return this.indexOf(v) !== -1; };
-    }
   };
 
   vm.createContext(context);
@@ -95,9 +92,10 @@ function makeHost({
     `Game_Map.prototype.width = function() { return 10; };` +
     `Game_Map.prototype.height = function() { return 10; };` +
     `Game_Map.prototype.isSlippery = (${SLIPPERY_QUERY_SHAPE});` +
-    `Array.prototype.contains = function(v) { return this.indexOf(v) !== -1; };`,
+    `Array.prototype.contains = function(element) { return this.indexOf(element) >= 0; };`,
     context, { filename: 'slippery-shape.js' }
   );
+  context.Array = vm.runInContext('Array', context);
 
   vm.runInContext(moduleSource, context, { filename: 'slippery-tiles.js' });
   if (autoActivate) {
@@ -108,13 +106,13 @@ function makeHost({
 }
 
 test('registers plugins.yanfly.slippery-tiles optimization', () => {
-  const context = makeHost();
+  const context = makeHost({ slipRegion: 0 });
   assert.equal(context.PMJS.optimizations.isEnabled('plugins.yanfly.slippery-tiles'), true);
   assert.ok(context.PMJS.optimizations.ids().includes('plugins.yanfly.slippery-tiles'));
 });
 
 test('plugin lifecycle hook ignores unrelated plugins', () => {
-  const context = makeHost({ autoActivate: false });
+  const context = makeHost({ autoActivate: false, slipRegion: 0 });
   vm.runInContext(
     `Game_Map.prototype.isSlippery = (${SLIPPERY_QUERY_SHAPE});` +
     `delete Game_Map.prototype.__pmjsSlipperyTilesGuard;`, context);
@@ -128,7 +126,17 @@ test('plugin lifecycle hook ignores unrelated plugins', () => {
   assert.equal(context.Game_Map.prototype.__pmjsSlipperyTilesGuard, true);
 });
 
-test('non-slippery Tiled map returns false before coordinate/region lookups', () => {
+test('composed array membership declines the optional fast path', () => {
+  const context = makeHost({ slipRegion: 0, autoActivate: false });
+  const original = context.Game_Map.prototype.isSlippery;
+  vm.runInContext('Array.prototype.contains = function() { return true; };', context);
+  context.PMJS.plugins.execute('YEP_SlipperyTiles', function() {});
+  context.PMJS.phases.emit('afterGuestPlugins');
+  assert.equal(context.Game_Map.prototype.isSlippery, original);
+  assert.equal(new context.Game_Map().isSlippery(5, 5), true);
+});
+
+test('configured slippery regions use the guest query even when absent initially', () => {
   const context = makeHost({
     regions: [new Array(100).fill(0)],
     tilesetSlip: [],
@@ -138,10 +146,21 @@ test('non-slippery Tiled map returns false before coordinate/region lookups', ()
   const map = new context.Game_Map();
 
   assert.equal(map.isSlippery(5, 5), false);
-  assert.equal(context.calls.isValid, 0);
-  assert.equal(context.calls.regionId, 0);
-  assert.equal(context.calls.terrainTag, 0);
-  assert.equal(context.Game_Map.prototype.__pmjsSlipperyTilesGuard, true);
+  assert.equal(context.calls.isValid, 1);
+  map._regions[0][5] = 10;
+  assert.equal(map.isSlippery(5, 5), true);
+  assert.equal(context.calls.regionId, 2);
+  assert.equal(context.Game_Map.prototype.__pmjsSlipperyTilesGuard, undefined);
+  assert.match(context.PMJS.optimizations.reason('plugins.yanfly.slippery-tiles'),
+    /refused: slippery region/);
+});
+
+test('composed regionId can make an unchanged isSlippery query true', () => {
+  const context = makeHost({ slipRegion: 10 });
+  const map = new context.Game_Map();
+  assert.equal(map.isSlippery(5, 5), false);
+  context.Game_Map.prototype.regionId = function() { return 10; };
+  assert.equal(map.isSlippery(5, 5), true);
 });
 
 test('Tiled map with region 10 falls through to original query', () => {
@@ -172,7 +191,7 @@ test('tileset with slippery terrain tags falls through to original query', () =>
   assert.equal(context.calls.terrainTag, 1);
 });
 
-test('stock MV map without region 10 returns false before lookups', () => {
+test('stock MV region data remains visible to the guest query', () => {
   const layerSize = 100; // 10x10
   const data = new Array(layerSize * 6).fill(0); // layer 5 is all 0
   const context = makeHost({
@@ -184,8 +203,7 @@ test('stock MV map without region 10 returns false before lookups', () => {
   const map = new context.Game_Map();
 
   assert.equal(map.isSlippery(5, 5), false);
-  assert.equal(context.calls.isValid, 0);
-  assert.equal(context.calls.regionId, 0);
+  assert.equal(context.calls.isValid, 1);
 });
 
 test('stock MV map with region 10 falls through to original query', () => {
@@ -218,47 +236,42 @@ test('per-level switching on Tiled maps', () => {
 
   map.currentMapLevel = 0;
   assert.equal(map.isSlippery(2, 0), false);
-  assert.equal(context.calls.isValid, 0);
+  assert.equal(context.calls.isValid, 1);
 
   map.currentMapLevel = 1;
   assert.equal(map.isSlippery(2, 0), true);
-  assert.equal(context.calls.isValid, 1);
+  assert.equal(context.calls.isValid, 2);
 });
 
-test('setup invalidates the cache', () => {
-  const context = makeHost();
+test('zero slippery region and empty known tag list can skip the guest query', () => {
+  const context = makeHost({ slipRegion: 0 });
   const map = new context.Game_Map();
 
   assert.equal(map.isSlippery(5, 5), false);
-  assert.ok(map._pmjsSlipperyCache);
-
-  map.setup(195);
-  assert.equal(map._pmjsSlipperyCache, null);
+  assert.equal(context.calls.isValid, 0);
+  context.Yanfly.Param.SlipRegion = 10;
+  map._regions[0][5] = 10;
+  assert.equal(map.isSlippery(5, 5), true);
 });
 
-test('changeTileset invalidates the cache when changing from non-slippery to slippery tileset', () => {
+test('tileset changes are observed without a cache or lifecycle hook', () => {
   const context = makeHost({
     regions: [new Array(100).fill(0)],
     tilesetSlip: [],
-    slipRegion: 10
+    slipRegion: 0
   });
   const map = new context.Game_Map();
 
-  // First query caches false
   assert.equal(map.isSlippery(5, 5), false);
   assert.equal(context.calls.isValid, 0);
-  assert.equal(map._pmjsSlipperyCache[0], false);
 
   // Dynamically change tileset to one with slippery tag 3
-  const newSlip = [3];
-  newSlip.contains = function(v) { return this.indexOf(v) !== -1; };
+  const newSlip = new context.Array(3);
   map._tileset = {
     slippery: newSlip
   };
   map.changeTileset(2);
 
-  // Cache is invalidated
-  assert.equal(map._pmjsSlipperyCache, null);
   assert.equal(context.calls.changeTileset, 1);
 
   // Next query must now fall through to original query because tileset has slippery tags
