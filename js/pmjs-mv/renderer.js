@@ -18,7 +18,7 @@ function renderNativeMvStage(stage) {
     }
     this._skipCount = 0;
     this._rendered = true;
-    this.frameCount = (this.frameCount + 1) % 1024;
+    this.frameCount++;
 }
 
 PMJS.methods.own({

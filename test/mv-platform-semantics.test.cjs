@@ -1094,6 +1094,14 @@ test('native renderer ownership is restored after game plugins compose', () => {
   assert.notEqual(context.Graphics.render, pluginRender);
   context.Graphics._createRenderer();
   assert.equal(typeof context.Graphics._renderer.render, 'function');
+  context.Graphics.frameCount = 1023;
+  context.Graphics.render({});
+  assert.equal(context.Graphics.frameCount, 1024,
+    'MV frame count must continue past the former renderer wraparound');
+  context.Graphics.frameCount = 60 * 60 * 24;
+  context.Graphics.render(null);
+  assert.equal(context.Graphics.frameCount, 60 * 60 * 24 + 1,
+    'a loaded playtime frame count must survive the next presentation');
 });
 
 test('document.title and nw.Window.title read from and write to authoritative __pmjsGameInfo', () => {
