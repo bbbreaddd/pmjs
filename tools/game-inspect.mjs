@@ -22,15 +22,18 @@ export function detectEngine(gameDir) {
       rpgCore.match(/rpg_core\.js\s+v?(\d+\.\d+\.\d+)/i) ||
       rpgCore.match(/\bv(\d+\.\d+\.\d+)\b/);
     if (versionMatch) mvVersion = versionMatch[1];
-    return { engine: 'mv', mvVersion };
+    return { engine: 'mv', engineVersion: mvVersion, mvVersion };
   }
 
   const rmmzCore = read(path.join('js', 'rmmz_core.js'));
   if (rmmzCore !== null) {
-    return { engine: 'mz', mvVersion: null };
+    const versionMatch = rmmzCore.match(/RPG Maker MZ\s+v?(\d+\.\d+\.\d+)/i) ||
+      rmmzCore.match(/rmmz_core\.js\s+v?(\d+\.\d+\.\d+)/i);
+    return { engine: 'mz', engineVersion: versionMatch && versionMatch[1],
+      mvVersion: null };
   }
 
-  return { engine: 'unknown', mvVersion: null };
+  return { engine: 'unknown', engineVersion: null, mvVersion: null };
 }
 
 export function detectPixiVersion(gameDir) {
@@ -54,6 +57,14 @@ export function detectPixiVersion(gameDir) {
     return { pixiVersion: null, pixiPath: relative };
   }
   return { pixiVersion: null, pixiPath: null };
+}
+
+function detectPixiTilemapPath(gameDir) {
+  for (const relative of [path.join('js', 'libs', 'pixi-tilemap.js'),
+    path.join('js', 'pixi-tilemap.js')]) {
+    if (fs.existsSync(path.join(gameDir, relative))) return relative;
+  }
+  return null;
 }
 
 function pluginArrayText(source) {
@@ -151,9 +162,11 @@ export function inspectGame(gameDir, registryPath) {
   return {
     gameDir: absolute,
     engine: engine.engine,
+    engineVersion: engine.engineVersion,
     mvVersion: engine.mvVersion,
     pixiVersion: pixi.pixiVersion,
     pixiPath: pixi.pixiPath,
+    pixiTilemapPath: detectPixiTilemapPath(absolute),
     pluginTotal: manifest.plugins.length,
     enabledPlugins: manifest.enabled,
     matchedAdapters: matched,

@@ -1,4 +1,9 @@
 NativeHost.runtime.loadScript('js/rpg_core.js');
+if (globalThis.PMJS_RUNTIME_GAME && PMJS_RUNTIME_GAME.engineVersion &&
+    Utils.RPGMAKER_VERSION !== PMJS_RUNTIME_GAME.engineVersion) {
+  throw new Error('inspected MV ' + PMJS_RUNTIME_GAME.engineVersion +
+    ' but loaded ' + Utils.RPGMAKER_VERSION);
+}
 
 if (typeof Bitmap !== 'function' || typeof Sprite !== 'function' ||
     typeof Graphics !== 'function' || typeof Input !== 'function') {

@@ -132,6 +132,8 @@ test('Pixi baseline loads before plugin setup, with scan after adapters', () => 
   fs.writeFileSync(path.join(game, 'js', 'rpg_core.js'), '// RPG Maker MV v1.6.1\n');
   fs.writeFileSync(path.join(game, 'js', 'rpg_managers.js'), '// managers\n');
   fs.writeFileSync(path.join(game, 'js', 'libs', 'pixi.js'), "PIXI.VERSION = '4.8.9';\n");
+  fs.writeFileSync(path.join(game, 'js', 'libs', 'pixi-tilemap.js'),
+    '// Pixi tilemap\n');
   fs.writeFileSync(path.join(game, 'js', 'plugins.js'),
     'var $plugins = [{"name": "YED_Tiled", "status": true}];\n');
   const manifest = path.join(root, 'manifest.json');

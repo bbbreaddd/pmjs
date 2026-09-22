@@ -83,6 +83,7 @@ function findProfile(name) {
 
 let rawModules = [];
 let buildReport = null;
+let detectedRuntime = null;
 
 function loadProfile(name) {
   const { profilePath, baseDir } = findProfile(name);
@@ -200,6 +201,17 @@ function resolveCapabilityManifest(manifest, manifestPath) {
   if (detectedPixiMajor !== engine.pixiMajor) {
     throw new Error(`engine ${inspection.engine} requires Pixi ${engine.pixiMajor}.x; detected ${inspection.pixiVersion}`);
   }
+  if (inspection.engine === 'mv' && !inspection.pixiTilemapPath) {
+    throw new Error('detected MV but could not find pixi-tilemap.js');
+  }
+  detectedRuntime = {
+    engine: inspection.engine,
+    engineVersion: inspection.engineVersion,
+    pixiPath: inspection.pixiPath.replaceAll(path.sep, '/'),
+    pixiVersion: inspection.pixiVersion,
+    pixiTilemapPath: inspection.pixiTilemapPath &&
+      inspection.pixiTilemapPath.replaceAll(path.sep, '/'),
+  };
 
   const profileName = engine.profile;
   const profile = loadProfile(profileName);
@@ -299,6 +311,11 @@ for (const item of rawModules) {
 }
 
 const bundleItems = [];
+
+if (detectedRuntime) {
+  bundleItems.push({ label: 'detected-game', inlineSource:
+    `globalThis.PMJS_RUNTIME_GAME = ${JSON.stringify(detectedRuntime)};\n` });
+}
 
 if (configArgument) {
   const resolvedConfig = path.resolve(process.cwd(), configArgument);

@@ -5,6 +5,7 @@ const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const vm = require('node:vm');
 const { temporaryDirectory } = require('./helpers/temp.cjs');
 
 const tool = path.resolve(__dirname, '../tools/build-js-runtime.mjs');
@@ -16,6 +17,8 @@ function writeMvGame(root, { pixiVersion = '4.8.9', plugins = [] } = {}) {
   fs.writeFileSync(path.join(game, 'js', 'rpg_managers.js'), '// managers\n');
   fs.writeFileSync(path.join(game, 'js', 'libs', 'pixi.js'),
     `PIXI.VERSION = '${pixiVersion}';\n`);
+  fs.writeFileSync(path.join(game, 'js', 'libs', 'pixi-tilemap.js'),
+    '// Pixi tilemap\n');
   fs.writeFileSync(path.join(game, 'js', 'plugins.js'),
     `var $plugins = ${JSON.stringify(plugins)};\n`);
   return game;
@@ -137,6 +140,79 @@ test('capability manifest composes config, base, detected adapters, port entry, 
   ].map(marker => bundleContent.indexOf(marker));
   assert.ok(order.every(index => index >= 0));
   assert.deepEqual([...order].sort((a, b) => a - b), order);
+  assert.match(bundleContent, /PMJS_RUNTIME_GAME = \{"engine":"mv","engineVersion":"1\.6\.1","pixiPath":"js\/libs\/pixi\.js","pixiVersion":"4\.8\.9","pixiTilemapPath":"js\/libs\/pixi-tilemap\.js"\}/);
+});
+
+test('alternate Pixi paths from inspection are used by MV setup', () => {
+  const root = temporaryDirectory('pmjs-alternate-pixi-');
+  const game = writeMvGame(root);
+  fs.renameSync(path.join(game, 'js', 'libs', 'pixi.js'),
+    path.join(game, 'js', 'pixi.js'));
+  fs.renameSync(path.join(game, 'js', 'libs', 'pixi-tilemap.js'),
+    path.join(game, 'js', 'pixi-tilemap.js'));
+  const out = path.join(root, 'out.js');
+  childProcess.execFileSync(process.execPath,
+    [tool, '--root', root, '--game', game, '--output', out]);
+  const bundle = fs.readFileSync(out, 'utf8');
+  const metadata = bundle.match(/globalThis\.PMJS_RUNTIME_GAME = (\{[^\n]+\});/);
+  assert.ok(metadata);
+  const paths = [];
+  const context = {
+    PMJS_RUNTIME_GAME: JSON.parse(metadata[1]),
+    nativeBootPhase() {},
+    NativeHost: { runtime: { loadScript(relative) {
+      paths.push(relative);
+      if (relative === 'js/pixi.js' && !context.PIXI) {
+        context.PIXI = { VERSION: '4.8.9', Container: function() {} };
+      }
+    } } }
+  };
+  context.globalThis = context;
+  const setup = fs.readFileSync(path.join(__dirname,
+    '../js/pmjs-pixi4/setup.js'), 'utf8');
+  vm.runInNewContext(setup.slice(0, setup.indexOf('// Retain compiled tile layers')), context);
+  assert.deepEqual(paths, ['js/pixi.js', 'js/pixi-tilemap.js']);
+
+  context.PIXI.VERSION = '4.8.8';
+  assert.throws(() => vm.runInNewContext(setup.slice(0,
+    setup.indexOf('// Retain compiled tile layers')), context), /inspected Pixi 4\.8\.9 but loaded 4\.8\.8/);
+});
+
+test('MV inspection rejects a missing tilemap library before bundle generation', () => {
+  const root = temporaryDirectory('pmjs-missing-tilemap-');
+  const game = writeMvGame(root);
+  fs.unlinkSync(path.join(game, 'js', 'libs', 'pixi-tilemap.js'));
+  assert.throws(() => childProcess.execFileSync(process.execPath,
+    [tool, '--root', root, '--game', game, '--output', 'out.js']),
+  /could not find pixi-tilemap\.js/);
+});
+
+test('MZ setup uses the inspected Pixi path and version', () => {
+  const root = temporaryDirectory('pmjs-mz-alternate-pixi-');
+  const game = writeMzGame(root);
+  fs.renameSync(path.join(game, 'js', 'libs', 'pixi.js'),
+    path.join(game, 'js', 'pixi.js'));
+  const out = path.join(root, 'out.js');
+  childProcess.execFileSync(process.execPath,
+    [tool, '--root', root, '--game', game, '--output', out]);
+  const bundle = fs.readFileSync(out, 'utf8');
+  const metadata = bundle.match(/globalThis\.PMJS_RUNTIME_GAME = (\{[^\n]+\});/);
+  assert.ok(metadata);
+  const paths = [];
+  const context = {
+    PMJS_RUNTIME_GAME: JSON.parse(metadata[1]),
+    nativeBootPhase() {},
+    NativeHost: { runtime: { loadScript(relative) {
+      paths.push(relative);
+      context.PIXI = { VERSION: '5.3.12', Container: function() {} };
+    } } }
+  };
+  context.globalThis = context;
+  const setup = fs.readFileSync(path.join(__dirname,
+    '../js/pmjs-pixi5/setup.js'), 'utf8');
+  vm.runInNewContext(setup, context);
+  assert.deepEqual(paths, ['js/pixi.js']);
+  assert.equal(context.PMJS_RUNTIME_GAME.engineVersion, '1.8.1');
 });
 
 test('capability manifest rejects port entry modules outside the port directory', () => {

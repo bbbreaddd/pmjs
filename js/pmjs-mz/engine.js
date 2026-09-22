@@ -21,6 +21,12 @@
     NativeHost.runtime.loadScript(path);
   });
 
+  if (globalThis.PMJS_RUNTIME_GAME && PMJS_RUNTIME_GAME.engineVersion &&
+      Utils.RPGMAKER_VERSION !== PMJS_RUNTIME_GAME.engineVersion) {
+    throw new Error('inspected MZ ' + PMJS_RUNTIME_GAME.engineVersion +
+      ' but loaded ' + Utils.RPGMAKER_VERSION);
+  }
+
   if (typeof Graphics !== 'function' || typeof SceneManager === 'undefined' ||
       typeof PluginManager === 'undefined' || typeof Scene_Boot !== 'function') {
     throw new Error('RPG Maker MZ engine did not initialize');

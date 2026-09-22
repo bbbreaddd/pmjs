@@ -44,7 +44,9 @@ while (true) {}
   const inspection = inspectGame(dir, registry);
   assert.equal(inspection.engine, 'mv');
   assert.equal(inspection.mvVersion, '1.6.1');
+  assert.equal(inspection.engineVersion, '1.6.1');
   assert.equal(inspection.pixiVersion, '4.8.9');
+  assert.equal(inspection.pixiPath, path.join('js', 'libs', 'pixi.js'));
   assert.deepEqual(inspection.enabledPlugins, ['YED_Tiled']);
   assert.deepEqual(inspection.matchedAdapters, [
     { plugin: 'YED_Tiled', modules: ['js/pmjs-plugins/yed/tiled.js'] },

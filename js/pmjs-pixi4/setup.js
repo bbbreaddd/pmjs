@@ -1,9 +1,16 @@
 nativeBootPhase('adapter-ready');
-NativeHost.runtime.loadScript('js/libs/pixi.js');
+var pmjsMvRuntimeGame = globalThis.PMJS_RUNTIME_GAME;
+NativeHost.runtime.loadScript(pmjsMvRuntimeGame ?
+  pmjsMvRuntimeGame.pixiPath : 'js/libs/pixi.js');
 if (!globalThis.PIXI || typeof PIXI.Container !== 'function') {
   throw new Error('Pixi object model did not initialize');
 }
-NativeHost.runtime.loadScript('js/libs/pixi-tilemap.js');
+if (pmjsMvRuntimeGame && PIXI.VERSION !== pmjsMvRuntimeGame.pixiVersion) {
+  throw new Error('inspected Pixi ' + pmjsMvRuntimeGame.pixiVersion +
+    ' but loaded ' + PIXI.VERSION);
+}
+NativeHost.runtime.loadScript(pmjsMvRuntimeGame ?
+  pmjsMvRuntimeGame.pixiTilemapPath : 'js/libs/pixi-tilemap.js');
 // Retain compiled tile layers to avoid per-tile JS/native calls every frame.
 if (PIXI.tilemap && PIXI.tilemap.RectTileLayer) {
   (function() {
