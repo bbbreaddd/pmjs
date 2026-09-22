@@ -672,10 +672,9 @@
     return true;
   }
 
-  if (typeof globalThis.pmjsRegisterHook === 'function') {
-    globalThis.pmjsRegisterHook('pluginLoaded', function(name) {
-      if (name !== 'YED_Tiled') return;
-      if (!installYedTiledFastPaths()) installYedTiledInstanceHook();
-    });
+  function activateYedTiled() {
+    if (!installYedTiledFastPaths()) installYedTiledInstanceHook();
   }
+
+  PMJS.plugins.onLoaded('YED_Tiled', 'pmjs.adapter.yed-tiled', activateYedTiled);
 })();

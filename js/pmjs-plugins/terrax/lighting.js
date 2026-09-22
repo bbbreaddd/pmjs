@@ -232,16 +232,11 @@
     return true;
   }
 
-  installTerraxLightingFastPaths();
-
-  if (typeof globalThis.pmjsRegisterHook === 'function') {
-    globalThis.pmjsRegisterHook('afterPlugins', function() {
-      installTerraxLightingFastPaths();
-    });
-    globalThis.pmjsRegisterHook('beforeBoot', function() {
-      installTerraxLightingFastPaths();
-    });
-  }
+  PMJS.phases.on('afterGuestPlugins', 'pmjs.adapter.terrax-lighting', function() {
+    installTerraxLightingFastPaths();
+    PMJS.phases.on('beforeBoot', 'pmjs.adapter.terrax-lighting',
+      installTerraxLightingFastPaths);
+  });
 
   globalThis.pmjsInstallTerraxLightingFastPaths = installTerraxLightingFastPaths;
 })();

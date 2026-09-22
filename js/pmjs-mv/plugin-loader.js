@@ -29,10 +29,12 @@
 
       pending.forEach(function(plugin) {
         this._scripts.push(plugin.name);
-        this.loadScript(plugin.name + '.js');
-
         var loadedName = String(plugin.name).replace(/\.js$/i, '');
-        globalThis.pmjsRunHooks('pluginLoaded', loadedName);
+        var self = this;
+        var file = plugin.name + '.js';
+        PMJS.plugins.execute(loadedName, function() {
+          self.loadScript(file);
+        });
       }, this);
     };
     PluginManager._pmjsLifecycleInstalled = true;

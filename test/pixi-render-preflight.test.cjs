@@ -3,6 +3,7 @@
 const assert = require('node:assert/strict');
 const childProcess = require('node:child_process');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
@@ -116,19 +117,36 @@ test('Pixi baseline loads before plugin setup, with scan after adapters', () => 
     generic.indexOf('js/pmjs-mv/plugin-loader.js'));
   assert.ok(generic.indexOf('js/pmjs-pixi4/render-preflight.js') <
     generic.indexOf('js/pmjs-mv/bootstrap.js'));
-  const repoRoot = path.join(runtimeRoot, '..');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-preflight-'));
+  fs.mkdirSync(path.join(root, 'ports', 'demo', 'port', 'native'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'ports', 'demo', 'port', 'native', 'extra.js'),
+    'globalThis.DEMO_EXTRA = true;\n');
+  fs.writeFileSync(path.join(root, 'ports', 'demo', 'port', 'native', 'index.json'),
+    JSON.stringify({ modules: ['ports/demo/port/native/extra.js'] }));
+  const game = path.join(root, 'game');
+  fs.mkdirSync(path.join(game, 'js', 'libs'), { recursive: true });
+  fs.writeFileSync(path.join(game, 'js', 'rpg_core.js'), '// RPG Maker MV v1.6.1\n');
+  fs.writeFileSync(path.join(game, 'js', 'rpg_managers.js'), '// managers\n');
+  fs.writeFileSync(path.join(game, 'js', 'libs', 'pixi.js'), "PIXI.VERSION = '4.8.9';\n");
+  fs.writeFileSync(path.join(game, 'js', 'plugins.js'),
+    'var $plugins = [{"name": "YED_Tiled", "status": true}];\n');
+  const manifest = path.join(root, 'manifest.json');
+  fs.writeFileSync(manifest, JSON.stringify({
+    adapters: 'none',
+    port: { id: 'demo', entry: 'ports/demo/port/native/index.json' },
+  }));
   const output = childProcess.execFileSync(process.execPath, [
     path.join(runtimeRoot, 'tools/build-js-runtime.mjs'),
-    '--root', repoRoot,
-    '--manifest', 'ports/omori/port/native/runtime-bundle.json',
-    '--game', 'ports/omori/OMORI-decrypted',
+    '--root', root,
+    '--manifest', manifest,
+    '--game', game,
     '--print-modules',
-  ], { cwd: repoRoot }).toString();
-  const omori = JSON.parse(output)
+  ]).toString();
+  const composed = JSON.parse(output)
     .map(entry => entry.base === 'native-runtime'
       ? `native-runtime/${entry.module}`
       : entry.module);
-  assert.ok(omori.indexOf('native-runtime/js/pmjs-pixi4/render-preflight.js') <
-    omori.indexOf('native-runtime/js/pmjs-mv/bootstrap.js'));
-  assert.ok(omori.indexOf('native-runtime/js/pmjs-mv/plugin-loader.js') >= 0);
+  assert.ok(composed.indexOf('native-runtime/js/pmjs-pixi4/render-preflight.js') <
+    composed.indexOf('native-runtime/js/pmjs-mv/bootstrap.js'));
+  assert.ok(composed.indexOf('native-runtime/js/pmjs-mv/plugin-loader.js') >= 0);
 });

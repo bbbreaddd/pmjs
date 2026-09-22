@@ -69,12 +69,14 @@ test('MZ plugin and boot lifecycle runs synchronously without main.js or Effekse
   context.globalThis = context;
 
   runModule(context, 'js/pmjs-rpgmaker/lifecycle.js');
+  runModule(context, 'js/pmjs-core/methods.js');
   runModule(context, 'js/pmjs-rpgmaker/plugins.js');
+  runModule(context, 'js/pmjs-core/optimizations.js');
   runModule(context, 'js/pmjs-rpgmaker/bootstrap.js');
-  context.pmjsRegisterHook('beforePlugins', () => events.push(['hook', 'beforePlugins']));
-  context.pmjsRegisterHook('pluginLoaded', name => events.push(['hook', 'pluginLoaded', name]));
-  context.pmjsRegisterHook('afterPlugins', () => events.push(['hook', 'afterPlugins']));
-  context.pmjsRegisterHook('beforeBoot', () => events.push(['hook', 'beforeBoot']));
+  context.PMJS.phases.on('beforePlugins', () => events.push(['hook', 'beforePlugins']));
+  context.PMJS.plugins.onLoaded('Example', () => events.push(['hook', 'pluginLoaded']));
+  context.PMJS.phases.on('afterPlugins', () => events.push(['hook', 'afterPlugins']));
+  context.PMJS.phases.on('beforeBoot', () => events.push(['hook', 'beforeBoot']));
   runModule(context, 'js/pmjs-mz/plugin-loader.js');
   runModule(context, 'js/pmjs-mz/bootstrap.js');
   context.pmjsMzLoadPluginManifest();
@@ -86,7 +88,7 @@ test('MZ plugin and boot lifecycle runs synchronously without main.js or Effekse
     ['script', 'js/plugins.js'],
     ['hook', 'beforePlugins'],
     ['script', 'js/plugins/Example.js'],
-    ['hook', 'pluginLoaded', 'Example'],
+    ['hook', 'pluginLoaded'],
     ['hook', 'afterPlugins'],
     ['phase', 'plugins-loaded'],
     ['hook', 'beforeBoot'],

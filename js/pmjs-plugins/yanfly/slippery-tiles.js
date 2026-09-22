@@ -137,13 +137,9 @@ if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
     return true;
   }
 
-  function installAfterPlugin(name) {
-    if (String(name).toLowerCase() === 'yep_slipperytiles') install();
-  }
-
-  install();
-  if (typeof globalThis.pmjsRegisterHook === 'function') {
-    globalThis.pmjsRegisterHook('pluginLoaded', installAfterPlugin);
-    globalThis.pmjsRegisterHook('beforeBoot', install);
-  }
+  PMJS.plugins.onLoaded('YEP_SlipperyTiles',
+    'pmjs.adapter.yanfly-slippery-tiles', function() {
+      install();
+      PMJS.phases.on('beforeBoot', 'pmjs.adapter.yanfly-slippery-tiles', install);
+    });
 })();

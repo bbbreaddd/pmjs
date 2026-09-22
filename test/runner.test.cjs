@@ -135,9 +135,10 @@ test('unknown port optimization IDs fail the run at startup', async () => {
   const manifest = path.join(tempDir, 'manifest.json');
   fs.writeFileSync(manifest, JSON.stringify({ modules: [
     'js/pmjs-core/optimizations.js',
+    'js/pmjs-core/methods.js',
     'js/pmjs-rpgmaker/lifecycle.js',
     'js/pmjs-rpgmaker/plugins.js',
-    'js/pmjs-rpgmaker/bootstrap.js',
+      'js/pmjs-rpgmaker/bootstrap.js',
     'js/pmjs-mv/setup.js',
     'js/pmjs-mv/plugin-loader.js',
   ] }));
@@ -150,7 +151,7 @@ test('unknown port optimization IDs fail the run at startup', async () => {
   // (beforeBoot), then finalizes before game boot; finalization rejects
   // the requested-but-unregistered ID. Mirrors bootstrap.js ordering.
   fs.appendFileSync(bootstrap,
-    '\npmjsMvInitializePlugins();\npmjsRunHooks(\'beforeBoot\');\nPMJS.optimizations.finalize();\n');
+    '\npmjsMvInitializePlugins();\nPMJS.phases.emit(\'beforeBoot\');\nPMJS.optimizations.finalize();\n');
   const options = { addon: path.join(tempDir, 'addon.node'), gameRoot: tempDir,
     bootstrap, saveRoot: path.join(tempDir, 'save'), width: 320, height: 240,
     title: 'Test', config, native: native() };

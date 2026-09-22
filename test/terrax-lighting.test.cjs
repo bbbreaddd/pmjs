@@ -11,6 +11,18 @@ const optimizationsSource = fs.readFileSync(
   path.join(runtimeRoot, 'js/pmjs-core/optimizations.js'), 'utf8');
 const terraxSource = fs.readFileSync(
   path.join(runtimeRoot, 'js/pmjs-plugins/terrax/lighting.js'), 'utf8');
+const lifecycleSource = fs.readFileSync(
+  path.join(runtimeRoot, 'js/pmjs-rpgmaker/lifecycle.js'), 'utf8');
+const methodsSource = fs.readFileSync(
+  path.join(runtimeRoot, 'js/pmjs-core/methods.js'), 'utf8');
+const pluginsSource = fs.readFileSync(
+  path.join(runtimeRoot, 'js/pmjs-rpgmaker/plugins.js'), 'utf8');
+
+function loadRegistrySupport(context) {
+  vm.runInContext(lifecycleSource, context, { filename: 'lifecycle.js' });
+  vm.runInContext(methodsSource, context, { filename: 'methods.js' });
+  vm.runInContext(pluginsSource, context, { filename: 'plugins.js' });
+}
 
 function knownAddSprite(x, y, bitmap) {
   var sprite = new Sprite(this.viewport); // eslint-disable-line no-undef
@@ -45,6 +57,7 @@ test('registers terrax.native-lighting optimization', () => {
   context.globalThis = context;
   vm.createContext(context);
   vm.runInContext(optimizationsSource, context);
+  loadRegistrySupport(context);
   vm.runInContext(terraxSource, context);
 
   assert.equal(context.PMJS.optimizations.isEnabled('terrax.native-lighting'), true);
@@ -73,8 +86,9 @@ test('native Terrax adapter retains one mask sprite', () => {
   context.globalThis = context;
   vm.createContext(context);
   vm.runInContext(optimizationsSource, context);
+  loadRegistrySupport(context);
   vm.runInContext(terraxSource, context);
-  hooks.afterPlugins();
+  context.PMJS.phases.emit('afterGuestPlugins');
 
   const spriteset = new context.Spriteset_Map();
   spriteset.createLightmask();
@@ -145,8 +159,9 @@ test('native Terrax adapter records supported mask draws into one GPU layer', ()
   context.globalThis = context;
   vm.createContext(context);
   vm.runInContext(optimizationsSource, context);
+  loadRegistrySupport(context);
   vm.runInContext(terraxSource, context);
-  hooks.afterPlugins();
+  context.PMJS.phases.emit('afterGuestPlugins');
   const spriteset = new context.Spriteset_Map();
   spriteset.createLightmask();
   spriteset._lightmask._updateMask();
@@ -180,8 +195,9 @@ test('native Terrax adapter keeps Canvas rendering without the color helper', ()
   };
   context.globalThis = context;
   vm.createContext(context);
+  loadRegistrySupport(context);
   vm.runInContext(terraxSource, context);
-  hooks.afterPlugins();
+  context.PMJS.phases.emit('afterGuestPlugins');
 
   const spriteset = new context.Spriteset_Map();
   spriteset.createLightmask();
@@ -201,6 +217,7 @@ test('Terrax adapter leaves an unknown createLightmask implementation untouched'
   };
   context.globalThis = context;
   vm.createContext(context);
+  loadRegistrySupport(context);
   vm.runInContext(terraxSource, context);
 
   assert.equal(context.Spriteset_Map.prototype.createLightmask,
@@ -226,6 +243,7 @@ test('Terrax adapter preserves unknown per-instance sprite methods', () => {
   };
   context.globalThis = context;
   vm.createContext(context);
+  loadRegistrySupport(context);
   vm.runInContext(terraxSource, context);
 
   const spriteset = new context.Spriteset_Map();
@@ -263,6 +281,7 @@ test('Terrax adapter requires the complete primitive-surface capability', () => 
   };
   context.globalThis = context;
   vm.createContext(context);
+  loadRegistrySupport(context);
   vm.runInContext(terraxSource, context);
 
   const spriteset = new context.Spriteset_Map();
@@ -322,8 +341,9 @@ function terraxDisabledContext({ config, env }) {
   context.globalThis = context;
   vm.createContext(context);
   vm.runInContext(optimizationsSource, context);
+  loadRegistrySupport(context);
   vm.runInContext(terraxSource, context);
-  hooks.afterPlugins();
+  context.PMJS.phases.emit('afterGuestPlugins');
   const spriteset = new context.Spriteset_Map();
   spriteset.createLightmask();
   return { mask: spriteset._lightmask, updates, stockAdds, context2d };

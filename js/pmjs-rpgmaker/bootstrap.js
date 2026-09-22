@@ -2,7 +2,7 @@
 
 (function() {
   function prepareBoot() {
-    globalThis.pmjsRunHooks('beforeBoot');
+    PMJS.phases.emit('beforeBoot');
     if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
         typeof PMJS.optimizations.finalize === 'function') {
       PMJS.optimizations.finalize();

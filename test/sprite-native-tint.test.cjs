@@ -11,6 +11,8 @@ const optimizationsSource = fs.readFileSync(
   path.join(runtimeRoot, 'js/pmjs-core/optimizations.js'), 'utf8');
 const rendererSource = fs.readFileSync(
   path.join(runtimeRoot, 'js/pmjs-mv/renderer.js'), 'utf8');
+const methodsSource = fs.readFileSync(
+  path.join(runtimeRoot, 'js/pmjs-core/methods.js'), 'utf8');
 
 function setupEnvironment({ config = {}, env = {}, beforeInstall } = {}) {
   const context = {
@@ -139,7 +141,9 @@ function setupEnvironment({ config = {}, env = {}, beforeInstall } = {}) {
 
   vm.createContext(context);
   vm.runInContext(optimizationsSource, context, { filename: 'optimizations.js' });
+  vm.runInContext(methodsSource, context, { filename: 'methods.js' });
   vm.runInContext(rendererSource, context, { filename: 'renderer.js' });
+  context.PMJS.methods.install();
   return context;
 }
 

@@ -153,14 +153,11 @@
     return true;
   }
 
-  install();
-
-  if (typeof globalThis.pmjsRegisterHook === 'function') {
-    globalThis.pmjsRegisterHook('pluginLoaded', function(name) {
-      if (name === 'YEP_EventMiniLabel') install();
+  PMJS.plugins.onLoaded('YEP_EventMiniLabel',
+    'pmjs.adapter.yanfly-event-mini-label', function() {
+      install();
+      PMJS.phases.on('beforeBoot', 'pmjs.adapter.yanfly-event-mini-label', install);
     });
-    globalThis.pmjsRegisterHook('beforeBoot', install);
-  }
 
   globalThis.pmjsInstallEventMiniLabelFastPath = install;
 })();

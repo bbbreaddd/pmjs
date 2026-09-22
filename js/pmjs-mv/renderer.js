@@ -1,6 +1,4 @@
-function installNativeMvRenderer() {
-  Graphics._createRenderer = function() {
-    // Let the port finalize plugin-owned renderer settings before replacement.
+function createNativeMvRenderer() {
     try {
       if (typeof globalThis.__pmjsBeforeCreateRenderer === 'function') {
         globalThis.__pmjsBeforeCreateRenderer.call(this);
@@ -11,9 +9,9 @@ function installNativeMvRenderer() {
       resolution: 1,
       autoResize: false
     });
-  };
+}
 
-  Graphics.render = function(stage) {
+function renderNativeMvStage(stage) {
     if (stage) {
       this._renderer.render(stage);
       if (this._renderer.gl && this._renderer.gl.flush) this._renderer.gl.flush();
@@ -21,13 +19,31 @@ function installNativeMvRenderer() {
     this._skipCount = 0;
     this._rendered = true;
     this.frameCount = (this.frameCount + 1) % 1024;
-  };
 }
 
-installNativeMvRenderer();
-if (typeof pmjsRegisterHook === 'function') {
-  pmjsRegisterHook('afterPlugins', installNativeMvRenderer);
-}
+PMJS.methods.own({
+  key: 'Graphics._createRenderer',
+  getTarget: function() {
+    return (typeof Graphics !== 'undefined') ? Graphics : null;
+  },
+  method: '_createRenderer',
+  id: 'pmjs.mv.native-renderer',
+  replace: function() {
+    return createNativeMvRenderer;
+  }
+});
+
+PMJS.methods.own({
+  key: 'Graphics.render',
+  getTarget: function() {
+    return (typeof Graphics !== 'undefined') ? Graphics : null;
+  },
+  method: 'render',
+  id: 'pmjs.mv.native-render',
+  replace: function() {
+    return renderNativeMvStage;
+  }
+});
 var originalIsOptionValid = Utils.isOptionValid;
 Utils.isOptionValid = function(name) {
   return (!globalThis.AudioContext && name === 'noaudio') ||
@@ -94,39 +110,36 @@ if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
   });
 }
 
-function installNativeSpriteTint() {
-  if (typeof Sprite === 'undefined' || !Sprite.prototype ||
-      typeof Sprite.prototype._refresh !== 'function' ||
-      Sprite.prototype._pmjsNativeSpriteTintInstalled) {
-    return false;
-  }
-  var stockRefresh = Sprite.prototype._refresh;
-  var neutralTone = [0, 0, 0, 0];
-  var neutralBlend = [0, 0, 0, 0];
-  Sprite.prototype._refresh = function() {
-    if (this._pmjsNativeSpriteTint !== false &&
-        (typeof pmjsOptimizationEnabled !== 'function' ||
-         pmjsOptimizationEnabled('sprite.native-tint'))) {
-      var tone = this._colorTone;
-      var blend = this._blendColor;
-      var hasTone = tone && (tone[0] || tone[1] || tone[2] || tone[3]);
-      var hasBlend = blend && blend[3] > 0;
-      if (hasTone || hasBlend) {
-        this._colorTone = neutralTone;
-        this._blendColor = neutralBlend;
-        try {
-          return stockRefresh.apply(this, arguments);
-        } finally {
-          this._colorTone = tone;
-          this._blendColor = blend;
+PMJS.methods.wrap({
+  key: 'Sprite._refresh',
+  getTarget: function() {
+    return (typeof Sprite !== 'undefined' && Sprite.prototype) ? Sprite.prototype : null;
+  },
+  method: '_refresh',
+  id: 'pmjs.mv.native-sprite-tint',
+  wrap: function(stockRefresh) {
+    var neutralTone = [0, 0, 0, 0];
+    var neutralBlend = [0, 0, 0, 0];
+    return function() {
+      if (this._pmjsNativeSpriteTint !== false &&
+          (typeof pmjsOptimizationEnabled !== 'function' ||
+            pmjsOptimizationEnabled('sprite.native-tint'))) {
+        var tone = this._colorTone;
+        var blend = this._blendColor;
+        var hasTone = tone && (tone[0] || tone[1] || tone[2] || tone[3]);
+        var hasBlend = blend && blend[3] > 0;
+        if (hasTone || hasBlend) {
+          this._colorTone = neutralTone;
+          this._blendColor = neutralBlend;
+          try {
+            return stockRefresh.apply(this, arguments);
+          } finally {
+            this._colorTone = tone;
+            this._blendColor = blend;
+          }
         }
       }
-    }
-    return stockRefresh.apply(this, arguments);
-  };
-  Sprite.prototype._pmjsNativeSpriteTintInstalled = true;
-  return true;
-}
-
-installNativeSpriteTint();
-globalThis.pmjsInstallNativeSpriteTint = installNativeSpriteTint;
+      return stockRefresh.apply(this, arguments);
+    };
+  }
+});

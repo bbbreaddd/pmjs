@@ -1,6 +1,7 @@
 {
   "modules": [
     "js/pmjs-core/optimizations.js",
+    "js/pmjs-core/methods.js",
     "js/pmjs-rpgmaker/lifecycle.js",
     "js/pmjs-rpgmaker/plugins.js",
     "js/pmjs-rpgmaker/bootstrap.js",

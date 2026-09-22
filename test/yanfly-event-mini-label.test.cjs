@@ -11,6 +11,12 @@ const optimizationsSource = fs.readFileSync(
   path.join(runtimeRoot, 'js/pmjs-core/optimizations.js'), 'utf8');
 const moduleSource = fs.readFileSync(
   path.join(runtimeRoot, 'js/pmjs-plugins/yanfly/event-mini-label.js'), 'utf8');
+const lifecycleSource = fs.readFileSync(
+  path.join(runtimeRoot, 'js/pmjs-rpgmaker/lifecycle.js'), 'utf8');
+const methodsSource = fs.readFileSync(
+  path.join(runtimeRoot, 'js/pmjs-core/methods.js'), 'utf8');
+const pluginsSource = fs.readFileSync(
+  path.join(runtimeRoot, 'js/pmjs-rpgmaker/plugins.js'), 'utf8');
 
 // YEP-shaped setupMiniLabel with deliberately different formatting: the
 // installer must recognize it anyway (whitespace-insensitive fingerprint).
@@ -72,6 +78,9 @@ function makeHost({
   context.Sprite_Character = function Sprite_Character() {};
 
   vm.createContext(context);
+  vm.runInContext(lifecycleSource, context, { filename: 'lifecycle.js' });
+  vm.runInContext(methodsSource, context, { filename: 'methods.js' });
+  vm.runInContext(pluginsSource, context, { filename: 'plugins.js' });
   vm.runInContext(optimizationsSource, context, { filename: 'optimizations.js' });
   vm.runInContext(
     `Sprite_Character.prototype.setupMiniLabel = (${shape});`,
@@ -88,6 +97,7 @@ function makeHost({
   }
 
   vm.runInContext(moduleSource, context, { filename: 'event-mini-label.js' });
+  context.PMJS.plugins.execute('YEP_EventMiniLabel', function() {});
   return context;
 }
 

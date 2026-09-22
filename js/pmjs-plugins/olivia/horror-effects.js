@@ -233,14 +233,8 @@
     return true;
   }
 
-  installOliviaHorrorEffects();
-
-  if (typeof globalThis.pmjsRegisterHook === 'function') {
-    globalThis.pmjsRegisterHook('pluginLoaded', function(name) {
-      if (name !== 'Olivia_HorrorEffects') return;
-      installOliviaHorrorEffects();
-    });
-  }
+  PMJS.plugins.onLoaded('Olivia_HorrorEffects', 'pmjs.adapter.olivia-horror',
+    installOliviaHorrorEffects);
 
   globalThis.pmjsInstallOliviaHorrorEffects = installOliviaHorrorEffects;
   globalThis.pmjsInstallOliviaHorrorFastPaths = installOliviaHorrorEffects;

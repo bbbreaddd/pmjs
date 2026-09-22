@@ -11,6 +11,12 @@ const optimizationsSource = fs.readFileSync(
   path.join(runtimeRoot, 'js/pmjs-core/optimizations.js'), 'utf8');
 const moduleSource = fs.readFileSync(
   path.join(runtimeRoot, 'js/pmjs-plugins/yanfly/slippery-tiles.js'), 'utf8');
+const lifecycleSource = fs.readFileSync(
+  path.join(runtimeRoot, 'js/pmjs-rpgmaker/lifecycle.js'), 'utf8');
+const methodsSource = fs.readFileSync(
+  path.join(runtimeRoot, 'js/pmjs-core/methods.js'), 'utf8');
+const pluginsSource = fs.readFileSync(
+  path.join(runtimeRoot, 'js/pmjs-rpgmaker/plugins.js'), 'utf8');
 
 const SLIPPERY_QUERY_SHAPE = `function(mx, my) {
     if ($gameParty.inBattle()) return false;
@@ -32,12 +38,11 @@ function makeHost({
   slipRegion = 10,
   isTiled = true,
   stockMap = null,
+  autoActivate = true,
 } = {}) {
   const calls = { regionId: 0, terrainTag: 0, isValid: 0, changeTileset: 0 };
-  const hooks = {};
   const context = {
     calls,
-    hooks,
     PMJS_GAME_CONFIG: { disableOptimizations },
     NativeHost: {
       runtime: {
@@ -55,7 +60,6 @@ function makeHost({
       inBattle() { return false; }
     },
     console: { log() {} },
-    pmjsRegisterHook(name, callback) { hooks[name] = callback; }
   };
 
   if (stockMap) {
@@ -75,6 +79,9 @@ function makeHost({
   };
 
   vm.createContext(context);
+  vm.runInContext(lifecycleSource, context, { filename: 'lifecycle.js' });
+  vm.runInContext(methodsSource, context, { filename: 'methods.js' });
+  vm.runInContext(pluginsSource, context, { filename: 'plugins.js' });
   vm.runInContext(optimizationsSource, context, { filename: 'optimizations.js' });
   vm.runInContext(
     `Game_Map.prototype.isValid = function(x, y) { calls.isValid++; return true; };` +
@@ -88,10 +95,13 @@ function makeHost({
     `Game_Map.prototype.height = function() { return 10; };` +
     `Game_Map.prototype.isSlippery = (${SLIPPERY_QUERY_SHAPE});` +
     `Array.prototype.contains = function(v) { return this.indexOf(v) !== -1; };`,
-    context, { filename: 'omori-slippery-shape.js' }
+    context, { filename: 'slippery-shape.js' }
   );
 
   vm.runInContext(moduleSource, context, { filename: 'slippery-tiles.js' });
+  if (autoActivate) {
+    context.PMJS.plugins.execute('YEP_SlipperyTiles', function() {});
+  }
   return context;
 }
 
@@ -102,15 +112,15 @@ test('registers plugins.yanfly.slippery-tiles optimization', () => {
 });
 
 test('plugin lifecycle hook ignores unrelated plugins', () => {
-  const context = makeHost();
+  const context = makeHost({ autoActivate: false });
   vm.runInContext(
     `Game_Map.prototype.isSlippery = (${SLIPPERY_QUERY_SHAPE});` +
     `delete Game_Map.prototype.__pmjsSlipperyTilesGuard;`, context);
   const stock = context.Game_Map.prototype.isSlippery;
 
-  context.hooks.pluginLoaded('SomeOtherPlugin');
+  context.PMJS.plugins.execute('SomeOtherPlugin', function() {});
   assert.equal(context.Game_Map.prototype.isSlippery, stock);
-  context.hooks.pluginLoaded('YEP_SlipperyTiles');
+  context.PMJS.plugins.execute('YEP_SlipperyTiles', function() {});
   assert.notEqual(context.Game_Map.prototype.isSlippery, stock);
   assert.equal(context.Game_Map.prototype.__pmjsSlipperyTilesGuard, true);
 });

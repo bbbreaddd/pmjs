@@ -19,46 +19,42 @@
     } catch (_) {}
   }
 
-  function installGraphicsFontHooks() {
-    if (typeof Graphics === 'undefined') return;
+  function graphicsTarget() {
+    return (typeof Graphics !== 'undefined') ? Graphics : null;
+  }
 
-    if (typeof Graphics.loadFont === 'function' &&
-        !Graphics.loadFont._pmjsFontRegistryWrapper) {
-      var originalLoadFont = Graphics.loadFont;
-      var wrappedLoadFont = function(name, url) {
+  PMJS.methods.wrap({
+    key: 'Graphics.loadFont',
+    getTarget: graphicsTarget,
+    method: 'loadFont',
+    id: 'pmjs.mv.font-registry',
+    wrap: function(originalLoadFont) {
+      return function(name, url) {
         if (globalThis.PMJS && PMJS.fonts &&
             typeof PMJS.fonts.registerFace === 'function') {
           PMJS.fonts.registerFace(name, url, { fromGame: true });
         }
         return originalLoadFont.apply(this, arguments);
       };
-      wrappedLoadFont._pmjsFontRegistryWrapper = true;
-      Graphics.loadFont = wrappedLoadFont;
     }
+  });
 
-    if (typeof Graphics.isFontLoaded !== 'function' ||
-        !Graphics.isFontLoaded._pmjsFontRegistryWrapper) {
-      var originalIsFontLoaded = typeof Graphics.isFontLoaded === 'function'
-        ? Graphics.isFontLoaded : null;
-      var wrappedIsFontLoaded = function(name) {
+  PMJS.methods.wrap({
+    key: 'Graphics.isFontLoaded',
+    getTarget: graphicsTarget,
+    method: 'isFontLoaded',
+    id: 'pmjs.mv.font-query',
+    wrap: function(originalIsFontLoaded) {
+      return function(name) {
         if (globalThis.PMJS && PMJS.fonts &&
             typeof PMJS.fonts.hasFamily === 'function' &&
             typeof PMJS.fonts.isFamilyLoaded === 'function') {
           if (PMJS.fonts.hasFamily(name)) return PMJS.fonts.isFamilyLoaded(name);
         }
-        if (originalIsFontLoaded) {
-          return originalIsFontLoaded.apply(this, arguments);
-        }
-        return false;
+        return originalIsFontLoaded.apply(this, arguments);
       };
-      wrappedIsFontLoaded._pmjsFontRegistryWrapper = true;
-      Graphics.isFontLoaded = wrappedIsFontLoaded;
     }
-  }
+  });
 
   loadStandardStylesheet();
-  installGraphicsFontHooks();
-  if (typeof pmjsRegisterHook === 'function') {
-    pmjsRegisterHook('afterPlugins', installGraphicsFontHooks);
-  }
 })();

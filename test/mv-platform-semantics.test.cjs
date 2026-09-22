@@ -10,7 +10,9 @@ const jsDir = path.resolve(__dirname, '../js');
 
 function readMvSetup() {
   return fs.readFileSync(path.join(jsDir, 'pmjs-rpgmaker/lifecycle.js'), 'utf8') +
+    '\n' + fs.readFileSync(path.join(jsDir, 'pmjs-core/methods.js'), 'utf8') +
     '\n' + fs.readFileSync(path.join(jsDir, 'pmjs-rpgmaker/plugins.js'), 'utf8') +
+    '\n' + fs.readFileSync(path.join(jsDir, 'pmjs-core/optimizations.js'), 'utf8') +
     '\n' + fs.readFileSync(path.join(jsDir, 'pmjs-rpgmaker/bootstrap.js'), 'utf8') +
     '\n' + fs.readFileSync(path.join(jsDir, 'pmjs-mv/setup.js'), 'utf8');
 }
@@ -73,7 +75,7 @@ test('plugin lifecycle hooks install after PluginManager becomes available', () 
     setup() { throw new Error('stock setup should be replaced'); }
   };
   const events = [];
-  context.pmjsRegisterHook('pluginLoaded', name => events.push(name));
+  context.PMJS.plugins.onLoaded('YED_Tiled', () => events.push('loaded'));
 
   assert.equal(context.pmjsMvInstallPluginManagerHooks(), true);
   assert.equal(context.pmjsMvInstallPluginManagerHooks(), true);
@@ -82,7 +84,7 @@ test('plugin lifecycle hooks install after PluginManager becomes available', () 
   ]);
 
   assert.deepEqual(loaded, ['js/plugins/YED_Tiled.js']);
-  assert.deepEqual(events, ['YED_Tiled']);
+  assert.deepEqual(events, ['loaded']);
   assert.equal(context.PluginManager._pmjsLifecycleInstalled, true);
 });
 
@@ -464,9 +466,9 @@ test('lifecycle pulses beforePlugins, afterPlugins, and beforeBoot', () => {
 
   vm.runInContext(setupCode, context);
   context.globalThis.PMJS_MANUAL_BOOTSTRAP = true;
-  context.globalThis.pmjsRegisterHook('beforePlugins', () => events.push('beforePlugins'));
-  context.globalThis.pmjsRegisterHook('afterPlugins', () => events.push('afterPlugins'));
-  context.globalThis.pmjsRegisterHook('beforeBoot', () => events.push('beforeBoot'));
+  context.PMJS.phases.on('beforePlugins', () => events.push('beforePlugins'));
+  context.PMJS.phases.on('afterPlugins', () => events.push('afterPlugins'));
+  context.PMJS.phases.on('beforeBoot', () => events.push('beforeBoot'));
   context.globalThis.pmjsPixiRenderPreflight = {
     scan() { events.push('pixi-preflight'); }
   };
@@ -488,7 +490,7 @@ test('lifecycle pulses beforePlugins, afterPlugins, and beforeBoot', () => {
   ]);
 });
 
-test('pmjsRegisterHook registers multiple hooks in order', () => {
+test('phases run multiple hooks in registration order', () => {
   const events = [];
   const sandbox = {
     globalThis: {},
@@ -511,8 +513,8 @@ test('pmjsRegisterHook registers multiple hooks in order', () => {
   const pluginLoaderCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/plugin-loader.js'), 'utf8');
 
   vm.runInContext(setupCode, context);
-  context.globalThis.pmjsRegisterHook('afterPlugins', () => events.push('hook-1'));
-  context.globalThis.pmjsRegisterHook('afterPlugins', () => events.push('hook-2'));
+  context.PMJS.phases.on('afterPlugins', () => events.push('hook-1'));
+  context.PMJS.phases.on('afterPlugins', () => events.push('hook-2'));
 
   vm.runInContext(pluginLoaderCode, context);
 
@@ -521,72 +523,15 @@ test('pmjsRegisterHook registers multiple hooks in order', () => {
   assert.deepEqual(events, ['hook-1', 'hook-2']);
 });
 
-test('pluginLoaded hooks fire in load order and stay generic', () => {
-  const events = [];
-  const sandbox = {
-    globalThis: {},
-    NativeHost: { runtime: { loadScript() {} } },
-    $plugins: [
-      { name: 'PluginA', status: true, parameters: {} },
-      { name: 'PluginB', status: true, parameters: {} }
-    ],
-    PluginManager: {
-      _scripts: [],
-      _path: 'js/plugins/',
-      loadScript() {},
-      setParameters() {},
-      setup() {}
-    }
-  };
-  sandbox.globalThis = sandbox;
-  const context = vm.createContext(sandbox);
-
-  const setupCode = readMvSetup();
-  const pluginLoaderCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/plugin-loader.js'), 'utf8');
-
-  vm.runInContext(setupCode, context);
-
-  const onPlugin = (name, fn) => {
-    context.globalThis.pmjsRegisterHook('pluginLoaded', (loaded) => {
-      if (loaded === name) fn();
-    });
-  };
-  onPlugin('PluginA', () => events.push('a-1'));
-  onPlugin('PluginA', () => events.push('a-2'));
-  onPlugin('PluginB', () => events.push('b'));
-
-  vm.runInContext(pluginLoaderCode, context);
-
-  context.pmjsMvInitializePlugins();
-
-  assert.deepEqual(events, ['a-1', 'a-2', 'b']);
-
-  context.globalThis.pmjsRunHooks('pluginLoaded', 'Nobody');
-});
-
-test('hook arguments forward and failures never take down boot', () => {
-  const sandbox = { globalThis: {}, console };
-  sandbox.globalThis = sandbox;
-  const context = vm.createContext(sandbox);
-
-  const setupCode = readMvSetup();
-  vm.runInContext(setupCode, context);
-
+test('named plugin callbacks run once and errors do not stop peers', () => {
+  const context = vm.createContext({ console });
+  vm.runInContext(readMvSetup(), context);
   const seen = [];
-  context.globalThis.pmjsRegisterHook('pluginLoaded', (name) => seen.push(name));
-  context.globalThis.pmjsRunHooks('pluginLoaded', 'SomePlugin.js');
-  assert.deepEqual(seen, ['SomePlugin.js']);
-
-  for (const devMode of [false, true]) {
-    let secondRan = false;
-    context.globalThis.PMJS_DEVELOPMENT_MODE = devMode;
-    context.globalThis.pmjsRegisterHook('pluginLoaded', () => {
-      throw new Error('boom');
-    });
-    context.globalThis.pmjsRegisterHook('pluginLoaded', () => { secondRan = true; });
-    context.globalThis.pmjsRunHooks('pluginLoaded', 'Flaky');
-    assert.equal(secondRan, true);
-  }
+  context.PMJS.plugins.onLoaded('SomePlugin', () => { throw new Error('boom'); });
+  context.PMJS.plugins.onLoaded('someplugin.js', () => seen.push('loaded'));
+  context.PMJS.plugins.execute('SomePlugin', function() {});
+  context.PMJS.plugins.execute('SomePlugin', function() {});
+  assert.deepEqual(seen, ['loaded']);
 });
 
 test('Scene_Map same-map transfer does not short-circuit through reuse and preserves stock transfer hooks', () => {
@@ -1082,20 +1027,22 @@ test('storage read coalescing runs underneath plugin wrappers and respects dynam
 
 test('native renderer ownership is restored after game plugins compose', () => {
   const source = fs.readFileSync(path.join(jsDir, 'pmjs-mv/renderer.js'), 'utf8');
+  const methodsSource = fs.readFileSync(path.join(jsDir, 'pmjs-core/methods.js'), 'utf8');
   const rendererInstaller = source.slice(0, source.indexOf('var originalIsOptionValid'));
-  const hooks = {};
   const context = {
+    console,
     Graphics: { frameCount: 0 },
     createNativePixiRenderer() { return { render() {}, gl: null }; },
-    pmjsRegisterHook(name, callback) { hooks[name] = callback; },
   };
+  context.globalThis = context;
   vm.createContext(context);
+  vm.runInContext(methodsSource, context, { filename: 'methods.js' });
   vm.runInContext(rendererInstaller, context);
   const pluginCreateRenderer = function() {};
   const pluginRender = function() {};
   context.Graphics._createRenderer = pluginCreateRenderer;
   context.Graphics.render = pluginRender;
-  hooks.afterPlugins();
+  context.PMJS.methods.install();
 
   assert.notEqual(context.Graphics._createRenderer, pluginCreateRenderer);
   assert.notEqual(context.Graphics.render, pluginRender);
@@ -1154,7 +1101,7 @@ test('screen and nw.Window report host dimensions while innerWidth/innerHeight r
       }
     },
     __pmjsGameInfo: {
-      title: 'Felvidek',
+      title: 'Demo Game',
       width: 960,
       height: 720,
       displayWidth: 640,
@@ -1181,7 +1128,7 @@ test('screen and nw.Window report host dimensions while innerWidth/innerHeight r
   const win = nw.Window.get();
   assert.equal(win.width, 640);
   assert.equal(win.height, 480);
-  assert.equal(win.title, 'Felvidek');
+  assert.equal(win.title, 'Demo Game');
 
   // NW window dimensions describe the native window and unsupported setters are no-ops.
   win.width = 1000;
@@ -1210,10 +1157,12 @@ test('screen and nw.Window report host dimensions while innerWidth/innerHeight r
 
 test('Graphics._createRenderer uses the game-authored logical dimensions', () => {
   const source = fs.readFileSync(path.join(jsDir, 'pmjs-mv/renderer.js'), 'utf8');
+  const methodsSource = fs.readFileSync(path.join(jsDir, 'pmjs-core/methods.js'), 'utf8');
   const rendererInstaller = source.slice(0, source.indexOf('var originalIsOptionValid'));
   const createdSizes = [];
   const context = {
-    Graphics: { _width: 960, _height: 720, frameCount: 0 },
+    console,
+    Graphics: { _width: 960, _height: 720, frameCount: 0, _createRenderer() {} },
     __pmjsGameInfo: { width: 816, height: 624, title: 'Test' },
     createNativePixiRenderer(w, h) {
       createdSizes.push({ w, h });
@@ -1222,11 +1171,12 @@ test('Graphics._createRenderer uses the game-authored logical dimensions', () =>
         gl: null
       };
     },
-    pmjsRegisterHook() {},
   };
   context.globalThis = context;
   vm.createContext(context);
+  vm.runInContext(methodsSource, context, { filename: 'methods.js' });
   vm.runInContext(rendererInstaller, context);
+  context.PMJS.methods.install();
 
   context.Graphics._createRenderer();
   assert.deepEqual(createdSizes, [{ w: 960, h: 720 }]);

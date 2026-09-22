@@ -8,6 +8,11 @@ const vm = require('node:vm');
 
 const runtimeRoot = path.resolve(__dirname, '..');
 const jsDir = path.join(runtimeRoot, 'js');
+const methodsSource = fs.readFileSync(path.join(jsDir, 'pmjs-core/methods.js'), 'utf8');
+
+function installMvFontLayers(context) {
+  context.PMJS.methods.install();
+}
 
 function createFontSandbox(options = {}) {
   const existingFiles = new Set(options.existingFiles || []);
@@ -34,7 +39,9 @@ function createFontSandbox(options = {}) {
     },
     pmjsGameConfig: options.pmjsGameConfig || {},
     nativeBootPhase: () => {},
-    Graphics: Object.assign(function() {}, { width: 100, height: 100 }),
+    Graphics: Object.assign(function() {}, { width: 100, height: 100,
+      loadFont() {},
+      isFontLoaded() { return false; } }),
     NativeHost: {
       runtime: {
         env: () => '',
@@ -95,7 +102,9 @@ function createFontSandbox(options = {}) {
   vm.runInContext(elementsCode, context);
 
   const mvFontsCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/fonts.js'), 'utf8');
+  vm.runInContext(methodsSource, context, { filename: 'methods.js' });
   vm.runInContext(mvFontsCode, context);
+  if (!options.deferMethodInstall) context.PMJS.methods.install();
 
   return { context, measureCalls, drawCalls, loadedScripts };
 }
@@ -276,8 +285,7 @@ test('MV adapter loads fonts/gamefont.css and registers GameFont relative to sty
     }
   });
 
-  const mvFontsCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/fonts.js'), 'utf8');
-  vm.runInContext(mvFontsCode, context);
+  installMvFontLayers(context);
 
   assert.equal(context.PMJS.fonts.isFamilyLoaded('GameFont'), true);
   const resolved = context.PMJS.fonts.resolveDescriptor('24px GameFont');
@@ -306,8 +314,7 @@ test('Dynamic font switching: resolve selected face for both drawText and measur
     }
   });
 
-  const mvFontsCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/fonts.js'), 'utf8');
-  vm.runInContext(mvFontsCode, context);
+  installMvFontLayers(context);
 
   context.PMJS.fonts.registerFontFaceRule('@font-face { font-family: "secondary"; src: url("fonts/SecondaryFont.ttf"); }');
   context.PMJS.fonts.registerFontFaceRule('@font-face { font-family: "primary"; src: url("fonts/PrimaryFont.ttf"); }');
@@ -341,8 +348,7 @@ test('Multiple dynamic faces and font stack with spaces', () => {
     }
   });
 
-  const mvFontsCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/fonts.js'), 'utf8');
-  vm.runInContext(mvFontsCode, context);
+  installMvFontLayers(context);
 
   context.PMJS.fonts.registerFace('CustomFont_A', 'fonts/CustomFont_A.ttf');
   context.PMJS.fonts.registerFace('CustomFont_B', 'fonts/CustomFont_B.ttf');
@@ -462,8 +468,7 @@ test('config.fonts acts as an override escape hatch against stylesheet font defi
     }
   });
 
-  const mvFontsCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/fonts.js'), 'utf8');
-  vm.runInContext(mvFontsCode, context);
+  installMvFontLayers(context);
 
   assert.equal(context.PMJS.fonts.isFamilyLoaded('GameFont'), true);
   const resolved = context.PMJS.fonts.resolveDescriptor('24px GameFont');
@@ -477,8 +482,7 @@ test('Graphics.loadFont registers dynamic font automatically', () => {
 
   context.Graphics = context.Graphics || {};
   context.Graphics.loadFont = function(name, url) {};
-  const mvFontsCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/fonts.js'), 'utf8');
-  vm.runInContext(mvFontsCode, context);
+  installMvFontLayers(context);
 
   context.Graphics.loadFont('DynamicFace', 'fonts/DynamicFont.ttf');
 
@@ -488,24 +492,17 @@ test('Graphics.loadFont registers dynamic font automatically', () => {
   assert.equal(resolved.faces[0].path, 'fonts/DynamicFont.ttf');
 });
 
-test('plugin replaces Graphics.loadFont and afterPlugins wraps replacement so dynamic font still registers', () => {
-  const hooks = {};
+test('plugin replacement before method install is wrapped for dynamic fonts', () => {
   const { context } = createFontSandbox({
-    existingFiles: ['fonts/PluginLoadedFont.ttf']
+    existingFiles: ['fonts/PluginLoadedFont.ttf'], deferMethodInstall: true
   });
-  context.pmjsRegisterHook = (name, fn) => { hooks[name] = fn; };
   context.Graphics = context.Graphics || {};
-  context.Graphics.loadFont = function(name, url) {};
-  const mvFontsCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/fonts.js'), 'utf8');
-  vm.runInContext(mvFontsCode, context);
-
   let pluginLoadCalled = 0;
   context.Graphics.loadFont = function(name, url) {
     pluginLoadCalled++;
   };
 
-  assert.equal(typeof hooks.afterPlugins, 'function');
-  hooks.afterPlugins();
+  installMvFontLayers(context);
 
   context.Graphics.loadFont('PluginFace', 'fonts/PluginLoadedFont.ttf');
 
@@ -517,24 +514,22 @@ test('plugin replaces Graphics.loadFont and afterPlugins wraps replacement so dy
 });
 
 test('Graphics.isFontLoaded falls back to a plugin result for fonts outside the PMJS registry', () => {
-  const { context } = createFontSandbox();
+  const { context } = createFontSandbox({ deferMethodInstall: true });
   context.Graphics = {
     isFontLoaded(name) { return name === 'PluginManagedFace'; }
   };
-  const mvFontsCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/fonts.js'), 'utf8');
-  vm.runInContext(mvFontsCode, context);
+  installMvFontLayers(context);
 
   assert.equal(context.Graphics.isFontLoaded('PluginManagedFace'), true);
   assert.equal(context.Graphics.isFontLoaded('MissingFace'), false);
 });
 
 test('Graphics.isFontLoaded keeps PMJS ownership for a registered font that failed readiness', () => {
-  const { context } = createFontSandbox();
+  const { context } = createFontSandbox({ deferMethodInstall: true });
   context.Graphics = {
     isFontLoaded() { return true; }
   };
-  const mvFontsCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/fonts.js'), 'utf8');
-  vm.runInContext(mvFontsCode, context);
+  installMvFontLayers(context);
   context.PMJS.fonts.registerFace('BrokenFace', 'fonts/missing.ttf');
 
   assert.equal(context.PMJS.fonts.hasFamily('BrokenFace'), true);

@@ -70,6 +70,19 @@ function createKnownOliviaSprite() {
   return Sprite;
 }
 
+const registrySources = {
+  lifecycle: 'js/pmjs-rpgmaker/lifecycle.js',
+  methods: 'js/pmjs-core/methods.js',
+  plugins: 'js/pmjs-rpgmaker/plugins.js',
+};
+
+function loadRegistrySupport(sandbox) {
+  for (const [name, file] of Object.entries(registrySources)) {
+    vm.runInContext(fs.readFileSync(path.join(runtimeRoot, file), 'utf8'),
+      sandbox, { filename: file });
+  }
+}
+
 function loadWithRegistrations(extra = {}) {
   const registrations = [];
   const sandbox = Object.assign({
@@ -81,6 +94,7 @@ function loadWithRegistrations(extra = {}) {
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(optimizationsSource, sandbox, { filename: 'optimizations.js' });
+  loadRegistrySupport(sandbox);
   vm.runInContext(source, sandbox, { filename: 'olivia-horror-effects.js' });
   return { sandbox, registrations };
 }
@@ -155,19 +169,22 @@ test('Olivia fast path is inert when the plugin is absent', () => {
   assert.equal(sandbox.Sprite.prototype.updateHorrorEffects, update);
 });
 
-test('Olivia module subscribes to pluginLoaded and filters by plugin name', () => {
-  const { sandbox, registrations } = loadWithRegistrations();
-  const pluginLoaded = registrations.find(r => r.hookName === 'pluginLoaded');
-  assert.ok(pluginLoaded);
+test('Olivia adapter activates on its trigger plugin and ignores others', () => {
+  const sandbox = { console };
+  sandbox.globalThis = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(optimizationsSource, sandbox, { filename: 'optimizations.js' });
+  loadRegistrySupport(sandbox);
+  vm.runInContext(source, sandbox, { filename: 'olivia-horror-effects.js' });
 
   sandbox.Sprite = createKnownOliviaSprite();
   sandbox.Olivia = { HorrorEffects: {} };
   const before = sandbox.Sprite.prototype.updateHorrorEffects;
 
-  pluginLoaded.callback('SomeOtherPlugin');
+  sandbox.PMJS.plugins.execute('SomeOtherPlugin', function() {});
   assert.equal(sandbox.Sprite.prototype.updateHorrorEffects, before);
 
-  pluginLoaded.callback('Olivia_HorrorEffects');
+  sandbox.PMJS.plugins.execute('Olivia_HorrorEffects', function() {});
   assert.notEqual(sandbox.Sprite.prototype.updateHorrorEffects, before);
   assert.equal(sandbox.Sprite.prototype._pmjsOliviaInstalled, true);
 });

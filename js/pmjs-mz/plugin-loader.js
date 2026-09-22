@@ -21,8 +21,12 @@
       }, this);
 
       pending.forEach(function(plugin) {
-        this.loadScript(plugin.filename);
-        globalThis.pmjsRunHooks('pluginLoaded', plugin.name);
+        var self = this;
+        var file = plugin.filename;
+        var name = plugin.name;
+        PMJS.plugins.execute(name, function() {
+          self.loadScript(file);
+        });
       }, this);
     };
 

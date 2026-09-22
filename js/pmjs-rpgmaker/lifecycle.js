@@ -2,25 +2,40 @@
 
 (function() {
   var registry = Object.create(null);
+  var fired = Object.create(null);
 
-  function registerHook(name, callback) {
-    if (typeof callback !== 'function') return;
-    registry[name] = registry[name] || [];
-    registry[name].push(callback);
-  }
-
-  function runHooks(name) {
-    var args = Array.prototype.slice.call(arguments, 1);
-    var hooks = registry[name] || [];
-    for (var index = 0; index < hooks.length; index++) {
-      try {
-        hooks[index].apply(null, args);
-      } catch (error) {
-        console.error('[pmjs] error running hook ' + name + ':', error);
-      }
+  function on(name, owner, callback) {
+    if (typeof owner === 'function') {
+      callback = owner;
+      owner = 'anonymous';
     }
+    if (typeof callback !== 'function') return;
+    if (fired[name]) {
+      try { callback(); } catch (error) {
+        console.error('[pmjs] error running late phase ' + name +
+          ' (owner ' + owner + '):', error);
+      }
+      return;
+    }
+    (registry[name] || (registry[name] = [])).push({
+      owner: owner, callback: callback
+    });
   }
 
-  globalThis.pmjsRegisterHook = registerHook;
-  globalThis.pmjsRunHooks = runHooks;
+  function emit(name) {
+    if (fired[name]) return false;
+    fired[name] = true;
+    var entries = registry[name] || [];
+    delete registry[name];
+    entries.forEach(function(entry) {
+      try { entry.callback(); } catch (error) {
+        console.error('[pmjs] error running phase ' + name +
+          ' (owner ' + entry.owner + '):', error);
+      }
+    });
+    return true;
+  }
+
+  globalThis.PMJS = globalThis.PMJS || {};
+  PMJS.phases = { on: on, emit: emit };
 })();

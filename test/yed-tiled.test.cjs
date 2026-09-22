@@ -7,6 +7,19 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const runtimeRoot = path.resolve(__dirname, '..');
+const registrySources = {
+  lifecycle: 'js/pmjs-rpgmaker/lifecycle.js',
+  methods: 'js/pmjs-core/methods.js',
+  plugins: 'js/pmjs-rpgmaker/plugins.js',
+};
+
+function loadRegistrySupport(context) {
+  for (const [name, file] of Object.entries(registrySources)) {
+    vm.runInContext(fs.readFileSync(path.join(runtimeRoot, file), 'utf8'),
+      context, { filename: file });
+  }
+}
+
 const source = fs.readFileSync(path.join(runtimeRoot,
   'js/pmjs-plugins/yed/tiled.js'), 'utf8');
 
@@ -85,6 +98,7 @@ function installInContext(configure) {
   };
   context.globalThis = context;
   vm.createContext(context);
+  loadRegistrySupport(context);
   vm.runInContext(source, context, { filename: 'js/pmjs-plugins/yed/tiled.js' });
   configure(context);
   const installed = context.pmjsInstallYedTiledFastPaths();
@@ -202,6 +216,7 @@ test('YED level hiding reruns only when level or repaint generation changes', ()
   vm.createContext(context);
   let calls = 0;
   context.Spriteset_Map.prototype._updateHideOnLevel = function() { calls++; };
+  loadRegistrySupport(context);
   vm.runInContext(source, context,
     { filename: 'js/pmjs-plugins/yed/tiled.js' });
   context.pmjsInstallYedTiledFastPaths();
@@ -326,43 +341,53 @@ test('YED fast paths install when recognized as known YED implementation', () =>
     faithfulPaintTilesLayer);
 });
 
-test('YED module subscribes to pluginLoaded and filters by plugin name', () => {
-  const registrations = [];
+test('YED adapter activates on its trigger plugin and ignores others', () => {
   const sandbox = {
     console,
     comparePmjsTilemapChildren: () => 0,
-    pmjsRegisterHook(hookName, callback) {
-      registrations.push({ hookName, callback });
-    }
   };
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
+  const runtimeSources = {
+    lifecycle: 'js/pmjs-rpgmaker/lifecycle.js',
+    methods: 'js/pmjs-core/methods.js',
+    plugins: 'js/pmjs-rpgmaker/plugins.js',
+  };
+  for (const [name, file] of Object.entries(runtimeSources)) {
+    vm.runInContext(fs.readFileSync(path.join(runtimeRoot, file), 'utf8'),
+      sandbox, { filename: file });
+  }
   vm.runInContext(source, sandbox, { filename: 'js/pmjs-plugins/yed/tiled.js' });
-
-  assert.ok(registrations.some(r => r.hookName === 'pluginLoaded'));
-  const pluginLoaded = registrations.find(r => r.hookName === 'pluginLoaded');
 
   sandbox.TiledTilemap = function TiledTilemap() {};
   const paintAllTiles = sandbox.TiledTilemap.prototype._paintAllTiles =
     faithfulPaintAllTiles;
 
-  // Other plugins loading must leave YED methods untouched.
-  pluginLoaded.callback('SomeOtherPlugin');
+  sandbox.PMJS.plugins.execute('SomeOtherPlugin', function() {});
   assert.equal(sandbox.TiledTilemap.prototype._paintAllTiles, paintAllTiles);
   assert.equal(sandbox.TiledTilemap.prototype._pmjsIndexedPaintLoops, undefined);
+
+  sandbox.PMJS.plugins.execute('YED_Tiled', function() {});
+  assert.equal(sandbox.PMJS.plugins.dump().guest.some(entry => entry.name === 'YED_Tiled' && entry.state === 'loaded'), true);
+  assert.equal(sandbox.TiledTilemap.prototype._paintAllTiles, paintAllTiles);
 });
 
 test('YED integration installs per plugin so later extensions wrap optimized behavior', () => {
-  const registrations = [];
   const sandbox = {
     console,
     comparePmjsTilemapChildren: () => 0,
-    pmjsRegisterHook(hookName, callback) {
-      registrations.push({ hookName, callback });
-    }
   };
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
+  const runtimeSources = {
+    lifecycle: 'js/pmjs-rpgmaker/lifecycle.js',
+    methods: 'js/pmjs-core/methods.js',
+    plugins: 'js/pmjs-rpgmaker/plugins.js',
+  };
+  for (const [name, file] of Object.entries(runtimeSources)) {
+    vm.runInContext(fs.readFileSync(path.join(runtimeRoot, file), 'utf8'),
+      sandbox, { filename: file });
+  }
   vm.runInContext(source, sandbox, { filename: 'js/pmjs-plugins/yed/tiled.js' });
 
   sandbox.TiledTilemap = function TiledTilemap() {};
@@ -374,9 +399,7 @@ test('YED integration installs per plugin so later extensions wrap optimized beh
   sandbox.Spriteset_Map = function Spriteset_Map() {};
   sandbox.Spriteset_Map.prototype._updateHideOnLevel = function() {};
 
-  // Per-plugin phase: YED_Tiled just loaded, methods are still pristine.
-  const pluginLoaded = registrations.find(r => r.hookName === 'pluginLoaded');
-  pluginLoaded.callback('YED_Tiled');
+  sandbox.PMJS.plugins.execute('YED_Tiled', function() {});
   assert.equal(sandbox.TiledTilemap.prototype._pmjsIndexedPaintLoops, true);
 
   // A later extension wraps the already-optimized repaint naturally.
@@ -505,6 +528,7 @@ function makeAnimatedTilemap({
   const optSrc = fs.readFileSync(
     path.join(runtimeRoot, 'js/pmjs-core/optimizations.js'), 'utf8');
   vm.runInContext(optSrc, context, { filename: 'pmjs-core/optimizations.js' });
+  loadRegistrySupport(context);
   vm.runInContext(source, context, { filename: 'js/pmjs-plugins/yed/tiled.js' });
 
   const ShaderTilemap = function ShaderTilemap() {};
