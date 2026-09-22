@@ -112,15 +112,6 @@ if (PIXI.BaseRenderTexture) {
     };
   })();
 }
-if (PIXI.RenderTexture) {
-  (function() {
-    var destroy = PIXI.RenderTexture.prototype.destroy;
-    PIXI.RenderTexture.prototype.destroy = function() {
-      releaseNativeRenderCanvas(this.baseTexture);
-      return destroy && destroy.apply(this, arguments);
-    };
-  })();
-}
 NativeHost.runtime.loadScript('js/libs/pixi-picture.js');
 installNativePictureTilingSprite();
 NativeHost.runtime.loadScript('js/libs/lz-string.js');

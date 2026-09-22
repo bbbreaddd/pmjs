@@ -213,6 +213,15 @@ function makeHarness() {
   return { sandbox, submitted, compatHits, compatObserved, counts, makeTexture, sprite };
 }
 
+test('blank tile retains its canvas owner for later layer compilations', () => {
+  const { sandbox } = makeHarness();
+  const handle = sandbox.nativeBlankTile();
+  assert.ok(handle);
+  assert.ok(sandbox.nativeBlankTileCanvas);
+  assert.equal(sandbox.nativeBlankTileCanvas._ensureNativeCanvas().handle, handle);
+  assert.equal(sandbox.nativeBlankTile(), handle);
+});
+
 function buildPlainFixture(harness) {
   const { sandbox, sprite } = harness;
   const root = new sandbox.PIXI.Container();

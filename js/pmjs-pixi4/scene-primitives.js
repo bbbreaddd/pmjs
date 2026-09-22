@@ -33,7 +33,7 @@ var nativeTileRebuilds = 0;
 var nativeTransformMs = 0;
 var nativeQueueMs = 0;
 var nativeStageSamples = 0;
-var nativeBlankTileHandle = 0;
+var nativeBlankTileCanvas = null;
 var nativeMaterializationStats = {
   tilingDirect: 0, tilingHits: 0, tilingMisses: 0,
   meshHits: 0, meshMisses: 0,
@@ -60,15 +60,17 @@ function nativeTextureSource(source) {
 }
 
 function nativeBlankTile() {
-  if (nativeBlankTileHandle) return nativeBlankTileHandle;
+  if (nativeBlankTileCanvas) {
+    return nativeBlankTileCanvas._ensureNativeCanvas().handle;
+  }
   var canvas = new CanvasElement();
   canvas.width = 1;
   canvas.height = 1;
   canvas.getContext('2d').clearRect(0, 0, 1, 1);
   var native = canvas._ensureNativeCanvas();
   if (!native) return 0;
-  nativeBlankTileHandle = native.handle;
-  return nativeBlankTileHandle;
+  nativeBlankTileCanvas = canvas;
+  return native.handle;
 }
 
 function nativeRotatedTexturePoint(rotation, x, y) {

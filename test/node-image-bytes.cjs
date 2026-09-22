@@ -18,6 +18,20 @@ async function main() {
     throw new Error('memory images unexpectedly shared path-cache identity');
   }
 
+  const canvas = native.canvas.create(2, 2);
+  const expected = native.images.load('fixture.png');
+  native.canvas.drawImage(canvas.handle, expected.handle, 0, 0, 2, 2, 0, 0, 2, 2, 1);
+  const expectedPixels = Array.from(native.canvas.readPixels(canvas.handle, 0, 0, 2, 2));
+  for (let frame = 0; frame < 65; frame++) native.beginFrame();
+  for (const image of [sync, async]) {
+    native.canvas.clear(canvas.handle);
+    native.canvas.drawImage(canvas.handle, image.handle, 0, 0, 2, 2, 0, 0, 2, 2, 1);
+    const actual = Array.from(native.canvas.readPixels(canvas.handle, 0, 0, 2, 2));
+    if (JSON.stringify(actual) !== JSON.stringify(expectedPixels)) {
+      throw new Error('memory image lost readable pixels after frame aging');
+    }
+  }
+
   let malformedRejected = false;
   try { await native.images.loadBytesAsync(Uint8Array.from([1, 2, 3, 4])); }
   catch (_) { malformedRejected = true; }
@@ -30,6 +44,8 @@ async function main() {
 
   native.images.release(sync.handle);
   native.images.release(async.handle);
+  native.images.release(expected.handle);
+  native.canvas.release(canvas.handle);
   console.log('[pmjs-node-image-bytes] ready');
 }
 

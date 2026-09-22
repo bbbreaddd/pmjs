@@ -226,15 +226,14 @@ std::optional<ImageInfo> ImageStore::installDecoded(
 }
 
 std::optional<ImageInfo> ImageStore::installDecodedMemory(
-    ImagePixels pixels, bool retainCpuPixels) {
+    ImagePixels pixels, bool /* retainCpuPixels */) {
   auto created = createRgba(pixels.width, pixels.height, pixels.rgba.data());
   if (!created) return std::nullopt;
   const std::size_t index = (created->handle & indexMask) - 1U;
-  slots_[index].retainCpuPixels = retainCpuPixels;
-  if (retainCpuPixels) {
-    slots_[index].cachedPixels = std::move(pixels);
-    slots_[index].cpuPixelFrames = 0;
-  }
+  // Memory images have no path to decode again after their load bytes are gone.
+  slots_[index].retainCpuPixels = true;
+  slots_[index].cachedPixels = std::move(pixels);
+  slots_[index].cpuPixelFrames = 0;
   return created;
 }
 
@@ -243,6 +242,11 @@ bool ImageStore::retainCpuPixels(ImageHandle handle) {
   if (!info) return false;
   const std::size_t index = (handle & indexMask) - 1U;
   auto& slot = slots_[index];
+  if (slot.cachedPixels) {
+    slot.retainCpuPixels = true;
+    slot.cpuPixelFrames = 0;
+    return true;
+  }
   if (slot.cacheKey.empty()) return false;
   if (!slot.cachedPixels) slot.cachedPixels = decodeImage(slot.cacheKey);
   if (!slot.cachedPixels) return false;
@@ -278,6 +282,10 @@ const ImagePixels* ImageStore::readPixels(ImageHandle handle) const {
   const auto info = lookup(handle);
   if (!info || encodedIndex == 0) return nullptr;
   const auto& slot = slots_[encodedIndex - 1U];
+  if (slot.cachedPixels) {
+    if (!slot.retainCpuPixels && !slot.cacheKey.empty()) slot.cpuPixelFrames = 60;
+    return &*slot.cachedPixels;
+  }
   if (slot.cacheKey.empty()) return nullptr;
   if (slot.retainCpuPixels) {
     if (!slot.cachedPixels) slot.cachedPixels = decodeImage(slot.cacheKey);
