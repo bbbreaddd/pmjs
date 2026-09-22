@@ -73,18 +73,19 @@ test('gate: ordinary debt is retained, not discarded', () => {
   assert.equal(next.overload, false);
 });
 
-test('gate: 300 ms stall rebases with zero steps and reports overload', () => {
+test('gate: repeated 300 ms frames make bounded progress in both catch-up modes', () => {
   const ctx = loadTiming();
-  const state = ctx.pmjsMvCreateStepGate();
-  ctx.pmjsMvGateSteps(state, 0);
-  const gated = ctx.pmjsMvGateSteps(state, 300);
-  assert.equal(gated.steps, 0);
-  assert.equal(gated.overload, true);
-  assert.ok(gated.droppedMs >= 300);
-  assert.equal(state.accMs, 0);
-  const next = ctx.pmjsMvGateSteps(state, 300 + 1000 / 60);
-  assert.equal(next.steps, 1);
-  assert.equal(next.overload, false);
+  for (const catchupMode of ['smooth', 'burst']) {
+    const state = ctx.pmjsMvCreateStepGate({ catchupMode });
+    ctx.pmjsMvGateSteps(state, 0);
+    for (const now of [300, 600, 900]) {
+      const gated = ctx.pmjsMvGateSteps(state, now);
+      assert.equal(gated.steps, 2);
+      assert.equal(gated.overload, true);
+      assert.ok(gated.droppedMs > 0);
+      assert.equal(state.accMs, 0);
+    }
+  }
 });
 
 test('gate: sustained overload below the threshold never bursts', () => {
@@ -122,6 +123,12 @@ function stockShapedScene() {
     updateScene() { this.logicSteps++; },
     renderScene() { this.renders++; },
     requestUpdate() {},
+    resume() {
+      this._stopped = false;
+      this.requestUpdate();
+      this._currentTime = this._getTimeInMsWithoutMobileSafari();
+      this._accumulator = 0;
+    },
     updateMain() {
       const newTime = this._getTimeInMsWithoutMobileSafari();
       let fTime = (newTime - this._currentTime) / 1000;
@@ -166,7 +173,7 @@ test('contract: disabled policy leaves guest updateMain unchanged', () => {
   assert.equal(ctx.PMJS.optimizations.isEnabled('mv.logic-timing-contract'), false);
 });
 
-test('contract: 300 ms stall executes zero catch-up steps then recovers', () => {
+test('contract: repeated 300 ms frames advance logic within the catch-up bound', () => {
   const ctx = loadTiming();
   const logs = [];
   ctx.console = { log: (message) => logs.push(String(message)) };
@@ -175,14 +182,34 @@ test('contract: 300 ms stall executes zero catch-up steps then recovers', () => 
   ctx.pmjsMvInstallTimingContract();
   ctx.SceneManager._now = 0;
   ctx.SceneManager.updateMain();
-  ctx.SceneManager._now = 300;
-  ctx.SceneManager.updateMain();
-  assert.equal(ctx.SceneManager.logicSteps, 0);
-  assert.ok(logs.some((line) => line.includes('overload-discontinuity')),
+  for (const now of [300, 600, 900]) {
+    ctx.SceneManager._now = now;
+    ctx.SceneManager.updateMain();
+  }
+  assert.equal(ctx.SceneManager.logicSteps, 6);
+  assert.ok(logs.some((line) => line.includes('overload-debt-clamp')),
     `expected overload log, got ${JSON.stringify(logs)}`);
-  ctx.SceneManager._now = 300 + 1000 / 60;
+  ctx.SceneManager._now = 900 + 1000 / 60;
+  ctx.SceneManager.updateMain();
+  assert.equal(ctx.SceneManager.logicSteps, 7);
+});
+
+test('contract: resume clears the gate clock and retained debt', () => {
+  const ctx = loadTiming();
+  ctx.SceneManager = stockShapedScene();
+  ctx.performance = { now: () => ctx.SceneManager._now };
+  assert.equal(ctx.pmjsMvInstallTimingContract(), true);
+  ctx.SceneManager.updateMain();
+  ctx.SceneManager._now = 20;
   ctx.SceneManager.updateMain();
   assert.equal(ctx.SceneManager.logicSteps, 1);
+  ctx.SceneManager._now = 220;
+  ctx.SceneManager.resume();
+  ctx.SceneManager.updateMain();
+  assert.equal(ctx.SceneManager.logicSteps, 1);
+  ctx.SceneManager._now += 1000 / 60;
+  ctx.SceneManager.updateMain();
+  assert.equal(ctx.SceneManager.logicSteps, 2);
 });
 
 test('contract: stock-shaped plugin override is wrapped, not replaced', () => {

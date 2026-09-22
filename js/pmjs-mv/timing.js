@@ -45,7 +45,12 @@
     };
   }
 
-  // Retain ordinary debt; rebase without catch-up after a discontinuity.
+  function pmjsMvResetStepGate(state, nowMs) {
+    state.clockMs = nowMs;
+    state.accMs = 0;
+  }
+
+  // Retain ordinary debt; bound progress and discard excess during overload.
   function pmjsMvGateSteps(state, nowMs) {
     if (!state || typeof nowMs !== 'number' || !(nowMs >= 0) ||
         typeof state.accMs !== 'number' || !(state.accMs >= 0)) {
@@ -60,31 +65,32 @@
     var elapsed = nowMs - state.clockMs;
 
     var total = state.accMs + elapsed;
-    if (elapsed >= MAX_DEBT_MS || total >= MAX_DEBT_MS) {
-      state.clockMs = nowMs;
-      state.accMs = 0;
-      return { steps: 0, feedMs: 0, overload: true, droppedMs: total };
-    }
     var slotMs = state.slotMs || 0;
     var nominalSteps = slotMs > 0 ? Math.ceil(slotMs / STEP_MS) : 1;
     var maxSteps = Math.max(BASE_MAX_STEPS_PER_FRAME, nominalSteps + 1);
+    var overload = elapsed >= MAX_DEBT_MS || total >= MAX_DEBT_MS;
+    var droppedMs = 0;
+    if (overload) {
+      var boundedTotal = Math.min(total, maxSteps * STEP_MS);
+      droppedMs = total - boundedTotal;
+      total = boundedTotal;
+    }
     var full = Math.floor((total + 1e-4) / STEP_MS);
     var steps = full > maxSteps ? maxSteps : full;
     var frac = Math.max(0, total - full * STEP_MS);
-    var droppedMs = 0;
     state.clockMs = nowMs;
     state.accMs = Math.max(0, total - steps * STEP_MS);
     if (state.catchupMode === 'smooth' && full > steps) {
-      droppedMs = (full - steps) * STEP_MS;
+      droppedMs += (full - steps) * STEP_MS;
       state.accMs = frac;
     }
     return { steps: steps, feedMs: steps > 0 ? steps * STEP_MS + frac : 0,
-      overload: false, droppedMs: droppedMs };
+      overload: overload, droppedMs: droppedMs };
   }
 
   function pmjsMvReportOverload(droppedMs) {
     try {
-      console.log('[pmjs] overload-discontinuity dropped_ms=' +
+      console.log('[pmjs] overload-debt-clamp dropped_ms=' +
         Number(droppedMs).toFixed(1));
     } catch (_) {}
     try {
@@ -138,6 +144,11 @@
         'unrecognized SceneManager.updateMain composition');
       return false;
     }
+    if (typeof SceneManager.resume !== 'function') {
+      pmjsMvRefuseTimingContract('missing-resume');
+      PMJS.optimizations.refuse(timingOptimizationId, 'missing SceneManager.resume');
+      return false;
+    }
     var original = SceneManager.updateMain;
     SceneManager._deltaTime = 1 / PMJS_MV_LOGIC_HZ;
     var gate = pmjsMvCreateStepGate(options);
@@ -146,15 +157,10 @@
       var nowMs = performance.now();
       SceneManager._deltaTime = 1 / PMJS_MV_LOGIC_HZ;
       var gated = pmjsMvGateSteps(gate, nowMs);
-      if (gated.overload) {
-        SceneManager._currentTime = nowMs;
-        SceneManager._accumulator = 0;
-        pmjsMvReportOverload(gated.droppedMs);
-      } else {
-        // Feed only the steps selected by the gate into stock updateMain.
-        SceneManager._currentTime = nowMs;
-        SceneManager._accumulator = gated.feedMs / 1000;
-      }
+      // Feed only the steps selected by the gate into stock updateMain.
+      SceneManager._currentTime = nowMs;
+      SceneManager._accumulator = gated.feedMs / 1000;
+      if (gated.overload) pmjsMvReportOverload(gated.droppedMs);
       // Prevent stock's second clock read from changing the selected steps.
       var hadGetter = false;
       var savedGetter;
@@ -172,6 +178,19 @@
     }
     wrappedUpdateMain._pmjsTimingWrapped = true;
     SceneManager.updateMain = wrappedUpdateMain;
+    if (SceneManager.resume._pmjsTimingResumeWrapped) {
+      SceneManager.resume._pmjsTimingGate = gate;
+    } else {
+      var originalResume = SceneManager.resume;
+      function wrappedResume() {
+        var result = originalResume.apply(this, arguments);
+        pmjsMvResetStepGate(wrappedResume._pmjsTimingGate, performance.now());
+        return result;
+      }
+      wrappedResume._pmjsTimingResumeWrapped = true;
+      wrappedResume._pmjsTimingGate = gate;
+      SceneManager.resume = wrappedResume;
+    }
     return true;
   }
 
