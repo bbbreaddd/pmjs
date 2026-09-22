@@ -744,6 +744,7 @@ test('MV preparation patches indexed YED animation without rebuilding tiles', ()
     _needsAnimRepaint: true,
     _pmjsChangedAnimKeys: pending,
     _updateLayerPositions() {},
+    _sortChildren() {},
     _paintAllTiles() { this.fullRepaints = (this.fullRepaints || 0) + 1; },
     _paintAnimTiles(keys) { this.patched = keys; }
   });
@@ -775,6 +776,7 @@ test('MV preparation keeps animation-frame rebuilds for ordinary tilemaps', () =
     _lastAnimationFrame: 1, animationFrame: 2,
     _needsRepaint: false,
     _updateLayerPositions() {},
+    _sortChildren() {},
     _paintAllTiles() { this.fullRepaints = (this.fullRepaints || 0) + 1; }
   });
 
@@ -784,6 +786,30 @@ test('MV preparation keeps animation-frame rebuilds for ordinary tilemaps', () =
   assert.equal(node._lastAnimationFrame, 2);
   assert.equal(node._frameUpdated, true);
   assert.equal(sandbox.nativeTileRebuilds, 1);
+});
+
+test('MV preparation sorts tilemap children after their ordering inputs move', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..',
+    'js/pmjs-mv/render-prepare.js'), 'utf8');
+  class Tilemap {}
+  const sandbox = { Tilemap, Window: function Window() {}, Math,
+    nativeTileRebuilds: 0 };
+  vm.createContext(sandbox);
+  vm.runInContext(source + '\nthis.prepare = prepareNativeMvSceneNode;', sandbox);
+  const first = { name: 'A', z: 0, y: 30, spriteId: 1 };
+  const second = { name: 'B', z: 0, y: 20, spriteId: 2 };
+  const node = Object.assign(new Tilemap(), {
+    children: [first, second], origin: { x: 0, y: 0 }, roundPixels: true,
+    _margin: 0, _tileWidth: 48, _tileHeight: 48,
+    _lastStartX: 0, _lastStartY: 0, _needsRepaint: false,
+    _updateLayerPositions() {}, _paintAllTiles() {},
+    _compareChildOrder(a, b) {
+      return (a.z - b.z) || (a.y - b.y) || (a.spriteId - b.spriteId);
+    },
+    _sortChildren() { this.children.sort(this._compareChildOrder.bind(this)); }
+  });
+  sandbox.prepare(node);
+  assert.deepEqual(node.children.map(child => child.name), ['B', 'A']);
 });
 
 test('filter parameter mutation re-renders without changing structure', () => {

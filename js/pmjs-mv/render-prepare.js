@@ -39,6 +39,6 @@ function prepareNativeMvSceneNode(node) {
         node._paintAnimTiles(pending);
       }
     }
-    if (node._pmjsSortDirty) node._sortChildren();
+    node._sortChildren();
   }
 }

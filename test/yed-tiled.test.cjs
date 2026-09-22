@@ -354,8 +354,10 @@ test('YED fast paths refuse modified implementations that only keep loose tokens
 });
 
 test('YED fast paths install when recognized as known YED implementation', () => {
+  let knownChildOrder;
   const { context, installed } = installInContext(ctx => {
-    function knownChildOrder(a, b) {
+    delete ctx.comparePmjsTilemapChildren;
+    knownChildOrder = function knownChildOrder(a, b) {
       if ((a.z || 0) !== (b.z || 0)) {
         return (a.z || 0) - (b.z || 0);
       } else if ((a.y || 0) !== (b.y || 0)) {
@@ -365,7 +367,7 @@ test('YED fast paths install when recognized as known YED implementation', () =>
       } else {
         return a.spriteId - b.spriteId;
       }
-    }
+    };
     ctx.TiledTilemap = function TiledTilemap() {};
     ctx.TiledTilemap.prototype._paintAllTiles = faithfulPaintAllTiles;
     ctx.TiledTilemap.prototype._updateLayerPositions =
@@ -386,6 +388,10 @@ test('YED fast paths install when recognized as known YED implementation', () =>
     faithfulPaintObjectLayers);
   assert.notEqual(context.TiledTilemap.prototype._paintTilesLayer,
     faithfulPaintTilesLayer);
+  assert.equal(context.TiledTilemap.prototype._compareChildOrder, knownChildOrder);
+  assert.equal(context.TiledTilemap.prototype._compareChildOrder(
+    { z: 0, y: 1, priority: 0, spriteId: 1 },
+    { z: 0, y: 2, priority: 0, spriteId: 2 }), -1);
 });
 
 test('YED adapter activates on its trigger plugin and ignores others', () => {
