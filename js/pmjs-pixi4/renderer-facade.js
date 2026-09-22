@@ -339,7 +339,8 @@ function createNativePixiRenderer(width, height, options) {
         var canvas = this.canvas(target);
         var image = new Image();
         image._src = canvas.toDataURL();
-        image._nativeCanvas = canvas;
+        image._nativeCanvas = canvas._ensureNativeCanvas();
+        image._pmjsCanvasOwner = canvas;
         image.width = image.naturalWidth = canvas.width;
         image.height = image.naturalHeight = canvas.height;
         image.complete = true;

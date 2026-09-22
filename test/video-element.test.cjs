@@ -10,6 +10,8 @@ const eventsSource = fs.readFileSync(
   path.resolve(__dirname, '../js/pmjs-web/events.js'), 'utf8');
 const elementsSource = fs.readFileSync(
   path.resolve(__dirname, '../js/pmjs-web/elements.js'), 'utf8');
+const rendererFacadeSource = fs.readFileSync(
+  path.resolve(__dirname, '../js/pmjs-pixi4/renderer-facade.js'), 'utf8');
 const mainLoopSource = fs.readFileSync(
   path.resolve(__dirname, '../js/pmjs-rpgmaker/main-loop.js'), 'utf8');
 
@@ -185,6 +187,38 @@ test('an ended handler can start another source without losing video updates', (
   video._startedAt = -12000;
   context.pmjsRunRpgMakerTick(3);
   assert.equal(completions, 2);
+});
+
+test('extract.image exposes a native canvas handle and releases it on src changes', () => {
+  const { context } = makeHarness();
+  const released = [];
+  let nextHandle = 70;
+  context.NativeHost.canvas.create = () => ({ handle: ++nextHandle });
+  context.NativeHost.canvas.encodePng = () => Uint8Array.from([1]);
+  context.releaseNativeResource = (resource, kind) => {
+    if (resource) released.push([resource.handle, kind]);
+  };
+  const start = rendererFacadeSource.indexOf('image: function(target) {');
+  const end = rendererFacadeSource.indexOf('      canvas: function(target)', start);
+  const extract = vm.runInContext('({' + rendererFacadeSource.slice(start, end) + '})', context);
+  const canvas = context.document.createElement('canvas');
+  canvas.width = 4;
+  canvas.height = 3;
+  const image = extract.image.call({ canvas: () => canvas });
+  assert.equal(image._nativeCanvas.handle, 71);
+  assert.equal(image._pmjsCanvasOwner, canvas);
+  assert.equal(image.width, 4);
+  assert.equal(image.complete, true);
+  image.src = '';
+  assert.equal(image._nativeCanvas, null);
+  assert.equal(image._pmjsCanvasOwner, null);
+  assert.deepEqual(released, [[71, 'canvas']]);
+
+  const replacement = extract.image.call({ canvas: () => context.document.createElement('canvas') });
+  const replacementHandle = replacement._nativeCanvas.handle;
+  replacement.src = 'other.png';
+  assert.equal(replacement._nativeCanvas, null);
+  assert.deepEqual(released.at(-1), [replacementHandle, 'canvas']);
 });
 
 test('removing video src releases media and load with no source stays empty', () => {

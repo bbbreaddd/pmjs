@@ -335,6 +335,8 @@ function NativeImage() {
   this.complete = false;
   this._src = '';
   this._nativeImage = null;
+  this._nativeCanvas = null;
+  this._pmjsCanvasOwner = null;
   this._loadGeneration = 0;
   this._pmjsLoadFailed = false;
   this._pmjsLoadError = null;
@@ -361,6 +363,13 @@ function nativeImageFromResource(resource) {
 Object.defineProperty(NativeImage.prototype, 'src', {
   get: function() { return this._src; },
   set: function(url) {
+    if (this._pmjsCanvasOwner) {
+      this._pmjsCanvasOwner._releaseNativeCanvas();
+      this._pmjsCanvasOwner = null;
+    } else if (this._nativeCanvas) {
+      releaseNativeResource(this._nativeCanvas, 'canvas');
+    }
+    this._nativeCanvas = null;
     this._src = String(url);
     var source = this._src;
     var generation = ++this._loadGeneration;
