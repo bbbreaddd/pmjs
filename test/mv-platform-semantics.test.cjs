@@ -601,8 +601,8 @@ test('Scene_Map same-map transfer does not short-circuit through reuse and prese
   };
   sandbox.globalThis = sandbox;
   const context = vm.createContext(sandbox);
-  const scenesCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/scenes.js'), 'utf8');
-  vm.runInContext(scenesCode, context);
+  const platformCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/platform.js'), 'utf8');
+  vm.runInContext(platformCode, context);
 
   assert.equal(context.Scene_Map.prototype._pmjsTransferPatched, undefined);
 
@@ -871,19 +871,19 @@ test('synchronous-burst storage read coalescing preserves stock DataManager obje
 
   assert.equal(storageReads, 1, 'Only 1 storage read for the entire burst of 16 calls');
   assert.equal(lzDecompresses, 1, 'Only 1 LZString decompression for the entire burst of 16 calls');
-  assert.equal(storageStats, 20, 'Only 20 exists stats (1..20) for the entire burst of 16 calls (not 320)');
+  assert.equal(storageStats, 38, 'Missing slots check primary and backup once per burst');
 
   context.StorageManager.remove(1);
   const c = context.DataManager.loadGlobalInfo();
   assert.equal(storageReads, 2, 'Storage mutation must invalidate burst cache, causing fresh read');
   assert.equal(lzDecompresses, 2, 'Storage mutation must invalidate burst cache, causing fresh decompression');
-  assert.equal(storageStats, 40, 'Storage mutation must invalidate burst cache, causing fresh stats');
+  assert.equal(storageStats, 76, 'Storage mutation must invalidate burst cache, causing fresh stats');
 
   await new Promise(resolve => queueMicrotask(resolve));
   const d = context.DataManager.loadGlobalInfo();
   assert.equal(storageReads, 3, 'New microtask turn must execute fresh storage read');
   assert.equal(lzDecompresses, 3, 'New microtask turn must execute fresh decompression');
-  assert.equal(storageStats, 60, 'New microtask turn must execute fresh stats');
+  assert.equal(storageStats, 114, 'New microtask turn must execute fresh stats');
 });
 
 test('storage read coalescing runs underneath plugin wrappers and respects dynamic localFilePath', () => {

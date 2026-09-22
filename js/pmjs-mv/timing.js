@@ -98,10 +98,12 @@
     } catch (_) {
       return false;
     }
-    return source.indexOf('_accumulator') !== -1 &&
-      source.indexOf('_deltaTime') !== -1 &&
-      source.indexOf('_currentTime') !== -1 &&
-      source.indexOf('renderScene') !== -1;
+    return /this\._currentTime\s*=\s*newTime/.test(source) &&
+      /this\._accumulator\s*\+=\s*fTime/.test(source) &&
+      /while\s*\(\s*this\._accumulator\s*>=\s*this\._deltaTime\s*\)/.test(source) &&
+      /this\.updateInputData\(\)\s*;\s*this\.changeScene\(\)\s*;\s*this\.updateScene\(\)/.test(source) &&
+      /this\._accumulator\s*-=\s*this\._deltaTime/.test(source) &&
+      /this\.renderScene\(\)\s*;\s*this\.requestUpdate\(\)/.test(source);
   }
 
   function pmjsMvRefuseTimingContract(reason) {

@@ -7,12 +7,16 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 function loadInput(native) {
+  let afterGuestPlugins;
   const context = {
     console,
     NativeHost: {
       input: native,
       runtime: { loadScript() {} },
     },
+    PMJS: { phases: { on(name, owner, callback) {
+      if (name === 'afterGuestPlugins') afterGuestPlugins = callback;
+    } } },
     Input: {
       _currentState: {},
       _previousState: {},
@@ -47,6 +51,7 @@ function loadInput(native) {
   vm.runInContext(
     fs.readFileSync(path.join(__dirname, '../js/pmjs-rpgmaker/input.js'), 'utf8'),
     context);
+  afterGuestPlugins();
   return context;
 }
 

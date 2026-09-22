@@ -108,34 +108,30 @@ function installNativeStorageManager() {
     if (burst && storagePath && hasBurstEntry(burst.loads, storagePath)) {
       return burst.loads[storagePath];
     }
-    var data = LZString.decompressFromBase64(
-      NativeHost.storage.readText(storagePath));
+    var raw = NativeHost.storage.readText(storagePath);
+    var data = raw === null ? null : LZString.decompressFromBase64(raw);
     if (burst && storagePath) {
       burst.loads[storagePath] = data;
     }
     return data;
   }
 
-  // Serves the atomic-save backup when the primary read fails.
+  // A missing primary can remain after an interrupted older save.
   function pmjsReadLocalSave(savefileId) {
     var storagePath = normalizeStoragePath(this.localFilePath(savefileId));
     try {
-      return pmjsReadDecompressed(storagePath);
+      var primary = pmjsReadDecompressed(storagePath);
+      if (primary !== null) return primary;
     } catch (error) {
-      var storageBackup = storagePath + '.bak';
-      var backupExists = false;
-      try {
-        backupExists = !!NativeHost.storage.exists(storageBackup);
-      } catch (_) {
-        backupExists = false;
-      }
-      if (!backupExists) throw error;
-      return pmjsReadDecompressed(storageBackup);
+      if (!pmjsCachedStorageExists(storagePath + '.bak')) throw error;
     }
+    if (pmjsCachedStorageExists(storagePath + '.bak')) {
+      return pmjsReadDecompressed(storagePath + '.bak');
+    }
+    return null;
   }
 
-  function pmjsLocalSaveExists(savefileId) {
-    var storagePath = normalizeStoragePath(this.localFilePath(savefileId));
+  function pmjsCachedStorageExists(storagePath) {
     var burst = currentReadBurst();
     if (burst && storagePath && hasBurstEntry(burst.exists, storagePath)) {
       return burst.exists[storagePath];
@@ -147,43 +143,12 @@ function installNativeStorageManager() {
     return result;
   }
 
-  // Preserve the previous save as a backup before atomic replacement.
-  if (typeof StorageManager.saveToLocalFile === 'function' &&
-      !StorageManager._pmjsAtomicPatched) {
-    var originalSaveToLocalFile = StorageManager.saveToLocalFile;
-    StorageManager.saveToLocalFile = function(savefileId, json) {
-      invalidateStorageBurst();
-      var path = this.localFilePath(savefileId);
-      var storagePath = normalizeStoragePath(path);
-      var storageBackup = storagePath + '.bak';
-      try {
-        if (NativeHost.storage.exists(storagePath)) {
-          try { NativeHost.storage.remove(storageBackup); } catch (_) {}
-          try { NativeHost.storage.rename(storagePath, storageBackup); } catch (_) {}
-        }
-      } catch (_) {}
-      return originalSaveToLocalFile.call(this, savefileId, json);
-    };
-    StorageManager._pmjsAtomicPatched = true;
+  function pmjsLocalSaveExists(savefileId) {
+    var storagePath = normalizeStoragePath(this.localFilePath(savefileId));
+    return pmjsCachedStorageExists(storagePath) ||
+      pmjsCachedStorageExists(storagePath + '.bak');
   }
-  // The host rename already creates the local backup; web-mode backups retain
-  // the stock implementation.
-  if (typeof StorageManager.backup === 'function' &&
-      !StorageManager._pmjsBackupPatched) {
-    var originalStorageBackup = StorageManager.backup;
-    StorageManager.backup = function(savefileId) {
-      invalidateStorageBurst();
-      var local = true;
-      try {
-        if (typeof StorageManager.isLocalMode === 'function') {
-          local = !!StorageManager.isLocalMode();
-        }
-      } catch (_) {}
-      if (local && StorageManager._pmjsAtomicPatched) return;
-      return originalStorageBackup.apply(this, arguments);
-    };
-    StorageManager._pmjsBackupPatched = true;
-  }
+
   if (typeof StorageManager.loadFromLocalFile === 'function' &&
       !StorageManager._pmjsLoadPatched) {
     StorageManager.loadFromLocalFile = function(savefileId) {

@@ -80,6 +80,13 @@
       console.log('[pmjs]     original: ' + snapshot.original.join(', '));
       console.log('[pmjs]     effective: ' + snapshot.effective.join(', '));
     }
+    PMJS.methods.dump().forEach(function(method) {
+      if (method.mode !== 'own' || method.mutations.length === 0) return;
+      console.log('[pmjs] owned method ' + method.key +
+        ' superseded guest changes from ' + method.mutations.map(function(mutation) {
+          return mutation.plugin;
+        }).join(', '));
+    });
   }
 
   function boot(installManagerHooks, afterPlugins) {

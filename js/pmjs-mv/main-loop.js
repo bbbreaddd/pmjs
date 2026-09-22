@@ -10,15 +10,8 @@
     }
   }
 
-  function beforeScheduler() {
-    // Re-wrap late plugin replacements of updateMain.
-    if (typeof globalThis.pmjsMvEnsureTimingContract === 'function') {
-      globalThis.pmjsMvEnsureTimingContract();
-    }
-  }
-
   function pmjsMvTick(now) {
-    globalThis.pmjsRunRpgMakerTick(now, beforeServices, beforeScheduler);
+    globalThis.pmjsRunRpgMakerTick(now, beforeServices);
   }
 
   function pmjsMvRender(now) {

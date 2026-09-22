@@ -11,8 +11,6 @@ const optimizationsSource = fs.readFileSync(
   path.join(runtimeRoot, 'js/pmjs-core/optimizations.js'), 'utf8');
 const scenePrimitivesSource = fs.readFileSync(
   path.join(runtimeRoot, 'js/pmjs-pixi4/scene-primitives.js'), 'utf8');
-const dataSource = fs.readFileSync(
-  path.join(runtimeRoot, 'js/pmjs-mv/data.js'), 'utf8');
 
 function stubCanvasContext(calls) {
   return {
@@ -323,4 +321,3 @@ test('storage.read-burst-coalesce disables cleanly via optimization gate', () =>
   disabled.context.StorageManager.loadFromLocalFile(0);
   assert.equal(disabled.getReads(), 2, 'disabled read-burst-coalesce should read on every call');
 });
-

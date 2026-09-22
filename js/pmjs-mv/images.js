@@ -113,7 +113,7 @@ if (typeof Bitmap !== 'undefined' && Bitmap.prototype._onLoad) {
 // MV removes an outgoing map spriteset without destroying its Pixi tree.
 // Release host-owned retained geometry deterministically; JavaScript display
 // objects and shared textures remain intact for the engine's normal teardown.
-function pmjsReleaseRetainedMapResources(root, seen) {
+function pmjsReleaseNativeSceneResources(root, seen) {
   if (!root) return 0;
   seen = seen || [];
   if (seen.indexOf(root) >= 0) return 0;
@@ -132,20 +132,26 @@ function pmjsReleaseRetainedMapResources(root, seen) {
   var children = root.children;
   if (children && typeof children.length === 'number') {
     for (var index = 0; index < children.length; index++) {
-      released += pmjsReleaseRetainedMapResources(children[index], seen);
+      released += pmjsReleaseNativeSceneResources(children[index], seen);
     }
   }
   return released;
 }
-if (typeof Scene_Map !== 'undefined' && Scene_Map.prototype &&
-    typeof Scene_Map.prototype.terminate === 'function') {
-  var originalMapTerminateForRetainedResources = Scene_Map.prototype.terminate;
-  Scene_Map.prototype.terminate = function() {
-    var result = originalMapTerminateForRetainedResources.apply(this, arguments);
-    pmjsReleaseRetainedMapResources(this._spriteset);
-    return result;
-  };
-}
+PMJS.methods.wrap({
+  key: 'Scene_Map.terminate',
+  id: 'pmjs.mv.native-scene-resources',
+  getTarget: function() {
+    return typeof Scene_Map !== 'undefined' && Scene_Map.prototype || null;
+  },
+  method: 'terminate',
+  wrap: function(guestTerminate) {
+    return function() {
+      var result = guestTerminate.apply(this, arguments);
+      pmjsReleaseNativeSceneResources(this._spriteset);
+      return result;
+    };
+  }
+});
 if (typeof SceneManager !== 'function' || typeof DataManager !== 'function' ||
     typeof Game_Map !== 'function' || typeof Scene_Boot !== 'function' ||
     typeof Spriteset_Map !== 'function' || typeof Window_Base !== 'function') {

@@ -43,10 +43,10 @@
     if (typeof Input === 'undefined' || typeof Input.update !== 'function') {
       return false;
     }
-    if (Input._pmjsNativeBridgeInstalled) return true;
+    if (Input.update._pmjsNativeBridge) return true;
 
     var originalUpdate = Input.update;
-    Input.update = function() {
+    function nativeInputUpdate() {
       for (var index = 0; index < nativeInputActions.length; index++) {
         var action = nativeInputActions[index];
         this._currentState[action] = pollNativeAction(action);
@@ -56,13 +56,15 @@
       try {
         if (NativeHost.input.consumePressed) NativeHost.input.consumePressed();
       } catch (_) {}
-    };
+    }
+    nativeInputUpdate._pmjsNativeBridge = true;
+    Input.update = nativeInputUpdate;
     Input._pmjsNativeBridgeInstalled = true;
     return true;
   }
 
   globalThis.pmjsInstallRpgMakerInputBridge = installInputBridge;
-  if (!installInputBridge()) {
-    throw new Error('RPG Maker Input did not initialize');
-  }
+  PMJS.phases.on('afterGuestPlugins', 'pmjs-rpgmaker.input', function() {
+    if (!installInputBridge()) throw new Error('RPG Maker Input did not initialize');
+  });
 })();
