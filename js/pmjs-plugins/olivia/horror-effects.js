@@ -151,12 +151,21 @@
     }
 
     var updateEffects = proto.updateHorrorEffects;
-    if (isKnownOliviaUpdateHorrorEffects(updateEffects)) {
+    var knownNoise = proto.updateHorrorNoise;
+    var knownGlitch = proto.updateHorrorGlitch;
+    var knownTV = proto.updateHorrorTV;
+    var knownDispatcher = isKnownOliviaUpdateHorrorEffects(updateEffects);
+    var knownDelegates = isKnownOliviaNoise(knownNoise) &&
+      isKnownOliviaGlitch(knownGlitch) && isKnownOliviaTV(knownTV);
+    if (knownDispatcher && knownDelegates) {
       proto.updateHorrorEffects = (function(original) {
         var guarded = function() {
           var census = pmjsHorrorCensus();
           if (census) census.effectsChecked++;
-          if (!hasActiveHorrorFilter(this)) {
+          var delegatesUnchanged = this.updateHorrorNoise === knownNoise &&
+            this.updateHorrorGlitch === knownGlitch &&
+            this.updateHorrorTV === knownTV;
+          if (delegatesUnchanged && !hasActiveHorrorFilter(this)) {
             if (census) census.effectsSkipped++;
             return;
           }
@@ -188,7 +197,7 @@
           })(countedLeaves[c]);
         }
       }
-    } else if (!updateEffects._pmjsOliviaGuard) {
+    } else if (!knownDispatcher && !updateEffects._pmjsOliviaGuard) {
       // Composed wrapper: guard only recognized leaves.
       var leaves = [
         { method: 'updateHorrorNoise', filter: 'noiseFilter',

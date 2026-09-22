@@ -115,6 +115,16 @@ if (typeof _Bitmap_fillRect === 'function') {
 
 // Blt avoids forcing source canvas realization when the source bitmap is a pristine image.
 var _Bitmap_blt = Bitmap.prototype.blt;
+var _Bitmap_canvasDescriptor = Object.getOwnPropertyDescriptor(Bitmap.prototype, '_canvas');
+var _Bitmap_createCanvasForBlt = Bitmap.prototype._createCanvas;
+function pmjsBitmapHasStockImagePixels(source) {
+  var descriptor = Object.getOwnPropertyDescriptor(Bitmap.prototype, '_canvas');
+  return Object.getPrototypeOf(source) === Bitmap.prototype &&
+    !Object.prototype.hasOwnProperty.call(source, '_canvas') &&
+    descriptor && _Bitmap_canvasDescriptor &&
+    descriptor.get === _Bitmap_canvasDescriptor.get &&
+    source._createCanvas === _Bitmap_createCanvasForBlt;
+}
 if (typeof _Bitmap_blt === 'function') {
   Bitmap.prototype.blt = function(source, sx, sy, sw, sh, dx, dy, dw, dh) {
     dw = dw || sw;
@@ -122,6 +132,7 @@ if (typeof _Bitmap_blt === 'function') {
     if (source &&
         PMJS.optimizations.isEnabled('bitmap.pristine-image-blt') &&
         source._image &&
+        pmjsBitmapHasStockImagePixels(source) &&
         !source.__canvas &&
         !source.hue &&
         !source._hue &&

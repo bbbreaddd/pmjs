@@ -250,6 +250,27 @@ test('materialized/mutated canvas fallback: draws from source._canvas when __can
   assert.equal(drawCalls[0].img, materializedCanvas, 'drawImage must use source._canvas');
 });
 
+test('custom lazy bitmap canvas accessors stay on the logical pixel path', () => {
+  const { Bitmap, getStockBltCalls } = setupEnvironment();
+  function CroppedBitmap() { Bitmap.call(this, 50, 50); }
+  CroppedBitmap.prototype = Object.create(Bitmap.prototype);
+  CroppedBitmap.prototype.constructor = CroppedBitmap;
+  Object.defineProperty(CroppedBitmap.prototype, '_canvas', {
+    get() {
+      if (!this.__canvas) {
+        this.__canvas = { width: 50, height: 50, logicalCrop: true };
+      }
+      return this.__canvas;
+    }
+  });
+  const dst = new Bitmap(50, 50);
+  const src = new CroppedBitmap();
+  src._image = { width: 50, height: 50, fullAtlas: true };
+  dst.blt(src, 0, 0, 50, 50, 0, 0, 50, 50);
+  assert.equal(getStockBltCalls(), 1);
+  assert.equal(dst.__canvas.drawCalls[0].img.logicalCrop, true);
+});
+
 test('out-of-bounds fallback: delegates to stock blt and rejects draw without error', () => {
   const { Bitmap, getStockBltCalls } = setupEnvironment();
   const dst = new Bitmap(100, 100);

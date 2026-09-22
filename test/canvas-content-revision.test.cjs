@@ -14,6 +14,7 @@ const source = [
 
 function harness() {
   let handle = 0;
+  const calls = { drawImage: [], writePixels: 0 };
   function EventTarget() {}
   EventTarget.prototype.addEventListener = function() {};
   EventTarget.prototype.removeEventListener = function() {};
@@ -32,7 +33,8 @@ function harness() {
         clear() {},
         clearRect() {},
         drawText() {},
-        writePixels() {},
+        drawImage() { calls.drawImage.push(Array.from(arguments)); },
+        writePixels() { calls.writePixels++; },
         readPixels(_handle, _x, _y, width, height) {
           return new Uint8ClampedArray(width * height * 4);
         },
@@ -43,6 +45,7 @@ function harness() {
   };
   vm.createContext(context);
   vm.runInContext(source, context);
+  context.calls = calls;
   return context;
 }
 
@@ -70,4 +73,40 @@ test('Canvas mutations and dimension resets invalidate revision-bound proof', ()
   establish();
   canvas._releaseNativeCanvas();
   assert.equal(canvas.__pmjsMaskProof, null);
+});
+
+test('reflected image draws use the affine path', () => {
+  const context = harness();
+  const canvas = new context.CanvasElement();
+  canvas.width = 8;
+  canvas.height = 8;
+  const drawing = canvas.getContext('2d');
+  const image = new context.Image();
+  image._nativeImage = { handle: 99 };
+  image.width = image.naturalWidth = 2;
+  image.height = image.naturalHeight = 2;
+  drawing.translate(2, 0);
+  drawing.scale(-1, 1);
+  drawing.drawImage(image, 0, 0);
+  assert.ok(context.calls.writePixels > 0,
+    'reflection must be rasterized through affine sampling');
+});
+
+test('resizing a canvas resets the existing 2D context state', () => {
+  const context = harness();
+  const canvas = new context.CanvasElement();
+  const drawing = canvas.getContext('2d');
+  drawing.translate(12, 8);
+  drawing.globalAlpha = 0.25;
+  drawing.fillStyle = '#f00';
+  drawing.beginPath();
+  drawing.rect(0, 0, 1, 1);
+  drawing.clip();
+  canvas.width = 16;
+  assert.equal(canvas.getContext('2d'), drawing);
+  assert.deepEqual(Array.from(drawing._transform), [1, 0, 0, 1, 0, 0]);
+  assert.equal(drawing.globalAlpha, 1);
+  assert.equal(drawing.fillStyle, '#000000');
+  assert.equal(drawing._clipPaths.length, 0);
+  assert.equal(drawing._stateStack.length, 0);
 });

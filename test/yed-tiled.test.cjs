@@ -200,7 +200,7 @@ test('YED diagnostic invariant throws when tile outside active prefix is visible
   }, /YED priority tile visible outside PMJS active prefix/);
 });
 
-test('YED level hiding reruns only when level or repaint generation changes', () => {
+test('YED level hiding retains the guest dispatcher without state-based skipping', () => {
   const context = {
     Spriteset_Map: function Spriteset_Map() {},
     TiledTilemap: function TiledTilemap() {},
@@ -230,15 +230,15 @@ test('YED level hiding reruns only when level or repaint generation changes', ()
 
   instance._updateHideOnLevel();
   instance._updateHideOnLevel();
-  assert.equal(calls, 1);
+  assert.equal(calls, 2);
 
   context.$gameMap.currentMapLevel = 2;
   instance._updateHideOnLevel();
-  assert.equal(calls, 2);
+  assert.equal(calls, 3);
 
   instance._tilemap._pmjsPriorityRepaintGeneration = 2;
   instance._updateHideOnLevel();
-  assert.equal(calls, 3);
+  assert.equal(calls, 4);
 });
 
 test('YED fast paths refuse to overwrite unknown or composed implementations', () => {

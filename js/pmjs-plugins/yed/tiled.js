@@ -646,36 +646,6 @@
       tiledProto._pmjsIndexedAnimation = true;
     }
 
-    if (looksLikeKnownYedHideOnLevel(
-          Spriteset_Map.prototype._updateHideOnLevel) &&
-        !Spriteset_Map.prototype._pmjsStateDrivenHideOnLevel) {
-      var updateHideOnLevel = Spriteset_Map.prototype._updateHideOnLevel;
-      Spriteset_Map.prototype._updateHideOnLevel = function() {
-        var tilemap = this._tilemap;
-        var currentLevel = $gameMap.currentMapLevel;
-        var repaintGeneration = tilemap._pmjsPriorityRepaintGeneration || 0;
-        var hideCensus = typeof pmjsYedCensus === 'function' ?
-          pmjsYedCensus() : null;
-        if (hideCensus) {
-          hideCensus.hideCalls++;
-          hideCensus.lastHideLevel = currentLevel;
-          hideCensus.lastRepaintGeneration = repaintGeneration;
-        }
-        if (tilemap._pmjsLastHideLevel === currentLevel &&
-            tilemap._pmjsLastHideRepaintGeneration === repaintGeneration) return;
-        updateHideOnLevel.call(this);
-        if (hideCensus) {
-          hideCensus.hideExecutions++;
-          if (tilemap._pmjsLastHideLevel !== currentLevel) {
-            hideCensus.hideLevelChanges++;
-          }
-        }
-        tilemap._pmjsLastHideLevel = currentLevel;
-        tilemap._pmjsLastHideRepaintGeneration = repaintGeneration;
-      };
-      Spriteset_Map.prototype._pmjsStateDrivenHideOnLevel = true;
-    }
-
     return true;
   }
 

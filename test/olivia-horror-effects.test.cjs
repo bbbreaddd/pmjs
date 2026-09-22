@@ -158,6 +158,38 @@ test('Olivia integration leaves unknown outer wrappers on reference behavior', (
   assert.equal(noiseUpdates, 2);
 });
 
+test('Olivia dispatcher guard does not skip an overridden delegated method', () => {
+  const Sprite = createKnownOliviaSprite();
+  const { sandbox } = loadWithRegistrations({
+    Sprite, Olivia: { HorrorEffects: {} }
+  });
+  sandbox.pmjsInstallOliviaHorrorEffects();
+  const sprite = new Sprite();
+  let extendedCalls = 0;
+  sprite.updateHorrorNoise = function() { extendedCalls++; };
+  sprite.updateHorrorEffects();
+  assert.equal(extendedCalls, 1);
+  assert.equal(sprite.glitchCalls, 1);
+  assert.equal(sprite.tvCalls, 1);
+});
+
+test('Olivia leaves a recognized dispatcher untouched when a delegate is composed', () => {
+  const Sprite = createKnownOliviaSprite();
+  const dispatcher = Sprite.prototype.updateHorrorEffects;
+  let composedCalls = 0;
+  Sprite.prototype.updateHorrorNoise = function() { composedCalls++; };
+  const { sandbox } = loadWithRegistrations({
+    Sprite, Olivia: { HorrorEffects: {} }
+  });
+  sandbox.pmjsInstallOliviaHorrorEffects();
+  assert.equal(Sprite.prototype.updateHorrorEffects, dispatcher);
+  const sprite = new Sprite();
+  sprite.updateHorrorEffects();
+  assert.equal(composedCalls, 1);
+  assert.equal(sprite.glitchCalls, 1);
+  assert.equal(sprite.tvCalls, 1);
+});
+
 test('Olivia fast path is inert when the plugin is absent', () => {
   function Sprite() {}
   const update = function() {

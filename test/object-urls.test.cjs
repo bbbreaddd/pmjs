@@ -15,7 +15,7 @@ const canvasSource = fs.readFileSync(
 const elementsSource = fs.readFileSync(
   path.resolve(__dirname, '../js/pmjs-web/elements.js'), 'utf8');
 
-function imageContext(loadBytesAsync) {
+function imageContext(loadBytesAsync, loadAsync) {
   const context = {
     Blob,
     URL: function URL() {},
@@ -27,7 +27,7 @@ function imageContext(loadBytesAsync) {
       runtime: { env: function() { return ''; } },
       images: {
         loadBytesAsync,
-        loadAsync: function() { throw new Error('filesystem loader used'); },
+        loadAsync: loadAsync || function() { throw new Error('filesystem loader used'); },
         release: function() {}
       },
       canvas: {},
@@ -113,4 +113,33 @@ test('revoking before NativeImage consumes an object URL reports an error', asyn
   assert.equal(loads, 0);
   assert.equal(errors, 1);
   assert.equal(image._pmjsLoadFailed, true);
+});
+
+test('NativeImage retries a path after a transient native load failure', async () => {
+  let attempts = 0;
+  const context = imageContext(async function() {
+    throw new Error('byte loader used');
+  }, async function(path) {
+    attempts++;
+    assert.equal(path, 'img/pictures/retry.png');
+    if (attempts === 1) throw new Error('temporary upload failure');
+    return { handle: 41, width: 32, height: 24 };
+  });
+  context.NativeHost.images.fallbackImage = () =>
+    ({ handle: 40, width: 2, height: 2 });
+  const image = new context.Image();
+  image.src = 'img/pictures/retry.png';
+  context.pendingTasks.splice(0).forEach(task => task());
+  await settle();
+  assert.equal(attempts, 1);
+  assert.equal(image._pmjsLoadFailed, true);
+  assert.equal(image.naturalWidth, 0);
+
+  image.src = 'img/pictures/retry.png';
+  context.pendingTasks.splice(0).forEach(task => task());
+  await settle();
+  assert.equal(attempts, 2);
+  assert.equal(image._pmjsLoadFailed, false);
+  assert.equal(image.naturalWidth, 32);
+  assert.equal(image.naturalHeight, 24);
 });

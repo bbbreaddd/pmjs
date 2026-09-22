@@ -1,18 +1,24 @@
 function CanvasContext2D(canvas) {
   this.canvas = canvas;
-  this.fillStyle = '#000000';
-  this.strokeStyle = '#000000';
-  this.globalAlpha = 1;
-  this.globalCompositeOperation = 'source-over';
-  this.font = '10px sans-serif';
-  this.textAlign = 'start';
-  this.textBaseline = 'alphabetic';
-  this.lineWidth = 1;
-  this._transform = [1, 0, 0, 1, 0, 0];
-  this._stateStack = [];
-  this._path = [];
-  this._subpath = null;
-  this._clipPaths = [];
+  resetCanvasContextState(this);
+}
+
+function resetCanvasContextState(context) {
+  var canvas = context.canvas;
+  context.canvas = canvas;
+  context.fillStyle = '#000000';
+  context.strokeStyle = '#000000';
+  context.globalAlpha = 1;
+  context.globalCompositeOperation = 'source-over';
+  context.font = '10px sans-serif';
+  context.textAlign = 'start';
+  context.textBaseline = 'alphabetic';
+  context.lineWidth = 1;
+  context._transform = [1, 0, 0, 1, 0, 0];
+  context._stateStack = [];
+  context._path = [];
+  context._subpath = null;
+  context._clipPaths = [];
 }
 
 function multiplyTransform(left, right) {
@@ -624,7 +630,8 @@ CanvasContext2D.prototype.drawImage = function(source) {
     composite: this.globalCompositeOperation
   }) : 0;
   var transformed = axisAlignedRect(this, dx, dy, dw, dh);
-  if (!transformed || this._clipPaths.length ||
+  if (!transformed || this._transform[0] < 0 || this._transform[3] < 0 ||
+      this._clipPaths.length ||
       this.globalCompositeOperation !== 'source-over') {
     drawAffineImage(this, source, nativeSource, sx, sy, sw, sh,
       dx, dy, dw, dh, operationId);
