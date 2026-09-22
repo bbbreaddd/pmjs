@@ -6,130 +6,221 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
 
-function loadInput(native) {
-  let afterGuestPlugins;
+function setup() {
+  let install;
+  let consumed = 0;
+  const listeners = {};
   const context = {
-    console,
     NativeHost: {
-      input: native,
-      runtime: { loadScript() {} },
+      input: { consumePressed() { consumed++; } },
+      runtime: { env: () => '', now: () => 0,
+        platform: () => ({ platform: 'linux', arch: 'x64' }),
+        displaySize: () => ({ width: 640, height: 480 }),
+        windowSize: () => ({ width: 640, height: 480 }) }
     },
-    PMJS: { phases: { on(name, owner, callback) {
-      if (name === 'afterGuestPlugins') afterGuestPlugins = callback;
-    } } },
-    Input: {
-      _currentState: {},
-      _previousState: {},
-      _latestButton: null,
-      _pressedTime: 0,
-      _date: 0,
-      keyMapper: undefined,
-      gamepadMapper: undefined,
-      update() {
-        if (this._currentState[this._latestButton]) {
-          this._pressedTime++;
-        } else {
-          this._latestButton = null;
-        }
-        for (const name in this._currentState) {
-          if (this._currentState[name] && !this._previousState[name]) {
-            this._latestButton = name;
-            this._pressedTime = 0;
-            this._date = Date.now();
-          }
-          this._previousState[name] = this._currentState[name];
-        }
-      },
-      isPressed(keyName) { return !!this._currentState[keyName]; },
-      isTriggered(keyName) {
-        return this._latestButton === keyName && this._pressedTime === 0;
-      },
-    },
+    PMJS: { phases: { on(_name, _owner, callback) { install = callback; } } },
+    addEventListener(type, callback) { (listeners[type] ||= []).push(callback); },
+    dispatchEvent(event) { for (const callback of listeners[event.type] || []) callback(event); },
+    document: { addEventListener(type, callback) { (listeners[type] ||= []).push(callback); },
+      dispatchEvent(event) { for (const callback of listeners[event.type] || []) callback(event); },
+      hasFocus() { return context.nativeWindowState.focused; } }
   };
   context.globalThis = context;
-  vm.createContext(context);
-  vm.runInContext(
-    fs.readFileSync(path.join(__dirname, '../js/pmjs-rpgmaker/input.js'), 'utf8'),
-    context);
-  afterGuestPlugins();
-  return context;
-}
-
-function latchedNative() {
-  const state = { down: false, pressed: false, consumes: 0 };
-  return {
-    state,
-    down: (action) => action === 'ok' && state.down,
-    pressed: (action) => action === 'ok' && state.pressed,
-    consumePressed: () => { state.consumes++; state.pressed = false; },
+  context.Input = {
+    keyMapper: { 65: 'tag', 67: 'ok', 90: 'ok', 37: 'left' },
+    gamepadMapper: { 3: 'tag', 12: 'up', 14: 'left' },
+    clear() { this._currentState = {}; this._previousState = {}; this._gamepadStates = []; this._latestButton = null; this._pressedTime = 0; },
+    _onKeyDown(event) { const action = this.keyMapper[event.keyCode]; if (action) this._currentState[action] = true; },
+    _onKeyUp(event) { const action = this.keyMapper[event.keyCode]; if (action) this._currentState[action] = false; },
+    _updateGamepadState(pad) {
+      const previous = this._gamepadStates[pad.index] || [];
+      const next = pad.buttons.map(button => button.pressed);
+      next[12] ||= pad.axes[1] < -0.5;
+      next[13] ||= pad.axes[1] > 0.5;
+      next[14] ||= pad.axes[0] < -0.5;
+      next[15] ||= pad.axes[0] > 0.5;
+      for (let i = 0; i < next.length; i++) {
+        if (next[i] !== previous[i] && this.gamepadMapper[i]) this._currentState[this.gamepadMapper[i]] = next[i];
+      }
+      this._gamepadStates[pad.index] = next;
+    },
+    update() {
+      for (const pad of context.navigator.getGamepads()) if (pad?.connected) this._updateGamepadState(pad);
+      if (this._currentState[this._latestButton]) this._pressedTime++;
+      else this._latestButton = null;
+      for (const action in this._currentState) {
+        if (this._currentState[action] && !this._previousState[action]) {
+          this._latestButton = action; this._pressedTime = 0;
+        }
+        this._previousState[action] = this._currentState[action];
+      }
+    },
+    isPressed(action) { return !!this._currentState[action]; },
+    isTriggered(action) { return this._latestButton === action && this._pressedTime === 0; }
   };
+  context.Input.clear();
+  context.document.addEventListener('keydown', event => context.Input._onKeyDown(event));
+  context.document.addEventListener('keyup', event => context.Input._onKeyUp(event));
+  context.addEventListener('blur', () => context.Input.clear());
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-web/runtime.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-rpgmaker/input.js'), 'utf8'), context);
+  install();
+  return { context, consumed: () => consumed };
 }
 
-test('sub-frame tap triggers exactly once, then clears', () => {
-  const native = latchedNative();
-  const ctx = loadInput(native);
-  native.state.down = false;
-  native.state.pressed = true;
+function key(code, down, repeat = false) {
+  return { keyCode: code, code: 'Key' + String.fromCharCode(code), key: String.fromCharCode(code), down, repeat };
+}
+function snapshot(keysDown = [], keysPressed = [], keyEvents = [], gamepads = []) {
+  return { keysDown, keysPressed, keyEvents, gamepads };
+}
+function pad(buttonsDown = [], buttonsPressed = [], axes = [0, 0, 0, 0]) {
+  return { index: 0, instance: 7, id: 'Xbox Controller', buttonsDown, buttonsPressed, axes };
+}
+
+test('keyboard events use live mapper and preserve a short tap for one logic step', () => {
+  const { context: ctx, consumed } = setup();
+  ctx.__pmjsReceiveInput(snapshot([], [65], [key(65, true), key(65, false)]));
+  assert.equal(ctx.Input.isPressed('tag'), true);
   ctx.Input.update();
+  assert.equal(ctx.Input.isTriggered('tag'), true);
+  assert.equal(ctx.Input.isPressed('tag'), false);
+  ctx.Input.update();
+  assert.equal(ctx.Input.isTriggered('tag'), false);
+  assert.equal(consumed(), 2);
+  ctx.Input.keyMapper[65] = undefined;
+  ctx.Input.keyMapper[67] = 'tag';
+  ctx.__pmjsReceiveInput(snapshot([67], [67], [key(67, true)]));
+  ctx.Input.update();
+  assert.equal(ctx.Input.isPressed('tag'), true);
+  assert.equal(ctx.Input.isTriggered('tag'), true);
+  ctx.Input.update();
+  assert.equal(ctx.Input.isTriggered('tag'), false);
+});
+
+test('gamepad shape, mapper, axes, and disconnect follow stock polling', () => {
+  const { context: ctx } = setup();
+  ctx.__pmjsReceiveInput(snapshot([], [], [], [pad([3], [3])]));
+  const first = ctx.navigator.getGamepads()[0];
+  assert.equal(first.id, 'Xbox Controller');
+  assert.equal(first.mapping, 'standard');
+  assert.equal(first.buttons[3].pressed, true);
+  const pressedDescriptor = Object.getOwnPropertyDescriptor(
+    Object.getPrototypeOf(first.buttons[3]), 'pressed');
+  assert.equal(typeof pressedDescriptor.get, 'function');
+  Object.defineProperty(first.buttons[3], 'pressed', pressedDescriptor);
+  assert.equal(first.buttons[3].pressed, true);
+  ctx.Input.update();
+  assert.equal(ctx.Input.isTriggered('tag'), true);
+  ctx.Input.gamepadMapper[3] = 'ok';
+  ctx.Input.update();
+  assert.equal(ctx.Input.isPressed('tag'), false);
   assert.equal(ctx.Input.isPressed('ok'), true);
-  assert.equal(ctx.Input.isTriggered('ok'), true);
-  assert.equal(native.state.consumes, 1);
-  assert.equal(native.state.pressed, false);
+  ctx.__pmjsReceiveInput(snapshot([], [], [], [pad([3], [], [-1, 0, 0, 0])]));
+  assert.equal(ctx.navigator.getGamepads()[0], first);
+  ctx.Input.update();
+  assert.equal(ctx.Input.isPressed('left'), true);
+  ctx.__pmjsReceiveInput(snapshot());
   ctx.Input.update();
   assert.equal(ctx.Input.isPressed('ok'), false);
-  assert.equal(ctx.Input.isTriggered('ok'), false);
+  assert.equal(ctx.Input.isPressed('left'), false);
 });
 
-test('held input triggers once, then reads as held', () => {
-  const native = latchedNative();
-  const ctx = loadInput(native);
-  native.state.down = true;
-  native.state.pressed = true;
+test('focus loss clears held keyboard state', () => {
+  const { context: ctx } = setup();
+  ctx.__pmjsReceiveInput(snapshot([37], [37], [key(37, true)]));
   ctx.Input.update();
-  assert.equal(ctx.Input.isTriggered('ok'), true);
-  native.state.pressed = false;
+  assert.equal(ctx.Input.isPressed('left'), true);
+  ctx.__pmjsUpdateWindowState({ focused: false, visible: true });
+  assert.equal(ctx.Input.isPressed('left'), false);
+});
+
+test('gamepad tap between logic steps triggers once', () => {
+  const { context: ctx, consumed } = setup();
+  ctx.__pmjsReceiveInput(snapshot([], [], [], [pad([], [3])]));
+  assert.equal(ctx.navigator.getGamepads()[0].buttons[3].pressed, true);
+  assert.equal(consumed(), 0);
   ctx.Input.update();
-  assert.equal(ctx.Input.isTriggered('ok'), false);
+  assert.equal(ctx.Input.isTriggered('tag'), true);
+  ctx.Input.update();
+  assert.equal(ctx.Input.isTriggered('tag'), false);
+  assert.equal(ctx.Input.isPressed('tag'), false);
+});
+
+test('disconnect keeps another controller at its browser index', () => {
+  const { context: ctx } = setup();
+  const second = { ...pad([3]), index: 1, instance: 8, id: 'Second Controller' };
+  ctx.__pmjsReceiveInput(snapshot([], [], [], [pad(), second]));
+  const stable = ctx.navigator.getGamepads()[1];
+  ctx.__pmjsReceiveInput(snapshot([], [], [], [
+    { index: 0, instance: -1, connected: false, id: '', buttonsDown: [], buttonsPressed: [], axes: [] },
+    second
+  ]));
+  assert.equal(ctx.navigator.getGamepads()[0], null);
+  assert.equal(ctx.navigator.getGamepads()[1], stable);
+  assert.equal(stable.index, 1);
+});
+
+test('one keyboard event dispatch reaches the shared document and window target once', () => {
+  const { context: ctx } = setup();
+  let delivered = 0;
+  ctx.addEventListener('keydown', () => { delivered++; });
+  ctx.__pmjsReceiveInput(snapshot([65], [65], [key(65, true)]));
+  assert.equal(delivered, 1);
+});
+
+test('remapping one of two held keys preserves their shared old action', () => {
+  const { context: ctx } = setup();
+  ctx.Input.keyMapper[13] = 'ok';
+  ctx.__pmjsReceiveInput(snapshot([13, 90], [13, 90], [key(13, true), key(90, true)]));
+  ctx.Input.update();
   assert.equal(ctx.Input.isPressed('ok'), true);
-});
-
-test('two logic steps sharing one frame fire a single trigger', () => {
-  const native = latchedNative();
-  const ctx = loadInput(native);
-  native.state.down = true;
-  native.state.pressed = true;
-  ctx.Input.update(); // step 1 of a 30 Hz frame
-  assert.equal(ctx.Input.isTriggered('ok'), true);
-  ctx.Input.update(); // step 2: latch consumed, held remains
-  assert.equal(ctx.Input.isTriggered('ok'), false);
+  ctx.Input.keyMapper[90] = 'tag';
+  ctx.__pmjsReceiveInput(snapshot([13, 90]));
+  ctx.Input.update();
   assert.equal(ctx.Input.isPressed('ok'), true);
+  assert.equal(ctx.Input.isPressed('tag'), true);
 });
 
-test('render-only frames do not consume the latch (no Input.update, no consume)', () => {
-  const native = latchedNative();
-  loadInput(native);
-  native.state.down = false;
-  native.state.pressed = true;
-  assert.equal(native.state.consumes, 0);
-  assert.equal(native.state.pressed, true);
+test('gamepad remap preserves an action held by the keyboard', () => {
+  const { context: ctx } = setup();
+  ctx.Input.gamepadMapper[3] = 'ok';
+  ctx.__pmjsReceiveInput(snapshot([67], [67], [key(67, true)], [pad([3], [3])]));
+  ctx.Input.update();
+  assert.equal(ctx.Input.isPressed('ok'), true);
+
+  ctx.Input.gamepadMapper[3] = 'tag';
+  ctx.__pmjsReceiveInput(snapshot([67], [], [], [pad([3])]));
+  ctx.Input.update();
+  assert.equal(ctx.Input.isPressed('ok'), true);
+  assert.equal(ctx.Input.isPressed('tag'), true);
 });
 
-test('custom keyMapper and gamepadMapper actions emit compatibility hit and default false', () => {
-  const hits = [];
-  const native = latchedNative();
-  const ctx = loadInput(native);
-  ctx.nativeCompatibilityHit = (capability, detail) => {
-    hits.push([capability, detail]);
-  };
-  ctx.Input.keyMapper = { 65: 'specialAttack', 90: 'ok' };
-  ctx.Input.gamepadMapper = { 12: 'up', 15: 'turboFire' };
+test('gamepad remap preserves an action held by another gamepad button', () => {
+  const { context: ctx } = setup();
+  ctx.Input.gamepadMapper[3] = 'ok';
+  ctx.Input.gamepadMapper[2] = 'ok';
+  ctx.__pmjsReceiveInput(snapshot([], [], [], [pad([2, 3], [2, 3])]));
+  ctx.Input.update();
+  assert.equal(ctx.Input.isPressed('ok'), true);
 
+  ctx.Input.gamepadMapper[3] = 'tag';
+  ctx.__pmjsReceiveInput(snapshot([], [], [], [pad([2, 3])]));
+  ctx.Input.update();
+  assert.equal(ctx.Input.isPressed('ok'), true);
+  assert.equal(ctx.Input.isPressed('tag'), true);
+});
+
+test('gamepad remap includes a latched keyboard press', () => {
+  const { context: ctx } = setup();
+  ctx.Input.gamepadMapper[3] = 'ok';
+  ctx.__pmjsReceiveInput(snapshot([], [], [], [pad([3], [3])]));
   ctx.Input.update();
 
-  assert.equal(ctx.Input.isPressed('specialAttack'), false);
-  assert.equal(ctx.Input.isPressed('turboFire'), false);
-  assert.deepEqual(hits, [
-    ['input.customAction', 'keyMapper:specialAttack'],
-    ['input.customAction', 'gamepadMapper:turboFire']
-  ]);
+  ctx.Input.gamepadMapper[3] = 'tag';
+  ctx.__pmjsReceiveInput(snapshot([], [67], [], [pad([3])]));
+  ctx.Input.update();
+  assert.equal(ctx.Input.isPressed('ok'), true);
+  assert.equal(ctx.Input.isPressed('tag'), true);
 });

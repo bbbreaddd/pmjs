@@ -1,61 +1,66 @@
 'use strict';
 
 (function() {
-  var nativeInputActions = ['left', 'right', 'up', 'down', 'ok', 'escape',
-    'shift', 'control', 'tab', 'pageup', 'pagedown', 'debug'];
-
-  function pollNativeAction(action) {
-    var held = NativeHost.input.down(action);
-    var edge = false;
-    try {
-      if (NativeHost.input.pressed) edge = NativeHost.input.pressed(action);
-    } catch (_) {}
-    return held || edge;
-  }
-
-  function exposeUnknownMappedActions(input) {
-    if (input.keyMapper) {
-      for (var code in input.keyMapper) {
-        var mapped = input.keyMapper[code];
-        if (mapped && input._currentState[mapped] === undefined) {
-          if (typeof nativeCompatibilityHit === 'function') {
-            nativeCompatibilityHit('input.customAction', 'keyMapper:' + mapped);
-          }
-          input._currentState[mapped] = false;
-        }
-      }
-    }
-    if (input.gamepadMapper) {
-      for (var button in input.gamepadMapper) {
-        var buttonAction = input.gamepadMapper[button];
-        if (buttonAction && input._currentState[buttonAction] === undefined) {
-          if (typeof nativeCompatibilityHit === 'function') {
-            nativeCompatibilityHit('input.customAction',
-              'gamepadMapper:' + buttonAction);
-          }
-          input._currentState[buttonAction] = false;
-        }
-      }
-    }
-  }
-
   function installInputBridge() {
-    if (typeof Input === 'undefined' || typeof Input.update !== 'function') {
-      return false;
-    }
+    if (typeof Input === 'undefined' || typeof Input.update !== 'function') return false;
     if (Input.update._pmjsNativeBridge) return true;
-
     var originalUpdate = Input.update;
+    var previousKeys = null;
+    var previousButtons = null;
+    function copyMapper(mapper) {
+      var copy = {};
+      for (var code in mapper) copy[code] = mapper[code];
+      return copy;
+    }
+    function actionHeld(input, action, keys) {
+      if (keys.some(function(key) { return input.keyMapper[key] === action; })) return true;
+      return (input._gamepadStates || []).some(function(buttons) {
+        return buttons && buttons.some(function(pressed, button) {
+          return pressed && input.gamepadMapper[button] === action;
+        });
+      });
+    }
     function nativeInputUpdate() {
-      for (var index = 0; index < nativeInputActions.length; index++) {
-        var action = nativeInputActions[index];
-        this._currentState[action] = pollNativeAction(action);
+      if (globalThis.__pmjsInputSnapshot && this.keyMapper && this.gamepadMapper) {
+        var keys = (globalThis.__pmjsInputSnapshot.keysDown || []).concat(
+          globalThis.__pmjsInputSnapshot.keysPressed || []);
+        if (previousKeys) {
+          var keyCodes = Object.assign({}, previousKeys, this.keyMapper);
+          var affected = Object.create(null);
+          for (var code in keyCodes) {
+            if (previousKeys[code] === this.keyMapper[code]) continue;
+            if (previousKeys[code]) affected[previousKeys[code]] = true;
+            if (this.keyMapper[code]) affected[this.keyMapper[code]] = true;
+          }
+          for (var action in affected) {
+            this._currentState[action] = actionHeld(this, action, keys);
+          }
+        }
+        if (previousButtons) {
+          var changed = false;
+          var buttonCodes = Object.assign({}, previousButtons, this.gamepadMapper);
+          var affectedButtons = Object.create(null);
+          for (var button in buttonCodes) {
+            if (previousButtons[button] === this.gamepadMapper[button]) continue;
+            changed = true;
+            if (previousButtons[button]) affectedButtons[previousButtons[button]] = true;
+            if (this.gamepadMapper[button]) affectedButtons[this.gamepadMapper[button]] = true;
+          }
+          for (var buttonAction in affectedButtons) {
+            this._currentState[buttonAction] = actionHeld(this, buttonAction, keys);
+          }
+          if (changed) this._gamepadStates = [];
+        }
+        previousKeys = copyMapper(this.keyMapper);
+        previousButtons = copyMapper(this.gamepadMapper);
       }
-      exposeUnknownMappedActions(this);
-      originalUpdate.call(this);
-      try {
+      try { return originalUpdate.apply(this, arguments); }
+      finally {
+        if (typeof globalThis.__pmjsFinishInputStep === 'function') {
+          globalThis.__pmjsFinishInputStep();
+        }
         if (NativeHost.input.consumePressed) NativeHost.input.consumePressed();
-      } catch (_) {}
+      }
     }
     nativeInputUpdate._pmjsNativeBridge = true;
     Input.update = nativeInputUpdate;

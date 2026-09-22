@@ -12,6 +12,16 @@ globalThis.__pmjsUpdateWindowState = function(state) {
   var wasVisible = nativeWindowState.visible;
   nativeWindowState.focused = state.focused !== false;
   nativeWindowState.visible = state.visible !== false;
+  if (wasFocused && !nativeWindowState.focused) {
+    pendingKeyReleases.length = 0;
+    pendingPadReleases.length = 0;
+    for (var padIndex = 0; padIndex < nativeGamepads.length; padIndex++) {
+      var pad = nativeGamepads[padIndex];
+      if (!pad) continue;
+      for (var buttonIndex = 0; buttonIndex < pad.buttons.length; buttonIndex++) pad.buttons[buttonIndex]._value = 0;
+      pad.axes = [0, 0, 0, 0];
+    }
+  }
   if (wasFocused !== nativeWindowState.focused &&
       typeof globalThis.dispatchEvent === 'function') {
     globalThis.dispatchEvent({
@@ -141,6 +151,27 @@ if (NativeHost.runtime.env('PMJS_RUNTIME') !== 'node-v8-native-addon') {
     get: function() { return legacyRegExpInput; }
   });
 }
+function GamepadButton() { this._value = 0; }
+Object.defineProperties(GamepadButton.prototype, {
+  pressed: { get: function() { return this._value > 0.5; } },
+  touched: { get: function() { return this._value > 0; } },
+  value: { get: function() { return this._value; } }
+});
+globalThis.GamepadButton = GamepadButton;
+var nativeGamepads = [];
+var pendingKeyReleases = [];
+var pendingPadReleases = [];
+function dispatchNativeKey(source) {
+  if (!globalThis.document || typeof document.dispatchEvent !== 'function') return;
+  var event = { type: source.down ? 'keydown' : 'keyup',
+    keyCode: source.keyCode, which: source.keyCode,
+    code: source.code || '', key: source.key || '', repeat: !!source.repeat,
+    altKey: !!source.alt, ctrlKey: !!source.ctrl, shiftKey: !!source.shift,
+    metaKey: !!source.meta,
+    getModifierState: function(name) { return name === 'CapsLock' && !!source.capsLock; },
+    preventDefault: function() { this.defaultPrevented = true; } };
+  document.dispatchEvent(event);
+}
 globalThis.navigator = {
   userAgent: 'pmjs native runtime',
   platform: nativePlatform.platform === 'linux'
@@ -149,7 +180,66 @@ globalThis.navigator = {
   language: 'en-US',
   isCocoonJS: false,
   plugins: { namedItem: function() { return null; } },
-  getGamepads: function() { return []; }
+  getGamepads: function() { return nativeGamepads.slice(); }
+};
+globalThis.__pmjsReceiveInput = function(state) {
+  if (!state) return;
+  globalThis.__pmjsInputSnapshot = state;
+  var pads = state.gamepads || [];
+  for (var index = 0; index < nativeGamepads.length; index++) {
+    var oldPad = nativeGamepads[index];
+    if (oldPad && (!pads[index] || pads[index].connected === false ||
+        pads[index].instance !== oldPad._instance)) {
+      oldPad.connected = false;
+      for (var cleared = 0; cleared < oldPad.buttons.length; cleared++) oldPad.buttons[cleared]._value = 0;
+      oldPad.axes = [0, 0, 0, 0];
+      if (globalThis.Input && typeof Input._updateGamepadState === 'function') {
+        Input._updateGamepadState(oldPad);
+      }
+      nativeGamepads[index] = null;
+    }
+  }
+  for (var i = 0; i < pads.length; i++) {
+    var sourcePad = pads[i];
+    if (!sourcePad || sourcePad.connected === false) {
+      nativeGamepads[i] = null;
+      continue;
+    }
+    var pad = nativeGamepads[i];
+    if (!pad || pad._instance !== sourcePad.instance) {
+      pad = { id: sourcePad.id, index: i, connected: true, mapping: 'standard',
+        timestamp: 0, buttons: [], axes: [0, 0, 0, 0], _instance: sourcePad.instance };
+      for (var button = 0; button < 17; button++) pad.buttons.push(new GamepadButton());
+      nativeGamepads[i] = pad;
+    }
+    pad.timestamp = Date.now();
+    pad.axes = (sourcePad.axes || [0, 0, 0, 0]).slice();
+    for (var j = 0; j < 17; j++) {
+      var held = sourcePad.buttonsDown.indexOf(j) >= 0;
+      var edge = sourcePad.buttonsPressed.indexOf(j) >= 0;
+      pad.buttons[j]._value = held || edge ? 1 : 0;
+      if (edge && !held) pendingPadReleases.push({ pad: pad, button: j });
+    }
+  }
+  nativeGamepads.length = pads.length;
+  var events = state.keyEvents || [];
+  var pressed = state.keysPressed || [];
+  var heldKeys = state.keysDown || [];
+  for (var k = 0; k < events.length; k++) {
+    var source = events[k];
+    if (!source.down && pressed.indexOf(source.keyCode) >= 0 &&
+        heldKeys.indexOf(source.keyCode) < 0) pendingKeyReleases.push(source);
+    else dispatchNativeKey(source);
+  }
+};
+globalThis.__pmjsFinishInputStep = function() {
+  for (var i = 0; i < pendingKeyReleases.length; i++) dispatchNativeKey(pendingKeyReleases[i]);
+  pendingKeyReleases.length = 0;
+  for (var j = 0; j < pendingPadReleases.length; j++) {
+    var release = pendingPadReleases[j];
+    release.pad.buttons[release.button]._value = 0;
+  }
+  pendingPadReleases.length = 0;
 };
 globalThis.nw = { App: { argv: [] } };
 globalThis.location = {

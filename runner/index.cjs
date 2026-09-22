@@ -262,6 +262,13 @@ async function run(input, hooks = {}) {
     function tick() {
       try {
         if (!native.pollEvents()) { resolve(); return; }
+        if (typeof globalThis.__pmjsUpdateWindowState === 'function') {
+          globalThis.__pmjsUpdateWindowState(native.runtime.windowState());
+        }
+        if (typeof globalThis.__pmjsReceiveInput === 'function' &&
+            typeof native.input.snapshot === 'function') {
+          globalThis.__pmjsReceiveInput(native.input.snapshot());
+        }
         const now = performance.now();
         native.beginFrame();
         globalThis.__pmjsTick(now);
