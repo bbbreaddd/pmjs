@@ -6,4 +6,3 @@ function warmIntl(config) {
 }
 
 warmIntl((globalThis.PMJS_GAME_CONFIG || {}).intlWarmup);
-

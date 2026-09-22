@@ -480,10 +480,6 @@ test('Graphics.loadFont registers dynamic font automatically', () => {
     existingFiles: ['fonts/DynamicFont.ttf']
   });
 
-  context.Graphics = context.Graphics || {};
-  context.Graphics.loadFont = function(name, url) {};
-  installMvFontLayers(context);
-
   context.Graphics.loadFont('DynamicFace', 'fonts/DynamicFont.ttf');
 
   assert.equal(context.PMJS.fonts.isFamilyLoaded('DynamicFace'), true);

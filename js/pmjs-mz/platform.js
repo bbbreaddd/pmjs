@@ -22,4 +22,3 @@
     return !!NativeHost.media;
   };
 })();
-
