@@ -201,9 +201,17 @@ if (typeof _Bitmap_blt === 'function') {
     }
 
     Bitmap.prototype.drawText = function(text, x, y, maxWidth, lineHeight, align) {
+      var context = this._context;
+      var transform = context && context._transform;
+      var identityTransform = transform && transform.length === 6 &&
+        transform[0] === 1 && transform[1] === 0 && transform[2] === 0 &&
+        transform[3] === 1 && transform[4] === 0 && transform[5] === 0;
       if (this._drawTextOutline !== originalOutline ||
           this._drawTextBody !== originalBody || maxWidth ||
-          (align && align !== 'left')) {
+          (align && align !== 'left') || text === undefined ||
+          !identityTransform ||
+          (context._clipPaths && context._clipPaths.length) ||
+          context.globalCompositeOperation !== 'source-over') {
         return originalDrawText.apply(this, arguments);
       }
 
@@ -215,7 +223,6 @@ if (typeof _Bitmap_blt === 'function') {
       lineHeight = Math.floor(lineHeight);
 
       var descriptor = this._makeFontNameText();
-      var context = this._context;
       var font = contextFont({ font: descriptor });
       // The native rasterizer expects an integral baseline offset.
       var baseline = y + lineHeight -
@@ -225,7 +232,7 @@ if (typeof _Bitmap_blt === 'function') {
       if (this.outlineWidth > 0) {
         NativeHost.canvas.drawText(canvas.handle, font.path, text,
           x, baseline, font.size,
-          colorWithGlobalAlpha(this.outlineColor, paintAlpha),
+          colorWithGlobalAlpha(this.outlineColor, 1),
           Math.max(0, Math.floor(this.outlineWidth)));
       }
       NativeHost.canvas.drawText(canvas.handle, font.path, text,

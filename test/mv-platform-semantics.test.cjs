@@ -689,6 +689,7 @@ test('Bitmap.prototype.drawText installs native acceleration only for stock pipe
   let stockOutlineCalls = 0;
   let customOutlineCalls = 0;
   let nativeDrawCalls = 0;
+  let nativeDrawArguments = [];
 
   function makeMockBitmapClass(customDrawText) {
     function MockBitmap() {
@@ -700,6 +701,9 @@ test('Bitmap.prototype.drawText installs native acceleration only for stock pipe
       this.textColor = '#ffffff';
       this._context = {
         globalAlpha: 1,
+        globalCompositeOperation: 'source-over',
+        _transform: [1, 0, 0, 1, 0, 0],
+        _clipPaths: [],
         save() {},
         restore() {},
         strokeText() {},
@@ -740,20 +744,24 @@ test('Bitmap.prototype.drawText installs native acceleration only for stock pipe
 
   function createContext(BitmapClass) {
     nativeDrawCalls = 0;
+    nativeDrawArguments = [];
     const sandbox = {
       Bitmap: BitmapClass,
       Sprite: function() {},
       Graphics: Object.assign(function() {}, { width: 100, height: 100 }),
       Input: function() {},
       contextFont: function() { return { path: 'font.ttf', size: 16 }; },
-      colorWithGlobalAlpha: function() { return 0xffffffff; },
+      colorWithGlobalAlpha: function(_color, alpha) { return alpha; },
       nativeBootPhase: function() {},
       NativeHost: {
         runtime: { loadScript() {} },
         render: {},
         canvas: {
           measureText: function() { return 50; },
-          drawText: function() { nativeDrawCalls++; }
+          drawText: function() {
+            nativeDrawCalls++;
+            nativeDrawArguments.push(Array.from(arguments));
+          }
         }
       }
     };
@@ -778,6 +786,23 @@ test('Bitmap.prototype.drawText installs native acceleration only for stock pipe
   stockBmp.drawText('centered', 0, 0, 0, 20, 'center');
   assert.equal(nativeDrawCalls, 0, 'unconstrained alignment must keep stock positioning');
   assert.equal(stockOutlineCalls, 2);
+  nativeDrawCalls = 0;
+  stockBmp._context.globalAlpha = 0.25;
+  stockBmp.drawText('alpha', 10, 0, 0, 20, 'left');
+  assert.equal(nativeDrawArguments.at(-2)[6], 1,
+    'outline preserves MV globalAlpha=1 behavior');
+  assert.equal(nativeDrawArguments.at(-1)[6], 0.25,
+    'body preserves the caller globalAlpha');
+  nativeDrawCalls = 0;
+  stockBmp.drawText(undefined, 0, 0, 0, 20, 'left');
+  assert.equal(nativeDrawCalls, 0, 'undefined text must not draw');
+  stockBmp._context._transform = [1, 0, 0, 1, 40, 0];
+  stockBmp.drawText('translated', 10, 0, 0, 20, 'left');
+  assert.equal(nativeDrawCalls, 0, 'translated text must retain Canvas path');
+  stockBmp._context._transform = [1, 0, 0, 1, 0, 0];
+  stockBmp._context._clipPaths = [{}];
+  stockBmp.drawText('clipped', 10, 0, 0, 20, 'left');
+  assert.equal(nativeDrawCalls, 0, 'clipped text must retain Canvas path');
 
   let pluginDrawCalls = 0;
   const PreModifiedBitmap = makeMockBitmapClass(function(text) {
