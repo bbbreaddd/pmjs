@@ -8,6 +8,34 @@ const path = require('node:path');
 
 const jsDir = path.resolve(__dirname, '../js');
 
+test('MV platform lets a plugin create and register its own scene ticker', () => {
+  const calls = [];
+  class Ticker {
+    add(callback) { calls.push(callback); }
+    start() { this.started = true; }
+  }
+  const context = {
+    Utils: {},
+    SceneManager: {},
+    PIXI: { ticker: { Ticker } }
+  };
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(jsDir, 'pmjs-mv/platform.js'), 'utf8'), context);
+
+  context.SceneManager.update = function() {};
+  context.SceneManager.requestUpdate = function() {
+    if (!this.ticker) {
+      this.ticker = new context.PIXI.ticker.Ticker();
+      this.ticker.add(this.update);
+      this.ticker.start();
+    }
+  };
+  context.SceneManager.requestUpdate();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0], context.SceneManager.update);
+  assert.equal(context.SceneManager.ticker.started, true);
+});
+
 function readMvSetup() {
   return fs.readFileSync(path.join(jsDir, 'pmjs-rpgmaker/lifecycle.js'), 'utf8') +
     '\n' + fs.readFileSync(path.join(jsDir, 'pmjs-core/methods.js'), 'utf8') +

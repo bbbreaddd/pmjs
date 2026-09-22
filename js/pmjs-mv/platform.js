@@ -8,11 +8,4 @@ if (typeof SceneManager !== 'undefined') {
       (typeof pmjsGameConfig !== 'undefined' && pmjsGameConfig.developmentMode)) {
     SceneManager.catchException = function(error) { throw error; };
   }
-  if (!SceneManager.ticker && typeof PIXI !== 'undefined' && PIXI.ticker &&
-      typeof PIXI.ticker.Ticker === 'function') {
-    SceneManager.ticker = new PIXI.ticker.Ticker();
-    SceneManager.ticker.autoStart = false;
-    SceneManager.ticker.stop();
-    SceneManager.ticker._pmjsHostDriven = true;
-  }
 }

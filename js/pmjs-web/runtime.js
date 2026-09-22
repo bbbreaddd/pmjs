@@ -172,7 +172,7 @@ function dispatchNativeKey(source) {
     preventDefault: function() { this.defaultPrevented = true; } };
   document.dispatchEvent(event);
 }
-globalThis.navigator = {
+Object.defineProperty(globalThis, 'navigator', { configurable: true, writable: true, value: {
   userAgent: 'pmjs native runtime',
   platform: nativePlatform.platform === 'linux'
     ? 'Linux ' + (nativePlatform.arch === 'x64' ? 'x86_64' : nativePlatform.arch)
@@ -181,7 +181,7 @@ globalThis.navigator = {
   isCocoonJS: false,
   plugins: { namedItem: function() { return null; } },
   getGamepads: function() { return nativeGamepads.slice(); }
-};
+} });
 globalThis.__pmjsReceiveInput = function(state) {
   if (!state) return;
   globalThis.__pmjsInputSnapshot = state;
