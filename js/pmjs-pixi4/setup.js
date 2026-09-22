@@ -23,8 +23,12 @@ if (PIXI.tilemap && PIXI.tilemap.RectTileLayer) {
     var destroy = proto.destroy;
     proto.destroy = function() {
       if (this._pmjsNativeLayer) {
-        NativeHost.render.releaseTileLayer(this._pmjsNativeLayer);
-        this._pmjsNativeLayer = 0;
+        if (typeof pmjsReleaseNativeGeometry === 'function')
+          pmjsReleaseNativeGeometry(this, 'tile');
+        else {
+          NativeHost.render.releaseTileLayer(this._pmjsNativeLayer);
+          this._pmjsNativeLayer = 0;
+        }
       }
       return destroy && destroy.apply(this, arguments);
     };
@@ -36,8 +40,12 @@ if (PIXI.mesh && PIXI.mesh.Mesh) {
     var destroy = proto.destroy;
     proto.destroy = function() {
       if (this.__pmjsNativeMesh) {
-        NativeHost.render.releaseMesh(this.__pmjsNativeMesh);
-        this.__pmjsNativeMesh = 0;
+        if (typeof pmjsReleaseNativeGeometry === 'function')
+          pmjsReleaseNativeGeometry(this, 'mesh');
+        else {
+          NativeHost.render.releaseMesh(this.__pmjsNativeMesh);
+          this.__pmjsNativeMesh = 0;
+        }
       }
       return destroy && destroy.apply(this, arguments);
     };

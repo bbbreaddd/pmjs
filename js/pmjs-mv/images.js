@@ -167,13 +167,21 @@ function pmjsReleaseNativeSceneResources(root, seen) {
   seen.push(root);
   var released = 0;
   if (root._pmjsNativeLayer) {
-    NativeHost.render.releaseTileLayer(root._pmjsNativeLayer);
-    root._pmjsNativeLayer = 0;
+    if (typeof pmjsReleaseNativeGeometry === 'function')
+      pmjsReleaseNativeGeometry(root, 'tile');
+    else {
+      NativeHost.render.releaseTileLayer(root._pmjsNativeLayer);
+      root._pmjsNativeLayer = 0;
+    }
     released++;
   }
   if (root.__pmjsNativeMesh) {
-    NativeHost.render.releaseMesh(root.__pmjsNativeMesh);
-    root.__pmjsNativeMesh = 0;
+    if (typeof pmjsReleaseNativeGeometry === 'function')
+      pmjsReleaseNativeGeometry(root, 'mesh');
+    else {
+      NativeHost.render.releaseMesh(root.__pmjsNativeMesh);
+      root.__pmjsNativeMesh = 0;
+    }
     released++;
   }
   var children = root.children;

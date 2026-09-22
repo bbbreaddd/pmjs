@@ -34,6 +34,47 @@ var nativeTransformMs = 0;
 var nativeQueueMs = 0;
 var nativeStageSamples = 0;
 var nativeBlankTileCanvas = null;
+var nativeGeometryFinalizer = typeof FinalizationRegistry === 'function'
+  ? new FinalizationRegistry(function(resource) {
+      try {
+        if (resource.kind === 'mesh') NativeHost.render.releaseMesh(resource.handle);
+        else NativeHost.render.releaseTileLayer(resource.handle);
+      } catch (_) {}
+    }) : null;
+
+function pmjsReleaseNativeGeometry(owner, kind) {
+  var mesh = kind === 'mesh';
+  var ownerKey = mesh ? '__pmjsNativeMeshOwner' : '_pmjsNativeLayerOwner';
+  var handleKey = mesh ? '__pmjsNativeMesh' : '_pmjsNativeLayer';
+  var resource = owner[ownerKey];
+  var handle = resource ? resource.handle : owner[handleKey];
+  if (resource && nativeGeometryFinalizer) nativeGeometryFinalizer.unregister(resource);
+  owner[ownerKey] = null;
+  owner[handleKey] = 0;
+  if (mesh) owner.__pmjsNativeMeshRevision = null;
+  else {
+    owner._pmjsNativeTextureSignature = '';
+    owner._pmjsNativePointSnapshot = null;
+    owner._pmjsNativeCompiledGeneration = null;
+  }
+  if (handle) {
+    if (mesh) NativeHost.render.releaseMesh(handle);
+    else NativeHost.render.releaseTileLayer(handle);
+  }
+}
+
+function pmjsAdoptNativeGeometry(owner, kind, handle) {
+  var resource = { kind: kind, handle: handle };
+  if (nativeGeometryFinalizer) nativeGeometryFinalizer.register(owner, resource, resource);
+  pmjsReleaseNativeGeometry(owner, kind);
+  if (kind === 'mesh') {
+    owner.__pmjsNativeMeshOwner = resource;
+    owner.__pmjsNativeMesh = handle;
+  } else {
+    owner._pmjsNativeLayerOwner = resource;
+    owner._pmjsNativeLayer = handle;
+  }
+}
 var nativeMaterializationStats = {
   tilingDirect: 0, tilingHits: 0, tilingMisses: 0,
   meshHits: 0, meshMisses: 0,
@@ -202,10 +243,7 @@ function ensureNativeRectTileLayer(layer) {
   var points = layer.pointsBuf;
   var textures = layer.textures;
   if (!points || !points.length || !textures || !textures.length) {
-    if (layer._pmjsNativeLayer) {
-      NativeHost.render.releaseTileLayer(layer._pmjsNativeLayer);
-      layer._pmjsNativeLayer = 0;
-    }
+    if (layer._pmjsNativeLayer) pmjsReleaseNativeGeometry(layer, 'tile');
     layer._pmjsNativeTextureSignature = '';
     layer._pmjsNativePointSnapshot = null;
     return 0;
@@ -239,9 +277,6 @@ function ensureNativeRectTileLayer(layer) {
 
       layer._pmjsNativeCompiledGeneration = generation;
     } else {
-      if (layer._pmjsNativeLayer) {
-        NativeHost.render.releaseTileLayer(layer._pmjsNativeLayer);
-      }
       var transferredPoints = points;
       if (PMJS.optimizations.isEnabled('tilemap.bulk-layer-transfer')) {
         var staging = layer._pmjsNativePointStaging;
@@ -253,8 +288,8 @@ function ensureNativeRectTileLayer(layer) {
         }
         transferredPoints = staging;
       }
-      layer._pmjsNativeLayer = NativeHost.render.createTileLayer(
-        transferredPoints, handles);
+      var nativeLayer = NativeHost.render.createTileLayer(transferredPoints, handles);
+      pmjsAdoptNativeGeometry(layer, 'tile', nativeLayer);
       layer._pmjsNativePointSnapshot = usePersistentCache ? points.slice() : null;
       layer._pmjsNativeCompiledGeneration = generation;
       layer._pmjsNativeTextureSignature = textureSignature;
@@ -847,7 +882,6 @@ function ensureNativeGpuMesh(mesh) {
   if (typeof nativeMaterializationStats !== 'undefined') {
     nativeMaterializationStats.meshMisses++;
   }
-  if (mesh.__pmjsNativeMesh) NativeHost.render.releaseMesh(mesh.__pmjsNativeMesh);
   var nativeUvs = Array.prototype.slice.call(uvs);
   if (uvTransform) {
     for (var uvIndex = 0; uvIndex < nativeUvs.length; uvIndex += 2) {
@@ -857,10 +891,11 @@ function ensureNativeGpuMesh(mesh) {
         uvTransform.b * uvX + uvTransform.d * uvY + uvTransform.ty;
     }
   }
-  mesh.__pmjsNativeMesh = NativeHost.render.createMesh(nativeSource.handle,
+  var nativeMesh = NativeHost.render.createMesh(nativeSource.handle,
     Array.prototype.slice.call(vertices), nativeUvs,
     Array.prototype.slice.call(indices),
     mesh.drawMode === PIXI.mesh.Mesh.DRAW_MODES.TRIANGLE_MESH);
+  pmjsAdoptNativeGeometry(mesh, 'mesh', nativeMesh);
   mesh.__pmjsNativeMeshRevision = revision;
   return mesh.__pmjsNativeMesh;
 }

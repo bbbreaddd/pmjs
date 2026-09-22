@@ -28,10 +28,18 @@ function stubCanvasContext(calls) {
 function loadScenePrimitives({ disableOptimizations = [], env = {} } = {}) {
   const calls = { createTileLayer: 0, tileLayerPoints: [],
     releaseTileLayer: 0, createMesh: 0,
-    releaseMesh: 0, putImageData: 0, fill: 0, getLocalBounds: 0 };
+    releaseMesh: 0, releasedLayers: [], releasedMeshes: [],
+    putImageData: 0, fill: 0, getLocalBounds: 0 };
+  const finalizers = [];
+  class MockFinalizationRegistry {
+    constructor(callback) { this.callback = callback; this.records = new Map(); finalizers.push(this); }
+    register(_target, held, token) { this.records.set(token, held); }
+    unregister(token) { return this.records.delete(token); }
+  }
   let nextHandle = 1000;
   const context = {
     console: { log() {} },
+    FinalizationRegistry: MockFinalizationRegistry,
     PMJS_GAME_CONFIG: { disableOptimizations },
     NativeHost: {
       runtime: { env(name) { return env[name]; } },
@@ -42,9 +50,9 @@ function loadScenePrimitives({ disableOptimizations = [], env = {} } = {}) {
           calls.tileLayerPoints.push(points);
           return ++nextHandle;
         },
-        releaseTileLayer() { calls.releaseTileLayer++; },
+        releaseTileLayer(handle) { calls.releaseTileLayer++; calls.releasedLayers.push(handle); },
         createMesh() { calls.createMesh++; return ++nextHandle; },
-        releaseMesh() { calls.releaseMesh++; },
+        releaseMesh(handle) { calls.releaseMesh++; calls.releasedMeshes.push(handle); },
       },
     },
     nativeCompatibilityHit() {},
@@ -74,7 +82,7 @@ function loadScenePrimitives({ disableOptimizations = [], env = {} } = {}) {
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-core/config.js'), 'utf8'), context);
   vm.runInContext(optimizationsSource, context, { filename: 'optimizations.js' });
   vm.runInContext(scenePrimitivesSource, context, { filename: 'scene-primitives.js' });
-  return { context, calls };
+  return { context, calls, finalizers };
 }
 
 function callIn(context, expression, name, value) {
@@ -306,6 +314,45 @@ test('scene.gpu-mesh-cache reuses the upload when enabled, re-uploads when disab
   callIn(disabled.context, 'ensureNativeGpuMesh(other)', 'other', other);
   assert.equal(disabled.calls.createMesh, 2);
   assert.equal(disabled.calls.releaseMesh, 1);
+});
+
+test('compiled geometry has finalizer owners and explicit release unregisters them', () => {
+  const { context, calls, finalizers } = loadScenePrimitives();
+  const mesh = gpuMesh();
+  const layer = tileLayer();
+  const meshHandle = callIn(context, 'ensureNativeGpuMesh(mesh)', 'mesh', mesh);
+  const layerHandle = callIn(context, 'ensureNativeRectTileLayer(layer)', 'layer', layer);
+  const registry = finalizers[0];
+  assert.deepEqual(Object.keys(mesh.__pmjsNativeMeshOwner).sort(), ['handle', 'kind']);
+  assert.deepEqual(Object.keys(layer._pmjsNativeLayerOwner).sort(), ['handle', 'kind']);
+  assert.equal(registry.records.size, 2);
+  registry.callback(mesh.__pmjsNativeMeshOwner);
+  assert.deepEqual(calls.releasedMeshes, [meshHandle]);
+  callIn(context, "pmjsReleaseNativeGeometry(layer, 'tile')", 'layer', layer);
+  assert.deepEqual(calls.releasedLayers, [layerHandle]);
+  assert.equal(registry.records.size, 1);
+});
+
+test('failed geometry replacements preserve the previous valid cache entry', () => {
+  const { context, calls } = loadScenePrimitives();
+  const mesh = gpuMesh();
+  const layer = tileLayer();
+  const meshHandle = callIn(context, 'ensureNativeGpuMesh(mesh)', 'mesh', mesh);
+  const layerHandle = callIn(context, 'ensureNativeRectTileLayer(layer)', 'layer', layer);
+  mesh.dirty = 1;
+  layer.pointsBuf[0] = 1;
+  context.NativeHost.render.createMesh = () => { throw new Error('mesh allocation failed'); };
+  context.NativeHost.render.createTileLayer = () => { throw new Error('tile allocation failed'); };
+  assert.throws(() => callIn(context, 'ensureNativeGpuMesh(mesh)', 'mesh', mesh), /mesh allocation failed/);
+  assert.throws(() => callIn(context, 'ensureNativeRectTileLayer(layer)', 'layer', layer), /tile allocation failed/);
+  assert.equal(mesh.__pmjsNativeMesh, meshHandle);
+  assert.equal(layer._pmjsNativeLayer, layerHandle);
+  assert.deepEqual(calls.releasedMeshes, []);
+  assert.deepEqual(calls.releasedLayers, []);
+  mesh.dirty = 0;
+  layer.pointsBuf[0] = 0;
+  assert.equal(callIn(context, 'ensureNativeGpuMesh(mesh)', 'mesh', mesh), meshHandle);
+  assert.equal(callIn(context, 'ensureNativeRectTileLayer(layer)', 'layer', layer), layerHandle);
 });
 
 test('storage.read-burst-coalesce disables cleanly via optimization gate', () => {
