@@ -851,6 +851,45 @@ test('unsupported filters render unfiltered and log the filter', () => {
     [0, 1, 1]);
 });
 
+test('unsupported filter resolution clears a previous node clip', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  sandbox.nativeEffectClip = { left: 1, top: 2, right: 3, bottom: 4 };
+  const node = sprite();
+  const plan = sandbox.resolveNativeAdvancedEffects(node, null,
+    [{ enabled: true }], null, null, -1, null);
+  assert.equal(plan.blur, 0);
+  assert.equal(plan.groups.length, 0);
+  assert.equal(sandbox.nativeEffectClip, null);
+});
+
+test('aborted visual encoders preserve a neutral transformed parent for children', () => {
+  const harness = makeHarness();
+  const { sandbox, makeTexture, sprite } = harness;
+  const root = new sandbox.PIXI.Container();
+  const texture = makeTexture(16, 16);
+  texture.rotate = 1;
+  const failed = new sandbox.PIXI.extras.TilingSprite(texture, 16, 16);
+  failed.x = 30;
+  failed.y = 12;
+  failed.alpha = 0.4;
+  failed.addChild(sprite(8, 8));
+  root.addChild(failed);
+  harness.submitted.length = 0;
+  assert.equal(sandbox.submitNativeScene(root), true);
+  const packet = harness.submitted[0];
+  assert.deepEqual(harness.compatHits,
+    [['render.texture-rotation', '1']]);
+  assert.equal(packet.count, 3);
+  assert.deepEqual(packet.metadata.filter((_, index) => index % 7 === 0),
+    [0, 0, 1]);
+  assert.equal(packet.metadata[2 * 7 + 1], 1,
+    'child must remain parented to the degraded node');
+  assert.equal(packet.values[41 + 4], 30);
+  assert.equal(packet.values[41 + 5], 12);
+  assert.ok(Math.abs(packet.values[41 + 6] - 0.4) < 0.000001);
+});
+
 test('a filter with a built-in constructor name cannot impersonate its shader', () => {
   const harness = makeHarness();
   const { sandbox, sprite } = harness;

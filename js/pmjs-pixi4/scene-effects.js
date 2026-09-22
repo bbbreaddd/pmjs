@@ -13,6 +13,8 @@ function nativeFilterGroupPreservesTransparentBounds(group) {
 
 function resolveNativeAdvancedEffects(node, particleContext, activeFilters,
     nodeMask, forcedMask, pictureBlend, forcedClip) {
+  nativeEffectClip = forcedClip || null;
+  nativeEffectAlphaMask = null;
   var filterPlan = nativeSceneFilter(node, activeFilters);
   if (filterPlan.unsupported) {
     var filterNames = filterPlan.filters.map(function(filter) {
@@ -20,7 +22,7 @@ function resolveNativeAdvancedEffects(node, particleContext, activeFilters,
     }).join(',');
     PMJS.compat.hit('render.filter',
       (node.constructor && node.constructor.name || 'node') + ':' + filterNames);
-    return { blur: 0, groups: [] };
+    filterPlan = { blur: 0, groups: [] };
   }
 
   var canKeepRectangleMask = !filterPlan.groups.length ||
@@ -55,7 +57,5 @@ function resolveNativeAdvancedEffects(node, particleContext, activeFilters,
   }
   nativeEffectClip = nativeClip;
 
-  nativeEffectAlphaMask = null;
   return filterPlan;
 }
-

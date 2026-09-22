@@ -361,15 +361,6 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
   resetNativeSceneEmission(tint);
   writeNativeSceneKind(pipeKind, node, pipeType, particleContext,
     particleValues);
-  if (nativeSceneEmission.aborted) {
-    var abortedChildren = node.children || [];
-    for (var abortedIndex = 0; abortedIndex < abortedChildren.length;
-        abortedIndex++) {
-      writeNativeSceneNode(abortedChildren[abortedIndex], parentIndex,
-        forcedClip, forcedMask, null);
-    }
-    return;
-  }
   var kind = nativeSceneEmission.kind;
   var resource = nativeSceneEmission.resource;
   tint = nativeSceneEmission.tint;
@@ -399,6 +390,20 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
       parentIndex, nativeClip);
   }
   nativeSceneFilterDepth += filterGroups.length;
+
+  if (nativeSceneEmission.aborted) {
+    var abortedParent = nativeSceneRecord(parentIndex, 0, 0, tint,
+      blendMode, local, particleValues ? particleValues.alpha :
+        forcedAlpha === undefined ? node.alpha : forcedAlpha,
+      nativeClip, nativeBlur, nativeMask);
+    var abortedChildren = node.children || [];
+    for (var abortedIndex = 0; abortedIndex < abortedChildren.length;
+        abortedIndex++) {
+      writeNativeSceneNode(abortedChildren[abortedIndex], abortedParent);
+    }
+    closeNativeSceneFilters(filterGroups.length, parentIndex, nativeClip);
+    return;
+  }
 
   if (kind === 1) {
     var textureRotation = ((Number(texture && texture.rotate) || 0) % 16 + 16) % 16;

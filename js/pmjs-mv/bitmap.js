@@ -43,16 +43,11 @@ function pmjsBitmapIsUnitMaskFill(bitmap, x, y, width, height, color) {
   return ((rgba >>> 24) & 255) === 255 && (rgba & 255) === 255;
 }
 
-// Render the supplied stage synchronously into one reusable background
-// bitmap. Copying the previously presented framebuffer is observably wrong
+// Render the supplied stage synchronously into an independently owned bitmap.
+// Copying the previously presented framebuffer is observably wrong
 // when snapForBackground runs after the scene update but before presentation.
 Bitmap.snap = function(stage) {
-  var bitmap = Bitmap.background_bitmap;
-  if (!(bitmap instanceof Bitmap) || bitmap.width !== Graphics.width ||
-      bitmap.height !== Graphics.height) {
-    if (bitmap && typeof bitmap.destroy === 'function') bitmap.destroy();
-    bitmap = Bitmap.background_bitmap = new Bitmap(Graphics.width, Graphics.height);
-  }
+  var bitmap = new Bitmap(Graphics.width, Graphics.height);
   if (!stage) return bitmap;
   var renderer = Graphics._renderer;
   NativeHost.render.setRenderTargetSize(Graphics.width, Graphics.height);
