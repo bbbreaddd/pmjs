@@ -146,7 +146,7 @@
   }
 
   function initConfigFonts() {
-    var config = globalThis.pmjsGameConfig || {};
+    var config = PMJS.config;
     var fonts = config.fonts || {};
     Object.keys(fonts).forEach(function(family) {
       if (fonts[family]) {

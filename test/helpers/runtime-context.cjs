@@ -7,6 +7,7 @@ const vm = require('node:vm');
 const root = path.resolve(__dirname, '../..');
 
 function loadPmjsRuntime(extra = {}, modules = [
+  'js/pmjs-core/config.js',
   'js/pmjs-core/optimizations.js',
   'js/pmjs-core/methods.js',
   'js/pmjs-rpgmaker/lifecycle.js',

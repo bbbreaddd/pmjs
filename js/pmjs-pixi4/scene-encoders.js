@@ -80,7 +80,7 @@ function writeNativeSceneTilingSprite(node, type, particleContext,
   var texture = node.texture;
   var tilingRotation = ((Number(texture && texture.rotate) || 0) % 16 + 16) % 16;
   if (tilingRotation % 2) {
-    nativeCompatibilityHit('render.texture-rotation', String(tilingRotation));
+    PMJS.compat.hit('render.texture-rotation', String(tilingRotation));
     scratch.aborted = true;
     return;
   }
@@ -115,7 +115,7 @@ function writeNativeSceneGraphics(node, type, particleContext, particleValues,
     scratch.destWidth = frame.width;
     scratch.destHeight = frame.height;
   } else if (node.__pmjsGraphicsUnsupported) {
-    nativeCompatibilityHit('render.graphics',
+    PMJS.compat.hit('render.graphics',
       (node.constructor && node.constructor.name || 'Graphics') + ':graphics');
     scratch.aborted = true;
   }
@@ -125,7 +125,7 @@ function writeNativeSceneMesh(node, type, particleContext, particleValues,
     scratch) {
   var meshHandle = ensureNativeGpuMesh(node);
   if (!meshHandle) {
-    nativeCompatibilityHit('render.mesh',
+    PMJS.compat.hit('render.mesh',
       (node.constructor && node.constructor.name || 'node') + ':mesh');
     scratch.aborted = true;
     return;
@@ -138,7 +138,7 @@ function writeNativeSceneMesh(node, type, particleContext, particleValues,
 function writeNativeSceneRectTileLayer(node, parentIndex) {
   var layerHandle = ensureNativeRectTileLayer(node);
   if (!layerHandle) {
-    nativeCompatibilityHit('render.tilemap',
+    PMJS.compat.hit('render.tilemap',
       (node.constructor && node.constructor.name || 'node') + ':layer-unrealized');
     return;
   }

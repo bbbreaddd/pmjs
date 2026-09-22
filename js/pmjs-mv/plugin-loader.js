@@ -41,8 +41,6 @@
     return true;
   }
 
-  pmjsMvInstallPluginManagerHooks();
-
   function pmjsMvLoadPluginManifest() {
     globalThis.pmjsLoadRpgMakerPluginManifest();
   }

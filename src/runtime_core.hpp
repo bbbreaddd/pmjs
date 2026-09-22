@@ -2,7 +2,6 @@
 
 #include "canvas.hpp"
 #include "dialog.hpp"
-#include "host_services.hpp"
 #include "media_service.hpp"
 #include "platform.hpp"
 #include "renderer.hpp"
@@ -22,7 +21,6 @@ class RuntimeCore {
   RuntimeCore(const std::filesystem::path& root, int width, int height,
               const std::string& title);
 
-  HostServices hostServices();
   std::optional<ImageHandle> resolveImage(std::uint32_t handle);
   bool submitScene(std::uint32_t version, const std::uint32_t* metadata,
                    std::size_t metadataCount, const float* values,
@@ -32,8 +30,6 @@ class RuntimeCore {
   bool running() const { return running_; }
   void requestQuit() { running_ = false; }
   void syncDrawableSize();
-  void injectInput(std::uint16_t input) { injectedInput_ = input; }
-  std::uint32_t inputState() const;
 
   int width() const { return width_; }
   int height() const { return height_; }
@@ -55,7 +51,6 @@ class RuntimeCore {
   Vfs vfs_;
   MediaService media_;
   Dialog dialog_;
-  std::uint16_t injectedInput_ = 0;
   bool running_ = true;
   std::vector<std::uint32_t> sceneMetadataScratch_;
 };

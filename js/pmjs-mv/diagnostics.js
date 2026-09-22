@@ -1,5 +1,5 @@
 function inspectPluginCompatibility() {
-  if (!nativeCompatibilityStrict && !nativeCompatibilityVerbose) return;
+  if (!PMJS.compat.audit) return;
   var expected = {
     Bitmap: ['getPixel', 'getAlphaPixel', 'adjustTone', 'rotateHue', 'blur', 'snap'],
     Graphics: ['isWebGL', 'canUseSaturationBlend', 'isFontLoaded'],
@@ -15,14 +15,14 @@ function inspectPluginCompatibility() {
   Object.keys(expected).forEach(function(className) {
     var constructor = globalThis[className];
     if (!constructor) {
-      nativeCompatibilityHit('compat.missingClass', className);
+      PMJS.compat.hit('compat.missingClass', className);
       return;
     }
     var prototype = constructor.prototype || constructor;
     expected[className].forEach(function(method) {
       if (typeof prototype[method] !== 'function' &&
           typeof constructor[method] !== 'function') {
-        nativeCompatibilityHit('compat.missingMethod', className + '.' + method);
+        PMJS.compat.hit('compat.missingMethod', className + '.' + method);
       }
     });
     (expectedProperties[className] || []).forEach(function(property) {
@@ -33,7 +33,7 @@ function inspectPluginCompatibility() {
         owner = Object.getPrototypeOf(owner);
       }
       if (!descriptor && !(property in prototype) && !(property in constructor)) {
-        nativeCompatibilityHit('compat.missingProperty', className + '.' + property);
+        PMJS.compat.hit('compat.missingProperty', className + '.' + property);
       }
     });
   });

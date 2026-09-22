@@ -121,8 +121,7 @@
     if (!proto || proto._pmjsOliviaInstalled) return true;
     if (typeof proto.updateHorrorEffects !== 'function') return false;
 
-    if (typeof pmjsOptimizationEnabled === 'function' &&
-        !pmjsOptimizationEnabled('plugins.olivia.horror-effects')) {
+    if (!PMJS.optimizations.isEnabled('plugins.olivia.horror-effects')) {
       return false;
     }
 

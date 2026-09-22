@@ -524,7 +524,7 @@ Object.defineProperty(documentTarget, 'title', {
   enumerable: true,
   get: function() {
     return (globalThis.__pmjsGameInfo && globalThis.__pmjsGameInfo.title) ||
-      pmjsGameConfig.title || 'PMJS';
+      PMJS.config.title || 'PMJS';
   },
   set: function(value) {
     globalThis.__pmjsSetWindowTitle(value);

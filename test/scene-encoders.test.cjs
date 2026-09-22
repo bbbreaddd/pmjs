@@ -158,6 +158,12 @@ function makeHarness() {
       filters: { BlurFilter, ColorMatrixFilter }, DisplayObject: Container,
       Texture: { EMPTY: null } },
     ScreenSprite, Tilemap, Window, WindowLayer, CanvasElement,
+    PMJS: { compat: { dump: () => ({ ...hitCounts }),
+      count: prefix => Object.entries(hitCounts).reduce((total, [kind, count]) =>
+        total + (!prefix || kind.startsWith(prefix) ? count : 0), 0),
+      hit: (...args) => sandbox.nativeCompatibilityHit(...args),
+      observed: (...args) => sandbox.nativeCompatibilityObserved(...args) },
+      optimizations: { isEnabled: () => true } },
     nativeCompatibilityHits: hitCounts,
     nativeCompatibilityHit(kind, detail) {
       compatHits.push([kind, String(detail)]);
@@ -664,7 +670,7 @@ test('Sprite rectangle masks resolve anchor, negative scale, and another parent 
 test('disabled Sprite rectangle lowering retains the alpha-mask path', () => {
   const harness = makeHarness();
   const { sandbox, sprite } = harness;
-  sandbox.pmjsOptimizationEnabled = id => id !== 'scene.solid-sprite-mask-clip';
+  sandbox.PMJS.optimizations.isEnabled = id => id !== 'scene.solid-sprite-mask-clip';
   const root = new sandbox.PIXI.Container();
   const masked = sprite();
   const mask = sprite(100, 92);
@@ -878,7 +884,7 @@ test('strict and headless hits throw with the capability', () => {
     root.addChild(filtered);
     sandbox.NativeHost.runtime.env = name =>
       name === setting ? value : undefined;
-    sandbox.nativeCompatibilityHit = (kind, detail) => {
+    sandbox.PMJS.compat.hit = (kind, detail) => {
       harness.compatHits.push([kind, String(detail)]);
       throw new Error('unsupported native capability: ' + kind);
     };

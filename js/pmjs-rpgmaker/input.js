@@ -68,7 +68,6 @@
     return true;
   }
 
-  globalThis.pmjsInstallRpgMakerInputBridge = installInputBridge;
   PMJS.phases.on('afterGuestPlugins', 'pmjs-rpgmaker.input', function() {
     if (!installInputBridge()) throw new Error('RPG Maker Input did not initialize');
   });

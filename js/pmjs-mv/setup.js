@@ -5,4 +5,4 @@ function warmIntl(config) {
   if (config.collatorEn) 'b'.localeCompare('a', 'en');
 }
 
-warmIntl((globalThis.PMJS_GAME_CONFIG || {}).intlWarmup);
+warmIntl(PMJS.config.intlWarmup);

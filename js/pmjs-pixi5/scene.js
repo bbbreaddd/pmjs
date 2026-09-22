@@ -85,9 +85,7 @@
 
   function reject(capability, node, detail) {
     var producer = node && node.constructor && node.constructor.name || 'DisplayObject';
-    if (typeof nativeCompatibilityHit === 'function') {
-      nativeCompatibilityHit(capability, producer);
-    }
+    PMJS.compat.hit(capability, producer);
     throw new Error('unsupported Pixi 5 native capability: ' +
       capability + ': ' + producer + (detail ? ': ' + detail : ''));
   }
@@ -296,6 +294,5 @@
     NativeHost.scene.submit(packetVersion, metadata, values, count);
   }
 
-  globalThis.pmjsPixi5TextureSource = textureSource;
   globalThis.pmjsPixi5RenderScene = render;
 })();

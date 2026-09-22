@@ -1,6 +1,8 @@
 {
   "modules": [
+    "js/pmjs-core/config.js",
     "js/pmjs-core/optimizations.js",
+    "js/pmjs-core/compatibility.js",
     "js/pmjs-core/methods.js",
     "js/pmjs-rpgmaker/lifecycle.js",
     "js/pmjs-rpgmaker/plugins.js",

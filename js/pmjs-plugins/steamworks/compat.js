@@ -1,7 +1,6 @@
 'use strict';
 (function() {
-  var steam = (typeof pmjsGameConfig !== 'undefined' && pmjsGameConfig.steam) ||
-    (globalThis.PMJS_GAME_CONFIG && globalThis.PMJS_GAME_CONFIG.steam) || {};
+  var steam = PMJS.config.steam || {};
   if (steam.provider !== 'portable') return;
   function createClient(appId) {
     var effectiveAppId = appId || steam.appId || 0;
@@ -34,6 +33,5 @@
     restartAppIfNecessary: function() { return false; }, runCallbacks: function() {},
     electronEnableSteamOverlay: function() {}
   };
-  globalThis.__pmjsSteamworksCompat = compat;
   registerCommonJsModule('steamworks.js', compat);
 })();

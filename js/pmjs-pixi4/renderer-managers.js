@@ -237,11 +237,11 @@ NativeFilterManager.prototype.returnRenderTarget = function(target) {
   pool.push(target);
 };
 NativeFilterManager.prototype.applyFilter = function(filter) {
-  nativeCompatibilityHit('renderer.filter-manager',
+  PMJS.compat.hit('renderer.filter-manager',
     filter && filter.constructor && filter.constructor.name || 'Filter');
 };
 NativeFilterManager.prototype.syncUniforms = function(shader, filter) {
-  nativeCompatibilityHit('renderer.filter-uniforms',
+  PMJS.compat.hit('renderer.filter-uniforms',
     filter && filter.constructor && filter.constructor.name || 'Filter');
 };
 NativeFilterManager.prototype.getPotRenderTarget = function(gl, width, height,
@@ -428,7 +428,7 @@ NativeObjectRenderer.prototype.onContextChange = function() {};
 NativeObjectRenderer.prototype.stop = function() {};
 NativeObjectRenderer.prototype.flush = function() {};
 NativeObjectRenderer.prototype.render = function(displayObject) {
-  nativeCompatibilityHit('renderer.object-plugin', this.name);
+  PMJS.compat.hit('renderer.object-plugin', this.name);
   throw new Error('native renderer plugin has no direct-call adapter: ' +
     this.name + (displayObject && displayObject.constructor ?
       ' (' + displayObject.constructor.name + ')' : ''));

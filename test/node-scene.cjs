@@ -18,12 +18,6 @@ if (schema.version !== native.scene.packetVersion ||
   throw new Error('native scene schema is incomplete');
 }
 
-native.input.inject(1 << 2);
-if ((native.input.state() & (1 << 2)) === 0) {
-  throw new Error('injected input was not visible');
-}
-native.input.inject(0);
-
 const canvas = native.canvas.create(1, 1);
 const rgba = new Uint8ClampedArray([12, 34, 56, 255]);
 native.canvas.writePixels(canvas.handle, 0, 0, 1, 1, rgba);

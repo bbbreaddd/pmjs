@@ -186,6 +186,7 @@ function setupEnvironment({ config = {}, env = {} } = {}) {
   };
 
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-core/config.js'), 'utf8'), context);
   vm.runInContext(optimizationsSource, context, { filename: 'optimizations.js' });
   vm.runInContext(bitmapSource, context, { filename: 'bitmap.js' });
 

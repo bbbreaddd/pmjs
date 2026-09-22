@@ -24,38 +24,14 @@
     } catch (_) {}
   }
 
-  var dialogHits = Object.create(null);
-  var dialogVerbose = false;
-  try {
-    dialogVerbose = NativeHost.runtime.env('PMJS_COMPAT_VERBOSE') === '1';
-  } catch (_) {}
-  // Same [pmjs-compat] records the report merges, without routing through
-  // the throwing strict-compat counter.
-  var compatObserved = (typeof nativeCompatibilityObserved === 'function') ?
-    nativeCompatibilityObserved : null;
   function noteDialogHit(capability, message) {
-    var detail = String(message).slice(0, 160);
-    if (compatObserved) {
-      try {
-        compatObserved(capability, detail);
-      } catch (_) {}
-      return;
-    }
-    var count = (dialogHits[capability] || 0) + 1;
-    dialogHits[capability] = count;
-    if (count === 1 && dialogVerbose) {
-      console.log('[pmjs-compat] ' + JSON.stringify({
-        capability: capability,
-        detail: detail
-      }));
-    }
+    PMJS.compat.observed(capability, String(message).slice(0, 160));
   }
 
   try {
     var candidates = [];
-    if (typeof pmjsGameConfig !== 'undefined' && pmjsGameConfig &&
-        pmjsGameConfig.fonts && pmjsGameConfig.fonts.GameFont) {
-      candidates.push(String(pmjsGameConfig.fonts.GameFont));
+    if (PMJS.config.fonts && PMJS.config.fonts.GameFont) {
+      candidates.push(String(PMJS.config.fonts.GameFont));
     }
     if (globalThis.PMJS && PMJS.fonts && typeof PMJS.fonts.resolveDescriptor === 'function') {
       var resolvedGameFont = PMJS.fonts.resolveDescriptor('16px GameFont');

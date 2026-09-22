@@ -33,7 +33,6 @@ globalThis.__pmjsUpdateWindowState = function(state) {
     globalThis.document.dispatchEvent({ type: 'visibilitychange', target: document });
   }
 };
-var pmjsGameConfig = globalThis.PMJS_GAME_CONFIG || {};
 var nativeLogicalWidth = (globalThis.__pmjsGameInfo && Number(globalThis.__pmjsGameInfo.width)) ||
   Number(NativeHost.runtime.env('PMJS_GAME_WIDTH') || 640);
 var nativeLogicalHeight = (globalThis.__pmjsGameInfo && Number(globalThis.__pmjsGameInfo.height)) ||
@@ -111,46 +110,6 @@ globalThis.resizeBy = function() {};
 globalThis.scrollBy = function() {};
 globalThis.scrollTo = function() {};
 
-var legacyRegExpResult = null;
-var legacyRegExpInput = '';
-var originalRegExpExec = RegExp.prototype.exec;
-var originalStringSplit = String.prototype.split;
-if (NativeHost.runtime.env('PMJS_RUNTIME') !== 'node-v8-native-addon') {
-  String.prototype.split = function(separator, limit) {
-    if (limit === undefined && separator instanceof RegExp &&
-        separator.source === '[\\r\\n]+' && separator.flags === '') {
-      return NativeHost.runtime.splitLines(String(this));
-    }
-    return originalStringSplit.call(this, separator, limit);
-  };
-  RegExp.prototype.exec = function(input) {
-    var result = originalRegExpExec.call(this, input);
-    if (result) {
-      legacyRegExpInput = String(input);
-      legacyRegExpResult = result;
-    }
-    return result;
-  };
-  for (var captureIndex = 1; captureIndex < 10; captureIndex++) {
-    (function(index) {
-      Object.defineProperty(RegExp, '$' + index, {
-        configurable: true,
-        get: function() {
-          var value = legacyRegExpResult && legacyRegExpResult[index];
-          return value === undefined ? '' : value;
-        }
-      });
-    })(captureIndex);
-  }
-  Object.defineProperty(RegExp, 'lastMatch', {
-    configurable: true,
-    get: function() { return legacyRegExpResult ? legacyRegExpResult[0] : ''; }
-  });
-  Object.defineProperty(RegExp, 'input', {
-    configurable: true,
-    get: function() { return legacyRegExpInput; }
-  });
-}
 function GamepadButton() { this._value = 0; }
 Object.defineProperties(GamepadButton.prototype, {
   pressed: { get: function() { return this._value > 0.5; } },

@@ -140,6 +140,7 @@ function setupEnvironment({ config = {}, env = {}, beforeInstall } = {}) {
   }
 
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-core/config.js'), 'utf8'), context);
   vm.runInContext(optimizationsSource, context, { filename: 'optimizations.js' });
   vm.runInContext(methodsSource, context, { filename: 'methods.js' });
   vm.runInContext(rendererSource, context, { filename: 'renderer.js' });

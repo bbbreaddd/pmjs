@@ -18,6 +18,7 @@ function loadRegistry({ config, env = {} } = {}) {
     NativeHost: { runtime: { env(name) { return env[name]; } } },
   };
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-core/config.js'), 'utf8'), context);
   vm.runInContext(optimizationsSource, context, { filename: 'optimizations.js' });
   return { context, logs, PMJS: context.PMJS };
 }
@@ -199,15 +200,6 @@ test('diagnostics stay silent by default and dump on finalize', () => {
   assert.ok(full.logs.length === full.PMJS.optimizations.ids().length);
   assert.ok(full.logs.every(line => line.startsWith('[pmjs-opt] ')));
   assert.ok(full.logs.some(line => line.endsWith(' enabled')));
-});
-
-test('consumers without the registry module default to enabled', () => {
-  const context = {};
-  vm.createContext(context);
-  const enabled = vm.runInContext(
-    "typeof pmjsOptimizationEnabled !== 'function' || pmjsOptimizationEnabled('x')",
-    context);
-  assert.equal(enabled, true);
 });
 
 test('owners can refuse an unrecognized shape with a reason', () => {

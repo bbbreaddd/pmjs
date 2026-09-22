@@ -143,7 +143,7 @@ function createNativePixiRenderer(width, height, options) {
     },
     bindShader: function(shader) {
       this._activeShader = shader || null;
-      if (shader) nativeCompatibilityHit('renderer.shader-bind',
+      if (shader) PMJS.compat.hit('renderer.shader-bind',
         shader.constructor && shader.constructor.name || 'Shader');
       return this;
     },
@@ -156,7 +156,7 @@ function createNativePixiRenderer(width, height, options) {
         bind: function() { return this; },
         unbind: function() { return this; },
         draw: function() {
-          nativeCompatibilityHit('renderer.vao-draw', 'direct');
+          PMJS.compat.hit('renderer.vao-draw', 'direct');
           return this;
         },
         destroy: function() {

@@ -132,8 +132,8 @@ test('unknown port optimization IDs fail the run at startup', async () => {
   const tempDir = temporaryDirectory('pmjs-runner-unknown-opt-');
   const config = path.join(tempDir, 'config.json');
   fs.writeFileSync(config, JSON.stringify({ disableOptimizations: ['terrax.nativeLight'] }));
-  const manifest = path.join(tempDir, 'manifest.json');
-  fs.writeFileSync(manifest, JSON.stringify({ modules: [
+  const modules = [
+    'js/pmjs-core/config.js',
     'js/pmjs-core/optimizations.js',
     'js/pmjs-core/methods.js',
     'js/pmjs-rpgmaker/lifecycle.js',
@@ -141,12 +141,12 @@ test('unknown port optimization IDs fail the run at startup', async () => {
       'js/pmjs-rpgmaker/bootstrap.js',
     'js/pmjs-mv/setup.js',
     'js/pmjs-mv/plugin-loader.js',
-  ] }));
+  ];
   const bootstrap = path.join(tempDir, 'bootstrap.js');
-  const tool = path.join(__dirname, '..', 'tools', 'build-js-runtime.mjs');
-  childProcess.execFileSync(process.execPath,
-    [tool, '--root', path.join(__dirname, '..'), '--manifest', manifest,
-      '--config', config, '--output', bootstrap]);
+  fs.writeFileSync(bootstrap,
+    `globalThis.PMJS_GAME_CONFIG = ${fs.readFileSync(config, 'utf8')};\n` +
+    modules.map(module => fs.readFileSync(path.join(__dirname, '..', module), 'utf8'))
+      .join('\n'));
   // Standard boot initializes plugins, runs the last registration seam
   // (beforeBoot), then finalizes before game boot; finalization rejects
   // the requested-but-unregistered ID. Mirrors bootstrap.js ordering.

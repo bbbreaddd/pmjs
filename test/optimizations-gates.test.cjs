@@ -71,6 +71,7 @@ function loadScenePrimitives({ disableOptimizations = [], env = {} } = {}) {
     return this._native;
   };
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-core/config.js'), 'utf8'), context);
   vm.runInContext(optimizationsSource, context, { filename: 'optimizations.js' });
   vm.runInContext(scenePrimitivesSource, context, { filename: 'scene-primitives.js' });
   return { context, calls };
@@ -304,8 +305,10 @@ test('storage.read-burst-coalesce disables cleanly via optimization gate', () =>
     };
     context.globalThis = context;
     vm.createContext(context);
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-core/config.js'), 'utf8'), context);
     vm.runInContext(optimizationsSource, context);
     vm.runInContext(storageSource, context);
+    vm.runInContext('installNativeStorageManager()', context);
     return { context, getReads: () => reads };
   }
 

@@ -4,8 +4,7 @@ Utils.canReadGameFiles = function() { return true; };
 
 if (typeof SceneManager !== 'undefined') {
   SceneManager.isFocus = function() { return true; };
-  if (globalThis.PMJS_DEVELOPMENT_MODE ||
-      (typeof pmjsGameConfig !== 'undefined' && pmjsGameConfig.developmentMode)) {
+  if (globalThis.PMJS_DEVELOPMENT_MODE || PMJS.config.developmentMode) {
     SceneManager.catchException = function(error) { throw error; };
   }
 }

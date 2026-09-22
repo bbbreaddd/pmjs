@@ -33,15 +33,14 @@ function writeMzGame(root, { pixiVersion = '5.3.12', plugins = [] } = {}) {
 }
 test('bundle generation is deterministic and confined to the explicit root', () => {
   const root = temporaryDirectory('pmjs-bundle-');
-  fs.writeFileSync(path.join(root, 'a.js'), 'one();\n');
-  fs.writeFileSync(path.join(root, 'manifest.json'), JSON.stringify({ modules: ['a.js'] }));
-  const args = [tool, '--root', root, '--manifest', 'manifest.json', '--output', 'out.js'];
+  const game = writeMvGame(root);
+  const args = [tool, '--root', root, '--game', game, '--output', 'out.js'];
   childProcess.execFileSync(process.execPath, args);
   const first = fs.readFileSync(path.join(root, 'out.js'), 'utf8');
   childProcess.execFileSync(process.execPath, [...args, '--check']);
   assert.equal(fs.readFileSync(path.join(root, 'out.js'), 'utf8'), first);
   assert.throws(() => childProcess.execFileSync(process.execPath,
-    [tool, '--root', root, '--manifest', 'manifest.json', '--output', '../escape.js']),
+    [tool, '--root', root, '--game', game, '--output', '../escape.js']),
   /output must be inside root/);
 });
 
@@ -52,21 +51,16 @@ test('bundle generation supports --profile with JSON --config and --compat', () 
   const out = path.join(tempDir, 'out.js');
   fs.writeFileSync(config, JSON.stringify({ title: 'JSON Title', display: { width: 960, height: 540 } }));
   fs.writeFileSync(compat, 'globalThis.COMPAT_LOADED = true;\n');
-
-  const args = [tool, '--profile', 'mv', '--config', config, '--compat', compat, '--output', out];
-  childProcess.execFileSync(process.execPath, args);
-
+  childProcess.execFileSync(process.execPath,
+    [tool, '--profile', 'mv', '--config', config, '--compat', compat, '--output', out]);
   const bundleContent = fs.readFileSync(out, 'utf8');
   assert.match(bundleContent, /globalThis\.PMJS_GAME_CONFIG = \{/);
   assert.match(bundleContent, /"title": "JSON Title"/);
   assert.match(bundleContent, /\/\/ BEGIN compat\.js\nglobalThis\.COMPAT_LOADED = true;\n\/\/ END compat\.js/);
-
-  const configIndex = bundleContent.indexOf('PMJS_GAME_CONFIG');
-  const compatIndex = bundleContent.indexOf('COMPAT_LOADED');
-  const bootstrapIndex = bundleContent.indexOf('BEGIN js/pmjs-mv/bootstrap.js');
-
-  assert.ok(configIndex < compatIndex, 'config must precede compat');
-  assert.ok(compatIndex < bootstrapIndex, 'compat must precede bootstrap');
+  assert.ok(bundleContent.indexOf('PMJS_GAME_CONFIG') <
+    bundleContent.indexOf('COMPAT_LOADED'));
+  assert.ok(bundleContent.indexOf('COMPAT_LOADED') <
+    bundleContent.indexOf('BEGIN js/pmjs-mv/bootstrap.js'));
 });
 
 test('bundle validates disableOptimizations shape and orders the registry first', () => {
@@ -81,12 +75,14 @@ test('bundle validates disableOptimizations shape and orders the registry first'
     [tool, '--profile', 'mv', '--config', good, '--output', out]);
   const bundleContent = fs.readFileSync(out, 'utf8');
   const configIndex = bundleContent.indexOf('PMJS_GAME_CONFIG');
+  const configModuleIndex = bundleContent.indexOf('BEGIN js/pmjs-core/config.js');
   const registryIndex = bundleContent.indexOf('BEGIN js/pmjs-core/optimizations.js');
   const lifecycleIndex = bundleContent.indexOf(
     'BEGIN js/pmjs-rpgmaker/lifecycle.js');
   const setupIndex = bundleContent.indexOf('BEGIN js/pmjs-mv/setup.js');
-  assert.ok(configIndex >= 0 && registryIndex > configIndex,
-    'registry must follow the injected config');
+  assert.ok(configIndex >= 0 && configModuleIndex > configIndex &&
+    registryIndex > configModuleIndex,
+  'registry must follow the injected config and core config module');
   assert.ok(lifecycleIndex > registryIndex && setupIndex > lifecycleIndex,
     'registry and shared lifecycle must precede MV setup');
 

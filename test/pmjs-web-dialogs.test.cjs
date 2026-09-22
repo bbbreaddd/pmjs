@@ -7,6 +7,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'js', 'pmjs-web', 'dialogs.js'), 'utf8');
+const compatibilitySource = fs.readFileSync(path.join(__dirname, '..', 'js', 'pmjs-core', 'compatibility.js'), 'utf8');
 
 function makeContext({ env = {}, dialog = null, fsExists = () => false } = {}) {
   const calls = [];
@@ -20,6 +21,8 @@ function makeContext({ env = {}, dialog = null, fsExists = () => false } = {}) {
   };
   context.globalThis = context;
   vm.createContext(context);
+  context.PMJS = {};
+  vm.runInContext(compatibilitySource, context);
   vm.runInContext(source, context);
   return { context, calls };
 }
@@ -36,7 +39,8 @@ test('interactive alert/confirm delegate to the native modal host', () => {
   vm.runInContext('alert("hi")', context);
   assert.equal(vm.runInContext('confirm("sure?")', context), true);
   assert.deepEqual(seen.map(([kind]) => kind), ['alert', 'confirm']);
-  assert.equal(calls.length, 0);
+  assert.deepEqual(calls.map(message => JSON.parse(message.replace('[pmjs-compat] ', '')).capability),
+    ['browser.dialog.alert', 'browser.dialog.confirm']);
 });
 
 test('strict mode throws instead of showing dialogs', () => {
@@ -119,9 +123,9 @@ test('shared observed hook records evidence without verbose mode', () => {
       fs: { exists: () => false, isDirectory: () => false },
       runtime: { env: () => undefined }
     },
-    nativeCompatibilityObserved: (capability, detail) => {
+    PMJS: { compat: { observed: (capability, detail) => {
       observed.push(capability + ':' + detail);
-    },
+    } }, config: {} },
     console: { log: message => logged.push(message) }
   };
   context.globalThis = context;
@@ -151,7 +155,8 @@ test('dialog font prefers game config over stock faces', () => {
       fs: { exists: () => true, isDirectory: () => false },
       runtime: { env: () => undefined }
     },
-    pmjsGameConfig: { fonts: { GameFont: 'fonts/custom.ttf' } },
+    PMJS: { config: { fonts: { GameFont: 'fonts/custom.ttf' } },
+      compat: { observed() {} } },
     console: { log: () => {} }
   };
   context.globalThis = context;

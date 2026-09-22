@@ -114,56 +114,9 @@ if(BUILD_TESTING)
   add_test(NAME native-input COMMAND
     ${XVFB_RUN} -a $<TARGET_FILE:pmjs-platform-input-test>)
   set_tests_properties(native-input PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
-  set(PMJS_JS_TESTS
-      test/achievements.test.cjs
-      test/bitmap-blt-pristine.test.cjs
-      test/build-js-runtime.test.cjs
-      test/canvas-content-revision.test.cjs
-      test/canvas-gradients.test.cjs
-      test/fonts.test.cjs
-      test/game-inspect.test.cjs
-      test/input-edge-retention.test.cjs
-      test/methods.test.cjs
-      test/mv-audio-object-url.test.cjs
-      test/mv-autorun-common-events.test.cjs
-      test/mv-platform-semantics.test.cjs
-      test/mv-post-guest-hooks.test.cjs
-      test/mv-shared-boundaries.test.cjs
-      test/mv-timing-contract.test.cjs
-      test/mz-bootstrap.test.cjs
-      test/mz-fonts.test.cjs
-      test/mz-main-loop.test.cjs
-      test/mz-platform.test.cjs
-      test/object-urls.test.cjs
-      test/olivia-horror-effects.test.cjs
-      test/operation-trace.test.cjs
-      test/optimizations-gates.test.cjs
-      test/optimizations.test.cjs
-      test/pixi-render-preflight.test.cjs
-      test/pixi5-renderer.test.cjs
-      test/plugin-patches.test.cjs
-      test/plugins.test.cjs
-      test/pmjs-web-dialogs.test.cjs
-      test/runner.test.cjs
-      test/runtime-contract.test.cjs
-      test/scene-encoders.test.cjs
-      test/scene-filter-purity.test.cjs
-      test/scene-record-clear.test.cjs
-      test/scheduler.test.cjs
-      test/sprite-native-tint.test.cjs
-      test/storage.test.cjs
-      test/terrax-lighting.test.cjs
-      test/video-element.test.cjs
-      test/yanfly-event-mini-label.test.cjs
-      test/yanfly-slippery-tiles.test.cjs
-      test/yed-tiled.test.cjs)
-  file(GLOB PMJS_DISCOVERED_JS_TESTS CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
+  file(GLOB PMJS_JS_TESTS CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/test/*.test.cjs")
   list(SORT PMJS_JS_TESTS)
-  list(SORT PMJS_DISCOVERED_JS_TESTS)
-  if(NOT PMJS_JS_TESTS STREQUAL PMJS_DISCOVERED_JS_TESTS)
-    message(FATAL_ERROR "Update PMJS_JS_TESTS to include every test/*.test.cjs file")
-  endif()
   foreach(PMJS_JS_TEST IN LISTS PMJS_JS_TESTS)
     get_filename_component(PMJS_TEST_NAME "${PMJS_JS_TEST}" NAME_WE)
     add_test(NAME "js-${PMJS_TEST_NAME}" COMMAND ${NODE_EXECUTABLE} --test

@@ -99,37 +99,6 @@ napi_value windowState(napi_env env, napi_callback_info) try {
   return nullptr;
 }
 
-napi_value presentation(napi_env env, napi_callback_info) try {
-  State& value = host(env);
-  napi_value result;
-  check(env, napi_create_object(env, &result), "cannot create presentation state");
-  check(env, napi_set_named_property(env, result, "requested",
-    number(env, value.platform.requestedSwapInterval())),
-        "cannot set requested swap interval");
-  check(env, napi_set_named_property(env, result, "accepted",
-    boolean(env, value.platform.swapIntervalAccepted())),
-    "cannot set swap acceptance");
-  check(env, napi_set_named_property(env, result, "driver",
-    number(env, value.platform.swapInterval())), "cannot set driver swap interval");
-  return result;
-} catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what());
-  return nullptr;
-}
-
-napi_value waitUntil(napi_env env, napi_callback_info info) try {
-  const auto args = arguments(env, info, 1);
-  if (args.size() != 1) throw std::runtime_error("waitUntil requires a deadline");
-  const auto deadline = std::chrono::duration<double, std::milli>(
-    asNumber(env, args[0]));
-  std::this_thread::sleep_until(std::chrono::steady_clock::time_point(
-    std::chrono::duration_cast<std::chrono::steady_clock::duration>(deadline)));
-  return undefined(env);
-} catch (const std::exception& error) {
-  napi_throw_range_error(env, nullptr, error.what());
-  return nullptr;
-}
-
 napi_value beginFrame(napi_env env, napi_callback_info) try {
   host(env).renderer.beginFrame();
   return undefined(env);
@@ -138,22 +107,6 @@ napi_value beginFrame(napi_env env, napi_callback_info) try {
   return nullptr;
 } catch (...) {
   napi_throw_error(env, nullptr, "beginFrame failed");
-  return nullptr;
-}
-
-napi_value present(napi_env env, napi_callback_info) try {
-  State& value = host(env);
-  value.canvases.uploadDirty();
-  value.core.syncDrawableSize();
-  value.renderer.render();
-  value.platform.swap();
-  syncExternalMemory(env);
-  return undefined(env);
-} catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what());
-  return nullptr;
-} catch (...) {
-  napi_throw_error(env, nullptr, "present failed");
   return nullptr;
 }
 
@@ -195,17 +148,6 @@ napi_value swapFrame(napi_env env, napi_callback_info) try {
   return nullptr;
 } catch (...) {
   napi_throw_error(env, nullptr, "swapFrame failed");
-  return nullptr;
-}
-
-napi_value finishGpuWork(napi_env env, napi_callback_info) try {
-  host(env).platform.finishGpuWork();
-  return undefined(env);
-} catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what());
-  return nullptr;
-} catch (...) {
-  napi_throw_error(env, nullptr, "finishGpuWork failed");
   return nullptr;
 }
 
@@ -363,17 +305,13 @@ void registerRuntimeBindings(napi_env env, napi_value exports) {
   method(env, exports, "pollEvents", pollEvents);
   method(env, exports, "finishLogicStep", finishLogicStep);
   method(env, exports, "beginFrame", beginFrame);
-  method(env, exports, "present", present);
   method(env, exports, "renderFrame", renderFrame);
   method(env, exports, "renderScene", renderScene);
-  method(env, exports, "finishGpuWork", finishGpuWork);
   method(env, exports, "swapFrame", swapFrame);
   napi_value runtime = moduleObject(env);
   method(env, runtime, "quit", quit);
   method(env, runtime, "env", environment);
   method(env, runtime, "monotonicNow", monotonicNow);
-  method(env, runtime, "waitUntil", waitUntil);
-  method(env, runtime, "presentation", presentation);
   method(env, runtime, "windowState", windowState);
   method(env, runtime, "displaySize", displaySize);
   method(env, runtime, "windowSize", windowSize);

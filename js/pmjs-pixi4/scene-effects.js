@@ -18,7 +18,7 @@ function resolveNativeAdvancedEffects(node, particleContext, activeFilters,
     var filterNames = filterPlan.filters.map(function(filter) {
       return filter && filter.constructor && filter.constructor.name || 'filter';
     }).join(',');
-    nativeCompatibilityHit('render.filter',
+    PMJS.compat.hit('render.filter',
       (node.constructor && node.constructor.name || 'node') + ':' + filterNames);
     return { blur: 0, groups: [] };
   }
@@ -32,7 +32,7 @@ function resolveNativeAdvancedEffects(node, particleContext, activeFilters,
     nativeAlphaMask(nodeMask) : null;
   if (!particleContext && nodeMask && !nativeClip && !nativeMask) {
 
-    nativeCompatibilityHit('render.mask',
+    PMJS.compat.hit('render.mask',
       node.constructor && node.constructor.name || 'node');
     return null;
   }

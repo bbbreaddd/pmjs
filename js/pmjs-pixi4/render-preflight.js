@@ -61,10 +61,10 @@
       });
     });
     report.rendererPlugins.forEach(function(name) {
-      nativeCompatibilityObserved('render.rendererPluginRegistration', name);
+      PMJS.compat.observed('render.rendererPluginRegistration', name);
     });
     report.renderMethodOverrides.forEach(function(name) {
-      nativeCompatibilityObserved('render.renderMethodOverride', name);
+      PMJS.compat.observed('render.renderMethodOverride', name);
     });
     return report;
   }

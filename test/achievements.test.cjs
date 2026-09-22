@@ -26,6 +26,7 @@ function harness(initial, catalog) {
       rename(from, to) { files.set(to, files.get(from)); files.delete(from); },
     } },
   };
+  context.PMJS = { config: context.PMJS_GAME_CONFIG };
   vm.createContext(context);
   vm.runInContext(coreCode, context);
   return { context, files, writes, store: context.pmjsAchievements };
@@ -119,7 +120,6 @@ test('Greenworks and steamworks.js adapters share the portable store', () => {
 test('does not advertise Steam modules without explicit portable policy', () => {
   const h = harness({}, []);
   h.context.PMJS_GAME_CONFIG.steam = {};
-  h.context.pmjsGameConfig = h.context.PMJS_GAME_CONFIG;
   const modules = {};
   h.context.registerCommonJsModule = (names, value) => {
     for (const name of Array.isArray(names) ? names : [names]) modules[name] = value;

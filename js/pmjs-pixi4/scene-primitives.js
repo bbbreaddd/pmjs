@@ -107,8 +107,7 @@ function ensureNativeTilingTexture(texture) {
     rotation, resolution].join(':');
   if (texture.__pmjsTilingCanvas &&
       texture.__pmjsTilingCanvasSignature === signature &&
-      (typeof pmjsOptimizationEnabled !== 'function' ||
-        pmjsOptimizationEnabled('scene.tiling-texture-cache'))) {
+      PMJS.optimizations.isEnabled('scene.tiling-texture-cache')) {
     if (typeof nativeMaterializationStats !== 'undefined') {
       nativeMaterializationStats.tilingHits++;
     }
@@ -221,8 +220,7 @@ function ensureNativeRectTileLayer(layer) {
   }
   var textureSignature = handles.join(':');
 
-  var usePersistentCache = typeof pmjsOptimizationEnabled !== 'function' ||
-    pmjsOptimizationEnabled('tilemap.persistent-layer-cache');
+  var usePersistentCache = PMJS.optimizations.isEnabled('tilemap.persistent-layer-cache');
   if (!usePersistentCache || !layer._pmjsNativeLayer ||
       layer._pmjsNativeCompiledGeneration !== generation ||
       layer._pmjsNativeTextureSignature !== textureSignature) {
@@ -236,8 +234,7 @@ function ensureNativeRectTileLayer(layer) {
         NativeHost.render.releaseTileLayer(layer._pmjsNativeLayer);
       }
       var transferredPoints = points;
-      if (typeof pmjsOptimizationEnabled !== 'function' ||
-          pmjsOptimizationEnabled('tilemap.bulk-layer-transfer')) {
+      if (PMJS.optimizations.isEnabled('tilemap.bulk-layer-transfer')) {
         var staging = layer._pmjsNativePointStaging;
         if (!staging || staging.length !== points.length) {
           staging = layer._pmjsNativePointStaging = new Float32Array(points.length);
@@ -284,14 +281,7 @@ var nativeSceneCount = 0;
 var nativeSceneBulkClear = false;
 var nativeSceneFilterDepth = 0;
 function nativeRenderHitCount() {
-  if (typeof nativeCompatibilityHits === 'undefined') return 0;
-  var total = 0;
-  Object.keys(nativeCompatibilityHits).forEach(function(capability) {
-    if (capability.indexOf('render.') === 0) {
-      total += nativeCompatibilityHits[capability];
-    }
-  });
-  return total;
+  return PMJS.compat.count('render.');
 }
 var nativeSceneBackgroundColor = null;
 var nativeSceneFilterAccessCache = new WeakMap();
@@ -319,8 +309,7 @@ function growNativeScene() {
 }
 
 function resetNativeSceneRecords() {
-  nativeSceneBulkClear = typeof pmjsOptimizationEnabled !== 'function' ||
-    pmjsOptimizationEnabled('scene.record-bulk-clear');
+  nativeSceneBulkClear = PMJS.optimizations.isEnabled('scene.record-bulk-clear');
 
   if (nativeSceneBulkClear && nativeSceneCount !== 0) {
     nativeSceneValues.fill(0, 0,
@@ -605,8 +594,7 @@ function nativeSpriteMaskGeometry(mask) {
 }
 
 function nativeSpriteRectangleMask(mask) {
-  if (typeof pmjsOptimizationEnabled === 'function' &&
-      !pmjsOptimizationEnabled('scene.solid-sprite-mask-clip')) return null;
+  if (!PMJS.optimizations.isEnabled('scene.solid-sprite-mask-clip')) return null;
   var geometry = nativeSpriteMaskGeometry(mask);
   if (!geometry || geometry.trim || Number(geometry.texture.rotate) !== 0) return null;
   var frame = geometry.rawFrame;
@@ -724,8 +712,7 @@ function ensureNativeGraphics(graphics, maskOnly) {
   var revisionProperty = maskOnly ? '__pmjsGraphicsMaskRevision' :
     '__pmjsGraphicsRevision';
   if (graphics[canvasProperty] && graphics[revisionProperty] === revision &&
-      (typeof pmjsOptimizationEnabled !== 'function' ||
-        pmjsOptimizationEnabled('scene.graphics-cache'))) {
+      PMJS.optimizations.isEnabled('scene.graphics-cache')) {
     return graphics[canvasProperty];
   }
   var bounds = graphics.getLocalBounds();
@@ -745,7 +732,7 @@ function ensureNativeGraphics(graphics, maskOnly) {
     if (!shape) continue;
     context.beginPath();
     if (!appendNativeGraphicsShape(context, shape)) {
-      nativeCompatibilityHit('render.graphics', 'shape=' + shape.type);
+      PMJS.compat.hit('render.graphics', 'shape=' + shape.type);
       graphics.__pmjsGraphicsUnsupported = true;
       return null;
     }
@@ -753,7 +740,7 @@ function ensureNativeGraphics(graphics, maskOnly) {
     for (var holeIndex = 0; holeIndex < holes.length; holeIndex++) {
       var holeShape = holes[holeIndex] && (holes[holeIndex].shape || holes[holeIndex]);
       if (!appendNativeGraphicsShape(context, holeShape)) {
-        nativeCompatibilityHit('render.graphics-hole',
+        PMJS.compat.hit('render.graphics-hole',
           'shape=' + (holeShape && holeShape.type));
         graphics.__pmjsGraphicsUnsupported = true;
         return null;
@@ -841,8 +828,7 @@ function ensureNativeGpuMesh(mesh) {
       uvTransform.d, uvTransform.tx, uvTransform.ty].join(',') || '',
     vertices.length, indices.length].join(':');
   if (mesh.__pmjsNativeMesh && mesh.__pmjsNativeMeshRevision === revision &&
-      (typeof pmjsOptimizationEnabled !== 'function' ||
-        pmjsOptimizationEnabled('scene.gpu-mesh-cache'))) {
+      PMJS.optimizations.isEnabled('scene.gpu-mesh-cache')) {
     if (typeof nativeMaterializationStats !== 'undefined') {
       nativeMaterializationStats.meshHits++;
     }

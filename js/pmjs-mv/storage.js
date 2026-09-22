@@ -1,6 +1,5 @@
 function installNativeStorageManager() {
   if (!NativeHost.storage || !globalThis.StorageManager) return;
-  // First install wins: later reinstalls (e.g. after plugins load) are no-ops.
   if (StorageManager._pmjsLoadPatched && StorageManager._pmjsExistsPatched) return;
   StorageManager.isLocalMode = function() { return true; };
   StorageManager.localFileDirectoryPath = function() { return '/save/'; };
@@ -34,8 +33,7 @@ function installNativeStorageManager() {
   var storageGeneration = 0;
 
   function currentReadBurst() {
-    if (typeof pmjsOptimizationEnabled === 'function' &&
-        !pmjsOptimizationEnabled('storage.read-burst-coalesce')) {
+    if (!PMJS.optimizations.isEnabled('storage.read-burst-coalesce')) {
       return null;
     }
     if (!readBurst || readBurst.generation !== storageGeneration) {
@@ -172,4 +170,3 @@ function installNativeStorageManager() {
     StorageManager._pmjsRemovePatched = true;
   }
 }
-installNativeStorageManager();

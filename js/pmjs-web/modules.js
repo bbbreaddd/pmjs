@@ -15,9 +15,7 @@ function registerCommonJsModule(names, exports) {
   }
 }
 function countNwCompatibilityUse(method) {
-  if (typeof nativeCompatibilityHit === 'function') {
-    nativeCompatibilityHit('browser.nwGui', method);
-  }
+  PMJS.compat.hit('browser.nwGui', method);
 }
 function compatibilityCountedNoop(method) {
   return function() { countNwCompatibilityUse(method); };
@@ -68,7 +66,7 @@ var nativeWindow = {
     countNwCompatibilityUse('Window.height');
   },
   get title() {
-    return (globalThis.__pmjsGameInfo && globalThis.__pmjsGameInfo.title) || pmjsGameConfig.title || 'PMJS';
+    return (globalThis.__pmjsGameInfo && globalThis.__pmjsGameInfo.title) || PMJS.config.title || 'PMJS';
   },
   set title(v) {
     globalThis.__pmjsSetWindowTitle(v);
@@ -160,7 +158,7 @@ function requireModule(request, parentDirectory) {
 globalThis.require = function(request) { return requireModule(request, '.'); };
 globalThis.nw = nativeNwGui;
 var hostProcessVersions = typeof process !== 'undefined' && process.versions ? process.versions : {};
-var nwCompatVersion = pmjsGameConfig.nwVersion || '0.29.0';
+var nwCompatVersion = PMJS.config.nwVersion || '0.29.0';
 globalThis.process = {
   platform: nativePlatform.platform,
   arch: nativePlatform.arch,

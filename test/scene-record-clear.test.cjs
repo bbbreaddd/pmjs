@@ -18,14 +18,13 @@ function makeHost(bulkClear) {
       this.worldAlpha = 1;
       this.transform = { worldTransform: { identity() {} } };
     } },
-    PMJS: { optimizations: { register() {} } },
+    PMJS: { optimizations: { register() {}, isEnabled: id =>
+      (id === 'scene.record-bulk-clear' ? bulkClear : true) } },
     NativeHost: { scene: { packetVersion: 1,
       schema: { version: 1, metadataStride: 7,
       valueStride: 41, transactionalSubmit: true } }, render: {} }
   };
   context.globalThis = context;
-  context.pmjsOptimizationEnabled = id =>
-    (id === 'scene.record-bulk-clear' ? bulkClear : true);
   vm.createContext(context);
   vm.runInContext(moduleSource, context, { filename: 'scene-primitives.js' });
   return context;
@@ -53,8 +52,8 @@ test('prefix fill and zero loop emit identical reused records', () => {
 test('bulk-clear flag resolves once per frame', () => {
   let reads = 0;
   const context = makeHost(true);
-  const host = context.pmjsOptimizationEnabled;
-  context.pmjsOptimizationEnabled = id => { reads++; return host(id); };
+  const host = context.PMJS.optimizations.isEnabled;
+  context.PMJS.optimizations.isEnabled = id => { reads++; return host(id); };
   context.resetNativeSceneRecords();
   for (let i = 0; i < 5; i++) {
     context.nativeSceneRecord(0, 1, 7, 0xffffff, 0,

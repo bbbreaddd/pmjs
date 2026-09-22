@@ -21,6 +21,7 @@ test('Pixi preflight reports plugin registrations and changed render hooks', () 
   const sandbox = {
     PIXI: { Sprite, WebGLRenderer: { __plugins: rendererPlugins } },
     Sprite: MVSprite,
+    PMJS: { compat: { observed: (capability, detail) => hits.push([capability, detail]) } },
     nativeCompatibilityObserved(capability, detail) {
       hits.push([capability, detail]);
     }
@@ -50,6 +51,7 @@ test('Pixi preflight inventories dormant registrations without strict failure', 
   const registered = {};
   const sandbox = {
     PIXI: { Sprite, WebGLRenderer: { __plugins: registered } },
+    PMJS: { compat: { observed() {} } },
     nativeCompatibilityHit(capability) {
       throw new Error('unsupported native capability: ' + capability);
     },
@@ -59,7 +61,8 @@ test('Pixi preflight inventories dormant registrations without strict failure', 
   vm.runInNewContext(source, sandbox);
   registered.unknown = function() {};
   assert.doesNotThrow(() => sandbox.pmjsPixiRenderPreflight.scan());
-  assert.equal(sandbox.PMJS, undefined);
+  assert.deepEqual(Array.from(sandbox.pmjsPixiRenderPreflight.report.rendererPlugins),
+    ['unknown']);
 });
 
 test('patched tilemap composite hooks are reported, not gated', () => {
@@ -72,6 +75,7 @@ test('patched tilemap composite hooks are reported, not gated', () => {
   const sandbox = { PIXI: { DisplayObject, Container,
     tilemap: { RectTileLayer, CompositeRectTileLayer },
     WebGLRenderer: { __plugins: {} } },
+  PMJS: { compat: { observed: (capability, detail) => hits.push([capability, detail]) } },
   nativeCompatibilityObserved(capability, detail) {
     hits.push([capability, detail]);
   } };

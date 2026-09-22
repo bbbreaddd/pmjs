@@ -8,6 +8,8 @@ const vm = require('node:vm');
 
 const runtimeRoot = path.resolve(__dirname, '..');
 const registrySources = {
+  config: 'js/pmjs-core/config.js',
+  optimizations: 'js/pmjs-core/optimizations.js',
   lifecycle: 'js/pmjs-rpgmaker/lifecycle.js',
   methods: 'js/pmjs-core/methods.js',
   plugins: 'js/pmjs-rpgmaker/plugins.js',
@@ -349,6 +351,8 @@ test('YED adapter activates on its trigger plugin and ignores others', () => {
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
   const runtimeSources = {
+    config: 'js/pmjs-core/config.js',
+    optimizations: 'js/pmjs-core/optimizations.js',
     lifecycle: 'js/pmjs-rpgmaker/lifecycle.js',
     methods: 'js/pmjs-core/methods.js',
     plugins: 'js/pmjs-rpgmaker/plugins.js',
@@ -380,6 +384,8 @@ test('YED integration installs per plugin so later extensions wrap optimized beh
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
   const runtimeSources = {
+    config: 'js/pmjs-core/config.js',
+    optimizations: 'js/pmjs-core/optimizations.js',
     lifecycle: 'js/pmjs-rpgmaker/lifecycle.js',
     methods: 'js/pmjs-core/methods.js',
     plugins: 'js/pmjs-rpgmaker/plugins.js',
@@ -527,6 +533,7 @@ function makeAnimatedTilemap({
   vm.createContext(context);
   const optSrc = fs.readFileSync(
     path.join(runtimeRoot, 'js/pmjs-core/optimizations.js'), 'utf8');
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-core/config.js'), 'utf8'), context);
   vm.runInContext(optSrc, context, { filename: 'pmjs-core/optimizations.js' });
   loadRegistrySupport(context);
   vm.runInContext(source, context, { filename: 'js/pmjs-plugins/yed/tiled.js' });

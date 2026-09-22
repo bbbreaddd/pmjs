@@ -33,8 +33,8 @@ function gamePath(path) {
 
 function gameReadPath(path) {
   var resolved = gamePath(path);
-  var aliases = pmjsGameConfig.virtualFiles &&
-    pmjsGameConfig.virtualFiles.extensionAliases || {};
+  var aliases = PMJS.config.virtualFiles &&
+    PMJS.config.virtualFiles.extensionAliases || {};
   var extension = pathModule.extname(resolved);
   var replacement = aliases[extension.toLowerCase()];
   return replacement === undefined
@@ -42,8 +42,8 @@ function gameReadPath(path) {
 }
 
 function gameDirectoryEntries(path, entries) {
-  var aliases = pmjsGameConfig.virtualFiles &&
-    pmjsGameConfig.virtualFiles.directoryEntryAliases || {};
+  var aliases = PMJS.config.virtualFiles &&
+    PMJS.config.virtualFiles.directoryEntryAliases || {};
   var directory = normalizePath(path).replace(/\/$/, '').split('/').pop().toLowerCase();
   var extensions = aliases[directory];
   if (!extensions) return entries;
@@ -104,7 +104,7 @@ function fsReadContents(path, options) {
   var result = writable !== null && NativeHost.storage
     ? NativeHost.storage.readText(writable)
     : NativeHost.fs.readText(gameReadPath(path));
-  var missingFiles = pmjsGameConfig.missingTextFiles || {};
+  var missingFiles = PMJS.config.missingTextFiles || {};
   if (result === null && writable !== null &&
       Object.prototype.hasOwnProperty.call(missingFiles, writable)) {
     result = missingFiles[writable];

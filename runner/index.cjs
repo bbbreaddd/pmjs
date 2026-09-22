@@ -195,9 +195,6 @@ async function run(input, hooks = {}) {
   native.storage = createStorage(options.saveRoot);
   native.runtime.now = () => performance.now();
   native.runtime.platform = () => ({ platform: process.platform, arch: process.arch });
-  native.runtime.splitLines = value => String(value).split(/\r\n|\n|\r/);
-  native.runtime.collectGarbage = typeof globalThis.gc === 'function'
-    ? globalThis.gc.bind(globalThis) : () => {};
   native.runtime.loadScript = relative => {
     const source = native.fs.readText(relative);
     if (source === null) throw new Error(`cannot load script: ${relative}`);

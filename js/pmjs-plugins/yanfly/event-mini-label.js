@@ -105,9 +105,7 @@
   }
 
   function isOptimizationEnabled() {
-    if (typeof pmjsOptimizationEnabled === 'function') {
-      if (!pmjsOptimizationEnabled('plugins.yanfly.event-mini-label')) return false;
-    }
+    if (!PMJS.optimizations.isEnabled('plugins.yanfly.event-mini-label')) return false;
     try {
       if (typeof NativeHost !== 'undefined' && NativeHost &&
           NativeHost.runtime &&

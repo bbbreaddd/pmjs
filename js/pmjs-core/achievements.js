@@ -166,7 +166,6 @@
       resetStats: resetStats, flush: flush };
   }
   globalThis.createPortableAchievements = createPortableAchievements;
-  var config = (typeof pmjsGameConfig !== 'undefined' && pmjsGameConfig.achievements) ||
-    (globalThis.PMJS_GAME_CONFIG && globalThis.PMJS_GAME_CONFIG.achievements) || {};
+  var config = PMJS.config.achievements || {};
   globalThis.pmjsAchievements = createPortableAchievements({ storage: NativeHost.storage, catalog: config.catalog });
 })();

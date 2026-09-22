@@ -1,6 +1,8 @@
 {
   "modules": [
+    "js/pmjs-core/config.js",
     "js/pmjs-core/optimizations.js",
+    "js/pmjs-core/compatibility.js",
     "js/pmjs-core/methods.js",
     "js/pmjs-rpgmaker/lifecycle.js",
     "js/pmjs-rpgmaker/plugins.js",
@@ -30,7 +32,6 @@
     "js/pmjs-rpgmaker/input.js",
     "js/pmjs-mv/engine.js",
     "js/pmjs-mv/timing.js",
-    "js/pmjs-mv/display.js",
     "js/pmjs-mv/render-prepare.js",
     "js/pmjs-mv/images.js",
     "js/pmjs-mv/storage.js",

@@ -171,7 +171,7 @@ function resolveCapabilityManifest(manifest, manifestPath) {
       manifest.prepend !== undefined || manifest.append !== undefined ||
       manifest.portModules !== undefined || manifest.schema !== undefined ||
       manifest.engine !== undefined) {
-    throw new Error(`manifest ${manifestPath} mixes capability keys with legacy module positioning keys`);
+    throw new Error(`manifest ${manifestPath} uses unsupported module positioning keys`);
   }
   if (!gameArgument) throw new Error(`capability manifest ${manifestPath} requires --game`);
   const port = portFiles(manifest.port, manifestPath);
@@ -260,14 +260,7 @@ if (profileArgument) {
     ? manifestArgument
     : insideRoot(manifestArgument, 'manifest');
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-  if (manifest.modules !== undefined) {
-    if (!Array.isArray(manifest.modules) || !manifest.modules.length) {
-      throw new Error('bundle manifest requires a non-empty modules array');
-    }
-    rawModules = manifest.modules.map(mod => ({ module: mod, baseDir: root }));
-  } else {
-    rawModules = resolveCapabilityManifest(manifest, manifestPath);
-  }
+  rawModules = resolveCapabilityManifest(manifest, manifestPath);
 } else {
   rawModules = resolveCapabilityManifest({}, '<command line>');
 }

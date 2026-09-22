@@ -16,6 +16,7 @@ test('MV platform lets a plugin create and register its own scene ticker', () =>
   }
   const context = {
     Utils: {},
+    PMJS: { config: {} },
     SceneManager: {},
     PIXI: { ticker: { Ticker } }
   };
@@ -37,7 +38,8 @@ test('MV platform lets a plugin create and register its own scene ticker', () =>
 });
 
 function readMvSetup() {
-  return fs.readFileSync(path.join(jsDir, 'pmjs-rpgmaker/lifecycle.js'), 'utf8') +
+  return fs.readFileSync(path.join(jsDir, 'pmjs-core/config.js'), 'utf8') +
+    '\n' + fs.readFileSync(path.join(jsDir, 'pmjs-rpgmaker/lifecycle.js'), 'utf8') +
     '\n' + fs.readFileSync(path.join(jsDir, 'pmjs-core/methods.js'), 'utf8') +
     '\n' + fs.readFileSync(path.join(jsDir, 'pmjs-rpgmaker/plugins.js'), 'utf8') +
     '\n' + fs.readFileSync(path.join(jsDir, 'pmjs-core/optimizations.js'), 'utf8') +
@@ -61,6 +63,7 @@ test('two-pass PluginManager.setup allows cross-plugin parameter lookups', () =>
   const pluginLoaderCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/plugin-loader.js'), 'utf8');
   vm.runInContext(setupCode, context);
   vm.runInContext(pluginLoaderCode, context);
+  context.pmjsMvInstallPluginManagerHooks();
 
   let p1SawP2Params = null;
   context.PluginManager.loadScript = function(name) {
@@ -176,7 +179,8 @@ test('nw.gui stubs count their use without changing behavior', () => {
     nativePlatform: { platform: 'linux', arch: 'x64' },
     nativeLogicalWidth: 800,
     nativeLogicalHeight: 600,
-    pmjsGameConfig: {},
+    PMJS: { config: {}, compat: { hit: (capability, detail) =>
+      hits.push([capability, String(detail)]) } },
     nativeCompatibilityHit(capability, detail) {
       hits.push([capability, String(detail)]);
     }
@@ -220,7 +224,7 @@ test('process.versions and process.version reflect host Node and NW.js compatibi
     nativePlatform: { platform: 'linux', arch: 'x64' },
     nativeLogicalWidth: 800,
     nativeLogicalHeight: 600,
-    pmjsGameConfig: {}
+    PMJS: { config: {} }
   };
   vm.createContext(context);
   const modulesCode = fs.readFileSync(path.join(jsDir, 'pmjs-web/modules.js'), 'utf8');
@@ -273,7 +277,7 @@ test('greenworks compatibility registers its supported module aliases', () => {
   const modules = {};
   const context = {
     console,
-    pmjsGameConfig: { steam: { provider: 'portable', appId: 123456 } },
+    PMJS: { config: { steam: { provider: 'portable', appId: 123456 } } },
     pmjsAchievements: {
       initialize: () => {},
       names: () => ['test'],
@@ -438,6 +442,7 @@ test('integrated stack: PluginManager.setup -> loadScript -> document.currentScr
   vm.runInContext(setupCode, context);
   vm.runInContext(scriptLoaderCode, context);
   vm.runInContext(pluginLoaderCode, context);
+  context.pmjsMvInstallPluginManagerHooks();
 
   const plugins = [
     { name: 'PluginOne', status: true, description: '', parameters: { opt1: 'v1' } },
@@ -620,6 +625,7 @@ test('Scene_Map same-map transfer does not short-circuit through reuse and prese
 
   const sandbox = {
     Utils: {},
+    PMJS: { config: {} },
     SceneManager: SceneManager,
     Scene_Map: Scene_Map,
     $gamePlayer: player,
@@ -669,8 +675,6 @@ test('Window_Base and Sprite_Base execute update without suppression', () => {
   };
   sandbox.Tilemap.prototype = {};
   const context = vm.createContext(sandbox);
-  const displayCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/display.js'), 'utf8');
-  vm.runInContext(displayCode, context);
 
   const win = new context.Window_Base();
   win.update();
@@ -870,6 +874,7 @@ test('synchronous-burst storage read coalescing preserves stock DataManager obje
 
   const sandbox = {
     NativeHost: { storage: mockStorage },
+    PMJS: { optimizations: { isEnabled: () => true } },
     StorageManager: StorageManager,
     DataManager: DataManager,
     LZString: mockLZString,
@@ -883,6 +888,7 @@ test('synchronous-burst storage read coalescing preserves stock DataManager obje
   const context = vm.createContext(sandbox);
   const storageCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/storage.js'), 'utf8');
   vm.runInContext(storageCode, context);
+  vm.runInContext('installNativeStorageManager()', context);
 
   const a = context.DataManager.loadGlobalInfo();
   const b = context.DataManager.loadGlobalInfo();
@@ -981,6 +987,7 @@ test('storage read coalescing runs underneath plugin wrappers and respects dynam
 
   const sandbox = {
     NativeHost: { storage: mockStorage },
+    PMJS: { optimizations: { isEnabled: () => true } },
     StorageManager: StorageManager,
     DataManager: DataManager,
     LZString: mockLZString,
@@ -995,6 +1002,7 @@ test('storage read coalescing runs underneath plugin wrappers and respects dynam
 
   const storageCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/storage.js'), 'utf8');
   vm.runInContext(storageCode, context);
+  vm.runInContext('installNativeStorageManager()', context);
 
   context.StorageManager.localFilePath = function(savefileId) {
     return '/save/' + activeProfile + '/file' + savefileId + '.rpgsave';
@@ -1043,6 +1051,7 @@ test('storage read coalescing runs underneath plugin wrappers and respects dynam
   assert.equal(physicalReads, 4, 'Direct NativeHost.storage write must invalidate read burst');
 
   vm.runInContext(storageCode, context);
+  vm.runInContext('installNativeStorageManager()', context);
   assert.equal(
     context.StorageManager.localFilePath(1),
     '/save/profileB/file1.rpgsave',
@@ -1084,6 +1093,7 @@ test('document.title and nw.Window.title read from and write to authoritative __
   const modulesCode = fs.readFileSync(path.join(jsDir, 'pmjs-web/modules.js'), 'utf8');
   const context = {
     globalThis: {},
+    PMJS: { config: {} },
     CanvasContext2D: function CanvasContext2D() {},
     nativeWindowState: { focused: true, visible: true },
     nativePlatform: { platform: 'linux', arch: 'x64' },
@@ -1091,7 +1101,7 @@ test('document.title and nw.Window.title read from and write to authoritative __
     nativeLogicalHeight: 624,
     NativeHost: { runtime: { env() { return ''; }, quit() {} } },
     __pmjsGameInfo: { title: 'Authoritative Game Title', width: 960, height: 720 },
-    pmjsGameConfig: { title: 'Fallback Config Title' },
+    __pmjsLegacyConfigTitle: 'Fallback Config Title',
     __pmjsSetWindowTitle(value) { this.__pmjsGameInfo.title = String(value); }
   };
   context.window = context;
@@ -1118,6 +1128,7 @@ test('screen and nw.Window report host dimensions while innerWidth/innerHeight r
   const windowTitles = [];
   const context = {
     globalThis: {},
+    PMJS: { config: {}, compat: { hit() {} } },
     CanvasContext2D: function CanvasContext2D() {},
     NativeHost: {
       runtime: {

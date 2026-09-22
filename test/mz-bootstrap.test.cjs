@@ -71,6 +71,7 @@ test('MZ plugin and boot lifecycle runs synchronously without main.js or Effekse
   runModule(context, 'js/pmjs-rpgmaker/lifecycle.js');
   runModule(context, 'js/pmjs-core/methods.js');
   runModule(context, 'js/pmjs-rpgmaker/plugins.js');
+  runModule(context, 'js/pmjs-core/config.js');
   runModule(context, 'js/pmjs-core/optimizations.js');
   runModule(context, 'js/pmjs-rpgmaker/bootstrap.js');
   context.PMJS.phases.on('beforePlugins', () => events.push(['hook', 'beforePlugins']));

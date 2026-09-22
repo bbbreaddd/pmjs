@@ -450,51 +450,12 @@ function contextFont(context) {
   }
   var sizeMatch = /(\d+(?:\.\d+)?)px/.exec(String(fontStr));
   var size = sizeMatch ? Math.max(1, Math.round(Number(sizeMatch[1]))) : 10;
-  var config = globalThis.pmjsGameConfig || {};
+  var config = PMJS.config;
   var files = config.fonts || {};
   var family = String(fontStr).split(/\s+/).pop().replace(/["']/g, '');
   return { path: files[family] || files.GameFont || 'fonts/gamefont.ttf', size: size };
 }
 
-var nativeCompatibilityHits = Object.create(null);
-var nativeCompatibilityStrict =
-  NativeHost.runtime.env('PMJS_STRICT_COMPAT') === '1';
-var nativeCompatibilityVerbose =
-  NativeHost.runtime.env('PMJS_COMPAT_VERBOSE') === '1';
-function nativeCompatibilityHit(capability, detail) {
-  var count = (nativeCompatibilityHits[capability] || 0) + 1;
-  nativeCompatibilityHits[capability] = count;
-  if (count === 1) {
-    var message = '[pmjs-compat] ' + capability + (detail ? ': ' + String(detail) : '');
-    if (typeof console !== 'undefined' && console.warn) {
-      console.warn(message);
-      if (nativeCompatibilityVerbose) {
-        console.warn(new Error().stack || '');
-      }
-    } else if (typeof console !== 'undefined' && console.log) {
-      console.log(message);
-      if (nativeCompatibilityVerbose) {
-        console.log(new Error().stack || '');
-      }
-    }
-  }
-  if (nativeCompatibilityStrict) {
-    throw new Error('unsupported native capability: ' + capability +
-      (detail ? ': ' + String(detail) : ''));
-  }
-}
-
-function nativeCompatibilityObserved(capability, detail) {
-  var count = (nativeCompatibilityHits[capability] || 0) + 1;
-  nativeCompatibilityHits[capability] = count;
-  if (count !== 1) return;
-  var event = {
-    capability: capability,
-    detail: detail || '',
-    frame: typeof Graphics === 'function' ? Graphics.frameCount : 0
-  };
-  console.log('[pmjs-compat] ' + JSON.stringify(event));
-}
 
 var nativeCanvasReleaseStats = { explicit: 0, finalizer: 0, sceneLifecycle: 0 };
 function noteCanvasRelease(reason) {
@@ -504,7 +465,7 @@ function noteCanvasRelease(reason) {
     else if (reason === 'scene-lifecycle') {
       nativeCanvasReleaseStats.sceneLifecycle++;
       try {
-        nativeCompatibilityHit('canvas.release.sceneLifecycle',
+        PMJS.compat.hit('canvas.release.sceneLifecycle',
           'total=' + nativeCanvasReleaseStats.sceneLifecycle);
       } catch (_) {}
       try {
@@ -547,9 +508,7 @@ globalThis.__pmjsCanvasReleaseStats = function() {
     finalizer: nativeCanvasReleaseStats.finalizer,
     sceneLifecycle: nativeCanvasReleaseStats.sceneLifecycle };
 };
-globalThis.__pmjsCompatibilityHits = function() {
-  return Object.assign({}, nativeCompatibilityHits);
-};
+
 
 CanvasContext2D.prototype.save = function() {
   this._stateStack.push({ transform: this._transform.slice(), fillStyle: this.fillStyle,

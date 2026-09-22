@@ -28,11 +28,13 @@ test('missing primary save recovers from backup without moving the primary durin
     saveToLocalFile(id, value) { storage.writeText('file' + id + '.rpgsave', value); }
   };
   const sandbox = { NativeHost: { storage }, StorageManager: manager,
+    PMJS: { optimizations: { isEnabled: () => true } },
     LZString: { decompressFromBase64: value => value },
     queueMicrotask, Promise, setTimeout };
   sandbox.globalThis = sandbox;
   const context = vm.createContext(sandbox);
   run(context, 'pmjs-mv/storage.js');
+  vm.runInContext('installNativeStorageManager()', context);
   assert.equal(manager.localFileExists(1), true);
   assert.equal(manager.loadFromLocalFile(1), 'old');
   manager.saveToLocalFile(1, 'new');
@@ -44,12 +46,13 @@ test('missing primary save recovers from backup without moving the primary durin
 test('native input wraps the guest replacement at the post-plugin boundary', () => {
   const events = [];
   const hooks = {};
-  const input = { _currentState: {}, update() { events.push('stock'); } };
+  const input = { _currentState: {}, keyMapper: { 13: 'ok' }, gamepadMapper: {},
+    _gamepadStates: [], update() { events.push('stock'); } };
   const sandbox = {
     Input: input,
+    __pmjsInputSnapshot: { keysDown: [13], keysPressed: [] },
     PMJS: { phases: { on(name, owner, callback) { hooks[name] = callback; } } },
-    NativeHost: { input: { down: action => action === 'ok', pressed: () => false,
-      consumePressed() { events.push('consumed'); } } }
+    NativeHost: { input: { consumePressed() { events.push('consumed'); } } }
   };
   sandbox.globalThis = sandbox;
   const context = vm.createContext(sandbox);
@@ -57,7 +60,12 @@ test('native input wraps the guest replacement at the post-plugin boundary', () 
   input.update = function() { events.push('guest'); };
   hooks.afterGuestPlugins();
   input.update();
-  assert.deepEqual(events, ['guest', 'consumed']);
+  input._currentState.ok = true;
+  input.keyMapper = { 13: 'cancel' };
+  input.update();
+  assert.deepEqual(events, ['guest', 'consumed', 'guest', 'consumed']);
+  assert.equal(input._currentState.ok, false);
+  assert.equal(input._currentState.cancel, true);
   assert.equal(input.update._pmjsNativeBridge, true);
 });
 
@@ -69,7 +77,8 @@ test('diagnostics inspect methods after plugins without replacing setup', () => 
     nativeCompatibilityStrict: true, nativeCompatibilityVerbose: false,
     nativeCompatibilityHit: (...args) => hits.push(args),
     PluginManager: { setup },
-    PMJS: { phases: { on(name, owner, callback) { hooks[name] = callback; } } }
+    PMJS: { phases: { on(name, owner, callback) { hooks[name] = callback; } },
+      compat: { audit: true, hit: (...args) => hits.push(args) } }
   };
   sandbox.globalThis = sandbox;
   const context = vm.createContext(sandbox);

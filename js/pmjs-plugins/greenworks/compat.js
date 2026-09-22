@@ -1,8 +1,7 @@
 'use strict';
 (function() {
   var noop = function() {};
-  var steam = (typeof pmjsGameConfig !== 'undefined' && pmjsGameConfig.steam) ||
-    (globalThis.PMJS_GAME_CONFIG && globalThis.PMJS_GAME_CONFIG.steam) || {};
+  var steam = PMJS.config.steam || {};
   if (steam.provider !== 'portable') return;
   var names = ['greenworks', 'greenworks.js', './greenworks', './greenworks.js',
     './js/libs/greenworks', './js/libs/greenworks.js'];

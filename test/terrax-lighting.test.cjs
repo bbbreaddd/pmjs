@@ -19,6 +19,10 @@ const pluginsSource = fs.readFileSync(
   path.join(runtimeRoot, 'js/pmjs-rpgmaker/plugins.js'), 'utf8');
 
 function loadRegistrySupport(context) {
+  if (!context.PMJS || !context.PMJS.optimizations) {
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-core/config.js'), 'utf8'), context);
+    vm.runInContext(optimizationsSource, context, { filename: 'optimizations.js' });
+  }
   vm.runInContext(lifecycleSource, context, { filename: 'lifecycle.js' });
   vm.runInContext(methodsSource, context, { filename: 'methods.js' });
   vm.runInContext(pluginsSource, context, { filename: 'plugins.js' });
@@ -56,6 +60,7 @@ test('registers terrax.native-lighting optimization', () => {
   };
   context.globalThis = context;
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-core/config.js'), 'utf8'), context);
   vm.runInContext(optimizationsSource, context);
   loadRegistrySupport(context);
   vm.runInContext(terraxSource, context);
@@ -85,6 +90,7 @@ test('native Terrax adapter retains one mask sprite', () => {
   };
   context.globalThis = context;
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-core/config.js'), 'utf8'), context);
   vm.runInContext(optimizationsSource, context);
   loadRegistrySupport(context);
   vm.runInContext(terraxSource, context);
@@ -158,6 +164,7 @@ test('native Terrax adapter records supported mask draws into one GPU layer', ()
   };
   context.globalThis = context;
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-core/config.js'), 'utf8'), context);
   vm.runInContext(optimizationsSource, context);
   loadRegistrySupport(context);
   vm.runInContext(terraxSource, context);
@@ -340,6 +347,7 @@ function terraxDisabledContext({ config, env }) {
   };
   context.globalThis = context;
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-core/config.js'), 'utf8'), context);
   vm.runInContext(optimizationsSource, context);
   loadRegistrySupport(context);
   vm.runInContext(terraxSource, context);

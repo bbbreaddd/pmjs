@@ -22,7 +22,7 @@ function pmjsBitmapClearImgInstanceWrap() {
           try { this._image.src = ''; } catch (_) {}
         }
       } catch (_) {}
-      nativeCompatibilityHit('bitmap._clearImgInstance');
+      PMJS.compat.hit('bitmap._clearImgInstance');
       return guestClearImgInstance.apply(this, arguments);
     };
     wrapped._pmjsNativeImageRelease = true;
@@ -34,7 +34,7 @@ if (typeof ImageCache !== 'undefined') {
   var gameRequestedImageCachePixels = Number(ImageCache.limit);
   if (!Number.isFinite(gameRequestedImageCachePixels) ||
       gameRequestedImageCachePixels < 0) gameRequestedImageCachePixels = 0;
-  var configuredImageCacheMaxPixels = Number(pmjsGameConfig.imageCacheMaxPixels || 0);
+  var configuredImageCacheMaxPixels = Number(PMJS.config.imageCacheMaxPixels || 0);
   try {
     var environmentImageCacheMaxPixels = Number(
       NativeHost.runtime.env('PMJS_IMAGE_CACHE_MAX_PIXELS') || 0);
@@ -86,7 +86,7 @@ if (typeof ImageCache !== 'undefined' && ImageCache.prototype._truncateCache) {
             });
             return;
           } catch (e) {
-            nativeCompatibilityHit('imageCache.truncateError', e && e.message || '');
+            PMJS.compat.hit('imageCache.truncateError', e && e.message || '');
           }
           return guestTruncate.apply(this, arguments);
         };
@@ -111,7 +111,7 @@ function pmjsScheduleImageCacheTrim() {
         ImageManager._imageCache._truncateCache();
       }
     } catch (error) {
-      nativeCompatibilityHit('imageCache.completionTrimError', error && error.message || '');
+      PMJS.compat.hit('imageCache.completionTrimError', error && error.message || '');
     }
   });
 }

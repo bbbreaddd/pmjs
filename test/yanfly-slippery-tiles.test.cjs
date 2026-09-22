@@ -82,6 +82,7 @@ function makeHost({
   vm.runInContext(lifecycleSource, context, { filename: 'lifecycle.js' });
   vm.runInContext(methodsSource, context, { filename: 'methods.js' });
   vm.runInContext(pluginsSource, context, { filename: 'plugins.js' });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-core/config.js'), 'utf8'), context);
   vm.runInContext(optimizationsSource, context, { filename: 'optimizations.js' });
   vm.runInContext(
     `Game_Map.prototype.isValid = function(x, y) { calls.isValid++; return true; };` +

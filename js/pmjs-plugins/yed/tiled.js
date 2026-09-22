@@ -193,8 +193,7 @@
       return false;
     }
 
-    var useIndexedPaintLoops = typeof pmjsOptimizationEnabled !== 'function' ||
-      pmjsOptimizationEnabled('tilemap.yed-indexed-paint-loops');
+    var useIndexedPaintLoops = PMJS.optimizations.isEnabled('tilemap.yed-indexed-paint-loops');
     if (!useIndexedPaintLoops) return true;
 
     tiledProto._compareChildOrder = compareYedTiledChildren;
@@ -340,8 +339,7 @@
     tiledProto._paintAllTiles._pmjsYedGuard = true;
     tiledProto._pmjsIndexedPaintLoops = true;
 
-    var useIndexedAnimation = typeof pmjsOptimizationEnabled !== 'function' ||
-        pmjsOptimizationEnabled('tilemap.yed-indexed-animation');
+    var useIndexedAnimation = PMJS.optimizations.isEnabled('tilemap.yed-indexed-animation');
 
     if (useIndexedAnimation && looksLikeKnownYedIndexedAnimation(tiledProto)) {
       tiledProto._paintTile = function(layer, startX, startY, x, y) {

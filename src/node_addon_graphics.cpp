@@ -49,21 +49,6 @@ napi_value drawImage(napi_env env, napi_callback_info info) try {
   napi_throw_range_error(env, nullptr, error.what()); return nullptr;
 }
 
-napi_value drawTiled(napi_env env, napi_callback_info info) try {
-  auto args = arguments(env, info, 16);
-  if (args.size() != 16) throw std::runtime_error("tiled requires render arguments");
-  State& value = host(env);
-  auto image = resolveImage(value, asUint32(env, args[0]));
-  bool ok = image && value.renderer.queueTiled(*image, floatArray<6>(env, args, 1),
-    floatArray<4>(env, args, 7), floatArray<2>(env, args, 11),
-    static_cast<float>(asNumber(env, args[13])), asUint32(env, args[14]),
-    asBlendMode(env, args[15]));
-  if (!ok) throw std::runtime_error("invalid tiled image");
-  return undefined(env);
-} catch (const std::exception& error) {
-  napi_throw_range_error(env, nullptr, error.what()); return nullptr;
-}
-
 std::vector<float> floatVector(napi_env env, napi_value input) {
   bool typed = false;
   check(env, napi_is_typedarray(env, input, &typed), "expected numeric array");
@@ -141,18 +126,6 @@ napi_value createMesh(napi_env env, napi_callback_info info) try {
     asUint32(env, args[4]) == 0);
   if (!mesh) throw std::runtime_error("invalid mesh geometry");
   return uint32(env, mesh);
-} catch (const std::exception& error) {
-  napi_throw_range_error(env, nullptr, error.what()); return nullptr;
-}
-
-napi_value drawTileLayer(napi_env env, napi_callback_info info) try {
-  auto args = arguments(env, info, 12);
-  bool ok = host(env).renderer.queueTileLayer(asUint32(env, args.at(0)),
-    floatArray<6>(env, args, 1), floatArray<2>(env, args, 7),
-    asNumber(env, args.at(9)), asUint32(env, args.at(10)),
-    asBlendMode(env, args.at(11)));
-  if (!ok) throw std::runtime_error("invalid tile layer");
-  return undefined(env);
 } catch (const std::exception& error) {
   napi_throw_range_error(env, nullptr, error.what()); return nullptr;
 }
@@ -377,9 +350,7 @@ void registerGraphicsBindings(napi_env env, napi_value exports) {
   method(env, render, "setScreenRenderSize", setScreenRenderSize);
   method(env, render, "quad", quad);
   method(env, render, "image", drawImage);
-  method(env, render, "tiled", drawTiled);
   method(env, render, "createTileLayer", createTileLayer);
-  method(env, render, "drawTileLayer", drawTileLayer);
   method(env, render, "releaseTileLayer", releaseTileLayer);
   method(env, render, "createMesh", createMesh);
   method(env, render, "releaseMesh", releaseMesh);

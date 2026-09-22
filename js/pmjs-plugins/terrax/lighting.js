@@ -69,8 +69,7 @@
         typeof Spriteset_Map.prototype.createLightmask !== 'function' ||
         Spriteset_Map.prototype.createLightmask._pmjsTerraxGuard) return false;
 
-    var useNativeLighting = typeof pmjsOptimizationEnabled !== 'function' ||
-      pmjsOptimizationEnabled('terrax.native-lighting');
+    var useNativeLighting = PMJS.optimizations.isEnabled('terrax.native-lighting');
     if (!useNativeLighting ||
         !looksLikeKnownCreateLightmask(
           Spriteset_Map.prototype.createLightmask)) return false;

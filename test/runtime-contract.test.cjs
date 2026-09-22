@@ -8,15 +8,33 @@ const vm = require('node:vm');
 
 const runtimeRoot = path.resolve(__dirname, '..');
 
+test('web runtime keeps V8 RegExp and String built-ins', () => {
+  const source = fs.readFileSync(path.join(runtimeRoot,
+    'js/pmjs-web/runtime.js'), 'utf8');
+  const context = { PMJS: { config: {} }, NativeHost: { runtime: {
+    env() { return ''; }, now() { return 0; },
+    displaySize() { return { width: 640, height: 480 }; }
+  } } };
+  context.globalThis = context;
+  vm.createContext(context);
+  const split = vm.runInContext('String.prototype.split', context);
+  const exec = vm.runInContext('RegExp.prototype.exec', context);
+  vm.runInContext(source, context);
+  assert.equal(vm.runInContext('String.prototype.split', context), split);
+  assert.equal(vm.runInContext('RegExp.prototype.exec', context), exec);
+  assert.deepEqual(Array.from(vm.runInContext('"a\\n\\nb".split(/[\\r\\n]+/)', context)),
+    ['a', 'b']);
+});
+
 test('virtual file aliases are configured data', () => {
   const source = fs.readFileSync(path.join(runtimeRoot,
     'js/pmjs-web/filesystem.js'), 'utf8');
   const end = source.indexOf('\nvar pendingTasks =');
   const context = {
-    pmjsGameConfig: { virtualFiles: {
+    PMJS: { config: { virtualFiles: {
       extensionAliases: { '.alias': '.json' },
       directoryEntryAliases: { locale: { '.json': '.LANG' } },
-    } },
+    } } },
   };
   vm.runInNewContext(source.slice(0, end) +
     '\nthis.contract = { gameReadPath, gameDirectoryEntries };', context);
@@ -77,12 +95,13 @@ test('MV image cache retrims completed loads without destroying bitmap backing',
     Bitmap,
     ImageCache,
     ImageManager: { _imageCache: cache },
-    pmjsGameConfig: { imageCacheMaxPixels: 64 },
+    PMJS: { config: { imageCacheMaxPixels: 64 } },
     NativeHost: { runtime: { env() { return ''; } } },
     Promise,
     nativeCompatibilityHit(...args) { compatibilityHits.push(args); },
   };
   vm.runInNewContext(methodsSource, context, { filename: 'methods.js' });
+  context.PMJS.compat = { hit: (...args) => compatibilityHits.push(args) };
   vm.runInNewContext(source.slice(0, end), context, { filename: 'images.js' });
   context.PMJS.methods.install();
   assert.equal(context.PMJS.methods.dump().find(entry =>
@@ -121,18 +140,17 @@ test('MV image cache retrims completed loads without destroying bitmap backing',
   assert.equal(compatibilityHits.at(-1)[0], 'imageCache.truncateError');
 });
 
-test('nativeCompatibilityHit logs on first hit, stacks on verbose, and throws on strict', () => {
+test('PMJS.compat.hit logs on first hit, stacks on verbose, and throws on strict', () => {
   const source = fs.readFileSync(path.join(runtimeRoot,
-    'js/pmjs-web/canvas.js'), 'utf8');
-  const start = source.indexOf('var nativeCompatibilityHits =');
-  const end = source.indexOf('\nfunction nativeCompatibilityObserved(');
-  const snippet = source.slice(start, end);
+    'js/pmjs-core/compatibility.js'), 'utf8');
+  const snippet = source;
 
   function runSnippet(env) {
     const warnings = [];
     const context = {
       console: { warn: msg => warnings.push(msg), log: msg => warnings.push(msg) },
       NativeHost: { runtime: { env: name => env[name] || '' } },
+      PMJS: {},
       Error,
     };
     vm.runInNewContext(snippet, context);
@@ -142,28 +160,37 @@ test('nativeCompatibilityHit logs on first hit, stacks on verbose, and throws on
   // Normal production: logs concise message once, silent on repeats
   {
     const { context, warnings } = runSnippet({});
-    context.nativeCompatibilityHit('filter.blur', 'radius=10');
+    context.PMJS.compat.hit('filter.blur', 'radius=10');
     assert.equal(warnings.length, 1);
     assert.equal(warnings[0], '[pmjs-compat] filter.blur: radius=10');
 
-    context.nativeCompatibilityHit('filter.blur', 'radius=20');
+    context.PMJS.compat.hit('filter.blur', 'radius=20');
     assert.equal(warnings.length, 1, 'subsequent occurrence should only increment counter');
-    assert.equal(context.nativeCompatibilityHits['filter.blur'], 2);
+    assert.equal(context.PMJS.compat.dump()['filter.blur'], 2);
 
-    context.nativeCompatibilityHit('render.mask');
+    context.PMJS.compat.hit('render.mask');
     assert.equal(warnings.length, 2);
     assert.equal(warnings[1], '[pmjs-compat] render.mask');
+    assert.equal(context.PMJS.compat.count('render.'), 1);
+    context.PMJS.compat.observed('render.sprite');
+    assert.equal(context.PMJS.compat.count('render.'), 2);
+    assert.equal(context.PMJS.compat.count('filter.'), 2);
+    assert.equal(context.PMJS.compat.count(), 4);
+    const snapshot = context.PMJS.compat.dump();
+    context.PMJS.compat.hit('render.mask');
+    assert.equal(snapshot['render.mask'], 1, 'dump remains a snapshot');
+    assert.equal(context.PMJS.compat.count('render.'), 3);
   }
 
   // Verbose: logs concise message and stack on first hit
   {
     const { context, warnings } = runSnippet({ PMJS_COMPAT_VERBOSE: '1' });
-    context.nativeCompatibilityHit('filter.kawase', 'kernels=3');
+    context.PMJS.compat.hit('filter.kawase', 'kernels=3');
     assert.equal(warnings.length, 2);
     assert.equal(warnings[0], '[pmjs-compat] filter.kawase: kernels=3');
     assert.match(warnings[1], /Error/);
 
-    context.nativeCompatibilityHit('filter.kawase', 'kernels=5');
+    context.PMJS.compat.hit('filter.kawase', 'kernels=5');
     assert.equal(warnings.length, 2);
   }
 
@@ -171,7 +198,7 @@ test('nativeCompatibilityHit logs on first hit, stacks on verbose, and throws on
   {
     const { context, warnings } = runSnippet({ PMJS_STRICT_COMPAT: '1' });
     assert.throws(
-      () => context.nativeCompatibilityHit('filter.glow', 'samples=8'),
+      () => context.PMJS.compat.hit('filter.glow', 'samples=8'),
       /unsupported native capability: filter\.glow: samples=8/
     );
     assert.equal(warnings.length, 1);

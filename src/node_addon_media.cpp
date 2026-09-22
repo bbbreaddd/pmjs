@@ -187,13 +187,6 @@ napi_value setMasterVolume(napi_env env, napi_callback_info info) try {
   napi_throw_type_error(env, nullptr, error.what()); return nullptr;
 }
 
-napi_value getMasterVolume(napi_env env, napi_callback_info info) try {
-  (void)info;
-  return number(env, host(env).core.media().masterVolume());
-} catch (const std::exception& error) {
-  napi_throw_type_error(env, nullptr, error.what()); return nullptr;
-}
-
 napi_value loadVideo(napi_env env, napi_callback_info info) try {
   auto a = arguments(env, info, 1); State& value = host(env);
   const auto path = value.vfs.resolve(asString(env, a.at(0)));
@@ -287,7 +280,6 @@ void registerMediaBindings(napi_env env, napi_value exports) {
   method(env, media, "audioPosition", audioPosition);
   method(env, media, "releaseAudio", releaseAudio);
   method(env, media, "setMasterVolume", setMasterVolume);
-  method(env, media, "getMasterVolume", getMasterVolume);
   method(env, media, "loadVideo", loadVideo);
   method(env, media, "updateVideo", updateVideo);
   method(env, media, "releaseVideo", releaseVideo);

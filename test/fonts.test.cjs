@@ -37,7 +37,7 @@ function createFontSandbox(options = {}) {
       removeEventListener() {},
       dispatchEvent() {}
     },
-    pmjsGameConfig: options.pmjsGameConfig || {},
+    PMJS: { config: options.pmjsGameConfig || {} },
     nativeBootPhase: () => {},
     Graphics: Object.assign(function() {}, { width: 100, height: 100,
       loadFont() {},

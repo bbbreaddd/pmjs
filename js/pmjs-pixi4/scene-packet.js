@@ -231,7 +231,7 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
     var cacheProducer = node.constructor && node.constructor.name || 'node';
     var cachedSprite = node._cacheData && node._cacheData.sprite;
     if (cachedSprite) {
-      nativeCompatibilityObserved('render.cacheAsBitmap', cacheProducer);
+      PMJS.compat.observed('render.cacheAsBitmap', cacheProducer);
       var cachedTransform = node.transform;
       if (cachedTransform && !nativeSceneRootUsesWorldTransform &&
           typeof cachedTransform.updateLocalTransform === 'function') {
@@ -253,7 +253,7 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
       writeNativeSceneNode(cachedSprite, cacheParent, null, null, null, 1);
       return;
     }
-    nativeCompatibilityHit('render.cacheAsBitmap',
+    PMJS.compat.hit('render.cacheAsBitmap',
       cacheProducer + ': uninitialized cache, drawing live children');
   }
   var particleValues = particleContext ?
@@ -267,14 +267,14 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
   }
   if (!particleContext) prepareNativeSceneNode(node);
   if (!particleContext && node.shader) {
-    nativeCompatibilityHit('render.shader',
+    PMJS.compat.hit('render.shader',
       (node.constructor && node.constructor.name || 'node') + ':' +
       (node.shader.constructor && node.shader.constructor.name || 'shader') +
       ':base=' + nativeNodeRenderType(node));
   }
   var blendMode = nativeSceneBlendMode(particleContext || node);
   if (blendMode < 0) {
-    nativeCompatibilityHit('render.blend-mode',
+    PMJS.compat.hit('render.blend-mode',
       (node.constructor && node.constructor.name || 'node') + ':blend=' + node.blendMode);
     blendMode = 0;
   }
@@ -353,7 +353,7 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
   if (pipeKind === PMJS_SCENE_KIND.CONTAINER &&
       pipeType !== 'container' && pipeType !== 'tilemap') {
     var pluginChildren = node.children && node.children.length || 0;
-    nativeCompatibilityHit('render.renderer-plugin',
+    PMJS.compat.hit('render.renderer-plugin',
       (node.constructor && node.constructor.name || 'node') + ':renderer=' + pipeType +
       (pluginChildren ? ':children=' + pluginChildren : ':visual-leaf'));
   }
@@ -387,7 +387,7 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
   var filterGroups = filterPlan.groups || [];
   if (nativeSceneFilterDepth + filterGroups.length > 4) {
     var appliedGroups = Math.max(0, 4 - nativeSceneFilterDepth);
-    nativeCompatibilityHit('render.filter-depth',
+    PMJS.compat.hit('render.filter-depth',
       (node.constructor && node.constructor.name || 'node') + ':filter-depth' +
       ':original=' + filterGroups.length + ':applied=' + appliedGroups);
     filterGroups = filterGroups.slice(0, appliedGroups);
@@ -403,7 +403,7 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
   if (kind === 1) {
     var textureRotation = ((Number(texture && texture.rotate) || 0) % 16 + 16) % 16;
     if (textureRotation % 2) {
-      nativeCompatibilityHit('render.texture-rotation', String(textureRotation));
+      PMJS.compat.hit('render.texture-rotation', String(textureRotation));
     }
   }
   var nodeIndex = nativeSceneRecord(parentIndex, kind, resource, tint,
@@ -571,8 +571,7 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
     if (nativeSceneTraversesChild(kind, node, node.children[index])) {
       if (!particleFrame &&
           nativePlainSpriteSegmentsEnabled &&
-          (typeof pmjsOptimizationEnabled !== 'function' ||
-            pmjsOptimizationEnabled('scene.plain-sprite-segment'))) {
+          PMJS.optimizations.isEnabled('scene.plain-sprite-segment')) {
         var segment = [];
         var segmentIndex = index;
         while (segmentIndex < childLimit &&

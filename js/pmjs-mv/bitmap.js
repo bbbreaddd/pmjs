@@ -115,8 +115,7 @@ if (typeof _Bitmap_blt === 'function') {
     dw = dw || sw;
     dh = dh || sh;
     if (source &&
-        (typeof pmjsOptimizationEnabled !== 'function' ||
-         pmjsOptimizationEnabled('bitmap.pristine-image-blt')) &&
+        PMJS.optimizations.isEnabled('bitmap.pristine-image-blt') &&
         source._image &&
         !source.__canvas &&
         !source.hue &&
@@ -247,7 +246,7 @@ Bitmap.prototype.getPixel = function(x, y) {
       } catch (_) {}
     }
   } catch (_) {}
-  nativeCompatibilityHit('bitmap.getPixel',
+  PMJS.compat.hit('bitmap.getPixel',
     'x=' + x + ' y=' + y + ' w=' + this.width + ' h=' + this.height);
   return '#000000';
 };
@@ -267,7 +266,7 @@ Bitmap.prototype.getAlphaPixel = function(x, y) {
       } catch (_) {}
     }
   } catch (_) {}
-  nativeCompatibilityHit('bitmap.getAlphaPixel',
+  PMJS.compat.hit('bitmap.getAlphaPixel',
     'x=' + x + ' y=' + y + ' w=' + this.width + ' h=' + this.height);
   return 0;
 };

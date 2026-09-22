@@ -133,5 +133,4 @@
   PIXI.Renderer = NativeRenderer;
   PIXI.autoDetectRenderer = createRenderer;
   PIXI.Application = NativeApplication;
-  globalThis.createNativePixi5Renderer = createRenderer;
 })();

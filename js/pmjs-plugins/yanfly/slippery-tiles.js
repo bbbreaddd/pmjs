@@ -87,8 +87,7 @@ if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
   }
 
   function install() {
-    if (typeof pmjsOptimizationEnabled === 'function' &&
-        !pmjsOptimizationEnabled('plugins.yanfly.slippery-tiles')) {
+    if (!PMJS.optimizations.isEnabled('plugins.yanfly.slippery-tiles')) {
       return false;
     }
 

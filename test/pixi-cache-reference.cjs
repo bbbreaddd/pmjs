@@ -161,8 +161,8 @@ test('Pixi 4 cacheAsBitmap pixels match the native scene writer',
       saveRoot: path.join(runtimeRoot, 'build/pixi-cache-reference-saves'),
       width: WIDTH, height: HEIGHT, title: 'Pixi cache reference' },
     { afterBootstrap({ native }) {
-      pmjsGameConfig.fonts = pmjsGameConfig.fonts || {};
-      pmjsGameConfig.fonts.ReferenceFont = 'fonts/BestTen-CRT.ttf';
+      PMJS.config.fonts = PMJS.config.fonts || {};
+      PMJS.config.fonts.ReferenceFont = 'fonts/BestTen-CRT.ttf';
       const renderer = createNativePixiRenderer(WIDTH, HEIGHT,
         { backgroundColor: 0x000000, preserveDrawingBuffer: true,
           antialias: false });

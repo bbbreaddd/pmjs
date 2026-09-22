@@ -136,8 +136,7 @@ PMJS.methods.wrap({
     var neutralBlend = [0, 0, 0, 0];
     return function() {
       if (this._pmjsNativeSpriteTint !== false &&
-          (typeof pmjsOptimizationEnabled !== 'function' ||
-            pmjsOptimizationEnabled('sprite.native-tint'))) {
+          PMJS.optimizations.isEnabled('sprite.native-tint')) {
         var tone = this._colorTone;
         var blend = this._blendColor;
         var hasTone = tone && (tone[0] || tone[1] || tone[2] || tone[3]);

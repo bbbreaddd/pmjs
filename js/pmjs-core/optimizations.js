@@ -41,7 +41,7 @@ function pmjsOptimizationParseList(value) {
 }
 
 function pmjsOptimizationPortDisables() {
-  var config = globalThis.PMJS_GAME_CONFIG || {};
+  var config = PMJS.config;
   var disables = config.disableOptimizations;
   if (disables === undefined) return [];
   if (!Array.isArray(disables)) {
@@ -172,22 +172,4 @@ PMJS.optimizations = {
     pmjsOptimizationFinalized = true;
     pmjsLogOptimizationPolicy();
   }
-};
-
-// Narrow gating helper for optimization boundaries. Effective state is
-// computed once at registration and frozen at finalization; this delegates
-// to that stored state.
-//
-// Transitional behavior: bundles assembled without this module keep existing
-// fast behavior (enabled) instead of throwing, so old handcrafted bundles
-// keep working. Long-term direction: every official profile carries this
-// module, and an official bundle that omits it must fail rather than
-// silently ignore requested disables. A present registry with an unknown ID
-// already throws: that is a programming error and must stay loud.
-globalThis.pmjsOptimizationEnabled = function(id) {
-  if (!globalThis.PMJS || !PMJS.optimizations ||
-      typeof PMJS.optimizations.isEnabled !== 'function') {
-    return true;
-  }
-  return PMJS.optimizations.isEnabled(id);
 };

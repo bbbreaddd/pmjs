@@ -125,7 +125,7 @@ function nativeSceneFilter(node, activeFilters) {
         var kawaseBlur = Math.max(0, Number(groupFilter.blur) || 0);
         if (!kawaseKernels || !kawaseKernels.length) kawaseKernels = [kawaseBlur];
         if (kawaseKernels.length > 15) {
-          nativeCompatibilityHit('render.kawase-kernels',
+          PMJS.compat.hit('render.kawase-kernels',
             String(kawaseKernels.length));
           groups = null;
           break;
@@ -229,7 +229,7 @@ function nativeSceneFilter(node, activeFilters) {
           }
         }
         if (bloomKernels.length > 12) {
-          nativeCompatibilityHit('render.advanced-bloom-kernels',
+          PMJS.compat.hit('render.advanced-bloom-kernels',
             String(bloomKernels.length));
           groups = null;
           break;
@@ -343,7 +343,7 @@ function nativeSceneFilter(node, activeFilters) {
         var radialCenter = groupFilter.center || [0, 0];
         var radialKernel = Math.max(1, Math.round(Number(groupFilter.kernelSize) || 5));
         if (radialKernel > 64) {
-          nativeCompatibilityHit('render.radial-blur-kernel', String(radialKernel));
+          PMJS.compat.hit('render.radial-blur-kernel', String(radialKernel));
           groups = null;
           break;
         }
@@ -374,7 +374,7 @@ function nativeSceneFilter(node, activeFilters) {
         var motionVelocity = groupFilter.velocity || [0, 0];
         var motionKernel = Math.max(1, Math.round(Number(groupFilter.kernelSize) || 5));
         if (motionKernel > 64) {
-          nativeCompatibilityHit('render.motion-blur-kernel', String(motionKernel));
+          PMJS.compat.hit('render.motion-blur-kernel', String(motionKernel));
           groups = null;
           break;
         }
@@ -420,7 +420,7 @@ function nativeSceneFilter(node, activeFilters) {
         if (glowStepMatch) glowStep = Number(glowStepMatch[1]) || glowStep;
         var glowAngles = glowStep > 0 ? Math.ceil(Math.PI * 2 / glowStep) + 1 : 65;
         if (glowDistance > 32 || glowAngles > 64) {
-          nativeCompatibilityHit('render.glow-samples',
+          PMJS.compat.hit('render.glow-samples',
             glowDistance + 'x' + glowAngles);
           groups = null;
           break;

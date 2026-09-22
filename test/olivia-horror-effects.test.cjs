@@ -93,6 +93,7 @@ function loadWithRegistrations(extra = {}) {
   }, extra);
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-core/config.js'), 'utf8'), sandbox);
   vm.runInContext(optimizationsSource, sandbox, { filename: 'optimizations.js' });
   loadRegistrySupport(sandbox);
   vm.runInContext(source, sandbox, { filename: 'olivia-horror-effects.js' });
@@ -173,6 +174,7 @@ test('Olivia adapter activates on its trigger plugin and ignores others', () => 
   const sandbox = { console };
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-core/config.js'), 'utf8'), sandbox);
   vm.runInContext(optimizationsSource, sandbox, { filename: 'optimizations.js' });
   loadRegistrySupport(sandbox);
   vm.runInContext(source, sandbox, { filename: 'olivia-horror-effects.js' });
