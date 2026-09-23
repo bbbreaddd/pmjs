@@ -118,6 +118,7 @@ Object.defineProperties(GamepadButton.prototype, {
 });
 globalThis.GamepadButton = GamepadButton;
 var nativeGamepads = [];
+var nativeGamepadExposed = false;
 var pendingKeyReleases = [];
 var pendingPadReleases = [];
 function dispatchNativeKey(source) {
@@ -139,12 +140,33 @@ Object.defineProperty(globalThis, 'navigator', { configurable: true, writable: t
   language: 'en-US',
   isCocoonJS: false,
   plugins: { namedItem: function() { return null; } },
-  getGamepads: function() { return nativeGamepads.slice(); }
+  getGamepads: function() { return nativeGamepadExposed ? nativeGamepads.slice() : []; }
 } });
 globalThis.__pmjsReceiveInput = function(state) {
   if (!state) return;
   globalThis.__pmjsInputSnapshot = state;
   var pads = state.gamepads || [];
+  if (!nativeGamepadExposed && nativeWindowState.focused) {
+    for (var interactionIndex = 0; interactionIndex < pads.length; interactionIndex++) {
+      var interactionPad = pads[interactionIndex];
+      if (!interactionPad || interactionPad.connected === false) continue;
+      var buttonsDown = interactionPad.buttonsDown || [];
+      var buttonsPressed = interactionPad.buttonsPressed || [];
+      var axes = interactionPad.axes || [];
+      var buttonMoved = buttonsDown.length > 0 || buttonsPressed.length > 0;
+      var axisMoved = false;
+      for (var axisIndex = 0; axisIndex < axes.length; axisIndex++) {
+        if (Math.abs(Number(axes[axisIndex]) || 0) > 0.5) {
+          axisMoved = true;
+          break;
+        }
+      }
+      if (buttonMoved || axisMoved) {
+        nativeGamepadExposed = true;
+        break;
+      }
+    }
+  }
   for (var index = 0; index < nativeGamepads.length; index++) {
     var oldPad = nativeGamepads[index];
     if (oldPad && (!pads[index] || pads[index].connected === false ||

@@ -101,6 +101,7 @@ test('keyboard events use live mapper and preserve a short tap for one logic ste
 
 test('gamepad shape, mapper, axes, and disconnect follow stock polling', () => {
   const { context: ctx } = setup();
+  assert.deepEqual(Array.from(ctx.navigator.getGamepads()), []);
   ctx.__pmjsReceiveInput(snapshot([], [], [], [pad([3], [3])]));
   const first = ctx.navigator.getGamepads()[0];
   assert.equal(first.id, 'Xbox Controller');
@@ -125,6 +126,26 @@ test('gamepad shape, mapper, axes, and disconnect follow stock polling', () => {
   ctx.Input.update();
   assert.equal(ctx.Input.isPressed('ok'), false);
   assert.equal(ctx.Input.isPressed('left'), false);
+});
+
+test('gamepads stay hidden until focused interaction and preserve the exposing state', () => {
+  const { context: ctx } = setup();
+  ctx.__pmjsReceiveInput(snapshot([], [], [], [pad()]));
+  assert.deepEqual(Array.from(ctx.navigator.getGamepads()), []);
+
+  ctx.__pmjsUpdateWindowState({ focused: false, visible: true });
+  ctx.__pmjsReceiveInput(snapshot([], [], [], [pad([3], [3])]));
+  assert.deepEqual(Array.from(ctx.navigator.getGamepads()), []);
+
+  ctx.__pmjsUpdateWindowState({ focused: true, visible: true });
+  ctx.__pmjsReceiveInput(snapshot([], [], [], [pad([], [], [0, -0.6, 0, 0])]));
+  const [first] = ctx.navigator.getGamepads();
+  assert.equal(first.axes[1], -0.6);
+  assert.equal(first.buttons[3].pressed, false);
+
+  ctx.__pmjsReceiveInput(snapshot([], [], [], [pad()]));
+  assert.equal(ctx.navigator.getGamepads()[0], first);
+  assert.equal(first.connected, true);
 });
 
 test('focus loss clears held keyboard state', () => {

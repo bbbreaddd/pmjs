@@ -18,7 +18,8 @@ export function detectEngine(gameDir) {
   const rpgManagers = read(path.join('js', 'rpg_managers.js'));
   if (rpgCore !== null && rpgManagers !== null) {
     let mvVersion = null;
-    const versionMatch = rpgCore.match(/RPG Maker MV\s+v?(\d+\.\d+\.\d+)/i) ||
+    const versionMatch = rpgCore.match(/Utils\.RPGMAKER_VERSION\s*=\s*['"](\d+\.\d+\.\d+)['"]/i) ||
+      rpgCore.match(/RPG Maker MV\s+v?(\d+\.\d+\.\d+)/i) ||
       rpgCore.match(/rpg_core\.js\s+v?(\d+\.\d+\.\d+)/i) ||
       rpgCore.match(/\bv(\d+\.\d+\.\d+)\b/);
     if (versionMatch) mvVersion = versionMatch[1];
@@ -27,7 +28,8 @@ export function detectEngine(gameDir) {
 
   const rmmzCore = read(path.join('js', 'rmmz_core.js'));
   if (rmmzCore !== null) {
-    const versionMatch = rmmzCore.match(/RPG Maker MZ\s+v?(\d+\.\d+\.\d+)/i) ||
+    const versionMatch = rmmzCore.match(/Utils\.RPGMAKER_VERSION\s*=\s*['"](\d+\.\d+\.\d+)['"]/i) ||
+      rmmzCore.match(/RPG Maker MZ\s+v?(\d+\.\d+\.\d+)/i) ||
       rmmzCore.match(/rmmz_core\.js\s+v?(\d+\.\d+\.\d+)/i);
     return { engine: 'mz', engineVersion: versionMatch && versionMatch[1],
       mvVersion: null };
