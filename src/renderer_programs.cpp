@@ -80,10 +80,24 @@ Renderer::Renderer(int width, int height, ImageStore& images)
     glGetUniformLocation(presentationProgram_, "sceneImage");
   presentationOverlayUniform_ =
     glGetUniformLocation(presentationProgram_, "overlayImage");
+  presentationVideoUniform_ =
+    glGetUniformLocation(presentationProgram_, "videoImage");
+  presentationUpperCanvasUniform_ =
+    glGetUniformLocation(presentationProgram_, "upperCanvasImage");
   presentationColorMatrixUniform_ =
     glGetUniformLocation(presentationProgram_, "colorMatrix");
   presentationColorMatrixAlphaUniform_ =
     glGetUniformLocation(presentationProgram_, "colorMatrixAlpha");
+  presentationToneEnabledUniform_ =
+    glGetUniformLocation(presentationProgram_, "toneEnabled");
+  presentationOpaqueBackgroundUniform_ =
+    glGetUniformLocation(presentationProgram_, "opaqueBackground");
+  presentationCanvasOpacityUniform_ =
+    glGetUniformLocation(presentationProgram_, "canvasOpacity");
+  presentationVideoOpacityUniform_ =
+    glGetUniformLocation(presentationProgram_, "videoOpacity");
+  presentationUpperCanvasOpacityUniform_ =
+    glGetUniformLocation(presentationProgram_, "upperCanvasOpacity");
   spriteEffectProgram_ = linkProgram(vertexSource, spriteEffectFragmentSource);
   spriteEffectTextureSizeUniform_ =
     glGetUniformLocation(spriteEffectProgram_, "textureSize");
@@ -247,6 +261,8 @@ Renderer::Renderer(int width, int height, ImageStore& images)
 }
 
 Renderer::~Renderer() {
+  if (presentationVideo_) images_.release(presentationVideo_);
+  if (presentationUpperCanvas_) images_.release(presentationUpperCanvas_);
   discardCommandsFrom(0);
   while (!tileLayers_.empty()) destroyTileLayer(tileLayers_.begin()->first);
   for (std::size_t index = 0; index < primitiveSurfaces_.size(); ++index) {

@@ -20,16 +20,21 @@ const rootArgument = option('--root');
 const manifestArgument = option('--manifest');
 const profileArgument = option('--profile');
 const configArgument = option('--config');
-const compatArgument = option('--compat');
+const compatArguments = [];
+for (let index = 0; index < args.length; index++) {
+  if (args[index] === '--compat' && index + 1 < args.length) {
+    compatArguments.push(args[index + 1]);
+  }
+}
 const outputArgument = option('--output');
 const gameArgument = option('--game');
 
 if (!manifestArgument && !profileArgument && !gameArgument) {
-  console.error('usage: build-js-runtime.mjs [--root ROOT] (--game DIR [--manifest FILE] | --profile NAME | --manifest FILE) [--output FILE] [--config FILE] [--compat FILE] [--check] [--print-modules]');
+  console.error('usage: build-js-runtime.mjs [--root ROOT] (--game DIR [--manifest FILE] | --profile NAME | --manifest FILE) [--output FILE] [--config FILE] [--compat FILE]... [--check] [--print-modules]');
   process.exit(2);
 }
 if (!outputArgument && !printModules) {
-  console.error('usage: build-js-runtime.mjs [--root ROOT] (--game DIR [--manifest FILE] | --profile NAME | --manifest FILE) --output FILE [--config FILE] [--compat FILE] [--check] [--print-modules]');
+  console.error('usage: build-js-runtime.mjs [--root ROOT] (--game DIR [--manifest FILE] | --profile NAME | --manifest FILE) --output FILE [--config FILE] [--compat FILE]... [--check] [--print-modules]');
   process.exit(2);
 }
 if (profileArgument && gameArgument) {
@@ -340,27 +345,26 @@ if (configArgument) {
 }
 
 let compatInserted = false;
+const pendingCompat = [];
+for (const compatFile of compatArguments) {
+  const resolvedCompat = path.resolve(process.cwd(), compatFile);
+  if (!fs.existsSync(resolvedCompat)) {
+    console.error(`error: compat file not found: ${resolvedCompat}`);
+    process.exit(1);
+  }
+  pendingCompat.push({ label: path.basename(resolvedCompat), path: resolvedCompat });
+}
 for (const item of rawModules) {
-  if (compatArgument && !compatInserted &&
+  if (pendingCompat.length && !compatInserted &&
       (item.module === 'js/pmjs-mv/bootstrap.js' || item.module === 'js/pmjs-mz/bootstrap.js')) {
-    const resolvedCompat = path.resolve(process.cwd(), compatArgument);
-    if (!fs.existsSync(resolvedCompat)) {
-      console.error(`error: compat file not found: ${resolvedCompat}`);
-      process.exit(1);
-    }
-    bundleItems.push({ label: path.basename(resolvedCompat), path: resolvedCompat });
+    for (const compatItem of pendingCompat) bundleItems.push(compatItem);
     compatInserted = true;
   }
   bundleItems.push({ label: item.module, module: item.module, baseDir: item.baseDir });
 }
 
-if (compatArgument && !compatInserted) {
-  const resolvedCompat = path.resolve(process.cwd(), compatArgument);
-  if (!fs.existsSync(resolvedCompat)) {
-    console.error(`error: compat file not found: ${resolvedCompat}`);
-    process.exit(1);
-  }
-  bundleItems.push({ label: path.basename(resolvedCompat), path: resolvedCompat });
+if (pendingCompat.length && !compatInserted) {
+  for (const compatItem of pendingCompat) bundleItems.push(compatItem);
 }
 
 function buildBundle() {

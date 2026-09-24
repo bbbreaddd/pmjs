@@ -151,6 +151,9 @@ class Renderer {
   Renderer& operator=(const Renderer&) = delete;
 
   void setClearColor(float red, float green, float blue, float alpha);
+  bool setPresentationLayers(float canvasOpacity, ImageHandle video,
+                             float videoOpacity, ImageHandle upperCanvas,
+                             float upperCanvasOpacity);
   bool setRenderTargetSize(int width, int height);
   bool setScreenRenderSize(int width, int height);
   void setDrawableSize(int width, int height);
@@ -253,7 +256,7 @@ class Renderer {
   void resizeTargets(int width, int height);
   void drawToneComposition(std::uint32_t framebuffer, int viewportX,
                            int viewportY, int viewportWidth,
-                           int viewportHeight);
+                           int viewportHeight, bool screenPresentation = false);
   void materializeToneComposition();
   void recomputePresentation();
   static PresentScaleMode presentScaleModeFromEnvironment();
@@ -285,8 +288,15 @@ class Renderer {
   std::uint32_t presentationProgram_ = 0;
   int presentationSceneUniform_ = -1;
   int presentationOverlayUniform_ = -1;
+  int presentationVideoUniform_ = -1;
+  int presentationUpperCanvasUniform_ = -1;
   int presentationColorMatrixUniform_ = -1;
   int presentationColorMatrixAlphaUniform_ = -1;
+  int presentationToneEnabledUniform_ = -1;
+  int presentationOpaqueBackgroundUniform_ = -1;
+  int presentationCanvasOpacityUniform_ = -1;
+  int presentationVideoOpacityUniform_ = -1;
+  int presentationUpperCanvasOpacityUniform_ = -1;
   int spriteEffectTextureSizeUniform_ = -1;
   int spriteEffectBlurUniform_ = -1;
   int spriteEffectMaskEnabledUniform_ = -1;
@@ -368,6 +378,11 @@ class Renderer {
   std::array<std::uint32_t, scene_packet::maxFilterDepth> groupTextures_{};
   bool offscreenRender_ = false;
   bool toneCompositionActive_ = false;
+  ImageHandle presentationVideo_ = 0;
+  ImageHandle presentationUpperCanvas_ = 0;
+  float presentationCanvasOpacity_ = 1.0F;
+  float presentationVideoOpacity_ = 0.0F;
+  float presentationUpperCanvasOpacity_ = 0.0F;
   std::array<float, 20> presentationColorMatrix_{};
   float presentationColorMatrixAlpha_ = 1.0F;
   std::uint32_t nextTileLayer_ = 1;

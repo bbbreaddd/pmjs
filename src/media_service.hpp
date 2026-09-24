@@ -17,6 +17,8 @@ class MediaService {
   MediaService& operator=(const MediaService&) = delete;
 
   std::uint32_t loadAudio(const std::string& path, std::string* error = nullptr);
+  std::uint32_t installAudioDecoder(
+      std::unique_ptr<AudioDecoderSession> decoder);
   std::uint32_t loadAudioBytes(std::vector<std::uint8_t> bytes,
                                std::string* error = nullptr);
   bool play(std::uint32_t handle, bool loop, double offset);

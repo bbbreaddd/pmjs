@@ -889,22 +889,43 @@ constexpr const char* presentationFragmentSource = R"(
   precision mediump float;
   uniform sampler2D sceneImage;
   uniform sampler2D overlayImage;
+  uniform sampler2D videoImage;
+  uniform sampler2D upperCanvasImage;
   uniform float colorMatrix[20];
   uniform float colorMatrixAlpha;
+  uniform bool toneEnabled;
+  uniform bool opaqueBackground;
+  uniform float canvasOpacity;
+  uniform float videoOpacity;
+  uniform float upperCanvasOpacity;
   in vec2 vertexUv;
   out vec4 outputColor;
   void main() {
-    vec4 c = texture(sceneImage, vertexUv);
-    if (c.a > 0.0) c.rgb /= c.a;
-    vec4 adjusted;
-    adjusted.r = colorMatrix[0] * c.r + colorMatrix[1] * c.g + colorMatrix[2] * c.b + colorMatrix[3] * c.a + colorMatrix[4];
-    adjusted.g = colorMatrix[5] * c.r + colorMatrix[6] * c.g + colorMatrix[7] * c.b + colorMatrix[8] * c.a + colorMatrix[9];
-    adjusted.b = colorMatrix[10] * c.r + colorMatrix[11] * c.g + colorMatrix[12] * c.b + colorMatrix[13] * c.a + colorMatrix[14];
-    adjusted.a = colorMatrix[15] * c.r + colorMatrix[16] * c.g + colorMatrix[17] * c.b + colorMatrix[18] * c.a + colorMatrix[19];
-    vec3 rgb = mix(c.rgb, adjusted.rgb, colorMatrixAlpha) * adjusted.a;
-    vec4 toned = vec4(rgb, adjusted.a);
-    vec4 overlay = texture(overlayImage, vertexUv);
-    outputColor = overlay + toned * (1.0 - overlay.a);
+    vec4 scene = texture(sceneImage, vertexUv);
+    if (toneEnabled) {
+      vec4 straight = scene;
+      if (straight.a > 0.0) straight.rgb /= straight.a;
+      vec4 adjusted;
+      adjusted.r = colorMatrix[0] * straight.r + colorMatrix[1] * straight.g + colorMatrix[2] * straight.b + colorMatrix[3] * straight.a + colorMatrix[4];
+      adjusted.g = colorMatrix[5] * straight.r + colorMatrix[6] * straight.g + colorMatrix[7] * straight.b + colorMatrix[8] * straight.a + colorMatrix[9];
+      adjusted.b = colorMatrix[10] * straight.r + colorMatrix[11] * straight.g + colorMatrix[12] * straight.b + colorMatrix[13] * straight.a + colorMatrix[14];
+      adjusted.a = colorMatrix[15] * straight.r + colorMatrix[16] * straight.g + colorMatrix[17] * straight.b + colorMatrix[18] * straight.a + colorMatrix[19];
+      vec3 rgb = mix(straight.rgb, adjusted.rgb, colorMatrixAlpha) * adjusted.a;
+      vec4 toned = vec4(rgb, adjusted.a);
+      vec4 toneOverlay = texture(overlayImage, vertexUv);
+      scene = toneOverlay + toned * (1.0 - toneOverlay.a);
+    }
+    vec4 composed = scene * canvasOpacity;
+    vec4 video = texture(videoImage, vertexUv);
+    video.a *= videoOpacity;
+    video.rgb *= video.a;
+    composed = video + composed * (1.0 - video.a);
+    vec4 upperCanvas = texture(upperCanvasImage, vertexUv);
+    upperCanvas.a *= upperCanvasOpacity;
+    upperCanvas.rgb *= upperCanvas.a;
+    composed = upperCanvas + composed * (1.0 - upperCanvas.a);
+    outputColor = vec4(composed.rgb,
+      opaqueBackground ? 1.0 : composed.a);
   }
 )";
 constexpr const char* spriteEffectFragmentSource = R"(

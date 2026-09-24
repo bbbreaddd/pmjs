@@ -50,20 +50,28 @@ test('bundle generation is deterministic and confined to the explicit root', () 
 test('bundle generation supports --profile with JSON --config and --compat', () => {
   const tempDir = temporaryDirectory('pmjs-profile-');
   const config = path.join(tempDir, 'config.json');
-  const compat = path.join(tempDir, 'compat.js');
+  const compatOne = path.join(tempDir, 'compat-one.js');
+  const compatTwo = path.join(tempDir, 'compat-two.js');
   const out = path.join(tempDir, 'out.js');
   fs.writeFileSync(config, JSON.stringify({ title: 'JSON Title', display: { width: 960, height: 540 } }));
-  fs.writeFileSync(compat, 'globalThis.COMPAT_LOADED = true;\n');
+  fs.writeFileSync(compatOne, 'globalThis.COMPAT_ONE = true;\n');
+  fs.writeFileSync(compatTwo, 'globalThis.COMPAT_TWO = true;\n');
   childProcess.execFileSync(process.execPath,
-    [tool, '--profile', 'mv', '--config', config, '--compat', compat, '--output', out]);
+    [tool, '--profile', 'mv', '--config', config, '--compat', compatOne,
+      '--compat', compatTwo, '--output', out]);
   const bundleContent = fs.readFileSync(out, 'utf8');
   assert.match(bundleContent, /globalThis\.PMJS_GAME_CONFIG = \{/);
   assert.match(bundleContent, /"title": "JSON Title"/);
-  assert.match(bundleContent, /\/\/ BEGIN compat\.js\nglobalThis\.COMPAT_LOADED = true;\n\/\/ END compat\.js/);
-  assert.ok(bundleContent.indexOf('PMJS_GAME_CONFIG') <
-    bundleContent.indexOf('COMPAT_LOADED'));
-  assert.ok(bundleContent.indexOf('COMPAT_LOADED') <
-    bundleContent.indexOf('BEGIN js/pmjs-mv/bootstrap.js'));
+  assert.match(bundleContent,
+    /\/\/ BEGIN compat-one\.js\nglobalThis\.COMPAT_ONE = true;\n\/\/ END compat-one\.js/);
+  assert.match(bundleContent,
+    /\/\/ BEGIN compat-two\.js\nglobalThis\.COMPAT_TWO = true;\n\/\/ END compat-two\.js/);
+  const configIndex = bundleContent.indexOf('"title": "JSON Title"');
+  const compatOneIndex = bundleContent.indexOf('COMPAT_ONE');
+  const compatTwoIndex = bundleContent.indexOf('COMPAT_TWO');
+  const bootstrapIndex = bundleContent.indexOf('BEGIN js/pmjs-mv/bootstrap.js');
+  assert.ok(configIndex < compatOneIndex && compatOneIndex < compatTwoIndex &&
+    compatTwoIndex < bootstrapIndex);
 });
 
 test('bundle validates disableOptimizations shape and orders the registry first', () => {

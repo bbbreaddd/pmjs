@@ -162,6 +162,35 @@ void Renderer::setClearColor(float red, float green, float blue, float alpha) {
   clearColor_ = {red, green, blue, alpha};
 }
 
+bool Renderer::setPresentationLayers(float canvasOpacity, ImageHandle video,
+                                     float videoOpacity, ImageHandle upperCanvas,
+                                     float upperCanvasOpacity) {
+  const auto opacity = [](float value) {
+    return std::isfinite(value) ? std::clamp(value, 0.0F, 1.0F) : 1.0F;
+  };
+  const bool retainVideo = video && video != presentationVideo_;
+  const bool retainUpperCanvas = upperCanvas &&
+    upperCanvas != presentationUpperCanvas_;
+  if (retainVideo && !images_.retain(video)) return false;
+  if (retainUpperCanvas && !images_.retain(upperCanvas)) {
+    if (retainVideo) images_.release(video);
+    return false;
+  }
+  if (presentationVideo_ && presentationVideo_ != video) {
+    images_.release(presentationVideo_);
+  }
+  if (presentationUpperCanvas_ && presentationUpperCanvas_ != upperCanvas) {
+    images_.release(presentationUpperCanvas_);
+  }
+  presentationCanvasOpacity_ = opacity(canvasOpacity);
+  presentationVideo_ = video;
+  presentationVideoOpacity_ = video ? opacity(videoOpacity) : 0.0F;
+  presentationUpperCanvas_ = upperCanvas;
+  presentationUpperCanvasOpacity_ = upperCanvas
+    ? opacity(upperCanvasOpacity) : 0.0F;
+  return true;
+}
+
 bool Renderer::setRenderTargetSize(int width, int height) {
   if (width <= 0 || height <= 0) return false;
   if (width > maxTextureSize_ || height > maxTextureSize_) return false;

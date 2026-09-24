@@ -1330,6 +1330,15 @@ void Renderer::renderScene() {
 
 void Renderer::presentToDrawable() {
   if (offscreenRender_) return;
+  const bool hasPresentationLayers = presentationCanvasOpacity_ < 1.0F ||
+      (presentationVideo_ && presentationVideoOpacity_ > 0.0F) ||
+      (presentationUpperCanvas_ && presentationUpperCanvasOpacity_ > 0.0F);
+  const bool composePresentation = toneCompositionActive_ ||
+      hasPresentationLayers;
+  if (composePresentation) {
+    drawToneComposition(filterFramebuffer_, 0, 0, width_, height_, true);
+    if (toneCompositionActive_) ++stats_.toneComposedPresentationFrames;
+  }
   const bool identity = presentation_.viewportX == 0 &&
       presentation_.viewportY == 0 &&
       presentation_.viewportWidth == presentation_.drawableWidth &&
@@ -1337,18 +1346,15 @@ void Renderer::presentToDrawable() {
       presentation_.drawableWidth == width_ &&
       presentation_.drawableHeight == height_;
   if (identity) {
-    if (toneCompositionActive_) {
-      drawToneComposition(0, 0, 0, presentationWidth_,
-                          presentationHeight_);
-      ++stats_.toneComposedPresentationFrames;
-    } else {
-      glBindFramebuffer(GL_READ_FRAMEBUFFER, sceneFramebuffer_);
-      glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-      glBlitFramebuffer(0, 0, width_, height_, 0, 0,
-                        presentationWidth_, presentationHeight_,
-                        GL_COLOR_BUFFER_BIT, GL_NEAREST);
-      glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    }
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                      composePresentation ? filterFramebuffer_ : sceneFramebuffer_);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    glBlitFramebuffer(0, 0, width_, height_, 0, 0,
+                      presentationWidth_, presentationHeight_,
+                      GL_COLOR_BUFFER_BIT,
+                      presentation_.filter == PresentFilter::linear ?
+                        GL_LINEAR : GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
     return;
   }
   ++stats_.scaledPresentationFrames;
@@ -1376,24 +1382,21 @@ void Renderer::presentToDrawable() {
     glBlitFramebuffer(0, 0, 1, 1, 0, 0, drawableWidth, drawableHeight,
                       GL_COLOR_BUFFER_BIT, GL_NEAREST);
   }
-  if (toneCompositionActive_) {
-    drawToneComposition(0, destX, destY, destWidth, destHeight);
-    ++stats_.toneComposedPresentationFrames;
-  } else {
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, sceneFramebuffer_);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-    glBlitFramebuffer(0, 0, width_, height_, destX, destY,
-                      destX + destWidth, destY + destHeight,
-                      GL_COLOR_BUFFER_BIT,
-                      presentation_.filter == PresentFilter::linear ?
-                        GL_LINEAR : GL_NEAREST);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-  }
+  glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                    composePresentation ? filterFramebuffer_ : sceneFramebuffer_);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+  glBlitFramebuffer(0, 0, width_, height_, destX, destY,
+                    destX + destWidth, destY + destHeight,
+                    GL_COLOR_BUFFER_BIT,
+                    presentation_.filter == PresentFilter::linear ?
+                      GL_LINEAR : GL_NEAREST);
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 void Renderer::drawToneComposition(std::uint32_t framebuffer,
                                    int viewportX, int viewportY,
-                                   int viewportWidth, int viewportHeight) {
+                                   int viewportWidth, int viewportHeight,
+                                   bool screenPresentation) {
   glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
   glViewport(viewportX, viewportY, viewportWidth, viewportHeight);
   glDisable(GL_BLEND);
@@ -1406,10 +1409,31 @@ void Renderer::drawToneComposition(std::uint32_t framebuffer,
   glActiveTexture(GL_TEXTURE1);
   glBindTexture(GL_TEXTURE_2D, toneOverlayTexture_);
   glUniform1i(presentationOverlayUniform_, 1);
+  const auto video = images_.lookup(presentationVideo_);
+  const auto upperCanvas = images_.lookup(presentationUpperCanvas_);
+  glActiveTexture(GL_TEXTURE2);
+  glBindTexture(GL_TEXTURE_2D, video ? video->texture : whiteTexture_);
+  glUniform1i(presentationVideoUniform_, 2);
+  glActiveTexture(GL_TEXTURE3);
+  glBindTexture(GL_TEXTURE_2D,
+                upperCanvas ? upperCanvas->texture : whiteTexture_);
+  glUniform1i(presentationUpperCanvasUniform_, 3);
   glUniform1fv(presentationColorMatrixUniform_, 20,
                presentationColorMatrix_.data());
   glUniform1f(presentationColorMatrixAlphaUniform_,
               presentationColorMatrixAlpha_);
+  const bool separateScreenPresentation = screenPresentation &&
+      !offscreenRender_;
+  glUniform1i(presentationToneEnabledUniform_, toneCompositionActive_);
+  glUniform1i(presentationOpaqueBackgroundUniform_,
+              separateScreenPresentation);
+  glUniform1f(presentationCanvasOpacityUniform_, separateScreenPresentation
+      ? presentationCanvasOpacity_ : 1.0F);
+  glUniform1f(presentationVideoOpacityUniform_,
+      separateScreenPresentation && video ? presentationVideoOpacity_ : 0.0F);
+  glUniform1f(presentationUpperCanvasOpacityUniform_,
+      separateScreenPresentation && upperCanvas
+        ? presentationUpperCanvasOpacity_ : 0.0F);
   glDrawArrays(GL_TRIANGLES, 0, 6);
   ++stats_.drawCalls;
   glActiveTexture(GL_TEXTURE0);

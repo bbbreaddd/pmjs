@@ -11,6 +11,38 @@ napi_value setClearColor(napi_env env, napi_callback_info info) try {
   napi_throw_type_error(env, nullptr, error.what()); return nullptr;
 }
 
+napi_value setPresentationLayers(napi_env env, napi_callback_info info) try {
+  auto args = arguments(env, info, 5);
+  if (args.size() != 5) {
+    throw std::runtime_error("setPresentationLayers requires five arguments");
+  }
+  State& value = host(env);
+  const auto resolveOptionalImage = [&value, env](napi_value argument) {
+    const auto handle = asUint32(env, argument);
+    if (!handle) return pmjs::ImageHandle{0};
+    if (!value.images.lookup(handle)) {
+      throw std::runtime_error("invalid presentation image handle");
+    }
+    return static_cast<pmjs::ImageHandle>(handle);
+  };
+  const auto resolveOptionalCanvas = [&value, env](napi_value argument) {
+    const auto handle = asUint32(env, argument);
+    if (!handle) return pmjs::ImageHandle{0};
+    const auto image = value.canvases.prepareImage(handle);
+    if (!image) throw std::runtime_error("invalid presentation canvas handle");
+    return *image;
+  };
+  if (!value.renderer.setPresentationLayers(
+      static_cast<float>(asNumber(env, args[0])),
+      resolveOptionalImage(args[1]), static_cast<float>(asNumber(env, args[2])),
+      resolveOptionalCanvas(args[3]), static_cast<float>(asNumber(env, args[4])))) {
+    throw std::runtime_error("could not retain presentation image handle");
+  }
+  return undefined(env);
+} catch (const std::exception& error) {
+  napi_throw_type_error(env, nullptr, error.what()); return nullptr;
+}
+
 napi_value setRenderTargetSize(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 2);
   if (args.size() != 2 || !host(env).renderer.setRenderTargetSize(
@@ -346,6 +378,7 @@ napi_value presentationGeometry(napi_env env, napi_callback_info) try {
 void registerGraphicsBindings(napi_env env, napi_value exports) {
   napi_value render = moduleObject(env);
   method(env, render, "setClearColor", setClearColor);
+  method(env, render, "setPresentationLayers", setPresentationLayers);
   method(env, render, "setRenderTargetSize", setRenderTargetSize);
   method(env, render, "setScreenRenderSize", setScreenRenderSize);
   method(env, render, "quad", quad);

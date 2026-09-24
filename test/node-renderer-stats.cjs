@@ -4,6 +4,16 @@ const path = require('node:path');
 const native = require(path.resolve(process.argv[2]));
 native.initialize({gameRoot:path.resolve(process.argv[3]),assetRoot:'',width:32,height:32,windowTitle:'pmjs test'});
 
+native.beginFrame();
+native.render.quad(0, 0, 32, 32, 0.2, 0.3, 0.4, 1);
+native.renderFrame();
+const ordinaryPresentationStats = native.render.stats();
+if (ordinaryPresentationStats.drawCalls !== 1 ||
+    ordinaryPresentationStats.toneComposedPresentationFrames !== 0) {
+  throw new Error('ordinary gameplay left the direct blit path: ' +
+    JSON.stringify(ordinaryPresentationStats));
+}
+
 const image = native.images.load('fixture.png');
 const stride = native.scene.schema.valueStride;
 const end = [7, 0xffffffff, 0, 0xffffff, 0, 0, 0];

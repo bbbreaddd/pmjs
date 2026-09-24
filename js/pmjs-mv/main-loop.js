@@ -16,6 +16,10 @@
 
   function pmjsMvRender(now) {
     globalThis.pmjsRunRpgMakerRender(now);
+    if (typeof Graphics !== 'undefined' && Graphics._renderer &&
+        typeof Graphics._renderer._pmjsSyncPresentation === 'function') {
+      Graphics._renderer._pmjsSyncPresentation();
+    }
   }
 
   globalThis.pmjsMvTick = pmjsMvTick;

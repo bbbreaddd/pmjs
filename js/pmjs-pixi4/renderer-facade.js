@@ -1,3 +1,27 @@
+function nativeElementOpacity(element, fallback) {
+  if (!element || !element.style) return fallback;
+  var rawOpacity = element.style.opacity;
+  if (rawOpacity === '' || rawOpacity === undefined || rawOpacity === null) {
+    return fallback;
+  }
+  var opacity = Number(rawOpacity);
+  if (!Number.isFinite(opacity)) return fallback;
+  return Math.max(0, Math.min(1, opacity));
+}
+
+var pmjsVideoTelemetryEnabled = null;
+function isPmjsVideoTelemetryEnabled() {
+  if (pmjsVideoTelemetryEnabled === null) {
+    try {
+      pmjsVideoTelemetryEnabled = NativeHost.runtime.env(
+        'PMJS_VIDEO_TELEMETRY') === '1';
+    } catch (_) {
+      pmjsVideoTelemetryEnabled = false;
+    }
+  }
+  return pmjsVideoTelemetryEnabled;
+}
+
 function createNativePixiRenderer(width, height, options) {
   if (width && typeof width === 'object') {
     options = width;
@@ -317,19 +341,49 @@ function createNativePixiRenderer(width, height, options) {
       renderNativeStage(stage, transform ?
         nativeComposeTransform(screenTransform, transform) : screenTransform,
       this.resolution, this.roundPixels, skipUpdateTransform);
+      this.textureGC.update();
+      if (typeof this.emit === 'function') this.emit('postrender');
+    },
+    _pmjsSyncPresentation: function() {
+      var canvasOpacity = nativeElementOpacity(Graphics._canvas, 1);
       var video = Graphics._video;
+      var videoOpacity = nativeElementOpacity(video, 1);
       var videoTexture = video &&
         (typeof video._pmjsNativeTextureSource === 'function' ?
           video._pmjsNativeTextureSource() :
           (video._nativeImage || video._nativeCanvas));
-      if (videoTexture && video.style.opacity > 0) {
-        NativeHost.render.image(videoTexture.handle,
-          screenWidth / video.videoWidth, 0, 0,
-          screenHeight / video.videoHeight, 0, 0,
-          0, 0, video.videoWidth, video.videoHeight, 1, 0xffffff, 0);
+      var videoHandle = videoTexture && videoOpacity > 0 &&
+        video.videoWidth > 0 && video.videoHeight > 0 ? videoTexture.handle : 0;
+      var upperCanvas = Graphics._upperCanvas;
+      var upperCanvasOpacity = nativeElementOpacity(upperCanvas, 1);
+      var upperCanvasHandle = upperCanvas && upperCanvasOpacity > 0 &&
+        typeof upperCanvas._ensureNativeCanvas === 'function'
+        ? upperCanvas._ensureNativeCanvas().handle : 0;
+      if (isPmjsVideoTelemetryEnabled()) {
+        var sceneName = '';
+        try {
+          sceneName = SceneManager._scene.constructor.name;
+        } catch (_) {}
+        var videoLoading = !!(Graphics && Graphics._videoLoading);
+        var presentationState = [videoLoading, canvasOpacity, videoOpacity,
+          videoHandle, upperCanvasOpacity, upperCanvasHandle, sceneName].join('|');
+        if (presentationState !== this._pmjsLastVideoTelemetryState) {
+          this._pmjsLastVideoTelemetryState = presentationState;
+          console.log('[pmjs-video-lifecycle] ' + JSON.stringify({
+            event: 'presentation-state',
+            timeMs: performance.now(),
+            scene: sceneName,
+            videoLoading: videoLoading,
+            canvasOpacity: canvasOpacity,
+            videoOpacity: videoOpacity,
+            videoReady: !!videoHandle,
+            upperCanvasOpacity: upperCanvasOpacity,
+            upperCanvasReady: !!upperCanvasHandle
+          }));
+        }
       }
-      this.textureGC.update();
-      if (typeof this.emit === 'function') this.emit('postrender');
+      NativeHost.render.setPresentationLayers(canvasOpacity,
+        videoHandle, videoOpacity, upperCanvasHandle, upperCanvasOpacity);
     },
     extract: {
       base64: function(target) {

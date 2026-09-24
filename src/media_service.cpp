@@ -137,6 +137,11 @@ std::uint32_t MediaService::loadAudio(const std::string& path, std::string* erro
   std::unique_ptr<AudioDecoderSession> decoder;
   try { decoder = std::make_unique<AudioDecoderSession>(resolved); }
   catch (const std::exception& exception) { if (error) *error = exception.what(); return 0; }
+  return installAudioDecoder(std::move(decoder));
+}
+std::uint32_t MediaService::installAudioDecoder(
+    std::unique_ptr<AudioDecoderSession> decoder) {
+  if (!decoder) return 0;
   auto voice = std::make_shared<Impl::Voice>(std::move(decoder));
   std::lock_guard lock(impl_->mutex);
   std::uint32_t handle = impl_->nextHandle++;

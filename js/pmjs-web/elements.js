@@ -162,6 +162,14 @@ var nativeVideoFinalizer = typeof FinalizationRegistry === 'function'
       try { NativeHost.media.releaseVideo(handles.video); } catch (_) {}
       try { if (handles.audio) NativeHost.media.releaseAudio(handles.audio); } catch (_) {}
     }) : null;
+function videoTelemetry(event, details) {
+  try {
+    if (typeof NativeHost === 'undefined' || !NativeHost.runtime ||
+        NativeHost.runtime.env('PMJS_VIDEO_TELEMETRY') !== '1') return;
+    console.log('[pmjs-video-lifecycle] ' + JSON.stringify(
+      Object.assign({ event: event, timeMs: performance.now() }, details || {})));
+  } catch (_) {}
+}
 function VideoElement() {
   GenericElement.call(this, 'video');
   this._src = ''; this._media = null;
@@ -171,25 +179,41 @@ function VideoElement() {
   this.width = 0; this.height = 0; this._volume = 1; this._playbackRate = 1;
   this.loop = false; this._muted = false; this.paused = true; this.ended = false;
   this.preload = 'auto'; this._loadGeneration = 0; this._playGeneration = 0;
+  this._loading = false; this._playRequested = false;
+  this._pendingPlayPromises = [];
   this.readyState = 0; this.HAVE_NOTHING = 0; this.HAVE_METADATA = 1;
   this.HAVE_CURRENT_DATA = 2; this.HAVE_FUTURE_DATA = 3; this.HAVE_ENOUGH_DATA = 4;
 }
 VideoElement.prototype = Object.create(GenericElement.prototype);
 VideoElement.prototype.constructor = VideoElement;
+['loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough', 'error',
+  'play', 'pause', 'ended'].forEach(function(type) {
+  var property = 'on' + type;
+  var storage = '_eventHandler_' + type;
+  Object.defineProperty(VideoElement.prototype, property, {
+    configurable: true,
+    get: function() { return this[storage] || null; },
+    set: function(handler) {
+      var previous = this[storage];
+      if (previous) this.removeEventListener(type, previous);
+      this[storage] = typeof handler === 'function' ? handler : null;
+      if (this[storage]) this.addEventListener(type, this[storage]);
+    }
+  });
+});
 Object.defineProperty(VideoElement.prototype, 'src', {
   get: function() { return this._src; },
   set: function(value) {
     this._src = String(value);
-    var video = this;
     var generation = ++this._loadGeneration;
     this._releaseMedia();
+    this._loading = false;
+    this._playRequested = false;
     if (!this._src) {
       return;
     }
     if (this.preload === 'none') return;
-    pendingTasks.push(function() {
-      if (generation === video._loadGeneration && video._src) video._loadNow();
-    });
+    this._queueLoad(generation);
   }
 });
 Object.defineProperty(VideoElement.prototype, 'currentTime', {
@@ -237,6 +261,7 @@ VideoElement.prototype.canPlayType = function(type) {
   return /^video\//.test(String(type)) ? 'maybe' : '';
 };
 VideoElement.prototype._releaseMedia = function() {
+  this._settlePlayPromises(videoAbortError('The media resource was replaced'));
   if (nativeVideoFinalizer) nativeVideoFinalizer.unregister(this);
   if (this._media) NativeHost.media.releaseVideo(this._media.handle);
   if (this._audio) NativeHost.media.releaseAudio(this._audio.handle);
@@ -252,46 +277,137 @@ VideoElement.prototype._releaseMedia = function() {
 VideoElement.prototype._pmjsNativeTextureSource = function() {
   return this._nativeImage || this._nativeCanvas;
 };
-VideoElement.prototype._loadNow = function() {
-  this._releaseMedia();
+function videoAbortError(message) {
+  var error = new Error(message);
+  error.name = 'AbortError';
+  return error;
+}
+VideoElement.prototype._settlePlayPromises = function(error) {
+  var pending = this._pendingPlayPromises.splice(0);
+  pending.forEach(function(entry) {
+    if (error) entry.reject(error);
+    else entry.resolve();
+  });
+};
+VideoElement.prototype._failLoad = function(generation, error) {
+  if (generation !== this._loadGeneration) return;
+  this._loading = false;
+  this._playRequested = false;
+  this._settlePlayPromises(error || new Error('Video load failed'));
+  videoTelemetry('load-failed', {
+    generation: generation,
+    queueMs: this._loadRequestedAt === undefined ? null :
+      performance.now() - this._loadRequestedAt,
+    error: error && error.message || String(error || 'Video load failed')
+  });
+  var event = { type: 'error', target: this, error: error };
+  this.dispatchEvent(event);
+};
+VideoElement.prototype._loadNow = function(generation) {
+  var video = this;
   var source = this._src;
   if (!source && this.children.length) source = this.children[0].src || '';
   if (!source) return;
-  var encoded = source.split('?')[0].replace(/%(?![0-9a-f]{2})/gi, '%25');
-  var path = decodeURIComponent(encoded).replace(/^file:\/\/\/game\//, '').replace(/^\.\//, '');
+  var loadPromise;
   try {
-    this._media = NativeHost.media.loadVideo(path);
-    try { this._audio = NativeHost.media.loadAudio(path); } catch (_) { this._audio = null; }
-    if (nativeVideoFinalizer) nativeVideoFinalizer.register(this, {
-      video: this._media.handle, audio: this._audio && this._audio.handle
-    }, this);
-    var nativeTexture = { handle: this._media.image !== undefined ?
-      this._media.image : this._media.canvas,
-      width: this._media.width, height: this._media.height };
-    if (this._media.image !== undefined) this._nativeImage = nativeTexture;
-    else this._nativeCanvas = nativeTexture;
-    this.videoWidth = this._media.width; this.videoHeight = this._media.height;
-    if (!this.width) this.width = this.videoWidth;
-    if (!this.height) this.height = this.videoHeight;
-    this.duration = this._media.duration; this.readyState = this.HAVE_ENOUGH_DATA;
-    this.ended = false;
-    this.dispatchEvent({ type: 'loadedmetadata', target: this });
-    if (typeof this.onloadeddata === 'function') this.onloadeddata({ type: 'loadeddata', target: this });
-    this.dispatchEvent({ type: 'loadeddata', target: this });
-    this.dispatchEvent({ type: 'canplay', target: this });
-    this.dispatchEvent({ type: 'canplaythrough', target: this });
+    var encoded = source.split('?')[0].replace(/%(?![0-9a-f]{2})/gi, '%25');
+    var path = decodeURIComponent(encoded).replace(/^file:\/\/\/game\//, '').replace(/^\.\//, '');
+    this._loading = true;
+    this._nativeLoadStartedAt = performance.now();
+    videoTelemetry('native-load-start', {
+      generation: generation,
+      queueMs: this._loadRequestedAt === undefined ? null :
+        this._nativeLoadStartedAt - this._loadRequestedAt
+    });
+    loadPromise = NativeHost.media.loadVideoAsync(path);
   } catch (error) {
-    if (typeof this.onerror === 'function') this.onerror({ type: 'error', target: this, error: error });
-    this.dispatchEvent({ type: 'error', target: this, error: error });
+    this._failLoad(generation, error);
+    return;
   }
+  loadPromise.then(function(media) {
+    if (generation !== video._loadGeneration) {
+      NativeHost.media.releaseVideo(media.handle);
+      if (media.audio) NativeHost.media.releaseAudio(media.audio);
+      return;
+    }
+    video._loading = false;
+    video._media = { handle: media.handle };
+    video._audio = media.audio ? { handle: media.audio } : null;
+    var nativeTexture = { handle: media.image, width: media.width, height: media.height };
+    video._nativeImage = nativeTexture;
+    video.videoWidth = media.width; video.videoHeight = media.height;
+    if (!video.width) video.width = video.videoWidth;
+    if (!video.height) video.height = video.videoHeight;
+    video.duration = media.duration; video.readyState = video.HAVE_ENOUGH_DATA;
+    video.ended = false;
+    if (nativeVideoFinalizer) nativeVideoFinalizer.register(video, {
+      video: media.handle, audio: media.audio || 0
+    }, video);
+    videoTelemetry('first-frame-ready', {
+      generation: generation,
+      queueMs: video._loadRequestedAt === undefined ? null :
+        performance.now() - video._loadRequestedAt,
+      nativeMs: video._nativeLoadStartedAt === undefined ? null :
+        performance.now() - video._nativeLoadStartedAt,
+      width: media.width,
+      height: media.height
+    });
+    video.dispatchEvent({ type: 'loadedmetadata', target: video });
+    video.dispatchEvent({ type: 'loadeddata', target: video });
+    var graphics = typeof Graphics !== 'undefined' ? Graphics : null;
+    videoTelemetry('loadeddata-dispatched', {
+      generation: generation,
+      videoLoading: !!(graphics && graphics._videoLoading),
+      canvasOpacity: graphics && graphics._canvas && graphics._canvas.style
+        ? graphics._canvas.style.opacity : null,
+      videoOpacity: video.style ? video.style.opacity : null
+    });
+    video.dispatchEvent({ type: 'canplay', target: video });
+    video.dispatchEvent({ type: 'canplaythrough', target: video });
+    if (video._playRequested) video._startPlayback();
+  }, function(error) {
+    video._failLoad(generation, error);
+  });
 };
 VideoElement.prototype.load = function() {
-  ++this._loadGeneration;
-  this._loadNow();
+  var generation = ++this._loadGeneration;
+  this._releaseMedia();
+  this._loading = false;
+  this._playRequested = false;
+  if (!this._src && !this.children.length) return;
+  this._queueLoad(generation);
+};
+VideoElement.prototype._queueLoad = function(generation) {
+  var video = this;
+  this._loading = true;
+  this._loadRequestedAt = performance.now();
+  this._nativeLoadStartedAt = undefined;
+  videoTelemetry('load-queued', { generation: generation });
+  pendingTasks.push(function() {
+    if (generation === video._loadGeneration && video._loading) {
+      video._loadNow(generation);
+    }
+  });
 };
 VideoElement.prototype.play = function() {
   ++this._playGeneration;
-  if (!this._media) this.load();
+  if (!this._media && !this._loading) this.load();
+  var video = this;
+  var promise = new Promise(function(resolve, reject) {
+    video._pendingPlayPromises.push({ resolve: resolve, reject: reject });
+  });
+  if (!this._media && !this._loading) {
+    this._playRequested = false;
+    this._settlePlayPromises(new Error('No video source is available'));
+  } else {
+    this._playRequested = true;
+    this._startPlayback();
+  }
+  return promise;
+};
+VideoElement.prototype._startPlayback = function() {
+  if (!this._media || !this._playRequested) return;
+  this._playRequested = false;
   this.paused = false; this.ended = false; this._startOffset = this._currentTime;
   this._startedAt = performance.now();
   if (this._audio) {
@@ -301,11 +417,16 @@ VideoElement.prototype.play = function() {
   }
   if (nativeVideos.indexOf(this) < 0) nativeVideos.push(this);
   this.dispatchEvent({ type: 'play', target: this });
-  return Promise.resolve();
+  this._settlePlayPromises();
 };
 VideoElement.prototype.pause = function() {
+  ++this._playGeneration;
+  this._playRequested = false;
+  this._settlePlayPromises(videoAbortError('Playback was interrupted by pause'));
   this._currentTime = this.currentTime; this.paused = true;
   if (this._audio) NativeHost.media.stopAudio(this._audio.handle);
+  var index = nativeVideos.indexOf(this);
+  if (index >= 0) nativeVideos.splice(index, 1);
   this.dispatchEvent({ type: 'pause', target: this });
 };
 VideoElement.prototype._update = function() {
@@ -316,7 +437,6 @@ VideoElement.prototype._update = function() {
     else {
       this._currentTime = this.duration; this.paused = true; this.ended = true;
       if (this._audio) NativeHost.media.stopAudio(this._audio.handle);
-      if (typeof this.onended === 'function') this.onended({ type: 'ended', target: this });
       this.dispatchEvent({ type: 'ended', target: this });
       return !this.paused && !!this._media;
     }

@@ -94,6 +94,147 @@ std::vector<std::uint8_t> audioBytes(napi_env env, napi_value value) {
   const auto* begin = static_cast<const std::uint8_t*>(data);
   return std::vector<std::uint8_t>(begin, begin + size);
 }
+
+struct AsyncVideoLoad {
+  napi_async_work work = nullptr;
+  napi_deferred deferred = nullptr;
+  std::filesystem::path path;
+  std::chrono::steady_clock::time_point queuedAt =
+    std::chrono::steady_clock::now();
+  std::unique_ptr<pmjs::VideoDecoderSession> video;
+  std::unique_ptr<pmjs::AudioDecoderSession> audio;
+  std::optional<pmjs::VideoFrame> firstFrame;
+  std::string error;
+  double videoOpenMs = 0;
+  double firstFrameMs = 0;
+  double audioOpenMs = 0;
+  double workerMs = 0;
+};
+
+void executeVideoLoad(napi_env, void* opaque) noexcept {
+  auto* load = static_cast<AsyncVideoLoad*>(opaque);
+  const auto workerStartedAt = std::chrono::steady_clock::now();
+  try {
+    auto phaseStartedAt = std::chrono::steady_clock::now();
+    load->video = std::make_unique<pmjs::VideoDecoderSession>(load->path);
+    load->videoOpenMs = std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now() - phaseStartedAt).count();
+    phaseStartedAt = std::chrono::steady_clock::now();
+    load->firstFrame = load->video->frame(0.0, &load->error);
+    load->firstFrameMs = std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now() - phaseStartedAt).count();
+    if (!load->firstFrame) {
+      if (load->error.empty()) load->error = "video has no decodable first frame";
+      load->video.reset();
+      load->workerMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - workerStartedAt).count();
+      return;
+    }
+    phaseStartedAt = std::chrono::steady_clock::now();
+    try {
+      load->audio = std::make_unique<pmjs::AudioDecoderSession>(load->path);
+    } catch (...) {
+    }
+    load->audioOpenMs = std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now() - phaseStartedAt).count();
+  } catch (const std::exception& error) {
+    load->error = error.what();
+  } catch (...) {
+    load->error = "video load failed";
+  }
+  load->workerMs = std::chrono::duration<double, std::milli>(
+    std::chrono::steady_clock::now() - workerStartedAt).count();
+}
+
+void reportVideoLoad(const AsyncVideoLoad& load, double installMs,
+                     bool success) {
+  const auto* enabled = std::getenv("PMJS_VIDEO_TELEMETRY");
+  if (!enabled || std::string(enabled) != "1") return;
+  const double totalMs = std::chrono::duration<double, std::milli>(
+    std::chrono::steady_clock::now() - load.queuedAt).count();
+  std::cerr << "[pmjs-video-load] {\"success\":"
+    << (success ? "true" : "false")
+    << ",\"totalMs\":" << totalMs
+    << ",\"videoOpenMs\":" << load.videoOpenMs
+    << ",\"firstFrameMs\":" << load.firstFrameMs
+    << ",\"audioOpenMs\":" << load.audioOpenMs
+    << ",\"workerMs\":" << load.workerMs
+    << ",\"mainThreadInstallMs\":" << installMs << "}\n";
+}
+
+void completeVideoLoad(napi_env env, napi_status status, void* opaque) {
+  std::unique_ptr<AsyncVideoLoad> load(static_cast<AsyncVideoLoad*>(opaque));
+  const auto completionStartedAt = std::chrono::steady_clock::now();
+  const auto reportInstallTime = [&load, completionStartedAt](bool success) {
+    reportVideoLoad(*load, std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now() - completionStartedAt).count(), success);
+  };
+  auto reject = [&](const char* fallback) {
+    napi_value message;
+    napi_value error;
+    const std::string& text = load->error.empty() ? std::string(fallback) : load->error;
+    napi_create_string_utf8(env, text.c_str(), text.size(), &message);
+    napi_create_error(env, nullptr, message, &error);
+    napi_reject_deferred(env, load->deferred, error);
+  };
+  if (status != napi_ok || !load->video || !load->firstFrame) {
+    reportInstallTime(false);
+    reject("video load was cancelled");
+    napi_delete_async_work(env, load->work);
+    return;
+  }
+
+  State* value = state.get();
+  pmjs::ImageHandle imageHandle = 0;
+  std::uint32_t videoHandle = 0;
+  std::uint32_t audioHandle = 0;
+  bool videoStored = false;
+  try {
+    if (!value) throw std::runtime_error("native host is not initialized");
+    const auto image = value->images.createRgba(load->firstFrame->width,
+        load->firstFrame->height, load->firstFrame->rgba.data());
+    if (!image) throw std::runtime_error("cannot allocate video texture");
+    imageHandle = image->handle;
+    auto video = std::make_unique<State::Video>(std::move(load->video));
+    video->image = image->handle;
+    video->duration = video->decoder->info().duration;
+    video->sourceFps = video->decoder->info().videoFrameRate;
+    video->timestamp = load->firstFrame->timestamp;
+    video->recycle(std::move(load->firstFrame->rgba));
+    video->telemetryEnabled = std::getenv("PMJS_VIDEO_TELEMETRY") &&
+      std::string(std::getenv("PMJS_VIDEO_TELEMETRY")) == "1";
+    videoHandle = value->nextVideo++;
+    if (!videoHandle) videoHandle = value->nextVideo++;
+    value->videos.emplace(videoHandle, std::move(video));
+    videoStored = true;
+    audioHandle = load->audio
+      ? value->core.media().installAudioDecoder(std::move(load->audio)) : 0;
+
+    napi_value result;
+    napi_create_object(env, &result);
+    napi_set_named_property(env, result, "handle", uint32(env, videoHandle));
+    napi_set_named_property(env, result, "image", uint32(env, image->handle));
+    napi_set_named_property(env, result, "width", number(env, image->width));
+    napi_set_named_property(env, result, "height", number(env, image->height));
+    napi_set_named_property(env, result, "duration",
+      number(env, value->videos.at(videoHandle)->duration));
+    napi_set_named_property(env, result, "audio",
+      audioHandle ? uint32(env, audioHandle) : null(env));
+    napi_resolve_deferred(env, load->deferred, result);
+    syncExternalMemory(env);
+    reportInstallTime(true);
+  } catch (const std::exception& error) {
+    load->error = error.what();
+    if (value) {
+      if (audioHandle) value->core.media().release(audioHandle);
+      if (videoStored) value->videos.erase(videoHandle);
+      if (imageHandle) value->images.release(imageHandle);
+    }
+    reportInstallTime(false);
+    reject("video load failed");
+  }
+  napi_delete_async_work(env, load->work);
+}
 }
 
 napi_value loadAudio(napi_env env, napi_callback_info info) try {
@@ -108,6 +249,32 @@ napi_value loadAudio(napi_env env, napi_callback_info info) try {
   napi_set_named_property(env, result, "duration",
     number(env, value.core.media().duration(handle)));
   return result;
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what()); return nullptr;
+}
+
+napi_value loadVideoAsync(napi_env env, napi_callback_info info) try {
+  auto args = arguments(env, info, 1);
+  State& value = host(env);
+  const auto path = value.vfs.resolve(asString(env, args.at(0)));
+  if (!path) throw std::runtime_error("video path is outside the game root");
+  auto load = std::make_unique<AsyncVideoLoad>();
+  load->path = *path;
+  napi_value promise;
+  check(env, napi_create_promise(env, &load->deferred, &promise),
+        "cannot create video load promise");
+  napi_value name;
+  check(env, napi_create_string_utf8(env, "pmjs-video-load", NAPI_AUTO_LENGTH,
+                                     &name), "cannot create video work name");
+  check(env, napi_create_async_work(env, nullptr, name, executeVideoLoad,
+      completeVideoLoad, load.get(), &load->work), "cannot create video work");
+  const auto queued = napi_queue_async_work(env, load->work);
+  if (queued != napi_ok) {
+    napi_delete_async_work(env, load->work);
+    check(env, queued, "cannot queue video work");
+  }
+  load.release();
+  return promise;
 } catch (const std::exception& error) {
   napi_throw_error(env, nullptr, error.what()); return nullptr;
 }
@@ -281,6 +448,7 @@ void registerMediaBindings(napi_env env, napi_value exports) {
   method(env, media, "releaseAudio", releaseAudio);
   method(env, media, "setMasterVolume", setMasterVolume);
   method(env, media, "loadVideo", loadVideo);
+  method(env, media, "loadVideoAsync", loadVideoAsync);
   method(env, media, "updateVideo", updateVideo);
   method(env, media, "releaseVideo", releaseVideo);
   check(env, napi_set_named_property(env, exports, "media", media), "cannot export media module");
