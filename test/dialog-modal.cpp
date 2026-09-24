@@ -115,11 +115,9 @@ void check(bool condition, const char* message) {
 int main() {
   const fs::path root = fs::temp_directory_path() / "pmjs-dialog-modal-test";
   fs::create_directories(root / "fonts");
-  const fs::path systemFont = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
-  if (fs::exists(systemFont)) {
-    fs::copy_file(systemFont, root / "fonts" / "mplus-1m-regular.ttf",
-                   fs::copy_options::overwrite_existing);
-  }
+  const fs::path testFont = fs::path(__FILE__).parent_path() / "assets" / "testfont.ttf";
+  fs::copy_file(testFont, root / "fonts" / "mplus-1m-regular.ttf",
+                 fs::copy_options::overwrite_existing);
 
   pmjs::Platform platform(816, 624, "pmjs dialog test");
   pmjs::ImageStore images;

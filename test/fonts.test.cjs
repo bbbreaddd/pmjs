@@ -124,8 +124,8 @@ test('PMJS.fonts.normalizeFontUrl handles all valid game paths and rejects trave
 
   assert.equal(norm('fonts/My%20Font.ttf'), 'fonts/My Font.ttf');
 
-  assert.equal(norm('BestTen-CRT.ttf', 'fonts/gamefont.css'), 'fonts/BestTen-CRT.ttf');
-  assert.equal(norm('./BestTen-CRT.ttf', 'fonts/gamefont.css'), 'fonts/BestTen-CRT.ttf');
+  assert.equal(norm('Secondary.ttf', 'fonts/gamefont.css'), 'fonts/Secondary.ttf');
+  assert.equal(norm('./Secondary.ttf', 'fonts/gamefont.css'), 'fonts/Secondary.ttf');
   assert.equal(norm('/game/fonts/foo.ttf', 'fonts/gamefont.css'), 'fonts/foo.ttf');
   assert.equal(norm('file:///game/fonts/foo.ttf', 'fonts/gamefont.css'), 'fonts/foo.ttf');
   assert.equal(norm('/fonts/foo.ttf', 'fonts/gamefont.css'), 'fonts/foo.ttf');
@@ -237,7 +237,7 @@ test('Unregistered GameFont returns false even when fonts/gamefont.ttf exists', 
 
 test('Stock MV Graphics.loadFont registers @font-face through style.sheet.insertRule end-to-end', () => {
   const { context } = createFontSandbox({
-    existingFiles: ['fonts/VCR_OSD_MONO_1.001.ttf', 'fonts/BestTen-CRT.ttf']
+    existingFiles: ['fonts/Primary.ttf', 'fonts/Secondary.ttf']
   });
 
   context.Graphics = context.Graphics || {};
@@ -266,8 +266,8 @@ test('Stock MV Graphics.loadFont registers @font-face through style.sheet.insert
     this._createFontLoader(name);
   };
 
-  context.Graphics.loadFont('default1', 'fonts/VCR_OSD_MONO_1.001.ttf');
-  context.Graphics.loadFont('japanese', 'fonts/BestTen-CRT.ttf');
+  context.Graphics.loadFont('default1', 'fonts/Primary.ttf');
+  context.Graphics.loadFont('japanese', 'fonts/Secondary.ttf');
 
   assert.equal(context.PMJS.fonts.isFamilyLoaded('default1'), true);
   assert.equal(context.PMJS.fonts.isFamilyLoaded('japanese'), true);
@@ -279,9 +279,9 @@ test('Stock MV Graphics.loadFont registers @font-face through style.sheet.insert
 
 test('MV adapter loads fonts/gamefont.css and registers GameFont relative to stylesheet', () => {
   const { context } = createFontSandbox({
-    existingFiles: ['fonts/BestTen-CRT.ttf'],
+    existingFiles: ['fonts/Secondary.ttf'],
     vfsFiles: {
-      'fonts/gamefont.css': '@font-face {\n    font-family: GameFont;\n    src: url("BestTen-CRT.ttf");\n}\n'
+      'fonts/gamefont.css': '@font-face {\n    font-family: GameFont;\n    src: url("Secondary.ttf");\n}\n'
     }
   });
 

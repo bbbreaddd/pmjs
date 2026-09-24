@@ -13,10 +13,10 @@ native.initialize({
   windowTitle: 'glyph cache test',
 });
 
-const font = 'testfont.otf';
+const font = 'testfont.ttf';
 
 // 1. Font loading validation
-assert.equal(native.canvas.canLoadFont(font), true, 'testfont.otf must load successfully');
+assert.equal(native.canvas.canLoadFont(font), true, 'testfont.ttf must load successfully');
 assert.equal(native.canvas.canLoadFont('nonexistent-font.ttf'), false, 'nonexistent font must fail to load');
 
 let stats = native.canvas.glyphStats();

@@ -150,6 +150,7 @@ if(BUILD_TESTING)
   execute_process(COMMAND ${BASE64_EXECUTABLE} -d INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/fixture.png.b64" OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture.png" COMMAND_ERROR_IS_FATAL ANY)
   execute_process(COMMAND ${BASE64_EXECUTABLE} -d INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/fixture.jpg.b64" OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture.jpg" COMMAND_ERROR_IS_FATAL ANY)
   execute_process(COMMAND ${BASE64_EXECUTABLE} -d INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/fixture-video.mp4.b64" OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture-video.mp4" COMMAND_ERROR_IS_FATAL ANY)
+  configure_file("${CMAKE_CURRENT_SOURCE_DIR}/test/assets/testfont.ttf" "${CMAKE_CURRENT_BINARY_DIR}/test-assets/testfont.ttf" COPYONLY)
   add_test(NAME native-media-decoder COMMAND pmjs-media-decoder-test
     "${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture-video.mp4")
   configure_file("${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture.png" "${CMAKE_CURRENT_BINARY_DIR}/test-assets/lease.png" COPYONLY)
