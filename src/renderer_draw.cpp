@@ -1129,6 +1129,7 @@ void Renderer::renderScene() {
       glUniform1i(maskEnabledUniform_, 0);
       glUniform1i(colorMatrixEnabledUniform_, 1);
       glUniform1i(spriteColorEnabledUniform_, 0);
+      glUniform1i(premultipliedInputUniform_, 1);
       glUniform1fv(colorMatrixUniform_, 20,
                    operation.matrixCommand->colorMatrix.data());
       glUniform1f(colorMatrixAlphaUniform_,

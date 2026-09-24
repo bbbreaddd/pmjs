@@ -910,8 +910,13 @@ constexpr const char* presentationFragmentSource = R"(
       adjusted.g = colorMatrix[5] * straight.r + colorMatrix[6] * straight.g + colorMatrix[7] * straight.b + colorMatrix[8] * straight.a + colorMatrix[9];
       adjusted.b = colorMatrix[10] * straight.r + colorMatrix[11] * straight.g + colorMatrix[12] * straight.b + colorMatrix[13] * straight.a + colorMatrix[14];
       adjusted.a = colorMatrix[15] * straight.r + colorMatrix[16] * straight.g + colorMatrix[17] * straight.b + colorMatrix[18] * straight.a + colorMatrix[19];
-      vec3 rgb = mix(straight.rgb, adjusted.rgb, colorMatrixAlpha) * adjusted.a;
-      vec4 toned = vec4(rgb, adjusted.a);
+      // Pixi writes the tone pass to an RGBA target before drawing pictures.
+      // Clamp that pass here so negative black-tone RGB cannot subtract from
+      // a later translucent picture during the combined presentation pass.
+      float tonedAlpha = clamp(adjusted.a, 0.0, 1.0);
+      vec3 rgb = clamp(mix(straight.rgb, adjusted.rgb, colorMatrixAlpha) *
+                       adjusted.a, 0.0, 1.0);
+      vec4 toned = vec4(rgb, tonedAlpha);
       vec4 toneOverlay = texture(overlayImage, vertexUv);
       scene = toneOverlay + toned * (1.0 - toneOverlay.a);
     }
