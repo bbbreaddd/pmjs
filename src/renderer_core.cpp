@@ -488,7 +488,7 @@ void Renderer::destroyTileLayer(std::uint32_t layer) {
   tileLayers_.erase(found);
 }
 
-std::vector<std::uint8_t> Renderer::captureSceneRgba() {
+std::vector<std::uint8_t> Renderer::captureSceneRawPremultiplied() {
   if (!offscreenRender_) materializeToneComposition();
   std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width_) *
                                    static_cast<std::size_t>(height_) * 4U);
@@ -509,6 +509,11 @@ std::vector<std::uint8_t> Renderer::captureSceneRgba() {
     std::copy(bottom, bottom + static_cast<std::ptrdiff_t>(rowBytes), top);
     std::copy(row.begin(), row.end(), bottom);
   }
+  return pixels;
+}
+
+std::vector<std::uint8_t> Renderer::captureSceneRgba() {
+  auto pixels = captureSceneRawPremultiplied();
   for (std::size_t offset = 0; offset < pixels.size(); offset += 4) {
     const std::uint32_t alpha = pixels[offset + 3];
     if (alpha == 0 || alpha == 255) continue;

@@ -196,6 +196,7 @@ class Renderer {
   void renderScene();
   void presentToDrawable();
   std::vector<std::uint8_t> captureSceneRgba();
+  std::vector<std::uint8_t> captureSceneRawPremultiplied();
   // Window backbuffer readback, valid only before swap.
   std::vector<std::uint8_t> captureDrawableRgba();
   std::vector<std::uint8_t> renderToRgba();

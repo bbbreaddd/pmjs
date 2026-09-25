@@ -20,6 +20,21 @@ napi_value captureScene(napi_env env, napi_callback_info) try {
   napi_throw_error(env, nullptr, error.what()); return nullptr;
 }
 
+napi_value captureSceneRawPremultiplied(napi_env env, napi_callback_info) try {
+  auto pixels = host(env).renderer.captureSceneRawPremultiplied();
+  void* data = nullptr;
+  napi_value buffer;
+  check(env, napi_create_arraybuffer(env, pixels.size(), &data, &buffer),
+        "cannot allocate raw scene pixel buffer");
+  std::memcpy(data, pixels.data(), pixels.size());
+  napi_value result;
+  check(env, napi_create_typedarray(env, napi_uint8_array, pixels.size(),
+    buffer, 0, &result), "cannot create raw scene pixel array");
+  return result;
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what()); return nullptr;
+}
+
 napi_value captureDrawable(napi_env env, napi_callback_info) try {
   State& value = host(env);
   value.core.syncDrawableSize();
@@ -285,6 +300,8 @@ void registerCanvasBindings(napi_env env, napi_value exports) {
   napi_value canvas = moduleObject(env);
   method(env, canvas, "create", createCanvas);
   method(env, canvas, "captureScene", captureScene);
+  method(env, canvas, "captureSceneRawPremultiplied",
+    captureSceneRawPremultiplied);
   method(env, canvas, "captureDrawable", captureDrawable);
   method(env, canvas, "fillRect", fillRect);
   method(env, canvas, "fillRadialGradient", fillRadialGradient);

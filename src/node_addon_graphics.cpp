@@ -1,6 +1,38 @@
 #include "node_addon_internal.hpp"
+#include <GLES3/gl3.h>
 
 namespace pmjs::addon {
+napi_value graphicsInfo(napi_env env, napi_callback_info) try {
+  host(env);
+  napi_value result;
+  check(env, napi_create_object(env, &result), "cannot create graphics info");
+  const auto setText = [&](const char* key, GLenum parameter) {
+    const auto* value = glGetString(parameter);
+    check(env, napi_set_named_property(env, result, key,
+      string(env, value ? reinterpret_cast<const char*>(value) : "unknown")),
+      "cannot set graphics string");
+  };
+  const auto setBits = [&](const char* key, GLenum parameter) {
+    GLint value = 0;
+    glGetIntegerv(parameter, &value);
+    check(env, napi_set_named_property(env, result, key,
+      number(env, value)), "cannot set graphics channel bits");
+  };
+  setText("vendor", GL_VENDOR);
+  setText("renderer", GL_RENDERER);
+  setText("version", GL_VERSION);
+  setText("shadingLanguageVersion", GL_SHADING_LANGUAGE_VERSION);
+  setBits("redBits", GL_RED_BITS);
+  setBits("greenBits", GL_GREEN_BITS);
+  setBits("blueBits", GL_BLUE_BITS);
+  setBits("alphaBits", GL_ALPHA_BITS);
+  check(env, napi_set_named_property(env, result, "sceneFormat",
+    string(env, "RGBA8")), "cannot set scene format");
+  return result;
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what()); return nullptr;
+}
+
 napi_value setClearColor(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 4);
   if (args.size() != 4) throw std::runtime_error("setClearColor requires rgba");
@@ -378,6 +410,7 @@ napi_value presentationGeometry(napi_env env, napi_callback_info) try {
 void registerGraphicsBindings(napi_env env, napi_value exports) {
   napi_value render = moduleObject(env);
   method(env, render, "setClearColor", setClearColor);
+  method(env, render, "graphicsInfo", graphicsInfo);
   method(env, render, "setPresentationLayers", setPresentationLayers);
   method(env, render, "setRenderTargetSize", setRenderTargetSize);
   method(env, render, "setScreenRenderSize", setScreenRenderSize);
