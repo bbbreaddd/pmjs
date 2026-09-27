@@ -3,14 +3,14 @@
 // Shared YED_Tiled fast paths for RPG Maker MV.
 // Unrecognized methods stay on reference behavior.
 (function() {
-  if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
-      typeof PMJS.optimizations.register === 'function') {
-    PMJS.optimizations.register({
+  if (typeof PMJS !== 'undefined' && PMJS.plugins &&
+      typeof PMJS.plugins.registerOptimization === 'function') {
+    PMJS.plugins.registerOptimization('YED_Tiled', {
       id: 'tilemap.yed-indexed-paint-loops',
       owner: 'plugins/yed/tiled',
       fallback: 'run the original YED tile paint and priority-tile loops'
     });
-    PMJS.optimizations.register({
+    PMJS.plugins.registerOptimization('YED_Tiled', {
       id: 'tilemap.yed-indexed-animation',
       owner: 'plugins/yed/tiled',
       fallback: 'full tilemap repaint on every animation tick'

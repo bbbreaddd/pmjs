@@ -8,6 +8,7 @@
   var loadSequence = 0;
   var callbacks = Object.create(null);
   var finished = false;
+  var optimizationRequirements = [];
 
   function key(name) {
     return String(name).replace(/\.js$/i, '').toLowerCase();
@@ -114,6 +115,12 @@
 
   globalThis.PMJS = globalThis.PMJS || {};
   PMJS.plugins = {
+    registerOptimization: function(name, definition) {
+      if (finished) throw new Error('PMJS plugins: optimization registration after resolution');
+      PMJS.optimizations.register(definition);
+      optimizationRequirements.push({ plugin: key(name), id: definition.id });
+    },
+
     snapshotOriginalManifest: function(records) {
       if (originalManifest) throw new Error('PMJS plugins: original manifest already captured');
       originalManifest = copyManifest(records);
@@ -176,6 +183,14 @@
         if (entry.enabled && entry.state === 'discovered') {
           entry.state = 'unloaded';
           entry.reason = 'enabled in manifest but no load event observed';
+        }
+      });
+      optimizationRequirements.forEach(function(requirement) {
+        var entry = guests[requirement.plugin];
+        if (!entry || entry.state !== 'loaded') {
+          PMJS.optimizations.refuse(requirement.id,
+            'required guest plugin ' + requirement.plugin + ' unavailable: ' +
+            (entry ? entry.state : 'not discovered'));
         }
       });
       return true;

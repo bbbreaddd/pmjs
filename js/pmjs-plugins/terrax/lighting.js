@@ -4,9 +4,9 @@
 // Gates the GPU recorder plus mask-sprite pooling; disabled means stock
 // Terrax Canvas _updateMask and light-sprite handling.
 (function() {
-  if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
-      typeof PMJS.optimizations.register === 'function') {
-    PMJS.optimizations.register({
+  if (typeof PMJS !== 'undefined' && PMJS.plugins &&
+      typeof PMJS.plugins.registerOptimization === 'function') {
+    PMJS.plugins.registerOptimization('Terrax_Lighting', {
       id: 'terrax.native-lighting',
       owner: 'plugins/terrax/lighting',
       fallback: 'ordinary Terrax Canvas _updateMask and stock light-sprite handling'

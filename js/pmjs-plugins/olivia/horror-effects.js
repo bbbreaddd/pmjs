@@ -4,9 +4,9 @@
 // Skips inactive HorrorEffects updates and synchronize calls when filters are absent.
 // Guard only exact Olivia implementations; leave composed or foreign wrappers untouched.
 (function() {
-  if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
-      typeof PMJS.optimizations.register === 'function') {
-    PMJS.optimizations.register({
+  if (typeof PMJS !== 'undefined' && PMJS.plugins &&
+      typeof PMJS.plugins.registerOptimization === 'function') {
+    PMJS.plugins.registerOptimization('Olivia_HorrorEffects', {
       id: 'plugins.olivia.horror-effects',
       owner: 'plugins/olivia/horror-effects',
       fallback: 'run original Olivia HorrorEffects methods unconditionally on every sprite'

@@ -584,7 +584,6 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
   for (var index = 0; index < childLimit; index++) {
     if (nativeSceneTraversesChild(kind, node, node.children[index])) {
       if (!particleFrame &&
-          nativePlainSpriteSegmentsEnabled &&
           PMJS.optimizations.isEnabled('scene.plain-sprite-segment')) {
         var segment = [];
         var segmentIndex = index;

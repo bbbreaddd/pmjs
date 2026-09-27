@@ -125,9 +125,6 @@ var nativeMaterializationStats = {
 var nativeSceneSegmentStats = { runs: 0, sprites: 0, candidates: 0,
   bindingProbes: 0, rejectedProbes: 0, abandonedRuns: 0, abandonedSprites: 0 };
 var nativeSceneSegmentTracing = false;
-var nativePlainSpriteSegmentsEnabled =
-  typeof pmjsOptimizationEnv === 'function' &&
-  pmjsOptimizationEnv('PMJS_SCENE_PLAIN_SPRITE_SEGMENT') === '1';
 
 function nativeTextureSource(source) {
   if (!source) return null;

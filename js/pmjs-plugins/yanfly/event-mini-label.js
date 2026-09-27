@@ -11,9 +11,9 @@
 // transitions, classifier errors, and unrecognized method shapes all take
 // the original path.
 (function() {
-  if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
-      typeof PMJS.optimizations.register === 'function') {
-    PMJS.optimizations.register({
+  if (typeof PMJS !== 'undefined' && PMJS.plugins &&
+      typeof PMJS.plugins.registerOptimization === 'function') {
+    PMJS.plugins.registerOptimization('YEP_EventMiniLabel', {
       id: 'plugins.yanfly.event-mini-label',
       owner: 'plugins/yanfly/event-mini-label',
       fallback: 'construct Window_EventMiniLabel for every event without checking page tags'
@@ -67,30 +67,9 @@
     return false;
   }
 
-  var classifier = null;
-  var classifierResolved = false;
-
   function classify(character) {
-    if (!classifierResolved) {
-      classifierResolved = true;
-      try {
-        var fastPaths = globalThis.__pmjsBuiltinRequire &&
-          typeof NativeHost !== 'undefined' && NativeHost &&
-          NativeHost.runtime &&
-          typeof NativeHost.runtime.env === 'function' ?
-          globalThis.__pmjsBuiltinRequire(
-            NativeHost.runtime.env('PMJS_NATIVE_FASTPATHS')) : null;
-        if (fastPaths && typeof fastPaths.pageHasMiniLabel === 'function') {
-          classifier = fastPaths.pageHasMiniLabel;
-        }
-      } catch (_) { classifier = null; }
-      if (!classifier) {
-        classifier = defaultPageHasMiniLabel;
-      }
-    }
-    if (!classifier) return null;
     try {
-      return classifier(character) ? true : false;
+      return defaultPageHasMiniLabel(character);
     } catch (_) { return null; }
   }
 
@@ -104,22 +83,8 @@
     } catch (_) { return undefined; }
   }
 
-  function isOptimizationEnabled() {
-    if (!PMJS.optimizations.isEnabled('plugins.yanfly.event-mini-label')) return false;
-    try {
-      if (typeof NativeHost !== 'undefined' && NativeHost &&
-          NativeHost.runtime &&
-          typeof NativeHost.runtime.env === 'function') {
-        if (NativeHost.runtime.env('PMJS_YEP_MINI_LABEL') === '0') {
-          return false;
-        }
-      }
-    } catch (_) {}
-    return true;
-  }
-
   function install() {
-    if (!isOptimizationEnabled()) return false;
+    if (!PMJS.optimizations.isEnabled('plugins.yanfly.event-mini-label')) return false;
 
     var spriteProto = typeof Sprite_Character !== 'undefined' &&
       Sprite_Character.prototype ? Sprite_Character.prototype : null;

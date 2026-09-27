@@ -43,11 +43,8 @@ const YEP_SHAPE = `function() {
 
 function makeHost({
   shape = YEP_SHAPE,
-  taggedPages = [],
   env = {},
-  disableOptimizations = [],
-  useAutonomousFallback = false,
-  classifyCounter = null
+  disableOptimizations = []
 } = {}) {
   const calls = { constructed: 0, original: 0 };
   const hooks = {};
@@ -59,9 +56,6 @@ function makeHost({
     NativeHost: {
       runtime: {
         env(name) {
-          if (name === 'PMJS_NATIVE_FASTPATHS' && !useAutonomousFallback) {
-            return 'sidecar';
-          }
           return env[name];
         }
       }
@@ -86,16 +80,6 @@ function makeHost({
   vm.runInContext(
     `Sprite_Character.prototype.setupMiniLabel = (${shape});`,
     context, { filename: 'minilabel-shape.js' });
-
-  if (!useAutonomousFallback) {
-    context.__pmjsBuiltinRequire = () => ({
-      pageHasMiniLabel(character) {
-        if (classifyCounter) classifyCounter.count++;
-        const page = character.event().pages[character._pageIndex];
-        return taggedPages.includes(page);
-      }
-    });
-  }
 
   vm.runInContext(moduleSource, context, { filename: 'event-mini-label.js' });
   context.PMJS.plugins.execute('YEP_EventMiniLabel', function() {});
@@ -123,7 +107,7 @@ test('registers plugins.yanfly.event-mini-label optimization', () => {
   assert.ok(context.PMJS.optimizations.ids().includes('plugins.yanfly.event-mini-label'));
 });
 
-test('untagged page skips construction with fastpaths sidecar', () => {
+test('untagged page skips construction', () => {
   const context = makeHost();
   const { sprite } = eventSprite(context, { id: 'plain' });
   sprite.setupMiniLabel();
@@ -133,17 +117,19 @@ test('untagged page skips construction with fastpaths sidecar', () => {
   assert.equal(context.Sprite_Character.prototype.__pmjsMiniLabelCache, true);
 });
 
-test('tagged page constructs through the original path with fastpaths sidecar', () => {
+test('tagged page constructs through the original path', () => {
   const page = { id: 'labeled' };
-  const context = makeHost({ taggedPages: [page] });
-  const { sprite } = eventSprite(context, page);
+  const context = makeHost();
+  const { sprite } = eventSprite(context, page, [
+    { code: 108, parameters: ['<Mini Label: Shopkeeper>'] }
+  ]);
   sprite.setupMiniLabel();
   assert.ok(sprite._miniLabel);
   assert.equal(context.calls.constructed, 1);
 });
 
-test('autonomous JS fallback detects tagged comments in event command list', () => {
-  const context = makeHost({ useAutonomousFallback: true });
+test('owned JS classifier detects tagged comments in event command list', () => {
+  const context = makeHost();
   const taggedPage = { id: 'labeled' };
   const commandList = [
     { code: 108, parameters: ['<Mini Label: Shopkeeper>'] }
@@ -155,8 +141,8 @@ test('autonomous JS fallback detects tagged comments in event command list', () 
   assert.equal(context.calls.constructed, 1);
 });
 
-test('autonomous JS fallback skips untagged events', () => {
-  const context = makeHost({ useAutonomousFallback: true });
+test('owned JS classifier skips untagged events', () => {
+  const context = makeHost();
   const untaggedPage = { id: 'plain' };
   const commandList = [
     { code: 108, parameters: ['Random note'] },
@@ -172,13 +158,14 @@ test('autonomous JS fallback skips untagged events', () => {
 test('page change from untagged to tagged constructs', () => {
   const plain = { id: 'plain' };
   const labeled = { id: 'labeled' };
-  const context = makeHost({ taggedPages: [labeled] });
+  const context = makeHost();
   const { sprite, model } = eventSprite(context, plain);
   sprite.setupMiniLabel();
   assert.equal(sprite._miniLabel, undefined);
   model._page = labeled;
   model.event = () => ({ pages: [labeled] });
   model.page = () => labeled;
+  model.list = () => [{ code: 408, parameters: ['<Mini Window: Shopkeeper>'] }];
   sprite.setupMiniLabel();
   assert.ok(sprite._miniLabel);
   assert.equal(context.calls.constructed, 1);
@@ -191,9 +178,12 @@ test('interleaved sprites on different pages classify once each', () => {
   const classifyCounter = { count: 0 };
   const pageA = { id: 'a' };
   const pageB = { id: 'b' };
-  const context = makeHost({ taggedPages: [], classifyCounter });
+  const context = makeHost();
   const spriteA = eventSprite(context, pageA).sprite;
   const spriteB = eventSprite(context, pageB).sprite;
+  for (const sprite of [spriteA, spriteB]) {
+    sprite._character.list = () => { classifyCounter.count++; return []; };
+  }
   for (let i = 0; i < 3; i++) {
     spriteA.setupMiniLabel();
     spriteB.setupMiniLabel();
@@ -233,9 +223,27 @@ test('disabled via PMJS_DISABLE_OPT leaves reference method alone', () => {
   assert.equal(context.Sprite_Character.prototype.__pmjsMiniLabelCache, undefined);
 });
 
-test('disabled via PMJS_YEP_MINI_LABEL=0 leaves reference method alone', () => {
+test('legacy Mini Label flag cannot override registry policy', () => {
   const context = makeHost({
     env: { PMJS_YEP_MINI_LABEL: '0' }
   });
-  assert.equal(context.Sprite_Character.prototype.__pmjsMiniLabelCache, undefined);
+  assert.equal(context.Sprite_Character.prototype.__pmjsMiniLabelCache, true);
+});
+
+test('external classifier selection cannot replace the bundled classifier', () => {
+  const context = makeHost({ env: { PMJS_NATIVE_FASTPATHS: 'sidecar' } });
+  let externalLoads = 0;
+  context.__pmjsBuiltinRequire = () => { externalLoads++; return { pageHasMiniLabel: () => true }; };
+  const { sprite } = eventSprite(context, { id: 'plain' });
+  sprite.setupMiniLabel();
+  assert.equal(context.calls.constructed, 0);
+  assert.equal(externalLoads, 0);
+});
+
+test('classifier errors preserve the original construction path', () => {
+  const context = makeHost();
+  const { sprite, model } = eventSprite(context, { id: 'plain' });
+  model.list = () => { throw new Error('guest list failed'); };
+  sprite.setupMiniLabel();
+  assert.equal(context.calls.constructed, 1);
 });

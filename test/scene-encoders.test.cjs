@@ -242,7 +242,6 @@ test('plain sprite segments ignore render hooks', () => {
   const root = new sandbox.PIXI.Container();
   for (let index = 0; index < 5; index++) root.addChild(sprite());
   root.children[3]._renderWebGL = function() {};
-  sandbox.nativePlainSpriteSegmentsEnabled = true;
   assert.equal(sandbox.submitNativeScene(root), true);
   assert.deepEqual(harness.compatHits, []);
   assert.deepEqual(harness.submitted[0].metadata.filter((_, index) => index % 7 === 0),
@@ -1426,4 +1425,25 @@ test('disjoint clip intersection normalizes to a zero-area clip without rejectio
   assert.deepEqual(
     [packet.values[17], packet.values[18], packet.values[19], packet.values[20]],
     [100, 100, 100, 100]);
+});
+
+test('registry disable selects ordinary sprite encoding with the same packet', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const root = new sandbox.PIXI.Container();
+  for (let i = 0; i < 6; i++) {
+    const child = sprite(16 + i, 24 + i);
+    child.x = i * 7;
+    child.y = i * 3;
+    child.alpha = 0.5 + i * 0.05;
+    child.tint = 0xabcdef;
+    root.addChild(child);
+  }
+  const optimized = submitOnly(harness, root);
+  assert.equal(sandbox.nativeSceneSegmentStats.runs, 1);
+  assert.equal(sandbox.nativeSceneSegmentStats.sprites, 6);
+  sandbox.PMJS.optimizations.isEnabled = id => id !== 'scene.plain-sprite-segment';
+  const ordinary = submitOnly(harness, root);
+  assert.equal(sandbox.nativeSceneSegmentStats.runs, 1);
+  assert.deepEqual(ordinary, optimized);
 });
