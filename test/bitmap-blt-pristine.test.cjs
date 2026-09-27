@@ -188,6 +188,8 @@ function setupEnvironment({ config = {}, env = {} } = {}) {
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-core/config.js'), 'utf8'), context);
   vm.runInContext(optimizationsSource, context, { filename: 'optimizations.js' });
+  vm.runInContext(fs.readFileSync(path.join(runtimeRoot,
+    'js/pmjs-web/canvas.js'), 'utf8'), context);
   vm.runInContext(bitmapSource, context, { filename: 'bitmap.js' });
 
   return {
@@ -424,4 +426,53 @@ test('mask proof rejects partial, translucent, transformed, clipped, and composi
   reject(() => { context.globalCompositeOperation = 'copy'; });
   reject(() => { context._transform[4] = 1; });
   reject(() => { context._clipPaths.push({}); });
+});
+
+test('Bitmap pixel queries preserve native RGBA channels and coordinate normalization', () => {
+  const { Bitmap, context } = setupEnvironment();
+  const bitmap = new Bitmap(8, 8);
+  const queries = [];
+  bitmap._canvas._nativeCanvas = { handle: 1 };
+  bitmap._context.getImageData = () => { throw new Error('native pixels must not read back an image'); };
+  context.NativeHost.canvas.pixel = (...args) => { queries.push(args); return 0x12ab34cd; };
+  assert.equal(bitmap.getPixel('2.9', -0.1), '#12ab34');
+  assert.equal(bitmap.getAlphaPixel(undefined, NaN), 205);
+  assert.deepEqual(queries, [[1, 2, -1], [1, 0, 0]]);
+  context.NativeHost.canvas.pixel = () => 0;
+  assert.equal(bitmap.getPixel(0, 0), '#000000');
+  assert.equal(bitmap.getAlphaPixel(0, 0), 0);
+});
+
+test('Bitmap pixel queries preserve Canvas fallback and compatibility diagnostics', () => {
+  const { Bitmap, context } = setupEnvironment();
+  const bitmap = new Bitmap(8, 8);
+  const hits = [];
+  context.PMJS.compat = { hit(...args) { hits.push(args); } };
+  let readbacks = 0;
+  bitmap._context.getImageData = (x, y, width, height) => {
+    assert.deepEqual([x, y, width, height], [1, 2, 1, 1]);
+    readbacks++;
+    return { data: Uint8ClampedArray.from([1, 2, 3, 4]) };
+  };
+  assert.equal(bitmap.getPixel(1, 2), '#010203');
+  assert.equal(bitmap.getAlphaPixel(1, 2), 4);
+  assert.equal(readbacks, 2);
+  assert.equal(hits.length, 0);
+  bitmap._context.getImageData = () => { throw new Error('readback unavailable'); };
+  assert.equal(bitmap.getPixel(0, 0), '#000000');
+  assert.equal(bitmap.getAlphaPixel(0, 0), 0);
+  assert.deepEqual(hits.map(hit => hit[0]), ['bitmap.getPixel', 'bitmap.getAlphaPixel']);
+});
+
+test('a failed native pixel query keeps its diagnostic fallback without a second readback', () => {
+  const { Bitmap, context } = setupEnvironment();
+  const bitmap = new Bitmap(8, 8);
+  const hits = [];
+  context.PMJS.compat = { hit(kind) { hits.push(kind); } };
+  bitmap._canvas._nativeCanvas = { handle: 1 };
+  context.NativeHost.canvas.pixel = () => { throw new Error('native query failed'); };
+  bitmap._context.getImageData = () => { throw new Error('second readback attempted'); };
+  assert.equal(bitmap.getPixel(0, 0), '#000000');
+  assert.equal(bitmap.getAlphaPixel(0, 0), 0);
+  assert.deepEqual(hits, ['bitmap.getPixel', 'bitmap.getAlphaPixel']);
 });

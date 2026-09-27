@@ -1080,6 +1080,20 @@ CanvasContext2D.prototype.putImageData = function(imageData, x, y) {
 })();
 
 Object.assign(PMJS.web.canvas, {
+  blur: function(canvas) {
+    NativeHost.canvas.blur(canvas._ensureNativeCanvas().handle);
+  },
+  readPixel: function(canvas, context, x, y) {
+    if (canvas && canvas._nativeCanvas) {
+      var rgba = NativeHost.canvas.pixel(canvas._ensureNativeCanvas().handle, x, y);
+      return [(rgba >>> 24) & 255, (rgba >>> 16) & 255,
+        (rgba >>> 8) & 255, rgba & 255];
+    }
+    if (context && typeof context.getImageData === 'function') {
+      return context.getImageData(x, y, 1, 1).data;
+    }
+    return null;
+  },
   supportsNativeText: function(context) {
     var transform = context && context._transform;
     return !!(transform && transform.length === 6 &&

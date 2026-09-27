@@ -105,14 +105,17 @@ test('Bitmap snap delegates capture while preserving MV transform, blur, and dir
   const context = {
     Bitmap,
     Graphics: { width: 64, height: 48, _renderer: { roundPixels: true } },
-    PMJS: { pixi4: { renderStageToCanvas(received, canvas, roundPixels) {
+    PMJS: { web: { canvas: { blur(canvas) {
+      assert.equal(canvas._ensureNativeCanvas().handle, 88);
+      calls.push('blur');
+    } } }, pixi4: { renderStageToCanvas(received, canvas, roundPixels) {
       assert.equal(received, stage);
       assert.equal(canvas.width, 64);
       assert.equal(canvas.height, 48);
       assert.equal(roundPixels, true);
       calls.push('capture');
     } } },
-    NativeHost: { canvas: { blur(handle) { assert.equal(handle, 88); calls.push('blur'); } } },
+
     pmjsBitmapCanvasChanged() { calls.push('changed'); },
   };
   vm.runInNewContext(snapSource, context);

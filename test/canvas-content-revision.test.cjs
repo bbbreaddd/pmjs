@@ -154,3 +154,21 @@ test('Canvas text measurement uses the same descriptor resolver and preserves st
   };
   assert.equal(context.PMJS.web.canvas.measureTextWidth(123, '21px Fixture'), 37);
 });
+
+test('Canvas blur uses native backing without changing context state', () => {
+  const context = harness();
+  const calls = [];
+  context.NativeHost.canvas.blur = handle => calls.push(handle);
+  const canvas = new context.CanvasElement();
+  const drawing = canvas.getContext('2d');
+  drawing.globalAlpha = 0.25;
+  drawing.globalCompositeOperation = 'lighter';
+  drawing.translate(3, 4);
+  const transform = Array.from(drawing._transform);
+  context.PMJS.web.canvas.blur(canvas);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0], canvas._nativeCanvas.handle);
+  assert.equal(drawing.globalAlpha, 0.25);
+  assert.equal(drawing.globalCompositeOperation, 'lighter');
+  assert.deepEqual(Array.from(drawing._transform), transform);
+});

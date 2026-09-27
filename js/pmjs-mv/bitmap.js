@@ -72,8 +72,7 @@ Bitmap.snap = function(stage) {
   if (stage.worldTransform && typeof stage.worldTransform.identity === 'function') {
     stage.worldTransform.identity();
   }
-  if (Bitmap.useBlur) NativeHost.canvas.blur(
-    bitmap._canvas._ensureNativeCanvas().handle);
+  if (Bitmap.useBlur) PMJS.web.canvas.blur(bitmap._canvas);
   if (Bitmap.useBlur) pmjsBitmapCanvasChanged(bitmap);
   bitmap._setDirty();
   return bitmap;
@@ -81,7 +80,7 @@ Bitmap.snap = function(stage) {
 
 // Blur is delegated to the native canvas to preserve its compositing state.
 Bitmap.prototype.blur = function() {
-  NativeHost.canvas.blur(this._canvas._ensureNativeCanvas().handle);
+  PMJS.web.canvas.blur(this._canvas);
   pmjsBitmapCanvasChanged(this);
   this._setDirty();
 };
@@ -255,19 +254,9 @@ Bitmap.prototype.getPixel = function(x, y) {
   x = Math.floor(Number(x) || 0);
   y = Math.floor(Number(y) || 0);
   try {
-    if (this._canvas && this._canvas._nativeCanvas) {
-      var rgba = NativeHost.canvas.pixel(
-        this._canvas._ensureNativeCanvas().handle, x, y);
-      var r = (rgba >>> 24) & 255;
-      var g = (rgba >>> 16) & 255;
-      var b = (rgba >>> 8) & 255;
-      return '#' + ('000000' + ((r << 16 | g << 8 | b) >>> 0).toString(16)).slice(-6);
-    }
-    if (this._context && typeof this._context.getImageData === 'function') {
-      try {
-        var data = this._context.getImageData(x, y, 1, 1).data;
-        return '#' + ('000000' + ((data[0] << 16 | data[1] << 8 | data[2]) >>> 0).toString(16)).slice(-6);
-      } catch (_) {}
+    var data = PMJS.web.canvas.readPixel(this._canvas, this._context, x, y);
+    if (data) {
+      return '#' + ('000000' + ((data[0] << 16 | data[1] << 8 | data[2]) >>> 0).toString(16)).slice(-6);
     }
   } catch (_) {}
   PMJS.compat.hit('bitmap.getPixel',
@@ -279,16 +268,8 @@ Bitmap.prototype.getAlphaPixel = function(x, y) {
   x = Math.floor(Number(x) || 0);
   y = Math.floor(Number(y) || 0);
   try {
-    if (this._canvas && this._canvas._nativeCanvas) {
-      var pixel = NativeHost.canvas.pixel(
-        this._canvas._ensureNativeCanvas().handle, x, y);
-      return pixel & 255;
-    }
-    if (this._context && typeof this._context.getImageData === 'function') {
-      try {
-        return this._context.getImageData(x, y, 1, 1).data[3];
-      } catch (_) {}
-    }
+    var data = PMJS.web.canvas.readPixel(this._canvas, this._context, x, y);
+    if (data) return data[3];
   } catch (_) {}
   PMJS.compat.hit('bitmap.getAlphaPixel',
     'x=' + x + ' y=' + y + ' w=' + this.width + ' h=' + this.height);
