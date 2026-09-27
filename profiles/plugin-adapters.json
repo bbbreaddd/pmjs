@@ -1,6 +1,10 @@
 {
   "adapters": [
     {
+      "plugins": ["YEP_MessageCore"],
+      "modules": ["js/pmjs-plugins/yanfly/message-core.js"]
+    },
+    {
       "plugins": ["Olivia_HorrorEffects"],
       "modules": ["js/pmjs-plugins/olivia/horror-effects.js"]
     },

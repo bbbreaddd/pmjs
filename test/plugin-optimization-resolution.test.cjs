@@ -8,6 +8,7 @@ const vm = require('node:vm');
 const { loadPmjsRuntime } = require('./helpers/runtime-context.cjs');
 
 const adapters = [
+  ['yanfly/message-core', 'YEP_MessageCore', ['plugins.yanfly.message-word-wrap-measure']],
   ['yanfly/event-mini-label', 'YEP_EventMiniLabel', ['plugins.yanfly.event-mini-label']],
   ['yanfly/slippery-tiles', 'YEP_SlipperyTiles', ['plugins.yanfly.slippery-tiles']],
   ['yed/tiled', 'YED_Tiled', ['tilemap.yed-indexed-paint-loops', 'tilemap.yed-indexed-animation']],
