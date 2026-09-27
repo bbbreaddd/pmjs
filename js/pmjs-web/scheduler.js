@@ -3,6 +3,31 @@
 (function() {
   var nextId = 1;
 
+  var pendingTasks = [];
+  var pendingTaskHead = 0;
+  function drainTasks() {
+    var deadline = performance.now() + 4;
+    var count = 0;
+    while (pendingTaskHead < pendingTasks.length && count < 64 &&
+        performance.now() < deadline) {
+      pendingTasks[pendingTaskHead++]();
+      count++;
+    }
+    // Avoid repeated Array.shift() reindexing while bounding retained callbacks.
+    if (pendingTaskHead >= pendingTasks.length) {
+      pendingTasks.length = 0;
+      pendingTaskHead = 0;
+    } else if (pendingTaskHead > 64) {
+      pendingTasks.splice(0, pendingTaskHead);
+      pendingTaskHead = 0;
+    }
+  }
+
+  PMJS.tasks = {
+    enqueue: function(callback) { pendingTasks.push(callback); },
+    drain: drainTasks
+  };
+
   var rafQueue = [];
   var cancelledRafs = new Set();
   var timers = new Map();

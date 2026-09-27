@@ -17,10 +17,11 @@ const elementsSource = fs.readFileSync(
 
 function imageContext(loadBytesAsync, loadAsync) {
   const context = {
+    performance: { now() { return 0; } },
     Blob,
     URL: function URL() {},
     console,
-    pendingTasks: [],
+    PMJS: {},
     pmjsGameConfig: {},
     nativeWindowState: { focused: true, visible: true },
     NativeHost: {
@@ -35,6 +36,8 @@ function imageContext(loadBytesAsync, loadAsync) {
     }
   };
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.resolve(__dirname,
+    '../js/pmjs-web/scheduler.js'), 'utf8'), context);
   vm.runInContext(eventsSource, context);
   vm.runInContext(canvasSource, context);
   vm.runInContext(source, context);
@@ -85,7 +88,7 @@ test('NativeImage loads object URL bytes without using the path loader', async (
   const second = new context.Image();
   first.src = url;
   second.src = url;
-  context.pendingTasks.splice(0).forEach(task => task());
+  context.PMJS.tasks.drain();
   await settle();
   assert.equal(loads, 2);
   assert.equal(first.complete, true);
@@ -108,7 +111,7 @@ test('revoking before NativeImage consumes an object URL reports an error', asyn
   image.onerror = function() { errors++; };
   image.src = url;
   context.URL.revokeObjectURL(url);
-  context.pendingTasks.splice(0).forEach(task => task());
+  context.PMJS.tasks.drain();
   await settle();
   assert.equal(loads, 0);
   assert.equal(errors, 1);
@@ -129,14 +132,14 @@ test('NativeImage retries a path after a transient native load failure', async (
     ({ handle: 40, width: 2, height: 2 });
   const image = new context.Image();
   image.src = 'img/pictures/retry.png';
-  context.pendingTasks.splice(0).forEach(task => task());
+  context.PMJS.tasks.drain();
   await settle();
   assert.equal(attempts, 1);
   assert.equal(image._pmjsLoadFailed, true);
   assert.equal(image.naturalWidth, 0);
 
   image.src = 'img/pictures/retry.png';
-  context.pendingTasks.splice(0).forEach(task => task());
+  context.PMJS.tasks.drain();
   await settle();
   assert.equal(attempts, 2);
   assert.equal(image._pmjsLoadFailed, false);

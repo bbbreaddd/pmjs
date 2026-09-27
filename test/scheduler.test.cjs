@@ -12,6 +12,7 @@ function loadSchedulerContext(extraSetup) {
     'utf8'
   );
   const context = {
+    PMJS: {},
     console: console,
     performance: performance,
     Math: Math,
@@ -225,4 +226,52 @@ test('RAF error isolation: error in first callback does not prevent second callb
   // Does not throw out of pmjsDrainScheduler and runs second callback
   ctx.pmjsDrainScheduler(100);
   assert.equal(secondRan, true);
+});
+
+test('deferred tasks preserve FIFO order including work queued during drain', () => {
+  const ctx = loadSchedulerContext();
+  const order = [];
+  ctx.PMJS.tasks.enqueue(() => {
+    order.push('first');
+    ctx.PMJS.tasks.enqueue(() => order.push('third'));
+  });
+  ctx.PMJS.tasks.enqueue(() => order.push('second'));
+  ctx.PMJS.tasks.drain();
+  ctx.PMJS.tasks.drain();
+  assert.deepEqual(order, ['first', 'second', 'third']);
+});
+
+test('deferred tasks carry work across count and time budgets without duplication', () => {
+  let now = 0;
+  const ctx = loadSchedulerContext(context => {
+    context.performance = { now() { return now; } };
+  });
+  const completed = [];
+  for (let i = 0; i < 140; i++) {
+    ctx.PMJS.tasks.enqueue(() => completed.push(i));
+  }
+  ctx.PMJS.tasks.drain();
+  assert.equal(completed.length, 64);
+  ctx.PMJS.tasks.drain();
+  assert.equal(completed.length, 128);
+  ctx.PMJS.tasks.drain();
+  assert.deepEqual(completed, Array.from({ length: 140 }, (_, i) => i));
+
+  ctx.PMJS.tasks.enqueue(() => { now += 4; completed.push('slow'); });
+  ctx.PMJS.tasks.enqueue(() => completed.push('later'));
+  ctx.PMJS.tasks.drain();
+  assert.equal(completed.at(-1), 'slow');
+  ctx.PMJS.tasks.drain();
+  assert.equal(completed.at(-1), 'later');
+});
+
+test('deferred task errors propagate and remaining work resumes on the next drain', () => {
+  const ctx = loadSchedulerContext();
+  let completed = false;
+  ctx.PMJS.tasks.enqueue(() => { throw new Error('task failed'); });
+  ctx.PMJS.tasks.enqueue(() => { completed = true; });
+  assert.throws(() => ctx.PMJS.tasks.drain(), /task failed/);
+  assert.equal(completed, false);
+  ctx.PMJS.tasks.drain();
+  assert.equal(completed, true);
 });

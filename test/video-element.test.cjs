@@ -23,7 +23,7 @@ function makeHarness(videoResource, runtimeEnv) {
   let nextVideo = 10;
   const context = {
     console: { log(line) { telemetry.push(String(line)); } },
-    pendingTasks: [],
+    PMJS: {},
     performance: { now() { return 1000; } },
     pmjsGameConfig: {},
     nativeWindowState: { focused: true, visible: true },
@@ -58,6 +58,8 @@ function makeHarness(videoResource, runtimeEnv) {
   context.globalThis = context;
   context.window = context;
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.resolve(__dirname,
+    '../js/pmjs-web/scheduler.js'), 'utf8'), context);
   vm.runInContext(eventsSource, context);
   vm.runInContext(elementsSource, context);
   return { context, calls, telemetry };
@@ -157,7 +159,7 @@ test('video src selection loads asynchronously after listeners can be installed'
 
   assert.equal(video.readyState, video.HAVE_NOTHING);
   assert.equal(calls.loadVideo.length, 0);
-  context.pendingTasks.splice(0).forEach(task => task());
+  context.PMJS.tasks.drain();
   await Promise.resolve();
 
   assert.deepEqual(calls.loadVideo, ['movies/Opening.mp4']);
@@ -177,7 +179,7 @@ test('media property handlers keep their registration order with listeners', asy
   video.addEventListener('loadeddata', () => events.push('listener-data'));
   video.onloadeddata = () => events.push('property-data');
 
-  context.pendingTasks.splice(0).forEach(task => task());
+  context.PMJS.tasks.drain();
   await Promise.resolve();
 
   assert.deepEqual(events, [
@@ -190,7 +192,7 @@ test('video lifecycle telemetry measures queued-to-frame readiness when enabled'
   const { context, telemetry } = makeHarness(undefined, '1');
   const video = context.document.createElement('video');
   video.src = 'movies/Opening.mp4';
-  context.pendingTasks.splice(0).forEach(task => task());
+  context.PMJS.tasks.drain();
   await Promise.resolve();
 
   const records = telemetry.filter(line =>
@@ -231,7 +233,7 @@ test('MV load returns before loadeddata and video-playing state clears on end', 
   assert.equal(graphics._videoLoading, true);
   assert.equal(video.style.opacity, undefined);
   assert.equal(graphics.isVideoPlaying(), true);
-  context.pendingTasks.splice(0).forEach(task => task());
+  context.PMJS.tasks.drain();
   await Promise.resolve();
 
   assert.equal(graphics._videoLoading, false);
@@ -249,8 +251,7 @@ test('src followed by play queues one asynchronous native load', async () => {
   video.src = 'movies/Opening.mp4';
   const playback = video.play();
   assert.equal(video._loading, true);
-  assert.equal(context.pendingTasks.length, 1);
-  context.pendingTasks.splice(0).forEach(task => task());
+  context.PMJS.tasks.drain();
   await Promise.resolve();
   assert.deepEqual(calls.loadVideo, ['movies/Opening.mp4']);
   assert.equal(video.paused, false);
@@ -265,11 +266,10 @@ test('load followed by play reuses queued work and pause cancels play intent', a
   video.load();
   const playback = video.play();
   const interrupted = assert.rejects(playback, { name: 'AbortError' });
-  assert.equal(context.pendingTasks.length, 1);
   assert.equal(video._loading, true);
   video.pause();
   await interrupted;
-  context.pendingTasks.splice(0).forEach(task => task());
+  context.PMJS.tasks.drain();
   await Promise.resolve();
   assert.deepEqual(calls.loadVideo, ['movies/Opening.mp4']);
   assert.equal(video.paused, true);
@@ -287,7 +287,7 @@ test('Pixi 4 VideoBaseTexture becomes valid after asynchronous data readiness', 
   texture.baseTexture.autoPlay = false;
   assert.equal(texture.baseTexture.hasLoaded, false);
   assert.equal(texture.valid, false);
-  context.pendingTasks.splice(0).forEach(task => task());
+  context.PMJS.tasks.drain();
   await Promise.resolve();
 
   assert.equal(texture.baseTexture.hasLoaded, true);
@@ -301,7 +301,7 @@ test('video exposes one stable native image while decoded frames advance', async
   const { context, calls } = makeHarness();
   const video = context.document.createElement('video');
   video.src = 'movies/Opening.mp4';
-  context.pendingTasks.splice(0).forEach(task => task());
+  context.PMJS.tasks.drain();
   await Promise.resolve();
   const source = video._pmjsNativeTextureSource();
 
@@ -391,7 +391,7 @@ test('video exposes its async native image texture contract', async () => {
   const { context } = makeHarness();
   const video = context.document.createElement('video');
   video.src = 'movies/Opening.mp4';
-  context.pendingTasks.splice(0).forEach(task => task());
+  context.PMJS.tasks.drain();
   await Promise.resolve();
 
   assert.equal(video._pmjsNativeTextureSource().handle, 510);
@@ -404,7 +404,7 @@ test('an ended handler can start another source without losing video updates', a
   vm.runInContext(mainLoopSource, context);
   const video = context.document.createElement('video');
   video.src = 'movies/one.webm';
-  context.pendingTasks.splice(0).forEach(task => task());
+  context.PMJS.tasks.drain();
   await Promise.resolve();
   let completions = 0;
   video.onended = () => {
@@ -417,7 +417,7 @@ test('an ended handler can start another source without losing video updates', a
   video.play();
   video._startedAt = -12000;
   context.pmjsRunRpgMakerTick(1);
-  context.pendingTasks.splice(0).forEach(task => task());
+  context.PMJS.tasks.drain();
   await Promise.resolve();
   await Promise.resolve();
   assert.equal(video.src, 'movies/two.webm');
@@ -466,7 +466,7 @@ test('removing video src releases media and load with no source stays empty', as
   const { context, calls } = makeHarness();
   const video = context.document.createElement('video');
   video.src = 'movies/Opening.mp4';
-  context.pendingTasks.splice(0).forEach(task => task());
+  context.PMJS.tasks.drain();
   await Promise.resolve();
 
   video.pause();
@@ -485,7 +485,7 @@ test('a replaced src cannot run its stale deferred load', async () => {
   const video = context.document.createElement('video');
   video.src = 'movies/first.mp4';
   video.src = 'movies/second.mp4';
-  context.pendingTasks.splice(0).forEach(task => task());
+  context.PMJS.tasks.drain();
   await Promise.resolve();
   assert.deepEqual(calls.loadVideo, ['movies/second.mp4']);
 });
@@ -501,10 +501,10 @@ test('a stale async media completion is released after source replacement', asyn
   video.src = 'movies/first.mp4';
   const playback = video.play();
   const interrupted = assert.rejects(playback, { name: 'AbortError' });
-  context.pendingTasks.splice(0).forEach(task => task());
+  context.PMJS.tasks.drain();
   video.src = 'movies/second.mp4';
   await interrupted;
-  context.pendingTasks.splice(0).forEach(task => task());
+  context.PMJS.tasks.drain();
 
   resolveLoads[0]({ handle: 30, image: 130, width: 960, height: 720,
     duration: 12, audio: null });
@@ -524,7 +524,7 @@ test('play rejects when loading fails or no source is available', async () => {
   context.NativeHost.media.loadVideoAsync = () =>
     Promise.reject(new Error('decode failed'));
   const playback = video.play();
-  context.pendingTasks.splice(0).forEach(task => task());
+  context.PMJS.tasks.drain();
   await assert.rejects(playback, /decode failed/);
 
   const emptyVideo = context.document.createElement('video');

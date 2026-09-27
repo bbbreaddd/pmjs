@@ -22,8 +22,8 @@
         }
       }
     }
-    if (typeof globalThis.drainPendingTasks === 'function') {
-      globalThis.drainPendingTasks();
+    if (globalThis.PMJS && PMJS.tasks) {
+      PMJS.tasks.drain();
     }
   }
 

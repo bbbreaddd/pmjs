@@ -383,7 +383,7 @@ VideoElement.prototype._queueLoad = function(generation) {
   this._loadRequestedAt = performance.now();
   this._nativeLoadStartedAt = undefined;
   videoTelemetry('load-queued', { generation: generation });
-  pendingTasks.push(function() {
+  PMJS.tasks.enqueue(function() {
     if (generation === video._loadGeneration && video._loading) {
       video._loadNow(generation);
     }
@@ -508,7 +508,7 @@ Object.defineProperty(NativeImage.prototype, 'src', {
     image.complete = false;
     image._pmjsLoadFailed = false;
     image._pmjsLoadError = null;
-    pendingTasks.push(function() {
+    PMJS.tasks.enqueue(function() {
       if (objectUrl) {
         pendingNativeImageLoads++;
         var objectBlob = typeof globalThis.pmjsResolveObjectURL === 'function'

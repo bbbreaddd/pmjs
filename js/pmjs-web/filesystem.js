@@ -80,25 +80,6 @@ var pathModule = {
   }
 };
 
-var pendingTasks = [];
-var pendingTaskHead = 0;
-function drainPendingTasks() {
-  var deadline = performance.now() + 4;
-  var count = 0;
-  while (pendingTaskHead < pendingTasks.length && count < 64 &&
-      performance.now() < deadline) {
-    pendingTasks[pendingTaskHead++]();
-    count++;
-  }
-  // Avoid repeated Array.shift() reindexing while bounding retained callbacks.
-  if (pendingTaskHead >= pendingTasks.length) {
-    pendingTasks.length = 0;
-    pendingTaskHead = 0;
-  } else if (pendingTaskHead > 64) {
-    pendingTasks.splice(0, pendingTaskHead);
-    pendingTaskHead = 0;
-  }
-}
 function fsReadContents(path, options) {
   var writable = writablePath(path);
   var result = writable !== null && NativeHost.storage
@@ -123,7 +104,7 @@ function FsReadStream(path, options) {
   this.path = path; this.options = options || {}; this.readable = true;
   this.destroyed = false; this._listeners = Object.create(null);
   var stream = this;
-  pendingTasks.push(function() {
+  PMJS.tasks.enqueue(function() {
     if (stream.destroyed) return;
     try {
       var contents = fsReadContents(path, stream.options);
@@ -183,7 +164,7 @@ var fsModule = {
     if (typeof options === 'function') { callback = options; options = null; }
     var result = null, error = null;
     try { result = fsReadContents(path, options); } catch (caught) { error = caught; }
-    pendingTasks.push(function() {
+    PMJS.tasks.enqueue(function() {
       callback(error, result);
     });
   },
@@ -200,7 +181,7 @@ var fsModule = {
     if (typeof options === 'function') { callback = options; options = null; }
     var error = null;
     try { this.writeFileSync(path, contents, options); } catch (caught) { error = caught; }
-    pendingTasks.push(function() { if (callback) callback(error); });
+    PMJS.tasks.enqueue(function() { if (callback) callback(error); });
   },
   mkdirSync: function(path) {
     var writable = writablePath(path);
@@ -211,7 +192,7 @@ var fsModule = {
     if (typeof options === 'function') { callback = options; options = null; }
     var error = null;
     try { this.mkdirSync(path, options); } catch (caught) { error = caught; }
-    pendingTasks.push(function() { if (callback) callback(error); });
+    PMJS.tasks.enqueue(function() { if (callback) callback(error); });
   },
   unlinkSync: function(path) {
     var writable = writablePath(path);
@@ -224,7 +205,7 @@ var fsModule = {
   unlink: function(path, callback) {
     var error = null;
     try { this.unlinkSync(path); } catch (caught) { error = caught; }
-    pendingTasks.push(function() { if (callback) callback(error); });
+    PMJS.tasks.enqueue(function() { if (callback) callback(error); });
   },
   renameSync: function(from, to) {
     var source = writablePath(from);
@@ -240,7 +221,7 @@ var fsModule = {
   rename: function(from, to, callback) {
     var error = null;
     try { this.renameSync(from, to); } catch (caught) { error = caught; }
-    pendingTasks.push(function() { if (callback) callback(error); });
+    PMJS.tasks.enqueue(function() { if (callback) callback(error); });
   },
   readdirSync: function(path) {
     var writable = writablePath(path);

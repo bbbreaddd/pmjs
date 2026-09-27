@@ -29,7 +29,7 @@ test('web runtime keeps V8 RegExp and String built-ins', () => {
 test('virtual file aliases are configured data', () => {
   const source = fs.readFileSync(path.join(runtimeRoot,
     'js/pmjs-web/filesystem.js'), 'utf8');
-  const end = source.indexOf('\nvar pendingTasks =');
+  const end = source.indexOf('\nfunction fsReadContents(');
   const context = {
     PMJS: { config: { virtualFiles: {
       extensionAliases: { '.alias': '.json' },

@@ -8,7 +8,7 @@ globalThis.fetch = function(url) {
     .replace(/^\.\//, '').replace(/%(?![0-9a-f]{2})/gi, '%25');
   var path = gameReadPath(decodeURIComponent(encoded));
   return new Promise(function(resolve) {
-    pendingTasks.push(function() {
+    PMJS.tasks.enqueue(function() {
       var text = NativeHost.fs.readText(path);
       var status = text === null ? 404 : 200;
       var body = text === null ? '' : text;
@@ -72,7 +72,7 @@ XMLHttpRequest.prototype.send = function() {
       resolved.replace(/\/maps\/Map(\d+)\.json$/i, '/maps/map$1.json'));
   }
   var request = this;
-  pendingTasks.push(function() {
+  PMJS.tasks.enqueue(function() {
     request.status = contents === null ? 404 : 200;
     request.readyState = 4;
     if (contents !== null) {

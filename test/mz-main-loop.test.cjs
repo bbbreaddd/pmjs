@@ -16,11 +16,10 @@ test('MZ host tick drains native services, pending work, and scheduler in order'
   const context = vm.createContext({
     console: { log() {} },
     globalThis: null,
-    PMJS: { rpgmaker: { audio: { update() { events.push('audio'); } } } },
+    PMJS: { tasks: { drain() { events.push('pending'); } }, rpgmaker: { audio: { update() { events.push('audio'); } } } },
     nativeVideos: [
       { _update() { events.push('video-release'); return false; } },
     ],
-    drainPendingTasks() { events.push('pending'); },
     pmjsDrainScheduler(now) { events.push('scheduler:' + now); },
     SceneManager: { _scene: null },
   });
