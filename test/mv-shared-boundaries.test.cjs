@@ -98,25 +98,23 @@ test('native map resources release after a guest replaces Scene_Map.terminate', 
     Game_Map: function() {}, Scene_Boot: function() {},
     Spriteset_Map: function() {}, Window_Base: function() {},
     nativeBootPhase() {},
-    NativeHost: { render: {
-      releaseTileLayer(handle) { calls.push('tile:' + handle); },
-      releaseMesh(handle) { calls.push('mesh:' + handle); }
-    } }
   });
+  const spriteset = { children: [] };
+  ctx.PMJS.pixi4 = { releaseSceneResources(root) {
+    assert.equal(root, spriteset);
+    calls.push('release-scene');
+  } };
   run(ctx, 'pmjs-mv/images.js');
   ctx.PMJS.plugins.execute('ReplaceTerminate', () => {
     Scene_Map.prototype.terminate = function() { calls.push('guest'); return 'done'; };
   });
   ctx.PMJS.methods.install();
   const scene = new Scene_Map();
-  const sharedChild = { _pmjsNativeLayer: 12, __pmjsNativeMesh: 34, children: [] };
-  scene._spriteset = { children: [sharedChild, sharedChild] };
+  scene._spriteset = spriteset;
   assert.equal(scene.terminate(), 'done');
-  assert.deepEqual(calls, ['guest', 'tile:12', 'mesh:34']);
-  assert.equal(sharedChild._pmjsNativeLayer, 0);
-  assert.equal(sharedChild.__pmjsNativeMesh, 0);
+  assert.deepEqual(calls, ['guest', 'release-scene']);
   assert.equal(scene.terminate(), 'done');
-  assert.deepEqual(calls, ['guest', 'tile:12', 'mesh:34', 'guest']);
+  assert.deepEqual(calls, ['guest', 'release-scene', 'guest', 'release-scene']);
   assert.deepEqual(Array.from(ctx.PMJS.methods.dump().find(
     entry => entry.key === 'Scene_Map.terminate').mutations,
     entry => entry.plugin), ['ReplaceTerminate']);

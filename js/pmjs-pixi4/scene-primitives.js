@@ -37,6 +37,7 @@ var nativeBlankTileCanvas = null;
 var nativeRetainedMeshes = new WeakMap();
 PMJS.pixi4 = PMJS.pixi4 || {};
 Object.assign(PMJS.pixi4, {
+  releaseSceneResources: function(root) { return pmjsReleaseSceneResources(root); },
   retainMeshGeometry: function(mesh) {
     if (!nativeRetainedMeshes.has(mesh)) {
       nativeRetainedMeshes.set(mesh, { handle: 0, signature: null });
@@ -76,6 +77,32 @@ function pmjsReleaseNativeGeometry(owner, kind) {
     if (mesh) NativeHost.render.releaseMesh(handle);
     else NativeHost.render.releaseTileLayer(handle);
   }
+}
+
+// MV removes an outgoing map spriteset without destroying its Pixi tree.
+// Release host-owned retained geometry deterministically; JavaScript display
+// objects and shared textures remain intact for the engine's normal teardown.
+function pmjsReleaseSceneResources(root, seen) {
+  if (!root) return 0;
+  seen = seen || [];
+  if (seen.indexOf(root) >= 0) return 0;
+  seen.push(root);
+  var released = 0;
+  if (root._pmjsNativeLayer) {
+    pmjsReleaseNativeGeometry(root, 'tile');
+    released++;
+  }
+  if (root.__pmjsNativeMesh) {
+    pmjsReleaseNativeGeometry(root, 'mesh');
+    released++;
+  }
+  var children = root.children;
+  if (children && typeof children.length === 'number') {
+    for (var index = 0; index < children.length; index++) {
+      released += pmjsReleaseSceneResources(children[index], seen);
+    }
+  }
+  return released;
 }
 
 function pmjsAdoptNativeGeometry(owner, kind, handle) {

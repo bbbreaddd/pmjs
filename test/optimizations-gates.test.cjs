@@ -474,3 +474,45 @@ test('storage.read-burst-coalesce disables cleanly via optimization gate', () =>
   disabled.context.StorageManager.loadFromLocalFile(0);
   assert.equal(disabled.getReads(), 2, 'disabled read-burst-coalesce should read on every call');
 });
+
+test('scene resource release preserves authored objects and rebuilds geometry on reuse', () => {
+  const { context, calls, finalizers } = loadScenePrimitives();
+  const mesh = gpuMesh();
+  const layer = tileLayer();
+  const outside = gpuMesh();
+  context.PMJS.pixi4.retainMeshGeometry(mesh);
+  context.PMJS.pixi4.retainMeshGeometry(outside);
+  const meshHandle = callIn(context, 'ensureNativeGpuMesh(mesh)', 'mesh', mesh);
+  const layerHandle = callIn(context, 'ensureNativeRectTileLayer(layer)', 'layer', layer);
+  const outsideHandle = callIn(context, 'ensureNativeGpuMesh(mesh)', 'mesh', outside);
+  const vertices = mesh.vertices.slice();
+  const points = layer.pointsBuf.slice();
+  const texture = mesh.texture;
+  const textures = layer.textures;
+  const root = { children: [mesh, layer, mesh] };
+  layer.children = [root];
+  mesh.destroy = () => { throw new Error('authored objects must survive'); };
+  texture.destroy = () => { throw new Error('shared textures must survive'); };
+
+  assert.equal(context.PMJS.pixi4.releaseSceneResources(root), 2);
+  assert.deepEqual(calls.releasedMeshes, [meshHandle]);
+  assert.deepEqual(calls.releasedLayers, [layerHandle]);
+  assert.equal(finalizers[0].records.size, 1);
+  assert.equal(context.PMJS.pixi4.releaseSceneResources(root), 0);
+  assert.equal(context.PMJS.pixi4.releaseSceneResources(null), 0);
+  assert.deepEqual(mesh.vertices, vertices);
+  assert.deepEqual(layer.pointsBuf, points);
+  assert.equal(mesh.texture, texture);
+  assert.equal(layer.textures, textures);
+  assert.equal(root.children[0], mesh);
+  assert.equal(callIn(context, 'ensureNativeGpuMesh(mesh)', 'mesh', outside), outsideHandle);
+
+  const rebuiltMesh = callIn(context, 'ensureNativeGpuMesh(mesh)', 'mesh', mesh);
+  const rebuiltLayer = callIn(context, 'ensureNativeRectTileLayer(layer)', 'layer', layer);
+  assert.notEqual(rebuiltMesh, meshHandle);
+  assert.notEqual(rebuiltLayer, layerHandle);
+  assert.equal(callIn(context, 'ensureNativeGpuMesh(mesh)', 'mesh', mesh), rebuiltMesh);
+  assert.equal(callIn(context, 'ensureNativeRectTileLayer(layer)', 'layer', layer), rebuiltLayer);
+  assert.deepEqual(calls.tileLayerPoints[0], calls.tileLayerPoints[1]);
+  assert.equal(finalizers[0].records.size, 3);
+});
