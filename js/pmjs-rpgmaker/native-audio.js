@@ -22,7 +22,13 @@ var nativeAudioFinalizer = typeof FinalizationRegistry === 'function'
       try { NativeHost.media.releaseAudio(handle); } catch (_) {}
     }) : null;
 
-function NativeAudioVoice() {
+if (globalThis.PMJS && PMJS.optimizations) {
+  PMJS.optimizations.register({ id: 'audio.prepared-effects', owner: 'pmjs-rpgmaker',
+    fallback: 'independent streaming decoder per audio voice' });
+}
+
+function NativeAudioVoice(intent) {
+  this.intent = intent || 'unknown';
   this.handle = 0;
   this.duration = 0;
   this.volume = 1;
@@ -43,6 +49,10 @@ NativeAudioVoice.prototype.install = function(loaded, generation) {
   if (generation !== this.loadGeneration) {
     NativeHost.media.releaseAudio(loaded.handle);
     return false;
+  }
+  if (this.handle) {
+    if (nativeAudioFinalizer) nativeAudioFinalizer.unregister(this);
+    NativeHost.media.releaseAudio(this.handle);
   }
   this.handle = loaded.handle;
   this.duration = loaded.duration;
@@ -68,16 +78,27 @@ NativeAudioVoice.prototype.failLoad = function(source, error, generation) {
     ' error=' + (error && error.message || error));
 };
 
+NativeAudioVoice.prototype.loadOptions = function(identity) {
+  var options = { intent: this.intent };
+  if (globalThis.PMJS && PMJS.optimizations &&
+      !PMJS.optimizations.isEnabled('audio.prepared-effects')) options.intent = 'unknown';
+  if (identity) {
+    if (identity.resourcePath) options.resourcePath = identity.resourcePath;
+    if (identity.resourceIdentity) options.resourceIdentity = identity.resourceIdentity;
+  }
+  return options;
+};
+
 NativeAudioVoice.prototype.loadPath = function(path) {
   var generation = ++this.loadGeneration;
-  try { this.install(NativeHost.media.loadAudio(path), generation); }
+  try { this.install(NativeHost.media.loadAudio(path, this.loadOptions()), generation); }
   catch (error) { this.failLoad(path, error, generation); }
 };
 
-NativeAudioVoice.prototype.loadBytes = function(buffer, generation) {
+NativeAudioVoice.prototype.loadBytes = function(buffer, generation, identity) {
   if (generation === undefined) generation = ++this.loadGeneration;
   if (generation !== this.loadGeneration) return;
-  try { this.install(NativeHost.media.loadAudioBytes(buffer), generation); }
+  try { this.install(NativeHost.media.loadAudioBytes(buffer, this.loadOptions(identity)), generation); }
   catch (error) { this.failLoad('audio bytes', error, generation); }
 };
 
@@ -92,7 +113,7 @@ NativeAudioVoice.prototype.loadObjectUrl = function(url) {
   }
   blob.arrayBuffer().then(function(buffer) {
     if (generation !== this.loadGeneration) return;
-    this.loadBytes(buffer, generation);
+    this.loadBytes(buffer, generation, { resourceIdentity: url });
   }.bind(this)).catch(function(error) {
     this.failLoad(url, error, generation);
   }.bind(this));
@@ -109,7 +130,7 @@ NativeAudioVoice.prototype.fetchEncrypted = function(encryptedPath, decryptFn) {
       if (request.status >= 400) throw new Error('HTTP status ' + request.status);
       var bytes = decryptFn(request.response);
       if (generation !== this.loadGeneration) return;
-      this.loadBytes(bytes, generation);
+      this.loadBytes(bytes, generation, { resourcePath: encryptedPath });
     } catch (error) {
       this.failLoad(encryptedPath, error, generation);
     }
@@ -230,8 +251,13 @@ NativeAudioVoice.setMasterVolume = function(value) {
 globalThis.PMJS = globalThis.PMJS || {};
 PMJS.rpgmaker = PMJS.rpgmaker || {};
 PMJS.rpgmaker.audio = {
-  createVoice: function() {
-    return new NativeAudioVoice();
+  intentForFolder: function(folder) {
+    var kind = folder.replace(/\/$/, '');
+    return kind === 'se' ? 'effect' : kind === 'bgm' ? 'music' :
+      kind === 'bgs' ? 'ambient' : kind === 'me' ? 'jingle' : 'unknown';
+  },
+  createVoice: function(intent) {
+    return new NativeAudioVoice(intent);
   },
   track: function(buffer) {
     if (trackedAudioBuffers.indexOf(buffer) < 0) trackedAudioBuffers.push(buffer);

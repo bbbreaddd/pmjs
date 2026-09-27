@@ -17,6 +17,7 @@ const mainLoopSource = fs.readFileSync(
 
 function contextFor(decrypter, XMLHttpRequest) {
   const loadedBytes = [];
+  const loadedOptions = [];
   const released = [];
   const context = {
     Blob,
@@ -31,7 +32,8 @@ function contextFor(decrypter, XMLHttpRequest) {
     NativeHost: {
       media: {
         loadAudio: function() { throw new Error('path loader used'); },
-        loadAudioBytes: function(buffer) {
+        loadAudioBytes: function(buffer, options) {
+          loadedOptions.push(options);
           loadedBytes.push(new Uint8Array(buffer));
           return { handle: loadedBytes.length, duration: 1.5 };
         },
@@ -49,6 +51,7 @@ function contextFor(decrypter, XMLHttpRequest) {
   vm.runInContext(audioSource, context);
   vm.runInContext(mvAudioSource, context);
   context.loadedBytes = loadedBytes;
+  context.loadedOptions = loadedOptions;
   context.released = released;
   return context;
 }
@@ -72,6 +75,7 @@ test('MV WebAudio consumes a PMJS object URL and queues early playback', async (
   assert.equal(context.loadedBytes.length, 1);
   assert.deepEqual(Array.from(context.loadedBytes[0]), [1, 2, 3]);
   assert.equal(audio.isReady(), true);
+  assert.equal(context.loadedOptions[0].resourceIdentity, url);
   assert.deepEqual(starts, [[1, true, 0.25]]);
   context.URL.revokeObjectURL(url);
   assert.equal(audio.isReady(), true);
@@ -100,6 +104,7 @@ test('MV WebAudio delegates encrypted audio to the MV Decrypter', async () => {
   const audio = new context.WebAudio('audio/se/cursor.ogg');
   await settle();
   assert.equal(requestedPath, 'audio/se/cursor.rpgmvo');
+  assert.equal(context.loadedOptions[0].resourcePath, requestedPath);
   assert.deepEqual(Array.from(context.loadedBytes[0]), [9, 8, 7]);
   assert.equal(audio.isReady(), true);
   assert.equal(objectUrlsCreated, 0, 'MV decrypted bytes should go directly to native audio');
@@ -251,4 +256,16 @@ test('MV clear drains a stop listener before releasing', () => {
   assert.equal(audio._stopListeners.length, 0);
   assert.equal(audio._loadListeners.length, 0);
   assert.deepEqual(context.released, [5]);
+});
+
+
+test('MV provides engine intent without native path classification', () => {
+  const context = contextFor({ hasEncryptedAudio: false });
+  const intents = [];
+  context.NativeHost.media.loadAudio = (_path, options) => {
+    intents.push(options.intent);
+    return { handle: intents.length, duration: 1 };
+  };
+  for (const folder of ['se', 'bgm', 'bgs', 'me']) context.AudioManager.createBuffer(folder, 'tone');
+  assert.deepEqual(intents, ['effect', 'music', 'ambient', 'jingle']);
 });

@@ -181,6 +181,97 @@ void testEofAndPaused() {
   CHECK(near(quiet[0], 0.0F) && near(quiet[1], 0.0F), "paused voice mixes nothing");
 }
 
+void testPreparedSampleParity() {
+  auto asset = std::make_shared<pmjs::PreparedAudioAsset>();
+  for (int frame = 0; frame < 16; ++frame) {
+    asset->samples.push_back(frame * 0.03F);
+    asset->samples.push_back(-frame * 0.02F);
+  }
+  for (float pitch : {0.5F, 1.0F, 1.3F, 2.0F, 8.0F}) {
+    for (bool loop : {false, true}) {
+      pmjs::VoiceMixState sample, stream;
+      sample.asset = asset;
+      sample.positionFrame = stream.positionFrame = 3;
+      sample.playing = stream.playing = true;
+      sample.pitch = stream.pitch = pitch;
+      sample.pan = stream.pan = -0.4F;
+      sample.volume = stream.volume = 0.7F;
+      sample.gain = stream.gain = 0.9F;
+      sample.targetGain = stream.targetGain = 0.3F;
+      sample.gainStep = stream.gainStep = -0.01F;
+      sample.duration = stream.duration = static_cast<double>(asset->samples.size() / 2) / 48000;
+      sample.loop = stream.loop = loop;
+      sample.loopStart = stream.loopStart = 4;
+      sample.loopEnd = stream.loopEnd = 12;
+      stream.eof = true;
+      for (int position = 3, count = 0; count < 512; ++count, ++position) {
+        if (loop && position >= 12) position = 4;
+        if (!loop && position >= 16) break;
+        stream.samples.push_back(asset->samples[position * 2]);
+        stream.samples.push_back(asset->samples[position * 2 + 1]);
+      }
+      std::vector<float> sampleOutput(100, 0), streamOutput(100, 0);
+      pmjs::mixVoiceInto(sample, sampleOutput.data(), 50, 0.8F);
+      pmjs::mixVoiceInto(stream, streamOutput.data(), 50, 0.8F);
+      for (std::size_t i = 0; i < sampleOutput.size(); ++i)
+        CHECK(near(sampleOutput[i], streamOutput[i]), "sample matches streaming interpolation/fade/pan");
+      CHECK(sample.playing == stream.playing, "sample and stream completion agree");
+      CHECK(sample.positionFrame == stream.positionFrame, "sample and stream final positions agree");
+    }
+  }
+  pmjs::VoiceMixState left, right;
+  left.asset = right.asset = asset;
+  left.playing = right.playing = true;
+  left.pan = -1; right.pan = 1;
+  left.pitch = 0.5F; right.pitch = 2;
+  left.positionFrame = 2; right.positionFrame = 5;
+  std::vector<float> output(2, 0);
+  pmjs::mixVoiceInto(left, output.data(), 1, 1);
+  pmjs::mixVoiceInto(right, output.data(), 1, 1);
+  CHECK(near(output[0], 0.06F) && near(output[1], -0.10F), "shared asset voices overlap independently");
+  CHECK(left.positionFrame == 2 && right.positionFrame == 7, "independent sample phases");
+  left.gain = 0.1F; left.targetGain = 0; left.gainStep = -0.1F; left.stopAfterFade = true;
+  pmjs::mixVoiceInto(left, output.data(), 1, 1);
+  CHECK(!left.playing && right.playing, "sample fade does not stop another voice");
+  for (std::uint64_t start : {0U, 4U}) {
+    pmjs::VoiceMixState whole;
+    whole.asset = asset; whole.playing = whole.loop = true;
+    whole.positionFrame = 15; whole.loopStart = start;
+    whole.duration = 15.5 / 48000;
+    std::vector<float> wrapped(4, 0);
+    pmjs::mixVoiceInto(whole, wrapped.data(), 2, 1);
+    CHECK(near(wrapped[0], 0.45F) && near(wrapped[2], start * 0.03F),
+      "sample loops at PCM end and honors a start-only loop point");
+    CHECK(whole.positionFrame == start + 1, "sample loop cursor matches samples");
+  }
+}
+
+void testPreparedHighPitchEof() {
+  auto asset = std::make_shared<pmjs::PreparedAudioAsset>();
+  asset->samples.resize(200, 0.25F);
+  for (float pitch : {2.0F, 8.0F}) {
+    for (std::uint64_t position : {96U, 98U}) {
+      pmjs::VoiceMixState sample, stream;
+      sample.asset = asset;
+      sample.playing = stream.playing = true;
+      sample.positionFrame = stream.positionFrame = position;
+      sample.pitch = stream.pitch = pitch;
+      stream.eof = true;
+      stream.samples.assign(asset->samples.begin() + position * 2, asset->samples.end());
+      for (int frame = 0; frame < 5; ++frame) {
+        float actual[2]{}, expected[2]{};
+        pmjs::mixVoiceInto(sample, actual, 1, 1);
+        pmjs::mixVoiceInto(stream, expected, 1, 1);
+        CHECK(near(actual[0], expected[0]) && near(actual[1], expected[1]), "EOF sample output parity");
+        CHECK(sample.positionFrame == stream.positionFrame && sample.positionFrame <= 100,
+          "high-pitch EOF position is bounded and matches streaming");
+        CHECK(sample.playing == stream.playing && sample.phase == stream.phase,
+          "high-pitch EOF playing state and residual phase match streaming");
+      }
+    }
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -192,6 +283,8 @@ int main() {
   testDurationWrapWithoutLoopPoints();
   testSimultaneousVoicesAccumulate();
   testEofAndPaused();
+  testPreparedSampleParity();
+  testPreparedHighPitchEof();
   if (failures == 0) std::cout << "media-mix unit tests passed\n";
   return failures == 0 ? 0 : 1;
 }

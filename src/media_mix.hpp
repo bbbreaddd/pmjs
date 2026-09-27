@@ -6,10 +6,17 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <memory>
+#include "media_decoder.hpp"
 
 namespace pmjs {
 
+struct PreparedAudioAsset : DecodedAudio {
+  double sourceDuration = 0;
+};
+
 struct VoiceMixState {
+  std::shared_ptr<const PreparedAudioAsset> asset;
   std::deque<float> samples;  // interleaved stereo frames
   double phase = 0;
   std::uint64_t positionFrame = 0;
@@ -24,7 +31,17 @@ inline void mixVoiceInto(VoiceMixState& voice, float* output, int frames,
                          float master) {
   if (!voice.playing) return;
   for (int frame = 0; frame < frames; ++frame) {
-    if (voice.samples.size() < 4) {
+    std::uint64_t nextSampleFrame = voice.positionFrame + 1;
+    if (voice.asset) {
+      const auto length = voice.asset->samples.size() / 2;
+      const auto end = voice.loop && voice.loopEnd > voice.loopStart
+        ? voice.loopEnd : length;
+      if (voice.loop && nextSampleFrame >= end) nextSampleFrame = voice.loopStart;
+      if (voice.positionFrame >= length || nextSampleFrame >= length) {
+        voice.playing = false;
+        break;
+      }
+    } else if (voice.samples.size() < 4) {
       if (voice.eof) voice.playing = false;
       break;
     }
@@ -43,10 +60,13 @@ inline void mixVoiceInto(VoiceMixState& voice, float* output, int frames,
       }
     }
     const float fraction = static_cast<float>(voice.phase);
-    const float left =
-        voice.samples[0] * (1 - fraction) + voice.samples[2] * fraction;
-    const float right =
-        voice.samples[1] * (1 - fraction) + voice.samples[3] * fraction;
+    const auto sample = [&](int channel, bool next) {
+      if (voice.asset) return voice.asset->samples[
+        (next ? nextSampleFrame : voice.positionFrame) * 2 + channel];
+      return voice.samples[(next ? 2 : 0) + channel];
+    };
+    const float left = sample(0, false) * (1 - fraction) + sample(0, true) * fraction;
+    const float right = sample(1, false) * (1 - fraction) + sample(1, true) * fraction;
     const float leftGain =
         voice.volume * voice.gain * (voice.pan > 0 ? 1 - voice.pan : 1);
     const float rightGain =
@@ -54,17 +74,24 @@ inline void mixVoiceInto(VoiceMixState& voice, float* output, int frames,
     output[frame * 2] += left * leftGain * master;
     output[frame * 2 + 1] += right * rightGain * master;
     voice.phase += voice.pitch;
-    while (voice.phase >= 1 && voice.samples.size() >= 2) {
-      voice.samples.pop_front();
-      voice.samples.pop_front();
+    while (voice.phase >= 1 && (voice.asset
+        ? (voice.loop || voice.positionFrame < voice.asset->samples.size() / 2)
+        : voice.samples.size() >= 2)) {
+      if (!voice.asset) {
+        voice.samples.pop_front();
+        voice.samples.pop_front();
+      }
       voice.phase -= 1;
       ++voice.positionFrame;
-      if (voice.loop && voice.loopEnd > voice.loopStart &&
+      if (voice.asset && voice.loop && voice.positionFrame >=
+          (voice.loopEnd > voice.loopStart ? voice.loopEnd : voice.asset->samples.size() / 2))
+        voice.positionFrame = voice.loopStart;
+      else if (voice.loop && voice.loopEnd > voice.loopStart &&
           voice.positionFrame >= voice.loopEnd)
         voice.positionFrame = voice.loopStart;
       else if (voice.loop && voice.duration > 0 &&
-               voice.positionFrame >=
-                   static_cast<std::uint64_t>(voice.duration * 48000))
+               voice.positionFrame >= (voice.asset ? voice.asset->samples.size() / 2
+                 : static_cast<std::uint64_t>(voice.duration * 48000)))
         voice.positionFrame = 0;
     }
   }

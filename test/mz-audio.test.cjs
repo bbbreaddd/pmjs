@@ -12,10 +12,11 @@ const mzAudioSource = fs.readFileSync(
   path.resolve(__dirname, '../js/pmjs-mz/audio.js'), 'utf8');
 
 function mediaStub() {
-  const calls = { plays: 0, releases: [], fades: [] };
+  const calls = { plays: 0, releases: [], fades: [], intents: [] };
   return {
     calls,
-    loadAudio: function(audioPath) {
+    loadAudio: function(audioPath, options) {
+      calls.intents.push(options.intent);
       return { handle: audioPath.length, duration: 2.5 };
     },
     loadAudioBytes: function() {
@@ -98,6 +99,8 @@ test('MZ wiring composes a voice behind MZ WebAudio semantics', () => {
   assert.equal(typeof buffer.retry, 'function');
   assert.ok(Number.isFinite(context.WebAudio._currentTime()));
   assert.equal(context.SceneManager.initAudio(), undefined);
+  for (const folder of ['se/', 'bgs/', 'me/']) context.AudioManager.createBuffer(folder, 'tone');
+  assert.deepEqual(context.NativeHost.media.calls.intents, ['music', 'effect', 'ambient', 'jingle']);
 });
 
 test('MZ play-before-load reports logical playback immediately', () => {

@@ -1,8 +1,8 @@
 var pmjsAudio = PMJS.rpgmaker.audio;
 
-function MzNativeWebAudio(url) {
+function MzNativeWebAudio(url, intent) {
   this._url = String(url || '');
-  this._voice = pmjsAudio.createVoice();
+  this._voice = pmjsAudio.createVoice(intent);
   this._loadListeners = [];
   this._stopListeners = [];
   this._playGeneration = 0;
@@ -194,7 +194,7 @@ if (NativeHost.media) {
   globalThis.WebAudio = MzNativeWebAudio;
   AudioManager.createBuffer = function(folder, name) {
     var url = this._path + folder + Utils.encodeURI(name) + this.audioFileExt();
-    var buffer = new MzNativeWebAudio(url);
+    var buffer = new MzNativeWebAudio(url, pmjsAudio.intentForFolder(folder));
     buffer.name = name;
     buffer.frameCount = Graphics.frameCount;
     return buffer;

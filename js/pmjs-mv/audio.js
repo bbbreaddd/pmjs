@@ -1,8 +1,8 @@
 var pmjsAudio = PMJS.rpgmaker.audio;
 
-function MvNativeWebAudio(url) {
+function MvNativeWebAudio(url, intent) {
   this._url = String(url || '');
-  this._voice = pmjsAudio.createVoice();
+  this._voice = pmjsAudio.createVoice(intent);
   this._loadListeners = [];
   this._stopListeners = [];
   this._playGeneration = 0;
@@ -194,7 +194,7 @@ if (NativeHost.media) {
   globalThis.WebAudio = MvNativeWebAudio;
   AudioManager.createBuffer = function(folder, name) {
     var url = this._path + folder + '/' + encodeURIComponent(name) + this.audioFileExt();
-    return new MvNativeWebAudio(url);
+    return new MvNativeWebAudio(url, pmjsAudio.intentForFolder(folder));
   };
   AudioManager.shouldUseHtml5Audio = function() { return false; };
   AudioManager.checkWebAudioError = function(buffer) {

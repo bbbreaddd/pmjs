@@ -237,13 +237,45 @@ void completeVideoLoad(napi_env env, napi_status status, void* opaque) {
 }
 }
 
+AudioLoadOptions audioLoadOptions(napi_env env, State& value, napi_value object) {
+  AudioLoadOptions options;
+  napi_valuetype type;
+  check(env, napi_typeof(env, object, &type), "cannot inspect audio options");
+  if (type == napi_undefined) return options;
+  if (type != napi_object) throw std::runtime_error("audio options must be an object");
+  auto field = [&](const char* name) -> std::optional<std::string> {
+    bool exists = false;
+    check(env, napi_has_named_property(env, object, name, &exists), "cannot inspect audio option");
+    if (!exists) return std::nullopt;
+    napi_value member;
+    check(env, napi_get_named_property(env, object, name, &member), "cannot read audio option");
+    return asString(env, member);
+  };
+  if (auto intent = field("intent")) {
+    if (*intent == "effect") options.intent = AudioIntent::effect;
+    else if (*intent == "music") options.intent = AudioIntent::music;
+    else if (*intent == "ambient") options.intent = AudioIntent::ambient;
+    else if (*intent == "jingle") options.intent = AudioIntent::jingle;
+    else if (*intent != "unknown") throw std::runtime_error("invalid audio intent");
+  }
+  if (auto identity = field("resourceIdentity")) options.resourceIdentity = *identity;
+  if (auto path = field("resourcePath")) {
+    auto resolved = value.vfs.resolve(*path);
+    if (!resolved) throw std::runtime_error("audio resource path is unavailable");
+    options.sourcePath = *resolved;
+  }
+  return options;
+}
+
 napi_value loadAudio(napi_env env, napi_callback_info info) try {
-  auto a = arguments(env, info, 1); State& value = host(env);
+  auto a = arguments(env, info, 2); State& value = host(env);
   const auto path = value.vfs.resolve(asString(env, a.at(0)));
   if (!path) throw std::runtime_error("audio path is outside the game root");
+  const auto options = a.size() > 1 ? audioLoadOptions(env, value, a[1]) : AudioLoadOptions{};
   std::string error;
-  const auto handle = value.core.media().loadAudio(path->string(), &error);
+  const auto handle = value.core.media().loadAudio(path->string(), &error, options);
   if (!handle) throw std::runtime_error(error.empty() ? "audio decode failed" : error);
+  syncExternalMemory(env);
   napi_value result; napi_create_object(env, &result);
   napi_set_named_property(env, result, "handle", uint32(env, handle));
   napi_set_named_property(env, result, "duration",
@@ -280,14 +312,39 @@ napi_value loadVideoAsync(napi_env env, napi_callback_info info) try {
 }
 
 napi_value loadAudioBytes(napi_env env, napi_callback_info info) try {
-  auto a = arguments(env, info, 1); State& value = host(env);
+  auto a = arguments(env, info, 2); State& value = host(env);
+  const auto options = a.size() > 1 ? audioLoadOptions(env, value, a[1]) : AudioLoadOptions{};
   std::string error;
-  const auto handle = value.core.media().loadAudioBytes(audioBytes(env, a.at(0)), &error);
+  const auto handle = value.core.media().loadAudioBytes(audioBytes(env, a.at(0)), &error, options);
   if (!handle) throw std::runtime_error(error.empty() ? "audio byte decode failed" : error);
+  syncExternalMemory(env);
   napi_value result; napi_create_object(env, &result);
   napi_set_named_property(env, result, "handle", uint32(env, handle));
   napi_set_named_property(env, result, "duration",
     number(env, value.core.media().duration(handle)));
+  return result;
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what()); return nullptr;
+}
+
+napi_value audioStats(napi_env env, napi_callback_info) try {
+  const auto stats = host(env).core.media().audioCacheStats();
+  napi_value result;
+  check(env, napi_create_object(env, &result), "cannot create audio stats");
+#define AUDIO_STAT(name) check(env, napi_set_named_property(env, result, #name, \
+  number(env, static_cast<double>(stats.name))), "cannot set audio " #name)
+  AUDIO_STAT(hits); AUDIO_STAT(misses); AUDIO_STAT(cacheBytes); AUDIO_STAT(livePcmBytes);
+  AUDIO_STAT(entries); AUDIO_STAT(sampleVoices); AUDIO_STAT(streamVoices);
+  check(env, napi_set_named_property(env, result, "diagnostics", boolean(env, stats.diagnostics)),
+        "cannot set audio diagnostics state");
+  if (stats.diagnostics) {
+    AUDIO_STAT(loads); AUDIO_STAT(decoderOpens); AUDIO_STAT(preparations);
+    AUDIO_STAT(admissions); AUDIO_STAT(evictions); AUDIO_STAT(rejections);
+    AUDIO_STAT(sampleLoads); AUDIO_STAT(streamLoads); AUDIO_STAT(prepareUs); AUDIO_STAT(decoderOpenUs);
+    AUDIO_STAT(workerDecodeCalls); AUDIO_STAT(workerDecodeUs); AUDIO_STAT(workerCpuUs);
+    AUDIO_STAT(peakCacheBytes); AUDIO_STAT(peakLivePcmBytes);
+  }
+#undef AUDIO_STAT
   return result;
 } catch (const std::exception& error) {
   napi_throw_error(env, nullptr, error.what()); return nullptr;
@@ -341,7 +398,9 @@ napi_value audioPosition(napi_env env, napi_callback_info info) try {
 
 napi_value releaseAudio(napi_env env, napi_callback_info info) try {
   auto a = arguments(env, info, 1);
-  return boolean(env, host(env).core.media().release(asUint32(env, a.at(0))));
+  const auto released = host(env).core.media().release(asUint32(env, a.at(0)));
+  syncExternalMemory(env);
+  return boolean(env, released);
 } catch (const std::exception& error) {
   napi_throw_type_error(env, nullptr, error.what()); return nullptr;
 }
@@ -438,6 +497,7 @@ napi_value releaseVideo(napi_env env, napi_callback_info info) try {
 void registerMediaBindings(napi_env env, napi_value exports) {
   napi_value media = moduleObject(env);
   method(env, media, "loadAudio", loadAudio);
+  method(env, media, "audioStats", audioStats);
   method(env, media, "loadAudioBytes", loadAudioBytes);
   method(env, media, "playAudio", playAudio);
   method(env, media, "stopAudio", stopAudio);

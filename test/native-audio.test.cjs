@@ -128,3 +128,31 @@ test('update keeps replayed buffers and drops finished ones', () => {
   assert.equal(audio.update(), 2);
   assert.equal(polls, 1);
 });
+
+test('intent hints and the rollback reach independent native loads', () => {
+  const context = contextFor();
+  const loads = [];
+  context.NativeHost.media.loadAudio = (path, options) => {
+    loads.push({ path, intent: options.intent });
+    return { handle: loads.length, duration: 1 };
+  };
+  context.PMJS.rpgmaker.audio.createVoice('effect').loadPath('audio/se/cursor.ogg');
+  context.PMJS.rpgmaker.audio.createVoice('music').loadPath('audio/bgm/theme.ogg');
+  assert.deepEqual(loads.map(load => load.intent), ['effect', 'music']);
+  context.PMJS.optimizations = { isEnabled: () => false };
+  context.PMJS.rpgmaker.audio.createVoice('effect').loadPath('audio/se/cursor.ogg');
+  assert.equal(loads[2].intent, 'unknown');
+});
+
+
+test('installing a replacement source releases only the replaced voice', () => {
+  const context = contextFor();
+  const first = context.PMJS.rpgmaker.audio.createVoice('effect');
+  const second = context.PMJS.rpgmaker.audio.createVoice('effect');
+  first.loadPath('audio/se/tone.ogg');
+  second.loadPath('audio/se/tone.ogg');
+  first.loadPath('audio/se/other.ogg');
+  assert.deepEqual(context.calls.releases, [1]);
+  assert.equal(first.handle, 3);
+  assert.equal(second.handle, 2);
+});
