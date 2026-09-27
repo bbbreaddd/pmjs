@@ -87,6 +87,34 @@ constexpr const char* fragmentSource = R"(
   in vec4 vertexColor;
   in vec4 vertexUvClamp;
   out vec4 outputColor;
+  vec3 mzRgbToHsl(vec3 rgb) {
+    float lo = min(rgb.r, min(rgb.g, rgb.b));
+    float hi = max(rgb.r, max(rgb.g, rgb.b));
+    float delta = hi - lo;
+    float lightness = (lo + hi) / 2.0;
+    float hue = 0.0;
+    float saturation = 0.0;
+    if (delta > 0.0) {
+      if (rgb.r == hi) hue = mod((rgb.g - rgb.b) / delta + 6.0, 6.0) / 6.0;
+      else if (rgb.g == hi) hue = ((rgb.b - rgb.r) / delta + 2.0) / 6.0;
+      else hue = ((rgb.r - rgb.g) / delta + 4.0) / 6.0;
+      if (lightness < 1.0) saturation = delta / (1.0 - abs(2.0 * lightness - 1.0));
+    }
+    return vec3(hue, saturation, lightness);
+  }
+  vec3 mzHslToRgb(vec3 hsl) {
+    float chroma = (1.0 - abs(2.0 * hsl.z - 1.0)) * hsl.y;
+    float x = chroma * (1.0 - abs(mod(hsl.x * 6.0, 2.0) - 1.0));
+    float m = hsl.z - chroma / 2.0;
+    vec3 rgb;
+    if (hsl.x < 1.0 / 6.0) rgb = vec3(chroma, x, 0.0);
+    else if (hsl.x < 2.0 / 6.0) rgb = vec3(x, chroma, 0.0);
+    else if (hsl.x < 3.0 / 6.0) rgb = vec3(0.0, chroma, x);
+    else if (hsl.x < 4.0 / 6.0) rgb = vec3(0.0, x, chroma);
+    else if (hsl.x < 5.0 / 6.0) rgb = vec3(x, 0.0, chroma);
+    else rgb = vec3(chroma, 0.0, x);
+    return rgb + vec3(m);
+  }
   highp float pmjsRandom(highp vec2 coordinate) {
     coordinate = mod(coordinate, vec2(4096.0));
     return fract(sin(dot(coordinate, vec2(12.9898, 78.233))) * 43758.5453);
@@ -272,6 +300,23 @@ constexpr const char* fragmentSource = R"(
       float resultAlpha = source.a + target.a * (1.0 - source.a);
       vec3 resultRgb = (1.0 - source.a) * targetRgb + source.a * blended;
       outputColor = vec4(resultRgb * resultAlpha, resultAlpha);
+      return;
+    }
+    if (pixiFilterKind == 26) {
+      vec4 color = texture(image, sampleUv);
+      if (color.a <= 0.0) { outputColor = vec4(0.0); return; }
+      vec3 hsl = mzRgbToHsl(color.rgb);
+      hsl.x = mod(hsl.x + pixiFilterParameters[0] / 360.0, 1.0);
+      hsl.y *= 1.0 - pixiFilterParameters[4] / 255.0;
+      vec3 rgb = mzHslToRgb(hsl);
+      vec3 tone = vec3(pixiFilterParameters[1], pixiFilterParameters[2],
+        pixiFilterParameters[3]) / 255.0;
+      vec3 blend = vec3(pixiFilterParameters[5], pixiFilterParameters[6],
+        pixiFilterParameters[7]) / 255.0;
+      float intensity = pixiFilterParameters[8] / 255.0;
+      rgb = clamp((rgb / color.a + tone) * color.a, 0.0, 1.0);
+      rgb = clamp(rgb * (1.0 - intensity) + blend * intensity * color.a, 0.0, 1.0);
+      outputColor = vec4(rgb * pixiFilterParameters[9] / 255.0, color.a) * vertexColor;
       return;
     }
     if (pixiFilterKind == 25) {

@@ -127,7 +127,7 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
       command.clipped = state.clipped;
       if (kind == static_cast<std::uint32_t>(NodeKind::filterBegin)) {
         if (filterDepth >= maxFilterDepth ||
-            blendValue > static_cast<std::uint32_t>(FilterKind::fxaa)) {
+            blendValue > static_cast<std::uint32_t>(FilterKind::mzColor)) {
           return false;
         }
         command.action = RenderCommand::Action::filterBegin;
@@ -150,6 +150,8 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
           if (resource != 0 || command.filterParameters[0] < 0 ||
               command.filterParameters[1] < 1 ||
               command.filterParameters[1] > 15) return false;
+        } else if (command.filterKind == FilterKind::mzColor) {
+          if (resource != 0) return false;
         } else if (command.filterKind == FilterKind::fxaa) {
           if (resource != 0) return false;
         } else if (command.filterKind == FilterKind::displacement) {

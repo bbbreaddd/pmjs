@@ -2,8 +2,14 @@
 
 (function() {
   var schema = NativeHost.scene && NativeHost.scene.schema;
+  var requiredPacketVersion = 28;
+  var filterEncoders = [];
+  globalThis.pmjsPixi5RegisterFilterEncoder = function(encoder) {
+    filterEncoders.push(encoder);
+  };
   var packetVersion = NativeHost.scene && NativeHost.scene.packetVersion;
-  if (!schema || schema.version !== packetVersion ||
+  if (!schema || packetVersion !== requiredPacketVersion ||
+      schema.version !== packetVersion ||
       schema.metadataStride !== 7 || schema.valueStride !== 41 ||
       !schema.transactionalSubmit) {
     throw new Error('native scene schema does not provide transactional submission');
@@ -153,7 +159,24 @@
     var transform = localTransform(node);
     if (!drawableTransform(transform)) return;
     if (node.mask) reject('render.mask', node);
-    if (activeFilters(node)) reject('render.filter', node);
+    var encodedFilters = [];
+    if (activeFilters(node)) {
+      node._filters.forEach(function(filter) {
+        if (!filter || filter.enabled === false) return;
+        var encoded = null;
+        for (var i = 0; i < filterEncoders.length && !encoded; i++) {
+          encoded = filterEncoders[i](filter);
+        }
+        if (!encoded) reject('render.filter', node);
+        if (!encoded.neutral) encodedFilters.push(encoded);
+      });
+    }
+    encodedFilters.reverse().forEach(function(filter) {
+      var begin = addRecord(parent, 6, 0, 0xffffff, filter.kind, identity, 1);
+      var offset = begin * valueStride;
+      values.set(filter.parameters, offset + 7);
+      values[offset + 33] = 1;
+    });
 
     var type = node.pluginName && String(node.pluginName).toLowerCase();
     var isSprite = node instanceof PIXI.Sprite;
@@ -280,6 +303,9 @@
       if (kind === 3 && children[childIndex] === node._graphics) continue;
       writeNode(children[childIndex], index);
     }
+    encodedFilters.forEach(function() {
+      addRecord(parent, 7, 0, 0xffffff, 0, identity, 1);
+    });
   }
 
   function render(stage, backgroundColor, resolution) {

@@ -5,7 +5,7 @@
 
 namespace pmjs::scene_packet {
 
-constexpr std::uint32_t version = 27;
+constexpr std::uint32_t version = 28;
 constexpr std::size_t metadataStride = 7;
 constexpr std::size_t valueStride = 41;
 constexpr std::size_t maxNodes = 65536;
@@ -55,6 +55,7 @@ enum class FilterKind : std::uint32_t {
   blurX = 27,
   blurY = 28,
   fxaa = 29,
+  mzColor = 30,
 };
 
 constexpr std::size_t maxFilterDepth = 4;

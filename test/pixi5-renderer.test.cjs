@@ -88,8 +88,8 @@ function createContext() {
     document: { createElement() { return canvas; } },
     NativeHost: {
       scene: {
-        packetVersion: 27,
-        schema: { version: 27, metadataStride: 7, valueStride: 41,
+        packetVersion: 28,
+        schema: { version: 28, metadataStride: 7, valueStride: 41,
           transactionalSubmit: true },
         submit(version, metadata, values, count) {
           submissions.push({ version, metadata: metadata.slice(),
@@ -168,7 +168,7 @@ test('Pixi 5 scene encoder reads resource.source and submits sprites', () => {
 
   assert.equal(fixture.submissions.length, 1);
   const packet = fixture.submissions[0];
-  assert.equal(packet.version, 27);
+  assert.equal(packet.version, 28);
   assert.equal(packet.count, 3, 'background, stage container, sprite');
   assert.equal(packet.metadata[2 * 7], 1);
   assert.equal(packet.metadata[2 * 7 + 2], 42);
@@ -346,4 +346,77 @@ test('Pixi 5 renderer renders and extracts MZ RenderTexture canvases', () => {
   assert.equal(fixture.submissions[0].count, 2,
     'resolution transform and stage container');
   assert.equal(fixture.submissions[0].values[0], 2);
+});
+
+test('MZ ColorFilter encloses its subtree and skips neutral or disabled filters', () => {
+  const { context, submissions } = createContext();
+  context.ColorFilter = function ColorFilter() {
+    this.uniforms = { hue: 0, colorTone: [0, 0, 0, 0],
+      blendColor: [0, 0, 0, 0], brightness: 255 };
+  };
+  runModule(context, 'js/pmjs-pixi5/scene.js');
+  runModule(context, 'js/pmjs-mz/rendering.js');
+  const stage = new context.PIXI.Container();
+  const child = new context.PIXI.Container();
+  stage.addChild(child);
+  const filter = new context.ColorFilter();
+  stage._filters = [filter];
+  context.pmjsPixi5RenderScene(stage, null, 1);
+  assert.equal(submissions.at(-1).count, 2);
+  Object.assign(filter.uniforms, { hue: -120, colorTone: [-20, 30, 40, 100],
+    blendColor: [80, 90, 100, 120], brightness: 180 });
+  context.pmjsPixi5RenderScene(stage, null, 1);
+  const packet = submissions.at(-1);
+  assert.equal(packet.count, 4);
+  assert.deepEqual([0, 1, 2, 3].map(i => packet.metadata[i * 7]), [6, 0, 0, 7]);
+  assert.equal(packet.metadata[4], 30);
+  assert.deepEqual(Array.from(packet.values.slice(7, 17)),
+    [-120, -20, 30, 40, 100, 80, 90, 100, 120, 180]);
+  const second = new context.ColorFilter();
+  second.uniforms.brightness = 90;
+  stage._filters = [filter, second];
+  context.pmjsPixi5RenderScene(stage, null, 1);
+  const chain = submissions.at(-1);
+  assert.equal(chain.count, 6);
+  assert.equal(chain.values[16], 90);
+  assert.equal(chain.values[41 + 16], 180);
+  stage._filters = [filter];
+  filter.enabled = false;
+  context.pmjsPixi5RenderScene(stage, null, 1);
+  assert.equal(submissions.at(-1).count, 2);
+});
+
+test('MZ ColorFilter subclasses fall through to compatibility handling or another encoder', () => {
+  const { context, submissions } = createContext();
+  const hits = [];
+  context.PMJS = { compat: { hit: (...args) => hits.push(args) } };
+  context.ColorFilter = class ColorFilter {};
+  class CustomColorFilter extends context.ColorFilter {}
+  runModule(context, 'js/pmjs-pixi5/scene.js');
+  runModule(context, 'js/pmjs-mz/rendering.js');
+  const stage = new context.PIXI.Container();
+  stage._filters = [new CustomColorFilter()];
+  assert.throws(() => context.pmjsPixi5RenderScene(stage, null, 1),
+    /unsupported Pixi 5 native capability: render.filter/);
+  assert.equal(hits[0][0], 'render.filter');
+  assert.equal(submissions.length, 0);
+  context.pmjsPixi5RegisterFilterEncoder(filter =>
+    filter instanceof CustomColorFilter ? { neutral: true } : null);
+  assert.doesNotThrow(() => context.pmjsPixi5RenderScene(stage, null, 1));
+  assert.equal(submissions.at(-1).count, 1);
+});
+
+test('MZ filter encoder tolerates an unavailable ColorFilter class', () => {
+  const { context } = createContext();
+  let encoder;
+  context.pmjsPixi5RegisterFilterEncoder = callback => { encoder = callback; };
+  runModule(context, 'js/pmjs-mz/rendering.js');
+  assert.equal(encoder({}), null);
+});
+
+test('Pixi 5 refuses an older native packet contract', () => {
+  const { context } = createContext();
+  context.NativeHost.scene.packetVersion = 27;
+  context.NativeHost.scene.schema.version = 27;
+  assert.throws(() => runModule(context, 'js/pmjs-pixi5/scene.js'), /scene schema/);
 });

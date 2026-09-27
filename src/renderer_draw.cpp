@@ -42,6 +42,7 @@ int Renderer::filterBoundsPadding(scene_packet::FilterKind kind,
   switch (kind) {
     case FilterKind::colorMatrix:
       return parameters[19] == 0.0F ? 0 : -1;
+    case FilterKind::mzColor:
     case FilterKind::adjustment:
     case FilterKind::alpha:
     case FilterKind::alphaMask:
@@ -1024,6 +1025,12 @@ void Renderer::renderScene() {
         glUniform1fv(colorMatrixUniform_, 20, filter.filterParameters.data());
         glUniform1f(colorMatrixAlphaUniform_, filter.filterParameters[20]);
         glUniform1i(colorMatrixEnabledUniform_, 1);
+      } else if (filter.filterKind == scene_packet::FilterKind::mzColor) {
+        glUniform1f(blurUniform_, 0);
+        glUniform2f(blurDirectionUniform_, 0, 0);
+        glUniform1fv(pixiFilterParametersUniform_, 10,
+                     filter.filterParameters.data());
+        glUniform1i(pixiFilterKindUniform_, 26);
       } else if (filter.filterKind == scene_packet::FilterKind::fxaa) {
         glUniform1f(blurUniform_, 0);
         glUniform2f(blurDirectionUniform_, 0, 0);

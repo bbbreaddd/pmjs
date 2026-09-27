@@ -85,7 +85,7 @@ struct PresentationGeometry {
 
 struct RendererStats {
   static constexpr std::size_t filterKindCount =
-    static_cast<std::size_t>(scene_packet::FilterKind::fxaa) + 1;
+    static_cast<std::size_t>(scene_packet::FilterKind::mzColor) + 1;
   std::uint64_t frames = 0;
   std::uint64_t retainedFrames = 0;
   std::uint64_t commands = 0;
