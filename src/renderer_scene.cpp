@@ -68,6 +68,8 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
         kind != static_cast<std::uint32_t>(NodeKind::sprite)) return false;
     if ((flags & NodeFlags::roundPixels) &&
         kind != static_cast<std::uint32_t>(NodeKind::sprite)) return false;
+    if ((flags & NodeFlags::hasMeshPostTintOverlay) &&
+        kind != static_cast<std::uint32_t>(NodeKind::mesh)) return false;
 
     const std::array<float, 6> local = {
       values[valueOffset], values[valueOffset + 1],
@@ -305,6 +307,14 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
         kind == static_cast<std::uint32_t>(NodeKind::tileLayer)
           ? RenderCommand::Primitive::tileLayer
           : RenderCommand::Primitive::mesh;
+      if (flags & NodeFlags::hasSpriteColor) return false;
+      if (flags & NodeFlags::hasMeshPostTintOverlay) {
+        frame_.commands.back().appliesMeshPostTintOverlay = true;
+        std::copy_n(values + valueOffset + 37, 4,
+                    frame_.commands.back().blendColor.begin());
+        if (frame_.commands.back().blendColor[3] < 0 ||
+            frame_.commands.back().blendColor[3] > 1) return false;
+      }
       continue;
     }
 

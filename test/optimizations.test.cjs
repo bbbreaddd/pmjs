@@ -30,7 +30,7 @@ function registerOwnerIds(PMJS, ids) {
   }
 }
 
-const sceneIds = ['scene.graphics-cache', 'scene.gpu-mesh-cache'];
+const sceneIds = ['scene.graphics-cache', 'scene.tiling-texture-cache'];
 const terraxId = 'terrax.native-lighting';
 
 test('registered optimizations default to enabled without any configuration', () => {
@@ -49,7 +49,7 @@ test('a port can disable exactly one optimization without affecting others', () 
   registerOwnerIds(PMJS, [...sceneIds, terraxId]);
   assert.equal(PMJS.optimizations.isEnabled('scene.graphics-cache'), false);
   assert.equal(PMJS.optimizations.reason('scene.graphics-cache'), 'disabled by port');
-  assert.equal(PMJS.optimizations.isEnabled('scene.gpu-mesh-cache'), true);
+  assert.equal(PMJS.optimizations.isEnabled('scene.tiling-texture-cache'), true);
   assert.equal(PMJS.optimizations.isEnabled(terraxId), true);
 });
 
@@ -61,7 +61,7 @@ test('multiple disables work and report their own reasons', () => {
   registerOwnerIds(PMJS, [...sceneIds, terraxId]);
   assert.equal(PMJS.optimizations.isEnabled(terraxId), false);
   assert.equal(PMJS.optimizations.isEnabled('scene.graphics-cache'), false);
-  assert.equal(PMJS.optimizations.isEnabled('scene.gpu-mesh-cache'), true);
+  assert.equal(PMJS.optimizations.isEnabled('scene.tiling-texture-cache'), true);
   const dump = PMJS.optimizations.dump();
   assert.equal(dump.find(entry => entry.id === terraxId).disabledBy, 'port');
   assert.equal(dump.find(entry => entry.id === terraxId).owner, 'test-owner');
@@ -70,11 +70,11 @@ test('multiple disables work and report their own reasons', () => {
 test('developer override is honored and takes precedence over port policy', () => {
   const { PMJS } = loadRegistry({
     config: { disableOptimizations: ['scene.graphics-cache'] },
-    env: { PMJS_DISABLE_OPT: 'scene.gpu-mesh-cache' },
+    env: { PMJS_DISABLE_OPT: 'scene.tiling-texture-cache' },
   });
   registerOwnerIds(PMJS, [...sceneIds, terraxId]);
-  assert.equal(PMJS.optimizations.isEnabled('scene.gpu-mesh-cache'), false);
-  assert.equal(PMJS.optimizations.reason('scene.gpu-mesh-cache'),
+  assert.equal(PMJS.optimizations.isEnabled('scene.tiling-texture-cache'), false);
+  assert.equal(PMJS.optimizations.reason('scene.tiling-texture-cache'),
     'disabled by PMJS_DISABLE_OPT');
   assert.equal(PMJS.optimizations.isEnabled('scene.graphics-cache'), false);
   assert.equal(PMJS.optimizations.reason('scene.graphics-cache'), 'disabled by port');
@@ -94,7 +94,7 @@ test('developer override parsing trims, drops empties, and dedupes', () => {
   });
   registerOwnerIds(PMJS, sceneIds);
   assert.equal(PMJS.optimizations.isEnabled('scene.graphics-cache'), false);
-  assert.equal(PMJS.optimizations.isEnabled('scene.gpu-mesh-cache'), true);
+  assert.equal(PMJS.optimizations.isEnabled('scene.tiling-texture-cache'), true);
 });
 
 test('requested disables stay pending until owners register', () => {
@@ -209,11 +209,11 @@ test('owners can refuse an unrecognized shape with a reason', () => {
   assert.equal(PMJS.optimizations.isEnabled('scene.graphics-cache'), false);
   assert.equal(PMJS.optimizations.reason('scene.graphics-cache'),
     'refused: unknown setter shape');
-  assert.equal(PMJS.optimizations.isEnabled('scene.gpu-mesh-cache'), true);
+  assert.equal(PMJS.optimizations.isEnabled('scene.tiling-texture-cache'), true);
   const dump = PMJS.optimizations.dump();
   assert.equal(dump.find(entry => entry.id === 'scene.graphics-cache').refusalReason,
     'unknown setter shape');
-  assert.equal(dump.find(entry => entry.id === 'scene.gpu-mesh-cache').refusalReason, null);
+  assert.equal(dump.find(entry => entry.id === 'scene.tiling-texture-cache').refusalReason, null);
 });
 
 test('boot diagnostics report refusal and finalization freezes refusal', () => {
@@ -224,9 +224,9 @@ test('boot diagnostics report refusal and finalization freezes refusal', () => {
   PMJS.optimizations.refuse('scene.graphics-cache', 'unknown setter shape');
   PMJS.optimizations.finalize();
   assert.ok(logs.includes('[pmjs-opt] scene.graphics-cache refused: unknown setter shape'));
-  assert.throws(() => PMJS.optimizations.refuse('scene.gpu-mesh-cache', 'late'),
+  assert.throws(() => PMJS.optimizations.refuse('scene.tiling-texture-cache', 'late'),
     /finalized; cannot refuse/);
-  assert.equal(PMJS.optimizations.isEnabled('scene.gpu-mesh-cache'), true);
+  assert.equal(PMJS.optimizations.isEnabled('scene.tiling-texture-cache'), true);
 });
 
 test('refusal keeps an earlier disable cause and validates input', () => {

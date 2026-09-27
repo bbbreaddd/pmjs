@@ -25,7 +25,7 @@ function stubCanvasContext(calls) {
   };
 }
 
-function loadScenePrimitives({ disableOptimizations = [], env = {} } = {}) {
+function loadScenePrimitives({ disableOptimizations = [], env = {}, pixi4 } = {}) {
   const calls = { createTileLayer: 0, tileLayerPoints: [],
     releaseTileLayer: 0, createMesh: 0,
     releaseMesh: 0, releasedLayers: [], releasedMeshes: [],
@@ -38,6 +38,7 @@ function loadScenePrimitives({ disableOptimizations = [], env = {} } = {}) {
   }
   let nextHandle = 1000;
   const context = {
+    PMJS: { pixi4 },
     console: { log() {} },
     FinalizationRegistry: MockFinalizationRegistry,
     PMJS_GAME_CONFIG: { disableOptimizations },
@@ -61,7 +62,7 @@ function loadScenePrimitives({ disableOptimizations = [], env = {} } = {}) {
         this.worldAlpha = 1;
         this.transform = { worldTransform: { identity() {} } };
       },
-      mesh: { Mesh: { DRAW_MODES: { TRIANGLE_MESH: 0 } } },
+      mesh: { Mesh: { DRAW_MODES: { TRIANGLE_MESH: 0, TRIANGLES: 1 } } },
     },
     CanvasElement: function CanvasElement() {
       const canvas = this;
@@ -93,6 +94,17 @@ function callIn(context, expression, name, value) {
     delete context[name];
   }
 }
+
+test('Pixi capabilities extend the existing namespace without replacing other owners', () => {
+  const existing = { prepareTexture() {} };
+  const prepareTexture = existing.prepareTexture;
+  const { context } = loadScenePrimitives({ pixi4: existing });
+  assert.equal(context.PMJS.pixi4, existing);
+  assert.equal(context.PMJS.pixi4.prepareTexture, prepareTexture);
+  assert.equal(typeof context.PMJS.pixi4.retainMeshGeometry, 'function');
+  assert.equal(typeof context.PMJS.pixi4.invalidateMeshGeometry, 'function');
+  assert.equal(typeof context.PMJS.pixi4.setMeshPostTintOverlay, 'function');
+});
 
 function tileLayer() {
   return {
@@ -292,28 +304,81 @@ function gpuMesh() {
     vertices: [0, 0, 10, 0, 10, 10],
     uvs: [0, 0, 1, 0, 1, 1],
     indices: [0, 1, 2],
-    dirty: 0, indexDirty: 0, vertexDirty: 0,
+    dirty: 0, indexDirty: 0,
     drawMode: 0,
     uploadUvTransform: null,
   };
 }
 
-test('scene.gpu-mesh-cache reuses the upload when enabled, re-uploads when disabled', () => {
-  const enabled = loadScenePrimitives();
+test('explicitly retained meshes reuse geometry until their producer invalidates it', () => {
+  const { context, calls, finalizers } = loadScenePrimitives();
   const mesh = gpuMesh();
-  const first = callIn(enabled.context, 'ensureNativeGpuMesh(mesh)', 'mesh', mesh);
-  const second = callIn(enabled.context, 'ensureNativeGpuMesh(mesh)', 'mesh', mesh);
-  assert.equal(enabled.calls.createMesh, 1);
-  assert.equal(enabled.calls.releaseMesh, 0);
-  assert.equal(first, second);
+  context.PMJS.pixi4.retainMeshGeometry(mesh);
+  const first = callIn(context, 'ensureNativeGpuMesh(mesh)', 'mesh', mesh);
+  assert.equal(callIn(context, 'ensureNativeGpuMesh(mesh)', 'mesh', mesh), first);
+  assert.equal(calls.createMesh, 1);
+  context.PMJS.pixi4.retainMeshGeometry(mesh);
+  assert.equal(callIn(context, 'ensureNativeGpuMesh(mesh)', 'mesh', mesh), first);
+  mesh.vertices[0] = 17;
+  context.PMJS.pixi4.invalidateMeshGeometry(mesh);
+  const next = callIn(context, 'ensureNativeGpuMesh(mesh)', 'mesh', mesh);
+  assert.notEqual(next, first);
+  assert.deepEqual(calls.releasedMeshes, [first]);
+  assert.equal(finalizers[0].records.size, 1);
+  const ordinary = gpuMesh();
+  const ordinaryHandle = callIn(context, 'ensureNativeGpuMesh(mesh)', 'mesh', ordinary);
+  assert.notEqual(callIn(context, 'ensureNativeGpuMesh(mesh)', 'mesh', ordinary), ordinaryHandle);
+});
 
-  const disabled = loadScenePrimitives(
-    { disableOptimizations: ['scene.gpu-mesh-cache'] });
-  const other = gpuMesh();
-  callIn(disabled.context, 'ensureNativeGpuMesh(other)', 'other', other);
-  callIn(disabled.context, 'ensureNativeGpuMesh(other)', 'other', other);
-  assert.equal(disabled.calls.createMesh, 2);
-  assert.equal(disabled.calls.releaseMesh, 1);
+test('retained meshes follow texture, UV transform, draw-mode, and released-resource changes', () => {
+  const { context } = loadScenePrimitives();
+  const mesh = gpuMesh();
+  context.PMJS.pixi4.retainMeshGeometry(mesh);
+  let handle = callIn(context, 'ensureNativeGpuMesh(mesh)', 'mesh', mesh);
+  for (const change of [
+    () => { mesh.texture.baseTexture.source._nativeImage.handle++; },
+    () => { mesh.uploadUvTransform = true;
+      mesh._uvTransform = { mapCoord: { a: 1, b: 0, c: 0, d: 1, tx: 0.25, ty: 0 } }; },
+    () => { mesh._uvTransform.mapCoord.tx = 0.5; },
+    () => { mesh.drawMode = 1; },
+    () => { callIn(context, "pmjsReleaseNativeGeometry(mesh, 'mesh')", 'mesh', mesh); }
+  ]) {
+    change();
+    const next = callIn(context, 'ensureNativeGpuMesh(mesh)', 'mesh', mesh);
+    assert.notEqual(next, handle);
+    assert.equal(callIn(context, 'ensureNativeGpuMesh(mesh)', 'mesh', mesh), next);
+    handle = next;
+  }
+});
+
+for (const via of ['config', 'env']) {
+  test(`retained mesh geometry can be disabled through ${via}`, () => {
+    const id = 'scene.retained-mesh-geometry';
+    const { context, calls } = loadScenePrimitives(via === 'config'
+      ? { disableOptimizations: [id] } : { env: { PMJS_DISABLE_OPT: id } });
+    const mesh = gpuMesh();
+    context.PMJS.pixi4.retainMeshGeometry(mesh);
+    const first = callIn(context, 'ensureNativeGpuMesh(mesh)', 'mesh', mesh);
+    const next = callIn(context, 'ensureNativeGpuMesh(mesh)', 'mesh', mesh);
+    assert.notEqual(next, first);
+    assert.equal(calls.createMesh, 2);
+    assert.deepEqual(calls.releasedMeshes, [first]);
+  });
+}
+
+test('failed retained mesh replacement remains retryable without releasing the current owner', () => {
+  const { context, calls } = loadScenePrimitives();
+  const mesh = gpuMesh();
+  context.PMJS.pixi4.retainMeshGeometry(mesh);
+  const first = callIn(context, 'ensureNativeGpuMesh(mesh)', 'mesh', mesh);
+  context.PMJS.pixi4.invalidateMeshGeometry(mesh);
+  const create = context.NativeHost.render.createMesh;
+  context.NativeHost.render.createMesh = () => { throw new Error('upload failed'); };
+  assert.throws(() => callIn(context, 'ensureNativeGpuMesh(mesh)', 'mesh', mesh), /upload failed/);
+  assert.deepEqual(calls.releasedMeshes, []);
+  context.NativeHost.render.createMesh = create;
+  assert.notEqual(callIn(context, 'ensureNativeGpuMesh(mesh)', 'mesh', mesh), first);
+  assert.deepEqual(calls.releasedMeshes, [first]);
 });
 
 test('compiled geometry has finalizer owners and explicit release unregisters them', () => {
@@ -351,7 +416,9 @@ test('failed geometry replacements preserve the previous valid cache entry', () 
   assert.deepEqual(calls.releasedLayers, []);
   mesh.dirty = 0;
   layer.pointsBuf[0] = 0;
-  assert.equal(callIn(context, 'ensureNativeGpuMesh(mesh)', 'mesh', mesh), meshHandle);
+  context.NativeHost.render.createMesh = () => 1234;
+  assert.equal(callIn(context, 'ensureNativeGpuMesh(mesh)', 'mesh', mesh), 1234);
+  assert.deepEqual(calls.releasedMeshes, [meshHandle]);
   assert.equal(callIn(context, 'ensureNativeRectTileLayer(layer)', 'layer', layer), layerHandle);
 });
 

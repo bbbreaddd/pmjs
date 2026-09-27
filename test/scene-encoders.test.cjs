@@ -941,6 +941,72 @@ test('tiling, screen, graphics, and mesh leaves emit their packet kinds', () => 
   assert.equal(sprite() instanceof sandbox.PIXI.Sprite, true);
 });
 
+test('ordinary Pixi meshes upload live vertex changes without revision counters', () => {
+  const harness = makeHarness();
+  const { sandbox, makeTexture } = harness;
+  const uploads = [], released = [];
+  sandbox.NativeHost.render.createMesh = function(_image, vertices) {
+    uploads.push(vertices);
+    return 500 + uploads.length;
+  };
+  sandbox.NativeHost.render.releaseMesh = function(handle) { released.push(handle); };
+  const root = new sandbox.PIXI.Container();
+  const mesh = new sandbox.PIXI.mesh.Mesh(makeTexture(64, 64));
+  root.addChild(mesh);
+  submitOnly(harness, root);
+  mesh.vertices[0] = 17;
+  submitOnly(harness, root);
+  mesh.vertices = new Float32Array([23, 0, 10, 0, 0, 10]);
+  submitOnly(harness, root);
+  assert.deepEqual(uploads.map(vertices => vertices[0]), [0, 17, 23]);
+  assert.deepEqual(released, [501, 502]);
+  assert.equal(mesh.dirty, 0);
+  assert.equal(mesh.indexDirty, 0);
+
+});
+
+test('PMJS mesh post-tint overlay changes scene state on ordinary meshes', () => {
+  const harness = makeHarness();
+  const { sandbox, makeTexture } = harness;
+  const root = new sandbox.PIXI.Container();
+  const mesh = new sandbox.PIXI.mesh.Mesh(makeTexture(64, 64));
+  mesh._blendColor = [255, 64, 0, 128];
+  root.addChild(mesh);
+  assert.equal(submitOnly(harness, root).metadata[7 + 5] & 512, 0);
+  sandbox.PMJS.pixi4.setMeshPostTintOverlay(mesh, [255, 64, 0, 128]);
+  const packet = submitOnly(harness, root);
+  assert.equal(packet.metadata[7 + 5] & 512, 512);
+  assert.equal(packet.metadata[7 + 5] & 16, 0);
+  const overlay = packet.values.slice(41 + 37, 41 + 41);
+  assert.equal(overlay[0], 1);
+  assert.ok(Math.abs(overlay[1] - 64 / 255) < 0.000001);
+  assert.equal(overlay[2], 0);
+  assert.ok(Math.abs(overlay[3] - 128 / 255) < 0.000001);
+  sandbox.PMJS.pixi4.setMeshPostTintOverlay(mesh, [255, 64, 0, 64]);
+  const next = submitOnly(harness, root);
+  assert.ok(Math.abs(next.values[41 + 40] - 64 / 255) < 0.000001);
+});
+
+test('Pixi mesh draw modes keep strip and independent triangles distinct', () => {
+  const harness = makeHarness();
+  const { sandbox, makeTexture } = harness;
+  const modes = [];
+  sandbox.NativeHost.render.createMesh = function(_image, _vertices, _uvs,
+      _indices, drawMode) {
+    modes.push(drawMode);
+    return 500 + modes.length;
+  };
+  const root = new sandbox.PIXI.Container();
+  const strip = new sandbox.PIXI.mesh.Mesh(makeTexture(64, 64));
+  strip.drawMode = sandbox.PIXI.mesh.Mesh.DRAW_MODES.TRIANGLE_MESH;
+  const triangles = new sandbox.PIXI.mesh.Mesh(makeTexture(64, 64));
+  triangles.drawMode = sandbox.PIXI.mesh.Mesh.DRAW_MODES.TRIANGLES;
+  root.addChild(strip);
+  root.addChild(triangles);
+  submitOnly(harness, root);
+  assert.deepEqual(modes, [0, 1]);
+});
+
 test('trim, rotation, and scale modes encode sprite variants', () => {
   const harness = makeHarness();
   const { sandbox, sprite, makeTexture } = harness;

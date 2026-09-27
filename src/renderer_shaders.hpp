@@ -1043,6 +1043,9 @@ constexpr const char* tileFragmentSource = R"(
   precision mediump float;
   uniform sampler2D image;
   uniform vec4 color;
+#ifdef PMJS_MESH_POST_TINT_OVERLAY
+  uniform vec4 meshPostTintOverlayColor;
+#endif
   uniform sampler2D maskImage;
   uniform bool maskEnabled;
   uniform float maskTransform[6];
@@ -1052,7 +1055,15 @@ constexpr const char* tileFragmentSource = R"(
   in vec2 vertexUv;
   out vec4 outputColor;
   void main() {
-    outputColor = texture(image, vertexUv) * color;
+    vec4 sampled = texture(image, vertexUv);
+    sampled.rgb *= color.rgb;
+#ifdef PMJS_MESH_POST_TINT_OVERLAY
+    if (meshPostTintOverlayColor.a > 0.0) {
+      sampled.rgb = mix(sampled.rgb, meshPostTintOverlayColor.rgb, meshPostTintOverlayColor.a);
+    }
+#endif
+    sampled.a *= color.a;
+    outputColor = sampled;
     if (maskEnabled) {
       vec2 screenPixel = vec2(gl_FragCoord.x, screenHeight - gl_FragCoord.y);
       vec2 maskPixel = vec2(
@@ -1067,5 +1078,11 @@ constexpr const char* tileFragmentSource = R"(
   }
 )";
 
+inline std::string meshPostTintOverlayFragmentSourceWithPrecision(const std::string& precision) {
+  auto source = pixiFragmentSourceWithPrecision(tileFragmentSource, precision);
+  const auto version = source.find("#version 300 es");
+  source.insert(source.find('\n', version) + 1, "#define PMJS_MESH_POST_TINT_OVERLAY\n");
+  return source;
+}
 
 }  // namespace pmjs::renderer_shaders

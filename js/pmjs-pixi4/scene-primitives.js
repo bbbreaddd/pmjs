@@ -14,8 +14,8 @@ if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
     fallback: 're-rasterize the tiling source canvas on every use' });
   PMJS.optimizations.register({ id: 'scene.graphics-cache', owner: 'pmjs-pixi4',
     fallback: 're-rasterize vector graphics on every use' });
-  PMJS.optimizations.register({ id: 'scene.gpu-mesh-cache', owner: 'pmjs-pixi4',
-    fallback: 're-upload the GPU mesh on every use' });
+  PMJS.optimizations.register({ id: 'scene.retained-mesh-geometry', owner: 'pmjs-pixi4',
+    fallback: 'upload mesh geometry on every draw' });
   PMJS.optimizations.register({ id: 'scene.plain-sprite-segment',
     owner: 'pmjs-pixi4',
     fallback: 'encode each sprite through the generic recursive scene writer' });
@@ -34,6 +34,22 @@ var nativeTransformMs = 0;
 var nativeQueueMs = 0;
 var nativeStageSamples = 0;
 var nativeBlankTileCanvas = null;
+var nativeRetainedMeshes = new WeakMap();
+PMJS.pixi4 = PMJS.pixi4 || {};
+Object.assign(PMJS.pixi4, {
+  retainMeshGeometry: function(mesh) {
+    if (!nativeRetainedMeshes.has(mesh)) {
+      nativeRetainedMeshes.set(mesh, { handle: 0, signature: null });
+    }
+  },
+  invalidateMeshGeometry: function(mesh) {
+    var retained = nativeRetainedMeshes.get(mesh);
+    if (retained) retained.handle = 0;
+  },
+  setMeshPostTintOverlay: function(mesh, color) {
+    mesh._pmjsMeshPostTintOverlay = color;
+  }
+});
 var nativeGeometryFinalizer = typeof FinalizationRegistry === 'function'
   ? new FinalizationRegistry(function(resource) {
       try {
@@ -51,8 +67,7 @@ function pmjsReleaseNativeGeometry(owner, kind) {
   if (resource && nativeGeometryFinalizer) nativeGeometryFinalizer.unregister(resource);
   owner[ownerKey] = null;
   owner[handleKey] = 0;
-  if (mesh) owner.__pmjsNativeMeshRevision = null;
-  else {
+  if (!mesh) {
     owner._pmjsNativeTextureSignature = '';
     owner._pmjsNativePointSnapshot = null;
     owner._pmjsNativeCompiledGeneration = null;
@@ -864,20 +879,18 @@ function ensureNativeGpuMesh(mesh) {
   var nativeSource = nativeTextureSource(source);
   var vertices = mesh.vertices, uvs = mesh.uvs, indices = mesh.indices;
   if (!nativeSource || !vertices || !uvs || !indices) return 0;
+  var drawMode = mesh.drawMode === PIXI.mesh.Mesh.DRAW_MODES.TRIANGLES ? 1 : 0;
   var uvTransform = mesh.uploadUvTransform && mesh._uvTransform &&
     mesh._uvTransform.mapCoord;
-  var revision = [Number(mesh.dirty) || 0, Number(mesh.indexDirty) || 0,
-    Number(mesh.vertexDirty) || 0, nativeSource.handle, mesh.drawMode || 0,
-    texture && texture._updateID || 0, uvTransform ? 1 : 0,
+  var retained = PMJS.optimizations.isEnabled('scene.retained-mesh-geometry') &&
+    nativeRetainedMeshes.get(mesh);
+  var signature = retained && [nativeSource.handle, drawMode, texture._updateID,
     uvTransform && [uvTransform.a, uvTransform.b, uvTransform.c,
-      uvTransform.d, uvTransform.tx, uvTransform.ty].join(',') || '',
-    vertices.length, indices.length].join(':');
-  if (mesh.__pmjsNativeMesh && mesh.__pmjsNativeMeshRevision === revision &&
-      PMJS.optimizations.isEnabled('scene.gpu-mesh-cache')) {
-    if (typeof nativeMaterializationStats !== 'undefined') {
-      nativeMaterializationStats.meshHits++;
-    }
-    return mesh.__pmjsNativeMesh;
+      uvTransform.d, uvTransform.tx, uvTransform.ty].join(',')].join(':');
+  if (retained && retained.handle && retained.handle === mesh.__pmjsNativeMesh &&
+      retained.signature === signature) {
+    nativeMaterializationStats.meshHits++;
+    return retained.handle;
   }
   if (typeof nativeMaterializationStats !== 'undefined') {
     nativeMaterializationStats.meshMisses++;
@@ -894,9 +907,12 @@ function ensureNativeGpuMesh(mesh) {
   var nativeMesh = NativeHost.render.createMesh(nativeSource.handle,
     Array.prototype.slice.call(vertices), nativeUvs,
     Array.prototype.slice.call(indices),
-    mesh.drawMode === PIXI.mesh.Mesh.DRAW_MODES.TRIANGLE_MESH);
+    drawMode);
   pmjsAdoptNativeGeometry(mesh, 'mesh', nativeMesh);
-  mesh.__pmjsNativeMeshRevision = revision;
+  if (retained) {
+    retained.handle = mesh.__pmjsNativeMesh;
+    retained.signature = signature;
+  }
   return mesh.__pmjsNativeMesh;
 }
 

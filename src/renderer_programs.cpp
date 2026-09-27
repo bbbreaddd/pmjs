@@ -256,18 +256,21 @@ void Renderer::queryFilterProgramUniforms() {
   spriteBlendColorUniform_ = glGetUniformLocation(program_, "spriteBlendColor");
 }
 
-void Renderer::queryTileProgramUniforms() {
-  tileWorldUniform_ = glGetUniformLocation(tileProgram_, "world");
-  tileScreenUniform_ = glGetUniformLocation(tileProgram_, "screenSize");
-  tileAnimationUniform_ = glGetUniformLocation(tileProgram_, "animationOffset");
-  tileTextureSizeUniform_ = glGetUniformLocation(tileProgram_, "textureSize");
-  tileColorUniform_ = glGetUniformLocation(tileProgram_, "color");
-  tileMaskEnabledUniform_ = glGetUniformLocation(tileProgram_, "maskEnabled");
-  tileMaskImageUniform_ = glGetUniformLocation(tileProgram_, "maskImage");
-  tileMaskTransformUniform_ = glGetUniformLocation(tileProgram_, "maskTransform");
-  tileMaskFrameUniform_ = glGetUniformLocation(tileProgram_, "maskFrame");
-  tileMaskTextureSizeUniform_ = glGetUniformLocation(tileProgram_, "maskTextureSize");
-  tileMaskScreenHeightUniform_ = glGetUniformLocation(tileProgram_, "screenHeight");
+Renderer::TileProgramUniforms Renderer::queryTileProgramUniforms(std::uint32_t program) {
+  TileProgramUniforms uniforms;
+  uniforms.world = glGetUniformLocation(program, "world");
+  uniforms.screen = glGetUniformLocation(program, "screenSize");
+  uniforms.animation = glGetUniformLocation(program, "animationOffset");
+  uniforms.textureSize = glGetUniformLocation(program, "textureSize");
+  uniforms.color = glGetUniformLocation(program, "color");
+  uniforms.overlayColor = glGetUniformLocation(program, "meshPostTintOverlayColor");
+  uniforms.maskEnabled = glGetUniformLocation(program, "maskEnabled");
+  uniforms.maskImage = glGetUniformLocation(program, "maskImage");
+  uniforms.maskTransform = glGetUniformLocation(program, "maskTransform");
+  uniforms.maskFrame = glGetUniformLocation(program, "maskFrame");
+  uniforms.maskTextureSize = glGetUniformLocation(program, "maskTextureSize");
+  uniforms.maskScreenHeight = glGetUniformLocation(program, "screenHeight");
+  return uniforms;
 }
 
 void Renderer::createPixiPrograms(const std::string& precision) {
@@ -279,24 +282,31 @@ void Renderer::createPixiPrograms(const std::string& precision) {
   GLuint filter = 0;
   GLuint simple = 0;
   GLuint tile = 0;
+  GLuint meshOverlay = 0;
   try {
     filter = linkPixiProgram(vertexSource, fragmentSource);
     simple = linkPixiProgram(vertexSource, simpleFragmentSource);
     tile = linkPixiProgram(tileVertexSource, tileFragmentSource);
+    const auto overlaySource = meshPostTintOverlayFragmentSourceWithPrecision("mediump");
+    meshOverlay = linkPixiProgram(tileVertexSource, overlaySource.c_str());
   } catch (...) {
     if (filter) glDeleteProgram(filter);
     if (simple) glDeleteProgram(simple);
     if (tile) glDeleteProgram(tile);
+    if (meshOverlay) glDeleteProgram(meshOverlay);
     throw;
   }
   if (program_) glDeleteProgram(program_);
   if (simpleProgram_) glDeleteProgram(simpleProgram_);
   if (tileProgram_) glDeleteProgram(tileProgram_);
+  if (meshPostTintOverlayProgram_) glDeleteProgram(meshPostTintOverlayProgram_);
   program_ = filter;
   simpleProgram_ = simple;
   tileProgram_ = tile;
+  meshPostTintOverlayProgram_ = meshOverlay;
   queryFilterProgramUniforms();
-  queryTileProgramUniforms();
+  tileUniforms_ = queryTileProgramUniforms(tileProgram_);
+  meshPostTintOverlayUniforms_ = queryTileProgramUniforms(meshPostTintOverlayProgram_);
 }
 
 void Renderer::configurePixiFragmentPrecision(const std::string& precision) {
@@ -351,6 +361,7 @@ Renderer::~Renderer() {
   if (presentationProgram_) glDeleteProgram(presentationProgram_);
   if (spriteEffectProgram_) glDeleteProgram(spriteEffectProgram_);
   if (tileProgram_) glDeleteProgram(tileProgram_);
+  if (meshPostTintOverlayProgram_) glDeleteProgram(meshPostTintOverlayProgram_);
   if (primitiveSurfaceProgram_) glDeleteProgram(primitiveSurfaceProgram_);
 }
 

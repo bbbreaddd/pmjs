@@ -523,6 +523,15 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
         texture.baseTexture.scaleMode === PIXI.SCALE_MODES.NEAREST) {
       nativeSceneMetadata[nodeIndex * nativeSceneMetadataStride + 5] |= 8;
     }
+    var meshPostTintOverlayColor = node._pmjsMeshPostTintOverlay;
+    if (meshPostTintOverlayColor && meshPostTintOverlayColor[3] > 0) {
+      nativeSceneMetadata[nodeIndex * nativeSceneMetadataStride + 5] |= 512;
+      for (var meshColorIndex = 0; meshColorIndex < 4; meshColorIndex++) {
+        nativeSceneValues[valueOffset + 37 + meshColorIndex] =
+          Math.max(0, Math.min(255,
+            Number(meshPostTintOverlayColor[meshColorIndex]) || 0)) / 255;
+      }
+    }
   } else if (kind === 2) {
     if (texture && texture.baseTexture && PIXI.SCALE_MODES &&
         texture.baseTexture.scaleMode === PIXI.SCALE_MODES.NEAREST) {

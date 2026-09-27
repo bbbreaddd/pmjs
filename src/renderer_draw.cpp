@@ -1180,36 +1180,41 @@ void Renderer::renderScene() {
         transform[2], transform[3], 0.0F,
         transform[4], transform[5], 1.0F,
       };
-      glUseProgram(tileProgram_);
-      activeProgram = tileProgram_;
+      const auto program = command.appliesMeshPostTintOverlay ? meshPostTintOverlayProgram_ : tileProgram_;
+      const auto& uniforms = command.appliesMeshPostTintOverlay ? meshPostTintOverlayUniforms_ : tileUniforms_;
+      glUseProgram(program);
+      activeProgram = program;
       glBindVertexArray(layer->second.vertexArray);
-      glUniformMatrix3fv(tileWorldUniform_, 1, GL_FALSE, world.data());
-      glUniform2f(tileScreenUniform_, static_cast<float>(width_),
+      glUniformMatrix3fv(uniforms.world, 1, GL_FALSE, world.data());
+      glUniform2f(uniforms.screen, static_cast<float>(width_),
                   static_cast<float>(height_));
-      glUniform2f(tileAnimationUniform_, command.tileAnimation[0],
+      glUniform2f(uniforms.animation, command.tileAnimation[0],
                   command.tileAnimation[1]);
-      glUniform4fv(tileColorUniform_, 1, command.color.data());
+      glUniform4fv(uniforms.color, 1, command.color.data());
+      if (command.appliesMeshPostTintOverlay) {
+        glUniform4fv(uniforms.overlayColor, 1, command.blendColor.data());
+      }
       if (command.maskImage) {
         const auto mask = images_.lookup(command.maskImage);
         if (!mask) continue;
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, mask->texture);
-        glUniform1i(tileMaskImageUniform_, 1);
-        glUniform1i(tileMaskEnabledUniform_, 1);
-        glUniform1fv(tileMaskTransformUniform_, 6,
+        glUniform1i(uniforms.maskImage, 1);
+        glUniform1i(uniforms.maskEnabled, 1);
+        glUniform1fv(uniforms.maskTransform, 6,
                      command.maskTransform.data());
-        glUniform4f(tileMaskFrameUniform_, 0, 0,
+        glUniform4f(uniforms.maskFrame, 0, 0,
                     static_cast<float>(mask->width),
                     static_cast<float>(mask->height));
-        glUniform2f(tileMaskTextureSizeUniform_, static_cast<float>(mask->width),
+        glUniform2f(uniforms.maskTextureSize, static_cast<float>(mask->width),
                     static_cast<float>(mask->height));
-        glUniform1f(tileMaskScreenHeightUniform_, static_cast<float>(height_));
+        glUniform1f(uniforms.maskScreenHeight, static_cast<float>(height_));
         glActiveTexture(GL_TEXTURE0);
       } else {
-        glUniform1i(tileMaskEnabledUniform_, 0);
+        glUniform1i(uniforms.maskEnabled, 0);
       }
       for (const auto& batch : layer->second.batches) {
-        glUniform2f(tileTextureSizeUniform_,
+        glUniform2f(uniforms.textureSize,
                     static_cast<float>(batch.textureWidth),
                     static_cast<float>(batch.textureHeight));
         glBindTexture(GL_TEXTURE_2D, batch.texture);

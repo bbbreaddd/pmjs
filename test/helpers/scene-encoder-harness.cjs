@@ -84,10 +84,10 @@ function makeHarness() {
       this.vertices = new Float32Array([0, 0, 10, 0, 0, 10]);
       this.uvs = new Float32Array([0, 0, 1, 0, 0, 1]);
       this.indices = new Uint16Array([0, 1, 2]);
-      this.drawMode = 0; this.dirty = 0; this.indexDirty = 0; this.vertexDirty = 0;
+      this.drawMode = 0; this.dirty = 0; this.indexDirty = 0;
     }
   }
-  Mesh.DRAW_MODES = { TRIANGLE_MESH: 0 };
+  Mesh.DRAW_MODES = { TRIANGLE_MESH: 0, TRIANGLES: 1 };
   class ParticleContainer extends Container {
     constructor() {
       super();

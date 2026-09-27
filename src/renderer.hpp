@@ -48,6 +48,7 @@ struct RenderCommand {
   std::array<float, 4> colorTone{};
   std::array<float, 4> blendColor{};
   bool appliesSpriteColor = false;
+  bool appliesMeshPostTintOverlay = false;
   std::uint8_t textureRotation = 0;
   bool nearest = false;
   bool roundPixels = false;
@@ -214,6 +215,20 @@ class Renderer {
   void discardCommandsFrom(std::size_t first);
 
  private:
+  struct TileProgramUniforms {
+    int world = -1;
+    int screen = -1;
+    int animation = -1;
+    int textureSize = -1;
+    int color = -1;
+    int overlayColor = -1;
+    int maskEnabled = -1;
+    int maskImage = -1;
+    int maskTransform = -1;
+    int maskFrame = -1;
+    int maskTextureSize = -1;
+    int maskScreenHeight = -1;
+  };
   struct TileBatch {
     std::uint32_t texture = 0;
     int textureWidth = 0;
@@ -257,7 +272,7 @@ class Renderer {
       std::vector<std::array<int, 4>>* regions) const;
   void destroyTileLayer(std::uint32_t handle);
   void queryFilterProgramUniforms();
-  void queryTileProgramUniforms();
+  TileProgramUniforms queryTileProgramUniforms(std::uint32_t program);
   void createPixiPrograms(const std::string& precision);
   static PrimitiveSurfaceHandle makePrimitiveSurfaceHandle(
       std::size_t index, std::uint16_t generation);
@@ -352,17 +367,9 @@ class Renderer {
   int spriteColorToneUniform_ = -1;
   int spriteBlendColorUniform_ = -1;
   std::uint32_t tileProgram_ = 0;
-  int tileWorldUniform_ = -1;
-  int tileScreenUniform_ = -1;
-  int tileAnimationUniform_ = -1;
-  int tileTextureSizeUniform_ = -1;
-  int tileColorUniform_ = -1;
-  int tileMaskEnabledUniform_ = -1;
-  int tileMaskImageUniform_ = -1;
-  int tileMaskTransformUniform_ = -1;
-  int tileMaskFrameUniform_ = -1;
-  int tileMaskTextureSizeUniform_ = -1;
-  int tileMaskScreenHeightUniform_ = -1;
+  std::uint32_t meshPostTintOverlayProgram_ = 0;
+  TileProgramUniforms tileUniforms_;
+  TileProgramUniforms meshPostTintOverlayUniforms_;
   std::uint32_t primitiveSurfaceProgram_ = 0;
   int primitiveSurfaceSizeUniform_ = -1;
   int primitiveSurfaceKindUniform_ = -1;

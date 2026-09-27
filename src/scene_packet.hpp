@@ -68,6 +68,7 @@ enum NodeFlags : std::uint32_t {
   textureRotationMask = 7U << 5U,
   textureRotationShift = 5U,
   roundPixels = 1U << 8U,
+  hasMeshPostTintOverlay = 1U << 9U,
 };
 
 // All packet validators share this mask so accepted flags cannot diverge.
@@ -75,7 +76,7 @@ constexpr std::uint32_t kAllowedNodeFlags =
     NodeFlags::hasClipRectangle | NodeFlags::hasBlurFilter |
     NodeFlags::hasAlphaMask | NodeFlags::nearestSampling |
     NodeFlags::hasSpriteColor | NodeFlags::textureRotationMask |
-    NodeFlags::roundPixels;
+    NodeFlags::roundPixels | NodeFlags::hasMeshPostTintOverlay;
 
 static_assert((kAllowedNodeFlags & NodeFlags::roundPixels) != 0U,
               "scene packet validators must accept roundPixels");
