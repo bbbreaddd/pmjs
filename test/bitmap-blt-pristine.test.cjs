@@ -22,12 +22,10 @@ function setupEnvironment({ config = {}, env = {} } = {}) {
       _height: height || 0,
       _pmjsBitmapUrl: null,
       __pmjsContentRevision: 0,
-      __pmjsMaskProof: null,
       drawCalls: [],
       _ensureNativeCanvas() { return { handle: 1 }; },
       _pmjsContentChanged() {
         canvas.__pmjsContentRevision++;
-        canvas.__pmjsMaskProof = null;
       },
       getContext(type) {
         if (type === '2d') {
@@ -109,7 +107,7 @@ function setupEnvironment({ config = {}, env = {} } = {}) {
   Object.defineProperty(MockBitmap.prototype, '_canvas', {
     get() {
       if (!this.__canvas) {
-        this._createCanvas();
+        this._createCanvas(this.width, this.height);
       }
       return this.__canvas;
     },
@@ -119,7 +117,7 @@ function setupEnvironment({ config = {}, env = {} } = {}) {
   Object.defineProperty(MockBitmap.prototype, '_context', {
     get() {
       if (!this.__context) {
-        this._createCanvas();
+        this._createCanvas(this.width, this.height);
       }
       return this.__context;
     },
@@ -392,22 +390,21 @@ test('URL attribution: lazily created canvases receive _pmjsBitmapUrl from sourc
 });
 
 test('unit full-bitmap fills establish revision-bound mask proof', () => {
-  const { Bitmap } = setupEnvironment();
+  const { Bitmap, PMJS } = setupEnvironment();
   const bitmap = new Bitmap(100, 92);
   bitmap.fillAll('white');
-  assert.deepEqual({ ...bitmap._canvas.__pmjsMaskProof }, {
-    kind: 'constant-mask-rect', x: 0, y: 0, width: 100, height: 92,
-    weight: 1, revision: bitmap._canvas.__pmjsContentRevision
+  assert.deepEqual({ ...PMJS.web.canvas.unitMaskRect(bitmap._canvas) }, {
+    x: 0, y: 0, width: 100, height: 92
   });
   bitmap._context.fillRect(0, 0, 1, 1);
-  assert.equal(bitmap._canvas.__pmjsMaskProof, null);
+  assert.equal(PMJS.web.canvas.unitMaskRect(bitmap._canvas), null);
   bitmap.fillAll('white');
   bitmap.blur();
-  assert.equal(bitmap._canvas.__pmjsMaskProof, null);
+  assert.equal(PMJS.web.canvas.unitMaskRect(bitmap._canvas), null);
 });
 
 test('mask proof rejects partial, translucent, transformed, clipped, and composited fills', () => {
-  const { Bitmap } = setupEnvironment();
+  const { Bitmap, PMJS } = setupEnvironment();
   const bitmap = new Bitmap(100, 92);
   const context = bitmap._context;
   const reject = (prepare, color = 'white') => {
@@ -417,10 +414,10 @@ test('mask proof rejects partial, translucent, transformed, clipped, and composi
     context._clipPaths = [];
     prepare();
     bitmap.fillRect(0, 0, 100, 92, color);
-    assert.equal(bitmap._canvas.__pmjsMaskProof, null);
+    assert.equal(PMJS.web.canvas.unitMaskRect(bitmap._canvas), null);
   };
   bitmap.fillRect(0, 0, 99, 92, 'white');
-  assert.equal(bitmap._canvas.__pmjsMaskProof, null);
+  assert.equal(PMJS.web.canvas.unitMaskRect(bitmap._canvas), null);
   reject(() => {}, 'rgba(255, 255, 255, 0.5)');
   reject(() => { context.globalAlpha = 0.5; });
   reject(() => { context.globalCompositeOperation = 'copy'; });

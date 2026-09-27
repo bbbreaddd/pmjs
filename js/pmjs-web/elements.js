@@ -35,7 +35,6 @@ function CanvasElement() {
   this._width = 300;
   this._height = 150;
   this.__pmjsContentRevision = 0;
-  this.__pmjsMaskProof = null;
   this.style = {};
   this.screencanvas = false;
   this._context2d = null;
@@ -46,7 +45,6 @@ CanvasElement.prototype = Object.create(EventTarget.prototype);
 CanvasElement.prototype.constructor = CanvasElement;
 CanvasElement.prototype._pmjsContentChanged = function() {
   this.__pmjsContentRevision++;
-  this.__pmjsMaskProof = null;
 };
 function isCanvasDiagnosticsEnabled() {
   if (globalThis.__pmjsCanvasDiag) return true;

@@ -401,9 +401,11 @@ test('proven full-frame Sprite mask resolves to a scissor without alpha work', (
   const masked = sprite();
   const mask = sprite(100, 92);
   const source = mask.texture.baseTexture.source;
-  source.__pmjsContentRevision = 4;
-  source.__pmjsMaskProof = { kind: 'constant-mask-rect', x: 0, y: 0,
-    width: 100, height: 92, weight: 1, revision: 4 };
+  source.__pmjsContentRevision = 0;
+  sandbox.PMJS.web.canvas.trackMaskFill({ canvas: source,
+    globalAlpha: 1, globalCompositeOperation: 'source-over',
+    _transform: [1, 0, 0, 1, 0, 0], _clipPaths: [] },
+  0, 0, 100, 92, 'white', () => { source.__pmjsContentRevision++; });
   mask.x = 7;
   mask.y = 25;
   masked.mask = mask;
@@ -431,9 +433,11 @@ test('uncertain Sprite masks retain the alpha-mask path', () => {
     const masked = sprite();
     const mask = sprite(100, 92);
     const source = mask.texture.baseTexture.source;
-    source.__pmjsContentRevision = 2;
-    source.__pmjsMaskProof = { kind: 'constant-mask-rect', x: 0, y: 0,
-      width: 100, height: 92, weight: 1, revision: 2 };
+    source.__pmjsContentRevision = 0;
+    sandbox.PMJS.web.canvas.trackMaskFill({ canvas: source,
+      globalAlpha: 1, globalCompositeOperation: 'source-over',
+      _transform: [1, 0, 0, 1, 0, 0], _clipPaths: [] },
+    0, 0, 100, 92, 'white', () => { source.__pmjsContentRevision++; });
     change(mask);
     masked.mask = mask;
     root.addChild(masked);
@@ -452,9 +456,11 @@ test('Sprite rectangle masks resolve anchor, negative scale, and another parent 
   const masked = sprite();
   const mask = sprite(100, 92);
   const source = mask.texture.baseTexture.source;
-  source.__pmjsContentRevision = 3;
-  source.__pmjsMaskProof = { kind: 'constant-mask-rect', x: 0, y: 0,
-    width: 100, height: 92, weight: 1, revision: 3 };
+  source.__pmjsContentRevision = 0;
+  sandbox.PMJS.web.canvas.trackMaskFill({ canvas: source,
+    globalAlpha: 1, globalCompositeOperation: 'source-over',
+    _transform: [1, 0, 0, 1, 0, 0], _clipPaths: [] },
+  0, 0, 100, 92, 'white', () => { source.__pmjsContentRevision++; });
   mask.anchor = { x: 0.5, y: 0.5 };
   mask.transform.localTransform = { a: -1, b: 0, c: 0, d: 1, tx: 107, ty: 71 };
   mask.transform.updateLocalTransform = function() {};
@@ -478,9 +484,11 @@ test('disabled Sprite rectangle lowering retains the alpha-mask path', () => {
   const masked = sprite();
   const mask = sprite(100, 92);
   const source = mask.texture.baseTexture.source;
-  source.__pmjsContentRevision = 1;
-  source.__pmjsMaskProof = { kind: 'constant-mask-rect', x: 0, y: 0,
-    width: 100, height: 92, weight: 1, revision: 1 };
+  source.__pmjsContentRevision = 0;
+  sandbox.PMJS.web.canvas.trackMaskFill({ canvas: source,
+    globalAlpha: 1, globalCompositeOperation: 'source-over',
+    _transform: [1, 0, 0, 1, 0, 0], _clipPaths: [] },
+  0, 0, 100, 92, 'white', () => { source.__pmjsContentRevision++; });
   masked.mask = mask;
   root.addChild(masked);
   submitOnly(harness, root);

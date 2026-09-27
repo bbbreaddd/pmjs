@@ -1079,6 +1079,15 @@ CanvasContext2D.prototype.putImageData = function(imageData, x, y) {
   };
 })();
 
+function canvasIsUntransformedSourceOver(context) {
+  var transform = context && context._transform;
+  return !!(transform && transform.length === 6 &&
+    transform[0] === 1 && transform[1] === 0 && transform[2] === 0 &&
+    transform[3] === 1 && transform[4] === 0 && transform[5] === 0 &&
+    !(context._clipPaths && context._clipPaths.length) &&
+    context.globalCompositeOperation === 'source-over');
+}
+
 Object.assign(PMJS.web.canvas, {
   blur: function(canvas) {
     NativeHost.canvas.blur(canvas._ensureNativeCanvas().handle);
@@ -1094,14 +1103,7 @@ Object.assign(PMJS.web.canvas, {
     }
     return null;
   },
-  supportsNativeText: function(context) {
-    var transform = context && context._transform;
-    return !!(transform && transform.length === 6 &&
-      transform[0] === 1 && transform[1] === 0 && transform[2] === 0 &&
-      transform[3] === 1 && transform[4] === 0 && transform[5] === 0 &&
-      !(context._clipPaths && context._clipPaths.length) &&
-      context.globalCompositeOperation === 'source-over');
-  },
+  supportsNativeText: canvasIsUntransformedSourceOver,
   drawNativeText: function(context, text, x, baseline, style) {
     var font = contextFont(style.font);
     var canvas = context.canvas._ensureNativeCanvas();
@@ -1119,3 +1121,37 @@ Object.assign(PMJS.web.canvas, {
     return NativeHost.canvas.measureText(font.path, String(text), font.size);
   }
 });
+
+// A full opaque red-channel fill proves unit weight for the sprite mask shader.
+// Keep proof state private; consumers receive only a validated rectangle.
+(function() {
+  var maskProofs = new WeakMap();
+  PMJS.web.canvas.trackMaskFill = function(context, x, y, width, height, color, draw) {
+    var canvas = context && context.canvas;
+    var eligible = canvas && Number.isFinite(canvas.__pmjsContentRevision) &&
+      Number(x) === 0 && Number(y) === 0 &&
+      Number(width) === canvas.width && Number(height) === canvas.height &&
+      Number(context.globalAlpha) === 1 &&
+      canvasIsUntransformedSourceOver(context);
+    if (eligible) {
+      var rgba = colorToRgba(color);
+      eligible = ((rgba >>> 24) & 255) === 255 && (rgba & 255) === 255;
+    }
+    var result = draw();
+    if (eligible) {
+      maskProofs.set(canvas, { width: Number(width), height: Number(height),
+        revision: canvas.__pmjsContentRevision });
+    }
+    return result;
+  };
+  PMJS.web.canvas.unitMaskRect = function(canvas) {
+    var proof = canvas && maskProofs.get(canvas);
+    if (!proof) return null;
+    if (proof.revision !== canvas.__pmjsContentRevision ||
+        proof.width !== canvas.width || proof.height !== canvas.height) {
+      maskProofs.delete(canvas);
+      return null;
+    }
+    return { x: 0, y: 0, width: proof.width, height: proof.height };
+  };
+})();

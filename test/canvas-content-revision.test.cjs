@@ -54,25 +54,28 @@ test('Canvas mutations and dimension resets invalidate revision-bound proof', ()
   const canvas = new context.CanvasElement();
   const drawing = canvas.getContext('2d');
   const establish = () => {
-    canvas.__pmjsMaskProof = { revision: canvas.__pmjsContentRevision };
+    drawing.fillStyle = 'white';
+    context.PMJS.web.canvas.trackMaskFill(drawing, 0, 0, canvas.width, canvas.height,
+      'white', () => drawing.fillRect(0, 0, canvas.width, canvas.height));
+    assert.ok(context.PMJS.web.canvas.unitMaskRect(canvas));
   };
   establish();
   const first = canvas.__pmjsContentRevision;
   drawing.fillRect(0, 0, 1, 1);
   assert.ok(canvas.__pmjsContentRevision > first);
-  assert.equal(canvas.__pmjsMaskProof, null);
+  assert.equal(context.PMJS.web.canvas.unitMaskRect(canvas), null);
   establish();
   drawing.clearRect(0, 0, 1, 1);
-  assert.equal(canvas.__pmjsMaskProof, null);
+  assert.equal(context.PMJS.web.canvas.unitMaskRect(canvas), null);
   establish();
   canvas.width = canvas.width;
-  assert.equal(canvas.__pmjsMaskProof, null);
+  assert.equal(context.PMJS.web.canvas.unitMaskRect(canvas), null);
   establish();
   canvas.height = canvas.height;
-  assert.equal(canvas.__pmjsMaskProof, null);
+  assert.equal(context.PMJS.web.canvas.unitMaskRect(canvas), null);
   establish();
   canvas._releaseNativeCanvas();
-  assert.equal(canvas.__pmjsMaskProof, null);
+  assert.equal(context.PMJS.web.canvas.unitMaskRect(canvas), null);
 });
 
 test('reflected image draws use the affine path', () => {
@@ -171,4 +174,22 @@ test('Canvas blur uses native backing without changing context state', () => {
   assert.equal(drawing.globalAlpha, 0.25);
   assert.equal(drawing.globalCompositeOperation, 'lighter');
   assert.deepEqual(Array.from(drawing._transform), transform);
+});
+
+test('mask rectangles are detached and failed fills cannot create proof', () => {
+  const context = harness();
+  const canvas = new context.CanvasElement();
+  const drawing = canvas.getContext('2d');
+  const owner = context.PMJS.web.canvas;
+  drawing.fillStyle = '#ff0000';
+  const fill = () => owner.trackMaskFill(drawing, 0, 0, canvas.width, canvas.height,
+    '#ff0000', () => { drawing.fillRect(0, 0, canvas.width, canvas.height); return 42; });
+  assert.equal(fill(), 42);
+  const rectangle = owner.unitMaskRect(canvas);
+  rectangle.width = 1;
+  assert.equal(owner.unitMaskRect(canvas).width, canvas.width);
+  drawing.clearRect(0, 0, 1, 1);
+  assert.throws(() => owner.trackMaskFill(drawing, 0, 0, canvas.width, canvas.height,
+    'white', () => { throw new Error('fill failed'); }), /fill failed/);
+  assert.equal(owner.unitMaskRect(canvas), null);
 });

@@ -689,9 +689,9 @@ function nativeSpriteRectangleMask(mask) {
       Number(frame.height) !== Number(baseTexture.height) ||
       Number(original.width) !== Number(frame.width) ||
       Number(original.height) !== Number(frame.height)) return null;
-  var proof = geometry.baseSource.__pmjsMaskProof;
-  if (!proof || proof.kind !== 'constant-mask-rect' || proof.weight !== 1 ||
-      proof.revision !== geometry.baseSource.__pmjsContentRevision ||
+  var canvasOwner = PMJS.web && PMJS.web.canvas;
+  var proof = canvasOwner && canvasOwner.unitMaskRect(geometry.baseSource);
+  if (!proof ||
       Number(proof.x) !== 0 || Number(proof.y) !== 0 ||
       Number(proof.width) !== geometry.frame.width ||
       Number(proof.height) !== geometry.frame.height) return null;

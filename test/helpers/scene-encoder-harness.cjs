@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const WRITER_SOURCES = ['js/pmjs-pixi4/render-preflight.js',
+const WRITER_SOURCES = ['js/pmjs-web/canvas.js', 'js/pmjs-pixi4/render-preflight.js',
   'js/pmjs-pixi4/scene-primitives.js',
   'js/pmjs-pixi4/scene-filters.js', 'js/pmjs-pixi4/scene-packet.js',
   'js/pmjs-mv/render-prepare.js',

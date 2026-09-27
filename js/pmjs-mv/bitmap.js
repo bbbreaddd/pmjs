@@ -34,31 +34,6 @@ function pmjsBitmapCanvasChanged(bitmap) {
   }
 }
 
-function pmjsBitmapEstablishMaskProof(bitmap) {
-  var canvas = bitmap && bitmap._canvas;
-  if (!canvas || !Number.isFinite(canvas.__pmjsContentRevision)) return;
-  canvas.__pmjsMaskProof = { kind: 'constant-mask-rect', x: 0, y: 0,
-    width: bitmap.width, height: bitmap.height, weight: 1,
-    revision: canvas.__pmjsContentRevision };
-}
-
-function pmjsBitmapIsUnitMaskFill(bitmap, x, y, width, height, color) {
-  if (Number(x) !== 0 || Number(y) !== 0 || Number(width) !== bitmap.width ||
-      Number(height) !== bitmap.height || typeof colorToRgba !== 'function') {
-    return false;
-  }
-  var context = bitmap._context;
-  var transform = context && context._transform;
-  if (!context || Number(context.globalAlpha) !== 1 ||
-      context.globalCompositeOperation !== 'source-over' ||
-      !transform || transform.length !== 6 ||
-      transform[0] !== 1 || transform[1] !== 0 || transform[2] !== 0 ||
-      transform[3] !== 1 || transform[4] !== 0 || transform[5] !== 0 ||
-      context._clipPaths && context._clipPaths.length) return false;
-  var rgba = colorToRgba(color);
-  return ((rgba >>> 24) & 255) === 255 && (rgba & 255) === 255;
-}
-
 // Render the supplied stage synchronously into an independently owned bitmap.
 // Copying the previously presented framebuffer is observably wrong
 // when snapForBackground runs after the scene update but before presentation.
@@ -113,11 +88,13 @@ if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
 var _Bitmap_fillRect = Bitmap.prototype.fillRect;
 if (typeof _Bitmap_fillRect === 'function') {
   Bitmap.prototype.fillRect = function(x, y, width, height, color) {
-    var establishesProof = pmjsBitmapIsUnitMaskFill(
-      this, x, y, width, height, color);
-    var result = _Bitmap_fillRect.apply(this, arguments);
-    if (establishesProof) pmjsBitmapEstablishMaskProof(this);
-    return result;
+    var bitmap = this;
+    var args = arguments;
+    var draw = function() { return _Bitmap_fillRect.apply(bitmap, args); };
+    if (Number(x) !== 0 || Number(y) !== 0 || Number(width) !== this.width ||
+        Number(height) !== this.height) return draw();
+    return PMJS.web.canvas.trackMaskFill(this._context, x, y, width, height,
+      color, draw);
   };
 }
 
