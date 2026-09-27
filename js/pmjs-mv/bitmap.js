@@ -50,10 +50,8 @@ Bitmap.snap = function(stage) {
   var bitmap = new Bitmap(Graphics.width, Graphics.height);
   if (!stage) return bitmap;
   var renderer = Graphics._renderer;
-  NativeHost.render.setRenderTargetSize(Graphics.width, Graphics.height);
-  renderNativeStage(stage, nativeIdentityTransform, 1,
+  PMJS.pixi4.renderStageToCanvas(stage, bitmap._canvas,
     renderer && renderer.roundPixels);
-  NativeHost.render.renderToCanvas(bitmap._canvas._ensureNativeCanvas().handle);
   pmjsBitmapCanvasChanged(bitmap);
   if (stage.worldTransform && typeof stage.worldTransform.identity === 'function') {
     stage.worldTransform.identity();

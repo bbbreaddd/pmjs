@@ -1,3 +1,10 @@
+PMJS.pixi4 = PMJS.pixi4 || {};
+PMJS.pixi4.renderStageToCanvas = function(stage, canvas, roundPixels) {
+  NativeHost.render.setRenderTargetSize(canvas.width, canvas.height);
+  renderNativeStage(stage, nativeIdentityTransform, 1, roundPixels);
+  NativeHost.render.renderToCanvas(canvas._ensureNativeCanvas().handle);
+};
+
 function nativeElementOpacity(element, fallback) {
   if (!element || !element.style) return fallback;
   var rawOpacity = element.style.opacity;
