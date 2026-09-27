@@ -460,3 +460,40 @@ test('gate creation validates catchupMode and renderHz strictly', () => {
   assert.throws(() => ctx.pmjsMvCreateStepGate({ renderHz: NaN }),
     /renderHz must be a non-negative finite number/);
 });
+
+
+test('gate consumes runner-normalized timing without reading process policy', () => {
+  const { parseTimingConfig } = require('../runner/index.cjs');
+  for (const env of [{}, { PMJS_RENDER_HZ: '30', PMJS_CATCHUP_MODE: 'smooth' },
+    { PMJS_RENDER_HZ: '120' }, { PMJS_RENDER_HZ: '60', PMJS_UNCAPPED: '1' }]) {
+    const timing = parseTimingConfig(env);
+    const ctx = loadTiming(context => {
+      context.__pmjsTimingConfig = timing;
+      context.NativeHost = { runtime: { env(name) {
+        if (name === 'PMJS_RENDER_HZ' || name === 'PMJS_CATCHUP_MODE') {
+          throw new Error('MV must consume normalized timing');
+        }
+        return '';
+      } } };
+    });
+    const state = ctx.pmjsMvCreateStepGate();
+    assert.equal(state.renderHz, timing.renderHz);
+    assert.equal(state.catchupMode, timing.catchupMode);
+    const explicit = ctx.pmjsMvCreateStepGate({ renderHz: 0, catchupMode: 'burst' });
+    assert.equal(explicit.renderHz, 0);
+    assert.equal(explicit.catchupMode, 'burst');
+  }
+});
+
+test('standalone gate uses explicit options rather than host timing environment', () => {
+  const ctx = loadTiming(context => {
+    context.NativeHost = { runtime: { env(name) {
+      return name === 'PMJS_RENDER_HZ' ? '77' :
+        name === 'PMJS_CATCHUP_MODE' ? 'invalid' : '';
+    } } };
+  });
+  const state = ctx.pmjsMvCreateStepGate();
+  assert.equal(state.renderHz, 0);
+  assert.equal(state.catchupMode, 'burst');
+  assert.equal(ctx.pmjsMvCreateStepGate({ renderHz: 30 }).renderHz, 30);
+});

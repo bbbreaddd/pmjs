@@ -18,15 +18,10 @@
   function pmjsMvCreateStepGate(options) {
     var globalOpts = globalThis.__pmjsTimingConfig || {};
     var opts = options || {};
-    var envRenderHz = (typeof NativeHost !== 'undefined' && NativeHost.runtime &&
-      typeof NativeHost.runtime.env === 'function' && Number(NativeHost.runtime.env('PMJS_RENDER_HZ'))) || 0;
-    var envCatchupMode = (typeof NativeHost !== 'undefined' && NativeHost.runtime &&
-      typeof NativeHost.runtime.env === 'function' && NativeHost.runtime.env('PMJS_CATCHUP_MODE')) || '';
-
     var renderHz = typeof opts.renderHz === 'number' ? opts.renderHz
       : typeof globalOpts.renderHz === 'number' ? globalOpts.renderHz
-      : envRenderHz;
-    var catchupMode = opts.catchupMode || globalOpts.catchupMode || envCatchupMode || 'burst';
+      : 0;
+    var catchupMode = opts.catchupMode || globalOpts.catchupMode || 'burst';
 
     if (typeof renderHz !== 'number' || !isFinite(renderHz) || renderHz < 0) {
       throw new TypeError('pmjsMvCreateStepGate: renderHz must be a non-negative finite number, got ' + renderHz);
