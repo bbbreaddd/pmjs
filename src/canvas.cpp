@@ -1,5 +1,7 @@
 #include "canvas.hpp"
 #include "checked_bounds.hpp"
+#include "text_layout.hpp"
+#include <hb-ft.h>
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -21,42 +23,7 @@ namespace {
 constexpr std::uint32_t indexMask = 0xffffU;
 constexpr std::uint16_t generationMask = 0x7fffU;
 
-std::vector<std::uint32_t> decodeUtf8(const std::string& text) {
-  std::vector<std::uint32_t> result;
-  for (std::size_t offset = 0; offset < text.size();) {
-    const auto first = static_cast<std::uint8_t>(text[offset++]);
-    std::uint32_t codepoint = 0xfffdU;
-    std::size_t continuationCount = 0;
-    if (first < 0x80U) {
-      codepoint = first;
-    } else if ((first & 0xe0U) == 0xc0U) {
-      codepoint = first & 0x1fU;
-      continuationCount = 1;
-    } else if ((first & 0xf0U) == 0xe0U) {
-      codepoint = first & 0x0fU;
-      continuationCount = 2;
-    } else if ((first & 0xf8U) == 0xf0U) {
-      codepoint = first & 0x07U;
-      continuationCount = 3;
-    }
-    if (continuationCount > 0) {
-      if (offset + continuationCount > text.size()) {
-        offset = text.size();
-        codepoint = 0xfffdU;
-      } else {
-        bool valid = true;
-        for (std::size_t index = 0; index < continuationCount; ++index) {
-          const auto byte = static_cast<std::uint8_t>(text[offset++]);
-          if ((byte & 0xc0U) != 0x80U) valid = false;
-          codepoint = (codepoint << 6U) | (byte & 0x3fU);
-        }
-        if (!valid) codepoint = 0xfffdU;
-      }
-    }
-    result.push_back(codepoint);
-  }
-  return result;
-}
+
 }
 
 static bool normalizeFreeTypeBitmap(const FT_Bitmap& bitmap,
@@ -161,7 +128,6 @@ static GlyphMask createStrokeMask(const GlyphMask& base, int strokeWidth) {
 using FontStrikeId = std::uint32_t;
 
 struct GlyphMetrics {
-  int advanceX = 0;
   int bearingX = 0;
   int bearingY = 0;
   int metricWidth = 0;
@@ -220,22 +186,10 @@ struct FontStrike {
   std::filesystem::path path;
   int pixelSize = 0;
   FT_Face face = nullptr;
-  std::unordered_map<char32_t, FT_UInt> charmap;
-
-  FT_UInt getGlyphIndex(char32_t codepoint) {
-    auto it = charmap.find(codepoint);
-    if (it != charmap.end()) {
-      return it->second;
-    }
-    if (!face) return 0;
-    FT_UInt index = FT_Get_Char_Index(face, codepoint);
-    charmap.emplace(codepoint, index);
-    return index;
-  }
+  hb_font_t* shapingFont = nullptr;
 };
 
 struct GlyphRenderItem {
-  int advanceX = 0;
   const GlyphMask* mask = nullptr;
 };
 
@@ -253,7 +207,7 @@ struct CanvasStore::FontState {
   std::list<GlyphKey> lruOrder;
   std::unordered_map<GlyphKey, std::pair<CachedGlyph, std::list<GlyphKey>::iterator>, GlyphKeyHash> glyphCache;
 
-  GlyphCacheStats stats;
+  CanvasTextStats stats;
   bool telemetryEnabled = false;
   std::chrono::steady_clock::time_point lastTelemetryReport = std::chrono::steady_clock::now();
 
@@ -284,6 +238,10 @@ struct CanvasStore::FontState {
     glyphCache.clear();
     lruOrder.clear();
     for (auto& s : strikes) {
+      if (s && s->shapingFont) {
+        hb_font_destroy(s->shapingFont);
+        s->shapingFont = nullptr;
+      }
       if (s && s->face) {
         FT_Done_Face(s->face);
         s->face = nullptr;
@@ -362,6 +320,8 @@ struct CanvasStore::FontState {
     strike->path = path;
     strike->pixelSize = pixelSize;
     strike->face = created;
+    strike->shapingFont = hb_ft_font_create_referenced(created);
+    hb_ft_font_set_load_flags(strike->shapingFont, FT_LOAD_NO_HINTING);
 
     FontStrike* ptr = strike.get();
     strikeLookup.emplace(key, strike->id);
@@ -374,13 +334,8 @@ struct CanvasStore::FontState {
     return strike ? strike->face : nullptr;
   }
 
-  const GlyphMetrics* getOrLoadMetrics(const std::filesystem::path& path,
-                                       int pixelSize,
-                                       char32_t codepoint) {
-    auto* strike = getStrike(path, pixelSize);
+  const GlyphMetrics* getOrLoadMetrics(FontStrike* strike, FT_UInt glyphIndex) {
     if (!strike || !strike->face) return nullptr;
-
-    const FT_UInt glyphIndex = strike->getGlyphIndex(codepoint);
     const GlyphKey key{strike->id, glyphIndex};
 
     auto it = glyphCache.find(key);
@@ -405,7 +360,6 @@ struct CanvasStore::FontState {
 
     const FT_GlyphSlot slot = strike->face->glyph;
     GlyphMetrics metrics;
-    metrics.advanceX = static_cast<int>(slot->advance.x >> 6);
     metrics.bearingX = static_cast<int>(slot->metrics.horiBearingX >> 6);
     metrics.bearingY = static_cast<int>(slot->metrics.horiBearingY >> 6);
     metrics.metricWidth = static_cast<int>(slot->metrics.width >> 6);
@@ -429,15 +383,12 @@ struct CanvasStore::FontState {
     return &insIt->second.first.metrics;
   }
 
-  std::optional<GlyphRenderItem> getOrLoadMask(const std::filesystem::path& path,
-                                               int pixelSize,
-                                               char32_t codepoint,
+  std::optional<GlyphRenderItem> getOrLoadMask(FontStrike* strike,
+                                               FT_UInt glyphIndex,
                                                int strokeWidth) {
-    if (strokeWidth < 0 || strokeWidth > 32) return std::nullopt;
-    auto* strike = getStrike(path, pixelSize);
-    if (!strike || !strike->face) return std::nullopt;
-
-    const FT_UInt glyphIndex = strike->getGlyphIndex(codepoint);
+    if (strokeWidth < 0 || strokeWidth > 32 || !strike || !strike->face) {
+      return std::nullopt;
+    }
     const GlyphKey key{strike->id, glyphIndex};
 
     auto it = glyphCache.find(key);
@@ -446,7 +397,7 @@ struct CanvasStore::FontState {
     }
 
     if (it == glyphCache.end() || !it->second.first.metricsLoaded) {
-      if (!getOrLoadMetrics(path, pixelSize, codepoint)) {
+      if (!getOrLoadMetrics(strike, glyphIndex)) {
         return std::nullopt;
       }
       it = glyphCache.find(key);
@@ -522,17 +473,110 @@ struct CanvasStore::FontState {
     }
 
     GlyphRenderItem item;
-    item.advanceX = cached.metrics.advanceX;
     item.mask = resultMask;
     return item;
+  }
+
+  struct TextLayout {
+    ShapedText shaped;
+    CanvasTextMetrics metrics;
+  };
+
+  struct LayoutKey {
+    std::vector<FontStrikeId> strikes;
+    int pixelSize;
+    std::vector<std::uint32_t> text;
+    bool operator==(const LayoutKey&) const = default;
+  };
+  std::optional<LayoutKey> recentLayoutKey;
+  std::shared_ptr<const TextLayout> recentLayout;
+
+  std::shared_ptr<const TextLayout> layoutText(
+      const std::vector<std::filesystem::path>& paths,
+      const std::string& text, int pixelSize) {
+    ++stats.layoutRequests;
+    std::vector<TextFont> available;
+    LayoutKey key{{}, pixelSize, prepareCanvasText(text)};
+    for (const auto& path : paths) {
+      if (auto* strike = getStrike(path, pixelSize)) {
+        available.push_back({strike->id, strike->shapingFont});
+        key.strikes.push_back(strike->id);
+      }
+    }
+    if (available.empty()) return nullptr;
+    if (recentLayoutKey && *recentLayoutKey == key) {
+      ++stats.layoutCacheHits;
+      return recentLayout;
+    }
+    // A miss replaces the recent request even when the new string is too long to retain.
+    recentLayout.reset();
+    recentLayoutKey.reset();
+    stats.layoutCacheBytes = 0;
+    auto result = std::make_shared<TextLayout>();
+    auto& layout = *result;
+    ++stats.shapeTextCalls;
+    std::chrono::steady_clock::time_point shapeStart;
+    if (telemetryEnabled) shapeStart = std::chrono::steady_clock::now();
+    layout.shaped = shapeText(key.text, available, stats.fallbackShapeCalls);
+    if (telemetryEnabled) {
+      stats.shapeTextUs += std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - shapeStart).count();
+    }
+    layout.metrics.width = layout.shaped.advanceX;
+    if (layout.shaped.glyphs.empty()) {
+      const auto face = strikes[available.front().strikeId]->face;
+      layout.metrics.fontAscent = static_cast<int>(face->size->metrics.ascender >> 6);
+      layout.metrics.fontDescent = -static_cast<int>(face->size->metrics.descender >> 6);
+    }
+    double penX = 0;
+    double penY = 0;
+    int minimumX = 0;
+    int maximumX = 0;
+    bool hasInk = false;
+    for (const auto& glyph : layout.shaped.glyphs) {
+      auto* strike = strikes[glyph.strikeId].get();
+      layout.metrics.fontAscent = std::max(layout.metrics.fontAscent,
+        static_cast<int>(strike->face->size->metrics.ascender >> 6));
+      layout.metrics.fontDescent = std::max(layout.metrics.fontDescent,
+        -static_cast<int>(strike->face->size->metrics.descender >> 6));
+      const auto* metrics = getOrLoadMetrics(strike, glyph.glyphIndex);
+      if (!metrics) return nullptr;
+      if (metrics->metricWidth > 0 && metrics->metricHeight > 0) {
+        const int left = static_cast<int>(std::lround(penX + glyph.xOffset)) + metrics->bearingX;
+        const int top = static_cast<int>(std::lround(penY + glyph.yOffset)) + metrics->bearingY;
+        minimumX = hasInk ? std::min(minimumX, left) : left;
+        maximumX = hasInk ? std::max(maximumX, left + metrics->metricWidth) :
+                           left + metrics->metricWidth;
+        layout.metrics.actualAscent = hasInk ? std::max(layout.metrics.actualAscent, top) : top;
+        layout.metrics.actualDescent = hasInk ?
+          std::max(layout.metrics.actualDescent, metrics->metricHeight - top) :
+          metrics->metricHeight - top;
+        hasInk = true;
+      }
+      penX += glyph.xAdvance;
+      penY += glyph.yAdvance;
+    }
+    layout.metrics.actualLeft = -minimumX;
+    layout.metrics.actualRight = maximumX;
+    constexpr std::size_t maxRecentLayoutBytes = 32 * 1024;
+    const auto retainedBytes = sizeof(LayoutKey) + sizeof(TextLayout) +
+        key.strikes.capacity() * sizeof(FontStrikeId) +
+        key.text.capacity() * sizeof(std::uint32_t) +
+        layout.shaped.glyphs.capacity() * sizeof(ShapedGlyph);
+    if (retainedBytes <= maxRecentLayoutBytes) {
+      stats.layoutCacheBytes = retainedBytes;
+      recentLayoutKey = std::move(key);
+      recentLayout = result;
+    }
+    return result;
   }
 
   void recordBlendUs(std::uint64_t us) {
     stats.glyphBlendUs += us;
   }
 
-  GlyphCacheStats getStats() const {
-    GlyphCacheStats s = stats;
+  CanvasTextStats getStats() const {
+    CanvasTextStats s = stats;
     std::unordered_set<std::string> uniquePaths;
     for (const auto& strike : strikes) {
       if (strike) uniquePaths.insert(strike->path.string());
@@ -586,6 +630,12 @@ struct CanvasStore::FontState {
       << ",\"renderUs\":" << s.freetypeRenderUs
       << ",\"strokeUs\":" << s.strokeBuildUs
       << ",\"blendUs\":" << s.glyphBlendUs
+      << ",\"layoutRequests\":" << s.layoutRequests
+      << ",\"layoutCacheHits\":" << s.layoutCacheHits
+      << ",\"shapeTextCalls\":" << s.shapeTextCalls
+      << ",\"shapeTextUs\":" << s.shapeTextUs
+      << ",\"fallbackShapeCalls\":" << s.fallbackShapeCalls
+      << ",\"layoutCacheBytes\":" << s.layoutCacheBytes
       << "}\n";
 
     lastTelemetryReport = now;
@@ -719,21 +769,36 @@ bool CanvasStore::drawImageNow(Surface& destinationSurface, std::uint32_t source
   return true;
 }
 
-bool CanvasStore::drawTextNow(Surface& surface, const std::filesystem::path& fontPath,
+bool CanvasStore::drawTextNow(Surface& surface, const std::vector<std::filesystem::path>& fontPaths,
                               const std::string& text, int x, int y, int pixelSize,
                               std::uint32_t rgba, int strokeWidth) {
-  int penX = x;
-  const int baseline = y;
+  auto layout = fonts_->layoutText(fontPaths, text, pixelSize);
+  if (!layout) return false;
+  double penX = 0;
+  double penY = 0;
   std::uint64_t blendUs = 0;
+  int dirtyLeft = surface.width;
+  int dirtyTop = surface.height;
+  int dirtyRight = 0;
+  int dirtyBottom = 0;
+  bool complete = true;
 
-  for (const auto codepoint : decodeUtf8(text)) {
-    const auto item = fonts_->getOrLoadMask(fontPath, pixelSize, codepoint, strokeWidth);
-    if (!item) continue;
+  for (const auto& glyph : layout->shaped.glyphs) {
+    const auto item = fonts_->getOrLoadMask(fonts_->strikes[glyph.strikeId].get(),
+                                           glyph.glyphIndex, strokeWidth);
+    if (!item) {
+      complete = false;
+      break;
+    }
 
     const auto* mask = item->mask;
     if (mask && mask->width > 0 && mask->height > 0 && !mask->coverage.empty()) {
-      const int originX = penX + mask->bitmapLeft;
-      const int originY = baseline - mask->bitmapTop;
+      const int originX = x + static_cast<int>(std::lround(penX + glyph.xOffset)) + mask->bitmapLeft;
+      const int originY = y - static_cast<int>(std::lround(penY + glyph.yOffset)) - mask->bitmapTop;
+      dirtyLeft = std::min(dirtyLeft, originX);
+      dirtyTop = std::min(dirtyTop, originY);
+      dirtyRight = std::max(dirtyRight, originX + mask->width);
+      dirtyBottom = std::max(dirtyBottom, originY + mask->height);
 
       std::chrono::steady_clock::time_point b0;
       if (fonts_->telemetryEnabled) {
@@ -756,19 +821,20 @@ bool CanvasStore::drawTextNow(Surface& surface, const std::filesystem::path& fon
         blendUs += std::chrono::duration_cast<std::chrono::microseconds>(b1 - b0).count();
       }
     }
-    penX += item->advanceX;
+    penX += glyph.xAdvance;
+    penY += glyph.yAdvance;
   }
 
   if (fonts_->telemetryEnabled && blendUs > 0) {
     fonts_->recordBlendUs(blendUs);
   }
 
-  const int radius = (strokeWidth + 1) / 2;
-  markDirty(surface, x - radius, y - pixelSize - radius,
-            penX - x + radius * 2, pixelSize * 2 + radius * 2);
+  if (dirtyRight > dirtyLeft && dirtyBottom > dirtyTop) {
+    markDirty(surface, dirtyLeft, dirtyTop, dirtyRight - dirtyLeft, dirtyBottom - dirtyTop);
+  }
 
   fonts_->maybeReportTelemetry();
-  return true;
+  return complete;
 }
 
 bool CanvasStore::blurNow(Surface& surface) {
@@ -827,7 +893,7 @@ bool CanvasStore::realizeSurface(Surface& surface) {
                      c.destinationWidth, c.destinationHeight, c.alpha);
         images_.release(c.source);
       } else if constexpr (std::is_same_v<T, DrawTextCmd>) {
-        drawTextNow(surface, c.fontPath, c.text, c.x, c.y,
+        drawTextNow(surface, c.fontPaths, c.text, c.x, c.y,
                     c.pixelSize, c.rgba, c.strokeWidth);
       } else if constexpr (std::is_same_v<T, BlurCmd>) {
         blurNow(surface);
@@ -1180,70 +1246,43 @@ void CanvasStore::blendPixelAdditive(Surface& surface, int x, int y,
 }
 
 bool CanvasStore::drawText(CanvasHandle handle,
-                           const std::filesystem::path& fontPath,
+                           const std::vector<std::filesystem::path>& fontPaths,
                            const std::string& text, int x, int y, int pixelSize,
                            std::uint32_t rgba, int strokeWidth) {
   auto* surface = lookup(handle);
-  if (!surface || pixelSize <= 0 || strokeWidth < 0 || strokeWidth > 32) return false;
+  if (!surface || pixelSize <= 0 || pixelSize > 256 || fontPaths.empty() ||
+      strokeWidth < 0 || strokeWidth > 32) return false;
   if (surface->state == SurfaceState::Deferred) {
-    const std::size_t estimatedBytes = sizeof(DrawTextCmd) + text.capacity();
+    const std::size_t estimatedBytes = sizeof(DrawTextCmd) + text.capacity() +
+      fontPaths.capacity() * sizeof(std::filesystem::path);
     if (surface->commands.size() >= 256 ||
         surface->queuedCommandBytes + estimatedBytes >= 64 * 1024) {
       if (!realizeSurface(*surface)) return false;
     } else {
       surface->commands.emplace_back(DrawTextCmd{
-        fontPath, text, x, y, pixelSize, rgba, strokeWidth
+        fontPaths, text, x, y, pixelSize, rgba, strokeWidth
       });
       surface->queuedCommandBytes += estimatedBytes;
       return true;
     }
   }
-  return drawTextNow(*surface, fontPath, text, x, y, pixelSize, rgba, strokeWidth);
+  return drawTextNow(*surface, fontPaths, text, x, y, pixelSize, rgba, strokeWidth);
 }
 
-std::optional<int> CanvasStore::measureText(
-    const std::filesystem::path& fontPath, const std::string& text,
+std::optional<double> CanvasStore::measureText(
+    const std::vector<std::filesystem::path>& fontPaths, const std::string& text,
     int pixelSize) const {
-  if (pixelSize <= 0 || pixelSize > 256) return std::nullopt;
-  if (!fonts_->face(fontPath, pixelSize)) return std::nullopt;
-  int width = 0;
-  for (const auto codepoint : decodeUtf8(text)) {
-    const auto* metrics = fonts_->getOrLoadMetrics(fontPath, pixelSize, codepoint);
-    if (!metrics) continue;
-    width += metrics->advanceX;
-  }
-  return width;
+  auto layout = fonts_->layoutText(fontPaths, text, pixelSize);
+  if (!layout) return std::nullopt;
+  return layout->metrics.width;
 }
 
 std::optional<CanvasTextMetrics> CanvasStore::measureTextMetrics(
-    const std::filesystem::path& fontPath, const std::string& text,
+    const std::vector<std::filesystem::path>& fontPaths, const std::string& text,
     int pixelSize) const {
-  if (pixelSize <= 0) return std::nullopt;
-  FT_Face face = fonts_->face(fontPath, pixelSize);
-  if (!face) return std::nullopt;
-  CanvasTextMetrics result;
-  int penX = 0;
-  int minimumX = 0;
-  int maximumX = 0;
-  for (const auto codepoint : decodeUtf8(text)) {
-    const auto* metrics = fonts_->getOrLoadMetrics(fontPath, pixelSize, codepoint);
-    if (!metrics) continue;
-    const int left = penX + metrics->bearingX;
-    const int top = metrics->bearingY;
-    const int right = left + metrics->metricWidth;
-    const int bottom = top - metrics->metricHeight;
-    minimumX = std::min(minimumX, left);
-    maximumX = std::max(maximumX, right);
-    result.actualAscent = std::max(result.actualAscent, top);
-    result.actualDescent = std::max(result.actualDescent, -bottom);
-    penX += metrics->advanceX;
-  }
-  result.width = penX;
-  result.actualLeft = -minimumX;
-  result.actualRight = maximumX;
-  result.fontAscent = static_cast<int>(face->size->metrics.ascender >> 6);
-  result.fontDescent = -static_cast<int>(face->size->metrics.descender >> 6);
-  return result;
+  auto layout = fonts_->layoutText(fontPaths, text, pixelSize);
+  if (!layout) return std::nullopt;
+  return layout->metrics;
 }
 
 bool CanvasStore::canLoadFont(const std::filesystem::path& fontPath) {
@@ -1446,7 +1485,7 @@ std::size_t CanvasStore::deferredCommandBytes() const {
   return bytes;
 }
 
-GlyphCacheStats CanvasStore::glyphCacheStats() const {
+CanvasTextStats CanvasStore::glyphCacheStats() const {
   return fonts_->getStats();
 }
 

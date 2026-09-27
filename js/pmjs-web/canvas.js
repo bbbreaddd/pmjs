@@ -449,7 +449,7 @@ function contextFont(context) {
   if (globalThis.PMJS && PMJS.fonts && typeof PMJS.fonts.resolveDescriptor === 'function') {
     var resolved = PMJS.fonts.resolveDescriptor(fontStr);
     return {
-      path: (resolved.faces && resolved.faces[0] && resolved.faces[0].path) || 'fonts/gamefont.ttf',
+      paths: resolved.faces.map(function(face) { return face.path; }),
       size: resolved.size,
       family: (resolved.faces && resolved.faces[0] && resolved.faces[0].family) || 'GameFont'
     };
@@ -459,7 +459,8 @@ function contextFont(context) {
   var config = PMJS.config;
   var files = config.fonts || {};
   var family = String(fontStr).split(/\s+/).pop().replace(/["']/g, '');
-  return { path: files[family] || files.GameFont || 'fonts/gamefont.ttf', size: size };
+  return { paths: [files[family] || files.GameFont || 'fonts/gamefont.ttf'],
+    size: size, family: family };
 }
 
 
@@ -660,7 +661,7 @@ CanvasContext2D.prototype.drawImage = function(source) {
 };
 function canvasTextPosition(context, text, x, y) {
   var font = contextFont(context);
-  var width = NativeHost.canvas.measureText(font.path, String(text), font.size);
+  var width = NativeHost.canvas.measureText(font.paths, String(text), font.size);
   if (context.textAlign === 'center') x -= width / 2;
   else if (context.textAlign === 'right' || context.textAlign === 'end') x -= width;
   var baseline = context.textBaseline;
@@ -691,7 +692,7 @@ function drawCanvasText(context, text, x, y, stroke, maxWidth) {
       Math.abs(t[2]) < 0.000001 && Math.abs(t[3] - 1) < 0.000001 &&
       !context._clipPaths.length && horizontalScale === 1) {
     NativeHost.canvas.drawText(context.canvas._ensureNativeCanvas().handle,
-      placement.font.path, text, Math.round(placement.x + t[4]),
+      placement.font.paths, text, Math.round(placement.x + t[4]),
       Math.round(placement.top + placement.font.size + t[5]),
       placement.font.size, color, strokeWidth);
     return;
@@ -701,7 +702,7 @@ function drawCanvasText(context, text, x, y, stroke, maxWidth) {
     Math.max(1, Math.ceil(placement.width) + padding * 2),
     Math.max(1, placement.font.size * 2 + padding * 2));
   try {
-    NativeHost.canvas.drawText(temporary.handle, placement.font.path, text,
+    NativeHost.canvas.drawText(temporary.handle, placement.font.paths, text,
       padding, padding + placement.font.size, placement.font.size,
       colorToRgba(style), strokeWidth);
     var source = { width: temporary.width, height: temporary.height,
@@ -868,7 +869,7 @@ CanvasContext2D.prototype.createPattern = function(source, repetition) {
 };
 CanvasContext2D.prototype.measureText = function(text) {
   var font = contextFont(this);
-  return NativeHost.canvas.measureTextMetrics(font.path, String(text), font.size);
+  return NativeHost.canvas.measureTextMetrics(font.paths, String(text), font.size);
 };
 CanvasContext2D.prototype.getImageData = function(x, y, width, height) {
   width = Math.floor(width);
@@ -1108,17 +1109,17 @@ Object.assign(PMJS.web.canvas, {
     var font = contextFont(style.font);
     var canvas = context.canvas._ensureNativeCanvas();
     if (style.outlineWidth > 0) {
-      NativeHost.canvas.drawText(canvas.handle, font.path, text,
+      NativeHost.canvas.drawText(canvas.handle, font.paths, text,
         x, baseline, font.size, colorWithGlobalAlpha(style.outlineColor, 1),
         Math.max(0, Math.floor(style.outlineWidth)));
     }
-    NativeHost.canvas.drawText(canvas.handle, font.path, text,
+    NativeHost.canvas.drawText(canvas.handle, font.paths, text,
       x, baseline, font.size,
       colorWithGlobalAlpha(style.color, context.globalAlpha), 0);
   },
   measureTextWidth: function(text, descriptor) {
     var font = contextFont(descriptor);
-    return NativeHost.canvas.measureText(font.path, String(text), font.size);
+    return NativeHost.canvas.measureText(font.paths, String(text), font.size);
   }
 });
 

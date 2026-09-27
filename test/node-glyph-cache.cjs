@@ -39,12 +39,12 @@ assert.equal(stats.glyphMaskMisses, 0, 'measureText must NOT rasterize or miss a
 assert.equal(stats.glyphMaskHits, 0, 'measureText must NOT query glyph masks');
 assert.equal(stats.freetypeRenderUs, 0, 'measureText must NOT spend time in FreeType render');
 
-// Measure again - all 5 should hit metric cache
+// Repeated measurement must reuse the prepared layout without loading new metrics.
 const width2 = native.canvas.measureText(font, 'HELLO', 24);
 assert.equal(width2, width1, 'Measured width must remain identical');
 
 stats = native.canvas.glyphStats();
-assert.equal(stats.glyphMetricHits, 6, 'Second measureText should hit metrics for all 5 characters');
+assert.equal(stats.layoutCacheHits, 1, 'Repeated measurement should reuse the layout');
 assert.equal(stats.glyphMetricMisses, 4, 'Metric misses should not increase');
 assert.equal(stats.glyphMaskMisses, 0, 'Mask misses must remain 0');
 
@@ -54,7 +54,7 @@ assert.equal(metrics.width, width1);
 assert.ok(metrics.fontBoundingBoxAscent > 0);
 
 stats = native.canvas.glyphStats();
-assert.equal(stats.glyphMetricHits, 11, 'measureTextMetrics should also hit metrics cache');
+assert.equal(stats.layoutCacheHits, 2, 'measureTextMetrics should reuse the same layout');
 assert.equal(stats.glyphMaskMisses, 0, 'measureTextMetrics must NOT rasterize masks');
 
 // 3. Drawing materializes base fill mask

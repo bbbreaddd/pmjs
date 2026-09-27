@@ -23,7 +23,7 @@ struct CanvasInfo {
 };
 
 struct CanvasTextMetrics {
-  int width = 0;
+  double width = 0;
   int actualLeft = 0;
   int actualRight = 0;
   int actualAscent = 0;
@@ -32,7 +32,7 @@ struct CanvasTextMetrics {
   int fontDescent = 0;
 };
 
-struct GlyphCacheStats {
+struct CanvasTextStats {
   std::size_t fontFaces = 0;
   std::size_t fontStrikes = 0;
   std::size_t glyphEntries = 0;
@@ -55,6 +55,12 @@ struct GlyphCacheStats {
   std::uint64_t freetypeRenderUs = 0;
   std::uint64_t strokeBuildUs = 0;
   std::uint64_t glyphBlendUs = 0;
+  std::uint64_t layoutRequests = 0;
+  std::uint64_t layoutCacheHits = 0;
+  std::uint64_t shapeTextCalls = 0;
+  std::uint64_t shapeTextUs = 0;
+  std::uint64_t fallbackShapeCalls = 0;
+  std::size_t layoutCacheBytes = 0;
 };
 
 class CanvasStore {
@@ -81,14 +87,24 @@ class CanvasStore {
                  int sourceX, int sourceY, int sourceWidth, int sourceHeight,
                  int destinationX, int destinationY,
                  int destinationWidth, int destinationHeight, float alpha);
-  bool drawText(CanvasHandle handle, const std::filesystem::path& fontPath,
+  bool drawText(CanvasHandle handle, const std::vector<std::filesystem::path>& fontPaths,
                 const std::string& text, int x, int y, int pixelSize,
                 std::uint32_t rgba, int strokeWidth = 0);
-  std::optional<int> measureText(const std::filesystem::path& fontPath,
+  std::optional<double> measureText(const std::vector<std::filesystem::path>& fontPaths,
                                  const std::string& text, int pixelSize) const;
   std::optional<CanvasTextMetrics> measureTextMetrics(
-    const std::filesystem::path& fontPath, const std::string& text,
+    const std::vector<std::filesystem::path>& fontPaths, const std::string& text,
     int pixelSize) const;
+  bool drawText(CanvasHandle handle, const std::filesystem::path& fontPath,
+                const std::string& text, int x, int y, int pixelSize,
+                std::uint32_t rgba, int strokeWidth = 0) {
+    return drawText(handle, std::vector<std::filesystem::path>{fontPath}, text,
+                    x, y, pixelSize, rgba, strokeWidth);
+  }
+  std::optional<double> measureText(const std::filesystem::path& fontPath,
+                                    const std::string& text, int pixelSize) const {
+    return measureText(std::vector<std::filesystem::path>{fontPath}, text, pixelSize);
+  }
   bool canLoadFont(const std::filesystem::path& fontPath);
   std::optional<std::uint32_t> pixel(CanvasHandle handle, int x, int y);
   std::optional<ImagePixels> readPixels(CanvasHandle handle, int x, int y,
@@ -112,7 +128,7 @@ class CanvasStore {
   std::size_t realizedCanvasCount() const;
   std::size_t deferredCommandCount() const;
   std::size_t deferredCommandBytes() const;
-  GlyphCacheStats glyphCacheStats() const;
+  CanvasTextStats glyphCacheStats() const;
   void setGlyphCacheLimits(std::size_t maxBytes, std::size_t maxEntries);
 
  private:
@@ -147,7 +163,7 @@ class CanvasStore {
   };
 
   struct DrawTextCmd {
-    std::filesystem::path fontPath;
+    std::vector<std::filesystem::path> fontPaths;
     std::string text;
     int x;
     int y;
@@ -199,7 +215,7 @@ class CanvasStore {
                     int sourceX, int sourceY, int sourceWidth, int sourceHeight,
                     int destinationX, int destinationY,
                     int destinationWidth, int destinationHeight, float alpha);
-  bool drawTextNow(Surface& surface, const std::filesystem::path& fontPath,
+  bool drawTextNow(Surface& surface, const std::vector<std::filesystem::path>& fontPaths,
                    const std::string& text, int x, int y, int pixelSize,
                    std::uint32_t rgba, int strokeWidth);
   bool blurNow(Surface& surface);

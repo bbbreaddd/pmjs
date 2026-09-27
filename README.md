@@ -18,7 +18,7 @@ PMJS supports Linux x64 and ARM64. Building it requires:
 - Node.js and Node API headers
 - pkg-config
 - SDL2, EGL, and OpenGL ES 2
-- libpng, libjpeg, and FreeType
+- libpng, libjpeg, FreeType, and HarfBuzz
 - FFmpeg libraries: avformat, avcodec, avutil, swresample, and swscale
 
 ## Building
@@ -35,7 +35,7 @@ for cross-compilation. When set, pkg-config resolves only from that prefix's
 fail configuration instead of falling back to host libraries. Prefix builds
 also require `PMJS_DEPENDENCY_LOCK`, a CMake file declaring exact versions as
 `set(PMJS_LOCK_SDL2 2.30.0)`, `set(PMJS_LOCK_EGL 1.5)`, and corresponding
-`PMJS_LOCK_*` values for GLES, PNG, JPEG, FREETYPE, AVFORMAT, AVCODEC,
+`PMJS_LOCK_*` values for GLES, PNG, JPEG, FREETYPE, HARFBUZZ, AVFORMAT, AVCODEC,
 AVUTIL, SWRESAMPLE, and SWSCALE. CMake prints the resolved versions and
 rejects a mismatch. Keep the reviewed prefix contents fixed across builds
 whose results you compare, and use a fresh CMake build directory when changing
@@ -54,7 +54,8 @@ PMJS uses the following software
 - [EGL and OpenGL ES](https://www.khronos.org/opengles/) for native rendering
 - [libpng](http://www.libpng.org/pub/png/libpng.html) for PNG images
 - [libjpeg](https://ijg.org/) for JPEG images
-- [FreeType](https://freetype.org/) for font rendering
+- [FreeType](https://freetype.org/) for glyph rasterization
+- [HarfBuzz](https://harfbuzz.github.io/) for text shaping
 - [FFmpeg](https://ffmpeg.org/) for audio and video decoding
 
 The build and test workflow uses CMake, pkg-config, ESLint, and Xvfb.

@@ -273,13 +273,17 @@
       var key = fam.toLowerCase();
       var entry = registeredFamilies[key];
       if (entry && ensureFaceReady(entry)) {
-        matchedFaces.push({ family: entry.family, path: entry.path });
-        break;
+        if (!matchedFaces.some(function(face) { return face.path === entry.path; })) {
+          matchedFaces.push({ family: entry.family, path: entry.path });
+        }
       }
     }
 
+    var gameFontEntry = registeredFamilies.gamefont;
+    if (!matchedFaces.length && gameFontEntry && ensureFaceReady(gameFontEntry)) {
+      matchedFaces.push({ family: gameFontEntry.family, path: gameFontEntry.path });
+    }
     if (!matchedFaces.length) {
-      var gameFontEntry = registeredFamilies.gamefont;
       var defaultPath = (gameFontEntry && gameFontEntry.path) ? gameFontEntry.path : 'fonts/gamefont.ttf';
       matchedFaces.push({ family: 'GameFont', path: defaultPath });
     }

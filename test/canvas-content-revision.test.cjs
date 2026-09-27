@@ -135,7 +135,8 @@ test('Canvas native text resolves fonts and preserves outline/body alpha without
   });
   assert.deepEqual(descriptors, ['18px Fixture']);
   assert.equal(calls.length, 2);
-  assert.deepEqual(calls[0].slice(1, 6), ['fonts/fixture.ttf', 'hello', 4, 19, 18]);
+  assert.deepEqual(Array.from(calls[0][1]), ['fonts/fixture.ttf']);
+  assert.deepEqual(calls[0].slice(2, 6), ['hello', 4, 19, 18]);
   assert.equal(calls[0][6], 128);
   assert.equal(calls[0][7], 2);
   assert.equal(calls[1][6], 0xffffff40);
@@ -152,7 +153,8 @@ test('Canvas text measurement uses the same descriptor resolver and preserves st
     return { size: 21, faces: [{ path: 'fixture.ttf' }] };
   } };
   context.NativeHost.canvas.measureText = (...args) => {
-    assert.deepEqual(args, ['fixture.ttf', '123', 21]);
+    assert.deepEqual(Array.from(args[0]), ['fixture.ttf']);
+    assert.deepEqual(args.slice(1), ['123', 21]);
     return 37;
   };
   assert.equal(context.PMJS.web.canvas.measureTextWidth(123, '21px Fixture'), 37);

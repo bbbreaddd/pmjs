@@ -320,24 +320,26 @@ test('Dynamic font switching: resolve selected face for both drawText and measur
   context.PMJS.fonts.registerFontFaceRule('@font-face { font-family: "primary"; src: url("fonts/PrimaryFont.ttf"); }');
 
   const resolvedSecondary = context.contextFont('16px secondary');
-  assert.equal(resolvedSecondary.path, 'fonts/SecondaryFont.ttf');
+  assert.deepEqual(Array.from(resolvedSecondary.paths), ['fonts/SecondaryFont.ttf']);
 
   const resolvedPrimary = context.contextFont('16px primary');
-  assert.equal(resolvedPrimary.path, 'fonts/PrimaryFont.ttf');
+  assert.deepEqual(Array.from(resolvedPrimary.paths), ['fonts/PrimaryFont.ttf']);
 
   const dummyCanvas = { width: 100, height: 50, _ensureNativeCanvas: () => ({ handle: 1 }) };
   const ctx = new context.CanvasContext2D(dummyCanvas);
   ctx.font = '16px secondary';
   ctx.measureText('Hello');
-  assert.equal(measureCalls[measureCalls.length - 1].fontPath, 'fonts/SecondaryFont.ttf');
+  assert.deepEqual(Array.from(measureCalls[measureCalls.length - 1].fontPath),
+    ['fonts/SecondaryFont.ttf']);
 
   ctx.font = '16px primary';
   ctx.measureText('World');
-  assert.equal(measureCalls[measureCalls.length - 1].fontPath, 'fonts/PrimaryFont.ttf');
+  assert.deepEqual(Array.from(measureCalls[measureCalls.length - 1].fontPath),
+    ['fonts/PrimaryFont.ttf']);
 });
 
 test('Multiple dynamic faces and font stack with spaces', () => {
-  const { context } = createFontSandbox({
+  const { context, measureCalls, drawCalls } = createFontSandbox({
     existingFiles: [
       'fonts/CustomFont_A.ttf',
       'fonts/CustomFont_B.ttf',
@@ -355,14 +357,29 @@ test('Multiple dynamic faces and font stack with spaces', () => {
   context.PMJS.fonts.registerFace('CustomFont_C', 'fonts/CustomFont_C.ttf');
 
   const resolvedStack = context.contextFont('28px GameFont, Verdana, Arial, Courier New');
-  assert.equal(resolvedStack.path, 'fonts/CustomFont_B.ttf');
+  assert.deepEqual(Array.from(resolvedStack.paths), ['fonts/CustomFont_B.ttf']);
   assert.equal(resolvedStack.size, 28);
 
   const resolvedA = context.contextFont('28px CustomFont_A');
-  assert.equal(resolvedA.path, 'fonts/CustomFont_A.ttf');
+  assert.deepEqual(Array.from(resolvedA.paths), ['fonts/CustomFont_A.ttf']);
 
   const resolvedC = context.contextFont('20px CustomFont_C');
-  assert.equal(resolvedC.path, 'fonts/CustomFont_C.ttf');
+  assert.deepEqual(Array.from(resolvedC.paths), ['fonts/CustomFont_C.ttf']);
+  const all = context.PMJS.fonts.resolveDescriptor(
+    '20px Missing, CustomFont_C, CustomFont_A, CustomFont_C');
+  assert.deepEqual(Array.from(all.faces, face => face.path),
+    ['fonts/CustomFont_C.ttf', 'fonts/CustomFont_A.ttf']);
+  const unresolved = context.contextFont('20px Missing, Verdana');
+  assert.deepEqual(Array.from(unresolved.paths), ['fonts/CustomFont_B.ttf'],
+    'GameFont is used only when no authored face resolves');
+  const canvas = { width: 100, height: 50, _ensureNativeCanvas: () => ({ handle: 1 }) };
+  const ctx = new context.CanvasContext2D(canvas);
+  ctx.font = '20px CustomFont_C, CustomFont_A';
+  ctx.measureText('Hello');
+  ctx.fillText('Hello', 0, 20);
+  const expected = ['fonts/CustomFont_C.ttf', 'fonts/CustomFont_A.ttf'];
+  assert.deepEqual(Array.from(measureCalls.at(-1).fontPath), expected);
+  assert.deepEqual(Array.from(drawCalls.at(-1).fontPath), expected);
 });
 
 test('post-guest text activation refuses a plugin-wrapped font selector', () => {

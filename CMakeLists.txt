@@ -26,6 +26,7 @@ pkg_check_modules(GLES REQUIRED IMPORTED_TARGET glesv2)
 pkg_check_modules(PNG REQUIRED IMPORTED_TARGET libpng)
 pkg_check_modules(JPEG REQUIRED IMPORTED_TARGET libjpeg)
 pkg_check_modules(FREETYPE REQUIRED IMPORTED_TARGET freetype2)
+pkg_check_modules(HARFBUZZ REQUIRED IMPORTED_TARGET harfbuzz)
 pkg_check_modules(AVFORMAT REQUIRED IMPORTED_TARGET libavformat)
 pkg_check_modules(AVCODEC REQUIRED IMPORTED_TARGET libavcodec)
 pkg_check_modules(AVUTIL REQUIRED IMPORTED_TARGET libavutil)
@@ -37,7 +38,7 @@ if(PMJS_DEPENDENCY_LOCK)
     message(FATAL_ERROR "PMJS_DEPENDENCY_LOCK does not exist: ${PMJS_DEPENDENCY_LOCK}")
   endif()
   include("${PMJS_DEPENDENCY_LOCK}")
-  foreach(dependency IN ITEMS SDL2 EGL GLES PNG JPEG FREETYPE AVFORMAT AVCODEC AVUTIL SWRESAMPLE SWSCALE)
+  foreach(dependency IN ITEMS SDL2 EGL GLES PNG JPEG FREETYPE HARFBUZZ AVFORMAT AVCODEC AVUTIL SWRESAMPLE SWSCALE)
     set(lockVariable "PMJS_LOCK_${dependency}")
     if(NOT DEFINED ${lockVariable} OR NOT "${${lockVariable}}" STREQUAL "${${dependency}_VERSION}")
       message(FATAL_ERROR "${dependency} pkg-config version ${${dependency}_VERSION} does not match ${lockVariable}=${${lockVariable}}")
@@ -45,7 +46,7 @@ if(PMJS_DEPENDENCY_LOCK)
   endforeach()
 endif()
 
-message(STATUS "PMJS dependency versions: SDL2=${SDL2_VERSION} EGL=${EGL_VERSION} GLES=${GLES_VERSION} PNG=${PNG_VERSION} JPEG=${JPEG_VERSION} FREETYPE=${FREETYPE_VERSION} AVFORMAT=${AVFORMAT_VERSION} AVCODEC=${AVCODEC_VERSION} AVUTIL=${AVUTIL_VERSION} SWRESAMPLE=${SWRESAMPLE_VERSION} SWSCALE=${SWSCALE_VERSION}")
+message(STATUS "PMJS dependency versions: SDL2=${SDL2_VERSION} EGL=${EGL_VERSION} GLES=${GLES_VERSION} PNG=${PNG_VERSION} JPEG=${JPEG_VERSION} FREETYPE=${FREETYPE_VERSION} HARFBUZZ=${HARFBUZZ_VERSION} AVFORMAT=${AVFORMAT_VERSION} AVCODEC=${AVCODEC_VERSION} AVUTIL=${AVUTIL_VERSION} SWRESAMPLE=${SWRESAMPLE_VERSION} SWSCALE=${SWSCALE_VERSION}")
 
 set(PMJS_PLATFORM_LIBS PkgConfig::SDL2 PkgConfig::EGL PkgConfig::GLES)
 set(PMJS_MEDIA_LIBS PkgConfig::AVFORMAT PkgConfig::AVCODEC PkgConfig::AVUTIL PkgConfig::SWRESAMPLE PkgConfig::SWSCALE)
@@ -59,6 +60,7 @@ set(PMJS_RUNTIME_SOURCES
   src/renderer_scene.cpp
   src/resources.cpp
   src/canvas.cpp
+  src/text_layout.cpp
   src/vfs.cpp
   src/media_decoder.cpp
   src/media_service.cpp)
@@ -75,7 +77,7 @@ add_library(pmjs_runtime STATIC ${PMJS_RUNTIME_SOURCES})
 target_include_directories(pmjs_runtime PUBLIC src)
 target_compile_options(pmjs_runtime PRIVATE ${PMJS_BASE_COMPILE_OPTIONS})
 target_link_libraries(pmjs_runtime PUBLIC ${PMJS_PLATFORM_LIBS} PkgConfig::PNG
-  PkgConfig::JPEG PkgConfig::FREETYPE ${PMJS_MEDIA_LIBS} m dl pthread)
+  PkgConfig::JPEG PkgConfig::FREETYPE PkgConfig::HARFBUZZ ${PMJS_MEDIA_LIBS} m dl pthread)
 
 find_path(PMJS_NODE_API_HEADERS node_api.h PATHS /usr/include/node REQUIRED)
 add_library(pmjs_native MODULE
@@ -157,6 +159,8 @@ if(BUILD_TESTING)
   execute_process(COMMAND ${BASE64_EXECUTABLE} -d INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/fixture.jpg.b64" OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture.jpg" COMMAND_ERROR_IS_FATAL ANY)
   execute_process(COMMAND ${BASE64_EXECUTABLE} -d INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/fixture-video.mp4.b64" OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture-video.mp4" COMMAND_ERROR_IS_FATAL ANY)
   configure_file("${CMAKE_CURRENT_SOURCE_DIR}/test/assets/testfont.ttf" "${CMAKE_CURRENT_BINARY_DIR}/test-assets/testfont.ttf" COPYONLY)
+  configure_file("${CMAKE_CURRENT_SOURCE_DIR}/test/assets/text-shaping.ttf"
+    "${CMAKE_CURRENT_BINARY_DIR}/test-assets/text-shaping.ttf" COPYONLY)
   add_test(NAME native-media-decoder COMMAND pmjs-media-decoder-test
     "${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture-video.mp4")
   configure_file("${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture.png" "${CMAKE_CURRENT_BINARY_DIR}/test-assets/lease.png" COPYONLY)
@@ -164,7 +168,7 @@ if(BUILD_TESTING)
   foreach(PMJS_MASK_PNG IN ITEMS probe-content probe-mask-a probe-mask-b)
     execute_process(COMMAND ${BASE64_EXECUTABLE} -d INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/${PMJS_MASK_PNG}.png.b64" OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/${PMJS_MASK_PNG}.png" COMMAND_ERROR_IS_FATAL ANY)
   endforeach()
-  foreach(PMJS_NODE_TEST IN ITEMS node-scene node-mask-pixels node-renderer-stats node-render-to-image node-render-to-canvas node-image-coalesce node-image-retention node-image-warm-cache node-image-no-warm-cache node-image-fallback node-image-bytes node-audio-bytes node-video-texture node-canvas-deferred node-canvas-radial-gradient node-primitive-surface node-filter-bounds node-tone-boundary-pixels node-mz-color-pixels node-mesh-post-tint-overlay node-glyph-cache)
+  foreach(PMJS_NODE_TEST IN ITEMS node-scene node-mask-pixels node-renderer-stats node-render-to-image node-render-to-canvas node-image-coalesce node-image-retention node-image-warm-cache node-image-no-warm-cache node-image-fallback node-image-bytes node-audio-bytes node-video-texture node-canvas-deferred node-canvas-radial-gradient node-primitive-surface node-filter-bounds node-tone-boundary-pixels node-mz-color-pixels node-mesh-post-tint-overlay node-glyph-cache node-text-layout node-text-layout-cache node-text-upload)
     add_test(NAME ${PMJS_NODE_TEST} COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
       "${CMAKE_CURRENT_SOURCE_DIR}/test/${PMJS_NODE_TEST}.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
     set_tests_properties(${PMJS_NODE_TEST} PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")

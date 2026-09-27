@@ -100,13 +100,56 @@ napi_value canvasDrawImage(napi_env env, napi_callback_info info) try {
   auto a=arguments(env,info,11); if(!host(env).canvases.drawImage(asUint32(env,a.at(0)),asUint32(env,a.at(1)),asInt32(env,a.at(2)),asInt32(env,a.at(3)),asInt32(env,a.at(4)),asInt32(env,a.at(5)),asInt32(env,a.at(6)),asInt32(env,a.at(7)),asInt32(env,a.at(8)),asInt32(env,a.at(9)),asNumber(env,a.at(10)))) throw std::runtime_error("invalid canvas image"); return undefined(env);
 } catch(const std::exception& error){napi_throw_range_error(env,nullptr,error.what());return nullptr;}
 
+namespace {
+std::vector<std::filesystem::path> textFontPaths(napi_env env, State& value,
+                                                napi_value descriptor) {
+  bool array = false;
+  check(env, napi_is_array(env, descriptor, &array), "invalid font descriptor");
+  std::vector<std::filesystem::path> paths;
+  if (array) {
+    std::uint32_t count = 0;
+    check(env, napi_get_array_length(env, descriptor, &count), "invalid font list");
+    if (count > 64) throw std::runtime_error("too many fallback fonts");
+    for (std::uint32_t i = 0; i < count; ++i) {
+      napi_value entry;
+      check(env, napi_get_element(env, descriptor, i, &entry), "invalid fallback font");
+      auto path = value.vfs.resolve(asString(env, entry));
+      if (!path) throw std::runtime_error("invalid font path");
+      paths.push_back(*path);
+    }
+  } else {
+    auto path = value.vfs.resolve(asString(env, descriptor));
+    if (!path) throw std::runtime_error("invalid font path");
+    paths.push_back(*path);
+  }
+  return paths;
+}
+}  // namespace
+
 napi_value drawText(napi_env env, napi_callback_info info) try {
-  auto a=arguments(env,info,8); State& value=host(env); auto path=value.vfs.resolve(asString(env,a.at(1))); if(!path||!value.canvases.drawText(asUint32(env,a.at(0)),*path,asString(env,a.at(2)),asInt32(env,a.at(3)),asInt32(env,a.at(4)),asInt32(env,a.at(5)),asUint32(env,a.at(6)),a.size()>7?asInt32(env,a.at(7)):0)) throw std::runtime_error("text draw failed"); return undefined(env);
-} catch(const std::exception& error){napi_throw_error(env,nullptr,error.what());return nullptr;}
+  auto a = arguments(env, info, 8);
+  State& value = host(env);
+  const auto paths = textFontPaths(env, value, a.at(1));
+  if (!value.canvases.drawText(asUint32(env, a.at(0)), paths, asString(env, a.at(2)),
+      asInt32(env, a.at(3)), asInt32(env, a.at(4)), asInt32(env, a.at(5)),
+      asUint32(env, a.at(6)), a.size() > 7 ? asInt32(env, a.at(7)) : 0)) {
+    throw std::runtime_error("text draw failed");
+  }
+  return undefined(env);
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what()); return nullptr;
+}
 
 napi_value measureText(napi_env env, napi_callback_info info) try {
-  auto a=arguments(env,info,3); State& value=host(env); auto path=value.vfs.resolve(asString(env,a.at(0))); auto width=path?value.canvases.measureText(*path,asString(env,a.at(1)),asInt32(env,a.at(2))):std::nullopt; if(!width) throw std::runtime_error("text measurement failed"); return number(env,*width);
-} catch(const std::exception& error){napi_throw_error(env,nullptr,error.what());return nullptr;}
+  auto a = arguments(env, info, 3);
+  State& value = host(env);
+  const auto paths = textFontPaths(env, value, a.at(0));
+  auto width = value.canvases.measureText(paths, asString(env, a.at(1)), asInt32(env, a.at(2)));
+  if (!width) throw std::runtime_error("text measurement failed");
+  return number(env, *width);
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what()); return nullptr;
+}
 
 napi_value canLoadFont(napi_env env, napi_callback_info info) try {
   auto a = arguments(env, info, 1);
@@ -255,6 +298,16 @@ napi_value canvasGlyphStats(napi_env env, napi_callback_info) try {
     number(env, stats.strokeBuildUs)), "cannot set strokeBuildUs");
   check(env, napi_set_named_property(env, result, "glyphBlendUs",
     number(env, stats.glyphBlendUs)), "cannot set glyphBlendUs");
+  const auto setLayoutStat = [&](const char* name, double metric) {
+    check(env, napi_set_named_property(env, result, name, number(env, metric)),
+      "cannot set text layout stat");
+  };
+  setLayoutStat("layoutRequests", stats.layoutRequests);
+  setLayoutStat("layoutCacheHits", stats.layoutCacheHits);
+  setLayoutStat("shapeTextCalls", stats.shapeTextCalls);
+  setLayoutStat("shapeTextUs", stats.shapeTextUs);
+  setLayoutStat("fallbackShapeCalls", stats.fallbackShapeCalls);
+  setLayoutStat("layoutCacheBytes", stats.layoutCacheBytes);
   return result;
 } catch (const std::exception& error) {
   napi_throw_error(env, nullptr, "cannot get glyph stats");
@@ -272,12 +325,12 @@ napi_value setGlyphCacheLimits(napi_env env, napi_callback_info info) try {
 
 napi_value measureTextMetrics(napi_env env, napi_callback_info info) try {
   auto a = arguments(env, info, 3); State& value = host(env);
-  auto path = value.vfs.resolve(asString(env, a.at(0)));
-  auto metrics = path ? value.canvases.measureTextMetrics(*path,
-    asString(env, a.at(1)), asInt32(env, a.at(2))) : std::nullopt;
+  const auto paths = textFontPaths(env, value, a.at(0));
+  auto metrics = value.canvases.measureTextMetrics(paths,
+    asString(env, a.at(1)), asInt32(env, a.at(2)));
   if (!metrics) throw std::runtime_error("text measurement failed");
   napi_value result; napi_create_object(env, &result);
-  const auto set = [&](const char* name, int metric) {
+  const auto set = [&](const char* name, double metric) {
     napi_set_named_property(env, result, name, number(env, metric));
   };
   set("width", metrics->width); set("actualBoundingBoxLeft", metrics->actualLeft);
