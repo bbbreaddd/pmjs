@@ -14,11 +14,13 @@ function run(context, file) {
 
 test('missing primary save recovers from backup without moving the primary during save', () => {
   const files = new Map([['file1.rpgsave.bak', 'old']]);
+  let generation = 0;
   const storage = {
+    generation: () => generation,
     readText: name => files.has(name) ? files.get(name) : null,
     exists: name => files.has(name),
-    writeText(name, value) { files.set(name, value); },
-    remove(name) { files.delete(name); },
+    writeText(name, value) { generation++; files.set(name, value); },
+    remove(name) { generation++; files.delete(name); },
     rename() { throw new Error('save must not rename the primary'); }
   };
   const manager = {

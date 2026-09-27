@@ -7,6 +7,8 @@ function createStorage(root) {
   const saveRoot = path.resolve(root);
   fs.mkdirSync(saveRoot, { recursive: true });
   let temporaryId = 0;
+  // Advance before mutation attempts, including failures after partial changes.
+  let mutationGeneration = 0;
 
   function resolve(relative) {
     const value = String(relative).replace(/\\/g, '/');
@@ -21,11 +23,13 @@ function createStorage(root) {
   }
 
   return {
+    generation() { return mutationGeneration; },
     readText(relative) {
       try { return fs.readFileSync(resolve(relative), 'utf8'); }
       catch (error) { if (error.code === 'ENOENT') return null; throw error; }
     },
     writeText(relative, contents) {
+      mutationGeneration++;
       const destination = resolve(relative);
       fs.mkdirSync(path.dirname(destination), { recursive: true });
       const temporary = `${destination}.tmp-${process.pid}-${++temporaryId}`;
@@ -53,12 +57,17 @@ function createStorage(root) {
       try { return fs.readdirSync(resolve(relative)); }
       catch (error) { if (error.code === 'ENOENT') return null; throw error; }
     },
-    makeDirectory: relative => fs.mkdirSync(resolve(relative), { recursive: true }),
+    makeDirectory(relative) {
+      mutationGeneration++;
+      return fs.mkdirSync(resolve(relative), { recursive: true });
+    },
     remove(relative) {
+      mutationGeneration++;
       try { fs.unlinkSync(resolve(relative)); }
       catch (error) { if (error.code !== 'ENOENT') throw error; }
     },
     rename(from, to) {
+      mutationGeneration++;
       const destination = resolve(to);
       fs.mkdirSync(path.dirname(destination), { recursive: true });
       fs.renameSync(resolve(from), destination);

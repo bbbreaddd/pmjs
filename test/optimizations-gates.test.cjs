@@ -432,6 +432,7 @@ test('storage.read-burst-coalesce disables cleanly via optimization gate', () =>
       PMJS_GAME_CONFIG: disabled ? { disableOptimizations: ['storage.read-burst-coalesce'] } : {},
       NativeHost: {
         storage: {
+          generation: () => 0,
           exists: () => true,
           readText: () => { reads++; return 'BASE64_DATA'; },
           writeText: () => {},

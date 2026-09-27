@@ -830,7 +830,9 @@ test('synchronous-burst storage read coalescing preserves stock DataManager obje
   };
   const serializedJson = JSON.stringify(sampleGlobalData);
 
+  let storageGeneration = 0;
   const mockStorage = {
+    generation: () => storageGeneration,
     exists(p) {
       storageStats++;
 
@@ -846,9 +848,9 @@ test('synchronous-burst storage read coalescing preserves stock DataManager obje
       }
       return null;
     },
-    writeText() {},
-    remove() {},
-    rename() {}
+    writeText() { storageGeneration++; },
+    remove() { storageGeneration++; },
+    rename() { storageGeneration++; }
   };
 
   const mockLZString = {
@@ -884,7 +886,7 @@ test('synchronous-burst storage read coalescing preserves stock DataManager obje
     },
     saveToLocalFile(savefileId, json) {},
     backup(savefileId) {},
-    remove(savefileId) {}
+    remove(savefileId) { mockStorage.remove(this.localFilePath(savefileId).slice(6)); }
   };
 
   const DataManager = {
@@ -958,7 +960,9 @@ test('storage read coalescing runs underneath plugin wrappers and respects dynam
   let pluginLoadCalls = 0;
   let pluginExistsCalls = 0;
 
+  let storageGeneration = 0;
   const mockStorage = {
+    generation: () => storageGeneration,
     exists(p) {
       physicalStats++;
       return true;
@@ -967,9 +971,9 @@ test('storage read coalescing runs underneath plugin wrappers and respects dynam
       physicalReads++;
       return p.includes('profileA') ? '{"profile":"A"}' : '{"profile":"B"}';
     },
-    writeText() {},
-    remove() {},
-    rename() {}
+    writeText() { storageGeneration++; },
+    remove() { storageGeneration++; },
+    rename() { storageGeneration++; }
   };
 
   const mockLZString = {

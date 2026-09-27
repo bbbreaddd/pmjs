@@ -30,12 +30,12 @@ function installNativeStorageManager() {
   // plugin wrappers always run; only physical reads underneath coalesce.
   var readBurst = null;
   var clearScheduled = false;
-  var storageGeneration = 0;
 
   function currentReadBurst() {
     if (!PMJS.optimizations.isEnabled('storage.read-burst-coalesce')) {
       return null;
     }
+    var storageGeneration = NativeHost.storage.generation();
     if (!readBurst || readBurst.generation !== storageGeneration) {
       readBurst = {
         generation: storageGeneration,
@@ -56,38 +56,6 @@ function installNativeStorageManager() {
       });
     }
     return readBurst;
-  }
-
-  function invalidateStorageBurst() {
-    storageGeneration++;
-    readBurst = null;
-  }
-  globalThis.pmjsInvalidateStorageBurst = invalidateStorageBurst;
-
-  if (!NativeHost.storage._pmjsInvalidationHooked) {
-    var rawStorage = NativeHost.storage;
-    if (typeof rawStorage.writeText === 'function') {
-      var origWriteText = rawStorage.writeText;
-      rawStorage.writeText = function() {
-        invalidateStorageBurst();
-        return origWriteText.apply(this, arguments);
-      };
-    }
-    if (typeof rawStorage.remove === 'function') {
-      var origRemove = rawStorage.remove;
-      rawStorage.remove = function() {
-        invalidateStorageBurst();
-        return origRemove.apply(this, arguments);
-      };
-    }
-    if (typeof rawStorage.rename === 'function') {
-      var origRename = rawStorage.rename;
-      rawStorage.rename = function() {
-        invalidateStorageBurst();
-        return origRename.apply(this, arguments);
-      };
-    }
-    rawStorage._pmjsInvalidationHooked = true;
   }
 
   function normalizeStoragePath(filePath) {
@@ -160,13 +128,5 @@ function installNativeStorageManager() {
       return pmjsLocalSaveExists.call(this, savefileId);
     };
     StorageManager._pmjsExistsPatched = true;
-  }
-  if (typeof StorageManager.remove === 'function' && !StorageManager._pmjsRemovePatched) {
-    var originalStorageRemove = StorageManager.remove;
-    StorageManager.remove = function(savefileId) {
-      invalidateStorageBurst();
-      return originalStorageRemove.apply(this, arguments);
-    };
-    StorageManager._pmjsRemovePatched = true;
   }
 }
