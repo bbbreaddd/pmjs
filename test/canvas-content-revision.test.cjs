@@ -110,3 +110,47 @@ test('resizing a canvas resets the existing 2D context state', () => {
   assert.equal(drawing._clipPaths.length, 0);
   assert.equal(drawing._stateStack.length, 0);
 });
+
+test('Canvas native text resolves fonts and preserves outline/body alpha without changing context state', () => {
+  const context = harness();
+  const calls = [];
+  const descriptors = [];
+  context.PMJS.fonts = { resolveDescriptor(descriptor) {
+    descriptors.push(descriptor);
+    return { size: 18, faces: [{ path: 'fonts/fixture.ttf', family: 'Fixture' }] };
+  } };
+  context.NativeHost.canvas.drawText = (...args) => calls.push(args);
+  const canvas = new context.CanvasElement();
+  const drawing = canvas.getContext('2d');
+  drawing.globalAlpha = 0.25;
+  drawing.font = '12px old-font';
+  drawing.fillStyle = '#123456';
+  assert.equal(context.PMJS.web.canvas.supportsNativeText(drawing), true);
+  context.PMJS.web.canvas.drawNativeText(drawing, 'hello', 4, 19, {
+    font: '18px Fixture', outlineWidth: 2.9,
+    outlineColor: 'rgba(0, 0, 0, 0.5)', color: '#ffffff',
+  });
+  assert.deepEqual(descriptors, ['18px Fixture']);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[0].slice(1, 6), ['fonts/fixture.ttf', 'hello', 4, 19, 18]);
+  assert.equal(calls[0][6], 128);
+  assert.equal(calls[0][7], 2);
+  assert.equal(calls[1][6], 0xffffff40);
+  assert.equal(calls[1][7], 0);
+  assert.equal(drawing.globalAlpha, 0.25);
+  assert.equal(drawing.font, '12px old-font');
+  assert.equal(drawing.fillStyle, '#123456');
+});
+
+test('Canvas text measurement uses the same descriptor resolver and preserves string conversion', () => {
+  const context = harness();
+  context.PMJS.fonts = { resolveDescriptor(descriptor) {
+    assert.equal(descriptor, '21px Fixture');
+    return { size: 21, faces: [{ path: 'fixture.ttf' }] };
+  } };
+  context.NativeHost.canvas.measureText = (...args) => {
+    assert.deepEqual(args, ['fixture.ttf', '123', 21]);
+    return 37;
+  };
+  assert.equal(context.PMJS.web.canvas.measureTextWidth(123, '21px Fixture'), 37);
+});

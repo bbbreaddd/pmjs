@@ -1,3 +1,19 @@
+PMJS.mv = PMJS.mv || {};
+PMJS.mv.bitmap = PMJS.mv.bitmap || {};
+PMJS.mv.bitmap.createPrimitiveRecorder = function(bitmap) {
+  if (!bitmap || !PMJS.web || !PMJS.web.canvas) return null;
+  var recorder = PMJS.web.canvas.createPrimitiveRecorder(bitmap._canvas);
+  if (!recorder) return null;
+  var originalDestroy = bitmap.destroy;
+  bitmap.destroy = function() {
+    recorder.destroy();
+    if (typeof originalDestroy === 'function') {
+      return originalDestroy.apply(this, arguments);
+    }
+  };
+  return recorder;
+};
+
 NativeHost.runtime.loadScript('js/rpg_core.js');
 if (globalThis.PMJS_RUNTIME_GAME && PMJS_RUNTIME_GAME.engineVersion &&
     Utils.RPGMAKER_VERSION !== PMJS_RUNTIME_GAME.engineVersion) {
@@ -195,16 +211,10 @@ if (typeof _Bitmap_blt === 'function') {
 
     Bitmap.prototype.drawText = function(text, x, y, maxWidth, lineHeight, align) {
       var context = this._context;
-      var transform = context && context._transform;
-      var identityTransform = transform && transform.length === 6 &&
-        transform[0] === 1 && transform[1] === 0 && transform[2] === 0 &&
-        transform[3] === 1 && transform[4] === 0 && transform[5] === 0;
       if (this._drawTextOutline !== originalOutline ||
           this._drawTextBody !== originalBody || maxWidth ||
           (align && align !== 'left') || text === undefined ||
-          !identityTransform ||
-          (context._clipPaths && context._clipPaths.length) ||
-          context.globalCompositeOperation !== 'source-over') {
+          !PMJS.web.canvas.supportsNativeText(context)) {
         return originalDrawText.apply(this, arguments);
       }
 
@@ -216,21 +226,13 @@ if (typeof _Bitmap_blt === 'function') {
       lineHeight = Math.floor(lineHeight);
 
       var descriptor = this._makeFontNameText();
-      var font = contextFont({ font: descriptor });
       // The native rasterizer expects an integral baseline offset.
       var baseline = y + lineHeight -
         Math.floor((lineHeight - this.fontSize * 0.7) / 2);
-      var canvas = this._canvas._ensureNativeCanvas();
-      var paintAlpha = context.globalAlpha;
-      if (this.outlineWidth > 0) {
-        NativeHost.canvas.drawText(canvas.handle, font.path, text,
-          x, baseline, font.size,
-          colorWithGlobalAlpha(this.outlineColor, 1),
-          Math.max(0, Math.floor(this.outlineWidth)));
-      }
-      NativeHost.canvas.drawText(canvas.handle, font.path, text,
-        x, baseline, font.size,
-        colorWithGlobalAlpha(this.textColor, paintAlpha), 0);
+      PMJS.web.canvas.drawNativeText(context, text, x, baseline, {
+        font: descriptor, outlineColor: this.outlineColor,
+        outlineWidth: this.outlineWidth, color: this.textColor
+      });
       pmjsBitmapCanvasChanged(this);
       this._setDirty();
     };
@@ -245,8 +247,7 @@ if (typeof _Bitmap_blt === 'function') {
 
 
 Bitmap.prototype.measureTextWidth = function(text) {
-  var font = contextFont({ font: this._makeFontNameText() });
-  return NativeHost.canvas.measureText(font.path, String(text), font.size);
+  return PMJS.web.canvas.measureTextWidth(text, this._makeFontNameText());
 };
 
 // Pixel queries support canvas-backed bitmaps without forcing image readback.

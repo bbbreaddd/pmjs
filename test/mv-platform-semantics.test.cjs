@@ -708,6 +708,7 @@ test('Bitmap.prototype.drawText installs native acceleration only for stock pipe
         fillText() {}
       };
       this._canvas = { _ensureNativeCanvas() { return { handle: 1 }; } };
+      this._context.canvas = this._canvas;
     }
     MockBitmap.prototype._makeFontNameText = function() { return '16px sans-serif'; };
     MockBitmap.prototype._setDirty = function() {};
@@ -740,7 +741,7 @@ test('Bitmap.prototype.drawText installs native acceleration only for stock pipe
     return MockBitmap;
   }
 
-  function createContext(BitmapClass) {
+  function createContext(BitmapClass, disabled = false) {
     nativeDrawCalls = 0;
     nativeDrawArguments = [];
     const sandbox = {
@@ -748,8 +749,6 @@ test('Bitmap.prototype.drawText installs native acceleration only for stock pipe
       Sprite: function() {},
       Graphics: Object.assign(function() {}, { width: 100, height: 100 }),
       Input: function() {},
-      contextFont: function() { return { path: 'font.ttf', size: 16 }; },
-      colorWithGlobalAlpha: function(_color, alpha) { return alpha; },
       nativeBootPhase: function() {},
       NativeHost: {
         runtime: { loadScript() {} },
@@ -764,8 +763,9 @@ test('Bitmap.prototype.drawText installs native acceleration only for stock pipe
       }
     };
     const context = vm.createContext(sandbox);
-    context.PMJS = { config: {} };
+    context.PMJS = { config: { disableOptimizations: disabled ? ['bitmap.native-draw-text'] : [] } };
     vm.runInContext(fs.readFileSync(path.join(jsDir, 'pmjs-core/optimizations.js'), 'utf8'), context);
+    vm.runInContext(fs.readFileSync(path.join(jsDir, 'pmjs-web/canvas.js'), 'utf8'), context);
     const bitmapCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/bitmap.js'), 'utf8');
     vm.runInContext(bitmapCode, context);
     return context;
@@ -787,9 +787,9 @@ test('Bitmap.prototype.drawText installs native acceleration only for stock pipe
   nativeDrawCalls = 0;
   stockBmp._context.globalAlpha = 0.25;
   stockBmp.drawText('alpha', 10, 0, 0, 20, 'left');
-  assert.equal(nativeDrawArguments.at(-2)[6], 1,
+  assert.equal(nativeDrawArguments.at(-2)[6] & 255, 255,
     'outline preserves MV globalAlpha=1 behavior');
-  assert.equal(nativeDrawArguments.at(-1)[6], 0.25,
+  assert.equal(nativeDrawArguments.at(-1)[6] & 255, 64,
     'body preserves the caller globalAlpha');
   nativeDrawCalls = 0;
   stockBmp.drawText(undefined, 0, 0, 0, 20, 'left');
@@ -817,6 +817,11 @@ test('Bitmap.prototype.drawText installs native acceleration only for stock pipe
   customBmp._drawTextOutline = function() { customOutlineCalls++; };
   customBmp.drawText('hello', 0, 0, 100, 20, 'left');
   assert.equal(customOutlineCalls, 1, 'overridden _drawTextOutline must be invoked via fallback');
+  const DisabledBitmap = makeMockBitmapClass();
+  const disabledContext = createContext(DisabledBitmap, true);
+  new disabledContext.Bitmap().drawText('ordinary', 0, 0, 0, 20, 'left');
+  assert.equal(nativeDrawCalls, 0, 'disabled text optimization must keep the ordinary path');
+  assert.equal(disabledContext.PMJS.optimizations.reason('bitmap.native-draw-text'), 'disabled by port');
 });
 
 test('synchronous-burst storage read coalescing preserves stock DataManager object identity and coalesces storage I/O', async () => {

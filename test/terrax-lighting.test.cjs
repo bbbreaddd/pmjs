@@ -26,6 +26,12 @@ function loadRegistrySupport(context) {
   vm.runInContext(lifecycleSource, context, { filename: 'lifecycle.js' });
   vm.runInContext(methodsSource, context, { filename: 'methods.js' });
   vm.runInContext(pluginsSource, context, { filename: 'plugins.js' });
+  vm.runInContext(fs.readFileSync(path.join(runtimeRoot,
+    'js/pmjs-web/canvas.js'), 'utf8'), context);
+  const bitmapSource = fs.readFileSync(path.join(runtimeRoot,
+    'js/pmjs-mv/bitmap.js'), 'utf8');
+  vm.runInContext(bitmapSource.slice(0,
+    bitmapSource.indexOf("NativeHost.runtime.loadScript")), context);
 }
 
 function knownAddSprite(x, y, bitmap) {
@@ -116,7 +122,7 @@ test('native Terrax adapter records supported mask draws into one GPU layer', ()
   const updates = [];
   function Sprite() {}
   function SpritesetMap() {}
-  const canvas = {};
+  const canvas = { width: 64, height: 48, getContext() { return context2d; } };
   const context2d = {
     _transform: [1, 0, 0, 1, 0, 0],
     fillStyle: '#000000', globalAlpha: 1,
@@ -181,7 +187,7 @@ test('native Terrax adapter records supported mask draws into one GPU layer', ()
   assert.equal(canvas._nativeImage.handle, 84);
 });
 
-test('native Terrax adapter keeps Canvas rendering without the color helper', () => {
+test('native Terrax adapter keeps Canvas rendering when primitive surfaces are unavailable', () => {
   const hooks = {};
   let surfaces = 0;
   function SpritesetMap() {}
@@ -302,7 +308,7 @@ function terraxDisabledContext({ config, env }) {
   const stockAdds = [];
   function Sprite() {}
   function SpritesetMap() {}
-  const canvas = {};
+  const canvas = { width: 64, height: 48, getContext() { return context2d; } };
   const context2d = {
     _transform: [1, 0, 0, 1, 0, 0],
     fillStyle: '#000000', globalAlpha: 1,
@@ -377,4 +383,119 @@ test('terrax.native-lighting disabled by PMJS_DISABLE_OPT runs the ordinary Canv
   mask._updateMask();
   assert.equal(updates.length, 0);
   assert.ok(context2d.cpuFills > 0);
+});
+
+function recorderHarness() {
+  const renders = [];
+  const releases = [];
+  const registrations = new Set();
+  class Registry {
+    constructor(callback) { this.callback = callback; }
+    register(_target, held, token) { registrations.add(token); }
+    unregister(token) { registrations.delete(token); }
+  }
+  const context = { console, FinalizationRegistry: Registry,
+    NativeHost: { render: {
+      createPrimitiveSurface() { return { handle: 42, image: { handle: 84 } }; },
+      renderPrimitiveSurface(handle, clear, records) { renders.push([handle, Array.from(clear), Array.from(records)]); },
+      releasePrimitiveSurface(handle) { releases.push(handle); },
+    } },
+  };
+  vm.createContext(context);
+  loadRegistrySupport(context);
+  const canvas = { width: 64, height: 48, getContext() { return drawing; } };
+  const drawing = new context.CanvasContext2D(canvas);
+  const cpu = [];
+  drawing.fillRect = function(...args) {
+    cpu.push({ args, style: this.fillStyle, transform: Array.from(this._transform),
+      clips: this._clipPaths.length });
+  };
+  drawing.fill = function() { cpu.push({ fill: true }); };
+  const bitmap = { _canvas: canvas, destroy() { return 'guest destroyed'; } };
+  const originalFillRect = drawing.fillRect;
+  const recorder = context.PMJS.mv.bitmap.createPrimitiveRecorder(bitmap);
+  return { context, canvas, drawing, bitmap, recorder, renders, releases, registrations, cpu, originalFillRect };
+}
+
+test('Canvas recorder replays supported rectangles before an unsupported draw and can recover next frame', () => {
+  const h = recorderHarness();
+  const result = h.recorder.record(() => {
+    h.drawing.fillStyle = '#ffffff';
+    h.drawing.fillRect(1, 2, 3, 4);
+    h.drawing.rotate(0.5);
+    h.drawing.fillStyle = '#000000';
+    h.drawing.fillRect(5, 6, 7, 8);
+    return 'guest result';
+  });
+  assert.equal(result, 'guest result');
+  assert.equal(h.renders.length, 0);
+  assert.deepEqual(h.cpu.map(op => op.args), [[1, 2, 3, 4], [5, 6, 7, 8]]);
+  assert.equal(h.cpu[0].style, '#ffffff');
+  assert.deepEqual(h.cpu[0].transform, [1, 0, 0, 1, 0, 0]);
+  h.drawing.resetTransform();
+  h.recorder.record(() => h.drawing.fillRect(0, 0, 64, 48));
+  assert.equal(h.renders.length, 1);
+  assert.equal(h.canvas._nativeImage.handle, 84);
+});
+
+test('Canvas recorder falls back on native submission failure and preserves drawing exceptions', () => {
+  const h = recorderHarness();
+  h.context.NativeHost.render.renderPrimitiveSurface = () => { throw new Error('GPU failed'); };
+  h.recorder.record(() => h.drawing.fillRect(1, 2, 3, 4));
+  assert.equal(h.cpu.length, 1);
+  assert.equal(h.canvas._nativeImage, undefined);
+  const error = new Error('guest failed');
+  assert.throws(() => h.recorder.record(() => {
+    h.drawing.fillRect(5, 6, 7, 8);
+    throw error;
+  }), thrown => thrown === error);
+  assert.equal(h.cpu.length, 2);
+});
+
+test('Bitmap destruction releases its Canvas surface once and restores ordinary drawing', () => {
+  const h = recorderHarness();
+  h.recorder.record(() => h.drawing.fillRect(0, 0, 64, 48));
+  assert.equal(h.registrations.size, 1);
+  assert.equal(h.bitmap.destroy(), 'guest destroyed');
+  assert.equal(h.bitmap.destroy(), 'guest destroyed');
+  assert.deepEqual(h.releases, [42]);
+  assert.equal(h.registrations.size, 0);
+  assert.equal(h.canvas._nativeImage, undefined);
+  assert.equal(h.drawing.fillRect, h.originalFillRect);
+  h.recorder.record(() => h.drawing.fillRect(0, 0, 64, 48));
+  assert.equal(h.renders.length, 1);
+  assert.equal(h.cpu.length, 1);
+});
+
+test('Canvas recorder keeps clipped or resized drawing on the ordinary path', () => {
+  for (const change of [
+    h => { h.drawing._clipPaths = [{}]; },
+    h => { h.canvas.width = 128; },
+  ]) {
+    const h = recorderHarness();
+    change(h);
+    h.recorder.record(() => h.drawing.fillRect(0, 0, 64, 48));
+    assert.equal(h.renders.length, 0);
+    assert.equal(h.cpu.length, 1);
+  }
+});
+
+test('fallback replay does not apply a later clip to earlier recorded rectangles', () => {
+  const h = recorderHarness();
+  h.recorder.record(() => {
+    h.drawing.fillRect(0, 0, 64, 48);
+    h.drawing.beginPath();
+    h.drawing.rect(1, 1, 2, 2);
+    h.drawing.clip();
+    h.drawing.fillRect(0, 0, 8, 8);
+  });
+  assert.deepEqual(h.cpu.map(op => op.clips), [0, 1]);
+});
+
+test('ordinary drawing after an accelerated frame preserves that frame through replay', () => {
+  const h = recorderHarness();
+  h.recorder.record(() => h.drawing.fillRect(0, 0, 64, 48));
+  h.drawing.fillRect(1, 2, 3, 4);
+  assert.deepEqual(h.cpu.map(op => op.args), [[0, 0, 64, 48], [1, 2, 3, 4]]);
+  assert.equal(h.canvas._nativeImage, undefined);
 });
