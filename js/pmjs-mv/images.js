@@ -115,7 +115,7 @@ function pmjsScheduleImageCacheTrim() {
     }
   });
 }
-globalThis.__pmjsImageLoadCompleted = pmjsScheduleImageCacheTrim;
+PMJS.images.onLoadComplete(pmjsScheduleImageCacheTrim);
 
 (function pmjsRegisterBitmapImageHooks() {
   var methods = globalThis.PMJS && globalThis.PMJS.methods;

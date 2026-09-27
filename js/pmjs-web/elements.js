@@ -515,8 +515,7 @@ Object.defineProperty(NativeImage.prototype, 'src', {
           ? globalThis.pmjsResolveObjectURL(source) : null;
         var objectLoad = objectBlob
           ? objectBlob.arrayBuffer().then(function(buffer) {
-              var retain = typeof globalThis.__pmjsShouldRetainImagePixels === 'function' &&
-                globalThis.__pmjsShouldRetainImagePixels(source);
+              var retain = PMJS.images.shouldRetainPixels(source);
               return NativeHost.images.loadBytesAsync(buffer, retain);
             })
           : Promise.reject(new Error('object URL is unavailable'));
@@ -533,9 +532,7 @@ Object.defineProperty(NativeImage.prototype, 'src', {
           image.complete = true;
           if (typeof image.onload === 'function') image.onload({ type: 'load', target: image });
           image.dispatchEvent({ type: 'load', target: image });
-          if (typeof globalThis.__pmjsImageLoadCompleted === 'function') {
-            globalThis.__pmjsImageLoadCompleted(image);
-          }
+          PMJS.images.loadCompleted(image);
         }, function(error) {
           if (generation !== image._loadGeneration) return;
           releaseNativeResource(image._nativeImage, 'image');
@@ -559,8 +556,7 @@ Object.defineProperty(NativeImage.prototype, 'src', {
       var loader = generated ? NativeHost.assets : NativeHost.images;
       var load = generated ? loader.loadImage : loader.load;
       var loadAsync = generated ? loader.loadImageAsync : loader.loadAsync;
-      var retainCpuPixels = typeof globalThis.__pmjsShouldRetainImagePixels ===
-        'function' && globalThis.__pmjsShouldRetainImagePixels(path);
+      var retainCpuPixels = PMJS.images.shouldRetainPixels(path);
 
       pendingNativeImageLoads++;
       new Promise(function(resolve) {
@@ -582,9 +578,7 @@ Object.defineProperty(NativeImage.prototype, 'src', {
         image._pmjsLoadError = null;
         if (typeof image.onload === 'function') image.onload({ type: 'load', target: image });
         image.dispatchEvent({ type: 'load', target: image });
-        if (typeof globalThis.__pmjsImageLoadCompleted === 'function') {
-          globalThis.__pmjsImageLoadCompleted(image);
-        }
+        PMJS.images.loadCompleted(image);
       }, function(error) {
         if (generation !== image._loadGeneration) return;
         console.warn('[pmjs] image load failed, rendering fallback checkerboard: ' + path +

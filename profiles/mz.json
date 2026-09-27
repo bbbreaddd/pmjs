@@ -22,6 +22,7 @@
     "js/pmjs-web/canvas.js",
     "js/pmjs-web/dialogs.js",
     "js/pmjs-web/object-urls.js",
+    "js/pmjs-web/images.js",
     "js/pmjs-web/elements.js",
     "js/pmjs-web/script-loader.js",
     "js/pmjs-web/requests.js",

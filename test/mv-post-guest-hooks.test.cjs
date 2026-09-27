@@ -34,7 +34,7 @@ test('Bitmap image hooks wrap the final guest implementation', () => {
   ctx.PMJS.compat = { hit() {} };
   const source = fs.readFileSync(path.join(root, 'js/pmjs-mv/images.js'), 'utf8');
   vm.runInContext(slice(source, 'function pmjsBitmapRequestImageWrap',
-    '\n// MV removes an outgoing map spriteset'), ctx,
+    '\nPMJS.methods.wrap({'), ctx,
   { filename: 'images-hooks.js' });
   // Guest plugin overrides after the shared module registers.
   Bitmap.prototype._requestImage = function() {

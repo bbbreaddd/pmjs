@@ -41,6 +41,8 @@ function imageContext(loadBytesAsync, loadAsync) {
   vm.runInContext(eventsSource, context);
   vm.runInContext(canvasSource, context);
   vm.runInContext(source, context);
+  vm.runInContext(fs.readFileSync(path.resolve(__dirname,
+    '../js/pmjs-web/images.js'), 'utf8'), context);
   vm.runInContext(elementsSource, context);
   return context;
 }
@@ -145,4 +147,86 @@ test('NativeImage retries a path after a transient native load failure', async (
   assert.equal(image._pmjsLoadFailed, false);
   assert.equal(image.naturalWidth, 32);
   assert.equal(image.naturalHeight, 24);
+});
+
+test('Atlas retention composes with other rules across path, generated, and byte loaders', async () => {
+  const loads = [];
+  const resource = { handle: 71, width: 4, height: 5 };
+  const context = imageContext(async (_buffer, retain) => {
+    loads.push(['bytes', retain]);
+    return resource;
+  }, async (path, retain) => {
+    loads.push([path, retain]);
+    return resource;
+  });
+  context.NativeHost.assets = { async loadImageAsync(path, retain) {
+    loads.push(['generated:' + path, retain]);
+    return resource;
+  } };
+  vm.runInContext(fs.readFileSync(path.resolve(__dirname,
+    '../js/pmjs-plugins/atlas-loader/image-retention.js'), 'utf8'), context);
+  context.PMJS.images.addRetentionRule(path =>
+    path.startsWith('blob:') || path === 'generated-assets:/retain.png');
+  for (const src of ['file:///game/img/atlases/main.png?version=1',
+    'img/pictures/ordinary.png', 'generated-assets:/retain.png',
+    context.URL.createObjectURL(new Blob(['bytes']))]) {
+    const image = new context.Image();
+    image.src = src;
+  }
+  context.PMJS.tasks.drain();
+  await settle();
+  assert.deepEqual(loads, [
+    ['img/atlases/main.png', true],
+    ['img/pictures/ordinary.png', false],
+    ['generated:retain.png', true],
+    ['bytes', true],
+  ]);
+});
+
+test('image completion listeners follow guest load handlers for path and byte loads', async () => {
+  const context = imageContext(async () => ({ handle: 81, width: 3, height: 2 }),
+    async () => ({ handle: 82, width: 3, height: 2 }));
+  const order = [];
+  context.PMJS.images.onLoadComplete(image => {
+    assert.equal(image.complete, true);
+    assert.equal(image.naturalWidth, 3);
+    order.push('first');
+  });
+  context.PMJS.images.onLoadComplete(() => order.push('second'));
+  for (const src of ['img/pictures/test.png',
+    context.URL.createObjectURL(new Blob(['bytes']))]) {
+    const image = new context.Image();
+    image.onload = () => order.push('handler');
+    image.addEventListener('load', () => order.push('event'));
+    image.src = src;
+    context.PMJS.tasks.drain();
+    await settle();
+  }
+  assert.deepEqual(order, ['handler', 'event', 'first', 'second',
+    'handler', 'event', 'first', 'second']);
+});
+
+test('failed and stale image loads do not notify completion listeners', async () => {
+  const releases = [];
+  let resolveOld;
+  const context = imageContext(async () => { throw new Error('decode failed'); },
+    path => path === 'old.png'
+      ? new Promise(resolve => { resolveOld = resolve; })
+      : Promise.resolve({ handle: 91, width: 2, height: 2 }));
+  context.NativeHost.images.release = handle => releases.push(handle);
+  const completed = [];
+  context.PMJS.images.onLoadComplete(image => completed.push(image.src));
+  const image = new context.Image();
+  image.src = 'old.png';
+  context.PMJS.tasks.drain();
+  image.src = 'new.png';
+  context.PMJS.tasks.drain();
+  resolveOld({ handle: 90, width: 2, height: 2 });
+  const failed = new context.Image();
+  failed.src = context.URL.createObjectURL(new Blob(['bad']));
+  context.PMJS.tasks.drain();
+  await settle();
+  assert.deepEqual(completed, ['new.png']);
+  assert.ok(releases.includes(90));
+  assert.equal(failed._pmjsLoadFailed, true);
 });

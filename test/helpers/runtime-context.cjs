@@ -12,6 +12,7 @@ function loadPmjsRuntime(extra = {}, modules = [
   'js/pmjs-core/methods.js',
   'js/pmjs-rpgmaker/lifecycle.js',
   'js/pmjs-rpgmaker/plugins.js',
+  'js/pmjs-web/images.js',
 ]) {
   const context = vm.createContext(Object.assign({ console }, extra));
   for (const relative of modules) {

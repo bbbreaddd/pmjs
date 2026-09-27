@@ -64,7 +64,7 @@ test('MV image cache retrims completed loads without destroying bitmap backing',
     'js/pmjs-mv/images.js'), 'utf8');
   const methodsSource = fs.readFileSync(path.join(runtimeRoot,
     'js/pmjs-core/methods.js'), 'utf8');
-  const end = source.indexOf('\n// MV removes an outgoing map spriteset');
+  const end = source.indexOf('\nPMJS.methods.wrap({');
   class Bitmap {
     _onLoad() {
       this.ready = true;
@@ -102,6 +102,8 @@ test('MV image cache retrims completed loads without destroying bitmap backing',
   };
   vm.runInNewContext(methodsSource, context, { filename: 'methods.js' });
   context.PMJS.compat = { hit: (...args) => compatibilityHits.push(args) };
+  vm.runInNewContext(fs.readFileSync(path.join(runtimeRoot,
+    'js/pmjs-web/images.js'), 'utf8'), context);
   vm.runInNewContext(source.slice(0, end), context, { filename: 'images.js' });
   context.PMJS.methods.install();
   assert.equal(context.PMJS.methods.dump().find(entry =>
@@ -128,6 +130,8 @@ test('MV image cache retrims completed loads without destroying bitmap backing',
   second.events = [];
   first._onLoad();
   second._onLoad();
+  context.PMJS.images.loadCompleted({ complete: true });
+  context.PMJS.images.loadCompleted({ complete: true });
   assert.equal(cache.trimCount, 0);
   await Promise.resolve();
   assert.equal(cache.trimCount, 1);
