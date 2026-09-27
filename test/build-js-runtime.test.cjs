@@ -90,12 +90,13 @@ test('bundle validates disableOptimizations shape and orders the registry first'
   const registryIndex = bundleContent.indexOf('BEGIN js/pmjs-core/optimizations.js');
   const lifecycleIndex = bundleContent.indexOf(
     'BEGIN js/pmjs-rpgmaker/lifecycle.js');
-  const setupIndex = bundleContent.indexOf('BEGIN js/pmjs-mv/setup.js');
+  const setupIndex = bundleContent.indexOf('BEGIN js/pmjs-core/intl-warmup.js');
   assert.ok(configIndex >= 0 && configModuleIndex > configIndex &&
     registryIndex > configModuleIndex,
   'registry must follow the injected config and core config module');
-  assert.ok(lifecycleIndex > registryIndex && setupIndex > lifecycleIndex,
-    'registry and shared lifecycle must precede MV setup');
+  assert.ok(lifecycleIndex > registryIndex && setupIndex > configModuleIndex &&
+    setupIndex < registryIndex,
+    'core intl warmup must follow config and precede the registry');
 
   // Structural validation only: unknown-but-well-formed IDs build fine here
   // and fail at runtime, where the registry is the single authority.

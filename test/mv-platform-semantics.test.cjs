@@ -21,7 +21,7 @@ test('MV platform lets a plugin create and register its own scene ticker', () =>
     PIXI: { ticker: { Ticker } }
   };
   vm.createContext(context);
-  vm.runInContext(fs.readFileSync(path.join(jsDir, 'pmjs-mv/platform.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(jsDir, 'pmjs-rpgmaker/platform.js'), 'utf8'), context);
 
   context.SceneManager.update = function() {};
   context.SceneManager.requestUpdate = function() {
@@ -37,14 +37,13 @@ test('MV platform lets a plugin create and register its own scene ticker', () =>
   assert.equal(context.SceneManager.ticker.started, true);
 });
 
-function readMvSetup() {
+function readPluginInfra() {
   return fs.readFileSync(path.join(jsDir, 'pmjs-core/config.js'), 'utf8') +
     '\n' + fs.readFileSync(path.join(jsDir, 'pmjs-rpgmaker/lifecycle.js'), 'utf8') +
     '\n' + fs.readFileSync(path.join(jsDir, 'pmjs-core/methods.js'), 'utf8') +
     '\n' + fs.readFileSync(path.join(jsDir, 'pmjs-rpgmaker/plugins.js'), 'utf8') +
     '\n' + fs.readFileSync(path.join(jsDir, 'pmjs-core/optimizations.js'), 'utf8') +
-    '\n' + fs.readFileSync(path.join(jsDir, 'pmjs-rpgmaker/bootstrap.js'), 'utf8') +
-    '\n' + fs.readFileSync(path.join(jsDir, 'pmjs-mv/setup.js'), 'utf8');
+    '\n' + fs.readFileSync(path.join(jsDir, 'pmjs-rpgmaker/bootstrap.js'), 'utf8');
 }
 
 test('two-pass PluginManager.setup allows cross-plugin parameter lookups', () => {
@@ -59,7 +58,7 @@ test('two-pass PluginManager.setup allows cross-plugin parameter lookups', () =>
     }
   };
   vm.createContext(context);
-  const setupCode = readMvSetup();
+  const setupCode = readPluginInfra();
   const pluginLoaderCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/plugin-loader.js'), 'utf8');
   vm.runInContext(setupCode, context);
   vm.runInContext(pluginLoaderCode, context);
@@ -92,7 +91,7 @@ test('plugin lifecycle hooks install after PluginManager becomes available', () 
   };
   context.globalThis = context;
   vm.createContext(context);
-  const setupCode = readMvSetup();
+  const setupCode = readPluginInfra();
   const pluginLoaderCode = fs.readFileSync(
     path.join(jsDir, 'pmjs-mv/plugin-loader.js'), 'utf8');
   vm.runInContext(setupCode, context);
@@ -333,7 +332,7 @@ test('one physical host tick executes ticker, audio, video, and scheduled MV upd
     Number: Number,
     TypeError: TypeError,
     Map: Map,
-    nativeAudioBuffers: [{ _poll: () => { audioPolls++; return true; } }],
+    PMJS: { rpgmaker: { audio: { update: () => { audioPolls++; } } } },
     nativeVideos: [{ _update: () => { videoUpdates++; return true; } }],
     drainPendingTasks: () => {},
     SceneManager: {
@@ -399,7 +398,7 @@ test('bootstrap dispatches window load event listeners and window.onload', () =>
   listeners.push(() => { addEventListenerCalled = true; });
 
   vm.createContext(context);
-  const setupCode = readMvSetup();
+  const setupCode = readPluginInfra();
   const bootstrapCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/bootstrap.js'), 'utf8');
   vm.runInContext(setupCode, context);
   vm.runInContext(bootstrapCode, context);
@@ -436,7 +435,7 @@ test('integrated stack: PluginManager.setup -> loadScript -> document.currentScr
   };
   vm.createContext(context);
 
-  const setupCode = readMvSetup();
+  const setupCode = readPluginInfra();
   const scriptLoaderCode = fs.readFileSync(path.join(jsDir, 'pmjs-web/script-loader.js'), 'utf8');
   const pluginLoaderCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/plugin-loader.js'), 'utf8');
   vm.runInContext(setupCode, context);
@@ -493,7 +492,7 @@ test('lifecycle pulses beforePlugins, afterPlugins, and beforeBoot', () => {
   sandbox.globalThis = sandbox;
   const context = vm.createContext(sandbox);
 
-  const setupCode = readMvSetup();
+  const setupCode = readPluginInfra();
   const pluginLoaderCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/plugin-loader.js'), 'utf8');
   const bootstrapCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/bootstrap.js'), 'utf8');
 
@@ -542,7 +541,7 @@ test('phases run multiple hooks in registration order', () => {
   sandbox.globalThis = sandbox;
   const context = vm.createContext(sandbox);
 
-  const setupCode = readMvSetup();
+  const setupCode = readPluginInfra();
   const pluginLoaderCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/plugin-loader.js'), 'utf8');
 
   vm.runInContext(setupCode, context);
@@ -558,7 +557,7 @@ test('phases run multiple hooks in registration order', () => {
 
 test('named plugin callbacks run once and errors do not stop peers', () => {
   const context = vm.createContext({ console });
-  vm.runInContext(readMvSetup(), context);
+  vm.runInContext(readPluginInfra(), context);
   const seen = [];
   context.PMJS.plugins.onLoaded('SomePlugin', () => { throw new Error('boom'); });
   context.PMJS.plugins.onLoaded('someplugin.js', () => seen.push('loaded'));
@@ -635,7 +634,7 @@ test('Scene_Map same-map transfer does not short-circuit through reuse and prese
   };
   sandbox.globalThis = sandbox;
   const context = vm.createContext(sandbox);
-  const platformCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/platform.js'), 'utf8');
+  const platformCode = fs.readFileSync(path.join(jsDir, 'pmjs-rpgmaker/platform.js'), 'utf8');
   vm.runInContext(platformCode, context);
 
   assert.equal(context.Scene_Map.prototype._pmjsTransferPatched, undefined);

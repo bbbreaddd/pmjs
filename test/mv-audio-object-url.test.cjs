@@ -9,6 +9,8 @@ const path = require('node:path');
 const objectUrlSource = fs.readFileSync(
   path.resolve(__dirname, '../js/pmjs-web/object-urls.js'), 'utf8');
 const audioSource = fs.readFileSync(
+  path.resolve(__dirname, '../js/pmjs-rpgmaker/native-audio.js'), 'utf8');
+const mvAudioSource = fs.readFileSync(
   path.resolve(__dirname, '../js/pmjs-mv/audio.js'), 'utf8');
 const mainLoopSource = fs.readFileSync(
   path.resolve(__dirname, '../js/pmjs-rpgmaker/main-loop.js'), 'utf8');
@@ -45,6 +47,7 @@ function contextFor(decrypter, XMLHttpRequest) {
   vm.createContext(context);
   vm.runInContext(objectUrlSource, context);
   vm.runInContext(audioSource, context);
+  vm.runInContext(mvAudioSource, context);
   context.loadedBytes = loadedBytes;
   context.released = released;
   return context;
@@ -54,8 +57,13 @@ function settle() {
   return new Promise(resolve => setImmediate(resolve));
 }
 
-test('NativeAudioBuffer consumes a PMJS object URL and queues early playback', async () => {
+test('MV WebAudio consumes a PMJS object URL and queues early playback', async () => {
   const context = contextFor({ hasEncryptedAudio: false });
+  const starts = [];
+  context.NativeHost.media.playAudio = (handle, loop, offset) => {
+    starts.push([handle, loop, offset]);
+    return true;
+  };
   const url = context.URL.createObjectURL(new Blob([Uint8Array.from([1, 2, 3])]));
   const audio = new context.WebAudio(url);
   audio.play(true, 0.25);
@@ -64,12 +72,12 @@ test('NativeAudioBuffer consumes a PMJS object URL and queues early playback', a
   assert.equal(context.loadedBytes.length, 1);
   assert.deepEqual(Array.from(context.loadedBytes[0]), [1, 2, 3]);
   assert.equal(audio.isReady(), true);
-  assert.equal(audio._wasPlaying, true);
+  assert.deepEqual(starts, [[1, true, 0.25]]);
   context.URL.revokeObjectURL(url);
   assert.equal(audio.isReady(), true);
 });
 
-test('NativeAudioBuffer delegates encrypted audio to the MV Decrypter', async () => {
+test('MV WebAudio delegates encrypted audio to the MV Decrypter', async () => {
   let requestedPath = '';
   let objectUrlsCreated = 0;
   function Request() {
@@ -105,18 +113,19 @@ test('clearing an in-flight object URL load skips native decoding', async () => 
   await settle();
   assert.equal(context.loadedBytes.length, 0, 'cancelled bytes must not enter native decoding');
   assert.deepEqual(context.released, []);
-  assert.equal(audio._handle, 0);
   assert.equal(audio.isReady(), false);
 });
 
 test('a stop listener can restart audio without losing completion polling', () => {
   const context = contextFor({ hasEncryptedAudio: false });
   let playing = false;
+  let nextHandle = 100;
+  context.NativeHost.media.loadAudio = () => ({ handle: nextHandle++, duration: 1 });
   context.NativeHost.media.playAudio = () => { playing = true; return true; };
   context.NativeHost.media.audioIsPlaying = () => playing;
   vm.runInContext(mainLoopSource, context);
-  const audio = new context.WebAudio('');
-  audio._handle = 1;
+  const tracked = () => context.PMJS.rpgmaker.audio.update();
+  const audio = new context.WebAudio('audio/se/restart.ogg');
   let completions = 0;
   audio.addStopListener(() => {
     completions++;
@@ -127,12 +136,12 @@ test('a stop listener can restart audio without losing completion polling', () =
   playing = false;
   context.pmjsRunRpgMakerTick(1);
   assert.equal(playing, true);
-  assert.equal(audio._wasPlaying, true);
-  assert.equal(context.nativeAudioBuffers.includes(audio), true);
+  assert.equal(audio.isPlaying(), true);
+  assert.equal(tracked(), 1);
   playing = false;
   context.pmjsRunRpgMakerTick(2);
   assert.equal(completions, 2);
-  assert.equal(context.nativeAudioBuffers.includes(audio), false);
+  assert.equal(tracked(), 0);
 });
 
 test('fade-out cancels autoplay while an object URL is loading', async () => {
@@ -182,4 +191,64 @@ test('stop before load drains listeners and cancels later playback', async () =>
   audio.play(false, 0);
   audio.stop();
   assert.equal(stops, 1, 'cancelled listener must not fire during later playback');
+});
+
+test('MV play-before-load keeps native playback truth until loaded', async () => {
+  const context = contextFor({ hasEncryptedAudio: false });
+  const url = context.URL.createObjectURL(new Blob([Uint8Array.from([1])]));
+  const audio = new context.WebAudio(url);
+  audio.play(false, 0);
+  assert.equal(audio.isPlaying(), false);
+  await settle();
+  assert.equal(audio.isPlaying(), false);
+  assert.equal(audio.isReady(), true);
+});
+
+test('MV master volume mirrors through the engine-visible field', () => {
+  const context = contextFor({ hasEncryptedAudio: false });
+  let hosted = null;
+  context.NativeHost.media.setMasterVolume = (value) => { hosted = value; };
+  context.WebAudio._masterVolume = 0.5;
+  assert.equal(context.WebAudio.masterVolume, 0.5);
+  assert.equal(hosted, 0.5);
+  context.WebAudio.setMasterVolume(
+    Math.min(context.WebAudio._masterVolume + 0.25, 1));
+  assert.equal(context.WebAudio._masterVolume, 0.75);
+});
+
+test('MV fadeOut hands the native voice a stop at fade end', () => {
+  const context = contextFor({ hasEncryptedAudio: false });
+  const calls = [];
+  context.NativeHost.media.loadAudio = () => ({ handle: 5, duration: 1 });
+  context.NativeHost.media.fadeAudio = (handle, from, to, duration, stop) => {
+    calls.push([handle, from, to, duration, stop]);
+  };
+  const audio = new context.WebAudio('audio/se/fade.ogg');
+  audio.fadeOut(1.5);
+  assert.deepEqual(calls, [[5, -1, 0, 1.5, true]]);
+});
+
+test('MV fadeTo reaches native audio without stopping', () => {
+  const context = contextFor({ hasEncryptedAudio: false });
+  const calls = [];
+  context.NativeHost.media.loadAudio = () => ({ handle: 5, duration: 1 });
+  context.NativeHost.media.fadeAudio = (handle, from, to, duration, stop) => {
+    calls.push([handle, from, to, duration, stop]);
+  };
+  const audio = new context.WebAudio('audio/se/fade.ogg');
+  audio._fadeTo(0.5, 2);
+  assert.deepEqual(calls, [[5, -1, 0.5, 2, false]]);
+});
+
+test('MV clear drains a stop listener before releasing', () => {
+  const context = contextFor({ hasEncryptedAudio: false });
+  context.NativeHost.media.loadAudio = () => ({ handle: 5, duration: 1 });
+  const audio = new context.WebAudio('audio/se/clear.ogg');
+  let stops = 0;
+  audio.addStopListener(() => { stops++; });
+  audio.clear();
+  assert.equal(stops, 1);
+  assert.equal(audio._stopListeners.length, 0);
+  assert.equal(audio._loadListeners.length, 0);
+  assert.deepEqual(context.released, [5]);
 });

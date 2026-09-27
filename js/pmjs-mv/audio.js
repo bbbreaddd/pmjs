@@ -1,342 +1,200 @@
-var nativeAudioBuffers = [];
-var nativeAudioFinalizer = typeof FinalizationRegistry === 'function'
-  ? new FinalizationRegistry(function(handle) {
-      try { NativeHost.media.releaseAudio(handle); } catch (_) {}
-    }) : null;
+var pmjsAudio = PMJS.rpgmaker.audio;
 
-function NativeAudioBuffer(url) {
+function MvNativeWebAudio(url) {
   this._url = String(url || '');
-  this._volume = 1;
-  this._pitch = 1;
-  this._pan = 0;
-  this._loop = false;
-  this._autoPlay = false;
-  this._pendingFadeIn = null;
-  this._offset = 0;
-  this._stopListeners = [];
+  this._voice = pmjsAudio.createVoice();
   this._loadListeners = [];
-  this._hasError = false;
-  this._wasPlaying = false;
-  this._handle = 0;
-  this._duration = 0;
-  this._loading = false;
-  this._loadGeneration = 0;
+  this._stopListeners = [];
   this._playGeneration = 0;
 
   this._gainNode = this;
   this.gain = this;
 
-  var encodedPath = this._url.split('?')[0].replace(/%(?![0-9a-f]{2})/gi, '%25');
-  var decoded = decodeURIComponent(encodedPath);
-  var clean = decoded.replace(/^file:\/\/\/game\//, '').replace(/^file:\/\//, '');
-  var path = typeof gamePath === 'function'
-    ? gamePath(clean)
-    : clean.replace(/^\.\//, '').replace(/^\/+/, '');
-  if (path === '.') path = '';
+  var path = pmjsAudio.resolvePath(this._url);
+  var self = this;
+  this._voice.onInstalled = function() {
+    var listeners = self._loadListeners.splice(0);
+    for (var index = 0; index < listeners.length; index++) listeners[index]();
+  };
 
-  if (NativeHost.media && typeof globalThis.pmjsIsObjectURL === 'function' &&
-      globalThis.pmjsIsObjectURL(this._url)) {
-    this._loadObjectUrl(this._url);
+  if (NativeHost.media && pmjsAudio.isObjectUrl(this._url)) {
+    this._voice.loadObjectUrl(this._url);
   } else if (NativeHost.media && path && typeof Decrypter !== 'undefined' &&
       Decrypter.hasEncryptedAudio) {
-    this._loadEncrypted(path);
+    this._voice.fetchEncrypted(Decrypter.extToEncryptExt(path), function(bytes) {
+      return Decrypter.decryptArrayBuffer(bytes);
+    });
   } else if (NativeHost.media && path) {
-    this._loadPath(path);
+    this._voice.loadPath(path);
   }
 }
 
-NativeAudioBuffer.prototype._install = function(loaded, generation) {
-  if (generation !== this._loadGeneration) {
-    NativeHost.media.releaseAudio(loaded.handle);
-    return;
-  }
-  this._handle = loaded.handle;
-  this._duration = loaded.duration;
-  this._loading = false;
-  if (nativeAudioFinalizer) nativeAudioFinalizer.register(this, this._handle, this);
-  if (this._autoPlay) {
-    this._updateParameters();
-    this._wasPlaying = NativeHost.media.playAudio(this._handle, this._loop, this._offset);
-    if (this._pendingFadeIn !== null) {
-      NativeHost.media.fadeAudio(this._handle, 0, 1, this._pendingFadeIn, false);
-    }
-  }
-  this._pendingFadeIn = null;
-  var listeners = this._loadListeners.splice(0);
-  for (var index = 0; index < listeners.length; index++) listeners[index]();
-};
-
-NativeAudioBuffer.prototype._failLoad = function(source, error, generation) {
-  if (generation !== undefined && generation !== this._loadGeneration) return;
-  this._loading = false;
-  this._hasError = true;
-  console.error('[pmjs-media] audio load failed source=' + source +
-    ' error=' + (error && error.message || error));
-};
-
-NativeAudioBuffer.prototype._loadPath = function(path) {
-  var generation = ++this._loadGeneration;
-  try { this._install(NativeHost.media.loadAudio(path), generation); }
-  catch (error) { this._failLoad(path, error, generation); }
-};
-
-NativeAudioBuffer.prototype._loadBytes = function(buffer, generation) {
-  if (generation === undefined) generation = ++this._loadGeneration;
-  if (generation !== this._loadGeneration) return;
-  try { this._install(NativeHost.media.loadAudioBytes(buffer), generation); }
-  catch (error) { this._failLoad('audio bytes', error, generation); }
-};
-
-NativeAudioBuffer.prototype._loadObjectUrl = function(url) {
-  var generation = ++this._loadGeneration;
-  this._loading = true;
-  var blob = typeof globalThis.pmjsResolveObjectURL === 'function'
-    ? globalThis.pmjsResolveObjectURL(url) : null;
-  if (!blob) { this._failLoad(url, new Error('object URL is unavailable'), generation); return; }
-  blob.arrayBuffer().then(function(buffer) {
-    if (generation !== this._loadGeneration) return;
-    this._loadBytes(buffer, generation);
-  }.bind(this)).catch(function(error) {
-    this._failLoad(url, error, generation);
-  }.bind(this));
-};
-
-NativeAudioBuffer.prototype._loadEncrypted = function(path) {
-  var generation = ++this._loadGeneration;
-  this._loading = true;
-  var encryptedPath = Decrypter.extToEncryptExt(path);
-  var request = new XMLHttpRequest();
-  request.open('GET', encryptedPath);
-  request.responseType = 'arraybuffer';
-  request.onload = function() {
-    try {
-      if (request.status >= 400) throw new Error('HTTP status ' + request.status);
-      var bytes = Decrypter.decryptArrayBuffer(request.response);
-      if (generation !== this._loadGeneration) return;
-      this._loadBytes(bytes, generation);
-    } catch (error) {
-      this._failLoad(encryptedPath, error, generation);
-    }
-  }.bind(this);
-  request.onerror = function() {
-    this._failLoad(encryptedPath, new Error('request failed'), generation);
-  }.bind(this);
-  request.send();
-};
-
-Object.defineProperties(NativeAudioBuffer.prototype, {
+Object.defineProperties(MvNativeWebAudio.prototype, {
   url: {
     get: function() { return this._url; },
     configurable: true
   },
   volume: {
-    get: function() { return this._volume; },
+    get: function() { return this._voice.volume; },
     set: function(value) {
-      this._volume = Number(value);
-      this._updateParameters();
+      this._voice.volume = Number(value);
+      this._voice.applyParameters();
     },
     configurable: true
   },
   pitch: {
-    get: function() { return this._pitch; },
+    get: function() { return this._voice.pitch; },
     set: function(value) {
-      this._pitch = Number(value);
-      this._updateParameters();
+      this._voice.pitch = Number(value);
+      this._voice.applyParameters();
     },
     configurable: true
   },
   pan: {
-    get: function() { return this._pan; },
+    get: function() { return this._voice.pan; },
     set: function(value) {
-      this._pan = Number(value);
-      this._updateParameters();
+      this._voice.pan = Number(value);
+      this._voice.applyParameters();
     },
     configurable: true
   },
   value: {
-    get: function() { return this._volume; },
+    get: function() { return this._voice.volume; },
     set: function(value) {
-      this._volume = Number(value);
-      this._updateParameters();
+      this._voice.volume = Number(value);
+      this._voice.applyParameters();
     },
+    configurable: true
+  },
+  _autoPlay: {
+    get: function() { return this._voice.autoPlay; },
+    set: function(value) { this._voice.autoPlay = value; },
     configurable: true
   }
 });
 
-NativeAudioBuffer.prototype.setValueAtTime = function(value) {
+MvNativeWebAudio.prototype.setValueAtTime = function(value) {
   this.volume = value;
 };
 
-NativeAudioBuffer.prototype.linearRampToValueAtTime = function(value, endTime) {
-  var currentTime = (WebAudio._context && WebAudio._context.currentTime) || 0;
-  var duration = Math.max(0, Number(endTime - currentTime) || 0);
-  this._fadeTo(value, duration);
+MvNativeWebAudio.prototype.linearRampToValueAtTime = function(value, endTime) {
+  var duration = Math.max(0, Number(endTime - pmjsAudio.now()) || 0);
+  this._voice.fadeTo(value, duration);
 };
 
-NativeAudioBuffer.prototype._updateParameters = function() {
-  if (this._handle && NativeHost.media) {
-    NativeHost.media.setAudioParameters(
-      this._handle, this._volume, this._pitch, this._pan);
-  }
+MvNativeWebAudio.prototype.isReady = function() {
+  return !this._voice.loading && !this._voice.error &&
+    (!!this._voice.handle || !NativeHost.media);
 };
 
-NativeAudioBuffer.prototype.isReady = function() {
-  return !this._loading && !this._hasError && (!!this._handle || !NativeHost.media);
+MvNativeWebAudio.prototype.isError = function() {
+  return this._voice.error;
 };
 
-NativeAudioBuffer.prototype.isError = function() {
-  return this._hasError;
+MvNativeWebAudio.prototype.isPlaying = function() {
+  return this._voice.nativePlaying();
 };
 
-NativeAudioBuffer.prototype.isPlaying = function() {
-  return !!this._handle && !!NativeHost.media && NativeHost.media.audioIsPlaying(this._handle);
+MvNativeWebAudio.prototype.bufferSize = function() {
+  return this._voice.handle ? MvNativeWebAudio._cacheSize : 0;
 };
 
-NativeAudioBuffer.prototype.bufferSize = function() {
-  return this._handle ? NativeAudioBuffer._cacheSize : 0;
-};
-
-NativeAudioBuffer.prototype.play = function(loop, offset) {
+MvNativeWebAudio.prototype.play = function(loop, offset) {
   ++this._playGeneration;
-  this._loop = !!loop;
-  this._autoPlay = true;
-  this._offset = Math.max(0, Number(offset) || 0);
-  this._updateParameters();
-  this._wasPlaying = !!this._handle && !!NativeHost.media &&
-    NativeHost.media.playAudio(this._handle, this._loop, this._offset);
-  if (nativeAudioBuffers.indexOf(this) < 0) nativeAudioBuffers.push(this);
+  this._voice.play(loop, offset);
+  pmjsAudio.track(this);
 };
 
-NativeAudioBuffer.prototype.stop = function() {
-  if (this._handle && NativeHost.media) NativeHost.media.stopAudio(this._handle);
-  this._wasPlaying = false;
-  this._autoPlay = false;
-  this._pendingFadeIn = null;
-  this._notifyStop();
+MvNativeWebAudio.prototype.stop = function() {
+  this._voice.stop();
+  this._drainStop();
 };
 
-NativeAudioBuffer.prototype.clear = function() {
-  this._loadGeneration++;
-  this._loading = false;
+MvNativeWebAudio.prototype.clear = function() {
   this.stop();
+  this._voice.release();
   this._loadListeners.length = 0;
   this._stopListeners.length = 0;
-  this._autoPlay = false;
-  this._wasPlaying = false;
-  if (this._handle) {
-    var handle = this._handle;
-    this._handle = 0;
-    if (nativeAudioFinalizer) {
-      try { nativeAudioFinalizer.unregister(this); } catch (_) {}
-    }
-    if (NativeHost.media) {
-      try { NativeHost.media.releaseAudio(handle); } catch (_) {}
-    }
-  }
 };
 
-NativeAudioBuffer.prototype.seek = function() {
-  return (this._handle && NativeHost.media) ? NativeHost.media.audioPosition(this._handle) : 0;
+MvNativeWebAudio.prototype._fadeTo = function(volume, duration) {
+  this._voice.fadeTo(volume, duration);
 };
 
-NativeAudioBuffer.prototype.fadeIn = function(duration) {
-  var time = Math.max(0, Number(duration) || 0);
-  if (this._handle && NativeHost.media) {
-    NativeHost.media.fadeAudio(this._handle, 0, 1, time, false);
-  } else if (this._autoPlay) {
-    this._pendingFadeIn = time;
-  }
+MvNativeWebAudio.prototype.seek = function() {
+  return this._voice.position();
 };
 
-NativeAudioBuffer.prototype.fadeOut = function(duration) {
-  this._autoPlay = false;
-  this._pendingFadeIn = null;
-  if (this._handle && NativeHost.media) {
-    NativeHost.media.fadeAudio(this._handle, -1, 0,
-      Math.max(0, Number(duration) || 0), true);
-  }
+MvNativeWebAudio.prototype.fadeIn = function(duration) {
+  this._voice.fadeIn(duration);
 };
 
-NativeAudioBuffer.prototype._fadeTo = function(vol, duration) {
-  var target = Math.max(0, Math.min(1, Number(vol) || 0));
-  var time = Math.max(0, Number(duration) || 0);
-  if (this._handle && NativeHost.media) {
-    NativeHost.media.fadeAudio(this._handle, -1, target, time, false);
-  }
+MvNativeWebAudio.prototype.fadeOut = function(duration) {
+  this._voice.cancelPending();
+  this._voice.fadeTo(0, duration, true);
 };
 
-NativeAudioBuffer.prototype.addLoadListener = function(listener) {
+MvNativeWebAudio.prototype.addLoadListener = function(listener) {
   if (typeof listener !== 'function') return;
   if (this.isReady()) listener();
-  else if (!this._hasError) this._loadListeners.push(listener);
+  else if (!this._voice.error) this._loadListeners.push(listener);
 };
 
-NativeAudioBuffer.prototype.addStopListener = function(listener) {
+MvNativeWebAudio.prototype.addStopListener = function(listener) {
   if (typeof listener === 'function') this._stopListeners.push(listener);
 };
 
-NativeAudioBuffer.prototype._notifyStop = function() {
+MvNativeWebAudio.prototype._drainStop = function() {
   var listeners = this._stopListeners.splice(0);
   for (var index = 0; index < listeners.length; index++) listeners[index]();
 };
 
-NativeAudioBuffer.prototype._poll = function() {
-  if (this._loading) return true;
-  var playing = this.isPlaying();
-  if (this._wasPlaying && !playing) {
-    this._wasPlaying = false;
-    this._notifyStop();
-    playing = this.isPlaying();
+MvNativeWebAudio.prototype._poll = function() {
+  var status = this._voice.pollNative();
+  if (status === 'loading') return true;
+  if (status === 'stopped') {
+    this._drainStop();
+    return this._voice.nativePlaying();
   }
-  this._wasPlaying = playing;
-  return playing;
+  return status === 'playing';
 };
 
-var audioContextStartTime = Date.now();
-NativeAudioBuffer._context = {
-  state: 'running',
-  get currentTime() {
-    return (Date.now() - audioContextStartTime) / 1000;
-  },
-  resume: function() { return Promise.resolve(); },
-  suspend: function() { return Promise.resolve(); },
-  destination: {}
-};
-NativeAudioBuffer._masterGainNode = {
+MvNativeWebAudio._context = pmjsAudio.clock;
+MvNativeWebAudio._masterGainNode = {
   gain: {
     setValueAtTime: function() {},
     linearRampToValueAtTime: function() {}
   }
 };
-NativeAudioBuffer._masterVolume = 1;
-NativeAudioBuffer._cacheSize = 48000 * 2 * 4;
-NativeAudioBuffer._initialized = true;
-NativeAudioBuffer._unlocked = true;
-NativeAudioBuffer.initialize = function() { return true; };
-NativeAudioBuffer.canPlayOgg = function() { return true; };
-NativeAudioBuffer.canPlayM4a = function() { return true; };
-NativeAudioBuffer.setMasterVolume = function(value) {
-  var vol = Math.max(0, Math.min(1, Number(value) || 0));
-  NativeAudioBuffer._masterVolume = vol;
-  if (NativeHost.media && typeof NativeHost.media.setMasterVolume === 'function') {
-    NativeHost.media.setMasterVolume(vol);
-  }
-};
-Object.defineProperty(NativeAudioBuffer, 'masterVolume', {
-  get: function() { return NativeAudioBuffer._masterVolume; },
-  set: function(value) { NativeAudioBuffer.setMasterVolume(value); },
+MvNativeWebAudio._cacheSize = 48000 * 2 * 4;
+Object.defineProperty(MvNativeWebAudio, 'masterVolume', {
+  get: function() { return pmjsAudio.masterVolume; },
+  set: function(value) { pmjsAudio.setMasterVolume(value); },
   configurable: true
 });
-NativeAudioBuffer._onTouchStart = function() {};
-NativeAudioBuffer._onVisibilityChange = function() {};
-NativeAudioBuffer._fadeIn = function() {};
-NativeAudioBuffer._fadeOut = function() {};
+Object.defineProperty(MvNativeWebAudio, '_masterVolume', {
+  get: function() { return pmjsAudio.masterVolume; },
+  set: function(value) { pmjsAudio.setMasterVolume(value); },
+  configurable: true
+});
+MvNativeWebAudio._initialized = true;
+MvNativeWebAudio._unlocked = true;
+MvNativeWebAudio.initialize = function() { return true; };
+MvNativeWebAudio.canPlayOgg = function() { return true; };
+MvNativeWebAudio.canPlayM4a = function() { return true; };
+MvNativeWebAudio.setMasterVolume = function(value) {
+  pmjsAudio.setMasterVolume(value);
+};
+MvNativeWebAudio._onTouchStart = function() {};
+MvNativeWebAudio._onVisibilityChange = function() {};
+MvNativeWebAudio._fadeIn = function() {};
+MvNativeWebAudio._fadeOut = function() {};
 
 if (NativeHost.media) {
-  globalThis.WebAudio = NativeAudioBuffer;
+  globalThis.WebAudio = MvNativeWebAudio;
   AudioManager.createBuffer = function(folder, name) {
     var url = this._path + folder + '/' + encodeURIComponent(name) + this.audioFileExt();
-    return new NativeAudioBuffer(url);
+    return new MvNativeWebAudio(url);
   };
   AudioManager.shouldUseHtml5Audio = function() { return false; };
   AudioManager.checkWebAudioError = function(buffer) {
@@ -347,9 +205,9 @@ if (NativeHost.media) {
   SceneManager.initAudio = function() {};
   AudioManager.isReady = function() { return true; };
 } else if (!globalThis.AudioContext) {
-  globalThis.WebAudio = NativeAudioBuffer;
+  globalThis.WebAudio = MvNativeWebAudio;
   SceneManager.initAudio = function() {};
-  WebAudio.initialize = function() { return true; };
+  MvNativeWebAudio.initialize = function() { return true; };
   AudioManager.isReady = function() { return true; };
 } else {
   WebAudio._onTouchStart = function() {

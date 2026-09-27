@@ -4,17 +4,9 @@
   var reportedScene = null;
 
   function updateNativeServices() {
-    if (Array.isArray(globalThis.nativeAudioBuffers)) {
-      for (var audioIndex = nativeAudioBuffers.length - 1;
-          audioIndex >= 0; audioIndex--) {
-        var audio = nativeAudioBuffers[audioIndex];
-        if (!audio) continue;
-        var audioGeneration = audio._playGeneration;
-        if (!audio._poll() && audio._playGeneration === audioGeneration) {
-          var currentAudioIndex = nativeAudioBuffers.indexOf(audio);
-          if (currentAudioIndex >= 0) nativeAudioBuffers.splice(currentAudioIndex, 1);
-        }
-      }
+    if (globalThis.PMJS && PMJS.rpgmaker && PMJS.rpgmaker.audio &&
+        typeof PMJS.rpgmaker.audio.update === 'function') {
+      PMJS.rpgmaker.audio.update();
     }
     if (Array.isArray(globalThis.nativeVideos)) {
       for (var videoIndex = nativeVideos.length - 1;

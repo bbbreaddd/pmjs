@@ -139,7 +139,7 @@ test('unknown port optimization IDs fail the run at startup', async () => {
     'js/pmjs-rpgmaker/lifecycle.js',
     'js/pmjs-rpgmaker/plugins.js',
       'js/pmjs-rpgmaker/bootstrap.js',
-    'js/pmjs-mv/setup.js',
+      'js/pmjs-core/intl-warmup.js',
     'js/pmjs-mv/plugin-loader.js',
   ];
   const bootstrap = path.join(tempDir, 'bootstrap.js');

@@ -9,7 +9,7 @@ function inspectPluginCompatibility() {
     Tilemap: ['_compareChildOrder', '_sortChildren', 'update'],
     Sprite_Character: ['update', 'updatePosition', 'updateBitmap', 'updateFrame'],
     Window_Base: ['update', 'convertEscapeCharacters', 'drawTextEx'],
-    SceneManager: ['update', 'renderScene', 'isCurrentSceneStarted', 'isFocus']
+    SceneManager: ['update', 'renderScene', 'isCurrentSceneStarted']
   };
   var expectedProperties = { Bitmap: ['paintOpacity'] };
   Object.keys(expected).forEach(function(className) {

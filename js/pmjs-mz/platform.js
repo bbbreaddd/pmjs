@@ -21,4 +21,10 @@
   Utils.canPlayWebm = function() {
     return !!NativeHost.media;
   };
+
+  if (typeof StorageManager !== 'undefined') {
+    StorageManager.isLocalMode = function() {
+      return true;
+    };
+  }
 })();

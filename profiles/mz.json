@@ -1,6 +1,7 @@
 {
   "modules": [
     "js/pmjs-core/config.js",
+    "js/pmjs-core/intl-warmup.js",
     "js/pmjs-core/optimizations.js",
     "js/pmjs-core/compatibility.js",
     "js/pmjs-core/methods.js",
@@ -29,8 +30,11 @@
     "js/pmjs-pixi5/renderer.js",
     "js/pmjs-mz/engine.js",
     "js/pmjs-rpgmaker/input.js",
+    "js/pmjs-rpgmaker/platform.js",
     "js/pmjs-mz/platform.js",
     "js/pmjs-mz/fonts.js",
+    "js/pmjs-rpgmaker/native-audio.js",
+    "js/pmjs-mz/audio.js",
     "js/pmjs-mz/plugin-loader.js",
     "js/pmjs-rpgmaker/main-loop.js",
     "js/pmjs-mz/main-loop.js",
