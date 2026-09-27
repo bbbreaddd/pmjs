@@ -1,5 +1,8 @@
 #pragma once
 
+#include <stdexcept>
+#include <string>
+
 namespace pmjs::renderer_shaders {
 constexpr const char* primitiveSurfaceFragmentSource = R"(
   #version 300 es
@@ -828,6 +831,28 @@ constexpr const char* fragmentSource = R"(
     if (!premultipliedInput) outputColor.rgb *= outputColor.a;
   }
 )";
+
+inline std::string pixiFragmentSourceWithPrecision(const char* base,
+                                                  const std::string& precision) {
+  if (precision != "highp" && precision != "mediump" && precision != "lowp") {
+    throw std::runtime_error(
+      "filter precision must be highp, mediump, or lowp");
+  }
+  static constexpr const char* marker = "precision mediump float;";
+  std::string source(base);
+  const std::string::size_type at = source.find(marker);
+  if (at == std::string::npos) {
+    throw std::runtime_error(
+      "fragment source has no default precision declaration");
+  }
+  source.replace(at, std::char_traits<char>::length(marker),
+                 std::string("precision ") + precision + " float;");
+  return source;
+}
+
+inline std::string filterFragmentSourceWithPrecision(const std::string& precision) {
+  return pixiFragmentSourceWithPrecision(fragmentSource, precision);
+}
 constexpr const char* tileVertexSource = R"(
   #version 300 es
   layout(location = 0) in vec2 localPosition;

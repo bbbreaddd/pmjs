@@ -32,7 +32,13 @@ GLuint compileShader(GLenum type, const char* source) {
 
 GLuint linkProgram(const char* vertexSource, const char* fragmentSource) {
   const GLuint vertex = compileShader(GL_VERTEX_SHADER, vertexSource);
-  const GLuint fragment = compileShader(GL_FRAGMENT_SHADER, fragmentSource);
+  GLuint fragment = 0;
+  try {
+    fragment = compileShader(GL_FRAGMENT_SHADER, fragmentSource);
+  } catch (...) {
+    glDeleteShader(vertex);
+    throw;
+  }
   const GLuint program = glCreateProgram();
   glAttachShader(program, vertex);
   glAttachShader(program, fragment);
@@ -70,8 +76,7 @@ Renderer::Renderer(int width, int height, ImageStore& images)
     throw std::runtime_error("cannot query GL_MAX_TEXTURE_SIZE");
   }
   using namespace renderer_shaders;
-  program_ = linkProgram(vertexSource, fragmentSource);
-  simpleProgram_ = linkProgram(vertexSource, simpleFragmentSource);
+  createPixiPrograms(pixiFragmentPrecision_);
   generatedTextureProgram_ = linkProgram(vertexSource,
                                           generatedTextureFragmentSource);
   presentationProgram_ = linkProgram(presentationVertexSource,
@@ -125,54 +130,6 @@ Renderer::Renderer(int width, int height, ImageStore& images)
     glGetUniformLocation(spriteEffectProgram_, "colorMatrix");
   spriteEffectMatrixAlphaUniform_ =
     glGetUniformLocation(spriteEffectProgram_, "colorMatrixAlpha");
-  textureSizeUniform_ = glGetUniformLocation(program_, "textureSize");
-  blurUniform_ = glGetUniformLocation(program_, "blurRadius");
-  blurDirectionUniform_ = glGetUniformLocation(program_, "blurDirection");
-  displacementEnabledUniform_ =
-    glGetUniformLocation(program_, "displacementEnabled");
-  displacementImageUniform_ =
-    glGetUniformLocation(program_, "displacementImage");
-  displacementBoundsUniform_ =
-    glGetUniformLocation(program_, "displacementBounds");
-  displacementScaleUniform_ =
-    glGetUniformLocation(program_, "displacementScale");
-  noiseGlitchEnabledUniform_ =
-    glGetUniformLocation(program_, "noiseGlitchEnabled");
-  noiseGlitchParametersUniform_ =
-    glGetUniformLocation(program_, "noiseGlitchParameters");
-  pixiFilterKindUniform_ = glGetUniformLocation(program_, "pixiFilterKind");
-  pixiFilterParametersUniform_ = glGetUniformLocation(program_, "pixiFilterParameters");
-  bloomImageUniform_ = glGetUniformLocation(program_, "bloomImage");
-  premultipliedInputUniform_ =
-    glGetUniformLocation(program_, "premultipliedInput");
-  maskEnabledUniform_ = glGetUniformLocation(program_, "maskEnabled");
-  maskImageUniform_ = glGetUniformLocation(program_, "maskImage");
-  maskTransformUniform_ = glGetUniformLocation(program_, "maskTransform");
-  maskFrameUniform_ = glGetUniformLocation(program_, "maskFrame");
-  maskTextureSizeUniform_ = glGetUniformLocation(program_, "maskTextureSize");
-  maskScreenHeightUniform_ = glGetUniformLocation(program_, "screenHeight");
-  maskAlphaUniform_ = glGetUniformLocation(program_, "maskAlpha");
-  maskUsesRedUniform_ = glGetUniformLocation(program_, "maskUsesRed");
-  maskRotationUniform_ = glGetUniformLocation(program_, "maskRotation");
-  maskLocalSizeUniform_ = glGetUniformLocation(program_, "maskLocalSize");
-  colorMatrixEnabledUniform_ = glGetUniformLocation(program_, "colorMatrixEnabled");
-  colorMatrixUniform_ = glGetUniformLocation(program_, "colorMatrix");
-  colorMatrixAlphaUniform_ = glGetUniformLocation(program_, "colorMatrixAlpha");
-  spriteColorEnabledUniform_ = glGetUniformLocation(program_, "spriteColorEnabled");
-  spriteColorToneUniform_ = glGetUniformLocation(program_, "spriteColorTone");
-  spriteBlendColorUniform_ = glGetUniformLocation(program_, "spriteBlendColor");
-  tileProgram_ = linkProgram(tileVertexSource, tileFragmentSource);
-  tileWorldUniform_ = glGetUniformLocation(tileProgram_, "world");
-  tileScreenUniform_ = glGetUniformLocation(tileProgram_, "screenSize");
-  tileAnimationUniform_ = glGetUniformLocation(tileProgram_, "animationOffset");
-  tileTextureSizeUniform_ = glGetUniformLocation(tileProgram_, "textureSize");
-  tileColorUniform_ = glGetUniformLocation(tileProgram_, "color");
-  tileMaskEnabledUniform_ = glGetUniformLocation(tileProgram_, "maskEnabled");
-  tileMaskImageUniform_ = glGetUniformLocation(tileProgram_, "maskImage");
-  tileMaskTransformUniform_ = glGetUniformLocation(tileProgram_, "maskTransform");
-  tileMaskFrameUniform_ = glGetUniformLocation(tileProgram_, "maskFrame");
-  tileMaskTextureSizeUniform_ = glGetUniformLocation(tileProgram_, "maskTextureSize");
-  tileMaskScreenHeightUniform_ = glGetUniformLocation(tileProgram_, "screenHeight");
   primitiveSurfaceProgram_ = linkProgram(vertexSource,
                                           primitiveSurfaceFragmentSource);
   primitiveSurfaceSizeUniform_ =
@@ -258,6 +215,105 @@ Renderer::Renderer(int width, int height, ImageStore& images)
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+}
+
+void Renderer::queryFilterProgramUniforms() {
+  textureSizeUniform_ = glGetUniformLocation(program_, "textureSize");
+  blurUniform_ = glGetUniformLocation(program_, "blurRadius");
+  blurDirectionUniform_ = glGetUniformLocation(program_, "blurDirection");
+  displacementEnabledUniform_ =
+    glGetUniformLocation(program_, "displacementEnabled");
+  displacementImageUniform_ =
+    glGetUniformLocation(program_, "displacementImage");
+  displacementBoundsUniform_ =
+    glGetUniformLocation(program_, "displacementBounds");
+  displacementScaleUniform_ =
+    glGetUniformLocation(program_, "displacementScale");
+  noiseGlitchEnabledUniform_ =
+    glGetUniformLocation(program_, "noiseGlitchEnabled");
+  noiseGlitchParametersUniform_ =
+    glGetUniformLocation(program_, "noiseGlitchParameters");
+  pixiFilterKindUniform_ = glGetUniformLocation(program_, "pixiFilterKind");
+  pixiFilterParametersUniform_ = glGetUniformLocation(program_, "pixiFilterParameters");
+  bloomImageUniform_ = glGetUniformLocation(program_, "bloomImage");
+  premultipliedInputUniform_ =
+    glGetUniformLocation(program_, "premultipliedInput");
+  maskEnabledUniform_ = glGetUniformLocation(program_, "maskEnabled");
+  maskImageUniform_ = glGetUniformLocation(program_, "maskImage");
+  maskTransformUniform_ = glGetUniformLocation(program_, "maskTransform");
+  maskFrameUniform_ = glGetUniformLocation(program_, "maskFrame");
+  maskTextureSizeUniform_ = glGetUniformLocation(program_, "maskTextureSize");
+  maskScreenHeightUniform_ = glGetUniformLocation(program_, "screenHeight");
+  maskAlphaUniform_ = glGetUniformLocation(program_, "maskAlpha");
+  maskUsesRedUniform_ = glGetUniformLocation(program_, "maskUsesRed");
+  maskRotationUniform_ = glGetUniformLocation(program_, "maskRotation");
+  maskLocalSizeUniform_ = glGetUniformLocation(program_, "maskLocalSize");
+  colorMatrixEnabledUniform_ = glGetUniformLocation(program_, "colorMatrixEnabled");
+  colorMatrixUniform_ = glGetUniformLocation(program_, "colorMatrix");
+  colorMatrixAlphaUniform_ = glGetUniformLocation(program_, "colorMatrixAlpha");
+  spriteColorEnabledUniform_ = glGetUniformLocation(program_, "spriteColorEnabled");
+  spriteColorToneUniform_ = glGetUniformLocation(program_, "spriteColorTone");
+  spriteBlendColorUniform_ = glGetUniformLocation(program_, "spriteBlendColor");
+}
+
+void Renderer::queryTileProgramUniforms() {
+  tileWorldUniform_ = glGetUniformLocation(tileProgram_, "world");
+  tileScreenUniform_ = glGetUniformLocation(tileProgram_, "screenSize");
+  tileAnimationUniform_ = glGetUniformLocation(tileProgram_, "animationOffset");
+  tileTextureSizeUniform_ = glGetUniformLocation(tileProgram_, "textureSize");
+  tileColorUniform_ = glGetUniformLocation(tileProgram_, "color");
+  tileMaskEnabledUniform_ = glGetUniformLocation(tileProgram_, "maskEnabled");
+  tileMaskImageUniform_ = glGetUniformLocation(tileProgram_, "maskImage");
+  tileMaskTransformUniform_ = glGetUniformLocation(tileProgram_, "maskTransform");
+  tileMaskFrameUniform_ = glGetUniformLocation(tileProgram_, "maskFrame");
+  tileMaskTextureSizeUniform_ = glGetUniformLocation(tileProgram_, "maskTextureSize");
+  tileMaskScreenHeightUniform_ = glGetUniformLocation(tileProgram_, "screenHeight");
+}
+
+void Renderer::createPixiPrograms(const std::string& precision) {
+  using namespace renderer_shaders;
+  const auto linkPixiProgram = [&precision](const char* vertex, const char* fragment) {
+    const auto source = pixiFragmentSourceWithPrecision(fragment, precision);
+    return linkProgram(vertex, source.c_str());
+  };
+  GLuint filter = 0;
+  GLuint simple = 0;
+  GLuint tile = 0;
+  try {
+    filter = linkPixiProgram(vertexSource, fragmentSource);
+    simple = linkPixiProgram(vertexSource, simpleFragmentSource);
+    tile = linkPixiProgram(tileVertexSource, tileFragmentSource);
+  } catch (...) {
+    if (filter) glDeleteProgram(filter);
+    if (simple) glDeleteProgram(simple);
+    if (tile) glDeleteProgram(tile);
+    throw;
+  }
+  if (program_) glDeleteProgram(program_);
+  if (simpleProgram_) glDeleteProgram(simpleProgram_);
+  if (tileProgram_) glDeleteProgram(tileProgram_);
+  program_ = filter;
+  simpleProgram_ = simple;
+  tileProgram_ = tile;
+  queryFilterProgramUniforms();
+  queryTileProgramUniforms();
+}
+
+void Renderer::configurePixiFragmentPrecision(const std::string& precision) {
+  if (precision != "highp" && precision != "mediump" && precision != "lowp") {
+    throw std::invalid_argument("Pixi fragment precision requires highp, mediump, or lowp");
+  }
+  if (pixiPrecisionConfigured_) {
+    if (precision != pixiFragmentPrecision_) {
+      throw std::runtime_error("Pixi fragment precision is already configured");
+    }
+    return;
+  }
+  if (precision != pixiFragmentPrecision_) {
+    createPixiPrograms(precision);
+    pixiFragmentPrecision_ = precision;
+  }
+  pixiPrecisionConfigured_ = true;
 }
 
 Renderer::~Renderer() {

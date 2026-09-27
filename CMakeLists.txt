@@ -119,6 +119,7 @@ if(BUILD_TESTING)
 
   pmjs_add_cpp_test(pmjs-vfs-test native-vfs test/vfs.cpp src/vfs.cpp)
   pmjs_add_cpp_test(pmjs-checked-bounds-test native-checked-bounds test/checked-bounds.cpp)
+  pmjs_add_cpp_test(pmjs-filter-precision-test native-filter-precision test/filter-precision.cpp)
   pmjs_add_cpp_test(pmjs-media-mix-test native-audio-mix-unit test/media-mix.cpp)
   add_executable(pmjs-media-decoder-test test/media-decoder.cpp)
   target_include_directories(pmjs-media-decoder-test PRIVATE src)
@@ -169,6 +170,10 @@ if(BUILD_TESTING)
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-filter-bounds.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-filter-bounds-fullscreen PROPERTIES ENVIRONMENT
     "LIBGL_ALWAYS_SOFTWARE=1;PMJS_FILTER_BOUNDS=0")
+  add_test(NAME node-pixi-precision COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-pixi-precision.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
+  set_tests_properties(node-pixi-precision PROPERTIES ENVIRONMENT
+    "LIBGL_ALWAYS_SOFTWARE=1")
   function(pmjs_add_presentation_test name game window scale expect)
     add_test(NAME ${name} COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
       "${CMAKE_CURRENT_SOURCE_DIR}/test/node-presentation.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")

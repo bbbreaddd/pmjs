@@ -22,6 +22,17 @@ function isPmjsVideoTelemetryEnabled() {
   return pmjsVideoTelemetryEnabled;
 }
 
+function configureNativePixiFragmentPrecision() {
+  var authored = typeof PIXI !== 'undefined' && PIXI &&
+    PIXI.settings && PIXI.settings.PRECISION_FRAGMENT;
+  var precision = authored === 'highp' ? 'highp' :
+    authored === 'lowp' ? 'lowp' : 'mediump';
+  if (typeof NativeHost !== 'undefined' && NativeHost.render &&
+      typeof NativeHost.render.configurePixiFragmentPrecision === 'function') {
+    NativeHost.render.configurePixiFragmentPrecision(precision);
+  }
+}
+
 function createNativePixiRenderer(width, height, options) {
   if (width && typeof width === 'object') {
     options = width;
@@ -763,6 +774,7 @@ function createNativePixiRenderer(width, height, options) {
   renderer.extract.renderer = renderer;
   renderer.plugins = installNativeRendererPlugins(renderer);
   renderer.resize(width, height);
+  configureNativePixiFragmentPrecision();
   return renderer;
 }
 

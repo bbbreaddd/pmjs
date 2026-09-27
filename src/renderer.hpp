@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -151,6 +152,10 @@ class Renderer {
   Renderer& operator=(const Renderer&) = delete;
 
   void setClearColor(float red, float green, float blue, float alpha);
+  void configurePixiFragmentPrecision(const std::string& precision);
+  const std::string& pixiFragmentPrecision() const {
+    return pixiFragmentPrecision_;
+  }
   bool setPresentationLayers(float canvasOpacity, ImageHandle video,
                              float videoOpacity, ImageHandle upperCanvas,
                              float upperCanvasOpacity);
@@ -251,6 +256,9 @@ class Renderer {
       const RenderCommand* filterBegin,
       std::vector<std::array<int, 4>>* regions) const;
   void destroyTileLayer(std::uint32_t handle);
+  void queryFilterProgramUniforms();
+  void queryTileProgramUniforms();
+  void createPixiPrograms(const std::string& precision);
   static PrimitiveSurfaceHandle makePrimitiveSurfaceHandle(
       std::size_t index, std::uint16_t generation);
   PrimitiveSurfaceResource* lookupPrimitiveSurface(PrimitiveSurfaceHandle handle);
@@ -273,6 +281,9 @@ class Renderer {
   int queueWidth_;
   int queueHeight_;
   int maxTextureSize_ = 0;
+  std::string pixiFragmentPrecision_ = "mediump";
+  // Native rendering is shared across facades; the first Pixi renderer fixes precision.
+  bool pixiPrecisionConfigured_ = false;
   ImageStore& images_;
   std::array<float, 4> clearColor_{0.0F, 0.0F, 0.0F, 1.0F};
   bool sceneSubmittedThisFrame_ = false;

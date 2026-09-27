@@ -43,6 +43,17 @@ napi_value setClearColor(napi_env env, napi_callback_info info) try {
   napi_throw_type_error(env, nullptr, error.what()); return nullptr;
 }
 
+napi_value configurePixiFragmentPrecision(napi_env env, napi_callback_info info) try {
+  auto args = arguments(env, info, 1);
+  if (args.empty()) {
+    throw std::invalid_argument("configurePixiFragmentPrecision requires a precision");
+  }
+  host(env).renderer.configurePixiFragmentPrecision(asString(env, args[0]));
+  return undefined(env);
+} catch (const std::exception& error) {
+  napi_throw_type_error(env, nullptr, error.what()); return nullptr;
+}
+
 napi_value setPresentationLayers(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 5);
   if (args.size() != 5) {
@@ -410,6 +421,7 @@ napi_value presentationGeometry(napi_env env, napi_callback_info) try {
 void registerGraphicsBindings(napi_env env, napi_value exports) {
   napi_value render = moduleObject(env);
   method(env, render, "setClearColor", setClearColor);
+  method(env, render, "configurePixiFragmentPrecision", configurePixiFragmentPrecision);
   method(env, render, "graphicsInfo", graphicsInfo);
   method(env, render, "setPresentationLayers", setPresentationLayers);
   method(env, render, "setRenderTargetSize", setRenderTargetSize);
