@@ -332,8 +332,8 @@ test('one physical host tick executes ticker, audio, video, and scheduled MV upd
     Number: Number,
     TypeError: TypeError,
     Map: Map,
-    PMJS: { rpgmaker: { audio: { update: () => { audioPolls++; } } } },
-    nativeVideos: [{ _update: () => { videoUpdates++; return true; } }],
+    PMJS: { rpgmaker: { audio: { update: () => { audioPolls++; } } },
+      web: { video: { update: () => { videoUpdates++; } } } },
     SceneManager: {
       _stopped: false,
       ticker: { _pmjsHostDriven: true, started: false, update: () => { tickerUpdates++; } },

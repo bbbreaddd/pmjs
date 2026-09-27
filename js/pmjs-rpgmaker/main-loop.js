@@ -8,19 +8,8 @@
         typeof PMJS.rpgmaker.audio.update === 'function') {
       PMJS.rpgmaker.audio.update();
     }
-    if (Array.isArray(globalThis.nativeVideos)) {
-      for (var videoIndex = nativeVideos.length - 1;
-          videoIndex >= 0; videoIndex--) {
-        var video = nativeVideos[videoIndex];
-        if (!video) continue;
-        var videoPlayGeneration = video._playGeneration;
-        var videoLoadGeneration = video._loadGeneration;
-        if (!video._update() && video._playGeneration === videoPlayGeneration &&
-            video._loadGeneration === videoLoadGeneration) {
-          var currentVideoIndex = nativeVideos.indexOf(video);
-          if (currentVideoIndex >= 0) nativeVideos.splice(currentVideoIndex, 1);
-        }
-      }
+    if (globalThis.PMJS && PMJS.web && PMJS.web.video) {
+      PMJS.web.video.update();
     }
     if (globalThis.PMJS && PMJS.tasks) {
       PMJS.tasks.drain();

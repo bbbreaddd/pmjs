@@ -16,10 +16,9 @@ test('MZ host tick drains native services, pending work, and scheduler in order'
   const context = vm.createContext({
     console: { log() {} },
     globalThis: null,
-    PMJS: { tasks: { drain() { events.push('pending'); } }, rpgmaker: { audio: { update() { events.push('audio'); } } } },
-    nativeVideos: [
-      { _update() { events.push('video-release'); return false; } },
-    ],
+    PMJS: { tasks: { drain() { events.push('pending'); } },
+      rpgmaker: { audio: { update() { events.push('audio'); } } },
+      web: { video: { update() { events.push('video'); } } } },
     pmjsDrainScheduler(now) { events.push('scheduler:' + now); },
     SceneManager: { _scene: null },
   });
@@ -30,8 +29,7 @@ test('MZ host tick drains native services, pending work, and scheduler in order'
   context.__pmjsTick(25);
 
   assert.deepEqual(events, [
-    'audio', 'video-release', 'pending', 'scheduler:25',
+    'audio', 'video', 'pending', 'scheduler:25',
   ]);
-  assert.equal(context.nativeVideos.length, 0);
   assert.equal(typeof context.__pmjsRender, 'function');
 });

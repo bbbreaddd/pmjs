@@ -1447,3 +1447,22 @@ test('registry disable selects ordinary sprite encoding with the same packet', (
   assert.equal(sandbox.nativeSceneSegmentStats.runs, 1);
   assert.deepEqual(ordinary, optimized);
 });
+
+test('scene submission asks the video owner for diagnostics only on failure', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const root = new sandbox.PIXI.Container();
+  root.addChild(sprite());
+  const snapshot = [{ media: 7, image: 8, readyState: 4, paused: false }];
+  let requests = 0;
+  sandbox.PMJS.web = { video: { diagnostics() { requests++; return snapshot; } } };
+  const errors = [];
+  sandbox.console = { log() {}, error(message) { errors.push(message); } };
+  sandbox.renderNativeStage(root);
+  assert.equal(requests, 0);
+  const error = new Error('native submission failed');
+  sandbox.NativeHost.scene.submit = () => { throw error; };
+  assert.throws(() => sandbox.renderNativeStage(root), thrown => thrown === error);
+  assert.equal(requests, 1);
+  assert.ok(errors[0].endsWith('videos=' + JSON.stringify(snapshot)));
+});

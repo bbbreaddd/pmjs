@@ -156,6 +156,7 @@ AudioElement.prototype.canPlayType = function(type) {
   return /^audio\//.test(String(type)) ? 'maybe' : '';
 };
 
+var VideoElement = (function() {
 var nativeVideos = [];
 var nativeVideoFinalizer = typeof FinalizationRegistry === 'function'
   ? new FinalizationRegistry(function(handles) {
@@ -447,6 +448,36 @@ VideoElement.prototype._update = function() {
   }
   return true;
 };
+
+globalThis.PMJS = globalThis.PMJS || {};
+PMJS.web = PMJS.web || {};
+PMJS.web.video = {
+  update: function() {
+    for (var index = nativeVideos.length - 1; index >= 0; index--) {
+      var video = nativeVideos[index];
+      if (!video) continue;
+      var playGeneration = video._playGeneration;
+      var loadGeneration = video._loadGeneration;
+      if (!video._update() && video._playGeneration === playGeneration &&
+          video._loadGeneration === loadGeneration) {
+        var currentIndex = nativeVideos.indexOf(video);
+        if (currentIndex >= 0) nativeVideos.splice(currentIndex, 1);
+      }
+    }
+    return nativeVideos.length;
+  },
+  diagnostics: function() {
+    return nativeVideos.map(function(video) {
+      var source = video._pmjsNativeTextureSource();
+      return { media: video._media && video._media.handle,
+        image: source && source.handle, readyState: video.readyState,
+        paused: video.paused };
+    });
+  }
+};
+
+return VideoElement;
+})();
 
 function NativeImage() {
   EventTarget.call(this);

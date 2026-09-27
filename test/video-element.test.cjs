@@ -274,7 +274,7 @@ test('load followed by play reuses queued work and pause cancels play intent', a
   assert.deepEqual(calls.loadVideo, ['movies/Opening.mp4']);
   assert.equal(video.paused, true);
   assert.equal(video._playRequested, false);
-  assert.equal(context.nativeVideos.indexOf(video), -1);
+  assert.equal(context.PMJS.web.video.diagnostics().length, 0);
 });
 
 test('Pixi 4 VideoBaseTexture becomes valid after asynchronous data readiness', async () => {
@@ -422,7 +422,7 @@ test('an ended handler can start another source without losing video updates', a
   await Promise.resolve();
   assert.equal(video.src, 'movies/two.webm');
   assert.equal(video.paused, false);
-  assert.equal(context.nativeVideos.includes(video), true);
+  assert.equal(context.PMJS.web.video.diagnostics().length, 1);
   context.pmjsRunRpgMakerTick(2);
   assert.equal(calls.updateVideo.at(-1)[0], 11);
   video._startedAt = -12000;
@@ -529,4 +529,40 @@ test('play rejects when loading fails or no source is available', async () => {
 
   const emptyVideo = context.document.createElement('video');
   await assert.rejects(emptyVideo.play(), /No video source is available/);
+});
+
+test('video owner snapshots diagnostics and removes finished playback without exposing its list', async () => {
+  const { context } = makeHarness();
+  const video = context.document.createElement('video');
+  video.src = 'movies/Opening.mp4';
+  context.PMJS.tasks.drain();
+  await Promise.resolve();
+  await video.play();
+  assert.equal(context.nativeVideos, undefined);
+  const snapshot = context.PMJS.web.video.diagnostics();
+  assert.deepEqual(Object.assign({}, snapshot[0]), {
+    media: 10, image: 510, readyState: video.readyState, paused: false,
+  });
+  snapshot[0].paused = true;
+  snapshot.length = 0;
+  assert.equal(context.PMJS.web.video.diagnostics()[0].paused, false);
+  assert.equal(context.PMJS.web.video.update(), 1);
+  video._startedAt = -12000;
+  assert.equal(context.PMJS.web.video.update(), 0);
+  assert.equal(video.ended, true);
+});
+
+test('video owner keeps a same-source replay started by its ended handler', async () => {
+  const { context, calls } = makeHarness();
+  const video = context.document.createElement('video');
+  video.src = 'movies/Opening.mp4';
+  context.PMJS.tasks.drain();
+  await Promise.resolve();
+  await video.play();
+  video.onended = () => { video.currentTime = 0; video.play(); };
+  video._startedAt = -12000;
+  assert.equal(context.PMJS.web.video.update(), 1);
+  assert.equal(video.paused, false);
+  context.PMJS.web.video.update();
+  assert.equal(calls.updateVideo.at(-1)[0], 10);
 });
