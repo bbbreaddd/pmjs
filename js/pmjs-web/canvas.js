@@ -595,11 +595,10 @@ CanvasContext2D.prototype.strokeRect = function(x, y, width, height) {
 };
 CanvasContext2D.prototype.drawImage = function(source) {
   var nativeSource = source && (source._nativeImage || source._nativeCanvas);
-  if (!nativeSource && source && typeof source._ensureNativeCanvas === 'function') {
-    nativeSource = source._ensureNativeCanvas();
+  if (!nativeSource && !(source instanceof NativeImage) &&
+      !(source && typeof source._ensureNativeCanvas === 'function')) {
+    throw new TypeError('drawImage source has no native resource');
   }
-  if (!nativeSource && source instanceof NativeImage) return;
-  if (!nativeSource) throw new TypeError('drawImage source has no native resource');
 
   var sx = 0;
   var sy = 0;
@@ -610,19 +609,25 @@ CanvasContext2D.prototype.drawImage = function(source) {
   var dw;
   var dh;
   if (arguments.length === 3) {
-    dx = arguments[1]; dy = arguments[2]; dw = sw; dh = sh;
+    dx = +arguments[1]; dy = +arguments[2]; dw = sw; dh = sh;
   } else if (arguments.length === 5) {
-    dx = arguments[1]; dy = arguments[2]; dw = arguments[3]; dh = arguments[4];
+    dx = +arguments[1]; dy = +arguments[2]; dw = +arguments[3]; dh = +arguments[4];
   } else if (arguments.length === 9) {
-    sx = arguments[1]; sy = arguments[2]; sw = arguments[3]; sh = arguments[4];
-    dx = arguments[5]; dy = arguments[6]; dw = arguments[7]; dh = arguments[8];
+    sx = +arguments[1]; sy = +arguments[2]; sw = +arguments[3]; sh = +arguments[4];
+    dx = +arguments[5]; dy = +arguments[6]; dw = +arguments[7]; dh = +arguments[8];
   } else {
     throw new TypeError('unsupported drawImage overload');
   }
-  // Canvas ignores non-finite draw arguments, including plugin measurement draws.
-  if (![sx, sy, sw, sh, dx, dy, dw, dh].every(function(value) {
-    return Number.isFinite(Number(value));
-  })) return;
+  // HTML Canvas drawImage is a no-op if any numeric argument is NaN or infinite.
+  if (!Number.isFinite(sx) || !Number.isFinite(sy) ||
+      !Number.isFinite(sw) || !Number.isFinite(sh) ||
+      !Number.isFinite(dx) || !Number.isFinite(dy) ||
+      !Number.isFinite(dw) || !Number.isFinite(dh)) return;
+  if (!nativeSource && typeof source._ensureNativeCanvas === 'function') {
+    nativeSource = source._ensureNativeCanvas();
+  }
+  if (!nativeSource && source instanceof NativeImage) return;
+  if (!nativeSource) throw new TypeError('drawImage source has no native resource');
   var trace = globalThis.__pmjsTrace;
   var tracedDestination = trace && trace.active() ?
     this.canvas._ensureNativeCanvas() : null;

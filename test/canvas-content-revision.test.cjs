@@ -122,6 +122,36 @@ test('image draws ignore non-finite arguments across overloads and transforms', 
   assert.equal(context.calls.drawImage.length, 1);
 });
 
+test('image draw arguments convert once using ToNumber semantics', () => {
+  const context = harness();
+  const drawing = new context.CanvasElement().getContext('2d');
+  const image = new context.Image();
+  image._nativeImage = { handle: 99 };
+  image.width = image.height = 32;
+  drawing.drawImage(image, '2', '3');
+  assert.deepEqual(context.calls.drawImage[0].slice(6, 10), [2, 3, 32, 32]);
+  assert.throws(() => drawing.drawImage(image, 1n, 2), { name: 'TypeError' });
+  let conversions = 0;
+  const coordinate = { valueOf() { return ++conversions === 1 ? 2 : NaN; } };
+  drawing.drawImage(image, coordinate, 2);
+  assert.equal(conversions, 1);
+  assert.deepEqual(context.calls.drawImage[1].slice(6, 10), [2, 2, 32, 32]);
+});
+
+test('non-finite draws do not materialize source or destination canvases', () => {
+  const context = harness();
+  const source = new context.CanvasElement();
+  const destination = new context.CanvasElement();
+  const drawing = destination.getContext('2d');
+  drawing.drawImage(source, 2, NaN);
+  assert.equal(source._nativeCanvas, null);
+  assert.equal(destination._nativeCanvas, null);
+  drawing.drawImage(source, 2, 3);
+  assert.ok(source._nativeCanvas);
+  assert.ok(destination._nativeCanvas);
+  assert.equal(context.calls.drawImage.length, 1);
+});
+
 test('resizing a canvas resets the existing 2D context state', () => {
   const context = harness();
   const canvas = new context.CanvasElement();
