@@ -27,6 +27,40 @@ if (typeof Bitmap !== 'function' || typeof Sprite !== 'function' ||
 }
 nativeBootPhase('rpg-core-loaded');
 
+(function installDeferredBitmapSwap() {
+  var descriptor = Object.getOwnPropertyDescriptor(Sprite.prototype, 'bitmap');
+  if (!descriptor || !descriptor.configurable || !descriptor.get || !descriptor.set) return;
+  Object.defineProperty(Sprite.prototype, 'bitmap', {
+    configurable: true,
+    enumerable: descriptor.enumerable,
+    get: descriptor.get,
+    set: function(value) {
+      this._pmjsPendingBitmapSwap = null;
+      var previous = descriptor.get.call(this);
+      if (previous && value && previous !== value && previous._url &&
+          previous._url === value._url && !previous.__canvas && !value.__canvas &&
+          typeof previous.isReady === 'function' && previous.isReady() &&
+          typeof value.isReady === 'function' && !value.isReady() &&
+          typeof value.addLoadListener === 'function') {
+        var sprite = this;
+        var pending = {};
+        this._pmjsPendingBitmapSwap = pending;
+        value.addLoadListener(function() {
+          if (sprite._pmjsPendingBitmapSwap !== pending ||
+              descriptor.get.call(sprite) !== previous) return;
+          sprite._pmjsPendingBitmapSwap = null;
+          var frame = sprite._frame.clone();
+          descriptor.set.call(sprite, value);
+          // Stock _onBitmapLoad expands the frame to the entire sheet.
+          sprite.setFrame(frame.x, frame.y, frame.width, frame.height);
+        });
+        return;
+      }
+      descriptor.set.call(this, value);
+    }
+  });
+})();
+
 function pmjsBitmapCanvasChanged(bitmap) {
   var canvas = bitmap && bitmap._canvas;
   if (canvas && typeof canvas._pmjsContentChanged === 'function') {
