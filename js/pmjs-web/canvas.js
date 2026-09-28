@@ -619,6 +619,10 @@ CanvasContext2D.prototype.drawImage = function(source) {
   } else {
     throw new TypeError('unsupported drawImage overload');
   }
+  // Canvas ignores non-finite draw arguments, including plugin measurement draws.
+  if (![sx, sy, sw, sh, dx, dy, dw, dh].every(function(value) {
+    return Number.isFinite(Number(value));
+  })) return;
   var trace = globalThis.__pmjsTrace;
   var tracedDestination = trace && trace.active() ?
     this.canvas._ensureNativeCanvas() : null;

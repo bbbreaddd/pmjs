@@ -95,6 +95,33 @@ test('reflected image draws use the affine path', () => {
     'reflection must be rasterized through affine sampling');
 });
 
+test('image draws ignore non-finite arguments across overloads and transforms', () => {
+  const context = harness();
+  const canvas = new context.CanvasElement();
+  const drawing = canvas.getContext('2d');
+  const image = new context.Image();
+  image._nativeImage = { handle: 99 };
+  image.width = image.height = 512;
+  const overloads = [[2, 2], [2, 2, 32, 32], [160, 160, 32, 32, 2, 2, 32, 32]];
+  for (const reflected of [false, true]) {
+    drawing.setTransform(reflected ? -1 : 1, 0, 0, 1, 0, 0);
+    for (const args of overloads) {
+      for (let index = 0; index < args.length; index++) {
+        for (const invalid of [NaN, Infinity, -Infinity, undefined]) {
+          const invalidArgs = args.slice();
+          invalidArgs[index] = invalid;
+          drawing.drawImage(image, ...invalidArgs);
+        }
+      }
+    }
+  }
+  assert.equal(context.calls.drawImage.length, 0);
+  assert.equal(context.calls.writePixels, 0);
+  drawing.resetTransform();
+  drawing.drawImage(image, 160, 160, 32, 32, 2, 2, 32, 32);
+  assert.equal(context.calls.drawImage.length, 1);
+});
+
 test('resizing a canvas resets the existing 2D context state', () => {
   const context = harness();
   const canvas = new context.CanvasElement();
