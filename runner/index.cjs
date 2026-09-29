@@ -211,6 +211,7 @@ async function run(input, hooks = {}) {
         height: Number(process.env.PMJS_SCREEN_HEIGHT || 480)
       };
   globalThis.NativeHost = { runtime: native.runtime, render: native.render,
+    plugins: native.plugins, mv: native.mv,
     scene: native.scene, images: native.images, assets: native.assets, fs: native.fs,
     storage: native.storage, input: native.input, canvas: native.canvas,
     media: native.media, dialog: native.dialog };

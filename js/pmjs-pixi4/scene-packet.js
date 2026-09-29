@@ -141,6 +141,55 @@ function nativeParticleValues(context, node, childIndex) {
   return value;
 }
 
+function nativeSpriteVertices(node, nodeIndex) {
+  if (!nativeSceneUsePixiWorldState || node.children && node.children.length ||
+      typeof node.calculateVertices !== 'function') return;
+  node.calculateVertices();
+  var vertices = node.vertexData;
+  if (!vertices || vertices.length !== 8) return;
+  var offset = nodeIndex * nativeSceneValueStride;
+  for (var corner = 0; corner < 4; corner++) {
+    var x = vertices[corner * 2], y = vertices[corner * 2 + 1];
+    var destination = offset + (corner < 3 ? corner * 2 : 15);
+    // Skipped world state excludes the additional capture transform.
+    if (nativeSceneRootUsesWorldTransform) {
+      var root = nativeSceneRootTransform;
+      nativeSceneValues[destination] = root.a * x + root.c * y + root.tx;
+      nativeSceneValues[destination + 1] = root.b * x + root.d * y + root.ty;
+    } else {
+      nativeSceneValues[destination] = x;
+      nativeSceneValues[destination + 1] = y;
+    }
+  }
+  nativeSceneMetadata[nodeIndex * nativeSceneMetadataStride + 5] |= 4096;
+}
+
+function nativePackSpriteColor(node, nodeIndex, tint) {
+  if (!nativeSceneUsePixiWorldState || !Number.isFinite(node.worldAlpha)) return;
+  var alpha = Math.max(0, Math.min(1, node.worldAlpha));
+  var red = Math.floor(((tint >>> 16) & 255) * alpha + 0.5);
+  var green = Math.floor(((tint >>> 8) & 255) * alpha + 0.5);
+  var blue = Math.floor((tint & 255) * alpha + 0.5);
+  var offset = nodeIndex * nativeSceneMetadataStride;
+  nativeSceneMetadata[offset + 3] = ((alpha * 255) << 24) | (red << 16) | (green << 8) | blue;
+  nativeSceneMetadata[offset + 5] |= 2048;
+}
+
+function nativeSpriteLocalTransform(node, local) {
+  if (!nativeSceneUsePixiWorldState || !(node instanceof PIXI.Sprite) ||
+      !node.parent || !node.parent.worldTransform) return local;
+  // Leaf Sprites send their final quad; only parents need a local transform.
+  if (!(node.children && node.children.length) && typeof node.calculateVertices === 'function') return local;
+  var parent = node.parent.worldTransform, world = node.worldTransform;
+  var determinant = parent.a * parent.d - parent.b * parent.c;
+  if (!determinant) return local;
+  var inverse = { a: parent.d / determinant, b: -parent.b / determinant,
+    c: -parent.c / determinant, d: parent.a / determinant,
+    tx: (parent.c * parent.ty - parent.d * parent.tx) / determinant,
+    ty: (parent.b * parent.tx - parent.a * parent.ty) / determinant };
+  return nativeComposeTransform(inverse, world);
+}
+
 function nativePlainSpriteBinding(node) {
   if (nativeSceneNodeRejected(node, null) || node.children && node.children.length ||
       node.shader || node.mask || typeof node.updateChowRender === 'function' ||
@@ -190,7 +239,7 @@ function writeNativePlainSpriteSegment(bindings, parentIndex) {
     if (transform && typeof transform.updateLocalTransform === 'function') {
       transform.updateLocalTransform();
     }
-    var local = transform && transform.localTransform || nativeIdentityTransform;
+    var local = nativeSpriteLocalTransform(node, transform && transform.localTransform || nativeIdentityTransform);
     var frame = binding.frame;
     var localX = binding.localX;
     var localY = binding.localY;
@@ -199,6 +248,8 @@ function writeNativePlainSpriteSegment(bindings, parentIndex) {
     var nodeIndex = nativeSceneRecord(parentIndex, 1, binding.nativeImage.handle,
       node.tint === undefined ? 0xffffff : node.tint, binding.blendMode,
       local, node.alpha, null, 0, null);
+    nativePackSpriteColor(node, nodeIndex, node.tint === undefined ? 0xffffff : node.tint);
+    nativeSpriteVertices(node, nodeIndex);
     var metadataOffset = nodeIndex * nativeSceneMetadataStride;
     var valueOffset = nodeIndex * nativeSceneValueStride;
     nativeSceneValues[valueOffset + 7] = localX;
@@ -208,6 +259,8 @@ function writeNativePlainSpriteSegment(bindings, parentIndex) {
       nativeSceneMetadata[metadataOffset + 5] |= 8;
     }
     if (nativeSceneRoundPixels) nativeSceneMetadata[metadataOffset + 5] |= 256;
+    if (binding.base.__pmjsPremultiplied) nativeSceneMetadata[metadataOffset + 5] |= 1024;
+    if (binding.texture.__pmjsStandaloneBitmapRegion) nativeSceneMetadata[metadataOffset + 5] |= 8192;
     var resolution = Math.max(0.000001, Number(binding.base.resolution) || 1);
     nativeSceneValues[valueOffset + 9] = frame.x * resolution;
     nativeSceneValues[valueOffset + 10] = frame.y * resolution;
@@ -338,6 +391,9 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
       nativeSceneRootUsesWorldTransform ? transform.worldTransform :
       transform.localTransform) || nativeIdentityTransform;
   }
+  if (!particleValues && !(parentIndex === 0xffffffff && nativeSceneRootUsesWorldTransform)) {
+    local = nativeSpriteLocalTransform(node, local);
+  }
   if (parentIndex === 0xffffffff && nativeSceneRootTransform !== nativeIdentityTransform) {
     local = nativeComposeTransform(nativeSceneRootTransform, local);
   }
@@ -419,6 +475,9 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
   nativeSceneValues[valueOffset + 7] = localX;
   nativeSceneValues[valueOffset + 8] = localY;
   if (kind === 1) {
+    if (!particleContext && forcedAlpha === undefined) nativePackSpriteColor(node, nodeIndex, tint);
+    if (!particleContext) nativeSpriteVertices(node, nodeIndex);
+    if (texture && texture.__pmjsStandaloneBitmapRegion) nativeSceneMetadata[nodeIndex * nativeSceneMetadataStride + 5] |= 8192;
     textureRotation = ((Number(texture && texture.rotate) || 0) % 16 + 16) % 16;
     nativeSceneMetadata[nodeIndex * nativeSceneMetadataStride + 5] |=
       textureRotation / 2 << 5;
@@ -434,6 +493,9 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
     nativeSceneValues[valueOffset + 9] = frame.x;
     nativeSceneValues[valueOffset + 10] = frame.y;
     var textureBase = texture && texture.baseTexture;
+    if (textureBase && textureBase.__pmjsPremultiplied) {
+      nativeSceneMetadata[nodeIndex * nativeSceneMetadataStride + 5] |= 1024;
+    }
     var spriteResolution = Math.max(0.000001,
       Number(textureBase && textureBase.resolution) || 1);
     var particleSampleX = 1;
@@ -523,9 +585,10 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
         texture.baseTexture.scaleMode === PIXI.SCALE_MODES.NEAREST) {
       nativeSceneMetadata[nodeIndex * nativeSceneMetadataStride + 5] |= 8;
     }
-    var meshPostTintOverlayColor = node._pmjsMeshPostTintOverlay;
+    var mvBitmapColor = PMJS.mv && PMJS.mv.bitmapMeshColor && PMJS.mv.bitmapMeshColor(node);
+    var meshPostTintOverlayColor = mvBitmapColor || node._pmjsMeshPostTintOverlay;
     if (meshPostTintOverlayColor && meshPostTintOverlayColor[3] > 0) {
-      nativeSceneMetadata[nodeIndex * nativeSceneMetadataStride + 5] |= 512;
+      nativeSceneMetadata[nodeIndex * nativeSceneMetadataStride + 5] |= mvBitmapColor ? 16384 : 512;
       for (var meshColorIndex = 0; meshColorIndex < 4; meshColorIndex++) {
         nativeSceneValues[valueOffset + 37 + meshColorIndex] =
           Math.max(0, Math.min(255,
@@ -654,13 +717,13 @@ function prepareNativeBitmapCaches(node, renderer, root) {
   }
 }
 
-function encodeNativeScene(stage) {
+function encodeNativeScene(stage, backgroundColor = null) {
   resetNativeSceneRecords();
   nativeSceneFilterDepth = 0;
   nativeSceneSegmentTracing = !!(globalThis.__pmjsTrace &&
     __pmjsTrace.active());
-  if (nativeSceneBackgroundColor !== null) {
-    nativeSceneRecord(0xffffffff, 3, 0, nativeSceneBackgroundColor,
+  if (backgroundColor !== null) {
+    nativeSceneRecord(0xffffffff, 3, 0, backgroundColor,
       0, nativeIdentityTransform, 1, null, 0, null);
   }
   writeNativeSceneNode(stage, 0xffffffff);
@@ -670,8 +733,8 @@ function encodeNativeScene(stage) {
     count: nativeSceneCount };
 }
 
-function submitNativeScene(stage) {
-  var packet = encodeNativeScene(stage);
+function submitNativeScene(stage, backgroundColor = null) {
+  var packet = encodeNativeScene(stage, backgroundColor);
   if (!NativeHost.scene) {
     throw new Error('native scene was not rendered: scene service unavailable');
   }
@@ -715,7 +778,7 @@ function collectNativeTilemaps(node, output) {
 }
 
 function renderNativeStage(stage, rootTransform, filterResolution, roundPixels,
-    skipUpdateTransform) {
+    skipUpdateTransform, backgroundColor = null, options = {}) {
   var profiling = typeof automationProfiling !== 'undefined' && automationProfiling;
   var stageStarted = profiling ? performance.now() : 0;
   nativeScreenOverlays.length = 0;
@@ -742,7 +805,11 @@ function renderNativeStage(stage, rootTransform, filterResolution, roundPixels,
   try {
     if (NativeHost.scene) {
       if (newStage) renderNativeStage._tilemaps = collectNativeTilemaps(stage, []);
-      submitNativeScene(stage);
+      nativeSceneUsePixiWorldState = !!skipUpdateTransform || options.worldState === 'pixi';
+      if (nativeSceneUsePixiWorldState && !skipUpdateTransform && typeof stage.updateTransform === 'function') {
+        stage.updateTransform();
+      }
+      submitNativeScene(stage, backgroundColor);
     }
   } catch (error) {
     renderNativeStage._ready = false;
@@ -752,6 +819,7 @@ function renderNativeStage(stage, rootTransform, filterResolution, roundPixels,
       nativeQueueMs += performance.now() - stageStarted;
       nativeStageSamples++;
     }
+    nativeSceneUsePixiWorldState = false;
     nativeSceneRootTransform = nativeIdentityTransform;
     nativeSceneRootUsesWorldTransform = false;
     nativeSceneFilterResolution = 1;

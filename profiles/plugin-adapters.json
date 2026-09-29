@@ -1,6 +1,10 @@
 {
   "adapters": [
     {
+      "plugins": ["MPP_EncounterEffect"],
+      "modules": ["js/pmjs-plugins/mpp/triangle-bitmap.js"]
+    },
+    {
       "plugins": ["YEP_MessageCore"],
       "modules": ["js/pmjs-plugins/yanfly/message-core.js"]
     },

@@ -312,8 +312,6 @@ function createNativePixiRenderer(width, height, options) {
       this.renderingToScreen = !renderTexture;
       this._nextTextureLocation = 0;
       if (typeof this.emit === 'function') this.emit('prerender');
-      nativeSceneBackgroundColor = !renderTexture && this.clearBeforeRender &&
-        !this.transparent ? this._backgroundColor : null;
       if (renderTexture) {
         var base = renderTexture.baseTexture;
         if (!base || base.width <= 0 || base.height <= 0) {
@@ -344,7 +342,7 @@ function createNativePixiRenderer(width, height, options) {
         renderNativeStage(stage, transform ?
           nativeComposeTransform(resolutionTransform, transform) :
           resolutionTransform, resolution, this.roundPixels,
-          skipUpdateTransform);
+          skipUpdateTransform, null, PMJS.pixi4.getStageRenderOptions(stage));
         NativeHost.render.renderToCanvas(target._ensureNativeCanvas().handle);
         target._pmjsContentChanged();
         this.textureGC.update();
@@ -358,7 +356,9 @@ function createNativePixiRenderer(width, height, options) {
         d: this.resolution, tx: 0, ty: 0 };
       renderNativeStage(stage, transform ?
         nativeComposeTransform(screenTransform, transform) : screenTransform,
-      this.resolution, this.roundPixels, skipUpdateTransform);
+      this.resolution, this.roundPixels, skipUpdateTransform,
+      this.clearBeforeRender && !this.transparent ? this._backgroundColor : null,
+      PMJS.pixi4.getStageRenderOptions(stage));
       this.textureGC.update();
       if (typeof this.emit === 'function') this.emit('postrender');
     },
@@ -519,7 +519,7 @@ function createNativePixiRenderer(width, height, options) {
         { a: 1, b: 0, c: 0, d: 1, tx: -region.x, ty: -region.y });
       return renderTexture;
     },
-    generateTextureGpu: function(displayObject, scaleMode, resolution, region) {
+    generateTextureGpu: function(displayObject, scaleMode, resolution, region, options) {
       resolution = Math.max(0.000001, Number(resolution) || 1);
       region = region || displayObject.getLocalBounds();
       prepareNativeBitmapCaches(displayObject, this);
@@ -534,10 +534,13 @@ function createNativePixiRenderer(width, height, options) {
       var resolutionTransform = { a: resolution, b: 0, c: 0,
         d: resolution, tx: -region.x * resolution, ty: -region.y * resolution };
       renderNativeStage(displayObject, resolutionTransform, resolution,
-        this.roundPixels);
-      var resource = NativeHost.render.renderToImage(targetWidth, targetHeight);
+        this.roundPixels, false, null, Object.assign({}, PMJS.pixi4.getStageRenderOptions(displayObject), options));
+      var resource = NativeHost.render.renderToImage(targetWidth, targetHeight,
+        { alphaMode: options && options.alphaMode || 'straight' });
       var source = nativeImageFromResource(resource);
       var baseTexture = new PIXI.BaseTexture(source, scaleMode, resolution);
+      baseTexture.__pmjsPremultiplied = !!(options && options.alphaMode === 'premultiplied');
+      baseTexture.__pmjsGpuGenerated = true;
       baseTexture.width = region.width;
       baseTexture.height = region.height;
       baseTexture.realWidth = targetWidth;

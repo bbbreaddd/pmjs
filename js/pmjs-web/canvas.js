@@ -41,31 +41,33 @@ function axisAlignedRect(context, x, y, width, height) {
     width: Math.abs(x1 - x0), height: Math.abs(y1 - y0) };
 }
 
-function canvasSourcePixels(source, nativeSource, operationId) {
+function canvasSourcePixels(source, nativeSource, operationId, region) {
+  var x = region ? region.x : 0;
+  var y = region ? region.y : 0;
+  var width = region ? region.width : source.width;
+  var height = region ? region.height : source.height;
   var trace = globalThis.__pmjsTrace;
   var sourceResource = trace && trace.active() ?
     trace.revision(nativeSource, source && source._nativeCanvas ? 'canvas' : 'image') : null;
   if (source && source._nativeCanvas) {
-    var canvasPixels = NativeHost.canvas.readPixels(nativeSource.handle, 0, 0,
-      source.width, source.height);
+    var canvasPixels = NativeHost.canvas.readPixels(nativeSource.handle, x, y, width, height);
     if (trace && trace.active()) trace.event('canvas', 'canvas.source-read', {
       parentOperationId: operationId, sourceId: sourceResource.id,
-      sourceRevision: sourceResource.revision, width: source.width,
-      height: source.height, bytes: canvasPixels.length, temporary: false
+      sourceRevision: sourceResource.revision, x: x, y: y, width: width,
+      height: height, bytes: canvasPixels.length, temporary: false
     });
     return canvasPixels;
   }
-  var temporary = NativeHost.canvas.create(source.width, source.height);
+  var temporary = NativeHost.canvas.create(width, height);
   try {
     NativeHost.canvas.drawImage(temporary.handle, nativeSource.handle,
-      0, 0, source.width, source.height, 0, 0, source.width, source.height, 1);
-    var imagePixels = NativeHost.canvas.readPixels(temporary.handle, 0, 0,
-      source.width, source.height);
+      x, y, width, height, 0, 0, width, height, 1);
+    var imagePixels = NativeHost.canvas.readPixels(temporary.handle, 0, 0, width, height);
     if (trace && trace.active()) trace.event('canvas', 'canvas.source-read', {
       parentOperationId: operationId, sourceId: sourceResource.id,
-      sourceRevision: sourceResource.revision, width: source.width,
-      height: source.height, bytes: imagePixels.length, temporary: true,
-      temporaryWidth: source.width, temporaryHeight: source.height
+      sourceRevision: sourceResource.revision, x: x, y: y, width: width,
+      height: height, bytes: imagePixels.length, temporary: true,
+      temporaryWidth: width, temporaryHeight: height
     });
     return imagePixels;
   } finally {
@@ -123,6 +125,7 @@ function compositeCanvasPixel(pixels, offset, sourceColors, sourceAlpha, operati
 
 function drawAffineImage(context, source, nativeSource, sx, sy, sw, sh,
     dx, dy, dw, dh, operationId) {
+  if (!sw || !sh || !dw || !dh || source.width <= 0 || source.height <= 0) return;
   var t = context._transform;
   var determinant = t[0] * t[3] - t[1] * t[2];
   if (Math.abs(determinant) < 0.000001) return;
@@ -137,7 +140,19 @@ function drawAffineImage(context, source, nativeSource, sx, sy, sw, sh,
   var right = Math.min(context.canvas.width, Math.ceil(Math.max.apply(null, corners.map(function(p) { return p[0]; }))));
   var bottom = Math.min(context.canvas.height, Math.ceil(Math.max.apply(null, corners.map(function(p) { return p[1]; }))));
   if (right <= left || bottom <= top) return;
-  var sourcePixels = canvasSourcePixels(source, nativeSource, operationId);
+  var sourceLeft = Math.max(0, Math.min(source.width - 1,
+    Math.floor(Math.min(sx, sx + sw))));
+  var sourceTop = Math.max(0, Math.min(source.height - 1,
+    Math.floor(Math.min(sy, sy + sh))));
+  var sourceRight = Math.max(sourceLeft + 1, Math.min(source.width,
+    Math.floor(Math.max(sx, sx + sw)) + 1));
+  var sourceBottom = Math.max(sourceTop + 1, Math.min(source.height,
+    Math.floor(Math.max(sy, sy + sh)) + 1));
+  var sourceWidth = sourceRight - sourceLeft;
+  var sourcePixels = canvasSourcePixels(source, nativeSource, operationId, {
+    x: sourceLeft, y: sourceTop, width: sourceWidth,
+    height: sourceBottom - sourceTop
+  });
   var destination = context.canvas._ensureNativeCanvas();
   var destinationPixels = NativeHost.canvas.readPixels(destination.handle,
     left, top, right - left, bottom - top);
@@ -152,7 +167,7 @@ function drawAffineImage(context, source, nativeSource, sx, sy, sw, sh,
     if (u < 0 || u >= 1 || v < 0 || v >= 1) continue;
     var sampleX = Math.max(0, Math.min(source.width - 1, Math.floor(sx + u * sw)));
     var sampleY = Math.max(0, Math.min(source.height - 1, Math.floor(sy + v * sh)));
-    var sourceOffset = (sampleY * source.width + sampleX) * 4;
+    var sourceOffset = ((sampleY - sourceTop) * sourceWidth + sampleX - sourceLeft) * 4;
     var destinationOffset = ((y - top) * (right - left) + x - left) * 4;
     if (!passesCanvasClip(context, x + 0.5, y + 0.5)) continue;
     var sourceAlpha = sourcePixels[sourceOffset + 3] / 255 * alpha;
@@ -628,6 +643,25 @@ CanvasContext2D.prototype.drawImage = function(source) {
   }
   if (!nativeSource && source instanceof NativeImage) return;
   if (!nativeSource) throw new TypeError('drawImage source has no native resource');
+  // Negative dimensions grow the rectangle backwards without reflecting pixels.
+  if (sw < 0) { sx += sw; sw = -sw; }
+  if (sh < 0) { sy += sh; sh = -sh; }
+  if (dw < 0) { dx += dw; dw = -dw; }
+  if (dh < 0) { dy += dh; dh = -dh; }
+  if (!sw || !sh || !dw || !dh) return;
+  var sourceWidth = nativeSource.width || source.width;
+  var sourceHeight = nativeSource.height || source.height;
+  var clippedLeft = Math.max(0, sx), clippedTop = Math.max(0, sy);
+  var clippedRight = Math.min(sourceWidth, sx + sw);
+  var clippedBottom = Math.min(sourceHeight, sy + sh);
+  if (clippedRight <= clippedLeft || clippedBottom <= clippedTop) return;
+  // Crop the destination proportionally, before transforming or compositing it.
+  dx += (clippedLeft - sx) / sw * dw;
+  dy += (clippedTop - sy) / sh * dh;
+  dw *= (clippedRight - clippedLeft) / sw;
+  dh *= (clippedBottom - clippedTop) / sh;
+  sx = clippedLeft; sy = clippedTop;
+  sw = clippedRight - clippedLeft; sh = clippedBottom - clippedTop;
   var trace = globalThis.__pmjsTrace;
   var tracedDestination = trace && trace.active() ?
     this.canvas._ensureNativeCanvas() : null;

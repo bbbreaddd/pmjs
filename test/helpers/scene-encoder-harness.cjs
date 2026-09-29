@@ -5,7 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const WRITER_SOURCES = ['js/pmjs-web/canvas.js', 'js/pmjs-pixi4/render-preflight.js',
-  'js/pmjs-pixi4/scene-primitives.js',
+  'js/pmjs-pixi4/scene-primitives.js', 'js/pmjs-mv/bitmap-mesh.js', 'js/pmjs-plugins/mpp/triangle-bitmap.js',
   'js/pmjs-pixi4/scene-filters.js', 'js/pmjs-pixi4/scene-packet.js',
   'js/pmjs-mv/render-prepare.js',
   'js/pmjs-pixi4/scene-prepare.js', 'js/pmjs-pixi4/scene-classify.js',
@@ -170,7 +170,7 @@ function makeHarness() {
     nativeCompatibilityObserved(kind, detail) {
       compatObserved.push([kind, String(detail)]);
     },
-    NativeHost: {
+    NativeHost: { plugins: { mpp: { createBitmapMesh() { return nextHandle++; } } }, mv: { createBitmapMesh() { return nextHandle++; } },
       scene: { schema: { version: 1, metadataStride: 7, valueStride: 41,
           transactionalSubmit: true },
         packetVersion: 1,

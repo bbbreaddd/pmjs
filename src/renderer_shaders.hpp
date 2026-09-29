@@ -4,6 +4,35 @@
 #include <string>
 
 namespace pmjs::renderer_shaders {
+constexpr const char* triangleClipCoverageSource = R"(
+  highp float triangleClipCoverage(highp vec2 pixel, highp vec2 points[3], highp vec2 inward[3]) {
+    highp float coverage = 1.0;
+    for (int edge = 0; edge < 3; ++edge) {
+      coverage *= clamp(0.5 + dot(pixel - points[edge], inward[edge]), 0.0, 1.0);
+    }
+    return floor(coverage * 255.0 + 0.5) / 255.0;
+  }
+)";
+inline std::string withTriangleClipCoverage(std::string source) {
+  source.insert(source.find("  uniform"), triangleClipCoverageSource);
+  return source;
+}
+
+constexpr const char* clearTriangleFragmentSource = R"(
+  #version 300 es
+  precision highp float;
+  uniform vec2 points[3];
+  uniform vec2 inward[3];
+  uniform vec4 clearRectangle;
+  out vec4 outputColor;
+  void main() {
+    vec2 rectangle = clamp(gl_FragCoord.xy - clearRectangle.xy + vec2(0.5), 0.0, 1.0)
+      * clamp(clearRectangle.zw - gl_FragCoord.xy + vec2(0.5), 0.0, 1.0);
+    float coverage = triangleClipCoverage(gl_FragCoord.xy, points, inward);
+    outputColor = vec4(0.0, 0.0, 0.0, coverage * rectangle.x * rectangle.y);
+  }
+)";
+
 constexpr const char* primitiveSurfaceFragmentSource = R"(
   #version 300 es
   precision mediump float;
@@ -40,11 +69,13 @@ constexpr const char* vertexSource = R"(
   layout(location = 1) in vec2 uv;
   layout(location = 2) in vec4 color;
   layout(location = 3) in vec4 uvClamp;
+  uniform bool spriteWorldVertices;
+  uniform mat3 spriteProjection;
   out vec2 vertexUv;
   out vec4 vertexColor;
   out vec4 vertexUvClamp;
   void main() {
-    gl_Position = vec4(position, 0.0, 1.0);
+    gl_Position = vec4(spriteWorldVertices ? (spriteProjection * vec3(position, 1.0)).xy : position, 0.0, 1.0);
     vertexUv = uv;
     vertexColor = color;
     vertexUvClamp = uvClamp;
@@ -834,9 +865,15 @@ constexpr const char* fragmentSource = R"(
       float gray = dot(straightColor, vec3(0.299, 0.587, 0.114));
       straightColor = mix(straightColor, vec3(gray), spriteColorTone.a);
       straightColor = clamp(straightColor + spriteColorTone.rgb, 0.0, 1.0);
+      // MV's opaque lighter pass makes neutral-tone RGB premultiplied
+      // before source-atop; destination-in restores the source alpha.
+      bool neutralTone = all(equal(spriteColorTone, vec4(0.0)));
+      if (neutralTone) {
+        straightColor = sampleColor.rgb * sampleColor.a;
+      }
       straightColor = mix(straightColor, spriteBlendColor.rgb,
                           spriteBlendColor.a);
-      sampleColor.rgb = straightColor * sampleColor.a;
+      sampleColor.rgb = neutralTone ? straightColor : straightColor * sampleColor.a;
     }
     outputColor = sampleColor * vertexColor;
     if (colorMatrixEnabled) {
@@ -908,10 +945,12 @@ constexpr const char* tileVertexSource = R"(
   uniform vec2 animationOffset;
   uniform vec2 textureSize;
   out vec2 vertexUv;
+  out highp vec2 meshLocalPosition;
   void main() {
     vec2 pixel = (world * vec3(localPosition, 1.0)).xy;
     gl_Position = vec4(pixel.x / screenSize.x * 2.0 - 1.0,
                        1.0 - pixel.y / screenSize.y * 2.0, 0.0, 1.0);
+    meshLocalPosition = localPosition;
     vertexUv = (sourcePixel + animationFactor * animationOffset) / textureSize;
   }
 )";
@@ -919,24 +958,28 @@ constexpr const char* simpleFragmentSource = R"(
   #version 300 es
   precision mediump float;
   uniform sampler2D image;
-  in vec2 vertexUv;
+  uniform bool pixiSpritePacking;
+  uniform bool texturePremultiplied;
+  in highp vec2 vertexUv;
   in vec4 vertexColor;
   in vec4 vertexUvClamp;
   out vec4 outputColor;
   void main() {
-    outputColor = texture(image, vertexUv) * vertexColor;
-    outputColor.rgb *= outputColor.a;
+    vec4 sampleColor = texture(image, vertexUv);
+    outputColor = sampleColor * vertexColor;
+    outputColor.rgb *= pixiSpritePacking ? (texturePremultiplied ? 1.0 : sampleColor.a) : outputColor.a;
   }
 )";
 constexpr const char* generatedTextureFragmentSource = R"(
   #version 300 es
-  precision mediump float;
-  uniform sampler2D image;
+  precision highp float;
+  uniform highp sampler2D image;
+  uniform bool preservePremultiplied;
   in vec2 vertexUv;
   out vec4 outputColor;
   void main() {
     vec4 color = texture(image, vec2(vertexUv.x, 1.0 - vertexUv.y));
-    if (color.a > 0.0) color.rgb /= color.a;
+    if (!preservePremultiplied && color.a > 0.0) color.rgb /= color.a;
     outputColor = color;
   }
 )";
@@ -1006,7 +1049,12 @@ constexpr const char* presentationFragmentSource = R"(
 constexpr const char* spriteEffectFragmentSource = R"(
   #version 300 es
   precision mediump float;
+  precision highp int;
   uniform sampler2D image;
+  uniform bool pixiSpritePacking;
+  uniform bool texturePremultiplied;
+  uniform bool nearestSampling;
+  uniform highp vec4 spriteFrame;
   uniform vec2 textureSize;
   uniform float blurRadius;
   uniform sampler2D maskImage;
@@ -1020,13 +1068,35 @@ constexpr const char* spriteEffectFragmentSource = R"(
   uniform bool colorMatrixEnabled;
   uniform float colorMatrix[20];
   uniform float colorMatrixAlpha;
-  in vec2 vertexUv;
+  in highp vec2 vertexUv;
   in vec4 vertexColor;
   in vec4 vertexUvClamp;
   out vec4 outputColor;
+  highp vec4 spriteTexel(highp vec2 pixel) {
+    highp vec4 texel = texelFetch(image, ivec2(clamp(pixel, spriteFrame.xy, spriteFrame.zw)), 0);
+    highp vec3 premultiplied = texturePremultiplied ? texel.rgb : texel.rgb * texel.a;
+    ivec3 sourceBytes = ivec3(floor(premultiplied * 255.0 + 0.5));
+    ivec3 blendBytes = ivec3(floor(spriteBlendColor.rgb * 255.0 + 0.5));
+    int blendAlpha = int(floor(spriteBlendColor.a * 255.0 + 0.5));
+    int sourceAlpha = int(floor(texel.a * 255.0 + 0.5));
+    ivec3 atop = (sourceBytes * (255 - blendAlpha) + blendBytes * blendAlpha + 127) / 255;
+    return vec4(vec3((atop * sourceAlpha + 127) / 255) / 255.0, texel.a);
+  }
+  highp vec4 spriteBitmap() {
+    highp vec2 position = vertexUv * textureSize - vec2(0.5);
+    highp vec2 pixel = floor(position), weight = fract(position);
+    highp vec4 sampled = nearestSampling ? spriteTexel(floor(position + vec2(0.5))) :
+      mix(mix(spriteTexel(pixel), spriteTexel(pixel + vec2(1, 0)), weight.x),
+          mix(spriteTexel(pixel + vec2(0, 1)), spriteTexel(pixel + vec2(1, 1)), weight.x), weight.y);
+    return vec4(sampled.a > 0.0 ? sampled.rgb / sampled.a : vec3(0.0), sampled.a);
+  }
   void main() {
+    bool bitmapBlend = spriteColorEnabled && all(equal(spriteColorTone, vec4(0.0))) &&
+      spriteBlendColor.a > 0.0 && blurRadius <= 0.0;
     vec4 sampleColor;
-    if (blurRadius <= 0.0) {
+    if (bitmapBlend) {
+      sampleColor = spriteBitmap();
+    } else if (blurRadius <= 0.0) {
       sampleColor = texture(image, vertexUv);
     } else {
       vec2 stepUv = blurRadius / textureSize;
@@ -1048,14 +1118,21 @@ constexpr const char* spriteEffectFragmentSource = R"(
       sampleColor += texture(image, clamp(vertexUv + vec2(-stepUv.x, stepUv.y),
         vertexUvClamp.xy, vertexUvClamp.zw)) * 0.049405;
     }
-    if (spriteColorEnabled && sampleColor.a > 0.0) {
-      vec3 straightColor = sampleColor.rgb / sampleColor.a;
+    if (!bitmapBlend && texturePremultiplied && sampleColor.a > 0.0) sampleColor.rgb /= sampleColor.a;
+    if (!bitmapBlend && spriteColorEnabled && sampleColor.a > 0.0) {
+      vec3 straightColor = sampleColor.rgb;
       float gray = dot(straightColor, vec3(0.299, 0.587, 0.114));
       straightColor = mix(straightColor, vec3(gray), spriteColorTone.a);
       straightColor = clamp(straightColor + spriteColorTone.rgb, 0.0, 1.0);
+      // MV's opaque lighter pass makes neutral-tone RGB premultiplied
+      // before source-atop; destination-in restores the source alpha.
+      bool neutralTone = all(equal(spriteColorTone, vec4(0.0)));
+      if (neutralTone) {
+        straightColor = sampleColor.rgb * sampleColor.a;
+      }
       straightColor = mix(straightColor, spriteBlendColor.rgb,
                           spriteBlendColor.a);
-      sampleColor.rgb = straightColor * sampleColor.a;
+      sampleColor.rgb = straightColor;
     }
     outputColor = sampleColor * vertexColor;
     if (maskEnabled) {
@@ -1067,9 +1144,11 @@ constexpr const char* spriteEffectFragmentSource = R"(
           maskTransform[5]);
       if (any(lessThan(maskLocal, vec2(0.0))) ||
           any(greaterThanEqual(maskLocal, maskTextureSize))) discard;
-      outputColor.a *= texture(maskImage, maskLocal / maskTextureSize).a;
+      float maskWeight = texture(maskImage, maskLocal / maskTextureSize).a;
+      outputColor.a *= maskWeight;
+      if (pixiSpritePacking) outputColor.rgb *= maskWeight;
     }
-    outputColor.rgb *= outputColor.a;
+    outputColor.rgb *= pixiSpritePacking ? sampleColor.a : outputColor.a;
     if (colorMatrixEnabled) {
       vec4 c = outputColor;
       if (c.a > 0.0) c.rgb /= c.a;
@@ -1086,10 +1165,179 @@ constexpr const char* spriteEffectFragmentSource = R"(
 constexpr const char* tileFragmentSource = R"(
   #version 300 es
   precision mediump float;
-  uniform sampler2D image;
+  precision highp int;
+  uniform highp sampler2D image;
   uniform vec4 color;
 #ifdef PMJS_MESH_POST_TINT_OVERLAY
+  in highp vec2 vertexUv;
+#else
+  in vec2 vertexUv;
+#endif
+#ifdef PMJS_MESH_POST_TINT_OVERLAY
   uniform vec4 meshPostTintOverlayColor;
+  uniform bool trianglePaintEnabled;
+  uniform bool mvBlendEnabled;
+  uniform bool mvPremultipliedInput;
+  uniform bool nearestSampling;
+  uniform highp vec4 mvBounds;
+  // Paint parameters followed by retained normals, miters, inradius and bevels.
+  uniform highp float trianglePaint[30];
+  uniform highp vec2 textureSize;
+  in highp vec2 meshLocalPosition;
+
+#ifndef PMJS_CANVAS_TRIANGLE_BITMAP
+  highp float paintEdgeArea(highp vec2 a, highp vec2 b) {
+    highp float dy = b.y - a.y;
+    if (abs(dy) < 0.000001) return 0.0;
+    highp float t0 = clamp((-0.5 - a.y) / dy, 0.0, 1.0);
+    highp float t1 = clamp((0.5 - a.y) / dy, 0.0, 1.0);
+    highp vec2 start = mix(a, b, min(t0, t1));
+    highp vec2 end = mix(a, b, max(t0, t1));
+    highp float low = min(start.x, end.x), high = max(start.x, end.x);
+    highp float span = high - low;
+    highp float mean;
+    if (span < 0.000001) mean = clamp((low + high) * 0.5, -0.5, 0.5);
+    else {
+      highp float left = clamp(low, -0.5, 0.5), right = clamp(high, -0.5, 0.5);
+      highp float middle = (right - left) / span;
+      highp float above = clamp((high - 0.5) / span, 0.0, 1.0);
+      mean = -0.5 + above + middle * (0.5 + (left + right) * 0.5);
+    }
+    return mean * (end.y - start.y);
+  }
+
+
+  highp float trianglePixelArea(highp vec2 pixel, highp vec2 points[3], highp vec2 inward[3], highp float inset, bool bevel) {
+    highp vec2 first = vec2(0.0), previous = vec2(0.0);
+    highp float area = 0.0;
+    if (inset > 0.0 && inset >= trianglePaint[28]) return 0.0;
+    for (int corner = 0; corner < 3; ++corner) {
+      highp vec2 before = inward[(corner + 2) % 3], after = inward[corner];
+      highp vec2 offset = vec2(trianglePaint[22 + corner * 2], trianglePaint[23 + corner * 2]) * inset;
+      highp vec2 entry = points[corner] + offset - pixel, exit = entry;
+      if (bevel && (int(trianglePaint[29]) & (1 << corner)) != 0) {
+        entry = points[corner] + before * inset - pixel;
+        exit = points[corner] + after * inset - pixel;
+      }
+      if (corner == 0) first = entry;
+      else area += paintEdgeArea(previous, entry);
+      area += paintEdgeArea(entry, exit);
+      previous = exit;
+    }
+    area += paintEdgeArea(previous, first);
+    return clamp(abs(area), 0.0, 1.0);
+  }
+
+#endif
+  highp vec4 paintTriangle() {
+    highp vec2 points[3];
+    for (int i = 0; i < 3; ++i) points[i] = vec2(trianglePaint[i * 2], trianglePaint[i * 2 + 1]);
+    highp vec2 inward[3];
+    for (int i = 0; i < 3; ++i) inward[i] = vec2(trianglePaint[16 + i * 2], trianglePaint[17 + i * 2]);
+    highp vec2 origin = vec2(trianglePaint[6], trianglePaint[7]);
+    highp vec2 pixel = floor(meshLocalPosition - origin) + origin + vec2(0.5);
+    highp vec2 localDx = dFdx(meshLocalPosition), localDy = dFdy(meshLocalPosition);
+    highp vec2 delta = pixel - meshLocalPosition;
+    highp float determinant = localDx.x * localDy.y - localDy.x * localDx.y;
+    highp vec2 screenDelta = vec2(delta.x * localDy.y - delta.y * localDy.x,
+      localDx.x * delta.y - localDx.y * delta.x) / determinant;
+    highp vec2 uv = vertexUv + dFdx(vertexUv) * screenDelta.x + dFdy(vertexUv) * screenDelta.y;
+    highp float halfWidth = trianglePaint[14] * 0.5;
+    highp float minimumDistance = 1e20;
+    for (int edge = 0; edge < 3; ++edge) {
+      minimumDistance = min(minimumDistance, dot(pixel - points[edge], inward[edge]));
+    }
+    highp vec2 coverage = vec2(0.0);
+    if (minimumDistance > halfWidth + 0.75) coverage.x = 1.0;
+    else if (minimumDistance >= -halfWidth - 0.75) {
+#ifndef PMJS_CANVAS_TRIANGLE_BITMAP
+      if ((int(trianglePaint[29]) & 16) != 0)
+#endif
+      {
+        coverage.x = triangleClipCoverage(pixel, points, inward);
+        // Clipped image crops leave the surrounding bitmap padding transparent.
+        highp vec2 low = min(points[0], min(points[1], points[2]));
+        highp vec2 high = max(points[0], max(points[1], points[2]));
+        highp vec2 rectangle = clamp(pixel - low + vec2(0.5), 0.0, 1.0)
+          * clamp(high - pixel + vec2(0.5), 0.0, 1.0);
+        coverage.x *= rectangle.x * rectangle.y;
+      }
+#ifndef PMJS_CANVAS_TRIANGLE_BITMAP
+      else { coverage.x = trianglePixelArea(pixel, points, inward, 0.0, false); }
+#endif
+      if (halfWidth > 0.0) {
+#ifndef PMJS_CANVAS_TRIANGLE_BITMAP
+        if ((int(trianglePaint[29]) & 8) != 0)
+#endif
+        {
+          // The pinned reference matches this grid in the tested MPP stroke cases.
+          highp vec2 samples[4] = vec2[4](vec2(-0.125, -0.375), vec2(0.375, -0.125),
+            vec2(-0.375, 0.125), vec2(0.125, 0.375));
+          for (int sampleIndex = 0; sampleIndex < 4; ++sampleIndex) {
+            highp vec2 position = pixel + samples[sampleIndex];
+            bool outer = true, inner = halfWidth < trianglePaint[28];
+            for (int edge = 0; edge < 3; ++edge) {
+              highp float distance = dot(position - points[edge], inward[edge]);
+              outer = outer && distance >= -halfWidth;
+              inner = inner && distance >= halfWidth;
+              if ((int(trianglePaint[29]) & (1 << edge)) != 0) {
+                highp vec2 before = inward[(edge + 2) % 3], after = inward[edge];
+                outer = outer && dot(position - points[edge], before + after) >=
+                  -halfWidth * (1.0 + dot(before, after));
+              }
+            }
+            if (outer && !inner) coverage.y += 0.25;
+          }
+        }
+#ifndef PMJS_CANVAS_TRIANGLE_BITMAP
+        else { coverage.y = max(0.0, trianglePixelArea(pixel, points, inward, -halfWidth, true)
+            - trianglePixelArea(pixel, points, inward, halfWidth, false)); }
+#endif
+      }
+    }
+    if (coverage.x <= 0.0 && coverage.y <= 0.0) return vec4(0.0);
+    highp vec4 source = texture(image, uv);
+    highp float fillAlpha = source.a * coverage.x;
+    highp float strokeAlpha = trianglePaint[13] * coverage.y;
+    highp float alpha = strokeAlpha + fillAlpha * (1.0 - strokeAlpha);
+    highp vec3 premultiplied = vec3(trianglePaint[10], trianglePaint[11], trianglePaint[12]) * strokeAlpha
+      + source.rgb * fillAlpha * (1.0 - strokeAlpha);
+    highp vec3 rgb = alpha > 0.0 ? premultiplied / alpha : vec3(0.0);
+    return vec4(rgb, alpha);
+  }
+
+#ifndef PMJS_CANVAS_TRIANGLE_BITMAP
+  highp vec4 mvTexel(highp vec2 pixel) {
+    highp vec4 texel = texelFetch(image, ivec2(clamp(pixel, mvBounds.xy, mvBounds.zw)), 0);
+    highp vec3 premultiplied = mvPremultipliedInput ? texel.rgb : texel.rgb * texel.a;
+    if (meshPostTintOverlayColor.a > 0.0) {
+      // MV stores the source-atop bitmap before its destination-in pass.
+      // Preserve those RGBA8 writes instead of fusing their real-number algebra.
+      ivec3 sourceBytes = ivec3(floor(premultiplied * 255.0 + 0.5));
+      ivec3 blendBytes = ivec3(floor(meshPostTintOverlayColor.rgb * 255.0 + 0.5));
+      int blendAlpha = int(floor(meshPostTintOverlayColor.a * 255.0 + 0.5));
+      int sourceAlpha = int(floor(texel.a * 255.0 + 0.5));
+      ivec3 atop = (sourceBytes * (255 - blendAlpha) + blendBytes * blendAlpha + 127) / 255;
+      premultiplied = vec3((atop * sourceAlpha + 127) / 255) / 255.0;
+    }
+    return vec4(premultiplied, texel.a);
+  }
+
+  highp vec4 sampleMvBitmap() {
+    if (mvPremultipliedInput && meshPostTintOverlayColor.a <= 0.0) {
+      highp vec4 sampled = texture(image, clamp(vertexUv,
+        (mvBounds.xy + vec2(0.5)) / textureSize, (mvBounds.zw + vec2(0.5)) / textureSize));
+      return vec4(sampled.a > 0.0 ? sampled.rgb / sampled.a : vec3(0.0), sampled.a);
+    }
+    highp vec2 position = vertexUv * textureSize - vec2(0.5);
+    highp vec2 pixel = floor(position), weight = fract(position);
+    highp vec4 sampled;
+    if (nearestSampling) sampled = mvTexel(floor(position + vec2(0.5)));
+    else sampled = mix(mix(mvTexel(pixel), mvTexel(pixel + vec2(1, 0)), weight.x),
+      mix(mvTexel(pixel + vec2(0, 1)), mvTexel(pixel + vec2(1, 1)), weight.x), weight.y);
+    return vec4(sampled.a > 0.0 ? sampled.rgb / sampled.a : vec3(0.0), sampled.a);
+  }
+#endif
 #endif
   uniform sampler2D maskImage;
   uniform bool maskEnabled;
@@ -1097,13 +1345,22 @@ constexpr const char* tileFragmentSource = R"(
   uniform vec4 maskFrame;
   uniform vec2 maskTextureSize;
   uniform float screenHeight;
-  in vec2 vertexUv;
+
   out vec4 outputColor;
   void main() {
-    vec4 sampled = texture(image, vertexUv);
+    vec4 sampled;
+#ifdef PMJS_CANVAS_TRIANGLE_BITMAP
+    sampled = paintTriangle();
+#elif defined(PMJS_MESH_POST_TINT_OVERLAY)
+    if (trianglePaintEnabled) sampled = paintTriangle();
+    else if (mvBlendEnabled) sampled = sampleMvBitmap();
+    else sampled = texture(image, vertexUv);
+#else
+    sampled = texture(image, vertexUv);
+#endif
     sampled.rgb *= color.rgb;
 #ifdef PMJS_MESH_POST_TINT_OVERLAY
-    if (meshPostTintOverlayColor.a > 0.0) {
+    if (!mvBlendEnabled && meshPostTintOverlayColor.a > 0.0) {
       sampled.rgb = mix(sampled.rgb, meshPostTintOverlayColor.rgb, meshPostTintOverlayColor.a);
     }
 #endif
@@ -1123,10 +1380,11 @@ constexpr const char* tileFragmentSource = R"(
   }
 )";
 
-inline std::string meshPostTintOverlayFragmentSourceWithPrecision(const std::string& precision) {
-  auto source = pixiFragmentSourceWithPrecision(tileFragmentSource, precision);
+inline std::string meshPostTintOverlayFragmentSourceWithPrecision(const std::string& precision, bool canvasTriangleBitmap = false) {
+  auto source = withTriangleClipCoverage(pixiFragmentSourceWithPrecision(tileFragmentSource, precision));
   const auto version = source.find("#version 300 es");
   source.insert(source.find('\n', version) + 1, "#define PMJS_MESH_POST_TINT_OVERLAY\n");
+  if (canvasTriangleBitmap) source.insert(source.find('\n', version) + 1, "#define PMJS_CANVAS_TRIANGLE_BITMAP\n");
   return source;
 }
 

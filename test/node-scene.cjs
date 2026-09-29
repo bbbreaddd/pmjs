@@ -98,9 +98,35 @@ if ((native.canvas.pixel(frame4.handle, 8, 8) >>> 8) !== 0) {
   throw new Error('explicitly submitted empty scene was not cleared to black');
 }
 native.canvas.release(frame4.handle);
-native.images.release(image.handle);
+
 
 const stats = native.render.stats();
 if (stats.frames !== 4 || stats.retainedFrames !== 2 || stats.commands !== 1 || stats.drawCalls !== 1) {
   throw new Error(`unexpected renderer statistics: ${JSON.stringify(stats)}`);
 }
+
+
+// World vertices describe a leaf Sprite, including its authored anchor and hooks.
+const vertexMetadata = new Uint32Array([1, 0xffffffff, image.handle, 0xffffff, 0, 4096, 0]);
+const vertexValues = new Float32Array(schema.valueStride);
+vertexValues.set([8, 8, 10, 8, 10, 10, 1], 0);
+vertexValues.set([0, 0, 2, 2], 9);
+vertexValues.set([2, 2, 8, 10], 13);
+native.beginFrame();
+native.scene.submit(schema.version, vertexMetadata, vertexValues, 1);
+native.renderScene();
+const vertexFrame = native.canvas.captureScene();
+if ((native.canvas.pixel(vertexFrame.handle, 8, 8) >>> 8) === 0 ||
+    (native.canvas.pixel(vertexFrame.handle, 10, 10) >>> 8) !== 0) {
+  throw new Error('Sprite Float32 world vertices were not presented at their exact bounds');
+}
+native.canvas.release(vertexFrame.handle);
+const parentMetadata = new Uint32Array([...vertexMetadata, 1, 0, image.handle, 0xffffff, 0, 0, 0]);
+const parentValues = new Float32Array(schema.valueStride * 2);
+parentValues.set(vertexValues);
+parentValues.set(values, schema.valueStride);
+let verticesParentRejected = false;
+try { native.scene.submit(schema.version, parentMetadata, parentValues, 2); }
+catch { verticesParentRejected = true; }
+if (!verticesParentRejected) throw new Error('Sprite world vertices were accepted as a parent transform');
+native.images.release(image.handle);

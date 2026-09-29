@@ -9,6 +9,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <variant>
 
 namespace pmjs {
 
@@ -22,6 +23,19 @@ enum class BlendMode : std::uint8_t {
 constexpr bool isValidBlendMode(std::uint8_t value) {
   return value <= static_cast<std::uint8_t>(BlendMode::screen);
 }
+
+enum class AlphaMode { straight, premultiplied };
+struct TexturedMeshMaterial {};
+struct TriangleBitmapMaterial {
+  enum class RasterRule { area, canvasFourSample };
+  std::array<float, 30> coefficients{};
+  RasterRule rasterRule = RasterRule::area;
+};
+struct MvBitmapMaterial {
+  std::array<float, 4> texelBounds{};
+  AlphaMode alphaMode = AlphaMode::straight;
+};
+using MeshMaterial = std::variant<TexturedMeshMaterial, TriangleBitmapMaterial, MvBitmapMaterial>;
 
 struct RenderCommand {
   enum class Action : std::uint8_t { draw, filterBegin, filterEnd };
@@ -48,6 +62,12 @@ struct RenderCommand {
   std::array<float, 4> colorTone{};
   std::array<float, 4> blendColor{};
   bool appliesSpriteColor = false;
+  bool pixiSpritePacking = false;
+  bool premultipliedSpriteTexture = false;
+  bool packedSpriteColor = false;
+  bool spriteWorldVertices = false;
+  bool standaloneBitmapRegion = false;
+  std::array<std::array<float, 2>, 4> spriteVertices{};
   bool appliesMeshPostTintOverlay = false;
   std::uint8_t textureRotation = 0;
   bool nearest = false;
@@ -179,12 +199,15 @@ class Renderer {
                            const std::vector<float>& positions,
                            const std::vector<float>& uvs,
                            const std::vector<std::uint32_t>& indices,
-                           bool triangleStrip);
+                           bool triangleStrip,
+                           const MeshMaterial& material = TexturedMeshMaterial{});
   bool queueTileLayer(std::uint32_t layer,
                       const std::array<float, 6>& transform,
                       const std::array<float, 2>& animation, float alpha,
                       std::uint32_t tint, BlendMode blendMode);
   bool releaseTileLayer(std::uint32_t layer);
+  bool clearImageTriangles(ImageHandle image, const std::vector<float>& triangles,
+    const std::vector<float>& rectangles = {}, const std::vector<float>& normals = {});
   struct PrimitiveSurfaceInfo {
     PrimitiveSurfaceHandle handle = 0;
     ImageInfo image;
@@ -207,7 +230,7 @@ class Renderer {
   std::vector<std::uint8_t> captureDrawableRgba();
   std::vector<std::uint8_t> renderToRgba();
   std::vector<std::uint8_t> renderToRgba(int width, int height);
-  std::optional<ImageInfo> renderToImage(int width, int height);
+  std::optional<ImageInfo> renderToImage(int width, int height, AlphaMode alphaMode = AlphaMode::straight);
   const RendererStats& stats() const { return stats_; }
   std::size_t renderTargetBytes() const;
   // Public for the modal overlay: snapshot, draw, discard back.
@@ -222,6 +245,12 @@ class Renderer {
     int textureSize = -1;
     int color = -1;
     int overlayColor = -1;
+    int trianglePaintEnabled = -1;
+    int trianglePaint = -1;
+    int mvBlendEnabled = -1;
+    int mvBounds = -1;
+    int nearestSampling = -1;
+    int mvPremultipliedInput = -1;
     int maskEnabled = -1;
     int maskImage = -1;
     int maskTransform = -1;
@@ -244,6 +273,8 @@ class Renderer {
     std::vector<TileBatch> batches;
     std::uint32_t owners = 1;
     std::uint32_t queuedReferences = 0;
+    // Typed material state is retained with the mesh; the scene packet carries dynamic color.
+    MeshMaterial material;
   };
 
   struct PrimitiveSurfaceResource {
@@ -311,7 +342,12 @@ class Renderer {
   std::uint32_t program_ = 0;
   std::uint32_t simpleProgram_ = 0;
   std::uint32_t spriteEffectProgram_ = 0;
+  std::uint32_t clearTriangleProgram_ = 0;
+  int clearTrianglePointsUniform_ = -1;
+  int clearTriangleNormalsUniform_ = -1;
+  int clearTriangleRectangleUniform_ = -1;
   std::uint32_t generatedTextureProgram_ = 0;
+  int generatedTexturePremultipliedUniform_ = -1;
   std::uint32_t presentationProgram_ = 0;
   int presentationSceneUniform_ = -1;
   int presentationOverlayUniform_ = -1;
@@ -324,6 +360,16 @@ class Renderer {
   int presentationCanvasOpacityUniform_ = -1;
   int presentationVideoOpacityUniform_ = -1;
   int presentationUpperCanvasOpacityUniform_ = -1;
+  int simpleSpriteVerticesUniform_ = -1;
+  int simpleSpriteProjectionUniform_ = -1;
+  int simpleSpritePackingUniform_ = -1;
+  int simpleSpritePremultipliedUniform_ = -1;
+  int spriteEffectVerticesUniform_ = -1;
+  int spriteEffectProjectionUniform_ = -1;
+  int spriteEffectPackingUniform_ = -1;
+  int spriteEffectPremultipliedUniform_ = -1;
+  int spriteEffectFrameUniform_ = -1;
+  int spriteEffectNearestUniform_ = -1;
   int spriteEffectTextureSizeUniform_ = -1;
   int spriteEffectBlurUniform_ = -1;
   int spriteEffectMaskEnabledUniform_ = -1;
@@ -368,8 +414,10 @@ class Renderer {
   int spriteBlendColorUniform_ = -1;
   std::uint32_t tileProgram_ = 0;
   std::uint32_t meshPostTintOverlayProgram_ = 0;
+  std::uint32_t canvasTriangleBitmapProgram_ = 0;
   TileProgramUniforms tileUniforms_;
   TileProgramUniforms meshPostTintOverlayUniforms_;
+  TileProgramUniforms canvasTriangleBitmapUniforms_;
   std::uint32_t primitiveSurfaceProgram_ = 0;
   int primitiveSurfaceSizeUniform_ = -1;
   int primitiveSurfaceKindUniform_ = -1;

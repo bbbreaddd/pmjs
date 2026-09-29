@@ -57,3 +57,145 @@ if (((bottomPixel >>> 8) & 0xff) < 240 ||
   throw new Error('GPU render image orientation is inverted: ' +
     bottomPixel.toString(16));
 }
+
+native.beginFrame();
+native.render.setRenderTargetSize(32, 8);
+native.render.quad(0, 0, 32, 8, 1, 1, 1, 0.5);
+const premultiplied = native.render.renderToImage(32, 8, { alphaMode: 'premultiplied' });
+const bitmap = native.mv.createBitmapMesh(premultiplied.handle,
+  [0, 0, 16, 0, 16, 16, 0, 16], [0, 0, 1, 0, 1, 1, 0, 1],
+  [0, 1, 2, 0, 2, 3], 1, { texelBounds: [0, 0, 31, 7], alphaMode: 'premultiplied' });
+const schema = native.scene.schema;
+native.render.setClearColor(0, 0, 0, 0);
+for (const blend of [0, 0.5]) {
+  native.beginFrame();
+  const values = new Float32Array(schema.valueStride);
+  values.set([1, 0, 0, 1, 0, 0, 1]);
+  values.set([1, 0, 0, blend], 37);
+  native.scene.submit(schema.version,
+    new Uint32Array([8, 0xffffffff, bitmap, 0xffffff, 0, blend ? 16384 : 0, 0]), values, 1);
+  native.renderScene();
+  const capture = native.canvas.captureScene();
+  const bytes = native.canvas.readPixels(capture.handle, 8, 8, 1, 1);
+  native.canvas.release(capture.handle);
+  const expected = blend ? [191, 64, 64, 128] : [255, 255, 255, 128];
+  if (!bytes.every((value, index) => Math.abs(value - expected[index]) <= 2)) {
+    throw new Error('offscreen premultiplied bitmap color mismatch: ' + bytes);
+  }
+}
+native.render.releaseMesh(bitmap);
+native.images.release(premultiplied.handle);
+
+// A tall retained atlas must preserve one-pixel rows through GPU normalization.
+// Medium-precision UVs round adjacent rows together above ~1024 texels.
+const atlasHeight = 2158;
+native.beginFrame();
+native.render.setRenderTargetSize(16, atlasHeight);
+for (let row = 0; row < atlasHeight; row++) {
+  const shade = row % 2;
+  native.render.quad(0, row, 16, 1, shade, shade, shade, 1);
+}
+const tallAtlas = native.render.renderToImage(16, atlasHeight, { alphaMode: 'premultiplied' });
+for (const top of [0, 900, 1800, 2140]) {
+  const crop = native.mv.createBitmapMesh(tallAtlas.handle,
+    [0, 0, 16, 0, 16, 16, 0, 16],
+    [0, top / atlasHeight, 1, top / atlasHeight,
+      1, (top + 16) / atlasHeight, 0, (top + 16) / atlasHeight],
+    [0, 1, 2, 0, 2, 3], 1, { texelBounds: [0, top, 15, top + 15], alphaMode: 'premultiplied' });
+  native.beginFrame();
+  const values = new Float32Array(schema.valueStride);
+  values.set([1, 0, 0, 1, 0, 0, 1]);
+  native.scene.submit(schema.version,
+    new Uint32Array([8, 0xffffffff, crop, 0xffffff, 0, 8, 0]), values, 1);
+  native.renderScene();
+  const pixels = native.canvas.captureSceneRawPremultiplied();
+  for (let y = 0; y < 16; y++) {
+    const offset = (y * 16 + 8) * 4;
+    const expected = (top + y) % 2 * 255;
+    if (pixels[offset] !== expected || pixels[offset + 3] !== 255) {
+      throw new Error(`Tall GPU atlas row ${top + y} changed: ${pixels.slice(offset, offset + 4)}`);
+    }
+  }
+  native.render.releaseMesh(crop);
+}
+native.images.release(tallAtlas.handle);
+
+// A clip-clear preserves the A8 edge mask, including repeated partial clears.
+// It must leave queued scene commands intact and reject invalid batches atomically.
+native.beginFrame();
+native.render.setRenderTargetSize(16, 16);
+native.render.quad(0, 0, 16, 16, 1, 1, 1, 1);
+const erased = native.render.renderToImage(16, 16, { alphaMode: 'premultiplied' });
+const erasedMesh = native.mv.createBitmapMesh(erased.handle,
+  [0, 0, 16, 0, 16, 16, 0, 16], [0, 0, 1, 0, 1, 1, 0, 1],
+  [0, 1, 2, 0, 2, 3], 1, { texelBounds: [0, 0, 15, 15], alphaMode: 'premultiplied' });
+const assert = require('node:assert/strict');
+const triangle = [0, 0, 16, 0, 0, 16];
+function erasedPixels(points) {
+  native.beginFrame();
+  const values = new Float32Array(schema.valueStride);
+  values.set([1, 0, 0, 1, 0, 0, 1]);
+  native.scene.submit(schema.version,
+    new Uint32Array([8, 0xffffffff, erasedMesh, 0xffffff, 0, 8, 0]), values, 1);
+  native.plugins.mpp.clearBackgroundTriangles(erased.handle, points);
+  native.renderScene();
+  return native.canvas.captureSceneRawPremultiplied();
+}
+assert.throws(() => native.plugins.mpp.clearBackgroundTriangles(erased.handle,
+  [...triangle, 0, 0, Infinity, 0, 0, 16]), RangeError);
+assert.throws(() => native.plugins.mpp.clearBackgroundTriangles(erased.handle, [1]), RangeError);
+const intact = erasedPixels([]);
+assert.equal(intact[(2 * 16 + 2) * 4 + 3], 255);
+const once = erasedPixels(triangle);
+assert.equal(once[(2 * 16 + 2) * 4 + 3], 0);
+assert.equal(once[(13 * 16 + 13) * 4 + 3], 255);
+assert.ok(Math.abs(once[(8 * 16 + 7) * 4 + 3] - 127) <= 1);
+const twice = erasedPixels([0, 16, 16, 0, 16, 16]);
+assert.ok(Math.abs(twice[(8 * 16 + 7) * 4 + 3] - 63) <= 1);
+native.render.releaseMesh(erasedMesh);
+native.images.release(erased.handle);
+assert.throws(() => native.plugins.mpp.clearBackgroundTriangles(erased.handle, triangle), RangeError);
+
+// A clear rectangle limits the triangle mask and remains transactional.
+native.beginFrame(); native.render.quad(0, 0, 16, 16, 1, 1, 1, 1);
+const bounded = native.render.renderToImage(16, 16, { alphaMode: 'premultiplied' });
+const boundedSprite = new Float32Array(schema.valueStride);
+boundedSprite.set([1, 0, 0, 1, 0, 0, 1]);
+boundedSprite.set([0, 0, 16, 16], 9); boundedSprite.set([16, 16], 13);
+assert.throws(() => native.plugins.mpp.clearBackgroundTriangles(bounded.handle, triangle, [0, 0, -1, 4]), RangeError);
+native.plugins.mpp.clearBackgroundTriangles(bounded.handle, triangle, [0, 0, 4, 16]);
+native.beginFrame();
+native.scene.submit(schema.version, new Uint32Array([1, 0xffffffff, bounded.handle, 0xffffff, 0, 1032, 0]), boundedSprite, 1);
+native.renderScene();
+const boundedPixels = native.canvas.captureSceneRawPremultiplied();
+assert.equal(boundedPixels[(2 * 16 + 2) * 4 + 3], 0);
+assert.equal(boundedPixels[(2 * 16 + 6) * 4 + 3], 255);
+native.images.release(bounded.handle);
+
+
+// A toned translucent GPU Sprite must normalize premultiplied RGB exactly once.
+native.beginFrame();
+native.render.setRenderTargetSize(16, 16);
+native.render.quad(0, 0, 16, 16, 0.5, 0.5, 0.5, 0.5);
+const tonedSource = native.render.renderToImage(16, 16, { alphaMode: 'premultiplied' });
+native.beginFrame();
+native.render.setClearColor(0, 0, 0, 0);
+const tonedValues = new Float32Array(schema.valueStride);
+tonedValues.set([1, 0, 0, 1, 0, 0, 1]);
+tonedValues.set([0, 0, 16, 16], 9); tonedValues.set([16,16], 13);
+tonedValues[33] = 0.1;
+native.scene.submit(schema.version,
+  new Uint32Array([1, 0xffffffff, tonedSource.handle, 0xffffff, 0, 1024 | 16 | 8, 0]), tonedValues, 1);
+native.renderScene();
+const tonedCapture = native.canvas.captureScene();
+const tonedPixel = native.canvas.readPixels(tonedCapture.handle, 8, 8, 1, 1);
+const tonedExpected = [153, 128, 128, 128];
+if (!tonedPixel.every((byte,index) => Math.abs(byte-tonedExpected[index]) <= 2)) {
+  throw new Error('premultiplied Sprite tone normalized incorrectly: ' + tonedPixel);
+}
+native.canvas.release(tonedCapture.handle); native.images.release(tonedSource.handle);
+
+
+assert.throws(() => native.render.renderToImage(16, 16, 1), /alphaMode|object/,
+  'positional alpha booleans are rejected');
+assert.throws(() => native.render.renderToImage(16, 16, {alphaMode:'unknown'}), /alphaMode/);

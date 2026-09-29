@@ -376,12 +376,28 @@ std::uint32_t Renderer::createTileLayer(std::vector<TileLayerTile> tiles) {
 std::uint32_t Renderer::createMesh(
     ImageHandle image, const std::vector<float>& positions,
     const std::vector<float>& uvs, const std::vector<std::uint32_t>& indices,
-    bool triangleStrip) {
+    bool triangleStrip, const MeshMaterial& material) {
   const auto info = images_.lookup(image);
   if (!info || positions.size() < 6 || positions.size() % 2 != 0 ||
       uvs.size() != positions.size() || indices.size() < 3 ||
       indices.size() > 65536U || positions.size() > 131072U) return 0;
+  if (const auto* triangle = std::get_if<TriangleBitmapMaterial>(&material)) {
+    const auto& values = triangle->coefficients;
+    for (float value : values) if (!std::isfinite(value)) return 0;
+    if (values[8] <= values[6] || values[9] <= values[7] || values[14] < 0 ||
+        values[15] < 1 || values[28] < 0 || values[29] < 0 || values[29] > 31 ||
+        values[29] != std::floor(values[29])) return 0;
+    for (std::size_t channel = 10; channel < 14; ++channel)
+      if (values[channel] < 0 || values[channel] > 1) return 0;
+  }
+  if (const auto* bitmap = std::get_if<MvBitmapMaterial>(&material)) {
+    const auto& bounds = bitmap->texelBounds;
+    for (float value : bounds) if (!std::isfinite(value)) return 0;
+    if (bounds[0] < 0 || bounds[1] < 0 || bounds[2] < bounds[0] ||
+        bounds[3] < bounds[1] || bounds[2] >= info->width || bounds[3] >= info->height) return 0;
+  }
   TileLayerResource mesh;
+  mesh.material = material;
   if (!images_.retain(image)) return 0;
   mesh.images.push_back(image);
   std::vector<std::uint32_t> triangles;
@@ -586,19 +602,20 @@ std::vector<std::uint8_t> Renderer::renderToRgba(int width, int height) {
   }
 }
 
-std::optional<ImageInfo> Renderer::renderToImage(int width, int height) {
+std::optional<ImageInfo> Renderer::renderToImage(int width, int height, AlphaMode alphaMode) {
   if (width <= 0 || height <= 0 || width > maxTextureSize_ ||
       height > maxTextureSize_) return std::nullopt;
-  if (width != width_ || height != height_) {
-    throw std::runtime_error(
-      "GPU render images currently require the active renderer dimensions");
+  if (width != queueWidth_ || height != queueHeight_) {
+    throw std::runtime_error("GPU render image dimensions must match the queued target");
   }
+  const int savedWidth = width_, savedHeight = height_;
+  resizeTargets(width, height);
   const auto savedClearColor = clearColor_;
   try {
     offscreenRender_ = true;
     clearColor_ = {0, 0, 0, 0};
     render();
-    auto image = images_.createRgba(width_, height_, nullptr);
+    auto image = images_.createRenderTarget(width_, height_);
     if (!image) throw std::runtime_error("cannot allocate GPU render image");
     while (glGetError() != GL_NO_ERROR) {}
     std::uint32_t destinationFramebuffer = 0;
@@ -623,6 +640,7 @@ std::optional<ImageInfo> Renderer::renderToImage(int width, int height) {
     glViewport(0, 0, width_, height_);
     glDisable(GL_BLEND);
     glUseProgram(generatedTextureProgram_);
+    glUniform1i(generatedTexturePremultipliedUniform_, alphaMode == AlphaMode::premultiplied);
     glBindVertexArray(vertexArray_);
     glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer_);
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices.data(),
@@ -641,8 +659,10 @@ std::optional<ImageInfo> Renderer::renderToImage(int width, int height) {
     clearColor_ = savedClearColor;
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glEnable(GL_BLEND);
+    resizeTargets(savedWidth, savedHeight);
     return image;
   } catch (...) {
+    resizeTargets(savedWidth, savedHeight);
     offscreenRender_ = false;
     clearColor_ = savedClearColor;
     glBindFramebuffer(GL_FRAMEBUFFER, 0);

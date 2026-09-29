@@ -509,6 +509,10 @@ void Renderer::renderScene() {
     const RenderCommand* matrixCommand = nullptr;
     RenderCommand::Action action = RenderCommand::Action::draw;
     bool appliesSpriteColor = false;
+    bool pixiSpritePacking = false;
+    bool spriteWorldVertices = false;
+    bool premultipliedSpriteTexture = false;
+    std::array<float, 4> spriteFrame{};
     std::array<float, 4> colorTone{};
     std::array<float, 4> blendColor{};
     const RenderCommand* inlineMatrix = nullptr;
@@ -576,9 +580,10 @@ void Renderer::renderScene() {
     const float textureHeight = info ? static_cast<float>(info->height) : 1.0F;
     const std::uint32_t texture = info ? info->texture : whiteTexture_;
     const auto& t = command.transform;
-    const auto point = [&](float x, float y) {
+    const auto point = [&](float x, float y, std::size_t corner) {
       float px = t[0] * x + t[2] * y + t[4];
       float py = t[1] * x + t[3] * y + t[5];
+      if (command.spriteWorldVertices) { px = command.spriteVertices[corner][0]; py = command.spriteVertices[corner][1]; }
       if (command.roundPixels) {
         px = std::floor(px);
         py = std::floor(py);
@@ -588,10 +593,10 @@ void Renderer::renderScene() {
     };
     const float localWidth = command.destination[0];
     const float localHeight = command.destination[1];
-    const auto p0 = point(0, 0);
-    const auto p1 = point(localWidth, 0);
-    const auto p2 = point(localWidth, localHeight);
-    const auto p3 = point(0, localHeight);
+    const auto p0 = point(0, 0, 0);
+    const auto p1 = point(localWidth, 0, 1);
+    const auto p2 = point(localWidth, localHeight, 2);
+    const auto p3 = point(0, localHeight, 3);
     if (preparingFilterDepth == 0) {
       const bool left = p0[0] <= -1 && p1[0] <= -1 &&
                         p2[0] <= -1 && p3[0] <= -1;
@@ -607,9 +612,25 @@ void Renderer::renderScene() {
     const float v0 = command.source[1] / textureHeight;
     const float u1 = (command.source[0] + command.source[2]) / textureWidth;
     const float v1 = (command.source[1] + command.source[3]) / textureHeight;
-    const std::array<std::array<float, 2>, 4> sourceCorners = {
+    std::array<std::array<float, 2>, 4> sourceCorners = {
       std::array<float, 2>{u0, v0}, {u1, v0}, {u1, v1}, {u0, v1}
     };
+    // GPU Bitmap views replace private textures; their storage atlas must not
+    // introduce the atlas-wide uint16 UV rounding of an authored spritesheet.
+    if (command.pixiSpritePacking && !command.standaloneBitmapRegion) {
+      const auto packUv = [](double coordinate) {
+        // JS ToUint16 truncates and wraps; an out-of-range C++ cast is undefined.
+        double packed = std::fmod(std::trunc(coordinate * 65535.0), 65536.0);
+        if (packed < 0) packed += 65536.0;
+        return static_cast<float>(packed / 65535.0);
+      };
+      const float packedU0 = packUv(double(command.source[0]) / textureWidth);
+      const float packedV0 = packUv(double(command.source[1]) / textureHeight);
+      const float packedU1 = packUv((double(command.source[0]) + command.source[2]) / textureWidth);
+      const float packedV1 = packUv((double(command.source[1]) + command.source[3]) / textureHeight);
+      sourceCorners = {{{packedU0, packedV0}, {packedU1, packedV0},
+                        {packedU1, packedV1}, {packedU0, packedV1}}};
+    }
     constexpr std::array<std::array<std::uint8_t, 4>, 8> rotatedCorners = {{
       {{0, 1, 2, 3}}, {{1, 2, 3, 0}}, {{2, 3, 0, 1}}, {{3, 0, 1, 2}},
       {{3, 2, 1, 0}}, {{0, 3, 2, 1}}, {{1, 0, 3, 2}}, {{2, 1, 0, 3}}
@@ -619,14 +640,25 @@ void Renderer::renderScene() {
     const auto& uv1 = sourceCorners[uvOrder[1]];
     const auto& uv2 = sourceCorners[uvOrder[2]];
     const auto& uv3 = sourceCorners[uvOrder[3]];
-    const auto& color = command.color;
+    auto color = command.color;
+    if (command.pixiSpritePacking && !command.packedSpriteColor) {
+      const float alpha = std::clamp(color[3], 0.0F, 1.0F);
+      for (std::size_t channel = 0; channel < 3; ++channel) {
+        color[channel] = std::floor(color[channel] * 255.0F * alpha + 0.5F) / 255.0F;
+      }
+      color[3] = std::floor(alpha * 255.0F) / 255.0F;
+    }
+    const auto vertex0 = command.spriteWorldVertices ? command.spriteVertices[0] : p0;
+    const auto vertex1 = command.spriteWorldVertices ? command.spriteVertices[1] : p1;
+    const auto vertex2 = command.spriteWorldVertices ? command.spriteVertices[2] : p2;
+    const auto vertex3 = command.spriteWorldVertices ? command.spriteVertices[3] : p3;
     const std::array<float, 72> vertices = {
-      p0[0], p0[1], uv0[0], uv0[1], color[0], color[1], color[2], color[3], u0, v0, u1, v1,
-      p1[0], p1[1], uv1[0], uv1[1], color[0], color[1], color[2], color[3], u0, v0, u1, v1,
-      p2[0], p2[1], uv2[0], uv2[1], color[0], color[1], color[2], color[3], u0, v0, u1, v1,
-      p0[0], p0[1], uv0[0], uv0[1], color[0], color[1], color[2], color[3], u0, v0, u1, v1,
-      p2[0], p2[1], uv2[0], uv2[1], color[0], color[1], color[2], color[3], u0, v0, u1, v1,
-      p3[0], p3[1], uv3[0], uv3[1], color[0], color[1], color[2], color[3], u0, v0, u1, v1,
+      vertex0[0], vertex0[1], uv0[0], uv0[1], color[0], color[1], color[2], color[3], u0, v0, u1, v1,
+      vertex1[0], vertex1[1], uv1[0], uv1[1], color[0], color[1], color[2], color[3], u0, v0, u1, v1,
+      vertex2[0], vertex2[1], uv2[0], uv2[1], color[0], color[1], color[2], color[3], u0, v0, u1, v1,
+      vertex0[0], vertex0[1], uv0[0], uv0[1], color[0], color[1], color[2], color[3], u0, v0, u1, v1,
+      vertex2[0], vertex2[1], uv2[0], uv2[1], color[0], color[1], color[2], color[3], u0, v0, u1, v1,
+      vertex3[0], vertex3[1], uv3[0], uv3[1], color[0], color[1], color[2], color[3], u0, v0, u1, v1,
     };
     vertices_.insert(vertices_.end(), vertices.begin(), vertices.end());
     const bool operationClipped = inlineFilterMatrix[commandIndex] ?
@@ -643,6 +675,10 @@ void Renderer::renderScene() {
         operations.back().maskImage != command.maskImage ||
         operations.back().maskTransform != command.maskTransform ||
         operations.back().appliesSpriteColor != command.appliesSpriteColor ||
+        operations.back().pixiSpritePacking != command.pixiSpritePacking ||
+        operations.back().spriteWorldVertices != command.spriteWorldVertices ||
+        operations.back().premultipliedSpriteTexture != command.premultipliedSpriteTexture ||
+        (command.appliesSpriteColor && operations.back().spriteFrame != command.source) ||
         operations.back().colorTone != command.colorTone ||
         operations.back().blendColor != command.blendColor ||
         operations.back().inlineMatrix != inlineFilterMatrix[commandIndex] ||
@@ -655,6 +691,10 @@ void Renderer::renderScene() {
         operationClip, operationClipped, textureWidth, textureHeight,
         command.blur, command.maskImage, command.maskTransform});
       operations.back().appliesSpriteColor = command.appliesSpriteColor;
+      operations.back().pixiSpritePacking = command.pixiSpritePacking;
+      operations.back().spriteWorldVertices = command.spriteWorldVertices;
+      operations.back().premultipliedSpriteTexture = command.premultipliedSpriteTexture;
+      operations.back().spriteFrame = command.source;
       operations.back().colorTone = command.colorTone;
       operations.back().blendColor = command.blendColor;
       operations.back().inlineMatrix = inlineFilterMatrix[commandIndex];
@@ -1187,8 +1227,16 @@ void Renderer::renderScene() {
         transform[2], transform[3], 0.0F,
         transform[4], transform[5], 1.0F,
       };
-      const auto program = command.appliesMeshPostTintOverlay ? meshPostTintOverlayProgram_ : tileProgram_;
-      const auto& uniforms = command.appliesMeshPostTintOverlay ? meshPostTintOverlayUniforms_ : tileUniforms_;
+      const auto& material = layer->second.material;
+      const auto* triangleMaterial = std::get_if<TriangleBitmapMaterial>(&material);
+      const auto* bitmapMaterial = std::get_if<MvBitmapMaterial>(&material);
+      const bool usesOverlay = command.appliesMeshPostTintOverlay || triangleMaterial || bitmapMaterial;
+      const bool canvasTriangleBitmap = triangleMaterial &&
+        triangleMaterial->rasterRule == TriangleBitmapMaterial::RasterRule::canvasFourSample;
+      const auto program = canvasTriangleBitmap ? canvasTriangleBitmapProgram_ :
+        usesOverlay ? meshPostTintOverlayProgram_ : tileProgram_;
+      const auto& uniforms = canvasTriangleBitmap ? canvasTriangleBitmapUniforms_ :
+        usesOverlay ? meshPostTintOverlayUniforms_ : tileUniforms_;
       glUseProgram(program);
       activeProgram = program;
       glBindVertexArray(layer->second.vertexArray);
@@ -1198,8 +1246,16 @@ void Renderer::renderScene() {
       glUniform2f(uniforms.animation, command.tileAnimation[0],
                   command.tileAnimation[1]);
       glUniform4fv(uniforms.color, 1, command.color.data());
-      if (command.appliesMeshPostTintOverlay) {
+      if (usesOverlay) {
         glUniform4fv(uniforms.overlayColor, 1, command.blendColor.data());
+        glUniform1i(uniforms.trianglePaintEnabled, triangleMaterial != nullptr);
+        glUniform1i(uniforms.mvBlendEnabled, bitmapMaterial != nullptr);
+        glUniform1i(uniforms.nearestSampling, operation.nearest);
+        if (triangleMaterial) glUniform1fv(uniforms.trianglePaint, 30, triangleMaterial->coefficients.data());
+        if (bitmapMaterial != nullptr) {
+          glUniform4fv(uniforms.mvBounds, 1, bitmapMaterial->texelBounds.data());
+          glUniform1i(uniforms.mvPremultipliedInput, bitmapMaterial->alphaMode == AlphaMode::premultiplied);
+        }
       }
       if (command.maskImage) {
         const auto mask = images_.lookup(command.maskImage);
@@ -1265,7 +1321,18 @@ void Renderer::renderScene() {
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
                       operation.nearest ? GL_NEAREST : GL_LINEAR);
     }
+    const std::array<float, 9> projection = {2.0F / width_, 0, 0, 0, -2.0F / height_, 0, -1, 1, 1};
+    glUniformMatrix3fv(simpleSprite ? simpleSpriteProjectionUniform_ : spriteEffectProjectionUniform_, 1, GL_FALSE, projection.data());
+    glUniform1i(simpleSprite ? simpleSpriteVerticesUniform_ : spriteEffectVerticesUniform_, operation.spriteWorldVertices);
+    glUniform1i(simpleSprite ? simpleSpritePackingUniform_ : spriteEffectPackingUniform_,
+                operation.pixiSpritePacking ? 1 : 0);
+    glUniform1i(simpleSprite ? simpleSpritePremultipliedUniform_ : spriteEffectPremultipliedUniform_,
+                operation.premultipliedSpriteTexture ? 1 : 0);
     if (!simpleSprite) {
+      const auto& frame = operation.spriteFrame;
+      glUniform4f(spriteEffectFrameUniform_, frame[0], frame[1],
+        frame[0] + frame[2] - 1, frame[1] + frame[3] - 1);
+      glUniform1i(spriteEffectNearestUniform_, operation.nearest);
       glUniform1i(spriteEffectColorEnabledUniform_,
                   operation.appliesSpriteColor ? 1 : 0);
       if (operation.appliesSpriteColor) {

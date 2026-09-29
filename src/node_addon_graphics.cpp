@@ -1,5 +1,6 @@
 #include "node_addon_internal.hpp"
 #include <GLES3/gl3.h>
+#include <cmath>
 
 namespace pmjs::addon {
 napi_value graphicsInfo(napi_env env, napi_callback_info) try {
@@ -190,17 +191,63 @@ napi_value createTileLayer(napi_env env, napi_callback_info info) try {
   napi_throw_range_error(env, nullptr, error.what()); return nullptr;
 }
 
-napi_value createMesh(napi_env env, napi_callback_info info) try {
-  auto args = arguments(env, info, 5);
-  if (args.size() != 5) throw std::runtime_error("createMesh requires five arguments");
+pmjs::AlphaMode imageAlphaMode(napi_env env, napi_value options) {
+  napi_valuetype type;
+  check(env, napi_typeof(env, options, &type), "invalid alpha options");
+  if (type != napi_object) throw std::runtime_error("alphaMode requires an options object");
+  if (!hasProperty(env, options, "alphaMode")) return pmjs::AlphaMode::straight;
+  const auto mode = asString(env, property(env, options, "alphaMode"));
+  if (mode == "straight") return pmjs::AlphaMode::straight;
+  if (mode == "premultiplied") return pmjs::AlphaMode::premultiplied;
+  throw std::runtime_error("alphaMode must be straight or premultiplied");
+}
+
+napi_value createMeshResource(napi_env env, const std::vector<napi_value>& args,
+                            const pmjs::MeshMaterial& material) {
   State& value = host(env);
   const auto image = resolveImage(value, asUint32(env, args[0]));
   if (!image) throw std::runtime_error("invalid mesh image");
   const auto mesh = value.renderer.createMesh(*image, floatVector(env, args[1]),
-    floatVector(env, args[2]), uintVector(env, args[3]),
-    asUint32(env, args[4]) == 0);
-  if (!mesh) throw std::runtime_error("invalid mesh geometry");
+    floatVector(env, args[2]), uintVector(env, args[3]), asUint32(env, args[4]) == 0, material);
+  if (!mesh) throw std::runtime_error("invalid mesh geometry or material");
   return uint32(env, mesh);
+}
+
+napi_value createMesh(napi_env env, napi_callback_info info) try {
+  auto args = arguments(env, info, 6);
+  if (args.size() != 5) throw std::runtime_error("createMesh requires exactly five geometry arguments");
+  return createMeshResource(env, args, pmjs::TexturedMeshMaterial{});
+} catch (const std::exception& error) {
+  napi_throw_range_error(env, nullptr, error.what()); return nullptr;
+}
+
+napi_value createMppBitmapMesh(napi_env env, napi_callback_info info) try {
+  auto args = arguments(env, info, 6);
+  if (args.size() != 6) throw std::runtime_error("MPP bitmap mesh requires geometry and raster options");
+  if (hasProperty(env, args[5], "rasterRule")) throw std::runtime_error("triangle raster rule is encoded in coefficients");
+  pmjs::TriangleBitmapMaterial material;
+  const auto coefficients = floatVector(env, property(env, args[5], "coefficients"));
+  if (coefficients.size() != material.coefficients.size()) throw std::runtime_error("invalid compiled triangle coefficients");
+  std::copy(coefficients.begin(), coefficients.end(), material.coefficients.begin());
+  const float compiledMode = material.coefficients[29];
+  if (!std::isfinite(compiledMode) || compiledMode < 0 || compiledMode > 31 ||
+      compiledMode != std::floor(compiledMode)) throw std::runtime_error("invalid triangle raster mode");
+  const auto modeBits = static_cast<unsigned>(compiledMode) & 24U;
+  if (modeBits == 24U) material.rasterRule = pmjs::TriangleBitmapMaterial::RasterRule::canvasFourSample;
+  return createMeshResource(env, args, material);
+} catch (const std::exception& error) {
+  napi_throw_range_error(env, nullptr, error.what()); return nullptr;
+}
+
+napi_value createMvBitmapMesh(napi_env env, napi_callback_info info) try {
+  auto args = arguments(env, info, 6);
+  if (args.size() != 6) throw std::runtime_error("MV bitmap mesh requires geometry and bitmap options");
+  pmjs::MvBitmapMaterial material;
+  const auto bounds = floatVector(env, property(env, args[5], "texelBounds"));
+  if (bounds.size() != 4) throw std::runtime_error("invalid MV bitmap texel bounds");
+  std::copy(bounds.begin(), bounds.end(), material.texelBounds.begin());
+  material.alphaMode = imageAlphaMode(env, args[5]);
+  return createMeshResource(env, args, material);
 } catch (const std::exception& error) {
   napi_throw_range_error(env, nullptr, error.what()); return nullptr;
 }
@@ -214,6 +261,19 @@ napi_value releaseTileLayer(napi_env env, napi_callback_info info) try {
 
 napi_value releaseMesh(napi_env env, napi_callback_info info) {
   return releaseTileLayer(env, info);
+}
+
+napi_value clearImageTriangles(napi_env env, napi_callback_info info) try {
+  auto args = arguments(env, info, 4);
+  if (args.size() < 2) throw std::runtime_error("image triangle clear requires an image and points");
+  if (!host(env).renderer.clearImageTriangles(asUint32(env, args[0]), floatVector(env, args[1]),
+      args.size() > 2 ? floatVector(env, args[2]) : std::vector<float>{},
+      args.size() > 3 ? floatVector(env, args[3]) : std::vector<float>{})) {
+    throw std::runtime_error("triangle clear requires a live GPU-only image and finite triangle coordinates");
+  }
+  return undefined(env);
+} catch (const std::exception& error) {
+  napi_throw_range_error(env, nullptr, error.what()); return nullptr;
 }
 
 napi_value createPrimitiveSurface(napi_env env, napi_callback_info info) try {
@@ -306,14 +366,15 @@ napi_value renderToCanvas(napi_env env, napi_callback_info info) try {
 }
 
 napi_value renderToImage(napi_env env, napi_callback_info info) try {
-  auto args = arguments(env, info, 2);
-  if (args.size() != 2) {
+  auto args = arguments(env, info, 3);
+  if (args.size() < 2) {
     throw std::runtime_error("renderToImage requires width and height");
   }
   State& value = host(env);
   value.canvases.uploadDirty();
   const auto image = value.renderer.renderToImage(
-    asInt32(env, args[0]), asInt32(env, args[1]));
+    asInt32(env, args[0]), asInt32(env, args[1]),
+    args.size() > 2 ? imageAlphaMode(env, args[2]) : pmjs::AlphaMode::straight);
   value.renderer.beginFrame();
   if (!image) throw std::runtime_error("could not create GPU render image");
   return imageInfo(env, image->handle, image->width, image->height);
@@ -432,6 +493,13 @@ void registerGraphicsBindings(napi_env env, napi_value exports) {
   method(env, render, "releaseTileLayer", releaseTileLayer);
   method(env, render, "createMesh", createMesh);
   method(env, render, "releaseMesh", releaseMesh);
+  napi_value plugins = moduleObject(env), mpp = moduleObject(env), mv = moduleObject(env);
+  method(env, mpp, "createBitmapMesh", createMppBitmapMesh);
+  method(env, mpp, "clearBackgroundTriangles", clearImageTriangles);
+  method(env, mv, "createBitmapMesh", createMvBitmapMesh);
+  napi_set_named_property(env, plugins, "mpp", mpp);
+  napi_set_named_property(env, exports, "plugins", plugins);
+  napi_set_named_property(env, exports, "mv", mv);
   method(env, render, "createPrimitiveSurface", createPrimitiveSurface);
   method(env, render, "renderPrimitiveSurface", renderPrimitiveSurface);
   method(env, render, "releasePrimitiveSurface", releasePrimitiveSurface);
@@ -464,6 +532,7 @@ void registerGraphicsBindings(napi_env env, napi_value exports) {
   napi_set_named_property(env, schema, "maxNodes", uint32(env, pmjs::scene_packet::maxNodes));
   napi_set_named_property(env, schema, "maxPacketBytes", uint32(env, pmjs::scene_packet::maxPacketBytes));
   napi_set_named_property(env, schema, "transactionalSubmit", boolean(env, true));
+  napi_set_named_property(env, schema, "gpuSpriteTextures", boolean(env, true));
   napi_set_named_property(env, scene, "schema", schema);
   check(env, napi_set_named_property(env, exports, "render", render), "cannot export render module");
   check(env, napi_set_named_property(env, exports, "scene", scene), "cannot export scene module");

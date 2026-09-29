@@ -126,13 +126,24 @@ if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
     PMJS.phases.on('afterGuestPlugins', 'pmjs.mv.native-sprite-tint-proof', function() {
       var changed = PMJS.methods.dump().some(function(record) {
         return (record.key === 'Sprite._refresh' ||
-          record.key === 'Sprite._executeTint') && record.mutations.length > 0;
+          record.key === 'Sprite._executeTint' ||
+          record.key === 'Sprite._needsTint') && record.mutations.length > 0;
       });
       if (changed) PMJS.optimizations.refuse('sprite.native-tint',
-        'guest changed Sprite._refresh or Sprite._executeTint');
+        'guest changed Sprite tint methods');
     });
   }
 }
+
+PMJS.methods.wrap({
+  key: 'Sprite._needsTint',
+  getTarget: function() {
+    return (typeof Sprite !== 'undefined' && Sprite.prototype) || null;
+  },
+  method: '_needsTint',
+  id: 'pmjs.mv.native-sprite-tint-needs-proof',
+  wrap: function(stockNeedsTint) { return stockNeedsTint; }
+});
 
 PMJS.methods.wrap({
   key: 'Sprite._refresh',
@@ -145,14 +156,18 @@ PMJS.methods.wrap({
     var neutralTone = [0, 0, 0, 0];
     var neutralBlend = [0, 0, 0, 0];
     return function() {
-      if (Object.getPrototypeOf(this) === Sprite.prototype &&
+      if (this instanceof Sprite &&
+          this._refresh === Sprite.prototype._refresh &&
+          this._executeTint === Sprite.prototype._executeTint &&
+          this._needsTint === Sprite.prototype._needsTint &&
           this._pmjsNativeSpriteTint !== false &&
           PMJS.optimizations.isEnabled('sprite.native-tint')) {
         var tone = this._colorTone;
         var blend = this._blendColor;
         var hasTone = tone && (tone[0] || tone[1] || tone[2] || tone[3]);
         var hasBlend = blend && blend[3] > 0;
-        if (hasTone || hasBlend) {
+        if ((hasTone || hasBlend) &&
+            (!hasTone || Object.getPrototypeOf(this) === Sprite.prototype)) {
           this._colorTone = neutralTone;
           this._blendColor = neutralBlend;
           try {

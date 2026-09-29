@@ -340,6 +340,8 @@ std::optional<ImageInfo> ImageStore::createRgba(int width, int height,
   slot.retainCpuPixels = false;
   slot.cacheKey.clear();
   slot.cachedPixels.reset();
+  slot.gpuOnly = pixels == nullptr;
+  slot.renderTarget = false;
   slot.live = true;
   ++liveCount_;
   gpuBytes_ += extent->rgbaBytes;
@@ -348,7 +350,9 @@ std::optional<ImageInfo> ImageStore::createRgba(int width, int height,
 }
 
 std::optional<ImageInfo> ImageStore::createRenderTarget(int width, int height) {
-  return createRgba(width, height, nullptr);
+  auto image = createRgba(width, height, nullptr);
+  if (image) slots_[(image->handle & indexMask) - 1U].renderTarget = true;
+  return image;
 }
 
 std::size_t ImageStore::cpuBytes() const {
@@ -483,6 +487,11 @@ std::optional<ImageInfo> ImageStore::lookup(ImageHandle handle) const {
   const auto& slot = slots_[index];
   if (!slot.live || slot.generation != generation) return std::nullopt;
   return ImageInfo{handle, slot.width, slot.height, slot.texture};
+}
+
+bool ImageStore::isRenderTarget(ImageHandle handle) const {
+  if (!lookup(handle)) return false;
+  return slots_[(handle & indexMask) - 1U].renderTarget;
 }
 
 bool ImageStore::retain(ImageHandle handle) {

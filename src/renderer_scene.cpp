@@ -66,11 +66,16 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
       (flags & NodeFlags::textureRotationMask) >> NodeFlags::textureRotationShift);
     if (textureRotation != 0 &&
         kind != static_cast<std::uint32_t>(NodeKind::sprite)) return false;
+    if ((flags & (NodeFlags::premultipliedSpriteTexture | NodeFlags::packedSpriteColor | NodeFlags::spriteWorldVertices | NodeFlags::standaloneBitmapRegion)) &&
+        kind != static_cast<std::uint32_t>(NodeKind::sprite)) return false;
     if ((flags & NodeFlags::roundPixels) &&
         kind != static_cast<std::uint32_t>(NodeKind::sprite)) return false;
-    if ((flags & NodeFlags::hasMeshPostTintOverlay) &&
+    if ((flags & (NodeFlags::hasMeshPostTintOverlay | NodeFlags::hasMvBitmapBlend)) &&
         kind != static_cast<std::uint32_t>(NodeKind::mesh)) return false;
 
+    if ((flags & NodeFlags::standaloneBitmapRegion) && !(flags & NodeFlags::premultipliedSpriteTexture)) return false;
+    if (parentIndex != noParent && (metadata[parentIndex * metadataStride + 5] & NodeFlags::spriteWorldVertices)) return false;
+    const bool spriteVertices = flags & NodeFlags::spriteWorldVertices;
     const std::array<float, 6> local = {
       values[valueOffset], values[valueOffset + 1],
       values[valueOffset + 2], values[valueOffset + 3],
@@ -87,6 +92,7 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
       parent.world[0] * local[4] + parent.world[2] * local[5] + parent.world[4],
       parent.world[1] * local[4] + parent.world[3] * local[5] + parent.world[5],
     };
+    if (spriteVertices) state.world = parent.world;
     state.alpha = parent.alpha * values[valueOffset + 6];
     state.clip = parent.clip;
     state.clipped = parent.clipped;
@@ -310,8 +316,12 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
           ? RenderCommand::Primitive::tileLayer
           : RenderCommand::Primitive::mesh;
       if (flags & NodeFlags::hasSpriteColor) return false;
-      if (flags & NodeFlags::hasMeshPostTintOverlay) {
-        frame_.commands.back().appliesMeshPostTintOverlay = true;
+      if (flags & (NodeFlags::hasMeshPostTintOverlay | NodeFlags::hasMvBitmapBlend)) {
+        const auto* material = std::get_if<MvBitmapMaterial>(&tileLayers_.at(resource).material);
+        const bool mvBlend = flags & NodeFlags::hasMvBitmapBlend;
+        if (mvBlend != (material != nullptr) ||
+            ((flags & NodeFlags::hasMeshPostTintOverlay) && mvBlend)) return false;
+        frame_.commands.back().appliesMeshPostTintOverlay = !mvBlend;
         std::copy_n(values + valueOffset + 37, 4,
                     frame_.commands.back().blendColor.begin());
         if (frame_.commands.back().blendColor[3] < 0 ||
@@ -332,10 +342,15 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
       return std::array<float, 2>{placed[0] * x + placed[2] * y + placed[4],
                                   placed[1] * x + placed[3] * y + placed[5]};
     };
-    const auto p0 = corner(0, 0);
-    const auto p1 = corner(destination[0], 0);
-    const auto p2 = corner(destination[0], destination[1]);
-    const auto p3 = corner(0, destination[1]);
+    std::array<std::array<float, 2>, 4> worldVertices;
+    for (std::size_t vertex = 0; vertex < 4; ++vertex) {
+      const std::size_t offset = valueOffset + (vertex < 3 ? vertex * 2 : 15);
+      worldVertices[vertex] = {values[offset], values[offset + 1]};
+    }
+    const auto p0 = spriteVertices ? worldVertices[0] : corner(0, 0);
+    const auto p1 = spriteVertices ? worldVertices[1] : corner(destination[0], 0);
+    const auto p2 = spriteVertices ? worldVertices[2] : corner(destination[0], destination[1]);
+    const auto p3 = spriteVertices ? worldVertices[3] : corner(0, destination[1]);
     const float minimumX = std::min({p0[0], p1[0], p2[0], p3[0]});
     const float maximumX = std::max({p0[0], p1[0], p2[0], p3[0]});
     const float minimumY = std::min({p0[1], p1[1], p2[1], p3[1]});
@@ -368,6 +383,16 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
       kind == static_cast<std::uint32_t>(NodeKind::tilingSprite)
         ? RenderCommand::Primitive::tilingSprite
         : RenderCommand::Primitive::sprite;
+    frame_.commands.back().spriteWorldVertices = spriteVertices;
+    frame_.commands.back().spriteVertices = worldVertices;
+    frame_.commands.back().standaloneBitmapRegion = flags & NodeFlags::standaloneBitmapRegion;
+    frame_.commands.back().packedSpriteColor = flags & NodeFlags::packedSpriteColor;
+    if (frame_.commands.back().packedSpriteColor) {
+      frame_.commands.back().color = { float((tint >> 16) & 255) / 255,
+        float((tint >> 8) & 255) / 255, float(tint & 255) / 255, float(tint >> 24) / 255 };
+    }
+    frame_.commands.back().premultipliedSpriteTexture = flags & NodeFlags::premultipliedSpriteTexture;
+    frame_.commands.back().pixiSpritePacking = kind == static_cast<std::uint32_t>(NodeKind::sprite);
     frame_.commands.back().appliesSpriteColor = flags & NodeFlags::hasSpriteColor;
     if (frame_.commands.back().appliesSpriteColor) {
       if (kind != static_cast<std::uint32_t>(NodeKind::sprite)) return false;

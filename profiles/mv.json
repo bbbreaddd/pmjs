@@ -28,6 +28,7 @@
     "js/pmjs-web/requests.js",
     "js/pmjs-pixi4/setup.js",
     "js/pmjs-mv/bitmap.js",
+    "js/pmjs-mv/bitmap-mesh.js",
     "js/pmjs-mv/fonts.js",
     "js/pmjs-mv/fpsmeter.js",
     "js/pmjs-rpgmaker/input.js",

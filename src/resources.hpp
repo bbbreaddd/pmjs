@@ -67,6 +67,7 @@ class ImageStore {
   std::optional<ImageInfo> createRgba(int width, int height, const void* pixels);
   // GPU-only image storage. readPixels() intentionally returns no CPU copy.
   std::optional<ImageInfo> createRenderTarget(int width, int height);
+  bool isRenderTarget(ImageHandle handle) const;
   const ImagePixels* readPixels(ImageHandle handle) const;
   bool updateRgba(ImageHandle handle, const void* pixels);
   bool updateRgbaRegion(ImageHandle handle, int x, int y, int width, int height,
@@ -118,6 +119,8 @@ class ImageStore {
     // Atlas CPU pixels are retained for the lifetime of the slot so blt()
     // never pays a second disk open + PNG decode. Freed only in destroySlot
     // alongside the GPU texture.
+    bool gpuOnly = false;
+    bool renderTarget = false;
     bool retainCpuPixels = false;
     std::string cacheKey;
     mutable std::optional<ImagePixels> cachedPixels;

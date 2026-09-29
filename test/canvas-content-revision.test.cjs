@@ -252,3 +252,89 @@ test('mask rectangles are detached and failed fills cannot create proof', () => 
     'white', () => { throw new Error('fill failed'); }), /fill failed/);
   assert.equal(owner.unitMaskRect(canvas), null);
 });
+
+for (const reflected of [false, true]) {
+  test(`clipped Canvas crop reads only its source region and preserves pixels, reflected=${reflected}`, () => {
+    const ctx = harness();
+    const source = new ctx.CanvasElement();
+    source.width = 816; source.height = 624;
+    const handle = source._ensureNativeCanvas().handle;
+    const target = new ctx.CanvasElement(); target.width = 2; target.height = 2;
+    const drawing = target.getContext('2d');
+    const reads = []; let output;
+    ctx.NativeHost.canvas.readPixels = function(resource, x, y, width, height) {
+      reads.push({ resource, x, y, width, height });
+      const pixels = new Uint8ClampedArray(width * height * 4);
+      if (resource === handle) {
+        for (let row = 0; row < height; row++) for (let column = 0; column < width; column++)
+          pixels.set([x + column, y + row, 77, 255], (row * width + column) * 4);
+      }
+      return pixels;
+    };
+    ctx.NativeHost.canvas.writePixels = function(_handle, _x, _y, _width, _height, pixels) {
+      output = Array.from(pixels);
+    };
+    drawing.beginPath(); drawing.rect(0, 0, 2, 2); drawing.clip();
+    if (reflected) { drawing.translate(2, 0); drawing.scale(-1, 1); }
+    drawing.drawImage(source, 10.25, 20.25, 2, 2, 0, 0, 2, 2);
+    assert.deepEqual(reads[0], { resource: handle, x: 10, y: 20, width: 3, height: 3 });
+    assert.deepEqual(output, reflected
+      ? [11,20,77,255, 10,20,77,255, 11,21,77,255, 10,21,77,255]
+      : [10,20,77,255, 11,20,77,255, 10,21,77,255, 11,21,77,255]);
+  });
+}
+
+test('fully out-of-range Canvas image crops leave the destination unchanged', () => {
+  const ctx = harness();
+  const source = new ctx.CanvasElement(); source.width = 2; source.height = 2;
+  const sourceHandle = source._ensureNativeCanvas().handle;
+  const target = new ctx.CanvasElement(); target.width = 2; target.height = 2;
+  let output;
+  ctx.NativeHost.canvas.readPixels = function(handle, x, y, width, height) {
+    assert.ok(x >= 0 && y >= 0 && width > 0 && height > 0);
+    const pixels = new Uint8ClampedArray(width * height * 4);
+    if (handle === sourceHandle) pixels.set([99, 88, 77, 255]);
+    return pixels;
+  };
+  ctx.NativeHost.canvas.writePixels = function(_handle, _x, _y, _w, _h, pixels) { output = Array.from(pixels); };
+  const drawing = target.getContext('2d');
+  drawing.beginPath(); drawing.rect(0, 0, 2, 2); drawing.clip();
+  drawing.drawImage(source, -10, -10, 2, 2, 0, 0, 2, 2);
+  assert.equal(output, undefined);
+  assert.equal(ctx.calls.drawImage.length, 0);
+});
+
+
+for (const clipped of [false, true]) {
+  test(`partly out-of-range crops trim the destination proportionally, clip=${clipped}`, () => {
+    const ctx = harness();
+    const source = new ctx.CanvasElement(); source.width = source.height = 2;
+    const sourceHandle = source._ensureNativeCanvas().handle;
+    const target = new ctx.CanvasElement(); target.width = target.height = 4;
+    const drawing = target.getContext('2d');
+    let written;
+    ctx.NativeHost.canvas.readPixels = (handle, x, y, width, height) => {
+      const pixels = new Uint8ClampedArray(width * height * 4);
+      if (handle === sourceHandle) pixels.fill(255);
+      return pixels;
+    };
+    ctx.NativeHost.canvas.writePixels = (_handle, x, y, width, height, pixels) => {
+      written = { x, y, width, height, pixels: Array.from(pixels) };
+    };
+    if (clipped) { drawing.beginPath(); drawing.rect(0, 0, 4, 4); drawing.clip(); }
+    drawing.drawImage(source, -1, -1, 2, 2, 0, 0, 4, 4);
+    if (clipped) {
+      assert.deepEqual(written, { x: 2, y: 2, width: 2, height: 2, pixels: new Array(16).fill(255) });
+    } else {
+      assert.deepEqual(ctx.calls.drawImage[0].slice(2, 10), [0, 0, 1, 1, 2, 2, 2, 2]);
+    }
+  });
+}
+
+test('negative source and destination dimensions grow backwards without mirroring', () => {
+  const ctx = harness();
+  const source = new ctx.CanvasElement(); source.width = source.height = 2;
+  const target = new ctx.CanvasElement();
+  target.getContext('2d').drawImage(source, 2, 2, -2, -2, 4, 4, -4, -4);
+  assert.deepEqual(ctx.calls.drawImage[0].slice(2, 10), [0, 0, 2, 2, 0, 0, 4, 4]);
+});

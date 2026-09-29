@@ -79,6 +79,8 @@ Renderer::Renderer(int width, int height, ImageStore& images)
   createPixiPrograms(pixiFragmentPrecision_);
   generatedTextureProgram_ = linkProgram(vertexSource,
                                           generatedTextureFragmentSource);
+  generatedTexturePremultipliedUniform_ = glGetUniformLocation(
+    generatedTextureProgram_, "preservePremultiplied");
   presentationProgram_ = linkProgram(presentationVertexSource,
                                      presentationFragmentSource);
   presentationSceneUniform_ =
@@ -104,6 +106,12 @@ Renderer::Renderer(int width, int height, ImageStore& images)
   presentationUpperCanvasOpacityUniform_ =
     glGetUniformLocation(presentationProgram_, "upperCanvasOpacity");
   spriteEffectProgram_ = linkProgram(vertexSource, spriteEffectFragmentSource);
+  spriteEffectVerticesUniform_ = glGetUniformLocation(spriteEffectProgram_, "spriteWorldVertices");
+  spriteEffectProjectionUniform_ = glGetUniformLocation(spriteEffectProgram_, "spriteProjection");
+  spriteEffectPackingUniform_ = glGetUniformLocation(spriteEffectProgram_, "pixiSpritePacking");
+  spriteEffectPremultipliedUniform_ = glGetUniformLocation(spriteEffectProgram_, "texturePremultiplied");
+  spriteEffectFrameUniform_ = glGetUniformLocation(spriteEffectProgram_, "spriteFrame");
+  spriteEffectNearestUniform_ = glGetUniformLocation(spriteEffectProgram_, "nearestSampling");
   spriteEffectTextureSizeUniform_ =
     glGetUniformLocation(spriteEffectProgram_, "textureSize");
   spriteEffectBlurUniform_ =
@@ -130,6 +138,10 @@ Renderer::Renderer(int width, int height, ImageStore& images)
     glGetUniformLocation(spriteEffectProgram_, "colorMatrix");
   spriteEffectMatrixAlphaUniform_ =
     glGetUniformLocation(spriteEffectProgram_, "colorMatrixAlpha");
+  clearTriangleProgram_ = linkProgram(vertexSource, withTriangleClipCoverage(clearTriangleFragmentSource).c_str());
+  clearTrianglePointsUniform_ = glGetUniformLocation(clearTriangleProgram_, "points");
+  clearTriangleNormalsUniform_ = glGetUniformLocation(clearTriangleProgram_, "inward");
+  clearTriangleRectangleUniform_ = glGetUniformLocation(clearTriangleProgram_, "clearRectangle");
   primitiveSurfaceProgram_ = linkProgram(vertexSource,
                                           primitiveSurfaceFragmentSource);
   primitiveSurfaceSizeUniform_ =
@@ -264,6 +276,12 @@ Renderer::TileProgramUniforms Renderer::queryTileProgramUniforms(std::uint32_t p
   uniforms.textureSize = glGetUniformLocation(program, "textureSize");
   uniforms.color = glGetUniformLocation(program, "color");
   uniforms.overlayColor = glGetUniformLocation(program, "meshPostTintOverlayColor");
+  uniforms.trianglePaintEnabled = glGetUniformLocation(program, "trianglePaintEnabled");
+  uniforms.trianglePaint = glGetUniformLocation(program, "trianglePaint");
+  uniforms.mvBlendEnabled = glGetUniformLocation(program, "mvBlendEnabled");
+  uniforms.mvBounds = glGetUniformLocation(program, "mvBounds");
+  uniforms.nearestSampling = glGetUniformLocation(program, "nearestSampling");
+  uniforms.mvPremultipliedInput = glGetUniformLocation(program, "mvPremultipliedInput");
   uniforms.maskEnabled = glGetUniformLocation(program, "maskEnabled");
   uniforms.maskImage = glGetUniformLocation(program, "maskImage");
   uniforms.maskTransform = glGetUniformLocation(program, "maskTransform");
@@ -283,30 +301,41 @@ void Renderer::createPixiPrograms(const std::string& precision) {
   GLuint simple = 0;
   GLuint tile = 0;
   GLuint meshOverlay = 0;
+  GLuint canvasTriangleBitmap = 0;
   try {
     filter = linkPixiProgram(vertexSource, fragmentSource);
     simple = linkPixiProgram(vertexSource, simpleFragmentSource);
     tile = linkPixiProgram(tileVertexSource, tileFragmentSource);
     const auto overlaySource = meshPostTintOverlayFragmentSourceWithPrecision("mediump");
     meshOverlay = linkPixiProgram(tileVertexSource, overlaySource.c_str());
+    const auto bitmapSource = meshPostTintOverlayFragmentSourceWithPrecision("mediump", true);
+    canvasTriangleBitmap = linkPixiProgram(tileVertexSource, bitmapSource.c_str());
   } catch (...) {
     if (filter) glDeleteProgram(filter);
     if (simple) glDeleteProgram(simple);
     if (tile) glDeleteProgram(tile);
     if (meshOverlay) glDeleteProgram(meshOverlay);
+    if (canvasTriangleBitmap) glDeleteProgram(canvasTriangleBitmap);
     throw;
   }
   if (program_) glDeleteProgram(program_);
   if (simpleProgram_) glDeleteProgram(simpleProgram_);
   if (tileProgram_) glDeleteProgram(tileProgram_);
   if (meshPostTintOverlayProgram_) glDeleteProgram(meshPostTintOverlayProgram_);
+  if (canvasTriangleBitmapProgram_) glDeleteProgram(canvasTriangleBitmapProgram_);
   program_ = filter;
   simpleProgram_ = simple;
+  simpleSpriteVerticesUniform_ = glGetUniformLocation(simpleProgram_, "spriteWorldVertices");
+  simpleSpriteProjectionUniform_ = glGetUniformLocation(simpleProgram_, "spriteProjection");
+  simpleSpritePackingUniform_ = glGetUniformLocation(simpleProgram_, "pixiSpritePacking");
+  simpleSpritePremultipliedUniform_ = glGetUniformLocation(simpleProgram_, "texturePremultiplied");
   tileProgram_ = tile;
   meshPostTintOverlayProgram_ = meshOverlay;
+  canvasTriangleBitmapProgram_ = canvasTriangleBitmap;
   queryFilterProgramUniforms();
   tileUniforms_ = queryTileProgramUniforms(tileProgram_);
   meshPostTintOverlayUniforms_ = queryTileProgramUniforms(meshPostTintOverlayProgram_);
+  canvasTriangleBitmapUniforms_ = queryTileProgramUniforms(canvasTriangleBitmapProgram_);
 }
 
 void Renderer::configurePixiFragmentPrecision(const std::string& precision) {
@@ -362,6 +391,8 @@ Renderer::~Renderer() {
   if (spriteEffectProgram_) glDeleteProgram(spriteEffectProgram_);
   if (tileProgram_) glDeleteProgram(tileProgram_);
   if (meshPostTintOverlayProgram_) glDeleteProgram(meshPostTintOverlayProgram_);
+  if (canvasTriangleBitmapProgram_) glDeleteProgram(canvasTriangleBitmapProgram_);
+  if (clearTriangleProgram_) glDeleteProgram(clearTriangleProgram_);
   if (primitiveSurfaceProgram_) glDeleteProgram(primitiveSurfaceProgram_);
 }
 
@@ -557,6 +588,130 @@ bool Renderer::renderPrimitiveSurface(
   if (scissorWasEnabled) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
   glClearColor(previousClearColor[0], previousClearColor[1],
                previousClearColor[2], previousClearColor[3]);
+  return true;
+}
+
+bool Renderer::clearImageTriangles(ImageHandle handle, const std::vector<float>& triangles,
+    const std::vector<float>& rectangles, const std::vector<float>& suppliedNormals) {
+  const auto image = images_.lookup(handle);
+  if (!image || !images_.isRenderTarget(handle) || triangles.size() % 6 != 0 ||
+      triangles.size() > 4096U * 6U) return false;
+  for (const float value : triangles) if (!std::isfinite(value)) return false;
+  if (!rectangles.empty() && rectangles.size() != triangles.size() / 6 * 4) return false;
+  for (std::size_t index = 0; index < rectangles.size(); ++index) {
+    if (!std::isfinite(rectangles[index]) || (index % 4 >= 2 && rectangles[index] < 0)) return false;
+  }
+  for (std::size_t index = 0; index < rectangles.size(); index += 4) {
+    if (!std::isfinite(rectangles[index] + rectangles[index + 2]) ||
+        !std::isfinite(rectangles[index + 1] + rectangles[index + 3])) return false;
+  }
+  if (!suppliedNormals.empty() && suppliedNormals.size() != triangles.size()) return false;
+  for (float normal : suppliedNormals) if (!std::isfinite(normal)) return false;
+  // Validate the whole batch before modifying any target pixels.
+  for (std::size_t offset = 0; offset < triangles.size(); offset += 6) {
+    const auto* p = triangles.data() + offset;
+    const float area = (p[2] - p[0]) * (p[5] - p[1]) - (p[4] - p[0]) * (p[3] - p[1]);
+    if (!std::isfinite(area)) return false;
+    for (std::size_t edge = 0; edge < 3; ++edge) {
+      const auto next = (edge + 1) % 3;
+      const float dx = p[next * 2] - p[edge * 2];
+      const float dy = p[next * 2 + 1] - p[edge * 2 + 1];
+      if (!std::isfinite(dx * dx + dy * dy)) return false;
+    }
+  }
+  if (triangles.empty()) return true;
+
+  struct SavedState {
+    GLint framebuffer, viewport[4], program, vao, buffer;
+    GLint blendRgbSource, blendRgbDestination, blendAlphaSource, blendAlphaDestination;
+    GLint equationRgb, equationAlpha;
+    GLboolean blend, scissor, depth, stencil, cull, colorMask[4];
+    GLuint target = 0;
+    SavedState() {
+      glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &framebuffer);
+      glGetIntegerv(GL_VIEWPORT, viewport);
+      glGetIntegerv(GL_CURRENT_PROGRAM, &program);
+      glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vao);
+      glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &buffer);
+      glGetIntegerv(GL_BLEND_SRC_RGB, &blendRgbSource);
+      glGetIntegerv(GL_BLEND_DST_RGB, &blendRgbDestination);
+      glGetIntegerv(GL_BLEND_SRC_ALPHA, &blendAlphaSource);
+      glGetIntegerv(GL_BLEND_DST_ALPHA, &blendAlphaDestination);
+      glGetIntegerv(GL_BLEND_EQUATION_RGB, &equationRgb);
+      glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &equationAlpha);
+      glGetBooleanv(GL_COLOR_WRITEMASK, colorMask);
+      blend = glIsEnabled(GL_BLEND); scissor = glIsEnabled(GL_SCISSOR_TEST);
+      depth = glIsEnabled(GL_DEPTH_TEST); stencil = glIsEnabled(GL_STENCIL_TEST);
+      cull = glIsEnabled(GL_CULL_FACE);
+    }
+    ~SavedState() {
+      glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
+      if (target) glDeleteFramebuffers(1, &target);
+      glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+      glUseProgram(program); glBindVertexArray(vao); glBindBuffer(GL_ARRAY_BUFFER, buffer);
+      glBlendFuncSeparate(blendRgbSource, blendRgbDestination, blendAlphaSource, blendAlphaDestination);
+      glBlendEquationSeparate(equationRgb, equationAlpha);
+      glColorMask(colorMask[0], colorMask[1], colorMask[2], colorMask[3]);
+      for (const auto& [capability, enabled] : std::array<std::pair<GLenum, GLboolean>, 5>{{
+          {GL_BLEND, blend}, {GL_SCISSOR_TEST, scissor}, {GL_DEPTH_TEST, depth},
+          {GL_STENCIL_TEST, stencil}, {GL_CULL_FACE, cull}}}) {
+        if (enabled) glEnable(capability); else glDisable(capability);
+      }
+    }
+  } saved;
+  glGenFramebuffers(1, &saved.target);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, saved.target);
+  glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, image->texture, 0);
+  ++stats_.framebufferChecks;
+  if (!saved.target || glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) return false;
+  glViewport(0, 0, image->width, image->height);
+  glDisable(GL_SCISSOR_TEST); glDisable(GL_DEPTH_TEST); glDisable(GL_STENCIL_TEST); glDisable(GL_CULL_FACE);
+  glEnable(GL_BLEND); glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+  glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
+  glBlendFuncSeparate(GL_ZERO, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE_MINUS_SRC_ALPHA);
+  glUseProgram(clearTriangleProgram_); glBindVertexArray(vertexArray_);
+  glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer_);
+  for (std::size_t offset = 0; offset < triangles.size(); offset += 6) {
+    const auto* points = triangles.data() + offset;
+    const float area = (points[2] - points[0]) * (points[5] - points[1]) -
+        (points[4] - points[0]) * (points[3] - points[1]);
+    if (area == 0) continue;
+    const float x0 = std::max(0.0F, std::floor(std::min({points[0], points[2], points[4]})));
+    const float y0 = std::max(0.0F, std::floor(std::min({points[1], points[3], points[5]})));
+    const float x1 = std::min(static_cast<float>(image->width), std::ceil(std::max({points[0], points[2], points[4]})));
+    const float y1 = std::min(static_cast<float>(image->height), std::ceil(std::max({points[1], points[3], points[5]})));
+    if (x1 <= x0 || y1 <= y0) continue;
+    const float left = x0 / image->width * 2 - 1, right = x1 / image->width * 2 - 1;
+    // Generated images store logical top-left row zero at texture row zero.
+    const float top = y0 / image->height * 2 - 1, bottom = y1 / image->height * 2 - 1;
+    const std::array<float, 72> vertices = {
+      left, top, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1,
+      right, top, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1,
+      right, bottom, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1,
+      left, top, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1,
+      right, bottom, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1,
+      left, bottom, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1};
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices.data(), GL_STREAM_DRAW);
+    std::array<float, 6> normals;
+    for (std::size_t edge = 0; suppliedNormals.empty() && edge < 3; ++edge) {
+      const auto next = (edge + 1) % 3;
+      const double dx = double(points[next * 2]) - points[edge * 2];
+      const double dy = double(points[next * 2 + 1]) - points[edge * 2 + 1];
+      const double length = std::hypot(dx, dy);
+      const double winding = area >= 0 ? 1 : -1;
+      normals[edge * 2] = static_cast<float>(-dy * winding / length);
+      normals[edge * 2 + 1] = static_cast<float>(dx * winding / length);
+    }
+    glUniform2fv(clearTrianglePointsUniform_, 3, points);
+    glUniform2fv(clearTriangleNormalsUniform_, 3, suppliedNormals.empty() ? normals.data() : suppliedNormals.data() + offset);
+    if (rectangles.empty()) glUniform4f(clearTriangleRectangleUniform_, 0, 0, image->width, image->height);
+    else {
+      const auto* rect = rectangles.data() + offset / 6 * 4;
+      glUniform4f(clearTriangleRectangleUniform_, rect[0], rect[1], rect[0] + rect[2], rect[1] + rect[3]);
+    }
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    ++stats_.bufferUploads; ++stats_.drawCalls;
+  }
   return true;
 }
 

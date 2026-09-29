@@ -178,6 +178,19 @@ test('guest _executeTint mutation refuses native tint and runs CPU tint', () => 
   assert.equal(sprite.guestTintCalls, 1);
 });
 
+test('guest global _needsTint mutation refuses native tint', () => {
+  const ctx = setupEnvironment({ afterRegister(context) {
+    const token = context.PMJS.methods.beginPlugin('GuestNeedsTint');
+    context.Sprite.prototype._needsTint = function() { return true; };
+    context.PMJS.methods.endPlugin(token);
+  } });
+  assert.match(ctx.PMJS.optimizations.reason('sprite.native-tint'), /refused: guest changed/);
+  const sprite = new ctx.Sprite(new ctx.Bitmap(20, 20));
+  sprite._blendColor = [255, 0, 0, 128];
+  sprite._refresh();
+  assert.equal(sprite.executeTintCalls, 1);
+});
+
 test('sprite.native-tint disables via PMJS_DISABLE_OPT', () => {
   const ctx = setupEnvironment({ env: { PMJS_DISABLE_OPT: 'sprite.native-tint' } });
   assert.equal(ctx.PMJS.optimizations.isEnabled('sprite.native-tint'), false);
@@ -371,7 +384,7 @@ test('particle sprite with explicit opt-out falls back to stock CPU tint inside 
   assert.equal(sprite.texture.baseTexture, sprite._tintTexture);
 });
 
-test('pixel parity: shader formula matches Canvas 2D tint within 1 LSB across tones, blends, and premultiplied alphas', () => {
+test('color arithmetic stays premultiplied and matches the tint model within 1 LSB', () => {
   function shaderTint(pr, pg, pb, a, tone, blend) {
     if (a <= 0) return [0, 0, 0, 0];
     const alphaNorm = a / 255;
@@ -386,6 +399,9 @@ test('pixel parity: shader formula matches Canvas 2D tint within 1 LSB across to
     cr = Math.min(1.0, Math.max(0.0, cr + tone[0] / 255));
     cg = Math.min(1.0, Math.max(0.0, cg + tone[1] / 255));
     cb = Math.min(1.0, Math.max(0.0, cb + tone[2] / 255));
+    if (tone.every(value => value === 0)) {
+      cr *= alphaNorm; cg *= alphaNorm; cb *= alphaNorm;
+    }
     const ba = blend[3] / 255;
     cr = cr * (1 - ba) + (blend[0] / 255) * ba;
     cg = cg * (1 - ba) + (blend[1] / 255) * ba;
@@ -406,6 +422,9 @@ test('pixel parity: shader formula matches Canvas 2D tint within 1 LSB across to
     cr = Math.min(255, Math.max(0, cr + tone[0]));
     cg = Math.min(255, Math.max(0, cg + tone[1]));
     cb = Math.min(255, Math.max(0, cb + tone[2]));
+    if (tone.every(value => value === 0)) {
+      cr *= a / 255; cg *= a / 255; cb *= a / 255;
+    }
     const ba = blend[3] / 255;
     cr = cr * (1 - ba) + blend[0] * ba;
     cg = cg * (1 - ba) + blend[1] * ba;
@@ -462,7 +481,7 @@ test('pixel parity: shader formula matches Canvas 2D tint within 1 LSB across to
   }
 });
 
-test('unrecognized sprite subclasses retain CPU tint across tone updates', () => {
+test('subclasses with non-neutral tone retain CPU tint across tone updates', () => {
   const ctx = setupEnvironment();
   function Sprite_Picture() {
     ctx.Sprite.apply(this, arguments);
@@ -490,3 +509,51 @@ test('unrecognized sprite subclasses retain CPU tint across tone updates', () =>
   assert.equal(picture.texture.frame.width, 816);
   assert.equal(picture.texture.frame.height, 624);
 });
+
+for (const method of ['_refresh', '_executeTint', '_needsTint']) {
+  test(`subclass overriding ${method} retains CPU tint`, () => {
+    const ctx = setupEnvironment();
+    function CustomSprite(bitmap) { ctx.Sprite.call(this, bitmap); }
+    CustomSprite.prototype = Object.create(ctx.Sprite.prototype);
+    const stock = ctx.Sprite.prototype[method];
+    CustomSprite.prototype[method] = function() {
+      this.customCalls = (this.customCalls || 0) + 1;
+      return stock.apply(this, arguments);
+    };
+    const sprite = new CustomSprite(new ctx.Bitmap(32, 32));
+    sprite._blendColor = [255, 255, 255, 64];
+    sprite._refresh();
+    assert.equal(sprite.customCalls, 1);
+    assert.equal(sprite.executeTintCalls, 1);
+    assert.equal(sprite.texture.baseTexture, sprite._tintTexture);
+  });
+}
+
+for (const disabled of [false, true]) {
+  test(`MPP-style inherited flash cadence with native tint disabled=${disabled}`, () => {
+    const ctx = setupEnvironment({ env: disabled
+      ? { PMJS_DISABLE_OPT: 'sprite.native-tint' } : {} });
+    function Sprite_Fragment(bitmap) { ctx.Sprite.call(this, bitmap); }
+    Sprite_Fragment.prototype = Object.create(ctx.Sprite.prototype);
+    const bitmap = new ctx.Bitmap(64, 64);
+    const fragments = Array.from({ length: 120 }, () => new Sprite_Fragment(bitmap));
+    for (const fragment of fragments) {
+      let alpha = 255;
+      for (let d = 25; d > 0; d--) {
+        alpha *= (d - 1) / d;
+        if (d % 8 === 1) {
+          fragment._blendColor = [255, 255, 255, alpha];
+          fragment._refresh();
+        }
+      }
+      assert.equal(fragment.executeTintCalls, disabled ? 3 : 0);
+      assert.equal(fragment.texture.baseTexture, bitmap.baseTexture);
+      assert.equal(fragment._blendColor[3], 0);
+    }
+    const optedOut = new Sprite_Fragment(bitmap);
+    optedOut._pmjsNativeSpriteTint = false;
+    optedOut._blendColor = [255, 255, 255, 128];
+    optedOut._refresh();
+    assert.equal(optedOut.executeTintCalls, 1);
+  });
+}
