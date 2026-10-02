@@ -240,3 +240,102 @@ test('Olivia optimization disabled via disableOptimizations leaves stock behavio
   assert.equal(inactive.glitchCalls, 1);
   assert.equal(inactive.tvCalls, 1);
 });
+
+test('normal execution retains guest synchronization and later hooks', () => {
+  const Sprite = createKnownOliviaSprite();
+  const synchronize = Sprite.prototype.synchronizeHorrorFiltersWithSource;
+  const { sandbox } = loadWithRegistrations({
+    Sprite, Olivia: { HorrorEffects: {} }
+  });
+  sandbox.pmjsInstallOliviaHorrorEffects();
+  assert.equal(Sprite.prototype.synchronizeHorrorFiltersWithSource, synchronize);
+  const sprite = new Sprite();
+  let hookCalls = 0;
+  sprite.synchronizeHorrorFiltersWithSource = function() {
+    hookCalls++;
+    return synchronize.apply(this, arguments);
+  };
+  sprite.synchronizeHorrorFiltersWithSource();
+  sprite.updateHorrorEffects();
+  assert.equal(sprite.tvCalls, undefined);
+  sprite._horrorFiltersSource = {
+    _horrorFilters: { tvFilter: { animated: true, time: 0, aniSpeed: 2 } }
+  };
+  sprite.synchronizeHorrorFiltersWithSource();
+  sprite.updateHorrorEffects();
+  assert.equal(hookCalls, 2);
+  assert.equal(sprite._horrorFilters.tvFilter.time, 2);
+});
+
+test('census preserves inactive skipping, active updates, late hooks, and reset', () => {
+  const Sprite = createKnownOliviaSprite();
+  const { sandbox } = loadWithRegistrations({
+    Sprite,
+    Olivia: { HorrorEffects: {} },
+    NativeHost: { runtime: { env(name) {
+      return name === 'PMJS_SCENE_CENSUS' ? '1' : '';
+    } } }
+  });
+  sandbox.pmjsInstallOliviaHorrorEffects();
+  const sprite = new Sprite();
+  sprite.synchronizeHorrorFiltersWithSource();
+  sprite.updateHorrorEffects();
+  assert.equal(sprite.noiseCalls, undefined);
+  assert.equal(sprite.glitchCalls, undefined);
+  assert.equal(sprite.tvCalls, undefined);
+  assert.equal(sandbox.__pmjsHorrorCensus.effectsSkipped, 1);
+  assert.equal(sandbox.__pmjsHorrorCensus.noise, 0);
+  assert.equal(sandbox.__pmjsHorrorCensus.syncSkipped, 1);
+
+  sprite._horrorFilters.tvFilter = { animated: true, time: 0, aniSpeed: 2 };
+  sprite.updateHorrorEffects();
+  assert.equal(sprite._horrorFilters.tvFilter.time, 2);
+  assert.equal(sandbox.__pmjsHorrorCensus.tv, 1);
+  delete sprite._horrorFilters.tvFilter;
+  sprite.updateHorrorEffects();
+  assert.equal(sandbox.__pmjsHorrorCensus.effectsSkipped, 2);
+  assert.equal(sandbox.__pmjsHorrorCensus.tv, 1);
+
+  let hookCalls = 0;
+  const original = Sprite.prototype.updateHorrorNoise;
+  Sprite.prototype.updateHorrorNoise = function() {
+    hookCalls++;
+    return original.apply(this, arguments);
+  };
+  // PortLab resets census windows by clearing the published object.
+  sandbox.__pmjsHorrorCensus = null;
+  sprite.updateHorrorEffects();
+  assert.equal(hookCalls, 1);
+  assert.equal(sandbox.__pmjsHorrorCensus.effectsChecked, 1);
+  assert.equal(sandbox.__pmjsHorrorCensus.effectsSkipped, 0);
+  assert.equal(sandbox.__pmjsHorrorCensus.noise, 1);
+  assert.equal(sandbox.__pmjsHorrorCensus.glitch, 1);
+  assert.equal(sandbox.__pmjsHorrorCensus.tv, 1);
+});
+
+test('census preserves custom dispatchers and counts only active known leaves', () => {
+  const Sprite = createKnownOliviaSprite();
+  const dispatch = Sprite.prototype.updateHorrorEffects;
+  Sprite.prototype.updateHorrorEffects = function() {
+    this.hookCalls = (this.hookCalls || 0) + 1;
+    return dispatch.apply(this, arguments);
+  };
+  const { sandbox } = loadWithRegistrations({
+    Sprite,
+    Olivia: { HorrorEffects: {} },
+    NativeHost: { runtime: { env() { return '1'; } } }
+  });
+  sandbox.pmjsInstallOliviaHorrorEffects();
+  const sprite = new Sprite();
+  sprite.updateHorrorEffects();
+  assert.equal(sprite.hookCalls, 1);
+  assert.equal(sandbox.__pmjsHorrorCensus.effectsSkipped, 3);
+  assert.equal(sprite.tvCalls, undefined);
+  sandbox.__pmjsHorrorCensus = null;
+  sprite._horrorFilters.tvFilter = { animated: true, time: 0, aniSpeed: 1 };
+  sprite.updateHorrorEffects();
+  assert.equal(sprite.hookCalls, 2);
+  assert.equal(sprite._horrorFilters.tvFilter.time, 1);
+  assert.equal(sandbox.__pmjsHorrorCensus.effectsSkipped, 2);
+  assert.equal(sandbox.__pmjsHorrorCensus.tv, 1);
+});

@@ -1,7 +1,7 @@
 'use strict';
 
 // Shared Olivia HorrorEffects guard: Olivia_HorrorEffects
-// Skips inactive HorrorEffects updates and synchronize calls when filters are absent.
+// Skips inactive HorrorEffects updates when filters are absent.
 // Guard only exact Olivia implementations; leave composed or foreign wrappers untouched.
 (function() {
   if (typeof PMJS !== 'undefined' && PMJS.plugins &&
@@ -131,9 +131,10 @@
 
     var integrated = false;
 
+    // The guest already returns on an absent source. Wrap only for diagnostics.
     var synchronize = proto.synchronizeHorrorFiltersWithSource;
     if (typeof synchronize === 'function' && !synchronize._pmjsOliviaGuard &&
-        isKnownOliviaSynchronize(synchronize)) {
+        isKnownOliviaSynchronize(synchronize) && pmjsHorrorCensus()) {
       proto.synchronizeHorrorFiltersWithSource = (function(original) {
         var guarded = function() {
           var census = pmjsHorrorCensus();
@@ -196,6 +197,9 @@
             proto[leaf.method] = counting;
           })(countedLeaves[c]);
         }
+        knownNoise = proto.updateHorrorNoise;
+        knownGlitch = proto.updateHorrorGlitch;
+        knownTV = proto.updateHorrorTV;
       }
     } else if (!knownDispatcher && !updateEffects._pmjsOliviaGuard) {
       // Composed wrapper: guard only recognized leaves.
