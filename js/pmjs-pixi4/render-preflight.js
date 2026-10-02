@@ -31,9 +31,20 @@
   var classNames = Object.keys(knownClasses);
 
   var baselineMethods = {};
+  var baselineWebGLMethods = new WeakMap();
+  var cachedWebGL = PIXI.DisplayObject &&
+    PIXI.DisplayObject.prototype._renderCachedWebGL;
+  var emptyMethods = {};
   classNames.forEach(function(name) {
     var proto = knownClasses[name] && knownClasses[name].prototype;
     if (!proto) return;
+    baselineWebGLMethods.set(proto, {
+      renderWebGL: proto.renderWebGL,
+      _renderWebGL: proto._renderWebGL,
+      // These stock entry points draw directly without dispatching the leaf hook.
+      callsLeaf: name !== 'WindowLayer' && name !== 'ParticleContainer' &&
+        name !== 'RectTileLayer' && name !== 'CompositeRectTileLayer'
+    });
     baselineMethods[name] = {};
     renderMethods.forEach(function(method) {
       baselineMethods[name][method] =
@@ -41,6 +52,34 @@
           undefined;
     });
   });
+
+  function unsupportedMethod(node) {
+    var proto = Object.getPrototypeOf(node);
+    var baseline;
+    while (proto && !(baseline = baselineWebGLMethods.get(proto))) {
+      proto = Object.getPrototypeOf(proto);
+    }
+    baseline = baseline || emptyMethods;
+    var renderWebGL = node.renderWebGL;
+    if (cachedWebGL && node._cacheAsBitmap && renderWebGL === cachedWebGL) {
+      // A realized cache draws its snapshot, not the original node's hooks.
+      if (!node.__pmjsBuildingBitmapCache && node._cacheData &&
+          node._cacheData.sprite) return null;
+      renderWebGL = node._cacheData && node._cacheData.originalRenderWebGL;
+    }
+    if (renderWebGL !== baseline.renderWebGL) return 'renderWebGL';
+    if (baseline.callsLeaf !== false &&
+        node._renderWebGL !== baseline._renderWebGL) return '_renderWebGL';
+    return null;
+  }
+
+  function check(node) {
+    var method = unsupportedMethod(node);
+    if (method) {
+      PMJS.compat.hit('render.render-method',
+        (node.constructor && node.constructor.name || 'node') + '.' + method);
+    }
+  }
 
   var report = { rendererPlugins: [], renderMethodOverrides: [] };
   function scan() {
@@ -69,6 +108,6 @@
     return report;
   }
 
-  globalThis.pmjsPixiRenderPreflight = { scan: scan, report: report };
+  globalThis.pmjsPixiRenderPreflight = { scan: scan, report: report,
+    unsupportedMethod: unsupportedMethod, check: check };
 })();
-

@@ -204,7 +204,7 @@ test('unrealized tile layers log instead of vanishing silently', () => {
     [['render.tilemap', 'Object:layer-unrealized']]);
 });
 
-test('custom render hooks do not affect native encoding', () => {
+test('reached custom render hooks report the native approximation', () => {
   const harness = makeHarness();
   const { sandbox, sprite } = harness;
   class WeirdSprite extends sandbox.PIXI.Sprite {
@@ -215,21 +215,24 @@ test('custom render hooks do not affect native encoding', () => {
   root.addChild(subclass);
   root.addChild(sprite());
   assert.equal(sandbox.submitNativeScene(root), true);
-  assert.deepEqual(harness.compatHits, []);
+  assert.deepEqual(harness.compatHits,
+    [['render.render-method', 'WeirdSprite._renderWebGL']]);
   assert.deepEqual(harness.submitted[0].metadata.filter((_, index) => index % 7 === 0),
     [0, 1, 1]);
   root.children.length = 0;
   harness.submitted.length = 0;
+  harness.compatHits.length = 0;
   const instance = sprite();
   instance.renderWebGL = function() {};
   root.addChild(instance);
   assert.equal(sandbox.submitNativeScene(root), true);
-  assert.deepEqual(harness.compatHits, []);
+  assert.deepEqual(harness.compatHits,
+    [['render.render-method', 'Sprite.renderWebGL']]);
   assert.deepEqual(harness.submitted[0].metadata.filter((_, index) => index % 7 === 0),
     [0, 1]);
 });
 
-test('late prototype patches do not affect native encoding', () => {
+test('late prototype render patches are reported on the next traversal', () => {
   const harness = makeHarness();
   const { sandbox, sprite } = harness;
   const root = new sandbox.PIXI.Container();
@@ -238,21 +241,94 @@ test('late prototype patches do not affect native encoding', () => {
   submitOnly(harness, root);
   sandbox.PIXI.Sprite.prototype._renderWebGL = function() {};
   assert.equal(sandbox.submitNativeScene(root), true);
-  assert.deepEqual(harness.compatHits, []);
+  assert.deepEqual(harness.compatHits,
+    [['render.render-method', 'Sprite._renderWebGL']]);
   assert.deepEqual(harness.submitted[harness.submitted.length - 1].metadata
     .filter((_, index) => index % 7 === 0), [0, 1]);
 });
 
-test('plain sprite segments ignore render hooks', () => {
+test('plain sprite segments cannot conceal overridden render hooks', () => {
   const harness = makeHarness();
   const { sandbox, sprite } = harness;
   const root = new sandbox.PIXI.Container();
   for (let index = 0; index < 5; index++) root.addChild(sprite());
   root.children[3]._renderWebGL = function() {};
   assert.equal(sandbox.submitNativeScene(root), true);
-  assert.deepEqual(harness.compatHits, []);
+  assert.deepEqual(harness.compatHits,
+    [['render.render-method', 'Sprite._renderWebGL']]);
   assert.deepEqual(harness.submitted[0].metadata.filter((_, index) => index % 7 === 0),
     [0, 1, 1, 1, 1, 1]);
+});
+
+test('unreached render hooks and Canvas-only overrides do not report unsupported drawing', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const root = new sandbox.PIXI.Container();
+  const hidden = root.addChild(sprite());
+  hidden.visible = false;
+  hidden.renderWebGL = function() {};
+  const hiddenParent = root.addChild(new sandbox.PIXI.Container());
+  hiddenParent.renderable = false;
+  hiddenParent.addChild(sprite())._renderWebGL = function() {};
+  const detached = sprite();
+  detached._renderWebGL = function() {};
+  root.addChild(sprite()).renderCanvas = function() {};
+  submitOnly(harness, root);
+
+  const particles = root.addChild(new sandbox.PIXI.particles.ParticleContainer());
+  particles.addChild(sprite()).renderWebGL = function() {};
+  submitOnly(harness, root);
+});
+
+test('strict render-hook rejection precedes submission and restores the stage parent', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  sandbox.NativeHost.runtime.env = name =>
+    name === 'PMJS_STRICT_COMPAT' ? '1' : undefined;
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..',
+    'js/pmjs-core/compatibility.js'), 'utf8'), sandbox);
+  const parent = new sandbox.PIXI.Container();
+  const root = parent.addChild(new sandbox.PIXI.Container());
+  for (let index = 0; index < 6; index++) root.addChild(sprite());
+  root.children[4]._renderWebGL = function() {
+    throw new Error('unsupported hook must not be invoked');
+  };
+  assert.throws(() => sandbox.renderNativeStage(root),
+    /unsupported native capability: render\.render-method: Sprite\._renderWebGL/);
+  assert.equal(harness.submitted.length, 0);
+  assert.equal(sandbox.renderNativeStage._ready, false);
+  assert.equal(root.parent, parent);
+  delete root.children[4]._renderWebGL;
+  sandbox.renderNativeStage(root);
+  assert.equal(harness.submitted.length, 1);
+  assert.equal(sandbox.renderNativeStage._ready, true);
+});
+
+test('a reached render override marks each affected frame degraded', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const root = new sandbox.PIXI.Container();
+  const child = root.addChild(sprite());
+  child.renderWebGL = function() {};
+  sandbox.renderNativeStage(root);
+  sandbox.renderNativeStage(root);
+  assert.equal(sandbox.renderNativeStage._framesDegraded, 2);
+  delete child.renderWebGL;
+  sandbox.renderNativeStage(root);
+  assert.equal(sandbox.renderNativeStage._framesTotal, 3);
+  assert.equal(sandbox.renderNativeStage._framesDegraded, 2);
+});
+
+test('structural tile layers cannot bypass render-method reporting', () => {
+  const harness = makeHarness();
+  const { sandbox } = harness;
+  const root = new sandbox.PIXI.Container();
+  root.addChild({ pointsBuf: [], textures: [], renderWebGL() {} });
+  sandbox.submitNativeScene(root);
+  assert.deepEqual(harness.compatHits, [
+    ['render.render-method', 'Object.renderWebGL'],
+    ['render.tilemap', 'Object:layer-unrealized']
+  ]);
 });
 
 test('skipUpdateTransform uses the rendered root world transform', () => {

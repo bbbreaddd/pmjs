@@ -195,7 +195,7 @@ function nativePlainSpriteBinding(node) {
       node._cacheAsBitmap ||
       node.shader || node.mask || typeof node.updateChowRender === 'function' ||
       nativeNodeRenderType(node) !== 'sprite' || nativeScenePictureBlend(node) >= 0 ||
-      nativeScenePreparation(node)) {
+      nativeScenePreparation(node) || pmjsPixiRenderPreflight.unsupportedMethod(node)) {
     return null;
   }
   var filters = nativeSceneFilters(node);
@@ -277,6 +277,7 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
     particleContext, forcedAlpha) {
   if (!node) return;
   if (nativeIsRectTileLayer(node)) {
+    pmjsPixiRenderPreflight.check(node);
     writeNativeSceneRectTileLayer(node, parentIndex);
     return;
   }
@@ -286,6 +287,7 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
     var cacheProducer = node.constructor && node.constructor.name || 'node';
     var cachedSprite = node._cacheData && node._cacheData.sprite;
     if (cachedSprite) {
+      pmjsPixiRenderPreflight.check(node);
       PMJS.compat.observed('render.cacheAsBitmap', cacheProducer);
       var cachedTransform = node.transform;
       if (cachedTransform && !nativeSceneRootUsesWorldTransform &&
@@ -320,7 +322,10 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
   if (!particleContext && typeof globalThis.__pmjsBeforeRenderNode === 'function') {
     globalThis.__pmjsBeforeRenderNode(node);
   }
-  if (!particleContext) prepareNativeSceneNode(node);
+  if (!particleContext) {
+    pmjsPixiRenderPreflight.check(node);
+    prepareNativeSceneNode(node);
+  }
   if (!particleContext && node.shader) {
     PMJS.compat.hit('render.shader',
       (node.constructor && node.constructor.name || 'node') + ':' +

@@ -113,6 +113,80 @@ test('Text preparation follows Pixi render resolution before rasterization', () 
   assert.deepEqual(label.calls, [[2, true, true]]);
 });
 
+test('scene checks retain inherited baselines and recheck live prototype chains', () => {
+  class Container {}
+  Container.prototype.renderWebGL = function() {};
+  Container.prototype._renderWebGL = function() {};
+  class Sprite extends Container {}
+  Sprite.prototype._renderWebGL = function() {};
+  class Derived extends Sprite {}
+  const sandbox = { PIXI: { Container, Sprite } };
+  vm.runInNewContext(source, sandbox);
+  const check = sandbox.pmjsPixiRenderPreflight.unsupportedMethod;
+  const node = new Derived();
+  assert.equal(check(node), null);
+  const stock = Container.prototype.renderWebGL;
+  Container.prototype.renderWebGL = function() {};
+  assert.equal(check(node), 'renderWebGL');
+  Container.prototype.renderWebGL = stock;
+  assert.equal(check(node), null);
+  // A different class's stock leaf does not establish equivalent drawing.
+  node._renderWebGL = Container.prototype._renderWebGL;
+  assert.equal(check(node), '_renderWebGL');
+  delete node._renderWebGL;
+  Object.setPrototypeOf(Derived.prototype, {
+    __proto__: Sprite.prototype, renderWebGL() {}
+  });
+  assert.equal(check(node), 'renderWebGL');
+});
+
+test('scene checks distinguish stock cached drawing from custom cache overrides', () => {
+  class DisplayObject {}
+  DisplayObject.prototype._renderCachedWebGL = function() {};
+  class Sprite extends DisplayObject {}
+  Sprite.prototype.renderWebGL = function() {};
+  Sprite.prototype._renderWebGL = function() {};
+  const sandbox = { PIXI: { DisplayObject, Sprite } };
+  vm.runInNewContext(source, sandbox);
+  const check = sandbox.pmjsPixiRenderPreflight.unsupportedMethod;
+  const node = new Sprite();
+  node._cacheAsBitmap = true;
+  node._cacheData = { originalRenderWebGL: node.renderWebGL, sprite: null };
+  node.renderWebGL = node._renderCachedWebGL;
+  assert.equal(check(node), null);
+  node._cacheData.originalRenderWebGL = function() {};
+  assert.equal(check(node), 'renderWebGL');
+  node._cacheData.sprite = new Sprite();
+  assert.equal(check(node), null);
+  node.__pmjsBuildingBitmapCache = true;
+  assert.equal(check(node), 'renderWebGL');
+  node.__pmjsBuildingBitmapCache = false;
+  node.renderWebGL = function() {};
+  assert.equal(check(node), 'renderWebGL');
+});
+
+test('direct stock renderers do not dispatch an overridden leaf hook', () => {
+  class Container {}
+  Container.prototype.renderWebGL = function() {};
+  class ParticleContainer extends Container {}
+  class WindowLayer extends Container {}
+  class RectTileLayer extends Container {}
+  class CompositeRectTileLayer extends Container {}
+  const classes = [ParticleContainer, WindowLayer, RectTileLayer, CompositeRectTileLayer];
+  for (const cls of classes) cls.prototype.renderWebGL = function() {};
+  const sandbox = { PIXI: { Container, particles: { ParticleContainer },
+    tilemap: { RectTileLayer, CompositeRectTileLayer } }, WindowLayer };
+  vm.runInNewContext(source, sandbox);
+  const check = sandbox.pmjsPixiRenderPreflight.unsupportedMethod;
+  for (const cls of classes) {
+    const node = new cls();
+    node._renderWebGL = function() {};
+    assert.equal(check(node), null);
+    node.renderWebGL = function() {};
+    assert.equal(check(node), 'renderWebGL');
+  }
+});
+
 test('Pixi baseline loads before plugin setup, with scan after adapters', () => {
   const runtimeRoot = path.join(__dirname, '..');
   const generic = JSON.parse(fs.readFileSync(path.join(runtimeRoot,
