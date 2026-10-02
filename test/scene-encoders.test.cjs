@@ -1463,6 +1463,88 @@ test('registry disable selects ordinary sprite encoding with the same packet', (
   assert.deepEqual(ordinary, optimized);
 });
 
+test('sprite segments preserve Text preparation and later text changes', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite, makeTexture } = harness;
+  class Text extends sandbox.PIXI.Sprite {
+    constructor() {
+      super(makeTexture(8, 8));
+      this.resolution = 1;
+      this.dirty = true;
+      this.nextTexture = makeTexture(40, 16);
+      this.prepared = [];
+    }
+    updateText(respectDirty) {
+      this.prepared.push([this.resolution, this.dirty, respectDirty]);
+      if (this.dirty) this.texture = this.nextTexture;
+      this.dirty = false;
+    }
+  }
+  sandbox.PIXI.Text = Text;
+  const root = new sandbox.PIXI.Container();
+  const label = new Text();
+  root.addChild(label);
+  for (let i = 0; i < 4; i++) root.addChild(sprite());
+  sandbox.nativeSceneFilterResolution = 2;
+  let packet = submitOnly(harness, root);
+  assert.deepEqual(label.prepared, [[2, true, true]]);
+  assert.equal(packet.metadata[7 + 2], label.nextTexture.baseTexture.source._nativeImage.handle);
+  assert.equal(packet.values[41 + 13], 40);
+  assert.equal(sandbox.nativeSceneSegmentStats.sprites, 4);
+
+  label.nextTexture = makeTexture(72, 16);
+  label.dirty = true;
+  packet = submitOnly(harness, root);
+  assert.equal(label.prepared.length, 2);
+  assert.equal(packet.values[41 + 13], 72);
+  sandbox.PMJS.optimizations.isEnabled = id => id !== 'scene.plain-sprite-segment';
+  assert.deepEqual(submitOnly(harness, root), packet);
+});
+
+test('sprite segments honor bitmap cache activation and removal', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const root = new sandbox.PIXI.Container();
+  const cached = root.addChild(sprite(16, 16));
+  for (let i = 0; i < 4; i++) root.addChild(sprite());
+  submitOnly(harness, root);
+  const snapshot = sprite(64, 48);
+  cached._cacheAsBitmap = true;
+  cached._cacheData = { sprite: snapshot };
+  const packet = submitOnly(harness, root);
+  const handles = packet.metadata.filter((_, index) => index % 7 === 2);
+  assert.ok(handles.includes(snapshot.texture.baseTexture.source._nativeImage.handle));
+  assert.ok(!handles.includes(cached.texture.baseTexture.source._nativeImage.handle));
+  sandbox.PMJS.optimizations.isEnabled = id => id !== 'scene.plain-sprite-segment';
+  assert.deepEqual(submitOnly(harness, root), packet);
+  cached._cacheAsBitmap = false;
+  const ordinary = submitOnly(harness, root);
+  sandbox.PMJS.optimizations.isEnabled = () => true;
+  assert.deepEqual(submitOnly(harness, root), ordinary);
+});
+
+test('sprite segments preserve later before-render hooks and their order', () => {
+  const harness = makeHarness();
+  const { sandbox, sprite } = harness;
+  const root = new sandbox.PIXI.Container();
+  for (let i = 0; i < 5; i++) root.addChild(sprite());
+  submitOnly(harness, root);
+  const visited = [];
+  sandbox.__pmjsBeforeRenderNode = node => {
+    visited.push(node);
+    node.x = visited.length * 3;
+  };
+  const packet = submitOnly(harness, root);
+  assert.deepEqual(visited.map(node => [root, ...root.children].indexOf(node)),
+    [0, 1, 2, 3, 4, 5]);
+  for (let i = 0; i < 6; i++) assert.equal(packet.values[i * 41 + 4], (i + 1) * 3);
+  visited.length = 0;
+  sandbox.PMJS.optimizations.isEnabled = id => id !== 'scene.plain-sprite-segment';
+  assert.deepEqual(submitOnly(harness, root), packet);
+  assert.deepEqual(visited.map(node => [root, ...root.children].indexOf(node)),
+    [0, 1, 2, 3, 4, 5]);
+});
+
 test('scene submission asks the video owner for diagnostics only on failure', () => {
   const harness = makeHarness();
   const { sandbox, sprite } = harness;

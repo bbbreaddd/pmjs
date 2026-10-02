@@ -22,15 +22,19 @@ function nativeScenePreparationFor(node) {
   }
   return null;
 }
-function prepareNativeSceneNode(node) {
-  var resolution = typeof nativeSceneFilterResolution === 'number' ?
-    nativeSceneFilterResolution : 1;
+function nativeScenePreparation(node) {
   var proto = Object.getPrototypeOf(node);
   var preparation = proto && nativeScenePreparationCache.get(proto);
   if (preparation === undefined) {
     preparation = nativeScenePreparationFor(node);
     if (proto) nativeScenePreparationCache.set(proto, preparation);
   }
+  return preparation;
+}
+function prepareNativeSceneNode(node) {
+  var resolution = typeof nativeSceneFilterResolution === 'number' ?
+    nativeSceneFilterResolution : 1;
+  var preparation = nativeScenePreparation(node);
   if (preparation) preparation(node, resolution);
   if (typeof prepareNativeMvSceneNode === 'function') {
     prepareNativeMvSceneNode(node);

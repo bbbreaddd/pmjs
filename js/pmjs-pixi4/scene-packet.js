@@ -192,8 +192,10 @@ function nativeSpriteLocalTransform(node, local) {
 
 function nativePlainSpriteBinding(node) {
   if (nativeSceneNodeRejected(node, null) || node.children && node.children.length ||
+      node._cacheAsBitmap ||
       node.shader || node.mask || typeof node.updateChowRender === 'function' ||
-      nativeNodeRenderType(node) !== 'sprite' || nativeScenePictureBlend(node) >= 0) {
+      nativeNodeRenderType(node) !== 'sprite' || nativeScenePictureBlend(node) >= 0 ||
+      nativeScenePreparation(node)) {
     return null;
   }
   var filters = nativeSceneFilters(node);
@@ -646,7 +648,7 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
   var particleFrame = particleContainer ? nativeParticleFrameContext(node) : null;
   for (var index = 0; index < childLimit; index++) {
     if (nativeSceneTraversesChild(kind, node, node.children[index])) {
-      if (!particleFrame &&
+      if (!particleFrame && typeof globalThis.__pmjsBeforeRenderNode !== 'function' &&
           PMJS.optimizations.isEnabled('scene.plain-sprite-segment')) {
         var segment = [];
         var segmentIndex = index;
