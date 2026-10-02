@@ -22,6 +22,7 @@ namespace pmjs {
 namespace {
 constexpr std::uint32_t indexMask = 0xffffU;
 constexpr std::uint16_t generationMask = 0x7fffU;
+constexpr std::size_t maxCanvasDependencyDepth = 16;
 
 
 }
@@ -651,7 +652,20 @@ struct CanvasStore::FontState {
 CanvasStore::CanvasStore(ImageStore& images)
     : images_(images), fonts_(std::make_unique<FontState>()) {}
 
-CanvasStore::~CanvasStore() = default;
+CanvasStore::~CanvasStore() {
+  for (auto& surface : surfaces_) {
+    if (surface.image) images_.release(surface.image);
+  }
+}
+
+CanvasStore::Content::Content(CanvasStore& store) : owner(store) {
+  owner.contents_.insert(this);
+}
+
+CanvasStore::Content::~Content() {
+  owner.discardCommands(*this);
+  owner.contents_.erase(this);
+}
 
 void CanvasStore::releaseCommandDependencies(CanvasCommand& cmd) {
   std::visit([this](auto& c) {
@@ -665,15 +679,16 @@ void CanvasStore::releaseCommandDependencies(CanvasCommand& cmd) {
   }, cmd);
 }
 
-void CanvasStore::discardCommands(Surface& surface) {
+void CanvasStore::discardCommands(Content& surface) {
   for (auto& cmd : surface.commands) {
     releaseCommandDependencies(cmd);
   }
   surface.commands.clear();
   surface.queuedCommandBytes = 0;
+  surface.dependencyDepth = 0;
 }
 
-void CanvasStore::fillRectNow(Surface& surface, int x, int y, int width, int height,
+void CanvasStore::fillRectNow(Content& surface, int x, int y, int width, int height,
                               std::uint32_t rgba) {
   const int x0 = std::clamp(x, 0, surface.width);
   const int y0 = std::clamp(y, 0, surface.height);
@@ -689,12 +704,12 @@ void CanvasStore::fillRectNow(Surface& surface, int x, int y, int width, int hei
   markDirty(surface, x0, y0, x1 - x0, y1 - y0);
 }
 
-void CanvasStore::clearNow(Surface& surface) {
+void CanvasStore::clearNow(Content& surface) {
   std::fill(surface.pixels.begin(), surface.pixels.end(), 0);
   markDirty(surface, 0, 0, surface.width, surface.height);
 }
 
-void CanvasStore::clearRectNow(Surface& surface, int x, int y, int width, int height) {
+void CanvasStore::clearRectNow(Content& surface, int x, int y, int width, int height) {
   const int x0 = std::clamp(x, 0, surface.width);
   const int y0 = std::clamp(y, 0, surface.height);
   const int x1 = static_cast<int>(std::clamp<std::int64_t>(
@@ -711,28 +726,17 @@ void CanvasStore::clearRectNow(Surface& surface, int x, int y, int width, int he
   markDirty(surface, x0, y0, x1 - x0, y1 - y0);
 }
 
-bool CanvasStore::drawImageNow(Surface& destinationSurface, std::uint32_t source,
-                               int sourceX, int sourceY,
-                               int sourceWidth, int sourceHeight,
-                               int destinationX, int destinationY,
-                               int destinationWidth, int destinationHeight,
-                               float alpha) {
+bool CanvasStore::drawImageNow(Content& destinationSurface, const DrawImageCmd& command) {
+  const auto& [source, canvas, sourceX, sourceY, sourceWidth, sourceHeight,
+               destinationX, destinationY, destinationWidth, destinationHeight, alpha] = command;
   struct PixelView {
     int width;
     int height;
     const std::uint8_t* rgba;
   } sourcePixels{};
-  std::vector<std::uint8_t> sourceSnapshot;
-  if (auto* sourceSurface = lookup(source)) {
-    if (!realizeSurface(*sourceSurface)) return false;
-    if (sourceSurface == &destinationSurface) {
-      sourceSnapshot = sourceSurface->pixels;
-      sourcePixels = {sourceSurface->width, sourceSurface->height,
-                      sourceSnapshot.data()};
-    } else {
-      sourcePixels = {sourceSurface->width, sourceSurface->height,
-                      sourceSurface->pixels.data()};
-    }
+  if (canvas) {
+    if (!realizeContent(*canvas)) return false;
+    sourcePixels = {canvas->width, canvas->height, canvas->pixels.data()};
   } else {
     const auto* decoded = images_.readPixels(source);
     if (!decoded) return false;
@@ -767,7 +771,7 @@ bool CanvasStore::drawImageNow(Surface& destinationSurface, std::uint32_t source
   return true;
 }
 
-bool CanvasStore::drawTextNow(Surface& surface, const std::vector<std::filesystem::path>& fontPaths,
+bool CanvasStore::drawTextNow(Content& surface, const std::vector<std::filesystem::path>& fontPaths,
                               const std::string& text, int x, int y, int pixelSize,
                               std::uint32_t rgba, int strokeWidth) {
   auto layout = fonts_->layoutText(fontPaths, text, pixelSize);
@@ -835,7 +839,7 @@ bool CanvasStore::drawTextNow(Surface& surface, const std::vector<std::filesyste
   return complete;
 }
 
-bool CanvasStore::blurNow(Surface& surface) {
+bool CanvasStore::blurNow(Content& surface) {
   const int width = surface.width;
   const int height = surface.height;
   std::vector<std::uint8_t> scratch(surface.pixels.size());
@@ -864,17 +868,17 @@ bool CanvasStore::blurNow(Surface& surface) {
   return true;
 }
 
-bool CanvasStore::realizeSurface(Surface& surface) {
-  if (surface.state == SurfaceState::Realized) return true;
-  if (surface.state == SurfaceState::Realizing) return false;
-  surface.state = SurfaceState::Realizing;
+bool CanvasStore::realizeContent(Content& surface) {
+  if (surface.state == ContentState::Realized) return true;
+  if (surface.state == ContentState::Realizing) return false;
 
   // Publish CPU content only after every command succeeds. Pending commands
   // keep their image references on failure, so replay can be retried safely.
-  Surface prepared;
+  Content prepared(*this);
   prepared.width = surface.width;
   prepared.height = surface.height;
-  prepared.state = SurfaceState::Realizing;
+  prepared.state = ContentState::Realizing;
+  surface.state = ContentState::Realizing;
   try {
     prepared.pixels.assign(static_cast<std::size_t>(surface.width) *
                              static_cast<std::size_t>(surface.height) * 4U, 0);
@@ -888,10 +892,7 @@ bool CanvasStore::realizeSurface(Surface& surface) {
           clearRectNow(prepared, c.x, c.y, c.width, c.height);
           return true;
         } else if constexpr (std::is_same_v<T, DrawImageCmd>) {
-          return drawImageNow(prepared, c.source, c.sourceX, c.sourceY,
-                              c.sourceWidth, c.sourceHeight,
-                              c.destinationX, c.destinationY,
-                              c.destinationWidth, c.destinationHeight, c.alpha);
+          return drawImageNow(prepared, c);
         } else if constexpr (std::is_same_v<T, DrawTextCmd>) {
           return drawTextNow(prepared, c.fontPaths, c.text, c.x, c.y,
                              c.pixelSize, c.rgba, c.strokeWidth);
@@ -900,17 +901,17 @@ bool CanvasStore::realizeSurface(Surface& surface) {
         }
       }, cmd);
       if (!ok) {
-        surface.state = SurfaceState::Deferred;
+        surface.state = ContentState::Deferred;
         return false;
       }
     }
   } catch (...) {
-    surface.state = SurfaceState::Deferred;
+    surface.state = ContentState::Deferred;
     throw;
   }
 
   surface.pixels = std::move(prepared.pixels);
-  surface.state = SurfaceState::Realized;
+  surface.state = ContentState::Realized;
   discardCommands(surface);
   surface.dirtyX0 = surface.dirtyY0 = 0;
   surface.dirtyX1 = surface.dirtyY1 = 0;
@@ -919,22 +920,23 @@ bool CanvasStore::realizeSurface(Surface& surface) {
 }
 
 bool CanvasStore::realize(CanvasHandle handle) {
-  auto* surface = lookup(handle);
-  return surface && realizeSurface(*surface);
+  auto* surface = lookupContent(handle);
+  return surface && realizeContent(*surface);
 }
 
 std::optional<ImageHandle> CanvasStore::prepareImage(CanvasHandle handle) {
   auto* surface = lookup(handle);
-  if (!surface) return std::nullopt;
-  if (!realizeSurface(*surface) || !uploadSurface(*surface)) return std::nullopt;
+  if (!surface || !realizeContent(*surface->content) || !uploadSurface(*surface)) {
+    return std::nullopt;
+  }
   return surface->image;
 }
 
 std::optional<std::vector<std::uint8_t>> CanvasStore::encodePng(
     CanvasHandle handle) {
-  auto* surface = lookup(handle);
+  auto* surface = lookupContent(handle);
   if (!surface) return std::nullopt;
-  if (surface->state == SurfaceState::Deferred && !realizeSurface(*surface)) {
+  if (surface->state == ContentState::Deferred && !realizeContent(*surface)) {
     return std::nullopt;
   }
   png_image image{};
@@ -980,6 +982,40 @@ const CanvasStore::Surface* CanvasStore::lookup(CanvasHandle handle) const {
   return surface.live && surface.generation == generation ? &surface : nullptr;
 }
 
+CanvasStore::Content* CanvasStore::lookupContent(CanvasHandle handle) const {
+  const auto* surface = lookup(handle);
+  return surface ? surface->content.get() : nullptr;
+}
+
+CanvasStore::Content* CanvasStore::writableContent(CanvasHandle handle) {
+  auto* surface = lookup(handle);
+  if (!surface) return nullptr;
+  if (!surface->content.unique()) {
+    const auto& old = *surface->content;
+    auto copy = std::make_shared<Content>(*this);
+    copy->width = old.width;
+    copy->height = old.height;
+    copy->state = old.state;
+    copy->pixels = old.pixels;
+    auto commands = old.commands;
+    for (const auto& command : commands) {
+      if (const auto* draw = std::get_if<DrawImageCmd>(&command); draw && draw->source) {
+        images_.retain(draw->source);
+      }
+    }
+    copy->commands = std::move(commands);
+    copy->queuedCommandBytes = old.queuedCommandBytes;
+    copy->dependencyDepth = old.dependencyDepth;
+    copy->dirtyX0 = old.dirtyX0;
+    copy->dirtyY0 = old.dirtyY0;
+    copy->dirtyX1 = old.dirtyX1;
+    copy->dirtyY1 = old.dirtyY1;
+    surface->content = std::move(copy);
+    peakCpuBytes_ = std::max(peakCpuBytes_, cpuBytes());
+  }
+  return surface->content.get();
+}
+
 std::optional<CanvasInfo> CanvasStore::create(int width, int height) {
   const auto extent = checkedImageExtent(width, height);
   if (!extent) return std::nullopt;
@@ -988,14 +1024,11 @@ std::optional<CanvasInfo> CanvasStore::create(int width, int height) {
   if (index >= indexMask) return std::nullopt;
   if (index == surfaces_.size()) surfaces_.emplace_back();
   auto& surface = surfaces_[index];
+  auto content = std::make_shared<Content>(*this);
+  content->width = width;
+  content->height = height;
+  surface.content = std::move(content);
   surface.image = 0;
-  surface.width = width;
-  surface.height = height;
-  surface.state = SurfaceState::Deferred;
-  surface.pixels.clear();
-  surface.commands.clear();
-  surface.dirtyX0 = surface.dirtyY0 = 0;
-  surface.dirtyX1 = surface.dirtyY1 = 0;
   surface.live = true;
   ++liveCount_;
   peakLiveCount_ = std::max(peakLiveCount_, liveCount_);
@@ -1008,8 +1041,8 @@ std::optional<CanvasInfo> CanvasStore::createRgba(
   if (!extent || pixels.size() != extent->rgbaBytes) return std::nullopt;
   const auto canvas = create(width, height);
   if (!canvas) return std::nullopt;
-  auto& surface = *lookup(canvas->handle);
-  surface.state = SurfaceState::Realized;
+  auto& surface = *lookupContent(canvas->handle);
+  surface.state = ContentState::Realized;
   surface.pixels = std::move(pixels);
   peakCpuBytes_ = std::max(peakCpuBytes_, cpuBytes());
   return canvas;
@@ -1017,12 +1050,12 @@ std::optional<CanvasInfo> CanvasStore::createRgba(
 
 bool CanvasStore::fillRect(CanvasHandle handle, int x, int y, int width, int height,
                            std::uint32_t rgba) {
-  auto* surfacePointer = lookup(handle);
+  auto* surfacePointer = writableContent(handle);
   if (!surfacePointer) return false;
   auto& surface = *surfacePointer;
-  if (surface.state == SurfaceState::Deferred) {
+  if (surface.state == ContentState::Deferred) {
     if (surface.commands.size() >= 256 || surface.queuedCommandBytes >= 64 * 1024) {
-      if (!realizeSurface(surface)) return false;
+      if (!realizeContent(surface)) return false;
     } else {
       surface.commands.emplace_back(FillRectCmd{x, y, width, height, rgba});
       surface.queuedCommandBytes += sizeof(FillRectCmd);
@@ -1038,7 +1071,7 @@ bool CanvasStore::fillRadialGradient(
     float centerX, float centerY, float innerRadius, float outerRadius,
     const std::vector<float>& offsets,
     const std::vector<std::uint32_t>& colors, bool additive) {
-  auto* surface = lookup(handle);
+  auto* surface = writableContent(handle);
   if (!surface || offsets.empty() || offsets.size() != colors.size() ||
       !std::isfinite(centerX) || !std::isfinite(centerY) ||
       !std::isfinite(innerRadius) || !std::isfinite(outerRadius) ||
@@ -1049,7 +1082,7 @@ bool CanvasStore::fillRadialGradient(
         offset < previousOffset) return false;
     previousOffset = offset;
   }
-  if (surface->state == SurfaceState::Deferred && !realizeSurface(*surface)) return false;
+  if (surface->state == ContentState::Deferred && !realizeContent(*surface)) return false;
   const int left = std::clamp(x, 0, surface->width);
   const int top = std::clamp(y, 0, surface->height);
   const int right = static_cast<int>(std::clamp<std::int64_t>(
@@ -1087,9 +1120,9 @@ bool CanvasStore::fillRadialGradient(
 }
 
 bool CanvasStore::clear(CanvasHandle handle) {
-  auto* surface = lookup(handle);
+  auto* surface = writableContent(handle);
   if (!surface) return false;
-  if (surface->state == SurfaceState::Deferred) {
+  if (surface->state == ContentState::Deferred) {
     discardCommands(*surface);
     return true;
   }
@@ -1098,15 +1131,15 @@ bool CanvasStore::clear(CanvasHandle handle) {
 }
 
 bool CanvasStore::clearRect(CanvasHandle handle, int x, int y, int width, int height) {
-  auto* surface = lookup(handle);
+  auto* surface = writableContent(handle);
   if (!surface) return false;
-  if (surface->state == SurfaceState::Deferred) {
+  if (surface->state == ContentState::Deferred) {
     if (x <= 0 && y <= 0 && width >= surface->width && height >= surface->height) {
       discardCommands(*surface);
       return true;
     }
     if (surface->commands.size() >= 256 || surface->queuedCommandBytes >= 64 * 1024) {
-      if (!realizeSurface(*surface)) return false;
+      if (!realizeContent(*surface)) return false;
     } else {
       surface->commands.emplace_back(ClearRectCmd{x, y, width, height});
       surface->queuedCommandBytes += sizeof(ClearRectCmd);
@@ -1123,44 +1156,39 @@ bool CanvasStore::drawImage(CanvasHandle destination, std::uint32_t source,
                             int destinationX, int destinationY,
                             int destinationWidth, int destinationHeight,
                             float alpha) {
-  auto* destinationSurface = lookup(destination);
-  if (!destinationSurface || sourceWidth <= 0 || sourceHeight <= 0 ||
-      destinationWidth <= 0 || destinationHeight <= 0 || alpha < 0.0F ||
-      alpha > 1.0F) return false;
-
-  // Fallback rule: Canvas -> Canvas drawImage forces realization of destination
-  // and executes immediately to guarantee draw-time snapshot semantics.
+  if (sourceWidth <= 0 || sourceHeight <= 0 || destinationWidth <= 0 ||
+      destinationHeight <= 0 || !std::isfinite(alpha) || alpha < 0 || alpha > 1) return false;
+  DrawImageCmd command{source, {}, sourceX, sourceY, sourceWidth, sourceHeight,
+                       destinationX, destinationY, destinationWidth, destinationHeight, alpha};
   if ((source & canvasHandleTag) != 0) {
-    if (destinationSurface->state == SurfaceState::Deferred) {
-      if (!realizeSurface(*destinationSurface)) return false;
-    }
-    return drawImageNow(*destinationSurface, source, sourceX, sourceY,
-                        sourceWidth, sourceHeight, destinationX, destinationY,
-                        destinationWidth, destinationHeight, alpha);
+    const auto* sourceSurface = lookup(source);
+    if (!sourceSurface) return false;
+    // Capture before detaching the destination, including a self draw.
+    command.canvas = sourceSurface->content;
+    command.source = 0;
+  } else if (!images_.lookup(source)) {
+    return false;
   }
-
-  // Source is an ImageHandle: safe to defer if destination is deferred.
-  if (destinationSurface->state == SurfaceState::Deferred) {
+  auto* destinationSurface = writableContent(destination);
+  if (!destinationSurface) return false;
+  if (destinationSurface->state == ContentState::Deferred) {
+    const auto depth = command.canvas ? command.canvas->dependencyDepth + 1 : 0;
     if (destinationSurface->commands.size() >= 256 ||
-        destinationSurface->queuedCommandBytes >= 64 * 1024) {
-      if (!realizeSurface(*destinationSurface)) return false;
+        destinationSurface->queuedCommandBytes + sizeof(DrawImageCmd) > 64 * 1024 ||
+        depth > maxCanvasDependencyDepth) {
+      if (!realizeContent(*destinationSurface)) return false;
     } else {
-      if (!images_.retain(source)) return false;
-      destinationSurface->commands.emplace_back(DrawImageCmd{
-        source, sourceX, sourceY, sourceWidth, sourceHeight,
-        destinationX, destinationY, destinationWidth, destinationHeight, alpha
-      });
+      destinationSurface->commands.emplace_back(command);
+      if (command.source) images_.retain(command.source);
       destinationSurface->queuedCommandBytes += sizeof(DrawImageCmd);
+      destinationSurface->dependencyDepth = std::max(destinationSurface->dependencyDepth, depth);
       return true;
     }
   }
-
-  return drawImageNow(*destinationSurface, source, sourceX, sourceY,
-                      sourceWidth, sourceHeight, destinationX, destinationY,
-                      destinationWidth, destinationHeight, alpha);
+  return drawImageNow(*destinationSurface, command);
 }
 
-void CanvasStore::markDirty(Surface& surface, int x, int y, int width,
+void CanvasStore::markDirty(Content& surface, int x, int y, int width,
                             int height) {
   const int x0 = std::clamp(x, 0, surface.width);
   const int y0 = std::clamp(y, 0, surface.height);
@@ -1182,7 +1210,7 @@ void CanvasStore::markDirty(Surface& surface, int x, int y, int width,
   surface.dirtyY1 = std::max(surface.dirtyY1, y1);
 }
 
-void CanvasStore::blendPixel(Surface& surface, int x, int y, std::uint32_t rgba,
+void CanvasStore::blendPixel(Content& surface, int x, int y, std::uint32_t rgba,
                              std::uint8_t coverage) {
   if (x < 0 || y < 0 || x >= surface.width || y >= surface.height) return;
   const std::uint32_t colorAlpha = rgba & 0xffU;
@@ -1206,7 +1234,7 @@ void CanvasStore::blendPixel(Surface& surface, int x, int y, std::uint32_t rgba,
   surface.pixels[offset + 3] = static_cast<std::uint8_t>(outputAlpha);
 }
 
-void CanvasStore::blendPixelAdditive(Surface& surface, int x, int y,
+void CanvasStore::blendPixelAdditive(Content& surface, int x, int y,
                                      std::uint32_t rgba) {
   if (x < 0 || y < 0 || x >= surface.width || y >= surface.height) return;
   const std::uint32_t sourceAlpha = rgba & 0xffU;
@@ -1232,15 +1260,15 @@ bool CanvasStore::drawText(CanvasHandle handle,
                            const std::vector<std::filesystem::path>& fontPaths,
                            const std::string& text, int x, int y, int pixelSize,
                            std::uint32_t rgba, int strokeWidth) {
-  auto* surface = lookup(handle);
+  auto* surface = writableContent(handle);
   if (!surface || pixelSize <= 0 || pixelSize > 256 || fontPaths.empty() ||
       strokeWidth < 0 || strokeWidth > 32) return false;
-  if (surface->state == SurfaceState::Deferred) {
+  if (surface->state == ContentState::Deferred) {
     const std::size_t estimatedBytes = sizeof(DrawTextCmd) + text.capacity() +
       fontPaths.capacity() * sizeof(std::filesystem::path);
     if (surface->commands.size() >= 256 ||
         surface->queuedCommandBytes + estimatedBytes >= 64 * 1024) {
-      if (!realizeSurface(*surface)) return false;
+      if (!realizeContent(*surface)) return false;
     } else {
       surface->commands.emplace_back(DrawTextCmd{
         fontPaths, text, x, y, pixelSize, rgba, strokeWidth
@@ -1274,9 +1302,9 @@ bool CanvasStore::canLoadFont(const std::filesystem::path& fontPath) {
 
 std::optional<std::uint32_t> CanvasStore::pixel(CanvasHandle handle,
                                                 int x, int y) {
-  auto* surface = lookup(handle);
+  auto* surface = lookupContent(handle);
   if (!surface) return std::nullopt;
-  if (surface->state == SurfaceState::Deferred && !realizeSurface(*surface)) {
+  if (surface->state == ContentState::Deferred && !realizeContent(*surface)) {
     return std::nullopt;
   }
   if (x < 0 || y < 0 || x >= surface->width || y >= surface->height) {
@@ -1291,11 +1319,11 @@ std::optional<std::uint32_t> CanvasStore::pixel(CanvasHandle handle,
 }
 
 bool CanvasStore::blur(CanvasHandle handle) {
-  auto* surface = lookup(handle);
+  auto* surface = writableContent(handle);
   if (!surface) return false;
-  if (surface->state == SurfaceState::Deferred) {
+  if (surface->state == ContentState::Deferred) {
     if (surface->commands.size() >= 256 || surface->queuedCommandBytes >= 64 * 1024) {
-      if (!realizeSurface(*surface)) return false;
+      if (!realizeContent(*surface)) return false;
     } else {
       surface->commands.emplace_back(BlurCmd{});
       surface->queuedCommandBytes += sizeof(BlurCmd);
@@ -1308,12 +1336,12 @@ bool CanvasStore::blur(CanvasHandle handle) {
 std::optional<ImagePixels> CanvasStore::readPixels(CanvasHandle handle, int x,
                                                    int y, int width,
                                                    int height) {
-  auto* surface = lookup(handle);
+  auto* surface = lookupContent(handle);
   const auto extent = checkedImageExtent(width, height);
   if (!surface || !extent) {
     return std::nullopt;
   }
-  if (surface->state == SurfaceState::Deferred && !realizeSurface(*surface)) {
+  if (surface->state == ContentState::Deferred && !realizeContent(*surface)) {
     return std::nullopt;
   }
   ImagePixels result;
@@ -1340,12 +1368,12 @@ std::optional<ImagePixels> CanvasStore::readPixels(CanvasHandle handle, int x,
 bool CanvasStore::writePixels(CanvasHandle handle, int x, int y, int width,
                               int height,
                               const std::vector<std::uint8_t>& pixels) {
-  auto* surface = lookup(handle);
+  auto* surface = writableContent(handle);
   const std::size_t expected = width > 0 && height > 0
     ? static_cast<std::size_t>(width) * height * 4U : 0;
   if (!surface || expected == 0 || pixels.size() != expected) return false;
   // writePixels forces realization immediately to avoid queuing megabytes of pixels
-  if (surface->state == SurfaceState::Deferred && !realizeSurface(*surface)) {
+  if (surface->state == ContentState::Deferred && !realizeContent(*surface)) {
     return false;
   }
   for (int row = 0; row < height; ++row) {
@@ -1370,17 +1398,9 @@ bool CanvasStore::writePixels(CanvasHandle handle, int x, int y, int width,
 bool CanvasStore::release(CanvasHandle handle) {
   auto* surface = lookup(handle);
   if (!surface) return false;
-  discardCommands(*surface);
-  if (surface->image != 0) {
-    images_.release(surface->image);
-    surface->image = 0;
-  }
-  surface->width = 0;
-  surface->height = 0;
-  surface->state = SurfaceState::Deferred;
-  std::vector<std::uint8_t>().swap(surface->pixels);
-  surface->dirtyX0 = surface->dirtyY0 = 0;
-  surface->dirtyX1 = surface->dirtyY1 = 0;
+  if (surface->image) images_.release(surface->image);
+  surface->image = 0;
+  surface->content.reset();
   surface->live = false;
   surface->generation = static_cast<std::uint16_t>(
     (surface->generation + 1U) & generationMask);
@@ -1390,7 +1410,7 @@ bool CanvasStore::release(CanvasHandle handle) {
 }
 
 std::optional<CanvasInfo> CanvasStore::info(CanvasHandle handle) const {
-  const auto* surface = lookup(handle);
+  const auto* surface = lookupContent(handle);
   if (!surface) return std::nullopt;
   return CanvasInfo{handle, surface->width, surface->height};
 }
@@ -1401,19 +1421,20 @@ std::optional<ImageHandle> CanvasStore::imageHandle(CanvasHandle handle) const {
                                    : std::nullopt;
 }
 
-bool CanvasStore::uploadSurface(Surface& surface) {
-  if (surface.image == 0) {
+bool CanvasStore::uploadSurface(Surface& target) {
+  auto& surface = *target.content;
+  if (target.image == 0) {
     const auto image = images_.createRgba(surface.width, surface.height,
                                          surface.pixels.data());
     if (!image) return false;
-    surface.image = image->handle;
+    target.image = image->handle;
   } else {
     if (surface.dirtyX1 <= surface.dirtyX0 ||
         surface.dirtyY1 <= surface.dirtyY0) return true;
     const std::size_t offset =
       (static_cast<std::size_t>(surface.dirtyY0) * surface.width +
        surface.dirtyX0) * 4U;
-    if (!images_.updateRgbaRegion(surface.image, surface.dirtyX0,
+    if (!images_.updateRgbaRegion(target.image, surface.dirtyX0,
         surface.dirtyY0, surface.dirtyX1 - surface.dirtyX0,
         surface.dirtyY1 - surface.dirtyY0, surface.pixels.data() + offset,
         surface.width)) return false;
@@ -1425,7 +1446,7 @@ bool CanvasStore::uploadSurface(Surface& surface) {
 
 void CanvasStore::uploadDirty() {
   for (auto& surface : surfaces_) {
-    if (surface.live && surface.state == SurfaceState::Realized && surface.image) {
+    if (surface.live && surface.content->state == ContentState::Realized && surface.image) {
       uploadSurface(surface);
     }
   }
@@ -1433,22 +1454,20 @@ void CanvasStore::uploadDirty() {
 
 std::size_t CanvasStore::cpuBytes() const {
   std::size_t result = 0;
-  for (const auto& surface : surfaces_) {
-    if (surface.live) result += surface.pixels.size();
-  }
+  for (const auto* content : contents_) result += content->pixels.size();
   return result;
 }
 
 std::size_t CanvasStore::capacityBytes() const {
   std::size_t result = 0;
-  for (const auto& surface : surfaces_) result += surface.pixels.capacity();
+  for (const auto* content : contents_) result += content->pixels.capacity();
   return result;
 }
 
 std::size_t CanvasStore::deferredCanvasCount() const {
   std::size_t count = 0;
   for (const auto& surface : surfaces_) {
-    if (surface.live && surface.state == SurfaceState::Deferred) ++count;
+    if (surface.live && surface.content->state == ContentState::Deferred) ++count;
   }
   return count;
 }
@@ -1456,28 +1475,20 @@ std::size_t CanvasStore::deferredCanvasCount() const {
 std::size_t CanvasStore::realizedCanvasCount() const {
   std::size_t count = 0;
   for (const auto& surface : surfaces_) {
-    if (surface.live && surface.state == SurfaceState::Realized) ++count;
+    if (surface.live && surface.content->state == ContentState::Realized) ++count;
   }
   return count;
 }
 
 std::size_t CanvasStore::deferredCommandCount() const {
   std::size_t count = 0;
-  for (const auto& surface : surfaces_) {
-    if (surface.live && surface.state == SurfaceState::Deferred) {
-      count += surface.commands.size();
-    }
-  }
+  for (const auto* content : contents_) count += content->commands.size();
   return count;
 }
 
 std::size_t CanvasStore::deferredCommandBytes() const {
   std::size_t bytes = 0;
-  for (const auto& surface : surfaces_) {
-    if (surface.live && surface.state == SurfaceState::Deferred) {
-      bytes += surface.queuedCommandBytes;
-    }
-  }
+  for (const auto* content : contents_) bytes += content->queuedCommandBytes;
   return bytes;
 }
 

@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <variant>
+#include <unordered_set>
 
 namespace pmjs {
 
@@ -149,8 +150,11 @@ class CanvasStore {
     int height;
   };
 
+  struct Content;
+
   struct DrawImageCmd {
     ImageHandle source;
+    std::shared_ptr<Content> canvas;
     int sourceX;
     int sourceY;
     int sourceWidth;
@@ -177,18 +181,22 @@ class CanvasStore {
   using CanvasCommand = std::variant<FillRectCmd, ClearRectCmd,
                                      DrawImageCmd, DrawTextCmd, BlurCmd>;
 
-  enum class SurfaceState {
+  enum class ContentState {
     Deferred,
     Realizing,
-    Realized  // CPU pixels are current; the GPU image is optional.
+    Realized  // CPU pixels are current.
   };
 
-  struct Surface {
-    std::uint16_t generation = 1;
-    ImageHandle image = 0;
+  struct Content {
+    explicit Content(CanvasStore& owner);
+    ~Content();
+    Content(const Content&) = delete;
+    Content& operator=(const Content&) = delete;
+
+    CanvasStore& owner;
     int width = 0;
     int height = 0;
-    SurfaceState state = SurfaceState::Deferred;
+    ContentState state = ContentState::Deferred;
     std::vector<std::uint8_t> pixels;
     std::vector<CanvasCommand> commands;
     std::size_t queuedCommandBytes = 0;
@@ -196,6 +204,13 @@ class CanvasStore {
     int dirtyY0 = 0;
     int dirtyX1 = 0;
     int dirtyY1 = 0;
+    std::size_t dependencyDepth = 0;
+  };
+
+  struct Surface {
+    std::uint16_t generation = 1;
+    ImageHandle image = 0;
+    std::shared_ptr<Content> content;
     bool live = false;
   };
 
@@ -203,32 +218,33 @@ class CanvasStore {
   Surface* lookup(CanvasHandle handle);
   const Surface* lookup(CanvasHandle handle) const;
 
-  bool realizeSurface(Surface& surface);
+  Content* lookupContent(CanvasHandle handle) const;
+  Content* writableContent(CanvasHandle handle);
+  bool realizeContent(Content& surface);
   bool uploadSurface(Surface& surface);
-  void discardCommands(Surface& surface);
+  void discardCommands(Content& surface);
   void releaseCommandDependencies(CanvasCommand& cmd);
 
-  void fillRectNow(Surface& surface, int x, int y, int width, int height,
+  void fillRectNow(Content& surface, int x, int y, int width, int height,
                    std::uint32_t rgba);
-  void clearNow(Surface& surface);
-  void clearRectNow(Surface& surface, int x, int y, int width, int height);
-  bool drawImageNow(Surface& destinationSurface, std::uint32_t source,
-                    int sourceX, int sourceY, int sourceWidth, int sourceHeight,
-                    int destinationX, int destinationY,
-                    int destinationWidth, int destinationHeight, float alpha);
-  bool drawTextNow(Surface& surface, const std::vector<std::filesystem::path>& fontPaths,
+  void clearNow(Content& surface);
+  void clearRectNow(Content& surface, int x, int y, int width, int height);
+  bool drawImageNow(Content& destination, const DrawImageCmd& command);
+  bool drawTextNow(Content& surface, const std::vector<std::filesystem::path>& fontPaths,
                    const std::string& text, int x, int y, int pixelSize,
                    std::uint32_t rgba, int strokeWidth);
-  bool blurNow(Surface& surface);
+  bool blurNow(Content& surface);
 
-  static void blendPixel(Surface& surface, int x, int y, std::uint32_t rgba,
+  static void blendPixel(Content& surface, int x, int y, std::uint32_t rgba,
                          std::uint8_t coverage);
-  static void blendPixelAdditive(Surface& surface, int x, int y,
+  static void blendPixelAdditive(Content& surface, int x, int y,
                                  std::uint32_t rgba);
-  static void markDirty(Surface& surface, int x, int y, int width, int height);
+  static void markDirty(Content& surface, int x, int y, int width, int height);
 
   ImageStore& images_;
   std::unique_ptr<FontState> fonts_;
+  // Non-owning registry includes versions kept alive only by queued draws.
+  std::unordered_set<Content*> contents_;
   std::vector<Surface> surfaces_;
   std::size_t liveCount_ = 0;
   std::size_t peakCpuBytes_ = 0;
