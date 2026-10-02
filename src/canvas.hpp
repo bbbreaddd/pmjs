@@ -113,6 +113,7 @@ class CanvasStore {
   std::optional<std::vector<std::uint8_t>> encodePng(CanvasHandle handle);
   bool writePixels(CanvasHandle handle, int x, int y, int width, int height,
                    const std::vector<std::uint8_t>& pixels);
+  bool replacePixels(CanvasHandle handle, std::vector<std::uint8_t> pixels);
   bool blur(CanvasHandle handle);
   bool release(CanvasHandle handle);
   bool realize(CanvasHandle handle);

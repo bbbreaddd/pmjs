@@ -1395,6 +1395,25 @@ bool CanvasStore::writePixels(CanvasHandle handle, int x, int y, int width,
   return true;
 }
 
+bool CanvasStore::replacePixels(CanvasHandle handle,
+                                std::vector<std::uint8_t> pixels) {
+  auto* target = lookup(handle);
+  if (!target) return false;
+  const auto extent = checkedImageExtent(target->content->width,
+                                         target->content->height);
+  if (!extent || pixels.size() != extent->rgbaBytes) return false;
+
+  auto replacement = std::make_shared<Content>(*this);
+  replacement->width = target->content->width;
+  replacement->height = target->content->height;
+  replacement->state = ContentState::Realized;
+  replacement->pixels = std::move(pixels);
+  markDirty(*replacement, 0, 0, replacement->width, replacement->height);
+  target->content = std::move(replacement);
+  peakCpuBytes_ = std::max(peakCpuBytes_, cpuBytes());
+  return true;
+}
+
 bool CanvasStore::release(CanvasHandle handle) {
   auto* surface = lookup(handle);
   if (!surface) return false;

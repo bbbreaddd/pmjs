@@ -353,9 +353,9 @@ napi_value renderToCanvas(napi_env env, napi_callback_info info) try {
   const auto target = value.canvases.info(asUint32(env, args.at(0)));
   if (!target) throw std::runtime_error("invalid render target canvas");
   value.canvases.uploadDirty();
-  const bool written = value.canvases.writePixels(
-      asUint32(env, args.at(0)), 0, 0, target->width, target->height,
-      value.renderer.renderToRgba(target->width, target->height));
+  const bool written = value.canvases.replacePixels(
+    asUint32(env, args.at(0)),
+    value.renderer.renderToRgba(target->width, target->height));
   value.renderer.beginFrame();
   if (!written) {
     throw std::runtime_error("could not write native render target");

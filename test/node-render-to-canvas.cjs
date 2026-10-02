@@ -76,7 +76,33 @@ const main = native.canvas.pixel(screen.handle, 8, 6);
 assert.ok(((main >>> 16) & 255) > 240 && (main >>> 24) < 15,
   `screen render after offscreen readback was wrong: ${main.toString(16)}`);
 native.canvas.release(screen.handle);
+
+// A full render replaces the content while earlier Canvas draws retain their source.
+const oldVersion = native.canvas.create(8, 6);
+native.canvas.drawImage(oldVersion.handle, target.handle,
+  0, 0, 8, 6, 0, 0, 8, 6, 1);
+native.beginFrame();
+native.render.setRenderTargetSize(8, 6);
+native.render.quad(0, 0, 8, 6, 0, 1, 0, 1);
+native.render.renderToCanvas(target.handle);
+assert.deepEqual(Array.from(native.canvas.readPixels(target.handle, 4, 3, 1, 1)),
+  [0, 255, 0, 255]);
+assert.deepEqual(Array.from(native.canvas.readPixels(oldVersion.handle, 4, 3, 1, 1)),
+  [0, 0, 255, 128]);
+native.canvas.release(oldVersion.handle);
 native.canvas.release(target.handle);
+
+// Obsolete commands need no replay when a render replaces the entire Canvas.
+const obsolete = native.canvas.create(8, 6);
+native.canvas.drawText(obsolete.handle, 'fixture.png', 'invalid font',
+  0, 12, 12, 0xffffffff);
+native.beginFrame();
+native.render.setRenderTargetSize(8, 6);
+native.render.quad(0, 0, 8, 6, 1, 0, 0, 1);
+native.render.renderToCanvas(obsolete.handle);
+assert.equal(native.canvas.pixel(obsolete.handle, 4, 3), 0xff0000ff);
+assert.equal(native.canvas.memory().deferredCommandCount, 0);
+native.canvas.release(obsolete.handle);
 
 assert.equal(native.render.stats().rendererTargetCreates - reused.rendererTargetCreates, 1,
   'screen resize should replace only the scene target');
