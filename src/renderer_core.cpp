@@ -93,69 +93,72 @@ void Renderer::setDrawableSize(int width, int height) {
   recomputePresentation();
 }
 
+void Renderer::destroyTarget(RenderTarget& target) {
+  if (target.framebuffer) glDeleteFramebuffers(1, &target.framebuffer);
+  if (target.texture) {
+    textureNearestState_.erase(target.texture);
+    textureRepeatState_.erase(target.texture);
+    glDeleteTextures(1, &target.texture);
+    ++stats_.rendererTargetDestroys;
+  }
+  target = {};
+}
+
+void Renderer::ensureTarget(RenderTarget& target, int width, int height) {
+  if (target.texture && target.width == width && target.height == height) return;
+  if (width <= 0 || height <= 0 || width > maxTextureSize_ || height > maxTextureSize_) {
+    throw std::runtime_error("invalid renderer target dimensions");
+  }
+  GLint savedTexture = 0, savedRead = 0, savedDraw = 0;
+  glGetIntegerv(GL_TEXTURE_BINDING_2D, &savedTexture);
+  glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &savedRead);
+  glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &savedDraw);
+  RenderTarget replacement;
+  replacement.width = width;
+  replacement.height = height;
+  glGenTextures(1, &replacement.texture);
+  glBindTexture(GL_TEXTURE_2D, replacement.texture);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA,
+               GL_UNSIGNED_BYTE, nullptr);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glGenFramebuffers(1, &replacement.framebuffer);
+  glBindFramebuffer(GL_FRAMEBUFFER, replacement.framebuffer);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                         GL_TEXTURE_2D, replacement.texture, 0);
+  ++stats_.framebufferChecks;
+  const bool complete = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+  if (complete) {
+    // Keep the previous allocation valid until its replacement is complete.
+    if (target.texture && static_cast<GLuint>(savedTexture) == target.texture)
+      savedTexture = static_cast<GLint>(replacement.texture);
+    if (target.framebuffer && static_cast<GLuint>(savedRead) == target.framebuffer)
+      savedRead = static_cast<GLint>(replacement.framebuffer);
+    if (target.framebuffer && static_cast<GLuint>(savedDraw) == target.framebuffer)
+      savedDraw = static_cast<GLint>(replacement.framebuffer);
+    destroyTarget(target);
+    target = replacement;
+    ++stats_.rendererTargetCreates;
+  } else {
+    glDeleteFramebuffers(1, &replacement.framebuffer);
+    glDeleteTextures(1, &replacement.texture);
+  }
+  glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(savedTexture));
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(savedRead));
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(savedDraw));
+  if (!complete) throw std::runtime_error("renderer framebuffer is incomplete");
+}
+
 void Renderer::resizeTargets(int width, int height) {
   if (width == width_ && height == height_) return;
-  if (width <= 0 || height <= 0) {
-    throw std::runtime_error("renderer target dimensions must be positive");
-  }
-  if (width > maxTextureSize_ || height > maxTextureSize_) {
-    throw std::runtime_error("renderer target exceeds GL_MAX_TEXTURE_SIZE");
-  }
-
-  const auto destroyTarget = [](std::uint32_t& texture,
-                                std::uint32_t& framebuffer) {
-    if (framebuffer) glDeleteFramebuffers(1, &framebuffer);
-    if (texture) glDeleteTextures(1, &texture);
-    framebuffer = 0;
-    texture = 0;
-  };
-  const std::size_t targetCount = 5U + groupFramebuffers_.size();
-  stats_.rendererTargetDestroys += targetCount;
-  destroyTarget(sceneTexture_, sceneFramebuffer_);
-  destroyTarget(offscreenTexture_, offscreenFramebuffer_);
-  destroyTarget(filterTexture_, filterFramebuffer_);
-  destroyTarget(toneOverlayTexture_, toneOverlayFramebuffer_);
-  destroyTarget(bloomTexture_, bloomFramebuffer_);
-  for (std::size_t index = 0; index < groupFramebuffers_.size(); ++index) {
-    destroyTarget(groupTextures_[index], groupFramebuffers_[index]);
-  }
-  textureNearestState_.clear();
-  textureRepeatState_.clear();
+  ensureTarget(sceneTarget_, width, height);
   width_ = width;
   height_ = height;
   hasValidSceneFrame_ = false;
   toneCompositionActive_ = false;
-
-  const auto createTarget = [&](std::uint32_t& texture,
-                                std::uint32_t& framebuffer) {
-    glGenTextures(1, &texture);
-    glBindTexture(GL_TEXTURE_2D, texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width_, height_, 0, GL_RGBA,
-                 GL_UNSIGNED_BYTE, nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glGenFramebuffers(1, &framebuffer);
-    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                           GL_TEXTURE_2D, texture, 0);
-    ++stats_.framebufferChecks;
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-      throw std::runtime_error("resized renderer framebuffer is incomplete");
-    }
-    ++stats_.rendererTargetCreates;
-  };
-  createTarget(sceneTexture_, sceneFramebuffer_);
-  createTarget(offscreenTexture_, offscreenFramebuffer_);
-  createTarget(filterTexture_, filterFramebuffer_);
-  createTarget(toneOverlayTexture_, toneOverlayFramebuffer_);
-  createTarget(bloomTexture_, bloomFramebuffer_);
-  for (std::size_t index = 0; index < groupFramebuffers_.size(); ++index) {
-    createTarget(groupTextures_[index], groupFramebuffers_[index]);
-  }
   recomputePresentation();
-  glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 void Renderer::setClearColor(float red, float green, float blue, float alpha) {
@@ -509,7 +512,7 @@ std::vector<std::uint8_t> Renderer::captureSceneRawPremultiplied() {
   std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width_) *
                                    static_cast<std::size_t>(height_) * 4U);
   glBindFramebuffer(GL_READ_FRAMEBUFFER,
-                    offscreenRender_ ? offscreenFramebuffer_ : sceneFramebuffer_);
+                    offscreenRender_ ? offscreenTarget_.framebuffer : sceneTarget_.framebuffer);
   glReadBuffer(GL_COLOR_ATTACHMENT0);
   glPixelStorei(GL_PACK_ALIGNMENT, 1);
   glReadPixels(0, 0, width_, height_, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
@@ -581,23 +584,22 @@ std::vector<std::uint8_t> Renderer::renderToRgba(int width, int height) {
   const auto savedClearColor = clearColor_;
   const bool savedOffscreenRender = offscreenRender_;
   try {
-    if (width != width_ || height != height_) resizeTargets(width, height);
+    width_ = width;
+    height_ = height;
     offscreenRender_ = true;
     clearColor_ = {0, 0, 0, 0};
     render();
     auto pixels = captureSceneRgba();
     offscreenRender_ = savedOffscreenRender;
     clearColor_ = savedClearColor;
-    if (width_ != savedWidth || height_ != savedHeight) {
-      resizeTargets(savedWidth, savedHeight);
-    }
+    width_ = savedWidth;
+    height_ = savedHeight;
     return pixels;
   } catch (...) {
     offscreenRender_ = savedOffscreenRender;
     clearColor_ = savedClearColor;
-    if (width_ != savedWidth || height_ != savedHeight) {
-      resizeTargets(savedWidth, savedHeight);
-    }
+    width_ = savedWidth;
+    height_ = savedHeight;
     throw;
   }
 }
@@ -609,9 +611,11 @@ std::optional<ImageInfo> Renderer::renderToImage(int width, int height, AlphaMod
     throw std::runtime_error("GPU render image dimensions must match the queued target");
   }
   const int savedWidth = width_, savedHeight = height_;
-  resizeTargets(width, height);
   const auto savedClearColor = clearColor_;
+  const bool savedOffscreenRender = offscreenRender_;
   try {
+    width_ = width;
+    height_ = height;
     offscreenRender_ = true;
     clearColor_ = {0, 0, 0, 0};
     render();
@@ -647,7 +651,7 @@ std::optional<ImageInfo> Renderer::renderToImage(int width, int height, AlphaMod
                  GL_STREAM_DRAW);
     ++stats_.bufferUploads;
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, offscreenTexture_);
+    glBindTexture(GL_TEXTURE_2D, offscreenTarget_.texture);
     glDrawArrays(GL_TRIANGLES, 0, 6);
     ++stats_.drawCalls;
     glDeleteFramebuffers(1, &destinationFramebuffer);
@@ -655,15 +659,17 @@ std::optional<ImageInfo> Renderer::renderToImage(int width, int height, AlphaMod
       images_.release(image->handle);
       throw std::runtime_error("cannot normalize GPU render image");
     }
-    offscreenRender_ = false;
+    offscreenRender_ = savedOffscreenRender;
     clearColor_ = savedClearColor;
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glEnable(GL_BLEND);
-    resizeTargets(savedWidth, savedHeight);
+    width_ = savedWidth;
+    height_ = savedHeight;
     return image;
   } catch (...) {
-    resizeTargets(savedWidth, savedHeight);
-    offscreenRender_ = false;
+    width_ = savedWidth;
+    height_ = savedHeight;
+    offscreenRender_ = savedOffscreenRender;
     clearColor_ = savedClearColor;
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glEnable(GL_BLEND);
@@ -672,7 +678,13 @@ std::optional<ImageInfo> Renderer::renderToImage(int width, int height, AlphaMod
 }
 
 std::size_t Renderer::renderTargetBytes() const {
-  return static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_) * 36U;
+  const auto bytes = [](const RenderTarget& target) {
+    return static_cast<std::size_t>(target.width) * target.height * 4U;
+  };
+  std::size_t total = bytes(sceneTarget_) + bytes(offscreenTarget_) +
+    bytes(filterTarget_) + bytes(toneOverlayTarget_) + bytes(bloomTarget_);
+  for (const auto& target : groupTargets_) total += bytes(target);
+  return total;
 }
 
 }

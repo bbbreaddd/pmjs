@@ -196,34 +196,7 @@ Renderer::Renderer(int width, int height, ImageStore& images)
     throw std::runtime_error("letterbox framebuffer is incomplete");
   }
 
-  const auto createTarget = [&](std::uint32_t& texture,
-                                  std::uint32_t& framebuffer) {
-      glGenTextures(1, &texture);
-      glBindTexture(GL_TEXTURE_2D, texture);
-      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width_, height_, 0, GL_RGBA,
-                   GL_UNSIGNED_BYTE, nullptr);
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-      glGenFramebuffers(1, &framebuffer);
-      glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
-      glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                             GL_TEXTURE_2D, texture, 0);
-      ++stats_.framebufferChecks;
-      if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        throw std::runtime_error("renderer framebuffer is incomplete");
-      }
-      ++stats_.rendererTargetCreates;
-  };
-  createTarget(sceneTexture_, sceneFramebuffer_);
-  createTarget(offscreenTexture_, offscreenFramebuffer_);
-  createTarget(filterTexture_, filterFramebuffer_);
-  createTarget(toneOverlayTexture_, toneOverlayFramebuffer_);
-  createTarget(bloomTexture_, bloomFramebuffer_);
-  for (std::size_t index = 0; index < groupFramebuffers_.size(); ++index) {
-    createTarget(groupTextures_[index], groupFramebuffers_[index]);
-  }
+  ensureTarget(sceneTarget_, width_, height_);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -365,20 +338,12 @@ Renderer::~Renderer() {
     if (surface.live) releasePrimitiveSurface(
       makePrimitiveSurfaceHandle(index, surface.generation));
   }
-  if (sceneFramebuffer_) glDeleteFramebuffers(1, &sceneFramebuffer_);
-  if (sceneTexture_) glDeleteTextures(1, &sceneTexture_);
-  if (offscreenFramebuffer_) glDeleteFramebuffers(1, &offscreenFramebuffer_);
-  if (offscreenTexture_) glDeleteTextures(1, &offscreenTexture_);
-  if (filterFramebuffer_) glDeleteFramebuffers(1, &filterFramebuffer_);
-  if (filterTexture_) glDeleteTextures(1, &filterTexture_);
-  if (toneOverlayFramebuffer_) glDeleteFramebuffers(1, &toneOverlayFramebuffer_);
-  if (toneOverlayTexture_) glDeleteTextures(1, &toneOverlayTexture_);
-  if (bloomFramebuffer_) glDeleteFramebuffers(1, &bloomFramebuffer_);
-  if (bloomTexture_) glDeleteTextures(1, &bloomTexture_);
-  glDeleteFramebuffers(static_cast<GLsizei>(groupFramebuffers_.size()),
-                       groupFramebuffers_.data());
-  glDeleteTextures(static_cast<GLsizei>(groupTextures_.size()),
-                   groupTextures_.data());
+  destroyTarget(sceneTarget_);
+  destroyTarget(offscreenTarget_);
+  destroyTarget(filterTarget_);
+  destroyTarget(toneOverlayTarget_);
+  destroyTarget(bloomTarget_);
+  for (auto& target : groupTargets_) destroyTarget(target);
   if (whiteTexture_) glDeleteTextures(1, &whiteTexture_);
   if (blackFramebuffer_) glDeleteFramebuffers(1, &blackFramebuffer_);
   if (blackTexture_) glDeleteTextures(1, &blackTexture_);

@@ -286,6 +286,13 @@ class Renderer {
     bool live = false;
   };
 
+  struct RenderTarget {
+    std::uint32_t texture = 0;
+    std::uint32_t framebuffer = 0;
+    int width = 0;
+    int height = 0;
+  };
+
   struct FilterContentBounds {
     bool bounded = false;
     bool regionsValid = false;
@@ -309,6 +316,8 @@ class Renderer {
       std::size_t index, std::uint16_t generation);
   PrimitiveSurfaceResource* lookupPrimitiveSurface(PrimitiveSurfaceHandle handle);
   void resizeTargets(int width, int height);
+  void ensureTarget(RenderTarget& target, int width, int height);
+  void destroyTarget(RenderTarget& target);
   void drawToneComposition(std::uint32_t framebuffer, int viewportX,
                            int viewportY, int viewportWidth,
                            int viewportHeight, bool screenPresentation = false);
@@ -431,18 +440,12 @@ class Renderer {
   std::uint32_t whiteTexture_ = 0;
   std::uint32_t blackTexture_ = 0;
   std::uint32_t blackFramebuffer_ = 0;
-  std::uint32_t sceneFramebuffer_ = 0;
-  std::uint32_t sceneTexture_ = 0;
-  std::uint32_t offscreenFramebuffer_ = 0;
-  std::uint32_t offscreenTexture_ = 0;
-  std::uint32_t filterFramebuffer_ = 0;
-  std::uint32_t filterTexture_ = 0;
-  std::uint32_t toneOverlayFramebuffer_ = 0;
-  std::uint32_t toneOverlayTexture_ = 0;
-  std::uint32_t bloomFramebuffer_ = 0;
-  std::uint32_t bloomTexture_ = 0;
-  std::array<std::uint32_t, scene_packet::maxFilterDepth> groupFramebuffers_{};
-  std::array<std::uint32_t, scene_packet::maxFilterDepth> groupTextures_{};
+  RenderTarget sceneTarget_;
+  RenderTarget offscreenTarget_;
+  RenderTarget filterTarget_;
+  RenderTarget toneOverlayTarget_;
+  RenderTarget bloomTarget_;
+  std::array<RenderTarget, scene_packet::maxFilterDepth> groupTargets_{};
   bool offscreenRender_ = false;
   bool toneCompositionActive_ = false;
   ImageHandle presentationVideo_ = 0;

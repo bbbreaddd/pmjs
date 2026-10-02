@@ -1,5 +1,6 @@
 'use strict';
 
+const assert = require('node:assert/strict');
 const path = require('node:path');
 const native = require(path.resolve(process.argv[2]));
 native.initialize({
@@ -62,6 +63,20 @@ native.beginFrame();
 native.render.setRenderTargetSize(32, 8);
 native.render.quad(0, 0, 32, 8, 1, 1, 1, 0.5);
 const premultiplied = native.render.renderToImage(32, 8, { alphaMode: 'premultiplied' });
+native.renderFrame();
+const afterResize = native.canvas.captureScene();
+assert.equal(native.canvas.pixel(afterResize.handle, 8, 2), topPixel,
+  'different-size GPU image discarded retained screen pixels');
+assert.equal(native.canvas.pixel(afterResize.handle, 8, 13), bottomPixel);
+native.canvas.release(afterResize.handle);
+const beforeRepeat = native.render.stats();
+native.beginFrame();
+native.render.setRenderTargetSize(32, 8);
+native.render.quad(0, 0, 32, 8, 0, 0, 1, 1);
+const repeated = native.render.renderToImage(32, 8);
+assert.equal(native.render.stats().rendererTargetCreates, beforeRepeat.rendererTargetCreates);
+assert.equal(native.render.stats().rendererTargetDestroys, beforeRepeat.rendererTargetDestroys);
+native.images.release(repeated.handle);
 const bitmap = native.mv.createBitmapMesh(premultiplied.handle,
   [0, 0, 16, 0, 16, 16, 0, 16], [0, 0, 1, 0, 1, 1, 0, 1],
   [0, 1, 2, 0, 2, 3], 1, { texelBounds: [0, 0, 31, 7], alphaMode: 'premultiplied' });
@@ -129,7 +144,6 @@ const erased = native.render.renderToImage(16, 16, { alphaMode: 'premultiplied' 
 const erasedMesh = native.mv.createBitmapMesh(erased.handle,
   [0, 0, 16, 0, 16, 16, 0, 16], [0, 0, 1, 0, 1, 1, 0, 1],
   [0, 1, 2, 0, 2, 3], 1, { texelBounds: [0, 0, 15, 15], alphaMode: 'premultiplied' });
-const assert = require('node:assert/strict');
 const triangle = [0, 0, 16, 0, 0, 16];
 function erasedPixels(points) {
   native.beginFrame();

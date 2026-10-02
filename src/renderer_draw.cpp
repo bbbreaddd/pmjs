@@ -347,10 +347,10 @@ bool Renderer::filterBoundsRect(const RenderCommand* filterBegin,
 }
 
 void Renderer::renderScene() {
-  std::uint32_t& rootFramebuffer = offscreenRender_ ? offscreenFramebuffer_ :
-                                                      sceneFramebuffer_;
-  std::uint32_t& rootTexture = offscreenRender_ ? offscreenTexture_ :
-                                                  sceneTexture_;
+  RenderTarget& rootTarget = offscreenRender_ ? offscreenTarget_ : sceneTarget_;
+  ensureTarget(rootTarget, width_, height_);
+  std::uint32_t& rootFramebuffer = rootTarget.framebuffer;
+  std::uint32_t& rootTexture = rootTarget.texture;
   const bool shouldRenderScene =
       sceneSubmittedThisFrame_ || offscreenRender_ || !hasValidSceneFrame_;
   if (shouldRenderScene) {
@@ -726,9 +726,12 @@ void Renderer::renderScene() {
   for (const auto& operation : operations) {
     if (operation.action == RenderCommand::Action::filterBegin) {
       ++stats_.filterTargetAcquires;
-      if (groupFramebuffers_[filterDepth] && groupTextures_[filterDepth]) {
+      if (groupTargets_[filterDepth].texture &&
+          groupTargets_[filterDepth].width == width_ &&
+          groupTargets_[filterDepth].height == height_) {
         ++stats_.filterTargetReuses;
       }
+      ensureTarget(groupTargets_[filterDepth], width_, height_);
       std::array<int, 4> boundedRect{};
       const bool bounded = filterBoundsRect(operation.command, &boundedRect);
       filterRegions[filterDepth].clear();
@@ -746,7 +749,7 @@ void Renderer::renderScene() {
         glDisable(GL_SCISSOR_TEST);
         scissorActive = false;
       }
-      glBindFramebuffer(GL_FRAMEBUFFER, groupFramebuffers_[filterDepth]);
+      glBindFramebuffer(GL_FRAMEBUFFER, groupTargets_[filterDepth].framebuffer);
       glViewport(0, 0, width_, height_);
       if (bounded && !multiRegion) {
         glEnable(GL_SCISSOR_TEST);
@@ -785,10 +788,10 @@ void Renderer::renderScene() {
       activeProgram = program_;
       glBindVertexArray(vertexArray_);
       glActiveTexture(GL_TEXTURE0);
-      glBindTexture(GL_TEXTURE_2D, groupTextures_[filterDepth]);
+      glBindTexture(GL_TEXTURE_2D, groupTargets_[filterDepth].texture);
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-      textureNearestState_[groupTextures_[filterDepth]] = false;
+      textureNearestState_[groupTargets_[filterDepth].texture] = false;
       glUniform2f(textureSizeUniform_,
                   static_cast<float>(width_) / filter.filterResolution,
                   static_cast<float>(height_) / filter.filterResolution);
@@ -803,72 +806,77 @@ void Renderer::renderScene() {
       const bool pictureBlend =
         filter.filterKind == scene_packet::FilterKind::pictureBlend;
       if (pictureBlend) {
+        ensureTarget(filterTarget_, width_, height_);
         glBindFramebuffer(GL_FRAMEBUFFER, filterDepth == 0 ? rootFramebuffer :
-                          groupFramebuffers_[filterDepth - 1]);
+                          groupTargets_[filterDepth - 1].framebuffer);
         glActiveTexture(GL_TEXTURE3);
-        glBindTexture(GL_TEXTURE_2D, filterTexture_);
+        glBindTexture(GL_TEXTURE_2D, filterTarget_.texture);
         glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, width_, height_);
         ++stats_.framebufferCopies;
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glUniform1i(bloomImageUniform_, 3);
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, groupTextures_[filterDepth]);
+        glBindTexture(GL_TEXTURE_2D, groupTargets_[filterDepth].texture);
       }
 
-      std::uint32_t compositeTexture = groupTextures_[filterDepth];
+      std::uint32_t compositeTexture = groupTargets_[filterDepth].texture;
       if (filter.filterKind == scene_packet::FilterKind::blur) {
+        ensureTarget(filterTarget_, width_, height_);
         glUniform1f(blurUniform_, filter.filterParameters[0]);
         glUniform2f(blurDirectionUniform_, 1, 0);
         glDisable(GL_BLEND);
-        std::uint32_t sourceTexture = groupTextures_[filterDepth];
+        std::uint32_t sourceTexture = groupTargets_[filterDepth].texture;
         const int passCount = static_cast<int>(filter.filterParameters[1]);
         for (int pass = 0; pass < passCount; ++pass) {
-          const bool targetFilter = sourceTexture == groupTextures_[filterDepth];
+          const bool targetFilter = sourceTexture == groupTargets_[filterDepth].texture;
           glBindFramebuffer(GL_FRAMEBUFFER,
-                            targetFilter ? filterFramebuffer_ :
-                                           groupFramebuffers_[filterDepth]);
+                            targetFilter ? filterTarget_.framebuffer :
+                                           groupTargets_[filterDepth].framebuffer);
           glBindTexture(GL_TEXTURE_2D, sourceTexture);
           glDrawArrays(GL_TRIANGLES, operation.first, operation.count);
           ++stats_.drawCalls;
           ++stats_.filterDrawCalls;
-          sourceTexture = targetFilter ? filterTexture_ :
-                                         groupTextures_[filterDepth];
+          sourceTexture = targetFilter ? filterTarget_.texture :
+                                         groupTargets_[filterDepth].texture;
         }
         glUniform2f(blurDirectionUniform_, 0, 1);
         for (int pass = 1; pass < passCount; ++pass) {
-          const bool targetFilter = sourceTexture == groupTextures_[filterDepth];
+          const bool targetFilter = sourceTexture == groupTargets_[filterDepth].texture;
           glBindFramebuffer(GL_FRAMEBUFFER,
-                            targetFilter ? filterFramebuffer_ :
-                                           groupFramebuffers_[filterDepth]);
+                            targetFilter ? filterTarget_.framebuffer :
+                                           groupTargets_[filterDepth].framebuffer);
           glBindTexture(GL_TEXTURE_2D, sourceTexture);
           glDrawArrays(GL_TRIANGLES, operation.first, operation.count);
           ++stats_.drawCalls;
           ++stats_.filterDrawCalls;
-          sourceTexture = targetFilter ? filterTexture_ :
-                                         groupTextures_[filterDepth];
+          sourceTexture = targetFilter ? filterTarget_.texture :
+                                         groupTargets_[filterDepth].texture;
         }
         compositeTexture = sourceTexture;
       } else if (filter.filterKind == scene_packet::FilterKind::blurX ||
                  filter.filterKind == scene_packet::FilterKind::blurY) {
+        if (filter.filterParameters[1] > 1) {
+          ensureTarget(filterTarget_, width_, height_);
+        }
         glUniform1f(blurUniform_, filter.filterParameters[0]);
         glUniform2f(blurDirectionUniform_,
                     filter.filterKind == scene_packet::FilterKind::blurX ? 1 : 0,
                     filter.filterKind == scene_packet::FilterKind::blurY ? 1 : 0);
         glDisable(GL_BLEND);
-        std::uint32_t sourceTexture = groupTextures_[filterDepth];
+        std::uint32_t sourceTexture = groupTargets_[filterDepth].texture;
         const int passCount = static_cast<int>(filter.filterParameters[1]);
         for (int pass = 1; pass < passCount; ++pass) {
-          const bool targetFilter = sourceTexture == groupTextures_[filterDepth];
+          const bool targetFilter = sourceTexture == groupTargets_[filterDepth].texture;
           glBindFramebuffer(GL_FRAMEBUFFER,
-                            targetFilter ? filterFramebuffer_ :
-                                           groupFramebuffers_[filterDepth]);
+                            targetFilter ? filterTarget_.framebuffer :
+                                           groupTargets_[filterDepth].framebuffer);
           glBindTexture(GL_TEXTURE_2D, sourceTexture);
           glDrawArrays(GL_TRIANGLES, operation.first, operation.count);
           ++stats_.drawCalls;
           ++stats_.filterDrawCalls;
-          sourceTexture = targetFilter ? filterTexture_ :
-                                         groupTextures_[filterDepth];
+          sourceTexture = targetFilter ? filterTarget_.texture :
+                                         groupTargets_[filterDepth].texture;
         }
         compositeTexture = sourceTexture;
       } else if (filter.filterKind == scene_packet::FilterKind::displacement) {
@@ -928,6 +936,8 @@ void Renderer::renderScene() {
         glUniform1i(pixiFilterKindUniform_,
                     filter.filterKind == scene_packet::FilterKind::zoomBlur ? 1 : 2);
       } else if (filter.filterKind == scene_packet::FilterKind::advancedBloom) {
+        ensureTarget(bloomTarget_, width_, height_);
+        ensureTarget(filterTarget_, width_, height_);
         glUniform1f(blurUniform_, 0);
         glUniform2f(blurDirectionUniform_, 0, 0);
         glDisable(GL_BLEND);
@@ -936,18 +946,18 @@ void Renderer::renderScene() {
         glUniform1fv(pixiFilterParametersUniform_, 10,
                      extractParameters.data());
         glUniform1i(pixiFilterKindUniform_, 3);
-        glBindFramebuffer(GL_FRAMEBUFFER, bloomFramebuffer_);
+        glBindFramebuffer(GL_FRAMEBUFFER, bloomTarget_.framebuffer);
         glDrawArrays(GL_TRIANGLES, operation.first, operation.count);
         ++stats_.drawCalls;
         ++stats_.filterDrawCalls;
 
-        std::uint32_t bloomSource = bloomTexture_;
+        std::uint32_t bloomSource = bloomTarget_.texture;
         const int passCount = static_cast<int>(filter.filterParameters[3]);
         for (int pass = 0; pass < passCount; ++pass) {
-          const bool targetFilter = bloomSource == bloomTexture_;
+          const bool targetFilter = bloomSource == bloomTarget_.texture;
           glBindFramebuffer(GL_FRAMEBUFFER,
-                            targetFilter ? filterFramebuffer_ :
-                                           bloomFramebuffer_);
+                            targetFilter ? filterTarget_.framebuffer :
+                                           bloomTarget_.framebuffer);
           glBindTexture(GL_TEXTURE_2D, bloomSource);
           const std::array<float, 10> passParameters = {
             filter.filterParameters[6 + pass], filter.filterParameters[4],
@@ -958,13 +968,13 @@ void Renderer::renderScene() {
           glDrawArrays(GL_TRIANGLES, operation.first, operation.count);
           ++stats_.drawCalls;
           ++stats_.filterDrawCalls;
-          bloomSource = targetFilter ? filterTexture_ : bloomTexture_;
+          bloomSource = targetFilter ? filterTarget_.texture : bloomTarget_.texture;
         }
         glActiveTexture(GL_TEXTURE3);
         glBindTexture(GL_TEXTURE_2D, bloomSource);
         glUniform1i(bloomImageUniform_, 3);
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, groupTextures_[filterDepth]);
+        glBindTexture(GL_TEXTURE_2D, groupTargets_[filterDepth].texture);
         const std::array<float, 10> compositeParameters = {
           filter.filterParameters[0], filter.filterParameters[1],
           0, 0, 0, 0, 0, 0, 0, 0};
@@ -1034,16 +1044,17 @@ void Renderer::renderScene() {
                      filter.filterParameters.data());
         glUniform1i(pixiFilterKindUniform_, 20);
       } else if (filter.filterKind == scene_packet::FilterKind::kawaseBlur) {
+        ensureTarget(filterTarget_, width_, height_);
         glUniform1f(blurUniform_, 0);
         glUniform2f(blurDirectionUniform_, 0, 0);
         glDisable(GL_BLEND);
-        std::uint32_t sourceTexture = groupTextures_[filterDepth];
+        std::uint32_t sourceTexture = groupTargets_[filterDepth].texture;
         const int passCount = static_cast<int>(filter.filterParameters[0]);
         for (int pass = 0; pass < passCount; ++pass) {
-          const bool targetFilter = sourceTexture == groupTextures_[filterDepth];
+          const bool targetFilter = sourceTexture == groupTargets_[filterDepth].texture;
           glBindFramebuffer(GL_FRAMEBUFFER,
-                            targetFilter ? filterFramebuffer_ :
-                                           groupFramebuffers_[filterDepth]);
+                            targetFilter ? filterTarget_.framebuffer :
+                                           groupTargets_[filterDepth].framebuffer);
           glBindTexture(GL_TEXTURE_2D, sourceTexture);
           const std::array<float, 10> passParameters = {
             filter.filterParameters[3 + pass], filter.filterParameters[1],
@@ -1054,8 +1065,8 @@ void Renderer::renderScene() {
           glDrawArrays(GL_TRIANGLES, operation.first, operation.count);
           ++stats_.drawCalls;
           ++stats_.filterDrawCalls;
-          sourceTexture = targetFilter ? filterTexture_ :
-                                         groupTextures_[filterDepth];
+          sourceTexture = targetFilter ? filterTarget_.texture :
+                                         groupTargets_[filterDepth].texture;
         }
         compositeTexture = sourceTexture;
         glUniform1i(pixiFilterKindUniform_, 0);
@@ -1083,7 +1094,7 @@ void Renderer::renderScene() {
       }
 
       glBindFramebuffer(GL_FRAMEBUFFER, filterDepth == 0 ? rootFramebuffer :
-                        groupFramebuffers_[filterDepth - 1]);
+                        groupTargets_[filterDepth - 1].framebuffer);
       glBindTexture(GL_TEXTURE_2D, compositeTexture);
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -1143,10 +1154,11 @@ void Renderer::renderScene() {
     }
     if (operation.matrixCommand) {
       if (operation.matrixCommand == composedToneCommand) {
+        ensureTarget(toneOverlayTarget_, width_, height_);
         presentationColorMatrix_ = operation.matrixCommand->colorMatrix;
         presentationColorMatrixAlpha_ = operation.matrixCommand->color[3];
         toneCompositionActive_ = true;
-        glBindFramebuffer(GL_FRAMEBUFFER, toneOverlayFramebuffer_);
+        glBindFramebuffer(GL_FRAMEBUFFER, toneOverlayTarget_.framebuffer);
         glViewport(0, 0, width_, height_);
         glDisable(GL_SCISSOR_TEST);
         scissorActive = false;
@@ -1157,15 +1169,16 @@ void Renderer::renderScene() {
         applyBlendMode(activeBlend);
         continue;
       }
+      ensureTarget(filterTarget_, width_, height_);
       glDisable(GL_BLEND);
-      glBindFramebuffer(GL_FRAMEBUFFER, filterFramebuffer_);
+      glBindFramebuffer(GL_FRAMEBUFFER, filterTarget_.framebuffer);
       glViewport(0, 0, width_, height_);
       glUseProgram(program_);
       activeProgram = program_;
       glBindVertexArray(vertexArray_);
       glActiveTexture(GL_TEXTURE0);
       glBindTexture(GL_TEXTURE_2D, filterDepth == 0 ? rootTexture :
-                    groupTextures_[filterDepth - 1]);
+                    groupTargets_[filterDepth - 1].texture);
       glUniform2f(textureSizeUniform_, static_cast<float>(width_),
                   static_cast<float>(height_));
       glUniform1f(blurUniform_, 0);
@@ -1186,14 +1199,12 @@ void Renderer::renderScene() {
       ++stats_.filterDrawCalls;
       ++stats_.toneAdjustDrawCalls;
       if (filterDepth == 0) {
-        std::swap(rootFramebuffer, filterFramebuffer_);
-        std::swap(rootTexture, filterTexture_);
+        std::swap(rootTarget, filterTarget_);
         glBindFramebuffer(GL_FRAMEBUFFER, rootFramebuffer);
       } else {
-        std::swap(groupFramebuffers_[filterDepth - 1], filterFramebuffer_);
-        std::swap(groupTextures_[filterDepth - 1], filterTexture_);
+        std::swap(groupTargets_[filterDepth - 1], filterTarget_);
         glBindFramebuffer(GL_FRAMEBUFFER,
-                          groupFramebuffers_[filterDepth - 1]);
+                          groupTargets_[filterDepth - 1].framebuffer);
       }
       glEnable(GL_BLEND);
       applyBlendMode(activeBlend);
@@ -1416,7 +1427,8 @@ void Renderer::presentToDrawable() {
   const bool composePresentation = toneCompositionActive_ ||
       hasPresentationLayers;
   if (composePresentation) {
-    drawToneComposition(filterFramebuffer_, 0, 0, width_, height_, true);
+    ensureTarget(filterTarget_, width_, height_);
+    drawToneComposition(filterTarget_.framebuffer, 0, 0, width_, height_, true);
     if (toneCompositionActive_) ++stats_.toneComposedPresentationFrames;
   }
   const bool identity = presentation_.viewportX == 0 &&
@@ -1427,7 +1439,7 @@ void Renderer::presentToDrawable() {
       presentation_.drawableHeight == height_;
   if (identity) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER,
-                      composePresentation ? filterFramebuffer_ : sceneFramebuffer_);
+                      composePresentation ? filterTarget_.framebuffer : sceneTarget_.framebuffer);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
     glBlitFramebuffer(0, 0, width_, height_, 0, 0,
                       presentationWidth_, presentationHeight_,
@@ -1463,7 +1475,7 @@ void Renderer::presentToDrawable() {
                       GL_COLOR_BUFFER_BIT, GL_NEAREST);
   }
   glBindFramebuffer(GL_READ_FRAMEBUFFER,
-                    composePresentation ? filterFramebuffer_ : sceneFramebuffer_);
+                    composePresentation ? filterTarget_.framebuffer : sceneTarget_.framebuffer);
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
   glBlitFramebuffer(0, 0, width_, height_, destX, destY,
                     destX + destWidth, destY + destHeight,
@@ -1484,10 +1496,10 @@ void Renderer::drawToneComposition(std::uint32_t framebuffer,
   glUseProgram(presentationProgram_);
   glBindVertexArray(vertexArray_);
   glActiveTexture(GL_TEXTURE0);
-  glBindTexture(GL_TEXTURE_2D, sceneTexture_);
+  glBindTexture(GL_TEXTURE_2D, sceneTarget_.texture);
   glUniform1i(presentationSceneUniform_, 0);
   glActiveTexture(GL_TEXTURE1);
-  glBindTexture(GL_TEXTURE_2D, toneOverlayTexture_);
+  glBindTexture(GL_TEXTURE_2D, toneOverlayTarget_.texture);
   glUniform1i(presentationOverlayUniform_, 1);
   const auto video = images_.lookup(presentationVideo_);
   const auto upperCanvas = images_.lookup(presentationUpperCanvas_);
@@ -1523,9 +1535,9 @@ void Renderer::drawToneComposition(std::uint32_t framebuffer,
 
 void Renderer::materializeToneComposition() {
   if (!toneCompositionActive_) return;
-  drawToneComposition(filterFramebuffer_, 0, 0, width_, height_);
-  std::swap(sceneFramebuffer_, filterFramebuffer_);
-  std::swap(sceneTexture_, filterTexture_);
+  ensureTarget(filterTarget_, width_, height_);
+  drawToneComposition(filterTarget_.framebuffer, 0, 0, width_, height_);
+  std::swap(sceneTarget_, filterTarget_);
   toneCompositionActive_ = false;
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }

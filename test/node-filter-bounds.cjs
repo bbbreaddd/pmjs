@@ -30,7 +30,7 @@ function checkPixel(actual, expected, tolerance, label) {
   }
 }
 
-function submit(records) {
+function submit(records, target) {
   const metadata = new Uint32Array(records.length * 7);
   const values = new Float32Array(records.length * stride);
   records.forEach((record, index) => {
@@ -38,8 +38,10 @@ function submit(records) {
     values.set(record.values, index * stride);
   });
   native.beginFrame();
+  if (target) native.render.setRenderTargetSize(target.width, target.height);
   native.scene.submit(native.scene.packetVersion, metadata, values, records.length);
-  native.renderScene();
+  if (target) native.render.renderToCanvas(target.handle);
+  else native.renderScene();
 }
 
 function runCase(label, expectations) {
@@ -316,3 +318,17 @@ const stats = native.render.stats();
 if (typeof stats.filterBoundedApplications !== 'number') {
   throw new Error('bounded filter applications stat is missing');
 }
+
+// Nested filter surfaces must follow the active target size, then return to screen use.
+for (const size of [8, 24, 24, 16]) {
+  const target = native.canvas.create(size, size);
+  submit(built['nested preserving filters'], target);
+  checkPixel(native.canvas.pixel(target.handle, 2, 2), [64, 13, 26, 255], 4,
+    'nested offscreen filters at size ' + size);
+  native.canvas.release(target.handle);
+}
+submit(built['nested preserving filters']);
+const returned = native.canvas.captureScene();
+checkPixel(native.canvas.pixel(returned.handle, 2, 2), [64, 13, 26, 255], 4,
+  'nested filters after offscreen resize');
+native.canvas.release(returned.handle);
