@@ -180,7 +180,7 @@ class CanvasStore {
   enum class SurfaceState {
     Deferred,
     Realizing,
-    Realized
+    Realized  // CPU pixels are current; the GPU image is optional.
   };
 
   struct Surface {
@@ -204,6 +204,7 @@ class CanvasStore {
   const Surface* lookup(CanvasHandle handle) const;
 
   bool realizeSurface(Surface& surface);
+  bool uploadSurface(Surface& surface);
   void discardCommands(Surface& surface);
   void releaseCommandDependencies(CanvasCommand& cmd);
 

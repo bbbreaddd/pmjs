@@ -12,6 +12,9 @@ native.initialize({
   windowTitle: 'deferred canvas test',
 });
 
+// The first memory query creates the diagnostic fallback texture.
+native.images.memory(0);
+
 // 1. Creation should be deferred: liveCount = 1, liveBytes = 0, cpuPixelBytes = 0
 const c1 = native.canvas.create(100, 100);
 assert.equal(typeof c1.handle, 'number');
@@ -48,8 +51,12 @@ assert.equal(mem.deferredCommandCount, 4, 'Expected 4 queued commands');
 native.images.release(fixture.handle);
 
 // 3. Direct pixel readback triggers realization and produces correct output
+const beforeCpuRead = native.images.memory(0);
 const p1 = native.canvas.pixel(c1.handle, 12, 12);
 assert.ok(p1 !== 0, 'pixel(12, 12) should have content after replay');
+assert.equal(native.images.memory(0).textureCreates, beforeCpuRead.textureCreates,
+  'CPU observation must not allocate a Canvas texture');
+assert.equal(native.images.memory(0).textureUploadBytes, beforeCpuRead.textureUploadBytes);
 
 mem = native.canvas.memory();
 assert.equal(mem.liveBytes, 100 * 100 * 4, 'Canvas should be realized after pixel()');
@@ -103,6 +110,7 @@ const dstCanvas = native.canvas.create(40, 40);
 mem = native.canvas.memory();
 assert.equal(mem.deferredCanvasCount, 2, 'Both canvases start deferred');
 
+const beforeCopy = native.images.memory(0);
 // Draw src into dst -> dst must realize immediately
 native.canvas.drawImage(dstCanvas.handle, srcCanvas.handle, 0, 0, 40, 40, 0, 0, 40, 40, 1.0);
 mem = native.canvas.memory();
@@ -115,6 +123,9 @@ native.canvas.fillRect(srcCanvas.handle, 0, 0, 40, 40, 0x0000ffff); // BLUE
 // dstCanvas must still be RED
 const dstColor = native.canvas.pixel(dstCanvas.handle, 20, 20);
 assert.equal(dstColor, 0xff0000ff, 'dstCanvas must preserve snapshot of src at drawImage time (RED, not BLUE)');
+assert.equal(native.images.memory(0).textureCreates, beforeCopy.textureCreates,
+  'CPU Canvas copies and mutations must not allocate textures');
+assert.equal(native.images.memory(0).textureUploadBytes, beforeCopy.textureUploadBytes);
 
 native.canvas.release(srcCanvas.handle);
 native.canvas.release(dstCanvas.handle);
@@ -165,9 +176,13 @@ assert.ok(uploads.textureUploadBytes >=
 mem = native.canvas.memory();
 assert.equal(mem.liveBytes, 32 * 32 * 4, 'c3 should have been realized upon submitScene');
 
+const beforeCapture = native.images.memory(0);
 const frame = native.canvas.captureScene();
 const sampled = native.canvas.pixel(frame.handle, 16, 16);
 assert.equal(sampled, 0x123456ff, 'Rendered frame should match canvas color');
+assert.equal(native.images.memory(0).textureCreates, beforeCapture.textureCreates,
+  'a CPU readback capture must not upload its pixels back to the GPU');
+assert.equal(native.images.memory(0).textureUploadBytes, beforeCapture.textureUploadBytes);
 
 const uploadsBeforeMutation = native.images.memory(0);
 native.canvas.fillRect(c3.handle, 0, 0, 1, 1, 0xffffffff);
@@ -183,5 +198,55 @@ assert.equal(uploads.textureUploadBytes,
 
 native.canvas.release(frame.handle);
 native.canvas.release(c3.handle);
+
+// A CPU-only Canvas uploads its latest pixels once, when first submitted.
+const cpuOnly = native.canvas.create(32, 32);
+const beforeCpuOnly = native.images.memory(0);
+native.canvas.fillRect(cpuOnly.handle, 0, 0, 32, 32, 0xff0000ff);
+assert.equal(native.canvas.pixel(cpuOnly.handle, 16, 16), 0xff0000ff);
+native.canvas.writePixels(cpuOnly.handle, 16, 16, 1, 1, new Uint8Array([0, 255, 0, 255]));
+assert.ok(native.canvas.encodePng(cpuOnly.handle).length > 0);
+native.beginFrame();
+native.renderFrame();
+assert.equal(native.images.memory(0).textureCreates, beforeCpuOnly.textureCreates);
+assert.equal(native.images.memory(0).textureUploadBytes, beforeCpuOnly.textureUploadBytes,
+  'the frame upload sweep must leave CPU-only Canvases alone');
+metadata[2] = cpuOnly.handle;
+native.beginFrame();
+native.scene.submit(schema.version, metadata, values, 1);
+native.renderFrame();
+assert.equal(native.images.memory(0).textureCreates, beforeCpuOnly.textureCreates + 1);
+assert.equal(native.images.memory(0).textureUploadBytes, beforeCpuOnly.textureUploadBytes + 32 * 32 * 4);
+const cpuFrame = native.canvas.captureScene();
+assert.equal(native.canvas.pixel(cpuFrame.handle, 16, 16), 0x00ff00ff);
+assert.equal(native.canvas.pixel(cpuFrame.handle, 15, 16), 0xff0000ff);
+native.canvas.release(cpuFrame.handle);
+native.canvas.release(cpuOnly.handle);
+
+// Failed replay keeps its commands and dependencies until retry or discard.
+const failed = native.canvas.create(16, 16);
+const dependency = native.images.load('fixture.png');
+native.canvas.fillRect(failed.handle, 0, 0, 16, 16, 0xff0000ff);
+native.canvas.drawImage(failed.handle, dependency.handle, 0, 0, 2, 2, 0, 0, 2, 2, 1);
+native.canvas.drawText(failed.handle, 'fixture.png', 'not a font', 0, 12, 12, 0xffffffff);
+native.images.release(dependency.handle);
+const beforeFailure = native.canvas.memory();
+for (let attempt = 0; attempt < 2; attempt++) {
+  assert.throws(() => native.canvas.pixel(failed.handle, 8, 8));
+  assert.equal(native.canvas.memory().deferredCommandCount, beforeFailure.deferredCommandCount);
+  assert.equal(native.canvas.memory().deferredCommandBytes, beforeFailure.deferredCommandBytes);
+  assert.equal(native.canvas.memory().cpuPixelBytes, beforeFailure.cpuPixelBytes);
+  assert.equal(native.images.memory(20).largest.find(entry => entry.handle === dependency.handle).references, 1);
+}
+const failedCopy = native.canvas.create(16, 16);
+assert.throws(() => native.canvas.drawImage(failedCopy.handle, failed.handle, 0, 0, 16, 16, 0, 0, 16, 16, 1));
+native.canvas.release(failedCopy.handle);
+native.canvas.clear(failed.handle);
+assert.equal(native.canvas.memory().deferredCommandCount, 0);
+const discarded = native.images.memory(20).largest.find(entry => entry.handle === dependency.handle);
+assert.ok(!discarded || discarded.references === 0);
+native.canvas.fillRect(failed.handle, 0, 0, 16, 16, 0x0000ffff);
+assert.equal(native.canvas.pixel(failed.handle, 8, 8), 0x0000ffff);
+native.canvas.release(failed.handle);
 
 console.log('Deferred canvas tests passed successfully.');
