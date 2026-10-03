@@ -10,11 +10,11 @@ function MvNativeWebAudio(url, intent) {
   this._gainValue = 1;
   this._gainRamp = null;
   this._pendingFadeIn = null;
+  this._loadEpoch = 0;
 
   this._gainNode = this;
   this.gain = this;
 
-  var path = pmjsAudio.resolvePath(this._url);
   var self = this;
   this._voice.onInstalled = function() {
     if (self._voice.autoPlay) {
@@ -22,9 +22,34 @@ function MvNativeWebAudio(url, intent) {
       else self.setValueAtTime(self._volume);
     }
     var listeners = self._loadListeners.splice(0);
-    for (var index = 0; index < listeners.length; index++) listeners[index]();
+    for (var index = 0; index < listeners.length; index++) {
+      try { listeners[index](); }
+      catch (error) { pmjsReportEventError(error); }
+    }
   };
 
+  if (typeof ResourceHandler !== 'undefined' && typeof ResourceHandler.createLoader === 'function') {
+    var epoch = this._loadEpoch;
+    this._loader = ResourceHandler.createLoader(this._url, function() {
+      if (epoch === self._loadEpoch) self._load();
+    }, function() {
+      if (epoch !== self._loadEpoch) return;
+      self._voice.loading = false;
+      self._voice.error = true;
+    });
+    this._voice.onLoadError = function() {
+      self._voice.error = false;
+      self._voice.loading = true;
+      self._loader();
+    };
+  }
+  this._load();
+}
+
+MvNativeWebAudio.prototype._load = function() {
+  var path = pmjsAudio.resolvePath(this._url);
+  this._voice.error = false;
+  this._voice.loading = !!NativeHost.media;
   if (NativeHost.media && pmjsAudio.isObjectUrl(this._url)) {
     this._voice.loadObjectUrl(this._url);
   } else if (NativeHost.media && path && typeof Decrypter !== 'undefined' &&
@@ -34,8 +59,10 @@ function MvNativeWebAudio(url, intent) {
     });
   } else if (NativeHost.media && path) {
     this._voice.loadPath(path);
+  } else {
+    this._voice.loading = false;
   }
-}
+};
 
 Object.defineProperties(MvNativeWebAudio.prototype, {
   url: {
@@ -53,8 +80,11 @@ Object.defineProperties(MvNativeWebAudio.prototype, {
   pitch: {
     get: function() { return this._voice.pitch; },
     set: function(value) {
-      this._voice.pitch = Number(value);
-      this._voice.applyParameters();
+      var pitch = Number(value);
+      if (this._voice.pitch === pitch) return;
+      this._voice.pitch = pitch;
+      if (this.isPlaying()) this.play(this._voice.loop, 0);
+      else this._voice.applyParameters();
     },
     configurable: true
   },
@@ -139,6 +169,8 @@ MvNativeWebAudio.prototype.stop = function() {
 };
 
 MvNativeWebAudio.prototype.clear = function() {
+  this._loadEpoch++;
+  this._voice.onLoadError = null;
   this.stop();
   this._voice.resetForReload();
   this._voice.volume = 1;

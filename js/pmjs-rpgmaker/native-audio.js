@@ -46,6 +46,7 @@ function NativeAudioVoice(intent) {
   this.error = false;
   this.loadGeneration = 0;
   this.onInstalled = null;
+  this.onLoadError = null;
 }
 
 NativeAudioVoice.prototype.install = function(loaded, generation) {
@@ -65,6 +66,7 @@ NativeAudioVoice.prototype.install = function(loaded, generation) {
   }
   this.duration = loaded.duration;
   this.loading = false;
+  this.error = false;
   if (nativeAudioFinalizer) nativeAudioFinalizer.register(this, this.handle, this);
   if (this.autoPlay) {
     this.applyParameters();
@@ -84,6 +86,7 @@ NativeAudioVoice.prototype.failLoad = function(source, error, generation) {
   this.error = true;
   console.error('[pmjs-media] audio load failed source=' + source +
     ' error=' + (error && error.message || error));
+  if (typeof this.onLoadError === 'function') this.onLoadError(error);
 };
 
 NativeAudioVoice.prototype.loadOptions = function(identity) {

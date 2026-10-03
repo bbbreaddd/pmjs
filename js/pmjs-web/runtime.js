@@ -171,6 +171,7 @@ globalThis.__pmjsReceiveInput = function(state) {
     var oldPad = nativeGamepads[index];
     if (oldPad && (!pads[index] || pads[index].connected === false ||
         pads[index].instance !== oldPad._instance)) {
+      pendingPadReleases = pendingPadReleases.filter(function(release) { return release.pad !== oldPad; });
       oldPad.connected = false;
       for (var cleared = 0; cleared < oldPad.buttons.length; cleared++) oldPad.buttons[cleared]._value = 0;
       oldPad.axes = [0, 0, 0, 0];
@@ -198,16 +199,33 @@ globalThis.__pmjsReceiveInput = function(state) {
     for (var j = 0; j < 17; j++) {
       var held = sourcePad.buttonsDown.indexOf(j) >= 0;
       var edge = sourcePad.buttonsPressed.indexOf(j) >= 0;
-      pad.buttons[j]._value = held || edge ? 1 : 0;
-      if (edge && !held) pendingPadReleases.push({ pad: pad, button: j });
+      var pending = pendingPadReleases.some(function(release) {
+        return release.pad === pad && release.button === j;
+      });
+      if (held && pending) {
+        pendingPadReleases = pendingPadReleases.filter(function(release) {
+          return release.pad !== pad || release.button !== j;
+        });
+        pending = false;
+      }
+      pad.buttons[j]._value = held || edge || pending ? 1 : 0;
+      if (edge && !held && !pending) pendingPadReleases.push({ pad: pad, button: j });
     }
   }
   nativeGamepads.length = pads.length;
   var events = state.keyEvents || [];
   var pressed = state.keysPressed || [];
   var heldKeys = state.keysDown || [];
+  pendingKeyReleases = pendingKeyReleases.filter(function(release) {
+    return heldKeys.indexOf(release.keyCode) < 0;
+  });
   for (var k = 0; k < events.length; k++) {
     var source = events[k];
+    if (source.down) {
+      pendingKeyReleases = pendingKeyReleases.filter(function(release) {
+        return release.keyCode !== source.keyCode;
+      });
+    }
     if (!source.down && pressed.indexOf(source.keyCode) >= 0 &&
         heldKeys.indexOf(source.keyCode) < 0) pendingKeyReleases.push(source);
     else dispatchNativeKey(source);
