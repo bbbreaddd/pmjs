@@ -386,6 +386,12 @@ bool MediaService::play(std::uint32_t handle, bool loop, double offset) {
   voice->mix.stopAfterFade = false;
   return impl_->device != 0;
 }
+bool MediaService::setSuspended(std::uint32_t handle, bool suspended) {
+  auto voice = impl_->voice(handle); if (!voice) return false;
+  std::lock_guard lock(voice->mutex);
+  voice->mix.suspended = suspended;
+  return true;
+}
 bool MediaService::stop(std::uint32_t handle) {
   auto voice = impl_->voice(handle); if (!voice) return false;
   std::lock_guard lock(voice->mutex); voice->mix.playing = false;

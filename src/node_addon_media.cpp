@@ -358,6 +358,14 @@ napi_value playAudio(napi_env env, napi_callback_info info) try {
   napi_throw_type_error(env, nullptr, error.what()); return nullptr;
 }
 
+napi_value setAudioSuspended(napi_env env, napi_callback_info info) try {
+  auto a = arguments(env, info, 2);
+  return boolean(env, host(env).core.media().setSuspended(
+      asUint32(env, a.at(0)), asBoolean(env, a.at(1))));
+} catch (const std::exception& error) {
+  napi_throw_type_error(env, nullptr, error.what()); return nullptr;
+}
+
 napi_value stopAudio(napi_env env, napi_callback_info info) try {
   auto a = arguments(env, info, 1);
   return boolean(env, host(env).core.media().stop(asUint32(env, a.at(0))));
@@ -501,6 +509,7 @@ void registerMediaBindings(napi_env env, napi_value exports) {
   method(env, media, "loadAudioBytes", loadAudioBytes);
   method(env, media, "playAudio", playAudio);
   method(env, media, "stopAudio", stopAudio);
+  method(env, media, "setAudioSuspended", setAudioSuspended);
   method(env, media, "setAudioParameters", setAudioParameters);
   method(env, media, "fadeAudio", fadeAudio);
   method(env, media, "audioIsPlaying", audioIsPlaying);

@@ -407,6 +407,11 @@ VideoElement.prototype.play = function() {
 VideoElement.prototype._startPlayback = function() {
   if (!this._media || !this._playRequested) return;
   this._playRequested = false;
+  if (!this.paused) {
+    this._settlePlayPromises();
+    return;
+  }
+  if (this.ended) this._currentTime = 0;
   this.paused = false; this.ended = false; this._startOffset = this._currentTime;
   this._startedAt = performance.now();
   if (this._audio) {

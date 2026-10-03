@@ -54,6 +54,7 @@ class MediaService {
   std::size_t sampleMemoryBytes() const;
   bool play(std::uint32_t handle, bool loop, double offset);
   bool stop(std::uint32_t handle);
+  bool setSuspended(std::uint32_t handle, bool suspended);
   bool setParameters(std::uint32_t handle, float volume, float pitch, float pan);
   bool fade(std::uint32_t handle, float from, float to, double duration,
             bool stopWhenFinished);

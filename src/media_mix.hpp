@@ -23,13 +23,14 @@ struct VoiceMixState {
   float volume = 1.0F, pitch = 1.0F, pan = 0.0F;
   float gain = 1.0F, targetGain = 1.0F, gainStep = 0.0F;
   bool stopAfterFade = false, playing = false, loop = false, eof = false;
+  bool suspended = false;
   std::uint64_t loopStart = 0, loopEnd = 0;
   double duration = 0;
 };
 
 inline void mixVoiceInto(VoiceMixState& voice, float* output, int frames,
                          float master) {
-  if (!voice.playing) return;
+  if (!voice.playing || voice.suspended) return;
   for (int frame = 0; frame < frames; ++frame) {
     std::uint64_t nextSampleFrame = voice.positionFrame + 1;
     if (voice.asset) {
