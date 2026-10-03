@@ -1,0 +1,68 @@
+{
+  "browser": "Chrome/151.0.7922.34",
+  "pixiSha256": "3b0ce3a88c6d59c0381b732a722d50d7467a0a994b221fb55a5ad68977440afc",
+  "version": "4.8.9",
+  "cases": {
+    "full black": [
+      128,
+      128,
+      128,
+      255
+    ],
+    "partial negative tone": [
+      128,
+      141,
+      166,
+      255
+    ],
+    "positive tone overflow": [
+      255,
+      255,
+      255,
+      255
+    ],
+    "matrix offset overflow": [
+      255,
+      178,
+      158,
+      255
+    ],
+    "alpha below zero": [
+      128,
+      128,
+      128,
+      127
+    ],
+    "alpha above one": [
+      179,
+      230,
+      255,
+      255
+    ],
+    "partial matrix alpha": [
+      128,
+      141,
+      167,
+      255
+    ],
+    "translucent source": [
+      128,
+      135,
+      147,
+      191
+    ],
+    "two translucent pictures": [
+      192,
+      64,
+      64,
+      255
+    ],
+    "inline color matrix": [
+      178,
+      160,
+      160,
+      255
+    ]
+  },
+  "renderer": "WebKit WebGL"
+}

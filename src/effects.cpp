@@ -244,8 +244,8 @@ auto& lookup(Map& map, std::uint32_t id, const char* what) {
 
 struct Effects::Impl {
   struct Context {
-    Effekseer::ManagerRef manager;
     EffekseerRendererGL::RendererRef renderer;
+    Effekseer::ManagerRef manager;
     Effekseer::RefPtr<Files> files;
     Effekseer::RefPtr<WavePlayer> sound;
     float time = 0;
@@ -382,7 +382,7 @@ bool Effects::exists(std::uint32_t id) const {
     lookup(impl_->contexts, found->second.context, "context").manager->Exists(found->second.handle);
 }
 
-void Effects::control(std::uint32_t id, const std::string& operation, const std::array<float, 4>& v) {
+void Effects::control(std::uint32_t id, const std::string& operation, const std::array<double, 4>& v) {
   const auto handle = lookup(impl_->handles, id, "handle");
   auto& manager = lookup(impl_->contexts, handle.context, "context").manager;
   const auto h = handle.handle;
@@ -392,8 +392,7 @@ void Effects::control(std::uint32_t id, const std::string& operation, const std:
   else if (operation == "speed") manager->SetSpeed(h, v[0]);
   else if (operation == "target") manager->SetTargetLocation(h, v[0], v[1], v[2]);
   else if (operation == "seed") {
-    if (static_cast<double>(v[0]) < std::numeric_limits<int>::min() ||
-        static_cast<double>(v[0]) > std::numeric_limits<int>::max()) {
+    if (v[0] < std::numeric_limits<int>::min() || v[0] > std::numeric_limits<int>::max()) {
       throw std::runtime_error("invalid effect random seed");
     }
     manager->SetRandomSeed(h, static_cast<int>(v[0]));
@@ -406,8 +405,8 @@ void Effects::control(std::uint32_t id, const std::string& operation, const std:
   else throw std::runtime_error("unknown effect handle operation: " + operation);
 }
 
-void Effects::draw(const EffectDraw& draw) {
-  if (!exists(draw.handle)) return;
+std::uint32_t Effects::draw(const EffectDraw& draw) {
+  if (!exists(draw.handle)) return 0;
   GlBindings restore;
   const auto handle = lookup(impl_->handles, draw.handle, "handle");
   auto& context = lookup(impl_->contexts, handle.context, "context");
@@ -418,9 +417,11 @@ void Effects::draw(const EffectDraw& draw) {
   context.renderer->SetCameraMatrix(camera);
   glViewport(static_cast<int>(draw.viewport[0]), static_cast<int>(draw.viewport[1]),
              static_cast<int>(draw.viewport[2]), static_cast<int>(draw.viewport[3]));
+  context.renderer->ResetDrawCallCount();
   context.renderer->BeginRendering();
   context.manager->DrawHandle(handle.handle);
   context.renderer->EndRendering();
+  return static_cast<std::uint32_t>(context.renderer->GetDrawCallCount());
 }
 
 std::array<std::uint32_t, 4> Effects::counts() const {

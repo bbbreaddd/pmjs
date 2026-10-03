@@ -1239,13 +1239,13 @@ void Renderer::renderScene() {
     }
     if (operation.primitive == RenderCommand::Primitive::effect) {
       auto draw = operation.command->effect;
-      if (offscreenRender_) {
-        // Stock MZ writes GL particles without Pixi's RenderTexture Y inversion.
-        // Native canvas readback flips rows, so reflect this producer beforehand.
+      if (offscreenRender_ || filterDepth > 0) {
+        // MZ bypasses Pixi's Y inversion when drawing into RenderTextures or filters.
+        // Reflect the producer to preserve its pixels in native target coordinates.
         draw.viewport[1] = height_ - draw.viewport[1] - draw.viewport[3];
         for (std::size_t column = 0; column < 4; ++column) draw.projection[column * 4 + 1] *= -1;
       }
-      effects_->draw(draw);
+      stats_.drawCalls += effects_->draw(draw);
       glViewport(0, height_ - static_cast<int>(draw.resetViewport[1]),
         static_cast<int>(draw.resetViewport[0]), static_cast<int>(draw.resetViewport[1]));
       continue;

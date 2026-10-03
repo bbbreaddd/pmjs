@@ -47,8 +47,11 @@ napi_value effectCall(napi_env env, napi_callback_info info) {
       effects.update(id, static_cast<float>(frames));
     } else if (operation == "control") {
       if (args.size() != 6) throw std::runtime_error("effect control requires handle, operation and four values");
-      const auto values = floatArray<4>(env, args, 2);
-      for (const auto value : values) if (!std::isfinite(value)) throw std::runtime_error("invalid effect control");
+      std::array<double, 4> values;
+      for (std::size_t i = 0; i < values.size(); ++i) {
+        values[i] = asNumber(env, args[i + 2]);
+        if (!std::isfinite(static_cast<float>(values[i]))) throw std::runtime_error("invalid effect control");
+      }
       effects.control(id, asString(env, args[1]), values);
     } else throw std::runtime_error("unknown effect operation");
     return undefined(env);

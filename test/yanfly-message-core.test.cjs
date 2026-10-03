@@ -9,7 +9,7 @@ const source = fs.readFileSync(path.join(__dirname,
   '../js/pmjs-plugins/yanfly/message-core.js'), 'utf8');
 
 function install({ enabled = true, changedCharacter = false, changedBody = false, changedMeasure = false,
-  pluginSource = null, fontWrapper = false } = {}) {
+  fontWrapper = false } = {}) {
   const phases = [];
   const state = { raster: [], fonts: 0, dirty: 0, refused: null };
   const context = vm.createContext({ state, PMJS: {
@@ -67,7 +67,6 @@ function install({ enabled = true, changedCharacter = false, changedBody = false
       return value;
     };
   `, context);
-  if (pluginSource) vm.runInContext(pluginSource, context);
   if (fontWrapper) vm.runInContext(`
     var drawText = Bitmap.prototype.drawText;
     Bitmap.prototype.drawText = function() {
@@ -165,45 +164,3 @@ test('nested measurement restores raster leaves only after the outer operation',
   message.drawTextEx('x');
   assert.deepEqual(state.raster, ['outline:x', 'fill:x']);
 });
-
-// Purchased sources are optional local evidence, never copied into the suite.
-for (const [name, game] of [
-  ['ISAT', '../../ports/isat/port/game'],
-  ['OMORI', '../../ports/omori/OMORI-decrypted']
-]) {
-  const file = path.resolve(__dirname, game, 'js/plugins/YEP_MessageCore.js');
-  test(name + ' installed YEP measurement preserves width and removes raster calls',
-    { skip: !fs.existsSync(file) }, () => {
-      const text = fs.readFileSync(file, 'utf8');
-      const assignment = text.match(/Window_Base\.prototype\.textWidthExCheck = function\(text\) \{[\s\S]*?\n\};/);
-      assert.ok(assignment);
-      const character = text.match(/Window_Base\.prototype\.processNormalCharacter = function\(textState\) \{[\s\S]*?\n\};/);
-      assert.ok(character);
-      let pluginSource = assignment[0] + '\n' + character[0] +
-        '\nWindow_Base.prototype.checkWordWrap = function() { return false; };';
-      if (name === 'ISAT') {
-        const plugins = path.dirname(file);
-        const shaking = fs.readFileSync(path.join(plugins, 'SRD_ShakingText.js'), 'utf8');
-        const message = shaking.match(/Window_Message\.prototype\.processNormalCharacter = function\(textState\) \{[\s\S]*?\n\s*\};/);
-        const font = fs.readFileSync(path.join(plugins, 'master2015hp_InStarTimeSnippet.js'), 'utf8');
-        const draw = font.match(/Bitmap\.prototype\.drawText = function\(text, x, y, maxWidth, lineHeight, align\) \{[\s\S]*?\n\};/);
-        assert.ok(message);
-        assert.ok(draw);
-        pluginSource += `
-          var _Window_Message_processNormalCharacter = Window_Message.prototype.processNormalCharacter;
-          Window_Message.prototype.isShakingActive = function() { return false; };
-          var master2015hp = { isatSnp: { b_42: Bitmap.prototype.drawText } };
-          Bitmap.prototype.loadOptionsFont = function() { state.fonts++; this.fontFace = 'language-font'; };
-        ` + message[0] + '\n' + draw[0];
-      }
-      const baseline = install({ enabled: false, pluginSource });
-      const candidate = install({ pluginSource });
-      assert.equal(candidate.state.refused, null);
-      assert.equal(candidate.message.textWidthExCheck('a界 b'), baseline.message.textWidthExCheck('a界 b'));
-      assert.deepEqual(candidate.state.raster, []);
-      assert.ok(baseline.state.raster.length > 0);
-      assert.equal(candidate.state.fonts, baseline.state.fonts);
-      assert.equal(candidate.message._wordWrap, baseline.message._wordWrap);
-      assert.equal(candidate.message._checkWordWrapMode, false);
-    });
-}

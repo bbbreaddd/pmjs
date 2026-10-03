@@ -1,0 +1,210 @@
+{
+  "browser": "Chrome/151.0.7922.34",
+  "fontSha256": "51acdee162a0b4b993d115282b48ad965097771fe802ee763ed1844034ecce51",
+  "fontSize": 28,
+  "canvas": [
+    320,
+    128
+  ],
+  "origin": [
+    16,
+    64
+  ],
+  "cases": {
+    "X": {
+      "width": 19.181640625,
+      "actualBoundingBoxLeft": 0,
+      "actualBoundingBoxRight": 19,
+      "actualBoundingBoxAscent": 21,
+      "actualBoundingBoxDescent": 0,
+      "inkBounds": [
+        0,
+        -21,
+        19,
+        0
+      ]
+    },
+    "X‎": {
+      "width": 19.181640625,
+      "actualBoundingBoxLeft": 0,
+      "actualBoundingBoxRight": 19,
+      "actualBoundingBoxAscent": 21,
+      "actualBoundingBoxDescent": 0,
+      "inkBounds": [
+        0,
+        -21,
+        19,
+        0
+      ]
+    },
+    "‏": {
+      "width": 0,
+      "actualBoundingBoxLeft": 0,
+      "actualBoundingBoxRight": 0,
+      "actualBoundingBoxAscent": 0,
+      "actualBoundingBoxDescent": 0,
+      "inkBounds": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "؜": {
+      "width": 0,
+      "actualBoundingBoxLeft": 0,
+      "actualBoundingBoxRight": 0,
+      "actualBoundingBoxAscent": 0,
+      "actualBoundingBoxDescent": 0,
+      "inkBounds": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "A‍B": {
+      "width": 38.36328125,
+      "actualBoundingBoxLeft": 0,
+      "actualBoundingBoxRight": 37.154296875,
+      "actualBoundingBoxAscent": 21,
+      "actualBoundingBoxDescent": 0,
+      "inkBounds": [
+        0,
+        -21,
+        37,
+        0
+      ]
+    },
+    "A‌B": {
+      "width": 38.36328125,
+      "actualBoundingBoxLeft": 0,
+      "actualBoundingBoxRight": 37.154296875,
+      "actualBoundingBoxAscent": 21,
+      "actualBoundingBoxDescent": 0,
+      "inkBounds": [
+        0,
+        -21,
+        37,
+        0
+      ]
+    },
+    "❤️": {
+      "width": 25.1015625,
+      "actualBoundingBoxLeft": -2,
+      "actualBoundingBoxRight": 23,
+      "actualBoundingBoxAscent": 21,
+      "actualBoundingBoxDescent": 0,
+      "inkBounds": [
+        2,
+        -21,
+        23,
+        0
+      ]
+    },
+    "é": {
+      "width": 17.2265625,
+      "actualBoundingBoxLeft": -1,
+      "actualBoundingBoxRight": 16,
+      "actualBoundingBoxAscent": 24,
+      "actualBoundingBoxDescent": 0,
+      "inkBounds": [
+        1,
+        -24,
+        16,
+        0
+      ]
+    },
+    "é": {
+      "width": 17.2265625,
+      "actualBoundingBoxLeft": -1,
+      "actualBoundingBoxRight": 16,
+      "actualBoundingBoxAscent": 24,
+      "actualBoundingBoxDescent": 0,
+      "inkBounds": [
+        1,
+        -24,
+        16,
+        0
+      ]
+    },
+    "AV": {
+      "width": 36.517578125,
+      "actualBoundingBoxLeft": 0,
+      "actualBoundingBoxRight": 36.36328125,
+      "actualBoundingBoxAscent": 21,
+      "actualBoundingBoxDescent": 0,
+      "inkBounds": [
+        0,
+        -21,
+        37,
+        0
+      ]
+    },
+    "ffi": {
+      "width": 27.0703125,
+      "actualBoundingBoxLeft": 0,
+      "actualBoundingBoxRight": 25,
+      "actualBoundingBoxAscent": 22,
+      "actualBoundingBoxDescent": 0,
+      "inkBounds": [
+        0,
+        -22,
+        25,
+        0
+      ]
+    },
+    "A\nB": {
+      "width": 47.263671875,
+      "actualBoundingBoxLeft": 0,
+      "actualBoundingBoxRight": 46.0546875,
+      "actualBoundingBoxAscent": 21,
+      "actualBoundingBoxDescent": 0,
+      "inkBounds": [
+        0,
+        -21,
+        46,
+        0
+      ]
+    },
+    "AéB": {
+      "width": 55.09765625,
+      "actualBoundingBoxLeft": 0,
+      "actualBoundingBoxRight": 53.888671875,
+      "actualBoundingBoxAscent": 24,
+      "actualBoundingBoxDescent": 0,
+      "inkBounds": [
+        0,
+        -24,
+        54,
+        0
+      ]
+    },
+    "سلام": {
+      "width": 57.50390625,
+      "actualBoundingBoxLeft": -1,
+      "actualBoundingBoxRight": 56.04296875,
+      "actualBoundingBoxAscent": 21,
+      "actualBoundingBoxDescent": 7,
+      "inkBounds": [
+        1,
+        -21,
+        56,
+        7
+      ]
+    },
+    "ل‌ا": {
+      "width": 28.123046875,
+      "actualBoundingBoxLeft": -2,
+      "actualBoundingBoxRight": 25.779296875,
+      "actualBoundingBoxAscent": 21,
+      "actualBoundingBoxDescent": 5,
+      "inkBounds": [
+        2,
+        -21,
+        26,
+        5
+      ]
+    }
+  }
+}

@@ -40,3 +40,30 @@ test('MZ platform capabilities do not claim missing native services', () => {
   assert.equal(utils.canPlayOgg(), false);
   assert.equal(utils.canPlayWebm(), false);
 });
+
+test('MZ local save paths resolve through the native storage filesystem', t => {
+  const { createStorage } = require('../runner/storage.cjs');
+  const os = require('node:os');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-mz-save-contract-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const storage = createStorage(directory);
+  const context = vm.createContext({ Buffer, Utils: {}, StorageManager: {},
+    NativeHost: { storage }, PMJS: { config: {} } });
+  vm.runInContext(fs.readFileSync(path.join(__dirname,
+    '../js/pmjs-web/filesystem.js'), 'utf8'), context);
+  vm.runInContext(source, context);
+  assert.equal(context.StorageManager.isLocalMode(), true);
+  assert.equal(context.StorageManager.fileDirectoryPath(), '/save/');
+  const save = context.StorageManager.fileDirectoryPath() + 'file1.rmmzsave';
+  const bytes = Buffer.from([0, 255, 128, 42]);
+  context.fsModule.writeFileSync(save, bytes);
+  const restartedStorage = createStorage(directory);
+  assert.deepEqual(restartedStorage.readBytes('file1.rmmzsave'), bytes);
+  context.NativeHost.storage = restartedStorage;
+  context.fsModule.renameSync(save, save + '_');
+  context.fsModule.writeFileSync(save, '日本語 / café / 🌙', 'utf8');
+  assert.equal(context.fsModule.readFileSync(save, 'utf8'), '日本語 / café / 🌙');
+  context.fsModule.unlinkSync(save);
+  context.fsModule.renameSync(save + '_', save);
+  assert.deepEqual(context.fsModule.readFileSync(save), bytes);
+});

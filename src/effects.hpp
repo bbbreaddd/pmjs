@@ -32,8 +32,8 @@ class Effects {
   bool exists(std::uint32_t handle) const;
   bool validHandle(std::uint32_t handle) const;
   void control(std::uint32_t handle, const std::string& operation,
-               const std::array<float, 4>& values);
-  void draw(const EffectDraw& draw);
+               const std::array<double, 4>& values);
+  std::uint32_t draw(const EffectDraw& draw);
   std::array<std::uint32_t, 4> counts() const;
 
  private:

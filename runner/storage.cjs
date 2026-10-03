@@ -85,7 +85,7 @@ function createGameFilesystem(host, root) {
   const overlayRoot = path.resolve(root);
   const files = createStorage(path.join(overlayRoot, 'files'));
   const deleted = createStorage(path.join(overlayRoot, 'deleted'));
-  host.mountWritableOverlay(overlayRoot);
+  const transactions = createStorage(overlayRoot);
 
   function normalize(relative) {
     const value = String(relative).replace(/\\/g, '/');
@@ -116,8 +116,32 @@ function createGameFilesystem(host, root) {
     fs.mkdirSync(path.dirname(physical(name)), { recursive: true });
   }
   function mutate(operation) {
-    try { return operation(); }
+    try {
+      if (recoverRename()) host.mountWritableOverlay(overlayRoot);
+      return operation();
+    }
     finally { host.mountWritableOverlay(overlayRoot); }
+  }
+  function recoverRename() {
+    const contents = transactions.readText('rename.json');
+    if (contents === null) return;
+    const intent = JSON.parse(contents);
+    const source = normalize(intent.source), destination = normalize(intent.destination);
+    if (!/^rename-[a-zA-Z0-9]+$/.test(intent.staging) || source === '.' || destination === '.') {
+      throw new Error('invalid game filesystem rename journal');
+    }
+    const staging = path.join(overlayRoot, intent.staging);
+    const value = path.join(staging, 'value');
+    if (fs.existsSync(value)) {
+      if (intent.directory && fs.existsSync(physical(destination))) fs.rmdirSync(physical(destination));
+      fs.renameSync(value, physical(destination));
+    }
+    hide(source);
+    if (intent.directory) hide(destination);
+    fs.rmSync(physical(source), { recursive: true, force: true });
+    fs.rmSync(staging, { recursive: true, force: true });
+    transactions.remove('rename.json');
+    return true;
   }
   function copy(name, destination) {
     if (host.isDirectory(name)) {
@@ -129,6 +153,8 @@ function createGameFilesystem(host, root) {
       fs.writeFileSync(destination, Buffer.from(bytes));
     }
   }
+  recoverRename();
+  host.mountWritableOverlay(overlayRoot);
   return Object.assign(host, {
     writeBytes(relative, contents) {
       const name = normalize(relative);
@@ -185,13 +211,14 @@ function createGameFilesystem(host, root) {
         const staging = fs.mkdtempSync(path.join(overlayRoot, 'rename-'));
         try {
           copy(source, path.join(staging, 'value'));
-          if (directory && fs.existsSync(physical(destination))) fs.rmdirSync(physical(destination));
-          fs.renameSync(path.join(staging, 'value'), physical(destination));
-          hide(source);
-          // A replaced base directory must not contribute old children after restart.
-          if (directory) hide(destination);
-          fs.rmSync(physical(source), { recursive: true, force: true });
-        } finally { fs.rmSync(staging, { recursive: true, force: true }); }
+          // Publish recovery intent before changing either visible path.
+          transactions.writeText('rename.json', JSON.stringify({ source, destination, directory,
+            staging: path.basename(staging) }));
+          recoverRename();
+        } finally {
+          // A committed intent retains its staging tree until recovery completes.
+          if (!transactions.exists('rename.json')) fs.rmSync(staging, { recursive: true, force: true });
+        }
       });
     }
   });

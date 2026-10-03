@@ -156,3 +156,47 @@ test('async writes preserve callback ordering and report failures without losing
   context.PMJS.tasks.drain(); assert.deepEqual(calls, [null, 'ENOENT']);
   assert.equal(host.readText('result'), 'success');
 });
+
+test('a rename interrupted after destination installation recovers on remount', t => {
+  const { guest, overlay, restart, host } = fixture(t);
+  const original = fs.renameSync;
+  fs.renameSync = function(from, to) {
+    original(from, to);
+    if (path.basename(from) === 'value' && to.endsWith('/moved')) {
+      throw new Error('simulated interruption after destination rename');
+    }
+  };
+  try { assert.throws(() => guest.renameSync('data', 'moved'), /simulated interruption/); }
+  finally { fs.renameSync = original; }
+  assert.equal(fs.existsSync(path.join(overlay, 'rename.json')), true);
+  restart();
+  assert.equal(host.exists('data'), false);
+  assert.equal(host.readText('moved/Original.txt'), 'original');
+  assert.equal(host.readText('moved/Keep.txt'), 'keep');
+  assert.equal(fs.existsSync(path.join(overlay, 'rename.json')), false);
+});
+
+test('long logical paths remain deletable and deleted after remount', t => {
+  const { guest, host, restart } = fixture(t);
+  const directory = 'x'.repeat(80), name = directory + '/' + 'y'.repeat(80);
+  guest.mkdirSync(directory);
+  guest.writeFileSync(name, 'long path');
+  guest.unlinkSync(name);
+  assert.equal(restart().exists(name), false);
+  guest.writeFileSync(name, 'recreated');
+  assert.equal(host.readText(name), 'recreated');
+});
+
+test('failed atomic file replacement keeps the previous content and removes its temporary file', t => {
+  const { guest, host, overlay } = fixture(t);
+  guest.writeFileSync('result', 'previous');
+  const original = fs.renameSync;
+  fs.renameSync = function(from, to) {
+    if (to === path.join(overlay, 'files/result')) throw new Error('simulated write failure');
+    return original(from, to);
+  };
+  try { assert.throws(() => guest.writeFileSync('result', 'lost'), /simulated write failure/); }
+  finally { fs.renameSync = original; }
+  assert.equal(host.readText('result'), 'previous');
+  assert.deepEqual(fs.readdirSync(path.join(overlay, 'files')), ['result']);
+});

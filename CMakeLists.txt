@@ -169,10 +169,16 @@ if(BUILD_TESTING)
     add_test(NAME "js-${PMJS_TEST_NAME}" COMMAND ${NODE_EXECUTABLE} --test
       "${CMAKE_CURRENT_SOURCE_DIR}/${PMJS_JS_TEST}")
   endforeach()
+  set_tests_properties(js-text-layout-reference js-pixi-filter-boundary-reference
+    PROPERTIES ENVIRONMENT "PMJS_NATIVE_ADDON=$<TARGET_FILE:pmjs_native>;PMJS_TEST_ASSET_ROOT=${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-assets/effects")
-  configure_file("${PMJS_EFFEKSEER_SOURCE}/Examples/Resources/square_r.efkefc"
-    "${CMAKE_CURRENT_BINARY_DIR}/test-assets/effects/Square.efkefc" COPYONLY)
+  foreach(PMJS_EFFECT_FIXTURE Square Laser)
+    execute_process(COMMAND ${BASE64_EXECUTABLE} -d
+      INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/effects/${PMJS_EFFECT_FIXTURE}.efkefc.b64"
+      OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/effects/${PMJS_EFFECT_FIXTURE}.efkefc"
+      COMMAND_ERROR_IS_FATAL ANY)
+  endforeach()
   execute_process(COMMAND ${BASE64_EXECUTABLE} -d INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/fixture.png.b64" OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture.png" COMMAND_ERROR_IS_FATAL ANY)
   execute_process(COMMAND ${BASE64_EXECUTABLE} -d INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/fixture.jpg.b64" OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture.jpg" COMMAND_ERROR_IS_FATAL ANY)
   execute_process(COMMAND ${BASE64_EXECUTABLE} -d INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/fixture-video.mp4.b64" OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture-video.mp4" COMMAND_ERROR_IS_FATAL ANY)
@@ -218,7 +224,9 @@ if(BUILD_TESTING)
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-presentation-pixels.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-presentation-pixels PROPERTIES ENVIRONMENT
     "LIBGL_ALWAYS_SOFTWARE=1;PMJS_TEST_GAME=816x624;PMJS_WINDOW_SIZE=640x480")
-  add_test(NAME node-effects COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
-    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-effects.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
-  set_tests_properties(node-effects PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
+  foreach(PMJS_EFFECT_TEST node-effects node-mz-effects)
+    add_test(NAME ${PMJS_EFFECT_TEST} COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/${PMJS_EFFECT_TEST}.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
+    set_tests_properties(${PMJS_EFFECT_TEST} PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy;PMJS_WINDOW_SIZE=64x64")
+  endforeach()
 endif()

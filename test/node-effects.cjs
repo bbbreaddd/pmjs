@@ -36,6 +36,7 @@ try {
   fx.release(context, texture);
   const effect = fx.load(context, 'effects/square.efkefc', 1);
   const handle = fx.play(context, effect, 0, 0, 0);
+  fx.control(handle, 'seed', 2147483647, 0, 0, 0);
   fx.control(handle, 'seed', 1, 0, 0, 0);
   assert.throws(() => fx.control(handle, 'seed', 1e30, 0, 0, 0), /invalid effect random seed/);
   fx.update(context, 1);
@@ -64,13 +65,20 @@ try {
   assert.throws(() => frame(handle), /invalid native scene packet/);
   const sound = fx.load(context, 'effects/Sound.efkefc', 1);
   const sounding = fx.play(context, sound, 0, 0, 0);
-  fx.update(context, 1);
+  fx.update(context, 2);
   assert.equal(fx.counts().voices, 1, 'authored particle sounds must play through native audio');
   fx.release(context, sound);
   assert.equal(fx.counts().voices, 1, 'cache release must retain a playing sound');
   fx.control(sounding, 'stop', 0, 0, 0, 0);
   fx.update(context, 2);
   assert.equal(fx.counts().voices, 0, 'stopping an effect must release its sound voices');
+  const repeatedSound = fx.load(context, 'effects/Sound.efkefc', 1);
+  for (let index = 0; index < 24; index++) {
+    fx.play(context, repeatedSound, 0, 0, 0);
+    fx.update(context, 2);
+  }
+  assert.equal(fx.counts().voices, 16, 'overlapping particle sounds must remain within the stock voice limit');
+  fx.release(context, repeatedSound);
   fx.releaseContext(context);
   assert.deepEqual(fx.counts(), { contexts: 0, effects: 0, handles: 0, voices: 0 });
   console.log('native MZ particle rendering and ownership passed');

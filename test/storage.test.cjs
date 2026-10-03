@@ -51,6 +51,7 @@ for (const disabled of [false, true]) {
       remove(id) { storage.remove(this.localFilePath(id).slice(6)); } };
     const remove = manager.remove;
     const ctx = loadPmjsRuntime({
+      Buffer,
       NativeHost: { storage },
       PMJS_GAME_CONFIG: { disableOptimizations: disabled ? ['storage.read-burst-coalesce'] : [] },
       StorageManager: manager,
