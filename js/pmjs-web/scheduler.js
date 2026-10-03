@@ -40,7 +40,8 @@
   }
 
   function reportAsyncError(error) {
-    console.error('[pmjs] async error:', error);
+    if (typeof pmjsReportEventError === 'function') pmjsReportEventError(error);
+    else console.error('[pmjs] async error:', error);
   }
 
   function requestAnimationFrameCompat(callback) {

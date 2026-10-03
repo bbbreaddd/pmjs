@@ -28,6 +28,10 @@ function createStorage(root) {
       try { return fs.readFileSync(resolve(relative), 'utf8'); }
       catch (error) { if (error.code === 'ENOENT') return null; throw error; }
     },
+    readBytes(relative) {
+      try { return fs.readFileSync(resolve(relative)); }
+      catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+    },
     writeText(relative, contents) {
       mutationGeneration++;
       const destination = resolve(relative);

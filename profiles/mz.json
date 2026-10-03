@@ -33,6 +33,7 @@
     "js/pmjs-mz/engine.js",
     "js/pmjs-mz/rendering.js",
     "js/pmjs-mz/display.js",
+    "js/pmjs-mz/animations.js",
     "js/pmjs-rpgmaker/input.js",
     "js/pmjs-rpgmaker/platform.js",
     "js/pmjs-mz/platform.js",

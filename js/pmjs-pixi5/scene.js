@@ -180,7 +180,7 @@
 
   function blendMode(node) {
     var mode = Number(node && node.blendMode) || 0;
-    if (mode < 0 || mode > 3) reject('render.blend-mode', node);
+    if (!Number.isInteger(mode) || mode < 0 || mode > 3) reject('render.blend-mode', node);
     return mode;
   }
 
@@ -220,7 +220,11 @@
           encoded = filterEncoders[i](filter);
         }
         if (!encoded) reject('render.filter', node);
-        if (!encoded.neutral) encodedFilters.push(encoded);
+        encoded = Object.assign({}, encoded, { blendMode: blendMode(filter) });
+        if (encoded.blendMode && !schema.filterCompositeBlend) {
+          reject('render.filter-blend', node);
+        }
+        if (!encoded.neutral || encoded.blendMode) encodedFilters.push(encoded);
       });
     }
     if (activeFilters(node) && node.filterArea) {
@@ -231,6 +235,7 @@
       var offset = begin * valueStride;
       values.set(filter.parameters, offset + 7);
       values[offset + 33] = 1;
+      values[offset + 34] = filter.blendMode;
     });
 
     var type = node.pluginName && String(node.pluginName).toLowerCase();

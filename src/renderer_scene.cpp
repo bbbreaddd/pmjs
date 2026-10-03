@@ -143,6 +143,10 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
         std::copy_n(values + valueOffset + 22, 11,
                     command.filterParameters.begin() + 10);
         command.filterResolution = values[valueOffset + 33];
+        const float compositeBlend = values[valueOffset + filterCompositeBlendOffset];
+        if (compositeBlend < 0 || compositeBlend > 3 ||
+            std::floor(compositeBlend) != compositeBlend) return false;
+        command.blendMode = static_cast<BlendMode>(compositeBlend);
         if (command.filterResolution == 0.0F) command.filterResolution = 1.0F;
         if (!std::isfinite(command.filterResolution) ||
             command.filterResolution <= 0.0F ||

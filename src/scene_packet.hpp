@@ -8,6 +8,8 @@ namespace pmjs::scene_packet {
 constexpr std::uint32_t version = 28;
 constexpr std::size_t metadataStride = 7;
 constexpr std::size_t valueStride = 41;
+// filterBegin's unused slot preserves zero/normal in existing version 28 writers.
+constexpr std::size_t filterCompositeBlendOffset = 34;
 constexpr std::size_t maxNodes = 65536;
 constexpr std::size_t maxPacketBytes = 16U * 1024U * 1024U;
 constexpr std::uint32_t noParent = 0xffffffffU;

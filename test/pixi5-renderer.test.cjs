@@ -90,7 +90,7 @@ function createContext() {
       scene: {
         packetVersion: 28,
         schema: { version: 28, metadataStride: 7, valueStride: 41,
-          transactionalSubmit: true },
+          transactionalSubmit: true, filterCompositeBlend: true },
         submit(version, metadata, values, count) {
           submissions.push({ version, metadata: metadata.slice(),
             values: values.slice(), count });
@@ -385,6 +385,26 @@ test('MZ ColorFilter encloses its subtree and skips neutral or disabled filters'
   filter.enabled = false;
   context.pmjsPixi5RenderScene(stage, null, 1);
   assert.equal(submissions.at(-1).count, 2);
+});
+
+test('Pixi 5 retains a neutral filter with a composite blend and rejects unsupported modes', () => {
+  const { context, submissions } = createContext();
+  const hits = [];
+  context.PMJS = { compat: { hit: (...args) => hits.push(args) } };
+  runModule(context, 'js/pmjs-pixi5/scene.js');
+  context.pmjsPixi5RegisterFilterEncoder(() => ({ kind: 20, parameters: [1], neutral: true }));
+  const stage = new context.PIXI.Container();
+  stage.filters = [{ blendMode: 1 }];
+  context.pmjsPixi5RenderScene(stage, null, 1);
+  assert.equal(submissions.at(-1).count, 3);
+  assert.equal(submissions.at(-1).values[34], 1);
+  stage.filters[0].blendMode = 1.5;
+  assert.throws(() => context.pmjsPixi5RenderScene(stage, null, 1), /render.blend-mode/);
+  assert.equal(submissions.length, 1);
+  stage.filters[0].blendMode = 1;
+  context.NativeHost.scene.schema.filterCompositeBlend = false;
+  assert.throws(() => context.pmjsPixi5RenderScene(stage, null, 1), /render.filter-blend/);
+  assert.deepEqual(hits.map(hit => hit[0]), ['render.blend-mode', 'render.filter-blend']);
 });
 
 test('MZ ColorFilter subclasses fall through to compatibility handling or another encoder', () => {

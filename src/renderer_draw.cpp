@@ -405,6 +405,7 @@ void Renderer::renderScene() {
   for (std::size_t begin = 0; begin < frame_.commands.size(); ++begin) {
     const RenderCommand& filter = frame_.commands[begin];
     if (filter.action != RenderCommand::Action::filterBegin ||
+        filter.blendMode != BlendMode::normal ||
         filterDepthBefore[begin] != 0 ||
         filter.filterKind != scene_packet::FilterKind::colorMatrix ||
         !preservesAlpha(filter.filterParameters)) continue;
@@ -1104,13 +1105,12 @@ void Renderer::renderScene() {
       if (filter.filterKind == scene_packet::FilterKind::blur) {
         glUniform2f(blurDirectionUniform_, 0, 1);
       }
-      activeBlend = BlendMode::normal;
+      activeBlend = filter.blendMode;
       if (pictureBlend) {
         glDisable(GL_BLEND);
       } else {
         glEnable(GL_BLEND);
-        glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA,
-                            GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+        applyBlendMode(activeBlend);
       }
       if (!filterRegions[filterDepth].empty()) {
         glEnable(GL_SCISSOR_TEST);

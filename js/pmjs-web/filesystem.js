@@ -82,24 +82,26 @@ var pathModule = {
 
 function fsReadContents(path, options) {
   var writable = writablePath(path);
-  var result = writable !== null && NativeHost.storage
-    ? NativeHost.storage.readText(writable)
-    : NativeHost.fs.readText(gameReadPath(path));
+  var encoding = typeof options === 'string' ? options : options && options.encoding;
+  var host = writable !== null && NativeHost.storage ? NativeHost.storage : NativeHost.fs;
+  var resolved = writable !== null && NativeHost.storage ? writable : gameReadPath(path);
+  var result = host.readBytes(resolved);
   var missingFiles = PMJS.config.missingTextFiles || {};
   if (result === null && writable !== null &&
       Object.prototype.hasOwnProperty.call(missingFiles, writable)) {
-    result = missingFiles[writable];
+    result = Buffer.from(String(missingFiles[writable]), 'utf8');
   }
-  if (result === null) throw new Error('ENOENT: ' + path);
-  var encoding = typeof options === 'string' ? options : options && options.encoding;
-  if (encoding) return result;
-  if (globalThis.Buffer && typeof Buffer.from === 'function') return Buffer.from(result);
-  // Large text resources are commonly consumed only through toString().
-  return {
-    length: result.length,
-    toString: function() { return result; }
-  };
+  if (result === null) {
+    var error = new Error('ENOENT: ' + path);
+    error.code = 'ENOENT';
+    throw error;
+  }
+  var buffer = ArrayBuffer.isView(result)
+    ? Buffer.from(result.buffer, result.byteOffset, result.byteLength)
+    : Buffer.from(result);
+  return encoding ? buffer.toString(encoding) : Buffer.from(buffer);
 }
+
 function FsReadStream(path, options) {
   this.path = path; this.options = options || {}; this.readable = true;
   this.destroyed = false; this._listeners = Object.create(null);
