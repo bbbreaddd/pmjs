@@ -1,6 +1,14 @@
 #include "node_addon_internal.hpp"
 
 namespace pmjs::addon {
+napi_value mountWritableOverlay(napi_env env, napi_callback_info info) try {
+  auto args = arguments(env, info, 1);
+  host(env).vfs.mountWritableOverlay(asString(env, args.at(0)));
+  return undefined(env);
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what()); return nullptr;
+}
+
 napi_value readText(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 1);
   auto value = host(env).vfs.readText(asString(env, args.at(0)));
@@ -122,6 +130,7 @@ napi_value inputConsumePressed(napi_env env, napi_callback_info) try {
 
 void registerPlatformBindings(napi_env env, napi_value exports) {
   napi_value fs = moduleObject(env);
+  method(env, fs, "mountWritableOverlay", mountWritableOverlay);
   method(env, fs, "readText", readText);
   method(env, fs, "readBytes", readBytes);
   method(env, fs, "readDirectory", readDirectory);

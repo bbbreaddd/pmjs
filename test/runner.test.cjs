@@ -20,7 +20,7 @@ function native(polls = [false]) {
   let now = 0;
   return { initialize() {}, pollEvents: () => polls.shift() ?? false,
     finishLogicStep() {}, beginFrame() {}, renderFrame() {}, swapFrame() {},
-    runtime: { monotonicNow: () => (now += 100), quit() {} }, fs: { readText() { return null; } },
+    runtime: { monotonicNow: () => (now += 100), quit() {} }, fs: { mountWritableOverlay() {}, readText() { return null; } },
     render: {}, scene: {}, images: {}, assets: {}, input: {}, canvas: {}, media: {} };
 }
 

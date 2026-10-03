@@ -245,7 +245,8 @@ void Renderer::computeFilterContentBounds() {
     }
     if (command.tileLayer != 0 ||
         command.primitive == RenderCommand::Primitive::tileLayer ||
-        command.primitive == RenderCommand::Primitive::mesh) {
+        command.primitive == RenderCommand::Primitive::mesh ||
+        command.primitive == RenderCommand::Primitive::effect) {
       top.unbounded = true;
       continue;
     }
@@ -486,6 +487,7 @@ void Renderer::renderScene() {
          cleanTail && index < frame_.commands.size(); ++index) {
       const RenderCommand& command = frame_.commands[index];
       cleanTail = command.action == RenderCommand::Action::draw &&
+                  command.primitive != RenderCommand::Primitive::effect &&
                   !command.appliesColorMatrix &&
                   command.blendMode == BlendMode::normal;
     }
@@ -565,6 +567,15 @@ void Renderer::renderScene() {
       operation.matrixCommand = &command;
       operations.push_back(operation);
       vertices_.insert(vertices_.end(), vertices.begin(), vertices.end());
+      continue;
+    }
+    if (command.primitive == RenderCommand::Primitive::effect) {
+      DrawOperation operation{};
+      operation.command = &command;
+      operation.primitive = command.primitive;
+      operation.clip = command.clip;
+      operation.clipped = command.clipped;
+      operations.push_back(operation);
       continue;
     }
     if (command.tileLayer != 0) {
@@ -1225,6 +1236,17 @@ void Renderer::renderScene() {
     } else if (scissorActive) {
       glDisable(GL_SCISSOR_TEST);
       scissorActive = false;
+    }
+    if (operation.primitive == RenderCommand::Primitive::effect) {
+      auto draw = operation.command->effect;
+      if (offscreenRender_) {
+        // Stock MZ writes GL particles without Pixi's RenderTexture Y inversion.
+        // Native canvas readback flips rows, so reflect this producer beforehand.
+        draw.viewport[1] = height_ - draw.viewport[1] - draw.viewport[3];
+        for (std::size_t column = 0; column < 4; ++column) draw.projection[column * 4 + 1] *= -1;
+      }
+      effects_->draw(draw);
+      continue;
     }
     if (operation.blendMode != activeBlend) {
       activeBlend = operation.blendMode;

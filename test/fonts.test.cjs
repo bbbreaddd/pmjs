@@ -465,7 +465,7 @@ test('post-guest text activation refuses a plugin-wrapped font selector', () => 
   };
   context.PMJS.phases.emit('afterGuestPlugins');
   assert.match(context.PMJS.optimizations.reason('bitmap.native-draw-text'),
-    /refused: unrecognized Bitmap text method composition/);
+    /refused: modified Bitmap text method composition/);
 
   const bmp = new context.Bitmap();
   bmp.drawText('Test Text', 0, 0, 0, 20, 'left');

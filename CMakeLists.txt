@@ -50,6 +50,7 @@ message(STATUS "PMJS dependency versions: SDL2=${SDL2_VERSION} EGL=${EGL_VERSION
 
 set(PMJS_PLATFORM_LIBS PkgConfig::SDL2 PkgConfig::EGL PkgConfig::GLES)
 set(PMJS_MEDIA_LIBS PkgConfig::AVFORMAT PkgConfig::AVCODEC PkgConfig::AVUTIL PkgConfig::SWRESAMPLE PkgConfig::SWSCALE)
+include(cmake/Effekseer.cmake)
 set(PMJS_RUNTIME_SOURCES
   src/runtime_core.cpp
   src/platform.cpp
@@ -63,7 +64,8 @@ set(PMJS_RUNTIME_SOURCES
   src/text_layout.cpp
   src/vfs.cpp
   src/media_decoder.cpp
-  src/media_service.cpp)
+  src/media_service.cpp
+  src/effects.cpp)
 
 option(PMJS_ENABLE_WERROR "Treat compiler warnings as errors" OFF)
 option(PMJS_ENABLE_SANITIZERS "Build with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
@@ -77,7 +79,7 @@ add_library(pmjs_runtime STATIC ${PMJS_RUNTIME_SOURCES})
 target_include_directories(pmjs_runtime PUBLIC src)
 target_compile_options(pmjs_runtime PRIVATE ${PMJS_BASE_COMPILE_OPTIONS})
 target_link_libraries(pmjs_runtime PUBLIC ${PMJS_PLATFORM_LIBS} PkgConfig::PNG
-  PkgConfig::JPEG PkgConfig::FREETYPE PkgConfig::HARFBUZZ ${PMJS_MEDIA_LIBS} m dl pthread)
+  PkgConfig::JPEG PkgConfig::FREETYPE PkgConfig::HARFBUZZ ${PMJS_MEDIA_LIBS} EffekseerRendererGL m dl pthread)
 
 find_path(PMJS_NODE_API_HEADERS node_api.h PATHS /usr/include/node REQUIRED)
 add_library(pmjs_native MODULE
@@ -86,6 +88,7 @@ add_library(pmjs_native MODULE
   src/node_addon_dialog.cpp
   src/node_addon_common.cpp
   src/node_addon_entry.cpp
+  src/node_addon_effects.cpp
   src/node_addon_graphics.cpp
   src/node_addon_media.cpp
   src/node_addon_platform.cpp
@@ -160,6 +163,9 @@ if(BUILD_TESTING)
       "${CMAKE_CURRENT_SOURCE_DIR}/${PMJS_JS_TEST}")
   endforeach()
   file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
+  file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-assets/effects")
+  configure_file("${PMJS_EFFEKSEER_SOURCE}/Examples/Resources/square_r.efkefc"
+    "${CMAKE_CURRENT_BINARY_DIR}/test-assets/effects/Square.efkefc" COPYONLY)
   execute_process(COMMAND ${BASE64_EXECUTABLE} -d INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/fixture.png.b64" OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture.png" COMMAND_ERROR_IS_FATAL ANY)
   execute_process(COMMAND ${BASE64_EXECUTABLE} -d INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/fixture.jpg.b64" OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture.jpg" COMMAND_ERROR_IS_FATAL ANY)
   execute_process(COMMAND ${BASE64_EXECUTABLE} -d INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/fixture-video.mp4.b64" OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture-video.mp4" COMMAND_ERROR_IS_FATAL ANY)
@@ -205,4 +211,7 @@ if(BUILD_TESTING)
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-presentation-pixels.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-presentation-pixels PROPERTIES ENVIRONMENT
     "LIBGL_ALWAYS_SOFTWARE=1;PMJS_TEST_GAME=816x624;PMJS_WINDOW_SIZE=640x480")
+  add_test(NAME node-effects COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-effects.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
+  set_tests_properties(node-effects PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
 endif()

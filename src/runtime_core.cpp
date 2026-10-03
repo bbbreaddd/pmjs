@@ -13,7 +13,9 @@ RuntimeCore::RuntimeCore(const std::filesystem::path& root, int width, int heigh
     : width_(width), height_(height), platform_(width, height, title),
       canvases_(images_), renderer_(width, height, images_), vfs_(root),
       media_(root),
-      dialog_(platform_, renderer_, canvases_, vfs_, width, height) {}
+      dialog_(platform_, renderer_, canvases_, vfs_, width, height), effects_(vfs_, media_) {
+  renderer_.setEffects(&effects_);
+}
 
 std::optional<ImageHandle> RuntimeCore::resolveImage(std::uint32_t handle) {
   return images_.lookup(handle) ? std::optional<ImageHandle>{handle}
@@ -42,7 +44,7 @@ bool RuntimeCore::submitScene(std::uint32_t version,
     const auto kind = static_cast<scene_packet::NodeKind>(
       sceneMetadataScratch_[offset]);
     if (sceneMetadataScratch_[offset] >
-        static_cast<std::uint32_t>(scene_packet::NodeKind::mesh)) {
+        static_cast<std::uint32_t>(scene_packet::NodeKind::effect)) {
       return false;
     }
     if (sceneMetadataScratch_[offset + 5] &

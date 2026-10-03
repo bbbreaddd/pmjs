@@ -2,6 +2,7 @@
 
 #include "resources.hpp"
 #include "scene_packet.hpp"
+#include "effects.hpp"
 
 #include <array>
 #include <cstddef>
@@ -40,7 +41,7 @@ using MeshMaterial = std::variant<TexturedMeshMaterial, TriangleBitmapMaterial, 
 struct RenderCommand {
   enum class Action : std::uint8_t { draw, filterBegin, filterEnd };
   enum class Primitive : std::uint8_t {
-    sprite, tilingSprite, screenFill, tileLayer, mesh
+    sprite, tilingSprite, screenFill, tileLayer, mesh, effect
   };
 
   ImageHandle image = 0;
@@ -77,6 +78,7 @@ struct RenderCommand {
   std::array<float, 21> filterParameters{};
   float filterResolution = 1.0F;
   Primitive primitive = Primitive::sprite;
+  EffectDraw effect{};
 };
 
 struct FramePacket {
@@ -168,6 +170,7 @@ class Renderer {
  public:
   Renderer(int width, int height, ImageStore& images);
   ~Renderer();
+  void setEffects(Effects* effects) { effects_ = effects; }
 
   Renderer(const Renderer&) = delete;
   Renderer& operator=(const Renderer&) = delete;
@@ -238,6 +241,7 @@ class Renderer {
   void discardCommandsFrom(std::size_t first);
 
  private:
+  Effects* effects_ = nullptr;
   struct TileProgramUniforms {
     int world = -1;
     int screen = -1;

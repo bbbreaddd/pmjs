@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { performance } = require('node:perf_hooks');
-const { createStorage } = require('./storage.cjs');
+const { createStorage, createGameFilesystem } = require('./storage.cjs');
 
 function resolveDefaults(input) {
   let title = input.title;
@@ -193,6 +193,7 @@ async function run(input, hooks = {}) {
     ...(options.imageWarmCacheBytes === undefined ? {} :
       { imageWarmCacheBytes: options.imageWarmCacheBytes }) });
   native.storage = createStorage(options.saveRoot);
+  native.fs = createGameFilesystem(native.fs, path.join(options.saveRoot, 'game-files'));
   native.runtime.now = () => performance.now();
   native.runtime.platform = () => ({ platform: process.platform, arch: process.arch });
   native.runtime.loadScript = relative => {
@@ -214,7 +215,7 @@ async function run(input, hooks = {}) {
     plugins: native.plugins, mv: native.mv,
     scene: native.scene, images: native.images, assets: native.assets, fs: native.fs,
     storage: native.storage, input: native.input, canvas: native.canvas,
-    media: native.media, dialog: native.dialog };
+    media: native.media, dialog: native.dialog, effects: native.effects };
   globalThis.__pmjsBuiltinRequire = require;
   globalThis.__pmjsNativeRuntime = true;
   globalThis.__pmjsTimingConfig = {

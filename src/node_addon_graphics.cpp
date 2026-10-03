@@ -534,6 +534,7 @@ void registerGraphicsBindings(napi_env env, napi_value exports) {
   napi_set_named_property(env, schema, "transactionalSubmit", boolean(env, true));
   napi_set_named_property(env, schema, "gpuSpriteTextures", boolean(env, true));
   napi_set_named_property(env, schema, "filterCompositeBlend", boolean(env, true));
+  napi_set_named_property(env, schema, "effects", boolean(env, true));
   napi_set_named_property(env, scene, "schema", schema);
   check(env, napi_set_named_property(env, exports, "render", render), "cannot export render module");
   check(env, napi_set_named_property(env, exports, "scene", scene), "cannot export scene module");

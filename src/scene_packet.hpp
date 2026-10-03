@@ -24,6 +24,8 @@ enum class NodeKind : std::uint32_t {
   filterBegin = 6,
   filterEnd = 7,
   mesh = 8,
+  // Effect: viewport in values 0..3; projection 7..22; camera 23..38.
+  effect = 9,
 };
 
 enum class FilterKind : std::uint32_t {

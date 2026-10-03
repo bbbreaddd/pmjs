@@ -171,9 +171,11 @@ test('document.currentScript stack exposes file:///game/ URL and restores on ret
   assert.equal(scriptsLoaded[4].currentScriptSrc, 'file:///game/outer.js');
 });
 
-test('nw.gui stubs count their use without changing behavior', () => {
+test('nw.gui unsupported calls are diagnosed and external links reach the host', () => {
   const hits = [];
+  const opened = [];
   const context = {
+    NativeHost: { runtime: { openExternal(url) { opened.push(url); return true; } } },
     process: { platform: 'linux', arch: 'x64', versions: {} },
     nativePlatform: { platform: 'linux', arch: 'x64' },
     nativeLogicalWidth: 800,
@@ -203,10 +205,10 @@ test('nw.gui stubs count their use without changing behavior', () => {
   gui.Menu().append({});
   gui.MenuItem({}).click();
   gui.App.clearCache();
+  assert.deepEqual(opened, ['https://example.com']);
   assert.deepEqual(hits, [
     ['browser.nwGui', 'Window.show'],
     ['browser.nwGui', 'Window.show'],
-    ['browser.nwGui', 'Shell.openExternal'],
     ['browser.nwGui', 'Menu.append'],
     ['browser.nwGui', 'MenuItem.click'],
     ['browser.nwGui', 'App.clearCache']

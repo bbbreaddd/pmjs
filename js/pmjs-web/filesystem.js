@@ -171,10 +171,19 @@ var fsModule = {
     });
   },
   createReadStream: function(path, options) { return new FsReadStream(path, options); },
-  writeFileSync: function(path, contents) {
+  writeFileSync: function(path, contents, options) {
     var writable = writablePath(path);
-    if (writable === null || !NativeHost.storage) throw new Error('EACCES: ' + path);
-    NativeHost.storage.writeText(writable, contents);
+    var host = writable !== null ? NativeHost.storage : NativeHost.fs;
+    if (!host) throw new Error('EACCES: ' + path);
+    var encoding = typeof options === 'string' ? options : options && options.encoding;
+    var bytes = ArrayBuffer.isView(contents)
+      ? Buffer.from(contents.buffer, contents.byteOffset, contents.byteLength)
+      : Buffer.from(String(contents), encoding || 'utf8');
+    var resolved = writable !== null ? writable : gameReadPath(path);
+    if (typeof host.writeBytes === 'function') host.writeBytes(resolved, bytes);
+    else if (writable !== null && typeof contents === 'string' && (!encoding || encoding === 'utf8')) {
+      host.writeText(resolved, contents);
+    } else throw new Error('filesystem byte writes are unavailable');
   },
   writeFile: function(path, contents, options, callback) {
     if (typeof options === 'function') { callback = options; options = null; }
@@ -182,10 +191,11 @@ var fsModule = {
     try { this.writeFileSync(path, contents, options); } catch (caught) { error = caught; }
     PMJS.tasks.enqueue(function() { if (callback) callback(error); });
   },
-  mkdirSync: function(path) {
+  mkdirSync: function(path, options) {
     var writable = writablePath(path);
-    if (writable === null || !NativeHost.storage) throw new Error('EACCES: ' + path);
-    if (writable !== '') NativeHost.storage.makeDirectory(writable);
+    var host = writable !== null ? NativeHost.storage : NativeHost.fs;
+    if (!host) throw new Error('EACCES: ' + path);
+    if (writable !== '') host.makeDirectory(writable !== null ? writable : gamePath(path), options);
   },
   mkdir: function(path, options, callback) {
     if (typeof options === 'function') { callback = options; options = null; }
@@ -195,8 +205,9 @@ var fsModule = {
   },
   unlinkSync: function(path) {
     var writable = writablePath(path);
-    if (writable === null || !NativeHost.storage) throw new Error('EACCES: ' + path);
-    NativeHost.storage.remove(writable);
+    var host = writable !== null ? NativeHost.storage : NativeHost.fs;
+    if (!host) throw new Error('EACCES: ' + path);
+    host.remove(writable !== null ? writable : gameReadPath(path));
   },
   unlink: function(path, callback) {
     var error = null;
@@ -206,10 +217,14 @@ var fsModule = {
   renameSync: function(from, to) {
     var source = writablePath(from);
     var destination = writablePath(to);
-    if (source === null || destination === null || !NativeHost.storage) {
-      throw new Error('EACCES: ' + from);
+    if ((source === null) !== (destination === null)) {
+      var error = new Error('EXDEV: ' + from);
+      error.code = 'EXDEV';
+      throw error;
     }
-    NativeHost.storage.rename(source, destination);
+    var host = source !== null ? NativeHost.storage : NativeHost.fs;
+    host.rename(source !== null ? source : gameReadPath(from),
+      destination !== null ? destination : gameReadPath(to));
   },
   rename: function(from, to, callback) {
     var error = null;
@@ -231,7 +246,7 @@ var fsModule = {
       exists = writable === '' || NativeHost.storage.exists(writable);
       directory = exists && (writable === '' || NativeHost.storage.isDirectory(writable));
     } else {
-      var resolved = gamePath(path);
+      var resolved = gameReadPath(path);
       exists = NativeHost.fs.exists(resolved);
       directory = exists && NativeHost.fs.isDirectory(resolved);
     }

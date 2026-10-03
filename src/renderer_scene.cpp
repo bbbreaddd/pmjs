@@ -76,7 +76,9 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
     if ((flags & NodeFlags::standaloneBitmapRegion) && !(flags & NodeFlags::premultipliedSpriteTexture)) return false;
     if (parentIndex != noParent && (metadata[parentIndex * metadataStride + 5] & NodeFlags::spriteWorldVertices)) return false;
     const bool spriteVertices = flags & NodeFlags::spriteWorldVertices;
-    const std::array<float, 6> local = {
+    const bool effectNode = kind == static_cast<std::uint32_t>(NodeKind::effect);
+    const std::array<float, 6> local = effectNode ?
+      std::array<float, 6>{1, 0, 0, 1, 0, 0} : std::array<float, 6>{
       values[valueOffset], values[valueOffset + 1],
       values[valueOffset + 2], values[valueOffset + 3],
       values[valueOffset + 4], values[valueOffset + 5]
@@ -274,6 +276,23 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
     }
     if (kind == static_cast<std::uint32_t>(NodeKind::container) ||
         state.alpha <= 0) continue;
+    if (effectNode) {
+      if (flags != 0 || state.maskImage || !effects_ || !effects_->validHandle(resource)) return false;
+      RenderCommand command{};
+      command.primitive = RenderCommand::Primitive::effect;
+      command.effect.handle = resource;
+      std::copy_n(values + valueOffset, 4, command.effect.viewport.begin());
+      std::copy_n(values + valueOffset + 7, 16, command.effect.projection.begin());
+      std::copy_n(values + valueOffset + 23, 16, command.effect.camera.begin());
+      for (const float value : command.effect.viewport) {
+        if (std::abs(value) > 65536) return false;
+      }
+      if (command.effect.viewport[2] <= 0 || command.effect.viewport[3] <= 0) return false;
+      command.clip = state.clip;
+      command.clipped = state.clipped;
+      frame_.commands.push_back(command);
+      continue;
+    }
     if ((flags & NodeFlags::hasBlurFilter) &&
       kind != static_cast<std::uint32_t>(NodeKind::sprite)) return false;
     if (state.maskImage && kind != static_cast<std::uint32_t>(NodeKind::sprite) &&

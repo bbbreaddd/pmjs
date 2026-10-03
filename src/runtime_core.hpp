@@ -2,6 +2,7 @@
 
 #include "canvas.hpp"
 #include "dialog.hpp"
+#include "effects.hpp"
 #include "media_service.hpp"
 #include "platform.hpp"
 #include "renderer.hpp"
@@ -40,6 +41,7 @@ class RuntimeCore {
   Vfs& vfs() { return vfs_; }
   MediaService& media() { return media_; }
   Dialog& dialog() { return dialog_; }
+  Effects& effects() { return effects_; }
 
  private:
   int width_;
@@ -51,6 +53,7 @@ class RuntimeCore {
   Vfs vfs_;
   MediaService media_;
   Dialog dialog_;
+  Effects effects_;
   bool running_ = true;
   std::vector<std::uint32_t> sceneMetadataScratch_;
 };

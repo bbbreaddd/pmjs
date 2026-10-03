@@ -10,6 +10,7 @@ napi_value init(napi_env env, napi_value exports) {
   registerCanvasBindings(env, exports);
   registerDialogBindings(env, exports);
   registerMediaBindings(env, exports);
+  registerEffectBindings(env, exports);
   return exports;
 }
 

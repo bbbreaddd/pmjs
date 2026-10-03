@@ -320,7 +320,13 @@
     if (encodedNode && encodedNode.nearest) {
       metadata[index * metadataStride + 5] |= 8;
     }
-    if (kind === 1) {
+    if (kind === 9) {
+      if (!schema.effects) reject('render.effekseer', node);
+      var effectOffset = index * valueStride;
+      values.set(encodedNode.effect.viewport, effectOffset);
+      values.set(encodedNode.effect.projection, effectOffset + 7);
+      values.set(encodedNode.effect.camera, effectOffset + 23);
+    } else if (kind === 1) {
       var baseTexture = texture.baseTexture;
       var resolution = Math.max(0.000001, Number(baseTexture.resolution) || 1);
       var valueOffset = index * valueStride;

@@ -10,8 +10,6 @@ const eventsSource = fs.readFileSync(
   path.resolve(__dirname, '../js/pmjs-web/events.js'), 'utf8');
 const elementsSource = fs.readFileSync(
   path.resolve(__dirname, '../js/pmjs-web/elements.js'), 'utf8');
-const rendererFacadeSource = fs.readFileSync(
-  path.resolve(__dirname, '../js/pmjs-pixi4/renderer-facade.js'), 'utf8');
 const mainLoopSource = fs.readFileSync(
   path.resolve(__dirname, '../js/pmjs-rpgmaker/main-loop.js'), 'utf8');
 const mvMainLoopSource = fs.readFileSync(
@@ -94,17 +92,21 @@ function pixi4TextureFromVideo(video) {
   return texture;
 }
 
-function createRendererRenderMethod(context) {
-  const methodStart = rendererFacadeSource.indexOf(
-    '    render: function(stage, renderTexture, clear, transform,');
-  const methodEnd = rendererFacadeSource.indexOf('    extract: {', methodStart);
-  const helperStart = rendererFacadeSource.indexOf('function nativeElementOpacity(');
-  const helperEnd = rendererFacadeSource.indexOf(
-    'function createNativePixiRenderer(', helperStart);
-  assert.ok(methodStart >= 0 && methodEnd > methodStart &&
-    helperStart >= 0 && helperEnd > helperStart);
-  vm.runInContext(rendererFacadeSource.slice(helperStart, helperEnd), context);
-  return vm.runInContext('({' + rendererFacadeSource.slice(methodStart, methodEnd) + '})', context);
+function loadRenderer(context) {
+  const { sandbox } = require('./helpers/scene-encoder-harness.cjs').makeHarness();
+  context.PIXI = sandbox.PIXI;
+  context.PIXI.RENDERER_TYPE = { WEBGL: 1 };
+  context.PIXI.Texture = { EMPTY: { baseTexture: {} } };
+  context.PIXI.Matrix = class {
+    identity() { this.a = this.d = 1; this.b = this.c = this.tx = this.ty = 0; return this; }
+  };
+  context.PIXI.WebGLRenderer = class {};
+  context.PIXI.WebGLRenderer.__plugins = {};
+  for (const name of ['scene-primitives', 'renderer-managers', 'renderer-facade']) {
+    const filename = path.resolve(__dirname, '../js/pmjs-pixi4', name + '.js');
+    vm.runInContext(fs.readFileSync(filename, 'utf8'), context, { filename });
+  }
+  return context.createNativePixiRenderer(816, 624);
 }
 
 function makeRendererHarness() {
@@ -129,21 +131,9 @@ function makeRendererHarness() {
     image(...args) { calls.push(['image', ...args]); },
     setPresentationLayers(...args) { calls.push(['presentation', ...args]); }
   };
-  const methods = createRendererRenderMethod(context);
-  const renderer = {
-    width: 816,
-    height: 624,
-    resolution: 1,
-    clearBeforeRender: true,
-    transparent: false,
-    _backgroundColor: 0,
-    _backgroundColorRgba: [0, 0, 0, 1],
-    roundPixels: false,
-    textureGC: { update() {} },
-    emit() {}
-  };
-  return { calls, context, render: methods.render,
-    syncPresentation: methods._pmjsSyncPresentation, renderer };
+  const renderer = loadRenderer(context);
+  return { calls, context, render: renderer.render,
+    syncPresentation: renderer._pmjsSyncPresentation, renderer };
 }
 
 test('video src selection loads asynchronously after listeners can be installed', async () => {
@@ -439,9 +429,8 @@ test('extract.image exposes a native canvas handle and releases it on src change
   context.releaseNativeResource = (resource, kind) => {
     if (resource) released.push([resource.handle, kind]);
   };
-  const start = rendererFacadeSource.indexOf('image: function(target) {');
-  const end = rendererFacadeSource.indexOf('      canvas: function(target)', start);
-  const extract = vm.runInContext('({' + rendererFacadeSource.slice(start, end) + '})', context);
+  context.NativeHost.render = { setScreenRenderSize() {} };
+  const extract = loadRenderer(context).extract;
   const canvas = context.document.createElement('canvas');
   canvas.width = 4;
   canvas.height = 3;

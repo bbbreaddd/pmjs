@@ -3,6 +3,8 @@
 #include <filesystem>
 #include <cstdint>
 #include <optional>
+#include <memory>
+#include <unordered_set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -12,6 +14,8 @@ namespace pmjs {
 class Vfs {
  public:
   explicit Vfs(std::filesystem::path root);
+
+  void mountWritableOverlay(const std::filesystem::path& root);
 
   std::optional<std::filesystem::path> resolve(const std::string& path) const;
   std::optional<std::string> readText(const std::string& path) const;
@@ -24,6 +28,12 @@ class Vfs {
  private:
   static std::optional<std::string> normalize(const std::string& path);
 
+  struct Overlay {
+    std::shared_ptr<const Vfs> files;
+    std::unordered_set<std::string> deleted;
+    bool hides(const std::string& key) const;
+  };
+  std::shared_ptr<const Overlay> overlay_;
   std::filesystem::path root_;
   std::unordered_map<std::string, std::filesystem::path> files_;
   std::unordered_map<std::string, std::filesystem::path> directories_;

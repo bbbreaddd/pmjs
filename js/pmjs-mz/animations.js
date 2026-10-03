@@ -2,12 +2,11 @@
 
 (function() {
   PMJS.pixi5.registerRenderContract(Sprite_Animation.prototype, {
-    encode: function(animation) {
+    encode: function(animation, renderer) {
       // Stock _render draws only a live Effekseer handle; timing/flash-only
       // animations still update through their original engine methods.
       if (animation._targets.length && animation._handle && animation._handle.exists) {
-        PMJS.compat.hit('render.effekseer', animation.constructor.name);
-        throw new Error('native MZ Effekseer rendering is unavailable');
+        return PMJS.mz.encodeEffect(animation, renderer);
       }
       return { kind: 0, resource: 0 };
     }

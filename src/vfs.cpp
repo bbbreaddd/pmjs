@@ -70,9 +70,55 @@ std::optional<std::string> Vfs::normalize(const std::string& path) {
   return result;
 }
 
+bool Vfs::Overlay::hides(const std::string& key) const {
+  auto prefix = key;
+  while (!prefix.empty()) {
+    if (deleted.contains(prefix)) return true;
+    const auto slash = prefix.rfind('/');
+    if (slash == std::string::npos) break;
+    prefix.resize(slash);
+  }
+  return false;
+}
+
+void Vfs::mountWritableOverlay(const std::filesystem::path& root) {
+  auto overlay = std::make_shared<Overlay>();
+  overlay->files = std::make_shared<Vfs>(root / "files");
+  for (const auto& entry : std::filesystem::directory_iterator(root / "deleted")) {
+    if (!entry.is_regular_file()) continue;
+    const auto name = entry.path().filename().string();
+    std::string decoded;
+    auto hex = [](char value) -> int {
+      if (value >= '0' && value <= '9') return value - '0';
+      if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+      return -1;
+    };
+    if (name.size() % 2) continue;
+    for (std::size_t index = 0; index < name.size(); index += 2) {
+      const auto high = hex(name[index]), low = hex(name[index + 1]);
+      if (high < 0 || low < 0) { decoded.clear(); break; }
+      decoded.push_back(static_cast<char>(high * 16 + low));
+    }
+    const auto key = normalize(decoded);
+    if (key) overlay->deleted.insert(*key);
+  }
+  // Async asset decoders retain an immutable view while mutations publish the next one.
+  std::atomic_store(&overlay_, std::shared_ptr<const Overlay>(std::move(overlay)));
+}
+
 std::optional<std::filesystem::path> Vfs::resolve(const std::string& path) const {
   const auto key = normalize(path);
   if (!key) return std::nullopt;
+  const auto overlay = std::atomic_load(&overlay_);
+  if (overlay) {
+    auto prefix = *key;
+    while (prefix.find('/') != std::string::npos) {
+      prefix.resize(prefix.rfind('/'));
+      if (overlay->files->files_.contains(prefix)) return std::nullopt;
+    }
+    if (overlay->files->exists(*key)) return overlay->files->resolve(*key);
+    if (overlay->hides(*key)) return std::nullopt;
+  }
   const auto found = files_.find(*key);
   if (found == files_.end()) return std::nullopt;
   return found->second;
@@ -104,33 +150,67 @@ std::optional<std::vector<std::uint8_t>> Vfs::readBytes(const std::string& path)
 }
 
 std::optional<std::vector<std::string>> Vfs::readDirectory(const std::string& path) const {
-  std::filesystem::path directory;
-  if (path.empty() || path == ".") {
-    directory = root_;
-  } else {
-    const auto normalized = normalize(path);
-    if (!normalized) return std::nullopt;
-    const auto found = directories_.find(*normalized);
-    if (found == directories_.end()) return std::nullopt;
-    directory = found->second;
+  const bool root = path.empty() || path == ".";
+  const auto key = root ? std::optional<std::string>("") : normalize(path);
+  if (!key || !isDirectory(root ? "." : *key)) return std::nullopt;
+  const auto overlay = std::atomic_load(&overlay_);
+  std::unordered_map<std::string, std::string> merged;
+  auto add = [&](const std::filesystem::path& directory) {
+    for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+      const auto name = entry.path().filename().string();
+      const auto child = key->empty() ? name : *key + "/" + name;
+      const auto childKey = normalize(child);
+      if (childKey && exists(child)) merged[*childKey] = name;
+    }
+  };
+  const auto base = directories_.find(*key);
+  if (!overlay || !overlay->hides(*key)) {
+    if (root) add(root_);
+    else if (base != directories_.end()) add(base->second);
   }
-
+  if (overlay) {
+    const auto directory = overlay->files->directories_.find(*key);
+    if (root) add(overlay->files->root());
+    else if (directory != overlay->files->directories_.end()) add(directory->second);
+  }
   std::vector<std::string> entries;
-  for (const auto& entry : std::filesystem::directory_iterator(directory)) {
-    entries.push_back(entry.path().filename().string());
-  }
+  for (const auto& [child, name] : merged) entries.push_back(name);
   std::sort(entries.begin(), entries.end());
   return entries;
 }
 
 bool Vfs::exists(const std::string& path) const {
-  const auto normalized = normalize(path);
-  return normalized && (files_.contains(*normalized) || directories_.contains(*normalized));
+  if (path.empty() || path == ".") return true;
+  const auto key = normalize(path);
+  if (!key) return false;
+  const auto overlay = std::atomic_load(&overlay_);
+  if (overlay) {
+    auto prefix = *key;
+    while (prefix.find('/') != std::string::npos) {
+      prefix.resize(prefix.rfind('/'));
+      if (overlay->files->files_.contains(prefix)) return false;
+    }
+    if (overlay->files->exists(*key)) return true;
+    if (overlay->hides(*key)) return false;
+  }
+  return files_.contains(*key) || directories_.contains(*key);
 }
 
 bool Vfs::isDirectory(const std::string& path) const {
-  const auto normalized = normalize(path);
-  return normalized && directories_.contains(*normalized);
+  if (path.empty() || path == ".") return true;
+  const auto key = normalize(path);
+  if (!key) return false;
+  const auto overlay = std::atomic_load(&overlay_);
+  if (overlay) {
+    auto prefix = *key;
+    while (prefix.find('/') != std::string::npos) {
+      prefix.resize(prefix.rfind('/'));
+      if (overlay->files->files_.contains(prefix)) return false;
+    }
+    if (overlay->files->exists(*key)) return overlay->files->isDirectory(*key);
+    if (overlay->hides(*key)) return false;
+  }
+  return directories_.contains(*key);
 }
 
 }  // namespace pmjs
