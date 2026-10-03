@@ -83,9 +83,32 @@ int main() try {
   require(entries && *entries == std::vector<std::string>{"system.JSON"},
           "listing did not merge case aliases and deletion markers");
   require(!vfs.resolve("../outside.txt"), "overlay allowed path traversal");
+  const auto snapshot = vfs;
+  write(overlay / "files" / "incremental.txt", "incremental");
+  write(overlay / "files" / "Collision", "outside this mutation");
+  write(overlay / "files" / "collision", "outside this mutation");
+  vfs.updateWritableOverlay({"incremental.txt"}, {});
+  require(vfs.readText("INCREMENTAL.TXT") == "incremental", "incremental write was not published");
+  require(!snapshot.exists("incremental.txt"), "a retained snapshot saw the new index");
+  require(!vfs.exists("Collision"), "incremental update rescanned unrelated files");
+  std::filesystem::remove(overlay / "files" / "Collision");
+  std::filesystem::remove(overlay / "files" / "collision");
+  std::filesystem::remove(overlay / "files" / "incremental.txt");
+  vfs.updateWritableOverlay({"incremental.txt"}, {});
+  require(!vfs.exists("incremental.txt"), "incremental removal retained an entry");
+  std::filesystem::create_directories(overlay / "files" / "nested" / "child");
+  write(overlay / "files" / "nested" / "child" / "new.txt", "nested");
+  vfs.updateWritableOverlay({"nested/child/new.txt"}, {});
+  require(vfs.isDirectory("nested") && vfs.isDirectory("nested/child"), "new parent indices missing");
+  require(vfs.readText("nested/child/new.txt") == "nested", "new descendant was not indexed");
+  std::filesystem::rename(overlay / "files" / "nested", overlay / "files" / "moved");
+  vfs.updateWritableOverlay({"nested", "moved"}, {});
+  require(!vfs.exists("nested/child/new.txt") && vfs.readText("moved/child/new.txt") == "nested",
+          "incremental directory rename left stale descendants");
+  require(!snapshot.exists("moved"), "directory publication mutated a retained snapshot");
   write(overlay / "deleted" / std::string(64, 'b'), "data");
   std::filesystem::remove_all(overlay / "files" / "data");
-  vfs.mountWritableOverlay(overlay);
+  vfs.updateWritableOverlay({"data"}, {std::string(64, 'b')});
   require(!vfs.exists("data") && !vfs.exists("data/System.json"),
           "directory deletion did not hide descendants");
   std::filesystem::create_directory(overlay / "files" / "data");

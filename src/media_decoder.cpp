@@ -676,6 +676,7 @@ AudioDecoderSession::AudioDecoderSession(std::vector<std::uint8_t> bytes)
     : impl_(std::make_unique<Impl>(std::move(bytes))) {}
 AudioDecoderSession::~AudioDecoderSession() = default;
 double AudioDecoderSession::duration() const { return impl_->durationSeconds; }
+int AudioDecoderSession::sourceChannels() const { return impl_->codec->ch_layout.nb_channels; }
 std::uint64_t AudioDecoderSession::loopStartFrame() const { return impl_->loopStart; }
 std::uint64_t AudioDecoderSession::loopEndFrame() const { return impl_->loopEnd; }
 bool AudioDecoderSession::seek(double timestamp, std::string* error) {

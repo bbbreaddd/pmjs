@@ -38,18 +38,19 @@ struct MediaService::Impl {
   static constexpr std::size_t bufferFrames = 48000, decodeFrames = 8192;
   struct Voice {
     explicit Voice(std::unique_ptr<AudioDecoderSession> source)
-        : decoder(std::move(source)) {
+        : decoder(std::move(source)), sourceChannels(decoder->sourceChannels()) {
       mix.duration = decoder->duration();
       mix.loopStart = decoder->loopStartFrame();
       mix.loopEnd = decoder->loopEndFrame();
     }
-    explicit Voice(std::shared_ptr<const PreparedAudioAsset> asset) {
+    explicit Voice(std::shared_ptr<const PreparedAudioAsset> asset) : sourceChannels(asset->sourceChannels) {
       mix.duration = asset->sourceDuration;
       mix.loopStart = std::min<std::uint64_t>(asset->loopStartFrame, asset->samples.size() / 2);
       mix.loopEnd = std::min<std::uint64_t>(asset->loopEndFrame, asset->samples.size() / 2);
       mix.asset = std::move(asset);
     }
     std::unique_ptr<AudioDecoderSession> decoder;
+    const int sourceChannels;
     mutable std::mutex mutex;
     VoiceMixState mix;
     std::uint64_t producerFrame = 0, generation = 0;
@@ -236,6 +237,7 @@ struct MediaService::Impl {
         auto* prepared = new PreparedAudioAsset;
         prepared->samples = std::move(samples);
         prepared->sourceDuration = duration;
+        prepared->sourceChannels = decoder->sourceChannels();
         prepared->loopStartFrame = decoder->loopStartFrame();
         prepared->loopEndFrame = decoder->loopEndFrame();
         const auto pcmBytes = prepared->samples.capacity() * sizeof(float);
@@ -299,6 +301,10 @@ struct MediaService::Impl {
 MediaService::MediaService(std::filesystem::path root)
   : impl_(std::make_unique<Impl>(std::move(root))) {}
 MediaService::~MediaService() = default;
+int MediaService::sourceChannels(std::uint32_t handle) const {
+  const auto voice = impl_->voice(handle);
+  return voice ? voice->sourceChannels : 0;
+}
 std::uint32_t MediaService::loadAudio(const std::string& path, std::string* error,
                                       const AudioLoadOptions& options) {
   const std::filesystem::path requested(path);

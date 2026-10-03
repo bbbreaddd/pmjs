@@ -1,4 +1,8 @@
 PMJS.pixi4 = PMJS.pixi4 || {};
+var nativePixiRenderers = new WeakSet();
+PMJS.pixi4.isNativeRenderer = function(renderer) {
+  return nativePixiRenderers.has(renderer);
+};
 PMJS.pixi4.renderStageToCanvas = function(stage, canvas, roundPixels) {
   NativeHost.render.setRenderTargetSize(canvas.width, canvas.height);
   renderNativeStage(stage, nativeIdentityTransform, 1, roundPixels);
@@ -786,6 +790,7 @@ function createNativePixiRenderer(width, height, options) {
   renderer.plugins = installNativeRendererPlugins(renderer);
   renderer.resize(width, height);
   configureNativePixiFragmentPrecision();
+  nativePixiRenderers.add(renderer);
   return renderer;
 }
 

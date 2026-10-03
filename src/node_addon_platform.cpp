@@ -1,6 +1,25 @@
 #include "node_addon_internal.hpp"
 
 namespace pmjs::addon {
+napi_value updateWritableOverlay(napi_env env, napi_callback_info info) try {
+  auto args = arguments(env, info, 2);
+  auto strings = [&](napi_value array) {
+    std::uint32_t count;
+    check(env, napi_get_array_length(env, array, &count), "overlay update requires arrays");
+    std::vector<std::string> values;
+    for (std::uint32_t i = 0; i < count; ++i) {
+      napi_value value;
+      check(env, napi_get_element(env, array, i, &value), "cannot read overlay update");
+      values.push_back(asString(env, value));
+    }
+    return values;
+  };
+  host(env).vfs.updateWritableOverlay(strings(args.at(0)), strings(args.at(1)));
+  return undefined(env);
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what()); return nullptr;
+}
+
 napi_value mountWritableOverlay(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 1);
   host(env).vfs.mountWritableOverlay(asString(env, args.at(0)));
@@ -131,6 +150,7 @@ napi_value inputConsumePressed(napi_env env, napi_callback_info) try {
 void registerPlatformBindings(napi_env env, napi_value exports) {
   napi_value fs = moduleObject(env);
   method(env, fs, "mountWritableOverlay", mountWritableOverlay);
+  method(env, fs, "updateWritableOverlay", updateWritableOverlay);
   method(env, fs, "readText", readText);
   method(env, fs, "readBytes", readBytes);
   method(env, fs, "readDirectory", readDirectory);

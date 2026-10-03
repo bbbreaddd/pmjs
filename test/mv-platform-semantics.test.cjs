@@ -1104,6 +1104,60 @@ test('storage read coalescing runs underneath plugin wrappers and respects dynam
   assert.equal(physicalReads, 4, 'Live burst must survive reinstall (still a hit, no new physical read)');
 });
 
+function markTestRenderers(context) {
+  const renderers = new WeakSet();
+  const create = context.createNativePixiRenderer;
+  context.createNativePixiRenderer = function(...args) {
+    const renderer = create(...args);
+    renderers.add(renderer);
+    return renderer;
+  };
+  context.PMJS.pixi4 = { isNativeRenderer: value => renderers.has(value) };
+}
+
+test('MV rejects a nondelegating browser renderer and records its plugin mutation', () => {
+  const context = vm.createContext({ console, Graphics: {},
+    createNativePixiRenderer() { return { render() {} }; } });
+  vm.runInContext(fs.readFileSync(path.join(jsDir, 'pmjs-core/methods.js'), 'utf8'), context);
+  markTestRenderers(context);
+  const source = fs.readFileSync(path.join(jsDir, 'pmjs-mv/renderer.js'), 'utf8');
+  vm.runInContext(source.slice(0, source.indexOf('var originalIsOptionValid')), context);
+  const token = context.PMJS.methods.beginPlugin('ReplacementRenderer');
+  let setups = 0;
+  context.Graphics._createRenderer = function() {
+    setups++;
+    this._renderer = { render() {}, gl: {}, _pmjsNative: true };
+  };
+  context.PMJS.methods.endPlugin(token);
+  context.PMJS.methods.install();
+  assert.throws(() => context.Graphics._createRenderer(), /must create a PMJS native renderer/);
+  assert.equal(setups, 1);
+  const record = context.PMJS.methods.dump().find(value => value.key === 'Graphics._createRenderer');
+  assert.equal(record.mutations[0].plugin, 'ReplacementRenderer');
+});
+
+test('MV accepts a replacement that creates a native renderer and preserves return and errors', () => {
+  const context = vm.createContext({ console, Graphics: {},
+    createNativePixiRenderer() { return { render() {} }; } });
+  vm.runInContext(fs.readFileSync(path.join(jsDir, 'pmjs-core/methods.js'), 'utf8'), context);
+  markTestRenderers(context);
+  const source = fs.readFileSync(path.join(jsDir, 'pmjs-mv/renderer.js'), 'utf8');
+  vm.runInContext(source.slice(0, source.indexOf('var originalIsOptionValid')), context);
+  let fail = false;
+  const error = new Error('guest setup failed');
+  context.Graphics._createRenderer = function() {
+    if (fail) throw error;
+    this._renderer = context.createNativePixiRenderer();
+    this._renderer.guestReady = true;
+    return 'created';
+  };
+  context.PMJS.methods.install();
+  assert.equal(context.Graphics._createRenderer(), 'created');
+  assert.equal(context.Graphics._renderer.guestReady, true);
+  fail = true;
+  assert.throws(() => context.Graphics._createRenderer(), value => value === error);
+});
+
 test('native presentation ownership is restored without discarding guest renderer creation', () => {
   const source = fs.readFileSync(path.join(jsDir, 'pmjs-mv/renderer.js'), 'utf8');
   const methodsSource = fs.readFileSync(path.join(jsDir, 'pmjs-core/methods.js'), 'utf8');
@@ -1116,6 +1170,7 @@ test('native presentation ownership is restored without discarding guest rendere
   context.globalThis = context;
   vm.createContext(context);
   vm.runInContext(methodsSource, context, { filename: 'methods.js' });
+  markTestRenderers(context);
   vm.runInContext(rendererInstaller, context);
   const baseCreateRenderer = context.Graphics._createRenderer;
   let pluginCreates = 0;
@@ -1128,7 +1183,7 @@ test('native presentation ownership is restored without discarding guest rendere
   context.Graphics.render = pluginRender;
   context.PMJS.methods.install();
 
-  assert.equal(context.Graphics._createRenderer, pluginCreateRenderer);
+  assert.notEqual(context.Graphics._createRenderer, pluginCreateRenderer);
   assert.notEqual(context.Graphics.render, pluginRender);
   context.Graphics._createRenderer();
   assert.equal(pluginCreates, 1);
@@ -1171,6 +1226,7 @@ for (const composition of ['alias', 'subclass']) {
         Graphics._canvas = {};
       `, context);
       vm.runInContext(fs.readFileSync(path.join(jsDir, 'pmjs-core/methods.js'), 'utf8'), context);
+      markTestRenderers(context);
       vm.runInContext(source.slice(0, source.indexOf('var originalIsOptionValid')), context);
       const preparation = `
         calls.push('prepare');
@@ -1338,6 +1394,7 @@ test('Graphics._createRenderer uses the game-authored logical dimensions', () =>
   context.globalThis = context;
   vm.createContext(context);
   vm.runInContext(methodsSource, context, { filename: 'methods.js' });
+  markTestRenderers(context);
   vm.runInContext(rendererInstaller, context);
   context.PMJS.methods.install();
 

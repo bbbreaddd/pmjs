@@ -1,0 +1,64 @@
+Pinned Effekseer e0ccaf1d1837b1d178d0088f714a1f4525cae8f4: portable MZ math.
+The sound queue intentionally differs from bundled MZ, which reads back() but pops front().
+
+--- a/Dev/Cpp/Effekseer/Effekseer/SIMD/Base.h
++++ b/Dev/Cpp/Effekseer/Effekseer/SIMD/Base.h
+@@ -6,7 +6,7 @@
+ #include <cmath>
+ #include "../Effekseer.Math.h"
+ 
+-#if defined(__ARM_NEON__) || defined(__ARM_NEON)
++#if 0 // MZ uses portable SIMD math.
+ // ARMv7/ARM64 NEON
+ 
+ #define EFK_SIMD_NEON
+@@ -17,7 +17,7 @@
+ 
+ #include <arm_neon.h>
+ 
+-#elif (defined(_M_AMD64) || defined(_M_X64)) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2) || defined(__SSE2__)
++#elif 0
+ // x86/x86-64 SSE2/AVX2
+ 
+ #define EFK_SIMD_SSE2
+--- a/Dev/Cpp/Effekseer/Effekseer/Effekseer.Color.cpp
++++ b/Dev/Cpp/Effekseer/Effekseer/Effekseer.Color.cpp
+@@ -9,10 +9,10 @@
+ //
+ //----------------------------------------------------------------------------------
+ #if (defined(_M_AMD64) || defined(_M_X64)) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2) || defined(__SSE2__)
+-#define EFK_SSE2
++// MZ uses portable color quantization.
+ #include <emmintrin.h>
+ #elif defined(__ARM_NEON__)
+-#define EFK_NEON
++// MZ uses portable color quantization.
+ #include <arm_neon.h>
+ #endif
+ 
+--- a/Dev/Cpp/Effekseer/Effekseer/Effekseer.Matrix43.cpp
++++ b/Dev/Cpp/Effekseer/Effekseer/Effekseer.Matrix43.cpp
+@@ -13,10 +13,10 @@
+ //
+ //----------------------------------------------------------------------------------
+ #if (defined(_M_AMD64) || defined(_M_X64)) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2) || defined(__SSE2__)
+-#define EFK_SSE2
++// MZ uses portable matrix arithmetic.
+ #include <emmintrin.h>
+ #elif defined(__ARM_NEON__)
+-#define EFK_NEON
++// MZ uses portable matrix arithmetic.
+ #include <arm_neon.h>
+ #endif
+ 
+--- a/Dev/Cpp/Effekseer/Effekseer/Effekseer.Manager.cpp
++++ b/Dev/Cpp/Effekseer/Effekseer/Effekseer.Manager.cpp
+@@ -2194,7 +2194,7 @@
+ 	{
+ 		while (!m_requestedSounds.empty())
+ 		{
+-			auto sound = m_requestedSounds.back();
++			auto sound = m_requestedSounds.front(); // Pop and read the same authored sound.
+ 			player->Play(sound.first, sound.second);
+ 			m_requestedSounds.pop();
+ 		}

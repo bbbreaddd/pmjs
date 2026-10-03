@@ -1,4 +1,5 @@
 #include "node_addon_internal.hpp"
+#include <cmath>
 
 namespace pmjs::addon {
 napi_value createCanvas(napi_env env, napi_callback_info info) try {

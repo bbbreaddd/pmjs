@@ -6,7 +6,7 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 const { loadPmjsRuntime } = require('./helpers/runtime-context.cjs');
-const { createStorage } = require('../runner/storage.cjs');
+const { createStorage, createGameFilesystem } = require('../runner/storage.cjs');
 const { temporaryDirectory } = require('./helpers/temp.cjs');
 
 test('storage writes atomically and rejects paths outside its root', () => {
@@ -18,6 +18,12 @@ test('storage writes atomically and rejects paths outside its root', () => {
   for (const invalid of ['', '../escape', '/absolute', 'a/../../escape']) {
     assert.throws(() => storage.writeText(invalid, 'bad'), /invalid save path/);
   }
+});
+
+test('an old native filesystem fails before creating a writable overlay', () => {
+  const root = path.join(temporaryDirectory('pmjs-storage-old-addon-'), 'overlay');
+  assert.throws(() => createGameFilesystem({}, root), /requires native overlay updates/);
+  assert.equal(fs.existsSync(root), false);
 });
 
 test('storage generation covers mutations and stays unchanged for reads', () => {
@@ -37,6 +43,61 @@ test('storage generation covers mutations and stays unchanged for reads', () => 
   assert.equal(storage.generation(), initial + 5);
   assert.throws(() => storage.rename('missing', 'target'), /ENOENT/);
   assert.equal(storage.generation(), initial + 6);
+});
+
+test('save rename and deletion sync directory entries and propagate sync failures', () => {
+  const root = temporaryDirectory('pmjs-storage-durability-');
+  const storage = createStorage(root);
+  storage.makeDirectory('from'); storage.makeDirectory('to');
+  storage.writeText('from/source', 'progress');
+  const synced = [];
+  const original = fs.fsyncSync;
+  fs.fsyncSync = function(descriptor) {
+    const filename = fs.readlinkSync('/proc/self/fd/' + descriptor);
+    synced.push(path.relative(root, filename));
+    return original(descriptor);
+  };
+  try {
+    storage.rename('from/source', 'to/destination');
+    assert.deepEqual(synced, ['to', 'from']);
+    assert.equal(storage.readText('to/destination'), 'progress');
+    synced.length = 0;
+    storage.rename('to/destination', 'to/backup');
+    assert.deepEqual(synced, ['to']);
+    synced.length = 0;
+    storage.remove('to/backup');
+    assert.deepEqual(synced, ['to']);
+    synced.length = 0;
+    storage.remove('to/missing');
+    assert.deepEqual(synced, []);
+    storage.writeText('from/source', 'retained');
+    fs.fsyncSync = () => { throw new Error('directory sync failed'); };
+    assert.throws(() => storage.rename('from/source', 'to/destination'), /directory sync failed/);
+    assert.equal(storage.readText('to/destination'), 'retained');
+    assert.throws(() => storage.remove('to/destination'), /directory sync failed/);
+    fs.fsyncSync = original;
+    storage.writeText('to/destination', 'another save');
+    fs.fsyncSync = () => { throw Object.assign(new Error('lost directory'), { code: 'ENOENT' }); };
+    assert.throws(() => storage.remove('to/destination'), /lost directory/);
+  } finally { fs.fsyncSync = original; }
+});
+
+test('creating nested save directories synchronizes their parent entries', () => {
+  const root = temporaryDirectory('pmjs-storage-parent-sync-');
+  const storage = createStorage(root);
+  const original = fs.fsyncSync;
+  const synced = [];
+  fs.fsyncSync = function(descriptor) {
+    if (fs.fstatSync(descriptor).isDirectory()) {
+      synced.push(path.relative(root, fs.readlinkSync('/proc/self/fd/' + descriptor)));
+    }
+    return original(descriptor);
+  };
+  try {
+    storage.writeText('profile/slots/one', 'new save');
+    assert.deepEqual(synced, ['profile/slots', 'profile', '', 'profile/slots']);
+    assert.equal(storage.readText('profile/slots/one'), 'new save');
+  } finally { fs.fsyncSync = original; }
 });
 
 for (const disabled of [false, true]) {

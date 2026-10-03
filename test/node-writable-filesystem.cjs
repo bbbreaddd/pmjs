@@ -176,6 +176,42 @@ test('a rename interrupted after destination installation recovers on remount', 
   assert.equal(fs.existsSync(path.join(overlay, 'rename.json')), false);
 });
 
+test('remount removes orphan staging and preserves the journaled rename until recovery', t => {
+  const { overlay, restart, host } = fixture(t);
+  for (const name of ['rename-Orphan', 'rename-Partial', 'rename-Active']) {
+    fs.mkdirSync(path.join(overlay, name));
+    fs.writeFileSync(path.join(overlay, name, 'value'), name);
+  }
+  fs.mkdirSync(path.join(overlay, 'other-work'));
+  fs.writeFileSync(path.join(overlay, 'rename.json'), JSON.stringify({
+    source: 'data/Original.txt', destination: 'recovered', directory: false, staging: 'rename-Active'
+  }));
+  restart();
+  assert.equal(host.readText('recovered'), 'rename-Active');
+  assert.equal(host.exists('data/Original.txt'), false);
+  assert.equal(fs.existsSync(path.join(overlay, 'rename.json')), false);
+  assert.equal(fs.existsSync(path.join(overlay, 'other-work')), true);
+  assert.equal(fs.readdirSync(overlay).some(name => /^rename-/.test(name)), false);
+  fs.mkdirSync(path.join(overlay, 'rename-WithoutJournal'));
+  restart();
+  assert.equal(fs.existsSync(path.join(overlay, 'rename-WithoutJournal')), false);
+});
+
+test('invalid rename intent fails visibly before orphan cleanup', t => {
+  const { overlay, restart } = fixture(t);
+  fs.mkdirSync(path.join(overlay, 'rename-Retained'));
+  fs.writeFileSync(path.join(overlay, 'rename.json'), JSON.stringify({
+    source: 'data', destination: 'moved', directory: true, staging: '../escape'
+  }));
+  assert.throws(restart, /invalid game filesystem rename journal/);
+  assert.equal(fs.existsSync(path.join(overlay, 'rename-Retained')), true);
+  for (const intent of [null, false, {}, { source: 'data', destination: 'moved', staging: 'rename-Retained' }]) {
+    fs.writeFileSync(path.join(overlay, 'rename.json'), JSON.stringify(intent));
+    assert.throws(restart, /invalid game filesystem rename journal/);
+    assert.equal(fs.existsSync(path.join(overlay, 'rename-Retained')), true);
+  }
+});
+
 test('long logical paths remain deletable and deleted after remount', t => {
   const { guest, host, restart } = fixture(t);
   const directory = 'x'.repeat(80), name = directory + '/' + 'y'.repeat(80);

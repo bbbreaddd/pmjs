@@ -23,6 +23,22 @@ function renderNativeMvStage(stage) {
 
 Graphics._createRenderer = createNativeMvRenderer;
 
+PMJS.methods.wrap({
+  key: 'Graphics._createRenderer',
+  getTarget: function() { return Graphics; },
+  method: '_createRenderer',
+  id: 'pmjs.mv.native-renderer-postcondition',
+  wrap: function(guestCreateRenderer) {
+    return function() {
+      var result = guestCreateRenderer.apply(this, arguments);
+      if (!PMJS.pixi4.isNativeRenderer(this._renderer)) {
+        throw new Error('Graphics._createRenderer must create a PMJS native renderer');
+      }
+      return result;
+    };
+  }
+});
+
 PMJS.methods.own({
   key: 'Graphics.render',
   getTarget: function() {

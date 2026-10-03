@@ -16,6 +16,8 @@ class Vfs {
   explicit Vfs(std::filesystem::path root);
 
   void mountWritableOverlay(const std::filesystem::path& root);
+  void updateWritableOverlay(const std::vector<std::string>& paths,
+                             const std::vector<std::string>& deletionMarkers);
 
   std::optional<std::filesystem::path> resolve(const std::string& path) const;
   std::optional<std::string> readText(const std::string& path) const;
@@ -27,6 +29,7 @@ class Vfs {
 
  private:
   static std::optional<std::string> normalize(const std::string& path);
+  void indexPath(const std::filesystem::path& path);
 
   struct Overlay {
     std::shared_ptr<const Vfs> files;

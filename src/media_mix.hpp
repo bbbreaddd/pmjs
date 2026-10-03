@@ -13,6 +13,7 @@ namespace pmjs {
 
 struct PreparedAudioAsset : DecodedAudio {
   double sourceDuration = 0;
+  int sourceChannels = 0;
 };
 
 struct VoiceMixState {

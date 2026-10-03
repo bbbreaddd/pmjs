@@ -49,6 +49,7 @@ int main() {
       const auto decoded = pmjs::MediaDecoder::decodeAudio(name);
       require(decoded && decoded->samples.size() >= 8, "spatial PCM fixture decodes");
       pmjs::AudioDecoderSession streaming(name);
+      require(streaming.sourceChannels() == channels, "decoder retains original mono/stereo metadata");
       const auto samples = streaming.read(4);
       require(samples.size() == 8, "spatial PCM fixture streams");
       for (const bool stream : {false, true}) {
@@ -71,6 +72,8 @@ int main() {
     {
       pmjs::MediaService ordinary(root);
       const auto handle = ordinary.loadAudio("a.wav");
+      require(ordinary.sourceChannels(handle) == 2 && ordinary.sourceChannels(0) == 0,
+              "stream voices expose original channel metadata without reopening");
       require(ordinary.setStereoGains(handle, 1.41421356F, 0) &&
         !ordinary.setStereoGains(handle, -1, 1) &&
         !ordinary.setStereoGains(handle, std::numeric_limits<float>::infinity(), 1) &&
@@ -117,6 +120,8 @@ int main() {
     auto first = media.loadAudio("a.wav", &error, sample);
     auto second = media.loadAudio("a.wav", &error, sample);
     require(first && second && first != second, "independent handles required");
+    require(media.sourceChannels(first) == 2 && media.sourceChannels(second) == 2,
+            "prepared and cached voices retain original channel metadata");
     auto stats = media.audioCacheStats();
     require(stats.preparations == 1 && stats.hits == 1 && stats.livePcmBytes == 38400,
       "two voices must share one prepared PCM allocation");

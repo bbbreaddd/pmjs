@@ -18,7 +18,7 @@ namespace {
 
 // Loading and renderer initialization also change bindings, outside Begin/EndRendering.
 struct GlBindings {
-  GLint program, framebuffer, vao, buffer, elements, activeTexture;
+  GLint program, drawFramebuffer, readFramebuffer, vao, buffer, elements, activeTexture;
   GLint viewport[4];
   bool es3;
   struct Attribute {
@@ -26,12 +26,14 @@ struct GlBindings {
     void* pointer;
   };
   std::vector<Attribute> attributes;
-  std::array<GLint, 8> textures{}, samplers{};
+  // The pinned GL renderer's texture and sampler arrays use TextureSlotMax.
+  std::array<GLint, Effekseer::TextureSlotMax> textures{}, samplers{};
   GlBindings() {
     glGetIntegerv(GL_CURRENT_PROGRAM, &program);
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &framebuffer);
     const auto version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
     es3 = version && std::strncmp(version, "OpenGL ES 3", 11) == 0;
+    glGetIntegerv(es3 ? GL_DRAW_FRAMEBUFFER_BINDING : GL_FRAMEBUFFER_BINDING, &drawFramebuffer);
+    if (es3) glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readFramebuffer);
     if (es3) glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vao);
     else {
       GLint count;
@@ -61,7 +63,10 @@ struct GlBindings {
   }
   ~GlBindings() {
     glUseProgram(program);
-    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    if (es3) {
+      glBindFramebuffer(GL_DRAW_FRAMEBUFFER, drawFramebuffer);
+      glBindFramebuffer(GL_READ_FRAMEBUFFER, readFramebuffer);
+    } else glBindFramebuffer(GL_FRAMEBUFFER, drawFramebuffer);
     if (es3) glBindVertexArray(vao);
     else {
       for (std::size_t i = 0; i < attributes.size(); ++i) {
@@ -145,18 +150,15 @@ class WaveLoader final : public Effekseer::SoundLoader {
     const auto name = std::filesystem::path(path).generic_string();
     const auto source = vfs_.resolve(name);
     std::string error;
+    // Short effect PCM stays cached; reuse metadata from that same audio load.
     const auto voice = source ? media_.loadAudio(source->string(), &error, {AudioIntent::effect, name, *source}) : 0;
     if (!voice) {
       files_->error = "cannot load effect sound: " + name + ": " + error;
       return nullptr;
     }
+    const auto channels = media_.sourceChannels(voice);
     media_.release(voice);
-    const auto info = MediaDecoder::probe(*source, &error);
-    if (!info || info->audioChannels < 1) {
-      files_->error = "cannot inspect effect sound: " + name + ": " + error;
-      return nullptr;
-    }
-    return Effekseer::MakeRefPtr<Wave>(source->string(), info->audioChannels);
+    return Effekseer::MakeRefPtr<Wave>(source->string(), channels);
   }
  private:
   Vfs& vfs_;

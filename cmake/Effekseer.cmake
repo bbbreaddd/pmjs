@@ -3,15 +3,6 @@ FetchContent_Declare(pmjs_effekseer
   URL https://codeload.github.com/effekseer/Effekseer/tar.gz/e0ccaf1d1837b1d178d0088f714a1f4525cae8f4
   URL_HASH SHA256=e2cb5aefdf1bf84d0d050fd44fcc64aa35baeee957686768a508784f1ed243d1)
 
-function(pmjs_effekseer_replace variable before after)
-  string(FIND "${${variable}}" "${before}" match)
-  if(match LESS 0)
-    message(FATAL_ERROR "Pinned Effekseer adaptation no longer matches: ${before}")
-  endif()
-  string(REPLACE "${before}" "${after}" result "${${variable}}")
-  set(${variable} "${result}" PARENT_SCOPE)
-endfunction()
-
 function(pmjs_build_effekseer)
   set(BUILD_VIEWER OFF)
   set(BUILD_EDITOR OFF)
@@ -32,34 +23,24 @@ function(pmjs_build_effekseer)
   set(USE_OPENGLES2 ON)
   set(USE_OPENGLES3 OFF)
   FetchContent_MakeAvailable(pmjs_effekseer)
-  # MZ's WebAssembly backend uses upstream's portable math. SSE/NEON color
-  # quantization and reciprocal estimates change seeded particle pixels.
-  set(core_dir "${pmjs_effekseer_SOURCE_DIR}/Dev/Cpp/Effekseer/Effekseer")
-  file(READ "${core_dir}/SIMD/Base.h" portable_base)
-  pmjs_effekseer_replace(portable_base "#include \"../Effekseer.Math.h\"" "#include <Effekseer/Effekseer.Math.h>")
-  pmjs_effekseer_replace(portable_base "#if defined(__ARM_NEON__) || defined(__ARM_NEON)" "#if 0")
-  pmjs_effekseer_replace(portable_base "#elif (defined(_M_AMD64) || defined(_M_X64)) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2) || defined(__SSE2__)" "#elif 0")
-  set(portable_header "${CMAKE_CURRENT_BINARY_DIR}/generated/effekseer_portable_math.h")
-  file(CONFIGURE OUTPUT "${portable_header}" CONTENT "${portable_base}" @ONLY)
-  target_compile_options(Effekseer PUBLIC "SHELL:-include \"${portable_header}\"")
-  get_target_property(core_sources Effekseer SOURCES)
-  list(FILTER core_sources EXCLUDE REGEX "(^|/)Effekseer\\.(Color|Matrix43|Manager)\\.cpp$")
-  set_property(TARGET Effekseer PROPERTY SOURCES "${core_sources}")
-  foreach(unit Color Matrix43 Manager)
-    file(READ "${core_dir}/Effekseer.${unit}.cpp" adapted_source)
-    if(unit STREQUAL "Manager")
-      # Intentional difference from bundled MZ: it reads queue.back() but pops
-      # queue.front(). Read the front to preserve each authored sound and tag.
-      pmjs_effekseer_replace(adapted_source "auto sound = m_requestedSounds.back();" "auto sound = m_requestedSounds.front();")
-    else()
-      pmjs_effekseer_replace(adapted_source "#define EFK_SSE2" "")
-      pmjs_effekseer_replace(adapted_source "#define EFK_NEON" "")
+  find_package(Git REQUIRED)
+  set(patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/effekseer-mz.patch")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${patch}")
+  execute_process(COMMAND "${GIT_EXECUTABLE}" apply --reverse --check "${patch}"
+    WORKING_DIRECTORY "${pmjs_effekseer_SOURCE_DIR}" RESULT_VARIABLE patched
+    OUTPUT_QUIET ERROR_QUIET)
+  if(NOT patched EQUAL 0)
+    execute_process(COMMAND "${GIT_EXECUTABLE}" apply --check "${patch}"
+      WORKING_DIRECTORY "${pmjs_effekseer_SOURCE_DIR}" RESULT_VARIABLE matches ERROR_VARIABLE reason)
+    if(NOT matches EQUAL 0)
+      message(FATAL_ERROR "Pinned Effekseer patch no longer matches ${pmjs_effekseer_SOURCE_DIR}: ${reason}")
     endif()
-    set(adapted_copy "${CMAKE_CURRENT_BINARY_DIR}/generated/effekseer_${unit}.cpp")
-    file(CONFIGURE OUTPUT "${adapted_copy}" CONTENT "${adapted_source}" @ONLY)
-    target_sources(Effekseer PRIVATE "${adapted_copy}")
-  endforeach()
-  target_include_directories(Effekseer PRIVATE "${core_dir}")
+    execute_process(COMMAND "${GIT_EXECUTABLE}" apply "${patch}"
+      WORKING_DIRECTORY "${pmjs_effekseer_SOURCE_DIR}" COMMAND_ERROR_IS_FATAL ANY)
+  endif()
+  # Keep portable math selection ahead of all Effekseer includes, including consumers.
+  target_compile_options(Effekseer PUBLIC
+    "SHELL:-include \"${pmjs_effekseer_SOURCE_DIR}/Dev/Cpp/Effekseer/Effekseer/SIMD/Base.h\"")
   target_include_directories(Effekseer SYSTEM PUBLIC "$<BUILD_INTERFACE:${pmjs_effekseer_SOURCE_DIR}/Dev/Cpp/Effekseer>")
   target_include_directories(EffekseerRendererGL SYSTEM PUBLIC "$<BUILD_INTERFACE:${pmjs_effekseer_SOURCE_DIR}/Dev/Cpp/EffekseerRendererGL>")
   target_link_libraries(EffekseerRendererGL PUBLIC PkgConfig::GLES PkgConfig::EGL)

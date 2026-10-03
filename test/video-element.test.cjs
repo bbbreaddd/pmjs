@@ -106,7 +106,11 @@ function loadRenderer(context) {
     const filename = path.resolve(__dirname, '../js/pmjs-pixi4', name + '.js');
     vm.runInContext(fs.readFileSync(filename, 'utf8'), context, { filename });
   }
-  return context.createNativePixiRenderer(816, 624);
+  const renderer = context.createNativePixiRenderer(816, 624);
+  assert.equal(context.PMJS.pixi4.isNativeRenderer(renderer), true);
+  assert.equal(context.PMJS.pixi4.isNativeRenderer(Object.assign({}, renderer)), false);
+  assert.equal(context.PMJS.pixi4.isNativeRenderer(Object.create(Object.getPrototypeOf(renderer))), false);
+  return renderer;
 }
 
 function makeRendererHarness() {

@@ -4,13 +4,27 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 
+function syncDirectory(directory) {
+  const descriptor = fs.openSync(directory, 'r');
+  try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
+}
+
 function createStorage(root) {
   const saveRoot = path.resolve(root);
-  fs.mkdirSync(saveRoot, { recursive: true });
+  makeDirectory(saveRoot);
   let temporaryId = 0;
   // Advance before mutation attempts, including failures after partial changes.
   let mutationGeneration = 0;
 
+  function makeDirectory(directory) {
+    const first = fs.mkdirSync(directory, { recursive: true });
+    if (!first) return;
+    for (let current = directory; ; current = path.dirname(current)) {
+      syncDirectory(current);
+      if (current === path.dirname(first)) break;
+    }
+    return first;
+  }
   function resolve(relative) {
     const value = String(relative).replace(/\\/g, '/');
     if (!value || value.startsWith('/') || value.split('/').includes('..')) {
@@ -36,7 +50,7 @@ function createStorage(root) {
     writeBytes(relative, contents) {
       mutationGeneration++;
       const destination = resolve(relative);
-      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      makeDirectory(path.dirname(destination));
       const temporary = `${destination}.tmp-${process.pid}-${++temporaryId}`;
       let descriptor;
       try {
@@ -46,8 +60,7 @@ function createStorage(root) {
         fs.closeSync(descriptor);
         descriptor = undefined;
         fs.renameSync(temporary, destination);
-        const directory = fs.openSync(path.dirname(destination), 'r');
-        try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
+        syncDirectory(path.dirname(destination));
       } finally {
         if (descriptor !== undefined) fs.closeSync(descriptor);
         try { fs.unlinkSync(temporary); } catch (_) {}
@@ -65,27 +78,37 @@ function createStorage(root) {
     },
     makeDirectory(relative) {
       mutationGeneration++;
-      return fs.mkdirSync(resolve(relative), { recursive: true });
+      return makeDirectory(resolve(relative));
     },
     remove(relative) {
       mutationGeneration++;
-      try { fs.unlinkSync(resolve(relative)); }
-      catch (error) { if (error.code !== 'ENOENT') throw error; }
+      const destination = resolve(relative);
+      try { fs.unlinkSync(destination); }
+      catch (error) { if (error.code === 'ENOENT') return; throw error; }
+      syncDirectory(path.dirname(destination));
     },
     rename(from, to) {
       mutationGeneration++;
+      const source = resolve(from);
       const destination = resolve(to);
-      fs.mkdirSync(path.dirname(destination), { recursive: true });
-      fs.renameSync(resolve(from), destination);
+      makeDirectory(path.dirname(destination));
+      fs.renameSync(source, destination);
+      syncDirectory(path.dirname(destination));
+      if (path.dirname(source) !== path.dirname(destination)) syncDirectory(path.dirname(source));
     },
   };
 }
 
 function createGameFilesystem(host, root) {
+  if (typeof host.updateWritableOverlay !== 'function') {
+    throw new Error('writable filesystem requires native overlay updates');
+  }
   const overlayRoot = path.resolve(root);
   const files = createStorage(path.join(overlayRoot, 'files'));
   const deleted = createStorage(path.join(overlayRoot, 'deleted'));
   const transactions = createStorage(overlayRoot);
+  const changedPaths = new Set();
+  const changedMarkers = new Set();
 
   function normalize(relative) {
     const value = String(relative).replace(/\\/g, '/');
@@ -97,7 +120,10 @@ function createGameFilesystem(host, root) {
   }
   const key = name => name.replace(/[A-Z]/g, value => value.toLowerCase());
   const marker = name => createHash('sha256').update(key(name)).digest('hex');
-  const hide = name => deleted.writeText(marker(name), key(name));
+  function hide(name) {
+    changedMarkers.add(marker(name));
+    deleted.writeText(marker(name), key(name));
+  }
   function error(code, name) {
     return Object.assign(new Error(`${code}: ${name}`), { code });
   }
@@ -113,52 +139,84 @@ function createGameFilesystem(host, root) {
   function parents(name) {
     const parent = path.posix.dirname(name);
     if (!host.isDirectory(parent)) throw error(host.exists(parent) ? 'ENOTDIR' : 'ENOENT', parent);
-    fs.mkdirSync(path.dirname(physical(name)), { recursive: true });
+    files.makeDirectory(path.relative(path.join(overlayRoot, 'files'), path.dirname(physical(name))) || '.');
   }
-  function mutate(operation) {
+  function publish() {
+    if (!changedPaths.size && !changedMarkers.size) return;
+    host.updateWritableOverlay(Array.from(changedPaths, name =>
+      path.relative(path.join(overlayRoot, 'files'), physical(name))), Array.from(changedMarkers));
+    changedPaths.clear(); changedMarkers.clear();
+  }
+  function mutate(names, operation) {
     try {
-      if (recoverRename()) host.mountWritableOverlay(overlayRoot);
+      if (recoverRename()) publish();
+      names.filter(name => name !== '.').forEach(name => changedPaths.add(name));
       return operation();
     }
-    finally { host.mountWritableOverlay(overlayRoot); }
+    finally { publish(); }
   }
-  function recoverRename() {
+  function recoverRename(cleanOrphans = false) {
     const contents = transactions.readText('rename.json');
-    if (contents === null) return;
-    const intent = JSON.parse(contents);
-    const source = normalize(intent.source), destination = normalize(intent.destination);
-    if (!/^rename-[a-zA-Z0-9]+$/.test(intent.staging) || source === '.' || destination === '.') {
+    const intent = contents === null ? null : JSON.parse(contents);
+    let source, destination;
+    if (contents !== null && (!intent || typeof intent.source !== 'string' ||
+        typeof intent.destination !== 'string' || typeof intent.staging !== 'string' ||
+        typeof intent.directory !== 'boolean')) {
       throw new Error('invalid game filesystem rename journal');
     }
+    if (intent) {
+      source = normalize(intent.source); destination = normalize(intent.destination);
+      if (!/^rename-[a-zA-Z0-9]+$/.test(intent.staging) || source === '.' || destination === '.') {
+        throw new Error('invalid game filesystem rename journal');
+      }
+    }
+    if (cleanOrphans) {
+      let removed = false;
+      for (const entry of fs.readdirSync(overlayRoot, { withFileTypes: true })) {
+        if (entry.isDirectory() && /^rename-[a-zA-Z0-9]+$/.test(entry.name) &&
+            (!intent || entry.name !== intent.staging)) {
+          fs.rmSync(path.join(overlayRoot, entry.name), { recursive: true, force: true });
+          removed = true;
+        }
+      }
+      if (removed) syncDirectory(overlayRoot);
+    }
+    if (!intent) return;
+    changedPaths.add(source); changedPaths.add(destination);
     const staging = path.join(overlayRoot, intent.staging);
     const value = path.join(staging, 'value');
     if (fs.existsSync(value)) {
       if (intent.directory && fs.existsSync(physical(destination))) fs.rmdirSync(physical(destination));
-      fs.renameSync(value, physical(destination));
+      transactions.rename(intent.staging + '/value', path.relative(overlayRoot, physical(destination)));
     }
     hide(source);
     if (intent.directory) hide(destination);
-    fs.rmSync(physical(source), { recursive: true, force: true });
+    const sourcePath = physical(source);
+    if (fs.existsSync(sourcePath)) {
+      fs.rmSync(sourcePath, { recursive: true, force: true });
+      syncDirectory(path.dirname(sourcePath));
+    }
     fs.rmSync(staging, { recursive: true, force: true });
     transactions.remove('rename.json');
     return true;
   }
   function copy(name, destination) {
     if (host.isDirectory(name)) {
-      fs.mkdirSync(destination);
+      transactions.makeDirectory(path.relative(overlayRoot, destination));
       for (const child of host.readDirectory(name)) copy(name + '/' + child, path.join(destination, child));
     } else {
       const bytes = host.readBytes(name);
       if (bytes === null) throw error('ENOENT', name);
-      fs.writeFileSync(destination, Buffer.from(bytes));
+      transactions.writeBytes(path.relative(overlayRoot, destination), Buffer.from(bytes));
     }
   }
-  recoverRename();
+  recoverRename(true);
   host.mountWritableOverlay(overlayRoot);
+  changedPaths.clear(); changedMarkers.clear();
   return Object.assign(host, {
     writeBytes(relative, contents) {
       const name = normalize(relative);
-      return mutate(() => {
+      return mutate([name], () => {
         if (host.isDirectory(name)) throw error('EISDIR', name);
         parents(name);
         const destination = path.relative(path.join(overlayRoot, 'files'), physical(name));
@@ -167,7 +225,7 @@ function createGameFilesystem(host, root) {
     },
     makeDirectory(relative, options = {}) {
       const name = normalize(relative);
-      return mutate(() => {
+      return mutate([name], () => {
         if (host.exists(name)) {
           if (options && options.recursive && host.isDirectory(name)) return;
           throw error('EEXIST', name);
@@ -180,21 +238,25 @@ function createGameFilesystem(host, root) {
             parent = path.posix.dirname(parent);
           }
         }
-        fs.mkdirSync(physical(name), { recursive: !!(options && options.recursive) });
+        files.makeDirectory(path.relative(path.join(overlayRoot, 'files'), physical(name)));
       });
     },
     remove(relative) {
       const name = normalize(relative);
-      return mutate(() => {
+      return mutate([name], () => {
         if (!host.exists(name)) throw error('ENOENT', name);
         if (host.isDirectory(name)) throw error('EISDIR', name);
         hide(name);
-        if (fs.existsSync(physical(name))) fs.unlinkSync(physical(name));
+        const filename = physical(name);
+        if (fs.existsSync(filename)) {
+          fs.unlinkSync(filename);
+          syncDirectory(path.dirname(filename));
+        }
       });
     },
     rename(from, to) {
       const source = normalize(from), destination = normalize(to);
-      return mutate(() => {
+      return mutate([source, destination], () => {
         if (source === '.' || destination === '.') throw error('EBUSY', source);
         if (!host.exists(source)) throw error('ENOENT', source);
         if (key(source) === key(destination)) return;

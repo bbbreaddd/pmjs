@@ -26,31 +26,35 @@ Vfs::Vfs(std::filesystem::path root) : root_(std::filesystem::canonical(root)) {
   const auto options = std::filesystem::directory_options::skip_permission_denied;
   for (const auto& entry :
        std::filesystem::recursive_directory_iterator(root_, options)) {
-    const auto relative = entry.path().lexically_relative(root_).generic_string();
-    const auto key = normalize(relative);
-    if (!key) continue;
-
-    std::error_code error;
-    const auto target = std::filesystem::canonical(entry.path(), error);
-    if (error || !isContainedBy(root_, target)) continue;
-    const auto status = entry.status(error);
-    if (error) continue;
-
-    auto insert = [&](auto& entries) {
-      const auto logicalPath = entry.path().lexically_normal();
-      const auto [position, inserted] = entries.emplace(*key, logicalPath);
-      if (!inserted && position->second != logicalPath) {
-        throw std::runtime_error("case-insensitive path collision: " +
-                                 position->second.string() + " and " +
-                                 logicalPath.string());
-      }
-    };
-    if (std::filesystem::is_directory(status)) {
-      insert(directories_);
-      continue;
-    }
-    if (std::filesystem::is_regular_file(status)) insert(files_);
+    indexPath(entry.path());
   }
+}
+
+void Vfs::indexPath(const std::filesystem::path& path) {
+  const auto relative = path.lexically_relative(root_).generic_string();
+  const auto key = normalize(relative);
+  if (!key) return;
+
+  std::error_code error;
+  const auto target = std::filesystem::canonical(path, error);
+  if (error || !isContainedBy(root_, target)) return;
+  const auto status = std::filesystem::status(path, error);
+  if (error) return;
+
+  auto insert = [&](auto& entries) {
+    const auto logicalPath = path.lexically_normal();
+    const auto [position, inserted] = entries.emplace(*key, logicalPath);
+    if (!inserted && position->second != logicalPath) {
+      throw std::runtime_error("case-insensitive path collision: " +
+                               position->second.string() + " and " +
+                               logicalPath.string());
+    }
+  };
+  if (std::filesystem::is_directory(status)) {
+    insert(directories_);
+    return;
+  }
+  if (std::filesystem::is_regular_file(status)) insert(files_);
 }
 
 std::optional<std::string> Vfs::normalize(const std::string& path) {
@@ -97,6 +101,44 @@ void Vfs::mountWritableOverlay(const std::filesystem::path& root) {
     if (key) overlay->deleted.insert(*key);
   }
   // Async asset decoders retain an immutable view while mutations publish the next one.
+  std::atomic_store(&overlay_, std::shared_ptr<const Overlay>(std::move(overlay)));
+}
+
+void Vfs::updateWritableOverlay(const std::vector<std::string>& paths,
+                               const std::vector<std::string>& deletionMarkers) {
+  const auto previous = std::atomic_load(&overlay_);
+  if (!previous) throw std::runtime_error("writable overlay is not mounted");
+  auto overlay = std::make_shared<Overlay>(*previous);
+  auto files = std::make_shared<Vfs>(*previous->files);
+  for (const auto& relative : paths) {
+    const auto key = normalize(relative);
+    if (!key) throw std::runtime_error("invalid overlay update path: " + relative);
+    files->files_.erase(*key);
+    if (files->directories_.erase(*key)) {
+      const auto prefix = *key + '/';
+      std::erase_if(files->files_, [&](const auto& entry) { return entry.first.starts_with(prefix); });
+      std::erase_if(files->directories_, [&](const auto& entry) { return entry.first.starts_with(prefix); });
+    }
+    const auto path = (files->root_ / relative).lexically_normal();
+    files->indexPath(path);
+    for (auto parent = path.parent_path(); parent != files->root_; parent = parent.parent_path()) {
+      files->indexPath(parent);
+    }
+    if (files->directories_.contains(*key)) {
+      for (const auto& entry : std::filesystem::recursive_directory_iterator(path)) files->indexPath(entry.path());
+    }
+  }
+  for (const auto& name : deletionMarkers) {
+    if (name.size() != 64 || !std::all_of(name.begin(), name.end(), [](char value) {
+          return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f');
+        })) throw std::runtime_error("invalid overlay deletion marker");
+    std::ifstream input(files->root_.parent_path() / "deleted" / name, std::ios::binary);
+    if (!input) continue;
+    std::ostringstream contents;
+    contents << input.rdbuf();
+    if (const auto key = normalize(contents.str())) overlay->deleted.insert(*key);
+  }
+  overlay->files = std::move(files);
   std::atomic_store(&overlay_, std::shared_ptr<const Overlay>(std::move(overlay)));
 }
 

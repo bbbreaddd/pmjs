@@ -61,6 +61,7 @@ class AudioDecoderSession {
   AudioDecoderSession(const AudioDecoderSession&) = delete;
   AudioDecoderSession& operator=(const AudioDecoderSession&) = delete;
   double duration() const;
+  int sourceChannels() const;
   std::uint64_t loopStartFrame() const;
   std::uint64_t loopEndFrame() const;
   bool seek(double timestamp, std::string* error = nullptr);
