@@ -115,7 +115,7 @@ assert.ok(widthSmall < width1, '14px text should have smaller width than 24px te
 stats = native.canvas.glyphStats();
 assert.ok(stats.fontStrikes >= 2, 'Different pixel sizes must create distinct font strikes');
 
-// 7. Test exact ABC sequence from review
+// Measuring creates metrics; subsequent fill and stroke draws reuse that layout.
 // measureText("ABC") -> metrics entries created -> glyphMaskMisses remains 0
 const glyphEntriesBeforeABC = stats.glyphEntries;
 const maskMissesBeforeABC = stats.glyphMaskMisses;

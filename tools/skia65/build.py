@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the experimental CPU-only C ABI; this never selects a runtime backend."""
+"""Build the checksum-pinned CPU-only Skia65 text component."""
 import argparse
 import json
 import os
@@ -108,7 +108,7 @@ def build(options):
     sources = [LOCK, pathlib.Path(__file__), pathlib.Path(__file__).with_name("provision.py")]
     sources += sorted((ROOT / "src/skia65").iterdir())
     sources += [ROOT / "src/text_layout.cpp", ROOT / "src/text_layout.hpp", ROOT / "src/unicode_default_ignorables.hpp"]
-    manifest = {"arch": options.arch, "experimental": True, "scope": "shared text backend",
+    manifest = {"arch": options.arch, "scope": "shared text backend",
         "dependencies": lock, "compilerVersion": compiler_version,
         "compilerSha256": digest(compiler.resolve()), "configuration": args,
         "strip": {"version": lock["clangVersion"], "sha256": digest(strip.resolve()), "arguments": ["--strip-debug"]},

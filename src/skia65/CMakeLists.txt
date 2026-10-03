@@ -8,7 +8,7 @@ set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 set(PMJS_SKIA65_SOURCE_ROOT "" CACHE PATH "Checksum-provisioned Skia65 source root")
 set(PMJS_SKIA65_ARCHIVE "" CACHE FILEPATH "CPU-only Skia archive")
 if(NOT EXISTS "${PMJS_SKIA65_ARCHIVE}" OR NOT EXISTS "${PMJS_SKIA65_SOURCE_ROOT}/provision.json")
-  message(FATAL_ERROR "Run tools/skia65/build.py before configuring the experimental Skia65 component")
+  message(FATAL_ERROR "Run tools/skia65/build.py before configuring the Skia65 text component")
 endif()
 
 set(ft "${PMJS_SKIA65_SOURCE_ROOT}/freetype")
@@ -21,6 +21,11 @@ set(icu "${PMJS_SKIA65_SOURCE_ROOT}/icu")
 # glyph decoding is excluded along with the raster component's other codecs.
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/include/freetype-custom-config")
 file(READ "${chromium}/third_party/freetype/include/freetype-custom-config/ftoption.h" ftOptions)
+string(REGEX MATCHALL "#define FT_CONFIG_OPTION_USE_PNG" pngOptions "${ftOptions}")
+list(LENGTH pngOptions pngOptionCount)
+if(NOT pngOptionCount EQUAL 1)
+  message(FATAL_ERROR "Pinned FreeType adaptation no longer matches ${chromium}/third_party/freetype/include/freetype-custom-config/ftoption.h: expected one FT_CONFIG_OPTION_USE_PNG definition")
+endif()
 string(REPLACE "#define FT_CONFIG_OPTION_USE_PNG" "/* PNG glyph decoding disabled */" ftOptions "${ftOptions}")
 file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/include/freetype-custom-config/ftoption.h" CONTENT "${ftOptions}" @ONLY)
 file(READ "${chromium}/third_party/freetype/BUILD.gn" ftBuild)
@@ -57,11 +62,12 @@ file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/icu-data.S" CONTENT
 add_library(pmjs-skia65 SHARED pmjs_skia65.cpp ../text_layout.cpp
   ${ftSources} ${hbSources} ${icuSources} "${CMAKE_CURRENT_BINARY_DIR}/icu-data.S")
 target_include_directories(pmjs-skia65 PRIVATE
-  "${CMAKE_CURRENT_BINARY_DIR}/include"
+  "${CMAKE_CURRENT_BINARY_DIR}/include" ..)
+target_include_directories(pmjs-skia65 SYSTEM PRIVATE
   "${chromium}/third_party/freetype/include"
   "${chromium}/third_party/freetype/include/freetype-custom-config"
   "${ft}/include" "${hb}" "${skia}/include/core" "${skia}/include/ports"
-  "${skia}/include/config" "${skia}/include/gpu" "${icu}/source/common" "${icu}/source/i18n" ..)
+  "${skia}/include/config" "${skia}/include/gpu" "${icu}/source/common" "${icu}/source/i18n")
 target_compile_definitions(pmjs-skia65 PRIVATE
   FT2_BUILD_LIBRARY PDFIUM_REQUIRED_MODULES CHROMIUM_RESTRICT_VISIBILITY
   HAVE_UNISTD_H HAVE_FCNTL_H HAVE_OT HAVE_INTEL_ATOMIC_PRIMITIVES HAVE_ICU HAVE_ICU_BUILTIN
@@ -71,7 +77,10 @@ target_compile_definitions(pmjs-skia65 PRIVATE
   FT_CONFIG_MODULES_H="freetype-custom-config/ftmodule.h"
   FT_CONFIG_OPTIONS_H="freetype-custom-config/ftoption.h"
   SK_SUPPORT_GPU=0 SK_SAMPLES_FOR_X _LIBCPP_ENABLE_CXX20_REMOVED_TYPE_TRAITS)
-target_compile_options(pmjs-skia65 PRIVATE -w $<$<COMPILE_LANGUAGE:CXX>:-fno-char8_t>)
+set_source_files_properties(${ftSources} ${hbSources} ${icuSources}
+  PROPERTIES COMPILE_OPTIONS "-w")
+target_compile_options(pmjs-skia65 PRIVATE -Wall -Wextra -Wpedantic -Wshadow
+  $<$<COMPILE_LANGUAGE:CXX>:-fno-char8_t>)
 target_link_libraries(pmjs-skia65 PRIVATE "${PMJS_SKIA65_ARCHIVE}" pthread dl m)
 target_link_options(pmjs-skia65 PRIVATE
   "LINKER:--version-script,${CMAKE_CURRENT_SOURCE_DIR}/exports.map" "LINKER:-z,defs")

@@ -236,6 +236,7 @@ class Renderer {
   std::vector<std::uint8_t> renderToRgba(int width, int height);
   std::optional<ImageInfo> renderToImage(int width, int height, AlphaMode alphaMode = AlphaMode::straight);
   const RendererStats& stats() const { return stats_; }
+  bool diagnosticsEnabled() const { return diagnostics_; }
   std::size_t renderTargetBytes() const;
   // Public for the modal overlay: snapshot, draw, discard back.
   std::size_t commandCount() const;
@@ -356,6 +357,7 @@ class Renderer {
   FramePacket frame_;
   std::vector<float> vertices_;
   RendererStats stats_;
+  bool diagnostics_ = false;
   std::vector<FilterContentBounds> filterBounds_;
   bool filterBoundsEnabled_ = true;
   std::uint32_t program_ = 0;

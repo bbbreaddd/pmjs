@@ -16,9 +16,13 @@ export default [
     rules: safetyRules,
   },
   {
-    files: ['runner/**/*.{js,cjs}', 'tools/**/*.mjs', 'test/**/*.cjs'],
+    files: ['runner/**/*.{js,cjs}', 'tools/**/*.{mjs,cjs}', 'test/**/*.cjs'],
     languageOptions: { ecmaVersion: 2022, globals: globals.node },
     rules: { ...safetyRules, 'no-undef': 'error' },
+  },
+  {
+    files: ['tools/generate-*-reference.cjs', 'tools/skia65/reference-readback.cjs'],
+    languageOptions: { globals: { ...globals.browser, __titleReadCanvas: 'readonly' } },
   },
   {
     files: ['example/**/*.js'],

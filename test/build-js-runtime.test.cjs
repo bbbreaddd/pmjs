@@ -179,12 +179,12 @@ test('alternate Pixi paths from inspection are used by MV setup', () => {
   context.globalThis = context;
   const setup = fs.readFileSync(path.join(__dirname,
     '../js/pmjs-pixi4/setup.js'), 'utf8');
-  vm.runInNewContext(setup.slice(0, setup.indexOf('// Retain compiled tile layers')), context);
-  assert.deepEqual(paths, ['js/pixi.js', 'js/pixi-tilemap.js']);
+  vm.runInNewContext(setup, context);
+  assert.deepEqual(paths.slice(0, 2), ['js/pixi.js', 'js/pixi-tilemap.js']);
 
   context.PIXI.VERSION = '4.8.8';
-  assert.throws(() => vm.runInNewContext(setup.slice(0,
-    setup.indexOf('// Retain compiled tile layers')), context), /inspected Pixi 4\.8\.9 but loaded 4\.8\.8/);
+  assert.throws(() => vm.runInNewContext(setup, context),
+    /inspected Pixi 4\.8\.9 but loaded 4\.8\.8/);
 });
 
 test('MV inspection rejects a missing tilemap library before bundle generation', () => {

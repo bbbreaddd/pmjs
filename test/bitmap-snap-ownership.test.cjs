@@ -5,16 +5,27 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { loadPmjsRuntime } = require('./helpers/runtime-context.cjs');
 
-const bitmapSource = fs.readFileSync(path.resolve(__dirname,
-  '../js/pmjs-mv/bitmap.js'), 'utf8');
-const snapStart = bitmapSource.indexOf('Bitmap.snap = function(stage) {');
-const snapEnd = bitmapSource.indexOf('// Keep MV', snapStart);
-const snapSource = bitmapSource.slice(snapStart, snapEnd);
 const rendererSource = fs.readFileSync(path.resolve(__dirname,
   '../js/pmjs-pixi4/renderer-facade.js'), 'utf8');
-const captureSource = rendererSource.slice(0,
-  rendererSource.indexOf('function nativeElementOpacity'));
+
+function loadBitmap(context) {
+  return loadPmjsRuntime({
+    ...context,
+    Graphics: Object.assign(function Graphics() {}, context.Graphics),
+    Sprite: function Sprite() {},
+    Input: function Input() {},
+    nativeBootPhase() {},
+    NativeHost: { ...context.NativeHost, runtime: { env: () => '', loadScript() {} } },
+  }, [
+    'js/pmjs-core/config.js',
+    'js/pmjs-core/optimizations.js',
+    'js/pmjs-core/methods.js',
+    'js/pmjs-rpgmaker/lifecycle.js',
+    'js/pmjs-mv/bitmap.js',
+  ]);
+}
 
 test('Bitmap.snap returns independent captures and a fresh blank for null', () => {
   let nextHandle = 0;
@@ -31,8 +42,9 @@ test('Bitmap.snap returns independent captures and a fresh blank for null', () =
     };
   }
   Bitmap.prototype._setDirty = function() {};
-  const context = {
+  const context = loadBitmap({
     PMJS: {},
+    PIXI: { WebGLRenderer: function() {} },
     Bitmap,
     Graphics: { width: 320, height: 240, _renderer: { roundPixels: false } },
     NativeHost: { render: {
@@ -41,12 +53,9 @@ test('Bitmap.snap returns independent captures and a fresh blank for null', () =
     }, canvas: { blur() {} } },
     renderNativeStage() {},
     nativeIdentityTransform: {},
-    pmjsBitmapCanvasChanged() {},
     captures: new Map()
-  };
-  vm.createContext(context);
-  vm.runInContext(captureSource, context);
-  vm.runInContext(snapSource, context);
+  });
+  vm.runInContext(rendererSource, context);
   const stage = { worldTransform: { identity() {} } };
   const first = context.Bitmap.snap(stage);
   const firstHandle = first._canvas._ensureNativeCanvas().handle;
@@ -72,6 +81,7 @@ test('Pixi capture renders current authored state before readback and preserves 
   const pixi4 = { existingCapability() {} };
   const context = {
     PMJS: { pixi4 },
+    PIXI: { WebGLRenderer: function() {} },
     nativeIdentityTransform: identity,
     NativeHost: { render: {
       setRenderTargetSize(width, height) { calls.push(['size', width, height]); },
@@ -83,7 +93,7 @@ test('Pixi capture renders current authored state before readback and preserves 
       calls.push(['render', received.color, alpha, roundPixels]);
     },
   };
-  vm.runInNewContext(captureSource, context);
+  vm.runInNewContext(rendererSource, context);
   stage.color = 'updated-before-presentation';
   context.PMJS.pixi4.renderStageToCanvas(stage, canvas, true);
   assert.equal(context.PMJS.pixi4, pixi4);
@@ -97,12 +107,13 @@ test('Bitmap snap delegates capture while preserving MV transform, blur, and dir
   const calls = [];
   const stage = { worldTransform: { identity() { calls.push('reset'); } } };
   function Bitmap(width, height) {
-    this._canvas = { width, height, _ensureNativeCanvas() { return { handle: 88 }; } };
+    this._canvas = { width, height, _ensureNativeCanvas() { return { handle: 88 }; },
+      _pmjsContentChanged() { calls.push('changed'); } };
     calls.push('bitmap');
   }
   Bitmap.useBlur = true;
   Bitmap.prototype._setDirty = function() { calls.push('dirty'); };
-  const context = {
+  const context = loadBitmap({
     Bitmap,
     Graphics: { width: 64, height: 48, _renderer: { roundPixels: true } },
     PMJS: { web: { canvas: { blur(canvas) {
@@ -115,10 +126,7 @@ test('Bitmap snap delegates capture while preserving MV transform, blur, and dir
       assert.equal(roundPixels, true);
       calls.push('capture');
     } } },
-
-    pmjsBitmapCanvasChanged() { calls.push('changed'); },
-  };
-  vm.runInNewContext(snapSource, context);
+  });
   context.Bitmap.snap(stage);
   assert.deepEqual(calls, ['bitmap', 'capture', 'changed', 'reset', 'blur', 'changed', 'dirty']);
 });

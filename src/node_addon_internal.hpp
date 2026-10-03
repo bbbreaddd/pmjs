@@ -39,8 +39,9 @@ struct State {
   }
 
   struct Video {
-    explicit Video(std::unique_ptr<pmjs::VideoDecoderSession> source)
-        : decoder(std::move(source)) {
+    explicit Video(std::unique_ptr<pmjs::VideoDecoderSession> source, bool telemetry)
+        : decoder(std::move(source)), telemetryEnabled(telemetry) {
+      if (telemetryEnabled) reportStarted = std::chrono::steady_clock::now();
       worker = std::thread([this]() { run(); });
     }
     ~Video() {
@@ -50,9 +51,9 @@ struct State {
     }
     void request(double targetTime) {
       { std::lock_guard lock(mutex);
-        if (requested.has_value()) ++requestsCoalesced;
+        if (telemetryEnabled && requested.has_value()) ++requestsCoalesced;
         requested = targetTime;
-        requestedAt = std::chrono::steady_clock::now(); }
+        if (telemetryEnabled) requestedAt = std::chrono::steady_clock::now(); }
       condition.notify_one();
     }
     void resetForSeek() {
@@ -68,7 +69,7 @@ struct State {
     std::optional<pmjs::VideoFrame> take() {
       std::lock_guard lock(mutex);
       if (!ready) return std::nullopt;
-      readyWaitMs += std::chrono::duration<double, std::milli>(
+      if (telemetryEnabled) readyWaitMs += std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - readyAt).count();
       auto result = std::move(ready); ready.reset(); return result;
     }
@@ -117,9 +118,11 @@ struct State {
           if (shuttingDown) return;
           frameTimestamp = *requested; requested.reset();
           generation = playbackGeneration;
-          ++workerJobs;
-          workerWaitMs += std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - requestedAt).count();
+          if (telemetryEnabled) {
+            ++workerJobs;
+            workerWaitMs += std::chrono::duration<double, std::milli>(
+              std::chrono::steady_clock::now() - requestedAt).count();
+          }
           rgba = std::move(recycledRgba);
         }
         std::string error;
@@ -142,7 +145,7 @@ struct State {
             recycledRgba = std::move(frame->rgba);
           continue;
         }
-        readyAt = std::chrono::steady_clock::now();
+        if (telemetryEnabled) readyAt = std::chrono::steady_clock::now();
         if (ready && ready->rgba.capacity() > recycledRgba.capacity())
           recycledRgba = std::move(ready->rgba);
         ready = std::move(frame);
@@ -164,7 +167,7 @@ struct State {
     std::thread worker;
     bool shuttingDown = false;
     pmjs::ImageHandle image = 0;
-    bool telemetryEnabled = false;
+    const bool telemetryEnabled;
     double duration = 0.0;
     double timestamp = -1.0;
     double lastRequestedTimestamp = -1.0;
@@ -173,7 +176,7 @@ struct State {
     std::uint64_t lateFrames = 0, staleReadyDrops = 0, uploadBytes = 0;
     double textureUploadMs = 0.0;
     double workerWaitMs = 0.0, readyWaitMs = 0.0;
-    std::chrono::steady_clock::time_point reportStarted = std::chrono::steady_clock::now();
+    std::chrono::steady_clock::time_point reportStarted;
     pmjs::VideoDecodeStats reportedDecodeStats;
     std::uint64_t reportedRequests = 0, reportedUploadedFrames = 0;
     std::uint64_t reportedRepeatedFrames = 0, reportedLateFrames = 0;

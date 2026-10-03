@@ -158,6 +158,8 @@ napi_value rendererStats(napi_env env, napi_callback_info) try {
   const auto& stats = host(env).renderer.stats();
   napi_value result;
   check(env, napi_create_object(env, &result), "cannot create renderer stats");
+  check(env, napi_set_named_property(env, result, "diagnostics",
+    boolean(env, host(env).renderer.diagnosticsEnabled())), "cannot set renderer diagnostics state");
   check(env, napi_set_named_property(env, result, "frames",
     number(env, static_cast<double>(stats.frames))), "cannot set renderer frames");
   check(env, napi_set_named_property(env, result, "retainedFrames",

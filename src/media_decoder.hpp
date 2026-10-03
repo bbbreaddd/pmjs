@@ -74,7 +74,7 @@ class AudioDecoderSession {
 
 class VideoDecoderSession {
  public:
-  explicit VideoDecoderSession(const std::filesystem::path& path);
+  explicit VideoDecoderSession(const std::filesystem::path& path, bool telemetry = false);
   ~VideoDecoderSession();
   VideoDecoderSession(const VideoDecoderSession&) = delete;
   VideoDecoderSession& operator=(const VideoDecoderSession&) = delete;

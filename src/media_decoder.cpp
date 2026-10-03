@@ -303,7 +303,8 @@ std::optional<DecodedAudio> MediaDecoder::decodeAudio(
 }
 
 struct VideoDecoderSession::Impl {
-  explicit Impl(const std::filesystem::path& path) {
+  explicit Impl(const std::filesystem::path& path, bool telemetry)
+      : telemetryEnabled(telemetry) {
     std::string error;
     format = open(path, &error);
     if (!format) throw std::runtime_error(error);
@@ -344,26 +345,27 @@ struct VideoDecoderSession::Impl {
     queued.clear();
     sentEof = false; exhausted = false; lastTimestamp = -1.0;
     hasPresentedFrame = false;
-    ++stats.seeks;
+    if (telemetryEnabled) ++stats.seeks;
     if (lastRequestedTimestamp && timestamp < *lastRequestedTimestamp)
-      ++stats.backwardSeeks;
+      if (telemetryEnabled) ++stats.backwardSeeks;
     countingAfterSeek = true;
     return true;
   }
 
   std::optional<double> decodeNext(std::string* error) {
-    const auto decodeStarted = std::chrono::steady_clock::now();
+    const auto decodeStarted = telemetryEnabled ? std::chrono::steady_clock::now()
+      : std::chrono::steady_clock::time_point{};
     while (true) {
       int result = avcodec_receive_frame(codec.get(), decoded.get());
       if (result >= 0) {
-        stats.decodeMs += std::chrono::duration<double, std::milli>(
+        if (telemetryEnabled) stats.decodeMs += std::chrono::duration<double, std::milli>(
           std::chrono::steady_clock::now() - decodeStarted).count();
         const auto best = decoded->best_effort_timestamp;
         const double timestamp = best == AV_NOPTS_VALUE ? 0.0
           : best * av_q2d(stream->time_base);
         lastTimestamp = timestamp;
-        ++stats.decodedFrames;
-        if (countingAfterSeek) ++stats.decodedAfterSeek;
+        if (telemetryEnabled) ++stats.decodedFrames;
+        if (telemetryEnabled && countingAfterSeek) ++stats.decodedAfterSeek;
         return timestamp;
       }
       if (result != AVERROR(EAGAIN) && result != AVERROR_EOF) {
@@ -413,18 +415,19 @@ struct VideoDecoderSession::Impl {
       return std::nullopt;
     }
     const auto rgbaBytes = static_cast<std::size_t>(width) * height * 4U;
-    if (rgba.capacity() < rgbaBytes) ++stats.rgbaAllocations;
+    if (telemetryEnabled && rgba.capacity() < rgbaBytes) ++stats.rgbaAllocations;
     rgba.resize(rgbaBytes);
     VideoFrame output{width, height, timestamp, std::move(rgba)};
     std::uint8_t* planes[] = {output.rgba.data(), nullptr, nullptr, nullptr};
     int strides[] = {width * 4, 0, 0, 0};
-    const auto convertStarted = std::chrono::steady_clock::now();
+    const auto convertStarted = telemetryEnabled ? std::chrono::steady_clock::now()
+      : std::chrono::steady_clock::time_point{};
     sws_scale(scaler.get(), decoded->data, decoded->linesize, 0, height,
               planes, strides);
-    stats.convertMs += std::chrono::duration<double, std::milli>(
+    if (telemetryEnabled) stats.convertMs += std::chrono::duration<double, std::milli>(
       std::chrono::steady_clock::now() - convertStarted).count();
     av_frame_unref(decoded.get());
-    ++stats.convertedFrames;
+    if (telemetryEnabled) ++stats.convertedFrames;
     return output;
   }
 
@@ -442,10 +445,11 @@ struct VideoDecoderSession::Impl {
   bool countingAfterSeek = false;
   MediaInfo info;
   VideoDecodeStats stats;
+  const bool telemetryEnabled;
 };
 
-VideoDecoderSession::VideoDecoderSession(const std::filesystem::path& path)
-    : impl_(std::make_unique<Impl>(path)) {}
+VideoDecoderSession::VideoDecoderSession(const std::filesystem::path& path, bool telemetry)
+    : impl_(std::make_unique<Impl>(path, telemetry)) {}
 VideoDecoderSession::~VideoDecoderSession() = default;
 const MediaInfo& VideoDecoderSession::info() const { return impl_->info; }
 VideoDecodeStats VideoDecoderSession::stats() const { return impl_->stats; }
@@ -459,8 +463,8 @@ bool VideoDecoderSession::prefetchOne(std::string* error) {
     impl_->exhausted = true; return false; }
   av_frame_move_ref(raw.get(), impl_->decoded.get());
   impl_->queued.push_back({*timestamp, std::move(raw)});
-  ++impl_->stats.prefetchedFrames;
-  impl_->stats.maxQueuedFrames = std::max<std::uint64_t>(
+  if (impl_->telemetryEnabled) ++impl_->stats.prefetchedFrames;
+  if (impl_->telemetryEnabled) impl_->stats.maxQueuedFrames = std::max<std::uint64_t>(
     impl_->stats.maxQueuedFrames, impl_->queued.size());
   return true;
 }
@@ -499,12 +503,12 @@ std::optional<VideoFrame> VideoDecoderSession::frame(
       break;
     if (impl_->queued.front().timestamp > timestamp + epsilon &&
         impl_->hasPresentedFrame && !selectedTimestamp) {
-      ++impl_->stats.noNewFrameDue;
+      if (impl_->telemetryEnabled) ++impl_->stats.noNewFrameDue;
       return std::nullopt;
     }
     if (selectedTimestamp) {
       av_frame_unref(impl_->selected.get());
-      ++impl_->stats.skippedFrames;
+      if (impl_->telemetryEnabled) ++impl_->stats.skippedFrames;
     }
     selectedTimestamp = impl_->queued.front().timestamp;
     av_frame_move_ref(impl_->selected.get(), impl_->queued.front().frame.get());
@@ -512,7 +516,7 @@ std::optional<VideoFrame> VideoDecoderSession::frame(
   }
   if (!selectedTimestamp) {
     if (error && !error->empty()) return std::nullopt;
-    ++impl_->stats.noNewFrameDue;
+    if (impl_->telemetryEnabled) ++impl_->stats.noNewFrameDue;
     return std::nullopt;
   }
   av_frame_move_ref(impl_->decoded.get(), impl_->selected.get());

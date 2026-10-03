@@ -232,8 +232,10 @@ function nativePlainSpriteBinding(node) {
 }
 
 function writeNativePlainSpriteSegment(bindings, parentIndex) {
-  nativeSceneSegmentStats.runs++;
-  nativeSceneSegmentStats.sprites += bindings.length;
+  if (nativeSceneSegmentTracing) {
+    nativeSceneSegmentStats.runs++;
+    nativeSceneSegmentStats.sprites += bindings.length;
+  }
   for (var bindingIndex = 0; bindingIndex < bindings.length; bindingIndex++) {
     var binding = bindings[bindingIndex];
     var node = binding.node;
@@ -668,7 +670,7 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
           segment.push(binding);
           segmentIndex++;
         }
-        nativeSceneSegmentStats.candidates += segment.length;
+        if (nativeSceneSegmentTracing) nativeSceneSegmentStats.candidates += segment.length;
         if (segment.length >= 4) {
           writeNativePlainSpriteSegment(segment, nodeIndex);
           index = segmentIndex - 1;

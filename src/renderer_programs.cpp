@@ -65,6 +65,8 @@ Renderer::Renderer(int width, int height, ImageStore& images)
     : width_(width), height_(height), presentationWidth_(width),
       presentationHeight_(height), queueWidth_(width), queueHeight_(height),
       images_(images) {
+  const char* diagnostics = std::getenv("PMJS_GRAPHICS_DIAGNOSTICS");
+  diagnostics_ = diagnostics && std::string(diagnostics) == "1";
   const char* filterBounds = std::getenv("PMJS_FILTER_BOUNDS");
   filterBoundsEnabled_ = !(filterBounds && std::string(filterBounds) == "0");
   presentation_.scaleMode = presentScaleModeFromEnvironment();
@@ -415,7 +417,7 @@ std::optional<Renderer::PrimitiveSurfaceInfo> Renderer::createPrimitiveSurface(
   glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                          image->texture, 0);
-  ++stats_.framebufferChecks;
+  if (diagnostics_) ++stats_.framebufferChecks;
   if (!framebuffer ||
       glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
     if (framebuffer) glDeleteFramebuffers(1, &framebuffer);
@@ -530,7 +532,7 @@ bool Renderer::renderPrimitiveSurface(
     };
     glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer_);
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices.data(), GL_STREAM_DRAW);
-    ++stats_.bufferUploads;
+    if (diagnostics_) ++stats_.bufferUploads;
     glUniform1i(primitiveSurfaceKindUniform_,
       primitive.kind ==
         PrimitiveSurfacePrimitive::Kind::concentricRadialGradient ? 1 : 0);
@@ -550,7 +552,7 @@ bool Renderer::renderPrimitiveSurface(
     }
     glEnable(GL_BLEND);
     glDrawArrays(GL_TRIANGLES, 0, 6);
-    ++stats_.drawCalls;
+    if (diagnostics_) ++stats_.drawCalls;
   }
   glBindFramebuffer(GL_FRAMEBUFFER, previousFramebuffer);
   glViewport(previousViewport[0], previousViewport[1], previousViewport[2],
@@ -638,7 +640,7 @@ bool Renderer::clearImageTriangles(ImageHandle handle, const std::vector<float>&
   glGenFramebuffers(1, &saved.target);
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, saved.target);
   glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, image->texture, 0);
-  ++stats_.framebufferChecks;
+  if (diagnostics_) ++stats_.framebufferChecks;
   if (!saved.target || glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) return false;
   glViewport(0, 0, image->width, image->height);
   glDisable(GL_SCISSOR_TEST); glDisable(GL_DEPTH_TEST); glDisable(GL_STENCIL_TEST); glDisable(GL_CULL_FACE);
@@ -686,7 +688,7 @@ bool Renderer::clearImageTriangles(ImageHandle handle, const std::vector<float>&
       glUniform4f(clearTriangleRectangleUniform_, rect[0], rect[1], rect[0] + rect[2], rect[1] + rect[3]);
     }
     glDrawArrays(GL_TRIANGLES, 0, 6);
-    ++stats_.bufferUploads; ++stats_.drawCalls;
+    if (diagnostics_) ++stats_.bufferUploads; if (diagnostics_) ++stats_.drawCalls;
   }
   return true;
 }

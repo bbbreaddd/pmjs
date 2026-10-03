@@ -4,6 +4,11 @@ namespace pmjs::addon {
 namespace {
 using Clock = std::chrono::steady_clock;
 
+bool videoTelemetryEnabled() {
+  const char* enabled = std::getenv("PMJS_VIDEO_TELEMETRY");
+  return enabled && std::string(enabled) == "1";
+}
+
 void reportVideo(State::Video& video, double requestedPts) {
   if (!video.telemetryEnabled) return;
   const auto now = Clock::now();
@@ -99,8 +104,8 @@ struct AsyncVideoLoad {
   napi_async_work work = nullptr;
   napi_deferred deferred = nullptr;
   std::filesystem::path path;
-  std::chrono::steady_clock::time_point queuedAt =
-    std::chrono::steady_clock::now();
+  const bool telemetryEnabled = videoTelemetryEnabled();
+  Clock::time_point queuedAt = telemetryEnabled ? Clock::now() : Clock::time_point{};
   std::unique_ptr<pmjs::VideoDecoderSession> video;
   std::unique_ptr<pmjs::AudioDecoderSession> audio;
   std::optional<pmjs::VideoFrame> firstFrame;
@@ -113,43 +118,44 @@ struct AsyncVideoLoad {
 
 void executeVideoLoad(napi_env, void* opaque) noexcept {
   auto* load = static_cast<AsyncVideoLoad*>(opaque);
-  const auto workerStartedAt = std::chrono::steady_clock::now();
+  const auto workerStartedAt = load->telemetryEnabled ? Clock::now() : Clock::time_point{};
   try {
-    auto phaseStartedAt = std::chrono::steady_clock::now();
-    load->video = std::make_unique<pmjs::VideoDecoderSession>(load->path);
-    load->videoOpenMs = std::chrono::duration<double, std::milli>(
-      std::chrono::steady_clock::now() - phaseStartedAt).count();
-    phaseStartedAt = std::chrono::steady_clock::now();
+    auto phaseStartedAt = load->telemetryEnabled ? Clock::now() : Clock::time_point{};
+    load->video = std::make_unique<pmjs::VideoDecoderSession>(load->path, load->telemetryEnabled);
+    if (load->telemetryEnabled) {
+      load->videoOpenMs = std::chrono::duration<double, std::milli>(
+        Clock::now() - phaseStartedAt).count();
+      phaseStartedAt = Clock::now();
+    }
     load->firstFrame = load->video->frame(0.0, &load->error);
-    load->firstFrameMs = std::chrono::duration<double, std::milli>(
-      std::chrono::steady_clock::now() - phaseStartedAt).count();
+    if (load->telemetryEnabled) load->firstFrameMs = std::chrono::duration<double, std::milli>(
+      Clock::now() - phaseStartedAt).count();
     if (!load->firstFrame) {
       if (load->error.empty()) load->error = "video has no decodable first frame";
       load->video.reset();
-      load->workerMs = std::chrono::duration<double, std::milli>(
-        std::chrono::steady_clock::now() - workerStartedAt).count();
+      if (load->telemetryEnabled) load->workerMs = std::chrono::duration<double, std::milli>(
+        Clock::now() - workerStartedAt).count();
       return;
     }
-    phaseStartedAt = std::chrono::steady_clock::now();
+    if (load->telemetryEnabled) phaseStartedAt = Clock::now();
     try {
       load->audio = std::make_unique<pmjs::AudioDecoderSession>(load->path);
     } catch (...) {
     }
-    load->audioOpenMs = std::chrono::duration<double, std::milli>(
-      std::chrono::steady_clock::now() - phaseStartedAt).count();
+    if (load->telemetryEnabled) load->audioOpenMs = std::chrono::duration<double, std::milli>(
+      Clock::now() - phaseStartedAt).count();
   } catch (const std::exception& error) {
     load->error = error.what();
   } catch (...) {
     load->error = "video load failed";
   }
-  load->workerMs = std::chrono::duration<double, std::milli>(
-    std::chrono::steady_clock::now() - workerStartedAt).count();
+  if (load->telemetryEnabled) load->workerMs = std::chrono::duration<double, std::milli>(
+    Clock::now() - workerStartedAt).count();
 }
 
 void reportVideoLoad(const AsyncVideoLoad& load, double installMs,
                      bool success) {
-  const auto* enabled = std::getenv("PMJS_VIDEO_TELEMETRY");
-  if (!enabled || std::string(enabled) != "1") return;
+  if (!load.telemetryEnabled) return;
   const double totalMs = std::chrono::duration<double, std::milli>(
     std::chrono::steady_clock::now() - load.queuedAt).count();
   std::cerr << "[pmjs-video-load] {\"success\":"
@@ -164,8 +170,9 @@ void reportVideoLoad(const AsyncVideoLoad& load, double installMs,
 
 void completeVideoLoad(napi_env env, napi_status status, void* opaque) {
   std::unique_ptr<AsyncVideoLoad> load(static_cast<AsyncVideoLoad*>(opaque));
-  const auto completionStartedAt = std::chrono::steady_clock::now();
+  const auto completionStartedAt = load->telemetryEnabled ? Clock::now() : Clock::time_point{};
   const auto reportInstallTime = [&load, completionStartedAt](bool success) {
+    if (!load->telemetryEnabled) return;
     reportVideoLoad(*load, std::chrono::duration<double, std::milli>(
       std::chrono::steady_clock::now() - completionStartedAt).count(), success);
   };
@@ -195,14 +202,12 @@ void completeVideoLoad(napi_env env, napi_status status, void* opaque) {
         load->firstFrame->height, load->firstFrame->rgba.data());
     if (!image) throw std::runtime_error("cannot allocate video texture");
     imageHandle = image->handle;
-    auto video = std::make_unique<State::Video>(std::move(load->video));
+    auto video = std::make_unique<State::Video>(std::move(load->video), load->telemetryEnabled);
     video->image = image->handle;
     video->duration = video->decoder->info().duration;
     video->sourceFps = video->decoder->info().videoFrameRate;
     video->timestamp = load->firstFrame->timestamp;
     video->recycle(std::move(load->firstFrame->rgba));
-    video->telemetryEnabled = std::getenv("PMJS_VIDEO_TELEMETRY") &&
-      std::string(std::getenv("PMJS_VIDEO_TELEMETRY")) == "1";
     videoHandle = value->nextVideo++;
     if (!videoHandle) videoHandle = value->nextVideo++;
     value->videos.emplace(videoHandle, std::move(video));
@@ -426,7 +431,8 @@ napi_value loadVideo(napi_env env, napi_callback_info info) try {
   const auto path = value.vfs.resolve(asString(env, a.at(0)));
   if (!path) throw std::runtime_error("video path is outside the game root");
   std::string error;
-  auto decoder = std::make_unique<pmjs::VideoDecoderSession>(*path);
+  const bool telemetry = videoTelemetryEnabled();
+  auto decoder = std::make_unique<pmjs::VideoDecoderSession>(*path, telemetry);
   auto frame = decoder->frame(0.0, &error);
   if (!frame) throw std::runtime_error(error.empty() ? "video decode failed" : error);
   const auto image = value.images.createRgba(frame->width, frame->height,
@@ -436,10 +442,8 @@ napi_value loadVideo(napi_env env, napi_callback_info info) try {
   if (!handle) handle = value.nextVideo++;
   const double duration = decoder->info().duration;
   const double sourceFps = decoder->info().videoFrameRate;
-  auto video = std::make_unique<State::Video>(std::move(decoder));
+  auto video = std::make_unique<State::Video>(std::move(decoder), telemetry);
   video->image = image->handle;
-  video->telemetryEnabled = std::getenv("PMJS_VIDEO_TELEMETRY") &&
-    std::string(std::getenv("PMJS_VIDEO_TELEMETRY")) == "1";
   video->duration = duration; video->sourceFps = sourceFps;
   video->timestamp = frame->timestamp;
   video->recycle(std::move(frame->rgba));
@@ -468,21 +472,23 @@ napi_value updateVideo(napi_env env, napi_callback_info info) try {
     video.timestamp = -1.0;
   }
   video.lastRequestedTimestamp = timestamp;
-  ++video.requests;
+  if (video.telemetryEnabled) ++video.requests;
   if (auto frame = video.take()) {
     if (frame->timestamp > video.timestamp + 0.000001) {
-      if (frame->timestamp + 0.1 < timestamp) ++video.lateFrames;
-      const auto started = Clock::now();
+      const auto started = video.telemetryEnabled ? Clock::now() : Clock::time_point{};
       if (!value.images.updateRgba(video.image, frame->rgba.data()))
         throw std::runtime_error("video texture update failed");
-      video.textureUploadMs += std::chrono::duration<double, std::milli>(
-        Clock::now() - started).count();
-      ++video.uploadedFrames;
-      video.uploadBytes += static_cast<std::uint64_t>(frame->width) * frame->height * 4U;
+      if (video.telemetryEnabled) {
+        if (frame->timestamp + 0.1 < timestamp) ++video.lateFrames;
+        video.textureUploadMs += std::chrono::duration<double, std::milli>(
+          Clock::now() - started).count();
+        ++video.uploadedFrames;
+        video.uploadBytes += static_cast<std::uint64_t>(frame->width) * frame->height * 4U;
+      }
       video.timestamp = frame->timestamp;
-    } else ++video.staleReadyDrops;
+    } else if (video.telemetryEnabled) ++video.staleReadyDrops;
     video.recycle(std::move(frame->rgba));
-  } else ++video.repeatedFrames;
+  } else if (video.telemetryEnabled) ++video.repeatedFrames;
   video.request(timestamp);
   reportVideo(video, timestamp);
   return number(env, video.timestamp);

@@ -548,20 +548,11 @@ function traceNativeScenePacket() {
     changedMetadataRecords: changedMetadataRecords,
     changedValueRecords: changedValueRecords,
     firstChangedRecords: firstChangedRecords,
-    // Plain-segment accounting (cumulative since boot). The statistics are
-    // emitted only while tracing; the runs/sprites/candidates counters
-    // themselves remain always-on. candidates counts every probed binding
-    // including runs abandoned below the segment threshold, so
-    // candidates - sprites measures successfully-created-but-discarded
-    // bindings -- not total probe cost (see the gated counters below, which
-    // additionally count rejected eligibility probes and abandoned runs).
+    // Cumulative over traced submissions. Candidates include bindings discarded
+    // below the segment threshold; rejected eligibility probes are separate.
     segmentRuns: nativeSceneSegmentStats.runs,
     segmentSprites: nativeSceneSegmentStats.sprites,
     segmentCandidates: nativeSceneSegmentStats.candidates,
-    // Gated counters: cumulative since boot but advancing only on
-    // submissions made while tracing was active. Together they separate
-    // valid-but-discarded speculative work (abandonedSprites) from
-    // eligibility checks that fail (rejectedProbes).
     segmentBindingProbes: nativeSceneSegmentStats.bindingProbes,
     segmentRejectedProbes: nativeSceneSegmentStats.rejectedProbes,
     segmentAbandonedRuns: nativeSceneSegmentStats.abandonedRuns,

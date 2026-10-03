@@ -1,6 +1,6 @@
 # PMJS: Native Runtime for RPG Maker MV/MZ
 
-Run RPG Maker MV/MZ games natively on Linux handhelds without without NW.js or a browser. PMJS runs the game's original JavaScript through Node/V8 while native C++ handles rendering, audio, input, canvas operations, and storage.
+Run RPG Maker MV/MZ games natively on Linux handhelds without NW.js or a browser. PMJS runs the game's original JavaScript through Node/V8 while native C++ handles rendering, audio, input, canvas operations, and storage.
 
 RPG Maker MV games are essentially web-games, which means to run it, you have to run an entire browser. Low-end handhelds like the RG35XX Plus have a lot of limitations like 1GB of RAM, a really slow CPU, and an SD card for I/O. Not a great combination.
 PMJS replaces the browser side with the small set of APIs these games need. There is no DOM layout engine and no JavaScript renderer.
@@ -11,11 +11,8 @@ PMJS is experimental and still has a lot of work to be done before I consider it
 
 ## Requirements
 
-PMJS supports Linux x64 and ARM64. Building it requires:
-
 - CMake 3.20 or newer
 - A C++20 compiler
-- Clang/LLVM 20.1.2 and Python 3
 - Node.js and Node API headers
 - pkg-config
 - SDL2, EGL, and OpenGL ES 3.0 or newer
@@ -37,5 +34,7 @@ PMJS uses the following software
 - [FreeType](https://freetype.org/) for glyph rasterization
 - [HarfBuzz](https://harfbuzz.github.io/) for text shaping
 - [FFmpeg](https://ffmpeg.org/) for audio and video decoding
+- [Effekseer](https://effekseer.github.io/) for RPG Maker MZ animation effects
+- [Skia](https://skia.org/) and [ICU](https://icu.unicode.org/), with private FreeType/HarfBuzz builds, for the Skia65 text component
 
 The build and test workflow uses CMake, pkg-config, ESLint, and Xvfb.

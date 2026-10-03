@@ -753,7 +753,7 @@ void Renderer::renderScene() {
     glBufferData(GL_ARRAY_BUFFER,
                  static_cast<GLsizeiptr>(vertices_.size() * sizeof(float)),
                  vertices_.data(), GL_STREAM_DRAW);
-    ++stats_.bufferUploads;
+    if (diagnostics_) ++stats_.bufferUploads;
   }
 
   BlendMode activeBlend = BlendMode::normal;
@@ -769,11 +769,11 @@ void Renderer::renderScene() {
   applyBlendMode(activeBlend);
   for (const auto& operation : operations) {
     if (operation.action == RenderCommand::Action::filterBegin) {
-      ++stats_.filterTargetAcquires;
+      if (diagnostics_) ++stats_.filterTargetAcquires;
       if (groupTargets_[filterDepth].texture &&
           groupTargets_[filterDepth].width == width_ &&
           groupTargets_[filterDepth].height == height_) {
-        ++stats_.filterTargetReuses;
+        if (diagnostics_) ++stats_.filterTargetReuses;
       }
       ensureTarget(groupTargets_[filterDepth], width_, height_);
       std::array<int, 4> boundedRect{};
@@ -809,7 +809,7 @@ void Renderer::renderScene() {
         scissorActive = false;
       }
       glClear(GL_COLOR_BUFFER_BIT);
-      ++stats_.filterTargetClears;
+      if (diagnostics_) ++stats_.filterTargetClears;
       activeBlend = BlendMode::normal;
       applyBlendMode(activeBlend);
       ++filterDepth;
@@ -818,10 +818,10 @@ void Renderer::renderScene() {
     if (operation.action == RenderCommand::Action::filterEnd) {
       --filterDepth;
       const RenderCommand& filter = *filterCommands[filterDepth];
-      ++stats_.filterApplications[static_cast<std::size_t>(filter.filterKind)];
+      if (diagnostics_) ++stats_.filterApplications[static_cast<std::size_t>(filter.filterKind)];
       std::array<int, 4> boundedRect{};
       if (filterBoundsRect(filterCommands[filterDepth], &boundedRect)) {
-        ++stats_.filterBoundedApplications;
+        if (diagnostics_) ++stats_.filterBoundedApplications;
       }
       if (scissorActive) {
         glDisable(GL_SCISSOR_TEST);
@@ -856,7 +856,7 @@ void Renderer::renderScene() {
         glActiveTexture(GL_TEXTURE3);
         glBindTexture(GL_TEXTURE_2D, filterTarget_.texture);
         glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, width_, height_);
-        ++stats_.framebufferCopies;
+        if (diagnostics_) ++stats_.framebufferCopies;
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glUniform1i(bloomImageUniform_, 3);
@@ -880,8 +880,10 @@ void Renderer::renderScene() {
                                            groupTargets_[filterDepth].framebuffer);
           glBindTexture(GL_TEXTURE_2D, sourceTexture);
           glDrawArrays(GL_TRIANGLES, operation.first, operation.count);
-          ++stats_.drawCalls;
-          ++stats_.filterDrawCalls;
+          if (diagnostics_) {
+            ++stats_.drawCalls;
+            ++stats_.filterDrawCalls;
+          }
           sourceTexture = targetFilter ? filterTarget_.texture :
                                          groupTargets_[filterDepth].texture;
         }
@@ -893,8 +895,10 @@ void Renderer::renderScene() {
                                            groupTargets_[filterDepth].framebuffer);
           glBindTexture(GL_TEXTURE_2D, sourceTexture);
           glDrawArrays(GL_TRIANGLES, operation.first, operation.count);
-          ++stats_.drawCalls;
-          ++stats_.filterDrawCalls;
+          if (diagnostics_) {
+            ++stats_.drawCalls;
+            ++stats_.filterDrawCalls;
+          }
           sourceTexture = targetFilter ? filterTarget_.texture :
                                          groupTargets_[filterDepth].texture;
         }
@@ -919,8 +923,10 @@ void Renderer::renderScene() {
                                            groupTargets_[filterDepth].framebuffer);
           glBindTexture(GL_TEXTURE_2D, sourceTexture);
           glDrawArrays(GL_TRIANGLES, operation.first, operation.count);
-          ++stats_.drawCalls;
-          ++stats_.filterDrawCalls;
+          if (diagnostics_) {
+            ++stats_.drawCalls;
+            ++stats_.filterDrawCalls;
+          }
           sourceTexture = targetFilter ? filterTarget_.texture :
                                          groupTargets_[filterDepth].texture;
         }
@@ -994,8 +1000,10 @@ void Renderer::renderScene() {
         glUniform1i(pixiFilterKindUniform_, 3);
         glBindFramebuffer(GL_FRAMEBUFFER, bloomTarget_.framebuffer);
         glDrawArrays(GL_TRIANGLES, operation.first, operation.count);
-        ++stats_.drawCalls;
-        ++stats_.filterDrawCalls;
+        if (diagnostics_) {
+          ++stats_.drawCalls;
+          ++stats_.filterDrawCalls;
+        }
 
         std::uint32_t bloomSource = bloomTarget_.texture;
         const int passCount = static_cast<int>(filter.filterParameters[3]);
@@ -1012,8 +1020,10 @@ void Renderer::renderScene() {
                        passParameters.data());
           glUniform1i(pixiFilterKindUniform_, 21);
           glDrawArrays(GL_TRIANGLES, operation.first, operation.count);
-          ++stats_.drawCalls;
-          ++stats_.filterDrawCalls;
+          if (diagnostics_) {
+            ++stats_.drawCalls;
+            ++stats_.filterDrawCalls;
+          }
           bloomSource = targetFilter ? filterTarget_.texture : bloomTarget_.texture;
         }
         glActiveTexture(GL_TEXTURE3);
@@ -1109,8 +1119,10 @@ void Renderer::renderScene() {
                        passParameters.data());
           glUniform1i(pixiFilterKindUniform_, 21);
           glDrawArrays(GL_TRIANGLES, operation.first, operation.count);
-          ++stats_.drawCalls;
-          ++stats_.filterDrawCalls;
+          if (diagnostics_) {
+            ++stats_.drawCalls;
+            ++stats_.filterDrawCalls;
+          }
           sourceTexture = targetFilter ? filterTarget_.texture :
                                          groupTargets_[filterDepth].texture;
         }
@@ -1161,8 +1173,10 @@ void Renderer::renderScene() {
           glScissor(region[0], height_ - region[3],
                     region[2] - region[0], region[3] - region[1]);
           glDrawArrays(GL_TRIANGLES, operation.first, operation.count);
-          ++stats_.drawCalls;
-          ++stats_.filterDrawCalls;
+          if (diagnostics_) {
+            ++stats_.drawCalls;
+            ++stats_.filterDrawCalls;
+          }
         }
         scissorActive = savedScissor[filterDepth];
         activeClip = savedClip[filterDepth];
@@ -1183,8 +1197,10 @@ void Renderer::renderScene() {
                     std::max(0, activeClip[3] - activeClip[1]));
         }
         glDrawArrays(GL_TRIANGLES, operation.first, operation.count);
-        ++stats_.drawCalls;
-        ++stats_.filterDrawCalls;
+        if (diagnostics_) {
+          ++stats_.drawCalls;
+          ++stats_.filterDrawCalls;
+        }
       }
       if (pictureBlend) glEnable(GL_BLEND);
       glUniform1i(displacementEnabledUniform_, 0);
@@ -1240,9 +1256,11 @@ void Renderer::renderScene() {
       glUniform1f(colorMatrixAlphaUniform_,
                   operation.matrixCommand->color[3]);
       glDrawArrays(GL_TRIANGLES, operation.first, operation.count);
-      ++stats_.drawCalls;
-      ++stats_.filterDrawCalls;
-      ++stats_.toneAdjustDrawCalls;
+      if (diagnostics_) {
+        ++stats_.drawCalls;
+        ++stats_.filterDrawCalls;
+        ++stats_.toneAdjustDrawCalls;
+      }
       if (filterDepth == 0) {
         swapTargetColors(rootTarget, filterTarget_);
         glBindFramebuffer(GL_FRAMEBUFFER, rootFramebuffer);
@@ -1293,7 +1311,8 @@ void Renderer::renderScene() {
                           0, 0, frameWidth, frameHeight,
                           GL_COLOR_BUFFER_BIT, GL_NEAREST);
         glBindFramebuffer(GL_FRAMEBUFFER, effectTarget_.framebuffer);
-        stats_.drawCalls += effects_->draw(draw);
+        const auto effectDrawCalls = effects_->draw(draw);
+        if (diagnostics_) stats_.drawCalls += effectDrawCalls;
         glBindFramebuffer(GL_READ_FRAMEBUFFER, effectTarget_.framebuffer);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
         if (scissorActive) glEnable(GL_SCISSOR_TEST);
@@ -1303,7 +1322,8 @@ void Renderer::renderScene() {
                           GL_COLOR_BUFFER_BIT, GL_NEAREST);
         glBindFramebuffer(GL_FRAMEBUFFER, destination);
       } else {
-        stats_.drawCalls += effects_->draw(draw);
+        const auto effectDrawCalls = effects_->draw(draw);
+        if (diagnostics_) stats_.drawCalls += effectDrawCalls;
       }
       // Subsequent geometry already includes MZ's reset viewport mapping.
       glViewport(0, 0, width_, height_);
@@ -1391,11 +1411,10 @@ void Renderer::renderScene() {
                           operation.nearest ? GL_NEAREST : GL_LINEAR);
         }
         glDrawArrays(GL_TRIANGLES, batch.first, batch.count);
-        ++stats_.drawCalls;
-        if (operation.primitive == RenderCommand::Primitive::mesh) {
-          ++stats_.meshDrawCalls;
-        } else {
-          ++stats_.tileDrawCalls;
+        if (diagnostics_) {
+          ++stats_.drawCalls;
+          if (operation.primitive == RenderCommand::Primitive::mesh) ++stats_.meshDrawCalls;
+          else ++stats_.tileDrawCalls;
         }
       }
       continue;
@@ -1484,32 +1503,27 @@ void Renderer::renderScene() {
                       gpuRepeat ? GL_REPEAT : GL_CLAMP_TO_EDGE);
     }
     glDrawArrays(GL_TRIANGLES, operation.first, operation.count);
-    ++stats_.drawCalls;
-    if (operation.primitive == RenderCommand::Primitive::tilingSprite) {
-      ++stats_.tilingSpriteDrawCalls;
-    } else if (operation.primitive == RenderCommand::Primitive::screenFill) {
-      ++stats_.screenFillDrawCalls;
-    } else {
-      ++stats_.spriteDrawCalls;
-    }
-    if (simpleSprite) {
-      ++stats_.baseSpriteDrawCalls;
-    } else {
-      ++stats_.effectSpriteDrawCalls;
+    if (diagnostics_) {
+      ++stats_.drawCalls;
+      if (operation.primitive == RenderCommand::Primitive::tilingSprite) ++stats_.tilingSpriteDrawCalls;
+      else if (operation.primitive == RenderCommand::Primitive::screenFill) ++stats_.screenFillDrawCalls;
+      else ++stats_.spriteDrawCalls;
+      if (simpleSprite) ++stats_.baseSpriteDrawCalls;
+      else ++stats_.effectSpriteDrawCalls;
     }
   }
   if (scissorActive) glDisable(GL_SCISSOR_TEST);
   applyBlendMode(BlendMode::normal);
-  stats_.commands += frame_.commands.size();
+  if (diagnostics_) stats_.commands += frame_.commands.size();
   discardCommandsFrom(0);
   if (!offscreenRender_ && sceneSubmittedThisFrame_) {
     hasValidSceneFrame_ = true;
   }
 } else {
   discardCommandsFrom(0);
-  ++stats_.retainedFrames;
+  if (diagnostics_) ++stats_.retainedFrames;
 }
-++stats_.frames;
+if (diagnostics_) ++stats_.frames;
 }
 
 void Renderer::presentToDrawable() {
@@ -1522,7 +1536,7 @@ void Renderer::presentToDrawable() {
   if (composePresentation) {
     ensureTarget(filterTarget_, width_, height_);
     drawToneComposition(filterTarget_.framebuffer, 0, 0, width_, height_, true);
-    if (toneCompositionActive_) ++stats_.toneComposedPresentationFrames;
+    if (diagnostics_ && toneCompositionActive_) ++stats_.toneComposedPresentationFrames;
   }
   const bool identity = presentation_.viewportX == 0 &&
       presentation_.viewportY == 0 &&
@@ -1542,10 +1556,10 @@ void Renderer::presentToDrawable() {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     return;
   }
-  ++stats_.scaledPresentationFrames;
+  if (diagnostics_) ++stats_.scaledPresentationFrames;
   if (presentation_.viewportWidth < presentation_.drawableWidth ||
       presentation_.viewportHeight < presentation_.drawableHeight) {
-    ++stats_.presentationLetterboxedFrames;
+    if (diagnostics_) ++stats_.presentationLetterboxedFrames;
   }
   const int drawableWidth = presentation_.drawableWidth;
   const int drawableHeight = presentation_.drawableHeight;
@@ -1622,7 +1636,7 @@ void Renderer::drawToneComposition(std::uint32_t framebuffer,
   glUniform1i(presentationVideoPremultipliedUniform_, video && video->premultiplied);
   glUniform1i(presentationUpperCanvasPremultipliedUniform_, upperCanvas && upperCanvas->premultiplied);
   glDrawArrays(GL_TRIANGLES, 0, 6);
-  ++stats_.drawCalls;
+  if (diagnostics_) ++stats_.drawCalls;
   glActiveTexture(GL_TEXTURE0);
   glEnable(GL_BLEND);
   applyBlendMode(BlendMode::normal);

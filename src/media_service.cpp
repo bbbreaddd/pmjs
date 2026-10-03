@@ -201,10 +201,10 @@ struct MediaService::Impl {
     const auto found = cache.find(key);
     if (found != cache.end()) {
       lru.splice(lru.begin(), lru, found->second.lru);
-      ++cacheStats.hits;
+      if (diagnostics) ++cacheStats.hits;
       return found->second.asset;
     }
-    ++cacheStats.misses;
+    if (diagnostics) ++cacheStats.misses;
     return {};
   }
   std::uint32_t loadDecoder(std::unique_ptr<AudioDecoderSession> decoder,

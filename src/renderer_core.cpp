@@ -100,7 +100,7 @@ void Renderer::destroyTarget(RenderTarget& target) {
     textureNearestState_.erase(target.texture);
     textureRepeatState_.erase(target.texture);
     glDeleteTextures(1, &target.texture);
-    ++stats_.rendererTargetDestroys;
+    if (diagnostics_) ++stats_.rendererTargetDestroys;
   }
   target = {};
 }
@@ -132,7 +132,7 @@ void Renderer::ensureDepthBuffer(RenderTarget& target) {
   glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, target.width, target.height);
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target.framebuffer);
   glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, target.depth);
-  ++stats_.framebufferChecks;
+  if (diagnostics_) ++stats_.framebufferChecks;
   const bool complete = glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
   if (!complete) {
     glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, 0);
@@ -168,7 +168,7 @@ void Renderer::ensureTarget(RenderTarget& target, int width, int height) {
   glBindFramebuffer(GL_FRAMEBUFFER, replacement.framebuffer);
   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                          GL_TEXTURE_2D, replacement.texture, 0);
-  ++stats_.framebufferChecks;
+  if (diagnostics_) ++stats_.framebufferChecks;
   const bool complete = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
   if (complete) {
     // Keep the previous allocation valid until its replacement is complete.
@@ -180,7 +180,7 @@ void Renderer::ensureTarget(RenderTarget& target, int width, int height) {
       savedDraw = static_cast<GLint>(replacement.framebuffer);
     destroyTarget(target);
     target = replacement;
-    ++stats_.rendererTargetCreates;
+    if (diagnostics_) ++stats_.rendererTargetCreates;
   } else {
     glDeleteFramebuffers(1, &replacement.framebuffer);
     glDeleteTextures(1, &replacement.texture);
@@ -410,7 +410,7 @@ std::uint32_t Renderer::createTileLayer(std::vector<TileLayerTile> tiles) {
   glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
                         reinterpret_cast<void*>(4 * sizeof(float)));
   glBindVertexArray(vertexArray_);
-  ++stats_.bufferUploads;
+  if (diagnostics_) ++stats_.bufferUploads;
   const std::uint32_t handle = nextTileLayer_++;
   tileLayers_.emplace(handle, std::move(layer));
   return handle;
@@ -493,7 +493,7 @@ std::uint32_t Renderer::createMesh(
   glBindVertexArray(vertexArray_);
   mesh.batches.push_back({info->texture, info->width, info->height, 0,
                           static_cast<std::int32_t>(triangles.size()), info->premultiplied});
-  ++stats_.bufferUploads;
+  if (diagnostics_) ++stats_.bufferUploads;
   const std::uint32_t handle = nextTileLayer_++;
   tileLayers_.emplace(handle, std::move(mesh));
   return handle;
@@ -667,7 +667,7 @@ std::optional<ImageInfo> Renderer::renderToImage(int width, int height, AlphaMod
     glBindFramebuffer(GL_FRAMEBUFFER, destinationFramebuffer);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                            GL_TEXTURE_2D, image->texture, 0);
-    ++stats_.framebufferChecks;
+    if (diagnostics_) ++stats_.framebufferChecks;
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
       glDeleteFramebuffers(1, &destinationFramebuffer);
       images_.release(image->handle);
@@ -689,11 +689,11 @@ std::optional<ImageInfo> Renderer::renderToImage(int width, int height, AlphaMod
     glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer_);
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices.data(),
                  GL_STREAM_DRAW);
-    ++stats_.bufferUploads;
+    if (diagnostics_) ++stats_.bufferUploads;
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, offscreenTarget_.texture);
     glDrawArrays(GL_TRIANGLES, 0, 6);
-    ++stats_.drawCalls;
+    if (diagnostics_) ++stats_.drawCalls;
     glDeleteFramebuffers(1, &destinationFramebuffer);
     if (glGetError() != GL_NO_ERROR) {
       images_.release(image->handle);

@@ -151,6 +151,9 @@ test('trace _executeTint observes without replacing guest behavior', () => {
   const events = [];
   const ctx = loadPmjsRuntime({
     Sprite,
+    Graphics: {},
+    Utils: { isOptionValid() { return false; } },
+    PIXI: {},
     __pmjsTrace: {
       active: () => true,
       revision: () => ({ id: 1 }),
@@ -159,9 +162,7 @@ test('trace _executeTint observes without replacing guest behavior', () => {
     },
   });
   const source = fs.readFileSync(path.join(root, 'js/pmjs-mv/renderer.js'), 'utf8');
-  vm.runInContext(slice(source, '// Capture provenance at the point MV',
-    '\nif (typeof PMJS !== \'undefined\' && PMJS.optimizations &&'), ctx,
-  { filename: 'renderer-tint.js' });
+  vm.runInContext(source, ctx, { filename: 'js/pmjs-mv/renderer.js' });
   ctx.PMJS.methods.install();
 
   const sprite = new Sprite();
