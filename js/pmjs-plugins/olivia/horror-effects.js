@@ -2,7 +2,7 @@
 
 // Shared Olivia HorrorEffects guard: Olivia_HorrorEffects
 // Skips inactive HorrorEffects updates when filters are absent.
-// Guard only exact Olivia implementations; leave composed or foreign wrappers untouched.
+// Recognize delegated update methods before skipping inactive effects.
 (function() {
   if (typeof PMJS !== 'undefined' && PMJS.plugins &&
       typeof PMJS.plugins.registerOptimization === 'function') {

@@ -1,5 +1,7 @@
 'use strict';
 
+process.env.PMJS_GRAPHICS_DIAGNOSTICS = '1';
+
 const path = require('node:path');
 const cases = require('./filter-bounds-cases.cjs');
 

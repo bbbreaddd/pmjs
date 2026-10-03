@@ -688,7 +688,10 @@ bool Renderer::clearImageTriangles(ImageHandle handle, const std::vector<float>&
       glUniform4f(clearTriangleRectangleUniform_, rect[0], rect[1], rect[0] + rect[2], rect[1] + rect[3]);
     }
     glDrawArrays(GL_TRIANGLES, 0, 6);
-    if (diagnostics_) ++stats_.bufferUploads; if (diagnostics_) ++stats_.drawCalls;
+    if (diagnostics_) {
+      ++stats_.bufferUploads;
+      ++stats_.drawCalls;
+    }
   }
   return true;
 }

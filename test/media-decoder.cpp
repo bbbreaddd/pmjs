@@ -7,11 +7,23 @@
 
 int main(int argc, char** argv) {
   if (argc != 2) return 2;
-  pmjs::VideoDecoderSession decoder{std::filesystem::path(argv[1])};
+  const std::filesystem::path path(argv[1]);
+  pmjs::VideoDecoderSession ordinary(path);
   std::string error;
+  auto ordinaryFirst = ordinary.frame(0.0, &error);
+  auto ordinaryLater = ordinary.frame(0.25, &error);
+  const auto ordinaryStats = ordinary.stats();
+  if (!ordinaryFirst || !ordinaryLater || ordinaryLater->timestamp < 0.2 ||
+      ordinaryStats.decodedFrames != 0 || ordinaryStats.convertedFrames != 0 ||
+      ordinaryStats.prefetchedFrames != 0 || ordinaryStats.decodeMs != 0 ||
+      ordinaryStats.convertMs != 0) {
+    std::cerr << "uninstrumented decoder changed playback or collected telemetry\n";
+    return 1;
+  }
+  pmjs::VideoDecoderSession decoder(path, true);
 
   auto first = decoder.frame(0.0, &error);
-  if (!first) {
+  if (!first || first->rgba != ordinaryFirst->rgba) {
     std::cerr << error << '\n';
     return 1;
   }
@@ -20,7 +32,7 @@ int main(int argc, char** argv) {
 
   auto reusable = std::move(first->rgba);
   auto catchUp = decoder.frame(0.25, reusable, &error);
-  if (!catchUp) {
+  if (!catchUp || catchUp->rgba != ordinaryLater->rgba) {
     std::cerr << error << '\n';
     return 1;
   }

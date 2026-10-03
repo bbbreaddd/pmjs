@@ -820,8 +820,8 @@ void Renderer::renderScene() {
       const RenderCommand& filter = *filterCommands[filterDepth];
       if (diagnostics_) ++stats_.filterApplications[static_cast<std::size_t>(filter.filterKind)];
       std::array<int, 4> boundedRect{};
-      if (filterBoundsRect(filterCommands[filterDepth], &boundedRect)) {
-        if (diagnostics_) ++stats_.filterBoundedApplications;
+      if (diagnostics_ && filterBoundsRect(filterCommands[filterDepth], &boundedRect)) {
+        ++stats_.filterBoundedApplications;
       }
       if (scissorActive) {
         glDisable(GL_SCISSOR_TEST);

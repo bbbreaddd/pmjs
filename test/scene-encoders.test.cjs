@@ -7,6 +7,13 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const { makeHarness } = require('./helpers/scene-encoder-harness.cjs');
+function traceScene(harness) {
+  harness.sandbox.performance = { now: () => 0 };
+  vm.runInContext(fs.readFileSync(path.join(__dirname,
+    '../js/pmjs-core/operation-trace.js'), 'utf8'), harness.sandbox);
+  harness.sandbox.__pmjsTrace.arm(10);
+  harness.sandbox.__pmjsTrace.beginFrame(0, 0);
+}
 function setTriangleBitmap(sandbox, mesh, values, options = {}) {
   sandbox.PMJS.plugins.mpp.setTriangleBitmap(mesh, {
     points: [values.slice(0,2), values.slice(2,4), values.slice(4,6)], sourceBounds: values.slice(6,10),
@@ -1530,7 +1537,11 @@ test('registry disable selects ordinary sprite encoding with the same packet', (
     child.tint = 0xabcdef;
     root.addChild(child);
   }
+  const untraced = submitOnly(harness, root);
+  assert.ok(Object.values(sandbox.nativeSceneSegmentStats).every(value => value === 0));
+  traceScene(harness);
   const optimized = submitOnly(harness, root);
+  assert.deepEqual(optimized, untraced);
   assert.equal(sandbox.nativeSceneSegmentStats.runs, 1);
   assert.equal(sandbox.nativeSceneSegmentStats.sprites, 6);
   sandbox.PMJS.optimizations.isEnabled = id => id !== 'scene.plain-sprite-segment';
@@ -1541,6 +1552,7 @@ test('registry disable selects ordinary sprite encoding with the same packet', (
 
 test('sprite segments preserve Text preparation and later text changes', () => {
   const harness = makeHarness();
+  traceScene(harness);
   const { sandbox, sprite, makeTexture } = harness;
   class Text extends sandbox.PIXI.Sprite {
     constructor() {

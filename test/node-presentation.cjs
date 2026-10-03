@@ -1,5 +1,7 @@
 'use strict';
 
+process.env.PMJS_GRAPHICS_DIAGNOSTICS = '1';
+
 // Geometry test, one case per ctest registration via environment:
 // PMJS_TEST_GAME, PMJS_WINDOW_SIZE, PMJS_PRESENT_SCALE,
 // PMJS_TEST_EXPECT=vw,vh,vx,vy,filter,letterboxed (or "auto").

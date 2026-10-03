@@ -1,5 +1,7 @@
 'use strict';
 
+process.env.PMJS_GRAPHICS_DIAGNOSTICS = '1';
+
 // Scene-only: renderScene/captureScene, no window presentation.
 const path = require('node:path');
 const native = require(path.resolve(process.argv[2]));

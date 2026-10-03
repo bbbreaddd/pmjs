@@ -2,13 +2,38 @@
 
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 const native = require(path.resolve(process.argv[2]));
+const diagnostics = process.argv[4] !== '--without-diagnostics';
+let ordinaryPixels;
+if (diagnostics) {
+  const output = execFileSync(process.execPath,
+    [__filename, ...process.argv.slice(2, 4), '--without-diagnostics'], { encoding: 'utf8' });
+  const frame = output.match(/^\[pmjs-uninstrumented-frame\] ([A-Za-z0-9+/=]+)$/m);
+  assert.ok(frame, 'uninstrumented child returned its captured frame');
+  ordinaryPixels = Buffer.from(frame[1], 'base64');
+}
+process.env.PMJS_GRAPHICS_DIAGNOSTICS = diagnostics ? '1' : '0';
 native.initialize({gameRoot:path.resolve(process.argv[3]),assetRoot:'',width:32,height:32,windowTitle:'pmjs test'});
 
 native.beginFrame();
 native.render.quad(0, 0, 32, 32, 0.2, 0.3, 0.4, 1);
 native.renderFrame();
 const ordinaryPresentationStats = native.render.stats();
+if (!diagnostics) {
+  assert.equal(ordinaryPresentationStats.diagnostics, false);
+  for (const [name, value] of Object.entries(ordinaryPresentationStats)) {
+    if (typeof value === 'number') assert.equal(value, 0, name + ' is disabled');
+  }
+  assert.ok(ordinaryPresentationStats.filterApplications.every(value => value === 0));
+  const frame = native.canvas.captureScene();
+  const pixels = native.canvas.readPixels(frame.handle, 0, 0, 32, 32);
+  console.log('[pmjs-uninstrumented-frame] ' + Buffer.from(pixels).toString('base64'));
+  native.canvas.release(frame.handle);
+  native.runtime.quit();
+  process.exit(0);
+}
+assert.equal(ordinaryPresentationStats.diagnostics, true);
 if (ordinaryPresentationStats.drawCalls !== 1 ||
     ordinaryPresentationStats.toneComposedPresentationFrames !== 0) {
   throw new Error('ordinary gameplay left the direct blit path: ' +
@@ -17,6 +42,9 @@ if (ordinaryPresentationStats.drawCalls !== 1 ||
 
 assert.equal(ordinaryPresentationStats.rendererTargetCreates, 1,
   'ordinary rendering should allocate only the scene target');
+const withDiagnostics = native.canvas.captureScene();
+assert.deepEqual(Buffer.from(native.canvas.readPixels(withDiagnostics.handle, 0, 0, 32, 32)), ordinaryPixels);
+native.canvas.release(withDiagnostics.handle);
 
 const image = native.images.load('fixture.png');
 const stride = native.scene.schema.valueStride;

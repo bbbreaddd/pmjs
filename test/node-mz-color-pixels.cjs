@@ -1,5 +1,7 @@
 'use strict';
 
+process.env.PMJS_GRAPHICS_DIAGNOSTICS = '1';
+
 const assert = require('node:assert/strict');
 const path = require('node:path');
 

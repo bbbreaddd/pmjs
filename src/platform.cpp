@@ -437,12 +437,17 @@ Platform::Platform(int width, int height, std::string title) {
   if (environmentFlag("PMJS_GRAPHICS_DIAGNOSTICS")) {
     std::cout << "[pmjs] swap_interval requested=" << requestedSwapInterval_
               << " accepted=" << (swapIntervalAccepted_ ? "yes" : "no")
-              << " driver=" << swapInterval_;
+              << " driver=" << swapInterval_
+              << " honored=" << (swapIntervalAccepted_ && swapInterval_ == requestedSwapInterval_ ? "yes" : "no");
     if (swapResult != 0) std::cout << " error=\"" << SDL_GetError() << '\"';
     std::cout << '\n';
     printGraphicsDiagnostics();
   } else if (swapResult != 0) {
     std::cerr << "[pmjs] swap interval unavailable: " << SDL_GetError() << '\n';
+  }
+  if (swapIntervalAccepted_ && swapInterval_ != requestedSwapInterval_) {
+    std::cerr << "[pmjs] SDL reports swap interval " << swapInterval_
+              << " instead of requested " << requestedSwapInterval_ << '\n';
   }
   const auto* renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
   if (environmentFlag("PMJS_REQUIRE_HARDWARE_GL") && softwareRenderer(renderer)) {
