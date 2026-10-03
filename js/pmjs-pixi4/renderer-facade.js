@@ -107,7 +107,8 @@ function createNativePixiRenderer(width, height, options) {
     _transform: null,
     boundTextures: new Array(textureUnitCount),
     emptyTextures: new Array(textureUnitCount),
-    gl: { isContextLost: function() { return false; }, flush: function() {} },
+    gl: { isContextLost: function() { return false; }, flush: function() {},
+      getExtension: function() { return null; } },
     setObjectRenderer: function(nextRenderer) {
       if (this.currentRenderer === nextRenderer) return;
       if (this.currentRenderer && typeof this.currentRenderer.stop === 'function') {

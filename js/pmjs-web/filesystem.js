@@ -44,8 +44,12 @@ function gameReadPath(path) {
 function gameDirectoryEntries(path, entries) {
   var aliases = PMJS.config.virtualFiles &&
     PMJS.config.virtualFiles.directoryEntryAliases || {};
-  var directory = normalizePath(path).replace(/\/$/, '').split('/').pop().toLowerCase();
-  var extensions = aliases[directory];
+  var directories = normalizePath(path).replace(/\/$/, '').toLowerCase().split('/');
+  var extensions;
+  for (var index = directories.length - 1; index >= 0; index--) {
+    extensions = aliases[directories[index]];
+    if (extensions) break;
+  }
   if (!extensions) return entries;
   return entries.map(function(name) {
     var extension = pathModule.extname(name);

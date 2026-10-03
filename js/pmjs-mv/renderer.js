@@ -21,17 +21,7 @@ function renderNativeMvStage(stage) {
     this.frameCount++;
 }
 
-PMJS.methods.own({
-  key: 'Graphics._createRenderer',
-  getTarget: function() {
-    return (typeof Graphics !== 'undefined') ? Graphics : null;
-  },
-  method: '_createRenderer',
-  id: 'pmjs.mv.native-renderer',
-  replace: function() {
-    return createNativeMvRenderer;
-  }
-});
+Graphics._createRenderer = createNativeMvRenderer;
 
 PMJS.methods.own({
   key: 'Graphics.render',

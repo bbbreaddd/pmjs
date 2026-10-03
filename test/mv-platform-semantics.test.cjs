@@ -1104,7 +1104,7 @@ test('storage read coalescing runs underneath plugin wrappers and respects dynam
   assert.equal(physicalReads, 4, 'Live burst must survive reinstall (still a hit, no new physical read)');
 });
 
-test('native renderer ownership is restored after game plugins compose', () => {
+test('native presentation ownership is restored without discarding guest renderer creation', () => {
   const source = fs.readFileSync(path.join(jsDir, 'pmjs-mv/renderer.js'), 'utf8');
   const methodsSource = fs.readFileSync(path.join(jsDir, 'pmjs-core/methods.js'), 'utf8');
   const rendererInstaller = source.slice(0, source.indexOf('var originalIsOptionValid'));
@@ -1117,15 +1117,21 @@ test('native renderer ownership is restored after game plugins compose', () => {
   vm.createContext(context);
   vm.runInContext(methodsSource, context, { filename: 'methods.js' });
   vm.runInContext(rendererInstaller, context);
-  const pluginCreateRenderer = function() {};
+  const baseCreateRenderer = context.Graphics._createRenderer;
+  let pluginCreates = 0;
+  const pluginCreateRenderer = function() {
+    pluginCreates++;
+    return baseCreateRenderer.apply(this, arguments);
+  };
   const pluginRender = function() {};
   context.Graphics._createRenderer = pluginCreateRenderer;
   context.Graphics.render = pluginRender;
   context.PMJS.methods.install();
 
-  assert.notEqual(context.Graphics._createRenderer, pluginCreateRenderer);
+  assert.equal(context.Graphics._createRenderer, pluginCreateRenderer);
   assert.notEqual(context.Graphics.render, pluginRender);
   context.Graphics._createRenderer();
+  assert.equal(pluginCreates, 1);
   assert.equal(typeof context.Graphics._renderer.render, 'function');
   context.Graphics.frameCount = 1023;
   context.Graphics.render({});
@@ -1136,6 +1142,74 @@ test('native renderer ownership is restored after game plugins compose', () => {
   assert.equal(context.Graphics.frameCount, 60 * 60 * 24 + 1,
     'a loaded playtime frame count must survive the next presentation');
 });
+
+for (const composition of ['alias', 'subclass']) {
+  test(`MV renderer preserves ${composition} setup, defaults and post-creation behavior`, () => {
+    for (const roundPixels of [false, true]) {
+      const source = fs.readFileSync(path.join(jsDir, 'pmjs-mv/renderer.js'), 'utf8');
+      const context = {
+        console,
+        calls: [],
+        roundPixels,
+        PIXI: { settings: { RENDER_OPTIONS: { roundPixels: false } } },
+        createNativePixiRenderer(w, h, options) {
+          context.calls.push('create');
+          return { width: w, height: h, view: options.view,
+            roundPixels: context.PIXI.settings.RENDER_OPTIONS.roundPixels };
+        },
+        __pmjsBeforeCreateRenderer() { context.calls.push('hook'); },
+      };
+      context.globalThis = context;
+      vm.createContext(context);
+      vm.runInContext(`
+        var Graphics = class {
+          static _createRenderer() { throw new Error('Browser renderer reached'); }
+          static render() {}
+        };
+        Graphics._width = 640;
+        Graphics._height = 480;
+        Graphics._canvas = {};
+      `, context);
+      vm.runInContext(fs.readFileSync(path.join(jsDir, 'pmjs-core/methods.js'), 'utf8'), context);
+      vm.runInContext(source.slice(0, source.indexOf('var originalIsOptionValid')), context);
+      const preparation = `
+        calls.push('prepare');
+        if (roundPixels) PIXI.settings.RENDER_OPTIONS.roundPixels = true;
+        this._width = 960;
+      `;
+      vm.runInContext(composition === 'alias' ? `
+        var parentCreateRenderer = Graphics._createRenderer;
+        Graphics._createRenderer = function() {
+          ${preparation}
+          parentCreateRenderer.apply(this, arguments);
+          calls.push('post');
+          this._renderer.guestReady = true;
+        };
+      ` : `
+        Graphics = class extends Graphics {
+          static _createRenderer() {
+            ${preparation}
+            super._createRenderer();
+            calls.push('post');
+            this._renderer.guestReady = true;
+          }
+        };
+      `, context);
+      context.PMJS.methods.install();
+      context.PMJS.methods.install();
+      context.Graphics._createRenderer();
+      assert.deepEqual(context.calls, ['prepare', 'hook', 'create', 'post']);
+      assert.equal(context.Graphics._renderer.roundPixels, roundPixels);
+      assert.equal(context.Graphics._renderer.width, 960);
+      assert.equal(context.Graphics._renderer.height, 480);
+      assert.equal(context.Graphics._renderer.view, context.Graphics._canvas);
+      assert.equal(context.Graphics._renderer.guestReady, true);
+      context.calls.length = 0;
+      context.Graphics._createRenderer();
+      assert.deepEqual(context.calls, ['prepare', 'hook', 'create', 'post']);
+    }
+  });
+}
 
 test('document.title and nw.Window.title read from and write to authoritative __pmjsGameInfo', () => {
   const eventsCode = fs.readFileSync(path.join(jsDir, 'pmjs-web/events.js'), 'utf8');

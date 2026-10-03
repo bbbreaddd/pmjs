@@ -42,6 +42,10 @@ test('virtual file aliases are configured data', () => {
     'data/System.json');
   assert.deepEqual(Array.from(context.contract.gameDirectoryEntries(
     '/game/locale/', ['en.json', 'readme.txt'])), ['en.LANG', 'readme.txt']);
+  assert.deepEqual(Array.from(context.contract.gameDirectoryEntries(
+    '/game/Locale/en/', ['dialogue.json', 'readme.txt'])), ['dialogue.LANG', 'readme.txt']);
+  assert.deepEqual(Array.from(context.contract.gameDirectoryEntries(
+    '/game/other/en/', ['dialogue.json'])), ['dialogue.json']);
 });
 
 test('registered CommonJS requests are exact and cannot be replaced', () => {

@@ -136,6 +136,13 @@ function makeRendererHarness() {
     syncPresentation: renderer._pmjsSyncPresentation, renderer };
 }
 
+test('native renderer allows guest extension queries without advertising unsupported extensions', () => {
+  const { renderer } = makeRendererHarness();
+  assert.equal(renderer.gl.getExtension('WEBGL_lose_context'), null);
+  assert.equal(renderer.gl.getExtension('PMJS_unknown_extension'), null);
+  assert.equal(renderer.gl.isContextLost(), false);
+});
+
 test('video src selection loads asynchronously after listeners can be installed', async () => {
   const { context, calls } = makeHarness();
   const video = context.document.createElement('video');
