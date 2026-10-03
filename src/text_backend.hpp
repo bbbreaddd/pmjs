@@ -20,7 +20,7 @@ struct TextBackendStats {
   size_t cacheBytes = 0, cacheLimit = 0, cacheEntries = 0, fontStacks = 0;
   uint64_t layoutRequests = 0, layoutHits = 0, drawCalls = 0, shapeNs = 0, drawNs = 0;
   std::string libraryPath;
-  size_t scratchPeakBytes = 0;
+  size_t scratchPeakBytes = 0, scratchBytes = 0, layoutCacheBytes = 0, layoutCacheEntries = 0, metricCacheBytes = 0;
 };
 class TextBackend {
  public:

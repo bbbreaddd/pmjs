@@ -46,6 +46,9 @@ PMJS_SKIA65_API int pmjs_skia65_measure(pmjs_skia65_font* font, const char* utf8
 PMJS_SKIA65_API int pmjs_skia65_draw(pmjs_skia65_font* font, const char* utf8, size_t utf8_bytes,
   const pmjs_skia65_style* style, float x, float baseline, uint8_t* rgba,
   int width, int height, size_t row_bytes, int origin_x, int origin_y);
+PMJS_SKIA65_API int pmjs_skia65_draw_bgra(pmjs_skia65_font* font, const char* utf8, size_t utf8_bytes,
+  const pmjs_skia65_style* style, float x, float baseline, uint8_t* bgra,
+  int width, int height, size_t row_bytes, int origin_x, int origin_y);
 PMJS_SKIA65_API int pmjs_skia65_measure_metrics(pmjs_skia65_font* font, const char* utf8, size_t utf8_bytes,
   const pmjs_skia65_style* style, pmjs_skia65_metrics* metrics);
 PMJS_SKIA65_API void pmjs_skia65_get_stats(pmjs_skia65_stats* stats);
@@ -54,6 +57,7 @@ PMJS_SKIA65_API void pmjs_skia65_cache_limits(size_t bytes, int entries);
  * Integer crop translation preserves the release's glyph subpixel phase. */
 PMJS_SKIA65_API int pmjs_skia65_bounds(pmjs_skia65_font* font, const char* utf8, size_t utf8_bytes,
   const pmjs_skia65_style* style, float x, float baseline, int width, int height, int bounds[4]);
+PMJS_SKIA65_API void pmjs_skia65_font_cache_stats(pmjs_skia65_font* font, size_t* bytes, size_t* entries, size_t* metric_bytes);
 PMJS_SKIA65_API void pmjs_skia65_set_telemetry(int enabled);
 
 #ifdef __cplusplus

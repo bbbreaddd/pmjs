@@ -454,8 +454,9 @@ function colorToRgba(color) {
 function colorWithGlobalAlpha(color, globalAlpha) {
   var rgba = colorToRgba(color);
   var sourceAlpha = rgba & 255;
-  var alpha = Math.round(sourceAlpha *
-    Math.max(0, Math.min(1, Number(globalAlpha))));
+  // Chromium 65 scales paint alpha with an eight-bit fixed-point factor.
+  var scale = Math.round(Math.max(0, Math.min(1, Number(globalAlpha))) * 256);
+  var alpha = (sourceAlpha * scale) >> 8;
   return ((rgba & 0xffffff00) | alpha) >>> 0;
 }
 

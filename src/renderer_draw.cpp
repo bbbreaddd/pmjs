@@ -612,7 +612,8 @@ void Renderer::renderScene() {
       continue;
     }
     const auto info = command.image == 0 ? std::optional<ImageInfo>{} :
-                                          images_.lookup(command.image);
+      (command.pixiSpritePacking && !command.premultipliedSpriteTexture ?
+        images_.lookupPremultiplied(command.image) : images_.lookup(command.image));
     if (command.image != 0 && !info) continue;
     const float textureWidth = info ? static_cast<float>(info->width) : 1.0F;
     const float textureHeight = info ? static_cast<float>(info->height) : 1.0F;

@@ -9,7 +9,9 @@ PMJS_SKIA65_2 {
     pmjs_skia65_get_stats;
     pmjs_skia65_cache_limits;
     pmjs_skia65_draw;
+    pmjs_skia65_draw_bgra;
     pmjs_skia65_bounds;
     pmjs_skia65_set_telemetry;
+    pmjs_skia65_font_cache_stats;
   local: *;
 };

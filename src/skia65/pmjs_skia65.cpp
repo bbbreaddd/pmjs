@@ -18,14 +18,26 @@
 #include <cmath>
 #include <cstring>
 #include <memory>
+#include <list>
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 namespace {
+struct GlyphMetrics {
+  SkScalar width;
+  SkRect bounds;
+};
 struct Face {
   sk_sp<SkTypeface> typeface;
   hb_face_t* face = nullptr;
-  ~Face() { if (face) hb_face_destroy(face); }
+  hb_font_t* shapingParent = nullptr;
+  pmjs_skia65_style metricStyle{};
+  std::unordered_map<uint16_t, GlyphMetrics> metrics;
+  ~Face() {
+    if (shapingParent) hb_font_destroy(shapingParent);
+    if (face) hb_face_destroy(face);
+  }
 };
 struct Run {
   sk_sp<SkTextBlob> blob;
@@ -40,11 +52,15 @@ uint64_t elapsed(Clock::time_point start) {
 }
 
 struct pmjs_skia65_font {
+  struct Layout {
+    std::string text;
+    pmjs_skia65_style style;
+    Run run;
+    size_t bytes;
+  };
   std::vector<std::unique_ptr<Face>> faces;
-  std::string recentText;
-  pmjs_skia65_style recentStyle{};
-  Run recentRun;
-  bool cached = false;
+  std::list<Layout> layouts;
+  size_t layoutBytes = 0;
 };
 
 namespace {
@@ -56,6 +72,27 @@ hb_blob_t* table(hb_face_t*, hb_tag_t tag, void* data) {
   typeface->getTableData(tag, 0, size, bytes);
   return hb_blob_create(bytes, size, HB_MEMORY_MODE_WRITABLE, bytes,
     [](void* value) { delete[] static_cast<char*>(value); });
+}
+
+bool sameFontStyle(const pmjs_skia65_style& a, const pmjs_skia65_style& b) {
+  return a.size == b.size && a.bold == b.bold && a.italic == b.italic &&
+    a.hinting == b.hinting && a.auto_hint == b.auto_hint;
+}
+
+struct MetricContext {
+  SkPaint* paint;
+  Face* face;
+  size_t limit;
+};
+GlyphMetrics glyphMetrics(MetricContext& context, uint16_t id) {
+  auto& metrics = context.face->metrics;
+  auto found = metrics.find(id);
+  if (found != metrics.end()) return found->second;
+  GlyphMetrics result;
+  context.paint->getTextWidths(&id, sizeof(id), &result.width, &result.bounds);
+  if (metrics.size() == context.limit) metrics.clear();
+  metrics.emplace(id, result);
+  return result;
 }
 
 SkPaint fontPaint(Face& font, const pmjs_skia65_style& style) {
@@ -76,14 +113,13 @@ SkPaint fontPaint(Face& font, const pmjs_skia65_style& style) {
 
 hb_position_t advance(hb_font_t*, void* data, hb_codepoint_t glyph, void*) {
   uint16_t id = glyph;
-  SkScalar width;
-  static_cast<SkPaint*>(data)->getTextWidths(&id, sizeof(id), &width);
+  const auto width = glyphMetrics(*static_cast<MetricContext*>(data), id).width;
   // Blink's SkiaTextMetrics treats HarfBuzz positions as 16.16.
   return static_cast<hb_position_t>(width * 65536.0f);
 }
 
 hb_position_t kerning(hb_font_t*, void* data, hb_codepoint_t left, hb_codepoint_t right, void*) {
-  auto* paint = static_cast<SkPaint*>(data);
+  auto* paint = static_cast<MetricContext*>(data)->paint;
   uint16_t glyphs[] = {static_cast<uint16_t>(left), static_cast<uint16_t>(right)};
   int32_t adjustment = 0;
   if (!paint->getTypeface()->getKerningPairAdjustments(glyphs, 2, &adjustment)) return 0;
@@ -93,8 +129,7 @@ hb_position_t kerning(hb_font_t*, void* data, hb_codepoint_t left, hb_codepoint_
 
 hb_bool_t extents(hb_font_t*, void* data, hb_codepoint_t glyph, hb_glyph_extents_t* output, void*) {
   uint16_t id = glyph;
-  SkRect bounds;
-  static_cast<SkPaint*>(data)->getTextWidths(&id, sizeof(id), nullptr, &bounds);
+  const auto bounds = glyphMetrics(*static_cast<MetricContext*>(data), id).bounds;
   output->x_bearing = static_cast<int>(bounds.fLeft * 65536);
   output->y_bearing = static_cast<int>(-bounds.fTop * 65536);
   output->width = static_cast<int>(bounds.width() * 65536);
@@ -116,36 +151,45 @@ Run layout(pmjs_skia65_font* font, const std::string& text, const pmjs_skia65_st
   auto style = requested;
   style.size = std::floor(style.size * 100.0f) / 100.0f;
   ++counters.layout_requests;
-  const auto& previous = font->recentStyle;
-  if (font->cached && font->recentText == text && previous.size == style.size &&
-      previous.bold == style.bold && previous.italic == style.italic &&
-      previous.hinting == style.hinting && previous.auto_hint == style.auto_hint) {
+  auto found = std::find_if(font->layouts.begin(), font->layouts.end(), [&](const auto& entry) {
+    return entry.text == text && sameFontStyle(entry.style, style);
+  });
+  if (found != font->layouts.end()) {
     ++counters.layout_hits;
-    return font->recentRun;
+    font->layouts.splice(font->layouts.begin(), font->layouts, found);
+    return font->layouts.front().run;
   }
   Clock::time_point start;
   if (telemetryEnabled) start = Clock::now();
   std::vector<SkPaint> paints;
   std::vector<pmjs::TextFont> fonts;
+  std::vector<MetricContext> contexts;
   paints.reserve(font->faces.size());
   fonts.reserve(font->faces.size());
-  auto* funcs = hb_font_funcs_create();
-  hb_font_funcs_set_glyph_h_advance_func(funcs, advance, nullptr, nullptr);
-  hb_font_funcs_set_glyph_h_kerning_func(funcs, kerning, nullptr, nullptr);
-  hb_font_funcs_set_glyph_extents_func(funcs, extents, nullptr, nullptr);
+  contexts.reserve(font->faces.size());
+  static const std::unique_ptr<hb_font_funcs_t, decltype(&hb_font_funcs_destroy)> funcs([] {
+    auto* value = hb_font_funcs_create();
+    hb_font_funcs_set_glyph_h_advance_func(value, advance, nullptr, nullptr);
+    hb_font_funcs_set_glyph_h_kerning_func(value, kerning, nullptr, nullptr);
+    hb_font_funcs_set_glyph_extents_func(value, extents, nullptr, nullptr);
+    hb_font_funcs_make_immutable(value);
+    return value;
+  }(), hb_font_funcs_destroy);
   for (size_t i = 0; i < font->faces.size(); ++i) {
-    paints.push_back(fontPaint(*font->faces[i], style));
-    auto* parent = hb_font_create(font->faces[i]->face);
-    hb_ot_font_set_funcs(parent);
-    auto* shapedFont = hb_font_create_sub_font(parent);
-    hb_font_destroy(parent);
-    hb_font_set_funcs(shapedFont, funcs, &paints.back(), nullptr);
+    auto& face = *font->faces[i];
+    if (!sameFontStyle(face.metricStyle, style)) {
+      face.metrics.clear();
+      face.metricStyle = style;
+    }
+    paints.push_back(fontPaint(face, style));
+    contexts.push_back({&paints.back(), &face, 128 / font->faces.size()});
+    auto* shapedFont = hb_font_create_sub_font(face.shapingParent);
+    hb_font_set_funcs(shapedFont, funcs.get(), &contexts.back(), nullptr);
     const int scale = static_cast<int>(style.size * 65536.0f);
     hb_font_set_scale(shapedFont, scale, scale);
     hb_font_set_ptem(shapedFont, style.size / (96.0f / 72.0f));
     fonts.push_back({static_cast<uint32_t>(i), shapedFont});
   }
-  hb_font_funcs_destroy(funcs);
   uint64_t fallbackCalls = 0;
   pmjs::ShapedText shaped;
   try {
@@ -176,8 +220,7 @@ Run layout(pmjs_skia65_font* font, const std::string& text, const pmjs_skia65_st
       output.glyphs[i - begin] = id;
       output.pos[(i - begin) * 2] = x;
       output.pos[(i - begin) * 2 + 1] = y;
-      SkRect bounds;
-      paint.getTextWidths(&id, sizeof(id), nullptr, &bounds);
+      auto bounds = glyphMetrics(contexts[strike], id).bounds;
       if (!bounds.isEmpty()) {
         bounds.offset(x, y);
         if (hasInk) ink.join(bounds); else ink = bounds;
@@ -202,10 +245,16 @@ Run layout(pmjs_skia65_font* font, const std::string& text, const pmjs_skia65_st
   run.metrics.ascent = hasInk ? -ink.fTop : 0;
   run.metrics.descent = hasInk ? ink.fBottom : 0;
   run.blob = builder.make();
-  font->cached = shaped.glyphs.size() * 32 + text.size() <= 64 * 1024;
-  font->recentRun = font->cached ? run : Run{};
-  font->recentText = font->cached ? text : "";
-  font->recentStyle = style;
+  const size_t bytes = shaped.glyphs.size() * 128 + text.size() + sizeof(pmjs_skia65_font::Layout) +
+    sizeof(SkTextBlob) + 2 * sizeof(void*);
+  if (bytes <= 64 * 1024) {
+    while (!font->layouts.empty() && (font->layouts.size() >= 16 || font->layoutBytes + bytes > 64 * 1024)) {
+      font->layoutBytes -= font->layouts.back().bytes;
+      font->layouts.pop_back();
+    }
+    font->layouts.push_front({text, style, run, bytes});
+    font->layoutBytes += bytes;
+  }
   if (telemetryEnabled) counters.shape_ns += elapsed(start);
   return run;
 }
@@ -250,6 +299,8 @@ pmjs_skia65_font* pmjs_skia65_font_open_many(const char* const* filenames, size_
     auto face = std::make_unique<Face>();
     face->typeface = std::move(typeface);
     face->face = hb_face_create_for_tables(table, face->typeface.get(), nullptr);
+    face->shapingParent = hb_font_create(face->face);
+    hb_ot_font_set_funcs(face->shapingParent);
     font->faces.push_back(std::move(face));
   }
   return font->faces.empty() ? nullptr : font.release();
@@ -285,9 +336,9 @@ int pmjs_skia65_bounds(pmjs_skia65_font* font, const char* utf8, size_t utf8Byte
   return 1;
 } catch (...) { return 0; }
 
-int pmjs_skia65_draw(pmjs_skia65_font* font, const char* utf8, size_t utf8Bytes,
+static int draw(pmjs_skia65_font* font, const char* utf8, size_t utf8Bytes,
   const pmjs_skia65_style* style, float x, float baseline, uint8_t* rgba,
-  int width, int height, size_t rowBytes, int originX, int originY) try {
+  int width, int height, size_t rowBytes, int originX, int originY, bool bgra) try {
   if (!rgba || rowBytes < static_cast<size_t>(width) * 4 || height <= 0 ||
       rowBytes > SIZE_MAX / static_cast<size_t>(height)) return 0;
   Clock::time_point start;
@@ -304,14 +355,16 @@ int pmjs_skia65_draw(pmjs_skia65_font* font, const char* utf8, size_t utf8Bytes,
   if (croppedWidth <= 0 || croppedHeight <= 0) return 1;
   // This release accepts native N32 (BGRA on Linux). Swizzle only the bounded
   // ink region; no alpha rounding or changes outside the region occur here.
-  std::vector<uint8_t> scratch(static_cast<size_t>(croppedWidth) * croppedHeight * 4);
-  for (int row = 0; row < croppedHeight; ++row) for (int column = 0; column < croppedWidth; ++column) {
+  std::vector<uint8_t> scratch;
+  if (!bgra) scratch.resize(static_cast<size_t>(croppedWidth) * croppedHeight * 4);
+  if (!bgra) for (int row = 0; row < croppedHeight; ++row) for (int column = 0; column < croppedWidth; ++column) {
     const auto* input = rgba + (top + row) * rowBytes + (left + column) * 4;
     auto* output = scratch.data() + (static_cast<size_t>(row) * croppedWidth + column) * 4;
     output[0] = input[2]; output[1] = input[1]; output[2] = input[0]; output[3] = input[3];
   }
   auto surface = SkSurface::MakeRasterDirect(
-    SkImageInfo::MakeN32(croppedWidth, croppedHeight, kPremul_SkAlphaType), scratch.data(), croppedWidth * 4);
+    SkImageInfo::MakeN32(croppedWidth, croppedHeight, kPremul_SkAlphaType),
+    bgra ? rgba + top * rowBytes + left * 4 : scratch.data(), bgra ? rowBytes : croppedWidth * 4);
   if (!surface) return 0;
   SkPaint paint;
   paint.setAntiAlias(true);
@@ -326,7 +379,7 @@ int pmjs_skia65_draw(pmjs_skia65_font* font, const char* utf8, size_t utf8Bytes,
   // coordinates. This retains the original float addition/subpixel phase.
   surface->getCanvas()->translate(-originX - left, -originY - top);
   if (run.blob) surface->getCanvas()->drawTextBlob(run.blob, x, baseline, paint);
-  for (int row = 0; row < croppedHeight; ++row) for (int column = 0; column < croppedWidth; ++column) {
+  if (!bgra) for (int row = 0; row < croppedHeight; ++row) for (int column = 0; column < croppedWidth; ++column) {
     const auto* input = scratch.data() + (static_cast<size_t>(row) * croppedWidth + column) * 4;
     auto* output = rgba + (top + row) * rowBytes + (left + column) * 4;
     output[0] = input[2]; output[1] = input[1]; output[2] = input[0]; output[3] = input[3];
@@ -334,6 +387,28 @@ int pmjs_skia65_draw(pmjs_skia65_font* font, const char* utf8, size_t utf8Bytes,
   if (telemetryEnabled) counters.draw_ns += elapsed(start);
   return 1;
 } catch (...) { return 0; }
+
+int pmjs_skia65_draw(pmjs_skia65_font* font, const char* utf8, size_t utf8Bytes,
+  const pmjs_skia65_style* style, float x, float baseline, uint8_t* rgba,
+  int width, int height, size_t rowBytes, int originX, int originY) {
+  return draw(font, utf8, utf8Bytes, style, x, baseline, rgba, width, height, rowBytes, originX, originY, false);
+}
+
+int pmjs_skia65_draw_bgra(pmjs_skia65_font* font, const char* utf8, size_t utf8Bytes,
+  const pmjs_skia65_style* style, float x, float baseline, uint8_t* bgra,
+  int width, int height, size_t rowBytes, int originX, int originY) {
+  return draw(font, utf8, utf8Bytes, style, x, baseline, bgra, width, height, rowBytes, originX, originY, true);
+}
+
+void pmjs_skia65_font_cache_stats(pmjs_skia65_font* font, size_t* bytes, size_t* entries, size_t* metricBytes) {
+  if (bytes) *bytes = font ? font->layoutBytes : 0;
+  if (entries) *entries = font ? font->layouts.size() : 0;
+  if (metricBytes) {
+    *metricBytes = 0;
+    if (font) for (const auto& face : font->faces)
+      *metricBytes += face->metrics.size() * sizeof(GlyphMetrics);
+  }
+}
 
 void pmjs_skia65_set_telemetry(int enabled) { telemetryEnabled = enabled != 0; }
 

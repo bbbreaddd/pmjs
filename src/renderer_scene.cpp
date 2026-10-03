@@ -310,9 +310,10 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
       const float red = static_cast<float>((tint >> 16U) & 0xffU) / 255.0F;
       const float green = static_cast<float>((tint >> 8U) & 0xffU) / 255.0F;
       const float blue = static_cast<float>(tint & 0xffU) / 255.0F;
+      // Match the fractional-alpha ScreenSprite draw in Chromium 65/Pixi 4.
       queueQuad(0, 0, static_cast<float>(queueWidth_),
                 static_cast<float>(queueHeight_),
-                {red, green, blue, state.alpha});
+                {red, green, blue, std::floor(state.alpha * 255.0F) / 255.0F});
       frame_.commands.back().primitive = RenderCommand::Primitive::screenFill;
       frame_.commands.back().clip = state.clip;
       frame_.commands.back().clipped = state.clipped;

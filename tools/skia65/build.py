@@ -118,11 +118,11 @@ def build(options):
         "exports": subprocess.check_output(["nm", "-D", "--defined-only", library], text=True)}
     exported = {line.split()[-1].split("@@")[0] for line in manifest["exports"].splitlines()}
     expected = {"pmjs_skia65_identity", "pmjs_skia65_font_open",
-                "pmjs_skia65_font_close", "pmjs_skia65_measure", "pmjs_skia65_draw",
+                "pmjs_skia65_font_close", "pmjs_skia65_measure", "pmjs_skia65_draw", "pmjs_skia65_draw_bgra",
                 "pmjs_skia65_font_open_many", "pmjs_skia65_measure_metrics",
-                "pmjs_skia65_get_stats", "pmjs_skia65_cache_limits", "pmjs_skia65_bounds", "pmjs_skia65_set_telemetry"}
+                "pmjs_skia65_get_stats", "pmjs_skia65_cache_limits", "pmjs_skia65_bounds", "pmjs_skia65_set_telemetry", "pmjs_skia65_font_cache_stats"}
     # GNU ld emits an absolute symbol for the version node; LLVM lld does not.
-    # Both must export exactly these eleven functions with the same ABI version.
+    # Both must export exactly these functions with the same ABI version.
     functions = exported - {"PMJS_SKIA65_2"}
     if functions != expected:
         raise RuntimeError("Incorrect private C ABI exports: extra=" + str(functions - expected) +

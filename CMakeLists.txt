@@ -225,7 +225,7 @@ if(BUILD_TESTING)
   set_tests_properties(node-glyph-cache node-text-layout-cache PROPERTIES ENVIRONMENT
     "LIBGL_ALWAYS_SOFTWARE=1;PMJS_TEXT_BACKEND=freetype")
   if(PMJS_ENABLE_SKIA65)
-    foreach(PMJS_SKIA_TEST IN ITEMS node-skia65-text node-skia65-canvas)
+    foreach(PMJS_SKIA_TEST IN ITEMS node-skia65-text node-skia65-canvas node-skia65-cache)
       add_test(NAME ${PMJS_SKIA_TEST} COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
         "${CMAKE_CURRENT_SOURCE_DIR}/test/${PMJS_SKIA_TEST}.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
       set_tests_properties(${PMJS_SKIA_TEST} PROPERTIES ENVIRONMENT

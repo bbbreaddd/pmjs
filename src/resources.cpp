@@ -191,7 +191,10 @@ std::unique_ptr<ImageFileSource> ImageStore::openFile(const std::filesystem::pat
 
 ImageStore::~ImageStore() {
   for (auto& slot : slots_) {
-    if (slot.live) glDeleteTextures(1, &slot.texture);
+    if (slot.live) {
+      clearPremultipliedTexture(slot);
+      glDeleteTextures(1, &slot.texture);
+    }
   }
 }
 
@@ -435,7 +438,8 @@ std::size_t ImageStore::cpuBytes() const {
 
 std::size_t ImageStore::residentBytes(const Slot& slot) {
   return static_cast<std::size_t>(slot.width) *
-      static_cast<std::size_t>(slot.height) * 4U +
+      static_cast<std::size_t>(slot.height) * 4U *
+      (slot.premultipliedTexture && slot.premultipliedTexture != slot.texture ? 2U : 1U) +
       (slot.cachedPixels ? slot.cachedPixels->rgba.capacity() : 0U);
 }
 
@@ -491,7 +495,8 @@ std::vector<ImageMemoryEntry> ImageStore::memoryEntries() const {
     if (!slot.live) continue;
     result.push_back({makeHandle(index, slot.generation), slot.width, slot.height,
       slot.references, slot.inFlight.load(std::memory_order_acquire), slot.pins,
-      static_cast<std::size_t>(slot.width) * slot.height * 4U,
+      static_cast<std::size_t>(slot.width) * slot.height * 4U *
+        (slot.premultipliedTexture && slot.premultipliedTexture != slot.texture ? 2U : 1U),
       slot.cachedPixels ? slot.cachedPixels->rgba.capacity() : 0U,
       slot.lastUsedSerial,
       slot.references == 0 && slot.pins == 0 &&
@@ -512,6 +517,7 @@ bool ImageStore::updateRgba(ImageHandle handle, const void* pixels) {
                   GL_RGBA, GL_UNSIGNED_BYTE, pixels);
   const bool ok = glGetError() == GL_NO_ERROR;
   if (ok) {
+    clearPremultipliedTexture(slots_[(handle & indexMask) - 1U]);
     ++textureFullUpdates_;
     textureUploadBytes_ += static_cast<std::uint64_t>(info->width) *
         static_cast<std::uint64_t>(info->height) * 4U;
@@ -535,6 +541,7 @@ bool ImageStore::updateRgbaRegion(ImageHandle handle, int x, int y, int width,
   glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
   const bool ok = glGetError() == GL_NO_ERROR;
   if (ok) {
+    clearPremultipliedTexture(slots_[(handle & indexMask) - 1U]);
     ++textureRegionUpdates_;
     textureUploadBytes_ += static_cast<std::uint64_t>(width) *
         static_cast<std::uint64_t>(height) * 4U;
@@ -562,6 +569,63 @@ std::optional<ImageInfo> ImageStore::lookup(ImageHandle handle) const {
 bool ImageStore::isRenderTarget(ImageHandle handle) const {
   if (!lookup(handle)) return false;
   return slots_[(handle & indexMask) - 1U].renderTarget;
+}
+
+std::optional<ImageInfo> ImageStore::lookupPremultiplied(ImageHandle handle) {
+  auto info = lookup(handle);
+  if (!info || info->premultiplied) return info;
+  auto& slot = slots_[(handle & indexMask) - 1U];
+  // Render targets are already framebuffer pixels, not decoded straight images.
+  if (slot.gpuOnly) return info;
+  if (!slot.premultipliedTexture) {
+    auto pixels = readTexturePixels(*info);
+    if (!pixels) return std::nullopt;
+    bool changed = false;
+    for (std::size_t offset = 0; offset < pixels->rgba.size(); offset += 4) {
+      const unsigned alpha = pixels->rgba[offset + 3];
+      for (std::size_t channel = 0; channel < 3; ++channel) {
+        auto& value = pixels->rgba[offset + channel];
+        const auto converted = static_cast<std::uint8_t>((value * alpha + 127) / 255);
+        changed |= converted != value;
+        value = converted;
+      }
+    }
+    if (!changed) {
+      slot.premultipliedTexture = slot.texture;
+    } else {
+      while (glGetError() != GL_NO_ERROR) {}
+      GLuint texture = 0;
+      glGenTextures(1, &texture);
+      glBindTexture(GL_TEXTURE_2D, texture);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+      glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, info->width, info->height, 0,
+        GL_RGBA, GL_UNSIGNED_BYTE, pixels->rgba.data());
+      if (!texture || glGetError() != GL_NO_ERROR) {
+        if (texture) glDeleteTextures(1, &texture);
+        return std::nullopt;
+      }
+      slot.premultipliedTexture = texture;
+      ++textureCreates_;
+      textureUploadBytes_ += pixels->rgba.size();
+      gpuBytes_ += pixels->rgba.size();
+      peakGpuBytes_ = std::max(peakGpuBytes_, gpuBytes_);
+    }
+  }
+  info->texture = slot.premultipliedTexture;
+  info->premultiplied = true;
+  return info;
+}
+
+void ImageStore::clearPremultipliedTexture(Slot& slot) {
+  if (slot.premultipliedTexture && slot.premultipliedTexture != slot.texture) {
+    glDeleteTextures(1, &slot.premultipliedTexture);
+    gpuBytes_ -= static_cast<std::size_t>(slot.width) * slot.height * 4U;
+  }
+  slot.premultipliedTexture = 0;
 }
 
 bool ImageStore::retain(ImageHandle handle) {
@@ -603,6 +667,7 @@ bool ImageStore::touch(ImageHandle handle) {
 
 void ImageStore::destroySlot(std::size_t index) {
   auto& slot = slots_[index];
+  clearPremultipliedTexture(slot);
   if (!slot.cacheKey.empty()) pathCache_.erase(slot.cacheKey);
   glDeleteTextures(1, &slot.texture);
   gpuBytes_ -= static_cast<std::size_t>(slot.width) *

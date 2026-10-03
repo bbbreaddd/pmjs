@@ -106,6 +106,8 @@ class ImageStore {
   bool endUse(ImageHandle handle);
   void update();
   std::optional<ImageInfo> lookup(ImageHandle handle) const;
+  // Pixi samples premultiplied texels; keep the straight CPU snapshot intact.
+  std::optional<ImageInfo> lookupPremultiplied(ImageHandle handle);
   ImageHandle fallbackHandle();
   std::optional<ImageInfo> acquireFallback();
   std::uint64_t fallbackUses() const { return fallbackUses_; }
@@ -146,6 +148,7 @@ class ImageStore {
     bool gpuOnly = false;
     bool renderTarget = false;
     bool premultiplied = false;
+    std::uint32_t premultipliedTexture = 0;
     bool retainCpuPixels = false;
     std::string cacheKey;
     std::filesystem::path sourcePath;
@@ -157,6 +160,7 @@ class ImageStore {
   void markUsed(Slot& slot);
   static std::size_t residentBytes(const Slot& slot);
   void destroySlot(std::size_t index);
+  void clearPremultipliedTexture(Slot& slot);
   std::deque<Slot> slots_;
   std::unordered_map<std::string, ImageHandle> pathCache_;
   std::size_t liveCount_ = 0;

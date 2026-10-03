@@ -306,7 +306,9 @@ napi_value canvasGlyphStats(napi_env env, napi_callback_info) try {
     };
     set("cacheBytes", stats.cacheBytes); set("cacheLimit", stats.cacheLimit);
     set("cacheEntries", stats.cacheEntries); set("fontStacks", stats.fontStacks);
-    set("scratchPeakBytes", stats.scratchPeakBytes);
+    set("scratchPeakBytes", stats.scratchPeakBytes); set("scratchBytes", stats.scratchBytes);
+    set("layoutCacheBytes", stats.layoutCacheBytes); set("layoutCacheEntries", stats.layoutCacheEntries);
+    set("metricCacheBytes", stats.metricCacheBytes);
     set("layoutRequests", stats.layoutRequests); set("layoutHits", stats.layoutHits);
     set("drawCalls", stats.drawCalls); set("shapeNs", stats.shapeNs); set("drawNs", stats.drawNs);
     return result;

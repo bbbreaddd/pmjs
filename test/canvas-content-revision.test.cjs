@@ -213,7 +213,7 @@ test('Canvas native text resolves fonts and preserves outline/body alpha without
   assert.equal(calls[0][6], 128);
   assert.equal(calls[0][7], 2.9);
   assert.equal(calls[0][8].lineJoin, 'round');
-  assert.equal(calls[1][6], 0xffffff40);
+  assert.equal(calls[1][6], 0xffffff3f);
   assert.equal(calls[1][7], 0);
   assert.equal(drawing.globalAlpha, 0.25);
   assert.equal(drawing.font, '12px old-font');
