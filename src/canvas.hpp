@@ -1,6 +1,7 @@
 #pragma once
 
 #include "resources.hpp"
+#include "text_backend.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -25,12 +26,12 @@ struct CanvasInfo {
 
 struct CanvasTextMetrics {
   double width = 0;
-  int actualLeft = 0;
-  int actualRight = 0;
-  int actualAscent = 0;
-  int actualDescent = 0;
-  int fontAscent = 0;
-  int fontDescent = 0;
+  double actualLeft = 0;
+  double actualRight = 0;
+  double actualAscent = 0;
+  double actualDescent = 0;
+  double fontAscent = 0;
+  double fontDescent = 0;
 };
 
 struct CanvasTextStats {
@@ -89,22 +90,22 @@ class CanvasStore {
                  int destinationX, int destinationY,
                  int destinationWidth, int destinationHeight, float alpha);
   bool drawText(CanvasHandle handle, const std::vector<std::filesystem::path>& fontPaths,
-                const std::string& text, int x, int y, int pixelSize,
-                std::uint32_t rgba, int strokeWidth = 0);
+                const std::string& text, float x, float y, float pixelSize,
+                std::uint32_t rgba, float strokeWidth = 0, const CanvasTextStyle& style = {});
   std::optional<double> measureText(const std::vector<std::filesystem::path>& fontPaths,
-                                 const std::string& text, int pixelSize) const;
+                                 const std::string& text, float pixelSize, const CanvasTextStyle& style = {}) const;
   std::optional<CanvasTextMetrics> measureTextMetrics(
     const std::vector<std::filesystem::path>& fontPaths, const std::string& text,
-    int pixelSize) const;
+    float pixelSize, const CanvasTextStyle& style = {}) const;
   bool drawText(CanvasHandle handle, const std::filesystem::path& fontPath,
-                const std::string& text, int x, int y, int pixelSize,
-                std::uint32_t rgba, int strokeWidth = 0) {
+                const std::string& text, float x, float y, float pixelSize,
+                std::uint32_t rgba, float strokeWidth = 0, const CanvasTextStyle& style = {}) {
     return drawText(handle, std::vector<std::filesystem::path>{fontPath}, text,
-                    x, y, pixelSize, rgba, strokeWidth);
+                    x, y, pixelSize, rgba, strokeWidth, style);
   }
   std::optional<double> measureText(const std::filesystem::path& fontPath,
-                                    const std::string& text, int pixelSize) const {
-    return measureText(std::vector<std::filesystem::path>{fontPath}, text, pixelSize);
+                                    const std::string& text, float pixelSize, const CanvasTextStyle& style = {}) const {
+    return measureText(std::vector<std::filesystem::path>{fontPath}, text, pixelSize, style);
   }
   bool canLoadFont(const std::filesystem::path& fontPath);
   std::optional<std::uint32_t> pixel(CanvasHandle handle, int x, int y);
@@ -131,6 +132,8 @@ class CanvasStore {
   std::size_t deferredCommandCount() const;
   std::size_t deferredCommandBytes() const;
   CanvasTextStats glyphCacheStats() const;
+  const char* textBackendName() const { return textBackend_.name(); }
+  TextBackendStats textBackendStats() const { return textBackend_.stats(); }
   void setGlyphCacheLimits(std::size_t maxBytes, std::size_t maxEntries);
 
  private:
@@ -170,11 +173,12 @@ class CanvasStore {
   struct DrawTextCmd {
     std::vector<std::filesystem::path> fontPaths;
     std::string text;
-    int x;
-    int y;
-    int pixelSize;
+    float x;
+    float y;
+    float pixelSize;
     std::uint32_t rgba;
-    int strokeWidth;
+    float strokeWidth;
+    CanvasTextStyle style;
   };
 
   struct BlurCmd {};
@@ -232,8 +236,8 @@ class CanvasStore {
   void clearRectNow(Content& surface, int x, int y, int width, int height);
   bool drawImageNow(Content& destination, const DrawImageCmd& command);
   bool drawTextNow(Content& surface, const std::vector<std::filesystem::path>& fontPaths,
-                   const std::string& text, int x, int y, int pixelSize,
-                   std::uint32_t rgba, int strokeWidth);
+                   const std::string& text, float x, float y, float pixelSize,
+                   std::uint32_t rgba, float strokeWidth, const CanvasTextStyle& style);
   bool blurNow(Content& surface);
 
   static void blendPixel(Content& surface, int x, int y, std::uint32_t rgba,
@@ -243,6 +247,7 @@ class CanvasStore {
   static void markDirty(Content& surface, int x, int y, int width, int height);
 
   ImageStore& images_;
+  TextBackend textBackend_;
   std::unique_ptr<FontState> fonts_;
   // Non-owning registry includes versions kept alive only by queued draws.
   std::unordered_set<Content*> contents_;

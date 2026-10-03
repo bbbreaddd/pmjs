@@ -62,8 +62,7 @@ class Platform {
   std::vector<SDL_GameController*> controllers_;
   std::uint16_t down_ = 0;
   std::uint16_t pressed_ = 0;
-  bool hotkeyDown_ = false;
-  bool startDown_ = false;
+  std::vector<int> exitHotkeys_ = {8, 16};
   std::vector<int> keysDown_;
   std::vector<int> keysPressed_;
   std::vector<KeyEvent> keyEvents_;

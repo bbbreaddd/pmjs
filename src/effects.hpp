@@ -31,6 +31,7 @@ class Effects {
   void stopAll(std::uint32_t context);
   bool exists(std::uint32_t handle) const;
   bool validHandle(std::uint32_t handle) const;
+  float dynamicInput(std::uint32_t handle, int index) const;
   void control(std::uint32_t handle, const std::string& operation,
                const std::array<double, 4>& values);
   std::uint32_t draw(const EffectDraw& draw);

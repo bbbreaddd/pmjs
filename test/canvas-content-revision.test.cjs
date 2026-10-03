@@ -211,12 +211,29 @@ test('Canvas native text resolves fonts and preserves outline/body alpha without
   assert.deepEqual(Array.from(calls[0][1]), ['fonts/fixture.ttf']);
   assert.deepEqual(calls[0].slice(2, 6), ['hello', 4, 19, 18]);
   assert.equal(calls[0][6], 128);
-  assert.equal(calls[0][7], 2);
+  assert.equal(calls[0][7], 2.9);
+  assert.equal(calls[0][8].lineJoin, 'round');
   assert.equal(calls[1][6], 0xffffff40);
   assert.equal(calls[1][7], 0);
   assert.equal(drawing.globalAlpha, 0.25);
   assert.equal(drawing.font, '12px old-font');
   assert.equal(drawing.fillStyle, '#123456');
+});
+
+test('ordinary Canvas text preserves fractional placement, font size, stroke and synthetic styles', () => {
+  const context = harness();
+  const calls = [];
+  context.PMJS.fonts = { resolveDescriptor() {
+    return { size: 24.375, style: 'italic', weight: 700, faces: [{ path: 'fixture.ttf' }] };
+  } };
+  context.NativeHost.canvas.drawText = (...args) => calls.push(args);
+  const drawing = new context.CanvasElement().getContext('2d');
+  drawing.lineWidth = 2.75; drawing.lineJoin = 'bevel'; drawing.lineCap = 'square'; drawing.miterLimit = 3.5;
+  drawing.strokeText('AV', 4.25, 35.875);
+  assert.deepEqual(calls[0].slice(2, 6), ['AV', 4.25, 35.875, 24.375]);
+  assert.equal(calls[0][7], 2.75);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0][8])),
+    { bold: true, italic: true, lineJoin: 'bevel', lineCap: 'square', miterLimit: 3.5 });
 });
 
 test('Canvas text measurement uses the same descriptor resolver and preserves string conversion', () => {
@@ -227,7 +244,9 @@ test('Canvas text measurement uses the same descriptor resolver and preserves st
   } };
   context.NativeHost.canvas.measureText = (...args) => {
     assert.deepEqual(Array.from(args[0]), ['fixture.ttf']);
-    assert.deepEqual(args.slice(1), ['123', 21]);
+    assert.deepEqual(args.slice(1, 3), ['123', 21]);
+    assert.equal(args[3].bold, false);
+    assert.equal(args[3].italic, false);
     return 37;
   };
   assert.equal(context.PMJS.web.canvas.measureTextWidth(123, '21px Fixture'), 37);

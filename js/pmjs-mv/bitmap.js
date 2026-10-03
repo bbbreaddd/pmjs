@@ -202,10 +202,10 @@ if (typeof _Bitmap_blt === 'function') {
 
       text = String(text);
       var descriptor = this._makeFontNameText();
-      var baseline = Math.round(y + lineHeight - (lineHeight - this.fontSize * 0.7) / 2);
-      PMJS.web.canvas.drawNativeText(context, text, Math.round(x), baseline, {
+      var baseline = y + lineHeight - (lineHeight - this.fontSize * 0.7) / 2;
+      PMJS.web.canvas.drawNativeText(context, text, x, baseline, {
         font: descriptor, outlineColor: this.outlineColor,
-        outlineWidth: Math.round(this.outlineWidth), color: this.textColor
+        outlineWidth: this.outlineWidth, color: this.textColor
       });
       pmjsBitmapCanvasChanged(this);
       this._setDirty();

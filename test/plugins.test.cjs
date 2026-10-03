@@ -44,16 +44,27 @@ test('manifests are one-shot and unfinished plugins appear unloaded at report ti
   assert.throws(() => ctx.PMJS.plugins.snapshotEffectiveManifest([]), /already captured/);
 });
 
-test('named callbacks run once, late subscribers run immediately, errors do not stop peers', () => {
-  const errors = [];
-  const ctx = loadPmjsRuntime({ console: { error(...args) { errors.push(args); } } });
+test('named callbacks run once and late subscribers run immediately', () => {
+  const ctx = loadPmjsRuntime();
   const seen = [];
-  ctx.PMJS.plugins.onLoaded('YED_Tiled', 'bad', () => { throw new Error('boom'); });
   ctx.PMJS.plugins.onLoaded('yed_tiled.js', 'good', () => seen.push('loaded'));
   ctx.PMJS.plugins.execute('YED_Tiled', () => {});
   ctx.PMJS.plugins.onLoaded('YED_Tiled', 'late', () => seen.push('late'));
   assert.deepEqual(seen, ['loaded', 'late']);
-  assert.equal(errors.length, 1);
+});
+
+test('unexpected loaded and late phase installer failures propagate to the caller', () => {
+  const errors = [];
+  const ctx = loadPmjsRuntime({ console: { error(...args) { errors.push(args); } } });
+  const seen = [];
+  ctx.PMJS.plugins.onLoaded('Example', 'bad', () => { throw new Error('loaded installer'); });
+  ctx.PMJS.plugins.onLoaded('Example', 'next', () => seen.push('next'));
+  assert.throws(() => ctx.PMJS.plugins.execute('Example', () => {}), /loaded installer/);
+  assert.deepEqual(seen, [], 'boot stops before further installers can mutate state');
+  assert.throws(() => ctx.PMJS.plugins.onLoaded('Example', 'late', () => { throw new Error('late installer'); }), /late installer/);
+  ctx.PMJS.phases.emit('afterPlugins');
+  assert.throws(() => ctx.PMJS.phases.on('afterPlugins', 'late', () => { throw new Error('late phase'); }), /late phase/);
+  assert.equal(errors.length, 3);
 });
 
 test('failed plugin execution keeps the error and method mutation attribution', () => {

@@ -556,15 +556,14 @@ test('phases run multiple hooks in registration order', () => {
   assert.deepEqual(events, ['hook-1', 'hook-2']);
 });
 
-test('named plugin callbacks run once and errors do not stop peers', () => {
+test('named plugin installer failures stop peers and propagate', () => {
   const context = vm.createContext({ console });
   vm.runInContext(readPluginInfra(), context);
   const seen = [];
   context.PMJS.plugins.onLoaded('SomePlugin', () => { throw new Error('boom'); });
   context.PMJS.plugins.onLoaded('someplugin.js', () => seen.push('loaded'));
-  context.PMJS.plugins.execute('SomePlugin', function() {});
-  context.PMJS.plugins.execute('SomePlugin', function() {});
-  assert.deepEqual(seen, ['loaded']);
+  assert.throws(() => context.PMJS.plugins.execute('SomePlugin', function() {}), /boom/);
+  assert.deepEqual(seen, []);
 });
 
 test('Scene_Map same-map transfer does not short-circuit through reuse and preserves stock transfer hooks', () => {

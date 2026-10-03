@@ -1,6 +1,7 @@
 (function() {
 var nativeCompatibilityHits = Object.create(null);
 var renderCompatibilityHits = 0;
+var nativeCompatibilityObservations = Object.create(null);
 var nativeCompatibilityStrict =
   NativeHost.runtime.env('PMJS_STRICT_COMPAT') === '1';
 var nativeCompatibilityVerbose =
@@ -30,9 +31,8 @@ function nativeCompatibilityHit(capability, detail) {
 }
 
 function nativeCompatibilityObserved(capability, detail) {
-  var count = (nativeCompatibilityHits[capability] || 0) + 1;
-  nativeCompatibilityHits[capability] = count;
-  if (capability.indexOf('render.') === 0) renderCompatibilityHits++;
+  var count = (nativeCompatibilityObservations[capability] || 0) + 1;
+  nativeCompatibilityObservations[capability] = count;
   if (count !== 1) return;
   var event = {
     capability: capability,

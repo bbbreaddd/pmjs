@@ -62,6 +62,60 @@ test('Bitmap image hooks wrap the final guest implementation', () => {
   assert.equal(other.cleared, 1);
 });
 
+for (const strict of [false, true]) {
+  test('MV request completion preserves image cleanup in ' +
+      (strict ? 'strict' : 'production') + ' compatibility mode', () => {
+    const listeners = new Set(['load', 'error']);
+    function NativeImage() { this.src = 'requested.png'; }
+    NativeImage.prototype.removeEventListener = function(name) {
+      listeners.delete(name);
+    };
+    function Bitmap() {}
+    Bitmap._reuseImages = [];
+    // MV's request-only completion contract returns the image to the pool.
+    Bitmap.prototype._onLoad = function() {
+      this._loadingState = 'requestCompleted';
+      if (!this._decodeAfterRequest) this._clearImgInstance();
+    };
+    Bitmap.prototype._clearImgInstance = function() {
+      this._image.removeEventListener('load', this._loadListener);
+      this._image.removeEventListener('error', this._errorListener);
+      Bitmap._reuseImages.push(this._image);
+      this._image = null;
+    };
+    const ctx = loadPmjsRuntime({
+      Bitmap, NativeImage,
+      console: { log() {}, warn() {} },
+      NativeHost: { runtime: {
+        env: name => strict && name === 'PMJS_STRICT_COMPAT' ? '1' : '',
+      } },
+    });
+    vm.runInContext(fs.readFileSync(path.join(root,
+      'js/pmjs-core/compatibility.js'), 'utf8'), ctx);
+    const source = fs.readFileSync(path.join(root, 'js/pmjs-mv/images.js'), 'utf8');
+    vm.runInContext(slice(source, 'function pmjsBitmapRequestImageWrap',
+      '\nPMJS.methods.wrap({'), ctx);
+    ctx.PMJS.methods.install();
+
+    const bitmap = new Bitmap();
+    const image = bitmap._image = new NativeImage();
+    bitmap._onLoad();
+    assert.equal(bitmap._loadingState, 'requestCompleted');
+    assert.equal(image.src, '');
+    assert.equal(bitmap._image, null);
+    assert.deepEqual(Bitmap._reuseImages, [image]);
+    assert.equal(listeners.size, 0);
+    assert.equal(ctx.PMJS.compat.count(), 0);
+    if (strict) {
+      assert.throws(() => ctx.PMJS.compat.hit('unsupported.test'),
+        /unsupported native capability/);
+    } else {
+      ctx.PMJS.compat.hit('unsupported.test');
+    }
+    assert.equal(ctx.PMJS.compat.count(), 1);
+  });
+}
+
 test('engine leaves guest WindowLayer initialize and filters untouched', () => {
   function WindowLayer() {}
   WindowLayer.prototype.initialize = function(value) {

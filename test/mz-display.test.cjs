@@ -4,8 +4,8 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { createMzContext, runModule } = require('./helpers/mz-context.cjs');
 
-function harness() {
-  const fixture = createMzContext();
+function harness(options) {
+  const fixture = createMzContext(options);
   const { context } = fixture;
   fixture.created = [];
   fixture.released = [];
@@ -150,7 +150,7 @@ test('MZ windows exclude overlaps with disjoint regions, including partial openn
       assert.equal(count, covered ? 0 : 1, `overlap or gap at ${x},${y}`);
     }
     top.drawShape = function() {};
-    assert.throws(() => f.render(layer), /unsupported MZ window shape/);
+    assert.throws(() => f.render(layer), /render.window-shape/);
     assert.equal(f.submissions.length, 1);
   }
 });
@@ -180,3 +180,38 @@ test('transform-time client scrolling and neutral AlphaFilter clipping reach the
   assert.ok(!Array.from({ length: second.count }, (_, i) => second.metadata[i * 7]).includes(6),
     'neutral alpha still clips without allocating a filter target');
 });
+
+for (const strictCompatibility of [false, true]) {
+  test('MZ display gaps preserve legal descendants in production and reject strictly (' + strictCompatibility + ')', () => {
+    for (const failure of ['window-shape', 'tile-atlas-size']) {
+      const f = harness({ strictCompatibility }), c = f.context;
+      const root = new c.PIXI.Container();
+      let producer;
+      if (failure === 'window-shape') {
+        producer = new c.WindowLayer();
+        const window = new c.Window(0, 0, 32, 24);
+        window.drawShape = () => {};
+        window.addChild(f.sprite(101, 0, 0, 8, 8)); producer.addChild(window);
+      } else {
+        producer = new c.Tilemap.Layer();
+        producer._images = [{ width: 1025, height: 24, _nativeImage: { handle: 100 } }];
+        producer._needsTexturesUpdate = true; producer._elements = [[0, 0, 0, 0, 0, 24, 24]];
+        producer.addChild(f.sprite(101, 0, 0, 8, 8));
+      }
+      root.addChild(producer); root.addChild(f.sprite(102, 0, 0, 8, 8));
+      if (strictCompatibility) {
+        assert.throws(() => f.render(root), new RegExp('render.' + failure));
+        assert.equal(f.submissions.length, 0);
+      } else {
+        const packet = f.render(root);
+        const handles = Array.from({ length: packet.count }, (_, i) => packet.metadata[i * 7 + 2]).filter(Boolean);
+        assert.deepEqual(handles, [101, 102]);
+      }
+      assert.equal(c.PMJS.compat.count('render.'), 1);
+      if (failure === 'tile-atlas-size') {
+        assert.equal(producer._needsTexturesUpdate, true);
+        assert.equal(f.created.length, 0);
+      }
+    }
+  });
+}

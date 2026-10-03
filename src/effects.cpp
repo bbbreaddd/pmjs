@@ -1,8 +1,8 @@
 #include "effects.hpp"
+#include "effects_audio.hpp"
 #include "media_service.hpp"
 
 #include <Effekseer.h>
-#include <Effekseer/Effekseer.EffectNode.h>
 #include <EffekseerRendererGL.h>
 #include <GLES3/gl3.h>
 #include <algorithm>
@@ -132,8 +132,9 @@ class Files final : public Effekseer::FileInterface {
 
 class Wave final : public Effekseer::SoundData {
  public:
-  explicit Wave(std::string source) : path(std::move(source)) {}
+  Wave(std::string source, int sourceChannels) : path(std::move(source)), channels(sourceChannels) {}
   std::string path;
+  int channels;
 };
 
 class WaveLoader final : public Effekseer::SoundLoader {
@@ -150,7 +151,12 @@ class WaveLoader final : public Effekseer::SoundLoader {
       return nullptr;
     }
     media_.release(voice);
-    return Effekseer::MakeRefPtr<Wave>(source->string());
+    const auto info = MediaDecoder::probe(*source, &error);
+    if (!info || info->audioChannels < 1) {
+      files_->error = "cannot inspect effect sound: " + name + ": " + error;
+      return nullptr;
+    }
+    return Effekseer::MakeRefPtr<Wave>(source->string(), info->audioChannels);
   }
  private:
   Vfs& vfs_;
@@ -164,7 +170,6 @@ class WavePlayer final : public Effekseer::SoundPlayer {
   explicit WavePlayer(MediaService& media) : media_(media) {}
   ~WavePlayer() override { StopAll(); }
   Effekseer::SoundHandle Play(Effekseer::SoundTag tag, const InstanceParameter& p) override {
-    if (p.Mode3D) throw std::runtime_error("Effekseer spatial sound is unsupported");
     const auto wave = p.Data.DownCast<Wave>();
     if (wave.Get() == nullptr) return nullptr;
     std::erase_if(voices_, [&](const auto& item) {
@@ -183,7 +188,15 @@ class WavePlayer final : public Effekseer::SoundPlayer {
     std::string error;
     const auto id = media_.loadAudio(wave->path, &error, {AudioIntent::effect, wave->path, wave->path});
     if (!id) throw std::runtime_error("cannot play effect sound: " + error);
-    media_.setParameters(id, p.Volume, std::pow(2.0F, p.Pitch), p.Pan);
+    if (p.Mode3D) {
+      // Authored Distance sets Web Audio maxDistance; inverse attenuation ignores it.
+      const auto gains = spatialEffectGains(wave->channels, p.Position.X, p.Position.Y, p.Position.Z);
+      if (!media_.setStereoGains(id, gains[0], gains[1])) {
+        media_.release(id);
+        throw std::runtime_error("invalid effect sound position");
+      }
+    }
+    media_.setParameters(id, p.Volume, std::pow(2.0F, p.Pitch), p.Mode3D ? 0 : p.Pan);
     media_.play(id, false, 0);
     auto voice = std::make_unique<Voice>(Voice{id, tag, nextVoice_++});
     const auto handle = voice.get();
@@ -330,13 +343,6 @@ std::uint32_t Effects::load(std::uint32_t contextId, const std::string& path, fl
   require(effect->GetMaterialCount(), &Effekseer::Effect::GetMaterial, "material");
   require(effect->GetCurveCount(), &Effekseer::Effect::GetCurve, "curve");
   require(effect->GetWaveCount(), &Effekseer::Effect::GetWave, "sound");
-  static_cast<Effekseer::EffectNodeImplemented*>(effect->GetRoot())->Traverse([](auto* node) {
-    if (node->SoundType == Effekseer::ParameterSoundType_Use &&
-        node->Sound.PanType == Effekseer::ParameterSoundPanType_3D) {
-      throw std::runtime_error("Effekseer spatial sound is unsupported");
-    }
-    return true;
-  });
   const auto id = impl_->id();
   impl_->effects.emplace(id, Impl::Effect{contextId, effect});
   return id;
@@ -382,6 +388,12 @@ bool Effects::exists(std::uint32_t id) const {
     lookup(impl_->contexts, found->second.context, "context").manager->Exists(found->second.handle);
 }
 
+float Effects::dynamicInput(std::uint32_t id, int index) const {
+  if (index < 0 || index > 3) throw std::runtime_error("invalid effect dynamic input index");
+  const auto handle = lookup(impl_->handles, id, "handle");
+  return lookup(impl_->contexts, handle.context, "context").manager->GetDynamicInput(handle.handle, index);
+}
+
 void Effects::control(std::uint32_t id, const std::string& operation, const std::array<double, 4>& v) {
   const auto handle = lookup(impl_->handles, id, "handle");
   auto& manager = lookup(impl_->contexts, handle.context, "context").manager;
@@ -391,6 +403,24 @@ void Effects::control(std::uint32_t id, const std::string& operation, const std:
   else if (operation == "scale") manager->SetScale(h, v[0], v[1], v[2]);
   else if (operation == "speed") manager->SetSpeed(h, v[0]);
   else if (operation == "target") manager->SetTargetLocation(h, v[0], v[1], v[2]);
+  else if (operation == "color") {
+    for (const auto channel : v) {
+      if (channel < 0 || channel > 255) throw std::runtime_error("invalid effect color");
+    }
+    manager->SetAllColor(h, Effekseer::Color(static_cast<std::uint8_t>(v[0]),
+      static_cast<std::uint8_t>(v[1]), static_cast<std::uint8_t>(v[2]), static_cast<std::uint8_t>(v[3])));
+  }
+  else if (operation == "frame") {
+    if (v[0] < 0 || v[0] > 10000) throw std::runtime_error("invalid effect frame");
+    manager->UpdateHandleToMoveToFrame(h, static_cast<float>(v[0]));
+  }
+  else if (operation == "dynamicInput" || operation == "trigger") {
+    if (v[0] < 0 || v[0] > 3 || std::floor(v[0]) != v[0]) {
+      throw std::runtime_error("invalid effect input index");
+    }
+    if (operation == "dynamicInput") manager->SetDynamicInput(h, static_cast<int>(v[0]), static_cast<float>(v[1]));
+    else manager->SendTrigger(h, static_cast<int>(v[0]));
+  }
   else if (operation == "seed") {
     if (v[0] < std::numeric_limits<int>::min() || v[0] > std::numeric_limits<int>::max()) {
       throw std::runtime_error("invalid effect random seed");

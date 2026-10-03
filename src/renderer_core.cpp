@@ -94,6 +94,7 @@ void Renderer::setDrawableSize(int width, int height) {
 }
 
 void Renderer::destroyTarget(RenderTarget& target) {
+  if (target.depth) glDeleteRenderbuffers(1, &target.depth);
   if (target.framebuffer) glDeleteFramebuffers(1, &target.framebuffer);
   if (target.texture) {
     textureNearestState_.erase(target.texture);
@@ -102,6 +103,45 @@ void Renderer::destroyTarget(RenderTarget& target) {
     ++stats_.rendererTargetDestroys;
   }
   target = {};
+}
+
+void Renderer::swapTargetColors(RenderTarget& left, RenderTarget& right) {
+  // Depth belongs to the main scene, even when a color pass exchanges FBOs.
+  std::swap(left, right);
+  if (!left.depth && !right.depth) return;
+  std::swap(left.depth, right.depth);
+  GLint savedRead = 0, savedDraw = 0;
+  glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &savedRead);
+  glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &savedDraw);
+  for (const auto* target : {&left, &right}) {
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target->framebuffer);
+    glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                              GL_RENDERBUFFER, target->depth);
+  }
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, savedRead);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, savedDraw);
+}
+
+void Renderer::ensureDepthBuffer(RenderTarget& target) {
+  if (target.depth) return;
+  GLint savedBuffer = 0, savedFramebuffer = 0;
+  glGetIntegerv(GL_RENDERBUFFER_BINDING, &savedBuffer);
+  glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &savedFramebuffer);
+  glGenRenderbuffers(1, &target.depth);
+  glBindRenderbuffer(GL_RENDERBUFFER, target.depth);
+  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, target.width, target.height);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target.framebuffer);
+  glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, target.depth);
+  ++stats_.framebufferChecks;
+  const bool complete = glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+  if (!complete) {
+    glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, 0);
+    glDeleteRenderbuffers(1, &target.depth);
+    target.depth = 0;
+  }
+  glBindRenderbuffer(GL_RENDERBUFFER, savedBuffer);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, savedFramebuffer);
+  if (!complete) throw std::runtime_error("renderer depth framebuffer is incomplete");
 }
 
 void Renderer::ensureTarget(RenderTarget& target, int width, int height) {
@@ -348,7 +388,7 @@ std::uint32_t Renderer::createTileLayer(std::vector<TileLayerTile> tiles) {
     append(left, bottom, sourceLeft, sourceBottom);
     if (layer.batches.empty() || layer.batches.back().texture != image.texture) {
       layer.batches.push_back({image.texture, image.width, image.height,
-        static_cast<std::int32_t>(vertices.size() / 6U - 6U), 6});
+        static_cast<std::int32_t>(vertices.size() / 6U - 6U), 6, image.premultiplied});
     } else {
       layer.batches.back().count += 6;
     }
@@ -452,7 +492,7 @@ std::uint32_t Renderer::createMesh(
                         reinterpret_cast<void*>(4 * sizeof(float)));
   glBindVertexArray(vertexArray_);
   mesh.batches.push_back({info->texture, info->width, info->height, 0,
-                          static_cast<std::int32_t>(triangles.size())});
+                          static_cast<std::int32_t>(triangles.size()), info->premultiplied});
   ++stats_.bufferUploads;
   const std::uint32_t handle = nextTileLayer_++;
   tileLayers_.emplace(handle, std::move(mesh));
@@ -679,10 +719,10 @@ std::optional<ImageInfo> Renderer::renderToImage(int width, int height, AlphaMod
 
 std::size_t Renderer::renderTargetBytes() const {
   const auto bytes = [](const RenderTarget& target) {
-    return static_cast<std::size_t>(target.width) * target.height * 4U;
+    return static_cast<std::size_t>(target.width) * target.height * (target.depth ? 8U : 4U);
   };
   std::size_t total = bytes(sceneTarget_) + bytes(offscreenTarget_) +
-    bytes(filterTarget_) + bytes(toneOverlayTarget_) + bytes(bloomTarget_);
+    bytes(effectTarget_) + bytes(filterTarget_) + bytes(toneOverlayTarget_) + bytes(bloomTarget_);
   for (const auto& target : groupTargets_) total += bytes(target);
   return total;
 }

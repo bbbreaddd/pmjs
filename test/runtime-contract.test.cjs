@@ -177,13 +177,13 @@ test('PMJS.compat.hit logs on first hit, stacks on verbose, and throws on strict
     assert.equal(warnings[1], '[pmjs-compat] render.mask');
     assert.equal(context.PMJS.compat.count('render.'), 1);
     context.PMJS.compat.observed('render.sprite');
-    assert.equal(context.PMJS.compat.count('render.'), 2);
+    assert.equal(context.PMJS.compat.count('render.'), 1);
     assert.equal(context.PMJS.compat.count('filter.'), 2);
-    assert.equal(context.PMJS.compat.count(), 4);
+    assert.equal(context.PMJS.compat.count(), 3);
     const snapshot = context.PMJS.compat.dump();
     context.PMJS.compat.hit('render.mask');
     assert.equal(snapshot['render.mask'], 1, 'dump remains a snapshot');
-    assert.equal(context.PMJS.compat.count('render.'), 3);
+    assert.equal(context.PMJS.compat.count('render.'), 2);
   }
 
   // Verbose: logs concise message and stack on first hit

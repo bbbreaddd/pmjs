@@ -1860,3 +1860,29 @@ test('a global guest Sprite transform hook does not force unrelated scenes onto 
   sandbox.renderNativeStage(scene, undefined, undefined, undefined, false, null, sandbox.PMJS.pixi4.getStageRenderOptions(scene));
   assert.equal(calls,1);
 });
+
+test('real compatibility observations preserve exact frames while unsupported hits degrade them', () => {
+  for (const strict of [false, true]) {
+    const h = makeHarness(), { sandbox, sprite } = h;
+    sandbox.NativeHost.runtime = { env: name => name === 'PMJS_STRICT_COMPAT' && strict ? '1' : undefined };
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-core/compatibility.js'), 'utf8'), sandbox);
+    const root = new sandbox.PIXI.Container(), cached = sprite();
+    cached._cacheAsBitmap = true;
+    cached._cacheData = { sprite: sprite() };
+    root.addChild(cached);
+    const render = () => sandbox.renderNativeStage(root, undefined, undefined, undefined, false, null,
+      sandbox.PMJS.pixi4.getStageRenderOptions(root));
+    render(); render();
+    assert.equal(sandbox.PMJS.compat.count('render.'), 0);
+    assert.equal(sandbox.renderNativeStage._framesDegraded || 0, 0);
+    const custom = sprite(); custom.pluginName = 'custom'; root.addChild(custom);
+    if (strict) {
+      const submissions = h.submitted.length;
+      assert.throws(render, /unsupported native capability/);
+      assert.equal(h.submitted.length, submissions);
+    } else {
+      render(); render();
+      assert.equal(sandbox.renderNativeStage._framesDegraded, 2);
+    }
+  }
+});

@@ -200,3 +200,74 @@ test('failed atomic file replacement keeps the previous content and removes its 
   assert.equal(host.readText('result'), 'previous');
   assert.deepEqual(fs.readdirSync(path.join(overlay, 'files')), ['result']);
 });
+
+function coloredPng(width, color) {
+  return require('./helpers/png.cjs').png(width, 1,
+    Buffer.from(Array.from({ length: width * 4 }, (_, i) => color[i % 4])));
+}
+function imagePixel(image, x = 0) {
+  const canvas = native.canvas.create(image.width, image.height);
+  try {
+    native.canvas.drawImage(canvas.handle, image.handle, 0, 0, image.width, image.height,
+      0, 0, image.width, image.height, 1);
+    return Array.from(native.canvas.readPixels(canvas.handle, x, 0, 1, 1));
+  } finally { native.canvas.release(canvas.handle); }
+}
+
+test('image replacement admits current pixels and preserves retained and lazy old owners', async t => {
+  const { guest } = fixture(t);
+  guest.writeFileSync('versioned.png', coloredPng(1, [255, 0, 0, 255]));
+  const old = native.images.load('versioned.png');
+  const retained = await native.images.loadAsync('versioned.png', true);
+  assert.equal(retained.handle, old.handle);
+  guest.writeFileSync('versioned.png', coloredPng(2, [0, 0, 255, 255]));
+  const current = await native.images.loadAsync('versioned.png', true);
+  try {
+    assert.notEqual(current.handle, old.handle);
+    assert.equal(current.width, 2); assert.equal(old.width, 1);
+    assert.deepEqual(imagePixel(old), [255, 0, 0, 255]);
+    assert.deepEqual(imagePixel(retained), [255, 0, 0, 255]);
+    assert.deepEqual(imagePixel(current, 1), [0, 0, 255, 255]);
+  } finally { for (const image of [old, retained, current]) native.images.release(image.handle); }
+});
+
+test('lazy image CPU pixels retain their upload after replacement, deletion and recreation', t => {
+  const { guest } = fixture(t);
+  guest.writeFileSync('lazy.png', coloredPng(1, [255, 0, 0, 255]));
+  const old = native.images.load('lazy.png');
+  guest.writeFileSync('lazy.png', coloredPng(2, [0, 0, 255, 255]));
+  const second = native.images.load('lazy.png');
+  guest.unlinkSync('lazy.png');
+  assert.throws(() => native.images.load('lazy.png'), /cannot load image/);
+  guest.writeFileSync('lazy.png', coloredPng(3, [0, 255, 0, 255]));
+  const current = native.images.load('lazy.png');
+  try {
+    assert.equal(current.width, 3);
+    assert.deepEqual(imagePixel(old), [255, 0, 0, 255]);
+    assert.deepEqual(imagePixel(second, 1), [0, 0, 255, 255]);
+    assert.deepEqual(imagePixel(current, 2), [0, 255, 0, 255]);
+    for (let frame = 0; frame < 62; frame++) { native.beginFrame(); native.renderScene(); }
+    assert.deepEqual(imagePixel(old), [255, 0, 0, 255], 'expiration of the CPU cache cannot reopen the replaced file');
+  } finally { for (const image of [old, second, current]) native.images.release(image.handle); }
+});
+
+test('replacement during pending image loads preserves each file version and coalesces only matching sources', async t => {
+  const { guest } = fixture(t);
+  guest.writeFileSync('pending.png', coloredPng(1, [255, 0, 0, 255]));
+  const before = native.images.memory(0);
+  const first = native.images.loadAsync('pending.png');
+  const alias = native.images.loadAsync('PENDING.png', true);
+  guest.writeFileSync('pending.png', coloredPng(2, [0, 0, 255, 255]));
+  const replacement = native.images.loadAsync('pending.png');
+  const queued = native.images.memory(0);
+  assert.equal(queued.decodeJobs - before.decodeJobs, 2);
+  assert.equal(queued.coalescedRequests - before.coalescedRequests, 1);
+  const [old, shared, current] = await Promise.all([first, alias, replacement]);
+  try {
+    assert.equal(old.handle, shared.handle); assert.notEqual(old, shared);
+    assert.notEqual(old.handle, current.handle);
+    assert.equal(old.width, 1); assert.equal(current.width, 2);
+    assert.deepEqual(imagePixel(old), [255, 0, 0, 255]);
+    assert.deepEqual(imagePixel(current, 1), [0, 0, 255, 255]);
+  } finally { for (const image of [old, shared, current]) native.images.release(image.handle); }
+});

@@ -1,0 +1,142 @@
+{
+  "engine": "1.8.1",
+  "pixi": "5.3.12",
+  "chromium": "151.0.7922.34",
+  "driver": "playwright-core 1.57.0",
+  "graphics": {
+    "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
+    "renderer": "ANGLE (Mesa, llvmpipe (LLVM 20.1.2 256 bits), OpenGL ES 3.2)",
+    "attributes": {
+      "alpha": true,
+      "antialias": false,
+      "depth": true,
+      "desynchronized": false,
+      "failIfMajorPerformanceCaveat": false,
+      "powerPreference": "default",
+      "premultipliedAlpha": true,
+      "preserveDrawingBuffer": true,
+      "stencil": true,
+      "xrCompatible": false
+    }
+  },
+  "scripts": {
+    "libs/pixi.js": "fb291f5fc93ffe857215164c38e15a41bd142703d4e9fa384376e59472a02a0a",
+    "libs/effekseer.min.js": "040d5d2c077bf07441a25562cbe389312638f3bc9d600d049e35fc2dbc8abac8",
+    "rmmz_core.js": "07fd688f1208f28e310565b2ad78d38ec603dbc0cb7a86f5cf1eed166bd52d87",
+    "rmmz_managers.js": "9c2359b55aacc0393d7271f36c0dcd76f281a94a30ef47152c06e528e523e77d",
+    "rmmz_sprites.js": "ec1fb26645d7b061e46f33e9d12f8384a5b6d6279a3e64b5eebc4c467c5b6b10",
+    "libs/effekseer.wasm": "7f144a3cc4cae65c4e2b9806483e565cc3b7123448c4b2311ece33b15f3f653d"
+  },
+  "effects": {
+    "Square": {
+      "file": "SeededSquare.efkefc",
+      "scale": 1,
+      "seek": true,
+      "sha256": "090f3a431abfb9b622807927d404e7766709cac1b6d5ed91a1fda7773b4c0cea"
+    },
+    "Laser": {
+      "file": "SeededLaser.efkefc",
+      "scale": 1,
+      "seek": true,
+      "sha256": "9249dced3f8f188edc110a6c92d8c67013215ca2f4b12131f666cbf6469e5baf"
+    },
+    "Ribbon": {
+      "file": "Ribbon.efk",
+      "scale": 1,
+      "sha256": "c97008cfdc90a9e3508ff3c781f05cd118428adb6ff76d9e4f5f0460eea7b1c8"
+    },
+    "Ring": {
+      "file": "Ring.efk",
+      "scale": 1,
+      "rotationX": 1.5707963267948966,
+      "sha256": "68a373612fdcdec3459cc79a2b326128def6d883099a64ef864de5ae0fce2784"
+    },
+    "Track": {
+      "file": "Track.efk",
+      "scale": 1,
+      "sha256": "991eae98bcb576c8d492452a3b2207b5da61acf773c9c168ac3dceb2731fc43d"
+    },
+    "Model": {
+      "file": "Model.efk",
+      "scale": 1,
+      "sha256": "e9b8a6ba8850944370ab90734e0f025a19c0c1abc88607d3fbb9bd3f0e1e3896"
+    },
+    "Dynamic": {
+      "file": "Dynamic.efkefc",
+      "scale": 1,
+      "dynamic": true,
+      "seek": true,
+      "sha256": "eaf2a8939555d3064812adafc4d2dd77f042ba72a481c1eb528ac26f06787d24"
+    },
+    "Trigger": {
+      "file": "SeededTrigger.efkefc",
+      "scale": 1,
+      "trigger": 0,
+      "seek": true,
+      "sha256": "c9c8bed050fd1e26398ac7d40ebb03b74c82155d28b1bfcd91b23603bf4df041"
+    },
+    "TriggerIdle": {
+      "file": "SeededTrigger.efkefc",
+      "scale": 1,
+      "trigger": 1,
+      "seek": true,
+      "sha256": "c9c8bed050fd1e26398ac7d40ebb03b74c82155d28b1bfcd91b23603bf4df041"
+    }
+  },
+  "modelSha256": "b3bda52b97c4ec41b8b0cd9f206bf88ce2553db9b9b8d17ce83c8b988a2eb657",
+  "fixtureNotes": {
+    "seeking": "Modern seek fixtures author random seed 1. setRandomSeed changes current random state but backward seeking restores the original authored seed. Legacy samples do not author a seed.",
+    "dynamic": "Square with a local equation mapping external inputs 0/1/2 to fixed translation; default input 0 is -6.",
+    "trigger": "Pinned TriggerLaser with trigger 0; TriggerIdle sends only unrelated trigger 1 at identical update times."
+  },
+  "scenarioSha256": "516934bd964d6117bb8524b54788840832180d8f146c4746ad063f9eec02f7d9",
+  "channelTolerance": 1,
+  "maxOutlierPixels": 0,
+  "audio": {
+    "file": "audio.tsv",
+    "sha256": "da16b087f6abd31e84ec31bd3192669175d8d1d92768ef6538350e4b6bd1712d",
+    "columns": [
+      "sourceChannels",
+      "x",
+      "y",
+      "z",
+      "left",
+      "right"
+    ],
+    "sampleRate": 48000,
+    "frames": 512,
+    "sampleIndex": 256,
+    "monoInput": 0.25,
+    "stereoInput": [
+      0.25,
+      -0.125
+    ],
+    "panner": {
+      "panningModel": "equalpower",
+      "distanceModel": "inverse",
+      "refDistance": 1,
+      "maxDistance": 1,
+      "rolloffFactor": 1
+    },
+    "simultaneousMonoStereo": {
+      "requestedPositions": [
+        [
+          -1,
+          0,
+          0
+        ],
+        [
+          1,
+          0,
+          0
+        ]
+      ],
+      "observedPannerPositions": []
+    },
+    "method": "Capture PannerNode creation and parameters during stock bundled Effekseer mono/stereo playback. Render constant inputs through the captured panner using OfflineAudioContext, or directly for stereo. Fixed default listener.",
+    "specification": "https://webaudio.github.io/web-audio-api/#panning-algorithm"
+  },
+  "generatorSha256": "1b2ea576158335922d2d654eadba8a7939108e5fbad98ba62d799ed106e32fc4",
+  "fixtureGeneratorSha256": "c9174cfe1dfe5f0784d963347c8e84f383b6118cdc98eb7126f73ae1c1ba1762",
+  "pngEncoderSha256": "74c5930fa2bba55e4adbaa860164f15521fa859c08336e7d6001558fea0d702f"
+}

@@ -333,7 +333,14 @@ napi_value openExternal(napi_env env, napi_callback_info info) try {
       std::any_of(url.begin(), url.end(), [](unsigned char ch) { return ch <= 32; })) {
     return boolean(env, false);
   }
-  return boolean(env, SDL_OpenURL(url.c_str()) == 0);
+  // SDL_OpenURL was added in SDL 2.0.14; older firmware can still run games.
+  using OpenUrl = int (*)(const char*);
+  void* library = SDL_LoadObject("libSDL2-2.0.so.0");
+  if (!library) return boolean(env, false);
+  const auto open = reinterpret_cast<OpenUrl>(SDL_LoadFunction(library, "SDL_OpenURL"));
+  const bool opened = open && open(url.c_str()) == 0;
+  SDL_UnloadObject(library);
+  return boolean(env, opened);
 } catch (const std::exception& error) {
   napi_throw_error(env, nullptr, error.what());
   return nullptr;

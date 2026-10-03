@@ -5,3 +5,5 @@
 /build-js/
 /dist/
 *.log
+__pycache__/
+*.py[cod]

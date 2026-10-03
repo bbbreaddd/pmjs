@@ -441,7 +441,7 @@ test('Canvas recorder replays supported rectangles before an unsupported draw an
 test('Canvas recorder falls back on native submission failure and preserves drawing exceptions', () => {
   const h = recorderHarness();
   h.context.NativeHost.render.renderPrimitiveSurface = () => { throw new Error('GPU failed'); };
-  h.recorder.record(() => h.drawing.fillRect(1, 2, 3, 4));
+  h.recorder.record(() => h.drawing.fillRect(0, 0, 64, 48));
   assert.equal(h.cpu.length, 1);
   assert.equal(h.canvas._nativeImage, undefined);
   const error = new Error('guest failed');
@@ -464,7 +464,7 @@ test('Bitmap destruction releases its Canvas surface once and restores ordinary 
   assert.equal(h.drawing.fillRect, h.originalFillRect);
   h.recorder.record(() => h.drawing.fillRect(0, 0, 64, 48));
   assert.equal(h.renders.length, 1);
-  assert.equal(h.cpu.length, 1);
+  assert.equal(h.cpu.length, 2, 'Destroy preserves pixels in the surviving Canvas owner before ordinary drawing');
 });
 
 test('Canvas recorder keeps clipped or resized drawing on the ordinary path', () => {

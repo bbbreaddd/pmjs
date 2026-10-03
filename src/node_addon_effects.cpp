@@ -25,6 +25,14 @@ napi_value effectCall(napi_env env, napi_callback_info info) {
     if (args.empty()) throw std::runtime_error("missing effect ID");
     const auto id = asUint32(env, args[0]);
     if (operation == "exists") return boolean(env, effects.exists(id));
+    if (operation == "dynamicInput") {
+      if (args.size() != 2) throw std::runtime_error("effect dynamic input requires handle and index");
+      const auto index = asNumber(env, args[1]);
+      if (!std::isfinite(index) || index < 0 || index > 3 || std::floor(index) != index) {
+        throw std::runtime_error("invalid effect dynamic input index");
+      }
+      return number(env, effects.dynamicInput(id, static_cast<int>(index)));
+    }
     if (operation == "releaseContext") effects.releaseContext(id);
     else if (operation == "stopAll") effects.stopAll(id);
     else if (operation == "release") {
@@ -67,7 +75,7 @@ void registerEffectBindings(napi_env env, napi_value exports) {
   auto effects = moduleObject(env);
   check(env, napi_set_named_property(env, effects, "license", string(env, effectsLicense)),
     "cannot export effects license");
-  for (const char* name : {"createContext", "releaseContext", "load", "release", "play", "update", "stopAll", "exists", "control", "counts"}) {
+  for (const char* name : {"createContext", "releaseContext", "load", "release", "play", "update", "stopAll", "exists", "control", "dynamicInput", "counts"}) {
     napi_value function;
     check(env, napi_create_function(env, name, NAPI_AUTO_LENGTH, effectCall,
       const_cast<char*>(name), &function), "cannot create effect binding");

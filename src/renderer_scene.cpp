@@ -59,6 +59,8 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
         blendValue > static_cast<std::uint32_t>(BlendMode::screen)) return false;
     const auto blendMode = static_cast<BlendMode>(blendValue);
     if (parentIndex != noParent && parentIndex >= index) return false;
+    if ((flags & NodeFlags::clampedTilingSampling) &&
+        kind != static_cast<std::uint32_t>(NodeKind::tilingSprite)) return false;
     if (flags & ~scene_packet::kAllowedNodeFlags) {
       return false;
     }
@@ -408,6 +410,7 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
     frame_.commands.back().blur =
       flags & NodeFlags::hasBlurFilter ? values[valueOffset + 21] : 0.0F;
     frame_.commands.back().nearest = flags & NodeFlags::nearestSampling;
+    frame_.commands.back().clampedTilingSampling = flags & NodeFlags::clampedTilingSampling;
     frame_.commands.back().roundPixels = flags & NodeFlags::roundPixels;
     frame_.commands.back().textureRotation = textureRotation;
     frame_.commands.back().primitive =
@@ -422,7 +425,7 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
       frame_.commands.back().color = { float((tint >> 16) & 255) / 255,
         float((tint >> 8) & 255) / 255, float(tint & 255) / 255, float(tint >> 24) / 255 };
     }
-    frame_.commands.back().premultipliedSpriteTexture = flags & NodeFlags::premultipliedSpriteTexture;
+    frame_.commands.back().premultipliedSpriteTexture = (flags & NodeFlags::premultipliedSpriteTexture) || images_.lookup(resource)->premultiplied;
     frame_.commands.back().pixiSpritePacking = kind == static_cast<std::uint32_t>(NodeKind::sprite);
     frame_.commands.back().appliesSpriteColor = flags & NodeFlags::hasSpriteColor;
     if (frame_.commands.back().appliesSpriteColor) {

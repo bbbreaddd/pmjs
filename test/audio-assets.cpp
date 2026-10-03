@@ -1,8 +1,12 @@
 #include "media_service.hpp"
+#include "media_mix.hpp"
+#include "effects_audio.hpp"
 #include <SDL.h>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -10,8 +14,8 @@ namespace {
 void require(bool ok, const char* message) {
   if (!ok) throw std::runtime_error(message);
 }
-std::vector<std::uint8_t> wav(int frames, std::uint16_t sample = 4000) {
-  std::vector<std::uint8_t> bytes(44 + frames * 4);
+std::vector<std::uint8_t> wav(int frames, std::uint16_t sample = 4000, int channels = 2) {
+  std::vector<std::uint8_t> bytes(44 + frames * channels * 2);
   auto word = [&](int offset, std::uint32_t value, int count) {
     for (int i = 0; i < count; ++i) bytes[offset + i] = value >> (i * 8);
   };
@@ -19,9 +23,9 @@ std::vector<std::uint8_t> wav(int frames, std::uint16_t sample = 4000) {
     for (int i = 0; i < 4; ++i) bytes[offset + i] = value[i];
   };
   text(0, "RIFF"); word(4, bytes.size() - 8, 4); text(8, "WAVE");
-  text(12, "fmt "); word(16, 16, 4); word(20, 1, 2); word(22, 2, 2);
-  word(24, 48000, 4); word(28, 192000, 4); word(32, 4, 2); word(34, 16, 2);
-  text(36, "data"); word(40, frames * 4, 4);
+  text(12, "fmt "); word(16, 16, 4); word(20, 1, 2); word(22, channels, 2);
+  word(24, 48000, 4); word(28, 48000 * channels * 2, 4); word(32, channels * 2, 2); word(34, 16, 2);
+  text(36, "data"); word(40, frames * channels * 2, 4);
   for (int i = 44; i < static_cast<int>(bytes.size()); i += 2) word(i, sample, 2);
   return bytes;
 }
@@ -39,12 +43,40 @@ int main() {
   std::filesystem::create_directories(root);
   try {
     const auto bytes = wav(4800);
+    for (const int channels : {1, 2}) {
+      const auto name = root / (channels == 1 ? "mono.wav" : "stereo.wav");
+      write(name, wav(64, 8192, channels));
+      const auto decoded = pmjs::MediaDecoder::decodeAudio(name);
+      require(decoded && decoded->samples.size() >= 8, "spatial PCM fixture decodes");
+      pmjs::AudioDecoderSession streaming(name);
+      const auto samples = streaming.read(4);
+      require(samples.size() == 8, "spatial PCM fixture streams");
+      for (const bool stream : {false, true}) {
+        pmjs::VoiceMixState voice;
+        voice.playing = true;
+        const auto& input = stream ? samples : decoded->samples;
+        voice.samples.assign(input.begin(), input.end());
+        const auto gains = pmjs::spatialEffectGains(channels, -1, 0, 0);
+        voice.leftGain = gains[0]; voice.rightGain = gains[1];
+        float output[2]{};
+        pmjs::mixVoiceInto(voice, output, 1, 1);
+        require(std::abs(output[0] - 0.25F) < 1e-5F &&
+          std::abs(output[1] - (channels == 1 ? 0.0F : 0.25F)) < 1e-5F,
+          "prepared and streaming decoders preserve spatial source amplitude");
+      }
+    }
     write(root / "a.wav", bytes); write(root / "b.wav", bytes);
     write(root / "c.wav", bytes);
     SDL_setenv("PMJS_AUDIO_DIAGNOSTICS", "0", 1);
     {
       pmjs::MediaService ordinary(root);
       const auto handle = ordinary.loadAudio("a.wav");
+      require(ordinary.setStereoGains(handle, 1.41421356F, 0) &&
+        !ordinary.setStereoGains(handle, -1, 1) &&
+        !ordinary.setStereoGains(handle, std::numeric_limits<float>::infinity(), 1) &&
+        !ordinary.setStereoGains(handle, 1, std::numeric_limits<float>::quiet_NaN()) &&
+        !ordinary.setStereoGains(0, 1, 1) && ordinary.setStereoGains(handle, 1, 1),
+        "stereo gains accept amplification and reject invalid coefficients or handles");
       require(handle && ordinary.play(handle, true, 0), "ordinary native loads stream");
       SDL_Delay(40);
       const auto normal = ordinary.audioCacheStats();

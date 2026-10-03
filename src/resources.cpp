@@ -5,7 +5,10 @@
 #include <array>
 #include <cstdio>
 #include <cstdlib>
-#include <fstream>
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <setjmp.h>
 #include <vector>
 
@@ -120,21 +123,70 @@ std::optional<ImagePixels> decodeMemory(const void* data, std::size_t size) {
   return std::nullopt;
 }
 
-std::optional<ImagePixels> decodeImage(const std::filesystem::path& path) {
-  try {
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file.is_open()) return std::nullopt;
-    const auto size = file.tellg();
-    constexpr std::streamoff kMaxImageFileSize = 64 * 1024 * 1024;
-    if (size <= 0 || size > kMaxImageFileSize) return std::nullopt;
-    file.seekg(0, std::ios::beg);
-    std::vector<std::uint8_t> buffer(static_cast<std::size_t>(size));
-    if (!file.read(reinterpret_cast<char*>(buffer.data()), size)) return std::nullopt;
-    return decodeMemory(buffer.data(), buffer.size());
-  } catch (...) {
-    return std::nullopt;
+std::optional<ImagePixels> readTexturePixels(const ImageInfo& image) {
+  const auto extent = checkedImageExtent(image.width, image.height);
+  if (!extent) return std::nullopt;
+  ImagePixels pixels{image.width, image.height,
+                     std::vector<std::uint8_t>(extent->rgbaBytes)};
+  GLint previousRead = 0, previousBuffer = 0;
+  glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousRead);
+  glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &previousBuffer);
+  constexpr std::array<GLenum, 4> parameters = {
+    GL_PACK_ALIGNMENT, GL_PACK_ROW_LENGTH, GL_PACK_SKIP_PIXELS, GL_PACK_SKIP_ROWS
+  };
+  std::array<GLint, 4> previousPack{};
+  for (std::size_t index = 0; index < parameters.size(); ++index) {
+    glGetIntegerv(parameters[index], &previousPack[index]);
+    glPixelStorei(parameters[index], index == 0 ? 1 : 0);
   }
+  GLuint framebuffer = 0;
+  glGenFramebuffers(1, &framebuffer);
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
+  if (framebuffer) {
+    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                          GL_TEXTURE_2D, image.texture, 0);
+  }
+  const bool complete = framebuffer != 0 &&
+    glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+  glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+  // The uploaded texture remains this owner's snapshot if its source changes.
+  // Texture row zero is the decoded first row; no screen-space flip is needed.
+  if (complete) {
+    glReadPixels(0, 0, image.width, image.height, GL_RGBA,
+                 GL_UNSIGNED_BYTE, pixels.rgba.data());
+  }
+  glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(previousBuffer));
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previousRead));
+  glDeleteFramebuffers(1, &framebuffer);
+  for (std::size_t index = 0; index < parameters.size(); ++index) {
+    glPixelStorei(parameters[index], previousPack[index]);
+  }
+  return complete ? std::optional<ImagePixels>(std::move(pixels)) : std::nullopt;
 }
+}
+
+ImageFileSource::~ImageFileSource() {
+  if (descriptor_ >= 0) close(descriptor_);
+}
+
+std::unique_ptr<ImageFileSource> ImageStore::openFile(const std::filesystem::path& path) {
+  std::error_code error;
+  const auto resolved = std::filesystem::canonical(path, error);
+  if (error) return nullptr;
+  std::unique_ptr<ImageFileSource> source(new ImageFileSource());
+  source->descriptor_ = open(resolved.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK);
+  struct stat info{};
+  if (source->descriptor_ < 0 || fstat(source->descriptor_, &info) != 0 ||
+      !S_ISREG(info.st_mode) || info.st_size <= 0 || info.st_size > 64 * 1024 * 1024) return nullptr;
+  source->path_ = resolved;
+  source->size_ = static_cast<std::size_t>(info.st_size);
+  source->modifiedSeconds_ = info.st_mtim.tv_sec;
+  source->modifiedNanoseconds_ = info.st_mtim.tv_nsec;
+  source->key_ = resolved.generic_string() + ':' + std::to_string(info.st_dev) + ':' +
+    std::to_string(info.st_ino) + ':' + std::to_string(info.st_size) + ':' +
+    std::to_string(info.st_mtim.tv_sec) + ':' + std::to_string(info.st_mtim.tv_nsec) + ':' +
+    std::to_string(info.st_ctim.tv_sec) + ':' + std::to_string(info.st_ctim.tv_nsec);
+  return source;
 }
 
 ImageStore::~ImageStore() {
@@ -187,35 +239,55 @@ std::optional<ImagePixels> ImageStore::decodeJpegFromMemory(const void* data, st
   return pmjs::decodeJpegFromMemory(data, size);
 }
 
-std::optional<ImagePixels> ImageStore::decodeFile(
-    const std::filesystem::path& path) {
-  return decodeImage(path);
+std::optional<ImagePixels> ImageStore::decodeFile(const ImageFileSource& source) {
+  std::vector<std::uint8_t> bytes(source.size_);
+  std::size_t offset = 0;
+  while (offset < bytes.size()) {
+    const auto read = pread(source.descriptor_, bytes.data() + offset,
+                            bytes.size() - offset, static_cast<off_t>(offset));
+    if (read < 0 && errno == EINTR) continue;
+    if (read <= 0) return std::nullopt;
+    offset += static_cast<std::size_t>(read);
+  }
+  struct stat current{};
+  // Atomic replacement can unlink this inode and change ctime without changing
+  // its bytes. Size and mtime detect writes to the held source instead.
+  if (fstat(source.descriptor_, &current) != 0 ||
+      current.st_size != static_cast<off_t>(source.size_) ||
+      current.st_mtim.tv_sec != source.modifiedSeconds_ ||
+      current.st_mtim.tv_nsec != source.modifiedNanoseconds_) {
+    return std::nullopt;
+  }
+  return decodeMemory(bytes.data(), bytes.size());
 }
 
 std::optional<ImageInfo> ImageStore::loadPng(const std::filesystem::path& path,
                                              bool retainCpuPixels) {
-  if (auto cached = acquireCached(path)) {
+  auto source = openFile(path);
+  if (!source) return std::nullopt;
+  if (auto cached = acquireCached(*source)) {
     if (retainCpuPixels) this->retainCpuPixels(cached->handle);
     return cached;
   }
-  auto pixels = decodeImage(path);
+  auto pixels = decodeFile(*source);
   if (!pixels) return std::nullopt;
-  return installDecoded(path, std::move(*pixels), retainCpuPixels);
+  return installDecoded(*source, std::move(*pixels), retainCpuPixels);
 }
 
 std::optional<ImageInfo> ImageStore::installDecoded(
-    const std::filesystem::path& path, ImagePixels pixels,
+    const ImageFileSource& source, ImagePixels pixels,
     bool retainCpuPixels) {
-  if (auto cached = acquireCached(path)) {
+  if (auto cached = acquireCached(source)) {
     if (retainCpuPixels) this->retainCpuPixels(cached->handle);
     return cached;
   }
-  const std::string cacheKey = std::filesystem::weakly_canonical(path).generic_string();
+  const std::string& cacheKey = source.key();
 
   auto created = createRgba(pixels.width, pixels.height, pixels.rgba.data());
   if (!created) return std::nullopt;
   const std::size_t index = (created->handle & indexMask) - 1U;
   slots_[index].cacheKey = cacheKey;
+  slots_[index].sourcePath = source.path();
   slots_[index].retainCpuPixels = retainCpuPixels;
   if (retainCpuPixels) {
     slots_[index].cachedPixels = std::move(pixels);
@@ -248,7 +320,7 @@ bool ImageStore::retainCpuPixels(ImageHandle handle) {
     return true;
   }
   if (slot.cacheKey.empty()) return false;
-  if (!slot.cachedPixels) slot.cachedPixels = decodeImage(slot.cacheKey);
+  slot.cachedPixels = readTexturePixels(*info);
   if (!slot.cachedPixels) return false;
   slot.retainCpuPixels = true;
   slot.cpuPixelFrames = 0;
@@ -256,8 +328,8 @@ bool ImageStore::retainCpuPixels(ImageHandle handle) {
 }
 
 std::optional<ImageInfo> ImageStore::acquireCached(
-    const std::filesystem::path& path) {
-  const std::string cacheKey = std::filesystem::weakly_canonical(path).generic_string();
+    const ImageFileSource& source) {
+  const std::string& cacheKey = source.key();
   const auto cached = pathCache_.find(cacheKey);
   if (cached != pathCache_.end()) {
     const auto info = lookup(cached->second);
@@ -287,17 +359,13 @@ const ImagePixels* ImageStore::readPixels(ImageHandle handle) const {
     return &*slot.cachedPixels;
   }
   if (slot.cacheKey.empty()) return nullptr;
-  if (slot.retainCpuPixels) {
-    if (!slot.cachedPixels) slot.cachedPixels = decodeImage(slot.cacheKey);
-    return slot.cachedPixels ? &*slot.cachedPixels : nullptr;
-  }
-  if (!slot.cachedPixels) slot.cachedPixels = decodeImage(slot.cacheKey);
-  slot.cpuPixelFrames = 60;
+  slot.cachedPixels = readTexturePixels(*info);
+  if (!slot.retainCpuPixels) slot.cpuPixelFrames = 60;
   return slot.cachedPixels ? &*slot.cachedPixels : nullptr;
 }
 
 std::optional<ImageInfo> ImageStore::createRgba(int width, int height,
-                                                 const void* pixels) {
+                                                 const void* pixels, bool premultiplied) {
   const auto extent = checkedImageExtent(width, height);
   if (!extent) return std::nullopt;
   GLuint texture = 0;
@@ -339,14 +407,16 @@ std::optional<ImageInfo> ImageStore::createRgba(int width, int height,
   slot.cpuPixelFrames = 0;
   slot.retainCpuPixels = false;
   slot.cacheKey.clear();
+  slot.sourcePath.clear();
   slot.cachedPixels.reset();
   slot.gpuOnly = pixels == nullptr;
   slot.renderTarget = false;
+  slot.premultiplied = premultiplied;
   slot.live = true;
   ++liveCount_;
   gpuBytes_ += extent->rgbaBytes;
   peakGpuBytes_ = std::max(peakGpuBytes_, gpuBytes_);
-  return ImageInfo{makeHandle(index, slot.generation), width, height, texture};
+  return ImageInfo{makeHandle(index, slot.generation), width, height, texture, premultiplied};
 }
 
 std::optional<ImageInfo> ImageStore::createRenderTarget(int width, int height) {
@@ -427,7 +497,7 @@ std::vector<ImageMemoryEntry> ImageStore::memoryEntries() const {
       slot.references == 0 && slot.pins == 0 &&
         slot.inFlight.load(std::memory_order_acquire) == 0 &&
         !slot.cacheKey.empty(),
-      slot.cacheKey});
+      slot.sourcePath.generic_string()});
   }
   return result;
 }
@@ -486,7 +556,7 @@ std::optional<ImageInfo> ImageStore::lookup(ImageHandle handle) const {
   if (index >= slots_.size()) return std::nullopt;
   const auto& slot = slots_[index];
   if (!slot.live || slot.generation != generation) return std::nullopt;
-  return ImageInfo{handle, slot.width, slot.height, slot.texture};
+  return ImageInfo{handle, slot.width, slot.height, slot.texture, slot.premultiplied};
 }
 
 bool ImageStore::isRenderTarget(ImageHandle handle) const {
@@ -547,6 +617,7 @@ void ImageStore::destroySlot(std::size_t index) {
   slot.cpuPixelFrames = 0;
   slot.retainCpuPixels = false;
   slot.cacheKey.clear();
+  slot.sourcePath.clear();
   slot.cachedPixels.reset();
   slot.live = false;
   slot.generation = static_cast<std::uint16_t>((slot.generation + 1U) & generationMask);

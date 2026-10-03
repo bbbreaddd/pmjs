@@ -11,7 +11,7 @@ function runModule(context, relative) {
   vm.runInContext(source, context, { filename: relative });
 }
 
-function createContext() {
+function createContext({ strictCompatibility = true } = {}) {
   let nextCanvasHandle = 900;
   function CanvasElement() {
     this.width = 0;
@@ -26,6 +26,7 @@ function createContext() {
     return { handle: this._handle };
   };
   CanvasElement.prototype._pmjsContentChanged = function() {};
+  CanvasElement.prototype._releaseNativeCanvas = function() { this.released = true; };
   function Rectangle(x, y, width, height) {
     Object.assign(this, { x, y, width, height });
   }
@@ -49,6 +50,7 @@ function createContext() {
     this.anchor = { x: 0.5, y: 0.25 };
     this.tint = 0xffffff;
     this.blendMode = 0;
+    this.pluginName = 'batch';
   }
   Sprite.prototype = Object.create(Container.prototype);
   Sprite.prototype.constructor = Sprite;
@@ -59,6 +61,21 @@ function createContext() {
     this.anchor = { x: 0, y: 0 };
     this.tilePosition = { x: 0, y: 0 };
     this.tileScale = { x: 1, y: 1 };
+    this.pluginName = 'tilingSprite';
+    this.uvRespectAnchor = false;
+    this.tileTransform = {
+      pivot: { x: 0, y: 0 }, rotation: 0,
+      localTransform: { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 },
+      updateLocalTransform: () => {
+        const t = this.tileTransform, m = t.localTransform;
+        m.a = Math.cos(t.rotation) * this.tileScale.x;
+        m.b = Math.sin(t.rotation) * this.tileScale.x;
+        m.c = -Math.sin(t.rotation) * this.tileScale.y;
+        m.d = Math.cos(t.rotation) * this.tileScale.y;
+        m.tx = this.tilePosition.x - t.pivot.x * m.a - t.pivot.y * m.c;
+        m.ty = this.tilePosition.y - t.pivot.x * m.b - t.pivot.y * m.d;
+      },
+    };
   }
   TilingSprite.prototype = Object.create(Sprite.prototype);
   TilingSprite.prototype.constructor = TilingSprite;
@@ -84,11 +101,13 @@ function createContext() {
     globalThis: null,
     CanvasElement,
     document: { createElement() { return canvas; } },
+    PMJS: {},
     NativeHost: {
+      runtime: { env(name) { return name === 'PMJS_STRICT_COMPAT' && strictCompatibility ? '1' : undefined; } },
       scene: {
         packetVersion: 28,
         schema: { version: 28, metadataStride: 7, valueStride: 41,
-          transactionalSubmit: true, filterCompositeBlend: true },
+          transactionalSubmit: true, filterCompositeBlend: true, clampedTilingSampling: true },
         submit(version, metadata, values, count) {
           submissions.push({ version, metadata: metadata.slice(),
             values: values.slice(), count });
@@ -105,7 +124,7 @@ function createContext() {
     PIXI: {
       VERSION: '5.3.12',
       RENDERER_TYPE: { WEBGL: 1 },
-      SCALE_MODES: { LINEAR: 0, NEAREST: 1 },
+      SCALE_MODES: { LINEAR: 1, NEAREST: 0 },
       Rectangle,
       Container,
       Sprite,
@@ -116,6 +135,7 @@ function createContext() {
     },
   });
   context.globalThis = context;
+  runModule(context, 'js/pmjs-core/compatibility.js');
   return { context, canvas, submissions, sizes, targets, OriginalApplication };
 }
 

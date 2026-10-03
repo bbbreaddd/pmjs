@@ -124,15 +124,41 @@ std::vector<std::filesystem::path> textFontPaths(napi_env env, State& value,
   }
   return paths;
 }
+CanvasTextStyle textStyle(napi_env env, const std::vector<napi_value>& args, size_t index) {
+  CanvasTextStyle style;
+  if (args.size() <= index) return style;
+  auto object = args[index];
+  const auto property = [&](const char* name) -> std::optional<napi_value> {
+    bool exists = false; check(env, napi_has_named_property(env, object, name, &exists), "invalid text style");
+    if (!exists) return std::nullopt;
+    napi_value value; check(env, napi_get_named_property(env, object, name, &value), "invalid text style");
+    return value;
+  };
+  if (auto value = property("bold")) style.bold = asBoolean(env, *value);
+  if (auto value = property("italic")) style.italic = asBoolean(env, *value);
+  if (auto value = property("miterLimit")) style.miterLimit = asNumber(env, *value);
+  if (auto value = property("lineJoin")) {
+    const auto name = asString(env, *value);
+    if (name != "miter" && name != "round" && name != "bevel") throw std::runtime_error("invalid text lineJoin");
+    style.join = name == "miter" ? 0 : name == "round" ? 1 : 2;
+  }
+  if (auto value = property("lineCap")) {
+    const auto name = asString(env, *value);
+    if (name != "butt" && name != "round" && name != "square") throw std::runtime_error("invalid text lineCap");
+    style.cap = name == "butt" ? 0 : name == "round" ? 1 : 2;
+  }
+  if (!std::isfinite(style.miterLimit) || style.miterLimit <= 0) throw std::runtime_error("invalid text miterLimit");
+  return style;
+}
 }  // namespace
 
 napi_value drawText(napi_env env, napi_callback_info info) try {
-  auto a = arguments(env, info, 8);
+  auto a = arguments(env, info, 9);
   State& value = host(env);
   const auto paths = textFontPaths(env, value, a.at(1));
   if (!value.canvases.drawText(asUint32(env, a.at(0)), paths, asString(env, a.at(2)),
-      asInt32(env, a.at(3)), asInt32(env, a.at(4)), asInt32(env, a.at(5)),
-      asUint32(env, a.at(6)), a.size() > 7 ? asInt32(env, a.at(7)) : 0)) {
+      asNumber(env, a.at(3)), asNumber(env, a.at(4)), asNumber(env, a.at(5)),
+      asUint32(env, a.at(6)), a.size() > 7 ? asNumber(env, a.at(7)) : 0, textStyle(env, a, 8))) {
     throw std::runtime_error("text draw failed");
   }
   return undefined(env);
@@ -141,10 +167,10 @@ napi_value drawText(napi_env env, napi_callback_info info) try {
 }
 
 napi_value measureText(napi_env env, napi_callback_info info) try {
-  auto a = arguments(env, info, 3);
+  auto a = arguments(env, info, 4);
   State& value = host(env);
   const auto paths = textFontPaths(env, value, a.at(0));
-  auto width = value.canvases.measureText(paths, asString(env, a.at(1)), asInt32(env, a.at(2)));
+  auto width = value.canvases.measureText(paths, asString(env, a.at(1)), asNumber(env, a.at(2)), textStyle(env, a, 3));
   if (!width) throw std::runtime_error("text measurement failed");
   return number(env, *width);
 } catch (const std::exception& error) {
@@ -248,11 +274,18 @@ napi_value canvasMemory(napi_env env, napi_callback_info) try {
     number(env, canvases.deferredCommandCount())), "cannot set deferred command count");
   check(env, napi_set_named_property(env, result, "deferredCommandBytes",
     number(env, canvases.deferredCommandBytes())), "cannot set deferred command bytes");
-  const auto gStats = canvases.glyphCacheStats();
-  check(env, napi_set_named_property(env, result, "glyphEntries",
-    number(env, gStats.glyphEntries)), "cannot set glyph entries");
-  check(env, napi_set_named_property(env, result, "glyphBytes",
-    number(env, gStats.glyphBytes)), "cannot set glyph bytes");
+  check(env, napi_set_named_property(env, result, "textBackend",
+    string(env, canvases.textBackendName())), "cannot set text backend");
+  if (std::string(canvases.textBackendName()) == "skia65") {
+    check(env, napi_set_named_property(env, result, "textCacheBytes",
+      number(env, canvases.textBackendStats().cacheBytes)), "cannot set Skia cache bytes");
+  } else {
+    const auto gStats = canvases.glyphCacheStats();
+    check(env, napi_set_named_property(env, result, "glyphEntries",
+      number(env, gStats.glyphEntries)), "cannot set glyph entries");
+    check(env, napi_set_named_property(env, result, "glyphBytes",
+      number(env, gStats.glyphBytes)), "cannot set glyph bytes");
+  }
   syncExternalMemory(env);
   return result;
 } catch (const std::exception& error) {
@@ -261,9 +294,27 @@ napi_value canvasMemory(napi_env env, napi_callback_info) try {
 }
 
 napi_value canvasGlyphStats(napi_env env, napi_callback_info) try {
+  auto& canvases = host(env).canvases;
+  if (std::string(canvases.textBackendName()) == "skia65") {
+    const auto stats = canvases.textBackendStats();
+    napi_value result; check(env, napi_create_object(env, &result), "cannot create text stats");
+    check(env, napi_set_named_property(env, result, "backend", string(env, "skia65")), "cannot set backend");
+    check(env, napi_set_named_property(env, result, "identity", string(env, stats.identity)), "cannot set identity");
+    check(env, napi_set_named_property(env, result, "libraryPath", string(env, stats.libraryPath)), "cannot set library path");
+    const auto set = [&](const char* name, double value) {
+      check(env, napi_set_named_property(env, result, name, number(env, value)), "cannot set text statistic");
+    };
+    set("cacheBytes", stats.cacheBytes); set("cacheLimit", stats.cacheLimit);
+    set("cacheEntries", stats.cacheEntries); set("fontStacks", stats.fontStacks);
+    set("scratchPeakBytes", stats.scratchPeakBytes);
+    set("layoutRequests", stats.layoutRequests); set("layoutHits", stats.layoutHits);
+    set("drawCalls", stats.drawCalls); set("shapeNs", stats.shapeNs); set("drawNs", stats.drawNs);
+    return result;
+  }
   const auto stats = host(env).canvases.glyphCacheStats();
   napi_value result;
   check(env, napi_create_object(env, &result), "cannot create glyph stats object");
+  check(env, napi_set_named_property(env, result, "backend", string(env, "freetype")), "cannot set backend");
   check(env, napi_set_named_property(env, result, "fontFaces",
     number(env, stats.fontFaces)), "cannot set fontFaces");
   check(env, napi_set_named_property(env, result, "fontStrikes",
@@ -324,10 +375,10 @@ napi_value setGlyphCacheLimits(napi_env env, napi_callback_info info) try {
 }
 
 napi_value measureTextMetrics(napi_env env, napi_callback_info info) try {
-  auto a = arguments(env, info, 3); State& value = host(env);
+  auto a = arguments(env, info, 4); State& value = host(env);
   const auto paths = textFontPaths(env, value, a.at(0));
   auto metrics = value.canvases.measureTextMetrics(paths,
-    asString(env, a.at(1)), asInt32(env, a.at(2)));
+    asString(env, a.at(1)), asNumber(env, a.at(2)), textStyle(env, a, 3));
   if (!metrics) throw std::runtime_error("text measurement failed");
   napi_value result; napi_create_object(env, &result);
   const auto set = [&](const char* name, double metric) {

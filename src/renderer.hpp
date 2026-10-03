@@ -79,6 +79,7 @@ struct RenderCommand {
   float filterResolution = 1.0F;
   Primitive primitive = Primitive::sprite;
   EffectDraw effect{};
+  bool clampedTilingSampling = false;
 };
 
 struct FramePacket {
@@ -255,6 +256,7 @@ class Renderer {
     int mvBounds = -1;
     int nearestSampling = -1;
     int mvPremultipliedInput = -1;
+    int texturePremultiplied = -1;
     int maskEnabled = -1;
     int maskImage = -1;
     int maskTransform = -1;
@@ -268,6 +270,7 @@ class Renderer {
     int textureHeight = 0;
     std::int32_t first = 0;
     std::int32_t count = 0;
+    bool premultiplied = false;
   };
 
   struct TileLayerResource {
@@ -293,6 +296,7 @@ class Renderer {
   struct RenderTarget {
     std::uint32_t texture = 0;
     std::uint32_t framebuffer = 0;
+    std::uint32_t depth = 0;
     int width = 0;
     int height = 0;
   };
@@ -321,7 +325,9 @@ class Renderer {
   PrimitiveSurfaceResource* lookupPrimitiveSurface(PrimitiveSurfaceHandle handle);
   void resizeTargets(int width, int height);
   void ensureTarget(RenderTarget& target, int width, int height);
+  void ensureDepthBuffer(RenderTarget& target);
   void destroyTarget(RenderTarget& target);
+  void swapTargetColors(RenderTarget& left, RenderTarget& right);
   void drawToneComposition(std::uint32_t framebuffer, int viewportX,
                            int viewportY, int viewportWidth,
                            int viewportHeight, bool screenPresentation = false);
@@ -373,15 +379,20 @@ class Renderer {
   int presentationCanvasOpacityUniform_ = -1;
   int presentationVideoOpacityUniform_ = -1;
   int presentationUpperCanvasOpacityUniform_ = -1;
+  int presentationVideoPremultipliedUniform_ = -1;
+  int presentationUpperCanvasPremultipliedUniform_ = -1;
   int simpleSpriteVerticesUniform_ = -1;
   int simpleSpriteProjectionUniform_ = -1;
   int simpleSpritePackingUniform_ = -1;
   int simpleSpritePremultipliedUniform_ = -1;
+  int simpleTilingClampUniform_ = -1;
+  int simpleTextureSizeUniform_ = -1;
   int spriteEffectVerticesUniform_ = -1;
   int spriteEffectProjectionUniform_ = -1;
   int spriteEffectPackingUniform_ = -1;
   int spriteEffectPremultipliedUniform_ = -1;
   int spriteEffectFrameUniform_ = -1;
+  int spriteEffectTilingClampUniform_ = -1;
   int spriteEffectNearestUniform_ = -1;
   int spriteEffectTextureSizeUniform_ = -1;
   int spriteEffectBlurUniform_ = -1;
@@ -446,6 +457,7 @@ class Renderer {
   std::uint32_t blackFramebuffer_ = 0;
   RenderTarget sceneTarget_;
   RenderTarget offscreenTarget_;
+  RenderTarget effectTarget_;
   RenderTarget filterTarget_;
   RenderTarget toneOverlayTarget_;
   RenderTarget bloomTarget_;

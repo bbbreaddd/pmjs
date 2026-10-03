@@ -214,7 +214,7 @@
     }
 
     var sizeMatch = /(\d+(?:\.\d+)?)px/i.exec(raw);
-    var size = sizeMatch ? Math.max(1, Math.round(Number(sizeMatch[1]))) : 10;
+    var size = sizeMatch ? Math.max(1, Number(sizeMatch[1])) : 10;
     var sizeEndIndex = sizeMatch ? sizeMatch.index + sizeMatch[0].length : 0;
 
     var prefix = raw.slice(0, sizeMatch ? sizeMatch.index : 0).toLowerCase();

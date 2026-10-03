@@ -97,3 +97,41 @@ test('MZ plugin and boot lifecycle runs synchronously without main.js or Effekse
     ['phase', 'scene-boot-started'],
   ]);
 });
+
+for (const failure of ['loaded', 'afterGuestPlugins', 'method', 'beforeBoot']) {
+  test('MZ boot propagates an unexpected ' + failure + ' installer failure', () => {
+    const events = [], target = { run() { return 'authored'; } };
+    const context = vm.createContext({ console: { log() {}, error() {} }, target,
+      PMJS_MANUAL_BOOTSTRAP: true,
+      NativeHost: { runtime: { loadScript(script) {
+        if (script === 'js/plugins.js') context.$plugins = [{ name: 'Example', status: true, parameters: {} }];
+      } } },
+      PluginManager: { _scripts: [], setParameters() {} },
+      Utils: { extractFileName: name => name },
+      SceneManager: { run() { events.push('scene'); } }, Scene_Boot: function Scene_Boot() {},
+      nativeBootPhase(phase) { events.push(phase); } });
+    for (const module of ['js/pmjs-rpgmaker/lifecycle.js', 'js/pmjs-core/methods.js',
+      'js/pmjs-rpgmaker/plugins.js', 'js/pmjs-core/config.js', 'js/pmjs-core/optimizations.js',
+      'js/pmjs-rpgmaker/bootstrap.js', 'js/pmjs-mz/plugin-loader.js', 'js/pmjs-mz/bootstrap.js']) runModule(context, module);
+    const fail = () => { target.mutated = true; throw new Error('installer failed: ' + failure); };
+    if (failure === 'loaded') context.PMJS.plugins.onLoaded('Example', 'fixture', fail);
+    else if (failure === 'method') context.PMJS.methods.wrap({ key: 'fixture.run', id: 'fixture',
+      getTarget: () => target, method: 'run', wrap: fail });
+    else {
+      context.PMJS.plugins.registerOptimization('Example', { id: 'fixture', owner: 'fixture', fallback: 'authored operation' });
+      context.PMJS.phases.on(failure, 'fixture', fail);
+    }
+    context.pmjsMzLoadPluginManifest();
+    assert.throws(() => { context.pmjsMzInitializePlugins(); context.pmjsMzStart(); }, /installer failed/);
+    assert.equal(target.mutated, true, 'partial installer mutations are not mistaken for a safe refusal');
+    assert.ok(!events.includes('scene'));
+    assert.throws(() => { if (failure !== 'beforeBoot') context.pmjsMzInitializePlugins(); context.pmjsMzStart(); }, /installer failed/,
+      'repeating boot cannot bypass an earlier partial installation failure');
+    if (failure !== 'beforeBoot') assert.ok(!events.includes('plugins-loaded'));
+    if (failure === 'method') {
+      assert.equal(context.PMJS.methods.dump()[0].state, 'failed');
+      assert.match(context.PMJS.methods.dump()[0].reason, /installer failed/);
+      assert.equal(target.run(), 'authored');
+    }
+  });
+}

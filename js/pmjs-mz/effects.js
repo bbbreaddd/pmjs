@@ -84,9 +84,12 @@
           y === undefined ? 0 : y, z === undefined ? 0 : z);
         state.handles.add(id);
         var handle = {};
-        var control = function(operation, a, b, c, d) {
+        var requireHandle = function() {
           requireContext(state);
           if (!state.handles.has(id)) throw new Error('stale Effekseer handle');
+        };
+        var control = function(operation, a, b, c, d) {
+          requireHandle();
           native.control(id, operation, a === undefined ? 0 : a, b === undefined ? 0 : b,
             c === undefined ? 0 : c, d === undefined ? 0 : d);
         };
@@ -99,6 +102,11 @@
         handle.setRotation = function(a, b, c) { control('rotation', a, b, c); };
         handle.setScale = function(a, b, c) { control('scale', a, b, c); };
         handle.setSpeed = function(a) { control('speed', a); };
+        handle.setFrame = function(a) { control('frame', a); };
+        handle.setAllColor = function(r, g, b, a) { control('color', r, g, b, a); };
+        handle.getDynamicInput = function(index) { requireHandle(); return native.dynamicInput(id, index); };
+        handle.setDynamicInput = function(index, value) { control('dynamicInput', index, value); };
+        handle.sendTrigger = function(index) { control('trigger', index); };
         handle.setTargetLocation = function(a, b, c) { control('target', a, b, c); };
         handle.setRandomSeed = function(a) { control('seed', a); };
         handle.setPaused = function(a) { control('paused', Number(!!a)); };

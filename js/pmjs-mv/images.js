@@ -22,7 +22,6 @@ function pmjsBitmapClearImgInstanceWrap() {
           try { this._image.src = ''; } catch (_) {}
         }
       } catch (_) {}
-      PMJS.compat.hit('bitmap._clearImgInstance');
       return guestClearImgInstance.apply(this, arguments);
     };
     wrapped._pmjsNativeImageRelease = true;

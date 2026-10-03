@@ -62,11 +62,13 @@ function logCanvasCreation(width, height, url) {
 }
 
 CanvasElement.prototype._releaseNativeCanvas = function() {
+  if (this._pmjsPrimitiveContent) this._pmjsPrimitiveContent.reset();
   releaseNativeResource(this._nativeCanvas, 'canvas');
   this._nativeCanvas = null;
   this._pmjsContentChanged();
 };
 CanvasElement.prototype._ensureNativeCanvas = function() {
+  if (this._pmjsPrimitiveContent) this._pmjsPrimitiveContent.materialize();
   if (!this._nativeCanvas) {
     var width = Math.max(1, this.width);
     var height = Math.max(1, this.height);

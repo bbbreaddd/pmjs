@@ -1,5 +1,8 @@
 'use strict';
 
+// This test exercises the legacy cache implementation, irrespective of the local default.
+process.env.PMJS_TEXT_BACKEND = 'freetype';
+
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const native = require(path.resolve(process.argv[2]));

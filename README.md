@@ -15,32 +15,12 @@ PMJS supports Linux x64 and ARM64. Building it requires:
 
 - CMake 3.20 or newer
 - A C++20 compiler
+- Clang/LLVM 20.1.2 and Python 3
 - Node.js and Node API headers
 - pkg-config
-- SDL2, EGL, and OpenGL ES 2
+- SDL2, EGL, and OpenGL ES 3.0 or newer
 - libpng, libjpeg, FreeType, and HarfBuzz
 - FFmpeg libraries: avformat, avcodec, avutil, swresample, and swscale
-
-## Building
-
-```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --parallel
-ctest --test-dir build --output-on-failure
-```
-
-`PMJS_DEPENDENCY_PREFIX` points CMake at a reviewed target dependency prefix
-for cross-compilation. When set, pkg-config resolves only from that prefix's
-`lib/pkgconfig` and `share/pkgconfig` directories; missing target dependencies
-fail configuration instead of falling back to host libraries. Prefix builds
-also require `PMJS_DEPENDENCY_LOCK`, a CMake file declaring exact versions as
-`set(PMJS_LOCK_SDL2 2.30.0)`, `set(PMJS_LOCK_EGL 1.5)`, and corresponding
-`PMJS_LOCK_*` values for GLES, PNG, JPEG, FREETYPE, HARFBUZZ, AVFORMAT, AVCODEC,
-AVUTIL, SWRESAMPLE, and SWSCALE. CMake prints the resolved versions and
-rejects a mismatch. Keep the reviewed prefix contents fixed across builds
-whose results you compare, and use a fresh CMake build directory when changing
-prefixes. `build-node-addon.sh` runs the same configure,
-build, and test flow.
 
 > [!NOTE]
 > I do use AI for this project. No, I am not proud of it. It's still very early in development so it's likely going to be a mess. Don't expect much right now.

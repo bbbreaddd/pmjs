@@ -90,7 +90,7 @@ struct AsyncImageLoad {
   napi_env env = nullptr;
   napi_async_work work = nullptr;
   std::vector<napi_deferred> deferreds;
-  std::filesystem::path path;
+  std::unique_ptr<pmjs::ImageFileSource> source;
   std::string key;
   bool retainCpuPixels = false;
   std::optional<pmjs::ImagePixels> pixels;
@@ -164,7 +164,7 @@ napi_value loadImageBytesAsync(napi_env env, napi_callback_info info) try {
 void executeImageLoad(napi_env, void* opaque) noexcept {
   auto* load = static_cast<AsyncImageLoad*>(opaque);
   try {
-    load->pixels = pmjs::ImageStore::decodeFile(load->path);
+    load->pixels = pmjs::ImageStore::decodeFile(*load->source);
   } catch (...) {
     load->pixels = std::nullopt;
   }
@@ -176,7 +176,7 @@ void completeImageLoad(napi_env env, napi_status status, void* opaque) {
   napi_value result;
   if (status == napi_ok && load->pixels) {
     auto installed = state->images.installDecoded(
-      load->path, std::move(*load->pixels), load->retainCpuPixels);
+      *load->source, std::move(*load->pixels), load->retainCpuPixels);
     if (installed) {
       bool retained = true;
       std::size_t ownerships = 1;
@@ -216,12 +216,14 @@ void completeImageLoad(napi_env env, napi_status status, void* opaque) {
 
 napi_value queueImageLoad(napi_env env, const std::filesystem::path& path,
                           bool retainCpuPixels) {
-  const std::string key = std::filesystem::weakly_canonical(path).generic_string();
+  auto source = pmjs::ImageStore::openFile(path);
+  if (!source) throw std::runtime_error("cannot open image");
+  const std::string key = source->key();
   napi_deferred deferred = nullptr;
   napi_value promise;
   check(env, napi_create_promise(env, &deferred, &promise),
         "cannot create image promise");
-  if (auto cached = state->images.acquireCached(path)) {
+  if (auto cached = state->images.acquireCached(*source)) {
     if (retainCpuPixels) state->images.retainCpuPixels(cached->handle);
     napi_resolve_deferred(env, deferred,
       imageInfo(env, cached->handle, cached->width, cached->height));
@@ -236,7 +238,7 @@ napi_value queueImageLoad(napi_env env, const std::filesystem::path& path,
   }
   auto load = std::make_unique<AsyncImageLoad>();
   load->env = env;
-  load->path = path;
+  load->source = std::move(source);
   load->key = key;
   load->retainCpuPixels = retainCpuPixels;
   load->deferreds.push_back(deferred);

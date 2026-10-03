@@ -29,6 +29,7 @@
     "js/pmjs-pixi5/setup.js",
     "js/pmjs-pixi5/scene.js",
     "js/pmjs-pixi5/filters.js",
+    "js/pmjs-pixi5/zoom-blur.js",
     "js/pmjs-pixi5/renderer.js",
     "js/pmjs-mz/engine.js",
     "js/pmjs-mz/rendering.js",

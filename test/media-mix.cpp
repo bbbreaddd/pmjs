@@ -1,6 +1,8 @@
 #include "media_mix.hpp"
+#include "effects_audio.hpp"
 
 #include <cmath>
+#include <fstream>
 #include <iostream>
 #include <vector>
 
@@ -63,6 +65,42 @@ void testPanLaw() {
   std::vector<float> centerOut(2, 0.0F);
   pmjs::mixVoiceInto(center, centerOut.data(), 1, 1.0F);
   CHECK(near(centerOut[0], 0.4F) && near(centerOut[1], 0.4F), "center pan is neutral");
+}
+
+void testSpatialEffects() {
+  std::ifstream reference(PMJS_EFFECT_AUDIO_REFERENCE);
+  CHECK(reference.good(), "contained stock audio reference must be readable");
+  int channels = 0, cases = 0;
+  float x, y, z, left, right;
+  while (reference >> channels >> x >> y >> z >> left >> right) {
+    auto voice = channels == 1 ? constantVoice(4, 0.176776695F, 0.176776695F) :
+                               constantVoice(4, 0.25F, -0.125F);
+    const auto gains = pmjs::spatialEffectGains(channels, x, y, z);
+    voice.leftGain = gains[0]; voice.rightGain = gains[1];
+    float output[2]{};
+    pmjs::mixVoiceInto(voice, output, 1, 1);
+    CHECK(near(output[0], left) && near(output[1], right),
+      "spatial output matches captured stock panner amplitude and geometry");
+    auto adjusted = voice;
+    adjusted.volume = 0.5F; adjusted.pitch = 2;
+    const auto before = adjusted.positionFrame;
+    float quieter[2]{};
+    pmjs::mixVoiceInto(adjusted, quieter, 1, 0.5F);
+    CHECK(near(quieter[0], left * 0.25F) && near(quieter[1], right * 0.25F),
+      "spatial mono and stereo retain authored volume and master gain");
+    CHECK(adjusted.positionFrame == before + 2, "spatial mono and stereo retain pitch advancement");
+    ++cases;
+  }
+  CHECK(cases == 18 && reference.eof(), "all mono and stereo spatial reference cases must run");
+  auto stereo = constantVoice(4, 0.25F, -0.125F);
+  const auto gains = pmjs::spatialEffectGains(2, 10, 10, 10);
+  stereo.leftGain = gains[0]; stereo.rightGain = gains[1];
+  stereo.volume = 0.5F; stereo.pitch = 2;
+  float output[2]{};
+  pmjs::mixVoiceInto(stereo, output, 1, 0.5F);
+  CHECK(near(output[0], 0.0625F) && near(output[1], -0.03125F),
+    "stereo bypasses spatial panning and attenuation, retaining volume and master gain");
+  CHECK(stereo.positionFrame == 2, "spatial playback retains pitch advancement");
 }
 
 void testPitchAdvancement() {
@@ -277,6 +315,7 @@ void testPreparedHighPitchEof() {
 int main() {
   testVolumeAndMaster();
   testPanLaw();
+  testSpatialEffects();
   testPitchAdvancement();
   testFadeCompletionAndStopAfterFade();
   testLoopWrap();

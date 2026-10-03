@@ -4,6 +4,7 @@
   var methods = Object.create(null);
   var order = [];
   var installed = false;
+  var installationError = null;
 
   function fail(message) {
     throw new Error('PMJS methods: ' + message);
@@ -59,6 +60,8 @@
     } catch (error) {
       record.state = 'failed';
       record.reason = String((error && error.message) || error);
+      installationError = error;
+      throw error;
     }
     return record.state;
   }
@@ -69,6 +72,7 @@
     own: function(definition) { return register(definition, 'own'); },
 
     install: function() {
+      if (installationError) throw installationError;
       if (installed) return [];
       installed = true;
       return order.map(function(key) {

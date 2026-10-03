@@ -32,6 +32,6 @@ struct ShapedText {
 std::vector<std::uint32_t> prepareCanvasText(const std::string& utf8);
 ShapedText shapeText(std::span<const std::uint32_t> text,
                      std::span<const TextFont> fonts,
-                     std::uint64_t& fallbackShapeCalls);
+                     std::uint64_t& fallbackShapeCalls, double positionScale = 64.0);
 
 }  // namespace pmjs

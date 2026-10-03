@@ -65,6 +65,15 @@ struct MediaService::Impl {
     requested.channels = 2; requested.samples = 1024;
     requested.callback = callback; requested.userdata = this;
     device = SDL_OpenAudioDevice(nullptr, 0, &requested, &obtained, 0);
+    if (diagnostics) {
+      const char* driver = SDL_GetCurrentAudioDriver();
+      std::cout << "[pmjs-audio] driver=" << (driver ? driver : "none")
+                << " device_open=" << (device ? "yes" : "no")
+                << " frequency=" << obtained.freq << " channels=" << int(obtained.channels)
+                << " format=" << obtained.format << " samples=" << obtained.samples;
+      if (!device) std::cout << " error=\"" << SDL_GetError() << '\"';
+      std::cout << std::endl;
+    }
     worker = std::thread([this] { decodeLoop(); });
     if (device) SDL_PauseAudioDevice(device, 0);
   }
@@ -406,6 +415,14 @@ bool MediaService::setParameters(std::uint32_t handle, float volume,
   std::lock_guard lock(voice->mutex); voice->mix.volume = std::max(0.0F, volume);
   voice->mix.pitch = std::clamp(pitch, 0.05F, 8.0F);
   voice->mix.pan = std::clamp(pan, -1.0F, 1.0F); return true;
+}
+bool MediaService::setStereoGains(std::uint32_t handle, float left, float right) {
+  if (!std::isfinite(left) || !std::isfinite(right) || left < 0 || right < 0) return false;
+  auto voice = impl_->voice(handle); if (!voice) return false;
+  std::lock_guard lock(voice->mutex);
+  voice->mix.leftGain = left;
+  voice->mix.rightGain = right;
+  return true;
 }
 bool MediaService::fade(std::uint32_t handle, float from, float to,
                         double duration, bool stopWhenFinished) {

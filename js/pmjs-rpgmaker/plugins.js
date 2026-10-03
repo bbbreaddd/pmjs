@@ -8,6 +8,7 @@
   var loadSequence = 0;
   var callbacks = Object.create(null);
   var finished = false;
+  var bootError = null;
   var optimizationRequirements = [];
 
   function key(name) {
@@ -47,6 +48,7 @@
       try { listener.callback(); } catch (error) {
         console.error('[pmjs] error running loaded callback for ' + entry.key +
           ' (owner ' + listener.owner + '):', error);
+        throw error;
       }
     });
   }
@@ -82,6 +84,9 @@
       console.log('[pmjs]     effective: ' + snapshot.effective.join(', '));
     }
     PMJS.methods.dump().forEach(function(method) {
+      if (method.state === 'failed') {
+        console.error('[pmjs] failed method installer ' + method.key + ': ' + method.reason);
+      }
       if (method.mode !== 'own' || method.mutations.length === 0) return;
       console.log('[pmjs] owned method ' + method.key +
         ' superseded guest changes from ' + method.mutations.map(function(mutation) {
@@ -91,20 +96,26 @@
   }
 
   function boot(installManagerHooks, afterPlugins) {
-    installManagerHooks();
-    PMJS.phases.emit('beforePlugins');
-    PMJS.plugins.snapshotEffectiveManifest(
-      (typeof $plugins !== 'undefined') ? $plugins : undefined);
-    if (typeof $plugins !== 'undefined' && Array.isArray($plugins)) {
-      PluginManager.setup($plugins);
+    if (bootError) throw bootError;
+    try {
+      installManagerHooks();
+      PMJS.phases.emit('beforePlugins');
+      PMJS.plugins.snapshotEffectiveManifest(
+        (typeof $plugins !== 'undefined') ? $plugins : undefined);
+      if (typeof $plugins !== 'undefined' && Array.isArray($plugins)) {
+        PluginManager.setup($plugins);
+      }
+      PMJS.plugins.finish();
+      PMJS.phases.emit('afterGuestPlugins');
+      PMJS.phases.emit('afterPlugins');
+      if (typeof afterPlugins === 'function') afterPlugins();
+      PMJS.methods.install();
+      reportRuntime();
+      if (typeof nativeBootPhase === 'function') nativeBootPhase('plugins-loaded');
+    } catch (error) {
+      bootError = error;
+      throw error;
     }
-    PMJS.plugins.finish();
-    PMJS.phases.emit('afterGuestPlugins');
-    PMJS.phases.emit('afterPlugins');
-    if (typeof afterPlugins === 'function') afterPlugins();
-    PMJS.methods.install();
-    reportRuntime();
-    if (typeof nativeBootPhase === 'function') nativeBootPhase('plugins-loaded');
   }
 
   function loadManifest() {
@@ -150,6 +161,7 @@
         try { callback(); } catch (error) {
           console.error('[pmjs] error running loaded callback for ' + canonical +
             ' (owner ' + owner + '):', error);
+          throw error;
         }
         return;
       }

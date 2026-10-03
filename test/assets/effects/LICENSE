@@ -2,6 +2,14 @@ Square.efkefc.b64 and Laser.efkefc.b64 are base64 copies of
 Examples/Resources/square_r.efkefc and Laser01.efkefc from Effekseer
 commit e0ccaf1d1837b1d178d0088f714a1f4525cae8f4.
 
+Trigger.efkefc.b64 is a base64 copy of Examples/Resources/TriggerLaser.efkefc
+from the same commit.
+
+Ribbon.efk.b64, Ring.efk.b64, Track.efk.b64, Model.efk.b64 and
+Block.efkmodel.b64 are base64 copies of Dev/Cpp/Test/Resource/
+Simple_Ribbon_Parent.efk, Simple_Ring_Shape1.efk, Simple_Track1.efk,
+block_simple.efk and Model/block.efkmodel from the same commit.
+
 The MIT License (MIT)
 
 Copyright (c) 2011 Effekseer Project

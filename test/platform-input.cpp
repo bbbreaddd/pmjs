@@ -6,6 +6,7 @@
 #include <iostream>
 
 int main() {
+  SDL_setenv("PMJS_EXIT_HOTKEY", "leftstick", 1);
   const std::pair<int, int> buttonMappings[] = {
     {SDL_CONTROLLER_BUTTON_A, 0}, {SDL_CONTROLLER_BUTTON_B, 1},
     {SDL_CONTROLLER_BUTTON_X, 2}, {SDL_CONTROLLER_BUTTON_Y, 3},
@@ -28,6 +29,16 @@ int main() {
   if (!platform.fullscreen()) return 1;
   platform.setFullscreen(false);
   if (platform.fullscreen()) return 1;
+  SDL_Window* window = SDL_GetWindowFromID(platform.windowId());
+  SDL_SetWindowSize(window, 80, 48);
+  if (!platform.pollEvents()) return 1;
+  int actualWidth = 0, actualHeight = 0;
+  SDL_GetWindowSize(window, &actualWidth, &actualHeight);
+  if (platform.windowWidth() != actualWidth || platform.windowHeight() != actualHeight ||
+      actualWidth != 80 || actualHeight != 48) {
+    std::cerr << "platform window dimensions did not follow SDL resize\n";
+    return 1;
+  }
   SDL_Event event{};
   event.type = SDL_WINDOWEVENT;
   event.window.windowID = platform.windowId();
@@ -103,9 +114,9 @@ int main() {
   if (SDL_PushEvent(&event) != 1 || !platform.pollEvents()) return 1;
 
   const int firstIndex = SDL_JoystickAttachVirtual(SDL_JOYSTICK_TYPE_GAMECONTROLLER,
-    SDL_CONTROLLER_BUTTON_MAX, SDL_CONTROLLER_AXIS_MAX, 0);
+    SDL_CONTROLLER_AXIS_MAX, SDL_CONTROLLER_BUTTON_MAX, 0);
   const int secondIndex = SDL_JoystickAttachVirtual(SDL_JOYSTICK_TYPE_GAMECONTROLLER,
-    SDL_CONTROLLER_BUTTON_MAX, SDL_CONTROLLER_AXIS_MAX, 0);
+    SDL_CONTROLLER_AXIS_MAX, SDL_CONTROLLER_BUTTON_MAX, 0);
   if (firstIndex < 0 || secondIndex < 0 || !platform.pollEvents()) return 1;
   SDL_Joystick* first = SDL_JoystickOpen(firstIndex);
   SDL_Joystick* second = SDL_JoystickOpen(secondIndex);
@@ -124,6 +135,51 @@ int main() {
     std::cerr << "controller removal did not preserve remaining actions\n";
     return 1;
   }
+  const int thirdIndex = SDL_JoystickAttachVirtual(SDL_JOYSTICK_TYPE_GAMECONTROLLER,
+    SDL_CONTROLLER_AXIS_MAX, SDL_CONTROLLER_BUTTON_MAX, 0);
+  if (thirdIndex < 0 || !platform.pollEvents()) return 1;
+  SDL_Joystick* third = SDL_JoystickOpen(thirdIndex);
+  if (!third) return 1;
+  const int firstInstance = SDL_JoystickInstanceID(third);
+  const int secondInstance = SDL_JoystickInstanceID(second);
+  const auto buttonEvent = [&](int instance, int button, bool down) {
+    SDL_Event buttonInput{};
+    buttonInput.type = down ? SDL_CONTROLLERBUTTONDOWN : SDL_CONTROLLERBUTTONUP;
+    buttonInput.cbutton.which = instance;
+    buttonInput.cbutton.button = button;
+    return SDL_PushEvent(&buttonInput) == 1 && platform.pollEvents();
+  };
+  if (!buttonEvent(firstInstance, SDL_CONTROLLER_BUTTON_START, true)) return 1;
+  event = {};
+  event.type = SDL_WINDOWEVENT;
+  event.window.windowID = platform.windowId();
+  event.window.event = SDL_WINDOWEVENT_FOCUS_LOST;
+  if (SDL_PushEvent(&event) != 1 || !platform.pollEvents()) return 1;
+  event.window.event = SDL_WINDOWEVENT_FOCUS_GAINED;
+  if (SDL_PushEvent(&event) != 1 || !platform.pollEvents()) return 1;
+  if (!buttonEvent(firstInstance, SDL_CONTROLLER_BUTTON_LEFTSTICK, true)) {
+    std::cerr << "focus loss retained an exit chord\n";
+    return 1;
+  }
+  if (!buttonEvent(firstInstance, SDL_CONTROLLER_BUTTON_LEFTSTICK, false) ||
+      !buttonEvent(firstInstance, SDL_CONTROLLER_BUTTON_BACK, true) ||
+      !buttonEvent(firstInstance, SDL_CONTROLLER_BUTTON_START, true)) {
+    std::cerr << "firmware hotkey override was ignored\n";
+    return 1;
+  }
+  if (!buttonEvent(firstInstance, SDL_CONTROLLER_BUTTON_BACK, false) ||
+      !buttonEvent(firstInstance, SDL_CONTROLLER_BUTTON_START, false) ||
+      !buttonEvent(firstInstance, SDL_CONTROLLER_BUTTON_LEFTSTICK, true) ||
+      !buttonEvent(secondInstance, SDL_CONTROLLER_BUTTON_START, true)) {
+    std::cerr << "exit chord combined different controllers\n";
+    return 1;
+  }
+  if (!buttonEvent(firstInstance, SDL_CONTROLLER_BUTTON_LEFTSTICK, false)) return 1;
+  if (buttonEvent(secondInstance, SDL_CONTROLLER_BUTTON_LEFTSTICK, true)) {
+    std::cerr << "configured exit chord did not quit\n";
+    return 1;
+  }
+  SDL_JoystickClose(third);
   SDL_JoystickClose(first);
   SDL_JoystickClose(second);
   return 0;

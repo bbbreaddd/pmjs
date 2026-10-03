@@ -533,6 +533,7 @@ void registerGraphicsBindings(napi_env env, napi_value exports) {
   napi_set_named_property(env, schema, "maxPacketBytes", uint32(env, pmjs::scene_packet::maxPacketBytes));
   napi_set_named_property(env, schema, "transactionalSubmit", boolean(env, true));
   napi_set_named_property(env, schema, "gpuSpriteTextures", boolean(env, true));
+  napi_set_named_property(env, schema, "clampedTilingSampling", boolean(env, true));
   napi_set_named_property(env, schema, "filterCompositeBlend", boolean(env, true));
   napi_set_named_property(env, schema, "effects", boolean(env, true));
   napi_set_named_property(env, scene, "schema", schema);

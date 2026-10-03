@@ -29,8 +29,7 @@
       // Immutable snapshots keep earlier encoded draws intact during later uploads.
       layer._images.forEach(function(source, index) {
         if (source.width > 1024 || source.height > 1024 || index >= 12) {
-          PMJS.compat.hit('render.tile-atlas-size', layer.constructor.name);
-          throw new Error('unsupported MZ tile atlas upload dimensions');
+          pixi.rejectRender('render.tile-atlas-size', layer, 'unsupported atlas upload dimensions');
         }
         var native = pixi.nativeSource(source);
         var cacheable = source._nativeImage || typeof source.__pmjsContentRevision === 'number';
@@ -152,16 +151,14 @@
     children: function(layer, viewport) {
       var matrix = layer.worldTransform;
       if (!viewport || matrix.b !== 0 || matrix.c !== 0) {
-        PMJS.compat.hit('render.window-layer-transform', layer.constructor.name);
-        throw new Error('native MZ WindowLayer requires an axis-aligned viewport');
+        pixi.rejectRender('render.window-layer-transform', layer, 'requires an axis-aligned viewport');
       }
       var uncovered = [{ x: 0, y: 0, width: viewport.width, height: viewport.height }];
       var entries = [];
       layer.children.slice().reverse().forEach(function(win) {
         if (!win._isWindow || !win.visible || win.openness <= 0) return;
         if (win.drawShape !== stockDrawShape) {
-          PMJS.compat.hit('render.window-shape', win.constructor.name);
-          throw new Error('unsupported MZ window shape: ' + win.constructor.name);
+          pixi.rejectRender('render.window-shape', win);
         }
         uncovered.forEach(function(rectangle) { entries.push({ node: win, clip: rectangle }); });
         var height = win.height * win.openness / 255;

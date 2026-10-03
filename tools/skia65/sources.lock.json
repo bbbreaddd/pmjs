@@ -1,0 +1,909 @@
+{
+  "chromium": "15b9f145354d863c03cebb6fb2d992d4213b9a05",
+  "skia": "bd0dafbc8112f6cfa92a8096d8cb5696d8535ef9",
+  "freetype": "707cd028b2b419a5491d444b128d8092afd9f201",
+  "harfbuzz": "1.7.3 + Chromium hb_set fixes",
+  "clangVersion": "20.1.2",
+  "archives": [
+    {
+      "name": "skia",
+      "url": "https://codeload.github.com/google/skia/tar.gz/bd0dafbc8112f6cfa92a8096d8cb5696d8535ef9",
+      "sha256": "aa9056ead78e35a77f25f399766d02a026614e036bb0b02da08324f529918d26",
+      "strip": 1
+    },
+    {
+      "name": "freetype",
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/freetype2/+archive/707cd028b2b419a5491d444b128d8092afd9f201.tar.gz",
+      "sha256": "e413fef8059ef2c295dc28063d8b7bd4ddef600f21c629a6faa7f8d89b23f8ee",
+      "strip": 0
+    },
+    {
+      "name": "icu",
+      "url": "https://chromium.googlesource.com/chromium/deps/icu/+archive/c8ca2962b46670ec89071ffd1291688983cd319c.tar.gz",
+      "sha256": "87d42c43db3fade0154ccb11f9e69f2911e92bc6fd0763ee53c0d18a0c0084cd",
+      "strip": 0
+    }
+  ],
+  "tools": [
+    {
+      "name": "gn",
+      "url": "https://storage.googleapis.com/chromium-gn/113f5b30a7cfae72015600a119590d45d64c0d0d",
+      "sha256": "5cf36d76c34e38e28b7e860406ef6479eed0713a4a7aefbd058b114d44f8987f",
+      "version": "514519"
+    },
+    {
+      "name": "ninja",
+      "url": "https://github.com/ninja-build/ninja/releases/download/v1.11.1/ninja-linux.zip",
+      "sha256": "b901ba96e486dce377f9a070ed4ef3f79deb45f4ffe2938f8e7ddc69cfb3df77",
+      "version": "1.11.1",
+      "zipMember": "ninja"
+    }
+  ],
+  "files": [
+    {
+      "path": "third_party/harfbuzz-ng/BUILD.gn",
+      "sha256": "82b20d9183812bc5ff2fcccaa41550ff7778e24057364e7476ebf2bd24d5e088"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/COPYING",
+      "sha256": "2a886915de4f296cdae5ed67064f86dba01d0c55286d86e8487f2a5caaf40216"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/NEWS",
+      "sha256": "1d503b3b3b97a67c81566f7bceacf23714596a18b1c2570c62e6dbcab7e1ca1c"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/OWNERS",
+      "sha256": "0d1fe98d7257742e829912a83d8fbd46a6f79260fe5f66832d05c73defaa262e"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/README",
+      "sha256": "ca774e9d5992361413eddcfc6e8023f25357e85017f64e216ffac892a46a048b"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/README.chromium",
+      "sha256": "bb4d35dcdf3a9866bb46517273fbc65cb89b4930d1fa2e12619b1b60e3d22e97"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/harfbuzz_fuzzer.cc",
+      "sha256": "228cd4951451b1012b7b1adad2c21dfd3a1a83bcd61f69aca59eaca99b9914ee"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/0509e80afb379d16560e9e47bdd7d888bebdebc6.ttf",
+      "sha256": "cb7b7f690ea3167cf135a43bf94cfdc34b923a7a95a066634e7e518a7620ded2"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/051d92f8bc6ff724511b296c27623f824de256e9.ttf",
+      "sha256": "1670a9e133bcd790822f2752f87f977591f91011ae3f7c93be66e5395ebbd7c5"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/07f054357ff8638bac3711b422a1e31180bba863.ttf",
+      "sha256": "91a95ff6269c7f317976f9512b4f6cd42c8cba2f97c2decaf722c9a590b389f4"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/191826b9643e3f124d865d617ae609db6a2ce203.ttf",
+      "sha256": "5d6ff7d26f8d031e35a96be54fa17524b22a76395bcdf020fa575587eda3b69a"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/1a6f1687b7a221f9f2c834b0b360d3c8463b6daf.ttf",
+      "sha256": "6f8751b346c39491475ff868fc3a81e3ca28cddb69a4710359e74c3c8ab479a3"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/1c04a16f32a39c26c851b7fc014d2e8d298ba2b8.ttf",
+      "sha256": "222f6482a70a2a5aeddc88a52fc0e07241fa53a890b86ec60e07ddd4061d03f5"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/1c2c3fc37b2d4c3cb2ef726c6cdaaabd4b7f3eb9.ttf",
+      "sha256": "bec31c73849db3a863b80d956fcd330a45998bba8eece0defb1e1f5db9afe7bb"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/1c2fb74c1b2aa173262734c1f616148f1648cfd6.ttf",
+      "sha256": "90f5c31bcc93f2e6038570748b14da72b364d7b31e1cc4f1f95ff95eb6367bbb"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/205edd09bd3d141cc9580f650109556cc28b22cb.ttf",
+      "sha256": "767f8cd0a6d0febfb7d5ad0f539d09a5a395919f0f13f74cfce6b67a790cca63"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/226bc2deab3846f1a682085f70c67d0421014144.ttf",
+      "sha256": "7e9f0135b4adb0f9ed1afa50f005de3dcf52fbf8a5866beccb25640fa649c193"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/270b89df543a7e48e206a2d830c0e10e5265c630.ttf",
+      "sha256": "9535d35dab9e002963eef56757c46881f6b3d3b27db24eefcc80929781856c77"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/298c9e1d955f10f6f72c6915c3c6ff9bf9695cec.ttf",
+      "sha256": "3ab2f26e9e206d2bee400f37957167e03aefd0f7b30545da53ebb913178278d4"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/3511ff5c1647150595846ac414c595cccac34f18.ttf",
+      "sha256": "f20716cf77e9c3fadce2bf428553dbc7586f596047010d4092fde9864759c008"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/37033cc5cf37bb223d7355153016b6ccece93b28.ttf",
+      "sha256": "f3c351bd511ff16f11c9160f20389e393742af8da97c62ded40b7e80bdee67c8"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/375d6ae32a3cbe52fbf81a4e5777e3377675d5a3.ttf",
+      "sha256": "2e3dda7bcf39d8c2450ada068c777bbde90773b50eb23ed2ea5812f44a30b3e5"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/43979b90b2dd929723cf4fe1715990bcb9c9a56b.ttf",
+      "sha256": "f73a1bbfc58c9ce3b193ea897dfe5a4729d7037b1340fa2db96b4abdec0a8ac2"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/43ef465752be9af900745f72fe29cb853a1401a5.ttf",
+      "sha256": "6ee2128aaf0d56446cbc90a617a00ae05bfb0b2a657f4f89870f8f005d8642d6"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/45855bc8d46332b39c4ab9e2ee1a26b1f896da6b.ttf",
+      "sha256": "51aa07a9c49e342459ae5c9b1cb6cb48b69b3eb209f17cbf6eb2f38e70182c7e"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/49c9f7485c1392fa09a1b801bc2ffea79275f22e.ttf",
+      "sha256": "0ee838282697b5a9c2377595c76e1ddbbfe530354967fb291d8a6dad59bfc7d8"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/4cce528e99f600ed9c25a2b69e32eb94a03b4ae8.ttf",
+      "sha256": "52572fdb2d20e56cb82246d3c366a602560073594a4a4d8097579499f8fe79e0"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/5028afb650b1bb718ed2131e872fbcce57828fff.ttf",
+      "sha256": "ab00bd27797af0116646da148d9b28050d725e3e3c5e85970095d95b10b895c4"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/56cfd0e18d07f41c38e9598545a6d369127fc6f9.ttf",
+      "sha256": "0f992875df67ae8773558d87a6a5306a48b4eb63de1cf30236299231446f589b"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/57a9d9f83020155cbb1d2be1f43d82388cbecc88.ttf",
+      "sha256": "ba3731ec7e19e6e74ffeab35868b262f45b20a30c79cbe0b58e2162df612722b"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/5a5daf5eb5a4db77a2baa3ad9c7a6ed6e0655fa8.ttf",
+      "sha256": "2a44bb69c095e6fe7b1ed734509065eba5027c4fb74c1ac34fc98bc491644161"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/641bd9db850193064d17575053ae2bf8ec149ddc.ttf",
+      "sha256": "2b1612c47e2ee2d684cfc9726d4548a2108cad7a4b74d70bf1b45cceeb8517b5"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/6466d38c62e73a39202435a4f73bf5d6acbb73c0.ttf",
+      "sha256": "30dcb5c881c20297841f361a4bc40b0326237bcda7a9e15ba57a102c96a58347"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/6ff0fbead4462d9f229167b4e6839eceb8465058.ttf",
+      "sha256": "55d46f21fc6287909189430e10cad61a8de1838ebea2f00e108958f90a74a573"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/706c5d7b625f207bc0d874c67237aad6f1e9cd6f.ttf",
+      "sha256": "6780987d01c5b023864120ca199fc1a27d7ed715d9bbe9c4b4d62e71805069ab"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/757ebd573617a24aa9dfbf0b885c54875c6fe06b.ttf",
+      "sha256": "5cc1db3ff5f353c381097906bf786a41b19039c21bfe57729cf3f04ebd1c6268"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/7a37dc4d5bf018456aea291cee06daf004c0221c.ttf",
+      "sha256": "cdfe0a11aaba69db9d78afc1b1f211dba63d88fdedd42e8a99d8d4fdc247a1fb"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/7e14e7883ed152baa158b80e207b66114c823a8b.ttf",
+      "sha256": "04f08de22235ada77e942906e68d1d98a964bf312abbfd1bee806d8ab97fcef7"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/7ef276fc886ea502a03b9b0e5c8b547d5dc2b61c.ttf",
+      "sha256": "74b7e09dd4fd21c6f8e74df22100169662b4f192f42b1c3fbbc224090d52b9cb"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/8099955657a54e9ee38a6ba1d6f950ce58e3cc25.ttf",
+      "sha256": "f4928643a2a861a8b5f5ea312f9eed7a4902f7626894eb35dedfbe7047039aad"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/813c2f8e5512187fd982417a7fb4286728e6f4a8.ttf",
+      "sha256": "df422c0c5233284c11cdeb69bc188726b36a661f0ecf3c5968913dcc0cec3fe4"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/8240789f6d12d4cfc4b5e8e6f246c3701bcf861f.ttf",
+      "sha256": "afd3b6f96903737bc4e430d2fbc82e9ab09253a1aaa0c707b93b45bce6594810"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/8454d22037f892e76614e1645d066689a0200e61.ttf",
+      "sha256": "6e00ae4a66719293861a2f172e36152f5eab6251c5bd3791be0b33b71b6c88e7"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/8a9fea2a7384f2116e5b84a9b31f83be7850ce21.ttf",
+      "sha256": "323c7d53163cf37248aa35c9bdcdb3963b381fdaed0a47ecc0e0b3cc7127ea5c"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/a34a7b00f22ffb5fd7eef6933b81c7e71bc2cdfb.ttf",
+      "sha256": "013b8e03811f96207cbee88eccc2703581e1284ea0c1842c2b4aab6ef54ac9ca"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/a919b33197965846f21074b24e30250d67277bce.ttf",
+      "sha256": "9d9e6025284c0833926775248918ec1fa9b2417fde90abaa663cc9b625e3bdb1"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/a98e908e2ed21b22228ea59ebcc0f05034c86f2e.ttf",
+      "sha256": "147649c74f0cee8d3a33d6f9ff703004cad68a443e7609e2181c906628c88802"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/b9e2aaa0d75fcef6971ec3a96d806ba4a6b31fe2.ttf",
+      "sha256": "0185a6d7b588f273ac2a6353b305398dfd1c4217e312ab0ba1090b4fb4a66a90"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/bb0c53752e85c3d28973ebc913287b8987d3dfe8.ttf",
+      "sha256": "13e1e85d60ab94bfd58f43cd64eda5cafaaab16f3e6d86a96051b7fff8c3ca7e"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/bb9473d2403488714043bcfb946c9f78b86ad627.ttf",
+      "sha256": "3b04f130c686d78c7057ba64fcb8daf039284bf563cc272079f6ce7b7ea5bc11"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/c4e48b0886ef460f532fb49f00047ec92c432ec0.ttf",
+      "sha256": "bd996ec9ce8d2a45203bc6ce5ee8d1e61dca2ad78c56edd4604df3cc10cdc80f"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/cc5f3d2d717fb6bd4dfae1c16d48a2cb8e12233b.ttf",
+      "sha256": "4e45183183725640b3cfe86f77084f656b23f3084e4099b063a7039c9f918686"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/d629e7fedc0b350222d7987345fe61613fa3929a.ttf",
+      "sha256": "ba70f1a2694c48a1580cdb9b161f2339019cf7999b7920f311799479bb2ccb89"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/df768b9c257e0c9c35786c47cae15c46571d56be.ttf",
+      "sha256": "584bce118fc2ad4e15ba4f7ceb36bddcb8b7972c91212dbcf0fb5b1ff11a139f"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/e207635780b42f898d58654b65098763e340f5c7.ttf",
+      "sha256": "cb20520f28da2cdf28a942864314a5bd4458083fb70e72b5370fd0aa2538c1f5"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/ef86fe710cfea877bbe0dbb6946a1f88d0661031.ttf",
+      "sha256": "7f8f6f44e95dceac6163a49bd4d1239d7e746cb24769565dd3e43b5e2e411779"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/f22416c692720a7d46fadf4af99f4c9e094f00b9.ttf",
+      "sha256": "aa39bba45e719891fb6464dd35cde6207d19e2702b1c71d51bcda2be341ed8eb"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/f499fbc23865022234775c43503bba2e63978fe1.ttf",
+      "sha256": "a2a88c82336798a149f29efdd41cc7a2f599669ecc0b43502170e3039f1829df"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/f518eb6f6b5eec2946c9fbbbde44e45d46f5e2ac.ttf",
+      "sha256": "bae5aaec8daab661d77b83222fc7b7a165d1b61e86f043efc92b7915bec69b60"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/fab39d60d758cb586db5a504f218442cd1395725.ttf",
+      "sha256": "59b2d0b2ec3874b8a0d3f7ff97420a96a9f1de4ed39a8c8a0ae2a5109c6ed318"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/fbb6c84c9e1fe0c39e152fbe845e51fd81f6748e.ttf",
+      "sha256": "cf57816e75a209878b3f7c268a936f2af5ffaec7b1917f6be3c1ea1c4e48e3f7"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/fcdcffbdf1c4c97c05308d7600e4c283eb47dbca.ttf",
+      "sha256": "4ebf553336b374d9c5fba6e4917f07b6ff2c44b9d06325b5828f48d96d964acd"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/fuzz/seed_corpus/ffa0f5d2d9025486d8469d8b1fdd983e7632499b.ttf",
+      "sha256": "5580109ea5be46224817012f3f2b400a6fae4a3eceeddfe0edeb036ad0e74bc4"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/harfbuzz.gni",
+      "sha256": "9b9917ea5cf989ceb19945fafd50eb1b5fa64b772d2333b8ab963d365868623c"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-atomic-private.hh",
+      "sha256": "00ae516b2d19ebb5058fec9893b55e443101dcf43eb8182b6aa9954d7bdcbd5e"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-blob.cc",
+      "sha256": "7fca0f73f0b7c0c200bac3b6cc4effdc8eb992902580db77a1257e530fc93b8a"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-blob.h",
+      "sha256": "d16a6b0bc18a49a19353681ec778cc60f5d77c9b5e68076a50ddaf440701aa03"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-buffer-deserialize-json.hh",
+      "sha256": "f6ac3b35163d248892d77099606176c890f6da11ef862ddc3a58fda86ab38547"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-buffer-deserialize-text.hh",
+      "sha256": "1b10cc408e33642aa3500f4ea7c48638ad278606e6c8c892713862fd4eb45648"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-buffer-private.hh",
+      "sha256": "dfc056bd586a4ce8de97c8e5943d267d54fab376fdc9305cab8185daf693e69b"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-buffer-serialize.cc",
+      "sha256": "5c807e02d329ced64979e1f37caabf4dd50b85220402975355f32eb1eca5d761"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-buffer.cc",
+      "sha256": "35e68a1745640ac26ba60bfc89c77a0d069fad8f7f32ba54cfeac88c273bc16c"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-buffer.h",
+      "sha256": "5de9b493631891b1fdc1f4279c8b21b9dffb5b1ff48aaf8b9b4f9c101b009775"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-common.cc",
+      "sha256": "e268f04a8866c8a29f0e7d27b4fe1a567d766e04a9499ba1f75a0d99f15aef28"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-common.h",
+      "sha256": "d5d08650b86e316c0ecde218df7a23b259cff2d20f5ed661c4a44cbc042e6efa"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-coretext.cc",
+      "sha256": "8f7d16da1fc71981a64655586bac6e54638a71e5935ea9793ac2a182d034234e"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-coretext.h",
+      "sha256": "66b295273cf4872c9775a841cd6661753505d132d0ca2828643e00309f46f7a2"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-debug.hh",
+      "sha256": "f7a0e1e040b09f93c68ff41c53e87faf3b61f3f98a77a8fcbbac1a725faea7d2"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-deprecated.h",
+      "sha256": "5fa47360a88ec21244eacee7b6b3f51cda22ea7c38991a728ec9d99ef1e70050"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-dsalgs.hh",
+      "sha256": "f0f5a6177f705413c9fdcce1e55045521ba60e505924e2bda7da5881a99dd233"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-face-private.hh",
+      "sha256": "47c3a7bab5c5a078c701629eee6138bf78e0a8a2c7746849db158cc91858957f"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-face.cc",
+      "sha256": "ac4d8ac2a5c3259e000baa1b5c1bc38b0440cf2278421aa431ea418f775ea6fb"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-face.h",
+      "sha256": "a9d94023aa3aadbee5dcfb34da627b474062b77f2a5cbbb2648817710df9bfa3"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-font-private.hh",
+      "sha256": "8fb3f59127ea608140a4333cb02fbdc99d6425b7c02187dd0305182d2a1471b2"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-font.cc",
+      "sha256": "451747cf7098a2aa3db3380a679cd877d9156df9231580d3099a6170fc25b077"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-font.h",
+      "sha256": "8e46535194320c8b2fc144f02689b4f122a5380236556b067a24d980add01445"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ft.cc",
+      "sha256": "a59f480f3bc375e74fa15d516fcdd026f9d5236e06a924221081e2e52fa7dd96"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ft.h",
+      "sha256": "9af154a09f95bd125400c16913f90dc399b25b2653bd0eefa29f29d33913085b"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-glib.cc",
+      "sha256": "8686fc07af1b9c0252bc21972e6627432195614bd4fa9e7c327801c08727f6a3"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-glib.h",
+      "sha256": "05402cbae1f44fc2587ea8f59afa235107f9e568e5a4aa93c12ed2727de74aac"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-gobject-structs.cc",
+      "sha256": "a7c4146f70a3cdaaf5cab6d3d302f92a9dc943ec2c5ffd3315ca3b525c0846da"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-gobject-structs.h",
+      "sha256": "cbc030c860e25e77399ff1c60011c4eee07adae44df049638db25de70d2c1539"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-gobject.h",
+      "sha256": "d8d14409803fc534a79d3f78d99264727392c2ac78d18e19eadb03f30c44693a"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-graphite2.cc",
+      "sha256": "70fda3097c59c81534c81bf21425c687994f2a71fe5e0837f18263fd5bccaa2f"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-graphite2.h",
+      "sha256": "e384c0e934b7948fb8f4250bb21ef877fa062e4fe23e4d08e42969d8cd83001a"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-icu.cc",
+      "sha256": "127ca2973485c2c7f7a92a622b8d35f0f3b2d7a68961e6468f81cd2cd86393e5"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-icu.h",
+      "sha256": "f2eaa478e7ecc533be912d75288e6fa8c2157191edbc03b2bd68c302bbcd0f6e"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-mutex-private.hh",
+      "sha256": "eb28569f6c4223f650bb8f29b89e3ea9d0c889eb9f5460f31b8c60f099bd6049"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-object-private.hh",
+      "sha256": "bf39b94ca34703efc192ac76a34bc4e10a53fb6e1be9050cb31557dd03936e85"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-open-file-private.hh",
+      "sha256": "1ca74fe4e60a5d0334afca3d4e648b6f7c5612d817218adb9672857651ad17cb"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-open-type-private.hh",
+      "sha256": "816d7de9561f6804cee952876add0aba9b8e9d49a1a8fe0a69f969f82e251a6c"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-cbdt-table.hh",
+      "sha256": "b48e39c5f36a80c5314d34e749ce7204fbbba2851ce6f87e4130abf1ccf85c5c"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-cmap-table.hh",
+      "sha256": "dd74f30fb8e9a004562fc2972449d7a8f26b86aaa8ac4b0ffd178db3bc9b5468"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-font.cc",
+      "sha256": "4247031705a6465dd0ae32a50662a0bd21ce595210c33278488288ba4e832fb5"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-font.h",
+      "sha256": "7c927795ca0daa3f0f18768ef998af82c7f9a82eb6034780380db8ceadca27fb"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-glyf-table.hh",
+      "sha256": "4eca4f03594e6e84085378b56b3c09137d6111193294df9c6f8b505420c9968f"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-head-table.hh",
+      "sha256": "394cf2e7f2538511526d52b23411019c7f3dc554997b8d828e96a30ff546af4c"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-hhea-table.hh",
+      "sha256": "7d3b3bd7f476f039812d498744a72941766705c1dbb8dc118130806d68045303"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-hmtx-table.hh",
+      "sha256": "131331787398e4c946822242d27b050d5e5a14c1f840346359a1ab58f3e0f0b5"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-kern-table.hh",
+      "sha256": "b5511430cf2b39c8af687d7e2fa52cb6e0b8f0dca3b44199477beacc0948462a"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-layout-common-private.hh",
+      "sha256": "13e662238283599ab6cfe66908403d7b3642ae1959377b77a07d22d0a4949517"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-layout-gdef-table.hh",
+      "sha256": "271a8fa2b7597f081a9a65394d9c56bfba937399d593bfcd37b82fd416096730"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-layout-gpos-table.hh",
+      "sha256": "80196bf85bf7390847f692d7505914f4f144010fb1f4bb42077b36fe20335e24"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-layout-gsub-table.hh",
+      "sha256": "d23c2e5481893b3a9d727533b21cb3320d593e19933d2fc5fb9b42d2e50ed509"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-layout-gsubgpos-private.hh",
+      "sha256": "e3058fab2999da6f7f5b8f84dc22806295628a7a97625813cc14e9260d4f2d7d"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-layout-jstf-table.hh",
+      "sha256": "8ceaaf00d59acef0b9296a23c08404dd161d5b6094b5201560f414cf73b94a11"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-layout-private.hh",
+      "sha256": "6183f4dfb12af0762ccf8bf9425233289f9a789b5ff94600fdc5f34b178567f0"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-layout.cc",
+      "sha256": "6aeff031eb74f0dd15822cd11339db9d2b8de7c41b2b7c5ae7770de7a0b6d08f"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-layout.h",
+      "sha256": "3fdd53cab03168fc3bd90e6d2a08bf1b37af300b217bdcde5b46013939b2e6c6"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-map-private.hh",
+      "sha256": "4e878780ed06c64ae0236ef1bf3a93ffa3230322b09230bf04e2d7bc655725d7"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-map.cc",
+      "sha256": "a4a0bbb8c8d3234f2cb4f4da08be262a58629adf23b08f5465005b835cae5ad4"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-math-table.hh",
+      "sha256": "305572f7927b7db1997780b5c4d6c9425e4c0d68aab66e897dbc12f64dab397a"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-math.cc",
+      "sha256": "25b3d3d4371f2dedac2aa974e887fc75834f2455e28e2b323f931d339f7a5f93"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-math.h",
+      "sha256": "6e8fc103fe9ae99fbf078e02759683552da6393c99e7464bc87a6274b55314ed"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-maxp-table.hh",
+      "sha256": "5eb6f41fe265d0e5d90198dd91107b5d930225d1dabe65f1f6b944cd34350442"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-name-table.hh",
+      "sha256": "a6f3adc2182bfa2c3f433f45bda6fa8786ab19b0cee38d1cab8d48fd9f5e6205"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-os2-table.hh",
+      "sha256": "d1606009fb9c2b9990fb62a5f30e0698f02855d09b6d185fe039f96ad1055686"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-post-macroman.hh",
+      "sha256": "ea8124c7af38c9fb2120cec642cc2b34294bc05517fb5abec515a221e7e15579"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-post-table.hh",
+      "sha256": "51c6f89112f8995a13289d607967910b991c88d5583f79e2bac925ffbdb8f563"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-shape-complex-arabic-fallback.hh",
+      "sha256": "d1bef4b7df2ad74ad7b832b695a8314db47310d7e9fcc2493be642fca371bf89"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-shape-complex-arabic-private.hh",
+      "sha256": "758f9f55101f08a9086dd56767845e7608aa4f49e33a60358593b36441759c47"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-shape-complex-arabic-table.hh",
+      "sha256": "c0ddc9b03cb7bbd59e24e4b6ddba37d3a5ff82969920e5b422c0b95bfc27fc46"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-shape-complex-arabic-win1256.hh",
+      "sha256": "ec386adebbc5e62f74029be19498677cbb6d4a7d340a79b95a1b1f2f9c360b13"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-shape-complex-arabic.cc",
+      "sha256": "62cf8362d634e8c3090f9eca955a72f1556a3d25cf62bee937fb543715885405"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-shape-complex-default.cc",
+      "sha256": "927a267ac607e55ed31ec25af65ed9ad3fa89679c78ced223483b5e13953d354"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-shape-complex-hangul.cc",
+      "sha256": "849333b0c710df9c87b658de5779edf6c3a6b5d4ac17613a9b089375f2aefb18"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-shape-complex-hebrew.cc",
+      "sha256": "37c0bfc1f38da2cd398c22ff55725c68671614fe035c384ff5ac6aae3b800c44"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-shape-complex-indic-machine.hh",
+      "sha256": "47639da8124a948aa5107374541d64761304c44d18cd0d56396ec68ae6f5667d"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-shape-complex-indic-private.hh",
+      "sha256": "c6e1bf4592324b3b0999512bc7511020578586bd8f15c71a61d18dc057443c63"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-shape-complex-indic-table.cc",
+      "sha256": "925a603cae71a03c094a8d22b0eacd7b6d7ffeafa45c894709e73ea6fb04ed78"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-shape-complex-indic.cc",
+      "sha256": "8b4b4347b997f451c4125064b63f176c41a4c01b5a1785ac1ca729cefd922968"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-shape-complex-myanmar-machine.hh",
+      "sha256": "889f913c05e3ed361395b24085f7c0d7da81bc8215170d46d6cbd8b249706c0d"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-shape-complex-myanmar.cc",
+      "sha256": "f217de539a217916cffd69639047ca7b32668218506e30ec955e2c945076cdad"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-shape-complex-private.hh",
+      "sha256": "29c04a8002c0588bace5b3d933c5b0bd48071c4d4f6fdbdf011cc1ef8a30483f"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-shape-complex-thai.cc",
+      "sha256": "abc99a7fd863bb3447b8821338a074bfbc9482945aa87a34b2b881305af76e20"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-shape-complex-tibetan.cc",
+      "sha256": "f304598a7a73084ac38bb714effd3e2d0f4e9e3e6829fd343a79ed67c3fb8a24"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-shape-complex-use-machine.hh",
+      "sha256": "f01f7f21fe49219f3a2686068809d17823761a482e81885dbb80d91fd6633e50"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-shape-complex-use-private.hh",
+      "sha256": "13e04454f7d8fb482e3eaf0b1ed6a0fb5ea384f4c02519dcd58d5d20ab50c85c"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-shape-complex-use-table.cc",
+      "sha256": "77c241998e130e34d2ab20c4803e8cba11a11aa1ccf721c19775392905146d6f"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-shape-complex-use.cc",
+      "sha256": "27f345fc88247132b6a246d8f5b58232ff832ebe0d4019f6ab77592fc5272256"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-shape-fallback-private.hh",
+      "sha256": "a4fde4e8e08ab6292d3bab5be617b7df30bee707a4e0c7300dc1ac0edb1b58f9"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-shape-fallback.cc",
+      "sha256": "c5e2627be509aed8d0e4b84bb85e720e9660383c1759e40af2ad5fd5dbbff3c1"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-shape-normalize-private.hh",
+      "sha256": "7833ad6044ba9cb099535b1ed95db19499159fb287f92c8ae3ccba4a339b5dcd"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-shape-normalize.cc",
+      "sha256": "0954b397862aa0555c6590a552f2f011d7da8045d289dd149d9a18cd00ce8baf"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-shape-private.hh",
+      "sha256": "30284b213da5a8ea12d7e87a412925e44125f9d659ab128e5879f9440ed13499"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-shape.cc",
+      "sha256": "52b4a06c514ff94c6e992300b4318dcaebf5f43bbbf2a61f22bde20ad4967be5"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-shape.h",
+      "sha256": "11e8c236b85317c700f89ac1b7ecae093876366ac73fb94ed96f04ed0dc2b5d2"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-tag.cc",
+      "sha256": "c918cd09abbd8d4d5ff6a43f6c7e67b3381442fb725f203f9bfe65938ed2236c"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-tag.h",
+      "sha256": "261c7b7619ec9b9092064cacfb09d8067307814d33634bcd0a64c67a9dd6ef05"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-var-avar-table.hh",
+      "sha256": "b86fc7223375dc27b3bf80df53999f25a369caed3df6cadb716181f1fc9b25e2"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-var-fvar-table.hh",
+      "sha256": "514d11941a0a8a29316ec790eb54fa7a86850028175542819d50e16396ad8773"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-var-hvar-table.hh",
+      "sha256": "d6b41cb91fabc127ff46d908c654a66a5c7d60a6885c94735cd30c446b36d8b2"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-var-mvar-table.hh",
+      "sha256": "7d3f3fc1360515fa19d7bded4ce411ef1439e5669f27d400d6b5c67da8bffab9"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-var.cc",
+      "sha256": "f45c7dd558c6f2b3270876b32dd5a6b4d358d17674f4afda17e6d95fa91f733d"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot-var.h",
+      "sha256": "8aecff4cc244a5bb7a38c2be22e6a4811aa877b21da64036a9fa6370b432428c"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ot.h",
+      "sha256": "401874fbd0714961bcee2c6bd028035e2164b4e431e8e14717d7121fce0d3a52"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-private.hh",
+      "sha256": "36d4e22ebbec88d849000fd2981e8bae8507af34e72afbf423381fd7146767b8"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-set-digest-private.hh",
+      "sha256": "155734554b5f42a43dfdc5fb28d4a7516b15c81a63b1810669a62ab81e583157"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-set-private.hh",
+      "sha256": "e2a20321d2c3978e45dd897db15f14c60c934cc635ee7932c03f6aa2c923c46d"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-set.cc",
+      "sha256": "696eae1afa25bd7a8625716bcba04128575fc7c0c4eb220b722268cfd3c8f96d"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-set.h",
+      "sha256": "53d284f9088310cd1354888900597dbc0f5b6b22910064779d00cef580bd84de"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-shape-plan-private.hh",
+      "sha256": "f3cd2235a579b013e1966518863f26030ac70b077d88eab2f487431ee7a6eb0a"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-shape-plan.cc",
+      "sha256": "02c074210329e3f6b6585a45aea8599e9eba9a8813383346f452580d7c9ccd67"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-shape-plan.h",
+      "sha256": "f1633ba7cd03d97ff0a9fb27afbe96e66d2f3e9b109ed141336115157f3ee84a"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-shape.cc",
+      "sha256": "71c87ce339e1747c98e0bd8868a7acd198329d7d9845a0da62324e1382f81fef"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-shape.h",
+      "sha256": "80dc9aa79717b46e84a9ba7d78414493bda2564cc2a06e6799bb023c2a1de299"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-shaper-impl-private.hh",
+      "sha256": "6ef3b98533e13b61d1153364261f4428b72b283c0113618046745ae97d7f88e4"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-shaper-list.hh",
+      "sha256": "5b779fcb7afa2359f5f81c4fc7a77ab165f9b0c5e3fb35bf95173a6239088bc8"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-shaper-private.hh",
+      "sha256": "809523500d316de361d724e4dacd883e6d086736b1c4f816a98e6fbc6d0f4297"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-shaper.cc",
+      "sha256": "2163e8d0cb54e379189358734ba2b292527bd46239e3b77b290b5ef57b6fa809"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-string-array.hh",
+      "sha256": "2a985da55b82661d78e85969d5c9ebe34d9c1bb8c8c2b6512aaa0fc8b20028d2"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-ucdn.cc",
+      "sha256": "6627df1103f2611fe6a949dfaa0e88b32f4200561d1c101d371aaf62d7dc5a17"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-unicode-private.hh",
+      "sha256": "1de51beb141ba619c56283ec858f9465d4109bc23a043ba067ee25594f356173"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-unicode.cc",
+      "sha256": "aff76f7e7b30c61246da367eb0eff35394682bb562265ff46f12e44a12d64a5d"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-unicode.h",
+      "sha256": "1aaa1a8976516bffe3687b0c479b4e16ed0d304535f5043fe10efc5ab75a89ee"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-utf-private.hh",
+      "sha256": "6efa90c082ed57fe912147cbfd37cac3df701bc1b429a032ddba62a46fcbfb3d"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-version.h",
+      "sha256": "3294cfff7b902b23495fa3959793f663cf0eab240c97c2495bbe1cbb2dd2b864"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb-warning.cc",
+      "sha256": "efd8d860f308278bbb086e6585b024c4ffb949f06bda57c1061f7575ed1f4578"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/hb.h",
+      "sha256": "a713d2a13e7ae581bc14f01cb59e69464ce4b67c0fa0a9dc50a851b3ad726e2c"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/main.cc",
+      "sha256": "0b7e61759c4d836c27a2d49f0f573024895096fb6cbaa996331460adbb6e3e08"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/test-buffer-serialize.cc",
+      "sha256": "3bfe3cd7021570a447285b12e0b3a7c1fad5155e6253b43e7a7261d8d1c64c1e"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/test-size-params.cc",
+      "sha256": "3ecad407320e6311693909515a7a6d3a7e3aeb99c7a75ec390db74e3688aabdf"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/test-would-substitute.cc",
+      "sha256": "8fbd5097921f1d6a0ca0e73193db6e4d98d287708959a0a676a824e2af7336fc"
+    },
+    {
+      "path": "third_party/harfbuzz-ng/src/test.cc",
+      "sha256": "b1922d1dac1560d432395bbf67ee68cab76eab5823f9e92048080b511c935d92"
+    },
+    {
+      "path": "third_party/freetype/.clang-format",
+      "sha256": "a46c8911862713e50ddaf798e09d3b69ecf4e7dde3fa5edb8a0c2856a88c49fa"
+    },
+    {
+      "path": "third_party/freetype/BUILD.gn",
+      "sha256": "39103c850e5764b17624882bd358407f516a29c506f1ccb1882c41dfa82bc7e0"
+    },
+    {
+      "path": "third_party/freetype/OWNERS",
+      "sha256": "0be1ed815630343df35e1d4805f2763e9d41fcd675ae4be11fe090b7ab6bc989"
+    },
+    {
+      "path": "third_party/freetype/README.chromium",
+      "sha256": "57eea565b87cf93474bb2c41ec32b90b8b9230c890244b2cc025640a435e5f9d"
+    },
+    {
+      "path": "third_party/freetype/include/freetype-custom-config/ftconfig.h",
+      "sha256": "30791702907d1758fc76b9e5a0853e697b877c0edafb36573639b8287dbc5070"
+    },
+    {
+      "path": "third_party/freetype/include/freetype-custom-config/ftmodule.h",
+      "sha256": "ba5f1d11531d51e17068d3bd4defdb4c6c0aaccf4968d8801d225fa33476ac73"
+    },
+    {
+      "path": "third_party/freetype/include/freetype-custom-config/ftoption.h",
+      "sha256": "e31983ed52802c869c3613d3f33716773e37deb6412a057b6712072e1f609090"
+    },
+    {
+      "path": "third_party/freetype/roll-freetype.sh",
+      "sha256": "c7090cd65eaf54d7a7df78d15290b2f5b82d6a73cb67d75e1f3076dcda4aaffc"
+    },
+    {
+      "path": "build/config/freetype/BUILD.gn",
+      "sha256": "355fac1350fc7dbd1ae8ac3869afd24c25083db5e08c313dc8ace3445639651f"
+    },
+    {
+      "path": "build/config/freetype/OWNERS",
+      "sha256": "0be1ed815630343df35e1d4805f2763e9d41fcd675ae4be11fe090b7ab6bc989"
+    },
+    {
+      "path": "build/config/freetype/freetype.gni",
+      "sha256": "b01e6a68499e0703c2b81fe35850c4cf619120a9e33642341d2d8686b88d9364"
+    },
+    {
+      "path": "skia/config/SkUserConfig.h",
+      "sha256": "291a4bd124b537d5ff4b56b54aacc5e5a8afe75ff1f2352c1c4b385c8048e7c1"
+    },
+    {
+      "path": "skia/BUILD.gn",
+      "sha256": "178511eb30d2a65af92aa9f2b654c41ca483d3fb44c3f630e750d724dca79971"
+    },
+    {
+      "path": "DEPS",
+      "sha256": "1074fb8eaea9b6d78c9ef76f41fb98a004aa551602d604cc11ac89cc863d23cd"
+    },
+    {
+      "path": "content/public/common/renderer_preferences.cc",
+      "sha256": "7699ff92f817c234e11d84947f9fc1cf76d5b50f25bf67edc0f093c1418b245d"
+    },
+    {
+      "path": "content/renderer/render_view_linux.cc",
+      "sha256": "73ce40bd977c788ba03d5463e91676425a33f99e41a27f081942b74e3a9c9532"
+    },
+    {
+      "path": "third_party/WebKit/Source/platform/fonts/linux/FontRenderStyle.cpp",
+      "sha256": "9a1f2829cb873e8ac97832b6f1053120bdf042be0c6535419228b86c50aa8471"
+    },
+    {
+      "path": "third_party/WebKit/Source/platform/fonts/skia/SkiaTextMetrics.cpp",
+      "sha256": "bf6d3a9c824e1c548b937e8f9121838fca95a8e716f7823671f88b0b27775395"
+    },
+    {
+      "path": "third_party/WebKit/Source/platform/fonts/shaping/HarfBuzzFace.cpp",
+      "sha256": "0fabbe95bbe0a3fe99e0e32ebee7830865e45ba6405323ab0eb831f47f8f7ca9"
+    },
+    {
+      "path": "third_party/WebKit/Source/platform/fonts/shaping/ShapeResultBloberizer.cpp",
+      "sha256": "cf90e47765e9d2b2a04124f6206a32cd5267214f17e839ef592225541844dd2b"
+    },
+    {
+      "path": "third_party/WebKit/Source/platform/fonts/FontDescription.cpp",
+      "sha256": "3f917688d51ec4630ab21f063ac6280932359dc5fdc4738ad28924ec3fd56bf6"
+    },
+    {
+      "path": "third_party/WebKit/Source/platform/fonts/FontCacheKey.h",
+      "sha256": "9f95433b6146788f6a39814cbd67757293207e30cc551e3c7846f792e8237aaa"
+    }
+  ],
+  "icu": "c8ca2962b46670ec89071ffd1291688983cd319c"
+}

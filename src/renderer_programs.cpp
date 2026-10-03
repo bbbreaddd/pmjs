@@ -49,8 +49,10 @@ GLuint linkProgram(const char* vertexSource, const char* fragmentSource) {
   GLint linked = GL_FALSE;
   glGetProgramiv(program, GL_LINK_STATUS, &linked);
   if (linked == GL_TRUE) return program;
+  std::array<char, 2048> log{};
+  glGetProgramInfoLog(program, static_cast<GLsizei>(log.size()), nullptr, log.data());
   glDeleteProgram(program);
-  throw std::runtime_error("shader program link failed");
+  throw std::runtime_error(std::string("shader program link failed: ") + log.data());
 }
 
 constexpr std::uint32_t primitiveSurfaceTag = 0x40000000U;
@@ -105,15 +107,20 @@ Renderer::Renderer(int width, int height, ImageStore& images)
     glGetUniformLocation(presentationProgram_, "videoOpacity");
   presentationUpperCanvasOpacityUniform_ =
     glGetUniformLocation(presentationProgram_, "upperCanvasOpacity");
+  presentationVideoPremultipliedUniform_ =
+    glGetUniformLocation(presentationProgram_, "videoPremultiplied");
+  presentationUpperCanvasPremultipliedUniform_ =
+    glGetUniformLocation(presentationProgram_, "upperCanvasPremultiplied");
   spriteEffectProgram_ = linkProgram(vertexSource, spriteEffectFragmentSource);
   spriteEffectVerticesUniform_ = glGetUniformLocation(spriteEffectProgram_, "spriteWorldVertices");
   spriteEffectProjectionUniform_ = glGetUniformLocation(spriteEffectProgram_, "spriteProjection");
   spriteEffectPackingUniform_ = glGetUniformLocation(spriteEffectProgram_, "pixiSpritePacking");
   spriteEffectPremultipliedUniform_ = glGetUniformLocation(spriteEffectProgram_, "texturePremultiplied");
   spriteEffectFrameUniform_ = glGetUniformLocation(spriteEffectProgram_, "spriteFrame");
+  spriteEffectTilingClampUniform_ = glGetUniformLocation(spriteEffectProgram_, "clampedTilingSampling");
   spriteEffectNearestUniform_ = glGetUniformLocation(spriteEffectProgram_, "nearestSampling");
   spriteEffectTextureSizeUniform_ =
-    glGetUniformLocation(spriteEffectProgram_, "textureSize");
+    glGetUniformLocation(spriteEffectProgram_, "imageDimensions");
   spriteEffectBlurUniform_ =
     glGetUniformLocation(spriteEffectProgram_, "blurRadius");
   spriteEffectMaskEnabledUniform_ =
@@ -203,7 +210,7 @@ Renderer::Renderer(int width, int height, ImageStore& images)
 }
 
 void Renderer::queryFilterProgramUniforms() {
-  textureSizeUniform_ = glGetUniformLocation(program_, "textureSize");
+  textureSizeUniform_ = glGetUniformLocation(program_, "imageDimensions");
   blurUniform_ = glGetUniformLocation(program_, "blurRadius");
   blurDirectionUniform_ = glGetUniformLocation(program_, "blurDirection");
   displacementEnabledUniform_ =
@@ -246,7 +253,7 @@ Renderer::TileProgramUniforms Renderer::queryTileProgramUniforms(std::uint32_t p
   uniforms.world = glGetUniformLocation(program, "world");
   uniforms.screen = glGetUniformLocation(program, "screenSize");
   uniforms.animation = glGetUniformLocation(program, "animationOffset");
-  uniforms.textureSize = glGetUniformLocation(program, "textureSize");
+  uniforms.textureSize = glGetUniformLocation(program, "imageDimensions");
   uniforms.color = glGetUniformLocation(program, "color");
   uniforms.overlayColor = glGetUniformLocation(program, "meshPostTintOverlayColor");
   uniforms.trianglePaintEnabled = glGetUniformLocation(program, "trianglePaintEnabled");
@@ -255,6 +262,7 @@ Renderer::TileProgramUniforms Renderer::queryTileProgramUniforms(std::uint32_t p
   uniforms.mvBounds = glGetUniformLocation(program, "mvBounds");
   uniforms.nearestSampling = glGetUniformLocation(program, "nearestSampling");
   uniforms.mvPremultipliedInput = glGetUniformLocation(program, "mvPremultipliedInput");
+  uniforms.texturePremultiplied = glGetUniformLocation(program, "texturePremultiplied");
   uniforms.maskEnabled = glGetUniformLocation(program, "maskEnabled");
   uniforms.maskImage = glGetUniformLocation(program, "maskImage");
   uniforms.maskTransform = glGetUniformLocation(program, "maskTransform");
@@ -302,6 +310,8 @@ void Renderer::createPixiPrograms(const std::string& precision) {
   simpleSpriteProjectionUniform_ = glGetUniformLocation(simpleProgram_, "spriteProjection");
   simpleSpritePackingUniform_ = glGetUniformLocation(simpleProgram_, "pixiSpritePacking");
   simpleSpritePremultipliedUniform_ = glGetUniformLocation(simpleProgram_, "texturePremultiplied");
+  simpleTilingClampUniform_ = glGetUniformLocation(simpleProgram_, "clampedTilingSampling");
+  simpleTextureSizeUniform_ = glGetUniformLocation(simpleProgram_, "imageDimensions");
   tileProgram_ = tile;
   meshPostTintOverlayProgram_ = meshOverlay;
   canvasTriangleBitmapProgram_ = canvasTriangleBitmap;
@@ -340,6 +350,7 @@ Renderer::~Renderer() {
   }
   destroyTarget(sceneTarget_);
   destroyTarget(offscreenTarget_);
+  destroyTarget(effectTarget_);
   destroyTarget(filterTarget_);
   destroyTarget(toneOverlayTarget_);
   destroyTarget(bloomTarget_);

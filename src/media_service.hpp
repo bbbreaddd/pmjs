@@ -56,6 +56,7 @@ class MediaService {
   bool stop(std::uint32_t handle);
   bool setSuspended(std::uint32_t handle, bool suspended);
   bool setParameters(std::uint32_t handle, float volume, float pitch, float pan);
+  bool setStereoGains(std::uint32_t handle, float left, float right);
   bool fade(std::uint32_t handle, float from, float to, double duration,
             bool stopWhenFinished);
   void setMasterVolume(float volume);

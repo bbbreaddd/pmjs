@@ -29,8 +29,26 @@ std::string::size_type countOccurrences(const std::string& haystack,
 }
 
 int main() {
-  using pmjs::renderer_shaders::filterFragmentSourceWithPrecision;
-  using pmjs::renderer_shaders::fragmentSource;
+  using namespace pmjs::renderer_shaders;
+
+  // Proprietary Mali compilers require the version directive on the first line.
+  for (const char* source : {vertexSource, fragmentSource, tileVertexSource,
+      simpleFragmentSource, generatedTextureFragmentSource,
+      presentationVertexSource, presentationFragmentSource,
+      spriteEffectFragmentSource, tileFragmentSource,
+      clearTriangleFragmentSource, primitiveSurfaceFragmentSource}) {
+    check(std::string(source).starts_with("#version 300 es\n"),
+          "shader version directive starts on the first line");
+    check(std::string(source).find(" textureSize;") == std::string::npos,
+          "shader avoids a uniform named after the GLSL textureSize built-in");
+  }
+  for (const char* precision : {"lowp", "mediump", "highp"}) {
+    for (const bool canvasTriangleBitmap : {false, true}) {
+      check(meshPostTintOverlayFragmentSourceWithPrecision(precision, canvasTriangleBitmap)
+              .starts_with("#version 300 es\n"),
+            "generated shader keeps the version directive on the first line");
+    }
+  }
 
   const std::string stock(fragmentSource);
   check(countOccurrences(stock, "precision mediump float;") == 1,

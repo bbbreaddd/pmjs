@@ -3,6 +3,7 @@
 (function() {
   var registry = Object.create(null);
   var fired = Object.create(null);
+  var failures = Object.create(null);
 
   function on(name, owner, callback) {
     if (typeof owner === 'function') {
@@ -10,10 +11,13 @@
       owner = 'anonymous';
     }
     if (typeof callback !== 'function') return;
+    if (failures[name]) throw failures[name];
     if (fired[name]) {
       try { callback(); } catch (error) {
         console.error('[pmjs] error running late phase ' + name +
           ' (owner ' + owner + '):', error);
+        failures[name] = error;
+        throw error;
       }
       return;
     }
@@ -23,6 +27,7 @@
   }
 
   function emit(name) {
+    if (failures[name]) throw failures[name];
     if (fired[name]) return false;
     fired[name] = true;
     var entries = registry[name] || [];
@@ -31,6 +36,8 @@
       try { entry.callback(); } catch (error) {
         console.error('[pmjs] error running phase ' + name +
           ' (owner ' + entry.owner + '):', error);
+        failures[name] = error;
+        throw error;
       }
     });
     return true;

@@ -3,6 +3,8 @@
 #include <SDL.h>
 #include <EGL/egl.h>
 #include <GLES3/gl3.h>
+#include <dlfcn.h>
+#include <link.h>
 
 #include <algorithm>
 #include <cctype>
@@ -38,6 +40,17 @@ bool environmentFlag(const char* name) {
   if (!value) return false;
   const std::string text(value);
   return text == "1" || text == "true" || text == "on" || text == "yes";
+}
+
+void printLoadedLibraries() {
+  if (!environmentFlag("PMJS_GRAPHICS_DIAGNOSTICS")) return;
+  dl_iterate_phdr([](dl_phdr_info* info, std::size_t, void*) {
+    const std::string name = info->dlpi_name ? info->dlpi_name : "";
+    if (name.find(".so") != std::string::npos || name.find(".node") != std::string::npos)
+      std::cout << "[pmjs-library] path=" << name << '\n';
+    return 0;
+  }, nullptr);
+  std::cout.flush();
 }
 
 int swapIntervalFromEnvironment() {
@@ -280,8 +293,52 @@ int standardGamepadButton(int button) {
 }
 
 Platform::Platform(int width, int height, std::string title) {
+  const char* exitHotkey = std::getenv("PMJS_EXIT_HOTKEY");
+  if (exitHotkey && *exitHotkey) {
+    exitHotkeys_.clear();
+    if (std::string(exitHotkey) != "none") {
+      const int button = standardGamepadButton(SDL_GameControllerGetButtonFromString(exitHotkey));
+      if (button < 0) throw std::runtime_error("PMJS_EXIT_HOTKEY must name an SDL controller button or none");
+      exitHotkeys_.push_back(button);
+    }
+  }
+  if (environmentFlag("PMJS_GRAPHICS_DIAGNOSTICS")) {
+    SDL_version compiled{}, runtime{};
+    SDL_VERSION(&compiled);
+    SDL_GetVersion(&runtime);
+    std::cout << "[pmjs-platform] requested_gles=3.0 sdl_compiled="
+              << int(compiled.major) << '.' << int(compiled.minor) << '.' << int(compiled.patch)
+              << " sdl_runtime=" << int(runtime.major) << '.' << int(runtime.minor) << '.' << int(runtime.patch)
+              << " available_drivers=";
+    for (int index = 0; index < SDL_GetNumVideoDrivers(); ++index) {
+      if (index) std::cout << ',';
+      std::cout << SDL_GetVideoDriver(index);
+    }
+    std::cout << std::endl;
+    printLoadedLibraries();
+  }
+  // SDL's compiled library names can differ from the renderer's linked providers.
+  const std::pair<const char*, const void*> providers[] = {
+    {"SDL_VIDEO_EGL_DRIVER", reinterpret_cast<const void*>(eglGetDisplay)},
+    {"SDL_VIDEO_GL_DRIVER", reinterpret_cast<const void*>(glGetString)}
+  };
+  for (const auto& [name, symbol] : providers) {
+    Dl_info info{};
+    if (!std::getenv(name) && dladdr(symbol, &info) && info.dli_fname)
+      SDL_setenv(name, info.dli_fname, 0);
+    if (environmentFlag("PMJS_GRAPHICS_DIAGNOSTICS"))
+      std::cout << "[pmjs-platform] " << name << '='
+                << (std::getenv(name) ? std::getenv(name) : "default") << '\n';
+  }
+  // The renderer calls EGL/GLES directly; an X11 GLX context uses another API.
+  SDL_SetHintWithPriority("SDL_VIDEO_X11_FORCE_EGL", "1", SDL_HINT_DEFAULT);
+  // Older SDL versions select EGL for ES contexts through this hint instead.
+  SDL_SetHintWithPriority(SDL_HINT_OPENGL_ES_DRIVER, "1", SDL_HINT_DEFAULT);
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_AUDIO) != 0) {
-    throw std::runtime_error(std::string("SDL_Init failed: ") + SDL_GetError());
+    const std::string error = SDL_GetError();
+    printLoadedLibraries();
+    SDL_Quit();
+    throw std::runtime_error("SDL_Init failed: " + error);
   }
   // Window is the physical drawable; the game size stays with the renderer.
   SDL_Rect bounds{};
@@ -317,30 +374,55 @@ Platform::Platform(int width, int height, std::string title) {
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
   SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-  SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 8);
-  SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 8);
-  SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8);
-  SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);
+  // Presentation is opaque; scene alpha and effect depth live in offscreen targets.
+  SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 0);
+  SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 0);
+  SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 0);
 
-  window_ = SDL_CreateWindow(title.c_str(), SDL_WINDOWPOS_CENTERED,
-                             SDL_WINDOWPOS_CENTERED, windowWidth_,
-                             windowHeight_,
-                             SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN);
-  if (!window_) {
-    SDL_Quit();
-    throw std::runtime_error(std::string("SDL_CreateWindow failed: ") + SDL_GetError());
+  std::string creationErrors;
+  // Some native-window providers expose only RGB565. Offscreen targets retain RGBA8.
+  constexpr int windowConfigs[][3] = {{8, 8, 8}, {5, 6, 5}};
+  for (const auto& rgb : windowConfigs) {
+    SDL_GL_SetAttribute(SDL_GL_RED_SIZE, rgb[0]);
+    SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, rgb[1]);
+    SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, rgb[2]);
+    SDL_ClearError();
+    window_ = SDL_CreateWindow(title.c_str(), SDL_WINDOWPOS_CENTERED,
+                               SDL_WINDOWPOS_CENTERED, windowWidth_, windowHeight_,
+                               SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN);
+    if (window_) context_ = SDL_GL_CreateContext(window_);
+    if (context_) break;
+    const std::string error = std::string(window_ ? "SDL_GL_CreateContext" : "SDL_CreateWindow") +
+      " failed (RGB" + std::to_string(rgb[0]) + std::to_string(rgb[1]) +
+      std::to_string(rgb[2]) + "): " + SDL_GetError();
+    if (!creationErrors.empty()) creationErrors += "; ";
+    creationErrors += error;
+    std::cerr << "[pmjs-platform] " << error << '\n';
+    if (window_) SDL_DestroyWindow(window_);
+    window_ = nullptr;
   }
+  if (!context_) {
+    printLoadedLibraries();
+    SDL_Quit();
+    throw std::runtime_error(creationErrors);
+  }
+  SDL_GetWindowSize(window_, &windowWidth_, &windowHeight_);
   const std::uint32_t windowFlags = SDL_GetWindowFlags(window_);
   windowFocused_ = (windowFlags & SDL_WINDOW_INPUT_FOCUS) != 0;
   windowVisible_ = (windowFlags & SDL_WINDOW_SHOWN) != 0 &&
     (windowFlags & (SDL_WINDOW_HIDDEN | SDL_WINDOW_MINIMIZED)) == 0;
 
-  context_ = SDL_GL_CreateContext(window_);
-  if (!context_) {
+  GLint contextMajor = 0;
+  glGetIntegerv(GL_MAJOR_VERSION, &contextMajor);
+  const auto* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+  if (contextMajor < 3 || !version || std::string(version).rfind("OpenGL ES ", 0) != 0) {
+    printLoadedLibraries();
+    SDL_GL_DeleteContext(context_);
+    context_ = nullptr;
     SDL_DestroyWindow(window_);
     window_ = nullptr;
     SDL_Quit();
-    throw std::runtime_error(std::string("SDL_GL_CreateContext failed: ") + SDL_GetError());
+    throw std::runtime_error("PMJS requires an OpenGL ES 3.0 or newer context");
   }
   const auto drawable = drawableSize();
   std::cout << "[pmjs] display=" << displayWidth_ << "x" << displayHeight_
@@ -412,12 +494,14 @@ bool Platform::pollEvents() {
       gamepadDown_.erase(std::remove_if(gamepadDown_.begin(), gamepadDown_.end(),
         [&](const auto& entry) { return entry.first == event.cdevice.which; }), gamepadDown_.end());
       recomputeLegacyInput();
-      hotkeyDown_ = startDown_ = false;
     }
     if (event.type == SDL_WINDOWEVENT && event.window.windowID ==
         SDL_GetWindowID(window_)) {
       switch (event.window.event) {
         case SDL_WINDOWEVENT_FOCUS_GAINED: windowFocused_ = true; break;
+        case SDL_WINDOWEVENT_SIZE_CHANGED:
+          SDL_GetWindowSize(window_, &windowWidth_, &windowHeight_);
+          break;
         case SDL_WINDOWEVENT_FOCUS_LOST:
           windowFocused_ = false;
           keysDown_.clear(); keysPressed_.clear(); keyEvents_.clear();
@@ -458,15 +542,6 @@ bool Platform::pollEvents() {
       });
       if (controller == controllers_.end()) continue;
       isDown = event.type == SDL_CONTROLLERBUTTONDOWN;
-      if (event.cbutton.button == SDL_CONTROLLER_BUTTON_BACK ||
-          event.cbutton.button == SDL_CONTROLLER_BUTTON_GUIDE) {
-        hotkeyDown_ = isDown;
-        if (hotkeyDown_ && startDown_) return false;
-      }
-      if (event.cbutton.button == SDL_CONTROLLER_BUTTON_START) {
-        startDown_ = isDown;
-        if (hotkeyDown_ && startDown_) return false;
-      }
       const int button = standardGamepadButton(event.cbutton.button);
       if (button < 0) continue;
       auto entry = std::find_if(gamepadPressed_.begin(), gamepadPressed_.end(), [&](const auto& value) {
@@ -488,6 +563,10 @@ bool Platform::pollEvents() {
       if (fresh)
         if (std::find(entry->second.begin(), entry->second.end(), button) == entry->second.end()) entry->second.push_back(button);
       setPhysical(heldEntry->second, button, isDown);
+      const auto held = [&](int candidate) {
+        return std::find(heldEntry->second.begin(), heldEntry->second.end(), candidate) != heldEntry->second.end();
+      };
+      if (isDown && held(9) && std::any_of(exitHotkeys_.begin(), exitHotkeys_.end(), held)) return false;
       action = actionForButton(event.cbutton.button);
     }
     if (!action) continue;
@@ -667,11 +746,15 @@ void Platform::printGraphicsDiagnostics() const {
   int doubleBuffer = 0;
   int depthBits = 0;
   int stencilBits = 0;
-  SDL_GL_GetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, &contextMajor);
-  SDL_GL_GetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, &contextMinor);
+  int redBits = 0, greenBits = 0, blueBits = 0;
+  glGetIntegerv(GL_MAJOR_VERSION, &contextMajor);
+  glGetIntegerv(GL_MINOR_VERSION, &contextMinor);
   SDL_GL_GetAttribute(SDL_GL_DOUBLEBUFFER, &doubleBuffer);
   SDL_GL_GetAttribute(SDL_GL_DEPTH_SIZE, &depthBits);
   SDL_GL_GetAttribute(SDL_GL_STENCIL_SIZE, &stencilBits);
+  SDL_GL_GetAttribute(SDL_GL_RED_SIZE, &redBits);
+  SDL_GL_GetAttribute(SDL_GL_GREEN_SIZE, &greenBits);
+  SDL_GL_GetAttribute(SDL_GL_BLUE_SIZE, &blueBits);
   GLint maxTextureSize = 0;
   GLint maxTextureUnits = 0;
   GLint maxRenderbufferSize = 0;
@@ -691,11 +774,18 @@ void Platform::printGraphicsDiagnostics() const {
             << " double_buffer=" << doubleBuffer
             << " depth_bits=" << depthBits
             << " stencil_bits=" << stencilBits
+            << " rgb_bits=" << redBits << ',' << greenBits << ',' << blueBits
             << " max_texture=" << maxTextureSize
             << " max_texture_units=" << maxTextureUnits
             << " max_renderbuffer=" << maxRenderbufferSize
             << " max_vertex_attributes=" << maxVertexAttributes
             << " software=" << (softwareRenderer(renderer) ? "yes" : "no") << '\n';
+  GLint precisionRange[2] = {}, precisionBits = 0;
+  glGetShaderPrecisionFormat(GL_FRAGMENT_SHADER, GL_HIGH_FLOAT, precisionRange, &precisionBits);
+  std::cout << "[pmjs-gpu] fragment_highp_bits=" << precisionBits
+            << " fragment_highp_range=" << precisionRange[0] << ',' << precisionRange[1] << '\n';
+  printLoadedLibraries();
+  std::cout.flush();
 }
 
 }  // namespace pmjs

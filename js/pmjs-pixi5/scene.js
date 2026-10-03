@@ -15,12 +15,16 @@
   [PIXI.Container, PIXI.Sprite, PIXI.TilingSprite].forEach(function(type) {
     if (type) registerRenderContract(type.prototype);
   });
-  function renderContract(node) {
+  function findRenderContract(node) {
     var prototype = Object.getPrototypeOf(node);
     var contract;
     while (prototype && !(contract = contracts.get(prototype))) {
       prototype = Object.getPrototypeOf(prototype);
     }
+    return contract;
+  }
+  function renderContract(node) {
+    var contract = findRenderContract(node);
     if (!contract || node.render !== contract.render ||
         (contract.callsLeaf && node._render !== contract.leaf) ||
         ((node.mask || activeFilters(node)) && node.renderAdvanced !== contract.advanced)) {
@@ -34,6 +38,7 @@
   PMJS.pixi5 = {
     registerRenderContract: registerRenderContract,
     nativeSource: nativeSource,
+    rejectRender: reject,
     releaseRenderer: function(renderer) {
       rendererReleases.forEach(function(release) { release(renderer); });
     }
@@ -92,7 +97,42 @@
     return null;
   }
 
+  function releaseTilingTexture(texture) {
+    var canvas = texture.__pmjsPixi5TilingCanvas;
+    if (canvas && typeof canvas._releaseNativeCanvas === 'function') {
+      canvas._releaseNativeCanvas();
+    }
+    delete texture.__pmjsPixi5TilingCanvas;
+    delete texture.__pmjsPixi5TilingSignature;
+  }
+  if (PMJS.methods) {
+    PMJS.methods.wrap({
+      key: 'PIXI.Texture.destroy.pixi5-tiling', id: 'pixi5-tiling-texture-release',
+      getTarget: function() { return PIXI.Texture && PIXI.Texture.prototype; },
+      method: 'destroy',
+      wrap: function(original) {
+        return function() {
+          var result = original.apply(this, arguments);
+          releaseTilingTexture(this);
+          return result;
+        };
+      }
+    });
+  }
+
+  function simpleTilingTexture(texture) {
+    var base = texture.baseTexture;
+    var frame = texture._frame || texture.frame;
+    function powerOfTwo(value) {
+      return value > 0 && Number.isInteger(value) && (value & (value - 1)) === 0;
+    }
+    return frame.width === base.width && frame.height === base.height &&
+      powerOfTwo(base.width * (Number(base.resolution) || 1)) &&
+      powerOfTwo(base.height * (Number(base.resolution) || 1));
+  }
+
   function nativeTilingTexture(texture) {
+    if (!texture || texture.valid === false) return null;
     var base = texture && texture.baseTexture;
     var source = textureSource(base);
     var native = nativeSource(source);
@@ -105,6 +145,7 @@
     var baseHeight = Number(base.height) || frame.height;
     if (frame.x === 0 && frame.y === 0 && frame.width === baseWidth &&
         frame.height === baseHeight) {
+      releaseTilingTexture(texture);
       return { handle: native.handle, resolution: resolution };
     }
     var sourceRevision = source && source.__pmjsContentRevision;
@@ -130,10 +171,12 @@
       resolution: resolution };
   }
 
+  function RenderingGap(message) { this.message = message; }
+  RenderingGap.prototype = Object.create(Error.prototype);
   function reject(capability, node, detail) {
     var producer = node && node.constructor && node.constructor.name || 'DisplayObject';
     PMJS.compat.hit(capability, producer);
-    throw new Error('unsupported Pixi 5 native capability: ' +
+    throw new RenderingGap('unsupported Pixi 5 native capability: ' +
       capability + ': ' + producer + (detail ? ': ' + detail : ''));
   }
 
@@ -195,6 +238,23 @@
   var renderResolution = 1;
   var renderOwner;
   var viewport;
+  var filterTargets;
+  function needsFilterTarget(node) {
+    if (!node || !node.visible || !node.renderable || node.alpha <= 0) return false;
+    if (!drawableTransform(localTransform(node))) return false;
+    if (filterTargets.has(node)) return filterTargets.get(node);
+    var contract = findRenderContract(node) || {};
+    var children = contract.children ? contract.children(node, viewport).map(function(entry) {
+      return entry.node;
+    }) : node.children || [];
+    var isScreenSprite = typeof ScreenSprite === 'function' && node instanceof ScreenSprite;
+    // ScreenSprite's Graphics is already represented by the native screen fill.
+    var result = !!contract.filterTarget || children.some(function(child) {
+      return !(isScreenSprite && child === node._graphics) && needsFilterTarget(child);
+    });
+    filterTargets.set(node, result);
+    return result;
+  }
   function clipRecord(parent, clip) {
     var index = addRecord(parent, 0, 0, 0xffffff, 0, identity, 1);
     metadata[index * metadataStride + 5] |= 1;
@@ -208,27 +268,51 @@
     if (!node || !node.visible || !node.renderable || node.alpha <= 0) return;
     var transform = localTransform(node);
     if (!drawableTransform(transform)) return;
+    var checkpoint = count;
+    try {
+      writePreparedNode(node, parent, clip, transform);
+    } catch (error) {
+      if (!(error instanceof RenderingGap)) throw error;
+      // Only a reported compatibility gap degrades drawing. Native failures and
+      // authored exceptions remain visible; discard any partial leaf/filter records.
+      count = checkpoint;
+      if (clip) parent = clipRecord(parent, clip);
+      var index = addRecord(parent, 0, 0, 0xffffff, 0, transform,
+        Number.isFinite(node.alpha) ? node.alpha : 1);
+      (node.children || []).forEach(function(child) { writeNode(child, index); });
+    }
+  }
+  function writePreparedNode(node, parent, clip, transform) {
     var contract = renderContract(node);
     if (clip) parent = clipRecord(parent, clip);
     if (node.mask) reject('render.mask', node);
     var encodedFilters = [];
+    var supportedFilters = false;
+    var filterTarget = activeFilters(node) && needsFilterTarget(node);
     if (activeFilters(node)) {
       node.filters.forEach(function(filter) {
         if (!filter || filter.enabled === false) return;
-        var encoded = null;
-        for (var i = 0; i < filterEncoders.length && !encoded; i++) {
-          encoded = filterEncoders[i](filter);
+        try {
+          var encoded = null;
+          for (var i = 0; i < filterEncoders.length && !encoded; i++) {
+            encoded = filterEncoders[i](filter, node, viewport, renderResolution, renderOwner);
+          }
+          if (!encoded) reject('render.filter', node);
+          encoded = Object.assign({}, encoded, { blendMode: blendMode(filter) });
+          if (encoded.blendMode && !schema.filterCompositeBlend) {
+            reject('render.filter-blend', node);
+          }
+          supportedFilters = true;
+          if (!encoded.neutral || encoded.blendMode || filterTarget) encodedFilters.push(encoded);
+        } catch (error) {
+          if (!(error instanceof RenderingGap)) throw error;
         }
-        if (!encoded) reject('render.filter', node);
-        encoded = Object.assign({}, encoded, { blendMode: blendMode(filter) });
-        if (encoded.blendMode && !schema.filterCompositeBlend) {
-          reject('render.filter-blend', node);
-        }
-        if (!encoded.neutral || encoded.blendMode) encodedFilters.push(encoded);
       });
     }
-    if (activeFilters(node) && node.filterArea) {
+    if (supportedFilters && node.filterArea) {
       parent = clipRecord(parent, node.filterArea);
+    } else if (encodedFilters.length && filterTarget && typeof node.getBounds === 'function') {
+      parent = clipRecord(parent, node.getBounds(true));
     }
     encodedFilters.reverse().forEach(function(filter) {
       var begin = addRecord(parent, 6, 0, 0xffffff, filter.kind, identity, 1);
@@ -243,7 +327,9 @@
     var isScreenSprite = typeof ScreenSprite === 'function' &&
       node instanceof ScreenSprite;
     var isTilingSprite = PIXI.TilingSprite && node instanceof PIXI.TilingSprite;
-    if (type && type !== 'batch' && type !== 'sprite' && !isTilingSprite) {
+    if (isTilingSprite ? node.pluginName !== 'tilingSprite' :
+        isSprite ? node.pluginName !== 'batch' :
+        type && type !== 'batch' && type !== 'sprite') {
       reject('render.renderer-plugin', node);
     }
     if (PIXI.Graphics && node instanceof PIXI.Graphics && !isSprite &&
@@ -277,7 +363,25 @@
             frame && frame.width, frame && frame.height].join(',') +
           ' trim=' + !!texture.trim + ' rotate=' + tilingRotation);
       }
-      tilingTextureInfo = nativeTilingTexture(texture);
+      if ((node.clampMargin !== undefined && node.clampMargin !== 0.5) ||
+          (node.uvMatrix && node.uvMatrix.clampOffset !== 0)) {
+        reject('render.tiling-clamp', node);
+      }
+      var tileTransform = node.tileTransform;
+      if (!tileTransform || typeof tileTransform.updateLocalTransform !== 'function') {
+        reject('render.tiling-transform', node);
+      }
+      tileTransform.updateLocalTransform();
+      var tilingMatrix = tileTransform.localTransform;
+      var finiteSampling = tilingMatrix && ['a', 'b', 'c', 'd', 'tx', 'ty']
+        .every(function(key) { return Number.isFinite(tilingMatrix[key]); });
+      if (finiteSampling && (tilingMatrix.b !== 0 || tilingMatrix.c !== 0)) {
+        reject('render.tiling-transform', node, 'rotated or skewed sampling');
+      }
+      // MZ can leave the origin nonfinite between image readiness and the next
+      // scene update. Omit undefined sampling; retain children and authored state.
+      tilingTextureInfo = finiteSampling && tilingMatrix.a !== 0 &&
+        tilingMatrix.d !== 0 ? nativeTilingTexture(texture) : null;
       if (tilingTextureInfo && frame && frame.width > 0 && frame.height > 0 &&
           node.width > 0 && node.height > 0) {
         kind = 2;
@@ -350,22 +454,22 @@
       var tilingValueOffset = index * valueStride;
       var tilingMetadataOffset = index * metadataStride;
       var tilingResolution = tilingTextureInfo.resolution;
-      var tileScale = node.tileScale || { x: 1, y: 1 };
-      var scaleX = Math.abs(Number(tileScale.x)) > 0.000001 ?
-        Number(tileScale.x) : 1;
-      var scaleY = Math.abs(Number(tileScale.y)) > 0.000001 ?
-        Number(tileScale.y) : 1;
-      var tilePosition = node.tilePosition || { x: 0, y: 0 };
+      if (!simpleTilingTexture(texture)) {
+        if (!schema.clampedTilingSampling) reject('render.tiling-clamp', node);
+        metadata[tilingMetadataOffset + 5] |= 32768;
+      }
+      var scaleX = tilingMatrix.a;
+      var scaleY = tilingMatrix.d;
       if (PIXI.SCALE_MODES &&
           texture.baseTexture.scaleMode === PIXI.SCALE_MODES.NEAREST) {
         metadata[tilingMetadataOffset + 5] |= 8;
       }
       values[tilingValueOffset + 7] = localX;
       values[tilingValueOffset + 8] = localY;
-      values[tilingValueOffset + 9] = -tilePosition.x / scaleX *
-        tilingResolution;
-      values[tilingValueOffset + 10] = -tilePosition.y / scaleY *
-        tilingResolution;
+      values[tilingValueOffset + 9] = (-tilingMatrix.tx +
+        (node.uvRespectAnchor ? localX : 0)) / scaleX * tilingResolution;
+      values[tilingValueOffset + 10] = (-tilingMatrix.ty +
+        (node.uvRespectAnchor ? localY : 0)) / scaleY * tilingResolution;
       values[tilingValueOffset + 11] = node.width / scaleX *
         tilingResolution;
       values[tilingValueOffset + 12] = node.height / scaleY *
@@ -397,6 +501,7 @@
       try { stage.updateTransform(); } finally { stage.parent = previousParent; }
     }
     count = 0;
+    filterTargets = new WeakMap();
     if (backgroundColor !== null) {
       addRecord(0xffffffff, 3, 0, backgroundColor, 0, identity, 1);
     }

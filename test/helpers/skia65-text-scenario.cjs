@@ -1,0 +1,27 @@
+'use strict';
+
+const cases = [
+  { name: 'fractional', text: 'AV To', size: 24.5, x: 12.25, y: 38.75 },
+  { name: 'centered', text: 'AV To', align: 'center', x: 100.125, size: 27.375, y: 40.2 },
+  { name: 'embedded-nul', text: 'A\0V', size: 24 },
+  { name: 'empty', text: '' },
+  { name: 'kerning', text: 'AVATAR To' },
+  { name: 'ligatures', text: 'office ffi fi fl' },
+  { name: 'combining', text: 'e\u0323\u0301 é e\u0301' },
+  { name: 'fallback-cluster', text: 'e\u0301', fontFiles: ['testfont.ttf', 'text-shaping.ttf'] },
+  { name: 'fallback-ligature', text: 'ffi', fontFiles: ['testfont.ttf', 'text-shaping.ttf'] },
+  { name: 'clipped-stroke', text: 'OMV', x: -2.25, y: 17.8, stroke: 5.5 },
+  { name: 'disabled', text: 'CONTINUE', alpha: 160 / 255 },
+  { name: 'opaque', text: 'AV To', background: 0x243648ff, fill: 0x769bcaff },
+  { name: 'translucent-background', text: 'AV To', background: 0x33557766, alpha: 0.625 },
+  { name: 'translucent-color', text: 'OMV', fill: 0x25539d80, alpha: 0.625 },
+  { name: 'bold', text: 'AV To', bold: true },
+  { name: 'italic', text: 'AV To', italic: true },
+  { name: 'bold-italic', text: 'ffi AV', bold: true, italic: true },
+  { name: 'miter', text: 'MV', join: 'miter', miterLimit: 2, stroke: 3.75 },
+  { name: 'bevel', text: 'MV', join: 'bevel', cap: 'square', stroke: 3.75 },
+  { name: 'zero-opacity', text: 'AV To', alpha: 0, outline: 0 },
+].map(item => ({ width: 224, height: 72, x: 12, y: 44, size: 28, align: 'left',
+  fontFiles: ['text-shaping.ttf'], fill: 0xffffffff, outline: 0x00000080,
+  alpha: 1, stroke: 4, join: 'round', cap: 'butt', miterLimit: 10, background: 0, ...item }));
+module.exports = { cases };

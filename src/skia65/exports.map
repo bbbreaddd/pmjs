@@ -1,0 +1,15 @@
+PMJS_SKIA65_2 {
+  global:
+    pmjs_skia65_identity;
+    pmjs_skia65_font_open;
+    pmjs_skia65_font_open_many;
+    pmjs_skia65_font_close;
+    pmjs_skia65_measure;
+    pmjs_skia65_measure_metrics;
+    pmjs_skia65_get_stats;
+    pmjs_skia65_cache_limits;
+    pmjs_skia65_draw;
+    pmjs_skia65_bounds;
+    pmjs_skia65_set_telemetry;
+  local: *;
+};

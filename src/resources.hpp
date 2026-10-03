@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <deque>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -20,6 +21,7 @@ struct ImageInfo {
   int width = 0;
   int height = 0;
   std::uint32_t texture = 0;
+  bool premultiplied = false;
 };
 
 struct ImagePixels {
@@ -42,6 +44,25 @@ struct ImageMemoryEntry {
   std::string path;
 };
 
+class ImageFileSource {
+ public:
+  ~ImageFileSource();
+  const std::string& key() const { return key_; }
+  const std::filesystem::path& path() const { return path_; }
+  ImageFileSource(const ImageFileSource&) = delete;
+  ImageFileSource& operator=(const ImageFileSource&) = delete;
+
+ private:
+  friend class ImageStore;
+  ImageFileSource() = default;
+  int descriptor_ = -1;
+  std::size_t size_ = 0;
+  std::int64_t modifiedSeconds_ = 0;
+  std::int64_t modifiedNanoseconds_ = 0;
+  std::filesystem::path path_;
+  std::string key_;
+};
+
 class ImageStore {
  public:
   static constexpr std::size_t defaultWarmBudgetBytes = 4U * 1024U * 1024U;
@@ -52,19 +73,22 @@ class ImageStore {
   ImageStore(const ImageStore&) = delete;
   ImageStore& operator=(const ImageStore&) = delete;
 
-  static std::optional<ImagePixels> decodeFile(const std::filesystem::path& path);
+  // Opening captures the file identity before async work; atomic replacement
+  // cannot redirect an in-flight load to a different inode.
+  static std::unique_ptr<ImageFileSource> openFile(const std::filesystem::path& path);
+  static std::optional<ImagePixels> decodeFile(const ImageFileSource& source);
   static std::optional<ImagePixels> decodeMemory(const void* data, std::size_t size);
   static std::optional<ImagePixels> decodePngFromMemory(const void* data, std::size_t size);
   static std::optional<ImagePixels> decodeJpegFromMemory(const void* data, std::size_t size);
-  std::optional<ImageInfo> acquireCached(const std::filesystem::path& path);
+  std::optional<ImageInfo> acquireCached(const ImageFileSource& source);
   std::optional<ImageInfo> loadPng(const std::filesystem::path& path,
                                    bool retainCpuPixels = false);
-  std::optional<ImageInfo> installDecoded(const std::filesystem::path& path,
+  std::optional<ImageInfo> installDecoded(const ImageFileSource& source,
                                           ImagePixels pixels,
                                           bool retainCpuPixels = false);
   std::optional<ImageInfo> installDecodedMemory(ImagePixels pixels,
                                                 bool retainCpuPixels = false);
-  std::optional<ImageInfo> createRgba(int width, int height, const void* pixels);
+  std::optional<ImageInfo> createRgba(int width, int height, const void* pixels, bool premultiplied = false);
   // GPU-only image storage. readPixels() intentionally returns no CPU copy.
   std::optional<ImageInfo> createRenderTarget(int width, int height);
   bool isRenderTarget(ImageHandle handle) const;
@@ -117,12 +141,14 @@ class ImageStore {
     std::uint64_t lastUsedSerial = 0;
     mutable std::uint16_t cpuPixelFrames = 0;
     // Atlas CPU pixels are retained for the lifetime of the slot so blt()
-    // never pays a second disk open + PNG decode. Freed only in destroySlot
+    // never pays a second pixel readback. Freed only in destroySlot
     // alongside the GPU texture.
     bool gpuOnly = false;
     bool renderTarget = false;
+    bool premultiplied = false;
     bool retainCpuPixels = false;
     std::string cacheKey;
+    std::filesystem::path sourcePath;
     mutable std::optional<ImagePixels> cachedPixels;
     bool live = false;
   };

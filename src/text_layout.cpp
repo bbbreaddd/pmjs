@@ -49,7 +49,7 @@ bool neutralScript(hb_script_t script) {
 std::vector<ShapedGlyph> shapeRun(std::span<const std::uint32_t> text,
     unsigned begin, unsigned end, hb_script_t script, hb_direction_t direction,
     std::span<const TextFont> fonts, std::uint64_t& fallbackShapeCalls,
-    bool allowFallback = true) {
+    double positionScale, bool allowFallback = true) {
   auto buffer = newBuffer();
   hb_buffer_add_utf32(buffer.get(), text.data(), static_cast<int>(text.size()),
                       begin, static_cast<int>(end - begin));
@@ -58,7 +58,9 @@ std::vector<ShapedGlyph> shapeRun(std::span<const std::uint32_t> text,
   hb_buffer_set_language(buffer.get(), hb_language_from_string("und", -1));
   hb_buffer_set_cluster_level(buffer.get(), HB_BUFFER_CLUSTER_LEVEL_MONOTONE_GRAPHEMES);
   // Removal happens after shaping, so joiners and selectors still affect glyph selection.
+#if HB_VERSION_ATLEAST(2, 0, 0)
   hb_buffer_set_flags(buffer.get(), HB_BUFFER_FLAG_REMOVE_DEFAULT_IGNORABLES);
+#endif
   hb_shape(fonts.front().font, buffer.get(), nullptr, 0);
   if (!hb_buffer_allocation_successful(buffer.get())) throw std::bad_alloc();
   unsigned count = 0;
@@ -68,8 +70,8 @@ std::vector<ShapedGlyph> shapeRun(std::span<const std::uint32_t> text,
   glyphs.reserve(count);
   for (unsigned i = 0; i < count; ++i) {
     glyphs.push_back({fonts.front().strikeId, info[i].codepoint, info[i].cluster,
-      positions[i].x_advance / 64.0, positions[i].y_advance / 64.0,
-      positions[i].x_offset / 64.0, positions[i].y_offset / 64.0});
+      positions[i].x_advance / positionScale, positions[i].y_advance / positionScale,
+      positions[i].x_offset / positionScale, positions[i].y_offset / positionScale});
   }
 
   // Retry whole shaping clusters, including bases and marks, with surrounding context.
@@ -84,7 +86,7 @@ std::vector<ShapedGlyph> shapeRun(std::span<const std::uint32_t> text,
     for (std::size_t font = 1; font < fonts.size(); ++font) {
       ++fallbackShapeCalls;
       auto candidate = shapeRun(text, start, stop, script, direction,
-                                 fonts.subspan(font, 1), fallbackShapeCalls, false);
+                                 fonts.subspan(font, 1), fallbackShapeCalls, positionScale, false);
       if (!candidate.empty() && std::none_of(candidate.begin(), candidate.end(), missingGlyph)) {
         replacement = std::move(candidate);
         break;
@@ -135,7 +137,7 @@ std::vector<ShapedGlyph> shapeRun(std::span<const std::uint32_t> text,
 
 ShapedText shapeText(std::span<const std::uint32_t> text,
                      std::span<const TextFont> fonts,
-                     std::uint64_t& fallbackShapeCalls) {
+                     std::uint64_t& fallbackShapeCalls, double positionScale) {
   ShapedText result;
   if (fonts.empty()) return result;
   std::vector<hb_script_t> scripts;
@@ -157,7 +159,7 @@ ShapedText shapeText(std::span<const std::uint32_t> text,
     while (end < text.size() && scripts[end] == scripts[begin]) ++end;
     auto direction = hb_script_get_horizontal_direction(scripts[begin]);
     if (direction == HB_DIRECTION_INVALID) direction = HB_DIRECTION_LTR;
-    auto run = shapeRun(text, begin, end, scripts[begin], direction, fonts, fallbackShapeCalls);
+    auto run = shapeRun(text, begin, end, scripts[begin], direction, fonts, fallbackShapeCalls, positionScale);
     for (const auto& glyph : run) result.advanceX += glyph.xAdvance;
     result.glyphs.insert(result.glyphs.end(), run.begin(), run.end());
     begin = end;

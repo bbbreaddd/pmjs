@@ -54,7 +54,11 @@ struct MemoryInput {
     context = avio_alloc_context(buffer, bufferSize, 0, this, read, nullptr, seek);
     if (!context) { av_free(buffer); throw std::runtime_error("cannot allocate media input"); }
   }
-  ~MemoryInput() { avio_context_free(&context); }
+  ~MemoryInput() {
+    // FFmpeg may replace this buffer; avio_context_free frees only the context.
+    av_freep(&context->buffer);
+    avio_context_free(&context);
+  }
   MemoryInput(const MemoryInput&) = delete;
   MemoryInput& operator=(const MemoryInput&) = delete;
 

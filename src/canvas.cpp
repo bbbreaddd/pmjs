@@ -536,9 +536,9 @@ struct CanvasStore::FontState {
     bool hasInk = false;
     for (const auto& glyph : layout.shaped.glyphs) {
       auto* strike = strikes[glyph.strikeId].get();
-      layout.metrics.fontAscent = std::max(layout.metrics.fontAscent,
+      layout.metrics.fontAscent = std::max<double>(layout.metrics.fontAscent,
         static_cast<int>(strike->face->size->metrics.ascender >> 6));
-      layout.metrics.fontDescent = std::max(layout.metrics.fontDescent,
+      layout.metrics.fontDescent = std::max<double>(layout.metrics.fontDescent,
         -static_cast<int>(strike->face->size->metrics.descender >> 6));
       const auto* metrics = getOrLoadMetrics(strike, glyph.glyphIndex);
       if (!metrics) return nullptr;
@@ -548,9 +548,9 @@ struct CanvasStore::FontState {
         minimumX = hasInk ? std::min(minimumX, left) : left;
         maximumX = hasInk ? std::max(maximumX, left + metrics->metricWidth) :
                            left + metrics->metricWidth;
-        layout.metrics.actualAscent = hasInk ? std::max(layout.metrics.actualAscent, top) : top;
+        layout.metrics.actualAscent = hasInk ? std::max<double>(layout.metrics.actualAscent, top) : top;
         layout.metrics.actualDescent = hasInk ?
-          std::max(layout.metrics.actualDescent, metrics->metricHeight - top) :
+          std::max<double>(layout.metrics.actualDescent, metrics->metricHeight - top) :
           metrics->metricHeight - top;
         hasInk = true;
       }
@@ -650,7 +650,9 @@ struct CanvasStore::FontState {
 };
 
 CanvasStore::CanvasStore(ImageStore& images)
-    : images_(images), fonts_(std::make_unique<FontState>()) {}
+    : images_(images), fonts_(std::make_unique<FontState>()) {
+  if (textBackend_.skia()) fonts_->telemetryEnabled = false;
+}
 
 CanvasStore::~CanvasStore() {
   for (auto& surface : surfaces_) {
@@ -772,9 +774,24 @@ bool CanvasStore::drawImageNow(Content& destinationSurface, const DrawImageCmd& 
 }
 
 bool CanvasStore::drawTextNow(Content& surface, const std::vector<std::filesystem::path>& fontPaths,
-                              const std::string& text, int x, int y, int pixelSize,
-                              std::uint32_t rgba, int strokeWidth) {
-  auto layout = fonts_->layoutText(fontPaths, text, pixelSize);
+                              const std::string& text, float x, float y, float pixelSize,
+                              std::uint32_t rgba, float strokeWidth, const CanvasTextStyle& style) {
+  if (textBackend_.skia()) {
+    int bounds[4];
+    if (!textBackend_.draw(fontPaths, text, x, y, pixelSize, rgba, strokeWidth, style,
+        surface.pixels, surface.width, surface.height, bounds)) return false;
+    if (bounds[2] > bounds[0] && bounds[3] > bounds[1])
+      markDirty(surface, bounds[0], bounds[1], bounds[2] - bounds[0], bounds[3] - bounds[1]);
+    return true;
+  }
+  // The legacy web facade rounded font sizes/positions/widths before this
+  // integer backend. MV's shortcut also rounded its outline before the helper
+  // floored it. Preserve those effective contracts explicitly at this boundary.
+  const int legacySize = static_cast<int>(std::floor(pixelSize + 0.5f));
+  const int legacyStroke = static_cast<int>(std::floor(strokeWidth + 0.5f));
+  const int legacyX = static_cast<int>(std::clamp(std::floor(x + 0.5f), -1000000000.0f, 1000000000.0f));
+  const int legacyY = static_cast<int>(std::clamp(std::floor(y + 0.5f), -1000000000.0f, 1000000000.0f));
+  auto layout = fonts_->layoutText(fontPaths, text, legacySize);
   if (!layout) return false;
   double penX = 0;
   double penY = 0;
@@ -787,7 +804,7 @@ bool CanvasStore::drawTextNow(Content& surface, const std::vector<std::filesyste
 
   for (const auto& glyph : layout->shaped.glyphs) {
     const auto item = fonts_->getOrLoadMask(fonts_->strikes[glyph.strikeId].get(),
-                                           glyph.glyphIndex, strokeWidth);
+                                           glyph.glyphIndex, legacyStroke);
     if (!item) {
       complete = false;
       break;
@@ -795,8 +812,8 @@ bool CanvasStore::drawTextNow(Content& surface, const std::vector<std::filesyste
 
     const auto* mask = item->mask;
     if (mask && mask->width > 0 && mask->height > 0 && !mask->coverage.empty()) {
-      const int originX = x + static_cast<int>(std::lround(penX + glyph.xOffset)) + mask->bitmapLeft;
-      const int originY = y - static_cast<int>(std::lround(penY + glyph.yOffset)) - mask->bitmapTop;
+      const int originX = legacyX + static_cast<int>(std::lround(penX + glyph.xOffset)) + mask->bitmapLeft;
+      const int originY = legacyY - static_cast<int>(std::lround(penY + glyph.yOffset)) - mask->bitmapTop;
       dirtyLeft = std::min(dirtyLeft, originX);
       dirtyTop = std::min(dirtyTop, originY);
       dirtyRight = std::max(dirtyRight, originX + mask->width);
@@ -895,7 +912,7 @@ bool CanvasStore::realizeContent(Content& surface) {
           return drawImageNow(prepared, c);
         } else if constexpr (std::is_same_v<T, DrawTextCmd>) {
           return drawTextNow(prepared, c.fontPaths, c.text, c.x, c.y,
-                             c.pixelSize, c.rgba, c.strokeWidth);
+                             c.pixelSize, c.rgba, c.strokeWidth, c.style);
         } else if constexpr (std::is_same_v<T, BlurCmd>) {
           return blurNow(prepared);
         }
@@ -990,7 +1007,7 @@ CanvasStore::Content* CanvasStore::lookupContent(CanvasHandle handle) const {
 CanvasStore::Content* CanvasStore::writableContent(CanvasHandle handle) {
   auto* surface = lookup(handle);
   if (!surface) return nullptr;
-  if (!surface->content.unique()) {
+  if (surface->content.use_count() != 1) {
     const auto& old = *surface->content;
     auto copy = std::make_shared<Content>(*this);
     copy->width = old.width;
@@ -1258,10 +1275,11 @@ void CanvasStore::blendPixelAdditive(Content& surface, int x, int y,
 
 bool CanvasStore::drawText(CanvasHandle handle,
                            const std::vector<std::filesystem::path>& fontPaths,
-                           const std::string& text, int x, int y, int pixelSize,
-                           std::uint32_t rgba, int strokeWidth) {
+                           const std::string& text, float x, float y, float pixelSize,
+                           std::uint32_t rgba, float strokeWidth, const CanvasTextStyle& style) {
   auto* surface = writableContent(handle);
-  if (!surface || pixelSize <= 0 || pixelSize > 256 || fontPaths.empty() ||
+  if (!surface || !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(pixelSize) ||
+      !std::isfinite(strokeWidth) || pixelSize <= 0 || pixelSize > 256 || fontPaths.empty() ||
       strokeWidth < 0 || strokeWidth > 32) return false;
   if (surface->state == ContentState::Deferred) {
     const std::size_t estimatedBytes = sizeof(DrawTextCmd) + text.capacity() +
@@ -1271,32 +1289,41 @@ bool CanvasStore::drawText(CanvasHandle handle,
       if (!realizeContent(*surface)) return false;
     } else {
       surface->commands.emplace_back(DrawTextCmd{
-        fontPaths, text, x, y, pixelSize, rgba, strokeWidth
+        fontPaths, text, x, y, pixelSize, rgba, strokeWidth, style
       });
       surface->queuedCommandBytes += estimatedBytes;
       return true;
     }
   }
-  return drawTextNow(*surface, fontPaths, text, x, y, pixelSize, rgba, strokeWidth);
+  return drawTextNow(*surface, fontPaths, text, x, y, pixelSize, rgba, strokeWidth, style);
 }
 
 std::optional<double> CanvasStore::measureText(
     const std::vector<std::filesystem::path>& fontPaths, const std::string& text,
-    int pixelSize) const {
-  auto layout = fonts_->layoutText(fontPaths, text, pixelSize);
+    float pixelSize, const CanvasTextStyle& style) const {
+  if (textBackend_.skia()) {
+    auto metrics = const_cast<TextBackend&>(textBackend_).measure(fontPaths, text, pixelSize, style);
+    return metrics ? std::optional<double>(metrics->width) : std::nullopt;
+  }
+  if (!std::isfinite(pixelSize) || pixelSize <= 0 || pixelSize > 256) return std::nullopt;
+  auto layout = fonts_->layoutText(fontPaths, text, static_cast<int>(std::floor(pixelSize + 0.5f)));
   if (!layout) return std::nullopt;
   return layout->metrics.width;
 }
 
 std::optional<CanvasTextMetrics> CanvasStore::measureTextMetrics(
     const std::vector<std::filesystem::path>& fontPaths, const std::string& text,
-    int pixelSize) const {
-  auto layout = fonts_->layoutText(fontPaths, text, pixelSize);
+    float pixelSize, const CanvasTextStyle& style) const {
+  if (textBackend_.skia())
+    return const_cast<TextBackend&>(textBackend_).measure(fontPaths, text, pixelSize, style);
+  if (!std::isfinite(pixelSize) || pixelSize <= 0 || pixelSize > 256) return std::nullopt;
+  auto layout = fonts_->layoutText(fontPaths, text, static_cast<int>(std::floor(pixelSize + 0.5f)));
   if (!layout) return std::nullopt;
   return layout->metrics;
 }
 
 bool CanvasStore::canLoadFont(const std::filesystem::path& fontPath) {
+  if (textBackend_.skia()) return textBackend_.canLoad(fontPath);
   return fonts_->face(fontPath, 16) != nullptr;
 }
 
@@ -1442,21 +1469,26 @@ std::optional<ImageHandle> CanvasStore::imageHandle(CanvasHandle handle) const {
 
 bool CanvasStore::uploadSurface(Surface& target) {
   auto& surface = *target.content;
+  if (target.image && (surface.dirtyX1 <= surface.dirtyX0 || surface.dirtyY1 <= surface.dirtyY0)) return true;
+  const int x = target.image ? surface.dirtyX0 : 0;
+  const int y = target.image ? surface.dirtyY0 : 0;
+  const int width = target.image ? surface.dirtyX1 - x : surface.width;
+  const int height = target.image ? surface.dirtyY1 - y : surface.height;
+  std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width) * height * 4);
+  for (int row = 0; row < height; ++row) for (int column = 0; column < width; ++column) {
+    const auto source = (static_cast<std::size_t>(y + row) * surface.width + x + column) * 4;
+    const auto destination = (static_cast<std::size_t>(row) * width + column) * 4;
+    const unsigned alpha = surface.pixels[source + 3];
+    for (int channel = 0; channel < 3; ++channel)
+      pixels[destination + channel] = (surface.pixels[source + channel] * alpha + 127) / 255;
+    pixels[destination + 3] = alpha;
+  }
   if (target.image == 0) {
-    const auto image = images_.createRgba(surface.width, surface.height,
-                                         surface.pixels.data());
+    const auto image = images_.createRgba(surface.width, surface.height, pixels.data(), true);
     if (!image) return false;
     target.image = image->handle;
-  } else {
-    if (surface.dirtyX1 <= surface.dirtyX0 ||
-        surface.dirtyY1 <= surface.dirtyY0) return true;
-    const std::size_t offset =
-      (static_cast<std::size_t>(surface.dirtyY0) * surface.width +
-       surface.dirtyX0) * 4U;
-    if (!images_.updateRgbaRegion(target.image, surface.dirtyX0,
-        surface.dirtyY0, surface.dirtyX1 - surface.dirtyX0,
-        surface.dirtyY1 - surface.dirtyY0, surface.pixels.data() + offset,
-        surface.width)) return false;
+  } else if (!images_.updateRgbaRegion(target.image, x, y, width, height, pixels.data(), width)) {
+    return false;
   }
   surface.dirtyX0 = surface.dirtyY0 = 0;
   surface.dirtyX1 = surface.dirtyY1 = 0;
@@ -1516,6 +1548,7 @@ CanvasTextStats CanvasStore::glyphCacheStats() const {
 }
 
 void CanvasStore::setGlyphCacheLimits(std::size_t maxBytes, std::size_t maxEntries) {
+  if (textBackend_.skia()) { textBackend_.limits(maxBytes, maxEntries); return; }
   fonts_->setLimits(maxBytes, maxEntries);
 }
 

@@ -2,6 +2,7 @@
 
 (function() {
   PMJS.pixi5.registerRenderContract(Sprite_Animation.prototype, {
+    filterTarget: true,
     encode: function(animation, renderer) {
       // Stock _render draws only a live Effekseer handle; timing/flash-only
       // animations still update through their original engine methods.

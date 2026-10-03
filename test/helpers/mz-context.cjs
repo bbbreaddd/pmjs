@@ -2,8 +2,8 @@
 
 const { createContext, runModule } = require('./pixi5-context.cjs');
 
-function createMzContext() {
-  const fixture = createContext();
+function createMzContext(options) {
+  const fixture = createContext(options);
   const { context } = fixture;
   const { Container } = context.PIXI;
   Container.prototype.render = function() {};
@@ -45,7 +45,8 @@ function createMzContext() {
     Sprite_Animation, Graphics: {}, EffectManager: { load(name) { return name; } },
     queueMicrotask });
   fixture.hits = [];
-  context.PMJS = { compat: { hit(...args) { fixture.hits.push(args); } } };
+  const stockHit = context.PMJS.compat.hit;
+  context.PMJS.compat.hit = (...args) => { fixture.hits.push(args); stockHit(...args); };
   runModule(context, 'js/pmjs-core/methods.js');
   runModule(context, 'js/pmjs-pixi5/scene.js');
   runModule(context, 'js/pmjs-pixi5/renderer.js');

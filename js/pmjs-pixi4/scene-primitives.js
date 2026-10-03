@@ -49,6 +49,7 @@ Object.assign(PMJS.pixi4, {
   getStageRenderOptions: function(stage) { return nativeStageRenderOptions.get(stage); },
   supportsGpuSpriteTextures: !!(NativeHost.scene && NativeHost.scene.schema && NativeHost.scene.schema.gpuSpriteTextures),
   releaseSceneResources: function(root) { return pmjsReleaseSceneResources(root); },
+  // Producers must call invalidateMeshGeometry after changing retained vertices or UVs.
   retainMeshGeometry: function(mesh) {
     if (!nativeRetainedMeshes.has(mesh)) {
       nativeRetainedMeshes.set(mesh, { handle: 0, signature: null });
