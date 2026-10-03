@@ -1,6 +1,43 @@
 'use strict';
 
 (function() {
+  var contracts = new WeakMap();
+  var rendererReleases = [];
+  function registerRenderContract(prototype, contract) {
+    if (!prototype) return;
+    var registered = Object.assign({
+      render: prototype.render, leaf: prototype._render,
+      advanced: prototype.renderAdvanced, callsLeaf: true
+    }, contract || {});
+    contracts.set(prototype, registered);
+    if (registered.releaseRenderer) rendererReleases.push(registered.releaseRenderer);
+  }
+  [PIXI.Container, PIXI.Sprite, PIXI.TilingSprite].forEach(function(type) {
+    if (type) registerRenderContract(type.prototype);
+  });
+  function renderContract(node) {
+    var prototype = Object.getPrototypeOf(node);
+    var contract;
+    while (prototype && !(contract = contracts.get(prototype))) {
+      prototype = Object.getPrototypeOf(prototype);
+    }
+    if (!contract || node.render !== contract.render ||
+        (contract.callsLeaf && node._render !== contract.leaf) ||
+        ((node.mask || activeFilters(node)) && node.renderAdvanced !== contract.advanced)) {
+      if (!contract || !contract.accept || !contract.accept(node)) {
+        reject('render.render-method', node);
+      }
+    }
+    return contract;
+  }
+  globalThis.PMJS = globalThis.PMJS || {};
+  PMJS.pixi5 = {
+    registerRenderContract: registerRenderContract,
+    nativeSource: nativeSource,
+    releaseRenderer: function(renderer) {
+      rendererReleases.forEach(function(release) { release(renderer); });
+    }
+  };
   var schema = NativeHost.scene && NativeHost.scene.schema;
   var requiredPacketVersion = 28;
   var filterEncoders = [];
@@ -35,6 +72,7 @@
 
   function textureSource(baseTexture) {
     if (!baseTexture) return null;
+    if (baseTexture.__pmjsPixi5RenderCanvas) return baseTexture.__pmjsPixi5RenderCanvas;
     if ('resource' in baseTexture) {
       return baseTexture.resource && baseTexture.resource.source || null;
     }
@@ -147,21 +185,35 @@
   }
 
   function activeFilters(node) {
-    var filters = node && node._filters;
+    var filters = node && node.filters;
     if (!Array.isArray(filters)) return false;
     return filters.some(function(filter) {
       return filter && filter.enabled !== false;
     });
   }
 
-  function writeNode(node, parent) {
+  var renderResolution = 1;
+  var renderOwner;
+  var viewport;
+  function clipRecord(parent, clip) {
+    var index = addRecord(parent, 0, 0, 0xffffff, 0, identity, 1);
+    metadata[index * metadataStride + 5] |= 1;
+    values.set([clip.x, clip.y, clip.x + clip.width, clip.y + clip.height]
+      .map(function(value) { return value * renderResolution; }),
+    index * valueStride + 17);
+    return index;
+  }
+
+  function writeNode(node, parent, clip) {
     if (!node || !node.visible || !node.renderable || node.alpha <= 0) return;
     var transform = localTransform(node);
     if (!drawableTransform(transform)) return;
+    var contract = renderContract(node);
+    if (clip) parent = clipRecord(parent, clip);
     if (node.mask) reject('render.mask', node);
     var encodedFilters = [];
     if (activeFilters(node)) {
-      node._filters.forEach(function(filter) {
+      node.filters.forEach(function(filter) {
         if (!filter || filter.enabled === false) return;
         var encoded = null;
         for (var i = 0; i < filterEncoders.length && !encoded; i++) {
@@ -170,6 +222,9 @@
         if (!encoded) reject('render.filter', node);
         if (!encoded.neutral) encodedFilters.push(encoded);
       });
+    }
+    if (activeFilters(node) && node.filterArea) {
+      parent = clipRecord(parent, node.filterArea);
     }
     encodedFilters.reverse().forEach(function(filter) {
       var begin = addRecord(parent, 6, 0, 0xffffff, filter.kind, identity, 1);
@@ -249,8 +304,17 @@
       }
     }
 
+    var encodedNode = contract.encode && contract.encode(node, renderOwner);
+    if (encodedNode) {
+      kind = encodedNode.kind;
+      resource = encodedNode.resource;
+    }
+
     var index = addRecord(parent, kind, resource, tint, blendMode(node),
       transform, Number.isFinite(node.alpha) ? node.alpha : 1);
+    if (encodedNode && encodedNode.nearest) {
+      metadata[index * metadataStride + 5] |= 8;
+    }
     if (kind === 1) {
       var baseTexture = texture.baseTexture;
       var resolution = Math.max(0.000001, Number(baseTexture.resolution) || 1);
@@ -298,29 +362,45 @@
       values[tilingValueOffset + 14] = destinationHeight;
     }
 
-    var children = node.children || [];
-    for (var childIndex = 0; childIndex < children.length; childIndex++) {
-      if (kind === 3 && children[childIndex] === node._graphics) continue;
-      writeNode(children[childIndex], index);
+    if (contract.children) {
+      contract.children(node, viewport).forEach(function(entry) {
+        writeNode(entry.node, index, entry.clip);
+      });
+    } else {
+      var children = node.children || [];
+      for (var childIndex = 0; childIndex < children.length; childIndex++) {
+        if (kind === 3 && children[childIndex] === node._graphics) continue;
+        writeNode(children[childIndex], index);
+      }
     }
     encodedFilters.forEach(function() {
       addRecord(parent, 7, 0, 0xffffff, 0, identity, 1);
     });
   }
 
-  function render(stage, backgroundColor, resolution) {
+  function render(stage, backgroundColor, resolution, size, renderer) {
+    if (typeof stage.updateTransform === 'function') {
+      var previousParent = stage.parent;
+      stage.parent = stage._tempDisplayObjectParent;
+      try { stage.updateTransform(); } finally { stage.parent = previousParent; }
+    }
     count = 0;
     if (backgroundColor !== null) {
       addRecord(0xffffffff, 3, 0, backgroundColor, 0, identity, 1);
     }
     var rootParent = 0xffffffff;
     resolution = Math.max(0.000001, Number(resolution) || 1);
+    renderResolution = resolution;
+    renderOwner = renderer;
+    viewport = size;
     if (resolution !== 1) {
       rootParent = addRecord(0xffffffff, 0, 0, 0xffffff, 0,
         { a: resolution, b: 0, c: 0, d: resolution, tx: 0, ty: 0 }, 1);
     }
     writeNode(stage, rootParent);
-    NativeHost.scene.submit(packetVersion, metadata, values, count);
+    if (NativeHost.scene.submit(packetVersion, metadata, values, count) === false) {
+      throw new Error('native Pixi 5 scene submission rejected');
+    }
   }
 
   globalThis.pmjsPixi5RenderScene = render;

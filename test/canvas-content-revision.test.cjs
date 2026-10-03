@@ -78,6 +78,22 @@ test('Canvas mutations and dimension resets invalidate revision-bound proof', ()
   assert.equal(context.PMJS.web.canvas.unitMaskRect(canvas), null);
 });
 
+test('document ID lookup follows attachment, removal, and live canvas IDs', () => {
+  const { document } = harness();
+  const parent = document.createElement('div');
+  const canvas = document.createElement('canvas');
+  canvas.id = 'overlay';
+  parent.appendChild(canvas);
+  assert.equal(document.getElementById('overlay'), null);
+  document.body.appendChild(parent);
+  assert.equal(document.getElementById('overlay'), canvas);
+  canvas.id = 'replacement';
+  assert.equal(document.getElementById('overlay'), null);
+  assert.equal(document.getElementById('replacement'), canvas);
+  parent.removeChild(canvas);
+  assert.equal(document.getElementById('replacement'), null);
+});
+
 test('reflected image draws use the affine path', () => {
   const context = harness();
   const canvas = new context.CanvasElement();

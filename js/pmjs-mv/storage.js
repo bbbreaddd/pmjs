@@ -91,7 +91,8 @@ function installNativeStorageManager() {
     } catch (error) {
       if (!pmjsCachedStorageExists(storagePath + '.bak')) throw error;
     }
-    if (pmjsCachedStorageExists(storagePath + '.bak')) {
+    if (pmjsCachedStorageExists(storagePath + '.bak') &&
+        !pmjsCachedStorageExists(storagePath + '.deleted')) {
       return pmjsReadDecompressed(storagePath + '.bak');
     }
     return null;
@@ -112,8 +113,32 @@ function installNativeStorageManager() {
   function pmjsLocalSaveExists(savefileId) {
     var storagePath = normalizeStoragePath(this.localFilePath(savefileId));
     return pmjsCachedStorageExists(storagePath) ||
-      pmjsCachedStorageExists(storagePath + '.bak');
+      (pmjsCachedStorageExists(storagePath + '.bak') &&
+        !pmjsCachedStorageExists(storagePath + '.deleted'));
   }
+
+  // Keep rollback backups, but distinguish deliberate deletion from interrupted
+  // writes across restarts. A successful save or restore revives the slot.
+  if (typeof StorageManager.removeLocalFile === 'function') {
+    var removeLocalFile = StorageManager.removeLocalFile;
+    StorageManager.removeLocalFile = function(savefileId) {
+      var storagePath = normalizeStoragePath(this.localFilePath(savefileId));
+      NativeHost.storage.writeText(storagePath + '.deleted', '');
+      return removeLocalFile.apply(this, arguments);
+    };
+  }
+  ['saveToLocalFile', 'restoreBackup'].forEach(function(method) {
+    if (typeof StorageManager[method] !== 'function') return;
+    var original = StorageManager[method];
+    StorageManager[method] = function(savefileId) {
+      var result = original.apply(this, arguments);
+      var storagePath = normalizeStoragePath(this.localFilePath(savefileId));
+      if (NativeHost.storage.exists(storagePath)) {
+        NativeHost.storage.remove(storagePath + '.deleted');
+      }
+      return result;
+    };
+  });
 
   if (typeof StorageManager.loadFromLocalFile === 'function' &&
       !StorageManager._pmjsLoadPatched) {

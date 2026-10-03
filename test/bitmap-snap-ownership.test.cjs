@@ -9,7 +9,7 @@ const vm = require('node:vm');
 const bitmapSource = fs.readFileSync(path.resolve(__dirname,
   '../js/pmjs-mv/bitmap.js'), 'utf8');
 const snapStart = bitmapSource.indexOf('Bitmap.snap = function(stage) {');
-const snapEnd = bitmapSource.indexOf('// Blur is delegated', snapStart);
+const snapEnd = bitmapSource.indexOf('// Keep MV', snapStart);
 const snapSource = bitmapSource.slice(snapStart, snapEnd);
 const rendererSource = fs.readFileSync(path.resolve(__dirname,
   '../js/pmjs-pixi4/renderer-facade.js'), 'utf8');

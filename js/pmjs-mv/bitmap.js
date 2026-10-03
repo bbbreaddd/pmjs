@@ -87,12 +87,7 @@ Bitmap.snap = function(stage) {
   return bitmap;
 };
 
-// Blur is delegated to the native canvas to preserve its compositing state.
-Bitmap.prototype.blur = function() {
-  PMJS.web.canvas.blur(this._canvas);
-  pmjsBitmapCanvasChanged(this);
-  this._setDirty();
-};
+// Keep MV's blur method: the generic native blur has different kernel and alpha semantics.
 
 // Annotate native canvases with their source bitmap URL for diagnosis.
 var _Bitmap_createCanvas = Bitmap.prototype._createCanvas;
@@ -176,72 +171,41 @@ if (typeof _Bitmap_blt === 'function') {
   if (typeof Bitmap === 'undefined' || !Bitmap.prototype) return;
   PMJS.optimizations.register({ id: 'bitmap.native-draw-text', owner: 'pmjs-mv',
     fallback: 'stock MV Canvas fillText and strokeText' });
+  var stockDrawText = Bitmap.prototype.drawText;
+  var stockOutline = Bitmap.prototype._drawTextOutline;
+  var stockBody = Bitmap.prototype._drawTextBody;
+  var stockFontName = Bitmap.prototype._makeFontNameText;
   function activateNativeDrawText() {
     if (!PMJS.optimizations.isEnabled('bitmap.native-draw-text')) return;
     var originalDrawText = Bitmap.prototype.drawText;
     var originalOutline = Bitmap.prototype._drawTextOutline;
     var originalBody = Bitmap.prototype._drawTextBody;
 
-    function normalizedSource(fn) {
-      if (typeof fn !== 'function') return '';
-      try {
-        return Function.prototype.toString.call(fn).replace(/\s+/g, '');
-      } catch (_) {
-        return '';
-      }
-    }
-
-    function isStockTextPipeline(drawFn, outlineFn, bodyFn) {
-      var drawSrc = normalizedSource(drawFn);
-      var outlineSrc = normalizedSource(outlineFn);
-      var bodySrc = normalizedSource(bodyFn);
-
-      // Stock RPG Maker MV drawText delegates directly to _drawTextOutline and _drawTextBody
-      var drawMatches = drawSrc.indexOf('this._drawTextOutline(') !== -1 &&
-        drawSrc.indexOf('this._drawTextBody(') !== -1 &&
-        drawSrc.indexOf('this._makeFontNameText()') !== -1 &&
-        drawSrc.indexOf('this._setDirty()') !== -1;
-
-      var outlineMatches = outlineSrc.indexOf('context.strokeText(') !== -1 &&
-        outlineSrc.indexOf('this.outlineColor') !== -1;
-
-      var bodyMatches = bodySrc.indexOf('context.fillText(') !== -1 &&
-        bodySrc.indexOf('this.textColor') !== -1;
-
-      return drawMatches && outlineMatches && bodyMatches;
-    }
-
-    // If Bitmap.prototype.drawText was already modified before PMJS installs,
-    // or outline/body are non-stock, do not install the native accelerator.
-    if (!isStockTextPipeline(originalDrawText, originalOutline, originalBody)) {
+    if (typeof stockDrawText !== 'function' || typeof stockOutline !== 'function' ||
+        typeof stockBody !== 'function' || typeof stockFontName !== 'function' ||
+        originalDrawText !== stockDrawText || originalOutline !== stockOutline ||
+        originalBody !== stockBody || Bitmap.prototype._makeFontNameText !== stockFontName) {
       PMJS.optimizations.refuse('bitmap.native-draw-text',
-        'unrecognized Bitmap text method composition');
+        'modified Bitmap text method composition');
       return;
     }
 
     Bitmap.prototype.drawText = function(text, x, y, maxWidth, lineHeight, align) {
       var context = this._context;
       if (this._drawTextOutline !== originalOutline ||
-          this._drawTextBody !== originalBody || maxWidth ||
+          this._drawTextBody !== originalBody || this._makeFontNameText !== stockFontName ||
+          !Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(lineHeight) || maxWidth ||
           (align && align !== 'left') || text === undefined ||
           !PMJS.web.canvas.supportsNativeText(context)) {
         return originalDrawText.apply(this, arguments);
       }
 
       text = String(text);
-      if (this._blockTextDrawing || y >= this.height) return;
-
-      x = Math.floor(x);
-      y = Math.floor(y);
-      lineHeight = Math.floor(lineHeight);
-
       var descriptor = this._makeFontNameText();
-      // The native rasterizer expects an integral baseline offset.
-      var baseline = y + lineHeight -
-        Math.floor((lineHeight - this.fontSize * 0.7) / 2);
-      PMJS.web.canvas.drawNativeText(context, text, x, baseline, {
+      var baseline = Math.round(y + lineHeight - (lineHeight - this.fontSize * 0.7) / 2);
+      PMJS.web.canvas.drawNativeText(context, text, Math.round(x), baseline, {
         font: descriptor, outlineColor: this.outlineColor,
-        outlineWidth: this.outlineWidth, color: this.textColor
+        outlineWidth: Math.round(this.outlineWidth), color: this.textColor
       });
       pmjsBitmapCanvasChanged(this);
       this._setDirty();
@@ -287,14 +251,4 @@ Bitmap.prototype.getAlphaPixel = function(x, y) {
   return 0;
 };
 
-Object.defineProperty(Bitmap.prototype, 'paintOpacity', {
-  configurable: true,
-  get: function() {
-    return this._paintOpacity === undefined ? 255 : this._paintOpacity;
-  },
-  set: function(value) {
-    var alpha = Math.max(0, Math.min(255, Number(value) | 0));
-    this._paintOpacity = alpha;
-    if (this._context) this._context.globalAlpha = alpha / 255;
-  }
-});
+// Preserve the engine's paintOpacity descriptor, including fractional values.

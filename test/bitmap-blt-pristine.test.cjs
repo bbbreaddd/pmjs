@@ -134,6 +134,11 @@ function setupEnvironment({ config = {}, env = {} } = {}) {
     this._setDirty();
   };
 
+  MockBitmap.prototype.blur = function() {
+    this._context.fillRect(0, 0, this.width, this.height);
+    this._setDirty();
+  };
+
   MockBitmap.prototype.fillAll = function(color) {
     this.fillRect(0, 0, this.width, this.height, color);
   };

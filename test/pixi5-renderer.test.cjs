@@ -97,6 +97,7 @@ function createContext() {
         },
       },
       render: {
+        setClearColor() {},
         setScreenRenderSize(width, height) { sizes.push([width, height]); },
         setRenderTargetSize(width, height) { targets.push(['size', width, height]); },
         renderToCanvas(handle) { targets.push(['render', handle]); },
@@ -360,7 +361,7 @@ test('MZ ColorFilter encloses its subtree and skips neutral or disabled filters'
   const child = new context.PIXI.Container();
   stage.addChild(child);
   const filter = new context.ColorFilter();
-  stage._filters = [filter];
+  stage.filters = [filter];
   context.pmjsPixi5RenderScene(stage, null, 1);
   assert.equal(submissions.at(-1).count, 2);
   Object.assign(filter.uniforms, { hue: -120, colorTone: [-20, 30, 40, 100],
@@ -374,13 +375,13 @@ test('MZ ColorFilter encloses its subtree and skips neutral or disabled filters'
     [-120, -20, 30, 40, 100, 80, 90, 100, 120, 180]);
   const second = new context.ColorFilter();
   second.uniforms.brightness = 90;
-  stage._filters = [filter, second];
+  stage.filters = [filter, second];
   context.pmjsPixi5RenderScene(stage, null, 1);
   const chain = submissions.at(-1);
   assert.equal(chain.count, 6);
   assert.equal(chain.values[16], 90);
   assert.equal(chain.values[41 + 16], 180);
-  stage._filters = [filter];
+  stage.filters = [filter];
   filter.enabled = false;
   context.pmjsPixi5RenderScene(stage, null, 1);
   assert.equal(submissions.at(-1).count, 2);
@@ -395,7 +396,7 @@ test('MZ ColorFilter subclasses fall through to compatibility handling or anothe
   runModule(context, 'js/pmjs-pixi5/scene.js');
   runModule(context, 'js/pmjs-mz/rendering.js');
   const stage = new context.PIXI.Container();
-  stage._filters = [new CustomColorFilter()];
+  stage.filters = [new CustomColorFilter()];
   assert.throws(() => context.pmjsPixi5RenderScene(stage, null, 1),
     /unsupported Pixi 5 native capability: render.filter/);
   assert.equal(hits[0][0], 'render.filter');
@@ -414,9 +415,66 @@ test('MZ filter encoder tolerates an unavailable ColorFilter class', () => {
   assert.equal(encoder({}), null);
 });
 
+test('MZ rejects later filter drawing overrides before submitting a scene', () => {
+  const { context, submissions } = createContext();
+  const hits = [];
+  context.PMJS = { compat: { hit: (...args) => hits.push(args) } };
+  context.ColorFilter = function ColorFilter() {
+    this.uniforms = { hue: 0, colorTone: [0, 0, 0, 0],
+      blendColor: [0, 0, 0, 0], brightness: 255 };
+  };
+  runModule(context, 'js/pmjs-pixi5/scene.js');
+  runModule(context, 'js/pmjs-mz/rendering.js');
+  context.ColorFilter.prototype.apply = function() {};
+  const stage = new context.PIXI.Container();
+  stage.filters = [new context.ColorFilter()];
+  assert.throws(() => context.pmjsPixi5RenderScene(stage, null, 1), /render.filter/);
+  assert.equal(hits[0][0], 'render.filter');
+  assert.equal(submissions.length, 0);
+});
+
 test('Pixi 5 refuses an older native packet contract', () => {
   const { context } = createContext();
   context.NativeHost.scene.packetVersion = 27;
   context.NativeHost.scene.schema.version = 27;
   assert.throws(() => runModule(context, 'js/pmjs-pixi5/scene.js'), /scene schema/);
+});
+
+test('Pixi 5 rejects reached instance and late prototype drawing overrides before submission', () => {
+  const fixture = createContext();
+  const hits = [];
+  fixture.context.PMJS = { compat: { hit: (...args) => hits.push(args) } };
+  runModule(fixture.context, 'js/pmjs-pixi5/scene.js');
+  const stage = new fixture.context.PIXI.Container();
+  const sprite = new fixture.context.PIXI.Sprite();
+  stage.addChild(sprite);
+  sprite._render = function customDrawing() {};
+  assert.throws(() => fixture.context.pmjsPixi5RenderScene(stage, null, 1), /render.render-method/);
+  assert.equal(fixture.submissions.length, 0);
+  delete sprite._render;
+  fixture.context.PIXI.Sprite.prototype.render = function laterDrawing() {};
+  assert.throws(() => fixture.context.pmjsPixi5RenderScene(stage, null, 1), /render.render-method/);
+  assert.equal(fixture.submissions.length, 0);
+  assert.equal(hits.length, 2);
+  sprite.visible = false;
+  assert.doesNotThrow(() => fixture.context.pmjsPixi5RenderScene(stage, null, 1));
+});
+
+test('Pixi 5 RenderTexture backing is drawable and screen size survives offscreen failure', () => {
+  const fixture = createContext();
+  fixture.context.PMJS = { compat: { hit() {} } };
+  runModule(fixture.context, 'js/pmjs-pixi5/scene.js');
+  runModule(fixture.context, 'js/pmjs-pixi5/renderer.js');
+  const renderer = fixture.context.PIXI.Renderer.create({ width: 100, height: 50 });
+  const stage = new fixture.context.PIXI.Container();
+  const texture = { baseTexture: { width: 40, height: 30, resolution: 2 },
+    frame: { x: 0, y: 0, width: 40, height: 30 }, orig: { width: 40, height: 30 } };
+  renderer.render(stage, texture);
+  stage.addChild(new fixture.context.PIXI.Sprite(texture));
+  renderer.render(stage);
+  const packet = fixture.submissions.at(-1);
+  assert.equal(packet.metadata[2 * 7 + 2], 900);
+  stage._render = function unknownDrawing() {};
+  assert.throws(() => renderer.render(stage, texture), /render.render-method/);
+  assert.deepEqual(fixture.sizes.at(-1), [100, 50]);
 });

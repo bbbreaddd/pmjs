@@ -11,6 +11,9 @@
       clearBeforeRender: true,
       autoDensity: false
     }, options || {});
+    if (PIXI.settings && NativeHost.render.configurePixiFragmentPrecision) {
+      NativeHost.render.configurePixiFragmentPrecision(PIXI.settings.PRECISION_FRAGMENT);
+    }
     var resolution = Math.max(0.000001, Number(options.resolution) || 1);
     function renderTextureCanvas(renderTexture) {
       var base = renderTexture && renderTexture.baseTexture;
@@ -22,6 +25,12 @@
       var target = base.__pmjsPixi5RenderCanvas;
       if (!target) {
         target = base.__pmjsPixi5RenderCanvas = new CanvasElement();
+        if (typeof base.once === 'function') {
+          base.once('dispose', function() {
+            if (typeof target._releaseNativeCanvas === 'function') target._releaseNativeCanvas();
+            delete base.__pmjsPixi5RenderCanvas;
+          });
+        }
       }
       if (target.width !== targetWidth) target.width = targetWidth;
       if (target.height !== targetHeight) target.height = targetHeight;
@@ -50,18 +59,26 @@
           var target = renderTextureCanvas(renderTexture);
           var targetResolution = Math.max(0.000001,
             Number(renderTexture.baseTexture.resolution) || 1);
-          NativeHost.render.setRenderTargetSize(target.width, target.height);
-          globalThis.pmjsPixi5RenderScene(stage, null, targetResolution);
-          NativeHost.render.renderToCanvas(target._ensureNativeCanvas().handle);
-          if (typeof target._pmjsContentChanged === 'function') {
-            target._pmjsContentChanged();
+          try {
+            NativeHost.render.setRenderTargetSize(target.width, target.height);
+            globalThis.pmjsPixi5RenderScene(stage, null, targetResolution,
+              { width: renderTexture.baseTexture.width, height: renderTexture.baseTexture.height }, this);
+            NativeHost.render.renderToCanvas(target._ensureNativeCanvas().handle);
+            if (typeof target._pmjsContentChanged === 'function') {
+              target._pmjsContentChanged();
+            }
+          } finally {
+            NativeHost.render.setScreenRenderSize(this.width, this.height);
           }
           return;
         }
         NativeHost.render.setScreenRenderSize(this.width, this.height);
+        if (this.clearBeforeRender) {
+          NativeHost.render.setClearColor(0, 0, 0, this.transparent ? 0 : 1);
+        }
         var background = this.clearBeforeRender && !this.transparent ?
           this.backgroundColor : null;
-        globalThis.pmjsPixi5RenderScene(stage, background, this.resolution);
+        globalThis.pmjsPixi5RenderScene(stage, background, this.resolution, this.screen, this);
       },
       resize: function(width, height) {
         this.screen.width = Math.max(0, Number(width) || 0);
@@ -77,6 +94,7 @@
         NativeHost.render.setScreenRenderSize(this.width, this.height);
       },
       destroy: function(removeView) {
+        PMJS.pixi5.releaseRenderer(this);
         if (removeView && this.view && this.view.parentNode) {
           this.view.parentNode.removeChild(this.view);
         }
@@ -86,8 +104,14 @@
     renderer.extract = {
       renderer: renderer,
       canvas: function(target) {
-        if (target && target.baseTexture) return renderTextureCanvas(target);
         var capture = new CanvasElement();
+        if (target && target.baseTexture) {
+          var backing = renderTextureCanvas(target);
+          capture.width = backing.width;
+          capture.height = backing.height;
+          capture.getContext('2d').drawImage(backing, 0, 0);
+          return capture;
+        }
         capture.width = renderer.width;
         capture.height = renderer.height;
         capture._nativeCanvas = NativeHost.canvas.captureScene();

@@ -6,6 +6,10 @@ function MvNativeWebAudio(url, intent) {
   this._loadListeners = [];
   this._stopListeners = [];
   this._playGeneration = 0;
+  this._volume = 1;
+  this._gainValue = 1;
+  this._gainRamp = null;
+  this._pendingFadeIn = null;
 
   this._gainNode = this;
   this.gain = this;
@@ -13,6 +17,10 @@ function MvNativeWebAudio(url, intent) {
   var path = pmjsAudio.resolvePath(this._url);
   var self = this;
   this._voice.onInstalled = function() {
+    if (self._voice.autoPlay) {
+      if (self._pendingFadeIn !== null) self.fadeIn(self._pendingFadeIn);
+      else self.setValueAtTime(self._volume);
+    }
     var listeners = self._loadListeners.splice(0);
     for (var index = 0; index < listeners.length; index++) listeners[index]();
   };
@@ -35,10 +43,10 @@ Object.defineProperties(MvNativeWebAudio.prototype, {
     configurable: true
   },
   volume: {
-    get: function() { return this._voice.volume; },
+    get: function() { return this._volume; },
     set: function(value) {
-      this._voice.volume = Number(value);
-      this._voice.applyParameters();
+      this._volume = Number(value);
+      this.setValueAtTime(this._volume);
     },
     configurable: true
   },
@@ -59,11 +67,13 @@ Object.defineProperties(MvNativeWebAudio.prototype, {
     configurable: true
   },
   value: {
-    get: function() { return this._voice.volume; },
-    set: function(value) {
-      this._voice.volume = Number(value);
-      this._voice.applyParameters();
+    get: function() {
+      var ramp = this._gainRamp;
+      if (!ramp) return this._gainValue;
+      var progress = Math.max(0, Math.min(1, (pmjsAudio.now() - ramp.start) / ramp.duration));
+      return ramp.from + (ramp.to - ramp.from) * progress;
     },
+    set: function(value) { this.setValueAtTime(value); },
     configurable: true
   },
   _autoPlay: {
@@ -73,13 +83,29 @@ Object.defineProperties(MvNativeWebAudio.prototype, {
   }
 });
 
+// Native fades are envelopes multiplied by voice volume; MV gain targets are absolute.
+MvNativeWebAudio.prototype._rampGain = function(from, to, duration) {
+  var time = Math.max(0, Number(duration) || 0);
+  from = Math.max(0, Number(from) || 0);
+  to = Math.max(0, Number(to) || 0);
+  this._gainValue = to;
+  this._gainRamp = time > 0
+    ? { from: from, to: to, start: pmjsAudio.now(), duration: time } : null;
+  var scale = Math.max(1, from, to);
+  this._voice.volume = scale;
+  this._voice.applyParameters();
+  if (this._voice.handle && NativeHost.media) {
+    NativeHost.media.fadeAudio(this._voice.handle, from / scale, to / scale, time, false);
+  }
+};
+
 MvNativeWebAudio.prototype.setValueAtTime = function(value) {
-  this.volume = value;
+  this._rampGain(value, value, 0);
 };
 
 MvNativeWebAudio.prototype.linearRampToValueAtTime = function(value, endTime) {
   var duration = Math.max(0, Number(endTime - pmjsAudio.now()) || 0);
-  this._voice.fadeTo(value, duration);
+  this._rampGain(this.value, value, duration);
 };
 
 MvNativeWebAudio.prototype.isReady = function() {
@@ -102,23 +128,33 @@ MvNativeWebAudio.prototype.bufferSize = function() {
 MvNativeWebAudio.prototype.play = function(loop, offset) {
   ++this._playGeneration;
   this._voice.play(loop, offset);
+  this.setValueAtTime(this._volume);
   pmjsAudio.track(this);
 };
 
 MvNativeWebAudio.prototype.stop = function() {
   this._voice.stop();
+  this._pendingFadeIn = null;
   this._drainStop();
 };
 
 MvNativeWebAudio.prototype.clear = function() {
   this.stop();
-  this._voice.release();
+  this._voice.resetForReload();
+  this._voice.volume = 1;
+  this._voice.pitch = 1;
+  this._voice.pan = 0;
+  this._voice.duration = 0;
+  this._voice.offset = 0;
+  this._volume = 1;
+  this._gainValue = 1;
+  this._gainRamp = null;
   this._loadListeners.length = 0;
   this._stopListeners.length = 0;
 };
 
 MvNativeWebAudio.prototype._fadeTo = function(volume, duration) {
-  this._voice.fadeTo(volume, duration);
+  this._rampGain(this.value, volume, duration);
 };
 
 MvNativeWebAudio.prototype.seek = function() {
@@ -126,12 +162,18 @@ MvNativeWebAudio.prototype.seek = function() {
 };
 
 MvNativeWebAudio.prototype.fadeIn = function(duration) {
-  this._voice.fadeIn(duration);
+  if (this.isReady()) {
+    this._pendingFadeIn = null;
+    this._rampGain(0, this._volume, duration);
+  } else if (this._voice.autoPlay) {
+    this._pendingFadeIn = duration;
+  }
 };
 
 MvNativeWebAudio.prototype.fadeOut = function(duration) {
   this._voice.cancelPending();
-  this._voice.fadeTo(0, duration, true);
+  this._pendingFadeIn = null;
+  this._rampGain(this._volume, 0, duration);
 };
 
 MvNativeWebAudio.prototype.addLoadListener = function(listener) {

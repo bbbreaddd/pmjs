@@ -812,15 +812,28 @@ constexpr const char* fragmentSource = R"(
       sampleColor = texture(image, sampleUv);
     } else if (any(notEqual(blurDirection, vec2(0.0)))) {
       vec2 stepUv = blurRadius * blurDirection / textureSize;
-      sampleColor = texture(image, sampleUv) * 0.227027;
-      sampleColor += texture(image, clamp(sampleUv + stepUv * 1.384615,
-        vertexUvClamp.xy, vertexUvClamp.zw)) * 0.316216;
-      sampleColor += texture(image, clamp(sampleUv - stepUv * 1.384615,
-        vertexUvClamp.xy, vertexUvClamp.zw)) * 0.316216;
-      sampleColor += texture(image, clamp(sampleUv + stepUv * 3.230769,
-        vertexUvClamp.xy, vertexUvClamp.zw)) * 0.070270;
-      sampleColor += texture(image, clamp(sampleUv - stepUv * 3.230769,
-        vertexUvClamp.xy, vertexUvClamp.zw)) * 0.070270;
+      if (pixiFilterParameters[2] == 5.0) {
+        // Pixi 5's default five-tap kernel; parameter zero retains the MV kernel.
+        sampleColor = texture(image, sampleUv) * 0.250301;
+        sampleColor += texture(image, clamp(sampleUv + stepUv,
+          vertexUvClamp.xy, vertexUvClamp.zw)) * 0.221461;
+        sampleColor += texture(image, clamp(sampleUv - stepUv,
+          vertexUvClamp.xy, vertexUvClamp.zw)) * 0.221461;
+        sampleColor += texture(image, clamp(sampleUv + stepUv * 2.0,
+          vertexUvClamp.xy, vertexUvClamp.zw)) * 0.153388;
+        sampleColor += texture(image, clamp(sampleUv - stepUv * 2.0,
+          vertexUvClamp.xy, vertexUvClamp.zw)) * 0.153388;
+      } else {
+        sampleColor = texture(image, sampleUv) * 0.227027;
+        sampleColor += texture(image, clamp(sampleUv + stepUv * 1.384615,
+          vertexUvClamp.xy, vertexUvClamp.zw)) * 0.316216;
+        sampleColor += texture(image, clamp(sampleUv - stepUv * 1.384615,
+          vertexUvClamp.xy, vertexUvClamp.zw)) * 0.316216;
+        sampleColor += texture(image, clamp(sampleUv + stepUv * 3.230769,
+          vertexUvClamp.xy, vertexUvClamp.zw)) * 0.070270;
+        sampleColor += texture(image, clamp(sampleUv - stepUv * 3.230769,
+          vertexUvClamp.xy, vertexUvClamp.zw)) * 0.070270;
+      }
     } else {
       vec2 stepUv = blurRadius / textureSize;
       sampleColor = texture(image, vertexUv) * 0.227027;

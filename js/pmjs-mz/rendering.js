@@ -1,9 +1,12 @@
 'use strict';
 
 (function() {
+  var StockColorFilter = typeof ColorFilter === 'function' && ColorFilter;
+  var stockColor = StockColorFilter && new StockColorFilter();
+  var colorApply = stockColor && stockColor.apply;
   pmjsPixi5RegisterFilterEncoder(function(filter) {
-    if (typeof ColorFilter !== 'function' ||
-        filter.constructor !== ColorFilter) return null;
+    if (!StockColorFilter || filter.constructor !== StockColorFilter ||
+        filter.apply !== colorApply || filter.program !== stockColor.program) return null;
     var uniforms = filter.uniforms;
     var tone = uniforms.colorTone;
     var blend = uniforms.blendColor;

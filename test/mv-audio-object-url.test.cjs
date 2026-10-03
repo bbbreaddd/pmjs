@@ -15,7 +15,7 @@ const mvAudioSource = fs.readFileSync(
 const mainLoopSource = fs.readFileSync(
   path.resolve(__dirname, '../js/pmjs-rpgmaker/main-loop.js'), 'utf8');
 
-function contextFor(decrypter, XMLHttpRequest) {
+function contextFor(decrypter, XMLHttpRequest, clock = Date) {
   const loadedBytes = [];
   const loadedOptions = [];
   const released = [];
@@ -23,7 +23,7 @@ function contextFor(decrypter, XMLHttpRequest) {
     Blob,
     URL: function URL() {},
     console,
-    Date,
+    Date: clock,
     AudioManager: { _path: 'audio/', audioFileExt: function() { return '.ogg'; } },
     SceneManager: {},
     Decrypter: decrypter,
@@ -39,6 +39,7 @@ function contextFor(decrypter, XMLHttpRequest) {
         },
         playAudio: function() { return true; },
         stopAudio: function() {},
+        fadeAudio: function() {},
         setAudioParameters: function() {},
         audioIsPlaying: function() { return false; },
         releaseAudio: function(handle) { released.push(handle); },
@@ -221,7 +222,7 @@ test('MV master volume mirrors through the engine-visible field', () => {
   assert.equal(context.WebAudio._masterVolume, 0.75);
 });
 
-test('MV fadeOut hands the native voice a stop at fade end', () => {
+test('MV fadeOut fades gain without stopping the source', () => {
   const context = contextFor({ hasEncryptedAudio: false });
   const calls = [];
   context.NativeHost.media.loadAudio = () => ({ handle: 5, duration: 1 });
@@ -230,7 +231,7 @@ test('MV fadeOut hands the native voice a stop at fade end', () => {
   };
   const audio = new context.WebAudio('audio/se/fade.ogg');
   audio.fadeOut(1.5);
-  assert.deepEqual(calls, [[5, -1, 0, 1.5, true]]);
+  assert.deepEqual(calls, [[5, 1, 0, 1.5, false]]);
 });
 
 test('MV fadeTo reaches native audio without stopping', () => {
@@ -242,7 +243,7 @@ test('MV fadeTo reaches native audio without stopping', () => {
   };
   const audio = new context.WebAudio('audio/se/fade.ogg');
   audio._fadeTo(0.5, 2);
-  assert.deepEqual(calls, [[5, -1, 0.5, 2, false]]);
+  assert.deepEqual(calls, [[5, 1, 0.5, 2, false]]);
 });
 
 test('MV clear drains a stop listener before releasing', () => {
@@ -268,4 +269,40 @@ test('MV provides engine intent without native path classification', () => {
   };
   for (const folder of ['se', 'bgm', 'bgs', 'me']) context.AudioManager.createBuffer(folder, 'tone');
   assert.deepEqual(intents, ['effect', 'music', 'ambient', 'jingle']);
+});
+
+test('MV gain reads and interrupted ramps preserve instantaneous gain and engine volume', () => {
+  let now = 0;
+  const clock = class extends Date { static now() { return now; } };
+  const context = contextFor({ hasEncryptedAudio: false }, undefined, clock);
+  context.NativeHost.media.loadAudio = () => ({ handle: 5, duration: 4 });
+  const ramps = [];
+  context.NativeHost.media.fadeAudio = (...args) => ramps.push(args);
+  const audio = new context.WebAudio('audio/bgm/ramp.ogg');
+  audio.volume = 0.5;
+  audio._fadeTo(0, 2);
+  now = 1000;
+  assert.equal(audio._gainNode.gain.value, 0.25);
+  audio.linearRampToValueAtTime(0.75, 3);
+  assert.deepEqual(ramps.at(-1), [5, 0.25, 0.75, 2, false]);
+  now = 2000;
+  assert.equal(audio._gainNode.gain.value, 0.5);
+  now = 3000;
+  assert.equal(audio._gainNode.gain.value, 0.75);
+  assert.equal(audio.volume, 0.5);
+});
+
+test('MV pending fade-in uses engine volume after asynchronous loading', async () => {
+  const context = contextFor({ hasEncryptedAudio: false });
+  const ramps = [];
+  context.NativeHost.media.fadeAudio = (...args) => ramps.push(args);
+  const url = context.URL.createObjectURL(new Blob([Uint8Array.from([1])]));
+  const audio = new context.WebAudio(url);
+  audio.volume = 0.5;
+  audio.play(true, 0);
+  audio.fadeIn(2);
+  await settle();
+  assert.deepEqual(ramps, [[1, 0, 0.5, 2, false]]);
+  assert.equal(audio.volume, 0.5);
+  context.URL.revokeObjectURL(url);
 });

@@ -25,6 +25,7 @@ enum class NodeKind : std::uint32_t {
 };
 
 enum class FilterKind : std::uint32_t {
+  // Blur parameters: strength per pass, pass count, kernel (0 = MV, 5 = Pixi 5).
   blur = 0,
   displacement = 1,
   noiseGlitch = 2,

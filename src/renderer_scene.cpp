@@ -150,12 +150,16 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
         if (command.filterKind == FilterKind::blur) {
           if (resource != 0 || command.filterParameters[0] < 0 ||
               command.filterParameters[1] < 1 ||
-              command.filterParameters[1] > 15) return false;
+              command.filterParameters[1] > 15 ||
+              (command.filterParameters[2] != 0 &&
+               command.filterParameters[2] != 5)) return false;
         } else if (command.filterKind == FilterKind::blurX ||
                    command.filterKind == FilterKind::blurY) {
           if (resource != 0 || command.filterParameters[0] < 0 ||
               command.filterParameters[1] < 1 ||
-              command.filterParameters[1] > 15) return false;
+              command.filterParameters[1] > 15 ||
+              (command.filterParameters[2] != 0 &&
+               command.filterParameters[2] != 5)) return false;
         } else if (command.filterKind == FilterKind::mzColor) {
           if (resource != 0) return false;
         } else if (command.filterKind == FilterKind::fxaa) {

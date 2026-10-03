@@ -2,6 +2,49 @@ function EventTarget() {
   this._listeners = Object.create(null);
 }
 
+var reportingEventError = false;
+function pmjsReportEventError(error) {
+  if (reportingEventError) {
+    console.error('[pmjs] event error:', error);
+    return;
+  }
+  reportingEventError = true;
+  try {
+    var event = {
+      type: 'error', error: error,
+      message: error && error.message ? error.message : String(error),
+      filename: '', lineno: 0, colno: 0, defaultPrevented: false,
+      preventDefault: function() { this.defaultPrevented = true; }
+    };
+    if (typeof globalThis.onerror === 'function') {
+      try {
+        if (globalThis.onerror(event.message, '', 0, 0, error) === true) {
+          event.preventDefault();
+        }
+      } catch (handlerError) {
+        console.error('[pmjs] error handler failed:', handlerError);
+      }
+    }
+    if (typeof globalThis.dispatchEvent === 'function') {
+      globalThis.dispatchEvent(event);
+    }
+    if (!event.defaultPrevented) console.error('[pmjs] event error:', error);
+  } catch (reportError) {
+    console.error('[pmjs] error handler failed:', reportError);
+  } finally {
+    reportingEventError = false;
+  }
+}
+
+function pmjsInvokeEventHandler(target, handler, event) {
+  if (typeof handler !== 'function') return;
+  try {
+    handler.call(target, event);
+  } catch (error) {
+    pmjsReportEventError(error);
+  }
+}
+
 EventTarget.prototype.addEventListener = function(type, listener) {
   if (typeof listener !== 'function') return;
   var listeners = this._listeners[type];
@@ -27,7 +70,7 @@ EventTarget.prototype.dispatchEvent = function(event) {
   event.target = event.target || this;
   event.currentTarget = this;
   for (var index = 0; index < listeners.length; index++) {
-    listeners[index].call(this, event);
+    pmjsInvokeEventHandler(this, listeners[index], event);
   }
   return !event.defaultPrevented;
 };

@@ -559,7 +559,7 @@ Object.defineProperty(NativeImage.prototype, 'src', {
           image.width = image.naturalWidth = loaded.width;
           image.height = image.naturalHeight = loaded.height;
           image.complete = true;
-          if (typeof image.onload === 'function') image.onload({ type: 'load', target: image });
+          pmjsInvokeEventHandler(image, image.onload, { type: 'load', target: image });
           image.dispatchEvent({ type: 'load', target: image });
           PMJS.images.loadCompleted(image);
         }, function(error) {
@@ -571,7 +571,7 @@ Object.defineProperty(NativeImage.prototype, 'src', {
           image.complete = true;
           image._pmjsLoadFailed = true;
           image._pmjsLoadError = error;
-          if (typeof image.onerror === 'function') image.onerror({ type: 'error', target: image });
+          pmjsInvokeEventHandler(image, image.onerror, { type: 'error', target: image });
           image.dispatchEvent({ type: 'error', target: image });
         }).then(function() { pendingNativeImageLoads--; }, function(error) {
           pendingNativeImageLoads--;
@@ -605,7 +605,7 @@ Object.defineProperty(NativeImage.prototype, 'src', {
         image.complete = true;
         image._pmjsLoadFailed = false;
         image._pmjsLoadError = null;
-        if (typeof image.onload === 'function') image.onload({ type: 'load', target: image });
+        pmjsInvokeEventHandler(image, image.onload, { type: 'load', target: image });
         image.dispatchEvent({ type: 'load', target: image });
         PMJS.images.loadCompleted(image);
       }, function(error) {
@@ -627,7 +627,7 @@ Object.defineProperty(NativeImage.prototype, 'src', {
         image.complete = true;
         image._pmjsLoadFailed = true;
         image._pmjsLoadError = error;
-        if (typeof image.onerror === 'function') image.onerror({ type: 'error', target: image });
+        pmjsInvokeEventHandler(image, image.onerror, { type: 'error', target: image });
         image.dispatchEvent({ type: 'error', target: image });
       }).then(function() { pendingNativeImageLoads--; },
         function(err) {
@@ -689,7 +689,20 @@ documentTarget.createTextNode = function(text) {
   node.textContent = String(text);
   return node;
 };
-documentTarget.getElementById = function() { return null; };
+documentTarget.getElementById = function(id) {
+  id = String(id);
+  if (!id) return null;
+  function find(node) {
+    if (node.id === id) return node;
+    var children = node.children || [];
+    for (var child of children) {
+      var match = find(child);
+      if (match) return match;
+    }
+    return null;
+  }
+  return find(this.body) || find(this.head);
+};
 documentTarget.getElementsByTagName = function(tagName) {
   var elements = String(tagName).toLowerCase() === 'head' ? [this.head] : [];
   elements.item = function(index) { return this[index] || null; };

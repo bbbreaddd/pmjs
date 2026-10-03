@@ -26,5 +26,8 @@
     StorageManager.isLocalMode = function() {
       return true;
     };
+    StorageManager.fileDirectoryPath = function() {
+      return '/save/';
+    };
   }
 })();

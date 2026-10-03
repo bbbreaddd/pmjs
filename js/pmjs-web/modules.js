@@ -122,8 +122,13 @@ function loadCommonJs(filename) {
   moduleCache[filename] = module;
   var directory = dirname(filename);
   var localRequire = function(request) { return requireModule(request, directory); };
-  var wrapper = Function('exports', 'require', 'module', '__filename', '__dirname', source);
-  wrapper(module.exports, localRequire, module, filename, directory);
+  try {
+    var wrapper = Function('exports', 'require', 'module', '__filename', '__dirname', source);
+    wrapper(module.exports, localRequire, module, filename, directory);
+  } catch (error) {
+    delete moduleCache[filename];
+    throw error;
+  }
   return module.exports;
 }
 

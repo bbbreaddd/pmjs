@@ -823,6 +823,7 @@ void Renderer::renderScene() {
       std::uint32_t compositeTexture = groupTargets_[filterDepth].texture;
       if (filter.filterKind == scene_packet::FilterKind::blur) {
         ensureTarget(filterTarget_, width_, height_);
+        glUniform1fv(pixiFilterParametersUniform_, 3, filter.filterParameters.data());
         glUniform1f(blurUniform_, filter.filterParameters[0]);
         glUniform2f(blurDirectionUniform_, 1, 0);
         glDisable(GL_BLEND);
@@ -856,6 +857,7 @@ void Renderer::renderScene() {
         compositeTexture = sourceTexture;
       } else if (filter.filterKind == scene_packet::FilterKind::blurX ||
                  filter.filterKind == scene_packet::FilterKind::blurY) {
+        glUniform1fv(pixiFilterParametersUniform_, 3, filter.filterParameters.data());
         if (filter.filterParameters[1] > 1) {
           ensureTarget(filterTarget_, width_, height_);
         }

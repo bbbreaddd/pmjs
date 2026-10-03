@@ -51,6 +51,7 @@ function XMLHttpRequest() {
   this.onload = null;
   this.onerror = null;
   this.onreadystatechange = null;
+  this._requestGeneration = 0;
 }
 
 XMLHttpRequest.prototype = Object.create(EventTarget.prototype);
@@ -58,6 +59,14 @@ XMLHttpRequest.prototype.constructor = XMLHttpRequest;
 XMLHttpRequest.prototype.open = function(method, url) {
   this._method = String(method).toUpperCase();
   this._url = String(url).replace(/^\.\//, '');
+  this._requestGeneration++;
+  this.status = 0;
+  this.responseText = '';
+  this.response = null;
+  this.readyState = 1;
+  pmjsInvokeEventHandler(this, this.onreadystatechange,
+    { type: 'readystatechange', target: this });
+  this.dispatchEvent({ type: 'readystatechange', target: this });
 };
 XMLHttpRequest.prototype.overrideMimeType = function() {};
 XMLHttpRequest.prototype.send = function() {
@@ -72,19 +81,25 @@ XMLHttpRequest.prototype.send = function() {
       resolved.replace(/\/maps\/Map(\d+)\.json$/i, '/maps/map$1.json'));
   }
   var request = this;
+  var generation = this._requestGeneration;
   PMJS.tasks.enqueue(function() {
+    if (request._requestGeneration !== generation) return;
     request.status = contents === null ? 404 : 200;
     request.readyState = 4;
     if (contents !== null) {
       request.response = contents;
       if (!binary) request.responseText = contents;
     }
-    if (typeof request.onreadystatechange === 'function') request.onreadystatechange();
+    var stateEvent = { type: 'readystatechange', target: request };
+    pmjsInvokeEventHandler(request, request.onreadystatechange, stateEvent);
+    if (request._requestGeneration !== generation) return;
+    request.dispatchEvent(stateEvent);
+    if (request._requestGeneration !== generation) return;
     var type = contents === null ? 'error' : 'load';
-    if (typeof request['on' + type] === 'function') {
-      request['on' + type]({ target: request });
-    }
-    request.dispatchEvent({ type: type, target: request });
+    var event = { type: type, target: request };
+    pmjsInvokeEventHandler(request, request['on' + type], event);
+    if (request._requestGeneration !== generation) return;
+    request.dispatchEvent(event);
   });
 };
 globalThis.XMLHttpRequest = XMLHttpRequest;
