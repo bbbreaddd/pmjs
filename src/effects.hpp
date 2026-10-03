@@ -14,6 +14,7 @@ struct EffectDraw {
   std::array<float, 4> viewport{};
   std::array<float, 16> projection{};
   std::array<float, 16> camera{};
+  std::array<float, 2> resetViewport{};
 };
 
 class Effects {

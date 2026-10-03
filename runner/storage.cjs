@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { createHash } = require('node:crypto');
 
 function createStorage(root) {
   const saveRoot = path.resolve(root);
@@ -95,7 +96,8 @@ function createGameFilesystem(host, root) {
     return normalized.replace(/\/$/, '');
   }
   const key = name => name.replace(/[A-Z]/g, value => value.toLowerCase());
-  const marker = name => Buffer.from(key(name)).toString('hex');
+  const marker = name => createHash('sha256').update(key(name)).digest('hex');
+  const hide = name => deleted.writeText(marker(name), key(name));
   function error(code, name) {
     return Object.assign(new Error(`${code}: ${name}`), { code });
   }
@@ -141,10 +143,10 @@ function createGameFilesystem(host, root) {
       const name = normalize(relative);
       return mutate(() => {
         if (host.exists(name)) {
-          if (options.recursive && host.isDirectory(name)) return;
+          if (options && options.recursive && host.isDirectory(name)) return;
           throw error('EEXIST', name);
         }
-        if (!options.recursive) parents(name);
+        if (!(options && options.recursive)) parents(name);
         else {
           let parent = path.posix.dirname(name);
           while (parent !== '.') {
@@ -152,7 +154,7 @@ function createGameFilesystem(host, root) {
             parent = path.posix.dirname(parent);
           }
         }
-        fs.mkdirSync(physical(name), { recursive: !!options.recursive });
+        fs.mkdirSync(physical(name), { recursive: !!(options && options.recursive) });
       });
     },
     remove(relative) {
@@ -160,18 +162,22 @@ function createGameFilesystem(host, root) {
       return mutate(() => {
         if (!host.exists(name)) throw error('ENOENT', name);
         if (host.isDirectory(name)) throw error('EISDIR', name);
-        deleted.writeText(marker(name), '');
+        hide(name);
         if (fs.existsSync(physical(name))) fs.unlinkSync(physical(name));
       });
     },
     rename(from, to) {
       const source = normalize(from), destination = normalize(to);
       return mutate(() => {
+        if (source === '.' || destination === '.') throw error('EBUSY', source);
         if (!host.exists(source)) throw error('ENOENT', source);
         if (key(source) === key(destination)) return;
         if (key(destination).startsWith(key(source) + '/')) throw error('EINVAL', destination);
         const directory = host.isDirectory(source);
         if (host.exists(destination)) {
+          if (host.isDirectory(destination) && key(source).startsWith(key(destination) + '/')) {
+            throw error('ENOTEMPTY', destination);
+          }
           if (directory !== host.isDirectory(destination)) throw error(directory ? 'ENOTDIR' : 'EISDIR', destination);
           if (directory && host.readDirectory(destination).length) throw error('ENOTEMPTY', destination);
         }
@@ -181,9 +187,9 @@ function createGameFilesystem(host, root) {
           copy(source, path.join(staging, 'value'));
           if (directory && fs.existsSync(physical(destination))) fs.rmdirSync(physical(destination));
           fs.renameSync(path.join(staging, 'value'), physical(destination));
-          deleted.writeText(marker(source), '');
+          hide(source);
           // A replaced base directory must not contribute old children after restart.
-          if (directory) deleted.writeText(marker(destination), '');
+          if (directory) hide(destination);
           fs.rmSync(physical(source), { recursive: true, force: true });
         } finally { fs.rmSync(staging, { recursive: true, force: true }); }
       });

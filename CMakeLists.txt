@@ -94,6 +94,9 @@ add_library(pmjs_native MODULE
   src/node_addon_platform.cpp
   src/node_addon_resources.cpp
   src/node_addon_runtime.cpp)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/third_party/effekseer.LICENSE" PMJS_EFFECTS_LICENSE)
+configure_file(src/effects_license.hpp.in generated/effects_license.hpp @ONLY)
+target_include_directories(pmjs_native PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_include_directories(pmjs_native PRIVATE src)
 target_include_directories(pmjs_native SYSTEM PRIVATE "${PMJS_NODE_API_HEADERS}")
 target_compile_definitions(pmjs_native PRIVATE NODE_GYP_MODULE_NAME=pmjs_native NAPI_VERSION=8)
@@ -123,6 +126,10 @@ if(BUILD_TESTING)
   endfunction()
 
   pmjs_add_cpp_test(pmjs-vfs-test native-vfs test/vfs.cpp src/vfs.cpp)
+  add_test(NAME node-writable-filesystem COMMAND ${XVFB_RUN} -a ${CMAKE_COMMAND} -E env
+    SDL_AUDIODRIVER=dummy LIBGL_ALWAYS_SOFTWARE=1
+    PMJS_NATIVE_ADDON=$<TARGET_FILE:pmjs_native>
+    ${NODE_EXECUTABLE} --test ${CMAKE_CURRENT_SOURCE_DIR}/test/node-writable-filesystem.cjs)
   pmjs_add_cpp_test(pmjs-checked-bounds-test native-checked-bounds test/checked-bounds.cpp)
   pmjs_add_cpp_test(pmjs-filter-precision-test native-filter-precision test/filter-precision.cpp)
   pmjs_add_cpp_test(pmjs-media-mix-test native-audio-mix-unit test/media-mix.cpp)

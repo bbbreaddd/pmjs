@@ -284,10 +284,14 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
       std::copy_n(values + valueOffset, 4, command.effect.viewport.begin());
       std::copy_n(values + valueOffset + 7, 16, command.effect.projection.begin());
       std::copy_n(values + valueOffset + 23, 16, command.effect.camera.begin());
+      std::copy_n(values + valueOffset + 39, 2, command.effect.resetViewport.begin());
       for (const float value : command.effect.viewport) {
         if (std::abs(value) > 65536) return false;
       }
       if (command.effect.viewport[2] <= 0 || command.effect.viewport[3] <= 0) return false;
+      for (const float value : command.effect.resetViewport) {
+        if (value <= 0 || value > 65536) return false;
+      }
       command.clip = state.clip;
       command.clipped = state.clipped;
       frame_.commands.push_back(command);

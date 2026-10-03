@@ -80,7 +80,8 @@
         if (!resource || resource.state !== state || !state.effects.has(resource.id) || !effect.isLoaded) {
           throw new Error('Effekseer effect is not loaded in this context');
         }
-        var id = native.play(state.id, resource.id, x || 0, y || 0, z || 0);
+        var id = native.play(state.id, resource.id, x === undefined ? 0 : x,
+          y === undefined ? 0 : y, z === undefined ? 0 : z);
         state.handles.add(id);
         var handle = {};
         var control = function(operation, a, b, c, d) {
@@ -160,6 +161,12 @@
     state.capture = capture;
     try {
       animation._render(facade);
+      if (capture.draw) {
+        if (capture.begun || capture.viewport[0] !== 0 || capture.viewport[1] !== 0) {
+          unsupported('incomplete animation viewport reset');
+        }
+        capture.draw.effect.resetViewport = capture.viewport.slice(2);
+      }
       return capture.draw || { kind: 0, resource: 0 };
     } finally { state.capture = null; }
   };

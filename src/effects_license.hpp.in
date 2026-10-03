@@ -1,0 +1,5 @@
+#pragma once
+
+namespace pmjs {
+inline constexpr char effectsLicense[] = R"PMJS_LICENSE(@PMJS_EFFECTS_LICENSE@)PMJS_LICENSE";
+}

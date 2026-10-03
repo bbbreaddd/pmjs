@@ -326,6 +326,7 @@
       values.set(encodedNode.effect.viewport, effectOffset);
       values.set(encodedNode.effect.projection, effectOffset + 7);
       values.set(encodedNode.effect.camera, effectOffset + 23);
+      values.set(encodedNode.effect.resetViewport, effectOffset + 39);
     } else if (kind === 1) {
       var baseTexture = texture.baseTexture;
       var resolution = Math.max(0.000001, Number(baseTexture.resolution) || 1);

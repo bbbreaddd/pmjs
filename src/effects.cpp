@@ -2,6 +2,7 @@
 #include "media_service.hpp"
 
 #include <Effekseer.h>
+#include <Effekseer/Effekseer.EffectNode.h>
 #include <EffekseerRendererGL.h>
 #include <GLES3/gl3.h>
 #include <algorithm>
@@ -143,7 +144,7 @@ class WaveLoader final : public Effekseer::SoundLoader {
     const auto name = std::filesystem::path(path).generic_string();
     const auto source = vfs_.resolve(name);
     std::string error;
-    const auto voice = source ? media_.loadAudio(source->string(), &error, {AudioIntent::effect}) : 0;
+    const auto voice = source ? media_.loadAudio(source->string(), &error, {AudioIntent::effect, name, *source}) : 0;
     if (!voice) {
       files_->error = "cannot load effect sound: " + name + ": " + error;
       return nullptr;
@@ -158,7 +159,7 @@ class WaveLoader final : public Effekseer::SoundLoader {
 };
 
 class WavePlayer final : public Effekseer::SoundPlayer {
-  struct Voice { std::uint32_t media; Effekseer::SoundTag tag; };
+  struct Voice { std::uint32_t media; Effekseer::SoundTag tag; std::uint64_t order; };
  public:
   explicit WavePlayer(MediaService& media) : media_(media) {}
   ~WavePlayer() override { StopAll(); }
@@ -166,12 +167,25 @@ class WavePlayer final : public Effekseer::SoundPlayer {
     if (p.Mode3D) throw std::runtime_error("Effekseer spatial sound is unsupported");
     const auto wave = p.Data.DownCast<Wave>();
     if (wave.Get() == nullptr) return nullptr;
+    std::erase_if(voices_, [&](const auto& item) {
+      if (media_.isPlaying(item.second->media)) return false;
+      media_.release(item.second->media);
+      return true;
+    });
+    // MZ's Effekseer backend has sixteen sound voices and reuses the oldest.
+    if (voices_.size() == 16) {
+      const auto oldest = std::min_element(voices_.begin(), voices_.end(), [](const auto& a, const auto& b) {
+        return a.second->order < b.second->order;
+      });
+      media_.release(oldest->second->media);
+      voices_.erase(oldest);
+    }
     std::string error;
-    const auto id = media_.loadAudio(wave->path, &error, {AudioIntent::effect});
+    const auto id = media_.loadAudio(wave->path, &error, {AudioIntent::effect, wave->path, wave->path});
     if (!id) throw std::runtime_error("cannot play effect sound: " + error);
     media_.setParameters(id, p.Volume, std::pow(2.0F, p.Pitch), p.Pan);
     media_.play(id, false, 0);
-    auto voice = std::make_unique<Voice>(Voice{id, tag});
+    auto voice = std::make_unique<Voice>(Voice{id, tag, nextVoice_++});
     const auto handle = voice.get();
     voices_.emplace(handle, std::move(voice));
     return handle;
@@ -215,6 +229,7 @@ class WavePlayer final : public Effekseer::SoundPlayer {
   std::uint32_t count() const { return static_cast<std::uint32_t>(voices_.size()); }
  private:
   MediaService& media_;
+  std::uint64_t nextVoice_ = 0;
   std::unordered_map<Effekseer::SoundHandle, std::unique_ptr<Voice>> voices_;
 };
 
@@ -261,8 +276,8 @@ std::uint32_t Effects::createContext() {
   }
   GlBindings restore;
   Impl::Context context;
-  context.manager = Effekseer::Manager::Create(8000);
-  context.renderer = EffekseerRendererGL::Renderer::Create(8000, EffekseerRendererGL::OpenGLDeviceType::OpenGLES2);
+  context.manager = Effekseer::Manager::Create(4000);
+  context.renderer = EffekseerRendererGL::Renderer::Create(10000, EffekseerRendererGL::OpenGLDeviceType::OpenGLES2);
   if (context.manager.Get() == nullptr || context.renderer.Get() == nullptr) throw std::runtime_error("Effekseer initialization failed");
   context.files = Effekseer::MakeRefPtr<Files>(impl_->vfs);
   auto& manager = context.manager;
@@ -315,6 +330,13 @@ std::uint32_t Effects::load(std::uint32_t contextId, const std::string& path, fl
   require(effect->GetMaterialCount(), &Effekseer::Effect::GetMaterial, "material");
   require(effect->GetCurveCount(), &Effekseer::Effect::GetCurve, "curve");
   require(effect->GetWaveCount(), &Effekseer::Effect::GetWave, "sound");
+  static_cast<Effekseer::EffectNodeImplemented*>(effect->GetRoot())->Traverse([](auto* node) {
+    if (node->SoundType == Effekseer::ParameterSoundType_Use &&
+        node->Sound.PanType == Effekseer::ParameterSoundPanType_3D) {
+      throw std::runtime_error("Effekseer spatial sound is unsupported");
+    }
+    return true;
+  });
   const auto id = impl_->id();
   impl_->effects.emplace(id, Impl::Effect{contextId, effect});
   return id;
@@ -369,7 +391,13 @@ void Effects::control(std::uint32_t id, const std::string& operation, const std:
   else if (operation == "scale") manager->SetScale(h, v[0], v[1], v[2]);
   else if (operation == "speed") manager->SetSpeed(h, v[0]);
   else if (operation == "target") manager->SetTargetLocation(h, v[0], v[1], v[2]);
-  else if (operation == "seed") manager->SetRandomSeed(h, static_cast<int>(v[0]));
+  else if (operation == "seed") {
+    if (static_cast<double>(v[0]) < std::numeric_limits<int>::min() ||
+        static_cast<double>(v[0]) > std::numeric_limits<int>::max()) {
+      throw std::runtime_error("invalid effect random seed");
+    }
+    manager->SetRandomSeed(h, static_cast<int>(v[0]));
+  }
   else if (operation == "paused") manager->SetPaused(h, v[0] != 0);
   else if (operation == "shown") manager->SetShown(h, v[0] != 0);
   else if (operation == "stop") manager->StopEffect(h);

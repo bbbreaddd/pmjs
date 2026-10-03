@@ -1246,6 +1246,8 @@ void Renderer::renderScene() {
         for (std::size_t column = 0; column < 4; ++column) draw.projection[column * 4 + 1] *= -1;
       }
       effects_->draw(draw);
+      glViewport(0, height_ - static_cast<int>(draw.resetViewport[1]),
+        static_cast<int>(draw.resetViewport[0]), static_cast<int>(draw.resetViewport[1]));
       continue;
     }
     if (operation.blendMode != activeBlend) {

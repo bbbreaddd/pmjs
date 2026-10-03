@@ -67,6 +67,37 @@ int main() try {
   require(!vfs.exists("data/Broken.alias"),
           "broken symlink was exposed");
 
+  const auto overlay = fixture.path() / "overlay";
+  std::filesystem::create_directories(overlay / "files" / "data");
+  std::filesystem::create_directories(overlay / "deleted");
+  write(overlay / "files" / "data" / "system.JSON", "replacement");
+  write(overlay / "files" / "created.bin", std::string("\0\x7f\x80\xff", 4));
+  // Marker names are fixed-length hashes; the contents hold the normalized path.
+  write(overlay / "deleted" / std::string(64, 'a'), "data/system.alias");
+  vfs.mountWritableOverlay(overlay);
+  require(vfs.readText("DATA/System.json") == "replacement", "overlay did not replace base");
+  require(vfs.readText("created.bin")->size() == 4, "binary overlay read lost bytes");
+  require(!vfs.exists("data/System.alias"), "deleted base file reappeared");
+  require(vfs.isDirectory(".") && vfs.isDirectory("data"), "merged directory missing");
+  const auto entries = vfs.readDirectory("data");
+  require(entries && *entries == std::vector<std::string>{"system.JSON"},
+          "listing did not merge case aliases and deletion markers");
+  require(!vfs.resolve("../outside.txt"), "overlay allowed path traversal");
+  write(overlay / "deleted" / std::string(64, 'b'), "data");
+  std::filesystem::remove_all(overlay / "files" / "data");
+  vfs.mountWritableOverlay(overlay);
+  require(!vfs.exists("data") && !vfs.exists("data/System.json"),
+          "directory deletion did not hide descendants");
+  std::filesystem::create_directory(overlay / "files" / "data");
+  write(overlay / "files" / "data" / "new.txt", "new");
+  vfs.mountWritableOverlay(overlay);
+  require(vfs.readDirectory("data") == std::vector<std::string>{"new.txt"},
+          "recreated directory exposed deleted base descendants");
+  pmjs::Vfs restarted(root);
+  restarted.mountWritableOverlay(overlay);
+  require(restarted.readText("data/new.txt") == "new" && !restarted.exists("data/System.json"),
+          "overlay state did not persist through a fresh VFS");
+
   TemporaryDirectory collisionFixture("collision");
   write(collisionFixture.path() / "Name.txt", "upper");
   write(collisionFixture.path() / "name.TXT", "lower");

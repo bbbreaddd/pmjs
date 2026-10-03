@@ -1,4 +1,5 @@
 #include "node_addon_internal.hpp"
+#include "effects_license.hpp"
 #include <cmath>
 
 namespace pmjs::addon {
@@ -61,6 +62,8 @@ napi_value effectCall(napi_env env, napi_callback_info info) {
 
 void registerEffectBindings(napi_env env, napi_value exports) {
   auto effects = moduleObject(env);
+  check(env, napi_set_named_property(env, effects, "license", string(env, effectsLicense)),
+    "cannot export effects license");
   for (const char* name : {"createContext", "releaseContext", "load", "release", "play", "update", "stopAll", "exists", "control", "counts"}) {
     napi_value function;
     check(env, napi_create_function(env, name, NAPI_AUTO_LENGTH, effectCall,

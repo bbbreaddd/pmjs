@@ -87,19 +87,13 @@ void Vfs::mountWritableOverlay(const std::filesystem::path& root) {
   for (const auto& entry : std::filesystem::directory_iterator(root / "deleted")) {
     if (!entry.is_regular_file()) continue;
     const auto name = entry.path().filename().string();
-    std::string decoded;
-    auto hex = [](char value) -> int {
-      if (value >= '0' && value <= '9') return value - '0';
-      if (value >= 'a' && value <= 'f') return value - 'a' + 10;
-      return -1;
-    };
-    if (name.size() % 2) continue;
-    for (std::size_t index = 0; index < name.size(); index += 2) {
-      const auto high = hex(name[index]), low = hex(name[index + 1]);
-      if (high < 0 || low < 0) { decoded.clear(); break; }
-      decoded.push_back(static_cast<char>(high * 16 + low));
-    }
-    const auto key = normalize(decoded);
+    if (name.size() != 64 || !std::all_of(name.begin(), name.end(), [](char value) {
+          return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f');
+        })) continue;
+    std::ifstream input(entry.path(), std::ios::binary);
+    std::ostringstream contents;
+    contents << input.rdbuf();
+    const auto key = normalize(contents.str());
     if (key) overlay->deleted.insert(*key);
   }
   // Async asset decoders retain an immutable view while mutations publish the next one.
