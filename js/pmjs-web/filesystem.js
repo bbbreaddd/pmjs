@@ -224,14 +224,27 @@ var fsModule = {
   },
   statSync: function(path) {
     var writable = writablePath(path);
+    var exists, directory;
     if (writable !== null && NativeHost.storage) {
-      if (writable !== '' && !NativeHost.storage.exists(writable)) throw new Error('ENOENT: ' + path);
-      return { isDirectory: function() {
-        return writable === '' || NativeHost.storage.isDirectory(writable);
-      } };
+      exists = writable === '' || NativeHost.storage.exists(writable);
+      directory = exists && (writable === '' || NativeHost.storage.isDirectory(writable));
+    } else {
+      var resolved = gamePath(path);
+      exists = NativeHost.fs.exists(resolved);
+      directory = exists && NativeHost.fs.isDirectory(resolved);
     }
-    var resolved = gamePath(path);
-    if (!NativeHost.fs.exists(resolved)) throw new Error('ENOENT: ' + path);
-    return { isDirectory: function() { return NativeHost.fs.isDirectory(resolved); } };
+    if (!exists) {
+      var error = new Error('ENOENT: ' + path);
+      error.code = 'ENOENT';
+      throw error;
+    }
+    return { isDirectory: function() { return directory; } };
+  },
+  stat: function(path, options, callback) {
+    if (typeof options === 'function') { callback = options; options = null; }
+    if (typeof callback !== 'function') throw new TypeError('stat requires a callback');
+    var result, error = null;
+    try { result = fsModule.statSync(path, options); } catch (caught) { error = caught; }
+    PMJS.tasks.enqueue(function() { callback(error, result); });
   }
 };

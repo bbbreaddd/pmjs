@@ -43,6 +43,8 @@ class Platform {
   int displayWidth() const { return displayWidth_ > 0 ? displayWidth_ : windowWidth_; }
   int displayHeight() const { return displayHeight_ > 0 ? displayHeight_ : windowHeight_; }
   void setWindowTitle(const std::string& title);
+  void setFullscreen(bool enabled);
+  bool fullscreen() const;
   void finishLogicStep();
   // Clears edges consumed by a simulation step.
   void consumePressed();

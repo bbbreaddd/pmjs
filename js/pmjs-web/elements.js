@@ -722,3 +722,66 @@ globalThis.CanvasRenderingContext2D = CanvasContext2D;
 globalThis.addEventListener = EventTarget.prototype.addEventListener.bind(documentTarget);
 globalThis.removeEventListener = EventTarget.prototype.removeEventListener.bind(documentTarget);
 globalThis.dispatchEvent = EventTarget.prototype.dispatchEvent.bind(documentTarget);
+
+function setNativeFullscreen(enabled, element) {
+  NativeHost.runtime.setFullscreen(enabled);
+  documentTarget.fullscreenElement = enabled ? (element || documentTarget.body) : null;
+  documentTarget.mozFullScreen = enabled;
+  documentTarget.webkitIsFullScreen = enabled;
+  documentTarget.webkitFullscreenElement = documentTarget.fullscreenElement;
+  documentTarget.mozFullScreenElement = documentTarget.fullscreenElement;
+  documentTarget.msFullscreenElement = documentTarget.fullscreenElement;
+  documentTarget.dispatchEvent({ type: 'fullscreenchange', target: documentTarget });
+}
+
+GenericElement.prototype.requestFullscreen = function() {
+  try {
+    setNativeFullscreen(true, this);
+    return Promise.resolve();
+  } catch (error) {
+    return Promise.reject(error);
+  }
+};
+GenericElement.prototype.requestFullScreen = function() { setNativeFullscreen(true, this); };
+GenericElement.prototype.webkitRequestFullscreen = GenericElement.prototype.requestFullScreen;
+GenericElement.prototype.webkitRequestFullScreen = GenericElement.prototype.requestFullScreen;
+GenericElement.prototype.mozRequestFullScreen = GenericElement.prototype.requestFullScreen;
+GenericElement.prototype.msRequestFullscreen = GenericElement.prototype.requestFullScreen;
+documentTarget.fullscreenElement = null;
+documentTarget.webkitFullscreenElement = null;
+documentTarget.mozFullScreenElement = null;
+documentTarget.msFullscreenElement = null;
+documentTarget.mozFullScreen = false;
+documentTarget.webkitIsFullScreen = false;
+documentTarget.exitFullscreen = function() {
+  try {
+    setNativeFullscreen(false);
+    return Promise.resolve();
+  } catch (error) {
+    return Promise.reject(error);
+  }
+};
+documentTarget.cancelFullScreen = function() { setNativeFullscreen(false); };
+documentTarget.webkitCancelFullScreen = documentTarget.cancelFullScreen;
+documentTarget.mozCancelFullScreen = documentTarget.cancelFullScreen;
+documentTarget.msExitFullscreen = documentTarget.cancelFullScreen;
+
+GenericElement.prototype.focus = function() {
+  if (documentTarget.activeElement === this) return;
+  var previous = documentTarget.activeElement;
+  documentTarget.activeElement = this;
+  if (previous) previous.dispatchEvent({ type: 'blur', target: previous });
+  this.dispatchEvent({ type: 'focus', target: this });
+};
+GenericElement.prototype.blur = function() {
+  if (documentTarget.activeElement !== this) return;
+  documentTarget.activeElement = documentTarget.body;
+  this.dispatchEvent({ type: 'blur', target: this });
+};
+documentTarget.activeElement = documentTarget.body;
+
+['requestFullscreen', 'requestFullScreen', 'webkitRequestFullscreen',
+  'webkitRequestFullScreen', 'mozRequestFullScreen', 'msRequestFullscreen',
+  'focus', 'blur'].forEach(function(name) {
+  CanvasElement.prototype[name] = GenericElement.prototype[name];
+});

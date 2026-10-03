@@ -23,6 +23,11 @@ int main() {
     }
   }
   pmjs::Platform platform(64, 64, "pmjs input test");
+  if (platform.fullscreen()) return 1;
+  platform.setFullscreen(true);
+  if (!platform.fullscreen()) return 1;
+  platform.setFullscreen(false);
+  if (platform.fullscreen()) return 1;
   SDL_Event event{};
   event.type = SDL_WINDOWEVENT;
   event.window.windowID = platform.windowId();

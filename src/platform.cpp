@@ -593,6 +593,16 @@ std::pair<int, int> Platform::drawableSize() const {
   return {width, height};
 }
 
+void Platform::setFullscreen(bool enabled) {
+  if (SDL_SetWindowFullscreen(window_, enabled ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0) != 0) {
+    throw std::runtime_error(std::string("SDL_SetWindowFullscreen failed: ") + SDL_GetError());
+  }
+}
+
+bool Platform::fullscreen() const {
+  return (SDL_GetWindowFlags(window_) & SDL_WINDOW_FULLSCREEN) != 0;
+}
+
 void Platform::setWindowTitle(const std::string& title) {
   if (window_) {
     SDL_SetWindowTitle(window_, title.c_str());

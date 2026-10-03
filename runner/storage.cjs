@@ -54,7 +54,7 @@ function createStorage(root) {
       catch (error) { if (error.code === 'ENOENT') return false; throw error; }
     },
     readDirectory(relative) {
-      try { return fs.readdirSync(resolve(relative)); }
+      try { return fs.readdirSync(relative === '' ? saveRoot : resolve(relative)); }
       catch (error) { if (error.code === 'ENOENT') return null; throw error; }
     },
     makeDirectory(relative) {

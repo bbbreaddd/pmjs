@@ -34,10 +34,10 @@ var nativeWindow = {
   unmaximize: compatibilityCountedNoop('Window.unmaximize'),
   minimize: compatibilityCountedNoop('Window.minimize'),
   restore: compatibilityCountedNoop('Window.restore'),
-  enterFullscreen: compatibilityCountedNoop('Window.enterFullscreen'),
-  leaveFullscreen: compatibilityCountedNoop('Window.leaveFullscreen'),
-  toggleFullscreen: compatibilityCountedNoop('Window.toggleFullscreen'),
-  isFullscreen: true,
+  enterFullscreen: function() { setNativeFullscreen(true); },
+  leaveFullscreen: function() { setNativeFullscreen(false); },
+  toggleFullscreen: function() { setNativeFullscreen(!NativeHost.runtime.isFullscreen()); },
+  get isFullscreen() { return NativeHost.runtime.isFullscreen(); },
   moveTo: compatibilityCountedNoop('Window.moveTo'),
   moveBy: compatibilityCountedNoop('Window.moveBy'),
   resizeTo: compatibilityCountedNoop('Window.resizeTo'),
@@ -84,7 +84,7 @@ var nativeNwGui = {
     open: function() { return nativeWindow; } },
   Screen: { Init: compatibilityCountedNoop('Screen.Init'),
     on: compatibilityCountedNoop('Screen.on') },
-  Shell: { openExternal: compatibilityCountedNoop('Shell.openExternal'),
+  Shell: { openExternal: function(url) { openNativeExternal(url); },
     openItem: compatibilityCountedNoop('Shell.openItem'),
     showItemInFolder: compatibilityCountedNoop('Shell.showItemInFolder') },
   Menu: function() { return {
@@ -141,7 +141,13 @@ function requireModule(request, parentDirectory) {
   if (request === 'fs') return fsModule;
   if (request === 'os') {
     return { platform: function() { return 'linux'; },
-             homedir: function() { return '/save'; } };
+             homedir: function() { return '/save'; },
+             userInfo: function(options) {
+               if (!globalThis.__pmjsBuiltinRequire) {
+                 throw new Error('host user information is unavailable');
+               }
+               return globalThis.__pmjsBuiltinRequire('os').userInfo(options);
+             } };
   }
   if (Object.prototype.hasOwnProperty.call(registeredCommonJsModules, request)) {
     return registeredCommonJsModules[request];
@@ -179,3 +185,20 @@ globalThis.process = {
     'node-webkit': nwCompatVersion
   }
 };
+
+function openNativeExternal(url) {
+  var address = String(url);
+  if (!/^(https?:\/\/|mailto:)/i.test(address) || /[\x00-\x20]/.test(address)) {
+    return false;
+  }
+  var opened = !!NativeHost.runtime.openExternal(address);
+  if (!opened) console.warn('[pmjs] system browser could not open URL: ' + address);
+  return opened;
+}
+
+globalThis.open = function(url) {
+  // An external browser has no guest WindowProxy to return.
+  if (url !== undefined && String(url) !== '') openNativeExternal(url);
+  return null;
+};
+globalThis.close = function() { NativeHost.runtime.quit(); };
