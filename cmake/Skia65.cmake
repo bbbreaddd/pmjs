@@ -3,7 +3,6 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarc
   set(pmjs_skia65_supported_default ON)
 endif()
 option(PMJS_ENABLE_SKIA65 "Link the shared Skia65 text backend" ${pmjs_skia65_supported_default})
-option(PMJS_SKIA65_DEFAULT "Select Skia65 as the default text backend" ${PMJS_ENABLE_SKIA65})
 option(PMJS_BUILD_SKIA65_COMPONENT "Build the checksum-pinned private Skia65 component" ${PMJS_ENABLE_SKIA65})
 set(PMJS_SKIA65_ARM64_SDK "" CACHE PATH "Prepared portable SDK for the Skia65 ARM64 component")
 if(PMJS_BUILD_SKIA65_COMPONENT)
@@ -22,6 +21,8 @@ if(PMJS_BUILD_SKIA65_COMPONENT)
     "${CMAKE_CURRENT_SOURCE_DIR}/src/skia65/exports.map"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/skia65/pmjs_skia65.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/skia65/pmjs_skia65.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/skia65/mask_test.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/skia65-mask-tail.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/skia65/build.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/skia65/provision.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/skia65/sources.lock.json")
@@ -53,7 +54,4 @@ if(PMJS_ENABLE_SKIA65)
   if(PMJS_BUILD_SKIA65_COMPONENT)
     add_dependencies(pmjs_skia65 pmjs_skia65_component)
   endif()
-endif()
-if(PMJS_SKIA65_DEFAULT AND NOT PMJS_ENABLE_SKIA65)
-  message(FATAL_ERROR "PMJS_SKIA65_DEFAULT requires PMJS_ENABLE_SKIA65")
 endif()

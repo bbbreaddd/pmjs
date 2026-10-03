@@ -1,5 +1,6 @@
 Pinned Effekseer e0ccaf1d1837b1d178d0088f714a1f4525cae8f4: portable MZ math.
 The sound queue intentionally differs from bundled MZ, which reads back() but pops front().
+Restore RGB and alpha blend equations independently.
 
 --- a/Dev/Cpp/Effekseer/Effekseer/SIMD/Base.h
 +++ b/Dev/Cpp/Effekseer/Effekseer/SIMD/Base.h
@@ -62,3 +63,52 @@ The sound queue intentionally differs from bundled MZ, which reads back() but po
  			player->Play(sound.first, sound.second);
  			m_requestedSounds.pop();
  		}
+--- a/Dev/Cpp/Effekseer/Effekseer.SIMD.h
++++ b/Dev/Cpp/Effekseer/Effekseer.SIMD.h
+@@ -8,7 +8,7 @@
+ #include <cstdint>
+ #include <cmath>
+ 
+-#if defined(__ARM_NEON__) || defined(__ARM_NEON)
++#if 0 // MZ uses portable SIMD math in public headers too.
+ // ARMv7/ARM64 NEON
+ 
+ #define EFK_SIMD_NEON
+@@ -19,7 +19,7 @@
+ 
+ #include <arm_neon.h>
+ 
+-#elif (defined(_M_AMD64) || defined(_M_X64)) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2) || defined(__SSE2__)
++#elif 0
+ // x86/x86-64 SSE2/AVX2
+ 
+ #define EFK_SIMD_SSE2
+--- a/Dev/Cpp/EffekseerRendererGL/EffekseerRenderer/EffekseerRendererGL.RendererImplemented.h
++++ b/Dev/Cpp/EffekseerRendererGL/EffekseerRenderer/EffekseerRendererGL.RendererImplemented.h
+@@ -31,6 +31,7 @@
+ 	GLint blendSrcAlpha;
+ 	GLint blendDstAlpha;
+ 	GLint blendEquation;
++	GLint blendEquationAlpha;
+ 	GLint vao;
+ 	GLint arrayBufferBinding;
+ 	GLint elementArrayBufferBinding;
+--- a/Dev/Cpp/EffekseerRendererGL/EffekseerRenderer/EffekseerRendererGL.Renderer.cpp
++++ b/Dev/Cpp/EffekseerRendererGL/EffekseerRenderer/EffekseerRendererGL.Renderer.cpp
+@@ -501,6 +501,7 @@
+ 		glGetIntegerv(GL_BLEND_SRC_ALPHA, &m_originalState.blendSrcAlpha);
+ 		glGetIntegerv(GL_BLEND_DST_ALPHA, &m_originalState.blendDstAlpha);
+ 		glGetIntegerv(GL_BLEND_EQUATION, &m_originalState.blendEquation);
++		glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &m_originalState.blendEquationAlpha);
+ 		glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &m_originalState.arrayBufferBinding);
+ 		glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &m_originalState.elementArrayBufferBinding);
+ 		glGetIntegerv(GL_CURRENT_PROGRAM, &m_originalState.program);
+@@ -587,7 +588,7 @@
+ 		glDepthMask(m_originalState.depthWrite);
+ 		glCullFace(m_originalState.cullFaceMode);
+ 		GLExt::glBlendFuncSeparate(m_originalState.blendSrc, m_originalState.blendDst, m_originalState.blendSrcAlpha, m_originalState.blendDstAlpha);
+-		GLExt::glBlendEquation(m_originalState.blendEquation);
++		GLExt::glBlendEquationSeparate(m_originalState.blendEquation, m_originalState.blendEquationAlpha);
+ 
+ 		GLExt::glBindBuffer(GL_ARRAY_BUFFER, m_originalState.arrayBufferBinding);
+ 		GLExt::glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_originalState.elementArrayBufferBinding);

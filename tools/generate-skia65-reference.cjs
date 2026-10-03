@@ -4,8 +4,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const zlib = require('node:zlib');
-const workspace = path.resolve(__dirname, '../..');
-const { launchMvReference } = require(path.join(workspace, 'tests/differential/mv-reference/browser.cjs'));
+const runnerPath = process.env.PMJS_MV_REFERENCE_BROWSER || process.argv[2];
+if (!runnerPath) {
+  throw Error('Usage: generate-skia65-reference.cjs <path-to-mv-reference-browser.cjs>\n' +
+              'Or specify PMJS_MV_REFERENCE_BROWSER environment variable pointing to the reference runner.');
+}
+const { launchMvReference } = require(path.resolve(runnerPath));
 const { install } = require('./skia65/reference-readback.cjs');
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const fonts = ['text-shaping.ttf', 'testfont.ttf'].map(file => {

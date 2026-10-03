@@ -581,14 +581,31 @@ struct AudioDecoderSession::Impl {
       fail(error, "invalid seek timestamp or stream time base");
       return false;
     }
-    const int result = av_seek_frame(format.get(), streamIndex, target,
-                                     AVSEEK_FLAG_BACKWARD);
+    int result = av_seek_frame(format.get(), streamIndex, target,
+                               AVSEEK_FLAG_BACKWARD);
+    std::int64_t replayFrames = 0;
+    // Short FLAC streams may have no usable interior seek point. Rewind and
+    // discard resampled frames so recovery preserves the requested position.
+    if (result < 0 && target > 0 && codec->codec_id == AV_CODEC_ID_FLAC &&
+        timeToStreamTimestamp(timestamp, {1, 48000}, &replayFrames)) {
+      replayFrames = std::llround(timestamp * 48000);
+      result = av_seek_frame(format.get(), streamIndex, 0, AVSEEK_FLAG_BACKWARD);
+    }
     if (result < 0) { fail(error, "audio seek failed: " + ffError(result)); return false; }
     avcodec_flush_buffers(codec.get()); swr_close(resampler.get());
     if (swr_init(resampler.get()) < 0) { fail(error, "audio resampler reset failed"); return false; }
     pending.clear(); pendingOffset = 0; sentEof = false;
-    discardUntil = timestamp;
+    replayFramesToDiscard = replayFrames;
+    discardUntil = replayFrames > 0 ? 0.0 : timestamp;
     return true;
+  }
+
+  void discardReplayedFrames(std::size_t start) {
+    const auto frames = std::min<std::uint64_t>(replayFramesToDiscard,
+                                               (pending.size() - start) / 2);
+    if (!frames) return;
+    pending.erase(pending.begin() + start, pending.begin() + start + frames * 2);
+    replayFramesToDiscard -= frames;
   }
 
   bool decodeOne(std::string* error) {
@@ -605,6 +622,7 @@ struct AudioDecoderSession::Impl {
           const_cast<const std::uint8_t**>(frame->extended_data), frame->nb_samples);
         if (converted < 0) { fail(error, "audio conversion failed: " + ffError(converted)); return false; }
         pending.resize(start + static_cast<std::size_t>(converted) * 2U);
+        discardReplayedFrames(start);
         if (discardUntil > 0.0) {
           const auto frameTime = frame->best_effort_timestamp == AV_NOPTS_VALUE ? 0.0
             : frame->best_effort_timestamp * av_q2d(stream->time_base);
@@ -634,6 +652,7 @@ struct AudioDecoderSession::Impl {
             const int converted = swr_convert(resampler.get(), &destination, delay, nullptr, 0);
             if (converted > 0) {
               pending.resize(start + static_cast<std::size_t>(converted) * 2U);
+              discardReplayedFrames(start);
               return true;
             }
             pending.resize(start);
@@ -667,6 +686,7 @@ struct AudioDecoderSession::Impl {
   Frame frame{nullptr}; Swr resampler{nullptr}; AVStream* stream = nullptr;
   int streamIndex = -1; double durationSeconds = 0.0, discardUntil = 0.0;
   std::uint64_t loopStart = 0, loopEnd = 0; bool sentEof = false;
+  std::uint64_t replayFramesToDiscard = 0;
   std::vector<float> pending; std::size_t pendingOffset = 0;
 };
 

@@ -61,6 +61,12 @@ def build(options):
             '"src/ports/SkFontMgr_custom_empty_factory.cpp",')
     if options.arch == "arm64":
         replace(skia / "BUILD.gn", '"-march=armv8-a+crc"', '"-mcpu=generic+crc"')
+    mask_patch = ROOT / "third_party/skia65-mask-tail.patch"
+    mask_source = skia / "src/opts/SkBlitMask_opts.h"
+    mask_original_sha256 = digest(mask_source)
+    patch_environment = {**os.environ, "GIT_CEILING_DIRECTORIES": str(skia.parent)}
+    run(["git", "apply", "--check", mask_patch], cwd=skia, env=patch_environment)
+    run(["git", "apply", mask_patch], cwd=skia, env=patch_environment)
     (skia / "src/ports/SkFontMgr_custom_empty_factory.cpp").write_text(
         '#include "SkFontMgr.h"\n#include "SkFontMgr_empty.h"\n'
         'sk_sp<SkFontMgr> SkFontMgr::Factory() { return SkFontMgr_New_Custom_Empty(); }\n')
@@ -94,6 +100,7 @@ def build(options):
                  "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_C_COMPILER=" + str(tools / "clang"),
                  "-DCMAKE_CXX_COMPILER=" + str(tools / "clang++"),
                  "-DCMAKE_MAKE_PROGRAM=" + str(tools / "ninja"),
+                 "-DPMJS_BUILD_SKIA65_MASK_TEST=" + ("ON" if options.mask_test else "OFF"),
                  "-DPMJS_SKIA65_SOURCE_ROOT=" + str(cache),
                  "-DPMJS_SKIA65_ARCHIVE=" + str(output / "libskia.a")]
     if options.arch == "arm64":
@@ -105,7 +112,7 @@ def build(options):
     if not strip.is_file() or "LLVM version " + lock["clangVersion"] not in subprocess.check_output([strip, "--version"], text=True):
         raise RuntimeError("Skia65 requires LLVM strip " + lock["clangVersion"])
     run([strip, "--strip-debug", library])
-    sources = [LOCK, pathlib.Path(__file__), pathlib.Path(__file__).with_name("provision.py")]
+    sources = [LOCK, pathlib.Path(__file__), pathlib.Path(__file__).with_name("provision.py"), mask_patch]
     sources += sorted((ROOT / "src/skia65").iterdir())
     sources += [ROOT / "src/text_layout.cpp", ROOT / "src/text_layout.hpp", ROOT / "src/unicode_default_ignorables.hpp"]
     manifest = {"arch": options.arch, "scope": "shared text backend",
@@ -113,6 +120,8 @@ def build(options):
         "compilerSha256": digest(compiler.resolve()), "configuration": args,
         "strip": {"version": lock["clangVersion"], "sha256": digest(strip.resolve()), "arguments": ["--strip-debug"]},
         "sources": {str(file.relative_to(ROOT)): digest(file) for file in sources},
+        "adaptations": {"maskTail": {"patchSha256": digest(mask_patch),
+            "originalSha256": mask_original_sha256, "adaptedSha256": digest(mask_source)}},
         "librarySha256": digest(library), "libraryBytes": library.stat().st_size,
         "readelfDynamic": subprocess.check_output(["readelf", "-d", library], text=True),
         "exports": subprocess.check_output(["nm", "-D", "--defined-only", library], text=True)}
@@ -142,4 +151,5 @@ if __name__ == "__main__":
     parser.add_argument("--arch", choices=["x64", "arm64"], default="x64")
     parser.add_argument("--sdk", type=pathlib.Path)
     parser.add_argument("--jobs", type=int, default=4)
+    parser.add_argument("--mask-test", action="store_true")
     build(parser.parse_args())

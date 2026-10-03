@@ -1,0 +1,14 @@
+diff --git a/src/opts/SkBlitMask_opts.h b/src/opts/SkBlitMask_opts.h
+--- a/src/opts/SkBlitMask_opts.h
++++ b/src/opts/SkBlitMask_opts.h
+@@ -67,7 +67,9 @@ namespace SK_OPTS_NS {
+             while (w--) {
+                 unsigned aa = *mask++;
+                 if (isColor) {
+-                    *device = SkBlendARGB32(pmc, *device, aa);
++                    auto left = Sk4px::DupPMColor(pmc).approxMulDiv255(Sk4px::DupAlpha(aa));
++                    auto right = Sk4px::Load1(device).approxMulDiv255(left.alphas().inv());
++                    (left + right).store1(device);
+                 } else {
+                     *device = SkAlphaMulQ(pmc, SkAlpha255To256(aa))
+                         + SkAlphaMulQ(*device, SkAlpha255To256(255 - aa));

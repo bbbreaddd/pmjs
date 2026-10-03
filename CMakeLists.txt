@@ -85,9 +85,6 @@ target_link_libraries(pmjs_runtime PUBLIC ${PMJS_PLATFORM_LIBS} PkgConfig::PNG
 if(PMJS_ENABLE_SKIA65)
   target_compile_definitions(pmjs_runtime PRIVATE PMJS_HAS_SKIA65)
   target_link_libraries(pmjs_runtime PRIVATE pmjs_skia65)
-  if(PMJS_SKIA65_DEFAULT)
-    target_compile_definitions(pmjs_runtime PRIVATE PMJS_SKIA65_DEFAULT)
-  endif()
 endif()
 
 find_path(PMJS_NODE_API_HEADERS node_api.h PATHS /usr/include/node REQUIRED)
@@ -135,7 +132,7 @@ if(BUILD_TESTING)
   endfunction()
 
   pmjs_add_cpp_test(pmjs-vfs-test native-vfs test/vfs.cpp src/vfs.cpp)
-  if(PMJS_SKIA65_DEFAULT)
+  if(PMJS_ENABLE_SKIA65)
     pmjs_add_cpp_test(pmjs-text-backend-default-test native-text-backend-default test/text-backend-default.cpp)
     target_link_libraries(pmjs-text-backend-default-test PRIVATE pmjs_runtime)
   endif()
@@ -166,13 +163,21 @@ if(BUILD_TESTING)
   target_compile_options(pmjs-effects-gl-state-test PRIVATE -Wall -Wextra -Wpedantic)
   target_link_libraries(pmjs-effects-gl-state-test PRIVATE pmjs_runtime Effekseer)
   add_test(NAME native-effects-gl-state COMMAND ${XVFB_RUN} -a $<TARGET_FILE:pmjs-effects-gl-state-test>
-    "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
+    "${CMAKE_CURRENT_BINARY_DIR}/test-assets" 3)
   set_tests_properties(native-effects-gl-state PROPERTIES
     ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1" RESOURCE_LOCK pmjs_effect_fixtures)
+  add_test(NAME native-effects-gl-state-es2 COMMAND ${XVFB_RUN} -a $<TARGET_FILE:pmjs-effects-gl-state-test>
+    "${CMAKE_CURRENT_BINARY_DIR}/test-assets" 2)
+  set_tests_properties(native-effects-gl-state-es2 PROPERTIES
+    ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;MESA_GLES_VERSION_OVERRIDE=2.0" RESOURCE_LOCK pmjs_effect_fixtures)
   add_executable(pmjs-media-decoder-test test/media-decoder.cpp)
   target_include_directories(pmjs-media-decoder-test PRIVATE src)
   target_compile_options(pmjs-media-decoder-test PRIVATE -Wall -Wextra -Wpedantic)
   target_link_libraries(pmjs-media-decoder-test PRIVATE pmjs_runtime)
+  add_executable(pmjs-audio-seek-test test/audio-seek.cpp)
+  target_include_directories(pmjs-audio-seek-test PRIVATE src)
+  target_compile_options(pmjs-audio-seek-test PRIVATE -Wall -Wextra -Wpedantic)
+  target_link_libraries(pmjs-audio-seek-test PRIVATE pmjs_runtime)
   add_executable(pmjs-platform-input-test test/platform-input.cpp src/platform.cpp)
   add_executable(pmjs-dialog-modal-test test/dialog-modal.cpp)
   target_include_directories(pmjs-dialog-modal-test PRIVATE src)
@@ -227,6 +232,12 @@ if(BUILD_TESTING)
     "${CMAKE_CURRENT_BINARY_DIR}/test-assets/text-shaping.ttf" COPYONLY)
   add_test(NAME native-media-decoder COMMAND pmjs-media-decoder-test
     "${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture-video.mp4")
+  execute_process(COMMAND ${BASE64_EXECUTABLE} -d
+    INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/short-audio.flac.b64"
+    OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/short-audio.flac"
+    COMMAND_ERROR_IS_FATAL ANY)
+  add_test(NAME native-audio-seek COMMAND pmjs-audio-seek-test
+    "${CMAKE_CURRENT_BINARY_DIR}/test-assets/short-audio.flac")
   configure_file("${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture.png" "${CMAKE_CURRENT_BINARY_DIR}/test-assets/lease.png" COPYONLY)
   configure_file("${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture.png" "${CMAKE_CURRENT_BINARY_DIR}/test-assets/retained-fixture.png" COPYONLY)
   foreach(PMJS_MASK_PNG IN ITEMS probe-content probe-mask-a probe-mask-b)

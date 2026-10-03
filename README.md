@@ -15,6 +15,9 @@ PMJS is experimental and still has a lot of work to be done before I consider it
 - A C++20 compiler
 - Node.js and Node API headers
 - pkg-config
+- Git and Python 3
+- Default x64 Skia65 build: Clang/LLVM 20.1.2 (`clang-20`, `clang++-20`, `llvm-ar-20`, `llvm-strip-20`)
+- ARM64 Skia65 build: `PMJS_SKIA65_ARM64_SDK` pointing to the prepared Zig 0.15.2 SDK, plus `llvm-strip-20` 20.1.2
 - SDL2, EGL, and OpenGL ES 3.0 or newer
 - libpng, libjpeg, FreeType, and HarfBuzz
 - FFmpeg libraries: avformat, avcodec, avutil, swresample, and swscale

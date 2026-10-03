@@ -38,9 +38,6 @@ function(pmjs_build_effekseer)
     execute_process(COMMAND "${GIT_EXECUTABLE}" apply "${patch}"
       WORKING_DIRECTORY "${pmjs_effekseer_SOURCE_DIR}" COMMAND_ERROR_IS_FATAL ANY)
   endif()
-  # Keep portable math selection ahead of all Effekseer includes, including consumers.
-  target_compile_options(Effekseer PUBLIC
-    "SHELL:-include \"${pmjs_effekseer_SOURCE_DIR}/Dev/Cpp/Effekseer/Effekseer/SIMD/Base.h\"")
   target_include_directories(Effekseer SYSTEM PUBLIC "$<BUILD_INTERFACE:${pmjs_effekseer_SOURCE_DIR}/Dev/Cpp/Effekseer>")
   target_include_directories(EffekseerRendererGL SYSTEM PUBLIC "$<BUILD_INTERFACE:${pmjs_effekseer_SOURCE_DIR}/Dev/Cpp/EffekseerRendererGL>")
   target_link_libraries(EffekseerRendererGL PUBLIC PkgConfig::GLES PkgConfig::EGL)

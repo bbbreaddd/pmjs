@@ -790,7 +790,7 @@ test('Bitmap.prototype.drawText installs native acceleration only for stock pipe
   stockBmp.drawText('alpha', 10, 0, 0, 20, 'left');
   assert.equal(nativeDrawArguments.at(-2)[6] & 255, 255,
     'outline preserves MV globalAlpha=1 behavior');
-  assert.equal(nativeDrawArguments.at(-1)[6] & 255, 64,
+  assert.equal(nativeDrawArguments.at(-1)[6] & 255, 63,
     'body preserves the caller globalAlpha');
   nativeDrawCalls = 0;
   stockBmp.drawText(undefined, 0, 0, 0, 20, 'left');

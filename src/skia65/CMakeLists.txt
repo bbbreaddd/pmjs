@@ -86,3 +86,16 @@ target_link_options(pmjs-skia65 PRIVATE
   "LINKER:--version-script,${CMAKE_CURRENT_SOURCE_DIR}/exports.map" "LINKER:-z,defs")
 set_target_properties(pmjs-skia65 PROPERTIES OUTPUT_NAME pmjs-skia65
   LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/exports.map")
+
+option(PMJS_BUILD_SKIA65_MASK_TEST "Build the private mask arithmetic regression test" OFF)
+if(PMJS_BUILD_SKIA65_MASK_TEST)
+  enable_testing()
+  add_executable(pmjs-skia65-mask-test mask_test.cpp)
+  target_include_directories(pmjs-skia65-mask-test SYSTEM PRIVATE
+    "${skia}/include/core" "${skia}/include/config" "${skia}/include/private"
+    "${skia}/src/core" "${skia}/src/opts")
+  target_compile_definitions(pmjs-skia65-mask-test PRIVATE
+    SK_RELEASE SK_SUPPORT_GPU=0 _LIBCPP_ENABLE_CXX20_REMOVED_TYPE_TRAITS)
+  target_link_libraries(pmjs-skia65-mask-test PRIVATE "${PMJS_SKIA65_ARCHIVE}" pthread dl m)
+  add_test(NAME skia65-mask COMMAND pmjs-skia65-mask-test)
+endif()

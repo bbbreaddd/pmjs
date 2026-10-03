@@ -43,7 +43,7 @@ struct TextBackend::State {
 
 TextBackend::TextBackend() : state_(std::make_unique<State>()) {
   const char* selected = std::getenv("PMJS_TEXT_BACKEND");
-#if defined(PMJS_SKIA65_DEFAULT)
+#ifdef PMJS_HAS_SKIA65
   if (!selected) selected = "skia65";
 #endif
   if (!selected) selected = "freetype";
