@@ -595,7 +595,7 @@ test('encoders observe state instead of advancing semantics', () => {
     readModule('js/pmjs-pixi4/scene-prepare.js');
   const classify = readModule('js/pmjs-pixi4/scene-classify.js');
 
-  ['updateChowRender', '_paintAllTiles', '_sortChildren', 'updateText(',
+  ['_paintAllTiles', '_sortChildren', 'updateText(',
     '.validate(', '_updateCursor', '_updateArrows', '_updatePauseSign',
     '_updateContents', 'nativeSceneFilter(', 'nativeRectangleMask(',
     'nativeAlphaMask('].forEach(forbidden => {
@@ -912,61 +912,6 @@ function directPacket(harness, node, clip, mask) {
   delete harness.sandbox.__mask;
   return JSON.parse(JSON.stringify(result));
 }
-
-test('custom type hooks select the encoder while hooks run in order', () => {
-  const harness = makeHarness();
-  const { sandbox, sprite } = harness;
-  let hookCalls = 0;
-  sandbox.__pmjsBeforeRenderNode = function(node) {
-    hookCalls++;
-    if (node && typeof node.updateChowRender === 'function') {
-      node.updateChowRender();
-    }
-  };
-  sandbox.__pmjsNodeRenderType = function(node) {
-    return (node && node._chowType) || '';
-  };
-  const root = new sandbox.PIXI.Container();
-  const hooked = sprite();
-  let hookUpdated = 0;
-  hooked._chowType = 'mesh';
-  hooked.vertices = new Float32Array([0, 0, 10, 0, 0, 10]);
-  hooked.uvs = new Float32Array([0, 0, 1, 0, 0, 1]);
-  hooked.indices = new Uint16Array([0, 1, 2]);
-  hooked.updateChowRender = function() { hookUpdated++; };
-  root.addChild(hooked);
-  assert.equal(sandbox.submitNativeScene(root), true);
-  assert.equal(hookCalls, 2);
-  assert.equal(hookUpdated, 1);
-  assert.deepEqual(harness.compatHits, []);
-  assert.deepEqual(harness.submitted[0].metadata.filter((_, index) => index % 7 === 0),
-    [0, 8]);
-});
-
-test('custom type hook observes post-transform-update state', () => {
-  const harness = makeHarness();
-  const { sandbox, sprite } = harness;
-  const root = new sandbox.PIXI.Container();
-  const node = sprite();
-  node.x = 7;
-  node.y = 3;
-
-  node.transform.localTransform = { a: 1, b: 0, c: 0, d: 1,
-    tx: 12345, ty: 6789 };
-  let observed = null;
-  sandbox.__pmjsNodeRenderType = function(current) {
-    if (current === node) {
-      observed = { tx: current.transform.localTransform.tx,
-        ty: current.transform.localTransform.ty };
-    }
-    return '';
-  };
-  root.addChild(node);
-  const packet = submitOnly(harness, root);
-  assert.deepEqual(observed, { tx: 7, ty: 3 });
-  assert.deepEqual(packet.metadata.filter((_, index) => index % 7 === 0),
-    [0, 1]);
-});
 
 test('classifier adds no label reads beyond type resolution', () => {
   const harness = makeHarness();
@@ -1609,28 +1554,6 @@ test('sprite segments honor bitmap cache activation and removal', () => {
   const ordinary = submitOnly(harness, root);
   sandbox.PMJS.optimizations.isEnabled = () => true;
   assert.deepEqual(submitOnly(harness, root), ordinary);
-});
-
-test('sprite segments preserve later before-render hooks and their order', () => {
-  const harness = makeHarness();
-  const { sandbox, sprite } = harness;
-  const root = new sandbox.PIXI.Container();
-  for (let i = 0; i < 5; i++) root.addChild(sprite());
-  submitOnly(harness, root);
-  const visited = [];
-  sandbox.__pmjsBeforeRenderNode = node => {
-    visited.push(node);
-    node.x = visited.length * 3;
-  };
-  const packet = submitOnly(harness, root);
-  assert.deepEqual(visited.map(node => [root, ...root.children].indexOf(node)),
-    [0, 1, 2, 3, 4, 5]);
-  for (let i = 0; i < 6; i++) assert.equal(packet.values[i * 41 + 4], (i + 1) * 3);
-  visited.length = 0;
-  sandbox.PMJS.optimizations.isEnabled = id => id !== 'scene.plain-sprite-segment';
-  assert.deepEqual(submitOnly(harness, root), packet);
-  assert.deepEqual(visited.map(node => [root, ...root.children].indexOf(node)),
-    [0, 1, 2, 3, 4, 5]);
 });
 
 test('scene submission asks the video owner for diagnostics only on failure', () => {

@@ -196,11 +196,6 @@ test('Pixi baseline loads before plugin setup, with scan after adapters', () => 
   assert.ok(generic.indexOf('js/pmjs-pixi4/render-preflight.js') <
     generic.indexOf('js/pmjs-mv/bootstrap.js'));
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-preflight-'));
-  fs.mkdirSync(path.join(root, 'ports', 'demo', 'port', 'native'), { recursive: true });
-  fs.writeFileSync(path.join(root, 'ports', 'demo', 'port', 'native', 'extra.js'),
-    'globalThis.DEMO_EXTRA = true;\n');
-  fs.writeFileSync(path.join(root, 'ports', 'demo', 'port', 'native', 'index.json'),
-    JSON.stringify({ modules: ['ports/demo/port/native/extra.js'] }));
   const game = path.join(root, 'game');
   fs.mkdirSync(path.join(game, 'js', 'libs'), { recursive: true });
   fs.writeFileSync(path.join(game, 'js', 'rpg_core.js'), '// RPG Maker MV v1.6.1\n');
@@ -213,11 +208,9 @@ test('Pixi baseline loads before plugin setup, with scan after adapters', () => 
   const manifest = path.join(root, 'manifest.json');
   fs.writeFileSync(manifest, JSON.stringify({
     adapters: 'none',
-    port: { id: 'demo', entry: 'ports/demo/port/native/index.json' },
   }));
   const output = childProcess.execFileSync(process.execPath, [
     path.join(runtimeRoot, 'tools/build-js-runtime.mjs'),
-    '--root', root,
     '--manifest', manifest,
     '--game', game,
     '--print-modules',

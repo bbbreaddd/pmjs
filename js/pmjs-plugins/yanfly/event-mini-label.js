@@ -129,6 +129,4 @@
       PMJS.phases.on('afterGuestPlugins',
         'pmjs.adapter.yanfly-event-mini-label', install);
     });
-
-  globalThis.pmjsInstallEventMiniLabelFastPath = install;
 })();

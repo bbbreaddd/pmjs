@@ -30,9 +30,6 @@ function nativeNodeRenderType(node) {
   if (!type && node && typeof node._pmjsType === 'string') {
     type = node._pmjsType;
   }
-  if (!type && typeof globalThis.__pmjsNodeRenderType === 'function') {
-    type = globalThis.__pmjsNodeRenderType(node);
-  }
   if (type === 'tilingSprite') type = 'tilingsprite';
   if (type) {
     return String(type).toLowerCase();
@@ -193,7 +190,7 @@ function nativeSpriteLocalTransform(node, local) {
 function nativePlainSpriteBinding(node) {
   if (nativeSceneNodeRejected(node, null) || node.children && node.children.length ||
       node._cacheAsBitmap ||
-      node.shader || node.mask || typeof node.updateChowRender === 'function' ||
+      node.shader || node.mask ||
       nativeNodeRenderType(node) !== 'sprite' || nativeScenePictureBlend(node) >= 0 ||
       nativeScenePreparation(node) || pmjsPixiRenderPreflight.unsupportedMethod(node)) {
     return null;
@@ -320,9 +317,6 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
   if (parentIndex === 0xffffffff && nativeSceneRootUsesWorldTransform &&
       !particleContext && forcedAlpha === undefined) {
     forcedAlpha = node.worldAlpha;
-  }
-  if (!particleContext && typeof globalThis.__pmjsBeforeRenderNode === 'function') {
-    globalThis.__pmjsBeforeRenderNode(node);
   }
   if (!particleContext) {
     pmjsPixiRenderPreflight.check(node);
@@ -655,7 +649,7 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
   var particleFrame = particleContainer ? nativeParticleFrameContext(node) : null;
   for (var index = 0; index < childLimit; index++) {
     if (nativeSceneTraversesChild(kind, node, node.children[index])) {
-      if (!particleFrame && typeof globalThis.__pmjsBeforeRenderNode !== 'function' &&
+      if (!particleFrame &&
           PMJS.optimizations.isEnabled('scene.plain-sprite-segment')) {
         var segment = [];
         var segmentIndex = index;
@@ -788,8 +782,6 @@ function collectNativeTilemaps(node, output) {
 
 function renderNativeStage(stage, rootTransform, filterResolution, roundPixels,
     skipUpdateTransform, backgroundColor = null, options = {}) {
-  var profiling = typeof automationProfiling !== 'undefined' && automationProfiling;
-  var stageStarted = profiling ? performance.now() : 0;
   nativeScreenOverlays.length = 0;
   nativeTileRects = 0;
   var parent = stage.parent;
@@ -824,10 +816,6 @@ function renderNativeStage(stage, rootTransform, filterResolution, roundPixels,
     renderNativeStage._ready = false;
     throw error;
   } finally {
-    if (profiling) {
-      nativeQueueMs += performance.now() - stageStarted;
-      nativeStageSamples++;
-    }
     nativeSceneUsePixiWorldState = false;
     nativeSceneRootTransform = nativeIdentityTransform;
     nativeSceneRootUsesWorldTransform = false;

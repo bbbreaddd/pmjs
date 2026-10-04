@@ -47,10 +47,6 @@ function nativeSceneFilter(node, activeFilters) {
       var colorValues = filter.matrix || filter.uniforms && filter.uniforms.m;
       return !nativeColorMatrixIsIdentity(colorValues);
     }
-    if (typeof globalThis.__pmjsIsFilterEffective === 'function') {
-      var portDecision = globalThis.__pmjsIsFilterEffective(node, filter);
-      if (portDecision !== undefined) return !!portDecision;
-    }
     // A zero-slice glitch filter is an identity pass.
     if (nativeFilterMatches(filter, GlitchFilter, 'GlitchFilter')) {
       return Number(filter.slices) > 0;

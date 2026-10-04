@@ -112,6 +112,4 @@
 
   PMJS.phases.on('afterGuestPlugins', 'pmjs.adapter.terrax-lighting',
     installTerraxLightingFastPaths);
-
-  globalThis.pmjsInstallTerraxLightingFastPaths = installTerraxLightingFastPaths;
 })();

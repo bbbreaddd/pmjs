@@ -5,10 +5,10 @@
 //
 // This module owns disable policy, effective state, validation, diagnostics,
 // and registry lifetime. Implementations are registered by their owning
-// module: pmjs-pixi4 and pmjs-mv register shared caches, and a port adapter
-// registers its own plugin accelerators. Core never catalogs game plugins.
+// module: pmjs-pixi4 and pmjs-mv register shared caches, and pmjs-plugins registers
+// plugin accelerators. Core never catalogs game plugins.
 //
-// Requested disables (port config, then PMJS_DISABLE_OPT) may precede
+// Requested disables (configuration, then PMJS_DISABLE_OPT) may precede
 // registration. finalize() rejects unresolved IDs and freezes registration
 // before game boot. Lifecycle: module evaluation -> plugin setup hooks ->
 // afterPlugins -> beforeBoot (last registration seam) -> finalize().
@@ -40,7 +40,7 @@ function pmjsOptimizationParseList(value) {
   return result;
 }
 
-function pmjsOptimizationPortDisables() {
+function pmjsOptimizationConfigDisables() {
   var config = PMJS.config;
   var disables = config.disableOptimizations;
   if (disables === undefined) return [];
@@ -61,14 +61,14 @@ function pmjsOptimizationPortDisables() {
 }
 
 // Requested disables, parsed at load and kept pending until owners register.
-// disabledBy per id: null (enabled default) | 'port' | 'PMJS_DISABLE_OPT'.
-var pmjsOptimizationPortDisabled = Object.create(null);
+// disabledBy per id: null (enabled default) | 'configuration' | 'PMJS_DISABLE_OPT'.
+var pmjsOptimizationConfigDisabled = Object.create(null);
 var pmjsOptimizationEnvDisabled = Object.create(null);
 var pmjsOptimizationStates = Object.create(null);
 var pmjsOptimizationFinalized = false;
 
-pmjsOptimizationPortDisables().forEach(function(id) {
-  pmjsOptimizationPortDisabled[id] = true;
+pmjsOptimizationConfigDisables().forEach(function(id) {
+  pmjsOptimizationConfigDisabled[id] = true;
 });
 pmjsOptimizationParseList(pmjsOptimizationEnv('PMJS_DISABLE_OPT')).forEach(function(id) {
   pmjsOptimizationEnvDisabled[id] = true;
@@ -115,7 +115,7 @@ PMJS.optimizations = {
       throw new Error('PMJS optimization already registered: ' + id);
     }
     var disabledBy = pmjsOptimizationEnvDisabled[id] ? 'PMJS_DISABLE_OPT' :
-      (pmjsOptimizationPortDisabled[id] ? 'port' : null);
+      (pmjsOptimizationConfigDisabled[id] ? 'configuration' : null);
     pmjsOptimizationStates[id] = { enabled: disabledBy === null,
       disabledBy: disabledBy, owner: definition.owner,
       fallback: definition.fallback };
@@ -160,7 +160,7 @@ PMJS.optimizations = {
     if (pmjsOptimizationFinalized) return;
     var seen = Object.create(null);
     var unknown = [];
-    Object.keys(pmjsOptimizationPortDisabled)
+    Object.keys(pmjsOptimizationConfigDisabled)
       .concat(Object.keys(pmjsOptimizationEnvDisabled)).forEach(function(id) {
         if (seen[id] || pmjsOptimizationStates[id]) return;
         seen[id] = true;

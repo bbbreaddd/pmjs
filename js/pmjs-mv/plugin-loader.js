@@ -62,7 +62,6 @@
       pmjsMvInstallPluginManagerHooks, afterPlugins);
   }
 
-  globalThis.pmjsMvInstallPluginManagerHooks = pmjsMvInstallPluginManagerHooks;
   globalThis.pmjsMvLoadPluginManifest = pmjsMvLoadPluginManifest;
   globalThis.pmjsMvInitializePlugins = pmjsMvInitializePlugins;
 })();

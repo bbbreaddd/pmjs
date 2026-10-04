@@ -103,8 +103,9 @@ function installInContext(configure) {
   loadRegistrySupport(context);
   vm.runInContext(source, context, { filename: 'js/pmjs-plugins/yed/tiled.js' });
   configure(context);
-  const installed = context.pmjsInstallYedTiledFastPaths();
-  return { context, installed };
+  context.PMJS.plugins.execute('YED_Tiled', function() {});
+  context.PMJS.phases.emit('afterGuestPlugins');
+  return { context };
 }
 
 test('YED layer positioning visits only the PMJS active priority prefix', () => {
@@ -140,7 +141,7 @@ test('YED layer positioning visits only the PMJS active priority prefix', () => 
 });
 
 test('YED repaint preserves active priority count and reapplies level hiding', () => {
-  const context = { globalThis: null, $gameMap: { currentMapLevel: 3 } };
+  const context = { globalThis: null, PMJS: { config: {} }, $gameMap: { currentMapLevel: 3 } };
   context.globalThis = context;
   const paintAllTiles = loadAssignedFunction(
     'tiledProto._paintAllTiles = function',
@@ -175,7 +176,7 @@ test('YED repaint preserves active priority count and reapplies level hiding', (
 test('YED diagnostic invariant throws when tile outside active prefix is visible in dev mode', () => {
   const context = {
     globalThis: null,
-    PMJS_DEVELOPMENT_MODE: true,
+    PMJS: { config: { developmentMode: true } },
     $gameMap: { currentMapLevel: 1 }
   };
   context.globalThis = context;
@@ -222,7 +223,8 @@ test('YED level hiding retains the guest dispatcher without state-based skipping
   loadRegistrySupport(context);
   vm.runInContext(source, context,
     { filename: 'js/pmjs-plugins/yed/tiled.js' });
-  context.pmjsInstallYedTiledFastPaths();
+  context.PMJS.plugins.execute('YED_Tiled', function() {});
+  context.PMJS.phases.emit('afterGuestPlugins');
 
   const instance = new context.Spriteset_Map();
   instance._tilemap = { _pmjsPriorityRepaintGeneration: 1,
@@ -242,7 +244,7 @@ test('YED level hiding retains the guest dispatcher without state-based skipping
 });
 
 test('YED fast paths refuse to overwrite unknown or composed implementations', () => {
-  const { context, installed } = installInContext(ctx => {
+  const { context } = installInContext(ctx => {
     function composedPaint() {}
     function composedPositions() {}
     function composedObjects() {}
@@ -263,8 +265,6 @@ test('YED fast paths refuse to overwrite unknown or composed implementations', (
     };
   });
 
-  // Fast paths MUST NOT be installed when implementation is unknown/composed!
-  assert.equal(installed, false);
   assert.equal(context.TiledTilemap.prototype._pmjsIndexedPaintLoops, undefined);
   assert.equal(context.TiledTilemap.prototype._paintAllTiles, context.saved.paint);
   assert.equal(context.TiledTilemap.prototype._updateLayerPositions,
@@ -278,7 +278,7 @@ test('YED fast paths refuse to overwrite unknown or composed implementations', (
 
 test('YED paint optimization preserves a composed child comparator', () => {
   function customOrder() { return -1; }
-  const { context, installed } = installInContext(ctx => {
+  const { context } = installInContext(ctx => {
     ctx.TiledTilemap = function TiledTilemap() {};
     ctx.TiledTilemap.prototype._paintAllTiles = faithfulPaintAllTiles;
     ctx.TiledTilemap.prototype._updateLayerPositions = faithfulUpdateLayerPositions;
@@ -287,14 +287,14 @@ test('YED paint optimization preserves a composed child comparator', () => {
     ctx.TiledTilemap.prototype._compareChildOrder = customOrder;
     ctx.Spriteset_Map = function Spriteset_Map() {};
   });
-  assert.equal(installed, false);
+  assert.equal(context.TiledTilemap.prototype._pmjsIndexedPaintLoops, undefined);
   assert.equal(context.TiledTilemap.prototype._compareChildOrder, customOrder);
   assert.equal(context.TiledTilemap.prototype._paintAllTiles, faithfulPaintAllTiles);
 });
 
 test('YED paint optimization leaves a composed level hiding method in place', () => {
   function customHide() { this.extraWork = true; }
-  const { context, installed } = installInContext(ctx => {
+  const { context } = installInContext(ctx => {
     ctx.TiledTilemap = function TiledTilemap() {};
     ctx.TiledTilemap.prototype._paintAllTiles = faithfulPaintAllTiles;
     ctx.TiledTilemap.prototype._updateLayerPositions = faithfulUpdateLayerPositions;
@@ -303,7 +303,7 @@ test('YED paint optimization leaves a composed level hiding method in place', ()
     ctx.Spriteset_Map = function Spriteset_Map() {};
     ctx.Spriteset_Map.prototype._updateHideOnLevel = customHide;
   });
-  assert.equal(installed, true);
+  assert.equal(context.TiledTilemap.prototype._pmjsIndexedPaintLoops, true);
   assert.equal(context.Spriteset_Map.prototype._updateHideOnLevel, customHide);
 });
 
@@ -335,7 +335,7 @@ test('YED fast paths refuse modified implementations that only keep loose tokens
     return [tileCols, layer, startX, startY];
   }
 
-  const { context, installed } = installInContext(ctx => {
+  const { context } = installInContext(ctx => {
     ctx.TiledTilemap = function TiledTilemap() {};
     ctx.TiledTilemap.prototype._paintAllTiles = modifiedPaintAllTiles;
     ctx.TiledTilemap.prototype._updateLayerPositions =
@@ -346,7 +346,6 @@ test('YED fast paths refuse modified implementations that only keep loose tokens
     ctx.Spriteset_Map.prototype._updateHideOnLevel = function() {};
   });
 
-  assert.equal(installed, false);
   assert.equal(context.TiledTilemap.prototype._pmjsIndexedPaintLoops, undefined);
   assert.equal(context.TiledTilemap.prototype._paintAllTiles, modifiedPaintAllTiles);
   assert.equal(context.TiledTilemap.prototype._updateLayerPositions,
@@ -355,7 +354,7 @@ test('YED fast paths refuse modified implementations that only keep loose tokens
 
 test('YED fast paths install when recognized as known YED implementation', () => {
   let knownChildOrder;
-  const { context, installed } = installInContext(ctx => {
+  const { context } = installInContext(ctx => {
     delete ctx.comparePmjsTilemapChildren;
     knownChildOrder = function knownChildOrder(a, b) {
       if ((a.z || 0) !== (b.z || 0)) {
@@ -379,7 +378,7 @@ test('YED fast paths install when recognized as known YED implementation', () =>
     ctx.Spriteset_Map.prototype._updateHideOnLevel = function() {};
   });
 
-  assert.equal(installed, true);
+  assert.equal(context.TiledTilemap.prototype._pmjsIndexedPaintLoops, true);
   assert.equal(context.TiledTilemap.prototype._pmjsIndexedPaintLoops, true);
   assert.notEqual(context.TiledTilemap.prototype._paintAllTiles, faithfulPaintAllTiles);
   assert.notEqual(context.TiledTilemap.prototype._updateLayerPositions,
@@ -611,7 +610,8 @@ function makeAnimatedTilemap({
   context.Spriteset_Map = function Spriteset_Map() {};
   context.Spriteset_Map.prototype._updateHideOnLevel = function() {};
 
-  context.pmjsInstallYedTiledFastPaths(TiledTilemap);
+  context.PMJS.plugins.execute('YED_Tiled', function() {});
+  context.PMJS.phases.emit('afterGuestPlugins');
 
   const rectLayer = {
     pointsBuf: [],

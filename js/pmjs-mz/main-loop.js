@@ -5,9 +5,8 @@
     globalThis.pmjsRunRpgMakerTick(now);
   }
 
-  function render(now) {
-    globalThis.pmjsRunRpgMakerRender(now);
-  }
+  // MZ renders from its ticker during the update phase.
+  function render() {}
 
   globalThis.pmjsMzTick = tick;
   globalThis.pmjsMzRender = render;

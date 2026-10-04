@@ -17,37 +17,6 @@
     });
   }
 
-  // Optional aggregate counters for scene audits. Dormant unless
-  // PMJS_SCENE_CENSUS=1.
-  function pmjsYedCensus() {
-    // Resolve once: per-frame call sites must not pay a NativeHost env
-    // lookup on every call while the census stays disabled all session.
-    if (typeof pmjsYedCensus.enabled !== 'boolean') {
-      var enabled = false;
-      try {
-        enabled = typeof NativeHost !== 'undefined' && NativeHost &&
-          NativeHost.runtime &&
-          typeof NativeHost.runtime.env === 'function' &&
-          NativeHost.runtime.env('PMJS_SCENE_CENSUS') === '1';
-      } catch (_) { enabled = false; }
-      pmjsYedCensus.enabled = enabled;
-    }
-    if (!pmjsYedCensus.enabled) return null;
-    try {
-      if (!globalThis.__pmjsYedCensus) {
-        globalThis.__pmjsYedCensus = { updateLayerCalls: 0,
-          layerVisited: 0, layerChanged: 0, priorityVisited: 0,
-          priorityChanged: 0, poolSize: 0, active: 0, hidden: 0, repaints: 0,
-          animRepaints: 0, animPatches: 0,
-          hideCalls: 0, hideExecutions: 0, hideLevelChanges: 0,
-          lastHideLevel: null, lastRepaintGeneration: 0 };
-      }
-      return globalThis.__pmjsYedCensus;
-    } catch (_) {
-      return null;
-    }
-  }
-
   function fnSource(fn) {
     return Function.prototype.toString.call(fn);
   }
@@ -190,11 +159,8 @@
            looksLikeKnownShaderTilemapUpdateTransform(tiledProto);
   }
 
-  function installYedTiledFastPaths(tiledConstructor) {
-    if (typeof tiledConstructor !== 'function' &&
-        typeof globalThis.TiledTilemap === 'function') {
-      tiledConstructor = globalThis.TiledTilemap;
-    }
+  function installYedTiledFastPaths() {
+    var tiledConstructor = globalThis.TiledTilemap;
     if (typeof tiledConstructor !== 'function' ||
         typeof Spriteset_Map !== 'function') return false;
 
@@ -229,7 +195,7 @@
     tiledProto._updateLayerPositions = function(startX, startY) {
       var ox = this.roundPixels ? Math.floor(this.origin.x) : this.origin.x;
       var oy = this.roundPixels ? Math.floor(this.origin.y) : this.origin.y;
-      var census = typeof pmjsYedCensus === 'function' ? pmjsYedCensus() : null;
+
       var layers = this._layers || [];
       for (var index = 0; index < layers.length; index++) {
         var layer = layers[index];
@@ -238,24 +204,12 @@
           (layerData.offsetx || 0);
         var newY = startY * this._tileHeight - oy +
           (layerData.offsety || 0);
-        if (census) {
-          census.layerVisited++;
-          if (layer.position.x !== newX || layer.position.y !== newY) {
-            census.layerChanged++;
-          }
-        }
         layer.position.x = newX;
         layer.position.y = newY;
       }
       var priorityTiles = this._priorityTiles || [];
       var activePriorityTiles = Math.max(0, Math.min(priorityTiles.length,
         Number(this._pmjsActivePriorityTileCount) || 0));
-      if (census) {
-        census.updateLayerCalls++;
-        census.poolSize = priorityTiles.length;
-        census.active = activePriorityTiles;
-        census.hidden = priorityTiles.length - activePriorityTiles;
-      }
       for (var priorityIndex = 0; priorityIndex < activePriorityTiles;
           priorityIndex++) {
         var sprite = priorityTiles[priorityIndex];
@@ -266,12 +220,6 @@
           sprite.width / 2;
         var spriteY = sprite.origY + startY * this._tileHeight - oy + offsetY +
           sprite.height;
-        if (census) {
-          census.priorityVisited++;
-          if (sprite.x !== spriteX || sprite.y !== spriteY) {
-            census.priorityChanged++;
-          }
-        }
         sprite.x = spriteX;
         sprite.y = spriteY;
       }
@@ -332,18 +280,8 @@
       this._pmjsActivePriorityTileCount = activePriorityTileCount;
       this._pmjsPriorityRepaintGeneration =
         (this._pmjsPriorityRepaintGeneration || 0) + 1;
-      var paintCensus = typeof pmjsYedCensus === 'function' ?
-        pmjsYedCensus() : null;
-      if (paintCensus) {
-        paintCensus.repaints++;
-        paintCensus.poolSize = this._priorityTiles.length;
-        paintCensus.active = activePriorityTileCount;
-        paintCensus.hidden = this._priorityTiles.length - activePriorityTileCount;
-        paintCensus.lastRepaintGeneration =
-          this._pmjsPriorityRepaintGeneration;
-      }
 
-      if (globalThis.PMJS_DEVELOPMENT_MODE) {
+      if (PMJS.config.developmentMode) {
         for (var devI = activePriorityTileCount; devI < this._priorityTiles.length; devI++) {
           if (this._priorityTiles[devI].visible) {
             throw new Error('YED priority tile visible outside PMJS active prefix');
@@ -530,11 +468,6 @@
       tiledProto._paintAnimTiles = function(pendingKeys) {
         if (!pendingKeys) return;
 
-        var census = typeof pmjsYedCensus === 'function' ? pmjsYedCensus() : null;
-        if (census) {
-          census.animRepaints = (census.animRepaints || 0) + 1;
-        }
-
         var layers = this._layers || [];
         for (var l = 0; l < layers.length; l++) {
           var layer = layers[l];
@@ -559,9 +492,6 @@
                   (points[offset] !== ux || points[offset + 1] !== uy)) {
                 points[offset] = ux;
                 points[offset + 1] = uy;
-                if (census) {
-                  census.animPatches = (census.animPatches || 0) + 1;
-                }
                 if (!dirtiedRectLayers) dirtiedRectLayers = [];
                 if (dirtiedRectLayers.indexOf(inst.rectLayer) === -1) {
                   dirtiedRectLayers.push(inst.rectLayer);
@@ -649,7 +579,6 @@
     return true;
   }
 
-  globalThis.pmjsInstallYedTiledFastPaths = installYedTiledFastPaths;
 
   function activateYedTiled() {
     if (typeof globalThis.TiledTilemap !== 'function') {

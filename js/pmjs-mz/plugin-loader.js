@@ -42,7 +42,6 @@
     globalThis.pmjsInitializeRpgMakerPlugins(installPluginManagerHooks);
   }
 
-  globalThis.pmjsMzInstallPluginManagerHooks = installPluginManagerHooks;
   globalThis.pmjsMzLoadPluginManifest = loadPluginManifest;
   globalThis.pmjsMzInitializePlugins = initializePlugins;
 })();

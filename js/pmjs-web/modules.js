@@ -152,11 +152,6 @@ function requireModule(request, parentDirectory) {
   if (Object.prototype.hasOwnProperty.call(registeredCommonJsModules, request)) {
     return registeredCommonJsModules[request];
   }
-  if (request === 'greenworks' || request === 'greenworks.js' ||
-      request === './greenworks' || request === './greenworks.js' ||
-      request === './js/libs/greenworks' || request === './js/libs/greenworks.js') {
-    if (globalThis.__pmjsGreenworksCompat) return globalThis.__pmjsGreenworksCompat;
-  }
   if (request === 'buffer' || request === 'esprima') {
     throw new Error("Native module '" + request + "' is unavailable");
   }

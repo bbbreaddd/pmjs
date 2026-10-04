@@ -42,13 +42,13 @@ test('registered optimizations default to enabled without any configuration', ()
   }
 });
 
-test('a port can disable exactly one optimization without affecting others', () => {
+test('configuration can disable exactly one optimization without affecting others', () => {
   const { PMJS } = loadRegistry({
     config: { disableOptimizations: ['scene.graphics-cache'] }, env: {},
   });
   registerOwnerIds(PMJS, [...sceneIds, terraxId]);
   assert.equal(PMJS.optimizations.isEnabled('scene.graphics-cache'), false);
-  assert.equal(PMJS.optimizations.reason('scene.graphics-cache'), 'disabled by port');
+  assert.equal(PMJS.optimizations.reason('scene.graphics-cache'), 'disabled by configuration');
   assert.equal(PMJS.optimizations.isEnabled('scene.tiling-texture-cache'), true);
   assert.equal(PMJS.optimizations.isEnabled(terraxId), true);
 });
@@ -63,11 +63,11 @@ test('multiple disables work and report their own reasons', () => {
   assert.equal(PMJS.optimizations.isEnabled('scene.graphics-cache'), false);
   assert.equal(PMJS.optimizations.isEnabled('scene.tiling-texture-cache'), true);
   const dump = PMJS.optimizations.dump();
-  assert.equal(dump.find(entry => entry.id === terraxId).disabledBy, 'port');
+  assert.equal(dump.find(entry => entry.id === terraxId).disabledBy, 'configuration');
   assert.equal(dump.find(entry => entry.id === terraxId).owner, 'test-owner');
 });
 
-test('developer override is honored and takes precedence over port policy', () => {
+test('developer override is honored and takes precedence over configuration policy', () => {
   const { PMJS } = loadRegistry({
     config: { disableOptimizations: ['scene.graphics-cache'] },
     env: { PMJS_DISABLE_OPT: 'scene.tiling-texture-cache' },
@@ -77,7 +77,7 @@ test('developer override is honored and takes precedence over port policy', () =
   assert.equal(PMJS.optimizations.reason('scene.tiling-texture-cache'),
     'disabled by PMJS_DISABLE_OPT');
   assert.equal(PMJS.optimizations.isEnabled('scene.graphics-cache'), false);
-  assert.equal(PMJS.optimizations.reason('scene.graphics-cache'), 'disabled by port');
+  assert.equal(PMJS.optimizations.reason('scene.graphics-cache'), 'disabled by configuration');
 
   const both = loadRegistry({
     config: { disableOptimizations: [terraxId] },
@@ -102,7 +102,7 @@ test('requested disables stay pending until owners register', () => {
     config: { disableOptimizations: [terraxId] },
     env: { PMJS_DISABLE_OPT: 'scene.graphics-cache' },
   });
-  // No throw yet: the port adapter has not registered its ID.
+  // No throw yet: the owning module has not registered its ID.
   assert.equal(PMJS.optimizations.ids().length, 0);
   registerOwnerIds(PMJS, [terraxId, 'scene.graphics-cache']);
   assert.equal(PMJS.optimizations.isEnabled(terraxId), false);
@@ -111,11 +111,11 @@ test('requested disables stay pending until owners register', () => {
 });
 
 test('finalize rejects requested disables that nobody registered', () => {
-  const port = loadRegistry({
+  const configured = loadRegistry({
     config: { disableOptimizations: ['terrax.nativeLight'] }, env: {},
   });
-  registerOwnerIds(port.PMJS, [terraxId]);
-  assert.throws(() => port.PMJS.optimizations.finalize(),
+  registerOwnerIds(configured.PMJS, [terraxId]);
+  assert.throws(() => configured.PMJS.optimizations.finalize(),
     /Unknown PMJS optimization: terrax\.nativeLight/);
 
   const developer = loadRegistry({
@@ -153,7 +153,7 @@ test('duplicate and malformed registrations throw', () => {
     /nonempty string fallback/);
 });
 
-test('malformed port configuration is fatal at load', () => {
+test('malformed configuration is fatal at load', () => {
   assert.throws(() => loadRegistry({
     config: { disableOptimizations: 'scene.graphics-cache' }, env: {},
   }), /must be an array/);
@@ -192,7 +192,7 @@ test('diagnostics stay silent by default and dump on finalize', () => {
   });
   registerOwnerIds(boot.PMJS, [terraxId]);
   boot.PMJS.optimizations.finalize();
-  assert.deepEqual(boot.logs, ['[pmjs-opt] terrax.native-lighting disabled by port']);
+  assert.deepEqual(boot.logs, ['[pmjs-opt] terrax.native-lighting disabled by configuration']);
 
   const full = loadRegistry({ config: {}, env: { PMJS_OPT_DIAGNOSTICS: '1' } });
   registerOwnerIds(full.PMJS, [...sceneIds, terraxId]);
@@ -234,8 +234,8 @@ test('refusal keeps an earlier disable cause and validates input', () => {
     config: { disableOptimizations: ['scene.graphics-cache'] }, env: {},
   });
   registerOwnerIds(PMJS, sceneIds);
-  assert.equal(PMJS.optimizations.refuse('scene.graphics-cache', 'unknown shape'), 'port');
-  assert.equal(PMJS.optimizations.reason('scene.graphics-cache'), 'disabled by port');
+  assert.equal(PMJS.optimizations.refuse('scene.graphics-cache', 'unknown shape'), 'configuration');
+  assert.equal(PMJS.optimizations.reason('scene.graphics-cache'), 'disabled by configuration');
   assert.throws(() => PMJS.optimizations.refuse('scene.graphics-cache', ''),
     /nonempty string reason/);
   assert.throws(() => PMJS.optimizations.refuse('no.such.id', 'reason'),

@@ -379,10 +379,8 @@ test('MV synchronizes presentation after the final game update', () => {
   context.Graphics._renderer = Object.assign(renderer, {
     _pmjsSyncPresentation: syncPresentation
   });
-  context.pmjsRunRpgMakerRender = () => {
-    context.Graphics._canvas.style.opacity = 1;
-    context.Graphics._video.style.opacity = 0;
-  };
+  context.Graphics._canvas.style.opacity = 1;
+  context.Graphics._video.style.opacity = 0;
   vm.runInContext(mvMainLoopSource, context);
   context.pmjsMvRender(100);
   assert.deepEqual(calls.at(-1), ['presentation', 1, 0, 0, 0, 1]);

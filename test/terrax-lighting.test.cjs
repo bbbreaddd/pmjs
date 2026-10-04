@@ -235,7 +235,10 @@ test('Terrax adapter leaves an unknown createLightmask implementation untouched'
 
   assert.equal(context.Spriteset_Map.prototype.createLightmask,
     customCreateLightmask);
-  assert.equal(context.pmjsInstallTerraxLightingFastPaths(), false);
+  context.PMJS.phases.emit('afterGuestPlugins');
+  assert.equal(context.Spriteset_Map.prototype.createLightmask, customCreateLightmask);
+  assert.match(context.PMJS.optimizations.reason('terrax.native-lighting'),
+    /unrecognized Terrax createLightmask/);
 });
 
 test('Terrax adapter preserves unknown per-instance sprite methods', () => {
@@ -363,7 +366,7 @@ function terraxDisabledContext({ config, env }) {
   return { mask: spriteset._lightmask, updates, stockAdds, context2d };
 }
 
-test('terrax.native-lighting disabled by port runs the ordinary Canvas path', () => {
+test('terrax.native-lighting disabled by configuration runs the ordinary Canvas path', () => {
   const { mask, updates, stockAdds, context2d } = terraxDisabledContext({
     config: { disableOptimizations: ['terrax.native-lighting'] }, env: {},
   });

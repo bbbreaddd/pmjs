@@ -83,36 +83,31 @@ function loadRegistrySupport(sandbox) {
   }
 }
 
-function loadWithRegistrations(extra = {}) {
-  const registrations = [];
-  const sandbox = Object.assign({
-    console,
-    pmjsRegisterHook(hookName, callback) {
-      registrations.push({ hookName, callback });
-    }
-  }, extra);
+function loadAdapter(extra = {}) {
+  const sandbox = Object.assign({ console }, extra);
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-core/config.js'), 'utf8'), sandbox);
   vm.runInContext(optimizationsSource, sandbox, { filename: 'optimizations.js' });
   loadRegistrySupport(sandbox);
   vm.runInContext(source, sandbox, { filename: 'olivia-horror-effects.js' });
-  return { sandbox, registrations };
+  return { sandbox };
 }
 
 test('registers plugins.olivia.horror-effects optimization', () => {
-  const { sandbox } = loadWithRegistrations();
+  const { sandbox } = loadAdapter();
   assert.equal(sandbox.PMJS.optimizations.isEnabled('plugins.olivia.horror-effects'), true);
   assert.ok(sandbox.PMJS.optimizations.ids().includes('plugins.olivia.horror-effects'));
 });
 
 test('Olivia fast path skips inactive work and preserves active plugin updates for known Olivia implementation', () => {
   const Sprite = createKnownOliviaSprite();
-  const { sandbox } = loadWithRegistrations({
+  const { sandbox } = loadAdapter({
     Sprite,
     Olivia: { HorrorEffects: {} }
   });
-  sandbox.pmjsInstallOliviaHorrorEffects();
+  sandbox.PMJS.plugins.execute('Olivia_HorrorEffects', function() {});
+  sandbox.PMJS.phases.emit('afterGuestPlugins');
 
   const inactive = new Sprite();
   inactive.updateHorrorEffects();
@@ -141,11 +136,12 @@ test('Olivia integration leaves unknown outer wrappers on reference behavior', (
     noiseUpdates++;
   };
 
-  const { sandbox } = loadWithRegistrations({
+  const { sandbox } = loadAdapter({
     Sprite,
     Olivia: { HorrorEffects: {} }
   });
-  sandbox.pmjsInstallOliviaHorrorEffects();
+  sandbox.PMJS.plugins.execute('Olivia_HorrorEffects', function() {});
+  sandbox.PMJS.phases.emit('afterGuestPlugins');
 
   const sprite = new Sprite();
   sprite.updateHorrorEffects();
@@ -160,10 +156,11 @@ test('Olivia integration leaves unknown outer wrappers on reference behavior', (
 
 test('Olivia dispatcher guard does not skip an overridden delegated method', () => {
   const Sprite = createKnownOliviaSprite();
-  const { sandbox } = loadWithRegistrations({
+  const { sandbox } = loadAdapter({
     Sprite, Olivia: { HorrorEffects: {} }
   });
-  sandbox.pmjsInstallOliviaHorrorEffects();
+  sandbox.PMJS.plugins.execute('Olivia_HorrorEffects', function() {});
+  sandbox.PMJS.phases.emit('afterGuestPlugins');
   const sprite = new Sprite();
   let extendedCalls = 0;
   sprite.updateHorrorNoise = function() { extendedCalls++; };
@@ -178,10 +175,11 @@ test('Olivia leaves a recognized dispatcher untouched when a delegate is compose
   const dispatcher = Sprite.prototype.updateHorrorEffects;
   let composedCalls = 0;
   Sprite.prototype.updateHorrorNoise = function() { composedCalls++; };
-  const { sandbox } = loadWithRegistrations({
+  const { sandbox } = loadAdapter({
     Sprite, Olivia: { HorrorEffects: {} }
   });
-  sandbox.pmjsInstallOliviaHorrorEffects();
+  sandbox.PMJS.plugins.execute('Olivia_HorrorEffects', function() {});
+  sandbox.PMJS.phases.emit('afterGuestPlugins');
   assert.equal(Sprite.prototype.updateHorrorEffects, dispatcher);
   const sprite = new Sprite();
   sprite.updateHorrorEffects();
@@ -198,7 +196,7 @@ test('Olivia fast path is inert when the plugin is absent', () => {
     this.updateHorrorTV();
   };
   Sprite.prototype.updateHorrorEffects = update;
-  const { sandbox } = loadWithRegistrations({ Sprite });
+  const { sandbox } = loadAdapter({ Sprite });
   assert.equal(sandbox.Sprite.prototype.updateHorrorEffects, update);
 });
 
@@ -227,12 +225,13 @@ test('Olivia adapter activates on its trigger plugin and ignores others', () => 
 
 test('Olivia optimization disabled via disableOptimizations leaves stock behavior', () => {
   const Sprite = createKnownOliviaSprite();
-  const { sandbox } = loadWithRegistrations({
+  const { sandbox } = loadAdapter({
     Sprite,
     Olivia: { HorrorEffects: {} },
     PMJS_GAME_CONFIG: { disableOptimizations: ['plugins.olivia.horror-effects'] }
   });
-  sandbox.pmjsInstallOliviaHorrorEffects();
+  sandbox.PMJS.plugins.execute('Olivia_HorrorEffects', function() {});
+  sandbox.PMJS.phases.emit('afterGuestPlugins');
 
   const inactive = new Sprite();
   inactive.updateHorrorEffects();
@@ -244,10 +243,11 @@ test('Olivia optimization disabled via disableOptimizations leaves stock behavio
 test('normal execution retains guest synchronization and later hooks', () => {
   const Sprite = createKnownOliviaSprite();
   const synchronize = Sprite.prototype.synchronizeHorrorFiltersWithSource;
-  const { sandbox } = loadWithRegistrations({
+  const { sandbox } = loadAdapter({
     Sprite, Olivia: { HorrorEffects: {} }
   });
-  sandbox.pmjsInstallOliviaHorrorEffects();
+  sandbox.PMJS.plugins.execute('Olivia_HorrorEffects', function() {});
+  sandbox.PMJS.phases.emit('afterGuestPlugins');
   assert.equal(Sprite.prototype.synchronizeHorrorFiltersWithSource, synchronize);
   const sprite = new Sprite();
   let hookCalls = 0;
@@ -267,34 +267,27 @@ test('normal execution retains guest synchronization and later hooks', () => {
   assert.equal(sprite._horrorFilters.tvFilter.time, 2);
 });
 
-test('census preserves inactive skipping, active updates, late hooks, and reset', () => {
+test('inactive effects skip work while active effects and late aliases remain authored', () => {
   const Sprite = createKnownOliviaSprite();
-  const { sandbox } = loadWithRegistrations({
+  const { sandbox } = loadAdapter({
     Sprite,
     Olivia: { HorrorEffects: {} },
-    NativeHost: { runtime: { env(name) {
-      return name === 'PMJS_SCENE_CENSUS' ? '1' : '';
-    } } }
   });
-  sandbox.pmjsInstallOliviaHorrorEffects();
+  sandbox.PMJS.plugins.execute('Olivia_HorrorEffects', function() {});
+  sandbox.PMJS.phases.emit('afterGuestPlugins');
   const sprite = new Sprite();
   sprite.synchronizeHorrorFiltersWithSource();
   sprite.updateHorrorEffects();
   assert.equal(sprite.noiseCalls, undefined);
   assert.equal(sprite.glitchCalls, undefined);
   assert.equal(sprite.tvCalls, undefined);
-  assert.equal(sandbox.__pmjsHorrorCensus.effectsSkipped, 1);
-  assert.equal(sandbox.__pmjsHorrorCensus.noise, 0);
-  assert.equal(sandbox.__pmjsHorrorCensus.syncSkipped, 1);
 
   sprite._horrorFilters.tvFilter = { animated: true, time: 0, aniSpeed: 2 };
   sprite.updateHorrorEffects();
   assert.equal(sprite._horrorFilters.tvFilter.time, 2);
-  assert.equal(sandbox.__pmjsHorrorCensus.tv, 1);
+
   delete sprite._horrorFilters.tvFilter;
   sprite.updateHorrorEffects();
-  assert.equal(sandbox.__pmjsHorrorCensus.effectsSkipped, 2);
-  assert.equal(sandbox.__pmjsHorrorCensus.tv, 1);
 
   let hookCalls = 0;
   const original = Sprite.prototype.updateHorrorNoise;
@@ -302,40 +295,34 @@ test('census preserves inactive skipping, active updates, late hooks, and reset'
     hookCalls++;
     return original.apply(this, arguments);
   };
-  // PortLab resets census windows by clearing the published object.
-  sandbox.__pmjsHorrorCensus = null;
+
   sprite.updateHorrorEffects();
   assert.equal(hookCalls, 1);
-  assert.equal(sandbox.__pmjsHorrorCensus.effectsChecked, 1);
-  assert.equal(sandbox.__pmjsHorrorCensus.effectsSkipped, 0);
-  assert.equal(sandbox.__pmjsHorrorCensus.noise, 1);
-  assert.equal(sandbox.__pmjsHorrorCensus.glitch, 1);
-  assert.equal(sandbox.__pmjsHorrorCensus.tv, 1);
+
 });
 
-test('census preserves custom dispatchers and counts only active known leaves', () => {
+test('custom dispatchers retain their work and guard only inactive known leaves', () => {
   const Sprite = createKnownOliviaSprite();
   const dispatch = Sprite.prototype.updateHorrorEffects;
   Sprite.prototype.updateHorrorEffects = function() {
     this.hookCalls = (this.hookCalls || 0) + 1;
     return dispatch.apply(this, arguments);
   };
-  const { sandbox } = loadWithRegistrations({
+  const { sandbox } = loadAdapter({
     Sprite,
     Olivia: { HorrorEffects: {} },
-    NativeHost: { runtime: { env() { return '1'; } } }
   });
-  sandbox.pmjsInstallOliviaHorrorEffects();
+  sandbox.PMJS.plugins.execute('Olivia_HorrorEffects', function() {});
+  sandbox.PMJS.phases.emit('afterGuestPlugins');
   const sprite = new Sprite();
   sprite.updateHorrorEffects();
   assert.equal(sprite.hookCalls, 1);
-  assert.equal(sandbox.__pmjsHorrorCensus.effectsSkipped, 3);
+
   assert.equal(sprite.tvCalls, undefined);
-  sandbox.__pmjsHorrorCensus = null;
+
   sprite._horrorFilters.tvFilter = { animated: true, time: 0, aniSpeed: 1 };
   sprite.updateHorrorEffects();
   assert.equal(sprite.hookCalls, 2);
   assert.equal(sprite._horrorFilters.tvFilter.time, 1);
-  assert.equal(sandbox.__pmjsHorrorCensus.effectsSkipped, 2);
-  assert.equal(sandbox.__pmjsHorrorCensus.tv, 1);
+
 });

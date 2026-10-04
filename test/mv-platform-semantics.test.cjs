@@ -62,14 +62,13 @@ test('two-pass PluginManager.setup allows cross-plugin parameter lookups', () =>
   const pluginLoaderCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/plugin-loader.js'), 'utf8');
   vm.runInContext(setupCode, context);
   vm.runInContext(pluginLoaderCode, context);
-  context.pmjsMvInstallPluginManagerHooks();
 
   let p1SawP2Params = null;
-  context.PluginManager.loadScript = function(name) {
-    if (name === 'PluginA.js') {
+  context.NativeHost = { runtime: { loadScript(name) {
+    if (name === 'js/plugins/PluginA.js') {
       p1SawP2Params = context.PluginManager.parameters('PluginB');
     }
-  };
+  } } };
 
   const samplePlugins = [
     { name: 'PluginA', status: true, description: '', parameters: { optA: '123' } },
@@ -77,7 +76,8 @@ test('two-pass PluginManager.setup allows cross-plugin parameter lookups', () =>
     { name: 'PluginA', status: true, description: 'dup', parameters: { optA: 'dup' } }
   ];
 
-  context.PluginManager.setup(samplePlugins);
+  context.$plugins = samplePlugins;
+  context.pmjsMvInitializePlugins();
   assert.deepEqual(p1SawP2Params, { optB: '456' }, 'PluginA should see PluginB parameters before PluginB script loads');
   assert.equal(context.PluginManager._scripts.length, 2, 'Duplicate plugins should be suppressed');
   assert.equal(context.PluginManager._scripts[0], 'PluginA');
@@ -97,7 +97,7 @@ test('plugin lifecycle hooks install after PluginManager becomes available', () 
   vm.runInContext(setupCode, context);
   vm.runInContext(pluginLoaderCode, context);
 
-  assert.equal(context.pmjsMvInstallPluginManagerHooks(), false);
+  assert.equal(context.PluginManager, undefined);
   context.PluginManager = {
     _path: 'js/plugins/',
     _scripts: [],
@@ -107,11 +107,8 @@ test('plugin lifecycle hooks install after PluginManager becomes available', () 
   const events = [];
   context.PMJS.plugins.onLoaded('YED_Tiled', () => events.push('loaded'));
 
-  assert.equal(context.pmjsMvInstallPluginManagerHooks(), true);
-  assert.equal(context.pmjsMvInstallPluginManagerHooks(), true);
-  context.PluginManager.setup([
-    { name: 'YED_Tiled', status: true, parameters: {} }
-  ]);
+  context.$plugins = [{ name: 'YED_Tiled', status: true, parameters: {} }];
+  context.pmjsMvInitializePlugins();
 
   assert.deepEqual(loaded, ['js/plugins/YED_Tiled.js']);
   assert.deepEqual(events, ['loaded']);
@@ -393,14 +390,13 @@ test('bootstrap dispatches window load event listeners and window.onload', () =>
           for (const l of listeners) l(event);
         }
       }
-    },
-    PMJS_MANUAL_BOOTSTRAP: true
+    }
   };
   listeners.push(() => { addEventListenerCalled = true; });
 
   vm.createContext(context);
   const setupCode = readPluginInfra();
-  const bootstrapCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/bootstrap.js'), 'utf8');
+  const bootstrapCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/boot.js'), 'utf8');
   vm.runInContext(setupCode, context);
   vm.runInContext(bootstrapCode, context);
 
@@ -442,14 +438,14 @@ test('integrated stack: PluginManager.setup -> loadScript -> document.currentScr
   vm.runInContext(setupCode, context);
   vm.runInContext(scriptLoaderCode, context);
   vm.runInContext(pluginLoaderCode, context);
-  context.pmjsMvInstallPluginManagerHooks();
 
   const plugins = [
     { name: 'PluginOne', status: true, description: '', parameters: { opt1: 'v1' } },
     { name: 'PluginTwo', status: true, description: '', parameters: { opt2: 'v2' } }
   ];
 
-  context.PluginManager.setup(plugins);
+  context.$plugins = plugins;
+  context.pmjsMvInitializePlugins();
 
   assert.equal(loadedScripts.length, 2);
   assert.equal(loadedScripts[0].path, 'js/plugins/PluginOne.js');
@@ -495,10 +491,9 @@ test('lifecycle pulses beforePlugins, afterPlugins, and beforeBoot', () => {
 
   const setupCode = readPluginInfra();
   const pluginLoaderCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/plugin-loader.js'), 'utf8');
-  const bootstrapCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/bootstrap.js'), 'utf8');
+  const bootstrapCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/boot.js'), 'utf8');
 
   vm.runInContext(setupCode, context);
-  context.globalThis.PMJS_MANUAL_BOOTSTRAP = true;
   context.PMJS.phases.on('beforePlugins', () => events.push('beforePlugins'));
   context.PMJS.phases.on('afterPlugins', () => events.push('afterPlugins'));
   context.PMJS.phases.on('beforeBoot', () => events.push('beforeBoot'));
@@ -822,7 +817,7 @@ test('Bitmap.prototype.drawText installs native acceleration only for stock pipe
   const disabledContext = createContext(DisabledBitmap, true);
   new disabledContext.Bitmap().drawText('ordinary', 0, 0, 0, 20, 'left');
   assert.equal(nativeDrawCalls, 0, 'disabled text optimization must keep the ordinary path');
-  assert.equal(disabledContext.PMJS.optimizations.reason('bitmap.native-draw-text'), 'disabled by port');
+  assert.equal(disabledContext.PMJS.optimizations.reason('bitmap.native-draw-text'), 'disabled by configuration');
 });
 
 test('synchronous-burst storage read coalescing preserves stock DataManager object identity and coalesces storage I/O', async () => {
@@ -1212,7 +1207,6 @@ for (const composition of ['alias', 'subclass']) {
           return { width: w, height: h, view: options.view,
             roundPixels: context.PIXI.settings.RENDER_OPTIONS.roundPixels };
         },
-        __pmjsBeforeCreateRenderer() { context.calls.push('hook'); },
       };
       context.globalThis = context;
       vm.createContext(context);
@@ -1254,7 +1248,7 @@ for (const composition of ['alias', 'subclass']) {
       context.PMJS.methods.install();
       context.PMJS.methods.install();
       context.Graphics._createRenderer();
-      assert.deepEqual(context.calls, ['prepare', 'hook', 'create', 'post']);
+      assert.deepEqual(context.calls, ['prepare', 'create', 'post']);
       assert.equal(context.Graphics._renderer.roundPixels, roundPixels);
       assert.equal(context.Graphics._renderer.width, 960);
       assert.equal(context.Graphics._renderer.height, 480);
@@ -1262,7 +1256,7 @@ for (const composition of ['alias', 'subclass']) {
       assert.equal(context.Graphics._renderer.guestReady, true);
       context.calls.length = 0;
       context.Graphics._createRenderer();
-      assert.deepEqual(context.calls, ['prepare', 'hook', 'create', 'post']);
+      assert.deepEqual(context.calls, ['prepare', 'create', 'post']);
     }
   });
 }

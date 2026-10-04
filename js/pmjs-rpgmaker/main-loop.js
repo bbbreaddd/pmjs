@@ -17,9 +17,6 @@
   }
 
   function runTick(now, beforeServices, beforeScheduler) {
-    if (typeof globalThis.__pmjsBeforeTick === 'function') {
-      globalThis.__pmjsBeforeTick(now);
-    }
     if (typeof beforeServices === 'function') beforeServices(now);
     updateNativeServices();
     if (typeof beforeScheduler === 'function') beforeScheduler(now);
@@ -31,17 +28,7 @@
       console.log('[pmjs] scene', reportedScene && reportedScene.constructor &&
         reportedScene.constructor.name || 'UnknownScene');
     }
-    if (typeof globalThis.__pmjsAfterTick === 'function') {
-      globalThis.__pmjsAfterTick(now);
-    }
-  }
-
-  function runRender(now) {
-    if (typeof globalThis.__pmjsBeforeNativeRender === 'function') {
-      globalThis.__pmjsBeforeNativeRender(now);
-    }
   }
 
   globalThis.pmjsRunRpgMakerTick = runTick;
-  globalThis.pmjsRunRpgMakerRender = runRender;
 })();

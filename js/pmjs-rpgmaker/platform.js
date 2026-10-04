@@ -2,7 +2,7 @@
 Utils.isNwjs = function() { return false; };
 
 if (typeof SceneManager !== 'undefined') {
-  if (globalThis.PMJS_DEVELOPMENT_MODE || PMJS.config.developmentMode) {
+  if (PMJS.config.developmentMode) {
     SceneManager.catchException = function(error) { throw error; };
   }
 }

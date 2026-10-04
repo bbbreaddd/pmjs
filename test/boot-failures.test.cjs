@@ -8,12 +8,12 @@ const { loadPmjsRuntime } = require('./helpers/runtime-context.cjs');
 function bootContext() {
   const events = [], target = { update() { return 'guest'; } };
   const ctx = loadPmjsRuntime({
-    target, PMJS_MANUAL_BOOTSTRAP: true, $plugins: [{ name: 'Example', status: true }],
+    target, $plugins: [{ name: 'Example', status: true }],
     console: { log() {}, error() {} }, nativeBootPhase: phase => events.push(phase),
     window: { dispatchEvent() { events.push('load'); }, onload() { events.push('scene'); } },
   });
   ctx.PluginManager = { setup() { ctx.PMJS.plugins.execute('Example', () => events.push('guest')); } };
-  for (const file of ['js/pmjs-rpgmaker/bootstrap.js', 'js/pmjs-mv/bootstrap.js'])
+  for (const file of ['js/pmjs-rpgmaker/bootstrap.js', 'js/pmjs-mv/boot.js'])
     vm.runInContext(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), ctx);
   ctx.PMJS.plugins.snapshotOriginalManifest(ctx.$plugins);
   return { ctx, events, target, initialize: () => ctx.pmjsInitializeRpgMakerPlugins(() => {}) };

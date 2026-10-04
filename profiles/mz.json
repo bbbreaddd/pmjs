@@ -45,6 +45,7 @@
     "js/pmjs-mz/plugin-loader.js",
     "js/pmjs-rpgmaker/main-loop.js",
     "js/pmjs-mz/main-loop.js",
+    "js/pmjs-mz/boot.js",
     "js/pmjs-mz/bootstrap.js"
   ]
 }

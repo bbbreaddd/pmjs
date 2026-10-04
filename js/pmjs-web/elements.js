@@ -47,7 +47,6 @@ CanvasElement.prototype._pmjsContentChanged = function() {
   this.__pmjsContentRevision++;
 };
 function isCanvasDiagnosticsEnabled() {
-  if (globalThis.__pmjsCanvasDiag) return true;
   return typeof NativeHost !== 'undefined' &&
     NativeHost.runtime &&
     typeof NativeHost.runtime.env === 'function' &&

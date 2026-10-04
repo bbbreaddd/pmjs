@@ -50,7 +50,7 @@ test('MZ plugin and boot lifecycle runs synchronously without main.js or Effekse
   const context = vm.createContext({
     console,
     globalThis: null,
-    PMJS_MANUAL_BOOTSTRAP: true,
+
     NativeHost: { runtime: { loadScript(script) {
       events.push(['script', script]);
       if (script === 'js/plugins.js') {
@@ -79,7 +79,7 @@ test('MZ plugin and boot lifecycle runs synchronously without main.js or Effekse
   context.PMJS.phases.on('afterPlugins', () => events.push(['hook', 'afterPlugins']));
   context.PMJS.phases.on('beforeBoot', () => events.push(['hook', 'beforeBoot']));
   runModule(context, 'js/pmjs-mz/plugin-loader.js');
-  runModule(context, 'js/pmjs-mz/bootstrap.js');
+  runModule(context, 'js/pmjs-mz/boot.js');
   context.pmjsMzLoadPluginManifest();
   context.pmjsMzInitializePlugins();
   context.pmjsMzStart();
@@ -102,7 +102,7 @@ for (const failure of ['loaded', 'afterGuestPlugins', 'method', 'beforeBoot']) {
   test('MZ boot propagates an unexpected ' + failure + ' installer failure', () => {
     const events = [], target = { run() { return 'authored'; } };
     const context = vm.createContext({ console: { log() {}, error() {} }, target,
-      PMJS_MANUAL_BOOTSTRAP: true,
+
       NativeHost: { runtime: { loadScript(script) {
         if (script === 'js/plugins.js') context.$plugins = [{ name: 'Example', status: true, parameters: {} }];
       } } },
@@ -112,7 +112,7 @@ for (const failure of ['loaded', 'afterGuestPlugins', 'method', 'beforeBoot']) {
       nativeBootPhase(phase) { events.push(phase); } });
     for (const module of ['js/pmjs-rpgmaker/lifecycle.js', 'js/pmjs-core/methods.js',
       'js/pmjs-rpgmaker/plugins.js', 'js/pmjs-core/config.js', 'js/pmjs-core/optimizations.js',
-      'js/pmjs-rpgmaker/bootstrap.js', 'js/pmjs-mz/plugin-loader.js', 'js/pmjs-mz/bootstrap.js']) runModule(context, module);
+      'js/pmjs-rpgmaker/bootstrap.js', 'js/pmjs-mz/plugin-loader.js', 'js/pmjs-mz/boot.js']) runModule(context, module);
     const fail = () => { target.mutated = true; throw new Error('installer failed: ' + failure); };
     if (failure === 'loaded') context.PMJS.plugins.onLoaded('Example', 'fixture', fail);
     else if (failure === 'method') context.PMJS.methods.wrap({ key: 'fixture.run', id: 'fixture',

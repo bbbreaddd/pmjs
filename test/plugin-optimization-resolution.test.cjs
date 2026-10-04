@@ -39,11 +39,11 @@ for (const [adapter, plugin, ids] of adapters) {
     });
   }
 
-  for (const policy of ['port', 'PMJS_DISABLE_OPT']) {
+  for (const policy of ['configuration', 'PMJS_DISABLE_OPT']) {
     test(adapter + ' preserves disable policy when the guest is unavailable: ' + policy, () => {
       const ctx = loadPmjsRuntime({
         console: { log() {}, error() {} },
-        PMJS_GAME_CONFIG: policy === 'port' ? { disableOptimizations: ids } : {},
+        PMJS_GAME_CONFIG: policy === 'configuration' ? { disableOptimizations: ids } : {},
         NativeHost: { runtime: { env(name) {
           return policy === 'PMJS_DISABLE_OPT' && name === 'PMJS_DISABLE_OPT'
             ? ids.join(',') : undefined;

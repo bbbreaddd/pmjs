@@ -13,35 +13,6 @@
     });
   }
 
-  // Optional aggregate counters for scene audits. Dormant unless
-  // PMJS_SCENE_CENSUS=1.
-  function pmjsHorrorCensus() {
-    try {
-      if (typeof pmjsHorrorCensus.enabled !== 'boolean') {
-        var enabled = false;
-        try {
-          enabled = typeof NativeHost !== 'undefined' && NativeHost &&
-            NativeHost.runtime &&
-            typeof NativeHost.runtime.env === 'function' &&
-            NativeHost.runtime.env('PMJS_SCENE_CENSUS') === '1';
-        } catch (_) { enabled = false; }
-        pmjsHorrorCensus.enabled = enabled;
-      }
-      if (!pmjsHorrorCensus.enabled) return null;
-    } catch (_) {
-      return null;
-    }
-    try {
-      if (!globalThis.__pmjsHorrorCensus) {
-        globalThis.__pmjsHorrorCensus = { syncChecked: 0, syncSkipped: 0,
-          effectsChecked: 0, effectsSkipped: 0, noise: 0, glitch: 0, tv: 0 };
-      }
-      return globalThis.__pmjsHorrorCensus;
-    } catch (_) {
-      return null;
-    }
-  }
-
   function fnSource(fn) {
     return Function.prototype.toString.call(fn);
   }
@@ -70,15 +41,6 @@
       statements[0] === 'this.updateHorrorNoise()' &&
       statements[1] === 'this.updateHorrorGlitch()' &&
       statements[2] === 'this.updateHorrorTV()';
-  }
-
-  function isKnownOliviaSynchronize(fn) {
-    if (typeof fn !== 'function' || fn._pmjsOliviaGuard) return false;
-    var str = fnSource(fn);
-    return str.indexOf('_horrorFiltersSource') !== -1 &&
-      str.indexOf('noiseFilter') !== -1 &&
-      str.indexOf('glitchFilter') !== -1 &&
-      str.indexOf('tvFilter') !== -1;
   }
 
   function isKnownOliviaNoise(fn) {
@@ -131,26 +93,6 @@
 
     var integrated = false;
 
-    // The guest already returns on an absent source. Wrap only for diagnostics.
-    var synchronize = proto.synchronizeHorrorFiltersWithSource;
-    if (typeof synchronize === 'function' && !synchronize._pmjsOliviaGuard &&
-        isKnownOliviaSynchronize(synchronize) && pmjsHorrorCensus()) {
-      proto.synchronizeHorrorFiltersWithSource = (function(original) {
-        var guarded = function() {
-          var census = pmjsHorrorCensus();
-          if (census) census.syncChecked++;
-          if (!this._horrorFiltersSource && !hasActiveHorrorFilter(this)) {
-            if (census) census.syncSkipped++;
-            return;
-          }
-          return original.apply(this, arguments);
-        };
-        guarded._pmjsOliviaGuard = true;
-        return guarded;
-      })(synchronize);
-      integrated = true;
-    }
-
     var updateEffects = proto.updateHorrorEffects;
     var knownNoise = proto.updateHorrorNoise;
     var knownGlitch = proto.updateHorrorGlitch;
@@ -161,13 +103,10 @@
     if (knownDispatcher && knownDelegates) {
       proto.updateHorrorEffects = (function(original) {
         var guarded = function() {
-          var census = pmjsHorrorCensus();
-          if (census) census.effectsChecked++;
           var delegatesUnchanged = this.updateHorrorNoise === knownNoise &&
             this.updateHorrorGlitch === knownGlitch &&
             this.updateHorrorTV === knownTV;
           if (delegatesUnchanged && !hasActiveHorrorFilter(this)) {
-            if (census) census.effectsSkipped++;
             return;
           }
           return original.apply(this, arguments);
@@ -177,30 +116,6 @@
       })(updateEffects);
       integrated = true;
 
-      if (pmjsHorrorCensus()) {
-        var countedLeaves = [
-          { method: 'updateHorrorNoise', counter: 'noise' },
-          { method: 'updateHorrorGlitch', counter: 'glitch' },
-          { method: 'updateHorrorTV', counter: 'tv' }
-        ];
-        for (var c = 0; c < countedLeaves.length; c++) {
-          (function(leaf) {
-            var original = proto[leaf.method];
-            if (typeof original !== 'function' ||
-                original._pmjsCensusCounted) return;
-            var counting = function() {
-              var census = pmjsHorrorCensus();
-              if (census) census[leaf.counter]++;
-              return original.apply(this, arguments);
-            };
-            counting._pmjsCensusCounted = true;
-            proto[leaf.method] = counting;
-          })(countedLeaves[c]);
-        }
-        knownNoise = proto.updateHorrorNoise;
-        knownGlitch = proto.updateHorrorGlitch;
-        knownTV = proto.updateHorrorTV;
-      }
     } else if (!knownDispatcher && !updateEffects._pmjsOliviaGuard) {
       // Composed wrapper: guard only recognized leaves.
       var leaves = [
@@ -218,20 +133,9 @@
             leaf.recognize(original)) {
           proto[leaf.method] = (function(originalMethod, filterName) {
             var guarded = function() {
-              var census = pmjsHorrorCensus();
               var filters = this._horrorFilters;
               if (!filters || !filters[filterName]) {
-                if (census) {
-                  census.effectsChecked++;
-                  census.effectsSkipped++;
-                }
                 return;
-              }
-              if (census) {
-                census.effectsChecked++;
-                if (filterName === 'noiseFilter') census.noise++;
-                else if (filterName === 'glitchFilter') census.glitch++;
-                else if (filterName === 'tvFilter') census.tv++;
               }
               return originalMethod.apply(this, arguments);
             };
@@ -259,6 +163,4 @@
         installOliviaHorrorEffects);
     });
 
-  globalThis.pmjsInstallOliviaHorrorEffects = installOliviaHorrorEffects;
-  globalThis.pmjsInstallOliviaHorrorFastPaths = installOliviaHorrorEffects;
 })();

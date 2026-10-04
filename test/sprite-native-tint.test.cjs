@@ -200,7 +200,7 @@ test('sprite.native-tint disables via PMJS_DISABLE_OPT', () => {
 test('sprite.native-tint disables via PMJS_GAME_CONFIG.disableOptimizations', () => {
   const ctx = setupEnvironment({ config: { disableOptimizations: ['sprite.native-tint'] } });
   assert.equal(ctx.PMJS.optimizations.isEnabled('sprite.native-tint'), false);
-  assert.equal(ctx.PMJS.optimizations.reason('sprite.native-tint'), 'disabled by port');
+  assert.equal(ctx.PMJS.optimizations.reason('sprite.native-tint'), 'disabled by configuration');
 });
 
 test('default sprite without _pmjsNativeSpriteTint bypasses CPU tint for blendColor', () => {

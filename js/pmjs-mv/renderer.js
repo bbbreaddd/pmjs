@@ -1,9 +1,4 @@
 function createNativeMvRenderer() {
-    try {
-      if (typeof globalThis.__pmjsBeforeCreateRenderer === 'function') {
-        globalThis.__pmjsBeforeCreateRenderer.call(this);
-      }
-    } catch (_) {}
     this._renderer = createNativePixiRenderer(this._width, this._height, {
       view: this._canvas,
       resolution: 1,

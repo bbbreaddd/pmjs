@@ -57,6 +57,5 @@
     FriendFlags: { None: 0, Immediate: 4, All: 511 }, on: noop, once: noop,
     removeListener: noop, removeAllListeners: noop
   };
-  globalThis.__pmjsGreenworksCompat = compat;
   registerCommonJsModule(names, compat);
 })();
