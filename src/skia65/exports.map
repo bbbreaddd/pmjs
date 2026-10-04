@@ -1,6 +1,13 @@
 PMJS_SKIA65_2 {
   global:
     pmjs_skia65_identity;
+    pmjs_skia65_rect_bgra;
+    pmjs_skia65_image_bgra;
+    pmjs_skia65_rect_bgra_strided;
+    pmjs_skia65_image_bgra_strided;
+    pmjs_skia65_image_rgba_strided;
+    pmjs_skia65_circle_coverage;
+    pmjs_skia65_triangle_coverage;
     pmjs_skia65_font_open;
     pmjs_skia65_font_open_many;
     pmjs_skia65_font_close;

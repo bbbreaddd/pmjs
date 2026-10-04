@@ -36,6 +36,7 @@ if(PMJS_ENABLE_SKIA65 OR PMJS_BUILD_SKIA65_COMPONENT)
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/skia65/sources.lock.json"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/text_layout.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/text_layout.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/canvas_pixels.hpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/unicode_default_ignorables.hpp")
   set(pmjs_skia65_library "${PMJS_SKIA65_COMPONENT_DIR}/libpmjs-skia65.so")
   set(pmjs_skia65_command "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/skia65/build.py"

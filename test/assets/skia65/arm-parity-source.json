@@ -1,0 +1,10 @@
+{
+  "source": "https://github.com/google/skia",
+  "revision": "bd0dafbc8112f6cfa92a8096d8cb5696d8535ef9",
+  "archiveSha256": "aa9056ead78e35a77f25f399766d02a026614e036bb0b02da08324f529918d26",
+  "files": {
+    "src/opts/SkBlitRow_opts.h": "0b7b20a0ec4942e5672d22dbbf9246acdedc193d7ad541804137df9d1b0f7d91",
+    "src/opts/SkNx_neon.h": "be6f339225e2e18a715993bf1960d09a9b5d0f7ef42371bcf4b161a915d6ed55",
+    "LICENSE": "d27678cba0d529e77201e2d2a053628143e986aad8f1e77f7039ad4366c8f978"
+  }
+}

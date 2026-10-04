@@ -153,7 +153,7 @@ def build_locked(options, cache):
         "readelfDynamic": subprocess.check_output(["readelf", "-d", library], text=True),
         "exports": subprocess.check_output(["nm", "-D", "--defined-only", library], text=True)}
     exported = {line.split()[-1].split("@@")[0] for line in manifest["exports"].splitlines()}
-    expected = {"pmjs_skia65_identity", "pmjs_skia65_font_open",
+    expected = {"pmjs_skia65_rect_bgra_strided", "pmjs_skia65_image_bgra_strided", "pmjs_skia65_image_rgba_strided", "pmjs_skia65_rect_bgra", "pmjs_skia65_image_bgra", "pmjs_skia65_circle_coverage", "pmjs_skia65_triangle_coverage", "pmjs_skia65_identity", "pmjs_skia65_font_open",
                 "pmjs_skia65_font_close", "pmjs_skia65_measure", "pmjs_skia65_draw", "pmjs_skia65_draw_bgra",
                 "pmjs_skia65_font_open_many", "pmjs_skia65_measure_metrics",
                 "pmjs_skia65_get_stats", "pmjs_skia65_cache_limits", "pmjs_skia65_bounds", "pmjs_skia65_set_telemetry", "pmjs_skia65_font_cache_stats"}

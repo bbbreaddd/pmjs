@@ -10,7 +10,7 @@ def source_hashes():
         ["build.py", "provision.py", "artifact.py", "component_sources.py"]]
     files += sorted(file for file in (ROOT / "src/skia65").iterdir() if file.is_file())
     files += [ROOT / "src" / name for name in
-        ["text_layout.cpp", "text_layout.hpp", "unicode_default_ignorables.hpp"]]
+        ["text_layout.cpp", "text_layout.hpp", "canvas_pixels.hpp", "unicode_default_ignorables.hpp"]]
     return {str(file.relative_to(ROOT)): digest(file) for file in files}
 
 

@@ -36,6 +36,28 @@ typedef struct {
 } pmjs_skia65_stats;
 
 PMJS_SKIA65_API const char* pmjs_skia65_identity(void);
+PMJS_SKIA65_API int pmjs_skia65_rect_bgra(uint8_t* pixels, int width, int height,
+  int left, int top, const float rect[4], uint32_t color, float stroke,
+  const float gradient[4], const float* offsets, const uint32_t* colors, size_t count);
+PMJS_SKIA65_API int pmjs_skia65_image_bgra(uint8_t* pixels, int width, int height,
+  int left, int top, const uint8_t* source, int source_width, int source_height,
+  const float src[4], const float dst[4], float alpha, int smoothing);
+/* Strided destinations and BGRA sources are premultiplied; RGBA sources are straight. */
+PMJS_SKIA65_API int pmjs_skia65_rect_bgra_strided(uint8_t* pixels, int width, int height,
+  size_t row_bytes, int left, int top, const float rect[4], uint32_t color, float stroke,
+  const float gradient[4], const float* offsets, const uint32_t* colors, size_t count);
+PMJS_SKIA65_API int pmjs_skia65_image_bgra_strided(uint8_t* pixels, int width, int height,
+  size_t row_bytes, int left, int top, const uint8_t* source, int source_width, int source_height,
+  size_t source_row_bytes, const float src[4], const float dst[4], float alpha, int smoothing);
+PMJS_SKIA65_API int pmjs_skia65_image_rgba_strided(uint8_t* pixels, int width, int height,
+  size_t row_bytes, int left, int top, const uint8_t* source, int source_width, int source_height,
+  size_t source_row_bytes, const float src[4], const float dst[4], float alpha, int smoothing);
+PMJS_SKIA65_API int pmjs_skia65_circle_coverage(float x, float y, float radius,
+  const float transform[6], int left, int top, int width, int height, uint8_t* coverage, const float* clips, size_t clip_count);
+/* RGBA8: fill coverage, stroke coverage, stroke span rule, A=255. */
+PMJS_SKIA65_API int pmjs_skia65_triangle_coverage(const float points[6],
+  float stroke_width, float miter_limit, float stroke_alpha,
+  float left, float top, int width, int height, uint8_t* coverage);
 PMJS_SKIA65_API pmjs_skia65_font* pmjs_skia65_font_open(const char* filename);
 PMJS_SKIA65_API pmjs_skia65_font* pmjs_skia65_font_open_many(const char* const* filenames, size_t count);
 PMJS_SKIA65_API void pmjs_skia65_font_close(pmjs_skia65_font* font);

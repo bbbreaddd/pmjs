@@ -1,12 +1,20 @@
 #include "pmjs_skia65.h"
 #include "text_layout.hpp"
+#include "canvas_pixels.hpp"
 
 #include "SkCanvas.h"
+#include "SkBlitter.h"
+#include "SkRasterClip.h"
+#include "SkScan.h"
 #include "SkFontMgr.h"
 #include "SkFontMgr_empty.h"
 #include "SkGraphics.h"
 #include "SkImageInfo.h"
 #include "SkPaint.h"
+#include "SkMatrix.h"
+#include "SkBitmap.h"
+#include "SkGradientShader.h"
+#include "SkPath.h"
 #include "SkSurface.h"
 #include "SkTextBlob.h"
 #include "SkTypeface.h"
@@ -284,6 +292,196 @@ void boundsOf(const Run& run, const pmjs_skia65_style* style, float x, float bas
 }
 
 extern "C" {
+int pmjs_skia65_rect_bgra_strided(uint8_t* pixels, int width, int height,
+    size_t row_bytes, int left, int top, const float rect[4], uint32_t color, float stroke,
+    const float gradient[4], const float* offsets, const uint32_t* colors, size_t count) try {
+  if (!pixels || width <= 0 || height <= 0 || row_bytes < static_cast<size_t>(width) * 4 ||
+      row_bytes > SIZE_MAX / static_cast<size_t>(height)) return 0;
+  auto surface = SkSurface::MakeRasterDirect(SkImageInfo::MakeN32Premul(width, height), pixels, row_bytes);
+  if (!surface) return 0;
+  SkPaint paint;
+  paint.setAntiAlias(true);
+  paint.setColor((color >> 8) | (color << 24));
+  if (stroke > 0) {
+    paint.setStyle(SkPaint::kStroke_Style);
+    paint.setStrokeWidth(stroke);
+  }
+  if (count) {
+    std::vector<SkColor> converted;
+    for (size_t i = 0; i < count; ++i) converted.push_back((colors[i] >> 8) | (colors[i] << 24));
+    SkPoint points[] = {{gradient[0], gradient[1]}, {gradient[2], gradient[3]}};
+    auto shader = SkGradientShader::MakeLinear(points, converted.data(), offsets, count, SkShader::kClamp_TileMode);
+    if (!shader) return 0;
+    paint.setDither(true);
+    paint.setShader(shader);
+  }
+  surface->getCanvas()->translate(-left, -top);
+  surface->getCanvas()->drawRect(SkRect::MakeXYWH(rect[0], rect[1], rect[2], rect[3]), paint);
+  return 1;
+} catch (...) { return 0; }
+
+static int imageStrided(uint8_t* pixels, int width, int height, size_t row_bytes,
+    int left, int top, const uint8_t* source, int source_width, int source_height,
+    size_t source_row_bytes, const float src[4], const float dst[4], float alpha, int smoothing,
+    bool source_bgra) try {
+  if (!pixels || !source || width <= 0 || height <= 0 || source_width <= 0 || source_height <= 0 ||
+      row_bytes < static_cast<size_t>(width) * 4 || source_row_bytes < static_cast<size_t>(source_width) * 4 ||
+      row_bytes > SIZE_MAX / static_cast<size_t>(height) ||
+      source_row_bytes > SIZE_MAX / static_cast<size_t>(source_height)) return 0;
+  auto surface = SkSurface::MakeRasterDirect(SkImageInfo::MakeN32Premul(width, height), pixels, row_bytes);
+  if (!surface) return 0;
+  const int source_left = std::clamp<double>(std::floor(src[0]) - 1, 0, source_width);
+  const int source_top = std::clamp<double>(std::floor(src[1]) - 1, 0, source_height);
+  const int source_right = std::clamp<double>(std::ceil(static_cast<double>(src[0]) + src[2]) + 1, 0, source_width);
+  const int source_bottom = std::clamp<double>(std::ceil(static_cast<double>(src[1]) + src[3]) + 1, 0, source_height);
+  const int cropped_width = source_right - source_left, cropped_height = source_bottom - source_top;
+  if (cropped_width <= 0 || cropped_height <= 0) return 1;
+  std::vector<uint8_t> premul;
+  if (!source_bgra) premul.resize(static_cast<size_t>(cropped_width) * cropped_height * 4);
+  if (!source_bgra) for (int row = 0; row < cropped_height; ++row) for (int column = 0; column < cropped_width; ++column) {
+    const auto* original = source + static_cast<size_t>(source_top + row) * source_row_bytes + (source_left + column) * 4;
+    auto* pixel = premul.data() + (static_cast<size_t>(row) * cropped_width + column) * 4;
+    pmjs::convertPixel(original, pmjs::PixelEncoding::StraightRGBA8,
+                       pixel, pmjs::PixelEncoding::PremultipliedBGRA8);
+  }
+  SkBitmap bitmap;
+  const auto* borrowed = source + static_cast<size_t>(source_top) * source_row_bytes + source_left * 4;
+  if (!bitmap.installPixels(SkImageInfo::MakeN32Premul(cropped_width, cropped_height),
+      source_bgra ? const_cast<uint8_t*>(borrowed) : premul.data(),
+      source_bgra ? source_row_bytes : cropped_width * 4)) return 0;
+  SkPaint paint;
+  paint.setAntiAlias(dst[2] < 1 || dst[3] < 1);
+  paint.setAlpha(std::min(255L, std::lround(alpha * 256)));
+  paint.setFilterQuality(smoothing ? kLow_SkFilterQuality : kNone_SkFilterQuality);
+  surface->getCanvas()->translate(-left, -top);
+  surface->getCanvas()->drawBitmapRect(bitmap, SkRect::MakeXYWH(src[0] - source_left, src[1] - source_top, src[2], src[3]),
+    SkRect::MakeXYWH(dst[0], dst[1], dst[2], dst[3]), &paint, SkCanvas::kFast_SrcRectConstraint);
+  return 1;
+} catch (...) { return 0; }
+
+int pmjs_skia65_rect_bgra(uint8_t* pixels, int width, int height, int left, int top,
+    const float rect[4], uint32_t color, float stroke, const float gradient[4],
+    const float* offsets, const uint32_t* colors, size_t count) {
+  return pmjs_skia65_rect_bgra_strided(pixels, width, height, static_cast<size_t>(width) * 4,
+    left, top, rect, color, stroke, gradient, offsets, colors, count);
+}
+int pmjs_skia65_image_bgra_strided(uint8_t* pixels, int width, int height, size_t row_bytes,
+    int left, int top, const uint8_t* source, int source_width, int source_height,
+    size_t source_row_bytes, const float src[4], const float dst[4], float alpha, int smoothing) {
+  return imageStrided(pixels, width, height, row_bytes, left, top, source, source_width,
+    source_height, source_row_bytes, src, dst, alpha, smoothing, true);
+}
+int pmjs_skia65_image_rgba_strided(uint8_t* pixels, int width, int height, size_t row_bytes,
+    int left, int top, const uint8_t* source, int source_width, int source_height,
+    size_t source_row_bytes, const float src[4], const float dst[4], float alpha, int smoothing) {
+  return imageStrided(pixels, width, height, row_bytes, left, top, source, source_width,
+    source_height, source_row_bytes, src, dst, alpha, smoothing, false);
+}
+int pmjs_skia65_image_bgra(uint8_t* pixels, int width, int height, int left, int top,
+    const uint8_t* source, int source_width, int source_height,
+    const float src[4], const float dst[4], float alpha, int smoothing) {
+  return pmjs_skia65_image_rgba_strided(pixels, width, height, static_cast<size_t>(width) * 4,
+    left, top, source, source_width, source_height, static_cast<size_t>(source_width) * 4,
+    src, dst, alpha, smoothing);
+}
+
+int pmjs_skia65_circle_coverage(float x, float y, float radius,
+    const float transform[6], int left, int top, int width, int height,
+    uint8_t* coverage, const float* clips, size_t clip_count) try {
+  std::vector<uint8_t> pixels(static_cast<size_t>(width) * height * 4, 0);
+  auto surface = SkSurface::MakeRasterDirect(
+    SkImageInfo::MakeN32(width, height, kPremul_SkAlphaType), pixels.data(), width * 4);
+  if (!surface) return 0;
+  SkMatrix matrix;
+  matrix.setAll(transform[0], transform[2], transform[4] - left,
+    transform[1], transform[3], transform[5] - top, 0, 0, 1);
+  SkPath path;
+  const auto oval = SkRect::MakeLTRB(x - radius, y - radius, x + radius, y + radius);
+  path.addOval(oval);
+  SkPaint paint;
+  paint.setColor(SK_ColorWHITE);
+  paint.setAntiAlias(true);
+  for (size_t i = 0; i < clip_count; ++i) {
+    const auto* clip = clips + i * 4;
+    surface->getCanvas()->clipRect(SkRect::MakeXYWH(clip[0] - left, clip[1] - top, clip[2], clip[3]), SkClipOp::kIntersect, true);
+  }
+  surface->getCanvas()->concat(matrix);
+  surface->getCanvas()->drawPath(path, paint);
+  for (size_t i = 0; i < static_cast<size_t>(width) * height; ++i) coverage[i] = pixels[i * 4 + 3];
+  return 1;
+} catch (...) { return 0; }
+
+int pmjs_skia65_triangle_coverage(const float points[6],
+    float stroke_width, float miter_limit, float stroke_alpha,
+    float left, float top, int width, int height, uint8_t* coverage) try {
+  std::vector<uint8_t> pixels(static_cast<size_t>(width) * height * 4, 0);
+  auto surface = SkSurface::MakeRasterDirect(
+    SkImageInfo::MakeN32(width, height, kPremul_SkAlphaType), pixels.data(), width * 4);
+  if (!surface) return 0;
+  auto* canvas = surface->getCanvas();
+  canvas->translate(-left, -top);
+  SkPath path;
+  path.moveTo(points[0], points[1]);
+  path.lineTo(points[2], points[3]);
+  path.lineTo(points[4], points[5]);
+  path.close();
+  SkPaint paint;
+  paint.setColor(SK_ColorWHITE);
+  canvas->save();
+  canvas->clipPath(path, SkClipOp::kIntersect, true);
+  canvas->drawRect(path.getBounds(), paint);
+  canvas->restore();
+  const size_t count = static_cast<size_t>(width) * height;
+  for (size_t i = 0; i < count; ++i) {
+    coverage[i * 4] = pixels[i * 4 + 3];
+    coverage[i * 4 + 1] = 0;
+    coverage[i * 4 + 2] = 0;
+    coverage[i * 4 + 3] = 255;
+  }
+  class StrokeCoverage final : public SkBlitter {
+   public:
+    StrokeCoverage(uint8_t* pixels, int width, int height) : pixels_(pixels), width_(width), height_(height) {}
+    void pixel(int x, int y, unsigned alpha, uint8_t mode) {
+      if (x < 0 || y < 0 || x >= width_ || y >= height_ || !alpha) return;
+      auto* p = pixels_ + (static_cast<size_t>(y) * width_ + x) * 4;
+      p[1] = static_cast<uint8_t>(alpha);
+      p[2] = mode;
+    }
+    void blitH(int x, int y, int width) override {
+      for (int i = 0; i < width; ++i) pixel(x + i, y, 255, 0);
+    }
+    void blitAntiH(int x, int y, const SkAlpha aa[], const int16_t runs[]) override {
+      while (*runs) {
+        const int count = *runs;
+        for (int i = 0; i < count; ++i) pixel(x + i, y, *aa, 0);
+        x += count; aa += count; runs += count;
+      }
+    }
+    void blitAntiH2(int x, int y, U8CPU a0, U8CPU a1) override {
+      pixel(x, y, a0, 1); pixel(x + 1, y, a1, 1);
+    }
+    void blitAntiV2(int x, int y, U8CPU a0, U8CPU a1) override {
+      pixel(x, y, a0, 1); pixel(x, y + 1, a1, 1);
+    }
+    void blitV(int x, int y, int height, SkAlpha alpha) override {
+      for (int i = 0; i < height; ++i) pixel(x, y + i, alpha, 2);
+    }
+   private:
+    uint8_t* pixels_;
+    int width_, height_;
+  } blitter(coverage, width, height);
+  paint.setStyle(SkPaint::kStroke_Style);
+  paint.setStrokeWidth(stroke_width);
+  paint.setStrokeMiter(miter_limit);
+  SkPath strokePath;
+  if (stroke_width > 0 && stroke_alpha > 0) {
+    paint.getFillPath(path, &strokePath);
+    strokePath.offset(-left, -top);
+    SkScan::AntiFillPath(strokePath, SkRasterClip(SkIRect::MakeWH(width, height)), &blitter);
+  }
+  return 1;
+} catch (...) { return 0; }
+
 const char* pmjs_skia65_identity() {
   return "skia65/bd0dafbc8112f6cfa92a8096d8cb5696d8535ef9;freetype/707cd028b2b419a5491d444b128d8092afd9f201;harfbuzz/1.7.3;icu/60.2;abi/2";
 }
