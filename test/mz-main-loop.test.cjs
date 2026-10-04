@@ -18,7 +18,8 @@ test('MZ host tick drains native services, pending work, and scheduler in order'
     globalThis: null,
     PMJS: { tasks: { drain() { events.push('pending'); } },
       rpgmaker: { audio: { update() { events.push('audio'); } } },
-      web: { video: { update() { events.push('video'); } } } },
+      web: { video: { update() { events.push('video'); } } },
+      mz: { graphics: { updatePresentation() { events.push('presentation'); } } } },
     pmjsDrainScheduler(now) { events.push('scheduler:' + now); },
     SceneManager: { _scene: null },
   });
@@ -32,4 +33,6 @@ test('MZ host tick drains native services, pending work, and scheduler in order'
     'audio', 'video', 'pending', 'scheduler:25',
   ]);
   assert.equal(typeof context.__pmjsRender, 'function');
+  context.__pmjsRender(25);
+  assert.equal(events.at(-1), 'presentation', 'presentation keeps running when the scene ticker is stopped');
 });

@@ -109,6 +109,23 @@ napi_value inputSnapshot(napi_env env, napi_callback_info) try {
   }
   check(env, napi_set_named_property(env, result, "keyEvents", events), "cannot set key events");
   platform.clearKeyEvents();
+  napi_value pointers;
+  check(env, napi_create_array_with_length(env, platform.pointerEvents().size(), &pointers), "cannot create pointer events");
+  for (std::size_t i = 0; i < platform.pointerEvents().size(); ++i) {
+    const auto& source = platform.pointerEvents()[i];
+    napi_value event = moduleObject(env);
+    napi_set_named_property(env, event, "type", string(env, source.type));
+    napi_set_named_property(env, event, "x", number(env, source.x));
+    napi_set_named_property(env, event, "y", number(env, source.y));
+    napi_set_named_property(env, event, "button", uint32(env, source.button));
+    napi_set_named_property(env, event, "buttons", uint32(env, source.buttons));
+    napi_set_named_property(env, event, "deltaX", number(env, source.deltaX));
+    napi_set_named_property(env, event, "deltaY", number(env, source.deltaY));
+    napi_set_named_property(env, event, "cancelled", boolean(env, source.cancelled));
+    napi_set_element(env, pointers, i, event);
+  }
+  napi_set_named_property(env, result, "pointerEvents", pointers);
+  platform.clearPointerEvents();
   const auto pads = platform.gamepads();
   napi_value gamepads;
   check(env, napi_create_array_with_length(env, pads.size(), &gamepads), "cannot create gamepads");

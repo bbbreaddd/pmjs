@@ -2,6 +2,7 @@
 
 (function() {
   if (typeof Utils === 'undefined') return;
+  if (PMJS.web && PMJS.web.usePhysicalViewport) PMJS.web.usePhysicalViewport();
 
   Utils.canUseWebGL = function() {
     return !!(NativeHost.render && NativeHost.scene);

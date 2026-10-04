@@ -6,7 +6,7 @@
   }
 
   // MZ renders from its ticker during the update phase.
-  function render() {}
+  function render() { PMJS.mz.graphics.updatePresentation(); }
 
   globalThis.pmjsMzTick = tick;
   globalThis.pmjsMzRender = render;

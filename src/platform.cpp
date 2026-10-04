@@ -509,6 +509,13 @@ bool Platform::pollEvents() {
           break;
         case SDL_WINDOWEVENT_FOCUS_LOST:
           windowFocused_ = false;
+          pointerEvents_.clear();
+          for (int button = 0; button < 3; ++button) {
+            const std::uint32_t bit = button == 1 ? 4 : button == 2 ? 2 : 1;
+            if (!(pointerButtons_ & bit)) continue;
+            pointerButtons_ &= ~bit;
+            pointerEvents_.push_back({"mouseup", pointerX_, pointerY_, button, pointerButtons_, 0, 0, true});
+          }
           keysDown_.clear(); keysPressed_.clear(); keyEvents_.clear();
           gamepadDown_.clear(); gamepadPressed_.clear();
           down_ = pressed_ = 0;
@@ -518,6 +525,38 @@ bool Platform::pollEvents() {
         case SDL_WINDOWEVENT_HIDDEN:
         case SDL_WINDOWEVENT_MINIMIZED: windowVisible_ = false; break;
         default: break;
+      }
+    }
+    if (windowFocused_ && (event.type == SDL_MOUSEMOTION || event.type == SDL_MOUSEBUTTONDOWN ||
+        event.type == SDL_MOUSEBUTTONUP || event.type == SDL_MOUSEWHEEL)) {
+      const auto pointerWindow = event.type == SDL_MOUSEMOTION ? event.motion.windowID :
+        event.type == SDL_MOUSEWHEEL ? event.wheel.windowID : event.button.windowID;
+      if (pointerWindow != 0 && pointerWindow != SDL_GetWindowID(static_cast<SDL_Window*>(window_))) continue;
+      if (event.type == SDL_MOUSEMOTION) {
+        pointerX_ = event.motion.x; pointerY_ = event.motion.y;
+        pointerEvents_.push_back({"mousemove", pointerX_, pointerY_, 0, pointerButtons_, 0, 0});
+      } else if (event.type == SDL_MOUSEWHEEL) {
+#if SDL_VERSION_ATLEAST(2, 26, 0)
+        pointerX_ = event.wheel.mouseX; pointerY_ = event.wheel.mouseY;
+#endif
+        const double direction = event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -100 : 100;
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+        const double dx = event.wheel.preciseX, dy = event.wheel.preciseY;
+#else
+        const double dx = event.wheel.x, dy = event.wheel.y;
+#endif
+        pointerEvents_.push_back({"wheel", pointerX_, pointerY_, 0, pointerButtons_, dx * direction, -dy * direction});
+      } else {
+        const int button = event.button.button == SDL_BUTTON_LEFT ? 0 :
+          event.button.button == SDL_BUTTON_MIDDLE ? 1 : event.button.button == SDL_BUTTON_RIGHT ? 2 : -1;
+        if (button >= 0) {
+          pointerX_ = event.button.x; pointerY_ = event.button.y;
+          const std::uint32_t bit = button == 1 ? 4 : button == 2 ? 2 : 1;
+          if (event.type == SDL_MOUSEBUTTONDOWN) pointerButtons_ |= bit;
+          else pointerButtons_ &= ~bit;
+          pointerEvents_.push_back({event.type == SDL_MOUSEBUTTONDOWN ? "mousedown" : "mouseup",
+            pointerX_, pointerY_, button, pointerButtons_, 0, 0});
+        }
       }
     }
     const char* action = nullptr;

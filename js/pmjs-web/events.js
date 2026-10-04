@@ -97,3 +97,6 @@ EventTarget.prototype.dispatchEvent = function(event) {
 };
 
 globalThis.EventTarget = EventTarget;
+globalThis.PMJS = globalThis.PMJS || {};
+PMJS.web = PMJS.web || {};
+PMJS.web.input = PMJS.web.input || new EventTarget();

@@ -17,6 +17,7 @@ int standardGamepadButton(int sdlButton);
 class Platform {
  public:
   struct KeyEvent { int keyCode; bool down; bool repeat; bool capsLock; std::string code; std::string key; bool shift; bool ctrl; bool alt; bool meta; };
+  struct PointerEvent { std::string type; double x, y; int button; std::uint32_t buttons; double deltaX, deltaY; bool cancelled = false; };
   struct GamepadState { int index; int instance; bool connected; std::string id; std::vector<int> buttonsDown; std::vector<int> buttonsPressed; std::vector<double> axes; };
   Platform(int width, int height, std::string title);
   ~Platform();
@@ -31,6 +32,8 @@ class Platform {
   const std::vector<int>& keysPressed() const { return keysPressed_; }
   const std::vector<KeyEvent>& keyEvents() const { return keyEvents_; }
   void clearKeyEvents() { keyEvents_.clear(); }
+  const std::vector<PointerEvent>& pointerEvents() const { return pointerEvents_; }
+  void clearPointerEvents() { pointerEvents_.clear(); }
   std::vector<GamepadState> gamepads() const;
   bool consumePress(const std::string& action);
   std::uint32_t inputState() const;
@@ -66,6 +69,9 @@ class Platform {
   std::vector<int> keysDown_;
   std::vector<int> keysPressed_;
   std::vector<KeyEvent> keyEvents_;
+  std::vector<PointerEvent> pointerEvents_;
+  std::uint32_t pointerButtons_ = 0;
+  double pointerX_ = 0, pointerY_ = 0;
   std::vector<std::pair<int, std::vector<int>>> gamepadDown_;
   std::vector<std::pair<int, std::vector<int>>> gamepadPressed_;
   int windowWidth_ = 0;

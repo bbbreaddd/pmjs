@@ -44,6 +44,35 @@ int main() {
   event.window.windowID = platform.windowId();
   event.window.event = SDL_WINDOWEVENT_FOCUS_GAINED;
   if (SDL_PushEvent(&event) != 1 || !platform.pollEvents()) return 1;
+  platform.clearPointerEvents();
+  for (Uint32 type : {SDL_MOUSEBUTTONDOWN, SDL_MOUSEBUTTONUP}) {
+    event = {}; event.type = type; event.button.windowID = platform.windowId();
+    event.button.button = SDL_BUTTON_LEFT; event.button.x = 17; event.button.y = 23;
+    if (SDL_PushEvent(&event) != 1) return 1;
+  }
+  event = {}; event.type = SDL_MOUSEWHEEL; event.wheel.windowID = platform.windowId();
+  event.wheel.x = 1; event.wheel.y = -2;
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+  event.wheel.preciseX = 1; event.wheel.preciseY = -2;
+#endif
+  if (SDL_PushEvent(&event) != 1 || !platform.pollEvents()) return 1;
+  const auto& pointer = platform.pointerEvents();
+  if (pointer.size() != 3 || pointer[0].type != "mousedown" || pointer[1].type != "mouseup" ||
+      pointer[0].x != 17 || pointer[0].y != 23 || pointer[0].buttons != 1 || pointer[1].buttons != 0 ||
+      pointer[2].deltaX != 100 || pointer[2].deltaY != 200) return 1;
+  platform.clearPointerEvents();
+  event = {}; event.type = SDL_MOUSEBUTTONDOWN; event.button.windowID = platform.windowId();
+  event.button.button = SDL_BUTTON_RIGHT;
+  if (SDL_PushEvent(&event) != 1 || !platform.pollEvents()) return 1;
+  platform.clearPointerEvents();
+  event = {}; event.type = SDL_WINDOWEVENT; event.window.windowID = platform.windowId();
+  event.window.event = SDL_WINDOWEVENT_FOCUS_LOST;
+  if (SDL_PushEvent(&event) != 1 || !platform.pollEvents()) return 1;
+  if (platform.pointerEvents().size() != 1 || platform.pointerEvents()[0].button != 2 ||
+      !platform.pointerEvents()[0].cancelled || platform.pointerEvents()[0].buttons != 0) return 1;
+  platform.clearPointerEvents();
+  event.window.event = SDL_WINDOWEVENT_FOCUS_GAINED;
+  if (SDL_PushEvent(&event) != 1 || !platform.pollEvents()) return 1;
   event = {};
   event.type = SDL_KEYDOWN;
   event.key.keysym.sym = SDLK_RETURN;

@@ -108,8 +108,13 @@ CanvasElement.prototype.toDataURL = function() {
     base64Bytes(NativeHost.canvas.encodePng(this._ensureNativeCanvas().handle));
 };
 CanvasElement.prototype.getBoundingClientRect = function() {
-  return { left: 0, top: 0, width: this.width, height: this.height };
+  return this._pmjsPresentationRect || { left: 0, top: 0, width: this.width, height: this.height };
 };
+
+Object.defineProperties(CanvasElement.prototype, {
+  offsetLeft: { get: function() { return this.getBoundingClientRect().left; } },
+  offsetTop: { get: function() { return this.getBoundingClientRect().top; } }
+});
 
 function GenericElement(tagName) {
   EventTarget.call(this);

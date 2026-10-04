@@ -43,8 +43,8 @@ test('MZ platform capabilities do not claim missing native services', () => {
 
 test('MZ local save paths resolve through the native storage filesystem', t => {
   const { createStorage } = require('../runner/storage.cjs');
-  const os = require('node:os');
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-mz-save-contract-'));
+  const { temporaryDirectory } = require('./helpers/temp.cjs');
+  const directory = temporaryDirectory('pmjs-mz-save-contract-');
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const storage = createStorage(directory);
   const context = vm.createContext({ Buffer, Utils: {}, StorageManager: {},

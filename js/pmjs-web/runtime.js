@@ -5,9 +5,18 @@ globalThis.self = globalThis;
 globalThis.top = globalThis;
 globalThis.parent = globalThis;
 globalThis.focus = function() {};
+globalThis.PMJS = globalThis.PMJS || {};
+PMJS.web = PMJS.web || {};
 var nativeWindowState = { focused: true, visible: true };
 globalThis.__pmjsUpdateWindowState = function(state) {
   if (!state || typeof state !== 'object') return;
+  var resized = Number(state.width) > 0 && Number(state.height) > 0 &&
+    (nativeWindowWidth !== Number(state.width) || nativeWindowHeight !== Number(state.height));
+  if (Number(state.width) > 0) nativeWindowWidth = Number(state.width);
+  if (Number(state.height) > 0) nativeWindowHeight = Number(state.height);
+  if (resized && typeof globalThis.dispatchEvent === 'function') {
+    globalThis.dispatchEvent({ type: 'resize', target: globalThis });
+  }
   var wasFocused = nativeWindowState.focused;
   var wasVisible = nativeWindowState.visible;
   nativeWindowState.focused = state.focused !== false;
@@ -90,18 +99,20 @@ globalThis.screen = {
     return nativeDisplayHeight;
   }
 };
+var nativeViewportUsesWindow = false;
+PMJS.web.usePhysicalViewport = function() { nativeViewportUsesWindow = true; };
 Object.defineProperty(globalThis, 'innerWidth', {
   configurable: true,
   enumerable: true,
   get: function() {
-    return nativeLogicalWidth;
+    return nativeViewportUsesWindow ? nativeWindowWidth : nativeLogicalWidth;
   }
 });
 Object.defineProperty(globalThis, 'innerHeight', {
   configurable: true,
   enumerable: true,
   get: function() {
-    return nativeLogicalHeight;
+    return nativeViewportUsesWindow ? nativeWindowHeight : nativeLogicalHeight;
   }
 });
 globalThis.moveBy = function() {};
@@ -132,6 +143,32 @@ function dispatchNativeKey(source) {
     preventDefault: function() { this.defaultPrevented = true; } };
   document.dispatchEvent(event);
 }
+var nativePointerDownTarget = null;
+function dispatchNativePointer(source) {
+  if (!globalThis.document) return;
+  var target = PMJS.web.presentation ?
+    PMJS.web.presentation.pointerTarget(source.x, source.y) : document;
+  target = target || document;
+  function dispatch(type) {
+    var event = { type: type, target: target, bubbles: true,
+      pageX: source.x, pageY: source.y, clientX: source.x, clientY: source.y,
+      button: source.button || 0, buttons: source.buttons || 0,
+      deltaX: source.deltaX || 0, deltaY: source.deltaY || 0, deltaMode: 0,
+      preventDefault: function() { this.defaultPrevented = true; },
+      stopPropagation: function() { this._pmjsPropagationStopped = true; } };
+    var current = target;
+    while (current && current !== document && !event._pmjsPropagationStopped) {
+      current.dispatchEvent(event); current = current.parentNode;
+    }
+    if (!event._pmjsPropagationStopped) document.dispatchEvent(event);
+  }
+  if (source.type === 'mousedown' && source.button === 0) nativePointerDownTarget = target;
+  dispatch(source.type);
+  if (source.type === 'mouseup' && source.button === 0) {
+    if (!source.cancelled && nativePointerDownTarget === target) dispatch('click');
+    nativePointerDownTarget = null;
+  }
+}
 Object.defineProperty(globalThis, 'navigator', { configurable: true, writable: true, value: {
   userAgent: 'pmjs native runtime',
   platform: nativePlatform.platform === 'linux'
@@ -145,6 +182,9 @@ Object.defineProperty(globalThis, 'navigator', { configurable: true, writable: t
 globalThis.__pmjsReceiveInput = function(state) {
   if (!state) return;
   globalThis.__pmjsInputSnapshot = state;
+  if (PMJS.web.input) PMJS.web.input.dispatchEvent({ type: 'snapshot', snapshot: state });
+  if (PMJS.web.presentation) PMJS.web.presentation.sync();
+  (state.pointerEvents || []).forEach(dispatchNativePointer);
   var pads = state.gamepads || [];
   if (!nativeGamepadExposed && nativeWindowState.focused) {
     for (var interactionIndex = 0; interactionIndex < pads.length; interactionIndex++) {

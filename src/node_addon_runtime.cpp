@@ -93,6 +93,8 @@ napi_value windowState(napi_env env, napi_callback_info) try {
     boolean(env, platform.windowFocused())), "cannot set window focus state");
   check(env, napi_set_named_property(env, result, "visible",
     boolean(env, platform.windowVisible())), "cannot set window visibility state");
+  napi_set_named_property(env, result, "width", number(env, platform.windowWidth()));
+  napi_set_named_property(env, result, "height", number(env, platform.windowHeight()));
   return result;
 } catch (const std::exception& error) {
   napi_throw_error(env, nullptr, error.what());
