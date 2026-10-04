@@ -360,6 +360,7 @@ std::uint32_t Renderer::createFilterProgram(const std::string& fragmentSource, c
   if (source.find("precision ") == std::string::npos) {
     source = "precision " + pixiFragmentPrecision_ + " float;\n" + source;
   }
+  source = "precision highp sampler2D;\n" + source;
   for (std::size_t index = 0; index < filterPrograms_.size(); ++index) {
     if (filterPrograms_[index].source == vertexSource + "\n" + source) return index + 1;
   }
@@ -381,7 +382,6 @@ std::uint32_t Renderer::createFilterProgram(const std::string& fragmentSource, c
   )";
   if (vertexSource.size() > 65536 || vertexSource.find('\0') != std::string::npos)
     throw std::invalid_argument("invalid filter vertex source");
-  source = "precision highp sampler2D;\n" + source;
   const GLuint program = linkProgram(vertexSource.empty() ? vertex : vertexSource.c_str(), source.c_str());
   try {
     FilterProgram result{program, vertexSource + "\n" + source, !vertexSource.empty(), {}};
