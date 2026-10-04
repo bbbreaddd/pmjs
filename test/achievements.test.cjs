@@ -101,7 +101,9 @@ test('Greenworks and steamworks.js adapters share the portable store', () => {
   vm.runInContext(greenworksCode, h.context);
   vm.runInContext(steamworksCode, h.context);
   const greenworks = modules.greenworks;
+  assert.equal(greenworks.isSteamRunning(), false);
   assert.equal(greenworks.initAPI(), true);
+  assert.equal(greenworks.isSteamRunning(), false, 'local initialization is not a Steam client');
   assert.equal(greenworks.getNumberOfAchievements(), 2);
   let callback = null;
   assert.equal(greenworks.activateAchievement('ONE', value => { callback = value; }), true);
@@ -128,6 +130,44 @@ test('does not advertise Steam modules without explicit portable policy', () => 
   vm.runInContext(steamworksCode, h.context);
   assert.equal(modules.greenworks, undefined);
   assert.equal(modules['steamworks.js'], undefined);
+  assert.equal(h.files.has('achievements.json'), false);
+});
+
+test('explicit Greenworks backend preserves exports, receivers, failures and callbacks', () => {
+  const h = harness({}, []);
+  h.context.PMJS.config.steam.provider = 'greenworks';
+  const failure = new Error('Steam backend failed');
+  const backend = {
+    running: false,
+    isSteamRunning() { return this.running; },
+    initAPI() { return false; },
+    init() { throw failure; },
+    getAchievement(id, callback) { callback(id === 'REAL'); }
+  };
+  h.context.NativeHost.greenworks = backend;
+  const modules = {};
+  h.context.registerCommonJsModule = (names, value) => {
+    for (const name of names) modules[name] = value;
+  };
+  vm.runInContext(greenworksCode, h.context);
+  const api = modules['./greenworks/greenworks'];
+  assert.equal(api, backend);
+  assert.equal(modules['./js/libs/greenworks'], backend);
+  assert.equal(api.initAPI(), false);
+  assert.equal(api.isSteamRunning(), false);
+  backend.running = true;
+  assert.equal(api.isSteamRunning(), true);
+  assert.throws(() => api.init(), error => error === failure);
+  let unlocked;
+  api.getAchievement('REAL', value => { unlocked = value; });
+  assert.equal(unlocked, true);
+  assert.equal(h.files.has('achievements.json'), false, 'external backend must not initialize local state');
+});
+
+test('explicit Greenworks provider fails when no backend was supplied', () => {
+  const h = harness({}, []);
+  h.context.PMJS.config.steam.provider = 'greenworks';
+  assert.throws(() => vm.runInContext(greenworksCode, h.context), /requires --greenworks-module/);
   assert.equal(h.files.has('achievements.json'), false);
 });
 

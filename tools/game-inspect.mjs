@@ -121,7 +121,10 @@ export function readPluginManifest(gameDir) {
         else if (character === '\\') escaped = true;
         else if (character === '"') quoted = false;
       } else if (character === '"') quoted = true;
-      else if (character === ',' && /^\s*[\]}]/.test(array.slice(index + 1))) continue;
+      else if (character === ',' && /^\s*[\]}]/.test(array.slice(index + 1))) {
+        const previous = json.trimEnd().slice(-1);
+        if (!['[', '{', ':', ','].includes(previous)) continue;
+      }
       json += character;
     }
     const entries = JSON.parse(json);

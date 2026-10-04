@@ -34,10 +34,12 @@ function writeAddon(root, polls = [false]) {
 
 test('CLI parses the documented options including --config', () => {
   const value = parse(['--addon','a','--game-root','g','--bootstrap','b','--save-root','s',
-    '--config','my-config.json','--width','640','--height','480','--image-warm-cache-bytes','1024']);
+    '--config','my-config.json','--width','640','--height','480','--image-warm-cache-bytes','1024',
+    '--greenworks-module','steam/greenworks.js']);
   assert.equal(value.width, 640); assert.equal(value.height, 480);
   assert.equal(value.config, 'my-config.json');
   assert.equal(value.imageWarmCacheBytes, 1024);
+  assert.equal(value.greenworksModule, 'steam/greenworks.js');
 });
 test('validation rejects missing paths and invalid dimensions', () => {
   assert.throws(() => validate({}), /addon is required/);
@@ -176,6 +178,37 @@ test('runner loads its addon and bootstrap while allowing Node jobs to finish', 
   assert.deepEqual(globalThis.__pmjsGameInfo,
     { title: 'Test', width: 320, height: 240, displayWidth: 640, displayHeight: 480 });
   assert.equal(globalThis.NativeHost.render.setLogicalSize, undefined);
+});
+
+test('runner loads an explicit Greenworks module in the host before bootstrap', async () => {
+  const options = fixture(`
+    if (!NativeHost.greenworks.hostProcess) throw new Error('backend loaded with guest process');
+    if (NativeHost.greenworks.initAPI() !== false) throw new Error('changed backend result');
+    globalThis.__pmjsTick=()=>{}; globalThis.__pmjsRender=()=>{};
+  `);
+  options.greenworksModule = path.join(options.gameRoot, 'greenworks.cjs');
+  fs.writeFileSync(options.greenworksModule, `module.exports = {
+    hostProcess: process === require('node:process'),
+    initAPI() { return false; }, isSteamRunning() { return false; }
+  };`);
+  await run(options);
+  assert.equal(globalThis.NativeHost.greenworks, require(options.greenworksModule));
+});
+
+test('missing, malformed and unloadable Greenworks modules fail before native initialization', async () => {
+  const options = fixture('throw new Error("bootstrap should not run");');
+  const host = require(options.addon);
+  let initializations = 0;
+  host.initialize = () => { initializations++; };
+  options.greenworksModule = path.join(options.gameRoot, 'missing.cjs');
+  await assert.rejects(run(options), error => error.code === 'MODULE_NOT_FOUND');
+  options.greenworksModule = path.join(options.gameRoot, 'invalid.cjs');
+  fs.writeFileSync(options.greenworksModule, 'module.exports = null;');
+  await assert.rejects(run(options), /must export initAPI and isSteamRunning/);
+  options.greenworksModule = path.join(options.gameRoot, 'invalid.node');
+  fs.writeFileSync(options.greenworksModule, 'not a native addon');
+  await assert.rejects(run(options), error => error.code === 'ERR_DLOPEN_FAILED');
+  assert.equal(initializations, 0);
 });
 
 test('runner closes the initialized host when storage setup fails', async () => {

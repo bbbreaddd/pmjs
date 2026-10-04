@@ -122,8 +122,14 @@ function GenericElement(tagName) {
 GenericElement.prototype = Object.create(EventTarget.prototype);
 GenericElement.prototype.constructor = GenericElement;
 GenericElement.prototype.appendChild = function(child) {
+  for (var ancestor = this; ancestor; ancestor = ancestor.parentNode) {
+    if (ancestor === child) throw new Error('Cannot append an ancestor');
+  }
+  if (child.parentNode) child.parentNode.removeChild(child);
   child.parentNode = this;
   this.children.push(child);
+  if (this instanceof ScriptElement) this._prepare();
+  prepareConnectedScripts(child);
   return child;
 };
 GenericElement.prototype.removeChild = function(child) {
@@ -144,6 +150,96 @@ GenericElement.prototype.removeAttribute = function(name) {
   if (descriptor && descriptor.set) this[name] = '';
 };
 GenericElement.prototype.getElementsByTagName = function() { return []; };
+
+function escapeElementText(text) {
+  return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+Object.defineProperties(GenericElement.prototype, {
+  textContent: {
+    configurable: true,
+    get: function() {
+      var text = this._innerHTML === undefined ? this._textContent || '' :
+        this._innerHTML.replace(/<[^>]*>/g, '').replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, function(_, entity) {
+          if (entity[0] === '#') return String.fromCodePoint(parseInt(entity.slice(entity[1].toLowerCase() === 'x' ? 2 : 1), entity[1].toLowerCase() === 'x' ? 16 : 10));
+          return { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }[entity.toLowerCase()];
+        });
+      return text + this.children.map(function(child) { return child.textContent || ''; }).join('');
+    },
+    set: function(value) {
+      this.children.forEach(function(child) { child.parentNode = null; });
+      this.children = [];
+      this._innerHTML = undefined;
+      this._textContent = value === null ? '' : String(value);
+    }
+  },
+  innerHTML: {
+    configurable: true,
+    get: function() {
+      return (this._innerHTML === undefined ? escapeElementText(this._textContent || '') : this._innerHTML) +
+        this.children.map(function(child) { return child.outerHTML || ''; }).join('');
+    },
+    set: function(value) {
+      this.textContent = '';
+      this._innerHTML = value === null ? '' : String(value);
+    }
+  },
+  outerHTML: {
+    get: function() {
+      if (this.tagName === '#TEXT') return escapeElementText(this.textContent);
+      var tag = this.tagName.toLowerCase();
+      return '<' + tag + (this.id ? ' id="' + escapeElementText(this.id).replace(/"/g, '&quot;') + '"' : '') +
+        '>' + this.innerHTML + '</' + tag + '>';
+    }
+  }
+});
+
+function prepareConnectedScripts(node) {
+  if (node instanceof ScriptElement) node._prepare();
+  (node.children || []).slice().forEach(prepareConnectedScripts);
+}
+
+function ScriptElement() {
+  GenericElement.call(this, 'script');
+  this.src = '';
+  this.type = '';
+  this._started = false;
+}
+ScriptElement.prototype = Object.create(GenericElement.prototype);
+ScriptElement.prototype.constructor = ScriptElement;
+ScriptElement.prototype._prepare = function() {
+  if (this._started || this.src) return;
+  var root = this;
+  while (root.parentNode) root = root.parentNode;
+  if (root !== documentTarget) return;
+  var type = String(this.type || '').trim().toLowerCase();
+  if (type && type !== 'text/javascript' && type !== 'application/javascript') return;
+  if (!this.textContent) return;
+  this._started = true;
+  var script = this;
+  try { pmjsExecuteScriptElement(script); }
+  catch (error) { pmjsReportEventError(error); }
+};
+Object.defineProperties(ScriptElement.prototype, {
+  textContent: {
+    configurable: true,
+    get: function() {
+      return this.children.map(function(child) { return child.textContent || ''; }).join('');
+    },
+    set: function(value) {
+      this.children.forEach(function(child) { child.parentNode = null; });
+      var text = new GenericElement('#text');
+      text.textContent = value === null ? '' : String(value);
+      text.parentNode = this;
+      this.children = [text];
+      this._prepare();
+    }
+  },
+  text: {
+    configurable: true,
+    get: function() { return this.textContent; },
+    set: function(value) { this.textContent = value; }
+  }
+});
 
 function AudioElement() {
   GenericElement.call(this, 'audio');
@@ -188,18 +284,7 @@ VideoElement.prototype = Object.create(GenericElement.prototype);
 VideoElement.prototype.constructor = VideoElement;
 ['loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough', 'error',
   'play', 'pause', 'ended'].forEach(function(type) {
-  var property = 'on' + type;
-  var storage = '_eventHandler_' + type;
-  Object.defineProperty(VideoElement.prototype, property, {
-    configurable: true,
-    get: function() { return this[storage] || null; },
-    set: function(handler) {
-      var previous = this[storage];
-      if (previous) this.removeEventListener(type, previous);
-      this[storage] = typeof handler === 'function' ? handler : null;
-      if (this[storage]) this.addEventListener(type, this[storage]);
-    }
-  });
+  EventTarget.defineEventHandlerProperty(VideoElement.prototype, type);
 });
 Object.defineProperty(VideoElement.prototype, 'src', {
   get: function() { return this._src; },
@@ -569,7 +654,6 @@ Object.defineProperty(NativeImage.prototype, 'src', {
           image.width = image.naturalWidth = loaded.width;
           image.height = image.naturalHeight = loaded.height;
           image.complete = true;
-          pmjsInvokeEventHandler(image, image.onload, { type: 'load', target: image });
           image.dispatchEvent({ type: 'load', target: image });
           PMJS.images.loadCompleted(image);
         }, function(error) {
@@ -581,7 +665,6 @@ Object.defineProperty(NativeImage.prototype, 'src', {
           image.complete = true;
           image._pmjsLoadFailed = true;
           image._pmjsLoadError = error;
-          pmjsInvokeEventHandler(image, image.onerror, { type: 'error', target: image });
           image.dispatchEvent({ type: 'error', target: image });
         }).then(function() { pendingNativeImageLoads--; }, function(error) {
           pendingNativeImageLoads--;
@@ -615,7 +698,6 @@ Object.defineProperty(NativeImage.prototype, 'src', {
         image.complete = true;
         image._pmjsLoadFailed = false;
         image._pmjsLoadError = null;
-        pmjsInvokeEventHandler(image, image.onload, { type: 'load', target: image });
         image.dispatchEvent({ type: 'load', target: image });
         PMJS.images.loadCompleted(image);
       }, function(error) {
@@ -637,7 +719,6 @@ Object.defineProperty(NativeImage.prototype, 'src', {
         image.complete = true;
         image._pmjsLoadFailed = true;
         image._pmjsLoadError = error;
-        pmjsInvokeEventHandler(image, image.onerror, { type: 'error', target: image });
         image.dispatchEvent({ type: 'error', target: image });
       }).then(function() { pendingNativeImageLoads--; },
         function(err) {
@@ -676,11 +757,15 @@ Object.defineProperty(documentTarget, 'visibilityState', {
 documentTarget.documentElement = new GenericElement('html');
 documentTarget.body = new GenericElement('body');
 documentTarget.head = new GenericElement('head');
+documentTarget.documentElement.parentNode = documentTarget;
+documentTarget.documentElement.appendChild(documentTarget.head);
+documentTarget.documentElement.appendChild(documentTarget.body);
 documentTarget.createElement = function(tagName) {
   var name = String(tagName).toLowerCase();
   if (name === 'canvas') return new CanvasElement();
   if (name === 'audio') return new AudioElement();
   if (name === 'video') return new VideoElement();
+  if (name === 'script') return new ScriptElement();
   var element = new GenericElement(tagName);
   if (name === 'style') {
     element.sheet = {

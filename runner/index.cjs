@@ -149,8 +149,14 @@ function validate(input) {
       (!Number.isSafeInteger(imageWarmCacheBytes) || imageWarmCacheBytes < 0)) {
     throw new Error('imageWarmCacheBytes must be a non-negative safe integer');
   }
+  if (options.greenworksModule !== undefined &&
+      (typeof options.greenworksModule !== 'string' || !options.greenworksModule)) {
+    throw new Error('greenworksModule must be a nonempty host module path');
+  }
   return {
     ...options,
+    ...(options.greenworksModule === undefined ? {} :
+      { greenworksModule: path.resolve(options.greenworksModule) }),
     addon: path.resolve(options.addon),
     gameRoot: path.resolve(options.gameRoot),
     bootstrap: path.resolve(options.bootstrap),
@@ -164,6 +170,12 @@ function validate(input) {
 async function run(input) {
   const options = validate(input);
   const hostProcess = process;
+  // Load host addons before the bootstrap installs the guest process and require.
+  const greenworks = options.greenworksModule ? require(options.greenworksModule) : null;
+  if (options.greenworksModule && (!greenworks || typeof greenworks.initAPI !== 'function' ||
+      typeof greenworks.isSteamRunning !== 'function')) {
+    throw new Error('Greenworks backend must export initAPI and isSteamRunning');
+  }
 
   const timing = parseTimingConfig(hostProcess.env);
   const swapDefault = resolveSwapDefault(hostProcess.env, timing);
@@ -186,6 +198,9 @@ async function run(input) {
       if (source === null) throw new Error(`cannot load script: ${relative}`);
       return vm.runInThisContext(source, { filename: path.join(options.gameRoot, relative) });
     };
+    native.runtime.runScript = source => vm.runInThisContext(String(source), {
+      filename: 'inline-script.js'
+    });
     const hostSetTimeout = globalThis.setTimeout.bind(globalThis);
     const hostSetImmediate = typeof globalThis.setImmediate === 'function'
       ? globalThis.setImmediate.bind(globalThis) : null;
@@ -199,7 +214,8 @@ async function run(input) {
       plugins: native.plugins, mv: native.mv,
       scene: native.scene, images: native.images, assets: native.assets, fs: native.fs,
       storage: native.storage, input: native.input, canvas: native.canvas,
-      media: native.media, dialog: native.dialog, effects: native.effects };
+      media: native.media, dialog: native.dialog, effects: native.effects,
+      greenworks };
     globalThis.__pmjsBuiltinRequire = require;
     globalThis.__pmjsNativeRuntime = true;
     globalThis.__pmjsTimingConfig = {

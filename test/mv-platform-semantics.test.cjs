@@ -322,7 +322,7 @@ test('greenworks compatibility registers its supported module aliases', () => {
   const gw = modules.greenworks;
   assert.equal(modules['./greenworks'], gw);
   assert.equal(gw.initAPI(), true);
-  assert.equal(gw.isSteamRunning(), true);
+  assert.equal(gw.isSteamRunning(), false);
   assert.equal(gw.getSteamId().isValid, false);
   assert.equal(gw.isSubscribedApp(), false);
   assert.equal(gw.isGameOverlayEnabled(), false);

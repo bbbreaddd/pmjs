@@ -1,5 +1,6 @@
 function EventTarget() {
   this._listeners = Object.create(null);
+  this._eventHandlers = Object.create(null);
 }
 
 var reportingEventError = false;
@@ -62,6 +63,19 @@ EventTarget.prototype.removeEventListener = function(type, listener) {
   if (index >= 0) listeners.splice(index, 1);
 };
 
+EventTarget.defineEventHandlerProperty = function(prototype, type) {
+  Object.defineProperty(prototype, 'on' + type, {
+    configurable: true,
+    get: function() { return this._eventHandlers[type] || null; },
+    set: function(handler) {
+      var previous = this._eventHandlers[type];
+      if (previous) this.removeEventListener(type, previous);
+      this._eventHandlers[type] = typeof handler === 'function' ? handler : null;
+      if (this._eventHandlers[type]) this.addEventListener(type, this._eventHandlers[type]);
+    }
+  });
+};
+
 EventTarget.prototype.dispatchEvent = function(event) {
   if (!event || typeof event.type !== 'string') {
     throw new TypeError('event must have a string type');
@@ -69,6 +83,13 @@ EventTarget.prototype.dispatchEvent = function(event) {
   var listeners = (this._listeners[event.type] || []).slice();
   event.target = event.target || this;
   event.currentTarget = this;
+  if (!event._pmjsHandlerInvoked && !this._eventHandlers[event.type]) {
+    var returned;
+    try {
+      if (typeof this['on' + event.type] === 'function') returned = this['on' + event.type].call(this, event);
+    } catch (error) { pmjsReportEventError(error); }
+    if (returned === false && typeof event.preventDefault === 'function') event.preventDefault();
+  }
   for (var index = 0; index < listeners.length; index++) {
     pmjsInvokeEventHandler(this, listeners[index], event);
   }

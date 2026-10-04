@@ -32,9 +32,21 @@
         var loadedName = String(plugin.name).replace(/\.js$/i, '');
         var self = this;
         var file = plugin.name + '.js';
-        PMJS.plugins.execute(loadedName, function() {
-          self.loadScript(file);
-        });
+        try {
+          PMJS.plugins.execute(loadedName, function() {
+            self.loadScript(file);
+          });
+        } catch (error) {
+          var failed = PMJS.plugins.dump().guest.some(function(entry) {
+            return entry.key === loadedName.toLowerCase() && entry.state === 'failed';
+          });
+          if (!failed) throw error;
+          if (!NativeHost.fs.exists(this._path + file)) {
+            this.onError({ target: { _url: this._path + file } });
+          } else {
+            pmjsReportEventError(error);
+          }
+        }
       }, this);
     };
     PluginManager._pmjsLifecycleInstalled = true;

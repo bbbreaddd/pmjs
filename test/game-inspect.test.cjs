@@ -67,7 +67,8 @@ test('generated manifests allow trailing commas without changing string values o
   const dir = temporaryDirectory('pmjs-game-commas-');
   writeGame(dir, { pluginsJs: 'var $plugins = [{"name":"Literal,]\\\"","status":true,"parameters":{"text":"x,}",},},]; throw new Error("never execute");' });
   assert.deepEqual(readPluginManifest(dir).enabled, ['Literal,]"']);
-  for (const literal of ['[,,]', '[{"name":"A"},,]', '[{"name":"A","status":true}, console.log("bad")]']) {
+  for (const literal of ['[,]', '[,,]', '[{"name":"A"},,]',
+    '[{"name":"A","parameters":{,}}]', '[{"name":"A","status":true}, console.log("bad")]']) {
     writeGame(dir, { pluginsJs: 'var $plugins = ' + literal + ';' });
     assert.throws(() => readPluginManifest(dir), /unsupported generated plugin manifest/);
   }

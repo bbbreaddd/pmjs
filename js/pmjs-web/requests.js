@@ -62,8 +62,6 @@ XMLHttpRequest.prototype.open = function(method, url, async) {
   this.responseText = '';
   this.response = null;
   this.readyState = 1;
-  pmjsInvokeEventHandler(this, this.onreadystatechange,
-    { type: 'readystatechange', target: this });
   this.dispatchEvent({ type: 'readystatechange', target: this });
 };
 XMLHttpRequest.prototype.overrideMimeType = function() {};
@@ -75,6 +73,7 @@ XMLHttpRequest.prototype.overrideMimeType = function() {};
 XMLHttpRequest.prototype._emit = function(type, generation) {
   var event = { type: type, target: this };
   pmjsInvokeEventHandler(this, this['on' + type], event);
+  event._pmjsHandlerInvoked = true;
   if (this._requestGeneration !== generation) return false;
   this.dispatchEvent(event);
   return this._requestGeneration === generation;

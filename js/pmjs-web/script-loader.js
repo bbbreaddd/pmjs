@@ -27,6 +27,14 @@
   if (typeof NativeHost !== 'undefined' && NativeHost.runtime &&
       typeof NativeHost.runtime.loadScript === 'function') {
     var rawLoadScript = NativeHost.runtime.loadScript;
+    globalThis.pmjsExecuteScriptElement = function(script) {
+      currentScriptStack.push(script);
+      try {
+        NativeHost.runtime.runScript(script.textContent);
+      } finally {
+        currentScriptStack.pop();
+      }
+    };
     NativeHost.runtime.loadScript = function(path) {
       var script = {
         src: resolveScriptVirtualSrc(path)

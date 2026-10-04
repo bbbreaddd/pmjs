@@ -2,9 +2,17 @@
 (function() {
   var noop = function() {};
   var steam = PMJS.config.steam || {};
-  if (steam.provider !== 'portable') return;
+  if (steam.provider !== 'portable' && steam.provider !== 'greenworks') return;
   var names = ['greenworks', 'greenworks.js', './greenworks', './greenworks.js',
-    './js/libs/greenworks', './js/libs/greenworks.js'];
+    './js/libs/greenworks', './js/libs/greenworks.js',
+    './greenworks/greenworks', './greenworks/greenworks.js'];
+  if (steam.provider === 'greenworks') {
+    if (!NativeHost.greenworks) {
+      throw new Error('Greenworks provider requires --greenworks-module with a compatible host backend');
+    }
+    registerCommonJsModule(names, NativeHost.greenworks);
+    return;
+  }
   var initialized = false;
   function initialize() {
     try { pmjsAchievements.initialize(); initialized = true; return true; }
@@ -23,7 +31,7 @@
   }
   var compat = {
     init: initialize, initAPI: initialize,
-    isSteamRunning: function() { return initialized; },
+    isSteamRunning: function() { return false; },
     restartAppIfNecessary: function() { return false; },
     getAppId: function() { return steam.appId || 0; },
     getSteamId: function() { return { screenName: steam.screenName || '', steamId: steam.steamId || '0',

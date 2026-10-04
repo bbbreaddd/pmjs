@@ -10,6 +10,7 @@ function parse(argv) {
     ['--save-root', 'saveRoot'], ['--asset-root', 'assetRoot'], ['--title', 'title'],
     ['--width', 'width'], ['--height', 'height'],
     ['--config', 'config'],
+    ['--greenworks-module', 'greenworksModule'],
     ['--image-warm-cache-bytes', 'imageWarmCacheBytes'],
   ]);
   for (let index = 0; index < argv.length; index += 2) {
