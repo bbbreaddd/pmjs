@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { reviewedFunctionFixture } = require('./helpers/reviewed-function-fixture.cjs');
 
 const runtimeRoot = path.resolve(__dirname, '..');
 const optimizationsSource = fs.readFileSync(
@@ -14,7 +15,12 @@ const source = fs.readFileSync(
 
 function createKnownOliviaSprite() {
   function Sprite() {
-    this._horrorFilters = {};
+    this.filterReads = 0;
+    this.filters = {};
+    Object.defineProperty(this, '_horrorFilters', {
+      get() { this.filterReads++; return this.filters; },
+      set(value) { this.filters = value; }
+    });
   }
   Sprite.prototype.synchronizeHorrorFiltersWithSource = function() {
     if (!!this._horrorFiltersSource && !!this._horrorFiltersSource._horrorFilters) {
@@ -39,7 +45,6 @@ function createKnownOliviaSprite() {
     this.updateHorrorTV();
   };
   Sprite.prototype.updateHorrorNoise = function() {
-    this.noiseCalls = (this.noiseCalls || 0) + 1;
     if (!!this._horrorFilters.noiseFilter) {
       if (this._horrorFilters.noiseFilter.animated) {
         this._horrorFilters.noiseFilter.seed = Math.random() * 3;
@@ -47,7 +52,6 @@ function createKnownOliviaSprite() {
     }
   };
   Sprite.prototype.updateHorrorGlitch = function() {
-    this.glitchCalls = (this.glitchCalls || 0) + 1;
     if (!!this._horrorFilters.glitchFilter) {
       if (this._horrorFiltersGlitchSpecial &&
           this._horrorFilters.glitchFilter.animated) {
@@ -59,7 +63,6 @@ function createKnownOliviaSprite() {
     }
   };
   Sprite.prototype.updateHorrorTV = function() {
-    this.tvCalls = (this.tvCalls || 0) + 1;
     if (!!this._horrorFilters.tvFilter) {
       if (this._horrorFilters.tvFilter.animated) {
         this._horrorFilters.tvFilter.time +=
@@ -69,6 +72,14 @@ function createKnownOliviaSprite() {
   };
   return Sprite;
 }
+
+const fixturePrototype = createKnownOliviaSprite().prototype;
+const fixtureSource = reviewedFunctionFixture(source, {
+  isKnownOliviaUpdateHorrorEffects: fixturePrototype.updateHorrorEffects,
+  isKnownOliviaNoise: fixturePrototype.updateHorrorNoise,
+  isKnownOliviaGlitch: fixturePrototype.updateHorrorGlitch,
+  isKnownOliviaTV: fixturePrototype.updateHorrorTV
+});
 
 const registrySources = {
   lifecycle: 'js/pmjs-rpgmaker/lifecycle.js',
@@ -84,13 +95,13 @@ function loadRegistrySupport(sandbox) {
 }
 
 function loadAdapter(extra = {}) {
-  const sandbox = Object.assign({ console }, extra);
+  const sandbox = Object.assign({ console, __pmjsBuiltinRequire: require }, extra);
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-core/config.js'), 'utf8'), sandbox);
   vm.runInContext(optimizationsSource, sandbox, { filename: 'optimizations.js' });
   loadRegistrySupport(sandbox);
-  vm.runInContext(source, sandbox, { filename: 'olivia-horror-effects.js' });
+  vm.runInContext(fixtureSource, sandbox, { filename: 'olivia-horror-effects.js' });
   return { sandbox };
 }
 
@@ -111,16 +122,16 @@ test('Olivia fast path skips inactive work and preserves active plugin updates f
 
   const inactive = new Sprite();
   inactive.updateHorrorEffects();
-  assert.equal(inactive.noiseCalls, undefined);
-  assert.equal(inactive.glitchCalls, undefined);
-  assert.equal(inactive.tvCalls, undefined);
+  assert.equal(inactive.filterReads, 1);
 
   const filtered = new Sprite();
-  filtered._horrorFilters = { noiseFilter: {} };
+  filtered._horrorFilters = { noiseFilter: { animated: true },
+    glitchFilter: { refreshRequest: true },
+    tvFilter: { animated: true, time: 0, aniSpeed: 2 } };
   filtered.updateHorrorEffects();
-  assert.equal(filtered.noiseCalls, 1);
-  assert.equal(filtered.glitchCalls, 1);
-  assert.equal(filtered.tvCalls, 1);
+  assert.ok(filtered.filters.noiseFilter.seed >= 0);
+  assert.equal(filtered.filters.glitchFilter.refreshRequest, false);
+  assert.equal(filtered.filters.tvFilter.time, 2);
 });
 
 test('Olivia integration leaves unknown outer wrappers on reference behavior', () => {
@@ -166,8 +177,7 @@ test('Olivia dispatcher guard does not skip an overridden delegated method', () 
   sprite.updateHorrorNoise = function() { extendedCalls++; };
   sprite.updateHorrorEffects();
   assert.equal(extendedCalls, 1);
-  assert.equal(sprite.glitchCalls, 1);
-  assert.equal(sprite.tvCalls, 1);
+  assert.ok(sprite.filterReads >= 2);
 });
 
 test('Olivia leaves a recognized dispatcher untouched when a delegate is composed', () => {
@@ -184,8 +194,7 @@ test('Olivia leaves a recognized dispatcher untouched when a delegate is compose
   const sprite = new Sprite();
   sprite.updateHorrorEffects();
   assert.equal(composedCalls, 1);
-  assert.equal(sprite.glitchCalls, 1);
-  assert.equal(sprite.tvCalls, 1);
+  assert.ok(sprite.filterReads >= 2);
 });
 
 test('Olivia fast path is inert when the plugin is absent', () => {
@@ -201,13 +210,13 @@ test('Olivia fast path is inert when the plugin is absent', () => {
 });
 
 test('Olivia adapter activates on its trigger plugin and ignores others', () => {
-  const sandbox = { console };
+  const sandbox = { console, __pmjsBuiltinRequire: require };
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-core/config.js'), 'utf8'), sandbox);
   vm.runInContext(optimizationsSource, sandbox, { filename: 'optimizations.js' });
   loadRegistrySupport(sandbox);
-  vm.runInContext(source, sandbox, { filename: 'olivia-horror-effects.js' });
+  vm.runInContext(fixtureSource, sandbox, { filename: 'olivia-horror-effects.js' });
 
   sandbox.Sprite = createKnownOliviaSprite();
   sandbox.Olivia = { HorrorEffects: {} };
@@ -235,9 +244,7 @@ test('Olivia optimization disabled via disableOptimizations leaves stock behavio
 
   const inactive = new Sprite();
   inactive.updateHorrorEffects();
-  assert.equal(inactive.noiseCalls, 1);
-  assert.equal(inactive.glitchCalls, 1);
-  assert.equal(inactive.tvCalls, 1);
+  assert.equal(inactive.filterReads, 3);
 });
 
 test('normal execution retains guest synchronization and later hooks', () => {
@@ -257,7 +264,7 @@ test('normal execution retains guest synchronization and later hooks', () => {
   };
   sprite.synchronizeHorrorFiltersWithSource();
   sprite.updateHorrorEffects();
-  assert.equal(sprite.tvCalls, undefined);
+  assert.equal(sprite.filters.tvFilter, undefined);
   sprite._horrorFiltersSource = {
     _horrorFilters: { tvFilter: { animated: true, time: 0, aniSpeed: 2 } }
   };
@@ -278,9 +285,7 @@ test('inactive effects skip work while active effects and late aliases remain au
   const sprite = new Sprite();
   sprite.synchronizeHorrorFiltersWithSource();
   sprite.updateHorrorEffects();
-  assert.equal(sprite.noiseCalls, undefined);
-  assert.equal(sprite.glitchCalls, undefined);
-  assert.equal(sprite.tvCalls, undefined);
+  assert.equal(sprite.filterReads, 1);
 
   sprite._horrorFilters.tvFilter = { animated: true, time: 0, aniSpeed: 2 };
   sprite.updateHorrorEffects();
@@ -318,7 +323,7 @@ test('custom dispatchers retain their work and guard only inactive known leaves'
   sprite.updateHorrorEffects();
   assert.equal(sprite.hookCalls, 1);
 
-  assert.equal(sprite.tvCalls, undefined);
+  assert.equal(sprite.filters.tvFilter, undefined);
 
   sprite._horrorFilters.tvFilter = { animated: true, time: 0, aniSpeed: 1 };
   sprite.updateHorrorEffects();
@@ -326,3 +331,30 @@ test('custom dispatchers retain their work and guard only inactive known leaves'
   assert.equal(sprite._horrorFilters.tvFilter.time, 1);
 
 });
+
+for (const method of ['updateHorrorNoise', 'updateHorrorGlitch', 'updateHorrorTV']) {
+  test('Olivia preserves added work retaining all stock tokens in ' + method, () => {
+    for (const composedDispatcher of [false, true]) {
+      const Sprite = createKnownOliviaSprite();
+      const original = Sprite.prototype[method];
+      Sprite.prototype[method] = Function('return ' + original.toString().replace('{',
+        '{ this.extraCalls = (this.extraCalls || 0) + 1;'))();
+      const modified = Sprite.prototype[method];
+      if (composedDispatcher) {
+        const dispatcher = Sprite.prototype.updateHorrorEffects;
+        Sprite.prototype.updateHorrorEffects = function() {
+          this.outerCalls = (this.outerCalls || 0) + 1;
+          return dispatcher.apply(this, arguments);
+        };
+      }
+      const { sandbox } = loadAdapter({ Sprite, Olivia: { HorrorEffects: {} } });
+      sandbox.PMJS.plugins.execute('Olivia_HorrorEffects', function() {});
+      sandbox.PMJS.phases.emit('afterGuestPlugins');
+      const sprite = new Sprite();
+      sprite.updateHorrorEffects(); sprite.updateHorrorEffects();
+      assert.equal(sprite.extraCalls, 2);
+      assert.equal(Sprite.prototype[method], modified);
+      if (composedDispatcher) assert.equal(sprite.outerCalls, 2);
+    }
+  });
+}

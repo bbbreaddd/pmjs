@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { reviewedFunctionFixture } = require('./helpers/reviewed-function-fixture.cjs');
 
 const runtimeRoot = path.resolve(__dirname, '..');
 const registrySources = {
@@ -37,8 +38,7 @@ function loadAssignedFunction(assignment, nextAssignment, context) {
   return context.loaded;
 }
 
-// Faithful YED method shapes: every strong fingerprint token the shipped
-// YED_Tiled plugin carries.
+// Independent tilemap fixtures exercise the optimized algorithms.
 function faithfulPaintAllTiles(startX, startY) {
   this._priorityTilesCount = 0;
   for (const layer of this._layers[Symbol.iterator]()) {
@@ -95,13 +95,14 @@ function faithfulPaintTilesLayer(layer, startX, startY) {
 
 function installInContext(configure) {
   const context = {
+    __pmjsBuiltinRequire: require,
     console,
     comparePmjsTilemapChildren: () => 0
   };
   context.globalThis = context;
   vm.createContext(context);
   loadRegistrySupport(context);
-  vm.runInContext(source, context, { filename: 'js/pmjs-plugins/yed/tiled.js' });
+  vm.runInContext(fixtureSource, context, { filename: 'js/pmjs-plugins/yed/tiled.js' });
   configure(context);
   context.PMJS.plugins.execute('YED_Tiled', function() {});
   context.PMJS.phases.emit('afterGuestPlugins');
@@ -206,6 +207,7 @@ test('YED level hiding retains the guest dispatcher without state-based skipping
     Spriteset_Map: function Spriteset_Map() {},
     TiledTilemap: function TiledTilemap() {},
     console,
+    __pmjsBuiltinRequire: require,
     comparePmjsTilemapChildren: () => 0,
     $gameMap: { currentMapLevel: 1 }
   };
@@ -221,7 +223,7 @@ test('YED level hiding retains the guest dispatcher without state-based skipping
   vm.runInContext('Spriteset_Map.prototype._updateHideOnLevel = function() {' +
     ' this._tilemap.hideOnLevel($gameMap.currentMapLevel); };', context);
   loadRegistrySupport(context);
-  vm.runInContext(source, context,
+  vm.runInContext(fixtureSource, context,
     { filename: 'js/pmjs-plugins/yed/tiled.js' });
   context.PMJS.plugins.execute('YED_Tiled', function() {});
   context.PMJS.phases.emit('afterGuestPlugins');
@@ -356,17 +358,7 @@ test('YED fast paths install when recognized as known YED implementation', () =>
   let knownChildOrder;
   const { context } = installInContext(ctx => {
     delete ctx.comparePmjsTilemapChildren;
-    knownChildOrder = function knownChildOrder(a, b) {
-      if ((a.z || 0) !== (b.z || 0)) {
-        return (a.z || 0) - (b.z || 0);
-      } else if ((a.y || 0) !== (b.y || 0)) {
-        return (a.y || 0) - (b.y || 0);
-      } else if ((a.priority || 0) !== (b.priority || 0)) {
-        return (a.priority || 0) - (b.priority || 0);
-      } else {
-        return a.spriteId - b.spriteId;
-      }
-    };
+    knownChildOrder = faithfulChildOrder;
     ctx.TiledTilemap = function TiledTilemap() {};
     ctx.TiledTilemap.prototype._paintAllTiles = faithfulPaintAllTiles;
     ctx.TiledTilemap.prototype._updateLayerPositions =
@@ -395,6 +387,7 @@ test('YED fast paths install when recognized as known YED implementation', () =>
 
 test('YED adapter activates on its trigger plugin and ignores others', () => {
   const sandbox = {
+    __pmjsBuiltinRequire: require,
     console,
     comparePmjsTilemapChildren: () => 0,
   };
@@ -411,7 +404,7 @@ test('YED adapter activates on its trigger plugin and ignores others', () => {
     vm.runInContext(fs.readFileSync(path.join(runtimeRoot, file), 'utf8'),
       sandbox, { filename: file });
   }
-  vm.runInContext(source, sandbox, { filename: 'js/pmjs-plugins/yed/tiled.js' });
+  vm.runInContext(fixtureSource, sandbox, { filename: 'js/pmjs-plugins/yed/tiled.js' });
 
   sandbox.TiledTilemap = function TiledTilemap() {};
   const paintAllTiles = sandbox.TiledTilemap.prototype._paintAllTiles =
@@ -428,6 +421,7 @@ test('YED adapter activates on its trigger plugin and ignores others', () => {
 
 test('YED integration checks the final guest method composition', () => {
   const sandbox = {
+    __pmjsBuiltinRequire: require,
     console,
     comparePmjsTilemapChildren: () => 0,
   };
@@ -444,7 +438,7 @@ test('YED integration checks the final guest method composition', () => {
     vm.runInContext(fs.readFileSync(path.join(runtimeRoot, file), 'utf8'),
       sandbox, { filename: file });
   }
-  vm.runInContext(source, sandbox, { filename: 'js/pmjs-plugins/yed/tiled.js' });
+  vm.runInContext(fixtureSource, sandbox, { filename: 'js/pmjs-plugins/yed/tiled.js' });
 
   sandbox.TiledTilemap = function TiledTilemap() {};
   sandbox.TiledTilemap.prototype._paintAllTiles = faithfulPaintAllTiles;
@@ -559,14 +553,40 @@ function faithfulShaderTilemapUpdateTransform() {
   PIXI.Container.prototype.updateTransform.call(this); // eslint-disable-line no-undef
 }
 
+function faithfulChildOrder(a, b) {
+      if ((a.z || 0) !== (b.z || 0)) {
+        return (a.z || 0) - (b.z || 0);
+      } else if ((a.y || 0) !== (b.y || 0)) {
+        return (a.y || 0) - (b.y || 0);
+      } else if ((a.priority || 0) !== (b.priority || 0)) {
+        return (a.priority || 0) - (b.priority || 0);
+      } else {
+        return a.spriteId - b.spriteId;
+      }
+}
+
+const fixtureSource = reviewedFunctionFixture(source, {
+  looksLikeKnownYedChildOrder: faithfulChildOrder,
+  looksLikeKnownYedPaintAllTiles: faithfulPaintAllTiles,
+  looksLikeKnownYedUpdateLayerPositions: faithfulUpdateLayerPositions,
+  looksLikeKnownYedPaintObjectLayers: faithfulPaintObjectLayers,
+  looksLikeKnownYedPaintTilesLayer: faithfulPaintTilesLayer,
+  looksLikeKnownYedPaintTile: faithfulPaintTile,
+  looksLikeKnownYedPaintPriorityTile: faithfulPaintPriorityTile,
+  looksLikeKnownYedUpdateAnim: faithfulUpdateAnim,
+  looksLikeKnownShaderTilemapUpdateTransform: faithfulShaderTilemapUpdateTransform
+});
+
 function makeAnimatedTilemap({
   tileWidth = 32,
   tileHeight = 32,
   squareTiles = true,
   disableOptimizations = [],
-  ownUpdateTransform = null
+  ownUpdateTransform = null,
+  guestOverrides = {}
 } = {}) {
   const context = {
+    __pmjsBuiltinRequire: require,
     console,
     Math,
     Number,
@@ -588,7 +608,7 @@ function makeAnimatedTilemap({
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-core/config.js'), 'utf8'), context);
   vm.runInContext(optSrc, context, { filename: 'pmjs-core/optimizations.js' });
   loadRegistrySupport(context);
-  vm.runInContext(source, context, { filename: 'js/pmjs-plugins/yed/tiled.js' });
+  vm.runInContext(fixtureSource, context, { filename: 'js/pmjs-plugins/yed/tiled.js' });
 
   const ShaderTilemap = function ShaderTilemap() {};
   ShaderTilemap.prototype.updateTransform = faithfulShaderTilemapUpdateTransform;
@@ -606,6 +626,7 @@ function makeAnimatedTilemap({
     TiledTilemap.prototype.updateTransform = ownUpdateTransform;
   }
 
+  Object.assign(TiledTilemap.prototype, guestOverrides);
   context.TiledTilemap = TiledTilemap;
   context.Spriteset_Map = function Spriteset_Map() {};
   context.Spriteset_Map.prototype._updateHideOnLevel = function() {};
@@ -914,3 +935,52 @@ test('paint-loop switch refuses dependent indexed animation', () => {
   assert.equal(TiledTilemap.prototype.updateTransform,
     faithfulShaderTilemapUpdateTransform);
 });
+
+for (const [method, original] of [
+  ['_paintAllTiles', faithfulPaintAllTiles],
+  ['_updateLayerPositions', faithfulUpdateLayerPositions],
+  ['_paintObjectLayers', faithfulPaintObjectLayers],
+  ['_paintTilesLayer', faithfulPaintTilesLayer]
+]) {
+  test('YED preserves added work retaining all stock tokens in ' + method, () => {
+    const modified = Function('return ' + original.toString().replace('{',
+      '{ this.extraCalls = (this.extraCalls || 0) + 1;'))();
+    const { context } = installInContext(ctx => {
+      ctx.TiledTilemap = function() {};
+      Object.assign(ctx.TiledTilemap.prototype, {
+        _paintAllTiles: faithfulPaintAllTiles,
+        _updateLayerPositions: faithfulUpdateLayerPositions,
+        _paintObjectLayers: faithfulPaintObjectLayers,
+        _paintTilesLayer: faithfulPaintTilesLayer,
+        [method]: modified
+      });
+      ctx.Spriteset_Map = function() {};
+    });
+    const proto = context.TiledTilemap.prototype;
+    assert.equal(proto[method], modified);
+    assert.equal(proto._pmjsIndexedPaintLoops, undefined);
+    const tilemap = Object.assign(new context.TiledTilemap(), {
+      _priorityTiles: [], _layers: [], origin: { x: 0, y: 0 },
+      _width: 32, _height: 32, _tileWidth: 32, _tileHeight: 32,
+      tiledData: { layers: [{ objects: [] }] }, _paintTile() {}
+    });
+    tilemap[method](0, 0, 0);
+    assert.equal(tilemap.extraCalls, 1);
+  });
+}
+
+for (const [method, original] of [
+  ['_paintTile', faithfulPaintTile],
+  ['_paintPriorityTile', faithfulPaintPriorityTile],
+  ['_updateAnim', faithfulUpdateAnim]
+]) {
+  test('YED animation preserves added work retaining all stock tokens in ' + method, () => {
+    const modified = Function('return ' + original.toString().replace('{',
+      '{ this.extraCalls = (this.extraCalls || 0) + 1; return "retained";'))();
+    const { TiledTilemap, tilemap } = makeAnimatedTilemap({ guestOverrides: { [method]: modified } });
+    assert.equal(TiledTilemap.prototype._pmjsIndexedPaintLoops, true);
+    assert.equal(TiledTilemap.prototype._pmjsIndexedAnimation, undefined);
+    assert.equal(tilemap[method](), 'retained');
+    assert.equal(tilemap.extraCalls, 1);
+  });
+}

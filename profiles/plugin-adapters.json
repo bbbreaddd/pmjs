@@ -13,6 +13,7 @@
         "MPP_EncounterEffect"
       ],
       "modules": [
+        "js/pmjs-plugins/mpp/fragment-sort.js",
         "js/pmjs-plugins/mpp/triangle-bitmap.js"
       ]
     },
@@ -70,6 +71,14 @@
       ],
       "modules": [
         "js/pmjs-plugins/atlas-loader/image-retention.js"
+      ]
+    },
+    {
+      "plugins": [
+        "StartUpFullScreen"
+      ],
+      "modules": [
+        "js/pmjs-plugins/startup-fullscreen/desktop.js"
       ]
     }
   ]

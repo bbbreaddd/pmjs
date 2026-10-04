@@ -17,108 +17,59 @@
     });
   }
 
+  // Match the complete reviewed function, including parameters and literals.
+  // Formatting changes safely retain guest behavior until reviewed.
+  function matchesReviewedFunction(fn, expected) {
+    if (typeof fn !== 'function' || !globalThis.__pmjsBuiltinRequire) return false;
+    var source = Function.prototype.toString.call(fn)
+      .replace(/^function(?:\s+[\w$]+)?\s*\(/, 'function(');
+    return globalThis.__pmjsBuiltinRequire('crypto').createHash('sha256')
+      .update(source).digest('hex') === expected;
+  }
+
   function fnSource(fn) {
     return Function.prototype.toString.call(fn);
   }
 
-  function isGuarded(fn) {
-    return !!(fn && fn._pmjsYedGuard);
-  }
-
-  // Shipped shape: reset priority cursor, repaint layers, hide tail.
   function looksLikeKnownYedPaintAllTiles(fn) {
-    if (typeof fn !== 'function' || isGuarded(fn)) return false;
-    var str = fnSource(fn);
-    return str.indexOf('_priorityTilesCount') !== -1 &&
-           str.indexOf('objectgroup') !== -1 &&
-           str.indexOf('_paintObjectLayers') !== -1 &&
-           str.indexOf('_paintTiles') !== -1 &&
-           str.indexOf('_priorityTiles.length') !== -1 &&
-           str.indexOf('.hide()') !== -1 &&
-           (str.indexOf('layerId = -1') !== -1 ||
-            str.indexOf('layerId=-1') !== -1);
+    return !fn?._pmjsYedGuard && matchesReviewedFunction(fn,
+      'e9b49d6deb06b751a5c2d605b252a951bbf3155c5db0ab4a1a2d2fc090ea2aec');
   }
 
-  // Shipped shape: floor origin on roundPixels, reposition layers/priority.
   function looksLikeKnownYedUpdateLayerPositions(fn) {
-    if (typeof fn !== 'function' || isGuarded(fn)) return false;
-    var str = fnSource(fn);
-    return str.indexOf('roundPixels') !== -1 &&
-           str.indexOf('_layers') !== -1 &&
-           str.indexOf('_priorityTiles') !== -1 &&
-           str.indexOf('origX') !== -1 &&
-           str.indexOf('Math.floor') !== -1 &&
-           (str.indexOf('Symbol.iterator') !== -1 ||
-            str.indexOf('_iterator') !== -1);
+    return !fn?._pmjsYedGuard && matchesReviewedFunction(fn,
+      '192c62e166187aeb511ac40046b4299999b4f53fe4dd1a77a5676f734d8eeeeb');
   }
 
-  // Shipped shape: skip gid-less/hidden objects, paint priority tiles.
   function looksLikeKnownYedPaintObjectLayers(fn) {
-    if (typeof fn !== 'function' || isGuarded(fn)) return false;
-    var str = fnSource(fn);
-    return str.indexOf('objects') !== -1 &&
-           str.indexOf('_getTextureId') !== -1 &&
-           str.indexOf('_paintPriorityTile') !== -1 &&
-           str.indexOf('gid') !== -1 &&
-           str.indexOf('visible') !== -1;
+    return !fn?._pmjsYedGuard && matchesReviewedFunction(fn,
+      '695762171e06d553823ce50a2c1b54067ae9e124c893b24ba116c42cd4a9dc8e');
   }
 
-  // Shipped shape: overdrawn tile grid, paint every cell.
   function looksLikeKnownYedPaintTilesLayer(fn) {
-    if (typeof fn !== 'function' || isGuarded(fn)) return false;
-    var str = fnSource(fn);
-    return str.indexOf('Math.ceil') !== -1 &&
-           str.indexOf('_tileWidth') !== -1 &&
-           str.indexOf('_tileHeight') !== -1 &&
-           str.indexOf('_paintTile') !== -1;
+    return !fn?._pmjsYedGuard && matchesReviewedFunction(fn,
+      '2ffe4cd820664ad0911e7f25db7272416613dfde1d4e2b772373637f0f6773ec');
   }
 
-  // Shipped shape: map bounds, wrap, texture id, anim tile id, addRect/priority.
   function looksLikeKnownYedPaintTile(fn) {
-    if (typeof fn !== 'function' || isGuarded(fn)) return false;
-    var str = fnSource(fn);
-    return str.indexOf('horizontalWrap') !== -1 &&
-           str.indexOf('tilePosition') !== -1 &&
-           str.indexOf('_getTextureId') !== -1 &&
-           str.indexOf('_getAnimTileId') !== -1 &&
-           str.indexOf('_isPriorityTile') !== -1 &&
-           str.indexOf('addRect') !== -1;
+    return !fn?._pmjsYedGuard && matchesReviewedFunction(fn,
+      '3179495717cb0e9ee850549aad37258435125b8b91f980e7a965ecb35fd0f40e');
   }
 
-  // Shipped shape: priority tile sprite setup from pool.
   function looksLikeKnownYedPaintPriorityTile(fn) {
-    if (typeof fn !== 'function' || isGuarded(fn)) return false;
-    var str = fnSource(fn);
-    return str.indexOf('origX') !== -1 &&
-           str.indexOf('origY') !== -1 &&
-           str.indexOf('setFrame') !== -1 &&
-           str.indexOf('_priorityTilesCount') !== -1;
+    return !fn?._pmjsYedGuard && matchesReviewedFunction(fn,
+      '9d8ed2d54c4397ed8fc7ac5ffb202022c37bb11af28b9611c2e42fd8cf22d1c3');
   }
 
-  // Shipped shape: animation timer decrement, advance frame, refresh.
   function looksLikeKnownYedUpdateAnim(fn) {
-    if (typeof fn !== 'function' || isGuarded(fn)) return false;
-    var str = fnSource(fn);
-    return str.indexOf('_animDuration') !== -1 &&
-           str.indexOf('_animFrame') !== -1 &&
-           str.indexOf('_updateAnimFrames') !== -1 &&
-           str.indexOf('refresh') !== -1;
+    return !fn?._pmjsYedGuard && matchesReviewedFunction(fn,
+      '61c2fed25261010df7f9b37abb4f691863ef23f2e3d84aad3f50d4599d9d840b');
   }
 
   function looksLikeKnownShaderTilemapUpdateTransform(tiledProto) {
-    if (Object.prototype.hasOwnProperty.call(tiledProto, 'updateTransform')) {
-      return false;
-    }
-    var fn = tiledProto.updateTransform;
-    if (typeof fn !== 'function' || isGuarded(fn)) return false;
-    var str = fnSource(fn);
-    return str.indexOf('_updateLayerPositions') !== -1 &&
-           str.indexOf('_needsRepaint') !== -1 &&
-           str.indexOf('_lastStartX') !== -1 &&
-           str.indexOf('_lastStartY') !== -1 &&
-           str.indexOf('_paintAllTiles') !== -1 &&
-           str.indexOf('_sortChildren') !== -1 &&
-           str.indexOf('PIXI.Container.prototype.updateTransform.call(this)') !== -1;
+    return !Object.prototype.hasOwnProperty.call(tiledProto, 'updateTransform') &&
+      matchesReviewedFunction(tiledProto.updateTransform,
+        'b7a7a370946ce0ae21b0627c85c55abd0efd8db9eef430a0afcb92f37637f236');
   }
 
   function looksLikeKnownYedImplementation(tiledProto) {
@@ -129,16 +80,8 @@
   }
 
   function looksLikeKnownYedChildOrder(fn) {
-    if (fn === undefined) return true;
-    if (typeof fn !== 'function' || isGuarded(fn)) return false;
-    var body = fnSource(fn);
-    body = body.slice(body.indexOf('{') + 1, body.lastIndexOf('}'));
-    return body.replace(/\s+/g, '') ===
-      'if((a.z||0)!==(b.z||0)){return(a.z||0)-(b.z||0);}' +
-      'elseif((a.y||0)!==(b.y||0)){return(a.y||0)-(b.y||0);}' +
-      'elseif((a.priority||0)!==(b.priority||0)){' +
-      'return(a.priority||0)-(b.priority||0);}' +
-      'else{returna.spriteId-b.spriteId;}';
+    return fn === undefined || matchesReviewedFunction(fn,
+      '4a81bea0be0ed6cb764109f1846f04e4bae324b85999d5258bdf920e3f4eb012');
   }
 
   function looksLikeKnownYedHideOnLevel(fn) {

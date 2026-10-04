@@ -13,61 +13,34 @@
     });
   }
 
-  function fnSource(fn) {
-    return Function.prototype.toString.call(fn);
+  // Match the complete reviewed function, including parameters and literals.
+  // Formatting changes safely retain guest behavior until reviewed.
+  function matchesReviewedFunction(fn, expected) {
+    if (typeof fn !== 'function' || !globalThis.__pmjsBuiltinRequire) return false;
+    var source = Function.prototype.toString.call(fn)
+      .replace(/^function(?:\s+[\w$]+)?\s*\(/, 'function(');
+    return globalThis.__pmjsBuiltinRequire('crypto').createHash('sha256')
+      .update(source).digest('hex') === expected;
   }
 
-  function fnBody(fn) {
-    var str = fnSource(fn);
-    var start = str.indexOf('{');
-    var end = str.lastIndexOf('}');
-    var body = start < 0 || end < 0 ? str : str.slice(start + 1, end);
-    return body
-      .replace(/\/\*[\s\S]*?\*\//g, ' ')
-      .replace(/(^|[^:'"\\])\/\/[^\n]*/g, '$1 ')
-      .replace(/\s+/g, ' ')
-      .trim();
-  }
-
-  // Exactly three delegated calls; anything more is a composed wrapper.
   function isKnownOliviaUpdateHorrorEffects(fn) {
-    if (typeof fn !== 'function' || fn._pmjsOliviaGuard) return false;
-    var statements = fnBody(fn).split(';').map(function(part) {
-      return part.trim();
-    }).filter(function(part) {
-      return part.length !== 0;
-    });
-    return statements.length === 3 &&
-      statements[0] === 'this.updateHorrorNoise()' &&
-      statements[1] === 'this.updateHorrorGlitch()' &&
-      statements[2] === 'this.updateHorrorTV()';
+    return !fn?._pmjsOliviaGuard && matchesReviewedFunction(fn,
+      '5a2e127a3a66d10dbac9ea5a08ce2f600c8c51737d8e60141b8e3fab61f4b66f');
   }
 
   function isKnownOliviaNoise(fn) {
-    if (typeof fn !== 'function' || fn._pmjsOliviaGuard) return false;
-    var str = fnSource(fn);
-    return str.indexOf('_horrorFilters') !== -1 &&
-      str.indexOf('noiseFilter') !== -1 &&
-      str.indexOf('animated') !== -1 &&
-      str.indexOf('Math.random') !== -1;
+    return !fn?._pmjsOliviaGuard && matchesReviewedFunction(fn,
+      '5886848c86d64f40d6342cd985179c8d0f328e8d4231011f044ebcd3b8c2d686');
   }
 
   function isKnownOliviaGlitch(fn) {
-    if (typeof fn !== 'function' || fn._pmjsOliviaGuard) return false;
-    var str = fnSource(fn);
-    return str.indexOf('glitchFilter') !== -1 &&
-      str.indexOf('_horrorFiltersGlitchSpecial') !== -1 &&
-      str.indexOf('updateHorrorGlitchEffect') !== -1 &&
-      str.indexOf('refreshRequest') !== -1;
+    return !fn?._pmjsOliviaGuard && matchesReviewedFunction(fn,
+      '1dfffbc540671e82481f9d99431290422c72a8c1b036a25c68e52708457b406c');
   }
 
   function isKnownOliviaTV(fn) {
-    if (typeof fn !== 'function' || fn._pmjsOliviaGuard) return false;
-    var str = fnSource(fn);
-    return str.indexOf('_horrorFilters') !== -1 &&
-      str.indexOf('tvFilter') !== -1 &&
-      str.indexOf('animated') !== -1 &&
-      str.indexOf('aniSpeed') !== -1;
+    return !fn?._pmjsOliviaGuard && matchesReviewedFunction(fn,
+      'f5469ca6d318fe389e00824aa5daf6f698f3e4a300b21a79372910c5434f2254');
   }
 
   function hasActiveHorrorFilter(sprite) {
