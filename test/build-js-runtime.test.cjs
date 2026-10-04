@@ -34,44 +34,36 @@ function writeMzGame(root, { pixiVersion = '5.3.12', plugins = [] } = {}) {
     `var $plugins = ${JSON.stringify(plugins)};\n`);
   return game;
 }
-test('bundle generation is deterministic and confined to the explicit root', () => {
+test('bundle generation is deterministic and resolves modules from its own checkout', () => {
   const root = temporaryDirectory('pmjs-bundle-');
   const game = writeMvGame(root);
-  const args = [tool, '--root', root, '--game', game, '--output', 'out.js'];
-  childProcess.execFileSync(process.execPath, args);
-  const first = fs.readFileSync(path.join(root, 'out.js'), 'utf8');
-  childProcess.execFileSync(process.execPath, [...args, '--check']);
-  assert.equal(fs.readFileSync(path.join(root, 'out.js'), 'utf8'), first);
-  assert.throws(() => childProcess.execFileSync(process.execPath,
-    [tool, '--root', root, '--game', game, '--output', '../escape.js']),
-  /output must be inside root/);
+  fs.mkdirSync(path.join(root, 'profiles'));
+  fs.writeFileSync(path.join(root, 'profiles/mv.json'), JSON.stringify({ modules: ['foreign.js'] }));
+  const out = path.join(root, 'out.js');
+  const args = [tool, '--game', game, '--output', out];
+  childProcess.execFileSync(process.execPath, args, { cwd: root });
+  const first = fs.readFileSync(out, 'utf8');
+  childProcess.execFileSync(process.execPath, [...args, '--check'], { cwd: root });
+  assert.equal(fs.readFileSync(out, 'utf8'), first);
+  assert.match(first, /BEGIN js\/pmjs-mv\/bootstrap.js/);
+  assert.doesNotMatch(first, /foreign.js/);
 });
 
-test('bundle generation supports --profile with JSON --config and --compat', () => {
-  const tempDir = temporaryDirectory('pmjs-profile-');
-  const config = path.join(tempDir, 'config.json');
-  const compatOne = path.join(tempDir, 'compat-one.js');
-  const compatTwo = path.join(tempDir, 'compat-two.js');
-  const out = path.join(tempDir, 'out.js');
+test('profile bundles accept configuration data without external code insertion', () => {
+  const root = temporaryDirectory('pmjs-profile-');
+  const config = path.join(root, 'config.json');
+  const out = path.join(root, 'out.js');
   fs.writeFileSync(config, JSON.stringify({ title: 'JSON Title', display: { width: 960, height: 540 } }));
-  fs.writeFileSync(compatOne, 'globalThis.COMPAT_ONE = true;\n');
-  fs.writeFileSync(compatTwo, 'globalThis.COMPAT_TWO = true;\n');
-  childProcess.execFileSync(process.execPath,
-    [tool, '--profile', 'mv', '--config', config, '--compat', compatOne,
-      '--compat', compatTwo, '--output', out]);
-  const bundleContent = fs.readFileSync(out, 'utf8');
-  assert.match(bundleContent, /globalThis\.PMJS_GAME_CONFIG = \{/);
-  assert.match(bundleContent, /"title": "JSON Title"/);
-  assert.match(bundleContent,
-    /\/\/ BEGIN compat-one\.js\nglobalThis\.COMPAT_ONE = true;\n\/\/ END compat-one\.js/);
-  assert.match(bundleContent,
-    /\/\/ BEGIN compat-two\.js\nglobalThis\.COMPAT_TWO = true;\n\/\/ END compat-two\.js/);
-  const configIndex = bundleContent.indexOf('"title": "JSON Title"');
-  const compatOneIndex = bundleContent.indexOf('COMPAT_ONE');
-  const compatTwoIndex = bundleContent.indexOf('COMPAT_TWO');
-  const bootstrapIndex = bundleContent.indexOf('BEGIN js/pmjs-mv/bootstrap.js');
-  assert.ok(configIndex < compatOneIndex && compatOneIndex < compatTwoIndex &&
-    compatTwoIndex < bootstrapIndex);
+  childProcess.execFileSync(process.execPath, [tool, '--profile', 'mv', '--config', config, '--output', out]);
+  const bundle = fs.readFileSync(out, 'utf8');
+  assert.ok(bundle.indexOf('"title": "JSON Title"') < bundle.indexOf('BEGIN js/pmjs-core/config.js'));
+  for (const argument of ['--root', '--compat']) {
+    assert.throws(() => childProcess.execFileSync(process.execPath,
+      [tool, '--profile', 'mv', argument, root, '--output', out]), /invalid argument/);
+  }
+  fs.writeFileSync(config, 'globalThis.PMJS_GAME_CONFIG = { title: "Code" };');
+  assert.throws(() => childProcess.execFileSync(process.execPath,
+    [tool, '--profile', 'mv', '--config', config, '--output', out]), /invalid JSON/);
 });
 
 test('bundle validates disableOptimizations shape and orders the registry first', () => {
@@ -110,46 +102,24 @@ test('bundle validates disableOptimizations shape and orders the registry first'
   });
 });
 
-test('capability manifest composes config, base, detected adapters, port entry, and bootstrap', () => {
+test('capability manifest selects only runtime-owned adapters before bootstrap', () => {
   const root = temporaryDirectory('pmjs-capability-');
-  fs.mkdirSync(path.join(root, 'ports', 'demo', 'port', 'native'), { recursive: true });
-  fs.writeFileSync(path.join(root, 'ports', 'demo', 'port', 'native', 'config.js'),
-    'globalThis.PMJS_GAME_CONFIG = { title: "Demo" };\n');
-  fs.writeFileSync(path.join(root, 'ports', 'demo', 'port', 'native', 'extra.js'),
-    'globalThis.DEMO_EXTRA = true;\n');
-  fs.writeFileSync(path.join(root, 'ports', 'demo', 'port', 'native', 'index.json'),
-    JSON.stringify({ modules: ['ports/demo/port/native/extra.js'] }));
-  const game = writeMvGame(root, { plugins: [
-    { name: 'YED_Tiled', status: true },
-    { name: 'Missing_No', status: true },
-  ] });
-  const manifestPath = path.join(root, 'manifest.json');
-  fs.writeFileSync(manifestPath, JSON.stringify({
-    port: {
-      id: 'demo',
-      config: 'ports/demo/port/native/config.js',
-      entry: 'ports/demo/port/native/index.json',
-    },
-  }));
+  const game = writeMvGame(root, { plugins: [{ name: 'YED_Tiled', status: true }, { name: 'Missing_No', status: true }] });
+  const manifest = path.join(root, 'manifest.json');
+  fs.writeFileSync(manifest, JSON.stringify({ adapters: 'auto' }));
   const out = path.join(root, 'out.js');
-  const output = childProcess.execFileSync(process.execPath,
-    [tool, '--root', root, '--manifest', 'manifest.json',
-      '--game', game, '--output', 'out.js']).toString();
-  assert.match(output, /\[pmjs-build\] engine: mv/);
-  assert.match(output, /YED_Tiled -> js\/pmjs-plugins\/yed\/tiled\.js/);
-  assert.match(output, /unmatched enabled plugins: 1/);
-  assert.match(output, /\[pmjs-build\] port: demo \(1 module\)/);
-  const bundleContent = fs.readFileSync(out, 'utf8');
-  const order = [
-    'BEGIN ports/demo/port/native/config.js',
-    'BEGIN js/pmjs-core/optimizations.js',
-    'BEGIN js/pmjs-plugins/yed/tiled.js',
-    'BEGIN ports/demo/port/native/extra.js',
-    'BEGIN js/pmjs-mv/bootstrap.js',
-  ].map(marker => bundleContent.indexOf(marker));
-  assert.ok(order.every(index => index >= 0));
-  assert.deepEqual([...order].sort((a, b) => a - b), order);
-  assert.match(bundleContent, /PMJS_RUNTIME_GAME = \{"engine":"mv","engineVersion":"1\.6\.1","pixiPath":"js\/libs\/pixi\.js","pixiVersion":"4\.8\.9","pixiTilemapPath":"js\/libs\/pixi-tilemap\.js"\}/);
+  const report = childProcess.execFileSync(process.execPath,
+    [tool, '--manifest', manifest, '--game', game, '--output', out]).toString();
+  assert.match(report, /unmatched enabled plugins: 1/);
+  const bundle = fs.readFileSync(out, 'utf8');
+  const adapter = bundle.indexOf('BEGIN js/pmjs-plugins/yed/tiled.js');
+  assert.ok(adapter > bundle.indexOf('BEGIN js/pmjs-core/optimizations.js'));
+  assert.ok(adapter < bundle.indexOf('BEGIN js/pmjs-mv/bootstrap.js'));
+  for (const key of ['port', 'modules', 'append', 'prepend']) {
+    fs.writeFileSync(manifest, JSON.stringify({ [key]: {} }));
+    assert.throws(() => childProcess.execFileSync(process.execPath,
+      [tool, '--manifest', manifest, '--game', game, '--output', out]), /unsupported manifest key/);
+  }
 });
 
 test('alternate Pixi paths from inspection are used by MV setup', () => {
@@ -161,7 +131,7 @@ test('alternate Pixi paths from inspection are used by MV setup', () => {
     path.join(game, 'js', 'pixi-tilemap.js'));
   const out = path.join(root, 'out.js');
   childProcess.execFileSync(process.execPath,
-    [tool, '--root', root, '--game', game, '--output', out]);
+    [tool, '--game', game, '--output', out]);
   const bundle = fs.readFileSync(out, 'utf8');
   const metadata = bundle.match(/globalThis\.PMJS_RUNTIME_GAME = (\{[^\n]+\});/);
   assert.ok(metadata);
@@ -192,7 +162,7 @@ test('MV inspection rejects a missing tilemap library before bundle generation',
   const game = writeMvGame(root);
   fs.unlinkSync(path.join(game, 'js', 'libs', 'pixi-tilemap.js'));
   assert.throws(() => childProcess.execFileSync(process.execPath,
-    [tool, '--root', root, '--game', game, '--output', 'out.js']),
+    [tool, '--game', game, '--output', path.join(root, 'out.js')]),
   /could not find pixi-tilemap\.js/);
 });
 
@@ -203,7 +173,7 @@ test('MZ setup uses the inspected Pixi path and version', () => {
     path.join(game, 'js', 'pixi.js'));
   const out = path.join(root, 'out.js');
   childProcess.execFileSync(process.execPath,
-    [tool, '--root', root, '--game', game, '--output', out]);
+    [tool, '--game', game, '--output', out]);
   const bundle = fs.readFileSync(out, 'utf8');
   const metadata = bundle.match(/globalThis\.PMJS_RUNTIME_GAME = (\{[^\n]+\});/);
   assert.ok(metadata);
@@ -224,50 +194,7 @@ test('MZ setup uses the inspected Pixi path and version', () => {
   assert.equal(context.PMJS_RUNTIME_GAME.engineVersion, '1.8.1');
 });
 
-test('capability manifest rejects port entry modules outside the port directory', () => {
-  const root = temporaryDirectory('pmjs-port-owner-');
-  const manifest = path.join(root, 'manifest.json');
-  fs.mkdirSync(path.join(root, 'ports', 'demo'), { recursive: true });
-  fs.writeFileSync(path.join(root, 'ports', 'demo', 'index.json'), JSON.stringify({
-    modules: ['ports/other/port/native/extra.js'],
-  }));
-  fs.writeFileSync(manifest, JSON.stringify({
-    adapters: 'none',
-    port: { id: 'demo', entry: 'ports/demo/index.json' },
-  }));
-  assert.throws(() => childProcess.execFileSync(process.execPath,
-    [tool, '--root', root, '--manifest', manifest, '--game', writeMvGame(root),
-      '--output', 'out.js']),
-  /entry module .* must live under ports\/demo\//);
-});
 
-test('port containment checks resolved paths instead of string prefixes', () => {
-  const root = temporaryDirectory('pmjs-port-traversal-');
-  const game = writeMvGame(root);
-  fs.mkdirSync(path.join(root, 'ports', 'demo'), { recursive: true });
-  fs.writeFileSync(path.join(root, 'outside.js'), '// outside\n');
-  fs.writeFileSync(path.join(root, 'ports', 'demo', 'index.json'), JSON.stringify({
-    modules: ['ports/demo/../../outside.js'],
-  }));
-  const manifest = path.join(root, 'manifest.json');
-  fs.writeFileSync(manifest, JSON.stringify({
-    port: { id: 'demo', entry: 'ports/demo/index.json' },
-  }));
-  assert.throws(() => childProcess.execFileSync(process.execPath,
-    [tool, '--root', root, '--manifest', manifest, '--game', game, '--output', 'out.js']),
-  /entry module .* must live under ports\/demo\//);
-
-  fs.writeFileSync(manifest, JSON.stringify({
-    port: {
-      id: 'demo',
-      config: 'ports/demo/../../outside.js',
-      entry: 'ports/demo/index.json',
-    },
-  }));
-  assert.throws(() => childProcess.execFileSync(process.execPath,
-    [tool, '--root', root, '--manifest', manifest, '--game', game, '--output', 'out.js']),
-  /port config must live under ports\/demo\//);
-});
 
 test('capability manifest supports explicit adapter selection', () => {
   const root = temporaryDirectory('pmjs-adapters-explicit-');
@@ -278,7 +205,7 @@ test('capability manifest supports explicit adapter selection', () => {
   }));
   const out = path.join(root, 'out.js');
   childProcess.execFileSync(process.execPath,
-    [tool, '--root', root, '--manifest', manifest, '--game', game, '--output', out]);
+    [tool, '--manifest', manifest, '--game', game, '--output', out]);
   const bundleContent = fs.readFileSync(out, 'utf8');
   assert.match(bundleContent, /BEGIN js\/pmjs-plugins\/yed\/tiled\.js/);
   assert.doesNotMatch(bundleContent, /BEGIN js\/pmjs-plugins\/aetherflow\//);
@@ -286,7 +213,7 @@ test('capability manifest supports explicit adapter selection', () => {
     adapters: ['No_Such_Plugin'],
   }));
   assert.throws(() => childProcess.execFileSync(process.execPath,
-    [tool, '--root', root, '--manifest', manifest, '--game', game, '--output', out]),
+    [tool, '--manifest', manifest, '--game', game, '--output', out]),
   /unknown plugin/);
 });
 
@@ -296,10 +223,10 @@ test('adapter modes are deterministic with and without game evidence', () => {
   const manifest = path.join(root, 'manifest.json');
   const out = path.join(root, 'out.js');
   const run = (...extra) => childProcess.execFileSync(process.execPath,
-    [tool, '--root', root, '--manifest', manifest, ...extra]).toString();
+    [tool, '--manifest', manifest, ...extra]).toString();
 
   fs.writeFileSync(manifest, '{}');
-  assert.throws(() => run('--output', out), /requires --game/);
+  assert.throws(() => run('--output', out), /--game DIR/);
 
   fs.writeFileSync(manifest, JSON.stringify({ adapters: 'all' }));
   run('--game', game, '--output', out);
@@ -318,7 +245,7 @@ test('print-modules writes only JSON to stdout', () => {
   const manifest = path.join(root, 'manifest.json');
   fs.writeFileSync(manifest, JSON.stringify({ adapters: 'all' }));
   const output = childProcess.execFileSync(process.execPath,
-    [tool, '--root', root, '--manifest', manifest, '--game', game,
+    [tool, '--manifest', manifest, '--game', game,
       '--print-modules']).toString();
   const modules = JSON.parse(output);
   assert.ok(Array.isArray(modules));
@@ -331,7 +258,7 @@ test('--game composes the default capability bundle without a manifest', () => {
     plugins: [{ name: 'YED_Tiled', status: true }],
   });
   const output = childProcess.execFileSync(process.execPath,
-    [tool, '--root', root, '--game', game, '--print-modules']).toString();
+    [tool, '--game', game, '--print-modules']).toString();
   const modules = JSON.parse(output);
   assert.ok(modules.some(entry => entry.module === 'js/pmjs-plugins/yed/tiled.js'));
   assert.equal(modules.at(-1).module, 'js/pmjs-mv/bootstrap.js');
@@ -343,7 +270,7 @@ test('--game composes the MZ profile with authored engine order and terminal boo
     plugins: [{ name: 'MZ_Only_Plugin', status: true }],
   });
   const output = childProcess.execFileSync(process.execPath,
-    [tool, '--root', root, '--game', game, '--print-modules']).toString();
+    [tool, '--game', game, '--print-modules']).toString();
   const modules = JSON.parse(output).map(entry => entry.module);
   const order = [
     'js/pmjs-pixi5/setup.js',
@@ -371,14 +298,14 @@ test('MZ composition requires Pixi 5 and rejects MV plugin adapters', () => {
   const root = temporaryDirectory('pmjs-mz-version-');
   const game = writeMzGame(root, { pixiVersion: '4.8.9' });
   assert.throws(() => childProcess.execFileSync(process.execPath,
-    [tool, '--root', root, '--game', game, '--output', 'out.js']),
+    [tool, '--game', game, '--output', path.join(root, 'out.js')]),
   /engine mz requires Pixi 5\.x; detected 4\.8\.9/);
 
   fs.writeFileSync(path.join(game, 'js', 'libs', 'pixi.js'), "PIXI.VERSION = '5.3.12';\n");
   const manifest = path.join(root, 'manifest.json');
   fs.writeFileSync(manifest, JSON.stringify({ adapters: 'all' }));
   assert.throws(() => childProcess.execFileSync(process.execPath,
-    [tool, '--root', root, '--manifest', manifest, '--game', game, '--output', 'out.js']),
+    [tool, '--manifest', manifest, '--game', game, '--output', path.join(root, 'out.js')]),
   /engine mz does not yet support plugin adapter selection/);
 });
 
@@ -397,32 +324,33 @@ test('auto adapter overrides and Pixi compatibility use inspected evidence', () 
   }));
   const out = path.join(root, 'out.js');
   childProcess.execFileSync(process.execPath,
-    [tool, '--root', root, '--manifest', manifest, '--game', game, '--output', out]);
+    [tool, '--manifest', manifest, '--game', game, '--output', out]);
   const bundle = fs.readFileSync(out, 'utf8');
   assert.doesNotMatch(bundle, /BEGIN js\/pmjs-plugins\/yed\/tiled\.js/);
   assert.match(bundle, /BEGIN js\/pmjs-plugins\/yanfly\/event-mini-label\.js/);
 
   fs.writeFileSync(path.join(game, 'js', 'libs', 'pixi.js'), "PIXI.VERSION = '5.3.0';\n");
   assert.throws(() => childProcess.execFileSync(process.execPath,
-    [tool, '--root', root, '--manifest', manifest, '--game', game, '--output', out]),
+    [tool, '--manifest', manifest, '--game', game, '--output', out]),
   /engine mv requires Pixi 4\.x; detected 5\.3\.0/);
 });
 
-test('auto composition requires a known Pixi version and terminal bootstrap', () => {
+test('auto composition requires a readable Pixi version', () => {
   const root = temporaryDirectory('pmjs-profile-invariants-');
   const game = writeMvGame(root);
-  const pixi = path.join(game, 'js', 'libs', 'pixi.js');
-  fs.writeFileSync(pixi, '// Pixi build without readable version metadata\n');
+  fs.writeFileSync(path.join(game, 'js/libs/pixi.js'), '// Pixi build without readable version metadata');
   assert.throws(() => childProcess.execFileSync(process.execPath,
-    [tool, '--root', root, '--game', game, '--output', 'out.js']),
-  /could not determine Pixi version/);
+    [tool, '--game', game, '--output', path.join(root, 'out.js')]), /could not determine Pixi version/);
+});
 
-  fs.writeFileSync(pixi, "PIXI.VERSION = '4.8.9';\n");
-  fs.mkdirSync(path.join(root, 'profiles'), { recursive: true });
-  fs.writeFileSync(path.join(root, 'profiles', 'mv.json'), JSON.stringify({
-    modules: ['js/pmjs-mv/bootstrap.js', 'after-bootstrap.js'],
-  }));
-  assert.throws(() => childProcess.execFileSync(process.execPath,
-    [tool, '--root', root, '--game', game, '--output', 'out.js']),
-  /bootstrap\.js exactly once as its final module/);
+test('a standalone source copy builds without the surrounding workspace', () => {
+  const root = temporaryDirectory('pmjs-standalone-');
+  const clone = path.join(root, 'runtime');
+  for (const directory of ['js', 'profiles']) fs.cpSync(path.join(__dirname, '..', directory), path.join(clone, directory), { recursive: true });
+  fs.mkdirSync(path.join(clone, 'tools'));
+  for (const file of ['build-js-runtime.mjs', 'game-inspect.mjs']) fs.copyFileSync(path.join(__dirname, '../tools', file), path.join(clone, 'tools', file));
+  const game = writeMvGame(root, { plugins: [{ name: 'YED_Tiled', status: true }] });
+  const output = path.join(root, 'standalone.js');
+  childProcess.execFileSync(process.execPath, [path.join(clone, 'tools/build-js-runtime.mjs'), '--game', game, '--output', output], { cwd: root });
+  assert.match(fs.readFileSync(output, 'utf8'), /BEGIN js\/pmjs-plugins\/yed\/tiled.js/);
 });

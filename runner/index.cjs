@@ -17,29 +17,13 @@ function resolveDefaults(input) {
       throw new Error(`config file not found: ${configPath}`);
     }
     let cfg;
-    const configText = fs.readFileSync(configPath, 'utf8');
-    if (configPath.endsWith('.json')) {
-      try {
-        cfg = JSON.parse(configText);
-      } catch (err) {
-        throw new Error(`invalid JSON in config file ${configPath}: ${err.message}`);
-      }
-    } else {
-      const sandbox = { globalThis: {} };
-      sandbox.window = sandbox.globalThis;
-      try {
-        vm.runInNewContext(configText, sandbox);
-      } catch (err) {
-        throw new Error(`error evaluating config file ${configPath}: ${err.message}`);
-      }
-      cfg = sandbox.globalThis.PMJS_GAME_CONFIG;
-    }
-    if (cfg) {
-      if (title === undefined && cfg.title) title = cfg.title;
-      if (width === undefined && cfg.display && cfg.display.width) width = Number(cfg.display.width);
-      if (height === undefined && cfg.display && cfg.display.height) height = Number(cfg.display.height);
-      assertDisableOptimizationsShape(cfg.disableOptimizations, configPath);
-    }
+    try { cfg = JSON.parse(fs.readFileSync(configPath, 'utf8')); }
+    catch (error) { throw new Error(`invalid JSON in config file ${configPath}: ${error.message}`); }
+    if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) throw new Error('configuration must be an object');
+    if (title === undefined && cfg.title) title = cfg.title;
+    if (width === undefined && cfg.display && cfg.display.width) width = Number(cfg.display.width);
+    if (height === undefined && cfg.display && cfg.display.height) height = Number(cfg.display.height);
+    assertDisableOptimizationsShape(cfg.disableOptimizations, configPath);
   }
 
   if (input.gameRoot) {
@@ -177,7 +161,7 @@ function validate(input) {
   };
 }
 
-async function run(input, hooks = {}) {
+async function run(input) {
   const options = validate(input);
   const hostProcess = process;
 
@@ -187,49 +171,48 @@ async function run(input, hooks = {}) {
     hostProcess.env.PMJS_SWAP_INTERVAL = swapDefault;
     console.log('[pmjs] uncapped render: defaulting PMJS_SWAP_INTERVAL=0 (was unset)');
   }
-  const native = options.native || require(options.addon);
+  const native = require(options.addon);
   native.initialize({ gameRoot: options.gameRoot, assetRoot: options.assetRoot,
     width: options.width, height: options.height, windowTitle: options.title,
     ...(options.imageWarmCacheBytes === undefined ? {} :
       { imageWarmCacheBytes: options.imageWarmCacheBytes }) });
-  native.storage = createStorage(options.saveRoot);
-  native.fs = createGameFilesystem(native.fs, path.join(options.saveRoot, 'game-files'));
-  native.runtime.now = () => performance.now();
-  native.runtime.platform = () => ({ platform: process.platform, arch: process.arch });
-  native.runtime.loadScript = relative => {
-    const source = native.fs.readText(relative);
-    if (source === null) throw new Error(`cannot load script: ${relative}`);
-    return vm.runInThisContext(source, { filename: path.join(options.gameRoot, relative) });
-  };
-  const hostSetTimeout = globalThis.setTimeout.bind(globalThis);
-  const hostClearTimeout = globalThis.clearTimeout.bind(globalThis);
-  const hostSetImmediate = typeof globalThis.setImmediate === 'function'
-    ? globalThis.setImmediate.bind(globalThis) : null;
-  const physicalDisplay = (native.runtime && typeof native.runtime.displaySize === 'function')
-    ? native.runtime.displaySize()
-    : {
-        width: Number(process.env.PMJS_SCREEN_WIDTH || 640),
-        height: Number(process.env.PMJS_SCREEN_HEIGHT || 480)
-      };
-  globalThis.NativeHost = { runtime: native.runtime, render: native.render,
-    plugins: native.plugins, mv: native.mv,
-    scene: native.scene, images: native.images, assets: native.assets, fs: native.fs,
-    storage: native.storage, input: native.input, canvas: native.canvas,
-    media: native.media, dialog: native.dialog, effects: native.effects };
-  globalThis.__pmjsBuiltinRequire = require;
-  globalThis.__pmjsNativeRuntime = true;
-  globalThis.__pmjsTimingConfig = {
-    renderHz: timing.renderHz,
-    catchupMode: timing.catchupMode
-  };
-  globalThis.__pmjsGameInfo = {
-    title: options.title,
-    width: options.width,
-    height: options.height,
-    displayWidth: physicalDisplay.width,
-    displayHeight: physicalDisplay.height
-  };
   try {
+    native.storage = createStorage(options.saveRoot);
+    native.fs = createGameFilesystem(native.fs, path.join(options.saveRoot, 'game-files'));
+    native.runtime.now = () => performance.now();
+    native.runtime.platform = () => ({ platform: process.platform, arch: process.arch });
+    native.runtime.loadScript = relative => {
+      const source = native.fs.readText(relative);
+      if (source === null) throw new Error(`cannot load script: ${relative}`);
+      return vm.runInThisContext(source, { filename: path.join(options.gameRoot, relative) });
+    };
+    const hostSetTimeout = globalThis.setTimeout.bind(globalThis);
+    const hostSetImmediate = typeof globalThis.setImmediate === 'function'
+      ? globalThis.setImmediate.bind(globalThis) : null;
+    const physicalDisplay = (native.runtime && typeof native.runtime.displaySize === 'function')
+      ? native.runtime.displaySize()
+      : {
+          width: Number(process.env.PMJS_SCREEN_WIDTH || 640),
+          height: Number(process.env.PMJS_SCREEN_HEIGHT || 480)
+        };
+    globalThis.NativeHost = { runtime: native.runtime, render: native.render,
+      plugins: native.plugins, mv: native.mv,
+      scene: native.scene, images: native.images, assets: native.assets, fs: native.fs,
+      storage: native.storage, input: native.input, canvas: native.canvas,
+      media: native.media, dialog: native.dialog, effects: native.effects };
+    globalThis.__pmjsBuiltinRequire = require;
+    globalThis.__pmjsNativeRuntime = true;
+    globalThis.__pmjsTimingConfig = {
+      renderHz: timing.renderHz,
+      catchupMode: timing.catchupMode
+    };
+    globalThis.__pmjsGameInfo = {
+      title: options.title,
+      width: options.width,
+      height: options.height,
+      displayWidth: physicalDisplay.width,
+      displayHeight: physicalDisplay.height
+    };
     vm.runInThisContext(fs.readFileSync(options.bootstrap, 'utf8'), {
       filename: options.bootstrap, displayErrors: true,
     });
@@ -237,58 +220,50 @@ async function run(input, hooks = {}) {
         typeof globalThis.__pmjsRender !== 'function') {
       throw new Error('bootstrap did not install __pmjsTick and __pmjsRender');
     }
-    if (hooks.afterBootstrap !== undefined) {
-      if (typeof hooks.afterBootstrap !== 'function') throw new Error('afterBootstrap must be a function');
-      await hooks.afterBootstrap({ native, options });
-    }
+
+    const period = timing.renderPeriod;
+    let deadline = timing.uncapped ? 0 : native.runtime.monotonicNow() + period;
+    console.log(`[pmjs] timing logic_hz=${timing.logicHz} ` +
+      (timing.uncapped ? 'render_hz=uncapped' : `render_hz=${timing.renderHz}`));
+    console.log(`[pmjs] ready size=${options.width}x${options.height}`);
+    return await new Promise((resolve, reject) => {
+      function schedule() {
+        if (timing.uncapped) { hostSetImmediate(tick); return; }
+        const delay = Math.max(0, deadline - native.runtime.monotonicNow());
+        if (delay < 1 && hostSetImmediate) hostSetImmediate(tick);
+        else hostSetTimeout(tick, delay);
+      }
+      function tick() {
+        try {
+          if (!native.pollEvents()) { resolve(); return; }
+          if (typeof globalThis.__pmjsUpdateWindowState === 'function') {
+            globalThis.__pmjsUpdateWindowState(native.runtime.windowState());
+          }
+          if (typeof globalThis.__pmjsReceiveInput === 'function' &&
+              typeof native.input.snapshot === 'function') {
+            globalThis.__pmjsReceiveInput(native.input.snapshot());
+          }
+          const now = performance.now();
+          native.beginFrame();
+          globalThis.__pmjsTick(now);
+          globalThis.__pmjsRender(now);
+          native.renderFrame();
+          native.swapFrame();
+          if (!timing.uncapped) {
+            const monotonicNow = native.runtime.monotonicNow();
+            deadline = advanceDeadline(deadline, monotonicNow, period);
+          }
+          schedule();
+        } catch (error) {
+          reject(error);
+        }
+      }
+      schedule();
+    });
   } catch (error) {
     try { native.runtime.quit(); } catch (_) {}
     throw error;
   }
-
-  const period = timing.renderPeriod;
-  let deadline = timing.uncapped ? 0 : native.runtime.monotonicNow() + period;
-  console.log(`[pmjs] timing logic_hz=${timing.logicHz} ` +
-    (timing.uncapped ? 'render_hz=uncapped' : `render_hz=${timing.renderHz}`));
-  console.log(`[pmjs] ready size=${options.width}x${options.height}`);
-  return new Promise((resolve, reject) => {
-    function schedule() {
-      if (timing.uncapped) { hostSetImmediate(tick); return; }
-      const delay = Math.max(0, deadline - native.runtime.monotonicNow());
-      if (delay < 1 && hostSetImmediate) hostSetImmediate(tick);
-      else hostSetTimeout(tick, delay);
-    }
-    function tick() {
-      try {
-        if (!native.pollEvents()) { resolve(); return; }
-        if (typeof globalThis.__pmjsUpdateWindowState === 'function') {
-          globalThis.__pmjsUpdateWindowState(native.runtime.windowState());
-        }
-        if (typeof globalThis.__pmjsReceiveInput === 'function' &&
-            typeof native.input.snapshot === 'function') {
-          globalThis.__pmjsReceiveInput(native.input.snapshot());
-        }
-        const now = performance.now();
-        native.beginFrame();
-        globalThis.__pmjsTick(now);
-        globalThis.__pmjsRender(now);
-        native.renderFrame();
-        if (typeof globalThis.__pmjsAfterNativeRender === 'function') {
-          globalThis.__pmjsAfterNativeRender();
-        }
-        native.swapFrame();
-        if (!timing.uncapped) {
-          const monotonicNow = native.runtime.monotonicNow();
-          deadline = advanceDeadline(deadline, monotonicNow, period);
-        }
-        schedule();
-      } catch (error) {
-        try { native.runtime.quit(); } catch (_) {}
-        reject(error);
-      }
-    }
-    schedule();
-  });
 }
 
 module.exports = { run, validate, parseTimingConfig, resolveSwapDefault, advanceDeadline,

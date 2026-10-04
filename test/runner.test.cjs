@@ -13,23 +13,30 @@ function fixture(source) {
   const root = temporaryDirectory('pmjs-runner-');
   const bootstrap = path.join(root, 'bootstrap.js');
   fs.writeFileSync(bootstrap, source);
-  return { addon: path.join(root, 'addon.node'), gameRoot: root, bootstrap,
+  const addon = writeAddon(root);
+  return { addon, gameRoot: root, bootstrap,
     saveRoot: path.join(root, 'save'), width: 320, height: 240, title: 'Test' };
 }
 function native(polls = [false]) {
   let now = 0;
   return { initialize() {}, pollEvents: () => polls.shift() ?? false,
     finishLogicStep() {}, beginFrame() {}, renderFrame() {}, swapFrame() {},
-    runtime: { monotonicNow: () => (now += 100), quit() {} },
+    runtime: { env() { return ''; }, monotonicNow: () => (now += 100), quit() {} },
     fs: { mountWritableOverlay() {}, updateWritableOverlay() {}, readText() { return null; } },
     render: {}, scene: {}, images: {}, assets: {}, input: {}, canvas: {}, media: {} };
 }
 
+function writeAddon(root, polls = [false]) {
+  const addon = path.join(root, 'addon.cjs');
+  fs.writeFileSync(addon, `module.exports = (${native.toString()})(${JSON.stringify(polls)});`);
+  return addon;
+}
+
 test('CLI parses the documented options including --config', () => {
   const value = parse(['--addon','a','--game-root','g','--bootstrap','b','--save-root','s',
-    '--config','my-config.js','--width','640','--height','480','--image-warm-cache-bytes','1024']);
+    '--config','my-config.json','--width','640','--height','480','--image-warm-cache-bytes','1024']);
   assert.equal(value.width, 640); assert.equal(value.height, 480);
-  assert.equal(value.config, 'my-config.js');
+  assert.equal(value.config, 'my-config.json');
   assert.equal(value.imageWarmCacheBytes, 1024);
 });
 test('validation rejects missing paths and invalid dimensions', () => {
@@ -111,9 +118,9 @@ test('validation rejects missing or malformed explicit config', () => {
   assert.throws(() => validate({
     addon: 'a', gameRoot: tempDir, bootstrap: 'b', saveRoot: 's',
     config: badJs
-  }), /error evaluating config file/);
+  }), /invalid JSON in config file/);
 });
-test('validation rejects malformed disableOptimizations but keeps well-formed ports', () => {
+test('validation rejects malformed disableOptimizations but keeps well-formed configuration', () => {
   const tempDir = temporaryDirectory('pmjs-runner-opt-');
   const bad = path.join(tempDir, 'bad.json');
   fs.writeFileSync(bad, JSON.stringify({ disableOptimizations: ['terrax.native-lighting', 7] }));
@@ -129,7 +136,7 @@ test('validation rejects malformed disableOptimizations but keeps well-formed po
   assert.equal(value.title, 'PMJS');
 });
 
-test('unknown port optimization IDs fail the run at startup', async () => {
+test('unknown configuration optimization IDs fail the run at startup', async () => {
   const tempDir = temporaryDirectory('pmjs-runner-unknown-opt-');
   const config = path.join(tempDir, 'config.json');
   fs.writeFileSync(config, JSON.stringify({ disableOptimizations: ['terrax.nativeLight'] }));
@@ -155,25 +162,41 @@ test('unknown port optimization IDs fail the run at startup', async () => {
     '\npmjsMvInitializePlugins();\nPMJS.phases.emit(\'beforeBoot\');\nPMJS.optimizations.finalize();\n');
   const options = { addon: path.join(tempDir, 'addon.node'), gameRoot: tempDir,
     bootstrap, saveRoot: path.join(tempDir, 'save'), width: 320, height: 240,
-    title: 'Test', config, native: native() };
-  options.native.runtime.env = () => '';
+    title: 'Test', config };
+  options.addon = writeAddon(tempDir);
   await assert.rejects(run(options), /Unknown PMJS optimization: terrax\.nativeLight/);
 });
-test('afterBootstrap runs once and Node jobs are not starved', async () => {
+test('runner loads its addon and bootstrap while allowing Node jobs to finish', async () => {
   const options = fixture('globalThis.__pmjsTick=()=>{};globalThis.__pmjsRender=()=>{};');
-  options.native = native();
-  let hooked = 0;
   const job = new Promise(resolve => setImmediate(resolve));
-  await run(options, { afterBootstrap({ native: host }) {
-    hooked++;
-    assert.deepEqual(host.runtime.platform(),
-      { platform: process.platform, arch: process.arch });
-    assert.deepEqual(globalThis.__pmjsGameInfo,
-      { title: 'Test', width: 320, height: 240, displayWidth: 640, displayHeight: 480 });
-    assert.equal(host.render.setLogicalSize, undefined);
-  } });
+  await run(options);
   await job;
-  assert.equal(hooked, 1);
+  assert.deepEqual(globalThis.NativeHost.runtime.platform(),
+    { platform: process.platform, arch: process.arch });
+  assert.deepEqual(globalThis.__pmjsGameInfo,
+    { title: 'Test', width: 320, height: 240, displayWidth: 640, displayHeight: 480 });
+  assert.equal(globalThis.NativeHost.render.setLogicalSize, undefined);
+});
+
+test('runner closes the initialized host when storage setup fails', async () => {
+  const options = fixture('throw new Error("bootstrap should not run");');
+  const host = require(options.addon);
+  let quits = 0;
+  host.runtime.quit = () => { quits++; };
+  fs.writeFileSync(options.saveRoot, 'a file cannot be a save directory');
+  await assert.rejects(run(options), /EEXIST|ENOTDIR/);
+  assert.equal(quits, 1);
+});
+
+test('runner closes the host on frame failure and preserves the original error', async () => {
+  const options = fixture('globalThis.__pmjsTick=()=>{};globalThis.__pmjsRender=()=>{};');
+  const host = require(options.addon);
+  const failure = new Error('frame failed');
+  host.pollEvents = () => { throw failure; };
+  let quits = 0;
+  host.runtime.quit = () => { quits++; throw new Error('shutdown failed'); };
+  await assert.rejects(run(options), error => error === failure);
+  assert.equal(quits, 1);
 });
 test('timing config pins MV logic at 60 Hz and validates render rates', () => {
   assert.deepEqual(parseTimingConfig({}), { logicHz: 60, renderHz: 60,
@@ -209,9 +232,8 @@ test('overdue scheduler skips expired deadlines without adding a full-period sle
 });
 test('bootstrap and tick failures reject the run', async () => {
   const bootstrap = fixture('throw new Error("bootstrap failure")');
-  bootstrap.native = native();
   await assert.rejects(run(bootstrap), /bootstrap failure/);
   const tick = fixture('globalThis.__pmjsTick=()=>{throw new Error("tick failure")};globalThis.__pmjsRender=()=>{};');
-  tick.native = native([true]);
+  tick.addon = writeAddon(tick.gameRoot, [true]);
   await assert.rejects(run(tick), /tick failure/);
 });

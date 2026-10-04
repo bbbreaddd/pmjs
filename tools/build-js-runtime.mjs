@@ -6,56 +6,38 @@ import { fileURLToPath } from 'node:url';
 import { inspectGame, loadAdapterRegistry, resolveAdapters } from './game-inspect.mjs';
 
 const args = process.argv.slice(2);
-const check = args.includes('--check');
-const printModules = args.includes('--print-modules');
-const verbose = args.includes('--verbose');
-
-function option(name) {
-  const index = args.indexOf(name);
-  if (index < 0 || index + 1 >= args.length) return null;
-  return args[index + 1];
-}
-
-const rootArgument = option('--root');
-const manifestArgument = option('--manifest');
-const profileArgument = option('--profile');
-const configArgument = option('--config');
-const compatArguments = [];
+const values = new Map();
+const switches = new Set(['--check', '--print-modules', '--verbose']);
+const inputs = new Set(['--manifest', '--profile', '--config', '--output', '--game']);
 for (let index = 0; index < args.length; index++) {
-  if (args[index] === '--compat' && index + 1 < args.length) {
-    compatArguments.push(args[index + 1]);
+  const argument = args[index];
+  if (switches.has(argument)) { values.set(argument, true); continue; }
+  if (!inputs.has(argument) || values.has(argument) || !args[index + 1] || args[index + 1].startsWith('--')) {
+    throw new Error(`invalid argument: ${argument}`);
   }
+  values.set(argument, args[++index]);
 }
-const outputArgument = option('--output');
-const gameArgument = option('--game');
-
-if (!manifestArgument && !profileArgument && !gameArgument) {
-  console.error('usage: build-js-runtime.mjs [--root ROOT] (--game DIR [--manifest FILE] | --profile NAME | --manifest FILE) [--output FILE] [--config FILE] [--compat FILE]... [--check] [--print-modules]');
+const check = values.has('--check');
+const printModules = values.has('--print-modules');
+const verbose = values.has('--verbose');
+const manifestArgument = values.get('--manifest');
+const profileArgument = values.get('--profile');
+const configArgument = values.get('--config');
+const outputArgument = values.get('--output');
+const gameArgument = values.get('--game');
+if ((!profileArgument && !gameArgument) || (!outputArgument && !printModules)) {
+  console.error('usage: build-js-runtime.mjs (--game DIR [--manifest FILE] | --profile NAME) [--config JSON] --output FILE [--check] [--print-modules] [--verbose]');
   process.exit(2);
 }
-if (!outputArgument && !printModules) {
-  console.error('usage: build-js-runtime.mjs [--root ROOT] (--game DIR [--manifest FILE] | --profile NAME | --manifest FILE) --output FILE [--config FILE] [--compat FILE]... [--check] [--print-modules]');
-  process.exit(2);
+if (profileArgument && (gameArgument || manifestArgument)) {
+  throw new Error('--profile cannot be combined with --game or --manifest');
 }
-if (profileArgument && gameArgument) {
-  console.error('error: --game and --profile are mutually exclusive');
-  process.exit(2);
-}
-
-const defaultRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const root = rootArgument ? path.resolve(process.cwd(), rootArgument) : defaultRoot;
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const output = outputArgument ? path.resolve(outputArgument) : null;
 const supportedEngines = {
   mv: { profile: 'mv', pixiMajor: 4, bootstrap: 'js/pmjs-mv/bootstrap.js', pluginAdapters: true },
   mz: { profile: 'mz', pixiMajor: 5, bootstrap: 'js/pmjs-mz/bootstrap.js', pluginAdapters: false },
 };
-
-function insideRoot(input, label) {
-  const resolved = path.resolve(root, input);
-  if (resolved !== root && !resolved.startsWith(root + path.sep)) {
-    throw new Error(`${label} must be inside root`);
-  }
-  return resolved;
-}
 
 // Structural validation only: the runtime optimization registry remains the
 // single authority for which IDs exist. Unknown IDs fail at startup instead.
@@ -69,29 +51,14 @@ function assertDisableOptimizationsShape(value, configPath) {
   }
 }
 
-let output = null;
-if (outputArgument) {
-  if (profileArgument || path.isAbsolute(outputArgument)) {
-    output = path.resolve(process.cwd(), outputArgument);
-  } else {
-    output = insideRoot(outputArgument, 'output');
-  }
-}
-
-function findProfile(name) {
-  const inRoot = path.resolve(root, 'profiles', `${name}.json`);
-  if (fs.existsSync(inRoot)) return { profilePath: inRoot, baseDir: root };
-  const inDefault = path.resolve(defaultRoot, 'profiles', `${name}.json`);
-  if (fs.existsSync(inDefault)) return { profilePath: inDefault, baseDir: defaultRoot };
-  return { profilePath: inRoot, baseDir: root };
-}
-
 let rawModules = [];
 let buildReport = null;
 let detectedRuntime = null;
 
 function loadProfile(name) {
-  const { profilePath, baseDir } = findProfile(name);
+  if (!/^[a-zA-Z0-9_-]+$/.test(name)) throw new Error(`invalid profile: ${name}`);
+  const profilePath = path.join(root, 'profiles', `${name}.json`);
+  const baseDir = root;
   if (!fs.existsSync(profilePath)) {
     console.error(`error: profile '${name}' not found at ${profilePath}`);
     process.exit(1);
@@ -101,42 +68,6 @@ function loadProfile(name) {
     throw new Error(`profile '${name}' requires a non-empty modules array`);
   }
   return { ...profile, baseDir };
-}
-
-function portFiles(port, manifestPath) {
-  if (port === undefined) return { config: null, modules: [], id: null };
-  if (!port || typeof port !== 'object' || Array.isArray(port) ||
-      typeof port.id !== 'string' || !port.id ||
-      typeof port.entry !== 'string' || !port.entry) {
-    throw new Error(`manifest ${manifestPath} port requires nonempty id and entry strings`);
-  }
-  if (path.basename(port.id) !== port.id || port.id === '.' || port.id === '..') {
-    throw new Error(`manifest ${manifestPath} port id must be one path segment`);
-  }
-  const portRoot = path.resolve(root, 'ports', port.id);
-  function insidePort(relative, label) {
-    if (typeof relative !== 'string' || !relative) {
-      throw new Error(`manifest ${manifestPath} port ${label} must be a nonempty path`);
-    }
-    const absolute = path.resolve(root, relative);
-    const fromPort = path.relative(portRoot, absolute);
-    if (fromPort === '' || fromPort === '..' || fromPort.startsWith(`..${path.sep}`) ||
-        path.isAbsolute(fromPort)) {
-      throw new Error(`manifest ${manifestPath} port ${label} must live under ports/${port.id}/`);
-    }
-    return absolute;
-  }
-  for (const [label, value] of [['config', port.config], ['entry', port.entry]]) {
-    if (value !== undefined) insidePort(value, label);
-  }
-  const entryPath = insidePort(port.entry, 'entry');
-  const entry = JSON.parse(fs.readFileSync(entryPath, 'utf8'));
-  if (!Array.isArray(entry.modules) || !entry.modules.length ||
-      !entry.modules.every(module => typeof module === 'string' && module)) {
-    throw new Error(`port entry ${port.entry} requires a nonempty modules array`);
-  }
-  for (const module of entry.modules) insidePort(module, `entry module ${module}`);
-  return { id: port.id, config: port.config || null, modules: entry.modules };
 }
 
 function adapterSelection(option, registry, inspection, manifestPath) {
@@ -173,17 +104,16 @@ function adapterSelection(option, registry, inspection, manifestPath) {
 }
 
 function resolveCapabilityManifest(manifest, manifestPath) {
-  if (manifest.modules !== undefined || manifest.extends !== undefined ||
-      manifest.prepend !== undefined || manifest.append !== undefined ||
-      manifest.portModules !== undefined || manifest.schema !== undefined ||
-      manifest.engine !== undefined) {
-    throw new Error(`manifest ${manifestPath} uses unsupported module positioning keys`);
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
+    throw new Error(`manifest ${manifestPath} must be an object`);
+  }
+  for (const key of Object.keys(manifest)) {
+    if (key !== 'adapters') throw new Error(`unsupported manifest key: ${key}`);
   }
   if (!gameArgument) throw new Error(`capability manifest ${manifestPath} requires --game`);
-  const port = portFiles(manifest.port, manifestPath);
   const adaptersOption = manifest.adapters === undefined ? 'auto' : manifest.adapters;
 
-  const registryPath = path.join(defaultRoot, 'profiles', 'plugin-adapters.json');
+  const registryPath = path.join(root, 'profiles', 'plugin-adapters.json');
   const registry = loadAdapterRegistry(registryPath);
 
   let inspection;
@@ -245,8 +175,7 @@ function resolveCapabilityManifest(manifest, manifestPath) {
   const split = baseModules.length - 1;
   const ordered = [
     ...baseModules.slice(0, split).map(mod => ({ module: mod, baseDir })),
-    ...adapterModules.map(mod => ({ module: mod, baseDir: defaultRoot })),
-    ...port.modules.map(mod => ({ module: mod, baseDir: root })),
+    ...adapterModules.map(mod => ({ module: mod, baseDir: root })),
     ...baseModules.slice(split).map(mod => ({ module: mod, baseDir })),
   ];
   buildReport = {
@@ -260,22 +189,15 @@ function resolveCapabilityManifest(manifest, manifestPath) {
       unmatchedEnabledPlugins: inspection.unmatchedEnabledPlugins,
     } : null,
     adapters: adapterReport,
-    port: port.id,
-    portModuleCount: port.modules.length,
   };
-  return [
-    ...(port.config ? [{ module: port.config, baseDir: root }] : []),
-    ...ordered,
-  ];
+  return ordered;
 }
 
 if (profileArgument) {
   const { modules, baseDir } = loadProfile(profileArgument);
   rawModules = modules.map(mod => ({ module: mod, baseDir }));
 } else if (manifestArgument) {
-  const manifestPath = path.isAbsolute(manifestArgument)
-    ? manifestArgument
-    : insideRoot(manifestArgument, 'manifest');
+  const manifestPath = path.resolve(manifestArgument);
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   rawModules = resolveCapabilityManifest(manifest, manifestPath);
 } else {
@@ -298,10 +220,6 @@ function printBuildReport() {
     const unmatched = buildReport.detected.unmatchedEnabledPlugins;
     lines.push(`[pmjs-build] unmatched enabled plugins: ${unmatched.length}`);
     if (verbose && unmatched.length) lines.push(`No PMJS adapter:\n${unmatched.map(name => `  ${name}`).join('\n')}`);
-  }
-  if (buildReport.port) {
-    const count = buildReport.portModuleCount;
-    lines.push(`[pmjs-build] port: ${buildReport.port} (${count} module${count === 1 ? '' : 's'})`);
   }
   const write = printModules ? console.error : console.log;
   write(lines.join('\n'));
@@ -328,43 +246,16 @@ if (configArgument) {
     console.error(`error: config file not found: ${resolvedConfig}`);
     process.exit(1);
   }
-  const configText = fs.readFileSync(resolvedConfig, 'utf8');
-  if (resolvedConfig.endsWith('.json')) {
-    try {
-      const parsed = JSON.parse(configText);
-      assertDisableOptimizationsShape(parsed.disableOptimizations, resolvedConfig);
-      const generated = `globalThis.PMJS_GAME_CONFIG = ${JSON.stringify(parsed, null, 2)};\n`;
-      bundleItems.push({ label: path.basename(resolvedConfig), inlineSource: generated });
-    } catch (e) {
-      console.error(`error: invalid JSON in config file ${resolvedConfig}: ${e.message}`);
-      process.exit(1);
-    }
-  } else {
-    bundleItems.push({ label: path.basename(resolvedConfig), path: resolvedConfig });
-  }
-}
-
-let compatInserted = false;
-const pendingCompat = [];
-for (const compatFile of compatArguments) {
-  const resolvedCompat = path.resolve(process.cwd(), compatFile);
-  if (!fs.existsSync(resolvedCompat)) {
-    console.error(`error: compat file not found: ${resolvedCompat}`);
-    process.exit(1);
-  }
-  pendingCompat.push({ label: path.basename(resolvedCompat), path: resolvedCompat });
+  let parsed;
+  try { parsed = JSON.parse(fs.readFileSync(resolvedConfig, 'utf8')); }
+  catch (error) { throw new Error(`invalid JSON in config file ${resolvedConfig}: ${error.message}`); }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('configuration must be an object');
+  assertDisableOptimizationsShape(parsed.disableOptimizations, resolvedConfig);
+  bundleItems.push({ label: path.basename(resolvedConfig), inlineSource:
+    `globalThis.PMJS_GAME_CONFIG = ${JSON.stringify(parsed, null, 2)};\n` });
 }
 for (const item of rawModules) {
-  if (pendingCompat.length && !compatInserted &&
-      (item.module === 'js/pmjs-mv/bootstrap.js' || item.module === 'js/pmjs-mz/bootstrap.js')) {
-    for (const compatItem of pendingCompat) bundleItems.push(compatItem);
-    compatInserted = true;
-  }
-  bundleItems.push({ label: item.module, module: item.module, baseDir: item.baseDir });
-}
-
-if (pendingCompat.length && !compatInserted) {
-  for (const compatItem of pendingCompat) bundleItems.push(compatItem);
+  bundleItems.push({ label: item.module, module: item.module, baseDir: root });
 }
 
 function buildBundle() {
@@ -372,8 +263,6 @@ function buildBundle() {
     let source;
     if (item.inlineSource) {
       source = item.inlineSource;
-    } else if (item.path) {
-      source = fs.readFileSync(item.path, 'utf8');
     } else {
       const relative = item.module;
       if (typeof relative !== 'string' || !relative || path.isAbsolute(relative) ||
@@ -392,7 +281,7 @@ if (printModules) {
   printBuildReport();
   console.log(JSON.stringify(rawModules.map(item => ({
     module: item.module,
-    base: item.baseDir === defaultRoot ? 'native-runtime' : 'root',
+    base: 'native-runtime',
   }))));
   process.exit(0);
 }
