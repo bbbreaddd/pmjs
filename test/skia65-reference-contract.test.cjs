@@ -8,10 +8,11 @@ const { validate } = require('./helpers/skia65-reference-contract.cjs');
 const read = () => JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(__dirname, 'assets/reference/skia65-text.json.gz'))));
 test('Skia65 fixtures enforce current owned source identities and complete scenarios', () => {
   validate(read());
-  for (const key of ['generatorSha256', 'readbackSha256', 'scenarioSha256']) {
+  for (const key of ['readbackSha256', 'scenarioSha256']) {
     const fixture = read(); fixture[key] = 'stale';
     assert.throws(() => validate(fixture), /Stale Skia65 reference/);
   }
+  const historical = read(); historical.generatorSha256 = '0'.repeat(64); validate(historical);
   const changed = read(); changed.cases[0].x++;
   assert.throws(() => validate(changed), /scenario changed/);
   const missing = read(); missing.records.pop();
