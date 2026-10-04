@@ -67,7 +67,7 @@ function captureReference() {
     }
     if (spec.clip) {
       stage.filters = [new PIXI.filters.AlphaFilter(0.5)];
-      stage.filterArea = new PIXI.Rectangle(0, 0, 24, 24);
+      stage.filterArea = new PIXI.Rectangle(0, 0, spec.clipSize || 24, spec.clipSize || 24);
     }
     const after = new PIXI.Sprite(texture); after.position.set(1, 27); after.scale.set(0.5); stage.addChild(after);
     let target, snapshot;

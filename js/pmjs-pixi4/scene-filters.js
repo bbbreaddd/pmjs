@@ -44,7 +44,7 @@ function nativeRecordCustomFilter(filter, node, filters) {
     renderTarget: input, resolution: resolution, target: node, filters: [filter] };
   var manager = {
     filterData: { index: 1, stack: [null, state] },
-    renderer: { resolution: 1, screen: { x: 0, y: 0, width: screenWidth, height: screenHeight } },
+    renderer: { resolution: 1, width: screenWidth, height: screenHeight, screen: { x: 0, y: 0, width: screenWidth, height: screenHeight } },
     currentState: function() { return state; },
     getRenderTarget: function(clear, requestedResolution) {
       var requested = Number(requestedResolution) || resolution;
@@ -99,7 +99,7 @@ function nativeRecordCustomFilter(filter, node, filters) {
               var base = texture && texture.baseTexture;
               var image = base && nativeTextureSource(base.source);
               if (!image || !image.handle) throw new Error('filter sampler has no native image');
-              pass.samplers.push({ image: image.handle, target: 0, nearest: base.scaleMode === 0 });
+              pass.samplers.push({ image: image.handle, target: 0, nearest: base.scaleMode === PIXI.SCALE_MODES.NEAREST });
             }
           }
           continue;
@@ -139,6 +139,28 @@ function nativeRecordCustomFilter(filter, node, filters) {
   return { kind: 31, resource: resource.handle, parameters: [padding] };
 }
 
+var nativeCoreFilterContracts = [];
+['ColorMatrixFilter', 'AlphaFilter', 'BlurFilter', 'BlurXFilter', 'BlurYFilter',
+  'NoiseFilter', 'FXAAFilter'].forEach(function(name) {
+  var Constructor = PIXI.filters && PIXI.filters[name];
+  if (typeof Constructor !== 'function') return;
+  var instance = new Constructor();
+  if (instance.fragmentSrc) nativeCoreFilterContracts.push({ Constructor: Constructor,
+    vertex: instance.vertexSrc, fragment: instance.fragmentSrc, apply: instance.apply });
+});
+
+function nativeFilterNeedsAuthoredProgram(filter) {
+  if (!filter || !filter.fragmentSrc) return false;
+  for (var index = 0; index < nativeCoreFilterContracts.length; index++) {
+    var contract = nativeCoreFilterContracts[index];
+    if (filter.constructor === contract.Constructor) {
+      return filter.vertexSrc !== contract.vertex || filter.fragmentSrc !== contract.fragment ||
+        filter.apply !== contract.apply;
+    }
+  }
+  return true;
+}
+
 var nativeCustomFilterPrograms = new Map();
 function nativeCustomFilterGroup(filter, node) {
   if (!filter || !filter.fragmentSrc ||
@@ -156,8 +178,9 @@ function nativeSceneFilter(node, activeFilters) {
     return { blur: 0, groups: [], unsupported: false };
   }
   if (typeof NativeHost.render.createFilterPlan === 'function' &&
-      activeFilters[0] && activeFilters[0].fragmentSrc &&
-      (!PIXI.Filter || activeFilters[0].constructor === PIXI.Filter)) {
+      activeFilters.some(function(filter) {
+        return filter && filter.enabled !== false && nativeFilterNeedsAuthoredProgram(filter);
+      })) {
     var actualFilters = activeFilters.filter(function(filter) { return filter && filter.enabled !== false; });
     if (actualFilters.length) {
       try {

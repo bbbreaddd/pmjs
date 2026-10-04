@@ -560,7 +560,7 @@ std::vector<std::uint8_t> Renderer::captureSceneRawPremultiplied() {
 
   const std::size_t rowBytes = static_cast<std::size_t>(width_) * 4U;
   std::vector<std::uint8_t> row(rowBytes);
-  for (int y = 0; y < height_ / 2; ++y) {
+  for (int y = 0; !offscreenRender_ && y < height_ / 2; ++y) {
     auto top = pixels.begin() + static_cast<std::ptrdiff_t>(y) * rowBytes;
     auto bottom = pixels.begin() +
       static_cast<std::ptrdiff_t>(height_ - y - 1) * rowBytes;

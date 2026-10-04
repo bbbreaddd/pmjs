@@ -118,6 +118,7 @@ Renderer::Renderer(int width, int height, ImageStore& images)
   presentationUpperCanvasPremultipliedUniform_ =
     glGetUniformLocation(presentationProgram_, "upperCanvasPremultiplied");
   spriteEffectProgram_ = linkProgram(vertexSource, spriteEffectFragmentSource);
+  spriteEffectTargetYDownUniform_ = glGetUniformLocation(spriteEffectProgram_, "targetYDown");
   spriteEffectVerticesUniform_ = glGetUniformLocation(spriteEffectProgram_, "spriteWorldVertices");
   spriteEffectProjectionUniform_ = glGetUniformLocation(spriteEffectProgram_, "spriteProjection");
   spriteEffectPackingUniform_ = glGetUniformLocation(spriteEffectProgram_, "pixiSpritePacking");
@@ -256,6 +257,7 @@ void Renderer::queryFilterProgramUniforms() {
 
 Renderer::TileProgramUniforms Renderer::queryTileProgramUniforms(std::uint32_t program) {
   TileProgramUniforms uniforms;
+  uniforms.targetYDown = glGetUniformLocation(program, "targetYDown");
   uniforms.world = glGetUniformLocation(program, "world");
   uniforms.screen = glGetUniformLocation(program, "screenSize");
   uniforms.animation = glGetUniformLocation(program, "animationOffset");
@@ -312,6 +314,10 @@ void Renderer::createPixiPrograms(const std::string& precision) {
   if (canvasTriangleBitmapProgram_) glDeleteProgram(canvasTriangleBitmapProgram_);
   program_ = filter;
   simpleProgram_ = simple;
+  filterTargetYDownUniform_ = glGetUniformLocation(program_, "targetYDown");
+  filterImageYDownUniform_ = glGetUniformLocation(program_, "imageYDown");
+  filterInputYDownUniform_ = glGetUniformLocation(program_, "inputYDown");
+  simpleTargetYDownUniform_ = glGetUniformLocation(simpleProgram_, "targetYDown");
   simpleSpriteVerticesUniform_ = glGetUniformLocation(simpleProgram_, "spriteWorldVertices");
   simpleSpriteProjectionUniform_ = glGetUniformLocation(simpleProgram_, "spriteProjection");
   simpleSpritePackingUniform_ = glGetUniformLocation(simpleProgram_, "pixiSpritePacking");
@@ -370,12 +376,13 @@ std::uint32_t Renderer::createFilterProgram(const std::string& fragmentSource, c
   constexpr const char* vertex = R"(
     attribute vec2 position;
     attribute vec2 uv;
+    uniform bool pmjsTargetYDown;
     uniform vec2 pmjsScreenSize;
     uniform vec4 pmjsFilterFrame;
     uniform vec2 pmjsFilterTextureSize;
     varying vec2 vTextureCoord;
     void main() {
-      gl_Position = vec4(position, 0.0, 1.0);
+      gl_Position = vec4(position.x, pmjsTargetYDown ? -position.y : position.y, 0.0, 1.0);
       vec2 screen = vec2(uv.x, 1.0 - uv.y) * pmjsScreenSize;
       vTextureCoord = (screen - pmjsFilterFrame.xy) / pmjsFilterTextureSize;
     }
@@ -398,7 +405,7 @@ std::uint32_t Renderer::createFilterProgram(const std::string& fragmentSource, c
       glGetActiveUniform(program, index, name.size(), &length, &count, &type, name.data());
       const std::string key(name.data(), length);
       if (key == "pmjsScreenSize" || key == "pmjsFilterFrame" ||
-          key == "pmjsFilterTextureSize") continue;
+          key == "pmjsFilterTextureSize" || key == "pmjsTargetYDown") continue;
       if (key == "projectionMatrix") {
         if (type != GL_FLOAT_MAT3 || count != 1) throw std::invalid_argument("filter projection must be mat3");
         continue;

@@ -118,7 +118,7 @@ try {
       const child = sprite(texture, !!spec.childRounded);
       place(child, 7.25, -3.75, 0.5); node.addChild(child);
     }
-    if (spec.clip) { stage.filters = [new c.PIXI.filters.AlphaFilter(0.5)]; stage.filterArea = new c.PIXI.Rectangle(0, 0, 24, 24); }
+    if (spec.clip) { stage.filters = [new c.PIXI.filters.AlphaFilter(0.5)]; stage.filterArea = new c.PIXI.Rectangle(0, 0, spec.clipSize || 24, spec.clipSize || 24); }
     const after = sprite(texture); place(after, 1, 27, 0.5); stage.addChild(after);
     native.beginFrame();
     if (spec.snapshot) {

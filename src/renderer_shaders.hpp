@@ -66,6 +66,8 @@ constexpr const char* vertexSource = R"(#version 300 es
   layout(location = 1) in vec2 uv;
   layout(location = 2) in vec4 color;
   layout(location = 3) in vec4 uvClamp;
+  uniform bool targetYDown;
+  uniform bool inputYDown;
   uniform bool spriteWorldVertices;
   uniform mat3 spriteProjection;
   out vec2 vertexUv;
@@ -74,7 +76,8 @@ constexpr const char* vertexSource = R"(#version 300 es
   out vec4 vertexUvClamp;
   void main() {
     gl_Position = vec4(spriteWorldVertices ? (spriteProjection * vec3(position, 1.0)).xy : position, 0.0, 1.0);
-    vertexUv = uv;
+    if (targetYDown && !spriteWorldVertices) gl_Position.y = -gl_Position.y;
+    vertexUv = vec2(uv.x, inputYDown ? 1.0 - uv.y : uv.y);
     filterCoord = vec2(uv.x, 1.0 - uv.y);
     vertexColor = color;
     vertexUvClamp = uvClamp;
@@ -83,6 +86,7 @@ constexpr const char* vertexSource = R"(#version 300 es
 constexpr const char* fragmentSource = R"(#version 300 es
   precision mediump float;
   uniform sampler2D image;
+  uniform bool imageYDown;
   uniform vec2 imageDimensions;
   uniform float blurRadius;
   uniform vec2 blurDirection;
@@ -101,6 +105,7 @@ constexpr const char* fragmentSource = R"(#version 300 es
   uniform float maskTransform[6];
   uniform vec4 maskFrame;
   uniform vec2 maskTextureSize;
+  uniform bool targetYDown;
   uniform float screenHeight;
   uniform float maskAlpha;
   uniform bool maskUsesRed;
@@ -239,6 +244,9 @@ constexpr const char* fragmentSource = R"(#version 300 es
     }
     return abs(sum);
   }
+  vec4 sampleImage(vec2 uv) {
+    return texture(image, vec2(uv.x, imageYDown ? 1.0 - uv.y : uv.y));
+  }
   void main() {
     vec2 sampleUv = vertexUv;
     if (pixiFilterKind == 1) {
@@ -271,7 +279,7 @@ constexpr const char* fragmentSource = R"(#version 300 es
         sampleLimit *= edge;
         strength *= edge;
         if (sampleLimit < 1.0) {
-          outputColor = texture(image, sampleUv) * vertexColor;
+          outputColor = sampleImage( sampleUv) * vertexColor;
           return;
         }
       }
@@ -287,7 +295,7 @@ constexpr const char* fragmentSource = R"(#version 300 es
         highp vec2 highPoint = point;
         highp vec2 lookup = pixi5 ? vec2(highPoint.x, 1.0 - highPoint.y) :
           clamp(point, vertexUvClamp.xy, vertexUvClamp.zw);
-        accumulated += texture(image, lookup) * weight;
+        accumulated += sampleImage( lookup) * weight;
         totalWeight += weight;
         // The reviewed Pixi 5 shader includes the first sample beyond its radius limit.
         if (pixi5 && float(sampleIndex) > sampleLimit) break;
@@ -311,7 +319,7 @@ constexpr const char* fragmentSource = R"(#version 300 es
       }
     }
     if (pixiFilterKind == 3) {
-      vec4 extracted = texture(image, sampleUv);
+      vec4 extracted = sampleImage( sampleUv);
       float maximum = max(max(extracted.r, extracted.g), extracted.b);
       float minimum = min(min(extracted.r, extracted.g), extracted.b);
       outputColor = (maximum + minimum) * 0.5 > pixiFilterParameters[0] ?
@@ -319,14 +327,14 @@ constexpr const char* fragmentSource = R"(#version 300 es
       return;
     }
     if (pixiFilterKind == 22) {
-      vec4 base = texture(image, sampleUv) * pixiFilterParameters[0];
+      vec4 base = sampleImage( sampleUv) * pixiFilterParameters[0];
       vec4 bloom = texture(bloomImage, sampleUv) * pixiFilterParameters[1];
       outputColor = (base + bloom) * vertexColor;
       return;
     }
     if (pixiFilterKind == 23 || pixiFilterKind == 24) {
-      vec4 source = texture(image, sampleUv) * vertexColor;
-      vec4 target = texture(bloomImage, sampleUv);
+      vec4 source = sampleImage( sampleUv) * vertexColor;
+      vec4 target = texture(bloomImage, vec2(sampleUv.x, targetYDown ? 1.0 - sampleUv.y : sampleUv.y));
       if (source.a <= 0.0) {
         outputColor = target;
         return;
@@ -347,7 +355,7 @@ constexpr const char* fragmentSource = R"(#version 300 es
       return;
     }
     if (pixiFilterKind == 26) {
-      vec4 color = texture(image, sampleUv);
+      vec4 color = sampleImage( sampleUv);
       if (color.a <= 0.0) { outputColor = vec4(0.0); return; }
       vec3 hsl = mzRgbToHsl(color.rgb);
       hsl.x = mod(hsl.x + pixiFilterParameters[0] / 360.0, 1.0);
@@ -365,15 +373,15 @@ constexpr const char* fragmentSource = R"(#version 300 es
     }
     if (pixiFilterKind == 25) {
       vec2 inverseSize = 1.0 / imageDimensions;
-      vec3 rgbNW = texture(image, clamp(sampleUv + vec2(-1.0, -1.0) * inverseSize,
+      vec3 rgbNW = sampleImage( clamp(sampleUv + vec2(-1.0, -1.0) * inverseSize,
         vertexUvClamp.xy, vertexUvClamp.zw)).rgb;
-      vec3 rgbNE = texture(image, clamp(sampleUv + vec2(1.0, -1.0) * inverseSize,
+      vec3 rgbNE = sampleImage( clamp(sampleUv + vec2(1.0, -1.0) * inverseSize,
         vertexUvClamp.xy, vertexUvClamp.zw)).rgb;
-      vec3 rgbSW = texture(image, clamp(sampleUv + vec2(-1.0, 1.0) * inverseSize,
+      vec3 rgbSW = sampleImage( clamp(sampleUv + vec2(-1.0, 1.0) * inverseSize,
         vertexUvClamp.xy, vertexUvClamp.zw)).rgb;
-      vec3 rgbSE = texture(image, clamp(sampleUv + vec2(1.0, 1.0) * inverseSize,
+      vec3 rgbSE = sampleImage( clamp(sampleUv + vec2(1.0, 1.0) * inverseSize,
         vertexUvClamp.xy, vertexUvClamp.zw)).rgb;
-      vec4 centerColor = texture(image, sampleUv);
+      vec4 centerColor = sampleImage( sampleUv);
       vec3 luma = vec3(0.299, 0.587, 0.114);
       float lumaNW = dot(rgbNW, luma);
       float lumaNE = dot(rgbNE, luma);
@@ -392,14 +400,14 @@ constexpr const char* fragmentSource = R"(#version 300 es
       direction = clamp(direction * reciprocalMinimum, vec2(-8.0), vec2(8.0)) *
         inverseSize;
       vec3 rgbA = 0.5 * (
-        texture(image, clamp(sampleUv + direction * (1.0 / 3.0 - 0.5),
+        sampleImage( clamp(sampleUv + direction * (1.0 / 3.0 - 0.5),
           vertexUvClamp.xy, vertexUvClamp.zw)).rgb +
-        texture(image, clamp(sampleUv + direction * (2.0 / 3.0 - 0.5),
+        sampleImage( clamp(sampleUv + direction * (2.0 / 3.0 - 0.5),
           vertexUvClamp.xy, vertexUvClamp.zw)).rgb);
       vec3 rgbB = rgbA * 0.5 + 0.25 * (
-        texture(image, clamp(sampleUv - direction * 0.5,
+        sampleImage( clamp(sampleUv - direction * 0.5,
           vertexUvClamp.xy, vertexUvClamp.zw)).rgb +
-        texture(image, clamp(sampleUv + direction * 0.5,
+        sampleImage( clamp(sampleUv + direction * 0.5,
           vertexUvClamp.xy, vertexUvClamp.zw)).rgb);
       float lumaB = dot(rgbB, luma);
       outputColor = vec4(lumaB < lumaMin || lumaB > lumaMax ? rgbA : rgbB,
@@ -414,7 +422,7 @@ constexpr const char* fragmentSource = R"(#version 300 es
         length(direction * direction) * 0.25 * curvature * curvature + 0.935 * curvature : 1.0;
       vec2 curved = direction * curveScale;
       sampleUv = clamp(coordinate, vertexUvClamp.xy, vertexUvClamp.zw);
-      vec4 crtColor = texture(image, sampleUv);
+      vec4 crtColor = sampleImage( sampleUv);
       vec3 crtRgb = crtColor.rgb;
       if (pixiFilterParameters[4] > 0.0 && pixiFilterParameters[5] > 0.0) {
         vec2 noisePixel = floor(coordinate * imageDimensions / pixiFilterParameters[5]);
@@ -441,7 +449,7 @@ constexpr const char* fragmentSource = R"(#version 300 es
       return;
     }
     if (pixiFilterKind == 5) {
-      vec4 adjusted = texture(image, sampleUv);
+      vec4 adjusted = sampleImage( sampleUv);
       if (adjusted.a > 0.0) {
         vec3 rgb = pow(adjusted.rgb / adjusted.a,
           vec3(1.0 / max(pixiFilterParameters[0], 0.0001)));
@@ -462,14 +470,14 @@ constexpr const char* fragmentSource = R"(#version 300 es
         pixelSize / imageDimensions;
     }
     if (pixiFilterKind == 7) {
-      vec4 centerSample = texture(image, sampleUv);
-      vec4 redSample = texture(image, clamp(sampleUv +
+      vec4 centerSample = sampleImage( sampleUv);
+      vec4 redSample = sampleImage( clamp(sampleUv +
         vec2(pixiFilterParameters[0], pixiFilterParameters[1]) / imageDimensions,
         vertexUvClamp.xy, vertexUvClamp.zw));
-      vec4 greenSample = texture(image, clamp(sampleUv +
+      vec4 greenSample = sampleImage( clamp(sampleUv +
         vec2(pixiFilterParameters[2], pixiFilterParameters[3]) / imageDimensions,
         vertexUvClamp.xy, vertexUvClamp.zw));
-      vec4 blueSample = texture(image, clamp(sampleUv +
+      vec4 blueSample = sampleImage( clamp(sampleUv +
         vec2(pixiFilterParameters[4], pixiFilterParameters[5]) / imageDimensions,
         vertexUvClamp.xy, vertexUvClamp.zw));
       outputColor = vec4(redSample.r, greenSample.g, blueSample.b,
@@ -521,7 +529,7 @@ constexpr const char* fragmentSource = R"(#version 300 es
       float characterSize = max(1.0, pixiFilterParameters[0]);
       vec2 pixelCoordinate = floor(sampleUv * imageDimensions / characterSize) *
         characterSize;
-      vec4 asciiColor = texture(image, pixelCoordinate / imageDimensions);
+      vec4 asciiColor = sampleImage( pixelCoordinate / imageDimensions);
       float gray = (asciiColor.r + asciiColor.g + asciiColor.b) / 3.0;
       float glyph = gray > 0.8 ? 11512810.0 : gray > 0.7 ? 13199452.0 :
         gray > 0.6 ? 15252014.0 : gray > 0.5 ? 23385164.0 :
@@ -543,7 +551,7 @@ constexpr const char* fragmentSource = R"(#version 300 es
       vec2 point = vec2(cosine * pixelCoordinate.x - sine * pixelCoordinate.y,
         sine * pixelCoordinate.x + cosine * pixelCoordinate.y) *
         pixiFilterParameters[1];
-      vec4 dotColor = texture(image, sampleUv);
+      vec4 dotColor = sampleImage( sampleUv);
       float average = (dotColor.r + dotColor.g + dotColor.b) / 3.0;
       float pattern = sin(point.x) * sin(point.y) * 4.0;
       outputColor = vec4(vec3(average * 10.0 - 5.0 + pattern), dotColor.a) *
@@ -553,17 +561,17 @@ constexpr const char* fragmentSource = R"(#version 300 es
     if (pixiFilterKind == 12) {
       vec2 onePixel = 1.0 / imageDimensions;
       vec4 embossed = vec4(vec3(0.5), 1.0) -
-        texture(image, clamp(sampleUv - onePixel,
+        sampleImage( clamp(sampleUv - onePixel,
           vertexUvClamp.xy, vertexUvClamp.zw)) * pixiFilterParameters[0] +
-        texture(image, clamp(sampleUv + onePixel,
+        sampleImage( clamp(sampleUv + onePixel,
           vertexUvClamp.xy, vertexUvClamp.zw)) * pixiFilterParameters[0];
       float average = (embossed.r + embossed.g + embossed.b) / 3.0;
-      float alpha = texture(image, sampleUv).a;
+      float alpha = sampleImage( sampleUv).a;
       outputColor = vec4(vec3(average) * alpha, alpha) * vertexColor;
       return;
     }
     if (pixiFilterKind == 13) {
-      float luminance = length(texture(image, sampleUv).rgb);
+      float luminance = length(sampleImage( sampleUv).rgb);
       bool ink = (luminance < 1.0 && mod(gl_FragCoord.x + gl_FragCoord.y, 10.0) < 1.0) ||
         (luminance < 0.75 && mod(gl_FragCoord.x - gl_FragCoord.y, 10.0) < 1.0) ||
         (luminance < 0.5 && mod(gl_FragCoord.x + gl_FragCoord.y - 5.0, 10.0) < 1.0) ||
@@ -575,7 +583,7 @@ constexpr const char* fragmentSource = R"(#version 300 es
     if (pixiFilterKind == 14) {
       int kernelSize = int(pixiFilterParameters[3]);
       if (kernelSize <= 1 || pixiFilterParameters[0] == 0.0) {
-        outputColor = texture(image, sampleUv) * vertexColor;
+        outputColor = sampleImage( sampleUv) * vertexColor;
         return;
       }
       float aspect = imageDimensions.y / imageDimensions.x;
@@ -591,7 +599,7 @@ constexpr const char* fragmentSource = R"(#version 300 es
         float scale = gradient > 0.0 ?
           1.0 - abs((distanceToCenter - radius) / gradient) : 0.0;
         if (scale <= 0.0) {
-          outputColor = texture(image, sampleUv) * vertexColor;
+          outputColor = sampleImage( sampleUv) * vertexColor;
           return;
         }
         radianStep *= scale;
@@ -601,7 +609,7 @@ constexpr const char* fragmentSource = R"(#version 300 es
       float cosine = cos(radianStep);
       mat2 rotation = mat2(vec2(cosine, -sine), vec2(sine, cosine));
       vec2 radialUv = sampleUv;
-      vec4 radialColor = texture(image, radialUv);
+      vec4 radialColor = sampleImage( radialUv);
       for (int radialIndex = 0; radialIndex < 63; ++radialIndex) {
         if (radialIndex == kernelSize - 1) break;
         radialUv -= center;
@@ -609,7 +617,7 @@ constexpr const char* fragmentSource = R"(#version 300 es
         radialUv = rotation * radialUv;
         radialUv.y /= aspect;
         radialUv += center;
-        radialColor += texture(image, clamp(radialUv,
+        radialColor += sampleImage( clamp(radialUv,
           vertexUvClamp.xy, vertexUvClamp.zw));
       }
       outputColor = radialColor / float(kernelSize) * vertexColor;
@@ -630,7 +638,7 @@ constexpr const char* fragmentSource = R"(#version 300 es
           reflectedX += cos(reflectedY * 6.2831853 / wavelength -
             pixiFilterParameters[8]) * amplitude;
         }
-        vec4 reflected = texture(image, clamp(vec2(reflectedX, reflectedY),
+        vec4 reflected = sampleImage( clamp(vec2(reflectedX, reflectedY),
           vertexUvClamp.xy, vertexUvClamp.zw));
         outputColor = reflected * mix(pixiFilterParameters[6],
           pixiFilterParameters[7], depth) * vertexColor;
@@ -643,28 +651,28 @@ constexpr const char* fragmentSource = R"(#version 300 es
         pixiFilterParameters[1]);
       float velocityLength = length(pixelVelocity);
       if (kernelSize <= 1 || velocityLength <= 0.000001) {
-        outputColor = texture(image, sampleUv) * vertexColor;
+        outputColor = sampleImage( sampleUv) * vertexColor;
         return;
       }
       vec2 velocity = pixelVelocity / imageDimensions;
       float offset = -pixiFilterParameters[3] / velocityLength - 0.5;
-      vec4 motionColor = texture(image, sampleUv);
+      vec4 motionColor = sampleImage( sampleUv);
       for (int motionIndex = 0; motionIndex < 63; ++motionIndex) {
         if (motionIndex == kernelSize - 1) break;
         float amount = float(motionIndex) / float(kernelSize - 1) + offset;
-        motionColor += texture(image, clamp(sampleUv + velocity * amount,
+        motionColor += sampleImage( clamp(sampleUv + velocity * amount,
           vertexUvClamp.xy, vertexUvClamp.zw));
       }
       outputColor = motionColor / float(kernelSize) * vertexColor;
       return;
     }
     if (pixiFilterKind == 17) {
-      outputColor = texture(image, sampleUv) * pixiFilterParameters[0] *
+      outputColor = sampleImage( sampleUv) * pixiFilterParameters[0] *
         vertexColor;
       return;
     }
     if (pixiFilterKind == 18) {
-      vec4 filmSample = texture(image, sampleUv);
+      vec4 filmSample = sampleImage( sampleUv);
       vec3 filmColor = filmSample.rgb;
       if (pixiFilterParameters[0] > 0.0) {
         float gray = (filmColor.r + filmColor.g + filmColor.b) / 3.0;
@@ -730,7 +738,7 @@ constexpr const char* fragmentSource = R"(#version 300 es
     if (pixiFilterKind == 19) {
       float glowDistance = pixiFilterParameters[0];
       float angularStep = pixiFilterParameters[6];
-      vec4 ownGlowColor = texture(image, sampleUv);
+      vec4 ownGlowColor = sampleImage( sampleUv);
       float totalAlpha = 0.0;
       float maximumAlpha = 0.0;
       for (int angleIndex = 0; angleIndex < 64; ++angleIndex) {
@@ -740,7 +748,7 @@ constexpr const char* fragmentSource = R"(#version 300 es
         for (int distanceIndex = 1; distanceIndex <= 32; ++distanceIndex) {
           float currentDistance = float(distanceIndex);
           if (currentDistance > glowDistance) break;
-          vec4 neighbor = texture(image, clamp(sampleUv + direction *
+          vec4 neighbor = sampleImage( clamp(sampleUv + direction *
             currentDistance / imageDimensions,
             vertexUvClamp.xy, vertexUvClamp.zw));
           float weight = glowDistance - currentDistance;
@@ -786,20 +794,20 @@ constexpr const char* fragmentSource = R"(#version 300 es
         pixiFilterParameters[3]) * 0.7;
       vec4 mist = vec4(vec3(rayNoise), 1.0) * (1.0 - sampleUv.y);
       mist.a = 1.0;
-      outputColor = (texture(image, sampleUv) + mist *
+      outputColor = (sampleImage( sampleUv) + mist *
         pixiFilterParameters[6]) * vertexColor;
       return;
     }
     if (pixiFilterKind == 21) {
       vec2 offset = (pixiFilterParameters[0] + 0.5) *
         vec2(pixiFilterParameters[1], pixiFilterParameters[2]) / imageDimensions;
-      vec4 kawaseColor = texture(image, clamp(sampleUv +
+      vec4 kawaseColor = sampleImage( clamp(sampleUv +
         vec2(-offset.x, offset.y), vertexUvClamp.xy, vertexUvClamp.zw));
-      kawaseColor += texture(image, clamp(sampleUv + offset,
+      kawaseColor += sampleImage( clamp(sampleUv + offset,
         vertexUvClamp.xy, vertexUvClamp.zw));
-      kawaseColor += texture(image, clamp(sampleUv +
+      kawaseColor += sampleImage( clamp(sampleUv +
         vec2(offset.x, -offset.y), vertexUvClamp.xy, vertexUvClamp.zw));
-      kawaseColor += texture(image, clamp(sampleUv - offset,
+      kawaseColor += sampleImage( clamp(sampleUv - offset,
         vertexUvClamp.xy, vertexUvClamp.zw));
       outputColor = kawaseColor * 0.25 * vertexColor;
       return;
@@ -822,49 +830,49 @@ constexpr const char* fragmentSource = R"(#version 300 es
     }
     vec4 sampleColor;
     if (blurRadius <= 0.0) {
-      sampleColor = texture(image, sampleUv);
+      sampleColor = sampleImage( sampleUv);
     } else if (any(notEqual(blurDirection, vec2(0.0)))) {
       vec2 stepUv = blurRadius * blurDirection / imageDimensions;
       if (pixiFilterParameters[2] == 5.0) {
         // Pixi 5's default five-tap kernel; parameter zero retains the MV kernel.
-        sampleColor = texture(image, sampleUv) * 0.250301;
-        sampleColor += texture(image, clamp(sampleUv + stepUv,
+        sampleColor = sampleImage( sampleUv) * 0.250301;
+        sampleColor += sampleImage( clamp(sampleUv + stepUv,
           vertexUvClamp.xy, vertexUvClamp.zw)) * 0.221461;
-        sampleColor += texture(image, clamp(sampleUv - stepUv,
+        sampleColor += sampleImage( clamp(sampleUv - stepUv,
           vertexUvClamp.xy, vertexUvClamp.zw)) * 0.221461;
-        sampleColor += texture(image, clamp(sampleUv + stepUv * 2.0,
+        sampleColor += sampleImage( clamp(sampleUv + stepUv * 2.0,
           vertexUvClamp.xy, vertexUvClamp.zw)) * 0.153388;
-        sampleColor += texture(image, clamp(sampleUv - stepUv * 2.0,
+        sampleColor += sampleImage( clamp(sampleUv - stepUv * 2.0,
           vertexUvClamp.xy, vertexUvClamp.zw)) * 0.153388;
       } else {
-        sampleColor = texture(image, sampleUv) * 0.227027;
-        sampleColor += texture(image, clamp(sampleUv + stepUv * 1.384615,
+        sampleColor = sampleImage( sampleUv) * 0.227027;
+        sampleColor += sampleImage( clamp(sampleUv + stepUv * 1.384615,
           vertexUvClamp.xy, vertexUvClamp.zw)) * 0.316216;
-        sampleColor += texture(image, clamp(sampleUv - stepUv * 1.384615,
+        sampleColor += sampleImage( clamp(sampleUv - stepUv * 1.384615,
           vertexUvClamp.xy, vertexUvClamp.zw)) * 0.316216;
-        sampleColor += texture(image, clamp(sampleUv + stepUv * 3.230769,
+        sampleColor += sampleImage( clamp(sampleUv + stepUv * 3.230769,
           vertexUvClamp.xy, vertexUvClamp.zw)) * 0.070270;
-        sampleColor += texture(image, clamp(sampleUv - stepUv * 3.230769,
+        sampleColor += sampleImage( clamp(sampleUv - stepUv * 3.230769,
           vertexUvClamp.xy, vertexUvClamp.zw)) * 0.070270;
       }
     } else {
       vec2 stepUv = blurRadius / imageDimensions;
-      sampleColor = texture(image, vertexUv) * 0.227027;
-      sampleColor += texture(image, clamp(vertexUv + vec2(stepUv.x, 0.0), vertexUvClamp.xy, vertexUvClamp.zw)) * 0.158108;
-      sampleColor += texture(image, clamp(vertexUv - vec2(stepUv.x, 0.0), vertexUvClamp.xy, vertexUvClamp.zw)) * 0.158108;
-      sampleColor += texture(image, clamp(vertexUv + vec2(0.0, stepUv.y), vertexUvClamp.xy, vertexUvClamp.zw)) * 0.158108;
-      sampleColor += texture(image, clamp(vertexUv - vec2(0.0, stepUv.y), vertexUvClamp.xy, vertexUvClamp.zw)) * 0.158108;
-      sampleColor += texture(image, clamp(vertexUv + stepUv, vertexUvClamp.xy, vertexUvClamp.zw)) * 0.049405;
-      sampleColor += texture(image, clamp(vertexUv - stepUv, vertexUvClamp.xy, vertexUvClamp.zw)) * 0.049405;
-      sampleColor += texture(image, clamp(vertexUv + vec2(stepUv.x, -stepUv.y), vertexUvClamp.xy, vertexUvClamp.zw)) * 0.049405;
-      sampleColor += texture(image, clamp(vertexUv + vec2(-stepUv.x, stepUv.y), vertexUvClamp.xy, vertexUvClamp.zw)) * 0.049405;
+      sampleColor = sampleImage( vertexUv) * 0.227027;
+      sampleColor += sampleImage( clamp(vertexUv + vec2(stepUv.x, 0.0), vertexUvClamp.xy, vertexUvClamp.zw)) * 0.158108;
+      sampleColor += sampleImage( clamp(vertexUv - vec2(stepUv.x, 0.0), vertexUvClamp.xy, vertexUvClamp.zw)) * 0.158108;
+      sampleColor += sampleImage( clamp(vertexUv + vec2(0.0, stepUv.y), vertexUvClamp.xy, vertexUvClamp.zw)) * 0.158108;
+      sampleColor += sampleImage( clamp(vertexUv - vec2(0.0, stepUv.y), vertexUvClamp.xy, vertexUvClamp.zw)) * 0.158108;
+      sampleColor += sampleImage( clamp(vertexUv + stepUv, vertexUvClamp.xy, vertexUvClamp.zw)) * 0.049405;
+      sampleColor += sampleImage( clamp(vertexUv - stepUv, vertexUvClamp.xy, vertexUvClamp.zw)) * 0.049405;
+      sampleColor += sampleImage( clamp(vertexUv + vec2(stepUv.x, -stepUv.y), vertexUvClamp.xy, vertexUvClamp.zw)) * 0.049405;
+      sampleColor += sampleImage( clamp(vertexUv + vec2(-stepUv.x, stepUv.y), vertexUvClamp.xy, vertexUvClamp.zw)) * 0.049405;
     }
     if (noiseGlitchEnabled) {
       if (sampleColor.a > 0.0) sampleColor.rgb /= sampleColor.a;
       float channelOffset = noiseGlitchParameters.w * 0.5 / imageDimensions.x;
-      vec4 redSample = texture(image, clamp(sampleUv + vec2(channelOffset, 0.0),
+      vec4 redSample = sampleImage( clamp(sampleUv + vec2(channelOffset, 0.0),
         vertexUvClamp.xy, vertexUvClamp.zw));
-      vec4 blueSample = texture(image, clamp(sampleUv - vec2(channelOffset, 0.0),
+      vec4 blueSample = sampleImage( clamp(sampleUv - vec2(channelOffset, 0.0),
         vertexUvClamp.xy, vertexUvClamp.zw));
       sampleColor.r = redSample.a > 0.0 ? redSample.r / redSample.a : 0.0;
       sampleColor.b = blueSample.a > 0.0 ? blueSample.b / blueSample.a : 0.0;
@@ -914,7 +922,7 @@ constexpr const char* fragmentSource = R"(#version 300 es
       outputColor = vec4(rgb, adjusted.a);
     }
     if (maskEnabled) {
-      vec2 screenPixel = vec2(gl_FragCoord.x, screenHeight - gl_FragCoord.y);
+      vec2 screenPixel = vec2(gl_FragCoord.x, targetYDown ? gl_FragCoord.y : screenHeight - gl_FragCoord.y);
       vec2 maskLocal = vec2(
         maskTransform[0] * screenPixel.x + maskTransform[2] * screenPixel.y + maskTransform[4],
         maskTransform[1] * screenPixel.x + maskTransform[3] * screenPixel.y + maskTransform[5]);
@@ -966,6 +974,7 @@ constexpr const char* tileVertexSource = R"(#version 300 es
   layout(location = 1) in vec2 sourcePixel;
   layout(location = 2) in vec2 animationFactor;
   uniform mat3 world;
+  uniform bool targetYDown;
   uniform vec2 screenSize;
   uniform vec2 animationOffset;
   uniform vec2 imageDimensions;
@@ -975,6 +984,7 @@ constexpr const char* tileVertexSource = R"(#version 300 es
     vec2 pixel = (world * vec3(localPosition, 1.0)).xy;
     gl_Position = vec4(pixel.x / screenSize.x * 2.0 - 1.0,
                        1.0 - pixel.y / screenSize.y * 2.0, 0.0, 1.0);
+    if (targetYDown) gl_Position.y = -gl_Position.y;
     meshLocalPosition = localPosition;
     vertexUv = (sourcePixel + animationFactor * animationOffset) / imageDimensions;
   }
@@ -1009,7 +1019,7 @@ constexpr const char* generatedTextureFragmentSource = R"(#version 300 es
   in vec2 vertexUv;
   out vec4 outputColor;
   void main() {
-    vec4 color = texture(image, vec2(vertexUv.x, 1.0 - vertexUv.y));
+    vec4 color = texture(image, vertexUv);
     if (!preservePremultiplied && color.a > 0.0) color.rgb /= color.a;
     outputColor = color;
   }
@@ -1092,6 +1102,7 @@ constexpr const char* spriteEffectFragmentSource = R"(#version 300 es
   uniform bool maskEnabled;
   uniform float maskTransform[6];
   uniform vec2 maskTextureSize;
+  uniform bool targetYDown;
   uniform float screenHeight;
   uniform bool spriteColorEnabled;
   uniform vec4 spriteColorTone;
@@ -1172,7 +1183,7 @@ constexpr const char* spriteEffectFragmentSource = R"(#version 300 es
     }
     outputColor = sampleColor * vertexColor;
     if (maskEnabled) {
-      vec2 screenPixel = vec2(gl_FragCoord.x, screenHeight - gl_FragCoord.y);
+      vec2 screenPixel = vec2(gl_FragCoord.x, targetYDown ? gl_FragCoord.y : screenHeight - gl_FragCoord.y);
       vec2 maskLocal = vec2(
         maskTransform[0] * screenPixel.x + maskTransform[2] * screenPixel.y +
           maskTransform[4],
@@ -1381,6 +1392,7 @@ constexpr const char* tileFragmentSource = R"(#version 300 es
   uniform float maskTransform[6];
   uniform vec4 maskFrame;
   uniform vec2 maskTextureSize;
+  uniform bool targetYDown;
   uniform float screenHeight;
 
   out vec4 outputColor;
@@ -1409,7 +1421,7 @@ constexpr const char* tileFragmentSource = R"(#version 300 es
     sampled.a *= color.a;
     outputColor = sampled;
     if (maskEnabled) {
-      vec2 screenPixel = vec2(gl_FragCoord.x, screenHeight - gl_FragCoord.y);
+      vec2 screenPixel = vec2(gl_FragCoord.x, targetYDown ? gl_FragCoord.y : screenHeight - gl_FragCoord.y);
       vec2 maskPixel = vec2(
         maskTransform[0] * screenPixel.x + maskTransform[2] * screenPixel.y + maskTransform[4],
         maskTransform[1] * screenPixel.x + maskTransform[3] * screenPixel.y + maskTransform[5]);

@@ -32,6 +32,14 @@ function spriteRoundingCases() {
         size: 64, parentScale: 2, child: true, childRounded, snapshot });
     }
   }
+  for (const snapshot of [false, true]) {
+    for (const childRounded of [false, true]) {
+      rows.push({ label: `nested-filter-${Number(snapshot)}-${Number(childRounded)}`,
+        size: 64, parentScale: 2, child: true, childRounded, snapshot, clip: true, clipSize: 64 });
+    }
+  }
+  rows.push({ label: 'screen-filter-snapshot', screen: 'filter', snapshot: true, rounded: false });
+  rows.push({ label: 'alpha-clip-snapshot', alpha: 0.5, clip: true, parent: true, snapshot: true });
   for (const atlasRotation of [0, 2, 4, 6, 8, 10, 12, 14]) {
     for (const rounded of [false, true]) {
       rows.push({ label: `atlas-${atlasRotation}-${Number(rounded)}`, atlasRotation,

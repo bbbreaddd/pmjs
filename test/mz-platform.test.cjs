@@ -67,3 +67,37 @@ test('MZ local save paths resolve through the native storage filesystem', t => {
   context.fsModule.renameSync(save + '_', save);
   assert.deepEqual(context.fsModule.readFileSync(save), bytes);
 });
+
+
+test('MZ compressed save strings survive UTF-8 writes, restart and backup recovery', t => {
+  const { createStorage } = require('../runner/storage.cjs');
+  const { deflateSync, inflateSync } = require('node:zlib');
+  const { temporaryDirectory } = require('./helpers/temp.cjs');
+  const directory = temporaryDirectory('pmjs-mz-compressed-save-');
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const context = vm.createContext({ Buffer, Utils: {}, StorageManager: {},
+    NativeHost: { storage: createStorage(directory) }, PMJS: { config: {} } });
+  vm.runInContext(fs.readFileSync(path.join(__dirname,
+    '../js/pmjs-web/filesystem.js'), 'utf8'), context);
+  vm.runInContext(source, context);
+  const contents = { '@': 'Game_System', title: '日本語 / café / 🌙',
+    variables: [null, 12, { enabled: true }], inventory: { 3: 2 } };
+  const compressed = deflateSync(JSON.stringify(contents), { level: 1 });
+  assert.ok(compressed.some(byte => byte > 127));
+  // MZ writes its compressed binary string with Node's default UTF-8 encoding.
+  const zip = compressed.toString('latin1');
+  const save = context.StorageManager.fileDirectoryPath() + 'file1.rmmzsave';
+  context.fsModule.writeFileSync(save, zip);
+  context.NativeHost.storage = createStorage(directory);
+  const restored = context.fsModule.readFileSync(save, 'utf8');
+  assert.equal(restored, zip);
+  assert.deepEqual(JSON.parse(inflateSync(Buffer.from(restored, 'latin1')).toString('utf8')), contents);
+  assert.deepEqual(fs.readFileSync(path.join(directory, 'file1.rmmzsave')), Buffer.from(zip, 'utf8'));
+  context.fsModule.renameSync(save, save + '_');
+  context.fsModule.writeFileSync(save, 'interrupted replacement');
+  context.NativeHost.storage = createStorage(directory);
+  context.fsModule.unlinkSync(save);
+  context.fsModule.renameSync(save + '_', save);
+  assert.equal(context.fsModule.readFileSync(save, 'utf8'), zip);
+  assert.equal(context.fsModule.existsSync(save + '_'), false);
+});

@@ -18,6 +18,14 @@ function fixture() {
     apply(manager, input, output, clear) { manager.applyFilter(this, input, output, clear); }
   }
   sandbox.PIXI.Filter = Filter;
+  class ColorMatrixFilter extends Filter {
+    constructor() {
+      super();
+      this.fragmentSrc = 'identity fragment';
+      this.matrix = [1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0];
+    }
+  }
+  sandbox.PIXI.filters.ColorMatrixFilter = ColorMatrixFilter;
   sandbox.Graphics = { width: 32, height: 32 };
   let compilations = 0;
   const plans = [];
@@ -83,4 +91,22 @@ test('invalid uniforms and feedback targets are observable and never publish a f
   assert.equal(plans.length, 0);
   assert.ok(compatHits.every(hit => hit[0] === 'render.filter-program'),
     JSON.stringify(compatHits));
+});
+
+
+test('changed shaders and subclasses run before a native identity-filter shortcut', () => {
+  const { sandbox, node, plans } = fixture();
+  const Core = sandbox.PIXI.filters.ColorMatrixFilter;
+  assert.equal(sandbox.nativeSceneFilter(node, [new Core()]).groups.length, 0);
+  const replacement = new Core();
+  replacement.fragmentSrc = 'replacement fragment';
+  assert.equal(sandbox.nativeSceneFilter(node, [replacement]).groups[0].kind, 31);
+  class Subclass extends Core {}
+  assert.equal(sandbox.nativeSceneFilter(node, [new Subclass()]).groups[0].kind, 31);
+  Core.prototype.apply = function(manager, input, output, clear) {
+    this.uniforms.amount = 0.5;
+    manager.applyFilter(this, input, output, clear);
+  };
+  assert.equal(sandbox.nativeSceneFilter(node, [new Core()]).groups[0].kind, 31);
+  assert.equal(plans[2].passes[0].uniforms[0], 0.5);
 });

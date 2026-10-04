@@ -284,6 +284,7 @@ class Renderer {
  private:
   Effects* effects_ = nullptr;
   struct TileProgramUniforms {
+    int targetYDown = -1;
     int world = -1;
     int screen = -1;
     int animation = -1;
@@ -394,7 +395,7 @@ class Renderer {
   static void applyBlendMode(BlendMode mode);
   void drawCustomFilterPlan(const CustomFilterPlan& plan, std::uint32_t source,
                             std::uint32_t output, const RenderCommand& command,
-                            float sourceResolution, float outputResolution);
+                            float sourceResolution, float outputResolution, bool outputYDown);
   std::uint32_t customFilterVertexArray_ = 0, customFilterVertexBuffer_ = 0;
   std::vector<RenderTarget> customPassTargets_;
   // Native rendering is shared across facades; the first Pixi renderer fixes precision.
@@ -432,6 +433,11 @@ class Renderer {
   int presentationUpperCanvasOpacityUniform_ = -1;
   int presentationVideoPremultipliedUniform_ = -1;
   int presentationUpperCanvasPremultipliedUniform_ = -1;
+  int filterTargetYDownUniform_ = -1;
+  int filterImageYDownUniform_ = -1;
+  int filterInputYDownUniform_ = -1;
+  int simpleTargetYDownUniform_ = -1;
+  int spriteEffectTargetYDownUniform_ = -1;
   int simpleSpriteVerticesUniform_ = -1;
   int simpleSpriteProjectionUniform_ = -1;
   int simpleSpritePackingUniform_ = -1;

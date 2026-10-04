@@ -779,7 +779,9 @@ void Renderer::renderScene() {
   std::array<const RenderCommand*, scene_packet::maxFilterDepth> filterCommands{};
   std::array<float, scene_packet::maxFilterDepth> rasterResolutions{};
   float rasterResolution = 1;
+  bool targetYDown = offscreenRender_;
   const auto rasterScissor = [&](int x, int y, int width, int height) {
+    if (targetYDown) y = height_ - y - height;
     glScissor(std::lround(x * rasterResolution), std::lround(y * rasterResolution),
       std::max(0L, std::lround(width * rasterResolution)), std::max(0L, std::lround(height * rasterResolution)));
   };
@@ -797,6 +799,7 @@ void Renderer::renderScene() {
   applyBlendMode(activeBlend);
   for (const auto& operation : operations) {
     if (operation.action == RenderCommand::Action::filterBegin) {
+      targetYDown = true;
       rasterResolution = operation.command->customFilterPlan ?
         operation.command->customFilterPlan->resolutions[0] : 1.0F;
       rasterResolutions[filterDepth] = rasterResolution;
@@ -850,6 +853,7 @@ void Renderer::renderScene() {
     }
     if (operation.action == RenderCommand::Action::filterEnd) {
       --filterDepth;
+      targetYDown = offscreenRender_ || filterDepth > 0;
       const float sourceResolution = rasterResolutions[filterDepth];
       rasterResolution = filterDepth ? rasterResolutions[filterDepth - 1] : 1.0F;
       const RenderCommand& filter = *filterCommands[filterDepth];
@@ -865,6 +869,10 @@ void Renderer::renderScene() {
       glViewport(0, 0, std::lround(width_ * rasterResolution), std::lround(height_ * rasterResolution));
       glUseProgram(program_);
       activeProgram = program_;
+      glUniform1i(filterTargetYDownUniform_, 0);
+      glUniform1i(filterInputYDownUniform_, 0);
+      bool sourceYDown = true;
+      glUniform1i(filterImageYDownUniform_, sourceYDown);
       glBindVertexArray(vertexArray_);
       glActiveTexture(GL_TEXTURE0);
       glBindTexture(GL_TEXTURE_2D, groupTargets_[filterDepth].texture);
@@ -915,6 +923,8 @@ void Renderer::renderScene() {
                                            groupTargets_[filterDepth].framebuffer);
           glBindTexture(GL_TEXTURE_2D, sourceTexture);
           glDrawArrays(GL_TRIANGLES, operation.first, operation.count);
+          sourceYDown = false;
+          glUniform1i(filterImageYDownUniform_, sourceYDown);
           if (diagnostics_) {
             ++stats_.drawCalls;
             ++stats_.filterDrawCalls;
@@ -930,6 +940,8 @@ void Renderer::renderScene() {
                                            groupTargets_[filterDepth].framebuffer);
           glBindTexture(GL_TEXTURE_2D, sourceTexture);
           glDrawArrays(GL_TRIANGLES, operation.first, operation.count);
+          sourceYDown = false;
+          glUniform1i(filterImageYDownUniform_, sourceYDown);
           if (diagnostics_) {
             ++stats_.drawCalls;
             ++stats_.filterDrawCalls;
@@ -958,6 +970,8 @@ void Renderer::renderScene() {
                                            groupTargets_[filterDepth].framebuffer);
           glBindTexture(GL_TEXTURE_2D, sourceTexture);
           glDrawArrays(GL_TRIANGLES, operation.first, operation.count);
+          sourceYDown = false;
+          glUniform1i(filterImageYDownUniform_, sourceYDown);
           if (diagnostics_) {
             ++stats_.drawCalls;
             ++stats_.filterDrawCalls;
@@ -1035,6 +1049,8 @@ void Renderer::renderScene() {
         glUniform1i(pixiFilterKindUniform_, 3);
         glBindFramebuffer(GL_FRAMEBUFFER, bloomTarget_.framebuffer);
         glDrawArrays(GL_TRIANGLES, operation.first, operation.count);
+          sourceYDown = false;
+          glUniform1i(filterImageYDownUniform_, sourceYDown);
         if (diagnostics_) {
           ++stats_.drawCalls;
           ++stats_.filterDrawCalls;
@@ -1055,6 +1071,8 @@ void Renderer::renderScene() {
                        passParameters.data());
           glUniform1i(pixiFilterKindUniform_, 21);
           glDrawArrays(GL_TRIANGLES, operation.first, operation.count);
+          sourceYDown = false;
+          glUniform1i(filterImageYDownUniform_, sourceYDown);
           if (diagnostics_) {
             ++stats_.drawCalls;
             ++stats_.filterDrawCalls;
@@ -1066,6 +1084,8 @@ void Renderer::renderScene() {
         glUniform1i(bloomImageUniform_, 3);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, groupTargets_[filterDepth].texture);
+        sourceYDown = true;
+        glUniform1i(filterImageYDownUniform_, sourceYDown);
         const std::array<float, 10> compositeParameters = {
           filter.filterParameters[0], filter.filterParameters[1],
           0, 0, 0, 0, 0, 0, 0, 0};
@@ -1154,6 +1174,8 @@ void Renderer::renderScene() {
                        passParameters.data());
           glUniform1i(pixiFilterKindUniform_, 21);
           glDrawArrays(GL_TRIANGLES, operation.first, operation.count);
+          sourceYDown = false;
+          glUniform1i(filterImageYDownUniform_, sourceYDown);
           if (diagnostics_) {
             ++stats_.drawCalls;
             ++stats_.filterDrawCalls;
@@ -1190,7 +1212,7 @@ void Renderer::renderScene() {
         if (filter.customFilterPlan) {
           drawCustomFilterPlan(*filter.customFilterPlan, groupTargets_[filterDepth].framebuffer,
             filterDepth == 0 ? rootFramebuffer : groupTargets_[filterDepth - 1].framebuffer,
-            filter, sourceResolution, rasterResolution);
+            filter, sourceResolution, rasterResolution, targetYDown);
           glUseProgram(program_);
           activeProgram = program_;
           activeBlend = filter.customFilterPlan->passes.empty() ? BlendMode::normal :
@@ -1222,8 +1244,8 @@ void Renderer::renderScene() {
         glBindFramebuffer(GL_READ_FRAMEBUFFER, groupTargets_[filterDepth].framebuffer);
         if (frameWidth > 0 && frameHeight > 0) {
           // Filter texture coordinates start at the top of the cropped source frame.
-          glBlitFramebuffer(bounds[0], height_ - bounds[3], bounds[2], height_ - bounds[1],
-            0, frameHeight, frameWidth, 0, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+          glBlitFramebuffer(bounds[0], bounds[1], bounds[2], bounds[3],
+            0, 0, frameWidth, frameHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
         }
         glBindFramebuffer(GL_FRAMEBUFFER, filterDepth == 0 ? rootFramebuffer :
                           groupTargets_[filterDepth - 1].framebuffer);
@@ -1232,6 +1254,7 @@ void Renderer::renderScene() {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         textureNearestState_[input.texture] = false;
         glUseProgram(custom.program);
+        glUniform1i(glGetUniformLocation(custom.program, "pmjsTargetYDown"), targetYDown);
         glUniform1i(glGetUniformLocation(custom.program, "uSampler"), 0);
         glUniform2f(glGetUniformLocation(custom.program, "pmjsScreenSize"), width_, height_);
         glUniform4f(glGetUniformLocation(custom.program, "pmjsFilterFrame"),
@@ -1272,6 +1295,8 @@ void Renderer::renderScene() {
         continue;
       }
 
+      glUniform1i(filterTargetYDownUniform_, targetYDown);
+      glUniform1i(filterImageYDownUniform_, sourceYDown);
       glBindFramebuffer(GL_FRAMEBUFFER, filterDepth == 0 ? rootFramebuffer :
                         groupTargets_[filterDepth - 1].framebuffer);
       glBindTexture(GL_TEXTURE_2D, compositeTexture);
@@ -1359,6 +1384,9 @@ void Renderer::renderScene() {
       activeProgram = program_;
       glBindVertexArray(vertexArray_);
       glActiveTexture(GL_TEXTURE0);
+      glUniform1i(filterTargetYDownUniform_, targetYDown);
+      glUniform1i(filterInputYDownUniform_, targetYDown);
+      glUniform1i(filterImageYDownUniform_, 0);
       glBindTexture(GL_TEXTURE_2D, filterDepth == 0 ? rootTexture :
                     groupTargets_[filterDepth - 1].texture);
       glUniform2f(textureSizeUniform_, static_cast<float>(width_), static_cast<float>(height_));
@@ -1411,10 +1439,10 @@ void Renderer::renderScene() {
       auto draw = operation.command->effect;
       const auto* filter = filterDepth ? filterCommands[filterDepth - 1] : nullptr;
       const auto filterFrame = effectFrame(filter, width_, height_);
-      if (offscreenRender_ || filterDepth > 0) {
+      if (filterDepth > 0) {
         // MZ draws directly in the filter's local GL coordinates, bypassing Pixi's
-        // projection. Copy the backdrop into that orientation rather than reflect
-        // particle geometry, which changes edge rasterization and model culling.
+        // projection. Crop the backdrop to that frame without reflecting particles,
+        // which changes edge rasterization and model culling.
         const int frameWidth = filterFrame[2] - filterFrame[0];
         const int frameHeight = filterFrame[3] - filterFrame[1];
         if (frameWidth <= 0 || frameHeight <= 0) continue;
@@ -1426,8 +1454,8 @@ void Renderer::renderScene() {
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, effectTarget_.framebuffer);
         glClearColor(0, 0, 0, 0);
         glClear(GL_COLOR_BUFFER_BIT);
-        glBlitFramebuffer(filterFrame[0], height_ - filterFrame[1],
-                          filterFrame[2], height_ - filterFrame[3],
+        glBlitFramebuffer(filterFrame[0], filterFrame[1],
+                          filterFrame[2], filterFrame[3],
                           0, 0, frameWidth, frameHeight,
                           GL_COLOR_BUFFER_BIT, GL_NEAREST);
         glBindFramebuffer(GL_FRAMEBUFFER, effectTarget_.framebuffer);
@@ -1437,8 +1465,8 @@ void Renderer::renderScene() {
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
         if (scissorActive) glEnable(GL_SCISSOR_TEST);
         glBlitFramebuffer(0, 0, frameWidth, frameHeight,
-                          filterFrame[0], height_ - filterFrame[1],
-                          filterFrame[2], height_ - filterFrame[3],
+                          filterFrame[0], filterFrame[1],
+                          filterFrame[2], filterFrame[3],
                           GL_COLOR_BUFFER_BIT, GL_NEAREST);
         glBindFramebuffer(GL_FRAMEBUFFER, destination);
       } else {
@@ -1477,6 +1505,7 @@ void Renderer::renderScene() {
       glUseProgram(program);
       activeProgram = program;
       glBindVertexArray(layer->second.vertexArray);
+      glUniform1i(uniforms.targetYDown, targetYDown);
       glUniformMatrix3fv(uniforms.world, 1, GL_FALSE, world.data());
       glUniform2f(uniforms.screen, static_cast<float>(width_), static_cast<float>(height_));
       glUniform2f(uniforms.animation, command.tileAnimation[0],
@@ -1559,7 +1588,11 @@ void Renderer::renderScene() {
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
                       operation.nearest ? GL_NEAREST : GL_LINEAR);
     }
-    const std::array<float, 9> projection = {2.0F / width_, 0, 0, 0, -2.0F / height_, 0, -1, 1, 1};
+    // Pixi render targets project downward in GL; readback reflection cannot
+    // reproduce sampling and edge coverage at exact pixel-center boundaries.
+    const float ySign = targetYDown ? 1.0F : -1.0F;
+    const std::array<float, 9> projection = {2.0F / width_, 0, 0, 0, ySign * 2.0F / height_, 0, -1, -ySign, 1};
+    glUniform1i(simpleSprite ? simpleTargetYDownUniform_ : spriteEffectTargetYDownUniform_, targetYDown);
     glUniformMatrix3fv(simpleSprite ? simpleSpriteProjectionUniform_ : spriteEffectProjectionUniform_, 1, GL_FALSE, projection.data());
     glUniform1i(simpleSprite ? simpleTilingClampUniform_ : spriteEffectTilingClampUniform_,
                 operation.clampedTilingSampling);

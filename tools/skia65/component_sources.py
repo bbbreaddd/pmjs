@@ -1,4 +1,5 @@
 import argparse
+import fcntl
 import pathlib
 import re
 
@@ -36,9 +37,13 @@ if __name__ == "__main__":
     parser.add_argument("--cache", type=pathlib.Path, default=ROOT / ".cache/skia65")
     parser.add_argument("--write", action="store_true")
     options = parser.parse_args()
-    provision(options.cache)
-    generated = generate(options.cache)
-    if options.write:
-        OUTPUT.write_text(generated)
-    elif OUTPUT.read_text() != generated:
-        raise RuntimeError("Frozen component sources changed; regenerate and review explicitly")
+    options.cache = options.cache.resolve()
+    options.cache.parent.mkdir(parents=True, exist_ok=True)
+    with options.cache.with_suffix(".lock").open("a") as guard:
+        fcntl.flock(guard, fcntl.LOCK_EX)
+        provision(options.cache)
+        generated = generate(options.cache)
+        if options.write:
+            OUTPUT.write_text(generated)
+        elif OUTPUT.read_text() != generated:
+            raise RuntimeError("Frozen component sources changed; regenerate and review explicitly")
