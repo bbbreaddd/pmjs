@@ -128,42 +128,46 @@ Renderer::Renderer(int width, int height, ImageStore& images)
     glGetUniformLocation(presentationProgram_, "videoPremultiplied");
   presentationUpperCanvasPremultipliedUniform_ =
     glGetUniformLocation(presentationProgram_, "upperCanvasPremultiplied");
-  spriteEffectProgram_ = linkProgram(vertexSource, spriteEffectFragmentSource);
-  spriteEffectTargetYDownUniform_ = glGetUniformLocation(spriteEffectProgram_, "targetYDown");
-  spriteEffectVerticesUniform_ = glGetUniformLocation(spriteEffectProgram_, "spriteWorldVertices");
-  spriteEffectProjectionUniform_ = glGetUniformLocation(spriteEffectProgram_, "spriteProjection");
-  spriteEffectPackingUniform_ = glGetUniformLocation(spriteEffectProgram_, "pixiSpritePacking");
-  spriteEffectPremultipliedUniform_ = glGetUniformLocation(spriteEffectProgram_, "texturePremultiplied");
-  spriteEffectFrameUniform_ = glGetUniformLocation(spriteEffectProgram_, "spriteFrame");
-  spriteEffectStandaloneUniform_ = glGetUniformLocation(spriteEffectProgram_, "standaloneBitmapRegion");
-  spriteEffectTilingClampUniform_ = glGetUniformLocation(spriteEffectProgram_, "clampedTilingSampling");
-  spriteEffectNearestUniform_ = glGetUniformLocation(spriteEffectProgram_, "nearestSampling");
-  spriteEffectTextureSizeUniform_ =
-    glGetUniformLocation(spriteEffectProgram_, "imageDimensions");
-  spriteEffectBlurUniform_ =
-    glGetUniformLocation(spriteEffectProgram_, "blurRadius");
-  spriteEffectMaskEnabledUniform_ =
-    glGetUniformLocation(spriteEffectProgram_, "maskEnabled");
-  spriteEffectMaskImageUniform_ =
-    glGetUniformLocation(spriteEffectProgram_, "maskImage");
-  spriteEffectMaskTransformUniform_ =
-    glGetUniformLocation(spriteEffectProgram_, "maskTransform");
-  spriteEffectMaskTextureSizeUniform_ =
-    glGetUniformLocation(spriteEffectProgram_, "maskTextureSize");
-  spriteEffectScreenHeightUniform_ =
-    glGetUniformLocation(spriteEffectProgram_, "screenHeight");
-  spriteEffectColorEnabledUniform_ =
-    glGetUniformLocation(spriteEffectProgram_, "spriteColorEnabled");
-  spriteEffectColorToneUniform_ =
-    glGetUniformLocation(spriteEffectProgram_, "spriteColorTone");
-  spriteEffectBlendColorUniform_ =
-    glGetUniformLocation(spriteEffectProgram_, "spriteBlendColor");
-  spriteEffectMatrixEnabledUniform_ =
-    glGetUniformLocation(spriteEffectProgram_, "colorMatrixEnabled");
-  spriteEffectMatrixUniform_ =
-    glGetUniformLocation(spriteEffectProgram_, "colorMatrix");
-  spriteEffectMatrixAlphaUniform_ =
-    glGetUniformLocation(spriteEffectProgram_, "colorMatrixAlpha");
+  spriteEffect_.program = linkProgram(vertexSource, spriteEffectFragmentSource);
+  bitmapRegion_.program = linkProgram(bitmapRegionVertexSource().c_str(), bitmapRegionFragmentSource().c_str());
+  for (auto* entry : {&spriteEffect_, &bitmapRegion_}) {
+    auto& effect = *entry;
+    effect.targetYDown = glGetUniformLocation(effect.program, "targetYDown");
+    effect.vertices = glGetUniformLocation(effect.program, "spriteWorldVertices");
+    effect.projection = glGetUniformLocation(effect.program, "spriteProjection");
+    effect.packing = glGetUniformLocation(effect.program, "pixiSpritePacking");
+    effect.premultiplied = glGetUniformLocation(effect.program, "texturePremultiplied");
+    effect.frame = glGetUniformLocation(effect.program, "spriteFrame");
+    effect.standalone = glGetUniformLocation(effect.program, "standaloneBitmapRegion");
+    effect.tilingClamp = glGetUniformLocation(effect.program, "clampedTilingSampling");
+    effect.nearest = glGetUniformLocation(effect.program, "nearestSampling");
+    effect.textureSize =
+      glGetUniformLocation(effect.program, "imageDimensions");
+    effect.blur =
+      glGetUniformLocation(effect.program, "blurRadius");
+    effect.maskEnabled =
+      glGetUniformLocation(effect.program, "maskEnabled");
+    effect.maskImage =
+      glGetUniformLocation(effect.program, "maskImage");
+    effect.maskTransform =
+      glGetUniformLocation(effect.program, "maskTransform");
+    effect.maskTextureSize =
+      glGetUniformLocation(effect.program, "maskTextureSize");
+    effect.screenHeight =
+      glGetUniformLocation(effect.program, "screenHeight");
+    effect.colorEnabled =
+      glGetUniformLocation(effect.program, "spriteColorEnabled");
+    effect.colorTone =
+      glGetUniformLocation(effect.program, "spriteColorTone");
+    effect.blendColor =
+      glGetUniformLocation(effect.program, "spriteBlendColor");
+    effect.matrixEnabled =
+      glGetUniformLocation(effect.program, "colorMatrixEnabled");
+    effect.matrix =
+      glGetUniformLocation(effect.program, "colorMatrix");
+    effect.matrixAlpha =
+      glGetUniformLocation(effect.program, "colorMatrixAlpha");
+  }
   clearTriangleProgram_ = linkProgram(vertexSource, withTriangleClipCoverage(clearTriangleFragmentSource).c_str());
   clearTrianglePointsUniform_ = glGetUniformLocation(clearTriangleProgram_, "points");
   clearTriangleNormalsUniform_ = glGetUniformLocation(clearTriangleProgram_, "inward");
@@ -522,7 +526,8 @@ Renderer::~Renderer() {
   if (simpleProgram_) glDeleteProgram(simpleProgram_);
   if (generatedTextureProgram_) glDeleteProgram(generatedTextureProgram_);
   if (presentationProgram_) glDeleteProgram(presentationProgram_);
-  if (spriteEffectProgram_) glDeleteProgram(spriteEffectProgram_);
+  if (spriteEffect_.program) glDeleteProgram(spriteEffect_.program);
+  if (bitmapRegion_.program) glDeleteProgram(bitmapRegion_.program);
   if (tileProgram_) glDeleteProgram(tileProgram_);
   if (meshPostTintOverlayProgram_) glDeleteProgram(meshPostTintOverlayProgram_);
   if (canvasTriangleBitmapProgram_) glDeleteProgram(canvasTriangleBitmapProgram_);

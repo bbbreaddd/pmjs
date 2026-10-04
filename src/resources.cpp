@@ -23,6 +23,18 @@ namespace {
 constexpr std::uint32_t indexMask = 0xffffU;
 constexpr std::uint16_t generationMask = 0x7fffU;
 
+bool allZeroRgba(const void* pixels, int width, int height, int rowPixels) {
+  const auto* bytes = static_cast<const std::uint8_t*>(pixels);
+  const auto rowBytes = static_cast<std::size_t>(width) * 4U;
+  const auto stride = static_cast<std::size_t>(rowPixels) * 4U;
+  for (int row = 0; row < height; ++row) {
+    const auto* begin = bytes + static_cast<std::size_t>(row) * stride;
+    if (std::any_of(begin, begin + rowBytes,
+                   [](std::uint8_t value) { return value != 0; })) return false;
+  }
+  return true;
+}
+
 std::optional<ImagePixels> decodePngFromMemory(const void* data, std::size_t size) {
   if (!data || size < 8) return std::nullopt;
   png_image image{};
@@ -420,11 +432,13 @@ std::optional<ImageInfo> ImageStore::createRgba(int width, int height,
   slot.gpuOnly = pixels == nullptr;
   slot.renderTarget = false;
   slot.premultiplied = premultiplied;
+  slot.knownAllZero = pixels && allZeroRgba(pixels, width, height, width);
   slot.live = true;
   ++liveCount_;
   gpuBytes_ += extent->rgbaBytes;
   peakGpuBytes_ = std::max(peakGpuBytes_, gpuBytes_);
-  return ImageInfo{makeHandle(index, slot.generation), width, height, texture, premultiplied};
+  return ImageInfo{makeHandle(index, slot.generation), width, height, texture,
+                   premultiplied, slot.knownAllZero};
 }
 
 std::optional<ImageInfo> ImageStore::createRenderTarget(int width, int height,
@@ -518,6 +532,8 @@ std::vector<ImageMemoryEntry> ImageStore::memoryEntries() const {
 bool ImageStore::updateRgba(ImageHandle handle, const void* pixels) {
   const auto info = lookup(handle);
   if (!info || !pixels) return false;
+  auto& slot = slots_[(handle & indexMask) - 1U];
+  slot.knownAllZero = false;
   while (glGetError() != GL_NO_ERROR) {}
   glBindTexture(GL_TEXTURE_2D, info->texture);
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -525,6 +541,8 @@ bool ImageStore::updateRgba(ImageHandle handle, const void* pixels) {
                   GL_RGBA, GL_UNSIGNED_BYTE, pixels);
   const bool ok = glGetError() == GL_NO_ERROR;
   if (ok) {
+    slot.knownAllZero = !slot.gpuOnly && !slot.renderTarget &&
+        allZeroRgba(pixels, info->width, info->height, info->width);
     slots_[(handle & indexMask) - 1U].mipmapsReady = false;
     clearPremultipliedTexture(slots_[(handle & indexMask) - 1U]);
     ++textureFullUpdates_;
@@ -541,6 +559,10 @@ bool ImageStore::updateRgbaRegion(ImageHandle handle, int x, int y, int width,
   if (!info || !pixels || x < 0 || y < 0 || width <= 0 || height <= 0 ||
       x + width > info->width || y + height > info->height ||
       sourceRowPixels < width) return false;
+  auto& slot = slots_[(handle & indexMask) - 1U];
+  const bool canProveZero = slot.knownAllZero ||
+      (x == 0 && y == 0 && width == info->width && height == info->height);
+  slot.knownAllZero = false;
   while (glGetError() != GL_NO_ERROR) {}
   glBindTexture(GL_TEXTURE_2D, info->texture);
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -550,6 +572,8 @@ bool ImageStore::updateRgbaRegion(ImageHandle handle, int x, int y, int width,
   glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
   const bool ok = glGetError() == GL_NO_ERROR;
   if (ok) {
+    slot.knownAllZero = !slot.gpuOnly && !slot.renderTarget && canProveZero &&
+        allZeroRgba(pixels, width, height, sourceRowPixels);
     slots_[(handle & indexMask) - 1U].mipmapsReady = false;
     clearPremultipliedTexture(slots_[(handle & indexMask) - 1U]);
     ++textureRegionUpdates_;
@@ -573,7 +597,8 @@ std::optional<ImageInfo> ImageStore::lookup(ImageHandle handle) const {
   if (index >= slots_.size()) return std::nullopt;
   const auto& slot = slots_[index];
   if (!slot.live || slot.generation != generation) return std::nullopt;
-  return ImageInfo{handle, slot.width, slot.height, slot.texture, slot.premultiplied};
+  return ImageInfo{handle, slot.width, slot.height, slot.texture,
+                   slot.premultiplied, slot.knownAllZero};
 }
 
 bool ImageStore::isRenderTarget(ImageHandle handle) const {
@@ -727,6 +752,7 @@ void ImageStore::destroySlot(std::size_t index) {
   slot.sourcePath.clear();
   slot.cachedPixels.reset();
   slot.live = false;
+  slot.knownAllZero = false;
   slot.generation = static_cast<std::uint16_t>((slot.generation + 1U) & generationMask);
   if (slot.generation == 0) slot.generation = 1;
   --liveCount_;

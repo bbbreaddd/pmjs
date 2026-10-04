@@ -24,7 +24,8 @@ void glTexImage2D(GLenum, GLint, GLint, GLsizei width, GLsizei height, GLint,
   assert(format==GL_RGBA && type==GL_UNSIGNED_BYTE);
   textureWidth=width;textureHeight=height;
   const auto* bytes=static_cast<const uint8_t*>(data);
-  texture.assign(bytes,bytes+static_cast<size_t>(width)*height*4);
+  texture.assign(static_cast<size_t>(width)*height*4, 0);
+  if(bytes) std::copy_n(bytes,texture.size(),texture.begin());
   ++fullUploads;
 }
 void glTexSubImage2D(GLenum, GLint, GLint x, GLint y, GLsizei width, GLsizei height,
@@ -72,5 +73,50 @@ int main() {
   }
   const auto stats=canvases.textBackendStats();
   assert(stats.scratchBytes==0);
+
+  const std::vector<uint8_t> zeros(2*2*4,0);
+  const auto empty=images.createRgba(2,2,zeros.data(),true); assert(empty);
+  assert(images.lookup(empty->handle)->knownAllZero);
+  const std::vector<uint8_t> strided={0,0,0,0, 255,255,255,255,
+                                     0,0,0,0, 255,255,255,255};
+  assert(images.updateRgbaRegion(empty->handle,0,0,1,2,strided.data(),2));
+  assert(images.lookup(empty->handle)->knownAllZero);
+  const std::vector<uint8_t> hiddenRgb={37,0,0,0};
+  assert(images.updateRgbaRegion(empty->handle,0,0,1,1,hiddenRgb.data(),1));
+  assert(!images.lookup(empty->handle)->knownAllZero);
+  assert(images.updateRgbaRegion(empty->handle,0,0,1,1,zeros.data(),1));
+  assert(!images.lookup(empty->handle)->knownAllZero);
+  const std::vector<uint8_t> fullStrided={0,0,0,0, 0,0,0,0, 255,255,255,255,
+                                         0,0,0,0, 0,0,0,0, 255,255,255,255};
+  assert(images.updateRgbaRegion(empty->handle,0,0,2,2,fullStrided.data(),3));
+  assert(images.lookup(empty->handle)->knownAllZero);
+  failUpload=true;
+  assert(!images.updateRgbaRegion(empty->handle,0,0,1,1,hiddenRgb.data(),1));
+  assert(!images.lookup(empty->handle)->knownAllZero);
+  failUpload=false;
+  assert(images.updateRgba(empty->handle,zeros.data()));
+  assert(images.lookup(empty->handle)->knownAllZero);
+  failUpload=true;
+  assert(!images.updateRgba(empty->handle,zeros.data()));
+  assert(!images.lookup(empty->handle)->knownAllZero);
+  failUpload=false;
+  assert(images.updateRgba(empty->handle,zeros.data()));
+  assert(images.release(empty->handle));
+  assert(!images.lookup(empty->handle));
+
+  const auto reused=images.createRgba(1,1,hiddenRgb.data(),true); assert(reused);
+  assert((reused->handle & 0xffffU)==(empty->handle & 0xffffU));
+  assert(!images.lookup(reused->handle)->knownAllZero);
+  assert(!images.lookup(empty->handle));
+  assert(images.release(reused->handle));
+  for(const bool target : {false,true}) {
+    const auto gpu=target ? images.createRenderTarget(2,2,true) : images.createRgba(2,2,nullptr,true);
+    assert(gpu && !images.lookup(gpu->handle)->knownAllZero);
+    assert(images.updateRgba(gpu->handle,zeros.data()));
+    assert(!images.lookup(gpu->handle)->knownAllZero);
+    assert(images.updateRgbaRegion(gpu->handle,0,0,2,2,zeros.data(),2));
+    assert(!images.lookup(gpu->handle)->knownAllZero);
+    assert(images.release(gpu->handle));
+  }
   std::cout << "[canvas-upload] exact RGBA premultiplied transfers, region bounds and failed-upload retry agree\n";
 }

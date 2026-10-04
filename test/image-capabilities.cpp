@@ -13,6 +13,44 @@
 
 int main() {
   pmjs::Platform platform(16, 16, "Image capability test");
+  {
+    pmjs::ImageStore emptyImages;
+    char emptyPath[] = "/tmp/pmjs-empty-image-XXXXXX";
+    const int emptyDescriptor = mkstemp(emptyPath);
+    if (emptyDescriptor < 0) throw std::runtime_error("temporary image allocation failed");
+    close(emptyDescriptor);
+    const std::array<std::uint8_t, 16> zeros{};
+    png_image emptyPng{};
+    emptyPng.version = PNG_IMAGE_VERSION;
+    emptyPng.width = emptyPng.height = 2;
+    emptyPng.format = PNG_FORMAT_RGBA;
+    if (!png_image_write_to_file(&emptyPng, emptyPath, 0, zeros.data(), 0, nullptr)) {
+      std::remove(emptyPath);
+      throw std::runtime_error("temporary image encoding failed");
+    }
+    const auto empty = emptyImages.loadPng(emptyPath);
+    std::remove(emptyPath);
+    if (!empty || !empty->knownAllZero || !emptyImages.readPixels(empty->handle)) {
+      throw std::runtime_error("empty image upload or lazy readback failed");
+    }
+    for (int frame = 0; frame < 65; ++frame) emptyImages.update();
+    if (emptyImages.cpuBytes() != 0 || !emptyImages.lookup(empty->handle)->knownAllZero) {
+      throw std::runtime_error("CPU eviction invalidated live texture content proof");
+    }
+    emptyImages.setWarmBudgetBytes(0);
+    if (!emptyImages.beginUse(empty->handle) || !emptyImages.release(empty->handle)) {
+      throw std::runtime_error("empty image ownership failed");
+    }
+    emptyImages.update();
+    if (!emptyImages.lookup(empty->handle)) {
+      throw std::runtime_error("empty image released while in flight");
+    }
+    emptyImages.endUse(empty->handle);
+    emptyImages.update();
+    if (emptyImages.lookup(empty->handle)) {
+      throw std::runtime_error("unowned image escaped cache eviction");
+    }
+  }
   pmjs::ImageStore images;
   const auto sampled = images.createRgba(4, 4, nullptr);
   const auto target = images.createRenderTarget(4, 4);

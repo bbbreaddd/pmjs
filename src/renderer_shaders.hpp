@@ -1512,4 +1512,16 @@ inline std::string meshPostTintOverlayFragmentSourceWithPrecision(const std::str
   return source;
 }
 
+inline std::string bitmapRegionVertexSource() {
+  std::string source(vertexSource);
+  source.insert(source.find("  void main()"), "  flat out highp vec4 spriteFrame;\n");
+  source.insert(source.find("    vertexUvClamp = uvClamp;"), "    spriteFrame = uvClamp;\n");
+  return source;
+}
+inline std::string bitmapRegionFragmentSource() {
+  std::string source(spriteEffectFragmentSource);
+  source.replace(source.find("uniform highp vec4 spriteFrame;"),
+    std::string("uniform highp vec4 spriteFrame;").size(), "flat in highp vec4 spriteFrame;");
+  return source;
+}
 }  // namespace pmjs::renderer_shaders

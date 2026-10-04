@@ -635,6 +635,16 @@ void Renderer::renderScene() {
       (command.pixiSpritePacking && !command.premultipliedSpriteTexture ?
         images_.lookupPremultiplied(command.image) : images_.lookup(command.image));
     if (command.image != 0 && !info) continue;
+    // Raw premultiplied pixels can contain RGB even with zero alpha.
+    // Preserve scene commands and filter bounds; omit only a proven no-op draw.
+    if (info && info->knownAllZero &&
+        command.primitive == RenderCommand::Primitive::sprite &&
+        command.blendMode == BlendMode::normal && preparingFilterDepth == 0 &&
+        inlineFilterMatrix[commandIndex] == nullptr && command.blur <= 0 &&
+        command.maskImage == 0 && !command.appliesSpriteColor &&
+        !command.standaloneBitmapRegion && !command.appliesMeshPostTintOverlay) {
+      continue;
+    }
     const float textureWidth = info ? static_cast<float>(info->width) : 1.0F;
     const float textureHeight = info ? static_cast<float>(info->height) : 1.0F;
     const std::uint32_t texture = info ? info->texture : whiteTexture_;
@@ -725,13 +735,19 @@ void Renderer::renderScene() {
     const auto vertex1 = project(p1);
     const auto vertex2 = project(p2);
     const auto vertex3 = project(p3);
+    // Unblurred bitmap regions use the existing clamp attribute for texel bounds.
+    // A flat shader input preserves each quad's frame while adjacent views batch.
+    const bool vertexBitmapFrame = command.standaloneBitmapRegion && command.blur <= 0 && !command.appliesSpriteColor;
+    const auto sampleBounds = vertexBitmapFrame ? std::array<float, 4>{
+      command.source[0], command.source[1], command.source[0] + command.source[2] - 1,
+      command.source[1] + command.source[3] - 1} : std::array<float, 4>{u0, v0, u1, v1};
     const std::array<float, 72> vertices = {
-      vertex0[0], vertex0[1], uv0[0], uv0[1], color[0], color[1], color[2], color[3], u0, v0, u1, v1,
-      vertex1[0], vertex1[1], uv1[0], uv1[1], color[0], color[1], color[2], color[3], u0, v0, u1, v1,
-      vertex2[0], vertex2[1], uv2[0], uv2[1], color[0], color[1], color[2], color[3], u0, v0, u1, v1,
-      vertex0[0], vertex0[1], uv0[0], uv0[1], color[0], color[1], color[2], color[3], u0, v0, u1, v1,
-      vertex2[0], vertex2[1], uv2[0], uv2[1], color[0], color[1], color[2], color[3], u0, v0, u1, v1,
-      vertex3[0], vertex3[1], uv3[0], uv3[1], color[0], color[1], color[2], color[3], u0, v0, u1, v1,
+      vertex0[0], vertex0[1], uv0[0], uv0[1], color[0], color[1], color[2], color[3], sampleBounds[0], sampleBounds[1], sampleBounds[2], sampleBounds[3],
+      vertex1[0], vertex1[1], uv1[0], uv1[1], color[0], color[1], color[2], color[3], sampleBounds[0], sampleBounds[1], sampleBounds[2], sampleBounds[3],
+      vertex2[0], vertex2[1], uv2[0], uv2[1], color[0], color[1], color[2], color[3], sampleBounds[0], sampleBounds[1], sampleBounds[2], sampleBounds[3],
+      vertex0[0], vertex0[1], uv0[0], uv0[1], color[0], color[1], color[2], color[3], sampleBounds[0], sampleBounds[1], sampleBounds[2], sampleBounds[3],
+      vertex2[0], vertex2[1], uv2[0], uv2[1], color[0], color[1], color[2], color[3], sampleBounds[0], sampleBounds[1], sampleBounds[2], sampleBounds[3],
+      vertex3[0], vertex3[1], uv3[0], uv3[1], color[0], color[1], color[2], color[3], sampleBounds[0], sampleBounds[1], sampleBounds[2], sampleBounds[3],
     };
     vertices_.insert(vertices_.end(), vertices.begin(), vertices.end());
     const bool operationClipped = inlineFilterMatrix[commandIndex] ?
@@ -754,7 +770,8 @@ void Renderer::renderScene() {
         operations.back().standaloneBitmapRegion != command.standaloneBitmapRegion ||
         operations.back().spriteWorldVertices != worldVertices ||
         operations.back().premultipliedSpriteTexture != texturePremultiplied ||
-        ((command.appliesSpriteColor || command.standaloneBitmapRegion) && operations.back().spriteFrame != command.source) ||
+        ((command.appliesSpriteColor || command.standaloneBitmapRegion) && !vertexBitmapFrame &&
+         operations.back().spriteFrame != command.source) ||
         operations.back().colorTone != command.colorTone ||
         operations.back().blendColor != command.blendColor ||
         operations.back().inlineMatrix != inlineFilterMatrix[commandIndex] ||
@@ -797,6 +814,7 @@ void Renderer::renderScene() {
   std::size_t filterDepth = 0;
   std::array<const RenderCommand*, scene_packet::maxFilterDepth> filterCommands{};
   std::array<float, scene_packet::maxFilterDepth> rasterResolutions{};
+  std::array<bool, scene_packet::maxFilterDepth> groupPaddingKnownZero{};
   float rasterResolution = 1;
   std::array<float, 4> rasterFrame{0, 0, static_cast<float>(width_), static_cast<float>(height_)};
   std::array<std::array<float, 4>, scene_packet::maxFilterDepth> rasterFrames{};
@@ -878,6 +896,7 @@ void Renderer::renderScene() {
         savedClip[filterDepth] = operation.command->clip;
       }
       filterCommands[filterDepth] = operation.command;
+      groupPaddingKnownZero[filterDepth] = true;
       if (scissorActive) {
         glDisable(GL_SCISSOR_TEST);
         scissorActive = false;
@@ -1266,9 +1285,10 @@ void Renderer::renderScene() {
 
       if (filter.filterKind == scene_packet::FilterKind::custom) {
         if (filter.customFilterPlan) {
-          drawCustomFilterPlan(*filter.customFilterPlan, groupTargets_[filterDepth].framebuffer,
-            filterDepth == 0 ? rootFramebuffer : groupTargets_[filterDepth - 1].framebuffer,
-            filter, sourceResolution, rasterResolution, targetYDown, rasterFrame);
+          drawCustomFilterPlan(*filter.customFilterPlan, groupTargets_[filterDepth],
+            filterDepth == 0 ? rootTarget : groupTargets_[filterDepth - 1],
+            filter, sourceResolution, rasterResolution, targetYDown, rasterFrame,
+            groupPaddingKnownZero[filterDepth]);
           glUseProgram(program_);
           projectTarget(program_);
           activeProgram = program_;
@@ -1416,6 +1436,10 @@ void Renderer::renderScene() {
       glUniform1i(spriteColorEnabledUniform_, 0);
       applyBlendMode(activeBlend);
       continue;
+    }
+    // Tone target swaps and effect blits can write beyond a group's raster viewport.
+    if (operation.matrixCommand || operation.primitive == RenderCommand::Primitive::effect) {
+      std::fill_n(groupPaddingKnownZero.begin(), filterDepth, false);
     }
     if (operation.matrixCommand) {
       if (operation.matrixCommand == composedToneCommand) {
@@ -1639,8 +1663,9 @@ void Renderer::renderScene() {
     const bool simpleSprite = operation.blur <= 0 && operation.maskImage == 0 &&
                               !operation.appliesSpriteColor && !operation.standaloneBitmapRegion &&
                               operation.inlineMatrix == nullptr;
-    const std::uint32_t spriteProgram = simpleSprite ? simpleProgram_ :
-                                                     spriteEffectProgram_;
+    const auto& spriteEffect = operation.standaloneBitmapRegion && operation.blur <= 0 &&
+        !operation.appliesSpriteColor ? bitmapRegion_ : spriteEffect_;
+    const std::uint32_t spriteProgram = simpleSprite ? simpleProgram_ : spriteEffect.program;
     if (activeProgram != spriteProgram) {
       glUseProgram(spriteProgram);
       glBindVertexArray(vertexArray_);
@@ -1668,39 +1693,39 @@ void Renderer::renderScene() {
       static_cast<float>(sx * transform[2]), static_cast<float>(sy * transform[3]), 0,
       static_cast<float>(-1 - rasterFrame[0] * sx + transform[4] * sx),
       static_cast<float>(-ySign - rasterFrame[1] * sy + transform[5] * sy), 1};
-    glUniform1i(simpleSprite ? simpleTargetYDownUniform_ : spriteEffectTargetYDownUniform_, targetYDown);
-    glUniformMatrix3fv(simpleSprite ? simpleSpriteProjectionUniform_ : spriteEffectProjectionUniform_, 1, GL_FALSE, projection.data());
-    glUniform1i(simpleSprite ? simpleTilingClampUniform_ : spriteEffectTilingClampUniform_,
+    glUniform1i(simpleSprite ? simpleTargetYDownUniform_ : spriteEffect.targetYDown, targetYDown);
+    glUniformMatrix3fv(simpleSprite ? simpleSpriteProjectionUniform_ : spriteEffect.projection, 1, GL_FALSE, projection.data());
+    glUniform1i(simpleSprite ? simpleTilingClampUniform_ : spriteEffect.tilingClamp,
                 operation.clampedTilingSampling);
     if (simpleSprite) glUniform2f(simpleTextureSizeUniform_, operation.textureWidth, operation.textureHeight);
-    glUniform1i(simpleSprite ? simpleSpriteVerticesUniform_ : spriteEffectVerticesUniform_, operation.spriteWorldVertices);
-    glUniform1i(simpleSprite ? simpleSpritePackingUniform_ : spriteEffectPackingUniform_,
+    glUniform1i(simpleSprite ? simpleSpriteVerticesUniform_ : spriteEffect.vertices, operation.spriteWorldVertices);
+    glUniform1i(simpleSprite ? simpleSpritePackingUniform_ : spriteEffect.packing,
                 operation.pixiSpritePacking ? 1 : 0);
-    glUniform1i(simpleSprite ? simpleSpritePremultipliedUniform_ : spriteEffectPremultipliedUniform_,
+    glUniform1i(simpleSprite ? simpleSpritePremultipliedUniform_ : spriteEffect.premultiplied,
                 operation.premultipliedSpriteTexture ? 1 : 0);
     if (!simpleSprite) {
       const auto& frame = operation.spriteFrame;
-      glUniform4f(spriteEffectFrameUniform_, frame[0], frame[1],
+      glUniform4f(spriteEffect.frame, frame[0], frame[1],
         frame[0] + frame[2] - 1, frame[1] + frame[3] - 1);
-      glUniform1i(spriteEffectNearestUniform_, operation.nearest);
-      glUniform1i(spriteEffectStandaloneUniform_, operation.standaloneBitmapRegion);
-      glUniform1i(spriteEffectColorEnabledUniform_,
+      glUniform1i(spriteEffect.nearest, operation.nearest);
+      glUniform1i(spriteEffect.standalone, operation.standaloneBitmapRegion);
+      glUniform1i(spriteEffect.colorEnabled,
                   operation.appliesSpriteColor ? 1 : 0);
       if (operation.appliesSpriteColor) {
-        glUniform4fv(spriteEffectColorToneUniform_, 1,
+        glUniform4fv(spriteEffect.colorTone, 1,
                      operation.colorTone.data());
-        glUniform4fv(spriteEffectBlendColorUniform_, 1,
+        glUniform4fv(spriteEffect.blendColor, 1,
                      operation.blendColor.data());
       }
-      glUniform2f(spriteEffectTextureSizeUniform_, operation.textureWidth,
+      glUniform2f(spriteEffect.textureSize, operation.textureWidth,
                   operation.textureHeight);
-      glUniform1f(spriteEffectBlurUniform_, operation.blur);
-      glUniform1i(spriteEffectMatrixEnabledUniform_,
+      glUniform1f(spriteEffect.blur, operation.blur);
+      glUniform1i(spriteEffect.matrixEnabled,
                   operation.inlineMatrix ? 1 : 0);
       if (operation.inlineMatrix) {
-        glUniform1fv(spriteEffectMatrixUniform_, 20,
+        glUniform1fv(spriteEffect.matrix, 20,
                      operation.inlineMatrix->filterParameters.data());
-        glUniform1f(spriteEffectMatrixAlphaUniform_,
+        glUniform1f(spriteEffect.matrixAlpha,
                     operation.inlineMatrix->filterParameters[20]);
       }
     }
@@ -1709,18 +1734,18 @@ void Renderer::renderScene() {
       if (!mask) continue;
       glActiveTexture(GL_TEXTURE1);
       glBindTexture(GL_TEXTURE_2D, mask->texture);
-      glUniform1i(spriteEffectMaskImageUniform_, 1);
-      glUniform1i(spriteEffectMaskEnabledUniform_, 1);
-      glUniform1fv(spriteEffectMaskTransformUniform_, 6,
+      glUniform1i(spriteEffect.maskImage, 1);
+      glUniform1i(spriteEffect.maskEnabled, 1);
+      glUniform1fv(spriteEffect.maskTransform, 6,
                    maskMatrix(operation.maskTransform.data()).data());
-      glUniform2f(spriteEffectMaskTextureSizeUniform_,
+      glUniform2f(spriteEffect.maskTextureSize,
                   static_cast<float>(mask->width),
                   static_cast<float>(mask->height));
-      glUniform1f(spriteEffectScreenHeightUniform_,
+      glUniform1f(spriteEffect.screenHeight,
                   rasterFrame[3] * rasterResolution);
       glActiveTexture(GL_TEXTURE0);
     } else if (!simpleSprite) {
-      glUniform1i(spriteEffectMaskEnabledUniform_, 0);
+      glUniform1i(spriteEffect.maskEnabled, 0);
     }
     const bool gpuRepeat = operation.repeat && !operation.clampedTilingSampling;
     const auto repeat = textureRepeatState_.find(operation.texture);

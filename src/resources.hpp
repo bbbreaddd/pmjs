@@ -22,6 +22,7 @@ struct ImageInfo {
   int height = 0;
   std::uint32_t texture = 0;
   bool premultiplied = false;
+  bool knownAllZero = false;
 };
 
 struct ImagePixels {
@@ -151,6 +152,7 @@ class ImageStore {
     bool gpuOnly = false;
     bool renderTarget = false;
     bool premultiplied = false;
+    bool knownAllZero = false;
     std::uint32_t premultipliedTexture = 0;
     bool mipmapsReady = false, premultipliedMipmapsReady = false;
     std::size_t mipmapBytes = 0, premultipliedMipmapBytes = 0;

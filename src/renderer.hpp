@@ -407,10 +407,10 @@ class Renderer {
   std::shared_ptr<int> filterPlanLifetime_ = std::make_shared<int>(0);
   std::uint32_t nextFilterPlan_ = 0x80000000U;
   static void applyBlendMode(BlendMode mode);
-  void drawCustomFilterPlan(const CustomFilterPlan& plan, std::uint32_t source,
-                            std::uint32_t output, const RenderCommand& command,
+  void drawCustomFilterPlan(const CustomFilterPlan& plan, const RenderTarget& source,
+                            const RenderTarget& output, const RenderCommand& command,
                             float sourceResolution, float outputResolution, bool outputYDown,
-                            const std::array<float, 4>& outputFrame);
+                            const std::array<float, 4>& outputFrame, bool sourcePaddingKnownZero);
   std::uint32_t customFilterVertexArray_ = 0, customFilterVertexBuffer_ = 0;
   std::vector<RenderTarget> customPassTargets_;
   // Native rendering is shared across facades; the first Pixi renderer fixes precision.
@@ -429,7 +429,32 @@ class Renderer {
   bool filterBoundsEnabled_ = true;
   std::uint32_t program_ = 0;
   std::uint32_t simpleProgram_ = 0;
-  std::uint32_t spriteEffectProgram_ = 0;
+  struct SpriteEffectProgram {
+    std::uint32_t program = 0;
+    int targetYDown = -1;
+    int vertices = -1;
+    int projection = -1;
+    int packing = -1;
+    int premultiplied = -1;
+    int frame = -1;
+    int standalone = -1;
+    int tilingClamp = -1;
+    int nearest = -1;
+    int textureSize = -1;
+    int blur = -1;
+    int maskEnabled = -1;
+    int maskImage = -1;
+    int maskTransform = -1;
+    int maskTextureSize = -1;
+    int screenHeight = -1;
+    int colorEnabled = -1;
+    int colorTone = -1;
+    int blendColor = -1;
+    int matrixEnabled = -1;
+    int matrix = -1;
+    int matrixAlpha = -1;
+  };
+  SpriteEffectProgram spriteEffect_, bitmapRegion_;
   std::uint32_t clearTriangleProgram_ = 0;
   int clearTrianglePointsUniform_ = -1;
   int clearTriangleNormalsUniform_ = -1;
@@ -453,34 +478,12 @@ class Renderer {
   int filterTargetYDownUniform_ = -1;
   int filterImageYDownUniform_ = -1;
   int simpleTargetYDownUniform_ = -1;
-  int spriteEffectTargetYDownUniform_ = -1;
   int simpleSpriteVerticesUniform_ = -1;
   int simpleSpriteProjectionUniform_ = -1;
   int simpleSpritePackingUniform_ = -1;
   int simpleSpritePremultipliedUniform_ = -1;
   int simpleTilingClampUniform_ = -1;
   int simpleTextureSizeUniform_ = -1;
-  int spriteEffectVerticesUniform_ = -1;
-  int spriteEffectProjectionUniform_ = -1;
-  int spriteEffectPackingUniform_ = -1;
-  int spriteEffectPremultipliedUniform_ = -1;
-  int spriteEffectFrameUniform_ = -1;
-  int spriteEffectStandaloneUniform_ = -1;
-  int spriteEffectTilingClampUniform_ = -1;
-  int spriteEffectNearestUniform_ = -1;
-  int spriteEffectTextureSizeUniform_ = -1;
-  int spriteEffectBlurUniform_ = -1;
-  int spriteEffectMaskEnabledUniform_ = -1;
-  int spriteEffectMaskImageUniform_ = -1;
-  int spriteEffectMaskTransformUniform_ = -1;
-  int spriteEffectMaskTextureSizeUniform_ = -1;
-  int spriteEffectScreenHeightUniform_ = -1;
-  int spriteEffectColorEnabledUniform_ = -1;
-  int spriteEffectColorToneUniform_ = -1;
-  int spriteEffectBlendColorUniform_ = -1;
-  int spriteEffectMatrixEnabledUniform_ = -1;
-  int spriteEffectMatrixUniform_ = -1;
-  int spriteEffectMatrixAlphaUniform_ = -1;
   int textureSizeUniform_ = -1;
   int blurUniform_ = -1;
   int blurDirectionUniform_ = -1;

@@ -7,10 +7,10 @@
 
 namespace pmjs {
 
-void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, std::uint32_t source,
-                                    std::uint32_t output, const RenderCommand& command,
+void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, const RenderTarget& source,
+                                    const RenderTarget& output, const RenderCommand& command,
                                     float sourceResolution, float outputResolution, bool outputYDown,
-                                    const std::array<float, 4>& outputFrame) {
+                                    const std::array<float, 4>& outputFrame, bool sourcePaddingKnownZero) {
   const auto& frame = plan.frame;
   if (frame[2] == 0 || frame[3] == 0) return;
   const auto pot = [this](float value) {
@@ -22,28 +22,39 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, std::uint32_t 
     if (result > maxTextureSize_) throw std::invalid_argument("custom filter target exceeds texture size");
     return result;
   };
+  // Custom groups already have downward-oriented RGBA storage and cleared padding.
+  // Borrow only a read-only input; longer chains can write back into target zero.
+  const bool borrowInput = sourcePaddingKnownZero &&
+      plan.resolutions.size() == 2 && plan.passes.size() == 1 &&
+      plan.passes[0].input == 0 && plan.passes[0].output == 1 &&
+      plan.passes[0].samplers.empty() && sourceResolution == plan.resolutions[0] &&
+      source.width == pot(frame[2] * plan.resolutions[0]) &&
+      source.height == pot(frame[3] * plan.resolutions[0]) &&
+      source.framebuffer != output.framebuffer && source.texture != output.texture;
   // Targets are reused only after the complete pass sequence has finished.
   if (customPassTargets_.size() < plan.resolutions.size())
     customPassTargets_.resize(plan.resolutions.size());
   for (std::size_t index = 0; index < plan.resolutions.size(); ++index) {
-    if (index == 1) continue;
+    if (index == 1 || (index == 0 && borrowInput)) continue;
     auto& target = customPassTargets_[index];
     ensureTarget(target, pot(frame[2] * plan.resolutions[index]), pot(frame[3] * plan.resolutions[index]));
     glBindFramebuffer(GL_FRAMEBUFFER, target.framebuffer);
     glDisable(GL_SCISSOR_TEST);
     glClearColor(0, 0, 0, 0);
     glClear(GL_COLOR_BUFFER_BIT);
+    if (diagnostics_) ++stats_.filterTargetClears;
   }
-  auto& input = customPassTargets_[0];
+  const auto& input = borrowInput ? source : customPassTargets_[0];
   const float resolution = plan.resolutions[0];
-  glBindFramebuffer(GL_READ_FRAMEBUFFER, source);
-  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, input.framebuffer);
   const int sourceWidth = static_cast<int>(frame[2] * sourceResolution);
   const int sourceHeight = static_cast<int>(frame[3] * sourceResolution);
-  if (sourceWidth > 0 && sourceHeight > 0) {
+  if (!borrowInput && sourceWidth > 0 && sourceHeight > 0) {
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, source.framebuffer);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, input.framebuffer);
     glBlitFramebuffer(0, 0, sourceWidth, sourceHeight, 0, 0,
       static_cast<int>(frame[2] * resolution), static_cast<int>(frame[3] * resolution),
       GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    if (diagnostics_) ++stats_.framebufferCopies;
   }
   if (!customFilterVertexArray_) {
     glGenVertexArrays(1, &customFilterVertexArray_);
@@ -70,11 +81,15 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, std::uint32_t 
     auto& target = customPassTargets_[pass.output];
     const float targetWidth = final ? outputFrame[2] : frame[2];
     const float targetHeight = final ? outputFrame[3] : frame[3];
-    glBindFramebuffer(GL_FRAMEBUFFER, final ? output : target.framebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, final ? output.framebuffer : target.framebuffer);
     glViewport(0, 0, final ? static_cast<int>(outputFrame[2] * outputResolution) : static_cast<int>(frame[2] * plan.resolutions[pass.output]),
       final ? static_cast<int>(outputFrame[3] * outputResolution) : static_cast<int>(frame[3] * plan.resolutions[pass.output]));
     glDisable(GL_SCISSOR_TEST);
-    if (pass.clear) { glClearColor(0, 0, 0, 0); glClear(GL_COLOR_BUFFER_BIT); }
+    if (pass.clear) {
+      glClearColor(0, 0, 0, 0);
+      glClear(GL_COLOR_BUFFER_BIT);
+      if (diagnostics_) ++stats_.filterTargetClears;
+    }
     if (final && command.clipped) {
       glEnable(GL_SCISSOR_TEST);
       glScissor(std::lround((command.clip[0] - outputFrame[0]) * outputResolution),
@@ -102,10 +117,11 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, std::uint32_t 
     glUniform4f(glGetUniformLocation(custom.program, "filterClamp"), 0, 0,
       (frame[2] - 1) * resolution / input.width, (frame[3] - 1) * resolution / input.height);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, customPassTargets_[pass.input].texture);
+    const auto inputTexture = borrowInput ? input.texture : customPassTargets_[pass.input].texture;
+    glBindTexture(GL_TEXTURE_2D, inputTexture);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    textureNearestState_[customPassTargets_[pass.input].texture] = false;
+    textureNearestState_[inputTexture] = false;
     glUniform1i(glGetUniformLocation(custom.program, "uSampler"), 0);
     std::size_t offset = 0, samplerOffset = 0;
     int unit = 1;
@@ -168,13 +184,13 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, std::uint32_t 
       offset += count;
     }
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, customPassTargets_[pass.input].texture);
+    glBindTexture(GL_TEXTURE_2D, inputTexture);
     glEnable(GL_BLEND);
     applyBlendMode(pass.blend);
     glDrawArrays(GL_TRIANGLES, 0, 6);
     if (diagnostics_) { ++stats_.drawCalls; ++stats_.filterDrawCalls; }
   }
-  glBindFramebuffer(GL_FRAMEBUFFER, output);
+  glBindFramebuffer(GL_FRAMEBUFFER, output.framebuffer);
   glViewport(0, 0, static_cast<int>(outputFrame[2] * outputResolution), static_cast<int>(outputFrame[3] * outputResolution));
   glBindVertexArray(vertexArray_);
   glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer_);
