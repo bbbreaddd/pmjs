@@ -659,7 +659,7 @@ std::optional<ImageInfo> Renderer::renderToImage(int width, int height, AlphaMod
     offscreenRender_ = true;
     clearColor_ = {0, 0, 0, 0};
     render();
-    auto image = images_.createRenderTarget(width_, height_);
+    auto image = images_.createRenderTarget(width_, height_, alphaMode == AlphaMode::premultiplied);
     if (!image) throw std::runtime_error("cannot allocate GPU render image");
     while (glGetError() != GL_NO_ERROR) {}
     std::uint32_t destinationFramebuffer = 0;

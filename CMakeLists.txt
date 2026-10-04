@@ -58,6 +58,7 @@ set(PMJS_RUNTIME_SOURCES
   src/dialog.cpp
   src/renderer_core.cpp
   src/renderer_draw.cpp
+  src/renderer_custom_filters.cpp
   src/renderer_programs.cpp
   src/renderer_scene.cpp
   src/resources.cpp

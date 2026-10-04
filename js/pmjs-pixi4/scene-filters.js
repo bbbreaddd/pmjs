@@ -1,3 +1,183 @@
+var nativeCustomFilterPlans = [];
+var nativeCustomFilterDefaultVertex = 'attribute vec2 aVertexPosition;\n' +
+  'attribute vec2 aTextureCoord;\nuniform mat3 projectionMatrix;\n' +
+  'varying vec2 vTextureCoord;\nvoid main(){\n' +
+  'gl_Position=vec4((projectionMatrix*vec3(aVertexPosition,1.0)).xy,0.0,1.0);\n' +
+  'vTextureCoord=aTextureCoord;\n}';
+
+function nativeRecordCustomFilter(filter, node) {
+  var resolution = filter.resolution === undefined ? 1 : Number(filter.resolution);
+  var padding = filter.padding === undefined ? 4 : Number(filter.padding) | 0;
+  if (!Number.isFinite(resolution) || resolution <= 0 || resolution > 16 || padding < 0) return null;
+  var bounds = node.filterArea || (node.getBounds && node.getBounds(true));
+  if (!bounds) return null;
+  var frame = { x: (bounds.x * resolution | 0) / resolution,
+    y: (bounds.y * resolution | 0) / resolution,
+    width: (bounds.width * resolution | 0) / resolution,
+    height: (bounds.height * resolution | 0) / resolution };
+  var screenWidth = Number(globalThis.Graphics && (Graphics.width || Graphics._width)) || 816;
+  var screenHeight = Number(globalThis.Graphics && (Graphics.height || Graphics._height)) || 624;
+  if (filter.autoFit !== false) {
+    var right = Math.min(screenWidth, frame.x + frame.width);
+    var bottom = Math.min(screenHeight, frame.y + frame.height);
+    frame.x = Math.max(0, frame.x); frame.y = Math.max(0, frame.y);
+    frame.width = Math.max(0, right - frame.x); frame.height = Math.max(0, bottom - frame.y);
+  }
+  frame.x -= padding; frame.y -= padding;
+  frame.width += padding * 2; frame.height += padding * 2;
+  var plan = { frame: [frame.x, frame.y, frame.width, frame.height],
+    resolutions: [resolution, 1], passes: [] };
+  var targets = [], pool = [];
+  function target(index, targetResolution) {
+    function pot(value) { var size = 1; while (size < value) size *= 2; return size; }
+    var result = { _nativeFilterTarget: index, resolution: targetResolution,
+      size: { width: pot(frame.width * targetResolution) / targetResolution,
+        height: pot(frame.height * targetResolution) / targetResolution },
+      sourceFrame: frame, destinationFrame: { x: 0, y: 0, width: frame.width, height: frame.height },
+      transform: null };
+    targets.push(result);
+    return result;
+  }
+  var input = target(0, resolution), output = target(1, 1);
+  var state = { sourceFrame: frame, destinationFrame: input.destinationFrame,
+    renderTarget: input, resolution: resolution, target: node, filters: [filter] };
+  var manager = {
+    filterData: { index: 1, stack: [null, state] },
+    renderer: { resolution: 1, screen: { x: 0, y: 0, width: screenWidth, height: screenHeight } },
+    currentState: function() { return state; },
+    getRenderTarget: function(clear, requestedResolution) {
+      var requested = Number(requestedResolution) || resolution;
+      for (var i = 0; i < pool.length; i++) {
+        if (pool[i].resolution === requested) return pool.splice(i, 1)[0];
+      }
+      var index = plan.resolutions.length;
+      plan.resolutions.push(requested);
+      return target(index, requested);
+    },
+    returnRenderTarget: function(value) {
+      if (targets.indexOf(value) < 0 || value === output || pool.indexOf(value) >= 0)
+        throw new Error('invalid returned filter target');
+      pool.push(value);
+    },
+    getPotRenderTarget: function(gl, width, height, requestedResolution) {
+      if (width !== frame.width || height !== frame.height)
+        throw new Error('filter target dimensions differ from source frame');
+      return this.getRenderTarget(false, requestedResolution);
+    },
+    applyFilter: function(passFilter, passInput, passOutput, clear) {
+      if (targets.indexOf(passInput) < 0 || targets.indexOf(passOutput) < 0 ||
+          passInput === passOutput || passInput.transform || passOutput.transform)
+        throw new Error('invalid filter pass target or transform');
+      var fragment = Array.isArray(passFilter.fragmentSrc) ? passFilter.fragmentSrc.join('\n') : String(passFilter.fragmentSrc);
+      var vertex = passFilter.vertexSrc || nativeCustomFilterDefaultVertex;
+      if (Array.isArray(vertex)) vertex = vertex.join('\n');
+      var key = vertex + '\u0000' + fragment;
+      var program = nativeCustomFilterPrograms.get(key);
+      if (!program) {
+        program = NativeHost.render.createFilterProgram(fragment, vertex);
+        nativeCustomFilterPrograms.set(key, program);
+      }
+      var pass = { program: program.handle, input: passInput._nativeFilterTarget,
+        output: passOutput._nativeFilterTarget, clear: !!clear,
+        blend: Number(passFilter.blendMode) || 0, uniforms: [], samplers: [] };
+      for (var index = 0; index < program.uniforms.length; index++) {
+        var uniform = program.uniforms[index];
+        var value = passFilter.uniforms && passFilter.uniforms[uniform.name];
+        if (uniform.sampler) {
+          var values = uniform.size === 1 ? [value] : value;
+          if (!values || values.length !== uniform.size) throw new Error('invalid filter sampler array');
+          for (var samplerIndex = 0; samplerIndex < values.length; samplerIndex++) {
+            var texture = values[samplerIndex];
+            if (targets.indexOf(texture) >= 0) {
+              pass.samplers.push({ image: 0, target: texture._nativeFilterTarget });
+            } else if (texture === 0) {
+              pass.samplers.push({ image: 0, target: pass.input });
+            } else {
+              var base = texture && texture.baseTexture;
+              var image = base && nativeTextureSource(base.source);
+              if (!image || !image.handle) throw new Error('filter sampler has no native image');
+              pass.samplers.push({ image: image.handle, target: 0 });
+            }
+          }
+          continue;
+        }
+        if (typeof value === 'number' || typeof value === 'boolean') value = [Number(value)];
+        else if (value && uniform.size === 2 && value.x !== undefined) value = [value.x, value.y];
+        else if (value && uniform.size === 9 && value.a !== undefined) value = value.toArray(true);
+        if (!value || value.length !== uniform.size) throw new Error('invalid filter uniform: ' + uniform.name);
+        for (var component = 0; component < uniform.size; component++) {
+          var number = Number(value[component]);
+          if (!Number.isFinite(number)) throw new Error('invalid filter uniform: ' + uniform.name);
+          pass.uniforms.push(number);
+        }
+      }
+      plan.passes.push(pass);
+    }
+  };
+  manager.freePotRenderTarget = manager.returnRenderTarget;
+  if (typeof NativeFilterManager === 'function') {
+    ['calculateScreenSpaceMatrix', 'calculateNormalizedScreenSpaceMatrix', 'calculateSpriteMatrix'].forEach(function(name) {
+      manager[name] = NativeFilterManager.prototype[name];
+    });
+  }
+  if (filter.apply) filter.apply(manager, input, output, false, state);
+  else manager.applyFilter(filter, input, output, false);
+  var resource = NativeHost.render.createFilterPlan(plan);
+  nativeCustomFilterPlans.push(resource);
+  return { kind: 31, resource: resource.handle, parameters: [padding] };
+}
+
+var nativeCustomFilterPrograms = new Map();
+var nativeCustomFilterApply = PIXI.Filter && PIXI.Filter.prototype.apply;
+var nativeCustomFilterVertex = PIXI.Filter && PIXI.Filter.defaultVertexSrc;
+
+function nativeCustomFilterGroup(filter, node) {
+  if (!filter || !filter.fragmentSrc ||
+      typeof NativeHost.render.createFilterProgram !== 'function') return null;
+  if (typeof NativeHost.render.createFilterPlan === 'function') {
+    try { return nativeRecordCustomFilter(filter, node); }
+    catch (error) {
+      PMJS.compat.hit('render.filter-program', String(error.message || error));
+      return null;
+    }
+  }
+  if (filter.vertexSrc && filter.vertexSrc !== nativeCustomFilterVertex) return null;
+  if (filter.apply && filter.apply !== nativeCustomFilterApply) return null;
+  if (filter.resolution !== undefined && Number(filter.resolution) !== 1) return null;
+  if (filter.autoFit === false) return null;
+  if (node.filterArea) return null;
+  if (filter.blendMode !== undefined && Number(filter.blendMode) !== 0) return null;
+  var source = Array.isArray(filter.fragmentSrc) ? filter.fragmentSrc.join('\n') :
+    String(filter.fragmentSrc);
+  var program = nativeCustomFilterPrograms.get(source);
+  if (!program) {
+    try {
+      program = NativeHost.render.createFilterProgram(source);
+    } catch (error) {
+      PMJS.compat.hit('render.filter-program', String(error.message || error));
+      return null;
+    }
+    nativeCustomFilterPrograms.set(source, program);
+  }
+  var padding = filter.padding === undefined ? 4 : Number(filter.padding);
+  if (!Number.isFinite(padding) || padding < 0 || padding > 65536) return null;
+  var parameters = [padding];
+  for (var index = 0; index < program.uniforms.length; index++) {
+    var uniform = program.uniforms[index];
+    var value = filter.uniforms && filter.uniforms[uniform.name];
+    if (value === undefined || value === null) return null;
+    if (typeof value === 'number') value = [value];
+    else if (uniform.size === 2 && value.x !== undefined) value = [value.x, value.y];
+    if (value.length !== uniform.size) return null;
+    for (var component = 0; component < uniform.size; component++) {
+      var number = Number(value[component]);
+      if (!Number.isFinite(number)) return null;
+      parameters.push(number);
+    }
+  }
+  return { kind: 31, resource: program.handle, parameters: parameters };
+}
+
 function nativeSceneFilter(node, activeFilters) {
   if (!activeFilters.length) {
     return { blur: 0, groups: [], unsupported: false };
@@ -450,6 +630,11 @@ function nativeSceneFilter(node, activeFilters) {
           Number(groupFilter.time) || 0,
           Number(groupFilter.strength) || 0
         ] });
+        continue;
+      }
+      var customGroup = nativeCustomFilterGroup(groupFilter, node);
+      if (customGroup) {
+        groups.push(customGroup);
         continue;
       }
       groups = null;

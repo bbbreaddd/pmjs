@@ -422,8 +422,9 @@ std::optional<ImageInfo> ImageStore::createRgba(int width, int height,
   return ImageInfo{makeHandle(index, slot.generation), width, height, texture, premultiplied};
 }
 
-std::optional<ImageInfo> ImageStore::createRenderTarget(int width, int height) {
-  auto image = createRgba(width, height, nullptr);
+std::optional<ImageInfo> ImageStore::createRenderTarget(int width, int height,
+                                                       bool premultiplied) {
+  auto image = createRgba(width, height, nullptr, premultiplied);
   if (image) slots_[(image->handle & indexMask) - 1U].renderTarget = true;
   return image;
 }

@@ -61,6 +61,7 @@ enum class FilterKind : std::uint32_t {
   blurY = 28,
   fxaa = 29,
   mzColor = 30,
+  custom = 31,
 };
 
 constexpr std::size_t maxFilterDepth = 4;

@@ -90,7 +90,8 @@ class ImageStore {
                                                 bool retainCpuPixels = false);
   std::optional<ImageInfo> createRgba(int width, int height, const void* pixels, bool premultiplied = false);
   // GPU-only image storage. readPixels() intentionally returns no CPU copy.
-  std::optional<ImageInfo> createRenderTarget(int width, int height);
+  std::optional<ImageInfo> createRenderTarget(int width, int height,
+                                             bool premultiplied = false);
   bool isRenderTarget(ImageHandle handle) const;
   const ImagePixels* readPixels(ImageHandle handle) const;
   bool updateRgba(ImageHandle handle, const void* pixels);

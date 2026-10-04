@@ -721,6 +721,7 @@ function prepareNativeBitmapCaches(node, renderer, root) {
 }
 
 function encodeNativeScene(stage, backgroundColor = null) {
+  nativeCustomFilterPlans = [];
   resetNativeSceneRecords();
   nativeSceneFilterDepth = 0;
   nativeSceneSegmentTracing = !!(globalThis.__pmjsTrace &&
@@ -733,7 +734,7 @@ function encodeNativeScene(stage, backgroundColor = null) {
   traceNativeScenePacket();
   return { version: nativeScenePacketVersion,
     metadata: nativeSceneMetadata, values: nativeSceneValues,
-    count: nativeSceneCount };
+    count: nativeSceneCount, customFilterPlans: nativeCustomFilterPlans };
 }
 
 function submitNativeScene(stage, backgroundColor = null) {

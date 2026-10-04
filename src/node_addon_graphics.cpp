@@ -55,6 +55,124 @@ napi_value configurePixiFragmentPrecision(napi_env env, napi_callback_info info)
   napi_throw_type_error(env, nullptr, error.what()); return nullptr;
 }
 
+napi_value createFilterProgram(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info, 2);
+  if (args.empty()) throw std::invalid_argument("createFilterProgram requires fragment source");
+  auto& renderer = host(env).renderer;
+  const auto handle = renderer.createFilterProgram(asString(env, args[0]),
+    args.size() > 1 ? asString(env, args[1]) : "");
+  const auto& program = renderer.filterProgram(handle);
+  napi_value result = moduleObject(env);
+  check(env, napi_set_named_property(env, result, "handle", number(env, handle)),
+    "cannot set filter handle");
+  napi_value uniforms;
+  check(env, napi_create_array_with_length(env, program.uniforms.size(), &uniforms),
+    "cannot create filter uniforms");
+  for (std::size_t index = 0; index < program.uniforms.size(); ++index) {
+    const auto& uniform = program.uniforms[index];
+    napi_value entry = moduleObject(env);
+    std::string name = uniform.name;
+    if (name.ends_with("[0]")) name.resize(name.size() - 3);
+    check(env, napi_set_named_property(env, entry, "name", string(env, name)),
+      "cannot set uniform name");
+    check(env, napi_set_named_property(env, entry, "size",
+      number(env, uniform.components * uniform.count)), "cannot set uniform size");
+    check(env, napi_set_named_property(env, entry, "sampler",
+      boolean(env, uniform.type == GL_SAMPLER_2D)), "cannot set uniform type");
+    check(env, napi_set_element(env, uniforms, index, entry), "cannot set filter uniform");
+  }
+  check(env, napi_set_named_property(env, result, "uniforms", uniforms),
+    "cannot set filter uniforms");
+  return result;
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what()); return nullptr;
+}
+
+napi_value createFilterPlan(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info, 1);
+  if (args.empty()) throw std::invalid_argument("createFilterPlan requires a plan");
+  auto& value = host(env);
+  auto plan = std::make_shared<CustomFilterPlan>();
+  const auto elements = [&](napi_value array, std::size_t limit) {
+    std::uint32_t count = 0;
+    check(env, napi_get_array_length(env, array, &count), "filter plan requires arrays");
+    if (count > limit) throw std::invalid_argument("filter plan capacity exceeded");
+    std::vector<napi_value> result(count);
+    for (std::uint32_t i = 0; i < count; ++i)
+      check(env, napi_get_element(env, array, i, &result[i]), "cannot read filter plan");
+    return result;
+  };
+  const auto finite = [&](napi_value number) {
+    const double result = asNumber(env, number);
+    if (!std::isfinite(result) || std::abs(result) > 1e30)
+      throw std::invalid_argument("invalid filter plan number");
+    return static_cast<float>(result);
+  };
+  const auto frame = elements(property(env, args[0], "frame"), 4);
+  if (frame.size() != 4) throw std::invalid_argument("filter frame requires four values");
+  for (std::size_t i = 0; i < 4; ++i) plan->frame[i] = finite(frame[i]);
+  if (std::abs(plan->frame[0]) > 65536 || std::abs(plan->frame[1]) > 65536 ||
+      plan->frame[2] < 0 || plan->frame[3] < 0 ||
+      plan->frame[2] > 65536 || plan->frame[3] > 65536)
+    throw std::invalid_argument("invalid filter frame");
+  for (auto item : elements(property(env, args[0], "resolutions"), 64)) {
+    const float resolution = finite(item);
+    if (resolution <= 0 || resolution > 16) throw std::invalid_argument("invalid filter resolution");
+    plan->resolutions.push_back(resolution);
+  }
+  if (plan->resolutions.size() < 2) throw std::invalid_argument("filter plan requires input and output");
+  for (auto item : elements(property(env, args[0], "passes"), 256)) {
+    CustomFilterPass pass;
+    pass.program = asUint32(env, property(env, item, "program"));
+    const auto& program = value.renderer.filterProgram(pass.program);
+    pass.input = asUint32(env, property(env, item, "input"));
+    pass.output = asUint32(env, property(env, item, "output"));
+    pass.clear = asBoolean(env, property(env, item, "clear"));
+    pass.blend = asBlendMode(env, property(env, item, "blend"));
+    if (pass.input >= plan->resolutions.size() || pass.output >= plan->resolutions.size() ||
+        pass.input == pass.output || pass.input == 1)
+      throw std::invalid_argument("invalid filter pass targets");
+    for (auto component : elements(property(env, item, "uniforms"), 4096))
+      pass.uniforms.push_back(finite(component));
+    for (auto sampler : elements(property(env, item, "samplers"), 32)) {
+      CustomFilterPass::Sampler binding;
+      binding.image = asUint32(env, property(env, sampler, "image"));
+      binding.target = asUint32(env, property(env, sampler, "target"));
+      if (binding.image) {
+        const auto image = resolveImage(value, binding.image);
+        if (!image) throw std::invalid_argument("invalid filter sampler image");
+        binding.image = *image;
+      } else if (binding.target >= plan->resolutions.size() || binding.target == 1 ||
+                 binding.target == pass.output) {
+        throw std::invalid_argument("invalid filter sampler target");
+      }
+      pass.samplers.push_back(binding);
+    }
+    std::size_t components = 0, samplers = 0;
+    for (const auto& uniform : program.uniforms) {
+      if (uniform.type == GL_SAMPLER_2D) samplers += uniform.count;
+      else components += uniform.components * uniform.count;
+    }
+    GLint textureUnits = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &textureUnits);
+    if (components != pass.uniforms.size() || samplers != pass.samplers.size() ||
+        samplers + 1 > static_cast<std::size_t>(textureUnits))
+      throw std::invalid_argument("invalid filter uniform or sampler count");
+    plan->passes.push_back(std::move(pass));
+  }
+  const auto handle = value.renderer.registerFilterPlan(plan);
+  napi_value result = moduleObject(env);
+  check(env, napi_set_named_property(env, result, "handle", uint32(env, handle)), "cannot set filter plan handle");
+  auto owner = std::make_unique<std::shared_ptr<CustomFilterPlan>>(plan);
+  check(env, napi_add_finalizer(env, result, owner.get(),
+    [](napi_env, void* data, void*) { delete static_cast<std::shared_ptr<CustomFilterPlan>*>(data); },
+    nullptr, nullptr), "cannot retain filter plan");
+  owner.release();
+  return result;
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what()); return nullptr;
+}
+
 napi_value setPresentationLayers(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 5);
   if (args.size() != 5) {
@@ -483,6 +601,8 @@ void registerGraphicsBindings(napi_env env, napi_value exports) {
   napi_value render = moduleObject(env);
   method(env, render, "setClearColor", setClearColor);
   method(env, render, "configurePixiFragmentPrecision", configurePixiFragmentPrecision);
+  method(env, render, "createFilterProgram", createFilterProgram);
+  method(env, render, "createFilterPlan", createFilterPlan);
   method(env, render, "graphicsInfo", graphicsInfo);
   method(env, render, "setPresentationLayers", setPresentationLayers);
   method(env, render, "setRenderTargetSize", setRenderTargetSize);

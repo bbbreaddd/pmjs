@@ -18,7 +18,9 @@ std::array<int, 4> effectFrame(const RenderCommand* filter, int width, int heigh
           std::clamp(filter->clip[3], 0, height)};
 }
 
-void applyBlendMode(BlendMode mode) {
+}  // namespace
+
+void Renderer::applyBlendMode(BlendMode mode) {
   switch (mode) {
     case BlendMode::normal:
       glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA,
@@ -37,7 +39,6 @@ void applyBlendMode(BlendMode mode) {
       break;
   }
 }
-}  // namespace
 
 void Renderer::render() {
   renderScene();
@@ -175,7 +176,15 @@ void Renderer::computeFilterContentBounds() {
       bool effective = false;
       const bool regionsValid = !level.unbounded &&
           filterBoundsPadding(begun.filterKind, begun.filterParameters) == 0;
-      if (!level.hasContent && !level.unbounded) {
+      if (begun.filterKind == scene_packet::FilterKind::custom && level.hasContent &&
+          !level.unbounded) {
+        const float padding = begun.filterParameters[0];
+        ex0 = level.minX - padding;
+        ey0 = level.minY - padding;
+        ex1 = level.maxX + padding;
+        ey1 = level.maxY + padding;
+        effective = true;
+      } else if (!level.hasContent && !level.unbounded) {
         effective = true;
       } else if (!level.unbounded &&
                  filterBoundsPadding(begun.filterKind,
@@ -267,14 +276,14 @@ void Renderer::computeFilterContentBounds() {
     const float dh = command.destination[1];
     if (!(dw > 0.0F) || !(dh > 0.0F)) continue;
     const auto& t = command.transform;
-    const float x0 = t[4];
-    const float y0 = t[5];
-    const float x1 = t[0] * dw + t[4];
-    const float y1 = t[1] * dw + t[5];
-    const float x2 = t[0] * dw + t[2] * dh + t[4];
-    const float y2 = t[1] * dw + t[3] * dh + t[5];
-    const float x3 = t[2] * dh + t[4];
-    const float y3 = t[3] * dh + t[5];
+    const auto point = [&](std::size_t corner, float x, float y) {
+      return command.spriteWorldVertices ? command.spriteVertices[corner] :
+        std::array<float, 2>{t[0] * x + t[2] * y + t[4], t[1] * x + t[3] * y + t[5]};
+    };
+    const auto [x0, y0] = point(0, 0, 0);
+    const auto [x1, y1] = point(1, dw, 0);
+    const auto [x2, y2] = point(2, dw, dh);
+    const auto [x3, y3] = point(3, 0, dh);
     if (!std::isfinite(x0) || !std::isfinite(y0) || !std::isfinite(x1) ||
         !std::isfinite(y1) || !std::isfinite(x2) || !std::isfinite(y2) ||
         !std::isfinite(x3) || !std::isfinite(y3)) {
@@ -376,7 +385,8 @@ void Renderer::renderScene() {
 
     vertices_.clear();
     vertices_.reserve(frame_.commands.size() * 72);
-    if (filterBoundsEnabled_) {
+    if (filterBoundsEnabled_ || std::any_of(frame_.commands.begin(), frame_.commands.end(),
+        [](const auto& command) { return command.filterKind == scene_packet::FilterKind::custom; })) {
       computeFilterContentBounds();
     } else {
       filterBounds_.clear();
@@ -1150,6 +1160,91 @@ void Renderer::renderScene() {
         glUniform2f(blurDirectionUniform_, 0, 0);
         glUniform1i(pixiFilterKindUniform_,
           filter.filterParameters[0] == 0 ? 23 : 24);
+      }
+
+      if (filter.filterKind == scene_packet::FilterKind::custom) {
+        if (filter.customFilterPlan) {
+          drawCustomFilterPlan(*filter.customFilterPlan, groupTargets_[filterDepth].framebuffer,
+            filterDepth == 0 ? rootFramebuffer : groupTargets_[filterDepth - 1].framebuffer, filter);
+          glUseProgram(program_);
+          activeProgram = program_;
+          activeBlend = filter.customFilterPlan->passes.empty() ? BlendMode::normal :
+            filter.customFilterPlan->passes.back().blend;
+          scissorActive = false;
+          continue;
+        }
+        const auto& custom = filterProgram(filter.filterProgram);
+        std::array<int, 4> bounds{0, 0, width_, height_};
+        const auto beginIndex = static_cast<std::size_t>(filterCommands[filterDepth] - frame_.commands.data());
+        if (filterBounds_[beginIndex].bounded) bounds = filterBounds_[beginIndex].rect;
+        bounds[0] = std::clamp(bounds[0], 0, width_);
+        bounds[1] = std::clamp(bounds[1], 0, height_);
+        bounds[2] = std::clamp(bounds[2], bounds[0], width_);
+        bounds[3] = std::clamp(bounds[3], bounds[1], height_);
+        const int frameWidth = bounds[2] - bounds[0];
+        const int frameHeight = bounds[3] - bounds[1];
+        const auto powerOfTwo = [](int size) {
+          int result = 1;
+          while (result < size) result *= 2;
+          return result;
+        };
+        auto& input = customFilterTargets_[filterDepth];
+        ensureTarget(input, powerOfTwo(frameWidth), powerOfTwo(frameHeight));
+        glDisable(GL_SCISSOR_TEST);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, input.framebuffer);
+        glClearColor(0, 0, 0, 0);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, groupTargets_[filterDepth].framebuffer);
+        if (frameWidth > 0 && frameHeight > 0) {
+          // Filter texture coordinates start at the top of the cropped source frame.
+          glBlitFramebuffer(bounds[0], height_ - bounds[3], bounds[2], height_ - bounds[1],
+            0, frameHeight, frameWidth, 0, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        }
+        glBindFramebuffer(GL_FRAMEBUFFER, filterDepth == 0 ? rootFramebuffer :
+                          groupTargets_[filterDepth - 1].framebuffer);
+        glBindTexture(GL_TEXTURE_2D, input.texture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        textureNearestState_[input.texture] = false;
+        glUseProgram(custom.program);
+        glUniform1i(glGetUniformLocation(custom.program, "uSampler"), 0);
+        glUniform2f(glGetUniformLocation(custom.program, "pmjsScreenSize"), width_, height_);
+        glUniform4f(glGetUniformLocation(custom.program, "pmjsFilterFrame"),
+          bounds[0], bounds[1], frameWidth, frameHeight);
+        glUniform2f(glGetUniformLocation(custom.program, "pmjsFilterTextureSize"), input.width, input.height);
+        glUniform4f(glGetUniformLocation(custom.program, "filterArea"),
+          input.width, input.height, bounds[0], bounds[1]);
+        glUniform4f(glGetUniformLocation(custom.program, "filterClamp"), 0, 0,
+          float(frameWidth - 1) / input.width, float(frameHeight - 1) / input.height);
+        int offset = 1;
+        for (const auto& uniform : custom.uniforms) {
+          const float* data = filter.filterParameters.data() + offset;
+          switch (uniform.type) {
+            case GL_FLOAT: glUniform1fv(uniform.location, uniform.count, data); break;
+            case GL_FLOAT_VEC2: glUniform2fv(uniform.location, uniform.count, data); break;
+            case GL_FLOAT_VEC3: glUniform3fv(uniform.location, uniform.count, data); break;
+            case GL_FLOAT_VEC4: glUniform4fv(uniform.location, uniform.count, data); break;
+            case GL_FLOAT_MAT2: glUniformMatrix2fv(uniform.location, uniform.count, GL_FALSE, data); break;
+            case GL_FLOAT_MAT3: glUniformMatrix3fv(uniform.location, uniform.count, GL_FALSE, data); break;
+            case GL_FLOAT_MAT4: glUniformMatrix4fv(uniform.location, uniform.count, GL_FALSE, data); break;
+          }
+          offset += uniform.components * uniform.count;
+        }
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(bounds[0], height_ - bounds[3], bounds[2] - bounds[0], bounds[3] - bounds[1]);
+        activeBlend = filter.blendMode;
+        glEnable(GL_BLEND);
+        applyBlendMode(activeBlend);
+        glDrawArrays(GL_TRIANGLES, operation.first, operation.count);
+        if (diagnostics_) {
+          ++stats_.drawCalls;
+          ++stats_.filterDrawCalls;
+        }
+        glUseProgram(program_);
+        activeProgram = program_;
+        glDisable(GL_SCISSOR_TEST);
+        scissorActive = false;
+        continue;
       }
 
       glBindFramebuffer(GL_FRAMEBUFFER, filterDepth == 0 ? rootFramebuffer :

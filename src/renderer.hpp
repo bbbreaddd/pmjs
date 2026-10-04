@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 #include <variant>
@@ -37,6 +38,24 @@ struct MvBitmapMaterial {
   AlphaMode alphaMode = AlphaMode::straight;
 };
 using MeshMaterial = std::variant<TexturedMeshMaterial, TriangleBitmapMaterial, MvBitmapMaterial>;
+
+struct CustomFilterPass {
+  struct Sampler { ImageHandle image = 0; std::uint32_t target = 0; };
+  std::uint32_t program = 0, input = 0, output = 1;
+  bool clear = false;
+  BlendMode blend = BlendMode::normal;
+  std::vector<float> uniforms;
+  std::vector<Sampler> samplers;
+};
+struct CustomFilterPlan {
+  std::array<float, 4> frame{};
+  std::vector<float> resolutions;
+  std::vector<CustomFilterPass> passes;
+  ImageStore* images = nullptr;
+  std::weak_ptr<int> lifetime;
+  std::vector<ImageHandle> retainedImages;
+  ~CustomFilterPlan() { if (!lifetime.expired()) for (auto image : retainedImages) images->endUse(image); }
+};
 
 struct RenderCommand {
   enum class Action : std::uint8_t { draw, filterBegin, filterEnd };
@@ -75,6 +94,8 @@ struct RenderCommand {
   bool roundPixels = false;
   Action action = Action::draw;
   scene_packet::FilterKind filterKind = scene_packet::FilterKind::blur;
+  std::uint32_t filterProgram = 0;
+  std::shared_ptr<const CustomFilterPlan> customFilterPlan{};
   std::array<float, 21> filterParameters{};
   float filterResolution = 1.0F;
   Primitive primitive = Primitive::sprite;
@@ -108,7 +129,7 @@ struct PresentationGeometry {
 
 struct RendererStats {
   static constexpr std::size_t filterKindCount =
-    static_cast<std::size_t>(scene_packet::FilterKind::mzColor) + 1;
+    static_cast<std::size_t>(scene_packet::FilterKind::custom) + 1;
   std::uint64_t frames = 0;
   std::uint64_t retainedFrames = 0;
   std::uint64_t commands = 0;
@@ -178,6 +199,23 @@ class Renderer {
 
   void setClearColor(float red, float green, float blue, float alpha);
   void configurePixiFragmentPrecision(const std::string& precision);
+  struct FilterUniform {
+    std::string name;
+    std::uint32_t type;
+    int location;
+    int components;
+    int count;
+  };
+  struct FilterProgram {
+    std::uint32_t program;
+    std::string source;
+    bool pixiVertex = false;
+    std::vector<FilterUniform> uniforms;
+  };
+  std::uint32_t createFilterProgram(const std::string& fragmentSource,
+                                    const std::string& vertexSource = "");
+  std::uint32_t registerFilterPlan(const std::shared_ptr<CustomFilterPlan>& plan);
+  const FilterProgram& filterProgram(std::uint32_t handle) const;
   const std::string& pixiFragmentPrecision() const {
     return pixiFragmentPrecision_;
   }
@@ -348,6 +386,15 @@ class Renderer {
   int queueHeight_;
   int maxTextureSize_ = 0;
   std::string pixiFragmentPrecision_ = "mediump";
+  std::vector<FilterProgram> filterPrograms_;
+  std::unordered_map<std::uint32_t, std::weak_ptr<const CustomFilterPlan>> filterPlans_;
+  std::shared_ptr<int> filterPlanLifetime_ = std::make_shared<int>(0);
+  std::uint32_t nextFilterPlan_ = 0x80000000U;
+  static void applyBlendMode(BlendMode mode);
+  void drawCustomFilterPlan(const CustomFilterPlan& plan, std::uint32_t source,
+                            std::uint32_t output, const RenderCommand& command);
+  std::uint32_t customFilterVertexArray_ = 0, customFilterVertexBuffer_ = 0;
+  std::vector<RenderTarget> customPassTargets_;
   // Native rendering is shared across facades; the first Pixi renderer fixes precision.
   bool pixiPrecisionConfigured_ = false;
   ImageStore& images_;
@@ -464,6 +511,7 @@ class Renderer {
   RenderTarget toneOverlayTarget_;
   RenderTarget bloomTarget_;
   std::array<RenderTarget, scene_packet::maxFilterDepth> groupTargets_{};
+  std::array<RenderTarget, scene_packet::maxFilterDepth> customFilterTargets_{};
   bool offscreenRender_ = false;
   bool toneCompositionActive_ = false;
   ImageHandle presentationVideo_ = 0;

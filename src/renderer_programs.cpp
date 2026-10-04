@@ -42,6 +42,10 @@ GLuint linkProgram(const char* vertexSource, const char* fragmentSource) {
   const GLuint program = glCreateProgram();
   glAttachShader(program, vertex);
   glAttachShader(program, fragment);
+  glBindAttribLocation(program, 0, "position");
+  glBindAttribLocation(program, 1, "uv");
+  glBindAttribLocation(program, 0, "aVertexPosition");
+  glBindAttribLocation(program, 1, "aTextureCoord");
   glLinkProgram(program);
   glDeleteShader(vertex);
   glDeleteShader(fragment);
@@ -340,7 +344,122 @@ void Renderer::configurePixiFragmentPrecision(const std::string& precision) {
   pixiPrecisionConfigured_ = true;
 }
 
+const Renderer::FilterProgram& Renderer::filterProgram(std::uint32_t handle) const {
+  if (handle == 0 || handle > filterPrograms_.size()) {
+    throw std::invalid_argument("invalid filter program handle");
+  }
+  return filterPrograms_[handle - 1];
+}
+
+std::uint32_t Renderer::createFilterProgram(const std::string& fragmentSource, const std::string& vertexSource) {
+  if (fragmentSource.empty() || fragmentSource.size() > 65536 ||
+      fragmentSource.find('\0') != std::string::npos) {
+    throw std::invalid_argument("invalid filter fragment source");
+  }
+  std::string source = fragmentSource;
+  if (source.find("precision ") == std::string::npos) {
+    source = "precision " + pixiFragmentPrecision_ + " float;\n" + source;
+  }
+  for (std::size_t index = 0; index < filterPrograms_.size(); ++index) {
+    if (filterPrograms_[index].source == vertexSource + "\n" + source) return index + 1;
+  }
+  if (filterPrograms_.size() >= 128) {
+    throw std::runtime_error("custom filter program budget exhausted");
+  }
+  constexpr const char* vertex = R"(
+    attribute vec2 position;
+    attribute vec2 uv;
+    uniform vec2 pmjsScreenSize;
+    uniform vec4 pmjsFilterFrame;
+    uniform vec2 pmjsFilterTextureSize;
+    varying vec2 vTextureCoord;
+    void main() {
+      gl_Position = vec4(position, 0.0, 1.0);
+      vec2 screen = vec2(uv.x, 1.0 - uv.y) * pmjsScreenSize;
+      vTextureCoord = (screen - pmjsFilterFrame.xy) / pmjsFilterTextureSize;
+    }
+  )";
+  if (vertexSource.size() > 65536 || vertexSource.find('\0') != std::string::npos)
+    throw std::invalid_argument("invalid filter vertex source");
+  source = "precision highp sampler2D;\n" + source;
+  const GLuint program = linkProgram(vertexSource.empty() ? vertex : vertexSource.c_str(), source.c_str());
+  try {
+    FilterProgram result{program, vertexSource + "\n" + source, !vertexSource.empty(), {}};
+    GLint uniformCount = 0;
+    GLint uniformNameSize = 0;
+    glGetProgramiv(program, GL_ACTIVE_UNIFORMS, &uniformCount);
+    glGetProgramiv(program, GL_ACTIVE_UNIFORM_MAX_LENGTH, &uniformNameSize);
+    int total = 0;
+    for (GLint index = 0; index < uniformCount; ++index) {
+      std::vector<char> name(std::max(1, uniformNameSize));
+      GLint count = 0;
+      GLenum type = 0;
+      GLsizei length = 0;
+      glGetActiveUniform(program, index, name.size(), &length, &count, &type, name.data());
+      const std::string key(name.data(), length);
+      if (key == "pmjsScreenSize" || key == "pmjsFilterFrame" ||
+          key == "pmjsFilterTextureSize" || key == "projectionMatrix") continue;
+      if (key == "filterArea" || key == "filterClamp") {
+        if (type != GL_FLOAT_VEC4 || count != 1) {
+          throw std::invalid_argument("custom filter built-in must be vec4: " + key);
+        }
+        continue;
+      }
+      if (key == "uSampler") {
+        if (type != GL_SAMPLER_2D || count != 1) {
+          throw std::invalid_argument("custom filter uSampler must be sampler2D");
+        }
+        continue;
+      }
+      int components = 0;
+      switch (type) {
+        case GL_FLOAT: case GL_INT: case GL_BOOL: case GL_SAMPLER_2D: components = 1; break;
+        case GL_FLOAT_VEC2: case GL_INT_VEC2: case GL_BOOL_VEC2: components = 2; break;
+        case GL_FLOAT_VEC3: case GL_INT_VEC3: case GL_BOOL_VEC3: components = 3; break;
+        case GL_FLOAT_VEC4: case GL_INT_VEC4: case GL_BOOL_VEC4: components = 4; break;
+        case GL_FLOAT_MAT2: components = 4; break;
+        case GL_FLOAT_MAT3: components = 9; break;
+        case GL_FLOAT_MAT4: components = 16; break;
+        default: throw std::invalid_argument("unsupported custom filter uniform: " + key);
+      }
+      if (count < 1 || count > (4096 - total) / components) {
+        throw std::invalid_argument("custom filter uniform capacity exceeded");
+      }
+      total += components * count;
+      result.uniforms.push_back({key, type, glGetUniformLocation(program, key.c_str()),
+        components, count});
+    }
+    filterPrograms_.push_back(std::move(result));
+    return filterPrograms_.size();
+  } catch (...) {
+    glDeleteProgram(program);
+    throw;
+  }
+}
+
+std::uint32_t Renderer::registerFilterPlan(const std::shared_ptr<CustomFilterPlan>& plan) {
+  std::erase_if(filterPlans_, [](const auto& entry) { return entry.second.expired(); });
+  if (filterPlans_.size() >= 4096 || nextFilterPlan_ == 0xffffffffU)
+    throw std::runtime_error("custom filter plan budget exhausted");
+  plan->images = &images_;
+  plan->lifetime = filterPlanLifetime_;
+  for (const auto& pass : plan->passes) for (const auto& sampler : pass.samplers) {
+    if (!sampler.image) continue;
+    if (!images_.beginUse(sampler.image)) throw std::invalid_argument("cannot retain filter sampler");
+    plan->retainedImages.push_back(sampler.image);
+  }
+  const auto handle = nextFilterPlan_++;
+  filterPlans_[handle] = plan;
+  return handle;
+}
+
 Renderer::~Renderer() {
+  frame_.clear();
+  filterPlanLifetime_.reset();
+  glDeleteVertexArrays(1, &customFilterVertexArray_);
+  glDeleteBuffers(1, &customFilterVertexBuffer_);
+  for (auto& target : customPassTargets_) destroyTarget(target);
+  for (const auto& filter : filterPrograms_) glDeleteProgram(filter.program);
   if (presentationVideo_) images_.release(presentationVideo_);
   if (presentationUpperCanvas_) images_.release(presentationUpperCanvas_);
   discardCommandsFrom(0);
@@ -357,6 +476,7 @@ Renderer::~Renderer() {
   destroyTarget(toneOverlayTarget_);
   destroyTarget(bloomTarget_);
   for (auto& target : groupTargets_) destroyTarget(target);
+  for (auto& target : customFilterTargets_) destroyTarget(target);
   if (whiteTexture_) glDeleteTextures(1, &whiteTexture_);
   if (blackFramebuffer_) glDeleteFramebuffers(1, &blackFramebuffer_);
   if (blackTexture_) glDeleteTextures(1, &blackTexture_);

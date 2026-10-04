@@ -137,7 +137,7 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
       command.clipped = state.clipped;
       if (kind == static_cast<std::uint32_t>(NodeKind::filterBegin)) {
         if (filterDepth >= maxFilterDepth ||
-            blendValue > static_cast<std::uint32_t>(FilterKind::mzColor)) {
+            blendValue > static_cast<std::uint32_t>(FilterKind::custom)) {
           return false;
         }
         command.action = RenderCommand::Action::filterBegin;
@@ -155,7 +155,17 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
         if (!std::isfinite(command.filterResolution) ||
             command.filterResolution <= 0.0F ||
             command.filterResolution > 16.0F) return false;
-        if (command.filterKind == FilterKind::blur) {
+        if (command.filterKind == FilterKind::custom) {
+          const auto plan = filterPlans_.find(resource);
+          if (plan != filterPlans_.end()) {
+            command.customFilterPlan = plan->second.lock();
+            if (!command.customFilterPlan) return false;
+          } else if (resource == 0 || resource > filterPrograms_.size() ||
+              command.filterParameters[0] < 0 ||
+              command.filterParameters[0] > 65536 ||
+              command.filterResolution != 1) return false;
+          command.filterProgram = command.customFilterPlan ? 0 : resource;
+        } else if (command.filterKind == FilterKind::blur) {
           if (resource != 0 || command.filterParameters[0] < 0 ||
               command.filterParameters[1] < 1 ||
               command.filterParameters[1] > 15 ||

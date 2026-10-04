@@ -101,6 +101,13 @@ for (const blend of [0, 0.5]) {
   }
 }
 native.render.releaseMesh(bitmap);
+native.beginFrame();
+native.render.image(premultiplied.handle, 0.5, 0, 0, 2, 0, 0,
+  0, 0, 32, 8, 1, 0xffffff);
+native.renderScene();
+const premultipliedPixel = native.canvas.captureSceneRawPremultiplied().slice((8 * 16 + 8) * 4, (8 * 16 + 8) * 4 + 4);
+assert.ok(premultipliedPixel.every(value => Math.abs(value - 128) <= 1),
+  `GPU image metadata multiplied alpha twice: ${premultipliedPixel}`);
 native.images.release(premultiplied.handle);
 
 // A tall retained atlas must preserve one-pixel rows through GPU normalization.
