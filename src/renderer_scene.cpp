@@ -1,6 +1,7 @@
 #include "renderer.hpp"
 #include "scene_packet.hpp"
 
+#include <GLES3/gl3.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -165,6 +166,19 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
               command.filterParameters[0] > 65536 ||
               command.filterResolution != 1) return false;
           command.filterProgram = command.customFilterPlan ? 0 : resource;
+          if (!command.customFilterPlan) {
+            const auto& program = filterProgram(resource);
+            std::size_t components = 0;
+            if (program.pixiVertex) return false;
+            for (const auto& uniform : program.uniforms) {
+              if (uniform.type != GL_FLOAT && uniform.type != GL_FLOAT_VEC2 &&
+                  uniform.type != GL_FLOAT_VEC3 && uniform.type != GL_FLOAT_VEC4 &&
+                  uniform.type != GL_FLOAT_MAT2 && uniform.type != GL_FLOAT_MAT3 &&
+                  uniform.type != GL_FLOAT_MAT4) return false;
+              components += uniform.components * uniform.count;
+            }
+            if (components > 20) return false;
+          }
         } else if (command.filterKind == FilterKind::blur) {
           if (resource != 0 || command.filterParameters[0] < 0 ||
               command.filterParameters[1] < 1 ||

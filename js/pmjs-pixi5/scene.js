@@ -405,10 +405,12 @@
     }
 
     var encodedNode = contract.encode && contract.encode(node, renderOwner);
+    var alpha = Number.isFinite(node.alpha) ? node.alpha : 1;
     if (encodedNode) {
       kind = encodedNode.kind;
       resource = encodedNode.resource;
       if (encodedNode.tint !== undefined) tint = encodedNode.tint;
+      if (encodedNode.alpha !== undefined) alpha = encodedNode.alpha;
       if (encodedNode.sprite) {
         texture = encodedNode.sprite.texture;
         frame = texture.frame;
@@ -418,8 +420,7 @@
     }
 
     var index = addRecord(parent, kind, resource, tint, blendMode(node),
-      transform, encodedNode && encodedNode.alpha !== undefined ? encodedNode.alpha :
-        Number.isFinite(node.alpha) ? node.alpha : 1);
+      transform, alpha);
     if (encodedNode && encodedNode.nearest) {
       metadata[index * metadataStride + 5] |= 8;
     }

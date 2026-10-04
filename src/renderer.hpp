@@ -40,11 +40,12 @@ struct MvBitmapMaterial {
 using MeshMaterial = std::variant<TexturedMeshMaterial, TriangleBitmapMaterial, MvBitmapMaterial>;
 
 struct CustomFilterPass {
-  struct Sampler { ImageHandle image = 0; std::uint32_t target = 0; };
+  struct Sampler { ImageHandle image = 0; std::uint32_t target = 0; bool nearest = false; };
   std::uint32_t program = 0, input = 0, output = 1;
   bool clear = false;
   BlendMode blend = BlendMode::normal;
-  std::vector<float> uniforms;
+  std::vector<double> uniforms;
+  std::array<float, 6> transform{1, 0, 0, 1, 0, 0};
   std::vector<Sampler> samplers;
 };
 struct CustomFilterPlan {

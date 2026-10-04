@@ -10,6 +10,7 @@ namespace pmjs {
 void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, std::uint32_t source,
                                     std::uint32_t output, const RenderCommand& command) {
   const auto& frame = plan.frame;
+  if (frame[2] == 0 || frame[3] == 0) return;
   const auto pot = [this](float value) {
     if (!std::isfinite(value) || value > maxTextureSize_)
       throw std::invalid_argument("custom filter target exceeds texture size");
@@ -81,9 +82,11 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, std::uint32_t 
     }
     glUseProgram(custom.program);
     const float sx = 2.0F / targetWidth, sy = (final ? -2.0F : 2.0F) / targetHeight;
-    const std::array<float, 9> projection{sx, 0, 0, 0, sy, 0,
-      -1.0F - (final ? 0 : frame[0] * sx),
-      (final ? 1.0F : -1.0F - frame[1] * sy), 1};
+    const auto& transform = pass.transform;
+    const std::array<float, 9> projection{sx * transform[0], sy * transform[1], 0,
+      sx * transform[2], sy * transform[3], 0,
+      -1.0F - (final ? 0 : frame[0] * sx) + sx * transform[4],
+      (final ? 1.0F : -1.0F - frame[1] * sy) + sy * transform[5], 1};
     glUniformMatrix3fv(glGetUniformLocation(custom.program, "projectionMatrix"), 1, GL_FALSE, projection.data());
     glUniform4f(glGetUniformLocation(custom.program, "filterArea"),
       input.width / resolution, input.height / resolution, frame[0], frame[1]);
@@ -107,21 +110,29 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, std::uint32_t 
           const auto texture = image ? image->texture : customPassTargets_[sampler.target].texture;
           glActiveTexture(GL_TEXTURE0 + unit);
           glBindTexture(GL_TEXTURE_2D, texture);
-          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-          textureNearestState_[texture] = false;
+          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, sampler.nearest ? GL_NEAREST : GL_LINEAR);
+          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, sampler.nearest ? GL_NEAREST : GL_LINEAR);
+          textureNearestState_[texture] = sampler.nearest;
           units.push_back(unit++);
         }
         glUniform1iv(uniform.location, uniform.count, units.data());
         continue;
       }
-      const float* data = pass.uniforms.data() + offset;
       const auto count = uniform.components * uniform.count;
+      const auto start = pass.uniforms.begin() + offset;
+      const std::vector<float> floats(start, start + count);
+      const float* data = floats.data();
       std::vector<GLint> integers;
       if (uniform.type == GL_INT || uniform.type == GL_BOOL || uniform.type == GL_INT_VEC2 ||
           uniform.type == GL_BOOL_VEC2 || uniform.type == GL_INT_VEC3 || uniform.type == GL_BOOL_VEC3 ||
           uniform.type == GL_INT_VEC4 || uniform.type == GL_BOOL_VEC4) {
-        for (int index = 0; index < count; ++index) integers.push_back(static_cast<GLint>(data[index]));
+        for (int index = 0; index < count; ++index) {
+          const double number = pass.uniforms[offset + index];
+          double integer = std::fmod(std::trunc(number), 4294967296.0);
+          if (integer < 0) integer += 4294967296.0;
+          if (integer >= 2147483648.0) integer -= 4294967296.0;
+          integers.push_back(static_cast<GLint>(integer));
+        }
       }
       switch (uniform.type) {
         case GL_FLOAT: glUniform1fv(uniform.location, uniform.count, data); break;
@@ -139,6 +150,7 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, std::uint32_t 
       offset += count;
     }
     glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, customPassTargets_[pass.input].texture);
     glEnable(GL_BLEND);
     applyBlendMode(pass.blend);
     glDrawArrays(GL_TRIANGLES, 0, 6);

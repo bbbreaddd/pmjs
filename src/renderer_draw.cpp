@@ -176,7 +176,12 @@ void Renderer::computeFilterContentBounds() {
       bool effective = false;
       const bool regionsValid = !level.unbounded &&
           filterBoundsPadding(begun.filterKind, begun.filterParameters) == 0;
-      if (begun.filterKind == scene_packet::FilterKind::custom && level.hasContent &&
+      if (begun.customFilterPlan) {
+        const auto& frame = begun.customFilterPlan->frame;
+        ex0 = frame[0]; ey0 = frame[1];
+        ex1 = frame[0] + frame[2]; ey1 = frame[1] + frame[3];
+        effective = true;
+      } else if (begun.filterKind == scene_packet::FilterKind::custom && level.hasContent &&
           !level.unbounded) {
         const float padding = begun.filterParameters[0];
         ex0 = level.minX - padding;

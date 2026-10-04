@@ -44,13 +44,13 @@
       }
       var matrix = graphics.worldTransform;
       var vertices = new Float32Array(8);
-      [shape.x, shape.y, shape.x + shape.width, shape.y,
-        shape.x + shape.width, shape.y + shape.height, shape.x, shape.y + shape.height]
-        .forEach(function(value, index, points) {
-          if (index % 2) return;
-          vertices[index] = matrix.a * value + matrix.c * points[index + 1] + matrix.tx;
-          vertices[index + 1] = matrix.b * value + matrix.d * points[index + 1] + matrix.ty;
-        });
+      var points = [shape.x, shape.y, shape.x + shape.width, shape.y,
+        shape.x + shape.width, shape.y + shape.height, shape.x, shape.y + shape.height];
+      for (var corner = 0; corner < 4; corner++) {
+        var x = points[corner * 2], y = points[corner * 2 + 1];
+        vertices[corner * 2] = matrix.a * x + matrix.c * y + matrix.tx;
+        vertices[corner * 2 + 1] = matrix.b * x + matrix.d * y + matrix.ty;
+      }
       var tint = 0;
       [16, 8, 0].forEach(function(shift) {
         tint |= Math.floor(((graphics.tint >> shift) & 255) / 255 *

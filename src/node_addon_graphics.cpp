@@ -106,7 +106,7 @@ napi_value createFilterPlan(napi_env env, napi_callback_info info) try {
     const double result = asNumber(env, number);
     if (!std::isfinite(result) || std::abs(result) > 1e30)
       throw std::invalid_argument("invalid filter plan number");
-    return static_cast<float>(result);
+    return result;
   };
   const auto frame = elements(property(env, args[0], "frame"), 4);
   if (frame.size() != 4) throw std::invalid_argument("filter frame requires four values");
@@ -129,6 +129,11 @@ napi_value createFilterPlan(napi_env env, napi_callback_info info) try {
     pass.output = asUint32(env, property(env, item, "output"));
     pass.clear = asBoolean(env, property(env, item, "clear"));
     pass.blend = asBlendMode(env, property(env, item, "blend"));
+    if (hasProperty(env, item, "transform")) {
+      const auto transform = elements(property(env, item, "transform"), 6);
+      if (transform.size() != 6) throw std::invalid_argument("invalid filter transform");
+      for (std::size_t i = 0; i < 6; ++i) pass.transform[i] = finite(transform[i]);
+    }
     if (pass.input >= plan->resolutions.size() || pass.output >= plan->resolutions.size() ||
         pass.input == pass.output || pass.input == 1)
       throw std::invalid_argument("invalid filter pass targets");
@@ -138,6 +143,7 @@ napi_value createFilterPlan(napi_env env, napi_callback_info info) try {
       CustomFilterPass::Sampler binding;
       binding.image = asUint32(env, property(env, sampler, "image"));
       binding.target = asUint32(env, property(env, sampler, "target"));
+      binding.nearest = hasProperty(env, sampler, "nearest") && asBoolean(env, property(env, sampler, "nearest"));
       if (binding.image) {
         const auto image = resolveImage(value, binding.image);
         if (!image) throw std::invalid_argument("invalid filter sampler image");

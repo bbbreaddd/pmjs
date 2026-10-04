@@ -5,7 +5,8 @@ var nativeCustomFilterDefaultVertex = 'attribute vec2 aVertexPosition;\n' +
   'gl_Position=vec4((projectionMatrix*vec3(aVertexPosition,1.0)).xy,0.0,1.0);\n' +
   'vTextureCoord=aTextureCoord;\n}';
 
-function nativeRecordCustomFilter(filter, node) {
+function nativeRecordCustomFilter(filter, node, filters) {
+  filters = filters || [filter];
   var resolution = filter.resolution === undefined ? 1 : Number(filter.resolution);
   var padding = filter.padding === undefined ? 4 : Number(filter.padding) | 0;
   if (!Number.isFinite(resolution) || resolution <= 0 || resolution > 16 || padding < 0) return null;
@@ -66,7 +67,7 @@ function nativeRecordCustomFilter(filter, node) {
     },
     applyFilter: function(passFilter, passInput, passOutput, clear) {
       if (targets.indexOf(passInput) < 0 || targets.indexOf(passOutput) < 0 ||
-          passInput === passOutput || passInput.transform || passOutput.transform)
+          passInput === passOutput)
         throw new Error('invalid filter pass target or transform');
       var fragment = Array.isArray(passFilter.fragmentSrc) ? passFilter.fragmentSrc.join('\n') : String(passFilter.fragmentSrc);
       var vertex = passFilter.vertexSrc || nativeCustomFilterDefaultVertex;
@@ -80,6 +81,8 @@ function nativeRecordCustomFilter(filter, node) {
       var pass = { program: program.handle, input: passInput._nativeFilterTarget,
         output: passOutput._nativeFilterTarget, clear: !!clear,
         blend: Number(passFilter.blendMode) || 0, uniforms: [], samplers: [] };
+      var transform = passOutput.transform;
+      if (transform) pass.transform = [transform.a, transform.b, transform.c, transform.d, transform.tx, transform.ty];
       for (var index = 0; index < program.uniforms.length; index++) {
         var uniform = program.uniforms[index];
         var value = passFilter.uniforms && passFilter.uniforms[uniform.name];
@@ -96,7 +99,7 @@ function nativeRecordCustomFilter(filter, node) {
               var base = texture && texture.baseTexture;
               var image = base && nativeTextureSource(base.source);
               if (!image || !image.handle) throw new Error('filter sampler has no native image');
-              pass.samplers.push({ image: image.handle, target: 0 });
+              pass.samplers.push({ image: image.handle, target: 0, nearest: base.scaleMode === 0 });
             }
           }
           continue;
@@ -120,67 +123,51 @@ function nativeRecordCustomFilter(filter, node) {
       manager[name] = NativeFilterManager.prototype[name];
     });
   }
-  if (filter.apply) filter.apply(manager, input, output, false, state);
-  else manager.applyFilter(filter, input, output, false);
+  var flip = input;
+  var flop = filters.length > 1 ? manager.getRenderTarget(true) : output;
+  state.filters = filters;
+  for (var filterIndex = 0; filterIndex < filters.length; filterIndex++) {
+    var currentFilter = filters[filterIndex];
+    var last = filterIndex === filters.length - 1;
+    var destination = last ? output : flop;
+    if (currentFilter.apply) currentFilter.apply(manager, flip, destination, !last, state);
+    else manager.applyFilter(currentFilter, flip, destination, !last);
+    if (!last) { flop = flip; flip = destination; }
+  }
   var resource = NativeHost.render.createFilterPlan(plan);
   nativeCustomFilterPlans.push(resource);
   return { kind: 31, resource: resource.handle, parameters: [padding] };
 }
 
 var nativeCustomFilterPrograms = new Map();
-var nativeCustomFilterApply = PIXI.Filter && PIXI.Filter.prototype.apply;
-var nativeCustomFilterVertex = PIXI.Filter && PIXI.Filter.defaultVertexSrc;
-
 function nativeCustomFilterGroup(filter, node) {
   if (!filter || !filter.fragmentSrc ||
-      typeof NativeHost.render.createFilterProgram !== 'function') return null;
-  if (typeof NativeHost.render.createFilterPlan === 'function') {
-    try { return nativeRecordCustomFilter(filter, node); }
-    catch (error) {
-      PMJS.compat.hit('render.filter-program', String(error.message || error));
-      return null;
-    }
+      typeof NativeHost.render.createFilterProgram !== 'function' ||
+      typeof NativeHost.render.createFilterPlan !== 'function') return null;
+  try { return nativeRecordCustomFilter(filter, node); }
+  catch (error) {
+    PMJS.compat.hit('render.filter-program', String(error.message || error));
+    return null;
   }
-  if (filter.vertexSrc && filter.vertexSrc !== nativeCustomFilterVertex) return null;
-  if (filter.apply && filter.apply !== nativeCustomFilterApply) return null;
-  if (filter.resolution !== undefined && Number(filter.resolution) !== 1) return null;
-  if (filter.autoFit === false) return null;
-  if (node.filterArea) return null;
-  if (filter.blendMode !== undefined && Number(filter.blendMode) !== 0) return null;
-  var source = Array.isArray(filter.fragmentSrc) ? filter.fragmentSrc.join('\n') :
-    String(filter.fragmentSrc);
-  var program = nativeCustomFilterPrograms.get(source);
-  if (!program) {
-    try {
-      program = NativeHost.render.createFilterProgram(source);
-    } catch (error) {
-      PMJS.compat.hit('render.filter-program', String(error.message || error));
-      return null;
-    }
-    nativeCustomFilterPrograms.set(source, program);
-  }
-  var padding = filter.padding === undefined ? 4 : Number(filter.padding);
-  if (!Number.isFinite(padding) || padding < 0 || padding > 65536) return null;
-  var parameters = [padding];
-  for (var index = 0; index < program.uniforms.length; index++) {
-    var uniform = program.uniforms[index];
-    var value = filter.uniforms && filter.uniforms[uniform.name];
-    if (value === undefined || value === null) return null;
-    if (typeof value === 'number') value = [value];
-    else if (uniform.size === 2 && value.x !== undefined) value = [value.x, value.y];
-    if (value.length !== uniform.size) return null;
-    for (var component = 0; component < uniform.size; component++) {
-      var number = Number(value[component]);
-      if (!Number.isFinite(number)) return null;
-      parameters.push(number);
-    }
-  }
-  return { kind: 31, resource: program.handle, parameters: parameters };
 }
 
 function nativeSceneFilter(node, activeFilters) {
   if (!activeFilters.length) {
     return { blur: 0, groups: [], unsupported: false };
+  }
+  if (typeof NativeHost.render.createFilterPlan === 'function' &&
+      activeFilters[0] && activeFilters[0].fragmentSrc &&
+      (!PIXI.Filter || activeFilters[0].constructor === PIXI.Filter)) {
+    var actualFilters = activeFilters.filter(function(filter) { return filter && filter.enabled !== false; });
+    if (actualFilters.length) {
+      try {
+        var actualGroup = nativeRecordCustomFilter(actualFilters[0], node, actualFilters);
+        if (actualGroup) return { blur: 0, groups: [actualGroup], unsupported: false };
+      } catch (error) {
+        PMJS.compat.hit('render.filter-program', String(error.message || error));
+        return { blur: 0, groups: [], unsupported: true, filters: actualFilters };
+      }
+    }
   }
   var MvToneFilter = typeof ToneFilter === 'function' ? ToneFilter : null;
   var DisplacementFilter = PIXI.filters && PIXI.filters.DisplacementFilter;

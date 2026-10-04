@@ -398,7 +398,11 @@ std::uint32_t Renderer::createFilterProgram(const std::string& fragmentSource, c
       glGetActiveUniform(program, index, name.size(), &length, &count, &type, name.data());
       const std::string key(name.data(), length);
       if (key == "pmjsScreenSize" || key == "pmjsFilterFrame" ||
-          key == "pmjsFilterTextureSize" || key == "projectionMatrix") continue;
+          key == "pmjsFilterTextureSize") continue;
+      if (key == "projectionMatrix") {
+        if (type != GL_FLOAT_MAT3 || count != 1) throw std::invalid_argument("filter projection must be mat3");
+        continue;
+      }
       if (key == "filterArea" || key == "filterClamp") {
         if (type != GL_FLOAT_VEC4 || count != 1) {
           throw std::invalid_argument("custom filter built-in must be vec4: " + key);
@@ -441,6 +445,10 @@ std::uint32_t Renderer::registerFilterPlan(const std::shared_ptr<CustomFilterPla
   std::erase_if(filterPlans_, [](const auto& entry) { return entry.second.expired(); });
   if (filterPlans_.size() >= 4096 || nextFilterPlan_ == 0xffffffffU)
     throw std::runtime_error("custom filter plan budget exhausted");
+for (float resolution : plan->resolutions) {
+    if (plan->frame[2] * resolution > maxTextureSize_ || plan->frame[3] * resolution > maxTextureSize_)
+      throw std::invalid_argument("custom filter target exceeds texture size");
+  }
   plan->images = &images_;
   plan->lifetime = filterPlanLifetime_;
   for (const auto& pass : plan->passes) for (const auto& sampler : pass.samplers) {
