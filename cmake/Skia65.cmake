@@ -22,7 +22,9 @@ if(PMJS_BUILD_SKIA65_COMPONENT)
     "${CMAKE_CURRENT_SOURCE_DIR}/src/skia65/pmjs_skia65.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/skia65/pmjs_skia65.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/skia65/mask_test.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/skia65/raster_test.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/skia65-mask-tail.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/skia65-arm-parity.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/skia65/build.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/skia65/provision.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/skia65/sources.lock.json")

@@ -1,0 +1,66 @@
+diff --git a/src/opts/SkBlitRow_opts.h b/src/opts/SkBlitRow_opts.h
+--- a/src/opts/SkBlitRow_opts.h
++++ b/src/opts/SkBlitRow_opts.h
+@@ -40,19 +40,10 @@
+ 
+ #if defined(SK_ARM_HAS_NEON)
+ 
+-// Return a uint8x8_t value, r, computed as r[i] = SkMulDiv255Round(x[i], y[i]), where r[i], x[i],
+-// y[i] are the i-th lanes of the corresponding NEON vectors.
+-static inline uint8x8_t SkMulDiv255Round_neon8(uint8x8_t x, uint8x8_t y) {
+-    uint16x8_t prod = vmull_u8(x, y);
+-    return vraddhn_u16(prod, vrshrq_n_u16(prod, 8));
+-}
+-
+-// The implementations of SkPMSrcOver below perform alpha blending consistently with
+-// SkMulDiv255Round. They compute the color components (numbers in the interval [0, 255]) as:
+-//
+-//   result_i = src_i + rint(g(src_alpha, dst_i))
+-//
+-// where g(x, y) = ((255.0 - x) * y) / 255.0 and rint rounds to the nearest integer.
++static inline uint8x8_t SkPMSrcOverBlend_neon8(uint8x8_t inverseAlpha, uint8x8_t destination) {
++    uint16x8_t scale = vaddl_u8(inverseAlpha, vdup_n_u8(1));
++    return vshrn_n_u16(vmulq_u16(scale, vmovl_u8(destination)), 8);
++}
+ 
+ // In this variant of SkPMSrcOver each NEON register, dst.val[i], src.val[i], contains the value
+ // of the same color component for 8 consecutive pixels. The result of this function follows the
+@@ -60,10 +51,10 @@
+ static inline uint8x8x4_t SkPMSrcOver_neon8(uint8x8x4_t dst, uint8x8x4_t src) {
+     uint8x8_t nalphas = vmvn_u8(src.val[3]);
+     uint8x8x4_t result;
+-    result.val[0] = vadd_u8(src.val[0], SkMulDiv255Round_neon8(nalphas,  dst.val[0]));
+-    result.val[1] = vadd_u8(src.val[1], SkMulDiv255Round_neon8(nalphas,  dst.val[1]));
+-    result.val[2] = vadd_u8(src.val[2], SkMulDiv255Round_neon8(nalphas,  dst.val[2]));
+-    result.val[3] = vadd_u8(src.val[3], SkMulDiv255Round_neon8(nalphas,  dst.val[3]));
++    result.val[0] = vadd_u8(src.val[0], SkPMSrcOverBlend_neon8(nalphas,  dst.val[0]));
++    result.val[1] = vadd_u8(src.val[1], SkPMSrcOverBlend_neon8(nalphas,  dst.val[1]));
++    result.val[2] = vadd_u8(src.val[2], SkPMSrcOverBlend_neon8(nalphas,  dst.val[2]));
++    result.val[3] = vadd_u8(src.val[3], SkPMSrcOverBlend_neon8(nalphas,  dst.val[3]));
+     return result;
+ }
+ 
+@@ -72,7 +63,7 @@
+ static inline uint8x8_t SkPMSrcOver_neon2(uint8x8_t dst, uint8x8_t src) {
+     const uint8x8_t alpha_indices = vcreate_u8(0x0707070703030303);
+     uint8x8_t nalphas = vmvn_u8(vtbl1_u8(src, alpha_indices));
+-    return vadd_u8(src, SkMulDiv255Round_neon8(nalphas, dst));
++    return vadd_u8(src, SkPMSrcOverBlend_neon8(nalphas, dst));
+ }
+ 
+ #endif
+diff --git a/src/opts/SkNx_neon.h b/src/opts/SkNx_neon.h
+--- a/src/opts/SkNx_neon.h
++++ b/src/opts/SkNx_neon.h
+@@ -656,7 +656,11 @@
+ }
+ 
+ AI static Sk4i Sk4f_round(const Sk4f& x) {
++#if defined(SK_CPU_ARM64)
++    return vcvtnq_s32_f32(x.fVec);
++#else
+     return vcvtq_s32_f32((x + 0.5f).fVec);
++#endif
+ }
+ 
+ }  // namespace

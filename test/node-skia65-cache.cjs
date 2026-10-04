@@ -37,7 +37,7 @@ for (const item of fixture.cases) compare(item);
 for (const item of fixture.cases.slice().reverse()) compare(item);
 const font = 'text-shaping.ttf';
 for (let index = 0; index < 200; ++index)
-  native.canvas.measureText(font, `OMORI ${index} AV ffi é`, 28);
+  native.canvas.measureText(font, `SAMPLE ${index} AV ffi é`, 28);
 const before = native.canvas.glyphStats();
 assert.ok(before.layoutCacheEntries <= before.fontStacks * 16);
 assert.ok(before.layoutCacheBytes <= before.fontStacks * 64 * 1024);

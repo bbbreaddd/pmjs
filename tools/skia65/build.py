@@ -72,6 +72,11 @@ def build(options):
     patch_environment = {**os.environ, "GIT_CEILING_DIRECTORIES": str(skia.parent)}
     run(["git", "apply", "--check", mask_patch], cwd=skia, env=patch_environment)
     run(["git", "apply", mask_patch], cwd=skia, env=patch_environment)
+    arm_patch = ROOT / "third_party/skia65-arm-parity.patch"
+    arm_sources = [skia / "src/opts/SkBlitRow_opts.h", skia / "src/opts/SkNx_neon.h"]
+    arm_original_sha256 = {str(file.relative_to(skia)): digest(file) for file in arm_sources}
+    run(["git", "apply", "--check", arm_patch], cwd=skia, env=patch_environment)
+    run(["git", "apply", arm_patch], cwd=skia, env=patch_environment)
     (skia / "src/ports/SkFontMgr_custom_empty_factory.cpp").write_text(
         '#include "SkFontMgr.h"\n#include "SkFontMgr_empty.h"\n'
         'sk_sp<SkFontMgr> SkFontMgr::Factory() { return SkFontMgr_New_Custom_Empty(); }\n')
@@ -87,6 +92,8 @@ def build(options):
                    "-DSK_SUPPORT_LEGACY_X86_BLITS", "-DSK_SUPPORT_LEGACY_DASH_CULL_PATH",
                    "-DSK_SUPPORT_LEGACY_SVG_ARC_TO"]
     flags = ["-fvisibility=hidden", "-Wno-error", "-w", "-USK_GAMMA_APPLY_TO_A8"] + definitions
+    if options.arch == "arm64":
+        flags.append("-ffp-contract=off")
     args = {"is_official_build": True, "is_debug": False, "cc": "clang", "cxx": "clang++",
             "ar": str(sdk / "bin/ar") if sdk else "llvm-ar-20", "target_cpu": "arm64" if options.arch == "arm64" else "x64",
             "skia_enable_gpu": False, "skia_enable_pdf": False, "skia_enable_tools": False,
@@ -117,7 +124,7 @@ def build(options):
     if not strip.is_file() or "LLVM version " + lock["clangVersion"] not in subprocess.check_output([strip, "--version"], text=True):
         raise RuntimeError("Skia65 requires LLVM strip " + lock["clangVersion"])
     run([strip, "--strip-debug", library])
-    sources = [LOCK, pathlib.Path(__file__), pathlib.Path(__file__).with_name("provision.py"), mask_patch]
+    sources = [LOCK, pathlib.Path(__file__), pathlib.Path(__file__).with_name("provision.py"), mask_patch, arm_patch]
     sources += sorted((ROOT / "src/skia65").iterdir())
     sources += [ROOT / "src/text_layout.cpp", ROOT / "src/text_layout.hpp", ROOT / "src/unicode_default_ignorables.hpp"]
     manifest = {"arch": options.arch, "scope": "shared text backend",
@@ -126,7 +133,9 @@ def build(options):
         "strip": {"version": lock["clangVersion"], "sha256": digest(strip.resolve()), "arguments": ["--strip-debug"]},
         "sources": {str(file.relative_to(ROOT)): digest(file) for file in sources},
         "adaptations": {"maskTail": {"patchSha256": digest(mask_patch),
-            "originalSha256": mask_original_sha256, "adaptedSha256": digest(mask_source)}},
+            "originalSha256": mask_original_sha256, "adaptedSha256": digest(mask_source)},
+            "armParity": {"patchSha256": digest(arm_patch), "originalSha256": arm_original_sha256,
+                "adaptedSha256": {str(file.relative_to(skia)): digest(file) for file in arm_sources}}},
         "librarySha256": digest(library), "libraryBytes": library.stat().st_size,
         "readelfDynamic": subprocess.check_output(["readelf", "-d", library], text=True),
         "exports": subprocess.check_output(["nm", "-D", "--defined-only", library], text=True)}

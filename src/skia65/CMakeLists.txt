@@ -98,4 +98,12 @@ if(PMJS_BUILD_SKIA65_MASK_TEST)
     SK_RELEASE SK_SUPPORT_GPU=0 _LIBCPP_ENABLE_CXX20_REMOVED_TYPE_TRAITS)
   target_link_libraries(pmjs-skia65-mask-test PRIVATE "${PMJS_SKIA65_ARCHIVE}" pthread dl m)
   add_test(NAME skia65-mask COMMAND pmjs-skia65-mask-test)
+  add_executable(pmjs-skia65-raster-test raster_test.cpp)
+  target_include_directories(pmjs-skia65-raster-test SYSTEM PRIVATE
+    "${skia}/include/core" "${skia}/include/config" "${skia}/include/private"
+    "${skia}/src/core" "${skia}/src/opts")
+  target_compile_definitions(pmjs-skia65-raster-test PRIVATE
+    SK_RELEASE SK_SUPPORT_GPU=0 _LIBCPP_ENABLE_CXX20_REMOVED_TYPE_TRAITS)
+  target_link_libraries(pmjs-skia65-raster-test PRIVATE "${PMJS_SKIA65_ARCHIVE}" pthread dl m)
+  add_test(NAME skia65-raster COMMAND pmjs-skia65-raster-test)
 endif()
