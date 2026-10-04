@@ -2,14 +2,9 @@ function installNativeStorageManager() {
   if (!NativeHost.storage || !globalThis.StorageManager) return;
   if (StorageManager._pmjsLoadPatched && StorageManager._pmjsExistsPatched) return;
   StorageManager.isLocalMode = function() { return true; };
+  // Filename selection remains guest-owned; stock and plugins resolve it through
+  // the relocated directory.
   StorageManager.localFileDirectoryPath = function() { return '/save/'; };
-  if (typeof StorageManager.localFilePath === 'function') {
-    StorageManager.localFilePath = function(savefileId) {
-      if (savefileId < 0) return '/save/config.rpgsave';
-      if (savefileId === 0) return '/save/global.rpgsave';
-      return '/save/file' + savefileId + '.rpgsave';
-    };
-  }
   if (typeof StorageManager.webStorageKey !== 'function') {
     StorageManager.webStorageKey = function(savefileId) {
       return 'RPG File' + savefileId;
