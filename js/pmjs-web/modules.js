@@ -148,6 +148,14 @@ function requireModule(request, parentDirectory) {
                  throw new Error('host user information is unavailable');
                }
                return globalThis.__pmjsBuiltinRequire('os').userInfo(options);
+             },
+             hostname: function() {
+               if (!globalThis.__pmjsBuiltinRequire) throw new Error('host name is unavailable');
+               return globalThis.__pmjsBuiltinRequire('os').hostname();
+             },
+             networkInterfaces: function() {
+               if (!globalThis.__pmjsBuiltinRequire) throw new Error('host network information is unavailable');
+               return globalThis.__pmjsBuiltinRequire('os').networkInterfaces();
              } };
   }
   if (Object.prototype.hasOwnProperty.call(registeredCommonJsModules, request)) {
@@ -165,6 +173,7 @@ function requireModule(request, parentDirectory) {
 globalThis.require = function(request) { return requireModule(request, '.'); };
 globalThis.nw = nativeNwGui;
 var hostProcessVersions = typeof process !== 'undefined' && process.versions ? process.versions : {};
+var hostProcessHrtime = typeof process !== 'undefined' ? process.hrtime : undefined;
 var nwCompatVersion = PMJS.config.nwVersion || '0.29.0';
 globalThis.process = {
   platform: nativePlatform.platform,
@@ -172,6 +181,8 @@ globalThis.process = {
   env: { LOCALAPPDATA: '/save/', HOME: '/save' },
   mainModule: { filename: '/game/index.html' },
   cwd: function() { return '/game'; },
+  hrtime: hostProcessHrtime,
+  execPath: '/game/pmjs',
   version: 'v' + (hostProcessVersions.node || '12.0.0'),
   versions: {
     node: hostProcessVersions.node || '12.0.0',

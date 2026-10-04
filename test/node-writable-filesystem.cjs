@@ -1,14 +1,14 @@
 'use strict';
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
+const { temporaryDirectory } = require('./helpers/temp.cjs');
 const path = require('node:path');
 const vm = require('node:vm');
 const test = require('node:test');
 const { createGameFilesystem, createStorage } = require('../runner/storage.cjs');
 const native = require(process.env.PMJS_NATIVE_ADDON || path.resolve(__dirname, '../build/pmjs_native.node'));
 
-const base = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-game-files-base-'));
+const base = temporaryDirectory('pmjs-game-files-base-');
 const gameRoot = path.join(base, 'game');
 fs.mkdirSync(path.join(gameRoot, 'data'), { recursive: true });
 fs.writeFileSync(path.join(gameRoot, 'data/Original.txt'), 'original');
@@ -17,7 +17,7 @@ native.initialize({ gameRoot, width: 32, height: 32, windowTitle: 'Writable file
 test.after(() => { native.runtime.quit(); fs.rmSync(base, { recursive: true, force: true }); });
 
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-game-files-'));
+  const root = temporaryDirectory('pmjs-game-files-');
   const overlay = path.join(root, 'save/game-files');
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const host = createGameFilesystem(native.fs, overlay);
@@ -61,6 +61,41 @@ test('copy-on-write replaces originals, merges listings and preserves case-insen
   assert.equal(guest.statSync('data/ORIGINAL.txt').isDirectory(), false);
   assert.equal(fs.readFileSync(path.join(gameRoot, 'data/Original.txt'), 'utf8'), 'original');
   assert.equal(restart().readText('DATA/ORIGINAL.TXT'), 'latest');
+});
+
+test('file and directory stat predicates match Node for game files, overlays and saves', t => {
+  const { guest, gameRoot, root } = fixture(t);
+  guest.writeFileSync('data/new.txt', 'overlay');
+  const overlayReference = path.join(root, 'node-overlay.txt');
+  fs.writeFileSync(overlayReference, 'overlay');
+  guest.mkdirSync('/save/nested', { recursive: true });
+  guest.writeFileSync('/save/nested/save.txt', 'save');
+  for (const [name, physical] of [
+    ['data/Keep.txt', path.join(gameRoot, 'data/Keep.txt')],
+    ['data/new.txt', overlayReference],
+    ['data', path.join(gameRoot, 'data')],
+    ['/save', path.join(root, 'save')],
+    ['/save/nested', path.join(root, 'save/nested')],
+    ['/save/nested/save.txt', path.join(root, 'save/nested/save.txt')]
+  ]) {
+    const actual = guest.statSync(name), expected = fs.statSync(physical);
+    assert.equal(actual.isFile(), expected.isFile(), name);
+    assert.equal(actual.isDirectory(), expected.isDirectory(), name);
+  }
+  assert.throws(() => guest.statSync('/save/missing'), { code: 'ENOENT' });
+  assert.throws(() => guest.statSync('data/missing'), { code: 'ENOENT' });
+});
+
+test('append copies up original files and preserves the merged contents across restart', t => {
+  const { guest, host, gameRoot, restart } = fixture(t);
+  guest.appendFileSync('data/Original.txt', '\nfirst');
+  guest.appendFileSync('DATA/ORIGINAL.TXT', Buffer.from([0, 255]));
+  const expected = Buffer.concat([Buffer.from('original\nfirst'), Buffer.from([0, 255])]);
+  assert.deepEqual(guest.readFileSync('data/Original.txt'), expected);
+  assert.deepEqual(Buffer.from(restart().readBytes('data/Original.txt')), expected);
+  assert.equal(fs.readFileSync(path.join(gameRoot, 'data/Original.txt'), 'utf8'), 'original');
+  guest.appendFileSync('data/new.log', 'created');
+  assert.equal(host.readText('data/new.log'), 'created');
 });
 
 test('unlink hides original and copied-up files persistently, then allows recreation', t => {

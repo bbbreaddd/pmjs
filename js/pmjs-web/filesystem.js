@@ -107,55 +107,27 @@ function fsReadContents(path, options) {
 }
 
 function FsReadStream(path, options) {
-  this.path = path; this.options = options || {}; this.readable = true;
-  this.destroyed = false; this._listeners = Object.create(null);
-  var stream = this;
+  var Readable = globalThis.__pmjsBuiltinRequire('stream').Readable;
+  var stream = new Readable({ read: function() {},
+    encoding: typeof options === 'string' ? options : options && options.encoding });
+  stream.path = path;
   PMJS.tasks.enqueue(function() {
     if (stream.destroyed) return;
+    var contents;
     try {
-      var contents = fsReadContents(path, stream.options);
-      stream.emit('open', 0); stream.emit('ready'); stream.emit('data', contents);
-      stream.readable = false; stream.emit('end'); stream.emit('close');
+      contents = fsReadContents(path);
     } catch (error) {
-      stream.readable = false; stream.emit('error', error); stream.emit('close');
+      stream.destroy(error);
+      return;
     }
+    stream.emit('open', 0);
+    stream.emit('ready');
+    if (stream.destroyed) return;
+    stream.push(contents);
+    if (!stream.destroyed) stream.push(null);
   });
+  return stream;
 }
-FsReadStream.prototype.on = function(name, listener) {
-  var listeners = this._listeners[name];
-  if (!listeners) {
-    listeners = [];
-    this._listeners[name] = listeners;
-  }
-  listeners.push(listener);
-  return this;
-};
-FsReadStream.prototype.once = function(name, listener) {
-  var stream = this;
-  function once() { stream.removeListener(name, once); return listener.apply(this, arguments); }
-  return this.on(name, once);
-};
-FsReadStream.prototype.removeListener = function(name, listener) {
-  var listeners = this._listeners[name] || [];
-  var index = listeners.indexOf(listener); if (index >= 0) listeners.splice(index, 1);
-  return this;
-};
-FsReadStream.prototype.emit = function(name) {
-  var args = Array.prototype.slice.call(arguments, 1);
-  (this._listeners[name] || []).slice().forEach(function(listener) {
-    listener.apply(null, args);
-  });
-  return this;
-};
-FsReadStream.prototype.setEncoding = function(encoding) {
-  this.options.encoding = encoding; return this;
-};
-FsReadStream.prototype.destroy = function(error) {
-  if (this.destroyed) return this;
-  this.destroyed = true; this.readable = false;
-  if (error) this.emit('error', error);
-  this.emit('close'); return this;
-};
 var fsModule = {
   existsSync: function(path) {
     var writable = writablePath(path);
@@ -271,7 +243,8 @@ var fsModule = {
       error.code = 'ENOENT';
       throw error;
     }
-    return { isDirectory: function() { return directory; } };
+    return { isDirectory: function() { return directory; },
+      isFile: function() { return !directory; } };
   },
   stat: function(path, options, callback) {
     if (typeof options === 'function') { callback = options; options = null; }

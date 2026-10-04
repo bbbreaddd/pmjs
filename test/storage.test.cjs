@@ -252,6 +252,22 @@ test('plugin filenames govern backup, deletion, recovery and restore', () => {
   }
 });
 
+test('MV reads plugin save paths containing Windows separators without changing the filename', () => {
+  const { context, manager, storage, lz } = localStorageContext();
+  manager.localFilePath = function(id) { return '/save\\profiles\\slot' + id + '.rpgsave'; };
+  storage.writeText('profiles/slot2.rpgsave', lz.compressToBase64('legacy'));
+  context.installNativeStorageManager();
+  assert.equal(manager.localFileExists(2), true);
+  assert.equal(manager.loadFromLocalFile(2), 'legacy');
+  manager.saveToLocalFile(2, 'updated');
+  manager.backup(2);
+  assert.equal(lz.decompressFromBase64(storage.readText('profiles/slot2.rpgsave.bak')), 'updated');
+  manager.removeLocalFile(2);
+  assert.equal(manager.localFileExists(2), false);
+  manager.restoreBackup(2);
+  assert.equal(manager.loadFromLocalFile(2), 'updated');
+});
+
 test('plugin config and global filenames preserve data and report I/O failures', () => {
   const { context, manager, storage, lz } = localStorageContext();
   manager.localFilePath = function(id) {

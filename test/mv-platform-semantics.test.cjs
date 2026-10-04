@@ -271,6 +271,33 @@ test('FPSMeter defines the standard method surface, returns this from methods, a
   }, /syntax error in broken fpsmeter/);
 });
 
+test('guest OS identity queries reach Node while filesystem paths remain virtual', () => {
+  const hostOs = require('node:os');
+  let network;
+  const context = vm.createContext({
+    process,
+    nativePlatform: { platform: process.platform, arch: process.arch },
+    PMJS: { config: {} },
+    __pmjsBuiltinRequire(name) {
+      assert.equal(name, 'os');
+      return {
+        hostname: () => hostOs.hostname(),
+        userInfo: options => hostOs.userInfo(options),
+        networkInterfaces: () => (network = hostOs.networkInterfaces())
+      };
+    }
+  });
+  vm.runInContext(fs.readFileSync(path.join(jsDir, 'pmjs-web/modules.js'), 'utf8'), context);
+  const os = context.require('os');
+  assert.equal(os.hostname(), hostOs.hostname());
+  assert.equal(os.networkInterfaces(), network);
+  assert.equal(os.userInfo().username, hostOs.userInfo().username);
+  assert.equal(Buffer.isBuffer(os.userInfo({ encoding: 'buffer' }).username), true);
+  assert.equal(os.homedir(), '/save');
+  assert.equal(context.process.execPath, '/game/pmjs');
+  assert.equal(context.process.cwd(), '/game');
+});
+
 test('greenworks compatibility registers its supported module aliases', () => {
   const modules = {};
   const context = {
