@@ -136,6 +136,8 @@ if(BUILD_TESTING)
   if(PMJS_ENABLE_SKIA65)
     pmjs_add_cpp_test(pmjs-text-backend-default-test native-text-backend-default test/text-backend-default.cpp)
     target_link_libraries(pmjs-text-backend-default-test PRIVATE pmjs_runtime)
+    target_compile_definitions(pmjs-text-backend-default-test PRIVATE
+      PMJS_TEST_FONT="${CMAKE_CURRENT_SOURCE_DIR}/test/assets/text-shaping.ttf")
   endif()
   add_executable(pmjs-text-backend-unavailable-test test/text-backend-unavailable.cpp src/text_backend.cpp)
   target_include_directories(pmjs-text-backend-unavailable-test PRIVATE src)

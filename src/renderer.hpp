@@ -393,7 +393,8 @@ class Renderer {
   std::uint32_t nextFilterPlan_ = 0x80000000U;
   static void applyBlendMode(BlendMode mode);
   void drawCustomFilterPlan(const CustomFilterPlan& plan, std::uint32_t source,
-                            std::uint32_t output, const RenderCommand& command);
+                            std::uint32_t output, const RenderCommand& command,
+                            float sourceResolution, float outputResolution);
   std::uint32_t customFilterVertexArray_ = 0, customFilterVertexBuffer_ = 0;
   std::vector<RenderTarget> customPassTargets_;
   // Native rendering is shared across facades; the first Pixi renderer fixes precision.

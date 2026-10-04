@@ -26,6 +26,12 @@ function spriteRoundingCases() {
   rows.push({ label: 'alpha-clip', alpha: 0.5, clip: true, parent: true });
   rows.push({ label: 'high-resolution-texture', textureResolution: 2, rounded: false });
   rows.push({ label: 'snapshot', snapshot: true, resolution: 2, child: true, childRounded: true });
+  for (const snapshot of [false, true]) {
+    for (const childRounded of [false, true]) {
+      rows.push({ label: `nested-half-${Number(snapshot)}-${Number(childRounded)}`,
+        size: 64, parentScale: 2, child: true, childRounded, snapshot });
+    }
+  }
   for (const atlasRotation of [0, 2, 4, 6, 8, 10, 12, 14]) {
     for (const rounded of [false, true]) {
       rows.push({ label: `atlas-${atlasRotation}-${Number(rounded)}`, atlasRotation,

@@ -26,7 +26,7 @@ class StopBuild(Exception): pass
 with mock.patch.object(build, 'provision', return_value={'clangVersion':'20.1.2', 'tools':[]}), \
      mock.patch.object(build, 'replace', side_effect=StopBuild), \
      mock.patch.object(build.sys, 'executable', str(binaries / 'python')):
-    try: build.build(SimpleNamespace(cache=cache, arch='x64', sdk=None))
+    try: build.build(SimpleNamespace(cache=cache, arch='x64', sdk=None, output=directory / 'component', verify=False, reuse=False))
     except StopBuild: pass
 for wrapper, name in [('clang','clang-20'), ('clang++','clang++-20'), ('python','python')]:
     actual = subprocess.check_output([cache / 'tools' / wrapper, 'argument with spaces'], text=True)

@@ -13,7 +13,7 @@ assert.equal(hash('helpers/sprite-rounding-scenario.cjs'), reference.scenarioSha
 assert.equal(hash('../tools/generate-pixi5-sprite-rounding-reference.cjs'), reference.generatorSha256);
 assert.equal(hash('assets/pixi5/sprite-vertices-5.3.12.cjs'), reference.vertexFixtureSha256);
 const native = require(path.resolve(process.argv[2])), assets = path.resolve(process.argv[3]);
-native.initialize({ gameRoot: assets, width: 32, height: 32, windowTitle: 'Pixi 5 sprite rounding' });
+native.initialize({ gameRoot: assets, width: 64, height: 64, windowTitle: 'Pixi 5 sprite rounding' });
 const handles = [], renderers = [];
 try {
   const { context: c } = createMzContext();
@@ -71,6 +71,7 @@ try {
   let failures = 0;
   const cases = spriteRoundingCases(); assert.equal(cases.length, reference.rows.length);
   for (const [i, spec] of cases.entries()) {
+    const size = spec.size || 32;
     c.PIXI.settings.RESOLUTION = spec.settingsResolution;
     const width = spec.sourceWidth || 8, height = spec.sourceHeight || 8;
     const key = `${width}x${height}`;
@@ -82,7 +83,7 @@ try {
     const base = { resource: { source: { _nativeCanvas: sources.get(key) } },
       scaleMode: c.PIXI.SCALE_MODES.NEAREST };
     base.resolution = spec.textureResolution;
-    const renderer = new c.PIXI.Renderer({ width: 32, height: 32, resolution: spec.resolution, transparent: true });
+    const renderer = new c.PIXI.Renderer({ width: size, height: size, resolution: spec.resolution, transparent: true });
     renderers.push(renderer);
     const extentX = width / spec.textureResolution, extentY = height / spec.textureResolution;
     const swap = (spec.atlasRotation || 0) % 4 === 2;
@@ -93,6 +94,7 @@ try {
       trim: spec.trim ? { x: 3, y: 2, width: 8, height: 8 } : null };
     const stage = new c.PIXI.Container(), parent = new c.PIXI.Container(); stage.addChild(parent);
     if (spec.parent) place(parent, 2.25, 3.75, 1.25, 0.8, 0.2);
+    if (spec.parentScale) place(parent, 0, 0, spec.parentScale);
     const node = sprite(texture, spec.rounded, spec.anchor); parent.addChild(node);
     place(node, spec.position, spec.position, spec.scale, spec.scale, spec.rotation);
     node.alpha = spec.alpha === undefined ? 1 : spec.alpha;
@@ -120,11 +122,11 @@ try {
     const after = sprite(texture); place(after, 1, 27, 0.5); stage.addChild(after);
     native.beginFrame();
     if (spec.snapshot) {
-      const target = { baseTexture: { width: 32, height: 32, resolution: spec.resolution } };
+      const target = { baseTexture: { width: size, height: size, resolution: spec.resolution } };
       renderer.render(stage, target);
       const snapshot = sprite({ baseTexture: target.baseTexture, _updateID: 0,
-        _uvs: { uvsFloat32: new Float32Array(8) }, orig: { width: 32, height: 32 },
-        frame: { x: 0, y: 0, width: 32, height: 32 } });
+        _uvs: { uvsFloat32: new Float32Array(8) }, orig: { width: size, height: size },
+        frame: { x: 0, y: 0, width: size, height: size } });
       renderer.render(snapshot);
     } else renderer.render(stage);
     native.renderScene();
@@ -140,7 +142,7 @@ try {
       failures++;
       const directory = path.join(assets, 'mismatches/pixi5-sprite-rounding'); fs.mkdirSync(directory, { recursive: true });
       for (const [name, pixels] of [['expected', expected], ['actual', actual]]) {
-        fs.writeFileSync(path.join(directory, spec.label + '-' + name + '.png'), png(32 * spec.resolution, 32 * spec.resolution, pixels));
+        fs.writeFileSync(path.join(directory, spec.label + '-' + name + '.png'), png(size * spec.resolution, size * spec.resolution, pixels));
       }
     }
     console.log(spec.label + ': delta=' + maxDelta + ' outlierPixels=' + outliers);

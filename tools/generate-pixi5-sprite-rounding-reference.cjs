@@ -19,7 +19,8 @@ function captureReference() {
   const rows = [];
   for (const spec of spriteRoundingCases()) {
     PIXI.settings.RESOLUTION = spec.settingsResolution;
-    const renderer = new PIXI.Renderer({ width: 32, height: 32, resolution: spec.resolution,
+    const logicalSize = spec.size || 32;
+    const renderer = new PIXI.Renderer({ width: logicalSize, height: logicalSize, resolution: spec.resolution,
       transparent: true, antialias: false, preserveDrawingBuffer: true });
     const width = spec.sourceWidth || 8, height = spec.sourceHeight || 8;
     const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;
@@ -37,6 +38,7 @@ function captureReference() {
     }
     const stage = new PIXI.Container(), parent = new PIXI.Container(); stage.addChild(parent);
     if (spec.parent) { parent.position.set(2.25, 3.75); parent.scale.set(1.25, 0.8); parent.rotation = 0.2; }
+    if (spec.parentScale) parent.scale.set(spec.parentScale);
     const sprite = new PIXI.Sprite(texture); parent.addChild(sprite);
     sprite.position.set(spec.position); sprite.scale.set(spec.scale); sprite.rotation = spec.rotation;
     sprite.anchor.set(spec.anchor); sprite.roundPixels = spec.rounded;
@@ -70,10 +72,10 @@ function captureReference() {
     const after = new PIXI.Sprite(texture); after.position.set(1, 27); after.scale.set(0.5); stage.addChild(after);
     let target, snapshot;
     if (spec.snapshot) {
-      target = PIXI.RenderTexture.create({ width: 32, height: 32, resolution: spec.resolution });
+      target = PIXI.RenderTexture.create({ width: logicalSize, height: logicalSize, resolution: spec.resolution });
       renderer.render(stage, target); snapshot = new PIXI.Sprite(target); renderer.render(snapshot);
     } else renderer.render(stage);
-    const size = 32 * spec.resolution, pixels = new Uint8Array(size * size * 4), top = new Uint8Array(pixels.length);
+    const size = logicalSize * spec.resolution, pixels = new Uint8Array(size * size * 4), top = new Uint8Array(pixels.length);
     const gl = renderer.gl;
     gl.readPixels(0, 0, size, size, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
     for (let y = 0; y < size; y++) top.set(pixels.subarray((size - y - 1) * size * 4, (size - y) * size * 4), y * size * 4);

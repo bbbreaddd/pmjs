@@ -777,6 +777,18 @@ void Renderer::renderScene() {
   bool scissorActive = false;
   std::size_t filterDepth = 0;
   std::array<const RenderCommand*, scene_packet::maxFilterDepth> filterCommands{};
+  std::array<float, scene_packet::maxFilterDepth> rasterResolutions{};
+  float rasterResolution = 1;
+  const auto rasterScissor = [&](int x, int y, int width, int height) {
+    glScissor(std::lround(x * rasterResolution), std::lround(y * rasterResolution),
+      std::max(0L, std::lround(width * rasterResolution)), std::max(0L, std::lround(height * rasterResolution)));
+  };
+  const auto maskMatrix = [&](const float* matrix) {
+    std::array<float, 6> result{};
+    std::copy_n(matrix, 6, result.begin());
+    for (int index = 0; index < 4; ++index) result[index] /= rasterResolution;
+    return result;
+  };
   std::array<bool, scene_packet::maxFilterDepth> savedScissor{};
   std::array<std::array<int, 4>, scene_packet::maxFilterDepth> savedClip{};
   std::array<int, 4> activeClip{};
@@ -785,13 +797,18 @@ void Renderer::renderScene() {
   applyBlendMode(activeBlend);
   for (const auto& operation : operations) {
     if (operation.action == RenderCommand::Action::filterBegin) {
+      rasterResolution = operation.command->customFilterPlan ?
+        operation.command->customFilterPlan->resolutions[0] : 1.0F;
+      rasterResolutions[filterDepth] = rasterResolution;
+      const int targetWidth = std::max(1, static_cast<int>(std::ceil(width_ * rasterResolution)));
+      const int targetHeight = std::max(1, static_cast<int>(std::ceil(height_ * rasterResolution)));
       if (diagnostics_) ++stats_.filterTargetAcquires;
       if (groupTargets_[filterDepth].texture &&
-          groupTargets_[filterDepth].width == width_ &&
-          groupTargets_[filterDepth].height == height_) {
+          groupTargets_[filterDepth].width == targetWidth &&
+          groupTargets_[filterDepth].height == targetHeight) {
         if (diagnostics_) ++stats_.filterTargetReuses;
       }
-      ensureTarget(groupTargets_[filterDepth], width_, height_);
+      ensureTarget(groupTargets_[filterDepth], targetWidth, targetHeight);
       std::array<int, 4> boundedRect{};
       const bool bounded = filterBoundsRect(operation.command, &boundedRect);
       filterRegions[filterDepth].clear();
@@ -810,10 +827,10 @@ void Renderer::renderScene() {
         scissorActive = false;
       }
       glBindFramebuffer(GL_FRAMEBUFFER, groupTargets_[filterDepth].framebuffer);
-      glViewport(0, 0, width_, height_);
+      glViewport(0, 0, std::lround(width_ * rasterResolution), std::lround(height_ * rasterResolution));
       if (bounded && !multiRegion) {
         glEnable(GL_SCISSOR_TEST);
-        glScissor(boundedRect[0], height_ - boundedRect[3],
+        rasterScissor(boundedRect[0], height_ - boundedRect[3],
                   std::max(0, boundedRect[2] - boundedRect[0]),
                   std::max(0, boundedRect[3] - boundedRect[1]));
         scissorActive = true;
@@ -833,6 +850,8 @@ void Renderer::renderScene() {
     }
     if (operation.action == RenderCommand::Action::filterEnd) {
       --filterDepth;
+      const float sourceResolution = rasterResolutions[filterDepth];
+      rasterResolution = filterDepth ? rasterResolutions[filterDepth - 1] : 1.0F;
       const RenderCommand& filter = *filterCommands[filterDepth];
       if (diagnostics_) ++stats_.filterApplications[static_cast<std::size_t>(filter.filterKind)];
       std::array<int, 4> boundedRect{};
@@ -843,7 +862,7 @@ void Renderer::renderScene() {
         glDisable(GL_SCISSOR_TEST);
         scissorActive = false;
       }
-      glViewport(0, 0, width_, height_);
+      glViewport(0, 0, std::lround(width_ * rasterResolution), std::lround(height_ * rasterResolution));
       glUseProgram(program_);
       activeProgram = program_;
       glBindVertexArray(vertexArray_);
@@ -976,12 +995,12 @@ void Renderer::renderScene() {
         glBindTexture(GL_TEXTURE_2D, mask->texture);
         glUniform1i(maskImageUniform_, 1);
         glUniform1fv(maskTransformUniform_, 6,
-                     filter.filterParameters.data());
+                     maskMatrix(filter.filterParameters.data()).data());
         glUniform4fv(maskFrameUniform_, 1,
                      filter.filterParameters.data() + 6);
         glUniform2f(maskTextureSizeUniform_, static_cast<float>(mask->width),
                     static_cast<float>(mask->height));
-        glUniform1f(maskScreenHeightUniform_, static_cast<float>(height_));
+        glUniform1f(maskScreenHeightUniform_, height_ * rasterResolution);
         glUniform1f(maskAlphaUniform_, filter.filterParameters[10]);
         glUniform1i(maskUsesRedUniform_, filter.filterParameters[11] != 0);
         glUniform1i(maskRotationUniform_,
@@ -1170,7 +1189,8 @@ void Renderer::renderScene() {
       if (filter.filterKind == scene_packet::FilterKind::custom) {
         if (filter.customFilterPlan) {
           drawCustomFilterPlan(*filter.customFilterPlan, groupTargets_[filterDepth].framebuffer,
-            filterDepth == 0 ? rootFramebuffer : groupTargets_[filterDepth - 1].framebuffer, filter);
+            filterDepth == 0 ? rootFramebuffer : groupTargets_[filterDepth - 1].framebuffer,
+            filter, sourceResolution, rasterResolution);
           glUseProgram(program_);
           activeProgram = program_;
           activeBlend = filter.customFilterPlan->passes.empty() ? BlendMode::normal :
@@ -1236,7 +1256,7 @@ void Renderer::renderScene() {
           offset += uniform.components * uniform.count;
         }
         glEnable(GL_SCISSOR_TEST);
-        glScissor(bounds[0], height_ - bounds[3], bounds[2] - bounds[0], bounds[3] - bounds[1]);
+        rasterScissor(bounds[0], height_ - bounds[3], bounds[2] - bounds[0], bounds[3] - bounds[1]);
         activeBlend = filter.blendMode;
         glEnable(GL_BLEND);
         applyBlendMode(activeBlend);
@@ -1271,7 +1291,7 @@ void Renderer::renderScene() {
       if (!filterRegions[filterDepth].empty()) {
         glEnable(GL_SCISSOR_TEST);
         for (const auto& region : filterRegions[filterDepth]) {
-          glScissor(region[0], height_ - region[3],
+          rasterScissor(region[0], height_ - region[3],
                     region[2] - region[0], region[3] - region[1]);
           glDrawArrays(GL_TRIANGLES, operation.first, operation.count);
           if (diagnostics_) {
@@ -1282,7 +1302,7 @@ void Renderer::renderScene() {
         scissorActive = savedScissor[filterDepth];
         activeClip = savedClip[filterDepth];
         if (scissorActive) {
-          glScissor(activeClip[0], height_ - activeClip[3],
+          rasterScissor(activeClip[0], height_ - activeClip[3],
                     std::max(0, activeClip[2] - activeClip[0]),
                     std::max(0, activeClip[3] - activeClip[1]));
         } else {
@@ -1293,7 +1313,7 @@ void Renderer::renderScene() {
         activeClip = savedClip[filterDepth];
         if (scissorActive) {
           glEnable(GL_SCISSOR_TEST);
-          glScissor(activeClip[0], height_ - activeClip[3],
+          rasterScissor(activeClip[0], height_ - activeClip[3],
                     std::max(0, activeClip[2] - activeClip[0]),
                     std::max(0, activeClip[3] - activeClip[1]));
         }
@@ -1321,7 +1341,7 @@ void Renderer::renderScene() {
         presentationColorMatrixAlpha_ = operation.matrixCommand->color[3];
         toneCompositionActive_ = true;
         glBindFramebuffer(GL_FRAMEBUFFER, toneOverlayTarget_.framebuffer);
-        glViewport(0, 0, width_, height_);
+        glViewport(0, 0, std::lround(width_ * rasterResolution), std::lround(height_ * rasterResolution));
         glDisable(GL_SCISSOR_TEST);
         scissorActive = false;
         glClearColor(0, 0, 0, 0);
@@ -1334,15 +1354,14 @@ void Renderer::renderScene() {
       ensureTarget(filterTarget_, width_, height_);
       glDisable(GL_BLEND);
       glBindFramebuffer(GL_FRAMEBUFFER, filterTarget_.framebuffer);
-      glViewport(0, 0, width_, height_);
+      glViewport(0, 0, std::lround(width_ * rasterResolution), std::lround(height_ * rasterResolution));
       glUseProgram(program_);
       activeProgram = program_;
       glBindVertexArray(vertexArray_);
       glActiveTexture(GL_TEXTURE0);
       glBindTexture(GL_TEXTURE_2D, filterDepth == 0 ? rootTexture :
                     groupTargets_[filterDepth - 1].texture);
-      glUniform2f(textureSizeUniform_, static_cast<float>(width_),
-                  static_cast<float>(height_));
+      glUniform2f(textureSizeUniform_, static_cast<float>(width_), static_cast<float>(height_));
       glUniform1f(blurUniform_, 0);
       glUniform2f(blurDirectionUniform_, 0, 0);
       glUniform1i(displacementEnabledUniform_, 0);
@@ -1380,7 +1399,7 @@ void Renderer::renderScene() {
         glEnable(GL_SCISSOR_TEST);
         scissorActive = true;
       }
-      glScissor(operation.clip[0], height_ - operation.clip[3],
+      rasterScissor(operation.clip[0], height_ - operation.clip[3],
                 std::max(0, operation.clip[2] - operation.clip[0]),
                 std::max(0, operation.clip[3] - operation.clip[1]));
       activeClip = operation.clip;
@@ -1427,7 +1446,7 @@ void Renderer::renderScene() {
         if (diagnostics_) stats_.drawCalls += effectDrawCalls;
       }
       // Subsequent geometry already includes MZ's reset viewport mapping.
-      glViewport(0, 0, width_, height_);
+      glViewport(0, 0, std::lround(width_ * rasterResolution), std::lround(height_ * rasterResolution));
       continue;
     }
     if (operation.blendMode != activeBlend) {
@@ -1459,8 +1478,7 @@ void Renderer::renderScene() {
       activeProgram = program;
       glBindVertexArray(layer->second.vertexArray);
       glUniformMatrix3fv(uniforms.world, 1, GL_FALSE, world.data());
-      glUniform2f(uniforms.screen, static_cast<float>(width_),
-                  static_cast<float>(height_));
+      glUniform2f(uniforms.screen, static_cast<float>(width_), static_cast<float>(height_));
       glUniform2f(uniforms.animation, command.tileAnimation[0],
                   command.tileAnimation[1]);
       glUniform4fv(uniforms.color, 1, command.color.data());
@@ -1483,13 +1501,13 @@ void Renderer::renderScene() {
         glUniform1i(uniforms.maskImage, 1);
         glUniform1i(uniforms.maskEnabled, 1);
         glUniform1fv(uniforms.maskTransform, 6,
-                     command.maskTransform.data());
+                     maskMatrix(command.maskTransform.data()).data());
         glUniform4f(uniforms.maskFrame, 0, 0,
                     static_cast<float>(mask->width),
                     static_cast<float>(mask->height));
         glUniform2f(uniforms.maskTextureSize, static_cast<float>(mask->width),
                     static_cast<float>(mask->height));
-        glUniform1f(uniforms.maskScreenHeight, static_cast<float>(height_));
+        glUniform1f(uniforms.maskScreenHeight, height_ * rasterResolution);
         glActiveTexture(GL_TEXTURE0);
       } else {
         glUniform1i(uniforms.maskEnabled, 0);
@@ -1584,12 +1602,12 @@ void Renderer::renderScene() {
       glUniform1i(spriteEffectMaskImageUniform_, 1);
       glUniform1i(spriteEffectMaskEnabledUniform_, 1);
       glUniform1fv(spriteEffectMaskTransformUniform_, 6,
-                   operation.maskTransform.data());
+                   maskMatrix(operation.maskTransform.data()).data());
       glUniform2f(spriteEffectMaskTextureSizeUniform_,
                   static_cast<float>(mask->width),
                   static_cast<float>(mask->height));
       glUniform1f(spriteEffectScreenHeightUniform_,
-                  static_cast<float>(height_));
+                  height_ * rasterResolution);
       glActiveTexture(GL_TEXTURE0);
     } else if (!simpleSprite) {
       glUniform1i(spriteEffectMaskEnabledUniform_, 0);

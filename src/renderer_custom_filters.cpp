@@ -8,7 +8,8 @@
 namespace pmjs {
 
 void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, std::uint32_t source,
-                                    std::uint32_t output, const RenderCommand& command) {
+                                    std::uint32_t output, const RenderCommand& command,
+                                    float sourceResolution, float outputResolution) {
   const auto& frame = plan.frame;
   if (frame[2] == 0 || frame[3] == 0) return;
   const auto pot = [this](float value) {
@@ -40,7 +41,8 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, std::uint32_t 
   glBindFramebuffer(GL_READ_FRAMEBUFFER, source);
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, input.framebuffer);
   if (x1 > x0 && y1 > y0) {
-    glBlitFramebuffer(x0, height_ - y1, x1, height_ - y0,
+    glBlitFramebuffer(std::lround(x0 * sourceResolution), std::lround((height_ - y1) * sourceResolution),
+      std::lround(x1 * sourceResolution), std::lround((height_ - y0) * sourceResolution),
       std::lround((x0 - frame[0]) * resolution), std::lround((y1 - frame[1]) * resolution),
       std::lround((x1 - frame[0]) * resolution), std::lround((y0 - frame[1]) * resolution),
       GL_COLOR_BUFFER_BIT, GL_NEAREST);
@@ -71,14 +73,16 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, std::uint32_t 
     const float targetWidth = final ? width_ : frame[2];
     const float targetHeight = final ? height_ : frame[3];
     glBindFramebuffer(GL_FRAMEBUFFER, final ? output : target.framebuffer);
-    glViewport(0, 0, final ? width_ : static_cast<int>(frame[2] * plan.resolutions[pass.output]),
-      final ? height_ : static_cast<int>(frame[3] * plan.resolutions[pass.output]));
+    glViewport(0, 0, final ? std::lround(width_ * outputResolution) : static_cast<int>(frame[2] * plan.resolutions[pass.output]),
+      final ? std::lround(height_ * outputResolution) : static_cast<int>(frame[3] * plan.resolutions[pass.output]));
     glDisable(GL_SCISSOR_TEST);
     if (pass.clear) { glClearColor(0, 0, 0, 0); glClear(GL_COLOR_BUFFER_BIT); }
     if (final && command.clipped) {
       glEnable(GL_SCISSOR_TEST);
-      glScissor(command.clip[0], height_ - command.clip[3],
-        command.clip[2] - command.clip[0], command.clip[3] - command.clip[1]);
+      glScissor(std::lround(command.clip[0] * outputResolution),
+        std::lround((height_ - command.clip[3]) * outputResolution),
+        std::lround((command.clip[2] - command.clip[0]) * outputResolution),
+        std::lround((command.clip[3] - command.clip[1]) * outputResolution));
     }
     glUseProgram(custom.program);
     const float sx = 2.0F / targetWidth, sy = (final ? -2.0F : 2.0F) / targetHeight;
@@ -157,7 +161,7 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, std::uint32_t 
     if (diagnostics_) { ++stats_.drawCalls; ++stats_.filterDrawCalls; }
   }
   glBindFramebuffer(GL_FRAMEBUFFER, output);
-  glViewport(0, 0, width_, height_);
+  glViewport(0, 0, std::lround(width_ * outputResolution), std::lround(height_ * outputResolution));
   glBindVertexArray(vertexArray_);
   glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer_);
   glActiveTexture(GL_TEXTURE0);

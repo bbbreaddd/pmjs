@@ -82,6 +82,7 @@ pmjs_skia65_style settings(float size, uint32_t color, float stroke, const Canva
 bool TextBackend::draw(const std::vector<std::filesystem::path>& paths, const std::string& text,
   float x, float y, float size, uint32_t color, float stroke, const CanvasTextStyle& options,
   std::vector<uint8_t>& straight, int width, int height, int dirty[4]) {
+  if (!skia_) return false;
 #ifdef PMJS_HAS_SKIA65
   auto* font = state_->font(paths);
   if (!font) return false;
@@ -146,6 +147,7 @@ bool TextBackend::draw(const std::vector<std::filesystem::path>& paths, const st
 
 std::optional<CanvasTextMetrics> TextBackend::measure(const std::vector<std::filesystem::path>& paths,
   const std::string& text, float size, const CanvasTextStyle& options) {
+  if (!skia_) return std::nullopt;
 #ifdef PMJS_HAS_SKIA65
   auto* font = state_->font(paths);
   if (!font) return std::nullopt;
@@ -161,6 +163,7 @@ std::optional<CanvasTextMetrics> TextBackend::measure(const std::vector<std::fil
 }
 
 bool TextBackend::canLoad(const std::filesystem::path& path) {
+  if (!skia_) return false;
 #ifdef PMJS_HAS_SKIA65
   return state_->font({path}) != nullptr;
 #else
@@ -191,6 +194,7 @@ TextBackendStats TextBackend::stats() const {
   return result;
 }
 void TextBackend::limits(size_t bytes, size_t entries) {
+  if (!skia_) return;
 #ifdef PMJS_HAS_SKIA65
   pmjs_skia65_cache_limits(bytes, std::min<size_t>(entries, 256));
 #else

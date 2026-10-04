@@ -986,7 +986,7 @@ constexpr const char* simpleFragmentSource = R"(#version 300 es
   uniform bool texturePremultiplied;
   uniform bool clampedTilingSampling;
   uniform highp vec2 imageDimensions;
-  in highp vec2 vertexUv;
+  in vec2 vertexUv;
   in vec4 vertexColor;
   in vec4 vertexUvClamp;
   out vec4 outputColor;
