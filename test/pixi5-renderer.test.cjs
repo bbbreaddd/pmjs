@@ -87,29 +87,54 @@ test('Pixi 5 scene encoder accepts an unrealized BaseTexture resource', () => {
   assert.equal(fixture.submissions[0].metadata[2 * 7], 0);
 });
 
-test('Pixi 5 scene encoder emits MZ ScreenSprite without rasterizing its Graphics', () => {
+test('rounded Pixi 5 sprites prepare world vertices while children retain local transforms', () => {
   const fixture = createContext();
-  function ScreenSprite() {
-    fixture.context.PIXI.Container.call(this);
-    this._red = 18;
-    this._green = 52;
-    this._blue = 86;
-    this._graphics = new fixture.context.PIXI.Graphics();
-    this.addChild(this._graphics);
-  }
-  ScreenSprite.prototype = Object.create(fixture.context.PIXI.Container.prototype);
-  ScreenSprite.prototype.constructor = ScreenSprite;
-  fixture.context.ScreenSprite = ScreenSprite;
   runModule(fixture.context, 'js/pmjs-pixi5/scene.js');
   runModule(fixture.context, 'js/pmjs-pixi5/renderer.js');
-  const app = new fixture.context.PIXI.Application({ width: 100, height: 50 });
-  app.stage.addChild(new fixture.context.ScreenSprite());
-
-  assert.doesNotThrow(() => app.render());
+  const texture = {
+    baseTexture: { resource: { source: { _nativeImage: { handle: 42 } } } },
+    frame: { x: 0, y: 0, width: 8, height: 8 },
+  };
+  const sprite = new fixture.context.PIXI.Sprite(texture);
+  sprite.roundPixels = true;
+  sprite.alpha = 0.5;
+  sprite.transform.localTransform.tx = 5.75;
+  let preparations = 0;
+  sprite.calculateVertices = function() {
+    preparations++;
+    this.vertexData = new Float32Array([-1, 5, 7, 5, 7, 13, -1, 13]);
+  };
+  const child = new fixture.context.PIXI.Sprite(texture);
+  child.transform.localTransform.tx = 2.25;
+  sprite.addChild(child);
+  const renderer = new fixture.context.PIXI.Renderer({ width: 32, height: 32, resolution: 2 });
+  renderer.render(sprite);
   const packet = fixture.submissions[0];
-  assert.equal(packet.count, 3, 'background, stage container, screen fill');
-  assert.equal(packet.metadata[2 * 7], 3);
-  assert.equal(packet.metadata[2 * 7 + 3], 0x123456);
+  const rows = Array.from({ length: packet.count }, (_, i) => ({
+    metadata: Array.from(packet.metadata.subarray(i * 7, i * 7 + 7)),
+    values: Array.from(packet.values.subarray(i * 41, i * 41 + 41)),
+  }));
+  const rounded = rows.find(row => row.metadata[5] & 4096);
+  const parent = rows[rounded.metadata[1]];
+  assert.equal(preparations, 1);
+  assert.deepEqual(rounded.values.slice(0, 6), [-2, 10, 14, 10, 14, 26]);
+  assert.deepEqual(rounded.values.slice(15, 17), [-2, 26]);
+  assert.equal(rounded.values[6], 1, 'alpha is inherited once from the transform parent');
+  assert.equal(parent.metadata[0], 0);
+  assert.equal(parent.values[4], 5.75);
+  assert.equal(parent.values[6], 0.5);
+  const childRow = rows.at(-1);
+  assert.equal(childRow.metadata[1], rounded.metadata[1]);
+  assert.equal(childRow.values[4], 2.25);
+  assert.equal(childRow.metadata[5] & 4096, 0);
+
+  sprite.roundPixels = false;
+  renderer.render(sprite);
+  assert.equal(preparations, 1, 'unrounded sprites retain the existing encoding');
+  sprite.roundPixels = true;
+  sprite.calculateVertices = () => { throw Error('authored vertex failure'); };
+  assert.throws(() => renderer.render(sprite), /authored vertex failure/);
+  assert.equal(fixture.submissions.length, 2, 'failed preparation submits no partial scene');
 });
 
 test('Pixi 5 filter target discovery follows translated children', () => {
@@ -118,26 +143,12 @@ test('Pixi 5 filter target discovery follows translated children', () => {
   context.PIXI.Graphics = class Graphics extends context.PIXI.Container {
     _render() {}
   };
-  class ScreenSprite extends context.PIXI.Container {
-    constructor() {
-      super();
-      this._red = 18;
-      this._green = 52;
-      this._blue = 86;
-      this._graphics = new context.PIXI.Graphics();
-      this._graphics._render = () => {};
-      this.addChild(this._graphics);
-    }
-  }
-  context.ScreenSprite = ScreenSprite;
   runModule(context, 'js/pmjs-pixi5/scene.js');
   runModule(context, 'js/pmjs-pixi5/renderer.js');
   context.pmjsPixi5RegisterFilterEncoder(() => ({ kind: 20, parameters: [0.5] }));
   const app = new context.PIXI.Application({ width: 100, height: 50 });
   app.stage.filters = [{}];
-  app.stage.addChild(new ScreenSprite());
   assert.doesNotThrow(() => app.render());
-  assert.ok(fixture.submissions[0].metadata.some((v, i) => i % 7 === 0 && v === 3));
 
   class TranslatedContainer extends context.PIXI.Container {}
   context.PMJS.pixi5.registerRenderContract(TranslatedContainer.prototype, {
@@ -476,10 +487,17 @@ test('Pixi 5 RenderTexture backing is drawable and screen size survives offscree
   const texture = { baseTexture: { width: 40, height: 30, resolution: 2 },
     frame: { x: 0, y: 0, width: 40, height: 30 }, orig: { width: 40, height: 30 } };
   renderer.render(stage, texture);
-  stage.addChild(new fixture.context.PIXI.Sprite(texture));
+  const sprite = new fixture.context.PIXI.Sprite(texture);
+  sprite.calculateVertices = function() {
+    this.vertexData = new Float32Array([-20, -7.5, 20, -7.5, 20, 22.5, -20, 22.5]);
+  };
+  stage.addChild(sprite);
   renderer.render(stage);
   const packet = fixture.submissions.at(-1);
-  assert.equal(packet.metadata[2 * 7 + 2], 900);
+  const spriteIndex = Array.from({ length: packet.count }, (_, i) => i)
+    .find(i => packet.metadata[i * 7] === 1);
+  assert.equal(packet.metadata[spriteIndex * 7 + 2], 900);
+  assert.equal(packet.metadata[spriteIndex * 7 + 5] & 4096, 4096);
   stage._render = function unknownDrawing() {};
   assert.throws(() => renderer.render(stage, texture), /render.render-method/);
   assert.deepEqual(fixture.sizes.at(-1), [100, 50]);

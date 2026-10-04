@@ -9,6 +9,62 @@
     NativeHost.render.releaseTileLayer(resource.handle);
   });
   var shadowCanvas;
+  var screenCanvas;
+  var graphicsMethods = ['finishPoly', '_populateBatches', '_renderBatched',
+    '_renderDirect', 'calculateVertices', 'calculateTints'].map(function(name) {
+    return [name, PIXI.Graphics.prototype[name]];
+  });
+  var stockUpdateBatches = PIXI.GraphicsGeometry && PIXI.GraphicsGeometry.prototype.updateBatches;
+
+  pixi.registerRenderContract(PIXI.Graphics.prototype, {
+    encode: function(graphics) {
+      var parent = graphics.parent;
+      if (!(parent instanceof ScreenSprite) || parent._graphics !== graphics ||
+          graphics.shader || graphics.pluginName !== 'batch' ||
+          graphics.geometry.updateBatches !== stockUpdateBatches ||
+          graphicsMethods.some(function(entry) { return graphics[entry[0]] !== entry[1]; })) {
+        pixi.rejectRender('render.screen-graphics', graphics);
+      }
+      graphics.finishPoly();
+      var data = graphics.geometry.graphicsData;
+      if (!data.length) return { kind: 0, resource: 0 };
+      var rectangle = data[0], shape = rectangle.shape, fill = rectangle.fillStyle;
+      if (data.length !== 1 || shape.type !== PIXI.SHAPES.RECT ||
+          rectangle.holes.length || rectangle.matrix || rectangle.lineStyle.visible ||
+          fill.texture !== PIXI.Texture.WHITE || fill.matrix) {
+        pixi.rejectRender('render.screen-graphics-shape', graphics);
+      }
+      if (!fill.visible) return { kind: 0, resource: 0 };
+      if (!screenCanvas) {
+        screenCanvas = new CanvasElement();
+        screenCanvas.width = screenCanvas.height = 1;
+        var context = screenCanvas.getContext('2d');
+        context.fillStyle = '#ffffff';
+        context.fillRect(0, 0, 1, 1);
+      }
+      var matrix = graphics.worldTransform;
+      var vertices = new Float32Array(8);
+      [shape.x, shape.y, shape.x + shape.width, shape.y,
+        shape.x + shape.width, shape.y + shape.height, shape.x, shape.y + shape.height]
+        .forEach(function(value, index, points) {
+          if (index % 2) return;
+          vertices[index] = matrix.a * value + matrix.c * points[index + 1] + matrix.tx;
+          vertices[index + 1] = matrix.b * value + matrix.d * points[index + 1] + matrix.ty;
+        });
+      var tint = 0;
+      [16, 8, 0].forEach(function(shift) {
+        tint |= Math.floor(((graphics.tint >> shift) & 255) / 255 *
+          ((fill.color >> shift) & 255) / 255 * 255) << shift;
+      });
+      return { kind: 1, resource: pixi.nativeSource(screenCanvas).handle,
+        tint: tint, alpha: graphics.alpha * fill.alpha,
+        sprite: { vertices: vertices, texture: {
+          baseTexture: { resolution: 1, scaleMode: PIXI.SCALE_MODES.NEAREST },
+          frame: { x: 0, y: 0, width: 1, height: 1 },
+          orig: { width: shape.width, height: shape.height }
+        } } };
+    }
+  });
 
   function releaseAtlas(renderer) {
     var atlas = atlases.get(renderer || defaultRenderer);
@@ -115,6 +171,12 @@
   var stockContainerAdvanced = PIXI.Container.prototype.renderAdvanced;
   pixi.registerRenderContract(Tilemap.Layer.prototype, { encode: tileLayer, callsLeaf: false,
     releaseRenderer: releaseAtlas,
+    children: function(layer) {
+      // Stock's direct tile renderer skips children; the reviewed Container relocation visits them.
+      return layer.render === stockTileRender ? [] : layer.children.map(function(node) {
+        return { node: node };
+      });
+    },
     accept: function(node) {
       return node.render === stockContainerRender && node._render === stockTileRender &&
         node.renderAdvanced === stockContainerAdvanced;

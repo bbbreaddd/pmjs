@@ -38,6 +38,72 @@ function harness(options) {
   return fixture;
 }
 
+test('MZ ScreenSprite drawing follows its Graphics child state, geometry and filters', () => {
+  const f = harness(), c = f.context, screen = new c.ScreenSprite(), g = screen._graphics;
+  screen.alpha = 0.5;
+  g.alpha = 0.5;
+  g.clear().beginFill(0x00ff00).drawRect(8, 9, 16, 17);
+  g.filters = [new c.PIXI.filters.AlphaFilter(0.5)];
+  g.filterArea = new c.PIXI.Rectangle(8, 9, 16, 17);
+  const child = f.sprite(123, 1, 2, 3, 4); g.addChild(child);
+  const packet = f.render(screen);
+  const rows = Array.from({ length: packet.count }, (_, i) => ({
+    m: Array.from(packet.metadata.slice(i * 7, i * 7 + 7)),
+    v: Array.from(packet.values.slice(i * 41, i * 41 + 41)),
+  }));
+  const drawing = rows.find(row => row.m[0] === 1 && row.m[2] !== 123);
+  assert.equal(drawing.m[3], 0x00ff00, 'current geometry color replaces cached ScreenSprite fields');
+  assert.equal(rows[drawing.m[1]].v[6], 0.5);
+  assert.equal(drawing.v[6], 1);
+  assert.deepEqual(drawing.v.slice(0, 6), [8, 9, 24, 9, 24, 26]);
+  assert.deepEqual(drawing.v.slice(15, 17), [8, 26]);
+  assert.ok(rows.some(row => row.m[0] === 6));
+  assert.ok(rows.some(row => row.m[5] & 1));
+  assert.equal(rows.find(row => row.m[2] === 123).m[1], drawing.m[1]);
+  for (const property of ['visible', 'renderable']) {
+    g[property] = false;
+    const hidden = f.render(screen);
+    assert.equal(hidden.count, 1, 'hidden Graphics and its subtree produce no drawing');
+    g[property] = true;
+  }
+  g.alpha = 0;
+  assert.equal(f.render(screen).count, 1);
+  g.alpha = 1; g.clear();
+  assert.ok(Array.from(f.render(screen).metadata).includes(123), 'empty geometry retains authored descendants');
+  screen.children.length = 0;
+  assert.equal(f.render(screen).count, 1, 'removed drawing children leave no phantom screen fill');
+});
+
+test('MZ ScreenSprite validates reached child producers and rejects unsupported geometry transactionally', () => {
+  const f = harness(), c = f.context;
+  for (const name of ['render', '_render', 'renderAdvanced', 'finishPoly',
+    '_populateBatches', '_renderBatched', '_renderDirect', 'calculateVertices', 'calculateTints']) {
+    const screen = new c.ScreenSprite(), g = screen._graphics;
+    g.filters = [new c.PIXI.filters.AlphaFilter(0.5)];
+    const original = g[name]; g[name] = function() { return original.apply(this, arguments); };
+    const before = f.submissions.length;
+    assert.throws(() => f.render(screen), /render\.(render-method|screen-graphics)/, name);
+    assert.equal(f.submissions.length, before);
+    screen.alpha = 0;
+    assert.doesNotThrow(() => f.render(screen), 'inactive producer overrides are not reached');
+  }
+  for (const mutate of [g => { g.shader = {}; }, g => { g.pluginName = 'custom'; },
+    g => { g.geometry.updateBatches = function() {}; },
+    g => { g.geometry.graphicsData[0].shape.type = 2; },
+    g => { g.geometry.graphicsData[0].holes.push({}); },
+    g => { g.geometry.graphicsData[0].fillStyle.texture = {}; },
+    g => { g.geometry.graphicsData[0].matrix = {}; },
+    g => { g.geometry.graphicsData[0].lineStyle.visible = true; }]) {
+    const screen = new c.ScreenSprite(); mutate(screen._graphics);
+    const before = f.submissions.length;
+    assert.throws(() => f.render(screen), /render\./);
+    assert.equal(f.submissions.length, before);
+  }
+  const standalone = new c.PIXI.Graphics();
+  standalone.beginFill(0xffffff).drawRect(0, 0, 1, 1);
+  assert.throws(() => f.render(standalone), /render.screen-graphics/);
+});
+
 test('MZ tiles retain resources on transfer and repaint only at authored uploads', () => {
   const f = harness();
   const layer = new f.context.Tilemap.Layer();
@@ -109,6 +175,20 @@ test('reviewed tile render relocation preserves filter processing; arbitrary ove
   layer._render = function() {};
   assert.throws(() => f.render(layer), /render.render-method/);
   assert.equal(f.submissions.length, 1);
+});
+
+test('MZ direct tile rendering skips children while the reviewed relocation reaches them', () => {
+  const f = harness(), layer = new f.context.Tilemap.Layer();
+  const child = f.sprite(321, 1, 2, 3, 4); layer.addChild(child);
+  assert.equal(f.render(layer).count, 1, 'stock Layer.render does not draw descendants');
+  child.render = function() {};
+  assert.doesNotThrow(() => f.render(layer), 'ignored descendants do not reach producer validation');
+  layer._render = layer.render; layer.render = f.context.PIXI.Container.prototype.render;
+  const before = f.submissions.length;
+  assert.throws(() => f.render(layer), /render.render-method/);
+  assert.equal(f.submissions.length, before);
+  delete child.render;
+  assert.ok(Array.from(f.render(layer).metadata).includes(321));
 });
 
 function clipsFor(packet, resource) {

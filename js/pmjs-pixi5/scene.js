@@ -247,10 +247,8 @@
     var children = contract.children ? contract.children(node, viewport).map(function(entry) {
       return entry.node;
     }) : node.children || [];
-    var isScreenSprite = typeof ScreenSprite === 'function' && node instanceof ScreenSprite;
-    // ScreenSprite's Graphics is already represented by the native screen fill.
     var result = !!contract.filterTarget || children.some(function(child) {
-      return !(isScreenSprite && child === node._graphics) && needsFilterTarget(child);
+      return needsFilterTarget(child);
     });
     filterTargets.set(node, result);
     return result;
@@ -324,16 +322,13 @@
 
     var type = node.pluginName && String(node.pluginName).toLowerCase();
     var isSprite = node instanceof PIXI.Sprite;
-    var isScreenSprite = typeof ScreenSprite === 'function' &&
-      node instanceof ScreenSprite;
     var isTilingSprite = PIXI.TilingSprite && node instanceof PIXI.TilingSprite;
     if (isTilingSprite ? node.pluginName !== 'tilingSprite' :
         isSprite ? node.pluginName !== 'batch' :
         type && type !== 'batch' && type !== 'sprite') {
       reject('render.renderer-plugin', node);
     }
-    if (PIXI.Graphics && node instanceof PIXI.Graphics && !isSprite &&
-        !isScreenSprite) {
+    if (PIXI.Graphics && node instanceof PIXI.Graphics && !isSprite && !contract.encode) {
       reject('render.graphics', node);
     }
 
@@ -348,11 +343,7 @@
     var destinationHeight = 0;
     var tilingTextureInfo = null;
 
-    if (isScreenSprite) {
-      kind = 3;
-      tint = ((node._red || 0) << 16) | ((node._green || 0) << 8) |
-        (node._blue || 0);
-    } else if (isTilingSprite) {
+    if (isTilingSprite) {
       texture = node.texture || node._texture;
       frame = texture && (texture._frame || texture.frame);
       var tilingRotation = ((Number(texture && texture.rotate) || 0) % 16 +
@@ -417,10 +408,18 @@
     if (encodedNode) {
       kind = encodedNode.kind;
       resource = encodedNode.resource;
+      if (encodedNode.tint !== undefined) tint = encodedNode.tint;
+      if (encodedNode.sprite) {
+        texture = encodedNode.sprite.texture;
+        frame = texture.frame;
+        destinationWidth = texture.orig.width;
+        destinationHeight = texture.orig.height;
+      }
     }
 
     var index = addRecord(parent, kind, resource, tint, blendMode(node),
-      transform, Number.isFinite(node.alpha) ? node.alpha : 1);
+      transform, encodedNode && encodedNode.alpha !== undefined ? encodedNode.alpha :
+        Number.isFinite(node.alpha) ? node.alpha : 1);
     if (encodedNode && encodedNode.nearest) {
       metadata[index * metadataStride + 5] |= 8;
     }
@@ -432,10 +431,26 @@
       values.set(encodedNode.effect.camera, effectOffset + 23);
       values.set(encodedNode.effect.resetViewport, effectOffset + 39);
     } else if (kind === 1) {
+      var spriteIndex = index;
       var baseTexture = texture.baseTexture;
       var resolution = Math.max(0.000001, Number(baseTexture.resolution) || 1);
-      var valueOffset = index * valueStride;
-      var metadataOffset = index * metadataStride;
+      var vertices = encodedNode && encodedNode.sprite && encodedNode.sprite.vertices;
+      if (vertices || node.roundPixels || resolution !== 1 ||
+          destinationWidth !== frame.width || destinationHeight !== frame.height) {
+        // World vertices preserve rounded/logical geometry; children keep the authored transform.
+        metadata[index * metadataStride] = 0;
+        metadata[index * metadataStride + 2] = 0;
+        spriteIndex = addRecord(index, 1, resource, tint, blendMode(node), identity, 1);
+        if (!vertices) { node.calculateVertices(); vertices = node.vertexData; }
+        for (var corner = 0; corner < 4; corner++) {
+          var vertexOffset = spriteIndex * valueStride + (corner < 3 ? corner * 2 : 15);
+          values[vertexOffset] = vertices[corner * 2] * renderResolution;
+          values[vertexOffset + 1] = vertices[corner * 2 + 1] * renderResolution;
+        }
+        metadata[spriteIndex * metadataStride + 5] |= 4096;
+      }
+      var valueOffset = spriteIndex * valueStride;
+      var metadataOffset = spriteIndex * metadataStride;
       var rotation = ((Number(texture.rotate) || 0) % 16 + 16) % 16;
       if (rotation % 2) reject('render.texture-rotation', node);
       metadata[metadataOffset + 5] |= rotation / 2 << 5;
@@ -485,7 +500,6 @@
     } else {
       var children = node.children || [];
       for (var childIndex = 0; childIndex < children.length; childIndex++) {
-        if (kind === 3 && children[childIndex] === node._graphics) continue;
         writeNode(children[childIndex], index);
       }
     }

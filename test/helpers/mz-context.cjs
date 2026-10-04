@@ -10,6 +10,47 @@ function createMzContext(options) {
   Container.prototype.renderAdvanced = function() {};
   Container.prototype._render = function() {};
   Container.prototype.destroy = function() { this.destroyed = true; };
+  context.PIXI.SHAPES = { RECT: 1 };
+  context.PIXI.Texture = { WHITE: {} };
+  class Graphics extends Container {
+    constructor() {
+      super();
+      this.geometry = { graphicsData: [] };
+      this.pluginName = 'batch';
+      this.tint = 0xffffff;
+    }
+    get worldTransform() { return this.transform.worldTransform || this.transform.localTransform; }
+    finishPoly() {}
+    _render() {}
+    _populateBatches() {}
+    _renderBatched() {}
+    _renderDirect() {}
+    calculateVertices() {}
+    calculateTints() {}
+    clear() { this.geometry.graphicsData = []; return this; }
+    beginFill(color, alpha = 1) { this.fill = { color, alpha, visible: true,
+      texture: context.PIXI.Texture.WHITE, matrix: null }; return this; }
+    drawRect(x, y, width, height) {
+      this.geometry.graphicsData.push({ shape: { x, y, width, height, type: 1 },
+        fillStyle: this.fill, lineStyle: { visible: false }, holes: [], matrix: null });
+      return this;
+    }
+  }
+  class ScreenSprite extends Container {
+    constructor() {
+      super();
+      this._graphics = new Graphics();
+      this.addChild(this._graphics);
+      this.setColor(0, 0, 0);
+    }
+    setColor(red, green, blue) {
+      Object.assign(this, { _red: red, _green: green, _blue: blue });
+      this._graphics.clear().beginFill(red << 16 | green << 8 | blue)
+        .drawRect(-50000, -50000, 100000, 100000);
+    }
+  }
+  context.PIXI.Graphics = Graphics;
+  context.ScreenSprite = ScreenSprite;
   class Layer extends Container {
     constructor() {
       super();
