@@ -23,92 +23,6 @@ function loadTiming(extra) {
   return context;
 }
 
-test('gate: first call syncs the clock and runs zero steps', () => {
-  const ctx = loadTiming();
-  const state = ctx.pmjsMvCreateStepGate();
-  const gated = ctx.pmjsMvGateSteps(state, 1000);
-  assert.equal(gated.steps, 0);
-  assert.equal(gated.overload, false);
-  assert.equal(state.clockMs, 1000);
-});
-
-test('gate: 60 Hz render yields one step per frame', () => {
-  const ctx = loadTiming();
-  const state = ctx.pmjsMvCreateStepGate();
-  ctx.pmjsMvGateSteps(state, 0);
-  const gated = ctx.pmjsMvGateSteps(state, 1000 / 60);
-  assert.equal(gated.steps, 1);
-  assert.equal(gated.overload, false);
-});
-
-test('gate: 30 Hz render yields two steps per frame', () => {
-  const ctx = loadTiming();
-  const state = ctx.pmjsMvCreateStepGate();
-  ctx.pmjsMvGateSteps(state, 0);
-  const gated = ctx.pmjsMvGateSteps(state, 1000 / 30);
-  assert.equal(gated.steps, 2);
-  assert.ok(Math.abs(gated.feedMs - 1000 / 30) < 1e-6);
-});
-
-test('gate: 120 Hz render alternates zero and one steps', () => {
-  const ctx = loadTiming();
-  const state = ctx.pmjsMvCreateStepGate();
-  ctx.pmjsMvGateSteps(state, 0);
-  const first = ctx.pmjsMvGateSteps(state, 1000 / 120);
-  const second = ctx.pmjsMvGateSteps(state, 2 * 1000 / 120);
-  assert.equal(first.steps, 0);
-  assert.equal(second.steps, 1);
-});
-
-test('gate: ordinary debt is retained, not discarded', () => {
-  const ctx = loadTiming();
-  const state = ctx.pmjsMvCreateStepGate();
-  ctx.pmjsMvGateSteps(state, 0);
-  const gated = ctx.pmjsMvGateSteps(state, 20);
-  assert.equal(gated.steps, 1);
-  assert.ok(state.accMs > 3 && state.accMs < 3.5,
-    `expected ~3.3 ms retained, got ${state.accMs}`);
-  const next = ctx.pmjsMvGateSteps(state, 20 + 1000 / 60);
-  assert.equal(next.steps, 1);
-  assert.equal(next.overload, false);
-});
-
-test('gate: repeated 300 ms frames make bounded progress in both catch-up modes', () => {
-  const ctx = loadTiming();
-  for (const catchupMode of ['smooth', 'burst']) {
-    const state = ctx.pmjsMvCreateStepGate({ catchupMode });
-    ctx.pmjsMvGateSteps(state, 0);
-    for (const now of [300, 600, 900]) {
-      const gated = ctx.pmjsMvGateSteps(state, now);
-      assert.equal(gated.steps, 2);
-      assert.equal(gated.overload, true);
-      assert.ok(gated.droppedMs > 0);
-      assert.equal(state.accMs, 0);
-    }
-  }
-});
-
-test('gate: sustained overload below the threshold never bursts', () => {
-  const ctx = loadTiming();
-  const state = ctx.pmjsMvCreateStepGate();
-  ctx.pmjsMvGateSteps(state, 0);
-  let now = 0;
-  for (let frame = 0; frame < 10; frame++) {
-    now += 40;
-    const gated = ctx.pmjsMvGateSteps(state, now);
-    assert.ok(gated.steps <= 2, `frame ${frame} ran ${gated.steps} steps`);
-  }
-});
-
-test('gate: clock step-back resyncs without steps or overload', () => {
-  const ctx = loadTiming();
-  const state = ctx.pmjsMvCreateStepGate();
-  ctx.pmjsMvGateSteps(state, 1000);
-  const gated = ctx.pmjsMvGateSteps(state, 500);
-  assert.equal(gated.steps, 0);
-  assert.equal(gated.overload, false);
-});
-
 function stockShapedScene() {
   return {
     _deltaTime: 1 / 60,
@@ -147,327 +61,249 @@ function stockShapedScene() {
   };
 }
 
-test('contract: stock-shaped updateMain is bounded to 2 steps at 30 Hz', () => {
-  const ctx = loadTiming();
-  ctx.SceneManager = stockShapedScene();
-  ctx.performance = { now: () => ctx.SceneManager._now };
-  assert.equal(ctx.pmjsMvInstallTimingContract(), true);
-  assert.equal(ctx.SceneManager._deltaTime, 1 / 60);
-  ctx.SceneManager._now = 0;
-  ctx.SceneManager.updateMain();
-  assert.equal(ctx.SceneManager.logicSteps, 0); // clock sync, no debt yet
-  ctx.SceneManager._now = 1000 / 30;
-  ctx.SceneManager.updateMain();
-  assert.equal(ctx.SceneManager.logicSteps, 2);
-  assert.equal(ctx.SceneManager.renders, 2); // one presentation per call
-});
-
-test('contract: disabled policy leaves guest updateMain unchanged', () => {
-  const ctx = loadTiming((context) => {
-    context.PMJS_GAME_CONFIG = { disableOptimizations: ['mv.logic-timing-contract'] };
+function startTiming(options, configure) {
+  const ctx = loadTiming(context => {
+    context.SceneManager = stockShapedScene();
+    context.performance = { now: () => context.SceneManager._now };
+    if (configure) configure(context);
   });
-  ctx.SceneManager = stockShapedScene();
-  const guestUpdateMain = ctx.SceneManager.updateMain;
-  assert.equal(ctx.pmjsMvInstallTimingContract(), false);
-  assert.equal(ctx.SceneManager.updateMain, guestUpdateMain);
-  assert.equal(ctx.PMJS.optimizations.isEnabled('mv.logic-timing-contract'), false);
+  assert.equal(ctx.pmjsMvInstallTimingContract(options), true);
+  return {
+    ctx,
+    step(now) {
+      const scene = ctx.SceneManager;
+      scene._now = now;
+      const before = scene.logicSteps;
+      scene.updateMain();
+      return scene.logicSteps - before;
+    }
+  };
+}
+
+test('first scene update synchronizes the clock and presents without advancing logic', () => {
+  const { ctx, step } = startTiming();
+  assert.equal(step(1000), 0);
+  assert.equal(ctx.SceneManager.renders, 1);
+  assert.equal(ctx.SceneManager._currentTime, 1000);
+  assert.equal(ctx.__pmjsOverloadDiscontinuities, undefined);
 });
 
-test('contract: repeated 300 ms frames advance logic within the catch-up bound', () => {
-  const ctx = loadTiming();
-  const logs = [];
-  ctx.console = { log: (message) => logs.push(String(message)) };
-  ctx.SceneManager = stockShapedScene();
-  ctx.performance = { now: () => ctx.SceneManager._now };
-  ctx.pmjsMvInstallTimingContract();
-  ctx.SceneManager._now = 0;
-  ctx.SceneManager.updateMain();
-  for (const now of [300, 600, 900]) {
-    ctx.SceneManager._now = now;
-    ctx.SceneManager.updateMain();
-  }
-  assert.equal(ctx.SceneManager.logicSteps, 6);
-  assert.ok(logs.some((line) => line.includes('overload-debt-clamp')),
-    `expected overload log, got ${JSON.stringify(logs)}`);
-  ctx.SceneManager._now = 900 + 1000 / 60;
-  ctx.SceneManager.updateMain();
-  assert.equal(ctx.SceneManager.logicSteps, 7);
+for (const [renderHz, expected] of [
+  [30, [2, 2, 2, 2]], [60, [1, 1, 1, 1]], [120, [0, 1, 0, 1]]
+]) {
+  test(renderHz + ' Hz presentation preserves authored 60 Hz scene updates', () => {
+    const { ctx, step } = startTiming({ renderHz });
+    assert.equal(step(0), 0);
+    const steps = expected.map((_, index) => step((index + 1) * 1000 / renderHz));
+    assert.deepEqual(steps, expected);
+    assert.equal(ctx.SceneManager.renders, expected.length + 1);
+    assert.equal(ctx.SceneManager._deltaTime, 1 / 60);
+    assert.equal(ctx.__pmjsOverloadDiscontinuities, undefined);
+  });
+}
+
+test('ordinary fractional debt survives into subsequent scene updates', () => {
+  const { ctx, step } = startTiming();
+  step(0);
+  assert.equal(step(20), 1);
+  assert.equal(step(35), 1);
+  assert.equal(step(50), 1);
+  assert.equal(ctx.__pmjsOverloadDiscontinuities, undefined);
 });
 
-test('contract: resume clears the gate clock and retained debt', () => {
-  const ctx = loadTiming();
-  ctx.SceneManager = stockShapedScene();
-  ctx.performance = { now: () => ctx.SceneManager._now };
+for (const catchupMode of ['smooth', 'burst']) {
+  test(catchupMode + ' catch-up bounds repeated overload and then resumes normal cadence', () => {
+    const logs = [];
+    const { ctx, step } = startTiming({ catchupMode }, context => {
+      context.console = { log(message) { logs.push(String(message)); } };
+    });
+    step(0);
+    for (const now of [300, 600, 900]) assert.equal(step(now), 2);
+    assert.equal(ctx.SceneManager.logicSteps, 6);
+    assert.equal(ctx.__pmjsOverloadDiscontinuities, 3);
+    assert.equal(logs.filter(line => line.includes('overload-debt-clamp')).length, 3);
+    assert.equal(step(900 + 1000 / 60), 1);
+  });
+
+  test(catchupMode + ' catch-up remains bounded during sustained 40 ms arrivals', () => {
+    const { step } = startTiming({ catchupMode });
+    step(0);
+    for (let frame = 1; frame <= 10; frame++) assert.equal(step(frame * 40), 2);
+  });
+}
+
+test('a backward clock change resynchronizes without scene updates or an overload', () => {
+  const { ctx, step } = startTiming();
+  step(1000);
+  assert.equal(step(500), 0);
+  assert.equal(ctx.__pmjsOverloadDiscontinuities, undefined);
+  assert.equal(step(500 + 1000 / 60), 1);
+});
+
+test('smooth catch-up preserves ordinary 45 ms elapsed time and its fractional remainder', () => {
+  const { ctx, step } = startTiming({ renderHz: 60, catchupMode: 'smooth' });
+  step(0);
+  assert.equal(step(16.67), 1);
+  assert.equal(step(61.67), 2);
+  assert.equal(step(78.34), 1);
+  assert.equal(step(83.34), 1);
+  assert.equal(ctx.__pmjsOverloadDiscontinuities, undefined);
+});
+
+test('smooth catch-up discards excess whole steps while retaining fractional debt', () => {
+  const { ctx, step } = startTiming({ renderHz: 60, catchupMode: 'smooth' });
+  step(0);
+  assert.equal(step(105), 2);
+  assert.equal(step(115), 0);
+  assert.equal(step(120), 1);
+  assert.equal(step(120), 0);
+  assert.equal(ctx.__pmjsOverloadDiscontinuities, undefined);
+});
+
+test('30 Hz burst catch-up pays retained debt before returning to normal cadence', () => {
+  const { step } = startTiming({ renderHz: 30, catchupMode: 'burst' });
+  step(0);
+  assert.equal(step(1000 / 30), 2);
+  assert.equal(step(100), 3);
+  assert.equal(step(4000 / 30), 3);
+  assert.equal(step(5000 / 30), 2);
+});
+
+test('jittered arrivals preserve elapsed simulation time', () => {
+  const { ctx, step } = startTiming({ renderHz: 60, catchupMode: 'smooth' });
+  const jitters = [-0.7, 0.8, -0.9, 0.5, -0.4, 0.9, -0.8, 0.2, -0.6, 0.7,
+    -0.5, 0.6, -0.7, 0.4, -0.3, 0.8, -0.6, 0.3, -0.5, 0.7,
+    -0.8, 0.5, -0.4, 0.6, -0.7, 0.3, -0.5, 0.6, -0.4, 0.5];
+  step(0);
+  jitters.forEach((jitter, index) => step((index + 1) * 1000 / 60 + jitter));
+  assert.equal(ctx.SceneManager.logicSteps, 30);
+  assert.equal(ctx.__pmjsOverloadDiscontinuities, undefined);
+});
+
+test('sustained 30 Hz arrivals preserve fixed-60 simulation without discarding ordinary debt', () => {
+  const { ctx, step } = startTiming({ renderHz: 60, catchupMode: 'smooth' });
+  step(0);
+  for (let frame = 1; frame <= 300; frame++) step(frame * 1000 / 30);
+  assert.equal(ctx.SceneManager.logicSteps, 600);
+  assert.equal(ctx.__pmjsOverloadDiscontinuities, undefined);
+});
+
+test('59.94 Hz arrivals preserve the authored step rate', () => {
+  const { step } = startTiming({ renderHz: 60, catchupMode: 'smooth' });
+  step(0);
+  for (let frame = 1; frame <= 120; frame++) assert.equal(step(frame * 1000 / 59.94), 1);
+});
+
+test('resume clears the clock and retained debt after a pause', () => {
+  const { ctx, step } = startTiming();
+  step(0);
+  assert.equal(step(20), 1);
+  ctx.SceneManager._now = 220;
+  ctx.SceneManager.resume();
+  assert.equal(step(220), 0);
+  assert.equal(step(235), 0);
+  assert.equal(step(240), 1);
+});
+
+test('install is idempotent and can wrap a later stock-shaped guest replacement', () => {
+  const { ctx, step } = startTiming();
+  const wrapped = ctx.SceneManager.updateMain;
+  const resume = ctx.SceneManager.resume;
   assert.equal(ctx.pmjsMvInstallTimingContract(), true);
-  ctx.SceneManager.updateMain();
+  assert.equal(ctx.SceneManager.updateMain, wrapped);
+  ctx.SceneManager.updateMain = stockShapedScene().updateMain;
+  assert.equal(ctx.pmjsMvInstallTimingContract(), true);
+  assert.notEqual(ctx.SceneManager.updateMain, wrapped);
+  assert.equal(ctx.SceneManager.resume, resume);
+  step(0);
+  assert.equal(step(1000 / 30), 2);
+  ctx.SceneManager._now = 220;
+  ctx.SceneManager.resume();
+  assert.equal(step(220), 0);
+  assert.equal(step(240), 1);
+});
+
+test('disabled optimization leaves authored scene updates and resume unchanged', () => {
+  const ctx = loadTiming(context => {
+    context.PMJS_GAME_CONFIG = { disableOptimizations: ['mv.logic-timing-contract'] };
+    context.SceneManager = stockShapedScene();
+  });
+  const { updateMain, resume } = ctx.SceneManager;
+  assert.equal(ctx.pmjsMvInstallTimingContract(), false);
+  assert.equal(ctx.SceneManager.updateMain, updateMain);
+  assert.equal(ctx.SceneManager.resume, resume);
   ctx.SceneManager._now = 20;
   ctx.SceneManager.updateMain();
   assert.equal(ctx.SceneManager.logicSteps, 1);
-  ctx.SceneManager._now = 220;
-  ctx.SceneManager.resume();
-  ctx.SceneManager.updateMain();
-  assert.equal(ctx.SceneManager.logicSteps, 1);
-  ctx.SceneManager._now += 1000 / 60;
-  ctx.SceneManager.updateMain();
-  assert.equal(ctx.SceneManager.logicSteps, 2);
 });
 
-test('contract: stock-shaped plugin override is wrapped, not replaced', () => {
-  const ctx = loadTiming();
-  ctx.SceneManager = stockShapedScene();
-  ctx.performance = { now: () => ctx.SceneManager._now };
-  ctx.pmjsMvInstallTimingContract();
-  const wrapped = ctx.SceneManager.updateMain;
-  ctx.SceneManager.updateMain = stockShapedScene().updateMain;
-  assert.equal(ctx.pmjsMvEnsureTimingContract(), true);
-  assert.notEqual(ctx.SceneManager.updateMain, wrapped);
-  assert.equal(ctx.SceneManager.updateMain._pmjsTimingWrapped, true);
-  ctx.SceneManager._now = 0;
-  ctx.SceneManager.updateMain();
-  ctx.SceneManager._now = 1000 / 30;
-  ctx.SceneManager.updateMain();
-  assert.equal(ctx.SceneManager.logicSteps, 2);
-});
-
-test('contract: direct-stepping override is refused, never wrapped', () => {
+test('direct-stepping overrides remain unchanged and execute their authored behavior', () => {
   const logs = [];
-  const ctx = loadTiming((context) => {
-    context.console = { log: (message) => logs.push(String(message)) };
+  const ctx = loadTiming(context => {
+    context.console = { log(message) { logs.push(String(message)); } };
+    context.SceneManager = stockShapedScene();
   });
-  ctx.SceneManager = stockShapedScene();
-  ctx.performance = { now: () => ctx.SceneManager._now };
-  ctx.SceneManager.updateMain = function() {
+  const update = ctx.SceneManager.updateMain = function() {
     this.updateInputData();
     this.changeScene();
     this.updateScene();
     this.renderScene();
   };
-  assert.equal(ctx.pmjsMvRecognizesUpdateMain(ctx.SceneManager.updateMain), false);
   assert.equal(ctx.pmjsMvInstallTimingContract(), false);
-  assert.equal(ctx.SceneManager.updateMain._pmjsTimingWrapped, undefined);
+  assert.equal(ctx.SceneManager.updateMain, update);
   assert.equal(ctx.__pmjsTimingFallback, 'unrecognized-updateMain');
   assert.equal(ctx.PMJS.optimizations.isEnabled('mv.logic-timing-contract'), false);
-  assert.ok(logs.some((line) => line.includes('timing-contract refused')));
-  assert.equal(ctx.pmjsMvEnsureTimingContract(), false);
-  assert.equal(ctx.SceneManager.updateMain._pmjsTimingWrapped, undefined);
-});
-
-test('contract: stock clock drift inside updateMain cannot add a step', () => {
-  const ctx = loadTiming();
-  ctx.SceneManager = stockShapedScene();
-  const STEP = 1000 / 60;
-  ctx.performance = { now: () => ctx.SceneManager._now };
-  ctx.SceneManager._getTimeInMsWithoutMobileSafari = function() {
-    return this._now + 0.005; // 5us of re-read drift per stock call
-  };
-  ctx.pmjsMvInstallTimingContract();
-  ctx.SceneManager._now = 0;
-  ctx.SceneManager.updateMain();
-  ctx.SceneManager._now = STEP - 0.001; // gate: 0 steps, feed just under STEP
-  ctx.SceneManager.updateMain();
-  assert.equal(ctx.SceneManager.logicSteps, 0);
-  ctx.SceneManager._now = STEP + 0.001;
+  assert.equal(ctx.pmjsMvInstallTimingContract(), false);
+  assert.equal(logs.filter(line => line.includes('timing-contract refused')).length, 1);
   ctx.SceneManager.updateMain();
   assert.equal(ctx.SceneManager.logicSteps, 1);
 });
 
-test('contract: install is a no-op without SceneManager', () => {
+test('stock clock drift cannot add a logic step and the original clock getter is restored', () => {
+  const { ctx, step } = startTiming(undefined, context => {
+    context.SceneManager._getTimeInMsWithoutMobileSafari = function() {
+      return this._now + 0.005;
+    };
+  });
+  const getter = ctx.SceneManager._getTimeInMsWithoutMobileSafari;
+  step(0);
+  assert.equal(step(1000 / 60 - 0.001), 0);
+  assert.equal(step(1000 / 60 + 0.001), 1);
+  assert.equal(ctx.SceneManager._getTimeInMsWithoutMobileSafari, getter);
+});
+
+test('install returns without wrapping when engine services are missing', () => {
   const ctx = loadTiming();
   assert.equal(ctx.pmjsMvInstallTimingContract(), false);
-  assert.equal(ctx.pmjsMvEnsureTimingContract(), false);
+  ctx.SceneManager = {};
+  assert.equal(ctx.pmjsMvInstallTimingContract(), false);
+  ctx.SceneManager = stockShapedScene();
+  delete ctx.SceneManager.resume;
+  const update = ctx.SceneManager.updateMain;
+  assert.equal(ctx.pmjsMvInstallTimingContract(), false);
+  assert.equal(ctx.SceneManager.updateMain, update);
+  assert.equal(ctx.__pmjsTimingFallback, 'missing-resume');
 });
 
-test('wall-clock gate: 60 Hz jitter preserves elapsed simulation time', () => {
-  const ctx = loadTiming();
-  const state = ctx.pmjsMvCreateStepGate({ renderHz: 60, catchupMode: 'smooth' });
-  ctx.pmjsMvGateSteps(state, 0); // initial sync
-
-  const stepMs = 1000 / 60;
-  // Simulate 30 frames with random-like arrival jitter between -1.0 ms and +1.0 ms
-  const jitters = [-0.7, 0.8, -0.9, 0.5, -0.4, 0.9, -0.8, 0.2, -0.6, 0.7,
-                   -0.5, 0.6, -0.7, 0.4, -0.3, 0.8, -0.6, 0.3, -0.5, 0.7,
-                   -0.8, 0.5, -0.4, 0.6, -0.7, 0.3, -0.5, 0.6, -0.4, 0.5];
-  let time = 0;
-  let steps = 0;
-  for (let i = 0; i < jitters.length; i++) {
-    time = (i + 1) * stepMs + jitters[i];
-    const gated = ctx.pmjsMvGateSteps(state, time);
-    steps += gated.steps;
-    assert.equal(gated.overload, false);
-    assert.equal(gated.droppedMs, 0);
-  }
-  assert.ok(steps >= 29 && steps <= 30, `expected elapsed-time step count, got ${steps}`);
-});
-
-test('wall-clock gate: smooth catchup advances ordinary 45 ms elapsed time', () => {
-  const ctx = loadTiming();
-  const state = ctx.pmjsMvCreateStepGate({ renderHz: 60, catchupMode: 'smooth' });
-  ctx.pmjsMvGateSteps(state, 0);
-
-  // Frame 1 normal
-  const f1 = ctx.pmjsMvGateSteps(state, 16.67);
-  assert.equal(f1.steps, 1);
-
-  // 45 ms hitch: time jumps from 16.67 to 61.67
-  const f2 = ctx.pmjsMvGateSteps(state, 61.67);
-  assert.equal(f2.steps, 2, 'ordinary elapsed time must advance two authored steps');
-  assert.equal(f2.overload, false);
-  assert.equal(f2.droppedMs, 0);
-
-  // The fractional 11.67 ms remainder is retained across the next frame.
-  const f3 = ctx.pmjsMvGateSteps(state, 61.67 + 16.67);
-  assert.equal(f3.steps, 1, 'subsequent frame must execute exactly 1 step without catchup burst');
-  assert.equal(f3.overload, false);
-});
-
-test('wall-clock gate: smooth catchup drops only debt beyond its step bound', () => {
-  const ctx = loadTiming();
-  const state = ctx.pmjsMvCreateStepGate({ renderHz: 60, catchupMode: 'smooth' });
-  ctx.pmjsMvGateSteps(state, 0);
-
-  const gated = ctx.pmjsMvGateSteps(state, 100);
-  assert.equal(gated.steps, 2);
-  assert.equal(gated.overload, false);
-  assert.ok(Math.abs(gated.droppedMs - 4 * 1000 / 60) < 0.01,
-    `expected four excess steps to be dropped, got ${gated.droppedMs} ms`);
-  assert.ok(state.accMs < 0.01, `expected only fractional debt, got ${state.accMs} ms`);
-});
-
-test('wall-clock gate: sustained 30 Hz arrivals preserve fixed-60 simulation', () => {
-  const ctx = loadTiming();
-  const state = ctx.pmjsMvCreateStepGate({ renderHz: 60, catchupMode: 'smooth' });
-  ctx.pmjsMvGateSteps(state, 0);
-
-  const interval = 1000 / 30;
-  let steps = 0;
-  let droppedMs = 0;
-  for (let frame = 1; frame <= 300; frame++) {
-    const gated = ctx.pmjsMvGateSteps(state, frame * interval);
-    steps += gated.steps;
-    droppedMs += gated.droppedMs;
-  }
-  assert.ok(steps >= 599 && steps <= 600, `expected about 600 steps, got ${steps}`);
-  assert.ok(droppedMs < 0.01, `ordinary elapsed time was discarded: ${droppedMs} ms`);
-});
-
-test('wall-clock gate: burst catchup mode permits up to 2 steps after hitch', () => {
-  const ctx = loadTiming();
-  const state = ctx.pmjsMvCreateStepGate({ renderHz: 60, catchupMode: 'burst' });
-  ctx.pmjsMvGateSteps(state, 0);
-
-  // Hitch of 40 ms
-  const gated = ctx.pmjsMvGateSteps(state, 40);
-  assert.equal(gated.steps, 2, 'burst mode should catch up up to BASE_MAX_STEPS_PER_FRAME');
-});
-
-test('wall-clock gate: 59.94 Hz arrivals preserve the authored step rate', () => {
-  const ctx = loadTiming();
-  const state = ctx.pmjsMvCreateStepGate({ renderHz: 60, catchupMode: 'smooth' });
-  ctx.pmjsMvGateSteps(state, 0);
-
-  // 59.94 Hz = 16.6833 ms per frame. Run 120 frames (~2 seconds).
-  const frameInterval = 1000 / 59.94;
-  let time = 0;
-  for (let i = 0; i < 120; i++) {
-    time += frameInterval;
-    const gated = ctx.pmjsMvGateSteps(state, time);
-    assert.equal(gated.steps, 1, `frame ${i} should yield 1 step under drift`);
+test('invalid timing options fail before wrapping authored scene updates', () => {
+  for (const [options, message] of [
+    [{ catchupMode: 'smoothh' }, /catchupMode must be "smooth" or "burst"/],
+    [{ renderHz: -60 }, /renderHz must be a non-negative finite number/],
+    [{ renderHz: NaN }, /renderHz must be a non-negative finite number/]
+  ]) {
+    const ctx = loadTiming(context => { context.SceneManager = stockShapedScene(); });
+    const update = ctx.SceneManager.updateMain;
+    assert.throws(() => ctx.pmjsMvInstallTimingContract(options), message);
+    assert.equal(ctx.SceneManager.updateMain, update);
   }
 });
 
-test('wall-clock gate: 30 Hz render yields two 60 Hz logic steps per arrival', () => {
-  const ctx = loadTiming();
-  const state = ctx.pmjsMvCreateStepGate({ renderHz: 30 });
-  ctx.pmjsMvGateSteps(state, 0);
-
-  const slot30Ms = 1000 / 30;
-  // Frame 1
-  const f1 = ctx.pmjsMvGateSteps(state, slot30Ms);
-  assert.equal(f1.steps, 2, '30 Hz presentation must yield 2 logic steps');
-
-  // Frame 2
-  const f2 = ctx.pmjsMvGateSteps(state, 2 * slot30Ms);
-  assert.equal(f2.steps, 2, 'subsequent 30 Hz presentation must yield 2 logic steps');
-});
-
-test('wall-clock gate: 120 Hz render alternates 0 and 1 logic steps to maintain 60 Hz simulation', () => {
-  const ctx = loadTiming();
-  const state = ctx.pmjsMvCreateStepGate({ renderHz: 120 });
-  ctx.pmjsMvGateSteps(state, 0);
-
-  const slot120Ms = 1000 / 120;
-  const f1 = ctx.pmjsMvGateSteps(state, slot120Ms);
-  assert.equal(f1.steps, 0, 'first 120 Hz slot accumulates ~8.3 ms, yielding 0 steps');
-
-  const f2 = ctx.pmjsMvGateSteps(state, 2 * slot120Ms);
-  assert.equal(f2.steps, 1, 'second 120 Hz slot reaches ~16.7 ms, yielding 1 step');
-
-  const f3 = ctx.pmjsMvGateSteps(state, 3 * slot120Ms);
-  assert.equal(f3.steps, 0);
-
-  const f4 = ctx.pmjsMvGateSteps(state, 4 * slot120Ms);
-  assert.equal(f4.steps, 1);
-});
-
-test('wall-clock gate: reads globalThis.__pmjsTimingConfig when options omitted', () => {
-  const ctx = loadTiming((context) => {
-    context.globalThis.__pmjsTimingConfig = { renderHz: 30, catchupMode: 'burst' };
-  });
-  const state = ctx.pmjsMvCreateStepGate();
-  assert.equal(state.renderHz, 30);
-  assert.equal(state.catchupMode, 'burst');
-  ctx.pmjsMvGateSteps(state, 0);
-  const f1 = ctx.pmjsMvGateSteps(state, 1000 / 30);
-  assert.equal(f1.steps, 2);
-});
-
-test('wall-clock gate: 30 Hz burst catchup mode pays off debt at bounded rate of 3 steps/frame', () => {
-  const ctx = loadTiming();
-  const state = ctx.pmjsMvCreateStepGate({ renderHz: 30, catchupMode: 'burst' });
-  ctx.pmjsMvGateSteps(state, 0);
-
-  const slot30Ms = 1000 / 30;
-  // Normal frame 1: 2 steps
-  const f1 = ctx.pmjsMvGateSteps(state, slot30Ms);
-  assert.equal(f1.steps, 2);
-
-  // Hitch: missed 1 presentation slot (elapsed = 2 * slot30Ms = 66.67 ms).
-  // Total logic owed: 4 steps. With bounded catch-up (maxSteps = nominal 2 + 1 = 3):
-  // executes 3 steps, retains 1 step of debt in accMs (~16.67 ms).
-  const f2 = ctx.pmjsMvGateSteps(state, 3 * slot30Ms);
-  assert.equal(f2.steps, 3, 'burst at 30 Hz must execute max 3 steps on hitch');
-  assert.ok(Math.abs(state.accMs - (1000 / 60)) < 0.1, `expected ~16.67 ms debt, got ${state.accMs}`);
-
-  // Normal frame 3 (elapsed = 1 slot): adds 2 steps, total debt = 3 steps.
-  // Executes 3 steps, paying off all remaining debt!
-  const f3 = ctx.pmjsMvGateSteps(state, 4 * slot30Ms);
-  assert.equal(f3.steps, 3, 'burst at 30 Hz executes 3 steps to retire remaining debt');
-  assert.ok(Math.abs(state.accMs) < 0.1, `expected 0 debt, got ${state.accMs}`);
-
-  // Normal frame 4: back to nominal 2 steps.
-  const f4 = ctx.pmjsMvGateSteps(state, 5 * slot30Ms);
-  assert.equal(f4.steps, 2, 'subsequent frame returns to nominal 2 steps');
-});
-
-test('gate creation validates catchupMode and renderHz strictly', () => {
-  const ctx = loadTiming();
-  assert.throws(() => ctx.pmjsMvCreateStepGate({ catchupMode: 'smooh' }),
-    /catchupMode must be "smooth" or "burst"/);
-  assert.throws(() => ctx.pmjsMvCreateStepGate({ catchupMode: 'invalid' }),
-    /catchupMode must be "smooth" or "burst"/);
-  assert.throws(() => ctx.pmjsMvCreateStepGate({ renderHz: -60 }),
-    /renderHz must be a non-negative finite number/);
-  assert.throws(() => ctx.pmjsMvCreateStepGate({ renderHz: NaN }),
-    /renderHz must be a non-negative finite number/);
-});
-
-
-test('gate consumes runner-normalized timing without reading process policy', () => {
+test('installer consumes runner-normalized timing without reading timing environment variables', () => {
   const { parseTimingConfig } = require('../runner/index.cjs');
   for (const env of [{}, { PMJS_RENDER_HZ: '30', PMJS_CATCHUP_MODE: 'smooth' },
     { PMJS_RENDER_HZ: '120' }, { PMJS_RENDER_HZ: '60', PMJS_UNCAPPED: '1' }]) {
     const timing = parseTimingConfig(env);
-    const ctx = loadTiming(context => {
+    const { step } = startTiming(undefined, context => {
       context.__pmjsTimingConfig = timing;
       context.NativeHost = { runtime: { env(name) {
         if (name === 'PMJS_RENDER_HZ' || name === 'PMJS_CATCHUP_MODE') {
@@ -476,24 +312,27 @@ test('gate consumes runner-normalized timing without reading process policy', ()
         return '';
       } } };
     });
-    const state = ctx.pmjsMvCreateStepGate();
-    assert.equal(state.renderHz, timing.renderHz);
-    assert.equal(state.catchupMode, timing.catchupMode);
-    const explicit = ctx.pmjsMvCreateStepGate({ renderHz: 0, catchupMode: 'burst' });
-    assert.equal(explicit.renderHz, 0);
-    assert.equal(explicit.catchupMode, 'burst');
+    step(0);
+    assert.equal(step(200), timing.renderHz === 30 ? 3 : 2);
   }
 });
 
-test('standalone gate uses explicit options rather than host timing environment', () => {
-  const ctx = loadTiming(context => {
+test('explicit timing options override runner timing', () => {
+  const { step } = startTiming({ renderHz: 60, catchupMode: 'smooth' }, context => {
+    context.__pmjsTimingConfig = { renderHz: 30, catchupMode: 'burst' };
+  });
+  step(0);
+  assert.equal(step(2000 / 30), 2);
+  assert.equal(step(2500 / 30), 1);
+});
+
+test('standalone installation ignores raw host timing policy', () => {
+  const { step } = startTiming(undefined, context => {
     context.NativeHost = { runtime: { env(name) {
-      return name === 'PMJS_RENDER_HZ' ? '77' :
-        name === 'PMJS_CATCHUP_MODE' ? 'invalid' : '';
+      return name === 'PMJS_RENDER_HZ' ? '77' : name === 'PMJS_CATCHUP_MODE' ? 'invalid' : '';
     } } };
   });
-  const state = ctx.pmjsMvCreateStepGate();
-  assert.equal(state.renderHz, 0);
-  assert.equal(state.catchupMode, 'burst');
-  assert.equal(ctx.pmjsMvCreateStepGate({ renderHz: 30 }).renderHz, 30);
+  step(0);
+  assert.equal(step(2000 / 30), 2);
+  assert.equal(step(2500 / 30), 2);
 });

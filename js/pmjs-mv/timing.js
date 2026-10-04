@@ -189,18 +189,5 @@
     return true;
   }
 
-  function pmjsMvEnsureTimingContract(options) {
-    if (typeof SceneManager === 'undefined' || !SceneManager) return false;
-    if (typeof SceneManager.updateMain !== 'function') return false;
-    if (SceneManager.updateMain._pmjsTimingWrapped) return true;
-    if (SceneManager.updateMain._pmjsTimingRefused) return false;
-    return pmjsMvInstallTimingContract(options);
-  }
-
-  globalThis.pmjsMvLogicHz = PMJS_MV_LOGIC_HZ;
-  globalThis.pmjsMvCreateStepGate = pmjsMvCreateStepGate;
-  globalThis.pmjsMvGateSteps = pmjsMvGateSteps;
-  globalThis.pmjsMvRecognizesUpdateMain = pmjsMvRecognizesUpdateMain;
   globalThis.pmjsMvInstallTimingContract = pmjsMvInstallTimingContract;
-  globalThis.pmjsMvEnsureTimingContract = pmjsMvEnsureTimingContract;
 })();
