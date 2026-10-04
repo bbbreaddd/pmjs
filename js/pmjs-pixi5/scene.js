@@ -35,14 +35,15 @@
     return contract;
   }
   globalThis.PMJS = globalThis.PMJS || {};
-  PMJS.pixi5 = {
+  PMJS.pixi5 = PMJS.pixi5 || {};
+  Object.assign(PMJS.pixi5, {
     registerRenderContract: registerRenderContract,
     nativeSource: nativeSource,
     rejectRender: reject,
     releaseRenderer: function(renderer) {
       rendererReleases.forEach(function(release) { release(renderer); });
     }
-  };
+  });
   var schema = NativeHost.scene && NativeHost.scene.schema;
   var requiredPacketVersion = 28;
   var filterEncoders = [];

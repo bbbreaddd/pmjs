@@ -28,6 +28,20 @@ test('Pixi 5 Application keeps plugins and uses the native renderer', () => {
   assert.equal(packet.values[1 * 41 + 3], 2);
 });
 
+test('Pixi 5 scene installation preserves the shared namespace and other capabilities', () => {
+  const fixture = createContext(), c = fixture.context;
+  const extension = () => 'existing capability';
+  const namespace = { extension };
+  c.PMJS.pixi5 = namespace;
+  runModule(c, 'js/pmjs-pixi5/scene.js');
+  runModule(c, 'js/pmjs-pixi5/renderer.js');
+  assert.equal(c.PMJS.pixi5, namespace);
+  assert.equal(c.PMJS.pixi5.extension(), 'existing capability');
+  const app = new c.PIXI.Application({ width: 32, height: 24 });
+  app.render();
+  assert.equal(fixture.submissions.length, 1);
+});
+
 test('Pixi 5 scene encoder reads resource.source and submits sprites', () => {
   const fixture = createContext();
   runModule(fixture.context, 'js/pmjs-pixi5/scene.js');

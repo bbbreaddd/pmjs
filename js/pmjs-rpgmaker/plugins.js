@@ -125,7 +125,8 @@
   }
 
   globalThis.PMJS = globalThis.PMJS || {};
-  PMJS.plugins = {
+  PMJS.plugins = PMJS.plugins || {};
+  Object.assign(PMJS.plugins, {
     registerOptimization: function(name, definition) {
       if (finished) throw new Error('PMJS plugins: optimization registration after resolution');
       PMJS.optimizations.register(definition);
@@ -231,7 +232,7 @@
         })
       };
     }
-  };
+  });
 
   globalThis.pmjsInitializeRpgMakerPlugins = boot;
   globalThis.pmjsLoadRpgMakerPluginManifest = loadManifest;

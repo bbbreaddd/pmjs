@@ -10,6 +10,20 @@ const { loadPmjsRuntime } = require('./helpers/runtime-context.cjs');
 const root = path.resolve(__dirname, '..');
 function plain(value) { return JSON.parse(JSON.stringify(value)); }
 
+test('plugin lifecycle installation preserves existing plugin capabilities', () => {
+  const extension = () => 'existing capability';
+  const namespace = { extension };
+  const ctx = loadPmjsRuntime({ PMJS: { plugins: namespace } });
+  assert.equal(ctx.PMJS.plugins, namespace);
+  assert.equal(ctx.PMJS.plugins.extension(), 'existing capability');
+  const loaded = [];
+  ctx.PMJS.plugins.snapshotEffectiveManifest([{ name: 'Example', status: true }]);
+  ctx.PMJS.plugins.onLoaded('Example', () => loaded.push('loaded'));
+  ctx.PMJS.plugins.execute('Example', () => {});
+  assert.deepEqual(loaded, ['loaded']);
+  assert.equal(ctx.PMJS.plugins.dump().counts.loaded, 1);
+});
+
 test('startup snapshots keep authored order and canonical guest identity', () => {
   const ctx = loadPmjsRuntime();
   ctx.PMJS.plugins.snapshotOriginalManifest([
