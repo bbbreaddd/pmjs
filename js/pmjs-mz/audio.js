@@ -2,7 +2,7 @@ var pmjsAudio = PMJS.rpgmaker.audio;
 
 function MzNativeWebAudio(url, intent) {
   this._url = String(url || '');
-  this._voice = pmjsAudio.createVoice(intent);
+  this._voice = pmjsAudio.createVoice(intent, { equalPowerPan: true, absoluteGain: 1 });
   this._loadListeners = [];
   this._stopListeners = [];
   this._playGeneration = 0;
@@ -18,23 +18,19 @@ function MzNativeWebAudio(url, intent) {
 }
 
 MzNativeWebAudio.prototype._startSource = function() {
-  var path = pmjsAudio.resolvePath(this._url);
   var self = this;
   this._voice.onInstalled = function() {
     var listeners = self._loadListeners.splice(0);
     for (var index = 0; index < listeners.length; index++) listeners[index]();
   };
 
-  if (NativeHost.media && pmjsAudio.isObjectUrl(this._url)) {
-    this._voice.loadObjectUrl(this._url);
-  } else if (NativeHost.media && path && typeof Utils !== 'undefined' &&
-      typeof Utils.hasEncryptedAudio === 'function' && Utils.hasEncryptedAudio()) {
-    this._voice.fetchEncrypted(path + '_', function(bytes) {
+  this._voice.loadSource(this._url, function(path) {
+    if (typeof Utils === 'undefined' || typeof Utils.hasEncryptedAudio !== 'function' ||
+        !Utils.hasEncryptedAudio()) return null;
+    return { path: path + '_', decrypt: function(bytes) {
       return Utils.decryptArrayBuffer(bytes);
-    });
-  } else if (NativeHost.media && path) {
-    this._voice.loadPath(path);
-  }
+    } };
+  });
 };
 
 Object.defineProperties(MzNativeWebAudio.prototype, {
@@ -46,7 +42,7 @@ Object.defineProperties(MzNativeWebAudio.prototype, {
     get: function() { return this._voice.volume; },
     set: function(value) {
       this._voice.volume = Number(value);
-      this._voice.applyParameters();
+      this._voice.setAbsoluteGain(this._voice.volume);
     },
     configurable: true
   },
@@ -73,12 +69,12 @@ Object.defineProperties(MzNativeWebAudio.prototype, {
 });
 
 MzNativeWebAudio.prototype.setValueAtTime = function(value) {
-  this.volume = value;
+  this._voice.setAbsoluteGain(value);
 };
 
 MzNativeWebAudio.prototype.linearRampToValueAtTime = function(value, endTime) {
   var duration = Math.max(0, Number(endTime - pmjsAudio.now()) || 0);
-  this._voice.fadeTo(value, duration);
+  this._voice.setAbsoluteGain(value, duration);
 };
 
 MzNativeWebAudio.prototype.isReady = function() {
@@ -97,6 +93,7 @@ MzNativeWebAudio.prototype.play = function(loop, offset) {
   ++this._playGeneration;
   this._loop = !!loop;
   this._isPlaying = true;
+  this._voice.absoluteGain = this._voice.volume;
   this._voice.play(this._loop, Math.max(0, Number(offset) || 0));
   pmjsAudio.track(this);
 };
@@ -114,10 +111,7 @@ MzNativeWebAudio.prototype.destroy = function() {
 
 MzNativeWebAudio.prototype.clear = function() {
   this.stop();
-  this._voice.resetForReload();
-  this._voice.volume = 1;
-  this._voice.pitch = 1;
-  this._voice.pan = 0;
+  this._voice.resetForClear({ absoluteGain: 1 });
   this._isPlaying = false;
   this._loop = false;
   this._loadListeners.length = 0;
@@ -146,7 +140,8 @@ MzNativeWebAudio.prototype.fadeOut = function(duration) {
   this._isPlaying = false;
   this._loadListeners.length = 0;
   this._voice.cancelPending();
-  this._voice.fadeTo(0, duration, false);
+  this._voice.setAbsoluteGain(this._voice.volume);
+  this._voice.setAbsoluteGain(0, duration);
 };
 
 MzNativeWebAudio.prototype.addLoadListener = function(listener) {

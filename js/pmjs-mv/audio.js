@@ -2,7 +2,7 @@ var pmjsAudio = PMJS.rpgmaker.audio;
 
 function MvNativeWebAudio(url, intent) {
   this._url = String(url || '');
-  this._voice = pmjsAudio.createVoice(intent);
+  this._voice = pmjsAudio.createVoice(intent, { equalPowerPan: true });
   this._loadListeners = [];
   this._stopListeners = [];
   this._playGeneration = 0;
@@ -30,38 +30,21 @@ function MvNativeWebAudio(url, intent) {
 
   if (typeof ResourceHandler !== 'undefined' && typeof ResourceHandler.createLoader === 'function') {
     var epoch = this._loadEpoch;
+    var resign = this._voice.configureLoadRetry(function() { self._loader(); });
     this._loader = ResourceHandler.createLoader(this._url, function() {
-      if (epoch === self._loadEpoch) self._load();
-    }, function() {
-      if (epoch !== self._loadEpoch) return;
-      self._voice.loading = false;
-      self._voice.error = true;
-    });
-    this._voice.onLoadError = function() {
-      self._voice.error = false;
-      self._voice.loading = true;
-      self._loader();
-    };
+      if (epoch === self._loadEpoch) self._load(self._url);
+    }, resign);
   }
-  this._load();
+  this._load(this._url);
 }
 
 MvNativeWebAudio.prototype._load = function() {
-  var path = pmjsAudio.resolvePath(this._url);
-  this._voice.error = false;
-  this._voice.loading = !!NativeHost.media;
-  if (NativeHost.media && pmjsAudio.isObjectUrl(this._url)) {
-    this._voice.loadObjectUrl(this._url);
-  } else if (NativeHost.media && path && typeof Decrypter !== 'undefined' &&
-      Decrypter.hasEncryptedAudio) {
-    this._voice.fetchEncrypted(Decrypter.extToEncryptExt(path), function(bytes) {
+  this._voice.reloadSource(this._url, function(path) {
+    if (typeof Decrypter === 'undefined' || !Decrypter.hasEncryptedAudio) return null;
+    return { path: Decrypter.extToEncryptExt(path), decrypt: function(bytes) {
       return Decrypter.decryptArrayBuffer(bytes);
-    });
-  } else if (NativeHost.media && path) {
-    this._voice.loadPath(path);
-  } else {
-    this._voice.loading = false;
-  }
+    } };
+  });
 };
 
 Object.defineProperties(MvNativeWebAudio.prototype, {
@@ -113,7 +96,6 @@ Object.defineProperties(MvNativeWebAudio.prototype, {
   }
 });
 
-// Native fades are envelopes multiplied by voice volume; MV gain targets are absolute.
 MvNativeWebAudio.prototype._rampGain = function(from, to, duration) {
   var time = Math.max(0, Number(duration) || 0);
   from = Math.max(0, Number(from) || 0);
@@ -121,12 +103,7 @@ MvNativeWebAudio.prototype._rampGain = function(from, to, duration) {
   this._gainValue = to;
   this._gainRamp = time > 0
     ? { from: from, to: to, start: pmjsAudio.now(), duration: time } : null;
-  var scale = Math.max(1, from, to);
-  this._voice.volume = scale;
-  this._voice.applyParameters();
-  if (this._voice.handle && NativeHost.media) {
-    NativeHost.media.fadeAudio(this._voice.handle, from / scale, to / scale, time, false);
-  }
+  this._voice.rampAbsoluteGain(from, to, time);
 };
 
 MvNativeWebAudio.prototype.setValueAtTime = function(value) {
@@ -170,14 +147,9 @@ MvNativeWebAudio.prototype.stop = function() {
 
 MvNativeWebAudio.prototype.clear = function() {
   this._loadEpoch++;
-  this._voice.onLoadError = null;
+  this._voice.cancelLoadRetry();
   this.stop();
-  this._voice.resetForReload();
-  this._voice.volume = 1;
-  this._voice.pitch = 1;
-  this._voice.pan = 0;
-  this._voice.duration = 0;
-  this._voice.offset = 0;
+  this._voice.resetForClear({ duration: 0, offset: 0 });
   this._volume = 1;
   this._gainValue = 1;
   this._gainRamp = null;

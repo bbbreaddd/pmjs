@@ -155,7 +155,8 @@ if(BUILD_TESTING)
   set_tests_properties(native-renderer-clear PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
   pmjs_add_cpp_test(pmjs-media-mix-test native-audio-mix-unit test/media-mix.cpp)
   target_compile_definitions(pmjs-media-mix-test PRIVATE
-    PMJS_EFFECT_AUDIO_REFERENCE="${CMAKE_CURRENT_SOURCE_DIR}/test/assets/reference/mz-effects/audio.tsv")
+    PMJS_EFFECT_AUDIO_REFERENCE="${CMAKE_CURRENT_SOURCE_DIR}/test/assets/reference/mz-effects/audio.tsv"
+    PMJS_MZ_AUDIO_REFERENCE="${CMAKE_CURRENT_SOURCE_DIR}/test/assets/reference/mz-pan.tsv")
   add_executable(pmjs-image-capabilities-test test/image-capabilities.cpp)
   target_include_directories(pmjs-image-capabilities-test PRIVATE src)
   target_compile_options(pmjs-image-capabilities-test PRIVATE -Wall -Wextra -Wpedantic)

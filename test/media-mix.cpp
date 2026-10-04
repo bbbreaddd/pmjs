@@ -2,6 +2,8 @@
 #include "effects_audio.hpp"
 
 #include <cmath>
+#include <string_view>
+#include <iomanip>
 #include <fstream>
 #include <iostream>
 #include <vector>
@@ -46,6 +48,47 @@ void testVolumeAndMaster() {
   pmjs::mixVoiceInto(master, masterOut.data(), 1, 0.65F);
   CHECK(near(masterOut[0], 0.325F) && near(masterOut[1], 0.325F),
         "master volume scales mixed samples");
+}
+
+void testMzEqualPowerPan() {
+  for (int channels : {1, 2}) for (float pan : {-1.0F, -0.5F, 0.0F, 0.5F, 1.0F}) {
+    // The decoder duplicates mono into two channels with a -3 dB gain.
+    auto voice = constantVoice(8, channels == 1 ? 0.5F / std::sqrt(2.0F) : 0.25F,
+      channels == 1 ? 0.5F / std::sqrt(2.0F) : 0.5F);
+    voice.panMatrix = pmjs::equalPowerPanMatrix(channels, pan);
+    std::vector<float> out(2);
+    pmjs::mixVoiceInto(voice, out.data(), 1, 1);
+    float expectedLeft, expectedRight;
+    if (channels == 1) {
+      const float angle = (std::atan2(pan, 1 - std::fabs(pan)) + std::numbers::pi_v<float> / 2) / 2;
+      expectedLeft = 0.5F * std::cos(angle); expectedRight = 0.5F * std::sin(angle);
+    } else if (pan < 0) {
+      const float angle = std::atan2(pan, 1 - std::fabs(pan)) + std::numbers::pi_v<float> / 2;
+      expectedLeft = 0.25F + 0.5F * std::cos(angle); expectedRight = 0.5F * std::sin(angle);
+    } else {
+      const float angle = std::atan2(pan, 1 - std::fabs(pan));
+      expectedLeft = 0.25F * std::cos(angle); expectedRight = 0.5F + 0.25F * std::sin(angle);
+    }
+    CHECK(near(out[0], expectedLeft) && near(out[1], expectedRight), "MZ equal-power position matches mono/stereo rules");
+  }
+  std::ifstream reference(PMJS_MZ_AUDIO_REFERENCE);
+  int channels = 0, cases = 0;
+  float pan, left, right;
+  while (reference >> channels >> pan >> left >> right) {
+    auto fixture = constantVoice(4, channels == 1 ? 0.5F / std::sqrt(2.0F) : 0.25F,
+      channels == 1 ? 0.5F / std::sqrt(2.0F) : 0.5F);
+    fixture.panMatrix = pmjs::equalPowerPanMatrix(channels, pan);
+    float output[2]{};
+    pmjs::mixVoiceInto(fixture, output, 1, 1);
+    CHECK(near(output[0], left, 1e-6F) && near(output[1], right, 1e-6F), "MZ panning matches stock Web Audio samples");
+    ++cases;
+  }
+  CHECK(cases == 18 && reference.eof(), "all stock MZ panning references must run");
+  auto voice = constantVoice(8, 0.5F, 0.5F);
+  voice.gain = 0.2F; voice.targetGain = 0.8F; voice.gainStep = 0.2F; voice.absoluteGainEnvelope = true;
+  std::vector<float> out(8);
+  pmjs::mixVoiceInto(voice, out.data(), 4, 1);
+  CHECK(near(out[0], 0.1F) && near(out[6], 0.4F), "absolute gain ramps from current value without logical volume multiplication");
 }
 
 void testPanLaw() {
@@ -149,6 +192,32 @@ void testFadeCompletionAndStopAfterFade() {
   std::vector<float> replay(2, 0.0F);
   pmjs::mixVoiceInto(voice, replay.data(), 1, 1.0F);
   CHECK(near(replay[0], 1.0F) && voice.playing, "replay after fade mixes again");
+}
+
+void testGainRampPrecision() {
+  constexpr int duration = 48000;
+  for (const auto endpoints : {std::array<float, 2>{0.6F, 0.2F},
+                               std::array<float, 2>{0.2F, 0.8F}}) {
+    auto voice = constantVoice(duration + 3, 1, 1);
+    voice.gain = endpoints[0];
+    voice.targetGain = endpoints[1];
+    voice.gainStep = (voice.targetGain - voice.gain) / duration;
+    voice.absoluteGainEnvelope = true;
+    std::vector<float> output((duration + 1) * 2);
+    for (int frame = 0; frame <= duration; frame += 128) {
+      pmjs::mixVoiceInto(voice, output.data() + frame * 2,
+        std::min(128, duration + 1 - frame), 1);
+    }
+    for (int frame = 0; frame <= duration; ++frame) {
+      const float expected = static_cast<float>(static_cast<double>(endpoints[0]) +
+        (static_cast<double>(endpoints[1]) - endpoints[0]) * frame / duration);
+      CHECK(near(output[frame * 2], expected, 1e-6F) &&
+            near(output[frame * 2 + 1], expected, 1e-6F),
+            "one-second gain automation preserves sample timing and amplitude across callbacks");
+    }
+    CHECK(voice.gain == voice.targetGain && voice.gainStep == 0 && voice.playing,
+          "gain automation reaches its target and retains the source");
+  }
 }
 
 void testLoopWrap() {
@@ -312,12 +381,40 @@ void testPreparedHighPitchEof() {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+  if (argc == 2 && std::string_view(argv[1]) == "--mz-gain-reference") {
+    auto voice = constantVoice(16, 0.5F, 0.5F);
+    voice.gain = 0.2F; voice.targetGain = 0.8F; voice.gainStep = 0.15F; voice.absoluteGainEnvelope = true;
+    float output[10]{};
+    pmjs::mixVoiceInto(voice, output, 5, 1);
+    std::cout << std::setprecision(9) << '[';
+    for (int i = 0; i < 5; ++i) { if (i) std::cout << ','; std::cout << output[i * 2]; }
+    std::cout << "]\n";
+    return 0;
+  }
+  if (argc == 2 && std::string_view(argv[1]) == "--mz-pan-reference") {
+    std::cout << std::setprecision(9) << '[';
+    bool first = true;
+    for (int channels : {1, 2}) for (float pan : {-1.0F, -0.75F, -0.5F, -0.25F, 0.0F, 0.25F, 0.5F, 0.75F, 1.0F}) {
+      auto voice = constantVoice(4, channels == 1 ? 0.5F / std::sqrt(2.0F) : 0.25F,
+        channels == 1 ? 0.5F / std::sqrt(2.0F) : 0.5F);
+      voice.panMatrix = pmjs::equalPowerPanMatrix(channels, pan);
+      float output[2]{};
+      pmjs::mixVoiceInto(voice, output, 1, 1);
+      if (!first) std::cout << ',';
+      first = false;
+      std::cout << "[" << channels << ',' << pan << ',' << output[0] << ',' << output[1] << "]";
+    }
+    std::cout << "]\n";
+    return 0;
+  }
   testVolumeAndMaster();
   testPanLaw();
+  testMzEqualPowerPan();
   testSpatialEffects();
   testPitchAdvancement();
   testFadeCompletionAndStopAfterFade();
+  testGainRampPrecision();
   testLoopWrap();
   testDurationWrapWithoutLoopPoints();
   testSimultaneousVoicesAccumulate();

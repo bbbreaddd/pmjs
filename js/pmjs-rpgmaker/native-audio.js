@@ -30,13 +30,16 @@ if (globalThis.PMJS && PMJS.optimizations) {
     fallback: 'independent streaming decoder per audio voice' });
 }
 
-function NativeAudioVoice(intent) {
+function NativeAudioVoice(intent, settings) {
+  settings = settings || {};
   this.intent = intent || 'unknown';
   this.handle = 0;
   this.duration = 0;
   this.volume = 1;
   this.pitch = 1;
   this.pan = 0;
+  this.equalPowerPan = settings.equalPowerPan === true;
+  this.absoluteGain = settings.absoluteGain === undefined ? null : settings.absoluteGain;
   this.loop = false;
   this.offset = 0;
   this.autoPlay = false;
@@ -47,6 +50,7 @@ function NativeAudioVoice(intent) {
   this.loadGeneration = 0;
   this.onInstalled = null;
   this.onLoadError = null;
+  this._loadRetryToken = null;
 }
 
 NativeAudioVoice.prototype.install = function(loaded, generation) {
@@ -71,8 +75,10 @@ NativeAudioVoice.prototype.install = function(loaded, generation) {
   if (this.autoPlay) {
     this.applyParameters();
     this.wasPlaying = NativeHost.media.playAudio(this.handle, this.loop, this.offset);
+    if (this.absoluteGain !== null) this.setAbsoluteGain(this.absoluteGain);
     if (this.pendingFadeIn !== null) {
-      NativeHost.media.fadeAudio(this.handle, 0, 1, this.pendingFadeIn, false);
+      NativeHost.media.fadeAudio(this.handle, 0, this.absoluteGain === null ? 1 : this.volume,
+        this.pendingFadeIn, false, this.absoluteGain !== null);
     }
   }
   this.pendingFadeIn = null;
@@ -89,6 +95,28 @@ NativeAudioVoice.prototype.failLoad = function(source, error, generation) {
   if (typeof this.onLoadError === 'function') this.onLoadError(error);
 };
 
+NativeAudioVoice.prototype.configureLoadRetry = function(retry) {
+  var voice = this;
+  var token = {};
+  this._loadRetryToken = token;
+  this.onLoadError = function() {
+    if (voice._loadRetryToken !== token) return;
+    voice.error = false;
+    voice.loading = true;
+    retry();
+  };
+  return function() {
+    if (voice._loadRetryToken !== token) return;
+    voice.loading = false;
+    voice.error = true;
+  };
+};
+
+NativeAudioVoice.prototype.cancelLoadRetry = function() {
+  this._loadRetryToken = null;
+  this.onLoadError = null;
+};
+
 NativeAudioVoice.prototype.loadOptions = function(identity) {
   var options = { intent: this.intent };
   if (globalThis.PMJS && PMJS.optimizations &&
@@ -98,6 +126,27 @@ NativeAudioVoice.prototype.loadOptions = function(identity) {
     if (identity.resourceIdentity) options.resourceIdentity = identity.resourceIdentity;
   }
   return options;
+};
+
+NativeAudioVoice.prototype.loadSource = function(url, encryptedSource) {
+  var path = pmjsResolveAudioPath(url);
+  if (!NativeHost.media) return false;
+  if (pmjsIsAudioObjectUrl(url)) {
+    this.loadObjectUrl(url);
+  } else if (path) {
+    var encrypted = typeof encryptedSource === 'function' ? encryptedSource(path) : null;
+    if (encrypted) this.fetchEncrypted(encrypted.path, encrypted.decrypt);
+    else this.loadPath(path);
+  } else {
+    return false;
+  }
+  return true;
+};
+
+NativeAudioVoice.prototype.reloadSource = function(url, encryptedSource) {
+  this.error = false;
+  this.loading = !!NativeHost.media;
+  if (!this.loadSource(url, encryptedSource)) this.loading = false;
 };
 
 NativeAudioVoice.prototype.loadPath = function(path) {
@@ -155,8 +204,35 @@ NativeAudioVoice.prototype.fetchEncrypted = function(encryptedPath, decryptFn) {
 NativeAudioVoice.prototype.applyParameters = function() {
   if (this.handle && NativeHost.media) {
     NativeHost.media.setAudioParameters(
-      this.handle, this.volume, this.pitch, this.pan);
+      this.handle, this.absoluteGain === null ? this.volume : 1, this.pitch,
+      this.equalPowerPan ? 0 : this.pan);
+    if (this.equalPowerPan) NativeHost.media.setAudioEqualPowerPan(this.handle, this.pan);
   }
+};
+
+function submitAbsoluteEnvelope(voice, from, to, duration) {
+  if (voice.handle && NativeHost.media) {
+    NativeHost.media.fadeAudio(voice.handle, from, to, duration, false, true);
+  }
+}
+
+NativeAudioVoice.prototype.rampAbsoluteGain = function(from, to, duration) {
+  var time = Math.max(0, Number(duration) || 0);
+  from = Math.max(0, Number(from) || 0);
+  to = Math.max(0, Number(to) || 0);
+  // Explicit gain ramps use voice volume as a scale for their normalized envelope.
+  var scale = Math.max(1, from, to);
+  this.volume = scale;
+  this.applyParameters();
+  submitAbsoluteEnvelope(this, from / scale, to / scale, time);
+};
+
+NativeAudioVoice.prototype.setAbsoluteGain = function(value, duration) {
+  var target = Math.max(0, Number(value) || 0);
+  var time = Math.max(0, Number(duration) || 0);
+  this.absoluteGain = target;
+  this.applyParameters();
+  submitAbsoluteEnvelope(this, time > 0 ? -1 : target, target, time);
 };
 
 NativeAudioVoice.prototype.play = function(loop, offset) {
@@ -166,6 +242,7 @@ NativeAudioVoice.prototype.play = function(loop, offset) {
   this.applyParameters();
   this.wasPlaying = !!this.handle && !!NativeHost.media &&
     NativeHost.media.playAudio(this.handle, this.loop, this.offset);
+  if (this.absoluteGain !== null && this.handle) this.setAbsoluteGain(this.absoluteGain);
   return this.wasPlaying;
 };
 
@@ -202,6 +279,17 @@ NativeAudioVoice.prototype.resetForReload = function() {
   this.error = false;
 };
 
+NativeAudioVoice.prototype.resetForClear = function(defaults) {
+  if (this._loadRetryToken) this.cancelLoadRetry();
+  this.resetForReload();
+  this.volume = 1;
+  this.pitch = 1;
+  this.pan = 0;
+  if (defaults.duration !== undefined) this.duration = defaults.duration;
+  if (defaults.offset !== undefined) this.offset = defaults.offset;
+  if (defaults.absoluteGain !== undefined) this.absoluteGain = defaults.absoluteGain;
+};
+
 NativeAudioVoice.prototype.position = function() {
   return (this.handle && NativeHost.media) ? NativeHost.media.audioPosition(this.handle) : 0;
 };
@@ -213,7 +301,7 @@ NativeAudioVoice.prototype.nativePlaying = function() {
 NativeAudioVoice.prototype.fadeIn = function(duration) {
   var time = Math.max(0, Number(duration) || 0);
   if (this.handle && NativeHost.media) {
-    NativeHost.media.fadeAudio(this.handle, 0, 1, time, false);
+    NativeHost.media.fadeAudio(this.handle, 0, this.absoluteGain === null ? 1 : this.volume, time, false, this.absoluteGain !== null);
   } else if (this.autoPlay) {
     this.pendingFadeIn = time;
   }
@@ -289,8 +377,8 @@ PMJS.rpgmaker.audio = {
     return kind === 'se' ? 'effect' : kind === 'bgm' ? 'music' :
       kind === 'bgs' ? 'ambient' : kind === 'me' ? 'jingle' : 'unknown';
   },
-  createVoice: function(intent) {
-    return new NativeAudioVoice(intent);
+  createVoice: function(intent, settings) {
+    return new NativeAudioVoice(intent, settings);
   },
   track: function(buffer) {
     if (trackedAudioBuffers.indexOf(buffer) < 0) trackedAudioBuffers.push(buffer);

@@ -7,6 +7,7 @@
   var order = [];
   var loadSequence = 0;
   var callbacks = Object.create(null);
+  var loadingCallbacks = Object.create(null);
   var finished = false;
   var bootError = null;
   var optimizationRequirements = [];
@@ -171,10 +172,30 @@
       });
     },
 
+    onLoading: function(name, owner, callback) {
+      var canonical = key(name);
+      if (finished || (guests[canonical] && guests[canonical].state !== 'discovered')) {
+        throw new Error('PMJS plugins: loading callback registered after execution: ' + name);
+      }
+      if (typeof callback !== 'function') return;
+      (loadingCallbacks[canonical] || (loadingCallbacks[canonical] = [])).push({
+        owner: owner, callback: callback
+      });
+    },
+
     execute: function(name, load) {
       var token = PMJS.methods.beginPlugin(name);
       var error = null;
       try {
+        var listeners = loadingCallbacks[key(name)] || [];
+        delete loadingCallbacks[key(name)];
+        listeners.forEach(function(listener) {
+          try { listener.callback(); } catch (error) {
+            console.error('[pmjs] error running loading callback for ' + key(name) +
+              ' (owner ' + listener.owner + '):', error);
+            throw error;
+          }
+        });
         load();
       } catch (caught) {
         error = caught;

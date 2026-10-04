@@ -386,11 +386,19 @@ napi_value setAudioParameters(napi_env env, napi_callback_info info) try {
   napi_throw_type_error(env, nullptr, error.what()); return nullptr;
 }
 
+napi_value setAudioEqualPowerPan(napi_env env, napi_callback_info info) try {
+  auto a = arguments(env, info, 2);
+  return boolean(env, host(env).core.media().setEqualPowerPan(asUint32(env, a.at(0)),
+    asNumber(env, a.at(1))));
+} catch (const std::exception& error) {
+  napi_throw_type_error(env, nullptr, error.what()); return nullptr;
+}
+
 napi_value fadeAudio(napi_env env, napi_callback_info info) try {
-  auto a = arguments(env, info, 5);
+  auto a = arguments(env, info, 6);
   return boolean(env, host(env).core.media().fade(asUint32(env, a.at(0)),
     asNumber(env, a.at(1)), asNumber(env, a.at(2)), asNumber(env, a.at(3)),
-    asBoolean(env, a.at(4))));
+    asBoolean(env, a.at(4)), a.size() > 5 && asBoolean(env, a.at(5))));
 } catch (const std::exception& error) {
   napi_throw_type_error(env, nullptr, error.what()); return nullptr;
 }
@@ -517,6 +525,7 @@ void registerMediaBindings(napi_env env, napi_value exports) {
   method(env, media, "stopAudio", stopAudio);
   method(env, media, "setAudioSuspended", setAudioSuspended);
   method(env, media, "setAudioParameters", setAudioParameters);
+  method(env, media, "setAudioEqualPowerPan", setAudioEqualPowerPan);
   method(env, media, "fadeAudio", fadeAudio);
   method(env, media, "audioIsPlaying", audioIsPlaying);
   method(env, media, "audioPosition", audioPosition);

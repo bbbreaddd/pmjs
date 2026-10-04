@@ -422,6 +422,14 @@ bool MediaService::setParameters(std::uint32_t handle, float volume,
   voice->mix.pitch = std::clamp(pitch, 0.05F, 8.0F);
   voice->mix.pan = std::clamp(pan, -1.0F, 1.0F); return true;
 }
+bool MediaService::setEqualPowerPan(std::uint32_t handle, float pan) {
+  if (!std::isfinite(pan)) return false;
+  auto voice = impl_->voice(handle); if (!voice) return false;
+  std::lock_guard lock(voice->mutex);
+  voice->mix.panMatrix = equalPowerPanMatrix(voice->sourceChannels, pan);
+  voice->mix.pan = 0;
+  return true;
+}
 bool MediaService::setStereoGains(std::uint32_t handle, float left, float right) {
   if (!std::isfinite(left) || !std::isfinite(right) || left < 0 || right < 0) return false;
   auto voice = impl_->voice(handle); if (!voice) return false;
@@ -431,15 +439,16 @@ bool MediaService::setStereoGains(std::uint32_t handle, float left, float right)
   return true;
 }
 bool MediaService::fade(std::uint32_t handle, float from, float to,
-                        double duration, bool stopWhenFinished) {
+                        double duration, bool stopWhenFinished, bool absolute) {
   if (!std::isfinite(from) || !std::isfinite(to) || !std::isfinite(duration) || duration < 0) return false;
   auto voice = impl_->voice(handle); if (!voice) return false;
   std::lock_guard lock(voice->mutex);
-  if (from >= 0.0F) voice->mix.gain = std::clamp(from, 0.0F, 1.0F);
-  voice->mix.targetGain = std::clamp(to, 0.0F, 1.0F);
+  if (from >= 0.0F) voice->mix.gain = absolute ? from : std::clamp(from, 0.0F, 1.0F);
+  voice->mix.targetGain = absolute ? std::max(0.0F, to) : std::clamp(to, 0.0F, 1.0F);
   voice->mix.stopAfterFade = stopWhenFinished;
+  voice->mix.absoluteGainEnvelope = absolute;
   const double frames = duration * 48000;
-  voice->mix.gainStep = frames > 0 ? static_cast<float>((voice->mix.targetGain - voice->mix.gain) / frames) : 0;
+  voice->mix.gainStep = frames > 0 ? (voice->mix.targetGain - voice->mix.gain) / frames : 0;
   if (frames <= 0) { voice->mix.gain = voice->mix.targetGain;
     if (stopWhenFinished && voice->mix.gain <= 0) voice->mix.playing = false; }
   return true;

@@ -81,6 +81,30 @@ test('unexpected loaded and late phase installer failures propagate to the calle
   assert.equal(errors.length, 3);
 });
 
+test('loading callbacks surround the named guest execution and canonicalize its name', () => {
+  const ctx = loadPmjsRuntime();
+  const seen = [];
+  ctx.PMJS.plugins.onLoading('Example.js', 'adapter', () => seen.push('before'));
+  ctx.PMJS.plugins.onLoaded('Example', 'adapter', () => seen.push('after'));
+  ctx.PMJS.plugins.execute('Other', () => seen.push('other'));
+  ctx.PMJS.plugins.execute('example', () => seen.push('guest'));
+  assert.deepEqual(seen, ['other', 'before', 'guest', 'after']);
+  assert.throws(() => ctx.PMJS.plugins.onLoading('EXAMPLE', 'late', () => {}), /after execution/);
+});
+
+test('loading callback failures prevent guest execution and remain visible', () => {
+  const errors = [];
+  const ctx = loadPmjsRuntime({ console: { error(...args) { errors.push(args); } } });
+  ctx.PMJS.plugins.onLoading('Example', 'adapter', () => { throw new Error('capture failed'); });
+  let executed = false;
+  assert.throws(() => ctx.PMJS.plugins.execute('Example', () => { executed = true; }), /capture failed/);
+  assert.equal(executed, false);
+  const guest = ctx.PMJS.plugins.dump().guest[0];
+  assert.equal(guest.state, 'failed');
+  assert.equal(guest.error, 'capture failed');
+  assert.match(errors[0][0], /owner adapter/);
+});
+
 test('failed plugin execution keeps the error and method mutation attribution', () => {
   const target = { update() {} };
   const ctx = loadPmjsRuntime({ target });

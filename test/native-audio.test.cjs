@@ -10,7 +10,7 @@ const audioSource = fs.readFileSync(
   path.resolve(__dirname, '../js/pmjs-rpgmaker/native-audio.js'), 'utf8');
 
 function contextFor() {
-  const calls = { plays: [], releases: [], fades: [], params: [], master: [] };
+  const calls = { plays: [], releases: [], fades: [], params: [], pans: [], master: [] };
   let nextHandle = 1;
   const context = {
     console,
@@ -28,11 +28,12 @@ function contextFor() {
         setAudioParameters: function(handle, volume, pitch, pan) {
           calls.params.push([handle, volume, pitch, pan]);
         },
+        setAudioEqualPowerPan: function(...args) { calls.pans.push(args); },
         audioIsPlaying: function() { return true; },
         audioPosition: function(handle) { return handle * 0.5; },
         releaseAudio: function(handle) { calls.releases.push(handle); },
-        fadeAudio: function(handle, from, to, duration, stop) {
-          calls.fades.push([handle, from, to, duration, stop]);
+        fadeAudio: function(...args) {
+          calls.fades.push(args);
         },
         setMasterVolume: function(value) { calls.master.push(value); }
       }
@@ -155,4 +156,91 @@ test('installing a replacement source releases only the replaced voice', () => {
   assert.deepEqual(context.calls.releases, [1]);
   assert.equal(first.handle, 3);
   assert.equal(second.handle, 2);
+});
+
+
+test('voice initialization selects equal-power pan and absolute gain without changing defaults', () => {
+  const context = contextFor();
+  const audio = context.PMJS.rpgmaker.audio;
+  const ordinary = audio.createVoice('effect');
+  ordinary.volume = 0.5;
+  ordinary.pan = 0.25;
+  ordinary.loadSource('audio/se/tone.ogg');
+  ordinary.play(false, 0);
+  const absolute = audio.createVoice('music', { equalPowerPan: true, absoluteGain: 0.8 });
+  absolute.pan = -0.5;
+  absolute.loadSource('audio/bgm/theme.ogg');
+  absolute.play(true, 0.25);
+  assert.deepEqual(context.calls.params, [[1, 0.5, 1, 0.25], [2, 1, 1, 0], [2, 1, 1, 0]]);
+  assert.deepEqual(context.calls.pans, [[2, -0.5], [2, -0.5]]);
+  assert.deepEqual(context.calls.fades, [[2, 0.8, 0.8, 0, false, true]]);
+});
+
+test('source routing preserves normalized paths, intent, and independent replacement', () => {
+  const context = contextFor();
+  const loads = [];
+  context.NativeHost.media.loadAudio = (path, options) => {
+    loads.push([path, options.intent]);
+    return { handle: loads.length, duration: 1 };
+  };
+  const first = context.PMJS.rpgmaker.audio.createVoice('effect');
+  const second = context.PMJS.rpgmaker.audio.createVoice('music');
+  first.loadSource('file:///game/audio/se/Town%20Bell.ogg?v=2', () => null);
+  second.loadSource('audio/bgm/theme.ogg');
+  first.loadSource('audio/se/other.ogg');
+  assert.deepEqual(loads, [['audio/se/Town Bell.ogg', 'effect'], ['audio/bgm/theme.ogg', 'music'], ['audio/se/other.ogg', 'effect']]);
+  assert.deepEqual(context.calls.releases, [1]);
+  second.play(true, 0.5);
+  assert.deepEqual(context.calls.plays, [[2, true, 0.5]]);
+});
+
+test('empty sources and an absent media host do not select encryption or attempt loading', () => {
+  const context = contextFor();
+  const voice = context.PMJS.rpgmaker.audio.createVoice();
+  const unexpected = () => { throw new Error('source operation used'); };
+  context.NativeHost.media.loadAudio = unexpected;
+  assert.equal(voice.loadSource('', unexpected), false);
+  context.NativeHost.media = null;
+  assert.equal(voice.loadSource('audio/se/tone.ogg', unexpected), false);
+});
+
+test('explicit and target gain envelopes preserve their separate parameter scales', () => {
+  const context = contextFor();
+  const voice = context.PMJS.rpgmaker.audio.createVoice();
+  voice.loadSource('audio/se/tone.ogg');
+  voice.rampAbsoluteGain(2, 3, 0.5);
+  assert.deepEqual(context.calls.params.at(-1), [1, 3, 1, 0]);
+  assert.deepEqual(context.calls.fades.at(-1), [1, 2 / 3, 1, 0.5, false, true]);
+  voice.setAbsoluteGain(2);
+  assert.deepEqual(context.calls.params.at(-1), [1, 1, 1, 0]);
+  assert.deepEqual(context.calls.fades.at(-1), [1, 2, 2, 0, false, true]);
+  voice.setAbsoluteGain(3, 0.5);
+  assert.deepEqual(context.calls.fades.at(-1), [1, -1, 3, 0.5, false, true]);
+});
+
+
+test('clear cancels deferred failure callbacks while retaining an independent voice', () => {
+  const context = contextFor();
+  context.console = { log() {}, error() {} };
+  const audio = context.PMJS.rpgmaker.audio;
+  const cleared = audio.createVoice('effect');
+  const retained = audio.createVoice('music');
+  retained.loadSource('audio/bgm/theme.ogg');
+  let retries = 0;
+  const resign = cleared.configureLoadRetry(() => retries++);
+  const deferredFailure = cleared.onLoadError;
+  context.NativeHost.media.loadAudio = () => { throw new Error('missing audio'); };
+  cleared.reloadSource('audio/se/missing.ogg');
+  assert.equal(cleared.pollNative(), 'loading');
+  assert.equal(cleared.error, false);
+  assert.equal(retries, 1);
+  cleared.resetForClear({ duration: 0, offset: 0 });
+  deferredFailure();
+  resign();
+  assert.equal(cleared.error, false);
+  assert.equal(cleared.pollNative(), 'idle');
+  assert.equal(retries, 1);
+  retained.play(true, 0);
+  assert.deepEqual(context.calls.plays, [[1, true, 0]]);
+  assert.deepEqual(context.calls.releases, []);
 });
