@@ -26,6 +26,8 @@ function fixture() {
     }
   }
   sandbox.PIXI.filters.ColorMatrixFilter = ColorMatrixFilter;
+  class NoiseFilter extends Filter {}
+  sandbox.PIXI.filters.NoiseFilter = NoiseFilter;
   sandbox.Graphics = { width: 32, height: 32 };
   let compilations = 0;
   const plans = [];
@@ -40,7 +42,7 @@ function fixture() {
   const file = path.join(__dirname, '../js/pmjs-pixi4/scene-filters.js');
   vm.runInContext(fs.readFileSync(file, 'utf8'), sandbox, { filename: file });
   const node = { getBounds: () => ({ x: 4, y: 4, width: 16, height: 16 }) };
-  return { sandbox, Filter, node, plans, compatHits, compilations: () => compilations };
+  return { sandbox, Filter, NoiseFilter, node, plans, compatHits, compilations: () => compilations };
 }
 
 test('custom filter passes snapshot mutations and reuse the vertex/fragment program', () => {
@@ -113,4 +115,53 @@ test('changed shaders and subclasses run before a native identity-filter shortcu
   };
   assert.equal(sandbox.nativeSceneFilter(node, [new Core()]).groups[0].kind, 31);
   assert.equal(plans[2].passes[0].uniforms[0], 0.5);
+});
+
+test('authored filters update stale world bounds unless the caller supplied Pixi world state', () => {
+  const { sandbox, Filter, node, plans } = fixture();
+  const calls = [];
+  node.getBounds = skipUpdate => {
+    calls.push(skipUpdate);
+    return { x: skipUpdate ? 4 : 12, y: 14, width: 16, height: 16 };
+  };
+  sandbox.nativeSceneUsePixiWorldState = false;
+  sandbox.nativeSceneFilter(node, [new Filter()]);
+  assert.deepEqual(plans[0].frame, [8, 10, 24, 24]);
+  sandbox.nativeSceneUsePixiWorldState = true;
+  sandbox.nativeSceneFilter(node, [new Filter()]);
+  assert.deepEqual(calls, [false, true]);
+});
+
+test('authored apply hooks receive the active renderer and its queried GL limits', () => {
+  const { sandbox, Filter, node, compatHits } = fixture();
+  const renderer = { gl: { MAX_VARYING_VECTORS: 36348,
+    getParameter(parameter) { assert.equal(parameter, 36348); return 32; } } };
+  sandbox.Graphics._renderer = renderer;
+  const filter = new Filter();
+  filter.apply = function(manager, input, output, clear) {
+    assert.equal(manager.renderer, renderer);
+    assert.equal(manager.renderer.gl.getParameter(manager.renderer.gl.MAX_VARYING_VECTORS), 32);
+    manager.applyFilter(this, input, output, clear);
+  };
+  assert.equal(sandbox.nativeSceneFilter(node, [filter]).unsupported, false);
+  assert.deepEqual(compatHits, []);
+});
+
+
+test('a source-backed noise filter uses its authored program instead of a different random hash', () => {
+  const { sandbox, NoiseFilter, node, plans } = fixture();
+  const result = sandbox.nativeSceneFilter(node, [new NoiseFilter()]);
+  assert.equal(result.unsupported, false);
+  assert.equal(result.groups[0].kind, 31);
+  assert.equal(plans.length, 1);
+});
+
+test('fullscreen filter frames preserve the supported Pixi version padding contract', () => {
+  for (const version of ['4.5.4', '4.6.2', '4.7.0', '4.8.0', '4.8.9']) {
+    const { sandbox, Filter, node, plans } = fixture();
+    sandbox.PIXI.VERSION = version;
+    node.filterArea = { x: 0, y: 0, width: 32, height: 32 };
+    sandbox.nativeSceneFilter(node, [new Filter()]);
+    assert.deepEqual(plans[0].frame, version.startsWith('4.8.') ? [0, 0, 32, 32] : [-4, -4, 40, 40]);
+  }
 });

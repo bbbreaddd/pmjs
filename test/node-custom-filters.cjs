@@ -6,6 +6,8 @@ const native = require(path.resolve(process.argv[2]));
 native.initialize({ gameRoot: path.resolve(process.argv[3]), assetRoot: '',
   width: 16, height: 16, imageWarmCacheBytes: 0, windowTitle: 'pmjs custom filter ownership' });
 native.render.setClearColor(0, 0, 0, 0);
+assert.ok(Number.isInteger(native.render.graphicsInfo().maxVaryingVectors) &&
+  native.render.graphicsInfo().maxVaryingVectors >= 8, 'missing actual shader varying limit');
 
 const vertex = 'attribute vec2 aVertexPosition; attribute vec2 aTextureCoord; uniform mat3 projectionMatrix; varying vec2 vTextureCoord; void main(){gl_Position=vec4((projectionMatrix*vec3(aVertexPosition,1.0)).xy,0,1);vTextureCoord=aTextureCoord;}';
 const fragment = 'varying vec2 vTextureCoord; uniform sampler2D uSampler; uniform sampler2D second; void main(){gl_FragColor=texture2D(second,vTextureCoord);}';

@@ -140,7 +140,7 @@ try {
   assert.equal(native.scene.schema.clampedTilingSampling, true);
   const invalidMetadata = new Uint32Array([0, 0xffffffff, 0, 0xffffff, 0, 32768, 0]);
   const invalidValues = new Float32Array(41); invalidValues.set([1, 0, 0, 1, 0, 0, 1]);
-  assert.throws(() => native.scene.submit(28, invalidMetadata, invalidValues, 1), /invalid|rejected/,
+  assert.throws(() => native.scene.submit(native.scene.schema.version, invalidMetadata, invalidValues, 1), /invalid|rejected/,
     'tiling clamp flags are rejected on another node kind');
   assert.equal(failures, 0, 'stock Pixi tiling pixel mismatches retained under test-assets/mismatches');
 } finally {

@@ -1,6 +1,7 @@
 'use strict';
 
 (function() {
+  var stockSpriteCalculateVertices = PIXI.Sprite.prototype.calculateVertices;
   var contracts = new WeakMap();
   var rendererReleases = [];
   function registerRenderContract(prototype, contract) {
@@ -45,7 +46,7 @@
     }
   });
   var schema = NativeHost.scene && NativeHost.scene.schema;
-  var requiredPacketVersion = 28;
+  var requiredPacketVersion = 29;
   var filterEncoders = [];
   globalThis.pmjsPixi5RegisterFilterEncoder = function(encoder) {
     filterEncoders.push(encoder);
@@ -206,6 +207,22 @@
 
   function localTransform(node) {
     var transform = node && node.transform;
+    if (skipTransformUpdate && transform && transform.worldTransform) {
+      var world = transform.worldTransform;
+      if (node === renderStage || !node.parent) return world;
+      var parent = node.parent.transform && node.parent.transform.worldTransform || identity;
+      var determinant = parent.a * parent.d - parent.b * parent.c;
+      if (!determinant) return { a: 0, b: 0, c: 0, d: 0, tx: 0, ty: 0 };
+      var x = world.tx - parent.tx, y = world.ty - parent.ty;
+      return {
+        a: (parent.d * world.a - parent.c * world.b) / determinant,
+        b: (parent.a * world.b - parent.b * world.a) / determinant,
+        c: (parent.d * world.c - parent.c * world.d) / determinant,
+        d: (parent.a * world.d - parent.b * world.c) / determinant,
+        tx: (parent.d * x - parent.c * y) / determinant,
+        ty: (parent.a * y - parent.b * x) / determinant
+      };
+    }
     if (transform && typeof transform.updateLocalTransform === 'function') {
       transform.updateLocalTransform();
     }
@@ -240,8 +257,13 @@
   var renderOwner;
   var viewport;
   var filterTargets;
+  var renderStage;
+  var skipTransformUpdate = false;
+  function visibleAlpha(node) {
+    return skipTransformUpdate && Number.isFinite(node.worldAlpha) ? node.worldAlpha : node.alpha;
+  }
   function needsFilterTarget(node) {
-    if (!node || !node.visible || !node.renderable || node.alpha <= 0) return false;
+    if (!node || !node.visible || !node.renderable || visibleAlpha(node) <= 0) return false;
     if (!drawableTransform(localTransform(node))) return false;
     if (filterTargets.has(node)) return filterTargets.get(node);
     var contract = findRenderContract(node) || {};
@@ -264,7 +286,7 @@
   }
 
   function writeNode(node, parent, clip) {
-    if (!node || !node.visible || !node.renderable || node.alpha <= 0) return;
+    if (!node || !node.visible || !node.renderable || visibleAlpha(node) <= 0) return;
     var transform = localTransform(node);
     if (!drawableTransform(transform)) return;
     var checkpoint = count;
@@ -343,6 +365,7 @@
     var destinationWidth = 0;
     var destinationHeight = 0;
     var tilingTextureInfo = null;
+    var authoredVertices = null;
 
     if (isTilingSprite) {
       texture = node.texture || node._texture;
@@ -385,10 +408,14 @@
         destinationHeight = node.height;
       }
     } else if (isSprite) {
+      if (node.calculateVertices !== stockSpriteCalculateVertices) {
+        node.calculateVertices();
+        authoredVertices = node.vertexData;
+      }
       texture = node.texture || node._texture;
       var base = texture && texture.baseTexture;
       var source = textureSource(base);
-      var native = nativeSource(source);
+      var native = texture && texture.valid !== false ? nativeSource(source) : null;
       frame = texture && (texture._frame || texture.frame);
       if (native && frame && frame.width > 0 && frame.height > 0) {
         kind = 1;
@@ -407,11 +434,16 @@
 
     var encodedNode = contract.encode && contract.encode(node, renderOwner);
     var alpha = Number.isFinite(node.alpha) ? node.alpha : 1;
+    if (skipTransformUpdate && Number.isFinite(node.worldAlpha)) {
+      var parentAlpha = node !== renderStage && node.parent && node.parent.worldAlpha;
+      alpha = node.worldAlpha / (Number.isFinite(parentAlpha) && parentAlpha !== 0 ? parentAlpha : 1);
+    }
     if (encodedNode) {
       kind = encodedNode.kind;
       resource = encodedNode.resource;
       if (encodedNode.tint !== undefined) tint = encodedNode.tint;
       if (encodedNode.alpha !== undefined) alpha = encodedNode.alpha;
+      if (encodedNode.alphaMultiplier !== undefined) alpha *= encodedNode.alphaMultiplier;
       if (encodedNode.sprite) {
         texture = encodedNode.sprite.texture;
         frame = texture.frame;
@@ -436,10 +468,10 @@
       var spriteIndex = index;
       var baseTexture = texture.baseTexture;
       var resolution = Math.max(0.000001, Number(baseTexture.resolution) || 1);
-      var vertices = encodedNode && encodedNode.sprite && encodedNode.sprite.vertices;
-      if (vertices || node.roundPixels || resolution !== 1 ||
+      var vertices = encodedNode && encodedNode.sprite && encodedNode.sprite.vertices || authoredVertices;
+      if (vertices || skipTransformUpdate || node.roundPixels || resolution !== 1 ||
           destinationWidth !== frame.width || destinationHeight !== frame.height) {
-        // World vertices preserve rounded/logical geometry; children keep the authored transform.
+        // World vertices preserve authored geometry; children keep the sprite transform.
         metadata[index * metadataStride] = 0;
         metadata[index * metadataStride + 2] = 0;
         spriteIndex = addRecord(index, 1, resource, tint, blendMode(node), identity, 1);
@@ -453,6 +485,14 @@
       }
       var valueOffset = spriteIndex * valueStride;
       var metadataOffset = spriteIndex * metadataStride;
+      if (!schema.floatSpriteUv) reject('render.sprite-uv', node);
+      metadata[metadataOffset + 5] |= 131072;
+      if (PIXI.WRAP_MODES && baseTexture.wrapMode !== undefined &&
+          baseTexture.wrapMode !== PIXI.WRAP_MODES.CLAMP && baseTexture.wrapMode !== PIXI.WRAP_MODES.REPEAT) reject('render.texture-wrap', node);
+      if (PIXI.WRAP_MODES && baseTexture.wrapMode === PIXI.WRAP_MODES.REPEAT) {
+        if (!schema.repeatSpriteSampling) reject('render.sprite-repeat', node);
+        metadata[metadataOffset + 5] |= 262144;
+      }
       var rotation = ((Number(texture.rotate) || 0) % 16 + 16) % 16;
       if (rotation % 2) reject('render.texture-rotation', node);
       metadata[metadataOffset + 5] |= rotation / 2 << 5;
@@ -510,13 +550,15 @@
     });
   }
 
-  function render(stage, backgroundColor, resolution, size, renderer) {
-    if (typeof stage.updateTransform === 'function') {
+  function render(stage, backgroundColor, resolution, size, renderer, skipUpdateTransform, projection) {
+    if (!skipUpdateTransform && typeof stage.updateTransform === 'function') {
       var previousParent = stage.parent;
       stage.parent = stage._tempDisplayObjectParent;
       try { stage.updateTransform(); } finally { stage.parent = previousParent; }
     }
     count = 0;
+    renderStage = stage;
+    skipTransformUpdate = !!skipUpdateTransform;
     filterTargets = new WeakMap();
     if (backgroundColor !== null) {
       addRecord(0xffffffff, 3, 0, backgroundColor, 0, identity, 1);
@@ -531,6 +573,7 @@
         { a: resolution, b: 0, c: 0, d: resolution, tx: 0, ty: 0 }, 1);
     }
     writeNode(stage, rootParent);
+    NativeHost.render.setSceneProjection(projection || [1, 0, 0, 1, 0, 0]);
     if (NativeHost.scene.submit(packetVersion, metadata, values, count) === false) {
       throw new Error('native Pixi 5 scene submission rejected');
     }

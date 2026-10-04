@@ -1,9 +1,21 @@
-function prepareNativeMvSceneNode(node) {
+function prepareNativeMvWindowTransforms(node) {
+  if (!node || !node.visible) return;
   if (typeof Window === 'function' && node instanceof Window) {
     node._updateCursor();
     node._updateArrows();
     node._updatePauseSign();
     node._updateContents();
+  }
+  var children = node.children || [];
+  for (var index = 0; index < children.length; index++) {
+    prepareNativeMvWindowTransforms(children[index]);
+  }
+}
+
+function prepareNativeMvSceneNode(node) {
+  if (typeof WindowLayer === 'function' && node instanceof WindowLayer &&
+      node.filterArea && typeof node.filterArea.copy === 'function') {
+    node.filterArea.copy(node);
   }
   if (typeof Tilemap === 'function' && node instanceof Tilemap) {
     var ox = node.roundPixels ? Math.floor(node.origin.x) : node.origin.x;

@@ -8,22 +8,18 @@ const vm = require('node:vm');
 
 const root = path.resolve(__dirname, '..');
 const source = [
+  'js/pmjs-web/events.js',
   'js/pmjs-web/canvas.js',
   'js/pmjs-web/elements.js'
 ].map(file => fs.readFileSync(path.join(root, file), 'utf8')).join('\n');
 
 function harness() {
   let handle = 0;
-  const calls = { drawImage: [], writePixels: 0 };
-  function EventTarget() {}
-  EventTarget.prototype.addEventListener = function() {};
-  EventTarget.prototype.removeEventListener = function() {};
-  EventTarget.prototype.dispatchEvent = function() {};
+  const calls = { drawImage: [], writePremultipliedPixels: 0 };
   const context = {
     console,
     pmjsGameConfig: {},
     nativeWindowState: { focused: true, visible: true },
-    EventTarget,
     NativeHost: {
       runtime: { env() { return ''; } },
       canvas: {
@@ -34,8 +30,8 @@ function harness() {
         clearRect() {},
         drawText() {},
         drawImage() { calls.drawImage.push(Array.from(arguments)); },
-        writePixels() { calls.writePixels++; },
-        readPixels(_handle, _x, _y, width, height) {
+        writePremultipliedPixels() { calls.writePremultipliedPixels++; },
+        readPremultipliedPixels(_handle, _x, _y, width, height) {
           return new Uint8ClampedArray(width * height * 4);
         },
         measureText() { return 1; },
@@ -107,7 +103,7 @@ test('reflected image draws use the affine path', () => {
   drawing.translate(2, 0);
   drawing.scale(-1, 1);
   drawing.drawImage(image, 0, 0);
-  assert.ok(context.calls.writePixels > 0,
+  assert.ok(context.calls.writePremultipliedPixels > 0,
     'reflection must be rasterized through affine sampling');
 });
 
@@ -132,7 +128,7 @@ test('image draws ignore non-finite arguments across overloads and transforms', 
     }
   }
   assert.equal(context.calls.drawImage.length, 0);
-  assert.equal(context.calls.writePixels, 0);
+  assert.equal(context.calls.writePremultipliedPixels, 0);
   drawing.resetTransform();
   drawing.drawImage(image, 160, 160, 32, 32, 2, 2, 32, 32);
   assert.equal(context.calls.drawImage.length, 1);
@@ -297,7 +293,7 @@ for (const reflected of [false, true]) {
     const target = new ctx.CanvasElement(); target.width = 2; target.height = 2;
     const drawing = target.getContext('2d');
     const reads = []; let output;
-    ctx.NativeHost.canvas.readPixels = function(resource, x, y, width, height) {
+    ctx.NativeHost.canvas.readPremultipliedPixels = function(resource, x, y, width, height) {
       reads.push({ resource, x, y, width, height });
       const pixels = new Uint8ClampedArray(width * height * 4);
       if (resource === handle) {
@@ -306,7 +302,7 @@ for (const reflected of [false, true]) {
       }
       return pixels;
     };
-    ctx.NativeHost.canvas.writePixels = function(_handle, _x, _y, _width, _height, pixels) {
+    ctx.NativeHost.canvas.writePremultipliedPixels = function(_handle, _x, _y, _width, _height, pixels) {
       output = Array.from(pixels);
     };
     drawing.beginPath(); drawing.rect(0, 0, 2, 2); drawing.clip();
@@ -325,13 +321,13 @@ test('fully out-of-range Canvas image crops leave the destination unchanged', ()
   const sourceHandle = source._ensureNativeCanvas().handle;
   const target = new ctx.CanvasElement(); target.width = 2; target.height = 2;
   let output;
-  ctx.NativeHost.canvas.readPixels = function(handle, x, y, width, height) {
+  ctx.NativeHost.canvas.readPremultipliedPixels = function(handle, x, y, width, height) {
     assert.ok(x >= 0 && y >= 0 && width > 0 && height > 0);
     const pixels = new Uint8ClampedArray(width * height * 4);
     if (handle === sourceHandle) pixels.set([99, 88, 77, 255]);
     return pixels;
   };
-  ctx.NativeHost.canvas.writePixels = function(_handle, _x, _y, _w, _h, pixels) { output = Array.from(pixels); };
+  ctx.NativeHost.canvas.writePremultipliedPixels = function(_handle, _x, _y, _w, _h, pixels) { output = Array.from(pixels); };
   const drawing = target.getContext('2d');
   drawing.beginPath(); drawing.rect(0, 0, 2, 2); drawing.clip();
   drawing.drawImage(source, -10, -10, 2, 2, 0, 0, 2, 2);
@@ -348,12 +344,12 @@ for (const clipped of [false, true]) {
     const target = new ctx.CanvasElement(); target.width = target.height = 4;
     const drawing = target.getContext('2d');
     let written;
-    ctx.NativeHost.canvas.readPixels = (handle, x, y, width, height) => {
+    ctx.NativeHost.canvas.readPremultipliedPixels = (handle, x, y, width, height) => {
       const pixels = new Uint8ClampedArray(width * height * 4);
       if (handle === sourceHandle) pixels.fill(255);
       return pixels;
     };
-    ctx.NativeHost.canvas.writePixels = (_handle, x, y, width, height, pixels) => {
+    ctx.NativeHost.canvas.writePremultipliedPixels = (_handle, x, y, width, height, pixels) => {
       written = { x, y, width, height, pixels: Array.from(pixels) };
     };
     if (clipped) { drawing.beginPath(); drawing.rect(0, 0, 4, 4); drawing.clip(); }

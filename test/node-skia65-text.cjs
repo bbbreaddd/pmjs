@@ -33,7 +33,7 @@ for (const item of fixture.cases) for (const layer of ['fill', 'outline', 'full'
     if (layer !== 'fill') native.canvas.drawText(canvas.handle, item.fontFiles, item.text, x, item.y, item.size, item.outline, item.stroke, style);
     if (layer !== 'outline') native.canvas.drawText(canvas.handle, item.fontFiles, item.text, x, item.y, item.size,
       ((item.fill & 0xffffff00) | Math.round((item.fill & 255) * item.alpha)) >>> 0, 0, style);
-    const pixels = premul(native.canvas.readPixels(canvas.handle, 0, 0, item.width, item.height));
+    const pixels = Buffer.from(native.canvas.readPremultipliedPixels(canvas.handle, 0, 0, item.width, item.height));
     const expected = Buffer.from(reference.pixels, 'base64');
     if (!realized && layer === 'fill' && item.background === 0) {
       let left = item.width, top = item.height, right = 0, bottom = 0;
@@ -43,7 +43,7 @@ for (const item of fixture.cases) for (const layer of ['fill', 'outline', 'full'
       }
       inkBounds.push({ name: item.name, bounds: right ? [left, top, right, bottom] : null });
     }
-    const repeated = premul(native.canvas.readPixels(canvas.handle, 0, 0, item.width, item.height));
+    const repeated = Buffer.from(native.canvas.readPremultipliedPixels(canvas.handle, 0, 0, item.width, item.height));
     assert.deepEqual(pixels, repeated, 'Frozen Canvas pixels changed');
     let differingPixels = 0, maxDelta = 0;
     for (let i = 0; i < pixels.length; i += 4) {

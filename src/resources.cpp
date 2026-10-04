@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <setjmp.h>
 #include <vector>
+#include <stdexcept>
 
 #include <GLES3/gl3.h>
 #include <jpeglib.h>
@@ -193,6 +194,7 @@ ImageStore::~ImageStore() {
   for (auto& slot : slots_) {
     if (slot.live) {
       clearPremultipliedTexture(slot);
+      ++textureEpoch_;
       glDeleteTextures(1, &slot.texture);
     }
   }
@@ -387,6 +389,7 @@ std::optional<ImageInfo> ImageStore::createRgba(int width, int height,
     return std::nullopt;
   }
   ++textureCreates_;
+  ++textureEpoch_;
   if (pixels) {
     textureUploadBytes_ += static_cast<std::uint64_t>(width) *
         static_cast<std::uint64_t>(height) * 4U;
@@ -401,6 +404,8 @@ std::optional<ImageInfo> ImageStore::createRgba(int width, int height,
   if (index == slots_.size()) slots_.emplace_back();
   auto& slot = slots_[index];
   slot.texture = texture;
+  slot.mipmapsReady = slot.premultipliedMipmapsReady = false;
+  slot.mipmapBytes = slot.premultipliedMipmapBytes = 0;
   slot.width = width;
   slot.height = height;
   slot.references = 1;
@@ -441,6 +446,7 @@ std::size_t ImageStore::residentBytes(const Slot& slot) {
   return static_cast<std::size_t>(slot.width) *
       static_cast<std::size_t>(slot.height) * 4U *
       (slot.premultipliedTexture && slot.premultipliedTexture != slot.texture ? 2U : 1U) +
+      slot.mipmapBytes + slot.premultipliedMipmapBytes +
       (slot.cachedPixels ? slot.cachedPixels->rgba.capacity() : 0U);
 }
 
@@ -497,7 +503,8 @@ std::vector<ImageMemoryEntry> ImageStore::memoryEntries() const {
     result.push_back({makeHandle(index, slot.generation), slot.width, slot.height,
       slot.references, slot.inFlight.load(std::memory_order_acquire), slot.pins,
       static_cast<std::size_t>(slot.width) * slot.height * 4U *
-        (slot.premultipliedTexture && slot.premultipliedTexture != slot.texture ? 2U : 1U),
+        (slot.premultipliedTexture && slot.premultipliedTexture != slot.texture ? 2U : 1U) +
+        slot.mipmapBytes + slot.premultipliedMipmapBytes,
       slot.cachedPixels ? slot.cachedPixels->rgba.capacity() : 0U,
       slot.lastUsedSerial,
       slot.references == 0 && slot.pins == 0 &&
@@ -518,6 +525,7 @@ bool ImageStore::updateRgba(ImageHandle handle, const void* pixels) {
                   GL_RGBA, GL_UNSIGNED_BYTE, pixels);
   const bool ok = glGetError() == GL_NO_ERROR;
   if (ok) {
+    slots_[(handle & indexMask) - 1U].mipmapsReady = false;
     clearPremultipliedTexture(slots_[(handle & indexMask) - 1U]);
     ++textureFullUpdates_;
     textureUploadBytes_ += static_cast<std::uint64_t>(info->width) *
@@ -542,6 +550,7 @@ bool ImageStore::updateRgbaRegion(ImageHandle handle, int x, int y, int width,
   glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
   const bool ok = glGetError() == GL_NO_ERROR;
   if (ok) {
+    slots_[(handle & indexMask) - 1U].mipmapsReady = false;
     clearPremultipliedTexture(slots_[(handle & indexMask) - 1U]);
     ++textureRegionUpdates_;
     textureUploadBytes_ += static_cast<std::uint64_t>(width) *
@@ -611,6 +620,7 @@ std::optional<ImageInfo> ImageStore::lookupPremultiplied(ImageHandle handle) {
       }
       slot.premultipliedTexture = texture;
       ++textureCreates_;
+      ++textureEpoch_;
       textureUploadBytes_ += pixels->rgba.size();
       gpuBytes_ += pixels->rgba.size();
       peakGpuBytes_ = std::max(peakGpuBytes_, gpuBytes_);
@@ -621,8 +631,36 @@ std::optional<ImageInfo> ImageStore::lookupPremultiplied(ImageHandle handle) {
   return info;
 }
 
+bool ImageStore::ensureMipmaps(ImageHandle handle, bool premultiplied) {
+  const auto info = premultiplied ? lookupPremultiplied(handle) : lookup(handle);
+  if (!info || (info->width & (info->width - 1)) || (info->height & (info->height - 1))) return false;
+  auto& slot = slots_[(handle & indexMask) - 1U];
+  const bool separate = info->texture != slot.texture;
+  auto& ready = separate ? slot.premultipliedMipmapsReady : slot.mipmapsReady;
+  auto& bytes = separate ? slot.premultipliedMipmapBytes : slot.mipmapBytes;
+  if (ready && !slot.renderTarget) return true;
+  while (glGetError() != GL_NO_ERROR) {}
+  glBindTexture(GL_TEXTURE_2D, info->texture);
+  glGenerateMipmap(GL_TEXTURE_2D);
+  if (glGetError() != GL_NO_ERROR) throw std::runtime_error("cannot generate image mipmaps");
+  if (!bytes) {
+    for (int w = info->width, h = info->height; w > 1 || h > 1;) {
+      w = std::max(1, w / 2); h = std::max(1, h / 2);
+      bytes += static_cast<std::size_t>(w) * h * 4U;
+    }
+    gpuBytes_ += bytes;
+    peakGpuBytes_ = std::max(peakGpuBytes_, gpuBytes_);
+  }
+  ready = true;
+  return true;
+}
+
 void ImageStore::clearPremultipliedTexture(Slot& slot) {
+  gpuBytes_ -= slot.premultipliedMipmapBytes;
+  slot.premultipliedMipmapBytes = 0;
+  slot.premultipliedMipmapsReady = false;
   if (slot.premultipliedTexture && slot.premultipliedTexture != slot.texture) {
+    ++textureEpoch_;
     glDeleteTextures(1, &slot.premultipliedTexture);
     gpuBytes_ -= static_cast<std::size_t>(slot.width) * slot.height * 4U;
   }
@@ -670,7 +708,10 @@ void ImageStore::destroySlot(std::size_t index) {
   auto& slot = slots_[index];
   clearPremultipliedTexture(slot);
   if (!slot.cacheKey.empty()) pathCache_.erase(slot.cacheKey);
+  ++textureEpoch_;
   glDeleteTextures(1, &slot.texture);
+  gpuBytes_ -= slot.mipmapBytes;
+  slot.mipmapBytes = 0;
   gpuBytes_ -= static_cast<std::size_t>(slot.width) *
                static_cast<std::size_t>(slot.height) * 4U;
   slot.texture = 0;

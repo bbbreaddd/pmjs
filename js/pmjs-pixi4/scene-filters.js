@@ -40,7 +40,10 @@ function nativeRecordCustomFilter(filter, node, filters) {
   var resolution = filter.resolution === undefined ? 1 : Number(filter.resolution);
   var padding = filter.padding === undefined ? 4 : Number(filter.padding) | 0;
   if (!Number.isFinite(resolution) || resolution <= 0 || resolution > 16 || padding < 0) return null;
-  var bounds = node.filterArea || (node.getBounds && node.getBounds(true));
+  // The packet writer normally computes transforms without updating Pixi's
+  // world state. Authored filters still need current upstream world bounds.
+  var bounds = node.filterArea || (node.getBounds && node.getBounds(
+    typeof nativeSceneUsePixiWorldState !== 'undefined' && nativeSceneUsePixiWorldState));
   if (!bounds) return null;
   var frame = { x: (bounds.x * resolution | 0) / resolution,
     y: (bounds.y * resolution | 0) / resolution,
@@ -48,19 +51,24 @@ function nativeRecordCustomFilter(filter, node, filters) {
     height: (bounds.height * resolution | 0) / resolution };
   var screenWidth = Number(globalThis.Graphics && (Graphics.width || Graphics._width)) || 816;
   var screenHeight = Number(globalThis.Graphics && (Graphics.height || Graphics._height)) || 624;
-  if (filter.autoFit !== false) {
+  var fullScreen = Number(String(PIXI.VERSION || '4.5').split('.')[1]) >= 8 &&
+    node.filterArea && bounds.x === 0 && bounds.y === 0 &&
+    bounds.width === screenWidth && bounds.height === screenHeight;
+  if (!fullScreen && filter.autoFit !== false) {
     var right = Math.min(screenWidth, frame.x + frame.width);
     var bottom = Math.min(screenHeight, frame.y + frame.height);
     frame.x = Math.max(0, frame.x); frame.y = Math.max(0, frame.y);
     frame.width = Math.max(0, right - frame.x); frame.height = Math.max(0, bottom - frame.y);
   }
-  frame.x -= padding; frame.y -= padding;
-  frame.width += padding * 2; frame.height += padding * 2;
+  if (!fullScreen) {
+    frame.x -= padding; frame.y -= padding;
+    frame.width += padding * 2; frame.height += padding * 2;
+  }
   var plan = { frame: [frame.x, frame.y, frame.width, frame.height],
     resolutions: [resolution, 1], passes: [] };
   var targets = [], pool = [];
   function target(index, targetResolution) {
-    function pot(value) { var size = 1; while (size < value) size *= 2; return size; }
+    function pot(value) { value = Math.max(1, value | 0); var size = 1; while (size < value) size *= 2; return size; }
     var result = { _nativeFilterTarget: index, resolution: targetResolution,
       size: { width: pot(frame.width * targetResolution) / targetResolution,
         height: pot(frame.height * targetResolution) / targetResolution },
@@ -74,7 +82,8 @@ function nativeRecordCustomFilter(filter, node, filters) {
     renderTarget: input, resolution: resolution, target: node, filters: [filter] };
   var manager = {
     filterData: { index: 1, stack: [null, state] },
-    renderer: { resolution: 1, width: screenWidth, height: screenHeight, screen: { x: 0, y: 0, width: screenWidth, height: screenHeight } },
+    renderer: globalThis.Graphics && Graphics._renderer ||
+      { resolution: 1, width: screenWidth, height: screenHeight, screen: { x: 0, y: 0, width: screenWidth, height: screenHeight } },
     currentState: function() { return state; },
     getRenderTarget: function(clear, requestedResolution) {
       var requested = Number(requestedResolution) || resolution;
@@ -121,7 +130,9 @@ function nativeRecordCustomFilter(filter, node, filters) {
               var base = texture && texture.baseTexture;
               var image = base && nativeTextureSource(base.source);
               if (!image || !image.handle) throw new Error('filter sampler has no native image');
-              pass.samplers.push({ image: image.handle, target: 0, nearest: base.scaleMode === PIXI.SCALE_MODES.NEAREST });
+              pass.samplers.push({ image: image.handle, target: 0, nearest: base.scaleMode === PIXI.SCALE_MODES.NEAREST,
+                mipmap: !!base.mipmap, wrap: base.wrapMode === 1 ? 10497 :
+                  base.wrapMode === 2 ? 33648 : 33071 });
             }
           }
           continue;
@@ -163,12 +174,14 @@ function nativeRecordCustomFilter(filter, node, filters) {
 
 var nativeCoreFilterContracts = [];
 ['ColorMatrixFilter', 'AlphaFilter', 'BlurFilter', 'BlurXFilter', 'BlurYFilter',
-  'NoiseFilter', 'FXAAFilter'].forEach(function(name) {
+  'FXAAFilter'].forEach(function(name) {
   var Constructor = PIXI.filters && PIXI.filters[name];
   if (typeof Constructor !== 'function') return;
   var instance = new Constructor();
   if (instance.fragmentSrc) nativeCoreFilterContracts.push({ Constructor: Constructor,
-    vertex: instance.vertexSrc, fragment: instance.fragmentSrc, apply: instance.apply });
+    vertex: instance.vertexSrc, fragment: instance.fragmentSrc, apply: instance.apply,
+    resolution: instance.resolution, padding: instance.padding, autoFit: instance.autoFit,
+    blendMode: instance.blendMode });
 });
 
 function nativeFilterNeedsAuthoredProgram(filter) {
@@ -177,7 +190,9 @@ function nativeFilterNeedsAuthoredProgram(filter) {
     var contract = nativeCoreFilterContracts[index];
     if (filter.constructor === contract.Constructor) {
       return filter.vertexSrc !== contract.vertex || filter.fragmentSrc !== contract.fragment ||
-        filter.apply !== contract.apply;
+        filter.apply !== contract.apply || filter.resolution !== contract.resolution ||
+        filter.padding !== contract.padding || filter.autoFit !== contract.autoFit ||
+        filter.blendMode !== contract.blendMode;
     }
   }
   return true;
@@ -201,7 +216,8 @@ function nativeSceneFilter(node, activeFilters) {
   }
   if (typeof NativeHost.render.createFilterPlan === 'function' &&
       activeFilters.some(function(filter) {
-        return filter && filter.enabled !== false && nativeFilterNeedsAuthoredProgram(filter);
+        return filter && filter.enabled !== false && filter.fragmentSrc &&
+          (node.filterArea || nativeFilterNeedsAuthoredProgram(filter));
       })) {
     var actualFilters = activeFilters.filter(function(filter) { return filter && filter.enabled !== false; });
     if (actualFilters.length) {

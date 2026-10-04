@@ -16,8 +16,9 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, std::uint32_t 
   const auto pot = [this](float value) {
     if (!std::isfinite(value) || value > maxTextureSize_)
       throw std::invalid_argument("custom filter target exceeds texture size");
+    const int size = std::max(1, static_cast<int>(value));
     int result = 1;
-    while (result < value) result *= 2;
+    while (result < size) result *= 2;
     if (result > maxTextureSize_) throw std::invalid_argument("custom filter target exceeds texture size");
     return result;
   };
@@ -37,11 +38,11 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, std::uint32_t 
   const float resolution = plan.resolutions[0];
   glBindFramebuffer(GL_READ_FRAMEBUFFER, source);
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, input.framebuffer);
-  const int sourceWidth = std::lround(frame[2] * sourceResolution);
-  const int sourceHeight = std::lround(frame[3] * sourceResolution);
+  const int sourceWidth = static_cast<int>(frame[2] * sourceResolution);
+  const int sourceHeight = static_cast<int>(frame[3] * sourceResolution);
   if (sourceWidth > 0 && sourceHeight > 0) {
     glBlitFramebuffer(0, 0, sourceWidth, sourceHeight, 0, 0,
-      std::lround(frame[2] * resolution), std::lround(frame[3] * resolution),
+      static_cast<int>(frame[2] * resolution), static_cast<int>(frame[3] * resolution),
       GL_COLOR_BUFFER_BIT, GL_NEAREST);
   }
   if (!customFilterVertexArray_) {
@@ -70,8 +71,8 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, std::uint32_t 
     const float targetWidth = final ? outputFrame[2] : frame[2];
     const float targetHeight = final ? outputFrame[3] : frame[3];
     glBindFramebuffer(GL_FRAMEBUFFER, final ? output : target.framebuffer);
-    glViewport(0, 0, final ? std::lround(outputFrame[2] * outputResolution) : static_cast<int>(frame[2] * plan.resolutions[pass.output]),
-      final ? std::lround(outputFrame[3] * outputResolution) : static_cast<int>(frame[3] * plan.resolutions[pass.output]));
+    glViewport(0, 0, final ? static_cast<int>(outputFrame[2] * outputResolution) : static_cast<int>(frame[2] * plan.resolutions[pass.output]),
+      final ? static_cast<int>(outputFrame[3] * outputResolution) : static_cast<int>(frame[3] * plan.resolutions[pass.output]));
     glDisable(GL_SCISSOR_TEST);
     if (pass.clear) { glClearColor(0, 0, 0, 0); glClear(GL_COLOR_BUFFER_BIT); }
     if (final && command.clipped) {
@@ -84,7 +85,13 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, std::uint32_t 
     glUseProgram(custom.program);
     const bool yDown = !final || outputYDown;
     const float sx = 2.0F / targetWidth, sy = (yDown ? 2.0F : -2.0F) / targetHeight;
-    const auto& transform = pass.transform;
+    const auto& local = pass.transform;
+    const auto& parent = sceneProjection_;
+    const std::array<float, 6> transform{
+      parent[0] * local[0] + parent[2] * local[1], parent[1] * local[0] + parent[3] * local[1],
+      parent[0] * local[2] + parent[2] * local[3], parent[1] * local[2] + parent[3] * local[3],
+      parent[0] * local[4] + parent[2] * local[5] + parent[4],
+      parent[1] * local[4] + parent[3] * local[5] + parent[5]};
     const std::array<float, 9> projection{sx * transform[0], sy * transform[1], 0,
       sx * transform[2], sy * transform[3], 0,
       -1.0F - (final ? outputFrame[0] * sx : frame[0] * sx) + sx * transform[4],
@@ -107,14 +114,23 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, std::uint32_t 
         std::vector<GLint> units;
         for (int index = 0; index < uniform.count; ++index) {
           const auto& sampler = pass.samplers[samplerOffset++];
+          glActiveTexture(GL_TEXTURE0);
           const auto image = sampler.image ? images_.lookupPremultiplied(sampler.image) : std::optional<ImageInfo>{};
           if (sampler.image && !image) throw std::runtime_error("filter sampler image expired");
           const auto texture = image ? image->texture : customPassTargets_[sampler.target].texture;
           glActiveTexture(GL_TEXTURE0 + unit);
           glBindTexture(GL_TEXTURE_2D, texture);
-          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, sampler.nearest ? GL_NEAREST : GL_LINEAR);
+          const bool mipmap = sampler.mipmap && sampler.image && images_.ensureMipmaps(sampler.image, true);
+          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, mipmap ?
+            (sampler.nearest ? GL_NEAREST_MIPMAP_NEAREST : GL_LINEAR_MIPMAP_LINEAR) :
+            (sampler.nearest ? GL_NEAREST : GL_LINEAR));
+          const bool potImage = image && !(image->width & (image->width - 1)) && !(image->height & (image->height - 1));
+          const auto wrap = potImage ? sampler.wrap : static_cast<std::uint32_t>(GL_CLAMP_TO_EDGE);
+          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
+          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
+          textureRepeatState_.erase(texture);
           glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, sampler.nearest ? GL_NEAREST : GL_LINEAR);
-          textureNearestState_[texture] = sampler.nearest;
+          textureNearestState_.erase(texture);
           units.push_back(unit++);
         }
         glUniform1iv(uniform.location, uniform.count, units.data());
@@ -159,7 +175,7 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, std::uint32_t 
     if (diagnostics_) { ++stats_.drawCalls; ++stats_.filterDrawCalls; }
   }
   glBindFramebuffer(GL_FRAMEBUFFER, output);
-  glViewport(0, 0, std::lround(outputFrame[2] * outputResolution), std::lround(outputFrame[3] * outputResolution));
+  glViewport(0, 0, static_cast<int>(outputFrame[2] * outputResolution), static_cast<int>(outputFrame[3] * outputResolution));
   glBindVertexArray(vertexArray_);
   glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer_);
   glActiveTexture(GL_TEXTURE0);

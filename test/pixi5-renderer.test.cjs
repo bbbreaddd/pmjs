@@ -47,10 +47,11 @@ test('Pixi 5 scene encoder reads resource.source and submits sprites', () => {
   runModule(fixture.context, 'js/pmjs-pixi5/scene.js');
   runModule(fixture.context, 'js/pmjs-pixi5/renderer.js');
   const app = new fixture.context.PIXI.Application({ width: 100, height: 50 });
+  fixture.context.PIXI.WRAP_MODES = { CLAMP: 0, REPEAT: 1, MIRRORED_REPEAT: 2 };
   const texture = {
     baseTexture: {
       resource: { source: { _nativeImage: { handle: 42 } } },
-      resolution: 1,
+      resolution: 1, wrapMode: 1,
       scaleMode: fixture.context.PIXI.SCALE_MODES.NEAREST,
     },
     frame: { x: 4, y: 6, width: 20, height: 10 },
@@ -67,11 +68,13 @@ test('Pixi 5 scene encoder reads resource.source and submits sprites', () => {
 
   assert.equal(fixture.submissions.length, 1);
   const packet = fixture.submissions[0];
-  assert.equal(packet.version, 28);
+  assert.equal(packet.version, 29);
   assert.equal(packet.count, 3, 'background, stage container, sprite');
   assert.equal(packet.metadata[2 * 7], 1);
   assert.equal(packet.metadata[2 * 7 + 2], 42);
   assert.equal(packet.metadata[2 * 7 + 5] & 8, 8);
+  assert.equal(packet.metadata[2 * 7 + 5] & 131072, 131072, 'Pixi 5 preserves float UVs');
+  assert.equal(packet.metadata[2 * 7 + 5] & 262144, 262144, 'ordinary sprites preserve repeating sampling');
   assert.equal(packet.values[2 * 41 + 4], 12);
   assert.equal(packet.values[2 * 41 + 5], 8);
   assert.equal(packet.values[2 * 41 + 7], -10);
@@ -80,6 +83,9 @@ test('Pixi 5 scene encoder reads resource.source and submits sprites', () => {
   assert.equal(packet.values[2 * 41 + 10], 6);
   assert.equal(packet.values[2 * 41 + 11], 20);
   assert.equal(packet.values[2 * 41 + 12], 10);
+  texture.baseTexture.wrapMode = 2;
+  assert.throws(() => app.render(), /render.texture-wrap/);
+  assert.equal(fixture.submissions.length, 1, 'unknown wrapping rejects before submission');
 });
 
 test('Pixi 5 scene encoder accepts an unrealized BaseTexture resource', () => {
@@ -99,6 +105,64 @@ test('Pixi 5 scene encoder accepts an unrealized BaseTexture resource', () => {
   assert.doesNotThrow(() => app.render());
   assert.equal(fixture.submissions[0].count, 3);
   assert.equal(fixture.submissions[0].metadata[2 * 7], 0);
+});
+
+test('invalid sprite textures retain children and resume drawing when ready', () => {
+  const fixture = createContext(), c = fixture.context;
+  runModule(c, 'js/pmjs-pixi5/scene.js');
+  runModule(c, 'js/pmjs-pixi5/renderer.js');
+  let realizations = 0;
+  const texture = {
+    valid: false,
+    baseTexture: { resource: { source: { _ensureNativeCanvas() {
+      assert.equal(texture.valid, true, 'invalid backing must not be realized');
+      realizations++; return { handle: 42 };
+    } } } },
+    frame: { x: 0, y: 0, width: 8, height: 8 },
+  };
+  const parent = new c.PIXI.Sprite(texture);
+  parent.addChild(new c.PIXI.Sprite({
+    baseTexture: { resource: { source: { _nativeImage: { handle: 43 } } } },
+    frame: { x: 0, y: 0, width: 4, height: 4 },
+  }));
+  const renderer = new c.PIXI.Renderer({ transparent: true });
+  for (const ready of [false, true, false, true]) {
+    texture.valid = ready; renderer.render(parent);
+    const packet = fixture.submissions.at(-1);
+    assert.equal(packet.metadata[0], ready ? 1 : 0);
+    assert.equal(packet.metadata[7], 1, 'child remains drawable');
+    assert.equal(packet.metadata[9], 43);
+  }
+  assert.equal(realizations, 2);
+});
+
+test('unrounded sprites honor authored vertex preparation without moving children', () => {
+  const fixture = createContext(), c = fixture.context;
+  c.PIXI.Sprite.prototype.calculateVertices = function() {};
+  runModule(c, 'js/pmjs-pixi5/scene.js');
+  runModule(c, 'js/pmjs-pixi5/renderer.js');
+  const texture = { baseTexture: { resource: { source: { _nativeImage: { handle: 42 } } } },
+    frame: { x: 0, y: 0, width: 8, height: 8 } };
+  const parent = new c.PIXI.Sprite(texture), child = new c.PIXI.Sprite(texture);
+  parent.transform.localTransform.tx = 4; child.transform.localTransform.ty = 8;
+  parent.addChild(child);
+  let calls = 0;
+  parent.calculateVertices = function() {
+    calls++; this.vertexData = Float32Array.of(20, 4, 28, 4, 28, 12, 20, 12);
+  };
+  const renderer = new c.PIXI.Renderer({ transparent: true });
+  renderer.render(parent);
+  assert.equal(calls, 1);
+  const packet = fixture.submissions[0];
+  assert.equal(packet.values[4], 4, 'parent keeps its local transform');
+  assert.equal(packet.metadata[12] & 4096, 4096);
+  assert.deepEqual(Array.from(packet.values.slice(41, 47)), [20, 4, 28, 4, 28, 12]);
+  assert.equal(packet.metadata[14], 1, 'child draws as a regular sprite');
+  assert.equal(packet.metadata[15], 0, 'child belongs to the authored parent');
+  assert.equal(packet.values[82 + 5], 8);
+  parent.calculateVertices = () => { throw Error('authored vertex failure'); };
+  assert.throws(() => renderer.render(parent), /authored vertex failure/);
+  assert.equal(fixture.submissions.length, 1, 'failed preparation submits no partial scene');
 });
 
 test('rounded Pixi 5 sprites prepare world vertices while children retain local transforms', () => {
@@ -144,7 +208,7 @@ test('rounded Pixi 5 sprites prepare world vertices while children retain local 
 
   sprite.roundPixels = false;
   renderer.render(sprite);
-  assert.equal(preparations, 1, 'unrounded sprites retain the existing encoding');
+  assert.equal(preparations, 2, 'unrounded sprites retain authored preparation');
   sprite.roundPixels = true;
   sprite.calculateVertices = () => { throw Error('authored vertex failure'); };
   assert.throws(() => renderer.render(sprite), /authored vertex failure/);
@@ -657,4 +721,52 @@ test('production Pixi 5 rendering leaves authored errors and native submission e
   c.NativeHost.scene.submit = () => false;
   assert.throws(() => app.render(), /scene submission rejected/);
   assert.equal(c.PMJS.compat.count('render.'), 0);
+});
+
+test('RenderTexture images remain usable until replacement, resize, or disposal', () => {
+  const fixture = createContext(), c = fixture.context;
+  runModule(c, 'js/pmjs-pixi5/scene.js');
+  runModule(c, 'js/pmjs-pixi5/renderer.js');
+  const renderer = new c.PIXI.Renderer({ transparent: true });
+  const callbacks = {}, released = [], captures = [];
+  let nextImage = 50;
+  c.NativeHost.images.release = handle => released.push(handle);
+  c.NativeHost.render.renderToCanvas = (canvas, clear, retain, previous) => {
+    captures.push({ clear, retain, previous });
+    return { handle: nextImage++ };
+  };
+  const base = { width: 8, height: 8, resolution: 1,
+    once(name, callback) { callbacks[name] = callback; } };
+  const target = { baseTexture: base, frame: { x: 0, y: 0, width: 8, height: 8 },
+    orig: { width: 8, height: 8 } };
+  renderer.render(new c.PIXI.Container(), target);
+  const backing = base.__pmjsPixi5RenderCanvas;
+  const retained = new c.PIXI.Sprite(target);
+  renderer.render(retained);
+  assert.equal(fixture.submissions.at(-1).metadata[2], 50);
+  renderer.render(new c.PIXI.Container());
+  renderer.render(retained);
+  assert.equal(fixture.submissions.at(-1).metadata[2], 50,
+    'removal from the scene must not release a retained texture');
+  assert.deepEqual(released, []);
+  renderer.render(new c.PIXI.Container(), target, false);
+  assert.deepEqual(captures[1], { clear: false, retain: true, previous: 50 });
+  assert.deepEqual(released, [50]);
+  renderer.render(retained);
+  assert.equal(fixture.submissions.at(-1).metadata[2], 51);
+  const renderToCanvas = c.NativeHost.render.renderToCanvas;
+  c.NativeHost.render.renderToCanvas = () => { throw Error('capture failed'); };
+  assert.throws(() => renderer.render(new c.PIXI.Container(), target), /capture failed/);
+  assert.deepEqual(released, [50], 'a failed replacement retains the last good image');
+  c.NativeHost.render.renderToCanvas = renderToCanvas;
+  renderer.render(retained);
+  assert.equal(fixture.submissions.at(-1).metadata[2], 51);
+  base.width = 16;
+  renderer.render(new c.PIXI.Container(), target, false);
+  assert.equal(captures[2].previous, 0, 'a resized target cannot reuse old-size pixels');
+  assert.deepEqual(released, [50, 51]);
+  callbacks.dispose();
+  assert.deepEqual(released, [50, 51, 52]);
+  assert.equal(backing.released, true);
+  assert.equal(base.__pmjsPixi5RenderCanvas, undefined);
 });

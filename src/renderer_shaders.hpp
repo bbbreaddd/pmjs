@@ -67,7 +67,7 @@ constexpr const char* vertexSource = R"(#version 300 es
   layout(location = 2) in vec4 color;
   layout(location = 3) in vec4 uvClamp;
   uniform bool targetYDown;
-  uniform highp vec4 targetProjection;
+  uniform highp mat3 targetProjection;
   uniform bool spriteWorldVertices;
   uniform mat3 spriteProjection;
   out vec2 vertexUv;
@@ -77,7 +77,7 @@ constexpr const char* vertexSource = R"(#version 300 es
   void main() {
     gl_Position = vec4(spriteWorldVertices ? (spriteProjection * vec3(position, 1.0)).xy : position, 0.0, 1.0);
     if (targetYDown && !spriteWorldVertices) gl_Position.y = -gl_Position.y;
-    gl_Position.xy = gl_Position.xy * targetProjection.xy + targetProjection.zw;
+    if (!spriteWorldVertices) gl_Position.xy = (targetProjection * vec3(gl_Position.xy, 1.0)).xy;
     vertexUv = uv;
     filterCoord = vec2(uv.x, 1.0 - uv.y);
     vertexColor = color;
@@ -107,7 +107,6 @@ constexpr const char* fragmentSource = R"(#version 300 es
   uniform vec4 maskFrame;
   uniform vec2 maskTextureSize;
   uniform bool targetYDown;
-  uniform highp vec4 targetProjection;
   uniform float screenHeight;
   uniform float maskAlpha;
   uniform bool maskUsesRed;
@@ -977,7 +976,7 @@ constexpr const char* tileVertexSource = R"(#version 300 es
   layout(location = 2) in vec2 animationFactor;
   uniform mat3 world;
   uniform bool targetYDown;
-  uniform highp vec4 targetProjection;
+  uniform highp mat3 targetProjection;
   uniform vec2 screenSize;
   uniform vec2 animationOffset;
   uniform vec2 imageDimensions;
@@ -988,7 +987,7 @@ constexpr const char* tileVertexSource = R"(#version 300 es
     gl_Position = vec4(pixel.x / screenSize.x * 2.0 - 1.0,
                        1.0 - pixel.y / screenSize.y * 2.0, 0.0, 1.0);
     if (targetYDown) gl_Position.y = -gl_Position.y;
-    gl_Position.xy = gl_Position.xy * targetProjection.xy + targetProjection.zw;
+    gl_Position.xy = (targetProjection * vec3(gl_Position.xy, 1.0)).xy;
     meshLocalPosition = localPosition;
     vertexUv = (sourcePixel + animationFactor * animationOffset) / imageDimensions;
   }
@@ -1099,6 +1098,7 @@ constexpr const char* spriteEffectFragmentSource = R"(#version 300 es
   uniform bool texturePremultiplied;
   uniform bool clampedTilingSampling;
   uniform bool nearestSampling;
+  uniform bool standaloneBitmapRegion;
   uniform highp vec4 spriteFrame;
   uniform vec2 imageDimensions;
   uniform float blurRadius;
@@ -1107,7 +1107,6 @@ constexpr const char* spriteEffectFragmentSource = R"(#version 300 es
   uniform float maskTransform[6];
   uniform vec2 maskTextureSize;
   uniform bool targetYDown;
-  uniform highp vec4 targetProjection;
   uniform float screenHeight;
   uniform bool spriteColorEnabled;
   uniform vec4 spriteColorTone;
@@ -1124,15 +1123,19 @@ constexpr const char* spriteEffectFragmentSource = R"(#version 300 es
     highp vec3 premultiplied = texturePremultiplied ? texel.rgb : texel.rgb * texel.a;
     ivec3 sourceBytes = ivec3(floor(premultiplied * 255.0 + 0.5));
     ivec3 blendBytes = ivec3(floor(spriteBlendColor.rgb * 255.0 + 0.5));
-    int blendAlpha = int(floor(spriteBlendColor.a * 255.0 + 0.5));
+    int blendAlpha = min(255, int(floor(spriteBlendColor.a * 256.0)));
     int sourceAlpha = int(floor(texel.a * 255.0 + 0.5));
     ivec3 atop = (sourceBytes * (255 - blendAlpha) + blendBytes * blendAlpha + 127) / 255;
-    return vec4(vec3((atop * sourceAlpha + 127) / 255) / 255.0, texel.a);
+    return vec4(vec3((atop * (sourceAlpha + 1)) / 256) / 255.0, texel.a);
   }
   highp vec4 spriteBitmap() {
-    highp vec2 position = vertexUv * imageDimensions - vec2(0.5);
+    highp vec2 position = standaloneBitmapRegion ?
+      vertexUv * (spriteFrame.zw - spriteFrame.xy + vec2(1.0)) - vec2(0.5) :
+      vertexUv * imageDimensions - vec2(0.5);
     highp vec2 pixel = floor(position), weight = fract(position);
-    highp vec4 sampled = nearestSampling ? spriteTexel(floor(position + vec2(0.5))) :
+    highp vec2 offset = standaloneBitmapRegion ? spriteFrame.xy : vec2(0.0);
+    pixel += offset;
+    highp vec4 sampled = nearestSampling ? spriteTexel(floor(position + vec2(0.5)) + offset) :
       mix(mix(spriteTexel(pixel), spriteTexel(pixel + vec2(1, 0)), weight.x),
           mix(spriteTexel(pixel + vec2(0, 1)), spriteTexel(pixel + vec2(1, 1)), weight.x), weight.y);
     return vec4(sampled.a > 0.0 ? sampled.rgb / sampled.a : vec3(0.0), sampled.a);
@@ -1145,29 +1148,41 @@ constexpr const char* spriteEffectFragmentSource = R"(#version 300 es
       sampleColor = spriteBitmap();
     } else if (blurRadius <= 0.0) {
       highp vec2 coord = vertexUv;
+      if (standaloneBitmapRegion) {
+        highp vec2 position = vertexUv * (spriteFrame.zw - spriteFrame.xy + vec2(1.0));
+        if (nearestSampling) {
+          sampleColor = texelFetch(image, ivec2(clamp(floor(position) + spriteFrame.xy, spriteFrame.xy, spriteFrame.zw)), 0);
+        } else {
+          coord = (clamp(position, vec2(0.5), spriteFrame.zw - spriteFrame.xy + vec2(0.5)) + spriteFrame.xy) / imageDimensions;
+          sampleColor = texture(image, coord);
+        }
+      } else {
       if (clampedTilingSampling) {
         highp vec2 margin = vec2(0.5) / imageDimensions;
         coord = clamp(coord + ceil(-coord), margin, vec2(1.0) - margin);
       }
       sampleColor = texture(image, coord);
+      }
     } else {
+      highp vec2 coord = standaloneBitmapRegion ?
+        (vertexUv * (spriteFrame.zw - spriteFrame.xy + vec2(1.0)) + spriteFrame.xy) / imageDimensions : vertexUv;
       vec2 stepUv = blurRadius / imageDimensions;
-      sampleColor = texture(image, vertexUv) * 0.227027;
-      sampleColor += texture(image, clamp(vertexUv + vec2(stepUv.x, 0.0),
+      sampleColor = texture(image, coord) * 0.227027;
+      sampleColor += texture(image, clamp(coord + vec2(stepUv.x, 0.0),
         vertexUvClamp.xy, vertexUvClamp.zw)) * 0.158108;
-      sampleColor += texture(image, clamp(vertexUv - vec2(stepUv.x, 0.0),
+      sampleColor += texture(image, clamp(coord - vec2(stepUv.x, 0.0),
         vertexUvClamp.xy, vertexUvClamp.zw)) * 0.158108;
-      sampleColor += texture(image, clamp(vertexUv + vec2(0.0, stepUv.y),
+      sampleColor += texture(image, clamp(coord + vec2(0.0, stepUv.y),
         vertexUvClamp.xy, vertexUvClamp.zw)) * 0.158108;
-      sampleColor += texture(image, clamp(vertexUv - vec2(0.0, stepUv.y),
+      sampleColor += texture(image, clamp(coord - vec2(0.0, stepUv.y),
         vertexUvClamp.xy, vertexUvClamp.zw)) * 0.158108;
-      sampleColor += texture(image, clamp(vertexUv + stepUv,
+      sampleColor += texture(image, clamp(coord + stepUv,
         vertexUvClamp.xy, vertexUvClamp.zw)) * 0.049405;
-      sampleColor += texture(image, clamp(vertexUv - stepUv,
+      sampleColor += texture(image, clamp(coord - stepUv,
         vertexUvClamp.xy, vertexUvClamp.zw)) * 0.049405;
-      sampleColor += texture(image, clamp(vertexUv + vec2(stepUv.x, -stepUv.y),
+      sampleColor += texture(image, clamp(coord + vec2(stepUv.x, -stepUv.y),
         vertexUvClamp.xy, vertexUvClamp.zw)) * 0.049405;
-      sampleColor += texture(image, clamp(vertexUv + vec2(-stepUv.x, stepUv.y),
+      sampleColor += texture(image, clamp(coord + vec2(-stepUv.x, stepUv.y),
         vertexUvClamp.xy, vertexUvClamp.zw)) * 0.049405;
     }
     if (!bitmapBlend && texturePremultiplied && sampleColor.a > 0.0) sampleColor.rgb /= sampleColor.a;
@@ -1234,6 +1249,8 @@ constexpr const char* tileFragmentSource = R"(#version 300 es
   uniform highp vec4 mvBounds;
   // Paint parameters followed by retained normals, miters, inradius and bevels.
   uniform highp float trianglePaint[30];
+  uniform bool triangleCoverageEnabled;
+  uniform highp sampler2D triangleCoverage;
   uniform highp vec2 imageDimensions;
   in highp vec2 meshLocalPosition;
 
@@ -1281,6 +1298,23 @@ constexpr const char* tileFragmentSource = R"(#version 300 es
   }
 
 #endif
+  ivec4 canvasImageTexel(ivec2 pixel) {
+    ivec2 dimensions = textureSize(image, 0);
+    highp vec4 sampleColor = texelFetch(image, clamp(pixel, ivec2(0), dimensions - 1), 0);
+    if (!texturePremultiplied) sampleColor.rgb *= sampleColor.a;
+    return ivec4(floor(sampleColor * 255.0 + 0.5));
+  }
+  // Skia low-quality bitmap filtering uses four-bit weights. Normalized
+  // Float32 mesh UVs need a small allowance at otherwise integral texels.
+  ivec4 canvasImageSample(highp vec2 uv) {
+    highp vec2 position = uv * imageDimensions - vec2(0.5);
+    ivec2 pixel = ivec2(floor(position + vec2(0.0001)));
+    ivec2 weight = ivec2(clamp(floor((position - vec2(pixel)) * 16.0 + vec2(0.001)), vec2(0), vec2(15)));
+    return (canvasImageTexel(pixel) * (16 - weight.x) * (16 - weight.y)
+      + canvasImageTexel(pixel + ivec2(1, 0)) * weight.x * (16 - weight.y)
+      + canvasImageTexel(pixel + ivec2(0, 1)) * (16 - weight.x) * weight.y
+      + canvasImageTexel(pixel + ivec2(1, 1)) * weight.x * weight.y) / 256;
+  }
   highp vec4 paintTriangle() {
     highp vec2 points[3];
     for (int i = 0; i < 3; ++i) points[i] = vec2(trianglePaint[i * 2], trianglePaint[i * 2 + 1]);
@@ -1294,6 +1328,37 @@ constexpr const char* tileFragmentSource = R"(#version 300 es
     highp vec2 screenDelta = vec2(delta.x * localDy.y - delta.y * localDy.x,
       localDx.x * delta.y - localDx.y * delta.x) / determinant;
     highp vec2 uv = vertexUv + dFdx(vertexUv) * screenDelta.x + dFdy(vertexUv) * screenDelta.y;
+    if (triangleCoverageEnabled) {
+      ivec2 coveragePixel = ivec2(floor(pixel - origin));
+      ivec2 dimensions = textureSize(triangleCoverage, 0);
+      if (any(lessThan(coveragePixel, ivec2(0))) || any(greaterThanEqual(coveragePixel, dimensions)))
+        return vec4(0.0);
+      ivec4 coverageBytes = ivec4(floor(texelFetch(triangleCoverage, coveragePixel, 0) * 255.0 + 0.5));
+      ivec4 sourceBytes = canvasImageSample(uv);
+      ivec4 fillBytes = (sourceBytes * (coverageBytes.r + 1)) / 256;
+      ivec3 strokeColor = ivec3(floor(vec3(trianglePaint[10], trianglePaint[11], trianglePaint[12]) * 255.0 + 0.5));
+      int alpha = int(floor(trianglePaint[13] * 255.0));
+      ivec4 color = ivec4((strokeColor * (alpha + 1)) / 256, alpha);
+      int scale = coverageBytes.g + 1;
+      ivec4 strokeBytes = (color * scale) / 256;
+      int inverseAlpha = 255 - strokeBytes.a;
+      inverseAlpha += inverseAlpha / 128;
+      ivec4 result = strokeBytes.a == 0 ? fillBytes :
+        strokeBytes + (fillBytes * inverseAlpha + 128) / 256;
+      if (coverageBytes.b == 1) {
+        if (alpha == 255) {
+          scale = coverageBytes.g + coverageBytes.g / 128;
+          result = (color * scale + fillBytes * (256 - scale)) / 256;
+        } else {
+          int product = 65535 - alpha * scale;
+          int destinationScale = (product + product / 256) / 256;
+          result = (color * scale + fillBytes * destinationScale) / 256;
+        }
+      } else if (coverageBytes.b == 2) {
+        result = strokeBytes + (fillBytes * (256 - strokeBytes.a)) / 256;
+      }
+      return vec4(result.a > 0 ? vec3(result.rgb) / float(result.a) : vec3(0.0), float(result.a) / 255.0);
+    }
     highp float halfWidth = trianglePaint[14] * 0.5;
     highp float minimumDistance = 1e20;
     for (int edge = 0; edge < 3; ++edge) {
@@ -1368,10 +1433,10 @@ constexpr const char* tileFragmentSource = R"(#version 300 es
       // Preserve those RGBA8 writes instead of fusing their real-number algebra.
       ivec3 sourceBytes = ivec3(floor(premultiplied * 255.0 + 0.5));
       ivec3 blendBytes = ivec3(floor(meshPostTintOverlayColor.rgb * 255.0 + 0.5));
-      int blendAlpha = int(floor(meshPostTintOverlayColor.a * 255.0 + 0.5));
+      int blendAlpha = min(255, int(floor(meshPostTintOverlayColor.a * 256.0)));
       int sourceAlpha = int(floor(texel.a * 255.0 + 0.5));
       ivec3 atop = (sourceBytes * (255 - blendAlpha) + blendBytes * blendAlpha + 127) / 255;
-      premultiplied = vec3((atop * sourceAlpha + 127) / 255) / 255.0;
+      premultiplied = vec3((atop * (sourceAlpha + 1)) / 256) / 255.0;
     }
     return vec4(premultiplied, texel.a);
   }
@@ -1398,7 +1463,6 @@ constexpr const char* tileFragmentSource = R"(#version 300 es
   uniform vec4 maskFrame;
   uniform vec2 maskTextureSize;
   uniform bool targetYDown;
-  uniform highp vec4 targetProjection;
   uniform float screenHeight;
 
   out vec4 outputColor;

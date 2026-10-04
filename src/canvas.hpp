@@ -1,8 +1,10 @@
 #pragma once
 
 #include "resources.hpp"
+#include "canvas_pixels.hpp"
 #include "text_backend.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -69,15 +71,20 @@ class CanvasStore {
  public:
   explicit CanvasStore(ImageStore& images);
   ~CanvasStore();
+  static std::vector<std::uint8_t> circleCoverage(float x, float y, float radius,
+    const std::array<float, 6>& transform, int left, int top, int width, int height,
+    const std::vector<std::array<float, 4>>& clips = {});
 
   CanvasStore(const CanvasStore&) = delete;
   CanvasStore& operator=(const CanvasStore&) = delete;
 
   std::optional<CanvasInfo> create(int width, int height);
-  std::optional<CanvasInfo> createRgba(int width, int height,
-                                       std::vector<std::uint8_t> pixels);
+  std::optional<CanvasInfo> createPixels(int width, int height,
+                                       std::vector<std::uint8_t> pixels, PixelEncoding encoding);
   bool fillRect(CanvasHandle handle, int x, int y, int width, int height,
                 std::uint32_t rgba);
+  bool paintRect(CanvasHandle handle, const std::array<float, 4>& rect, uint32_t color, float stroke,
+    const std::array<float, 4>& gradient, const std::vector<float>& offsets, const std::vector<uint32_t>& colors);
   bool fillRadialGradient(CanvasHandle handle, int x, int y, int width, int height,
                           float centerX, float centerY, float innerRadius,
                           float outerRadius, const std::vector<float>& offsets,
@@ -86,9 +93,9 @@ class CanvasStore {
   bool clear(CanvasHandle handle);
   bool clearRect(CanvasHandle handle, int x, int y, int width, int height);
   bool drawImage(CanvasHandle destination, std::uint32_t source,
-                 int sourceX, int sourceY, int sourceWidth, int sourceHeight,
-                 int destinationX, int destinationY,
-                 int destinationWidth, int destinationHeight, float alpha);
+                 float sourceX, float sourceY, float sourceWidth, float sourceHeight,
+                 float destinationX, float destinationY,
+                 float destinationWidth, float destinationHeight, float alpha, bool smoothing = true);
   bool drawText(CanvasHandle handle, const std::vector<std::filesystem::path>& fontPaths,
                 const std::string& text, float x, float y, float pixelSize,
                 std::uint32_t rgba, float strokeWidth = 0, const CanvasTextStyle& style = {});
@@ -110,11 +117,11 @@ class CanvasStore {
   bool canLoadFont(const std::filesystem::path& fontPath);
   std::optional<std::uint32_t> pixel(CanvasHandle handle, int x, int y);
   std::optional<ImagePixels> readPixels(CanvasHandle handle, int x, int y,
-                                        int width, int height);
+                                        int width, int height, PixelEncoding encoding = PixelEncoding::StraightRGBA8);
   std::optional<std::vector<std::uint8_t>> encodePng(CanvasHandle handle);
   bool writePixels(CanvasHandle handle, int x, int y, int width, int height,
-                   const std::vector<std::uint8_t>& pixels);
-  bool replacePixels(CanvasHandle handle, std::vector<std::uint8_t> pixels);
+                   const std::vector<std::uint8_t>& pixels, PixelEncoding encoding = PixelEncoding::StraightRGBA8);
+  bool replacePixels(CanvasHandle handle, std::vector<std::uint8_t> pixels, PixelEncoding encoding);
   bool blur(CanvasHandle handle);
   bool release(CanvasHandle handle);
   bool realize(CanvasHandle handle);
@@ -159,15 +166,16 @@ class CanvasStore {
   struct DrawImageCmd {
     ImageHandle source;
     std::shared_ptr<Content> canvas;
-    int sourceX;
-    int sourceY;
-    int sourceWidth;
-    int sourceHeight;
-    int destinationX;
-    int destinationY;
-    int destinationWidth;
-    int destinationHeight;
+    float sourceX;
+    float sourceY;
+    float sourceWidth;
+    float sourceHeight;
+    float destinationX;
+    float destinationY;
+    float destinationWidth;
+    float destinationHeight;
     float alpha;
+    bool smoothing;
   };
 
   struct DrawTextCmd {
@@ -202,7 +210,10 @@ class CanvasStore {
     int width = 0;
     int height = 0;
     ContentState state = ContentState::Deferred;
+    // Authoritative top-down premultiplied BGRA8; shared versions detach before writes.
     std::vector<std::uint8_t> pixels;
+    // Conservative hint: raw premultiplied input can violate RGB <= alpha.
+    bool mayHaveOverAlpha = false;
     std::vector<CanvasCommand> commands;
     std::size_t queuedCommandBytes = 0;
     int dirtyX0 = 0;

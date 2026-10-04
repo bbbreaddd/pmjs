@@ -6,19 +6,17 @@ const vm = require('node:vm');
 const native = require(path.resolve(process.argv[2]));
 native.initialize({ gameRoot: path.resolve(process.argv[3]), assetRoot: '', width: 64, height: 48,
   windowTitle: 'Primitive Canvas content ownership' });
-function EventTarget() {}
-for (const name of ['addEventListener', 'removeEventListener', 'dispatchEvent']) EventTarget.prototype[name] = function() {};
 let allocatedSurfaces = 0;
 const renderer = Object.create(native.render);
 renderer.createPrimitiveSurface = (...args) => {
   allocatedSurfaces++;
   return native.render.createPrimitiveSurface(...args);
 };
-const realm = vm.createContext({ console, EventTarget, pmjsGameConfig: {},
+const realm = vm.createContext({ console, pmjsGameConfig: {},
   nativeWindowState: { focused: true, visible: true }, PMJS: { config: { fonts: { GameFont: 'text-shaping.ttf' } } },
   NativeHost: { canvas: native.canvas, render: renderer, runtime: { env: () => '' } },
 });
-for (const file of ['canvas', 'elements'])
+for (const file of ['events', 'canvas', 'elements'])
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-web', file + '.js'), 'utf8'), realm);
 const create = () => { const canvas = new realm.CanvasElement(); canvas.width = 64; canvas.height = 48; return canvas; };
 const canvas = create(), drawing = canvas.getContext('2d');

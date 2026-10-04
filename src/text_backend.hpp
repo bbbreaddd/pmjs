@@ -30,7 +30,7 @@ class TextBackend {
   const char* name() const { return skia_ ? "skia65" : "freetype"; }
   bool draw(const std::vector<std::filesystem::path>& paths, const std::string& text,
     float x, float y, float size, uint32_t rgba, float stroke, const CanvasTextStyle& style,
-    std::vector<uint8_t>& straight, int width, int height, int dirty[4]);
+    std::vector<uint8_t>& pixels, int width, int height, int dirty[4]);
   std::optional<CanvasTextMetrics> measure(const std::vector<std::filesystem::path>& paths,
     const std::string& text, float size, const CanvasTextStyle& style);
   bool canLoad(const std::filesystem::path& path);

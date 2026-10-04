@@ -111,7 +111,15 @@ function createNativePixiRenderer(width, height, options) {
     _transform: null,
     boundTextures: new Array(textureUnitCount),
     emptyTextures: new Array(textureUnitCount),
-    gl: { isContextLost: function() { return false; }, flush: function() {},
+    gl: { MAX_VARYING_VECTORS: 36348,
+      getParameter: function(parameter) {
+        if (parameter === this.MAX_VARYING_VECTORS) {
+          return NativeHost.render.graphicsInfo().maxVaryingVectors;
+        }
+        PMJS.compat.hit('renderer.gl-parameter', String(parameter));
+        return null;
+      },
+      isContextLost: function() { return false; }, flush: function() {},
       getExtension: function() { return null; } },
     setObjectRenderer: function(nextRenderer) {
       if (this.currentRenderer === nextRenderer) return;
@@ -161,31 +169,52 @@ function createNativePixiRenderer(width, height, options) {
       return this;
     },
     clear: function(clearColor) {
-      var color = clearColor || this._backgroundColorRgba;
-      NativeHost.render.setClearColor(Number(color[0]) || 0,
-        Number(color[1]) || 0, Number(color[2]) || 0,
-        color[3] === undefined ? 1 : Number(color[3]) || 0);
+      var target = this._activeRenderTarget || this.rootRenderTarget;
+      var color = clearColor || (target.root ? this._backgroundColorRgba :
+        target.clearColor);
+      var frame = nativeRenderTargetClearFrame(target);
+      if (target._pmjsBaseTexture) {
+        this.clearRenderTexture({ baseTexture: target._pmjsBaseTexture,
+          width: target.width, height: target.height }, color);
+        return this;
+      }
+      var rgba = [Number(color[0]) || 0, Number(color[1]) || 0,
+        Number(color[2]) || 0,
+        color[3] === undefined ? 1 : Number(color[3]) || 0];
+      NativeHost.render.clearScene.apply(NativeHost.render,
+        frame ? rgba.concat(frame) : rgba);
       return this;
     },
     clearRenderTexture: function(renderTexture, clearColor) {
       if (!renderTexture || !renderTexture.baseTexture) return this;
       var base = renderTexture.baseTexture;
+      var renderTarget = nativeRenderTargetFor(this, renderTexture);
+      var color = clearColor || renderTarget.clearColor;
       var resolution = Math.max(0.000001, Number(base.resolution) || 1);
       var target = base.__pmjsRenderCanvas;
       if (!target) {
         target = base.__pmjsRenderCanvas = new CanvasElement();
         base.source = target;
       }
-      target.width = Math.max(1, Math.ceil(base.width * resolution));
-      target.height = Math.max(1, Math.ceil(base.height * resolution));
-      var context = target.getContext('2d');
-      context.clearRect(0, 0, target.width, target.height);
-      if (clearColor && clearColor[3] > 0) {
-        context.fillStyle = 'rgba(' + Math.round(clearColor[0] * 255) + ',' +
-          Math.round(clearColor[1] * 255) + ',' +
-          Math.round(clearColor[2] * 255) + ',' + clearColor[3] + ')';
-        context.fillRect(0, 0, target.width, target.height);
+      var width = Math.max(1, Math.ceil(base.width * resolution));
+      var height = Math.max(1, Math.ceil(base.height * resolution));
+      if (target.width !== width) target.width = width;
+      if (target.height !== height) target.height = height;
+      var frame = nativeRenderTargetClearFrame(renderTarget) ||
+        [0, 0, width, height];
+      var canvas = target._ensureNativeCanvas();
+      NativeHost.canvas.clearRect(canvas.handle, frame[0], frame[1],
+        frame[2], frame[3]);
+      if (color[3] > 0) {
+        var bytes = color.map(function(value) {
+          return Math.max(0, Math.min(255, Math.round(value * 255)));
+        });
+        var packed = (bytes[0] << 24 | bytes[1] << 16 | bytes[2] << 8 |
+          bytes[3]) >>> 0;
+        NativeHost.canvas.fillRect(canvas.handle, frame[0], frame[1],
+          frame[2], frame[3], packed);
       }
+      target._pmjsContentChanged();
       return this;
     },
     bindShader: function(shader) {
@@ -322,6 +351,7 @@ function createNativePixiRenderer(width, height, options) {
         if (!base || base.width <= 0 || base.height <= 0) {
           throw new Error('native RenderTexture has invalid dimensions');
         }
+        this.renderTexture.bind(renderTexture);
         var resolution = Math.max(0.000001, Number(base.resolution) || 1);
         var targetWidth = Math.ceil(base.width * resolution);
         var targetHeight = Math.ceil(base.height * resolution);
@@ -354,6 +384,7 @@ function createNativePixiRenderer(width, height, options) {
         if (typeof this.emit === 'function') this.emit('postrender');
         return;
       }
+      this.renderTexture.bind(null);
       var screenWidth = this.width;
       var screenHeight = this.height;
       NativeHost.render.setScreenRenderSize(screenWidth, screenHeight);
@@ -437,8 +468,8 @@ function createNativePixiRenderer(width, height, options) {
           var croppedCanvas = new CanvasElement();
           croppedCanvas.width = cropWidth;
           croppedCanvas.height = cropHeight;
-          NativeHost.canvas.writePixels(croppedCanvas._ensureNativeCanvas().handle,
-            0, 0, cropWidth, cropHeight, NativeHost.canvas.readPixels(
+          NativeHost.canvas.writePremultipliedPixels(croppedCanvas._ensureNativeCanvas().handle,
+            0, 0, cropWidth, cropHeight, NativeHost.canvas.readPremultipliedPixels(
               renderCanvas._ensureNativeCanvas().handle,
               Math.floor(frame.x * renderResolution),
               Math.floor(frame.y * renderResolution), cropWidth, cropHeight));
@@ -465,17 +496,7 @@ function createNativePixiRenderer(width, height, options) {
           return screenCanvas;
         }
         var renderTexture = this.renderer.generateTexture(target);
-        var width = Math.ceil(renderTexture.width *
-          (Number(renderTexture.baseTexture.resolution) || 1));
-        var height = Math.ceil(renderTexture.height *
-          (Number(renderTexture.baseTexture.resolution) || 1));
-        var pixels = this.pixels(renderTexture);
-        var canvas = new CanvasElement();
-        canvas.width = width;
-        canvas.height = height;
-        NativeHost.canvas.writePixels(canvas._ensureNativeCanvas().handle,
-          0, 0, width, height, pixels);
-        canvas._pmjsContentChanged();
+        var canvas = this.canvas(renderTexture);
         renderTexture.destroy(true);
         return canvas;
       },
@@ -612,6 +633,7 @@ function createNativePixiRenderer(width, height, options) {
   }
   renderer.rootRenderTarget = createNativeRenderTarget(renderer, width, height,
     resolution, true);
+  renderer.rootRenderTarget.clearColor = renderer._backgroundColorRgba;
   renderer.handleContextLost = renderer.handleContextLost.bind(renderer);
   renderer.handleContextRestored = renderer.handleContextRestored.bind(renderer);
   if (renderer.view && typeof renderer.view.addEventListener === 'function') {

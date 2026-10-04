@@ -102,12 +102,14 @@ function createContext({ strictCompatibility = true } = {}) {
     CanvasElement,
     document: { createElement() { return canvas; } },
     PMJS: {},
+    trackNativeResource(resource) { return resource; },
+    releaseNativeResource(resource) { context.NativeHost.images.release(resource.handle); },
     NativeHost: {
       runtime: { env(name) { return name === 'PMJS_STRICT_COMPAT' && strictCompatibility ? '1' : undefined; } },
       scene: {
-        packetVersion: 28,
-        schema: { version: 28, metadataStride: 7, valueStride: 41,
-          transactionalSubmit: true, filterCompositeBlend: true, clampedTilingSampling: true },
+        packetVersion: 29,
+        schema: { version: 29, metadataStride: 7, valueStride: 41,
+          transactionalSubmit: true, filterCompositeBlend: true, clampedTilingSampling: true, floatSpriteUv: true, repeatSpriteSampling: true },
         submit(version, metadata, values, count) {
           submissions.push({ version, metadata: metadata.slice(),
             values: values.slice(), count });
@@ -115,11 +117,14 @@ function createContext({ strictCompatibility = true } = {}) {
       },
       render: {
         setClearColor() {},
+        setClearBeforeRender() {},
+        setSceneProjection() {},
         setScreenRenderSize(width, height) { sizes.push([width, height]); },
         setRenderTargetSize(width, height) { targets.push(['size', width, height]); },
         renderToCanvas(handle) { targets.push(['render', handle]); },
       },
       canvas: { captureScene() { return { handle: 333 }; } },
+      images: { release() {} },
     },
     PIXI: {
       VERSION: '5.3.12',

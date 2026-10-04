@@ -1,4 +1,9 @@
+#include "canvas_pixels.hpp"
 #include "renderer.hpp"
+#include "checked_bounds.hpp"
+#ifdef PMJS_HAS_SKIA65
+#include "skia65/pmjs_skia65.h"
+#endif
 #include <GLES3/gl3.h>
 
 #include <algorithm>
@@ -69,6 +74,10 @@ void Renderer::recomputePresentation() {
          sourceHeight / 2) / sourceHeight);
     }
   }
+  if (authoredPresentationSize_[0] > 0) {
+    viewportWidth = authoredPresentationSize_[0];
+    viewportHeight = authoredPresentationSize_[1];
+  }
   presentation_.sourceWidth = sourceWidth;
   presentation_.sourceHeight = sourceHeight;
   presentation_.viewportX = (drawableWidth - viewportWidth) / 2;
@@ -80,6 +89,18 @@ void Renderer::recomputePresentation() {
       viewportWidth / sourceWidth == viewportHeight / sourceHeight;
   presentation_.filter = hasFilterOverride_ ? filterOverride_
       : (integerMapping ? PresentFilter::nearest : PresentFilter::linear);
+  if (authoredPresentationFilter_) presentation_.filter = authoredPresentationFilter_ == 1 ?
+    PresentFilter::nearest : PresentFilter::linear;
+}
+
+void Renderer::setPresentationViewport(int width, int height, int filter) {
+  if (width < 0 || height < 0 || width > 32768 || height > 32768 ||
+      ((width == 0) != (height == 0)) || filter < 0 || filter > 2) {
+    throw std::invalid_argument("invalid presentation viewport");
+  }
+  authoredPresentationSize_ = {width, height};
+  authoredPresentationFilter_ = filter;
+  recomputePresentation();
 }
 
 void Renderer::setDrawableSize(int width, int height) {
@@ -205,6 +226,55 @@ void Renderer::setClearColor(float red, float green, float blue, float alpha) {
   clearColor_ = {red, green, blue, alpha};
 }
 
+void Renderer::clearScene(float red, float green, float blue, float alpha,
+                          const std::optional<std::array<int, 4>>& clip) {
+  if (sceneSubmittedThisFrame_) {
+    renderScene();
+    discardCommandsFrom(0);
+    sceneSubmittedThisFrame_ = false;
+  }
+  ensureTarget(sceneTarget_, width_, height_);
+  if (clip) materializeToneComposition();
+  GLint savedFramebuffer = 0;
+  GLint savedScissorBox[4]{};
+  GLfloat savedClearColor[4]{};
+  GLboolean savedColorMask[4]{};
+  const GLboolean savedScissor = glIsEnabled(GL_SCISSOR_TEST);
+  glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &savedFramebuffer);
+  glGetIntegerv(GL_SCISSOR_BOX, savedScissorBox);
+  glGetFloatv(GL_COLOR_CLEAR_VALUE, savedClearColor);
+  glGetBooleanv(GL_COLOR_WRITEMASK, savedColorMask);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, sceneTarget_.framebuffer);
+  if (clip) {
+    glEnable(GL_SCISSOR_TEST);
+    glScissor((*clip)[0], (*clip)[1], std::max(0, (*clip)[2]),
+              std::max(0, (*clip)[3]));
+  } else {
+    glDisable(GL_SCISSOR_TEST);
+  }
+  glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+  glClearColor(red, green, blue, alpha);
+  glClear(GL_COLOR_BUFFER_BIT);
+  glClearColor(savedClearColor[0], savedClearColor[1],
+               savedClearColor[2], savedClearColor[3]);
+  glColorMask(savedColorMask[0], savedColorMask[1],
+              savedColorMask[2], savedColorMask[3]);
+  glScissor(savedScissorBox[0], savedScissorBox[1],
+            savedScissorBox[2], savedScissorBox[3]);
+  if (savedScissor) glEnable(GL_SCISSOR_TEST);
+  else glDisable(GL_SCISSOR_TEST);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(savedFramebuffer));
+  hasValidSceneFrame_ = true;
+  toneCompositionActive_ = false;
+}
+
+void Renderer::setSceneProjection(const std::array<float, 6>& transform) {
+  if (!std::all_of(transform.begin(), transform.end(), [](float value) { return std::isfinite(value); })) {
+    throw std::invalid_argument("scene projection must be finite");
+  }
+  sceneProjection_ = transform;
+}
+
 bool Renderer::setPresentationLayers(float canvasOpacity, ImageHandle video,
                                      float videoOpacity, ImageHandle upperCanvas,
                                      float upperCanvasOpacity) {
@@ -252,6 +322,8 @@ bool Renderer::setScreenRenderSize(int width, int height) {
 }
 
 void Renderer::beginFrame() {
+  clearBeforeRender_ = true;
+  sceneProjection_ = {1, 0, 0, 1, 0, 0};
   sceneSubmittedThisFrame_ = false;
   discardCommandsFrom(0);
   images_.update();
@@ -475,6 +547,40 @@ std::uint32_t Renderer::createMesh(
       uvs[offset] * static_cast<float>(info->width),
       uvs[offset + 1] * static_cast<float>(info->height), 0, 0});
   }
+#ifdef PMJS_HAS_SKIA65
+  if (const auto* triangle = std::get_if<TriangleBitmapMaterial>(&material);
+      triangle && triangle->rasterRule == TriangleBitmapMaterial::RasterRule::canvasFourSample) {
+    const auto& p = triangle->coefficients;
+    const float width = std::ceil(p[8] - p[6]), height = std::ceil(p[9] - p[7]);
+    if (width <= 0 || height <= 0 || width > 8192 || height > 8192) {
+      images_.release(image);
+      return 0;
+    }
+    const auto extent = checkedImageExtent(static_cast<int>(width), static_cast<int>(height));
+    if (!extent) {
+      images_.release(image);
+      return 0;
+    }
+    try {
+      mesh.images.reserve(2);
+      std::vector<std::uint8_t> coverage(extent->rgbaBytes);
+      if (!pmjs_skia65_triangle_coverage(p.data(), p[14], p[15], p[13], p[6], p[7],
+          static_cast<int>(width), static_cast<int>(height), coverage.data())) {
+        throw std::runtime_error("triangle bitmap rasterization failed");
+      }
+      const auto mask = images_.createRgba(static_cast<int>(width), static_cast<int>(height), coverage.data());
+      if (!mask) {
+        images_.release(image);
+        return 0;
+      }
+      mesh.triangleCoverage = mask->handle;
+      mesh.images.push_back(mask->handle);
+    } catch (...) {
+      images_.release(image);
+      throw;
+    }
+  }
+#endif
   glGenVertexArrays(1, &mesh.vertexArray);
   glGenBuffers(1, &mesh.vertexBuffer);
   glBindVertexArray(mesh.vertexArray);
@@ -573,21 +679,16 @@ std::vector<std::uint8_t> Renderer::captureSceneRawPremultiplied() {
   return pixels;
 }
 
-std::vector<std::uint8_t> Renderer::captureSceneRgba() {
+std::vector<std::uint8_t> Renderer::captureSceneRgba(AlphaMode alphaMode) {
   auto pixels = captureSceneRawPremultiplied();
-  for (std::size_t offset = 0; offset < pixels.size(); offset += 4) {
-    const std::uint32_t alpha = pixels[offset + 3];
-    if (alpha == 0 || alpha == 255) continue;
-    for (std::size_t channel = 0; channel < 3; ++channel) {
-      pixels[offset + channel] = static_cast<std::uint8_t>(std::min(
-        255U, (static_cast<std::uint32_t>(pixels[offset + channel]) * 255U +
-               alpha / 2U) / alpha));
-    }
-  }
+  if (alphaMode == AlphaMode::straight)
+    for (std::size_t offset = 0; offset < pixels.size(); offset += 4)
+      convertPixel(pixels.data() + offset, PixelEncoding::PremultipliedRGBA8,
+                   pixels.data() + offset, PixelEncoding::StraightRGBA8);
   return pixels;
 }
 
-std::vector<std::uint8_t> Renderer::captureDrawableRgba() {
+std::vector<std::uint8_t> Renderer::captureDrawableRgba(AlphaMode alphaMode) {
   const int width = presentation_.drawableWidth;
   const int height = presentation_.drawableHeight;
   std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width) *
@@ -608,38 +709,68 @@ std::vector<std::uint8_t> Renderer::captureDrawableRgba() {
     std::copy(bottom, bottom + static_cast<std::ptrdiff_t>(rowBytes), top);
     std::copy(row.begin(), row.end(), bottom);
   }
+  if (alphaMode == AlphaMode::straight)
+    for (size_t offset = 0; offset < pixels.size(); offset += 4)
+      convertPixel(pixels.data() + offset, PixelEncoding::PremultipliedRGBA8,
+                   pixels.data() + offset, PixelEncoding::StraightRGBA8);
   return pixels;
 }
 
-std::vector<std::uint8_t> Renderer::renderToRgba() {
+std::vector<std::uint8_t> Renderer::renderToRgba(AlphaMode alphaMode) {
   const auto savedClearColor = clearColor_;
   clearColor_ = {0, 0, 0, 0};
   render();
-  auto pixels = captureSceneRgba();
+  auto pixels = captureSceneRgba(alphaMode);
   clearColor_ = savedClearColor;
   return pixels;
 }
 
-std::vector<std::uint8_t> Renderer::renderToRgba(int width, int height) {
+std::vector<std::uint8_t> Renderer::renderToRgba(int width, int height, ImageHandle initialImage, AlphaMode alphaMode) {
   const int savedWidth = width_;
   const int savedHeight = height_;
   const auto savedClearColor = clearColor_;
   const bool savedOffscreenRender = offscreenRender_;
+  const bool savedClearBeforeRender = clearBeforeRender_;
+  const auto savedProjection = sceneProjection_;
+  std::optional<FramePacket> queuedFrame;
   try {
     width_ = width;
     height_ = height;
     offscreenRender_ = true;
     clearColor_ = {0, 0, 0, 0};
+    clearBeforeRender_ = true;
+    if (initialImage) {
+      // Offscreen scratch is shared. Seed from this canvas, not the last target.
+      queuedFrame = std::move(frame_);
+      frame_ = {};
+      sceneProjection_ = {1, 0, 0, 1, 0, 0};
+      if (!queueImage(initialImage, {1, 0, 0, 1, 0, 0},
+          {0, 0, static_cast<float>(width), static_cast<float>(height)}, 1,
+          0xffffff, BlendMode::normal)) throw std::runtime_error("cannot restore render target contents");
+      renderScene();
+      frame_ = std::move(*queuedFrame);
+      queuedFrame.reset();
+      sceneProjection_ = savedProjection;
+      clearBeforeRender_ = false;
+    }
     render();
-    auto pixels = captureSceneRgba();
+    auto pixels = captureSceneRgba(alphaMode);
     offscreenRender_ = savedOffscreenRender;
     clearColor_ = savedClearColor;
+    clearBeforeRender_ = savedClearBeforeRender;
+    sceneProjection_ = savedProjection;
     width_ = savedWidth;
     height_ = savedHeight;
     return pixels;
   } catch (...) {
+    if (queuedFrame) {
+      discardCommandsFrom(0);
+      frame_ = std::move(*queuedFrame);
+    }
     offscreenRender_ = savedOffscreenRender;
     clearColor_ = savedClearColor;
+    clearBeforeRender_ = savedClearBeforeRender;
+    sceneProjection_ = savedProjection;
     width_ = savedWidth;
     height_ = savedHeight;
     throw;
@@ -717,6 +848,30 @@ std::optional<ImageInfo> Renderer::renderToImage(int width, int height, AlphaMod
     glEnable(GL_BLEND);
     throw;
   }
+}
+
+std::optional<ImageInfo> Renderer::captureOffscreenImage() {
+  if (!offscreenTarget_.framebuffer) return std::nullopt;
+  GLint savedRead = 0, savedTexture = 0;
+  glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &savedRead);
+  glGetIntegerv(GL_TEXTURE_BINDING_2D, &savedTexture);
+  const auto image = images_.createRenderTarget(offscreenTarget_.width, offscreenTarget_.height, true);
+  if (!image) {
+    glBindTexture(GL_TEXTURE_2D, savedTexture);
+    return std::nullopt;
+  }
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, offscreenTarget_.framebuffer);
+  glReadBuffer(GL_COLOR_ATTACHMENT0);
+  glBindTexture(GL_TEXTURE_2D, image->texture);
+  glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, image->width, image->height);
+  const auto error = glGetError();
+  glBindTexture(GL_TEXTURE_2D, savedTexture);
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, savedRead);
+  if (error != GL_NO_ERROR) {
+    images_.release(image->handle);
+    throw std::runtime_error("cannot capture render target image");
+  }
+  return image;
 }
 
 std::size_t Renderer::renderTargetBytes() const {

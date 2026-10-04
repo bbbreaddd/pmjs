@@ -267,7 +267,8 @@ NativeFilterManager.prototype.onPrerender = function() {
   this.emptyPool();
 };
 NativeFilterManager.prototype.currentState = function() {
-  return this.filterData.stack[this.filterData.index - 1] || null;
+  return this.filterData.stack[this.filterData.index] ||
+    this.filterData.stack[this.filterData.index - 1] || null;
 };
 NativeFilterManager.prototype.calculateScreenSpaceMatrix = function(outputMatrix) {
   var state = this.currentState();
@@ -294,6 +295,18 @@ NativeFilterManager.prototype.calculateSpriteMatrix = function(outputMatrix, spr
   if (!state || !sprite || !sprite._texture) return outputMatrix.identity();
   var size = state.renderTarget.size || state.renderTarget;
   var frame = state.sourceFrame;
+  if (/^4\.5\./.test(PIXI.VERSION || '')) {
+    var ratio = size.height / size.width;
+    var texture = sprite._texture.baseTexture;
+    var legacyWorld = sprite.worldTransform.copy(new PIXI.Matrix());
+    legacyWorld.tx /= size.width;
+    legacyWorld.ty /= size.width;
+    outputMatrix.identity().translate(frame.x / size.width, frame.y / size.height)
+      .scale(1, ratio).prepend(legacyWorld.invert()).scale(1, 1 / ratio)
+      .scale(size.width / texture.width, size.height / texture.height)
+      .translate(sprite.anchor.x, sprite.anchor.y);
+    return outputMatrix;
+  }
   outputMatrix.set(size.width, 0, 0, size.height, frame.x, frame.y);
   var world = sprite.worldTransform.clone ? sprite.worldTransform.clone() :
     sprite.worldTransform.copy(new PIXI.Matrix());
@@ -335,13 +348,19 @@ NativeRenderTextureManager.prototype.bind = function(renderTexture) {
     this.renderer.rootRenderTarget;
 };
 NativeRenderTextureManager.prototype.clear = function(clearColor) {
-  if (this.current) this.renderer.clearRenderTexture(this.current, clearColor);
-  else this.renderer.clear(clearColor);
+  this.renderer.clear(clearColor);
 };
 NativeRenderTextureManager.prototype.destroy = function() {
   this.current = null;
   this.renderer = null;
 };
+
+function nativeRenderTargetClearFrame(target) {
+  if (!target || target.destinationFrame === target.sourceFrame) return null;
+  var frame = target.destinationFrame;
+  return [frame.x | 0, frame.y | 0,
+    frame.width * target.resolution | 0, frame.height * target.resolution | 0];
+}
 
 function createNativeRenderTarget(renderer, width, height, resolution, root) {
   var target = {
@@ -378,7 +397,15 @@ function createNativeRenderTarget(renderer, width, height, resolution, root) {
       return this;
     },
     clear: function(clearColor) {
-      this.renderer.clear(clearColor || this.clearColor);
+      if (this._pmjsBaseTexture) {
+        this.renderer.clearRenderTexture({ baseTexture: this._pmjsBaseTexture,
+          width: this.width, height: this.height }, clearColor || this.clearColor);
+      } else {
+        var previous = this.renderer._activeRenderTarget;
+        this.renderer._activeRenderTarget = this;
+        try { this.renderer.clear(clearColor || this.clearColor); }
+        finally { this.renderer._activeRenderTarget = previous; }
+      }
       return this;
     },
     resize: function(nextWidth, nextHeight) {
@@ -413,6 +440,7 @@ function nativeRenderTargetFor(renderer, renderTexture) {
     target.resolution = resolution;
     target.resize(renderTexture.width, renderTexture.height);
   }
+  target._pmjsBaseTexture = base;
   return target;
 }
 

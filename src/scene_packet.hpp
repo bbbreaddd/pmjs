@@ -5,7 +5,7 @@
 
 namespace pmjs::scene_packet {
 
-constexpr std::uint32_t version = 28;
+constexpr std::uint32_t version = 29;
 constexpr std::size_t metadataStride = 7;
 constexpr std::size_t valueStride = 41;
 // filterBegin's unused slot preserves zero/normal in existing version 28 writers.
@@ -82,6 +82,9 @@ enum NodeFlags : std::uint32_t {
   standaloneBitmapRegion = 1U << 13U,
   hasMvBitmapBlend = 1U << 14U,
   clampedTilingSampling = 1U << 15U,
+  mipmapSampling = 1U << 16U,
+  floatSpriteUv = 1U << 17U,
+  repeatSpriteSampling = 1U << 18U,
 };
 
 // All packet validators share this mask so accepted flags cannot diverge.
@@ -92,7 +95,7 @@ constexpr std::uint32_t kAllowedNodeFlags =
     NodeFlags::roundPixels | NodeFlags::hasMeshPostTintOverlay |
     NodeFlags::premultipliedSpriteTexture | NodeFlags::packedSpriteColor |
     NodeFlags::spriteWorldVertices | NodeFlags::standaloneBitmapRegion | NodeFlags::hasMvBitmapBlend |
-    NodeFlags::clampedTilingSampling;
+    NodeFlags::clampedTilingSampling | NodeFlags::mipmapSampling | NodeFlags::floatSpriteUv | NodeFlags::repeatSpriteSampling;
 
 static_assert((kAllowedNodeFlags & NodeFlags::roundPixels) != 0U,
               "scene packet validators must accept roundPixels");

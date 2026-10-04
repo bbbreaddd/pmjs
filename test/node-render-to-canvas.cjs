@@ -109,3 +109,64 @@ native.canvas.release(obsolete.handle);
 assert.equal(native.render.stats().rendererTargetCreates - reused.rendererTargetCreates, 1,
   'screen resize should replace only the scene target');
 assert.equal(native.render.stats().rendererTargetDestroys - reused.rendererTargetDestroys, 1);
+
+// Packed Pixi colors can have RGB=128 with alpha=127. A straight-alpha
+// readback cannot round-trip those texels; retained target images must do so.
+// Memory diagnostics lazily create the pinned fallback image.
+native.images.memory(0);
+const liveImagesBeforeCapture = native.images.memory(0).liveCount;
+const source = native.canvas.create(1, 1), captureTarget = native.canvas.create(2, 1);
+native.canvas.writePixels(source.handle, 0, 0, 1, 1, Uint8Array.of(255, 0, 0, 255));
+const schema = native.scene.schema;
+function queuePackedSprite(x) {
+  const values = new Float32Array(schema.valueStride);
+  values.set([1, 0, 0, 1, x, 0, 0.5]);
+  values.set([0, 0, 1, 1], 9); values.set([1, 1], 13);
+  native.scene.submit(schema.version,
+    new Uint32Array([1, 0xffffffff, source.handle, 0xffffff, 0, 8, 0]), values, 1);
+}
+native.beginFrame(); native.render.setRenderTargetSize(2, 1);
+queuePackedSprite(0);
+const firstImage = native.render.renderToCanvas(captureTarget.handle, true, true);
+assert.deepEqual(Array.from(native.canvas.readPremultipliedPixels(captureTarget.handle, 0, 0, 1, 1)),
+  [128, 0, 0, 127], 'Canvas retains over-alpha framebuffer bytes');
+assert.deepEqual(Array.from(native.canvas.readPixels(captureTarget.handle, 0, 0, 1, 1)),
+  [255, 0, 0, 127], 'Canvas extraction uses straight alpha');
+native.canvas.writePixels(source.handle, 0, 0, 1, 1, Uint8Array.of(0, 0, 255, 255));
+native.beginFrame(); native.render.setRenderTargetSize(2, 1);
+queuePackedSprite(1);
+const secondImage = native.render.renderToCanvas(captureTarget.handle, false, true, firstImage.handle);
+native.images.release(firstImage.handle);
+native.canvas.release(captureTarget.handle);
+native.canvas.release(source.handle);
+native.beginFrame(); native.render.setClearColor(0, 0, 0, 0);
+native.render.image(secondImage.handle, 1, 0, 0, 1, 0, 0, 0, 0, 2, 1, 1, 0xffffff, 0);
+native.images.release(secondImage.handle);
+native.renderScene();
+assert.deepEqual(Array.from(native.canvas.captureSceneRawPremultiplied().slice(0, 8)),
+  [128, 0, 0, 127, 0, 0, 128, 127],
+  'preservation and queued drawing retain exact GPU pixels after owners are released');
+
+native.beginFrame();
+assert.equal(native.images.memory(0).liveCount, liveImagesBeforeCapture,
+  'retained capture images must settle after replacement and queued drawing: ' +
+    JSON.stringify(native.images.memory(20).largest));
+
+// A Canvas target without a retained GPU image still supports clear=false.
+const canvasOnly = native.canvas.create(2, 1);
+native.canvas.writePixels(canvasOnly.handle, 0, 0, 2, 1,
+  Uint8Array.of(255, 0, 0, 255, 0, 0, 0, 0));
+native.beginFrame(); native.render.setRenderTargetSize(2, 1);
+native.render.quad(1, 0, 1, 1, 0, 0, 1, 1);
+assert.equal(native.render.renderToCanvas(canvasOnly.handle, false), undefined);
+assert.deepEqual(Array.from(native.canvas.readPixels(canvasOnly.handle, 0, 0, 2, 1)),
+  [255, 0, 0, 255, 0, 0, 255, 255]);
+assert.throws(() => native.render.renderToCanvas(canvasOnly.handle, false, true, 0x7fffffff),
+  /backing must match/);
+assert.throws(() => native.render.setSceneProjection([1, 0, 0, 1, Infinity, 0]), /finite/);
+native.beginFrame(); native.render.setRenderTargetSize(2, 1);
+native.render.quad(0, 0, 2, 1, 0, 1, 0, 1);
+native.render.renderToCanvas(canvasOnly.handle);
+assert.deepEqual(Array.from(native.canvas.readPixels(canvasOnly.handle, 0, 0, 1, 1)),
+  [0, 255, 0, 255], 'a rejected render must not corrupt the next capture');
+native.canvas.release(canvasOnly.handle);

@@ -15,6 +15,11 @@
       NativeHost.render.configurePixiFragmentPrecision(PIXI.settings.PRECISION_FRAGMENT);
     }
     var resolution = Math.max(0.000001, Number(options.resolution) || 1);
+    function releaseTargetImage(target) {
+      if (!target.__pmjsPixi5Image) return;
+      releaseNativeResource(target.__pmjsPixi5Image, 'image');
+      delete target.__pmjsPixi5Image;
+    }
     function renderTextureCanvas(renderTexture) {
       var base = renderTexture && renderTexture.baseTexture;
       if (!base) throw new Error('native RenderTexture has no base texture');
@@ -25,13 +30,18 @@
       var target = base.__pmjsPixi5RenderCanvas;
       if (!target) {
         target = base.__pmjsPixi5RenderCanvas = new CanvasElement();
+        target._pmjsNativeTextureSource = function() {
+          return target.__pmjsPixi5Image || target._ensureNativeCanvas();
+        };
         if (typeof base.once === 'function') {
           base.once('dispose', function() {
+            releaseTargetImage(target);
             if (typeof target._releaseNativeCanvas === 'function') target._releaseNativeCanvas();
             delete base.__pmjsPixi5RenderCanvas;
           });
         }
       }
+      if (target.width !== targetWidth || target.height !== targetHeight) releaseTargetImage(target);
       if (target.width !== targetWidth) target.width = targetWidth;
       if (target.height !== targetHeight) target.height = targetHeight;
       return target;
@@ -53,17 +63,26 @@
         isContextLost: function() { return false; },
         flush: function() {}
       },
-      render: function(stage, renderTexture) {
+      render: function(stage, renderTexture, clear, transform, skipUpdateTransform) {
         if (!stage) return;
+        var shouldClear = clear === undefined ? this.clearBeforeRender : !!clear;
+        var targetResolution = renderTexture ? Math.max(0.000001,
+          Number(renderTexture.baseTexture.resolution) || 1) : this.resolution;
+        var projection = transform ? [transform.a, transform.b, transform.c, transform.d,
+          transform.tx * targetResolution, transform.ty * targetResolution] : [1, 0, 0, 1, 0, 0];
+        if (!projection.every(Number.isFinite)) throw new Error('Pixi scene projection must be finite');
         if (renderTexture) {
           var target = renderTextureCanvas(renderTexture);
-          var targetResolution = Math.max(0.000001,
-            Number(renderTexture.baseTexture.resolution) || 1);
           try {
             NativeHost.render.setRenderTargetSize(target.width, target.height);
             globalThis.pmjsPixi5RenderScene(stage, null, targetResolution,
-              { width: renderTexture.baseTexture.width, height: renderTexture.baseTexture.height }, this);
-            NativeHost.render.renderToCanvas(target._ensureNativeCanvas().handle);
+              { width: renderTexture.baseTexture.width, height: renderTexture.baseTexture.height }, this,
+              skipUpdateTransform, projection);
+            var image = NativeHost.render.renderToCanvas(target._ensureNativeCanvas().handle,
+              shouldClear, true, target.__pmjsPixi5Image ? target.__pmjsPixi5Image.handle : 0);
+            releaseTargetImage(target);
+            // Keep premultiplied texels: packed sprite RGB can exceed its alpha.
+            target.__pmjsPixi5Image = trackNativeResource(image, 'image');
             if (typeof target._pmjsContentChanged === 'function') {
               target._pmjsContentChanged();
             }
@@ -73,12 +92,14 @@
           return;
         }
         NativeHost.render.setScreenRenderSize(this.width, this.height);
-        if (this.clearBeforeRender) {
+        if (shouldClear) {
           NativeHost.render.setClearColor(0, 0, 0, this.transparent ? 0 : 1);
         }
-        var background = this.clearBeforeRender && !this.transparent ?
+        var background = shouldClear && !this.transparent ?
           this.backgroundColor : null;
-        globalThis.pmjsPixi5RenderScene(stage, background, this.resolution, this.screen, this);
+        globalThis.pmjsPixi5RenderScene(stage, background, this.resolution, this.screen, this,
+          skipUpdateTransform, projection);
+        NativeHost.render.setClearBeforeRender(shouldClear);
       },
       resize: function(width, height) {
         this.screen.width = Math.max(0, Number(width) || 0);

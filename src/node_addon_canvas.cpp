@@ -13,8 +13,8 @@ napi_value createCanvas(napi_env env, napi_callback_info info) try {
 
 napi_value captureScene(napi_env env, napi_callback_info) try {
   State& value = host(env);
-  auto canvas = value.canvases.createRgba(value.width, value.height,
-                                           value.renderer.captureSceneRgba());
+  auto canvas = value.canvases.createPixels(value.width, value.height,
+                                           value.renderer.captureSceneRawPremultiplied(), PixelEncoding::PremultipliedRGBA8);
   if (!canvas) throw std::runtime_error("capture failed");
   return imageInfo(env, canvas->handle, canvas->width, canvas->height);
 } catch (const std::exception& error) {
@@ -40,12 +40,44 @@ napi_value captureDrawable(napi_env env, napi_callback_info) try {
   State& value = host(env);
   value.core.syncDrawableSize();
   const auto geometry = value.renderer.presentationGeometry();
-  auto canvas = value.canvases.createRgba(geometry.drawableWidth,
-    geometry.drawableHeight, value.renderer.captureDrawableRgba());
+  auto canvas = value.canvases.createPixels(geometry.drawableWidth,
+    geometry.drawableHeight, value.renderer.captureDrawableRgba(AlphaMode::premultiplied), PixelEncoding::PremultipliedRGBA8);
   if (!canvas) throw std::runtime_error("drawable capture failed");
   return imageInfo(env, canvas->handle, canvas->width, canvas->height);
 } catch (const std::exception& error) {
   napi_throw_error(env, nullptr, error.what()); return nullptr;
+}
+
+napi_value circleCoverage(napi_env env, napi_callback_info info) try {
+  auto args = arguments(env, info, 14);
+  std::vector<std::array<float, 4>> clips;
+  if (args.size() > 13) {
+    bool isArray = false;
+    check(env, napi_is_array(env, args[13], &isArray), "invalid circle clips");
+    if (!isArray) throw std::invalid_argument("circle clips must be an array");
+    uint32_t count = 0;
+    check(env, napi_get_array_length(env, args[13], &count), "invalid circle clips");
+    if (count % 4 || count > 64) throw std::invalid_argument("invalid circle clips");
+    clips.resize(count / 4);
+    for (uint32_t i = 0; i < count; ++i) {
+      napi_value component;
+      check(env, napi_get_element(env, args[13], i, &component), "invalid circle clip");
+      clips[i / 4][i % 4] = asNumber(env, component);
+    }
+  }
+  std::array<float, 6> transform;
+  for (size_t i = 0; i < transform.size(); ++i) transform[i] = asNumber(env, args.at(3 + i));
+  auto pixels = CanvasStore::circleCoverage(asNumber(env, args.at(0)), asNumber(env, args.at(1)),
+    asNumber(env, args.at(2)), transform, asInt32(env, args.at(9)), asInt32(env, args.at(10)),
+    asInt32(env, args.at(11)), asInt32(env, args.at(12)), clips);
+  void* data = nullptr;
+  napi_value buffer, result;
+  check(env, napi_create_arraybuffer(env, pixels.size(), &data, &buffer), "cannot allocate circle coverage");
+  std::memcpy(data, pixels.data(), pixels.size());
+  check(env, napi_create_typedarray(env, napi_uint8_array, pixels.size(), buffer, 0, &result), "cannot create coverage array");
+  return result;
+} catch (const std::exception& error) {
+  napi_throw_range_error(env, nullptr, error.what()); return nullptr;
 }
 
 napi_value fillRect(napi_env env, napi_callback_info info) try {
@@ -98,7 +130,31 @@ napi_value clearRect(napi_env env, napi_callback_info info) try {
 } catch(const std::exception& error){napi_throw_range_error(env,nullptr,error.what());return nullptr;}
 
 napi_value canvasDrawImage(napi_env env, napi_callback_info info) try {
-  auto a=arguments(env,info,11); if(!host(env).canvases.drawImage(asUint32(env,a.at(0)),asUint32(env,a.at(1)),asInt32(env,a.at(2)),asInt32(env,a.at(3)),asInt32(env,a.at(4)),asInt32(env,a.at(5)),asInt32(env,a.at(6)),asInt32(env,a.at(7)),asInt32(env,a.at(8)),asInt32(env,a.at(9)),asNumber(env,a.at(10)))) throw std::runtime_error("invalid canvas image"); return undefined(env);
+  auto a=arguments(env,info,12); if(!host(env).canvases.drawImage(asUint32(env,a.at(0)),asUint32(env,a.at(1)),asNumber(env,a.at(2)),asNumber(env,a.at(3)),asNumber(env,a.at(4)),asNumber(env,a.at(5)),asNumber(env,a.at(6)),asNumber(env,a.at(7)),asNumber(env,a.at(8)),asNumber(env,a.at(9)),asNumber(env,a.at(10)), a.size() < 12 || asBoolean(env,a.at(11)))) throw std::runtime_error("invalid canvas image"); return undefined(env);
+} catch(const std::exception& error){napi_throw_range_error(env,nullptr,error.what());return nullptr;}
+
+napi_value paintRect(napi_env env, napi_callback_info info) try {
+  auto a = arguments(env, info, 13);
+  std::array<float, 4> rect, gradient;
+  for (size_t i = 0; i < 4; ++i) { rect[i] = asNumber(env, a.at(1 + i)); gradient[i] = asNumber(env, a.at(7 + i)); }
+  std::vector<float> offsets;
+  std::vector<uint32_t> colors;
+  uint32_t count = 0, colorCount = 0;
+  bool offsetArray = false, colorArray = false;
+  check(env, napi_is_array(env, a.at(11), &offsetArray), "invalid gradient offsets");
+  check(env, napi_is_array(env, a.at(12), &colorArray), "invalid gradient colors");
+  if (!offsetArray || !colorArray) throw std::invalid_argument("gradient stops must be arrays");
+  check(env, napi_get_array_length(env, a.at(11), &count), "invalid gradient offsets");
+  check(env, napi_get_array_length(env, a.at(12), &colorCount), "invalid gradient colors");
+  if (count != colorCount || count > 64) throw std::invalid_argument("invalid gradient stops");
+  for (uint32_t i = 0; i < count; ++i) {
+    napi_value offset, color;
+    check(env, napi_get_element(env, a.at(11), i, &offset), "invalid gradient offset");
+    check(env, napi_get_element(env, a.at(12), i, &color), "invalid gradient color");
+    offsets.push_back(asNumber(env, offset)); colors.push_back(asUint32(env, color));
+  }
+  return boolean(env, host(env).canvases.paintRect(asUint32(env, a.at(0)), rect,
+    asUint32(env, a.at(5)), asNumber(env, a.at(6)), gradient, offsets, colors));
 } catch(const std::exception& error){napi_throw_range_error(env,nullptr,error.what());return nullptr;}
 
 namespace {
@@ -191,12 +247,13 @@ napi_value pixel(napi_env env, napi_callback_info info) try {
   auto a=arguments(env,info,3); auto value=host(env).canvases.pixel(asUint32(env,a.at(0)),asInt32(env,a.at(1)),asInt32(env,a.at(2))); if(!value) throw std::runtime_error("invalid pixel"); return uint32(env,*value);
 } catch(const std::exception& error){napi_throw_range_error(env,nullptr,error.what());return nullptr;}
 
+template<PixelEncoding encoding>
 napi_value readCanvasPixels(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 5);
   if (args.size() != 5) throw std::runtime_error("readPixels requires handle and rectangle");
   const auto pixels = host(env).canvases.readPixels(asUint32(env, args[0]),
     asInt32(env, args[1]), asInt32(env, args[2]), asInt32(env, args[3]),
-    asInt32(env, args[4]));
+    asInt32(env, args[4]), encoding);
   if (!pixels) throw std::runtime_error("invalid canvas pixel rectangle");
   void* data = nullptr;
   napi_value buffer;
@@ -224,6 +281,7 @@ napi_value encodeCanvasPng(napi_env env, napi_callback_info info) try {
   return result;
 } catch(const std::exception& error){napi_throw_range_error(env,nullptr,error.what());return nullptr;}
 
+template<PixelEncoding encoding>
 napi_value writeCanvasPixels(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 6);
   if (args.size() != 6) throw std::runtime_error("writePixels requires handle, rectangle, and pixels");
@@ -241,7 +299,7 @@ napi_value writeCanvasPixels(napi_env env, napi_callback_info info) try {
                                    static_cast<std::uint8_t*>(data) + length);
   if (!host(env).canvases.writePixels(asUint32(env, args[0]),
       asInt32(env, args[1]), asInt32(env, args[2]), asInt32(env, args[3]),
-      asInt32(env, args[4]), pixels)) {
+      asInt32(env, args[4]), pixels, encoding)) {
     throw std::runtime_error("invalid canvas pixel data");
   }
   return undefined(env);
@@ -411,18 +469,22 @@ void registerCanvasBindings(napi_env env, napi_value exports) {
     captureSceneRawPremultiplied);
   method(env, canvas, "captureDrawable", captureDrawable);
   method(env, canvas, "fillRect", fillRect);
+  method(env, canvas, "circleCoverage", circleCoverage);
   method(env, canvas, "fillRadialGradient", fillRadialGradient);
   method(env, canvas, "clear", clearCanvas);
   method(env, canvas, "clearRect", clearRect);
   method(env, canvas, "drawImage", canvasDrawImage);
+  method(env, canvas, "paintRect", paintRect);
   method(env, canvas, "drawText", drawText);
   method(env, canvas, "measureText", measureText);
   method(env, canvas, "measureTextMetrics", measureTextMetrics);
   method(env, canvas, "canLoadFont", canLoadFont);
   method(env, canvas, "pixel", pixel);
-  method(env, canvas, "readPixels", readCanvasPixels);
+  method(env, canvas, "readPixels", readCanvasPixels<PixelEncoding::StraightRGBA8>);
+  method(env, canvas, "readPremultipliedPixels", readCanvasPixels<PixelEncoding::PremultipliedRGBA8>);
+  method(env, canvas, "writePremultipliedPixels", writeCanvasPixels<PixelEncoding::PremultipliedRGBA8>);
   method(env, canvas, "encodePng", encodeCanvasPng);
-  method(env, canvas, "writePixels", writeCanvasPixels);
+  method(env, canvas, "writePixels", writeCanvasPixels<PixelEncoding::StraightRGBA8>);
   method(env, canvas, "blur", blurCanvas);
   method(env, canvas, "release", releaseCanvas);
   method(env, canvas, "memory", canvasMemory);

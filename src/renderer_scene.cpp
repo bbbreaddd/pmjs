@@ -69,7 +69,7 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
       (flags & NodeFlags::textureRotationMask) >> NodeFlags::textureRotationShift);
     if (textureRotation != 0 &&
         kind != static_cast<std::uint32_t>(NodeKind::sprite)) return false;
-    if ((flags & (NodeFlags::premultipliedSpriteTexture | NodeFlags::packedSpriteColor | NodeFlags::spriteWorldVertices | NodeFlags::standaloneBitmapRegion)) &&
+    if ((flags & (NodeFlags::premultipliedSpriteTexture | NodeFlags::packedSpriteColor | NodeFlags::spriteWorldVertices | NodeFlags::standaloneBitmapRegion | NodeFlags::mipmapSampling | NodeFlags::floatSpriteUv | NodeFlags::repeatSpriteSampling)) &&
         kind != static_cast<std::uint32_t>(NodeKind::sprite)) return false;
     if ((flags & NodeFlags::roundPixels) &&
         kind != static_cast<std::uint32_t>(NodeKind::sprite)) return false;
@@ -414,6 +414,7 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
     const float minimumY = std::min({p0[1], p1[1], p2[1], p3[1]});
     const float maximumY = std::max({p0[1], p1[1], p2[1], p3[1]});
     if (filterDepth == 0 &&
+        sceneProjection_ == std::array<float, 6>{1, 0, 0, 1, 0, 0} &&
         (maximumX <= 0 || maximumY <= 0 || minimumX >= queueWidth_ ||
          minimumY >= queueHeight_)) continue;
 
@@ -435,6 +436,7 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
     frame_.commands.back().blur =
       flags & NodeFlags::hasBlurFilter ? values[valueOffset + 21] : 0.0F;
     frame_.commands.back().nearest = flags & NodeFlags::nearestSampling;
+    frame_.commands.back().mipmap = flags & NodeFlags::mipmapSampling;
     frame_.commands.back().clampedTilingSampling = flags & NodeFlags::clampedTilingSampling;
     frame_.commands.back().roundPixels = flags & NodeFlags::roundPixels;
     frame_.commands.back().textureRotation = textureRotation;
@@ -445,6 +447,8 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
     frame_.commands.back().spriteWorldVertices = spriteVertices;
     frame_.commands.back().spriteVertices = worldVertices;
     frame_.commands.back().standaloneBitmapRegion = flags & NodeFlags::standaloneBitmapRegion;
+    frame_.commands.back().floatSpriteUv = flags & NodeFlags::floatSpriteUv;
+    if (flags & NodeFlags::repeatSpriteSampling) frame_.commands.back().repeat = true;
     frame_.commands.back().packedSpriteColor = flags & NodeFlags::packedSpriteColor;
     if (frame_.commands.back().packedSpriteColor) {
       frame_.commands.back().color = { float((tint >> 16) & 255) / 255,

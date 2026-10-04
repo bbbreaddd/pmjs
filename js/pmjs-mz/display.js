@@ -57,7 +57,7 @@
           ((fill.color >> shift) & 255) / 255 * 255) << shift;
       });
       return { kind: 1, resource: pixi.nativeSource(screenCanvas).handle,
-        tint: tint, alpha: graphics.alpha * fill.alpha,
+        tint: tint, alphaMultiplier: fill.alpha,
         sprite: { vertices: vertices, texture: {
           baseTexture: { resolution: 1, scaleMode: PIXI.SCALE_MODES.NEAREST },
           frame: { x: 0, y: 0, width: 1, height: 1 },

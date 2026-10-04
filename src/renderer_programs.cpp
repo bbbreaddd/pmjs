@@ -58,7 +58,8 @@ GLuint linkProgram(const char* vertexSource, const char* fragmentSource) {
       GLint previous = 0;
       glGetIntegerv(GL_CURRENT_PROGRAM, &previous);
       glUseProgram(program);
-      glUniform4f(projection, 1, 1, 0, 0);
+      constexpr std::array<float, 9> identity{1, 0, 0, 0, 1, 0, 0, 0, 1};
+      glUniformMatrix3fv(projection, 1, GL_FALSE, identity.data());
       glUseProgram(previous);
     }
     return program;
@@ -134,6 +135,7 @@ Renderer::Renderer(int width, int height, ImageStore& images)
   spriteEffectPackingUniform_ = glGetUniformLocation(spriteEffectProgram_, "pixiSpritePacking");
   spriteEffectPremultipliedUniform_ = glGetUniformLocation(spriteEffectProgram_, "texturePremultiplied");
   spriteEffectFrameUniform_ = glGetUniformLocation(spriteEffectProgram_, "spriteFrame");
+  spriteEffectStandaloneUniform_ = glGetUniformLocation(spriteEffectProgram_, "standaloneBitmapRegion");
   spriteEffectTilingClampUniform_ = glGetUniformLocation(spriteEffectProgram_, "clampedTilingSampling");
   spriteEffectNearestUniform_ = glGetUniformLocation(spriteEffectProgram_, "nearestSampling");
   spriteEffectTextureSizeUniform_ =
@@ -276,6 +278,8 @@ Renderer::TileProgramUniforms Renderer::queryTileProgramUniforms(std::uint32_t p
   uniforms.overlayColor = glGetUniformLocation(program, "meshPostTintOverlayColor");
   uniforms.trianglePaintEnabled = glGetUniformLocation(program, "trianglePaintEnabled");
   uniforms.trianglePaint = glGetUniformLocation(program, "trianglePaint");
+  uniforms.triangleCoverageEnabled = glGetUniformLocation(program, "triangleCoverageEnabled");
+  uniforms.triangleCoverage = glGetUniformLocation(program, "triangleCoverage");
   uniforms.mvBlendEnabled = glGetUniformLocation(program, "mvBlendEnabled");
   uniforms.mvBounds = glGetUniformLocation(program, "mvBounds");
   uniforms.nearestSampling = glGetUniformLocation(program, "nearestSampling");
@@ -373,8 +377,12 @@ std::uint32_t Renderer::createFilterProgram(const std::string& fragmentSource, c
     throw std::invalid_argument("invalid filter fragment source");
   }
   std::string source = fragmentSource;
-  if (source.find("precision ") == std::string::npos) {
-    source = "precision " + pixiFragmentPrecision_ + " float;\n" + source;
+  const auto first = source.find_first_not_of(" \t\r\n\f\v");
+  if (first == std::string::npos || source.compare(first, 9, "precision") != 0) {
+    // Implicit desktop-GL mediump arithmetic retains full float precision.
+    // Use full precision here as well; explicit shader declarations stay intact.
+    const auto precision = pixiFragmentPrecision_ == "mediump" ? "highp" : pixiFragmentPrecision_;
+    source = "precision " + precision + " float;\n" + source;
   }
   source = "precision highp sampler2D;\n" + source;
   for (std::size_t index = 0; index < filterPrograms_.size(); ++index) {
@@ -462,10 +470,14 @@ std::uint32_t Renderer::registerFilterPlan(const std::shared_ptr<CustomFilterPla
   std::erase_if(filterPlans_, [](const auto& entry) { return entry.second.expired(); });
   if (filterPlans_.size() >= 4096 || nextFilterPlan_ == 0xffffffffU)
     throw std::runtime_error("custom filter plan budget exhausted");
-for (float resolution : plan->resolutions) {
+  for (float resolution : plan->resolutions) {
     if (plan->frame[2] * resolution > maxTextureSize_ || plan->frame[3] * resolution > maxTextureSize_)
       throw std::invalid_argument("custom filter target exceeds texture size");
   }
+  std::size_t retainedCount = 0;
+  for (const auto& pass : plan->passes) for (const auto& sampler : pass.samplers)
+    retainedCount += sampler.image != 0;
+  plan->retainedImages.reserve(retainedCount);
   plan->images = &images_;
   plan->lifetime = filterPlanLifetime_;
   for (const auto& pass : plan->passes) for (const auto& sampler : pass.samplers) {
@@ -479,7 +491,7 @@ for (float resolution : plan->resolutions) {
 }
 
 Renderer::~Renderer() {
-  frame_.clear();
+  discardCommandsFrom(0);
   filterPlanLifetime_.reset();
   glDeleteVertexArrays(1, &customFilterVertexArray_);
   glDeleteBuffers(1, &customFilterVertexBuffer_);
@@ -487,7 +499,6 @@ Renderer::~Renderer() {
   for (const auto& filter : filterPrograms_) glDeleteProgram(filter.program);
   if (presentationVideo_) images_.release(presentationVideo_);
   if (presentationUpperCanvas_) images_.release(presentationUpperCanvas_);
-  discardCommandsFrom(0);
   while (!tileLayers_.empty()) destroyTileLayer(tileLayers_.begin()->first);
   for (std::size_t index = 0; index < primitiveSurfaces_.size(); ++index) {
     auto& surface = primitiveSurfaces_[index];

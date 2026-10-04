@@ -20,8 +20,6 @@ struct TextBackend::State {
     ~Font() { pmjs_skia65_font_close(value); }
   };
   std::list<Font> fonts;
-  size_t scratchPeakBytes = 0;
-  std::vector<uint8_t> scratch;
   pmjs_skia65_font* font(const std::vector<std::filesystem::path>& paths) {
     auto found = std::find_if(fonts.begin(), fonts.end(), [&](const Font& item) { return item.paths == paths; });
     if (found != fonts.end()) {
@@ -65,13 +63,6 @@ TextBackend::~TextBackend() = default;
 
 #ifdef PMJS_HAS_SKIA65
 namespace {
-constexpr auto unpremultiplied = [] {
-  std::array<std::array<uint8_t, 256>, 256> values{};
-  for (unsigned alpha = 1; alpha < 256; ++alpha)
-    for (unsigned channel = 0; channel < 256; ++channel)
-      values[alpha][channel] = std::min(255U, (channel * 255U + alpha / 2) / alpha);
-  return values;
-}();
 pmjs_skia65_style settings(float size, uint32_t color, float stroke, const CanvasTextStyle& options) {
   return {size, stroke, options.miterLimit, color, stroke > 0, options.join, options.cap,
     options.bold, options.italic, 1, 0};
@@ -81,7 +72,7 @@ pmjs_skia65_style settings(float size, uint32_t color, float stroke, const Canva
 
 bool TextBackend::draw(const std::vector<std::filesystem::path>& paths, const std::string& text,
   float x, float y, float size, uint32_t color, float stroke, const CanvasTextStyle& options,
-  std::vector<uint8_t>& straight, int width, int height, int dirty[4]) {
+  std::vector<uint8_t>& pixels, int width, int height, int dirty[4]) {
   if (!skia_) return false;
 #ifdef PMJS_HAS_SKIA65
   auto* font = state_->font(paths);
@@ -92,55 +83,14 @@ bool TextBackend::draw(const std::vector<std::filesystem::path>& paths, const st
   dirty[0] = width; dirty[1] = height; dirty[2] = dirty[3] = 0;
   const int left = region[0], top = region[1], croppedWidth = region[2] - left, croppedHeight = region[3] - top;
   if (croppedWidth <= 0 || croppedHeight <= 0) return true;
-  const size_t pixelBytes = static_cast<size_t>(croppedWidth) * croppedHeight * 4;
-  std::vector<uint8_t> temporary;
-  auto& storage = pixelBytes * 2 <= 128 * 1024 ? state_->scratch : temporary;
-  if (storage.capacity() < pixelBytes * 2) storage.reserve(pixelBytes * 2);
-  storage.resize(pixelBytes * 2);
-  auto* pixels = storage.data();
-  auto* before = pixels + pixelBytes;
-  state_->scratchPeakBytes = std::max(state_->scratchPeakBytes,
-    state_->scratch.capacity() + temporary.capacity());
-  for (int row = 0; row < croppedHeight; ++row) {
-    const auto* source = straight.data() + (static_cast<size_t>(top + row) * width + left) * 4;
-    auto* destination = pixels + static_cast<size_t>(row) * croppedWidth * 4;
-    for (int column = 0; column < croppedWidth; ++column, source += 4, destination += 4) {
-      const unsigned alpha = source[3];
-      if (alpha == 0) std::fill_n(destination, 4, 0);
-      else {
-        for (int channel = 0; channel < 3; ++channel)
-          destination[2 - channel] = alpha == 255 ? source[channel] : (source[channel] * alpha + 127) / 255;
-        destination[3] = alpha;
-      }
-    }
-  }
-  std::copy_n(pixels, pixelBytes, before);
-  if (!pmjs_skia65_draw_bgra(font, text.data(), text.size(), &style, x, y, pixels,
-      croppedWidth, croppedHeight, croppedWidth * 4, left, top)) return false;
-  for (int row = 0; row < croppedHeight; ++row) {
-    auto* source = pixels + static_cast<size_t>(row) * croppedWidth * 4;
-    const auto* previous = before + static_cast<size_t>(row) * croppedWidth * 4;
-    auto* destination = straight.data() + (static_cast<size_t>(top + row) * width + left) * 4;
-    int first = croppedWidth, last = -1;
-    for (int column = 0; column < croppedWidth; ++column, source += 4, previous += 4, destination += 4) {
-      if (std::equal(source, source + 4, previous)) continue;
-      const unsigned alpha = source[3];
-      if (alpha != 255) for (int channel = 0; channel < 3; ++channel)
-        source[channel] = unpremultiplied[alpha][source[channel]];
-      std::swap(source[0], source[2]);
-      if (std::equal(source, source + 4, destination)) continue;
-      if (first == croppedWidth) first = column;
-      last = column;
-      std::copy_n(source, 4, destination);
-    }
-    if (last < 0) continue;
-    dirty[0] = std::min(dirty[0], left + first); dirty[1] = std::min(dirty[1], top + row);
-    dirty[2] = std::max(dirty[2], left + last + 1); dirty[3] = top + row + 1;
-  }
+  const size_t stride = static_cast<size_t>(width) * 4;
+  if (!pmjs_skia65_draw_bgra(font, text.data(), text.size(), &style, x, y,
+      pixels.data() + top * stride + left * 4, croppedWidth, croppedHeight, stride, left, top)) return false;
+  std::copy_n(region, 4, dirty);
   return true;
 #else
   (void)paths; (void)text; (void)x; (void)y; (void)size; (void)color; (void)stroke;
-  (void)options; (void)straight; (void)width; (void)height; (void)dirty;
+  (void)options; (void)pixels; (void)width; (void)height; (void)dirty;
   return false;
 #endif
 }
@@ -178,7 +128,7 @@ TextBackendStats TextBackend::stats() const {
     pmjs_skia65_stats stats;
     pmjs_skia65_get_stats(&stats);
     result = {pmjs_skia65_identity(), stats.cache_bytes, stats.cache_limit, stats.cache_entries,
-      state_->fonts.size(), stats.layout_requests, stats.layout_hits, stats.draw_calls, stats.shape_ns, stats.draw_ns, {}, state_->scratchPeakBytes, state_->scratch.capacity()};
+      state_->fonts.size(), stats.layout_requests, stats.layout_hits, stats.draw_calls, stats.shape_ns, stats.draw_ns, {}, 0, 0};
     for (const auto& font : state_->fonts) {
       size_t bytes, entries, metrics;
       pmjs_skia65_font_cache_stats(font.value, &bytes, &entries, &metrics);

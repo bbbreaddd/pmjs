@@ -3,6 +3,8 @@
 #include <cmath>
 
 namespace pmjs::addon {
+std::vector<float> floatVector(napi_env env, napi_value input);
+
 napi_value graphicsInfo(napi_env env, napi_callback_info) try {
   host(env);
   napi_value result;
@@ -27,6 +29,7 @@ napi_value graphicsInfo(napi_env env, napi_callback_info) try {
   setBits("greenBits", GL_GREEN_BITS);
   setBits("blueBits", GL_BLUE_BITS);
   setBits("alphaBits", GL_ALPHA_BITS);
+  setBits("maxVaryingVectors", GL_MAX_VARYING_VECTORS);
   check(env, napi_set_named_property(env, result, "sceneFormat",
     string(env, "RGBA8")), "cannot set scene format");
   return result;
@@ -39,6 +42,51 @@ napi_value setClearColor(napi_env env, napi_callback_info info) try {
   if (args.size() != 4) throw std::runtime_error("setClearColor requires rgba");
   host(env).renderer.setClearColor(asNumber(env, args[0]), asNumber(env, args[1]),
                                    asNumber(env, args[2]), asNumber(env, args[3]));
+  return undefined(env);
+} catch (const std::exception& error) {
+  napi_throw_type_error(env, nullptr, error.what()); return nullptr;
+}
+
+napi_value clearScene(napi_env env, napi_callback_info info) try {
+  auto args = arguments(env, info, 8);
+  if (args.size() != 4 && args.size() != 8)
+    throw std::runtime_error("clearScene requires rgba and an optional pixel rectangle");
+  std::optional<std::array<int, 4>> clip;
+  if (args.size() == 8) {
+    clip = std::array<int, 4>{asInt32(env, args[4]), asInt32(env, args[5]),
+            asInt32(env, args[6]), asInt32(env, args[7])};
+  }
+  host(env).renderer.clearScene(asNumber(env, args[0]), asNumber(env, args[1]),
+                                asNumber(env, args[2]), asNumber(env, args[3]), clip);
+  return undefined(env);
+} catch (const std::exception& error) {
+  napi_throw_type_error(env, nullptr, error.what()); return nullptr;
+}
+
+napi_value setPresentationViewport(napi_env env, napi_callback_info info) try {
+  auto args = arguments(env, info, 3);
+  host(env).renderer.setPresentationViewport(asUint32(env, args.at(0)), asUint32(env, args.at(1)),
+    asUint32(env, args.at(2)));
+  return undefined(env);
+} catch (const std::exception& error) {
+  napi_throw_range_error(env, nullptr, error.what()); return nullptr;
+}
+
+napi_value setClearBeforeRender(napi_env env, napi_callback_info info) try {
+  auto args = arguments(env, info, 1);
+  host(env).renderer.setClearBeforeRender(asBoolean(env, args.at(0)));
+  return undefined(env);
+} catch (const std::exception& error) {
+  napi_throw_type_error(env, nullptr, error.what()); return nullptr;
+}
+
+napi_value setSceneProjection(napi_env env, napi_callback_info info) try {
+  auto args = arguments(env, info, 1);
+  const auto values = floatVector(env, args.at(0));
+  if (values.size() != 6) throw std::invalid_argument("scene projection requires six coefficients");
+  std::array<float, 6> transform;
+  std::copy(values.begin(), values.end(), transform.begin());
+  host(env).renderer.setSceneProjection(transform);
   return undefined(env);
 } catch (const std::exception& error) {
   napi_throw_type_error(env, nullptr, error.what()); return nullptr;
@@ -144,6 +192,10 @@ napi_value createFilterPlan(napi_env env, napi_callback_info info) try {
       binding.image = asUint32(env, property(env, sampler, "image"));
       binding.target = asUint32(env, property(env, sampler, "target"));
       binding.nearest = hasProperty(env, sampler, "nearest") && asBoolean(env, property(env, sampler, "nearest"));
+      binding.mipmap = hasProperty(env, sampler, "mipmap") && asBoolean(env, property(env, sampler, "mipmap"));
+      if (hasProperty(env, sampler, "wrap")) binding.wrap = asUint32(env, property(env, sampler, "wrap"));
+      if (binding.wrap != GL_CLAMP_TO_EDGE && binding.wrap != GL_REPEAT && binding.wrap != GL_MIRRORED_REPEAT)
+        throw std::invalid_argument("invalid filter sampler wrap mode");
       if (binding.image) {
         const auto image = resolveImage(value, binding.image);
         if (!image) throw std::invalid_argument("invalid filter sampler image");
@@ -472,17 +524,37 @@ napi_value releasePrimitiveSurface(napi_env env, napi_callback_info info) try {
 }
 
 napi_value renderToCanvas(napi_env env, napi_callback_info info) try {
-  auto args = arguments(env, info, 1);
+  auto args = arguments(env, info, 4);
   State& value = host(env);
   const auto target = value.canvases.info(asUint32(env, args.at(0)));
   if (!target) throw std::runtime_error("invalid render target canvas");
   value.canvases.uploadDirty();
+  const bool clear = args.size() < 2 || asBoolean(env, args[1]);
+  const bool retainImage = args.size() > 2 && asBoolean(env, args[2]);
+  std::optional<pmjs::ImageHandle> initialImage;
+  if (!clear) {
+    const auto previous = args.size() > 3 ? asUint32(env, args[3]) : 0;
+    initialImage = previous ? std::optional<pmjs::ImageHandle>{previous} :
+      value.canvases.prepareImage(asUint32(env, args[0]));
+  }
+  if (!clear && !initialImage) throw std::runtime_error("cannot restore render target canvas");
+  if (initialImage) {
+    const auto image = value.images.lookup(*initialImage);
+    if (!image || image->width != target->width || image->height != target->height)
+      throw std::runtime_error("render target backing must match the canvas");
+  }
   const bool written = value.canvases.replacePixels(
     asUint32(env, args.at(0)),
-    value.renderer.renderToRgba(target->width, target->height));
+    value.renderer.renderToRgba(target->width, target->height, initialImage.value_or(0), AlphaMode::premultiplied),
+    PixelEncoding::PremultipliedRGBA8);
   value.renderer.beginFrame();
   if (!written) {
     throw std::runtime_error("could not write native render target");
+  }
+  if (retainImage) {
+    const auto image = value.renderer.captureOffscreenImage();
+    if (!image) throw std::runtime_error("could not retain render target image");
+    return imageInfo(env, image->handle, image->width, image->height);
   }
   return undefined(env);
 } catch (const std::exception& error) {
@@ -606,6 +678,10 @@ napi_value presentationGeometry(napi_env env, napi_callback_info) try {
 void registerGraphicsBindings(napi_env env, napi_value exports) {
   napi_value render = moduleObject(env);
   method(env, render, "setClearColor", setClearColor);
+  method(env, render, "clearScene", clearScene);
+  method(env, render, "setPresentationViewport", setPresentationViewport);
+  method(env, render, "setClearBeforeRender", setClearBeforeRender);
+  method(env, render, "setSceneProjection", setSceneProjection);
   method(env, render, "configurePixiFragmentPrecision", configurePixiFragmentPrecision);
   method(env, render, "createFilterProgram", createFilterProgram);
   method(env, render, "createFilterPlan", createFilterPlan);
@@ -660,6 +736,8 @@ void registerGraphicsBindings(napi_env env, napi_value exports) {
   napi_set_named_property(env, schema, "transactionalSubmit", boolean(env, true));
   napi_set_named_property(env, schema, "gpuSpriteTextures", boolean(env, true));
   napi_set_named_property(env, schema, "clampedTilingSampling", boolean(env, true));
+  napi_set_named_property(env, schema, "floatSpriteUv", boolean(env, true));
+  napi_set_named_property(env, schema, "repeatSpriteSampling", boolean(env, true));
   napi_set_named_property(env, schema, "filterCompositeBlend", boolean(env, true));
   napi_set_named_property(env, schema, "effects", boolean(env, true));
   napi_set_named_property(env, scene, "schema", schema);

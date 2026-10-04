@@ -6,11 +6,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const native = require(path.resolve(process.argv[2]));
 native.initialize({ gameRoot: path.resolve(process.argv[3]), assetRoot: '', width: 160, height: 80, windowTitle: 'FreeType facade quantization' });
-function EventTarget() {}
-EventTarget.prototype.addEventListener = function() {};
-EventTarget.prototype.removeEventListener = function() {};
-EventTarget.prototype.dispatchEvent = function() {};
-const ctx = vm.createContext({ console, EventTarget, pmjsGameConfig: {},
+const ctx = vm.createContext({ console, pmjsGameConfig: {},
   nativeWindowState: { focused: true, visible: true }, NativeHost: { canvas: native.canvas,
     runtime: { env: () => '', loadScript() {} } },
   PMJS: { config: { fonts: { GameFont: 'text-shaping.ttf' } }, optimizations: {
@@ -18,7 +14,7 @@ const ctx = vm.createContext({ console, EventTarget, pmjsGameConfig: {},
   } }, nativeBootPhase() {}, Sprite: function() {}, Graphics: function() {}, Input: function() {},
 });
 const load = file => vm.runInContext(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), ctx, { filename: file });
-load('js/pmjs-web/canvas.js'); load('js/pmjs-web/elements.js');
+load('js/pmjs-web/events.js'); load('js/pmjs-web/canvas.js'); load('js/pmjs-web/elements.js');
 function snapshot(canvas) {
   return Buffer.from(native.canvas.readPixels(canvas._ensureNativeCanvas().handle, 0, 0, 160, 80));
 }

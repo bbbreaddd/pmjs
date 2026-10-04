@@ -1,6 +1,9 @@
 #include "canvas.hpp"
 #include "checked_bounds.hpp"
 #include "text_layout.hpp"
+#ifdef PMJS_HAS_SKIA65
+#include "skia65/pmjs_skia65.h"
+#endif
 #include <hb-ft.h>
 
 #include <ft2build.h>
@@ -19,6 +22,64 @@
 #include <utility>
 
 namespace pmjs {
+std::vector<std::uint8_t> CanvasStore::circleCoverage(float x, float y, float radius,
+    const std::array<float, 6>& transform, int left, int top, int width, int height,
+    const std::vector<std::array<float, 4>>& clips) {
+  auto extent = checkedImageExtent(width, height);
+  if (!extent || !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(radius) || radius < 0 ||
+      !std::all_of(transform.begin(), transform.end(), [](float value) { return std::isfinite(value); }) ||
+      clips.size() > 16 || !std::all_of(clips.begin(), clips.end(), [](const auto& clip) {
+        return std::all_of(clip.begin(), clip.end(), [](float value) { return std::isfinite(value); }) && clip[2] >= 0 && clip[3] >= 0;
+      }))
+    throw std::invalid_argument("invalid circle coverage geometry");
+  std::vector<std::uint8_t> coverage(extent->rgbaBytes / 4, 0);
+#ifdef PMJS_HAS_SKIA65
+  std::vector<float> clipValues;
+  for (const auto& clip : clips) clipValues.insert(clipValues.end(), clip.begin(), clip.end());
+  if (!pmjs_skia65_circle_coverage(x, y, radius, transform.data(), left, top, width, height, coverage.data(),
+      clipValues.data(), clips.size()))
+    throw std::runtime_error("circle rasterization failed");
+#else
+  const double determinant = transform[0] * transform[3] - transform[1] * transform[2];
+  if (determinant == 0) return coverage;
+  // Portable builds use bounded subpixel coverage instead of binary polygons.
+  for (int row = 0; row < height; ++row) for (int column = 0; column < width; ++column) {
+    int inside = 0;
+    for (int sy = 0; sy < 16; ++sy) for (int sx = 0; sx < 16; ++sx) {
+      const double px = static_cast<double>(left) + column + (sx + 0.5) / 16 - transform[4];
+      const double py = static_cast<double>(top) + row + (sy + 0.5) / 16 - transform[5];
+      const double dx = (px * transform[3] - py * transform[2]) / determinant - x;
+      const double dy = (py * transform[0] - px * transform[1]) / determinant - y;
+      bool clipped = false;
+      for (const auto& clip : clips) clipped |= px + transform[4] < clip[0] || py + transform[5] < clip[1] ||
+        px + transform[4] >= clip[0] + clip[2] || py + transform[5] >= clip[1] + clip[3];
+      inside += !clipped && dx * dx + dy * dy < radius * radius;
+    }
+    coverage[static_cast<size_t>(row) * width + column] = (inside * 255 + 128) / 256;
+  }
+#endif
+  return coverage;
+}
+namespace {
+#ifdef PMJS_HAS_SKIA65
+template<class Draw>
+std::array<int, 4> rasterCanvasRegion(std::vector<uint8_t>& pixels, int width, int height,
+    const std::array<float, 4>& bounds, Draw draw) {
+  // Four-pixel crop alignment retains the rasterizer's gradient dither phase.
+  const int left = std::clamp<double>(std::floor(bounds[0] / 4.0) * 4, 0, width);
+  const int top = std::clamp<double>(std::floor(bounds[1] / 4.0) * 4, 0, height);
+  const int right = std::clamp<double>(std::ceil(static_cast<double>(bounds[0]) + bounds[2]), 0, width);
+  const int bottom = std::clamp<double>(std::ceil(static_cast<double>(bounds[1]) + bounds[3]), 0, height);
+  if (right <= left || bottom <= top) return {left, top, 0, 0};
+  const size_t stride = static_cast<size_t>(width) * 4;
+  auto* origin = pixels.data() + top * stride + left * 4;
+  if (!draw(origin, right - left, bottom - top, stride, left, top))
+    throw std::runtime_error("canvas rasterization failed");
+  return {left, top, right - left, bottom - top};
+}
+#endif
+}
+
 namespace {
 constexpr std::uint32_t indexMask = 0xffffU;
 constexpr std::uint16_t generationMask = 0x7fffU;
@@ -698,6 +759,7 @@ void CanvasStore::fillRectNow(Content& surface, int x, int y, int width, int hei
     static_cast<std::int64_t>(x) + width, 0, surface.width));
   const int y1 = static_cast<int>(std::clamp<std::int64_t>(
     static_cast<std::int64_t>(y) + height, 0, surface.height));
+  if (!(rgba & 255)) return;
   for (int py = y0; py < y1; ++py) {
     for (int px = x0; px < x1; ++px) {
       blendPixel(surface, px, py, rgba, 255);
@@ -708,6 +770,7 @@ void CanvasStore::fillRectNow(Content& surface, int x, int y, int width, int hei
 
 void CanvasStore::clearNow(Content& surface) {
   std::fill(surface.pixels.begin(), surface.pixels.end(), 0);
+  surface.mayHaveOverAlpha = false;
   markDirty(surface, 0, 0, surface.width, surface.height);
 }
 
@@ -730,22 +793,83 @@ void CanvasStore::clearRectNow(Content& surface, int x, int y, int width, int he
 
 bool CanvasStore::drawImageNow(Content& destinationSurface, const DrawImageCmd& command) {
   const auto& [source, canvas, sourceX, sourceY, sourceWidth, sourceHeight,
-               destinationX, destinationY, destinationWidth, destinationHeight, alpha] = command;
-  struct PixelView {
+               destinationX, destinationY, destinationWidth, destinationHeight, alpha, smoothing] = command;
+  if (alpha == 0) return true;
+  struct SourcePixels {
     int width;
     int height;
     const std::uint8_t* rgba;
+    PixelEncoding encoding;
+    bool mayHaveOverAlpha;
   } sourcePixels{};
   if (canvas) {
     if (!realizeContent(*canvas)) return false;
-    sourcePixels = {canvas->width, canvas->height, canvas->pixels.data()};
+    sourcePixels = {canvas->width, canvas->height, canvas->pixels.data(), PixelEncoding::PremultipliedBGRA8, canvas->mayHaveOverAlpha};
   } else {
     const auto* decoded = images_.readPixels(source);
     if (!decoded) return false;
-    sourcePixels = {decoded->width, decoded->height, decoded->rgba.data()};
+    sourcePixels = {decoded->width, decoded->height, decoded->rgba.data(), PixelEncoding::StraightRGBA8, false};
   }
   if (sourceX >= sourcePixels.width || sourceY >= sourcePixels.height) return true;
+  const std::array<float, 8> geometry = {sourceX, sourceY, sourceWidth, sourceHeight,
+    destinationX, destinationY, destinationWidth, destinationHeight};
+  if (alpha == 1 && sourceWidth == destinationWidth && sourceHeight == destinationHeight &&
+      sourceX >= 0 && sourceY >= 0 && destinationX >= 0 && destinationY >= 0 &&
+      sourceX + sourceWidth <= sourcePixels.width && sourceY + sourceHeight <= sourcePixels.height &&
+      destinationX + destinationWidth <= destinationSurface.width &&
+      destinationY + destinationHeight <= destinationSurface.height &&
+      std::all_of(geometry.begin(), geometry.end(), [](float value) { return value == std::floor(value); })) {
+    bool transparent = true;
+    for (int y = 0; y < destinationHeight && transparent; ++y) for (int x = 0; x < destinationWidth; ++x) {
+      const size_t index = (static_cast<size_t>(destinationY + y) * destinationSurface.width + destinationX + x) * 4;
+      uint32_t pixel;
+      std::memcpy(&pixel, destinationSurface.pixels.data() + index, sizeof(pixel));
+      if (pixel) { transparent = false; break; }
+    }
+    // The rasterizer treats alpha-zero RGB differently in scalar and vector
+    // source-over batches. Keep such raw pixels on its drawing path.
+    if (transparent && sourcePixels.mayHaveOverAlpha) {
+      for (int y = 0; y < destinationHeight && transparent; ++y) {
+        const auto* row = sourcePixels.rgba + (static_cast<size_t>(sourceY + y) * sourcePixels.width + static_cast<size_t>(sourceX)) * 4;
+        for (int x = 0; x < destinationWidth; ++x) {
+          uint32_t pixel;
+          std::memcpy(&pixel, row + x * 4, sizeof(pixel));
+          if (pixel && !(pixel & 0xff000000U)) { transparent = false; break; }
+        }
+      }
+    }
+    if (transparent) {
+      for (int y = 0; y < destinationHeight; ++y) {
+        const auto* row = sourcePixels.rgba + (static_cast<size_t>(sourceY + y) * sourcePixels.width + static_cast<size_t>(sourceX)) * 4;
+        auto* target = destinationSurface.pixels.data() +
+          (static_cast<size_t>(destinationY + y) * destinationSurface.width + static_cast<size_t>(destinationX)) * 4;
+        if (sourcePixels.encoding == PixelEncoding::PremultipliedBGRA8) {
+          std::memcpy(target, row, static_cast<size_t>(destinationWidth) * 4);
+        } else for (int x = 0; x < destinationWidth; ++x)
+          convertPixel(row + x * 4, sourcePixels.encoding, target + x * 4, PixelEncoding::PremultipliedBGRA8);
+      }
+      destinationSurface.mayHaveOverAlpha |= sourcePixels.mayHaveOverAlpha;
+      markDirty(destinationSurface, destinationX, destinationY, destinationWidth, destinationHeight);
+      return true;
+    }
+  }
 
+#ifdef PMJS_HAS_SKIA65
+  const std::array<float, 4> src = {sourceX, sourceY, sourceWidth, sourceHeight};
+  const std::array<float, 4> dst = {destinationX, destinationY, destinationWidth, destinationHeight};
+  const auto region = rasterCanvasRegion(destinationSurface.pixels, destinationSurface.width,
+    destinationSurface.height, dst, [&](uint8_t* pixels, int width, int height, size_t stride, int left, int top) {
+      const auto draw = sourcePixels.encoding == PixelEncoding::PremultipliedBGRA8 ?
+        pmjs_skia65_image_bgra_strided : pmjs_skia65_image_rgba_strided;
+      return draw(pixels, width, height, stride, left, top, sourcePixels.rgba,
+        sourcePixels.width, sourcePixels.height, static_cast<size_t>(sourcePixels.width) * 4,
+        src.data(), dst.data(), alpha, smoothing);
+    });
+  destinationSurface.mayHaveOverAlpha |= sourcePixels.mayHaveOverAlpha;
+  markDirty(destinationSurface, region[0], region[1], region[2], region[3]);
+  return true;
+#else
+  (void)smoothing;
   const auto coverage = static_cast<std::uint8_t>(std::clamp(
       static_cast<int>(alpha * 255.0F + 0.5F), 0, 255));
   for (int y = 0; y < destinationHeight; ++y) {
@@ -760,17 +884,22 @@ bool CanvasStore::drawImageNow(Content& destinationSurface, const DrawImageCmd& 
       if (sampleX < 0 || sampleX >= sourcePixels.width) continue;
       const std::size_t offset =
         (static_cast<std::size_t>(sampleY) * sourcePixels.width + sampleX) * 4U;
-      const std::uint32_t rgba =
-        (static_cast<std::uint32_t>(sourcePixels.rgba[offset]) << 24U) |
-        (static_cast<std::uint32_t>(sourcePixels.rgba[offset + 1]) << 16U) |
-        (static_cast<std::uint32_t>(sourcePixels.rgba[offset + 2]) << 8U) |
-        sourcePixels.rgba[offset + 3];
-      blendPixel(destinationSurface, targetX, targetY, rgba, coverage);
+      uint8_t premul[4];
+      convertPixel(sourcePixels.rgba + offset, sourcePixels.encoding, premul, PixelEncoding::PremultipliedBGRA8);
+      if (!premul[3]) continue;
+      auto* target = destinationSurface.pixels.data() +
+        (static_cast<size_t>(targetY) * destinationSurface.width + targetX) * 4;
+      const unsigned sourceAlpha = importCanvasChannel(premul[3], coverage);
+      for (int c = 0; c < 4; ++c)
+        target[c] = std::min(255U, unsigned(importCanvasChannel(premul[c], coverage)) +
+          (target[c] * (256 - sourceAlpha) >> 8));
     }
   }
+  destinationSurface.mayHaveOverAlpha |= sourcePixels.mayHaveOverAlpha;
   markDirty(destinationSurface, destinationX, destinationY,
             destinationWidth, destinationHeight);
   return true;
+#endif
 }
 
 bool CanvasStore::drawTextNow(Content& surface, const std::vector<std::filesystem::path>& fontPaths,
@@ -859,11 +988,15 @@ bool CanvasStore::drawTextNow(Content& surface, const std::vector<std::filesyste
 bool CanvasStore::blurNow(Content& surface) {
   const int width = surface.width;
   const int height = surface.height;
+  std::vector<std::uint8_t> straight(surface.pixels.size());
+  for (size_t i = 0; i < straight.size(); i += 4)
+    convertPixel(surface.pixels.data() + i, PixelEncoding::PremultipliedBGRA8,
+                 straight.data() + i, PixelEncoding::StraightRGBA8);
   std::vector<std::uint8_t> scratch(surface.pixels.size());
   constexpr int weights[5] = {1, 4, 6, 4, 1};
   for (int pass = 0; pass < 2; ++pass) {
-    const auto& source = pass == 0 ? surface.pixels : scratch;
-    auto& destination = pass == 0 ? scratch : surface.pixels;
+    const auto& source = pass == 0 ? straight : scratch;
+    auto& destination = pass == 0 ? scratch : straight;
     for (int y = 0; y < height; ++y) {
       for (int x = 0; x < width; ++x) {
         for (int channel = 0; channel < 4; ++channel) {
@@ -881,6 +1014,10 @@ bool CanvasStore::blurNow(Content& surface) {
       }
     }
   }
+  for (size_t i = 0; i < straight.size(); i += 4)
+    convertPixel(straight.data() + i, PixelEncoding::StraightRGBA8,
+                 surface.pixels.data() + i, PixelEncoding::PremultipliedBGRA8);
+  surface.mayHaveOverAlpha = false;
   markDirty(surface, 0, 0, width, height);
   return true;
 }
@@ -928,6 +1065,7 @@ bool CanvasStore::realizeContent(Content& surface) {
   }
 
   surface.pixels = std::move(prepared.pixels);
+  surface.mayHaveOverAlpha = prepared.mayHaveOverAlpha;
   surface.state = ContentState::Realized;
   discardCommands(surface);
   surface.dirtyX0 = surface.dirtyY0 = 0;
@@ -956,6 +1094,8 @@ std::optional<std::vector<std::uint8_t>> CanvasStore::encodePng(
   if (surface->state == ContentState::Deferred && !realizeContent(*surface)) {
     return std::nullopt;
   }
+  const auto straight = readPixels(handle, 0, 0, surface->width, surface->height);
+  if (!straight) return std::nullopt;
   png_image image{};
   image.version = PNG_IMAGE_VERSION;
   image.width = static_cast<png_uint_32>(surface->width);
@@ -963,13 +1103,13 @@ std::optional<std::vector<std::uint8_t>> CanvasStore::encodePng(
   image.format = PNG_FORMAT_RGBA;
   png_alloc_size_t size = 0;
   if (!png_image_write_to_memory(&image, nullptr, &size, 0,
-                                 surface->pixels.data(), 0, nullptr)) {
+                                 straight->rgba.data(), 0, nullptr)) {
     png_image_free(&image);
     return std::nullopt;
   }
   std::vector<std::uint8_t> encoded(static_cast<std::size_t>(size));
   if (!png_image_write_to_memory(&image, encoded.data(), &size, 0,
-                                 surface->pixels.data(), 0, nullptr)) {
+                                 straight->rgba.data(), 0, nullptr)) {
     png_image_free(&image);
     return std::nullopt;
   }
@@ -1014,6 +1154,7 @@ CanvasStore::Content* CanvasStore::writableContent(CanvasHandle handle) {
     copy->height = old.height;
     copy->state = old.state;
     copy->pixels = old.pixels;
+    copy->mayHaveOverAlpha = old.mayHaveOverAlpha;
     auto commands = old.commands;
     for (const auto& command : commands) {
       if (const auto* draw = std::get_if<DrawImageCmd>(&command); draw && draw->source) {
@@ -1052,15 +1193,22 @@ std::optional<CanvasInfo> CanvasStore::create(int width, int height) {
   return CanvasInfo{makeHandle(index, surface.generation), width, height};
 }
 
-std::optional<CanvasInfo> CanvasStore::createRgba(
-    int width, int height, std::vector<std::uint8_t> pixels) {
+std::optional<CanvasInfo> CanvasStore::createPixels(
+    int width, int height, std::vector<std::uint8_t> pixels, PixelEncoding encoding) {
   const auto extent = checkedImageExtent(width, height);
   if (!extent || pixels.size() != extent->rgbaBytes) return std::nullopt;
   const auto canvas = create(width, height);
   if (!canvas) return std::nullopt;
   auto& surface = *lookupContent(canvas->handle);
   surface.state = ContentState::Realized;
+  convertPixels(ConstPixelView(pixels.data(), pixels.size(), extent->width, extent->height,
+                               static_cast<size_t>(extent->width) * 4, encoding),
+                PixelView(pixels.data(), pixels.size(), extent->width, extent->height,
+                          static_cast<size_t>(extent->width) * 4, PixelEncoding::PremultipliedBGRA8));
   surface.pixels = std::move(pixels);
+  for (size_t i = 0; i < surface.pixels.size(); i += 4)
+    if (surface.pixels[i] > surface.pixels[i+3] || surface.pixels[i+1] > surface.pixels[i+3] ||
+        surface.pixels[i+2] > surface.pixels[i+3]) { surface.mayHaveOverAlpha = true; break; }
   peakCpuBytes_ = std::max(peakCpuBytes_, cpuBytes());
   return canvas;
 }
@@ -1167,16 +1315,49 @@ bool CanvasStore::clearRect(CanvasHandle handle, int x, int y, int width, int he
   return true;
 }
 
+bool CanvasStore::paintRect(CanvasHandle handle, const std::array<float, 4>& rect,
+    uint32_t color, float stroke, const std::array<float, 4>& gradient,
+    const std::vector<float>& offsets, const std::vector<uint32_t>& colors) {
+  if (!std::all_of(rect.begin(), rect.end(), [](float value) { return std::isfinite(value); }) ||
+      !std::all_of(gradient.begin(), gradient.end(), [](float value) { return std::isfinite(value); }) ||
+      !std::isfinite(stroke) || stroke < 0 || rect[2] < 0 || rect[3] < 0 ||
+      offsets.size() != colors.size() || offsets.size() > 64) return false;
+  for (size_t i = 0; i < offsets.size(); ++i) if (!std::isfinite(offsets[i]) || offsets[i] < 0 || offsets[i] > 1 ||
+    (i && offsets[i] < offsets[i - 1])) return false;
+  if (rect[2] == 0 || rect[3] == 0 || (color & 255) == 0 ||
+      (!colors.empty() && std::all_of(colors.begin(), colors.end(), [](uint32_t c) { return !(c & 255); }))) return lookup(handle) != nullptr;
+  auto* surface = writableContent(handle);
+  if (!surface || !realizeContent(*surface)) return false;
+#ifdef PMJS_HAS_SKIA65
+  const float padding = stroke / 2 + 1;
+  const std::array<float, 4> bounds = {rect[0] - padding, rect[1] - padding,
+    rect[2] + 2 * padding, rect[3] + 2 * padding};
+  const auto region = rasterCanvasRegion(surface->pixels, surface->width, surface->height, bounds,
+    [&](uint8_t* pixels, int width, int height, size_t stride, int left, int top) {
+      return pmjs_skia65_rect_bgra_strided(pixels, width, height, stride, left, top, rect.data(), color, stroke,
+        gradient.data(), offsets.data(), colors.data(), offsets.size());
+    });
+  markDirty(*surface, region[0], region[1], region[2], region[3]);
+  return true;
+#else
+  (void)color;
+  return false;
+#endif
+}
+
 bool CanvasStore::drawImage(CanvasHandle destination, std::uint32_t source,
-                            int sourceX, int sourceY,
-                            int sourceWidth, int sourceHeight,
-                            int destinationX, int destinationY,
-                            int destinationWidth, int destinationHeight,
-                            float alpha) {
+                            float sourceX, float sourceY,
+                            float sourceWidth, float sourceHeight,
+                            float destinationX, float destinationY,
+                            float destinationWidth, float destinationHeight,
+                            float alpha, bool smoothing) {
   if (sourceWidth <= 0 || sourceHeight <= 0 || destinationWidth <= 0 ||
       destinationHeight <= 0 || !std::isfinite(alpha) || alpha < 0 || alpha > 1) return false;
+  const std::array<float, 8> geometry = {sourceX, sourceY, sourceWidth, sourceHeight,
+    destinationX, destinationY, destinationWidth, destinationHeight};
+  if (!std::all_of(geometry.begin(), geometry.end(), [](float value) { return std::isfinite(value); })) return false;
   DrawImageCmd command{source, {}, sourceX, sourceY, sourceWidth, sourceHeight,
-                       destinationX, destinationY, destinationWidth, destinationHeight, alpha};
+                       destinationX, destinationY, destinationWidth, destinationHeight, alpha, smoothing};
   if ((source & canvasHandleTag) != 0) {
     const auto* sourceSurface = lookup(source);
     if (!sourceSurface) return false;
@@ -1230,47 +1411,21 @@ void CanvasStore::markDirty(Content& surface, int x, int y, int width,
 void CanvasStore::blendPixel(Content& surface, int x, int y, std::uint32_t rgba,
                              std::uint8_t coverage) {
   if (x < 0 || y < 0 || x >= surface.width || y >= surface.height) return;
-  const std::uint32_t colorAlpha = rgba & 0xffU;
-  const std::uint32_t sourceAlpha = colorAlpha * coverage / 255U;
-  const std::size_t offset =
-    (static_cast<std::size_t>(y) * surface.width + x) * 4U;
-  const std::uint32_t destinationAlpha = surface.pixels[offset + 3];
-  const std::uint32_t inverse = 255U - sourceAlpha;
-  const std::uint32_t outputAlpha = sourceAlpha + destinationAlpha * inverse / 255U;
-  const std::uint8_t colors[3] = {
-    static_cast<std::uint8_t>((rgba >> 24U) & 0xffU),
-    static_cast<std::uint8_t>((rgba >> 16U) & 0xffU),
-    static_cast<std::uint8_t>((rgba >> 8U) & 0xffU),
-  };
-  for (int channel = 0; channel < 3; ++channel) {
-    const std::uint32_t premultiplied = colors[channel] * sourceAlpha +
-      surface.pixels[offset + channel] * destinationAlpha * inverse / 255U;
-    surface.pixels[offset + channel] = outputAlpha == 0 ? 0 :
-      static_cast<std::uint8_t>(premultiplied / outputAlpha);
-  }
-  surface.pixels[offset + 3] = static_cast<std::uint8_t>(outputAlpha);
+  const unsigned alpha = importCanvasChannel(rgba & 255, coverage);
+  if (!alpha) return;
+  auto* pixel = surface.pixels.data() + (static_cast<size_t>(y) * surface.width + x) * 4;
+  const unsigned colors[] = {(rgba >> 8) & 255, (rgba >> 16) & 255, rgba >> 24, 255};
+  for (int c = 0; c < 4; ++c)
+    pixel[c] = std::min(255U, unsigned(importCanvasChannel(colors[c], alpha)) +
+      (pixel[c] * (256 - alpha) >> 8));
 }
 
-void CanvasStore::blendPixelAdditive(Content& surface, int x, int y,
-                                     std::uint32_t rgba) {
+void CanvasStore::blendPixelAdditive(Content& surface, int x, int y, std::uint32_t rgba) {
   if (x < 0 || y < 0 || x >= surface.width || y >= surface.height) return;
-  const std::uint32_t sourceAlpha = rgba & 0xffU;
-  const std::size_t offset =
-    (static_cast<std::size_t>(y) * surface.width + x) * 4U;
-  const std::uint32_t destinationAlpha = surface.pixels[offset + 3];
-  const std::uint32_t outputAlpha = std::min(255U, sourceAlpha + destinationAlpha);
-  const std::uint8_t colors[3] = {
-    static_cast<std::uint8_t>((rgba >> 24U) & 0xffU),
-    static_cast<std::uint8_t>((rgba >> 16U) & 0xffU),
-    static_cast<std::uint8_t>((rgba >> 8U) & 0xffU),
-  };
-  for (int channel = 0; channel < 3; ++channel) {
-    const std::uint32_t premultiplied = colors[channel] * sourceAlpha +
-      surface.pixels[offset + channel] * destinationAlpha;
-    surface.pixels[offset + channel] = outputAlpha == 0 ? 0 :
-      static_cast<std::uint8_t>(std::min(255U, premultiplied / outputAlpha));
-  }
-  surface.pixels[offset + 3] = static_cast<std::uint8_t>(outputAlpha);
+  auto* pixel = surface.pixels.data() + (static_cast<size_t>(y) * surface.width + x) * 4;
+  const unsigned colors[] = {(rgba >> 8) & 255, (rgba >> 16) & 255, rgba >> 24, 255};
+  for (int c = 0; c < 4; ++c)
+    pixel[c] = std::min(255U, unsigned(pixel[c]) + importCanvasChannel(colors[c], rgba & 255));
 }
 
 bool CanvasStore::drawText(CanvasHandle handle,
@@ -1339,10 +1494,11 @@ std::optional<std::uint32_t> CanvasStore::pixel(CanvasHandle handle,
   }
   const std::size_t offset =
     (static_cast<std::size_t>(y) * surface->width + x) * 4U;
-  return (static_cast<std::uint32_t>(surface->pixels[offset]) << 24U) |
-    (static_cast<std::uint32_t>(surface->pixels[offset + 1]) << 16U) |
-    (static_cast<std::uint32_t>(surface->pixels[offset + 2]) << 8U) |
-    surface->pixels[offset + 3];
+  uint8_t rgba[4];
+  convertPixel(surface->pixels.data() + offset, PixelEncoding::PremultipliedBGRA8,
+               rgba, PixelEncoding::StraightRGBA8);
+  return (uint32_t(rgba[0]) << 24U) | (uint32_t(rgba[1]) << 16U) |
+    (uint32_t(rgba[2]) << 8U) | rgba[3];
 }
 
 bool CanvasStore::blur(CanvasHandle handle) {
@@ -1362,7 +1518,7 @@ bool CanvasStore::blur(CanvasHandle handle) {
 
 std::optional<ImagePixels> CanvasStore::readPixels(CanvasHandle handle, int x,
                                                    int y, int width,
-                                                   int height) {
+                                                   int height, PixelEncoding encoding) {
   auto* surface = lookupContent(handle);
   const auto extent = checkedImageExtent(width, height);
   if (!surface || !extent) {
@@ -1376,17 +1532,17 @@ std::optional<ImagePixels> CanvasStore::readPixels(CanvasHandle handle, int x,
   result.height = extent->height;
   result.rgba.resize(extent->rgbaBytes);
   for (int row = 0; row < height; ++row) {
-    const int sourceY = y + row;
+    const int64_t sourceY = static_cast<int64_t>(y) + row;
     if (sourceY < 0 || sourceY >= surface->height) continue;
     for (int column = 0; column < width; ++column) {
-      const int sourceX = x + column;
+      const int64_t sourceX = static_cast<int64_t>(x) + column;
       if (sourceX < 0 || sourceX >= surface->width) continue;
       const std::size_t sourceOffset =
         (static_cast<std::size_t>(sourceY) * surface->width + sourceX) * 4U;
       const std::size_t destinationOffset =
         (static_cast<std::size_t>(row) * width + column) * 4U;
-      std::copy_n(surface->pixels.data() + sourceOffset, 4,
-                  result.rgba.data() + destinationOffset);
+      convertPixel(surface->pixels.data() + sourceOffset, PixelEncoding::PremultipliedBGRA8,
+                   result.rgba.data() + destinationOffset, encoding);
     }
   }
   return result;
@@ -1394,7 +1550,7 @@ std::optional<ImagePixels> CanvasStore::readPixels(CanvasHandle handle, int x,
 
 bool CanvasStore::writePixels(CanvasHandle handle, int x, int y, int width,
                               int height,
-                              const std::vector<std::uint8_t>& pixels) {
+                              const std::vector<std::uint8_t>& pixels, PixelEncoding encoding) {
   auto* surface = writableContent(handle);
   const std::size_t expected = width > 0 && height > 0
     ? static_cast<std::size_t>(width) * height * 4U : 0;
@@ -1404,26 +1560,30 @@ bool CanvasStore::writePixels(CanvasHandle handle, int x, int y, int width,
     return false;
   }
   for (int row = 0; row < height; ++row) {
-    const int destinationY = y + row;
+    const int64_t destinationY = static_cast<int64_t>(y) + row;
     if (destinationY < 0 || destinationY >= surface->height) continue;
-    const int sourceX = std::max(0, -x);
+    const int64_t sourceX = std::max<int64_t>(0, -static_cast<int64_t>(x));
     const int destinationX = std::max(0, x);
-    const int count = std::min(width - sourceX, surface->width - destinationX);
+    const int64_t count = std::min<int64_t>(width - sourceX, static_cast<int64_t>(surface->width) - destinationX);
     if (count <= 0) continue;
     const std::size_t sourceOffset =
       (static_cast<std::size_t>(row) * width + sourceX) * 4U;
     const std::size_t destinationOffset =
       (static_cast<std::size_t>(destinationY) * surface->width +
        destinationX) * 4U;
-    std::copy_n(pixels.data() + sourceOffset, static_cast<std::size_t>(count) * 4U,
-                surface->pixels.data() + destinationOffset);
+    for (int64_t column = 0; column < count; ++column) {
+      convertPixel(pixels.data() + sourceOffset + column * 4, encoding,
+        surface->pixels.data() + destinationOffset + column * 4, PixelEncoding::PremultipliedBGRA8);
+      const auto* pixel = surface->pixels.data() + destinationOffset + column * 4;
+      if (pixel[0] > pixel[3] || pixel[1] > pixel[3] || pixel[2] > pixel[3]) surface->mayHaveOverAlpha = true;
+    }
   }
   markDirty(*surface, x, y, width, height);
   return true;
 }
 
 bool CanvasStore::replacePixels(CanvasHandle handle,
-                                std::vector<std::uint8_t> pixels) {
+                                std::vector<std::uint8_t> pixels, PixelEncoding encoding) {
   auto* target = lookup(handle);
   if (!target) return false;
   const auto extent = checkedImageExtent(target->content->width,
@@ -1434,7 +1594,14 @@ bool CanvasStore::replacePixels(CanvasHandle handle,
   replacement->width = target->content->width;
   replacement->height = target->content->height;
   replacement->state = ContentState::Realized;
+  convertPixels(ConstPixelView(pixels.data(), pixels.size(), extent->width, extent->height,
+                               static_cast<size_t>(extent->width) * 4, encoding),
+                PixelView(pixels.data(), pixels.size(), extent->width, extent->height,
+                          static_cast<size_t>(extent->width) * 4, PixelEncoding::PremultipliedBGRA8));
   replacement->pixels = std::move(pixels);
+  for (size_t i = 0; i < replacement->pixels.size(); i += 4)
+    if (replacement->pixels[i] > replacement->pixels[i+3] || replacement->pixels[i+1] > replacement->pixels[i+3] ||
+        replacement->pixels[i+2] > replacement->pixels[i+3]) { replacement->mayHaveOverAlpha = true; break; }
   markDirty(*replacement, 0, 0, replacement->width, replacement->height);
   target->content = std::move(replacement);
   peakCpuBytes_ = std::max(peakCpuBytes_, cpuBytes());
@@ -1478,10 +1645,8 @@ bool CanvasStore::uploadSurface(Surface& target) {
   for (int row = 0; row < height; ++row) for (int column = 0; column < width; ++column) {
     const auto source = (static_cast<std::size_t>(y + row) * surface.width + x + column) * 4;
     const auto destination = (static_cast<std::size_t>(row) * width + column) * 4;
-    const unsigned alpha = surface.pixels[source + 3];
-    for (int channel = 0; channel < 3; ++channel)
-      pixels[destination + channel] = (surface.pixels[source + channel] * alpha + 127) / 255;
-    pixels[destination + 3] = alpha;
+    convertPixel(surface.pixels.data() + source, PixelEncoding::PremultipliedBGRA8,
+                 pixels.data() + destination, PixelEncoding::PremultipliedRGBA8);
   }
   if (target.image == 0) {
     const auto image = images_.createRgba(surface.width, surface.height, pixels.data(), true);

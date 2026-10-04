@@ -93,6 +93,8 @@ class ImageStore {
   std::optional<ImageInfo> createRenderTarget(int width, int height,
                                              bool premultiplied = false);
   bool isRenderTarget(ImageHandle handle) const;
+  std::uint64_t textureEpoch() const { return textureEpoch_; }
+  bool ensureMipmaps(ImageHandle handle, bool premultiplied);
   const ImagePixels* readPixels(ImageHandle handle) const;
   bool updateRgba(ImageHandle handle, const void* pixels);
   bool updateRgbaRegion(ImageHandle handle, int x, int y, int width, int height,
@@ -150,6 +152,8 @@ class ImageStore {
     bool renderTarget = false;
     bool premultiplied = false;
     std::uint32_t premultipliedTexture = 0;
+    bool mipmapsReady = false, premultipliedMipmapsReady = false;
+    std::size_t mipmapBytes = 0, premultipliedMipmapBytes = 0;
     bool retainCpuPixels = false;
     std::string cacheKey;
     std::filesystem::path sourcePath;
@@ -160,6 +164,7 @@ class ImageStore {
   static ImageHandle makeHandle(std::size_t index, std::uint16_t generation);
   void markUsed(Slot& slot);
   static std::size_t residentBytes(const Slot& slot);
+  std::uint64_t textureEpoch_ = 0;
   void destroySlot(std::size_t index);
   void clearPremultipliedTexture(Slot& slot);
   std::deque<Slot> slots_;

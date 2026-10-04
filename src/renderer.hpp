@@ -40,7 +40,7 @@ struct MvBitmapMaterial {
 using MeshMaterial = std::variant<TexturedMeshMaterial, TriangleBitmapMaterial, MvBitmapMaterial>;
 
 struct CustomFilterPass {
-  struct Sampler { ImageHandle image = 0; std::uint32_t target = 0; bool nearest = false; };
+  struct Sampler { ImageHandle image = 0; std::uint32_t target = 0; bool nearest = false; bool mipmap = false; std::uint32_t wrap = 33071; };
   std::uint32_t program = 0, input = 0, output = 1;
   bool clear = false;
   BlendMode blend = BlendMode::normal;
@@ -86,12 +86,14 @@ struct RenderCommand {
   bool pixiSpritePacking = false;
   bool premultipliedSpriteTexture = false;
   bool packedSpriteColor = false;
+  bool floatSpriteUv = false;
   bool spriteWorldVertices = false;
   bool standaloneBitmapRegion = false;
   std::array<std::array<float, 2>, 4> spriteVertices{};
   bool appliesMeshPostTintOverlay = false;
   std::uint8_t textureRotation = 0;
   bool nearest = false;
+  bool mipmap = false;
   bool roundPixels = false;
   Action action = Action::draw;
   scene_packet::FilterKind filterKind = scene_packet::FilterKind::blur;
@@ -199,6 +201,11 @@ class Renderer {
   Renderer& operator=(const Renderer&) = delete;
 
   void setClearColor(float red, float green, float blue, float alpha);
+  void clearScene(float red, float green, float blue, float alpha,
+                  const std::optional<std::array<int, 4>>& clip = std::nullopt);
+  void setClearBeforeRender(bool clear) { clearBeforeRender_ = clear; }
+  void setSceneProjection(const std::array<float, 6>& transform);
+  void setPresentationViewport(int width, int height, int filter);
   void configurePixiFragmentPrecision(const std::string& precision);
   struct FilterUniform {
     std::string name;
@@ -267,12 +274,13 @@ class Renderer {
   void render();
   void renderScene();
   void presentToDrawable();
-  std::vector<std::uint8_t> captureSceneRgba();
+  std::vector<std::uint8_t> captureSceneRgba(AlphaMode alphaMode = AlphaMode::straight);
   std::vector<std::uint8_t> captureSceneRawPremultiplied();
   // Window backbuffer readback, valid only before swap.
-  std::vector<std::uint8_t> captureDrawableRgba();
-  std::vector<std::uint8_t> renderToRgba();
-  std::vector<std::uint8_t> renderToRgba(int width, int height);
+  std::vector<std::uint8_t> captureDrawableRgba(AlphaMode alphaMode = AlphaMode::straight);
+  std::vector<std::uint8_t> renderToRgba(AlphaMode alphaMode = AlphaMode::straight);
+  std::vector<std::uint8_t> renderToRgba(int width, int height, ImageHandle initialImage = 0, AlphaMode alphaMode = AlphaMode::straight);
+  std::optional<ImageInfo> captureOffscreenImage();
   std::optional<ImageInfo> renderToImage(int width, int height, AlphaMode alphaMode = AlphaMode::straight);
   const RendererStats& stats() const { return stats_; }
   bool diagnosticsEnabled() const { return diagnostics_; }
@@ -293,6 +301,8 @@ class Renderer {
     int overlayColor = -1;
     int trianglePaintEnabled = -1;
     int trianglePaint = -1;
+    int triangleCoverageEnabled = -1;
+    int triangleCoverage = -1;
     int mvBlendEnabled = -1;
     int mvBounds = -1;
     int nearestSampling = -1;
@@ -318,6 +328,7 @@ class Renderer {
     std::uint32_t vertexArray = 0;
     std::uint32_t vertexBuffer = 0;
     std::vector<ImageHandle> images;
+    ImageHandle triangleCoverage = 0;
     std::vector<TileBatch> batches;
     std::uint32_t owners = 1;
     std::uint32_t queuedReferences = 0;
@@ -382,6 +393,8 @@ class Renderer {
   int presentationWidth_;
   int presentationHeight_;
   PresentationGeometry presentation_;
+  std::array<int, 2> authoredPresentationSize_{0, 0};
+  int authoredPresentationFilter_ = 0;
   bool hasFilterOverride_ = false;
   PresentFilter filterOverride_ = PresentFilter::nearest;
   int queueWidth_;
@@ -404,6 +417,8 @@ class Renderer {
   bool pixiPrecisionConfigured_ = false;
   ImageStore& images_;
   std::array<float, 4> clearColor_{0.0F, 0.0F, 0.0F, 1.0F};
+  bool clearBeforeRender_ = true;
+  std::array<float, 6> sceneProjection_{1, 0, 0, 1, 0, 0};
   bool sceneSubmittedThisFrame_ = false;
   bool hasValidSceneFrame_ = false;
   FramePacket frame_;
@@ -450,6 +465,7 @@ class Renderer {
   int spriteEffectPackingUniform_ = -1;
   int spriteEffectPremultipliedUniform_ = -1;
   int spriteEffectFrameUniform_ = -1;
+  int spriteEffectStandaloneUniform_ = -1;
   int spriteEffectTilingClampUniform_ = -1;
   int spriteEffectNearestUniform_ = -1;
   int spriteEffectTextureSizeUniform_ = -1;
@@ -535,6 +551,7 @@ class Renderer {
   std::vector<PrimitiveSurfaceResource> primitiveSurfaces_;
   std::unordered_map<std::uint32_t, bool> textureRepeatState_;
   std::unordered_map<std::uint32_t, bool> textureNearestState_;
+  std::uint64_t imageTextureEpoch_ = 0;
 };
 
 }  // namespace pmjs

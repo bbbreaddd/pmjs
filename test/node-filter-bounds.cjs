@@ -4,7 +4,7 @@ process.env.PMJS_GRAPHICS_DIAGNOSTICS = '1';
 
 const path = require('node:path');
 const fs = require('node:fs');
-const os = require('node:os');
+const { temporaryDirectory } = require('./helpers/temp.cjs');
 const childProcess = require('node:child_process');
 const cases = require('./filter-bounds-cases.cjs');
 
@@ -91,7 +91,7 @@ function compareFullFrame(label) {
   } finally {
     native.canvas.release(frame.handle);
   }
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-filter-bounds-'));
+  const tmp = temporaryDirectory('pmjs-filter-bounds-');
   const outPath = path.join(tmp, 'frame.rgba');
   const childEnv = Object.assign({}, process.env);
   if (boundedBuild) {

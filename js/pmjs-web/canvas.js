@@ -14,8 +14,10 @@ function resetCanvasContextState(context) {
   context.textAlign = 'start';
   context.textBaseline = 'alphabetic';
   context.lineWidth = 1;
+  context.imageSmoothingEnabled = true;
   context._transform = [1, 0, 0, 1, 0, 0];
   context._stateStack = [];
+  context._circlePath = null;
   context._path = [];
   context._subpath = null;
   context._clipPaths = [];
@@ -50,7 +52,7 @@ function canvasSourcePixels(source, nativeSource, operationId, region) {
   var sourceResource = trace && trace.active() ?
     trace.revision(nativeSource, source && source._nativeCanvas ? 'canvas' : 'image') : null;
   if (source && source._nativeCanvas) {
-    var canvasPixels = NativeHost.canvas.readPixels(nativeSource.handle, x, y, width, height);
+    var canvasPixels = NativeHost.canvas.readPremultipliedPixels(nativeSource.handle, x, y, width, height);
     if (trace && trace.active()) trace.event('canvas', 'canvas.source-read', {
       parentOperationId: operationId, sourceId: sourceResource.id,
       sourceRevision: sourceResource.revision, x: x, y: y, width: width,
@@ -62,7 +64,7 @@ function canvasSourcePixels(source, nativeSource, operationId, region) {
   try {
     NativeHost.canvas.drawImage(temporary.handle, nativeSource.handle,
       x, y, width, height, 0, 0, width, height, 1);
-    var imagePixels = NativeHost.canvas.readPixels(temporary.handle, 0, 0, width, height);
+    var imagePixels = NativeHost.canvas.readPremultipliedPixels(temporary.handle, 0, 0, width, height);
     if (trace && trace.active()) trace.event('canvas', 'canvas.source-read', {
       parentOperationId: operationId, sourceId: sourceResource.id,
       sourceRevision: sourceResource.revision, x: x, y: y, width: width,
@@ -75,24 +77,26 @@ function canvasSourcePixels(source, nativeSource, operationId, region) {
   }
 }
 
+// Colors are premultiplied RGBA transport bytes. Only blend functions need
+// transient normalized colors. Raw transport retains over-alpha RGB.
 function compositeCanvasPixel(pixels, offset, sourceColors, sourceAlpha, operation) {
   var destinationAlpha = pixels[offset + 3] / 255;
   var outputAlpha;
   var output = [0, 0, 0];
   operation = operation || 'source-over';
+  if (sourceAlpha === 0 && operation === 'source-over') sourceColors = [0, 0, 0];
   if (operation === 'copy') {
     outputAlpha = sourceAlpha;
     output = sourceColors;
   } else if (operation === 'destination-in') {
     outputAlpha = destinationAlpha * sourceAlpha;
-    output = [pixels[offset], pixels[offset + 1], pixels[offset + 2]];
+    for (var inChannel = 0; inChannel < 3; inChannel++)
+      output[inChannel] = pixels[offset + inChannel] * sourceAlpha;
   } else if (operation === 'source-atop') {
     outputAlpha = destinationAlpha;
-    for (var atopChannel = 0; atopChannel < 3; atopChannel++) {
-      output[atopChannel] = destinationAlpha <= 0 ? 0 :
-        sourceColors[atopChannel] * sourceAlpha +
+    for (var atopChannel = 0; atopChannel < 3; atopChannel++)
+      output[atopChannel] = sourceColors[atopChannel] * destinationAlpha +
         pixels[offset + atopChannel] * (1 - sourceAlpha);
-    }
   } else {
     outputAlpha = operation === 'lighter'
       ? Math.min(1, sourceAlpha + destinationAlpha)
@@ -100,26 +104,19 @@ function compositeCanvasPixel(pixels, offset, sourceColors, sourceAlpha, operati
     for (var channel = 0; channel < 3; channel++) {
       var source = sourceColors[channel];
       var destination = pixels[offset + channel];
-      var blended = source;
-      if (operation === 'difference') blended = Math.abs(destination - source);
-      else if (operation === 'saturation') {
-
-        var gray = pixels[offset] * 0.299 + pixels[offset + 1] * 0.587 +
-          pixels[offset + 2] * 0.114;
-        blended = gray;
-      }
-      var premultiplied = operation === 'lighter'
-        ? source * sourceAlpha + destination * destinationAlpha
-        : blended * sourceAlpha * destinationAlpha +
-          source * sourceAlpha * (1 - destinationAlpha) +
-          destination * destinationAlpha * (1 - sourceAlpha);
-      output[channel] = outputAlpha <= 0 ? 0 : premultiplied / outputAlpha;
+      if (operation === 'difference' || operation === 'saturation') {
+        var normalizedSource = sourceAlpha > 0 ? source / sourceAlpha : 0;
+        var normalizedDestination = destinationAlpha > 0 ? destination / destinationAlpha : 0;
+        var blended = Math.abs(normalizedDestination - normalizedSource);
+        if (operation === 'saturation') blended = destinationAlpha > 0 ?
+          (pixels[offset] * 0.299 + pixels[offset + 1] * 0.587 + pixels[offset + 2] * 0.114) / destinationAlpha : 0;
+        output[channel] = blended * sourceAlpha * destinationAlpha +
+          source * (1 - destinationAlpha) + destination * (1 - sourceAlpha);
+      } else output[channel] = source + destination * (operation === 'lighter' ? 1 : 1 - sourceAlpha);
     }
   }
-  for (var outputChannel = 0; outputChannel < 3; outputChannel++) {
-    pixels[offset + outputChannel] = Math.max(0, Math.min(255,
-      Math.round(output[outputChannel])));
-  }
+  for (var outputChannel = 0; outputChannel < 3; outputChannel++)
+    pixels[offset + outputChannel] = Math.max(0, Math.min(255, Math.round(output[outputChannel])));
   pixels[offset + 3] = Math.max(0, Math.min(255, Math.round(outputAlpha * 255)));
 }
 
@@ -154,7 +151,7 @@ function drawAffineImage(context, source, nativeSource, sx, sy, sw, sh,
     height: sourceBottom - sourceTop
   });
   var destination = context.canvas._ensureNativeCanvas();
-  var destinationPixels = NativeHost.canvas.readPixels(destination.handle,
+  var destinationPixels = NativeHost.canvas.readPremultipliedPixels(destination.handle,
     left, top, right - left, bottom - top);
   var inverseA = t[3] / determinant, inverseB = -t[1] / determinant;
   var inverseC = -t[2] / determinant, inverseD = t[0] / determinant;
@@ -172,11 +169,11 @@ function drawAffineImage(context, source, nativeSource, sx, sy, sw, sh,
     if (!passesCanvasClip(context, x + 0.5, y + 0.5)) continue;
     var sourceAlpha = sourcePixels[sourceOffset + 3] / 255 * alpha;
     compositeCanvasPixel(destinationPixels, destinationOffset,
-      [sourcePixels[sourceOffset], sourcePixels[sourceOffset + 1],
-       sourcePixels[sourceOffset + 2]], sourceAlpha,
+      [sourcePixels[sourceOffset] * alpha, sourcePixels[sourceOffset + 1] * alpha,
+       sourcePixels[sourceOffset + 2] * alpha], sourceAlpha,
       context.globalCompositeOperation);
   }
-  NativeHost.canvas.writePixels(destination.handle, left, top,
+  NativeHost.canvas.writePremultipliedPixels(destination.handle, left, top,
     right - left, bottom - top, destinationPixels);
   if (globalThis.__pmjsTrace && __pmjsTrace.active()) {
     var destinationResource = __pmjsTrace.revision(destination, 'canvas', true);
@@ -203,7 +200,7 @@ function paintAffineRectangle(context, x, y, width, height, rgba, clear) {
   var bottom = Math.min(context.canvas.height, Math.ceil(Math.max.apply(null, points.map(function(p) { return p[1]; }))));
   if (right <= left || bottom <= top) return;
   var canvas = context.canvas._ensureNativeCanvas();
-  var pixels = NativeHost.canvas.readPixels(canvas.handle, left, top,
+  var pixels = NativeHost.canvas.readPremultipliedPixels(canvas.handle, left, top,
     right - left, bottom - top);
   var dynamicStyle = rgba && typeof rgba === 'object';
   for (var targetY = top; targetY < bottom; targetY++) for (var targetX = left; targetX < right; targetX++) {
@@ -223,21 +220,36 @@ function paintAffineRectangle(context, x, y, width, height, rgba, clear) {
       pixels[offset] = pixels[offset + 1] = pixels[offset + 2] = pixels[offset + 3] = 0;
       continue;
     }
-    var pixelRgba = dynamicStyle ? canvasStyleRgba(rgba,
-      targetX + 0.5, targetY + 0.5, context.globalAlpha) : rgba;
+    var pixelRgba = dynamicStyle ? canvasStylePremultiplied(rgba,
+      targetX + 0.5, targetY + 0.5, context.globalAlpha) : premultiplyCanvasColor(rgba);
     var sourceAlpha = (pixelRgba & 255) / 255;
     var sourceColors = [(pixelRgba >>> 24) & 255,
       (pixelRgba >>> 16) & 255, (pixelRgba >>> 8) & 255];
     compositeCanvasPixel(pixels, offset, sourceColors, sourceAlpha,
       context.globalCompositeOperation);
   }
-  NativeHost.canvas.writePixels(canvas.handle, left, top,
+  NativeHost.canvas.writePremultipliedPixels(canvas.handle, left, top,
     right - left, bottom - top, pixels);
 }
 
 function transformedPoint(context, x, y) {
   var t = context._transform;
   return [t[0] * x + t[2] * y + t[4], t[1] * x + t[3] * y + t[5]];
+}
+
+function premultiplyCanvasColor(rgba) {
+  var alpha = rgba & 255;
+  return ((Math.floor(((rgba >>> 24) * alpha + 127) / 255) << 24) |
+    (Math.floor(((rgba >>> 16 & 255) * alpha + 127) / 255) << 16) |
+    (Math.floor(((rgba >>> 8 & 255) * alpha + 127) / 255) << 8) | alpha) >>> 0;
+}
+function canvasStylePremultiplied(style, x, y, alpha) {
+  var rgba = canvasStyleRgba(style, x, y, alpha);
+  if (!style || style._pmjsStyle !== 'pattern') return premultiplyCanvasColor(rgba);
+  // Pattern samples already contain premultiplied colors.
+  return ((Math.round((rgba >>> 24) * alpha) << 24) |
+    (Math.round((rgba >>> 16 & 255) * alpha) << 16) |
+    (Math.round((rgba >>> 8 & 255) * alpha) << 8) | (rgba & 255)) >>> 0;
 }
 
 function canvasStyleRgba(style, x, y, alpha) {
@@ -335,6 +347,12 @@ function fillAxisAlignedRadialGradient(context, rectangle, style) {
 function fillAxisAlignedLinearGradient(context, rectangle, style) {
   if (!style || style._pmjsStyle !== 'linear-gradient' ||
       !style.stops.length || context._clipPaths.length) return false;
+  if (context.globalCompositeOperation === 'source-over' && NativeHost.canvas.paintRect &&
+      NativeHost.canvas.paintRect(context.canvas._ensureNativeCanvas().handle,
+        rectangle.x, rectangle.y, rectangle.width, rectangle.height, colorWithGlobalAlpha('#fff', context.globalAlpha), 0,
+        style.x0, style.y0, style.x1, style.y1,
+        style.stops.map(function(stop) { return stop.offset; }),
+        style.stops.map(function(stop) { return colorToRgba(stop.color); }))) return true;
   var dx = style.x1 - style.x0;
   var dy = style.y1 - style.y0;
   var horizontal = Math.abs(dy) < 0.000001;
@@ -396,8 +414,35 @@ function rasterPath(context, stroke, rule) {
   var right = Math.min(context.canvas.width, Math.ceil(Math.max.apply(null, all.map(function(p) { return p[0]; })) + radius));
   var bottom = Math.min(context.canvas.height, Math.ceil(Math.max.apply(null, all.map(function(p) { return p[1]; })) + radius));
   if (right <= left || bottom <= top) return;
+  var circle = !stroke && context._circlePath;
+  if (circle) {
+    var t = circle.transform, center = [t[0] * circle.x + t[2] * circle.y + t[4], t[1] * circle.x + t[3] * circle.y + t[5]];
+    var extentX = circle.radius * Math.hypot(t[0], t[2]), extentY = circle.radius * Math.hypot(t[1], t[3]);
+    // Tight scratch clipping changes Skia65 coverage at transformed curve edges.
+    left = Math.max(0, Math.floor(center[0] - extentX) - 2); top = Math.max(0, Math.floor(center[1] - extentY) - 2);
+    right = Math.min(context.canvas.width, Math.ceil(center[0] + extentX) + 2); bottom = Math.min(context.canvas.height, Math.ceil(center[1] + extentY) + 2);
+    if (right <= left || bottom <= top) return;
+  }
+  var circleClips = [];
+  var nativeCircleClip = circle && context._clipPaths.every(function(clip) {
+    if (clip.paths.length !== 1) return false;
+    var path = clip.paths[0];
+    if (path.length !== 5 || path[0][0] !== path[4][0] || path[0][1] !== path[4][1]) return false;
+    for (var edge = 1; edge < 5; edge++) if (path[edge][0] !== path[edge - 1][0] && path[edge][1] !== path[edge - 1][1]) return false;
+    var xs = path.map(function(point) { return point[0]; }), ys = path.map(function(point) { return point[1]; });
+    var x = Math.min.apply(null, xs), y = Math.min.apply(null, ys);
+    var right = Math.max.apply(null, xs), bottom = Math.max.apply(null, ys);
+    if (circleClips.length) {
+      right = Math.min(right, circleClips[0] + circleClips[2]); bottom = Math.min(bottom, circleClips[1] + circleClips[3]);
+      x = Math.max(x, circleClips[0]); y = Math.max(y, circleClips[1]);
+    }
+    circleClips = [x, y, Math.max(0, right - x), Math.max(0, bottom - y)];
+    return true;
+  });
+  var coverage = circle ? NativeHost.canvas.circleCoverage.apply(null,
+    [circle.x, circle.y, circle.radius].concat(circle.transform, [left, top, right - left, bottom - top, nativeCircleClip ? circleClips : []])) : null;
   var canvas = context.canvas._ensureNativeCanvas();
-  var pixels = NativeHost.canvas.readPixels(canvas.handle, left, top, right - left, bottom - top);
+  var pixels = NativeHost.canvas.readPremultipliedPixels(canvas.handle, left, top, right - left, bottom - top);
   var style = stroke ? context.strokeStyle : context.fillStyle;
   for (var y = top; y < bottom; y++) for (var x = left; x < right; x++) {
     var px = x + 0.5, py = y + 0.5, covered = false;
@@ -415,41 +460,146 @@ function rasterPath(context, stroke, rule) {
         }
       }
     } else {
-      covered = pointInCanvasPaths(paths, px, py, rule);
+      covered = coverage ? coverage[(y - top) * (right - left) + x - left] > 0 : pointInCanvasPaths(paths, px, py, rule);
     }
-    if (!covered || !passesCanvasClip(context, px, py)) continue;
+    if (!covered || !nativeCircleClip && !passesCanvasClip(context, px, py)) continue;
     var offset = ((y - top) * (right - left) + x - left) * 4;
-    var rgba = canvasStyleRgba(style, px, py, context.globalAlpha);
+    var rgba = canvasStylePremultiplied(style, px, py, coverage ? 1 : context.globalAlpha);
+    if (coverage) {
+      var paintAlpha = (rgba & 255) * Math.round(Math.max(0, Math.min(1, context.globalAlpha)) * 256) >> 8;
+      if (paintAlpha === 0) continue;
+      var coverageScale = coverage[(y - top) * (right - left) + x - left] + 1;
+      var circleAlpha = paintAlpha * coverageScale >> 8;
+      var destinationByteAlpha = pixels[offset + 3];
+      var outputByteAlpha = circleAlpha + (destinationByteAlpha * (256 - circleAlpha) >> 8);
+      var colors = [rgba >>> 24, rgba >>> 16 & 255, rgba >>> 8 & 255];
+      for (var colorIndex = 0; colorIndex < 3; colorIndex++) {
+        var sourcePremul = (colors[colorIndex] * Math.round(Math.max(0, Math.min(1, context.globalAlpha)) * 256) >> 8) * coverageScale >> 8;
+        var destinationPremul = pixels[offset + colorIndex];
+        var outputPremul = sourcePremul + (destinationPremul * (256 - circleAlpha) >> 8);
+        pixels[offset + colorIndex] = outputPremul;
+      }
+      pixels[offset + 3] = outputByteAlpha;
+      continue;
+    }
     var sourceAlpha = (rgba & 255) / 255;
     var sourceColors = [(rgba >>> 24) & 255, (rgba >>> 16) & 255, (rgba >>> 8) & 255];
-    var destinationAlpha = pixels[offset + 3] / 255;
-    var outputAlpha = sourceAlpha + destinationAlpha * (1 - sourceAlpha);
-    for (var channel = 0; channel < 3; channel++) pixels[offset + channel] =
-      outputAlpha <= 0 ? 0 : Math.round((sourceColors[channel] * sourceAlpha +
-        pixels[offset + channel] * destinationAlpha * (1 - sourceAlpha)) / outputAlpha);
-    pixels[offset + 3] = Math.round(outputAlpha * 255);
+    compositeCanvasPixel(pixels, offset, sourceColors, sourceAlpha, 'source-over');
   }
-  NativeHost.canvas.writePixels(canvas.handle, left, top, right - left,
+  NativeHost.canvas.writePremultipliedPixels(canvas.handle, left, top, right - left,
     bottom - top, pixels);
 }
 
-function colorToRgba(color) {
-  if (typeof color === 'number') return ((color & 0xffffff) << 8 | 0xff) >>> 0;
-  var text = String(color).trim().toLowerCase();
-  if (text === 'transparent') return 0x00000000;
-  if (text === 'black') return 0x000000ff;
-  if (text === 'white') return 0xffffffff;
-  var hex = /^#([0-9a-f]{6})$/i.exec(text);
-  if (hex) return (parseInt(hex[1], 16) * 256 + 255) >>> 0;
-  var rgba = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)$/i.exec(text);
-  if (rgba) {
-    var alpha = rgba[4] === undefined ? 255 : Math.round(Number(rgba[4]) * 255);
-    return ((Number(rgba[1]) & 255) * 0x1000000 +
-            (Number(rgba[2]) & 255) * 0x10000 +
-            (Number(rgba[3]) & 255) * 0x100 + (alpha & 255)) >>> 0;
+// CSS Color named values: https://www.w3.org/TR/css-color-4/#named-colors
+var canvasNamedColors = {
+  aliceblue: 0xf0f8ff, antiquewhite: 0xfaebd7, aqua: 0x00ffff, aquamarine: 0x7fffd4,
+  azure: 0xf0ffff, beige: 0xf5f5dc, bisque: 0xffe4c4, black: 0x000000,
+  blanchedalmond: 0xffebcd, blue: 0x0000ff, blueviolet: 0x8a2be2, brown: 0xa52a2a,
+  burlywood: 0xdeb887, cadetblue: 0x5f9ea0, chartreuse: 0x7fff00, chocolate: 0xd2691e,
+  coral: 0xff7f50, cornflowerblue: 0x6495ed, cornsilk: 0xfff8dc, crimson: 0xdc143c,
+  cyan: 0x00ffff, darkblue: 0x00008b, darkcyan: 0x008b8b, darkgoldenrod: 0xb8860b,
+  darkgray: 0xa9a9a9, darkgreen: 0x006400, darkgrey: 0xa9a9a9, darkkhaki: 0xbdb76b,
+  darkmagenta: 0x8b008b, darkolivegreen: 0x556b2f, darkorange: 0xff8c00, darkorchid: 0x9932cc,
+  darkred: 0x8b0000, darksalmon: 0xe9967a, darkseagreen: 0x8fbc8f, darkslateblue: 0x483d8b,
+  darkslategray: 0x2f4f4f, darkslategrey: 0x2f4f4f, darkturquoise: 0x00ced1, darkviolet: 0x9400d3,
+  deeppink: 0xff1493, deepskyblue: 0x00bfff, dimgray: 0x696969, dimgrey: 0x696969,
+  dodgerblue: 0x1e90ff, firebrick: 0xb22222, floralwhite: 0xfffaf0, forestgreen: 0x228b22,
+  fuchsia: 0xff00ff, gainsboro: 0xdcdcdc, ghostwhite: 0xf8f8ff, gold: 0xffd700,
+  goldenrod: 0xdaa520, gray: 0x808080, green: 0x008000, greenyellow: 0xadff2f,
+  grey: 0x808080, honeydew: 0xf0fff0, hotpink: 0xff69b4, indianred: 0xcd5c5c,
+  indigo: 0x4b0082, ivory: 0xfffff0, khaki: 0xf0e68c, lavender: 0xe6e6fa,
+  lavenderblush: 0xfff0f5, lawngreen: 0x7cfc00, lemonchiffon: 0xfffacd, lightblue: 0xadd8e6,
+  lightcoral: 0xf08080, lightcyan: 0xe0ffff, lightgoldenrodyellow: 0xfafad2, lightgray: 0xd3d3d3,
+  lightgreen: 0x90ee90, lightgrey: 0xd3d3d3, lightpink: 0xffb6c1, lightsalmon: 0xffa07a,
+  lightseagreen: 0x20b2aa, lightskyblue: 0x87cefa, lightslategray: 0x778899, lightslategrey: 0x778899,
+  lightsteelblue: 0xb0c4de, lightyellow: 0xffffe0, lime: 0x00ff00, limegreen: 0x32cd32,
+  linen: 0xfaf0e6, magenta: 0xff00ff, maroon: 0x800000, mediumaquamarine: 0x66cdaa,
+  mediumblue: 0x0000cd, mediumorchid: 0xba55d3, mediumpurple: 0x9370db, mediumseagreen: 0x3cb371,
+  mediumslateblue: 0x7b68ee, mediumspringgreen: 0x00fa9a, mediumturquoise: 0x48d1cc, mediumvioletred: 0xc71585,
+  midnightblue: 0x191970, mintcream: 0xf5fffa, mistyrose: 0xffe4e1, moccasin: 0xffe4b5,
+  navajowhite: 0xffdead, navy: 0x000080, oldlace: 0xfdf5e6, olive: 0x808000,
+  olivedrab: 0x6b8e23, orange: 0xffa500, orangered: 0xff4500, orchid: 0xda70d6,
+  palegoldenrod: 0xeee8aa, palegreen: 0x98fb98, paleturquoise: 0xafeeee, palevioletred: 0xdb7093,
+  papayawhip: 0xffefd5, peachpuff: 0xffdab9, peru: 0xcd853f, pink: 0xffc0cb,
+  plum: 0xdda0dd, powderblue: 0xb0e0e6, purple: 0x800080, rebeccapurple: 0x663399,
+  red: 0xff0000, rosybrown: 0xbc8f8f, royalblue: 0x4169e1, saddlebrown: 0x8b4513,
+  salmon: 0xfa8072, sandybrown: 0xf4a460, seagreen: 0x2e8b57, seashell: 0xfff5ee,
+  sienna: 0xa0522d, silver: 0xc0c0c0, skyblue: 0x87ceeb, slateblue: 0x6a5acd,
+  slategray: 0x708090, slategrey: 0x708090, snow: 0xfffafa, springgreen: 0x00ff7f,
+  steelblue: 0x4682b4, tan: 0xd2b48c, teal: 0x008080, thistle: 0xd8bfd8,
+  tomato: 0xff6347, turquoise: 0x40e0d0, violet: 0xee82ee, wheat: 0xf5deb3,
+  white: 0xffffff, whitesmoke: 0xf5f5f5, yellow: 0xffff00, yellowgreen: 0x9acd32
+};
+
+function parseCanvasColor(color) {
+  if (typeof color === 'number' && Number.isFinite(color)) return ((color & 0xffffff) << 8 | 255) >>> 0;
+  if (typeof color !== 'string') return null;
+  var text = color.trim().toLowerCase();
+  if (text === 'transparent') return 0;
+  if (Object.prototype.hasOwnProperty.call(canvasNamedColors, text)) return (canvasNamedColors[text] * 256 + 255) >>> 0;
+  var hex = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/.exec(text);
+  if (hex) {
+    var digits = hex[1];
+    if (digits.length < 5) digits = digits.split('').map(function(digit) { return digit + digit; }).join('');
+    if (digits.length === 6) digits += 'ff';
+    return parseInt(digits, 16) >>> 0;
   }
-  return 0x000000ff;
+  var functional = /^(rgba?|hsla?|hwb)\((.*)\)$/.exec(text);
+  if (!functional) return null;
+  var body = functional[2], comma = body.indexOf(',') >= 0;
+  if (comma && body.indexOf('/') >= 0) return null;
+  var sections = comma ? [body] : body.split('/');
+  if (sections.length > 2) return null;
+  var parts = sections[0].trim().split(comma ? /\s*,\s*/ : /\s+/);
+  var alpha = comma && parts.length === 4 ? parts.pop() : sections[1];
+  if (parts.length !== 3 || functional[1] === 'hwb' && comma) return null;
+  function component(value, scale, percentageOnly) {
+    if (value === 'none' && !comma) return 0;
+    if (!/^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?%?$/.test(value)) return NaN;
+    var percent = value.endsWith('%');
+    if (percentageOnly && !percent) return NaN;
+    return Number(percent ? value.slice(0, -1) : value) * (percent ? scale / 100 : 1);
+  }
+  var opacity = alpha === undefined ? 1 : component(alpha.trim(), 1, false);
+  var channels;
+  if (functional[1].slice(0, 3) === 'rgb') {
+    if (comma && parts.some(function(part) { return part.endsWith('%') !== parts[0].endsWith('%'); })) return null;
+    channels = parts.map(function(part) { return component(part, 255, false); });
+  } else {
+    var hue = /^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)(deg|grad|rad|turn)?$/.exec(parts[0]);
+    if (!hue && parts[0] !== 'none') return null;
+    var angle = hue ? Number(hue[1]) * ({ deg: 1, grad: 0.9, rad: 180 / Math.PI, turn: 360 }[hue[2] || 'deg']) : 0;
+    angle = ((angle % 360) + 360) % 360 / 60;
+    var first = component(parts[1], 1, true), second = component(parts[2], 1, true);
+    if (![first, second, angle].every(Number.isFinite)) return null;
+    first = Math.max(0, Math.min(1, first)); second = Math.max(0, Math.min(1, second));
+    var chroma = functional[1] === 'hwb' ? 1 : (1 - Math.abs(2 * second - 1)) * first;
+    var middle = chroma * (1 - Math.abs(angle % 2 - 1));
+    var rgb = [[chroma, middle, 0], [middle, chroma, 0], [0, chroma, middle],
+      [0, middle, chroma], [middle, 0, chroma], [chroma, 0, middle]][Math.floor(angle)];
+    channels = rgb.map(function(channel) {
+      if (functional[1] === 'hwb') return 255 * (first + second >= 1 ? first / (first + second) : channel * (1 - first - second) + first);
+      return 255 * (channel + second - chroma / 2);
+    });
+  }
+  if (!channels.concat([opacity]).every(Number.isFinite)) return null;
+  var bytes = channels.map(function(channel) { return Math.round(Math.max(0, Math.min(255, channel))); });
+  return (bytes[0] * 0x1000000 + bytes[1] * 0x10000 + bytes[2] * 0x100 + Math.round(Math.max(0, Math.min(1, opacity)) * 255)) >>> 0;
 }
+
+function colorToRgba(color) {
+  var rgba = parseCanvasColor(color);
+  return rgba === null ? 0x000000ff : rgba;
+}
+
+['fillStyle', 'strokeStyle'].forEach(function(property) {
+  Object.defineProperty(CanvasContext2D.prototype, property, {
+    get: function() { return this['_' + property]; },
+    set: function(value) {
+      if (value && typeof value === 'object' && value._pmjsStyle || parseCanvasColor(value) !== null) this['_' + property] = value;
+    }
+  });
+});
 
 function colorWithGlobalAlpha(color, globalAlpha) {
   var rgba = colorToRgba(color);
@@ -552,7 +702,8 @@ CanvasContext2D.prototype.save = function() {
     strokeStyle: this.strokeStyle, globalAlpha: this.globalAlpha,
     globalCompositeOperation: this.globalCompositeOperation, font: this.font,
     textAlign: this.textAlign, textBaseline: this.textBaseline,
-    lineWidth: this.lineWidth, clipPaths: this._clipPaths.map(function(region) {
+    lineWidth: this.lineWidth, imageSmoothingEnabled: this.imageSmoothingEnabled,
+    clipPaths: this._clipPaths.map(function(region) {
       return { rule: region.rule, paths: region.paths.map(function(path) {
         return path.map(function(point) { return point.slice(); });
       }) };
@@ -614,13 +765,22 @@ CanvasContext2D.prototype.fillRect = function(x, y, width, height) {
     colorWithGlobalAlpha(this.fillStyle, this.globalAlpha));
 };
 CanvasContext2D.prototype.strokeRect = function(x, y, width, height) {
-  var line = Math.max(1, Number(this.lineWidth));
+  var line = Number(this.lineWidth);
+  if (!(line > 0) || !Number.isFinite(line)) return;
+  var rectangle = axisAlignedRect(this, x, y, width, height);
+  if (rectangle && Math.abs(this._transform[0]) === Math.abs(this._transform[3]) &&
+      !this._clipPaths.length && this.globalCompositeOperation === 'source-over' &&
+      typeof this.strokeStyle !== 'object' && NativeHost.canvas.paintRect &&
+      NativeHost.canvas.paintRect(this.canvas._ensureNativeCanvas().handle,
+        rectangle.x, rectangle.y, rectangle.width, rectangle.height,
+        colorWithGlobalAlpha(this.strokeStyle, this.globalAlpha), line * Math.abs(this._transform[0]),
+        0, 0, 0, 0, [], [])) return;
   var old = this.fillStyle;
   this.fillStyle = this.strokeStyle;
-  this.fillRect(x, y, width, line);
-  this.fillRect(x, y + height - line, width, line);
-  this.fillRect(x, y + line, line, Math.max(0, height - line * 2));
-  this.fillRect(x + width - line, y + line, line, Math.max(0, height - line * 2));
+  this.fillRect(x - line / 2, y - line / 2, width + line, line);
+  this.fillRect(x - line / 2, y + height - line / 2, width + line, line);
+  this.fillRect(x - line / 2, y + line / 2, line, Math.max(0, height - line));
+  this.fillRect(x + width - line / 2, y + line / 2, line, Math.max(0, height - line));
   this.fillStyle = old;
 };
 CanvasContext2D.prototype.drawImage = function(source) {
@@ -701,9 +861,8 @@ CanvasContext2D.prototype.drawImage = function(source) {
   var destination = this.canvas._ensureNativeCanvas();
   NativeHost.canvas.drawImage(
     destination.handle, nativeSource.handle,
-    Math.floor(sx), Math.floor(sy), Math.floor(sw), Math.floor(sh),
-    Math.floor(dx), Math.floor(dy), Math.floor(dw), Math.floor(dh),
-    Math.max(0, Math.min(1, Number(this.globalAlpha))));
+    sx, sy, sw, sh, dx, dy, dw, dh,
+    Math.max(0, Math.min(1, Number(this.globalAlpha))), this.imageSmoothingEnabled !== false);
   if (trace && trace.active()) {
     var destinationResource = trace.revision(destination, 'canvas', true);
     trace.event('canvas', 'canvas.drawImage-complete', {
@@ -785,17 +944,20 @@ CanvasContext2D.prototype.strokeText = function(text, x, y, maxWidth) {
   drawCanvasText(this, text, x, y, true, maxWidth);
 };
 CanvasContext2D.prototype.beginPath = function() {
+  this._circlePath = null;
   this._path = []; this._subpath = null; this._currentPathPoint = null;
 };
 CanvasContext2D.prototype.closePath = function() {
   if (this._subpath && this._subpath.length > 1) this._subpath.push(this._subpath[0].slice());
 };
 CanvasContext2D.prototype.moveTo = function(x, y) {
+  this._circlePath = null;
   this._currentPathPoint = [Number(x), Number(y)];
   this._subpath = [transformedPoint(this, Number(x), Number(y))];
   this._path.push(this._subpath);
 };
 CanvasContext2D.prototype.lineTo = function(x, y) {
+  this._circlePath = null;
   if (!this._subpath) this.moveTo(x, y);
   else {
     this._currentPathPoint = [Number(x), Number(y)];
@@ -804,11 +966,19 @@ CanvasContext2D.prototype.lineTo = function(x, y) {
 };
 CanvasContext2D.prototype.arc = function(x, y, radius, start, end, anticlockwise) {
   radius = Number(radius); if (radius < 0) throw new RangeError('negative arc radius');
-  var sweep = Number(end) - Number(start);
-  if (!anticlockwise && sweep < 0) sweep += Math.PI * 2;
-  if (anticlockwise && sweep > 0) sweep -= Math.PI * 2;
-  sweep = Math.max(-Math.PI * 2, Math.min(Math.PI * 2, sweep));
-  var segments = Math.max(4, Math.ceil(Math.abs(sweep) * Math.max(1, radius) / 4));
+  x = Number(x); y = Number(y); start = Number(start); end = Number(end);
+  if (![x, y, radius, start, end].every(Number.isFinite)) return;
+  var difference = end - start, tau = Math.PI * 2;
+  var sweep;
+  if (!anticlockwise && difference >= tau) sweep = tau;
+  else if (anticlockwise && difference <= -tau) sweep = -tau;
+  else {
+    sweep = (difference % tau + tau) % tau;
+    if (anticlockwise && sweep > 0) sweep -= tau;
+  }
+  this._circlePath = !this._path.length && Math.abs(sweep) >= Math.PI * 2 ?
+    { x: Number(x), y: Number(y), radius: radius, transform: this._transform.slice() } : null;
+  var segments = Math.max(8, Math.ceil(Math.abs(sweep) * Math.max(1, radius) * 2));
   for (var index = 0; index <= segments; index++) {
     var angle = Number(start) + sweep * index / segments;
     var point = transformedPoint(this, Number(x) + Math.cos(angle) * radius,
@@ -875,7 +1045,7 @@ CanvasContext2D.prototype.createLinearGradient = function() {
     x1: second[0], y1: second[1], stops: [], addColorStop: function(offset, color) {
       offset = Number(offset);
       if (!isFinite(offset) || offset < 0 || offset > 1) throw new RangeError('invalid color stop');
-      colorToRgba(color);
+      if (parseCanvasColor(color) === null) throw new SyntaxError('Invalid color');
       this.stops.push({ offset: offset, color: color });
       this.stops.sort(function(left, right) { return left.offset - right.offset; });
     } };
@@ -904,7 +1074,7 @@ CanvasContext2D.prototype.createRadialGradient = function(x0, y0, r0, x1, y1, r1
     stops: [], addColorStop: function(offset, color) {
       offset = Number(offset);
       if (!isFinite(offset) || offset < 0 || offset > 1) throw new RangeError('invalid color stop');
-      colorToRgba(color);
+      if (parseCanvasColor(color) === null) throw new SyntaxError('Invalid color');
       this.stops.push({ offset: offset, color: color });
       this.stops.sort(function(left, right) { return left.offset - right.offset; });
     } };

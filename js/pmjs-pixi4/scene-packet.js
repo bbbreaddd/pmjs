@@ -496,6 +496,9 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
     nativeSceneValues[valueOffset + 9] = frame.x;
     nativeSceneValues[valueOffset + 10] = frame.y;
     var textureBase = texture && texture.baseTexture;
+    if (textureBase && textureBase.mipmap) {
+      nativeSceneMetadata[nodeIndex * nativeSceneMetadataStride + 5] |= 65536;
+    }
     if (textureBase && textureBase.__pmjsPremultiplied) {
       nativeSceneMetadata[nodeIndex * nativeSceneMetadataStride + 5] |= 1024;
     }
@@ -810,6 +813,9 @@ function renderNativeStage(stage, rootTransform, filterResolution, roundPixels,
       nativeSceneUsePixiWorldState = !!skipUpdateTransform || options.worldState === 'pixi';
       if (nativeSceneUsePixiWorldState && !skipUpdateTransform && typeof stage.updateTransform === 'function') {
         stage.updateTransform();
+      }
+      if (!nativeSceneUsePixiWorldState && typeof prepareNativeMvWindowTransforms === 'function') {
+        prepareNativeMvWindowTransforms(stage);
       }
       submitNativeScene(stage, backgroundColor);
     }

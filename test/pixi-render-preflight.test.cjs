@@ -3,10 +3,10 @@
 const assert = require('node:assert/strict');
 const childProcess = require('node:child_process');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { temporaryDirectory } = require('./helpers/temp.cjs');
 
 const source = fs.readFileSync(path.join(__dirname,
   '../js/pmjs-pixi4/render-preflight.js'), 'utf8');
@@ -195,7 +195,7 @@ test('Pixi baseline loads before plugin setup, with scan after adapters', () => 
     generic.indexOf('js/pmjs-mv/plugin-loader.js'));
   assert.ok(generic.indexOf('js/pmjs-pixi4/render-preflight.js') <
     generic.indexOf('js/pmjs-mv/bootstrap.js'));
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-preflight-'));
+  const root = temporaryDirectory('pmjs-preflight-');
   const game = path.join(root, 'game');
   fs.mkdirSync(path.join(game, 'js', 'libs'), { recursive: true });
   fs.writeFileSync(path.join(game, 'js', 'rpg_core.js'), '// RPG Maker MV v1.6.1\n');

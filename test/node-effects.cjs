@@ -12,12 +12,12 @@ const camera = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, -10, 1];
 function frame(handle, transform = projection) {
   native.beginFrame();
   const metadata = new Uint32Array([9, 0xffffffff, handle, 0xffffff, 0, 0, 0]);
-  const values = new Float32Array(41);
+  const values = new Float32Array(native.scene.schema.valueStride);
   values.set([-2016, -2016, 4096, 4096, 0, 0, 1]);
   values.set(transform, 7);
   values.set(camera, 23);
   values.set([64, 64], 39);
-  native.scene.submit(28, metadata, values, 1);
+  native.scene.submit(native.scene.schema.version, metadata, values, 1);
   native.renderScene();
   return Array.from(native.canvas.captureSceneRawPremultiplied());
 }

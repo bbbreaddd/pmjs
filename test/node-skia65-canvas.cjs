@@ -25,7 +25,7 @@ assert.equal(native.canvas.memory().deferredCanvasCount, 1);
 const expected = pixels(immediate);
 assert.deepEqual(pixels(deferred), expected, 'Interleaved commands preserve fractional styles and source-over order');
 assert.deepEqual(Array.from(expected.subarray((1 * 64 + 1) * 4, (1 * 64 + 1) * 4 + 4)),
-  [37, 67, 103, 157], 'Text must preserve untouched straight-alpha Canvas pixels');
+  [37, 67, 102, 157], 'Text must preserve untouched Canvas content through straight observation');
 const retained = native.canvas.create(64, 64);
 native.canvas.drawImage(retained.handle, deferred.handle, 0, 0, 64, 64, 0, 0, 64, 64, 1);
 native.canvas.clear(deferred.handle);

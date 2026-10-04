@@ -339,6 +339,7 @@ bool Renderer::filterBoundsRect(const RenderCommand* filterBegin,
   if (!filterBoundsEnabled_ || filterBegin == nullptr || rect == nullptr) {
     return false;
   }
+  if (sceneProjection_ != std::array<float, 6>{1, 0, 0, 1, 0, 0}) return false;
   if (filterBegin < frame_.commands.data() ||
       filterBegin >= frame_.commands.data() + frame_.commands.size()) {
     return false;
@@ -386,7 +387,8 @@ void Renderer::renderScene() {
     glClearColor(clearColor_[0], clearColor_[1], clearColor_[2], clearColor_[3]);
     glDepthMask(GL_TRUE);
     glClearDepthf(1);
-    glClear(GL_COLOR_BUFFER_BIT | (rootTarget.depth ? GL_DEPTH_BUFFER_BIT : 0));
+    const bool clearColor = clearBeforeRender_ || (!offscreenRender_ && !hasValidSceneFrame_);
+    glClear((clearColor ? GL_COLOR_BUFFER_BIT : 0) | (rootTarget.depth ? GL_DEPTH_BUFFER_BIT : 0));
 
     vertices_.clear();
     vertices_.reserve(frame_.commands.size() * 72);
@@ -434,6 +436,7 @@ void Renderer::renderScene() {
   for (std::size_t begin = 0; begin < frame_.commands.size(); ++begin) {
     const RenderCommand& filter = frame_.commands[begin];
     if (filter.action != RenderCommand::Action::filterBegin ||
+        sceneProjection_ != std::array<float, 6>{1, 0, 0, 1, 0, 0} ||
         filter.blendMode != BlendMode::normal ||
         filterDepthBefore[begin] != 0 ||
         filter.filterKind != scene_packet::FilterKind::colorMatrix ||
@@ -541,9 +544,11 @@ void Renderer::renderScene() {
     RenderCommand::Action action = RenderCommand::Action::draw;
     bool appliesSpriteColor = false;
     bool pixiSpritePacking = false;
+    bool standaloneBitmapRegion = false;
     bool spriteWorldVertices = false;
     bool premultipliedSpriteTexture = false;
     bool clampedTilingSampling = false;
+    bool mipmap = false;
     std::array<float, 4> spriteFrame{};
     std::array<float, 4> colorTone{};
     std::array<float, 4> blendColor{};
@@ -634,6 +639,7 @@ void Renderer::renderScene() {
     const float textureHeight = info ? static_cast<float>(info->height) : 1.0F;
     const std::uint32_t texture = info ? info->texture : whiteTexture_;
     const bool texturePremultiplied = command.premultipliedSpriteTexture || (info && info->premultiplied);
+    const bool mipmap = command.mipmap && info && images_.ensureMipmaps(command.image, info->premultiplied);
     const auto& t = command.transform;
     const auto point = [&](float x, float y, std::size_t corner) {
       float px = t[0] * x + t[2] * y + t[4];
@@ -645,8 +651,7 @@ void Renderer::renderScene() {
       }
       px = px * viewportMapping[0] + viewportMapping[2];
       py = py * viewportMapping[1] + viewportMapping[3];
-      return std::array<float, 2>{px / static_cast<float>(width_) * 2.0F - 1.0F,
-                                  1.0F - py / static_cast<float>(height_) * 2.0F};
+      return std::array<float, 2>{px, py};
     };
     const float localWidth = command.destination[0];
     const float localHeight = command.destination[1];
@@ -654,15 +659,16 @@ void Renderer::renderScene() {
     const auto p1 = point(localWidth, 0, 1);
     const auto p2 = point(localWidth, localHeight, 2);
     const auto p3 = point(0, localHeight, 3);
-    if (preparingFilterDepth == 0) {
-      const bool left = p0[0] <= -1 && p1[0] <= -1 &&
-                        p2[0] <= -1 && p3[0] <= -1;
-      const bool right = p0[0] >= 1 && p1[0] >= 1 &&
-                         p2[0] >= 1 && p3[0] >= 1;
-      const bool above = p0[1] >= 1 && p1[1] >= 1 &&
-                         p2[1] >= 1 && p3[1] >= 1;
-      const bool below = p0[1] <= -1 && p1[1] <= -1 &&
-                         p2[1] <= -1 && p3[1] <= -1;
+    if (preparingFilterDepth == 0 &&
+        sceneProjection_ == std::array<float, 6>{1, 0, 0, 1, 0, 0}) {
+      const bool left = p0[0] <= 0 && p1[0] <= 0 &&
+                        p2[0] <= 0 && p3[0] <= 0;
+      const bool right = p0[0] >= width_ && p1[0] >= width_ &&
+                         p2[0] >= width_ && p3[0] >= width_;
+      const bool above = p0[1] <= 0 && p1[1] <= 0 &&
+                         p2[1] <= 0 && p3[1] <= 0;
+      const bool below = p0[1] >= height_ && p1[1] >= height_ &&
+                         p2[1] >= height_ && p3[1] >= height_;
       if (left || right || above || below) continue;
     }
     const float u0 = command.source[0] / textureWidth;
@@ -672,9 +678,12 @@ void Renderer::renderScene() {
     std::array<std::array<float, 2>, 4> sourceCorners = {
       std::array<float, 2>{u0, v0}, {u1, v0}, {u1, v1}, {u0, v1}
     };
+    if (command.standaloneBitmapRegion) {
+      sourceCorners = {{{0, 0}, {1, 0}, {1, 1}, {0, 1}}};
+    }
     // GPU Bitmap views replace private textures; their storage atlas must not
     // introduce the atlas-wide uint16 UV rounding of an authored spritesheet.
-    if (command.pixiSpritePacking && !command.standaloneBitmapRegion) {
+    if (command.pixiSpritePacking && !command.standaloneBitmapRegion && !command.floatSpriteUv) {
       const auto packUv = [](double coordinate) {
         // JS ToUint16 truncates and wraps; an out-of-range C++ cast is undefined.
         double packed = std::fmod(std::trunc(coordinate * 65535.0), 65536.0);
@@ -705,11 +714,17 @@ void Renderer::renderScene() {
       }
       color[3] = std::floor(alpha * 255.0F) / 255.0F;
     }
-    const bool worldVertices = command.spriteWorldVertices && viewportMapping == std::array<float, 4>{1, 1, 0, 0};
-    const auto vertex0 = worldVertices ? command.spriteVertices[0] : p0;
-    const auto vertex1 = worldVertices ? command.spriteVertices[1] : p1;
-    const auto vertex2 = worldVertices ? command.spriteVertices[2] : p2;
-    const auto vertex3 = worldVertices ? command.spriteVertices[3] : p3;
+    const bool worldVertices = (command.spriteWorldVertices || command.pixiSpritePacking) &&
+                               viewportMapping == std::array<float, 4>{1, 1, 0, 0};
+    const auto project = [&](const std::array<float, 2>& pixel) {
+      if (worldVertices) return pixel;
+      return std::array<float, 2>{pixel[0] / static_cast<float>(width_) * 2.0F - 1.0F,
+                                 1.0F - pixel[1] / static_cast<float>(height_) * 2.0F};
+    };
+    const auto vertex0 = project(p0);
+    const auto vertex1 = project(p1);
+    const auto vertex2 = project(p2);
+    const auto vertex3 = project(p3);
     const std::array<float, 72> vertices = {
       vertex0[0], vertex0[1], uv0[0], uv0[1], color[0], color[1], color[2], color[3], u0, v0, u1, v1,
       vertex1[0], vertex1[1], uv1[0], uv1[1], color[0], color[1], color[2], color[3], u0, v0, u1, v1,
@@ -729,15 +744,17 @@ void Renderer::renderScene() {
         operations.back().blendMode != command.blendMode ||
         operations.back().repeat != command.repeat ||
         operations.back().nearest != command.nearest ||
+        operations.back().mipmap != mipmap ||
         operations.back().clampedTilingSampling != command.clampedTilingSampling ||
         operations.back().blur != command.blur ||
         operations.back().maskImage != command.maskImage ||
         operations.back().maskTransform != command.maskTransform ||
         operations.back().appliesSpriteColor != command.appliesSpriteColor ||
         operations.back().pixiSpritePacking != command.pixiSpritePacking ||
+        operations.back().standaloneBitmapRegion != command.standaloneBitmapRegion ||
         operations.back().spriteWorldVertices != worldVertices ||
         operations.back().premultipliedSpriteTexture != texturePremultiplied ||
-        (command.appliesSpriteColor && operations.back().spriteFrame != command.source) ||
+        ((command.appliesSpriteColor || command.standaloneBitmapRegion) && operations.back().spriteFrame != command.source) ||
         operations.back().colorTone != command.colorTone ||
         operations.back().blendColor != command.blendColor ||
         operations.back().inlineMatrix != inlineFilterMatrix[commandIndex] ||
@@ -751,7 +768,9 @@ void Renderer::renderScene() {
         command.blur, command.maskImage, command.maskTransform});
       operations.back().appliesSpriteColor = command.appliesSpriteColor;
       operations.back().pixiSpritePacking = command.pixiSpritePacking;
+      operations.back().standaloneBitmapRegion = command.standaloneBitmapRegion;
       operations.back().spriteWorldVertices = worldVertices;
+      operations.back().mipmap = mipmap;
       operations.back().premultipliedSpriteTexture = texturePremultiplied;
       operations.back().clampedTilingSampling = command.clampedTilingSampling;
       operations.back().spriteFrame = command.source;
@@ -781,15 +800,29 @@ void Renderer::renderScene() {
   float rasterResolution = 1;
   std::array<float, 4> rasterFrame{0, 0, static_cast<float>(width_), static_cast<float>(height_)};
   std::array<std::array<float, 4>, scene_packet::maxFilterDepth> rasterFrames{};
+  // Deleted image textures can return under the same GL name with default sampling.
+  if (imageTextureEpoch_ != images_.textureEpoch()) {
+    textureNearestState_.clear();
+    textureRepeatState_.clear();
+    imageTextureEpoch_ = images_.textureEpoch();
+  }
   bool targetYDown = offscreenRender_;
-  bool targetYDown = offscreenRender_;
-  const auto projectTarget = [&](std::uint32_t program) {
+  const auto projectTarget = [&](std::uint32_t program, bool projectScene = true) {
     auto [entry, inserted] = targetProjectionLocations_.try_emplace(program, -1);
     if (inserted) entry->second = glGetUniformLocation(program, "targetProjection");
-    glUniform4f(entry->second, width_ / std::max(1.0F, rasterFrame[2]),
-      height_ / std::max(1.0F, rasterFrame[3]),
-      (width_ - 2 * rasterFrame[0]) / std::max(1.0F, rasterFrame[2]) - 1,
-      (targetYDown ? -1.0F : 1.0F) * (1 - (height_ - 2 * rasterFrame[1]) / std::max(1.0F, rasterFrame[3])));
+    // Convert pixel-space projection to this framebuffer's NDC and crop frame.
+    const auto transform = projectScene ? sceneProjection_ : std::array<float, 6>{1, 0, 0, 1, 0, 0};
+    const float sign = targetYDown ? 1.0F : -1.0F;
+    const float wx = static_cast<float>(width_), hy = static_cast<float>(height_);
+    const float sx = wx / std::max(1.0F, rasterFrame[2]), sy = hy / std::max(1.0F, rasterFrame[3]);
+    const float ox = (wx - 2 * rasterFrame[0]) / std::max(1.0F, rasterFrame[2]) - 1;
+    const float oy = sign * ((hy - 2 * rasterFrame[1]) / std::max(1.0F, rasterFrame[3]) - 1);
+    const std::array<float, 9> projection{
+      sx * transform[0], sy * sign * wx / hy * transform[1], 0,
+      sx * sign * hy / wx * transform[2], sy * transform[3], 0,
+      sx * (transform[0] + hy / wx * transform[2] + 2 / wx * transform[4] - 1) + ox,
+      sy * sign * (wx / hy * transform[1] + transform[3] + 2 / hy * transform[5] - 1) + oy, 1};
+    glUniformMatrix3fv(entry->second, 1, GL_FALSE, projection.data());
   };
   const auto rasterScissor = [&](int x, int y, int width, int height) {
     const float localY = targetYDown ? height_ - y - height - rasterFrame[1] :
@@ -822,8 +855,8 @@ void Renderer::renderScene() {
       rasterFrames[filterDepth] = rasterFrame;
       if (activeProgram) projectTarget(activeProgram);
       const auto pot = [](int size) { int result = 1; while (result < size) result *= 2; return result; };
-      const int targetWidth = std::max(1, static_cast<int>(std::ceil(rasterFrame[2] * rasterResolution)));
-      const int targetHeight = std::max(1, static_cast<int>(std::ceil(rasterFrame[3] * rasterResolution)));
+      const int targetWidth = std::max(1, static_cast<int>(rasterFrame[2] * rasterResolution));
+      const int targetHeight = std::max(1, static_cast<int>(rasterFrame[3] * rasterResolution));
       if (diagnostics_) ++stats_.filterTargetAcquires;
       if (groupTargets_[filterDepth].texture &&
           groupTargets_[filterDepth].width == targetWidth &&
@@ -850,7 +883,7 @@ void Renderer::renderScene() {
         scissorActive = false;
       }
       glBindFramebuffer(GL_FRAMEBUFFER, groupTargets_[filterDepth].framebuffer);
-      glViewport(0, 0, std::lround(rasterFrame[2] * rasterResolution), std::lround(rasterFrame[3] * rasterResolution));
+      glViewport(0, 0, static_cast<int>(rasterFrame[2] * rasterResolution), static_cast<int>(rasterFrame[3] * rasterResolution));
       if (bounded && !multiRegion) {
         glEnable(GL_SCISSOR_TEST);
         rasterScissor(boundedRect[0], height_ - boundedRect[3],
@@ -888,7 +921,7 @@ void Renderer::renderScene() {
         glDisable(GL_SCISSOR_TEST);
         scissorActive = false;
       }
-      glViewport(0, 0, std::lround(rasterFrame[2] * rasterResolution), std::lround(rasterFrame[3] * rasterResolution));
+      glViewport(0, 0, static_cast<int>(rasterFrame[2] * rasterResolution), static_cast<int>(rasterFrame[3] * rasterResolution));
       glUseProgram(program_);
       projectTarget(program_);
       activeProgram = program_;
@@ -1391,7 +1424,7 @@ void Renderer::renderScene() {
         presentationColorMatrixAlpha_ = operation.matrixCommand->color[3];
         toneCompositionActive_ = true;
         glBindFramebuffer(GL_FRAMEBUFFER, toneOverlayTarget_.framebuffer);
-        glViewport(0, 0, std::lround(rasterFrame[2] * rasterResolution), std::lround(rasterFrame[3] * rasterResolution));
+        glViewport(0, 0, static_cast<int>(rasterFrame[2] * rasterResolution), static_cast<int>(rasterFrame[3] * rasterResolution));
         glDisable(GL_SCISSOR_TEST);
         scissorActive = false;
         glClearColor(0, 0, 0, 0);
@@ -1404,7 +1437,7 @@ void Renderer::renderScene() {
       ensureTarget(filterTarget_, width_, height_);
       glDisable(GL_BLEND);
       glBindFramebuffer(GL_FRAMEBUFFER, filterTarget_.framebuffer);
-      glViewport(0, 0, std::lround(rasterFrame[2] * rasterResolution), std::lround(rasterFrame[3] * rasterResolution));
+      glViewport(0, 0, static_cast<int>(rasterFrame[2] * rasterResolution), static_cast<int>(rasterFrame[3] * rasterResolution));
       glUseProgram(program_);
       projectTarget(program_);
       activeProgram = program_;
@@ -1499,7 +1532,7 @@ void Renderer::renderScene() {
         if (diagnostics_) stats_.drawCalls += effectDrawCalls;
       }
       // Subsequent geometry already includes MZ's reset viewport mapping.
-      glViewport(0, 0, std::lround(rasterFrame[2] * rasterResolution), std::lround(rasterFrame[3] * rasterResolution));
+      glViewport(0, 0, static_cast<int>(rasterFrame[2] * rasterResolution), static_cast<int>(rasterFrame[3] * rasterResolution));
       continue;
     }
     if (operation.blendMode != activeBlend) {
@@ -1542,6 +1575,15 @@ void Renderer::renderScene() {
         glUniform1i(uniforms.trianglePaintEnabled, triangleMaterial != nullptr);
         glUniform1i(uniforms.mvBlendEnabled, bitmapMaterial != nullptr);
         glUniform1i(uniforms.nearestSampling, operation.nearest);
+        glUniform1i(uniforms.triangleCoverageEnabled, layer->second.triangleCoverage != 0);
+        if (layer->second.triangleCoverage) {
+          const auto coverage = images_.lookup(layer->second.triangleCoverage);
+          if (!coverage) throw std::runtime_error("triangle bitmap coverage was released");
+          glActiveTexture(GL_TEXTURE2);
+          glBindTexture(GL_TEXTURE_2D, coverage->texture);
+          glUniform1i(uniforms.triangleCoverage, 2);
+          glActiveTexture(GL_TEXTURE0);
+        }
         if (triangleMaterial) glUniform1fv(uniforms.trianglePaint, 30, triangleMaterial->coefficients.data());
         if (bitmapMaterial != nullptr) {
           glUniform4fv(uniforms.mvBounds, 1, bitmapMaterial->texelBounds.data());
@@ -1595,16 +1637,16 @@ void Renderer::renderScene() {
     }
 
     const bool simpleSprite = operation.blur <= 0 && operation.maskImage == 0 &&
-                              !operation.appliesSpriteColor &&
+                              !operation.appliesSpriteColor && !operation.standaloneBitmapRegion &&
                               operation.inlineMatrix == nullptr;
     const std::uint32_t spriteProgram = simpleSprite ? simpleProgram_ :
                                                      spriteEffectProgram_;
     if (activeProgram != spriteProgram) {
       glUseProgram(spriteProgram);
-      projectTarget(spriteProgram);
       glBindVertexArray(vertexArray_);
       activeProgram = spriteProgram;
     }
+    projectTarget(spriteProgram, operation.primitive != RenderCommand::Primitive::screenFill);
     glBindTexture(GL_TEXTURE_2D, operation.texture);
     const auto nearest = textureNearestState_.find(operation.texture);
     if (nearest == textureNearestState_.end() ||
@@ -1618,7 +1660,14 @@ void Renderer::renderScene() {
     // Pixi render targets project downward in GL; readback reflection cannot
     // reproduce sampling and edge coverage at exact pixel-center boundaries.
     const float ySign = targetYDown ? 1.0F : -1.0F;
-    const std::array<float, 9> projection = {2.0F / width_, 0, 0, 0, ySign * 2.0F / height_, 0, -1, -ySign, 1};
+    const double sx = 2.0 / std::max(1.0F, rasterFrame[2]);
+    const double sy = ySign * 2.0 / std::max(1.0F, rasterFrame[3]);
+    const auto& transform = sceneProjection_;
+    const std::array<float, 9> projection = {
+      static_cast<float>(sx * transform[0]), static_cast<float>(sy * transform[1]), 0,
+      static_cast<float>(sx * transform[2]), static_cast<float>(sy * transform[3]), 0,
+      static_cast<float>(-1 - rasterFrame[0] * sx + transform[4] * sx),
+      static_cast<float>(-ySign - rasterFrame[1] * sy + transform[5] * sy), 1};
     glUniform1i(simpleSprite ? simpleTargetYDownUniform_ : spriteEffectTargetYDownUniform_, targetYDown);
     glUniformMatrix3fv(simpleSprite ? simpleSpriteProjectionUniform_ : spriteEffectProjectionUniform_, 1, GL_FALSE, projection.data());
     glUniform1i(simpleSprite ? simpleTilingClampUniform_ : spriteEffectTilingClampUniform_,
@@ -1634,6 +1683,7 @@ void Renderer::renderScene() {
       glUniform4f(spriteEffectFrameUniform_, frame[0], frame[1],
         frame[0] + frame[2] - 1, frame[1] + frame[3] - 1);
       glUniform1i(spriteEffectNearestUniform_, operation.nearest);
+      glUniform1i(spriteEffectStandaloneUniform_, operation.standaloneBitmapRegion);
       glUniform1i(spriteEffectColorEnabledUniform_,
                   operation.appliesSpriteColor ? 1 : 0);
       if (operation.appliesSpriteColor) {
@@ -1681,7 +1731,11 @@ void Renderer::renderScene() {
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T,
                       gpuRepeat ? GL_REPEAT : GL_CLAMP_TO_EDGE);
     }
+    if (operation.mipmap) glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+      operation.nearest ? GL_NEAREST_MIPMAP_NEAREST : GL_LINEAR_MIPMAP_LINEAR);
     glDrawArrays(GL_TRIANGLES, operation.first, operation.count);
+    if (operation.mipmap) glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+      operation.nearest ? GL_NEAREST : GL_LINEAR);
     if (diagnostics_) {
       ++stats_.drawCalls;
       if (operation.primitive == RenderCommand::Primitive::tilingSprite) ++stats_.tilingSpriteDrawCalls;
