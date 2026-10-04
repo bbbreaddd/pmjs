@@ -45,10 +45,13 @@ export function detectPixiVersion(gameDir) {
     let source = '';
     try {
       const handle = fs.openSync(file, 'r');
-      const buffer = Buffer.alloc(65536);
-      const bytes = fs.readSync(handle, buffer, 0, buffer.length, 0);
-      fs.closeSync(handle);
-      source = buffer.subarray(0, bytes).toString('utf8');
+      try {
+        const buffer = Buffer.alloc(65536);
+        const bytes = fs.readSync(handle, buffer, 0, buffer.length, 0);
+        source = buffer.subarray(0, bytes).toString('utf8');
+      } finally {
+        fs.closeSync(handle);
+      }
     } catch {
       continue;
     }

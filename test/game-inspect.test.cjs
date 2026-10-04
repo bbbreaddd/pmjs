@@ -62,6 +62,43 @@ test('game inspection rejects plugins.js outside the generated JSON form', async
   assert.throws(() => readPluginManifest(dir), /unsupported generated plugin manifest/);
 });
 
+test('Pixi inspection closes a failed read before trying the next candidate', async () => {
+  const { detectPixiVersion } = await loadInspect();
+  const dir = temporaryDirectory('pmjs-game-pixi-read-');
+  writeGame(dir);
+  const first = path.join(dir, 'js', 'libs', 'pixi.js');
+  fs.writeFileSync(path.join(dir, 'js', 'pixi.js'), "PIXI.VERSION = '5.3.0';");
+  const open = fs.openSync;
+  const read = fs.readSync;
+  let failedHandle;
+  let closedBeforeFallback = false;
+  try {
+    fs.openSync = function(file, ...args) {
+      if (file === path.join(dir, 'js', 'pixi.js')) {
+        assert.throws(() => fs.fstatSync(failedHandle), /EBADF/);
+        closedBeforeFallback = true;
+      }
+      const handle = open.call(fs, file, ...args);
+      if (file === first) failedHandle = handle;
+      return handle;
+    };
+    fs.readSync = function(handle, ...args) {
+      if (handle === failedHandle && !closedBeforeFallback) throw new Error('read failed');
+      return read.call(fs, handle, ...args);
+    };
+    assert.equal(detectPixiVersion(dir).pixiVersion, '5.3.0');
+    assert.equal(closedBeforeFallback, true);
+  } finally {
+    fs.openSync = open;
+    fs.readSync = read;
+    if (failedHandle !== undefined) {
+      try { fs.closeSync(failedHandle); } catch (error) {
+        if (error.code !== 'EBADF') throw error;
+      }
+    }
+  }
+});
+
 test('game inspection rejects unknown engines and missing manifests', async () => {
   const { inspectGame, readPluginManifest } = await loadInspect();
   const registry = path.join(__dirname, '..', 'profiles', 'plugin-adapters.json');

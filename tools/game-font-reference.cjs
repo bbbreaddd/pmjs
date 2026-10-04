@@ -34,8 +34,8 @@ async function main() {
     await app.whenReady();
     const window = new BrowserWindow({ show: false,
       webPreferences: { backgroundThrottling: false } });
-    await window.loadURL('about:blank');
     try {
+      await window.loadURL('about:blank');
       for (const [index, font] of fonts.entries()) {
         const data = { family: `Reference${index}`, size: font.size, cases: font.cases,
           bytes: fs.readFileSync(font.path).toString('base64'), boundsSource: inkBounds.toString() };
@@ -60,34 +60,42 @@ async function main() {
         })(${JSON.stringify(data)})`, true);
         result.fonts.push({ path: font.path, sha256: font.sha256, size: font.size, cases });
       }
-    } finally {
-      window.destroy();
       fs.writeFileSync(output, JSON.stringify(result, null, 2) + '\n');
-      app.quit();
+    } finally {
+      try { window.destroy(); } finally { app.quit(); }
     }
   } else {
     const native = require(path.resolve(option('--addon')));
-    // Purchased font links can escape the workspace VFS; stage only these local inputs.
+    // Stage font contents because the game VFS cannot follow external symlinks.
     const fontRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-font-reference-'));
+    let initialized = false;
     try {
       fonts.forEach((font, index) => fs.copyFileSync(font.path, path.join(fontRoot, `${index}.ttf`)));
       native.initialize({ gameRoot: fontRoot, assetRoot: '', width: 1024, height: 192,
         windowTitle: 'actual game font reference' });
+      initialized = true;
       for (const [index, font] of fonts.entries()) {
         const fontPath = `${index}.ttf`;
         const cases = font.cases.map(text => {
           const metrics = native.canvas.measureTextMetrics(fontPath, text, font.size);
           const canvas = native.canvas.create(1024, 192);
-          native.canvas.drawText(canvas.handle, fontPath, text, 32, 96, font.size, 0xffffffff, 0);
-          const pixels = native.canvas.readPixels(canvas.handle, 0, 0, 1024, 192);
-          native.canvas.release(canvas.handle);
-          return { text, metrics, ink: inkBounds(pixels, 1024, 192) };
+          try {
+            native.canvas.drawText(canvas.handle, fontPath, text, 32, 96, font.size, 0xffffffff, 0);
+            const pixels = native.canvas.readPixels(canvas.handle, 0, 0, 1024, 192);
+            return { text, metrics, ink: inkBounds(pixels, 1024, 192) };
+          } finally {
+            native.canvas.release(canvas.handle);
+          }
         });
         result.fonts.push({ path: font.path, sha256: font.sha256, size: font.size, cases });
       }
       fs.writeFileSync(output, JSON.stringify(result, null, 2) + '\n');
     } finally {
-      fs.rmSync(fontRoot, { recursive: true, force: true });
+      try {
+        if (initialized) native.runtime.quit();
+      } finally {
+        fs.rmSync(fontRoot, { recursive: true, force: true });
+      }
     }
   }
 }
