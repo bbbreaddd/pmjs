@@ -195,6 +195,18 @@ var fsModule = {
     try { this.writeFileSync(path, contents, options); } catch (caught) { error = caught; }
     PMJS.tasks.enqueue(function() { if (callback) callback(error); });
   },
+  appendFileSync: function(path, contents, options) {
+    var previous;
+    try { previous = fsReadContents(path); } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      previous = Buffer.alloc(0);
+    }
+    var encoding = typeof options === 'string' ? options : options && options.encoding;
+    var bytes = ArrayBuffer.isView(contents)
+      ? Buffer.from(contents.buffer, contents.byteOffset, contents.byteLength)
+      : Buffer.from(String(contents), encoding || 'utf8');
+    fsModule.writeFileSync(path, Buffer.concat([previous, bytes]));
+  },
   mkdirSync: function(path, options) {
     var writable = writablePath(path);
     var host = writable !== null ? NativeHost.storage : NativeHost.fs;

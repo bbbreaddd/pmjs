@@ -57,9 +57,20 @@ test('game inspection rejects plugins.js outside the generated JSON form', async
   const { readPluginManifest } = await loadInspect();
   const dir = temporaryDirectory('pmjs-game-regex-');
   writeGame(dir, {
-    pluginsJs: 'var $plugins = [\n{"name":"YEP_SlipperyTiles","status":true},\n];\n trailing garbage {{{',
+    pluginsJs: 'var $plugins = [\n{"name":"YEP_SlipperyTiles","status":Boolean(1)},\n];',
   });
   assert.throws(() => readPluginManifest(dir), /unsupported generated plugin manifest/);
+});
+
+test('generated manifests allow trailing commas without changing string values or executing code', async () => {
+  const { readPluginManifest } = await loadInspect();
+  const dir = temporaryDirectory('pmjs-game-commas-');
+  writeGame(dir, { pluginsJs: 'var $plugins = [{"name":"Literal,]\\\"","status":true,"parameters":{"text":"x,}",},},]; throw new Error("never execute");' });
+  assert.deepEqual(readPluginManifest(dir).enabled, ['Literal,]"']);
+  for (const literal of ['[,,]', '[{"name":"A"},,]', '[{"name":"A","status":true}, console.log("bad")]']) {
+    writeGame(dir, { pluginsJs: 'var $plugins = ' + literal + ';' });
+    assert.throws(() => readPluginManifest(dir), /unsupported generated plugin manifest/);
+  }
 });
 
 test('Pixi inspection closes a failed read before trying the next candidate', async () => {

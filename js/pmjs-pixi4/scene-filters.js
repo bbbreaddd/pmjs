@@ -5,6 +5,36 @@ var nativeCustomFilterDefaultVertex = 'attribute vec2 aVertexPosition;\n' +
   'gl_Position=vec4((projectionMatrix*vec3(aVertexPosition,1.0)).xy,0.0,1.0);\n' +
   'vTextureCoord=aTextureCoord;\n}';
 
+var nativeCustomFilterShaderCache = Object.create(null);
+function nativeResolveFilterProgram(filter) {
+  var renderer = globalThis.Graphics && Graphics._renderer;
+  var context = renderer && renderer.CONTEXT_UID || 0;
+  var cache = renderer && renderer.filterManager && renderer.filterManager.shaderCache ||
+    nativeCustomFilterShaderCache;
+  var shaders = filter.glShaders || (filter.glShaders = {});
+  var shader = shaders[context];
+  if (!shader && filter.glShaderKey) shader = cache[filter.glShaderKey];
+  if (!shader) {
+    var fragment = Array.isArray(filter.fragmentSrc) ? filter.fragmentSrc.join('\n') : String(filter.fragmentSrc);
+    var vertex = filter.vertexSrc || nativeCustomFilterDefaultVertex;
+    if (Array.isArray(vertex)) vertex = vertex.join('\n');
+    var key = vertex + '\u0000' + fragment;
+    var program = nativeCustomFilterPrograms.get(key);
+    if (!program) {
+      program = NativeHost.render.createFilterProgram(fragment, vertex);
+      nativeCustomFilterPrograms.set(key, program);
+    }
+    shader = { _pmjsFilterProgram: program,
+      uniforms: Object.create(null),
+      bind: function() { PMJS.compat.hit('renderer.shader-bind', 'direct filter shader'); },
+      destroy: function() { this._pmjsFilterProgram = null; } };
+    if (filter.glShaderKey) cache[filter.glShaderKey] = shader;
+  }
+  shaders[context] = shader;
+  if (!shader._pmjsFilterProgram) throw new Error('filter shader is destroyed or has no native program');
+  return shader._pmjsFilterProgram;
+}
+
 function nativeRecordCustomFilter(filter, node, filters) {
   filters = filters || [filter];
   var resolution = filter.resolution === undefined ? 1 : Number(filter.resolution);
@@ -69,15 +99,7 @@ function nativeRecordCustomFilter(filter, node, filters) {
       if (targets.indexOf(passInput) < 0 || targets.indexOf(passOutput) < 0 ||
           passInput === passOutput)
         throw new Error('invalid filter pass target or transform');
-      var fragment = Array.isArray(passFilter.fragmentSrc) ? passFilter.fragmentSrc.join('\n') : String(passFilter.fragmentSrc);
-      var vertex = passFilter.vertexSrc || nativeCustomFilterDefaultVertex;
-      if (Array.isArray(vertex)) vertex = vertex.join('\n');
-      var key = vertex + '\u0000' + fragment;
-      var program = nativeCustomFilterPrograms.get(key);
-      if (!program) {
-        program = NativeHost.render.createFilterProgram(fragment, vertex);
-        nativeCustomFilterPrograms.set(key, program);
-      }
+      var program = nativeResolveFilterProgram(passFilter);
       var pass = { program: program.handle, input: passInput._nativeFilterTarget,
         output: passOutput._nativeFilterTarget, clear: !!clear,
         blend: Number(passFilter.blendMode) || 0, uniforms: [], samplers: [] };
@@ -190,6 +212,16 @@ function nativeSceneFilter(node, activeFilters) {
         PMJS.compat.hit('render.filter-program', String(error.message || error));
         return { blur: 0, groups: [], unsupported: true, filters: actualFilters };
       }
+    }
+  }
+  if (typeof NativeHost.render.createFilterPlan === 'function') {
+    try {
+      activeFilters.forEach(function(filter) {
+        if (filter && filter.enabled !== false && filter.fragmentSrc) nativeResolveFilterProgram(filter);
+      });
+    } catch (error) {
+      PMJS.compat.hit('render.filter-program', String(error.message || error));
+      return { blur: 0, groups: [], unsupported: true, filters: activeFilters };
     }
   }
   var MvToneFilter = typeof ToneFilter === 'function' ? ToneFilter : null;

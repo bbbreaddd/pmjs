@@ -558,9 +558,11 @@ std::vector<std::uint8_t> Renderer::captureSceneRawPremultiplied() {
   glReadPixels(0, 0, width_, height_, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
   glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
 
+  // RenderTexture projection puts logical row zero at GL row zero.
+  if (offscreenRender_) return pixels;
   const std::size_t rowBytes = static_cast<std::size_t>(width_) * 4U;
   std::vector<std::uint8_t> row(rowBytes);
-  for (int y = 0; !offscreenRender_ && y < height_ / 2; ++y) {
+  for (int y = 0; y < height_ / 2; ++y) {
     auto top = pixels.begin() + static_cast<std::ptrdiff_t>(y) * rowBytes;
     auto bottom = pixels.begin() +
       static_cast<std::ptrdiff_t>(height_ - y - 1) * rowBytes;

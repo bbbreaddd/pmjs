@@ -1,8 +1,7 @@
 'use strict';
 
-// Render preparation must observe filter state, never advance it. Game and
-// plugin updates own semantic mutation (Olivia updateHorrorNoise/Glitch/TV);
-// nativeSceneFilter translates the current state into a render plan.
+// Engine and plugin updates own filter state. Render preparation translates
+// the current state into a render plan without advancing it.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -27,6 +26,7 @@ function createHarness() {
     }
   }
   const sandbox = {
+    NativeHost: { render: {} },
     PIXI: { filters: { NoiseFilter, GlitchFilter } },
     nativeIdentityTransform: { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 },
     nativeFilterMatches(filter, ctor, name) {

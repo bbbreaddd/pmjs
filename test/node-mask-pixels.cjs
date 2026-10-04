@@ -60,7 +60,7 @@ function endRecord(parent) {
   return { metadata: [7, parent, 0, 0xffffff, 0, 0, 0], values };
 }
 
-function submitNested(first, second) {
+function submitNested(first, second, snapshot = false) {
   const recs = [
     first(0xffffffff), second(0), spriteRecord(1), endRecord(1), endRecord(0),
   ];
@@ -72,6 +72,11 @@ function submitNested(first, second) {
   });
   native.beginFrame();
   native.scene.submit(schema.version, metadata, values, recs.length);
+  if (snapshot) {
+    const target = native.canvas.create(64, 64);
+    native.render.renderToCanvas(target.handle);
+    return target;
+  }
   native.renderScene();
   return native.canvas.captureScene();
 }
@@ -103,5 +108,11 @@ const canvasB = canvasMask((x, y) => y < 8);
 checkQuadrants(submitNested(
   (parent) => maskGroup(parent, canvasA.handle, 0),
   (parent) => maskGroup(parent, canvasB.handle, 0)), 'canvas masks');
+checkQuadrants(submitNested(
+  (parent) => maskGroup(parent, maskA.handle, 1),
+  (parent) => maskGroup(parent, maskB.handle, 1), true), 'image mask snapshot');
+checkQuadrants(submitNested(
+  (parent) => maskGroup(parent, canvasA.handle, 0),
+  (parent) => maskGroup(parent, canvasB.handle, 0), true), 'canvas mask snapshot');
 native.canvas.release(canvasA.handle);
 native.canvas.release(canvasB.handle);

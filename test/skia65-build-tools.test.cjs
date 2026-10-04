@@ -15,9 +15,10 @@ sys.path.insert(0, str(root / 'tools/skia65'))
 import build
 binaries = directory / 'tools with spaces'
 binaries.mkdir()
-for name in ['clang-20', 'clang++-20', 'python']:
+for name in ['clang-20', 'clang++-20', 'python', 'llvm-strip-20']:
     executable = binaries / name
-    executable.write_text('#!/bin/sh\nif [ "$1" = "--version" ]; then echo "clang version 20.1.2 fixture"; else printf "%s\\n" "' + name + '" "$@"; fi\n')
+    version = 'LLVM version 20.1.2 fixture' if name == 'llvm-strip-20' else 'clang version 20.1.2 fixture'
+    executable.write_text('#!/bin/sh\nif [ "$1" = "--version" ]; then echo "' + version + '"; else printf "%s\\n" "' + name + '" "$@"; fi\n')
     executable.chmod(0o755)
 os.environ['PATH'] = str(binaries) + os.pathsep + os.environ['PATH']
 cache = directory / 'cache'

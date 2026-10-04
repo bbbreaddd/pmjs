@@ -390,12 +390,14 @@ class Renderer {
   std::string pixiFragmentPrecision_ = "mediump";
   std::vector<FilterProgram> filterPrograms_;
   std::unordered_map<std::uint32_t, std::weak_ptr<const CustomFilterPlan>> filterPlans_;
+  std::unordered_map<std::uint32_t, int> targetProjectionLocations_;
   std::shared_ptr<int> filterPlanLifetime_ = std::make_shared<int>(0);
   std::uint32_t nextFilterPlan_ = 0x80000000U;
   static void applyBlendMode(BlendMode mode);
   void drawCustomFilterPlan(const CustomFilterPlan& plan, std::uint32_t source,
                             std::uint32_t output, const RenderCommand& command,
-                            float sourceResolution, float outputResolution, bool outputYDown);
+                            float sourceResolution, float outputResolution, bool outputYDown,
+                            const std::array<float, 4>& outputFrame);
   std::uint32_t customFilterVertexArray_ = 0, customFilterVertexBuffer_ = 0;
   std::vector<RenderTarget> customPassTargets_;
   // Native rendering is shared across facades; the first Pixi renderer fixes precision.
@@ -435,7 +437,6 @@ class Renderer {
   int presentationUpperCanvasPremultipliedUniform_ = -1;
   int filterTargetYDownUniform_ = -1;
   int filterImageYDownUniform_ = -1;
-  int filterInputYDownUniform_ = -1;
   int simpleTargetYDownUniform_ = -1;
   int spriteEffectTargetYDownUniform_ = -1;
   int simpleSpriteVerticesUniform_ = -1;

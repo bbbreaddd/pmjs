@@ -134,7 +134,8 @@ function loadCommonJs(filename) {
 
 function requireModule(request, parentDirectory) {
   if (globalThis.__pmjsBuiltinRequire &&
-      (request === 'crypto' || request === 'buffer')) {
+      (request === 'crypto' || request === 'buffer' ||
+       request === 'zlib' || request === 'node:zlib')) {
     return globalThis.__pmjsBuiltinRequire(request);
   }
   if (request === 'path') return pathModule;

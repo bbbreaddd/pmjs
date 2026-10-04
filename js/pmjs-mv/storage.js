@@ -55,6 +55,7 @@ function installNativeStorageManager() {
 
   function normalizeStoragePath(filePath) {
     if (!filePath) return '';
+    filePath = String(filePath).replace(/\\/g, '/');
     return filePath.indexOf('/save/') === 0 ? filePath.slice(6) : filePath;
   }
 

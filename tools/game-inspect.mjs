@@ -108,7 +108,23 @@ export function readPluginManifest(gameDir) {
   }
   const source = fs.readFileSync(file, 'utf8');
   try {
-    const entries = JSON.parse(pluginArrayText(source));
+    // Generated JavaScript literals can have trailing commas. Normalize only
+    // those outside strings; never execute the manifest to inspect it.
+    const array = pluginArrayText(source);
+    let quoted = false;
+    let escaped = false;
+    let json = '';
+    for (let index = 0; index < array.length; index += 1) {
+      const character = array[index];
+      if (quoted) {
+        if (escaped) escaped = false;
+        else if (character === '\\') escaped = true;
+        else if (character === '"') quoted = false;
+      } else if (character === '"') quoted = true;
+      else if (character === ',' && /^\s*[\]}]/.test(array.slice(index + 1))) continue;
+      json += character;
+    }
+    const entries = JSON.parse(json);
     if (!Array.isArray(entries)) throw new Error('$plugins is not an array');
     const plugins = entries
       .filter(entry => entry && typeof entry.name === 'string')

@@ -55,6 +55,10 @@ test('custom filter passes snapshot mutations and reuse the vertex/fragment prog
   assert.equal(compilations(), 1);
   filter.vertexSrc = 'another vertex';
   sandbox.nativeSceneFilter(node, [filter]);
+  assert.equal(compilations(), 1, 'warm shader source mutation bypassed the Pixi cache');
+  filter.glShaders = {};
+  filter.glShaderKey = 0;
+  sandbox.nativeSceneFilter(node, [filter]);
   assert.equal(compilations(), 2);
 });
 

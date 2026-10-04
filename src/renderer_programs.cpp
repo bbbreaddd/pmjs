@@ -52,7 +52,17 @@ GLuint linkProgram(const char* vertexSource, const char* fragmentSource) {
 
   GLint linked = GL_FALSE;
   glGetProgramiv(program, GL_LINK_STATUS, &linked);
-  if (linked == GL_TRUE) return program;
+  if (linked == GL_TRUE) {
+    const GLint projection = glGetUniformLocation(program, "targetProjection");
+    if (projection >= 0) {
+      GLint previous = 0;
+      glGetIntegerv(GL_CURRENT_PROGRAM, &previous);
+      glUseProgram(program);
+      glUniform4f(projection, 1, 1, 0, 0);
+      glUseProgram(previous);
+    }
+    return program;
+  }
   std::array<char, 2048> log{};
   glGetProgramInfoLog(program, static_cast<GLsizei>(log.size()), nullptr, log.data());
   glDeleteProgram(program);
@@ -281,6 +291,7 @@ Renderer::TileProgramUniforms Renderer::queryTileProgramUniforms(std::uint32_t p
 }
 
 void Renderer::createPixiPrograms(const std::string& precision) {
+  targetProjectionLocations_.clear();
   using namespace renderer_shaders;
   const auto linkPixiProgram = [&precision](const char* vertex, const char* fragment) {
     const auto source = pixiFragmentSourceWithPrecision(fragment, precision);
@@ -316,7 +327,6 @@ void Renderer::createPixiPrograms(const std::string& precision) {
   simpleProgram_ = simple;
   filterTargetYDownUniform_ = glGetUniformLocation(program_, "targetYDown");
   filterImageYDownUniform_ = glGetUniformLocation(program_, "imageYDown");
-  filterInputYDownUniform_ = glGetUniformLocation(program_, "inputYDown");
   simpleTargetYDownUniform_ = glGetUniformLocation(simpleProgram_, "targetYDown");
   simpleSpriteVerticesUniform_ = glGetUniformLocation(simpleProgram_, "spriteWorldVertices");
   simpleSpriteProjectionUniform_ = glGetUniformLocation(simpleProgram_, "spriteProjection");

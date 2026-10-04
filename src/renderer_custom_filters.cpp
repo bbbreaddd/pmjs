@@ -9,7 +9,8 @@ namespace pmjs {
 
 void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, std::uint32_t source,
                                     std::uint32_t output, const RenderCommand& command,
-                                    float sourceResolution, float outputResolution, bool outputYDown) {
+                                    float sourceResolution, float outputResolution, bool outputYDown,
+                                    const std::array<float, 4>& outputFrame) {
   const auto& frame = plan.frame;
   if (frame[2] == 0 || frame[3] == 0) return;
   const auto pot = [this](float value) {
@@ -34,17 +35,13 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, std::uint32_t 
   }
   auto& input = customPassTargets_[0];
   const float resolution = plan.resolutions[0];
-  const int x0 = std::clamp(static_cast<int>(frame[0]), 0, width_);
-  const int y0 = std::clamp(static_cast<int>(frame[1]), 0, height_);
-  const int x1 = std::clamp(static_cast<int>(frame[0] + frame[2]), x0, width_);
-  const int y1 = std::clamp(static_cast<int>(frame[1] + frame[3]), y0, height_);
   glBindFramebuffer(GL_READ_FRAMEBUFFER, source);
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, input.framebuffer);
-  if (x1 > x0 && y1 > y0) {
-    glBlitFramebuffer(std::lround(x0 * sourceResolution), std::lround(y0 * sourceResolution),
-      std::lround(x1 * sourceResolution), std::lround(y1 * sourceResolution),
-      std::lround((x0 - frame[0]) * resolution), std::lround((y0 - frame[1]) * resolution),
-      std::lround((x1 - frame[0]) * resolution), std::lround((y1 - frame[1]) * resolution),
+  const int sourceWidth = std::lround(frame[2] * sourceResolution);
+  const int sourceHeight = std::lround(frame[3] * sourceResolution);
+  if (sourceWidth > 0 && sourceHeight > 0) {
+    glBlitFramebuffer(0, 0, sourceWidth, sourceHeight, 0, 0,
+      std::lround(frame[2] * resolution), std::lround(frame[3] * resolution),
       GL_COLOR_BUFFER_BIT, GL_NEAREST);
   }
   if (!customFilterVertexArray_) {
@@ -70,17 +67,17 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, std::uint32_t 
     const auto& custom = filterProgram(pass.program);
     const bool final = pass.output == 1;
     auto& target = customPassTargets_[pass.output];
-    const float targetWidth = final ? width_ : frame[2];
-    const float targetHeight = final ? height_ : frame[3];
+    const float targetWidth = final ? outputFrame[2] : frame[2];
+    const float targetHeight = final ? outputFrame[3] : frame[3];
     glBindFramebuffer(GL_FRAMEBUFFER, final ? output : target.framebuffer);
-    glViewport(0, 0, final ? std::lround(width_ * outputResolution) : static_cast<int>(frame[2] * plan.resolutions[pass.output]),
-      final ? std::lround(height_ * outputResolution) : static_cast<int>(frame[3] * plan.resolutions[pass.output]));
+    glViewport(0, 0, final ? std::lround(outputFrame[2] * outputResolution) : static_cast<int>(frame[2] * plan.resolutions[pass.output]),
+      final ? std::lround(outputFrame[3] * outputResolution) : static_cast<int>(frame[3] * plan.resolutions[pass.output]));
     glDisable(GL_SCISSOR_TEST);
     if (pass.clear) { glClearColor(0, 0, 0, 0); glClear(GL_COLOR_BUFFER_BIT); }
     if (final && command.clipped) {
       glEnable(GL_SCISSOR_TEST);
-      glScissor(std::lround(command.clip[0] * outputResolution),
-        std::lround((outputYDown ? command.clip[1] : height_ - command.clip[3]) * outputResolution),
+      glScissor(std::lround((command.clip[0] - outputFrame[0]) * outputResolution),
+        std::lround((outputYDown ? command.clip[1] - outputFrame[1] : outputFrame[1] + outputFrame[3] - command.clip[3]) * outputResolution),
         std::lround((command.clip[2] - command.clip[0]) * outputResolution),
         std::lround((command.clip[3] - command.clip[1]) * outputResolution));
     }
@@ -90,8 +87,8 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, std::uint32_t 
     const auto& transform = pass.transform;
     const std::array<float, 9> projection{sx * transform[0], sy * transform[1], 0,
       sx * transform[2], sy * transform[3], 0,
-      -1.0F - (final ? 0 : frame[0] * sx) + sx * transform[4],
-      (final ? (yDown ? -1.0F : 1.0F) : -1.0F - frame[1] * sy) + sy * transform[5], 1};
+      -1.0F - (final ? outputFrame[0] * sx : frame[0] * sx) + sx * transform[4],
+      (final ? (yDown ? -1.0F : 1.0F) - outputFrame[1] * sy : -1.0F - frame[1] * sy) + sy * transform[5], 1};
     glUniformMatrix3fv(glGetUniformLocation(custom.program, "projectionMatrix"), 1, GL_FALSE, projection.data());
     glUniform4f(glGetUniformLocation(custom.program, "filterArea"),
       input.width / resolution, input.height / resolution, frame[0], frame[1]);
@@ -162,7 +159,7 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, std::uint32_t 
     if (diagnostics_) { ++stats_.drawCalls; ++stats_.filterDrawCalls; }
   }
   glBindFramebuffer(GL_FRAMEBUFFER, output);
-  glViewport(0, 0, std::lround(width_ * outputResolution), std::lround(height_ * outputResolution));
+  glViewport(0, 0, std::lround(outputFrame[2] * outputResolution), std::lround(outputFrame[3] * outputResolution));
   glBindVertexArray(vertexArray_);
   glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer_);
   glActiveTexture(GL_TEXTURE0);
