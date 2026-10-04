@@ -5,7 +5,9 @@ import json
 import os
 import pathlib
 import shutil
+import shlex
 import subprocess
+import sys
 
 from provision import ROOT, LOCK, digest, provision
 
@@ -36,9 +38,13 @@ def build(options):
             raise RuntimeError("Skia65 ARM64 requires the portable SDK's pinned Zig 0.15.2")
     else:
         resolved = shutil.which("clang++-20")
-        if not resolved:
+        c_compiler = shutil.which("clang-20")
+        if not resolved or not c_compiler:
             raise RuntimeError("Skia65 requires Clang " + lock["clangVersion"])
         compiler = pathlib.Path(resolved)
+        c_version = subprocess.check_output([c_compiler, "--version"], text=True)
+        if "clang version " + lock["clangVersion"] + " " not in c_version:
+            raise RuntimeError("Skia65 requires Clang " + lock["clangVersion"])
         compiler_version = subprocess.check_output([compiler, "--version"], text=True)
         if "clang version " + lock["clangVersion"] + " " not in compiler_version:
             raise RuntimeError("Skia65 requires Clang " + lock["clangVersion"])
@@ -49,13 +55,12 @@ def build(options):
     skia = cache / "skia"
     # Both literal compiler names avoid the release's Python 2 is_clang.py.
     for name in ["clang", "clang++"]:
-        command = [str(sdk / "bin" / ("cc" if name == "clang" else "c++"))] if sdk else ["/usr/bin/" + name + "-20"]
+        command = [str(sdk / "bin" / ("cc" if name == "clang" else "c++"))] if sdk else [c_compiler if name == "clang" else str(compiler)]
         wrapper = tools / name
-        import shlex
         wrapper.write_text("#!/bin/sh\nexec " + shlex.join(command) + ' "$@"\n')
         wrapper.chmod(0o755)
     python = tools / "python"
-    python.write_text('#!/bin/sh\nexec /usr/bin/python3 "$@"\n')
+    python.write_text('#!/bin/sh\nexec ' + shlex.quote(sys.executable) + ' "$@"\n')
     python.chmod(0o755)
     replace(skia / "BUILD.gn", '"src/ports/SkFontMgr_custom_directory_factory.cpp",',
             '"src/ports/SkFontMgr_custom_empty_factory.cpp",')
