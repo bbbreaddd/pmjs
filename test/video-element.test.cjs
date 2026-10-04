@@ -488,6 +488,38 @@ test('a replaced src cannot run its stale deferred load', async () => {
   assert.deepEqual(calls.loadVideo, ['movies/second.mp4']);
 });
 
+test('a source replaced by a readiness handler receives no stale readiness events', async () => {
+  for (const replacementEvent of ['loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough']) {
+    const { context, calls } = makeHarness();
+    const video = context.document.createElement('video');
+    const events = [];
+    const readinessEvents = ['loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough'];
+    for (const type of readinessEvents) {
+      video.addEventListener(type, () => {
+        events.push([type, video.src, video.readyState]);
+        if (type === replacementEvent && video.src === 'movies/first.mp4') {
+          video.src = 'movies/second.mp4';
+          video.play();
+        }
+      });
+    }
+    video.src = 'movies/first.mp4';
+    context.PMJS.tasks.drain();
+    await Promise.resolve();
+    assert.deepEqual(events.map(event => event[0]),
+      readinessEvents.slice(0, readinessEvents.indexOf(replacementEvent) + 1));
+    assert.ok(events.every(event => event[1] === 'movies/first.mp4' && event[2] === video.HAVE_ENOUGH_DATA));
+    assert.equal(video.readyState, video.HAVE_NOTHING);
+    context.PMJS.tasks.drain();
+    await Promise.resolve();
+    assert.deepEqual(calls.loadVideo, ['movies/first.mp4', 'movies/second.mp4']);
+    assert.deepEqual(calls.releaseVideo, [10]);
+    assert.deepEqual(events.slice(-4).map(event => event.slice(0, 2)),
+      readinessEvents.map(type => [type, 'movies/second.mp4']));
+    assert.equal(video.paused, false);
+  }
+});
+
 test('a stale async media completion is released after source replacement', async () => {
   const { context, calls } = makeHarness();
   const resolveLoads = [];

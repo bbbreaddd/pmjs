@@ -353,7 +353,9 @@ VideoElement.prototype._loadNow = function(generation) {
       height: media.height
     });
     video.dispatchEvent({ type: 'loadedmetadata', target: video });
+    if (generation !== video._loadGeneration) return;
     video.dispatchEvent({ type: 'loadeddata', target: video });
+    if (generation !== video._loadGeneration) return;
     var graphics = typeof Graphics !== 'undefined' ? Graphics : null;
     videoTelemetry('loadeddata-dispatched', {
       generation: generation,
@@ -363,7 +365,9 @@ VideoElement.prototype._loadNow = function(generation) {
       videoOpacity: video.style ? video.style.opacity : null
     });
     video.dispatchEvent({ type: 'canplay', target: video });
+    if (generation !== video._loadGeneration) return;
     video.dispatchEvent({ type: 'canplaythrough', target: video });
+    if (generation !== video._loadGeneration) return;
     if (video._playRequested) video._startPlayback();
   }, function(error) {
     video._failLoad(generation, error);
