@@ -56,7 +56,10 @@ try {
   }
   fx.update(context, 1);
   assert.ok(fx.exists(handle));
+  const targetBytesBeforeDepth = native.render.stats().rendererTargetBytes;
   const initial = frame(handle);
+  assert.equal(native.render.stats().rendererTargetBytes - targetBytesBeforeDepth, 64 * 64 * 4,
+    'renderer memory includes the scene depth buffer');
   assert.ok(initial.some((value, index) => index % 4 === 0 && value > 200), 'particle must draw visible red pixels');
   assert.deepEqual(frame(handle), initial, 'rendering must not advance simulation');
   const sibling = fx.play(context, effect, 0, 0, 0);

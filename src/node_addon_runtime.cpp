@@ -207,6 +207,15 @@ napi_value rendererStats(napi_env env, napi_callback_info) try {
   check(env, napi_set_named_property(env, result, "rendererTargetDestroys",
     number(env, static_cast<double>(stats.rendererTargetDestroys))),
     "cannot set renderer target destroys");
+  for (const auto& [name, value] : {
+      std::pair{"rendererTargetBytes", stats.rendererTargetBytes},
+      std::pair{"rendererTargetPeakBytes", stats.rendererTargetPeakBytes},
+      std::pair{"rendererTargetCacheBytes", stats.rendererTargetCacheBytes},
+      std::pair{"rendererTargetCacheHits", stats.rendererTargetCacheHits},
+      std::pair{"rendererTargetCacheEvictions", stats.rendererTargetCacheEvictions}}) {
+    check(env, napi_set_named_property(env, result, name, number(env, static_cast<double>(value))),
+      "cannot set renderer target memory/cache stats");
+  }
   check(env, napi_set_named_property(env, result, "filterTargetClears",
     number(env, static_cast<double>(stats.filterTargetClears))),
     "cannot set filter target clears");

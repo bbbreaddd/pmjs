@@ -268,6 +268,14 @@ if(BUILD_TESTING)
   add_test(NAME node-custom-filters COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE} --expose-gc
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-custom-filters.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-custom-filters PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
+  add_test(NAME node-filter-target-cache COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-filter-target-cache.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
+  set_tests_properties(node-filter-target-cache PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
+  add_executable(pmjs-filter-target-lifetime-test test/filter-target-lifetime.cpp)
+  target_link_libraries(pmjs-filter-target-lifetime-test PRIVATE pmjs_runtime)
+  target_compile_options(pmjs-filter-target-lifetime-test PRIVATE -UNDEBUG)
+  add_test(NAME native-filter-target-lifetime COMMAND ${XVFB_RUN} -a $<TARGET_FILE:pmjs-filter-target-lifetime-test>)
+  set_tests_properties(native-filter-target-lifetime PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
   set_tests_properties(node-glyph-cache node-text-layout-cache PROPERTIES ENVIRONMENT
     "LIBGL_ALWAYS_SOFTWARE=1;PMJS_TEXT_BACKEND=freetype")
   if(PMJS_ENABLE_SKIA65)

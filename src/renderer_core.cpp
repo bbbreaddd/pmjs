@@ -115,6 +115,7 @@ void Renderer::setDrawableSize(int width, int height) {
 }
 
 void Renderer::destroyTarget(RenderTarget& target) {
+  stats_.rendererTargetBytes -= targetStorageBytes(target);
   if (target.depth) glDeleteRenderbuffers(1, &target.depth);
   if (target.framebuffer) glDeleteFramebuffers(1, &target.framebuffer);
   if (target.texture) {
@@ -149,6 +150,7 @@ void Renderer::ensureDepthBuffer(RenderTarget& target) {
   glGetIntegerv(GL_RENDERBUFFER_BINDING, &savedBuffer);
   glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &savedFramebuffer);
   glGenRenderbuffers(1, &target.depth);
+  if (!target.depth) throw std::runtime_error("cannot allocate renderer depth buffer");
   glBindRenderbuffer(GL_RENDERBUFFER, target.depth);
   glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, target.width, target.height);
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target.framebuffer);
@@ -163,6 +165,8 @@ void Renderer::ensureDepthBuffer(RenderTarget& target) {
   glBindRenderbuffer(GL_RENDERBUFFER, savedBuffer);
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, savedFramebuffer);
   if (!complete) throw std::runtime_error("renderer depth framebuffer is incomplete");
+  stats_.rendererTargetBytes += static_cast<std::size_t>(target.width) * target.height * 4U;
+  stats_.rendererTargetPeakBytes = std::max(stats_.rendererTargetPeakBytes, stats_.rendererTargetBytes);
 }
 
 void Renderer::ensureTarget(RenderTarget& target, int width, int height) {
@@ -178,6 +182,7 @@ void Renderer::ensureTarget(RenderTarget& target, int width, int height) {
   replacement.width = width;
   replacement.height = height;
   glGenTextures(1, &replacement.texture);
+  if (!replacement.texture) throw std::runtime_error("cannot allocate renderer target texture");
   glBindTexture(GL_TEXTURE_2D, replacement.texture);
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA,
                GL_UNSIGNED_BYTE, nullptr);
@@ -186,12 +191,19 @@ void Renderer::ensureTarget(RenderTarget& target, int width, int height) {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
   glGenFramebuffers(1, &replacement.framebuffer);
+  if (!replacement.framebuffer) {
+    glDeleteTextures(1, &replacement.texture);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(savedTexture));
+    throw std::runtime_error("cannot allocate renderer target framebuffer");
+  }
   glBindFramebuffer(GL_FRAMEBUFFER, replacement.framebuffer);
   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                          GL_TEXTURE_2D, replacement.texture, 0);
   if (diagnostics_) ++stats_.framebufferChecks;
   const bool complete = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
   if (complete) {
+    stats_.rendererTargetBytes += targetStorageBytes(replacement);
+    stats_.rendererTargetPeakBytes = std::max(stats_.rendererTargetPeakBytes, stats_.rendererTargetBytes);
     // Keep the previous allocation valid until its replacement is complete.
     if (target.texture && static_cast<GLuint>(savedTexture) == target.texture)
       savedTexture = static_cast<GLint>(replacement.texture);
@@ -210,6 +222,64 @@ void Renderer::ensureTarget(RenderTarget& target, int width, int height) {
   glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(savedRead));
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(savedDraw));
   if (!complete) throw std::runtime_error("renderer framebuffer is incomplete");
+}
+
+bool Renderer::ensureFilterTarget(RenderTarget& target, int width, int height, std::size_t slot) {
+  if (target.texture && target.width == width && target.height == height) return true;
+  auto& cached = filterTargetCache_[slot];
+  const bool reused = cached.target.texture && !cached.target.depth &&
+      cached.target.width == width && cached.target.height == height;
+  GLint savedTexture = 0, savedRead = 0, savedDraw = 0;
+  glGetIntegerv(GL_TEXTURE_BINDING_2D, &savedTexture);
+  glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &savedRead);
+  glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &savedDraw);
+  RenderTarget replacement;
+  if (reused) {
+    replacement = cached.target;
+    stats_.rendererTargetCacheBytes -= targetStorageBytes(replacement);
+    cached = {};
+    if (diagnostics_) ++stats_.rendererTargetCacheHits;
+  } else {
+    ensureTarget(replacement, width, height);
+  }
+  std::swap(target, replacement);
+  if (replacement.texture && static_cast<GLuint>(savedTexture) == replacement.texture)
+    savedTexture = static_cast<GLint>(target.texture);
+  if (replacement.framebuffer && static_cast<GLuint>(savedRead) == replacement.framebuffer)
+    savedRead = static_cast<GLint>(target.framebuffer);
+  if (replacement.framebuffer && static_cast<GLuint>(savedDraw) == replacement.framebuffer)
+    savedDraw = static_cast<GLint>(target.framebuffer);
+
+  const auto evict = [&](CachedFilterTarget& entry) {
+    if (static_cast<GLuint>(savedTexture) == entry.target.texture) savedTexture = 0;
+    if (static_cast<GLuint>(savedRead) == entry.target.framebuffer) savedRead = 0;
+    if (static_cast<GLuint>(savedDraw) == entry.target.framebuffer) savedDraw = 0;
+    stats_.rendererTargetCacheBytes -= targetStorageBytes(entry.target);
+    destroyTarget(entry.target);
+    entry.lastUse = 0;
+    if (diagnostics_) ++stats_.rendererTargetCacheEvictions;
+  };
+  if (cached.target.texture) evict(cached);
+  const auto bytes = targetStorageBytes(replacement);
+  if (replacement.texture && !replacement.depth && bytes <= filterTargetCacheBudget) {
+    while (stats_.rendererTargetCacheBytes + bytes > filterTargetCacheBudget) {
+      auto oldest = std::min_element(filterTargetCache_.begin(), filterTargetCache_.end(),
+        [](const auto& left, const auto& right) {
+          if (bool(left.target.texture) != bool(right.target.texture)) return bool(left.target.texture);
+          return left.lastUse < right.lastUse;
+        });
+      evict(*oldest);
+    }
+    cached.target = replacement;
+    cached.lastUse = ++filterTargetCacheClock_;
+    stats_.rendererTargetCacheBytes += bytes;
+  } else {
+    destroyTarget(replacement);
+  }
+  glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(savedTexture));
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(savedRead));
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(savedDraw));
+  return reused;
 }
 
 void Renderer::resizeTargets(int width, int height) {
@@ -874,14 +944,12 @@ std::optional<ImageInfo> Renderer::captureOffscreenImage() {
   return image;
 }
 
+std::size_t Renderer::targetStorageBytes(const RenderTarget& target) {
+  return target.texture ? static_cast<std::size_t>(target.width) * target.height * (target.depth ? 8U : 4U) : 0;
+}
+
 std::size_t Renderer::renderTargetBytes() const {
-  const auto bytes = [](const RenderTarget& target) {
-    return static_cast<std::size_t>(target.width) * target.height * (target.depth ? 8U : 4U);
-  };
-  std::size_t total = bytes(sceneTarget_) + bytes(offscreenTarget_) +
-    bytes(effectTarget_) + bytes(filterTarget_) + bytes(toneOverlayTarget_) + bytes(bloomTarget_);
-  for (const auto& target : groupTargets_) total += bytes(target);
-  return total;
+  return stats_.rendererTargetBytes;
 }
 
 }

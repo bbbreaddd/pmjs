@@ -129,6 +129,7 @@ void syncExternalMemory(napi_env env) {
       static_cast<std::int64_t>(value.images.gpuBytes()) +
       static_cast<std::int64_t>(value.images.cpuBytes()) +
       static_cast<std::int64_t>(value.canvases.cpuBytes()) +
+      static_cast<std::int64_t>(value.renderer.renderTargetBytes()) +
       static_cast<std::int64_t>(value.core.media().sampleMemoryBytes());
   const std::int64_t delta = current - value.reportedExternalBytes;
   if (delta == 0) return;

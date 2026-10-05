@@ -876,13 +876,11 @@ void Renderer::renderScene() {
       const int targetWidth = std::max(1, static_cast<int>(rasterFrame[2] * rasterResolution));
       const int targetHeight = std::max(1, static_cast<int>(rasterFrame[3] * rasterResolution));
       if (diagnostics_) ++stats_.filterTargetAcquires;
-      if (groupTargets_[filterDepth].texture &&
-          groupTargets_[filterDepth].width == targetWidth &&
-          groupTargets_[filterDepth].height == targetHeight) {
-        if (diagnostics_) ++stats_.filterTargetReuses;
-      }
-      ensureTarget(groupTargets_[filterDepth], operation.command->customFilterPlan ? pot(targetWidth) : targetWidth,
-        operation.command->customFilterPlan ? pot(targetHeight) : targetHeight);
+      const bool reused = ensureFilterTarget(groupTargets_[filterDepth],
+        operation.command->customFilterPlan ? pot(targetWidth) : targetWidth,
+        operation.command->customFilterPlan ? pot(targetHeight) : targetHeight,
+        customFilterTargetCapacity + filterDepth);
+      if (diagnostics_ && reused) ++stats_.filterTargetReuses;
       std::array<int, 4> boundedRect{};
       const bool bounded = !operation.command->customFilterPlan && filterBoundsRect(operation.command, &boundedRect);
       filterRegions[filterDepth].clear();

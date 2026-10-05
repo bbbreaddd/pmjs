@@ -37,7 +37,8 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, const RenderTa
   for (std::size_t index = 0; index < plan.resolutions.size(); ++index) {
     if (index == 1 || (index == 0 && borrowInput)) continue;
     auto& target = customPassTargets_[index];
-    ensureTarget(target, pot(frame[2] * plan.resolutions[index]), pot(frame[3] * plan.resolutions[index]));
+    ensureFilterTarget(target, pot(frame[2] * plan.resolutions[index]),
+      pot(frame[3] * plan.resolutions[index]), index);
     glBindFramebuffer(GL_FRAMEBUFFER, target.framebuffer);
     glDisable(GL_SCISSOR_TEST);
     glClearColor(0, 0, 0, 0);

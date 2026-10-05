@@ -23,8 +23,12 @@ const ordinaryPresentationStats = native.render.stats();
 if (!diagnostics) {
   assert.equal(ordinaryPresentationStats.diagnostics, false);
   for (const [name, value] of Object.entries(ordinaryPresentationStats)) {
-    if (typeof value === 'number') assert.equal(value, 0, name + ' is disabled');
+    if (typeof value === 'number' && !['rendererTargetBytes', 'rendererTargetPeakBytes',
+      'rendererTargetCacheBytes'].includes(name)) assert.equal(value, 0, name + ' is disabled');
   }
+  assert.equal(ordinaryPresentationStats.rendererTargetBytes, 32 * 32 * 4);
+  assert.equal(ordinaryPresentationStats.rendererTargetPeakBytes, 32 * 32 * 4);
+  assert.equal(ordinaryPresentationStats.rendererTargetCacheBytes, 0);
   assert.ok(ordinaryPresentationStats.filterApplications.every(value => value === 0));
   const frame = native.canvas.captureScene();
   const pixels = native.canvas.readPixels(frame.handle, 0, 0, 32, 32);

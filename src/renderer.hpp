@@ -147,6 +147,11 @@ struct RendererStats {
   std::uint64_t filterTargetReuses = 0;
   std::uint64_t rendererTargetCreates = 0;
   std::uint64_t rendererTargetDestroys = 0;
+  std::uint64_t rendererTargetBytes = 0;
+  std::uint64_t rendererTargetPeakBytes = 0;
+  std::uint64_t rendererTargetCacheBytes = 0;
+  std::uint64_t rendererTargetCacheHits = 0;
+  std::uint64_t rendererTargetCacheEvictions = 0;
   std::uint64_t filterTargetClears = 0;
 
   std::uint64_t filterBoundedApplications = 0;
@@ -353,6 +358,13 @@ class Renderer {
     int height = 0;
   };
 
+  static constexpr std::size_t customFilterTargetCapacity = 64;
+  static constexpr std::size_t filterTargetCacheBudget = 32U * 1024U * 1024U;
+  struct CachedFilterTarget {
+    RenderTarget target;
+    std::uint64_t lastUse = 0;
+  };
+
   struct FilterContentBounds {
     bool bounded = false;
     bool regionsValid = false;
@@ -377,6 +389,8 @@ class Renderer {
   PrimitiveSurfaceResource* lookupPrimitiveSurface(PrimitiveSurfaceHandle handle);
   void resizeTargets(int width, int height);
   void ensureTarget(RenderTarget& target, int width, int height);
+  bool ensureFilterTarget(RenderTarget& target, int width, int height, std::size_t slot);
+  static std::size_t targetStorageBytes(const RenderTarget& target);
   void ensureDepthBuffer(RenderTarget& target);
   void destroyTarget(RenderTarget& target);
   void swapTargetColors(RenderTarget& left, RenderTarget& right);
@@ -413,6 +427,8 @@ class Renderer {
                             const std::array<float, 4>& outputFrame, bool sourcePaddingKnownZero);
   std::uint32_t customFilterVertexArray_ = 0, customFilterVertexBuffer_ = 0;
   std::vector<RenderTarget> customPassTargets_;
+  std::array<CachedFilterTarget, customFilterTargetCapacity + scene_packet::maxFilterDepth> filterTargetCache_{};
+  std::uint64_t filterTargetCacheClock_ = 0;
   // Native rendering is shared across facades; the first Pixi renderer fixes precision.
   bool pixiPrecisionConfigured_ = false;
   ImageStore& images_;
