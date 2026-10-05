@@ -15,6 +15,7 @@
 #include <unordered_set>
 
 namespace pmjs {
+void Renderer::finish() { glFinish(); }
 
 PresentScaleMode Renderer::presentScaleModeFromEnvironment() {
   const char* value = std::getenv("PMJS_PRESENT_SCALE");
@@ -182,10 +183,17 @@ void Renderer::ensureTarget(RenderTarget& target, int width, int height) {
   replacement.width = width;
   replacement.height = height;
   glGenTextures(1, &replacement.texture);
-  if (!replacement.texture) throw std::runtime_error("cannot allocate renderer target texture");
+  if (!replacement.texture) throw std::bad_alloc();
   glBindTexture(GL_TEXTURE_2D, replacement.texture);
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA,
                GL_UNSIGNED_BYTE, nullptr);
+  const auto allocationError = glGetError();
+  if (allocationError != GL_NO_ERROR) {
+    glDeleteTextures(1, &replacement.texture);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(savedTexture));
+    if (allocationError == GL_OUT_OF_MEMORY) throw std::bad_alloc();
+    throw std::runtime_error("cannot allocate renderer target storage");
+  }
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -194,7 +202,7 @@ void Renderer::ensureTarget(RenderTarget& target, int width, int height) {
   if (!replacement.framebuffer) {
     glDeleteTextures(1, &replacement.texture);
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(savedTexture));
-    throw std::runtime_error("cannot allocate renderer target framebuffer");
+    throw std::bad_alloc();
   }
   glBindFramebuffer(GL_FRAMEBUFFER, replacement.framebuffer);
   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
@@ -487,7 +495,66 @@ bool Renderer::queueTiled(ImageHandle image,
   return true;
 }
 
-std::uint32_t Renderer::createTileLayer(std::vector<TileLayerTile> tiles) {
+bool Renderer::prepareTileLayer(TileLayerResource& layer,
+    const std::array<float, 2>& animation, bool nearest) {
+  if (layer.tiles.empty()) return true;
+  if (layer.mappedReady && layer.mappedNearest == nearest &&
+      layer.mappedAnimation == animation && layer.mappedEpoch == images_.textureEpoch()) return true;
+  auto vertices = layer.tileVertices;
+  std::vector<TileBatch> batches;
+  for (std::size_t index = 0; index < layer.tiles.size(); ++index) {
+    const auto& tile = layer.tiles[index];
+    std::optional<SpriteImageRegion> region;
+    if (nearest && images_.hasTileBacking(tile.image)) region = images_.resolveSpriteRegion(tile.image,
+      tile.source[0]+tile.animation[0]*animation[0], tile.source[1]+tile.animation[1]*animation[1],
+      tile.source[2], tile.source[3], false);
+    else images_.notePreparedFallback(tile.image, "tile-linear-sampling");
+    const auto image = region ? std::optional<ImageInfo>(region->image) : images_.lookup(tile.image);
+    if (!image || !image->texture) return false;
+    const std::array<float, 4> mapping = region ? std::array<float, 4>{
+      region->atlas[0]-region->source[0], region->atlas[1]-region->source[1],
+      static_cast<float>(region->logicalWidth), static_cast<float>(region->logicalHeight)} : std::array<float, 4>{};
+    for (std::size_t corner = 0; corner < 6; ++corner)
+      std::copy(mapping.begin(), mapping.end(), vertices.begin()+index*60+corner*10+6);
+    if (batches.empty() || batches.back().texture != image->texture) {
+      batches.push_back({image->texture, image->width, image->height,
+        static_cast<std::int32_t>(index*6), 6, image->premultiplied});
+    } else batches.back().count += 6;
+  }
+  if (!layer.mappedReady || vertices != layer.tileVertices) {
+    while (glGetError() != GL_NO_ERROR) {}
+    glBindBuffer(GL_ARRAY_BUFFER, layer.vertexBuffer);
+    if (!layer.mappedReady) glBufferData(GL_ARRAY_BUFFER,
+      static_cast<GLsizeiptr>(vertices.size()*sizeof(float)), vertices.data(), GL_DYNAMIC_DRAW);
+    else {
+      // Existing geometry remains fixed. Only changed per-quad mapping attributes
+      // are uploaded when the authored animation offset or sampling mode changes.
+      for (std::size_t index = 0; index < layer.tiles.size(); ++index)
+        if (!std::equal(vertices.begin()+index*60, vertices.begin()+(index+1)*60,
+                        layer.tileVertices.begin()+index*60))
+          glBufferSubData(GL_ARRAY_BUFFER, static_cast<GLintptr>(index*60*sizeof(float)),
+            60*sizeof(float), vertices.data()+index*60);
+    }
+    if (glGetError() != GL_NO_ERROR) {
+      const auto owners = layer.owners, queued = layer.queuedReferences;
+      for (const auto image : layer.images) images_.notePreparedFallback(image, "tile-geometry-allocation");
+      const auto fallback = createOrdinaryTileLayer(layer.tiles);
+      if (!fallback) return false;
+      std::swap(layer, tileLayers_.at(fallback));
+      layer.owners = owners; layer.queuedReferences = queued;
+      destroyTileLayer(fallback);
+      return true;
+    }
+    layer.vertexBytes = vertices.size()*sizeof(float);
+    if (diagnostics_) ++stats_.bufferUploads;
+  }
+  layer.tileVertices = std::move(vertices); layer.batches = std::move(batches);
+  layer.mappedAnimation = animation; layer.mappedNearest = nearest;
+  layer.mappedEpoch = images_.textureEpoch(); layer.mappedReady = true;
+  return true;
+}
+
+std::uint32_t Renderer::createOrdinaryTileLayer(std::vector<TileLayerTile> tiles) {
   constexpr std::size_t kMaxTileCount = 65536U;
   if (tiles.empty() || tiles.size() > kMaxTileCount) return 0;
   TileLayerResource layer;
@@ -540,9 +607,17 @@ std::uint32_t Renderer::createTileLayer(std::vector<TileLayerTile> tiles) {
   glGenBuffers(1, &layer.vertexBuffer);
   glBindVertexArray(layer.vertexArray);
   glBindBuffer(GL_ARRAY_BUFFER, layer.vertexBuffer);
+  while (glGetError() != GL_NO_ERROR) {}
   glBufferData(GL_ARRAY_BUFFER,
                static_cast<GLsizeiptr>(vertices.size() * sizeof(float)),
                vertices.data(), GL_STATIC_DRAW);
+  if (glGetError() != GL_NO_ERROR) {
+    glDeleteBuffers(1, &layer.vertexBuffer); glDeleteVertexArrays(1, &layer.vertexArray);
+    glBindVertexArray(vertexArray_);
+    for (const auto image : layer.images) images_.release(image);
+    return 0;
+  }
+  layer.vertexBytes = vertices.size()*sizeof(float);
   glEnableVertexAttribArray(0);
   glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
   glEnableVertexAttribArray(1);
@@ -554,6 +629,46 @@ std::uint32_t Renderer::createTileLayer(std::vector<TileLayerTile> tiles) {
   glBindVertexArray(vertexArray_);
   if (diagnostics_) ++stats_.bufferUploads;
   const std::uint32_t handle = nextTileLayer_++;
+  tileLayers_.emplace(handle, std::move(layer));
+  return handle;
+}
+
+std::uint32_t Renderer::createTileLayer(std::vector<TileLayerTile> tiles) {
+  if (std::none_of(tiles.begin(), tiles.end(), [&](const auto& tile) { return images_.hasTileBacking(tile.image); }))
+    return createOrdinaryTileLayer(std::move(tiles));
+  constexpr std::size_t kMaxTileCount = 65536U;
+  if (tiles.empty() || tiles.size() > kMaxTileCount) return 0;
+  TileLayerResource layer;
+  for (const auto& tile : tiles) {
+    if (std::find(layer.images.begin(), layer.images.end(), tile.image) != layer.images.end()) continue;
+    if (!images_.inspect(tile.image) || !images_.retain(tile.image)) {
+      for (const auto image : layer.images) images_.release(image);
+      return 0;
+    }
+    layer.images.push_back(tile.image);
+  }
+  layer.tileVertices.reserve(tiles.size()*60);
+  for (const auto& tile : tiles) {
+    const float left = tile.position[0], top = tile.position[1];
+    const float right = left+tile.source[2], bottom = top+tile.source[3];
+    const float sx = tile.source[0], sy = tile.source[1];
+    const auto append = [&](float x, float y, float u, float v) {
+      layer.tileVertices.insert(layer.tileVertices.end(), {x,y,u,v,tile.animation[0],tile.animation[1],0,0,0,0});
+    };
+    append(left,top,sx,sy); append(right,top,sx+tile.source[2],sy);
+    append(right,bottom,sx+tile.source[2],sy+tile.source[3]); append(left,top,sx,sy);
+    append(right,bottom,sx+tile.source[2],sy+tile.source[3]); append(left,bottom,sx,sy+tile.source[3]);
+  }
+  layer.tiles = std::move(tiles);
+  glGenVertexArrays(1, &layer.vertexArray); glGenBuffers(1, &layer.vertexBuffer);
+  glBindVertexArray(layer.vertexArray); glBindBuffer(GL_ARRAY_BUFFER, layer.vertexBuffer);
+  glEnableVertexAttribArray(0); glVertexAttribPointer(0,2,GL_FLOAT,GL_FALSE,10*sizeof(float),nullptr);
+  glEnableVertexAttribArray(1); glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,10*sizeof(float),reinterpret_cast<void*>(2*sizeof(float)));
+  glEnableVertexAttribArray(2); glVertexAttribPointer(2,2,GL_FLOAT,GL_FALSE,10*sizeof(float),reinterpret_cast<void*>(4*sizeof(float)));
+  glEnableVertexAttribArray(3); glVertexAttribPointer(3,4,GL_FLOAT,GL_FALSE,10*sizeof(float),reinterpret_cast<void*>(6*sizeof(float)));
+  glBindVertexArray(vertexArray_);
+  // Sampling is chosen at submission, before ordinary lookup can materialize a full sheet.
+  const auto handle = nextTileLayer_++;
   tileLayers_.emplace(handle, std::move(layer));
   return handle;
 }
@@ -658,6 +773,7 @@ std::uint32_t Renderer::createMesh(
   glBufferData(GL_ARRAY_BUFFER,
                static_cast<GLsizeiptr>(vertices.size() * sizeof(float)),
                vertices.data(), GL_STATIC_DRAW);
+  mesh.vertexBytes = vertices.size()*sizeof(float);
   glEnableVertexAttribArray(0);
   glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
   glEnableVertexAttribArray(1);
@@ -863,10 +979,14 @@ std::optional<ImageInfo> Renderer::renderToImage(int width, int height, AlphaMod
     clearColor_ = {0, 0, 0, 0};
     render();
     auto image = images_.createRenderTarget(width_, height_, alphaMode == AlphaMode::premultiplied);
-    if (!image) throw std::runtime_error("cannot allocate GPU render image");
+    if (!image) throw std::bad_alloc();
     while (glGetError() != GL_NO_ERROR) {}
     std::uint32_t destinationFramebuffer = 0;
     glGenFramebuffers(1, &destinationFramebuffer);
+    if (!destinationFramebuffer) {
+      images_.release(image->handle);
+      throw std::bad_alloc();
+    }
     glBindFramebuffer(GL_FRAMEBUFFER, destinationFramebuffer);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                            GL_TEXTURE_2D, image->texture, 0);
@@ -948,6 +1068,17 @@ std::size_t Renderer::targetStorageBytes(const RenderTarget& target) {
   return target.texture ? static_cast<std::size_t>(target.width) * target.height * (target.depth ? 8U : 4U) : 0;
 }
 
+std::size_t Renderer::tileGeometryGpuBytes() const {
+  std::size_t bytes = 0;
+  for (const auto& [_, layer] : tileLayers_) bytes += layer.vertexBytes;
+  return bytes;
+}
+std::size_t Renderer::tileGeometryCpuBytes() const {
+  std::size_t bytes = 0;
+  for (const auto& [_, layer] : tileLayers_) bytes += layer.tiles.capacity()*sizeof(TileLayerTile)+
+    layer.tileVertices.capacity()*sizeof(float)+layer.images.capacity()*sizeof(ImageHandle)+layer.batches.capacity()*sizeof(TileBatch);
+  return bytes;
+}
 std::size_t Renderer::renderTargetBytes() const {
   return stats_.rendererTargetBytes;
 }

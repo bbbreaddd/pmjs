@@ -647,7 +647,8 @@ void Renderer::renderScene() {
       !command.appliesColorMatrix && !command.appliesSpriteColor &&
       !command.appliesMeshPostTintOverlay && !command.standaloneBitmapRegion &&
       command.blur <= 0 && command.maskImage == 0 && command.textureRotation == 0 &&
-      inlineFilterMatrix[commandIndex] == nullptr;
+      // A constant texture needs no UV remapping in the inline effect sampler.
+      (inlineFilterMatrix[commandIndex] == nullptr || uniformPrepared);
     const auto derived = derivedEligible ? images_.resolveSpriteRegion(command.image,
       command.source[0], command.source[1], command.source[2], command.source[3],
       command.pixiSpritePacking && !command.premultipliedSpriteTexture) :
@@ -1633,6 +1634,8 @@ void Renderer::renderScene() {
         transform[2] * mapping[0], transform[3] * mapping[1], 0.0F,
         transform[4] * mapping[0] + mapping[2], transform[5] * mapping[1] + mapping[3], 1.0F,
       };
+      if (!prepareTileLayer(layer->second, command.tileAnimation, operation.nearest))
+        throw std::runtime_error("tile layer backing cannot be prepared");
       const auto& material = layer->second.material;
       const auto* triangleMaterial = std::get_if<TriangleBitmapMaterial>(&material);
       const auto* bitmapMaterial = std::get_if<MvBitmapMaterial>(&material);

@@ -1,5 +1,6 @@
 #include "node_addon_internal.hpp"
 #include "asset_processor.hpp"
+#include "tile_assets.hpp"
 
 #include <cmath>
 #include <fcntl.h>
@@ -167,10 +168,193 @@ napi_value processImage(napi_env env, napi_callback_info info) try {
   work.release();
   return promise;
 } catch (const std::exception& error) { napi_throw_error(env, nullptr, error.what()); return nullptr; }
+
+struct TileWork {
+  napi_async_work work = nullptr;
+  napi_deferred deferred = nullptr;
+  std::vector<TileAssetInput> inputs;
+  std::filesystem::path staging;
+  std::optional<PreparedTileAssets> result, expected;
+  std::size_t verifiedRegions = 0;
+  std::string error;
+  bool unsupported = false;
+};
+napi_value tileDescriptor(napi_env env, const PreparedTileAssets& asset) {
+  auto result = moduleObject(env);
+  set(env, result, "version", number(env, asset.version));
+  set(env, result, "halo", number(env, asset.halo));
+  set(env, result, "ordinaryBytes", number(env, asset.ordinaryBytes));
+  set(env, result, "pageBytes", number(env, asset.pageBytes));
+  napi_value sources, pages;
+  check(env, napi_create_array_with_length(env, asset.sources.size(), &sources), "cannot create tile sources");
+  for (std::size_t i = 0; i < asset.sources.size(); ++i) {
+    const auto& source = asset.sources[i]; auto value = moduleObject(env);
+    set(env, value, "width", number(env, source.width)); set(env, value, "height", number(env, source.height));
+    napi_value regions;
+    check(env, napi_create_array_with_length(env, source.regions.size(), &regions), "cannot create tile regions");
+    for (std::size_t j = 0; j < source.regions.size(); ++j) {
+      const auto& r = source.regions[j]; auto region = moduleObject(env);
+      set(env, region, "rect", arrayValue(env, r.rect)); set(env, region, "atlas", arrayValue(env, r.atlas));
+      set(env, region, "page", number(env, r.page));
+      check(env, napi_set_element(env, regions, j, region), "cannot write tile region");
+    }
+    set(env, value, "regions", regions);
+    check(env, napi_set_element(env, sources, i, value), "cannot write tile source");
+  }
+  check(env, napi_create_array_with_length(env, asset.pages.size(), &pages), "cannot create tile pages");
+  for (std::size_t i = 0; i < asset.pages.size(); ++i) {
+    const auto& page = asset.pages[i]; auto value = moduleObject(env);
+    set(env, value, "path", string(env, page.path.string()));
+    set(env, value, "width", number(env, page.width)); set(env, value, "height", number(env, page.height));
+    check(env, napi_set_element(env, pages, i, value), "cannot write tile page");
+  }
+  set(env, result, "sources", sources); set(env, result, "pages", pages);
+  return result;
+}
+void executeTiles(napi_env, void* opaque) noexcept {
+  auto& work = *static_cast<TileWork*>(opaque);
+  try {
+    if (work.expected) work.verifiedRegions = verifyTileAssets(work.inputs, *work.expected, work.staging);
+    else work.result = prepareTileAssets(work.inputs, work.staging);
+  }
+  catch (const AssetPreparationUnsupported& error) { work.error = error.what(); work.unsupported = true; }
+  catch (const std::exception& error) { work.error = error.what(); }
+  catch (...) { work.error = "tile preparation failed"; }
+}
+void completeTiles(napi_env env, napi_status status, void* opaque) {
+  std::unique_ptr<TileWork> work(static_cast<TileWork*>(opaque));
+  try {
+    if (status != napi_ok) throw std::runtime_error("tile preparation cancelled");
+    if (!work->error.empty()) throw std::runtime_error(work->error);
+    check(env, napi_resolve_deferred(env, work->deferred, work->expected ? number(env, work->verifiedRegions) : tileDescriptor(env, *work->result)), "cannot resolve tile preparation");
+  } catch (const std::exception& error) {
+    napi_value rejection;
+    napi_create_error(env, nullptr, string(env, error.what()), &rejection);
+    if (work->unsupported) set(env, rejection, "code", string(env, "PMJS_TILE_UNSUPPORTED"));
+    napi_reject_deferred(env, work->deferred, rejection);
+  }
+  napi_delete_async_work(env, work->work);
+}
+std::uint32_t arrayLength(napi_env env, napi_value value, std::uint32_t limit) {
+  bool array = false; std::uint32_t size = 0;
+  check(env, napi_is_array(env, value, &array), "cannot inspect tile array");
+  if (!array) throw std::runtime_error("expected tile array");
+  check(env, napi_get_array_length(env, value, &size), "cannot read tile array");
+  if (size > limit) throw std::runtime_error("tile array exceeds limit");
+  return size;
+}
+napi_value element(napi_env env, napi_value value, std::uint32_t index) {
+  napi_value item;
+  check(env, napi_get_element(env, value, index, &item), "cannot read tile array element");
+  return item;
+}
+napi_value processTiles(napi_env env, napi_callback_info info) try {
+  auto args = arguments(env, info, 3); auto work = std::make_unique<TileWork>();
+  const auto count = arrayLength(env, args.at(0), 512);
+  for (std::uint32_t i = 0; i < count; ++i) {
+    const auto input = element(env, args[0], i); TileAssetInput source;
+    const std::filesystem::path file = asString(env, property(env, input, "file"));
+    if (!file.is_absolute()) throw std::runtime_error("tile source must be absolute");
+    source.source = ImageStore::openFile(file);
+    if (!source.source) throw std::runtime_error("cannot open tile source");
+    const auto rectangles = property(env, input, "rectangles");
+    const auto length = arrayLength(env, rectangles, 65536);
+    for (std::uint32_t j = 0; j < length; ++j) source.rectangles.push_back(integers<4>(env, element(env, rectangles, j)));
+    work->inputs.push_back(std::move(source));
+  }
+  work->staging = asString(env, args.at(1));
+  if (!work->staging.is_absolute()) throw std::runtime_error("tile staging directory must be absolute");
+  if (args.size() > 2) {
+    PreparedTileAssets expected;
+    auto d = args[2]; expected.halo = integer(env, property(env, d, "halo"));
+    if (integer(env, property(env, d, "version")) != 1) throw std::runtime_error("unsupported tile verification version");
+    auto pages = property(env, d, "pages");
+    for (std::uint32_t i=0, n=arrayLength(env,pages,4096);i<n;++i) {
+      auto page=element(env,pages,i);
+      expected.pages.push_back({asString(env,property(env,page,"path")), integer(env,property(env,page,"width")), integer(env,property(env,page,"height"))});
+    }
+    auto sources=property(env,d,"sources");
+    for (std::uint32_t i=0,n=arrayLength(env,sources,512);i<n;++i) {
+      auto source=element(env,sources,i); TileAssetSource out;
+      out.width=integer(env,property(env,source,"width"));out.height=integer(env,property(env,source,"height"));
+      auto regions=property(env,source,"regions");
+      for(std::uint32_t j=0,length=arrayLength(env,regions,65536);j<length;++j) {
+        auto region=element(env,regions,j);PreparedAssetCell r;
+        r.rect=integers<4>(env,property(env,region,"rect"));r.atlas=integers<4>(env,property(env,region,"atlas"));r.page=integer(env,property(env,region,"page"));out.regions.push_back(r);
+      }
+      expected.sources.push_back(std::move(out));
+    }
+    work->expected=std::move(expected);
+  }
+  napi_value promise;
+  check(env, napi_create_promise(env, &work->deferred, &promise), "cannot create tile preparation promise");
+  check(env, napi_create_async_work(env, nullptr, string(env, "pmjs-tile-preparation"), executeTiles, completeTiles, work.get(), &work->work), "cannot create tile work");
+  const auto status = napi_queue_async_work(env, work->work);
+  if (status != napi_ok) { napi_delete_async_work(env, work->work); check(env, status, "cannot queue tile work"); }
+  work.release(); return promise;
+} catch (const std::exception& error) { napi_throw_error(env, nullptr, error.what()); return nullptr; }
+
+napi_value installTileSets(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info, 1); auto& value = host(env);
+  const auto count = arrayLength(env, args.at(0), 65536);
+  std::vector<PreparedTileSet> descriptors;
+  descriptors.reserve(count);
+  for (std::uint32_t i = 0; i < count; ++i) {
+    auto entry = element(env, args[0], i); PreparedTileSet setValue;
+    auto d = property(env, entry, "descriptor");
+    setValue.identity = asString(env, property(env, entry, "identity"));
+    setValue.directory = asString(env, property(env, entry, "directory"));
+    setValue.version = integer(env, property(env, d, "version"));
+    setValue.halo = integer(env, property(env, d, "halo"));
+    auto pages = property(env, d, "pages");
+    const auto pageCount = arrayLength(env, pages, 4096);
+    setValue.pages.reserve(pageCount);
+    for (std::uint32_t j = 0; j < pageCount; ++j) {
+      auto page = element(env, pages, j);
+      setValue.pages.push_back({asString(env, property(env, page, "path")),
+        integer(env, property(env, page, "width")), integer(env, property(env, page, "height"))});
+    }
+    auto sources = property(env, d, "sources");
+    const auto sourceCount = arrayLength(env, sources, 512);
+    setValue.sources.reserve(sourceCount);
+    for (std::uint32_t j = 0; j < sourceCount; ++j) {
+      auto source = element(env, sources, j); PreparedTileSource output;
+      const auto logical = asString(env, property(env, source, "source"));
+      auto path = value.vfs.resolve(logical);
+      if (!path) throw std::runtime_error("cannot resolve tile source");
+      output.path = *path; output.snapshot = asString(env, property(env, source, "snapshot"));
+      output.identity = asString(env, property(env, source, "sourceIdentity"));
+      output.width = integer(env, property(env, source, "width")); output.height = integer(env, property(env, source, "height"));
+      auto regions = property(env, source, "regions");
+      const auto regionCount = arrayLength(env, regions, 65536);
+      output.regions.reserve(regionCount);
+      for (std::uint32_t k = 0; k < regionCount; ++k) {
+        auto region = element(env, regions, k);
+        output.regions.push_back({integers<4>(env, property(env, region, "rect")),
+          integers<4>(env, property(env, region, "atlas")), integer(env, property(env, region, "page"))});
+      }
+      setValue.sources.push_back(std::move(output));
+    }
+    descriptors.push_back(std::move(setValue));
+  }
+  value.images.clearTileSetIndex();
+  std::uint32_t installed = 0;
+  for (auto& descriptor : descriptors) if (value.images.installTileSet(std::move(descriptor))) ++installed;
+  return number(env, installed);
+} catch (const std::exception& error) { napi_throw_error(env, nullptr, error.what()); return nullptr; }
+napi_value tileSlot(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info, 3);
+  auto image = host(env).images.createTileSlot(asUint32(env, args.at(0)), integer(env, args.at(1)), integer(env, args.at(2)));
+  return image ? imageInfo(env, image->handle, image->width, image->height) : null(env);
+} catch (const std::exception& error) { napi_throw_error(env, nullptr, error.what()); return nullptr; }
 }
 void registerAssetMethods(napi_env env, napi_value exports) {
   const auto assets = property(env, exports, "assets");
   method(env, assets, "processImage", processImage);
+  method(env, assets, "processTiles", processTiles);
+  method(env, assets, "installTileSets", installTileSets);
+  method(env, property(env, exports, "images"), "tileSlot", tileSlot);
+  set(env, assets, "tilePreparationVersion", string(env, "lossless-tile-sets-v3"));
   const auto version = moduleObject(env);
   set(env, version, "processor", string(env, "lossless-images-v2"));
   set(env, version, "decoder", string(env, std::string("libpng-") + png_get_libpng_ver(nullptr) + "-rgba8-v1"));

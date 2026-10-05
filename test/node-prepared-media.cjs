@@ -8,6 +8,10 @@ const { png } = require('./helpers/png.cjs');
 const { prepareAssets } = require('../runner/asset-preparation.cjs');
 const { createGameFilesystem } = require('../runner/storage.cjs');
 const native = require(path.resolve(process.argv[2]));
+const engine = process.argv[3] || 'MZ';
+assert.ok(engine === 'MV' || engine === 'MZ');
+const imageSource = 'img/characters/!$actor.' + (engine === 'MV' ? 'rpgmvp' : 'png_');
+const audioExtension = engine === 'MV' ? '.rpgmvo' : '.ogg_';
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-prepared-media-'));
 const gameRoot = path.join(root, 'game');
 for (const directory of ['data', 'img/characters', 'img/sv_actors', 'audio/bgm', 'audio/se']) {
@@ -30,7 +34,7 @@ for (let y = 0; y < height; ++y) for (let x = 0; x < width; ++x) {
   }
 }
 const imageBytes = png(width, height, pixels);
-fs.writeFileSync(path.join(gameRoot, 'img/characters/!$actor.png_'), encrypt(imageBytes));
+fs.writeFileSync(path.join(gameRoot, imageSource), encrypt(imageBytes));
 const dense = Buffer.alloc(90 * 60 * 4);
 for (let y = 0; y < 60; ++y) for (let x = 0; x < 90; ++x) {
   dense.set([x * 13 % 256, y * 17 % 256, (x + y) % 256, 255], (y * 90 + x) * 4);
@@ -42,7 +46,9 @@ wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(2, 22);
 wav.writeUInt32LE(48000, 24); wav.writeUInt32LE(192000, 28);
 wav.writeUInt16LE(4, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36);
 wav.writeUInt32LE(wav.length - 44, 40);
-for (const source of ['audio/bgm/tone.ogg_', 'audio/se/tone.ogg_']) fs.writeFileSync(path.join(gameRoot, source), encrypt(wav));
+for (const folder of ['bgm', 'se']) {
+  fs.writeFileSync(path.join(gameRoot, 'audio', folder, 'tone' + audioExtension), encrypt(wav));
+}
 native.initialize({ gameRoot, assetRoot: '', width: 128, height: 128, windowTitle: 'prepared media' });
 
 async function main() {
@@ -104,7 +110,7 @@ async function main() {
   assert.equal(native.media.audioIsPlaying(music.handle), true, 'retained music voice survives cache removal');
   native.media.releaseAudio(music.handle); native.media.releaseAudio(effect.handle);
   native.images.release(original.handle); native.images.release(prepared.handle); native.canvas.release(canvas.handle);
-  console.log('[pmjs-prepared-media] images, audio, warm reuse, pixel identity and retained owners passed');
+  console.log('[pmjs-prepared-media] ' + engine + ' images, audio, warm reuse, pixel identity and retained owners passed');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => {
   native.runtime.quit(); fs.rmSync(root, { recursive: true, force: true });

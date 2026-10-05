@@ -102,8 +102,8 @@
            looksLikeKnownShaderTilemapUpdateTransform(tiledProto);
   }
 
-  function installYedTiledFastPaths() {
-    var tiledConstructor = globalThis.TiledTilemap;
+  function installYedTiledFastPaths(tiledConstructor) {
+    tiledConstructor = tiledConstructor || globalThis.TiledTilemap;
     if (typeof tiledConstructor !== 'function' ||
         typeof Spriteset_Map !== 'function') return false;
 
@@ -523,18 +523,68 @@
   }
 
 
-  function activateYedTiled() {
-    if (typeof globalThis.TiledTilemap !== 'function') {
+  var tileContracts = new WeakMap();
+  function activateYedTiled(tiledConstructor) {
+    tiledConstructor = tiledConstructor || globalThis.TiledTilemap;
+    if (typeof tiledConstructor !== 'function') {
       PMJS.optimizations.refuse('tilemap.yed-indexed-paint-loops',
         'YED tilemap constructor unavailable after guest plugins');
       PMJS.optimizations.refuse('tilemap.yed-indexed-animation',
         'YED tilemap constructor unavailable after guest plugins');
       return;
     }
-    installYedTiledFastPaths();
+    if (tileContracts.has(tiledConstructor)) {
+      if (PMJS.maps) PMJS.maps.tiledContract = tileContracts.get(tiledConstructor);
+      return;
+    }
+    var prototype = tiledConstructor.prototype;
+    var qualified = looksLikeKnownYedImplementation(prototype) && looksLikeKnownYedIndexedAnimation(prototype) &&
+      looksLikeKnownYedChildOrder(prototype._compareChildOrder);
+    var helpers = {
+      _paintTiles: '7b10b95d1b40b756830d4a685e29706839bdc548fd2b1fddd53ada242edc33bc',
+      _getTextureId: 'd61c490aaedc4da890a6f13299bfa605a707146a1eb4fad8a9a303ef17f7d3b3',
+      _getAnimTileId: '6b2481626a353fe2df179a7260405ee1a32b2ca7af8acc6a5a5254d19d47e637',
+      _getPriority: 'aeac6b3ac39790e16616036a059d0114218504718d8bee3dc0dea93b4b4b05d9',
+      _isPriorityTile: 'a83e33b7e55289e825b00d3a60e3f83d622f8843199ce0efbb1ee5e29f45beeb',
+      _getZIndex: 'd04b04844182e1fcc628e8d0b21899fdcde0cc0d7649a720207f862894791b99'
+    };
+    qualified = qualified && Object.keys(helpers).every(function(name) {
+      return matchesReviewedFunction(prototype[name], helpers[name]);
+    });
+    installYedTiledFastPaths(tiledConstructor);
+    if (qualified && PMJS.maps) {
+      var names = ['_paintAllTiles', '_paintTile', '_paintPriorityTile', '_paintObjectLayers',
+        '_paintTilesLayer', '_updateAnim', '_updateLayerPositions', '_compareChildOrder', 'updateTransform'].concat(Object.keys(helpers));
+      var effective = names.map(function(name) { return prototype[name]; });
+      PMJS.maps.tiledContract = function(data) {
+        if (!names.every(function(name, index) { return prototype[name] === effective[index]; })) return 'tiled-producer-changed';
+        if (!data) return true;
+        if (data.infinite || data.orientation && data.orientation !== 'orthogonal' ||
+            data.layers.some(function(layer) { return layer.layers || layer.chunks; })) return 'unreviewed-tiled-layer-geometry';
+        if (data.tilesets.some(function(set) { return set.margin || set.spacing ||
+            Array.isArray(set.tiles) && set.tiles.some(function(tile,index) { return tile.id !== index; }); })) return 'unreviewed-tiled-tileset-geometry';
+        if (data.layers.some(function(layer) {
+          return (layer.data || []).some(function(gid) { return (Number(gid) >>> 0) > 0x0fffffff; }) ||
+            (layer.objects || []).some(function(object) { return (Number(object.gid) >>> 0) > 0x0fffffff; });
+        })) return 'unreviewed-tiled-flips';
+        return true;
+      };
+      tileContracts.set(tiledConstructor, PMJS.maps.tiledContract);
+    } else if (PMJS.maps) {
+      PMJS.maps.tiledContract = function() { return 'unreviewed-tiled-methods'; };
+    }
   }
 
+  PMJS.methods.wrap({key:'Spriteset_Map.loadTileset',id:'pmjs.yed-map-contract',
+    getTarget:function(){return typeof Spriteset_Map === 'function' ? Spriteset_Map.prototype : null;},method:'loadTileset',
+    wrap:function(original){return function(){
+      if (this._tilemap && typeof $gameMap !== 'undefined' && typeof $gameMap.isTiledMap === 'function' && $gameMap.isTiledMap())
+        activateYedTiled(this._tilemap.constructor);
+      return original.apply(this,arguments);
+    };}
+  });
+
   PMJS.plugins.onLoaded('YED_Tiled', 'pmjs.adapter.yed-tiled', function() {
-    PMJS.phases.on('afterGuestPlugins', 'pmjs.adapter.yed-tiled', activateYedTiled);
+    PMJS.phases.on('afterGuestPlugins', 'pmjs.adapter.yed-tiled', function(){activateYedTiled();});
   });
 })();

@@ -577,6 +577,37 @@ const fixtureSource = reviewedFunctionFixture(source, {
   looksLikeKnownShaderTilemapUpdateTransform: faithfulShaderTilemapUpdateTransform
 });
 
+test('private reached tilemap constructors qualify before image loads and later replacements refuse', () => {
+  function helper() { return 0; }
+  const helpers=['_paintTiles','_getTextureId','_getAnimTileId','_getPriority','_isPriorityTile','_getZIndex'];
+  const hash=require('node:crypto').createHash('sha256').update(String(helper).replace(/^function(?:\s+[\w$]+)?\s*\(/,'function(')).digest('hex');
+  let accepted=fixtureSource;
+  for(const name of helpers) accepted=accepted.replace(new RegExp(name+": '[a-f0-9]{64}'"),name+": '"+hash+"'");
+  function Shader() {}
+  Shader.prototype.updateTransform=faithfulShaderTilemapUpdateTransform;
+  function PrivateTilemap() {}
+  PrivateTilemap.prototype=Object.create(Shader.prototype);
+  Object.assign(PrivateTilemap.prototype,{constructor:PrivateTilemap,_paintAllTiles:faithfulPaintAllTiles,
+    _updateLayerPositions:faithfulUpdateLayerPositions,_paintObjectLayers:faithfulPaintObjectLayers,
+    _paintTilesLayer:faithfulPaintTilesLayer,_paintTile:faithfulPaintTile,
+    _paintPriorityTile:faithfulPaintPriorityTile,_updateAnim:faithfulUpdateAnim});
+  for(const name of helpers) PrivateTilemap.prototype[name]=helper;
+  const observed=[], context={__pmjsBuiltinRequire:require,console,$gameMap:{isTiledMap(){return true;}}};
+  context.globalThis=context;vm.createContext(context);loadRegistrySupport(context);
+  context.PMJS.maps={};context.Spriteset_Map=function(){};
+  context.Spriteset_Map.prototype.loadTileset=function(){observed.push(context.PMJS.maps.tiledContract());};
+  vm.runInContext(accepted,context);
+  context.PMJS.plugins.execute('YED_Tiled',()=>{});context.PMJS.phases.emit('afterGuestPlugins');
+  context.PMJS.methods.install();
+  assert.equal(context.TiledTilemap,undefined);
+  const spriteset=new context.Spriteset_Map();spriteset._tilemap=new PrivateTilemap();
+  spriteset.loadTileset();assert.equal(observed.at(-1),true);
+  PrivateTilemap.prototype._getTextureId=function(){return 1;};
+  spriteset.loadTileset();assert.equal(observed.at(-1),'tiled-producer-changed');
+  spriteset._tilemap={constructor:function Unknown(){}};
+  spriteset.loadTileset();assert.equal(observed.at(-1),'unreviewed-tiled-methods');
+});
+
 function makeAnimatedTilemap({
   tileWidth = 32,
   tileHeight = 32,

@@ -11,6 +11,19 @@
 
 namespace pmjs {
 
+class FileReader {
+ public:
+  FileReader(int descriptor, std::uint64_t position) : descriptor_(descriptor), position_(position) {}
+  ~FileReader();
+  FileReader(const FileReader&) = delete;
+  FileReader& operator=(const FileReader&) = delete;
+  std::vector<std::uint8_t> read(std::size_t maxBytes);
+  void close();
+ private:
+  int descriptor_;
+  std::uint64_t position_;
+};
+
 class Vfs {
  public:
   struct DerivedFile {
@@ -31,6 +44,7 @@ class Vfs {
   std::optional<std::filesystem::path> resolve(const std::string& path) const;
   std::optional<std::string> readText(const std::string& path) const;
   std::optional<std::vector<std::uint8_t>> readBytes(const std::string& path) const;
+  std::unique_ptr<FileReader> openRead(const std::string& path, std::uint64_t start = 0) const;
   std::optional<std::vector<std::string>> readDirectory(const std::string& path) const;
   bool exists(const std::string& path) const;
   bool isDirectory(const std::string& path) const;

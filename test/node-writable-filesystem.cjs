@@ -5,6 +5,7 @@ const { temporaryDirectory } = require('./helpers/temp.cjs');
 const path = require('node:path');
 const vm = require('node:vm');
 const test = require('node:test');
+const { spawnSync } = require('node:child_process');
 const { createGameFilesystem, createStorage } = require('../runner/storage.cjs');
 const native = require(process.env.PMJS_NATIVE_ADDON || path.resolve(__dirname, '../build/pmjs_native.node'));
 
@@ -21,7 +22,7 @@ function fixture(t) {
   const overlay = path.join(root, 'save/game-files');
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const host = createGameFilesystem(native.fs, overlay);
-  const context = vm.createContext({ Buffer, TextDecoder, performance: { now: () => 0 },
+  const context = vm.createContext({ Buffer, TextDecoder, __pmjsBuiltinRequire: require, performance: { now: () => 0 },
     PMJS: { config: {} }, NativeHost: { fs: host, storage: createStorage(path.join(root, 'save')) } });
   for (const name of ['events', 'scheduler', 'filesystem', 'requests']) {
     const filename = path.resolve(__dirname, '../js/pmjs-web', name + '.js');
@@ -30,6 +31,71 @@ function fixture(t) {
   return { root, gameRoot, overlay, host, context, guest: context.fsModule,
     restart() { return createGameFilesystem(native.fs, overlay); } };
 }
+
+test('native readers capture originals and overlays and close descriptors', t => {
+  const { host } = fixture(t), files = () => fs.readdirSync('/proc/self/fd').length;
+  const before = files(), original = host.openRead('DATA/Original.TXT', 2);
+  host.writeBytes('data/Original.txt', Buffer.from('changed'));
+  const overlay = host.openRead('data/original.txt', 1);
+  assert.equal(files(), before + 2);
+  host.writeBytes('data/Original.txt', Buffer.from('replacement')); host.remove('data/Original.txt');
+  assert.equal(Buffer.from(original.read(3)).toString(), 'igi');
+  assert.equal(Buffer.from(overlay.read(2)).toString(), 'ha');
+  assert.equal(Buffer.from(overlay.read(100)).toString(), 'nged');
+  assert.equal(overlay.read(1).length, 0);
+  original.close(); overlay.close(); overlay.close();
+  assert.equal(files(), before);
+  assert.equal(host.openRead('data/Original.txt'), null);
+  assert.equal(host.openRead('../escape'), null);
+  assert.throws(() => host.openRead('data'), error => error.code === 'EISDIR');
+  assert.throws(() => overlay.read(1), error => error.code === 'EBADF');
+});
+
+test('native and save reader finalizers close abandoned descriptors', () => {
+  const script = `
+    const assert = require('node:assert/strict'), fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+    const native = require(${JSON.stringify(process.env.PMJS_NATIVE_ADDON || path.resolve(__dirname, '../build/pmjs_native.node'))});
+    const { createStorage } = require(${JSON.stringify(path.resolve(__dirname, '../runner/storage.cjs'))});
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-reader-gc-'));
+    fs.writeFileSync(path.join(root, 'input'), 'abcdef');
+    native.initialize({ gameRoot: root, assetRoot: '', width: 16, height: 16, windowTitle: 'reader finalizers' });
+    const storage = createStorage(root), files = () => fs.readdirSync('/proc/self/fd').length;
+    async function main() {
+      for (const host of [native.fs, storage]) {
+        const before = files();
+        for (let i = 0; i < 8; i++) host.openRead('input').read(1);
+        assert.equal(files(), before + 8);
+        global.gc(); await new Promise(setImmediate);
+        global.gc(); await new Promise(setImmediate);
+        assert.equal(files(), before);
+      }
+    }
+    main().catch(error => { console.error(error); process.exitCode = 1; })
+      .finally(() => { native.runtime.quit(); fs.rmSync(root, { recursive: true, force: true }); });
+  `;
+  const result = spawnSync(process.execPath, ['--expose-gc', '-e', script], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+});
+
+test('guest streams range and decode captured game and save files with bounded reads', async t => {
+  const { context, guest } = fixture(t);
+  context.PMJS.tasks.enqueue = callback => setImmediate(callback);
+  const bytes = Buffer.concat([Buffer.from('abé🌙cd'), Buffer.alloc(256 * 1024, 97)]);
+  for (const route of ['/game/data/stream', '/save/stream']) {
+    guest.writeFileSync(route, bytes);
+    const stream = guest.createReadStream(route, { start: 2, end: 7, encoding: 'utf8', highWaterMark: 1 });
+    stream.on('open', () => guest.writeFileSync(route, 'replacement'));
+    let output = '';
+    for await (const chunk of stream) output += chunk;
+    assert.equal(output, 'é🌙');
+    assert.equal(guest.readFileSync(route, 'utf8'), 'replacement');
+    guest.writeFileSync(route, bytes);
+    const sizes = [];
+    for await (const chunk of guest.createReadStream(route)) sizes.push(chunk.length);
+    assert.equal(sizes.reduce((sum, size) => sum + size, 0), bytes.length);
+    assert.ok(sizes.every(size => size <= 65536));
+  }
+});
 
 test('binary and encoded writes match Node and are visible to fs, fetch and XHR', async t => {
   const { guest, context, host, gameRoot, root } = fixture(t);

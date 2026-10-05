@@ -36,6 +36,10 @@ int main() {
   require(valid->rgbaBytes == 640U * 480U * 4U, "rgbaBytes mismatch");
 
   // Allocation limit exceeded
+  require(checkedImageExtent(8192, 3072).has_value(),
+          "wide images below the 128MB ceiling must succeed");
+  require(!checkedImageExtent(8192, 8192),
+          "256MB images must still exceed the default allocation ceiling");
   require(!checkedImageExtent(8192, 8192, 8192, 64 * 1024 * 1024),
           "8192x8192 (256MB) must exceed 64MB allocation ceiling");
   auto largeValid = checkedImageExtent(8192, 8192, 8192, 256 * 1024 * 1024);

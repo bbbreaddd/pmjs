@@ -54,7 +54,7 @@ function assertProgress(progress, result, terminalPhase) {
   }
 }
 
-test('first preparation installs logical backing; unchanged launch hashes and reuses without transforms', async () => {
+test('first preparation installs logical backing; unchanged launch reuses verified content without transforms', async () => {
   const f = fixture();
   const progress = [];
   const first = await prepareAssets({ ...f, onProgress: value => progress.push(value) });
@@ -78,6 +78,102 @@ test('first preparation installs logical backing; unchanged launch hashes and re
   assertProgress(warmProgress, second, 'complete');
   assert.equal(warmProgress.some(p => p.phase === 'prepare'), false);
   assert.ok(warmProgress.some(p => p.phase === 'validate' && p.source === f.source && p.completed === 1 && p.hits === 1));
+});
+
+test('unchanged sources and pages reuse checksums; explicit verification reads them again', async () => {
+  const f = fixture();
+  await prepareAssets(f);
+  const warm = await prepareAssets(f);
+  assert.equal(warm.generated, 0);
+  assert.equal(warm.validation.hashedFiles, 0);
+  assert.ok(warm.validation.reusedFiles >= 2);
+  const verified = await prepareAssets({ ...f, verifyHashes: true });
+  assert.equal(verified.generated, 0);
+  assert.equal(verified.validation.hashedFiles, 2);
+  assert.equal(verified.validation.reusedFiles, 0);
+});
+
+test('warm manifests and page headers reuse completed validation; edited manifests revalidate dimensions', async t => {
+  const f = fixture(), first = await prepareAssets(f);
+  const originalRead = fs.promises.readFile, originalOpen = fs.promises.open;
+  let manifestReads = 0, pageOpens = 0;
+  fs.promises.readFile = async (file, ...args) => {
+    if (String(file).endsWith('/manifest.json')) manifestReads++;
+    return originalRead(file, ...args);
+  };
+  fs.promises.open = async (file, ...args) => {
+    if (String(file).endsWith('/page-0.png')) pageOpens++;
+    return originalOpen(file, ...args);
+  };
+  t.after(() => { fs.promises.readFile = originalRead; fs.promises.open = originalOpen; });
+  const warm = await prepareAssets(f);
+  assert.equal(manifestReads, 0); assert.equal(pageOpens, 0);
+  assert.equal(warm.validation.jsonReuses, 1);
+  assert.deepEqual(warm.entries[0].descriptor, first.entries[0].descriptor);
+  const file = manifests(f)[0], manifest = JSON.parse(fs.readFileSync(file));
+  manifest.descriptor.pages[0].width = 2;
+  const stable = value => Array.isArray(value) ? value.map(stable) :
+    value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(k => [k, stable(value[k])])) : value;
+  manifest.descriptorHash = crypto.createHash('sha256').update(JSON.stringify(stable(manifest.descriptor))).digest('hex');
+  fs.writeFileSync(file, JSON.stringify(manifest));
+  const repaired = await prepareAssets(f);
+  assert.equal(repaired.generated, 1);
+  assert.ok(manifestReads > 0); assert.ok(pageOpens > 0);
+  assert.deepEqual(repaired.entries[0].descriptor, first.entries[0].descriptor);
+});
+
+test('unchanged validation preserves the published file receipt', async () => {
+  const f = fixture();
+  await prepareAssets(f);
+  await prepareAssets(f);
+  const file = path.join(f.cacheRoot, 'verified-files.json'), before = fs.statSync(file, { bigint: true });
+  const warm = await prepareAssets(f), after = fs.statSync(file, { bigint: true });
+  assert.equal(warm.generated, 0); assert.equal(warm.installed, 1);
+  assert.equal(after.ino, before.ino); assert.equal(after.mtimeNs, before.mtimeNs);
+});
+
+test('same-size source and page edits with restored mtime invalidate verified checksums', async () => {
+  const f = fixture();
+  await prepareAssets(f);
+  for (const source of [true, false]) {
+    const file = source ? path.join(f.gameRoot, f.source) :
+      path.join(path.dirname(manifests(f)[0]), 'page-0.png');
+    const before = fs.statSync(file);
+    const bytes = fs.readFileSync(file);
+    bytes[bytes.length - 1] ^= 1;
+    fs.writeFileSync(file, bytes);
+    fs.utimesSync(file, before.atime, before.mtime);
+    const changed = await prepareAssets(f);
+    assert.equal(changed.generated, 1);
+    assert.ok(changed.validation.hashedFiles > 0);
+  }
+  assert.equal((await prepareAssets(f)).generated, 0);
+});
+
+test('damaged verification receipts require full checks without regenerating valid entries', async () => {
+  const f = fixture();
+  await prepareAssets(f);
+  fs.writeFileSync(path.join(f.cacheRoot, 'verified-files.json'), '{');
+  const repaired = await prepareAssets(f);
+  assert.equal(repaired.validation.hashedFiles, 2);
+  assert.equal(repaired.generated, 0);
+  assert.equal((await prepareAssets(f)).validation.hashedFiles, 0);
+});
+
+test('full verification detects edits hidden by unchanged metadata', async t => {
+  const f = fixture();
+  await prepareAssets(f);
+  const file = path.join(f.gameRoot, f.source);
+  const before = fs.statSync(file, { bigint: true });
+  const bytes = fs.readFileSync(file);
+  bytes[bytes.length - 1] ^= 1;
+  fs.writeFileSync(file, bytes);
+  const lstat = fs.promises.lstat;
+  fs.promises.lstat = async (target, options) => target === file ? before : lstat(target, options);
+  t.after(() => { fs.promises.lstat = lstat; });
+  const verified = await prepareAssets({ ...f, verifyHashes: true });
+  assert.equal(verified.generated, 1);
+  assert.ok(verified.validation.hashedFiles >= 2);
 });
 
 test('empty discovery reports install and successful completion without transformation', async () => {
@@ -355,6 +451,9 @@ test('runner resolves default cache, config-relative recipes and explicit CLI ov
   fs.writeFileSync(cfg, JSON.stringify({ assetPreparation: { enabled: false, cacheRoot: 'cache-near-config', recipes: 'recipes.json' } }));
   const base = { addon: 'a', bootstrap: 'b', gameRoot: f.gameRoot, saveRoot: path.join(f.root, 'save') };
   assert.equal(validate(base).assetPreparation.cacheRoot, path.join(f.root, 'save/asset-cache'));
+  assert.equal(validate(base).assetPreparation.verifyHashes, false);
+  assert.equal(validate({ ...base, assetPreparation: { verifyHashes: true } }).assetPreparation.verifyHashes, true);
+  assert.throws(() => validate({ ...base, assetPreparation: { verifyHashes: 'yes' } }), /verifyHashes must be a boolean/);
   const configured = validate({ ...base, config: cfg });
   assert.equal(configured.assetPreparation.enabled, false);
   assert.equal(configured.assetPreparation.cacheRoot, path.join(f.root, 'cache-near-config'));
@@ -449,7 +548,7 @@ test('quit requests retain cache ownership; explicit release and dead lease prun
   f.native.runtime.quit();
 });
 
-function encryptedFixture() {
+function encryptedFixture(engine = 'MZ') {
   const f = fixture();
   const key = Buffer.from('00112233445566778899aabbccddeeff', 'hex');
   const systemFile = path.join(f.gameRoot, 'data/System.json');
@@ -461,13 +560,20 @@ function encryptedFixture() {
     for (let i = 0; i < 16; ++i) body[i] ^= key[i];
     return Buffer.concat([Buffer.from('5250474d560000000003010000000000', 'hex'), body]);
   };
-  fs.renameSync(path.join(f.gameRoot, f.source), path.join(f.gameRoot, f.source + '_'));
-  fs.writeFileSync(path.join(f.gameRoot, f.source + '_'), encrypt(PNG));
+  const encryptedImage = engine === 'MV' ? f.source.replace(/\.png$/, '.rpgmvp') : f.source + '_';
+  const encryptedAudio = 'audio/bgm/theme.' + (engine === 'MV' ? 'rpgmvo' : 'ogg_');
+  fs.renameSync(path.join(f.gameRoot, f.source), path.join(f.gameRoot, encryptedImage));
+  fs.writeFileSync(path.join(f.gameRoot, encryptedImage), encrypt(PNG));
   const audio = Buffer.concat([Buffer.from('OggS'), Buffer.alloc(28), Buffer.from('LOOPSTART=12\0LOOPLENGTH=96')]);
   fs.mkdirSync(path.join(f.gameRoot, 'audio/bgm'), { recursive: true });
-  fs.writeFileSync(path.join(f.gameRoot, 'audio/bgm/theme.ogg_'), encrypt(audio));
+  fs.writeFileSync(path.join(f.gameRoot, encryptedAudio), encrypt(audio));
   let aliases = new Map();
-  const id = file => fs.existsSync(file) ? crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') : null;
+  const id = file => {
+    if (!fs.existsSync(file)) return null;
+    const stat = fs.statSync(file, { bigint: true });
+    return [stat.dev,stat.ino,stat.size,stat.mtimeNs,stat.ctimeNs,
+      crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')].join(':');
+  };
   const assets = f.native.assets;
   const originalProcess = assets.processImage;
   assets.processImage = (source, output, recipe, file) => {
@@ -488,90 +594,165 @@ function encryptedFixture() {
   assets.installDecrypted = entries => {
     aliases = new Map(entries.map(entry => [entry.logicalSource, { ...entry, fileIdentity: id(entry.file) }]));
   };
-  return { ...f, encrypt, audio, systemFile, get jobs() { return f.jobs; }, get installs() { return f.installs; } };
+  return { ...f, encrypt, audio, encryptedImage, encryptedAudio, systemFile, get jobs() { return f.jobs; }, get installs() { return f.installs; } };
 }
 
-test('encrypted images and audio prepare once, preserve plaintext bytes and reuse on warm launch', async () => {
-  const f = encryptedFixture();
-  const originals = ['img/pictures/a.png_', 'audio/bgm/theme.ogg_', 'data/System.json']
-    .map(source => [source, fs.readFileSync(path.join(f.gameRoot, source))]);
-  const cold = await prepareAssets(f);
-  assert.equal(cold.generated, 2);
-  assert.equal(cold.decrypted, 2);
-  assert.equal(cold.fallback, 0);
-  assert.equal(cold.installed, 1);
-  assert.equal(f.jobs, 1);
-  assert.deepEqual(fs.readFileSync(f.native.assets.sourcePath('img/pictures/a.png')), PNG);
-  assert.deepEqual(fs.readFileSync(f.native.assets.sourcePath('audio/bgm/theme.ogg')), f.audio);
-  const warm = await prepareAssets(f);
-  assert.equal(warm.generated, 0);
-  assert.equal(warm.hits, 2);
-  assert.equal(warm.negativeHits, 0);
-  assert.equal(warm.decrypted, 2);
-  assert.equal(f.jobs, 1);
-  for (const [source, bytes] of originals) assert.deepEqual(fs.readFileSync(path.join(f.gameRoot, source)), bytes);
-});
+for (const engine of ['MV', 'MZ']) {
+  test(engine + ': unchanged hard-linked encryption inputs refresh identities while changed settings refuse installation', async () => {
+    for (const changeContent of [false,true]) {
+      const f = encryptedFixture(engine), processImage = f.native.assets.processImage;
+      f.native.assets.processImage = async (...args) => {
+        const descriptor = await processImage(...args);
+        fs.linkSync(f.systemFile, path.join(f.root,'system-link.json'));
+        fs.linkSync(path.join(f.gameRoot,f.encryptedImage),path.join(f.root,'image-link'));
+        if (changeContent) fs.writeFileSync(f.systemFile, JSON.stringify({hasEncryptedImages:true,
+          hasEncryptedAudio:true,encryptionKey:'ff'.repeat(16)}));
+        return descriptor;
+      };
+      const result = await prepareAssets(f);
+      assert.equal(result.decrypted,changeContent?0:2);
+      assert.equal(f.native.assets.hasDecrypted(f.source),!changeContent);
+      if (!changeContent) assert.deepEqual(fs.readFileSync(f.native.assets.sourcePath(f.source)),PNG);
+    }
+  });
 
-test('decrypted media corruption regenerates only its source; key changes never reuse stale output', async () => {
-  const f = encryptedFixture();
-  const cold = await prepareAssets(f);
-  fs.appendFileSync(cold.decryptedEntries.find(entry => entry.source.startsWith('audio/')).file, 'corrupt');
-  const repaired = await prepareAssets(f);
-  assert.equal(repaired.generated, 1);
-  assert.equal(repaired.hits, 1);
-  const settings = JSON.parse(fs.readFileSync(f.systemFile));
-  settings.encryptionKey = 'ff'.repeat(16);
-  fs.writeFileSync(f.systemFile, JSON.stringify(settings));
-  const changed = await prepareAssets(f);
-  assert.equal(changed.hits, 0);
-  assert.equal(changed.decrypted, 0);
-  assert.equal(changed.fallback, 2);
-  assert.equal(f.native.assets.hasDecrypted('img/pictures/a.png'), false);
-});
-
-test('encrypted ordinary images still get a plaintext cache when compact preparation is unnecessary', async () => {
-  const f = encryptedFixture();
-  f.native.assets.processImage = async () => null;
-  const cold = await prepareAssets(f);
-  assert.equal(cold.decrypted, 2);
-  assert.equal(cold.installed, 0);
-  assert.equal(cold.fallback, 0);
-  const warm = await prepareAssets(f);
-  assert.equal(warm.hits, 2);
-  assert.equal(warm.negativeHits, 0);
-});
-
-test('truncated or invalid encrypted headers fall back independently of valid audio', async () => {
-  for (const bytes of [Buffer.alloc(8), Buffer.alloc(64)]) {
-    const f = encryptedFixture();
-    fs.writeFileSync(path.join(f.gameRoot, 'img/pictures/a.png_'), bytes);
+  test(engine + ': encrypted extension case preserves logical source naming', async () => {
+    const f = encryptedFixture(engine);
+    for (const source of [f.encryptedImage, f.encryptedAudio]) {
+      fs.renameSync(path.join(f.gameRoot, source),
+        path.join(f.gameRoot, source.replace(/\.[^.]+$/, extension => extension.toUpperCase())));
+    }
     const result = await prepareAssets(f);
-    assert.equal(result.decrypted, 1);
-    assert.equal(result.fallback, 1);
+    assert.equal(result.decrypted, 2);
+    const image = engine === 'MV' ? f.source : f.source.replace(/\.png$/, '.PNG');
+    const audio = 'audio/bgm/theme.' + (engine === 'MV' ? 'ogg' : 'OGG');
+    assert.equal(result.entries[0].source, image);
+    assert.deepEqual(fs.readFileSync(f.native.assets.sourcePath(image)), PNG);
+    assert.deepEqual(fs.readFileSync(f.native.assets.sourcePath(audio)), f.audio);
+  });
+
+  test(engine + ': encrypted images and audio prepare once, preserve plaintext bytes and reuse on warm launch', async () => {
+    const f = encryptedFixture(engine);
+    const originals = [f.encryptedImage, f.encryptedAudio, 'data/System.json']
+      .map(source => [source, fs.readFileSync(path.join(f.gameRoot, source))]);
+    const cold = await prepareAssets(f);
+    assert.equal(cold.generated, 2);
+    assert.equal(cold.decrypted, 2);
+    assert.equal(cold.fallback, 0);
+    assert.equal(cold.installed, 1);
+    assert.equal(f.jobs, 1);
+    assert.deepEqual(fs.readFileSync(f.native.assets.sourcePath('img/pictures/a.png')), PNG);
+    assert.deepEqual(fs.readFileSync(f.native.assets.sourcePath('audio/bgm/theme.ogg')), f.audio);
+    const warm = await prepareAssets(f);
+    assert.equal(warm.generated, 0);
+    assert.equal(warm.hits, 2);
+    assert.equal(warm.negativeHits, 0);
+    assert.equal(warm.decrypted, 2);
+    assert.equal(f.jobs, 1);
+    for (const [source, bytes] of originals) assert.deepEqual(fs.readFileSync(path.join(f.gameRoot, source)), bytes);
+  });
+
+  test(engine + ': decrypted media corruption regenerates only its source; key changes never reuse stale output', async () => {
+    const f = encryptedFixture(engine);
+    const cold = await prepareAssets(f);
+    fs.appendFileSync(cold.decryptedEntries.find(entry => entry.source.startsWith('audio/')).file, 'corrupt');
+    const repaired = await prepareAssets(f);
+    assert.equal(repaired.generated, 1);
+    assert.equal(repaired.hits, 1);
+    const settings = JSON.parse(fs.readFileSync(f.systemFile));
+    settings.encryptionKey = 'ff'.repeat(16);
+    fs.writeFileSync(f.systemFile, JSON.stringify(settings));
+    const changed = await prepareAssets(f);
+    assert.equal(changed.hits, 0);
+    assert.equal(changed.decrypted, 0);
+    assert.equal(changed.fallback, 2);
     assert.equal(f.native.assets.hasDecrypted('img/pictures/a.png'), false);
-    assert.equal(f.native.assets.hasDecrypted('audio/bgm/theme.ogg'), true);
-    assert.equal(f.jobs, 0);
-  }
+  });
+
+  test(engine + ': encrypted ordinary images still get a plaintext cache when compact preparation is unnecessary', async () => {
+    const f = encryptedFixture(engine);
+    f.native.assets.processImage = async () => null;
+    const cold = await prepareAssets(f);
+    assert.equal(cold.decrypted, 2);
+    assert.equal(cold.installed, 0);
+    assert.equal(cold.fallback, 0);
+    const warm = await prepareAssets(f);
+    assert.equal(warm.hits, 2);
+    assert.equal(warm.negativeHits, 0);
+  });
+
+  test(engine + ': truncated or invalid encrypted headers fall back independently of valid audio', async () => {
+    for (const bytes of [Buffer.alloc(8), Buffer.alloc(64)]) {
+      const f = encryptedFixture(engine);
+      fs.writeFileSync(path.join(f.gameRoot, f.encryptedImage), bytes);
+      const result = await prepareAssets(f);
+      assert.equal(result.decrypted, 1);
+      assert.equal(result.fallback, 1);
+      assert.equal(f.native.assets.hasDecrypted('img/pictures/a.png'), false);
+      assert.equal(f.native.assets.hasDecrypted('audio/bgm/theme.ogg'), true);
+      assert.equal(f.jobs, 0);
+    }
+  });
+
+  test(engine + ': WAV bytes with an ogg extension retain their exact data and logical filename', async () => {
+    const f = encryptedFixture(engine);
+    const wav = Buffer.alloc(44); wav.write('RIFF'); wav.write('WAVE', 8);
+    fs.writeFileSync(path.join(f.gameRoot, f.encryptedAudio), f.encrypt(wav));
+    const result = await prepareAssets(f);
+    assert.equal(result.decrypted, 2);
+    assert.deepEqual(fs.readFileSync(f.native.assets.sourcePath('audio/bgm/theme.ogg')), wav);
+  });
+
+  test(engine + ': cancelling encrypted preparation publishes no plaintext aliases or prepared images', async () => {
+    const f = encryptedFixture(engine);
+    let cancel = false;
+    const result = await prepareAssets({ ...f, shouldCancel: () => cancel,
+      onProgress(progress) { if (progress.completed === 1) cancel = true; } });
+    assert.equal(result.cancelled, true);
+    assert.equal(result.decrypted, 0);
+    assert.equal(f.installs.length, 0);
+    assert.equal(f.native.assets.hasDecrypted('img/pictures/a.png'), false);
+  });
+}
+
+test('MV M4A detection keeps the logical extension and validates the decrypted media header', async () => {
+  const f = encryptedFixture('MV');
+  const m4a = Buffer.alloc(32); m4a.writeUInt32BE(24); m4a.write('ftypM4A ', 4);
+  const source = 'audio/bgm/theme.rpgmvm';
+  fs.writeFileSync(path.join(f.gameRoot, source), f.encrypt(m4a));
+  const cold = await prepareAssets(f);
+  assert.equal(cold.total, 3);
+  assert.equal(cold.decrypted, 3);
+  assert.deepEqual(fs.readFileSync(f.native.assets.sourcePath('audio/bgm/theme.m4a')), m4a);
+  const warm = await prepareAssets(f);
+  assert.equal(warm.hits, 3);
+  assert.equal(warm.generated, 0);
+  fs.writeFileSync(path.join(f.gameRoot, source), f.encrypt(f.audio));
+  const invalid = await prepareAssets(f);
+  assert.equal(invalid.decrypted, 2);
+  assert.equal(invalid.fallback, 1);
+  assert.equal(f.native.assets.hasDecrypted('audio/bgm/theme.m4a'), false);
 });
 
-test('WAV bytes with an ogg extension retain their exact data and logical filename', async () => {
-  const f = encryptedFixture();
-  const wav = Buffer.alloc(44); wav.write('RIFF'); wav.write('WAVE', 8);
-  fs.writeFileSync(path.join(f.gameRoot, 'audio/bgm/theme.ogg_'), f.encrypt(wav));
-  const result = await prepareAssets(f);
-  assert.equal(result.decrypted, 2);
-  assert.deepEqual(fs.readFileSync(f.native.assets.sourcePath('audio/bgm/theme.ogg')), wav);
-});
-
-test('cancelling encrypted preparation publishes no plaintext aliases or prepared images', async () => {
-  const f = encryptedFixture();
-  let cancel = false;
-  const result = await prepareAssets({ ...f, shouldCancel: () => cancel,
-    onProgress(progress) { if (progress.completed === 1) cancel = true; } });
-  assert.equal(result.cancelled, true);
-  assert.equal(result.decrypted, 0);
-  assert.equal(f.installs.length, 0);
-  assert.equal(f.native.assets.hasDecrypted('img/pictures/a.png'), false);
+test('MV encryption flags gate preparation and existing plaintext images take precedence', async () => {
+  const f = encryptedFixture('MV');
+  const settings = JSON.parse(fs.readFileSync(f.systemFile));
+  settings.hasEncryptedImages = false;
+  fs.writeFileSync(f.systemFile, JSON.stringify(settings));
+  const disabled = await prepareAssets(f);
+  assert.equal(disabled.total, 2);
+  assert.equal(disabled.decrypted, 1);
+  assert.equal(disabled.fallback, 1);
+  assert.equal(f.native.assets.hasDecrypted(f.source), false);
+  settings.hasEncryptedImages = true;
+  fs.writeFileSync(f.systemFile, JSON.stringify(settings));
+  fs.writeFileSync(path.join(f.gameRoot, f.source), PNG);
+  f.native.assets.processImage = async () => null;
+  const plaintext = await prepareAssets(f);
+  assert.equal(plaintext.total, 3);
+  assert.equal(plaintext.decrypted, 1);
+  assert.equal(f.native.assets.hasDecrypted(f.source), false);
+  assert.deepEqual(fs.readFileSync(f.native.assets.sourcePath(f.source)), PNG);
 });
 
 test('automatic character grids retain ordinary and single-character logical layouts', async () => {
@@ -585,5 +766,26 @@ test('automatic character grids retain ordinary and single-character logical lay
     f.native.assets.processImage = async (_source, _output, recipe) => { observed = recipe.grid; return null; };
     await prepareAssets(f);
     assert.deepEqual(observed, grid);
+  }
+});
+
+test('torn positive and negative cache manifests regenerate without changing sources', async () => {
+  for (const negative of [false, true]) {
+    const f = fixture();
+    if (negative) f.native.assets.processImage = async () => null;
+    const first = await prepareAssets(f);
+    assert.equal(first.generated, 1);
+    const [manifest] = manifests(f);
+    const bytes = fs.readFileSync(path.join(f.gameRoot, f.source));
+    fs.writeFileSync(manifest, '{"version":1,"key":');
+    const repaired = await prepareAssets(f);
+    assert.equal(repaired.generated, 1);
+    assert.equal(repaired.hits, 0);
+    assert.deepEqual(fs.readFileSync(path.join(f.gameRoot, f.source)), bytes);
+    assert.equal(repaired.installed, negative ? 0 : 1);
+    const warm = await prepareAssets(f);
+    assert.equal(warm.generated, 0);
+    assert.equal(warm.hits, 1);
+    assert.equal(warm.negativeHits, negative ? 1 : 0);
   }
 });

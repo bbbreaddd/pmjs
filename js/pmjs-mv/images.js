@@ -125,6 +125,70 @@ PMJS.mv.bitmap.requestImageFile = pmjsBitmapRequestImageWrap()(Bitmap.prototype.
   var methods = globalThis.PMJS && globalThis.PMJS.methods;
   if (!methods || typeof methods.wrap !== 'function') return;
   methods.wrap({
+    key: 'Decrypter.decryptImg',
+    id: 'pmjs.mv.prepared-decryption',
+    getTarget: function() { return typeof Decrypter !== 'undefined' && Decrypter || null; },
+    method: 'decryptImg',
+    wrap: function(guestDecrypt) {
+      var reviewedDecrypt = function(url, bitmap) {
+          url = this.extToEncryptExt(url);
+
+          var requestFile = new XMLHttpRequest();
+          requestFile.open("GET", url);
+          requestFile.responseType = "arraybuffer";
+          requestFile.send();
+
+          requestFile.onload = function () {
+              if(this.status < Decrypter._xhrOk) {
+                  var arrayBuffer = Decrypter.decryptArrayBuffer(requestFile.response);
+                  bitmap._image.src = Decrypter.createBlobUrl(arrayBuffer);
+                  bitmap._image.addEventListener('load', bitmap._loadListener = Bitmap.prototype._onLoad.bind(bitmap));
+                  bitmap._image.addEventListener('error', bitmap._errorListener = bitmap._loader || Bitmap.prototype._onError.bind(bitmap));
+              }
+          };
+
+          requestFile.onerror = function () {
+              if (bitmap._loader) {
+                  bitmap._loader();
+              } else {
+                  bitmap._onError();
+              }
+          };
+      };
+      function reviewedSource(fn) {
+        return Function.prototype.toString.call(fn).replace(/\r\n/g, "\n")
+          .split("\n").map(function(line) { return line.trim(); }).join("\n");
+      }
+      if (reviewedSource(guestDecrypt) !== reviewedSource(reviewedDecrypt)) return guestDecrypt;
+      return function(url, bitmap) {
+        var encodedPath = url.split('?')[0].replace(/%(?![0-9a-f]{2})/gi, '%25');
+        var path = decodeURIComponent(encodedPath)
+          .replace(/^file:\/\/\/game\//, '').replace(/^\.\//, '');
+        if (!NativeHost.assets || typeof NativeHost.assets.hasDecrypted !== 'function' ||
+            !NativeHost.assets.hasDecrypted(path)) return guestDecrypt.apply(this, arguments);
+        var decrypter = this;
+        var args = arguments;
+        var image = bitmap._image;
+        var guestOnLoad = Bitmap.prototype._onLoad;
+        function detach() {
+          image.removeEventListener('load', onLoad);
+          image.removeEventListener('error', onError);
+        }
+        function onLoad() {
+          detach();
+          if (bitmap._image === image) return guestOnLoad.apply(bitmap, arguments);
+        }
+        function onError() {
+          detach();
+          if (bitmap._image === image) return guestDecrypt.apply(decrypter, args);
+        }
+        image.addEventListener('load', bitmap._loadListener = onLoad);
+        image.addEventListener('error', bitmap._errorListener = onError);
+        image.src = url;
+      };
+    }
+  });
+  methods.wrap({
     key: 'Bitmap._requestImage',
     id: 'pmjs.mv.native-image-release',
     getTarget: function() {

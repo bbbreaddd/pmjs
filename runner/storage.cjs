@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
+const readerFinalizer = new FinalizationRegistry(descriptor => fs.closeSync(descriptor));
 
 function syncDirectory(directory) {
   const descriptor = fs.openSync(directory, 'r');
@@ -46,6 +47,34 @@ function createStorage(root) {
     readBytes(relative) {
       try { return fs.readFileSync(resolve(relative)); }
       catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+    },
+    openRead(relative, start = 0) {
+      if (!Number.isSafeInteger(start) || start < 0) throw new RangeError('invalid read position');
+      let descriptor;
+      try { descriptor = fs.openSync(resolve(relative), 'r'); }
+      catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+      let position = start;
+      const token = {};
+      const reader = {
+        read(maxBytes) {
+          if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > 0xffffffff) {
+            throw new RangeError('invalid read size');
+          }
+          const bytes = Buffer.allocUnsafe(maxBytes);
+          const count = fs.readSync(descriptor, bytes, 0, maxBytes, position);
+          position += count;
+          return bytes.subarray(0, count);
+        },
+        close() {
+          if (descriptor === undefined) return;
+          const captured = descriptor;
+          descriptor = undefined;
+          readerFinalizer.unregister(token);
+          fs.closeSync(captured);
+        }
+      };
+      readerFinalizer.register(reader, descriptor, token);
+      return reader;
     },
     writeBytes(relative, contents) {
       mutationGeneration++;

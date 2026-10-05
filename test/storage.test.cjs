@@ -20,6 +20,21 @@ test('storage writes atomically and rejects paths outside its root', () => {
   }
 });
 
+test('save readers capture files, read bounded bytes and release their descriptor', () => {
+  const root = temporaryDirectory('pmjs-save-reader-'), storage = createStorage(root);
+  const files = () => fs.readdirSync('/proc/self/fd').length;
+  storage.writeText('input', 'abcdef');
+  const before = files(), reader = storage.openRead('input', 2);
+  assert.equal(files(), before + 1);
+  storage.writeText('input', 'replacement'); storage.remove('input');
+  assert.equal(reader.read(2).toString(), 'cd');
+  assert.equal(reader.read(2).toString(), 'ef');
+  assert.equal(reader.read(2).length, 0);
+  reader.close(); reader.close(); assert.equal(files(), before);
+  assert.equal(storage.openRead('input'), null);
+  assert.throws(() => storage.openRead('../input'), /invalid save path/);
+});
+
 test('an old native filesystem fails before creating a writable overlay', () => {
   const root = path.join(temporaryDirectory('pmjs-storage-old-addon-'), 'overlay');
   assert.throws(() => createGameFilesystem({}, root), /requires native overlay updates/);
@@ -113,7 +128,7 @@ for (const disabled of [false, true]) {
       remove(id) { storage.remove(this.localFilePath(id).slice(6)); } };
     const remove = manager.remove;
     const ctx = loadPmjsRuntime({
-      Buffer,
+      Buffer, __pmjsBuiltinRequire: require,
       NativeHost: { storage },
       PMJS_GAME_CONFIG: { disableOptimizations: disabled ? ['storage.read-burst-coalesce'] : [] },
       StorageManager: manager,
@@ -189,7 +204,7 @@ function localStorageContext() {
     },
   };
   const context = loadPmjsRuntime({
-    Buffer, NativeHost: { storage }, StorageManager: manager, LZString: lz, queueMicrotask,
+    Buffer, __pmjsBuiltinRequire: require, NativeHost: { storage }, StorageManager: manager, LZString: lz, queueMicrotask,
   });
   for (const file of ['pmjs-web/filesystem.js', 'pmjs-mv/storage.js']) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../js', file), 'utf8'), context);

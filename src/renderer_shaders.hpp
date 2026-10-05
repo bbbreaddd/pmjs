@@ -974,6 +974,8 @@ constexpr const char* tileVertexSource = R"(#version 300 es
   layout(location = 0) in vec2 localPosition;
   layout(location = 1) in vec2 sourcePixel;
   layout(location = 2) in vec2 animationFactor;
+  layout(location = 3) in vec4 preparedMapping;
+  flat out highp vec4 tileMapping;
   uniform mat3 world;
   uniform bool targetYDown;
   uniform highp mat3 targetProjection;
@@ -989,7 +991,9 @@ constexpr const char* tileVertexSource = R"(#version 300 es
     if (targetYDown) gl_Position.y = -gl_Position.y;
     gl_Position.xy = (targetProjection * vec3(gl_Position.xy, 1.0)).xy;
     meshLocalPosition = localPosition;
-    vertexUv = (sourcePixel + animationFactor * animationOffset) / imageDimensions;
+    tileMapping = preparedMapping;
+    vec2 logicalDimensions = preparedMapping.z > 0.0 ? preparedMapping.zw : imageDimensions;
+    vertexUv = (sourcePixel + animationFactor * animationOffset) / logicalDimensions;
   }
 )";
 constexpr const char* simpleFragmentSource = R"(#version 300 es
@@ -1073,7 +1077,7 @@ constexpr const char* presentationFragmentSource = R"(#version 300 es
   uniform float upperCanvasOpacity;
   uniform bool videoPremultiplied;
   uniform bool upperCanvasPremultiplied;
-  in vec2 vertexUv;
+  in highp vec2 vertexUv;
   out vec4 outputColor;
   void main() {
     vec4 scene = texture(sceneImage, vertexUv);
@@ -1096,11 +1100,13 @@ constexpr const char* presentationFragmentSource = R"(#version 300 es
       scene = toneOverlay + toned * (1.0 - toneOverlay.a);
     }
     vec4 composed = scene * canvasOpacity;
-    vec4 video = texture(videoImage, vertexUv);
+    // Uploaded element textures store the top row at v=0, unlike scene framebuffers.
+    highp vec2 elementUv = vec2(vertexUv.x, 1.0 - vertexUv.y);
+    vec4 video = texture(videoImage, elementUv);
     video.a *= videoOpacity;
     video.rgb *= videoPremultiplied ? videoOpacity : video.a;
     composed = video + composed * (1.0 - video.a);
-    vec4 upperCanvas = texture(upperCanvasImage, vertexUv);
+    vec4 upperCanvas = texture(upperCanvasImage, elementUv);
     upperCanvas.a *= upperCanvasOpacity;
     upperCanvas.rgb *= upperCanvasPremultiplied ? upperCanvasOpacity : upperCanvas.a;
     composed = upperCanvas + composed * (1.0 - upperCanvas.a);
@@ -1253,12 +1259,21 @@ constexpr const char* tileFragmentSource = R"(#version 300 es
   uniform highp sampler2D image;
   uniform vec4 color;
   uniform bool texturePremultiplied;
+#ifndef PMJS_MESH_POST_TINT_OVERLAY
+  flat in highp vec4 tileMapping;
+  highp vec4 tileTexel(vec2 uv) {
+    if (tileMapping.z <= 0.0) return texture(image, uv);
+    highp vec2 pixel = clamp(floor(vec2(uv)*tileMapping.zw), vec2(0.0), tileMapping.zw-vec2(1.0));
+    return texture(image, (pixel+tileMapping.xy+vec2(0.5))/vec2(textureSize(image,0)));
+  }
+#endif
 #ifdef PMJS_MESH_POST_TINT_OVERLAY
   in highp vec2 vertexUv;
 #else
   in vec2 vertexUv;
 #endif
 #ifdef PMJS_MESH_POST_TINT_OVERLAY
+  highp vec4 tileTexel(highp vec2 uv) { return texture(image, uv); }
   uniform vec4 meshPostTintOverlayColor;
   uniform bool trianglePaintEnabled;
   uniform bool mvBlendEnabled;
@@ -1493,9 +1508,9 @@ constexpr const char* tileFragmentSource = R"(#version 300 es
 #elif defined(PMJS_MESH_POST_TINT_OVERLAY)
     if (trianglePaintEnabled) { sampled = paintTriangle(); sampledPremultiplied = false; }
     else if (mvBlendEnabled) { sampled = sampleMvBitmap(); sampledPremultiplied = false; }
-    else sampled = texture(image, vertexUv);
+    else sampled = tileTexel(vertexUv);
 #else
-    sampled = texture(image, vertexUv);
+    sampled = tileTexel(vertexUv);
 #endif
     sampled.rgb *= color.rgb;
 #ifdef PMJS_MESH_POST_TINT_OVERLAY

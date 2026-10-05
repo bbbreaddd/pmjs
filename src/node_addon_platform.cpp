@@ -1,6 +1,67 @@
 #include "node_addon_internal.hpp"
+#include <cmath>
+#include <system_error>
+#include <cerrno>
 
 namespace pmjs::addon {
+namespace {
+std::uint64_t readPosition(napi_env env, napi_value value) {
+  const double position = asNumber(env, value);
+  if (!std::isfinite(position) || position < 0 || position > 9007199254740991.0 ||
+      std::floor(position) != position) throw std::runtime_error("read position must be a non-negative safe integer");
+  return static_cast<std::uint64_t>(position);
+}
+pmjs::FileReader& fileReader(napi_env env, napi_callback_info info) {
+  napi_value self;
+  check(env, napi_get_cb_info(env, info, nullptr, nullptr, &self, nullptr), "cannot read file receiver");
+  void* reader = nullptr;
+  check(env, napi_unwrap(env, self, &reader), "invalid file reader");
+  if (!reader) throw std::runtime_error("invalid file reader");
+  return *static_cast<pmjs::FileReader*>(reader);
+}
+napi_value throwFileError(napi_env env, const std::exception& error) {
+  const auto* system = dynamic_cast<const std::system_error*>(&error);
+  const char* code = nullptr;
+  if (system) switch (system->code().value()) {
+    case EBADF: code = "EBADF"; break;
+    case EISDIR: code = "EISDIR"; break;
+    case EACCES: code = "EACCES"; break;
+    case EINVAL: code = "EINVAL"; break;
+    case EIO: code = "EIO"; break;
+  }
+  napi_throw_error(env, code, error.what());
+  return nullptr;
+}
+napi_value readFileChunk(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info, 1);
+  const auto length = readPosition(env, args.at(0));
+  if (length > 0xffffffffU) throw std::runtime_error("read size exceeds buffer limit");
+  const auto bytes = fileReader(env, info).read(static_cast<std::size_t>(length));
+  napi_value result;
+  check(env, napi_create_buffer_copy(env, bytes.size(), bytes.data(), nullptr, &result), "cannot create file chunk");
+  return result;
+} catch (const std::exception& error) { return throwFileError(env, error); }
+napi_value closeFileReader(napi_env env, napi_callback_info info) try {
+  fileReader(env, info).close();
+  return undefined(env);
+} catch (const std::exception& error) { return throwFileError(env, error); }
+}
+
+napi_value openRead(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info, 2);
+  const auto start = args.size() > 1 ? readPosition(env, args[1]) : 0;
+  auto reader = host(env).vfs.openRead(asString(env, args.at(0)), start);
+  if (!reader) return null(env);
+  napi_value result = moduleObject(env);
+  method(env, result, "read", readFileChunk);
+  method(env, result, "close", closeFileReader);
+  check(env, napi_wrap(env, result, reader.get(), [](napi_env, void* value, void*) {
+    delete static_cast<pmjs::FileReader*>(value);
+  }, nullptr, nullptr), "cannot attach file reader");
+  reader.release();
+  return result;
+} catch (const std::exception& error) { return throwFileError(env, error); }
+
 napi_value updateWritableOverlay(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 2);
   auto strings = [&](napi_value array) {
@@ -170,6 +231,7 @@ void registerPlatformBindings(napi_env env, napi_value exports) {
   method(env, fs, "updateWritableOverlay", updateWritableOverlay);
   method(env, fs, "readText", readText);
   method(env, fs, "readBytes", readBytes);
+  method(env, fs, "openRead", openRead);
   method(env, fs, "readDirectory", readDirectory);
   method(env, fs, "exists", exists);
   method(env, fs, "isDirectory", isDirectory);

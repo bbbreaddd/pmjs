@@ -38,11 +38,11 @@ std::vector<std::uint8_t> encodedImageBytes(napi_env env, napi_value value) {
 }
 
 napi_value loadImage(napi_env env, napi_callback_info info) try {
-  auto args = arguments(env, info, 2);
+  auto args = arguments(env, info, 3);
   State& value = host(env);
   auto path = value.vfs.resolve(asString(env, args.at(0)));
   const bool retainCpuPixels = args.size() > 1 && asBoolean(env, args.at(1));
-  auto image = path ? value.images.loadPng(*path, retainCpuPixels) : std::nullopt;
+  auto image = path ? value.images.loadPng(*path, retainCpuPixels, args.size() > 2 ? asString(env, args[2]) : "") : std::nullopt;
   if (!image) throw std::runtime_error("cannot load image");
   return imageInfo(env, image->handle, image->width, image->height);
 } catch (const std::exception& error) {
@@ -92,9 +92,10 @@ struct AsyncImageLoad {
   napi_async_work work = nullptr;
   std::vector<napi_deferred> deferreds;
   std::unique_ptr<pmjs::ImageFileSource> source;
-  std::string key;
+  std::shared_ptr<pmjs::ImageFileSource> fallbackSource;
+  std::string key, tileSet;
   bool retainCpuPixels = false;
-  bool prepareCpuPixels = false;
+  bool prepareCpuPixels = false, tileValidationFailed = false;
   std::shared_ptr<pmjs::ImageStore::PreparedLoad> prepared;
   std::optional<pmjs::ImagePixels> pixels;
 };
@@ -174,10 +175,11 @@ void executeImageLoad(napi_env, void* opaque) noexcept {
     } catch (...) {
       // Invalid prepared backing still permits decoding the captured source.
     }
+    load->tileValidationFailed = !load->tileSet.empty();
     load->prepared.reset();
   }
   try {
-    load->pixels = pmjs::ImageStore::decodeFile(*load->source);
+    load->pixels = pmjs::ImageStore::decodeFile(load->fallbackSource ? *load->fallbackSource : *load->source);
   } catch (...) {
     load->pixels = std::nullopt;
   }
@@ -196,12 +198,24 @@ void completeImageLoad(napi_env env, napi_status status, void* opaque) {
     }
     status = napi_generic_failure;
   }
-  if (state) state->pendingImageLoads.erase(load->key);
+  if (state) {
+    state->pendingImageLoads.erase(load->key);
+    if (load->tileValidationFailed) state->images.noteTileLoadFallback();
+  }
   napi_value result;
   if (status == napi_ok && (load->prepared || load->pixels)) {
+    const bool preparedAttempt = static_cast<bool>(load->prepared);
     auto installed = load->prepared ? state->images.installPreparedLoad(
       *load->source, std::move(load->prepared), load->retainCpuPixels) :
       state->images.installDecoded(*load->source, std::move(*load->pixels), load->retainCpuPixels);
+    if (!installed && preparedAttempt) {
+      // No logical view was published. Decode the captured ordinary source on
+      // the worker, retaining every pending caller and leaving existing owners valid.
+      load->prepared.reset();
+      state->pendingImageLoads[load->key] = load.get();
+      if (queueImageWork(env, *load) == napi_ok) { load.release(); return; }
+      state->pendingImageLoads.erase(load->key);
+    }
     if (installed) {
       bool retained = true;
       std::size_t ownerships = 1;
@@ -253,15 +267,16 @@ napi_status queueImageWork(napi_env env, AsyncImageLoad& load) {
 }
 
 napi_value queueImageLoad(napi_env env, const std::filesystem::path& path,
-                          bool retainCpuPixels) {
+                          bool retainCpuPixels, const std::string& requestedTileSet = {}) {
   auto source = pmjs::ImageStore::openFile(path);
   if (!source) throw std::runtime_error("cannot open image");
-  const std::string key = source->key();
+  const auto tileSet = state->images.effectiveTileSet(*source, requestedTileSet);
+  const std::string key = source->key() + (tileSet.empty() ? "" : "\n"+tileSet);
   napi_deferred deferred = nullptr;
   napi_value promise;
   check(env, napi_create_promise(env, &deferred, &promise),
         "cannot create image promise");
-  if (auto cached = state->images.acquireCached(*source)) {
+  if (auto cached = state->images.acquireCached(*source, tileSet)) {
     if (!retainCpuPixels || !state->images.hasPreparedBacking(cached->handle) ||
         state->images.hasCpuPixels(cached->handle)) {
       if (retainCpuPixels) state->images.retainCpuPixels(cached->handle);
@@ -282,9 +297,11 @@ napi_value queueImageLoad(napi_env env, const std::filesystem::path& path,
   load->env = env;
   load->source = std::move(source);
   load->key = key;
+  load->tileSet = tileSet;
   load->retainCpuPixels = retainCpuPixels;
   load->prepareCpuPixels = retainCpuPixels;
-  load->prepared = state->images.capturePrepared(*load->source);
+  load->prepared = state->images.capturePrepared(*load->source, tileSet);
+  if (load->prepared) load->fallbackSource = pmjs::ImageStore::capturePreparedFallback(*load->prepared);
   load->deferreds.push_back(deferred);
   state->pendingImageLoads.emplace(key, load.get());
   const auto queued = queueImageWork(env, *load);
@@ -298,12 +315,12 @@ napi_value queueImageLoad(napi_env env, const std::filesystem::path& path,
 }
 
 napi_value loadImageAsync(napi_env env, napi_callback_info info) try {
-  auto args = arguments(env, info, 2);
+  auto args = arguments(env, info, 3);
   State& value = host(env);
   auto path = value.vfs.resolve(asString(env, args.at(0)));
   if (!path) throw std::runtime_error("cannot resolve image");
   return queueImageLoad(env, *path,
-    args.size() > 1 && asBoolean(env, args.at(1)));
+    args.size() > 1 && asBoolean(env, args.at(1)), args.size() > 2 ? asString(env, args[2]) : "");
 } catch (const std::exception& error) {
   napi_throw_error(env, nullptr, error.what()); return nullptr;
 }
@@ -393,12 +410,20 @@ napi_value imageMemory(napi_env env, napi_callback_info info) try {
     number(env, images.peakGpuBytes())), "cannot set peak image GPU bytes");
   check(env, napi_set_named_property(env, result, "cpuBytes",
     number(env, images.cpuBytes())), "cannot set image CPU bytes");
+  check(env, napi_set_named_property(env, result, "tileMetadataBytes",
+    number(env, images.tileMetadataBytes())), "cannot set tile metadata bytes");
   check(env, napi_set_named_property(env, result, "warmBudgetBytes",
     number(env, images.warmBudgetBytes())), "cannot set image warm budget");
   check(env, napi_set_named_property(env, result, "warmBytes",
     number(env, images.warmBytes())), "cannot set warm image bytes");
   check(env, napi_set_named_property(env, result, "warmCount",
     number(env, images.warmCount())), "cannot set warm image count");
+  check(env, napi_set_named_property(env, result, "warmFileCount",
+    number(env, images.warmFileCount())), "cannot set warm file count");
+  check(env, napi_set_named_property(env, result, "warmEntryLimit",
+    number(env, pmjs::ImageStore::warmEntryLimit)), "cannot set warm entry limit");
+  check(env, napi_set_named_property(env, result, "warmFileLimit",
+    number(env, pmjs::ImageStore::warmFileLimit)), "cannot set warm file limit");
   check(env, napi_set_named_property(env, result, "pinnedBytes",
     number(env, images.pinnedBytes())), "cannot set pinned image bytes");
   check(env, napi_set_named_property(env, result, "pinnedCount",
@@ -430,6 +455,17 @@ napi_value imageMemory(napi_env env, napi_callback_info info) try {
     number(env, images.fallbackReferences())), "cannot set fallback references");
   check(env, napi_set_named_property(env, result, "fallbackUses",
     number(env, images.fallbackUses())), "cannot set fallback uses");
+  napi_set_named_property(env, result, "tileHits", number(env, images.tileHits()));
+  napi_set_named_property(env, result, "tileRegions", number(env, images.tileRegions()));
+  napi_set_named_property(env, result, "tileMaterializations", number(env, images.tileMaterializations()));
+  napi_set_named_property(env, result, "tilePageDecodes", number(env, images.tilePageDecodes()));
+  napi_set_named_property(env, result, "tilePageUploads", number(env, images.tilePageUploads()));
+  auto tileRegionSets = moduleObject(env);
+  for (const auto& [identity, count] : images.tileRegionSets()) napi_set_named_property(env, tileRegionSets, identity.c_str(), number(env, count));
+  napi_set_named_property(env, result, "tileRegionSets", tileRegionSets);
+  auto tileFallbacks = moduleObject(env);
+  for (const auto& [reason, count] : images.tileFallbacks()) napi_set_named_property(env, tileFallbacks, reason.c_str(), number(env, count));
+  napi_set_named_property(env, result, "tileFallbacks", tileFallbacks);
   napi_set_named_property(env, result, "preparedHits", number(env, images.preparedHits()));
   napi_set_named_property(env, result, "preparedRegions", number(env, images.preparedRegions()));
   napi_set_named_property(env, result, "preparedMaterializations", number(env, images.preparedMaterializations()));

@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace pmjs {
@@ -50,6 +51,24 @@ struct PreparedImageDescriptor {
   std::vector<PreparedImagePage> pages;
 };
 
+struct PreparedTileRegion {
+  std::array<int, 4> rect{}, atlas{};
+  int page = -1;
+};
+struct PreparedTileSource {
+  std::filesystem::path path, snapshot;
+  std::string identity;
+  int width = 0, height = 0;
+  std::vector<PreparedTileRegion> regions;
+};
+struct PreparedTileSet {
+  int version = 1, halo = 1;
+  std::string identity;
+  std::filesystem::path directory;
+  std::vector<PreparedImagePage> pages;
+  std::vector<PreparedTileSource> sources;
+};
+
 struct SpriteImageRegion {
   ImageInfo image;
   std::array<float, 4> source{}, atlas{};
@@ -73,6 +92,7 @@ struct ImageMemoryEntry {
 class ImageFileSource {
  public:
   ~ImageFileSource();
+  std::size_t encodedBytes() const { return size_; }
   const std::string& key() const { return key_; }
   const std::filesystem::path& path() const { return path_; }
   ImageFileSource(const ImageFileSource&) = delete;
@@ -92,8 +112,10 @@ class ImageFileSource {
 class ImageStore {
  public:
   static constexpr std::size_t defaultWarmBudgetBytes = 4U * 1024U * 1024U;
+  static constexpr std::size_t warmEntryLimit = 256;
+  static constexpr std::size_t warmFileLimit = 128;
 
-  ImageStore() = default;
+  ImageStore();
   ~ImageStore();
 
   ImageStore(const ImageStore&) = delete;
@@ -102,10 +124,26 @@ class ImageStore {
   // Opening captures the file identity before async work; atomic replacement
   // cannot redirect an in-flight load to a different inode.
   static std::unique_ptr<ImageFileSource> openFile(const std::filesystem::path& path);
-  static std::optional<ImagePixels> decodeFile(const ImageFileSource& source);
+  static std::size_t decodedStorageBytes(const ImagePixels& pixels);
+  static std::optional<ImagePixels> decodeFile(const ImageFileSource& source,
+      std::size_t maxDecodedBytes = 128U*1024U*1024U);
   static std::optional<ImagePixels> decodeMemory(const void* data, std::size_t size);
   static std::optional<ImagePixels> decodePngFromMemory(const void* data, std::size_t size);
   static std::optional<ImagePixels> decodeJpegFromMemory(const void* data, std::size_t size);
+  bool installTileSet(PreparedTileSet descriptor);
+  void clearTileSetIndex();
+  std::optional<ImageInfo> createTileSlot(ImageHandle handle, int width, int height);
+  bool hasTileBacking(ImageHandle handle) const;
+  std::string effectiveTileSet(const ImageFileSource& source, const std::string& identity) const;
+  std::uint64_t tileHits() const { return tileHits_; }
+  std::uint64_t tileRegions() const { return tileRegions_; }
+  const std::unordered_map<std::string, std::uint64_t>& tileRegionSets() const { return tileRegionSets_; }
+  std::uint64_t tileMaterializations() const { return tileMaterializations_; }
+  std::uint64_t tilePageDecodes() const { return tilePageDecodes_; }
+  std::uint64_t tilePageUploads() const { return tilePageUploads_; }
+  const std::unordered_map<std::string, std::uint64_t>& tileFallbacks() const { return tileFallbacks_; }
+  std::size_t tileMetadataBytes() const { return tileMetadataBytes_->load(std::memory_order_relaxed); }
+  void noteTileLoadFallback() { if (tileDiagnostics_) ++tileFallbacks_["page-validation"]; }
   void clearPreparedIndex() { preparedSources_.clear(); }
   bool installPrepared(const std::filesystem::path& sourcePath,
                        const std::filesystem::path& directory,
@@ -114,8 +152,10 @@ class ImageStore {
   std::optional<ImageInfo> acquirePrepared(const ImageFileSource& source,
                                           bool retainCpuPixels = false);
   struct PreparedLoad;
-  std::shared_ptr<PreparedLoad> capturePrepared(const ImageFileSource& source) const;
+  std::shared_ptr<PreparedLoad> capturePrepared(const ImageFileSource& source,
+      const std::string& tileSet = {}) const;
   static bool validatePrepared(PreparedLoad& load, bool retainCpuPixels = false);
+  static std::shared_ptr<ImageFileSource> capturePreparedFallback(const PreparedLoad& load);
   std::optional<ImageInfo> installPreparedLoad(const ImageFileSource& source,
       std::shared_ptr<PreparedLoad> load, bool retainCpuPixels);
   std::optional<ImageInfo> inspect(ImageHandle handle) const;
@@ -125,9 +165,9 @@ class ImageStore {
       bool premultiplied = true);
   std::optional<ImagePixels> readPixelsRegion(ImageHandle handle,
                                             int x, int y, int width, int height) const;
-  std::optional<ImageInfo> acquireCached(const ImageFileSource& source);
+  std::optional<ImageInfo> acquireCached(const ImageFileSource& source, const std::string& tileSet = {});
   std::optional<ImageInfo> loadPng(const std::filesystem::path& path,
-                                   bool retainCpuPixels = false);
+                                   bool retainCpuPixels = false, const std::string& tileSet = {});
   std::optional<ImageInfo> installDecoded(const ImageFileSource& source,
                                           ImagePixels pixels,
                                           bool retainCpuPixels = false);
@@ -168,6 +208,7 @@ class ImageStore {
   std::size_t warmBudgetBytes() const { return warmBudgetBytes_; }
   std::size_t warmBytes() const;
   std::size_t warmCount() const;
+  std::size_t warmFileCount() const;
   std::size_t pinnedBytes() const;
   std::size_t pinnedCount() const;
   std::uint64_t cacheHits() const { return cacheHits_; }
@@ -189,12 +230,19 @@ class ImageStore {
 
  private:
   struct PreparedBacking;
+  struct TilePrototype;
+  struct TileCatalog;
+  struct TilePages;
+  struct TileBacking;
+  struct TileLoad;
   struct Slot {
     std::uint16_t generation = 1;
     std::uint32_t texture = 0;
     std::shared_ptr<PreparedBacking> prepared;
+    std::shared_ptr<TileBacking> tiles;
     int width = 0;
     int height = 0;
+    int channels = 4;
     std::uint32_t references = 0;
     std::atomic<std::uint32_t> inFlight{0};
     std::uint32_t pins = 0;
@@ -217,6 +265,27 @@ class ImageStore {
     bool live = false;
   };
 
+  std::shared_ptr<TileLoad> captureTileLoad(const ImageFileSource& source, const std::string& identity) const;
+  static bool validateTileLoad(TileLoad& load, bool retainCpu);
+  static std::shared_ptr<ImageFileSource> captureTileFallback(const TileLoad& load);
+  std::optional<ImageInfo> installTileLoad(std::shared_ptr<TileLoad> load, bool retainCpu);
+  std::optional<ImagePixels> readTileRegion(const Slot& slot, int x, int y, int width, int height) const;
+  std::optional<SpriteImageRegion> resolveTileRegion(Slot& slot, float x, float y,
+      float width, float height, bool premultiplied);
+  std::size_t tileWarmBytes() const;
+  void collectTileFiles(const Slot& slot, std::unordered_set<const ImageFileSource*>& files) const;
+  std::optional<ImageInfo> insertTileView(std::shared_ptr<TileBacking> backing,
+      int width, int height, const std::string& cacheKey);
+  bool tileDiagnostics_ = false;
+  std::shared_ptr<std::atomic<std::size_t>> tileMetadataBytes_ =
+      std::make_shared<std::atomic<std::size_t>>(0);
+  std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
+  std::unordered_map<std::string, std::shared_ptr<TileCatalog>> tileSets_;
+  mutable std::unordered_map<std::string, std::weak_ptr<ImageFileSource>> tileFiles_;
+  std::shared_ptr<ImageFileSource> captureTileFile(const std::filesystem::path& path) const;
+  std::uint64_t tileHits_ = 0, tileRegions_ = 0, tileMaterializations_ = 0;
+  std::uint64_t tilePageDecodes_ = 0, tilePageUploads_ = 0;
+  std::unordered_map<std::string, std::uint64_t> tileFallbacks_, tileRegionSets_;
   void clearPrepared(Slot& slot);
   bool materialize(Slot& slot, bool premultiplied);
   static ImagePixels* preparedPixels(PreparedBacking& backing, std::size_t page);
@@ -229,6 +298,10 @@ class ImageStore {
   std::uint64_t textureEpoch_ = 0;
   void destroySlot(std::size_t index);
   void clearPremultipliedTexture(Slot& slot);
+  std::optional<ImageInfo> createDecoded(const ImagePixels& pixels);
+  std::optional<ImageInfo> createImage(int width, int height, const void* pixels,
+                                     bool premultiplied, int channels);
+  bool promoteToRgba(Slot& slot, const void* replacement = nullptr);
   std::deque<Slot> slots_;
   std::unordered_map<std::string, ImageHandle> pathCache_;
   std::unordered_map<std::string, std::shared_ptr<PreparedBacking>> preparedSources_;

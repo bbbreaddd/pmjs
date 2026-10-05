@@ -142,6 +142,13 @@ struct Tile {
 };
 }
 
+void writePreparedPng(const std::filesystem::path& path, int width, int height,
+                      const std::vector<std::uint8_t>& bytes) {
+  if (width <= 0 || height <= 0 || bytes.size() != static_cast<std::size_t>(width)*height*4)
+    throw std::runtime_error("invalid prepared PNG extent");
+  writePng(path, width, height, bytes);
+}
+
 PreparedAsset prepareAssetImage(const std::filesystem::path& source,
                                const std::filesystem::path& staging,
                                const AssetRecipe& recipe) {
@@ -172,21 +179,28 @@ PreparedAsset prepareAssetImage(const std::filesystem::path& source,
   for (int y = 0; y < input.height; ++y) {
     input.read();
     if (y == 0) first = pixel(input.row.data());
-    for (int x = 0; x < input.width; ++x) {
-      const auto rgba = pixel(input.row.data() + static_cast<std::size_t>(x) * 4);
-      allUniform = allUniform && rgba == first;
-      auto& cell = result.cells[static_cast<std::size_t>(y / cellHeight) * recipe.columns + x / cellWidth];
-      const int localX = x - cell.rect[0], localY = y - cell.rect[1];
-      if (recipe.crop && !inside(localX, localY, *recipe.crop) && rgba != cell.fill)
-        throw AssetPreparationUnsupported("preparation recipe discards nonconstant pixels");
-      if (rgba != cell.fill) {
-        if (!cell.crop[2]) cell.crop = {localX, localY, 1, 1};
-        else {
-          const int right = std::max(cell.crop[0] + cell.crop[2], localX + 1);
-          const int bottom = std::max(cell.crop[1] + cell.crop[3], localY + 1);
-          cell.crop[0] = std::min(cell.crop[0], localX); cell.crop[1] = std::min(cell.crop[1], localY);
-          cell.crop[2] = right - cell.crop[0]; cell.crop[3] = bottom - cell.crop[1];
-        }
+    const auto rowIndex = static_cast<std::size_t>(y / cellHeight) * recipe.columns;
+    const int localY = y % cellHeight;
+    for (int column = 0; column < recipe.columns; ++column) {
+      auto& cell = result.cells[rowIndex + column];
+      int left = cellWidth, right = 0;
+      const auto* row = input.row.data() + static_cast<std::size_t>(cell.rect[0]) * 4;
+      for (int x = 0; x < cellWidth; ++x) {
+        const auto rgba = pixel(row + static_cast<std::size_t>(x) * 4);
+        allUniform = allUniform && rgba == first;
+        if (rgba == cell.fill) continue;
+        if (recipe.crop && !inside(x, localY, *recipe.crop))
+          throw AssetPreparationUnsupported("preparation recipe discards nonconstant pixels");
+        left = std::min(left, x);
+        right = x + 1;
+      }
+      if (left == cellWidth) continue;
+      if (!cell.crop[2]) cell.crop = {left, localY, right - left, 1};
+      else {
+        const int end = std::max(cell.crop[0] + cell.crop[2], right);
+        cell.crop[0] = std::min(cell.crop[0], left);
+        cell.crop[2] = end - cell.crop[0];
+        cell.crop[3] = localY - cell.crop[1] + 1;
       }
     }
   }

@@ -279,6 +279,7 @@ class Renderer {
   void render();
   void renderScene();
   void presentToDrawable();
+  void finish();
   std::vector<std::uint8_t> captureSceneRgba(AlphaMode alphaMode = AlphaMode::straight);
   std::vector<std::uint8_t> captureSceneRawPremultiplied();
   // Window backbuffer readback, valid only before swap.
@@ -290,6 +291,8 @@ class Renderer {
   const RendererStats& stats() const { return stats_; }
   bool diagnosticsEnabled() const { return diagnostics_; }
   std::size_t renderTargetBytes() const;
+  std::size_t tileGeometryGpuBytes() const;
+  std::size_t tileGeometryCpuBytes() const;
   // Public for the modal overlay: snapshot, draw, discard back.
   std::size_t commandCount() const;
   void discardCommandsFrom(std::size_t first);
@@ -332,14 +335,23 @@ class Renderer {
   struct TileLayerResource {
     std::uint32_t vertexArray = 0;
     std::uint32_t vertexBuffer = 0;
+    std::size_t vertexBytes = 0;
     std::vector<ImageHandle> images;
     ImageHandle triangleCoverage = 0;
     std::vector<TileBatch> batches;
     std::uint32_t owners = 1;
     std::uint32_t queuedReferences = 0;
+    std::vector<TileLayerTile> tiles;
+    std::vector<float> tileVertices;
+    std::array<float, 2> mappedAnimation{};
+    bool mappedNearest = true, mappedReady = false;
+    std::uint64_t mappedEpoch = 0;
     // Typed material state is retained with the mesh; the scene packet carries dynamic color.
     MeshMaterial material;
   };
+
+  std::uint32_t createOrdinaryTileLayer(std::vector<TileLayerTile> tiles);
+  bool prepareTileLayer(TileLayerResource& layer, const std::array<float, 2>& animation, bool nearest);
 
   struct PrimitiveSurfaceResource {
     std::uint16_t generation = 1;

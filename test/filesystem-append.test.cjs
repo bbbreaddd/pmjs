@@ -10,7 +10,7 @@ const { temporaryDirectory } = require('./helpers/temp.cjs');
 function fixture() {
   const root = temporaryDirectory('pmjs-append-');
   const storage = createStorage(root);
-  const context = vm.createContext({ Buffer, NativeHost: { storage }, PMJS: { config: {} } });
+  const context = vm.createContext({ Buffer, __pmjsBuiltinRequire: require, NativeHost: { storage }, PMJS: { config: {} } });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-web/filesystem.js'), 'utf8'), context);
   return { root, storage, guest: context.fsModule };
 }

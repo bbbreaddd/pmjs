@@ -6,6 +6,11 @@
 #include <sstream>
 #include <stdexcept>
 #include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <cerrno>
+#include <system_error>
+#include <limits>
 
 namespace pmjs {
 
@@ -22,6 +27,42 @@ bool isContainedBy(const std::filesystem::path& root,
 }
 
 }  // namespace
+
+FileReader::~FileReader() { close(); }
+
+void FileReader::close() {
+  if (descriptor_ >= 0) { ::close(descriptor_); descriptor_ = -1; }
+}
+
+std::vector<std::uint8_t> FileReader::read(std::size_t maxBytes) {
+  if (descriptor_ < 0) throw std::system_error(EBADF, std::generic_category(), "read");
+  if (maxBytes > static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()) ||
+      position_ > static_cast<std::uint64_t>(std::numeric_limits<off_t>::max()))
+    throw std::system_error(EINVAL, std::generic_category(), "read range");
+  std::vector<std::uint8_t> bytes(maxBytes);
+  ssize_t count;
+  do { count = ::pread(descriptor_, bytes.data(), maxBytes, static_cast<off_t>(position_)); }
+  while (count < 0 && errno == EINTR);
+  if (count < 0) throw std::system_error(errno, std::generic_category(), "read");
+  position_ += static_cast<std::uint64_t>(count);
+  bytes.resize(static_cast<std::size_t>(count));
+  return bytes;
+}
+
+std::unique_ptr<FileReader> Vfs::openRead(const std::string& path, std::uint64_t start) const {
+  const auto resolved = resolve(path);
+  if (!resolved) {
+    if (isDirectory(path)) throw std::system_error(EISDIR, std::generic_category(), "open");
+    return nullptr;
+  }
+  const int descriptor = ::open(resolved->c_str(), O_RDONLY | O_CLOEXEC);
+  if (descriptor < 0) {
+    if (errno == ENOENT) return nullptr;
+    throw std::system_error(errno, std::generic_category(), "open");
+  }
+  try { return std::make_unique<FileReader>(descriptor, start); }
+  catch (...) { ::close(descriptor); throw; }
+}
 
 Vfs::Vfs(std::filesystem::path root) : root_(std::filesystem::canonical(root)) {
   const auto options = std::filesystem::directory_options::skip_permission_denied;

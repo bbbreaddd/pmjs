@@ -17,7 +17,7 @@ struct ImageExtent {
 inline std::optional<ImageExtent> checkedImageExtent(
     int width, int height,
     int maxDimension = 8192,
-    std::size_t maxAllocationBytes = 64 * 1024 * 1024) {
+    std::size_t maxAllocationBytes = 128 * 1024 * 1024) {
   if (width <= 0 || height <= 0) return std::nullopt;
   if (width > maxDimension || height > maxDimension) return std::nullopt;
 

@@ -7,6 +7,7 @@ const crypto = require('node:crypto');
 const os = require('node:os');
 const { performance } = require('node:perf_hooks');
 const { pipeline } = require('node:stream/promises');
+const { preparationFiles } = require('./preparation-files.cjs');
 
 const CACHE_VERSION = 1;
 const PROCESSOR_IDENTITY = { processor: 'lossless-images-v2', decoder: 'png-rgba-v1', pageSize: 2048 };
@@ -33,10 +34,15 @@ function safeSource(source) {
     !source.includes('\\') && !source.includes('\0') &&
     source.split('/').every(part => part && part !== '.' && part !== '..') && /\.png$/i.test(source);
 }
-function encryptedSource(source) {
-  return typeof source === 'string' && !source.includes('\\') && !source.includes('\0') &&
-    source.split('/').every(part => part && part !== '.' && part !== '..') &&
-    (/^img\/.+\.png_$/i.test(source) || /^audio\/.+\.(ogg|m4a)_$/i.test(source));
+function decryptedSource(source) {
+  if (typeof source !== 'string' || source.includes('\\') || source.includes('\0') ||
+      !source.split('/').every(part => part && part !== '.' && part !== '..')) return null;
+  const image = source.match(/^(img\/.+)\.(png_|rpgmvp)$/i);
+  if (image) return image[2].endsWith('_') ? source.slice(0, -1) : image[1] + '.png';
+  const audio = source.match(/^(audio\/.+)\.(ogg_|m4a_|rpgmvo|rpgmvm)$/i);
+  if (!audio) return null;
+  if (audio[2].endsWith('_')) return source.slice(0, -1);
+  return audio[1] + (audio[2].toLowerCase() === 'rpgmvo' ? '.ogg' : '.m4a');
 }
 function sourceFile(native, gameRoot, source) {
   if (typeof native.assets.sourcePath === 'function') {
@@ -50,10 +56,14 @@ async function encryptionSettings(native, gameRoot) {
   try {
     const file = sourceFile(native, gameRoot, 'data/System.json');
     if (!fs.existsSync(file)) return { images: false, audio: false, key: null };
-    const sourceIdentity = native.assets.sourceIdentity?.('data/System.json');
-    const data = await fsp.readFile(file);
-    if (sourceIdentity !== undefined && native.assets.sourceIdentity('data/System.json') !== sourceIdentity) {
-      throw new Error('encryption settings changed while reading');
+    let sourceIdentity = native.assets.sourceIdentity?.('data/System.json');
+    const read = () => native.fs?.readBytes ? Buffer.from(native.fs.readBytes('data/System.json')) : fsp.readFile(file);
+    const data = await read();
+    const current = native.assets.sourceIdentity?.('data/System.json');
+    if (sourceIdentity !== undefined && current !== sourceIdentity) {
+      if (!(await read()).equals(data) || native.assets.sourceIdentity('data/System.json') !== current)
+        throw new Error('encryption settings changed while reading');
+      sourceIdentity = current;
     }
     const system = JSON.parse(data);
     return { images: system.hasEncryptedImages === true, audio: system.hasEncryptedAudio === true,
@@ -165,7 +175,7 @@ async function discover(gameRoot, cacheRoot) {
     for (const entry of files.sort((a, b) => a.name.localeCompare(b.name, 'en'))) {
       const name = relative + '/' + entry.name;
       if (entry.isDirectory()) await visit(name);
-      else if (entry.isFile() && (safeSource(name) || encryptedSource(name))) result.push(name);
+      else if (entry.isFile() && (safeSource(name) || decryptedSource(name))) result.push(name);
     }
   }
   await visit('img');
@@ -175,9 +185,12 @@ async function discover(gameRoot, cacheRoot) {
 async function readJson(file) {
   try { return JSON.parse(await fsp.readFile(file, 'utf8')); } catch (_) { return null; }
 }
-async function writeJson(file, data) {
+async function writeJson(file, data, flush = true) {
   const handle = await fsp.open(file, 'wx');
-  try { await handle.writeFile(JSON.stringify(data) + '\n'); await handle.sync(); } finally { await handle.close(); }
+  try {
+    await handle.writeFile(JSON.stringify(data) + '\n');
+    if (flush) await handle.sync();
+  } finally { await handle.close(); }
 }
 const activeLeases = new Map();
 const installedLeases = new WeakMap();
@@ -254,34 +267,38 @@ async function acquireLock(cacheRoot, cancelled, onWait) {
     }
   }
 }
-async function cachedEntry(directory, key, sourceHash) {
-  const manifest = await readJson(path.join(directory, 'manifest.json'));
-  if (!manifest || manifest.version !== CACHE_VERSION || manifest.key !== key || manifest.sourceHash !== sourceHash ||
-      manifest.descriptorHash !== identity(manifest.descriptor)) return null;
-  if (manifest.decrypted !== undefined && !/^source\.(png|ogg|m4a)$/.test(manifest.decrypted)) return null;
-  if (manifest.descriptor !== null && !validDescriptor(manifest.descriptor)) return null;
-  const pages = manifest.descriptor ? manifest.descriptor.pages : [];
-  if (!manifest.outputs || Object.keys(manifest.outputs).length !== pages.length + (manifest.decrypted ? 1 : 0)) return null;
-  const outputs = [...pages, ...(manifest.decrypted ? [{ path: manifest.decrypted }] : [])];
-  for (const page of outputs) {
-    const file = path.join(directory, page.path);
-    const stat = await fsp.lstat(file).catch(() => null);
-    if (!stat || !stat.isFile() || !HASH.test(manifest.outputs[page.path]) ||
-        await hashFile(file) !== manifest.outputs[page.path]) return null;
-    const handle = await fsp.open(file, 'r');
-    const header = Buffer.alloc(24);
-    try { if ((await handle.read(header, 0, 24, 0)).bytesRead !== 24) return null; }
-    finally { await handle.close(); }
-    if (page.path === manifest.decrypted) {
-      if (!mediaHeader(header, path.extname(page.path))) return null;
-    } else if (!header.subarray(0, 8).equals(PNG) || header.readUInt32BE(16) !== page.width ||
-        header.readUInt32BE(20) !== page.height) return null;
-  }
-  return manifest;
+async function cachedEntry(directory, key, sourceHash, files) {
+  try {
+    return await files.validatedJson(path.join(directory, 'manifest.json'), async (manifest, reused) => {
+      if (!manifest || manifest.version !== CACHE_VERSION || manifest.key !== key || manifest.sourceHash !== sourceHash ||
+          manifest.descriptorHash !== identity(manifest.descriptor)) return false;
+      if (manifest.decrypted !== undefined && !/^source\.(png|ogg|m4a)$/.test(manifest.decrypted)) return false;
+      if (manifest.descriptor !== null && !validDescriptor(manifest.descriptor)) return false;
+      const pages = manifest.descriptor ? manifest.descriptor.pages : [];
+      if (!manifest.outputs || Object.keys(manifest.outputs).length !== pages.length + (manifest.decrypted ? 1 : 0)) return false;
+      const outputs = [...pages, ...(manifest.decrypted ? [{ path: manifest.decrypted }] : [])];
+      for (const page of outputs) {
+        const file = path.join(directory, page.path);
+        if (!HASH.test(manifest.outputs[page.path])) return false;
+        const checked = await files.inspect(file);
+        if (checked.hash !== manifest.outputs[page.path]) return false;
+        if (reused && checked.reused) continue;
+        const handle = await fsp.open(file, 'r');
+        const header = Buffer.alloc(24);
+        try { if ((await handle.read(header, 0, 24, 0)).bytesRead !== 24) return false; }
+        finally { await handle.close(); }
+        if (page.path === manifest.decrypted) {
+          if (!mediaHeader(header, path.extname(page.path))) return false;
+        } else if (!header.subarray(0, 8).equals(PNG) || header.readUInt32BE(16) !== page.width ||
+            header.readUInt32BE(20) !== page.height) return false;
+      }
+      return true;
+    });
+  } catch (_) { return null; }
 }
 
 async function prepareAssets({ gameRoot, cacheRoot, recipes = [], native, onProgress = () => {},
-  shouldCancel = () => false, logger = console,
+  shouldCancel = () => false, logger = console, verifyHashes = false,
   processorIdentity = (native && native.assets && native.assets.preparationVersion) || PROCESSOR_IDENTITY }) {
   const started = performance.now();
   const result = { enabled: true, total: 0, completed: 0, generated: 0, hits: 0, negativeHits: 0,
@@ -317,6 +334,16 @@ async function prepareAssets({ gameRoot, cacheRoot, recipes = [], native, onProg
     await fsp.mkdir(path.join(cacheRoot, 'entries'), { recursive: true });
     release = await acquireLock(cacheRoot, cancelled, () => report('wait'));
     if (!release) return result;
+    const files = await preparationFiles(cacheRoot, verifyHashes);
+    result.validation = files.stats;
+    async function refreshIdentity(source, expectedHash, previous) {
+      const current = native.assets.sourceIdentity?.(source);
+      if (current === undefined || current === previous) return current;
+      const file = sourceFile(native, gameRoot, source);
+      if (await files.hash(file) !== expectedHash || native.assets.sourceIdentity(source) !== current)
+        throw new Error('source changed while validating '+source);
+      return current;
+    }
     const indexName = 'index-' + identity(path.resolve(gameRoot)) + '.json';
     const recipeMap = new Map(recipes.map(recipe => [recipe.source, recipe]));
     const keys = [];
@@ -326,24 +353,25 @@ async function prepareAssets({ gameRoot, cacheRoot, recipes = [], native, onProg
       let stage;
       let sourcePhase = 'validate';
       try {
-        const encrypted = encryptedSource(source);
-        const logicalSource = encrypted ? source.slice(0, -1) : source;
+        const decryptedPath = decryptedSource(source);
+        const encrypted = decryptedPath !== null;
+        const logicalSource = decryptedPath || source;
         const extension = path.extname(logicalSource).toLowerCase();
         if (encrypted && (!settings.key || !(extension === '.png' ? settings.images : settings.audio) ||
             typeof native.assets.installDecrypted !== 'function')) throw new Error('cached decryption is unavailable');
         if (encrypted && fs.existsSync(path.join(gameRoot, logicalSource))) throw new Error('plaintext source path already exists');
         const file = sourceFile(native, gameRoot, source);
-        const sourceIdentity = typeof native.assets.sourceIdentity === 'function' ? native.assets.sourceIdentity(source) : undefined;
-        const sourceHash = await hashFile(file);
+        let sourceIdentity = typeof native.assets.sourceIdentity === 'function' ? native.assets.sourceIdentity(source) : undefined;
+        const checkedSource = await files.inspect(file), sourceHash = checkedSource.hash;
         if (sourceIdentity !== undefined && native.assets.sourceIdentity(source) !== sourceIdentity) throw new Error('source changed while hashing');
-        result.sourceBytes += (await fsp.stat(file)).size;
+        result.sourceBytes += checkedSource.size;
         let recipe = recipeMap.get(logicalSource);
         if (!recipe && !encrypted) recipe = await automaticRecipe(file, logicalSource, sourceHash);
         if (recipe && recipe.sourceHash !== sourceHash) throw new Error('recipe source hash changed');
         const key = identity({ version: CACHE_VERSION, processorIdentity, sourceHash, source, recipe: recipe || null,
           ...(encrypted ? { encryption: { version: 1, settingsHash: settings.hash }, characterLayout: 'mz-standard-v1' } : {}) });
         const directory = path.join(cacheRoot, 'entries', key);
-        let manifest = await cachedEntry(directory, key, sourceHash);
+        let manifest = await cachedEntry(directory, key, sourceHash, files);
         if (manifest && encrypted && manifest.decrypted !== 'source' + extension) manifest = null;
         if (manifest) {
           result.hits += 1;
@@ -371,20 +399,22 @@ async function prepareAssets({ gameRoot, cacheRoot, recipes = [], native, onProg
           for (const page of descriptor ? descriptor.pages : []) outputs[page.path] = await hashFile(path.join(stage, page.path));
           manifest = { version: CACHE_VERSION, key, sourceHash, descriptor, descriptorHash: identity(descriptor), outputs,
             ...(decrypted ? { decrypted } : {}) };
-          await writeJson(path.join(stage, 'manifest.json'), manifest);
-          if (!await cachedEntry(stage, key, sourceHash)) throw new Error('prepared output validation failed');
+          // Cache entries are disposable and hash-validated; locks, leases and indexes still flush.
+          await writeJson(path.join(stage, 'manifest.json'), manifest, false);
+          if (!await cachedEntry(stage, key, sourceHash, files)) throw new Error('prepared output validation failed');
           await fsp.rm(directory, { recursive: true, force: true });
           await fsp.rename(stage, directory);
           stage = null;
+          for (const output of Object.keys(outputs)) await files.hash(path.join(directory, output));
+          if (!await cachedEntry(directory, key, sourceHash, files)) throw new Error('published output validation failed');
           result.generated += 1;
         }
-        if (sourceIdentity !== undefined && native.assets.sourceIdentity(source) !== sourceIdentity) throw new Error('source changed during cache validation');
-        if (encrypted && settings.sourceIdentity !== undefined &&
-            native.assets.sourceIdentity('data/System.json') !== settings.sourceIdentity) throw new Error('encryption settings changed during preparation');
+        sourceIdentity = await refreshIdentity(source, sourceHash, sourceIdentity);
+        if (encrypted) settings.sourceIdentity = await refreshIdentity('data/System.json', settings.hash, settings.sourceIdentity);
         keys.push(key);
         if (manifest.decrypted) {
           result.decryptedEntries.push({ source, logicalSource, file: path.join(directory, manifest.decrypted),
-            sourceIdentity, settingsIdentity: settings.sourceIdentity });
+            sourceIdentity, sourceHash, settingsIdentity: settings.sourceIdentity });
           result.cacheBytes += (await fsp.stat(path.join(directory, manifest.decrypted))).size;
         }
         if (manifest.descriptor) {
@@ -404,6 +434,13 @@ async function prepareAssets({ gameRoot, cacheRoot, recipes = [], native, onProg
     if (!cancelled()) {
       report('install');
       if (cancelled()) return result;
+      if (result.decryptedEntries.length) {
+        settings.sourceIdentity = await refreshIdentity('data/System.json', settings.hash, settings.sourceIdentity);
+        for (const entry of result.decryptedEntries) {
+          entry.sourceIdentity = await refreshIdentity(entry.source, entry.sourceHash, entry.sourceIdentity);
+          entry.settingsIdentity = settings.sourceIdentity;
+        }
+      }
       const releaseCacheLease = await createLease(cacheRoot, keys, native);
       const previousLease = installedLeases.get(native.assets);
       installedLeases.set(native.assets, releaseCacheLease);
@@ -430,6 +467,7 @@ async function prepareAssets({ gameRoot, cacheRoot, recipes = [], native, onProg
         logger.warn(`[pmjs] prepared image index installed ${result.installed}/${result.prepared}; remaining images use ordinary loading`);
       }
       report('cleanup');
+      await files.save();
       const indexStage = path.join(cacheRoot, '.' + indexName + '-' + crypto.randomBytes(6).toString('hex'));
       await writeJson(indexStage, { version: CACHE_VERSION, keys });
       await fsp.rename(indexStage, path.join(cacheRoot, indexName));
@@ -462,4 +500,4 @@ async function prepareAssets({ gameRoot, cacheRoot, recipes = [], native, onProg
   return result;
 }
 
-module.exports = { prepareAssets, validRecipes, validDescriptor, PROCESSOR_IDENTITY };
+module.exports = { acquireLock, createLease, retainLeases, prepareAssets, validRecipes, validDescriptor, PROCESSOR_IDENTITY };

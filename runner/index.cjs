@@ -1,5 +1,7 @@
 'use strict';
 
+const { prepareMaps } = require('./map-preparation.cjs');
+
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
@@ -67,13 +69,20 @@ function resolveDefaults(input) {
   if (!assetPreparation || typeof assetPreparation !== 'object' || Array.isArray(assetPreparation)) {
     throw new Error('assetPreparation must be an object');
   }
-  assetPreparation = { enabled: true, ...assetPreparation,
+  assetPreparation = { enabled: true, maps: true, verifyHashes: false, ...assetPreparation,
     ...(typeof input.assetPreparation === 'object' ? input.assetPreparation : {}) };
   if (input.assetPreparation === 'on' || input.assetPreparation === 'off') {
     assetPreparation.enabled = input.assetPreparation === 'on';
   } else if (input.assetPreparation !== undefined && typeof input.assetPreparation !== 'object') {
     throw new Error('assetPreparation must be on or off');
   }
+  if (input.mapPreparation !== undefined) {
+    if (!['on', 'off'].includes(input.mapPreparation)) throw new Error('mapPreparation must be on or off');
+    assetPreparation.maps = input.mapPreparation === 'on';
+  }
+  if (typeof assetPreparation.maps !== 'boolean') throw new Error('assetPreparation.maps must be a boolean');
+  if (typeof assetPreparation.verifyHashes !== 'boolean') throw new Error('assetPreparation.verifyHashes must be a boolean');
+  if (!assetPreparation.enabled) assetPreparation.maps = false;
   if (input.assetCacheRoot !== undefined) assetPreparation.cacheRoot = path.resolve(input.assetCacheRoot);
   else if (assetPreparation.cacheRoot !== undefined) {
     assetPreparation.cacheRoot = path.resolve(configDirectory, assetPreparation.cacheRoot);
@@ -298,12 +307,19 @@ async function run(input) {
       try {
         preparation = await prepareAssets({ gameRoot: options.gameRoot,
           cacheRoot: options.assetPreparation.cacheRoot, recipes: options.assetPreparation.recipes, native,
+          verifyHashes: options.assetPreparation.verifyHashes,
           shouldCancel: () => cancelled,
           onProgress: progress => {
             current = progress;
             try { showProgress(); }
             catch (error) { failPreparation(error); }
           } });
+        if (!cancelled && options.assetPreparation.maps) {
+          preparation.maps = await prepareMaps({ gameRoot: options.gameRoot,
+            cacheRoot: options.assetPreparation.cacheRoot, native, width: options.width, height: options.height,
+            verifyHashes: options.assetPreparation.verifyHashes,
+            shouldCancel: () => cancelled, onProgress: progress => { current = progress; showProgress(); } });
+        }
       } catch (error) {
         throw preparationFailed ? preparationError : error;
       } finally { clearInterval(pump); }
@@ -311,12 +327,23 @@ async function run(input) {
       const { entries, decryptedEntries, releaseCacheLease, ...preparationStats } = preparation;
       native.assets.preparationStats = preparationStats;
       console.log(`[pmjs] asset preparation generated=${preparation.generated} hits=${preparation.hits} ` +
-        `decrypted=${preparation.decrypted} fallback=${preparation.fallback} duration_ms=${preparation.durationMs.toFixed(1)}`);
+        `decrypted=${preparation.decrypted} fallback=${preparation.fallback} ` +
+        `hashed_files=${preparation.validation?.hashedFiles || 0} hashed_bytes=${preparation.validation?.hashedBytes || 0} ` +
+        `reused_files=${preparation.validation?.reusedFiles || 0} duration_ms=${preparation.durationMs.toFixed(1)}`);
+      if (preparation.maps) {
+        const maps = preparation.maps;
+        console.log(`[pmjs] map preparation generated=${maps.generated} hits=${maps.hits} ` +
+          `compilation_hits=${maps.compilationHits} selected=${maps.selected} ` +
+          `hashed_files=${maps.validation?.hashedFiles || 0} hashed_bytes=${maps.validation?.hashedBytes || 0} ` +
+          `reused_files=${maps.validation?.reusedFiles || 0} duration_ms=${maps.durationMs.toFixed(1)}`);
+      }
       if (cancelled || preparation.cancelled) { native.runtime.quit(); return; }
     } else if (native.assets && typeof native.assets.installPrepared === 'function') {
       native.assets.installPrepared([]);
       if (native.assets.installDecrypted) native.assets.installDecrypted([]);
     }
+    native.assets.mapPreparationEnabled = options.assetPreparation.maps;
+    console.log(`[pmjs] map preparation=${options.assetPreparation.maps ? "on" : "off"}`);
     native.runtime.now = () => performance.now();
     native.runtime.platform = () => ({ platform: process.platform, arch: process.arch });
     native.runtime.loadScript = relative => {

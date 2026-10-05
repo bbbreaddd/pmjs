@@ -1,28 +1,8 @@
+var posixPath = globalThis.__pmjsBuiltinRequire('path').posix;
 function normalizePath(path) {
-  var text = String(path).replace(/\\/g, '/');
-  var absolute = text.charAt(0) === '/';
-  var trailingSeparator = text.length > 1 && text.charAt(text.length - 1) === '/';
-  var parts = text.split('/');
-  var result = [];
-  for (var index = 0; index < parts.length; index++) {
-    var part = parts[index];
-    if (!part || part === '.') continue;
-    if (part === '..') {
-      if (result.length) result.pop();
-    } else {
-      result.push(part);
-    }
-  }
-  var normalized = (absolute ? '/' : '') + result.join('/');
-  return trailingSeparator && normalized !== '/' ? normalized + '/' : normalized;
+  return posixPath.normalize(String(path).replace(/\\/g, '/'));
 }
-
-function dirname(path) {
-  var normalized = normalizePath(path);
-  var index = normalized.lastIndexOf('/');
-  if (index < 0) return '.';
-  return index === 0 ? '/' : normalized.slice(0, index);
-}
+function dirname(path) { return posixPath.dirname(path); }
 
 function gamePath(path) {
   var normalized = normalizePath(path);
@@ -65,24 +45,15 @@ function writablePath(path) {
   return normalized.indexOf('/save/') === 0 ? normalized.slice(6) : null;
 }
 
-var pathModule = {
-  sep: '/',
-  normalize: normalizePath,
-  dirname: dirname,
-  join: function() { return normalizePath(Array.prototype.join.call(arguments, '/')); },
-  resolve: function() { return normalizePath('/game/' + Array.prototype.join.call(arguments, '/')); },
-  basename: function(path, extension) {
-    var name = normalizePath(path).split('/').pop() || '';
-    return extension && name.slice(-extension.length) === extension
-      ? name.slice(0, -extension.length)
-      : name;
+var pathModule = Object.assign({}, posixPath, {
+  resolve: function() {
+    return posixPath.resolve.apply(posixPath, ['/game'].concat(Array.prototype.slice.call(arguments)));
   },
-  extname: function(path) {
-    var name = this.basename(path);
-    var index = name.lastIndexOf('.');
-    return index > 0 ? name.slice(index) : '';
+  relative: function(from, to) {
+    return posixPath.relative(pathModule.resolve(from), pathModule.resolve(to));
   }
-};
+});
+pathModule.posix = pathModule;
 
 function fsReadContents(path, options) {
   var writable = writablePath(path);
@@ -107,27 +78,80 @@ function fsReadContents(path, options) {
 }
 
 function FsReadStream(path, options) {
+  options = typeof options === 'string' ? { encoding: options } : options || {};
+  var start = options.start === undefined ? 0 : options.start;
+  var end = options.end === undefined ? Infinity : options.end;
+  function validateRange(value, name, infinity) {
+    var error;
+    if (typeof value !== 'number') {
+      error = new TypeError(name + ' must be a number'); error.code = 'ERR_INVALID_ARG_TYPE';
+    } else if (!(infinity && value === Infinity) && (!Number.isSafeInteger(value) || value < 0)) {
+      error = new RangeError(name + ' must be a non-negative safe integer'); error.code = 'ERR_OUT_OF_RANGE';
+    }
+    if (error) throw error;
+  }
+  validateRange(start, 'start', false);
+  validateRange(end, 'end', true);
+  if (start > end) {
+    var rangeError = new RangeError('start must not exceed end');
+    rangeError.code = 'ERR_OUT_OF_RANGE'; throw rangeError;
+  }
   var Readable = globalThis.__pmjsBuiltinRequire('stream').Readable;
-  var stream = new Readable({ read: function() {},
-    encoding: typeof options === 'string' ? options : options && options.encoding });
+  var reader, demand = 0, queued = false, position = start;
+  function scheduleRead() {
+    if (!reader || !demand || queued || stream.destroyed) return;
+    queued = true;
+    PMJS.tasks.enqueue(function() {
+      queued = false;
+      if (stream.destroyed) return;
+      var size = Math.min(demand, end === Infinity ? Infinity : end - position + 1);
+      demand = 0;
+      var contents;
+      try { contents = reader.read(size); }
+      catch (error) { stream.destroy(error); return; }
+      position += contents.byteLength;
+      if (!contents.byteLength) { stream.push(null); return; }
+      stream.push(contents);
+      if (!stream.destroyed && position > end) stream.push(null);
+    });
+  }
+  var stream = new Readable({
+    encoding: options.encoding,
+    highWaterMark: options.highWaterMark === undefined ? 64 * 1024 : options.highWaterMark,
+    read: function(size) { demand = size || 1; scheduleRead(); },
+    destroy: function(error, callback) {
+      try { if (reader) reader.close(); }
+      catch (closeError) { error = error || closeError; }
+      reader = null;
+      callback(error);
+    }
+  });
   stream.path = path;
   PMJS.tasks.enqueue(function() {
     if (stream.destroyed) return;
-    var contents;
     try {
-      contents = fsReadContents(path);
-    } catch (error) {
-      stream.destroy(error);
-      return;
-    }
+      var writable = writablePath(path);
+      var host = writable !== null && NativeHost.storage ? NativeHost.storage : NativeHost.fs;
+      var resolved = writable !== null && NativeHost.storage ? writable : gameReadPath(path);
+      reader = host.openRead(resolved, start);
+      var missingFiles = PMJS.config.missingTextFiles || {};
+      if (!reader && writable !== null && Object.prototype.hasOwnProperty.call(missingFiles, writable)) {
+        var bytes = Buffer.from(String(missingFiles[writable]), 'utf8'), offset = start;
+        reader = { read: function(size) {
+          var chunk = bytes.subarray(offset, offset + size); offset += chunk.length; return chunk;
+        }, close: function() { bytes = null; } };
+      }
+      if (!reader) {
+        var error = new Error('ENOENT: ' + path); error.code = 'ENOENT'; throw error;
+      }
+    } catch (error) { stream.destroy(error); return; }
     stream.emit('open', 0);
     stream.emit('ready');
-    if (stream.destroyed) return;
-    stream.push(contents);
-    if (!stream.destroyed) stream.push(null);
+    scheduleRead();
   });
   return stream;
 }
+
 var fsModule = {
   existsSync: function(path) {
     var writable = writablePath(path);

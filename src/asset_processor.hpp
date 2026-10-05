@@ -40,6 +40,8 @@ struct PreparedAsset {
   std::vector<PreparedAssetCell> cells;
   std::vector<PreparedAssetPage> pages;
 };
+void writePreparedPng(const std::filesystem::path& path, int width, int height,
+                      const std::vector<std::uint8_t>& bytes);
 PreparedAsset prepareAssetImage(const std::filesystem::path& source,
                                const std::filesystem::path& staging,
                                const AssetRecipe& recipe = {});

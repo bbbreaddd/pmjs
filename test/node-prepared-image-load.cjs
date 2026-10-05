@@ -182,7 +182,7 @@ async function main() {
   install(oversized);
   const large = await native.images.loadAsync(oversized.source, true);
   assert.deepEqual([large.width, large.height], [4096, 4097]);
-  assert.equal(entry(large).cpuBytes, 0, 'CPU retention exceeded the allocation limit');
+  assert.equal(entry(large).cpuBytes, 4096 * 4097 * 4, 'explicit large CPU retention lost its pixels');
   assert.equal(entry(large).gpuBytes, 0);
   native.images.release(large.handle);
   console.log('[pmjs-prepared-image-load] worker loading, snapshots, coalescing, CPU retention and fallback passed');
