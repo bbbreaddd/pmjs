@@ -282,6 +282,48 @@ test('MV WebAudio delegates encrypted audio to the MV Decrypter', async () => {
   assert.equal(objectUrlsCreated, 0, 'MV decrypted bytes should go directly to native audio');
 });
 
+test('MV prepared audio loads its logical path and invalidated cache entries use guest decryption', async () => {
+  let cached = true;
+  const requests = [];
+  const paths = [];
+  let decryptions = 0;
+  function Request() {
+    this.status = 200;
+    this.response = Uint8Array.from([9, 8, 7]).buffer;
+  }
+  Request.prototype.open = function(_method, path) { requests.push(path); };
+  Request.prototype.send = function() { this.onload(); };
+  const context = contextFor({ hasEncryptedAudio: true,
+    extToEncryptExt: path => path.replace(/\.ogg$/, '.rpgmvo'),
+    decryptArrayBuffer(buffer) { decryptions++; return buffer; }
+  }, Request);
+  context.NativeHost.assets = { hasDecrypted(path) {
+    assert.equal(path, 'audio/bgm/a b.ogg');
+    return cached;
+  } };
+  context.NativeHost.media.loadAudio = (path, options) => {
+    paths.push([path, options.intent]);
+    return { handle: 5, duration: 1 };
+  };
+  const url = 'file:///game/audio/bgm/a%20b.ogg?version=1';
+  const prepared = new context.WebAudio(url, 'music');
+  assert.equal(prepared.url, url);
+  assert.equal(prepared.isReady(), true);
+  assert.deepEqual(paths, [['audio/bgm/a b.ogg', 'music']]);
+  assert.equal(requests.length, 0);
+  assert.equal(decryptions, 0);
+  prepared.clear();
+
+  cached = false;
+  const ordinary = new context.WebAudio(url, 'music');
+  await settle();
+  assert.equal(ordinary.isReady(), true);
+  assert.deepEqual(requests, ['audio/bgm/a b.rpgmvo']);
+  assert.equal(decryptions, 1);
+  assert.deepEqual(Array.from(context.loadedBytes[0]), [9, 8, 7]);
+  ordinary.clear();
+});
+
 test('clearing an in-flight object URL load skips native decoding', async () => {
   const context = contextFor({ hasEncryptedAudio: false });
   const url = context.URL.createObjectURL(new Blob([Uint8Array.from([1])]));

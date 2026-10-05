@@ -4,6 +4,14 @@ namespace pmjs::addon {
 namespace {
 using Clock = std::chrono::steady_clock;
 
+bool browserVideoColor(napi_env env, const std::vector<napi_value>& args) {
+  if (args.size() < 2) return false;
+  const auto profile = asString(env, args[1]);
+  if (profile == "ffmpeg") return false;
+  if (profile == "chromium65") return true;
+  throw std::runtime_error("unknown video color profile: " + profile);
+}
+
 bool videoTelemetryEnabled() {
   const char* enabled = std::getenv("PMJS_VIDEO_TELEMETRY");
   return enabled && std::string(enabled) == "1";
@@ -104,6 +112,7 @@ struct AsyncVideoLoad {
   napi_async_work work = nullptr;
   napi_deferred deferred = nullptr;
   std::filesystem::path path;
+  bool browserColor = false;
   const bool telemetryEnabled = videoTelemetryEnabled();
   Clock::time_point queuedAt = telemetryEnabled ? Clock::now() : Clock::time_point{};
   std::unique_ptr<pmjs::VideoDecoderSession> video;
@@ -121,7 +130,7 @@ void executeVideoLoad(napi_env, void* opaque) noexcept {
   const auto workerStartedAt = load->telemetryEnabled ? Clock::now() : Clock::time_point{};
   try {
     auto phaseStartedAt = load->telemetryEnabled ? Clock::now() : Clock::time_point{};
-    load->video = std::make_unique<pmjs::VideoDecoderSession>(load->path, load->telemetryEnabled);
+    load->video = std::make_unique<pmjs::VideoDecoderSession>(load->path, load->telemetryEnabled, load->browserColor);
     if (load->telemetryEnabled) {
       load->videoOpenMs = std::chrono::duration<double, std::milli>(
         Clock::now() - phaseStartedAt).count();
@@ -207,6 +216,7 @@ void completeVideoLoad(napi_env env, napi_status status, void* opaque) {
     video->duration = video->decoder->info().duration;
     video->sourceFps = video->decoder->info().videoFrameRate;
     video->timestamp = load->firstFrame->timestamp;
+    video->browser420 = std::move(load->firstFrame->browser420);
     video->recycle(std::move(load->firstFrame->rgba));
     videoHandle = value->nextVideo++;
     if (!videoHandle) videoHandle = value->nextVideo++;
@@ -291,12 +301,13 @@ napi_value loadAudio(napi_env env, napi_callback_info info) try {
 }
 
 napi_value loadVideoAsync(napi_env env, napi_callback_info info) try {
-  auto args = arguments(env, info, 1);
+  auto args = arguments(env, info, 2);
   State& value = host(env);
   const auto path = value.vfs.resolve(asString(env, args.at(0)));
   if (!path) throw std::runtime_error("video path is outside the game root");
   auto load = std::make_unique<AsyncVideoLoad>();
   load->path = *path;
+  load->browserColor = browserVideoColor(env, args);
   napi_value promise;
   check(env, napi_create_promise(env, &load->deferred, &promise),
         "cannot create video load promise");
@@ -435,12 +446,12 @@ napi_value setMasterVolume(napi_env env, napi_callback_info info) try {
 }
 
 napi_value loadVideo(napi_env env, napi_callback_info info) try {
-  auto a = arguments(env, info, 1); State& value = host(env);
+  auto a = arguments(env, info, 2); State& value = host(env);
   const auto path = value.vfs.resolve(asString(env, a.at(0)));
   if (!path) throw std::runtime_error("video path is outside the game root");
   std::string error;
   const bool telemetry = videoTelemetryEnabled();
-  auto decoder = std::make_unique<pmjs::VideoDecoderSession>(*path, telemetry);
+  auto decoder = std::make_unique<pmjs::VideoDecoderSession>(*path, telemetry, browserVideoColor(env, a));
   auto frame = decoder->frame(0.0, &error);
   if (!frame) throw std::runtime_error(error.empty() ? "video decode failed" : error);
   const auto image = value.images.createRgba(frame->width, frame->height,
@@ -454,8 +465,10 @@ napi_value loadVideo(napi_env env, napi_callback_info info) try {
   video->image = image->handle;
   video->duration = duration; video->sourceFps = sourceFps;
   video->timestamp = frame->timestamp;
+  video->browser420 = std::move(frame->browser420);
   video->recycle(std::move(frame->rgba));
   value.videos.emplace(handle, std::move(video));
+  syncExternalMemory(env);
   napi_value result; napi_create_object(env, &result);
   napi_set_named_property(env, result, "handle", uint32(env, handle));
   napi_set_named_property(env, result, "image", uint32(env, image->handle));
@@ -486,12 +499,23 @@ napi_value updateVideo(napi_env env, napi_callback_info info) try {
       const auto started = video.telemetryEnabled ? Clock::now() : Clock::time_point{};
       if (!value.images.updateRgba(video.image, frame->rgba.data()))
         throw std::runtime_error("video texture update failed");
+      video.browser420 = std::move(frame->browser420);
+      if (video.canvasImage) {
+        const std::uint8_t* pixels = frame->rgba.data();
+        if (video.browser420) {
+          video.browser420->convert(video.canvasRgba, true);
+          pixels = video.canvasRgba.data();
+        }
+        if (!value.images.updateRgba(video.canvasImage, pixels))
+          throw std::runtime_error("video canvas texture update failed");
+      }
       if (video.telemetryEnabled) {
         if (frame->timestamp + 0.1 < timestamp) ++video.lateFrames;
         video.textureUploadMs += std::chrono::duration<double, std::milli>(
           Clock::now() - started).count();
         ++video.uploadedFrames;
-        video.uploadBytes += static_cast<std::uint64_t>(frame->width) * frame->height * 4U;
+        video.uploadBytes += static_cast<std::uint64_t>(frame->width) * frame->height * 4U *
+          (video.canvasImage ? 2U : 1U);
       }
       video.timestamp = frame->timestamp;
     } else if (video.telemetryEnabled) ++video.staleReadyDrops;
@@ -504,12 +528,35 @@ napi_value updateVideo(napi_env env, napi_callback_info info) try {
   napi_throw_error(env, nullptr, error.what()); return nullptr;
 }
 
+// The canvas/texture consumer requests its own conversion lazily. The image
+// remains video-owned; renderers can retain it under the ordinary image contract.
+napi_value videoCanvasImage(napi_env env, napi_callback_info info) try {
+  auto a = arguments(env, info, 1); State& value = host(env);
+  const auto found = value.videos.find(asUint32(env, a.at(0)));
+  if (found == value.videos.end()) throw std::runtime_error("invalid video handle");
+  auto& video = *found->second;
+  if (!video.browser420) return uint32(env, video.canvasImage ? video.canvasImage : video.image);
+  if (!video.canvasImage) {
+    video.browser420->convert(video.canvasRgba, true);
+    const auto image = value.images.createRgba(video.browser420->width,
+      video.browser420->height, video.canvasRgba.data());
+    if (!image) throw std::runtime_error("cannot allocate video canvas texture");
+    video.canvasImage = image->handle;
+    syncExternalMemory(env);
+  }
+  return uint32(env, video.canvasImage);
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what()); return nullptr;
+}
+
 napi_value releaseVideo(napi_env env, napi_callback_info info) try {
   auto a = arguments(env, info, 1); State& value = host(env);
   const auto found = value.videos.find(asUint32(env, a.at(0)));
   if (found == value.videos.end()) return boolean(env, false);
   value.images.release(found->second->image);
+  if (found->second->canvasImage) value.images.release(found->second->canvasImage);
   value.videos.erase(found);
+  syncExternalMemory(env);
   return boolean(env, true);
 } catch (const std::exception& error) {
   napi_throw_type_error(env, nullptr, error.what()); return nullptr;
@@ -534,6 +581,7 @@ void registerMediaBindings(napi_env env, napi_value exports) {
   method(env, media, "loadVideo", loadVideo);
   method(env, media, "loadVideoAsync", loadVideoAsync);
   method(env, media, "updateVideo", updateVideo);
+  method(env, media, "videoCanvasImage", videoCanvasImage);
   method(env, media, "releaseVideo", releaseVideo);
   check(env, napi_set_named_property(env, exports, "media", media), "cannot export media module");
 }

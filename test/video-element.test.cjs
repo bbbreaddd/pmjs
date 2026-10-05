@@ -16,12 +16,12 @@ const mvMainLoopSource = fs.readFileSync(
   path.resolve(__dirname, '../js/pmjs-mv/main-loop.js'), 'utf8');
 
 function makeHarness(videoResource, runtimeEnv) {
-  const calls = { loadVideo: [], releaseVideo: [], updateVideo: [] };
+  const calls = { loadVideo: [], loadVideoProfiles: [], releaseVideo: [], updateVideo: [] };
   const telemetry = [];
   let nextVideo = 10;
   const context = {
     console: { log(line) { telemetry.push(String(line)); } },
-    PMJS: {},
+    PMJS: { images: { preparedTileSet: '' } },
     performance: { now() { return 1000; } },
     pmjsGameConfig: {},
     nativeWindowState: { focused: true, visible: true },
@@ -32,8 +32,9 @@ function makeHarness(videoResource, runtimeEnv) {
       runtime: { env() { return runtimeEnv || ''; } },
       canvas: {},
       media: {
-        loadVideoAsync(source) {
+        loadVideoAsync(source, profile) {
           calls.loadVideo.push(source);
+          calls.loadVideoProfiles.push(profile);
           const handle = nextVideo++;
           const result = { handle, width: 960, height: 720, duration: 12 };
           result[videoResource || 'image'] = 500 + handle;
@@ -120,7 +121,7 @@ function makeRendererHarness() {
     style: { opacity: 0.4 },
     videoWidth: 816,
     videoHeight: 624,
-    _pmjsNativeTextureSource() { return { handle: 42 }; }
+    _pmjsNativePresentationSource() { return { handle: 42 }; }
   };
   context.Graphics = {
     _canvas: { style: { opacity: 0 } },
@@ -330,7 +331,7 @@ test('presentation layers synchronize separately after scene render', () => {
   assert.deepEqual(calls[1], ['presentation', 0, 42, 0.4, 0, 1]);
 
   calls.length = 0;
-  context.Graphics._video._pmjsNativeTextureSource = () => null;
+  context.Graphics._video._pmjsNativePresentationSource = () => null;
   context.Graphics._video.style.opacity = 1;
   render.call(renderer, {});
   assert.deepEqual(calls.map(call => call[0]), ['stage']);
@@ -340,7 +341,7 @@ test('presentation layers synchronize separately after scene render', () => {
   calls.length = 0;
   context.Graphics._canvas.style.opacity = 0.25;
   context.Graphics._video.style.opacity = '';
-  context.Graphics._video._pmjsNativeTextureSource = () => ({ handle: 42 });
+  context.Graphics._video._pmjsNativePresentationSource = () => ({ handle: 42 });
   render.call(renderer, {});
   assert.deepEqual(calls.map(call => call[0]), ['stage']);
   syncPresentation.call(renderer);
@@ -360,7 +361,7 @@ test('MV movie visibility transitions preserve separate presentation layers', ()
   const setVisibility = (canvasOpacity, videoOpacity, hasFrame) => {
     context.Graphics._canvas.style.opacity = canvasOpacity;
     context.Graphics._video.style.opacity = videoOpacity;
-    context.Graphics._video._pmjsNativeTextureSource = () =>
+    context.Graphics._video._pmjsNativePresentationSource = () =>
       hasFrame ? { handle: 42 } : null;
     calls.length = 0;
     render.call(renderer, {});
@@ -595,4 +596,37 @@ test('video owner keeps a same-source replay started by its ended handler', asyn
   assert.equal(video.paused, false);
   context.PMJS.web.video.update();
   assert.equal(calls.updateVideo.at(-1)[0], 10);
+});
+
+
+test('video routes canvas and presentation separately without changing playback', async () => {
+  const { context, calls } = makeHarness();
+  context.NativeHost.media.videoCanvasImage = handle => handle + 900;
+  const video = context.document.createElement('video');
+  video.src = 'movies/Opening.mp4';
+  context.PMJS.tasks.drain();
+  await Promise.resolve();
+  assert.deepEqual(calls.loadVideoProfiles, ['chromium65']);
+  const presentation = video._pmjsNativePresentationSource();
+  const canvas = video._pmjsNativeTextureSource();
+  assert.equal(presentation.handle, 510);
+  assert.equal(canvas.handle, 910);
+  assert.equal(video._pmjsNativeTextureSource(), canvas);
+  assert.equal(video._pmjsNativePresentationSource(), presentation);
+  assert.equal(video.currentTime, 0);
+  assert.equal(video.paused, true);
+  video.src = '';
+  assert.equal(video._pmjsNativeTextureSource(), null);
+  assert.equal(video._pmjsNativePresentationSource(), null);
+  assert.deepEqual(calls.releaseVideo, [10]);
+});
+
+test('video honours the explicit ordinary colour profile', async () => {
+  const { context, calls } = makeHarness();
+  context.PMJS.config = { videoColorProfile: 'ffmpeg' };
+  const video = context.document.createElement('video');
+  video.src = 'movies/Opening.mp4';
+  context.PMJS.tasks.drain();
+  await Promise.resolve();
+  assert.deepEqual(calls.loadVideoProfiles, ['ffmpeg']);
 });

@@ -109,6 +109,23 @@ test('MZ wiring composes a voice behind MZ WebAudio semantics', () => {
   assert.deepEqual(context.NativeHost.media.calls.intents, ['music', 'effect', 'ambient', 'jingle']);
 });
 
+test('MZ plaintext audio overrides encrypted loading without masking missing files', () => {
+  const context = contextFor({ encrypted: true });
+  const paths = [];
+  context.NativeHost.fs = { exists: value => value === 'audio/se/plain.ogg' };
+  context.NativeHost.media.loadAudio = value => { paths.push(value); return { handle: 81, duration: 1 }; };
+  const plain = context.AudioManager.createBuffer('se/', 'plain');
+  assert.equal(plain.isReady(), true);
+  assert.deepEqual(paths, ['audio/se/plain.ogg']);
+  assert.equal(context.pendingRequests.length, 0);
+  const encrypted = context.AudioManager.createBuffer('se/', 'encrypted');
+  assert.equal(encrypted.isReady(), false);
+  assert.equal(context.pendingRequests[0].path, 'audio/se/encrypted.ogg_');
+  context.pendingRequests[0].onload();
+  assert.equal(encrypted.isReady(), true);
+  plain.destroy(); encrypted.destroy();
+});
+
 test('MZ play-before-load reports logical playback immediately', () => {
   const context = contextFor({ encrypted: true });
   const buffer = context.playSe({ name: 'Hit', volume: 90, pitch: 100, pan: 0 });

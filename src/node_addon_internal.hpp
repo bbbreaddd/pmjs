@@ -166,7 +166,9 @@ struct State {
     std::size_t rawQueueDepth = 0;
     std::thread worker;
     bool shuttingDown = false;
-    pmjs::ImageHandle image = 0;
+    pmjs::ImageHandle image = 0, canvasImage = 0;
+    std::shared_ptr<const pmjs::VideoYuv420> browser420;
+    std::vector<std::uint8_t> canvasRgba;
     const bool telemetryEnabled;
     double duration = 0.0;
     double timestamp = -1.0;

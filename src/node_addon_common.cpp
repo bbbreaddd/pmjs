@@ -125,12 +125,22 @@ State& host(napi_env env) {
 // into private buffers, so their totals can be reported without locking.
 void syncExternalMemory(napi_env env) {
   State& value = host(env);
+  std::size_t videoColorBytes = 0;
+  for (const auto& [handle, video] : value.videos) {
+    (void)handle;
+    if (video->browser420) videoColorBytes += video->browser420->planes.capacity();
+    videoColorBytes += video->canvasRgba.capacity();
+  }
   const std::int64_t current =
       static_cast<std::int64_t>(value.images.gpuBytes()) +
       static_cast<std::int64_t>(value.images.cpuBytes()) +
+      static_cast<std::int64_t>(value.images.tileMetadataBytes()) +
       static_cast<std::int64_t>(value.canvases.cpuBytes()) +
       static_cast<std::int64_t>(value.renderer.renderTargetBytes()) +
-      static_cast<std::int64_t>(value.core.media().sampleMemoryBytes());
+      static_cast<std::int64_t>(value.renderer.tileGeometryGpuBytes()) +
+      static_cast<std::int64_t>(value.renderer.tileGeometryCpuBytes()) +
+      static_cast<std::int64_t>(value.core.media().sampleMemoryBytes()) +
+      static_cast<std::int64_t>(videoColorBytes);
   const std::int64_t delta = current - value.reportedExternalBytes;
   if (delta == 0) return;
   std::int64_t adjusted = 0;

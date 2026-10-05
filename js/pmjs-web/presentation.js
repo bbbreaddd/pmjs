@@ -29,7 +29,7 @@
     canvas._pmjsPresentationRect = { left: geometry.viewportX / ratioX,
       top: geometry.viewportY / ratioY, width: geometry.viewportWidth / ratioX,
       height: geometry.viewportHeight / ratioY };
-    var videoSource = video && video._pmjsNativeTextureSource();
+    var videoSource = video && video._pmjsNativePresentationSource();
     NativeHost.render.setPresentationLayers(opacity(canvas, 1),
       videoSource ? videoSource.handle : 0, video ? opacity(video, 0) : 0,
       overlay ? overlay._ensureNativeCanvas().handle : 0, overlay ? opacity(overlay, 1) : 0);

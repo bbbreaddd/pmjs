@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+#include "video_color.hpp"
+
 namespace pmjs {
 
 struct MediaInfo {
@@ -36,6 +38,7 @@ struct VideoFrame {
   int height = 0;
   double timestamp = 0.0;
   std::vector<std::uint8_t> rgba;
+  std::shared_ptr<const VideoYuv420> browser420;
 };
 
 struct VideoDecodeStats {
@@ -75,7 +78,8 @@ class AudioDecoderSession {
 
 class VideoDecoderSession {
  public:
-  explicit VideoDecoderSession(const std::filesystem::path& path, bool telemetry = false);
+  explicit VideoDecoderSession(const std::filesystem::path& path, bool telemetry = false,
+                               bool browserColor = false);
   ~VideoDecoderSession();
   VideoDecoderSession(const VideoDecoderSession&) = delete;
   VideoDecoderSession& operator=(const VideoDecoderSession&) = delete;

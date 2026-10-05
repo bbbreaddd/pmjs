@@ -53,10 +53,11 @@ test('web presentation owns CSS geometry and hit testing without an engine', () 
   assert.equal(presentation.pointerTarget(25, 25), canvas);
 });
 
-test('web presentation resolves video through its texture capability and borrows overlay ownership', () => {
+test('web presentation resolves video through its presentation capability and borrows overlay ownership', () => {
   const { context, canvas, layers, presentation } = setup();
   let source = { handle: 42 };
-  const video = { style: { opacity: '0.75' }, _pmjsNativeTextureSource: () => source };
+  const video = { style: { opacity: '0.75' }, _pmjsNativePresentationSource: () => source,
+    _pmjsNativeTextureSource() { throw new Error('canvas conversion requested for presentation'); } };
   Object.defineProperty(video, '_nativeImage', { get() { throw new Error('private representation read'); } });
   const overlay = context.document.createElement('canvas');
   canvas.style.opacity = '0.5';

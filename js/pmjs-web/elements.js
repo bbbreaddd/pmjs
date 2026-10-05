@@ -274,7 +274,7 @@ function videoTelemetry(event, details) {
 function VideoElement() {
   GenericElement.call(this, 'video');
   this._src = ''; this._media = null;
-  this._nativeImage = null; this._nativeCanvas = null;
+  this._nativeImage = null; this._nativeCanvas = null; this._presentationImage = null;
   this._currentTime = 0; this._startedAt = 0; this._startOffset = 0;
   this.duration = 0; this.videoWidth = 0; this.videoHeight = 0;
   this.width = 0; this.height = 0; this._volume = 1; this._playbackRate = 1;
@@ -356,7 +356,7 @@ VideoElement.prototype._releaseMedia = function() {
   if (this._media) NativeHost.media.releaseVideo(this._media.handle);
   if (this._audio) NativeHost.media.releaseAudio(this._audio.handle);
   this._media = null; this._audio = null;
-  this._nativeImage = null; this._nativeCanvas = null;
+  this._nativeImage = null; this._nativeCanvas = null; this._presentationImage = null;
   this.readyState = this.HAVE_NOTHING;
   this.duration = 0; this.videoWidth = 0; this.videoHeight = 0;
   this._currentTime = 0; this._startOffset = 0; this._decodedTime = undefined;
@@ -365,7 +365,16 @@ VideoElement.prototype._releaseMedia = function() {
   if (index >= 0) nativeVideos.splice(index, 1);
 };
 VideoElement.prototype._pmjsNativeTextureSource = function() {
+  if (this._media && typeof NativeHost.media.videoCanvasImage === 'function') {
+    var handle = NativeHost.media.videoCanvasImage(this._media.handle);
+    if (!this._nativeImage || this._nativeImage.handle !== handle) {
+      this._nativeImage = { handle: handle, width: this.videoWidth, height: this.videoHeight };
+    }
+  }
   return this._nativeImage || this._nativeCanvas;
+};
+VideoElement.prototype._pmjsNativePresentationSource = function() {
+  return this._presentationImage || this._nativeImage || this._nativeCanvas;
 };
 function videoAbortError(message) {
   var error = new Error(message);
@@ -409,7 +418,8 @@ VideoElement.prototype._loadNow = function(generation) {
       queueMs: this._loadRequestedAt === undefined ? null :
         this._nativeLoadStartedAt - this._loadRequestedAt
     });
-    loadPromise = NativeHost.media.loadVideoAsync(path);
+    loadPromise = NativeHost.media.loadVideoAsync(path,
+      PMJS.config && PMJS.config.videoColorProfile || 'chromium65');
   } catch (error) {
     this._failLoad(generation, error);
     return;
@@ -425,6 +435,7 @@ VideoElement.prototype._loadNow = function(generation) {
     video._audio = media.audio ? { handle: media.audio } : null;
     var nativeTexture = { handle: media.image, width: media.width, height: media.height };
     video._nativeImage = nativeTexture;
+    video._presentationImage = nativeTexture;
     video.videoWidth = media.width; video.videoHeight = media.height;
     if (!video.width) video.width = video.videoWidth;
     if (!video.height) video.height = video.videoHeight;
@@ -566,7 +577,7 @@ PMJS.web.video = {
   },
   diagnostics: function() {
     return nativeVideos.map(function(video) {
-      var source = video._pmjsNativeTextureSource();
+      var source = video._pmjsNativePresentationSource();
       return { media: video._media && video._media.handle,
         image: source && source.handle, readyState: video.readyState,
         paused: video.paused };
@@ -589,6 +600,7 @@ function NativeImage() {
   this._nativeCanvas = null;
   this._pmjsCanvasOwner = null;
   this._loadGeneration = 0;
+  this._pmjsPreparedTileSet = PMJS.images.preparedTileSet || "";
   this._pmjsLoadFailed = false;
   this._pmjsLoadError = null;
 }
@@ -634,6 +646,7 @@ Object.defineProperty(NativeImage.prototype, 'src', {
       .replace(/^file:\/\/\/game\//, '')
       .replace(/^\.\//, '');
     var image = this;
+    var preparedTileSet = this._pmjsPreparedTileSet;
     image.complete = false;
     image._pmjsLoadFailed = false;
     image._pmjsLoadError = null;
@@ -688,8 +701,8 @@ Object.defineProperty(NativeImage.prototype, 'src', {
       pendingNativeImageLoads++;
       new Promise(function(resolve) {
         resolve(typeof loadAsync === 'function'
-          ? loadAsync.call(loader, relativePath, retainCpuPixels)
-          : load.call(loader, relativePath, retainCpuPixels));
+          ? loadAsync.call(loader, relativePath, retainCpuPixels, preparedTileSet)
+          : load.call(loader, relativePath, retainCpuPixels, preparedTileSet));
       }).then(function(result) {
         var loaded = trackNativeResource(result, 'image');
         if (generation !== image._loadGeneration) {

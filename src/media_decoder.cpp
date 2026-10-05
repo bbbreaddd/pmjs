@@ -304,8 +304,8 @@ std::optional<DecodedAudio> MediaDecoder::decodeAudio(
 }
 
 struct VideoDecoderSession::Impl {
-  explicit Impl(const std::filesystem::path& path, bool telemetry)
-      : telemetryEnabled(telemetry) {
+  explicit Impl(const std::filesystem::path& path, bool telemetry, bool browserColor)
+      : telemetryEnabled(telemetry), browserColorEnabled(browserColor) {
     std::string error;
     format = open(path, &error);
     if (!format) throw std::runtime_error(error);
@@ -403,28 +403,52 @@ struct VideoDecoderSession::Impl {
       return std::nullopt;
     }
     const int width = extent->width, height = extent->height;
-    if (!scaler || scalerWidth != width || scalerHeight != height ||
-        scalerFormat != decoded->format) {
-      scaler.reset(sws_getContext(width, height,
-        static_cast<AVPixelFormat>(decoded->format), width, height,
-        AV_PIX_FMT_RGBA, SWS_BILINEAR, nullptr, nullptr, nullptr));
-      scalerWidth = width; scalerHeight = height; scalerFormat = decoded->format;
-    }
-    if (!scaler) {
-      av_frame_unref(decoded.get());
-      fail(error, "cannot initialize video conversion");
-      return std::nullopt;
-    }
     const auto rgbaBytes = static_cast<std::size_t>(width) * height * 4U;
     if (telemetryEnabled && rgba.capacity() < rgbaBytes) ++stats.rgbaAllocations;
     rgba.resize(rgbaBytes);
-    VideoFrame output{width, height, timestamp, std::move(rgba)};
+    VideoFrame output{width, height, timestamp, std::move(rgba), {}};
     std::uint8_t* planes[] = {output.rgba.data(), nullptr, nullptr, nullptr};
     int strides[] = {width * 4, 0, 0, 0};
     const auto convertStarted = telemetryEnabled ? std::chrono::steady_clock::now()
       : std::chrono::steady_clock::time_point{};
-    sws_scale(scaler.get(), decoded->data, decoded->linesize, 0, height,
-              planes, strides);
+    const bool browser420 = browserColorEnabled && decoded->format == AV_PIX_FMT_YUV420P &&
+      width % 2 == 0 && height % 2 == 0 &&
+      ((decoded->colorspace == AVCOL_SPC_UNSPECIFIED && codec->codec_id == AV_CODEC_ID_VP8) ||
+       decoded->colorspace == AVCOL_SPC_BT470BG ||
+       decoded->colorspace == AVCOL_SPC_SMPTE170M) &&
+      (decoded->color_range == AVCOL_RANGE_UNSPECIFIED || decoded->color_range == AVCOL_RANGE_MPEG) &&
+      (decoded->chroma_location == AVCHROMA_LOC_UNSPECIFIED || decoded->chroma_location == AVCHROMA_LOC_CENTER);
+    if (browser420) {
+      auto backing = std::make_shared<VideoYuv420>();
+      backing->width = width; backing->height = height;
+      const int cw = (width + 1) / 2, ch = (height + 1) / 2;
+      backing->planes.resize(static_cast<std::size_t>(width) * height +
+                             static_cast<std::size_t>(cw) * ch * 2);
+      auto* destination = backing->planes.data();
+      for (int plane = 0; plane < 3; ++plane) {
+        const int pw = plane == 0 ? width : cw, ph = plane == 0 ? height : ch;
+        for (int row = 0; row < ph; ++row) {
+          std::copy_n(decoded->data[plane] + row * decoded->linesize[plane], pw, destination);
+          destination += pw;
+        }
+      }
+      backing->convert(output.rgba, false);
+      output.browser420 = std::move(backing);
+    } else {
+      if (!scaler || scalerWidth != width || scalerHeight != height ||
+          scalerFormat != decoded->format) {
+        scaler.reset(sws_getContext(width, height,
+          static_cast<AVPixelFormat>(decoded->format), width, height,
+          AV_PIX_FMT_RGBA, SWS_BILINEAR, nullptr, nullptr, nullptr));
+        scalerWidth = width; scalerHeight = height; scalerFormat = decoded->format;
+      }
+      if (!scaler) {
+        av_frame_unref(decoded.get());
+        fail(error, "cannot initialize video conversion");
+        return std::nullopt;
+      }
+      sws_scale(scaler.get(), decoded->data, decoded->linesize, 0, height, planes, strides);
+    }
     if (telemetryEnabled) stats.convertMs += std::chrono::duration<double, std::milli>(
       std::chrono::steady_clock::now() - convertStarted).count();
     av_frame_unref(decoded.get());
@@ -447,10 +471,11 @@ struct VideoDecoderSession::Impl {
   MediaInfo info;
   VideoDecodeStats stats;
   const bool telemetryEnabled;
+  const bool browserColorEnabled;
 };
 
-VideoDecoderSession::VideoDecoderSession(const std::filesystem::path& path, bool telemetry)
-    : impl_(std::make_unique<Impl>(path, telemetry)) {}
+VideoDecoderSession::VideoDecoderSession(const std::filesystem::path& path, bool telemetry, bool browserColor)
+    : impl_(std::make_unique<Impl>(path, telemetry, browserColor)) {}
 VideoDecoderSession::~VideoDecoderSession() = default;
 const MediaInfo& VideoDecoderSession::info() const { return impl_->info; }
 VideoDecodeStats VideoDecoderSession::stats() const { return impl_->stats; }
@@ -752,7 +777,7 @@ std::optional<VideoFrame> MediaDecoder::decodeVideoFrame(
             fail(error, "invalid video frame dimensions");
             return std::nullopt;
           }
-          VideoFrame output{extent->width, extent->height, frameTime, {}};
+          VideoFrame output{extent->width, extent->height, frameTime, {}, {}};
           output.rgba.resize(extent->rgbaBytes);
           Sws scaler(sws_getContext(output.width, output.height, codec->pix_fmt,
             output.width, output.height, AV_PIX_FMT_RGBA, SWS_BILINEAR,

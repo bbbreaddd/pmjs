@@ -29,6 +29,9 @@ MzNativeWebAudio.prototype._startSource = function() {
         !Utils.hasEncryptedAudio()) return null;
     if (NativeHost.assets && typeof NativeHost.assets.hasDecrypted === 'function' &&
         NativeHost.assets.hasDecrypted(path)) return null;
+    // Authored plaintext and writable overrides take precedence over encryption flags.
+    if (NativeHost.fs && typeof NativeHost.fs.exists === 'function' &&
+        NativeHost.fs.exists(path)) return null;
     return { path: path + '_', decrypt: function(bytes) {
       return Utils.decryptArrayBuffer(bytes);
     } };

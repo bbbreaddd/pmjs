@@ -40,6 +40,8 @@ function MvNativeWebAudio(url, intent) {
 
 MvNativeWebAudio.prototype._load = function() {
   this._voice.reloadSource(this._url, function(path) {
+    if (NativeHost.assets && typeof NativeHost.assets.hasDecrypted === 'function' &&
+        NativeHost.assets.hasDecrypted(path)) return null;
     if (typeof Decrypter === 'undefined' || !Decrypter.hasEncryptedAudio) return null;
     return { path: Decrypter.extToEncryptExt(path), decrypt: function(bytes) {
       return Decrypter.decryptArrayBuffer(bytes);
