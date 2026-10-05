@@ -45,6 +45,15 @@ Object.assign(PMJS.pixi4, {
   },
   getStageRenderOptions: function(stage) { return nativeStageRenderOptions.get(stage); },
   supportsGpuSpriteTextures: !!(NativeHost.scene && NativeHost.scene.schema && NativeHost.scene.schema.gpuSpriteTextures),
+  clearBackgroundTriangles: function(texture, points, rectangles, normals) {
+    var base = texture && texture.baseTexture;
+    if (!base || !base.__pmjsGpuGenerated || !base.__pmjsPremultiplied) {
+      throw new TypeError('Triangle clear requires a premultiplied GPU-generated texture');
+    }
+    var image = nativeTextureSource(base.source);
+    if (!image) throw new TypeError('Triangle clear requires a live native texture source');
+    NativeHost.plugins.mpp.clearBackgroundTriangles(image.handle, points, rectangles, normals);
+  },
   releaseSceneResources: function(root) { return pmjsReleaseSceneResources(root); },
   // Producers must call invalidateMeshGeometry after changing retained vertices or UVs.
   retainMeshGeometry: function(mesh) {

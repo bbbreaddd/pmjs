@@ -30,17 +30,12 @@ Object.assign(PMJS.plugins.mpp, {
     mesh._pmjsMppTriangleBitmap = coefficients;
   },
   clearBackground: function(texture, points, rectangles) {
-    var base = texture && texture.baseTexture;
-    var image = base && base.source && base.source._nativeImage;
-    if (!base || !base.__pmjsGpuGenerated || !base.__pmjsPremultiplied || !image) {
-      throw new TypeError('Triangle clear requires a premultiplied GPU-generated texture');
-    }
     points = Float32Array.from(points);
     var normals = new Float32Array(points.length);
     for (var index = 0; index < points.length; index += 6) {
       normals.set(nativeTriangleClipNormals(points.subarray(index, index + 6)), index);
     }
-    NativeHost.plugins.mpp.clearBackgroundTriangles(image.handle, points,
+    PMJS.pixi4.clearBackgroundTriangles(texture, points,
       rectangles || new Float32Array(0), normals);
   },
 });

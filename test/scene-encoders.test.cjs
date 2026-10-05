@@ -1640,6 +1640,28 @@ test('Pixi owns exactly one specialized mesh material claim', () => {
   assert.throws(() => sandbox.PMJS.pixi4.setMeshNativeMaterial(mesh, 'unknown', {}), /Unknown mesh material owner/);
 });
 
+test('MPP clearing delegates texture validation and resolution to Pixi', () => {
+  const { sandbox } = makeHarness();
+  const calls = [];
+  sandbox.NativeHost.plugins.mpp.clearBackgroundTriangles = (...args) => calls.push(args);
+  const texture = { baseTexture: { __pmjsGpuGenerated: true, __pmjsPremultiplied: true,
+    source: { _nativeImage: { handle: 91 } } } };
+  const shared = { baseTexture: texture.baseTexture };
+  const points = [0, 0, 4, 0, 0, 4];
+  sandbox.PMJS.plugins.mpp.clearBackground(texture, points);
+  sandbox.PMJS.plugins.mpp.clearBackground(shared, points);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0][0], 91);
+  assert.deepEqual(Array.from(calls[0][1]), points);
+  assert.equal(calls[0][3].length, 6);
+  for (const invalid of [null, {}, { baseTexture: { source: texture.baseTexture.source } }]) {
+    assert.throws(() => sandbox.PMJS.plugins.mpp.clearBackground(invalid, points), /premultiplied GPU-generated/);
+  }
+  delete texture.baseTexture.source._nativeImage;
+  assert.throws(() => sandbox.PMJS.plugins.mpp.clearBackground(shared, points), /live native texture/);
+  assert.equal(calls.length, 2, 'invalid resource ownership never reaches native mutation');
+});
+
 test('background fill is explicit per scene submission and never persists into offscreen encoding', () => {
   const harness = makeHarness();
   const root = new harness.sandbox.PIXI.Container();

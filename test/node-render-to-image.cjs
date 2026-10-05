@@ -154,13 +154,18 @@ const erasedMesh = native.mv.createBitmapMesh(erased.handle,
   [0, 0, 16, 0, 16, 16, 0, 16], [0, 0, 1, 0, 1, 1, 0, 1],
   [0, 1, 2, 0, 2, 3], 1, { texelBounds: [0, 0, 15, 15], alphaMode: 'premultiplied' });
 const triangle = [0, 0, 16, 0, 0, 16];
-function erasedPixels(points) {
+const { makeHarness } = require('./helpers/scene-encoder-harness.cjs');
+const { sandbox } = makeHarness();
+sandbox.NativeHost.plugins.mpp = native.plugins.mpp;
+const erasedTexture = { baseTexture: { __pmjsGpuGenerated: true, __pmjsPremultiplied: true,
+  source: { _nativeImage: erased } } };
+function erasedPixels(points, texture = erasedTexture) {
   native.beginFrame();
   const values = new Float32Array(schema.valueStride);
   values.set([1, 0, 0, 1, 0, 0, 1]);
   native.scene.submit(schema.version,
     new Uint32Array([8, 0xffffffff, erasedMesh, 0xffffff, 0, 8, 0]), values, 1);
-  native.plugins.mpp.clearBackgroundTriangles(erased.handle, points);
+  sandbox.PMJS.plugins.mpp.clearBackground(texture, points);
   native.renderScene();
   return native.canvas.captureSceneRawPremultiplied();
 }
@@ -173,11 +178,12 @@ const once = erasedPixels(triangle);
 assert.equal(once[(2 * 16 + 2) * 4 + 3], 0);
 assert.equal(once[(13 * 16 + 13) * 4 + 3], 255);
 assert.ok(Math.abs(once[(8 * 16 + 7) * 4 + 3] - 127) <= 1);
-const twice = erasedPixels([0, 16, 16, 0, 16, 16]);
+const twice = erasedPixels([0, 16, 16, 0, 16, 16], { baseTexture: erasedTexture.baseTexture });
 assert.ok(Math.abs(twice[(8 * 16 + 7) * 4 + 3] - 63) <= 1);
 native.render.releaseMesh(erasedMesh);
 native.images.release(erased.handle);
 assert.throws(() => native.plugins.mpp.clearBackgroundTriangles(erased.handle, triangle), RangeError);
+assert.throws(() => sandbox.PMJS.plugins.mpp.clearBackground(erasedTexture, triangle), RangeError);
 
 // A clear rectangle limits the triangle mask and remains transactional.
 native.beginFrame(); native.render.quad(0, 0, 16, 16, 1, 1, 1, 1);
