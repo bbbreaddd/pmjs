@@ -20,7 +20,7 @@ assert.equal(fixture.reference.referenceFiles.nw, '0c99f7355109513384f386bd6bff0
 assert.equal(fixture.representation, 'direct premultiplied RGBA8');
 assert.equal(fixture.freshProcessReplays, 2);
 assert.equal(fixture.frozenFramesEqual, true);
-assert.equal(Object.keys(fixture.frames).length, 25);
+assert.equal(Object.keys(fixture.frames).length, 30);
 const native = require(path.resolve(process.argv[2]));
 native.initialize({ gameRoot: path.resolve(process.argv[3]), assetRoot: '', width: 64, height: 64, windowTitle: 'Chromium 65 Canvas primitives' });
 const create = native.canvas.create;
@@ -47,4 +47,4 @@ for (const immediate of [false, true]) {
   }
 }
 assert.equal(native.canvas.memory().liveCount, 0);
-console.log(JSON.stringify({ cases: 25, drawingModes: 2, differingPixels: 0 }));
+console.log(JSON.stringify({ cases: 30, drawingModes: 2, differingPixels: 0 }));

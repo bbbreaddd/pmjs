@@ -574,6 +574,9 @@ napi_value renderToImage(napi_env env, napi_callback_info info) try {
   value.renderer.beginFrame();
   if (!image) throw std::runtime_error("could not create GPU render image");
   return imageInfo(env, image->handle, image->width, image->height);
+} catch (const std::bad_alloc&) {
+  napi_throw_error(env, "PMJS_RENDER_IMAGE_ALLOCATION", "cannot allocate GPU render image");
+  return nullptr;
 } catch (const std::exception& error) {
   napi_throw_range_error(env, nullptr, error.what()); return nullptr;
 }
@@ -675,6 +678,11 @@ napi_value presentationGeometry(napi_env env, napi_callback_info) try {
   return result;
 } catch(const std::exception& error){napi_throw_error(env,nullptr,error.what());return nullptr;}
 
+napi_value finishRendering(napi_env env, napi_callback_info) try {
+  host(env).renderer.finish();
+  return undefined(env);
+} catch (const std::exception& error) { napi_throw_error(env, nullptr, error.what()); return nullptr; }
+
 void registerGraphicsBindings(napi_env env, napi_value exports) {
   napi_value render = moduleObject(env);
   method(env, render, "setClearColor", setClearColor);
@@ -724,6 +732,7 @@ void registerGraphicsBindings(napi_env env, napi_value exports) {
   method(env, render, "renderToImage", renderToImage);
   method(env, render, "presentation", presentationGeometry);
   method(env, render, "stats", rendererStats);
+  method(env, render, "finish", finishRendering);
   napi_value scene = moduleObject(env);
   method(env, scene, "submit", submitScene);
   napi_set_named_property(env, scene, "packetVersion", uint32(env, pmjs::scene_packet::version));

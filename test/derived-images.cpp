@@ -131,6 +131,66 @@ int main() {
     require(images.gpuBytes()==0,"replacement owners leaked");
   }
   {
+    write(root/"lazy-page.png",6,6,std::vector<std::uint8_t>(6*6*4,255));
+    pmjs::PreparedImageDescriptor descriptor;
+    descriptor.width=4; descriptor.height=4;
+    descriptor.pages.push_back({"lazy-page.png",6,6});
+    descriptor.cells.push_back({{0,0,4,4},{0,0,4,4},{1,1,4,4},{0,0,0,0},0});
+    const auto files=[]() {
+      return std::distance(std::filesystem::directory_iterator("/proc/self/fd"),std::filesystem::directory_iterator{});
+    };
+    auto acquire=[&](pmjs::ImageStore& images, int index) {
+      const auto source=root/("lazy-"+std::to_string(index)+".png");
+      write(source,4,4,std::vector<std::uint8_t>(4*4*4,255));
+      const auto identity=pmjs::ImageStore::openFile(source);
+      require(images.installPrepared(source,root,descriptor,identity->key()),"lazy preparation failed");
+      const auto image=images.loadPng(source);
+      require(image&&image->texture==0&&images.cpuBytes()==0,"lazy image materialized before drawing");
+      return image->handle;
+    };
+    {
+      pmjs::ImageStore images; images.setWarmBudgetBytes(0);
+      const auto before=files();
+      const auto pinned=acquire(images,0), inFlight=acquire(images,1), live=acquire(images,2);
+      require(images.pin(pinned)&&images.beginUse(inFlight),"lazy owner capture failed");
+      images.release(pinned); images.release(inFlight);
+      for(int i=3;i<67;++i) images.release(acquire(images,i));
+      require(images.warmCount()==64&&images.warmBytes()==0&&images.warmFileCount()==64,
+              "zero-byte lazy file accounting failed");
+      images.update();
+      require(images.warmCount()==0&&images.warmFileCount()==0&&files()==before+3,
+              "zero-budget lazy cache retained descriptors");
+      require(images.inspect(pinned)&&images.inspect(inFlight)&&images.inspect(live),
+              "cache eviction released a live owner");
+      std::filesystem::remove(root/"lazy-page.png");
+      require(images.readPixelsRegion(live,0,0,4,4)->rgba==std::vector<std::uint8_t>(64,255),
+              "live captured page lost after deletion");
+      images.unpin(pinned); images.endUse(inFlight); images.release(live); images.update();
+      require(files()==before&&images.liveCount()==0,"released lazy owners leaked");
+    }
+    write(root/"lazy-page.png",6,6,std::vector<std::uint8_t>(6*6*4,255));
+    {
+      pmjs::ImageStore images;
+      const auto before=files();
+      std::vector<pmjs::ImageHandle> handles;
+      for(int i=0;i<132;++i) { const auto image=acquire(images,i); handles.push_back(image); images.release(image); }
+      images.update();
+      require(images.warmCount()==pmjs::ImageStore::warmFileLimit&&
+              images.warmFileCount()==pmjs::ImageStore::warmFileLimit&&
+              files()==before+static_cast<int>(pmjs::ImageStore::warmFileLimit),"lazy file limit failed");
+      require(!images.inspect(handles.front())&&images.inspect(handles.back()),"lazy cache did not evict oldest entries");
+      images.setWarmBudgetBytes(0); images.update(); require(files()==before,"lazy descriptor flush failed");
+    }
+    {
+      pmjs::ImageStore images;
+      descriptor.pages.clear(); descriptor.cells.clear(); descriptor.uniform=std::array<std::uint8_t,4>{255,255,255,255};
+      for(int i=0;i<260;++i) images.release(acquire(images,i));
+      images.update();
+      require(images.warmCount()==pmjs::ImageStore::warmEntryLimit&&images.warmFileCount()==0,
+              "metadata-only warm entry limit failed");
+    }
+  }
+  {
     pmjs::ImageStore images;
     const std::array<std::uint8_t,4> color{37,73,109,0};
     std::vector<std::uint8_t> original(16*4);
@@ -176,21 +236,24 @@ int main() {
   }
   {
     pmjs::ImageStore images;
-    // Just above the ordinary CPU allocation limit, below the full GPU limit.
+    // Larger logical readbacks retain compact backing until explicitly requested.
     const std::array<std::uint8_t,4> color{37,73,109,157};
     writeGenerated(root/"oversized.png",4096,4097,[color](int,int) { return color; });
     pmjs::PreparedImageDescriptor descriptor;
     descriptor.width=4096;descriptor.height=4097;descriptor.uniform=color;
     require(images.installPrepared(root/"oversized.png",root,descriptor),"oversized install failed");
     const auto image=images.loadPng(root/"oversized.png");
-    require(image&&image->texture==0&&!images.readPixels(image->handle),"oversized full CPU allocation limit changed");
+    require(image&&image->texture==0&&images.cpuBytes()==0,"large image eagerly allocated CPU pixels");
     const auto pixels=images.readPixelsRegion(image->handle,4094,4095,2,2);
     require(pixels&&pixels->rgba.size()==16&&std::equal(color.begin(),color.end(),pixels->rgba.begin()),"oversized bounded read failed");
     const auto compact=images.resolveSpriteRegion(image->handle,0,0,4096,4097,false);
     require(compact&&compact->image.width==1&&images.gpuBytes()==4,"oversized uniform lost compact backing");
     const auto full=images.lookup(image->handle);
     require(full&&full->width==4096&&full->height==4097&&images.preparedMaterializations()==1,"oversized strip GPU fallback failed");
-    require(!images.readPixels(image->handle),"GPU fallback bypassed full CPU allocation limit");
+    const auto* logical=images.readPixels(image->handle);
+    require(logical&&logical->rgba.size()==4096U*4097U*4U&&
+      std::equal(color.begin(),color.end(),logical->rgba.begin())&&
+      std::equal(color.begin(),color.end(),logical->rgba.end()-4),"large full CPU readback failed");
     images.release(image->handle);images.setWarmBudgetBytes(0);images.update();
     require(images.gpuBytes()==0&&images.cpuBytes()==0,"oversized backing leaked");
   }
@@ -221,11 +284,14 @@ int main() {
     const auto full=images.lookup(image->handle);
     require(full&&images.preparedMaterializations()==1,"many-page oversized strip fallback failed");
     require(images.cpuBytes()<=32U*1024U*1024U,"strip fallback retained more than bounded page cache");
-    require(!images.readPixels(image->handle),"many-page fallback bypassed full CPU limit");
     const auto region=images.readPixelsRegion(image->handle,width-2,height-2,2,2);
     const auto expected=color(width-1,height-1);
     require(region&&std::equal(expected.begin(),expected.end(),region->rgba.begin()),"evicted page could not be reconstructed");
     require(images.cpuBytes()<=32U*1024U*1024U,"region read exceeded bounded page cache");
+    const auto* logical=images.readPixels(image->handle);
+    require(logical&&logical->rgba.size()==static_cast<std::size_t>(width)*height*4U&&
+      std::equal(expected.begin(),expected.end(),logical->rgba.end()-4),
+      "many-page full readback below the allocation limit failed");
     images.release(image->handle);images.setWarmBudgetBytes(0);images.update();
     require(images.gpuBytes()==0&&images.cpuBytes()==0,"many-page fallback ownership leaked");
   }

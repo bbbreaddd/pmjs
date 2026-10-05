@@ -3,6 +3,10 @@
 (function() {
   if (typeof Utils === 'undefined') return;
   if (PMJS.web && PMJS.web.usePhysicalViewport) PMJS.web.usePhysicalViewport();
+  // Native windows need the desktop fitting default without claiming the NW environment.
+  if (typeof Graphics !== 'undefined') {
+    Graphics._defaultStretchMode = function() { return true; };
+  }
 
   Utils.canUseWebGL = function() {
     return !!(NativeHost.render && NativeHost.scene);

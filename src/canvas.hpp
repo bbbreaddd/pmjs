@@ -151,6 +151,9 @@ class CanvasStore {
                    const std::vector<std::uint8_t>& pixels, PixelEncoding encoding = PixelEncoding::StraightRGBA8);
   bool replacePixels(CanvasHandle handle, std::vector<std::uint8_t> pixels, PixelEncoding encoding);
   bool blur(CanvasHandle handle);
+  // Two additive 3x3 passes over opaque black, using Skia65 byte scaling.
+  // Returns false without painting when raw RGB exceeds alpha.
+  bool blurMv(CanvasHandle handle);
   bool release(CanvasHandle handle);
   bool realize(CanvasHandle handle);
   std::optional<CanvasInfo> info(CanvasHandle handle) const;

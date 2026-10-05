@@ -93,7 +93,7 @@ test('MZ local save paths resolve through the native storage filesystem', t => {
   const directory = temporaryDirectory('pmjs-mz-save-contract-');
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const storage = createStorage(directory);
-  const context = vm.createContext({ Buffer, Utils: {}, StorageManager: {},
+  const context = vm.createContext({ Buffer, __pmjsBuiltinRequire: require, Utils: {}, StorageManager: {},
     NativeHost: { storage }, PMJS: { config: {} } });
   vm.runInContext(fs.readFileSync(path.join(__dirname,
     '../js/pmjs-web/filesystem.js'), 'utf8'), context);
@@ -121,7 +121,7 @@ test('MZ compressed save strings survive UTF-8 writes, restart and backup recove
   const { temporaryDirectory } = require('./helpers/temp.cjs');
   const directory = temporaryDirectory('pmjs-mz-compressed-save-');
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
-  const context = vm.createContext({ Buffer, Utils: {}, StorageManager: {},
+  const context = vm.createContext({ Buffer, __pmjsBuiltinRequire: require, Utils: {}, StorageManager: {},
     NativeHost: { storage: createStorage(directory) }, PMJS: { config: {} } });
   vm.runInContext(fs.readFileSync(path.join(__dirname,
     '../js/pmjs-web/filesystem.js'), 'utf8'), context);

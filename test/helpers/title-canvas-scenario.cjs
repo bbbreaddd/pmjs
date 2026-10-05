@@ -24,6 +24,15 @@ function titleCanvasFixtures(readCanvas) {
       drawing.strokeRect(3.5, 2.5, 17, 14);
     });
   }
+  for (const [name, invalid] of [['zero', 0], ['negative', -1], ['nan', NaN],
+    ['infinity', Infinity], ['negative-infinity', -Infinity]]) {
+    record('stroke/invalid/' + name, drawing => {
+      drawing.lineWidth = 2.5;
+      drawing.lineWidth = invalid;
+      drawing.strokeStyle = '#20202080';
+      drawing.strokeRect(3.5, 2.5, 17, 14);
+    });
+  }
   for (const alpha of [1, 0.5, 0.63, 160 / 255]) record('gradient/' + alpha, drawing => {
     const gradient = drawing.createLinearGradient(0, 0, 0, 18);
     gradient.addColorStop(0, '#20202080'); gradient.addColorStop(1, '#00000080');

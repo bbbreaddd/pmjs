@@ -606,9 +606,11 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
         texture.baseTexture.scaleMode === PIXI.SCALE_MODES.NEAREST) {
       nativeSceneMetadata[nodeIndex * nativeSceneMetadataStride + 5] |= 8;
     }
-    var tileScale = node.tileScale || { x: 1, y: 1 };
-    var scaleX = Math.abs(tileScale.x) > 0.000001 ? tileScale.x : 1;
-    var scaleY = Math.abs(tileScale.y) > 0.000001 ? tileScale.y : 1;
+    if (!nativeSimpleTilingTexture(texture)) {
+      nativeSceneMetadata[nodeIndex * nativeSceneMetadataStride + 5] |= 32768;
+    }
+    var scaleX = node.tileTransform.localTransform.a;
+    var scaleY = node.tileTransform.localTransform.d;
     var tilingSource = nativeTilingSource(node, scaleX, scaleY);
     nativeSceneValues[valueOffset + 9] = tilingSource.x * tilingResolution;
     nativeSceneValues[valueOffset + 10] = tilingSource.y * tilingResolution;

@@ -43,4 +43,8 @@ function prepareNativeSceneNode(node) {
     node.tilePosition.x = Math.round(-node.origin.x);
     node.tilePosition.y = Math.round(-node.origin.y);
   }
+  if (PIXI.extras && node instanceof PIXI.extras.TilingSprite && node.tileTransform &&
+      typeof node.tileTransform.updateLocalTransform === 'function') {
+    node.tileTransform.updateLocalTransform();
+  }
 }

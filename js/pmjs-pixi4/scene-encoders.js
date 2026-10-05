@@ -78,6 +78,33 @@ function writeNativeSceneScreenSprite(node, type, particleContext,
 function writeNativeSceneTilingSprite(node, type, particleContext,
     particleValues, scratch) {
   var texture = node.texture;
+  var matrix = node.tileTransform && node.tileTransform.localTransform;
+  var finiteSampling = matrix && ['a', 'b', 'c', 'd', 'tx', 'ty'].every(function(key) {
+    return Number.isFinite(matrix[key]);
+  });
+  if (!finiteSampling || matrix.a === 0 || matrix.d === 0) return;
+  var resolution = Math.max(0.000001,
+    Number(texture && texture.baseTexture && texture.baseTexture.resolution) || 1);
+  var sampling = nativeTilingSource(node, matrix.a, matrix.d);
+  if (!['x', 'y', 'width', 'height'].every(function(key) {
+    return Number.isFinite(Math.fround(sampling[key] * resolution));
+  })) return;
+  if (matrix.b !== 0 || matrix.c !== 0) {
+    PMJS.compat.hit('render.tiling-transform', 'rotated or skewed sampling');
+    scratch.aborted = true;
+    return;
+  }
+  var uv = node.uvTransform;
+  if (uv && (uv.clampMargin !== 0.5 || uv.clampOffset !== 0)) {
+    PMJS.compat.hit('render.tiling-clamp', 'custom clamp parameters');
+    scratch.aborted = true;
+    return;
+  }
+  if (texture && !nativeSimpleTilingTexture(texture) && !nativeSceneSchema.clampedTilingSampling) {
+    PMJS.compat.hit('render.tiling-clamp', 'host lacks clamped tiling sampling');
+    scratch.aborted = true;
+    return;
+  }
   var tilingRotation = ((Number(texture && texture.rotate) || 0) % 16 + 16) % 16;
   if (tilingRotation % 2) {
     PMJS.compat.hit('render.texture-rotation', String(tilingRotation));

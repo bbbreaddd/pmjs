@@ -533,6 +533,16 @@ napi_value blurCanvas(napi_env env, napi_callback_info info) try {
   auto a=arguments(env,info,1); if(!host(env).canvases.blur(asUint32(env,a.at(0)))) throw std::runtime_error("invalid canvas"); return undefined(env);
 } catch(const std::exception& error){napi_throw_range_error(env,nullptr,error.what());return nullptr;}
 
+napi_value blurMvCanvas(napi_env env, napi_callback_info info) try {
+  auto a = arguments(env, info, 1);
+  auto& canvases = host(env).canvases;
+  const auto handle = asUint32(env, a.at(0));
+  if (!canvases.info(handle)) throw std::runtime_error("invalid canvas");
+  return boolean(env, canvases.blurMv(handle));
+} catch (const std::exception& error) {
+  napi_throw_range_error(env, nullptr, error.what());
+  return nullptr;
+}
 
 void registerCanvasBindings(napi_env env, napi_value exports) {
   napi_value canvas = moduleObject(env);
@@ -560,6 +570,7 @@ void registerCanvasBindings(napi_env env, napi_value exports) {
   method(env, canvas, "encodePng", encodeCanvasPng);
   method(env, canvas, "writePixels", writeCanvasPixels<PixelEncoding::StraightRGBA8>);
   method(env, canvas, "blur", blurCanvas);
+  method(env, canvas, "blurMv", blurMvCanvas);
   method(env, canvas, "release", releaseCanvas);
   method(env, canvas, "memory", canvasMemory);
   method(env, canvas, "glyphStats", canvasGlyphStats);

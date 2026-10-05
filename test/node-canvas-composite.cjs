@@ -4,6 +4,7 @@ const assert = require('node:assert/strict'), fs = require('node:fs'), path = re
 const crypto = require('node:crypto'), zlib = require('node:zlib'), vm = require('node:vm');
 const { createHostContext } = require('./helpers/mz-host-context.cjs');
 const { canvasCompositeFixtures } = require('./helpers/canvas-composite-scenario.cjs');
+const { canvasRegressionFixtures } = require('./helpers/canvas-regression-scenario.cjs');
 const expected = JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(__dirname, 'assets/reference/canvas-composite.json.gz'))));
 assert.equal(expected.chromium, '65.0.3325.146');
 assert.equal(expected.scenarioSha256, crypto.createHash('sha256').update(
@@ -22,6 +23,28 @@ try {
     if (max > tolerance) failures.push({ label, max });
   }
   assert.deepEqual(failures, [], 'browser composite pixel differences');
+
+  const regression = JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(__dirname, 'assets/reference/canvas-regressions.json.gz'))));
+  require('../tools/generate-canvas-regressions-reference.cjs').validateFixture(regression);
+  vm.runInContext('globalThis.canvasRegressionFixtures = ' + canvasRegressionFixtures.toString(), context);
+  const differences = [];
+  const create = native.canvas.create;
+  for (const immediate of [false, true]) {
+    native.canvas.create = function(width, height) {
+      const canvas = create(width, height);
+      if (immediate) native.canvas.readPixels(canvas.handle, 0, 0, 1, 1);
+      return canvas;
+    };
+    try {
+      const regressionFrames = context.canvasRegressionFixtures();
+      assert.deepEqual(Object.keys(regressionFrames), Object.keys(regression.frames));
+      for (const [name, pixels] of Object.entries(regression.frames)) {
+        const max = Math.max(...pixels.map((value, index) => Math.abs(value - regressionFrames[name][index])));
+        if (max > regression.channelTolerance) differences.push({ name, max, immediate });
+      }
+    } finally { native.canvas.create = create; }
+  }
+  assert.deepEqual(differences, [], 'browser regression pixel differences');
 
   const opaque = {
     'source-over': [255, 0, 0, 255], 'source-in': [255, 0, 0, 255], 'source-out': [0, 0, 0, 0],

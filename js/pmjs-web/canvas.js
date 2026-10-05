@@ -77,6 +77,14 @@ function canvasSourcePixels(source, nativeSource, operationId, region) {
   }
 }
 
+Object.defineProperty(CanvasContext2D.prototype, 'lineWidth', {
+  get: function() { return this._lineWidth; },
+  set: function(value) {
+    value = +value;
+    if (Number.isFinite(value) && value > 0) this._lineWidth = value;
+  }
+});
+
 var canvasCompositeOperations = [
   'source-over', 'source-in', 'source-out', 'source-atop', 'destination-over',
   'destination-in', 'destination-out', 'destination-atop', 'lighter', 'copy', 'xor',
@@ -132,13 +140,15 @@ function drawAffineImage(context, source, nativeSource, sx, sy, sw, sh,
   left = region[0]; top = region[1]; right = region[2]; bottom = region[3];
   if (right <= left || bottom <= top) return;
   var sourceLeft = Math.max(0, Math.min(source.width - 1,
-    Math.floor(Math.min(sx, sx + sw))));
+    Math.floor(Math.min(sx, sx + sw) - (context.imageSmoothingEnabled ? 0.5 : 0))));
   var sourceTop = Math.max(0, Math.min(source.height - 1,
-    Math.floor(Math.min(sy, sy + sh))));
+    Math.floor(Math.min(sy, sy + sh) - (context.imageSmoothingEnabled ? 0.5 : 0))));
   var sourceRight = Math.max(sourceLeft + 1, Math.min(source.width,
-    Math.floor(Math.max(sx, sx + sw)) + 1));
+    context.imageSmoothingEnabled ? Math.ceil(Math.max(sx, sx + sw) + 0.5) :
+      Math.floor(Math.max(sx, sx + sw)) + 1));
   var sourceBottom = Math.max(sourceTop + 1, Math.min(source.height,
-    Math.floor(Math.max(sy, sy + sh)) + 1));
+    context.imageSmoothingEnabled ? Math.ceil(Math.max(sy, sy + sh) + 0.5) :
+      Math.floor(Math.max(sy, sy + sh)) + 1));
   var sourceWidth = sourceRight - sourceLeft;
   var sourcePixels = canvasSourcePixels(source, nativeSource, operationId, {
     x: sourceLeft, y: sourceTop, width: sourceWidth,
@@ -159,10 +169,28 @@ function drawAffineImage(context, source, nativeSource, sx, sy, sw, sh,
     var index = (y - top) * (right - left) + x - left;
     clipMask[index] = 255;
     if (u < 0 || u >= 1 || v < 0 || v >= 1) continue;
-    var sampleX = Math.max(0, Math.min(source.width - 1, Math.floor(sx + u * sw)));
-    var sampleY = Math.max(0, Math.min(source.height - 1, Math.floor(sy + v * sh)));
-    var sourceOffset = ((sampleY - sourceTop) * sourceWidth + sampleX - sourceLeft) * 4;
-    paintPixels.set(sourcePixels.subarray(sourceOffset, sourceOffset + 4), index * 4);
+    var sampleX = sx + u * sw, sampleY = sy + v * sh;
+    if (context.imageSmoothingEnabled) {
+      sampleX = Math.max(0, Math.min(source.width - 1, sampleX - 0.5));
+      sampleY = Math.max(0, Math.min(source.height - 1, sampleY - 0.5));
+      var x0 = Math.floor(sampleX), y0 = Math.floor(sampleY);
+      var x1 = Math.min(source.width - 1, x0 + 1), y1 = Math.min(source.height - 1, y0 + 1);
+      var fx = sampleX - x0, fy = sampleY - y0;
+      var p00 = ((y0 - sourceTop) * sourceWidth + x0 - sourceLeft) * 4;
+      var p10 = ((y0 - sourceTop) * sourceWidth + x1 - sourceLeft) * 4;
+      var p01 = ((y1 - sourceTop) * sourceWidth + x0 - sourceLeft) * 4;
+      var p11 = ((y1 - sourceTop) * sourceWidth + x1 - sourceLeft) * 4;
+      for (var channel = 0; channel < 4; channel++) {
+        paintPixels[index * 4 + channel] = Math.round(
+          (sourcePixels[p00 + channel] * (1 - fx) + sourcePixels[p10 + channel] * fx) * (1 - fy) +
+          (sourcePixels[p01 + channel] * (1 - fx) + sourcePixels[p11 + channel] * fx) * fy);
+      }
+    } else {
+      sampleX = Math.max(0, Math.min(source.width - 1, Math.floor(sampleX)));
+      sampleY = Math.max(0, Math.min(source.height - 1, Math.floor(sampleY)));
+      var sourceOffset = ((sampleY - sourceTop) * sourceWidth + sampleX - sourceLeft) * 4;
+      paintPixels.set(sourcePixels.subarray(sourceOffset, sourceOffset + 4), index * 4);
+    }
   }
   NativeHost.canvas.compositePixels(destination.handle, left, top,
     right - left, bottom - top, paintPixels, clipMask, context.globalCompositeOperation, alpha);
@@ -338,7 +366,8 @@ function fillAxisAlignedRadialGradient(context, rectangle, style) {
 
 function fillAxisAlignedLinearGradient(context, rectangle, style) {
   if (!style || style._pmjsStyle !== 'linear-gradient' ||
-      !style.stops.length || context._clipPaths.length) return false;
+      !style.stops.length || context._clipPaths.length ||
+      context.globalCompositeOperation !== 'source-over') return false;
   if (context.globalCompositeOperation === 'source-over' && NativeHost.canvas.paintRect &&
       NativeHost.canvas.paintRect(context.canvas._ensureNativeCanvas().handle,
         rectangle.x, rectangle.y, rectangle.width, rectangle.height, colorWithGlobalAlpha('#fff', context.globalAlpha), 0,
@@ -704,7 +733,7 @@ CanvasContext2D.prototype.clearRect = function(x, y, width, height) {
   }
   x = rectangle.x; y = rectangle.y; width = rectangle.width; height = rectangle.height;
   var canvas = this.canvas._ensureNativeCanvas();
-  if (x <= 0 && y <= 0 && width >= this.canvas.width && height >= this.canvas.height) {
+  if (x <= 0 && y <= 0 && x + width >= this.canvas.width && y + height >= this.canvas.height) {
     NativeHost.canvas.clear(canvas.handle);
   } else {
     NativeHost.canvas.clearRect(canvas.handle,
@@ -747,7 +776,8 @@ CanvasContext2D.prototype.strokeRect = function(x, y, width, height) {
 };
 CanvasContext2D.prototype.drawImage = function(source) {
   if (source && source._pmjsPrimitiveContent) source._pmjsPrimitiveContent.materialize();
-  var nativeSource = source && (source._nativeImage || source._nativeCanvas);
+  var nativeSource = source && (typeof source._pmjsNativeTextureSource === 'function'
+    ? source._pmjsNativeTextureSource() : (source._nativeImage || source._nativeCanvas));
   if (!nativeSource && !(source instanceof NativeImage) &&
       !(source && typeof source._ensureNativeCanvas === 'function')) {
     throw new TypeError('drawImage source has no native resource');
@@ -878,7 +908,8 @@ function drawCanvasText(context, text, x, y, stroke, maxWidth) {
   var strokeWidth = stroke ? Math.max(0, usesLegacyText() ? Math.round(context.lineWidth) : Number(context.lineWidth)) : 0;
   if (Math.abs(t[0] - 1) < 0.000001 && Math.abs(t[1]) < 0.000001 &&
       Math.abs(t[2]) < 0.000001 && Math.abs(t[3] - 1) < 0.000001 &&
-      !context._clipPaths.length && horizontalScale === 1) {
+      !context._clipPaths.length && horizontalScale === 1 &&
+      context.globalCompositeOperation === 'source-over') {
     NativeHost.canvas.drawText(context.canvas._ensureNativeCanvas().handle,
       placement.font.paths, text, placement.x + t[4],
       placement.top + placement.font.size + t[5],
@@ -1046,7 +1077,8 @@ CanvasContext2D.prototype.createRadialGradient = function(x0, y0, r0, x1, y1, r1
 };
 CanvasContext2D.prototype.createPattern = function(source, repetition) {
   if (source && source._pmjsPrimitiveContent) source._pmjsPrimitiveContent.materialize();
-  var nativeSource = source && (source._nativeImage || source._nativeCanvas);
+  var nativeSource = source && (typeof source._pmjsNativeTextureSource === 'function'
+    ? source._pmjsNativeTextureSource() : (source._nativeImage || source._nativeCanvas));
   if (!nativeSource && source && typeof source._ensureNativeCanvas === 'function') {
     nativeSource = source._ensureNativeCanvas();
   }
@@ -1085,10 +1117,14 @@ CanvasContext2D.prototype.putImageData = function(imageData, x, y) {
   var sourceY = arguments.length >= 7 ? Math.floor(arguments[4]) : 0;
   var width = arguments.length >= 7 ? Math.floor(arguments[5]) : imageData.width;
   var height = arguments.length >= 7 ? Math.floor(arguments[6]) : imageData.height;
+  if (width < 0) { sourceX += width; width = -width; }
+  if (height < 0) { sourceY += height; height = -height; }
+  var right = Math.min(imageData.width, sourceX + width);
+  var bottom = Math.min(imageData.height, sourceY + height);
   sourceX = Math.max(0, sourceX);
   sourceY = Math.max(0, sourceY);
-  width = Math.min(width, imageData.width - sourceX);
-  height = Math.min(height, imageData.height - sourceY);
+  width = right - sourceX;
+  height = bottom - sourceY;
   if (width <= 0 || height <= 0) return;
   var pixels = imageData.data;
   if (sourceX !== 0 || sourceY !== 0 || width !== imageData.width ||
@@ -1105,16 +1141,18 @@ CanvasContext2D.prototype.putImageData = function(imageData, x, y) {
 };
 
 [
-  'clearRect', 'fillRect', 'drawImage', 'fillText', 'strokeText',
+  'clearRect', 'fillRect', 'strokeRect', 'drawImage', 'fillText', 'strokeText',
   'fill', 'stroke', 'putImageData'
 ].forEach(function(method) {
   var mutate = CanvasContext2D.prototype[method];
   CanvasContext2D.prototype[method] = function() {
-    var result = mutate.apply(this, arguments);
-    if (this.canvas && typeof this.canvas._pmjsContentChanged === 'function') {
-      this.canvas._pmjsContentChanged();
+    try {
+      return mutate.apply(this, arguments);
+    } finally {
+      if (this.canvas && typeof this.canvas._pmjsContentChanged === 'function') {
+        this.canvas._pmjsContentChanged();
+      }
     }
-    return result;
   };
 });
 
@@ -1316,9 +1354,21 @@ function canvasIsUntransformedSourceOver(context) {
     context.globalCompositeOperation === 'source-over');
 }
 
+var mvBlurCanvasMethods = ['drawImage', 'fillRect', 'save', 'restore'].map(function(name) {
+  return { name: name, method: CanvasContext2D.prototype[name] };
+});
+
 Object.assign(PMJS.web.canvas, {
   blur: function(canvas) {
     NativeHost.canvas.blur(canvas._ensureNativeCanvas().handle);
+  },
+  blurMv: function(context) {
+    if (!canvasIsUntransformedSourceOver(context) || context.globalAlpha !== 1 ||
+        typeof NativeHost.canvas.blurMv !== 'function' ||
+        !mvBlurCanvasMethods.every(function(entry) {
+          return context[entry.name] === entry.method;
+        })) return false;
+    return NativeHost.canvas.blurMv(context.canvas._ensureNativeCanvas().handle);
   },
   readPixel: function(canvas, context, x, y) {
     if (canvas && canvas._nativeCanvas) {
@@ -1337,11 +1387,11 @@ Object.assign(PMJS.web.canvas, {
     var canvas = context.canvas._ensureNativeCanvas();
     var options = nativeTextStyle(context, font);
     options.lineJoin = 'round'; // MV Bitmap._drawTextOutline sets this before stroking.
-    if (style.outlineWidth > 0) {
-      NativeHost.canvas.drawText(canvas.handle, font.paths, text,
-        x, baseline, font.size, colorWithGlobalAlpha(style.outlineColor, 1),
-        Math.max(0, Number(style.outlineWidth)), options);
-    }
+    var outlineWidth = +style.outlineWidth;
+    if (!Number.isFinite(outlineWidth) || !(outlineWidth > 0)) outlineWidth = context.lineWidth;
+    NativeHost.canvas.drawText(canvas.handle, font.paths, text,
+      x, baseline, font.size, colorWithGlobalAlpha(style.outlineColor, 1),
+      outlineWidth, options);
     NativeHost.canvas.drawText(canvas.handle, font.paths, text,
       x, baseline, font.size,
       colorWithGlobalAlpha(style.color, context.globalAlpha), 0, options);
@@ -1350,6 +1400,20 @@ Object.assign(PMJS.web.canvas, {
     var font = contextFont(descriptor);
     return NativeHost.canvas.measureText(font.paths, String(text), font.size, nativeTextStyle({}, font));
   }
+});
+
+['blur', 'blurMv', 'drawNativeText'].forEach(function(name) {
+  var mutate = PMJS.web.canvas[name];
+  PMJS.web.canvas[name] = function(target) {
+    var result;
+    try {
+      result = mutate.apply(this, arguments);
+      return result;
+    } finally {
+      var canvas = name === 'blur' ? target : target && target.canvas;
+      if (result !== false && canvas && canvas._pmjsContentChanged) canvas._pmjsContentChanged();
+    }
+  };
 });
 
 // A full opaque red-channel fill proves unit weight for the sprite mask shader.

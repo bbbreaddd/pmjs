@@ -295,3 +295,33 @@ for (const strictCompatibility of [false, true]) {
     }
   });
 }
+
+test('prepared MZ uploads use immutable logical slots and retain untouched slots and encoded layers', () => {
+  const f = harness(), c = f.context;
+  const slots = [], released = [];
+  c.nativeImageFromResource = resource => {
+    const image = { width: resource.width, height: resource.height,
+      _nativeImage: resource, _pmjsOwnedTextureSource: true };
+    Object.defineProperty(image, 'src', { set() { released.push(resource.handle); } });
+    return image;
+  };
+  c.NativeHost.images = { tileSlot(handle, width, height) {
+    const resource = { handle: 900+slots.length, width, height };
+    slots.push({ source: handle, resource }); return resource;
+  } };
+  const layer = new c.Tilemap.Layer();
+  layer._images = [{ width: 48, height: 64, _nativeImage: { handle: 100 } },
+    { width: 32, height: 32, _nativeImage: { handle: 101 } }];
+  layer._elements = [[0, 0, 0, 0, 0, 24, 24], [1, 0, 0, 24, 0, 24, 24]];
+  layer._needsTexturesUpdate = true; f.render(layer);
+  assert.equal(f.canvases.length, 0, 'qualifying images allocate no 1024 Canvas');
+  assert.deepEqual(f.created[0].handles, [900,901]);
+  assert.deepEqual(slots.map(slot => [slot.resource.width,slot.resource.height]), [[1024,1024],[1024,1024]]);
+  layer._images = [{ width: 48, height: 64, _nativeImage: { handle: 102 } }];
+  layer._needsTexturesUpdate = true; f.render(layer);
+  assert.deepEqual(f.created[1].handles, [902,901], 'partial upload keeps untouched slot');
+  assert.deepEqual(f.created[0].handles, [900,901], 'previously encoded snapshot remains immutable');
+  assert.deepEqual(released,[900]);
+  c.PMJS.pixi5.releaseRenderer(f.renderOwner);
+  assert.deepEqual(released,[900,902,901]);
+});

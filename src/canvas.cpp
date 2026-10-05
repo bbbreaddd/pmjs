@@ -1310,7 +1310,8 @@ bool CanvasStore::clearRect(CanvasHandle handle, int x, int y, int width, int he
   auto* surface = writableContent(handle);
   if (!surface) return false;
   if (surface->state == ContentState::Deferred) {
-    if (x <= 0 && y <= 0 && width >= surface->width && height >= surface->height) {
+    if (x <= 0 && y <= 0 && static_cast<int64_t>(x) + width >= surface->width &&
+        static_cast<int64_t>(y) + height >= surface->height) {
       discardCommands(*surface);
       return true;
     }
@@ -1525,6 +1526,53 @@ bool CanvasStore::blur(CanvasHandle handle) {
     }
   }
   return blurNow(*surface);
+}
+
+bool CanvasStore::blurMv(CanvasHandle handle) {
+  auto* sourceContent = lookupContent(handle);
+  if (!sourceContent || !realizeContent(*sourceContent)) return false;
+  // Raw alpha-zero RGB has rasterizer-dependent source-over behavior. Preserve
+  // the ordinary drawing path for noncanonical premultiplied inputs.
+  if (sourceContent->mayHaveOverAlpha) return false;
+  auto* surface = writableContent(handle);
+  if (!surface) return false;
+  const int width = surface->width, height = surface->height;
+  const size_t count = static_cast<size_t>(width) * height;
+  std::vector<uint8_t> intermediate(count * 4), horizontal(count * 3);
+  // Skia65 encodes opacity 1/9 as paint alpha 28, then scales by (alpha + 1)/256.
+  const auto scale = [](uint8_t channel) { return (unsigned(channel) * 29) >> 8; };
+  const uint8_t* source = surface->pixels.data();
+  for (int pass = 0; pass < 2; ++pass) {
+    uint8_t* destination = pass ? surface->pixels.data() : intermediate.data();
+    for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x) {
+      const size_t row = static_cast<size_t>(y) * width;
+      for (int channel = 0; channel < 3; ++channel) {
+        unsigned sum = 0;
+        for (int dx = -1; dx <= 1; ++dx)
+          sum += scale(source[(row + std::clamp(x + dx, 0, width - 1)) * 4 + channel]);
+        horizontal[(row + x) * 3 + channel] = sum;
+      }
+    }
+    for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x) {
+      const size_t index = static_cast<size_t>(y) * width + x;
+      // The padded edge strips leave all four corners transparent. Thin
+      // canvases can omit two samples on either axis, so count both edges.
+      const unsigned omitted = unsigned((x == 0) + (x == width - 1)) *
+        unsigned((y == 0) + (y == height - 1));
+      for (int channel = 0; channel < 3; ++channel) {
+        unsigned sum = 0;
+        for (int dy = -1; dy <= 1; ++dy)
+          sum += horizontal[(static_cast<size_t>(std::clamp(y + dy, 0, height - 1)) * width + x) * 3 + channel];
+        destination[index * 4 + channel] = std::min(255U,
+          sum - omitted * scale(source[index * 4 + channel]));
+      }
+      destination[index * 4 + 3] = 255;
+    }
+    source = destination;
+  }
+  surface->mayHaveOverAlpha = false;
+  markDirty(*surface, 0, 0, width, height);
+  return true;
 }
 
 std::optional<ImagePixels> CanvasStore::readPixels(CanvasHandle handle, int x,

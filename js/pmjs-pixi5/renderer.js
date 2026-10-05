@@ -65,6 +65,8 @@
       },
       render: function(stage, renderTexture, clear, transform, skipUpdateTransform) {
         if (!stage) return;
+        var prepared = PMJS.pixi5.prepareRender(this, stage,
+          !!(renderTexture || transform || skipUpdateTransform));
         var shouldClear = clear === undefined ? this.clearBeforeRender : !!clear;
         var targetResolution = renderTexture ? Math.max(0.000001,
           Number(renderTexture.baseTexture.resolution) || 1) : this.resolution;
@@ -98,7 +100,7 @@
         var background = shouldClear && !this.transparent ?
           this.backgroundColor : null;
         globalThis.pmjsPixi5RenderScene(stage, background, this.resolution, this.screen, this,
-          skipUpdateTransform, projection);
+          skipUpdateTransform, projection, prepared);
         NativeHost.render.setClearBeforeRender(shouldClear);
       },
       resize: function(width, height) {

@@ -347,6 +347,8 @@ napi_value rendererStats(napi_env env, napi_callback_info) try {
     check(env, napi_set_named_property(env, result, name, number(env, static_cast<double>(value))),
       "cannot set renderer target memory/cache stats");
   }
+  napi_set_named_property(env, result, "tileGeometryGpuBytes", number(env, host(env).renderer.tileGeometryGpuBytes()));
+  napi_set_named_property(env, result, "tileGeometryCpuBytes", number(env, host(env).renderer.tileGeometryCpuBytes()));
   check(env, napi_set_named_property(env, result, "filterTargetClears",
     number(env, static_cast<double>(stats.filterTargetClears))),
     "cannot set filter target clears");

@@ -42,6 +42,7 @@ function harness() {
   };
   vm.createContext(context);
   vm.runInContext(source, context);
+  context.PMJS.images = {};
   context.calls = calls;
   return context;
 }
@@ -234,6 +235,52 @@ test('ordinary Canvas text preserves fractional placement, font size, stroke and
     { bold: true, italic: true, lineJoin: 'bevel', lineCap: 'square', miterLimit: 3.5 });
 });
 
+test('invalid Canvas line widths retain the previous stroke through save, restore and resize', () => {
+  const context = harness();
+  context.PMJS.fonts = { resolveDescriptor() { return { size: 18, faces: [{ path: 'fixture.ttf' }] }; } };
+  const calls = [];
+  context.NativeHost.canvas.drawText = (...args) => calls.push(args);
+  const canvas = new context.CanvasElement();
+  const drawing = canvas.getContext('2d');
+  assert.equal(drawing.lineWidth, 1);
+  drawing.lineWidth = 2.75;
+  drawing.save();
+  for (const invalid of [0, -1, NaN, Infinity, -Infinity, undefined, null, 'invalid']) {
+    drawing.lineWidth = invalid;
+    drawing.strokeText('A', 0, 20);
+    assert.equal(drawing.lineWidth, 2.75);
+    assert.equal(calls.at(-1)[7], 2.75);
+  }
+  drawing.lineWidth = '3.5';
+  assert.equal(drawing.lineWidth, 3.5);
+  for (const nonNumber of [1n, Symbol('width')]) {
+    assert.throws(() => { drawing.lineWidth = nonNumber; }, { name: 'TypeError' });
+    assert.equal(drawing.lineWidth, 3.5);
+  }
+  drawing.restore();
+  assert.equal(drawing.lineWidth, 2.75);
+  canvas.width = canvas.width;
+  assert.equal(drawing.lineWidth, 1);
+});
+
+test('native Bitmap text preserves the inherited stroke for invalid outline widths', () => {
+  const context = harness();
+  context.PMJS.fonts = { resolveDescriptor() { return { size: 18, faces: [{ path: 'fixture.ttf' }] }; } };
+  const calls = [];
+  context.NativeHost.canvas.drawText = (...args) => calls.push(args);
+  const drawing = new context.CanvasElement().getContext('2d');
+  drawing.lineWidth = 2.75;
+  for (const outlineWidth of [0, -1, NaN, Infinity, undefined]) {
+    context.PMJS.web.canvas.drawNativeText(drawing, 'A', 0, 20, {
+      font: '18px sans-serif', outlineWidth,
+      outlineColor: '#00000080', color: '#ffffff'
+    });
+    assert.equal(calls.at(-2)[7], 2.75);
+    assert.equal(calls.at(-1)[7], 0);
+    assert.equal(drawing.lineWidth, 2.75);
+  }
+});
+
 test('non-finite text positions and supplied widths are no-ops before font or canvas preparation', () => {
   const context = harness();
   const canvas = new context.CanvasElement();
@@ -344,6 +391,7 @@ for (const reflected of [false, true]) {
       assert.equal(alpha, 1);
     };
     drawing.beginPath(); drawing.rect(0, 0, 2, 2); drawing.clip();
+    drawing.imageSmoothingEnabled = false;
     if (reflected) { drawing.translate(2, 0); drawing.scale(-1, 1); }
     drawing.drawImage(source, 10.25, 20.25, 2, 2, 0, 0, 2, 2);
     assert.deepEqual(reads, [{ resource: handle, x: 10, y: 20, width: 3, height: 3 }]);
@@ -406,4 +454,110 @@ test('negative source and destination dimensions grow backwards without mirrorin
   const target = new ctx.CanvasElement();
   target.getContext('2d').drawImage(source, 2, 2, -2, -2, 4, 4, -4, -4);
   assert.deepEqual(ctx.calls.drawImage[0].slice(2, 10), [0, 0, 2, 2, 0, 0, 4, 4]);
+});
+
+test('every Canvas painting entry point invalidates a solid-mask proof', () => {
+  const operations = {
+    clearRect: c => c.clearRect(1, 1, 2, 2), fillRect: c => c.fillRect(1, 1, 2, 2),
+    strokeRect: c => c.strokeRect(1, 1, 2, 2),
+    nativeStrokeRect: (c, h) => { h.NativeHost.canvas.paintRect = () => true; c.strokeRect(1, 1, 2, 2); },
+    drawImage: (c, h) => { const source = new h.CanvasElement(); source.width = source.height = 2; c.drawImage(source, 1, 1); },
+    fill: c => { c.beginPath(); c.rect(1, 1, 2, 2); c.fill(); },
+    stroke: c => { c.beginPath(); c.rect(1, 1, 2, 2); c.stroke(); },
+    fillText: c => c.fillText('X', 1, 3), strokeText: c => c.strokeText('X', 1, 3),
+    putImageData: c => c.putImageData({ width: 1, height: 1, data: new Uint8ClampedArray(4) }, 1, 1),
+    blur: (c, h) => h.PMJS.web.canvas.blur(c.canvas),
+    blurMv: (c, h) => h.PMJS.web.canvas.blurMv(c),
+    nativeText: (c, h) => h.PMJS.web.canvas.drawNativeText(c, 'X', 1, 3,
+      { font: '18px fixture', outlineWidth: 1, outlineColor: 'black', color: 'black' })
+  };
+  for (const [name, draw] of Object.entries(operations)) {
+    const h = harness(), canvas = new h.CanvasElement(); canvas.width = canvas.height = 10;
+    h.PMJS.fonts = { resolveDescriptor: () => ({ size: 18, faces: [{ path: 'fixture.ttf' }] }) };
+    Object.assign(h.NativeHost.canvas, { writePixels() {}, blur() {}, blurMv: () => true });
+    const c = canvas.getContext('2d'), owner = h.PMJS.web.canvas;
+    owner.trackMaskFill(c, 0, 0, 10, 10, 'white', () => c.fillRect(0, 0, 10, 10));
+    assert.ok(owner.unitMaskRect(canvas));
+    const revision = canvas.__pmjsContentRevision;
+    draw(c, h);
+    assert.ok(canvas.__pmjsContentRevision > revision, name);
+    assert.equal(owner.unitMaskRect(canvas), null, name);
+  }
+});
+
+test('partial native painting failures invalidate an earlier proof', () => {
+  const h = harness(), canvas = new h.CanvasElement(), c = canvas.getContext('2d');
+  h.PMJS.fonts = { resolveDescriptor: () => ({ size: 18, faces: [{ path: 'fixture.ttf' }] }) };
+  h.PMJS.web.canvas.trackMaskFill(c, 0, 0, canvas.width, canvas.height, 'white',
+    () => c.fillRect(0, 0, canvas.width, canvas.height));
+  let draws = 0;
+  h.NativeHost.canvas.drawText = () => { if (++draws === 2) throw Error('body failed'); };
+  assert.throws(() => h.PMJS.web.canvas.drawNativeText(c, 'X', 1, 3,
+    { font: '18px fixture', outlineWidth: 1, outlineColor: 'black', color: 'black' }), /body failed/);
+  assert.equal(h.PMJS.web.canvas.unitMaskRect(canvas), null);
+});
+
+test('full-clear eligibility checks normalized far edges', () => {
+  const h = harness(), canvas = new h.CanvasElement(); canvas.width = canvas.height = 10;
+  const calls = []; h.NativeHost.canvas.clear = () => calls.push('whole');
+  h.NativeHost.canvas.clearRect = (...args) => calls.push(args.slice(1));
+  const c = canvas.getContext('2d');
+  c.clearRect(-5, 0, 10, 10); c.clearRect(0, -5, 10, 10);
+  c.clearRect(-5, -5, 15, 15); c.clearRect(10, 10, -10, -10);
+  assert.deepEqual(calls, [[-5, 0, 10, 10], [0, -5, 10, 10], 'whole', 'whole']);
+});
+
+test('dirty ImageData rectangles intersect original edges and normalize negative extents', () => {
+  const h = harness(), canvas = new h.CanvasElement(), c = canvas.getContext('2d');
+  const data = { width: 3, height: 2, data: Uint8ClampedArray.from({ length: 24 }, (_, i) => i + 1) };
+  let writes = []; h.NativeHost.canvas.writePixels = (...args) => writes.push(args.slice(1));
+  c.putImageData(data, 4, 5, -1, 0, 2, 1);
+  assert.deepEqual(writes[0].slice(0, 4), [4, 5, 1, 1]);
+  assert.deepEqual(Array.from(writes[0][4]), Array.from(data.data.subarray(0, 4)));
+  writes = []; c.putImageData(data, 4, 5, 2, 2, -2, -2);
+  assert.deepEqual(writes[0].slice(0, 4), [4, 5, 2, 2]);
+  assert.deepEqual(Array.from(writes[0][4]), [...data.data.subarray(0, 8), ...data.data.subarray(12, 20)]);
+  writes = [];
+  for (const rect of [[-4, 0, 2, 1], [4, 0, 2, 1], [0, -4, 1, 2], [0, 3, 1, 1], [0, 0, 0, 1]])
+    c.putImageData(data, 0, 0, ...rect);
+  assert.deepEqual(writes, []);
+});
+
+test('linear gradients and text bypass source-over shortcuts for other operations', () => {
+  const h = harness(), canvas = new h.CanvasElement(); canvas.width = canvas.height = 10;
+  const c = canvas.getContext('2d'); let fills = 0, textTargets = [];
+  h.NativeHost.canvas.fillRect = () => fills++;
+  h.NativeHost.canvas.drawText = handle => textTargets.push(handle);
+  h.PMJS.fonts = { resolveDescriptor: () => ({ size: 18, faces: [{ path: 'fixture.ttf' }] }) };
+  for (const operation of ['destination-out', 'destination-in', 'copy', 'multiply']) {
+    c.globalCompositeOperation = operation;
+    const gradient = c.createLinearGradient(0, 0, 2, 0);
+    gradient.addColorStop(0, 'white'); gradient.addColorStop(1, 'black');
+    c.fillStyle = gradient; c.fillRect(0, 0, 2, 2);
+    assert.equal(h.calls.compositePixels.at(-1)[7], operation);
+    c.fillStyle = 'white'; c.fillText('X', 1, 3); c.strokeText('X', 1, 3);
+    assert.equal(h.calls.compositePixels.at(-1)[7], operation);
+  }
+  assert.equal(fills, 0);
+  assert.ok(textTargets.every(handle => handle !== canvas._nativeCanvas.handle));
+});
+
+test('affine smoothing interpolates premultiplied pixels and preserves reflection', () => {
+  for (const translucent of [false, true]) for (const reflected of [false, true]) {
+    const h = harness(), source = new h.CanvasElement(); source.width = 2; source.height = 1;
+    const target = new h.CanvasElement(); target.width = 4; target.height = 1;
+    const alpha = translucent ? 128 : 255;
+    h.NativeHost.canvas.readPremultipliedPixels = () => Uint8ClampedArray.from([255, 0, 0, 255, 0, 0, alpha, alpha]);
+    const c = target.getContext('2d'); c.beginPath(); c.rect(0, 0, 4, 1); c.clip();
+    if (reflected) { c.translate(4, 0); c.scale(-1, 1); }
+    c.imageSmoothingEnabled = false; c.drawImage(source, 0, 0, 4, 1);
+    const nearest = Array.from(h.calls.compositePixels.at(-1)[5]);
+    c.imageSmoothingEnabled = true; c.drawImage(source, 0, 0, 4, 1);
+    const filtered = Array.from(h.calls.compositePixels.at(-1)[5]);
+    let expected = [[255, 0, 0, 255], [191, 0, Math.round(alpha / 4), Math.round(255 * 0.75 + alpha / 4)],
+      [64, 0, Math.round(alpha * 0.75), Math.round(255 / 4 + alpha * 0.75)], [0, 0, alpha, alpha]];
+    if (reflected) expected.reverse();
+    assert.deepEqual(filtered, expected.flat());
+    assert.notDeepEqual(filtered, nearest);
+  }
 });

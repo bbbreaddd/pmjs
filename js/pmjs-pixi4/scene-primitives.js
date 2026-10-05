@@ -304,14 +304,27 @@ function ensureNativeTilingTexture(texture) {
 }
 
 function nativeTilingSource(sprite, scaleX, scaleY) {
-  if (sprite.origin && Number.isFinite(Number(sprite.origin.x)) &&
-      Number.isFinite(Number(sprite.origin.y))) {
-    return { x: Math.round(sprite.origin.x), y: Math.round(sprite.origin.y),
-      width: sprite.width, height: sprite.height };
-  }
-  var tilePosition = sprite.tilePosition || { x: 0, y: 0 };
-  return { x: -tilePosition.x / scaleX, y: -tilePosition.y / scaleY,
+  var matrix = sprite.tileTransform.localTransform;
+  var PictureTilingSprite = PIXI.extras && PIXI.extras.PictureTilingSprite;
+  // Picture tiling always includes anchor UVs; ordinary tiling opts in.
+  var respectAnchor = sprite.uvRespectAnchor ||
+    typeof PictureTilingSprite === 'function' && sprite instanceof PictureTilingSprite;
+  var anchorX = respectAnchor ? -sprite.anchor.x * sprite.width : 0;
+  var anchorY = respectAnchor ? -sprite.anchor.y * sprite.height : 0;
+  return { x: (-matrix.tx + anchorX) / scaleX,
+    y: (-matrix.ty + anchorY) / scaleY,
     width: sprite.width / scaleX, height: sprite.height / scaleY };
+}
+
+function nativeSimpleTilingTexture(texture) {
+  var base = texture.baseTexture, frame = texture._frame || texture.frame;
+  if (!base || !frame) return false;
+  var resolution = Number(base.resolution) || 1;
+  function powerOfTwo(value) {
+    return value > 0 && Number.isInteger(value) && (value & (value - 1)) === 0;
+  }
+  return frame.width === base.width && frame.height === base.height &&
+    powerOfTwo(base.width * resolution) && powerOfTwo(base.height * resolution);
 }
 
 function tileAnimationOffset(layer) {

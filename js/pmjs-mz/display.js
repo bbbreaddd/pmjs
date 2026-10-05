@@ -66,10 +66,14 @@
     }
   });
 
+  function releaseSlot(slot) {
+    if (slot._pmjsOwnedTextureSource) { slot.src = ''; return; }
+    slot._releaseNativeCanvas();
+  }
   function releaseAtlas(renderer) {
     var atlas = atlases.get(renderer || defaultRenderer);
     if (!atlas) return;
-    atlas.forEach(function(slot) { slot._releaseNativeCanvas(); });
+    atlas.forEach(releaseSlot);
     atlases.delete(renderer || defaultRenderer);
   }
 
@@ -93,12 +97,18 @@
           source.width, source.height].join(':');
         var previous = atlas[index];
         if (cacheable && previous && previous.__pmjsTileUploadSignature === signature) return;
-        var slot = new CanvasElement();
-        slot.width = slot.height = 1024;
-        slot.getContext('2d').drawImage(source, 0, 0);
+        var view = source._nativeImage && NativeHost.images.tileSlot &&
+          NativeHost.images.tileSlot(native.handle, 1024, 1024);
+        var slot;
+        if (view) slot = nativeImageFromResource(view);
+        else {
+          slot = new CanvasElement();
+          slot.width = slot.height = 1024;
+          slot.getContext('2d').drawImage(source, 0, 0);
+        }
         slot.__pmjsTileUploadSignature = signature;
         atlas[index] = slot;
-        if (previous) previous._releaseNativeCanvas();
+        if (previous) releaseSlot(previous);
       });
       layer._needsTexturesUpdate = false;
     }

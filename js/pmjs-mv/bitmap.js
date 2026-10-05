@@ -82,12 +82,70 @@ Bitmap.snap = function(stage) {
     stage.worldTransform.identity();
   }
   if (Bitmap.useBlur) PMJS.web.canvas.blur(bitmap._canvas);
-  if (Bitmap.useBlur) pmjsBitmapCanvasChanged(bitmap);
   bitmap._setDirty();
   return bitmap;
 };
 
-// Keep MV's blur method: the generic native blur has different kernel and alpha semantics.
+(function installNativeBlur() {
+  var reviewedBlur = function() {
+      for (var i = 0; i < 2; i++) {
+          var w = this.width;
+          var h = this.height;
+          var canvas = this._canvas;
+          var context = this._context;
+          var tempCanvas = document.createElement('canvas');
+          var tempContext = tempCanvas.getContext('2d');
+          tempCanvas.width = w + 2;
+          tempCanvas.height = h + 2;
+          tempContext.drawImage(canvas, 0, 0, w, h, 1, 1, w, h);
+          tempContext.drawImage(canvas, 0, 0, w, 1, 1, 0, w, 1);
+          tempContext.drawImage(canvas, 0, 0, 1, h, 0, 1, 1, h);
+          tempContext.drawImage(canvas, 0, h - 1, w, 1, 1, h + 1, w, 1);
+          tempContext.drawImage(canvas, w - 1, 0, 1, h, w + 1, 1, 1, h);
+          context.save();
+          context.fillStyle = 'black';
+          context.fillRect(0, 0, w, h);
+          context.globalCompositeOperation = 'lighter';
+          context.globalAlpha = 1 / 9;
+          for (var y = 0; y < 3; y++) {
+              for (var x = 0; x < 3; x++) {
+                  context.drawImage(tempCanvas, x, y, w, h, 0, 0, w, h);
+              }
+          }
+          context.restore();
+      }
+      this._setDirty();
+  };
+  function reviewedSource(fn) {
+    return Function.prototype.toString.call(fn).replace(/\r\n/g, "\n")
+      .split("\n").map(function(line) { return line.trim(); }).join("\n");
+  }
+  var stockBlur = Bitmap.prototype.blur;
+  if (typeof stockBlur !== 'function') return;
+  PMJS.optimizations.register({ id: 'bitmap.native-blur', owner: 'pmjs-mv',
+    fallback: 'stock MV Canvas additive blur' });
+  function activateNativeBlur() {
+    if (!PMJS.optimizations.isEnabled('bitmap.native-blur')) return;
+    if (reviewedSource(stockBlur) !== reviewedSource(reviewedBlur) || Bitmap.prototype.blur !== stockBlur) {
+      PMJS.optimizations.refuse('bitmap.native-blur', 'modified Bitmap blur method');
+      return;
+    }
+    Bitmap.prototype.blur = function() {
+      var canvas = this._canvas;
+      if (canvas.width !== this.width || canvas.height !== this.height ||
+          typeof PMJS.web.canvas.blurMv !== 'function' ||
+          !PMJS.web.canvas.blurMv(this._context)) {
+        return stockBlur.apply(this, arguments);
+      }
+      this._setDirty();
+    };
+  }
+  if (PMJS.phases && typeof PMJS.phases.on === 'function') {
+    PMJS.phases.on('afterGuestPlugins', 'pmjs.mv.native-blur', activateNativeBlur);
+  } else {
+    activateNativeBlur();
+  }
+})();
 
 // Annotate native canvases with their source bitmap URL for diagnosis.
 var _Bitmap_createCanvas = Bitmap.prototype._createCanvas;

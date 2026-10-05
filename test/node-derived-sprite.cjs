@@ -15,25 +15,30 @@ for (const [name, width, height, grid, backdrop] of [
   ['power-of-two', 256, 128, [8, 4], [0, 0, 0, 0]],
   ['wide', 8192, 32, [256, 1], [0, 0, 0, 0]],
   ['uniform', 192, 96, [1, 1], [37, 83, 129, 117]],
+  ['uniform-black', 816, 624, [1, 1], [0, 0, 0, 255]],
 ]) {
+  const uniform = name.startsWith('uniform');
   const pixels = Buffer.alloc(width * height * 4);
   const cw = width / grid[0], ch = height / grid[1];
   for (let y = 0; y < height; ++y) for (let x = 0; x < width; ++x) {
     const inside = name === 'wide' ? x % cw >= 12 && x % cw < 16 && y % ch >= 12 && y % ch < 16 :
-      name !== 'uniform' && x % cw >= 5 && x % cw < cw - 4 && y % ch >= 3 && y % ch < ch - 3;
+      !uniform && x % cw >= 5 && x % cw < cw - 4 && y % ch >= 3 && y % ch < ch - 3;
     const color = inside ? [(x % cw * 23) % 256, (y % ch * 19) % 256, (x + y) % 256, 96 + (x % cw * 7) % 160] : backdrop;
     pixels.set(color, (y * width + x) * 4);
   }
   const bytes = png(width, height, pixels);
   fs.writeFileSync(path.join(root, name + '.png'), bytes);
-  fixtures.push({ name, bytes, width, height, cw, ch, grid, backdrop });
+  fixtures.push({ name, bytes, width, height, cw, ch, grid, backdrop, uniform });
 }
 native.initialize({ gameRoot: root, assetRoot: '', width: 128, height: 96, windowTitle: 'derived sprite pixels' });
 native.render.setClearColor(0.08, 0.15, 0.2, 1);
 const schema = native.scene.schema;
 
 function frame(image, source, transform, nearest, alpha = 1, blend = 0, extraFlags = 0) {
-  const metadata = new Uint32Array([1, 0xffffffff, image.handle, 0xc3e7af, blend, (nearest ? 8 : 0) | extraFlags, 0]);
+  const tint = extraFlags & (1 << 11) ?
+    ((alpha * 255 << 24) | (Math.round(195 * alpha) << 16) |
+      (Math.round(231 * alpha) << 8) | Math.round(175 * alpha)) >>> 0 : 0xc3e7af;
+  const metadata = new Uint32Array([1, 0xffffffff, image.handle, tint, blend, (nearest ? 8 : 0) | extraFlags, 0]);
   const values = new Float32Array(schema.valueStride);
   values.set([...transform, alpha]);
   values.set(source, 9);
@@ -51,13 +56,23 @@ async function main() {
     fs.mkdirSync(directory);
     const recipe = { grid: fixture.grid, backdrop: fixture.backdrop };
     if (fixture.name === 'opaque') recipe.crop = [0, 0, fixture.cw, fixture.ch];
-    const descriptor = await native.assets.processImage(fixture.name + '.png', directory, recipe);
+    const descriptor = await native.assets.processImage(fixture.name + '.png', directory,
+      fixture.uniform ? null : recipe);
     assert.ok(descriptor, fixture.name);
+    if (fixture.uniform) {
+      assert.deepEqual(descriptor.uniform, fixture.backdrop, 'automatic uniform detection');
+      assert.deepEqual(descriptor.cells, []);
+      assert.deepEqual(descriptor.pages, []);
+    }
     const original = native.images.loadBytes(fixture.bytes);
     native.assets.installPrepared([{ source: fixture.name + '.png', directory, descriptor,
       sourceIdentity: native.assets.sourceIdentity(fixture.name + '.png') }]);
     const derived = await native.images.loadAsync(fixture.name + '.png');
     assert.deepEqual([derived.width, derived.height], [fixture.width, fixture.height]);
+    if (fixture.uniform) {
+      // Warm ordinary premultiplied storage before measuring the prepared image.
+      frame(original, [0, 0, fixture.width, fixture.height], [1, 0, 0, 1, 0, 0], true);
+    }
     const before = native.images.memory();
     const sources = [[0, 0, fixture.cw, fixture.ch],
       [Math.min(fixture.width - fixture.cw, fixture.cw), 0, fixture.cw, fixture.ch],
@@ -78,6 +93,33 @@ async function main() {
         'frozen derived frame changed');
       ++comparisons;
     }
+    if (fixture.uniform) {
+      const compact = native.images.memory();
+      const pixelBytes = fixture.backdrop[3] === 255 ? 4 : 8;
+      assert.equal(compact.gpuBytes - before.gpuBytes, pixelBytes,
+        'uniform drawing allocated more than straight and premultiplied source pixels');
+      assert.equal(compact.preparedMaterializations, before.preparedMaterializations,
+        'uniform drawing expanded the logical image');
+      const source = [0, 0, fixture.width, fixture.height];
+      const transform = [128 / fixture.width, 0, 0, 96 / fixture.height, 0, 0];
+      for (const backgroundAlpha of [0, 1]) {
+        native.render.setClearColor(0.08, 0.15, 0.2, backgroundAlpha);
+        for (const flags of [0, 1 << 11]) for (const nearest of [true, false]) {
+          for (const alpha of [0, 150 / 255, 0.37, 1]) {
+            assert.deepEqual(frame(derived, source, transform, nearest, alpha, 0, flags),
+              frame(original, source, transform, nearest, alpha, 0, flags),
+              `${fixture.name}: alpha=${alpha}, background=${backgroundAlpha}, flags=${flags}`);
+            ++comparisons;
+          }
+        }
+      }
+      native.render.setClearColor(0.08, 0.15, 0.2, 1);
+      const afterOpacity = native.images.memory();
+      assert.equal(afterOpacity.preparedMaterializations, before.preparedMaterializations,
+        'opacity or packed sprite colour expanded the logical image');
+      assert.equal(afterOpacity.textureUploadBytes, compact.textureUploadBytes,
+        'opacity or packed sprite colour uploaded source pixels again');
+    }
     // Mipmap and cross-cell crops require ordinary backing with original sampling.
     for (const [source, flags] of [
       [[0, 0, Math.min(fixture.width, fixture.cw + 7), fixture.ch], 0],
@@ -88,14 +130,14 @@ async function main() {
       ++comparisons;
     }
     const after = native.images.memory();
-    if (fixture.name === 'uniform' || fixture.name === 'power-of-two' || fixture.name === 'wide') {
+    if (fixture.uniform || fixture.name === 'power-of-two' || fixture.name === 'wide') {
       assert.ok(after.preparedRegions > before.preparedRegions, 'eligible sprites did not use prepared regions');
     } else {
       assert.ok(after.preparedFallbacks['non-power-of-two-sampling'] > 0,
         'non-power-of-two nearest sampling must use compatible backing');
     }
     assert.ok(after.preparedFallbacks.mipmaps > 0, 'mipmaps did not use compatible backing');
-    if (fixture.name !== 'uniform') assert.ok(after.preparedFallbacks['linear-sampling'] > 0,
+    if (!fixture.uniform) assert.ok(after.preparedFallbacks['linear-sampling'] > 0,
       'nonuniform linear sampling must use compatible backing');
     for (const blend of [1, 2, 3]) {
       assert.deepEqual(frame(derived, sources[0], transforms[0], true, 0.63, blend),

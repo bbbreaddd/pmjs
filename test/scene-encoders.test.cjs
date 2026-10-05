@@ -983,6 +983,101 @@ test('tiling, screen, graphics, and mesh leaves emit their packet kinds', () => 
   assert.equal(sprite() instanceof sandbox.PIXI.Sprite, true);
 });
 
+test('picture tiling includes anchor UVs while ordinary tiling keeps its explicit anchor mode', () => {
+  const harness = makeHarness(), { sandbox, makeTexture } = harness;
+  class PictureTilingSprite extends sandbox.PIXI.extras.TilingSprite {}
+  sandbox.PIXI.extras.PictureTilingSprite = PictureTilingSprite;
+  for (const [SpriteType, respectAnchor, expectedX, expectedY] of [
+    [PictureTilingSprite, false, -816, -624],
+    [sandbox.PIXI.extras.TilingSprite, false, -408, -312],
+    [sandbox.PIXI.extras.TilingSprite, true, -816, -624],
+  ]) {
+    const stage = new sandbox.PIXI.Container();
+    const node = new SpriteType(makeTexture(816, 624), 816, 624);
+    Object.assign(node.anchor, { x: 0.5, y: 0.5 });
+    node.x = 408; node.y = 312; node.origin = { x: -408, y: -312 };
+    node.uvRespectAnchor = respectAnchor;
+    stage.addChild(node);
+    const packet = submitOnly(harness, stage);
+    assert.deepEqual(packet.values.slice(41 + 9, 41 + 13), [expectedX, expectedY, 816, 624]);
+    assert.deepEqual(packet.values.slice(41 + 7, 41 + 9), [-408, -312]);
+    assert.deepEqual(node.anchor, { x: 0.5, y: 0.5 });
+    assert.equal(node.uvRespectAnchor, respectAnchor);
+  }
+});
+
+test('tiled origins use the prepared rounding and sampling scale, including mirrored sampling', () => {
+  const harness = makeHarness(), { sandbox, makeTexture } = harness;
+  for (const scale of [2, -2]) {
+    const stage = new sandbox.PIXI.Container();
+    const node = new sandbox.PIXI.extras.TilingSprite(makeTexture(16, 12), 32, 24);
+    node.origin = { x: 0.5, y: -0.5 };
+    node.tileScale = { x: scale, y: scale };
+    stage.addChild(node);
+    const packet = submitOnly(harness, stage);
+    assert.equal(Math.abs(packet.values[41 + 9]), 0);
+    assert.equal(packet.values[41 + 10], -1 / scale);
+    assert.deepEqual(packet.values.slice(41 + 11, 41 + 13), [32 / scale, 24 / scale]);
+    assert.equal(node.origin.x, 0.5);
+    assert.equal(node.origin.y, -0.5);
+  }
+});
+
+test('tiling prepares pivot sampling and retains finite small scales', () => {
+  const harness = makeHarness(), { sandbox, makeTexture } = harness;
+  const root = new sandbox.PIXI.Container();
+  const node = new sandbox.PIXI.extras.TilingSprite(makeTexture(4, 4), 20, 16);
+  node.tileScale = { x: 2, y: 0.5 };
+  node.tileTransform.pivot = { x: 1.5, y: 2 };
+  root.addChild(node);
+  assert.deepEqual(submitOnly(harness, root).values.slice(41 + 9, 41 + 13), [1.5, 2, 10, 32]);
+  node.tileScale.x = 1 / 1048576;
+  assert.deepEqual(submitOnly(harness, root).values.slice(41 + 9, 41 + 13), [1.5, 2, 20971520, 32]);
+  assert.equal(node.tileScale.x, 1 / 1048576);
+  assert.deepEqual(node.tileTransform.pivot, { x: 1.5, y: 2 });
+});
+
+test('undefined tiling sampling omits only its leaf and preserves visible children', () => {
+  for (const scale of [0, NaN, Infinity, 1e-40]) {
+    const harness = makeHarness(), { sandbox, makeTexture, sprite } = harness;
+    const root = new sandbox.PIXI.Container();
+    const node = new sandbox.PIXI.extras.TilingSprite(makeTexture(4, 4), 20, 16);
+    node.tileScale.x = scale; node.addChild(sprite()); root.addChild(node);
+    const packet = submitOnly(harness, root);
+    assert.deepEqual(packet.metadata.filter((_, i) => i % 7 === 0), [0, 0, 1]);
+    assert.ok(Object.is(node.tileScale.x, scale));
+  }
+});
+
+test('tiling reports rotated sampling and custom clamps without losing children', () => {
+  for (const setup of [node => { node.tileTransform.rotation = 0.25; },
+    node => { node.uvTransform = { clampMargin: 0, clampOffset: 0 }; }]) {
+    const harness = makeHarness(), { sandbox, makeTexture, sprite } = harness;
+    const root = new sandbox.PIXI.Container();
+    const node = new sandbox.PIXI.extras.TilingSprite(makeTexture(4, 4), 20, 16);
+    setup(node); node.addChild(sprite()); root.addChild(node);
+    assert.equal(sandbox.submitNativeScene(root), true);
+    const packet = harness.submitted[0];
+    assert.deepEqual(packet.metadata.filter((_, i) => i % 7 === 0), [0, 0, 1]);
+    assert.equal(harness.compatHits.length, 1);
+    assert.match(harness.compatHits[0][0], /^render.tiling-/);
+  }
+});
+
+test('tiling clamps NPOT and cropped repeats while preserving full POT repeat sampling', () => {
+  const harness = makeHarness(), { sandbox, makeTexture } = harness;
+  for (const [width, height, cropped, expected] of [[4, 4, false, 0], [3, 5, false, 32768], [4, 4, true, 32768]]) {
+    const texture = makeTexture(width, height);
+    if (cropped) texture._frame.width = 3;
+    // Crop rasterization is covered by real-addon rendering fixtures.
+    if (cropped) sandbox.ensureNativeTilingTexture = () => ({ handle: 300, resolution: 1 });
+    const root = new sandbox.PIXI.Container();
+    root.addChild(new sandbox.PIXI.extras.TilingSprite(texture, 20, 16));
+    const packet = submitOnly(harness, root);
+    assert.equal(packet.metadata[7 + 5] & 32768, expected);
+  }
+});
+
 test('ordinary Pixi meshes upload live vertex changes without revision counters', () => {
   const harness = makeHarness();
   const { sandbox, makeTexture } = harness;

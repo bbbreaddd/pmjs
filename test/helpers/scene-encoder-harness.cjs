@@ -76,6 +76,15 @@ function makeHarness() {
       super(); this.texture = texture; this.width = width; this.height = height;
       this.anchor = { x: 0, y: 0 }; this.tileScale = { x: 1, y: 1 };
       this.tilePosition = { x: 0, y: 0 }; this.origin = null;
+      this.tileTransform = { pivot: { x: 0, y: 0 }, rotation: 0,
+        localTransform: {}, updateLocalTransform: () => {
+          const transform = this.tileTransform, angle = transform.rotation;
+          const a = Math.cos(angle) * this.tileScale.x, b = Math.sin(angle) * this.tileScale.x;
+          const c = -Math.sin(angle) * this.tileScale.y, d = Math.cos(angle) * this.tileScale.y;
+          transform.localTransform = { a, b, c, d,
+            tx: this.tilePosition.x - transform.pivot.x * a - transform.pivot.y * c,
+            ty: this.tilePosition.y - transform.pivot.x * b - transform.pivot.y * d };
+        } };
     }
   }
   class Mesh extends Container {
@@ -172,7 +181,7 @@ function makeHarness() {
     },
     NativeHost: { plugins: { mpp: { createBitmapMesh() { return nextHandle++; } } }, mv: { createBitmapMesh() { return nextHandle++; } },
       scene: { schema: { version: 1, metadataStride: 7, valueStride: 41,
-          transactionalSubmit: true },
+          transactionalSubmit: true, clampedTilingSampling: true },
         packetVersion: 1,
         submit(version, metadata, values, count) {
           submitted.push({ version, count,

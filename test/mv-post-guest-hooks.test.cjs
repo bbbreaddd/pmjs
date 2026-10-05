@@ -69,6 +69,65 @@ test('Bitmap image hooks wrap the final guest implementation', () => {
   assert.equal(previous.destroyed, true, 'stock file request releases its replaced native image');
 });
 
+test('MV prepared cache hits preserve custom guest decryptors and completion', () => {
+  let cached = true;
+  let ctx;
+  const decrypted = [];
+  function NativeImage() { ctx.EventTarget.call(this); }
+  function Bitmap() {}
+  Bitmap.prototype._requestImage = function(url) {
+    this._image = new NativeImage();
+    this._url = url;
+    this._loadingState = 'decrypting';
+    ctx.Decrypter.decryptImg(url, this);
+  };
+  Bitmap.prototype._onLoad = function(event) {
+    this._image.removeEventListener('load', this._loadListener);
+    this._image.removeEventListener('error', this._errorListener);
+    this.completed = (this.completed || 0) + 1;
+    this.event = event;
+  };
+  const decrypter = { decryptImg() { throw new Error('stock decryptor used'); } };
+  ctx = loadPmjsRuntime({ Bitmap, NativeImage, Decrypter: decrypter,
+    NativeHost: { assets: { hasDecrypted(path) {
+      assert.equal(path, 'img/pictures/a b.png');
+      return cached;
+    } } }
+  });
+  vm.runInContext(fs.readFileSync(path.join(root, 'js/pmjs-web/events.js'), 'utf8'), ctx);
+  NativeImage.prototype = Object.create(ctx.EventTarget.prototype);
+  NativeImage.prototype.constructor = NativeImage;
+  const source = fs.readFileSync(path.join(root, 'js/pmjs-mv/images.js'), 'utf8');
+  vm.runInContext(slice(source, 'function pmjsBitmapRequestImageWrap',
+    '\nPMJS.methods.wrap({'), ctx);
+  decrypter.decryptImg = function(url, bitmap) {
+    assert.equal(this, decrypter);
+    decrypted.push([url, bitmap]);
+    bitmap._image.src = 'blob:guest';
+    bitmap._image.addEventListener('load', bitmap._loadListener = Bitmap.prototype._onLoad.bind(bitmap));
+  };
+  ctx.PMJS.methods.install();
+
+  const url = 'file:///game/img/pictures/a%20b.png?version=1';
+  const loaded = new Bitmap();
+  loaded._requestImage(url);
+  assert.equal(loaded._image.src, 'blob:guest');
+  assert.equal(loaded._url, url);
+  const event = { type: 'load' };
+  loaded._image.dispatchEvent(event);
+  assert.equal(loaded.completed, 1);
+  assert.equal(loaded.event, event);
+  assert.deepEqual(decrypted, [[url, loaded]]);
+  assert.equal(loaded._image._listeners.load.length, 0);
+
+
+  cached = false;
+  const missing = new Bitmap();
+  missing._requestImage(url);
+  assert.deepEqual(decrypted[1], [url, missing]);
+  assert.equal(missing._image.src, 'blob:guest');
+});
+
 for (const strict of [false, true]) {
   test('MV request completion preserves image cleanup in ' +
       (strict ? 'strict' : 'production') + ' compatibility mode', () => {
@@ -178,4 +237,39 @@ test('trace _executeTint observes without replacing guest behavior', () => {
   assert.equal(sprite._executeTint(1, 2, 3, 4), 'guest');
   assert.equal(sprite.tinted, true);
   assert.deepEqual(events, [['tint', 'mv.cpu-tint-complete']]);
+});
+
+test('recognized MV decryptor uses prepared images and falls back on cache errors', () => {
+  const { decryptImg } = require('./helpers/mv-reviewed-methods.cjs');
+  const requests = [];
+  function Bitmap() {}
+  function NativeImage() { context.EventTarget.call(this); }
+  Bitmap.prototype._onLoad = function() { this.completed = (this.completed || 0)+1; };
+  Bitmap.prototype._onError = function() { this.failed = true; };
+  const decrypter = { extToEncryptExt: url => url, decryptArrayBuffer: value => value,
+    createBlobUrl: () => 'blob:ordinary', _xhrOk: 400 };
+  const context = loadPmjsRuntime({ Bitmap, NativeImage, Decrypter: decrypter,
+    NativeHost: { assets: { hasDecrypted: () => true } },
+    XMLHttpRequest: function() { this.open = () => {}; this.send = () => requests.push(this); }
+  });
+  vm.runInContext(fs.readFileSync(path.join(root, 'js/pmjs-web/events.js'), 'utf8'), context);
+  NativeImage.prototype = Object.create(context.EventTarget.prototype);
+  decrypter.decryptImg = vm.runInContext('('+decryptImg.toString()+')', context);
+  vm.runInContext(slice(fs.readFileSync(path.join(root, 'js/pmjs-mv/images.js'), 'utf8'),
+    'function pmjsBitmapRequestImageWrap', '\nPMJS.methods.wrap({'), context);
+  context.PMJS.methods.install();
+  const bitmap = new Bitmap(); bitmap._image = new NativeImage();
+  decrypter.decryptImg('img/a.png', bitmap);
+  assert.equal(bitmap._image.src, 'img/a.png');
+  bitmap._image.dispatchEvent({ type: 'load' });
+  assert.equal(bitmap.completed, 1);
+  assert.equal(requests.length, 0);
+  const failed = new Bitmap(); failed._image = new NativeImage();
+  decrypter.decryptImg('img/a.png', failed);
+  failed._image.dispatchEvent({ type: 'error' });
+  assert.equal(requests.length, 1);
+  requests[0].status = 200; requests[0].response = new ArrayBuffer(0); requests[0].onload();
+  assert.equal(failed._image.src, 'blob:ordinary');
+  failed._image.dispatchEvent({ type: 'load' });
+  assert.equal(failed.completed, 1);
 });

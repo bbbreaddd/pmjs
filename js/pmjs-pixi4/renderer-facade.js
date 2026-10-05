@@ -403,8 +403,8 @@ function createNativePixiRenderer(width, height, options) {
       var video = Graphics._video;
       var videoOpacity = nativeElementOpacity(video, 1);
       var videoTexture = video &&
-        (typeof video._pmjsNativeTextureSource === 'function' ?
-          video._pmjsNativeTextureSource() :
+        (typeof video._pmjsNativePresentationSource === 'function' ?
+          video._pmjsNativePresentationSource() :
           (video._nativeImage || video._nativeCanvas));
       var videoHandle = videoTexture && videoOpacity > 0 &&
         video.videoWidth > 0 && video.videoHeight > 0 ? videoTexture.handle : 0;

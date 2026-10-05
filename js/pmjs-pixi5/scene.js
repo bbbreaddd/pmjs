@@ -4,6 +4,7 @@
   var stockSpriteCalculateVertices = PIXI.Sprite.prototype.calculateVertices;
   var contracts = new WeakMap();
   var rendererReleases = [];
+  var renderPreparations = [];
   function registerRenderContract(prototype, contract) {
     if (!prototype) return;
     var registered = Object.assign({
@@ -41,6 +42,17 @@
     registerRenderContract: registerRenderContract,
     nativeSource: nativeSource,
     rejectRender: reject,
+    registerRenderPreparation: function(prepare, release) {
+      renderPreparations.push(prepare);
+      if (release) rendererReleases.push(release);
+    },
+    prepareRender: function(renderer, stage, offscreen) {
+      var prepared = new WeakMap();
+      renderPreparations.forEach(function(prepare) {
+        prepare(renderer, stage, offscreen, prepared);
+      });
+      return prepared;
+    },
     releaseRenderer: function(renderer) {
       rendererReleases.forEach(function(release) { release(renderer); });
     }
@@ -257,6 +269,7 @@
   var renderOwner;
   var viewport;
   var filterTargets;
+  var preparedSprites;
   var renderStage;
   var skipTransformUpdate = false;
   function visibleAlpha(node) {
@@ -307,6 +320,14 @@
     var contract = renderContract(node);
     if (clip) parent = clipRecord(parent, clip);
     if (node.mask) reject('render.mask', node);
+    var prepared = preparedSprites && preparedSprites.get(node);
+    if (prepared) {
+      var cached = addRecord(parent, 1, prepared.resource, 0xffffff, 0, identity, 1);
+      metadata[cached * metadataStride + 5] |= 131072 | 8;
+      values.set([0, 0, 0, 0, prepared.width, prepared.height,
+        prepared.width, prepared.height], cached * valueStride + 7);
+      return;
+    }
     var encodedFilters = [];
     var supportedFilters = false;
     var filterTarget = activeFilters(node) && needsFilterTarget(node);
@@ -550,7 +571,7 @@
     });
   }
 
-  function render(stage, backgroundColor, resolution, size, renderer, skipUpdateTransform, projection) {
+  function render(stage, backgroundColor, resolution, size, renderer, skipUpdateTransform, projection, prepared) {
     if (!skipUpdateTransform && typeof stage.updateTransform === 'function') {
       var previousParent = stage.parent;
       stage.parent = stage._tempDisplayObjectParent;
@@ -560,6 +581,7 @@
     renderStage = stage;
     skipTransformUpdate = !!skipUpdateTransform;
     filterTargets = new WeakMap();
+    preparedSprites = prepared;
     if (backgroundColor !== null) {
       addRecord(0xffffffff, 3, 0, backgroundColor, 0, identity, 1);
     }
