@@ -7,6 +7,8 @@ process.env.PMJS_AUDIO_DIAGNOSTICS = '0';
 const native = require(path.resolve(process.argv[2]));
 fs.writeFileSync(path.join(path.resolve(process.argv[3]), 'fixture-encrypted.rpgmvo'),
   Buffer.concat([Buffer.from('encrypted-fixture'), wavBytes()]));
+const emptyPacketBytes = Buffer.from(fs.readFileSync(path.join(__dirname, 'assets/empty-packet.ogg.b64'), 'utf8'), 'base64');
+fs.writeFileSync(path.join(path.resolve(process.argv[3]), 'empty-packet.ogg'), emptyPacketBytes);
 native.initialize({gameRoot:path.resolve(process.argv[3]),assetRoot:'',width:640,height:480,windowTitle:'pmjs test'});
 
 function wavBytes(frames = 480) {
@@ -70,4 +72,11 @@ const released = native.media.audioStats();
 assert.equal(released.sampleVoices, 0);
 assert.equal(released.streamVoices, 0);
 assert.equal(released.livePcmBytes, released.cacheBytes);
+const fromFile = native.media.loadAudio('empty-packet.ogg', { intent: 'effect' });
+const fromBytes = native.media.loadAudioBytes(emptyPacketBytes,
+  { intent: 'effect', resourceIdentity: 'empty-packet-regression' });
+assert.ok(fromFile.duration > 0.09 && fromFile.duration < 0.15, 'empty final packet preserves audible samples');
+assert.equal(fromBytes.duration, fromFile.duration);
+for (const handle of [fromFile.handle, fromBytes.handle]) native.media.releaseAudio(handle);
+assert.equal(native.media.audioStats().sampleVoices, 0);
 console.log('[pmjs-node-audio-bytes] ready');

@@ -239,8 +239,13 @@ if(BUILD_TESTING)
   configure_file("${CMAKE_CURRENT_SOURCE_DIR}/test/assets/testfont.ttf" "${CMAKE_CURRENT_BINARY_DIR}/test-assets/testfont.ttf" COPYONLY)
   configure_file("${CMAKE_CURRENT_SOURCE_DIR}/test/assets/text-shaping.ttf"
     "${CMAKE_CURRENT_BINARY_DIR}/test-assets/text-shaping.ttf" COPYONLY)
+  execute_process(COMMAND ${BASE64_EXECUTABLE} -d
+    INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/empty-packet.ogg.b64"
+    OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/empty-packet.ogg"
+    COMMAND_ERROR_IS_FATAL ANY)
   add_test(NAME native-media-decoder COMMAND pmjs-media-decoder-test
-    "${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture-video.mp4")
+    "${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture-video.mp4"
+    "${CMAKE_CURRENT_BINARY_DIR}/test-assets/empty-packet.ogg")
   execute_process(COMMAND ${BASE64_EXECUTABLE} -d
     INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/short-audio.flac.b64"
     OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/short-audio.flac"

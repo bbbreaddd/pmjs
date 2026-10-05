@@ -263,7 +263,8 @@ std::optional<DecodedAudio> MediaDecoder::decodeAudio(
     }
   };
   while ((result = av_read_frame(format.get(), packet.get())) >= 0) {
-    if (packet->stream_index == streamIndex) {
+    // Empty demux packets carry no audio; only an explicit null packet flushes the decoder.
+    if (packet->stream_index == streamIndex && packet->size > 0) {
       while ((result = avcodec_send_packet(codec.get(), packet.get())) == AVERROR(EAGAIN))
         if (!drain()) return std::nullopt;
       if (result < 0) { fail(error, "cannot submit audio packet: " + ffError(result)); return std::nullopt; }
@@ -666,7 +667,9 @@ struct AudioDecoderSession::Impl {
           break;
         }
         if (result < 0) { fail(error, "cannot read audio: " + ffError(result)); return false; }
-        if (packet->stream_index != streamIndex) { av_packet_unref(packet.get()); continue; }
+        if (packet->stream_index != streamIndex || packet->size == 0) {
+          av_packet_unref(packet.get()); continue;
+        }
         result = avcodec_send_packet(codec.get(), packet.get());
         av_packet_unref(packet.get());
         if (result < 0 && result != AVERROR(EAGAIN)) {

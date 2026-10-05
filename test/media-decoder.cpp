@@ -1,15 +1,35 @@
 #include "media_decoder.hpp"
 
 #include <filesystem>
+#include <cmath>
 #include <iostream>
 #include <string>
 #include <vector>
 
 int main(int argc, char** argv) {
-  if (argc != 2) return 2;
+  if (argc != 3) return 2;
   const std::filesystem::path path(argv[1]);
-  pmjs::VideoDecoderSession ordinary(path);
   std::string error;
+  const auto pcm = pmjs::MediaDecoder::decodeAudio(argv[2], &error);
+  pmjs::AudioDecoderSession audio(argv[2]);
+  std::vector<float> streamed;
+  for (;;) {
+    auto chunk = audio.read(512, &error);
+    if (!error.empty()) { std::cerr << error << '\n'; return 1; }
+    if (chunk.empty()) break;
+    streamed.insert(streamed.end(), chunk.begin(), chunk.end());
+  }
+  if (!pcm || pcm->duration() < 0.09 || pcm->duration() > 0.15 ||
+      pcm->samples.size() != streamed.size()) {
+    std::cerr << "empty final packet changed audio decoding: " << error << '\n';
+    return 1;
+  }
+  for (std::size_t i = 0; i < streamed.size(); ++i) {
+    if (std::abs(streamed[i] - pcm->samples[i]) > 1e-7F) {
+      std::cerr << "streamed and full audio samples differ\n"; return 1;
+    }
+  }
+  pmjs::VideoDecoderSession ordinary(path);
   auto ordinaryFirst = ordinary.frame(0.0, &error);
   auto ordinaryLater = ordinary.frame(0.25, &error);
   const auto ordinaryStats = ordinary.stats();
