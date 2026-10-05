@@ -197,6 +197,10 @@ struct State {
   pmjs::Vfs& vfs;
   std::unique_ptr<pmjs::Vfs> assets;
   std::int64_t reportedExternalBytes = 0;
+  std::chrono::steady_clock::time_point preparationPresentedAt{};
+  bool preparationFontsResolved = false;
+  std::vector<std::filesystem::path> preparationFonts;
+  pmjs::CanvasHandle preparationSurface = 0;
   std::unordered_map<std::uint32_t, std::unique_ptr<Video>> videos;
   std::unordered_map<std::string, AsyncImageLoad*> pendingImageLoads;
   std::uint64_t imageDecodeJobs = 0;

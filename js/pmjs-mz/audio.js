@@ -27,6 +27,8 @@ MzNativeWebAudio.prototype._startSource = function() {
   this._voice.loadSource(this._url, function(path) {
     if (typeof Utils === 'undefined' || typeof Utils.hasEncryptedAudio !== 'function' ||
         !Utils.hasEncryptedAudio()) return null;
+    if (NativeHost.assets && typeof NativeHost.assets.hasDecrypted === 'function' &&
+        NativeHost.assets.hasDecrypted(path)) return null;
     return { path: path + '_', decrypt: function(bytes) {
       return Utils.decryptArrayBuffer(bytes);
     } };

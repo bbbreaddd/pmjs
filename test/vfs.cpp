@@ -121,6 +121,62 @@ int main() try {
   require(restarted.readText("data/new.txt") == "new" && !restarted.exists("data/System.json"),
           "overlay state did not persist through a fresh VFS");
 
+  TemporaryDirectory derivedFixture("derived");
+  const auto mediaRoot = derivedFixture.path() / "game";
+  const auto cache = derivedFixture.path() / "cache.png";
+  std::filesystem::create_directories(mediaRoot / "img");
+  std::filesystem::create_directories(mediaRoot / "data");
+  write(mediaRoot / "img/a.png_", "ciphertext");
+  write(mediaRoot / "data/System.json", "key-one");
+  write(cache, "plaintext");
+  pmjs::Vfs media(mediaRoot);
+  auto entry = pmjs::Vfs::DerivedFile{"img/a.png", "img/a.png_", "data/System.json", cache,
+    pmjs::Vfs::fileIdentity(mediaRoot / "img/a.png_"),
+    pmjs::Vfs::fileIdentity(mediaRoot / "data/System.json"), {}};
+  media.installDerivedFiles({entry});
+  require(media.readText("IMG/A.PNG") == "plaintext" && media.exists("img/a.png"),
+          "validated derived file did not resolve");
+  require(media.readText("img/a.png_") == "ciphertext", "derived file replaced original bytes");
+  require(media.readDirectory("img") == std::vector<std::string>{"a.png", "a.png_"},
+          "derived logical path missing from listing");
+  const auto retainedDerivedIndex = media;
+  media.installDerivedFiles({});
+  require(!media.exists("img/a.png") && retainedDerivedIndex.exists("img/a.png"),
+          "derived index publication changed a retained snapshot");
+  media.installDerivedFiles({entry});
+  write(cache, "changed cached bytes");
+  require(!media.resolveDerived("img/a.png"), "mutated cached file was reused");
+  write(cache, "plaintext");
+  media.installDerivedFiles({entry});
+  write(mediaRoot / "data/System.json", "key-two");
+  require(!media.resolve("img/a.png"), "changed encryption settings reused stale plaintext");
+  entry.settingsIdentity = pmjs::Vfs::fileIdentity(mediaRoot / "data/System.json");
+  media.installDerivedFiles({entry});
+  write(mediaRoot / "img/a.png_", "changed ciphertext");
+  require(!media.resolve("img/a.png"), "changed ciphertext reused stale plaintext");
+  entry.sourceIdentity = pmjs::Vfs::fileIdentity(mediaRoot / "img/a.png_");
+  media.installDerivedFiles({entry});
+  const auto mediaOverlay = derivedFixture.path() / "overlay";
+  std::filesystem::create_directories(mediaOverlay / "files/img");
+  std::filesystem::create_directories(mediaOverlay / "deleted");
+  media.mountWritableOverlay(mediaOverlay);
+  write(mediaOverlay / "files/img/a.png_", "overlay ciphertext");
+  media.updateWritableOverlay({"img/a.png_"}, {});
+  require(!media.resolveDerived("img/a.png"), "writable encrypted replacement reused stale plaintext");
+  write(mediaOverlay / "files/img/a.png", "explicit plaintext replacement");
+  media.updateWritableOverlay({"img/a.png"}, {});
+  require(media.readText("img/a.png") == "explicit plaintext replacement" && media.resolveDerived("img/a.png"),
+          "explicit logical replacement did not override derived backing");
+  std::filesystem::remove(mediaOverlay / "files/img/a.png");
+  std::filesystem::create_directory(mediaOverlay / "files/img/a.png");
+  media.updateWritableOverlay({"img/a.png"}, {});
+  require(media.isDirectory("img/a.png") && !media.resolveDerived("img/a.png"),
+          "logical directory resolved to a derived file");
+  std::filesystem::remove(mediaOverlay / "files/img/a.png");
+  write(mediaOverlay / "deleted" / std::string(64, 'c'), "img/a.png");
+  media.updateWritableOverlay({"img/a.png"}, {std::string(64, 'c')});
+  require(!media.resolveDerived("img/a.png"), "deleted logical path resurrected derived backing");
+
   TemporaryDirectory collisionFixture("collision");
   write(collisionFixture.path() / "Name.txt", "upper");
   write(collisionFixture.path() / "name.TXT", "lower");

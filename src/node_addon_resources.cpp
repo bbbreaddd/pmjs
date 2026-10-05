@@ -1,4 +1,5 @@
 #include "node_addon_internal.hpp"
+#include <cmath>
 
 namespace pmjs::addon {
 namespace {
@@ -93,8 +94,12 @@ struct AsyncImageLoad {
   std::unique_ptr<pmjs::ImageFileSource> source;
   std::string key;
   bool retainCpuPixels = false;
+  bool prepareCpuPixels = false;
+  std::shared_ptr<pmjs::ImageStore::PreparedLoad> prepared;
   std::optional<pmjs::ImagePixels> pixels;
 };
+
+napi_status queueImageWork(napi_env env, AsyncImageLoad& load);
 
 struct AsyncImageMemoryLoad {
   napi_env env = nullptr;
@@ -163,6 +168,14 @@ napi_value loadImageBytesAsync(napi_env env, napi_callback_info info) try {
 
 void executeImageLoad(napi_env, void* opaque) noexcept {
   auto* load = static_cast<AsyncImageLoad*>(opaque);
+  if (load->prepared) {
+    try {
+      if (pmjs::ImageStore::validatePrepared(*load->prepared, load->prepareCpuPixels)) return;
+    } catch (...) {
+      // Invalid prepared backing still permits decoding the captured source.
+    }
+    load->prepared.reset();
+  }
   try {
     load->pixels = pmjs::ImageStore::decodeFile(*load->source);
   } catch (...) {
@@ -172,11 +185,23 @@ void executeImageLoad(napi_env, void* opaque) noexcept {
 
 void completeImageLoad(napi_env env, napi_status status, void* opaque) {
   std::unique_ptr<AsyncImageLoad> load(static_cast<AsyncImageLoad*>(opaque));
+  napi_delete_async_work(env, load->work);
+  load->work = nullptr;
+  // A caller may request CPU pixels after validation has already finished.
+  if (status == napi_ok && load->prepared && load->retainCpuPixels && !load->prepareCpuPixels) {
+    load->prepareCpuPixels = true;
+    if (queueImageWork(env, *load) == napi_ok) {
+      load.release();
+      return;
+    }
+    status = napi_generic_failure;
+  }
   if (state) state->pendingImageLoads.erase(load->key);
   napi_value result;
-  if (status == napi_ok && load->pixels) {
-    auto installed = state->images.installDecoded(
-      *load->source, std::move(*load->pixels), load->retainCpuPixels);
+  if (status == napi_ok && (load->prepared || load->pixels)) {
+    auto installed = load->prepared ? state->images.installPreparedLoad(
+      *load->source, std::move(load->prepared), load->retainCpuPixels) :
+      state->images.installDecoded(*load->source, std::move(*load->pixels), load->retainCpuPixels);
     if (installed) {
       bool retained = true;
       std::size_t ownerships = 1;
@@ -196,7 +221,6 @@ void completeImageLoad(napi_env env, napi_status status, void* opaque) {
             imageInfo(env, installed->handle, installed->width,
                       installed->height));
         }
-        napi_delete_async_work(env, load->work);
         return;
       }
       while (ownerships > 0) {
@@ -211,7 +235,21 @@ void completeImageLoad(napi_env env, napi_status status, void* opaque) {
   for (const auto deferred : load->deferreds) {
     napi_reject_deferred(env, deferred, result);
   }
-  napi_delete_async_work(env, load->work);
+}
+
+napi_status queueImageWork(napi_env env, AsyncImageLoad& load) {
+  napi_value name;
+  auto status = napi_create_string_utf8(env, "pmjs-image-load", NAPI_AUTO_LENGTH, &name);
+  if (status != napi_ok) return status;
+  status = napi_create_async_work(env, nullptr, name, executeImageLoad,
+    completeImageLoad, &load, &load.work);
+  if (status != napi_ok) return status;
+  status = napi_queue_async_work(env, load.work);
+  if (status != napi_ok) {
+    napi_delete_async_work(env, load.work);
+    load.work = nullptr;
+  }
+  return status;
 }
 
 napi_value queueImageLoad(napi_env env, const std::filesystem::path& path,
@@ -224,10 +262,14 @@ napi_value queueImageLoad(napi_env env, const std::filesystem::path& path,
   check(env, napi_create_promise(env, &deferred, &promise),
         "cannot create image promise");
   if (auto cached = state->images.acquireCached(*source)) {
-    if (retainCpuPixels) state->images.retainCpuPixels(cached->handle);
-    napi_resolve_deferred(env, deferred,
-      imageInfo(env, cached->handle, cached->width, cached->height));
-    return promise;
+    if (!retainCpuPixels || !state->images.hasPreparedBacking(cached->handle) ||
+        state->images.hasCpuPixels(cached->handle)) {
+      if (retainCpuPixels) state->images.retainCpuPixels(cached->handle);
+      napi_resolve_deferred(env, deferred,
+        imageInfo(env, cached->handle, cached->width, cached->height));
+      return promise;
+    }
+    state->images.release(cached->handle);
   }
   const auto pending = state->pendingImageLoads.find(key);
   if (pending != state->pendingImageLoads.end()) {
@@ -241,18 +283,13 @@ napi_value queueImageLoad(napi_env env, const std::filesystem::path& path,
   load->source = std::move(source);
   load->key = key;
   load->retainCpuPixels = retainCpuPixels;
+  load->prepareCpuPixels = retainCpuPixels;
+  load->prepared = state->images.capturePrepared(*load->source);
   load->deferreds.push_back(deferred);
-  napi_value name;
-  check(env, napi_create_string_utf8(env, "pmjs-image-load", NAPI_AUTO_LENGTH,
-                                     &name), "cannot create image work name");
-  check(env, napi_create_async_work(env, nullptr, name, executeImageLoad,
-                                    completeImageLoad, load.get(), &load->work),
-        "cannot create image work");
   state->pendingImageLoads.emplace(key, load.get());
-  const auto queued = napi_queue_async_work(env, load->work);
+  const auto queued = queueImageWork(env, *load);
   if (queued != napi_ok) {
     state->pendingImageLoads.erase(key);
-    napi_delete_async_work(env, load->work);
     check(env, queued, "cannot queue image work");
   }
   ++state->imageDecodeJobs;
@@ -393,6 +430,15 @@ napi_value imageMemory(napi_env env, napi_callback_info info) try {
     number(env, images.fallbackReferences())), "cannot set fallback references");
   check(env, napi_set_named_property(env, result, "fallbackUses",
     number(env, images.fallbackUses())), "cannot set fallback uses");
+  napi_set_named_property(env, result, "preparedHits", number(env, images.preparedHits()));
+  napi_set_named_property(env, result, "preparedRegions", number(env, images.preparedRegions()));
+  napi_set_named_property(env, result, "preparedMaterializations", number(env, images.preparedMaterializations()));
+  napi_set_named_property(env, result, "preparedRegionReads", number(env, images.preparedRegionReads()));
+  napi_value preparedFallbacks;
+  check(env, napi_create_object(env, &preparedFallbacks), "cannot create prepared fallback counts");
+  for (const auto& [reason, count] : images.preparedFallbacks())
+    napi_set_named_property(env, preparedFallbacks, reason.c_str(), number(env, count));
+  napi_set_named_property(env, result, "preparedFallbacks", preparedFallbacks);
   auto entries = limit ? images.memoryEntries() : std::vector<pmjs::ImageMemoryEntry>();
   std::sort(entries.begin(), entries.end(), [](const auto& left, const auto& right) {
     return left.gpuBytes + left.cpuBytes > right.gpuBytes + right.cpuBytes;
@@ -461,6 +507,134 @@ void registerResourceBindings(napi_env env, napi_value exports) {
   method(env, assets, "exists", assetExists);
   check(env, napi_set_named_property(env, exports, "images", images), "cannot export images module");
   check(env, napi_set_named_property(env, exports, "assets", assets), "cannot export assets module");
+}
+
+namespace {
+template <std::size_t N>
+std::array<int, N> preparedArray(napi_env env, napi_value object, const char* key) {
+  const auto array = property(env, object, key);
+  std::uint32_t length = 0;
+  check(env, napi_get_array_length(env, array, &length), "invalid prepared image tuple");
+  if (length != N) throw std::runtime_error("invalid prepared image tuple length");
+  std::array<int, N> result{};
+  for (std::size_t i = 0; i < N; ++i) {
+    napi_value item;
+    check(env, napi_get_element(env, array, i, &item), "invalid prepared image tuple value");
+    const auto number = asNumber(env, item);
+    if (!std::isfinite(number) || number != std::floor(number) || number < -1 || number > 8192)
+      throw std::runtime_error("invalid prepared image integer");
+    result[i] = static_cast<int>(number);
+  }
+  return result;
+}
+std::array<std::uint8_t, 4> preparedColor(napi_env env, napi_value object, const char* key) {
+  const auto values = preparedArray<4>(env, object, key);
+  std::array<std::uint8_t, 4> color{};
+  for (std::size_t i = 0; i < 4; ++i) {
+    if (values[i] < 0 || values[i] > 255) throw std::runtime_error("invalid prepared image color");
+    color[i] = values[i];
+  }
+  return color;
+}
+
+napi_value installPreparedAssets(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info, 1);
+  auto& value = host(env);
+  std::uint32_t count = 0;
+  check(env, napi_get_array_length(env, args.at(0), &count), "prepared entries must be an array");
+  if (count > 100000) throw std::runtime_error("too many prepared image entries");
+  value.images.clearPreparedIndex();
+  std::uint32_t installed = 0;
+  for (std::uint32_t i = 0; i < count; ++i) {
+    napi_value entry; check(env, napi_get_element(env, args[0], i, &entry), "invalid prepared entry");
+    const auto path = value.vfs.resolve(asString(env, property(env, entry, "source")));
+    if (!path) continue;
+    const auto directory = std::filesystem::path(asString(env, property(env, entry, "directory")));
+    if (!directory.is_absolute()) throw std::runtime_error("prepared directory must be absolute");
+    const auto object = property(env, entry, "descriptor");
+    PreparedImageDescriptor descriptor;
+    descriptor.version = asInt32(env, property(env, object, "version"));
+    descriptor.width = asInt32(env, property(env, object, "width"));
+    descriptor.height = asInt32(env, property(env, object, "height"));
+    if (hasProperty(env, object, "halo")) descriptor.halo = asInt32(env, property(env, object, "halo"));
+    if (hasProperty(env, object, "uniform")) descriptor.uniform = preparedColor(env, object, "uniform");
+    if (hasProperty(env, object, "pages")) {
+      const auto pages = property(env, object, "pages"); std::uint32_t size = 0;
+      check(env, napi_get_array_length(env, pages, &size), "invalid prepared pages");
+      if (size > 10000) throw std::runtime_error("too many prepared pages");
+      for (std::uint32_t j = 0; j < size; ++j) {
+        napi_value page; check(env, napi_get_element(env, pages, j, &page), "invalid prepared page");
+        descriptor.pages.push_back({asString(env, property(env, page, "path")),
+          asInt32(env, property(env, page, "width")), asInt32(env, property(env, page, "height"))});
+      }
+    }
+    if (hasProperty(env, object, "cells")) {
+      const auto cells = property(env, object, "cells"); std::uint32_t size = 0;
+      check(env, napi_get_array_length(env, cells, &size), "invalid prepared cells");
+      if (size > 10000) throw std::runtime_error("too many prepared cells");
+      for (std::uint32_t j = 0; j < size; ++j) {
+        napi_value cell; check(env, napi_get_element(env, cells, j, &cell), "invalid prepared cell");
+        PreparedImageCell item;
+        item.rect = preparedArray<4>(env, cell, "rect"); item.crop = preparedArray<4>(env, cell, "crop");
+        item.fill = preparedColor(env, cell, "fill");
+        if (hasProperty(env, cell, "page")) item.page = asInt32(env, property(env, cell, "page"));
+        if (hasProperty(env, cell, "atlas")) item.atlas = preparedArray<4>(env, cell, "atlas");
+        descriptor.cells.push_back(item);
+      }
+    }
+    const auto identity = asString(env, property(env, entry, "sourceIdentity"));
+    if (value.images.installPrepared(*path, directory, std::move(descriptor), identity)) ++installed;
+  }
+  return number(env, installed);
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what()); return nullptr;
+}
+}
+
+napi_value preparedSourceIdentity(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info, 1);
+  const auto path = host(env).vfs.resolve(asString(env, args.at(0)));
+  const auto identity = path ? Vfs::fileIdentity(*path) : std::string{};
+  return identity.empty() ? null(env) : string(env, identity);
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what()); return nullptr;
+}
+
+napi_value preparationSourcePath(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info, 1);
+  const auto path = host(env).vfs.resolve(asString(env, args.at(0)));
+  return path ? string(env, path->string()) : null(env);
+} catch (const std::exception& error) { napi_throw_error(env, nullptr, error.what()); return nullptr; }
+
+napi_value installDecryptedAssets(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info, 1);
+  std::uint32_t count = 0;
+  check(env, napi_get_array_length(env, args.at(0), &count), "decrypted entries must be an array");
+  if (count > 100000) throw std::runtime_error("too many decrypted entries");
+  std::vector<Vfs::DerivedFile> entries;
+  for (std::uint32_t i = 0; i < count; ++i) {
+    napi_value entry; check(env, napi_get_element(env, args[0], i, &entry), "invalid decrypted entry");
+    entries.push_back({asString(env, property(env, entry, "logicalSource")),
+      asString(env, property(env, entry, "source")), "data/System.json",
+      asString(env, property(env, entry, "file")),
+      asString(env, property(env, entry, "sourceIdentity")),
+      asString(env, property(env, entry, "settingsIdentity")), {}});
+  }
+  host(env).vfs.installDerivedFiles(entries);
+  return undefined(env);
+} catch (const std::exception& error) { napi_throw_error(env, nullptr, error.what()); return nullptr; }
+
+napi_value hasDecryptedAsset(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info, 1);
+  return boolean(env, host(env).vfs.resolveDerived(asString(env, args.at(0))).has_value());
+} catch (const std::exception& error) { napi_throw_error(env, nullptr, error.what()); return nullptr; }
+
+void registerPreparedAssetBindings(napi_env env, napi_value exports) {
+  method(env, property(env, exports, "assets"), "installPrepared", installPreparedAssets);
+  method(env, property(env, exports, "assets"), "sourceIdentity", preparedSourceIdentity);
+  method(env, property(env, exports, "assets"), "sourcePath", preparationSourcePath);
+  method(env, property(env, exports, "assets"), "installDecrypted", installDecryptedAssets);
+  method(env, property(env, exports, "assets"), "hasDecrypted", hasDecryptedAsset);
 }
 
 }  // namespace pmjs::addon

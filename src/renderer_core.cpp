@@ -433,7 +433,7 @@ bool Renderer::queueImage(ImageHandle image,
                           const std::array<float, 6>& transform,
                           const std::array<float, 4>& source, float alpha,
                           std::uint32_t tint, BlendMode blendMode) {
-  if (!images_.lookup(image) ||
+  if (!images_.inspect(image) ||
       !isValidBlendMode(static_cast<std::uint8_t>(blendMode))) return false;
   const std::array<float, 4> color = {
     static_cast<float>((tint >> 16U) & 0xffU) / 255.0F,

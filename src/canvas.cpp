@@ -792,7 +792,7 @@ void CanvasStore::clearRectNow(Content& surface, int x, int y, int width, int he
 }
 
 bool CanvasStore::drawImageNow(Content& destinationSurface, const DrawImageCmd& command) {
-  const auto& [source, canvas, sourceX, sourceY, sourceWidth, sourceHeight,
+  auto [source, canvas, sourceX, sourceY, sourceWidth, sourceHeight,
                destinationX, destinationY, destinationWidth, destinationHeight, alpha, smoothing] = command;
   if (alpha == 0) return true;
   struct SourcePixels {
@@ -802,12 +802,24 @@ bool CanvasStore::drawImageNow(Content& destinationSurface, const DrawImageCmd& 
     PixelEncoding encoding;
     bool mayHaveOverAlpha;
   } sourcePixels{};
+  std::optional<ImagePixels> regionPixels;
   if (canvas) {
     if (!realizeContent(*canvas)) return false;
     sourcePixels = {canvas->width, canvas->height, canvas->pixels.data(), PixelEncoding::PremultipliedBGRA8, canvas->mayHaveOverAlpha};
   } else {
-    const auto* decoded = images_.readPixels(source);
-    if (!decoded) return false;
+    const auto* decoded = images_.hasPreparedBacking(source) ? nullptr : images_.readPixels(source);
+    if (!decoded) {
+      const auto logical = images_.inspect(source);
+      if (!logical) return false;
+      const int rx = static_cast<int>(std::floor(std::clamp(static_cast<double>(sourceX)-1, 0.0, static_cast<double>(logical->width))));
+      const int ry = static_cast<int>(std::floor(std::clamp(static_cast<double>(sourceY)-1, 0.0, static_cast<double>(logical->height))));
+      const int right = static_cast<int>(std::ceil(std::clamp(static_cast<double>(sourceX)+sourceWidth+1, 0.0, static_cast<double>(logical->width))));
+      const int bottom = static_cast<int>(std::ceil(std::clamp(static_cast<double>(sourceY)+sourceHeight+1, 0.0, static_cast<double>(logical->height))));
+      if (right <= rx || bottom <= ry) return true;
+      regionPixels = images_.readPixelsRegion(source, rx, ry, right-rx, bottom-ry);
+      if (!regionPixels) return false;
+      sourceX -= rx; sourceY -= ry; decoded = &*regionPixels;
+    }
     sourcePixels = {decoded->width, decoded->height, decoded->rgba.data(), PixelEncoding::StraightRGBA8, false};
   }
   if (sourceX >= sourcePixels.width || sourceY >= sourcePixels.height) return true;
@@ -1364,7 +1376,7 @@ bool CanvasStore::drawImage(CanvasHandle destination, std::uint32_t source,
     // Capture before detaching the destination, including a self draw.
     command.canvas = sourceSurface->content;
     command.source = 0;
-  } else if (!images_.lookup(source)) {
+  } else if (!images_.inspect(source)) {
     return false;
   }
   auto* destinationSurface = writableContent(destination);

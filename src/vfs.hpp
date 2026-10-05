@@ -13,7 +13,16 @@ namespace pmjs {
 
 class Vfs {
  public:
+  struct DerivedFile {
+    std::string logical, source, settings;
+    std::filesystem::path file;
+    std::string sourceIdentity, settingsIdentity, fileIdentity;
+  };
   explicit Vfs(std::filesystem::path root);
+
+  static std::string fileIdentity(const std::filesystem::path& path);
+  void installDerivedFiles(const std::vector<DerivedFile>& files);
+  std::optional<std::filesystem::path> resolveDerived(const std::string& path) const;
 
   void mountWritableOverlay(const std::filesystem::path& root);
   void updateWritableOverlay(const std::vector<std::string>& paths,
@@ -29,6 +38,7 @@ class Vfs {
 
  private:
   static std::optional<std::string> normalize(const std::string& path);
+  std::optional<std::filesystem::path> resolveOriginal(const std::string& path) const;
   void indexPath(const std::filesystem::path& path);
 
   struct Overlay {
@@ -37,6 +47,7 @@ class Vfs {
     bool hides(const std::string& key) const;
   };
   std::shared_ptr<const Overlay> overlay_;
+  std::shared_ptr<const std::unordered_map<std::string, DerivedFile>> derived_;
   std::filesystem::path root_;
   std::unordered_map<std::string, std::filesystem::path> files_;
   std::unordered_map<std::string, std::filesystem::path> directories_;

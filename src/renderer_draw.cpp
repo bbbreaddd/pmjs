@@ -555,6 +555,10 @@ void Renderer::renderScene() {
     const RenderCommand* inlineMatrix = nullptr;
     RenderCommand::Primitive primitive = RenderCommand::Primitive::sprite;
     std::array<float, 4> viewportMapping{1, 1, 0, 0};
+    bool derivedImage = false;
+    std::array<float, 4> derivedUvTransform{};
+    std::array<float, 4> derivedSampleBounds{};
+    std::array<float, 2> derivedAtlasOffset{};
   };
   std::vector<DrawOperation> operations;
   std::size_t preparingFilterDepth = 0;
@@ -631,7 +635,35 @@ void Renderer::renderScene() {
       operations.back().viewportMapping = viewportMapping;
       continue;
     }
-    const auto info = command.image == 0 ? std::optional<ImageInfo>{} :
+    const auto logicalInfo = images_.inspect(command.image);
+    const bool uniformPrepared = images_.hasUniformPreparedBacking(command.image);
+    const bool exactNearestDimensions = logicalInfo && logicalInfo->width > 0 &&
+      logicalInfo->height > 0 && (logicalInfo->width & (logicalInfo->width - 1)) == 0 &&
+      (logicalInfo->height & (logicalInfo->height - 1)) == 0;
+    const bool derivedSampling = uniformPrepared || (command.nearest && exactNearestDimensions);
+    const bool derivedEligible = command.primitive == RenderCommand::Primitive::sprite &&
+      derivedSampling &&
+      !command.repeat && !command.mipmap && !command.clampedTilingSampling &&
+      !command.appliesColorMatrix && !command.appliesSpriteColor &&
+      !command.appliesMeshPostTintOverlay && !command.standaloneBitmapRegion &&
+      command.blur <= 0 && command.maskImage == 0 && command.textureRotation == 0 &&
+      inlineFilterMatrix[commandIndex] == nullptr;
+    const auto derived = derivedEligible ? images_.resolveSpriteRegion(command.image,
+      command.source[0], command.source[1], command.source[2], command.source[3],
+      command.pixiSpritePacking && !command.premultipliedSpriteTexture) :
+      std::optional<SpriteImageRegion>{};
+    if (!derived && images_.hasPreparedBacking(command.image)) {
+      const char* reason = derivedEligible ? "unsupported-crop" :
+        command.primitive != RenderCommand::Primitive::sprite ? "non-sprite" :
+        command.mipmap ? "mipmaps" : !derivedSampling ?
+          (command.nearest ? "non-power-of-two-sampling" : "linear-sampling") :
+        command.repeat ? "repetition" :
+        command.maskImage ? "mask" : command.blur > 0 ? "blur" :
+        command.textureRotation ? "texture-rotation" : "effects-or-sampler";
+      images_.notePreparedFallback(command.image, reason);
+    }
+    const auto info = derived ? std::optional<ImageInfo>{derived->image} :
+      command.image == 0 ? std::optional<ImageInfo>{} :
       (command.pixiSpritePacking && !command.premultipliedSpriteTexture ?
         images_.lookupPremultiplied(command.image) : images_.lookup(command.image));
     if (command.image != 0 && !info) continue;
@@ -645,8 +677,29 @@ void Renderer::renderScene() {
         !command.standaloneBitmapRegion && !command.appliesMeshPostTintOverlay) {
       continue;
     }
-    const float textureWidth = info ? static_cast<float>(info->width) : 1.0F;
-    const float textureHeight = info ? static_cast<float>(info->height) : 1.0F;
+    const float textureWidth = derived && logicalInfo ? static_cast<float>(logicalInfo->width) :
+      info ? static_cast<float>(info->width) : 1.0F;
+    const float textureHeight = derived && logicalInfo ? static_cast<float>(logicalInfo->height) :
+      info ? static_cast<float>(info->height) : 1.0F;
+    std::array<float, 4> derivedUvTransform{}, derivedSampleBounds{};
+    std::array<float, 2> derivedAtlasOffset{};
+    if (derived) {
+      const auto& region = *derived;
+      derivedAtlasOffset = {region.atlas[0] - region.source[0], region.atlas[1] - region.source[1]};
+      derivedUvTransform = {textureWidth / region.image.width,
+        textureHeight / region.image.height,
+        (region.atlas[0] - region.source[0]) / region.image.width,
+        (region.atlas[1] - region.source[1]) / region.image.height};
+      const float halo = static_cast<float>(region.halo);
+      derivedSampleBounds = {(region.source[0] - halo) / textureWidth,
+        (region.source[1] - halo) / textureHeight,
+        (region.source[0] + region.source[2] + halo) / textureWidth,
+        (region.source[1] + region.source[3] + halo) / textureHeight};
+      if (region.image.width == 1 && region.image.height == 1) {
+        derivedUvTransform = {0, 0, 0.5F, 0.5F};
+        derivedSampleBounds = {-1, -1, 2, 2};
+      }
+    }
     const std::uint32_t texture = info ? info->texture : whiteTexture_;
     const bool texturePremultiplied = command.premultipliedSpriteTexture || (info && info->premultiplied);
     const bool mipmap = command.mipmap && info && images_.ensureMipmaps(command.image, info->premultiplied);
@@ -756,6 +809,10 @@ void Renderer::renderScene() {
         inlineFilterMatrix[commandIndex] ? inlineFilterClip[commandIndex] :
                                            command.clip;
     if (operations.empty() || operations.back().tileLayer != 0 ||
+        operations.back().derivedImage != derived.has_value() ||
+        operations.back().derivedUvTransform != derivedUvTransform ||
+        operations.back().derivedSampleBounds != derivedSampleBounds ||
+        operations.back().derivedAtlasOffset != derivedAtlasOffset ||
         operations.back().texture != texture ||
         operations.back().blendMode != command.blendMode ||
         operations.back().repeat != command.repeat ||
@@ -795,6 +852,10 @@ void Renderer::renderScene() {
       operations.back().blendColor = command.blendColor;
       operations.back().inlineMatrix = inlineFilterMatrix[commandIndex];
       operations.back().primitive = command.primitive;
+      operations.back().derivedImage = derived.has_value();
+      operations.back().derivedUvTransform = derivedUvTransform;
+      operations.back().derivedSampleBounds = derivedSampleBounds;
+      operations.back().derivedAtlasOffset = derivedAtlasOffset;
     } else {
       operations.back().count += 6;
     }
@@ -1695,7 +1756,16 @@ void Renderer::renderScene() {
     glUniformMatrix3fv(simpleSprite ? simpleSpriteProjectionUniform_ : spriteEffect.projection, 1, GL_FALSE, projection.data());
     glUniform1i(simpleSprite ? simpleTilingClampUniform_ : spriteEffect.tilingClamp,
                 operation.clampedTilingSampling);
-    if (simpleSprite) glUniform2f(simpleTextureSizeUniform_, operation.textureWidth, operation.textureHeight);
+    if (simpleSprite) {
+      glUniform2f(simpleTextureSizeUniform_, operation.textureWidth, operation.textureHeight);
+      glUniform1i(simpleDerivedImageUniform_, operation.derivedImage);
+      if (operation.derivedImage) {
+        glUniform1i(simpleDerivedNearestUniform_, operation.nearest);
+        glUniform2fv(simpleDerivedAtlasOffsetUniform_, 1, operation.derivedAtlasOffset.data());
+        glUniform4fv(simpleDerivedUvTransformUniform_, 1, operation.derivedUvTransform.data());
+        glUniform4fv(simpleDerivedSampleBoundsUniform_, 1, operation.derivedSampleBounds.data());
+      }
+    }
     glUniform1i(simpleSprite ? simpleSpriteVerticesUniform_ : spriteEffect.vertices, operation.spriteWorldVertices);
     glUniform1i(simpleSprite ? simpleSpritePackingUniform_ : spriteEffect.packing,
                 operation.pixiSpritePacking ? 1 : 0);

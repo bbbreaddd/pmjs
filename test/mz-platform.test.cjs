@@ -41,6 +41,52 @@ test('MZ platform capabilities do not claim missing native services', () => {
   assert.equal(utils.canPlayWebm(), false);
 });
 
+test('MZ prepared images preserve the bitmap URL and use encrypted loading on cache miss or failure', () => {
+  const methodsSource = fs.readFileSync(path.join(__dirname, '../js/pmjs-core/methods.js'), 'utf8');
+  const context = vm.createContext({ console, NativeHost: { assets: {
+    hasDecrypted: value => value === 'img/pictures/a b.png'
+  } }, PMJS: {}, Utils: {}, Bitmap: function Bitmap() {} });
+  context.Bitmap.prototype._startDecrypting = function() { this.encryptedLoads = (this.encryptedLoads || 0) + 1; };
+  vm.runInContext(methodsSource, context);
+  vm.runInContext(source, context);
+  context.PMJS.methods.install();
+  const image = new context.Bitmap();
+  image._url = 'img/pictures/a%20b.png';
+  let errors = 0;
+  const originalError = () => { errors++; };
+  image._image = { onerror: originalError };
+  image._startDecrypting();
+  assert.equal(image._image.src, image._url);
+  assert.equal(image.encryptedLoads, undefined);
+  image._image.onerror();
+  assert.equal(image.encryptedLoads, 1);
+  assert.equal(image._image.onerror, originalError);
+  image._image.onerror();
+  assert.equal(errors, 1);
+  const missing = new context.Bitmap();
+  missing._url = 'img/pictures/missing.png'; missing._image = {};
+  missing._startDecrypting();
+  assert.equal(missing.encryptedLoads, 1);
+  assert.equal(missing._image.src, undefined);
+  const loaded = new context.Bitmap();
+  loaded._url = image._url;
+  let loads = 0;
+  const originalLoad = () => { loads++; };
+  loaded._image = { onload: originalLoad, onerror: originalError };
+  loaded._startDecrypting();
+  loaded._image.onload();
+  assert.equal(loads, 1);
+  assert.equal(loaded._image.onload, originalLoad);
+  assert.equal(loaded._image.onerror, originalError);
+  loaded._startDecrypting();
+  const retainedImage = loaded._image;
+  const staleLoad = retainedImage.onload, staleError = retainedImage.onerror;
+  loaded._image = {};
+  staleLoad(); staleError();
+  assert.equal(loads, 1, 'old image callbacks must not mutate a replacement bitmap image');
+  assert.equal(loaded.encryptedLoads, undefined);
+});
+
 test('MZ local save paths resolve through the native storage filesystem', t => {
   const { createStorage } = require('../runner/storage.cjs');
   const { temporaryDirectory } = require('./helpers/temp.cjs');

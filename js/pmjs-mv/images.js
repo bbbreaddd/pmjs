@@ -116,6 +116,11 @@ function pmjsScheduleImageCacheTrim() {
 }
 PMJS.images.onLoadComplete(pmjsScheduleImageCacheTrim);
 
+PMJS.mv = PMJS.mv || {};
+PMJS.mv.bitmap = PMJS.mv.bitmap || {};
+// Preserve the stock request and native ownership for file-backed plugin adapters.
+PMJS.mv.bitmap.requestImageFile = pmjsBitmapRequestImageWrap()(Bitmap.prototype._requestImage);
+
 (function pmjsRegisterBitmapImageHooks() {
   var methods = globalThis.PMJS && globalThis.PMJS.methods;
   if (!methods || typeof methods.wrap !== 'function') return;

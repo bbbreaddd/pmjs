@@ -128,6 +128,26 @@ test('MZ encrypted SE survives cleanupSe and plays after decryption', () => {
   assert.equal(context.NativeHost.media.calls.plays, 1);
 });
 
+test('MZ prepared encrypted music and effects use logical file paths without XHR', () => {
+  const context = contextFor({ encrypted: true });
+  const paths = [];
+  context.NativeHost.assets = { hasDecrypted: source => source !== 'audio/se/Missing.ogg' };
+  const ordinary = context.NativeHost.media.loadAudio;
+  context.NativeHost.media.loadAudio = (source, options) => {
+    paths.push(source);
+    return ordinary(source, options);
+  };
+  const music = context.AudioManager.createBuffer('bgm/', 'Town Theme');
+  const effect = context.playSe({ name: 'Hit', volume: 90, pitch: 100, pan: 0 });
+  assert.equal(music.isReady(), true);
+  assert.equal(effect.isPlaying(), true);
+  assert.deepEqual(paths, ['audio/bgm/Town Theme.ogg', 'audio/se/Hit.ogg']);
+  assert.equal(context.pendingRequests.length, 0);
+  context.AudioManager.createBuffer('se/', 'Missing');
+  assert.equal(context.pendingRequests.length, 1);
+  assert.equal(context.pendingRequests[0].path, 'audio/se/Missing.ogg_');
+});
+
 test('MZ stop-before-load prevents later playback', () => {
   const context = contextFor({ encrypted: true });
   const buffer = context.playSe({ name: 'Hit', volume: 90, pitch: 100, pan: 0 });

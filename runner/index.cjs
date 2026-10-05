@@ -5,11 +5,15 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { performance } = require('node:perf_hooks');
 const { createStorage, createGameFilesystem } = require('./storage.cjs');
+const { prepareAssets, validRecipes } = require('./asset-preparation.cjs');
 
 function resolveDefaults(input) {
   let title = input.title;
   let width = input.width;
   let height = input.height;
+  let assetPreparation = {};
+  let preparationFonts = [];
+  let configDirectory = process.cwd();
 
   if (input.config) {
     const configPath = path.resolve(input.config);
@@ -23,7 +27,12 @@ function resolveDefaults(input) {
     if (title === undefined && cfg.title) title = cfg.title;
     if (width === undefined && cfg.display && cfg.display.width) width = Number(cfg.display.width);
     if (height === undefined && cfg.display && cfg.display.height) height = Number(cfg.display.height);
+    if (cfg.fonts && typeof cfg.fonts === 'object') {
+      preparationFonts = Object.values(cfg.fonts).flat().filter(font => typeof font === 'string');
+    }
     assertDisableOptimizationsShape(cfg.disableOptimizations, configPath);
+    configDirectory = path.dirname(configPath);
+    if (cfg.assetPreparation !== undefined) assetPreparation = cfg.assetPreparation;
   }
 
   if (input.gameRoot) {
@@ -55,7 +64,30 @@ function resolveDefaults(input) {
   if (height === undefined) height = 624;
   if (title === undefined) title = 'PMJS';
 
-  return { ...input, width, height, title };
+  if (!assetPreparation || typeof assetPreparation !== 'object' || Array.isArray(assetPreparation)) {
+    throw new Error('assetPreparation must be an object');
+  }
+  assetPreparation = { enabled: true, ...assetPreparation,
+    ...(typeof input.assetPreparation === 'object' ? input.assetPreparation : {}) };
+  if (input.assetPreparation === 'on' || input.assetPreparation === 'off') {
+    assetPreparation.enabled = input.assetPreparation === 'on';
+  } else if (input.assetPreparation !== undefined && typeof input.assetPreparation !== 'object') {
+    throw new Error('assetPreparation must be on or off');
+  }
+  if (input.assetCacheRoot !== undefined) assetPreparation.cacheRoot = path.resolve(input.assetCacheRoot);
+  else if (assetPreparation.cacheRoot !== undefined) {
+    assetPreparation.cacheRoot = path.resolve(configDirectory, assetPreparation.cacheRoot);
+  }
+  if (input.assetRecipes !== undefined) assetPreparation.recipes = path.resolve(input.assetRecipes);
+  else if (typeof assetPreparation.recipes === 'string') {
+    assetPreparation.recipes = path.resolve(configDirectory, assetPreparation.recipes);
+  }
+  if (typeof assetPreparation.enabled !== 'boolean') throw new Error('assetPreparation.enabled must be a boolean');
+  if (typeof assetPreparation.recipes === 'string') {
+    assetPreparation.recipes = JSON.parse(fs.readFileSync(assetPreparation.recipes, 'utf8'));
+  }
+  assetPreparation.recipes = validRecipes(assetPreparation.recipes || []);
+  return { ...input, width, height, title, assetPreparation, preparationFonts };
 }
 
 function assertDisableOptimizationsShape(value, configPath) {
@@ -162,9 +194,51 @@ function validate(input) {
     bootstrap: path.resolve(options.bootstrap),
     saveRoot: path.resolve(options.saveRoot),
     assetRoot: options.assetRoot ? path.resolve(options.assetRoot) : '',
+    assetPreparation: { ...options.assetPreparation,
+      cacheRoot: options.assetPreparation.cacheRoot || path.join(path.resolve(options.saveRoot), 'asset-cache') },
     ...(imageWarmCacheBytes === undefined ? {} : { imageWarmCacheBytes }),
     title: options.title,
   };
+}
+
+function progressClock(milliseconds) {
+  const seconds = Math.floor(Math.max(0, milliseconds) / 1000);
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+function progressLines(progress) {
+  const { phase, source = '', completed = 0, total = 0, generated = 0,
+    hits = 0, fallback = 0, elapsedMs = 0 } = progress;
+  const titles = {
+    discover: 'Finding game assets', wait: 'Waiting for asset cache',
+    validate: 'Checking cached assets', prepare: 'Preparing new assets',
+    ready: 'Checking game assets', install: 'Finishing asset preparation',
+    cleanup: 'Finishing asset preparation', complete: 'Assets ready',
+    cancelled: 'Asset preparation cancelled', error: 'Continuing with original assets',
+  };
+  const rate = elapsedMs > 0 && completed > 0 ? completed * 1000 / elapsedMs : null;
+  const remaining = Math.max(0, total - completed);
+  const working = phase === 'validate' || phase === 'prepare';
+  const lines = [titles[phase] || 'Preparing game assets',
+    phase === 'discover' ? 'Counting files...' :
+      `${completed} / ${total} done (${total ? Math.floor(completed * 100 / total) : 100}%)  |  ${remaining} left`,
+    source ? `Current file: ${source.replace(/[\r\n\t]/g, ' ')}` : '',
+    `Cache: ${generated} new, ${hits} reused  |  Originals: ${fallback}`,
+    `Elapsed: ${progressClock(elapsedMs)}  |  Average: ${rate === null ? 'estimating...' : `${rate.toFixed(1)} files/s`}`];
+  if (!progress.terminal && total && remaining && rate !== null && completed >= 3 &&
+      (phase === 'ready' || working)) {
+    lines.push(`Estimated time left: ${progressClock(remaining * 1000 / rate)}`);
+  } else if (phase === 'prepare') {
+    lines.push('Large files can take longer. Original files are preserved.');
+  } else if (phase === 'wait') {
+    lines.push('Another launch is preparing this cache.');
+  } else if (phase === 'discover' || phase === 'validate') {
+    lines.push('Existing prepared assets are reused when unchanged.');
+  } else if (phase === 'install' || phase === 'cleanup') {
+    lines.push('All files checked; finishing up...');
+  }
+  return lines;
 }
 
 async function run(input) {
@@ -191,6 +265,58 @@ async function run(input) {
   try {
     native.storage = createStorage(options.saveRoot);
     native.fs = createGameFilesystem(native.fs, path.join(options.saveRoot, 'game-files'));
+    if (options.assetPreparation.enabled) {
+      let cancelled = false;
+      let preparationFailed = false;
+      let preparationError;
+      const failPreparation = error => {
+        if (!preparationFailed) preparationError = error;
+        preparationFailed = true;
+        cancelled = true;
+      };
+      const screenStarted = performance.now();
+      let screenUpdated = -Infinity;
+      let current = { completed: 0, total: 0, phase: 'discover' };
+      const showProgress = () => {
+        if (preparationFailed || (cancelled && !current.terminal) ||
+            typeof native.runtime.preparationProgress !== 'function') return;
+        const elapsedMs = performance.now() - screenStarted;
+        screenUpdated = elapsedMs;
+        const progress = { ...current, elapsedMs };
+        native.runtime.preparationProgress({ ...progress, lines: progressLines(progress),
+          fonts: options.preparationFonts });
+      };
+      showProgress();
+      const pump = setInterval(() => {
+        if (cancelled) return;
+        try {
+          if (!native.pollEvents()) cancelled = true;
+          if (performance.now() - screenStarted - screenUpdated >= 100) showProgress();
+        } catch (error) { failPreparation(error); }
+      }, 16);
+      let preparation;
+      try {
+        preparation = await prepareAssets({ gameRoot: options.gameRoot,
+          cacheRoot: options.assetPreparation.cacheRoot, recipes: options.assetPreparation.recipes, native,
+          shouldCancel: () => cancelled,
+          onProgress: progress => {
+            current = progress;
+            try { showProgress(); }
+            catch (error) { failPreparation(error); }
+          } });
+      } catch (error) {
+        throw preparationFailed ? preparationError : error;
+      } finally { clearInterval(pump); }
+      if (preparationFailed) throw preparationError;
+      const { entries, decryptedEntries, releaseCacheLease, ...preparationStats } = preparation;
+      native.assets.preparationStats = preparationStats;
+      console.log(`[pmjs] asset preparation generated=${preparation.generated} hits=${preparation.hits} ` +
+        `decrypted=${preparation.decrypted} fallback=${preparation.fallback} duration_ms=${preparation.durationMs.toFixed(1)}`);
+      if (cancelled || preparation.cancelled) { native.runtime.quit(); return; }
+    } else if (native.assets && typeof native.assets.installPrepared === 'function') {
+      native.assets.installPrepared([]);
+      if (native.assets.installDecrypted) native.assets.installDecrypted([]);
+    }
     native.runtime.now = () => performance.now();
     native.runtime.platform = () => ({ platform: process.platform, arch: process.arch });
     native.runtime.loadScript = relative => {
@@ -282,5 +408,5 @@ async function run(input) {
   }
 }
 
-module.exports = { run, validate, parseTimingConfig, resolveSwapDefault, advanceDeadline,
+module.exports = { run, validate, progressLines, parseTimingConfig, resolveSwapDefault, advanceDeadline,
   PMJS_MV_LOGIC_HZ, PMJS_SUPPORTED_RENDER_HZ };

@@ -5,6 +5,7 @@
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
+#include <sys/stat.h>
 
 namespace pmjs {
 
@@ -142,7 +143,62 @@ void Vfs::updateWritableOverlay(const std::vector<std::string>& paths,
   std::atomic_store(&overlay_, std::shared_ptr<const Overlay>(std::move(overlay)));
 }
 
+std::string Vfs::fileIdentity(const std::filesystem::path& path) {
+  std::error_code error;
+  const auto resolved = std::filesystem::canonical(path, error);
+  struct stat info{};
+  if (error || ::stat(resolved.c_str(), &info) != 0 || !S_ISREG(info.st_mode)) return {};
+  return resolved.generic_string() + ':' + std::to_string(info.st_dev) + ':' +
+    std::to_string(info.st_ino) + ':' + std::to_string(info.st_size) + ':' +
+    std::to_string(info.st_mtim.tv_sec) + ':' + std::to_string(info.st_mtim.tv_nsec) + ':' +
+    std::to_string(info.st_ctim.tv_sec) + ':' + std::to_string(info.st_ctim.tv_nsec);
+}
+
+void Vfs::installDerivedFiles(const std::vector<DerivedFile>& files) {
+  auto index = std::make_shared<std::unordered_map<std::string, DerivedFile>>();
+  for (auto file : files) {
+    const auto key = normalize(file.logical);
+    const auto source = resolveOriginal(file.source), settings = resolveOriginal(file.settings);
+    if (!key || !source || !settings || !file.file.is_absolute() ||
+        file.sourceIdentity.empty() || file.settingsIdentity.empty() ||
+        fileIdentity(*source) != file.sourceIdentity || fileIdentity(*settings) != file.settingsIdentity) continue;
+    file.fileIdentity = fileIdentity(file.file);
+    if (!file.fileIdentity.empty() && !index->emplace(*key, std::move(file)).second)
+      throw std::runtime_error("duplicate derived file path");
+  }
+  std::atomic_store(&derived_, std::shared_ptr<const std::unordered_map<std::string, DerivedFile>>(std::move(index)));
+}
+
+std::optional<std::filesystem::path> Vfs::resolveDerived(const std::string& path) const {
+  const auto key = normalize(path);
+  const auto index = std::atomic_load(&derived_);
+  if (!key || !index) return std::nullopt;
+  const auto found = index->find(*key);
+  if (found == index->end()) return std::nullopt;
+  if (const auto original = resolveOriginal(path)) return original;
+  if (isDirectory(path)) return std::nullopt;
+  const auto overlay = std::atomic_load(&overlay_);
+  if (overlay && overlay->hides(*key)) return std::nullopt;
+  if (overlay) {
+    auto prefix = *key;
+    while (prefix.find('/') != std::string::npos) {
+      prefix.resize(prefix.rfind('/'));
+      if (overlay->files->files_.contains(prefix)) return std::nullopt;
+    }
+  }
+  const auto& entry = found->second;
+  const auto source = resolveOriginal(entry.source), settings = resolveOriginal(entry.settings);
+  if (!source || !settings || fileIdentity(*source) != entry.sourceIdentity ||
+      fileIdentity(*settings) != entry.settingsIdentity || fileIdentity(entry.file) != entry.fileIdentity) return std::nullopt;
+  return entry.file;
+}
+
 std::optional<std::filesystem::path> Vfs::resolve(const std::string& path) const {
+  if (auto original = resolveOriginal(path)) return original;
+  return resolveDerived(path);
+}
+
+std::optional<std::filesystem::path> Vfs::resolveOriginal(const std::string& path) const {
   const auto key = normalize(path);
   if (!key) return std::nullopt;
   const auto overlay = std::atomic_load(&overlay_);
@@ -209,6 +265,15 @@ std::optional<std::vector<std::string>> Vfs::readDirectory(const std::string& pa
     if (root) add(overlay->files->root());
     else if (directory != overlay->files->directories_.end()) add(directory->second);
   }
+  const auto derived = std::atomic_load(&derived_);
+  if (derived) {
+    for (const auto& [childKey, entry] : *derived) {
+      const auto slash = childKey.rfind('/');
+      const auto parent = slash == std::string::npos ? std::string{} : childKey.substr(0, slash);
+      if (parent == *key && exists(entry.logical))
+        merged[childKey] = std::filesystem::path(entry.logical).filename().string();
+    }
+  }
   std::vector<std::string> entries;
   for (const auto& [child, name] : merged) entries.push_back(name);
   std::sort(entries.begin(), entries.end());
@@ -229,7 +294,7 @@ bool Vfs::exists(const std::string& path) const {
     if (overlay->files->exists(*key)) return true;
     if (overlay->hides(*key)) return false;
   }
-  return files_.contains(*key) || directories_.contains(*key);
+  return files_.contains(*key) || directories_.contains(*key) || resolveDerived(path).has_value();
 }
 
 bool Vfs::isDirectory(const std::string& path) const {

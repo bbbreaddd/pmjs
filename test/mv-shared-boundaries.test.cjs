@@ -91,10 +91,13 @@ test('diagnostics inspect methods after plugins without replacing setup', () => 
 });
 
 test('native map resources release after a guest replaces Scene_Map.terminate', () => {
+  function Bitmap() {}
+  Bitmap.prototype._requestImage = function() {};
+
   const calls = [];
   function Scene_Map() {}
   Scene_Map.prototype.terminate = function() { calls.push('stock'); };
-  const ctx = loadPmjsRuntime({
+  const ctx = loadPmjsRuntime({ Bitmap,
     Scene_Map,
     SceneManager: function() {}, DataManager: function() {},
     Game_Map: function() {}, Scene_Boot: function() {},

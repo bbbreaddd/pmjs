@@ -445,6 +445,11 @@ class Renderer {
   bool filterBoundsEnabled_ = true;
   std::uint32_t program_ = 0;
   std::uint32_t simpleProgram_ = 0;
+  int simpleDerivedImageUniform_ = -1;
+  int simpleDerivedNearestUniform_ = -1;
+  int simpleDerivedAtlasOffsetUniform_ = -1;
+  int simpleDerivedUvTransformUniform_ = -1;
+  int simpleDerivedSampleBoundsUniform_ = -1;
   struct SpriteEffectProgram {
     std::uint32_t program = 0;
     int targetYDown = -1;

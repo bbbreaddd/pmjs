@@ -115,6 +115,137 @@ napi_value beginFrame(napi_env env, napi_callback_info) try {
   return nullptr;
 }
 
+namespace {
+std::string fitProgressLine(pmjs::CanvasStore& canvases,
+                           const std::vector<std::filesystem::path>& fonts,
+                           const std::string& text, float size, float width) {
+  auto measured = canvases.measureText(fonts, text, size);
+  if (!measured || *measured <= width) return text;
+  // Remove whole UTF-8 codepoints from the middle, retaining the filename suffix.
+  std::vector<std::size_t> boundaries{0};
+  for (std::size_t i = 1; i <= text.size(); ++i) {
+    if (i == text.size() || (static_cast<unsigned char>(text[i]) & 0xC0U) != 0x80U)
+      boundaries.push_back(i);
+  }
+  std::size_t low = 0, high = boundaries.size() - 1;
+  std::string fitted;
+  while (low <= high) {
+    const auto count = (low + high) / 2;
+    const auto left = (count + 1) / 2;
+    const auto right = count / 2;
+    const auto candidate = text.substr(0, boundaries[left]) + "..." +
+      text.substr(boundaries[boundaries.size() - 1 - right]);
+    const auto extent = canvases.measureText(fonts, candidate, size);
+    if (extent && *extent <= width) { fitted = candidate; low = count + 1; }
+    else { if (count == 0) break; high = count - 1; }
+  }
+  return fitted;
+}
+
+void resolvePreparationFonts(napi_env env, napi_value progress, State& value) {
+  if (value.preparationFontsResolved) return;
+  value.preparationFontsResolved = true;
+  std::vector<std::string> candidates;
+  if (hasProperty(env, progress, "fonts")) {
+    const auto fonts = property(env, progress, "fonts");
+    bool array = false;
+    check(env, napi_is_array(env, fonts, &array), "invalid preparation fonts");
+    if (!array) throw std::invalid_argument("preparation fonts must be an array");
+    std::uint32_t count = 0;
+    check(env, napi_get_array_length(env, fonts, &count), "invalid preparation fonts");
+    for (std::uint32_t i = 0; i < std::min(count, 32U); ++i) {
+      napi_value entry;
+      check(env, napi_get_element(env, fonts, i, &entry), "invalid preparation font");
+      candidates.push_back(asString(env, entry));
+    }
+  }
+  if (auto files = value.vfs.readDirectory("fonts")) {
+    for (const auto& file : *files) {
+      std::string extension = std::filesystem::path(file).extension().string();
+      std::transform(extension.begin(), extension.end(), extension.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+      if (extension == ".ttf" || extension == ".otf") candidates.push_back("fonts/" + file);
+    }
+  }
+  for (const auto& candidate : candidates) {
+    const auto font = value.vfs.resolve(candidate);
+    if (font && std::find(value.preparationFonts.begin(), value.preparationFonts.end(), *font) == value.preparationFonts.end() &&
+        value.canvases.canLoadFont(*font)) value.preparationFonts.push_back(*font);
+    if (value.preparationFonts.size() >= 8) break;
+  }
+}
+}  // namespace
+
+napi_value preparationProgress(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info, 1);
+  if (args.empty()) throw std::invalid_argument("preparationProgress requires progress");
+  const auto progress = args[0];
+  const double completed = asNumber(env, property(env, progress, "completed"));
+  const double total = asNumber(env, property(env, progress, "total"));
+  if (!std::isfinite(completed) || !std::isfinite(total) || completed < 0 || total < 0)
+    throw std::invalid_argument("invalid preparation progress");
+  const bool terminal = hasProperty(env, progress, "terminal") ?
+    asBoolean(env, property(env, progress, "terminal")) :
+    (!hasProperty(env, progress, "phase") && completed >= total);
+  auto& value = host(env);
+  const auto now = std::chrono::steady_clock::now();
+  if (!terminal && now - value.preparationPresentedAt < std::chrono::milliseconds(100))
+    return undefined(env);
+  value.preparationPresentedAt = now;
+  const float width = static_cast<float>(value.width);
+  const float height = static_cast<float>(value.height);
+  const float amount = total > 0 ? static_cast<float>(std::clamp(completed / total, 0.0, 1.0)) : 0;
+  value.renderer.beginFrame();
+  value.renderer.queueQuad(0, 0, width, height, {0.04F, 0.04F, 0.05F, 1});
+  value.renderer.queueQuad(width * 0.08F, height * 0.45F, width * 0.84F, height * 0.025F,
+                           {0.2F, 0.2F, 0.22F, 1});
+  value.renderer.queueQuad(width * 0.08F, height * 0.45F, width * 0.84F * amount, height * 0.025F,
+                           {0.8F, 0.8F, 0.85F, 1});
+  if (hasProperty(env, progress, "lines")) {
+    resolvePreparationFonts(env, progress, value);
+    if (!value.preparationFonts.empty()) {
+      if (!value.preparationSurface) {
+        const auto surface = value.canvases.create(value.width, value.height);
+        if (!surface) throw std::runtime_error("cannot allocate preparation screen");
+        value.preparationSurface = surface->handle;
+      }
+      value.canvases.clear(value.preparationSurface);
+      const auto lines = property(env, progress, "lines");
+      bool array = false;
+      check(env, napi_is_array(env, lines, &array), "invalid preparation lines");
+      if (!array) throw std::invalid_argument("preparation lines must be an array");
+      std::uint32_t count = 0;
+      check(env, napi_get_array_length(env, lines, &count), "invalid preparation lines");
+      const std::array<float, 6> positions{0.22F, 0.31F, 0.38F, 0.56F, 0.64F, 0.72F};
+      for (std::uint32_t i = 0; i < std::min(count, 6U); ++i) {
+        napi_value entry;
+        check(env, napi_get_element(env, lines, i, &entry), "invalid preparation line");
+        const float size = std::clamp(height * (i == 0 ? 0.05F : 0.037F), 8.0F, i == 0 ? 32.0F : 24.0F);
+        const auto text = fitProgressLine(value.canvases, value.preparationFonts,
+          asString(env, entry), size, width * 0.84F);
+        value.canvases.drawText(value.preparationSurface, value.preparationFonts,
+          text, width * 0.08F, height * positions[i], size,
+          i == 0 ? 0xFFFFFFFFU : 0xCACAD4FFU);
+      }
+      if (const auto image = value.canvases.prepareImage(value.preparationSurface)) {
+        value.renderer.queueImage(*image, {1, 0, 0, 1, 0, 0}, {0, 0, width, height},
+                                  1, 0xFFFFFFU, pmjs::BlendMode::normal);
+      }
+    }
+  }
+  value.core.syncDrawableSize();
+  value.renderer.render();
+  value.platform.swap();
+  if (terminal && value.preparationSurface) {
+    value.canvases.release(value.preparationSurface);
+    value.preparationSurface = 0;
+  }
+  return undefined(env);
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what());
+  return nullptr;
+}
+
 napi_value renderFrame(napi_env env, napi_callback_info) try {
   State& value = host(env);
   value.canvases.uploadDirty();
@@ -369,6 +500,7 @@ void registerRuntimeBindings(napi_env env, napi_value exports) {
   method(env, exports, "swapFrame", swapFrame);
   napi_value runtime = moduleObject(env);
   method(env, runtime, "quit", quit);
+  method(env, runtime, "preparationProgress", preparationProgress);
   method(env, runtime, "env", environment);
   method(env, runtime, "monotonicNow", monotonicNow);
   method(env, runtime, "windowState", windowState);

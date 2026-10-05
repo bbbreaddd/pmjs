@@ -270,3 +270,78 @@ test('bootstrap and tick failures reject the run', async () => {
   tick.addon = writeAddon(tick.gameRoot, [true]);
   await assert.rejects(run(tick), /tick failure/);
 });
+
+test('preparation cancellation polls the host, waits for its worker and prevents guest boot', async () => {
+  const f = fixture('throw new Error("guest must not boot after cancellation");');
+  fs.mkdirSync(path.join(f.gameRoot, 'img/pictures'), { recursive: true });
+  fs.writeFileSync(path.join(f.gameRoot, 'img/pictures/test.png'), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  const marker = path.join(f.gameRoot, 'closed');
+  fs.writeFileSync(f.addon, `
+    const native = (${native.toString()})([false]);
+    let workerStarted = false;
+    native.pollEvents = () => !workerStarted;
+    native.assets.processImage = () => {
+      workerStarted = true;
+      return new Promise(resolve => setTimeout(() => resolve(null), 50));
+    };
+    native.assets.installPrepared = () => { throw new Error('cancelled preparation must not install'); };
+    native.runtime.quit = () => require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'closed');
+    module.exports = native;
+  `);
+  await run(f);
+  assert.equal(fs.readFileSync(marker, 'utf8'), 'closed');
+  assert.deepEqual(fs.readdirSync(path.join(f.saveRoot, 'asset-cache/entries')), []);
+});
+
+for (const failure of ['poll', 'presentation', 'progress callback']) {
+  test('preparation ' + failure + ' failure stops work and rejects with the original error', async () => {
+    const f = fixture('throw new Error("guest must not boot after preparation failure");');
+    fs.mkdirSync(path.join(f.gameRoot, 'img/pictures'), { recursive: true });
+    fs.writeFileSync(path.join(f.gameRoot, 'img/pictures/test.png'),
+      Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    fs.writeFileSync(path.join(f.gameRoot, 'img/pictures/test2.png'),
+      Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    fs.writeFileSync(f.addon, `
+      const native = (${native.toString()})();
+      const failure = ${JSON.stringify(failure)};
+      const error = new Error('preparation host failed');
+      let workerStarted = false, finish;
+      native.error = error;
+      native.settled = false;
+      native.closed = false;
+      native.jobs = 0;
+      native.pollEvents = () => {
+        if (workerStarted && failure === 'poll') {
+          setImmediate(finish);
+          throw error;
+        }
+        return true;
+      };
+      native.runtime.preparationProgress = progress => {
+        if (progress.terminal) throw new Error('later progress failed');
+        if (failure === 'progress callback' && progress.phase === 'prepare') throw error;
+        if (failure === 'presentation' && workerStarted) {
+          setImmediate(finish);
+          throw error;
+        }
+      };
+      native.assets.processImage = () => {
+        native.jobs++;
+        workerStarted = true;
+        return new Promise(resolve => {
+          finish = () => { native.settled = true; resolve(null); };
+          if (failure === 'progress callback') setImmediate(finish);
+        });
+      };
+      native.assets.installPrepared = () => { throw new Error('failed preparation must not install'); };
+      native.runtime.quit = () => { native.closed = true; };
+      module.exports = native;
+    `);
+    const host = require(f.addon);
+    await assert.rejects(run(f), error => error === host.error);
+    assert.equal(host.settled, failure !== 'progress callback');
+    assert.equal(host.jobs, failure === 'progress callback' ? 0 : 1);
+    assert.equal(host.closed, true);
+    assert.deepEqual(fs.readdirSync(path.join(f.saveRoot, 'asset-cache/entries')), []);
+  });
+}

@@ -12,6 +12,8 @@ function parse(argv) {
     ['--config', 'config'],
     ['--greenworks-module', 'greenworksModule'],
     ['--image-warm-cache-bytes', 'imageWarmCacheBytes'],
+    ['--asset-preparation', 'assetPreparation'], ['--asset-cache-root', 'assetCacheRoot'],
+    ['--asset-recipes', 'assetRecipes'],
   ]);
   for (let index = 0; index < argv.length; index += 2) {
     const name = names.get(argv[index]);

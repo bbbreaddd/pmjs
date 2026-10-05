@@ -60,6 +60,13 @@ test('Bitmap image hooks wrap the final guest implementation', () => {
   other._image = { plain: true };
   other._clearImgInstance();
   assert.equal(other.cleared, 1);
+  const file = new Bitmap();
+  file._image = previous;
+  previous.destroyed = false;
+  ctx.PMJS.mv.bitmap.requestImageFile.call(file, 'plain.png');
+  assert.equal(file.requested, 1, 'file request retains the captured stock implementation');
+  assert.equal(file.guestRequested, undefined);
+  assert.equal(previous.destroyed, true, 'stock file request releases its replaced native image');
 });
 
 for (const strict of [false, true]) {

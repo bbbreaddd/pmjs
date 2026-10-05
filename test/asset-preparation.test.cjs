@@ -1,0 +1,589 @@
+'use strict';
+
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const test = require('node:test');
+const { prepareAssets } = require('../runner/asset-preparation.cjs');
+const { validate } = require('../runner/index.cjs');
+const { parse } = require('../runner/cli.cjs');
+const { temporaryDirectory } = require('./helpers/temp.cjs');
+
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==', 'base64');
+function fixture() {
+  const root = temporaryDirectory('pmjs-preparation-');
+  const gameRoot = path.join(root, 'game');
+  fs.mkdirSync(path.join(gameRoot, 'img/pictures'), { recursive: true });
+  const source = 'img/pictures/a.png';
+  fs.writeFileSync(path.join(gameRoot, source), PNG);
+  let jobs = 0;
+  let installs = [];
+  const processImage = async (name, output) => {
+    jobs += 1;
+    fs.writeFileSync(path.join(output, 'page-0.png'), PNG);
+    return { version: 1, width: 1, height: 1, pages: [{ path: 'page-0.png', width: 1, height: 1 }],
+      cells: [{ rect: [0, 0, 1, 1], crop: [0, 0, 1, 1], fill: [0, 0, 0, 0], page: 0, atlas: [0, 0, 1, 1] }] };
+  };
+  const native = { assets: { processImage, installPrepared(entries) { installs.push(entries); } } };
+  const warnings = [];
+  return { root, gameRoot, source, native, cacheRoot: path.join(root, 'cache'),
+    logger: { warn(message) { warnings.push(message); } }, warnings,
+    get jobs() { return jobs; }, get installs() { return installs; } };
+}
+function manifests(f) {
+  return fs.readdirSync(path.join(f.cacheRoot, 'entries')).filter(n => !n.startsWith('.'))
+    .map(n => path.join(f.cacheRoot, 'entries', n, 'manifest.json'));
+}
+function assertProgress(progress, result, terminalPhase) {
+  assert.equal(progress[0].phase, 'discover');
+  assert.equal(progress[0].completed, 0);
+  assert.equal(progress[0].sourceBytes, 0);
+  assert.deepEqual(progress.filter(p => p.terminal).map(p => p.phase), [terminalPhase]);
+  const terminal = progress.at(-1);
+  assert.equal(terminal.phase, terminalPhase);
+  assert.equal(terminal.source, '');
+  for (const field of ['completed', 'total', 'generated', 'hits', 'fallback', 'sourceBytes']) {
+    assert.equal(terminal[field], result[field], field);
+  }
+  for (let i = 0; i < progress.length; ++i) {
+    const value = progress[i];
+    assert.equal(value.remaining, value.total - value.completed);
+    assert.ok(Number.isFinite(value.elapsedMs) && value.elapsedMs >= 0);
+    if (i) assert.ok(value.elapsedMs >= progress[i - 1].elapsedMs);
+  }
+}
+
+test('first preparation installs logical backing; unchanged launch hashes and reuses without transforms', async () => {
+  const f = fixture();
+  const progress = [];
+  const first = await prepareAssets({ ...f, onProgress: value => progress.push(value) });
+  assert.equal(first.generated, 1);
+  assert.equal(first.entries[0].source, f.source);
+  assert.equal(first.entries[0].sourceHash, crypto.createHash('sha256').update(PNG).digest('hex'));
+  assert.equal(first.completed, 1);
+  assert.equal(first.cacheBytes, PNG.length);
+  assert.ok(progress.some(p => p.phase === 'prepare'));
+  assertProgress(progress, first, 'complete');
+  assert.ok(progress.some(p => p.phase === 'prepare' && p.source === f.source && p.remaining === 1 && p.generated === 0));
+  assert.ok(progress.some(p => p.phase === 'prepare' && p.source === f.source && p.remaining === 0 && p.generated === 1));
+  assert.ok(progress.some(p => p.phase === 'install' && p.completed === 1));
+  assert.ok(progress.some(p => p.phase === 'cleanup' && p.completed === 1));
+  const warmProgress = [];
+  const second = await prepareAssets({ ...f, onProgress: value => warmProgress.push(value) });
+  assert.equal(second.generated, 0);
+  assert.equal(second.hits, 1);
+  assert.equal(f.jobs, 1);
+  assert.equal(f.installs.length, 2);
+  assertProgress(warmProgress, second, 'complete');
+  assert.equal(warmProgress.some(p => p.phase === 'prepare'), false);
+  assert.ok(warmProgress.some(p => p.phase === 'validate' && p.source === f.source && p.completed === 1 && p.hits === 1));
+});
+
+test('empty discovery reports install and successful completion without transformation', async () => {
+  const f = fixture();
+  fs.unlinkSync(path.join(f.gameRoot, f.source));
+  const progress = [];
+  const result = await prepareAssets({ ...f, onProgress: value => progress.push(value) });
+  assertProgress(progress, result, 'complete');
+  assert.equal(result.total, 0);
+  assert.equal(f.jobs, 0);
+  assert.deepEqual(f.installs, [[]]);
+  assert.deepEqual(progress.map(p => p.phase), ['discover', 'discover', 'install', 'complete']);
+});
+
+test('addon and install errors report a terminal failure after discovery or validation', async () => {
+  for (const failInstall of [false, true]) {
+    const f = fixture();
+    if (failInstall) f.native.assets.installPrepared = () => { throw new Error('install failed'); };
+    else delete f.native.assets.processImage;
+    const progress = [];
+    const result = await prepareAssets({ ...f, onProgress: value => progress.push(value) });
+    assertProgress(progress, result, 'error');
+    assert.equal(result.completed, failInstall ? 1 : 0);
+    assert.equal(f.jobs, failInstall ? 1 : 0);
+    assert.equal(result.installed, 0);
+  }
+});
+
+test('cancellation before scanning or after discovery does not install or report success', async () => {
+  for (const afterDiscovery of [false, true]) {
+    const f = fixture();
+    const progress = [];
+    let cancel = !afterDiscovery;
+    const result = await prepareAssets({ ...f, shouldCancel: () => cancel, onProgress(value) {
+      progress.push(value);
+      if (value.phase === 'discover' && value.total === 1) cancel = true;
+    } });
+    assertProgress(progress, result, 'cancelled');
+    assert.equal(result.total, afterDiscovery ? 1 : 0);
+    assert.equal(result.completed, 0);
+    assert.equal(f.jobs, 0);
+    assert.equal(f.installs.length, 0);
+  }
+});
+
+test('cache pages under img are excluded while original cache-root siblings remain sources', async () => {
+  const f = fixture();
+  f.cacheRoot = path.join(f.gameRoot, 'img/.asset-cache');
+  fs.mkdirSync(f.cacheRoot);
+  fs.writeFileSync(path.join(f.cacheRoot, 'original.png'), PNG);
+  const first = await prepareAssets(f);
+  assert.equal(first.total, 2);
+  assert.equal(first.generated, 2);
+  const second = await prepareAssets(f);
+  assert.equal(second.total, 2);
+  assert.equal(second.generated, 0);
+  assert.equal(second.hits, 2);
+  assert.equal(f.jobs, 2);
+});
+
+test('asset directories are discovered regardless of their suffix', async () => {
+  const f = fixture();
+  const directory = path.join(f.gameRoot, 'img/pictures/story-port');
+  fs.mkdirSync(directory);
+  fs.renameSync(path.join(f.gameRoot, f.source), path.join(directory, 'portrait.png'));
+  const first = await prepareAssets(f);
+  assert.equal(first.total, 1);
+  assert.equal(first.entries[0].source, 'img/pictures/story-port/portrait.png');
+  const second = await prepareAssets(f);
+  assert.equal(second.hits, 1);
+  assert.equal(f.jobs, 1);
+});
+
+test('an img cache root scans originals and excludes owned entries through a game-root alias', async () => {
+  const f = fixture();
+  f.cacheRoot = path.join(f.gameRoot, 'img');
+  const alias = path.join(f.root, 'game-alias');
+  fs.symlinkSync(f.gameRoot, alias, 'dir');
+  const first = await prepareAssets({ ...f, gameRoot: alias });
+  assert.equal(first.total, 1);
+  assert.equal(first.generated, 1);
+  const second = await prepareAssets({ ...f, gameRoot: alias });
+  assert.equal(second.total, 1);
+  assert.equal(second.generated, 0);
+  assert.equal(second.hits, 1);
+  assert.equal(f.jobs, 1);
+});
+
+test('source and processor identities invalidate individual entries and remove superseded output', async () => {
+  const f = fixture();
+  await prepareAssets(f);
+  const old = path.dirname(manifests(f)[0]);
+  fs.appendFileSync(path.join(f.gameRoot, f.source), 'new source bytes');
+  assert.equal((await prepareAssets(f)).generated, 1);
+  assert.equal(fs.existsSync(old), false);
+  assert.equal((await prepareAssets({ ...f, processorIdentity: { processor: 'next' } })).generated, 1);
+  assert.equal(f.jobs, 3);
+  assert.equal(manifests(f).length, 1);
+});
+
+test('recipe changes regenerate; mismatching source hashes fall back without processing', async () => {
+  const f = fixture();
+  const sourceHash = crypto.createHash('sha256').update(PNG).digest('hex');
+  const recipe = { source: f.source, sourceHash, grid: [1, 1] };
+  await prepareAssets({ ...f, recipes: [recipe] });
+  assert.equal((await prepareAssets({ ...f, recipes: [{ ...recipe, backdrop: [0, 0, 0, 0] }] })).generated, 1);
+  const result = await prepareAssets({ ...f, recipes: [{ ...recipe, sourceHash: '0'.repeat(64) }] });
+  assert.equal(result.fallback, 1);
+  assert.equal(result.entries.length, 0);
+  assert.equal(f.jobs, 2);
+});
+
+test('corrupt PNG outputs and descriptor edits are regenerated independently', async () => {
+  const f = fixture();
+  await prepareAssets(f);
+  let file = manifests(f)[0];
+  fs.appendFileSync(path.join(path.dirname(file), 'page-0.png'), 'corruption');
+  assert.equal((await prepareAssets(f)).generated, 1);
+  file = manifests(f)[0];
+  const manifest = JSON.parse(fs.readFileSync(file));
+  manifest.descriptor.cells[0].fill = [255, 0, 0, 255];
+  fs.writeFileSync(file, JSON.stringify(manifest));
+  assert.equal((await prepareAssets(f)).generated, 1);
+  assert.equal(f.jobs, 3);
+});
+
+test('unsupported images reuse a negative entry; transient failures retry next launch', async () => {
+  const f = fixture();
+  let calls = 0;
+  f.native.assets.processImage = async () => { calls += 1; return null; };
+  assert.equal((await prepareAssets(f)).fallback, 1);
+  assert.equal((await prepareAssets(f)).negativeHits, 1);
+  assert.equal(calls, 1);
+  fs.appendFileSync(path.join(f.gameRoot, f.source), 'changed');
+  f.native.assets.processImage = async () => { calls += 1; throw new Error('decode failed'); };
+  assert.equal((await prepareAssets(f)).fallback, 1);
+  assert.equal((await prepareAssets(f)).fallback, 1);
+  assert.equal(calls, 3);
+});
+
+test('concurrent preparers serialize and reuse completed output', async () => {
+  const f = fixture();
+  const original = f.native.assets.processImage;
+  let releaseProcessing;
+  const processing = new Promise(resolve => { releaseProcessing = resolve; });
+  f.native.assets.processImage = async (...args) => {
+    await processing;
+    return original(...args);
+  };
+  const progress = [[], []];
+  const results = await Promise.all(progress.map(events => prepareAssets({ ...f, onProgress(value) {
+    events.push(value);
+    if (value.phase === 'wait') releaseProcessing();
+  } })));
+  assert.equal(results.reduce((sum, r) => sum + r.generated, 0), 1);
+  assert.equal(results.reduce((sum, r) => sum + r.hits, 0), 1);
+  assert.equal(f.jobs, 1);
+  assert.ok(progress.some(events => events.some(p => p.phase === 'wait' && p.remaining === 1 && p.source === '')));
+  progress.forEach((events, i) => assertProgress(events, results[i], 'complete'));
+});
+
+test('lock-wait cancellation reports remaining sources and leaves the active lock intact', async () => {
+  const f = fixture();
+  const lock = path.join(f.cacheRoot, '.prepare-lock');
+  fs.mkdirSync(lock, { recursive: true });
+  fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify({ pid: process.pid, hostname: require('node:os').hostname() }));
+  const progress = [];
+  let cancel = false;
+  const result = await prepareAssets({ ...f, shouldCancel: () => cancel, onProgress(value) {
+    progress.push(value);
+    if (value.phase === 'wait') cancel = true;
+  } });
+  assertProgress(progress, result, 'cancelled');
+  assert.equal(progress.at(-1).remaining, 1);
+  assert.equal(f.jobs, 0);
+  assert.equal(f.installs.length, 0);
+  assert.equal(fs.existsSync(lock), true);
+});
+
+test('stale locks and interrupted staging directories are repaired', async () => {
+  const f = fixture();
+  fs.mkdirSync(path.join(f.cacheRoot, '.prepare-lock'), { recursive: true });
+  fs.writeFileSync(path.join(f.cacheRoot, '.prepare-lock/owner.json'), JSON.stringify({ pid: 2147483647, hostname: require('node:os').hostname() }));
+  fs.mkdirSync(path.join(f.cacheRoot, 'entries/.stage-abandoned'), { recursive: true });
+  assert.equal((await prepareAssets(f)).generated, 1);
+  assert.equal(fs.existsSync(path.join(f.cacheRoot, '.prepare-lock')), false);
+  assert.equal(fs.existsSync(path.join(f.cacheRoot, 'entries/.stage-abandoned')), false);
+});
+
+test('an aged foreign-host lock remains intact and falls back after a bounded wait', async () => {
+  const f = fixture();
+  const lock = path.join(f.cacheRoot, '.prepare-lock');
+  fs.mkdirSync(lock, { recursive: true });
+  const owner = JSON.stringify({ pid: 1234, hostname: require('node:os').hostname() + '-other' });
+  fs.writeFileSync(path.join(lock, 'owner.json'), owner);
+  const old = new Date(Date.now() - 120000);
+  fs.utimesSync(lock, old, old);
+  const started = performance.now();
+  const result = await prepareAssets(f);
+  assert.ok(performance.now() - started < 20000, 'foreign lock wait exceeded its bound');
+  assert.equal(result.fallback, 1);
+  assert.equal(f.jobs, 0);
+  assert.equal(fs.readFileSync(path.join(lock, 'owner.json'), 'utf8'), owner);
+  assert.ok(f.warnings.some(message => message.includes('locked by another host')));
+});
+
+test('cancellation waits for current processor, discards its output and prevents install', async () => {
+  const f = fixture();
+  let cancel = false;
+  const original = f.native.assets.processImage;
+  f.native.assets.processImage = async (...args) => { const result = await original(...args); cancel = true; return result; };
+  const progress = [];
+  const result = await prepareAssets({ ...f, shouldCancel: () => cancel, onProgress: value => progress.push(value) });
+  assert.equal(result.cancelled, true);
+  assert.equal(result.generated, 0);
+  assertProgress(progress, result, 'cancelled');
+  assert.equal(progress.at(-1).remaining, 1);
+  assert.equal(progress.at(-1).completed, 0);
+  assert.equal(f.installs.length, 0);
+  assert.deepEqual(fs.readdirSync(path.join(f.cacheRoot, 'entries')), []);
+  f.native.assets.processImage = original;
+  assert.equal((await prepareAssets(f)).generated, 1);
+});
+
+test('cancellation during final cleanup never reports assets ready', async () => {
+  const f = fixture();
+  let cancel = false;
+  const progress = [];
+  const result = await prepareAssets({ ...f, shouldCancel: () => cancel, onProgress(value) {
+    progress.push(value);
+    if (value.phase === 'cleanup') cancel = true;
+  } });
+  assert.equal(result.cancelled, true);
+  assertProgress(progress, result, 'cancelled');
+  assert.equal(fs.existsSync(path.join(f.cacheRoot, '.prepare-lock')), false);
+  assert.equal((await prepareAssets(f)).generated, 0, 'completed cache entries remain reusable after cancellation');
+});
+
+test('unwritable cache falls back; source changes during preparation never publish', async () => {
+  const f = fixture();
+  fs.writeFileSync(f.cacheRoot, 'a file blocks the cache directory');
+  const progress = [];
+  const result = await prepareAssets({ ...f, onProgress: value => progress.push(value) });
+  assert.equal(f.jobs, 0);
+  assert.ok(f.warnings.some(s => s.includes('unavailable')));
+  assertProgress(progress, result, 'error');
+  assert.equal(progress.at(-1).remaining, 1);
+  fs.unlinkSync(f.cacheRoot);
+  const original = f.native.assets.processImage;
+  f.native.assets.processImage = async (...args) => {
+    const descriptor = await original(...args);
+    fs.appendFileSync(path.join(f.gameRoot, f.source), 'changed during preparation');
+    return descriptor;
+  };
+  assert.equal((await prepareAssets(f)).fallback, 1);
+  assert.deepEqual(fs.readdirSync(path.join(f.cacheRoot, 'entries')), []);
+});
+
+test('invalid coverage and unsafe page paths never install or publish', async () => {
+  const f = fixture();
+  const original = f.native.assets.processImage;
+  f.native.assets.processImage = async (...args) => { const d = await original(...args); d.width = 2; return d; };
+  assert.equal((await prepareAssets(f)).fallback, 1);
+  f.native.assets.processImage = async (...args) => { const d = await original(...args); d.pages[0].path = '../outside.png'; return d; };
+  assert.equal((await prepareAssets(f)).fallback, 1);
+  assert.equal(f.installs.at(-1).length, 0);
+  assert.deepEqual(fs.readdirSync(path.join(f.cacheRoot, 'entries')), []);
+});
+
+test('runner resolves default cache, config-relative recipes and explicit CLI overrides', () => {
+  const f = fixture();
+  const cfg = path.join(f.root, 'config.json');
+  const recipesFile = path.join(f.root, 'recipes.json');
+  fs.writeFileSync(recipesFile, '[]');
+  fs.writeFileSync(cfg, JSON.stringify({ assetPreparation: { enabled: false, cacheRoot: 'cache-near-config', recipes: 'recipes.json' } }));
+  const base = { addon: 'a', bootstrap: 'b', gameRoot: f.gameRoot, saveRoot: path.join(f.root, 'save') };
+  assert.equal(validate(base).assetPreparation.cacheRoot, path.join(f.root, 'save/asset-cache'));
+  const configured = validate({ ...base, config: cfg });
+  assert.equal(configured.assetPreparation.enabled, false);
+  assert.equal(configured.assetPreparation.cacheRoot, path.join(f.root, 'cache-near-config'));
+  const cli = parse(['--asset-preparation', 'on', '--asset-cache-root', f.cacheRoot, '--asset-recipes', recipesFile]);
+  assert.equal(validate({ ...base, config: cfg, ...cli }).assetPreparation.enabled, true);
+  assert.equal(validate({ ...base, config: cfg, ...cli }).assetPreparation.cacheRoot, f.cacheRoot);
+  assert.throws(() => validate({ ...base, assetPreparation: 'maybe' }), /on or off/);
+});
+
+test('source metadata snapshots accompany install and detect changes during hashing', async () => {
+  const f = fixture();
+  f.native.assets.sourceIdentity = () => 'captured-source-version';
+  await prepareAssets(f);
+  assert.equal(f.installs[0][0].sourceIdentity, 'captured-source-version');
+  let checks = 0;
+  f.native.assets.sourceIdentity = () => ++checks === 1 ? 'before' : 'after';
+  const result = await prepareAssets(f);
+  assert.equal(result.fallback, 1);
+  assert.equal(result.entries.length, 0);
+  assert.equal(f.jobs, 1);
+});
+
+test('uniform RGBA descriptors preserve all channels and reuse without PNG pages', async () => {
+  const f = fixture();
+  let calls = 0;
+  f.native.assets.processImage = async () => {
+    calls += 1;
+    return { version: 1, width: 1, height: 1, halo: 3, uniform: [42, 17, 8, 0], pages: [], cells: [] };
+  };
+  const cold = await prepareAssets(f);
+  assert.equal(cold.generated, 1);
+  assert.equal(cold.cacheBytes, 0);
+  assert.deepEqual(cold.entries[0].descriptor.uniform, [42, 17, 8, 0]);
+  const warm = await prepareAssets(f);
+  assert.equal(warm.hits, 1);
+  assert.equal(calls, 1);
+});
+
+test('a shared cache retains entries referenced by another game index', async () => {
+  const first = fixture();
+  const second = fixture();
+  second.cacheRoot = first.cacheRoot;
+  await prepareAssets(first);
+  await prepareAssets(second);
+  const shared = manifests(first)[0];
+  fs.appendFileSync(path.join(first.gameRoot, first.source), 'new first game asset');
+  await prepareAssets(first);
+  assert.equal(fs.existsSync(shared), true);
+  assert.equal((await prepareAssets(second)).hits, 1);
+  assert.equal(second.jobs, 0);
+});
+
+test('linked decoder identities invalidate cache reuse without changes to source pixels', async () => {
+  const f = fixture();
+  f.native.assets.preparationVersion = { processor: 'lossless-images-v1', decoder: 'decoder-1', pageSize: 2048 };
+  await prepareAssets(f);
+  f.native.assets.preparationVersion = { ...f.native.assets.preparationVersion, decoder: 'decoder-2' };
+  assert.equal((await prepareAssets(f)).generated, 1);
+  assert.equal(f.jobs, 2);
+});
+
+test('live index leases protect unloaded entries until shutdown or explicit release', async () => {
+  const f = fixture();
+  const first = await prepareAssets(f);
+  const oldDirectory = first.entries[0].directory;
+  fs.appendFileSync(path.join(f.gameRoot, f.source), 'new version while first game is alive');
+  const other = { ...f, native: { assets: { ...f.native.assets } } };
+  await prepareAssets(other);
+  assert.equal(fs.existsSync(oldDirectory), true);
+  first.releaseCacheLease();
+  await prepareAssets(other);
+  assert.equal(fs.existsSync(oldDirectory), false);
+});
+
+test('quit requests retain cache ownership; explicit release and dead lease pruning work', async () => {
+  const f = fixture();
+  let closed = false;
+  f.native.runtime = { quit() { closed = true; } };
+  const first = await prepareAssets(f);
+  const leases = () => fs.readdirSync(f.cacheRoot).filter(n => n.startsWith('.lease-'));
+  assert.equal(leases().length, 1);
+  f.native.runtime.quit();
+  assert.equal(closed, true);
+  assert.equal(leases().length, 1);
+  first.releaseCacheLease();
+  assert.equal(leases().length, 0);
+  fs.writeFileSync(path.join(f.cacheRoot, '.lease-2147483647-dead.json'), JSON.stringify({
+    pid: 2147483647, hostname: require('node:os').hostname(), keys: ['0'.repeat(64)]
+  }));
+  await prepareAssets(f);
+  assert.equal(fs.existsSync(path.join(f.cacheRoot, '.lease-2147483647-dead.json')), false);
+  f.native.runtime.quit();
+});
+
+function encryptedFixture() {
+  const f = fixture();
+  const key = Buffer.from('00112233445566778899aabbccddeeff', 'hex');
+  const systemFile = path.join(f.gameRoot, 'data/System.json');
+  fs.mkdirSync(path.dirname(systemFile), { recursive: true });
+  fs.writeFileSync(systemFile, JSON.stringify({ hasEncryptedImages: true, hasEncryptedAudio: true,
+    encryptionKey: key.toString('hex') }));
+  const encrypt = bytes => {
+    const body = Buffer.from(bytes);
+    for (let i = 0; i < 16; ++i) body[i] ^= key[i];
+    return Buffer.concat([Buffer.from('5250474d560000000003010000000000', 'hex'), body]);
+  };
+  fs.renameSync(path.join(f.gameRoot, f.source), path.join(f.gameRoot, f.source + '_'));
+  fs.writeFileSync(path.join(f.gameRoot, f.source + '_'), encrypt(PNG));
+  const audio = Buffer.concat([Buffer.from('OggS'), Buffer.alloc(28), Buffer.from('LOOPSTART=12\0LOOPLENGTH=96')]);
+  fs.mkdirSync(path.join(f.gameRoot, 'audio/bgm'), { recursive: true });
+  fs.writeFileSync(path.join(f.gameRoot, 'audio/bgm/theme.ogg_'), encrypt(audio));
+  let aliases = new Map();
+  const id = file => fs.existsSync(file) ? crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') : null;
+  const assets = f.native.assets;
+  const originalProcess = assets.processImage;
+  assets.processImage = (source, output, recipe, file) => {
+    assert.deepEqual(fs.readFileSync(file), PNG, 'processor receives plaintext');
+    return originalProcess(source, output, recipe);
+  };
+  assets.hasDecrypted = source => {
+    const entry = aliases.get(source);
+    return !!entry && id(path.join(f.gameRoot, entry.source)) === entry.sourceIdentity &&
+      id(systemFile) === entry.settingsIdentity && id(entry.file) === entry.fileIdentity;
+  };
+  assets.sourcePath = source => assets.hasDecrypted(source) ? aliases.get(source).file :
+    (fs.existsSync(path.join(f.gameRoot, source)) ? path.join(f.gameRoot, source) : null);
+  assets.sourceIdentity = source => {
+    const file = assets.sourcePath(source);
+    return file ? id(file) : null;
+  };
+  assets.installDecrypted = entries => {
+    aliases = new Map(entries.map(entry => [entry.logicalSource, { ...entry, fileIdentity: id(entry.file) }]));
+  };
+  return { ...f, encrypt, audio, systemFile, get jobs() { return f.jobs; }, get installs() { return f.installs; } };
+}
+
+test('encrypted images and audio prepare once, preserve plaintext bytes and reuse on warm launch', async () => {
+  const f = encryptedFixture();
+  const originals = ['img/pictures/a.png_', 'audio/bgm/theme.ogg_', 'data/System.json']
+    .map(source => [source, fs.readFileSync(path.join(f.gameRoot, source))]);
+  const cold = await prepareAssets(f);
+  assert.equal(cold.generated, 2);
+  assert.equal(cold.decrypted, 2);
+  assert.equal(cold.fallback, 0);
+  assert.equal(cold.installed, 1);
+  assert.equal(f.jobs, 1);
+  assert.deepEqual(fs.readFileSync(f.native.assets.sourcePath('img/pictures/a.png')), PNG);
+  assert.deepEqual(fs.readFileSync(f.native.assets.sourcePath('audio/bgm/theme.ogg')), f.audio);
+  const warm = await prepareAssets(f);
+  assert.equal(warm.generated, 0);
+  assert.equal(warm.hits, 2);
+  assert.equal(warm.negativeHits, 0);
+  assert.equal(warm.decrypted, 2);
+  assert.equal(f.jobs, 1);
+  for (const [source, bytes] of originals) assert.deepEqual(fs.readFileSync(path.join(f.gameRoot, source)), bytes);
+});
+
+test('decrypted media corruption regenerates only its source; key changes never reuse stale output', async () => {
+  const f = encryptedFixture();
+  const cold = await prepareAssets(f);
+  fs.appendFileSync(cold.decryptedEntries.find(entry => entry.source.startsWith('audio/')).file, 'corrupt');
+  const repaired = await prepareAssets(f);
+  assert.equal(repaired.generated, 1);
+  assert.equal(repaired.hits, 1);
+  const settings = JSON.parse(fs.readFileSync(f.systemFile));
+  settings.encryptionKey = 'ff'.repeat(16);
+  fs.writeFileSync(f.systemFile, JSON.stringify(settings));
+  const changed = await prepareAssets(f);
+  assert.equal(changed.hits, 0);
+  assert.equal(changed.decrypted, 0);
+  assert.equal(changed.fallback, 2);
+  assert.equal(f.native.assets.hasDecrypted('img/pictures/a.png'), false);
+});
+
+test('encrypted ordinary images still get a plaintext cache when compact preparation is unnecessary', async () => {
+  const f = encryptedFixture();
+  f.native.assets.processImage = async () => null;
+  const cold = await prepareAssets(f);
+  assert.equal(cold.decrypted, 2);
+  assert.equal(cold.installed, 0);
+  assert.equal(cold.fallback, 0);
+  const warm = await prepareAssets(f);
+  assert.equal(warm.hits, 2);
+  assert.equal(warm.negativeHits, 0);
+});
+
+test('truncated or invalid encrypted headers fall back independently of valid audio', async () => {
+  for (const bytes of [Buffer.alloc(8), Buffer.alloc(64)]) {
+    const f = encryptedFixture();
+    fs.writeFileSync(path.join(f.gameRoot, 'img/pictures/a.png_'), bytes);
+    const result = await prepareAssets(f);
+    assert.equal(result.decrypted, 1);
+    assert.equal(result.fallback, 1);
+    assert.equal(f.native.assets.hasDecrypted('img/pictures/a.png'), false);
+    assert.equal(f.native.assets.hasDecrypted('audio/bgm/theme.ogg'), true);
+    assert.equal(f.jobs, 0);
+  }
+});
+
+test('WAV bytes with an ogg extension retain their exact data and logical filename', async () => {
+  const f = encryptedFixture();
+  const wav = Buffer.alloc(44); wav.write('RIFF'); wav.write('WAVE', 8);
+  fs.writeFileSync(path.join(f.gameRoot, 'audio/bgm/theme.ogg_'), f.encrypt(wav));
+  const result = await prepareAssets(f);
+  assert.equal(result.decrypted, 2);
+  assert.deepEqual(fs.readFileSync(f.native.assets.sourcePath('audio/bgm/theme.ogg')), wav);
+});
+
+test('cancelling encrypted preparation publishes no plaintext aliases or prepared images', async () => {
+  const f = encryptedFixture();
+  let cancel = false;
+  const result = await prepareAssets({ ...f, shouldCancel: () => cancel,
+    onProgress(progress) { if (progress.completed === 1) cancel = true; } });
+  assert.equal(result.cancelled, true);
+  assert.equal(result.decrypted, 0);
+  assert.equal(f.installs.length, 0);
+  assert.equal(f.native.assets.hasDecrypted('img/pictures/a.png'), false);
+});
+
+test('automatic character grids retain ordinary and single-character logical layouts', async () => {
+  for (const [name, width, height, grid] of [['ordinary.png', 12, 8, [12, 8]], ['!$single.png', 3, 4, [3, 4]]]) {
+    const f = fixture();
+    fs.unlinkSync(path.join(f.gameRoot, f.source));
+    fs.mkdirSync(path.join(f.gameRoot, 'img/characters'));
+    const png = Buffer.from(PNG); png.writeUInt32BE(width, 16); png.writeUInt32BE(height, 20);
+    fs.writeFileSync(path.join(f.gameRoot, 'img/characters', name), png);
+    let observed;
+    f.native.assets.processImage = async (_source, _output, recipe) => { observed = recipe.grid; return null; };
+    await prepareAssets(f);
+    assert.deepEqual(observed, grid);
+  }
+});

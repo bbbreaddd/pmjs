@@ -999,6 +999,11 @@ constexpr const char* simpleFragmentSource = R"(#version 300 es
   uniform bool texturePremultiplied;
   uniform bool clampedTilingSampling;
   uniform highp vec2 imageDimensions;
+  uniform bool derivedImage;
+  uniform bool derivedNearest;
+  uniform highp vec2 derivedAtlasOffset;
+  uniform highp vec4 derivedUvTransform;
+  uniform highp vec4 derivedSampleBounds;
   in vec2 vertexUv;
   in vec4 vertexColor;
   in vec4 vertexUvClamp;
@@ -1010,7 +1015,20 @@ constexpr const char* simpleFragmentSource = R"(#version 300 es
       highp vec2 margin = vec2(0.5) / imageDimensions;
       coord = clamp(coord + ceil(-coord), margin, vec2(1.0) - margin);
     }
-    vec4 sampleColor = texture(image, coord);
+    vec4 sampleColor;
+    if (derivedImage) {
+      bool outside = any(lessThan(coord, derivedSampleBounds.xy)) ||
+                     any(greaterThan(coord, derivedSampleBounds.zw));
+      if (outside) sampleColor = vec4(0.0);
+      else if (derivedNearest) {
+        highp vec2 pixel = clamp(floor(coord * imageDimensions), vec2(0.0), imageDimensions - vec2(1.0));
+        highp ivec2 address = derivedUvTransform.x == 0.0 ? ivec2(0) : ivec2(pixel + derivedAtlasOffset);
+        sampleColor = texelFetch(image, address, 0);
+      } else sampleColor = texture(image,
+        coord * derivedUvTransform.xy + derivedUvTransform.zw);
+    } else {
+      sampleColor = texture(image, coord);
+    }
     outputColor = sampleColor * vertexColor;
     outputColor.rgb *= pixiSpritePacking ? (texturePremultiplied ? 1.0 : sampleColor.a) : (texturePremultiplied ? vertexColor.a : outputColor.a);
   }

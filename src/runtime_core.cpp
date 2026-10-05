@@ -18,7 +18,7 @@ RuntimeCore::RuntimeCore(const std::filesystem::path& root, int width, int heigh
 }
 
 std::optional<ImageHandle> RuntimeCore::resolveImage(std::uint32_t handle) {
-  return images_.lookup(handle) ? std::optional<ImageHandle>{handle}
+  return images_.inspect(handle) ? std::optional<ImageHandle>{handle}
                                 : canvases_.prepareImage(handle);
 }
 

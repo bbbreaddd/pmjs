@@ -342,6 +342,11 @@ void Renderer::createPixiPrograms(const std::string& precision) {
   simpleSpritePremultipliedUniform_ = glGetUniformLocation(simpleProgram_, "texturePremultiplied");
   simpleTilingClampUniform_ = glGetUniformLocation(simpleProgram_, "clampedTilingSampling");
   simpleTextureSizeUniform_ = glGetUniformLocation(simpleProgram_, "imageDimensions");
+  simpleDerivedImageUniform_ = glGetUniformLocation(simpleProgram_, "derivedImage");
+  simpleDerivedNearestUniform_ = glGetUniformLocation(simpleProgram_, "derivedNearest");
+  simpleDerivedAtlasOffsetUniform_ = glGetUniformLocation(simpleProgram_, "derivedAtlasOffset");
+  simpleDerivedUvTransformUniform_ = glGetUniformLocation(simpleProgram_, "derivedUvTransform");
+  simpleDerivedSampleBoundsUniform_ = glGetUniformLocation(simpleProgram_, "derivedSampleBounds");
   tileProgram_ = tile;
   meshPostTintOverlayProgram_ = meshOverlay;
   canvasTriangleBitmapProgram_ = canvasTriangleBitmap;

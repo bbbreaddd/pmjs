@@ -454,7 +454,7 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
       frame_.commands.back().color = { float((tint >> 16) & 255) / 255,
         float((tint >> 8) & 255) / 255, float(tint & 255) / 255, float(tint >> 24) / 255 };
     }
-    frame_.commands.back().premultipliedSpriteTexture = (flags & NodeFlags::premultipliedSpriteTexture) || images_.lookup(resource)->premultiplied;
+    frame_.commands.back().premultipliedSpriteTexture = (flags & NodeFlags::premultipliedSpriteTexture) || images_.inspect(resource)->premultiplied;
     frame_.commands.back().pixiSpritePacking = kind == static_cast<std::uint32_t>(NodeKind::sprite);
     frame_.commands.back().appliesSpriteColor = flags & NodeFlags::hasSpriteColor;
     if (frame_.commands.back().appliesSpriteColor) {

@@ -62,6 +62,7 @@ set(PMJS_RUNTIME_SOURCES
   src/renderer_programs.cpp
   src/renderer_scene.cpp
   src/resources.cpp
+  src/asset_processor.cpp
   src/canvas.cpp
   src/text_backend.cpp
   src/text_layout.cpp
@@ -100,6 +101,7 @@ add_library(pmjs_native MODULE
   src/node_addon_media.cpp
   src/node_addon_platform.cpp
   src/node_addon_resources.cpp
+  src/node_addon_assets.cpp
   src/node_addon_runtime.cpp)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/third_party/effekseer.LICENSE" PMJS_EFFECTS_LICENSE)
 configure_file(src/effects_license.hpp.in generated/effects_license.hpp @ONLY)
@@ -133,6 +135,12 @@ if(BUILD_TESTING)
   endfunction()
 
   pmjs_add_cpp_test(pmjs-vfs-test native-vfs test/vfs.cpp src/vfs.cpp)
+  pmjs_add_cpp_test(pmjs-asset-processor-test native-asset-processor test/asset-processor.cpp src/asset_processor.cpp)
+  target_link_libraries(pmjs-asset-processor-test PRIVATE PkgConfig::PNG)
+  add_executable(pmjs-derived-images-test test/derived-images.cpp)
+  target_link_libraries(pmjs-derived-images-test PRIVATE pmjs_runtime)
+  add_test(NAME native-derived-images COMMAND ${XVFB_RUN} -a $<TARGET_FILE:pmjs-derived-images-test>)
+  set_tests_properties(native-derived-images PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
   if(PMJS_ENABLE_SKIA65)
     pmjs_add_cpp_test(pmjs-text-backend-default-test native-text-backend-default test/text-backend-default.cpp)
     target_link_libraries(pmjs-text-backend-default-test PRIVATE pmjs_runtime)
@@ -265,11 +273,19 @@ if(BUILD_TESTING)
   target_link_libraries(pmjs-canvas-upload-test PRIVATE pmjs_runtime)
   target_compile_options(pmjs-canvas-upload-test PRIVATE -UNDEBUG)
   add_test(NAME native-canvas-upload COMMAND pmjs-canvas-upload-test)
-  foreach(PMJS_NODE_TEST IN ITEMS node-scene node-pixi4-clear node-mask-pixels node-renderer-stats node-empty-sprite node-filter-input node-bitmap-region-batching node-render-to-image node-render-to-canvas node-render-target-filters node-image-coalesce node-image-retention node-image-warm-cache node-image-no-warm-cache node-image-fallback node-image-bytes node-audio-bytes node-video-texture node-canvas-deferred node-canvas-pixels node-canvas-radial-gradient node-primitive-surface node-filter-bounds node-tone-boundary-pixels node-mz-color-pixels node-pixi5-zoom-pixels node-pixi5-tiling-pixels node-pixi5-sprite-rounding-pixels node-mz-host-contracts node-mz-canvas-pixels node-mz-sampling-pixels node-mesh-post-tint-overlay node-glyph-cache node-text-layout node-text-layout-cache node-text-upload node-freetype-facade node-primitive-canvas)
+  foreach(PMJS_NODE_TEST IN ITEMS node-scene node-pixi4-clear node-mask-pixels node-renderer-stats node-empty-sprite node-preparation-progress node-derived-sprite node-filter-input node-bitmap-region-batching node-render-to-image node-render-to-canvas node-render-target-filters node-image-coalesce node-image-retention node-image-warm-cache node-image-no-warm-cache node-image-fallback node-image-bytes node-audio-bytes node-video-texture node-canvas-deferred node-canvas-pixels node-canvas-radial-gradient node-primitive-surface node-filter-bounds node-tone-boundary-pixels node-mz-color-pixels node-pixi5-zoom-pixels node-pixi5-tiling-pixels node-pixi5-sprite-rounding-pixels node-mz-host-contracts node-mz-canvas-pixels node-mz-sampling-pixels node-mesh-post-tint-overlay node-glyph-cache node-text-layout node-text-layout-cache node-text-upload node-freetype-facade node-primitive-canvas)
     add_test(NAME ${PMJS_NODE_TEST} COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
       "${CMAKE_CURRENT_SOURCE_DIR}/test/${PMJS_NODE_TEST}.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
     set_tests_properties(${PMJS_NODE_TEST} PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
   endforeach()
+  set_tests_properties(node-derived-sprite PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
+  add_test(NAME node-prepared-media COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-prepared-media.cjs" $<TARGET_FILE:pmjs_native>)
+  set_tests_properties(node-prepared-media PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
+  add_test(NAME node-prepared-image-load COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-prepared-image-load.cjs" $<TARGET_FILE:pmjs_native>)
+  set_tests_properties(node-prepared-image-load PROPERTIES ENVIRONMENT
+    "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy;UV_THREADPOOL_SIZE=1")
   add_test(NAME node-custom-filters COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE} --expose-gc
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-custom-filters.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-custom-filters PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
