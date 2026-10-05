@@ -10,6 +10,52 @@ const { loadPmjsRuntime } = require('./helpers/runtime-context.cjs');
 const root = path.resolve(__dirname, '..');
 function plain(value) { return JSON.parse(JSON.stringify(value)); }
 
+test('plugin failure remains primary when a method accessor also fails during auditing', () => {
+  const logs = [];
+  const ctx = loadPmjsRuntime({ console: { error(...args) { logs.push(args); } } });
+  const original = new Error('plugin failure'), audit = new Error('accessor failure');
+  const target = { update() {} };
+  ctx.PMJS.methods.wrap({ key: 'K.update', id: 'pmjs.k', method: 'update', getTarget: () => target, wrap: next => next });
+  assert.throws(() => ctx.PMJS.plugins.execute('Example', () => {
+    Object.defineProperty(target, 'update', { get() { throw audit; } });
+    throw original;
+  }), error => error === original);
+  assert.ok(logs.some(args => args.includes(audit)), 'the secondary audit failure remains visible');
+  assert.equal(ctx.PMJS.plugins.dump().counts.failed, 1);
+});
+
+test('method audit failure fails an otherwise successful plugin load', () => {
+  const ctx = loadPmjsRuntime();
+  const error = new Error('accessor failure'), target = { update() {} };
+  ctx.PMJS.methods.wrap({ key: 'K.update', id: 'pmjs.k', method: 'update', getTarget: () => target, wrap: next => next });
+  assert.throws(() => ctx.PMJS.plugins.execute('Example', () => {
+    Object.defineProperty(target, 'update', { get() { throw error; } });
+  }), caught => caught === error);
+  assert.equal(ctx.PMJS.plugins.dump().counts.failed, 1);
+});
+
+test('a falsy plugin exception remains primary when auditing fails', () => {
+  const ctx = loadPmjsRuntime({ console: { error() {} } });
+  const target = { update() {} };
+  ctx.PMJS.methods.wrap({ key: 'K.update', id: 'pmjs.k', method: 'update', getTarget: () => target, wrap: next => next });
+  assert.throws(() => ctx.PMJS.plugins.execute('Example', () => {
+    Object.defineProperty(target, 'update', { get() { throw new Error('audit'); } });
+    throw 0;
+  }), caught => caught === 0);
+});
+
+test('plugin error formatting and audit logging cannot replace the load failure', () => {
+  const ctx = loadPmjsRuntime({ console: { error() { throw new Error('logging failure'); } } });
+  const original = { get message() { throw new Error('formatting failure'); } };
+  const target = { update() {} };
+  ctx.PMJS.methods.wrap({ key: 'K.update', id: 'pmjs.k', method: 'update', getTarget: () => target, wrap: next => next });
+  assert.throws(() => ctx.PMJS.plugins.execute('Example', () => {
+    Object.defineProperty(target, 'update', { get() { throw new Error('audit failure'); } });
+    throw original;
+  }), caught => caught === original);
+  assert.equal(ctx.PMJS.plugins.dump().counts.failed, 1);
+});
+
 test('plugin lifecycle installation preserves existing plugin capabilities', () => {
   const extension = () => 'existing capability';
   const namespace = { extension };

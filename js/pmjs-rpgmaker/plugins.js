@@ -58,7 +58,8 @@
     var entry = guest(name);
     entry.state = 'failed';
     entry.reason = 'failed during setup';
-    entry.error = String((error && error.message) || error);
+    try { entry.error = String((error && error.message) || error); }
+    catch (_) { entry.error = 'unprintable plugin error'; }
   }
 
   function isLoaded(name) {
@@ -184,9 +185,11 @@
     },
 
     execute: function(name, load) {
-      var token = PMJS.methods.beginPlugin(name);
+      var token = null;
       var error = null;
+      var loadFailed = false;
       try {
+        token = PMJS.methods.beginPlugin(name);
         var listeners = loadingCallbacks[key(name)] || [];
         delete loadingCallbacks[key(name)];
         listeners.forEach(function(listener) {
@@ -199,10 +202,19 @@
         load();
       } catch (caught) {
         error = caught;
+        loadFailed = true;
         failed(name, caught);
         throw caught;
       } finally {
-        PMJS.methods.endPlugin(token, { error: error });
+        if (token) {
+          try { PMJS.methods.endPlugin(token, { error: error, failed: loadFailed }); }
+          catch (auditError) {
+            if (!loadFailed) { failed(name, auditError); throw auditError; }
+            // A secondary diagnostic cannot replace the original load failure.
+            try { console.error('[pmjs] method audit failed for ' + name + ':', auditError); }
+            catch (_) { /* The original load failure is already propagating. */ }
+          }
+        }
       }
       loaded(name);
       return true;

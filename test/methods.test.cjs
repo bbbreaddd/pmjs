@@ -76,6 +76,57 @@ test('unavailable targets are skipped at installation', () => {
   assert.equal(host.target.update(), 'guest');
 });
 
+test('installation resolves a target once and preserves resolver, getter, builder and setter errors', () => {
+  for (const failure of ['resolver', 'getter', 'builder', 'setter']) {
+    const ctx = context();
+    const error = new Error(failure);
+    let resolutions = 0;
+    const target = failure === 'getter' ? Object.defineProperty({}, 'update', { get() { throw error; } }) :
+      failure === 'setter' ? Object.defineProperty({}, 'update', { get() { return () => {}; }, set() { throw error; } }) :
+      { update() {} };
+    ctx.PMJS.methods.wrap({ key: 'K.update', id: 'pmjs.k', method: 'update',
+      getTarget() { resolutions++; if (failure === 'resolver') throw error; return target; },
+      wrap(next) { if (failure === 'builder') throw error; return next; } });
+    assert.throws(() => ctx.PMJS.methods.install(), caught => caught === error);
+    assert.equal(resolutions, 1);
+    assert.equal(method(ctx, 'K.update').state, 'failed');
+    assert.equal(method(ctx, 'K.update').reason, failure);
+    assert.throws(() => ctx.PMJS.methods.install(), caught => caught === error);
+    assert.equal(resolutions, 1, 'a failed installation cannot mutate targets on retry');
+  }
+});
+
+test('non-function methods remain explicit skips', () => {
+  const ctx = context();
+  ctx.PMJS.methods.own({ key: 'K.update', id: 'pmjs.k', method: 'update',
+    getTarget: () => ({ update: 42 }), replace: () => () => {} });
+  assert.equal(ctx.PMJS.methods.install()[0].state, 'skipped');
+  assert.equal(method(ctx, 'K.update').reason, 'method is not a function');
+});
+
+test('falsy thrown values are sticky installation failures', () => {
+  for (const error of [null, undefined, false, 0, '']) {
+    const ctx = context();
+    let resolutions = 0;
+    ctx.PMJS.methods.wrap({ key: 'K.update', id: 'pmjs.k', method: 'update',
+      getTarget() { resolutions++; throw error; }, wrap: next => next });
+    assert.throws(() => ctx.PMJS.methods.install(), caught => caught === error);
+    assert.throws(() => ctx.PMJS.methods.install(), caught => caught === error);
+    assert.equal(resolutions, 1);
+    assert.equal(method(ctx, 'K.update').state, 'failed');
+  }
+});
+
+test('formatting an installation error cannot replace it or lose the failed state', () => {
+  const ctx = context();
+  const error = { get message() { throw new Error('formatting failure'); } };
+  ctx.PMJS.methods.wrap({ key: 'K.update', id: 'pmjs.k', method: 'update',
+    getTarget() { throw error; }, wrap: next => next });
+  assert.throws(() => ctx.PMJS.methods.install(), caught => caught === error);
+  assert.throws(() => ctx.PMJS.methods.install(), caught => caught === error);
+  assert.equal(method(ctx, 'K.update').state, 'failed');
+});
+
 test('plugin mutation audit records mutator and failure', () => {
   const target = { update() {} };
   const ctx = context({ target });

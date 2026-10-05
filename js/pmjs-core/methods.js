@@ -5,19 +5,20 @@
   var order = [];
   var installed = false;
   var installationError = null;
+  var installationFailed = false;
 
   function fail(message) {
     throw new Error('PMJS methods: ' + message);
   }
 
   function targetOf(record) {
-    try { return record.getTarget() || null; } catch (_) { return null; }
+    return record.getTarget() || null;
   }
 
   function liveMethod(record) {
     var target = targetOf(record);
     if (!target) return undefined;
-    try { return target[record.method]; } catch (_) { return undefined; }
+    return target[record.method];
   }
 
   function register(definition, mode) {
@@ -42,14 +43,14 @@
   }
 
   function installRecord(record) {
-    var target = targetOf(record);
-    var original = liveMethod(record);
-    if (!target || typeof original !== 'function') {
-      record.state = 'skipped';
-      record.reason = target ? 'method is not a function' : 'target unavailable';
-      return record.state;
-    }
     try {
+      var target = targetOf(record);
+      var original = target ? target[record.method] : undefined;
+      if (!target || typeof original !== 'function') {
+        record.state = 'skipped';
+        record.reason = target ? 'method is not a function' : 'target unavailable';
+        return record.state;
+      }
       var replacement = record.build(original);
       if (typeof replacement !== 'function') {
         fail(record.id + ' did not return a function');
@@ -59,8 +60,10 @@
       record.reason = 'installed';
     } catch (error) {
       record.state = 'failed';
-      record.reason = String((error && error.message) || error);
       installationError = error;
+      installationFailed = true;
+      try { record.reason = String((error && error.message) || error); }
+      catch (_) { record.reason = 'unprintable installation error'; }
       throw error;
     }
     return record.state;
@@ -72,7 +75,7 @@
     own: function(definition) { return register(definition, 'own'); },
 
     install: function() {
-      if (installationError) throw installationError;
+      if (installationFailed) throw installationError;
       if (installed) return [];
       installed = true;
       return order.map(function(key) {
@@ -95,7 +98,7 @@
         var after = liveMethod(methods[key]);
         if (before === after || (before === undefined && after === undefined)) return;
         methods[key].mutations.push({
-          plugin: token.name, failed: !!(options && options.error)
+          plugin: token.name, failed: !!(options && (options.failed || options.error))
         });
       });
       return token.name;
