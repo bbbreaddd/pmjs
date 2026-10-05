@@ -48,34 +48,107 @@ napi_value captureDrawable(napi_env env, napi_callback_info) try {
   napi_throw_error(env, nullptr, error.what()); return nullptr;
 }
 
-napi_value circleCoverage(napi_env env, napi_callback_info info) try {
-  auto args = arguments(env, info, 14);
-  std::vector<std::array<float, 4>> clips;
-  if (args.size() > 13) {
-    bool isArray = false;
-    check(env, napi_is_array(env, args[13], &isArray), "invalid circle clips");
-    if (!isArray) throw std::invalid_argument("circle clips must be an array");
-    uint32_t count = 0;
-    check(env, napi_get_array_length(env, args[13], &count), "invalid circle clips");
-    if (count % 4 || count > 64) throw std::invalid_argument("invalid circle clips");
-    clips.resize(count / 4);
-    for (uint32_t i = 0; i < count; ++i) {
-      napi_value component;
-      check(env, napi_get_element(env, args[13], i, &component), "invalid circle clip");
-      clips[i / 4][i % 4] = asNumber(env, component);
-    }
-  }
-  std::array<float, 6> transform;
-  for (size_t i = 0; i < transform.size(); ++i) transform[i] = asNumber(env, args.at(3 + i));
-  auto pixels = CanvasStore::circleCoverage(asNumber(env, args.at(0)), asNumber(env, args.at(1)),
-    asNumber(env, args.at(2)), transform, asInt32(env, args.at(9)), asInt32(env, args.at(10)),
-    asInt32(env, args.at(11)), asInt32(env, args.at(12)), clips);
+namespace {
+std::span<const uint8_t> canvasBytes(napi_env env, napi_value value) {
+  napi_typedarray_type type;
+  size_t size = 0, offset = 0;
   void* data = nullptr;
-  napi_value buffer, result;
-  check(env, napi_create_arraybuffer(env, pixels.size(), &data, &buffer), "cannot allocate circle coverage");
-  std::memcpy(data, pixels.data(), pixels.size());
-  check(env, napi_create_typedarray(env, napi_uint8_array, pixels.size(), buffer, 0, &result), "cannot create coverage array");
+  napi_value buffer;
+  check(env, napi_get_typedarray_info(env, value, &type, &size, &data, &buffer, &offset), "invalid Canvas byte array");
+  if ((type != napi_uint8_array && type != napi_uint8_clamped_array) || !data)
+    throw std::invalid_argument("Canvas pixels must be a Uint8Array");
+  return {static_cast<const uint8_t*>(data), size};
+}
+uint32_t canvasArrayLength(napi_env env, napi_value value) {
+  bool array = false;
+  uint32_t count = 0;
+  check(env, napi_is_array(env, value, &array), "invalid Canvas array");
+  if (!array) throw std::invalid_argument("Canvas descriptor requires arrays");
+  check(env, napi_get_array_length(env, value, &count), "invalid Canvas array");
+  return count;
+}
+napi_value canvasElement(napi_env env, napi_value array, uint32_t index) {
+  napi_value value;
+  check(env, napi_get_element(env, array, index, &value), "invalid Canvas element");
+  return value;
+}
+template<size_t Size> std::array<double, Size> canvasNumbers(napi_env env, napi_value value) {
+  if (canvasArrayLength(env, value) != Size) throw std::invalid_argument("invalid Canvas geometry length");
+  std::array<double, Size> result;
+  for (size_t i = 0; i < Size; ++i) result[i] = asNumber(env, canvasElement(env, value, i));
   return result;
+}
+CanvasPaint canvasPaint(napi_env env, napi_value descriptor) {
+  CanvasPaint paint;
+  const auto kind = asString(env, property(env, descriptor, "kind"));
+  if (kind == "solid") paint.color = asUint32(env, property(env, descriptor, "color"));
+  else if (kind == "linear" || kind == "radial") {
+    paint.kind = kind == "linear" ? CanvasPaint::Kind::linear : CanvasPaint::Kind::radial;
+    paint.geometry = canvasNumbers<6>(env, property(env, descriptor, "geometry"));
+    const auto offsets = property(env, descriptor, "offsets"), colors = property(env, descriptor, "colors");
+    const auto count = canvasArrayLength(env, offsets);
+    if (canvasArrayLength(env, colors) != count) throw std::invalid_argument("invalid Canvas gradient stops");
+    for (uint32_t i = 0; i < count; ++i) {
+      paint.offsets.push_back(asNumber(env, canvasElement(env, offsets, i)));
+      paint.colors.push_back(asUint32(env, canvasElement(env, colors, i)));
+    }
+  } else if (kind == "pattern") {
+    paint.kind = CanvasPaint::Kind::pattern;
+    paint.width = asInt32(env, property(env, descriptor, "width"));
+    paint.height = asInt32(env, property(env, descriptor, "height"));
+    paint.repeat = asString(env, property(env, descriptor, "repeat"));
+    paint.transform = canvasNumbers<6>(env, property(env, descriptor, "transform"));
+    paint.pixels = canvasBytes(env, property(env, descriptor, "pixels"));
+  } else throw std::invalid_argument("invalid Canvas paint kind");
+  return paint;
+}
+}
+
+napi_value compositePixels(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info, 9);
+  if (!host(env).canvases.compositePixels(asUint32(env, args.at(0)), asInt32(env, args.at(1)),
+      asInt32(env, args.at(2)), asInt32(env, args.at(3)), asInt32(env, args.at(4)),
+      canvasBytes(env, args.at(5)), canvasBytes(env, args.at(6)),
+      canvasComposite(asString(env, args.at(7))), asNumber(env, args.at(8))))
+    throw std::invalid_argument("invalid Canvas composite pixels");
+  return undefined(env);
+} catch (const std::exception& error) {
+  napi_throw_range_error(env, nullptr, error.what()); return nullptr;
+}
+
+napi_value paintCircle(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info, 2);
+  const auto request = args.at(1);
+  CanvasCirclePaint circle;
+  const auto geometry = canvasNumbers<3>(env, property(env, request, "geometry"));
+  circle.x = geometry[0]; circle.y = geometry[1]; circle.radius = geometry[2];
+  const auto transform = canvasNumbers<6>(env, property(env, request, "transform"));
+  std::copy(transform.begin(), transform.end(), circle.transform.begin());
+  circle.alpha = asNumber(env, property(env, request, "globalAlpha"));
+  circle.composite = canvasComposite(asString(env, property(env, request, "composite")));
+  const auto clips = property(env, request, "clips");
+  const auto clipCount = canvasArrayLength(env, clips);
+  for (uint32_t i = 0; i < clipCount; ++i) {
+    const auto descriptor = canvasElement(env, clips, i);
+    const auto rule = asString(env, property(env, descriptor, "rule"));
+    if (rule != "nonzero" && rule != "evenodd") throw std::invalid_argument("invalid Canvas clip rule");
+    CanvasClip clip;
+    clip.evenOdd = rule == "evenodd";
+    const auto paths = property(env, descriptor, "paths");
+    const auto pathCount = canvasArrayLength(env, paths);
+    for (uint32_t j = 0; j < pathCount; ++j) {
+      const auto points = canvasElement(env, paths, j);
+      const auto pointCount = canvasArrayLength(env, points);
+      CanvasPath path;
+      for (uint32_t k = 0; k < pointCount; ++k) path.push_back(canvasNumbers<2>(env, canvasElement(env, points, k)));
+      clip.paths.push_back(std::move(path));
+    }
+    circle.clips.push_back(std::move(clip));
+  }
+  circle.paint = canvasPaint(env, property(env, request, "paint"));
+  if (!host(env).canvases.paintCircle(asUint32(env, args.at(0)), circle))
+    throw std::invalid_argument("invalid Canvas circle paint");
+  return undefined(env);
 } catch (const std::exception& error) {
   napi_throw_range_error(env, nullptr, error.what()); return nullptr;
 }
@@ -469,7 +542,8 @@ void registerCanvasBindings(napi_env env, napi_value exports) {
     captureSceneRawPremultiplied);
   method(env, canvas, "captureDrawable", captureDrawable);
   method(env, canvas, "fillRect", fillRect);
-  method(env, canvas, "circleCoverage", circleCoverage);
+  method(env, canvas, "paintCircle", paintCircle);
+  method(env, canvas, "compositePixels", compositePixels);
   method(env, canvas, "fillRadialGradient", fillRadialGradient);
   method(env, canvas, "clear", clearCanvas);
   method(env, canvas, "clearRect", clearRect);

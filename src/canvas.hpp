@@ -2,6 +2,7 @@
 
 #include "resources.hpp"
 #include "canvas_pixels.hpp"
+#include "canvas_composite.hpp"
 #include "text_backend.hpp"
 
 #include <array>
@@ -12,6 +13,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <span>
 
 #include <variant>
 #include <unordered_set>
@@ -67,13 +69,35 @@ struct CanvasTextStats {
   std::size_t layoutCacheBytes = 0;
 };
 
+using CanvasPath = std::vector<std::array<double, 2>>;
+struct CanvasClip {
+  std::vector<CanvasPath> paths;
+  bool evenOdd = false;
+};
+struct CanvasPaint {
+  enum class Kind { solid, linear, radial, pattern };
+  Kind kind = Kind::solid;
+  std::uint32_t color = 0;
+  std::array<double, 6> geometry{};
+  std::vector<double> offsets;
+  std::vector<std::uint32_t> colors;
+  std::span<const std::uint8_t> pixels;
+  int width = 0, height = 0;
+  std::string repeat;
+  std::array<double, 6> transform = {1, 0, 0, 1, 0, 0};
+};
+struct CanvasCirclePaint {
+  double x = 0, y = 0, radius = 0, alpha = 1;
+  std::array<float, 6> transform = {1, 0, 0, 1, 0, 0};
+  CanvasPaint paint;
+  CanvasComposite composite = CanvasComposite::sourceOver;
+  std::vector<CanvasClip> clips;
+};
+
 class CanvasStore {
  public:
   explicit CanvasStore(ImageStore& images);
   ~CanvasStore();
-  static std::vector<std::uint8_t> circleCoverage(float x, float y, float radius,
-    const std::array<float, 6>& transform, int left, int top, int width, int height,
-    const std::vector<std::array<float, 4>>& clips = {});
 
   CanvasStore(const CanvasStore&) = delete;
   CanvasStore& operator=(const CanvasStore&) = delete;
@@ -83,6 +107,10 @@ class CanvasStore {
                                        std::vector<std::uint8_t> pixels, PixelEncoding encoding);
   bool fillRect(CanvasHandle handle, int x, int y, int width, int height,
                 std::uint32_t rgba);
+  bool compositePixels(CanvasHandle handle, int x, int y, int width, int height,
+    std::span<const std::uint8_t> pixels, std::span<const std::uint8_t> clip,
+    CanvasComposite operation, double alpha);
+  bool paintCircle(CanvasHandle handle, const CanvasCirclePaint& request);
   bool paintRect(CanvasHandle handle, const std::array<float, 4>& rect, uint32_t color, float stroke,
     const std::array<float, 4>& gradient, const std::vector<float>& offsets, const std::vector<uint32_t>& colors);
   bool fillRadialGradient(CanvasHandle handle, int x, int y, int width, int height,
@@ -144,6 +172,9 @@ class CanvasStore {
   void setGlyphCacheLimits(std::size_t maxBytes, std::size_t maxEntries);
 
  private:
+  static std::vector<std::uint8_t> circleCoverage(float x, float y, float radius,
+    const std::array<float, 6>& transform, int left, int top, int width, int height,
+    const std::vector<std::array<float, 4>>& clips = {});
   struct FontState;
 
   struct FillRectCmd {

@@ -15,7 +15,7 @@ const source = [
 
 function harness() {
   let handle = 0;
-  const calls = { drawImage: [], writePremultipliedPixels: 0 };
+  const calls = { drawImage: [], writePremultipliedPixels: 0, compositePixels: [] };
   const context = {
     console,
     pmjsGameConfig: {},
@@ -31,6 +31,7 @@ function harness() {
         drawText() {},
         drawImage() { calls.drawImage.push(Array.from(arguments)); },
         writePremultipliedPixels() { calls.writePremultipliedPixels++; },
+        compositePixels() { calls.compositePixels.push(Array.from(arguments)); },
         readPremultipliedPixels(_handle, _x, _y, width, height) {
           return new Uint8ClampedArray(width * height * 4);
         },
@@ -103,8 +104,9 @@ test('reflected image draws use the affine path', () => {
   drawing.translate(2, 0);
   drawing.scale(-1, 1);
   drawing.drawImage(image, 0, 0);
-  assert.ok(context.calls.writePremultipliedPixels > 0,
-    'reflection must be rasterized through affine sampling');
+  assert.equal(context.calls.compositePixels.length, 1,
+    'reflection submits affine samples to the native compositor');
+  assert.equal(context.calls.writePremultipliedPixels, 0);
 });
 
 test('image draws ignore non-finite arguments across overloads and transforms', () => {
@@ -232,6 +234,39 @@ test('ordinary Canvas text preserves fractional placement, font size, stroke and
     { bold: true, italic: true, lineJoin: 'bevel', lineCap: 'square', miterLimit: 3.5 });
 });
 
+test('non-finite text positions and supplied widths are no-ops before font or canvas preparation', () => {
+  const context = harness();
+  const canvas = new context.CanvasElement();
+  const drawing = canvas.getContext('2d');
+  context.NativeHost.canvas.measureText = () => { throw new Error('invalid text draw measured a font'); };
+  context.NativeHost.canvas.drawText = () => { throw new Error('invalid text draw reached the host'); };
+  for (const method of ['fillText', 'strokeText']) {
+    for (const invalid of [NaN, Infinity, -Infinity, undefined]) {
+      drawing[method]('A', invalid, 20);
+      drawing[method]('A', 0, invalid);
+    }
+    for (const width of [NaN, Infinity, -Infinity, 0, -1]) {
+      drawing[method]('A', 0, 20, width);
+    }
+  }
+  assert.equal(canvas._nativeCanvas, null);
+});
+
+test('text draw coordinates convert once and an omitted maximum width allows ordinary drawing', () => {
+  const context = harness();
+  context.PMJS.config = { fonts: { GameFont: 'fixture.ttf' } };
+  const drawing = new context.CanvasElement().getContext('2d');
+  const calls = [];
+  context.NativeHost.canvas.drawText = (...args) => calls.push(args);
+  let conversions = 0;
+  const coordinate = { valueOf() { return ++conversions === 1 ? 2 : NaN; } };
+  drawing.fillText('A', coordinate, '20');
+  drawing.strokeText('A', '3', '21', undefined);
+  assert.equal(conversions, 1);
+  assert.deepEqual(calls.map(args => args.slice(3, 5)), [[2, 20], [3, 21]]);
+  assert.throws(() => drawing.fillText('A', 1n, 20), { name: 'TypeError' });
+});
+
 test('Canvas text measurement uses the same descriptor resolver and preserves string conversion', () => {
   const context = harness();
   context.PMJS.fonts = { resolveDescriptor(descriptor) {
@@ -285,7 +320,7 @@ test('mask rectangles are detached and failed fills cannot create proof', () => 
 });
 
 for (const reflected of [false, true]) {
-  test(`clipped Canvas crop reads only its source region and preserves pixels, reflected=${reflected}`, () => {
+  test(`clipped Canvas crop submits its source region without destination readback, reflected=${reflected}`, () => {
     const ctx = harness();
     const source = new ctx.CanvasElement();
     source.width = 816; source.height = 624;
@@ -302,13 +337,16 @@ for (const reflected of [false, true]) {
       }
       return pixels;
     };
-    ctx.NativeHost.canvas.writePremultipliedPixels = function(_handle, _x, _y, _width, _height, pixels) {
+    ctx.NativeHost.canvas.compositePixels = function(_handle, _x, _y, _width, _height, pixels, mask, operation, alpha) {
       output = Array.from(pixels);
+      assert.deepEqual(Array.from(mask), [255, 255, 255, 255]);
+      assert.equal(operation, 'source-over');
+      assert.equal(alpha, 1);
     };
     drawing.beginPath(); drawing.rect(0, 0, 2, 2); drawing.clip();
     if (reflected) { drawing.translate(2, 0); drawing.scale(-1, 1); }
     drawing.drawImage(source, 10.25, 20.25, 2, 2, 0, 0, 2, 2);
-    assert.deepEqual(reads[0], { resource: handle, x: 10, y: 20, width: 3, height: 3 });
+    assert.deepEqual(reads, [{ resource: handle, x: 10, y: 20, width: 3, height: 3 }]);
     assert.deepEqual(output, reflected
       ? [11,20,77,255, 10,20,77,255, 11,21,77,255, 10,21,77,255]
       : [10,20,77,255, 11,20,77,255, 10,21,77,255, 11,21,77,255]);
@@ -327,7 +365,7 @@ test('fully out-of-range Canvas image crops leave the destination unchanged', ()
     if (handle === sourceHandle) pixels.set([99, 88, 77, 255]);
     return pixels;
   };
-  ctx.NativeHost.canvas.writePremultipliedPixels = function(_handle, _x, _y, _w, _h, pixels) { output = Array.from(pixels); };
+  ctx.NativeHost.canvas.compositePixels = function(_handle, _x, _y, _w, _h, pixels) { output = Array.from(pixels); };
   const drawing = target.getContext('2d');
   drawing.beginPath(); drawing.rect(0, 0, 2, 2); drawing.clip();
   drawing.drawImage(source, -10, -10, 2, 2, 0, 0, 2, 2);
@@ -349,7 +387,7 @@ for (const clipped of [false, true]) {
       if (handle === sourceHandle) pixels.fill(255);
       return pixels;
     };
-    ctx.NativeHost.canvas.writePremultipliedPixels = (_handle, x, y, width, height, pixels) => {
+    ctx.NativeHost.canvas.compositePixels = (_handle, x, y, width, height, pixels) => {
       written = { x, y, width, height, pixels: Array.from(pixels) };
     };
     if (clipped) { drawing.beginPath(); drawing.rect(0, 0, 4, 4); drawing.clip(); }

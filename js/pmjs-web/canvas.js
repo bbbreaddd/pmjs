@@ -77,47 +77,39 @@ function canvasSourcePixels(source, nativeSource, operationId, region) {
   }
 }
 
-// Colors are premultiplied RGBA transport bytes. Only blend functions need
-// transient normalized colors. Raw transport retains over-alpha RGB.
-function compositeCanvasPixel(pixels, offset, sourceColors, sourceAlpha, operation) {
-  var destinationAlpha = pixels[offset + 3] / 255;
-  var outputAlpha;
-  var output = [0, 0, 0];
-  operation = operation || 'source-over';
-  if (sourceAlpha === 0 && operation === 'source-over') sourceColors = [0, 0, 0];
-  if (operation === 'copy') {
-    outputAlpha = sourceAlpha;
-    output = sourceColors;
-  } else if (operation === 'destination-in') {
-    outputAlpha = destinationAlpha * sourceAlpha;
-    for (var inChannel = 0; inChannel < 3; inChannel++)
-      output[inChannel] = pixels[offset + inChannel] * sourceAlpha;
-  } else if (operation === 'source-atop') {
-    outputAlpha = destinationAlpha;
-    for (var atopChannel = 0; atopChannel < 3; atopChannel++)
-      output[atopChannel] = sourceColors[atopChannel] * destinationAlpha +
-        pixels[offset + atopChannel] * (1 - sourceAlpha);
-  } else {
-    outputAlpha = operation === 'lighter'
-      ? Math.min(1, sourceAlpha + destinationAlpha)
-      : sourceAlpha + destinationAlpha * (1 - sourceAlpha);
-    for (var channel = 0; channel < 3; channel++) {
-      var source = sourceColors[channel];
-      var destination = pixels[offset + channel];
-      if (operation === 'difference' || operation === 'saturation') {
-        var normalizedSource = sourceAlpha > 0 ? source / sourceAlpha : 0;
-        var normalizedDestination = destinationAlpha > 0 ? destination / destinationAlpha : 0;
-        var blended = Math.abs(normalizedDestination - normalizedSource);
-        if (operation === 'saturation') blended = destinationAlpha > 0 ?
-          (pixels[offset] * 0.299 + pixels[offset + 1] * 0.587 + pixels[offset + 2] * 0.114) / destinationAlpha : 0;
-        output[channel] = blended * sourceAlpha * destinationAlpha +
-          source * (1 - destinationAlpha) + destination * (1 - sourceAlpha);
-      } else output[channel] = source + destination * (operation === 'lighter' ? 1 : 1 - sourceAlpha);
-    }
+var canvasCompositeOperations = [
+  'source-over', 'source-in', 'source-out', 'source-atop', 'destination-over',
+  'destination-in', 'destination-out', 'destination-atop', 'lighter', 'copy', 'xor',
+  'multiply', 'screen', 'overlay', 'darken', 'lighten', 'color-dodge', 'color-burn',
+  'hard-light', 'soft-light', 'difference', 'exclusion', 'hue', 'saturation', 'color', 'luminosity'
+];
+Object.defineProperty(CanvasContext2D.prototype, 'globalCompositeOperation', {
+  get: function() { return this._compositeOperation || 'source-over'; },
+  set: function(value) {
+    value = String(value);
+    if (canvasCompositeOperations.indexOf(value) >= 0) this._compositeOperation = value;
   }
-  for (var outputChannel = 0; outputChannel < 3; outputChannel++)
-    pixels[offset + outputChannel] = Math.max(0, Math.min(255, Math.round(output[outputChannel])));
-  pixels[offset + 3] = Math.max(0, Math.min(255, Math.round(outputAlpha * 255)));
+});
+function canvasCompositeRegion(context, left, top, right, bottom) {
+  var operation = context.globalCompositeOperation;
+  if (operation === 'copy' || operation === 'source-in' || operation === 'source-out' ||
+      operation === 'destination-in' || operation === 'destination-atop') {
+    return [0, 0, context.canvas.width, context.canvas.height];
+  }
+  return [left, top, right, bottom];
+}
+function canvasNativePaint(style) {
+  if (style && style._pmjsStyle === 'pattern') {
+    return { kind: 'pattern', width: style.width, height: style.height,
+      repeat: style.repeat, pixels: style.pixels, transform: style.transform };
+  }
+  if (style && (style._pmjsStyle === 'linear-gradient' || style._pmjsStyle === 'radial-gradient')) {
+    return { kind: style._pmjsStyle === 'linear-gradient' ? 'linear' : 'radial',
+      geometry: [style.x0, style.y0, style.r0 || 0, style.x1, style.y1, style.r1 || 0],
+      offsets: style.stops.map(function(stop) { return stop.offset; }),
+      colors: style.stops.map(function(stop) { return colorToRgba(stop.color); }) };
+  }
+  return { kind: 'solid', color: colorToRgba(style) };
 }
 
 function drawAffineImage(context, source, nativeSource, sx, sy, sw, sh,
@@ -136,6 +128,8 @@ function drawAffineImage(context, source, nativeSource, sx, sy, sw, sh,
   var top = Math.max(0, Math.floor(Math.min.apply(null, corners.map(function(p) { return p[1]; }))));
   var right = Math.min(context.canvas.width, Math.ceil(Math.max.apply(null, corners.map(function(p) { return p[0]; }))));
   var bottom = Math.min(context.canvas.height, Math.ceil(Math.max.apply(null, corners.map(function(p) { return p[1]; }))));
+  var region = canvasCompositeRegion(context, left, top, right, bottom);
+  left = region[0]; top = region[1]; right = region[2]; bottom = region[3];
   if (right <= left || bottom <= top) return;
   var sourceLeft = Math.max(0, Math.min(source.width - 1,
     Math.floor(Math.min(sx, sx + sw))));
@@ -151,8 +145,8 @@ function drawAffineImage(context, source, nativeSource, sx, sy, sw, sh,
     height: sourceBottom - sourceTop
   });
   var destination = context.canvas._ensureNativeCanvas();
-  var destinationPixels = NativeHost.canvas.readPremultipliedPixels(destination.handle,
-    left, top, right - left, bottom - top);
+  var paintPixels = new Uint8Array((right - left) * (bottom - top) * 4);
+  var clipMask = new Uint8Array((right - left) * (bottom - top));
   var inverseA = t[3] / determinant, inverseB = -t[1] / determinant;
   var inverseC = -t[2] / determinant, inverseD = t[0] / determinant;
   var alpha = Math.max(0, Math.min(1, Number(context.globalAlpha)));
@@ -161,32 +155,30 @@ function drawAffineImage(context, source, nativeSource, sx, sy, sw, sh,
     var localX = inverseA * shiftedX + inverseC * shiftedY;
     var localY = inverseB * shiftedX + inverseD * shiftedY;
     var u = (localX - dx) / dw, v = (localY - dy) / dh;
+    if (!passesCanvasClip(context, x + 0.5, y + 0.5)) continue;
+    var index = (y - top) * (right - left) + x - left;
+    clipMask[index] = 255;
     if (u < 0 || u >= 1 || v < 0 || v >= 1) continue;
     var sampleX = Math.max(0, Math.min(source.width - 1, Math.floor(sx + u * sw)));
     var sampleY = Math.max(0, Math.min(source.height - 1, Math.floor(sy + v * sh)));
     var sourceOffset = ((sampleY - sourceTop) * sourceWidth + sampleX - sourceLeft) * 4;
-    var destinationOffset = ((y - top) * (right - left) + x - left) * 4;
-    if (!passesCanvasClip(context, x + 0.5, y + 0.5)) continue;
-    var sourceAlpha = sourcePixels[sourceOffset + 3] / 255 * alpha;
-    compositeCanvasPixel(destinationPixels, destinationOffset,
-      [sourcePixels[sourceOffset] * alpha, sourcePixels[sourceOffset + 1] * alpha,
-       sourcePixels[sourceOffset + 2] * alpha], sourceAlpha,
-      context.globalCompositeOperation);
+    paintPixels.set(sourcePixels.subarray(sourceOffset, sourceOffset + 4), index * 4);
   }
-  NativeHost.canvas.writePremultipliedPixels(destination.handle, left, top,
-    right - left, bottom - top, destinationPixels);
+  NativeHost.canvas.compositePixels(destination.handle, left, top,
+    right - left, bottom - top, paintPixels, clipMask, context.globalCompositeOperation, alpha);
   if (globalThis.__pmjsTrace && __pmjsTrace.active()) {
     var destinationResource = __pmjsTrace.revision(destination, 'canvas', true);
     __pmjsTrace.event('canvas', 'canvas.destination-write', {
       parentOperationId: operationId, destinationId: destinationResource.id,
       destinationRevision: destinationResource.revision,
       x: left, y: top, width: right - left, height: bottom - top,
-      bytes: destinationPixels.length
+      bytes: paintPixels.length
     });
   }
 }
 
 function paintAffineRectangle(context, x, y, width, height, rgba, clear) {
+  if (!width || !height) return;
   var t = context._transform;
   var points = [[x, y], [x + width, y], [x + width, y + height], [x, y + height]];
   for (var index = 0; index < 4; index++) {
@@ -198,10 +190,14 @@ function paintAffineRectangle(context, x, y, width, height, rgba, clear) {
   var top = Math.max(0, Math.floor(Math.min.apply(null, points.map(function(p) { return p[1]; }))));
   var right = Math.min(context.canvas.width, Math.ceil(Math.max.apply(null, points.map(function(p) { return p[0]; }))));
   var bottom = Math.min(context.canvas.height, Math.ceil(Math.max.apply(null, points.map(function(p) { return p[1]; }))));
+  if (!clear) {
+    var region = canvasCompositeRegion(context, left, top, right, bottom);
+    left = region[0]; top = region[1]; right = region[2]; bottom = region[3];
+  }
   if (right <= left || bottom <= top) return;
   var canvas = context.canvas._ensureNativeCanvas();
-  var pixels = NativeHost.canvas.readPremultipliedPixels(canvas.handle, left, top,
-    right - left, bottom - top);
+  var pixels = new Uint8Array((right - left) * (bottom - top) * 4);
+  var clipMask = new Uint8Array((right - left) * (bottom - top));
   var dynamicStyle = rgba && typeof rgba === 'object';
   for (var targetY = top; targetY < bottom; targetY++) for (var targetX = left; targetX < right; targetX++) {
     var inside = true, sign = 0;
@@ -214,22 +210,18 @@ function paintAffineRectangle(context, x, y, width, height, rgba, clear) {
       if (sign && sign !== currentSign) { inside = false; break; }
       sign = currentSign;
     }
-    if (!inside || !passesCanvasClip(context, targetX + 0.5, targetY + 0.5)) continue;
-    var offset = ((targetY - top) * (right - left) + targetX - left) * 4;
-    if (clear) {
-      pixels[offset] = pixels[offset + 1] = pixels[offset + 2] = pixels[offset + 3] = 0;
-      continue;
-    }
+    if (!passesCanvasClip(context, targetX + 0.5, targetY + 0.5) || clear && !inside) continue;
+    var index = (targetY - top) * (right - left) + targetX - left;
+    clipMask[index] = 255;
+    if (clear || !inside) continue;
+    var offset = index * 4;
     var pixelRgba = dynamicStyle ? canvasStylePremultiplied(rgba,
       targetX + 0.5, targetY + 0.5, context.globalAlpha) : premultiplyCanvasColor(rgba);
-    var sourceAlpha = (pixelRgba & 255) / 255;
-    var sourceColors = [(pixelRgba >>> 24) & 255,
-      (pixelRgba >>> 16) & 255, (pixelRgba >>> 8) & 255];
-    compositeCanvasPixel(pixels, offset, sourceColors, sourceAlpha,
-      context.globalCompositeOperation);
+    pixels[offset] = pixelRgba >>> 24; pixels[offset + 1] = pixelRgba >>> 16 & 255;
+    pixels[offset + 2] = pixelRgba >>> 8 & 255; pixels[offset + 3] = pixelRgba & 255;
   }
-  NativeHost.canvas.writePremultipliedPixels(canvas.handle, left, top,
-    right - left, bottom - top, pixels);
+  NativeHost.canvas.compositePixels(canvas.handle, left, top,
+    right - left, bottom - top, pixels, clipMask, clear ? 'copy' : context.globalCompositeOperation, 1);
 }
 
 function transformedPoint(context, x, y) {
@@ -404,45 +396,31 @@ function passesCanvasClip(context, x, y) {
   return true;
 }
 
-function rasterPath(context, stroke, rule) {
-  var paths = context._path.filter(function(path) { return path.length > 1; });
+function rasterPath(context, stroke, rule, drawingPaths) {
+  var paths = (drawingPaths || context._path).filter(function(path) { return path.length > 1; });
   if (!paths.length) return;
+  var circle = !stroke && context._circlePath;
+  if (circle) {
+    NativeHost.canvas.paintCircle(context.canvas._ensureNativeCanvas().handle, {
+      geometry: [circle.x, circle.y, circle.radius], transform: circle.transform,
+      paint: canvasNativePaint(context.fillStyle),
+      globalAlpha: Math.max(0, Math.min(1, Number(context.globalAlpha))),
+      composite: context.globalCompositeOperation, clips: context._clipPaths
+    });
+    return;
+  }
   var all = [].concat.apply([], paths);
   var radius = stroke ? Math.max(0.5, Number(context.lineWidth) / 2) : 0;
   var left = Math.max(0, Math.floor(Math.min.apply(null, all.map(function(p) { return p[0]; })) - radius));
   var top = Math.max(0, Math.floor(Math.min.apply(null, all.map(function(p) { return p[1]; })) - radius));
   var right = Math.min(context.canvas.width, Math.ceil(Math.max.apply(null, all.map(function(p) { return p[0]; })) + radius));
   var bottom = Math.min(context.canvas.height, Math.ceil(Math.max.apply(null, all.map(function(p) { return p[1]; })) + radius));
+  var region = canvasCompositeRegion(context, left, top, right, bottom);
+  left = region[0]; top = region[1]; right = region[2]; bottom = region[3];
   if (right <= left || bottom <= top) return;
-  var circle = !stroke && context._circlePath;
-  if (circle) {
-    var t = circle.transform, center = [t[0] * circle.x + t[2] * circle.y + t[4], t[1] * circle.x + t[3] * circle.y + t[5]];
-    var extentX = circle.radius * Math.hypot(t[0], t[2]), extentY = circle.radius * Math.hypot(t[1], t[3]);
-    // Tight scratch clipping changes Skia65 coverage at transformed curve edges.
-    left = Math.max(0, Math.floor(center[0] - extentX) - 2); top = Math.max(0, Math.floor(center[1] - extentY) - 2);
-    right = Math.min(context.canvas.width, Math.ceil(center[0] + extentX) + 2); bottom = Math.min(context.canvas.height, Math.ceil(center[1] + extentY) + 2);
-    if (right <= left || bottom <= top) return;
-  }
-  var circleClips = [];
-  var nativeCircleClip = circle && context._clipPaths.every(function(clip) {
-    if (clip.paths.length !== 1) return false;
-    var path = clip.paths[0];
-    if (path.length !== 5 || path[0][0] !== path[4][0] || path[0][1] !== path[4][1]) return false;
-    for (var edge = 1; edge < 5; edge++) if (path[edge][0] !== path[edge - 1][0] && path[edge][1] !== path[edge - 1][1]) return false;
-    var xs = path.map(function(point) { return point[0]; }), ys = path.map(function(point) { return point[1]; });
-    var x = Math.min.apply(null, xs), y = Math.min.apply(null, ys);
-    var right = Math.max.apply(null, xs), bottom = Math.max.apply(null, ys);
-    if (circleClips.length) {
-      right = Math.min(right, circleClips[0] + circleClips[2]); bottom = Math.min(bottom, circleClips[1] + circleClips[3]);
-      x = Math.max(x, circleClips[0]); y = Math.max(y, circleClips[1]);
-    }
-    circleClips = [x, y, Math.max(0, right - x), Math.max(0, bottom - y)];
-    return true;
-  });
-  var coverage = circle ? NativeHost.canvas.circleCoverage.apply(null,
-    [circle.x, circle.y, circle.radius].concat(circle.transform, [left, top, right - left, bottom - top, nativeCircleClip ? circleClips : []])) : null;
   var canvas = context.canvas._ensureNativeCanvas();
-  var pixels = NativeHost.canvas.readPremultipliedPixels(canvas.handle, left, top, right - left, bottom - top);
+  var pixels = new Uint8Array((right - left) * (bottom - top) * 4);
+  var clipMask = new Uint8Array((right - left) * (bottom - top));
   var style = stroke ? context.strokeStyle : context.fillStyle;
   for (var y = top; y < bottom; y++) for (var x = left; x < right; x++) {
     var px = x + 0.5, py = y + 0.5, covered = false;
@@ -460,34 +438,19 @@ function rasterPath(context, stroke, rule) {
         }
       }
     } else {
-      covered = coverage ? coverage[(y - top) * (right - left) + x - left] > 0 : pointInCanvasPaths(paths, px, py, rule);
+      covered = pointInCanvasPaths(paths, px, py, rule);
     }
-    if (!covered || !nativeCircleClip && !passesCanvasClip(context, px, py)) continue;
-    var offset = ((y - top) * (right - left) + x - left) * 4;
-    var rgba = canvasStylePremultiplied(style, px, py, coverage ? 1 : context.globalAlpha);
-    if (coverage) {
-      var paintAlpha = (rgba & 255) * Math.round(Math.max(0, Math.min(1, context.globalAlpha)) * 256) >> 8;
-      if (paintAlpha === 0) continue;
-      var coverageScale = coverage[(y - top) * (right - left) + x - left] + 1;
-      var circleAlpha = paintAlpha * coverageScale >> 8;
-      var destinationByteAlpha = pixels[offset + 3];
-      var outputByteAlpha = circleAlpha + (destinationByteAlpha * (256 - circleAlpha) >> 8);
-      var colors = [rgba >>> 24, rgba >>> 16 & 255, rgba >>> 8 & 255];
-      for (var colorIndex = 0; colorIndex < 3; colorIndex++) {
-        var sourcePremul = (colors[colorIndex] * Math.round(Math.max(0, Math.min(1, context.globalAlpha)) * 256) >> 8) * coverageScale >> 8;
-        var destinationPremul = pixels[offset + colorIndex];
-        var outputPremul = sourcePremul + (destinationPremul * (256 - circleAlpha) >> 8);
-        pixels[offset + colorIndex] = outputPremul;
-      }
-      pixels[offset + 3] = outputByteAlpha;
-      continue;
-    }
-    var sourceAlpha = (rgba & 255) / 255;
-    var sourceColors = [(rgba >>> 24) & 255, (rgba >>> 16) & 255, (rgba >>> 8) & 255];
-    compositeCanvasPixel(pixels, offset, sourceColors, sourceAlpha, 'source-over');
+    if (!passesCanvasClip(context, px, py)) continue;
+    var index = (y - top) * (right - left) + x - left;
+    clipMask[index] = 255;
+    if (!covered) continue;
+    var offset = index * 4;
+    var rgba = canvasStylePremultiplied(style, px, py, context.globalAlpha);
+    pixels[offset] = rgba >>> 24; pixels[offset + 1] = rgba >>> 16 & 255;
+    pixels[offset + 2] = rgba >>> 8 & 255; pixels[offset + 3] = rgba & 255;
   }
-  NativeHost.canvas.writePremultipliedPixels(canvas.handle, left, top, right - left,
-    bottom - top, pixels);
+  NativeHost.canvas.compositePixels(canvas.handle, left, top, right - left,
+    bottom - top, pixels, clipMask, context.globalCompositeOperation, 1);
 }
 
 // CSS Color named values: https://www.w3.org/TR/css-color-4/#named-colors
@@ -775,13 +738,12 @@ CanvasContext2D.prototype.strokeRect = function(x, y, width, height) {
         rectangle.x, rectangle.y, rectangle.width, rectangle.height,
         colorWithGlobalAlpha(this.strokeStyle, this.globalAlpha), line * Math.abs(this._transform[0]),
         0, 0, 0, 0, [], [])) return;
-  var old = this.fillStyle;
-  this.fillStyle = this.strokeStyle;
-  this.fillRect(x - line / 2, y - line / 2, width + line, line);
-  this.fillRect(x - line / 2, y + height - line / 2, width + line, line);
-  this.fillRect(x - line / 2, y + line / 2, line, Math.max(0, height - line));
-  this.fillRect(x + width - line / 2, y + line / 2, line, Math.max(0, height - line));
-  this.fillStyle = old;
+  var context = this;
+  var outline = [[x, y], [x + width, y], [x + width, y + height],
+    [x, y + height], [x, y]].map(function(point) {
+      return transformedPoint(context, point[0], point[1]);
+    });
+  rasterPath(this, true, 'nonzero', [outline]);
 };
 CanvasContext2D.prototype.drawImage = function(source) {
   if (source && source._pmjsPrimitiveContent) source._pmjsPrimitiveContent.materialize();
@@ -896,9 +858,12 @@ function canvasTextPosition(context, text, x, y) {
 
 function drawCanvasText(context, text, x, y, stroke, maxWidth) {
   text = String(text);
-  var placement = canvasTextPosition(context, text, Number(x), Number(y));
-  maxWidth = maxWidth === undefined ? Infinity : Number(maxWidth);
-  if (!(maxWidth > 0)) return;
+  x = +x; y = +y;
+  var suppliedWidth = maxWidth !== undefined;
+  maxWidth = suppliedWidth ? +maxWidth : Infinity;
+  if (!Number.isFinite(x) || !Number.isFinite(y) ||
+      (suppliedWidth && !Number.isFinite(maxWidth)) || !(maxWidth > 0)) return;
+  var placement = canvasTextPosition(context, text, x, y);
   var horizontalScale = placement.width > maxWidth ? maxWidth / placement.width : 1;
   if (horizontalScale < 1) {
     var removedWidth = placement.width - maxWidth;

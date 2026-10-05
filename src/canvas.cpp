@@ -901,10 +901,9 @@ bool CanvasStore::drawImageNow(Content& destinationSurface, const DrawImageCmd& 
       if (!premul[3]) continue;
       auto* target = destinationSurface.pixels.data() +
         (static_cast<size_t>(targetY) * destinationSurface.width + targetX) * 4;
-      const unsigned sourceAlpha = importCanvasChannel(premul[3], coverage);
-      for (int c = 0; c < 4; ++c)
-        target[c] = std::min(255U, unsigned(importCanvasChannel(premul[c], coverage)) +
-          (target[c] * (256 - sourceAlpha) >> 8));
+      compositeCanvasPixel(target, {double(importCanvasChannel(premul[2], coverage)),
+        double(importCanvasChannel(premul[1], coverage)), double(importCanvasChannel(premul[0], coverage)),
+        double(importCanvasChannel(premul[3], coverage))}, CanvasComposite::sourceOver, true);
     }
   }
   destinationSurface.mayHaveOverAlpha |= sourcePixels.mayHaveOverAlpha;
@@ -1426,18 +1425,18 @@ void CanvasStore::blendPixel(Content& surface, int x, int y, std::uint32_t rgba,
   const unsigned alpha = importCanvasChannel(rgba & 255, coverage);
   if (!alpha) return;
   auto* pixel = surface.pixels.data() + (static_cast<size_t>(y) * surface.width + x) * 4;
-  const unsigned colors[] = {(rgba >> 8) & 255, (rgba >> 16) & 255, rgba >> 24, 255};
-  for (int c = 0; c < 4; ++c)
-    pixel[c] = std::min(255U, unsigned(importCanvasChannel(colors[c], alpha)) +
-      (pixel[c] * (256 - alpha) >> 8));
+  compositeCanvasPixel(pixel, {double(importCanvasChannel(rgba >> 24, alpha)),
+    double(importCanvasChannel((rgba >> 16) & 255, alpha)),
+    double(importCanvasChannel((rgba >> 8) & 255, alpha)), double(alpha)}, CanvasComposite::sourceOver, true);
 }
 
 void CanvasStore::blendPixelAdditive(Content& surface, int x, int y, std::uint32_t rgba) {
   if (x < 0 || y < 0 || x >= surface.width || y >= surface.height) return;
   auto* pixel = surface.pixels.data() + (static_cast<size_t>(y) * surface.width + x) * 4;
-  const unsigned colors[] = {(rgba >> 8) & 255, (rgba >> 16) & 255, rgba >> 24, 255};
-  for (int c = 0; c < 4; ++c)
-    pixel[c] = std::min(255U, unsigned(pixel[c]) + importCanvasChannel(colors[c], rgba & 255));
+  const unsigned alpha = rgba & 255;
+  compositeCanvasPixel(pixel, {double(importCanvasChannel(rgba >> 24, alpha)),
+    double(importCanvasChannel((rgba >> 16) & 255, alpha)),
+    double(importCanvasChannel((rgba >> 8) & 255, alpha)), double(alpha)}, CanvasComposite::lighter);
 }
 
 bool CanvasStore::drawText(CanvasHandle handle,

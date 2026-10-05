@@ -103,6 +103,11 @@ try {
   for (const item of reference.lighterAlphaZero) {
     native.canvas.clear(target.handle);
     if (item.background) native.canvas.fillRect(target.handle,0,0,1,1,0x00ff0080);
+    native.canvas.compositePixels(target.handle,0,0,1,1,
+      Uint8Array.of(255,127,0,0),Uint8Array.of(255),'lighter',1);
+    assert.deepEqual(Array.from(read(target)), item.pixels, 'native lighter retains fractional destination alpha');
+    native.canvas.clear(target.handle);
+    if (item.background) native.canvas.fillRect(target.handle,0,0,1,1,0x00ff0080);
     const lighter = vm.runInContext(`(function() {
       var source = document.createElement('canvas'); source.width = source.height = 1;
       source._nativeCanvas = { handle: sourceHandle, width: 1, height: 1 };

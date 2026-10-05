@@ -64,6 +64,8 @@ set(PMJS_RUNTIME_SOURCES
   src/resources.cpp
   src/asset_processor.cpp
   src/canvas.cpp
+  src/canvas_composite.cpp
+  src/canvas_paint.cpp
   src/text_backend.cpp
   src/text_layout.cpp
   src/vfs.cpp
@@ -279,6 +281,9 @@ if(BUILD_TESTING)
     set_tests_properties(${PMJS_NODE_TEST} PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
   endforeach()
   set_tests_properties(node-derived-sprite PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
+  add_test(NAME node-canvas-composite COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-canvas-composite.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
+  set_tests_properties(node-canvas-composite PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
   add_test(NAME node-prepared-media COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-prepared-media.cjs" $<TARGET_FILE:pmjs_native>)
   set_tests_properties(node-prepared-media PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")

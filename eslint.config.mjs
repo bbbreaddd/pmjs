@@ -21,7 +21,11 @@ export default [
     rules: { ...safetyRules, 'no-undef': 'error' },
   },
   {
-    files: ['tools/generate-*-reference.cjs', 'tools/skia65/reference-readback.cjs'],
+    files: [
+      'tools/generate-*-reference.cjs',
+      'tools/skia65/reference-readback.cjs',
+      'test/helpers/title-canvas-scenario.cjs',
+    ],
     languageOptions: { globals: { ...globals.browser, __titleReadCanvas: 'readonly' } },
   },
   {
