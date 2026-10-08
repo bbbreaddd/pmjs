@@ -1,590 +1,187 @@
 'use strict';
 
-// Shared YED_Tiled fast paths for RPG Maker MV.
-// Unrecognized methods stay on reference behavior.
 (function() {
-  if (typeof PMJS !== 'undefined' && PMJS.plugins &&
-      typeof PMJS.plugins.registerOptimization === 'function') {
-    PMJS.plugins.registerOptimization('YED_Tiled', {
-      id: 'tilemap.yed-indexed-paint-loops',
-      owner: 'plugins/yed/tiled',
-      fallback: 'run the original YED tile paint and priority-tile loops'
-    });
-    PMJS.plugins.registerOptimization('YED_Tiled', {
-      id: 'tilemap.yed-indexed-animation',
-      owner: 'plugins/yed/tiled',
-      fallback: 'full tilemap repaint on every animation tick'
-    });
-  }
+  var paintingId = 'tilemap.yed-indexed-paint-loops';
+  var animationId = 'tilemap.yed-indexed-animation';
+  PMJS.plugins.registerOptimization('YED_Tiled', {
+    id: paintingId, owner: 'plugins/yed/tiled',
+    fallback: 'guest tile preparation and priority-sprite painting'
+  });
+  PMJS.plugins.registerOptimization('YED_Tiled', {
+    id: animationId, owner: 'plugins/yed/tiled',
+    fallback: 'guest animation updates with full tile repaint'
+  });
 
-  // Match the complete reviewed function, including parameters and literals.
-  // Formatting changes safely retain guest behavior until reviewed.
-  function matchesReviewedFunction(fn, expected) {
+  var reviewedMethods = {
+    _paintAllTiles: 'e9b49d6deb06b751a5c2d605b252a951bbf3155c5db0ab4a1a2d2fc090ea2aec',
+    _updateLayerPositions: '192c62e166187aeb511ac40046b4299999b4f53fe4dd1a77a5676f734d8eeeeb',
+    _paintObjectLayers: '695762171e06d553823ce50a2c1b54067ae9e124c893b24ba116c42cd4a9dc8e',
+    _paintTilesLayer: '2ffe4cd820664ad0911e7f25db7272416613dfde1d4e2b772373637f0f6773ec',
+    _paintTile: '3179495717cb0e9ee850549aad37258435125b8b91f980e7a965ecb35fd0f40e',
+    _paintPriorityTile: '9d8ed2d54c4397ed8fc7ac5ffb202022c37bb11af28b9611c2e42fd8cf22d1c3',
+    _updateAnim: '61c2fed25261010df7f9b37abb4f691863ef23f2e3d84aad3f50d4599d9d840b',
+    updateTransform: 'b7a7a370946ce0ae21b0627c85c55abd0efd8db9eef430a0afcb92f37637f236',
+    _compareChildOrder: '4a81bea0be0ed6cb764109f1846f04e4bae324b85999d5258bdf920e3f4eb012',
+    _paintTiles: '7b10b95d1b40b756830d4a685e29706839bdc548fd2b1fddd53ada242edc33bc',
+    _getTextureId: 'd61c490aaedc4da890a6f13299bfa605a707146a1eb4fad8a9a303ef17f7d3b3',
+    _getAnimTileId: '6b2481626a353fe2df179a7260405ee1a32b2ca7af8acc6a5a5254d19d47e637',
+    _getPriority: 'aeac6b3ac39790e16616036a059d0114218504718d8bee3dc0dea93b4b4b05d9',
+    _isPriorityTile: 'a83e33b7e55289e825b00d3a60e3f83d622f8843199ce0efbb1ee5e29f45beeb',
+    _getZIndex: 'd04b04844182e1fcc628e8d0b21899fdcde0cc0d7649a720207f862894791b99',
+    _updateAnimFrames: '1784d51ae97e984417d78e6ba34073a9d31e53259873765f040d3693cf9ab8cf',
+    hideOnLevel: '0140d27e86bc6e413e5450c27b2446445b7c26a180de67339b7d54f6926e14aa',
+    _sortChildren: 'f70b7bc23a18ba594dba1664022d1aac77f4285cde92b18e3c4040d995a82210'
+  };
+  var contracts = new WeakMap();
+
+  function matches(fn, digest) {
     if (typeof fn !== 'function' || !globalThis.__pmjsBuiltinRequire) return false;
     var source = Function.prototype.toString.call(fn)
       .replace(/^function(?:\s+[\w$]+)?\s*\(/, 'function(');
     return globalThis.__pmjsBuiltinRequire('crypto').createHash('sha256')
-      .update(source).digest('hex') === expected;
+      .update(source).digest('hex') === digest;
   }
 
-  function fnSource(fn) {
-    return Function.prototype.toString.call(fn);
-  }
-
-  function looksLikeKnownYedPaintAllTiles(fn) {
-    return !fn?._pmjsYedGuard && matchesReviewedFunction(fn,
-      'e9b49d6deb06b751a5c2d605b252a951bbf3155c5db0ab4a1a2d2fc090ea2aec');
-  }
-
-  function looksLikeKnownYedUpdateLayerPositions(fn) {
-    return !fn?._pmjsYedGuard && matchesReviewedFunction(fn,
-      '192c62e166187aeb511ac40046b4299999b4f53fe4dd1a77a5676f734d8eeeeb');
-  }
-
-  function looksLikeKnownYedPaintObjectLayers(fn) {
-    return !fn?._pmjsYedGuard && matchesReviewedFunction(fn,
-      '695762171e06d553823ce50a2c1b54067ae9e124c893b24ba116c42cd4a9dc8e');
-  }
-
-  function looksLikeKnownYedPaintTilesLayer(fn) {
-    return !fn?._pmjsYedGuard && matchesReviewedFunction(fn,
-      '2ffe4cd820664ad0911e7f25db7272416613dfde1d4e2b772373637f0f6773ec');
-  }
-
-  function looksLikeKnownYedPaintTile(fn) {
-    return !fn?._pmjsYedGuard && matchesReviewedFunction(fn,
-      '3179495717cb0e9ee850549aad37258435125b8b91f980e7a965ecb35fd0f40e');
-  }
-
-  function looksLikeKnownYedPaintPriorityTile(fn) {
-    return !fn?._pmjsYedGuard && matchesReviewedFunction(fn,
-      '9d8ed2d54c4397ed8fc7ac5ffb202022c37bb11af28b9611c2e42fd8cf22d1c3');
-  }
-
-  function looksLikeKnownYedUpdateAnim(fn) {
-    return !fn?._pmjsYedGuard && matchesReviewedFunction(fn,
-      '61c2fed25261010df7f9b37abb4f691863ef23f2e3d84aad3f50d4599d9d840b');
-  }
-
-  function looksLikeKnownShaderTilemapUpdateTransform(tiledProto) {
-    return !Object.prototype.hasOwnProperty.call(tiledProto, 'updateTransform') &&
-      matchesReviewedFunction(tiledProto.updateTransform,
-        'b7a7a370946ce0ae21b0627c85c55abd0efd8db9eef430a0afcb92f37637f236');
-  }
-
-  function looksLikeKnownYedImplementation(tiledProto) {
-    return looksLikeKnownYedPaintAllTiles(tiledProto._paintAllTiles) &&
-           looksLikeKnownYedUpdateLayerPositions(tiledProto._updateLayerPositions) &&
-           looksLikeKnownYedPaintObjectLayers(tiledProto._paintObjectLayers) &&
-           looksLikeKnownYedPaintTilesLayer(tiledProto._paintTilesLayer);
-  }
-
-  function looksLikeKnownYedChildOrder(fn) {
-    return fn === undefined || matchesReviewedFunction(fn,
-      '4a81bea0be0ed6cb764109f1846f04e4bae324b85999d5258bdf920e3f4eb012');
-  }
-
-  function looksLikeKnownYedHideOnLevel(fn) {
-    if (typeof fn !== 'function') return false;
-    var body = fnSource(fn);
-    body = body.slice(body.indexOf('{') + 1, body.lastIndexOf('}'));
-    return body.replace(/\s+/g, '') ===
-      'this._tilemap.hideOnLevel($gameMap.currentMapLevel);';
-  }
-
-  function looksLikeKnownYedIndexedAnimation(tiledProto) {
-    return typeof tiledProto._paintTile === 'function' &&
-           looksLikeKnownYedPaintTile(tiledProto._paintTile) &&
-           typeof tiledProto._paintPriorityTile === 'function' &&
-           looksLikeKnownYedPaintPriorityTile(tiledProto._paintPriorityTile) &&
-           typeof tiledProto._updateAnim === 'function' &&
-           looksLikeKnownYedUpdateAnim(tiledProto._updateAnim) &&
-           looksLikeKnownShaderTilemapUpdateTransform(tiledProto);
-  }
-
-  function installYedTiledFastPaths(tiledConstructor) {
-    tiledConstructor = tiledConstructor || globalThis.TiledTilemap;
-    if (typeof tiledConstructor !== 'function' ||
-        typeof Spriteset_Map !== 'function') return false;
-
-    var tiledProto = tiledConstructor.prototype;
-    if (!tiledProto || tiledProto._pmjsIndexedPaintLoops) return true;
-
-    if (!looksLikeKnownYedImplementation(tiledProto) ||
-        !looksLikeKnownYedChildOrder(tiledProto._compareChildOrder)) {
-      PMJS.optimizations.refuse('tilemap.yed-indexed-paint-loops',
-        'unrecognized YED tilemap method composition');
-      PMJS.optimizations.refuse('tilemap.yed-indexed-animation',
-        'unrecognized YED tilemap method composition');
-      return false;
+  function dataContract(data) {
+    if (!data || !Array.isArray(data.layers) || !Array.isArray(data.tilesets)) return 'unreviewed-tiled-data';
+    if (data.infinite || data.orientation && data.orientation !== 'orthogonal' ||
+        data.layers.some(function(layer) { return !layer || layer.layers || layer.chunks ||
+          layer.data !== undefined && !Array.isArray(layer.data) ||
+          layer.objects !== undefined && !Array.isArray(layer.objects); })) {
+      return 'unreviewed-tiled-layer-geometry';
     }
-
-    var useIndexedPaintLoops = PMJS.optimizations.isEnabled('tilemap.yed-indexed-paint-loops');
-    if (!useIndexedPaintLoops) {
-      if (PMJS.optimizations.isEnabled('tilemap.yed-indexed-animation')) {
-        PMJS.optimizations.refuse('tilemap.yed-indexed-animation',
-          'requires tilemap.yed-indexed-paint-loops');
-      }
-      return true;
+    if (data.tilesets.some(function(set) { return !set || set.margin || set.spacing ||
+        Array.isArray(set.tiles) && set.tiles.some(function(tile, index) { return tile && tile.id !== index; }); })) {
+      return 'unreviewed-tiled-tileset-geometry';
     }
-
-    var useIndexedAnimation = PMJS.optimizations.isEnabled('tilemap.yed-indexed-animation');
-    if (useIndexedAnimation && !looksLikeKnownYedIndexedAnimation(tiledProto)) {
-      PMJS.optimizations.refuse('tilemap.yed-indexed-animation',
-        'unrecognized YED animation method composition');
-      useIndexedAnimation = false;
-    }
-
-    tiledProto._updateLayerPositions = function(startX, startY) {
-      var ox = this.roundPixels ? Math.floor(this.origin.x) : this.origin.x;
-      var oy = this.roundPixels ? Math.floor(this.origin.y) : this.origin.y;
-
-      var layers = this._layers || [];
-      for (var index = 0; index < layers.length; index++) {
-        var layer = layers[index];
-        var layerData = this.tiledData.layers[layer.layerId];
-        var newX = startX * this._tileWidth - ox +
-          (layerData.offsetx || 0);
-        var newY = startY * this._tileHeight - oy +
-          (layerData.offsety || 0);
-        layer.position.x = newX;
-        layer.position.y = newY;
-      }
-      var priorityTiles = this._priorityTiles || [];
-      var activePriorityTiles = Math.max(0, Math.min(priorityTiles.length,
-        Number(this._pmjsActivePriorityTileCount) || 0));
-      for (var priorityIndex = 0; priorityIndex < activePriorityTiles;
-          priorityIndex++) {
-        var sprite = priorityTiles[priorityIndex];
-        var priorityLayer = this.tiledData.layers[sprite.layerId];
-        var offsetX = priorityLayer ? priorityLayer.offsetx || 0 : 0;
-        var offsetY = priorityLayer ? priorityLayer.offsety || 0 : 0;
-        var spriteX = sprite.origX + startX * this._tileWidth - ox + offsetX +
-          sprite.width / 2;
-        var spriteY = sprite.origY + startY * this._tileHeight - oy + offsetY +
-          sprite.height;
-        sprite.x = spriteX;
-        sprite.y = spriteY;
-      }
-    };
-
-    tiledProto._paintTilesLayer = function(layer, startX, startY) {
-      var tileCols = Math.ceil(this._width / this._tileWidth) + 1;
-      var tileRows = Math.ceil(this._height / this._tileHeight) + 1;
-      for (var y = 0; y < tileRows; y++) {
-        for (var x = 0; x < tileCols; x++) {
-          this._paintTile(layer, startX, startY, x, y);
-        }
-      }
-    };
-
-    tiledProto._paintObjectLayers = function(layerId, startX, startY) {
-      var layerData = this.tiledData.layers[layerId];
-      var objects = layerData.objects || [];
-      for (var index = 0; index < objects.length; index++) {
-        var object = objects[index];
-        if (!object.gid || !object.visible) continue;
-        var tileId = object.gid;
-        var textureId = this._getTextureId(tileId);
-        var dx = object.x - startX * this._tileWidth;
-        var dy = object.y - startY * this._tileHeight - object.height;
-        this._paintPriorityTile(layerId, textureId, tileId,
-          startX, startY, dx, dy);
-      }
-    };
-
-    tiledProto._paintAllTiles = function(startX, startY) {
-      this._priorityTilesCount = 0;
-      this._pmjsAnimPrioritySprites = Object.create(null);
-      this._pmjsFallbackAnimKeys = Object.create(null);
-      this._pmjsChangedAnimKeys = null;
-      this._needsAnimRepaint = false;
-
-      var layers = this._layers || [];
-      for (var index = 0; index < layers.length; index++) {
-        if (layers[index]) layers[index]._pmjsAnimRecords = Object.create(null);
-        layers[index].clear();
-        this._paintTiles(layers[index], startX, startY);
-      }
-      var tiledLayers = this.tiledData.layers || [];
-      for (var layerId = 0; layerId < tiledLayers.length; layerId++) {
-        if (tiledLayers[layerId].type === 'objectgroup') {
-          this._paintObjectLayers(layerId, startX, startY);
-        }
-      }
-      // Snapshot the active prefix before the tail loop consumes the cursor.
-      var activePriorityTileCount = this._priorityTilesCount;
-      while (this._priorityTilesCount < this._priorityTiles.length) {
-        var sprite = this._priorityTiles[this._priorityTilesCount];
-        sprite.hide();
-        sprite.layerId = -1;
-        this._priorityTilesCount++;
-      }
-      this._pmjsActivePriorityTileCount = activePriorityTileCount;
-      this._pmjsPriorityRepaintGeneration =
-        (this._pmjsPriorityRepaintGeneration || 0) + 1;
-
-      if (PMJS.config.developmentMode) {
-        for (var devI = activePriorityTileCount; devI < this._priorityTiles.length; devI++) {
-          if (this._priorityTiles[devI].visible) {
-            throw new Error('YED priority tile visible outside PMJS active prefix');
-          }
-        }
-      }
-
-      if (typeof this.hideOnLevel === 'function' && globalThis.$gameMap) {
-        // Repaint re-shows tiles after the update-phase check; rehide here.
-        var currentLevel = $gameMap.currentMapLevel;
-        this.hideOnLevel(currentLevel);
-        this._pmjsLastHideLevel = currentLevel;
-        this._pmjsLastHideRepaintGeneration =
-          this._pmjsPriorityRepaintGeneration;
-      }
-    };
-
-    tiledProto._updateLayerPositions._pmjsYedGuard = true;
-    tiledProto._paintTilesLayer._pmjsYedGuard = true;
-    tiledProto._paintObjectLayers._pmjsYedGuard = true;
-    tiledProto._paintAllTiles._pmjsYedGuard = true;
-    tiledProto._pmjsIndexedPaintLoops = true;
-
-    if (useIndexedAnimation) {
-      tiledProto._paintTile = function(layer, startX, startY, x, y) {
-        var mx = x + startX;
-        var my = y + startY;
-        if (this.horizontalWrap) {
-          mx = mx.mod(this._mapWidth);
-        }
-        if (this.verticalWrap) {
-          my = my.mod(this._mapHeight);
-        }
-        var tilePosition = mx + my * this._mapWidth;
-        var layerObj = this.tiledData.layers[layer.layerId];
-        var tileId = layerObj && layerObj.data ? layerObj.data[tilePosition] : 0;
-        var rectLayer = layer.children && layer.children[0];
-        if (!rectLayer || !tileId) {
-          return;
-        }
-
-        if (mx < 0 || mx >= this._mapWidth || my < 0 || my >= this._mapHeight) {
-          return;
-        }
-
-        var textureId = this._getTextureId(tileId);
-        var tileset = this.tiledData.tilesets[textureId];
-        if (!tileset) return;
-        var dx = x * this._tileWidth;
-        var dy = y * this._tileHeight;
-        var w = tileset.tilewidth;
-        var h = tileset.tileheight;
-        var tileCols = tileset.columns;
-        var localId = tileId - tileset.firstgid;
-        var rId = this._getAnimTileId(textureId, localId);
-        var ux = (rId % tileCols) * w;
-        var uy = Math.floor(rId / tileCols) * h;
-
-        if (this._isPriorityTile(layer.layerId)) {
-          this._paintPriorityTile(layer.layerId, textureId, tileId, startX, startY, dx, dy);
-          return;
-        }
-
-        var pointOffset = rectLayer.pointsBuf.length;
-        rectLayer.addRect(textureId, ux, uy, dx, dy, w, h);
-
-        var tilesData = tileset.tiles;
-        if (tilesData && tilesData[localId] && tilesData[localId].animation) {
-          var key = String(localId);
-          if (w === h) {
-            if (!layer._pmjsAnimRecords) layer._pmjsAnimRecords = Object.create(null);
-            var records = layer._pmjsAnimRecords[key];
-            if (!records) records = layer._pmjsAnimRecords[key] = [];
-            records.push({
-              rectLayer: rectLayer,
-              pointOffset: pointOffset,
-              textureId: textureId,
-              localId: localId,
-              w: w,
-              h: h,
-              tileCols: tileCols
-            });
-          } else {
-            if (!this._pmjsFallbackAnimKeys) this._pmjsFallbackAnimKeys = Object.create(null);
-            this._pmjsFallbackAnimKeys[key] = true;
-          }
-        }
-      };
-
-      tiledProto._paintPriorityTile = function(layerId, textureId, tileId, startX, startY, dx, dy) {
-        var tileset = this.tiledData.tilesets[textureId];
-        if (!tileset) return;
-        var w = tileset.tilewidth;
-        var h = tileset.tileheight;
-        var tileCols = tileset.columns;
-        var localId = tileId - tileset.firstgid;
-        var rId = this._getAnimTileId(textureId, localId);
-        var ux = (rId % tileCols) * w;
-        var uy = Math.floor(rId / tileCols) * h;
-
-        if (this._priorityTilesCount >= this._priorityTiles.length) {
-          return;
-        }
-        var sprite = this._priorityTiles[this._priorityTilesCount];
-        var layerData = this.tiledData.layers[layerId];
-        var offsetX = layerData ? layerData.offsetx || 0 : 0;
-        var offsetY = layerData ? layerData.offsety || 0 : 0;
-        var ox = this.roundPixels ? Math.floor(this.origin.x) : this.origin.x;
-        var oy = this.roundPixels ? Math.floor(this.origin.y) : this.origin.y;
-
-        sprite.layerId = layerId;
-        sprite.anchor.x = 0.5;
-        sprite.anchor.y = 1.0;
-        sprite.origX = dx;
-        sprite.origY = dy;
-        sprite.x = sprite.origX + startX * this._tileWidth - ox + offsetX + w / 2;
-        sprite.y = sprite.origY + startY * this._tileHeight - oy + offsetY + h;
-        sprite.bitmap = this.bitmaps[textureId];
-        sprite.setFrame(ux, uy, w, h);
-        sprite.priority = this._getPriority(layerId);
-        sprite.z = sprite.zIndex = this._getZIndex(layerId);
-        sprite.show();
-
-        this._priorityTilesCount += 1;
-
-        var tilesData = tileset.tiles;
-        if (tilesData && tilesData[localId] && tilesData[localId].animation) {
-          var key = String(localId);
-          if (!this._pmjsAnimPrioritySprites) this._pmjsAnimPrioritySprites = Object.create(null);
-          var list = this._pmjsAnimPrioritySprites[key];
-          if (!list) list = this._pmjsAnimPrioritySprites[key] = [];
-          list.push({
-            sprite: sprite,
-            textureId: textureId,
-            localId: localId,
-            w: w,
-            h: h,
-            tileCols: tileCols
-          });
-        }
-      };
-
-      tiledProto._updateAnim = function() {
-        var changedKeys = null;
-        for (var key in this._animDuration) {
-          this._animDuration[key] -= 1;
-          if (this._animDuration[key] <= 0) {
-            this._animFrame[key] += 1;
-            if (!changedKeys) changedKeys = [];
-            changedKeys.push(key);
-          }
-        }
-
-        if (changedKeys) {
-          this._updateAnimFrames();
-
-          if (this.bitmaps && this._lastBitmapLength !== this.bitmaps.length) {
-            this.refresh();
-            this._needsAnimRepaint = false;
-            this._pmjsChangedAnimKeys = null;
-            return;
-          }
-
-          if (this._pmjsFallbackAnimKeys) {
-            for (var f = 0; f < changedKeys.length; f++) {
-              if (this._pmjsFallbackAnimKeys[changedKeys[f]]) {
-                this.refresh();
-                this._needsAnimRepaint = false;
-                this._pmjsChangedAnimKeys = null;
-                return;
-              }
-            }
-          }
-
-          var pending = this._pmjsChangedAnimKeys;
-          if (!pending) pending = this._pmjsChangedAnimKeys = Object.create(null);
-          for (var c = 0; c < changedKeys.length; c++) {
-            pending[changedKeys[c]] = true;
-          }
-          this._needsAnimRepaint = true;
-        }
-      };
-
-      tiledProto._paintAnimTiles = function(pendingKeys) {
-        if (!pendingKeys) return;
-
-        var layers = this._layers || [];
-        for (var l = 0; l < layers.length; l++) {
-          var layer = layers[l];
-          var animRecords = layer._pmjsAnimRecords;
-          if (!animRecords) continue;
-
-          var dirtiedRectLayers = null;
-
-          for (var key in pendingKeys) {
-            var instances = animRecords[key];
-            if (!instances) continue;
-
-            for (var i = 0; i < instances.length; i++) {
-              var inst = instances[i];
-              var rId = this._getAnimTileId(inst.textureId, inst.localId);
-              var ux = (rId % inst.tileCols) * inst.w;
-              var uy = Math.floor(rId / inst.tileCols) * inst.h;
-
-              var points = inst.rectLayer.pointsBuf;
-              var offset = inst.pointOffset;
-              if (points && offset + 1 < points.length &&
-                  (points[offset] !== ux || points[offset + 1] !== uy)) {
-                points[offset] = ux;
-                points[offset + 1] = uy;
-                if (!dirtiedRectLayers) dirtiedRectLayers = [];
-                if (dirtiedRectLayers.indexOf(inst.rectLayer) === -1) {
-                  dirtiedRectLayers.push(inst.rectLayer);
-                }
-              }
-            }
-          }
-
-          if (dirtiedRectLayers) {
-            for (var d = 0; d < dirtiedRectLayers.length; d++) {
-              var rl = dirtiedRectLayers[d];
-              rl.modificationMarker = 0;
-              if (rl.parent) {
-                rl.parent.modificationMarker = 0;
-              }
-              rl._pmjsNativeGeneration = (rl._pmjsNativeGeneration || 0) + 1;
-            }
-          }
-        }
-
-        var prioritySprites = this._pmjsAnimPrioritySprites;
-        if (prioritySprites) {
-          for (var pKey in pendingKeys) {
-            var pList = prioritySprites[pKey];
-            if (!pList) continue;
-
-            for (var p = 0; p < pList.length; p++) {
-              var pEntry = pList[p];
-              var pId = this._getAnimTileId(pEntry.textureId, pEntry.localId);
-              var pUx = (pId % pEntry.tileCols) * pEntry.w;
-              var pUy = Math.floor(pId / pEntry.tileCols) * pEntry.h;
-
-              var s = pEntry.sprite;
-              if (!s._frame || s._frame.x !== pUx || s._frame.y !== pUy ||
-                  s._frame.width !== pEntry.w ||
-                  s._frame.height !== pEntry.h) {
-                s.setFrame(pUx, pUy, pEntry.w, pEntry.h);
-              }
-            }
-          }
-        }
-      };
-
-      tiledProto.updateTransform = function() {
-        var ox = this.roundPixels ? Math.floor(this.origin.x) : this.origin.x;
-        var oy = this.roundPixels ? Math.floor(this.origin.y) : this.origin.y;
-        var margin = this._margin || 0;
-        var startX = Math.floor((ox - margin) / this._tileWidth);
-        var startY = Math.floor((oy - margin) / this._tileHeight);
-        this._updateLayerPositions(startX, startY);
-
-        var isFullRepaint = this._needsRepaint ||
-            this._lastStartX !== startX || this._lastStartY !== startY;
-
-        if (isFullRepaint) {
-          this._lastStartX = startX;
-          this._lastStartY = startY;
-          this._paintAllTiles(startX, startY);
-          this._needsRepaint = false;
-          this._needsAnimRepaint = false;
-          this._pmjsChangedAnimKeys = null;
-        } else if (this._needsAnimRepaint && this._pmjsChangedAnimKeys) {
-          var pending = this._pmjsChangedAnimKeys;
-          this._pmjsChangedAnimKeys = null;
-          this._needsAnimRepaint = false;
-          this._paintAnimTiles(pending);
-        }
-
-        if (typeof this._sortChildren === 'function') {
-          this._sortChildren();
-        }
-        if (typeof PIXI.Container.prototype.updateTransform === 'function') {
-          PIXI.Container.prototype.updateTransform.call(this);
-        }
-      };
-
-      tiledProto._paintTile._pmjsYedGuard = true;
-      tiledProto._paintPriorityTile._pmjsYedGuard = true;
-      tiledProto._updateAnim._pmjsYedGuard = true;
-      tiledProto._paintAnimTiles._pmjsYedGuard = true;
-      tiledProto.updateTransform._pmjsYedGuard = true;
-      tiledProto._pmjsIndexedAnimation = true;
-    }
-
+    if (data.layers.some(function(layer) {
+      return (layer.data || []).some(function(gid) { return (Number(gid) >>> 0) > 0x0fffffff; }) ||
+        (layer.objects || []).some(function(object) { return object && (Number(object.gid) >>> 0) > 0x0fffffff; });
+    })) return 'unreviewed-tiled-flips';
     return true;
   }
 
+  function activate(constructor) {
+    if (typeof constructor !== 'function') {
+      PMJS.optimizations.refuse(paintingId, 'tilemap constructor unavailable');
+      PMJS.optimizations.refuse(animationId, 'tilemap constructor unavailable');
+      return;
+    }
+    if (contracts.has(constructor)) {
+      if (PMJS.maps) PMJS.maps.tiledContract = contracts.get(constructor);
+      return;
+    }
+    var prototype = constructor.prototype;
+    var names = Object.keys(reviewedMethods);
+    var qualified = !Object.prototype.hasOwnProperty.call(prototype, 'updateTransform') &&
+      names.every(function(name) {
+        return name === '_compareChildOrder' && prototype[name] === undefined ||
+          matches(prototype[name], reviewedMethods[name]);
+      });
+    if (!qualified) {
+      PMJS.optimizations.refuse(paintingId, 'unrecognized tile preparation composition');
+      PMJS.optimizations.refuse(animationId, 'unrecognized tile preparation composition');
+      if (PMJS.maps) PMJS.maps.tiledContract = function() { return 'unreviewed-tiled-methods'; };
+      return;
+    }
+    var original = {};
+    names.forEach(function(name) { original[name] = prototype[name]; });
+    var effective = Object.assign({}, original);
+    var disabled = new WeakSet();
+    var retained = PMJS.yedRetainedTiles;
+    var painting = PMJS.optimizations.isEnabled(paintingId);
+    var animation = painting && PMJS.optimizations.isEnabled(animationId);
+    if (!painting && PMJS.optimizations.isEnabled(animationId)) {
+      PMJS.optimizations.refuse(animationId, 'requires ' + paintingId);
+    }
 
-  var tileContracts = new WeakMap();
-  function activateYedTiled(tiledConstructor) {
-    tiledConstructor = tiledConstructor || globalThis.TiledTilemap;
-    if (typeof tiledConstructor !== 'function') {
-      PMJS.optimizations.refuse('tilemap.yed-indexed-paint-loops',
-        'YED tilemap constructor unavailable after guest plugins');
-      PMJS.optimizations.refuse('tilemap.yed-indexed-animation',
-        'YED tilemap constructor unavailable after guest plugins');
-      return;
+    function methodsUnchanged(instance) {
+      return names.every(function(name) { return instance[name] === effective[name]; });
     }
-    if (tileContracts.has(tiledConstructor)) {
-      if (PMJS.maps) PMJS.maps.tiledContract = tileContracts.get(tiledConstructor);
-      return;
+    function deactivate(instance) {
+      if (disabled.has(instance)) return;
+      disabled.add(instance);
+      instance._pmjsIndexedAnimation = false;
+      instance._pmjsIndexedPaintLoops = false;
+      instance._needsRepaint = true;
+      instance._needsAnimRepaint = false;
+      instance._pmjsChangedAnimKeys = null;
+      retained.invalidate(instance);
     }
-    var prototype = tiledConstructor.prototype;
-    var qualified = looksLikeKnownYedImplementation(prototype) && looksLikeKnownYedIndexedAnimation(prototype) &&
-      looksLikeKnownYedChildOrder(prototype._compareChildOrder);
-    var helpers = {
-      _paintTiles: '7b10b95d1b40b756830d4a685e29706839bdc548fd2b1fddd53ada242edc33bc',
-      _getTextureId: 'd61c490aaedc4da890a6f13299bfa605a707146a1eb4fad8a9a303ef17f7d3b3',
-      _getAnimTileId: '6b2481626a353fe2df179a7260405ee1a32b2ca7af8acc6a5a5254d19d47e637',
-      _getPriority: 'aeac6b3ac39790e16616036a059d0114218504718d8bee3dc0dea93b4b4b05d9',
-      _isPriorityTile: 'a83e33b7e55289e825b00d3a60e3f83d622f8843199ce0efbb1ee5e29f45beeb',
-      _getZIndex: 'd04b04844182e1fcc628e8d0b21899fdcde0cc0d7649a720207f862894791b99'
-    };
-    qualified = qualified && Object.keys(helpers).every(function(name) {
-      return matchesReviewedFunction(prototype[name], helpers[name]);
-    });
-    installYedTiledFastPaths(tiledConstructor);
-    if (qualified && PMJS.maps) {
-      var names = ['_paintAllTiles', '_paintTile', '_paintPriorityTile', '_paintObjectLayers',
-        '_paintTilesLayer', '_updateAnim', '_updateLayerPositions', '_compareChildOrder', 'updateTransform'].concat(Object.keys(helpers));
-      var effective = names.map(function(name) { return prototype[name]; });
-      PMJS.maps.tiledContract = function(data) {
-        if (!names.every(function(name, index) { return prototype[name] === effective[index]; })) return 'tiled-producer-changed';
-        if (!data) return true;
-        if (data.infinite || data.orientation && data.orientation !== 'orthogonal' ||
-            data.layers.some(function(layer) { return layer.layers || layer.chunks; })) return 'unreviewed-tiled-layer-geometry';
-        if (data.tilesets.some(function(set) { return set.margin || set.spacing ||
-            Array.isArray(set.tiles) && set.tiles.some(function(tile,index) { return tile.id !== index; }); })) return 'unreviewed-tiled-tileset-geometry';
-        if (data.layers.some(function(layer) {
-          return (layer.data || []).some(function(gid) { return (Number(gid) >>> 0) > 0x0fffffff; }) ||
-            (layer.objects || []).some(function(object) { return (Number(object.gid) >>> 0) > 0x0fffffff; });
-        })) return 'unreviewed-tiled-flips';
-        return true;
+    function eligible(instance) {
+      if (disabled.has(instance)) return false;
+      if (methodsUnchanged(instance) && retained.supported(instance)) return true;
+      deactivate(instance);
+      return false;
+    }
+    function coordinates(instance) {
+      var camera = instance.origin;
+      return [Math.floor(((instance.roundPixels ? Math.floor(camera.x) : camera.x) - (instance._margin || 0)) / instance._tileWidth),
+        Math.floor(((instance.roundPixels ? Math.floor(camera.y) : camera.y) - (instance._margin || 0)) / instance._tileHeight)];
+    }
+    function prepare(instance) {
+      if (!eligible(instance)) return false;
+      var window = coordinates(instance);
+      if (!retained.prepare(instance, window[0], window[1])) {
+        deactivate(instance);
+        return false;
+      }
+      instance._sortChildren();
+      return true;
+    }
+    function wrap(name, operation) {
+      var guest = original[name];
+      var wrapped = function() {
+        if (!eligible(this)) return guest.apply(this, arguments);
+        if (operation.apply(this, arguments) === false) {
+          deactivate(this);
+          return guest.apply(this, arguments);
+        }
       };
-      tileContracts.set(tiledConstructor, PMJS.maps.tiledContract);
-    } else if (PMJS.maps) {
-      PMJS.maps.tiledContract = function() { return 'unreviewed-tiled-methods'; };
+      wrapped._pmjsYedGuard = true;
+      prototype[name] = effective[name] = wrapped;
     }
+    if (painting) {
+      wrap('_paintAllTiles', function(x, y) { return retained.paint(this, x, y); });
+      wrap('_updateLayerPositions', function(x, y) { return retained.updatePositions(this, x, y); });
+      if (animation) wrap('_updateAnim', function() { return retained.updateAnimation(this); });
+      wrap('updateTransform', function() {
+        if (!prepare(this)) return false;
+        PIXI.Container.prototype.updateTransform.call(this);
+        return true;
+      });
+      prototype._paintAnimTiles = function(pending) {
+        if (!eligible(this)) return;
+        if (pending) this._pmjsChangedAnimKeys = Object.assign(this._pmjsChangedAnimKeys || Object.create(null), pending);
+        prepare(this);
+      };
+      prototype._pmjsPrepareTiles = function() { return prepare(this); };
+      prototype._pmjsIndexedPaintLoops = true;
+      prototype._pmjsIndexedAnimation = animation;
+    }
+    var contract = function(data) {
+      if (!names.every(function(name) { return prototype[name] === effective[name]; })) return 'tiled-producer-changed';
+      return data ? dataContract(data) : true;
+    };
+    contracts.set(constructor, contract);
+    if (PMJS.maps) PMJS.maps.tiledContract = contract;
   }
 
-  PMJS.methods.wrap({key:'Spriteset_Map.loadTileset',id:'pmjs.yed-map-contract',
-    getTarget:function(){return typeof Spriteset_Map === 'function' ? Spriteset_Map.prototype : null;},method:'loadTileset',
-    wrap:function(original){return function(){
-      if (this._tilemap && typeof $gameMap !== 'undefined' && typeof $gameMap.isTiledMap === 'function' && $gameMap.isTiledMap())
-        activateYedTiled(this._tilemap.constructor);
-      return original.apply(this,arguments);
-    };}
+  PMJS.methods.wrap({
+    key: 'Spriteset_Map.loadTileset', id: 'pmjs.yed-map-contract',
+    getTarget: function() { return typeof Spriteset_Map === 'function' ? Spriteset_Map.prototype : null; },
+    method: 'loadTileset',
+    wrap: function(guest) { return function() {
+      if (this._tilemap && typeof $gameMap !== 'undefined' &&
+          typeof $gameMap.isTiledMap === 'function' && $gameMap.isTiledMap()) {
+        activate(this._tilemap.constructor);
+      }
+      return guest.apply(this, arguments);
+    }; }
   });
-
   PMJS.plugins.onLoaded('YED_Tiled', 'pmjs.adapter.yed-tiled', function() {
-    PMJS.phases.on('afterGuestPlugins', 'pmjs.adapter.yed-tiled', function(){activateYedTiled();});
+    PMJS.phases.on('afterGuestPlugins', 'pmjs.adapter.yed-tiled', function() {
+      if (typeof globalThis.TiledTilemap === 'function') activate(globalThis.TiledTilemap);
+    });
   });
 })();

@@ -139,17 +139,37 @@ test('fixed representation table classifies every leaf without probing', () => {
     rectLayer: nativeSceneKind({ pointsBuf: [], textures: [] }),
     unknown: nativeSceneKind(
       Object.assign(new PIXI.Sprite(null), { pluginName: 'customPipe' })),
-    encoders: [typeof writeNativeSceneSprite, typeof writeNativeSceneMesh,
-      typeof writeNativeSceneKind].join(','),
+    encoders: [typeof PMJS.pixi4.sceneEncoding.createEmission,
+      typeof PMJS.pixi4.sceneEncoding.encode].join(','),
     kinds: PMJS_SCENE_KIND
   })`, sandbox);
 
   const table = JSON.parse(JSON.stringify(kinds));
   assert.deepEqual(table, { container: 0, sprite: 1, picture: 1, weather: 1,
     screen: 2, tiling: 3, graphics: 4, mesh: 5, rectLayer: 6, unknown: 0,
-    encoders: 'function,function,function',
+    encoders: 'function,function',
     kinds: { CONTAINER: 0, SPRITE: 1, SCREEN_SPRITE: 2, TILING_SPRITE: 3,
-      GRAPHICS: 4, MESH: 5, RECT_TILE_LAYER: 6, GENERIC: 7 } });
+      GRAPHICS: 4, MESH: 5, RECT_TILE_LAYER: 6 } });
+});
+
+test('leaf outputs have independent ownership and reusable outputs discard prior resources', () => {
+  const { sandbox, sprite } = makeHarness();
+  const encoding = sandbox.PMJS.pixi4.sceneEncoding;
+  const first = encoding.createEmission();
+  const second = encoding.createEmission();
+  const node = sprite();
+  encoding.encode(sandbox.PMJS_SCENE_KIND.SPRITE, node, 'sprite', null,
+    null, first, 0xff0000, sandbox.nativeSceneSchema);
+  encoding.encode(sandbox.PMJS_SCENE_KIND.SPRITE, sprite(), 'sprite', null,
+    null, second, 0x00ff00, sandbox.nativeSceneSchema);
+  const retained = { resource: second.resource, texture: second.texture, tint: second.tint };
+  encoding.encode(sandbox.PMJS_SCENE_KIND.CONTAINER, new sandbox.PIXI.Container(),
+    'container', null, null, first, 0xffffff, sandbox.nativeSceneSchema);
+  assert.equal(first.kind, 0);
+  assert.equal(first.resource, 0);
+  assert.equal(first.texture, null);
+  assert.equal(first.roundPixelsEligible, false);
+  assert.deepEqual({ resource: second.resource, texture: second.texture, tint: second.tint }, retained);
 });
 
 test('unknown renderer labels render as containers and log the label', () => {
@@ -743,16 +763,19 @@ test('unsupported filters render unfiltered and log the filter', () => {
     [0, 1, 1]);
 });
 
-test('unsupported filter resolution clears a previous node clip', () => {
+test('effect resolution returns a clip without changing an earlier plan', () => {
   const harness = makeHarness();
   const { sandbox, sprite } = harness;
-  sandbox.nativeEffectClip = { left: 1, top: 2, right: 3, bottom: 4 };
   const node = sprite();
+  const clip = { left: 1, top: 2, right: 3, bottom: 4 };
+  const previous = sandbox.resolveNativeAdvancedEffects(node, null,
+    [{ enabled: true }], null, null, -1, clip);
   const plan = sandbox.resolveNativeAdvancedEffects(node, null,
     [{ enabled: true }], null, null, -1, null);
+  assert.equal(previous.clip, clip);
   assert.equal(plan.blur, 0);
   assert.equal(plan.groups.length, 0);
-  assert.equal(sandbox.nativeEffectClip, null);
+  assert.equal(plan.clip, null);
 });
 
 test('aborted visual encoders preserve a neutral transformed parent for children', () => {
@@ -1317,6 +1340,7 @@ test('particle children carry tone and blend colors regardless of attachment tim
 test('rect tile layers bypass rejection with retained records', () => {
   const harness = makeHarness();
   const { sandbox, makeTexture } = harness;
+  sandbox.PIXI.tilemap.TileRenderer = { SCALE_MODE: sandbox.PIXI.SCALE_MODES.NEAREST };
   const parent = new sandbox.PIXI.Container();
   parent.animationFrame = 1;
   parent._tileWidth = 48;
@@ -1330,6 +1354,9 @@ test('rect tile layers bypass rejection with retained records', () => {
 
   assert.deepEqual(packet.metadata.filter((_, index) => index % 7 === 0),
     [0, 0, 4]);
+  assert.equal(packet.metadata[2 * 7 + 5] & 8, 8);
+  sandbox.PIXI.tilemap.TileRenderer.SCALE_MODE = sandbox.PIXI.SCALE_MODES.LINEAR;
+  assert.equal(submitOnly(harness, root).metadata[2 * 7 + 5] & 8, 0);
 });
 
 function trySubmitMaskStage(harness, stage) {
@@ -1937,4 +1964,24 @@ test('real compatibility observations preserve exact frames while unsupported hi
       assert.equal(sandbox.renderNativeStage._framesDegraded, 2);
     }
   }
+});
+
+test('root resolution invalidates cached Pixi world transforms and restores full coordinates', () => {
+  const { sandbox } = makeHarness();
+  sandbox.nativeTransformParent.transform._worldID = 0;
+  const root = new sandbox.PIXI.Container();
+  let parentGeneration = 0, resolvedX = 100;
+  root.updateTransform = function() {
+    const parent = this.parent.transform;
+    if (parentGeneration !== parent._worldID) {
+      resolvedX = parent.worldTransform.a * 100 + parent.worldTransform.tx;
+      parentGeneration = parent._worldID;
+    }
+  };
+  const render = scale => sandbox.renderNativeStage(root,
+    {a:scale,b:0,c:0,d:scale,tx:0,ty:0},scale,false,false,null,{worldState:'pixi'});
+  render(0.5); assert.equal(resolvedX,50);
+  render(0.75); assert.equal(resolvedX,75);
+  render(1); assert.equal(resolvedX,100);
+  assert.equal(root.parent,null);
 });

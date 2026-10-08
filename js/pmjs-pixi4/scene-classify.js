@@ -1,3 +1,23 @@
+function nativeNodeRenderType(node) {
+  var type = node && node.pluginName;
+  if (!type && node && typeof node._pmjsType === 'string') {
+    type = node._pmjsType;
+  }
+  if (type === 'tilingSprite') type = 'tilingsprite';
+  if (type) {
+    return String(type).toLowerCase();
+  }
+  if (typeof ScreenSprite === 'function' && node instanceof ScreenSprite) {
+    return 'screensprite';
+  }
+  if (PIXI.extras && PIXI.extras.TilingSprite &&
+      node instanceof PIXI.extras.TilingSprite) return 'tilingsprite';
+  if (PIXI.mesh && PIXI.mesh.Mesh && node instanceof PIXI.mesh.Mesh) return 'mesh';
+  if (PIXI.Graphics && node instanceof PIXI.Graphics) return 'graphics';
+  if (PIXI.Sprite && node instanceof PIXI.Sprite) return 'sprite';
+  return 'container';
+}
+
 var PMJS_SCENE_KIND = {
   CONTAINER: 0,
   SPRITE: 1,
@@ -5,8 +25,7 @@ var PMJS_SCENE_KIND = {
   TILING_SPRITE: 3,
   GRAPHICS: 4,
   MESH: 5,
-  RECT_TILE_LAYER: 6,
-  GENERIC: 7
+  RECT_TILE_LAYER: 6
 };
 
 function nativeSceneKindForType(type) {

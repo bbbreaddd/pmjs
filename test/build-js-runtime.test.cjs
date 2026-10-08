@@ -7,6 +7,7 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 const { temporaryDirectory } = require('./helpers/temp.cjs');
+const { writerSources } = require('./helpers/scene-encoder-harness.cjs');
 
 const tool = path.resolve(__dirname, '../tools/build-js-runtime.mjs');
 
@@ -47,6 +48,16 @@ test('bundle generation is deterministic and resolves modules from its own check
   assert.equal(fs.readFileSync(out, 'utf8'), first);
   assert.match(first, /BEGIN js\/pmjs-mv\/bootstrap.js/);
   assert.doesNotMatch(first, /foreign.js/);
+});
+
+test('scene harness sources follow the production profile and selected adapter order', () => {
+  const root = temporaryDirectory('pmjs-scene-composition-');
+  const game = writeMvGame(root, { plugins: [{ name: 'MPP_EncounterEffect', status: true }] });
+  const out = path.join(root, 'out.js');
+  childProcess.execFileSync(process.execPath, [tool, '--game', game, '--output', out]);
+  const bundle = fs.readFileSync(out, 'utf8');
+  const modules = Array.from(bundle.matchAll(/^\/\/ BEGIN (js\/[^\n]+)$/gm), match => match[1]);
+  assert.deepEqual(modules.filter(source => writerSources.includes(source)), writerSources);
 });
 
 test('profile bundles accept configuration data without external code insertion', () => {
@@ -353,4 +364,23 @@ test('a standalone source copy builds without the surrounding workspace', () => 
   const output = path.join(root, 'standalone.js');
   childProcess.execFileSync(process.execPath, [path.join(clone, 'tools/build-js-runtime.mjs'), '--game', game, '--output', output], { cwd: root });
   assert.match(fs.readFileSync(output, 'utf8'), /BEGIN js\/pmjs-plugins\/yed\/tiled.js/);
+});
+
+test('primitive recording ships with the selected Terrax adapter', () => {
+  const root = temporaryDirectory('pmjs-terrax-bundle-');
+  const game = writeMvGame(root, { plugins: [{ name: 'Terrax_Lighting', status: true }] });
+  fs.mkdirSync(path.join(game, 'js/plugins'));
+  fs.writeFileSync(path.join(game, 'js/plugins/Terrax_Lighting.js'), '// plugin\n');
+  const output = path.join(root, 'runtime.js');
+  childProcess.execFileSync(process.execPath, [tool, '--game', game, '--output', output]);
+  const bundle = fs.readFileSync(output, 'utf8');
+  const recorder = '// BEGIN js/pmjs-web/canvas-primitives.js';
+  const bridge = '// BEGIN js/pmjs-plugins/terrax/bitmap-primitives.js';
+  assert.ok(bundle.includes(recorder));
+  assert.ok(bundle.indexOf(recorder) < bundle.indexOf(bridge));
+  assert.ok(bundle.indexOf(bridge) < bundle.indexOf('// BEGIN js/pmjs-plugins/terrax/lighting.js'));
+  for (const profile of ['mv', 'mz']) {
+    childProcess.execFileSync(process.execPath, [tool, '--profile', profile, '--output', output]);
+    assert.ok(!fs.readFileSync(output, 'utf8').includes(recorder));
+  }
 });

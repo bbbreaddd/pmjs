@@ -1,5 +1,6 @@
 'use strict';
 
+const { pinBodyFingerprint } = require('./helpers/reviewed-function-fixture.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -12,7 +13,7 @@ function install({ enabled = true, changedCharacter = false, changedBody = false
   fontWrapper = false } = {}) {
   const phases = [];
   const state = { raster: [], fonts: 0, dirty: 0, refused: null };
-  const context = vm.createContext({ state, PMJS: {
+  const context = vm.createContext({ state, __pmjsBuiltinRequire: require, PMJS: {
     plugins: {
       registerOptimization(plugin, definition) { state.definition = definition; },
       onLoaded(plugin, id, callback) { state.loaded = callback; }
@@ -47,7 +48,6 @@ function install({ enabled = true, changedCharacter = false, changedBody = false
     Window_Base.prototype.restoreCurrentWindowSettings = function() {};
     Window_Base.prototype.clearCurrentWindowSettings = function() {};
   `, context);
-  vm.runInContext(source, context);
   vm.runInContext(`
     var Yanfly = { Message: {} };
     Yanfly.Message.Window_Base_processNormalCharacter = Window_Base.prototype.processNormalCharacter;
@@ -55,18 +55,14 @@ function install({ enabled = true, changedCharacter = false, changedBody = false
       return Yanfly.Message.Window_Base_processNormalCharacter.call(this, textState);
     };
     Window_Base.prototype.textWidthExCheck = function(text) {
-      var setting = this._wordWrap;
-      this._wordWrap = false;
-      this.saveCurrentWindowSettings();
+      const previous = this._checkWordWrapMode;
       this._checkWordWrapMode = true;
-      var value = this.drawTextEx(text, 0, this.contents.height);
-      this._checkWordWrapMode = false;
-      this.restoreCurrentWindowSettings();
-      this.clearCurrentWindowSettings();
-      this._wordWrap = setting;
-      return value;
+      try { return this.drawTextEx(text); }
+      finally { this._checkWordWrapMode = previous; }
     };
   `, context);
+  vm.runInContext(pinBodyFingerprint(source, 'expectedBody',
+    context.Window_Base.prototype.textWidthExCheck, true), context);
   if (fontWrapper) vm.runInContext(`
     var drawText = Bitmap.prototype.drawText;
     Bitmap.prototype.drawText = function() {

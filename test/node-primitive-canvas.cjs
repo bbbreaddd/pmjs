@@ -16,8 +16,11 @@ const realm = vm.createContext({ console, pmjsGameConfig: {},
   nativeWindowState: { focused: true, visible: true }, PMJS: { config: { fonts: { GameFont: 'text-shaping.ttf' } } },
   NativeHost: { canvas: native.canvas, render: renderer, runtime: { env: () => '' } },
 });
-for (const file of ['events', 'canvas', 'elements'])
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-web', file + '.js'), 'utf8'), realm);
+for (const file of ['js/pmjs-web/events.js', 'js/pmjs-web/canvas.js',
+    ...require('./helpers/web-element-sources.cjs').elementSources,
+    'js/pmjs-web/canvas-primitives.js']) {
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), realm);
+}
 const create = () => { const canvas = new realm.CanvasElement(); canvas.width = 64; canvas.height = 48; return canvas; };
 const canvas = create(), drawing = canvas.getContext('2d');
 const recorder = realm.PMJS.web.canvas.createPrimitiveRecorder(canvas);

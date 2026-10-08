@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2016 Terraxz
+// SPDX-FileCopyrightText: 2026 PMJS contributors
+// SPDX-License-Identifier: MIT
+// Portions derived from TerraxLighting; see third_party/terrax.LICENSE.
 'use strict';
 
 const test = require('node:test');
@@ -5,6 +9,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { reviewedFunctionFixture } = require('./helpers/reviewed-function-fixture.cjs');
 
 const runtimeRoot = path.resolve(__dirname, '..');
 const optimizationsSource = fs.readFileSync(
@@ -19,6 +24,7 @@ const pluginsSource = fs.readFileSync(
   path.join(runtimeRoot, 'js/pmjs-rpgmaker/plugins.js'), 'utf8');
 
 function loadRegistrySupport(context) {
+  context.__pmjsBuiltinRequire = require;
   if (!context.PMJS || !context.PMJS.optimizations) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-core/config.js'), 'utf8'), context);
     vm.runInContext(optimizationsSource, context, { filename: 'optimizations.js' });
@@ -28,10 +34,11 @@ function loadRegistrySupport(context) {
   vm.runInContext(pluginsSource, context, { filename: 'plugins.js' });
   vm.runInContext(fs.readFileSync(path.join(runtimeRoot,
     'js/pmjs-web/canvas.js'), 'utf8'), context);
-  const bitmapSource = fs.readFileSync(path.join(runtimeRoot,
-    'js/pmjs-mv/bitmap.js'), 'utf8');
-  vm.runInContext(bitmapSource.slice(0,
-    bitmapSource.indexOf("NativeHost.runtime.loadScript")), context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..',
+    'js/pmjs-web/canvas-primitives.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(runtimeRoot,
+    'js/pmjs-plugins/terrax/bitmap-primitives.js'), 'utf8'), context);
+
 }
 
 function knownAddSprite(x, y, bitmap) {
@@ -51,13 +58,39 @@ function knownRemoveSprite() {
 
 function defineKnownCreateLightmask(SpritesetMap, createState) {
   function Lightmask() {
-    Object.assign(this, createState());
+    Object.assign(this, { _updateMask: knownUpdateMask }, createState());
   }
   SpritesetMap.prototype.addChild = function() {};
   SpritesetMap.prototype.createLightmask = function() {
     this._lightmask = new Lightmask();
     this.addChild(this._lightmask);
   };
+}
+
+function knownUpdateMask() {
+  var context = this._maskBitmap._context;
+  context.fillStyle = '#000000';
+  context.globalCompositeOperation = 'source-over';
+  context.fillRect(0, 0, 64, 48);
+  context.fillStyle = { _pmjsStyle: 'radial-gradient', nativeConcentric: true,
+    x0: 20, y0: 20, r0: 0, r1: 10,
+    stops: [{ offset: 0, color: '#ffffff' },
+      { offset: 1, color: '#000000' }] };
+  context.globalCompositeOperation = 'lighter';
+  context.fillRect(10, 10, 20, 20);
+}
+
+const factoryFixture = { prototype: {} };
+defineKnownCreateLightmask(factoryFixture, () => ({}));
+const fixtureSource = reviewedFunctionFixture(terraxSource, {
+  isKnownTerraxCreateLightmask: factoryFixture.prototype.createLightmask,
+  isKnownTerraxAddSprite: knownAddSprite,
+  isKnownTerraxRemoveSprite: knownRemoveSprite,
+  isKnownTerraxUpdateMask: knownUpdateMask,
+});
+
+function loadTerraxAdapter(context) {
+  vm.runInContext(fixtureSource, context);
 }
 
 test('registers terrax.native-lighting optimization', () => {
@@ -69,7 +102,7 @@ test('registers terrax.native-lighting optimization', () => {
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-core/config.js'), 'utf8'), context);
   vm.runInContext(optimizationsSource, context);
   loadRegistrySupport(context);
-  vm.runInContext(terraxSource, context);
+  loadTerraxAdapter(context);
 
   assert.equal(context.PMJS.optimizations.isEnabled('terrax.native-lighting'), true);
   assert.ok(context.PMJS.optimizations.ids().includes('terrax.native-lighting'));
@@ -99,7 +132,7 @@ test('native Terrax adapter retains one mask sprite', () => {
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-core/config.js'), 'utf8'), context);
   vm.runInContext(optimizationsSource, context);
   loadRegistrySupport(context);
-  vm.runInContext(terraxSource, context);
+  loadTerraxAdapter(context);
   context.PMJS.phases.emit('afterGuestPlugins');
 
   const spriteset = new context.Spriteset_Map();
@@ -137,19 +170,7 @@ test('native Terrax adapter records supported mask draws into one GPU layer', ()
     return {
       _sprites: [], _maskBitmap: bitmap, addChild() {}, removeChild() {},
       _addSprite: knownAddSprite, _removeSprite: knownRemoveSprite,
-      _updateMask() {
-        var maskBitmap = this._maskBitmap;
-        void maskBitmap;
-        context2d.fillStyle = '#000000';
-        context2d.globalCompositeOperation = 'source-over';
-        context2d.fillRect(0, 0, 64, 48);
-        context2d.fillStyle = { _pmjsStyle: 'radial-gradient', nativeConcentric: true,
-          x0: 20, y0: 20, r0: 0, r1: 10,
-          stops: [{ offset: 0, color: '#ffffff' },
-            { offset: 1, color: '#000000' }] };
-        context2d.globalCompositeOperation = 'lighter';
-        context2d.fillRect(10, 10, 20, 20);
-      },
+      _updateMask: knownUpdateMask,
     };
   });
   const context = {
@@ -173,7 +194,7 @@ test('native Terrax adapter records supported mask draws into one GPU layer', ()
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-core/config.js'), 'utf8'), context);
   vm.runInContext(optimizationsSource, context);
   loadRegistrySupport(context);
-  vm.runInContext(terraxSource, context);
+  loadTerraxAdapter(context);
   context.PMJS.phases.emit('afterGuestPlugins');
   const spriteset = new context.Spriteset_Map();
   spriteset.createLightmask();
@@ -209,7 +230,7 @@ test('native Terrax adapter keeps Canvas rendering when primitive surfaces are u
   context.globalThis = context;
   vm.createContext(context);
   loadRegistrySupport(context);
-  vm.runInContext(terraxSource, context);
+  loadTerraxAdapter(context);
   context.PMJS.phases.emit('afterGuestPlugins');
 
   const spriteset = new context.Spriteset_Map();
@@ -231,7 +252,7 @@ test('Terrax adapter leaves an unknown createLightmask implementation untouched'
   context.globalThis = context;
   vm.createContext(context);
   loadRegistrySupport(context);
-  vm.runInContext(terraxSource, context);
+  loadTerraxAdapter(context);
 
   assert.equal(context.Spriteset_Map.prototype.createLightmask,
     customCreateLightmask);
@@ -260,12 +281,107 @@ test('Terrax adapter preserves unknown per-instance sprite methods', () => {
   context.globalThis = context;
   vm.createContext(context);
   loadRegistrySupport(context);
-  vm.runInContext(terraxSource, context);
+  loadTerraxAdapter(context);
+  context.PMJS.phases.emit('afterGuestPlugins');
 
   const spriteset = new context.Spriteset_Map();
   spriteset.createLightmask();
   assert.equal(spriteset._lightmask._addSprite, customAddSprite);
   assert.equal(spriteset._lightmask._removeSprite, customRemoveSprite);
+});
+
+test('Terrax token-shaped factories retain their authored behavior', () => {
+  function SpritesetMap() {}
+  function customCreateLightmask() {
+    // _lightmask new Lightmask addChild
+    this.customCalls = (this.customCalls || 0) + 1;
+    return 'custom result';
+  }
+  SpritesetMap.prototype.createLightmask = customCreateLightmask;
+  const context = vm.createContext({ Spriteset_Map: SpritesetMap });
+  loadRegistrySupport(context);
+  vm.runInContext(terraxSource, context);
+  context.PMJS.phases.emit('afterGuestPlugins');
+  assert.equal(SpritesetMap.prototype.createLightmask, customCreateLightmask);
+  const spriteset = new SpritesetMap();
+  assert.equal(spriteset.createLightmask(), 'custom result');
+  assert.equal(spriteset.customCalls, 1);
+});
+
+test('Terrax refuses a wrapper around a reviewed factory', () => {
+  function SpritesetMap() {}
+  defineKnownCreateLightmask(SpritesetMap, () => ({}));
+  const original = SpritesetMap.prototype.createLightmask;
+  function wrappedCreateLightmask() {
+    // _lightmask new Lightmask addChild
+    this.wrapperCalls = (this.wrapperCalls || 0) + 1;
+    return original.apply(this, arguments);
+  }
+  SpritesetMap.prototype.createLightmask = wrappedCreateLightmask;
+  const context = vm.createContext({ Spriteset_Map: SpritesetMap });
+  loadRegistrySupport(context);
+  loadTerraxAdapter(context);
+  context.PMJS.phases.emit('afterGuestPlugins');
+  assert.equal(SpritesetMap.prototype.createLightmask, wrappedCreateLightmask);
+  const spriteset = new SpritesetMap();
+  spriteset.createLightmask();
+  assert.equal(spriteset.wrapperCalls, 1);
+});
+
+for (const method of ['_addSprite', '_removeSprite', '_updateMask']) {
+  for (const wrapped of [false, true]) {
+    test('Terrax retains ordinary mask behavior for ' + method + ', wrapped=' + wrapped, () => {
+      let surfaces = 0;
+      let calls = 0;
+      function SpritesetMap() {}
+      const original = { _addSprite: knownAddSprite, _removeSprite: knownRemoveSprite,
+        _updateMask: knownUpdateMask };
+      function customMethod() {
+        // new Sprite _sprites.push addChild bitmap blendMode _sprites.pop removeChild _maskBitmap fillRect
+        calls++;
+        return 'custom result';
+      }
+      const unknown = wrapped ? function() {
+        calls++;
+        return customMethod.apply(this, arguments);
+      } : customMethod;
+      defineKnownCreateLightmask(SpritesetMap, () => ({
+        _sprites: [], addChild() {}, removeChild() {}, ...original, [method]: unknown,
+      }));
+      const context = vm.createContext({ Spriteset_Map: SpritesetMap,
+        NativeHost: { render: {
+          createPrimitiveSurface() { surfaces++; return { handle: 1, image: {} }; },
+          renderPrimitiveSurface() {}, releasePrimitiveSurface() {},
+        } },
+      });
+      loadRegistrySupport(context);
+      loadTerraxAdapter(context);
+      context.PMJS.phases.emit('afterGuestPlugins');
+      const spriteset = new SpritesetMap();
+      spriteset.createLightmask();
+      const mask = spriteset._lightmask;
+      for (const name of Object.keys(original)) {
+        assert.equal(mask[name], name === method ? unknown : original[name]);
+      }
+      assert.equal(mask[method](), 'custom result');
+      assert.equal(calls, wrapped ? 2 : 1);
+      assert.equal(surfaces, 0);
+      assert.equal(mask._pmjsMaskSprite, undefined);
+    });
+  }
+}
+
+test('Terrax retains ordinary behavior when implementation verification is unavailable', () => {
+  function SpritesetMap() {}
+  defineKnownCreateLightmask(SpritesetMap, () => ({}));
+  const original = SpritesetMap.prototype.createLightmask;
+  const context = vm.createContext({ Spriteset_Map: SpritesetMap });
+  loadRegistrySupport(context);
+  delete context.__pmjsBuiltinRequire;
+  loadTerraxAdapter(context);
+  context.PMJS.phases.emit('afterGuestPlugins');
+  assert.equal(SpritesetMap.prototype.createLightmask, original);
+  assert.equal(context.PMJS.optimizations.isEnabled('terrax.native-lighting'), false);
 });
 
 test('Terrax adapter requires the complete primitive-surface capability', () => {
@@ -280,10 +396,7 @@ test('Terrax adapter requires the complete primitive-surface capability', () => 
       removeChild() {},
       _addSprite: knownAddSprite,
       _removeSprite: knownRemoveSprite,
-      _updateMask() {
-        var maskBitmap = this._maskBitmap;
-        maskBitmap._context.fillRect(0, 0, 1, 1);
-      }
+      _updateMask: knownUpdateMask
     };
   });
   const context = {
@@ -298,7 +411,8 @@ test('Terrax adapter requires the complete primitive-surface capability', () => 
   context.globalThis = context;
   vm.createContext(context);
   loadRegistrySupport(context);
-  vm.runInContext(terraxSource, context);
+  loadTerraxAdapter(context);
+  context.PMJS.phases.emit('afterGuestPlugins');
 
   const spriteset = new context.Spriteset_Map();
   spriteset.createLightmask();
@@ -359,7 +473,7 @@ function terraxDisabledContext({ config, env }) {
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-core/config.js'), 'utf8'), context);
   vm.runInContext(optimizationsSource, context);
   loadRegistrySupport(context);
-  vm.runInContext(terraxSource, context);
+  loadTerraxAdapter(context);
   context.PMJS.phases.emit('afterGuestPlugins');
   const spriteset = new context.Spriteset_Map();
   spriteset.createLightmask();

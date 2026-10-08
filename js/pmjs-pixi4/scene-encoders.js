@@ -1,32 +1,30 @@
-var nativeSceneEmission = { kind: 0, resource: 0, tint: 0xffffff, texture: null,
+PMJS.pixi4.sceneEncoding = (function() {
+function createEmission() {
+  return { kind: 0, resource: 0, tint: 0xffffff, texture: null,
   frame: null, nativeImage: null, source: null, localX: 0, localY: 0,
   destWidth: 0, destHeight: 0, tilingResolution: 1, sampledBaseTexture: null,
   roundPixelsEligible: false, aborted: false };
+}
 
-function resetNativeSceneEmission(tint) {
-  nativeSceneEmission.kind = 0;
-  nativeSceneEmission.resource = 0;
-  nativeSceneEmission.tint = tint;
-  nativeSceneEmission.texture = null;
-  nativeSceneEmission.frame = null;
-  nativeSceneEmission.nativeImage = null;
-  nativeSceneEmission.source = null;
-  nativeSceneEmission.localX = 0;
-  nativeSceneEmission.localY = 0;
-  nativeSceneEmission.destWidth = 0;
-  nativeSceneEmission.destHeight = 0;
-  nativeSceneEmission.tilingResolution = 1;
-  nativeSceneEmission.sampledBaseTexture = null;
-  nativeSceneEmission.roundPixelsEligible = false;
-  nativeSceneEmission.aborted = false;
+function resetEmission(scratch, tint) {
+  scratch.kind = 0;
+  scratch.resource = 0;
+  scratch.tint = tint;
+  scratch.texture = null;
+  scratch.frame = null;
+  scratch.nativeImage = null;
+  scratch.source = null;
+  scratch.localX = 0;
+  scratch.localY = 0;
+  scratch.destWidth = 0;
+  scratch.destHeight = 0;
+  scratch.tilingResolution = 1;
+  scratch.sampledBaseTexture = null;
+  scratch.roundPixelsEligible = false;
+  scratch.aborted = false;
 }
 
 function writeNativeSceneContainer(node, type, particleContext, particleValues,
-    scratch) {
-
-}
-
-function writeNativeSceneGeneric(node, type, particleContext, particleValues,
     scratch) {
 
 }
@@ -69,14 +67,11 @@ function writeNativeSceneScreenSprite(node, type, particleContext,
   scratch.kind = 3;
   scratch.tint = ((node._red || 0) << 16) | ((node._green || 0) << 8) |
     (node._blue || 0);
-  nativeScreenOverlays.push([
-    node._red || 0, node._green || 0, node._blue || 0,
-    Math.round(node.alpha * 255)
-  ]);
+
 }
 
 function writeNativeSceneTilingSprite(node, type, particleContext,
-    particleValues, scratch) {
+    particleValues, scratch, schema) {
   var texture = node.texture;
   var matrix = node.tileTransform && node.tileTransform.localTransform;
   var finiteSampling = matrix && ['a', 'b', 'c', 'd', 'tx', 'ty'].every(function(key) {
@@ -100,7 +95,7 @@ function writeNativeSceneTilingSprite(node, type, particleContext,
     scratch.aborted = true;
     return;
   }
-  if (texture && !nativeSimpleTilingTexture(texture) && !nativeSceneSchema.clampedTilingSampling) {
+  if (texture && !nativeSimpleTilingTexture(texture) && !schema.clampedTilingSampling) {
     PMJS.compat.hit('render.tiling-clamp', 'host lacks clamped tiling sampling');
     scratch.aborted = true;
     return;
@@ -162,24 +157,6 @@ function writeNativeSceneMesh(node, type, particleContext, particleValues,
   scratch.texture = node.texture;
 }
 
-function writeNativeSceneRectTileLayer(node, parentIndex) {
-  var layerHandle = ensureNativeRectTileLayer(node);
-  if (!layerHandle) {
-    PMJS.compat.hit('render.tilemap',
-      (node.constructor && node.constructor.name || 'node') + ':layer-unrealized');
-    return;
-  }
-  var layerParent = node.parent || node;
-  var layerIndex = nativeSceneRecord(parentIndex, 4, layerHandle,
-    layerParent.tint === undefined ? 0xffffff : layerParent.tint,
-    layerParent.blendMode || 0, nativeIdentityTransform, 1, null, 0, null);
-  var layerValues = layerIndex * nativeSceneValueStride;
-  var animation = tileAnimationOffset(layerParent);
-  nativeSceneValues[layerValues + 15] = animation[0];
-  nativeSceneValues[layerValues + 16] = animation[1];
-  nativeTileRects += node.pointsBuf.length / 9;
-}
-
 var nativeSceneEncoders = [];
 nativeSceneEncoders[PMJS_SCENE_KIND.CONTAINER] = writeNativeSceneContainer;
 nativeSceneEncoders[PMJS_SCENE_KIND.SPRITE] = writeNativeSceneSprite;
@@ -187,10 +164,10 @@ nativeSceneEncoders[PMJS_SCENE_KIND.SCREEN_SPRITE] = writeNativeSceneScreenSprit
 nativeSceneEncoders[PMJS_SCENE_KIND.TILING_SPRITE] = writeNativeSceneTilingSprite;
 nativeSceneEncoders[PMJS_SCENE_KIND.GRAPHICS] = writeNativeSceneGraphics;
 nativeSceneEncoders[PMJS_SCENE_KIND.MESH] = writeNativeSceneMesh;
-nativeSceneEncoders[PMJS_SCENE_KIND.GENERIC] = writeNativeSceneGeneric;
 
-function writeNativeSceneKind(kind, node, type, particleContext,
-    particleValues) {
-  return nativeSceneEncoders[kind](node, type, particleContext,
-    particleValues, nativeSceneEmission);
+function encode(kind, node, type, particleContext, particleValues, scratch, tint, schema) {
+  resetEmission(scratch, tint);
+  nativeSceneEncoders[kind](node, type, particleContext, particleValues, scratch, schema);
 }
+return { createEmission: createEmission, encode: encode };
+})();

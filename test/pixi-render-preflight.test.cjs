@@ -103,13 +103,13 @@ test('Text preparation follows Pixi render resolution before rasterization', () 
       this.dirty = false;
     }
   }
-  const sandbox = { PIXI: { Text, extras: { TilingSprite: class {} }, mesh: {},
+  const sandbox = { PMJS: { pixi4: {} }, PIXI: { Text, extras: { TilingSprite: class {} }, mesh: {},
     WebGLRenderer: { __plugins: {} } }, nativeSceneFilterResolution: 2 };
   sandbox.globalThis = sandbox;
   vm.runInNewContext(source, sandbox);
   vm.runInNewContext(prepareSource, sandbox);
   const label = new Text();
-  sandbox.prepareNativeSceneNode(label);
+  sandbox.PMJS.pixi4.scenePreparation.prepare(label, 2);
   assert.deepEqual(label.calls, [[2, true, true]]);
 });
 

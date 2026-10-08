@@ -4,17 +4,12 @@ function nativeNodeNeedsAdvancedEffects(enabledFilterCount, nodeMask,
     pictureBlend >= 0;
 }
 
-var nativeEffectClip = null;
-var nativeEffectAlphaMask = null;
-
 function nativeFilterGroupPreservesTransparentBounds(group) {
   return !!group && group.preservesTransparentBlack === true;
 }
 
 function resolveNativeAdvancedEffects(node, particleContext, activeFilters,
     nodeMask, forcedMask, pictureBlend, forcedClip) {
-  nativeEffectClip = forcedClip || null;
-  nativeEffectAlphaMask = null;
   var filterPlan = nativeSceneFilter(node, activeFilters);
   if (filterPlan.unsupported) {
     var filterNames = filterPlan.filters.map(function(filter) {
@@ -55,7 +50,7 @@ function resolveNativeAdvancedEffects(node, particleContext, activeFilters,
     filterPlan.groups.push({ kind: 26, resource: 0,
       parameters: [pictureBlend] });
   }
-  nativeEffectClip = nativeClip;
+  filterPlan.clip = nativeClip;
 
   return filterPlan;
 }

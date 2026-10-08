@@ -1,19 +1,5 @@
 PMJS.mv = PMJS.mv || {};
 PMJS.mv.bitmap = PMJS.mv.bitmap || {};
-PMJS.mv.bitmap.createPrimitiveRecorder = function(bitmap) {
-  if (!bitmap || !PMJS.web || !PMJS.web.canvas) return null;
-  var recorder = PMJS.web.canvas.createPrimitiveRecorder(bitmap._canvas);
-  if (!recorder) return null;
-  var originalDestroy = bitmap.destroy;
-  bitmap.destroy = function() {
-    recorder.destroy();
-    if (typeof originalDestroy === 'function') {
-      return originalDestroy.apply(this, arguments);
-    }
-  };
-  return recorder;
-};
-
 NativeHost.runtime.loadScript('js/rpg_core.js');
 if (globalThis.PMJS_RUNTIME_GAME && PMJS_RUNTIME_GAME.engineVersion &&
     Utils.RPGMAKER_VERSION !== PMJS_RUNTIME_GAME.engineVersion) {

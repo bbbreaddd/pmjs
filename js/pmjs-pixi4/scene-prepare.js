@@ -1,3 +1,4 @@
+PMJS.pixi4.scenePreparation = (function() {
 var nativeScenePreparationCache = new WeakMap();
 function nativeScenePreparationFor(node) {
   if (PIXI.extras && PIXI.extras.BitmapText &&
@@ -31,9 +32,8 @@ function nativeScenePreparation(node) {
   }
   return preparation;
 }
-function prepareNativeSceneNode(node) {
-  var resolution = typeof nativeSceneFilterResolution === 'number' ?
-    nativeSceneFilterResolution : 1;
+function prepareNativeSceneNode(node, resolution) {
+  resolution = typeof resolution === 'number' ? resolution : 1;
   var preparation = nativeScenePreparation(node);
   if (preparation) preparation(node, resolution);
   if (typeof prepareNativeMvSceneNode === 'function') {
@@ -48,3 +48,6 @@ function prepareNativeSceneNode(node) {
     node.tileTransform.updateLocalTransform();
   }
 }
+
+return { forNode: nativeScenePreparation, prepare: prepareNativeSceneNode };
+})();

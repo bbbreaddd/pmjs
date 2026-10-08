@@ -18,6 +18,7 @@ function prepareNativeMvSceneNode(node) {
     node.filterArea.copy(node);
   }
   if (typeof Tilemap === 'function' && node instanceof Tilemap) {
+    if (typeof node._pmjsPrepareTiles === 'function' && node._pmjsPrepareTiles()) return;
     var ox = node.roundPixels ? Math.floor(node.origin.x) : node.origin.x;
     var oy = node.roundPixels ? Math.floor(node.origin.y) : node.origin.y;
     var startX = Math.floor((ox - node._margin) / node._tileWidth);

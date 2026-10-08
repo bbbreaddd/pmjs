@@ -1,5 +1,6 @@
 'use strict';
 
+const { pinBodyFingerprint } = require('./helpers/reviewed-function-fixture.cjs');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
@@ -18,28 +19,12 @@ const methodsSource = fs.readFileSync(
 const pluginsSource = fs.readFileSync(
   path.join(runtimeRoot, 'js/pmjs-rpgmaker/plugins.js'), 'utf8');
 
-// YEP-shaped setupMiniLabel with deliberately different formatting: the
-// installer must recognize it anyway (whitespace-insensitive fingerprint).
+// Synthetic guest: construction is observable; guest internals are irrelevant.
 const YEP_SHAPE = `function() {
-    if (this._miniLabel) {
-      if(this._miniLabel._text !== "") {
-        if(!this._miniLabel.parent) {
-          SceneManager._scene._spriteset.addChild(this._miniLabel);
-        }
-      }
-      else if(this._miniLabel._text === "") {
-        if(!!this._miniLabel.parent) {
-          this._miniLabel.parent.removeChild(this._miniLabel);
-        }
-      }
-      return;
-    }
-    if (!SceneManager._scene._spriteset) return;
-    this._miniLabel = new Window_EventMiniLabel();
-    this._miniLabel.setCharacter(this._character);
-    if(this._miniLabel._text === "") {return;}
-    SceneManager._scene._spriteset.addChild(this._miniLabel);
-  }`;
+  calls.original++;
+  this._miniLabel = { _text: 'fixture' };
+  calls.constructed++;
+}`;
 
 function makeHost({
   shape = YEP_SHAPE,
@@ -49,6 +34,7 @@ function makeHost({
   const calls = { constructed: 0, original: 0 };
   const hooks = {};
   const context = {
+    __pmjsBuiltinRequire: require,
     calls,
     hooks,
     PMJS_GAME_CONFIG: { disableOptimizations },
@@ -81,7 +67,8 @@ function makeHost({
     `Sprite_Character.prototype.setupMiniLabel = (${shape});`,
     context, { filename: 'minilabel-shape.js' });
 
-  vm.runInContext(moduleSource, context, { filename: 'event-mini-label.js' });
+  vm.runInContext(pinBodyFingerprint(moduleSource, 'KNOWN_BODY',
+    vm.runInNewContext('(' + YEP_SHAPE + ')')), context, { filename: 'event-mini-label.js' });
   context.PMJS.plugins.execute('YEP_EventMiniLabel', function() {});
   context.PMJS.phases.emit('afterGuestPlugins');
   return context;

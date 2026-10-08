@@ -10,7 +10,8 @@ const root = path.resolve(__dirname, '..');
 const source = [
   'js/pmjs-web/events.js',
   'js/pmjs-web/canvas.js',
-  'js/pmjs-web/elements.js'
+  'js/pmjs-web/canvas-primitives.js',
+  ...require('./helpers/web-element-sources.cjs').elementSources
 ].map(file => fs.readFileSync(path.join(root, file), 'utf8')).join('\n');
 
 function harness() {

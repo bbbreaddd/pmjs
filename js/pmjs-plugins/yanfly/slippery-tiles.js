@@ -22,15 +22,13 @@ if (typeof PMJS !== 'undefined' && PMJS.plugins &&
       .trim();
   }
 
-  var KNOWN_SLIPPERY_QUERY =
-    'if ($gameParty.inBattle()) return false; ' +
-    'if (this.isValid(mx, my) && this.tileset()) { ' +
-    'if (Yanfly.Param.SlipRegion !== 0 && ' +
-    'this.regionId(mx, my) === Yanfly.Param.SlipRegion) return true; ' +
-    'var tagId = this.terrainTag(mx, my); ' +
-    'var slipTiles = this.tileset().slippery; ' +
-    'return slipTiles.contains(tagId); ' +
-    '} return false;';
+  var KNOWN_SLIPPERY_QUERY = 'd06e176669197657614662215af1deb67bdae5c7a595914f7d82cf39e4e3f8b2';
+
+  function fingerprint(fn) {
+    if (!globalThis.__pmjsBuiltinRequire) return null;
+    return globalThis.__pmjsBuiltinRequire('crypto').createHash('sha256')
+      .update(fnBody(fn)).digest('hex');
+  }
 
   function install() {
     if (!PMJS.optimizations.isEnabled('plugins.yanfly.slippery-tiles')) {
@@ -46,7 +44,7 @@ if (typeof PMJS !== 'undefined' && PMJS.plugins &&
     }
     if (mapProto.__pmjsSlipperyTilesGuard) return true;
 
-    if (fnBody(mapProto.isSlippery) !== KNOWN_SLIPPERY_QUERY) {
+    if (fingerprint(mapProto.isSlippery) !== KNOWN_SLIPPERY_QUERY) {
       PMJS.optimizations.refuse('plugins.yanfly.slippery-tiles',
         'unrecognized Yanfly isSlippery method composition');
       return false;

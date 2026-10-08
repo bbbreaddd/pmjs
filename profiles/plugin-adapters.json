@@ -38,6 +38,7 @@
         "YED_Tiled"
       ],
       "modules": [
+        "js/pmjs-plugins/yed/retained-tiles.js",
         "js/pmjs-plugins/yed/tiled.js"
       ]
     },
@@ -62,6 +63,8 @@
         "Terrax_Lighting"
       ],
       "modules": [
+        "js/pmjs-web/canvas-primitives.js",
+        "js/pmjs-plugins/terrax/bitmap-primitives.js",
         "js/pmjs-plugins/terrax/lighting.js"
       ]
     },

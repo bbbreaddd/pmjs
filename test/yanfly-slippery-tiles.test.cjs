@@ -1,5 +1,6 @@
 'use strict';
 
+const { pinBodyFingerprint } = require('./helpers/reviewed-function-fixture.cjs');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
@@ -19,15 +20,12 @@ const pluginsSource = fs.readFileSync(
   path.join(runtimeRoot, 'js/pmjs-rpgmaker/plugins.js'), 'utf8');
 
 const SLIPPERY_QUERY_SHAPE = `function(mx, my) {
-    if ($gameParty.inBattle()) return false;
-    if (this.isValid(mx, my) && this.tileset()) {
-      if (Yanfly.Param.SlipRegion !== 0 &&
-        this.regionId(mx, my) === Yanfly.Param.SlipRegion) return true;
-      var tagId = this.terrainTag(mx, my);
-      var slipTiles = this.tileset().slippery;
-      return slipTiles.contains(tagId);
-    }
-    return false;
+  const allowed = this.isValid(mx, my);
+  const region = this.regionId(mx, my);
+  const terrain = this.terrainTag(mx, my);
+  const membership = this.tileset().slippery.contains(terrain);
+  return allowed && !$gameParty.inBattle() &&
+    (membership || (region !== 0 && region === Yanfly.Param.SlipRegion));
 }`;
 
 function makeHost({
@@ -42,6 +40,7 @@ function makeHost({
 } = {}) {
   const calls = { regionId: 0, terrainTag: 0, isValid: 0, changeTileset: 0 };
   const context = {
+    __pmjsBuiltinRequire: require,
     calls,
     PMJS_GAME_CONFIG: { disableOptimizations },
     NativeHost: {
@@ -97,7 +96,8 @@ function makeHost({
   );
   context.Array = vm.runInContext('Array', context);
 
-  vm.runInContext(moduleSource, context, { filename: 'slippery-tiles.js' });
+  vm.runInContext(pinBodyFingerprint(moduleSource, 'KNOWN_SLIPPERY_QUERY',
+    vm.runInNewContext('(' + SLIPPERY_QUERY_SHAPE + ')')), context, { filename: 'slippery-tiles.js' });
   if (autoActivate) {
     context.PMJS.plugins.execute('YEP_SlipperyTiles', function() {});
     context.PMJS.phases.emit('afterGuestPlugins');

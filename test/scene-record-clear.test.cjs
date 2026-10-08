@@ -53,7 +53,7 @@ test('bulk-clear flag resolves once per frame', () => {
   let reads = 0;
   const context = makeHost(true);
   const host = context.PMJS.optimizations.isEnabled;
-  context.PMJS.optimizations.isEnabled = id => { reads++; return host(id); };
+  context.PMJS.optimizations.isEnabled = id => { if (id === 'scene.record-bulk-clear') reads++; return host(id); };
   context.resetNativeSceneRecords();
   for (let i = 0; i < 5; i++) {
     context.nativeSceneRecord(0, 1, 7, 0xffffff, 0,

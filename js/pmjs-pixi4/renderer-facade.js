@@ -108,7 +108,6 @@ function createNativePixiRenderer(width, height, options) {
     _nextTextureLocation: 0,
     _activeShader: null,
     _activeVao: null,
-    _transform: null,
     boundTextures: new Array(textureUnitCount),
     emptyTextures: new Array(textureUnitCount),
     gl: { MAX_VARYING_VECTORS: 36348,
@@ -142,8 +141,7 @@ function createNativePixiRenderer(width, height, options) {
       return this;
     },
     setTransform: function(matrix) {
-      this._transform = matrix || null;
-      this.rootRenderTarget.transform = this._transform;
+      this.rootRenderTarget.transform = matrix || null;
       return this;
     },
     bindRenderTexture: function(renderTexture, transform) {
@@ -248,7 +246,6 @@ function createNativePixiRenderer(width, height, options) {
       this.setObjectRenderer(null);
       this._activeShader = null;
       this._activeVao = null;
-      this._transform = null;
       this.state.resetToDefault();
       this.renderTexture.bind(null);
       return this;

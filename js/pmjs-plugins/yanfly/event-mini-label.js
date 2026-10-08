@@ -32,19 +32,7 @@
       .trim();
   }
 
-  // YEP_EventMiniLabel setupMiniLabel body, whitespace/comment insensitive.
-  var KNOWN_BODY = 'if (this._miniLabel) { ' +
-    'if(this._miniLabel._text !== "") { ' +
-    'if(!this._miniLabel.parent) { ' +
-    'SceneManager._scene._spriteset.addChild(this._miniLabel); } } ' +
-    'else if(this._miniLabel._text === "") { ' +
-    'if(!!this._miniLabel.parent) { ' +
-    'this._miniLabel.parent.removeChild(this._miniLabel); } } return; } ' +
-    'if (!SceneManager._scene._spriteset) return; ' +
-    'this._miniLabel = new Window_EventMiniLabel(); ' +
-    'this._miniLabel.setCharacter(this._character); ' +
-    'if(this._miniLabel._text === "") {return;} ' +
-    'SceneManager._scene._spriteset.addChild(this._miniLabel);';
+  var KNOWN_BODY = '08d98040c0f49d840e9e84f1b7d2dd0fa42f5382e4a357af160d1aed7c10a335';
 
   function defaultPageHasMiniLabel(character) {
     if (!character || !character._eventId || typeof character.list !== 'function') {
@@ -83,6 +71,12 @@
     } catch (_) { return undefined; }
   }
 
+  function fingerprint(fn) {
+    if (!globalThis.__pmjsBuiltinRequire) return null;
+    return globalThis.__pmjsBuiltinRequire('crypto').createHash('sha256')
+      .update(fnBody(fn)).digest('hex');
+  }
+
   function install() {
     if (!PMJS.optimizations.isEnabled('plugins.yanfly.event-mini-label')) return false;
 
@@ -94,7 +88,7 @@
       return false;
     }
     if (spriteProto.__pmjsMiniLabelCache) return true;
-    if (fnBody(spriteProto.setupMiniLabel) !== KNOWN_BODY) {
+    if (fingerprint(spriteProto.setupMiniLabel) !== KNOWN_BODY) {
       PMJS.optimizations.refuse('plugins.yanfly.event-mini-label',
         'unrecognized Yanfly setupMiniLabel method composition');
       return false;

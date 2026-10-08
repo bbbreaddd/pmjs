@@ -4,16 +4,26 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const WRITER_SOURCES = ['js/pmjs-web/canvas.js', 'js/pmjs-pixi4/render-preflight.js',
+const WRITER_REQUIREMENTS = new Set(['js/pmjs-web/canvas.js', 'js/pmjs-pixi4/render-preflight.js',
   'js/pmjs-pixi4/scene-primitives.js', 'js/pmjs-mv/bitmap-mesh.js', 'js/pmjs-plugins/mpp/triangle-bitmap.js',
   'js/pmjs-pixi4/scene-filters.js', 'js/pmjs-pixi4/scene-packet.js',
   'js/pmjs-mv/render-prepare.js',
   'js/pmjs-pixi4/scene-prepare.js', 'js/pmjs-pixi4/scene-classify.js',
-  'js/pmjs-pixi4/scene-encoders.js', 'js/pmjs-pixi4/scene-effects.js'];
+  'js/pmjs-pixi4/scene-encoders.js', 'js/pmjs-pixi4/scene-effects.js']);
+
+const root = path.resolve(__dirname, '../..');
+const profile = JSON.parse(fs.readFileSync(path.join(root, 'profiles/mv.json'), 'utf8'));
+const adapters = JSON.parse(fs.readFileSync(path.join(root, 'profiles/plugin-adapters.json'), 'utf8'));
+const mpp = adapters.adapters.find(adapter => adapter.plugins.includes('MPP_EncounterEffect'));
+const writerSources = [...profile.modules.slice(0, -1), ...mpp.modules, profile.modules.at(-1)]
+  .filter(source => WRITER_REQUIREMENTS.has(source));
+for (const source of WRITER_REQUIREMENTS) {
+  if (!writerSources.includes(source)) throw new Error('Scene harness source missing from composition: ' + source);
+}
 
 function loadWriterSources() {
-  return WRITER_SOURCES.map(relative =>
-    fs.readFileSync(path.join(__dirname, '../..', relative), 'utf8')).join('\n');
+  return writerSources.map(relative =>
+    fs.readFileSync(path.join(root, relative), 'utf8')).join('\n');
 }
 
 function makeHarness() {
@@ -220,4 +230,4 @@ function makeHarness() {
   return { sandbox, submitted, compatHits, compatObserved, counts, makeTexture, sprite };
 }
 
-module.exports = { makeHarness };
+module.exports = { makeHarness, writerSources };

@@ -19,14 +19,13 @@ PMJS.plugins.registerOptimization('YEP_MessageCore', {
       var measure = windowProto && windowProto.textWidthExCheck;
       var measureSource = typeof measure === 'function'
         ? Function.prototype.toString.call(measure).replace(/\s+/g, '') : '';
-      var expectedBody = 'varsetting=this._wordWrap;this._wordWrap=false;' +
-        'this.saveCurrentWindowSettings();this._checkWordWrapMode=true;' +
-        'varvalue=this.drawTextEx(text,0,this.contents.height);' +
-        'this._checkWordWrapMode=false;this.restoreCurrentWindowSettings();' +
-        'this.clearCurrentWindowSettings();this._wordWrap=setting;returnvalue;';
+      var expectedBody = '5589e1927afd0452c8f047fcb0348523a9b28a2c3b2709fb48ba1b6e6bc271fb';
       var measureBody = measureSource.slice(measureSource.indexOf('{') + 1,
         measureSource.lastIndexOf('}'));
-      if (measureBody !== expectedBody ||
+      var digest = globalThis.__pmjsBuiltinRequire &&
+        globalThis.__pmjsBuiltinRequire('crypto').createHash('sha256')
+          .update(measureBody).digest('hex');
+      if (digest !== expectedBody ||
           typeof outline !== 'function' || typeof body !== 'function' ||
           bitmapProto._drawTextOutline !== outline ||
           bitmapProto._drawTextBody !== body) {

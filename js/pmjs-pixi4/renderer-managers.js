@@ -174,7 +174,6 @@ function NativeFilterManager(renderer) {
   this.renderer = renderer;
   this.filterData = { index: 0, stack: [] };
   this.pool = {};
-  this.managedFilters = [];
   this.shaderCache = {};
   this.gl = renderer.gl;
   this._onPrerender = this.onPrerender.bind(this);
@@ -329,7 +328,6 @@ NativeFilterManager.prototype.destroy = function() {
   }
   this.emptyPool();
   this.filterData.stack.length = 0;
-  this.managedFilters.length = 0;
   this.shaderCache = {};
   this.gl = null;
   this._onPrerender = null;
@@ -339,10 +337,8 @@ NativeFilterManager.prototype.onContextChange = function() {};
 
 function NativeRenderTextureManager(renderer) {
   this.renderer = renderer;
-  this.current = null;
 }
 NativeRenderTextureManager.prototype.bind = function(renderTexture) {
-  this.current = renderTexture || null;
   this.renderer._activeRenderTarget = renderTexture ?
     nativeRenderTargetFor(this.renderer, renderTexture) :
     this.renderer.rootRenderTarget;
@@ -351,7 +347,6 @@ NativeRenderTextureManager.prototype.clear = function(clearColor) {
   this.renderer.clear(clearColor);
 };
 NativeRenderTextureManager.prototype.destroy = function() {
-  this.current = null;
   this.renderer = null;
 };
 

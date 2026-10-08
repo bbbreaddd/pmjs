@@ -23,52 +23,22 @@ function createKnownOliviaSprite() {
     });
   }
   Sprite.prototype.synchronizeHorrorFiltersWithSource = function() {
-    if (!!this._horrorFiltersSource && !!this._horrorFiltersSource._horrorFilters) {
-      var source = this._horrorFiltersSource._horrorFilters;
-      if (!!source.noiseFilter) {
-        this._horrorFilters = this._horrorFilters || {};
-        this._horrorFilters.noiseFilter = source.noiseFilter;
-      }
-      if (!!source.glitchFilter) {
-        this._horrorFilters = this._horrorFilters || {};
-        this._horrorFilters.glitchFilter = source.glitchFilter;
-      }
-      if (!!source.tvFilter) {
-        this._horrorFilters = this._horrorFilters || {};
-        this._horrorFilters.tvFilter = source.tvFilter;
-      }
-    }
+    Object.assign(this.filters, this._horrorFiltersSource?._horrorFilters);
   };
   Sprite.prototype.updateHorrorEffects = function() {
-    this.updateHorrorNoise();
-    this.updateHorrorGlitch();
-    this.updateHorrorTV();
+    for (const name of ['Noise', 'Glitch', 'TV']) this['updateHorror' + name]();
   };
   Sprite.prototype.updateHorrorNoise = function() {
-    if (!!this._horrorFilters.noiseFilter) {
-      if (this._horrorFilters.noiseFilter.animated) {
-        this._horrorFilters.noiseFilter.seed = Math.random() * 3;
-      }
-    }
+    const effect = this._horrorFilters.noiseFilter;
+    if (effect?.animated) effect.seed = 0.5;
   };
   Sprite.prototype.updateHorrorGlitch = function() {
-    if (!!this._horrorFilters.glitchFilter) {
-      if (this._horrorFiltersGlitchSpecial &&
-          this._horrorFilters.glitchFilter.animated) {
-        this.updateHorrorGlitchEffect(this._horrorFilters.glitchFilter);
-      }
-      if (this._horrorFilters.glitchFilter.refreshRequest) {
-        this._horrorFilters.glitchFilter.refreshRequest = false;
-      }
-    }
+    const effect = this._horrorFilters.glitchFilter;
+    if (effect) effect.refreshRequest = false;
   };
   Sprite.prototype.updateHorrorTV = function() {
-    if (!!this._horrorFilters.tvFilter) {
-      if (this._horrorFilters.tvFilter.animated) {
-        this._horrorFilters.tvFilter.time +=
-          this._horrorFilters.tvFilter.aniSpeed;
-      }
-    }
+    const effect = this._horrorFilters.tvFilter;
+    if (effect?.animated) effect.time = effect.time + effect.aniSpeed;
   };
   return Sprite;
 }
