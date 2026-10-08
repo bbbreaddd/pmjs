@@ -1,5 +1,6 @@
 #include "renderer.hpp"
 #include "renderer_shaders.hpp"
+#include "renderer_identity_shader.hpp"
 #include "scene_packet.hpp"
 
 #include <GLES3/gl3.h>
@@ -485,8 +486,22 @@ std::uint32_t Renderer::createFilterProgram(const std::string& fragmentSource, c
   if (vertexSource.size() > 65536 || vertexSource.find('\0') != std::string::npos)
     throw std::invalid_argument("invalid filter vertex source");
   const GLuint program = linkProgram(vertexSource.empty() ? vertex : vertexSource.c_str(), source.c_str());
+  GLuint identityProgram = 0;
   try {
     FilterProgram result{program, vertexSource + "\n" + source, !vertexSource.empty(), {}};
+    const auto normalizeLines = [](const std::string& text) {
+      std::string normalized;
+      normalized.reserve(text.size());
+      for (std::size_t index = 0; index < text.size(); ++index) {
+        if (text[index] == '\r' && index + 1 < text.size() && text[index + 1] == '\n') continue;
+        normalized.push_back(text[index]);
+      }
+      return normalized;
+    };
+    result.identityColorMatrixContract =
+        normalizeLines(vertexSource) == shaders::colorMatrixVertex &&
+        normalizeLines(source) == std::string("precision highp sampler2D;\nprecision highp float;\n") +
+            shaders::colorMatrixFragment;
     GLint uniformCount = 0;
     GLint uniformNameSize = 0;
     glGetProgramiv(program, GL_ACTIVE_UNIFORMS, &uniformCount);
@@ -535,10 +550,29 @@ std::uint32_t Renderer::createFilterProgram(const std::string& fragmentSource, c
       result.uniforms.push_back({key, type, glGetUniformLocation(program, key.c_str()),
         components, count});
     }
+    if (result.identityColorMatrixContract) {
+      auto identitySource = source;
+      constexpr std::array<float, 20> identity{1, 0, 0, 0, 0, 0, 1, 0, 0, 0,
+                                             0, 0, 1, 0, 0, 0, 0, 0, 1, 0};
+      for (std::size_t index = 0; index < identity.size(); ++index) {
+        const auto coefficient = "m[" + std::to_string(index) + "]";
+        for (auto at = identitySource.find(coefficient); at != std::string::npos;
+             at = identitySource.find(coefficient, at + 3)) {
+          identitySource.replace(at, coefficient.size(), identity[index] == 1 ? "1.0" : "0.0");
+        }
+      }
+      // Keep un-premultiplication, mixing and re-premultiplication, as well as
+      // the original vertex program and sampling. Only exact matrix constants fold.
+      result.identityUniformLocations.reserve(result.uniforms.size());
+      result.identityProgram = identityProgram = linkProgram(vertexSource.c_str(), identitySource.c_str());
+      for (const auto& uniform : result.uniforms)
+        result.identityUniformLocations.push_back(glGetUniformLocation(result.identityProgram, uniform.name.c_str()));
+    }
     filterPrograms_.push_back(std::move(result));
     return filterPrograms_.size();
   } catch (...) {
     glDeleteProgram(program);
+    if (identityProgram) glDeleteProgram(identityProgram);
     throw;
   }
 }
@@ -575,7 +609,10 @@ Renderer::~Renderer() {
   for (auto& target : customPassTargets_) destroyTarget(target);
   for (auto& cached : filterTargetCache_) destroyTarget(cached.target);
   stats_.rendererTargetCacheBytes = 0;
-  for (const auto& filter : filterPrograms_) glDeleteProgram(filter.program);
+  for (const auto& filter : filterPrograms_) {
+    glDeleteProgram(filter.program);
+    if (filter.identityProgram) glDeleteProgram(filter.identityProgram);
+  }
   if (presentationVideo_) images_.release(presentationVideo_);
   if (presentationUpperCanvas_) images_.release(presentationUpperCanvas_);
   while (!tileLayers_.empty()) destroyTileLayer(tileLayers_.begin()->first);

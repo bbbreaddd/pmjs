@@ -9,6 +9,7 @@ PMJS's MIT license covers its own contributions, not third-party material.
 | Unicode default-ignorable data | Unicode 16.0.0 | Unicode-3.0; `third_party/unicode.LICENSE` |
 | Effekseer and stb portions | Revision pinned in `CMakeLists.txt` | MIT and embedded stb notice; `third_party/effekseer.LICENSE` |
 | Effekseer effect fixtures | Revision in `test/assets/effects/LICENSE` | MIT; adjacent `LICENSE` |
+| Color-matrix shader contract and pixel-test reference | PixiJS 4.5.4 | MIT; `third_party/pixi4.LICENSE` |
 | Pixi 5 sprite fixture | PixiJS 5.3.12 | MIT; `test/assets/pixi5/LICENSE` |
 | Zoom blur fixture | pixi-filters 3.1.0 | MIT; `test/assets/pixi-filters/LICENSE` |
 | Fallback and test font | Liberation Sans 2.1.5, renamed subset | SIL-OFL-1.1; `js/pmjs-web/fallback-font.LICENSE`, `test/assets/testfont.LICENSE` |

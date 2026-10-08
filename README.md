@@ -8,6 +8,9 @@ PMJS replaces the browser side with the small set of APIs these games need. Ther
 
 PMJS is experimental and still has a lot of work to be done before I consider it usable. Currently, I'm focusing on getting it to work properly with OMORI on the RG35XX Plus.
 
+PMJS uses the stock RPG Maker MV 1.6.2 stack as its compatibility reference: PixiJS 4.5.4 and NW.js 0.29.0, which includes Chromium 65.0.3325.146 and Node.js 9.7.1.
+
+The MZ reference is stock RPG Maker MZ 1.10.0, PixiJS 5.3.12 and NW.js 0.48.4, which includes Chromium 85.0.4183.121 and Node.js 14.12.0.
 
 ## Requirements
 

@@ -345,6 +345,27 @@
       "revision": "5.1.281; ArraySort sorting helpers with PMJS dense-array wrappers",
       "license": "BSD-3-Clause",
       "notice": "third_party/v8.LICENSE"
+    },
+    "src/renderer_identity_shader.hpp": {
+      "origin": "permissive",
+      "source": "https://github.com/pixijs/pixi.js/tree/v4.5.4",
+      "revision": "v4.5.4; color-matrix vertex and fragment shader contract",
+      "license": "MIT",
+      "notice": "third_party/pixi4.LICENSE"
+    },
+    "test/helpers/color-matrix-shaders.cjs": {
+      "origin": "permissive",
+      "source": "https://github.com/pixijs/pixi.js/tree/v4.5.4",
+      "revision": "v4.5.4; color-matrix vertex and fragment shader contract",
+      "license": "MIT",
+      "notice": "third_party/pixi4.LICENSE"
+    },
+    "third_party/pixi4.LICENSE": {
+      "origin": "permissive",
+      "source": "https://github.com/pixijs/pixi.js/tree/v4.5.4",
+      "revision": "v4.5.4",
+      "license": "MIT",
+      "notice": "third_party/pixi4.LICENSE"
     }
   },
   "defaults": {

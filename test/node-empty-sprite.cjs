@@ -32,6 +32,13 @@ function sprite(image, flags = 0, blend = 0, parent = noParent) {
   return entry;
 }
 
+function tiling(image, flags = 0, blend = 0, parent = noParent) {
+  const entry = sprite(image, flags, blend, parent);
+  entry.metadata[0] = 2;
+  entry.values.set([size, size], 13);
+  return entry;
+}
+
 function render(entries, target) {
   const metadata = new Uint32Array(entries.length * schema.metadataStride);
   const values = new Float32Array(entries.length * schema.valueStride);
@@ -50,7 +57,9 @@ function render(entries, target) {
     native.renderScene();
     pixels = Buffer.from(native.canvas.captureSceneRawPremultiplied());
   }
-  return { pixels, draws: native.render.stats().drawCalls - before.drawCalls };
+  const after = native.render.stats();
+  return { pixels, draws: after.drawCalls - before.drawCalls,
+    tilingDraws: after.tilingSpriteDrawCalls - before.tilingSpriteDrawCalls };
 }
 
 function pixel(frame, x, y) {
@@ -119,6 +128,8 @@ native.beginFrame();
 native.render.quad(0, 0, size, size, 0, 0, 0, 0);
 const gpuImage = native.render.renderToImage(size, size, { alphaMode: 'premultiplied' });
 assert.equal(render([sprite(gpuImage)]).draws, 1, 'GPU target content is not CPU-proven empty');
+assert.equal(render([tiling(gpuImage)]).tilingDraws, 1,
+  'GPU target tiling content is not CPU-proven empty');
 native.images.release(gpuImage.handle);
 
 for (const blend of [1, 2, 3]) {
@@ -151,6 +162,56 @@ matrix.values[31] = 1;
 assert.equal(render([matrix, sprite(empty), end]).draws, 2,
   'filters that create alpha from empty content must render');
 
+const emptyTile = canvas();
+for (const flags of [0, 1 << 3, 1 << 15, (1 << 3) | (1 << 15)]) {
+  const entry = tiling(emptyTile, flags);
+  entry.values.set([-3.25, 18.5, size * 3, size * 2], 9);
+  entry.values.set([0.9, 0.1, -0.2, 1.1, 2.5, -1.25]);
+  const result = render([entry]);
+  assert.deepEqual(result.pixels, blank.pixels, 'empty repeated tiles preserve pixels with varied sampling and transforms');
+  assert.equal(result.tilingDraws, 0);
+}
+const tiny = native.canvas.create(1, 1); canvases.push(tiny);
+assert.deepEqual(render([tiling(tiny)]).pixels, blank.pixels);
+assert.equal(render([tiling(tiny)]).tilingDraws, 0, 'tiny empty backing must skip its full destination draw');
+assert.equal(render([tiling(emptyTile), tiling(emptyTile)]).tilingDraws, 0);
+native.canvas.fillRect(emptyTile.handle, 0, 0, size, size, 0xff0000ff);
+assert.deepEqual(render([tiling(emptyTile)]).pixels, filled.pixels, 'deferred writes restore a tiling draw');
+assert.equal(render([tiling(emptyTile)]).tilingDraws, 1);
+native.canvas.clearRect(emptyTile.handle, 0, 0, 1, 1);
+assert.equal(render([tiling(emptyTile)]).tilingDraws, 1, 'partial clears retain nonzero tiling content');
+native.canvas.clear(emptyTile.handle);
+assert.equal(render([tiling(emptyTile)]).tilingDraws, 0, 'full clear restores the zero proof');
+native.canvas.writePixels(emptyTile.handle, 8, 8, 1, 1, new Uint8Array([0, 255, 0, 255]));
+const tileWritten = render([tiling(emptyTile)]);
+assert.equal(tileWritten.tilingDraws, 1);
+assert.deepEqual(pixel(tileWritten, 8, 8), [0, 255, 0, 255]);
+native.canvas.clearRect(emptyTile.handle, 0, 0, size, size);
+assert.equal(render([tiling(emptyTile)]).tilingDraws, 0);
+assert.equal(render([tiling(hiddenRgb)]).tilingDraws, 1,
+  'zero alpha with nonzero raw RGB must not be classified as empty tiling');
+assert.deepEqual(render([tiling(emptyTile), sprite(child, 0, 0, 0)]).pixels,
+  render([sprite(child)]).pixels, 'empty tiling parents preserve children');
+assert.equal(render([tiling(emptyTile), sprite(child, 0, 0, 0)]).draws, 1);
+const offscreenTile = render([tiling(emptyTile), sprite(child)], target);
+assert.deepEqual(offscreenTile.pixels, render([sprite(child)], target).pixels);
+assert.equal(offscreenTile.tilingDraws, 0);
+assert.equal(render([tiling(capturedEmpty)]).tilingDraws, 0,
+  'captured zero sources stay zero after original source writes');
+assert.deepEqual(render([tiling(capturedRed)]).pixels, filled.pixels,
+  'captured nonzero sources survive original source clearing');
+for (const blend of [1, 2, 3]) assert.equal(render([tiling(emptyTile, 0, blend)]).tilingDraws, 1,
+  'non-normal blend retains the tiling draw');
+const tileBlur = record(6);
+tileBlur.values.set([1, 1, 5], 7);
+assert.equal(render([tileBlur, tiling(emptyTile), end]).tilingDraws, 1,
+  'filter groups retain empty tiling content');
+assert.equal(render([matrix, tiling(emptyTile), end]).draws, 2,
+  'filters that create alpha from empty tiling content must render');
+matrix.values[30] = 1; matrix.values[31] = 0;
+assert.equal(render([matrix, tiling(emptyTile), end]).tilingDraws, 1,
+  'inline matrix effects retain the tiling draw');
+
 for (const image of canvases) native.canvas.release(image.handle);
 native.runtime.quit();
-console.log('Empty sprite pixels, later writes, captured versions, children and effect fallbacks agree');
+console.log('Empty sprite and tiling pixels, later writes, captured versions, children and effect fallbacks agree');

@@ -7,6 +7,35 @@
 
 namespace pmjs {
 
+bool Renderer::isIdentityColorMatrixPlan(const CustomFilterPlan& plan) const {
+  if (plan.resolutions.size() != 2 || plan.resolutions[0] != 1 ||
+      plan.resolutions[1] != 1 || plan.passes.size() != 1) return false;
+  const auto& pass = plan.passes.front();
+  if (pass.input != 0 || pass.output != 1 || pass.clear || pass.blend != BlendMode::normal ||
+      !pass.samplers.empty() || pass.transform != std::array<float, 6>{1, 0, 0, 1, 0, 0}) return false;
+  const auto& program = filterProgram(pass.program);
+  if (!program.identityColorMatrixContract) return false;
+  constexpr std::array<double, 20> identity{1, 0, 0, 0, 0, 0, 1, 0, 0, 0,
+                                          0, 0, 1, 0, 0, 0, 0, 0, 1, 0};
+  std::size_t offset = 0;
+  bool matrix = false, alpha = false;
+  for (const auto& uniform : program.uniforms) {
+    const std::size_t count = uniform.components * uniform.count;
+    if (offset + count > pass.uniforms.size() || uniform.type != GL_FLOAT) return false;
+    if ((uniform.name == "m" || uniform.name == "m[0]") && count == identity.size() && !matrix) {
+      matrix = true;
+      for (std::size_t index = 0; index < count; ++index)
+        if (!std::isfinite(pass.uniforms[offset + index]) ||
+            pass.uniforms[offset + index] != identity[index]) return false;
+    } else if (uniform.name == "uAlpha" && count == 1 && !alpha) {
+      alpha = true;
+      if (pass.uniforms[offset] != 1) return false;
+    } else return false;
+    offset += count;
+  }
+  return matrix && alpha && offset == pass.uniforms.size();
+}
+
 void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, const RenderTarget& source,
                                     const RenderTarget& output, const RenderCommand& command,
                                     float sourceResolution, float outputResolution, bool outputYDown,
@@ -76,8 +105,10 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, const RenderTa
   glBindVertexArray(customFilterVertexArray_);
   glBindBuffer(GL_ARRAY_BUFFER, customFilterVertexBuffer_);
   glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad.data(), GL_STREAM_DRAW);
+  const bool identity = isIdentityColorMatrixPlan(plan);
   for (const auto& pass : plan.passes) {
     const auto& custom = filterProgram(pass.program);
+    const auto shader = identity ? custom.identityProgram : custom.program;
     const bool final = pass.output == 1;
     auto& target = customPassTargets_[pass.output];
     const float targetWidth = final ? outputFrame[2] : frame[2];
@@ -98,7 +129,7 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, const RenderTa
         std::lround((command.clip[2] - command.clip[0]) * outputResolution),
         std::lround((command.clip[3] - command.clip[1]) * outputResolution));
     }
-    glUseProgram(custom.program);
+    glUseProgram(shader);
     const bool yDown = !final || outputYDown;
     const float sx = 2.0F / targetWidth, sy = (yDown ? 2.0F : -2.0F) / targetHeight;
     const auto& local = pass.transform;
@@ -112,10 +143,10 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, const RenderTa
       sx * transform[2], sy * transform[3], 0,
       -1.0F - (final ? outputFrame[0] * sx : frame[0] * sx) + sx * transform[4],
       (final ? (yDown ? -1.0F : 1.0F) - outputFrame[1] * sy : -1.0F - frame[1] * sy) + sy * transform[5], 1};
-    glUniformMatrix3fv(glGetUniformLocation(custom.program, "projectionMatrix"), 1, GL_FALSE, projection.data());
-    glUniform4f(glGetUniformLocation(custom.program, "filterArea"),
+    glUniformMatrix3fv(glGetUniformLocation(shader, "projectionMatrix"), 1, GL_FALSE, projection.data());
+    glUniform4f(glGetUniformLocation(shader, "filterArea"),
       input.width / resolution, input.height / resolution, frame[0], frame[1]);
-    glUniform4f(glGetUniformLocation(custom.program, "filterClamp"), 0, 0,
+    glUniform4f(glGetUniformLocation(shader, "filterClamp"), 0, 0,
       (frame[2] - 1) * resolution / input.width, (frame[3] - 1) * resolution / input.height);
     glActiveTexture(GL_TEXTURE0);
     const auto inputTexture = borrowInput ? input.texture : customPassTargets_[pass.input].texture;
@@ -123,10 +154,13 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, const RenderTa
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     textureNearestState_[inputTexture] = false;
-    glUniform1i(glGetUniformLocation(custom.program, "uSampler"), 0);
+    glUniform1i(glGetUniformLocation(shader, "uSampler"), 0);
     std::size_t offset = 0, samplerOffset = 0;
     int unit = 1;
+    std::size_t uniformIndex = 0;
     for (const auto& uniform : custom.uniforms) {
+      const auto location = identity ? custom.identityUniformLocations[uniformIndex] : uniform.location;
+      ++uniformIndex;
       if (uniform.type == GL_SAMPLER_2D) {
         std::vector<GLint> units;
         for (int index = 0; index < uniform.count; ++index) {
@@ -150,7 +184,7 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, const RenderTa
           textureNearestState_.erase(texture);
           units.push_back(unit++);
         }
-        glUniform1iv(uniform.location, uniform.count, units.data());
+        glUniform1iv(location, uniform.count, units.data());
         continue;
       }
       const auto count = uniform.components * uniform.count;
@@ -170,17 +204,17 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, const RenderTa
         }
       }
       switch (uniform.type) {
-        case GL_FLOAT: glUniform1fv(uniform.location, uniform.count, data); break;
-        case GL_FLOAT_VEC2: glUniform2fv(uniform.location, uniform.count, data); break;
-        case GL_FLOAT_VEC3: glUniform3fv(uniform.location, uniform.count, data); break;
-        case GL_FLOAT_VEC4: glUniform4fv(uniform.location, uniform.count, data); break;
-        case GL_FLOAT_MAT2: glUniformMatrix2fv(uniform.location, uniform.count, GL_FALSE, data); break;
-        case GL_FLOAT_MAT3: glUniformMatrix3fv(uniform.location, uniform.count, GL_FALSE, data); break;
-        case GL_FLOAT_MAT4: glUniformMatrix4fv(uniform.location, uniform.count, GL_FALSE, data); break;
-        case GL_INT: case GL_BOOL: glUniform1iv(uniform.location, uniform.count, integers.data()); break;
-        case GL_INT_VEC2: case GL_BOOL_VEC2: glUniform2iv(uniform.location, uniform.count, integers.data()); break;
-        case GL_INT_VEC3: case GL_BOOL_VEC3: glUniform3iv(uniform.location, uniform.count, integers.data()); break;
-        case GL_INT_VEC4: case GL_BOOL_VEC4: glUniform4iv(uniform.location, uniform.count, integers.data()); break;
+        case GL_FLOAT: glUniform1fv(location, uniform.count, data); break;
+        case GL_FLOAT_VEC2: glUniform2fv(location, uniform.count, data); break;
+        case GL_FLOAT_VEC3: glUniform3fv(location, uniform.count, data); break;
+        case GL_FLOAT_VEC4: glUniform4fv(location, uniform.count, data); break;
+        case GL_FLOAT_MAT2: glUniformMatrix2fv(location, uniform.count, GL_FALSE, data); break;
+        case GL_FLOAT_MAT3: glUniformMatrix3fv(location, uniform.count, GL_FALSE, data); break;
+        case GL_FLOAT_MAT4: glUniformMatrix4fv(location, uniform.count, GL_FALSE, data); break;
+        case GL_INT: case GL_BOOL: glUniform1iv(location, uniform.count, integers.data()); break;
+        case GL_INT_VEC2: case GL_BOOL_VEC2: glUniform2iv(location, uniform.count, integers.data()); break;
+        case GL_INT_VEC3: case GL_BOOL_VEC3: glUniform3iv(location, uniform.count, integers.data()); break;
+        case GL_INT_VEC4: case GL_BOOL_VEC4: glUniform4iv(location, uniform.count, integers.data()); break;
       }
       offset += count;
     }
@@ -189,7 +223,11 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, const RenderTa
     glEnable(GL_BLEND);
     applyBlendMode(pass.blend);
     glDrawArrays(GL_TRIANGLES, 0, 6);
-    if (diagnostics_) { ++stats_.drawCalls; ++stats_.filterDrawCalls; }
+    if (diagnostics_) {
+      if (identity) ++stats_.identityFilterShaderDrawCalls;
+      ++stats_.drawCalls;
+      ++stats_.filterDrawCalls;
+    }
   }
   glBindFramebuffer(GL_FRAMEBUFFER, output.framebuffer);
   glViewport(0, 0, static_cast<int>(outputFrame[2] * outputResolution), static_cast<int>(outputFrame[3] * outputResolution));

@@ -1022,7 +1022,8 @@ function nativeFilterMatches(filter, ctor, name) {
 function nativeColorMatrixIsIdentity(values) {
   if (!values || values.length !== nativeSceneColorIdentity.length) return false;
   for (var index = 0; index < nativeSceneColorIdentity.length; index++) {
-    if (Math.abs(values[index] - nativeSceneColorIdentity[index]) > 0.000001) {
+    if (!Number.isFinite(values[index]) ||
+        values[index] !== nativeSceneColorIdentity[index]) {
       return false;
     }
   }

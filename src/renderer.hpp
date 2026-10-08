@@ -176,6 +176,7 @@ struct RendererStats {
   std::uint64_t nearestTileShaderDrawCalls = 0;
   std::uint64_t nearestTileShaderFallbackDrawCalls = 0;
   std::uint64_t filterDrawCalls = 0;
+  std::uint64_t identityFilterShaderDrawCalls = 0;
   std::array<std::uint64_t, filterKindCount> filterApplications{};
   std::uint64_t filterTargetAcquires = 0;
   std::uint64_t filterTargetReuses = 0;
@@ -258,6 +259,9 @@ class Renderer {
     std::string source;
     bool pixiVertex = false;
     std::vector<FilterUniform> uniforms;
+    bool identityColorMatrixContract = false;
+    std::uint32_t identityProgram = 0;
+    std::vector<int> identityUniformLocations{};
   };
   std::uint32_t createFilterProgram(const std::string& fragmentSource,
                                     const std::string& vertexSource = "");
@@ -494,6 +498,7 @@ class Renderer {
   std::shared_ptr<int> filterPlanLifetime_ = std::make_shared<int>(0);
   std::uint32_t nextFilterPlan_ = 0x80000000U;
   static void applyBlendMode(BlendMode mode);
+  bool isIdentityColorMatrixPlan(const CustomFilterPlan& plan) const;
   void drawCustomFilterPlan(const CustomFilterPlan& plan, const RenderTarget& source,
                             const RenderTarget& output, const RenderCommand& command,
                             float sourceResolution, float outputResolution, bool outputYDown,

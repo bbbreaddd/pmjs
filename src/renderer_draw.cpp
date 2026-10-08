@@ -682,7 +682,8 @@ void Renderer::renderScene() {
     // Raw premultiplied pixels can contain RGB even with zero alpha.
     // Preserve scene commands and filter bounds; omit only a proven no-op draw.
     if (info && info->knownAllZero &&
-        command.primitive == RenderCommand::Primitive::sprite &&
+        (command.primitive == RenderCommand::Primitive::sprite ||
+         command.primitive == RenderCommand::Primitive::tilingSprite) &&
         command.blendMode == BlendMode::normal && preparingFilterDepth == 0 &&
         inlineFilterMatrix[commandIndex] == nullptr && command.blur <= 0 &&
         command.maskImage == 0 && !command.appliesSpriteColor &&
@@ -1663,11 +1664,17 @@ void Renderer::renderScene() {
       const auto integral = [](float value, float limit) {
         return std::isfinite(value) && std::abs(value) <= limit && value == std::floor(value);
       };
+      // Cropped unit-resolution targets retain texel centers on an integer grid.
+      const bool nearestTarget = filterDepth == 0 ?
+        rasterFrame == std::array<float, 4>{0, 0, static_cast<float>(width_), static_cast<float>(height_)} :
+        filterDepth == 1 && rasterFrame[2] > 0 && rasterFrame[3] > 0 &&
+        std::all_of(rasterFrame.begin(), rasterFrame.end(),
+          [&](float value) { return integral(value, 8192); });
       const bool nearestTile = nearestTileShader_ &&
         (fourTextures ? nearestFourTileProgram_ : nearestTileProgram_) &&
         layer->second.nearestTileGeometry && layer->second.nearestTileMapping && operation.nearest && !usesOverlay && !command.maskImage &&
-        command.primitive == RenderCommand::Primitive::tileLayer && !offscreenRender_ && filterDepth == 0 &&
-        rasterResolution == 1 && rasterFrame == std::array<float, 4>{0, 0, static_cast<float>(width_), static_cast<float>(height_)} &&
+        command.primitive == RenderCommand::Primitive::tileLayer && !offscreenRender_ &&
+        rasterResolution == 1 && nearestTarget &&
         sceneProjection_ == std::array<float, 6>{1, 0, 0, 1, 0, 0} &&
         mapping == std::array<float, 4>{1, 1, 0, 0} &&
         transform[0] == 1 && transform[1] == 0 && transform[2] == 0 && transform[3] == 1 &&

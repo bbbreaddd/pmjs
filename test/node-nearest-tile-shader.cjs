@@ -27,6 +27,9 @@ if (!process.argv.includes('--worker')) {
           fs.readFileSync(path.join(results[1].directory, results[1].frames[index].file))),
         `pixels: textures=${textures}, case=${results[0].frames[index].name}`);
       assert.equal(results[0].draws, results[1].draws, 'shader selection preserves physical batching');
+      assert.equal(results[0].filters, results[1].filters, 'shader selection preserves filter passes');
+      assert.equal(results[0].filterTargets, results[1].filterTargets, 'shader selection preserves filter targets');
+      assert.equal(results[0].filterClears, results[1].filterClears, 'shader selection preserves filter clears');
       assert.ok(results[1].active > 0 && results[1].fallback > 0);
       console.log(JSON.stringify({textures, comparisons: results[0].frames.length,
         active: results[1].active, fallback: results[1].fallback, draws: results[1].draws}));
@@ -65,14 +68,19 @@ async function main() {
       options.mask ? options.mask.handle : 0]);
     let packetMetadata = metadata, packetValues = values, count = 1;
     if (options.filter) {
-      count = 3;
+      const nested = !!options.outerFilter;
+      const begin = nested ? 1 : 0;
+      count = nested ? 5 : 3;
       packetMetadata = new Uint32Array(schema.metadataStride * count);
       packetValues = new Float32Array(schema.valueStride * count);
-      packetMetadata.set([6, 0xffffffff, options.filter, 0xffffff, 31, 0, 0]);
-      metadata[1] = 0; packetMetadata.set(metadata, schema.metadataStride);
-      packetMetadata.set([7, 0, 0, 0xffffff, 0, 0, 0], schema.metadataStride * 2);
-      packetValues.set([1, 0, 0, 1, 0, 0, 1]); packetValues.set(values, schema.valueStride);
-      packetValues.set([1, 0, 0, 1, 0, 0, 1], schema.valueStride * 2);
+      for (let index = 0; index < count; ++index)
+        packetValues.set([1, 0, 0, 1, 0, 0, 1], schema.valueStride * index);
+      if (nested) packetMetadata.set([6, 0xffffffff, options.outerFilter, 0xffffff, 31, 0, 0]);
+      packetMetadata.set([6, nested ? 0 : 0xffffffff, options.filter, 0xffffff, 31, 0, 0], schema.metadataStride * begin);
+      metadata[1] = begin; packetMetadata.set(metadata, schema.metadataStride * (begin + 1));
+      packetMetadata.set([7, begin, 0, 0xffffff, 0, 0, 0], schema.metadataStride * (begin + 2));
+      if (nested) packetMetadata.set([7, 0, 0, 0xffffff, 0, 0, 0], schema.metadataStride * 4);
+      packetValues.set(values, schema.valueStride * (begin + 1));
     }
     native.beginFrame(); native.scene.submit(schema.version, packetMetadata, packetValues, count);
     const before = native.render.stats();
@@ -170,11 +178,40 @@ async function main() {
       const plan = native.render.createFilterPlan({frame: [0, 0, width, height], resolutions: [resolution, resolution],
         passes: [{program: program.handle, input: 0, output: 1, clear: false, blend: 0, uniforms: [], samplers: []}]});
       plans.push(plan);
-      frame(`prepared filter resolution ${resolution}`, preparedRetained, {filter: plan.handle}, false);
+      frame(`prepared filter resolution ${resolution}`, preparedRetained, {filter: plan.handle}, resolution === 1);
     }
+    function filter(frame, resolution = 1, effect = program) {
+      const plan = native.render.createFilterPlan({frame, resolutions: [resolution, resolution],
+        passes: [{program: effect.handle, input: 0, output: 1, clear: false, blend: 0, uniforms: [], samplers: []}]});
+      plans.push(plan); return plan.handle;
+    }
+    const paddedFilter = filter([-4, -4, width + 8, height + 8]);
+    for (const animation of [0, 1, 24]) for (const blend of [0, 1, 2, 3])
+      frame(`padded filter animation=${animation} blend=${blend}`, retained,
+        {filter: paddedFilter, animation: [animation, 0], blend});
+    for (const crop of [[4, 6, width - 8, height - 12], [7, 9, 101, 79]])
+      frame(`integer filter crop ${crop}`, retained, {filter: filter(crop)});
+    frame('filtered fractional clip', retained, {filter: paddedFilter, clip: true});
+    fallbacks.forEach((options, index) => frame(`filtered unsupported ${index}`, retained,
+      {...options, filter: paddedFilter}, false));
+    frame('fractional filter origin', retained, {filter: filter([-3.5, -4, width + 8, height + 8])}, false);
+    frame('fractional filter extent', retained, {filter: filter([-4, -4, width + 8.5, height + 8])}, false);
+    frame('nested filter fallback', retained, {filter: paddedFilter, outerFilter: paddedFilter}, false);
+    const effectProgram = native.render.createFilterProgram(
+      'varying vec2 vTextureCoord; uniform sampler2D uSampler; void main(){vec4 c=texture2D(uSampler,vTextureCoord);gl_FragColor=vec4(c.bgr*0.7,c.a);}',
+      'attribute vec2 aVertexPosition; attribute vec2 aTextureCoord; uniform mat3 projectionMatrix; varying vec2 vTextureCoord; void main(){gl_Position=vec4((projectionMatrix*vec3(aVertexPosition,1.0)).xy,0,1);vTextureCoord=aTextureCoord;}');
+    frame('non-neutral filter composition', preparedRetained,
+      {filter: filter([-4, -4, width + 8, height + 8], 1, effectProgram)});
+    frame('filtered prepared animation', animated, {filter: paddedFilter, animation: [32, 0]});
+    frame('filtered animated sheet edge', animatedEdge, {filter: paddedFilter, animation: [16, 0]});
+    const filteredWritten = frame('filtered canvas before write', mutable, {filter: paddedFilter});
+    native.canvas.writePremultipliedPixels(sources[0].handle, 0, 0, 32, 32, new Uint8Array(32 * 32 * 4).fill(255));
+    assert.notDeepEqual(frame('filtered canvas after write', mutable, {filter: paddedFilter}), filteredWritten);
     const stats = native.render.stats();
     console.log(JSON.stringify({frames, draws: stats.tileDrawCalls,
-      active: stats.nearestTileShaderDrawCalls, fallback: stats.nearestTileShaderFallbackDrawCalls}));
+      active: stats.nearestTileShaderDrawCalls, fallback: stats.nearestTileShaderFallbackDrawCalls,
+      filters: stats.filterDrawCalls, filterTargets: stats.filterTargetAcquires,
+      filterClears: stats.filterTargetClears}));
   } finally {
     layers.forEach(handle => native.render.releaseTileLayer(handle));
     images.forEach(image => native.images.release(image.handle));
