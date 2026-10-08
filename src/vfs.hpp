@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <atomic>
 #include <cstdint>
 #include <optional>
 #include <memory>
@@ -34,8 +35,11 @@ class Vfs {
   explicit Vfs(std::filesystem::path root);
 
   static std::string fileIdentity(const std::filesystem::path& path);
-  void installDerivedFiles(const std::vector<DerivedFile>& files);
+  void installDerivedFiles(const std::vector<DerivedFile>& files, bool catalog = false);
+  std::string derivedIdentity(const std::string& path) const;
   std::optional<std::filesystem::path> resolveDerived(const std::string& path) const;
+
+  bool consumeDerivedInvalidation() { return derivedInvalidated_->exchange(false, std::memory_order_relaxed); }
 
   void mountWritableOverlay(const std::filesystem::path& root);
   void updateWritableOverlay(const std::vector<std::string>& paths,
@@ -60,6 +64,7 @@ class Vfs {
     std::unordered_set<std::string> deleted;
     bool hides(const std::string& key) const;
   };
+  std::shared_ptr<std::atomic<bool>> derivedInvalidated_ = std::make_shared<std::atomic<bool>>(false);
   std::shared_ptr<const Overlay> overlay_;
   std::shared_ptr<const std::unordered_map<std::string, DerivedFile>> derived_;
   std::filesystem::path root_;

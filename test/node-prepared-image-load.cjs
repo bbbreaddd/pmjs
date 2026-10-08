@@ -33,8 +33,10 @@ function fixture(name, pageBytes) {
 }
 
 function install(fixture) {
-  assert.equal(native.assets.installPrepared([{ ...fixture,
-    sourceIdentity: native.assets.sourceIdentity(fixture.source) }]), 1);
+  const entries = [{ ...fixture, sourceIdentity: native.assets.sourceIdentity(fixture.source) }];
+  assert.equal(native.assets.installPrepared([Object.freeze({ ...entries[0] })]), 1);
+  assert.equal(native.assets.installPrepared(entries, true), 1);
+  assert.equal(native.assets.installPreparedCatalog(entries), 1);
 }
 
 // The sole worker blocks in FIFO open until the main thread releases it.
@@ -81,6 +83,7 @@ async function main() {
   const lazy = fixture('lazy');
   const retainedFixtures = [fixture('cpu'), fixture('coalesced-cpu')];
   const cached = fixture('cached-cpu');
+  const staleFixtures = [fixture('stale-page'), fixture('missing-page'), fixture('stale-source'), fixture('missing-source')];
   const fallbackFixtures = [fixture('corrupt', Buffer.from('invalid PNG data')),
     fixture('dimensions', png(2, 2, Buffer.alloc(16, 255)))];
   const oversized = { source: 'oversized.png', directory: root,
@@ -185,6 +188,32 @@ async function main() {
   assert.equal(entry(large).cpuBytes, 4096 * 4097 * 4, 'explicit large CPU retention lost its pixels');
   assert.equal(entry(large).gpuBytes, 0);
   native.images.release(large.handle);
+  for (const stale of staleFixtures) {
+    const entries = [{ ...stale, sourceIdentity: native.assets.sourceIdentity(stale.source) }];
+    assert.equal(native.assets.installPrepared(entries, true), 1);
+    if (stale.source === 'missing-source.png') {
+      fs.unlinkSync(path.join(root, stale.source));
+      assert.equal(native.assets.installPreparedCatalog(entries), 1);
+      await assert.rejects(async () => native.images.loadAsync(stale.source), /cannot open image/);
+      continue;
+    }
+    const page = path.join(stale.directory, 'page-0.png');
+    let expected = stale.pixels;
+    if (stale.source === 'missing-page.png') fs.unlinkSync(page);
+    else if (stale.source === 'stale-page.png') fs.writeFileSync(page, 'invalid page');
+    else {
+      expected = Buffer.alloc(4*4*4, 255);
+      fs.writeFileSync(path.join(root, stale.source), png(4, 4, expected));
+    }
+    native.assets.consumePreparationInvalidations();
+    assert.equal(native.assets.installPreparedCatalog(entries), 1, 'catalog installation must not inspect stale files');
+    const image = await native.images.loadAsync(stale.source);
+    assertPixels(image, expected);
+    assert.ok(entry(image).gpuBytes > 0, 'stale catalog should use original decoding');
+    assert.equal(native.assets.consumePreparationInvalidations() & 1, 1, 'observed stale images request catalog regeneration');
+    assert.equal(native.assets.consumePreparationInvalidations(), 0, 'signals are consumed once');
+    native.images.release(image.handle);
+  }
   console.log('[pmjs-prepared-image-load] worker loading, snapshots, coalescing, CPU retention and fallback passed');
 }
 

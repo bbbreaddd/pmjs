@@ -6,13 +6,15 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const vm = require('node:vm');
 const { performance } = require('node:perf_hooks');
-const { acquireLock, createLease, retainLeases } = require('./asset-preparation.cjs');
+const { acquireLock, createLease, retainLeases } = require('./preparation-lifetime.cjs');
 const { preparationFiles } = require('./preparation-files.cjs');
+const { catalogInvalidator, readCatalog, publishCatalog, checksum } = require('./preparation-catalog.cjs');
 const { COMPILER_VERSION, mapContract, geometryEstimate, engineTilemap, compileRpgMap, compileTiledMap } = require('./map-demand.cjs');
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const identity = object => hash(JSON.stringify(object));
 const digest = async file => hash(await fsp.readFile(file));
 const HASH = /^[a-f0-9]{64}$/;
+const installedLeases = new WeakMap();
 async function readJson(file) { return JSON.parse(await fsp.readFile(file, 'utf8')); }
 async function publishJson(file, value) {
   const handle = await fsp.open(file, 'wx');
@@ -116,6 +118,8 @@ async function prepareMaps({ gameRoot, cacheRoot, native, width = 816, height = 
   const started = performance.now(), root = path.join(cacheRoot, 'maps');
   const result = { enabled: true, selected: 0, refused: 0, generated: 0, hits: 0, negativeHits: 0,
     installed: 0, compilationHits: 0, verifiedRegions: 0, identityRefreshes: 0, snapshotBytes: 0, additionalSnapshotBytes: 0, pageBytes: 0, durationMs: 0, cancelled: false, maps: [], index: {} };
+  const catalogFile = path.join(root, 'catalog-'+checksum(path.resolve(gameRoot))+'.json');
+  result.invalidateCatalog = catalogInvalidator(catalogFile, logger);
   let release;
   let files;
   const digest = file => files.hash(file);
@@ -150,6 +154,39 @@ async function prepareMaps({ gameRoot, cacheRoot, native, width = 816, height = 
   try {
     if (!native.assets || typeof native.assets.processTiles !== 'function' || typeof native.assets.installTileSets !== 'function')
       throw new Error('tile preparation unavailable in this addon');
+
+    const binding = { gameRoot: path.resolve(gameRoot), cacheRoot: path.resolve(cacheRoot), width, height,
+      engine: native.fs?.exists?.('js/rmmz_core.js') ? 'mz' : 'mv',
+      compiler: COMPILER_VERSION, processor: native.assets.tilePreparationVersion };
+    const catalogCapable = typeof native.assets.installTileSetCatalog === 'function';
+    if (!verifyHashes && !verifyRegions && catalogCapable) {
+      await fsp.mkdir(root, { recursive: true });
+      release = await acquireLock(root, shouldCancel, () => report('wait', '', 0, 0));
+      if (!release) { result.cancelled = true; return result; }
+      const catalog = await readCatalog(catalogFile, binding, cacheRoot);
+      if (catalog && !shouldCancel()) {
+        let lease;
+        try {
+          lease = await createLease(root, catalog.keys);
+          const installed = native.assets.installTileSetCatalog(catalog.entries);
+          if (installed !== catalog.entries.length || shouldCancel()) throw new Error('incomplete tile catalog installation');
+          const previous = installedLeases.get(native.assets);
+          installedLeases.set(native.assets, lease);
+          if (previous) previous();
+          native.assets.preparedMapIndex = catalog.index;
+          Object.assign(result, catalog.summary, { generated: 0, compilationHits: 0, identityRefreshes: 0, additionalSnapshotBytes: 0, index: catalog.index, maps: catalog.maps, catalogHit: true, releaseCacheLease: lease });
+          return result;
+        } catch (_) {
+          native.assets.installTileSets([]); native.assets.preparedMapIndex = {};
+          const previous = installedLeases.get(native.assets);
+          installedLeases.delete(native.assets);
+          if (previous && previous !== lease) previous();
+          if (lease) lease();
+        }
+      }
+      await release(); release = undefined;
+      if (shouldCancel()) { result.cancelled = true; return result; }
+    }
     const game = gameInputs(native), mz = game.exists('js/rmmz_core.js');
     const systemInput = game.read('data/System.json'), sheetsInput = game.read('data/Tilesets.json');
     const system = JSON.parse(systemInput.bytes), sheets = JSON.parse(sheetsInput.bytes);
@@ -366,10 +403,26 @@ async function prepareMaps({ gameRoot, cacheRoot, native, width = 816, height = 
       await files.save();
       for (const entry of entries) for (const source of entry.descriptor.sources)
         source.sourceIdentity = sourceDependencies.get(source.source).sourceIdentity;
-      result.releaseCacheLease = await createLease(root, [...keys, ...snapshots.keys()], native);
-      result.installed = native.assets.installTileSets(entries);
+      const retentionKeys = [...keys, ...snapshots.keys()];
+      for (const snapshot of snapshots.values()) {
+        const relative = path.relative(path.resolve(cacheRoot), snapshot);
+        const match = /^entries\/([a-f0-9]{64})\//.exec(relative);
+        if (match) retentionKeys.push(match[1]);
+      }
+      result.releaseCacheLease = await createLease(root, retentionKeys);
+      result.installed = native.assets.installTileSets(entries, catalogCapable);
       if (result.installed !== entries.length) throw new Error('some tile sets were not installed');
+      if (shouldCancel()) { result.cancelled = true; throw new Error("map preparation cancelled"); }
       native.assets.preparedMapIndex = result.index;
+      if (catalogCapable) {
+        const summary = Object.fromEntries(Object.entries(result).filter(([, value]) => typeof value === 'number'));
+        summary.hits = result.maps.length;
+        await publishCatalog(catalogFile, binding, cacheRoot, { keys: retentionKeys, entries, index: result.index, maps: result.maps, summary });
+      }
+
+      const previousLease = installedLeases.get(native.assets);
+      installedLeases.set(native.assets, result.releaseCacheLease);
+      if (previousLease) previousLease();
       const nextIndex = { keys, snapshots: [...snapshots.keys()],
         compilations, compilationsHash: identity(compilations), mapInputs, mapInputsHash: identity(mapInputs) };
       if (previousCompilations !== previousIndex?.compilations || previousInputs !== previousIndex?.mapInputs ||
@@ -382,9 +435,9 @@ async function prepareMaps({ gameRoot, cacheRoot, native, width = 816, height = 
         await fsp.rename(stagedIndex, indexFile);
       }
       const retained = new Set([...keys, ...snapshots.keys()]);
-      for (const file of await fsp.readdir(root)) if (/^index-[a-f0-9]{64}\.json$/.test(file) && file !== path.basename(indexFile)) {
+      for (const file of await fsp.readdir(root)) if (/^(index|catalog)-[a-f0-9]{64}\.json$/.test(file) && file !== path.basename(indexFile)) {
         const index = await readJson(path.join(root, file)).catch(() => null);
-        for (const key of [...index && index.keys || [], ...index && index.snapshots || []]) if (HASH.test(key)) retained.add(key);
+        for (const key of [...index && (index.keys || index.payload?.keys) || [], ...index && index.snapshots || []]) if (HASH.test(key)) retained.add(key);
       }
       await retainLeases(root, retained);
       for (const file of await fsp.readdir(path.join(root, 'entries'))) if (file.startsWith('.stage-') || HASH.test(file) && !retained.has(file))
@@ -394,12 +447,16 @@ async function prepareMaps({ gameRoot, cacheRoot, native, width = 816, height = 
 
     }
   } catch (error) {
+    native.assets.installTileSets && native.assets.installTileSets([]);
+    native.assets.preparedMapIndex = {};
+    const installedLease = installedLeases.get(native.assets);
+    installedLeases.delete(native.assets);
+    if (installedLease && installedLease !== result.releaseCacheLease) installedLease();
+    if (result.releaseCacheLease) { result.releaseCacheLease(); delete result.releaseCacheLease; }
     result.error = error.message;
     for (const row of result.maps) if (row.selected) { row.selected = false; row.reason = error.message; }
     result.refused += result.selected; result.selected = result.installed = 0; result.index = {};
     logger.warn('[pmjs] map preparation unavailable: '+error.message);
-    native.assets.installTileSets && native.assets.installTileSets([]);
-    native.assets.preparedMapIndex = {};
   } finally {
     if (release) await release();
     result.durationMs = performance.now()-started;

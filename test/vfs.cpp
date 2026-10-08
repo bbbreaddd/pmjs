@@ -139,20 +139,28 @@ int main() try {
   require(media.readText("img/a.png_") == "ciphertext", "derived file replaced original bytes");
   require(media.readDirectory("img") == std::vector<std::string>{"a.png", "a.png_"},
           "derived logical path missing from listing");
+  entry.fileIdentity = media.derivedIdentity(entry.logical);
+  media.installDerivedFiles({entry}, true);
+  require(media.readText("img/a.png") == "plaintext", "catalog did not reuse valid derived bytes");
   const auto retainedDerivedIndex = media;
   media.installDerivedFiles({});
   require(!media.exists("img/a.png") && retainedDerivedIndex.exists("img/a.png"),
           "derived index publication changed a retained snapshot");
   media.installDerivedFiles({entry});
   write(cache, "changed cached bytes");
+  media.installDerivedFiles({entry}, true);
   require(!media.resolveDerived("img/a.png"), "mutated cached file was reused");
   write(cache, "plaintext");
   media.installDerivedFiles({entry});
+  entry.fileIdentity = media.derivedIdentity(entry.logical);
   write(mediaRoot / "data/System.json", "key-two");
+  media.installDerivedFiles({entry}, true);
   require(!media.resolve("img/a.png"), "changed encryption settings reused stale plaintext");
   entry.settingsIdentity = pmjs::Vfs::fileIdentity(mediaRoot / "data/System.json");
   media.installDerivedFiles({entry});
+  entry.fileIdentity = media.derivedIdentity(entry.logical);
   write(mediaRoot / "img/a.png_", "changed ciphertext");
+  media.installDerivedFiles({entry}, true);
   require(!media.resolve("img/a.png"), "changed ciphertext reused stale plaintext");
   entry.sourceIdentity = pmjs::Vfs::fileIdentity(mediaRoot / "img/a.png_");
   media.installDerivedFiles({entry});

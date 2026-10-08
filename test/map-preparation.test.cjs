@@ -160,12 +160,25 @@ test('unprofitable and unsupported decisions are cached without adding source sn
   assert.equal(fs.readdirSync(path.join(g.cacheRoot,'maps/sources')).length,0);
 });
 test('leased decrypted sources are reused directly without a second encoded snapshot',async t=>{
-  const f=fixture(t),directory=path.join(f.cacheRoot,'entries/decrypted');fs.mkdirSync(directory,{recursive:true});
+  const f=fixture(t),decryptedKey='a'.repeat(64),directory=path.join(f.cacheRoot,'entries',decryptedKey);fs.mkdirSync(directory,{recursive:true});
   const file=path.join(directory,'source.png');fs.copyFileSync(path.join(f.gameRoot,'img/tilesets/B.png'),file);
   const sourcePath=f.native.assets.sourcePath,sourceIdentity=f.native.assets.sourceIdentity;
   f.native.assets.sourcePath=source=>source.startsWith('img/')?file:sourcePath(source);
   f.native.assets.sourceIdentity=source=>source.startsWith('img/')?crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'):sourceIdentity(source);
+  const install=f.native.assets.installTileSets;
+  f.native.assets.installTileSets=entries=>{
+    for(const entry of entries) {
+      entry.pageIdentities=entry.descriptor.pages.map(()=>'page');
+      entry.snapshotIdentities=entry.descriptor.sources.map(()=>'snapshot');
+    }
+    return install(entries);
+  };
+  f.native.assets.installTileSetCatalog=entries=>entries.length;
   const report=await prepareMaps(f);assert.equal(report.selected,1);assert.equal(report.additionalSnapshotBytes,0);
+  const lease=fs.readdirSync(path.join(f.cacheRoot,'maps')).find(name=>name.startsWith('.lease-'));
+  assert.ok(JSON.parse(fs.readFileSync(path.join(f.cacheRoot,'maps',lease))).keys.includes(decryptedKey));
+  const warm=await prepareMaps(f);assert.equal(warm.catalogHit,true);
+  warm.releaseCacheLease();report.releaseCacheLease();
   assert.equal(f.installed[0].descriptor.sources[0].snapshot,file);
   assert.equal(f.installed[0].descriptor.sources.length,1,'VFS aliases share one logical source backing');
 });
@@ -222,4 +235,98 @@ test('metadata changes with identical VFS backing bytes refresh installation ide
   g.native.assets.processTiles=async(...args)=>{const descriptor=await pack(...args);
     fs.appendFileSync(path.join(g.gameRoot,'data/Map001.json'),' ');return descriptor;};
   const changed=await prepareMaps(g);assert.equal(changed.selected,0);assert.match(changed.maps[0].reason,/map dependency changed.*Map001/);
+});
+
+test('warm map catalogs skip map inputs and dependency scans; viewport changes rebuild',async t=>{
+  const f=fixture(t);
+  const install=f.native.assets.installTileSets;
+  f.native.assets.installTileSets=entries=>{
+    for(const entry of entries) {
+      entry.pageIdentities=entry.descriptor.pages.map(()=>'page-identity');
+      entry.snapshotIdentities=entry.descriptor.sources.map(()=>'snapshot-identity');
+    }
+    return install(entries);
+  };
+  f.native.assets.installTileSetCatalog=entries=>entries.length;
+  const cold=await prepareMaps(f);
+  assert.equal(cold.installed,1);
+  const read=f.native.fs.readBytes, sourceIdentity=f.native.assets.sourceIdentity;
+  f.native.fs.readBytes=()=>{throw new Error('unexpected map read');};
+  f.native.assets.sourceIdentity=()=>{throw new Error('unexpected dependency scan');};
+  try {
+    const warm=await prepareMaps(f);
+    assert.equal(warm.catalogHit,true);
+    assert.deepEqual(warm.index,cold.index);
+    assert.deepEqual(warm.maps,cold.maps);
+    assert.equal(warm.generated,0);
+    warm.releaseCacheLease();
+  } finally {f.native.fs.readBytes=read;f.native.assets.sourceIdentity=sourceIdentity;}
+  const resized=await prepareMaps({...f,width:640,height:480});
+  assert.equal(resized.catalogHit,undefined);
+  assert.equal(resized.installed,1);
+  resized.releaseCacheLease();cold.releaseCacheLease();
+});
+
+test('observed stale map catalogs recompile changed inputs on the following launch', async t => {
+  const f = fixture(t);
+  const install = f.native.assets.installTileSets;
+  f.native.assets.installTileSets = entries => {
+    for (const entry of entries) {
+      entry.pageIdentities = entry.descriptor.pages.map(() => 'page-identity');
+      entry.snapshotIdentities = entry.descriptor.sources.map(() => 'snapshot-identity');
+    }
+    return install(entries);
+  };
+  f.native.assets.installTileSetCatalog = entries => entries.length;
+  const cold = await prepareMaps(f);
+  const warm = await prepareMaps(f);
+  assert.equal(warm.catalogHit, true);
+  const file = path.join(f.gameRoot, 'data/Map001.json');
+  const map = JSON.parse(fs.readFileSync(file)); map.data[0] = 2;
+  fs.writeFileSync(file, JSON.stringify(map));
+  assert.equal(warm.invalidateCatalog(), true);
+  const refreshed = await prepareMaps(f);
+  assert.equal(refreshed.catalogHit, undefined);
+  assert.notDeepEqual(refreshed.index, warm.index);
+  const next = await prepareMaps(f);
+  assert.equal(next.catalogHit, true);
+  for (const result of [cold, warm, refreshed, next]) result.releaseCacheLease();
+});
+
+test('installation failures clear native entries before releasing their cache lease', async t => {
+  for (const failure of ['cancel', 'catalog']) {
+    const f = fixture(t), install = f.native.assets.installTileSets;
+    const root = path.join(f.cacheRoot, 'maps');
+    const previous = await prepareMaps(f);
+    assert.equal(previous.installed, 1);
+    let installed = false, cleared = false;
+    if (failure === 'catalog') f.native.assets.installTileSetCatalog = entries => entries.length;
+    f.native.assets.installTileSets = entries => {
+      if (entries.length) {
+        installed = true;
+        if (failure === 'catalog') {
+          for (const entry of entries) {
+            entry.pageIdentities = entry.descriptor.pages.map(() => 'page-identity');
+            entry.snapshotIdentities = entry.descriptor.sources.map(() => 'snapshot-identity');
+          }
+          const { checksum } = require('../runner/preparation-catalog.cjs');
+          fs.mkdirSync(path.join(root, 'catalog-' + checksum(path.resolve(f.gameRoot)) + '.json'));
+        }
+      } else if (installed) {
+        assert.ok(fs.readdirSync(root).some(file => file.startsWith('.lease-')),
+          'native references must be removed while their lease is still live');
+        cleared = true;
+      }
+      return install(entries);
+    };
+    const result = await prepareMaps({ ...f, shouldCancel: () => failure === 'cancel' && installed });
+    assert.equal(installed, true);
+    assert.equal(cleared, true);
+    assert.equal(result.installed, 0);
+    assert.deepEqual(f.installed, []);
+    assert.deepEqual(f.native.assets.preparedMapIndex, {});
+    assert.equal(result.releaseCacheLease, undefined);
+    assert.equal(fs.readdirSync(root).some(file => file.startsWith('.lease-')), false);
+    assert.ok(result.error);
+  }
 });

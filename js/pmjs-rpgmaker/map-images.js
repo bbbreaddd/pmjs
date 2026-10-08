@@ -23,17 +23,23 @@
   }
   var stats = { selected: 0, refused: 0, reasons: Object.create(null) };
   function refuse(reason) { stats.refused++; stats.reasons[reason] = (stats.reasons[reason] || 0)+1; return ''; }
+  function stale(reason) {
+    if (typeof NativeHost.assets.invalidateMapCatalog === 'function') NativeHost.assets.invalidateMapCatalog();
+    return refuse(reason);
+  }
   function hash(value) { return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex'); }
   function selected() {
     if (!NativeHost.assets.mapPreparationEnabled || typeof $gameMap === 'undefined' || !$gameMap ||
         typeof $dataMap === 'undefined' || !$dataMap) return '';
     var entry = (NativeHost.assets.preparedMapIndex || {})[$gameMap.mapId()];
     if (!entry) return '';
+    var currentTiled = typeof $gameMap.isTiledMap === 'function' && $gameMap.isTiledMap();
+    if (Boolean(currentTiled) !== (entry.renderer === 'tiled')) return stale('map-renderer-changed');
     if (entry.renderer === 'tiled') {
       var data = $gameMap.tiledData;
       var contract = PMJS.maps.tiledContract && PMJS.maps.tiledContract(data);
       if (contract !== true) return refuse(typeof contract === 'string' ? contract : 'unreviewed-tiled-methods');
-      return hash(data) === entry.contractHash ? entry.identity : refuse('tiled-content-changed');
+      return hash(data) === entry.contractHash ? entry.identity : stale('tiled-content-changed');
     }
     if (!reviewedProducerContract) return refuse('unreviewed-tile-producers');
     for (var method of reviewed) if (method[0][method[1]] !== method[2]) return refuse('tile-producer-changed:'+method[1]);
@@ -42,7 +48,7 @@
         events: ($dataMap.events || []).map(function(event) { return event && (event.pages || []).map(function(page) {
           return page.image && page.image.tileId || 0;
         }); }), tilesetNames: tileset.tilesetNames, flags: tileset.flags, tileWidth: width, tileHeight: height };
-    return hash(contract) === entry.contractHash ? entry.identity : refuse('map-contract-changed');
+    return hash(contract) === entry.contractHash ? entry.identity : stale('map-contract-changed');
   }
   function scope(identity, callback) {
     var previous = PMJS.images.preparedTileSet;

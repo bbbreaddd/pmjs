@@ -271,6 +271,17 @@ async function run(input) {
     width: options.width, height: options.height, windowTitle: options.title,
     ...(options.imageWarmCacheBytes === undefined ? {} :
       { imageWarmCacheBytes: options.imageWarmCacheBytes }) });
+  let pendingInvalidations = 0, retryInvalidationAt = 0;
+  let invalidateImages, invalidateMaps;
+  native.assets.invalidateMapCatalog = () => { pendingInvalidations |= 2; };
+  function flushPreparationInvalidations(force = false) {
+    if (typeof native.assets.consumePreparationInvalidations === 'function')
+      pendingInvalidations |= native.assets.consumePreparationInvalidations();
+    if (!pendingInvalidations || (!force && performance.now() < retryInvalidationAt)) return;
+    if ((pendingInvalidations & 1) && invalidateImages && invalidateImages()) pendingInvalidations &= ~1;
+    if ((pendingInvalidations & 2) && invalidateMaps && invalidateMaps()) pendingInvalidations &= ~2;
+    retryInvalidationAt = performance.now() + 1000;
+  }
   try {
     native.storage = createStorage(options.saveRoot);
     native.fs = createGameFilesystem(native.fs, path.join(options.saveRoot, 'game-files'));
@@ -324,7 +335,9 @@ async function run(input) {
         throw preparationFailed ? preparationError : error;
       } finally { clearInterval(pump); }
       if (preparationFailed) throw preparationError;
-      const { entries, decryptedEntries, releaseCacheLease, ...preparationStats } = preparation;
+      invalidateImages = preparation.invalidateCatalog;
+      invalidateMaps = preparation.maps && preparation.maps.invalidateCatalog;
+      const { entries, decryptedEntries, releaseCacheLease, invalidateCatalog, ...preparationStats } = preparation;
       native.assets.preparationStats = preparationStats;
       console.log(`[pmjs] asset preparation generated=${preparation.generated} hits=${preparation.hits} ` +
         `decrypted=${preparation.decrypted} fallback=${preparation.fallback} ` +
@@ -404,7 +417,8 @@ async function run(input) {
       }
       function tick() {
         try {
-          if (!native.pollEvents()) { resolve(); return; }
+          flushPreparationInvalidations();
+          if (!native.pollEvents()) { flushPreparationInvalidations(true); resolve(); return; }
           if (typeof globalThis.__pmjsUpdateWindowState === 'function') {
             globalThis.__pmjsUpdateWindowState(native.runtime.windowState());
           }
@@ -418,6 +432,7 @@ async function run(input) {
           globalThis.__pmjsRender(now);
           native.renderFrame();
           native.swapFrame();
+          flushPreparationInvalidations();
           if (!timing.uncapped) {
             const monotonicNow = native.runtime.monotonicNow();
             deadline = advanceDeadline(deadline, monotonicNow, period);
@@ -430,6 +445,7 @@ async function run(input) {
       schedule();
     });
   } catch (error) {
+    try { flushPreparationInvalidations(true); } catch (_) {}
     try { native.runtime.quit(); } catch (_) {}
     throw error;
   }

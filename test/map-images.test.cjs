@@ -16,7 +16,7 @@ function fixture() {
   const data={tilesets:[{firstgid:1}],layers:[{data:[1,2]}]};
   const index={1:{renderer:'tiled',identity:'set-a',contractHash:crypto.createHash('sha256').update(JSON.stringify(data)).digest('hex')}};
   const context={PMJS,NativeHost:{assets:{mapPreparationEnabled:true,preparedMapIndex:index}},ImageManager,
-    Tilemap,ShaderTilemap,Bitmap,$dataMap:{},$gameMap:{mapId:()=>1,tiledData:data},
+    Tilemap,ShaderTilemap,Bitmap,$dataMap:{},$gameMap:{mapId:()=>1,tiledData:data,isTiledMap:()=>true},
     __pmjsBuiltinRequire:require};
   vm.runInNewContext(source,context);
   for(const definition of definitions) {
@@ -43,6 +43,30 @@ test('hue, revised content and changed method compositions use ordinary context 
   assert.equal(f.loads.at(-1).context,'');assert.equal(f.PMJS.maps.stats.reasons['tiled-content-changed'],1);
   f.PMJS.maps.tiledContract=()=>false;f.ImageManager.loadTileset('Sheet',0);
   assert.equal(f.PMJS.maps.stats.reasons['unreviewed-tiled-methods'],1);
-  f.index[1].renderer='mv';f.ImageManager.loadTileset('Sheet',0);
+  f.index[1].renderer='mv';f.context.$gameMap.isTiledMap=()=>false;f.ImageManager.loadTileset('Sheet',0);
   assert.equal(f.PMJS.maps.stats.reasons['unreviewed-tile-producers'],1);
+});
+
+test('adding or removing a Tiled override refuses the cached renderer',()=>{
+  const f=fixture();
+  f.context.$gameMap.isTiledMap=()=>false;
+  assert.equal(f.PMJS.maps.selected(),'');
+  f.index[1].renderer='mv';f.context.$gameMap.isTiledMap=()=>true;
+  assert.equal(f.PMJS.maps.selected(),'');
+  assert.equal(f.PMJS.maps.stats.reasons['map-renderer-changed'],2);
+});
+
+test('observed content and renderer mismatches request catalog refresh, unknown methods do not', () => {
+  const f = fixture(); let invalidations = 0;
+  f.context.NativeHost.assets.invalidateMapCatalog = () => { invalidations++; };
+  f.data.layers[0].data.push(3);
+  assert.equal(f.PMJS.maps.selected(), '');
+  assert.equal(invalidations, 1);
+  f.context.$gameMap.isTiledMap = () => false;
+  assert.equal(f.PMJS.maps.selected(), '');
+  assert.equal(invalidations, 2);
+  f.context.$gameMap.isTiledMap = () => true;
+  f.PMJS.maps.tiledContract = () => false;
+  assert.equal(f.PMJS.maps.selected(), '');
+  assert.equal(invalidations, 2, 'runtime plugin overrides cannot be repaired by regeneration');
 });

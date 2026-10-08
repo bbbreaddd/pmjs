@@ -573,8 +573,9 @@ std::array<std::uint8_t, 4> preparedColor(napi_env env, napi_value object, const
   return color;
 }
 
-napi_value installPreparedAssets(napi_env env, napi_callback_info info) try {
-  const auto args = arguments(env, info, 1);
+napi_value installPreparedAssetsImpl(napi_env env, napi_callback_info info, bool catalog) try {
+  const auto args = arguments(env, info, 2);
+  const bool capture = !catalog && args.size() > 1 && asBoolean(env, args[1]);
   auto& value = host(env);
   std::uint32_t count = 0;
   check(env, napi_get_array_length(env, args.at(0), &count), "prepared entries must be an array");
@@ -619,13 +620,34 @@ napi_value installPreparedAssets(napi_env env, napi_callback_info info) try {
       }
     }
     const auto identity = asString(env, property(env, entry, "sourceIdentity"));
-    if (value.images.installPrepared(*path, directory, std::move(descriptor), identity)) ++installed;
+    std::vector<std::string> identities;
+    if (catalog) {
+      const auto pages = property(env, entry, "pageIdentities"); std::uint32_t size = 0;
+      check(env, napi_get_array_length(env, pages, &size), "invalid page identities");
+      if (size != descriptor.pages.size()) throw std::runtime_error("page identity count mismatch");
+      for (std::uint32_t j = 0; j < size; ++j) {
+        napi_value item; check(env, napi_get_element(env, pages, j, &item), "invalid page identity");
+        identities.push_back(asString(env, item));
+      }
+    }
+    std::vector<std::string> captured;
+    if (value.images.installPrepared(*path, directory, std::move(descriptor), identity, catalog ? &identities : nullptr, capture ? &captured : nullptr)) {
+      ++installed;
+      if (capture) {
+        napi_value list; check(env, napi_create_array_with_length(env, captured.size(), &list), "cannot create identities");
+        for (std::size_t j = 0; j < captured.size(); ++j) check(env, napi_set_element(env, list, j, string(env, captured[j])), "cannot set identity");
+        check(env, napi_set_named_property(env, entry, "pageIdentities", list), "cannot set page identities");
+      }
+    }
   }
   return number(env, installed);
 } catch (const std::exception& error) {
   napi_throw_error(env, nullptr, error.what()); return nullptr;
 }
 }
+
+napi_value installPreparedAssets(napi_env env, napi_callback_info info) { return installPreparedAssetsImpl(env, info, false); }
+napi_value installPreparedCatalog(napi_env env, napi_callback_info info) { return installPreparedAssetsImpl(env, info, true); }
 
 napi_value preparedSourceIdentity(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info, 1);
@@ -642,8 +664,9 @@ napi_value preparationSourcePath(napi_env env, napi_callback_info info) try {
   return path ? string(env, path->string()) : null(env);
 } catch (const std::exception& error) { napi_throw_error(env, nullptr, error.what()); return nullptr; }
 
-napi_value installDecryptedAssets(napi_env env, napi_callback_info info) try {
-  const auto args = arguments(env, info, 1);
+napi_value installDecryptedAssetsImpl(napi_env env, napi_callback_info info, bool catalog) try {
+  const auto args = arguments(env, info, 2);
+  const bool capture = !catalog && args.size() > 1 && asBoolean(env, args[1]);
   std::uint32_t count = 0;
   check(env, napi_get_array_length(env, args.at(0), &count), "decrypted entries must be an array");
   if (count > 100000) throw std::runtime_error("too many decrypted entries");
@@ -654,11 +677,19 @@ napi_value installDecryptedAssets(napi_env env, napi_callback_info info) try {
       asString(env, property(env, entry, "source")), "data/System.json",
       asString(env, property(env, entry, "file")),
       asString(env, property(env, entry, "sourceIdentity")),
-      asString(env, property(env, entry, "settingsIdentity")), {}});
+      asString(env, property(env, entry, "settingsIdentity")),
+      catalog ? asString(env, property(env, entry, "fileIdentity")) : std::string{}});
   }
-  host(env).vfs.installDerivedFiles(entries);
+  host(env).vfs.installDerivedFiles(entries, catalog);
+  if (capture) for (std::uint32_t i = 0; i < count; ++i) {
+    napi_value entry; check(env, napi_get_element(env, args[0], i, &entry), "invalid decrypted entry");
+    check(env, napi_set_named_property(env, entry, "fileIdentity", string(env, host(env).vfs.derivedIdentity(entries[i].logical))), "cannot set file identity");
+  }
   return undefined(env);
 } catch (const std::exception& error) { napi_throw_error(env, nullptr, error.what()); return nullptr; }
+
+napi_value installDecryptedAssets(napi_env env, napi_callback_info info) { return installDecryptedAssetsImpl(env, info, false); }
+napi_value installDerivedCatalog(napi_env env, napi_callback_info info) { return installDecryptedAssetsImpl(env, info, true); }
 
 napi_value hasDecryptedAsset(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info, 1);
@@ -667,6 +698,8 @@ napi_value hasDecryptedAsset(napi_env env, napi_callback_info info) try {
 
 void registerPreparedAssetBindings(napi_env env, napi_value exports) {
   method(env, property(env, exports, "assets"), "installPrepared", installPreparedAssets);
+  method(env, property(env, exports, "assets"), "installPreparedCatalog", installPreparedCatalog);
+  method(env, property(env, exports, "assets"), "installDerivedCatalog", installDerivedCatalog);
   method(env, property(env, exports, "assets"), "sourceIdentity", preparedSourceIdentity);
   method(env, property(env, exports, "assets"), "sourcePath", preparationSourcePath);
   method(env, property(env, exports, "assets"), "installDecrypted", installDecryptedAssets);

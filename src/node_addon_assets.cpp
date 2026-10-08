@@ -294,8 +294,10 @@ napi_value processTiles(napi_env env, napi_callback_info info) try {
   work.release(); return promise;
 } catch (const std::exception& error) { napi_throw_error(env, nullptr, error.what()); return nullptr; }
 
-napi_value installTileSets(napi_env env, napi_callback_info info) try {
-  const auto args = arguments(env, info, 1); auto& value = host(env);
+napi_value installTileSetsImpl(napi_env env, napi_callback_info info, bool catalog) try {
+  const auto args = arguments(env, info, 2);
+  const bool capture = !catalog && args.size() > 1 && asBoolean(env, args[1]);
+  auto& value = host(env);
   const auto count = arrayLength(env, args.at(0), 65536);
   std::vector<PreparedTileSet> descriptors;
   descriptors.reserve(count);
@@ -339,8 +341,40 @@ napi_value installTileSets(napi_env env, napi_callback_info info) try {
   }
   value.images.clearTileSetIndex();
   std::uint32_t installed = 0;
-  for (auto& descriptor : descriptors) if (value.images.installTileSet(std::move(descriptor))) ++installed;
+  for (std::uint32_t i = 0; i < count; ++i) {
+    std::vector<std::string> pages, snapshots;
+    if (catalog) {
+      auto entry = element(env, args[0], i);
+      for (const auto name : {"pageIdentities", "snapshotIdentities"}) {
+        auto list = property(env, entry, name);
+        auto& output = std::string(name) == "pageIdentities" ? pages : snapshots;
+        const auto size = arrayLength(env, list, 4096);
+        for (std::uint32_t j = 0; j < size; ++j) output.push_back(asString(env, element(env, list, j)));
+      }
+    }
+    std::vector<std::string> capturedPages, capturedSnapshots;
+    if (value.images.installTileSet(std::move(descriptors[i]), catalog ? &pages : nullptr, catalog ? &snapshots : nullptr, capture ? &capturedPages : nullptr, capture ? &capturedSnapshots : nullptr)) {
+      ++installed;
+      if (capture) {
+        auto entry = element(env, args[0], i);
+        for (const auto name : {"pageIdentities", "snapshotIdentities"}) {
+          const auto& captured = std::string(name) == "pageIdentities" ? capturedPages : capturedSnapshots;
+          napi_value list; check(env, napi_create_array_with_length(env, captured.size(), &list), "cannot create identities");
+          for (std::size_t j = 0; j < captured.size(); ++j) check(env, napi_set_element(env, list, j, string(env, captured[j])), "cannot set identity");
+          set(env, entry, name, list);
+        }
+      }
+    }
+  }
   return number(env, installed);
+} catch (const std::exception& error) { napi_throw_error(env, nullptr, error.what()); return nullptr; }
+napi_value installTileSets(napi_env env, napi_callback_info info) { return installTileSetsImpl(env, info, false); }
+napi_value installTileSetCatalog(napi_env env, napi_callback_info info) { return installTileSetsImpl(env, info, true); }
+napi_value consumePreparationInvalidations(napi_env env, napi_callback_info) try {
+  auto& value = host(env);
+  auto flags = value.images.consumePreparationInvalidations();
+  if (value.vfs.consumeDerivedInvalidation()) flags |= 3;
+  return number(env, flags);
 } catch (const std::exception& error) { napi_throw_error(env, nullptr, error.what()); return nullptr; }
 napi_value tileSlot(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info, 3);
@@ -350,9 +384,11 @@ napi_value tileSlot(napi_env env, napi_callback_info info) try {
 }
 void registerAssetMethods(napi_env env, napi_value exports) {
   const auto assets = property(env, exports, "assets");
+  method(env, assets, "consumePreparationInvalidations", consumePreparationInvalidations);
   method(env, assets, "processImage", processImage);
   method(env, assets, "processTiles", processTiles);
   method(env, assets, "installTileSets", installTileSets);
+  method(env, assets, "installTileSetCatalog", installTileSetCatalog);
   method(env, property(env, exports, "images"), "tileSlot", tileSlot);
   set(env, assets, "tilePreparationVersion", string(env, "lossless-tile-sets-v3"));
   const auto version = moduleObject(env);

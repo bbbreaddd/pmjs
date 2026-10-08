@@ -3,7 +3,7 @@
 const vm = require('node:vm');
 const path = require('node:path');
 
-const COMPILER_VERSION = 'map-demand-v4';
+const COMPILER_VERSION = 'map-demand-v5';
 function mapContract(map, tileset, tileWidth, tileHeight) {
   return { width: map.width, height: map.height, data: map.data, tilesetId: map.tilesetId, scrollType: map.scrollType,
     events: (map.events || []).map(event => event && (event.pages || []).map(page => page.image && page.image.tileId || 0)),
@@ -151,8 +151,9 @@ function compileTiledMap(map) {
     sources: [...demands].map(([source, rectangles]) => ({ source, rectangles: [...rectangles.values()] })) };
 }
 function geometryEstimate(demand, width, height) {
+  const bytesPerQuad = 500;
   const columns = Math.ceil(width/demand.tileWidth)+3, rows = Math.ceil(height/demand.tileHeight)+3;
-  if (!demand.geometryDensity) return columns*rows*16*400;
+  if (!demand.geometryDensity) return columns*rows*16*bytesPerQuad;
   const mw = demand.geometryWidth, mh = demand.geometryHeight;
   let maximum = 0;
   // Bound each reached row separately; this conservative window bound avoids
@@ -175,6 +176,6 @@ function geometryEstimate(demand, width, height) {
     if (y >= rows) sum -= value(y-rows);
     maximum = Math.max(maximum, sum);
   }
-  return maximum*400;
+  return maximum*bytesPerQuad;
 }
 module.exports = { geometryEstimate, COMPILER_VERSION, mapContract, engineTilemap, compileRpgMap, compileTiledMap };

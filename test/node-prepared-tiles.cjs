@@ -19,6 +19,17 @@ const widePixels=Buffer.alloc(8192*64*4);
 for(let y=0;y<64;y++) for(let x=0;x<8192;x++) widePixels.set([x%256,y*3,(x*71+y)%256,255],(y*8192+x)*4);
 fs.writeFileSync(path.join(root,'wide.png'),png(8192,64,widePixels));
 fs.copyFileSync(path.join(root,'wide.png'),path.join(root,'wide-snapshot.png'));
+const paddedSources = [[512,0,32,32],[-32,0,32,32],[0,512,32,32],[0,-32,32,32],
+  [496,0,32,32],[-16,0,32,32],[0,496,32,32],[0,-16,32,32],[496,496,32,32]];
+for (const [index,source] of paddedSources.entries()) {
+  const expectedPixels = Buffer.alloc(32*32*4);
+  for (let y=0;y<32;y++) for (let x=0;x<32;x++) {
+    const sx=source[0]+x, sy=source[1]+y;
+    if (sx>=0 && sy>=0 && sx<512 && sy<512)
+      pixels.copy(expectedPixels,(y*32+x)*4,(sy*512+sx)*4,(sy*512+sx)*4+4);
+  }
+  fs.writeFileSync(path.join(root,`expected-${index}.png`),png(32,32,expectedPixels));
+}
 native.initialize({gameRoot:root,width:128,height:96,windowTitle:'prepared tiles',imageWarmCacheBytes:0});
 const schema = native.scene.schema;
 function frame(image, source, transform, nearest, offset = [0,0], animation = [0,0], options = {}) {
@@ -55,7 +66,14 @@ async function main() {
   assert.ok(descriptor.pages.every(page=>page.width<=2048&&page.height<=2048));
   const set = {identity:'set-a',directory,descriptor:structuredClone(descriptor)};
   Object.assign(set.descriptor.sources[0],{source:'source.png',snapshot:path.join(root,'snapshot.png'),sourceIdentity:native.assets.sourceIdentity('source.png')});
-  assert.equal(native.assets.installTileSets([set]),1);
+  assert.equal(native.assets.installTileSets([Object.freeze({ ...set })]),1);
+  assert.equal(native.assets.installTileSets([set], true),1);
+  assert.equal(native.assets.installTileSetCatalog([set]),1);
+  for (const source of ['../outside.png', '/tmp/outside.png']) {
+    const unsafe = structuredClone(set);
+    unsafe.descriptor.sources[0].source = source;
+    assert.throws(() => native.assets.installTileSetCatalog([unsafe]), /cannot resolve tile source/);
+  }
   const [view, shared] = await Promise.all([native.images.loadAsync('source.png',false,'set-a'),native.images.loadAsync('source.png',false,'set-a')]);
   assert.equal(view.handle,shared.handle);
   const original = native.images.load('source.png');
@@ -95,6 +113,17 @@ async function main() {
     assert.deepEqual(frame(view,source,transforms[2],nearest),frame(original,source,transforms[2],nearest)); comparisons++;
   }
   assert.equal(native.images.memory().tileMaterializations>0,diagnostics);
+  // Expected tiles retain in-bounds pixels and transparent padding on every edge.
+  for (const [index,source] of paddedSources.entries()) {
+    const expected = native.images.load(`expected-${index}.png`);
+    const expectedFrame = frame(expected,[0,0,32,32],transforms[0],true);
+    for (const image of [original,view]) {
+      assert.deepEqual(frame(image,source,transforms[0],true),expectedFrame,
+        `transparent tile padding: ${JSON.stringify(source)}`);
+      comparisons++;
+    }
+    native.images.release(expected.handle);
+  }
   native.images.release(view.handle);native.images.release(shared.handle);
   assert.equal(native.images.memory().warmFileCount,
     set.descriptor.pages.length + set.descriptor.sources.length,
@@ -143,6 +172,32 @@ async function main() {
   assert.deepEqual(frame(wideView,wideRects[2],transforms[0],true),saved);
   assert.deepEqual(frame(wideView,[2048,16,32,32],transforms[0],true),frame(wideOriginal,[2048,16,32,32],transforms[0],true));
   native.images.release(wideView.handle);native.images.release(wideOriginal.handle);native.beginFrame();
+  const staleSet = { identity: 'stale-set', directory, descriptor: structuredClone(descriptor) };
+  Object.assign(staleSet.descriptor.sources[0], { source: 'source.png', snapshot: path.join(root, 'snapshot.png'),
+    sourceIdentity: native.assets.sourceIdentity('source.png') });
+  assert.equal(native.assets.installTileSets([staleSet], true), 1);
+  for (const missing of [path.join(directory, descriptor.pages[0].path), path.join(root, 'snapshot.png')]) {
+    const bytes = fs.readFileSync(missing); fs.unlinkSync(missing);
+    assert.equal(native.assets.installTileSetCatalog([staleSet]), 1, 'catalog installation must not open missing tile files');
+    native.assets.consumePreparationInvalidations();
+    const fallback = await native.images.loadAsync('source.png', false, staleSet.identity);
+    assert.equal(native.assets.consumePreparationInvalidations() & 2, 2, 'stale pages and snapshots request map regeneration');
+    const ordinary = native.images.load('source.png');
+    assert.deepEqual(frame(fallback, rectangles[0], transforms[0], true), frame(ordinary, rectangles[0], transforms[0], true));
+    native.images.release(fallback.handle); native.images.release(ordinary.handle); native.beginFrame();
+    fs.writeFileSync(missing, bytes);
+    assert.equal(native.assets.installTileSets([staleSet], true), 1);
+  }
+  assert.equal(native.assets.installTileSets([staleSet], true), 1);
+  assert.equal(native.assets.installTileSetCatalog([staleSet]), 1);
+  native.assets.consumePreparationInvalidations();
+  fs.writeFileSync(path.join(root, 'source.png'), png(512,512,Buffer.alloc(512*512*4, 255)));
+  const changedSource = await native.images.loadAsync('source.png', false, staleSet.identity);
+  const changedOrdinary = native.images.load('source.png');
+  assert.deepEqual(frame(changedSource, rectangles[0], transforms[0], true),
+    frame(changedOrdinary, rectangles[0], transforms[0], true));
+  assert.equal(native.assets.consumePreparationInvalidations() & 2, 2, 'changed original source requests map regeneration');
+  native.images.release(changedSource.handle); native.images.release(changedOrdinary.handle);
   if (!diagnostics) {
     const memory=native.images.memory();
     for (const field of ['tileHits','tileRegions','tileMaterializations','tilePageDecodes','tilePageUploads']) assert.equal(memory[field],0);

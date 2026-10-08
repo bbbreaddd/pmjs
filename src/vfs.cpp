@@ -195,19 +195,34 @@ std::string Vfs::fileIdentity(const std::filesystem::path& path) {
     std::to_string(info.st_ctim.tv_sec) + ':' + std::to_string(info.st_ctim.tv_nsec);
 }
 
-void Vfs::installDerivedFiles(const std::vector<DerivedFile>& files) {
+void Vfs::installDerivedFiles(const std::vector<DerivedFile>& files, bool catalog) {
   auto index = std::make_shared<std::unordered_map<std::string, DerivedFile>>();
   for (auto file : files) {
     const auto key = normalize(file.logical);
-    const auto source = resolveOriginal(file.source), settings = resolveOriginal(file.settings);
-    if (!key || !source || !settings || !file.file.is_absolute() ||
-        file.sourceIdentity.empty() || file.settingsIdentity.empty() ||
-        fileIdentity(*source) != file.sourceIdentity || fileIdentity(*settings) != file.settingsIdentity) continue;
-    file.fileIdentity = fileIdentity(file.file);
+    const auto source = catalog ? std::optional<std::filesystem::path>{} : resolveOriginal(file.source);
+    const auto settings = catalog ? std::optional<std::filesystem::path>{} : resolveOriginal(file.settings);
+    if (catalog) {
+      if (!key || !normalize(file.source) || !normalize(file.settings) || !file.file.is_absolute() ||
+          file.sourceIdentity.empty() || file.settingsIdentity.empty() || file.fileIdentity.empty())
+        throw std::runtime_error("invalid derived catalog entry");
+    } else {
+      if (!key || !source || !settings || !file.file.is_absolute() ||
+          file.sourceIdentity.empty() || file.settingsIdentity.empty() ||
+          fileIdentity(*source) != file.sourceIdentity || fileIdentity(*settings) != file.settingsIdentity) continue;
+      file.fileIdentity = fileIdentity(file.file);
+    }
     if (!file.fileIdentity.empty() && !index->emplace(*key, std::move(file)).second)
       throw std::runtime_error("duplicate derived file path");
   }
   std::atomic_store(&derived_, std::shared_ptr<const std::unordered_map<std::string, DerivedFile>>(std::move(index)));
+}
+
+std::string Vfs::derivedIdentity(const std::string& path) const {
+  const auto key = normalize(path);
+  const auto index = std::atomic_load(&derived_);
+  if (!key || !index) return {};
+  const auto entry = index->find(*key);
+  return entry == index->end() ? std::string{} : entry->second.fileIdentity;
 }
 
 std::optional<std::filesystem::path> Vfs::resolveDerived(const std::string& path) const {
@@ -230,7 +245,10 @@ std::optional<std::filesystem::path> Vfs::resolveDerived(const std::string& path
   const auto& entry = found->second;
   const auto source = resolveOriginal(entry.source), settings = resolveOriginal(entry.settings);
   if (!source || !settings || fileIdentity(*source) != entry.sourceIdentity ||
-      fileIdentity(*settings) != entry.settingsIdentity || fileIdentity(entry.file) != entry.fileIdentity) return std::nullopt;
+      fileIdentity(*settings) != entry.settingsIdentity || fileIdentity(entry.file) != entry.fileIdentity) {
+    derivedInvalidated_->store(true, std::memory_order_relaxed);
+    return std::nullopt;
+  }
   return entry.file;
 }
 

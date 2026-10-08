@@ -84,6 +84,7 @@ async function main() {
   assert.equal(native.media.playAudio(music.handle, true, 0), true);
   assert.equal(native.media.playAudio(effect.handle, false, 0), true);
   const warm = await prepareAssets(options);
+  assert.equal(warm.catalogHit, true);
   assert.equal(warm.generated, 0);
   assert.equal(warm.hits, 4);
   assert.equal(warm.negativeHits, 1);
@@ -92,13 +93,15 @@ async function main() {
   const replacementPixels = Buffer.alloc(16, 255);
   native.fs.writeBytes('img/characters/!$actor.png', png(2, 2, replacementPixels));
   const overridden = await prepareAssets(options);
-  assert.equal(overridden.installed, 0, 'encrypted-source descriptors must not replace an explicit logical file');
+  assert.equal(overridden.catalogHit, true, 'overlays are checked at use time');
   const changedImage = await native.images.loadAsync('img/characters/!$actor.png');
   assert.deepEqual([changedImage.width, changedImage.height], [2, 2]);
   native.images.release(changedImage.handle);
   fs.writeFileSync(systemFile, JSON.stringify({ hasEncryptedImages: true, hasEncryptedAudio: true,
     encryptionKey: 'ff'.repeat(16) }));
+  native.assets.consumePreparationInvalidations();
   assert.equal(native.assets.hasDecrypted('audio/bgm/tone.ogg'), false);
+  assert.equal(native.assets.consumePreparationInvalidations(), 3, 'changed encryption settings invalidate both catalogs');
   assert.equal(native.assets.hasDecrypted('img/characters/!$actor.png'), true,
     'explicit plaintext replacements remain readable independently of encryption settings');
   fs.rmSync(options.cacheRoot, { recursive: true, force: true });

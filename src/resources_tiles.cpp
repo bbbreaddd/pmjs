@@ -102,9 +102,14 @@ std::string ImageStore::effectiveTileSet(const ImageFileSource& source, const st
   const auto set = tileSets_.find(identity);
   if (set != tileSets_.end()) for (const auto& entry : set->second->descriptor.sources)
     if (entry.identity == source.key()) return identity;
+  if (set != tileSets_.end()) preparationInvalidations_.fetch_or(2, std::memory_order_relaxed);
   return {};
 }
-bool ImageStore::installTileSet(PreparedTileSet descriptor) {
+bool ImageStore::installTileSet(PreparedTileSet descriptor,
+    const std::vector<std::string>* pageIdentities, const std::vector<std::string>* snapshotIdentities,
+    std::vector<std::string>* capturedPages, std::vector<std::string>* capturedSnapshots) {
+  if (pageIdentities && (!snapshotIdentities || pageIdentities->size() != descriptor.pages.size() ||
+      snapshotIdentities->size() != descriptor.sources.size())) return false;
   if (descriptor.version != 1 || descriptor.halo < 1 || descriptor.halo > 32 || descriptor.identity.empty() ||
       descriptor.identity.size() > 256 || descriptor.pages.empty() || descriptor.pages.size() > 4096 ||
       descriptor.sources.empty() || descriptor.sources.size() > 512 || !descriptor.directory.is_absolute()) return false;
@@ -112,17 +117,19 @@ bool ImageStore::installTileSet(PreparedTileSet descriptor) {
   for (const auto& page : descriptor.pages) {
     if (page.width <= 0 || page.height <= 0 || page.width > 2048 || page.height > 2048 ||
         page.path.empty() || page.path.is_absolute() || page.path.has_parent_path()) return false;
-    auto file = openFile(descriptor.directory/page.path);
-    if (!file) return false;
-    catalog->pageIdentities.push_back(file->key());
+    auto file = pageIdentities ? nullptr : openFile(descriptor.directory/page.path);
+    const auto identity = pageIdentities ? pageIdentities->at(catalog->pageIdentities.size()) : file ? file->key() : "";
+    if (identity.empty()) return false;
+    catalog->pageIdentities.push_back(identity);
   }
   std::unordered_set<std::string> sources;
   for (const auto& source : descriptor.sources) {
     if (!checkedImageExtent(source.width, source.height, 8192, 128U*1024U*1024U) ||
         source.regions.size() > 65536 || !source.snapshot.is_absolute()) return false;
-    auto original = openFile(source.path);
-    auto snapshot = openFile(source.snapshot);
-    if (!original || !snapshot || original->key() != source.identity || !sources.insert(source.identity).second) return false;
+    auto original = pageIdentities ? nullptr : openFile(source.path);
+    auto snapshot = pageIdentities ? nullptr : openFile(source.snapshot);
+    if ((!pageIdentities && (!original || !snapshot || original->key() != source.identity)) ||
+        source.identity.empty() || !sources.insert(source.identity).second) return false;
     for (const auto& region : source.regions) {
       if (!inside(region.rect, source.width, source.height) || region.page < 0 ||
           static_cast<std::size_t>(region.page) >= descriptor.pages.size()) return false;
@@ -131,8 +138,12 @@ bool ImageStore::installTileSet(PreparedTileSet descriptor) {
           region.atlas[0]+region.atlas[2]+descriptor.halo > page.width || region.atlas[1]+region.atlas[3]+descriptor.halo > page.height ||
           region.atlas[2] != region.rect[2] || region.atlas[3] != region.rect[3]) return false;
     }
-    catalog->snapshotIdentities.push_back(snapshot->key());
+    const auto snapshotIdentity = pageIdentities ? snapshotIdentities->at(catalog->snapshotIdentities.size()) : snapshot->key();
+    if (snapshotIdentity.empty()) return false;
+    catalog->snapshotIdentities.push_back(snapshotIdentity);
   }
+  if (capturedPages) *capturedPages = catalog->pageIdentities;
+  if (capturedSnapshots) *capturedSnapshots = catalog->snapshotIdentities;
   catalog->descriptor = std::move(descriptor);
   catalog->metadataBytes = sizeof(TileCatalog)+descriptorBytes(catalog->descriptor)+
     (catalog->pageIdentities.capacity()+catalog->snapshotIdentities.capacity())*sizeof(std::string);
@@ -149,7 +160,11 @@ std::shared_ptr<ImageStore::TileLoad> ImageStore::captureTileLoad(
   if (found == tileSets_.end()) return nullptr;
   const auto& descriptor = found->second->descriptor;
   for (std::size_t i = 0; i < descriptor.sources.size(); ++i) {
-    if (descriptor.sources[i].identity != source.key()) continue;
+    if (descriptor.sources[i].identity != source.key()) {
+      if (descriptor.sources[i].path == source.path())
+        preparationInvalidations_.fetch_or(2, std::memory_order_relaxed);
+      continue;
+    }
     auto load = std::make_shared<TileLoad>();
     auto prototype = found->second->captured.lock();
     if (!prototype) {
@@ -157,12 +172,18 @@ std::shared_ptr<ImageStore::TileLoad> ImageStore::captureTileLoad(
       prototype->descriptor = descriptor;
       for (std::size_t page = 0; page < descriptor.pages.size(); ++page) {
         auto file = captureTileFile(descriptor.directory/descriptor.pages[page].path);
-        if (!file || file->key() != found->second->pageIdentities[page]) return nullptr;
+        if (!file || file->key() != found->second->pageIdentities[page]) {
+          preparationInvalidations_.fetch_or(2, std::memory_order_relaxed);
+          return nullptr;
+        }
         prototype->pages.push_back(std::move(file));
       }
       for (std::size_t entry = 0; entry < descriptor.sources.size(); ++entry) {
         auto file = captureTileFile(descriptor.sources[entry].snapshot);
-        if (!file || file->key() != found->second->snapshotIdentities[entry]) return nullptr;
+        if (!file || file->key() != found->second->snapshotIdentities[entry]) {
+          preparationInvalidations_.fetch_or(2, std::memory_order_relaxed);
+          return nullptr;
+        }
         prototype->snapshots.push_back(std::move(file));
       }
       prototype->metadataBytes = sizeof(TilePrototype)+descriptorBytes(prototype->descriptor)+

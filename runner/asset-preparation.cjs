@@ -4,10 +4,11 @@ const fs = require('node:fs');
 const fsp = fs.promises;
 const path = require('node:path');
 const crypto = require('node:crypto');
-const os = require('node:os');
 const { performance } = require('node:perf_hooks');
 const { pipeline } = require('node:stream/promises');
 const { preparationFiles } = require('./preparation-files.cjs');
+const { acquireLock, createLease, retainLeases } = require('./preparation-lifetime.cjs');
+const { catalogInvalidator, readCatalog, publishCatalog } = require('./preparation-catalog.cjs');
 
 const CACHE_VERSION = 1;
 const PROCESSOR_IDENTITY = { processor: 'lossless-images-v2', decoder: 'png-rgba-v1', pageSize: 2048 };
@@ -192,80 +193,15 @@ async function writeJson(file, data, flush = true) {
     if (flush) await handle.sync();
   } finally { await handle.close(); }
 }
-const activeLeases = new Map();
 const installedLeases = new WeakMap();
-let exitCleanupInstalled = false;
 
-function processStart(pid) {
-  try {
-    const value = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
-    return value.slice(value.lastIndexOf(')') + 2).split(' ')[19];
-  } catch (_) { return null; }
-}
-function ownerAlive(owner) {
-  if (!owner || !Number.isInteger(owner.pid) || owner.pid < 1) return false;
-  if (owner.hostname !== os.hostname()) return true;
-  try { process.kill(owner.pid, 0); }
-  catch (error) { return error.code !== 'ESRCH'; }
-  const start = processStart(owner.pid);
-  return !owner.start || !start || owner.start === start;
-}
-async function createLease(cacheRoot, keys, native) {
-  const file = path.join(cacheRoot, `.lease-${process.pid}-${crypto.randomBytes(8).toString('hex')}.json`);
-  await writeJson(file, { pid: process.pid, hostname: os.hostname(), start: processStart(process.pid), keys });
+async function createImageLease(cacheRoot, keys, assets) {
+  const releaseLease = await createLease(cacheRoot, keys);
   function release() {
-    activeLeases.delete(file);
-    try { fs.unlinkSync(file); } catch (_) {}
-    if (installedLeases.get(native.assets) === release) installedLeases.delete(native.assets);
-  }
-  activeLeases.set(file, release);
-  if (!exitCleanupInstalled) {
-    process.once('exit', () => { for (const release of [...activeLeases.values()]) release(); });
-    exitCleanupInstalled = true;
+    releaseLease();
+    if (installedLeases.get(assets) === release) installedLeases.delete(assets);
   }
   return release;
-}
-async function retainLeases(cacheRoot, retained) {
-  for (const filename of await fsp.readdir(cacheRoot)) {
-    if (!/^\.lease-\d+-[a-f0-9]+\.json$/.test(filename)) continue;
-    const file = path.join(cacheRoot, filename);
-    const lease = await readJson(file);
-    if (!ownerAlive(lease) || !Array.isArray(lease.keys)) {
-      await fsp.rm(file, { force: true });
-      continue;
-    }
-    for (const key of lease.keys) if (HASH.test(key)) retained.add(key);
-  }
-}
-async function acquireLock(cacheRoot, cancelled, onWait) {
-  const lock = path.join(cacheRoot, '.prepare-lock');
-  const started = performance.now();
-  for (;;) {
-    if (cancelled()) return null;
-    try {
-      await fsp.mkdir(lock);
-      try { await writeJson(path.join(lock, 'owner.json'), { pid: process.pid, hostname: os.hostname(), start: processStart(process.pid) }); }
-      catch (error) { await fsp.rm(lock, { recursive: true, force: true }); throw error; }
-      return async () => fsp.rm(lock, { recursive: true, force: true });
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      const owner = await readJson(path.join(lock, 'owner.json'));
-      let stale = false;
-      if (owner && owner.hostname === os.hostname() && Number.isInteger(owner.pid) && owner.pid > 0) {
-        stale = !ownerAlive(owner);
-      } else if (owner && typeof owner.hostname === 'string' && Number.isInteger(owner.pid) && owner.pid > 0) {
-        if (performance.now() - started >= 15000) {
-          throw new Error('preparation cache is locked by another host; continuing with original images');
-        }
-      } else {
-        try { stale = Date.now() - (await fsp.stat(lock)).mtimeMs > 60000; }
-        catch (e) { if (e.code === 'ENOENT') continue; throw e; }
-      }
-      if (stale) { await fsp.rm(lock, { recursive: true, force: true }); continue; }
-      onWait();
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
-  }
 }
 async function cachedEntry(directory, key, sourceHash, files) {
   try {
@@ -304,13 +240,24 @@ async function prepareAssets({ gameRoot, cacheRoot, recipes = [], native, onProg
   const result = { enabled: true, total: 0, completed: 0, generated: 0, hits: 0, negativeHits: 0,
     fallback: 0, prepared: 0, installed: 0, decrypted: 0, sourceBytes: 0, cacheBytes: 0,
     cancelled: false, entries: [], decryptedEntries: [], durationMs: 0 };
+  const catalogFile = path.join(cacheRoot, 'catalog-'+identity(path.resolve(gameRoot))+'.json');
+  result.invalidateCatalog = catalogInvalidator(catalogFile, logger);
   let release;
+  let catalogNegativeHits = 0;
   let terminalPhase = 'complete';
   const report = (phase, source = '', terminal = false) => onProgress({
     phase, source, terminal, completed: result.completed, total: result.total,
     remaining: result.total - result.completed, generated: result.generated, hits: result.hits,
     fallback: result.fallback, sourceBytes: result.sourceBytes, elapsedMs: performance.now() - started
   });
+  async function clearIndexes() {
+    const results = await Promise.allSettled([
+      Promise.resolve().then(() => native.assets.installPrepared([])),
+      Promise.resolve().then(() => native.assets.installDecrypted?.([]))
+    ]);
+    for (const value of results) if (value.status === 'rejected')
+      logger.warn('[pmjs] cannot clear preparation index: '+value.reason.message);
+  }
   const cancelled = () => { if (shouldCancel()) result.cancelled = true; return result.cancelled; };
   try {
     report('discover');
@@ -318,6 +265,38 @@ async function prepareAssets({ gameRoot, cacheRoot, recipes = [], native, onProg
     validRecipes(recipes);
     if (!native.assets || typeof native.assets.processImage !== 'function' || typeof native.assets.installPrepared !== 'function') {
       throw new Error('image preparation is unavailable in this addon');
+    }
+
+    const binding = { gameRoot: path.resolve(gameRoot), cacheRoot: path.resolve(cacheRoot), processorIdentity, recipes };
+    const catalogCapable = typeof native.assets.installPreparedCatalog === 'function' &&
+      typeof native.assets.installDerivedCatalog === 'function';
+    if (!verifyHashes && catalogCapable) {
+      await fsp.mkdir(cacheRoot, { recursive: true });
+      release = await acquireLock(cacheRoot, cancelled, () => report('wait'));
+      if (!release) return result;
+      const catalog = await readCatalog(catalogFile, binding, cacheRoot);
+      if (catalog && !cancelled()) {
+        let lease;
+        try {
+          lease = await createImageLease(cacheRoot, catalog.keys, native.assets);
+          await native.assets.installDerivedCatalog(catalog.decryptedEntries);
+          const installed = await native.assets.installPreparedCatalog(catalog.entries);
+          if (installed !== catalog.entries.length) throw new Error('incomplete image catalog installation');
+          if (cancelled()) throw new Error('catalog installation cancelled');
+          const previous = installedLeases.get(native.assets);
+          installedLeases.set(native.assets, lease);
+          if (previous) previous();
+          Object.assign(result, catalog.summary, { entries: catalog.entries, decryptedEntries: catalog.decryptedEntries,
+            generated: 0, catalogHit: true, releaseCacheLease: lease });
+          report('install');
+          return result;
+        } catch (_) {
+          if (lease) lease();
+          await clearIndexes();
+        }
+      }
+      await release(); release = undefined;
+      if (cancelled()) return result;
     }
     const sources = await discover(gameRoot, cacheRoot);
     const settings = await encryptionSettings(native, gameRoot);
@@ -421,7 +400,7 @@ async function prepareAssets({ gameRoot, cacheRoot, recipes = [], native, onProg
           for (const page of manifest.descriptor.pages) result.cacheBytes += (await fsp.stat(path.join(directory, page.path))).size;
           result.entries.push({ source: logicalSource, directory, descriptor: manifest.descriptor, sourceHash, sourceIdentity,
             ...(encrypted ? { decryptedFile: path.join(directory, manifest.decrypted) } : {}) });
-        } else if (!manifest.decrypted) result.fallback += 1;
+        } else if (!manifest.decrypted) { result.fallback += 1; ++catalogNegativeHits; }
       } catch (error) {
         result.fallback += 1;
         logger.warn(`[pmjs] asset preparation fallback ${source}: ${error.message}`);
@@ -441,12 +420,12 @@ async function prepareAssets({ gameRoot, cacheRoot, recipes = [], native, onProg
           entry.settingsIdentity = settings.sourceIdentity;
         }
       }
-      const releaseCacheLease = await createLease(cacheRoot, keys, native);
+      const releaseCacheLease = await createImageLease(cacheRoot, keys, native.assets);
       const previousLease = installedLeases.get(native.assets);
       installedLeases.set(native.assets, releaseCacheLease);
       result.releaseCacheLease = releaseCacheLease;
       if (native.assets.installDecrypted) {
-        await native.assets.installDecrypted(result.decryptedEntries);
+        await native.assets.installDecrypted(result.decryptedEntries, catalogCapable);
         result.decrypted = result.decryptedEntries.filter(entry => native.assets.hasDecrypted(entry.logicalSource)).length;
         result.fallback += result.decryptedEntries.length - result.decrypted;
         result.entries = result.entries.filter(entry => {
@@ -458,13 +437,20 @@ async function prepareAssets({ gameRoot, cacheRoot, recipes = [], native, onProg
           return true;
         });
       }
-      const installed = await native.assets.installPrepared(result.entries);
+      const installed = await native.assets.installPrepared(result.entries, catalogCapable);
       if (previousLease) previousLease();
       result.prepared = result.entries.length;
       result.installed = Number.isInteger(installed) ? installed : result.entries.length;
       result.fallback += result.prepared - result.installed;
       if (result.installed < result.prepared) {
         logger.warn(`[pmjs] prepared image index installed ${result.installed}/${result.prepared}; remaining images use ordinary loading`);
+      }
+      if (catalogCapable && result.installed === result.entries.length && result.decrypted === result.decryptedEntries.length) {
+        const summary = Object.fromEntries(Object.entries(result).filter(([, value]) => typeof value === 'number'));
+        summary.hits = keys.length;
+        summary.negativeHits = catalogNegativeHits;
+        await publishCatalog(catalogFile, binding, cacheRoot, { keys, entries: result.entries,
+          decryptedEntries: result.decryptedEntries, summary });
       }
       report('cleanup');
       await files.save();
@@ -473,10 +459,17 @@ async function prepareAssets({ gameRoot, cacheRoot, recipes = [], native, onProg
       await fsp.rename(indexStage, path.join(cacheRoot, indexName));
       const retained = new Set(keys);
       for (const filename of await fsp.readdir(cacheRoot)) {
-        if (!filename.startsWith('index-') || !filename.endsWith('.json') || filename === indexName) continue;
+        if (!/^(index|catalog)-/.test(filename) || !filename.endsWith('.json') || filename === indexName) continue;
         const other = await readJson(path.join(cacheRoot, filename));
-        for (const key of other && Array.isArray(other.keys) ? other.keys : []) retained.add(key);
+        for (const key of other && Array.isArray(other.keys || other.payload?.keys) ? (other.keys || other.payload.keys) : []) if (HASH.test(key)) retained.add(key);
       }
+      const mapRoot = path.join(cacheRoot, 'maps');
+      for (const filename of await fsp.readdir(mapRoot).catch(() => [])) {
+        if (!/^catalog-[a-f0-9]{64}\.json$/.test(filename)) continue;
+        const catalog = await readJson(path.join(mapRoot, filename));
+        for (const key of Array.isArray(catalog?.payload?.keys) ? catalog.payload.keys : []) if (HASH.test(key)) retained.add(key);
+      }
+      if (fs.existsSync(mapRoot)) await retainLeases(mapRoot, retained);
       await retainLeases(cacheRoot, retained);
       for (const name of await fsp.readdir(path.join(cacheRoot, 'entries'))) {
         if (name.startsWith('.stage-') || (HASH.test(name) && !retained.has(name))) {
@@ -486,6 +479,11 @@ async function prepareAssets({ gameRoot, cacheRoot, recipes = [], native, onProg
     }
   } catch (error) {
     terminalPhase = 'error';
+    if (result.releaseCacheLease) {
+      result.releaseCacheLease(); delete result.releaseCacheLease;
+      await clearIndexes();
+      result.installed = result.decrypted = 0;
+    }
     result.fallback += result.total - result.completed;
     logger.warn(`[pmjs] asset preparation unavailable: ${error.message}`);
   } finally {
@@ -495,9 +493,14 @@ async function prepareAssets({ gameRoot, cacheRoot, recipes = [], native, onProg
     }
     result.durationMs = performance.now() - started;
     cancelled();
+    if (result.cancelled && result.releaseCacheLease) {
+      result.releaseCacheLease(); delete result.releaseCacheLease;
+      await clearIndexes();
+      result.installed = result.decrypted = 0;
+    }
     report(result.cancelled ? 'cancelled' : terminalPhase, '', true);
   }
   return result;
 }
 
-module.exports = { acquireLock, createLease, retainLeases, prepareAssets, validRecipes, validDescriptor, PROCESSOR_IDENTITY };
+module.exports = { prepareAssets, validRecipes, validDescriptor, PROCESSOR_IDENTITY };

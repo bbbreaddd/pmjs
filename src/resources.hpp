@@ -130,7 +130,10 @@ class ImageStore {
   static std::optional<ImagePixels> decodeMemory(const void* data, std::size_t size);
   static std::optional<ImagePixels> decodePngFromMemory(const void* data, std::size_t size);
   static std::optional<ImagePixels> decodeJpegFromMemory(const void* data, std::size_t size);
-  bool installTileSet(PreparedTileSet descriptor);
+  bool installTileSet(PreparedTileSet descriptor,
+      const std::vector<std::string>* pageIdentities = nullptr,
+      const std::vector<std::string>* snapshotIdentities = nullptr,
+      std::vector<std::string>* capturedPages = nullptr, std::vector<std::string>* capturedSnapshots = nullptr);
   void clearTileSetIndex();
   std::optional<ImageInfo> createTileSlot(ImageHandle handle, int width, int height);
   bool hasTileBacking(ImageHandle handle) const;
@@ -144,11 +147,14 @@ class ImageStore {
   const std::unordered_map<std::string, std::uint64_t>& tileFallbacks() const { return tileFallbacks_; }
   std::size_t tileMetadataBytes() const { return tileMetadataBytes_->load(std::memory_order_relaxed); }
   void noteTileLoadFallback() { if (tileDiagnostics_) ++tileFallbacks_["page-validation"]; }
+  unsigned consumePreparationInvalidations() { return preparationInvalidations_.exchange(0, std::memory_order_relaxed); }
   void clearPreparedIndex() { preparedSources_.clear(); }
   bool installPrepared(const std::filesystem::path& sourcePath,
                        const std::filesystem::path& directory,
                        PreparedImageDescriptor descriptor,
-                       const std::string& expectedSourceIdentity = {});
+                       const std::string& expectedSourceIdentity = {},
+                       const std::vector<std::string>* pageIdentities = nullptr,
+                       std::vector<std::string>* capturedPages = nullptr);
   std::optional<ImageInfo> acquirePrepared(const ImageFileSource& source,
                                           bool retainCpuPixels = false);
   struct PreparedLoad;
@@ -304,6 +310,7 @@ class ImageStore {
   bool promoteToRgba(Slot& slot, const void* replacement = nullptr);
   std::deque<Slot> slots_;
   std::unordered_map<std::string, ImageHandle> pathCache_;
+  mutable std::atomic<unsigned> preparationInvalidations_{0};
   std::unordered_map<std::string, std::shared_ptr<PreparedBacking>> preparedSources_;
   std::size_t liveCount_ = 0;
   std::size_t gpuBytes_ = 0;

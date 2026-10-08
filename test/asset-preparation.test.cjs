@@ -789,3 +789,121 @@ test('torn positive and negative cache manifests regenerate without changing sou
     assert.equal(warm.negativeHits, negative ? 1 : 0);
   }
 });
+
+test('warm catalogs install without discovery or source checks and verification bypasses reuse', async () => {
+  const f = fixture();
+  f.native.assets.sourceIdentity = () => 'source-identity';
+  f.native.assets.installPrepared = entries => {
+    for (const entry of entries) entry.pageIdentities = entry.descriptor.pages.map(() => 'page-identity');
+    return entries.length;
+  };
+  f.native.assets.installPreparedCatalog = entries => entries.length;
+  f.native.assets.installDerivedCatalog = () => {};
+  const cold = await prepareAssets(f);
+  assert.equal(cold.installed, 1);
+  const originals = new Map();
+  for (const name of ['readdir', 'lstat', 'stat']) {
+    originals.set(name, fs.promises[name]);
+    fs.promises[name] = async () => { throw new Error('unexpected warm '+name); };
+  }
+  const sourceIdentity = f.native.assets.sourceIdentity;
+  f.native.assets.sourceIdentity = () => { throw new Error('unexpected warm source identity'); };
+  try {
+    const warm = await prepareAssets(f);
+    assert.equal(warm.catalogHit, true);
+    assert.equal(warm.generated, 0);
+    assert.equal(warm.installed, 1);
+    assert.equal(warm.entries[0].sourceIdentity, 'source-identity');
+    warm.releaseCacheLease();
+  } finally {
+    for (const [name, original] of originals) fs.promises[name] = original;
+    f.native.assets.sourceIdentity = sourceIdentity;
+  }
+  const verified = await prepareAssets({ ...f, verifyHashes: true });
+  assert.equal(verified.catalogHit, undefined);
+  assert.ok(verified.validation.hashedFiles > 0);
+  verified.releaseCacheLease(); cold.releaseCacheLease();
+});
+
+test('observed stale image catalogs regenerate on the following preparation run', async () => {
+  const f = fixture();
+  f.native.assets.sourceIdentity = () => 'source-identity';
+  f.native.assets.installPrepared = entries => {
+    for (const entry of entries) entry.pageIdentities = entry.descriptor.pages.map(() => 'page-identity');
+    return entries.length;
+  };
+  f.native.assets.installPreparedCatalog = entries => entries.length;
+  f.native.assets.installDerivedCatalog = () => {};
+  const cold = await prepareAssets(f);
+  const warm = await prepareAssets(f);
+  assert.equal(warm.catalogHit, true);
+  assert.equal(warm.invalidateCatalog(), true);
+  assert.equal(warm.invalidateCatalog(), true, 'repeated invalidation is harmless');
+  const refreshed = await prepareAssets(f);
+  assert.equal(refreshed.catalogHit, undefined);
+  assert.equal(refreshed.installed, 1);
+  const next = await prepareAssets(f);
+  assert.equal(next.catalogHit, true, 'a repaired catalog returns to the fast path');
+  for (const result of [cold, warm, refreshed, next]) result.releaseCacheLease();
+});
+
+test('damaged or rejected catalogs rebuild and release failed installation leases', async () => {
+  const f = fixture();
+  f.native.assets.sourceIdentity = () => 'source-identity';
+  f.native.assets.installPrepared = entries => {
+    for (const entry of entries) entry.pageIdentities = ['page-identity'];
+    return entries.length;
+  };
+  f.native.assets.installPreparedCatalog = () => 0;
+  f.native.assets.installDerivedCatalog = () => {};
+  const cold = await prepareAssets(f);
+  const refused = await prepareAssets(f);
+  assert.equal(refused.catalogHit, undefined);
+  assert.equal(refused.installed, 1);
+  const file = fs.readdirSync(f.cacheRoot).find(name => name.startsWith('catalog-'));
+  fs.writeFileSync(path.join(f.cacheRoot, file), '{');
+  const repaired = await prepareAssets(f);
+  assert.equal(repaired.installed, 1);
+  assert.equal(repaired.generated, 0);
+  assert.doesNotThrow(() => JSON.parse(fs.readFileSync(path.join(f.cacheRoot, file))));
+  repaired.releaseCacheLease(); refused.releaseCacheLease(); cold.releaseCacheLease();
+});
+
+test('map catalogs and live map leases protect shared decrypted entries during image cleanup', async () => {
+  const f = fixture(), key = 'b'.repeat(64);
+  const directory = path.join(f.cacheRoot, 'entries', key), mapRoot = path.join(f.cacheRoot, 'maps');
+  fs.mkdirSync(directory, { recursive: true }); fs.mkdirSync(mapRoot);
+  fs.writeFileSync(path.join(directory, 'source.png'), PNG);
+  const { publishCatalog } = require('../runner/preparation-catalog.cjs');
+  const { createLease } = require('../runner/preparation-lifetime.cjs');
+  const catalog = path.join(mapRoot, 'catalog-'+key+'.json');
+  await publishCatalog(catalog, {}, f.cacheRoot, { keys: [key], entries: [] });
+  await prepareAssets(f);
+  assert.ok(fs.existsSync(directory));
+  const release = await createLease(mapRoot, [key]);
+  fs.unlinkSync(catalog);
+  await prepareAssets(f);
+  assert.ok(fs.existsSync(directory));
+  release();
+  await prepareAssets(f);
+  assert.equal(fs.existsSync(directory), false);
+});
+
+test('cancelled warm installation releases its lease and clears partial indexes', async () => {
+  const f = fixture(); let cancelled = false;
+  f.native.assets.sourceIdentity = () => 'source-identity';
+  f.native.assets.installPrepared = entries => {
+    for (const entry of entries) entry.pageIdentities = ['page'];
+    return entries.length;
+  };
+  f.native.assets.installPreparedCatalog = entries => { cancelled = true; return entries.length; };
+  f.native.assets.installDerivedCatalog = () => {};
+  const cold = await prepareAssets(f);
+  const before = fs.readdirSync(f.cacheRoot).filter(name => name.startsWith('.lease-'));
+  const warm = await prepareAssets({ ...f, shouldCancel: () => cancelled });
+  assert.equal(warm.cancelled, true);
+  assert.equal(warm.installed, 0);
+  assert.equal(warm.releaseCacheLease, undefined);
+  assert.deepEqual(fs.readdirSync(f.cacheRoot).filter(name => name.startsWith('.lease-')), before);
+  cold.releaseCacheLease();
+});

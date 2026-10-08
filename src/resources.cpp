@@ -266,6 +266,7 @@ std::unique_ptr<ImageFileSource> ImageStore::openFile(const std::filesystem::pat
 }
 
 struct ImageStore::PreparedBacking {
+  std::string sourceIdentity;
   struct Page {
     std::shared_ptr<ImageFileSource> source;
     std::optional<ImagePixels> pixels;
@@ -1051,13 +1052,15 @@ void ImageStore::clearPrepared(Slot& slot) {
 bool ImageStore::installPrepared(const std::filesystem::path& sourcePath,
                                 const std::filesystem::path& directory,
                                 PreparedImageDescriptor descriptor,
-                                const std::string& expectedSourceIdentity) {
+                                const std::string& expectedSourceIdentity,
+                                const std::vector<std::string>* pageIdentities, std::vector<std::string>* capturedPages) {
   if (descriptor.version != 1 || descriptor.halo < 1 || descriptor.halo > 32 || !checkedImageExtent(descriptor.width, descriptor.height,
       8192, 128U * 1024U * 1024U)) return false;
-  auto original = openFile(sourcePath);
-  if (!original || (!expectedSourceIdentity.empty() && original->key() != expectedSourceIdentity)) return false;
+  auto original = pageIdentities ? nullptr : openFile(sourcePath);
+  if (pageIdentities ? (expectedSourceIdentity.empty() || pageIdentities->size() != descriptor.pages.size()) :
+      (!original || (!expectedSourceIdentity.empty() && original->key() != expectedSourceIdentity))) return false;
   auto backing = std::make_shared<PreparedBacking>();
-  const auto sourceIdentity = original->key();
+  const auto sourceIdentity = pageIdentities ? expectedSourceIdentity : original->key();
   if (!descriptor.uniform && descriptor.cells.empty()) return false;
   std::size_t area = 0;
   for (const auto& cell : descriptor.cells) {
@@ -1086,14 +1089,22 @@ bool ImageStore::installPrepared(const std::filesystem::path& sourcePath,
   for (const auto& page : descriptor.pages) {
     if (page.width <= 0 || page.height <= 0 || page.width > 2048 || page.height > 2048 ||
         page.path.empty() || page.path.is_absolute() || page.path.has_parent_path()) return false;
-    auto source = openFile(directory / page.path);
-    if (!source) return false;
     PreparedBacking::Page prepared;
-    prepared.path = source->path(); prepared.identity = source->key();
+    if (pageIdentities) {
+      prepared.path = directory / page.path; prepared.identity = pageIdentities->at(backing->pages.size());
+      if (prepared.identity.empty()) return false;
+    } else {
+      auto source = openFile(directory / page.path);
+      if (!source) return false;
+      prepared.path = source->path(); prepared.identity = source->key();
+    }
     backing->pages.push_back(std::move(prepared));
   }
+  if (capturedPages) for (const auto& page : backing->pages) capturedPages->push_back(page.identity);
   backing->descriptor = std::move(descriptor);
-  preparedSources_[sourceIdentity] = std::move(backing);
+  backing->sourceIdentity = sourceIdentity;
+  const auto canonicalSource = original ? original->path().string() : sourcePath.string();
+  preparedSources_[canonicalSource] = std::move(backing);
   return true;
 }
 
@@ -1108,7 +1119,11 @@ std::shared_ptr<ImageStore::PreparedLoad> ImageStore::capturePrepared(
   const auto cached = pathCache_.find(source.key());
   if (cached != pathCache_.end() && inspect(cached->second))
     prototype = slots_[(cached->second & indexMask) - 1U].prepared;
-  const auto found = preparedSources_.find(source.key());
+  const auto found = preparedSources_.find(source.path().string());
+  if (!prototype && found != preparedSources_.end() && found->second->sourceIdentity != source.key()) {
+    preparationInvalidations_.fetch_or(1, std::memory_order_relaxed);
+    return nullptr;
+  }
   if (!prototype && found == preparedSources_.end()) return nullptr;
   auto load = std::make_shared<PreparedLoad>();
   if (!prototype) prototype = found->second;
@@ -1116,13 +1131,19 @@ std::shared_ptr<ImageStore::PreparedLoad> ImageStore::capturePrepared(
   if (fstat(source.descriptor_, &current) != 0 ||
       current.st_size != static_cast<off_t>(source.size_) ||
       current.st_mtim.tv_sec != source.modifiedSeconds_ ||
-      current.st_mtim.tv_nsec != source.modifiedNanoseconds_) return nullptr;
+      current.st_mtim.tv_nsec != source.modifiedNanoseconds_) {
+    preparationInvalidations_.fetch_or(1, std::memory_order_relaxed);
+    return nullptr;
+  }
   load->backing = std::make_shared<PreparedBacking>();
   auto& backing = *load->backing;
   backing.descriptor = prototype->descriptor;
   for (const auto& page : prototype->pages) {
     auto file = page.source ? page.source : std::shared_ptr<ImageFileSource>(openFile(page.path));
-    if (!file || file->key() != page.identity) return nullptr;
+    if (!file || file->key() != page.identity) {
+      preparationInvalidations_.fetch_or(1, std::memory_order_relaxed);
+      return nullptr;
+    }
     PreparedBacking::Page captured;
     captured.source = std::move(file);
     captured.path = page.path;
