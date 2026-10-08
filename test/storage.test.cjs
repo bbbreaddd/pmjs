@@ -162,8 +162,8 @@ for (const disabled of [false, true]) {
   });
 }
 
-function localStorageContext() {
-  const storage = createStorage(temporaryDirectory('pmjs-storage-paths-'));
+function localStorageContext({ storage = createStorage(temporaryDirectory('pmjs-storage-paths-')),
+  disabled = false } = {}) {
   const lz = {
     compressToBase64: value => Buffer.from(value).toString('base64'),
     decompressFromBase64: value => value === null ? null : Buffer.from(value, 'base64').toString('utf8'),
@@ -205,12 +205,86 @@ function localStorageContext() {
   };
   const context = loadPmjsRuntime({
     Buffer, __pmjsBuiltinRequire: require, NativeHost: { storage }, StorageManager: manager, LZString: lz, queueMicrotask,
+    PMJS_GAME_CONFIG: { disableOptimizations: disabled ? ['storage.read-burst-coalesce'] : [] },
   });
   for (const file of ['pmjs-web/filesystem.js', 'pmjs-mv/storage.js']) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../js', file), 'utf8'), context);
   }
   guestFs = context.fsModule;
   return { context, manager, storage, lz };
+}
+
+for (const disabled of [false, true]) {
+  test('MV primary read errors propagate with backups and deletion markers, cache disabled=' + disabled, () => {
+    for (const backup of [false, true]) {
+      for (const deleted of [false, true]) {
+        const { context, manager, storage, lz } = localStorageContext({ disabled });
+        storage.writeText('file1.rpgsave', lz.compressToBase64('primary'));
+        if (backup) storage.writeText('file1.rpgsave.bak', lz.compressToBase64('backup'));
+        if (deleted) storage.writeText('file1.rpgsave.deleted', '');
+        context.installNativeStorageManager();
+        const error = Object.assign(new Error('primary read failed'), { code: 'EIO' });
+        const readText = storage.readText;
+        storage.readText = function(name) {
+          if (name === 'file1.rpgsave') throw error;
+          return readText.call(this, name);
+        };
+        assert.equal(manager.localFileExists(1), true);
+        assert.throws(() => manager.loadFromLocalFile(1), caught => caught === error);
+        assert.throws(() => manager.loadFromLocalFile(1), caught => caught === error);
+        storage.readText = readText;
+        assert.equal(manager.loadFromLocalFile(1), 'primary');
+      }
+    }
+  });
+
+  test('MV recovery and deliberate deletion survive restart, cache disabled=' + disabled, () => {
+    const { storage, lz } = localStorageContext({ disabled });
+    storage.writeText('file1.rpgsave.bak', lz.compressToBase64('backup'));
+    function restart() {
+      const { context, manager } = localStorageContext({ storage, disabled });
+      context.installNativeStorageManager();
+      return manager;
+    }
+    let manager = restart();
+    assert.equal(manager.localFileExists(1), true);
+    assert.equal(manager.loadFromLocalFile(1), 'backup');
+    manager.removeLocalFile(1);
+    manager = restart();
+    assert.equal(manager.localFileExists(1), false);
+    assert.equal(manager.loadFromLocalFile(1), null);
+    assert.equal(storage.exists('file1.rpgsave.bak'), true);
+    manager.restoreBackup(1);
+    manager = restart();
+    assert.equal(manager.loadFromLocalFile(1), 'backup');
+    assert.equal(storage.exists('file1.rpgsave.deleted'), false);
+    manager.removeLocalFile(1);
+    manager.saveToLocalFile(1, 'new save');
+    assert.equal(restart().loadFromLocalFile(1), 'new save');
+    assert.equal(storage.exists('file1.rpgsave.deleted'), false);
+  });
+
+  test('MV decompression and backup read errors propagate, cache disabled=' + disabled, () => {
+    const { context, manager, storage, lz } = localStorageContext({ disabled });
+    storage.writeText('file1.rpgsave', lz.compressToBase64('primary'));
+    storage.writeText('file1.rpgsave.bak', lz.compressToBase64('backup'));
+    context.installNativeStorageManager();
+    const error = new Error('decompression failed');
+    const decompress = lz.decompressFromBase64;
+    lz.decompressFromBase64 = value => {
+      if (value === lz.compressToBase64('primary')) throw error;
+      return decompress(value);
+    };
+    assert.throws(() => manager.loadFromLocalFile(1), caught => caught === error);
+    lz.decompressFromBase64 = decompress;
+    storage.remove('file1.rpgsave');
+    const readText = storage.readText;
+    storage.readText = function(name) {
+      if (name.endsWith('.bak')) throw error;
+      return readText.call(this, name);
+    };
+    assert.throws(() => manager.loadFromLocalFile(1), caught => caught === error);
+  });
 }
 
 test('MV relocates local storage without replacing plugin filenames', () => {

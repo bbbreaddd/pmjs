@@ -78,15 +78,11 @@ function installNativeStorageManager() {
     return data;
   }
 
-  // A missing primary can remain after an interrupted older save.
+  // Null content may recover from a backup; read/decompression errors propagate.
   function pmjsReadLocalSave(savefileId) {
     var storagePath = normalizeStoragePath(this.localFilePath(savefileId));
-    try {
-      var primary = pmjsReadDecompressed(storagePath);
-      if (primary !== null) return primary;
-    } catch (error) {
-      if (!pmjsCachedStorageExists(storagePath + '.bak')) throw error;
-    }
+    var primary = pmjsReadDecompressed(storagePath);
+    if (primary !== null) return primary;
     if (pmjsCachedStorageExists(storagePath + '.bak') &&
         !pmjsCachedStorageExists(storagePath + '.deleted')) {
       return pmjsReadDecompressed(storagePath + '.bak');
