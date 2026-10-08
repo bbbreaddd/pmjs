@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <stdexcept>
@@ -80,6 +81,12 @@ Renderer::Renderer(int width, int height, ImageStore& images)
     : width_(width), height_(height), presentationWidth_(width),
       presentationHeight_(height), queueWidth_(width), queueHeight_(height),
       images_(images) {
+  const auto* graphicsRenderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+  softwareSceneDepth_ = graphicsRenderer && std::string(graphicsRenderer).find("llvmpipe") != std::string::npos;
+  const char* tileTextures = std::getenv("PMJS_TILE_BATCH_TEXTURES");
+  if (tileTextures && std::string(tileTextures) != "1" && std::string(tileTextures) != "4")
+    throw std::runtime_error("PMJS_TILE_BATCH_TEXTURES must be 1 or 4");
+  fourTileTextures_ = tileTextures && std::string(tileTextures) == "4";
   const char* diagnostics = std::getenv("PMJS_GRAPHICS_DIAGNOSTICS");
   diagnostics_ = diagnostics && std::string(diagnostics) == "1";
   const char* filterBounds = std::getenv("PMJS_FILTER_BOUNDS");
@@ -94,6 +101,10 @@ Renderer::Renderer(int width, int height, ImageStore& images)
   if (maxTextureSize_ <= 0) {
     throw std::runtime_error("cannot query GL_MAX_TEXTURE_SIZE");
   }
+  const char* presentTiming = std::getenv("PMJS_PRESENT_TIMING");
+  presentationTimings_.enabled = presentTiming && std::string(presentTiming) == "1";
+  const char* presentFinish = std::getenv("PMJS_PRESENT_FINISH");
+  presentationTimings_.finishBeforeSwap = presentFinish && std::string(presentFinish) == "1";
   using namespace renderer_shaders;
   createPixiPrograms(pixiFragmentPrecision_);
   generatedTextureProgram_ = linkProgram(vertexSource,
@@ -102,6 +113,7 @@ Renderer::Renderer(int width, int height, ImageStore& images)
     generatedTextureProgram_, "preservePremultiplied");
   presentationProgram_ = linkProgram(presentationVertexSource,
                                      presentationFragmentSource);
+  presentationLayerUniform_ = glGetUniformLocation(presentationProgram_, "presentationLayer");
   presentationSceneUniform_ =
     glGetUniformLocation(presentationProgram_, "sceneImage");
   presentationOverlayUniform_ =
@@ -273,6 +285,7 @@ void Renderer::queryFilterProgramUniforms() {
 
 Renderer::TileProgramUniforms Renderer::queryTileProgramUniforms(std::uint32_t program) {
   TileProgramUniforms uniforms;
+  uniforms.tileFrameEnabled = glGetUniformLocation(program, "tileFrameEnabled");
   uniforms.targetYDown = glGetUniformLocation(program, "targetYDown");
   uniforms.world = glGetUniformLocation(program, "world");
   uniforms.screen = glGetUniformLocation(program, "screenSize");
@@ -284,6 +297,8 @@ Renderer::TileProgramUniforms Renderer::queryTileProgramUniforms(std::uint32_t p
   uniforms.trianglePaint = glGetUniformLocation(program, "trianglePaint");
   uniforms.triangleCoverageEnabled = glGetUniformLocation(program, "triangleCoverageEnabled");
   uniforms.triangleCoverage = glGetUniformLocation(program, "triangleCoverage");
+  uniforms.triangleSourceMappingEnabled = glGetUniformLocation(program, "triangleSourceMappingEnabled");
+  uniforms.triangleSourceMapping = glGetUniformLocation(program, "triangleSourceMapping");
   uniforms.mvBlendEnabled = glGetUniformLocation(program, "mvBlendEnabled");
   uniforms.mvBounds = glGetUniformLocation(program, "mvBounds");
   uniforms.nearestSampling = glGetUniformLocation(program, "nearestSampling");
@@ -307,13 +322,19 @@ void Renderer::createPixiPrograms(const std::string& precision) {
   };
   GLuint filter = 0;
   GLuint simple = 0;
-  GLuint tile = 0;
+  GLuint tile = 0, fourTile = 0;
   GLuint meshOverlay = 0;
   GLuint canvasTriangleBitmap = 0;
   try {
     filter = linkPixiProgram(vertexSource, fragmentSource);
     simple = linkPixiProgram(vertexSource, simpleFragmentSource);
     tile = linkPixiProgram(tileVertexSource, tileFragmentSource);
+    if (fourTileTextures_) {
+      std::string vertex(tileVertexSource), fragment(tileFragmentSource);
+      vertex.insert(vertex.find('\n') + 1, "#define PMJS_FOUR_TILE_TEXTURES\n");
+      fragment.insert(fragment.find('\n') + 1, "#define PMJS_FOUR_TILE_TEXTURES\n");
+      fourTile = linkPixiProgram(vertex.c_str(), fragment.c_str());
+    }
     const auto overlaySource = meshPostTintOverlayFragmentSourceWithPrecision("mediump");
     meshOverlay = linkPixiProgram(tileVertexSource, overlaySource.c_str());
     const auto bitmapSource = meshPostTintOverlayFragmentSourceWithPrecision("mediump", true);
@@ -322,6 +343,7 @@ void Renderer::createPixiPrograms(const std::string& precision) {
     if (filter) glDeleteProgram(filter);
     if (simple) glDeleteProgram(simple);
     if (tile) glDeleteProgram(tile);
+    if (fourTile) glDeleteProgram(fourTile);
     if (meshOverlay) glDeleteProgram(meshOverlay);
     if (canvasTriangleBitmap) glDeleteProgram(canvasTriangleBitmap);
     throw;
@@ -329,6 +351,7 @@ void Renderer::createPixiPrograms(const std::string& precision) {
   if (program_) glDeleteProgram(program_);
   if (simpleProgram_) glDeleteProgram(simpleProgram_);
   if (tileProgram_) glDeleteProgram(tileProgram_);
+  if (fourTileProgram_) glDeleteProgram(fourTileProgram_);
   if (meshPostTintOverlayProgram_) glDeleteProgram(meshPostTintOverlayProgram_);
   if (canvasTriangleBitmapProgram_) glDeleteProgram(canvasTriangleBitmapProgram_);
   program_ = filter;
@@ -348,6 +371,13 @@ void Renderer::createPixiPrograms(const std::string& precision) {
   simpleDerivedUvTransformUniform_ = glGetUniformLocation(simpleProgram_, "derivedUvTransform");
   simpleDerivedSampleBoundsUniform_ = glGetUniformLocation(simpleProgram_, "derivedSampleBounds");
   tileProgram_ = tile;
+  fourTileProgram_ = fourTile;
+  if (fourTileProgram_) {
+    fourTileUniforms_ = queryTileProgramUniforms(fourTileProgram_);
+    glUseProgram(fourTileProgram_);
+    for (int slot = 0; slot < 4; ++slot)
+      glUniform1i(glGetUniformLocation(fourTileProgram_, ("tileImage" + std::to_string(slot)).c_str()), slot);
+  }
   meshPostTintOverlayProgram_ = meshOverlay;
   canvasTriangleBitmapProgram_ = canvasTriangleBitmap;
   queryFilterProgramUniforms();
@@ -394,6 +424,7 @@ std::uint32_t Renderer::createFilterProgram(const std::string& fragmentSource, c
     source = "precision " + precision + " float;\n" + source;
   }
   source = "precision highp sampler2D;\n" + source;
+
   for (std::size_t index = 0; index < filterPrograms_.size(); ++index) {
     if (filterPrograms_[index].source == vertexSource + "\n" + source) return index + 1;
   }
@@ -536,6 +567,7 @@ Renderer::~Renderer() {
   if (spriteEffect_.program) glDeleteProgram(spriteEffect_.program);
   if (bitmapRegion_.program) glDeleteProgram(bitmapRegion_.program);
   if (tileProgram_) glDeleteProgram(tileProgram_);
+  if (fourTileProgram_) glDeleteProgram(fourTileProgram_);
   if (meshPostTintOverlayProgram_) glDeleteProgram(meshPostTintOverlayProgram_);
   if (canvasTriangleBitmapProgram_) glDeleteProgram(canvasTriangleBitmapProgram_);
   if (clearTriangleProgram_) glDeleteProgram(clearTriangleProgram_);

@@ -26,9 +26,11 @@ function compare(item) {
   const width = native.canvas.measureText(item.fontFiles, item.text, item.size, style);
   assert.equal(width, expected.width, item.name);
   const x = item.align === 'center' ? item.x - width / 2 : item.x;
-  native.canvas.drawText(canvas.handle, item.fontFiles, item.text, x, item.y, item.size, item.outline, item.stroke, style);
-  native.canvas.drawText(canvas.handle, item.fontFiles, item.text, x, item.y, item.size,
-    ((item.fill & 0xffffff00) | Math.round((item.fill & 255) * item.alpha)) >>> 0, 0, style);
+  for (const draw of item.draws || [{ text: item.text, x, y: item.y }]) {
+    native.canvas.drawText(canvas.handle, item.fontFiles, draw.text, draw.x, draw.y, item.size, item.outline, item.stroke, style);
+    native.canvas.drawText(canvas.handle, item.fontFiles, draw.text, draw.x, draw.y, item.size,
+      ((item.fill & 0xffffff00) | Math.round((item.fill & 255) * item.alpha)) >>> 0, 0, style);
+  }
   const pixels = premul(native.canvas.readPixels(canvas.handle, 0, 0, item.width, item.height));
   assert.deepEqual(pixels, Buffer.from(expected.pixels, 'base64'), item.name);
   native.canvas.release(canvas.handle);

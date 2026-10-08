@@ -41,8 +41,18 @@ void Renderer::applyBlendMode(BlendMode mode) {
 }
 
 void Renderer::render() {
-  renderScene();
-  presentToDrawable();
+  {
+    PresentationPhaseTimer timer(presentationTimings_.enabled, presentationTimings_.phases[0]);
+    renderScene();
+  }
+  {
+    PresentationPhaseTimer timer(presentationTimings_.enabled, presentationTimings_.phases[1]);
+    presentToDrawable();
+  }
+  if (presentationTimings_.finishBeforeSwap && !offscreenRender_) {
+    PresentationPhaseTimer timer(presentationTimings_.enabled, presentationTimings_.phases[4]);
+    glFinish();
+  }
 }
 
 int Renderer::filterBoundsPadding(scene_packet::FilterKind kind,
@@ -378,9 +388,10 @@ void Renderer::renderScene() {
   const bool shouldRenderScene =
       sceneSubmittedThisFrame_ || offscreenRender_ || !hasValidSceneFrame_;
   if (shouldRenderScene) {
-    if (!offscreenRender_ && std::any_of(frame_.commands.begin(), frame_.commands.end(), [](const auto& command) {
+    // llvmpipe changes interpolation when depth is first attached; keep its scene storage stable.
+    if (!offscreenRender_ && (softwareSceneDepth_ || std::any_of(frame_.commands.begin(), frame_.commands.end(), [](const auto& command) {
       return command.primitive == RenderCommand::Primitive::effect;
-    })) ensureDepthBuffer(rootTarget);
+    }))) ensureDepthBuffer(rootTarget);
     if (!offscreenRender_) toneCompositionActive_ = false;
     glBindFramebuffer(GL_FRAMEBUFFER, rootFramebuffer);
     glViewport(0, 0, width_, height_);
@@ -881,11 +892,14 @@ void Renderer::renderScene() {
   std::array<float, 4> rasterFrame{0, 0, static_cast<float>(width_), static_cast<float>(height_)};
   std::array<std::array<float, 4>, scene_packet::maxFilterDepth> rasterFrames{};
   // Deleted image textures can return under the same GL name with default sampling.
-  if (imageTextureEpoch_ != images_.textureEpoch()) {
-    textureNearestState_.clear();
-    textureRepeatState_.clear();
-    imageTextureEpoch_ = images_.textureEpoch();
-  }
+  const auto synchronizeImageTextureEpoch = [&] {
+    if (imageTextureEpoch_ != images_.textureEpoch()) {
+      textureNearestState_.clear();
+      textureRepeatState_.clear();
+      imageTextureEpoch_ = images_.textureEpoch();
+    }
+  };
+  synchronizeImageTextureEpoch();
   bool targetYDown = offscreenRender_;
   const auto projectTarget = [&](std::uint32_t program, bool projectScene = true) {
     auto [entry, inserted] = targetProjectionLocations_.try_emplace(program, -1);
@@ -1637,14 +1651,17 @@ void Renderer::renderScene() {
       if (!prepareTileLayer(layer->second, command.tileAnimation, operation.nearest))
         throw std::runtime_error("tile layer backing cannot be prepared");
       const auto& material = layer->second.material;
+      synchronizeImageTextureEpoch();
       const auto* triangleMaterial = std::get_if<TriangleBitmapMaterial>(&material);
       const auto* bitmapMaterial = std::get_if<MvBitmapMaterial>(&material);
       const bool usesOverlay = command.appliesMeshPostTintOverlay || triangleMaterial || bitmapMaterial;
       const bool canvasTriangleBitmap = triangleMaterial &&
         triangleMaterial->rasterRule == TriangleBitmapMaterial::RasterRule::canvasFourSample;
-      const auto program = canvasTriangleBitmap ? canvasTriangleBitmapProgram_ :
+      const bool fourTextures = fourTileTextures_ && !usesOverlay && !command.maskImage &&
+        command.primitive == RenderCommand::Primitive::tileLayer && prepareFourTileBatches(layer->second);
+      const auto program = fourTextures ? fourTileProgram_ : canvasTriangleBitmap ? canvasTriangleBitmapProgram_ :
         usesOverlay ? meshPostTintOverlayProgram_ : tileProgram_;
-      const auto& uniforms = canvasTriangleBitmap ? canvasTriangleBitmapUniforms_ :
+      const auto& uniforms = fourTextures ? fourTileUniforms_ : canvasTriangleBitmap ? canvasTriangleBitmapUniforms_ :
         usesOverlay ? meshPostTintOverlayUniforms_ : tileUniforms_;
       glUseProgram(program);
       projectTarget(program);
@@ -1656,6 +1673,9 @@ void Renderer::renderScene() {
       glUniform2f(uniforms.animation, command.tileAnimation[0],
                   command.tileAnimation[1]);
       glUniform4fv(uniforms.color, 1, command.color.data());
+      glUniform1i(uniforms.tileFrameEnabled,
+        command.primitive == RenderCommand::Primitive::tileLayer);
+      glUniform1i(uniforms.nearestSampling, operation.nearest);
       if (usesOverlay) {
         glUniform4fv(uniforms.overlayColor, 1, command.blendColor.data());
         glUniform1i(uniforms.trianglePaintEnabled, triangleMaterial != nullptr);
@@ -1670,6 +1690,9 @@ void Renderer::renderScene() {
           glUniform1i(uniforms.triangleCoverage, 2);
           glActiveTexture(GL_TEXTURE0);
         }
+        glUniform1i(uniforms.triangleSourceMappingEnabled, layer->second.triangleSourceMappingEnabled);
+        if (layer->second.triangleSourceMappingEnabled)
+          glUniform4fv(uniforms.triangleSourceMapping, 1, layer->second.triangleSourceMapping.data());
         if (triangleMaterial) glUniform1fv(uniforms.trianglePaint, 30, triangleMaterial->coefficients.data());
         if (bitmapMaterial != nullptr) {
           glUniform4fv(uniforms.mvBounds, 1, bitmapMaterial->texelBounds.data());
@@ -1694,6 +1717,24 @@ void Renderer::renderScene() {
         glActiveTexture(GL_TEXTURE0);
       } else {
         glUniform1i(uniforms.maskEnabled, 0);
+      }
+      if (fourTextures) {
+        for (const auto& batch : layer->second.fourBatches) {
+          for (int slot = 0; slot < 4; ++slot) {
+            const auto texture = batch.textures[slot < batch.textureCount ? slot : 0].texture;
+            glActiveTexture(GL_TEXTURE0 + slot); glBindTexture(GL_TEXTURE_2D, texture);
+            const auto nearest = textureNearestState_.find(texture);
+            if (nearest == textureNearestState_.end() || nearest->second != operation.nearest) {
+              textureNearestState_[texture] = operation.nearest;
+              glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, operation.nearest ? GL_NEAREST : GL_LINEAR);
+              glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, operation.nearest ? GL_NEAREST : GL_LINEAR);
+            }
+          }
+          glDrawArrays(GL_TRIANGLES, batch.first, batch.count);
+          if (diagnostics_) { ++stats_.drawCalls; ++stats_.tileDrawCalls; }
+        }
+        glActiveTexture(GL_TEXTURE0);
+        continue;
       }
       for (const auto& batch : layer->second.batches) {
         glUniform1i(uniforms.texturePremultiplied, batch.premultiplied);
@@ -1876,7 +1917,11 @@ void Renderer::presentToDrawable() {
   if (identity) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER,
                       composePresentation ? filterTarget_.framebuffer : sceneTarget_.framebuffer);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    {
+      PresentationPhaseTimer timer(presentationTimings_.enabled, presentationTimings_.phases[2]);
+      glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    }
+    PresentationPhaseTimer windowWrite(presentationTimings_.enabled, presentationTimings_.phases[3]);
     glBlitFramebuffer(0, 0, width_, height_, 0, 0,
                       presentationWidth_, presentationHeight_,
                       GL_COLOR_BUFFER_BIT,
@@ -1897,7 +1942,10 @@ void Renderer::presentToDrawable() {
       presentation_.viewportHeight;
   const int destWidth = presentation_.viewportWidth;
   const int destHeight = presentation_.viewportHeight;
-  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  {
+    PresentationPhaseTimer timer(presentationTimings_.enabled, presentationTimings_.phases[2]);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  }
   glViewport(0, 0, drawableWidth, drawableHeight);
   glDisable(GL_SCISSOR_TEST);
   // Bars use a blit, not glClear: an unswapped window clear correlates
@@ -1907,12 +1955,14 @@ void Renderer::presentToDrawable() {
   if (!fullWindow) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, blackFramebuffer_);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    PresentationPhaseTimer windowWrite(presentationTimings_.enabled, presentationTimings_.phases[3]);
     glBlitFramebuffer(0, 0, 1, 1, 0, 0, drawableWidth, drawableHeight,
                       GL_COLOR_BUFFER_BIT, GL_NEAREST);
   }
   glBindFramebuffer(GL_READ_FRAMEBUFFER,
                     composePresentation ? filterTarget_.framebuffer : sceneTarget_.framebuffer);
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+  PresentationPhaseTimer windowWrite(presentationTimings_.enabled && fullWindow, presentationTimings_.phases[3]);
   glBlitFramebuffer(0, 0, width_, height_, destX, destY,
                     destX + destWidth, destY + destHeight,
                     GL_COLOR_BUFFER_BIT,
@@ -1964,8 +2014,24 @@ void Renderer::drawToneComposition(std::uint32_t framebuffer,
         ? presentationUpperCanvasOpacity_ : 0.0F);
   glUniform1i(presentationVideoPremultipliedUniform_, video && video->premultiplied);
   glUniform1i(presentationUpperCanvasPremultipliedUniform_, upperCanvas && upperCanvas->premultiplied);
+  // Page layers must retain their separate RGBA8 writes and source-over blending.
+  glUniform1i(presentationLayerUniform_, 0);
   glDrawArrays(GL_TRIANGLES, 0, 6);
   if (diagnostics_) ++stats_.drawCalls;
+  if (separateScreenPresentation) {
+    glEnable(GL_BLEND);
+    applyBlendMode(BlendMode::normal);
+    if (video && presentationVideoOpacity_ > 0.0F) {
+      glUniform1i(presentationLayerUniform_, 1);
+      glDrawArrays(GL_TRIANGLES, 0, 6);
+      if (diagnostics_) ++stats_.drawCalls;
+    }
+    if (upperCanvas && presentationUpperCanvasOpacity_ > 0.0F) {
+      glUniform1i(presentationLayerUniform_, 2);
+      glDrawArrays(GL_TRIANGLES, 0, 6);
+      if (diagnostics_) ++stats_.drawCalls;
+    }
+  }
   glActiveTexture(GL_TEXTURE0);
   glEnable(GL_BLEND);
   applyBlendMode(BlendMode::normal);

@@ -495,9 +495,55 @@ bool Renderer::queueTiled(ImageHandle image,
   return true;
 }
 
+bool Renderer::prepareFourTileBatches(TileLayerResource& layer) {
+  if (layer.batchReady) return true;
+  layer.fourBatches.clear();
+  std::vector<float> attributes;
+  for (const auto& run : layer.batches) {
+    if (layer.fourBatches.empty()) layer.fourBatches.emplace_back();
+    auto* batch = &layer.fourBatches.back();
+    int slot = 0;
+    while (slot < batch->textureCount && batch->textures[slot].texture != run.texture) ++slot;
+    if (slot == 4) {
+      layer.fourBatches.emplace_back(); batch = &layer.fourBatches.back(); slot = 0;
+    }
+    if (slot == batch->textureCount) batch->textures[batch->textureCount++] = run;
+    if (!batch->count) batch->first = run.first;
+    batch->count += run.count;
+    for (int vertex = 0; vertex < run.count; ++vertex)
+      attributes.insert(attributes.end(), {static_cast<float>(slot), static_cast<float>(run.textureWidth),
+        static_cast<float>(run.textureHeight), run.premultiplied ? 1.0F : 0.0F});
+  }
+  if (!layer.batchBuffer) glGenBuffers(1, &layer.batchBuffer);
+  glBindVertexArray(layer.vertexArray);
+  glBindBuffer(GL_ARRAY_BUFFER, layer.batchBuffer);
+  while (glGetError() != GL_NO_ERROR) {}
+  glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(attributes.size()*sizeof(float)), attributes.data(), GL_DYNAMIC_DRAW);
+  if (glGetError() != GL_NO_ERROR) return false;
+  glEnableVertexAttribArray(5);
+  glVertexAttribPointer(5, 4, GL_FLOAT, GL_FALSE, 4*sizeof(float), nullptr);
+  layer.batchBytes = attributes.size()*sizeof(float);
+  layer.batchReady = true;
+  if (diagnostics_) ++stats_.bufferUploads;
+  return true;
+}
+
 bool Renderer::prepareTileLayer(TileLayerResource& layer,
     const std::array<float, 2>& animation, bool nearest) {
-  if (layer.tiles.empty()) return true;
+  if (layer.tiles.empty()) {
+    if (layer.mappedEpoch == images_.textureEpoch()) return true;
+    for (auto& batch : layer.batches) {
+      // Derived textures can be replaced while the logical image and geometry survive.
+      const auto image = batch.premultiplied ? images_.lookupPremultiplied(batch.image) : images_.lookup(batch.image);
+      if (!image || !image->texture) return false;
+      if (batch.texture != image->texture || batch.textureWidth != image->width ||
+          batch.textureHeight != image->height || batch.premultiplied != image->premultiplied) layer.batchReady = false;
+      batch.texture = image->texture; batch.textureWidth = image->width; batch.textureHeight = image->height;
+      batch.premultiplied = image->premultiplied;
+    }
+    layer.mappedEpoch = images_.textureEpoch();
+    return true;
+  }
   if (layer.mappedReady && layer.mappedNearest == nearest &&
       layer.mappedAnimation == animation && layer.mappedEpoch == images_.textureEpoch()) return true;
   auto vertices = layer.tileVertices;
@@ -507,15 +553,15 @@ bool Renderer::prepareTileLayer(TileLayerResource& layer,
     std::optional<SpriteImageRegion> region;
     if (nearest && images_.hasTileBacking(tile.image)) region = images_.resolveSpriteRegion(tile.image,
       tile.source[0]+tile.animation[0]*animation[0], tile.source[1]+tile.animation[1]*animation[1],
-      tile.source[2], tile.source[3], false);
+      tile.source[2], tile.source[3], true);
     else images_.notePreparedFallback(tile.image, "tile-linear-sampling");
-    const auto image = region ? std::optional<ImageInfo>(region->image) : images_.lookup(tile.image);
+    const auto image = region ? std::optional<ImageInfo>(region->image) : images_.lookupPremultiplied(tile.image);
     if (!image || !image->texture) return false;
     const std::array<float, 4> mapping = region ? std::array<float, 4>{
       region->atlas[0]-region->source[0], region->atlas[1]-region->source[1],
       static_cast<float>(region->logicalWidth), static_cast<float>(region->logicalHeight)} : std::array<float, 4>{};
     for (std::size_t corner = 0; corner < 6; ++corner)
-      std::copy(mapping.begin(), mapping.end(), vertices.begin()+index*60+corner*10+6);
+      std::copy(mapping.begin(), mapping.end(), vertices.begin()+index*84+corner*14+6);
     if (batches.empty() || batches.back().texture != image->texture) {
       batches.push_back({image->texture, image->width, image->height,
         static_cast<std::int32_t>(index*6), 6, image->premultiplied});
@@ -530,10 +576,10 @@ bool Renderer::prepareTileLayer(TileLayerResource& layer,
       // Existing geometry remains fixed. Only changed per-quad mapping attributes
       // are uploaded when the authored animation offset or sampling mode changes.
       for (std::size_t index = 0; index < layer.tiles.size(); ++index)
-        if (!std::equal(vertices.begin()+index*60, vertices.begin()+(index+1)*60,
-                        layer.tileVertices.begin()+index*60))
-          glBufferSubData(GL_ARRAY_BUFFER, static_cast<GLintptr>(index*60*sizeof(float)),
-            60*sizeof(float), vertices.data()+index*60);
+        if (!std::equal(vertices.begin()+index*84, vertices.begin()+(index+1)*84,
+                        layer.tileVertices.begin()+index*84))
+          glBufferSubData(GL_ARRAY_BUFFER, static_cast<GLintptr>(index*84*sizeof(float)),
+            84*sizeof(float), vertices.data()+index*84);
     }
     if (glGetError() != GL_NO_ERROR) {
       const auto owners = layer.owners, queued = layer.queuedReferences;
@@ -548,6 +594,7 @@ bool Renderer::prepareTileLayer(TileLayerResource& layer,
     layer.vertexBytes = vertices.size()*sizeof(float);
     if (diagnostics_) ++stats_.bufferUploads;
   }
+  layer.batchReady = false;
   layer.tileVertices = std::move(vertices); layer.batches = std::move(batches);
   layer.mappedAnimation = animation; layer.mappedNearest = nearest;
   layer.mappedEpoch = images_.textureEpoch(); layer.mappedReady = true;
@@ -561,7 +608,8 @@ std::uint32_t Renderer::createOrdinaryTileLayer(std::vector<TileLayerTile> tiles
   std::unordered_map<ImageHandle, ImageInfo> imageInfo;
   for (const auto& tile : tiles) {
     if (imageInfo.find(tile.image) != imageInfo.end()) continue;
-    const auto image = images_.lookup(tile.image);
+    // Tile slots are uploaded premultiplied before filtering.
+    const auto image = images_.lookupPremultiplied(tile.image);
     if (!image) return 0;
     imageInfo.emplace(tile.image, *image);
   }
@@ -574,7 +622,7 @@ std::uint32_t Renderer::createOrdinaryTileLayer(std::vector<TileLayerTile> tiles
     layer.images.push_back(image);
   }
   std::vector<float> vertices;
-  vertices.reserve(tiles.size() * 36U);
+  vertices.reserve(tiles.size() * 60U);
   for (const auto& tile : tiles) {
     const auto& image = imageInfo.at(tile.image);
     const float left = tile.position[0];
@@ -587,7 +635,8 @@ std::uint32_t Renderer::createOrdinaryTileLayer(std::vector<TileLayerTile> tiles
     const float sourceBottom = sourceTop + tile.source[3];
     const auto append = [&](float x, float y, float u, float v) {
       vertices.insert(vertices.end(), {x, y, u, v,
-        tile.animation[0], tile.animation[1]});
+        tile.animation[0], tile.animation[1],
+        sourceLeft+0.5F, sourceTop+0.5F, sourceRight-0.5F, sourceBottom-0.5F});
     };
     append(left, top, sourceLeft, sourceTop);
     append(right, top, sourceRight, sourceTop);
@@ -597,7 +646,7 @@ std::uint32_t Renderer::createOrdinaryTileLayer(std::vector<TileLayerTile> tiles
     append(left, bottom, sourceLeft, sourceBottom);
     if (layer.batches.empty() || layer.batches.back().texture != image.texture) {
       layer.batches.push_back({image.texture, image.width, image.height,
-        static_cast<std::int32_t>(vertices.size() / 6U - 6U), 6, image.premultiplied});
+        static_cast<std::int32_t>(vertices.size() / 10U - 6U), 6, image.premultiplied, tile.image});
     } else {
       layer.batches.back().count += 6;
     }
@@ -619,13 +668,16 @@ std::uint32_t Renderer::createOrdinaryTileLayer(std::vector<TileLayerTile> tiles
   }
   layer.vertexBytes = vertices.size()*sizeof(float);
   glEnableVertexAttribArray(0);
-  glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
+  glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 10 * sizeof(float), nullptr);
   glEnableVertexAttribArray(1);
-  glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
+  glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 10 * sizeof(float),
                         reinterpret_cast<void*>(2 * sizeof(float)));
   glEnableVertexAttribArray(2);
-  glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
+  glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 10 * sizeof(float),
                         reinterpret_cast<void*>(4 * sizeof(float)));
+  glEnableVertexAttribArray(4);
+  glVertexAttribPointer(4, 4, GL_FLOAT, GL_FALSE, 10 * sizeof(float),
+                        reinterpret_cast<void*>(6 * sizeof(float)));
   glBindVertexArray(vertexArray_);
   if (diagnostics_) ++stats_.bufferUploads;
   const std::uint32_t handle = nextTileLayer_++;
@@ -647,13 +699,14 @@ std::uint32_t Renderer::createTileLayer(std::vector<TileLayerTile> tiles) {
     }
     layer.images.push_back(tile.image);
   }
-  layer.tileVertices.reserve(tiles.size()*60);
+  layer.tileVertices.reserve(tiles.size()*84);
   for (const auto& tile : tiles) {
     const float left = tile.position[0], top = tile.position[1];
     const float right = left+tile.source[2], bottom = top+tile.source[3];
     const float sx = tile.source[0], sy = tile.source[1];
     const auto append = [&](float x, float y, float u, float v) {
-      layer.tileVertices.insert(layer.tileVertices.end(), {x,y,u,v,tile.animation[0],tile.animation[1],0,0,0,0});
+      layer.tileVertices.insert(layer.tileVertices.end(), {x,y,u,v,tile.animation[0],tile.animation[1],0,0,0,0,
+        sx+0.5F,sy+0.5F,sx+tile.source[2]-0.5F,sy+tile.source[3]-0.5F});
     };
     append(left,top,sx,sy); append(right,top,sx+tile.source[2],sy);
     append(right,bottom,sx+tile.source[2],sy+tile.source[3]); append(left,top,sx,sy);
@@ -662,10 +715,11 @@ std::uint32_t Renderer::createTileLayer(std::vector<TileLayerTile> tiles) {
   layer.tiles = std::move(tiles);
   glGenVertexArrays(1, &layer.vertexArray); glGenBuffers(1, &layer.vertexBuffer);
   glBindVertexArray(layer.vertexArray); glBindBuffer(GL_ARRAY_BUFFER, layer.vertexBuffer);
-  glEnableVertexAttribArray(0); glVertexAttribPointer(0,2,GL_FLOAT,GL_FALSE,10*sizeof(float),nullptr);
-  glEnableVertexAttribArray(1); glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,10*sizeof(float),reinterpret_cast<void*>(2*sizeof(float)));
-  glEnableVertexAttribArray(2); glVertexAttribPointer(2,2,GL_FLOAT,GL_FALSE,10*sizeof(float),reinterpret_cast<void*>(4*sizeof(float)));
-  glEnableVertexAttribArray(3); glVertexAttribPointer(3,4,GL_FLOAT,GL_FALSE,10*sizeof(float),reinterpret_cast<void*>(6*sizeof(float)));
+  glEnableVertexAttribArray(0); glVertexAttribPointer(0,2,GL_FLOAT,GL_FALSE,14*sizeof(float),nullptr);
+  glEnableVertexAttribArray(1); glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,14*sizeof(float),reinterpret_cast<void*>(2*sizeof(float)));
+  glEnableVertexAttribArray(2); glVertexAttribPointer(2,2,GL_FLOAT,GL_FALSE,14*sizeof(float),reinterpret_cast<void*>(4*sizeof(float)));
+  glEnableVertexAttribArray(3); glVertexAttribPointer(3,4,GL_FLOAT,GL_FALSE,14*sizeof(float),reinterpret_cast<void*>(6*sizeof(float)));
+  glEnableVertexAttribArray(4); glVertexAttribPointer(4,4,GL_FLOAT,GL_FALSE,14*sizeof(float),reinterpret_cast<void*>(10*sizeof(float)));
   glBindVertexArray(vertexArray_);
   // Sampling is chosen at submission, before ordinary lookup can materialize a full sheet.
   const auto handle = nextTileLayer_++;
@@ -675,7 +729,7 @@ std::uint32_t Renderer::createTileLayer(std::vector<TileLayerTile> tiles) {
 
 std::uint32_t Renderer::createMesh(
     ImageHandle image, const std::vector<float>& positions,
-    const std::vector<float>& uvs, const std::vector<std::uint32_t>& indices,
+    const std::vector<double>& uvs, const std::vector<std::uint32_t>& indices,
     bool triangleStrip, const MeshMaterial& material) {
   const auto info = images_.lookup(image);
   if (!info || positions.size() < 6 || positions.size() % 2 != 0 ||
@@ -698,6 +752,20 @@ std::uint32_t Renderer::createMesh(
   }
   TileLayerResource mesh;
   mesh.material = material;
+  if (std::holds_alternative<TriangleBitmapMaterial>(material) && positions.size() == 8 &&
+      positions[1] == positions[3] && positions[2] == positions[4] &&
+      positions[5] == positions[7] && positions[0] == positions[6] &&
+      uvs[1] == uvs[3] && uvs[2] == uvs[4] && uvs[5] == uvs[7] && uvs[0] == uvs[6] &&
+      positions[2] != positions[0] && positions[7] != positions[1]) {
+    // Retain the pixel-space crop before normalized UVs lose subtexel precision.
+    const double sx = (uvs[2] - uvs[0]) * info->width / (double(positions[2]) - positions[0]);
+    const double sy = (uvs[7] - uvs[1]) * info->height / (double(positions[7]) - positions[1]);
+    mesh.triangleSourceMapping = {static_cast<float>(sx), static_cast<float>(sy),
+      static_cast<float>(uvs[0] * info->width - positions[0] * sx),
+      static_cast<float>(uvs[1] * info->height - positions[1] * sy)};
+    mesh.triangleSourceMappingEnabled = std::all_of(mesh.triangleSourceMapping.begin(),
+      mesh.triangleSourceMapping.end(), [](float value) { return std::isfinite(value); });
+  }
   if (!images_.retain(image)) return 0;
   mesh.images.push_back(image);
   std::vector<std::uint32_t> triangles;
@@ -729,8 +797,8 @@ std::uint32_t Renderer::createMesh(
     }
     vertices.insert(vertices.end(), {
       positions[offset], positions[offset + 1],
-      uvs[offset] * static_cast<float>(info->width),
-      uvs[offset + 1] * static_cast<float>(info->height), 0, 0});
+      static_cast<float>(uvs[offset]) * static_cast<float>(info->width),
+      static_cast<float>(uvs[offset + 1]) * static_cast<float>(info->height), 0, 0});
   }
 #ifdef PMJS_HAS_SKIA65
   if (const auto* triangle = std::get_if<TriangleBitmapMaterial>(&material);
@@ -784,7 +852,7 @@ std::uint32_t Renderer::createMesh(
                         reinterpret_cast<void*>(4 * sizeof(float)));
   glBindVertexArray(vertexArray_);
   mesh.batches.push_back({info->texture, info->width, info->height, 0,
-                          static_cast<std::int32_t>(triangles.size()), info->premultiplied});
+                          static_cast<std::int32_t>(triangles.size()), info->premultiplied, image});
   if (diagnostics_) ++stats_.bufferUploads;
   const std::uint32_t handle = nextTileLayer_++;
   tileLayers_.emplace(handle, std::move(mesh));
@@ -833,6 +901,7 @@ bool Renderer::releaseTileLayer(std::uint32_t layer) {
 void Renderer::destroyTileLayer(std::uint32_t layer) {
   const auto found = tileLayers_.find(layer);
   if (found == tileLayers_.end()) return;
+  if (found->second.batchBuffer) glDeleteBuffers(1, &found->second.batchBuffer);
   if (found->second.vertexBuffer) glDeleteBuffers(1, &found->second.vertexBuffer);
   if (found->second.vertexArray) glDeleteVertexArrays(1, &found->second.vertexArray);
   for (const auto image : found->second.images) images_.release(image);
@@ -1070,13 +1139,13 @@ std::size_t Renderer::targetStorageBytes(const RenderTarget& target) {
 
 std::size_t Renderer::tileGeometryGpuBytes() const {
   std::size_t bytes = 0;
-  for (const auto& [_, layer] : tileLayers_) bytes += layer.vertexBytes;
+  for (const auto& [_, layer] : tileLayers_) bytes += layer.vertexBytes + layer.batchBytes;
   return bytes;
 }
 std::size_t Renderer::tileGeometryCpuBytes() const {
   std::size_t bytes = 0;
   for (const auto& [_, layer] : tileLayers_) bytes += layer.tiles.capacity()*sizeof(TileLayerTile)+
-    layer.tileVertices.capacity()*sizeof(float)+layer.images.capacity()*sizeof(ImageHandle)+layer.batches.capacity()*sizeof(TileBatch);
+    layer.tileVertices.capacity()*sizeof(float)+layer.images.capacity()*sizeof(ImageHandle)+layer.batches.capacity()*sizeof(TileBatch)+layer.fourBatches.capacity()*sizeof(FourTileBatch);
   return bytes;
 }
 std::size_t Renderer::renderTargetBytes() const {

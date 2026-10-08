@@ -27,6 +27,7 @@
 #include <cstring>
 #include <memory>
 #include <list>
+#include <stdexcept>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -436,7 +437,7 @@ int pmjs_skia65_triangle_coverage(const float points[6],
     coverage[i * 4] = pixels[i * 4 + 3];
     coverage[i * 4 + 1] = 0;
     coverage[i * 4 + 2] = 0;
-    coverage[i * 4 + 3] = 255;
+    coverage[i * 4 + 3] = 0;
   }
   class StrokeCoverage final : public SkBlitter {
    public:
@@ -444,8 +445,22 @@ int pmjs_skia65_triangle_coverage(const float points[6],
     void pixel(int x, int y, unsigned alpha, uint8_t mode) {
       if (x < 0 || y < 0 || x >= width_ || y >= height_ || !alpha) return;
       auto* p = pixels_ + (static_cast<size_t>(y) * width_ + x) * 4;
-      p[1] = static_cast<uint8_t>(alpha);
-      p[2] = mode;
+      // Preserve two spans where possible; excess overlap retries the legacy path.
+      if (!singleSpan_ && p[1]) {
+        if (p[3]) { overflowed_ = true; return; }
+        p[3] = static_cast<uint8_t>(alpha);
+        p[2] |= mode << 2;
+      } else {
+        p[1] = static_cast<uint8_t>(alpha);
+        p[2] = mode;
+      }
+    }
+    bool overflowed() const { return overflowed_; }
+    void useSingleSpan() {
+      singleSpan_ = true;
+      for (size_t i = 0; i < static_cast<size_t>(width_) * height_; ++i) {
+        pixels_[i * 4 + 1] = pixels_[i * 4 + 2] = pixels_[i * 4 + 3] = 0;
+      }
     }
     void blitH(int x, int y, int width) override {
       for (int i = 0; i < width; ++i) pixel(x + i, y, 255, 0);
@@ -469,6 +484,7 @@ int pmjs_skia65_triangle_coverage(const float points[6],
    private:
     uint8_t* pixels_;
     int width_, height_;
+    bool overflowed_ = false, singleSpan_ = false;
   } blitter(coverage, width, height);
   paint.setStyle(SkPaint::kStroke_Style);
   paint.setStrokeWidth(stroke_width);
@@ -478,6 +494,10 @@ int pmjs_skia65_triangle_coverage(const float points[6],
     paint.getFillPath(path, &strokePath);
     strokePath.offset(-left, -top);
     SkScan::AntiFillPath(strokePath, SkRasterClip(SkIRect::MakeWH(width, height)), &blitter);
+    if (blitter.overflowed()) {
+      blitter.useSingleSpan();
+      SkScan::AntiFillPath(strokePath, SkRasterClip(SkIRect::MakeWH(width, height)), &blitter);
+    }
   }
   return 1;
 } catch (...) { return 0; }
@@ -551,18 +571,19 @@ static int draw(pmjs_skia65_font* font, const char* utf8, size_t utf8Bytes,
   const int left = bounds[0], top = bounds[1];
   const int croppedWidth = bounds[2] - left, croppedHeight = bounds[3] - top;
   if (croppedWidth <= 0 || croppedHeight <= 0) return 1;
-  // This release accepts native N32 (BGRA on Linux). Swizzle only the bounded
-  // ink region; no alpha rounding or changes outside the region occur here.
+  // Raster text writes directly to native N32 (BGRA on Linux). Accelerated
+  // text needs bounded source coverage before rounded destination composition.
   std::vector<uint8_t> scratch;
-  if (!bgra) scratch.resize(static_cast<size_t>(croppedWidth) * croppedHeight * 4);
-  if (!bgra) for (int row = 0; row < croppedHeight; ++row) for (int column = 0; column < croppedWidth; ++column) {
+  if (!bgra || style->accelerated_blend) scratch.resize(static_cast<size_t>(croppedWidth) * croppedHeight * 4);
+  if (!bgra && !style->accelerated_blend) for (int row = 0; row < croppedHeight; ++row) for (int column = 0; column < croppedWidth; ++column) {
     const auto* input = rgba + (top + row) * rowBytes + (left + column) * 4;
     auto* output = scratch.data() + (static_cast<size_t>(row) * croppedWidth + column) * 4;
     output[0] = input[2]; output[1] = input[1]; output[2] = input[0]; output[3] = input[3];
   }
   auto surface = SkSurface::MakeRasterDirect(
     SkImageInfo::MakeN32(croppedWidth, croppedHeight, kPremul_SkAlphaType),
-    bgra ? rgba + top * rowBytes + left * 4 : scratch.data(), bgra ? rowBytes : croppedWidth * 4);
+    bgra && !style->accelerated_blend ? rgba + top * rowBytes + left * 4 : scratch.data(),
+    bgra && !style->accelerated_blend ? rowBytes : croppedWidth * 4);
   if (!surface) return 0;
   SkPaint paint;
   paint.setAntiAlias(true);
@@ -577,10 +598,20 @@ static int draw(pmjs_skia65_font* font, const char* utf8, size_t utf8Bytes,
   // coordinates. This retains the original float addition/subpixel phase.
   surface->getCanvas()->translate(-originX - left, -originY - top);
   if (run.blob) surface->getCanvas()->drawTextBlob(run.blob, x, baseline, paint);
-  if (!bgra) for (int row = 0; row < croppedHeight; ++row) for (int column = 0; column < croppedWidth; ++column) {
+  if (!bgra || style->accelerated_blend) for (int row = 0; row < croppedHeight; ++row) for (int column = 0; column < croppedWidth; ++column) {
     const auto* input = scratch.data() + (static_cast<size_t>(row) * croppedWidth + column) * 4;
     auto* output = rgba + (top + row) * rowBytes + (left + column) * 4;
-    output[0] = input[2]; output[1] = input[1]; output[2] = input[0]; output[3] = input[3];
+    if (style->accelerated_blend) {
+      // Accelerated source-over rounds normalized channel products, whereas
+      // the raster blitter truncates its 256-based destination contribution.
+      for (int channel = 0; channel < 4; ++channel) {
+        const int sourceChannel = bgra || channel == 1 || channel == 3 ? channel : 2 - channel;
+        output[channel] = std::min(255, input[sourceChannel] +
+          (output[channel] * (255 - input[3]) + 127) / 255);
+      }
+    } else {
+      output[0] = input[2]; output[1] = input[1]; output[2] = input[0]; output[3] = input[3];
+    }
   }
   if (telemetryEnabled) counters.draw_ns += elapsed(start);
   return 1;

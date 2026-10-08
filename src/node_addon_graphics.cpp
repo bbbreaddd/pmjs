@@ -301,7 +301,8 @@ napi_value drawImage(napi_env env, napi_callback_info info) try {
   napi_throw_range_error(env, nullptr, error.what()); return nullptr;
 }
 
-std::vector<float> floatVector(napi_env env, napi_value input) {
+template<class Number>
+std::vector<Number> numericVector(napi_env env, napi_value input) {
   bool typed = false;
   check(env, napi_is_typedarray(env, input, &typed), "expected numeric array");
   if (typed) {
@@ -316,17 +317,21 @@ std::vector<float> floatVector(napi_env env, napi_value input) {
       throw std::runtime_error("expected Float32Array");
     }
     const auto* values = static_cast<const float*>(data);
-    return std::vector<float>(values, values + length);
+    return std::vector<Number>(values, values + length);
   }
   std::uint32_t length = 0;
   check(env, napi_get_array_length(env, input, &length), "expected numeric array");
-  std::vector<float> result;
+  std::vector<Number> result;
   result.reserve(length);
   for (std::uint32_t index = 0; index < length; ++index) {
     napi_value item; napi_get_element(env, input, index, &item);
-    result.push_back(static_cast<float>(asNumber(env, item)));
+    result.push_back(static_cast<Number>(asNumber(env, item)));
   }
   return result;
+}
+
+std::vector<float> floatVector(napi_env env, napi_value input) {
+  return numericVector<float>(env, input);
 }
 
 std::vector<std::uint32_t> uintVector(napi_env env, napi_value input) {
@@ -384,7 +389,7 @@ napi_value createMeshResource(napi_env env, const std::vector<napi_value>& args,
   const auto image = resolveImage(value, asUint32(env, args[0]));
   if (!image) throw std::runtime_error("invalid mesh image");
   const auto mesh = value.renderer.createMesh(*image, floatVector(env, args[1]),
-    floatVector(env, args[2]), uintVector(env, args[3]), asUint32(env, args[4]) == 0, material);
+    numericVector<double>(env, args[2]), uintVector(env, args[3]), asUint32(env, args[4]) == 0, material);
   if (!mesh) throw std::runtime_error("invalid mesh geometry or material");
   return uint32(env, mesh);
 }

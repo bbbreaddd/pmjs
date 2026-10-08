@@ -277,7 +277,10 @@ napi_value renderScene(napi_env env, napi_callback_info) try {
 }
 
 napi_value swapFrame(napi_env env, napi_callback_info) try {
-  host(env).platform.swap();
+  State& value = host(env);
+  auto& timing = value.renderer.presentationTimings();
+  PresentationPhaseTimer timer(timing.enabled, timing.phases[5]);
+  value.platform.swap();
   return undefined(env);
 } catch (const std::exception& error) {
   napi_throw_error(env, nullptr, error.what());
@@ -315,6 +318,22 @@ napi_value rendererStats(napi_env env, napi_callback_info) try {
   check(env, napi_set_named_property(env, result, "filterDrawCalls",
     number(env, static_cast<double>(stats.filterDrawCalls))),
     "cannot set renderer filter draws");
+  const auto& timing = host(env).renderer.presentationTimings();
+  napi_value phases;
+  check(env, napi_create_object(env, &phases), "cannot create presentation timings");
+  check(env, napi_set_named_property(env, phases, "enabled", boolean(env, timing.enabled)), "cannot set timing state");
+  check(env, napi_set_named_property(env, phases, "finishBeforeSwap", boolean(env, timing.finishBeforeSwap)), "cannot set completion state");
+  constexpr std::array<const char*, 6> phaseNames{"scene", "presentation", "windowBind", "firstWindowWrite", "completion", "swap"};
+  for (std::size_t index = 0; index < phaseNames.size(); ++index) {
+    napi_value phase;
+    check(env, napi_create_object(env, &phase), "cannot create phase timing");
+    const auto& sample = timing.phases[index];
+    for (const auto& [name, value] : {std::pair{"calls", static_cast<double>(sample.calls)},
+        std::pair{"wallMs", sample.wallMs}, std::pair{"cpuMs", sample.cpuMs}})
+      check(env, napi_set_named_property(env, phase, name, number(env, value)), "cannot set phase timing");
+    check(env, napi_set_named_property(env, phases, phaseNames[index], phase), "cannot set presentation phase");
+  }
+  check(env, napi_set_named_property(env, result, "presentationTimings", phases), "cannot set presentation timings");
   napi_value filterApplications;
   check(env, napi_create_array_with_length(env, stats.filterApplications.size(),
     &filterApplications), "cannot create filter application stats");

@@ -26,8 +26,8 @@ if (!diagnostics) {
     if (typeof value === 'number' && !['rendererTargetBytes', 'rendererTargetPeakBytes',
       'rendererTargetCacheBytes'].includes(name)) assert.equal(value, 0, name + ' is disabled');
   }
-  assert.equal(ordinaryPresentationStats.rendererTargetBytes, 32 * 32 * 4);
-  assert.equal(ordinaryPresentationStats.rendererTargetPeakBytes, 32 * 32 * 4);
+  assert.equal(ordinaryPresentationStats.rendererTargetBytes, 32 * 32 * 8);
+  assert.equal(ordinaryPresentationStats.rendererTargetPeakBytes, 32 * 32 * 8);
   assert.equal(ordinaryPresentationStats.rendererTargetCacheBytes, 0);
   assert.ok(ordinaryPresentationStats.filterApplications.every(value => value === 0));
   const frame = native.canvas.captureScene();
@@ -103,7 +103,7 @@ if (stats.toneAdjustDrawCalls !== 0 ||
 }
 if (stats.filterTargetAcquires !== 1 || stats.filterTargetReuses !== 0 ||
     stats.filterTargetClears !== 1 || stats.rendererTargetCreates !== 4 ||
-    stats.rendererTargetDestroys !== 0 || stats.framebufferChecks !== 4) {
+    stats.rendererTargetDestroys !== 0 || stats.framebufferChecks !== 5) {
   throw new Error('filter target lifecycle counters are inconsistent: ' +
     JSON.stringify(stats));
 }

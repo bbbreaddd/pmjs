@@ -65,7 +65,7 @@ TextBackend::~TextBackend() = default;
 namespace {
 pmjs_skia65_style settings(float size, uint32_t color, float stroke, const CanvasTextStyle& options) {
   return {size, stroke, options.miterLimit, color, stroke > 0, options.join, options.cap,
-    options.bold, options.italic, 1, 0};
+    options.bold, options.italic, 1, 0, 0};
 }
 }
 #endif
@@ -78,6 +78,9 @@ bool TextBackend::draw(const std::vector<std::filesystem::path>& paths, const st
   auto* font = state_->font(paths);
   if (!font) return false;
   auto style = settings(size, color, stroke, options);
+  // Match the default Canvas acceleration area; select before cropping ink.
+  constexpr size_t acceleratedCanvasArea = 257 * 256;
+  style.accelerated_blend = static_cast<size_t>(width) * height >= acceleratedCanvasArea;
   int region[4];
   if (!pmjs_skia65_bounds(font, text.data(), text.size(), &style, x, y, width, height, region)) return false;
   dirty[0] = width; dirty[1] = height; dirty[2] = dirty[3] = 0;

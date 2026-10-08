@@ -437,8 +437,8 @@ Platform::Platform(int width, int height, std::string title) {
   if (environmentFlag("PMJS_GRAPHICS_DIAGNOSTICS")) {
     std::cout << "[pmjs] swap_interval requested=" << requestedSwapInterval_
               << " accepted=" << (swapIntervalAccepted_ ? "yes" : "no")
-              << " driver=" << swapInterval_
-              << " honored=" << (swapIntervalAccepted_ && swapInterval_ == requestedSwapInterval_ ? "yes" : "no");
+              << " sdl_reported=" << swapInterval_
+              << " reported_match=" << (swapIntervalAccepted_ && swapInterval_ == requestedSwapInterval_ ? "yes" : "no");
     if (swapResult != 0) std::cout << " error=\"" << SDL_GetError() << '\"';
     std::cout << '\n';
     printGraphicsDiagnostics();

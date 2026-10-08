@@ -23,6 +23,7 @@ typedef struct {
   int italic;
   int hinting; /* SkPaint: 0=none, 1=slight, 2=normal, 3=full */
   int auto_hint;
+  int accelerated_blend; /* Rounded source-over for accelerated Canvas text. */
 } pmjs_skia65_style;
 
 typedef struct {
@@ -54,7 +55,7 @@ PMJS_SKIA65_API int pmjs_skia65_image_rgba_strided(uint8_t* pixels, int width, i
   size_t source_row_bytes, const float src[4], const float dst[4], float alpha, int smoothing);
 PMJS_SKIA65_API int pmjs_skia65_circle_coverage(float x, float y, float radius,
   const float transform[6], int left, int top, int width, int height, uint8_t* coverage, const float* clips, size_t clip_count);
-/* RGBA8: fill coverage, stroke coverage, stroke span rule, A=255. */
+/* RGBA8: fill coverage, first stroke, packed two-bit span rules, second stroke. */
 PMJS_SKIA65_API int pmjs_skia65_triangle_coverage(const float points[6],
   float stroke_width, float miter_limit, float stroke_alpha,
   float left, float top, int width, int height, uint8_t* coverage);

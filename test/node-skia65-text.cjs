@@ -30,9 +30,11 @@ for (const item of fixture.cases) for (const layer of ['fill', 'outline', 'full'
     assert.deepEqual(Array.from(premul(reference.background)), reference.backgroundPremul, 'Background roundtrip must reproduce the oracle input');
     native.canvas.fillRect(canvas.handle, 0, 0, item.width, item.height, bg);
     const x = item.align === 'center' ? item.x - measured / 2 : item.x;
-    if (layer !== 'fill') native.canvas.drawText(canvas.handle, item.fontFiles, item.text, x, item.y, item.size, item.outline, item.stroke, style);
-    if (layer !== 'outline') native.canvas.drawText(canvas.handle, item.fontFiles, item.text, x, item.y, item.size,
-      ((item.fill & 0xffffff00) | Math.round((item.fill & 255) * item.alpha)) >>> 0, 0, style);
+    for (const draw of item.draws || [{ text: item.text, x, y: item.y }]) {
+      if (layer !== 'fill') native.canvas.drawText(canvas.handle, item.fontFiles, draw.text, draw.x, draw.y, item.size, item.outline, item.stroke, style);
+      if (layer !== 'outline') native.canvas.drawText(canvas.handle, item.fontFiles, draw.text, draw.x, draw.y, item.size,
+        ((item.fill & 0xffffff00) | Math.round((item.fill & 255) * item.alpha)) >>> 0, 0, style);
+    }
     const pixels = Buffer.from(native.canvas.readPremultipliedPixels(canvas.handle, 0, 0, item.width, item.height));
     const expected = Buffer.from(reference.pixels, 'base64');
     if (!realized && layer === 'fill' && item.background === 0) {

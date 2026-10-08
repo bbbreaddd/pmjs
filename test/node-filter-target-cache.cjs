@@ -69,8 +69,8 @@ const sameSize = render([large, large]);
 assert.equal(sameSize.delta.rendererTargetCreates, 0);
 assert.equal(sameSize.delta.rendererTargetDestroys, 0);
 assert.equal(sameSize.delta.filterTargetReuses, 2, 'logical height 24 reuses a 32-pixel POT backing');
-assert.equal(sameSize.after.rendererTargetBytes, 4 * 32 * 32 * 4,
-  'root, group and two custom scratch allocations are accounted');
+assert.equal(sameSize.after.rendererTargetBytes, 32 * 32 * 8 + 3 * 32 * 32 * 4,
+  'root color/depth, group and two custom scratch allocations are accounted');
 render([large, small]);
 for (let i = 0; i < 4; i++) {
   const mixed = render([large, small]);
@@ -83,7 +83,7 @@ for (let i = 0; i < 4; i++) {
     assert.equal(mixed.delta[k], sameSize.delta[k], k);
   }
   assert.equal(mixed.after.rendererTargetCacheBytes, 3 * 32 * 32 * 4);
-  assert.equal(mixed.after.rendererTargetBytes, 32 * 32 * 4 + 3 * (32 * 32 + 16 * 16) * 4);
+  assert.equal(mixed.after.rendererTargetBytes, 32 * 32 * 8 + 3 * (32 * 32 + 16 * 16) * 4);
 }
 // Eleven displaced 4-MiB backings exceed the shared 32-MiB cache budget.
 const pressureLarge = plan(1024, 1024, 11), pressureSmall = plan(16, 12, 11);
@@ -93,7 +93,7 @@ const evicted = render([pressureSmall]);
 assert.deepEqual(evicted.actual, clipped(16, 12));
 assert.ok(evicted.after.rendererTargetCacheEvictions > beforePressure.rendererTargetCacheEvictions);
 assert.equal(evicted.after.rendererTargetCacheBytes, 32 * 1024 * 1024);
-assert.equal(evicted.after.rendererTargetBytes, 32 * 32 * 4 + 11 * 16 * 16 * 4 + 32 * 1024 * 1024);
+assert.equal(evicted.after.rendererTargetBytes, 32 * 32 * 8 + 11 * 16 * 16 * 4 + 32 * 1024 * 1024);
 for (let i = 0; i < 3; i++) {
   assert.deepEqual(render([pressureLarge]).actual, Buffer.from(pixels));
   assert.deepEqual(render([pressureSmall]).actual, clipped(16, 12));

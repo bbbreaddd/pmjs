@@ -129,6 +129,24 @@
       releaseLayer(layer);
       return { kind: 0, resource: 0 };
     }
+    var shadowWidth = shadowCanvas ? shadowCanvas.width : 1;
+    var shadowHeight = shadowCanvas ? shadowCanvas.height : 1;
+    var hasShadow = false;
+    for (var shadow of layer._elements) {
+      if (shadow[0] >= 0) continue;
+      hasShadow = true;
+      shadowWidth = Math.max(shadowWidth, Math.ceil(shadow[1] + shadow[5]));
+      shadowHeight = Math.max(shadowHeight, Math.ceil(shadow[2] + shadow[6]));
+    }
+    if (hasShadow && (!shadowCanvas || shadowCanvas.width < shadowWidth || shadowCanvas.height < shadowHeight)) {
+      // Resizing releases native backing; finish it before collecting any handles.
+      if (!shadowCanvas) shadowCanvas = new CanvasElement();
+      shadowCanvas.width = shadowWidth;
+      shadowCanvas.height = shadowHeight;
+      var shadowContext = shadowCanvas.getContext('2d');
+      shadowContext.fillStyle = 'rgba(0,0,0,0.5)';
+      shadowContext.fillRect(0, 0, shadowCanvas.width, shadowCanvas.height);
+    }
     var handles = [];
     var textureIndices = new Map();
     var points = [];
@@ -136,12 +154,6 @@
     for (var element of layer._elements) {
       var source;
       if (element[0] < 0) {
-        if (!shadowCanvas) {
-          shadowCanvas = new CanvasElement();
-          shadowCanvas.width = shadowCanvas.height = 1;
-          shadowCanvas.getContext('2d').fillStyle = 'rgba(0,0,0,0.5)';
-          shadowCanvas.getContext('2d').fillRect(0, 0, 1, 1);
-        }
         source = shadowCanvas;
       } else {
         source = atlas[element[0]];

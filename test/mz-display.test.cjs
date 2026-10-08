@@ -145,7 +145,7 @@ test('MZ delayed atlas uploads, empty replacement and half-alpha shadows remain 
   f.render(layer);
   const first = f.created[0];
   assert.equal(first.handles.length, 2);
-  assert.deepEqual(f.canvases[1].drawCalls, [['rgba(0,0,0,0.5)', 0, 0, 1, 1]]);
+  assert.deepEqual(f.canvases.find(canvas => canvas.drawCalls.some(call => call[0] === 'rgba(0,0,0,0.5)')).drawCalls, [['rgba(0,0,0,0.5)', 0, 0, 12, 12]]);
   layer._images = [{ width: 48, height: 48, _nativeImage: { handle: 100 } }];
   layer._needsTexturesUpdate = true;
   f.render(layer);
@@ -158,6 +158,56 @@ test('MZ delayed atlas uploads, empty replacement and half-alpha shadows remain 
   assert.deepEqual(f.released, [1, 2], 'empty and destroyed layers must not release twice');
   f.context.PMJS.pixi5.releaseRenderer(f.renderOwner);
   assert.equal(f.canvases[2].released, true);
+});
+
+test('MZ solid shadows cover their source rectangles as tile sizes grow', () => {
+  const f = harness();
+  const layer = new f.context.Tilemap.Layer();
+  layer._elements = [[-1, 2, 3, 0, 0, 12, 4]];
+  f.render(layer);
+  const shadow = f.canvases[0];
+  assert.deepEqual([shadow.width, shadow.height], [14, 7]);
+  assert.deepEqual(shadow.drawCalls.at(-1), ['rgba(0,0,0,0.5)', 0, 0, 14, 7]);
+  layer._elements = [[-1, 0, 0, 0, 0, 24, 24]];
+  f.render(layer);
+  assert.equal(f.canvases.length, 1);
+  assert.deepEqual([shadow.width, shadow.height], [24, 24]);
+  assert.deepEqual(shadow.drawCalls.at(-1), ['rgba(0,0,0,0.5)', 0, 0, 24, 24]);
+});
+
+test('differently sized shadows share a live handle within one tile-layer creation', () => {
+  const f = harness();
+  const Canvas = f.context.CanvasElement;
+  const live = new Set();
+  let next = 10000;
+  Canvas.prototype._ensureNativeCanvas = function() {
+    if (!this.shadowResource) {
+      this.shadowResource = { handle: next++, width: this.width, height: this.height };
+      live.add(this.shadowResource.handle);
+    }
+    return this.shadowResource;
+  };
+  for (const dimension of ['width', 'height']) {
+    Object.defineProperty(Canvas.prototype, dimension, {
+      get() { return this['shadow_' + dimension] || 0; },
+      set(value) {
+        if (this.shadowResource) live.delete(this.shadowResource.handle);
+        this.shadowResource = null;
+        this['shadow_' + dimension] = value;
+      }
+    });
+  }
+  const create = f.context.NativeHost.render.createTileLayer;
+  f.context.NativeHost.render.createTileLayer = (points, handles) => {
+    assert.ok(handles.every(handle => live.has(handle)), 'all sources survive until native retention');
+    return create(points, handles);
+  };
+  const layer = new f.context.Tilemap.Layer();
+  layer._elements = [[-1, 0, 0, 0, 0, 12, 12], [-1, 7, 3, 12, 0, 24, 24]];
+  f.render(layer);
+  assert.equal(f.created[0].handles.length, 1);
+  assert.deepEqual([f.canvases[0].width, f.canvases[0].height], [31, 27]);
+  assert.equal(f.canvases[0].drawCalls.length, 1);
 });
 
 test('reviewed tile render relocation preserves filter processing; arbitrary overrides reject before submission', () => {

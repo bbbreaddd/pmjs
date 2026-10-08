@@ -164,6 +164,8 @@ if(BUILD_TESTING)
   target_link_libraries(pmjs-grayscale-images-test PRIVATE pmjs_runtime)
   add_test(NAME native-grayscale-images COMMAND ${XVFB_RUN} -a $<TARGET_FILE:pmjs-grayscale-images-test>)
   set_tests_properties(native-grayscale-images PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
+  add_test(NAME native-grayscale-images-four-textures COMMAND ${XVFB_RUN} -a $<TARGET_FILE:pmjs-grayscale-images-test>)
+  set_tests_properties(native-grayscale-images-four-textures PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy;PMJS_TILE_BATCH_TEXTURES=4")
   add_executable(pmjs-tile-lifetime-test test/tile-lifetime.cpp)
   target_compile_options(pmjs-tile-lifetime-test PRIVATE -Wall -Wextra -Wpedantic)
   target_link_libraries(pmjs-tile-lifetime-test PRIVATE pmjs_runtime)
@@ -320,11 +322,13 @@ if(BUILD_TESTING)
   target_link_libraries(pmjs-canvas-upload-test PRIVATE pmjs_runtime)
   target_compile_options(pmjs-canvas-upload-test PRIVATE -UNDEBUG)
   add_test(NAME native-canvas-upload COMMAND pmjs-canvas-upload-test)
-  foreach(PMJS_NODE_TEST IN ITEMS node-scene node-pixi4-clear node-mask-pixels node-renderer-stats node-empty-sprite node-preparation-progress node-derived-sprite node-uniform-inline-matrix node-filter-input node-bitmap-region-batching node-yed-retained-tiles node-render-to-image node-render-to-canvas node-render-target-filters node-image-coalesce node-image-retention node-image-warm-cache node-image-no-warm-cache node-image-fallback node-image-bytes node-audio-bytes node-video-texture node-video-color node-canvas-deferred node-canvas-pixels node-canvas-radial-gradient node-primitive-surface node-filter-bounds node-tone-boundary-pixels node-mz-color-pixels node-pixi5-zoom-pixels node-pixi5-tiling-pixels node-pixi5-sprite-rounding-pixels node-mz-host-contracts node-mz-canvas-pixels node-mz-sampling-pixels node-mesh-post-tint-overlay node-glyph-cache node-text-layout node-text-layout-cache node-text-upload node-freetype-facade node-primitive-canvas)
+  foreach(PMJS_NODE_TEST IN ITEMS node-scene node-sprite-byte-precision node-pixi4-clear node-mask-pixels node-renderer-stats node-empty-sprite node-preparation-progress node-derived-sprite node-uniform-inline-matrix node-filter-coordinates node-filter-input node-bitmap-region-batching node-bitmap-region-flash node-mv-bitmap-filtering node-tile-edge-filtering node-four-texture-tiles node-yed-retained-tiles node-presentation-byte-precision node-render-to-image node-render-to-canvas node-render-target-filters node-image-coalesce node-image-retention node-image-warm-cache node-image-no-warm-cache node-image-fallback node-image-bytes node-audio-bytes node-video-texture node-video-color node-canvas-deferred node-canvas-pixels node-canvas-radial-gradient node-primitive-surface node-filter-bounds node-tone-boundary-pixels node-mz-color-pixels node-pixi5-zoom-pixels node-pixi5-tiling-pixels node-pixi5-sprite-rounding-pixels node-mz-host-contracts node-mz-canvas-pixels node-mz-sampling-pixels node-mesh-post-tint-overlay node-glyph-cache node-text-layout node-text-layout-cache node-text-upload node-freetype-facade node-primitive-canvas)
     add_test(NAME ${PMJS_NODE_TEST} COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
       "${CMAKE_CURRENT_SOURCE_DIR}/test/${PMJS_NODE_TEST}.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
     set_tests_properties(${PMJS_NODE_TEST} PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
   endforeach()
+  set_tests_properties(node-presentation-byte-precision PROPERTIES ENVIRONMENT
+    "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy;PMJS_WINDOW_SIZE=256x256")
   set_tests_properties(node-derived-sprite node-uniform-inline-matrix PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
   add_test(NAME node-pixi4-tiling-pixels COMMAND ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-pixi4-tiling-pixels.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
@@ -394,6 +398,12 @@ if(BUILD_TESTING)
   pmjs_add_presentation_test(node-presentation-integer-upscale 320x240 640x480 "integer" "640,480,0,0,nearest,0")
   pmjs_add_presentation_test(node-presentation-display 64x64 "" "" "auto")
   pmjs_add_presentation_test(node-presentation-awkward 500x333 640x480 "" "640,426,0,27,linear,1")
+
+  add_test(NAME node-presentation-timing COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-presentation-timing.cjs"
+    $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
+  set_tests_properties(node-presentation-timing PROPERTIES ENVIRONMENT
+    "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy;PMJS_WINDOW_SIZE=64x64;PMJS_PRESENT_TIMING=1;PMJS_PRESENT_FINISH=1")
 
   add_test(NAME node-presentation-pixels COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-presentation-pixels.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")

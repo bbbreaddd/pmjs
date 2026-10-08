@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <vector>
 #include <variant>
+#include <ctime>
 
 namespace pmjs {
 
@@ -128,6 +129,37 @@ struct PresentationGeometry {
   int viewportHeight = 0;
   PresentScaleMode scaleMode = PresentScaleMode::fit;
   PresentFilter filter = PresentFilter::nearest;
+};
+
+// Wall and calling-thread CPU envelopes, not GPU execution timestamps.
+struct PresentationPhaseTiming {
+  std::uint64_t calls = 0;
+  double wallMs = 0, cpuMs = 0;
+};
+struct PresentationTimings {
+  bool enabled = false, finishBeforeSwap = false;
+  std::array<PresentationPhaseTiming, 6> phases{};
+};
+class PresentationPhaseTimer {
+ public:
+  PresentationPhaseTimer(bool enabled, PresentationPhaseTiming& phase)
+      : phase_(enabled ? &phase : nullptr) {
+    if (phase_) { wall_ = milliseconds(CLOCK_MONOTONIC); cpu_ = milliseconds(CLOCK_THREAD_CPUTIME_ID); }
+  }
+  ~PresentationPhaseTimer() {
+    if (!phase_) return;
+    phase_->cpuMs += milliseconds(CLOCK_THREAD_CPUTIME_ID) - cpu_;
+    phase_->wallMs += milliseconds(CLOCK_MONOTONIC) - wall_;
+    ++phase_->calls;
+  }
+ private:
+  static double milliseconds(clockid_t clock) {
+    timespec value{};
+    clock_gettime(clock, &value);
+    return value.tv_sec * 1000.0 + value.tv_nsec / 1000000.0;
+  }
+  PresentationPhaseTiming* phase_;
+  double wall_ = 0, cpu_ = 0;
 };
 
 struct RendererStats {
@@ -252,7 +284,7 @@ class Renderer {
   std::uint32_t createTileLayer(std::vector<TileLayerTile> tiles);
   std::uint32_t createMesh(ImageHandle image,
                            const std::vector<float>& positions,
-                           const std::vector<float>& uvs,
+                           const std::vector<double>& uvs,
                            const std::vector<std::uint32_t>& indices,
                            bool triangleStrip,
                            const MeshMaterial& material = TexturedMeshMaterial{});
@@ -290,6 +322,7 @@ class Renderer {
   std::optional<ImageInfo> renderToImage(int width, int height, AlphaMode alphaMode = AlphaMode::straight);
   const RendererStats& stats() const { return stats_; }
   bool diagnosticsEnabled() const { return diagnostics_; }
+  PresentationTimings& presentationTimings() { return presentationTimings_; }
   std::size_t renderTargetBytes() const;
   std::size_t tileGeometryGpuBytes() const;
   std::size_t tileGeometryCpuBytes() const;
@@ -300,6 +333,7 @@ class Renderer {
  private:
   Effects* effects_ = nullptr;
   struct TileProgramUniforms {
+    int tileFrameEnabled = -1;
     int targetYDown = -1;
     int world = -1;
     int screen = -1;
@@ -311,6 +345,8 @@ class Renderer {
     int trianglePaint = -1;
     int triangleCoverageEnabled = -1;
     int triangleCoverage = -1;
+    int triangleSourceMappingEnabled = -1;
+    int triangleSourceMapping = -1;
     int mvBlendEnabled = -1;
     int mvBounds = -1;
     int nearestSampling = -1;
@@ -330,14 +366,27 @@ class Renderer {
     std::int32_t first = 0;
     std::int32_t count = 0;
     bool premultiplied = false;
+    ImageHandle image = 0;
+  };
+
+  struct FourTileBatch {
+    std::array<TileBatch, 4> textures{};
+    int textureCount = 0;
+    std::int32_t first = 0, count = 0;
   };
 
   struct TileLayerResource {
+    std::uint32_t batchBuffer = 0;
+    std::size_t batchBytes = 0;
+    bool batchReady = false;
+    std::vector<FourTileBatch> fourBatches;
     std::uint32_t vertexArray = 0;
     std::uint32_t vertexBuffer = 0;
     std::size_t vertexBytes = 0;
     std::vector<ImageHandle> images;
     ImageHandle triangleCoverage = 0;
+    bool triangleSourceMappingEnabled = false;
+    std::array<float, 4> triangleSourceMapping{};
     std::vector<TileBatch> batches;
     std::uint32_t owners = 1;
     std::uint32_t queuedReferences = 0;
@@ -349,6 +398,12 @@ class Renderer {
     // Typed material state is retained with the mesh; the scene packet carries dynamic color.
     MeshMaterial material;
   };
+
+  bool prepareFourTileBatches(TileLayerResource& layer);
+  bool fourTileTextures_ = false;
+  bool softwareSceneDepth_ = false;
+  std::uint32_t fourTileProgram_ = 0;
+  TileProgramUniforms fourTileUniforms_;
 
   std::uint32_t createOrdinaryTileLayer(std::vector<TileLayerTile> tiles);
   bool prepareTileLayer(TileLayerResource& layer, const std::array<float, 2>& animation, bool nearest);
@@ -452,6 +507,7 @@ class Renderer {
   FramePacket frame_;
   std::vector<float> vertices_;
   RendererStats stats_;
+  PresentationTimings presentationTimings_;
   bool diagnostics_ = false;
   std::vector<FilterContentBounds> filterBounds_;
   bool filterBoundsEnabled_ = true;
@@ -496,6 +552,7 @@ class Renderer {
   int generatedTexturePremultipliedUniform_ = -1;
   std::uint32_t presentationProgram_ = 0;
   int presentationSceneUniform_ = -1;
+  int presentationLayerUniform_ = -1;
   int presentationOverlayUniform_ = -1;
   int presentationVideoUniform_ = -1;
   int presentationUpperCanvasUniform_ = -1;

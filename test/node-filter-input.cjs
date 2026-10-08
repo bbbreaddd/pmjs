@@ -202,6 +202,94 @@ assert.deepEqual(nestedTone[0].pixels, nestedTone[1].pixels,
 assert.equal(nestedTone[0].copies, 2, 'unsafe descendant invalidates borrowing for active ancestors');
 assert.equal(nestedTone[1].copies, 2);
 
+// Scratch storage can contain a prior plan's pixels. Reads before the first
+// write must still see transparent contents, through either sampler binding.
+for (const auxiliaryRead of [false, true]) {
+  render(entries(chain, null, image));
+  const unread = plan([0, 0, size, size], 1, [
+    pass('identity', auxiliaryRead, auxiliaryRead ?
+      { uniforms: [1], samplers: [{ image: 0, target: 2 }] } : { input: 2 }),
+  ], [1]);
+  const actual = render(entries(unread, null, image));
+  assert.ok(actual.pixels.every(value => value === 0),
+    `unwritten scratch ${auxiliaryRead ? 'auxiliary' : 'primary'} sampler must be transparent`);
+}
+
+const translucent = native.canvas.create(size, size);
+const translucentPixels = Uint8Array.from(pixels);
+for (let index = 3; index < translucentPixels.length; index += 4)
+  translucentPixels[index] = 96;
+native.canvas.writePixels(translucent.handle, 0, 0, size, size, translucentPixels);
+for (const resolution of [0.5, 1, 2]) {
+  for (const offscreen of [false, true]) {
+    for (const nested of [false, true]) {
+      const outputs = [false, true].map(clear => {
+        render(entries(chain, null, image));
+        const inner = plan([-1.25, -0.5, 23.75, 21.25], resolution, [
+          pass('color', false, { output: 2, clear, transform: [0.75, 0, 0, 1, 1.25, 0.5] }),
+          pass('identity', false, { output: 2, clear: false }),
+          pass('identity', false, { input: 2 }),
+        ], [resolution]);
+        const outer = nested ? plan([0, 0, size, size], 1,
+          [pass('identity', false)]) : null;
+        return render(entries(inner, outer, translucent), offscreen).pixels;
+      });
+      assert.ok(outputs[0].some(value => value !== 0), 'translucent chain must remain visible');
+      assert.deepEqual(outputs[0], outputs[1],
+        `first scratch write must blend over zero, later writes retain contents: resolution=${resolution} offscreen=${offscreen} nested=${nested}`);
+    }
+  }
+}
+native.canvas.release(translucent.handle);
+
+for (const clear of [false, true]) {
+  render(entries(chain, null, image));
+  const padding = plan([0, 0, 23, 21], 1, [
+    pass('identity', false, { output: 2, clear }),
+    pass('padding', false, { input: 2 }),
+  ], [1]);
+  const actual = render(entries(padding, null, image));
+  assert.deepEqual(Array.from(actual.pixels.subarray((10 * size + 10) * 4,
+    (10 * size + 10) * 4 + 4)), [0, 0, 64, 255],
+    'initial scratch write must clear padding outside the active viewport');
+}
+
+const stockQuadVertex = 'attribute vec2 aVertexPosition; attribute vec2 aTextureCoord; ' +
+  'uniform mat3 projectionMatrix; varying vec2 vTextureCoord; void main(void) {' +
+  'gl_Position=vec4((projectionMatrix*vec3(aVertexPosition,1.0)).xy,0.0,1.0);' +
+  'vTextureCoord=aTextureCoord;}';
+const texelCenterProgram = native.render.createFilterProgram(
+  'varying vec2 vTextureCoord; void main(){' +
+  'vec2 fraction=fract(vTextureCoord*32.0);' +
+  'gl_FragColor=vec4(equal(fraction,vec2(0.5)),0.0,1.0);}', stockQuadVertex);
+const interpolatedCenterProgram = native.render.createFilterProgram(
+  'varying vec2 vTextureCoord; void main(){' +
+  'vec2 fraction=fract(vTextureCoord*32.0);' +
+  'gl_FragColor=vec4(equal(fraction,vec2(0.5)),0.0,1.0);}',
+  stockQuadVertex + '\n// Authored interpolation reference.');
+for (const offscreen of [false, true]) {
+  const centerPlan = plan([4, 4, 24, 24], 1, [{
+    program: texelCenterProgram.handle, input: 0, output: 1,
+    clear: false, blend: 0, uniforms: [], samplers: [],
+  }]);
+  const actual = render(entries(centerPlan, null, image), offscreen).pixels;
+  const referencePlan = plan([4, 4, 24, 24], 1, [{
+    program: interpolatedCenterProgram.handle, input: 0, output: 1,
+    clear: false, blend: 0, uniforms: [], samplers: [],
+  }]);
+  const reference = render(entries(referencePlan, null, image), offscreen).pixels;
+  assert.deepEqual(actual, reference,
+    `coordinate arithmetic must preserve authored interpolation, offscreen=${offscreen}`);
+}
+
+const translatedCenterPlan = plan([4, 4, 24, 24], 1, [{
+  program: texelCenterProgram.handle, input: 0, output: 1,
+  clear: false, blend: 0, uniforms: [], samplers: [], transform: [1, 0, 0, 1, 0.25, 0],
+}]);
+const translatedCenters = render(entries(translatedCenterPlan, null, image)).pixels;
+assert.equal(translatedCenters[(10 * size + 10) * 4], 0,
+  'translated stock quads must retain fractional authored UVs');
+
 for (const canvas of [image, empty, snapshot]) native.canvas.release(canvas.handle);
 native.runtime.quit();
 console.log('Custom filter borrowed input and copied input pixels agree across layout, effects and reuse');

@@ -367,7 +367,6 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
       frame_.commands.back().maskImage = state.maskImage;
       frame_.commands.back().maskTransform = state.maskTransform;
       frame_.commands.back().nearest =
-        kind == static_cast<std::uint32_t>(NodeKind::tileLayer) ||
         (flags & NodeFlags::nearestSampling);
       frame_.commands.back().primitive =
         kind == static_cast<std::uint32_t>(NodeKind::tileLayer)

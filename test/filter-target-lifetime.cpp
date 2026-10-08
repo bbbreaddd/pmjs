@@ -9,6 +9,7 @@
 #include <cassert>
 #include <cstdlib>
 #include <memory>
+#include <new>
 #include <stdexcept>
 #include <vector>
 
@@ -17,7 +18,7 @@ bool failFramebuffer = false;
 bool failTextureAllocation = false;
 bool failFramebufferAllocation = false;
 bool recordAllocations = false;
-std::vector<GLuint> textures, framebuffers;
+std::vector<GLuint> textures, framebuffers, renderbuffers;
 }
 
 // Keep real driver rendering while controlling allocation failure and teardown checks.
@@ -41,6 +42,12 @@ void glGenTextures(GLsizei count, GLuint* names) {
   assert(real);
   real(count, names);
   if (recordAllocations) textures.insert(textures.end(), names, names + count);
+}
+void glGenRenderbuffers(GLsizei count, GLuint* names) {
+  static const auto real = reinterpret_cast<void (*)(GLsizei, GLuint*)>(dlsym(RTLD_NEXT, "glGenRenderbuffers"));
+  assert(real);
+  real(count, names);
+  if (recordAllocations) renderbuffers.insert(renderbuffers.end(), names, names + count);
 }
 void glGenFramebuffers(GLsizei count, GLuint* names) {
   if (failFramebufferAllocation) {
@@ -104,7 +111,9 @@ int main() {
     for (auto* failure : {&failFramebuffer, &failTextureAllocation, &failFramebufferAllocation}) {
       *failure = true;
       bool failed = false;
-      try { render(other.second); } catch (const std::runtime_error&) { failed = true; }
+      try { render(other.second); }
+      catch (const std::runtime_error&) { failed = true; }
+      catch (const std::bad_alloc&) { failed = true; }
       assert(failed && !*failure);
       assert(renderer.stats().rendererTargetBytes == beforeFailure.rendererTargetBytes);
       assert(renderer.stats().rendererTargetCacheBytes == beforeFailure.rendererTargetCacheBytes);
@@ -126,5 +135,6 @@ int main() {
   assert(!textures.empty() && !framebuffers.empty());
   for (auto name : textures) assert(!glIsTexture(name));
   for (auto name : framebuffers) assert(!glIsFramebuffer(name));
+  for (auto name : renderbuffers) assert(!glIsRenderbuffer(name));
   assert(glGetError() == GL_NO_ERROR);
 }
