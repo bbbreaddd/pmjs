@@ -31,6 +31,7 @@ if(PMJS_ENABLE_SKIA65 OR PMJS_BUILD_SKIA65_COMPONENT)
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/skia65-arm-parity.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/skia65/build.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/skia65/artifact.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/skia65/raster.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/skia65/component_sources.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/skia65/provision.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/skia65/sources.lock.json"

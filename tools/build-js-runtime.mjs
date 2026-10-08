@@ -295,6 +295,8 @@ if (check) {
     console.error(`${path.relative(root, output)} is out of date`);
     process.exitCode = 1;
   }
+} else if (fs.existsSync(output) && fs.readFileSync(output, 'utf8') === bundle) {
+  console.log(`unchanged ${path.relative(process.cwd(), output)}`);
 } else {
   fs.mkdirSync(path.dirname(output), { recursive: true });
   const temporary = `${output}.tmp-${process.pid}`;

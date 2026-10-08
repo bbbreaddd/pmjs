@@ -44,6 +44,9 @@ test('bundle generation is deterministic and resolves modules from its own check
   const args = [tool, '--game', game, '--output', out];
   childProcess.execFileSync(process.execPath, args, { cwd: root });
   const first = fs.readFileSync(out, 'utf8');
+  const stamp = fs.statSync(out, { bigint: true }).mtimeNs;
+  childProcess.execFileSync(process.execPath, args, { cwd: root });
+  assert.equal(fs.statSync(out, { bigint: true }).mtimeNs, stamp);
   childProcess.execFileSync(process.execPath, [...args, '--check'], { cwd: root });
   assert.equal(fs.readFileSync(out, 'utf8'), first);
   assert.match(first, /BEGIN js\/pmjs-mv\/bootstrap.js/);

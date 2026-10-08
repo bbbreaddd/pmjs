@@ -7,23 +7,15 @@ import json
 import os
 import pathlib
 import shutil
-import shlex
 import subprocess
-import sys
 
-from provision import ROOT, LOCK, digest, provision
+from provision import ROOT, LOCK, digest
 from artifact import configuration, source_hashes, validate
+from raster import build_raster, recipe, reusable
 
 
 def run(arguments, **kwargs):
     subprocess.run([str(value) for value in arguments], check=True, **kwargs)
-
-
-def replace(filename, before, after):
-    source = filename.read_text()
-    if source.count(before) != 1:
-        raise RuntimeError(f"Pinned adaptation no longer matches: {filename}: {before}")
-    filename.write_text(source.replace(before, after))
 
 
 def build(options):
@@ -31,6 +23,8 @@ def build(options):
         validate(options.output.resolve(), options.arch)
         return
     cache = (options.cache or ROOT / (".cache/skia65" if options.arch == "x64" else ".cache/skia65-arm64")).resolve()
+    if getattr(options, "explain", False):
+        return build_locked(options, cache)
     cache.parent.mkdir(parents=True, exist_ok=True)
     with cache.with_suffix(".lock").open("a") as guard:
         fcntl.flock(guard, fcntl.LOCK_EX)
@@ -70,63 +64,29 @@ def build_locked(options, cache):
         "drivers": [digest(command.resolve()) for command in compiler_commands],
         "sdk": str(sdk) if sdk else None, "configuration": args, "stripSha256": digest(strip.resolve())}
     destination = options.output.resolve()
-    if options.reuse:
+    explain = getattr(options, "explain", False)
+    if options.reuse or explain:
         try:
             validate(destination, options.arch, toolchain)
             tests = ["pmjs-skia65-mask-test", "pmjs-skia65-raster-test"] if options.mask_test else []
             if all((destination / name).is_file() for name in tests):
-                print(destination / "libpmjs-skia65.so")
+                print("Skia65: unchanged verified component" if explain else destination / "libpmjs-skia65.so")
                 return
         except RuntimeError as error:
-            print(str(error) + "; rebuilding", flush=True)
+            print(str(error) + ("; build required" if explain else "; rebuilding"), flush=True)
     identity = hashlib.sha256(json.dumps(toolchain, sort_keys=True).encode()).hexdigest()[:16]
-    destination.mkdir(parents=True, exist_ok=True)
     component = destination / ("component-" + identity)
     output = destination / ("skia-" + identity)
-    lock = provision(cache)
+    if explain:
+        reason = reusable(cache, output, recipe(toolchain, args))
+        print("Skia65: upstream raster " + ("rebuild (" + reason + ")" if reason else "unchanged"), flush=True)
+        print("Skia65: bridge configuration and build required", flush=True)
+        return
+    destination.mkdir(parents=True, exist_ok=True)
+    adaptations = build_raster(options, cache, output, toolchain, args, sdk,
+                               c_compiler if not sdk else None, compiler)
     tools = cache / "tools"
-    for tool in lock["tools"]:
-        if subprocess.check_output([tools / tool["name"], "--version"], text=True).strip() != tool["version"]:
-            raise RuntimeError("Unexpected build tool version: " + tool["name"])
-    skia = cache / "skia"
-    # Both literal compiler names avoid the release's Python 2 is_clang.py.
-    for name in ["clang", "clang++"]:
-        command = [str(sdk / "bin" / ("cc" if name == "clang" else "c++"))] if sdk else [c_compiler if name == "clang" else str(compiler)]
-        wrapper = tools / name
-        wrapper.write_text("#!/bin/sh\nexec " + shlex.join(command) + ' "$@"\n')
-        wrapper.chmod(0o755)
-    python = tools / "python"
-    python.write_text('#!/bin/sh\nexec ' + shlex.quote(sys.executable) + ' "$@"\n')
-    python.chmod(0o755)
-    replace(skia / "BUILD.gn", '"src/ports/SkFontMgr_custom_directory_factory.cpp",',
-            '"src/ports/SkFontMgr_custom_empty_factory.cpp",')
-    if options.arch == "arm64":
-        replace(skia / "BUILD.gn", '"-march=armv8-a+crc"', '"-mcpu=generic+crc"')
-    mask_patch = ROOT / "third_party/skia65-mask-tail.patch"
-    mask_source = skia / "src/opts/SkBlitMask_opts.h"
-    mask_original_sha256 = digest(mask_source)
-    patch_environment = {**os.environ, "GIT_CEILING_DIRECTORIES": str(skia.parent)}
-    run(["git", "apply", "--check", mask_patch], cwd=skia, env=patch_environment)
-    run(["git", "apply", mask_patch], cwd=skia, env=patch_environment)
-    arm_patch = ROOT / "third_party/skia65-arm-parity.patch"
-    arm_sources = [skia / "src/opts/SkBlitRow_opts.h", skia / "src/opts/SkNx_neon.h"]
-    arm_original_sha256 = {str(file.relative_to(skia)): digest(file) for file in arm_sources}
-    run(["git", "apply", "--check", arm_patch], cwd=skia, env=patch_environment)
-    run(["git", "apply", arm_patch], cwd=skia, env=patch_environment)
-    (skia / "src/ports/SkFontMgr_custom_empty_factory.cpp").write_text(
-        '#include "SkFontMgr.h"\n#include "SkFontMgr_empty.h"\n'
-        'sk_sp<SkFontMgr> SkFontMgr::Factory() { return SkFontMgr_New_Custom_Empty(); }\n')
-    # The private component compiles FreeType and HarfBuzz together. GN only
-    # needs their headers; no system font library may enter libskia.a.
-    (skia / "third_party/freetype2/BUILD.gn").write_text(
-        'import("../third_party.gni")\nsystem("freetype2") {\n'
-        ' include_dirs = ' + json.dumps([str(cache / "freetype/include"),
-            str(cache / "chromium/third_party/freetype/include")]) + '\n}\n')
-    output.mkdir(parents=True, exist_ok=True)
-    (output / "args.gn").write_text("\n".join(key + " = " + json.dumps(value) for key, value in args.items()) + "\n")
     environment = {**os.environ, "PATH": str(tools) + os.pathsep + os.environ["PATH"]}
-    run([tools / "gn", "gen", output, "--root=" + str(skia)], env=environment)
-    run([tools / "ninja", "-C", output, "skia", "-j", options.jobs], env=environment)
     configure = ["cmake", "-S", ROOT / "src/skia65", "-B", component, "-G", "Ninja",
                  "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_C_COMPILER=" + str(tools / "clang"),
                  "-DCMAKE_CXX_COMPILER=" + str(tools / "clang++"),
@@ -142,13 +102,10 @@ def build_locked(options, cache):
     run([strip, "--strip-debug", library])
     manifest = {"arch": options.arch, "scope": "shared text backend",
         "dependencies": lock, "compilerVersion": compiler_version,
-        "compilerSha256": digest(compiler.resolve()), "configuration": args, "toolchain": toolchain,
-        "strip": {"version": lock["clangVersion"], "sha256": digest(strip.resolve()), "arguments": ["--strip-debug"]},
+        "compilerSha256": toolchain["compilerSha256"], "configuration": args, "toolchain": toolchain,
+        "strip": {"version": lock["clangVersion"], "sha256": toolchain["stripSha256"], "arguments": ["--strip-debug"]},
         "sources": source_hashes(),
-        "adaptations": {"maskTail": {"patchSha256": digest(mask_patch),
-            "originalSha256": mask_original_sha256, "adaptedSha256": digest(mask_source)},
-            "armParity": {"patchSha256": digest(arm_patch), "originalSha256": arm_original_sha256,
-                "adaptedSha256": {str(file.relative_to(skia)): digest(file) for file in arm_sources}}},
+        "adaptations": adaptations,
         "librarySha256": digest(library), "libraryBytes": library.stat().st_size,
         "readelfDynamic": subprocess.check_output(["readelf", "-d", library], text=True),
         "exports": subprocess.check_output(["nm", "-D", "--defined-only", library], text=True)}
@@ -169,8 +126,10 @@ def build_locked(options, cache):
     if any(name in manifest["readelfDynamic"] for name in ["libfreetype", "libharfbuzz", "libfontconfig"]):
         raise RuntimeError("Skia65 unexpectedly links a system font dependency")
     temporary = destination / "libpmjs-skia65.so.tmp"
-    shutil.copyfile(library, temporary)
-    temporary.replace(destination / "libpmjs-skia65.so")
+    published = destination / "libpmjs-skia65.so"
+    if not published.exists() or digest(published) != manifest["librarySha256"]:
+        shutil.copyfile(library, temporary)
+        temporary.replace(published)
     temporary = destination / "manifest.json.tmp"
     temporary.write_text(json.dumps(manifest, indent=2) + "\n")
     temporary.replace(destination / "manifest.json")
@@ -188,6 +147,7 @@ if __name__ == "__main__":
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--reuse", action="store_true")
     modes.add_argument("--verify", action="store_true")
+    modes.add_argument("--explain", action="store_true")
     parser.add_argument("--arch", choices=["x64", "arm64"], default="x64")
     parser.add_argument("--sdk", type=pathlib.Path)
     parser.add_argument("--jobs", type=int, default=4)

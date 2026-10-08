@@ -7,7 +7,7 @@ from provision import ROOT, LOCK, digest
 def source_hashes():
     files = [LOCK, ROOT / "third_party/skia65-mask-tail.patch", ROOT / "third_party/skia65-arm-parity.patch"]
     files += [pathlib.Path(__file__).with_name(name) for name in
-        ["build.py", "provision.py", "artifact.py", "component_sources.py"]]
+        ["build.py", "provision.py", "artifact.py", "component_sources.py", "raster.py"]]
     files += sorted(file for file in (ROOT / "src/skia65").iterdir() if file.is_file())
     files += [ROOT / "src" / name for name in
         ["text_layout.cpp", "text_layout.hpp", "canvas_pixels.hpp", "unicode_default_ignorables.hpp"]]

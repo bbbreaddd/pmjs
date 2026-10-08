@@ -3,9 +3,28 @@ if(POLICY CMP0135)
 endif()
 
 include(FetchContent)
+find_package(Git REQUIRED)
+set(effekseer_revision "e0ccaf1d1837b1d178d0088f714a1f4525cae8f4")
+set(effekseer_archive_sha "e2cb5aefdf1bf84d0d050fd44fcc64aa35baeee957686768a508784f1ed243d1")
+set(effekseer_patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/effekseer-mz.patch")
+file(SHA256 "${effekseer_patch}" patch_sha)
+string(SHA256 source_key "${effekseer_archive_sha}:${patch_sha}")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${effekseer_patch}")
+
+if(FETCHCONTENT_SOURCE_DIR_PMJS_EFFEKSEER)
+  execute_process(COMMAND "${GIT_EXECUTABLE}" apply --reverse --check "${effekseer_patch}"
+    WORKING_DIRECTORY "${FETCHCONTENT_SOURCE_DIR_PMJS_EFFEKSEER}"
+    RESULT_VARIABLE patch_status ERROR_VARIABLE patch_error)
+  if(NOT patch_status EQUAL 0)
+    message(FATAL_ERROR "Custom Effekseer source must already contain the pinned patch: ${patch_error}")
+  endif()
+endif()
+
 FetchContent_Declare(pmjs_effekseer
-  URL https://codeload.github.com/effekseer/Effekseer/tar.gz/e0ccaf1d1837b1d178d0088f714a1f4525cae8f4
-  URL_HASH SHA256=e2cb5aefdf1bf84d0d050fd44fcc64aa35baeee957686768a508784f1ed243d1)
+  URL "https://codeload.github.com/effekseer/Effekseer/tar.gz/${effekseer_revision}"
+  URL_HASH "SHA256=${effekseer_archive_sha}"
+  SOURCE_DIR "${FETCHCONTENT_BASE_DIR}/pmjs_effekseer-${source_key}-src"
+  PATCH_COMMAND "${GIT_EXECUTABLE}" apply "${effekseer_patch}")
 
 function(pmjs_build_effekseer)
   set(BUILD_VIEWER OFF)
@@ -38,21 +57,6 @@ function(pmjs_build_effekseer)
     set(CMAKE_WARN_DEPRECATED "${pmjs_prev_warn_deprecated}" CACHE BOOL "" FORCE)
   else()
     unset(CMAKE_WARN_DEPRECATED CACHE)
-  endif()
-  find_package(Git REQUIRED)
-  set(patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/effekseer-mz.patch")
-  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${patch}")
-  execute_process(COMMAND "${GIT_EXECUTABLE}" apply --reverse --check "${patch}"
-    WORKING_DIRECTORY "${pmjs_effekseer_SOURCE_DIR}" RESULT_VARIABLE patched
-    OUTPUT_QUIET ERROR_QUIET)
-  if(NOT patched EQUAL 0)
-    execute_process(COMMAND "${GIT_EXECUTABLE}" apply --check "${patch}"
-      WORKING_DIRECTORY "${pmjs_effekseer_SOURCE_DIR}" RESULT_VARIABLE matches ERROR_VARIABLE reason)
-    if(NOT matches EQUAL 0)
-      message(FATAL_ERROR "Pinned Effekseer patch no longer matches ${pmjs_effekseer_SOURCE_DIR}: ${reason}")
-    endif()
-    execute_process(COMMAND "${GIT_EXECUTABLE}" apply "${patch}"
-      WORKING_DIRECTORY "${pmjs_effekseer_SOURCE_DIR}" COMMAND_ERROR_IS_FATAL ANY)
   endif()
   target_include_directories(Effekseer SYSTEM PUBLIC "$<BUILD_INTERFACE:${pmjs_effekseer_SOURCE_DIR}/Dev/Cpp/Effekseer>")
   target_include_directories(EffekseerRendererGL SYSTEM PUBLIC "$<BUILD_INTERFACE:${pmjs_effekseer_SOURCE_DIR}/Dev/Cpp/EffekseerRendererGL>")
