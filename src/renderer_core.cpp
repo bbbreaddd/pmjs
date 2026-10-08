@@ -15,6 +15,22 @@
 #include <unordered_set>
 
 namespace pmjs {
+namespace {
+bool nearestTileGeometry(const std::vector<TileLayerTile>& tiles) {
+  const auto integral = [](float value, float limit) {
+    return std::isfinite(value) && std::abs(value) <= limit && value == std::floor(value);
+  };
+  return std::all_of(tiles.begin(), tiles.end(), [&](const auto& tile) {
+    return tile.source[2] >= 1 && tile.source[3] >= 1 &&
+      std::all_of(tile.source.begin(), tile.source.end(), [&](float value) { return integral(value, 8192); }) &&
+      std::all_of(tile.position.begin(), tile.position.end(), [&](float value) { return integral(value, 8192); }) &&
+      integral(tile.source[0] + tile.source[2], 8192) && integral(tile.source[1] + tile.source[3], 8192) &&
+      integral(tile.position[0] + tile.source[2], 8192) && integral(tile.position[1] + tile.source[3], 8192) &&
+      std::all_of(tile.animation.begin(), tile.animation.end(), [&](float value) { return integral(value, 4); });
+  });
+}
+}  // namespace
+
 void Renderer::finish() { glFinish(); }
 
 PresentScaleMode Renderer::presentScaleModeFromEnvironment() {
@@ -532,10 +548,14 @@ bool Renderer::prepareTileLayer(TileLayerResource& layer,
     const std::array<float, 2>& animation, bool nearest) {
   if (layer.tiles.empty()) {
     if (layer.mappedEpoch == images_.textureEpoch()) return true;
+    layer.nearestTileMapping = layer.nearestTileGeometry;
     for (auto& batch : layer.batches) {
       // Derived textures can be replaced while the logical image and geometry survive.
       const auto image = batch.premultiplied ? images_.lookupPremultiplied(batch.image) : images_.lookup(batch.image);
       if (!image || !image->texture) return false;
+      const auto logical = images_.inspect(batch.image);
+      layer.nearestTileMapping = layer.nearestTileMapping && logical &&
+        logical->width == image->width && logical->height == image->height;
       if (batch.texture != image->texture || batch.textureWidth != image->width ||
           batch.textureHeight != image->height || batch.premultiplied != image->premultiplied) layer.batchReady = false;
       batch.texture = image->texture; batch.textureWidth = image->width; batch.textureHeight = image->height;
@@ -548,6 +568,7 @@ bool Renderer::prepareTileLayer(TileLayerResource& layer,
       layer.mappedAnimation == animation && layer.mappedEpoch == images_.textureEpoch()) return true;
   auto vertices = layer.tileVertices;
   std::vector<TileBatch> batches;
+  bool nearestMapping = layer.nearestTileGeometry;
   for (std::size_t index = 0; index < layer.tiles.size(); ++index) {
     const auto& tile = layer.tiles[index];
     std::optional<SpriteImageRegion> region;
@@ -557,6 +578,25 @@ bool Renderer::prepareTileLayer(TileLayerResource& layer,
     else images_.notePreparedFallback(tile.image, "tile-linear-sampling");
     const auto image = region ? std::optional<ImageInfo>(region->image) : images_.lookupPremultiplied(tile.image);
     if (!image || !image->texture) return false;
+    const float x = tile.source[0] + tile.animation[0] * animation[0];
+    const float y = tile.source[1] + tile.animation[1] * animation[1];
+    if (region) {
+      const auto& source = region->source;
+      const auto& atlas = region->atlas;
+      const float physicalX = x + atlas[0] - source[0];
+      const float physicalY = y + atlas[1] - source[1];
+      nearestMapping = nearestMapping && source[2] == atlas[2] && source[3] == atlas[3] &&
+        x >= source[0] && y >= source[1] &&
+        x + tile.source[2] <= source[0] + source[2] && y + tile.source[3] <= source[1] + source[3] &&
+        x >= 0 && y >= 0 && x + tile.source[2] <= region->logicalWidth && y + tile.source[3] <= region->logicalHeight &&
+        physicalX == std::floor(physicalX) && physicalY == std::floor(physicalY) &&
+        physicalX >= 0 && physicalY >= 0 &&
+        physicalX + tile.source[2] <= image->width && physicalY + tile.source[3] <= image->height;
+    } else {
+      // Full-sheet backing shares the logical bounds used for transparent padding.
+      const auto logical = images_.inspect(tile.image);
+      nearestMapping = nearestMapping && logical && logical->width == image->width && logical->height == image->height;
+    }
     const std::array<float, 4> mapping = region ? std::array<float, 4>{
       region->atlas[0]-region->source[0], region->atlas[1]-region->source[1],
       static_cast<float>(region->logicalWidth), static_cast<float>(region->logicalHeight)} : std::array<float, 4>{};
@@ -598,6 +638,7 @@ bool Renderer::prepareTileLayer(TileLayerResource& layer,
   layer.tileVertices = std::move(vertices); layer.batches = std::move(batches);
   layer.mappedAnimation = animation; layer.mappedNearest = nearest;
   layer.mappedEpoch = images_.textureEpoch(); layer.mappedReady = true;
+  layer.nearestTileMapping = nearestMapping;
   return true;
 }
 
@@ -605,12 +646,17 @@ std::uint32_t Renderer::createOrdinaryTileLayer(std::vector<TileLayerTile> tiles
   constexpr std::size_t kMaxTileCount = 65536U;
   if (tiles.empty() || tiles.size() > kMaxTileCount) return 0;
   TileLayerResource layer;
+  layer.nearestTileGeometry = nearestTileShader_ && nearestTileGeometry(tiles);
+  layer.nearestTileMapping = layer.nearestTileGeometry;
   std::unordered_map<ImageHandle, ImageInfo> imageInfo;
   for (const auto& tile : tiles) {
     if (imageInfo.find(tile.image) != imageInfo.end()) continue;
     // Tile slots are uploaded premultiplied before filtering.
     const auto image = images_.lookupPremultiplied(tile.image);
     if (!image) return 0;
+    const auto logical = images_.inspect(tile.image);
+    layer.nearestTileMapping = layer.nearestTileMapping && logical &&
+      logical->width == image->width && logical->height == image->height;
     imageInfo.emplace(tile.image, *image);
   }
   layer.images.reserve(imageInfo.size());
@@ -691,6 +737,7 @@ std::uint32_t Renderer::createTileLayer(std::vector<TileLayerTile> tiles) {
   constexpr std::size_t kMaxTileCount = 65536U;
   if (tiles.empty() || tiles.size() > kMaxTileCount) return 0;
   TileLayerResource layer;
+  layer.nearestTileGeometry = nearestTileShader_ && nearestTileGeometry(tiles);
   for (const auto& tile : tiles) {
     if (std::find(layer.images.begin(), layer.images.end(), tile.image) != layer.images.end()) continue;
     if (!images_.inspect(tile.image) || !images_.retain(tile.image)) {

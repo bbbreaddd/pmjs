@@ -980,8 +980,14 @@ constexpr const char* tileVertexSource = R"(#version 300 es
   layout(location = 5) in vec4 batchTexture;
   flat out highp vec4 tileTextureInfo;
 #endif
+#ifdef PMJS_NEAREST_TILE
+  out highp vec2 logicalUv;
+#else
   flat out highp vec4 tileMapping;
   flat out highp vec4 tileFrame;
+  out highp vec2 meshLocalPosition;
+  uniform bool tileFrameEnabled;
+#endif
   uniform mat3 world;
   uniform bool targetYDown;
   uniform highp mat3 targetProjection;
@@ -989,24 +995,65 @@ constexpr const char* tileVertexSource = R"(#version 300 es
   uniform vec2 animationOffset;
   uniform vec2 imageDimensions;
   out highp vec2 vertexUv;
-  out highp vec2 meshLocalPosition;
-  uniform bool tileFrameEnabled;
   void main() {
     vec2 pixel = (world * vec3(localPosition, 1.0)).xy;
     gl_Position = vec4(pixel.x / screenSize.x * 2.0 - 1.0,
                        1.0 - pixel.y / screenSize.y * 2.0, 0.0, 1.0);
     if (targetYDown) gl_Position.y = -gl_Position.y;
     gl_Position.xy = (targetProjection * vec3(gl_Position.xy, 1.0)).xy;
-    meshLocalPosition = localPosition;
-    tileMapping = preparedMapping;
 #ifdef PMJS_FOUR_TILE_TEXTURES
     tileTextureInfo = batchTexture;
 #endif
+    vec2 source = sourcePixel + animationFactor * animationOffset;
+#ifdef PMJS_NEAREST_TILE
+#ifdef PMJS_FOUR_TILE_TEXTURES
+    vec2 dimensions = batchTexture.yz;
+#else
+    vec2 dimensions = imageDimensions;
+#endif
+    logicalUv = source / (preparedMapping.z > 0.0 ? preparedMapping.zw : dimensions);
+    vertexUv = (source + preparedMapping.xy) / dimensions;
+#else
+    meshLocalPosition = localPosition;
+    tileMapping = preparedMapping;
     vec2 logicalDimensions = preparedMapping.z > 0.0 ? preparedMapping.zw : imageDimensions;
     tileFrame = sourceFrame + vec4(animationFactor * animationOffset,
       animationFactor * animationOffset);
-    vertexUv = sourcePixel + animationFactor * animationOffset;
+    vertexUv = source;
     if (!tileFrameEnabled) vertexUv /= logicalDimensions;
+#endif
+  }
+)";
+constexpr const char* nearestTileFragmentSource = R"(#version 300 es
+  precision mediump float;
+  uniform highp vec4 color;
+  in highp vec2 vertexUv;
+  in highp vec2 logicalUv;
+#ifdef PMJS_FOUR_TILE_TEXTURES
+  flat in highp vec4 tileTextureInfo;
+  uniform highp sampler2D tileImage0, tileImage1, tileImage2, tileImage3;
+  #define texturePremultiplied (tileTextureInfo.w > 0.5)
+  highp vec4 tileSample(highp vec2 uv) {
+    if (tileTextureInfo.x < 0.5) return texture(tileImage0, uv);
+    if (tileTextureInfo.x < 1.5) return texture(tileImage1, uv);
+    if (tileTextureInfo.x < 2.5) return texture(tileImage2, uv);
+    return texture(tileImage3, uv);
+  }
+#else
+  uniform highp sampler2D image;
+  uniform bool texturePremultiplied;
+  highp vec4 tileSample(highp vec2 uv) { return texture(image, uv); }
+#endif
+  out highp vec4 outputColor;
+  void main() {
+    // Out-of-sheet rectangles retain transparent slot padding, even for tiny sheets.
+    highp vec4 sampled = vec4(0.0);
+    if (all(greaterThanEqual(logicalUv, vec2(0.0))) && all(lessThan(logicalUv, vec2(1.0))))
+      sampled = tileSample(vertexUv);
+    sampled.rgb *= color.rgb;
+    sampled.a *= color.a;
+    outputColor = sampled;
+    outputColor.rgb *= texturePremultiplied ? color.a : outputColor.a;
   }
 )";
 constexpr const char* simpleFragmentSource = R"(#version 300 es

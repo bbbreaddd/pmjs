@@ -173,6 +173,8 @@ struct RendererStats {
   std::uint64_t baseSpriteDrawCalls = 0;
   std::uint64_t effectSpriteDrawCalls = 0;
   std::uint64_t tileDrawCalls = 0;
+  std::uint64_t nearestTileShaderDrawCalls = 0;
+  std::uint64_t nearestTileShaderFallbackDrawCalls = 0;
   std::uint64_t filterDrawCalls = 0;
   std::array<std::uint64_t, filterKindCount> filterApplications{};
   std::uint64_t filterTargetAcquires = 0;
@@ -394,6 +396,7 @@ class Renderer {
     std::vector<float> tileVertices;
     std::array<float, 2> mappedAnimation{};
     bool mappedNearest = true, mappedReady = false;
+    bool nearestTileGeometry = false, nearestTileMapping = false;
     std::uint64_t mappedEpoch = 0;
     // Typed material state is retained with the mesh; the scene packet carries dynamic color.
     MeshMaterial material;
@@ -401,9 +404,12 @@ class Renderer {
 
   bool prepareFourTileBatches(TileLayerResource& layer);
   bool fourTileTextures_ = false;
+  bool nearestTileShader_ = false;
   bool softwareSceneDepth_ = false;
   std::uint32_t fourTileProgram_ = 0;
   TileProgramUniforms fourTileUniforms_;
+  std::uint32_t nearestTileProgram_ = 0, nearestFourTileProgram_ = 0;
+  TileProgramUniforms nearestTileUniforms_, nearestFourTileUniforms_;
 
   std::uint32_t createOrdinaryTileLayer(std::vector<TileLayerTile> tiles);
   bool prepareTileLayer(TileLayerResource& layer, const std::array<float, 2>& animation, bool nearest);

@@ -8,6 +8,7 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
@@ -87,6 +88,10 @@ Renderer::Renderer(int width, int height, ImageStore& images)
   if (tileTextures && std::string(tileTextures) != "1" && std::string(tileTextures) != "4")
     throw std::runtime_error("PMJS_TILE_BATCH_TEXTURES must be 1 or 4");
   fourTileTextures_ = tileTextures && std::string(tileTextures) == "4";
+  const char* nearestTile = std::getenv("PMJS_TILE_NEAREST_SHADER");
+  if (nearestTile && std::string(nearestTile) != "0" && std::string(nearestTile) != "1")
+    throw std::runtime_error("PMJS_TILE_NEAREST_SHADER must be 0 or 1");
+  nearestTileShader_ = !(nearestTile && std::string(nearestTile) == "0");
   const char* diagnostics = std::getenv("PMJS_GRAPHICS_DIAGNOSTICS");
   diagnostics_ = diagnostics && std::string(diagnostics) == "1";
   const char* filterBounds = std::getenv("PMJS_FILTER_BOUNDS");
@@ -323,6 +328,7 @@ void Renderer::createPixiPrograms(const std::string& precision) {
   GLuint filter = 0;
   GLuint simple = 0;
   GLuint tile = 0, fourTile = 0;
+  GLuint nearestTile = 0, nearestFourTile = 0;
   GLuint meshOverlay = 0;
   GLuint canvasTriangleBitmap = 0;
   try {
@@ -335,6 +341,24 @@ void Renderer::createPixiPrograms(const std::string& precision) {
       fragment.insert(fragment.find('\n') + 1, "#define PMJS_FOUR_TILE_TEXTURES\n");
       fourTile = linkPixiProgram(vertex.c_str(), fragment.c_str());
     }
+    if (nearestTileShader_) {
+      try {
+        std::string vertex(tileVertexSource);
+        vertex.insert(vertex.find('\n') + 1, "#define PMJS_NEAREST_TILE\n");
+        nearestTile = linkPixiProgram(vertex.c_str(), nearestTileFragmentSource);
+        if (fourTileTextures_) {
+          std::string fragment(nearestTileFragmentSource);
+          vertex.insert(vertex.find('\n') + 1, "#define PMJS_FOUR_TILE_TEXTURES\n");
+          fragment.insert(fragment.find('\n') + 1, "#define PMJS_FOUR_TILE_TEXTURES\n");
+          nearestFourTile = linkPixiProgram(vertex.c_str(), fragment.c_str());
+        }
+      } catch (const std::exception& error) {
+        if (nearestTile) glDeleteProgram(nearestTile);
+        if (nearestFourTile) glDeleteProgram(nearestFourTile);
+        nearestTile = nearestFourTile = 0;
+        std::fprintf(stderr, "[pmjs-renderer] nearest tile shader unavailable: %s\n", error.what());
+      }
+    }
     const auto overlaySource = meshPostTintOverlayFragmentSourceWithPrecision("mediump");
     meshOverlay = linkPixiProgram(tileVertexSource, overlaySource.c_str());
     const auto bitmapSource = meshPostTintOverlayFragmentSourceWithPrecision("mediump", true);
@@ -344,6 +368,8 @@ void Renderer::createPixiPrograms(const std::string& precision) {
     if (simple) glDeleteProgram(simple);
     if (tile) glDeleteProgram(tile);
     if (fourTile) glDeleteProgram(fourTile);
+    if (nearestTile) glDeleteProgram(nearestTile);
+    if (nearestFourTile) glDeleteProgram(nearestFourTile);
     if (meshOverlay) glDeleteProgram(meshOverlay);
     if (canvasTriangleBitmap) glDeleteProgram(canvasTriangleBitmap);
     throw;
@@ -352,6 +378,8 @@ void Renderer::createPixiPrograms(const std::string& precision) {
   if (simpleProgram_) glDeleteProgram(simpleProgram_);
   if (tileProgram_) glDeleteProgram(tileProgram_);
   if (fourTileProgram_) glDeleteProgram(fourTileProgram_);
+  if (nearestTileProgram_) glDeleteProgram(nearestTileProgram_);
+  if (nearestFourTileProgram_) glDeleteProgram(nearestFourTileProgram_);
   if (meshPostTintOverlayProgram_) glDeleteProgram(meshPostTintOverlayProgram_);
   if (canvasTriangleBitmapProgram_) glDeleteProgram(canvasTriangleBitmapProgram_);
   program_ = filter;
@@ -372,6 +400,15 @@ void Renderer::createPixiPrograms(const std::string& precision) {
   simpleDerivedSampleBoundsUniform_ = glGetUniformLocation(simpleProgram_, "derivedSampleBounds");
   tileProgram_ = tile;
   fourTileProgram_ = fourTile;
+  nearestTileProgram_ = nearestTile;
+  nearestFourTileProgram_ = nearestFourTile;
+  if (nearestTileProgram_) nearestTileUniforms_ = queryTileProgramUniforms(nearestTileProgram_);
+  if (nearestFourTileProgram_) {
+    nearestFourTileUniforms_ = queryTileProgramUniforms(nearestFourTileProgram_);
+    glUseProgram(nearestFourTileProgram_);
+    for (int slot = 0; slot < 4; ++slot)
+      glUniform1i(glGetUniformLocation(nearestFourTileProgram_, ("tileImage" + std::to_string(slot)).c_str()), slot);
+  }
   if (fourTileProgram_) {
     fourTileUniforms_ = queryTileProgramUniforms(fourTileProgram_);
     glUseProgram(fourTileProgram_);
@@ -568,6 +605,8 @@ Renderer::~Renderer() {
   if (bitmapRegion_.program) glDeleteProgram(bitmapRegion_.program);
   if (tileProgram_) glDeleteProgram(tileProgram_);
   if (fourTileProgram_) glDeleteProgram(fourTileProgram_);
+  if (nearestTileProgram_) glDeleteProgram(nearestTileProgram_);
+  if (nearestFourTileProgram_) glDeleteProgram(nearestFourTileProgram_);
   if (meshPostTintOverlayProgram_) glDeleteProgram(meshPostTintOverlayProgram_);
   if (canvasTriangleBitmapProgram_) glDeleteProgram(canvasTriangleBitmapProgram_);
   if (clearTriangleProgram_) glDeleteProgram(clearTriangleProgram_);

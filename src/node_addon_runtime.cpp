@@ -315,6 +315,12 @@ napi_value rendererStats(napi_env env, napi_callback_info) try {
   check(env, napi_set_named_property(env, result, "tileDrawCalls",
     number(env, static_cast<double>(stats.tileDrawCalls))),
     "cannot set renderer tile draws");
+  check(env, napi_set_named_property(env, result, "nearestTileShaderDrawCalls",
+    number(env, static_cast<double>(stats.nearestTileShaderDrawCalls))),
+    "cannot set nearest tile shader draws");
+  check(env, napi_set_named_property(env, result, "nearestTileShaderFallbackDrawCalls",
+    number(env, static_cast<double>(stats.nearestTileShaderFallbackDrawCalls))),
+    "cannot set nearest tile shader fallback draws");
   check(env, napi_set_named_property(env, result, "filterDrawCalls",
     number(env, static_cast<double>(stats.filterDrawCalls))),
     "cannot set renderer filter draws");

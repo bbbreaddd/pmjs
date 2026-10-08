@@ -1659,9 +1659,25 @@ void Renderer::renderScene() {
         triangleMaterial->rasterRule == TriangleBitmapMaterial::RasterRule::canvasFourSample;
       const bool fourTextures = fourTileTextures_ && !usesOverlay && !command.maskImage &&
         command.primitive == RenderCommand::Primitive::tileLayer && prepareFourTileBatches(layer->second);
-      const auto program = fourTextures ? fourTileProgram_ : canvasTriangleBitmap ? canvasTriangleBitmapProgram_ :
+      // Integer unit-scale rasterization places fragments at source texel centers.
+      const auto integral = [](float value, float limit) {
+        return std::isfinite(value) && std::abs(value) <= limit && value == std::floor(value);
+      };
+      const bool nearestTile = nearestTileShader_ &&
+        (fourTextures ? nearestFourTileProgram_ : nearestTileProgram_) &&
+        layer->second.nearestTileGeometry && layer->second.nearestTileMapping && operation.nearest && !usesOverlay && !command.maskImage &&
+        command.primitive == RenderCommand::Primitive::tileLayer && !offscreenRender_ && filterDepth == 0 &&
+        rasterResolution == 1 && rasterFrame == std::array<float, 4>{0, 0, static_cast<float>(width_), static_cast<float>(height_)} &&
+        sceneProjection_ == std::array<float, 6>{1, 0, 0, 1, 0, 0} &&
+        mapping == std::array<float, 4>{1, 1, 0, 0} &&
+        transform[0] == 1 && transform[1] == 0 && transform[2] == 0 && transform[3] == 1 &&
+        integral(transform[4], 8192) && integral(transform[5], 8192) &&
+        integral(command.tileAnimation[0], 1024) && integral(command.tileAnimation[1], 1024);
+      const auto program = nearestTile ? (fourTextures ? nearestFourTileProgram_ : nearestTileProgram_) :
+        fourTextures ? fourTileProgram_ : canvasTriangleBitmap ? canvasTriangleBitmapProgram_ :
         usesOverlay ? meshPostTintOverlayProgram_ : tileProgram_;
-      const auto& uniforms = fourTextures ? fourTileUniforms_ : canvasTriangleBitmap ? canvasTriangleBitmapUniforms_ :
+      const auto& uniforms = nearestTile ? (fourTextures ? nearestFourTileUniforms_ : nearestTileUniforms_) :
+        fourTextures ? fourTileUniforms_ : canvasTriangleBitmap ? canvasTriangleBitmapUniforms_ :
         usesOverlay ? meshPostTintOverlayUniforms_ : tileUniforms_;
       glUseProgram(program);
       projectTarget(program);
@@ -1731,7 +1747,11 @@ void Renderer::renderScene() {
             }
           }
           glDrawArrays(GL_TRIANGLES, batch.first, batch.count);
-          if (diagnostics_) { ++stats_.drawCalls; ++stats_.tileDrawCalls; }
+          if (diagnostics_) {
+            ++stats_.drawCalls; ++stats_.tileDrawCalls;
+            if (nearestTile) ++stats_.nearestTileShaderDrawCalls;
+            else if (nearestTileShader_) ++stats_.nearestTileShaderFallbackDrawCalls;
+          }
         }
         glActiveTexture(GL_TEXTURE0);
         continue;
@@ -1757,7 +1777,11 @@ void Renderer::renderScene() {
         if (diagnostics_) {
           ++stats_.drawCalls;
           if (operation.primitive == RenderCommand::Primitive::mesh) ++stats_.meshDrawCalls;
-          else ++stats_.tileDrawCalls;
+          else {
+            ++stats_.tileDrawCalls;
+            if (nearestTile) ++stats_.nearestTileShaderDrawCalls;
+            else if (nearestTileShader_) ++stats_.nearestTileShaderFallbackDrawCalls;
+          }
         }
       }
       continue;
