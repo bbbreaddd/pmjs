@@ -1,0 +1,356 @@
+{
+  "version": 1,
+  "description": "Exceptional source provenance records. Ordinary PMJS contributions use the defaults; classifications require source review.",
+  "files": {
+    "js/pmjs-plugins/atlas-loader/image-retention.js": {
+      "origin": "compatibility",
+      "source": "PMJS",
+      "license": "MIT",
+      "notice": "LICENSE"
+    },
+    "js/pmjs-plugins/audio-streaming/native-audio.js": {
+      "origin": "compatibility",
+      "source": "PMJS",
+      "license": "MIT",
+      "notice": "LICENSE"
+    },
+    "js/pmjs-plugins/greenworks/compat.js": {
+      "origin": "compatibility",
+      "source": "PMJS",
+      "license": "MIT",
+      "notice": "LICENSE"
+    },
+    "js/pmjs-plugins/mpp/fragment-sort.js": {
+      "origin": "permissive",
+      "source": "https://github.com/v8/v8/tree/5.1.281",
+      "revision": "5.1.281; ArraySort sorting helpers with PMJS dense-array wrappers",
+      "license": "BSD-3-Clause",
+      "notice": "third_party/v8.LICENSE"
+    },
+    "js/pmjs-plugins/mpp/triangle-bitmap.js": {
+      "origin": "compatibility",
+      "source": "PMJS",
+      "license": "MIT",
+      "notice": "LICENSE"
+    },
+    "js/pmjs-plugins/olivia/horror-effects.js": {
+      "origin": "compatibility",
+      "source": "PMJS",
+      "license": "MIT",
+      "notice": "LICENSE"
+    },
+    "js/pmjs-plugins/startup-fullscreen/desktop.js": {
+      "origin": "compatibility",
+      "source": "PMJS",
+      "license": "MIT",
+      "notice": "LICENSE"
+    },
+    "js/pmjs-plugins/steamworks/compat.js": {
+      "origin": "compatibility",
+      "source": "PMJS",
+      "license": "MIT",
+      "notice": "LICENSE"
+    },
+    "js/pmjs-plugins/terrax/bitmap-primitives.js": {
+      "origin": "compatibility",
+      "source": "PMJS",
+      "license": "MIT",
+      "notice": "LICENSE"
+    },
+    "js/pmjs-plugins/terrax/lighting.js": {
+      "origin": "permissive",
+      "source": "https://github.com/FreezyFz/TerraxLighting/tree/dac2b0eaf1f8128d705bd471942739deca33363c",
+      "revision": "TerraxLighting 1.4.9; dac2b0eaf1f8128d705bd471942739deca33363c; PMJS adaptations",
+      "license": "MIT",
+      "notice": "third_party/terrax.LICENSE"
+    },
+    "js/pmjs-plugins/yanfly/event-mini-label.js": {
+      "origin": "compatibility",
+      "source": "PMJS",
+      "license": "MIT",
+      "notice": "LICENSE"
+    },
+    "js/pmjs-plugins/yanfly/message-core.js": {
+      "origin": "compatibility",
+      "source": "PMJS",
+      "license": "MIT",
+      "notice": "LICENSE"
+    },
+    "js/pmjs-plugins/yanfly/slippery-tiles.js": {
+      "origin": "compatibility",
+      "source": "PMJS",
+      "license": "MIT",
+      "notice": "LICENSE"
+    },
+    "js/pmjs-plugins/yed/retained-tiles.js": {
+      "origin": "compatibility",
+      "source": "PMJS retained tile preparation from behavioral contracts",
+      "license": "MIT",
+      "notice": "LICENSE"
+    },
+    "js/pmjs-plugins/yed/tiled.js": {
+      "origin": "compatibility",
+      "source": "PMJS retained tile preparation from behavioral contracts",
+      "license": "MIT",
+      "notice": "LICENSE"
+    },
+    "js/pmjs-web/fallback-font.LICENSE": {
+      "origin": "permissive",
+      "source": "https://github.com/liberationfonts/liberation-fonts/releases/tag/2.1.5",
+      "revision": "Liberation Sans 2.1.5; renamed PMJS Test Sans subset; fallback bitmap derived from that subset",
+      "license": "OFL-1.1",
+      "notice": "js/pmjs-web/fallback-font.LICENSE"
+    },
+    "js/pmjs-web/fallback-font.js": {
+      "origin": "permissive",
+      "source": "https://github.com/liberationfonts/liberation-fonts/releases/tag/2.1.5",
+      "revision": "Liberation Sans 2.1.5; renamed PMJS Test Sans subset; fallback bitmap derived from that subset",
+      "license": "OFL-1.1",
+      "notice": "js/pmjs-web/fallback-font.LICENSE"
+    },
+    "src/unicode_default_ignorables.hpp": {
+      "origin": "permissive",
+      "source": "https://www.unicode.org/Public/16.0.0/ucd/DerivedCoreProperties.txt",
+      "revision": "16.0.0",
+      "license": "Unicode-3.0",
+      "notice": "third_party/unicode.LICENSE"
+    },
+    "test/assets/effects/Block.efkmodel.b64": {
+      "origin": "permissive",
+      "source": "https://github.com/effekseer/Effekseer",
+      "revision": "Pinned revision in CMakeLists.txt and test/assets/effects/LICENSE",
+      "license": "MIT",
+      "notice": "test/assets/effects/LICENSE"
+    },
+    "test/assets/effects/LICENSE": {
+      "origin": "permissive",
+      "source": "https://github.com/effekseer/Effekseer",
+      "revision": "Pinned revision in CMakeLists.txt and test/assets/effects/LICENSE",
+      "license": "MIT",
+      "notice": "test/assets/effects/LICENSE"
+    },
+    "test/assets/effects/Laser.efkefc.b64": {
+      "origin": "permissive",
+      "source": "https://github.com/effekseer/Effekseer",
+      "revision": "Pinned revision in CMakeLists.txt and test/assets/effects/LICENSE",
+      "license": "MIT",
+      "notice": "test/assets/effects/LICENSE"
+    },
+    "test/assets/effects/Model.efk.b64": {
+      "origin": "permissive",
+      "source": "https://github.com/effekseer/Effekseer",
+      "revision": "Pinned revision in CMakeLists.txt and test/assets/effects/LICENSE",
+      "license": "MIT",
+      "notice": "test/assets/effects/LICENSE"
+    },
+    "test/assets/effects/Ribbon.efk.b64": {
+      "origin": "permissive",
+      "source": "https://github.com/effekseer/Effekseer",
+      "revision": "Pinned revision in CMakeLists.txt and test/assets/effects/LICENSE",
+      "license": "MIT",
+      "notice": "test/assets/effects/LICENSE"
+    },
+    "test/assets/effects/Ring.efk.b64": {
+      "origin": "permissive",
+      "source": "https://github.com/effekseer/Effekseer",
+      "revision": "Pinned revision in CMakeLists.txt and test/assets/effects/LICENSE",
+      "license": "MIT",
+      "notice": "test/assets/effects/LICENSE"
+    },
+    "test/assets/effects/Square.efkefc.b64": {
+      "origin": "permissive",
+      "source": "https://github.com/effekseer/Effekseer",
+      "revision": "Pinned revision in CMakeLists.txt and test/assets/effects/LICENSE",
+      "license": "MIT",
+      "notice": "test/assets/effects/LICENSE"
+    },
+    "test/assets/effects/Track.efk.b64": {
+      "origin": "permissive",
+      "source": "https://github.com/effekseer/Effekseer",
+      "revision": "Pinned revision in CMakeLists.txt and test/assets/effects/LICENSE",
+      "license": "MIT",
+      "notice": "test/assets/effects/LICENSE"
+    },
+    "test/assets/effects/Trigger.efkefc.b64": {
+      "origin": "permissive",
+      "source": "https://github.com/effekseer/Effekseer",
+      "revision": "Pinned revision in CMakeLists.txt and test/assets/effects/LICENSE",
+      "license": "MIT",
+      "notice": "test/assets/effects/LICENSE"
+    },
+    "test/assets/pixi-filters/LICENSE": {
+      "origin": "permissive",
+      "source": "https://github.com/pixijs/filters",
+      "revision": "3.1.0",
+      "license": "MIT",
+      "notice": "test/assets/pixi-filters/LICENSE"
+    },
+    "test/assets/pixi-filters/zoom-blur-3.1.0.js": {
+      "origin": "permissive",
+      "source": "https://github.com/pixijs/filters",
+      "revision": "3.1.0",
+      "license": "MIT",
+      "notice": "test/assets/pixi-filters/LICENSE"
+    },
+    "test/assets/pixi5/LICENSE": {
+      "origin": "permissive",
+      "source": "https://github.com/pixijs/pixijs",
+      "revision": "5.3.12",
+      "license": "MIT",
+      "notice": "test/assets/pixi5/LICENSE"
+    },
+    "test/assets/pixi5/sprite-vertices-5.3.12.cjs": {
+      "origin": "permissive",
+      "source": "https://github.com/pixijs/pixijs",
+      "revision": "5.3.12",
+      "license": "MIT",
+      "notice": "test/assets/pixi5/LICENSE"
+    },
+    "test/assets/skia65/arm-parity-source.json": {
+      "origin": "permissive",
+      "source": "Pinned components in tools/skia65/sources.lock.json",
+      "revision": "bd0dafbc8112f6cfa92a8096d8cb5696d8535ef9",
+      "license": "BSD-3-Clause",
+      "notice": "third_party/skia65/Skia.LICENSE"
+    },
+    "test/assets/skia65/arm-parity-source.tar.gz": {
+      "origin": "permissive",
+      "source": "Pinned components in tools/skia65/sources.lock.json",
+      "revision": "bd0dafbc8112f6cfa92a8096d8cb5696d8535ef9",
+      "license": "BSD-3-Clause",
+      "notice": "third_party/skia65/Skia.LICENSE"
+    },
+    "test/assets/testfont.LICENSE": {
+      "origin": "permissive",
+      "source": "https://github.com/liberationfonts/liberation-fonts/releases/tag/2.1.5",
+      "revision": "Liberation Sans 2.1.5; renamed PMJS Test Sans subset; fallback bitmap derived from that subset",
+      "license": "OFL-1.1",
+      "notice": "test/assets/testfont.LICENSE"
+    },
+    "test/assets/testfont.ttf": {
+      "origin": "permissive",
+      "source": "https://github.com/liberationfonts/liberation-fonts/releases/tag/2.1.5",
+      "revision": "Liberation Sans 2.1.5; renamed PMJS Test Sans subset; fallback bitmap derived from that subset",
+      "license": "OFL-1.1",
+      "notice": "test/assets/testfont.LICENSE"
+    },
+    "test/assets/text-shaping.LICENSE": {
+      "origin": "permissive",
+      "source": "DejaVu Fonts 2.37 upstream release (dejavu.sourceforge.net); version, authorship and license strings retained in the font name table",
+      "revision": "DejaVu 2.37; renamed PMJS Text Test; version and license retained in font name table",
+      "license": "Bitstream-Vera AND LicenseRef-Arev",
+      "notice": "test/assets/text-shaping.LICENSE"
+    },
+    "test/assets/text-shaping.ttf": {
+      "origin": "permissive",
+      "source": "DejaVu Fonts 2.37 upstream release (dejavu.sourceforge.net); version, authorship and license strings retained in the font name table",
+      "revision": "DejaVu 2.37; renamed PMJS Text Test; version and license retained in font name table",
+      "license": "Bitstream-Vera AND LicenseRef-Arev",
+      "notice": "test/assets/text-shaping.LICENSE"
+    },
+    "test/terrax-lighting.test.cjs": {
+      "origin": "permissive",
+      "source": "https://github.com/FreezyFz/TerraxLighting/tree/dac2b0eaf1f8128d705bd471942739deca33363c",
+      "revision": "TerraxLighting 1.4.9; dac2b0eaf1f8128d705bd471942739deca33363c; PMJS adaptations",
+      "license": "MIT",
+      "notice": "third_party/terrax.LICENSE"
+    },
+    "third_party/effekseer-mz.patch": {
+      "origin": "permissive",
+      "source": "https://github.com/effekseer/Effekseer",
+      "revision": "Pinned revision in CMakeLists.txt and test/assets/effects/LICENSE",
+      "license": "MIT",
+      "notice": "third_party/effekseer.LICENSE"
+    },
+    "third_party/effekseer.LICENSE": {
+      "origin": "permissive",
+      "source": "https://github.com/effekseer/Effekseer",
+      "revision": "Pinned revision in CMakeLists.txt and test/assets/effects/LICENSE",
+      "license": "MIT",
+      "notice": "third_party/effekseer.LICENSE"
+    },
+    "third_party/harfbuzz.LICENSE": {
+      "origin": "permissive",
+      "source": "https://github.com/harfbuzz/harfbuzz",
+      "revision": "Host build dependent; copyright list in notice",
+      "license": "MIT",
+      "notice": "third_party/harfbuzz.LICENSE"
+    },
+    "third_party/skia65-arm-parity.patch": {
+      "origin": "permissive",
+      "source": "Pinned components in tools/skia65/sources.lock.json",
+      "revision": "bd0dafbc8112f6cfa92a8096d8cb5696d8535ef9",
+      "license": "BSD-3-Clause",
+      "notice": "third_party/skia65/Skia.LICENSE"
+    },
+    "third_party/skia65-mask-tail.patch": {
+      "origin": "permissive",
+      "source": "Pinned components in tools/skia65/sources.lock.json",
+      "revision": "bd0dafbc8112f6cfa92a8096d8cb5696d8535ef9",
+      "license": "BSD-3-Clause",
+      "notice": "third_party/skia65/Skia.LICENSE"
+    },
+    "third_party/skia65/FreeType.GPLv2": {
+      "origin": "permissive",
+      "source": "Pinned components in tools/skia65/sources.lock.json",
+      "revision": "bd0dafbc8112f6cfa92a8096d8cb5696d8535ef9",
+      "license": "FTL OR GPL-2.0-only",
+      "notice": "third_party/skia65/FreeType.LICENSE"
+    },
+    "third_party/skia65/FreeType.LICENSE": {
+      "origin": "permissive",
+      "source": "Pinned components in tools/skia65/sources.lock.json",
+      "revision": "bd0dafbc8112f6cfa92a8096d8cb5696d8535ef9",
+      "license": "FTL OR GPL-2.0-only",
+      "notice": "third_party/skia65/FreeType.LICENSE"
+    },
+    "third_party/skia65/HarfBuzz.LICENSE": {
+      "origin": "permissive",
+      "source": "Pinned components in tools/skia65/sources.lock.json",
+      "revision": "bd0dafbc8112f6cfa92a8096d8cb5696d8535ef9",
+      "license": "MIT",
+      "notice": "third_party/skia65/HarfBuzz.LICENSE"
+    },
+    "third_party/skia65/ICU.LICENSE": {
+      "origin": "permissive",
+      "source": "Pinned components in tools/skia65/sources.lock.json",
+      "revision": "bd0dafbc8112f6cfa92a8096d8cb5696d8535ef9",
+      "license": "ICU",
+      "notice": "third_party/skia65/ICU.LICENSE"
+    },
+    "third_party/skia65/Skia.LICENSE": {
+      "origin": "permissive",
+      "source": "Pinned components in tools/skia65/sources.lock.json",
+      "revision": "bd0dafbc8112f6cfa92a8096d8cb5696d8535ef9",
+      "license": "BSD-3-Clause",
+      "notice": "third_party/skia65/Skia.LICENSE"
+    },
+    "third_party/terrax.LICENSE": {
+      "origin": "permissive",
+      "source": "https://github.com/FreezyFz/TerraxLighting/tree/dac2b0eaf1f8128d705bd471942739deca33363c",
+      "revision": "TerraxLighting 1.4.9; dac2b0eaf1f8128d705bd471942739deca33363c; PMJS adaptations",
+      "license": "MIT",
+      "notice": "third_party/terrax.LICENSE"
+    },
+    "third_party/unicode.LICENSE": {
+      "origin": "permissive",
+      "source": "https://www.unicode.org/Public/16.0.0/ucd/",
+      "revision": "16.0.0",
+      "license": "Unicode-3.0",
+      "notice": "third_party/unicode.LICENSE"
+    },
+    "third_party/v8.LICENSE": {
+      "origin": "permissive",
+      "source": "https://github.com/v8/v8/tree/5.1.281",
+      "revision": "5.1.281; ArraySort sorting helpers with PMJS dense-array wrappers",
+      "license": "BSD-3-Clause",
+      "notice": "third_party/v8.LICENSE"
+    }
+  },
+  "defaults": {
+    "origin": "original",
+    "source": "PMJS",
+    "license": "MIT",
+    "notice": "LICENSE"
+  }
+}

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2010 Google Corporation; 2012 Red Hat, Inc.
+// SPDX-License-Identifier: OFL-1.1
 'use strict';
 
 // Bitmap fallback derived from the bundled test font. See fallback-font.LICENSE.
