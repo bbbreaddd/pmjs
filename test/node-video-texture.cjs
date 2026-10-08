@@ -225,6 +225,22 @@ async function main() {
     throw new Error('video texture was not released');
   }
 
+  // Releasing while work is queued must join the worker and drop its owned image.
+  const lifecycleBaseline = native.images.memory().liveCount;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const pending = await native.media.loadVideoAsync('fixture-video.mp4');
+    native.media.updateVideo(pending.handle, 0.5);
+    native.media.updateVideo(pending.handle, 0);
+    native.media.updateVideo(pending.handle, 0.25);
+    if (!native.media.releaseVideo(pending.handle) || native.media.releaseVideo(pending.handle)) {
+      throw new Error('video release is not idempotent');
+    }
+    if (pending.audio) native.media.releaseAudio(pending.audio);
+    if (native.images.memory().liveCount !== lifecycleBaseline) {
+      throw new Error('queued video work retained its image after release');
+    }
+  }
+
   console.log('[pmjs-node-video-texture] ready');
 }
 

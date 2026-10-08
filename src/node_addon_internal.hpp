@@ -8,7 +8,6 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -19,175 +18,18 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <unordered_map>
 #include <vector>
 
 namespace pmjs::addon {
 
 struct AsyncImageLoad;
+struct Video;
 struct State {
   State(const std::string& root, int initWidth, int initHeight,
         const std::string& assetRoot, const std::string& windowTitle,
-        std::size_t imageWarmCacheBytes)
-      : core(root, initWidth, initHeight, windowTitle),
-        width(core.width()), height(core.height()), platform(core.platform()),
-        images(core.images()), canvases(core.canvases()),
-        renderer(core.renderer()), vfs(core.vfs()) {
-    images.setWarmBudgetBytes(imageWarmCacheBytes);
-    if (!assetRoot.empty()) assets = std::make_unique<pmjs::Vfs>(assetRoot);
-  }
-
-  struct Video {
-    explicit Video(std::unique_ptr<pmjs::VideoDecoderSession> source, bool telemetry)
-        : decoder(std::move(source)), telemetryEnabled(telemetry) {
-      if (telemetryEnabled) reportStarted = std::chrono::steady_clock::now();
-      worker = std::thread([this]() { run(); });
-    }
-    ~Video() {
-      { std::lock_guard lock(mutex); shuttingDown = true; }
-      condition.notify_one();
-      if (worker.joinable()) worker.join();
-    }
-    void request(double targetTime) {
-      { std::lock_guard lock(mutex);
-        if (telemetryEnabled && requested.has_value()) ++requestsCoalesced;
-        requested = targetTime;
-        if (telemetryEnabled) requestedAt = std::chrono::steady_clock::now(); }
-      condition.notify_one();
-    }
-    void resetForSeek() {
-      std::lock_guard lock(mutex);
-      ++playbackGeneration;
-      requested.reset();
-      if (ready) {
-        if (ready->rgba.capacity() > recycledRgba.capacity())
-          recycledRgba = std::move(ready->rgba);
-        ready.reset();
-      }
-    }
-    std::optional<pmjs::VideoFrame> take() {
-      std::lock_guard lock(mutex);
-      if (!ready) return std::nullopt;
-      if (telemetryEnabled) readyWaitMs += std::chrono::duration<double, std::milli>(
-        std::chrono::steady_clock::now() - readyAt).count();
-      auto result = std::move(ready); ready.reset(); return result;
-    }
-    pmjs::VideoDecodeStats workerStats() {
-      std::lock_guard lock(mutex); return decodeStats;
-    }
-    double workerQueueMs() {
-      std::lock_guard lock(mutex); return workerWaitMs;
-    }
-    std::uint64_t coalescedRequests() {
-      std::lock_guard lock(mutex); return requestsCoalesced;
-    }
-    std::uint64_t jobsStarted() {
-      std::lock_guard lock(mutex); return workerJobs;
-    }
-    std::size_t queuedRawFrames() {
-      std::lock_guard lock(mutex); return rawQueueDepth;
-    }
-    void recycle(std::vector<std::uint8_t> rgba) {
-      std::lock_guard lock(mutex);
-      if (rgba.capacity() > recycledRgba.capacity())
-        recycledRgba = std::move(rgba);
-    }
-    void run() {
-      while (true) {
-        double frameTimestamp = 0;
-        std::uint64_t generation = 0;
-        std::vector<std::uint8_t> rgba;
-        {
-          std::unique_lock lock(mutex);
-          if (!requested && !shuttingDown &&
-              decoder->queuedFrames() < 3 && !decoder->exhausted()) {
-            lock.unlock();
-            std::string error;
-            decoder->prefetchOne(&error);
-            const auto stats = decoder->stats();
-            const auto depth = decoder->queuedFrames();
-            if (!error.empty()) std::cerr << "[pmjs-media] video prefetch error: "
-                                          << error << '\n';
-            lock.lock();
-            decodeStats = stats;
-            rawQueueDepth = depth;
-            continue;
-          }
-          condition.wait(lock, [this] { return shuttingDown || requested.has_value(); });
-          if (shuttingDown) return;
-          frameTimestamp = *requested; requested.reset();
-          generation = playbackGeneration;
-          if (telemetryEnabled) {
-            ++workerJobs;
-            workerWaitMs += std::chrono::duration<double, std::milli>(
-              std::chrono::steady_clock::now() - requestedAt).count();
-          }
-          rgba = std::move(recycledRgba);
-        }
-        std::string error;
-        auto frame = decoder->frame(frameTimestamp, rgba, &error);
-        const auto stats = decoder->stats();
-        if (!frame) {
-          if (!error.empty()) std::cerr << "[pmjs-media] video decoder error: "
-                                        << error << '\n';
-          recycle(std::move(rgba));
-          std::lock_guard lock(mutex);
-          decodeStats = stats;
-          rawQueueDepth = decoder->queuedFrames();
-          continue;
-        }
-        std::lock_guard lock(mutex);
-        decodeStats = stats;
-        rawQueueDepth = decoder->queuedFrames();
-        if (generation != playbackGeneration) {
-          if (frame->rgba.capacity() > recycledRgba.capacity())
-            recycledRgba = std::move(frame->rgba);
-          continue;
-        }
-        if (telemetryEnabled) readyAt = std::chrono::steady_clock::now();
-        if (ready && ready->rgba.capacity() > recycledRgba.capacity())
-          recycledRgba = std::move(ready->rgba);
-        ready = std::move(frame);
-      }
-    }
-    std::unique_ptr<pmjs::VideoDecoderSession> decoder;
-    std::mutex mutex;
-    std::condition_variable condition;
-    std::optional<double> requested;
-    std::chrono::steady_clock::time_point requestedAt;
-    std::optional<pmjs::VideoFrame> ready;
-    std::chrono::steady_clock::time_point readyAt;
-    std::vector<std::uint8_t> recycledRgba;
-    pmjs::VideoDecodeStats decodeStats;
-    std::uint64_t requestsCoalesced = 0;
-    std::uint64_t workerJobs = 0;
-    std::uint64_t playbackGeneration = 0;
-    std::size_t rawQueueDepth = 0;
-    std::thread worker;
-    bool shuttingDown = false;
-    pmjs::ImageHandle image = 0, canvasImage = 0;
-    std::shared_ptr<const pmjs::VideoYuv420> browser420;
-    std::vector<std::uint8_t> canvasRgba;
-    const bool telemetryEnabled;
-    double duration = 0.0;
-    double timestamp = -1.0;
-    double lastRequestedTimestamp = -1.0;
-    double sourceFps = 0.0;
-    std::uint64_t requests = 0, uploadedFrames = 0, repeatedFrames = 0;
-    std::uint64_t lateFrames = 0, staleReadyDrops = 0, uploadBytes = 0;
-    double textureUploadMs = 0.0;
-    double workerWaitMs = 0.0, readyWaitMs = 0.0;
-    std::chrono::steady_clock::time_point reportStarted;
-    pmjs::VideoDecodeStats reportedDecodeStats;
-    std::uint64_t reportedRequests = 0, reportedUploadedFrames = 0;
-    std::uint64_t reportedRepeatedFrames = 0, reportedLateFrames = 0;
-    std::uint64_t reportedStaleReadyDrops = 0;
-    std::uint64_t reportedUploadBytes = 0;
-    std::uint64_t reportedWorkerJobs = 0, reportedCoalescedRequests = 0;
-    double reportedUploadMs = 0.0;
-    double reportedWorkerWaitMs = 0.0, reportedReadyWaitMs = 0.0;
-  };
+        std::size_t imageWarmCacheBytes);
+  ~State();
 
   pmjs::RuntimeCore core;
   int width;

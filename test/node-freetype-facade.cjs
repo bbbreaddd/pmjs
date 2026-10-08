@@ -14,7 +14,7 @@ const ctx = vm.createContext({ console, pmjsGameConfig: {},
   } }, nativeBootPhase() {}, Sprite: function() {}, Graphics: function() {}, Input: function() {},
 });
 const load = file => vm.runInContext(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), ctx, { filename: file });
-load('js/pmjs-web/events.js'); load('js/pmjs-web/canvas.js'); load('js/pmjs-web/elements.js');
+load('js/pmjs-web/events.js'); load('js/pmjs-web/canvas.js'); require('./helpers/web-element-sources.cjs').elementSources.forEach(load);
 function snapshot(canvas) {
   return Buffer.from(native.canvas.readPixels(canvas._ensureNativeCanvas().handle, 0, 0, 160, 80));
 }

@@ -12,7 +12,7 @@ function createHostContext(native, { graphics = true } = {}) {
     Input: { gamepadMapper: { 0: 'ok', 1: 'cancel' } }
   });
   for (const module of ['pmjs-core/methods', 'pmjs-web/runtime', 'pmjs-web/events',
-    'pmjs-web/canvas', 'pmjs-web/elements', 'pmjs-web/presentation', 'pmjs-web/fallback-font']) {
+    'pmjs-web/canvas', ...require('./web-element-sources.cjs').elementSources.map(file => file.slice(3, -3)), 'pmjs-web/presentation', 'pmjs-web/fallback-font']) {
     const file = path.resolve(__dirname, '../../js', module + '.js');
     vm.runInContext(fs.readFileSync(file, 'utf8'), context, { filename: file });
   }

@@ -99,7 +99,7 @@ if(PMJS_ENABLE_SKIA65)
   target_link_libraries(pmjs_runtime PRIVATE pmjs_skia65)
 endif()
 
-find_path(PMJS_NODE_API_HEADERS node_api.h PATHS /usr/include/node REQUIRED)
+find_path(PMJS_NODE_API_HEADERS NAMES node_api.h PATH_SUFFIXES node nodejs/src REQUIRED)
 add_library(pmjs_native MODULE
   src/node_addon.cpp
   src/node_addon_canvas.cpp
@@ -109,6 +109,7 @@ add_library(pmjs_native MODULE
   src/node_addon_effects.cpp
   src/node_addon_graphics.cpp
   src/node_addon_media.cpp
+  src/node_addon_video.cpp
   src/node_addon_platform.cpp
   src/node_addon_resources.cpp
   src/node_addon_assets.cpp

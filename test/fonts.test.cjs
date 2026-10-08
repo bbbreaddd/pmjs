@@ -98,7 +98,7 @@ function createFontSandbox(options = {}) {
   const canvasCode = fs.readFileSync(path.join(jsDir, 'pmjs-web/canvas.js'), 'utf8');
   vm.runInContext(canvasCode, context);
 
-  const elementsCode = fs.readFileSync(path.join(jsDir, 'pmjs-web/elements.js'), 'utf8');
+  const elementsCode = require('./helpers/web-element-sources.cjs').source;
   vm.runInContext(elementsCode, context);
 
   const mvFontsCode = fs.readFileSync(path.join(jsDir, 'pmjs-mv/fonts.js'), 'utf8');

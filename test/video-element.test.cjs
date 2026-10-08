@@ -8,8 +8,7 @@ const vm = require('node:vm');
 
 const eventsSource = fs.readFileSync(
   path.resolve(__dirname, '../js/pmjs-web/events.js'), 'utf8');
-const elementsSource = fs.readFileSync(
-  path.resolve(__dirname, '../js/pmjs-web/elements.js'), 'utf8');
+const elementsSource = require('./helpers/web-element-sources.cjs').source;
 const mainLoopSource = fs.readFileSync(
   path.resolve(__dirname, '../js/pmjs-rpgmaker/main-loop.js'), 'utf8');
 const mvMainLoopSource = fs.readFileSync(

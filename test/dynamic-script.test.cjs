@@ -15,7 +15,7 @@ function fixture() {
       runScript(source) { return vm.runInContext(source, context); }
     } } });
   context.window = context;
-  for (const name of ['scheduler', 'events', 'elements', 'script-loader']) {
+  for (const name of ['scheduler', 'events', ...require('./helpers/web-element-sources.cjs').elementSources.map(file => path.basename(file, '.js')), 'script-loader']) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-web', name + '.js'), 'utf8'), context);
   }
   context.onerror = message => { errors.push(message); return true; };

@@ -1,4 +1,5 @@
 #include "node_addon_internal.hpp"
+#include "node_addon_video.hpp"
 
 namespace pmjs::addon {
 namespace {
@@ -17,7 +18,7 @@ bool videoTelemetryEnabled() {
   return enabled && std::string(enabled) == "1";
 }
 
-void reportVideo(State::Video& video, double requestedPts) {
+void reportVideo(Video& video, double requestedPts) {
   if (!video.telemetryEnabled) return;
   const auto now = Clock::now();
   const double interval = std::chrono::duration<double>(now - video.reportStarted).count();
@@ -211,10 +212,10 @@ void completeVideoLoad(napi_env env, napi_status status, void* opaque) {
         load->firstFrame->height, load->firstFrame->rgba.data());
     if (!image) throw std::runtime_error("cannot allocate video texture");
     imageHandle = image->handle;
-    auto video = std::make_unique<State::Video>(std::move(load->video), load->telemetryEnabled);
+    auto video = std::make_unique<Video>(std::move(load->video), load->telemetryEnabled);
     video->image = image->handle;
-    video->duration = video->decoder->info().duration;
-    video->sourceFps = video->decoder->info().videoFrameRate;
+    video->duration = video->info().duration;
+    video->sourceFps = video->info().videoFrameRate;
     video->timestamp = load->firstFrame->timestamp;
     video->browser420 = std::move(load->firstFrame->browser420);
     video->recycle(std::move(load->firstFrame->rgba));
@@ -461,7 +462,7 @@ napi_value loadVideo(napi_env env, napi_callback_info info) try {
   if (!handle) handle = value.nextVideo++;
   const double duration = decoder->info().duration;
   const double sourceFps = decoder->info().videoFrameRate;
-  auto video = std::make_unique<State::Video>(std::move(decoder), telemetry);
+  auto video = std::make_unique<Video>(std::move(decoder), telemetry);
   video->image = image->handle;
   video->duration = duration; video->sourceFps = sourceFps;
   video->timestamp = frame->timestamp;

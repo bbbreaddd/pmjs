@@ -29,7 +29,7 @@ function makeHarness(withUnlockHook = true) {
     }
   });
   const modules = ['pmjs-core/methods.js', 'pmjs-web/scheduler.js',
-    'pmjs-web/events.js', 'pmjs-web/elements.js'];
+    'pmjs-web/events.js', ...require('./helpers/web-element-sources.cjs').elementSources.map(file => file.slice(3))];
   if (withUnlockHook) modules.push('pmjs-mv/platform.js');
   for (const relative of modules) {
     const filename = path.resolve(__dirname, '../js', relative);

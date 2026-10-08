@@ -12,8 +12,7 @@ const eventsSource = fs.readFileSync(
   path.resolve(__dirname, '../js/pmjs-web/events.js'), 'utf8');
 const canvasSource = fs.readFileSync(
   path.resolve(__dirname, '../js/pmjs-web/canvas.js'), 'utf8');
-const elementsSource = fs.readFileSync(
-  path.resolve(__dirname, '../js/pmjs-web/elements.js'), 'utf8');
+const elementsSource = require('./helpers/web-element-sources.cjs').source;
 
 function imageContext(loadBytesAsync, loadAsync) {
   const context = {

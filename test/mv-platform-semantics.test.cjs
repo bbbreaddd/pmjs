@@ -1290,7 +1290,7 @@ for (const composition of ['alias', 'subclass']) {
 
 test('document.title and nw.Window.title read from and write to authoritative __pmjsGameInfo', () => {
   const eventsCode = fs.readFileSync(path.join(jsDir, 'pmjs-web/events.js'), 'utf8');
-  const elementsCode = fs.readFileSync(path.join(jsDir, 'pmjs-web/elements.js'), 'utf8');
+  const elementsCode = require('./helpers/web-element-sources.cjs').source;
   const modulesCode = fs.readFileSync(path.join(jsDir, 'pmjs-web/modules.js'), 'utf8');
   const context = {
     globalThis: {},
@@ -1323,7 +1323,7 @@ test('document.title and nw.Window.title read from and write to authoritative __
 
 test('screen and nw.Window report host dimensions while innerWidth/innerHeight report logical viewport', () => {
   const eventsCode = fs.readFileSync(path.join(jsDir, 'pmjs-web/events.js'), 'utf8');
-  const elementsCode = fs.readFileSync(path.join(jsDir, 'pmjs-web/elements.js'), 'utf8');
+  const elementsCode = require('./helpers/web-element-sources.cjs').source;
   const runtimeCode = fs.readFileSync(path.join(jsDir, 'pmjs-web/runtime.js'), 'utf8');
   const modulesCode = fs.readFileSync(path.join(jsDir, 'pmjs-web/modules.js'), 'utf8');
   const windowTitles = [];

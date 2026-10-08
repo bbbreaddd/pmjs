@@ -1,6 +1,21 @@
 #include "node_addon_internal.hpp"
+#include "node_addon_video.hpp"
 
 namespace pmjs::addon {
+
+State::State(const std::string& root, int initWidth, int initHeight,
+      const std::string& assetRoot, const std::string& windowTitle,
+      std::size_t imageWarmCacheBytes)
+    : core(root, initWidth, initHeight, windowTitle),
+      width(core.width()), height(core.height()), platform(core.platform()),
+      images(core.images()), canvases(core.canvases()),
+      renderer(core.renderer()), vfs(core.vfs()) {
+  images.setWarmBudgetBytes(imageWarmCacheBytes);
+  if (!assetRoot.empty()) assets = std::make_unique<pmjs::Vfs>(assetRoot);
+}
+
+
+State::~State() = default;
 
 std::unique_ptr<State> state;
 void check(napi_env env, napi_status status, const char* message) {
