@@ -112,3 +112,36 @@ Restore RGB and alpha blend equations independently.
  
  		GLExt::glBindBuffer(GL_ARRAY_BUFFER, m_originalState.arrayBufferBinding);
  		GLExt::glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_originalState.elementArrayBufferBinding);
+
+--- a/Dev/Cpp/EffekseerRendererCommon/EffekseerRenderer.TGATextureLoader.cpp
++++ b/Dev/Cpp/EffekseerRendererCommon/EffekseerRenderer.TGATextureLoader.cpp
+@@ -2,6 +2,8 @@
+ #ifndef __DISABLED_DEFAULT_TEXTURE_LOADER__
+ 
+ #include "EffekseerRenderer.TGATextureLoader.h"
++#include <cstdint>
++#include <limits>
+ 
+ namespace EffekseerRenderer
+ {
+@@ -11,6 +13,7 @@
+ 	uint8_t* data_texture = (uint8_t*)data;
+ 
+ 	const int TGA_HEADER_SIZE = 18;
++	if (size < TGA_HEADER_SIZE) return false;
+ 	uint8_t TgaHeader[TGA_HEADER_SIZE];
+ 
+ 	// tga ヘッダー読み込み
+@@ -42,7 +45,11 @@
+ 	}
+ 
+ 	// カラーマップ取得
+-	int MapSize = textureWidth * textureHeight * 4;
++	const auto pixels = static_cast<std::uint64_t>(textureWidth) * textureHeight;
++	if (textureWidth <= 0 || textureHeight <= 0 ||
++		pixels > std::numeric_limits<int32_t>::max() / 4 ||
++		pixels > static_cast<std::uint64_t>(size - TGA_HEADER_SIZE) / ColorStep) return false;
++	int MapSize = static_cast<int>(pixels * 4);
+ 	textureData.resize(MapSize);
+ 
+ 	uint8_t* SrcTextureRef = &data_texture[TGA_HEADER_SIZE];

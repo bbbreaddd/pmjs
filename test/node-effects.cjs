@@ -1,14 +1,55 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
 const native = require(path.resolve(process.argv[2]));
 require('./effect-fixtures.cjs').writeEffectFixtures(path.resolve(process.argv[3]));
+const effectRoot = path.join(path.resolve(process.argv[3]), 'effects');
+const truncated = Buffer.alloc(18);
+truncated[2] = 2; truncated[12] = 1; truncated[14] = 1; truncated[16] = 32;
+fs.writeFileSync(path.join(effectRoot, 'Truncat.tga'), truncated);
+const truncatedEffect = fs.readFileSync(path.join(effectRoot, 'InvalidTexture.efkefc'));
+const texturePath = Buffer.from('Invalid.png', 'utf16le');
+const textureOffset = truncatedEffect.indexOf(texturePath);
+assert.ok(textureOffset >= 0);
+Buffer.from('Truncat.tga', 'utf16le').copy(truncatedEffect, textureOffset);
+fs.writeFileSync(path.join(effectRoot, 'TruncatedTexture.efkefc'), truncatedEffect);
 native.initialize({ gameRoot: path.resolve(process.argv[3]), assetRoot: '', width: 64, height: 64,
   windowTitle: 'MZ particle contract' });
 const fx = native.effects;
 const projection = [1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 1, -64, 0, 0, 0, 1];
 const camera = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, -10, 1];
+const coordinateImage = native.canvas.create(48, 48);
+native.canvas.writePixels(coordinateImage.handle, 0, 0, 48, 48,
+  new Uint8Array(48 * 48 * 4).fill(255));
+const coordinateProgram = native.render.createFilterProgram(
+  'varying vec2 vTextureCoord; uniform sampler2D uSampler; void main(){' +
+  'float below = vTextureCoord.y < 0.4921875 ? 1.0 : 0.0;' +
+  'gl_FragColor=vec4(below,1.0-below,0.0,texture2D(uSampler,vTextureCoord).a);}',
+  'attribute vec2 aVertexPosition; attribute vec2 aTextureCoord; uniform mat3 projectionMatrix;' +
+  'varying vec2 vTextureCoord; void main(){' +
+  'gl_Position=vec4((projectionMatrix*vec3(aVertexPosition,1.0)).xy,0.0,1.0);' +
+  'vTextureCoord=aTextureCoord;}');
+const coordinatePlan = native.render.createFilterPlan({ frame: [4, 4, 56, 56], resolutions: [1, 1],
+  passes: [{ program: coordinateProgram.handle, input: 0, output: 1, clear: false,
+    blend: 0, uniforms: [], samplers: [] }] });
+function coordinateFrame() {
+  const schema = native.scene.schema;
+  const metadata = new Uint32Array([
+    6, 0xffffffff, coordinatePlan.handle, 0xffffff, 31, 0, 0,
+    1, 0, coordinateImage.handle, 0xffffff, 0, 0, 0,
+    7, 0, 0, 0xffffff, 0, 0, 0,
+  ]);
+  const values = new Float32Array(schema.valueStride * 3);
+  for (let index = 0; index < 3; index++) values.set([1, 0, 0, 1, 0, 0, 1], index * schema.valueStride);
+  values.set([8, 8], schema.valueStride + 4);
+  values.set([0, 0, 48, 48, 48, 48], schema.valueStride + 9);
+  native.beginFrame();
+  native.scene.submit(schema.version, metadata, values, 3);
+  native.renderScene();
+  return Buffer.from(native.canvas.captureSceneRawPremultiplied());
+}
 function frame(handle, transform = projection) {
   native.beginFrame();
   const metadata = new Uint32Array([9, 0xffffffff, handle, 0xffffff, 0, 0, 0]);
@@ -29,6 +70,7 @@ try {
   assert.throws(() => fx.load(context, 'missing.efkefc', 1), /cannot load/);
   assert.throws(() => fx.load(context, 'effects/MissingTexture.efkefc', 1), /cannot load effect resource/);
   assert.throws(() => fx.load(context, 'effects/InvalidTexture.efkefc', 1), /invalid effect color texture/);
+  assert.throws(() => fx.load(context, 'effects/TruncatedTexture.efkefc', 1), /invalid effect color texture/);
   assert.throws(() => fx.load(context, 'effects/MissingSound.efkefc', 1), /cannot load effect sound/);
   assert.throws(() => fx.load(context, 'effects/InvalidSound.efkefc', 1), /cannot load effect sound/);
   assert.throws(() => fx.load(context, 'effects/MissingModel.efk', 1), /cannot load effect resource|invalid effect model/);
@@ -56,10 +98,15 @@ try {
   }
   fx.update(context, 1);
   assert.ok(fx.exists(handle));
-  const targetBytesBeforeDepth = native.render.stats().rendererTargetBytes;
+  const coordinatesBeforeParticles = coordinateFrame();
+  const targetBytesBeforeParticles = native.render.stats().rendererTargetBytes;
   const initial = frame(handle);
-  assert.equal(native.render.stats().rendererTargetBytes - targetBytesBeforeDepth, 64 * 64 * 4,
-    'renderer memory includes the scene depth buffer');
+  assert.deepEqual(coordinateFrame(), coordinatesBeforeParticles,
+    'first particle rendering must not change color-only filter interpolation');
+  const depthGrowth = native.render.stats().rendererTargetBytes - targetBytesBeforeParticles;
+  assert.ok(depthGrowth === 0 || depthGrowth === 64 * 64 * 4,
+    'first particles may allocate one scene depth attachment; filter targets are reused');
+  native.canvas.release(coordinateImage.handle);
   assert.ok(initial.some((value, index) => index % 4 === 0 && value > 200), 'particle must draw visible red pixels');
   assert.deepEqual(frame(handle), initial, 'rendering must not advance simulation');
   const sibling = fx.play(context, effect, 0, 0, 0);
