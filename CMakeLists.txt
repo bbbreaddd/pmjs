@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 if(POLICY CMP0135)
   cmake_policy(SET CMP0135 NEW)
 endif()
-project(pmjs_native_runtime LANGUAGES C CXX)
+project(pmjs_native_runtime VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 20)
@@ -10,6 +10,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(PMJS_DEPENDENCY_PREFIX "" CACHE PATH "Prefix containing target runtime dependencies")
 set(PMJS_DEPENDENCY_LOCK "" CACHE FILEPATH "CMake file with exact target pkg-config versions")
+set(PMJS_PKG_CONFIG_DIRS "" CACHE STRING "Explicit target pkg-config directories, separated by semicolons")
+option(BUILD_TESTING "Configure native and JavaScript tests" OFF)
+option(PMJS_OFFLINE "Require prepared third-party inputs without downloads" OFF)
+message(STATUS "PMJS compiler: ${CMAKE_CXX_COMPILER} (${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION})")
+message(STATUS "PMJS target: ${CMAKE_SYSTEM_NAME}/${CMAKE_SYSTEM_PROCESSOR}; cross=${CMAKE_CROSSCOMPILING}; sysroot=${CMAKE_SYSROOT}")
+message(STATUS "PMJS dependencies: prefix=${PMJS_DEPENDENCY_PREFIX}; lock=${PMJS_DEPENDENCY_LOCK}")
+find_path(PMJS_NODE_API_HEADERS NAMES node_api.h PATH_SUFFIXES node nodejs/src)
+if(NOT PMJS_NODE_API_HEADERS OR NOT EXISTS "${PMJS_NODE_API_HEADERS}/node_api.h")
+  message(FATAL_ERROR "Set PMJS_NODE_API_HEADERS to the selected Node SDK's include/node directory (Node-API 8 or newer)")
+endif()
+message(STATUS "PMJS Node-API headers: ${PMJS_NODE_API_HEADERS}; addon ABI=8")
 
 if(PMJS_DEPENDENCY_PREFIX AND NOT PMJS_DEPENDENCY_LOCK)
   message(FATAL_ERROR "PMJS_DEPENDENCY_PREFIX requires PMJS_DEPENDENCY_LOCK")
@@ -21,8 +32,13 @@ if(PMJS_DEPENDENCY_PREFIX)
     message(FATAL_ERROR "PMJS_DEPENDENCY_PREFIX does not exist: ${PMJS_DEPENDENCY_PREFIX}")
   endif()
   set(ENV{PKG_CONFIG_PATH} "")
-  set(ENV{PKG_CONFIG_LIBDIR} "${PMJS_DEPENDENCY_PREFIX}/lib/pkgconfig:${PMJS_DEPENDENCY_PREFIX}/share/pkgconfig")
+  if(NOT PMJS_PKG_CONFIG_DIRS)
+    set(PMJS_PKG_CONFIG_DIRS "${PMJS_DEPENDENCY_PREFIX}/lib/pkgconfig;${PMJS_DEPENDENCY_PREFIX}/share/pkgconfig")
+  endif()
+  list(JOIN PMJS_PKG_CONFIG_DIRS ":" pmjs_pkg_config_libdir)
+  set(ENV{PKG_CONFIG_LIBDIR} "${pmjs_pkg_config_libdir}")
 endif()
+message(STATUS "PMJS pkg-config: ${PKG_CONFIG_EXECUTABLE}; directories=$ENV{PKG_CONFIG_LIBDIR}")
 pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
 pkg_check_modules(EGL REQUIRED IMPORTED_TARGET egl)
 pkg_check_modules(GLES REQUIRED IMPORTED_TARGET glesv2)
@@ -47,6 +63,19 @@ if(PMJS_DEPENDENCY_LOCK)
     if(NOT DEFINED ${lockVariable} OR NOT "${${lockVariable}}" STREQUAL "${${dependency}_VERSION}")
       message(FATAL_ERROR "${dependency} pkg-config version ${${dependency}_VERSION} does not match ${lockVariable}=${${lockVariable}}")
     endif()
+  endforeach()
+endif()
+if(PMJS_LINUX_ARM64_BUILD)
+  foreach(dependency IN ITEMS SDL2 EGL GLES PNG ZLIB JPEG FREETYPE HARFBUZZ AVFORMAT AVCODEC AVUTIL SWRESAMPLE SWSCALE)
+    foreach(input IN LISTS ${dependency}_INCLUDE_DIRS ${dependency}_LIBRARY_DIRS ${dependency}_LINK_LIBRARIES)
+      if(IS_ABSOLUTE "${input}")
+        file(REAL_PATH "${input}" resolved_input)
+        string(FIND "${resolved_input}" "${PMJS_SDK_ROOT}/" input_prefix)
+        if(NOT input_prefix EQUAL 0)
+          message(FATAL_ERROR "${dependency} resolved outside the target SDK: ${input}")
+        endif()
+      endif()
+    endforeach()
   endforeach()
 endif()
 
@@ -99,7 +128,6 @@ if(PMJS_ENABLE_SKIA65)
   target_link_libraries(pmjs_runtime PRIVATE pmjs_skia65)
 endif()
 
-find_path(PMJS_NODE_API_HEADERS NAMES node_api.h PATH_SUFFIXES node nodejs/src REQUIRED)
 add_library(pmjs_native MODULE
   src/node_addon.cpp
   src/node_addon_canvas.cpp
@@ -115,6 +143,8 @@ add_library(pmjs_native MODULE
   src/node_addon_assets.cpp
   src/node_addon_runtime.cpp)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/third_party/effekseer.LICENSE" PMJS_EFFECTS_LICENSE)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/third_party/effekseer.LICENSE")
 configure_file(src/effects_license.hpp.in generated/effects_license.hpp @ONLY)
 target_include_directories(pmjs_native PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_include_directories(pmjs_native PRIVATE src)
@@ -123,6 +153,7 @@ target_compile_definitions(pmjs_native PRIVATE NODE_GYP_MODULE_NAME=pmjs_native 
 target_compile_options(pmjs_native PRIVATE ${PMJS_BASE_COMPILE_OPTIONS})
 target_link_libraries(pmjs_native PRIVATE pmjs_runtime)
 set_target_properties(pmjs_native PROPERTIES PREFIX "" SUFFIX ".node")
+set_target_properties(pmjs_native PROPERTIES INSTALL_RPATH "$ORIGIN" INSTALL_RPATH_USE_LINK_PATH FALSE)
 
 if(PMJS_ENABLE_SANITIZERS)
   set(PMJS_SANITIZER_FLAGS -fsanitize=address,undefined -fno-omit-frame-pointer)
@@ -135,8 +166,11 @@ endif()
 include(CTest)
 if(BUILD_TESTING)
   find_program(XVFB_RUN xvfb-run REQUIRED)
-  find_program(BASE64_EXECUTABLE base64 REQUIRED)
   find_program(NODE_EXECUTABLE node REQUIRED)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME build-sdk-cache COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/sdk-cache.py")
+  add_test(NAME build-node-sdk COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/node-sdk.py")
+  add_test(NAME build-provenance COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/build-provenance.py")
 
   function(pmjs_add_cpp_test TARGET TEST_NAME)
     add_executable(${TARGET} ${ARGN})
@@ -260,60 +294,18 @@ if(BUILD_TESTING)
   endforeach()
   set_tests_properties(js-text-layout-reference js-pixi-filter-boundary-reference
     PROPERTIES ENVIRONMENT "PMJS_NATIVE_ADDON=$<TARGET_FILE:pmjs_native>;PMJS_TEST_ASSET_ROOT=${CMAKE_CURRENT_BINARY_DIR}/test-assets")
-  file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
-  file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-assets/effects")
-  foreach(PMJS_EFFECT_FIXTURE Square Laser Trigger)
-    execute_process(COMMAND ${BASE64_EXECUTABLE} -d
-      INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/effects/${PMJS_EFFECT_FIXTURE}.efkefc.b64"
-      OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/effects/${PMJS_EFFECT_FIXTURE}.efkefc"
-      COMMAND_ERROR_IS_FATAL ANY)
-  endforeach()
-  foreach(PMJS_EFFECT_FIXTURE Ribbon Ring Track Model)
-    execute_process(COMMAND ${BASE64_EXECUTABLE} -d
-      INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/effects/${PMJS_EFFECT_FIXTURE}.efk.b64"
-      OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/effects/${PMJS_EFFECT_FIXTURE}.efk"
-      COMMAND_ERROR_IS_FATAL ANY)
-  endforeach()
-  file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-assets/effects/Model")
-  execute_process(COMMAND ${BASE64_EXECUTABLE} -d
-    INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/effects/Block.efkmodel.b64"
-    OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/effects/Model/block.efkmodel"
-    COMMAND_ERROR_IS_FATAL ANY)
-  execute_process(COMMAND ${BASE64_EXECUTABLE} -d INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/fixture.png.b64" OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture.png" COMMAND_ERROR_IS_FATAL ANY)
-  execute_process(COMMAND ${NODE_EXECUTABLE} -e "require(process.argv[1]).writeEffectFixtures(process.argv[2])"
-    "${CMAKE_CURRENT_SOURCE_DIR}/test/effect-fixtures.cjs" "${CMAKE_CURRENT_BINARY_DIR}/test-assets"
-    COMMAND_ERROR_IS_FATAL ANY)
-  execute_process(COMMAND ${BASE64_EXECUTABLE} -d INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/fixture.jpg.b64" OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture.jpg" COMMAND_ERROR_IS_FATAL ANY)
-  execute_process(COMMAND ${BASE64_EXECUTABLE} -d INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/fixture-video.mp4.b64" OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture-video.mp4" COMMAND_ERROR_IS_FATAL ANY)
-  execute_process(COMMAND ${BASE64_EXECUTABLE} -d
-    INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/video-color.webm.b64"
-    OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/video-color.webm"
-    COMMAND_ERROR_IS_FATAL ANY)
-  execute_process(COMMAND ${BASE64_EXECUTABLE} -d
-    INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/video-color-fallback.webm.b64"
-    OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/video-color-fallback.webm"
-    COMMAND_ERROR_IS_FATAL ANY)
-  configure_file("${CMAKE_CURRENT_SOURCE_DIR}/test/assets/testfont.ttf" "${CMAKE_CURRENT_BINARY_DIR}/test-assets/testfont.ttf" COPYONLY)
-  configure_file("${CMAKE_CURRENT_SOURCE_DIR}/test/assets/text-shaping.ttf"
-    "${CMAKE_CURRENT_BINARY_DIR}/test-assets/text-shaping.ttf" COPYONLY)
-  execute_process(COMMAND ${BASE64_EXECUTABLE} -d
-    INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/empty-packet.ogg.b64"
-    OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/empty-packet.ogg"
-    COMMAND_ERROR_IS_FATAL ANY)
+  add_custom_target(pmjs-test-fixtures
+    COMMAND "${NODE_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/prepare-fixtures.cjs"
+      "${CMAKE_CURRENT_BINARY_DIR}/test-assets"
+    VERBATIM)
+  add_test(NAME test-fixtures COMMAND "${NODE_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/prepare-fixtures.cjs" "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
+  set_tests_properties(test-fixtures PROPERTIES FIXTURES_SETUP pmjs_assets LABELS setup)
   add_test(NAME native-media-decoder COMMAND pmjs-media-decoder-test
     "${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture-video.mp4"
     "${CMAKE_CURRENT_BINARY_DIR}/test-assets/empty-packet.ogg")
-  execute_process(COMMAND ${BASE64_EXECUTABLE} -d
-    INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/short-audio.flac.b64"
-    OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/short-audio.flac"
-    COMMAND_ERROR_IS_FATAL ANY)
   add_test(NAME native-audio-seek COMMAND pmjs-audio-seek-test
     "${CMAKE_CURRENT_BINARY_DIR}/test-assets/short-audio.flac")
-  configure_file("${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture.png" "${CMAKE_CURRENT_BINARY_DIR}/test-assets/lease.png" COPYONLY)
-  configure_file("${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture.png" "${CMAKE_CURRENT_BINARY_DIR}/test-assets/retained-fixture.png" COPYONLY)
-  foreach(PMJS_MASK_PNG IN ITEMS probe-content probe-mask-a probe-mask-b)
-    execute_process(COMMAND ${BASE64_EXECUTABLE} -d INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/test/assets/${PMJS_MASK_PNG}.png.b64" OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/test-assets/${PMJS_MASK_PNG}.png" COMMAND_ERROR_IS_FATAL ANY)
-  endforeach()
   add_executable(pmjs-canvas-pixels-test test/canvas-pixels.cpp)
   target_include_directories(pmjs-canvas-pixels-test PRIVATE src)
   target_compile_options(pmjs-canvas-pixels-test PRIVATE -UNDEBUG)
@@ -323,6 +315,9 @@ if(BUILD_TESTING)
   target_compile_options(pmjs-canvas-upload-test PRIVATE -UNDEBUG)
   add_test(NAME native-canvas-upload COMMAND pmjs-canvas-upload-test)
   foreach(PMJS_NODE_TEST IN ITEMS node-identity-filter-shader node-nearest-tile-shader node-scene node-sprite-byte-precision node-pixi4-clear node-mask-pixels node-renderer-stats node-empty-sprite node-preparation-progress node-derived-sprite node-uniform-inline-matrix node-filter-coordinates node-filter-input node-bitmap-region-batching node-bitmap-region-flash node-mv-bitmap-filtering node-tile-edge-filtering node-four-texture-tiles node-yed-retained-tiles node-presentation-byte-precision node-render-to-image node-render-to-canvas node-render-target-filters node-image-coalesce node-image-retention node-image-warm-cache node-image-no-warm-cache node-image-fallback node-image-bytes node-audio-bytes node-video-texture node-video-color node-canvas-deferred node-canvas-pixels node-canvas-radial-gradient node-primitive-surface node-filter-bounds node-tone-boundary-pixels node-mz-color-pixels node-pixi5-zoom-pixels node-pixi5-tiling-pixels node-pixi5-sprite-rounding-pixels node-mz-host-contracts node-mz-canvas-pixels node-mz-sampling-pixels node-mesh-post-tint-overlay node-glyph-cache node-text-layout node-text-layout-cache node-text-upload node-freetype-facade node-primitive-canvas)
+    if(NOT PMJS_ENABLE_SKIA65 AND PMJS_NODE_TEST STREQUAL "node-mz-canvas-pixels")
+      continue()
+    endif()
     add_test(NAME ${PMJS_NODE_TEST} COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
       "${CMAKE_CURRENT_SOURCE_DIR}/test/${PMJS_NODE_TEST}.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
     set_tests_properties(${PMJS_NODE_TEST} PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
@@ -339,9 +334,11 @@ if(BUILD_TESTING)
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-pixi4-tiling-pixels.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-pixi4-tiling-pixels PROPERTIES ENVIRONMENT
     "SDL_VIDEODRIVER=offscreen;SDL_AUDIODRIVER=dummy;PMJS_WINDOW_SIZE=32x24")
-  add_test(NAME node-canvas-composite COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
-    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-canvas-composite.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
-  set_tests_properties(node-canvas-composite PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
+  if(PMJS_ENABLE_SKIA65)
+    add_test(NAME node-canvas-composite COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/node-canvas-composite.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
+    set_tests_properties(node-canvas-composite PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
+  endif()
   add_test(NAME node-mv-blur COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-blur.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-mv-blur PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
@@ -436,4 +433,32 @@ if(BUILD_TESTING)
       RESOURCE_LOCK pmjs_effect_fixtures
       ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy;PMJS_WINDOW_SIZE=64x64")
   endforeach()
+  get_property(pmjs_tests DIRECTORY PROPERTY TESTS)
+  foreach(pmjs_test IN LISTS pmjs_tests)
+    if(pmjs_test STREQUAL "test-fixtures")
+      continue()
+    endif()
+    if(pmjs_test MATCHES "^build-")
+      set_tests_properties(${pmjs_test} PROPERTIES LABELS build)
+    elseif(pmjs_test MATCHES "^js-" AND NOT pmjs_test MATCHES "^js-(text-layout-reference|pixi-filter-boundary-reference)$")
+      set_tests_properties(${pmjs_test} PROPERTIES LABELS js)
+    else()
+      set_tests_properties(${pmjs_test} PROPERTIES LABELS native)
+      if(pmjs_test MATCHES "^node-" OR pmjs_test MATCHES "^native-(media-decoder|audio-seek|effects-gl-state(-es2)?)$"
+          OR pmjs_test MATCHES "^js-(text-layout-reference|pixi-filter-boundary-reference)$")
+        set_tests_properties(${pmjs_test} PROPERTIES FIXTURES_REQUIRED pmjs_assets)
+      endif()
+    endif()
+  endforeach()
+  if(PMJS_ENABLE_SANITIZERS)
+    get_property(pmjs_test_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(pmjs_test_target IN LISTS pmjs_test_targets)
+      get_target_property(pmjs_test_target_type ${pmjs_test_target} TYPE)
+      if(pmjs_test_target_type STREQUAL "EXECUTABLE")
+        target_compile_options(${pmjs_test_target} PRIVATE ${PMJS_SANITIZER_FLAGS})
+        target_link_options(${pmjs_test_target} PRIVATE ${PMJS_SANITIZER_FLAGS})
+      endif()
+    endforeach()
+  endif()
 endif()
+include(cmake/Install.cmake)

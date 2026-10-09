@@ -1,0 +1,128 @@
+{
+  "revision": 2,
+  "target": "aarch64-linux-gnu.2.28",
+  "cpu": "generic",
+  "sources": {
+    "zig": {
+      "url": "https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz",
+      "sha256": "02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239"
+    },
+    "zlib": {
+      "url": "https://github.com/zlib-ng/zlib-ng/archive/refs/tags/2.2.4.tar.gz",
+      "sha256": "a73343c3093e5cdc50d9377997c3815b878fd110bf6511c2c7759f2afb90f5a3"
+    },
+    "png": {
+      "url": "https://downloads.sourceforge.net/project/libpng/libpng16/1.6.43/libpng-1.6.43.tar.xz",
+      "sha256": "6a5ca0652392a2d7c9db2ae5b40210843c0bbc081cbd410825ab00cc59f14a6c"
+    },
+    "jpeg": {
+      "url": "https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.2.0/libjpeg-turbo-3.2.0.tar.gz",
+      "sha256": "6f30092cef9fb839779646608f4ee14ae3cbac989c47fa05e841b0841f09878e"
+    },
+    "freetype": {
+      "url": "https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.xz",
+      "sha256": "0550350666d427c74daeb85d5ac7bb353acba5f76956395995311a9c6f063289"
+    },
+    "harfbuzz": {
+      "url": "https://github.com/harfbuzz/harfbuzz/releases/download/8.3.0/harfbuzz-8.3.0.tar.xz",
+      "sha256": "109501eaeb8bde3eadb25fab4164e993fbace29c3d775bcaa1c1e58e2f15f847"
+    },
+    "ffmpeg": {
+      "url": "https://ffmpeg.org/releases/ffmpeg-6.0.tar.xz",
+      "sha256": "57be87c22d9b49c112b6d24bc67d42508660e6b718b3db89c44e47e289137082"
+    }
+  },
+  "components": {
+    "zlib": {
+      "options": [
+        "-DZLIB_COMPAT=ON",
+        "-DZLIB_ENABLE_TESTS=OFF"
+      ],
+      "dependencies": []
+    },
+    "png": {
+      "options": [
+        "-DPNG_TESTS=OFF",
+        "-DPNG_EXECUTABLES=OFF",
+        "-DPNG_STATIC=OFF"
+      ],
+      "dependencies": [
+        "zlib"
+      ]
+    },
+    "jpeg": {
+      "options": [
+        "-DENABLE_STATIC=OFF",
+        "-DWITH_JPEG8=ON",
+        "-DWITH_TOOLS=OFF",
+        "-DWITH_TESTS=OFF"
+      ],
+      "dependencies": []
+    },
+    "freetype": {
+      "options": [
+        "-DFT_DISABLE_HARFBUZZ=ON",
+        "-DFT_DISABLE_BZIP2=ON",
+        "-DFT_DISABLE_BROTLI=ON"
+      ],
+      "dependencies": [
+        "zlib",
+        "png"
+      ]
+    },
+    "harfbuzz": {
+      "options": [
+        "-DBUILD_SHARED_LIBS=OFF",
+        "-DHB_BUILD_SUBSET=OFF",
+        "-DHB_BUILD_UTILS=OFF",
+        "-DHB_HAVE_FREETYPE=ON",
+        "-DHB_HAVE_GLIB=OFF",
+        "-DHB_HAVE_ICU=OFF",
+        "-DFREETYPE_LIBRARY={prefix}/lib/libfreetype.so",
+        "-DFREETYPE_INCLUDE_DIR_freetype2={prefix}/include/freetype2",
+        "-DFREETYPE_INCLUDE_DIR_ft2build={prefix}/include/freetype2"
+      ],
+      "dependencies": [
+        "freetype"
+      ]
+    },
+    "ffmpeg": {
+      "options": [
+        "--arch=aarch64",
+        "--target-os=linux",
+        "--enable-cross-compile",
+        "--pkg-config=false",
+        "--disable-autodetect",
+        "--disable-doc",
+        "--disable-debug",
+        "--disable-network",
+        "--disable-everything",
+        "--disable-stripping",
+        "--disable-avdevice",
+        "--disable-avfilter",
+        "--disable-programs",
+        "--disable-static",
+        "--enable-shared",
+        "--enable-pic",
+        "--enable-avcodec",
+        "--enable-avformat",
+        "--enable-avutil",
+        "--enable-swresample",
+        "--enable-swscale",
+        "--enable-protocol=file",
+        "--enable-demuxer=ogg,matroska,mp3,wav,flac,mov",
+        "--enable-decoder=vorbis,opus,mp3,mp3float,aac,alac,flac,ac3,eac3,pcm_s8,pcm_u8,pcm_s16le,pcm_s16be,pcm_u16le,pcm_s24le,pcm_s32le,pcm_f32le,pcm_f64le,vp8,vp9,h264,theora,png,mjpeg,psd",
+        "--enable-parser=aac,ac3,h264,mpegaudio,opus,vorbis,vp8,vp9",
+        "--enable-small"
+      ],
+      "dependencies": [],
+      "patches": [
+        [
+          "configure",
+          "check_func  sysctl",
+          "check_func_headers \"sys/sysctl.h\" sysctl"
+        ]
+      ]
+    }
+  }
+}

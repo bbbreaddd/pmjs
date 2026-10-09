@@ -1,0 +1,17 @@
+{
+  "version": "@PROJECT_VERSION@-experimental",
+  "architecture": "@CMAKE_SYSTEM_PROCESSOR@",
+  "compiler": {"id": "@CMAKE_CXX_COMPILER_ID@", "version": "@CMAKE_CXX_COMPILER_VERSION@"},
+  "buildType": "@CMAKE_BUILD_TYPE@",
+  "nodeApi": 8,
+  "skia65": "@PMJS_ENABLE_SKIA65@",
+  "bundledDependencies": "@PMJS_BUNDLE_DEPENDENCIES@",
+  "targetEnvironment": "@PMJS_LINUX_ARM64_BUILD@",
+  "dependencies": {
+    "sdl2": "@SDL2_VERSION@", "egl": "@EGL_VERSION@", "glesv2": "@GLES_VERSION@",
+    "png": "@PNG_VERSION@", "zlib": "@ZLIB_VERSION@", "jpeg": "@JPEG_VERSION@",
+    "freetype": "@FREETYPE_VERSION@", "harfbuzz": "@HARFBUZZ_VERSION@",
+    "avformat": "@AVFORMAT_VERSION@", "avcodec": "@AVCODEC_VERSION@", "avutil": "@AVUTIL_VERSION@",
+    "swresample": "@SWRESAMPLE_VERSION@", "swscale": "@SWSCALE_VERSION@"
+  }
+}

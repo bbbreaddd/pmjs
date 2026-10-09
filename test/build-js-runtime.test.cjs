@@ -387,3 +387,38 @@ test('primitive recording ships with the selected Terrax adapter', () => {
     assert.ok(!fs.readFileSync(output, 'utf8').includes(recorder));
   }
 });
+
+
+test('explicit adapter files execute in supplied order before engine bootstrap', () => {
+  const root = temporaryDirectory('pmjs-explicit-adapters-');
+  fs.mkdirSync(path.join(root, 'tools'));
+  for (const name of ['build-js-runtime.mjs', 'game-inspect.mjs']) {
+    fs.copyFileSync(path.resolve(__dirname, '../tools', name), path.join(root, 'tools', name));
+  }
+  fs.mkdirSync(path.join(root, 'profiles'));
+  fs.mkdirSync(path.join(root, 'js/pmjs-mv'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'profiles/mv.json'),
+    JSON.stringify({ modules: ['js/base.js', 'js/pmjs-mv/bootstrap.js'] }));
+  fs.writeFileSync(path.join(root, 'js/base.js'), 'globalThis.order = ["base"];');
+  fs.writeFileSync(path.join(root, 'js/pmjs-mv/bootstrap.js'), 'order.push("boot");');
+  const first = path.join(root, 'first adapter.js');
+  const second = path.join(root, 'second adapter.js');
+  fs.writeFileSync(first, 'order.push("first");');
+  fs.writeFileSync(second, 'order.push("second");');
+  const output = path.join(root, 'bundle.js');
+  const builder = path.join(root, 'tools/build-js-runtime.mjs');
+  const args = [builder, '--profile', 'mv', '--adapter', first, '--adapter', second, '--output', output];
+  childProcess.execFileSync(process.execPath, args);
+  const bundle = fs.readFileSync(output, 'utf8');
+  const context = {};
+  vm.runInNewContext(bundle, context);
+  assert.deepEqual(Array.from(context.order), ['base', 'first', 'second', 'boot']);
+  childProcess.execFileSync(process.execPath, [...args, '--check']);
+  fs.appendFileSync(first, 'order.push("changed");');
+  assert.throws(() => childProcess.execFileSync(process.execPath, [...args, '--check']), /out of date/);
+  assert.throws(() => childProcess.execFileSync(process.execPath, [...args, '--adapter', first]), /duplicate module/);
+  assert.equal(fs.readFileSync(output, 'utf8'), bundle);
+  assert.throws(() => childProcess.execFileSync(process.execPath,
+    [builder, '--profile', 'mv', '--adapter', path.join(root, 'missing.js'), '--output', output]), /ENOENT/);
+  assert.equal(fs.readFileSync(output, 'utf8'), bundle);
+});

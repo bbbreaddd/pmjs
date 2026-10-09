@@ -3,7 +3,8 @@
   "private": true,
   "scripts": {
     "lint": "eslint js runner tools test example",
-    "licensing": "node tools/check-provenance.cjs"
+    "licensing": "node tools/check-provenance.cjs",
+    "test": "node tools/test-js.cjs"
   },
   "devDependencies": {
     "eslint": "9.35.0",

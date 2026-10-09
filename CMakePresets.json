@@ -1,0 +1,103 @@
+{
+  "version": 2,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 20,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "dev",
+      "inherits": "base",
+      "displayName": "Local development (FreeType)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "BUILD_TESTING": "ON",
+        "PMJS_ENABLE_SKIA65": "OFF",
+        "PMJS_BUILD_SKIA65_COMPONENT": "OFF"
+      }
+    },
+    {
+      "name": "dev-asan",
+      "inherits": "dev",
+      "displayName": "Native ASan/UBSan diagnostics",
+      "cacheVariables": {
+        "PMJS_ENABLE_SANITIZERS": "ON"
+      }
+    },
+    {
+      "name": "release-x64",
+      "inherits": "base",
+      "displayName": "x64 release with verified Skia65",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "BUILD_TESTING": "OFF",
+        "PMJS_ENABLE_SKIA65": "ON",
+        "PMJS_RELEASE_PROVENANCE": "ON",
+        "PMJS_BUILD_SKIA65_COMPONENT": "OFF",
+        "PMJS_SKIA65_COMPONENT_DIR": "$env{PMJS_SKIA65_COMPONENT_DIR}"
+      }
+    },
+    {
+      "name": "release-linux-arm64",
+      "inherits": "release-x64",
+      "displayName": "ARM64/glibc 2.28 production runtime",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchains/linux-arm64.cmake",
+        "PMJS_OFFLINE": "ON",
+        "PMJS_EFFEKSEER_ARCHIVE": "$env{PMJS_EFFEKSEER_ARCHIVE}",
+        "PMJS_NODE_ROOT": "$env{PMJS_NODE_ROOT}",
+        "PMJS_BUNDLE_DEPENDENCIES": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "dev",
+      "configurePreset": "dev"
+    },
+    {
+      "name": "dev-asan",
+      "configurePreset": "dev-asan"
+    },
+    {
+      "name": "release-x64",
+      "configurePreset": "release-x64"
+    },
+    {
+      "name": "release-linux-arm64",
+      "configurePreset": "release-linux-arm64"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "dev",
+      "configurePreset": "dev",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "dev-asan",
+      "configurePreset": "dev-asan",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    }
+  ]
+}

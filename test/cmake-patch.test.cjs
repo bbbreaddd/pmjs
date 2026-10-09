@@ -18,9 +18,10 @@ function fixture() {
   const archive = path.join(root, 'upstream.tar');
   assert.equal(spawnSync('cmake', ['-E', 'tar', 'cf', archive, 'upstream'], { cwd: root }).status, 0);
   const sha = createHash('sha256').update(fs.readFileSync(archive)).digest('hex');
-  const module = fs.readFileSync(path.resolve(__dirname, '../cmake/Effekseer.cmake'), 'utf8')
-    .replace(/set\(effekseer_archive_sha "[^"]+"\)/, `set(effekseer_archive_sha "${sha}")`)
-    .replace('https://codeload.github.com/effekseer/Effekseer/tar.gz/${effekseer_revision}', archive);
+  const module = fs.readFileSync(path.resolve(__dirname, '../cmake/Effekseer.cmake'), 'utf8');
+  fs.mkdirSync(path.join(root, 'tools'));
+  fs.writeFileSync(path.join(root, 'tools/effekseer.lock.json'),
+    JSON.stringify({ revision: 'fixture', sha256: sha, url: archive }));
   fs.writeFileSync(path.join(root, 'Effekseer.cmake'), module);
   fs.mkdirSync(path.join(root, 'third_party'));
   const patch = path.join(root, 'third_party/effekseer-mz.patch');
@@ -30,7 +31,7 @@ function fixture() {
     'add_library(PkgConfig::GLES INTERFACE IMPORTED)\nadd_library(PkgConfig::EGL INTERFACE IMPORTED)\n' +
     'include(Effekseer.cmake)\nFetchContent_GetProperties(pmjs_effekseer)\nfile(WRITE "${CMAKE_BINARY_DIR}/source.txt" "${pmjs_effekseer_SOURCE_DIR}")\n');
   const build = path.join(root, 'build');
-  return { upstream, patch, run(...args) {
+  return { root, archive, upstream, patch, build, run(...args) {
     return spawnSync('cmake', ['-S', root, '-B', build, ...args], { encoding: 'utf8' });
   }, source() { return fs.readFileSync(path.join(build, 'source.txt'), 'utf8'); } };
 }
@@ -61,6 +62,19 @@ test('incompatible patches fail during population', () => {
   assert.notEqual(f.run().status, 0);
 });
 
+test('a changed source lock reconfigures a development Ninja build', () => {
+  const f = fixture();
+  succeeds(f.run('-G', 'Ninja'));
+  succeeds(spawnSync('cmake', ['--build', f.build], { encoding: 'utf8' }));
+  const lock = path.join(f.root, 'tools/effekseer.lock.json');
+  const source = JSON.parse(fs.readFileSync(lock, 'utf8'));
+  source.sha256 = '0'.repeat(64);
+  fs.writeFileSync(lock, JSON.stringify(source));
+  const rebuilt = spawnSync('cmake', ['--build', f.build], { encoding: 'utf8' });
+  assert.notEqual(rebuilt.status, 0);
+  assert.match(rebuilt.stdout + rebuilt.stderr, /SHA256|hash/);
+});
+
 test('custom sources must be patched already and are never modified', () => {
   const f = fixture();
   const override = `-DFETCHCONTENT_SOURCE_DIR_PMJS_EFFEKSEER=${f.upstream}`;
@@ -72,4 +86,44 @@ test('custom sources must be patched already and are never modified', () => {
   succeeds(f.run(override));
   assert.equal(f.source(), f.upstream);
   assert.equal(fs.readFileSync(path.join(f.upstream, 'tiles.txt'), 'utf8'), 'new first\ncontext\nold second\n');
+});
+
+test('fresh offline builds extract local archives and unchanged configurations reuse them', () => {
+  const f = fixture();
+  assert.match(f.run('-DPMJS_OFFLINE=ON').stderr, /require PMJS_EFFEKSEER_ARCHIVE/);
+  const options = ['-DPMJS_OFFLINE=ON', `-DPMJS_EFFEKSEER_ARCHIVE=${f.archive}`,
+    '-DFETCHCONTENT_FULLY_DISCONNECTED=ON'];
+  fs.appendFileSync(path.join(f.root, 'CMakeLists.txt'),
+    '\nif(NOT FETCHCONTENT_FULLY_DISCONNECTED)\nmessage(FATAL_ERROR "Offline guard is disabled")\nendif()\n');
+  succeeds(f.run(...options));
+  const first = f.source();
+  assert.equal(fs.readFileSync(path.join(first, 'tiles.txt'), 'utf8'), 'new first\ncontext\nold second\n');
+  fs.writeFileSync(path.join(first, 'retained'), 'sentinel');
+  succeeds(f.run(...options));
+  assert.equal(f.source(), first);
+  assert.equal(fs.readFileSync(path.join(first, 'retained'), 'utf8'), 'sentinel');
+  fs.writeFileSync(f.patch, '--- a/tiles.txt\n+++ b/tiles.txt\n@@ -1,3 +1,3 @@\n-old first\n+new first\n context\n-old second\n+new second\n');
+  succeeds(f.run(...options));
+  assert.notEqual(f.source(), first);
+  assert.equal(fs.readFileSync(path.join(f.source(), 'tiles.txt'), 'utf8'), 'new first\ncontext\nnew second\n');
+});
+
+test('offline archives reject missing and changed bytes before reusing sources', () => {
+  const f = fixture();
+  const options = ['-DPMJS_OFFLINE=ON', `-DPMJS_EFFEKSEER_ARCHIVE=${f.archive}`];
+  succeeds(f.run(...options));
+  fs.appendFileSync(f.archive, 'corrupt');
+  assert.match(f.run(...options).stderr, /archive SHA256 does not match/);
+  fs.rmSync(f.archive);
+  assert.match(f.run(...options).stderr, /archive not found/);
+});
+
+test('archive changes are consumed by an ordinary Ninja build', () => {
+  const f = fixture();
+  succeeds(f.run('-G', 'Ninja', '-DPMJS_OFFLINE=ON', `-DPMJS_EFFEKSEER_ARCHIVE=${f.archive}`));
+  succeeds(spawnSync('cmake', ['--build', f.build], { encoding: 'utf8' }));
+  fs.appendFileSync(f.archive, 'corrupt');
+  const rebuilt = spawnSync('cmake', ['--build', f.build], { encoding: 'utf8' });
+  assert.notEqual(rebuilt.status, 0);
+  assert.match(rebuilt.stdout + rebuilt.stderr, /archive SHA256 does not match/);
 });

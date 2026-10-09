@@ -2,6 +2,15 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cmake -S "$ROOT" -B "$ROOT/build" -DCMAKE_BUILD_TYPE=Release "$@"
-cmake --build "$ROOT/build" --parallel
-ctest --test-dir "$ROOT/build" --output-on-failure
+PRESET="${PMJS_BUILD_PRESET:-release-x64}"
+configure=(--preset "$PRESET")
+build=(--build --preset "$PRESET")
+if [ -n "${PMJS_BUILD_DIR:-}" ]; then
+  BUILD_DIR="$PMJS_BUILD_DIR"
+  case "$BUILD_DIR" in /*) ;; *) BUILD_DIR="$PWD/$BUILD_DIR" ;; esac
+  configure+=(-B "$BUILD_DIR")
+  build=(--build "$BUILD_DIR")
+fi
+cd "$ROOT"
+cmake "${configure[@]}" "$@"
+cmake "${build[@]}" --target pmjs_native --parallel "${PMJS_BUILD_JOBS:-4}"

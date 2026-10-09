@@ -7,7 +7,7 @@ PMJS's MIT license covers its own contributions, not third-party material.
 | Fragment sorting implementation | V8 5.1.281, copyright 2012 | BSD-3-Clause; `third_party/v8.LICENSE` |
 | Terrax lighting compatibility portions and tests | TerraxLighting 1.4.9 | MIT, copyright 2016 Terraxz; `third_party/terrax.LICENSE` |
 | Unicode default-ignorable data | Unicode 16.0.0 | Unicode-3.0; `third_party/unicode.LICENSE` |
-| Effekseer and stb portions | Revision pinned in `CMakeLists.txt` | MIT and embedded stb notice; `third_party/effekseer.LICENSE` |
+| Effekseer and stb portions | Revision pinned in `tools/effekseer.lock.json` | MIT and embedded stb notice; `third_party/effekseer.LICENSE` |
 | Effekseer effect fixtures | Revision in `test/assets/effects/LICENSE` | MIT; adjacent `LICENSE` |
 | Color-matrix shader contract and pixel-test reference | PixiJS 4.5.4 | MIT; `third_party/pixi4.LICENSE` |
 | Pixi 5 sprite fixture | PixiJS 5.3.12 | MIT; `test/assets/pixi5/LICENSE` |
@@ -32,6 +32,9 @@ versions and build configurations distributed. EGL/GLES and SDL supplied
 by the operating system are not automatically bundled dependencies.
 Node's distribution includes notices for additional components; retain its full
 LICENSE when shipping Node. Test fixtures are not normally runtime payloads.
+Linux ARM64 builds also link Zig's compiler runtime and LLVM libc++, libc++abi
+and libunwind. Their complete MIT and Apache/LLVM exception notices are installed
+under `share/pmjs/notices/compiler/` in the binary package.
 
 [FFmpeg's license](https://ffmpeg.org/legal.html) depends on its build
 configuration. LGPL builds and GPL builds have different redistribution requirements; PMJS's MIT license does not replace

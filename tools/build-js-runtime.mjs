@@ -7,10 +7,15 @@ import { inspectGame, loadAdapterRegistry, resolveAdapters } from './game-inspec
 
 const args = process.argv.slice(2);
 const values = new Map();
+const adapterFiles = [];
 const switches = new Set(['--check', '--print-modules', '--verbose']);
 const inputs = new Set(['--manifest', '--profile', '--config', '--output', '--game']);
 for (let index = 0; index < args.length; index++) {
   const argument = args[index];
+  if (argument === '--adapter' && args[index + 1] && !args[index + 1].startsWith('--')) {
+    adapterFiles.push(fs.realpathSync(path.resolve(args[++index])));
+    continue;
+  }
   if (switches.has(argument)) { values.set(argument, true); continue; }
   if (!inputs.has(argument) || values.has(argument) || !args[index + 1] || args[index + 1].startsWith('--')) {
     throw new Error(`invalid argument: ${argument}`);
@@ -26,7 +31,7 @@ const configArgument = values.get('--config');
 const outputArgument = values.get('--output');
 const gameArgument = values.get('--game');
 if ((!profileArgument && !gameArgument) || (!outputArgument && !printModules)) {
-  console.error('usage: build-js-runtime.mjs (--game DIR [--manifest FILE] | --profile NAME) [--config JSON] --output FILE [--check] [--print-modules] [--verbose]');
+  console.error('usage: build-js-runtime.mjs (--game DIR [--manifest FILE] | --profile NAME) [--adapter FILE ...] [--config JSON] --output FILE [--check] [--print-modules] [--verbose]');
   process.exit(2);
 }
 if (profileArgument && (gameArgument || manifestArgument)) {
@@ -225,12 +230,26 @@ function printBuildReport() {
   write(lines.join('\n'));
 }
 
+if (adapterFiles.length) {
+  const bootstrap = rawModules.findIndex(item =>
+    Object.values(supportedEngines).some(engine => item.module === engine.bootstrap));
+  if (bootstrap !== rawModules.length - 1 || bootstrap < 0) {
+    throw new Error('explicit adapters require a terminal MV/MZ bootstrap');
+  }
+  rawModules.splice(bootstrap, 0, ...adapterFiles.map(file => ({ module: path.basename(file), file })));
+}
+
 const seenModules = new Set();
 for (const item of rawModules) {
-  if (seenModules.has(item.module)) {
+  if (!item.file && (typeof item.module !== 'string' || !item.module || path.isAbsolute(item.module) ||
+      item.module.split(/[\\/]/).includes('..'))) {
+    throw new Error(`invalid bundle module: ${item.module}`);
+  }
+  const identity = item.file || fs.realpathSync(path.resolve(root, item.module));
+  if (seenModules.has(identity)) {
     throw new Error(`duplicate module in profile/manifest: ${item.module}`);
   }
-  seenModules.add(item.module);
+  seenModules.add(identity);
 }
 
 const bundleItems = [];
@@ -255,7 +274,7 @@ if (configArgument) {
     `globalThis.PMJS_GAME_CONFIG = ${JSON.stringify(parsed, null, 2)};\n` });
 }
 for (const item of rawModules) {
-  bundleItems.push({ label: item.module, module: item.module, baseDir: root });
+  bundleItems.push({ label: item.module, module: item.module, file: item.file, baseDir: root });
 }
 
 function buildBundle() {
@@ -263,13 +282,10 @@ function buildBundle() {
     let source;
     if (item.inlineSource) {
       source = item.inlineSource;
+    } else if (item.file) {
+      source = fs.readFileSync(item.file, 'utf8');
     } else {
-      const relative = item.module;
-      if (typeof relative !== 'string' || !relative || path.isAbsolute(relative) ||
-          relative.split(/[\\/]/).includes('..')) {
-        throw new Error(`invalid bundle module: ${relative}`);
-      }
-      const fileResolved = path.resolve(item.baseDir, relative);
+      const fileResolved = path.resolve(item.baseDir, item.module);
       source = fs.readFileSync(fileResolved, 'utf8');
     }
     return `// BEGIN ${item.label}\n${source.trimEnd()}\n// END ${item.label}\n`;
@@ -281,7 +297,7 @@ if (printModules) {
   printBuildReport();
   console.log(JSON.stringify(rawModules.map(item => ({
     module: item.module,
-    base: 'native-runtime',
+    base: item.file ? 'explicit-adapter' : 'native-runtime',
   }))));
   process.exit(0);
 }

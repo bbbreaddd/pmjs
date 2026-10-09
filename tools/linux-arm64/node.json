@@ -1,0 +1,6 @@
+{
+  "version": "22.23.2",
+  "artifact": "node-v22.23.2-linux-arm64.tar.xz",
+  "url": "https://nodejs.org/dist/v22.23.2/node-v22.23.2-linux-arm64.tar.xz",
+  "sha256": "fff4078c5def658577f92c88db7db3bc0072924bfb93fe52c1e744a54e94abb8"
+}

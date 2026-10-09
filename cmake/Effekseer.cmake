@@ -4,12 +4,35 @@ endif()
 
 include(FetchContent)
 find_package(Git REQUIRED)
-set(effekseer_revision "e0ccaf1d1837b1d178d0088f714a1f4525cae8f4")
-set(effekseer_archive_sha "e2cb5aefdf1bf84d0d050fd44fcc64aa35baeee957686768a508784f1ed243d1")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/tools/effekseer.lock.json" effekseer_lock)
+string(JSON effekseer_archive_sha GET "${effekseer_lock}" sha256)
+string(JSON effekseer_url GET "${effekseer_lock}" url)
+set(PMJS_EFFEKSEER_ARCHIVE "" CACHE FILEPATH "Local archive matching tools/effekseer.lock.json")
+if(PMJS_OFFLINE AND NOT PMJS_EFFEKSEER_ARCHIVE AND NOT FETCHCONTENT_SOURCE_DIR_PMJS_EFFEKSEER)
+  message(FATAL_ERROR "Offline builds require PMJS_EFFEKSEER_ARCHIVE pointing to the pinned Effekseer archive")
+endif()
+if(PMJS_EFFEKSEER_ARCHIVE)
+  if(NOT EXISTS "${PMJS_EFFEKSEER_ARCHIVE}")
+    message(FATAL_ERROR "Effekseer archive not found: ${PMJS_EFFEKSEER_ARCHIVE}")
+  endif()
+  file(SHA256 "${PMJS_EFFEKSEER_ARCHIVE}" archive_sha)
+  if(NOT archive_sha STREQUAL effekseer_archive_sha)
+    message(FATAL_ERROR "Effekseer archive SHA256 does not match tools/effekseer.lock.json")
+  endif()
+  set(effekseer_url "${PMJS_EFFEKSEER_ARCHIVE}")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PMJS_EFFEKSEER_ARCHIVE}")
+endif()
+if(PMJS_OFFLINE)
+  set(FETCHCONTENT_FULLY_DISCONNECTED ON)
+  if(POLICY CMP0170)
+    cmake_policy(SET CMP0170 NEW)
+  endif()
+endif()
 set(effekseer_patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/effekseer-mz.patch")
 file(SHA256 "${effekseer_patch}" patch_sha)
 string(SHA256 source_key "${effekseer_archive_sha}:${patch_sha}")
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${effekseer_patch}")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/tools/effekseer.lock.json" "${effekseer_patch}")
 
 if(FETCHCONTENT_SOURCE_DIR_PMJS_EFFEKSEER)
   execute_process(COMMAND "${GIT_EXECUTABLE}" apply --reverse --check "${effekseer_patch}"
@@ -21,7 +44,7 @@ if(FETCHCONTENT_SOURCE_DIR_PMJS_EFFEKSEER)
 endif()
 
 FetchContent_Declare(pmjs_effekseer
-  URL "https://codeload.github.com/effekseer/Effekseer/tar.gz/${effekseer_revision}"
+  URL "${effekseer_url}"
   URL_HASH "SHA256=${effekseer_archive_sha}"
   SOURCE_DIR "${FETCHCONTENT_BASE_DIR}/pmjs_effekseer-${source_key}-src"
   PATCH_COMMAND "${GIT_EXECUTABLE}" apply "${effekseer_patch}")
@@ -52,7 +75,13 @@ function(pmjs_build_effekseer)
     set(pmjs_had_warn_deprecated FALSE)
   endif()
   set(CMAKE_WARN_DEPRECATED OFF CACHE BOOL "" FORCE)
+  if(PMJS_OFFLINE AND PMJS_EFFEKSEER_ARCHIVE)
+    # Fully disconnected skips even local extraction on the first configuration.
+    set(FETCHCONTENT_FULLY_DISCONNECTED OFF)
+  endif()
   FetchContent_MakeAvailable(pmjs_effekseer)
+  # The runtime consumes static targets; upstream development files are not payload.
+  set_property(DIRECTORY "${pmjs_effekseer_SOURCE_DIR}" PROPERTY EXCLUDE_FROM_ALL TRUE)
   if(pmjs_had_warn_deprecated)
     set(CMAKE_WARN_DEPRECATED "${pmjs_prev_warn_deprecated}" CACHE BOOL "" FORCE)
   else()

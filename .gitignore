@@ -7,3 +7,5 @@
 *.log
 __pycache__/
 *.py[cod]
+/CMakeUserPresets.json
+/tools/linux-arm64/.cache/

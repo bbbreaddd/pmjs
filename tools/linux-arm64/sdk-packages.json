@@ -1,0 +1,65 @@
+{
+  "origin": "https://archive.debian.org/debian/",
+  "packages": [
+    {
+      "Package": "libegl1",
+      "Version": "1.1.0-1",
+      "Filename": "pool/main/libg/libglvnd/libegl1_1.1.0-1_arm64.deb",
+      "SHA256": "7f8a09aeba00173c817955df9c143246422cbd65599038612cd8910d520d827b"
+    },
+    {
+      "Package": "libgles2",
+      "Version": "1.1.0-1",
+      "Filename": "pool/main/libg/libglvnd/libgles2_1.1.0-1_arm64.deb",
+      "SHA256": "b97d9afedf79d0cd39b11ab216c0f1a19475df0514e87846da3a07f731819229"
+    },
+    {
+      "Package": "libglvnd-dev",
+      "Version": "1.1.0-1",
+      "Filename": "pool/main/libg/libglvnd/libglvnd-dev_1.1.0-1_arm64.deb",
+      "SHA256": "9fc82c30a8fc56a9228979f5af1659279cbb90ddca83614fee4fd6e45d2e11ad"
+    },
+    {
+      "Package": "libglvnd0",
+      "Version": "1.1.0-1",
+      "Filename": "pool/main/libg/libglvnd/libglvnd0_1.1.0-1_arm64.deb",
+      "SHA256": "13d2616b670c03bf0868e35903c53d805af0db236d55b81d7d3f026b85219076"
+    },
+    {
+      "Package": "libsdl2-2.0-0",
+      "Version": "2.0.9+dfsg1-1",
+      "Filename": "pool/main/libs/libsdl2/libsdl2-2.0-0_2.0.9+dfsg1-1_arm64.deb",
+      "SHA256": "9b6095f134e3d65edd789ffc44a5ea727ebf6b30e5bc84af5068769f5499027f"
+    },
+    {
+      "Package": "libsdl2-dev",
+      "Version": "2.0.9+dfsg1-1",
+      "Filename": "pool/main/libs/libsdl2/libsdl2-dev_2.0.9+dfsg1-1_arm64.deb",
+      "SHA256": "f234435019e3178c4f89afe7fd2f38d098a016d0c2aafbadeaf87e8743839098"
+    },
+    {
+      "Package": "libegl1-mesa-dev",
+      "Version": "18.3.6-2+deb10u1",
+      "Filename": "pool/main/m/mesa/libegl1-mesa-dev_18.3.6-2+deb10u1_arm64.deb",
+      "SHA256": "3c7bb44e35ecd07fb00084004e32e5f57d30afcca16087051be03bde65405bba"
+    },
+    {
+      "Package": "libgles2-mesa-dev",
+      "Version": "18.3.6-2+deb10u1",
+      "Filename": "pool/main/m/mesa/libgles2-mesa-dev_18.3.6-2+deb10u1_arm64.deb",
+      "SHA256": "5f33b8e15718ef967431667b11bfc26006e706d9a622434453ec078846d46d5e"
+    },
+    {
+      "Package": "libglvnd-core-dev",
+      "Version": "1.1.0-1",
+      "Filename": "pool/main/libg/libglvnd/libglvnd-core-dev_1.1.0-1_arm64.deb",
+      "SHA256": "c578d6967454e1a0555d319102480afbc54a5e6e4f16da92daea236fc6305597"
+    },
+    {
+      "Package": "mesa-common-dev",
+      "Version": "18.3.6-2+deb10u1",
+      "Filename": "pool/main/m/mesa/mesa-common-dev_18.3.6-2+deb10u1_arm64.deb",
+      "SHA256": "8904ad81e0441a61a7a87ac0828c920cd171a6ef4538b392f0ea0175950f1184"
+    }
+  ]
+}

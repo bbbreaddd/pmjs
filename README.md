@@ -18,7 +18,7 @@ The MZ reference is stock RPG Maker MZ 1.10.0, PixiJS 5.3.12 and NW.js 0.48.4, w
 - A C++20 compiler
 - Node.js and Node API headers
 - pkg-config
-- Git and Python 3
+- Git and Python 3.12 or newer
 - Default x64 Skia65 build: Clang/LLVM 20.1.2 (`clang-20`, `clang++-20`, `llvm-ar-20`, `llvm-strip-20`)
 - ARM64 Skia65 build: `PMJS_SKIA65_ARM64_SDK` pointing to the prepared Zig 0.15.2 SDK, plus `llvm-strip-20` 20.1.2
 - SDL2, EGL, and OpenGL ES 3.0 or newer
@@ -44,3 +44,9 @@ PMJS uses the following software
 - [Skia](https://skia.org/) and [ICU](https://icu.unicode.org/), with private FreeType/HarfBuzz builds, for the Skia65 text component
 
 The build and test workflow uses CMake, pkg-config, ESLint, and Xvfb.
+
+## Build, install and run
+
+- [Building](docs/building.md)
+- [Using PMJS](docs/using.md): prepare and run games, saves and troubleshooting.
+- [Releases](docs/releases.md): install, verify and package the runtime.
