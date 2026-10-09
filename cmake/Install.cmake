@@ -47,7 +47,7 @@ if(PMJS_BUNDLE_DEPENDENCIES)
   if(NOT PMJS_LINUX_ARM64_BUILD)
     message(FATAL_ERROR "Automatic dependency bundling is supported only by the reviewed Linux ARM64 environment")
   endif()
-  foreach(library IN ITEMS libz.so.1 libpng16.so.16 libwebp.so.7 libjpeg.so.8 libfreetype.so.6
+  foreach(library IN ITEMS libz.so.1 libpng16.so.16 libwebp.so.7 libsharpyuv.so.0 libjpeg.so.8 libfreetype.so.6
       libavformat.so.60 libavcodec.so.60 libavutil.so.58 libswresample.so.4 libswscale.so.7)
     file(REAL_PATH "${PMJS_DEPENDENCY_PREFIX}/lib/${library}" library_file)
     install(FILES "${library_file}" DESTINATION lib RENAME "${library}")

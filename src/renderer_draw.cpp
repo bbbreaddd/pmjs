@@ -646,6 +646,37 @@ void Renderer::renderScene() {
       operations.back().viewportMapping = viewportMapping;
       continue;
     }
+    const auto& t = command.transform;
+    const auto point = [&](float x, float y, std::size_t corner) {
+      float px = t[0] * x + t[2] * y + t[4];
+      float py = t[1] * x + t[3] * y + t[5];
+      if (command.spriteWorldVertices) { px = command.spriteVertices[corner][0]; py = command.spriteVertices[corner][1]; }
+      if (command.roundPixels) {
+        px = std::floor(px);
+        py = std::floor(py);
+      }
+      px = px * viewportMapping[0] + viewportMapping[2];
+      py = py * viewportMapping[1] + viewportMapping[3];
+      return std::array<float, 2>{px, py};
+    };
+    const float localWidth = command.destination[0];
+    const float localHeight = command.destination[1];
+    const auto p0 = point(0, 0, 0);
+    const auto p1 = point(localWidth, 0, 1);
+    const auto p2 = point(localWidth, localHeight, 2);
+    const auto p3 = point(0, localHeight, 3);
+    if (preparingFilterDepth == 0 &&
+        sceneProjection_ == std::array<float, 6>{1, 0, 0, 1, 0, 0}) {
+      const bool left = p0[0] <= 0 && p1[0] <= 0 &&
+                        p2[0] <= 0 && p3[0] <= 0;
+      const bool right = p0[0] >= width_ && p1[0] >= width_ &&
+                         p2[0] >= width_ && p3[0] >= width_;
+      const bool above = p0[1] <= 0 && p1[1] <= 0 &&
+                         p2[1] <= 0 && p3[1] <= 0;
+      const bool below = p0[1] >= height_ && p1[1] >= height_ &&
+                         p2[1] >= height_ && p3[1] >= height_;
+      if (left || right || above || below) continue;
+    }
     const auto logicalInfo = images_.inspect(command.image);
     const bool uniformPrepared = images_.hasUniformPreparedBacking(command.image);
     const bool exactNearestDimensions = logicalInfo && logicalInfo->width > 0 &&
@@ -716,37 +747,6 @@ void Renderer::renderScene() {
     const std::uint32_t texture = info ? info->texture : whiteTexture_;
     const bool texturePremultiplied = command.premultipliedSpriteTexture || (info && info->premultiplied);
     const bool mipmap = command.mipmap && info && images_.ensureMipmaps(command.image, info->premultiplied);
-    const auto& t = command.transform;
-    const auto point = [&](float x, float y, std::size_t corner) {
-      float px = t[0] * x + t[2] * y + t[4];
-      float py = t[1] * x + t[3] * y + t[5];
-      if (command.spriteWorldVertices) { px = command.spriteVertices[corner][0]; py = command.spriteVertices[corner][1]; }
-      if (command.roundPixels) {
-        px = std::floor(px);
-        py = std::floor(py);
-      }
-      px = px * viewportMapping[0] + viewportMapping[2];
-      py = py * viewportMapping[1] + viewportMapping[3];
-      return std::array<float, 2>{px, py};
-    };
-    const float localWidth = command.destination[0];
-    const float localHeight = command.destination[1];
-    const auto p0 = point(0, 0, 0);
-    const auto p1 = point(localWidth, 0, 1);
-    const auto p2 = point(localWidth, localHeight, 2);
-    const auto p3 = point(0, localHeight, 3);
-    if (preparingFilterDepth == 0 &&
-        sceneProjection_ == std::array<float, 6>{1, 0, 0, 1, 0, 0}) {
-      const bool left = p0[0] <= 0 && p1[0] <= 0 &&
-                        p2[0] <= 0 && p3[0] <= 0;
-      const bool right = p0[0] >= width_ && p1[0] >= width_ &&
-                         p2[0] >= width_ && p3[0] >= width_;
-      const bool above = p0[1] <= 0 && p1[1] <= 0 &&
-                         p2[1] <= 0 && p3[1] <= 0;
-      const bool below = p0[1] >= height_ && p1[1] >= height_ &&
-                         p2[1] >= height_ && p3[1] >= height_;
-      if (left || right || above || below) continue;
-    }
     const float u0 = command.source[0] / textureWidth;
     const float v0 = command.source[1] / textureHeight;
     const float u1 = (command.source[0] + command.source[2]) / textureWidth;

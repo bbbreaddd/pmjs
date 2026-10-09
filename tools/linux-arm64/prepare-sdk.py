@@ -223,7 +223,9 @@ def build_component(sdk, name, spec, recipe, jobs):
         write_changed(source_record, json.dumps(source_recipe, sort_keys=True) + "\n")
         options = [option.format(prefix=prefix) for option in component["options"]]
         if name == "ffmpeg":
-            run([source / "configure", *options,
+            configure = source / "configure"
+            configure.chmod(configure.stat().st_mode | 0o755)
+            run([configure, *options,
                  *["--" + n + "=" + str(sdk / "bin" / binary) for n, binary in
                    [("cc", "cc"), ("cxx", "c++"), ("ar", "ar"), ("ranlib", "ranlib")]],
                  "--prefix=" + str(prefix), "--extra-cflags=-DPMJS_TOOLCHAIN_ID=" + recipe["toolchain"]], cwd=source, env=env)
@@ -241,7 +243,7 @@ def build_component(sdk, name, spec, recipe, jobs):
             run(["cmake", "--install", build], env=install_env)
         notices = installed / "notices" / name
         notices.mkdir(parents=True)
-        for pattern in ["LICENSE*", "COPYING*", "COPYRIGHT*", "README.ijg", "docs/FTL.TXT", "docs/GPLv2.TXT"]:
+        for pattern in ["LICENSE*", "COPYING*", "COPYRIGHT*", "README.ijg", "docs/FTL.TXT", "docs/GPLv2.TXT", "PATENTS*"]:
             for file in source.glob(pattern):
                 if file.is_file():
                     shutil.copyfile(file, notices / file.name)
@@ -313,7 +315,7 @@ def sdk_metadata(sdk, verify):
             write_changed(file, text)
     env = {**os.environ, "PKG_CONFIG_PATH": "", "PKG_CONFIG_LIBDIR": str(pc_dir), "PKG_CONFIG_SYSROOT_DIR": ""}
     lock = []
-    for name, package in {"SDL2": "sdl2", "EGL": "egl", "GLES": "glesv2", "PNG": "libpng", "ZLIB": "zlib",
+    for name, package in {"SDL2": "sdl2", "EGL": "egl", "GLES": "glesv2", "PNG": "libpng", "WEBP": "libwebp", "ZLIB": "zlib",
                           "JPEG": "libjpeg", "FREETYPE": "freetype2", "HARFBUZZ": "harfbuzz", "AVFORMAT": "libavformat",
                           "AVCODEC": "libavcodec", "AVUTIL": "libavutil", "SWRESAMPLE": "libswresample", "SWSCALE": "libswscale"}.items():
         value = subprocess.check_output(["pkg-config", "--modversion", package], env=env, text=True).strip()

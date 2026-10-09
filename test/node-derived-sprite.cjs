@@ -33,8 +33,10 @@ for (const [name, width, height, grid, backdrop] of [
 native.initialize({ gameRoot: root, assetRoot: '', width: 128, height: 96, windowTitle: 'derived sprite pixels' });
 native.render.setClearColor(0.08, 0.15, 0.2, 1);
 const schema = native.scene.schema;
+// Initialize diagnostic fallback storage before measuring image realization.
+native.images.memory();
 
-function frame(image, source, transform, nearest, alpha = 1, blend = 0, extraFlags = 0) {
+function frame(image, source, transform, nearest, alpha = 1, blend = 0, extraFlags = 0, projection) {
   const tint = extraFlags & (1 << 11) ?
     ((alpha * 255 << 24) | (Math.round(195 * alpha) << 16) |
       (Math.round(231 * alpha) << 8) | Math.round(175 * alpha)) >>> 0 : 0xc3e7af;
@@ -44,6 +46,7 @@ function frame(image, source, transform, nearest, alpha = 1, blend = 0, extraFla
   values.set(source, 9);
   values.set([source[2], source[3]], 13);
   native.beginFrame();
+  if (projection) native.render.setSceneProjection(projection);
   assert.equal(native.scene.submit(schema.version, metadata, values, 1), undefined);
   native.renderScene();
   return Buffer.from(native.canvas.captureSceneRawPremultiplied());
@@ -69,6 +72,55 @@ async function main() {
       sourceIdentity: native.assets.sourceIdentity(fixture.name + '.png') }]);
     const derived = await native.images.loadAsync(fixture.name + '.png');
     assert.deepEqual([derived.width, derived.height], [fixture.width, fixture.height]);
+    native.beginFrame();
+    native.scene.submit(schema.version, new Uint32Array(0), new Float32Array(0), 0);
+    native.renderScene();
+    const empty = Buffer.from(native.canvas.captureSceneRawPremultiplied());
+    const beforeOffscreen = native.images.memory();
+    const offscreenTransforms = [
+      [1, 0, 0, 1, -fixture.cw, 0],
+      [1, 0, 0, 1, 128, 0],
+      [1, 0, 0, 1, 0, -fixture.ch],
+      [1, 0, 0, 1, 0, 96],
+      [1.31, 0.17, -0.2, 1.19, -2 * fixture.cw, -2 * fixture.ch],
+    ];
+    for (const nearest of [true, false]) for (const transform of offscreenTransforms) {
+      for (const flags of [0, 1 << 8, 1 << 11]) {
+        assert.deepEqual(frame(derived, [0, 0, fixture.cw, fixture.ch], transform,
+          nearest, 0.63, 0, flags), empty, `${fixture.name}: offscreen draw changed pixels`);
+      }
+    }
+    for (const transform of offscreenTransforms) {
+      native.beginFrame();
+      native.render.image(derived.handle, ...transform, 0, 0, fixture.cw, fixture.ch,
+        0.63, 0xc3e7af, 0);
+      native.renderScene();
+      assert.deepEqual(Buffer.from(native.canvas.captureSceneRawPremultiplied()), empty,
+        `${fixture.name}: offscreen direct draw changed pixels`);
+    }
+    // The packet builder sees a fractional sliver; rounding hides it at render time.
+    for (const nearest of [true, false]) {
+      assert.deepEqual(frame(derived, [0, 0, fixture.cw, fixture.ch],
+        [1, 0, 0, 1, -fixture.cw + 0.25, 0], nearest, 0.63, 0, 1 << 8), empty,
+      `${fixture.name}: rounded offscreen draw changed pixels`);
+    }
+    const afterOffscreen = native.images.memory();
+    for (const counter of ['gpuBytes', 'textureCreates', 'textureUploadBytes',
+      'preparedRegions', 'preparedMaterializations']) {
+      assert.equal(afterOffscreen[counter], beforeOffscreen[counter],
+        `${fixture.name}: offscreen draw changed ${counter}`);
+    }
+    assert.deepEqual(afterOffscreen.preparedFallbacks, beforeOffscreen.preparedFallbacks,
+      'offscreen sprites must not select a backing');
+    if (fixture.name === 'transparent') {
+      const source = [0, 0, fixture.cw, fixture.ch];
+      const transform = [1, 0, 0, 1, -fixture.cw, 0];
+      const projection = [1, 0, 0, 1, fixture.cw + 8, 8];
+      const projected = frame(derived, source, transform, false, 1, 0, 0, projection);
+      assert.notDeepEqual(projected, empty, 'projection moved the sprite into view');
+      assert.deepEqual(projected, frame(original, source, transform, false, 1, 0, 0, projection),
+        'culling must respect a nonidentity scene projection');
+    }
     if (fixture.uniform) {
       // Warm ordinary premultiplied storage before measuring the prepared image.
       frame(original, [0, 0, fixture.width, fixture.height], [1, 0, 0, 1, 0, 0], true);
