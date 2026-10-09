@@ -147,6 +147,7 @@ class CanvasStore {
   std::optional<ImagePixels> readPixels(CanvasHandle handle, int x, int y,
                                         int width, int height, PixelEncoding encoding = PixelEncoding::StraightRGBA8);
   std::optional<std::vector<std::uint8_t>> encodePng(CanvasHandle handle);
+  std::optional<std::vector<std::uint8_t>> encodeWebP(CanvasHandle handle);
   bool writePixels(CanvasHandle handle, int x, int y, int width, int height,
                    const std::vector<std::uint8_t>& pixels, PixelEncoding encoding = PixelEncoding::StraightRGBA8);
   bool replacePixels(CanvasHandle handle, std::vector<std::uint8_t> pixels, PixelEncoding encoding);

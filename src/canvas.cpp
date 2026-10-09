@@ -9,6 +9,7 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include <png.h>
+#include <webp/encode.h>
 
 #include <algorithm>
 #include <chrono>
@@ -1126,6 +1127,25 @@ std::optional<std::vector<std::uint8_t>> CanvasStore::encodePng(
   }
   png_image_free(&image);
   encoded.resize(static_cast<std::size_t>(size));
+  return encoded;
+}
+
+std::optional<std::vector<std::uint8_t>> CanvasStore::encodeWebP(
+    CanvasHandle handle) {
+  auto* surface = lookupContent(handle);
+  if (!surface) return std::nullopt;
+  if (surface->state == ContentState::Deferred && !realizeContent(*surface)) {
+    return std::nullopt;
+  }
+  const auto straight = readPixels(handle, 0, 0, surface->width, surface->height);
+  if (!straight) return std::nullopt;
+  std::uint8_t* output = nullptr;
+  const std::size_t size = WebPEncodeLosslessRGBA(
+      straight->rgba.data(), surface->width, surface->height,
+      surface->width * 4, &output);
+  if (size == 0 || !output) return std::nullopt;
+  std::vector<std::uint8_t> encoded(output, output + size);
+  WebPFree(output);
   return encoded;
 }
 

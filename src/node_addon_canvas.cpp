@@ -354,6 +354,21 @@ napi_value encodeCanvasPng(napi_env env, napi_callback_info info) try {
   return result;
 } catch(const std::exception& error){napi_throw_range_error(env,nullptr,error.what());return nullptr;}
 
+napi_value encodeCanvasWebP(napi_env env, napi_callback_info info) try {
+  auto args = arguments(env, info, 1);
+  const auto encoded = host(env).canvases.encodeWebP(asUint32(env, args.at(0)));
+  if (!encoded) throw std::runtime_error("invalid canvas");
+  void* data = nullptr;
+  napi_value buffer;
+  check(env, napi_create_arraybuffer(env, encoded->size(), &data, &buffer),
+        "cannot allocate WebP buffer");
+  std::memcpy(data, encoded->data(), encoded->size());
+  napi_value result;
+  check(env, napi_create_typedarray(env, napi_uint8_array, encoded->size(),
+    buffer, 0, &result), "cannot create WebP byte array");
+  return result;
+} catch(const std::exception& error){napi_throw_range_error(env,nullptr,error.what());return nullptr;}
+
 template<PixelEncoding encoding>
 napi_value writeCanvasPixels(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 6);
@@ -568,6 +583,7 @@ void registerCanvasBindings(napi_env env, napi_value exports) {
   method(env, canvas, "readPremultipliedPixels", readCanvasPixels<PixelEncoding::PremultipliedRGBA8>);
   method(env, canvas, "writePremultipliedPixels", writeCanvasPixels<PixelEncoding::PremultipliedRGBA8>);
   method(env, canvas, "encodePng", encodeCanvasPng);
+  method(env, canvas, "encodeWebP", encodeCanvasWebP);
   method(env, canvas, "writePixels", writeCanvasPixels<PixelEncoding::StraightRGBA8>);
   method(env, canvas, "blur", blurCanvas);
   method(env, canvas, "blurMv", blurMvCanvas);
