@@ -129,6 +129,23 @@ test('processor helper changes rebuild derivations and remain self-contained', a
   assert.equal(reader(second.portArtifacts)('fixture-multi/composed').toString(), 'changed:active-input');
 });
 
+test('processor cache identity includes source paths exposed to generate', async t => {
+  const f = fixture(t);
+  const processor = path.join(f.root, 'path-sensitive.pmjs-processor.cjs');
+  fs.writeFileSync(processor, `'use strict'; module.exports = {
+    id: 'path-sensitive', version: 1, outputs: [],
+    discover({ files }) { return files.filter(source => source.startsWith('sources/')).map(source => ({ id: 'stable', source })); },
+    generate(bytes, { source }) { return Buffer.from(source + ':' + bytes.toString()); }
+  };`);
+  fs.writeFileSync(f.source('sources/a.bin'), 'same');
+  const descriptors = buildPortPreparation({ gameRoot: f.game, bundleRoot: f.bundle, processors: [processor] });
+  const first = await run(f, descriptors);
+  assert.equal(reader(first.portArtifacts)('path-sensitive/stable').toString(), 'sources/a.bin:same');
+  fs.renameSync(f.source('sources/a.bin'), f.source('sources/b.bin'));
+  const second = await run(f, descriptors);
+  assert.equal(reader(second.portArtifacts)('path-sensitive/stable').toString(), 'sources/b.bin:same');
+});
+
 test('invalid optional declarations do not discard valid processors', async () => {
   const f = fixture(); f.writeSources('active-input', 'declined-input');
   const records = buildPortPreparation({ gameRoot: f.game, bundleRoot: f.bundle, processors: [f.processor] });

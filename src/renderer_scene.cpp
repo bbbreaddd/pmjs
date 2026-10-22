@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 
 namespace pmjs {
@@ -124,11 +125,17 @@ bool Renderer::queueScene(std::uint32_t version, const std::uint32_t* metadata,
       if (!std::isfinite(left) || !std::isfinite(top) ||
           !std::isfinite(right) || !std::isfinite(bottom) ||
           right < left || bottom < top) return false;
+      const double clippedLeft = std::floor(std::max(static_cast<double>(left), 0.0));
+      const double clippedTop = std::floor(std::max(static_cast<double>(top), 0.0));
+      const double clippedRight = std::ceil(std::max(static_cast<double>(right), 0.0));
+      const double clippedBottom = std::ceil(std::max(static_cast<double>(bottom), 0.0));
+      if (clippedLeft > std::numeric_limits<int>::max() ||
+          clippedTop > std::numeric_limits<int>::max() ||
+          clippedRight > std::numeric_limits<int>::max() ||
+          clippedBottom > std::numeric_limits<int>::max()) return false;
       std::array<int, 4> own = {
-        static_cast<int>(std::floor(std::max(left, 0.0F))),
-        static_cast<int>(std::floor(std::max(top, 0.0F))),
-        static_cast<int>(std::ceil(std::max(right, 0.0F))),
-        static_cast<int>(std::ceil(std::max(bottom, 0.0F))),
+        static_cast<int>(clippedLeft), static_cast<int>(clippedTop),
+        static_cast<int>(clippedRight), static_cast<int>(clippedBottom),
       };
       if (state.clipped) {
         own = {std::max(own[0], state.clip[0]),

@@ -1,9 +1,29 @@
 'use strict';
 
 function pluginArrayText(source) {
-  const assignment = source.match(/(?:\bvar\s+)?\$plugins\s*=/);
-  if (!assignment) throw new Error('js/plugins.js does not assign $plugins');
-  let start = assignment.index + assignment[0].length;
+  let scanQuote = null, scanEscaped = false, scanLineComment = false, scanBlockComment = false;
+  let assignment = -1;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index], next = source[index + 1];
+    if (scanLineComment) { if (character === '\n') scanLineComment = false; continue; }
+    if (scanBlockComment) { if (character === '*' && next === '/') { scanBlockComment = false; index += 1; } continue; }
+    if (scanQuote !== null) {
+      if (scanEscaped) scanEscaped = false;
+      else if (character === '\\') scanEscaped = true;
+      else if (character === scanQuote) scanQuote = null;
+      continue;
+    }
+    if (character === '/' && next === '/') { scanLineComment = true; index += 1; continue; }
+    if (character === '/' && next === '*') { scanBlockComment = true; index += 1; continue; }
+    if (character === '"' || character === "'" || character === '`') { scanQuote = character; continue; }
+    if (character === '$' && source.slice(index, index + 8) === '$plugins' &&
+        !/[\w$.]/.test(source[index - 1] || '') && !/[\w$]/.test(source[index + 8] || '')) {
+      const match = source.slice(index + 8).match(/^\s*=/);
+      if (match) { assignment = index + 8 + match[0].length; break; }
+    }
+  }
+  if (assignment < 0) throw new Error('js/plugins.js does not assign $plugins');
+  let start = assignment;
   while (/\s/.test(source[start] || '')) start += 1;
   if (source[start] !== '[') throw new Error('js/plugins.js does not assign a literal $plugins array');
 

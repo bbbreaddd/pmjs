@@ -28,19 +28,29 @@ test('append creates missing files and preserves bytes across encoded and binary
   assert.deepEqual(Buffer.from(storage.readBytes('log.txt')), fs.readFileSync(reference));
 });
 
-test('append propagates read/write failures without erasing existing data', () => {
+test('append propagates direct write failures without erasing existing data', () => {
   const { storage, guest } = fixture();
   guest.writeFileSync('/save/log', 'retained');
   const failure = Object.assign(new Error('storage failed'), { code: 'EIO' });
-  const read = storage.readBytes;
-  storage.readBytes = () => { throw failure; };
-  assert.throws(() => guest.appendFileSync('/save/log', 'new'), error => error === failure);
-  storage.readBytes = read;
   const write = storage.writeBytes;
   storage.writeBytes = () => { throw failure; };
   assert.throws(() => guest.appendFileSync('/save/log', 'new'), error => error === failure);
   storage.writeBytes = write;
   assert.equal(storage.readText('log'), 'retained');
+});
+
+test('append avoids reading existing save files and preserves virtual initial contents', () => {
+  const { storage, guest, context } = fixture();
+  guest.writeFileSync('/save/existing', 'large existing value');
+  const read = storage.readBytes;
+  storage.readBytes = () => { throw new Error('existing file should use direct append'); };
+  guest.appendFileSync('/save/existing', '+tail');
+  storage.readBytes = read;
+  assert.equal(storage.readText('existing'), 'large existing value+tail');
+
+  context.PMJS.config.missingTextFiles = { 'virtual.txt': 'configured initial value' };
+  guest.appendFileSync('/save/virtual.txt', '+tail');
+  assert.equal(storage.readText('virtual.txt'), 'configured initial value+tail');
 });
 
 

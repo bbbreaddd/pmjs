@@ -124,10 +124,28 @@ function createStorage(root) {
       readerFinalizer.register(reader, descriptor, token);
       return reader;
     },
-    writeBytes(relative, contents) {
+    writeBytes(relative, contents, options = {}) {
       mutationGeneration++;
       const destination = resolve(relative);
       makeDirectory(path.dirname(destination));
+      const flag = options.flag || 'w';
+      if (flag === 'wx' || flag === 'ax') {
+        const descriptor = fs.openSync(destination, flag, 0o600);
+        try { fs.writeFileSync(descriptor, contents); fs.fsyncSync(descriptor); }
+        finally { fs.closeSync(descriptor); }
+        syncDirectory(path.dirname(destination));
+        return;
+      }
+      if (flag === 'a') {
+        // Append in place to avoid reading and rewriting large existing save files.
+        // A failed append may leave a partial suffix; replacement writes stay atomic.
+        const descriptor = fs.openSync(destination, 'a', 0o600);
+        try { fs.writeFileSync(descriptor, contents); fs.fsyncSync(descriptor); }
+        finally { fs.closeSync(descriptor); }
+        syncDirectory(path.dirname(destination));
+        return;
+      }
+      if (flag !== 'w') throw Object.assign(new Error(`unsupported write flag: ${flag}`), { code: 'EINVAL' });
       const temporary = `${destination}.tmp-${hostProcess.pid}-${++temporaryId}`;
       let descriptor;
       try {
@@ -322,13 +340,24 @@ function createGameFilesystem(host, root) {
         }
       });
     },
-    writeBytes(relative, contents) {
+    writeBytes(relative, contents, options = {}) {
       const name = normalize(relative);
       return mutate([name], () => {
         if (host.isDirectory(name)) throw error('EISDIR', name);
         parents(name);
         const destination = path.relative(path.join(overlayRoot, 'files'), physical(name));
-        files.writeBytes(destination, contents);
+        const flag = options.flag || 'w';
+        if (flag !== 'w' && flag !== 'wx' && flag !== 'a' && flag !== 'ax') {
+          throw error('EINVAL', name);
+        }
+        if ((flag === 'wx' || flag === 'ax') && host.exists(name)) throw error('EEXIST', name);
+        if (flag === 'a') {
+          const previous = host.readBytes(name);
+          files.writeBytes(destination, previous === null
+            ? contents : Buffer.concat([Buffer.from(previous), Buffer.from(contents)]));
+        } else {
+          files.writeBytes(destination, contents, { flag: flag === 'ax' ? 'wx' : flag });
+        }
       });
     },
     makeDirectory(relative, options = {}) {

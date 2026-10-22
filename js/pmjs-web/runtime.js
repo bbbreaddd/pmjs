@@ -99,20 +99,18 @@ globalThis.screen = {
     return nativeDisplayHeight;
   }
 };
-var nativeViewportUsesWindow = true;
-PMJS.web.usePhysicalViewport = function() { nativeViewportUsesWindow = true; };
 Object.defineProperty(globalThis, 'innerWidth', {
   configurable: true,
   enumerable: true,
   get: function() {
-    return nativeViewportUsesWindow ? nativeWindowWidth : nativeLogicalWidth;
+    return nativeWindowWidth;
   }
 });
 Object.defineProperty(globalThis, 'innerHeight', {
   configurable: true,
   enumerable: true,
   get: function() {
-    return nativeViewportUsesWindow ? nativeWindowHeight : nativeLogicalHeight;
+    return nativeWindowHeight;
   }
 });
 globalThis.moveBy = function() {};

@@ -3,7 +3,7 @@
 const vm = require('node:vm');
 const path = require('node:path');
 
-const COMPILER_VERSION = 'map-demand-v6';
+const COMPILER_VERSION = 'map-demand-v7';
 function mapContract(map, tileset, tileWidth, tileHeight) {
   return { width: map.width, height: map.height, data: map.data, tilesetId: map.tilesetId, scrollType: map.scrollType,
     events: (map.events || []).map(event => event && (event.pages || []).map(page => page.image && page.image.tileId || 0)),
@@ -82,7 +82,7 @@ function compileRpgMap({ map, tileset, Tilemap, mz, tileWidth = 48, tileHeight =
       shadows: map.data.slice(map.width*map.height*4,map.width*map.height*5).some(Boolean),
       tileEvents: (map.events || []).some(event => event && event.pages.some(page => page.image && page.image.tileId)),
       looping: !!map.scrollType },
-    animationPhases: 12, tileWidth, tileHeight,
+    tileWidth, tileHeight,
     geometryDensity: Array.from({ length: map.width*map.height }, (_, index) => {
       let count = 0;
       for (let plane = 0; plane < 4; plane++) count += counts.get(map.data[index+plane*map.width*map.height]) || 0;
@@ -91,8 +91,7 @@ function compileRpgMap({ map, tileset, Tilemap, mz, tileWidth = 48, tileHeight =
     }), geometryWidth: map.width, geometryHeight: map.height,
     loopHorizontal: map.scrollType === 2 || map.scrollType === 3,
     loopVertical: map.scrollType === 1 || map.scrollType === 3,
-    sources: [...demands].map(([source, rectangles]) => ({ source, rectangles: [...rectangles.values()] })),
-    ordinarySources: tileset.tilesetNames.filter(Boolean).map(name => 'img/tilesets/'+name+'.png') };
+    sources: [...demands].map(([source, rectangles]) => ({ source, rectangles: [...rectangles.values()] })) };
 }
 function compileTiledMap(map) {
   if (!map || !Array.isArray(map.tilesets) || !Array.isArray(map.layers)) throw new Error('incomplete Tiled map');
@@ -128,7 +127,7 @@ function compileTiledMap(map) {
     const tile = Array.isArray(definitions) ? definitions.find(tile => tile.id === gid-set.firstgid) : definitions[gid-set.firstgid];
     for (const frame of tile && tile.animation || []) ids.add(set.firstgid+frame.tileid);
   }
-  const demands = new Map(), ordinarySources = [];
+  const demands = new Map();
   for (const set of tilesets) if (!set.image || !set.columns || !set.tilewidth || !set.tileheight || set.tileoffset ||
       set.objectalignment && set.objectalignment !== 'unspecified') preserved.add(set);
   const sourcePath = set => path.posix.normalize('img/tilesets/'+path.posix.basename(set.image.replaceAll('\\', '/')));
@@ -138,7 +137,6 @@ function compileTiledMap(map) {
       preserved.add(set); continue;
     }
     const source = sourcePath(set);
-    ordinarySources.push(source);
     if (preservedImages.has(source)) continue;
     const rectangles = demands.get(source) || new Map();
     for (const gid of [...ids].sort((a, b) => a-b)) if (tileset(gid) === set) {
@@ -149,16 +147,16 @@ function compileTiledMap(map) {
     }
     if (rectangles.size) demands.set(source, rectangles);
   }
-  return { renderer: 'tiled', contract: map, animationPhases: 'authored', tileWidth: map.tilewidth,
+  return { renderer: 'tiled', contract: map, tileWidth: map.tilewidth,
     features: { animation: tilesets.some(set => Object.values(set.tiles || {}).some(tile => tile.animation)),
       priority: map.layers.some(layer => layer.properties && layer.properties.priority),
       looping: false, objects: map.layers.some(layer => layer.objects && layer.objects.length),
       chunks: map.layers.some(layer => layer.chunks && layer.chunks.length) },
-    tileHeight: map.tileheight, ordinarySources,
-    preservedSources: tilesets.filter(set => preserved.has(set)).map(set => set.image),
+    tileHeight: map.tileheight,
     sources: [...demands].map(([source, rectangles]) => ({ source, rectangles: [...rectangles.values()] })) };
 }
 function geometryEstimate(demand, width, height) {
+  if (Number.isFinite(demand.geometryBytes)) return demand.geometryBytes;
   const bytesPerQuad = 500;
   const columns = Math.ceil(width/demand.tileWidth)+3, rows = Math.ceil(height/demand.tileHeight)+3;
   if (!demand.geometryDensity) return columns*rows*16*bytesPerQuad;

@@ -261,7 +261,7 @@ async function prepareForRun({ gameRoot, bundleRoot, descriptors, adapters = [],
         const id = desc.id + '/' + entry.id;
         try {
           const input = sourcePath(entry.source), inputHash = await files.hash(input, 'port-input');
-          const key = hash(Buffer.from(JSON.stringify([identity, entry.id, inputHash, discoveryInputs.map(input => [input.source, input.hash])])));
+          const key = hash(Buffer.from(JSON.stringify([identity, entry.id, entry.source, inputHash, discoveryInputs.map(input => [input.source, input.hash])])));
           let directory = session.directory('port/' + desc.id, key);
           let output = path.join(directory, 'data.pma1');
           const previous = session.readManifest(directory);

@@ -156,6 +156,11 @@ async function openPreparation({ gameRoot, cacheRoot, native, verifyHashes = fal
       async checkpoint() {
         if (!stateDirty) return true;
         const serializedData = JSON.stringify(data);
+        if (Buffer.byteLength(serializedData) + 128 > maximumStateBytes) {
+          if (!session.persistenceWarning) logger.warn('[pmjs] preparation state exceeds the storage budget; keeping the previous checkpoint');
+          session.persistenceWarning = true;
+          return false;
+        }
         const current = checksumText(serializedData);
         if (current === lastChecksum) { stateDirty = false; return true; }
         const temporary = filename + '.stage-' + crypto.randomBytes(6).toString('hex');

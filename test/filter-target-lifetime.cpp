@@ -15,8 +15,10 @@
 
 namespace {
 bool failFramebuffer = false;
+int failFramebufferStatusOn = 0;
 bool failTextureAllocation = false;
 bool failFramebufferAllocation = false;
+int failShaderCompilationOn = 0;
 bool recordAllocations = false;
 std::vector<GLuint> textures, framebuffers, renderbuffers;
 }
@@ -24,13 +26,20 @@ std::vector<GLuint> textures, framebuffers, renderbuffers;
 // Keep real driver rendering while controlling allocation failure and teardown checks.
 extern "C" {
 GLenum glCheckFramebufferStatus(GLenum target) {
-  if (failFramebuffer) {
+  if (failFramebuffer || (failFramebufferStatusOn > 0 && --failFramebufferStatusOn == 0)) {
     failFramebuffer = false;
     return GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT;
   }
   static const auto real = reinterpret_cast<GLenum (*)(GLenum)>(dlsym(RTLD_NEXT, "glCheckFramebufferStatus"));
   assert(real);
   return real(target);
+}
+void glGetShaderiv(GLuint shader, GLenum pname, GLint* params) {
+  static const auto real = reinterpret_cast<void (*)(GLuint, GLenum, GLint*)>(dlsym(RTLD_NEXT, "glGetShaderiv"));
+  assert(real);
+  real(shader, pname, params);
+  if (pname == GL_COMPILE_STATUS && failShaderCompilationOn > 0 &&
+      --failShaderCompilationOn == 0) *params = GL_FALSE;
 }
 void glGenTextures(GLsizei count, GLuint* names) {
   if (failTextureAllocation) {
@@ -62,6 +71,13 @@ void glGenFramebuffers(GLsizei count, GLuint* names) {
 }
 }
 
+void assertNoRendererObjects() {
+  for (auto name : textures) assert(!glIsTexture(name));
+  for (auto name : framebuffers) assert(!glIsFramebuffer(name));
+  for (auto name : renderbuffers) assert(!glIsRenderbuffer(name));
+  assert(glGetError() == GL_NO_ERROR);
+}
+
 int main() {
   setenv("PMJS_GRAPHICS_DIAGNOSTICS", "1", 1);
   pmjs::Platform platform(32, 32, "Filter allocation lifetime");
@@ -70,8 +86,41 @@ int main() {
   const auto image = images.createRgba(32, 32, pixels.data(), true);
   assert(image);
   recordAllocations = true;
+  failShaderCompilationOn = 3;
+  bool shaderFailed = false;
+  try { pmjs::Renderer failed(32, 32, images); }
+  catch (const std::runtime_error&) { shaderFailed = true; }
+  assert(shaderFailed && failShaderCompilationOn == 0);
+  assertNoRendererObjects();
+
+  failFramebuffer = true;
+  bool constructorFailed = false;
+  try { pmjs::Renderer failed(32, 32, images); }
+  catch (const std::runtime_error&) { constructorFailed = true; }
+  assert(constructorFailed && !failFramebuffer);
+  assertNoRendererObjects();
+
+  failFramebufferStatusOn = 2;
+  bool targetFailed = false;
+  try { pmjs::Renderer failed(32, 32, images); }
+  catch (const std::runtime_error&) { targetFailed = true; }
+  assert(targetFailed && failFramebufferStatusOn == 0);
+  assertNoRendererObjects();
   {
     pmjs::Renderer renderer(32, 32, images);
+    {
+      using namespace pmjs::scene_packet;
+      std::array<std::uint32_t, metadataStride> metadata{};
+      metadata[0] = static_cast<std::uint32_t>(NodeKind::container);
+      metadata[1] = noParent;
+      metadata[5] = hasClipRectangle;
+      std::array<float, valueStride> values{};
+      values[0] = values[3] = values[6] = 1;
+      values[19] = values[20] = 1.0e30F;
+      renderer.beginFrame();
+      assert(!renderer.queueScene(version, metadata.data(), metadata.size(),
+        values.data(), values.size(), 1));
+    }
     const auto program = renderer.createFilterProgram(
       "varying vec2 vTextureCoord; uniform sampler2D uSampler; void main(){gl_FragColor=texture2D(uSampler,vTextureCoord);}",
       "attribute vec2 aVertexPosition; attribute vec2 aTextureCoord; uniform mat3 projectionMatrix; varying vec2 vTextureCoord; void main(){gl_Position=vec4((projectionMatrix*vec3(aVertexPosition,1.0)).xy,0,1);vTextureCoord=aTextureCoord;}");
@@ -133,8 +182,5 @@ int main() {
   }
   recordAllocations = false;
   assert(!textures.empty() && !framebuffers.empty());
-  for (auto name : textures) assert(!glIsTexture(name));
-  for (auto name : framebuffers) assert(!glIsFramebuffer(name));
-  for (auto name : renderbuffers) assert(!glIsRenderbuffer(name));
-  assert(glGetError() == GL_NO_ERROR);
+  assertNoRendererObjects();
 }

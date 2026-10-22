@@ -298,6 +298,29 @@ test('PML4 v3 indexed pages validate and reuse from cache', async () => {
   assert.equal(warm.hits, 1);
 });
 
+test('portable page metadata never mutates a verified manifest during a checkpoint', async () => {
+  const f = fixture();
+  let result = await prepareAssets(f);
+  result.releaseCacheLease?.();
+  const descriptor = structuredClone(result.entries[0].descriptor);
+  descriptor.pages[0].storage = { version: 1, width: 1, height: 1, channels: 4,
+    paletteBits: 0, source: [0, 1, 2, 3], swizzle: [0, 1, 2, 3] };
+  const sourceHash = crypto.createHash('sha256').update(PNG).digest('hex');
+  f.portableIndex = { images: [{ source: f.source, sourceHash, recipe: null,
+    encryptionSettingsSha256: null, descriptor, outputs: [{
+      path: 'assets/images/' + 'a'.repeat(64) + '/page-0.png', hash: sourceHash
+    }] }] };
+  fs.writeFileSync(path.join(f.gameRoot, 'img/pictures/b.png'), PNG);
+  result = await prepareAssets(f);
+  result.releaseCacheLease?.();
+  assert.equal(result.generated, 1, 'the added image forces a durable checkpoint');
+  result = await prepareAssets(f);
+  result.releaseCacheLease?.();
+  assert.equal(result.generated, 0);
+  assert.equal(result.hits, 2);
+  assert.equal(f.jobs, 2);
+});
+
 test('unchanged sources and pages reuse checksums; explicit verification reads them again', async () => {
   const f = fixture();
   await prepareAssets(f);

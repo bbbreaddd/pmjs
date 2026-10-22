@@ -38,14 +38,16 @@ function pmjsReportEventError(error) {
 }
 
 function pmjsInvokeEventHandler(target, handler, event) {
-  if (typeof handler !== 'function') return;
+  if (typeof handler !== 'function') return undefined;
   try {
     var result = handler.call(target, event);
     if (PMJS.tasks && typeof PMJS.tasks.trackGuestPromise === 'function') {
       PMJS.tasks.trackGuestPromise(result, 'browser');
     }
+    return result;
   } catch (error) {
     pmjsReportEventError(error);
+    return undefined;
   }
 }
 
@@ -97,10 +99,7 @@ EventTarget.prototype.dispatchEvent = function(event) {
   event.target = event.target || this;
   event.currentTarget = this;
   if (!event._pmjsHandlerInvoked && !this._eventHandlers[event.type]) {
-    var returned;
-    try {
-      if (typeof this['on' + event.type] === 'function') returned = this['on' + event.type].call(this, event);
-    } catch (error) { pmjsReportEventError(error); }
+    var returned = pmjsInvokeEventHandler(this, this['on' + event.type], event);
     if (returned === false && typeof event.preventDefault === 'function') event.preventDefault();
   }
   for (var index = 0; index < listeners.length; index++) {

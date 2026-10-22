@@ -164,6 +164,25 @@ test('append copies up original files and preserves the merged contents across r
   assert.equal(host.readText('data/new.log'), 'created');
 });
 
+test('game write flags apply to original and overlay files', t => {
+  const { guest, host, restart } = fixture(t);
+  assert.throws(() => guest.writeFileSync('data/Original.txt', 'changed', { flag: 'wx' }),
+    { code: 'EEXIST' });
+  assert.equal(host.readText('data/Original.txt'), 'original');
+
+  guest.writeFileSync('data/Original.txt', '+appended', { flag: 'a' });
+  assert.equal(host.readText('data/Original.txt'), 'original+appended');
+  assert.equal(restart().readText('data/Original.txt'), 'original+appended');
+
+  guest.writeFileSync('data/new-exclusive.txt', 'created', { flag: 'wx' });
+  assert.throws(() => guest.writeFileSync('data/new-exclusive.txt', 'overwrite', { flag: 'wx' }),
+    { code: 'EEXIST' });
+  guest.writeFileSync('data/new-exclusive.txt', '+tail', { flag: 'a' });
+  assert.equal(host.readText('data/new-exclusive.txt'), 'created+tail');
+  assert.throws(() => guest.writeFileSync('data/Original.txt', 'x', { flag: 'unsupported' }),
+    { code: 'EINVAL' });
+});
+
 test('unlink hides original and copied-up files persistently, then allows recreation', t => {
   const { guest, host, restart, gameRoot } = fixture(t);
   guest.unlinkSync('data/Original.txt');

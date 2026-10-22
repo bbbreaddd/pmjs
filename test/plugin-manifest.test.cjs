@@ -30,3 +30,14 @@ globalThis.pluginManifestSideEffect = true;`);
   assert.throws(() => parsePluginManifest('var $plugins = [makePlugin()];'), /unsupported generated plugin manifest/);
   delete globalThis.pluginManifestSideEffect;
 });
+
+test('plugin assignment search ignores comment and string examples', () => {
+  const source = [
+    '// Example: $plugins = []',
+    'var note = "$plugins = []";',
+    'var template = `$plugins = []`;',
+    'var object = { $plugins: [] };',
+    'var $plugins = [{"name":"Actual","status":true}];'
+  ].join('\n');
+  assert.deepEqual(parsePluginManifest(source).plugins.map(plugin => plugin.name), ['Actual']);
+});

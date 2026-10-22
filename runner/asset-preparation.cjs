@@ -633,19 +633,20 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
               settingsHash: settings.hash, fileHash: manifest.outputs[manifest.decrypted] });
             result.cacheBytes += (await fsp.stat(path.join(directory, manifest.decrypted))).size;
           }
-          if (manifest.descriptor && indexed?.descriptor) {
-            manifest.descriptor = { ...manifest.descriptor, pages: manifest.descriptor.pages.map(page => {
+          let installDescriptor = manifest.descriptor;
+          if (installDescriptor && indexed?.descriptor) {
+            installDescriptor = { ...installDescriptor, pages: installDescriptor.pages.map(page => {
               const known = indexed.descriptor.pages.find(p => p.path === page.path && p.width === page.width && p.height === page.height);
               const output = indexed.outputs?.find(o => path.basename(o.path) === page.path);
               return known?.storage && output?.hash === manifest.outputs[page.path]
                 ? { ...page, storage: known.storage } : page;
             }) };
           }
-          if (manifest.descriptor) {
-            for (const page of manifest.descriptor.pages) result.cacheBytes += (await fsp.stat(path.join(directory, page.path))).size;
-            result.entries.push({ source: logicalSource, directory, descriptor: manifest.descriptor, sourceHash, sourceIdentity,
+          if (installDescriptor) {
+            for (const page of installDescriptor.pages) result.cacheBytes += (await fsp.stat(path.join(directory, page.path))).size;
+            result.entries.push({ source: logicalSource, directory, descriptor: installDescriptor, sourceHash, sourceIdentity,
               backingHash: manifest.decrypted ? manifest.outputs[manifest.decrypted] : sourceHash,
-              pageHashes: manifest.descriptor.pages.map(page => manifest.outputs[page.path]),
+              pageHashes: installDescriptor.pages.map(page => manifest.outputs[page.path]),
               ...(encrypted ? { decryptedFile: path.join(directory, manifest.decrypted) } : {}) });
           } else if (!manifest.decrypted) { result.fallback += 1; }
         }

@@ -106,6 +106,20 @@ test('large state checkpoints use bounded write buffers and preserve Unicode at 
   assert.ok(largestWrite <= 256 * 1024, 'checkpoint writes must not allocate a full-state byte buffer');
 });
 
+test('checkpoints above the read budget keep the last valid state', async t => {
+  const f = fixture(), session = await openPreparation({ ...f.options });
+  t.after(() => session.close());
+  session.markDirty();
+  assert.equal(await session.checkpoint(), true);
+  const filename = path.join(session.root, 'preparation-state.json');
+  const previous = fs.readFileSync(filename);
+  session.data.failures.large = 'x'.repeat(48 * 1024 * 1024);
+  session.markDirty();
+  assert.equal(await session.checkpoint(), false);
+  assert.deepEqual(fs.readFileSync(filename), previous);
+  assert.ok(f.warnings.some(message => message.includes('exceeds the storage budget')));
+});
+
 test('successful finalization checkpoints once and close does not serialize state again', async t => {
   const f = fixture(), session = await openPreparation({ ...f.options });
   let serializations = 0;

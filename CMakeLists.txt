@@ -196,6 +196,13 @@ if(BUILD_TESTING)
   add_test(NAME build-node-sdk COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/node-sdk.py")
   add_test(NAME build-provenance COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/build-provenance.py")
 
+  foreach(PMJS_NATIVE_JS_TEST yanfly-core-text srd-shaking-text)
+    add_test(NAME native-${PMJS_NATIVE_JS_TEST} COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE} --test
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/${PMJS_NATIVE_JS_TEST}.test.cjs")
+    set_tests_properties(native-${PMJS_NATIVE_JS_TEST} PROPERTIES
+      ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy;PMJS_NATIVE_ADDON=$<TARGET_FILE:pmjs_native>")
+  endforeach()
+
   function(pmjs_add_cpp_test TARGET TEST_NAME)
     add_executable(${TARGET} ${ARGN})
     target_include_directories(${TARGET} PRIVATE src)

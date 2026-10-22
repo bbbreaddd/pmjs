@@ -197,9 +197,28 @@ if (process.env.PMJS_TONE_BOUNDARY_JSON) {
     materializedScene: separate.sceneCenter,
   }));
 }
+const distributiveMatrix = matrix();
+distributiveMatrix[0] = distributiveMatrix[6] = distributiveMatrix[12] = 0.5;
+const multiSpriteFilter = [filterBegin(distributiveMatrix), sprite(backdrop),
+  sprite(foreground, 0.5), record(7)];
+const multiSpriteInline = render(multiSpriteFilter);
+const multiSpriteFallback = render([...multiSpriteFilter.slice(0, -1),
+  sprite(transparent, 1, 1), record(7)]);
+assert.equal(multiSpriteInline.matrixPasses, 0,
+  'eligible multi-sprite color matrix should remain inline');
+assert.equal(multiSpriteFallback.matrixPasses, 1,
+  'additive transparent draw should force the reference filter pass');
+let multiSpriteDelta = 0;
+for (let index = 0; index < multiSpriteInline.pixels.length; index++) {
+  multiSpriteDelta = Math.max(multiSpriteDelta, Math.abs(
+    multiSpriteInline.pixels[index] - multiSpriteFallback.pixels[index]));
+}
+assert.ok(multiSpriteDelta <= 2,
+  `multi-sprite inline color matrix pixel delta ${multiSpriteDelta}`);
+console.log(`multi-sprite inline color matrix pixel delta ${multiSpriteDelta}`);
+
 native.canvas.release(backdrop.handle);
 native.canvas.release(foreground.handle);
-
 native.canvas.release(transparent.handle);
 native.canvas.release(white.handle);
 native.canvas.release(red.handle);

@@ -1037,15 +1037,6 @@ std::vector<std::uint8_t> Renderer::captureDrawableRgba(AlphaMode alphaMode) {
   return pixels;
 }
 
-std::vector<std::uint8_t> Renderer::renderToRgba(AlphaMode alphaMode) {
-  const auto savedClearColor = clearColor_;
-  clearColor_ = {0, 0, 0, 0};
-  render();
-  auto pixels = captureSceneRgba(alphaMode);
-  clearColor_ = savedClearColor;
-  return pixels;
-}
-
 std::vector<std::uint8_t> Renderer::renderToRgba(int width, int height, ImageHandle initialImage, AlphaMode alphaMode) {
   const int savedWidth = width_;
   const int savedHeight = height_;

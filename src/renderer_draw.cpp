@@ -505,8 +505,7 @@ void Renderer::renderScene() {
            std::abs(matrix[18] - 1.0F) <= epsilon &&
            std::abs(matrix[19]) <= epsilon;
   };
-  const auto distributesOverSourceOver = [&](
-      const std::array<float, 21>& matrix) {
+  const auto distributesOverSourceOver = [&](const std::array<float, 21>& matrix) {
     constexpr float epsilon = 0.000001F;
     return preservesAlpha(matrix) &&
            std::abs(matrix[3]) <= epsilon &&

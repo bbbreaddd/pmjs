@@ -84,6 +84,34 @@ Renderer::Renderer(int width, int height, ImageStore& images)
     : width_(width), height_(height), presentationWidth_(width),
       presentationHeight_(height), queueWidth_(width), queueHeight_(height),
       images_(images) {
+  struct GraphicsBindings {
+    GLint program = 0, vertexArray = 0, arrayBuffer = 0, texture = 0;
+    GLint renderbuffer = 0, readFramebuffer = 0, drawFramebuffer = 0, activeTexture = GL_TEXTURE0;
+  } bindings;
+  glGetIntegerv(GL_CURRENT_PROGRAM, &bindings.program);
+  glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &bindings.vertexArray);
+  glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &bindings.arrayBuffer);
+  glGetIntegerv(GL_TEXTURE_BINDING_2D, &bindings.texture);
+  glGetIntegerv(GL_RENDERBUFFER_BINDING, &bindings.renderbuffer);
+  glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &bindings.readFramebuffer);
+  glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &bindings.drawFramebuffer);
+  glGetIntegerv(GL_ACTIVE_TEXTURE, &bindings.activeTexture);
+  const auto cleanupOnFailure = [this, bindings] {
+    releaseResources(true);
+    glUseProgram(static_cast<GLuint>(bindings.program));
+    glBindVertexArray(static_cast<GLuint>(bindings.vertexArray));
+    glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(bindings.arrayBuffer));
+    glActiveTexture(static_cast<GLenum>(bindings.activeTexture));
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(bindings.texture));
+    glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(bindings.renderbuffer));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(bindings.readFramebuffer));
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(bindings.drawFramebuffer));
+  };
+  struct ConstructorGuard {
+    decltype(cleanupOnFailure)& cleanup;
+    bool active = true;
+    ~ConstructorGuard() { if (active) cleanup(); }
+  } guard{cleanupOnFailure};
   const auto* graphicsRenderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
   softwareSceneDepth_ = graphicsRenderer && std::string(graphicsRenderer).find("llvmpipe") != std::string::npos;
   const char* tileTextures = std::getenv("PMJS_TILE_BATCH_TEXTURES");
@@ -269,6 +297,7 @@ Renderer::Renderer(int width, int height, ImageStore& images)
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  guard.active = false;
 }
 
 void Renderer::queryFilterProgramUniforms() {
@@ -701,7 +730,17 @@ bool Renderer::releaseFilterPlan(std::uint32_t handle) {
   return filterPlans_.erase(handle) != 0;
 }
 
-Renderer::~Renderer() {
+Renderer::~Renderer() { releaseResources(); }
+
+void Renderer::releaseResources(bool constructorFailure) {
+  if (constructorFailure) {
+    glUseProgram(0);
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindRenderbuffer(GL_RENDERBUFFER, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  }
   discardCommandsFrom(0);
   filterPlanLifetime_.reset();
   glDeleteVertexArrays(1, &customFilterVertexArray_);

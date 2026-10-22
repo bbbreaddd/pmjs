@@ -116,8 +116,6 @@ struct RenderCommand {
 
 struct FramePacket {
   std::vector<RenderCommand> commands;
-
-  void clear() { commands.clear(); }
 };
 
 // `integer` falls back to `fit` when shrinking (floor of sub-1 is zero).
@@ -315,7 +313,6 @@ class Renderer {
   std::vector<std::uint8_t> captureSceneRawPremultiplied();
   // Window backbuffer readback, valid only before swap.
   std::vector<std::uint8_t> captureDrawableRgba(AlphaMode alphaMode = AlphaMode::straight);
-  std::vector<std::uint8_t> renderToRgba(AlphaMode alphaMode = AlphaMode::straight);
   std::vector<std::uint8_t> renderToRgba(int width, int height, ImageHandle initialImage = 0, AlphaMode alphaMode = AlphaMode::straight);
   std::optional<ImageInfo> captureOffscreenImage();
   std::optional<ImageInfo> renderToImage(int width, int height, AlphaMode alphaMode = AlphaMode::straight);
@@ -468,6 +465,7 @@ class Renderer {
                            int viewportHeight, bool screenPresentation = false);
   void materializeToneComposition();
   void recomputePresentation();
+  void releaseResources(bool constructorFailure = false);
   static PresentScaleMode presentScaleModeFromEnvironment();
   static bool presentFilterOverrideFromEnvironment(PresentFilter* filter);
 

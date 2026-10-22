@@ -252,12 +252,16 @@ var fsModule = {
     var host = writable !== null ? NativeHost.storage : NativeHost.fs;
     if (!host) throw new Error('EACCES: ' + path);
     var encoding = typeof options === 'string' ? options : options && options.encoding;
+    var flag = typeof options === 'object' && options ? options.flag : 'w';
+    if (flag !== undefined && ['w', 'wx', 'a', 'ax'].indexOf(flag) < 0) {
+      throw Object.assign(new Error('unsupported filesystem write flag: ' + flag), { code: 'EINVAL' });
+    }
     var bytes = ArrayBuffer.isView(contents)
       ? Buffer.from(contents.buffer, contents.byteOffset, contents.byteLength)
       : Buffer.from(String(contents), encoding || 'utf8');
     var resolved = writable !== null ? writable : gameReadPath(path);
-    if (typeof host.writeBytes === 'function') host.writeBytes(resolved, bytes);
-    else if (writable !== null && typeof contents === 'string' && (!encoding || encoding === 'utf8')) {
+    if (typeof host.writeBytes === 'function') host.writeBytes(resolved, bytes, { flag: flag || 'w' });
+    else if (writable !== null && (flag || 'w') === 'w' && typeof contents === 'string' && (!encoding || encoding === 'utf8')) {
       host.writeText(resolved, contents);
     } else throw new Error('filesystem byte writes are unavailable');
   },
@@ -268,16 +272,24 @@ var fsModule = {
     deliverNodeCallback(function() { if (callback) return callback(error); });
   },
   appendFileSync: function(path, contents, options) {
-    var previous;
-    try { previous = fsReadContents(path); } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-      previous = Buffer.alloc(0);
-    }
     var encoding = typeof options === 'string' ? options : options && options.encoding;
     var bytes = ArrayBuffer.isView(contents)
       ? Buffer.from(contents.buffer, contents.byteOffset, contents.byteLength)
       : Buffer.from(String(contents), encoding || 'utf8');
-    fsModule.writeFileSync(path, Buffer.concat([previous, bytes]));
+    var writable = writablePath(path);
+    if (writable !== null && NativeHost.storage && typeof NativeHost.storage.writeBytes === 'function') {
+      if (fsModule.existsSync(path)) {
+        NativeHost.storage.writeBytes(writable, bytes, { flag: 'a' });
+        return;
+      }
+      var initial = Buffer.alloc(0);
+      try { initial = fsReadContents(path); } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
+      fsModule.writeFileSync(path, Buffer.concat([initial, bytes]));
+      return;
+    }
+    fsModule.writeFileSync(path, bytes, { flag: 'a' });
   },
   mkdirSync: function(path, options) {
     var writable = writablePath(path);

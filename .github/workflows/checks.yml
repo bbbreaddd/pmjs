@@ -1,0 +1,40 @@
+name: Checks
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  source:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install native test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build pkg-config python3 clang-20 llvm-20 \
+            libnode-dev libsdl2-dev libegl1-mesa-dev libgles2-mesa-dev \
+            libpng-dev libwebp-dev zlib1g-dev libjpeg-dev libfreetype-dev libharfbuzz-dev \
+            libavformat-dev libavcodec-dev libavutil-dev libswresample-dev libswscale-dev \
+            xvfb xauth
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run licensing
+      - run: npm test
+      - run: python3 test/portmaster-package.py
+      - name: Build and run native regressions
+        run: |
+          cmake --preset dev
+          cmake --build --preset dev --target pmjs_native pmjs-filter-target-lifetime-test --parallel 4
+          ctest --preset dev -R '^(native-yanfly-core-text|native-srd-shaking-text|native-filter-target-lifetime)$'

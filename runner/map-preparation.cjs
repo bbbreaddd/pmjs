@@ -340,6 +340,14 @@ async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, heig
           demand.contractHash = identity(demand.contract);
           delete demand.contract;
         }
+        if (demand.geometryDensity) {
+          demand.geometryBytes = geometryEstimate(demand, width, height);
+          delete demand.geometryDensity;
+          delete demand.geometryWidth;
+          delete demand.geometryHeight;
+          delete demand.loopHorizontal;
+          delete demand.loopVertical;
+        }
         compilations[refusalKey] = { ...demand };
         mapInputs[filename] = { tiled, dependencies, contractHash: demand.contractHash, compilationKey: refusalKey };
         row.renderer = demand.renderer;
@@ -469,7 +477,7 @@ async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, heig
           source: inputs[i].source, snapshot: inputs[i].snapshot, sourceHash: inputs[i].sourceHash, sourceIdentity: inputs[i].sourceIdentity }));
         entries.push({ identity: key, directory, descriptor, outputs: manifest.outputs });
         result.index[mapId] = { identity: key, renderer: demand.renderer, contractHash: demand.contractHash,
-          animationPhases: demand.animationPhases, sources: inputs.map(input => input.source),
+          sources: inputs.map(input => input.source),
           tileWidth: demand.tileWidth, tileHeight: demand.tileHeight };
         row.selected = true; ++result.selected;
         session.outcome('map:' + filename, outcome);

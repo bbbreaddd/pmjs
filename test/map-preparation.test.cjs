@@ -124,6 +124,10 @@ test('ordinary map preparation reuses shared dependency checks; full verificatio
 });
 test('warm compilation preserves descriptors and map contracts; changed and damaged inputs rebuild demand',async t=>{
   const f=fixture(t),cold=await prepareMaps(f);
+  const compiledDemand = Object.values(readIndex(f).compilations)[0];
+  assert.ok(Number.isFinite(compiledDemand.geometryBytes));
+  assert.equal(Object.hasOwn(compiledDemand, 'geometryDensity'), false);
+  assert.equal(Object.hasOwn(compiledDemand, 'geometryWidth'), false);
   const descriptor=structuredClone(f.installed[0].descriptor);
   const read = f.native.fs.readBytes;
   f.native.fs.readBytes = logical => {

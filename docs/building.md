@@ -108,6 +108,7 @@ npm ci
 npm run lint
 npm run licensing
 npm test
+python3 test/portmaster-package.py
 ```
 
 `./build.sh` makes a runnable installation. A public release also needs
