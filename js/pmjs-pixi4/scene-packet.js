@@ -78,6 +78,13 @@ function nativeSceneNodeRejected(node, particleContext) {
     typeof node._openness === 'number' && node._openness <= 0;
 }
 
+// writeNativeSceneNode emits nothing for these children: rejected nodes (hidden, transparent or
+// closed) other than rect tile layers, which bypass rejection. Containers can hold hundreds of hidden
+// children (pooled sprites), so the child loops skip them without starting a node.
+function nativeSceneSkipsChild(child) {
+  return nativeSceneNodeRejected(child, null) && !nativeIsRectTileLayer(child);
+}
+
 function nativeParticleFrameContext(container) {
   var batchSize = Math.max(1, Number(container._batchSize) || 16384);
   var properties = container.__pmjsParticleProperties;
@@ -751,12 +758,14 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
   var particleFrame = particleContainer ? nativeParticleFrameContext(node) : null;
   for (var index = 0; index < childLimit; index++) {
     if (nativeSceneTraversesChild(kind, node, node.children[index])) {
+      if (!particleFrame && nativeSceneSkipsChild(node.children[index])) continue;
       if (nativeScenePlainSpriteSegments && !particleFrame && childLimit - index >= 4 &&
           PMJS.optimizations.isEnabled('scene.plain-sprite-segment')) {
         var segment = [];
         var segmentIndex = index;
         while (segmentIndex < childLimit &&
             nativeSceneTraversesChild(kind, node, node.children[segmentIndex])) {
+          if (nativeSceneSkipsChild(node.children[segmentIndex])) { segmentIndex++; continue; }
           var binding = nativePlainSpriteBinding(node.children[segmentIndex]);
           if (!binding) break;
           segment.push(binding);
