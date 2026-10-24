@@ -248,9 +248,13 @@ async function openPreparation({ gameRoot, cacheRoot, native, verifyHashes = fal
         for (const [file, receipt] of Object.entries(session.files.receipts)) {
           if (data.files[file] !== receipt) { data.files[file] = receipt; stateDirty = true; }
         }
-        for (const file of Object.keys(data.files)) if (!session.files.receipts[file]) {
-          delete data.files[file]; stateDirty = true;
-        }
+        // A session that ran only some phases cannot see the other phases' files. Pruning
+        // their receipts here would make the next boot that runs those phases re-hash every
+        // input and output (1.3 GB on OMORI), so only a full image+map session prunes.
+        if (session.phaseStates.get('images') === 'completed' && session.phaseStates.get('maps') === 'completed')
+          for (const file of Object.keys(data.files)) if (!session.files.receipts[file]) {
+            delete data.files[file]; stateDirty = true;
+          }
         const committed = await session.checkpoint();
         if (!offline) {
           const previousLease = installedLeases.get(native.assets);
