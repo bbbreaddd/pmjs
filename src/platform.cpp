@@ -326,12 +326,16 @@ Platform::Platform(int width, int height, std::string title) {
     {"SDL_VIDEO_GL_DRIVER", reinterpret_cast<const void*>(glGetString)}
   };
   for (const auto& [name, symbol] : providers) {
+    const bool inherited = std::getenv(name) != nullptr;
     Dl_info info{};
-    if (!std::getenv(name) && dladdr(symbol, &info) && info.dli_fname)
+    bool pinned = false;
+    if (!inherited && dladdr(symbol, &info) && info.dli_fname) {
       SDL_setenv(name, info.dli_fname, 0);
-    if (environmentFlag("PMJS_GRAPHICS_DIAGNOSTICS"))
-      Log() << "[pmjs-platform] " << name << '='
-                << (std::getenv(name) ? std::getenv(name) : "default") << '\n';
+      pinned = true;
+    }
+    const char* origin = inherited ? "environment" : pinned ? "pinned by PMJS" : "default";
+    Log() << "[pmjs-platform] " << name << "=\""
+              << (std::getenv(name) ? std::getenv(name) : "default") << "\" (" << origin << ")\n";
   }
   // The renderer calls EGL/GLES directly; an X11 GLX context uses another API.
   SDL_SetHintWithPriority("SDL_VIDEO_X11_FORCE_EGL", "1", SDL_HINT_DEFAULT);
@@ -866,6 +870,9 @@ void Platform::printGraphicsDiagnostics() const {
             << "\" version=\"" << (eglVersion ? eglVersion : "unknown")
             << "\" config=" << configId << " min_swap=" << minSwap
             << " max_swap=" << maxSwap << '\n';
+  const SDL_GLContext sdlContext = SDL_GL_GetCurrentContext();
+  Log() << "[pmjs] gl-context sdl=" << (sdlContext ? "current" : "none")
+            << " egl=" << (context != EGL_NO_CONTEXT ? "visible" : "hidden") << '\n';
 
   std::ostringstream drivers;
   for (int index = 0; index < SDL_GetNumVideoDrivers(); ++index) {
