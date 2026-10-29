@@ -374,6 +374,12 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
           nativeSceneRootUsesWorldTransform ? node.worldAlpha : node.alpha,
         null, 0, null);
       writeNativeSceneNode(cachedSprite, cacheParent, null, null, null, 1);
+      if (PMJS.mv && PMJS.mv.pictureLayerCache) {
+        var livePictures = PMJS.mv.pictureLayerCache.tail(node);
+        for (var pictureIndex = 0; pictureIndex < livePictures.length; pictureIndex++) {
+          writeNativeSceneNode(livePictures[pictureIndex], cacheParent);
+        }
+      }
       return;
     }
     PMJS.compat.hit('render.cacheAsBitmap',

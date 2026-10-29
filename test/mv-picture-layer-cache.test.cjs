@@ -143,3 +143,71 @@ test('guest caches and unsupported sources retain ordinary rendering; scene chan
   f.renderer.renderingToScreen=true; f.cache.prepare({},f.renderer);
   assert.equal(f.layer._cacheAsBitmap,false);
 });
+
+test('moving foreground pictures retain a stable background snapshot and live guest children',()=>{
+  const f=fixture();
+  const marker=new f.layer.constructor();
+  marker.texture={...f.layer.children[0].texture,
+    _frame:{x:0,y:0,width:32,height:48}};
+  f.layer.children.push(marker);
+  const children=f.layer.children;
+  const captured=[];
+  const initialize=f.layer._initCachedDisplayObject;
+  f.layer._initCachedDisplayObject=function(renderer) {
+    captured.push(this.children.slice());
+    initialize.call(this,renderer);
+  };
+  for(let i=0;i<30;i++) {marker.transform.localTransform.tx++;f.frame();}
+  assert.equal(f.cache.diagnostics().captures,1);
+  assert.equal(f.cache.diagnostics().cachedChildren,2);
+  assert.equal(f.layer.children,children);
+  assert.deepEqual(captured[0],children.slice(0,2));
+  assert.deepEqual(Array.from(f.cache.tail(f.layer)),[marker]);
+  marker.transform.localTransform.tx++;
+  f.cache.validate(f.layer,f.renderer);
+  assert.equal(f.cache.diagnostics().active,true,'late foreground movement stays live');
+  marker.texture = {...marker.texture, _frame:{x:0,y:0,width:48,height:48}};
+  marker.alpha = 0.5;
+  f.cache.validate(f.layer,f.renderer);
+  assert.equal(f.cache.diagnostics().active,true,'foreground artwork and fades stay live');
+  f.settle();
+  assert.equal(f.cache.diagnostics().captures,1,'a settled marker does not expand the snapshot');
+  children[0].texture._frame.width--;
+  f.cache.validate(f.layer,f.renderer);
+  assert.equal(f.cache.diagnostics().active,false,'background mutations invalidate immediately');
+});
+
+test('a whole-layer cache shrinks to its stable prefix when the foreground starts moving',()=>{
+  const f=fixture();
+  const marker=new f.layer.constructor();
+  marker.texture={...f.layer.children[0].texture,_frame:{x:0,y:0,width:32,height:48}};
+  f.layer.children.push(marker);
+  f.settle();
+  assert.equal(f.cache.diagnostics().cachedChildren,3);
+  marker.transform.localTransform.tx++;
+  f.frame();
+  assert.equal(f.cache.diagnostics().cachedChildren,2);
+  assert.equal(f.cache.diagnostics().captures,2);
+  for(let i=0;i<20;i++) {marker.transform.localTransform.tx++;f.frame();}
+  assert.equal(f.cache.diagnostics().captures,2);
+  f.layer.children.unshift(new f.layer.constructor());
+  f.cache.validate(f.layer,f.renderer);
+  assert.equal(f.cache.diagnostics().active,false,'insertion ahead of the prefix changes painter order');
+});
+
+test('unsupported foreground producers remain live and failed prefix capture restores the child array',()=>{
+  const f=fixture();
+  const foreground=new f.layer.constructor();
+  foreground._filters=[{}];
+  f.layer.children.push(foreground);
+  const children=f.layer.children;
+  f.settle();
+  assert.equal(f.cache.diagnostics().cachedChildren,2);
+  assert.deepEqual(Array.from(f.cache.tail(f.layer)),[foreground]);
+  f.cache.release();
+  f.layer._initCachedDisplayObject=()=>{throw new Error('snapshot failed');};
+  f.settle();
+  assert.equal(f.layer.children,children);
+  assert.equal(f.cache.diagnostics().active,false);
+  assert.equal(f.cache.diagnostics().failures,1);
+});

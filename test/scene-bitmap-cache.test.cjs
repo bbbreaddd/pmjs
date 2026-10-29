@@ -71,6 +71,28 @@ test('bitmap cache uses one Pixi snapshot until the cache is disabled', () => {
   assert.deepEqual(harness.compatHits, []);
 });
 
+test('picture-prefix snapshots draw the live tail afterward in painter order', () => {
+  const { sandbox, sprite, submitted } = makeHarness();
+  const root = new sandbox.PIXI.Container();
+  const layer = root.addChild(new sandbox.PIXI.Container());
+  const background = layer.addChild(sprite());
+  const marker = layer.addChild(sprite());
+  const snapshot = sprite();
+  layer.x = 12; marker.x = 90; background.x = 42;
+  layer._cacheAsBitmap = true;
+  layer._cacheData = { sprite: snapshot };
+  sandbox.PMJS.mv = { pictureLayerCache: {
+    validate(node) { assert.equal(node, layer); },
+    tail(node) { return node === layer ? [marker] : []; }
+  } };
+  assert.equal(sandbox.submitNativeScene(root), true);
+  const packet = submitted[0];
+  assert.deepEqual(packet.metadata.filter((_, index) => index % 7 === 0), [0, 0, 1, 1]);
+  assert.equal(packet.values[41 + 4], 12);
+  assert.equal(packet.values[3 * 41 + 4], 90);
+  assert.equal(packet.metadata[3 * 7 + 1], 1, 'the marker uses the picture container transform');
+});
+
 test('nested bitmap caches build inside out and draw the parent snapshot', () => {
   const harness = makeHarness();
   const { sandbox, sprite } = harness;
