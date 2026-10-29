@@ -378,4 +378,39 @@ native.canvas.fillRect(failed.handle, 0, 0, 16, 16, 0x0000ffff);
 assert.equal(native.canvas.pixel(failed.handle, 8, 8), 0x0000ffff);
 native.canvas.release(failed.handle);
 
+// A broad clear only damages the pixels that previously contained content.
+const sparse = native.canvas.create(64, 64);
+native.canvas.fillRect(sparse.handle, 7, 11, 3, 2, 0x12345680);
+const sparseMetadata = new Uint32Array([1, 0xffffffff, sparse.handle, 0xffffff, 0, 0, 0]);
+function presentSparse() {
+  native.beginFrame();
+  native.scene.submit(schema.version, sparseMetadata, values, 1);
+  native.renderFrame();
+}
+presentSparse();
+const beforeSparseClear = native.images.memory(0).textureUploadBytes;
+native.canvas.clear(sparse.handle);
+presentSparse();
+assert.equal(native.images.memory(0).textureUploadBytes - beforeSparseClear, 3 * 2 * 4,
+  'full clear uploads only previously painted pixels');
+assert.equal(native.canvas.pixel(sparse.handle, 7, 11), 0);
+const beforeEmptyClear = native.images.memory(0).textureUploadBytes;
+native.canvas.clear(sparse.handle);
+presentSparse();
+assert.equal(native.images.memory(0).textureUploadBytes, beforeEmptyClear,
+  'clearing an already empty canvas needs no upload');
+
+native.canvas.fillRect(sparse.handle, 7, 11, 3, 2, 0xffffffff);
+presentSparse();
+const beforeClearAndDraw = native.images.memory(0).textureUploadBytes;
+native.canvas.clearRect(sparse.handle, 0, 0, 64, 64);
+native.canvas.fillRect(sparse.handle, 12, 13, 2, 2, 0xff0000ff);
+presentSparse();
+assert.equal(native.images.memory(0).textureUploadBytes - beforeClearAndDraw, 7 * 4 * 4,
+  'damage includes both erased and newly drawn pixels');
+assert.equal(native.canvas.pixel(sparse.handle, 7, 11), 0);
+assert.equal(native.canvas.pixel(sparse.handle, 12, 13), 0xff0000ff);
+assert.equal(native.canvas.pixel(sparse.handle, 63, 63), 0);
+native.canvas.release(sparse.handle);
+
 console.log('Deferred canvas tests passed successfully.');

@@ -301,6 +301,7 @@ class CanvasStore {
   struct Surface {
     std::uint16_t generation = 1;
     ImageHandle image = 0;
+    std::optional<std::uint64_t> imageRevision;
     std::shared_ptr<Content> content;
     bool live = false;
   };
@@ -319,9 +320,9 @@ class CanvasStore {
 
   void fillRectNow(Content& surface, int x, int y, int width, int height,
                    std::uint32_t rgba);
-  void clearNow(Content& surface, ImageHandle image);
+  void clearNow(Content& surface, ImageHandle image, std::optional<std::uint64_t> imageRevision);
   void clearRectNow(Content& surface, int x, int y, int width, int height,
-                    ImageHandle image = 0);
+                    ImageHandle image = 0, std::optional<std::uint64_t> imageRevision = std::nullopt);
   bool drawImageNow(Content& destination, const DrawImageCmd& command);
   bool drawTextNow(Content& surface, const std::vector<std::filesystem::path>& fontPaths,
                    const std::string& text, float x, float y, float pixelSize,

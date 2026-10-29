@@ -812,13 +812,15 @@ void CanvasStore::fillRectNow(Content& surface, int x, int y, int width, int hei
   markDirty(surface, x0, y0, x1 - x0, y1 - y0);
 }
 
-void CanvasStore::clearNow(Content& surface, ImageHandle image) {
-  clearRectNow(surface, 0, 0, surface.width, surface.height, image);
+void CanvasStore::clearNow(Content& surface, ImageHandle image,
+                            std::optional<std::uint64_t> imageRevision) {
+  clearRectNow(surface, 0, 0, surface.width, surface.height, image, imageRevision);
   surface.mayHaveOverAlpha = false;
 }
 
 void CanvasStore::clearRectNow(Content& surface, int x, int y, int width, int height,
-                               ImageHandle image) {
+                               ImageHandle image,
+                               std::optional<std::uint64_t> imageRevision) {
   const int x0 = std::clamp(x, 0, surface.width);
   const int y0 = std::clamp(y, 0, surface.height);
   const int x1 = static_cast<int>(std::clamp<std::int64_t>(
@@ -828,22 +830,30 @@ void CanvasStore::clearRectNow(Content& surface, int x, int y, int width, int he
   if (x1 <= x0 || y1 <= y0) return;
   const bool allZero = surface.knownAllZero ||
     (x0 == 0 && y0 == 0 && x1 == surface.width && y1 == surface.height);
-  bool changed = false;
+  int left = x1, top = y1, right = x0, bottom = y0;
   for (int py = y0; !surface.knownAllZero && py < y1; ++py) {
     auto* first = surface.pixels.data() +
       (static_cast<std::size_t>(py) * surface.width + x0) * 4U;
     auto* last = first + static_cast<std::size_t>(x1 - x0) * 4U;
-    if (std::any_of(first, last, [](std::uint8_t value) { return value != 0; })) {
-      std::fill(first, last, 0);
-      changed = true;
+    auto* changedFirst = std::find_if(first, last,
+      [](std::uint8_t value) { return value != 0; });
+    if (changedFirst == last) continue;
+    auto* changedLast = last;
+    while (changedLast[-1] == 0) --changedLast;
+    left = std::min(left, x0 + static_cast<int>((changedFirst - first) / 4));
+    right = std::max(right, x0 + static_cast<int>((changedLast - first + 3) / 4));
+    top = std::min(top, py);
+    bottom = py + 1;
+    std::fill(changedFirst, changedLast, 0);
+  }
+  // Only bound damage when the texture still matches the last Canvas upload.
+  if (image) {
+    const auto revision = images_.contentRevision(image);
+    if (!revision || revision != imageRevision) {
+      left = x0; top = y0; right = x1; bottom = y1;
     }
   }
-  // CPU equality alone cannot prove that an externally changed texture is clear.
-  if (!changed && image) {
-    const auto info = images_.lookup(image);
-    changed = !info || !info->knownAllZero || !images_.contentRevision(image);
-  }
-  if (changed) markDirty(surface, x0, y0, x1 - x0, y1 - y0);
+  if (right > left && bottom > top) markDirty(surface, left, top, right - left, bottom - top);
   surface.knownAllZero = allZero;
 }
 
@@ -1482,7 +1492,7 @@ bool CanvasStore::clear(CanvasHandle handle) {
     }
     return true;
   }
-  clearNow(*surface, lookup(handle)->image);
+  clearNow(*surface, lookup(handle)->image, lookup(handle)->imageRevision);
   return true;
 }
 
@@ -1503,7 +1513,7 @@ bool CanvasStore::clearRect(CanvasHandle handle, int x, int y, int width, int he
       return true;
     }
   }
-  clearRectNow(*surface, x, y, width, height, lookup(handle)->image);
+  clearRectNow(*surface, x, y, width, height, lookup(handle)->image, lookup(handle)->imageRevision);
   return true;
 }
 
@@ -1947,6 +1957,7 @@ bool CanvasStore::uploadSurface(Surface& target) {
   } else if (!images_.updateRgbaRegion(target.image, x, y, width, height, pixels.data(), width)) {
     return false;
   }
+  target.imageRevision = images_.contentRevision(target.image);
   surface.dirtyX0 = surface.dirtyY0 = 0;
   surface.dirtyX1 = surface.dirtyY1 = 0;
   return true;

@@ -88,7 +88,7 @@ int main() {
   assert(canvases.clear(canvas->handle));
   assert(canvases.prepareImage(canvas->handle));
   assert(regionUploads==clearUploads+1);
-  assert(images.lookup(*image)->knownAllZero);
+  assert(std::all_of(texture.begin(), texture.end(), [](uint8_t v) { return v == 0; }));
   const auto clearRevision=images.contentRevision(*image);
   for(int i=0;i<7;++i) {
     assert(canvases.clear(canvas->handle));
@@ -123,6 +123,12 @@ int main() {
   assert(canvases.prepareImage(canvas->handle));
   assert(regionUploads==externalUploads+1);
   assert(std::all_of(texture.begin(),texture.end(),[](uint8_t v){return v==0;}));
+  assert(canvases.fillRect(canvas->handle, 1, 1, 1, 1, 0xff0000ff));
+  assert(canvases.prepareImage(canvas->handle));
+  assert(images.updateRgba(*image, externalPixels.data()));
+  assert(canvases.clear(canvas->handle));
+  assert(canvases.prepareImage(canvas->handle));
+  assert(std::all_of(texture.begin(), texture.end(), [](uint8_t v) { return v == 0; }));
   const int recoveryUploads=regionUploads;
   failUpload=true;
   assert(!images.updateRgbaRegion(*image,0,0,1,1,redPixel.data(),1));
