@@ -59,6 +59,12 @@
       "license": "MIT",
       "notice": "LICENSE"
     },
+    "js/pmjs-plugins/orange/hud-contents.js": {
+      "origin": "compatibility",
+      "source": "PMJS",
+      "license": "MIT",
+      "notice": "LICENSE"
+    },
     "js/pmjs-plugins/srd/battle-status-gauges.js": {
       "origin": "compatibility",
       "source": "PMJS",
