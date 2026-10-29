@@ -197,6 +197,14 @@
       "modules": [
         "js/pmjs-plugins/volume-control/menu.js"
       ]
+    },
+    {
+      "plugins": [
+        "OrangeHud"
+      ],
+      "modules": [
+        "js/pmjs-plugins/orange/hud-contents.js"
+      ]
     }
   ]
 }
