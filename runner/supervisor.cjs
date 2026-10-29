@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { fork } = require('node:child_process');
 const { performance } = require('node:perf_hooks');
-const { processMappingDetails, parseProcessStatus } = require('./diagnostics.cjs');
+const { MEMORY_PRESSURE_BYTES, processMappingDetails, parseProcessStatus } = require('./diagnostics.cjs');
 
 const terminalStates = new WeakMap();
 function terminalState(stream) {
@@ -483,7 +483,7 @@ async function runSupervised(prepare, { worker = path.join(__dirname, 'session.c
             const oomDelta = currentOomCount !== null && lastOomCount !== null ?
               Math.max(0, currentOomCount - lastOomCount) : 0;
             if (currentOomCount !== null) lastOomCount = currentOomCount;
-            const pressured = sample.headroomBytes !== undefined && sample.headroomBytes < 180 * MiB;
+            const pressured = sample.headroomBytes !== undefined && sample.headroomBytes < MEMORY_PRESSURE_BYTES;
             pressureSampleCount = pressured ? pressureSampleCount + 1 : 0;
             const worsening = pressured && (!pressureActive ||
               sample.headroomBytes <= lastReportedHeadroom - worseningBytes);

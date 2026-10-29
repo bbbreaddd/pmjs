@@ -515,6 +515,7 @@ if(BUILD_TESTING)
     node-yed-retained-tiles
     node-presentation-byte-precision
     node-render-to-image
+    node-allocator-reclamation
     node-render-target-filters
     node-primitive-surface
     node-filter-bounds

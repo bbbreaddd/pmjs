@@ -274,11 +274,16 @@ test('renderer confines producer selection to configured screen renders and repo
     return submit(stage, color);
   };
   renderer.render(root);
+  assert.equal(renderer._pmjsScreenStage, root);
+  const screenRenderId = renderer._pmjsScreenRenderId;
   const state = sandbox.PMJS.pixi4.getStageRenderState(root);
   assert.equal(state.worldState, 'local'); assert.equal(state.renders, 1);
   assert.equal(state.bitmapCacheMode, 'declared'); assert.equal(state.bitmapCacheAdmission, 'accepted');
   assert.equal(sandbox.PMJS.pixi4.getStageRenderState(inner).bitmapCacheMode, 'full');
+  sandbox.submitNativeScene = submit;
   renderer.render(root, { baseTexture: { width: 8, height: 8 } });
+  assert.equal(renderer._pmjsScreenRenderId, screenRenderId, 'offscreen renders do not establish a presented frame');
+  assert.equal(renderer._pmjsScreenStage, root);
   const after = sandbox.PMJS.pixi4.getStageRenderState(root);
   assert.equal(after.renders, 2);
   assert.equal(after.bitmapCacheMode, 'full'); assert.equal(after.bitmapCacheAdmission, 'offscreen');

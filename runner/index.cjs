@@ -16,7 +16,8 @@ const { createStorage, createGameFilesystem } = require('./storage.cjs');
 const { resolveDefaults, validate, PMJS_MV_LOGIC_HZ, PMJS_SUPPORTED_RENDER_HZ,
   parseTimingConfig, resolveSwapDefault } = require('./config.cjs');
 const hostTimers = require('node:timers');
-const { createDiagnostics } = require('./diagnostics.cjs');
+const { createDiagnostics, memoryState } = require('./diagnostics.cjs');
+const { createMemoryReclaimer } = require('./memory-reclamation.cjs');
 
 function sendSupervisorHeartbeat(processHandle, heartbeat) {
   if (!processHandle || typeof processHandle.send !== 'function' || !processHandle.connected) return false;
@@ -289,6 +290,9 @@ async function runSession(input, diagnostics, setNative) {
     preparedCompactSampling: options.preparedCompactSampling,
     preparedCropUploads: options.preparedCropUploads }));
   diagnostics.stage('native-ready');
+  const memoryReclaimer = createMemoryReclaimer({ native,
+    readMemory: () => memoryState({ processObject: hostProcess }),
+    readRss: () => hostProcess.memoryUsage.rss(), now: () => performance.now() });
   const scan = native.runtime.vfsIndexStats?.();
   if (scan) console.log(`[pmjs] startup stage=vfs-index statistics=${JSON.stringify(scan)}`);
   console.log(`[pmjs] startup stage=host-initialized elapsed_ms=${(performance.now() - startupStarted).toFixed(1)}`);
@@ -343,6 +347,7 @@ async function runSession(input, diagnostics, setNative) {
       }
       native.assets.preparationStats = preparationStats;
       if (startup.cancelled || startup.preparation.cancelled) { native.runtime.quit(); return; }
+      memoryReclaimer.atBoundary('startup');
     } else if (native.assets && typeof native.assets.installPrepared === 'function') {
       native.assets.installPrepared([]);
       if (native.assets.installDecrypted) native.assets.installDecrypted([]);
@@ -510,10 +515,14 @@ async function runSession(input, diagnostics, setNative) {
           };
           const complete = dispatcher ? dispatcher.runFrame(frame) : frame();
           complete.then(() => {
+            if (memoryReclaimer.pending && typeof globalThis.__pmjsMemoryReclamationBoundary === 'function') {
+              memoryReclaimer.atBoundary(globalThis.__pmjsMemoryReclamationBoundary());
+            }
             // Sample one in eight frames: no extra clock read on the other seven.
             if ((++diagnosticsFrameIndex & 7) === 0) {
               const observedAt = performance.now();
               diagnostics.observeFrame(observedAt - now, observedAt);
+              memoryReclaimer.observe(diagnostics.snapshot().memory);
             }
             if (!timing.uncapped) {
               deadline = advanceDeadline(deadline, native.runtime.monotonicNow(), period);

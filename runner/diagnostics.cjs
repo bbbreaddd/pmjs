@@ -20,6 +20,7 @@ function cpuState() {
 }
 
 const MiB = 1024 * 1024;
+const MEMORY_PRESSURE_BYTES = 180 * MiB;
 // Resolve the active cgroup v2 if the mount exposes multiple descendants.
 // In container/cgroup namespaces /sys/fs/cgroup may already be the delegated
 // root, in which case the fallback is the correct location.
@@ -515,5 +516,5 @@ function createDiagnostics({ logger = console, getNative = () => null,
   };
 }
 
-module.exports = { readCgroupFile, numericFile, memAvailable, memoryEvents, memoryPressure,
+module.exports = { MEMORY_PRESSURE_BYTES, readCgroupFile, numericFile, memAvailable, memoryEvents, memoryPressure,
   parseProcessStatus, processMappingDetails, memoryState, gameContext, createDiagnostics };

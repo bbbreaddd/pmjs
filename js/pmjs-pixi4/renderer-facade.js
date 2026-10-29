@@ -410,6 +410,8 @@ function createNativePixiRenderer(width, height, options) {
           NativeHost.render.setScreenRenderSize(screenWidth, screenHeight);
         });
         NativeHost.render.setClearBeforeRender(shouldClear);
+        this._pmjsScreenStage = stage;
+        this._pmjsScreenRenderId = (this._pmjsScreenRenderId || 0) + 1;
         this.textureGC.update();
         if (typeof this.emit === 'function') this.emit('postrender');
       } finally {
@@ -648,6 +650,7 @@ function createNativePixiRenderer(width, height, options) {
       }
       if (typeof this.removeAllListeners === 'function') this.removeAllListeners();
       this._lastObjectRendered = null;
+      this._pmjsScreenStage = null;
       this._tempDisplayObjectParent = null;
       this.state = null;
       this.view = null;

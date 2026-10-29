@@ -23,18 +23,30 @@ std::optional<AllocatorInfo> allocatorInfo() {
   return query ? std::optional<AllocatorInfo>(query()) : std::nullopt;
 }
 #endif
+std::optional<int> trimAllocatorMemory(std::size_t pad) {
+#if defined(__GLIBC__)
+  using Trim = int (*)(std::size_t);
+  static const auto trim = reinterpret_cast<Trim>(dlsym(RTLD_DEFAULT, "malloc_trim"));
+  if (trim) return trim(pad);
+#else
+  (void)pad;
+#endif
+  return std::nullopt;
+}
 }
 
 void trimPreparationMemory() noexcept {
 #if defined(__GLIBC__)
-  using Trim = int (*)(std::size_t);
-  static const auto trim = reinterpret_cast<Trim>(dlsym(RTLD_DEFAULT, "malloc_trim"));
-  if (!trim) return;
   const auto info = allocatorInfo();
   if (info && info->fordblks < 32U * 1024U * 1024U) return;
   // Preparation frees large temporary buffers that worker arenas otherwise retain.
-  trim(128U * 1024U);
+  trimAllocatorMemory(128U * 1024U);
 #endif
+}
+
+napi_value trimAllocator(napi_env env, napi_callback_info) {
+  const auto released = trimAllocatorMemory(0);
+  return released ? boolean(env, *released != 0) : undefined(env);
 }
 
 napi_value allocatorStats(napi_env env, napi_callback_info) try {
@@ -742,6 +754,7 @@ void registerRuntimeBindings(napi_env env, napi_value exports) {
   method(env, runtime, "quit", quit);
   method(env, runtime, "vfsIndexStats", vfsIndexStats);
   method(env, runtime, "allocatorStats", allocatorStats);
+  method(env, runtime, "trimAllocator", trimAllocator);
   method(env, runtime, "preparationProgress", preparationProgress);
   method(env, runtime, "env", environment);
   method(env, runtime, "monotonicNow", monotonicNow);
