@@ -236,5 +236,6 @@ def stage_submission(destination, port, data, stage, info, notices, extra_notice
         shutil.copyfile(file, licenses / ('LICENSE.' + label + '.txt'))
     if info.get('dependencySources'):
         (licenses / 'FFMPEG_SOURCES.txt').write_text(
-            'Matching FFmpeg source and build materials: ' + info['dependencySources']['url'] + '\n',
+            'Matching dependency source and build materials: ' +
+            info['dependencySources'].get('url', info['dependencySources']['filename']) + '\n',
             encoding='utf-8')

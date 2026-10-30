@@ -356,9 +356,10 @@ class PortMasterPackage(unittest.TestCase):
                      'build-records/ffmpeg.json': json.dumps({'recipe': {'source': recipe}}).encode(),
                      'tools/linux-arm64/sdk-recipes.json': json.dumps({'sources': {'ffmpeg': recipe}}).encode()}
         for name in ('build-records/toolchain.json', 'build-records/sysroot.json',
-                     'tools/linux-arm64/prepare-sdk.py', 'tools/linux-arm64/sdk-packages.json',
+                     'tools/linux-arm64/prepare-sdk.py',
                      'cmake/toolchains/portable-arm64.cmake'):
             materials[name] = b'fixture rebuild material'
+        materials['tools/linux-arm64/sdk-packages.json'] = b'{}'
         def write_archive():
             with tarfile.open(archive, 'w:gz') as output:
                 for name, data in materials.items():
@@ -372,6 +373,12 @@ class PortMasterPackage(unittest.TestCase):
             info = json.loads(package.read('minimalgame/runtime/build-info.json'))
             self.assertEqual(info['dependencySources']['sha256'], artifacts.digest(archive))
             self.assertFalse(any('/sources/' in name or name.endswith('.tar.gz') for name in package.namelist()))
+        portmaster.portmaster(self.stage, self.bundle, self.output, sources=archive)
+        with zipfile.ZipFile(self.output) as package:
+            info = json.loads(package.read('minimalgame/runtime/build-info.json'))
+            self.assertEqual(info['dependencySources'],
+                             {'filename': archive.name, 'sha256': artifacts.digest(archive)})
+            self.assertIn(archive.name, package.read('minimalgame/runtime/LICENSES.txt').decode())
         before = self.output.read_bytes()
         materials['ffmpeg-ffmpeg-fixture.tar.xz'] = b'wrong source code'
         write_archive()

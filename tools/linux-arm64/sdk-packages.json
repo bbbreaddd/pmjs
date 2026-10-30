@@ -60,6 +60,32 @@
       "Version": "18.3.6-2+deb10u1",
       "Filename": "pool/main/m/mesa/mesa-common-dev_18.3.6-2+deb10u1_arm64.deb",
       "SHA256": "8904ad81e0441a61a7a87ac0828c920cd171a6ef4538b392f0ea0175950f1184"
+    },
+    {
+      "Package": "libatomic1",
+      "Version": "8.3.0-6",
+      "Filename": "pool/main/g/gcc-8/libatomic1_8.3.0-6_arm64.deb",
+      "SHA256": "1cef699ebc0bb80b1d1c7a27218bef0ec9d379eceddfacdf887fb25db73ed9e5"
+    },
+    {
+      "Package": "gcc-8-base",
+      "Version": "8.3.0-6",
+      "Filename": "pool/main/g/gcc-8/gcc-8-base_8.3.0-6_arm64.deb",
+      "SHA256": "41456860e929beec8ead5282cf6891db8fe213af86d46967e77f9b13b1c44bf2"
+    }
+  ],
+  "sources": [
+    {
+      "Filename": "pool/main/g/gcc-8/gcc-8_8.3.0-6.dsc",
+      "SHA256": "3b380579af74f1a325a07cc5798f8bff5206f0820fcac5bf64ff2bbd0466867d"
+    },
+    {
+      "Filename": "pool/main/g/gcc-8/gcc-8_8.3.0.orig.tar.gz",
+      "SHA256": "ee3fd608f66e5737f20cf71b176cfbf58f7c1d190ad6def33d57610cdae8eac2"
+    },
+    {
+      "Filename": "pool/main/g/gcc-8/gcc-8_8.3.0-6.diff.gz",
+      "SHA256": "211e5e1022e115abbcb9eeb39cf4bf84958c4e8469c0cbe430569947a04c5415"
     }
   ]
 }

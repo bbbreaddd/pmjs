@@ -367,6 +367,15 @@ class DependencySources(unittest.TestCase):
         for component in ('ffmpeg', 'toolchain', 'sysroot'):
             release.write_json(self.sdk / 'records' / (component + '.json'),
                                {'component': component, 'recipe': {'source': spec['sources']['ffmpeg']}})
+        packages_file = self.root / 'tools/linux-arm64/sdk-packages.json'
+        packages = json.loads(packages_file.read_text())
+        self.atomic_sources = []
+        for source in packages['sources']:
+            file = self.cache / Path(source['Filename']).name
+            file.write_bytes(('matching ' + file.name).encode())
+            source['SHA256'] = release.digest(file)
+            self.atomic_sources.append(file)
+        release.write_json(packages_file, packages)
         self.output = self.root / 'installed sources'
 
     def sources(self):
@@ -376,14 +385,15 @@ class DependencySources(unittest.TestCase):
                               cwd=self.root / 'tools', text=True, capture_output=True,
                               env={**os.environ, 'PMJS_DOWNLOAD_CACHE': str(self.cache)})
 
-    def test_only_media_sources_are_shipped_with_rebuild_materials(self):
+    def test_dependency_sources_are_shipped_with_rebuild_materials(self):
         result = self.sources()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual({str(file.relative_to(self.output)) for file in self.output.rglob('*') if file.is_file()},
                          {'ffmpeg-' + self.archive.name,
                           'tools/linux-arm64/sdk-recipes.json', 'tools/linux-arm64/sdk-packages.json',
                           'tools/linux-arm64/prepare-sdk.py', 'cmake/toolchains/portable-arm64.cmake',
-                          'build-records/ffmpeg.json', 'build-records/toolchain.json', 'build-records/sysroot.json'})
+                          'build-records/ffmpeg.json', 'build-records/toolchain.json', 'build-records/sysroot.json'} |
+                         {'libatomic/' + file.name for file in self.atomic_sources})
         self.assertEqual((self.output / ('ffmpeg-' + self.archive.name)).read_bytes(), self.archive.read_bytes())
         self.assertEqual((self.output / 'cmake/toolchains/portable-arm64.cmake').read_bytes(),
                          (ROOT / 'cmake/toolchains/portable-arm64.cmake').read_bytes())
@@ -443,6 +453,33 @@ class DependencySources(unittest.TestCase):
             output.write_bytes(b'corrupt source archive')
             with self.assertRaisesRegex(ValueError, 'Source archive differs'):
                 release.checked_manifest(stage)
+
+    def test_missing_or_changed_atomic_sources_are_rejected(self):
+        source = self.atomic_sources[0]
+        for content in (b'changed source archive', None):
+            with self.subTest(content=content):
+                if content is None:
+                    source.unlink()
+                else:
+                    source.write_bytes(content)
+                result = self.sources()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('Missing verified dependency source archive', result.stderr)
+
+    def test_source_archive_rejects_missing_or_changed_atomic_sources(self):
+        self.assertEqual(self.sources().returncode, 0)
+        source = self.output / 'libatomic' / self.atomic_sources[0].name
+        output = self.root / 'sources.tar.gz'
+        for content in (b'changed source archive', None):
+            with self.subTest(content=content):
+                if content is None:
+                    source.unlink()
+                else:
+                    source.write_bytes(content)
+                with tarfile.open(output, 'w:gz') as bundle:
+                    bundle.add(self.output, arcname='pmjs-ffmpeg-sources')
+                with self.assertRaisesRegex(ValueError, 'libatomic source'):
+                    release.source_reference(output)
 
     def test_missing_or_changed_media_sources_are_rejected(self):
         for content in (b'changed source archive', None):

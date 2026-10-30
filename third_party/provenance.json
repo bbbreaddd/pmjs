@@ -482,6 +482,13 @@
       "source": "PMJS",
       "license": "MIT",
       "notice": "LICENSE"
+    },
+    "third_party/gcc-runtime.LICENSE": {
+      "origin": "permissive",
+      "source": "GNU General Public License version 3 license document, Free Software Foundation",
+      "revision": "29 June 2007",
+      "license": "License document permits verbatim copying and distribution",
+      "notice": "third_party/gcc-runtime.LICENSE"
     }
   },
   "defaults": {

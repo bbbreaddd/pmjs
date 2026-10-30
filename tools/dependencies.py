@@ -37,6 +37,12 @@ def sources(sdk, output):
     if not archive.is_file() or digest(archive) != source['sha256']:
         raise ValueError('Missing verified dependency source archive: ' + str(archive))
     materials = {archive: output / ('ffmpeg-' + archive.name)}
+    packages = json.loads((ROOT / 'tools/linux-arm64/sdk-packages.json').read_text())
+    for source_package in packages.get('sources', []):
+        source_file = cache / Path(source_package['Filename']).name
+        if not source_file.is_file() or digest(source_file) != source_package['SHA256']:
+            raise ValueError('Missing verified dependency source archive: ' + str(source_file))
+        materials[source_file] = output / 'libatomic' / source_file.name
     for relative in [Path('tools/linux-arm64') / name for name in
                      ('sdk-recipes.json', 'sdk-packages.json', 'prepare-sdk.py')]:
         materials[ROOT / relative] = output / relative

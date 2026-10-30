@@ -195,6 +195,8 @@ def build_component(sdk, name, spec, recipe, jobs):
         for package in recipe["packages"]["packages"]:
             archive = download(recipe["packages"]["origin"] + package["Filename"], package["SHA256"])
             run(["dpkg-deb", "--extract", archive, target])
+        for source in recipe["packages"].get("sources", []):
+            download(recipe["packages"]["origin"] + source["Filename"], source["SHA256"])
     elif name == "toolchain":
         zig = sdk / "zig"
         if (not zig.exists() or not (zig / "zig").exists() or

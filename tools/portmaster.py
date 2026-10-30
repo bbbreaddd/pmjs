@@ -244,8 +244,8 @@ def portmaster(stage, bundle, output, name=None, strip=None, extra_notices=(), s
     if release and submission_details is None:
         raise ValueError('PortMaster release packaging requires --submission')
     if sources is not None or sources_url is not None:
-        if sources is None or sources_url is None:
-            raise ValueError('--sources and --sources-url must be provided together')
+        if sources is None:
+            raise ValueError('--sources-url requires --sources')
         info = {**info, 'dependencySources': source_reference(sources, sources_url)}
     if not (stage / 'bin/node').is_file():
         raise ValueError('PortMaster packaging requires a runtime with bundled target Node')
@@ -317,9 +317,9 @@ def portmaster(stage, bundle, output, name=None, strip=None, extra_notices=(), s
                 for notice in extra_notices:
                     licenses.write(f'===== {notice.name} =====\n\n{notice.read_text().rstrip()}\n\n')
                 if info.get('dependencySources'):
-                    licenses.write('FFmpeg source and build materials: ' + info['dependencySources']['url'] + '\n')
+                    licenses.write('FFmpeg source and build materials: ' + info['dependencySources'].get('url', info['dependencySources']['filename']) + '\n')
         if any(file.name.startswith('libav') for file in copied) and not info.get('dependencySources'):
-            raise ValueError('Bundled FFmpeg requires a source archive reference; specify --sources and --sources-url')
+            raise ValueError('Bundled FFmpeg requires a source archive reference; specify --sources')
         if submission_details is not None:
             stage_submission(payload if layout == "pr" else port, port, submission_details,
                              stage, info, notices, extra_notices)

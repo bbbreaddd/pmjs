@@ -40,6 +40,10 @@ if(PMJS_BUNDLE_DEPENDENCIES)
     file(REAL_PATH "${PMJS_DEPENDENCY_PREFIX}/lib/${library}" library_file)
     install(FILES "${library_file}" DESTINATION lib RENAME "${library}")
   endforeach()
+  file(REAL_PATH "${PMJS_SDK_ROOT}/sysroot/usr/lib/aarch64-linux-gnu/libatomic.so.1" atomic_library)
+  install(FILES "${atomic_library}" DESTINATION lib RENAME libatomic.so.1)
+  install(FILES "${PMJS_SDK_ROOT}/sysroot/usr/share/doc/gcc-8-base/copyright"
+    DESTINATION share/pmjs/notices/dependencies/libatomic RENAME copyright)
   install(DIRECTORY "${PMJS_DEPENDENCY_PREFIX}/notices/" DESTINATION share/pmjs/notices/dependencies)
   foreach(runtime IN ITEMS libcxx libcxxabi libunwind)
     install(FILES "${PMJS_SDK_ROOT}/zig/lib/${runtime}/LICENSE.TXT"

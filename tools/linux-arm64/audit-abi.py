@@ -13,7 +13,7 @@ from pathlib import Path
 PLATFORM_LIBRARIES = {"libSDL2-2.0.so.0", "libEGL.so.1", "libGLESv2.so.2"}
 SYSTEM_LIBRARIES = {
     "libc.so.6", "libm.so.6", "libdl.so.2", "libpthread.so.0", "librt.so.1",
-    "libgcc_s.so.1", "libstdc++.so.6", "libatomic.so.1", "ld-linux-aarch64.so.1",
+    "libgcc_s.so.1", "libstdc++.so.6", "ld-linux-aarch64.so.1",
 }
 GRAPHICS_NAME = re.compile(r"^(lib(SDL2|EGL|GLES|GL|gbm|Mali|mali|drm|wayland)|.*_dri\.so)")
 

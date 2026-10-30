@@ -29,7 +29,7 @@ text does not select that alternative.
 ## Linked and packaged dependencies
 
 Node/V8, SDL2, EGL/GLES providers, zlib, libpng, libjpeg, FreeType, HarfBuzz,
-and FFmpeg are external dependencies. Applicable licenses depend on the
+FFmpeg, and libatomic are external dependencies. Applicable licenses depend on the
 versions and build configurations distributed. EGL/GLES and SDL supplied
 by the operating system are not automatically bundled dependencies.
 Node's distribution includes notices for additional components; retain its full
@@ -37,6 +37,11 @@ LICENSE when shipping Node. Test fixtures are not normally runtime payloads.
 Linux ARM64 builds also link Zig's compiler runtime and LLVM libc++, libc++abi
 and libunwind. Their complete MIT and Apache/LLVM exception notices are installed
 under `share/pmjs/notices/compiler/` in the binary package.
+Linux ARM64 packages include Debian libatomic1 8.3.0-6 under GPL-3.0-or-later
+with the GCC Runtime Library Exception 3.1. Its copyright and exception notice
+are installed under `share/pmjs/notices/dependencies/libatomic/`; the GPL text is
+`share/pmjs/notices/gcc-runtime.LICENSE`. Corresponding GCC source and Debian
+patches are included in the dependency source archive.
 
 [FFmpeg's license](https://ffmpeg.org/legal.html) depends on its build
 configuration. LGPL builds and GPL builds have different redistribution requirements; PMJS's MIT license does not replace

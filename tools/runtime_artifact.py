@@ -175,6 +175,14 @@ def source_reference(archive, url=None):
             with bundle.extractfile(files[name]) as stream:
                 if hashlib.file_digest(stream, 'sha256').hexdigest() != recipe['sha256']:
                     raise ValueError('FFmpeg source checksum differs from build materials')
+            packages = json.load(bundle.extractfile(files[prefix + 'tools/linux-arm64/sdk-packages.json']))
+            for source in packages.get('sources', []):
+                name = prefix + 'libatomic/' + Path(source['Filename']).name
+                if name not in files:
+                    raise ValueError('Matching libatomic source is required: ' + name)
+                with bundle.extractfile(files[name]) as stream:
+                    if hashlib.file_digest(stream, 'sha256').hexdigest() != source['SHA256']:
+                        raise ValueError('libatomic source checksum differs from build materials')
     except (tarfile.TarError, EOFError, KeyError, TypeError) as error:
         raise ValueError('Invalid FFmpeg source archive: ' + str(error)) from error
     return {'filename': archive.name, 'sha256': digest(archive), **({'url': url} if url is not None else {})}

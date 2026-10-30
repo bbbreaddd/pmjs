@@ -1,4 +1,5 @@
 import importlib.util
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -10,7 +11,7 @@ spec.loader.exec_module(abi)
 
 
 class LoaderContractTests(unittest.TestCase):
-    def audit(self, needed, **requirements):
+    def audit(self, needed, lib_dir=None, **requirements):
         def inspect(file):
             versions = {name: [] for name in ('GLIBC', 'GLIBCXX', 'CXXABI', 'GCC', 'LIBATOMIC')}
             if file.name == 'node':
@@ -18,11 +19,19 @@ class LoaderContractTests(unittest.TestCase):
             return {'path': str(file), 'needed': needed if file.name == 'node' else [],
                     'requirements': versions}
         with patch.object(abi, 'inspect', side_effect=inspect):
-            return abi.audit(ROOT / 'bin/node', ROOT / 'lib/pmjs_native.node', Path(__file__).parent)
+            return abi.audit(ROOT / 'bin/node', ROOT / 'lib/pmjs_native.node', lib_dir or Path(__file__).parent)
 
-    def test_atomic_runtime_is_an_explicit_system_dependency(self):
-        report = self.audit(['libatomic.so.1'], LIBATOMIC=['1.0'])
-        self.assertEqual(report['systemLibraries'], ['libatomic.so.1'])
+    def test_atomic_runtime_must_be_bundled(self):
+        with self.assertRaisesRegex(ValueError, 'missing bundled dependency libatomic.so.1'):
+            self.audit(['libatomic.so.1'], LIBATOMIC=['1.0'])
+        temporary_root = ROOT / '.cache/tests'
+        temporary_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temporary_root) as directory:
+            lib_dir = Path(directory)
+            (lib_dir / 'libatomic.so.1').touch()
+            report = self.audit(['libatomic.so.1'], lib_dir=lib_dir, LIBATOMIC=['1.0'])
+            self.assertEqual(report['systemLibraries'], [])
+            self.assertIn('libatomic.so.1', {Path(item['path']).name for item in report['artifacts']})
 
     def test_other_missing_dependencies_still_require_bundling(self):
         with self.assertRaisesRegex(ValueError, 'missing bundled dependency libexample.so.1'):
