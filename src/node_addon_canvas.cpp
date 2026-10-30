@@ -316,12 +316,12 @@ napi_value canvasDrawImageBatch(napi_env env, napi_callback_info info) try {
         (rows[i + 8] != 0 && rows[i + 8] != 1))
       throw std::invalid_argument("invalid image batch geometry");
   }
-  auto& state = host(env);
-  if (!state.canvases.info(destination) ||
-      (!state.canvases.info(source) && !state.images.inspect(source)))
+  auto& runtime = host(env);
+  if (!runtime.canvases.info(destination) ||
+      (!runtime.canvases.info(source) && !runtime.images.inspect(source)))
     throw std::invalid_argument("invalid image batch resource");
   for (size_t i = 0; i < length; i += 9)
-    if (!state.canvases.drawImage(destination, source, rows[i], rows[i+1], rows[i+2], rows[i+3],
+    if (!runtime.canvases.drawImage(destination, source, rows[i], rows[i+1], rows[i+2], rows[i+3],
         rows[i+4], rows[i+5], rows[i+6], rows[i+7], alpha, rows[i+8] != 0))
       throw std::runtime_error("image batch draw failed");
   return undefined(env);
