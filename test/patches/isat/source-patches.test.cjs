@@ -91,9 +91,10 @@ test('playtest overlays still update when a scene exists', () => {
   assert.equal(host.context.overlays, 2);
 });
 
-test('animated pictures ignore an old bitmap callback after replacement', () => {
-  const file = 'js/plugins/Olivia_AnimatedPictures.js';
-  const host = setup({ [file]: `
+for (const newline of ['\n', '\r\n']) {
+  test(`animated pictures ignore replaced bitmap callbacks with ${newline === '\n' ? 'LF' : 'CRLF'} source`, () => {
+    const file = 'js/plugins/Olivia_AnimatedPictures.js';
+    const source = `
     function load() {
   if (this._isAnimatedPicture) {
     this.bitmap.addLoadListener(this.updateAnimatedPictureFrame.bind(this));
@@ -101,20 +102,26 @@ test('animated pictures ignore an old bitmap callback after replacement', () => 
     this.bitmap.addLoadListener(this.resetFrame.bind(this));
   }
     }
-  ` });
-  host.load(file);
-  const callbacks = [];
-  const picture = { bitmap: { addLoadListener(callback) { callbacks.push(callback); } },
-    _isAnimatedPicture: true, frames: 0,
-    updateAnimatedPictureFrame() { this.frames++; } };
-  host.context.load.call(picture);
-  picture.bitmap = { addLoadListener(callback) { callbacks.push(callback); } };
-  host.context.load.call(picture);
-  callbacks[0]();
-  assert.equal(picture.frames, 0);
-  callbacks[1]();
-  assert.equal(picture.frames, 1);
-});
+  `.replace(/\n/g, newline);
+    const host = setup({ [file]: source });
+    host.load(file);
+    assert.deepEqual(host.warnings, []);
+    const patched = host.source(file);
+    assert.equal(patched.replace(/\r\n/g, '').includes('\n'), newline === '\n');
+    assert.equal(setup({ [file]: patched }).source(file), patched);
+    const callbacks = [];
+    const picture = { bitmap: { addLoadListener(callback) { callbacks.push(callback); } },
+      _isAnimatedPicture: true, frames: 0,
+      updateAnimatedPictureFrame() { this.frames++; } };
+    host.context.load.call(picture);
+    picture.bitmap = { addLoadListener(callback) { callbacks.push(callback); } };
+    host.context.load.call(picture);
+    callbacks[0]();
+    assert.equal(picture.frames, 0);
+    callbacks[1]();
+    assert.equal(picture.frames, 1);
+  });
+}
 
 test('persistent progress loads after slot extraction even when a save plugin replaces onLoadSuccess', () => {
   const file = 'js/plugins/JKL_PersistentData.js';
