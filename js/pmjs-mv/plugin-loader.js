@@ -64,6 +64,10 @@
       installNativeStorageManager();
     }
 
+    if (typeof installNativeJsonEx === 'function') {
+      installNativeJsonEx();
+    }
+
     if (typeof pmjsMvInstallTimingContract === 'function') {
       pmjsMvInstallTimingContract();
     }

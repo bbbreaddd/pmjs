@@ -18,7 +18,8 @@
 // Runtime guards report rejected uses through reportFallback(id, reason, detail).
 // Reasons are stable owner-defined strings, logged once per ID/reason without
 // changing policy. Normal cache misses and work outside the accelerator's scope
-// stay quiet. dump() separates these fallbackReasons from a global refusalReason.
+// stay quiet. dump() exposes fallbackReasons and fallbackCounts separately from
+// a global refusalReason.
 
 (function() {
 function pmjsOptimizationEnv(name) {
@@ -160,8 +161,10 @@ PMJS.optimizations = {
     if (typeof reason !== 'string' || !reason) {
       throw new Error('PMJS optimization fallback requires a nonempty string reason: ' + id);
     }
-    if (!state.enabled || state.fallbackReasons[reason]) return;
-    state.fallbackReasons[reason] = true;
+    if (!state.enabled) return;
+    var count = state.fallbackReasons[reason] || 0;
+    state.fallbackReasons[reason] = count + 1;
+    if (count) return;
     try {
       var message = '[pmjs-opt] ' + id + ' refused for this use: ' + reason;
       if (detail) {
@@ -179,7 +182,8 @@ PMJS.optimizations = {
       return { id: id, owner: state.owner, fallback: state.fallback,
         enabled: state.enabled, disabledBy: state.disabledBy,
         refusalReason: state.refusalReason || null,
-        fallbackReasons: Object.keys(state.fallbackReasons) };
+        fallbackReasons: Object.keys(state.fallbackReasons),
+        fallbackCounts: { ...state.fallbackReasons } };
     });
   },
   finalize: function() {

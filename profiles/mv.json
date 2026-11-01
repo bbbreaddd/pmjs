@@ -43,6 +43,7 @@
     "js/pmjs-mv/images.js",
     "js/pmjs-rpgmaker/map-images.js",
     "js/pmjs-mv/storage.js",
+    "js/pmjs-mv/jsonex.js",
     "js/pmjs-rpgmaker/platform.js",
     "js/pmjs-mv/platform.js",
     "js/pmjs-mv/diagnostics.js",

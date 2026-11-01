@@ -293,6 +293,9 @@ test('runtime fallback reasons warn once per optimization and reason without cha
   assert.equal(record.enabled, true);
   assert.equal(record.refusalReason, null);
   assert.deepEqual(Array.from(record.fallbackReasons), ['unsupported drawing state', 'source revision unavailable']);
+  assert.deepEqual({ ...record.fallbackCounts }, { 'unsupported drawing state': 2, 'source revision unavailable': 1 });
+  record.fallbackCounts['unsupported drawing state'] = 99;
+  assert.equal(PMJS.optimizations.dump()[0].fallbackCounts['unsupported drawing state'], 2);
   record.fallbackReasons.push('unowned reason');
   assert.equal(PMJS.optimizations.dump()[0].fallbackReasons.length, 2);
 });
