@@ -20,7 +20,17 @@ PMJS.plugins.onLoaded('YEP_SaveCore', 'pmjs.adapter.save-core', function() {
     if (typeof original !== 'function') return;
     Window_SaveInfo.prototype[name] = function() {
       cancelPreviews(this);
-      return original.apply(this, arguments);
+      if (name !== 'refresh') return original.apply(this, arguments);
+      try {
+        return original.apply(this, arguments);
+      } catch (error) {
+        cancelPreviews(this);
+        this._saveContents = null;
+        console.warn('[pmjs] save preview failed for slot ' + this.savefileId() + ': ' + error.message);
+        this.contents.clear();
+        this.resetFontSettings();
+        return this.drawInvalidText(this.drawGameTitle(0));
+      }
     };
   });
 

@@ -7,6 +7,7 @@
     "animated-picture-loading.js",
     "independent-item-search.js",
     "persistent-storage.js",
+    "save-recovery.js",
     "auxiliary-storage.js",
     "input-polling.js",
     "message-fast-forward.js",

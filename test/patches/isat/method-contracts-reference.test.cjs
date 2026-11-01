@@ -123,3 +123,23 @@ test('neutral-tone admission accepts the purchased engine lifecycle', { skip: !g
   vm.runInContext('tone[0] = 10;', c);
   scene.updateToneChanger(); assert.equal(updates, 1); assert.equal(filter.enabled, true);
 });
+
+test('save recovery accepts the purchased engine and preserves the MetaControls wrapper', { skip: !game }, () => {
+  const f = fixture('save-recovery'), c = f.context;
+  const original = f.guestMethod('js/rpg_managers.js', 'DataManager.saveGame =');
+  const wrapper = f.guestMethod('js/plugins/Olivia_MetaControls.js', 'DataManager.saveGame =');
+  const calls = [];
+  c.Olivia = { MetaControls: { ___DataManager_saveGame___: original } };
+  c.$gameVariables = {};
+  c.StorageManager = { exists: () => true, backup: id => calls.push(['backup', id]) };
+  c.DataManager = {
+    saveGame: wrapper,
+    saveGameMetaControls() { calls.push('meta-controls'); },
+    saveGameWithoutRescue(id) { calls.push(['save', id]); return 'saved'; }
+  };
+  f.install();
+  assert.notEqual(c.Olivia.MetaControls.___DataManager_saveGame___, original);
+  assert.equal(c.DataManager.saveGame, wrapper);
+  assert.equal(c.DataManager.saveGame(2), 'saved');
+  assert.deepEqual(calls, ['meta-controls', ['backup', 2], ['save', 2]]);
+});
