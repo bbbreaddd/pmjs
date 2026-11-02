@@ -565,6 +565,80 @@ const Renderer::FilterProgram& Renderer::filterProgram(std::uint32_t handle) con
   return filterPrograms_[handle - 1];
 }
 
+namespace {
+
+bool glslSpace(char value) {
+  return value == ' ' || value == '\t' || value == '\r' || value == '\n' ||
+         value == '\f' || value == '\v';
+}
+
+// Game fragment shaders sample the filter texture through texture2D(uSampler, uv).
+// When a reused target is physically larger than the logical size the shader
+// math uses, sampler reads are scaled by logical/physical. Every coordinate the
+// game computes keeps the value it had on the exact-size path; only the sampler
+// lookup accounts for the physical allocation.
+std::string scaleSamplerCoordinates(std::string source) {
+  std::size_t prologue = 0;
+  while (prologue < source.size()) {
+    const auto lineEnd = source.find('\n', prologue);
+    if (lineEnd == std::string::npos) break;
+    std::size_t token = prologue;
+    while (token < lineEnd && glslSpace(source[token])) ++token;
+    if (source.compare(token, 9, "precision") != 0) break;
+    prologue = lineEnd + 1;
+  }
+  source.insert(prologue,
+    "precision highp float;\nuniform vec2 pmjsSampleScale;\n");
+  std::string out;
+  out.reserve(source.size() + 64);
+  std::size_t pos = 0;
+  while (pos < source.size()) {
+    const auto at = source.find("texture2D", pos);
+    if (at == std::string::npos) { out.append(source, pos, std::string::npos); break; }
+    const char before = at > 0 ? source[at - 1] : '\0';
+    const bool identifierBefore = (before >= 'a' && before <= 'z') ||
+      (before >= 'A' && before <= 'Z') || (before >= '0' && before <= '9') || before == '_';
+    std::size_t open = at + 9;
+    while (open < source.size() && glslSpace(source[open])) ++open;
+    if (identifierBefore || open >= source.size() || source[open] != '(') {
+      out.append(source, pos, at + 9 - pos);
+      pos = at + 9;
+      continue;
+    }
+    std::size_t close = std::string::npos, comma = std::string::npos;
+    int depth = 0;
+    for (std::size_t index = open; index < source.size(); ++index) {
+      const char value = source[index];
+      if (value == '(') {
+        ++depth;
+      } else if (value == ')') {
+        if (--depth == 0) { close = index; break; }
+      } else if (value == ',' && depth == 1 && comma == std::string::npos) {
+        comma = index;
+      }
+    }
+    if (comma == std::string::npos || close == std::string::npos) {
+      out.append(source, pos, std::string::npos);
+      break;
+    }
+    std::size_t first = open + 1, last = comma;
+    while (first < last && glslSpace(source[first])) ++first;
+    while (last > first && glslSpace(source[last - 1])) --last;
+    out.append(source, pos, comma + 1 - pos);
+    if (last - first == 8 && source.compare(first, 8, "uSampler") == 0) {
+      out += " pmjsSampleScale * (";
+      out.append(source, comma + 1, close - (comma + 1));
+      out += "))";
+    } else {
+      out.append(source, comma + 1, close - comma);
+    }
+    pos = close + 1;
+  }
+  return out;
+}
+
+}  // namespace
+
 std::uint32_t Renderer::createFilterProgram(const std::string& fragmentSource, const std::string& vertexSource) {
   if (fragmentSource.empty() || fragmentSource.size() > 65536 ||
       fragmentSource.find('\0') != std::string::npos) {
@@ -579,9 +653,12 @@ std::uint32_t Renderer::createFilterProgram(const std::string& fragmentSource, c
     source = "precision " + precision + " float;\n" + source;
   }
   source = "precision highp sampler2D;\n" + source;
+  // Contract checks below must see the exact text the game supplied; only the
+  // linked source carries the sampler-coordinate scale.
+  const std::string shaderSource = scaleSamplerCoordinates(source);
 
   for (std::size_t index = 0; index < filterPrograms_.size(); ++index) {
-    if (filterPrograms_[index].source == vertexSource + "\n" + source) return index + 1;
+    if (filterPrograms_[index].source == vertexSource + "\n" + shaderSource) return index + 1;
   }
   if (filterPrograms_.size() >= 128) {
     throw std::runtime_error("custom filter program budget exhausted");
@@ -602,10 +679,11 @@ std::uint32_t Renderer::createFilterProgram(const std::string& fragmentSource, c
   )";
   if (vertexSource.size() > 65536 || vertexSource.find('\0') != std::string::npos)
     throw std::invalid_argument("invalid filter vertex source");
-  const GLuint program = linkProgram(vertexSource.empty() ? vertex : vertexSource.c_str(), source.c_str());
+  const GLuint program = linkProgram(vertexSource.empty() ? vertex : vertexSource.c_str(), shaderSource.c_str());
   GLuint identityProgram = 0;
   try {
-    FilterProgram result{program, vertexSource + "\n" + source, !vertexSource.empty(), {}};
+    FilterProgram result{program, vertexSource + "\n" + shaderSource, !vertexSource.empty(), {}};
+    result.sampleScaleLocation = glGetUniformLocation(program, "pmjsSampleScale");
     constexpr std::array<const char*, 4> builtInUniformNames{
       "projectionMatrix", "filterArea", "filterClamp", "uSampler"};
     for (std::size_t index = 0; index < builtInUniformNames.size(); ++index) {
@@ -638,7 +716,8 @@ std::uint32_t Renderer::createFilterProgram(const std::string& fragmentSource, c
       glGetActiveUniform(program, index, name.size(), &length, &count, &type, name.data());
       const std::string key(name.data(), length);
       if (key == "pmjsScreenSize" || key == "pmjsFilterFrame" ||
-          key == "pmjsFilterTextureSize" || key == "pmjsTargetYDown") continue;
+          key == "pmjsFilterTextureSize" || key == "pmjsTargetYDown" ||
+          key == "pmjsSampleScale") continue;
       if (key == "projectionMatrix") {
         if (type != GL_FLOAT_MAT3 || count != 1) throw std::invalid_argument("filter projection must be mat3");
         continue;
@@ -687,7 +766,10 @@ std::uint32_t Renderer::createFilterProgram(const std::string& fragmentSource, c
       // Keep un-premultiplication, mixing and re-premultiplication, as well as
       // the original vertex program and sampling. Only exact matrix constants fold.
       result.identityUniformLocations.reserve(result.uniforms.size());
+      identitySource = scaleSamplerCoordinates(identitySource);
       result.identityProgram = identityProgram = linkProgram(vertexSource.c_str(), identitySource.c_str());
+      result.identitySampleScaleLocation =
+        glGetUniformLocation(result.identityProgram, "pmjsSampleScale");
       for (std::size_t index = 0; index < builtInUniformNames.size(); ++index) {
         result.identityBuiltInUniformLocations[index] =
           glGetUniformLocation(result.identityProgram, builtInUniformNames[index]);

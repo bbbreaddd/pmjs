@@ -282,6 +282,9 @@ void Renderer::ensureTarget(RenderTarget& target, int width, int height) {
       savedDraw = static_cast<GLint>(replacement.framebuffer);
     destroyTarget(target);
     target = replacement;
+    target.logicalWidth = width;
+    target.logicalHeight = height;
+    target.oversizeSince = 0;
     if (diagnostics_) ++stats_.rendererTargetCreates;
   } else {
     glDeleteFramebuffers(1, &replacement.framebuffer);
@@ -293,22 +296,48 @@ void Renderer::ensureTarget(RenderTarget& target, int width, int height) {
   if (!complete) throw std::runtime_error("renderer framebuffer is incomplete");
 }
 
-bool Renderer::ensureFilterTarget(RenderTarget& target, int width, int height, std::size_t slot) {
+bool Renderer::ensureFilterTarget(RenderTarget& target, int width, int height, std::size_t slot,
+                                  std::uint64_t frameTick, bool allowReuse) {
   const bool diagnostic = filterTargetDiagnostics();
+  const bool reuseEnabled = allowReuse && filterTargetReuseEnabled();
   auto& cached = filterTargetCache_[slot];
+  // A larger target is kept while the request still fits. It is only shrunk
+  // down to the requested size after it has been oversized for a while, so a
+  // transient small frame cannot force a reallocation.
+  const auto oversized = [&](const RenderTarget& candidate) {
+    return candidate.texture && (candidate.width > width || candidate.height > height);
+  };
+  const auto expired = [&](const RenderTarget& candidate) {
+    return oversized(candidate) && candidate.oversizeSince &&
+      frameTick - candidate.oversizeSince > filterTargetShrinkFrames;
+  };
+  const auto fits = [&](const RenderTarget& candidate) {
+    if (!candidate.texture) return false;
+    if (reuseEnabled) {
+      return candidate.width >= width && candidate.height >= height && !expired(candidate);
+    }
+    return candidate.width == width && candidate.height == height;
+  };
+  const auto noteUse = [&](RenderTarget& used) {
+    used.logicalWidth = width;
+    used.logicalHeight = height;
+    if (used.width == width && used.height == height) used.oversizeSince = 0;
+    else if (!used.oversizeSince) used.oversizeSince = frameTick;
+  };
   if (diagnostic) {
     std::fprintf(stderr,
       "[pmjs-filter-target] slot=%zu request=%dx%d current=%s%dx%d cached=%s%dx%d action=%s\n",
       slot, width, height, target.texture ? "" : "none:", target.texture ? target.width : 0,
       target.texture ? target.height : 0, cached.target.texture ? "" : "none:",
       cached.target.texture ? cached.target.width : 0, cached.target.texture ? cached.target.height : 0,
-      target.texture && target.width == width && target.height == height ? "reuse-current" :
-      (cached.target.texture && !cached.target.depth && cached.target.width == width &&
-       cached.target.height == height ? "cache-hit" : "create"));
+      fits(target) ? "reuse-current" :
+      (cached.target.texture && !cached.target.depth && fits(cached.target) ? "cache-hit" : "create"));
   }
-  if (target.texture && target.width == width && target.height == height) return true;
-  const bool reused = cached.target.texture && !cached.target.depth &&
-      cached.target.width == width && cached.target.height == height;
+  if (fits(target)) {
+    noteUse(target);
+    return true;
+  }
+  const bool reused = cached.target.texture && !cached.target.depth && fits(cached.target);
   GLint savedTexture = 0, savedRead = 0, savedDraw = 0;
   glGetIntegerv(GL_TEXTURE_BINDING_2D, &savedTexture);
   glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &savedRead);
@@ -333,6 +362,7 @@ bool Renderer::ensureFilterTarget(RenderTarget& target, int width, int height, s
     ensureTarget(replacement, width, height);
   }
   std::swap(target, replacement);
+  noteUse(target);
   if (replacement.texture && static_cast<GLuint>(savedTexture) == replacement.texture)
     savedTexture = static_cast<GLint>(target.texture);
   if (replacement.framebuffer && static_cast<GLuint>(savedRead) == replacement.framebuffer)
