@@ -1229,7 +1229,7 @@ void Renderer::renderScene() {
       }
       glBindFramebuffer(GL_FRAMEBUFFER, groupTargets_[filterDepth].framebuffer);
       glViewport(0, 0, static_cast<int>(rasterFrame[2] * rasterResolution), static_cast<int>(rasterFrame[3] * rasterResolution));
-      const auto& groupTarget = groupTargets_[filterDepth];
+      auto& groupTarget = groupTargets_[filterDepth];
       const int groupLogicalWidth = groupTarget.logicalWidth > 0 ?
         groupTarget.logicalWidth : groupTarget.width;
       const int groupLogicalHeight = groupTarget.logicalHeight > 0 ?
@@ -1248,14 +1248,21 @@ void Renderer::renderScene() {
       glClearColor(0, 0, 0, 0);
       if (oversized) {
         // A reused target can be physically larger than the frame. Clear the
-        // whole allocation (scissor off) so filter samples outside the content
-        // read transparent, not pixels left over from an earlier use.
-        glDisable(GL_SCISSOR_TEST);
-        scissorActive = false;
+        // logical extent (the physical tail was cleared at allocation and is
+        // never written) so samples outside the content read transparent.
         if (!reuseFilterContent) {
+          if (groupTarget.fullClearPending) {
+            glDisable(GL_SCISSOR_TEST);
+            groupTarget.fullClearPending = false;
+          } else {
+            glEnable(GL_SCISSOR_TEST);
+            glScissor(0, 0, groupLogicalWidth, groupLogicalHeight);
+          }
           glClear(GL_COLOR_BUFFER_BIT);
           if (diagnostics_) ++stats_.filterTargetClears;
         }
+        glDisable(GL_SCISSOR_TEST);
+        scissorActive = false;
         scissorBounds();
       } else {
         scissorBounds();

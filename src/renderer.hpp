@@ -464,6 +464,9 @@ class Renderer {
     int logicalHeight = 0;
     // Frame tick when the target first became larger than its request.
     std::uint64_t oversizeSince = 0;
+    // New allocations start with undefined storage: the first clear must cover
+    // the whole physical texture, later clears only the logical extent.
+    bool fullClearPending = false;
   };
 
   static constexpr std::size_t customFilterTargetCapacity = 64;

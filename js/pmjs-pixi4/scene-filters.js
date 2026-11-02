@@ -1,3 +1,10 @@
+if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
+    typeof PMJS.optimizations.register === 'function') {
+  // The switch is read natively from PMJS_DISABLE_OPT; the registration keeps
+  // that environment ID valid for the boot-time optimization validator.
+  PMJS.optimizations.register({ id: 'render.filter-target-reuse', owner: 'pmjs-pixi4',
+    fallback: 'allocate every filter target at the exact requested size' });
+}
 var nativeCustomFilterPlans = [];
 function disposeNativeCustomFilterPlans(plans) {
   if (!plans) return;

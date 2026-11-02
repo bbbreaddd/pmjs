@@ -285,6 +285,7 @@ void Renderer::ensureTarget(RenderTarget& target, int width, int height) {
     target.logicalWidth = width;
     target.logicalHeight = height;
     target.oversizeSince = 0;
+    target.fullClearPending = true;
     if (diagnostics_) ++stats_.rendererTargetCreates;
   } else {
     glDeleteFramebuffers(1, &replacement.framebuffer);

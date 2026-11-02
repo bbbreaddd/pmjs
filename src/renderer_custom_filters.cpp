@@ -310,9 +310,19 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, RenderTarget& 
     }
     ensureFilterTarget(target, requestWidth, requestHeight, index, frameTick_, true);
     glBindFramebuffer(GL_FRAMEBUFFER, target.framebuffer);
-    glDisable(GL_SCISSOR_TEST);
+    // Clear the logical extent only: the physical tail beyond it is never
+    // written and is cleared when the target is allocated, so content outside
+    // the frame still reads transparent.
     glClearColor(0, 0, 0, 0);
+    if (target.fullClearPending) {
+      glDisable(GL_SCISSOR_TEST);
+      target.fullClearPending = false;
+    } else {
+      glEnable(GL_SCISSOR_TEST);
+      glScissor(0, 0, requestWidth, requestHeight);
+    }
     glClear(GL_COLOR_BUFFER_BIT);
+    glDisable(GL_SCISSOR_TEST);
     if (diagnostics_) ++stats_.filterTargetClears;
   }
   const auto& input = cacheHit ? filterIntermediateTarget_ :
