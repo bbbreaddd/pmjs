@@ -138,6 +138,37 @@ for (const [label, setup] of [
     object = function() {};
     object.toJSON = function() { calls.push(input['@c']); return input['@c']; };
   `],
+  ['function with a toJSON getter', `
+    object = function() {};
+    Object.defineProperty(object, 'toJSON', { get: function() {
+      calls.push(!!input['@c']); return function() { calls.push(this === object); return 17; };
+    } });
+  `],
+  ['function with inherited serialization', `
+    object = function() {};
+    Function.prototype.toJSON = function() { calls.push(this === object, !!input['@c']); return 17; };
+  `],
+  ['function with a tag getter', `
+    object = function() {};
+    Object.defineProperty(object, Symbol.toStringTag, { get: function() {
+      calls.push(!!input['@c']); return 'Function';
+    } });
+  `],
+  ['function with an object tag', `
+    object = function() {};
+    Object.defineProperty(object, Symbol.toStringTag, { value: 'Object' });
+  `],
+  ['function proxy', `
+    object = new Proxy(function() {}, { get: function(target, key, receiver) {
+      calls.push(String(key) + ':' + !!input['@c']); return Reflect.get(target, key, receiver);
+    } });
+  `],
+  ['function with a proxy prototype', `
+    object = function() {};
+    Object.setPrototypeOf(object, new Proxy(Function.prototype, { get: function(target, key, receiver) {
+      calls.push(String(key) + ':' + !!input['@c']); return Reflect.get(target, key, receiver);
+    } }));
+  `],
   ['inherited constructor object with a name getter', `
     Object.setPrototypeOf(object, { constructor: {
       get name() { calls.push(!!input['@c']); return input['@c'] ? 'Live' : 'Copy'; }
@@ -474,4 +505,48 @@ test('parse guards hasOwnProperty accessors without an extra callback', () => {
     assert.equal(vm.runInContext('seen.has(loaded)', target), true);
   }
   assert.deepEqual(Array.from(ctx.calls), Array.from(stock.calls));
+});
+
+
+test('ordinary callback fields preserve stock bytes, live identities and fast game objects', () => {
+  const edit = `
+    var calls = 0;
+    var callback = function() { calls++; };
+    var callbacks = [callback, callback.bind(null), () => calls++, async function() {}, function*() {}, class Callback {}];
+    Object.defineProperty(callback, 'ignored', { enumerable: true, get: function() { throw new Error('not serialized'); } });
+    Object.freeze(callbacks[1]);
+  `;
+  const stock = context({ installed: false, edit }), ctx = context({ edit });
+  for (const target of [stock, ctx]) {
+    target.input = target.build(7, 12);
+    vm.runInContext(`
+      input.picture = { updateMove: callbacks[1] };
+      input.map.camTarget = { screenX: callback, screenY: callback };
+      input.callbacks = callbacks; input.callback = callback; callback.owner = input;
+    `, target);
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(ctx.callback, 'ignored');
+  assert.equal(ctx.JsonEx.stringify(ctx.input), stock.JsonEx.stringify(stock.input));
+  assert.equal(ctx.input.callback, ctx.callback);
+  assert.equal(ctx.callback.owner, ctx.input);
+  assert.equal(ctx.input.picture.updateMove, ctx.callbacks[1]);
+  assert.equal(ctx.input.map.camTarget.screenX, ctx.callback);
+  assert.deepEqual(Object.getOwnPropertyDescriptor(ctx.callback, 'ignored'), descriptor);
+  assert.equal(ctx.calls, 0);
+  assert.equal(stock.calls, 0);
+  assert.ok(ctx.input.events.filter(Boolean).every(event => ctx.fast(event)));
+  assert.ok(stock.input.events.filter(Boolean).every(event => !stock.fast(event)));
+  const json = ctx.JsonEx.stringify(ctx.input);
+  const plain = JSON.parse(json);
+  assert.equal(Object.hasOwn(plain, 'callback'), false);
+  assert.deepEqual(plain.callbacks['@a'], Array(6).fill(null));
+  assert.deepEqual({ ...ctx.PMJS.optimizations.dump().find(entry => entry.id === 'storage.jsonex-fast-objects').fallbackCounts }, {});
+});
+
+test('a function root preserves stock return value and metadata cleanup', () => {
+  const edit = `var callback = function() {}; callback['@c'] = 17; callback['@'] = 'custom';`;
+  const stock = context({ installed: false, edit }), ctx = context({ edit });
+  assert.equal(ctx.JsonEx.stringify(ctx.callback), stock.JsonEx.stringify(stock.callback));
+  assert.equal(Object.hasOwn(ctx.callback, '@c'), false);
+  assert.equal(Object.hasOwn(ctx.callback, '@'), false);
 });

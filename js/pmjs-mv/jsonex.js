@@ -54,9 +54,21 @@ function installNativeJsonEx() {
   var unsupported = {};
   var hookNames = ['toJSON', 'constructor', 'hasOwnProperty', '@', '@c', 'valueOf', 'toISOString', Symbol.toPrimitive, Symbol.toStringTag];
 
+  function canShareFunction(value) {
+    for (var current = value; current; current = Object.getPrototypeOf(current)) {
+      if (isProxy(current)) return false;
+      var json = Object.getOwnPropertyDescriptor(current, 'toJSON');
+      var tag = Object.getOwnPropertyDescriptor(current, Symbol.toStringTag);
+      if (json && (!('value' in json) || typeof json.value === 'function')) return false;
+      if (tag && (!('value' in tag) || tag.value === 'Object' || tag.value === 'Array')) return false;
+    }
+    return true;
+  }
+
   function copyGraph(value, copies, checkedPrototypes, depth) {
     if (depth >= JsonEx.maxDepth) return unsupported;
-    if (typeof value === 'function') return unsupported;
+    // Stock leaves ordinary functions untouched; JSON omits fields or emits null array slots.
+    if (typeof value === 'function') return canShareFunction(value) ? value : unsupported;
     if (!value || typeof value !== 'object') return value;
     if (copies.has(value)) return copies.get(value);
     if (isProxy(value) || !Object.isExtensible(value)) return unsupported;
