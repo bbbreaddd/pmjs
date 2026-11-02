@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <string>
 #include <memory>
 #include <unordered_map>
@@ -14,6 +15,15 @@
 #include <variant>
 
 namespace pmjs {
+
+// Filter-target churn premise check: log requested sizes and allocation cost.
+inline bool filterTargetDiagnostics() {
+  static const bool enabled = []() {
+    const char* value = std::getenv("PMJS_FILTER_TARGET_DIAGNOSTICS");
+    return value && std::string(value) == "1";
+  }();
+  return enabled;
+}
 
 enum class BlendMode : std::uint8_t {
   normal = 0,

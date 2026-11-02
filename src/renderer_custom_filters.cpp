@@ -3,6 +3,7 @@
 #include <GLES3/gl3.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -298,8 +299,14 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, RenderTarget& 
   for (std::size_t index = 0; !cacheHit && index < plan.resolutions.size(); ++index) {
     if (index == 1 || (index == 0 && borrowInput)) continue;
     auto& target = customPassTargets_[index];
-    ensureFilterTarget(target, pot(frame[2] * plan.resolutions[index]),
-      pot(frame[3] * plan.resolutions[index]), index);
+    const int requestWidth = pot(frame[2] * plan.resolutions[index]);
+    const int requestHeight = pot(frame[3] * plan.resolutions[index]);
+    if (filterTargetDiagnostics()) {
+      std::fprintf(stderr,
+        "[pmjs-filter-target] slot=%zu frame=%.2fx%.2f res=%.3f pot=%dx%d\n",
+        index, frame[2], frame[3], plan.resolutions[index], requestWidth, requestHeight);
+    }
+    ensureFilterTarget(target, requestWidth, requestHeight, index);
     glBindFramebuffer(GL_FRAMEBUFFER, target.framebuffer);
     glDisable(GL_SCISSOR_TEST);
     glClearColor(0, 0, 0, 0);

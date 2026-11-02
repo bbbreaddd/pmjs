@@ -7,8 +7,10 @@
 #include <GLES3/gl3.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
@@ -292,8 +294,19 @@ void Renderer::ensureTarget(RenderTarget& target, int width, int height) {
 }
 
 bool Renderer::ensureFilterTarget(RenderTarget& target, int width, int height, std::size_t slot) {
-  if (target.texture && target.width == width && target.height == height) return true;
+  const bool diagnostic = filterTargetDiagnostics();
   auto& cached = filterTargetCache_[slot];
+  if (diagnostic) {
+    std::fprintf(stderr,
+      "[pmjs-filter-target] slot=%zu request=%dx%d current=%s%dx%d cached=%s%dx%d action=%s\n",
+      slot, width, height, target.texture ? "" : "none:", target.texture ? target.width : 0,
+      target.texture ? target.height : 0, cached.target.texture ? "" : "none:",
+      cached.target.texture ? cached.target.width : 0, cached.target.texture ? cached.target.height : 0,
+      target.texture && target.width == width && target.height == height ? "reuse-current" :
+      (cached.target.texture && !cached.target.depth && cached.target.width == width &&
+       cached.target.height == height ? "cache-hit" : "create"));
+  }
+  if (target.texture && target.width == width && target.height == height) return true;
   const bool reused = cached.target.texture && !cached.target.depth &&
       cached.target.width == width && cached.target.height == height;
   GLint savedTexture = 0, savedRead = 0, savedDraw = 0;
@@ -306,6 +319,16 @@ bool Renderer::ensureFilterTarget(RenderTarget& target, int width, int height, s
     stats_.rendererTargetCacheBytes -= targetStorageBytes(replacement);
     cached = {};
     if (diagnostics_) ++stats_.rendererTargetCacheHits;
+  } else if (diagnostic) {
+    const int previousWidth = target.texture ? target.width : 0;
+    const int previousHeight = target.texture ? target.height : 0;
+    const auto start = std::chrono::steady_clock::now();
+    ensureTarget(replacement, width, height);
+    const auto elapsed = std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now() - start).count();
+    std::fprintf(stderr,
+      "[pmjs-filter-target] slot=%zu created=%dx%d previous=%dx%d ms=%.3f\n",
+      slot, width, height, previousWidth, previousHeight, elapsed);
   } else {
     ensureTarget(replacement, width, height);
   }
@@ -318,6 +341,10 @@ bool Renderer::ensureFilterTarget(RenderTarget& target, int width, int height, s
     savedDraw = static_cast<GLint>(target.framebuffer);
 
   const auto evict = [&](CachedFilterTarget& entry) {
+    if (diagnostic && entry.target.texture) {
+      std::fprintf(stderr, "[pmjs-filter-target] slot=%zu evicted=%dx%d\n", slot,
+        entry.target.width, entry.target.height);
+    }
     if (static_cast<GLuint>(savedTexture) == entry.target.texture) savedTexture = 0;
     if (static_cast<GLuint>(savedRead) == entry.target.framebuffer) savedRead = 0;
     if (static_cast<GLuint>(savedDraw) == entry.target.framebuffer) savedDraw = 0;
