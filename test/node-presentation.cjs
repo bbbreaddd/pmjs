@@ -76,6 +76,35 @@ assert.equal(letterboxedFrames,
     ? 1 : 0);
 assert.equal(p.letterboxed, letterboxedFrames === 1);
 
+native.render.setPresentScaleMode('stretch');
+const stretched = native.render.presentation();
+assert.equal(stretched.scale, 'stretch');
+assert.equal(stretched.viewportWidth, stretched.drawableWidth);
+assert.equal(stretched.viewportHeight, stretched.drawableHeight);
+assert.equal(stretched.viewportX, 0);
+assert.equal(stretched.viewportY, 0);
+native.render.setPresentScaleMode('fit');
+const fitted = native.render.presentation();
+assert.equal(fitted.scale, 'fit');
+assert(Math.abs(fitted.viewportWidth * gameHeight - fitted.viewportHeight * gameWidth) <= Math.max(gameWidth, gameHeight));
+native.render.setPresentScaleMode('integer');
+const integer = native.render.presentation();
+assert.equal(integer.scale, 'integer');
+if (gameWidth > integer.drawableWidth || gameHeight > integer.drawableHeight) {
+  const divisor = Math.max(Math.ceil(gameWidth / integer.drawableWidth), Math.ceil(gameHeight / integer.drawableHeight));
+  assert.equal(integer.viewportWidth, Math.max(1, Math.round(gameWidth / divisor)));
+  assert.equal(integer.viewportHeight, Math.max(1, Math.round(gameHeight / divisor)));
+}
+native.render.setPresentScaleMode('crop');
+const crop = native.render.presentation();
+assert.equal(crop.scale, 'crop');
+assert(crop.viewportWidth >= crop.drawableWidth && crop.viewportHeight >= crop.drawableHeight);
+assert(Math.abs(crop.viewportWidth * gameHeight - crop.viewportHeight * gameWidth) <= Math.max(gameWidth, gameHeight));
+assert(Math.abs(crop.viewportX * 2 + crop.viewportWidth - crop.drawableWidth) <= 1);
+assert(Math.abs(crop.viewportY * 2 + crop.viewportHeight - crop.drawableHeight) <= 1);
+native.render.setPresentScaleMode('default');
+assert.equal(native.render.presentation().scale, process.env.PMJS_PRESENT_SCALE === 'integer' ? 'integer' : 'fit');
+
 // Presenting must leave the scene framebuffer intact: clear it through an
 // empty submit, present repeatedly, and verify black every time.
 const schema = native.scene.schema;

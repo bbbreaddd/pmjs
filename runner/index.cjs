@@ -18,6 +18,7 @@ const { resolveDefaults, validate, PMJS_MV_LOGIC_HZ, PMJS_SUPPORTED_RENDER_HZ,
 const hostTimers = require('node:timers');
 const { createDiagnostics, memoryState } = require('./diagnostics.cjs');
 const { createMemoryReclaimer } = require('./memory-reclamation.cjs');
+const { createSettings, createInputFilter } = require('./settings.cjs');
 
 function sendSupervisorHeartbeat(processHandle, heartbeat) {
   if (!processHandle || typeof processHandle.send !== 'function' || !processHandle.connected) return false;
@@ -156,7 +157,7 @@ function createPreparationLog(details, { log = message => console.log(message), 
   };
 }
 
-async function prepareStartupAssets(options, native) {
+async function prepareStartupAssets(options, native, settings) {
   const preparationStarted = performance.now();
   console.log(`[pmjs] preparation event=start workspace_bytes=${options.assetPreparation.workspaceBytes} ` +
     `processor=${JSON.stringify(native.assets.preparationVersion || null)} ` +
@@ -174,17 +175,18 @@ async function prepareStartupAssets(options, native) {
   let screenUpdated = -Infinity;
   let current = { completed: 0, total: 0, phase: 'discover' };
   let stageBaseline = null;
-  const showProgress = () => {
+  let menuVisible = false;
+  const showProgress = (present = true, force = false) => {
     if (preparationFailed || (cancelled && !current.terminal) ||
         typeof native.runtime.preparationProgress !== 'function') return;
     const elapsedMs = performance.now() - screenStarted;
     // Coalesce file notifications before formatting or crossing into native drawing.
-    if (!current.terminal && elapsedMs - screenUpdated < 500) return;
+    if (!force && !current.terminal && elapsedMs - screenUpdated < 500) return;
     screenUpdated = elapsedMs;
     const stepped = stageProgress(current, elapsedMs, stageBaseline);
     stageBaseline = stepped.baseline;
     const progress = stepped.progress;
-    native.runtime.preparationProgress({ ...progress, lines: progressLines(progress),
+    native.runtime.preparationProgress({ ...progress, force, present, lines: progressLines(progress),
       fonts: options.preparationFonts });
   };
   showProgress();
@@ -192,12 +194,33 @@ async function prepareStartupAssets(options, native) {
   const pump = setInterval(() => {
     if (cancelled) return;
     try {
-      if (!native.pollEvents()) cancelled = true;
+      if (!native.pollEvents()) {
+        cancelled = true;
+        return;
+      }
+      if (settings) {
+        settings.update(native.input.snapshot());
+        native.input.consumePressed();
+        if (!settings.isOpen() && menuVisible) {
+          settings.hide(); menuVisible = false;
+          showProgress(true, true);
+          return;
+        }
+        if (settings.isOpen()) {
+          if (performance.now() - screenStarted - screenUpdated < 100) return;
+          showProgress(false, true);
+          settings.draw();
+          menuVisible = true;
+          native.renderFrame();
+          native.swapFrame();
+          return;
+        }
+      }
       activeLog?.heartbeat();
       showProgress();
     } catch (error) { failPreparation(error); }
   }, 16);
-  let preparation, preparationStatus = 'failed';
+  let preparation, preparationStatus = 'failed', preparationThrew = false;
   try {
     const all = await prepareGameAssets({ gameRoot: options.gameRoot,
       sourceRoots: [path.join(options.saveRoot, 'game-files', 'files')],
@@ -215,7 +238,7 @@ async function prepareStartupAssets(options, native) {
           stageBaseline = null;
         }
         activeLog?.progress(progress); current = progress;
-        try { showProgress(); } catch (error) { failPreparation(error); }
+        try { if (!settings?.isOpen()) showProgress(); } catch (error) { failPreparation(error); }
       },
       onPhaseComplete: (stage, value) => { if (stage !== 'port') activeLog?.finish(value); }
     });
@@ -248,10 +271,17 @@ async function prepareStartupAssets(options, native) {
         preparation.error || preparation.maps?.error ? 'failed' :
           preparation.failedFiles || preparation.installFailures ? 'partial' : 'complete';
   } catch (error) {
+    preparationThrew = true;
     activeLog?.finish({ ...current, cancelled }, preparationFailed ? preparationError : error);
     throw preparationFailed ? preparationError : error;
   } finally {
     clearInterval(pump);
+    try {
+      if (typeof native.runtime.preparationClear === 'function') native.runtime.preparationClear();
+    } catch (error) {
+      if (!preparationThrew && !preparationFailed) throw error;
+      console.warn('[pmjs] preparation cleanup failed:', error.message);
+    }
     console.log(`[pmjs] preparation event=finish status=${preparationStatus} duration_ms=${(performance.now() - preparationStarted).toFixed(1)}`);
   }
   if (preparationFailed) throw preparationError;
@@ -274,6 +304,16 @@ async function runSession(input, diagnostics, setNative) {
   }
 
   const timing = parseTimingConfig(hostProcess.env);
+  const defaultRenderHz = timing.renderHz;
+  function setRenderLimit(limit) {
+    const hz = limit === null ? defaultRenderHz : limit;
+    if (hz === timing.renderHz) return false;
+    timing.renderHz = hz;
+    timing.uncapped = hz === 0;
+    timing.renderPeriod = hz === 0 ? Infinity : 1000 / hz;
+    if (globalThis.__pmjsTimingConfig) globalThis.__pmjsTimingConfig.renderHz = hz;
+    return true;
+  }
   const swapDefault = resolveSwapDefault(hostProcess.env, timing);
   if (swapDefault !== null) {
     hostProcess.env.PMJS_SWAP_INTERVAL = swapDefault;
@@ -298,7 +338,7 @@ async function runSession(input, diagnostics, setNative) {
   console.log(`[pmjs] startup stage=host-initialized elapsed_ms=${(performance.now() - startupStarted).toFixed(1)}`);
   let pendingInvalidations = 0, retryInvalidationAt = 0;
   let invalidatePreparation;
-  let dispatcher;
+  let dispatcher, settings;
   let removePromiseRejectionBridge;
   let subprocesses, reloadRequested = false, finishSession;
   let cancelFrameSchedule = () => {};
@@ -335,10 +375,12 @@ async function runSession(input, diagnostics, setNative) {
   }
   try {
     native.storage = createStorage(options.saveRoot);
+    settings = createSettings({ native,
+      fonts: options.preparationFonts, storage: native.storage, width: options.width, height: options.height });
     native.fs = createGameFilesystem(native.fs, path.join(options.saveRoot, 'game-files'));
     if (options.assetPreparation.enabled || options.portDescriptors?.length || options.preparationAdapters?.length) {
       diagnostics.stage('asset-preparation');
-      const startup = await prepareStartupAssets(options, native);
+      const startup = await prepareStartupAssets(options, native, settings);
       invalidatePreparation = startup.invalidate;
       const { entries, decryptedEntries, releaseCacheLease, invalidateCatalog, ...preparationStats } = startup.preparation;
       if (preparationStats.maps) {
@@ -415,6 +457,7 @@ async function runSession(input, diagnostics, setNative) {
       greenworks };
     globalThis.__pmjsBuiltinRequire = require;
     globalThis.__pmjsNativeRuntime = true;
+    setRenderLimit(settings.frameRate());
     globalThis.__pmjsTimingConfig = {
       renderHz: timing.renderHz,
       catchupMode: timing.catchupMode
@@ -455,13 +498,13 @@ async function runSession(input, diagnostics, setNative) {
     });
 
     if (reloadRequested) return { reload: true };
-    const period = timing.renderPeriod;
-    let deadline = timing.uncapped ? 0 : native.runtime.monotonicNow() + period;
+    let deadline = timing.uncapped ? 0 : native.runtime.monotonicNow() + timing.renderPeriod;
     console.log(`[pmjs] timing logic_hz=${timing.logicHz} ` +
       (timing.uncapped ? 'render_hz=uncapped' : `render_hz=${timing.renderHz}`));
     diagnostics.stage('playing');
     console.log(`[pmjs] ready size=${options.width}x${options.height} startup_ms=${(performance.now() - startupStarted).toFixed(1)}`);
     let diagnosticsFrameIndex = 0;
+    const filterInput = createInputFilter();
     await new Promise((resolve, reject) => {
       finishSession = resolve;
       native.runtime.scheduling.onFatal = reject;
@@ -497,16 +540,21 @@ async function runSession(input, diagnostics, setNative) {
             }
             previousFullscreen = windowState && windowState.fullscreen;
           }
-          if (typeof globalThis.__pmjsReceiveInput === 'function' &&
-              typeof native.input.snapshot === 'function') {
-            globalThis.__pmjsReceiveInput(native.input.snapshot());
-          }
           const now = performance.now();
+          const input = native.input.snapshot();
+          const captured = settings.update(input);
+          if (setRenderLimit(settings.frameRate()))
+            deadline = timing.uncapped ? 0 : native.runtime.monotonicNow();
+          if (captured) native.input.consumePressed();
+          if (typeof globalThis.__pmjsReceiveInput === 'function')
+            globalThis.__pmjsReceiveInput(filterInput(input, captured));
           const frame = () => {
             native.beginFrame();
             return Promise.resolve(globalThis.__pmjsTick(now)).then(() => {
               if (dispatcher && dispatcher.stopped) return;
               globalThis.__pmjsRender(now);
+              if (settings.isOpen()) settings.draw();
+              else if (settings.isVisible()) settings.hide();
               native.renderFrame();
               if (globalThis.__pmjsAfterPresent) globalThis.__pmjsAfterPresent();
               native.swapFrame();
@@ -525,7 +573,7 @@ async function runSession(input, diagnostics, setNative) {
               memoryReclaimer.observe(diagnostics.snapshot().memory);
             }
             if (!timing.uncapped) {
-              deadline = advanceDeadline(deadline, native.runtime.monotonicNow(), period);
+              deadline = advanceDeadline(deadline, native.runtime.monotonicNow(), timing.renderPeriod);
             }
             schedule();
           }, reject);
@@ -545,6 +593,7 @@ async function runSession(input, diagnostics, setNative) {
     try { native.runtime.quit(); } catch (_) {}
     throw error;
   } finally {
+    if (settings) await settings.waitForSave();
     if (removePromiseRejectionBridge) removePromiseRejectionBridge();
     cancelFrameSchedule();
     if (dispatcher) dispatcher.stop();

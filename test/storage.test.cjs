@@ -20,6 +20,22 @@ test('storage writes atomically and rejects paths outside its root', () => {
   }
 });
 
+test('asynchronous storage replacement persists and rejects paths outside its root', async () => {
+  const root = temporaryDirectory('pmjs-save-async-');
+  const storage = createStorage(root);
+  await storage.writeTextAsync('runtime/settings.json', 'first');
+  await storage.writeTextAsync('runtime/settings.json', 'second');
+  assert.equal(storage.readText('runtime/settings.json'), 'second');
+  const rename = fs.promises.rename;
+  try {
+    fs.promises.rename = async () => { throw new Error('rename failed'); };
+    await assert.rejects(storage.writeTextAsync('runtime/settings.json', 'third'), /rename failed/);
+  } finally { fs.promises.rename = rename; }
+  assert.equal(storage.readText('runtime/settings.json'), 'second');
+  assert.deepEqual(storage.readDirectory('runtime'), ['settings.json']);
+  await assert.rejects(storage.writeTextAsync('../escape', 'bad'), /invalid save path/);
+});
+
 test('save readers capture files, read bounded bytes and release their descriptor', () => {
   const root = temporaryDirectory('pmjs-save-reader-'), storage = createStorage(root);
   const files = () => fs.readdirSync('/proc/self/fd').length;

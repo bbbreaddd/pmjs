@@ -162,6 +162,36 @@ function createStorage(root) {
       }
     },
     writeText(relative, contents) { return this.writeBytes(relative, Buffer.from(String(contents), 'utf8')); },
+    async writeTextAsync(relative, contents) {
+      mutationGeneration++;
+      const destination = resolve(relative);
+      const directory = path.dirname(destination);
+      const first = await fs.promises.mkdir(directory, { recursive: true });
+      const syncDir = async dir => {
+        const handle = await fs.promises.open(dir, 'r');
+        try { await handle.sync(); } finally { await handle.close(); }
+      };
+      if (first) {
+        for (let current = directory; ; current = path.dirname(current)) {
+          await syncDir(current);
+          if (current === path.dirname(first)) break;
+        }
+      }
+      const temporary = `${destination}.tmp-${hostProcess.pid}-${++temporaryId}`;
+      let handle;
+      try {
+        handle = await fs.promises.open(temporary, 'wx', 0o600);
+        await handle.writeFile(String(contents), 'utf8');
+        await handle.sync();
+        await handle.close();
+        handle = undefined;
+        await fs.promises.rename(temporary, destination);
+        await syncDir(directory);
+      } finally {
+        if (handle) await handle.close();
+        try { await fs.promises.unlink(temporary); } catch (_) {}
+      }
+    },
     exists: relative => fs.existsSync(resolve(relative)),
     isDirectory(relative) {
       try { return fs.statSync(resolve(relative)).isDirectory(); }

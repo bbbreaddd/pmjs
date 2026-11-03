@@ -68,6 +68,63 @@ function writeAddon(root, polls = [true, false]) {
   return addon;
 }
 
+test('saved frame limit reaches the guest timing configuration at boot', async () => {
+  const options = fixture(`
+    if (__pmjsTimingConfig.renderHz !== 30) throw new Error('saved limit not applied');
+    globalThis.__pmjsTick = () => {};
+    globalThis.__pmjsRender = () => {};
+  `);
+  options.assetPreparation = 'off'; options.mapPreparation = 'off';
+  fs.mkdirSync(path.join(options.saveRoot, 'runtime-settings'), { recursive: true });
+  fs.writeFileSync(path.join(options.saveRoot, 'runtime-settings/settings.json'),
+    JSON.stringify({ scale: 'default', frameRate: 30 }));
+  await run(options);
+});
+
+test('settings captures controller input while game frames continue', async () => {
+  const clock = require('node:perf_hooks').performance;
+  const oldNow = Object.getOwnPropertyDescriptor(clock, 'now');
+  let now = 0, polls = 0;
+  Object.defineProperty(clock, 'now', { configurable: true, value: () => now });
+  const options = fixture(`
+    globalThis.__settingsInputs = [];
+    globalThis.__settingsRates = [];
+    globalThis.__settingsTicks = 0;
+    globalThis.__pmjsReceiveInput = value => __settingsInputs.push(value);
+    globalThis.__pmjsTick = () => { __settingsTicks++; __settingsRates.push(__pmjsTimingConfig.renderHz); };
+    globalThis.__pmjsRender = () => {};
+  `);
+  options.assetPreparation = 'off'; options.mapPreparation = 'off';
+  const host = require(options.addon);
+  host.pollEvents = () => ++polls <= 12;
+  let snapshots = 0;
+  host.input.snapshot = () => {
+    now += 1000;
+    snapshots++;
+    const pressed = snapshots === 8 ? [13] : snapshots === 9 ? [15] : [];
+    return { gamepads: [{ connected: true, index: 0, instance: 7,
+      buttonsDown: [16, 0], buttonsPressed: pressed, axes: [0.5, 0] }] };
+  };
+  let shown = 0;
+  host.runtime.settingsOverlay = () => ({ hasFont: true });
+  host.runtime.settingsPresent = visible => { if (visible) shown++; };
+  try {
+    await run(options);
+    assert(shown > 0);
+    assert.equal(globalThis.__settingsTicks, globalThis.__settingsInputs.length);
+    assert(globalThis.__settingsInputs.some(input => input.gamepads[0].buttonsDown.length === 0));
+    assert(globalThis.__settingsTicks >= 7);
+    assert(globalThis.__settingsRates.includes(30));
+  } finally {
+    if (oldNow) Object.defineProperty(clock, 'now', oldNow);
+    else delete clock.now;
+    delete globalThis.__settingsInputs;
+    delete globalThis.__settingsTicks;
+    delete globalThis.__settingsRates;
+    delete globalThis.__pmjsReceiveInput;
+  }
+});
+
 test('preparation logs bounded heartbeats, current work and phase durations with a monotonic clock', () => {
   let clock = 0;
   const lines = [];
@@ -388,6 +445,7 @@ test('unknown configuration optimization IDs fail the run at startup', async () 
     bootstrap, saveRoot: path.join(tempDir, 'save'), width: 320, height: 240,
     title: 'Test', config };
   options.addon = writeAddon(tempDir);
+  require(options.addon).pollEvents = () => true;
   await assert.rejects(run(options), /Unknown PMJS optimization: terrax\.nativeLight/);
 });
 test('runner loads its addon and bootstrap while allowing Node jobs to finish', async () => {
@@ -634,6 +692,41 @@ test('preparation cancellation polls the host, waits for its worker and prevents
   await run(f);
   assert.equal(fs.readFileSync(marker, 'utf8'), 'closed');
   assert.deepEqual(fs.readdirSync(path.join(f.saveRoot, 'asset-cache/preparation-v1', fs.readdirSync(path.join(f.saveRoot, 'asset-cache/preparation-v1'))[0], 'entries')), []);
+});
+
+test('settings stays open while preparation completes and the guest starts', async () => {
+  const clock = require('node:perf_hooks').performance;
+  const oldNow = Object.getOwnPropertyDescriptor(clock, 'now');
+  let now = 50000, shown = 0, guestBooted = false, cleared = 0;
+  const progressPresentations = [];
+  Object.defineProperty(clock, 'now', { configurable: true, value: () => now });
+  const f = fixture('NativeHost.input.checkBoot(); globalThis.__pmjsTick=()=>{}; globalThis.__pmjsRender=()=>{};');
+  fs.mkdirSync(path.join(f.gameRoot, 'img/pictures'), { recursive: true });
+  fs.writeFileSync(path.join(f.gameRoot, 'img/pictures/test.png'), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  const host = require(f.addon);
+  host.pollEvents = () => !guestBooted;
+  host.input.snapshot = () => {
+    now += 100;
+    return { gamepads: [{ connected: true, instance: 1,
+      buttonsDown: [16, 0], buttonsPressed: [], axes: [0, 0] }] };
+  };
+  host.input.checkBoot = () => { assert(shown > 0); guestBooted = true; };
+  host.runtime.preparationProgress = value => { progressPresentations.push(value); };
+  host.runtime.preparationClear = () => { cleared++; };
+  host.runtime.settingsOverlay = () => ({ hasFont: true });
+  host.runtime.settingsPresent = visible => { if (visible) shown++; };
+  host.assets.processImage = () => new Promise(resolve => setTimeout(() => resolve(null), 1100));
+  host.assets.installPrepared = () => {};
+  try {
+    await run(f);
+    assert(shown > 0);
+    assert(guestBooted);
+    assert(progressPresentations.some(value => value.force && value.present === false));
+    assert.equal(cleared, 1);
+  } finally {
+    if (oldNow) Object.defineProperty(clock, 'now', oldNow);
+    else delete clock.now;
+  }
 });
 
 for (const failure of ['poll', 'presentation', 'progress callback']) {

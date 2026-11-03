@@ -764,6 +764,7 @@ void Renderer::releaseResources(bool constructorFailure) {
   if (presentationVideo_) images_.release(presentationVideo_);
   if (presentationUpperCanvas_) images_.release(presentationUpperCanvas_);
   if (presentationOverlay_) images_.release(presentationOverlay_);
+  if (runtimeOverlay_) images_.release(runtimeOverlay_);
   while (!tileLayers_.empty()) destroyTileLayer(tileLayers_.begin()->first);
   for (std::size_t index = 0; index < primitiveSurfaces_.size(); ++index) {
     auto& surface = primitiveSurfaces_[index];

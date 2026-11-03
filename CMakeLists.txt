@@ -712,10 +712,14 @@ if(BUILD_TESTING)
   endfunction()
   pmjs_add_presentation_test(node-presentation-identity 640x480 640x480 "" "640,480,0,0,nearest,0")
   pmjs_add_presentation_test(node-presentation-fit 816x624 640x480 "" "628,480,6,0,linear,1")
-  pmjs_add_presentation_test(node-presentation-integer-fallback 816x624 640x480 "integer" "628,480,6,0,linear,1")
+  pmjs_add_presentation_test(node-presentation-integer-downscale 816x624 640x480 "integer" "408,312,116,84,nearest,1")
   pmjs_add_presentation_test(node-presentation-integer-upscale 320x240 640x480 "integer" "640,480,0,0,nearest,0")
   pmjs_add_presentation_test(node-presentation-display 64x64 "" "" "auto")
   pmjs_add_presentation_test(node-presentation-awkward 500x333 640x480 "" "640,426,0,27,linear,1")
+  add_test(NAME node-presentation-scaling COMMAND ${XVFB_RUN} -a -s "-screen 0 640x480x24" ${NODE_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-presentation-scaling.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
+  set_tests_properties(node-presentation-scaling PROPERTIES ENVIRONMENT
+    "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy;PMJS_WINDOW_SIZE=640x480")
 
   foreach(PMJS_OVERLAY_WINDOW IN ITEMS 192x96 384x240 96x48)
     add_test(NAME node-presentation-overlay-${PMJS_OVERLAY_WINDOW}

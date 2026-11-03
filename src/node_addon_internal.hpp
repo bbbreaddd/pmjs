@@ -56,6 +56,7 @@ struct State {
   bool preparationFontsResolved = false;
   std::vector<std::filesystem::path> preparationFonts;
   pmjs::CanvasHandle preparationSurface = 0;
+  pmjs::CanvasHandle settingsSurface = 0;
   std::unordered_map<std::uint32_t, std::unique_ptr<Video>> videos;
   std::unordered_map<std::string, AsyncImageLoad*> pendingImageLoads;
   std::uint64_t imageDecodeJobs = 0;

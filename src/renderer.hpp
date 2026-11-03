@@ -119,8 +119,7 @@ struct FramePacket {
   std::vector<RenderCommand> commands;
 };
 
-// `integer` falls back to `fit` when shrinking (floor of sub-1 is zero).
-enum class PresentScaleMode : std::uint8_t { fit, integer };
+enum class PresentScaleMode : std::uint8_t { fit, integer, stretch, crop };
 
 enum class PresentFilter : std::uint8_t { nearest, linear };
 
@@ -260,10 +259,13 @@ class Renderer {
                              float upperCanvasOpacity);
   bool setPresentationOverlay(ImageHandle image, float x, float y,
                               float width, float height, float opacity);
+  bool setRuntimeOverlay(ImageHandle image);
   bool setRenderTargetSize(int width, int height);
   bool setScreenRenderSize(int width, int height);
   void setDrawableSize(int width, int height);
   PresentationGeometry presentationGeometry() const { return presentation_; }
+  void setPresentScaleMode(PresentScaleMode mode);
+  void resetPresentScaleMode();
   void beginFrame();
   void queueQuad(float x, float y, float width, float height,
                  const std::array<float, 4>& color);
@@ -306,6 +308,7 @@ class Renderer {
   void renderScene();
   void presentToDrawable();
   void drawPresentationOverlay();
+  void drawOverlay(ImageHandle image, const std::array<float, 4>& rect, float opacity, bool fullDrawable = false);
   void finish();
   std::vector<std::uint8_t> captureSceneRgba(AlphaMode alphaMode = AlphaMode::straight);
   std::vector<std::uint8_t> captureSceneRawPremultiplied();
@@ -470,6 +473,7 @@ class Renderer {
   int width_;
   int height_;
   PresentationGeometry presentation_;
+  bool userPresentScale_ = false;
   std::array<int, 2> authoredPresentationSize_{0, 0};
   int authoredPresentationFilter_ = 0;
   bool hasFilterOverride_ = false;
@@ -677,6 +681,7 @@ class Renderer {
   ImageHandle presentationVideo_ = 0;
   ImageHandle presentationUpperCanvas_ = 0;
   ImageHandle presentationOverlay_ = 0;
+  ImageHandle runtimeOverlay_ = 0;
   std::array<float, 4> presentationOverlayRect_{};
   float presentationOverlayOpacity_ = 0.0F;
   float presentationCanvasOpacity_ = 1.0F;

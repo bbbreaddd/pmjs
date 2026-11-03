@@ -172,6 +172,12 @@
     var clockGetter = '_getTimeInMsWithoutMobileSafari';
     function wrappedUpdateMain() {
       var scene = this;
+      var configuredHz = globalThis.__pmjsTimingConfig && globalThis.__pmjsTimingConfig.renderHz;
+      if ((!options || options.renderHz === undefined) && typeof configuredHz === 'number' &&
+          configuredHz >= 0 && configuredHz !== gate.renderHz) {
+        gate.renderHz = configuredHz;
+        gate.slotMs = configuredHz > 0 ? 1000 / configuredHz : 0;
+      }
       if (scene._deltaTime !== 1 / PMJS_MV_LOGIC_HZ) {
         gate.clockMs = null;
         gate.accMs = 0;

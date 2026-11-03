@@ -52,7 +52,8 @@ PresentScaleMode Renderer::presentScaleModeFromEnvironment() {
   const std::string text(value);
   if (text == "fit") return PresentScaleMode::fit;
   if (text == "integer") return PresentScaleMode::integer;
-  throw std::runtime_error("PMJS_PRESENT_SCALE must be fit or integer");
+  if (text == "crop") return PresentScaleMode::crop;
+  throw std::runtime_error("PMJS_PRESENT_SCALE must be fit, integer, or crop");
 }
 
 bool Renderer::presentFilterOverrideFromEnvironment(PresentFilter* filter) {
@@ -86,9 +87,26 @@ void Renderer::recomputePresentation() {
     if (scale >= 1) {
       viewportWidth = sourceWidth * scale;
       viewportHeight = sourceHeight * scale;
+    } else {
+      const int divisor = std::max((sourceWidth + drawableWidth - 1) / drawableWidth,
+                                   (sourceHeight + drawableHeight - 1) / drawableHeight);
+      viewportWidth = std::max(1, (sourceWidth + divisor / 2) / divisor);
+      viewportHeight = std::max(1, (sourceHeight + divisor / 2) / divisor);
     }
   }
-  if (viewportWidth == drawableWidth && viewportHeight == drawableHeight) {
+  if (presentation_.scaleMode == PresentScaleMode::crop) {
+    const bool widthConstrained = static_cast<std::int64_t>(drawableWidth) * sourceHeight >=
+                                  static_cast<std::int64_t>(drawableHeight) * sourceWidth;
+    if (widthConstrained) {
+      viewportWidth = drawableWidth;
+      viewportHeight = static_cast<int>((static_cast<std::int64_t>(sourceHeight) * drawableWidth + sourceWidth / 2) / sourceWidth);
+    } else {
+      viewportHeight = drawableHeight;
+      viewportWidth = static_cast<int>((static_cast<std::int64_t>(sourceWidth) * drawableHeight + sourceHeight / 2) / sourceHeight);
+    }
+  }
+  if (presentation_.scaleMode == PresentScaleMode::fit &&
+      viewportWidth == drawableWidth && viewportHeight == drawableHeight) {
     const bool widthConstrained = static_cast<std::int64_t>(drawableWidth) *
             sourceHeight <=
         static_cast<std::int64_t>(drawableHeight) * sourceWidth;
@@ -104,7 +122,7 @@ void Renderer::recomputePresentation() {
          sourceHeight / 2) / sourceHeight);
     }
   }
-  if (authoredPresentationSize_[0] > 0) {
+  if (!userPresentScale_ && authoredPresentationSize_[0] > 0) {
     viewportWidth = authoredPresentationSize_[0];
     viewportHeight = authoredPresentationSize_[1];
   }
@@ -118,9 +136,21 @@ void Renderer::recomputePresentation() {
       viewportHeight % sourceHeight == 0 &&
       viewportWidth / sourceWidth == viewportHeight / sourceHeight;
   presentation_.filter = hasFilterOverride_ ? filterOverride_
-      : (integerMapping ? PresentFilter::nearest : PresentFilter::linear);
+      : (integerMapping || presentation_.scaleMode == PresentScaleMode::integer ? PresentFilter::nearest : PresentFilter::linear);
   if (authoredPresentationFilter_) presentation_.filter = authoredPresentationFilter_ == 1 ?
     PresentFilter::nearest : PresentFilter::linear;
+}
+
+void Renderer::setPresentScaleMode(PresentScaleMode mode) {
+  userPresentScale_ = true;
+  presentation_.scaleMode = mode;
+  recomputePresentation();
+}
+
+void Renderer::resetPresentScaleMode() {
+  userPresentScale_ = false;
+  presentation_.scaleMode = presentScaleModeFromEnvironment();
+  recomputePresentation();
 }
 
 void Renderer::setPresentationViewport(int width, int height, int filter) {
@@ -423,6 +453,13 @@ bool Renderer::setPresentationOverlay(ImageHandle image, float x, float y,
   presentationOverlay_ = image;
   presentationOverlayRect_ = {x, y, width, height};
   presentationOverlayOpacity_ = image ? std::clamp(opacity, 0.0F, 1.0F) : 0.0F;
+  return true;
+}
+
+bool Renderer::setRuntimeOverlay(ImageHandle image) {
+  if (image && image != runtimeOverlay_ && !images_.retain(image)) return false;
+  if (runtimeOverlay_ && runtimeOverlay_ != image) images_.release(runtimeOverlay_);
+  runtimeOverlay_ = image;
   return true;
 }
 

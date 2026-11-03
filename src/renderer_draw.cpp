@@ -2352,6 +2352,7 @@ void Renderer::presentToDrawable() {
                         GL_LINEAR : GL_NEAREST);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     drawPresentationOverlay();
+    drawOverlay(runtimeOverlay_, {0, 0, static_cast<float>(width_), static_cast<float>(height_)}, 1, true);
     return;
   }
   if (diagnostics_) ++stats_.scaledPresentationFrames;
@@ -2371,9 +2372,7 @@ void Renderer::presentToDrawable() {
   glDisable(GL_SCISSOR_TEST);
   // Bars use a blit, not glClear: an unswapped window clear correlates
   // with stale FBO readback under llvmpipe. Revisit with Mali evidence.
-  const bool fullWindow = destX == 0 && destY == 0 &&
-      destWidth == drawableWidth && destHeight == drawableHeight;
-  if (!fullWindow) {
+  if (destX > 0 || destY > 0 || destX + destWidth < drawableWidth || destY + destHeight < drawableHeight) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, blackFramebuffer_);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
     glBlitFramebuffer(0, 0, 1, 1, 0, 0, drawableWidth, drawableHeight,
@@ -2389,18 +2388,25 @@ void Renderer::presentToDrawable() {
                       GL_LINEAR : GL_NEAREST);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   drawPresentationOverlay();
+  drawOverlay(runtimeOverlay_, {0, 0, static_cast<float>(width_), static_cast<float>(height_)}, 1, true);
 }
 
 void Renderer::drawPresentationOverlay() {
-  if (!presentationOverlay_ || presentationOverlayOpacity_ <= 0.0F) return;
-  const auto image = images_.lookup(presentationOverlay_);
+  drawOverlay(presentationOverlay_, presentationOverlayRect_, presentationOverlayOpacity_);
+}
+
+void Renderer::drawOverlay(ImageHandle handle, const std::array<float, 4>& rect, float opacity, bool fullDrawable) {
+  if (!handle || opacity <= 0.0F) return;
+  const auto image = images_.lookup(handle);
   if (!image) return;
-  const int x = presentation_.viewportX;
-  const int y = presentation_.drawableHeight - presentation_.viewportY -
+  const int x = fullDrawable ? 0 : presentation_.viewportX;
+  const int y = fullDrawable ? 0 : presentation_.drawableHeight - presentation_.viewportY -
     presentation_.viewportHeight;
-  glViewport(x, y, presentation_.viewportWidth, presentation_.viewportHeight);
+  const int viewportWidth = fullDrawable ? presentation_.drawableWidth : presentation_.viewportWidth;
+  const int viewportHeight = fullDrawable ? presentation_.drawableHeight : presentation_.viewportHeight;
+  glViewport(x, y, viewportWidth, viewportHeight);
   glEnable(GL_SCISSOR_TEST);
-  glScissor(x, y, presentation_.viewportWidth, presentation_.viewportHeight);
+  glScissor(x, y, viewportWidth, viewportHeight);
   glEnable(GL_BLEND);
   applyBlendMode(BlendMode::normal);
   glUseProgram(presentationProgram_);
@@ -2408,12 +2414,11 @@ void Renderer::drawPresentationOverlay() {
   glActiveTexture(GL_TEXTURE3);
   glBindTexture(GL_TEXTURE_2D, image->texture);
   glUniform1i(presentationUpperCanvasUniform_, 3);
-  glUniform1f(presentationUpperCanvasOpacityUniform_, presentationOverlayOpacity_);
+  glUniform1f(presentationUpperCanvasOpacityUniform_, opacity);
   glUniform1i(presentationUpperCanvasPremultipliedUniform_, image->premultiplied);
   glUniform1i(presentationLayerUniform_, 2);
   glUniform4f(presentationRectUniform_,
-    presentationOverlayRect_[0] / width_, presentationOverlayRect_[1] / height_,
-    presentationOverlayRect_[2] / width_, presentationOverlayRect_[3] / height_);
+    rect[0] / width_, rect[1] / height_, rect[2] / width_, rect[3] / height_);
   glDrawArrays(GL_TRIANGLES, 0, 6);
   if (diagnostics_) ++stats_.drawCalls;
   glActiveTexture(GL_TEXTURE0);

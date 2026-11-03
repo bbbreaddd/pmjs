@@ -732,6 +732,20 @@ napi_value setScreenRenderSize(napi_env env, napi_callback_info info) try {
   return nullptr;
 }
 
+napi_value setPresentScaleMode(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info, 1);
+  if (args.empty()) throw std::invalid_argument("scale mode is required");
+  const auto mode = asString(env, args[0]);
+  if (mode == "default") host(env).renderer.resetPresentScaleMode();
+  else if (mode == "fit" || mode == "stretch" || mode == "integer" || mode == "crop")
+    host(env).renderer.setPresentScaleMode(mode == "fit" ? PresentScaleMode::fit :
+      mode == "integer" ? PresentScaleMode::integer : mode == "crop" ? PresentScaleMode::crop : PresentScaleMode::stretch);
+  else throw std::invalid_argument("invalid scale mode");
+  return undefined(env);
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what()); return nullptr;
+}
+
 napi_value presentationGeometry(napi_env env, napi_callback_info) try {
   State& value = host(env);
   value.core.syncDrawableSize();
@@ -755,8 +769,9 @@ napi_value presentationGeometry(napi_env env, napi_callback_info) try {
   check(env, napi_set_named_property(env, result, "viewportHeight",
     number(env, geometry.viewportHeight)), "cannot set viewport height");
   check(env, napi_set_named_property(env, result, "scale",
-    string(env, geometry.scaleMode == PresentScaleMode::integer ?
-      "integer" : "fit")), "cannot set scale mode");
+    string(env, geometry.scaleMode == PresentScaleMode::integer ? "integer" :
+      geometry.scaleMode == PresentScaleMode::stretch ? "stretch" :
+      geometry.scaleMode == PresentScaleMode::crop ? "crop" : "fit")), "cannot set scale mode");
   check(env, napi_set_named_property(env, result, "filter",
     string(env, geometry.filter == PresentFilter::linear ?
       "linear" : "nearest")), "cannot set present filter");
@@ -827,6 +842,7 @@ void registerGraphicsBindings(napi_env env, napi_value exports) {
   method(env, render, "renderToCanvas", renderToCanvas);
   method(env, render, "renderToImage", renderToImage);
   method(env, render, "presentation", presentationGeometry);
+  method(env, render, "setPresentScaleMode", setPresentScaleMode);
   method(env, render, "stats", rendererStats);
   method(env, render, "finish", finishRendering);
   napi_value scene = moduleObject(env);

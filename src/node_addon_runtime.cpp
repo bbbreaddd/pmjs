@@ -281,6 +281,156 @@ void resolvePreparationFonts(napi_env env, napi_value progress, State& value) {
 }
 }  // namespace
 
+napi_value settingsOverlay(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info, 1);
+  if (args.empty()) throw std::invalid_argument("settings overlay requires options");
+  auto& value = host(env);
+  resolvePreparationFonts(env, args[0], value);
+  const int selected = hasProperty(env, args[0], "selected") ? asInt32(env, property(env, args[0], "selected")) : 0;
+  const bool confirming = hasProperty(env, args[0], "confirming") && asBoolean(env, property(env, args[0], "confirming"));
+  const bool confirmYes = hasProperty(env, args[0], "confirmYes") && asBoolean(env, property(env, args[0], "confirmYes"));
+  const auto rowsArg = property(env, args[0], "rows");
+  bool array = false;
+  check(env, napi_is_array(env, rowsArg, &array), "invalid settings rows");
+  if (!array) throw std::invalid_argument("settings rows must be an array");
+  std::uint32_t count = 0;
+  check(env, napi_get_array_length(env, rowsArg, &count), "invalid settings rows");
+  if (count == 0 || count > 16) throw std::invalid_argument("invalid settings row count");
+  std::vector<std::pair<std::string, std::string>> rows;
+  for (std::uint32_t i = 0; i < count; ++i) {
+    napi_value row;
+    check(env, napi_get_element(env, rowsArg, i, &row), "invalid settings row");
+    rows.emplace_back(asString(env, property(env, row, "label")), asString(env, property(env, row, "value")));
+  }
+  const auto title = asString(env, property(env, args[0], "title"));
+  const auto question = asString(env, property(env, args[0], "question"));
+  const auto yes = asString(env, property(env, args[0], "yes"));
+  const auto no = asString(env, property(env, args[0], "no"));
+  const auto footerArg = property(env, args[0], "footer");
+  std::array<std::string, 2> footer;
+  for (std::uint32_t i = 0; i < footer.size(); ++i) {
+    napi_value line;
+    check(env, napi_get_element(env, footerArg, i, &line), "invalid settings footer");
+    footer[i] = asString(env, line);
+  }
+  value.core.syncDrawableSize();
+  const auto geometry = value.renderer.presentationGeometry();
+  const int sw = std::max(1, geometry.drawableWidth);
+  const int sh = std::max(1, geometry.drawableHeight);
+  const float width = static_cast<float>(sw), height = static_cast<float>(sh);
+  constexpr float scale = 1.0F;
+  const auto current = value.canvases.info(value.settingsSurface);
+  if (!value.settingsSurface || !current || current->width != sw || current->height != sh) {
+    if (value.settingsSurface) value.canvases.release(value.settingsSurface);
+    const auto surface = value.canvases.create(sw, sh);
+    if (!surface) throw std::runtime_error("cannot allocate settings surface");
+    value.settingsSurface = surface->handle;
+  }
+  const auto rect = [&](float x, float y, float w, float h, std::uint32_t color) {
+    value.canvases.fillRect(value.settingsSurface, x * sw, y * sh, w * sw, h * sh, color);
+  };
+  rect(0, 0, 1, 1, 0x090E17FFU);
+  rect(0.07F, 0.06F, 0.86F, 0.88F, 0x131C2BFFU);
+  rect(0.07F, 0.06F, 0.012F, 0.88F, 0x59B8D1FFU);
+  const float rowStep = 0.51F / rows.size();
+  const float rowY = 0.24F + static_cast<float>(std::clamp(selected, 0, static_cast<int>(rows.size()) - 1)) * rowStep;
+  if (!confirming) {
+    rect(0.11F, rowY, 0.78F, rowStep * 0.85F, 0x294D66FFU);
+    rect(0.11F, rowY, 0.008F, rowStep * 0.85F, 0x75D9E8FFU);
+  } else {
+    rect(0.15F, 0.24F, 0.70F, 0.43F, 0x1C2C3CFFU);
+    rect(confirmYes ? 0.21F : 0.54F, 0.46F, 0.25F, 0.13F, 0x426B83FFU);
+  }
+  rect(0.12F, 0.78F, 0.76F, 0.003F, 0x526979FFU);
+  napi_value fallbackLines;
+  check(env, napi_create_array(env, &fallbackLines), "cannot create settings text lines");
+  std::uint32_t fallbackCount = 0;
+  {
+    const float bodySize = std::clamp(height * 0.045F, 10.0F, 27.0F);
+    const auto text = [&](const std::string& label, float x, float y, float maxWidth,
+                          float size, std::uint32_t color, bool right = false) {
+      x *= scale; y *= scale; maxWidth *= scale; size *= scale;
+      const auto measured = value.preparationFonts.empty() ?
+        std::optional<double>{label.size() * size * 0.75} :
+        value.canvases.measureText(value.preparationFonts, label, size);
+      if (measured && *measured > maxWidth) size *= maxWidth / *measured;
+      const auto actual = value.preparationFonts.empty() ?
+        std::optional<double>{label.size() * size * 0.75} :
+        value.canvases.measureText(value.preparationFonts, label, size);
+      const float left = right && actual ? x - *actual : x;
+      if (!value.preparationFonts.empty()) {
+        value.canvases.drawText(value.settingsSurface, value.preparationFonts, label, left, y, size, color);
+      } else {
+        napi_value line = moduleObject(env);
+        napi_set_named_property(env, line, "text", string(env, label));
+        napi_set_named_property(env, line, "x", number(env, left));
+        napi_set_named_property(env, line, "y", number(env, y - size));
+        napi_set_named_property(env, line, "pixel", number(env, size / 16));
+        napi_set_named_property(env, line, "color", uint32(env, color));
+        napi_set_element(env, fallbackLines, fallbackCount++, line);
+      }
+    };
+    constexpr std::uint32_t primary = 0xFFFFFFFFU;
+    constexpr std::uint32_t secondary = 0xB4C8D5FFU;
+    text(title, width * 0.15F, height * 0.17F, width * 0.70F, bodySize * 1.35F, primary);
+    if (confirming) {
+      text(question, width * 0.20F, height * 0.36F, width * 0.60F, bodySize * 1.05F, primary);
+      const auto centered = [&](const std::string& label, float center) {
+        const auto measured = value.preparationFonts.empty() ?
+          std::optional<double>{label.size() * bodySize * 0.75} :
+          value.canvases.measureText(value.preparationFonts, label, bodySize);
+        text(label, width * center + (measured ? *measured / 2 : 0), height * 0.545F,
+             width * 0.21F, bodySize, primary, true);
+      };
+      centered(yes, 0.335F);
+      centered(no, 0.665F);
+      text(footer[0], width * 0.15F, height * 0.85F, width * 0.70F, bodySize * 0.76F, secondary);
+      text(footer[1], width * 0.15F, height * 0.91F, width * 0.70F, bodySize * 0.76F, secondary);
+    } else {
+      const bool stacked = width < 480.0F;
+      for (std::size_t i = 0; i < rows.size(); ++i) {
+        const float top = 0.24F + i * rowStep;
+        const bool hasValue = !rows[i].second.empty();
+        const float labelY = height * (top + rowStep * (stacked && hasValue ? 0.32F : 0.54F));
+        text(rows[i].first, width * 0.15F, labelY, width * (stacked || !hasValue ? 0.68F : 0.31F), bodySize, primary);
+        if (hasValue) {
+          const auto valueText = "<  " + rows[i].second + "  >";
+          if (stacked) text(valueText, width * 0.15F, height * (top + rowStep * 0.71F), width * 0.68F, bodySize * 0.88F, secondary);
+          else text(valueText, width * 0.85F, labelY, width * 0.38F, bodySize, secondary, true);
+        }
+      }
+      text(footer[0], width * 0.15F, height * 0.85F, width * 0.70F, bodySize * 0.76F, secondary);
+      text(footer[1], width * 0.15F, height * 0.91F,
+           width * 0.70F, bodySize * 0.76F, secondary);
+    }
+  }
+  napi_value result = moduleObject(env);
+  napi_set_named_property(env, result, "canvas", uint32(env, value.settingsSurface));
+  napi_set_named_property(env, result, "hasFont", boolean(env, !value.preparationFonts.empty()));
+  napi_set_named_property(env, result, "scale", number(env, scale));
+  napi_set_named_property(env, result, "width", uint32(env, sw));
+  napi_set_named_property(env, result, "height", uint32(env, sh));
+  napi_set_named_property(env, result, "lines", fallbackLines);
+  return result;
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what()); return nullptr;
+}
+
+napi_value settingsPresent(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info, 1);
+  auto& value = host(env);
+  const bool visible = !args.empty() && asBoolean(env, args[0]);
+  const auto image = visible ? value.canvases.prepareImage(value.settingsSurface) : std::optional<pmjs::ImageHandle>{0};
+  if (!image || !value.renderer.setRuntimeOverlay(*image)) throw std::runtime_error("cannot present settings");
+  if (!visible && value.settingsSurface) {
+    value.canvases.release(value.settingsSurface);
+    value.settingsSurface = 0;
+  }
+  return undefined(env);
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what()); return nullptr;
+}
+
 napi_value preparationProgress(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info, 1);
   if (args.empty()) throw std::invalid_argument("preparationProgress requires progress");
@@ -294,7 +444,9 @@ napi_value preparationProgress(napi_env env, napi_callback_info info) try {
     (!hasProperty(env, progress, "phase") && completed >= total);
   auto& value = host(env);
   const auto now = std::chrono::steady_clock::now();
-  if (!terminal && now - value.preparationPresentedAt < std::chrono::milliseconds(500))
+  const bool present = !hasProperty(env, progress, "present") || asBoolean(env, property(env, progress, "present"));
+  const bool force = hasProperty(env, progress, "force") && asBoolean(env, property(env, progress, "force"));
+  if (!terminal && !force && now - value.preparationPresentedAt < std::chrono::milliseconds(500))
     return undefined(env);
   value.preparationPresentedAt = now;
   value.core.syncDrawableSize();
@@ -359,8 +511,10 @@ napi_value preparationProgress(napi_env env, napi_callback_info info) try {
     }
   }
   value.core.syncDrawableSize();
-  value.renderer.render();
-  value.platform.swap();
+  if (present) {
+    value.renderer.render();
+    value.platform.swap();
+  }
   if (terminal && value.preparationSurface) {
     value.canvases.release(value.preparationSurface);
     value.preparationSurface = 0;
@@ -369,6 +523,17 @@ napi_value preparationProgress(napi_env env, napi_callback_info info) try {
 } catch (const std::exception& error) {
   napi_throw_error(env, nullptr, error.what());
   return nullptr;
+}
+
+napi_value preparationClear(napi_env env, napi_callback_info) try {
+  auto& value = host(env);
+  if (value.preparationSurface) {
+    value.canvases.release(value.preparationSurface);
+    value.preparationSurface = 0;
+  }
+  return undefined(env);
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what()); return nullptr;
 }
 
 napi_value renderFrame(napi_env env, napi_callback_info) try {
@@ -756,6 +921,9 @@ void registerRuntimeBindings(napi_env env, napi_value exports) {
   method(env, runtime, "allocatorStats", allocatorStats);
   method(env, runtime, "trimAllocator", trimAllocator);
   method(env, runtime, "preparationProgress", preparationProgress);
+  method(env, runtime, "preparationClear", preparationClear);
+  method(env, runtime, "settingsOverlay", settingsOverlay);
+  method(env, runtime, "settingsPresent", settingsPresent);
   method(env, runtime, "env", environment);
   method(env, runtime, "monotonicNow", monotonicNow);
   method(env, runtime, "windowState", windowState);

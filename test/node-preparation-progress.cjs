@@ -13,6 +13,33 @@ const canvasBytesBefore = native.canvas.memory().liveBytes;
 native.runtime.preparationProgress({ completed: 0, total: 1000, terminal: false,
   fonts: ['text-shaping.ttf'], lines: ['Preparing assets'] });
 const window = native.runtime.windowState();
+const withPreparationSurface = native.canvas.memory().liveCount;
+native.runtime.preparationClear();
+assert.equal(native.canvas.memory().liveCount, withPreparationSurface - 1,
+  'preparation cleanup releases its surface without a terminal draw');
+native.runtime.preparationProgress({ completed: 0, total: 1000, terminal: false,
+  force: true, fonts: ['text-shaping.ttf'], lines: ['Preparing assets'] });
+const framesBeforeQueuedProgress = native.render.stats().frames;
+native.runtime.preparationProgress({ completed: 1, total: 1000, terminal: false,
+  force: true, present: false, fonts: ['text-shaping.ttf'], lines: ['Preparing assets'] });
+assert.equal(native.render.stats().frames, framesBeforeQueuedProgress,
+  'queued preparation progress is not presented before the caller renders it');
+native.renderFrame();
+assert.equal(native.render.stats().frames, framesBeforeQueuedProgress + 1);
+native.beginFrame();
+native.render.quad(0, 0, 320, 240, 0, 0, 0, 1);
+const menu = native.runtime.settingsOverlay({ title: 'Settings', question: 'Exit Settings?', yes: 'Yes', no: 'No',
+  rows: [{ label: 'Scaling', value: 'Stretch' }], footer: ['D-pad: Move', 'Start / B: Exit'], fonts: ['text-shaping.ttf'] });
+native.runtime.settingsPresent(true);
+native.renderFrame();
+const menuWidth = menu.width, menuHeight = menu.height;
+const settingsPixels = native.canvas.readPixels(menu.canvas, 0, 0, menuWidth, menuHeight);
+let settingsText = 0;
+for (let y = Math.floor(menuHeight * 0.27); y < menuHeight * 0.69; y++) for (let x = Math.floor(menuWidth * 0.09); x < menuWidth * 0.91; x++) {
+  if (settingsPixels[(y * menuWidth + x) * 4] > 160) settingsText++;
+}
+assert(settingsText > 30, 'settings overlay must draw readable text');
+native.runtime.settingsPresent(false);
 assert.ok(native.canvas.memory().liveBytes - canvasBytesBefore <= window.width * window.height * 4,
   'preparation text must fit the physical display without oversized supersampling');
 const before = native.render.stats().frames - 1;

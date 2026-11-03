@@ -10,6 +10,8 @@ native.images.memory();
 const initialImages = native.images.memory().liveCount;
 const overlay = native.canvas.create(8, 8);
 const upper = native.canvas.create(192, 96);
+const menu = { title: 'Settings', question: 'Exit Settings?', yes: 'Yes', no: 'No',
+  rows: [{ label: 'Scaling', value: 'Default' }], footer: ['', ''], fonts: [] };
 native.canvas.fillRect(upper.handle, 0, 0, 192, 96, 0xff0000ff);
 const colors = [0xff0000ff, 0x00ff00ff, 0x0000ffff, 0xffff00ff];
 colors.forEach((color, index) => native.canvas.fillRect(overlay.handle,
@@ -64,7 +66,28 @@ show(overlay.handle, 10, 12, 0.5);
 frame();
 check(pixel(34, 16), [127, 128, 0, 255]);
 check(pixel(80, 30), [255, 0, 0, 255]);
+native.runtime.settingsOverlay(menu);
+native.runtime.settingsPresent(true);
+frame();
+assert.notDeepEqual(pixel(80, 30), [255, 0, 0, 255], 'settings appear above the upper canvas');
+assert.notDeepEqual(pixel(34, 16), [127, 128, 0, 255], 'settings appear above the guest overlay');
+native.runtime.settingsPresent(false);
+frame();
+check(pixel(34, 16), [127, 128, 0, 255]);
+check(pixel(80, 30), [255, 0, 0, 255]);
+const videoImage = native.images.fallbackImage();
+native.render.setPresentationLayers(0, videoImage.handle, 1, 0, 0);
+frame();
+const videoPixel = pixel(80, 30);
+native.runtime.settingsOverlay(menu);
+native.runtime.settingsPresent(true);
+frame();
+assert.notDeepEqual(pixel(80, 30), videoPixel, 'settings appear above the video layer');
+native.runtime.settingsPresent(false);
+frame();
+check(pixel(80, 30), videoPixel);
 native.render.setPresentationLayers(1, 0, 0, 0, 0);
+native.images.release(videoImage.handle);
 native.canvas.release(upper.handle);
 
 native.canvas.fillRect(overlay.handle, 0, 0, 8, 8, 0x00ffffff);
@@ -102,10 +125,17 @@ if (geometry.letterboxed) {
     'clipped overlay does not draw into letterbox bars');
   native.canvas.release(shot.handle);
 }
+native.runtime.settingsOverlay(menu);
+native.runtime.settingsPresent(true);
 native.render.setScreenRenderSize(208, 104);
 native.beginFrame();
 native.render.quad(0, 0, 208, 104, 1, 1, 1, 1);
+native.runtime.settingsOverlay({ ...menu, rows: [{ label: 'Scaling', value: 'Integer' }] });
+native.runtime.settingsPresent(true);
 native.renderFrame();
+assert.notDeepEqual(pixel(4, 4), [0, 0, 255, 255], 'settings remain on top after resize');
+native.runtime.settingsPresent(false);
+frame();
 check(pixel(4, 4), [0, 0, 255, 255]);
 show(0);
 frame();

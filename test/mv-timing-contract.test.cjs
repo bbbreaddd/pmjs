@@ -134,6 +134,18 @@ for (const [renderHz, expected] of [
   });
 }
 
+test('changing the runtime frame limit preserves the authored update rate', () => {
+  const { ctx, step } = startTiming(undefined, context => {
+    context.__pmjsTimingConfig = { renderHz: 120 };
+  });
+  step(0);
+  assert.equal(step(1000 / 120), 0);
+  assert.equal(step(1000 / 60), 1);
+  ctx.__pmjsTimingConfig.renderHz = 30;
+  assert.equal(step(50), 2);
+  assert.equal(step(250 / 3), 2);
+});
+
 test('ordinary fractional debt survives into subsequent scene updates', () => {
   const { ctx, step } = startTiming();
   step(0);
@@ -293,6 +305,17 @@ test('direct-stepping overrides remain unchanged and execute their authored beha
   assert.equal(logs.filter(line => line.includes('timing-contract refused')).length, 1);
   ctx.SceneManager.updateMain();
   assert.equal(ctx.SceneManager.logicSteps, 1);
+});
+
+test('a refused direct-stepping update remains tied to the configured presentation cadence', () => {
+  const ctx = loadTiming(context => {
+    context.__pmjsTimingConfig = { renderHz: 30 };
+    context.SceneManager = stockShapedScene();
+  });
+  ctx.SceneManager.updateMain = function() { this.updateScene(); this.renderScene(); };
+  assert.equal(ctx.pmjsMvInstallTimingContract(), false);
+  for (let frame = 0; frame < 30; frame++) ctx.SceneManager.updateMain();
+  assert.equal(ctx.SceneManager.logicSteps, 30);
 });
 
 test('stock-looking time scaling is refused without changing guest simulation', () => {
