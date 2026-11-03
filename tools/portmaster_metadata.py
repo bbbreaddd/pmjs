@@ -208,9 +208,6 @@ def stage_submission(destination, port, data, stage, info, notices, extra_notice
         if file:
             shutil.copyfile(file, destination / file.name)
     shutil.copyfile(source / 'gameinfo.xml', destination / 'gameinfo.xml')
-    thread = source / 'testing_thread.txt'
-    if thread.exists():
-        shutil.copyfile(_regular(thread), destination / thread.name)
     patches = source / 'patches'
     if patches.exists():
         for file in (patches, *patches.rglob('*')):

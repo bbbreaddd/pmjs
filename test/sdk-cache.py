@@ -192,6 +192,35 @@ install: all
         self.assertEqual(self.builder.digest(archive), checksum)
         self.assertIsNone(self.builder.cache_reason(self.sdk, self.builder.read_record(self.sdk, 'ffmpeg'), recipe))
 
+    def test_ffmpeg_portable_paths_remove_local_build_directory(self):
+        configure = '#!' + sys.executable + '\n' + '''import sys
+from pathlib import Path
+args = dict(arg[2:].split('=', 1) for arg in sys.argv[1:] if '=' in arg)
+Path('config.h').write_text('#define FFMPEG_CONFIGURATION "' + args['prefix'] + '"\\n')
+Path('Makefile').write_text("""all: libfixture.so
+libfixture.so: fixture.c
+\t{cc} -shared -fPIC -g {flags} {ldflags} {source} -o libfixture.so
+install: all
+\tmkdir -p $(DESTDIR){prefix}/lib
+\tcp libfixture.so $(DESTDIR){prefix}/lib/
+""".format(cc=args['cc'], flags=args['extra-cflags'], ldflags=args['extra-ldflags'], source=Path('fixture.c').resolve(), prefix=args['prefix']))
+'''
+        recipe, _ = self.archive('ffmpeg', {
+            'LICENSE': 'fixture license', 'configure': configure,
+            'fixture.c': 'const char *source_path(void) { return __FILE__; }'
+        })
+        recipe['component']['portablePaths'] = True
+        recipe['component']['options'] = ['--extra-ldflags=-Wl,--strip-debug']
+        self.build('ffmpeg', recipe)
+        source = self.sdk / 'work/ffmpeg/ffmpeg'
+        config = (source / 'config.h').read_text()
+        binary = (self.sdk / 'prefix/lib/libfixture.so').read_bytes()
+        self.assertNotIn(str(self.sdk), config)
+        self.assertIn('/pmjs-sdk/prefix', config)
+        self.assertNotIn(str(self.sdk).encode(), binary)
+        self.assertIn(b'/pmjs-sdk/work/ffmpeg/ffmpeg/fixture.c', binary)
+        self.assertNotIn(b'.debug_info', binary)
+
 
 if __name__ == '__main__':
     unittest.main()

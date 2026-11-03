@@ -551,6 +551,25 @@ test('quit in the final event batch closes the host without starting the guest',
   assert.equal(quits, 1);
 });
 
+test('controller exit reaches guest persistence cleanup', async () => {
+  const options = fixture(`
+    globalThis.pmjsSteam = { flush() { NativeHost.input.flushed(); } };
+    NativeHost.input.checkBoot();
+    globalThis.__pmjsTick = () => {};
+    globalThis.__pmjsRender = () => {};
+  `);
+  options.assetPreparation = 'off'; options.mapPreparation = 'off';
+  const host = require(options.addon);
+  let booted = false, flushed = 0;
+  host.input.checkBoot = () => { booted = true; };
+  host.input.flushed = () => { ++flushed; };
+  host.pollEvents = () => !booted;
+  try {
+    await run(options);
+    assert.equal(flushed, 1);
+  } finally { delete globalThis.pmjsSteam; }
+});
+
 test('window tasks retain event order and fullscreen changes without ordinary events', async t => {
   const globals = ['PMJS', '__pmjsUpdateWindowState', '__pmjsDispatchWindowEvents'];
   const previous = globals.map(key => globalThis[key]);

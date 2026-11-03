@@ -105,6 +105,7 @@
       ]
     },
     "ffmpeg": {
+      "portablePaths": true,
       "options": [
         "--arch=aarch64",
         "--target-os=linux",
@@ -113,6 +114,7 @@
         "--disable-autodetect",
         "--disable-doc",
         "--disable-debug",
+        "--extra-ldflags=-Wl,--strip-debug",
         "--disable-network",
         "--disable-everything",
         "--disable-stripping",

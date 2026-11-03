@@ -6,8 +6,6 @@ import io
 import json
 import os
 from pathlib import Path
-import select
-import signal
 import shlex
 import shutil
 import subprocess
@@ -206,13 +204,14 @@ class PortMasterPackage(unittest.TestCase):
                 self.assertIn('minimalgame/' + name, names)
             self.assertEqual({name.split('/')[0] for name in names},
                              {'Minimal Game.sh', 'minimalgame'})
-            self.assertIn('minimalgame/testing_thread.txt', names)
+            self.assertFalse(any(name.endswith('/testing_thread.txt') or name == 'testing_thread.txt' for name in names))
             self.assertIn('minimalgame/patches/build.sh', names)
             self.assertIn('minimalgame/gamedata/', names)
             self.assertIn('Minimal Game.sh', names)
             self.assertNotIn('minimalgame/runtime/LICENSES.txt', names)
             self.assertIn('minimalgame/licenses/LICENSE.share_pmjs_notices_node_license.txt', names)
             self.assertIn('minimalgame/licenses/LICENSE.license.txt', names)
+            self.assertIn('minimalgame/licenses/LICENSE.share_pmjs_js_pmjs_web_fallback_font_license.txt', names)
             self.assertEqual(json.loads(package.read('minimalgame/port.json')), descriptor)
             self.assertEqual(package.read('minimalgame/gameinfo.xml'),
                              (submission / 'gameinfo.xml').read_bytes())
@@ -226,10 +225,11 @@ class PortMasterPackage(unittest.TestCase):
         portmaster.portmaster(self.stage, self.bundle, output, submission=submission, layout='pr')
         with zipfile.ZipFile(output) as package:
             names = package.namelist()
-            for name in ('port.json', 'README.md', 'gameinfo.xml', 'screenshot.png',
-                         'testing_thread.txt', 'patches/build.sh'):
+            for name in ('port.json', 'README.md', 'gameinfo.xml', 'screenshot.png', 'patches/build.sh'):
                 self.assertIn(name, names)
                 self.assertNotIn('minimalgame/' + name, names)
+            self.assertNotIn('testing_thread.txt', names)
+            self.assertEqual(package.getinfo('Minimal Game.sh').external_attr >> 16 & 0o777, 0o644)
             self.assertEqual(package.read('gameinfo.xml'), (submission / 'gameinfo.xml').read_bytes())
             self.assertIn('minimalgame/licenses/LICENSE.license.txt', names)
         checksum = artifacts.digest(output)
@@ -736,6 +736,7 @@ get_controls() {
   return "${CONTROLS_STATUS:-0}"
 }
 pm_platform_helper() { echo base-helper >> "$EVENTS"; }
+pm_show_error() { printf 'error:%s\n' "$1" >> "$EVENTS"; }
 pm_finish() {
   printf 'finish:%s\n' "$LD_LIBRARY_PATH" >> "$EVENTS"
   return "${FINISH_STATUS:-0}"
@@ -797,7 +798,7 @@ return "${MODULE_STATUS:-0}"
         for name in ('DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'SWAYSOCK'):
             self.assertNotIn(name, env)
         self.assertEqual(env['SDL_GAMECONTROLLERCONFIG'], 'firmware-map')
-        self.assertEqual(env['PMJS_EXIT_HOTKEY'], 'none')
+        self.assertEqual(env['PMJS_EXIT_HOTKEY'], 'back')
         self.assertNotIn('PMJS_GRAPHICS_DIAGNOSTICS', env)
 
     def test_standard_control_directory_priority(self):
@@ -821,19 +822,39 @@ return "${MODULE_STATUS:-0}"
         self.assertEqual(arguments[arguments.index('--save-root') + 1], str(self.port / 'saves'))
         self.assertEqual(arguments[arguments.index('--asset-cache-root') + 1], str(self.port / '.cache'))
 
+    def test_launcher_restores_runtime_executable_permissions(self):
+        node = self.port / 'runtime/bin/node'
+        launcher = self.port / 'runtime/bin/pmjs'
+        node.chmod(0o644)
+        launcher.chmod(0o644)
+        self.assertEqual(self.run_launcher().returncode, 0)
+        self.assertTrue(node.stat().st_mode & 0o111)
+        self.assertTrue(launcher.stat().st_mode & 0o111)
+
+    def test_runtime_failure_is_reported_after_firmware_cleanup(self):
+        self.assertEqual(self.run_launcher(NODE_STATUS='7').returncode, 7)
+        self.assertIn('error:The game exited with an error. Check the game files and minimalgame/log.txt.',
+                      self.events.read_text().splitlines())
+
     def test_graphics_diagnostics_honor_explicit_environment(self):
         for value in ('0', '1'):
             with self.subTest(value=value):
                 self.assertEqual(self.run_launcher(PMJS_GRAPHICS_DIAGNOSTICS=value).returncode, 0)
                 self.assertEqual(json.loads(self.capture.read_text())['env']['PMJS_GRAPHICS_DIAGNOSTICS'], value)
 
-    def test_exit_helper_has_no_gameplay_bindings_and_honors_native_override(self):
-        self.assertEqual(self.run_launcher().returncode, 0)
-        helper = json.loads(self.gpt_capture.read_text())
-        self.assertEqual(helper['argv'], ['node'])
-        self.assertEqual(helper['wrapper'], 'active', 'multiword GPTOKEYB2 is a command line')
-        self.assertEqual(self.run_launcher(PMJS_EXIT_HOTKEY='leftstick').returncode, 0)
-        self.assertEqual(json.loads(self.capture.read_text())['env']['PMJS_EXIT_HOTKEY'], 'leftstick')
+    def test_native_exit_does_not_start_external_kill_helper(self):
+        unrelated = subprocess.Popen(['node', '-e', 'setInterval(() => {}, 1000)'])
+        try:
+            self.assertEqual(self.run_launcher().returncode, 0)
+            self.assertFalse(self.gpt_capture.exists())
+            self.assertIsNone(unrelated.poll(), 'unrelated Node process must remain alive')
+            self.assertEqual(self.run_launcher(PMJS_EXIT_HOTKEY='leftstick').returncode, 0)
+            self.assertEqual(json.loads(self.capture.read_text())['env']['PMJS_EXIT_HOTKEY'], 'leftstick')
+            self.assertFalse(self.gpt_capture.exists())
+            self.assertIsNone(unrelated.poll())
+        finally:
+            unrelated.terminate()
+            unrelated.wait(timeout=5)
 
     def test_helper_return_status_does_not_abort_launch(self):
         result = self.run_launcher(CONTROLS_STATUS='1')
@@ -844,50 +865,6 @@ return "${MODULE_STATUS:-0}"
         result = self.run_launcher(PLATFORM_STATUS='1')
         self.assertEqual(result.returncode, 0)
         self.assertTrue(self.capture.exists())
-
-    def test_exit_helper_stops_runtime_before_firmware_cleanup(self):
-        for stopped in (False, True):
-            with self.subTest(stopped=stopped):
-                self.check_exit_helper(stopped)
-
-    def check_exit_helper(self, stopped):
-        read_fd, write_fd = os.pipe()
-        target_fd, target_write_fd = os.pipe()
-        process = None
-        node_pid = None
-        try:
-            process = subprocess.Popen(['bash', self.launcher],
-                                       env={**self.env, 'READY_FD': str(write_fd),
-                                            'IGNORE_TERM': '1', 'KILL_TARGET_FD': str(target_fd)},
-                                       pass_fds=(write_fd, target_fd), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            os.close(write_fd)
-            write_fd = None
-            self.assertTrue(select.select([read_fd], [], [], 5)[0], 'Node started')
-            self.assertEqual(os.read(read_fd, 1), b'1')
-            node_pid = json.loads(self.capture.read_text())['pid']
-            if stopped:
-                os.kill(node_pid, signal.SIGSTOP)
-            os.write(target_write_fd, str(node_pid).encode())
-            process.communicate(timeout=8)
-            self.assertEqual(process.returncode, 0)
-            with self.assertRaises(ProcessLookupError):
-                os.kill(node_pid, 0)
-            self.assertEqual(self.events.read_text().splitlines()[-1], 'finish:/firmware/lib')
-        finally:
-            os.close(read_fd)
-            os.close(target_fd)
-            os.close(target_write_fd)
-            if write_fd is not None:
-                os.close(write_fd)
-            if node_pid:
-                try:
-                    os.kill(node_pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-            if process and process.poll() is None:
-                process.kill()
-                process.communicate(timeout=5)
-
 
 if __name__ == '__main__':
     unittest.main()

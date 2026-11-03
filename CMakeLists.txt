@@ -421,6 +421,9 @@ if(BUILD_TESTING)
   target_link_libraries(pmjs-platform-input-test PRIVATE ${PMJS_PLATFORM_LIBS})
   add_test(NAME native-input COMMAND
     ${XVFB_RUN} -a $<TARGET_FILE:pmjs-platform-input-test>)
+  add_test(NAME native-input-exit-back COMMAND
+    ${XVFB_RUN} -a $<TARGET_FILE:pmjs-platform-input-test> --exit-back)
+  set_tests_properties(native-input-exit-back PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
   set_tests_properties(native-input PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
   file(GLOB PMJS_JS_TESTS CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/test/*.test.cjs")

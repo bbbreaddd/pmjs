@@ -37,15 +37,20 @@ BINARY=node
 cd "$GAMEDIR"
 > "$GAMEDIR/log.txt" && exec > >(tee "$GAMEDIR/log.txt") 2>&1
 export SDL_GAMECONTROLLERCONFIG="$sdl_controllerconfig"
-export PMJS_EXIT_HOTKEY=${PMJS_EXIT_HOTKEY-none}
+export PMJS_EXIT_HOTKEY=${PMJS_EXIT_HOTKEY-back}
 
-$GPTOKEYB2 "$BINARY" > /dev/null 2>&1 &
+chmod +x "$GAMEDIR/runtime/bin/$BINARY" "$GAMEDIR/runtime/bin/pmjs"
 pm_platform_helper "$GAMEDIR/runtime/bin/$BINARY"
 
 XDG_CACHE_HOME="$GAMEDIR/.cache" \\
   "$GAMEDIR/runtime/bin/pmjs" "$GAMEDIR" \\
   --save-root "$GAMEDIR/saves" --asset-cache-root "$GAMEDIR/.cache"
+status=$?
+if [ "$status" -ne 0 ]; then
+  pm_show_error "The game exited with an error. Check the game files and @ID@/log.txt."
+fi
 pm_finish
+exit "$status"
 '''
 
 
@@ -308,6 +313,7 @@ def portmaster(stage, bundle, output, name=None, strip=None, extra_notices=(), s
                           'game-bundle.mjs', 'package-self-test.cjs'):
             shutil.copy2(stage / 'share/pmjs/tools' / tool_name, tools / tool_name)
         notices = [stage / 'LICENSE', stage / 'THIRD_PARTY_NOTICES.md',
+                   stage / 'share/pmjs/js/pmjs-web/fallback-font.LICENSE',
                    *sorted(file for file in (stage / 'share/pmjs/notices').rglob('*') if file.is_file())]
         if submission_details is None:
             # Standalone packages retain their historical combined notice file.
@@ -344,7 +350,7 @@ def portmaster(stage, bundle, output, name=None, strip=None, extra_notices=(), s
         write_json(runtime / 'build-info.json', package_info)
         launcher = payload / (name + '.sh')
         launcher.write_text(PORTMASTER_LAUNCHER.replace('@ID@', identifier))
-        launcher.chmod(0o755)
+        launcher.chmod(0o644 if layout == 'pr' else 0o755)
         subprocess.run(['bash', '-n', launcher], check=True)
         epoch = info['source']['sourceDateEpoch']
         package = workspace / 'game.zip'

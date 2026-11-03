@@ -9,7 +9,7 @@ import subprocess
 import sys
 import urllib.request
 
-from runtime_artifact import digest
+from runtime_artifact import digest, write_json
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -48,13 +48,26 @@ def sources(sdk, output):
         materials[ROOT / relative] = output / relative
     relative = Path('cmake/toolchains/portable-arm64.cmake')
     materials[ROOT / relative] = output / relative
-    materials.update({file: output / 'build-records' / file.relative_to(sdk / 'records')
-                      for file in (sdk / 'records' / (name + '.json') for name in ('ffmpeg', 'toolchain', 'sysroot'))})
     for original, destination in materials.items():
         checksum = source['sha256'] if original == archive else digest(original)
         if not destination.is_file() or digest(destination) != checksum:
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(original, destination)
+    def portable(value):
+        if isinstance(value, dict):
+            return {key: portable(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [portable(item) for item in value]
+        if isinstance(value, str):
+            for root, variable in ((str(sdk.resolve()), '${PMJS_SDK_ROOT}'),
+                                   (str(ROOT.resolve()), '${PMJS_RUNTIME_ROOT}')):
+                if value == root or value.startswith(root + os.sep):
+                    return variable + value[len(root):]
+        return value
+    for name in ('ffmpeg', 'toolchain', 'sysroot'):
+        record = json.loads((sdk / 'records' / (name + '.json')).read_text())
+        destination = output / 'build-records' / (name + '.json')
+        write_json(destination, portable(record))
 
 
 def prepare_arm64(jobs):

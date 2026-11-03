@@ -398,6 +398,17 @@ class DependencySources(unittest.TestCase):
         self.assertEqual((self.output / 'cmake/toolchains/portable-arm64.cmake').read_bytes(),
                          (ROOT / 'cmake/toolchains/portable-arm64.cmake').read_bytes())
 
+    def test_source_records_do_not_disclose_local_sdk_paths(self):
+        record = self.sdk / 'records/ffmpeg.json'
+        original = json.loads(record.read_text())
+        original['recipe']['prefix'] = str(self.sdk / 'prefix')
+        release.write_json(record, original)
+        result = self.sources()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        exported = json.loads((self.output / 'build-records/ffmpeg.json').read_text())
+        self.assertEqual(exported['recipe']['prefix'], '${PMJS_SDK_ROOT}/prefix')
+        self.assertEqual(json.loads(record.read_text()), original)
+
     def test_unchanged_materials_are_not_recopied_and_changed_materials_are_refreshed(self):
         self.assertEqual(self.sources().returncode, 0)
         before = {file: file.stat().st_mtime_ns for file in self.output.rglob('*') if file.is_file()}

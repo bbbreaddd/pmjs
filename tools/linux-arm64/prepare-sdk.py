@@ -241,10 +241,19 @@ def build_component(sdk, name, spec, recipe, jobs):
         if name == "ffmpeg":
             configure = source / "configure"
             configure.chmod(configure.stat().st_mode | 0o755)
+            extra_cflags = "-DPMJS_TOOLCHAIN_ID=" + recipe["toolchain"]
+            if component.get("portablePaths"):
+                extra_cflags += " " + shlex.quote("-ffile-prefix-map=" + str(sdk) + "=/pmjs-sdk")
             run([configure, *options,
                  *["--" + n + "=" + str(sdk / "bin" / binary) for n, binary in
                    [("cc", "cc"), ("cxx", "c++"), ("ar", "ar"), ("ranlib", "ranlib")]],
-                 "--prefix=" + str(prefix), "--extra-cflags=-DPMJS_TOOLCHAIN_ID=" + recipe["toolchain"]], cwd=source, env=env)
+                 "--prefix=" + str(prefix), "--extra-cflags=" + extra_cflags], cwd=source, env=env)
+            if component.get("portablePaths"):
+                config = source / "config.h"
+                lines = config.read_text().splitlines(keepends=True)
+                lines = [line.replace(str(sdk), "/pmjs-sdk") if line.startswith("#define FFMPEG_CONFIGURATION ") else line
+                         for line in lines]
+                write_changed(config, "".join(lines))
             run(["make", "-j" + str(jobs)], cwd=source, env=env)
             run(["make", "install"], cwd=source, env=install_env)
         else:

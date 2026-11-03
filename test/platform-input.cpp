@@ -6,8 +6,9 @@
 #include <cstring>
 #include <iostream>
 
-int main() {
-  SDL_setenv("PMJS_EXIT_HOTKEY", "leftstick", 1);
+int main(int argc, char** argv) {
+  const bool exitBack = argc > 1 && std::strcmp(argv[1], "--exit-back") == 0;
+  SDL_setenv("PMJS_EXIT_HOTKEY", exitBack ? "back" : "leftstick", 1);
   const std::pair<int, int> buttonMappings[] = {
     {SDL_CONTROLLER_BUTTON_A, 0}, {SDL_CONTROLLER_BUTTON_B, 1},
     {SDL_CONTROLLER_BUTTON_X, 2}, {SDL_CONTROLLER_BUTTON_Y, 3},
@@ -189,6 +190,22 @@ int main() {
     buttonInput.cbutton.button = button;
     return SDL_PushEvent(&buttonInput) == 1 && platform.pollEvents();
   };
+  if (exitBack) {
+    if (!buttonEvent(firstInstance, SDL_CONTROLLER_BUTTON_GUIDE, true) ||
+        !buttonEvent(firstInstance, SDL_CONTROLLER_BUTTON_A, true) ||
+        !buttonEvent(firstInstance, SDL_CONTROLLER_BUTTON_A, false) ||
+        !buttonEvent(firstInstance, SDL_CONTROLLER_BUTTON_GUIDE, false) ||
+        !buttonEvent(firstInstance, SDL_CONTROLLER_BUTTON_START, true) ||
+        !buttonEvent(secondInstance, SDL_CONTROLLER_BUTTON_BACK, true)) return 1;
+    if (buttonEvent(firstInstance, SDL_CONTROLLER_BUTTON_BACK, true)) {
+      std::cerr << "Start + Back did not request exit\n";
+      return 1;
+    }
+    SDL_JoystickClose(third);
+    SDL_JoystickClose(first);
+    SDL_JoystickClose(second);
+    return 0;
+  }
   if (!buttonEvent(firstInstance, SDL_CONTROLLER_BUTTON_START, true)) return 1;
   event = {};
   event.type = SDL_WINDOWEVENT;
