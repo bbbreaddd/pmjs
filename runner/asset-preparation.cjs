@@ -724,7 +724,7 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
       }
       activationStarted = true;
       if (native.assets.installDecrypted) {
-        const derivedReport = await native.assets.installDecrypted(result.decryptedEntries, false, true);
+        const derivedReport = await native.assets.installDecrypted(result.decryptedEntries, true, true);
         result.activation = derivedReport?.rejected ? derivedReport : undefined;
         result.decrypted = result.decryptedEntries.filter(entry => native.assets.hasDecrypted(entry.logicalSource)).length;
         result.installFailures += result.decryptedEntries.length - result.decrypted;
@@ -753,7 +753,7 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
         return true;
       });
       const storage = native.assets.installImageStorage ? await native.assets.installImageStorage(result.storageEntries, true) : null;
-      const installed = await native.assets.installPrepared(result.entries, false, true);
+      const installed = await native.assets.installPrepared(result.entries, true, true);
       result.activation = { accepted: installed?.accepted || [], rejected: [...(result.activation?.rejected || []), ...(storage?.rejected || []), ...(installed?.rejected || [])] };
       result.prepared = result.entries.length;
       result.installed = installed?.accepted ? installed.accepted.length : Number.isInteger(installed) ? installed : result.entries.length;

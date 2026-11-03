@@ -62,15 +62,18 @@ async function preparation() {
   assert.equal(cold.error, undefined);
   assert.equal(cold.audioViews, 2);
   assert.equal(cold.decrypted, 0);
-  assert.equal(cold.validation.hashedBytes, 0);
-  assert.deepEqual(fs.readdirSync(path.join(options.cacheRoot, 'entries')), []);
+  assert.equal(cold.validation.hashedBytes, fs.statSync(path.join(root, 'data/System.json')).size);
+  const preparationRoot = path.join(options.cacheRoot, 'preparation-v1');
+  const entryRoot = path.join(preparationRoot, fs.readdirSync(preparationRoot)[0], 'entries');
+  assert.deepEqual(fs.readdirSync(entryRoot), []);
   const warm = await prepareAssets(options);
-  assert.equal(warm.catalogHit, true);
+  assert.equal(warm.validation.hashedFiles, 0);
+  assert.equal(warm.generated, 0);
   assert.equal(warm.audioViews, 2);
   const audio = native.media.loadAudioView(entry.logicalSource, { intent: 'music' });
   assert.equal(audio.duration, first.duration);
   native.media.releaseAudio(audio.handle);
-  console.log('default preparation and warm catalog register playable views without audio payload output');
+  console.log('default preparation and warm reuse register playable views without audio payload output');
 }
 preparation().catch(error => { console.error(error); process.exitCode = 1; })
   .finally(() => native.runtime.quit());

@@ -14,6 +14,23 @@ function fixture(initial) {
 const input = (down = [], pressed = []) => ({ gamepads: [{ connected: true, instance: 1,
   buttonsDown: down, buttonsPressed: pressed }] });
 
+test('asset rebuild request is saved and acknowledged from the menu', async () => {
+  const writes = [];
+  const native = { render: { setPresentScaleMode() {} }, runtime: {
+    settingsOverlay(value) { native.overlay = value; return { hasFont: true }; }, settingsPresent() {} } };
+  const storage = { readText: () => null, async writeTextAsync(name, value) { writes.push([name, value]); } };
+  const settings = createSettings({ native, storage });
+  settings.update(input([16, 0], [0]));
+  for (let i = 0; i < 3; ++i) settings.update(input([13], [13]));
+  settings.update(input([0], [0]));
+  await settings.waitForSave();
+  settings.draw();
+  assert.equal(writes[0][0], 'runtime-settings/rebuild-assets');
+  assert.match(writes[0][1], /^[a-f0-9]{32}$/);
+  assert.match(native.overlay.footer[1], /rebuild next launch/i);
+  assert.equal(settings.isOpen(), true);
+});
+
 test('shortcut requires Home and A on the same connected controller', () => {
   const s = fixture(null).settings;
   assert.equal(s.update(input([4, 5])), false);

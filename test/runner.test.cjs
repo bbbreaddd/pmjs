@@ -248,6 +248,30 @@ test('normal shutdown waits for pending preparation invalidation persistence', a
   assert.equal(finished, true);
 });
 
+test('unnamed native invalidations discard the startup catalog before shutdown', async t => {
+  const options = fixture('NativeHost.input.checkBoot(); globalThis.__pmjsTick=()=>{}; globalThis.__pmjsRender=()=>{};');
+  options.mapPreparation = 'off';
+  const host = require(options.addon);
+  host.assets.processImage = async () => null;
+  host.assets.installPrepared = () => 0;
+  host.assets.installPreparedCatalog = () => 0;
+  host.assets.installDerivedCatalog = () => {};
+  let booted = false, report = false;
+  host.input.checkBoot = () => { booted = true; };
+  host.pollEvents = () => !booted;
+  host.assets.consumePreparationInvalidations = () => report ? (report = false, 3) : 0;
+  host.assets.consumePreparationFailures = () => [];
+  t.mock.method(console, 'log', () => {});
+  t.mock.method(console, 'warn', () => {});
+  await run(options);
+  const root = path.join(options.saveRoot, 'asset-cache/preparation-v1');
+  const catalog = path.join(root, fs.readdirSync(root)[0], 'startup-catalog.json');
+  assert.equal(fs.existsSync(catalog), true);
+  booted = false; report = true;
+  await run(options);
+  assert.equal(fs.existsSync(catalog), false);
+});
+
 test('CLI parses the documented options including --config', () => {
   const value = parse(['--addon','a','--game-root','g','--bootstrap','b','--save-root','s',
     '--config','my-config.json','--width','640','--height','480','--image-warm-cache-bytes','1024',

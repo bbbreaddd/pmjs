@@ -8,6 +8,7 @@ const { temporaryDirectory } = require('./helpers/temp.cjs');
 const { preparationLocks } = require('./helpers/preparation-lock.cjs');
 const { prepareGameAssets } = require('../runner/preparation.cjs');
 const { openPreparation } = require('../runner/preparation-state.cjs');
+const { loadCatalog } = require('../runner/preparation-catalog.cjs');
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==', 'base64');
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 function fixture() {
@@ -31,6 +32,56 @@ function fixture() {
   return { root, gameRoot, jobs, installed, warnings, options,
     async run(extra = {}) { const result = await prepareGameAssets({ ...options, ...extra }); result.releaseCacheLease?.(); return result; } };
 }
+
+test('completed startup catalog restores without inventory, and invalidations force preparation', async () => {
+  const f = fixture(), assets = f.options.native.assets;
+  assets.installPrepared = (entries, capture) => {
+    for (const entry of entries) if (capture) entry.pageIdentities = entry.descriptor.pages.map(() => 'page-id');
+    return entries.length;
+  };
+  let activated;
+  assets.installPreparedCatalog = entries => { activated = entries; return entries.length; };
+  assets.installDerivedCatalog = () => {};
+  const options = { ...f.options, fastStartup: true };
+  const cold = await prepareGameAssets(options);
+  assert.equal(cold.catalogSaved, true);
+  cold.releaseCacheLease();
+  const inventory = f.options.native.fs = { inventory() { throw new Error('inventory must not run'); } };
+  fs.appendFileSync(path.join(f.gameRoot, 'img/pictures/a.png'), 'changed');
+  const warm = await loadCatalog(options);
+  assert.ok(warm?.images.catalogHit);
+  assert.equal(activated.length, 1);
+  warm.releaseCacheLease();
+  assert.equal(await loadCatalog({ ...options, pageCodec: 'lz4' }), null, 'configuration changes reject the catalog');
+  await warm.invalidate('img/pictures/a.png');
+  assert.equal(await loadCatalog(options), null, 'observed failures force a fresh preparation');
+  delete f.options.native.fs;
+  assert.ok(inventory);
+  const rebuilt = await prepareGameAssets({ ...options, verifyHashes: true, forceRebuild: true });
+  assert.equal(rebuilt.catalogSaved, true, 'an explicit full verification produces a new catalog');
+  assert.equal(f.jobs.length, 2, 'changed source is prepared again');
+  rebuilt.releaseCacheLease();
+  const afterRebuild = await loadCatalog(options);
+  assert.ok(afterRebuild?.images.catalogHit);
+  afterRebuild.releaseCacheLease();
+  const otherPreparation = await openPreparation(options);
+  await otherPreparation.close();
+  assert.equal(await loadCatalog(options), null, 'another preparation invalidates the previous catalog before making changes');
+});
+
+test('incomplete preparation and malformed catalogs never authorize the fast path', async () => {
+  const f = fixture(), assets = f.options.native.assets;
+  assets.installPreparedCatalog = entries => entries.length;
+  assets.installDerivedCatalog = () => {};
+  assets.processImage = async () => { throw new Error('processor failed'); };
+  const options = { ...f.options, fastStartup: true };
+  const failed = await prepareGameAssets(options);
+  failed.releaseCacheLease();
+  assert.equal(failed.catalogSaved, false);
+  assert.equal(await loadCatalog(options), null);
+  fs.writeFileSync(path.join(failed.root, 'startup-catalog.json'), '{invalid');
+  assert.equal(await loadCatalog(options), null);
+});
 
 test('publication relocates only declared image, map and port output receipts', async t => {
   const f = fixture();

@@ -6,6 +6,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { preparationLocks } = require('./helpers/preparation-lock.cjs');
 const { prepareGameAssets } = require('../runner/preparation.cjs');
+const { loadCatalog } = require('../runner/preparation-catalog.cjs');
 const { temporaryDirectory } = require('./helpers/temp.cjs');
 const { buildPortPreparation, verifyPortDescriptor, reader, loadProcessor } =
   require('../runner/port-preparation.cjs');
@@ -127,6 +128,49 @@ test('processor helper changes rebuild derivations and remain self-contained', a
   fs.writeFileSync(path.join(f.root, 'support.cjs'), HELPER_TEXT.replace('from-helper:', 'changed:'));
   const second = await prepareGameAssets(options); second.releaseCacheLease();
   assert.equal(reader(second.portArtifacts)('fixture-multi/composed').toString(), 'changed:active-input');
+});
+
+test('startup catalog tracks processor changes and repairs damaged artifacts when read', async () => {
+  const f = fixture(); f.writeSources('active-input', 'declined-input');
+  const helper = path.join(f.root, 'support.cjs');
+  fs.writeFileSync(helper, HELPER_TEXT);
+  fs.writeFileSync(f.processor, MULTI_TEXT);
+  const assets = { ...preparationLocks(), installPreparedCatalog: entries => entries.length,
+    installDerivedCatalog() {} };
+  const options = { native: { assets }, gameRoot: f.game, cacheRoot: f.cache(), images: false, maps: false,
+    adapters: [f.processor], logger: f.logger, fastStartup: true };
+  let cold = await prepareGameAssets(options);
+  assert.equal(cold.catalogSaved, true, f.warnings.join('\n'));
+  cold.releaseCacheLease();
+  let warm = await loadCatalog(options);
+  assert.ok(warm);
+  warm.releaseCacheLease();
+  fs.writeFileSync(helper, HELPER_TEXT.replace('from-helper:', 'changed:'));
+  assert.equal(await loadCatalog(options), null, 'a changed helper requires preparation');
+  cold = await prepareGameAssets(options);
+  assert.equal(cold.catalogSaved, true, f.warnings.join('\n'));
+  cold.releaseCacheLease();
+  fs.writeFileSync(f.processor, MULTI_TEXT.replace("id: 'composed'", "id: 'composed' /* updated */"));
+  assert.equal(await loadCatalog(options), null, 'a changed processor requires preparation');
+  cold = await prepareGameAssets(options);
+  assert.equal(cold.catalogSaved, true, f.warnings.join('\n'));
+  cold.releaseCacheLease();
+  warm = await loadCatalog(options);
+  const id = 'fixture-multi/composed';
+  const file = warm.portArtifacts.get(id);
+  assert.equal(reader(warm.portArtifacts, null, { hashes: warm.portArtifactHashes })(id).toString(), 'changed:active-input');
+  fs.writeFileSync(file, 'damaged');
+  let invalidation;
+  assert.equal(reader(warm.portArtifacts, null, { hashes: warm.portArtifactHashes,
+    onInvalid: source => { invalidation = warm.invalidate(source); } })(id), null);
+  await invalidation;
+  warm.releaseCacheLease();
+  assert.equal(await loadCatalog(options), null, 'a damaged artifact invalidates the next fast launch');
+  const repaired = await prepareGameAssets(options);
+  assert.equal(reader(repaired.portArtifacts)(id).toString(), 'changed:active-input');
+  repaired.releaseCacheLease();
+  fs.writeFileSync(path.join(f.root, 'extra.pmjs-processor.cjs'), REJECTING_PROCESSOR_TEXT);
+  assert.equal(await loadCatalog(options), null, 'a newly discovered processor requires preparation');
 });
 
 test('processor cache identity includes source paths exposed to generate', async t => {

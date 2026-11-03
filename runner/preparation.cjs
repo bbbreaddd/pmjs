@@ -1,7 +1,7 @@
 'use strict';
 
 const path = require('node:path');
-const { openPreparation, inventory, invalidateResults } = require('./preparation-state.cjs');
+const { openPreparation, inventory, invalidateResults, invalidateCatalog } = require('./preparation-state.cjs');
 const { prepareAssetsPhase } = require('./asset-preparation.cjs');
 const { prepareMapsPhase } = require('./map-preparation.cjs');
 const { prepareForRun } = require('./port-preparation.cjs');
@@ -70,7 +70,16 @@ async function prepareGameAssets(options) {
         decompressArtifact: native.assets.decompressPortArtifact }));
     result.cancelled = shouldCancel() || result.images?.cancelled || result.maps?.cancelled || false;
     if (!result.cancelled) {
-      try { await session.finish(); }
+      try {
+        await session.finish();
+        result.portArtifactHashes = Object.fromEntries(Object.values(session.data.results)
+          .filter(record => record?.id && record.outputs?.['data.pma1'] && result.portArtifacts.has(record.id))
+          .map(record => [record.id, record.outputs['data.pma1']]));
+        if (options.fastStartup) {
+          try { result.catalogSaved = await require('./preparation-catalog.cjs').saveCatalog(options, session, result); }
+          catch (error) { logger.warn('[pmjs] cannot save startup catalog: ' + error.message); }
+        }
+      }
       catch (error) {
         if (preparationContext === 'offline') throw error;
         logger.warn('[pmjs] preparation lease unavailable; using originals: ' + error.message);
@@ -86,6 +95,7 @@ async function prepareGameAssets(options) {
       }
     }
     result.records = session.data.results;
+    result.portArtifactHashes ||= {};
     result.outcomes = [...session.outcomes.values()];
     result.invalidated = session.invalidated;
     result.outcomeCounts = {};
@@ -96,6 +106,7 @@ async function prepareGameAssets(options) {
     const preparationRoot = session.root;
     result.invalidate = source => invalidateResults({ root: preparationRoot, native,
       sources: Array.isArray(source) ? source : [source], logger });
+    result.invalidateCatalog = () => invalidateCatalog({ root: preparationRoot, native });
     logger.info?.(`[pmjs] preparation inventory=${result.inventory.files} scan_ms=${result.inventory.durationMs.toFixed(1)} ` +
       `outcomes=${JSON.stringify(result.outcomeCounts)} hashed_files=${result.validation.hashedFiles} hashed_bytes=${result.validation.hashedBytes} reused_files=${result.validation.reusedFiles}`);
     return result;

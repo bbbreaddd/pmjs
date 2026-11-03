@@ -655,6 +655,9 @@ if(BUILD_TESTING)
   endforeach()
   add_test(NAME node-prepared-image-load COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-prepared-image-load.cjs" $<TARGET_FILE:pmjs_native>)
+  add_test(NAME node-preparation-catalog COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-preparation-catalog.cjs" $<TARGET_FILE:pmjs_native>)
+  set_tests_properties(node-preparation-catalog PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
   set_tests_properties(node-prepared-image-load PROPERTIES ENVIRONMENT
     "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy;UV_THREADPOOL_SIZE=1")
   add_test(NAME node-failed-tile-ownership COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}

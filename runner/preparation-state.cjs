@@ -105,6 +105,7 @@ async function openPreparation({ gameRoot, cacheRoot, native, verifyHashes = fal
     () => onProgress({ phase: 'wait', completed: 0, total: 0 }), native.assets);
   if (!releaseLock) return null;
   try {
+    await fsp.rm(path.join(root, 'startup-catalog.json'), { force: true });
     await applyPendingInvalidations({ root, native, logger });
     const filename = path.join(root, 'preparation-state.json');
     let saved = {}, verifiedChecksum = null;
@@ -310,6 +311,12 @@ async function invalidateResults({ root, native, sources, logger = console }) {
   finally { release(); }
 }
 
+async function invalidateCatalog({ root, native }) {
+  const release = await acquireLock(root, () => false, () => {}, native.assets);
+  try { await fsp.rm(path.join(root, 'startup-catalog.json'), { force: true }); }
+  finally { release(); }
+}
+
 // The caller holds the preparation lock; full state work stays before guest execution.
 async function applyPendingInvalidations({ root, native, logger = console }) {
   try {
@@ -341,7 +348,7 @@ async function applyPendingInvalidations({ root, native, logger = console }) {
     let changed = false;
     for (const [key, record] of Object.entries(saved.data.results)) {
       if (!record || typeof record !== 'object') continue;
-      const request = requests.find(({ source }) => record.source === source || record.filename === source || record.key === source ||
+      const request = requests.find(({ source }) => record.source === source || record.filename === source || record.key === source || record.id === source ||
         record.source && native.assets.sourcePath?.(record.source) === source ||
         record.decrypted && path.join(root, key, record.decrypted) === source);
       if (request) {
@@ -381,4 +388,4 @@ async function applyPendingInvalidations({ root, native, logger = console }) {
   } catch (error) { logger.warn('[pmjs] cannot apply preparation invalidations: ' + error.message); }
 }
 
-module.exports = { openPreparation, inventory, invalidateResults };
+module.exports = { openPreparation, inventory, invalidateResults, invalidateCatalog };

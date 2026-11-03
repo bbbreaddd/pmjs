@@ -163,6 +163,28 @@ async function prepareStartupAssets(options, native, settings) {
     `processor=${JSON.stringify(native.assets.preparationVersion || null)} ` +
     `lz4_version=${JSON.stringify(native.assets.preparationLz4Version || null)}`);
   const portableIndex = require('./asset-index.cjs').loadAssetIndex(options.assetIndex, native, options);
+  const { loadCatalog, rebuildMarker } = require('./preparation-catalog.cjs');
+  const preparationOptions = { gameRoot: options.gameRoot,
+    sourceRoots: [path.join(options.saveRoot, 'game-files', 'files')],
+    cacheRoot: options.assetPreparation.cacheRoot, native, ...options.assetPreparation,
+    images: options.assetPreparation.enabled, recipes: options.assetPreparation.recipes,
+    policyOverrides: options.assetPolicyOverrides, portableIndex,
+    portableAssetRoot: portableIndex && path.dirname(options.assetIndex),
+    bundleRoot: options.bundleRoot, portDescriptors: options.portDescriptors, adapters: options.preparationAdapters,
+    width: options.width, height: options.height, fastStartup: true };
+  const rebuildRequest = native.storage.readText(rebuildMarker);
+  if (rebuildRequest) { preparationOptions.verifyHashes = true; preparationOptions.forceRebuild = true; }
+  if (!rebuildRequest) {
+    const cached = await loadCatalog(preparationOptions);
+    if (cached) {
+      options.portArtifacts = Object.fromEntries(cached.portArtifacts);
+      options.portArtifactHashes = cached.portArtifactHashes;
+      console.log('[pmjs] using completed asset preparation catalog');
+      return { preparation: { ...cached.images, maps: cached.maps, releaseCacheLease: cached.releaseCacheLease,
+        invalidate: cached.invalidate }, cancelled: false, invalidate: cached.invalidate,
+        invalidateCatalog: cached.invalidateCatalog };
+    }
+  }
   let cancelled = false;
   let preparationFailed = false;
   let preparationError;
@@ -220,17 +242,9 @@ async function prepareStartupAssets(options, native, settings) {
       showProgress();
     } catch (error) { failPreparation(error); }
   }, 16);
-  let preparation, preparationStatus = 'failed', preparationThrew = false;
+  let preparation, invalidateCatalog, preparationStatus = 'failed', preparationThrew = false;
   try {
-    const all = await prepareGameAssets({ gameRoot: options.gameRoot,
-      sourceRoots: [path.join(options.saveRoot, 'game-files', 'files')],
-      cacheRoot: options.assetPreparation.cacheRoot, native,
-      ...options.assetPreparation, images: options.assetPreparation.enabled,
-      recipes: options.assetPreparation.recipes,
-      policyOverrides: options.assetPolicyOverrides,
-      portableIndex, portableAssetRoot: portableIndex && path.dirname(options.assetIndex),
-      bundleRoot: options.bundleRoot, portDescriptors: options.portDescriptors, adapters: options.preparationAdapters,
-      width: options.width, height: options.height, shouldCancel: () => cancelled,
+    const all = await prepareGameAssets({ ...preparationOptions, shouldCancel: () => cancelled,
       onProgress: progress => {
         if (progress.phase === 'start') {
           activeLog = createPreparationLog({ stage: progress.stage, codec: options.assetPreparation.pageCodec,
@@ -242,6 +256,10 @@ async function prepareStartupAssets(options, native, settings) {
       },
       onPhaseComplete: (stage, value) => { if (stage !== 'port') activeLog?.finish(value); }
     });
+    if (all.catalogSaved && rebuildRequest && native.storage.readText(rebuildMarker) === rebuildRequest) {
+      try { native.storage.remove(rebuildMarker); }
+      catch (error) { console.warn('[pmjs] cannot clear asset rebuild request: ' + error.message); }
+    }
     const imageResults = all.images || {}, mapResults = all.maps || {};
     const outcomes = all.outcomes || [];
     const refusalReasons = new Map();
@@ -266,6 +284,8 @@ async function prepareStartupAssets(options, native, settings) {
       inventory: all.inventory, validation: all.validation, releaseCacheLease: all.releaseCacheLease,
       invalidate: all.invalidate };
     options.portArtifacts = Object.fromEntries(all.portArtifacts);
+    options.portArtifactHashes = all.portArtifactHashes || {};
+    invalidateCatalog = all.invalidateCatalog;
     preparationStatus = preparationFailed ? 'failed' :
       cancelled || preparation.cancelled || preparation.maps?.cancelled ? 'cancelled' :
         preparation.error || preparation.maps?.error ? 'failed' :
@@ -286,7 +306,7 @@ async function prepareStartupAssets(options, native, settings) {
   }
   if (preparationFailed) throw preparationError;
   return { preparation, cancelled,
-    invalidate: preparation.invalidate };
+    invalidate: preparation.invalidate, invalidateCatalog };
 }
 
 async function runSession(input, diagnostics, setNative) {
@@ -337,7 +357,7 @@ async function runSession(input, diagnostics, setNative) {
   if (scan) console.log(`[pmjs] startup stage=vfs-index statistics=${JSON.stringify(scan)}`);
   console.log(`[pmjs] startup stage=host-initialized elapsed_ms=${(performance.now() - startupStarted).toFixed(1)}`);
   let pendingInvalidations = 0, retryInvalidationAt = 0;
-  let invalidatePreparation;
+  let invalidatePreparation, invalidatePreparationCatalog;
   let dispatcher, settings;
   let removePromiseRejectionBridge;
   let subprocesses, reloadRequested = false, finishSession;
@@ -366,6 +386,13 @@ async function runSession(input, diagnostics, setNative) {
     if (typeof native.assets.consumePreparationInvalidations === 'function')
       pendingInvalidations |= native.assets.consumePreparationInvalidations();
     if (!pendingInvalidations || (!force && performance.now() < retryInvalidationAt)) return;
+    if (invalidatePreparationCatalog) {
+      let write;
+      write = Promise.resolve().then(() => invalidatePreparationCatalog())
+        .catch(error => console.warn('[pmjs] cannot invalidate preparation catalog: ' + error.message))
+        .finally(() => pendingInvalidationWrites.delete(write));
+      pendingInvalidationWrites.add(write);
+    }
     if (invalidatePreparation && typeof native.assets.consumePreparationFailures === 'function') {
       const failures = native.assets.consumePreparationFailures();
       if (failures.length) recordPreparationInvalidation(failures);
@@ -382,6 +409,7 @@ async function runSession(input, diagnostics, setNative) {
       diagnostics.stage('asset-preparation');
       const startup = await prepareStartupAssets(options, native, settings);
       invalidatePreparation = startup.invalidate;
+      invalidatePreparationCatalog = startup.invalidateCatalog;
       const { entries, decryptedEntries, releaseCacheLease, invalidateCatalog, ...preparationStats } = startup.preparation;
       if (preparationStats.maps) {
         const { entries: mapEntries, ...mapStats } = preparationStats.maps;
@@ -439,7 +467,8 @@ async function runSession(input, diagnostics, setNative) {
     native.runtime.childProcess = subprocesses.api;
     // Guest adapters may request only declared, validated port assets.
     native.assets.portArtifact = portArtifactReader(options.portArtifacts || {},
-      native.assets.decompressPortArtifact);
+      native.assets.decompressPortArtifact, { hashes: options.portArtifactHashes || {},
+        onInvalid: id => recordPreparationInvalidation(id, 'prepared artifact') });
     const hostSetTimeout = hostTimers.setTimeout;
     const hostSetImmediate = hostTimers.setImmediate;
     native.runtime.scheduling = { ...hostTimers, nextTick: hostProcess.nextTick.bind(hostProcess) };

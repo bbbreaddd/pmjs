@@ -4,17 +4,20 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const file = 'runtime-settings/settings.json';
+const { rebuildMarker } = require('./preparation-catalog.cjs');
 let fallbackText;
 const entries = [
   { id: 'scale', label: 'Scaling', values: ['default', 'fit', 'integer', 'crop', 'stretch'] },
   { id: 'frameRate', label: 'Frame-rate limit', values: [null, 30, 60, 120] },
-  { id: 'reset', label: 'Restore defaults' }
+  { id: 'reset', label: 'Restore defaults' },
+  { id: 'rebuild', label: 'Rebuild assets next launch' }
 ];
 
 function createSettings({ native, fonts, storage }) {
   let scale = 'default', frameRate = null, active = false, waitingForRelease = false;
   let selected = 0, error = false, dirty = true, confirming = false, confirmYes = false;
   let savedScale = scale, savedRate = frameRate, saving = null;
+  let rebuildRequested = false;
   try {
     const saved = JSON.parse(storage.readText(file));
     if (saved && ['fit', 'stretch', 'integer', 'crop'].includes(saved.scale)) {
@@ -82,7 +85,16 @@ function createSettings({ native, fonts, storage }) {
       } else if (entries[selected].id === 'frameRate') {
         const values = entries[selected].values;
         nextRate = values[(values.indexOf(frameRate) + direction + values.length) % values.length];
-      } else if (pressed.includes(0)) { nextScale = 'default'; nextRate = null; }
+      } else if (entries[selected].id === 'rebuild' && pressed.includes(0)) {
+        saving = storage.writeTextAsync(rebuildMarker, require('node:crypto').randomBytes(16).toString('hex')).then(() => {
+          rebuildRequested = true; error = false;
+        }, failure => {
+          error = true;
+          console.warn('[pmjs] cannot request asset rebuild:', failure.message);
+        }).finally(() => { saving = null; dirty = true; });
+        dirty = true;
+        return true;
+      } else if (entries[selected].id === 'reset' && pressed.includes(0)) { nextScale = 'default'; nextRate = null; }
       else return true;
       if (nextScale !== scale) native.render.setPresentScaleMode(nextScale);
       scale = nextScale; frameRate = nextRate; error = false;
@@ -97,7 +109,8 @@ function createSettings({ native, fonts, storage }) {
       entry.id === 'frameRate' ? (frameRate ? frameRate + ' FPS' : 'Default') : '' }));
     const title = 'Settings', question = 'Exit Settings?', yes = 'Yes', no = 'No';
     const footer = confirming ? [saving ? 'Saving...' : 'Left / Right: Choose', saving ? '' : 'A: Select    B: Cancel'] :
-      ['D-pad: Move    A: Select', error ? 'Save failed. Try again.' : 'Start / B: Exit'];
+      ['D-pad: Move    A: Select', error ? 'Save failed. Try again.' :
+        rebuildRequested ? 'Assets will rebuild next launch.' : 'Start / B: Exit'];
     const overlay = native.runtime.settingsOverlay({ title, question, yes, no, rows, footer, selected, fonts, confirming, confirmYes });
     if (overlay.hasFont) { native.runtime.settingsPresent(true); dirty = false; return; }
     if (!fallbackText) {

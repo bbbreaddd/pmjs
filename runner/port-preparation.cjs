@@ -232,17 +232,20 @@ async function prepareForRun({ gameRoot, bundleRoot, descriptors, adapters = [],
   compressArtifact, decompressArtifact, logger = console, session = null }) {
   if (!session) throw new Error('port preparation requires a preparation session');
   const resolved = new Map(), assets = session.native.assets, files = session.files;
+  session.processorFiles = new Set();
   const sourcePath = logical => assets.sourcePath?.(logical) || fileInside(gameRoot, logical);
   const records = await processorRecords({ bundleRoot, descriptors, adapters, logger, files });
   for (const desc of records) {
     try {
       const processorFile = desc.sourceFile || fileInside(bundleRoot, desc.processor);
+      session.processorFiles.add(processorFile);
       const processorHash = await files.hash(processorFile, 'processor');
       if (desc.processorSha256 && processorHash !== desc.processorSha256)
         throw new Error('port processor checksum changed');
       const helpers = [];
       for (const item of desc.files || []) {
         const filename = fileInside(desc.sourceFile ? path.dirname(processorFile) : bundleRoot, item.path);
+        session.processorFiles.add(filename);
         const checksum = await files.hash(filename, 'processor');
         if (checksum !== item.sha256) throw new Error('port processor helper checksum changed');
         helpers.push([item.path, checksum]);
@@ -318,24 +321,30 @@ async function prepareForRun({ gameRoot, bundleRoot, descriptors, adapters = [],
           } finally { await fs.promises.rm(stage, { recursive: true, force: true }); }
         } catch (error) { session.outcome('port:' + id, 'ordinary-failure', error.message); logger.warn(`[pmjs] port preparation ${id} unavailable: ${error.message}`); }
       }
-    } catch (error) { logger.warn(`[pmjs] port preparation ${desc.id} unavailable: ${error.message}`); }
+    } catch (error) {
+      session.outcome('port:' + desc.id, 'ordinary-failure', error.message);
+      logger.warn(`[pmjs] port preparation ${desc.id} unavailable: ${error.message}`);
+    }
   }
   await files.save();
   return resolved;
 }
 
-function reader(files, decompressArtifact) {
+function reader(files, decompressArtifact, { hashes = {}, onInvalid = () => {} } = {}) {
   return name => {
     const file = typeof name === 'string' &&
       (files instanceof Map ? files.get(name) :
        Object.prototype.hasOwnProperty.call(files, name) ? files[name] : null);
     if (!file) return null;
     try {
-      if (fs.statSync(file).size > MAX_OUTPUT_BYTES + 1024 * 1024) return null;
+      if (fs.statSync(file).size > MAX_OUTPUT_BYTES + 1024 * 1024) throw new Error('prepared artifact exceeds size limit');
       const bytes = fs.readFileSync(file);
-      return decompressArtifact ? decompressArtifact(bytes) : bytes;
+      if (hashes[name] && hash(bytes) !== hashes[name]) throw new Error('prepared artifact checksum mismatch');
+      const value = decompressArtifact ? decompressArtifact(bytes) : bytes;
+      if (value === null || value === undefined) throw new Error('prepared artifact could not be decoded');
+      return value;
     }
-    catch { return null; }
+    catch { onInvalid(name); return null; }
   };
 }
 module.exports = { buildPortPreparation, verifyPortDescriptor, prepareForRun, reader,

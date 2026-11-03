@@ -500,7 +500,7 @@ async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, heig
         source.sourceIdentity = sourceDependencies.get(source.source).sourceIdentity;
       if (!offline) {
         report('install', '', data.length, data.length);
-        const installed = native.assets.installTileSets(entries, false, true);
+        const installed = native.assets.installTileSets(entries, true, true);
         result.activation = installed?.accepted ? installed : { accepted: entries.slice(0, installed).map(entry => entry.identity), rejected: [] };
         result.installed = result.activation.accepted.length;
         for (const [mapId, prepared] of Object.entries(result.index))
