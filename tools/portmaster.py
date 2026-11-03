@@ -33,25 +33,45 @@ source "$controlfolder/control.txt"
 get_controls
 
 GAMEDIR="/$directory/ports/@ID@"
-BINARY=node
 cd "$GAMEDIR"
 > "$GAMEDIR/log.txt" && exec > >(tee "$GAMEDIR/log.txt") 2>&1
 export SDL_GAMECONTROLLERCONFIG="$sdl_controllerconfig"
-export PMJS_EXIT_HOTKEY=${PMJS_EXIT_HOTKEY-back}
 
-chmod +x "$GAMEDIR/runtime/bin/$BINARY" "$GAMEDIR/runtime/bin/pmjs"
-pm_platform_helper "$GAMEDIR/runtime/bin/$BINARY"
+@RUNTIME_SETUP@
+pm_platform_helper "$runtime_dir/bin/node"
 
 XDG_CACHE_HOME="$GAMEDIR/.cache" \\
-  "$GAMEDIR/runtime/bin/pmjs" "$GAMEDIR" \\
+  "$runtime_dir/bin/pmjs" "$GAMEDIR" \\
   --save-root "$GAMEDIR/saves" --asset-cache-root "$GAMEDIR/.cache"
 status=$?
-if [ "$status" -ne 0 ]; then
-  pm_show_error "The game exited with an error. Check the game files and @ID@/log.txt."
-fi
+@RUNTIME_CLEANUP@
 pm_finish
 exit "$status"
 '''
+
+
+SHARED_RUNTIME_SETUP = '''runtime="@RUNTIME@"
+runtime_dir="/tmp/${runtime}-@ID@"
+mkdir -p "$runtime_dir"
+$ESUDO umount "$runtime_dir" || true
+$ESUDO mount "$controlfolder/libs/${runtime}.squashfs" "$runtime_dir"
+'''
+
+
+
+def launcher_script(identifier, runtime_key=None):
+    if not re.fullmatch(r'[a-z0-9]+', identifier):
+        raise ValueError('Invalid PortMaster portname')
+    if runtime_key is None:
+        setup = '\n'.join(('runtime_dir="$GAMEDIR/runtime"',
+                           'chmod +x "$runtime_dir/bin/node" "$runtime_dir/bin/pmjs"'))
+    else:
+        if not re.fullmatch(r'[a-z0-9][a-z0-9._-]*', runtime_key):
+            raise ValueError('Invalid PortMaster runtime key')
+        setup = SHARED_RUNTIME_SETUP.replace('@RUNTIME@', runtime_key).rstrip()
+    cleanup = '$ESUDO umount "$runtime_dir"' if runtime_key is not None else ''
+    return (PORTMASTER_LAUNCHER.replace('@RUNTIME_SETUP@', setup)
+            .replace('@RUNTIME_CLEANUP@', cleanup).replace('@ID@', identifier))
 
 
 def write_zip(directory, output, epoch):
@@ -327,8 +347,28 @@ def portmaster(stage, bundle, output, name=None, strip=None, extra_notices=(), s
         if any(file.name.startswith('libav') for file in copied) and not info.get('dependencySources'):
             raise ValueError('Bundled FFmpeg requires a source archive reference; specify --sources')
         if submission_details is not None:
+            for notice in notices:
+                target = runtime / notice.relative_to(stage)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(notice, target)
+            if info.get('dependencySources'):
+                (runtime / 'FFMPEG_SOURCES.txt').write_text(
+                    'Matching dependency source and build materials: ' +
+                    info['dependencySources'].get('url', info['dependencySources']['filename']) + '\n',
+                    encoding='utf-8')
+            provenance = json.loads((Path(__file__).resolve().parent.parent /
+                                     'third_party/provenance.json').read_text())['files']
+            bundled_modules = re.findall(r'^// BEGIN (js/.+)$',
+                                         (port / descriptor['bootstrap']).read_text(), re.MULTILINE)
+            bundle_notices = {stage / 'LICENSE'}
+            for module in bundled_modules:
+                notice = provenance.get(module, {}).get('notice', 'LICENSE')
+                if notice.startswith('third_party/'):
+                    bundle_notices.add(stage / 'share/pmjs/notices' / notice.removeprefix('third_party/'))
+                elif notice != 'LICENSE':
+                    bundle_notices.add(stage / 'share/pmjs' / notice)
             stage_submission(payload if layout == "pr" else port, port, submission_details,
-                             stage, info, notices, extra_notices)
+                             stage, info, sorted(bundle_notices), extra_notices)
             root_files = {file.name.casefold() for file in payload.iterdir() if file.is_file()}
             if identifier.casefold() in root_files:
                 raise ValueError('Port directory name collides with a submission file: ' + identifier)
@@ -349,7 +389,7 @@ def portmaster(stage, bundle, output, name=None, strip=None, extra_notices=(), s
             package_info['payloadSha256'] = payload_digest(files)
         write_json(runtime / 'build-info.json', package_info)
         launcher = payload / (name + '.sh')
-        launcher.write_text(PORTMASTER_LAUNCHER.replace('@ID@', identifier))
+        launcher.write_text(launcher_script(identifier))
         launcher.chmod(0o644 if layout == 'pr' else 0o755)
         subprocess.run(['bash', '-n', launcher], check=True)
         epoch = info['source']['sourceDateEpoch']

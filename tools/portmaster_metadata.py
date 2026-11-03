@@ -231,8 +231,3 @@ def stage_submission(destination, port, data, stage, info, notices, extra_notice
             raise ValueError('Conflicting license name: ' + str(file))
         used.add(label)
         shutil.copyfile(file, licenses / ('LICENSE.' + label + '.txt'))
-    if info.get('dependencySources'):
-        (licenses / 'FFMPEG_SOURCES.txt').write_text(
-            'Matching dependency source and build materials: ' +
-            info['dependencySources'].get('url', info['dependencySources']['filename']) + '\n',
-            encoding='utf-8')

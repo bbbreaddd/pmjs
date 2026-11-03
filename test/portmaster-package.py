@@ -187,6 +187,8 @@ class PortMasterPackage(unittest.TestCase):
         (submission / 'testing_thread.txt').write_text('Testing instructions')
         (submission / 'patches').mkdir()
         (submission / 'patches/build.sh').write_text('#!/bin/sh\necho build\n')
+        extra_notice = self.root / 'patch.LICENSE'
+        extra_notice.write_text('port-specific attribution')
         output = self.root / 'output/minimalgame.zip'
         subprocess.run(['node', ROOT / 'test/helpers/generate-schema3-index.cjs',
                          self.bundle, self.game, self.root], check=True, capture_output=True, text=True)
@@ -196,7 +198,22 @@ class PortMasterPackage(unittest.TestCase):
         self.assertEqual(len(index['images']), 1)
         self.assertEqual(index['images'][0]['calculated']['outputs'][0]['path'],
                          'assets/images/prepared-image/page.png')
-        portmaster.portmaster(self.stage, self.bundle, output, submission=submission, release=True)
+        module = 'js/pmjs-plugins/mpp/fragment-sort.js'
+        descriptor_file = self.bundle / 'pmjs.json'
+        bundle_record = json.loads(descriptor_file.read_text())
+        bootstrap = self.bundle / bundle_record['bootstrap']
+        bootstrap.write_text(bootstrap.read_text() + '\n// BEGIN ' + module + '\n' +
+                             (ROOT / module).read_text() + '\n// END ' + module + '\n')
+        bundle_record['bootstrapSha256'] = artifacts.digest(bootstrap)
+        artifacts.write_json(descriptor_file, bundle_record)
+        shutil.copyfile(ROOT / 'third_party/v8.LICENSE', self.stage / 'share/pmjs/notices/v8.LICENSE')
+        self.refresh_manifest()
+        info = json.loads((self.stage / 'build-info.json').read_text())
+        info['dependencySources'] = {'filename': 'sources.tar.gz', 'sha256': 'a' * 64,
+                                    'url': 'https://example.invalid/sources.tar.gz'}
+        artifacts.write_json(self.stage / 'build-info.json', info)
+        portmaster.portmaster(self.stage, self.bundle, output, submission=submission, release=True,
+                             extra_notices=(extra_notice,))
         with zipfile.ZipFile(output) as package:
             self.assertIsNone(package.testzip())
             names = package.namelist()
@@ -209,9 +226,20 @@ class PortMasterPackage(unittest.TestCase):
             self.assertIn('minimalgame/gamedata/', names)
             self.assertIn('Minimal Game.sh', names)
             self.assertNotIn('minimalgame/runtime/LICENSES.txt', names)
-            self.assertIn('minimalgame/licenses/LICENSE.share_pmjs_notices_node_license.txt', names)
-            self.assertIn('minimalgame/licenses/LICENSE.license.txt', names)
-            self.assertIn('minimalgame/licenses/LICENSE.share_pmjs_js_pmjs_web_fallback_font_license.txt', names)
+            self.assertEqual({name for name in names if name.startswith('minimalgame/licenses/')},
+                             {'minimalgame/licenses/LICENSE.license.txt',
+                              'minimalgame/licenses/LICENSE.share_pmjs_notices_v8_license.txt',
+                              'minimalgame/licenses/LICENSE.additional_patch_license.txt'})
+            self.assertEqual(package.read('minimalgame/licenses/LICENSE.share_pmjs_notices_v8_license.txt'),
+                             (ROOT / 'third_party/v8.LICENSE').read_bytes())
+            self.assertEqual(package.read('minimalgame/licenses/LICENSE.additional_patch_license.txt'),
+                             extra_notice.read_bytes())
+            for notice in ('LICENSE', 'THIRD_PARTY_NOTICES.md', 'share/pmjs/notices/Node.LICENSE',
+                           'share/pmjs/js/pmjs-web/fallback-font.LICENSE'):
+                self.assertEqual(package.read('minimalgame/runtime/' + notice),
+                                 (self.stage / notice).read_bytes())
+            self.assertIn(info['dependencySources']['url'],
+                          package.read('minimalgame/runtime/FFMPEG_SOURCES.txt').decode())
             self.assertEqual(json.loads(package.read('minimalgame/port.json')), descriptor)
             self.assertEqual(package.read('minimalgame/gameinfo.xml'),
                              (submission / 'gameinfo.xml').read_bytes())
@@ -220,7 +248,8 @@ class PortMasterPackage(unittest.TestCase):
                              b'generated image page')
             self.assertNotIn(b'purchased bytes', b''.join(package.read(n) for n in names if n.endswith('.js')))
         checksum = artifacts.digest(output)
-        portmaster.portmaster(self.stage, self.bundle, output, submission=submission, release=True)
+        portmaster.portmaster(self.stage, self.bundle, output, submission=submission, release=True,
+                             extra_notices=(extra_notice,))
         self.assertEqual(artifacts.digest(output), checksum)
         portmaster.portmaster(self.stage, self.bundle, output, submission=submission, layout='pr')
         with zipfile.ZipFile(output) as package:
@@ -682,7 +711,7 @@ class PortMasterLauncher(unittest.TestCase):
         (self.port / 'runtime/bin').mkdir(parents=True)
         self.launcher = self.root / 'menu/Minimal Game.sh'
         self.launcher.parent.mkdir()
-        launcher = portmaster.PORTMASTER_LAUNCHER.replace('@ID@', 'minimalgame')
+        launcher = portmaster.launcher_script('minimalgame')
         for location in ('/opt/system/Tools/PortMaster', '/opt/tools/PortMaster', '/roms/ports/PortMaster'):
             launcher = launcher.replace(location, str(self.root / location.lstrip('/')))
         self.launcher.write_text(launcher)
@@ -798,7 +827,7 @@ return "${MODULE_STATUS:-0}"
         for name in ('DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'SWAYSOCK'):
             self.assertNotIn(name, env)
         self.assertEqual(env['SDL_GAMECONTROLLERCONFIG'], 'firmware-map')
-        self.assertEqual(env['PMJS_EXIT_HOTKEY'], 'back')
+        self.assertNotIn('PMJS_EXIT_HOTKEY', env)
         self.assertNotIn('PMJS_GRAPHICS_DIAGNOSTICS', env)
 
     def test_standard_control_directory_priority(self):
@@ -831,10 +860,8 @@ return "${MODULE_STATUS:-0}"
         self.assertTrue(node.stat().st_mode & 0o111)
         self.assertTrue(launcher.stat().st_mode & 0o111)
 
-    def test_runtime_failure_is_reported_after_firmware_cleanup(self):
+    def test_runtime_failure_preserves_status_and_finishes(self):
         self.assertEqual(self.run_launcher(NODE_STATUS='7').returncode, 7)
-        self.assertIn('error:The game exited with an error. Check the game files and minimalgame/log.txt.',
-                      self.events.read_text().splitlines())
 
     def test_graphics_diagnostics_honor_explicit_environment(self):
         for value in ('0', '1'):
