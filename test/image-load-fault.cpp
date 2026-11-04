@@ -1,4 +1,5 @@
 #include <EGL/egl.h>
+#include <SDL_video.h>
 #include <GLES3/gl3.h>
 #include <cstdlib>
 #include <cstring>
@@ -8,9 +9,16 @@
 
 
 extern "C" {
+SDL_GLContext SDL_GL_GetCurrentContext() {
+  const char* mode = std::getenv("PMJS_IMAGE_FAULT");
+  if (mode && std::strcmp(mode, "no-context") == 0) return nullptr;
+  using Current = SDL_GLContext (*)();
+  static const auto current = reinterpret_cast<Current>(dlsym(RTLD_NEXT, "SDL_GL_GetCurrentContext"));
+  return current();
+}
 EGLContext eglGetCurrentContext() {
   const char* mode = std::getenv("PMJS_IMAGE_FAULT");
-  if (mode && std::strcmp(mode, "no-context") == 0) return EGL_NO_CONTEXT;
+  if (mode && std::strcmp(mode, "hidden-egl") == 0) return EGL_NO_CONTEXT;
   using Current = EGLContext (*)();
   static const auto current = reinterpret_cast<Current>(dlsym(dlopen("libEGL.so.1", RTLD_LAZY), "eglGetCurrentContext"));
   return current();

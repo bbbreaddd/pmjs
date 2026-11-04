@@ -1,5 +1,6 @@
 #include "canvas.hpp"
 #include <EGL/egl.h>
+#include <SDL_video.h>
 #include <GLES3/gl3.h>
 #include <algorithm>
 #include <cassert>
@@ -11,12 +12,14 @@ std::vector<uint8_t> texture;
 int textureWidth, textureHeight, rowLength, fullUploads, regionUploads;
 std::array<int, 4> readRectangle{};
 GLenum pendingError = GL_NO_ERROR;
+bool currentContext = true;
 bool failUpload = false;
 bool failRead = false;
 }
 // Capture the actual GLES transfer boundary without a window or driver.
 extern "C" {
-EGLContext eglGetCurrentContext() { return reinterpret_cast<EGLContext>(1); }
+EGLContext eglGetCurrentContext() { return EGL_NO_CONTEXT; }
+SDL_GLContext SDL_GL_GetCurrentContext() { return currentContext ? reinterpret_cast<SDL_GLContext>(1) : nullptr; }
 void glGenTextures(GLsizei count, GLuint* names) { for(int i=0;i<count;++i) names[i]=i+1; }
 void glDeleteTextures(GLsizei, const GLuint*) {}
 void glBindTexture(GLenum, GLuint) {}
@@ -65,7 +68,12 @@ int main() {
   pmjs::CanvasStore canvases(images);
   const auto canvas=canvases.create(5,3); assert(canvas);
   assert(canvases.writePixels(canvas->handle,0,0,1,1,{37,67,103,157}));
+  currentContext=false;
+  assert(!canvases.prepareImage(canvas->handle));
+  assert(fullUploads==0);
+  currentContext=true;
   auto image=canvases.prepareImage(canvas->handle); assert(image);
+  assert(eglGetCurrentContext()==EGL_NO_CONTEXT && fullUploads==1);
   assert(images.lookup(*image)->premultiplied);
   assert((std::vector<uint8_t>(texture.begin(),texture.begin()+4)==std::vector<uint8_t>{23,41,63,157}));
   const auto before=texture;

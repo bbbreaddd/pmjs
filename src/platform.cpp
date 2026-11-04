@@ -318,7 +318,6 @@ Platform::Platform(int width, int height, std::string title) {
       }
       message << '\n';
     }
-    printLoadedLibraries();
   }
   // SDL's compiled library names can differ from the renderer's linked providers.
   const std::pair<const char*, const void*> providers[] = {
@@ -329,13 +328,14 @@ Platform::Platform(int width, int height, std::string title) {
     const bool inherited = std::getenv(name) != nullptr;
     Dl_info info{};
     bool pinned = false;
-    if (!inherited && dladdr(symbol, &info) && info.dli_fname) {
-      SDL_setenv(name, info.dli_fname, 0);
-      pinned = true;
-    }
+    const bool linked = dladdr(symbol, &info) && info.dli_fname;
+    if (!inherited && linked) pinned = SDL_setenv(name, info.dli_fname, 0) == 0;
     const char* origin = inherited ? "environment" : pinned ? "pinned by PMJS" : "default";
-    Log() << "[pmjs-platform] " << name << "=\""
-              << (std::getenv(name) ? std::getenv(name) : "default") << "\" (" << origin << ")\n";
+    if (environmentFlag("PMJS_GRAPHICS_DIAGNOSTICS")) {
+      Log() << "[pmjs-platform] requested_driver " << name << "=\""
+            << (std::getenv(name) ? std::getenv(name) : "default") << "\" origin=\"" << origin
+            << "\" linked_symbol_provider=\"" << (linked ? info.dli_fname : "unknown") << "\"\n";
+    }
   }
   // The renderer calls EGL/GLES directly; an X11 GLX context uses another API.
   SDL_SetHintWithPriority("SDL_VIDEO_X11_FORCE_EGL", "1", SDL_HINT_DEFAULT);
@@ -469,6 +469,7 @@ Platform::Platform(int width, int height, std::string title) {
     Log(LogLevel::Warning) << "[pmjs] SDL reports swap interval " << swapInterval_
               << " instead of requested " << requestedSwapInterval_ << '\n';
   }
+  printLoadedLibraries();
   printGraphicsDiagnostics();
   const auto* renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
   Log() << "[pmjs] graphics hardware renderer=\"" << (renderer ? renderer : "unknown")

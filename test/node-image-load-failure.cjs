@@ -27,5 +27,11 @@ native.initialize({ gameRoot: root, assetRoot: '', windowTitle: 'Native failure 
       for (let frame = 0; frame < 65; frame++) native.beginFrame();
     }
   }
+  process.env.PMJS_IMAGE_FAULT = 'hidden-egl';
+  try {
+    const image = await native.images.loadAsync('fixture.png');
+    assert.equal(image.width, 2);
+    native.images.release(image.handle);
+  } finally { delete process.env.PMJS_IMAGE_FAULT; }
   console.log('image installation failures reject all callers, release resources, and permit retry');
 })().catch(error => { console.error(error); process.exitCode = 1; });
