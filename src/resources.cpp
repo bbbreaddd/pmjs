@@ -1,7 +1,7 @@
 #include "log.hpp"
 #include "resources.hpp"
 #include "astc_texture.hpp"
-#include <EGL/egl.h>
+#include <SDL_video.h>
 #include "prepared_page.hpp"
 #include "texture_artifact.hpp"
 #include "file_identity.hpp"
@@ -117,7 +117,10 @@ ImageChannelStorage imageStorage(const ImagePixels& pixels) { return imageChanne
 std::uint32_t uploadTexture(int width, int height, const void* rgba, ImageChannelStorage storage,
                             std::uint32_t texture = 0, bool packed = false) {
   const int channels = storage.channels;
-  if (eglGetCurrentContext() == EGL_NO_CONTEXT) return 0;
+  // SDL owns the GL context. Some firmware SDL builds make it current through an EGL
+  // provider other than the libEGL this addon links, so its EGL cannot see the context
+  // even though its GLES entry points can. Ask SDL instead of the linked EGL.
+  if (SDL_GL_GetCurrentContext() == nullptr) return 0;
   for (int attempt = 0; ; ++attempt) {
     const auto error = glGetError();
     if (error == GL_NO_ERROR) break;
