@@ -609,8 +609,10 @@ async function runSession(input, diagnostics, setNative) {
           };
           const complete = dispatcher ? dispatcher.runFrame(frame) : frame();
           complete.then(() => {
-            if (memoryReclaimer.pending && typeof globalThis.__pmjsMemoryReclamationBoundary === 'function') {
-              memoryReclaimer.atBoundary(globalThis.__pmjsMemoryReclamationBoundary());
+            if (memoryReclaimer.pending) {
+              // Engines without a boundary hook still get the critical-pressure trim.
+              memoryReclaimer.atBoundary(typeof globalThis.__pmjsMemoryReclamationBoundary === 'function' ?
+                globalThis.__pmjsMemoryReclamationBoundary() : null);
             }
             // Sample one in eight frames: no extra clock read on the other seven.
             if ((++diagnosticsFrameIndex & 7) === 0) {

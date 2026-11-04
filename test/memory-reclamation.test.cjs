@@ -109,3 +109,64 @@ test('missing native support and native failures never abort the game or retry e
   const h = createMemoryReclaimer({ native: { runtime: {} } });
   h.observe({ availableBytes: 0 }); assert.equal(h.atBoundary('startup'), null);
 });
+
+test('sustained critical pressure trims during play when no fade arrives', () => {
+  // Field report: a fade trim, then a long sequence without a fade regrows past the headroom.
+  const f = fixture(); f.pressure();
+  assert.equal(f.policy.atBoundary('scene-fade').boundary, 'scene-fade');
+  f.time += 20000; f.rss += 90 * MiB; f.available = 80 * MiB; f.pressure();
+  assert.equal(f.policy.pending, true, 'regrowth under critical pressure bypasses the 60 s cooldown');
+  assert.equal(f.policy.atBoundary(null), null, 'a fade gets the grace period first');
+  f.time += 2000;
+  const result = f.policy.atBoundary(null);
+  assert.equal(result.boundary, 'critical-pressure');
+  assert.equal(result.availableBytes, 80 * MiB);
+  assert.equal(f.trims, 2);
+  assert.equal(f.policy.pending, false);
+});
+
+test('a fade inside the grace period takes the critical trim invisibly', () => {
+  const f = fixture(); f.available = 80 * MiB; f.pressure();
+  assert.equal(f.policy.atBoundary(null), null);
+  assert.equal(f.policy.atBoundary('scene-fade').boundary, 'scene-fade');
+  f.time += 5000;
+  assert.equal(f.policy.atBoundary(null), null);
+  assert.equal(f.trims, 1);
+});
+
+test('non-critical pressure still waits for a fade', () => {
+  const f = fixture(); f.available = 150 * MiB; f.pressure();
+  f.time += 60000;
+  assert.equal(f.policy.atBoundary(null), null);
+  assert.equal(f.policy.atBoundary('dialogue-pause'), null);
+  assert.equal(f.trims, 0);
+});
+
+test('critical trims need regrowth and a minimum interval', () => {
+  const f = fixture(); f.available = 80 * MiB; f.pressure(); f.time += 2000;
+  assert.equal(f.policy.atBoundary(null).boundary, 'critical-pressure');
+  f.time += 3000; f.rss += 100 * MiB; f.pressure();
+  assert.equal(f.policy.pending, false, 'within 10 s of the last attempt');
+  f.time += 8000; f.rss -= 50 * MiB; f.pressure();
+  assert.equal(f.policy.pending, false, 'less than 64 MiB regrowth since the trim');
+  f.rss += 20 * MiB; f.pressure();
+  assert.equal(f.policy.pending, true);
+  f.time += 2000;
+  assert.equal(f.policy.atBoundary(null).boundary, 'critical-pressure');
+  assert.equal(f.trims, 2);
+});
+
+test('emergency deferrals do not read memory every frame', () => {
+  const f = fixture(); let reads = 0; const sample = f.sample;
+  f.available = 80 * MiB; f.pressure(); f.time += 2000;
+  f.native.images.memory = () => ({ pendingDecodeJobs: f.jobs });
+  const policy = createMemoryReclaimer({ native: f.native, readMemory: () => { reads++; return sample(); },
+    readRss: () => f.rss, now: () => f.time, logger: { log() {}, warn() {} } });
+  policy.observe(sample()); policy.observe(sample()); f.time += 2000; f.jobs = 1;
+  for (let frame = 0; frame < 30; frame++) policy.atBoundary(null);
+  assert.equal(reads, 1, 'active decodes restart the grace period');
+  f.jobs = 0; f.time += 2000;
+  assert.equal(policy.atBoundary(null).boundary, 'critical-pressure');
+  f.available = 150 * MiB;
+  assert.equal(f.trims, 1);
+});
