@@ -296,13 +296,21 @@ var fsModule = {
     var host = writable !== null ? NativeHost.storage : NativeHost.fs;
     if (!host) throw new Error('EACCES: ' + path);
     if (writable === '' && !(options && options.recursive)) throw Object.assign(new Error('EEXIST: ' + path), { code: 'EEXIST' });
-    if (writable !== '') (host.mkdir || host.makeDirectory).call(host, writable !== null ? writable : gamePath(path), options);
+    if (writable === '') return;
+    var relative = writable !== null ? writable : gamePath(path);
+    var first = (host.mkdir || host.makeDirectory).call(host, relative, options);
+    if (first === undefined || !(options && options.recursive)) return;
+    var normalized = normalizePath(path);
+    if (String(path).indexOf('./') === 0) normalized = './' + normalized;
+    if (writable !== null) first = posixPath.relative(host.resolvePath(''), first);
+    var suffix = posixPath.relative(first, relative);
+    return suffix ? normalized.split('/').slice(0, -suffix.split('/').length).join('/') : normalized;
   },
   mkdir: function(path, options, callback) {
     if (typeof options === 'function') { callback = options; options = undefined; }
-    var error = null;
-    try { fsModule.mkdirSync(path, options); } catch (caught) { error = caught; }
-    deliverNodeCallback(function() { if (callback) return callback(error); });
+    var result, error = null;
+    try { result = fsModule.mkdirSync(path, options); } catch (caught) { error = caught; }
+    deliverNodeCallback(function() { if (callback) return callback(error, result); });
   },
   unlinkSync: function(path) {
     var writable = writablePath(path);

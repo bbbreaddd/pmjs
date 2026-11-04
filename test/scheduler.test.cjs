@@ -9,7 +9,7 @@ const timers = require('node:timers');
 
 function fixture(t, clock = performance, nodeReporter) {
   const errors = [], fatals = [];
-  const globals = { PMJS: {}, performance: clock, console,
+  const globals = { PMJS: {}, __pmjsBuiltinRequire: require, performance: clock, console,
     NativeHost: { runtime: { scheduling: { ...timers, onFatal: error => fatals.push(error) } } },
     pmjsReportEventError: error => errors.push(error) };
   if (nodeReporter) globals.pmjsReportNodeException = nodeReporter;
@@ -234,4 +234,87 @@ test('timer and animation callback promises use browser rejection delivery witho
   const infrastructure = new Error('infrastructure');
   assert.throws(() => host.emit('unhandledRejection', infrastructure, Promise.resolve()), error => error === infrastructure);
   assert.deepEqual(fatals, []);
+});
+
+test('discarded promises retain guest origin through reactions and await without tagging host work', async t => {
+  const { context } = fixture(t);
+  vm.runInContext(`
+    globalThis.created = [];
+    setTimeout(() => {
+      const rejection = Promise.reject(new Error('discarded timer'));
+      created.push(rejection); rejection.catch(() => {});
+      Promise.resolve().then(() => created.push(Promise.resolve('reaction')));
+    }, 0);
+    setImmediate(async () => {
+      await Promise.resolve();
+      created.push(Promise.resolve('await'));
+    });
+  `, context);
+  await new Promise(resolve => timers.setTimeout(resolve, 20));
+  await context.PMJS.tasks.idle();
+  assert.equal(context.created.length, 3);
+  assert.deepEqual(Array.from(context.created, p => context.PMJS.tasks.guestPromiseOrigin(p)).sort(),
+    ['browser', 'browser', 'node']);
+  const tasks = context.PMJS.tasks;
+  let infrastructure, consumer;
+  tasks.runGuest('browser', () => {
+    tasks.runHost(() => { infrastructure = Promise.resolve(); });
+    infrastructure.then(() => { consumer = Promise.resolve(); });
+  });
+  await tasks.idle();
+  assert.equal(tasks.guestPromiseOrigin(infrastructure), undefined);
+  assert.equal(tasks.guestPromiseOrigin(consumer), 'browser');
+  const guestPromise = tasks.runGuest('browser', () => Promise.resolve());
+  let hostChild;
+  await guestPromise.then(() => { hostChild = Promise.resolve(); });
+  assert.equal(tasks.guestPromiseOrigin(hostChild), undefined);
+  assert.equal(tasks.guestPromiseOrigin(Promise.resolve()), undefined);
+  assert.throws(() => tasks.runGuest('browser', () => { throw new Error('scope'); }), /scope/);
+  assert.equal(tasks.guestPromiseOrigin(Promise.resolve()), undefined);
+});
+
+test('guest emitter listeners and script scopes attribute discarded promises and stop removes hooks', t => {
+  const { context } = fixture(t), tasks = context.PMJS.tasks;
+  const { EventEmitter } = require('node:events');
+  const emitter = tasks.wrapNodeEmitter(new EventEmitter());
+  let promise;
+  emitter.on('data', () => { promise = Promise.resolve(); });
+  emitter.emit('data');
+  assert.equal(tasks.guestPromiseOrigin(promise), 'node');
+  tasks.runGuest('browser', () => vm.runInContext('globalThis.scriptPromise = Promise.resolve()', context));
+  assert.equal(tasks.guestPromiseOrigin(context.scriptPromise), 'browser');
+  tasks.stop();
+  tasks.runGuest('browser', () => { promise = Promise.resolve(); });
+  assert.equal(tasks.guestPromiseOrigin(promise), undefined);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-web/scheduler.js'), 'utf8'), context);
+  context.PMJS.tasks.runGuest('browser', () => { promise = Promise.resolve(); });
+  assert.equal(context.PMJS.tasks.guestPromiseOrigin(promise), 'browser');
+  assert.equal(tasks.guestPromiseOrigin(promise), undefined);
+});
+
+test('a synchronous frame failure wakes work queued by the frame', async t => {
+  const { context } = fixture(t), tasks = context.PMJS.tasks, trace = [];
+  await assert.rejects(tasks.runFrame(() => {
+    tasks.enqueue(() => trace.push('continued'));
+    throw new Error('frame failed');
+  }), /frame failed/);
+  // No new enqueue or idle wake may be needed to resume the stranded work.
+  await new Promise(timers.setImmediate);
+  assert.deepEqual(trace, ['continued']);
+});
+
+test('ordinary callbacks remain held by an awaiting frame; explicit continuations can complete it', async t => {
+  const { context } = fixture(t), tasks = context.PMJS.tasks, trace = [];
+  let release;
+  const frame = tasks.runFrame(() => new Promise(resolve => {
+    release = resolve;
+    tasks.enqueue(() => { trace.push('ordinary'); resolve(); });
+  }));
+  await new Promise(timers.setImmediate);
+  await new Promise(timers.setImmediate);
+  assert.deepEqual(trace, []);
+  await tasks.invokeRendering(() => { trace.push('continuation'); release(); });
+  await frame;
+  await tasks.idle();
+  assert.deepEqual(trace, ['continuation', 'ordinary']);
 });

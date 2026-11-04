@@ -7,7 +7,7 @@
         SceneManager.ticker &&
         SceneManager.ticker._pmjsHostDriven &&
         typeof SceneManager.ticker.update === 'function') {
-      SceneManager.ticker.update(performance.now());
+      PMJS.tasks.runGuest('browser', SceneManager.ticker.update, SceneManager.ticker, [performance.now()]);
     }
   }
 

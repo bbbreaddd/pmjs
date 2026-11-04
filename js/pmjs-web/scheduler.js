@@ -18,6 +18,32 @@
   var nodeListenerExceptions = new WeakMap();
   var guestPromiseOrigins = new WeakMap();
   var runningTask = false;
+  var activeOrigin, promiseScopes = [];
+  var promiseHooks = typeof globalThis.__pmjsBuiltinRequire === 'function'
+    ? globalThis.__pmjsBuiltinRequire('node:v8').promiseHooks : host.promiseHooks;
+  // Registration scopes keep host observers of guest promises outside guest attribution.
+  var removePromiseHooks = promiseHooks && promiseHooks.createHook({
+    init: function(promise) {
+      if (activeOrigin) guestPromiseOrigins.set(promise, activeOrigin);
+    },
+    before: function(promise) {
+      promiseScopes.push(activeOrigin);
+      activeOrigin = guestPromiseOrigins.get(promise);
+    },
+    after: function() { activeOrigin = promiseScopes.pop(); }
+  });
+  function runGuest(origin, callback, receiver, args) {
+    var previous = activeOrigin;
+    activeOrigin = origin;
+    try { return trackGuestPromise(callback.apply(receiver, args || []), origin); }
+    finally { activeOrigin = previous; }
+  }
+  function runHost(callback, receiver, args) {
+    var previous = activeOrigin;
+    activeOrigin = undefined;
+    try { return callback.apply(receiver, args || []); }
+    finally { activeOrigin = previous; }
+  }
   var rafs = new Map(), timers = new Map(), immediates = new Set(), timerWake = null;
 
   function report(error) {
@@ -60,7 +86,7 @@
         if (methods.indexOf(property) >= 0) return function(event, listener) {
           if (typeof listener !== 'function') return target[property].call(target, event, listener);
           var wrapped = function() {
-            try { return trackGuestPromise(listener.apply(guestEmitter, arguments), 'node'); }
+            try { return runGuest('node', listener, guestEmitter, arguments); }
             catch (error) {
               if (synchronousDispatch) throw error;
               if (runningTask) throw nodeListenerException(error);
@@ -140,6 +166,7 @@
   function stop() {
     if (stopped) return;
     stopped = true;
+    if (removePromiseHooks) removePromiseHooks();
     if (scheduled !== null) host.clearImmediate(scheduled);
     if (timerWake !== null) host.clearTimeout(timerWake);
     scheduled = timerWake = null;
@@ -169,7 +196,7 @@
       rendering = true;
       var result;
       try { result = active.callback(); }
-      catch (error) { rendering = false; active.reject(error); return; }
+      catch (error) { rendering = false; active.reject(error); wake(); return; }
       Promise.resolve(result).then(function(value) {
         rendering = false; active.resolve(value); wake();
       }, function(error) {
@@ -193,8 +220,8 @@
     }
     runningTask = true;
     try {
-      var result = entry.callback();
-      if (entry.options.errorMode === 'uncaught') trackGuestPromise(result, 'node');
+      if (entry.options.errorMode === 'uncaught') runGuest('node', entry.callback);
+      else runHost(entry.callback);
     }
     catch (error) {
       runningTask = false;
@@ -217,7 +244,7 @@
       hostNextTick(function() {
         if (stopped) return;
         runningTask = true;
-        try { trackGuestPromise(callback.apply(undefined, args || []), 'node'); }
+        try { runGuest('node', callback, undefined, args); }
         catch (error) {
           reportUncaught(nodeListenerExceptions.has(error) ? nodeListenerExceptions.get(error) : error);
         } finally { runningTask = false; }
@@ -227,6 +254,8 @@
     invoke: invoke,
     nodeListenerException: nodeListenerException,
     trackGuestPromise: trackGuestPromise,
+    runGuest: runGuest,
+    runHost: runHost,
     guestPromiseOrigin: function(promise) { return guestPromiseOrigins.get(promise); },
     wrapNodeEmitter: wrapNodeEmitter,
     invokeRendering: function(callback, errorMode) { return invoke(callback, errorMode, true); },
@@ -278,8 +307,8 @@
         if (!timers.has(timer.id)) return;
         if (!timer.interval) timers.delete(timer.id);
         try {
-          if (typeof timer.callback === 'function') trackGuestPromise(timer.callback.apply(globalThis, timer.args), 'browser');
-          else if (typeof timer.callback === 'string') trackGuestPromise((0, eval)(timer.callback), 'browser');
+          if (typeof timer.callback === 'function') runGuest('browser', timer.callback, globalThis, timer.args);
+          else if (typeof timer.callback === 'string') runGuest('browser', function() { return (0, eval)(timer.callback); });
         } finally {
           if (timer.interval && timers.has(timer.id)) {
             var now = performance.now();
@@ -346,7 +375,7 @@
           var callback = rafs.get(id);
           if (!callback) return;
           rafs.delete(id);
-          trackGuestPromise(callback(now), 'browser');
+          runGuest('browser', callback, undefined, [now]);
         }, 'event', true);
       });
     });

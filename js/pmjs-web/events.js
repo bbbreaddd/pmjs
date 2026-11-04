@@ -19,7 +19,11 @@ function pmjsReportEventError(error) {
     };
     if (typeof globalThis.onerror === 'function') {
       try {
-        if (globalThis.onerror(event.message, '', 0, 0, error) === true) {
+        var args = [event.message, '', 0, 0, error];
+        var handled = PMJS.tasks && PMJS.tasks.runGuest
+          ? PMJS.tasks.runGuest('browser', globalThis.onerror, globalThis, args)
+          : globalThis.onerror.apply(globalThis, args);
+        if (handled === true) {
           event.preventDefault();
         }
       } catch (handlerError) {
@@ -40,6 +44,7 @@ function pmjsReportEventError(error) {
 function pmjsInvokeEventHandler(target, handler, event) {
   if (typeof handler !== 'function') return undefined;
   try {
+    if (PMJS.tasks && PMJS.tasks.runGuest) return PMJS.tasks.runGuest('browser', handler, target, [event]);
     var result = handler.call(target, event);
     if (PMJS.tasks && typeof PMJS.tasks.trackGuestPromise === 'function') {
       PMJS.tasks.trackGuestPromise(result, 'browser');

@@ -14,6 +14,7 @@ function syncDirectory(directory) {
 function createStorage(root) {
   const saveRoot = path.resolve(root);
   makeDirectory(saveRoot);
+  const canonicalRoot = fs.realpathSync(saveRoot);
   let temporaryId = 0;
   // Advance before mutation attempts, including failures after partial changes.
   let mutationGeneration = 0;
@@ -27,6 +28,24 @@ function createStorage(root) {
     }
     return first;
   }
+  function checkContained(filename, links = 0) {
+    let resolved;
+    try { resolved = fs.realpathSync(filename); }
+    catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      let stat;
+      try { stat = fs.lstatSync(filename); }
+      catch (missing) { if (missing.code !== 'ENOENT') throw missing; }
+      if (stat && stat.isSymbolicLink()) {
+        if (links >= 40) throw Object.assign(new Error('save symlink loop'), { code: 'ELOOP' });
+        return checkContained(path.resolve(path.dirname(filename), fs.readlinkSync(filename)), links + 1);
+      }
+      return checkContained(path.dirname(filename), links);
+    }
+    if (resolved !== canonicalRoot && !resolved.startsWith(canonicalRoot + path.sep)) {
+      throw Object.assign(new Error(`save path escapes root: ${filename}`), { code: 'EACCES' });
+    }
+  }
   function resolve(relative) {
     const value = String(relative).replace(/\\/g, '/');
     if (!value || value.startsWith('/') || value.split('/').includes('..')) {
@@ -36,11 +55,20 @@ function createStorage(root) {
     if (resolved !== saveRoot && !resolved.startsWith(saveRoot + path.sep)) {
       throw new Error(`save path escapes root: ${relative}`);
     }
+    let current = saveRoot;
+    for (const component of path.relative(saveRoot, resolved).split(path.sep)) {
+      current = path.join(current, component);
+      checkContained(current);
+    }
     return resolved;
   }
 
   return {
-    resolvePath(relative) { return relative === '' || relative === '.' ? saveRoot : resolve(relative); },
+    resolvePath(relative) {
+      if (relative !== '' && relative !== '.') return resolve(relative);
+      checkContained(saveRoot);
+      return saveRoot;
+    },
     stat(relative, options) { return fs.statSync(this.resolvePath(relative), options); },
     lstat(relative, options) { return fs.lstatSync(this.resolvePath(relative), options); },
     access(relative, mode) { return fs.accessSync(this.resolvePath(relative), mode); },
@@ -198,7 +226,7 @@ function createStorage(root) {
       catch (error) { if (error.code === 'ENOENT') return false; throw error; }
     },
     readDirectory(relative) {
-      try { return fs.readdirSync(relative === '' ? saveRoot : resolve(relative)); }
+      try { return fs.readdirSync(this.resolvePath(relative)); }
       catch (error) { if (error.code === 'ENOENT') return null; throw error; }
     },
     makeDirectory(relative) {
@@ -310,14 +338,22 @@ function createGameFilesystem(host, root) {
     changedPaths.add(source); changedPaths.add(destination);
     const staging = path.join(overlayRoot, intent.staging);
     const value = path.join(staging, 'value');
+    const caseOnly = key(source) === key(destination);
+    const destinationPath = caseOnly
+      ? path.join(physical(path.posix.dirname(destination)), path.posix.basename(destination))
+      : physical(destination);
     if (fs.existsSync(value)) {
+      if (caseOnly && fs.existsSync(physical(source))) {
+        fs.rmSync(physical(source), { recursive: true, force: true });
+        syncDirectory(path.dirname(destinationPath));
+      }
       if (intent.directory && fs.existsSync(physical(destination))) fs.rmdirSync(physical(destination));
-      transactions.rename(intent.staging + '/value', path.relative(overlayRoot, physical(destination)));
+      transactions.rename(intent.staging + '/value', path.relative(overlayRoot, destinationPath));
     }
     hide(source);
     if (intent.directory) hide(destination);
     const sourcePath = physical(source);
-    if (fs.existsSync(sourcePath)) {
+    if (!caseOnly && fs.existsSync(sourcePath)) {
       fs.rmSync(sourcePath, { recursive: true, force: true });
       syncDirectory(path.dirname(sourcePath));
     }
@@ -397,15 +433,18 @@ function createGameFilesystem(host, root) {
           if (options && options.recursive && host.isDirectory(name)) return;
           throw error('EEXIST', name);
         }
+        let first = name;
         if (!(options && options.recursive)) parents(name);
         else {
           let parent = path.posix.dirname(name);
           while (parent !== '.') {
             if (host.exists(parent) && !host.isDirectory(parent)) throw error('ENOTDIR', parent);
+            if (!host.exists(parent)) first = parent;
             parent = path.posix.dirname(parent);
           }
         }
         files.makeDirectory(path.relative(path.join(overlayRoot, 'files'), physical(name)));
+        if (options && options.recursive) return first;
       });
     },
     remove(relative) {
@@ -426,10 +465,10 @@ function createGameFilesystem(host, root) {
       return mutate([source, destination], () => {
         if (source === '.' || destination === '.') throw error('EBUSY', source);
         if (!host.exists(source)) throw error('ENOENT', source);
-        if (key(source) === key(destination)) return;
+        if (source === destination) return;
         if (key(destination).startsWith(key(source) + '/')) throw error('EINVAL', destination);
         const directory = host.isDirectory(source);
-        if (host.exists(destination)) {
+        if (key(source) !== key(destination) && host.exists(destination)) {
           if (host.isDirectory(destination) && key(source).startsWith(key(destination) + '/')) {
             throw error('ENOTEMPTY', destination);
           }

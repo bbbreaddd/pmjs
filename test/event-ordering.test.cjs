@@ -217,3 +217,62 @@ test('runner XHR checkpoints between DONE and load, and between independent comp
   const second = first === 'A' ? 'B' : 'A';
   assert.ok(trace.indexOf(first + ':micro') < trace.indexOf(second + ':load'));
 });
+
+test('discarded guest rejections reach browser and Node handlers through the real process bridge', () => {
+  const trace = runGuest(`
+    globalThis.pmjsReportUnhandledPromiseRejection=(reason,promise,origin)=>{
+      trace.push([reason.message,origin]);
+      if(reason.message==='timer')setTimeout(()=>promise.catch(()=>{}),0);
+    };
+    globalThis.pmjsReportHandledPromiseRejection=()=>trace.push('handled');
+    setTimeout(()=>{Promise.reject(new Error('timer'));},0);
+    setImmediate(()=>{Promise.resolve().then(()=>{Promise.reject(new Error('chain'));});});
+    PMJS.tasks.nextTick(async()=>{await Promise.resolve();Promise.reject(new Error('await'));});
+    fsModule.readFile('file',()=>{Promise.reject(new Error('filesystem'));});
+    const target=new EventTarget();
+    target.addEventListener('click',()=>{Promise.reject(new Error('event'));});
+    target.dispatchEvent({type:'click'});
+    requestAnimationFrame(()=>{Promise.reject(new Error('raf'));});
+    NativeHost.runtime.runScript('Promise.reject(new Error("script"));');
+    function complete(){return trace.filter(Array.isArray).length===7&&trace.includes('handled');}
+  `);
+  assert.deepEqual(trace.filter(Array.isArray).sort(), [
+    ['await','node'], ['chain','node'], ['event','browser'], ['filesystem','node'],
+    ['raf','browser'], ['script','browser'], ['timer','browser']
+  ]);
+  assert.ok(trace.includes('handled'));
+});
+
+test('infrastructure rejections remain fatal after guest callbacks have run', () => {
+  runGuest(`
+    setTimeout(()=>trace.push('guest'),0);
+    __pmjsBuiltinRequire('node:timers').setImmediate(()=>{
+      Promise.reject(new Error('host infrastructure rejection'));
+    });
+    function complete(){return false;}
+  `, { expectedError: /host infrastructure rejection/ });
+});
+
+test('a host filesystem rejection created during guest work remains fatal', () => {
+  runGuest(`
+    NativeHost.fs.readBytesAsync=()=>{
+      Promise.reject(new Error('host backend failure'));
+      return Promise.resolve(Buffer.from('{}'));
+    };
+    setTimeout(()=>fsModule.readFile('file',()=>trace.push('read')),0);
+    function complete(){return false;}
+  `, { expectedError: /host backend failure/ });
+});
+
+test('discarded rejections from the host-driven guest ticker and onerror retain browser origin', () => {
+  const trace = runGuest(`
+    globalThis.pmjsReportUnhandledPromiseRejection=(reason,promise,origin)=>trace.push([reason.message,origin]);
+    globalThis.onerror=()=>{Promise.reject(new Error('onerror'));return true;};
+    setTimeout(()=>{throw new Error('timer error');},0);
+    globalThis.SceneManager={ticker:{_pmjsHostDriven:true,update(){
+      if(!this.rejected){this.rejected=true;Promise.reject(new Error('ticker'));}
+    }}};
+    function complete(){return trace.length===2;}
+  `);
+  assert.deepEqual(trace.sort(), [['onerror','browser'],['ticker','browser']]);
+});

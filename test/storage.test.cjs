@@ -728,3 +728,47 @@ test('storage.read-burst-coalesce disables cleanly via optimization gate', () =>
   disabled.context.StorageManager.loadFromLocalFile(0);
   assert.equal(disabled.getReads(), 2, 'disabled read-burst-coalesce should read on every call');
 });
+
+test('save paths reject escaping links across sync and async operations and allow internal links', async t => {
+  const root = temporaryDirectory('pmjs-links-');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const actual = path.join(root, 'actual'), outside = path.join(root, 'outside');
+  fs.mkdirSync(actual); fs.mkdirSync(outside);
+  fs.symlinkSync(actual, path.join(root, 'save'));
+  const storage = createStorage(path.join(root, 'save'));
+  storage.writeText('inside/source', 'keep');
+  fs.symlinkSync(outside, path.join(actual, 'alias'));
+  fs.symlinkSync(path.join(outside, 'missing'), path.join(actual, 'dangling'));
+  fs.symlinkSync(path.join(actual, 'inside'), path.join(actual, 'internal'));
+  for (const alias of ['alias', 'dangling']) {
+    for (const operation of [
+      () => storage.writeText(alias + '/new/nested', 'bad'),
+      () => storage.writeBytes(alias + '/append', Buffer.from('bad'), { flag: 'a' }),
+      () => storage.readBytes(alias + '/file'),
+      () => storage.mkdir(alias + '/folder', { recursive: true }),
+      () => storage.rename('inside/source', alias + '/destination'),
+      () => storage.rename(alias + '/source', 'inside/destination'),
+      () => storage.remove(alias + '/file')
+    ]) assert.throws(operation, { code: 'EACCES' });
+    await assert.rejects(storage.writeTextAsync(alias + '/new', 'bad'), { code: 'EACCES' });
+    await assert.rejects(storage.readBytesAsync(alias + '/file'), { code: 'EACCES' });
+    await assert.rejects(storage.openReadAsync(alias + '/file'), { code: 'EACCES' });
+  }
+  storage.writeText('internal/new/nested', 'valid');
+  assert.equal(storage.readText('inside/new/nested'), 'valid');
+  assert.equal(storage.readText('inside/source'), 'keep');
+  assert.deepEqual(fs.readdirSync(outside), []);
+});
+
+
+test('save root access rejects a root link redirected after storage creation', t => {
+  const root = temporaryDirectory('pmjs-root-link-');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'actual')); fs.mkdirSync(path.join(root, 'outside'));
+  const link = path.join(root, 'save');
+  fs.symlinkSync(path.join(root, 'actual'), link);
+  const storage = createStorage(link);
+  fs.unlinkSync(link); fs.symlinkSync(path.join(root, 'outside'), link);
+  assert.throws(() => storage.stat('.'), { code: 'EACCES' });
+  assert.throws(() => storage.readDirectory(''), { code: 'EACCES' });
+});

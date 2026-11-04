@@ -28,6 +28,7 @@ function fixture(t) {
     const filename = path.resolve(__dirname, '../js/pmjs-web', name + '.js');
     vm.runInContext(fs.readFileSync(filename, 'utf8'), context, { filename });
   }
+  t.after(() => context.PMJS.tasks.stop());
   return { root, gameRoot, overlay, host, context, guest: context.fsModule,
     restart() { return createGameFilesystem(native.fs, overlay); } };
 }
@@ -448,4 +449,54 @@ test('desktop metadata follows actual overlay bytes, links, directories and dele
   assert.equal(guest.existsSync('/game/data/remove-me/file'), false);
   restart();
   assert.equal(guest.existsSync('/game/data/remove-me'), false);
+});
+
+test('case-only renames preserve requested spelling for original and overlay trees across remount', t => {
+  const { guest, restart } = fixture(t);
+  guest.renameSync('data/Original.txt', 'data/ORIGINAL.TXT');
+  assert.ok(guest.readdirSync('data').includes('ORIGINAL.TXT'));
+  assert.ok(!guest.readdirSync('data').includes('Original.txt'));
+  assert.equal(guest.readFileSync('DATA/original.txt', 'utf8'), 'original');
+  guest.writeFileSync('data/extra', 'overlay');
+  guest.renameSync('data/extra', 'data/EXTRA');
+  guest.renameSync('data', 'DATA');
+  assert.ok(guest.readdirSync('.').includes('DATA'));
+  const host = restart();
+  assert.deepEqual(Array.from(host.readDirectory('data')).sort(), ['EXTRA', 'Keep.txt', 'ORIGINAL.TXT']);
+  assert.equal(host.readText('data/extra'), 'overlay');
+  assert.equal(fs.readFileSync(path.join(gameRoot, 'data/Original.txt'), 'utf8'), 'original');
+});
+
+test('recursive mkdir returns guest-visible first-created paths in sync, callback and promise APIs', async t => {
+  const { guest, root } = fixture(t);
+  const reference = path.join(root, 'reference');
+  fs.mkdirSync(reference);
+  for (const prefix of ['/save', '/game', '.']) {
+    const first = prefix + '/created-' + (prefix === '/save' ? 'save' : prefix === '/game' ? 'game' : 'relative');
+    const nodeFirst = fs.mkdirSync(path.join(reference, path.basename(first), 'nested'), { recursive: true });
+    assert.equal(guest.mkdirSync(first + '/nested', { recursive: true }),
+      prefix + '/' + path.relative(reference, nodeFirst));
+    assert.equal(guest.mkdirSync(first + '/nested', { recursive: true }), undefined);
+    const value = await new Promise((resolve, reject) => guest.mkdir(first + '/callback/deep',
+      { recursive: true }, (error, result) => error ? reject(error) : resolve(result)));
+    assert.equal(value, first + '/callback');
+    assert.equal(await guest.promises.mkdir(first + '/promise/deep', { recursive: true }), first + '/promise');
+  }
+});
+
+test('case-only directory rename recovers after destination installation', t => {
+  const { guest, overlay, restart } = fixture(t);
+  guest.writeFileSync('data/extra', 'retained');
+  const rename = fs.renameSync;
+  t.mock.method(fs, 'renameSync', (from, to) => {
+    rename(from, to);
+    if (String(from).endsWith('/value')) throw new Error('case rename interrupted');
+  });
+  assert.throws(() => guest.renameSync('data', 'DATA'), /case rename interrupted/);
+  t.mock.restoreAll();
+  const host = restart();
+  assert.ok(Array.from(host.readDirectory('.')).includes('DATA'));
+  assert.equal(host.readText('data/extra'), 'retained');
+  assert.equal(host.readText('data/original.txt'), 'original');
+  assert.equal(fs.existsSync(path.join(overlay, 'rename.json')), false);
 });
