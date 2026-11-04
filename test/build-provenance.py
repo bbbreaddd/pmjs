@@ -46,6 +46,26 @@ class BuildCommand(unittest.TestCase):
                 else:
                     self.assertFalse(target.exists())
 
+    def test_invalid_package_format_does_not_touch_files(self):
+        with mock.patch.object(release, 'ROOT', self.root), \
+             mock.patch.object(release, 'archive_sources') as sources:
+            with self.assertRaisesRegex(ValueError, 'PMJS_PACKAGE_FORMAT'):
+                release.package('invalid')
+            sources.assert_not_called()
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_package_cli_validates_environment_and_allows_an_explicit_override(self):
+        with mock.patch.dict(os.environ, {'PMJS_PACKAGE_FORMAT': 'invalid', 'PMJS_SOURCES_URL': ''}), \
+             mock.patch.object(sys, 'argv', ['release.py', 'package']):
+            with self.assertRaises(SystemExit) as error:
+                release.main()
+            self.assertEqual(error.exception.code, 1)
+        with mock.patch.dict(os.environ, {'PMJS_PACKAGE_FORMAT': 'invalid', 'PMJS_SOURCES_URL': ''}), \
+             mock.patch.object(sys, 'argv', ['release.py', 'package', '--format', 'tar.gz']), \
+             mock.patch.object(release, 'package') as package:
+            release.main()
+            package.assert_called_once_with('tar.gz', None)
+
     def test_example_uses_the_public_launcher_and_preserves_arguments(self):
         example = self.root / 'example'
         example.mkdir()
@@ -261,6 +281,53 @@ include(cmake/Install.cmake)
             self.assertEqual(archive.extractfile('pmjs-linux-x64/lib/pmjs_native.node').read(),
                              (stage / 'lib/pmjs_native.node').read_bytes())
         self.assertEqual(info['files'], release.inventory(stage))
+
+    def test_package_command_selects_runtime_formats(self):
+        stage = self.root / 'dist/pmjs-arm64'
+        self.runtime_install(stage)
+        installed_files = release.inventory(stage)
+        installed_metadata = (stage / 'build-info.json').read_bytes()
+        (self.build / 'pmjs-arm64').symlink_to(self.build, target_is_directory=True)
+        strip = release.cache_values(self.build)['CMAKE_STRIP']
+
+        def sources(_sdk, output):
+            output.write_bytes(b'fixture source archive')
+
+        def reference(archive, url):
+            return {'filename': archive.name, 'sha256': release.digest(archive),
+                    **({'url': url} if url else {})}
+
+        formats = ['tar.gz']
+        if shutil.which('mksquashfs') and shutil.which('unsquashfs'):
+            formats.extend(['squashfs', 'all'])
+        with mock.patch.object(release, 'ROOT', self.root), \
+             mock.patch.object(release, 'archive_sources', side_effect=sources), \
+             mock.patch.object(release, 'source_reference', side_effect=reference), \
+             mock.patch.object(release, 'llvm_strip', return_value=(strip, 'fixture')):
+            for format in formats:
+                with self.subTest(format=format):
+                    for file in stage.parent.glob('pmjs-linux-arm64-*'):
+                        file.unlink()
+                    release.package(format)
+                    outputs = list(stage.parent.glob('pmjs-linux-arm64-*'))
+                    self.assertEqual(any(file.name.endswith('.tar.gz') for file in outputs), format != 'squashfs')
+                    self.assertEqual(any(file.name.endswith('.squashfs') for file in outputs), format != 'tar.gz')
+                    if format != 'tar.gz':
+                        self.assertTrue(any(file.name.endswith('.squashfs.release.json') for file in outputs))
+                    self.assertEqual(release.inventory(stage), installed_files)
+                    self.assertEqual((stage / 'build-info.json').read_bytes(), installed_metadata)
+
+    def test_matching_sources_can_be_packaged_before_a_public_url_exists(self):
+        stage, _ = self.install('local-sources')
+        sources = stage.parent / 'sources.tar.gz'
+        sources.write_bytes(b'fixture sources')
+        reference = {'filename': sources.name, 'sha256': release.digest(sources)}
+        with mock.patch.object(release, 'source_reference', return_value=reference):
+            release.manifest(stage, self.build, self.root, sources=sources)
+        self.assertEqual(json.loads((stage / 'build-info.json').read_text())['dependencySources'], reference)
+        release.verify(stage, stage.parent / 'local-sources-verification.json', static=True)
+        with self.assertRaisesRegex(ValueError, '--sources-url requires --sources'):
+            release.manifest(stage, self.build, self.root, sources_url='https://example.org/sources.tar.gz')
 
     def test_debug_installation_keeps_symbols(self):
         self.command('cmake', '-S', str(self.root), '-B', str(self.build), '-DCMAKE_BUILD_TYPE=Debug')

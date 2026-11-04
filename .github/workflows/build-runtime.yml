@@ -37,14 +37,6 @@ jobs:
           title="PMJS-$build_date-$build_time"
           echo "title=$title" >> "$GITHUB_OUTPUT"
 
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential cmake ninja-build pkg-config git python3 \
-            llvm-20=1:20.1.2-0ubuntu1~24.04.3 \
-            binutils dpkg-dev
-
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
@@ -60,7 +52,7 @@ jobs:
 
       - name: Restore prepared ARM64 dependencies
         id: dependencies-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             .cache/linux-arm64
@@ -71,7 +63,7 @@ jobs:
             .cache/astcenc
           key: >-
             ${{ runner.os }}-${{ runner.arch }}-arm64-v2-${{
-            hashFiles('tools/dependencies.py', 'tools/runtime_artifact.py', 'tools/llvm_tools.py',
+            hashFiles('Dockerfile', 'tools/dependencies.py', 'tools/runtime_artifact.py', 'tools/llvm_tools.py',
             'tools/linux-arm64/*.py', 'tools/linux-arm64/*.json',
             'tools/skia65/*.py', 'tools/skia65/*.json',
             'tools/effekseer.lock.json', 'tools/lz4.lock.json', 'tools/astcenc.lock.json',
@@ -81,7 +73,7 @@ jobs:
             ${{ runner.os }}-${{ runner.arch }}-arm64-v2-
 
       - name: Restore legacy ARM64 dependencies
-        if: steps.dependencies-cache.outputs.cache-matched-key == ''
+        if: steps.dependencies-cache.outputs.cache-hit == ''
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -93,45 +85,15 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-arm64-v1-
 
-      - name: Build ARM64 runtime
-        run: ./build.sh --target arm64 --jobs 2
-
-      - name: Save prepared ARM64 dependencies
-        if: steps.dependencies-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            .cache/linux-arm64
-            .cache/skia65-arm64
-            .cache/components/arm64
-            .cache/effekseer
-            .cache/lz4
-            .cache/astcenc
-          key: ${{ steps.dependencies-cache.outputs.cache-primary-key }}
-
-      - name: Archive FFmpeg source and build materials
-        run: |
-          python3 tools/release.py sources --sdk .cache/linux-arm64/sdk \
-            --output "dist/pmjs-ffmpeg-sources-${GITHUB_SHA:0:7}.tar.gz"
-
-      - name: Audit distribution inventories
+      - name: Build and package runtime
         run: |
           source_archive="pmjs-ffmpeg-sources-${GITHUB_SHA:0:7}.tar.gz"
-          python3 tools/release.py manifest --stage dist/pmjs-arm64 --build build/pmjs-arm64 --source . \
-            --strip llvm-strip-20 --sources "dist/$source_archive" \
-            --sources-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$PMJS_BUILD_ID/$source_archive"
-
-      - name: Verify ARM64 package
-        run: |
-          python3 tools/release.py verify --stage dist/pmjs-arm64 \
-            --report dist/static-arm64.json --static
-
-      - name: Archive runtime
-        run: |
-          python3 tools/release.py archive --stage dist/pmjs-arm64 \
-            --report dist/static-arm64.json \
-            --output "dist/pmjs-linux-arm64-${GITHUB_SHA:0:7}.tar.gz"
-          python3 tools/release.py verify-archive --archive "dist/pmjs-linux-arm64-${GITHUB_SHA:0:7}.tar.gz"
+          docker build --target build-environment --tag pmjs-build-environment .
+          docker run --rm --user "$(id -u):$(id -g)" \
+            --volume "$PWD:$PWD" --workdir "$PWD" \
+            --env HOME=/tmp --env PMJS_BUILD_ID --env PMJS_PACKAGE_FORMAT=all \
+            --env PMJS_SOURCES_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$PMJS_BUILD_ID/$source_archive" \
+            pmjs-build-environment sh -ec './build.sh --target arm64 --jobs 2; python3 tools/release.py package'
 
       - name: Save build files
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -140,6 +102,8 @@ jobs:
           path: |
             dist/pmjs-linux-arm64-*.tar.gz
             dist/pmjs-linux-arm64-*.tar.gz.*.json
+            dist/pmjs-linux-arm64-*.squashfs
+            dist/pmjs-linux-arm64-*.squashfs.release.json
             dist/pmjs-ffmpeg-sources-*.tar.gz
             dist/static-arm64.json
           if-no-files-found: error
@@ -187,6 +151,7 @@ jobs:
           } > release-notes.md
           release_url=$(gh release create "$BUILD_ID" \
             "dist/pmjs-linux-arm64-${GITHUB_SHA:0:7}.tar.gz" \
+            "dist/pmjs-linux-arm64-${GITHUB_SHA:0:7}.squashfs" \
             "dist/pmjs-ffmpeg-sources-${GITHUB_SHA:0:7}.tar.gz" \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "$TITLE" \

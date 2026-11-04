@@ -1,8 +1,10 @@
-.git
+.git/config*
+.git/hooks
+.git/logs
 .cache
 node_modules
 build
-build-*
+build-*/*
 build-js
 dist
 tmp

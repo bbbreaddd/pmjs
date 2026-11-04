@@ -52,8 +52,8 @@ def manifest(stage, build, source, strip=None, record=None, sources=None, source
     record = record or release_record(stage)
     if record.is_relative_to(stage):
         raise ValueError('Release record must be outside the runtime')
-    if (sources is None) != (sources_url is None):
-        raise ValueError('--sources and --sources-url must be provided together')
+    if sources_url and sources is None:
+        raise ValueError('--sources-url requires --sources')
     reference = source_reference(sources, sources_url) if sources else None
     if sources and sources.parent != record.parent:
         raise ValueError('Keep the source archive alongside the detached release record')
@@ -62,7 +62,7 @@ def manifest(stage, build, source, strip=None, record=None, sources=None, source
             ('portmaster.py', 'release.py', 'runtime_artifact.py', 'linux-arm64')):
         raise ValueError('Use a runtime-only installation for packaging (release.py stage)')
     if any((stage / 'lib').glob('libav*.so*')) and reference is None:
-        raise ValueError('Bundled FFmpeg requires --sources and --sources-url')
+        raise ValueError('Bundled FFmpeg requires --sources')
     config = json.loads((build / 'build-config.json').read_text())
     values = cache_values(build)
     identity = source_identity(source)
@@ -300,9 +300,44 @@ def verify_archive(output, record=None, report=None):
     print('Archive and detached records verified:', output)
 
 
+def package(format, sources_url=None):
+    if format not in ('tar.gz', 'squashfs', 'all'):
+        raise ValueError('PMJS_PACKAGE_FORMAT must be tar.gz, squashfs, or all')
+    dist = ROOT / 'dist'
+    installed = dist / 'pmjs-arm64'
+    build = ROOT / 'build/pmjs-arm64'
+    revision = git(ROOT, 'rev-parse', 'HEAD').decode().strip()[:7]
+    sources = dist / f'pmjs-ffmpeg-sources-{revision}.tar.gz'
+    output = dist / f'pmjs-linux-arm64-{revision}.tar.gz'
+    image = dist / f'pmjs-linux-arm64-{revision}.squashfs'
+    report = dist / 'static-arm64.json'
+    record = release_record(installed)
+
+    checked_runtime(installed)
+    with tempfile.TemporaryDirectory(prefix='.pmjs-package-', dir=dist) as temporary:
+        stage = Path(temporary) / 'pmjs-arm64'
+        shutil.copytree(installed, stage, symlinks=True)
+        archive_sources(ROOT / '.cache/linux-arm64/sdk', sources)
+        manifest(stage, build, ROOT, llvm_strip()[0], record=record, sources=sources, sources_url=sources_url)
+        verify(stage, report, static=True, record=record)
+        if format in ('tar.gz', 'all'):
+            archive(stage, report, output, record=record)
+            verify_archive(output)
+        if format in ('squashfs', 'all'):
+            subprocess.run(['mksquashfs', stage, image, '-noappend', '-comp', 'gzip',
+                            '-all-root', '-processors', '2', '-no-progress'], check=True)
+            extracted = Path(temporary) / 'extracted'
+            subprocess.run(['unsquashfs', '-no-progress', '-processors', '2', '-d', extracted, image], check=True)
+            verify(extracted, Path(temporary) / 'verification.json', static=True, record=record)
+            shutil.copyfile(record, image.with_name(image.name + '.release.json'))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
+    command = commands.add_parser('package', help='Package and verify the ARM64 runtime')
+    command.add_argument('--format', choices=['tar.gz', 'squashfs', 'all'])
+    command.add_argument('--sources-url', default=os.environ.get('PMJS_SOURCES_URL') or None)
     command = commands.add_parser('manifest')
     for name in ['stage', 'build', 'source']:
         command.add_argument('--' + name, type=Path, required=True)
@@ -334,7 +369,9 @@ def main():
         commands.choices[name].add_argument('--sources-url', help='Permanent HTTP(S) source archive download URL')
     args = parser.parse_args()
     try:
-        if args.command == 'manifest':
+        if args.command == 'package':
+            package(args.format or os.environ.get('PMJS_PACKAGE_FORMAT') or 'tar.gz', args.sources_url)
+        elif args.command == 'manifest':
             manifest(args.stage.resolve(), args.build.resolve(), args.source.resolve(), args.strip,
                      args.record.resolve() if args.record else None,
                      args.sources.resolve() if args.sources else None, args.sources_url)
