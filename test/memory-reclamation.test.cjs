@@ -170,3 +170,58 @@ test('emergency deferrals do not read memory every frame', () => {
   f.available = 150 * MiB;
   assert.equal(f.trims, 1);
 });
+
+test('frame polling detects a fresh critical episode without waiting for diagnostics', () => {
+  const { reclamationMemoryState } = require('../runner/diagnostics.cjs');
+  const f = fixture(); f.available = 300 * MiB;
+  const reads = [], attempts = [];
+  const reader = { readFileSync(file) {
+    if (file === '/proc/meminfo') { reads.push(f.time); return 'MemAvailable: ' + f.available / 1024 + ' kB\n'; }
+    if (file === '/sys/fs/cgroup/memory.max') return 'max';
+    throw Error('ENOENT');
+  } };
+  const memoryUsage = () => { throw Error('full process metrics must not be sampled'); };
+  memoryUsage.rss = () => f.rss;
+  const policy = createMemoryReclaimer({ native: f.native,
+    readMemory: () => reclamationMemoryState({ reader, processObject: { memoryUsage },
+      osObject: { totalmem: () => 1024 * MiB, freemem: () => 0 } }),
+    readRss: () => f.rss, now: () => f.time, logger: { log() {}, warn(error) { assert.fail(error); } } });
+  policy.poll();
+  f.available = 80 * MiB; // Pressure begins immediately after a healthy sample.
+  for (let timestamp = 125; timestamp <= 3000; timestamp += 125) {
+    f.time = timestamp;
+    const result = policy.atBoundary(null);
+    if (result) attempts.push(timestamp);
+    policy.poll(timestamp);
+    policy.poll(timestamp); // Repeated frames cannot manufacture fresh observations.
+  }
+  assert.deepEqual(attempts, [2500]);
+  assert.equal(f.trims, 1);
+  assert.ok(reads.length <= 8, 'reads are bounded by the sample interval plus live validation');
+});
+
+test('live recovery cancels the old critical episode and renews the full grace period', () => {
+  const f = fixture(); f.available = 80 * MiB; f.pressure();
+  f.time = 2000; f.available = 250 * MiB;
+  assert.equal(f.policy.atBoundary(null), null);
+  f.time = 3000; f.available = 80 * MiB;
+  f.policy.observe(f.sample());
+  assert.equal(f.policy.pending, false, 'recovery resets the sustained-pressure sample count');
+  f.time = 3500; f.policy.observe(f.sample());
+  assert.equal(f.policy.atBoundary(null), null);
+  f.time = 4999; assert.equal(f.policy.atBoundary(null), null);
+  f.time = 5000; assert.equal(f.policy.atBoundary(null).boundary, 'critical-pressure');
+  assert.equal(f.trims, 1);
+});
+
+test('sampler failures disable reclamation without aborting frames or retrying reads', () => {
+  const f = fixture(); let reads = 0;
+  const policy = createMemoryReclaimer({ native: f.native, now: () => f.time,
+    readMemory() { reads++; throw Error('memory sampler unavailable'); },
+    logger: { warn: message => f.warnings.push(message) } });
+  policy.poll(0); policy.poll(10000);
+  assert.equal(policy.atBoundary('scene-fade'), null);
+  assert.equal(reads, 1);
+  assert.equal(f.warnings.length, 1);
+  assert.equal(policy.pending, false);
+});
