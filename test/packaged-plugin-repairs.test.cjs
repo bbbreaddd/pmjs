@@ -60,7 +60,8 @@ test('volume replacement uses the existing volume options, scene stack and menu 
   const c = loadAdapter('volume-control/menu.js', '# incompatible language', {
     Window_Options, Window_TitleCommand, Window_MenuCommand, Scene_Options, Scene_Title, Scene_Menu,
     SceneManager: { push(Scene) { pushed.push(Scene); } } });
-  c.PluginManager.loadScript('volume setting.js');
+  c.PMJS.plugins.execute('volume setting', () => c.PluginManager.loadScript('volume setting.js'));
+  assert.equal(c.PMJS.plugins.dump().guest[0].state, 'loaded');
   const title = new Window_TitleCommand(); title.makeCommandList();
   assert.deepEqual(title.commands.map(item => item[0]), ['Original', 'Volume Control']);
   const menu = new Window_MenuCommand(); menu.addOriginalCommands();

@@ -1,6 +1,7 @@
 import globals from 'globals';
 
 const safetyRules = {
+  'no-dupe-keys': 'error',
   'no-unreachable': 'error',
   'no-constant-condition': 'error',
 };

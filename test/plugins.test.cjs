@@ -114,7 +114,7 @@ test('named callbacks run once and late subscribers run immediately', () => {
   assert.deepEqual(seen, ['loaded', 'late']);
 });
 
-test('unexpected loaded and late phase installer failures propagate to the caller', () => {
+test('unexpected queued loaded and late phase installer failures propagate to the caller', () => {
   const errors = [];
   const ctx = loadPmjsRuntime({ console: { error(...args) { errors.push(args); } } });
   const seen = [];
@@ -122,10 +122,9 @@ test('unexpected loaded and late phase installer failures propagate to the calle
   ctx.PMJS.plugins.onLoaded('Example', 'next', () => seen.push('next'));
   assert.throws(() => ctx.PMJS.plugins.execute('Example', () => {}), /loaded installer/);
   assert.deepEqual(seen, [], 'boot stops before further installers can mutate state');
-  assert.throws(() => ctx.PMJS.plugins.onLoaded('Example', 'late', () => { throw new Error('late installer'); }), /late installer/);
   ctx.PMJS.phases.emit('afterPlugins');
   assert.throws(() => ctx.PMJS.phases.on('afterPlugins', 'late', () => { throw new Error('late phase'); }), /late phase/);
-  assert.equal(errors.length, 3);
+  assert.equal(errors.length, 2);
 });
 
 test('loading callbacks surround the named guest execution and canonicalize its name', () => {
@@ -565,7 +564,11 @@ test('loading cleanup runs in reverse order before success and preserves primary
     const calls = [], primary = 0, cleanupError = new Error('cleanup failed');
     plugins.onLoading('Example', 'first', () => {
       calls.push('first');
-      return () => { calls.push('cleanup-first'); throw cleanupError; };
+      return () => {
+        calls.push('cleanup-first');
+        plugins.execute('CleanupHelper', () => {});
+        throw cleanupError;
+      };
     });
     plugins.onLoading('Example', 'second', () => {
       if (phase === 'loading') throw primary;
@@ -581,6 +584,7 @@ test('loading cleanup runs in reverse order before success and preserves primary
     assert.equal(calls.at(-1), 'cleanup-first');
     if (phase !== 'loading') assert.deepEqual(calls.slice(-2), ['cleanup-second', 'cleanup-first']);
     assert.equal(plugins.dump().counts.failed, 1);
+    assert.equal(plugins.dump().guest.find(entry => entry.key === 'example').failureStage, phase === 'load' ? 'guest-script' : phase === 'loading' ? 'loading-callback' : 'cleanup');
   }
   const ctx = loadPmjsRuntime(), calls = [];
   ctx.PMJS.plugins.onLoading('Example', 'scoped', () => () => calls.push('cleanup'));
@@ -626,3 +630,108 @@ for (const engine of ['mv', 'mz']) {
     ]);
   });
 }
+
+for (const timing of ['queued', 'nested', 'late']) {
+  test(`loaded callback failure records ${timing} failure and retains execution order`, () => {
+    const ctx = loadPmjsRuntime({ console: { error() {} } });
+    const failure = { message: timing + ' failure' };
+    let remaining = false;
+    const fail = function() {
+      assert.equal(ctx.PMJS.plugins.dump().guest[0].state, 'loaded');
+      if (timing === 'late' || timing === 'nested') assert.equal(this, undefined);
+      else assert.equal(this.owner, 'adapter');
+      throw failure;
+    };
+    if (timing === 'late') ctx.PMJS.plugins.execute('Example', () => {});
+    else {
+      ctx.PMJS.plugins.onLoaded('Example', 'adapter', timing === 'nested' ? () => {
+        ctx.PMJS.plugins.onLoaded('Example', 'nested', fail);
+      } : fail);
+      ctx.PMJS.plugins.onLoaded('Example', 'remaining', () => { remaining = true; });
+    }
+    assert.throws(() => timing === 'late'
+      ? ctx.PMJS.plugins.onLoaded('Example', 'late', fail)
+      : ctx.PMJS.plugins.execute('Example', () => {}), error => error === failure);
+    const entry = ctx.PMJS.plugins.dump().guest[0];
+    assert.equal(entry.state, 'failed');
+    assert.equal(entry.loadOrder, 0);
+    assert.equal(entry.error, timing + ' failure');
+    assert.match(entry.reason, /loaded callback/);
+    assert.match(entry.reason, new RegExp('owner ' + (timing === 'queued' ? 'adapter' : timing)));
+    assert.equal(remaining, false);
+  });
+}
+
+test('each interceptor continuation executes at most once, including after a throw', () => {
+  for (const throwing of [false, true]) {
+    const ctx = loadPmjsRuntime();
+    let executions = 0;
+    ctx.PMJS.plugins.interceptLoad('Example', 'adapter', next => {
+      if (throwing) assert.throws(next, /guest failure/);
+      else assert.equal(next(), 42);
+      assert.throws(next, /adapter.*next\(\) twice.*Example.js/);
+    });
+    ctx.PMJS.plugins.loadScript('Example.js', 'js/plugins/Example.js', () => {
+      executions++;
+      if (throwing) throw Error('guest failure');
+      return 42;
+    });
+    assert.equal(executions, 1);
+  }
+});
+
+test('handled replacement suppresses remaining execution and still completes plugin setup', () => {
+  const ctx = loadPmjsRuntime();
+  const calls = [];
+  ctx.PMJS.plugins.interceptLoad('Example', 'replacement', () => { calls.push('replacement'); return 42; });
+  ctx.PMJS.plugins.interceptLoad('Example', 'remaining', () => { throw Error('must not execute'); });
+  ctx.PMJS.plugins.onLoading('Example', 'cleanup', () => () => calls.push('cleanup'));
+  ctx.PMJS.plugins.onLoaded('Example', 'loaded', () => calls.push('loaded'));
+  ctx.PMJS.plugins.execute('Example', () => {
+    assert.equal(ctx.PMJS.plugins.loadScript('Example', 'Example.js', () => { throw Error('original source'); }), 42);
+  });
+  assert.deepEqual(calls, ['replacement', 'cleanup', 'loaded']);
+  assert.equal(ctx.PMJS.plugins.dump().guest[0].state, 'loaded');
+});
+
+test('interceptor continuations expire when their callback returns or throws', () => {
+  for (const throwing of [false, true]) {
+    const ctx = loadPmjsRuntime();
+    let saved, executions = 0;
+    ctx.PMJS.plugins.interceptLoad('Guest', 'adapter', next => {
+      saved = next;
+      if (throwing) throw Error('interceptor failed');
+      return 'handled';
+    });
+    const execute = () => ctx.PMJS.plugins.execute('Guest', () => ctx.PMJS.plugins.loadScript('Guest.js', 'Guest.js', () => executions++));
+    if (throwing) assert.throws(execute, /interceptor failed/);
+    else execute();
+    assert.throws(saved, /adapter.*next\(\) after returning.*Guest.js/);
+    assert.equal(executions, 0);
+    assert.equal(ctx.PMJS.plugins.dump().guest[0].state, throwing ? 'failed' : 'loaded');
+  }
+});
+
+test('failure stages distinguish delegated script throws from interceptor failures', () => {
+  for (const mode of ['delegate', 'replace-error', 'after-next', 'nested']) {
+    const ctx = loadPmjsRuntime();
+    const scriptError = NaN, adapterError = 0;
+    ctx.PMJS.plugins.interceptLoad('Guest', 'adapter', next => {
+      if (mode === 'replace-error') {
+        try { next(); } catch (_) { throw adapterError; }
+      }
+      if (mode === 'nested') return ctx.PMJS.plugins.execute('Helper', () => {
+        ctx.PMJS.plugins.onLoaded('Nested', 'nested', () => { throw adapterError; });
+        ctx.PMJS.plugins.execute('Nested', () => {});
+      });
+      next();
+      if (mode === 'after-next') throw adapterError;
+    });
+    const execute = () => ctx.PMJS.plugins.execute('Guest', () => ctx.PMJS.plugins.loadScript('Guest.js', 'Guest.js', () => {
+      if (mode !== 'after-next') throw scriptError;
+    }));
+    assert.throws(execute, error => Object.is(error, mode === 'delegate' ? scriptError : adapterError));
+    const entry = ctx.PMJS.plugins.dump().guest.find(entry => entry.key === 'guest');
+    assert.equal(entry.failureStage, mode === 'delegate' ? 'guest-script' : mode === 'nested' ? 'loaded-callback' : 'load-interceptor');
+  }
+});

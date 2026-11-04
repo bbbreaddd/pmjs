@@ -71,8 +71,8 @@
     var mapUpdate = Game_Map.prototype.updateEvents;
     var inheritedUpdate = Galv.CA.Game_Character_update;
     var originalEvent = Yanfly.ECP.Game_Event_update;
-    if (inheritedUpdate !== base.update || digest(originalEvent) !==
-        ['7d33fee1f625b00d52d89dc8c0bfbaa878ac997e10243572b0abb1a60fc5b629', '7670bb37a4c9ff075102e942a4bf646bb185ba99f772d3482b57659a50179933']) {
+    if (inheritedUpdate !== base.update || !PMJS.methods.matchesSource(originalEvent,
+        ['7d33fee1f625b00d52d89dc8c0bfbaa878ac997e10243572b0abb1a60fc5b629', '7670bb37a4c9ff075102e942a4bf646bb185ba99f772d3482b57659a50179933'])) {
       PMJS.optimizations.refuse(id, 'unrecognized event update predecessors');
       return;
     }

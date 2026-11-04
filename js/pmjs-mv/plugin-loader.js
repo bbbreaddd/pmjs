@@ -40,10 +40,10 @@
             self.loadScript(file);
           });
         } catch (error) {
-          var failed = PMJS.plugins.dump().guest.some(function(entry) {
+          var failed = PMJS.plugins.dump().guest.find(function(entry) {
             return entry.key === loadedName.toLowerCase() && entry.state === 'failed';
           });
-          if (!failed) throw error;
+          if (!failed || failed.failureStage !== 'guest-script') throw error;
           if (!NativeHost.fs.exists(this._path + file)) {
             this.onError({ target: { _url: this._path + file } });
           } else {

@@ -34,10 +34,6 @@
   };
   var contracts = new WeakMap();
 
-  function matches(fn, digest) {
-    return PMJS.methods.matchesSource(fn, digest);
-  }
-
   function dataContract(data) {
     if (!data || !Array.isArray(data.layers) || !Array.isArray(data.tilesets)) return 'unreviewed-tiled-data';
     if (data.infinite || data.orientation && data.orientation !== 'orthogonal' ||
@@ -80,7 +76,7 @@
     var qualified = !mismatch &&
       names.every(function(name) {
         var recognized = name === '_compareChildOrder' && prototype[name] === undefined ||
-          matches(prototype[name], reviewedMethods[name]);
+          PMJS.methods.matchesSource(prototype[name], reviewedMethods[name]);
         if (!recognized) mismatch = name;
         return recognized;
       });

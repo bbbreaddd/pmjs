@@ -6,10 +6,6 @@
     id: id, owner: 'pmjs-plugins/srd', fallback: 'authored glyph removal and finalization'
   });
 
-  function matches(fn, expected) {
-    return PMJS.methods.matchesSource(fn, expected);
-  }
-
   PMJS.plugins.onLoaded('SRD_ShakingText', 'pmjs.adapter.srd-shaking-text', function() {
     PMJS.phases.on('afterGuestPlugins', 'pmjs.adapter.srd-shaking-text', function() {
       if (!PMJS.optimizations.isEnabled(id)) return;
@@ -19,7 +15,7 @@
       // SRD_ShakingText 1.12 private-glyph creation and removal.
       var expectedCreate = ['326d0cf7893b98b6dacfe7f882cd8162245325d03d1e8ee1d9fc7e9ba848a7f5'];
       var expectedRemove = ['d11378ae6e5bd6e5094c96bd1ea1d6700c900c63c459c7ed0c9a67f64b954794'];
-      if (!matches(create, expectedCreate) || !matches(remove, expectedRemove)) {
+      if (!PMJS.methods.matchesSource(create, expectedCreate) || !PMJS.methods.matchesSource(remove, expectedRemove)) {
         PMJS.optimizations.refuse(id, 'unrecognized shaking glyph creation or page removal');
         return;
       }

@@ -9,24 +9,22 @@
     if (!PMJS.optimizations.isEnabled(id) || typeof Window_OrangeHud !== 'function' ||
         typeof OrangeHudDefaultLine === 'undefined' || typeof OrangeHudVariableIcon === 'undefined') return;
     var prototype = Window_OrangeHud.prototype;
-    var methods = [prototype.refresh, prototype.drawHud, prototype.drawTextEx,
-      OrangeHudDefaultLine.drawLine, OrangeHudVariableIcon.drawLine];
-    var hashes = ['e7466e3e6c5677d8cca3dc0ef6c99caca7bc18c9950b15d52ddf3ddbb7a2b24e',
-      'cc912db5761746c12877c758cc327d0be30d6938bed4512af509cb1cb42cf5df',
-      'bb13fc2904c33710ef381e51b451fbd694a8b517d4f846fcb6007087c60dcf18',
-      '64568cb082e3f33f7a50c9dbe5c26e400292157a6142ce485683505ab0ebf2f1',
-      '848307224df9db45d99389ca78c5adc4fdabaaf6776b74788ae0c0cda264e495'];
-    var names = ['Window_OrangeHud.refresh', 'Window_OrangeHud.drawHud', 'Window_OrangeHud.drawTextEx',
-      'OrangeHudDefaultLine.drawLine', 'OrangeHudVariableIcon.drawLine'];
+    var reviewed = {
+      refresh: { name: 'Window_OrangeHud.refresh', method: prototype.refresh, hash: 'e7466e3e6c5677d8cca3dc0ef6c99caca7bc18c9950b15d52ddf3ddbb7a2b24e' },
+      hud: { name: 'Window_OrangeHud.drawHud', method: prototype.drawHud, hash: 'cc912db5761746c12877c758cc327d0be30d6938bed4512af509cb1cb42cf5df' },
+      text: { name: 'Window_OrangeHud.drawTextEx', method: prototype.drawTextEx, hash: 'bb13fc2904c33710ef381e51b451fbd694a8b517d4f846fcb6007087c60dcf18' },
+      line: { name: 'OrangeHudDefaultLine.drawLine', method: OrangeHudDefaultLine.drawLine, hash: '64568cb082e3f33f7a50c9dbe5c26e400292157a6142ce485683505ab0ebf2f1' },
+      icon: { name: 'OrangeHudVariableIcon.drawLine', method: OrangeHudVariableIcon.drawLine, hash: '848307224df9db45d99389ca78c5adc4fdabaaf6776b74788ae0c0cda264e495' }
+    };
     var mismatch = null;
-    if (!methods.every(function(method, index) {
-      var recognized = PMJS.methods.matchesSource(method, hashes[index]);
-      if (!recognized) mismatch = names[index];
+    if (!Object.values(reviewed).every(function(record) {
+      var recognized = PMJS.methods.matchesSource(record.method, record.hash);
+      if (!recognized) mismatch = record.name;
       return recognized;
     })) {
       PMJS.optimizations.refuse(id, 'unrecognized HUD drawing pipeline', mismatch); return;
     }
-    var originalRefresh = methods[0], originalIcon = prototype.drawIcon;
+    var originalRefresh = reviewed.refresh.method, originalIcon = prototype.drawIcon;
     var states = new WeakMap(), recording = new WeakMap();
     var styles = ['fontFace', 'fontSize', 'fontItalic', 'textColor', 'outlineColor',
       'outlineWidth', 'paintOpacity', '_allowTextTranslation'];
@@ -48,7 +46,7 @@
       bounds.bottom = Math.max(bounds.bottom, y + height);
     }
     function drawText(text, x, y) {
-      var result = methods[2].apply(this, arguments), bounds = recording.get(this);
+      var result = reviewed.text.method.apply(this, arguments), bounds = recording.get(this);
       if (bounds) {
         if (typeof text !== 'string' || /[\\\x1b\r\n\f]/.test(text)) bounds.unsupported = true;
         else if (text) {
@@ -64,12 +62,12 @@
       return result;
     }
     function supported(window) {
-      return window.drawHud === methods[1] && window.drawTextEx === drawText && window.drawIcon === drawIcon &&
+      return window.drawHud === reviewed.hud.method && window.drawTextEx === drawText && window.drawIcon === drawIcon &&
         Object.keys(OrangeHud._addons).every(function(key) {
           var addon = OrangeHud._addons[key];
           if (addon.params.some(function(line) { return !!line.ScriptPattern; })) return false;
-          return key === 'OrangeHudLine' && addon.manager === OrangeHudDefaultLine && addon.manager.drawLine === methods[3] ||
-            key === 'OrangeHudVariableIcon' && addon.manager === OrangeHudVariableIcon && addon.manager.drawLine === methods[4];
+          return key === 'OrangeHudLine' && addon.manager === OrangeHudDefaultLine && addon.manager.drawLine === reviewed.line.method ||
+            key === 'OrangeHudVariableIcon' && addon.manager === OrangeHudVariableIcon && addon.manager.drawLine === reviewed.icon.method;
         });
     }
     prototype.drawTextEx = drawText;

@@ -31,32 +31,23 @@
   var classNames = Object.keys(knownClasses);
 
   var baselineMethods = {};
-  // Reviewed Pixi 4.8.9 / MV 1.6.1 transforms; LF and CRLF are pinned separately.
+  // Reviewed Pixi 4.8.9 / MV 1.6.1 transforms.
   var reviewedTransforms = {
     '1a091756d85883232da57aa53141f43968c21abfc58b6b231a46c0faa9014861': 'container',
-    '1a091756d85883232da57aa53141f43968c21abfc58b6b231a46c0faa9014861': 'container',
-    'f611889101e9659a0c13ef6cdfa1b6a0be5edb374a52ad864169ddf6976d9a8e': 'leaf',
     'f611889101e9659a0c13ef6cdfa1b6a0be5edb374a52ad864169ddf6976d9a8e': 'leaf',
     'cfcbeacef1f4ca9ed869519fdba23e734e6e70e75bce5b05bb75718e6fea548a': 'Window',
-    'cfcbeacef1f4ca9ed869519fdba23e734e6e70e75bce5b05bb75718e6fea548a': 'Window',
-    '2169c8e4be4708d97d9be182006b653aa0fcdb74dd7c1cf1270b1dd4f3963e48': 'Tilemap',
     '2169c8e4be4708d97d9be182006b653aa0fcdb74dd7c1cf1270b1dd4f3963e48': 'Tilemap',
     '0b7ff0daca0957e3b83d04114304eb6263ab76da0275136f9361ad02b06bbde6': 'ShaderTilemap',
-    '0b7ff0daca0957e3b83d04114304eb6263ab76da0275136f9361ad02b06bbde6': 'ShaderTilemap',
-    '387766129c695c855bf5a624b0dd29893b5188d97f812d310ff6a7aa41979f8a': 'MVTilingSprite',
     '387766129c695c855bf5a624b0dd29893b5188d97f812d310ff6a7aa41979f8a': 'MVTilingSprite',
     '0938d1a3fcf18a6628689547f09640615c0b7a096e445b869559d2e3a6ecaa4f': 'tileLeaf',
-    '0938d1a3fcf18a6628689547f09640615c0b7a096e445b869559d2e3a6ecaa4f': 'tileLeaf'
   };
   var containerClass = PIXI.Container;
   var displayObjectTransform = PIXI.DisplayObject && PIXI.DisplayObject.prototype.updateTransform;
   var containerTransform = PIXI.Container && PIXI.Container.prototype.updateTransform;
   var tilingTransform = globalThis.TilingSprite && TilingSprite.prototype.updateTransformTS;
   function reviewedTransform(method) {
-    var digest = Object.keys(reviewedTransforms).find(function(expected) {
-      return PMJS.methods.matchesSource(method, expected);
-    });
-    return reviewedTransforms[digest];
+    if (typeof method !== 'function') return;
+    return reviewedTransforms[PMJS.methods.fingerprint(PMJS.methods.sourceOf(method))];
   }
   var transformEquivalents = new Map();
   var renderTransformChecks = [];

@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
-const { reviewedFunctionFixture } = require('./helpers/reviewed-function-fixture.cjs');
+const { createHash } = require('node:crypto');
 
 const runtimeRoot = path.resolve(__dirname, '..');
 const optimizationsSource = fs.readFileSync(
@@ -44,12 +44,14 @@ function createKnownOliviaSprite() {
 }
 
 const fixturePrototype = createKnownOliviaSprite().prototype;
-const fixtureSource = reviewedFunctionFixture(source, {
-  isKnownOliviaUpdateHorrorEffects: fixturePrototype.updateHorrorEffects,
-  isKnownOliviaNoise: fixturePrototype.updateHorrorNoise,
-  isKnownOliviaGlitch: fixturePrototype.updateHorrorGlitch,
-  isKnownOliviaTV: fixturePrototype.updateHorrorTV
-});
+const fixtureHashes = {
+  '5a2e127a3a66d10dbac9ea5a08ce2f600c8c51737d8e60141b8e3fab61f4b66f': fixturePrototype.updateHorrorEffects,
+  '5886848c86d64f40d6342cd985179c8d0f328e8d4231011f044ebcd3b8c2d686': fixturePrototype.updateHorrorNoise,
+  '1dfffbc540671e82481f9d99431290422c72a8c1b036a25c68e52708457b406c': fixturePrototype.updateHorrorGlitch,
+  'f5469ca6d318fe389e00824aa5daf6f698f3e4a300b21a79372910c5434f2254': fixturePrototype.updateHorrorTV
+};
+const fixtureSource = Object.entries(fixtureHashes).reduce((text, [hash, fn]) =>
+  text.replace(hash, createHash('sha256').update(Function.prototype.toString.call(fn).replace(/\r\n/g, '\n')).digest('hex')), source);
 
 const registrySources = {
   lifecycle: 'js/pmjs-rpgmaker/lifecycle.js',

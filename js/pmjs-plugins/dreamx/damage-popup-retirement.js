@@ -11,17 +11,13 @@
     victorLoaded = true;
   });
 
-  function matches(fn, digest) {
-    return PMJS.methods.matchesSource(fn, digest);
-  }
-
   PMJS.plugins.onLoaded('DreamX_Ext_VE_DamagePopup', 'pmjs.adapter.dreamx-popup-retirement', function() {
     PMJS.phases.on('afterGuestPlugins', 'pmjs.adapter.dreamx-popup-retirement', function() {
       if (!PMJS.optimizations.isEnabled(id)) return;
       var prototype = globalThis.Sprite_Battler && Sprite_Battler.prototype;
       if (!prototype || !victorLoaded ||
-          !matches(prototype.updateDamagePopup, '190a974ff58f3028f03bdef044abe9d14ebdc9ed3c511e4d15b92cb44c308ac2') ||
-          !matches(prototype.damagePopupSprite, '7ece5d64382a9a48a1f25323024af59f9e36f3286a6fca73cfb5e3d4a2d0238d')) {
+          !PMJS.methods.matchesSource(prototype.updateDamagePopup, '190a974ff58f3028f03bdef044abe9d14ebdc9ed3c511e4d15b92cb44c308ac2') ||
+          !PMJS.methods.matchesSource(prototype.damagePopupSprite, '7ece5d64382a9a48a1f25323024af59f9e36f3286a6fca73cfb5e3d4a2d0238d')) {
         PMJS.optimizations.refuse(id, 'unrecognized popup update or reparenting composition');
         return;
       }

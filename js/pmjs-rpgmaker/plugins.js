@@ -11,6 +11,7 @@
   var interceptors = Object.create(null);
   var finished = false;
   var bootError = null;
+  var activeAttempt = null;
   var optimizationRequirements = [];
 
   function key(name) {
@@ -36,15 +37,35 @@
         id: 'game:' + canonical, key: canonical,
         name: String(name).replace(/\.js$/i, ''), enabled: true,
         state: 'discovered', reason: 'loaded without manifest entry',
-        loadOrder: null, error: null
+        loadOrder: null, error: null, failureStage: null
       };
       order.push(canonical);
     }
     return guests[canonical];
   }
 
+  // Preserve the origin of a delegated exception, including primitive throws.
+  function atStage(stage, callback) {
+    var attempt = activeAttempt;
+    try {
+      var result = callback();
+      if (attempt) attempt.failure = null;
+      return result;
+    } catch (error) {
+      if (attempt && (!attempt.failure || !Object.is(attempt.failure.error, error))) {
+        attempt.failure = { stage: stage, error: error };
+      }
+      throw error;
+    }
+  }
+
   function invokeCallback(plugin, owner, callback, phase, receiver) {
-    try { return Reflect.apply(callback, receiver, []); } catch (error) {
+    try { return atStage(phase + '-callback', function() {
+      return Reflect.apply(callback, receiver, []);
+    }); } catch (error) {
+      if (phase === 'loaded' && guest(plugin).state !== 'failed') {
+        failed(plugin, error, 'loaded-callback', 'failed in loaded callback (owner ' + owner + ')');
+      }
       console.error('[pmjs] error running ' + phase + ' callback for ' + plugin +
         ' (owner ' + owner + '):', error);
       throw error;
@@ -63,10 +84,11 @@
     });
   }
 
-  function failed(name, error) {
+  function failed(name, error, stage, reason) {
     var entry = guest(name);
     entry.state = 'failed';
-    entry.reason = 'failed during setup';
+    entry.reason = reason || 'failed during setup';
+    entry.failureStage = stage;
     try { entry.error = String((error && error.message) || error); }
     catch (_) { entry.error = 'unprintable plugin error'; }
   }
@@ -189,6 +211,10 @@
       });
     },
 
+    // Synchronous interception propagates results and exceptions; next() is single-use.
+    // Unknown scripts
+    // must delegate unchanged; replacement or suppression requires reviewed source.
+    // A handled load may replace setup without evaluating the original script.
     interceptLoad: function(name, owner, callback) {
       if (typeof callback !== 'function') throw new TypeError('Plugin load interceptor must be a function');
       var canonical = key(name);
@@ -205,57 +231,83 @@
       var listeners = (interceptors[key(name)] || []).slice();
       var context = { name: name, path: path };
       function next(index) {
-        if (index === listeners.length) return load();
-        return listeners[index].callback(function() { return next(index + 1); }, context);
+        if (index === listeners.length) return atStage('guest-script', load);
+        var listener = listeners[index], continued = false, active = true;
+        try {
+          return atStage('load-interceptor', function() {
+            return listener.callback(function() {
+              if (!active) throw new Error('Plugin load interceptor ' + listener.owner +
+                ' called next() after returning for ' + name);
+              if (continued) throw new Error('Plugin load interceptor ' + listener.owner +
+                ' called next() twice for ' + name);
+              continued = true;
+              return next(index + 1);
+            }, context);
+          });
+        } finally { active = false; }
       }
       return next(0);
     },
 
     execute: function(name, load) {
-      var token = null;
-      var error = null;
-      var loadFailed = false;
-      var cleanups = [];
+      var previousAttempt = activeAttempt;
+      var attempt = activeAttempt = { failure: null };
       try {
-        token = PMJS.methods.beginPlugin(name);
-        var listeners = loadingCallbacks[key(name)] || [];
-        delete loadingCallbacks[key(name)];
-        listeners.forEach(function(listener) {
-          var cleanup = invokeCallback(key(name), listener.owner, listener.callback, 'loading', listener);
-          if (typeof cleanup === 'function') cleanups.push(cleanup);
-        });
-        load();
-      } catch (caught) {
-        error = caught;
-        loadFailed = true;
-        failed(name, caught);
-        throw caught;
-      } finally {
-        var cleanupError, cleanupFailed = false, propagateCleanup = false;
-        cleanups.reverse().forEach(function(cleanup) {
-          try { cleanup(); } catch (caught) {
-            if (!cleanupFailed) { cleanupError = caught; cleanupFailed = true; }
-          }
-        });
-        if (!loadFailed && cleanupFailed) {
-          propagateCleanup = true;
-          error = cleanupError;
+        var token = null;
+        var error = null;
+        var loadFailed = false;
+        var primaryFailure = null;
+        var cleanups = [];
+        try {
+          token = atStage('method-audit', function() { return PMJS.methods.beginPlugin(name); });
+          var listeners = loadingCallbacks[key(name)] || [];
+          delete loadingCallbacks[key(name)];
+          listeners.forEach(function(listener) {
+            var cleanup = invokeCallback(key(name), listener.owner, listener.callback, 'loading', listener);
+            if (typeof cleanup === 'function') cleanups.push(cleanup);
+          });
+          atStage('guest-script', load);
+        } catch (caught) {
+          error = caught;
           loadFailed = true;
-          failed(name, error);
-        }
-        if (token) {
-          try { PMJS.methods.endPlugin(token, { error: error, failed: loadFailed }); }
-          catch (auditError) {
-            if (!loadFailed) { failed(name, auditError); throw auditError; }
-            // A secondary diagnostic cannot replace the original load failure.
-            try { console.error('[pmjs] method audit failed for ' + name + ':', auditError); }
-            catch (_) { /* The original load failure is already propagating. */ }
+          primaryFailure = attempt.failure || { stage: 'guest-script', error: caught };
+          failed(name, caught, primaryFailure.stage);
+          throw caught;
+        } finally {
+          var cleanupError, cleanupFailed = false, propagateCleanup = false;
+          cleanups.reverse().forEach(function(cleanup) {
+            try { cleanup(); } catch (caught) {
+              if (!cleanupFailed) { cleanupError = caught; cleanupFailed = true; }
+            }
+          });
+          if (!loadFailed && cleanupFailed) {
+            propagateCleanup = true;
+            error = cleanupError;
+            loadFailed = true;
+            primaryFailure = { stage: 'cleanup', error: error };
+            failed(name, error, primaryFailure.stage);
           }
+          if (token) {
+            try { PMJS.methods.endPlugin(token, { error: error, failed: loadFailed }); }
+            catch (auditError) {
+              if (!loadFailed) {
+                attempt.failure = { stage: 'method-audit', error: auditError };
+                failed(name, auditError, 'method-audit'); throw auditError;
+              }
+              // A secondary diagnostic cannot replace the original load failure.
+              try { console.error('[pmjs] method audit failed for ' + name + ':', auditError); }
+              catch (_) { /* The original load failure is already propagating. */ }
+            }
+          }
+          if (primaryFailure) attempt.failure = primaryFailure;
+          if (propagateCleanup) throw cleanupError;
         }
-        if (propagateCleanup) throw cleanupError;
+        loaded(name);
+        return true;
+      } finally {
+        activeAttempt = previousAttempt;
+        if (previousAttempt && attempt.failure) previousAttempt.failure = attempt.failure;
       }
-      loaded(name);
-      return true;
     },
 
     finish: function() {
@@ -286,7 +338,8 @@
         return {
           id: entry.id, key: entry.key, name: entry.name,
           manifestEnabled: entry.enabled, state: entry.state,
-          reason: entry.reason, loadOrder: entry.loadOrder, error: entry.error
+          reason: entry.reason, loadOrder: entry.loadOrder, error: entry.error,
+          failureStage: entry.failureStage
         };
       });
       var counts = { total: list.length, loaded: 0, disabled: 0,
