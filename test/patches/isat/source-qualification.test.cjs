@@ -37,6 +37,7 @@ function setup({ unknown = false, verifierSource = false, wrongEngine = false, w
       assert.equal(name, 'afterGuestPlugins'); assert.equal(owner, 'pmjs.isat.source-qualification'); phase = callback;
     } } }
   });
+  require('../../helpers/runtime-context.cjs').runModule(context, 'js/pmjs-core/methods.js');
   vm.runInContext(source, context);
   assert.equal(context.PMJS.isatSourceQualification, undefined);
   phase();
@@ -86,6 +87,7 @@ test('the shared file contract is available before plugin execution and uses LF-
       return { digest() { return engineHashes['js/rpg_core.js']; } };
     } }; } }; }
   });
+  require('../../helpers/runtime-context.cjs').runModule(context, 'js/pmjs-core/methods.js');
   vm.runInContext(source, context);
   assert.equal(context.PMJS.isatSourceQualification, undefined);
   assert.equal(context.PMJS.isatSourceMatches('js/rpg_core.js', 'fixture\r\n'), true);

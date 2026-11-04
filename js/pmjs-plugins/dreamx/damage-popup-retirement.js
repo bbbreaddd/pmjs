@@ -11,9 +11,8 @@
     victorLoaded = true;
   });
 
-  function matches(method, digest) {
-    return typeof method === 'function' && __pmjsBuiltinRequire('crypto').createHash('sha256')
-      .update(Function.prototype.toString.call(method).replace(/\r\n/g, '\n')).digest('hex') === digest;
+  function matches(fn, digest) {
+    return PMJS.methods.matchesSource(fn, digest);
   }
 
   PMJS.plugins.onLoaded('DreamX_Ext_VE_DamagePopup', 'pmjs.adapter.dreamx-popup-retirement', function() {

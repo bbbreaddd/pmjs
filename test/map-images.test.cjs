@@ -6,11 +6,15 @@ const vm=require('node:vm');
 const crypto=require('node:crypto');
 const {loadPmjsRuntime}=require('./helpers/runtime-context.cjs');
 const source=fs.readFileSync(require.resolve('../js/pmjs-rpgmaker/map-images.js'),'utf8');
-function fixture() {
+function fixture({ reviewed = false, mz = false, lineEnding = '\n', unknown = false } = {}) {
   const definitions=[],loads=[];
   function Tilemap() {} function ShaderTilemap() {} function Bitmap() {}
-  for(const name of ['_drawNormalTile','_drawAutotile','_drawTableEdge','_isTableTile']) Tilemap.prototype[name]=()=>{};
-  const PMJS=loadPmjsRuntime({}, ['js/pmjs-core/methods.js']).PMJS;
+  const producerSource = 'function(tileId) {\n  return tileId + 1;\n}';
+  const producer = vm.runInNewContext('(' + producerSource.replace(/\n/g, lineEnding) + ')');
+  for(const name of ['_addNormalTile','_addAutotile','_addTableEdge','_drawNormalTile','_drawAutotile','_drawTableEdge','_isTableTile']) Tilemap.prototype[name]=producer;
+  for(const name of ['_drawNormalTile','_drawAutotile','_drawTableEdge']) ShaderTilemap.prototype[name]=producer;
+  if (unknown) Tilemap.prototype._isTableTile = function() { return false; };
+  const PMJS=loadPmjsRuntime({ __pmjsBuiltinRequire: require }, ['js/pmjs-core/methods.js']).PMJS;
   PMJS.images={};
   PMJS.methods.wrap=definition=>definitions.push(definition);
   const ImageManager={loadTileset(url,hue){loads.push({url,hue,context:PMJS.images.preparedTileSet});return {};},
@@ -19,9 +23,11 @@ function fixture() {
   const data={tilesets:[{firstgid:1}],layers:[{data:[1,2]}]};
   const index={1:{renderer:'tiled',identity:'set-a',contractHash:crypto.createHash('sha256').update(JSON.stringify(data)).digest('hex')}};
   const context={PMJS,NativeHost:{assets:{mapPreparationEnabled:true,preparedMapIndex:index}},ImageManager,
-    Tilemap,ShaderTilemap,Bitmap,$dataMap:{},$gameMap:{mapId:()=>1,tiledData:data,isTiledMap:()=>true},
+    Tilemap,ShaderTilemap:mz?undefined:ShaderTilemap,Bitmap,$dataMap:{},$gameMap:{mapId:()=>1,tiledData:data,isTiledMap:()=>true},
     __pmjsBuiltinRequire:require};
-  vm.runInNewContext(source,context);
+  const adapter = reviewed ? source.replace(/'[a-f0-9]{64}'/g,
+    "'" + crypto.createHash('sha256').update(producerSource).digest('hex') + "'") : source;
+  vm.runInNewContext(adapter,context);
   for(const definition of definitions) {
     const target=definition.getTarget();if(typeof target[definition.method]==='function')
       target[definition.method]=definition.wrap(target[definition.method]);
@@ -93,3 +99,36 @@ test('tileset images outside the prepared set load unscoped without discarding t
   f.ImageManager.loadParserTileset('../img/tilesets/Unused.png', 0);
   assert.equal(f.loads.at(-1).context, 'set-a', 'indexes without a source list keep the previous scoping');
 });
+
+function selectOrdinaryMap(f) {
+  const map = { width: 1, height: 1, data: [0], tilesetId: 1, scrollType: 0, events: [] };
+  const tileset = { tilesetNames: ['Ground'], flags: [0] };
+  Object.assign(f.context.$gameMap, {
+    isTiledMap: () => false, tileset: () => tileset, tileWidth: () => 48, tileHeight: () => 48
+  });
+  f.context.$dataMap = map;
+  f.index[1] = { renderer: 'ordinary', identity: 'ordinary-map', contractHash: crypto.createHash('sha256')
+    .update(JSON.stringify({ ...map, tilesetNames: tileset.tilesetNames, flags: tileset.flags,
+      tileWidth: 48, tileHeight: 48 })).digest('hex') };
+}
+
+for (const mz of [false, true]) {
+  for (const lineEnding of ['\n', '\r\n']) {
+    test((mz ? 'MZ' : 'MV') + ' producers qualify with ' + (lineEnding === '\n' ? 'LF' : 'CRLF'), () => {
+      const f = fixture({ reviewed: true, mz, lineEnding });
+      selectOrdinaryMap(f);
+      assert.equal(f.PMJS.maps.selected(), 'ordinary-map');
+      const owner = mz ? f.context.Tilemap : f.context.ShaderTilemap;
+      const method = mz ? '_addNormalTile' : '_drawNormalTile';
+      owner.prototype[method] = function customProducer() {};
+      assert.equal(f.PMJS.maps.selected(), '');
+      assert.equal(f.PMJS.maps.stats.reasons['tile-producer-changed:' + method], 1);
+    });
+  }
+  test((mz ? 'MZ' : 'MV') + ' unknown producers preserve ordinary loading', () => {
+    const f = fixture({ reviewed: true, mz, unknown: true });
+    selectOrdinaryMap(f);
+    assert.equal(f.PMJS.maps.selected(), '');
+    assert.equal(f.PMJS.maps.stats.reasons['unreviewed-tile-producers'], 1);
+  });
+}

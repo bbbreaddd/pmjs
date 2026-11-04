@@ -248,7 +248,12 @@ test('OrangeGreenworks keeps original methods and repairs only the storeStats de
     _storeStatsSuccess: success, _storeStatsError: failure };
   h.context.Hudell = { OrangeGreenworks: plugin };
   h.context.PMJS.plugins = { onLoaded(name, owner, callback) { loaded.set(name, callback); } };
-  vm.runInContext(fs.readFileSync(path.join(root, 'js/pmjs-plugins/greenworks/orange.js'), 'utf8'), h.context);
+  h.context.__pmjsBuiltinRequire = require;
+  require('./helpers/runtime-context.cjs').runModule(h.context, 'js/pmjs-core/methods.js');
+  plugin.storeStats = function fixtureStoreStats() { return 'guest stats'; };
+  const digest = require('node:crypto').createHash('sha256').update(plugin.storeStats.toString()).digest('hex');
+  vm.runInContext(fs.readFileSync(path.join(root, 'js/pmjs-plugins/greenworks/orange.js'), 'utf8')
+    .replace('d45217042bfd56bf2e124ae34da13ea7a153155d86793c69ed6571a81cd35b1a', digest), h.context);
   loaded.get('OrangeGreenworks')();
   assert.equal(plugin.activateAchievement, original);
   assert.equal(plugin.storeStats(), true);
@@ -474,4 +479,18 @@ test('session flush persists direct store use without initializing an unused pro
   assert.equal(h.context.pmjsSteam.initialized, false);
   h.context.pmjsSteam.flush();
   assert.equal(JSON.parse(h.files.get('achievements.json')).stats.direct, 9);
+});
+
+test('OrangeGreenworks preserves an unfamiliar storeStats implementation and reports it', () => {
+  const h = harness(), hits = [];
+  const original = function customStats() { return 'custom stats'; };
+  h.context.Hudell = { OrangeGreenworks: { storeStats: original } };
+  h.context.PMJS.compat = { hit(...args) { hits.push(args); } };
+  h.context.PMJS.plugins = { onLoaded(name, owner, install) { install(); } };
+  h.context.__pmjsBuiltinRequire = require;
+  require('./helpers/runtime-context.cjs').runModule(h.context, 'js/pmjs-core/methods.js');
+  vm.runInContext(fs.readFileSync(path.join(root, 'js/pmjs-plugins/greenworks/orange.js'), 'utf8'), h.context);
+  assert.equal(h.context.Hudell.OrangeGreenworks.storeStats, original);
+  assert.equal(original(), 'custom stats');
+  assert.deepEqual(hits, [['plugins.orange-greenworks.store-stats', 'unrecognized OrangeGreenworks.storeStats']]);
 });

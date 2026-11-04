@@ -90,7 +90,9 @@ function fixture({ disabled = false, unknown = false, composed = false } = {}) {
     optimizations: { isEnabled() { return !disabled; },
       reportFallback(id, reason) { refusals.push(reason); },
       refuse(id, reason) { refusals.push(reason); } } } };
-  vm.runInNewContext(patched, context);
+  vm.createContext(context);
+  require('./helpers/runtime-context.cjs').runModule(context, 'js/pmjs-core/methods.js');
+  vm.runInContext(patched, context);
   loaded.get('SRD_BattleStatusCustomizer')();
   phases.get('beforeBoot')();
   return { actor, images, Status, Bitmap, config, calls, refusals, originals,

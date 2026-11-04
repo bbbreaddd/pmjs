@@ -4,21 +4,17 @@
   PMJS.phases.on('beforeBoot', 'pmjs.isat.local-map-transforms', function() {
     var qualification = PMJS.isatSourceQualification;
     if (!qualification || qualification.verified !== true || qualification.dormontDataVerified !== true) return;
-    var req = __pmjsBuiltinRequire;
     function digest(method) {
-      if (typeof method !== 'function') return '';
-      var text = Function.prototype.toString.call(method).replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '')
-        .replace(/^function(?:\s+[\w$]+)?\s*\(/, 'function(').replace(/\s/g, '');
-      return req('node:crypto').createHash('sha256').update(text).digest('hex');
+      return typeof method === 'function' ? PMJS.methods.fingerprint(PMJS.methods.sourceOf(method)) : null;
     }
     var reviewed = new Set([
-      '9b72717c412d296ece91ea0cc7fab4b4fb6e4616acd1695f341e65c38577bdf6',
-      'f73a944d5eaf648b2bc889563092d8453183be562e30e64d1ba4218d57614677',
-      'cb1dd91963c974a21bdaa4d31b75bc8aa5883c0f7f9ef52873fcd028f33771ae',
-      'd3ad6a2cb5ce923b424a85a4397e81df1cfa310ee441831aafb18443faee4668',
-      'a7412bdc5b39ba5fc985062655147982aa5f03502f0995cc08f8b622144ccb39',
-      '5e32e41b3f0bc2145bafdc719d2f913aca029c89c09b4bfeecd93b874b2eddbe',
-      '6d1393221107188f680e8137675a6665f39d061935185d51d1579d073250c9b5'
+      '1a091756d85883232da57aa53141f43968c21abfc58b6b231a46c0faa9014861',
+      'f611889101e9659a0c13ef6cdfa1b6a0be5edb374a52ad864169ddf6976d9a8e',
+      'cfcbeacef1f4ca9ed869519fdba23e734e6e70e75bce5b05bb75718e6fea548a',
+      '2169c8e4be4708d97d9be182006b653aa0fcdb74dd7c1cf1270b1dd4f3963e48',
+      '0b7ff0daca0957e3b83d04114304eb6263ab76da0275136f9361ad02b06bbde6',
+      '387766129c695c855bf5a624b0dd29893b5188d97f812d310ff6a7aa41979f8a',
+      '0938d1a3fcf18a6628689547f09640615c0b7a096e445b869559d2e3a6ecaa4f'
     ]);
     var approved = new Set(), graph = [];
     var classes = { Container: PIXI.Container, PixiSprite: PIXI.Sprite, Sprite: globalThis.Sprite,
@@ -27,16 +23,12 @@
       RectTileLayer: PIXI.tilemap && PIXI.tilemap.RectTileLayer,
       CompositeRectTileLayer: PIXI.tilemap && PIXI.tilemap.CompositeRectTileLayer };
     var yepPredecessor = globalThis.Yanfly && Yanfly.Core && Yanfly.Core.Sprite_updateTransform;
-    var yepSource = function() {
-      Yanfly.Core.Sprite_updateTransform.call(this);
-      this.worldTransform.tx = Math.floor(this.worldTransform.tx);
-      this.worldTransform.ty = Math.floor(this.worldTransform.ty);
-    };
     for (var key in classes) {
       var proto = classes[key] && classes[key].prototype;
       if (!proto) continue;
       var method = proto.updateTransform, hash = digest(method);
-      var valid = reviewed.has(hash) || key === 'Sprite' && digest(yepSource) === hash &&
+      var valid = reviewed.has(hash) || key === 'Sprite' && PMJS.methods.matchesSource(method,
+        ['866ba21d861bf698e1a5ef3d034a58f8453b55fe618be6596beb29cd6b473429']) &&
         yepPredecessor === PIXI.Container.prototype.updateTransform;
       if (valid) approved.add(method);
       graph.push({ prototype: proto, method: method });
@@ -45,59 +37,59 @@
     var preparationHashes = {
       "Window": {
         "_updateCursor": [
-          "a77e25d57e76cc0f5e1aa6882708e71a6c5e12e4e27916517f0ef6a070b44f59"
+          "3cd215fcefb0811c8bded097aa4f94ea3e2f320f35f7db9ac385232186bf027b"
         ],
         "_updateArrows": [
-          "da37860ee278f66bda8429edce0530bdfea95011a407aaaba80f17d62a72e975",
-          "adcf781f35d354856a470be523bef78f50d022158bde803b6b1fa9122d4e09f7"
+          "f22a3f57cd8ecd7fa97860cdb1c90cd89f74dd1cbe38718aab423556574217f5",
+          "84e126939b66b8a8dd33f8b9789917285c4e3164029fdc3d578036de87256923"
         ],
         "_updatePauseSign": [
-          "647037b14332964b24f3e311f9c1594f53ce90353c0a066d711c478147da606f",
-          "f2a783f854f0738c927db5ca4fe6f6d7d18bf6ac963dee08053aae0b8bf9a710"
+          "ae29cd24d4b3d406e92e302d2901dad4ec5d00367fb0883fe5b4ff55afbc43f7",
+          "c4e17a506604483ea089ea66f2397355a0a53470079d7efc0e3d2452c310d35f"
         ],
         "_updateContents": [
-          "9356942ccd393c4a101c9621344b1015b1ac842b737d5226d1a1bda17ffcfa2d"
+          "24f637291593ed4f2e7afb4cf23c5278a2be1ac224fe6bd82b07edc1c2c7a2f1"
         ],
         "isOpen": [
-          "a327ecf5ced279f7d111ca8e5ba74f2bb61dfb45a375585a92cd04716cb8065c"
+          "de6e8974f6ffcc880d122d5f97b5d75e1559bf42e23835b1664a897121473105"
         ]
       },
       "Tilemap": {
         "_sortChildren": [
-          "64357a55744a6dedad2a098e2faaedb1d2e96512326322ff470f8069bd6439bb"
+          "31e0ce88f7b3499320e66a5cc868df35b3a02ea9bb5d03927393927a260050d9", "53cf0784889e2a5be27b7522f3ab5af7b26ef220fb42621bc213c31e746ae4b5"
         ],
         "_compareChildOrder": [
-          "6224a1718ee087ea4ad7ea0924e5ffcae7b35323e8669afaeafa234735d6fcff"
+          "b9105871a0c28610d6beb9efe79a80d988671c4f0c52c038012b2aee0fb28750", "404a97a009e4a40e9ea03d452372c6585d7d818f76d5e51c1f014dc12fa27e9e"
         ],
         "_readMapData": [
-          "e374a294caa62275df3645088c1c84dc8c302c80f71e80081b6705a3d44680b5"
+          "779f7551fdc5e750ed17a8758cb4d6983d5bb9e94a348670e1ece594f8ae8312"
         ]
       },
       "ShaderTilemap": {
         "_updateLayerPositions": [
-          "844174ccf2450159afbfacc884f8df4ba39b38de06628bd4f6ae5f9560af96c5"
+          "868447bde8b0f24f0a48ab9359bf0ffcff8d764c062954160cce23309e381ecd"
         ],
         "_paintAllTiles": [
-          "eb620cfeb6d5c0dec8757f95fd1e8ba16f19d64d645e717b38593e533759307c"
+          "ff0734b91ff16a7f8fcba6d1cd8afe9944a9be105a4ec41b40da6a4dc5f10814"
         ],
         "_paintTiles": [
-          "4c1866088809380fdf280ef25eb358eecc58841a9858069d164685be67a83daf"
+          "2806e707cc60f2bd3fdcafc2b5a241dbabdcb43831ede86e61c88e2cf3155da7"
         ],
         "_drawTile": [
-          "589b5d8e5bbe0634990ed122102e59bdc4d7b9b733ddd2aab41c8a7fe0ea447f"
+          "de42538692a6ca945253936aa456a6aa7c6c6f841d6ac01817240e0b1159fe72"
         ],
         "_drawNormalTile": [
-          "333935c500ce73250962cdf061811dac8aa8fe963d2b4a2df1c647d5dd56e3c2"
+          "5fd670384171babd4362d6e8927b66fdabb5fcdb99b5e053537d52d6bbe4eb83"
         ],
         "_drawAutotile": [
-          "0e0b9f1f7308e0fb0ec616eade2164d856490ee424d27214eb7d8f59cbbc2002"
+          "f6ab2ddd304f540075f02dd13c05951c1352bac96ca378e24edc2c4a01f0b956"
         ],
         "_drawShadow": [
-          "5baab8503394f0cfa4d54a159aac212dbc620c828f701f901c20ac7e469de990",
-          "660d3891e32e600de0ce7365c31f0758cdc50a58161900ae5e639998a1a4dc93"
+          "baee0a3de12cec0ea1d285f9cf1191fc700155ca25faa0f966a2803a5da22772",
+          "4e8aed98e625274c85422fc6bd8e771de1acd7039c8fe99709396966c9cb00b9"
         ],
         "_drawTableEdge": [
-          "bbfa6123dd1a1fe61c9fe08fbe219292e9deed881a44c282f158797222f45dec"
+          "f4e9daf4a8a5cce847d39e4e4fe35c0c22dde4dbf0e29bc921707862c6fc4a73"
         ]
       }
     };
@@ -111,9 +103,9 @@
       }
       preparationMethods.push({ prototype: prototype, name: name, method: method });
     }
-    var masterArrows = digest(Window.prototype._updateArrows) === "adcf781f35d354856a470be523bef78f50d022158bde803b6b1fa9122d4e09f7";
+    var masterArrows = PMJS.methods.matchesSource(Window.prototype._updateArrows, "84e126939b66b8a8dd33f8b9789917285c4e3164029fdc3d578036de87256923");
     var arrowPredecessor = globalThis.master2015hp && master2015hp.isatSnp && master2015hp.isatSnp.b_67;
-    if (masterArrows && digest(arrowPredecessor) !== "da37860ee278f66bda8429edce0530bdfea95011a407aaaba80f17d62a72e975") {
+    if (masterArrows && !PMJS.methods.matchesSource(arrowPredecessor, "f22a3f57cd8ecd7fa97860cdb1c90cd89f74dd1cbe38718aab423556574217f5")) {
       preparationReady = false; preparationRefusals.push('master arrow predecessor');
     }
     function rendererCallbacksAllowed(renderer) {
@@ -136,9 +128,9 @@
 
     }
     var weatherEpoch = 0, weatherGraph = [], weatherNotifications = false;
-    var weatherHashes = {"weatherEX_initialize": "826b5d30e0a258accca58fb36b2d0ac0198bdf450ea5138180173bd24f7f12ed", "clearWeatherEX": "e463b6b48ec048059b47f71914c4b72282e9baaeaffb45a8f1dfb9bc9de79030", "commandSetupWeather": "bc974b11b6d00ba4a845265278e4a3c076d70c23da5a9adf8cf873c5fecd38e7"};
+    var weatherHashes = {"weatherEX_initialize": "177b8c2990ae5c6cae9d02cf753d993d212c00c3e3b91c8dc9e13086573d28c7", "clearWeatherEX": "0b9ff9187eb4aec52775bfb4e1bb079e5731668350e21788e4dc10f4ee106199", "commandSetupWeather": "c2b0c8b6104f682de874ac4c28b6c1971850c481b49a2b0224da92f2ed99a07a"};
     if (globalThis.Game_System && Object.keys(weatherHashes).every(function(name) {
-      return digest(Game_System.prototype[name]) === weatherHashes[name];
+      return PMJS.methods.matchesSource(Game_System.prototype[name], weatherHashes[name]);
     })) {
       weatherNotifications = true;
       Object.keys(weatherHashes).forEach(function(name) {

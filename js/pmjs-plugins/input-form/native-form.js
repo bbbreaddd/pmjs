@@ -8,8 +8,7 @@
     if (typeof original !== 'function') return;
     var source = NativeHost.fs.readText('js/plugins/111_InputForm.js');
     if (!globalThis.__pmjsBuiltinRequire || !source ||
-        __pmjsBuiltinRequire('crypto').createHash('sha256').update(source).digest('hex') !==
-        'e634bc2553aeb8bb2af7ba2877f09ec3822b1f218b5645849d402a2d0948c43a') {
+        !PMJS.methods.matchesText(source, 'e634bc2553aeb8bb2af7ba2877f09ec3822b1f218b5645849d402a2d0948c43a')) {
       PMJS.compat.hit('plugins.input-form.native', 'unrecognized input form implementation');
       return;
     }

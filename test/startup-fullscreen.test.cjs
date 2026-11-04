@@ -14,6 +14,8 @@ for (const throws of [false, true]) {
         if (throws && name === 'StartUpFullScreen.js') throw new Error('load failed');
         return 'loaded';
       } } });
+    const load = context.PluginManager.loadScript;
+    context.PluginManager.loadScript = name => context.PMJS.plugins.loadScript(name, 'js/plugins/' + name, () => load(name));
     const original = context.Utils.isNwjs;
     const file = require.resolve('../js/pmjs-plugins/startup-fullscreen/desktop.js');
     vm.runInContext(fs.readFileSync(file, 'utf8'), context, { filename: file });

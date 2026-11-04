@@ -61,7 +61,9 @@ function fixture({ unknown = false } = {}) {
       phases: { on(_phase, _id, callback) { callback(); } },
       optimizations: { isEnabled: () => true, refuse() { calls.refused = true; } } }
   };
-  vm.runInNewContext(source, realm);
+  vm.createContext(realm);
+  require('./helpers/runtime-context.cjs').runModule(realm, 'js/pmjs-core/methods.js');
+  vm.runInContext(source, realm);
   return { window: new Hud(), realm, calls, addons, Bitmap };
 }
 

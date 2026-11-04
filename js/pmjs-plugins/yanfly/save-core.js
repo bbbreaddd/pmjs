@@ -69,41 +69,51 @@ PMJS.plugins.onLoaded('YEP_SaveCore', 'pmjs.adapter.save-core', function() {
     };
   });
 
-  Window_SaveInfo.prototype.drawContents = function(y) {
-    // StorageManager.load is synchronous: absent contents cannot complete later.
-    if (!this._saveContents) return this.drawInvalidText(y);
-    if (typeof this._saveContents === 'string') {
-      this._saveContents = JsonEx.parse(this._saveContents);
-    }
-    y = this.drawPartyGraphics(y);
-    y = this.drawPartyNames(y);
-    y = this.drawPartyLevels(y);
-    return this.drawColumnData(y);
-  };
+  if (PMJS.methods.matchesSource(Window_SaveInfo.prototype.drawContents,
+      '4a5dc3341613ba4b9132bb00b060859521cf26b4de5a194b1926db0da5f78e23')) {
+    Window_SaveInfo.prototype.drawContents = function(y) {
+      // StorageManager.load is synchronous: absent contents cannot complete later.
+      if (!this._saveContents) return this.drawInvalidText(y);
+      if (typeof this._saveContents === 'string') {
+        this._saveContents = JsonEx.parse(this._saveContents);
+      }
+      y = this.drawPartyGraphics(y);
+      y = this.drawPartyNames(y);
+      y = this.drawPartyLevels(y);
+      return this.drawColumnData(y);
+    };
+  } else {
+    PMJS.compat.hit('plugins.yanfly.save-core.draw-contents', 'unrecognized Window_SaveInfo.drawContents');
+  }
 
   var proto = Scene_File.prototype;
-  proto.onConfirmOk = function() {
-    this._confirmWindow.deactivate();
-    this._confirmWindow.close();
-    clearTimeout(this._pmjsSaveActionTimer);
-    var symbol = this._actionWindow.currentSymbol();
-    var method = { load: 'performActionLoad', save: 'performActionSave',
-      delete: 'performActionDelete' }[symbol];
-    if (!method) return this.onConfirmCancel();
-    var scene = this, id = this.savefileId(), action = this[method];
-    var request = this._pmjsSaveActionRequest = {};
-    this._pmjsSaveActionTimer = setTimeout(function() {
-      if (scene._pmjsSaveActionRequest !== request || SceneManager._scene !== scene ||
-          SceneManager.isSceneChanging()) return;
-      scene._pmjsSaveActionTimer = null;
-      scene._pmjsSaveActionRequest = null;
-      // A changed selection cancels confirmation instead of acting on another slot.
-      if (scene.savefileId() !== id || scene._actionWindow.currentSymbol() !== symbol) {
-        return scene.onActionCancel();
-      }
-      return action.call(scene);
-    }, 200);
-  };
+  if (PMJS.methods.matchesSource(proto.onConfirmOk,
+      'ca2ff7296b178a4f9ec2d63d6a98eb432f1973321049d0d18be5258b40b1153d')) {
+    proto.onConfirmOk = function() {
+      this._confirmWindow.deactivate();
+      this._confirmWindow.close();
+      clearTimeout(this._pmjsSaveActionTimer);
+      var symbol = this._actionWindow.currentSymbol();
+      var method = { load: 'performActionLoad', save: 'performActionSave',
+        delete: 'performActionDelete' }[symbol];
+      if (!method) return this.onConfirmCancel();
+      var scene = this, id = this.savefileId(), action = this[method];
+      var request = this._pmjsSaveActionRequest = {};
+      this._pmjsSaveActionTimer = setTimeout(function() {
+        if (scene._pmjsSaveActionRequest !== request || SceneManager._scene !== scene ||
+            SceneManager.isSceneChanging()) return;
+        scene._pmjsSaveActionTimer = null;
+        scene._pmjsSaveActionRequest = null;
+        // A changed selection cancels confirmation instead of acting on another slot.
+        if (scene.savefileId() !== id || scene._actionWindow.currentSymbol() !== symbol) {
+          return scene.onActionCancel();
+        }
+        return action.call(scene);
+      }, 200);
+    };
+  } else {
+    PMJS.compat.hit('plugins.yanfly.save-core.confirm', 'unrecognized Scene_File.onConfirmOk');
+  }
   ['onConfirmCancel', 'onActionCancel', 'terminate'].forEach(function(name) {
     var original = proto[name];
     proto[name] = function() {

@@ -49,9 +49,15 @@ function setup({ recognized = true, qualification = { verified: true }, extraWor
       this._checkForRefresh.push([actor.allIcons(), "actor.allIcons()"]);
     };
   `, context);
+  context.__pmjsBuiltinRequire = require;
+  require('../../helpers/runtime-context.cjs').runModule(context, 'js/pmjs-core/methods.js');
+  const hash = method => context.PMJS.methods.fingerprint(context.PMJS.methods.sourceOf(method));
+  const source = adapter
+    .replace('ffd96184669de4d75cdbcd5ba90ccca6f0c5fa033941f1d020eead313f466154', hash(context.Window_BattleStatusUpgrade.prototype.updateRefreshes))
+    .replace('5079c41aea8d86f452570edc42bfd1d5463dca629bf0e68eb3dafc34578ee1d1', hash(context.Window_BattleStatusUpgrade.prototype.drawActorIconsScale));
   if (!recognized) context.Window_BattleStatusUpgrade.prototype.drawActorIconsScale = function() {};
   const original = context.Window_BattleStatusUpgrade.prototype.updateRefreshes;
-  vm.runInContext(adapter, context);
+  vm.runInContext(source, context);
   afterPlugins();
   return { context, original, refusal };
 }

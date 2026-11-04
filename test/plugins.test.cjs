@@ -530,3 +530,99 @@ test('named plugin installer failures stop peers and propagate', () => {
   assert.throws(() => context.PMJS.plugins.execute('SomePlugin', function() {}), /boom/);
   assert.deepEqual(seen, []);
 });
+
+test('load interceptors preserve ordering, nested loads, results and disposal', () => {
+  const ctx = loadPmjsRuntime(), plugins = ctx.PMJS.plugins, calls = [];
+  const result = {};
+  const dispose = plugins.interceptLoad('Main', 'first', (next, context) => {
+    calls.push(['first', context.name, context.path]);
+    const value = next();
+    calls.push('after');
+    return value;
+  });
+  plugins.interceptLoad('Main.js', 'second', next => {
+    calls.push('second');
+    return next();
+  });
+  plugins.interceptLoad('Helper', 'helper', next => { calls.push('helper'); return next(); });
+  const load = () => plugins.loadScript('main.js', 'js/plugins/main.js', () => {
+    calls.push('main');
+    return plugins.loadScript('Helper.js', 'js/plugins/Helper.js', () => result);
+  });
+  assert.equal(load(), result);
+  assert.deepEqual(calls, [['first', 'main.js', 'js/plugins/main.js'], 'second', 'main', 'helper', 'after']);
+  dispose(); dispose(); calls.length = 0;
+  assert.equal(load(), result);
+  assert.deepEqual(calls, ['second', 'main', 'helper']);
+  for (const error of [0, null, new Error('guest load')]) {
+    assert.throws(() => plugins.loadScript('Main', 'Main.js', () => { throw error; }), caught => caught === error);
+  }
+});
+
+test('loading cleanup runs in reverse order before success and preserves primary failures', () => {
+  for (const phase of ['load', 'loading', 'cleanup']) {
+    const ctx = loadPmjsRuntime({ console: { error() {} } }), plugins = ctx.PMJS.plugins;
+    const calls = [], primary = 0, cleanupError = new Error('cleanup failed');
+    plugins.onLoading('Example', 'first', () => {
+      calls.push('first');
+      return () => { calls.push('cleanup-first'); throw cleanupError; };
+    });
+    plugins.onLoading('Example', 'second', () => {
+      if (phase === 'loading') throw primary;
+      calls.push('second');
+      return () => calls.push('cleanup-second');
+    });
+    plugins.onLoaded('Example', 'loaded', () => calls.push('loaded'));
+    assert.throws(() => plugins.execute('Example', () => {
+      calls.push('load');
+      if (phase === 'load') throw primary;
+    }), caught => caught === (phase === 'cleanup' ? cleanupError : primary));
+    assert.equal(calls.includes('loaded'), false);
+    assert.equal(calls.at(-1), 'cleanup-first');
+    if (phase !== 'loading') assert.deepEqual(calls.slice(-2), ['cleanup-second', 'cleanup-first']);
+    assert.equal(plugins.dump().counts.failed, 1);
+  }
+  const ctx = loadPmjsRuntime(), calls = [];
+  ctx.PMJS.plugins.onLoading('Example', 'scoped', () => () => calls.push('cleanup'));
+  ctx.PMJS.plugins.onLoaded('Example', 'loaded', () => calls.push('loaded'));
+  assert.equal(ctx.PMJS.plugins.execute('Example', () => calls.push('load')), true);
+  assert.deepEqual(calls, ['load', 'cleanup', 'loaded']);
+});
+
+for (const engine of ['mv', 'mz']) {
+  test(engine + ' loader intercepts manifest and helper scripts with resolved paths and parameters', () => {
+    const calls = [], parameters = new Map(), result = {};
+    const name = engine === 'mz' ? 'Folder/Example' : 'Example';
+    const ctx = loadPmjsRuntime({ PMJS_RUNTIME_ENGINE: engine,
+      console: { log() {} },
+      $plugins: [{ name, status: true, parameters: { option: 'value' } }],
+      PluginManager: { _scripts: [], _path: 'js/plugins/', setParameters(name, values) { parameters.set(name, values); } },
+      NativeHost: { runtime: { loadScript(path) {
+        calls.push(['native', path]);
+        if (path.endsWith('Example.js')) {
+          assert.equal(parameters.get('Example').option, 'value');
+          return ctx.PluginManager.loadScript(engine === 'mv' ? 'Helper.js' : 'Helper');
+        }
+        return result;
+      } } }
+    });
+    ctx.PMJS.plugins.interceptLoad('Example', 'example', (next, context) => {
+      calls.push(['intercept', context.name, context.path]);
+      assert.equal(next(), result);
+      return result;
+    });
+    ctx.PMJS.plugins.interceptLoad('Helper', 'helper', (next, context) => {
+      calls.push(['helper', context.name, context.path]);
+      return next();
+    });
+    vm.runInContext(fs.readFileSync(path.join(root, 'js/pmjs-' + engine + '/plugin-loader.js'), 'utf8'), ctx);
+    ctx[engine === 'mv' ? 'pmjsMvInitializePlugins' : 'pmjsMzInitializePlugins']();
+    assert.equal(ctx.PMJS.plugins.dump().counts.loaded, 1);
+    assert.deepEqual(calls, [
+      ['intercept', engine === 'mv' ? 'Example.js' : 'Folder/Example', 'js/plugins/' + name + '.js'],
+      ['native', 'js/plugins/' + name + '.js'],
+      ['helper', engine === 'mv' ? 'Helper.js' : 'Helper', 'js/plugins/Helper.js'],
+      ['native', 'js/plugins/Helper.js']
+    ]);
+  });
+}

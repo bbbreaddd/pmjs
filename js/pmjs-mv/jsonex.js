@@ -2,26 +2,16 @@
 // mode. Serialize data-only copies and rebuild parsed objects to keep them fast;
 // graphs with serialization hooks use stock behavior on the original objects.
 var PMJS_JSONEX_STOCK = {
-  stringify: ['f828473f50eb89841799e5931d5afb03a48be61ecce223823b432ed4ddf8d8a0',
-    '676cc734383dfcfd9f888bd6f9333a51a616fd5d923cc82d02b83a3d44a17e6c'],
-  parse: ['73b2d0010667280feea4478bee3525547e336af3be36433872315e100c95204f',
-    '2db7c10add1f3d23f6a2a5875998fc555a68cea248e9c1fb548210b108a174f3'],
-  _encode: ['250424483d8681b975cd188c4f6636664db6101c532d9058b240ce623c151255',
-    'd376d63eca747a22f6dfca40f010c05dea595b46ee800766fb8b396d4f9e6542'],
-  _decode: ['a72730ac0df340c3bc74223ab1ac52461dc14bb04fb67d038a13c88b2161cdc5',
-    '45cffbf6be498b80c40d41fad6f1c04e7138ceecc8dd03b3624360d3f120f6b6'],
-  _cleanMetadata: ['8f5fa23992a701049c8f7309049c70e12480df3e616b452c4da89f51cb6266d2',
-    '57729a719060c2913b865615d3addf627573478f50f9e9fce168323ecad040c0'],
-  _generateId: ['4c9a57207fe56570b60f49dac5c8f88abd883596e18a4fa5b1c778d8fdb44ea2',
-    '6da6d3cc080b9777c45a24cc01f63b3c22f3baaa5f192aa2f44e7ef7212cc28e'],
-  _restoreCircularReference: ['ed4778a641450f2ea7cfa4a163019ff7c3ef43bec7caa8311b93760dcef24063',
-    '7304f7df5809da8c465fc2f5a2bef57d65be6cfc9148193365409b7f72721aec'],
-  _linkCircularReference: ['c38de3cdcdeab65a3df36b7b71a6a62c1759471c29677582fe691bbab8dd55be',
-    '92b713f2b1d0ca4fc04dee74575d351d36afe06baf9b334f810f658b063d40f5'],
-  _getConstructorName: ['99e080a5df92817913e65bcfc037249b66c80a6dade7fe52058966ae3b5be888',
-    '923d1aec5ae3259b69b649f24b6bdeaef1ed2a99dcdd7299da5bcc9a6119e2bf'],
-  _resetPrototype: ['21188628e16c1de249324501336e80828670528e7c72944020ea81919321dcd3',
-    '57508b7f76ad66758448b83656dd677cfbbc111b3c457e797d13afacf1a75e46']
+  stringify: ['f828473f50eb89841799e5931d5afb03a48be61ecce223823b432ed4ddf8d8a0'],
+  parse: ['73b2d0010667280feea4478bee3525547e336af3be36433872315e100c95204f'],
+  _encode: ['250424483d8681b975cd188c4f6636664db6101c532d9058b240ce623c151255'],
+  _decode: ['a72730ac0df340c3bc74223ab1ac52461dc14bb04fb67d038a13c88b2161cdc5'],
+  _cleanMetadata: ['8f5fa23992a701049c8f7309049c70e12480df3e616b452c4da89f51cb6266d2'],
+  _generateId: ['4c9a57207fe56570b60f49dac5c8f88abd883596e18a4fa5b1c778d8fdb44ea2'],
+  _restoreCircularReference: ['ed4778a641450f2ea7cfa4a163019ff7c3ef43bec7caa8311b93760dcef24063'],
+  _linkCircularReference: ['c38de3cdcdeab65a3df36b7b71a6a62c1759471c29677582fe691bbab8dd55be'],
+  _getConstructorName: ['99e080a5df92817913e65bcfc037249b66c80a6dade7fe52058966ae3b5be888'],
+  _resetPrototype: ['21188628e16c1de249324501336e80828670528e7c72944020ea81919321dcd3']
 };
 
 // Capture these before game scripts can replace serialization hooks.

@@ -65,8 +65,14 @@ function fixture(enabled = true, altered = false) {
  var $dataCommonEvents={105:event}, variables={1:1,2:2};
  var $gameVariables={value:function(id){return variables[id];}},target=new Game_Actor(2),requested=44;
  var interpreter=new Game_Interpreter();`,context);
+ context.__pmjsBuiltinRequire = require;
+ require('../../helpers/runtime-context.cjs').runModule(context, 'js/pmjs-core/methods.js');
+ const patched = source.replace(/methodMatches\(([^,]+), '([a-f0-9]+)'\)/g, (text, expression, digest) => {
+   const method = vm.runInContext(expression.replace(/^actor\./, 'Game_Actor.prototype.').replace(/^stress\./, 'Olivia.AntiPlayerStress.'), context);
+   return text.replace(digest, context.PMJS.methods.fingerprint(context.PMJS.methods.sourceOf(method)));
+ });
  if(altered) vm.runInContext('Game_Actor.prototype.levelUp=function(){this._level++;};',context);
- vm.runInContext(source,context);hooks.afterGuestPlugins();
+ vm.runInContext(patched,context);hooks.afterGuestPlugins();
  return {context,warnings,run: code => vm.runInContext(code,context)};
 }
 function state(f) {return JSON.parse(f.run('JSON.stringify({level:target._level,exp:target.currentExp(),hp:target._hp,mp:target._mp,skills:target._skills,states:target._states})'));}

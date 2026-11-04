@@ -12,12 +12,8 @@ if (typeof PMJS !== 'undefined' && PMJS.plugins &&
 (function() {
 
   // MV 1.6.1 membership and YEP_SlipperyTiles 1.05 query.
-  var KNOWN_CONTAINS = ['2b4ef5ac511af2a98109ab4d0b75cc66af8e533adf8d852d82f751941a7d68e1',
-    '0a14e5f3f0be233bf31d33eeecb6d55d5c34aca2a60a567f65891cbf7dc7e3f5',
-    // MV 1.6.1 descriptor-defined contains, original CRLF source.
-    '70490d2a5d5d80be4b5a0a8a2861d212f3f99eee98598d360067880050e3e1fa'];
-  var KNOWN_SLIPPERY_QUERY = ['a36c9d35d257710fabbc1270f2ab8d0f715a855815b352766d9c2e17aa50c606',
-      '425386319071765fdcb4f7874c65eb031dbe13f651098a84b1e1ff633505ccbe'];
+  var KNOWN_CONTAINS = ['0a14e5f3f0be233bf31d33eeecb6d55d5c34aca2a60a567f65891cbf7dc7e3f5', 'c8973dbd38a3d5da461ca1d9e5292a6f120b88595b65888819c5e70f95a3ccac'];
+  var KNOWN_SLIPPERY_QUERY = ['425386319071765fdcb4f7874c65eb031dbe13f651098a84b1e1ff633505ccbe'];
 
   function install() {
     if (!PMJS.optimizations.isEnabled('plugins.yanfly.slippery-tiles')) {
@@ -44,7 +40,7 @@ if (typeof PMJS !== 'undefined' && PMJS.plugins &&
     var nativeIndexOf = Array.prototype.indexOf;
     var knownContains = typeof stockContains === 'function' &&
       PMJS.methods.matchesSource(stockContains, KNOWN_CONTAINS) &&
-      /\[native code\]/.test(Function.prototype.toString.call(nativeIndexOf));
+      /\[native code\]/.test(PMJS.methods.sourceOf(nativeIndexOf));
     if (!knownContains || typeof Yanfly === 'undefined' || !Yanfly.Param ||
         Yanfly.Param.SlipRegion !== 0) {
       PMJS.optimizations.refuse('plugins.yanfly.slippery-tiles',

@@ -15,9 +15,7 @@
       PMJS.optimizations.refuse(id, 'enemy ATB gauge method unavailable');
       return;
     }
-    var digest = __pmjsBuiltinRequire('crypto').createHash('sha256')
-      .update(Function.prototype.toString.call(original).replace(/\r\n/g, '\n')).digest('hex');
-    if (digest !== '58c487e44dfefa99c48880d7e7c1e6984e1f020c09cad4d226f4b7031a21005b') {
+    if (!PMJS.methods.matchesSource(original, '58c487e44dfefa99c48880d7e7c1e6984e1f020c09cad4d226f4b7031a21005b')) {
       PMJS.optimizations.refuse(id, 'unrecognized enemy ATB gauge method composition');
       return;
     }

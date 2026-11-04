@@ -90,20 +90,42 @@
     return record.state;
   }
 
+  function canonicalSource(source) {
+    return source.replace(/\r\n/g, '\n');
+  }
+
+  function fingerprint(source) {
+    if (typeof source !== 'string' || typeof globalThis.__pmjsBuiltinRequire !== 'function') return null;
+    try {
+      return __pmjsBuiltinRequire('crypto').createHash('sha256')
+        .update(canonicalSource(source)).digest('hex');
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function matchesReviewedSource(source, expected, allowExact) {
+    if (typeof source !== 'string') return false;
+    var accepted = Array.isArray(expected) ? expected : [expected];
+    if (allowExact && accepted.some(function(value) {
+      return typeof value === 'string' && canonicalSource(value) === canonicalSource(source);
+    })) return true;
+    var digest = fingerprint(source);
+    return digest !== null && accepted.includes(digest);
+  }
+
   globalThis.PMJS = globalThis.PMJS || {};
   PMJS.methods = {
     sourceOf: sourceOf,
+    fingerprint: fingerprint,
 
-    // Exact source strings or SHA-256 digests; callers also guard mutable dependencies.
     matchesSource: function(fn, expected) {
-      if (typeof fn !== 'function') return false;
-      var source = sourceOf(fn);
-      var accepted = Array.isArray(expected) ? expected : [expected];
-      if (accepted.includes(source)) return true;
-      if (typeof globalThis.__pmjsBuiltinRequire !== 'function') return false;
-      var digest = __pmjsBuiltinRequire('crypto').createHash('sha256')
-        .update(source).digest('hex');
-      return accepted.includes(digest);
+      return typeof fn === 'function' &&
+        matchesReviewedSource(sourceOf(fn), expected, true);
+    },
+
+    matchesText: function(source, expected) {
+      return matchesReviewedSource(source, expected, false);
     },
 
     wrap: function(definition) { return register(definition, 'wrap'); },

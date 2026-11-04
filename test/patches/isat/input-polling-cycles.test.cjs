@@ -71,13 +71,8 @@ function fixture(configure) {
   context.PMJS.methods.matchesSource = method => reviewed.has(method);
   [context.Game_Interpreter.prototype.command111,
     context.Yanfly.SSV.Game_Interpreter_command111,
-    context.Yanfly.Core.Game_Interpreter_command111].forEach((method, index) => {
-    hashes.set(method.toString().replace(/\s/g, ''), [
-      '617a68b21ac021fcc91a3ab813554c244470f8283d592bd35e96619c9fa2cdff',
-      '78ac10b42be74944c82a73bb27472c08a062670c0e1844e122fd01fd2c6b1a02',
-      'c94f01bccefd3acac08ab3283e3a6923c6217afa61a9ea7b7064d27efe07f5d7'
-    ][index]);
-  });
+    context.Yanfly.Core.Game_Interpreter_command111,
+    context.RG19.OpenPS5Activity].forEach(method => reviewed.add(method));
   if (configure) configure(context, state);
   const source = fs.readFileSync(path.join(__dirname, '../../../patches/isat/input-polling.js'), 'utf8');
   vm.runInContext(source, context);

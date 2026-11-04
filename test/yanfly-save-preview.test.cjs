@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const test = require('node:test');
 const vm = require('node:vm');
 
-function fixture() {
+function fixture(options = {}) {
   const timers = new Map(), images = new Map(), draws = [], warnings = [];
   let serial = 0;
   function schedule(callback, delay) {
@@ -43,9 +43,15 @@ function fixture() {
     clearTimeout(id) { timers.delete(id); },
     PMJS: { plugins: { onLoaded(_plugin, _owner, install) { install(); } } }
   });
-  vm.runInContext(fs.readFileSync(require.resolve('../js/pmjs-plugins/yanfly/save-core.js'), 'utf8'), context);
+  const source = require('./helpers/save-core-fixture.cjs').prepareSaveCoreAdapter(context);
+  const hits = [];
+  context.PMJS.compat.hit = (...args) => hits.push(args);
+  if (options.unknownContents) Window_SaveInfo.prototype.drawContents = function customContents() { return 'custom contents'; };
+  if (options.unknownConfirm) Scene_File.prototype.onConfirmOk = function customConfirm() { return 'custom confirmation'; };
+  const originals = { contents: Window_SaveInfo.prototype.drawContents, confirm: Scene_File.prototype.onConfirmOk };
+  vm.runInContext(source, context);
   const window = scene._infoWindow = new Window_SaveInfo();
-  return { context, window, scene, SceneManager, timers, images, image, draws, warnings,
+  return { context, window, scene, SceneManager, timers, images, image, draws, warnings, hits, originals,
     tick() { const pending = [...timers.values()]; timers.clear(); pending.forEach(fn => fn()); } };
 }
 
@@ -232,4 +238,34 @@ test('missing slot contents retain the existing invalid-slot presentation withou
   assert.deepEqual(h.contents, ['title', ['invalid', 12]]);
   assert.deepEqual(h.warnings, []);
   assert.equal(h.timers.size, 0);
+});
+
+for (const unknown of ['unknownContents', 'unknownConfirm']) {
+  test('SaveCore qualifies repairs independently and preserves ' + unknown, () => {
+    const h = fixture({ [unknown]: true });
+    if (unknown === 'unknownContents') {
+      assert.equal(h.window.drawContents, h.originals.contents);
+      assert.equal(h.window.drawContents(), 'custom contents');
+      assert.notEqual(h.scene.onConfirmOk, h.originals.confirm);
+      assert.equal(h.hits[0][1], 'unrecognized Window_SaveInfo.drawContents');
+    } else {
+      assert.equal(h.scene.onConfirmOk, h.originals.confirm);
+      assert.equal(h.scene.onConfirmOk(), 'custom confirmation');
+      assert.notEqual(h.window.drawContents, h.originals.contents);
+      assert.equal(h.hits[0][1], 'unrecognized Scene_File.onConfirmOk');
+    }
+    assert.equal(h.hits.length, 1);
+  });
+}
+
+test('later SaveCore wrappers compose around the repaired method', () => {
+  const h = fixture(), calls = [];
+  h.window.drawInvalidText = value => { calls.push(value); return 'invalid'; };
+  const repaired = h.window.drawContents;
+  h.context.Window_SaveInfo.prototype.drawContents = function(value) {
+    calls.push('later plugin');
+    return repaired.call(this, value);
+  };
+  assert.equal(h.window.drawContents(12), 'invalid');
+  assert.deepEqual(calls, ['later plugin', 12]);
 });

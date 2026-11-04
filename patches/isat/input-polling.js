@@ -1,60 +1,21 @@
 'use strict';
 
 (function() {
-  // Reviewed MV event methods, pinned independently for LF and CRLF source.
+  // Reviewed MV event methods.
   var sources = {
-    "executeCommand": [
-        "c6a9443115bd0cea0121f5486b7c9bf0778861dee46e14f7f572f90793c3e247",
-        "6af0ec2eb00d7771603675da53bbd2f47da3a6596929505ea7e0f6b2309aef6b"
-    ],
-    "currentCommand": [
-        "900f935c4e9b987e2f42cd4ffc67bdc1a2bf3d79fffde90542102d8560623049",
-        "8f1a53bf9315462d35f5209e57daf03fc7daceb1120bcec3153c81b306c3d1ad"
-    ],
-    "skipBranch": [
-        "d46200b0393442b183a909a658ad22589e712dffd36af5a4846d5778b07a96a6",
-        "b3750c22009ffbf1adc7d98559b62fe3cb568dbce85031bf280173cbe2bb2972"
-    ],
-    "jumpTo": [
-        "fb89a37c475e17e9f6eefd4a302830950b0618a0568a94c47e29583c4dee3f36",
-        "35538a7c3b4702aaa64b3bc967d9e29072f55212257ca3a15e562cb1356ec1f0"
-    ],
-    "nextEventCode": [
-        "c7548d9583c852e91b0ffe6198cecc82fee9129ba10234aa0ee2596df05973a4",
-        "1398a8626608b27cc542d528cac70cac2ef5858edcaa5d4396c9d4de5ec8eda6"
-    ],
-    "command108": [
-        "053ffb4c0e69c4c66c18a3cf2f3764d4cf6328436c824a72477030f4898a191a",
-        "fa186212b1a1fc484e5306379afdde542e8e7a7da426f186eed4b2dceed61a24"
-    ],
-    "command112": [
-        "59d970ec76aa49dd256286168f3a2fb122e03247533834e3703df8f7590ae7ba",
-        "dd342a23179cec37ba93288997a7f2a399d79c3820e2f58900c48e19b6e99af5"
-    ],
-    "command113": [
-        "bd7c7ec73d9f35776bcd27e9cf724a24d5bede6d4a92c70a5c73b981e0fa104f",
-        "74931a02ff1ec1d4048eb7157d888737b6e495aaa24a51dd25c178cba0e0c93e"
-    ],
-    "command115": [
-        "1c9957515e9011ec37edfcb1519a9adfef6121c2f386380a3ecb4245263f3888",
-        "3e75f801190c65945453790baccb88120367ab7f78f1035c921eec0f63fe8978"
-    ],
-    "command118": [
-        "59d970ec76aa49dd256286168f3a2fb122e03247533834e3703df8f7590ae7ba",
-        "dd342a23179cec37ba93288997a7f2a399d79c3820e2f58900c48e19b6e99af5"
-    ],
-    "command119": [
-        "af7534878d04dec2710d59d994ed1d9784dd6fcfd139af23ffacbb6dcac15117",
-        "a56ee71745db46cd243a62dae63ae9562e9e51ad777097302b27cdcd2b3d98b4"
-    ],
-    "command411": [
-        "14a446c78043a1ca6c00b2531de53c3b0e29f9b37147bbc6155baf712a95a1aa",
-        "0d2d6977aefe97bfadb23a566799f6b293454ddacf7b3190eb7ebe3c803a5b6b"
-    ],
-    "command413": [
-        "cb52497e3763b41b5fccfb4c105d73452458bc3c28d02ff2d3892e1afd7b7aa7",
-        "105ad7c6bce561bf339ba14e52c541d0f970c822562720e457d66730e49ea34f"
-    ]
+    "executeCommand": ['c6a9443115bd0cea0121f5486b7c9bf0778861dee46e14f7f572f90793c3e247'],
+    "currentCommand": ['900f935c4e9b987e2f42cd4ffc67bdc1a2bf3d79fffde90542102d8560623049'],
+    "skipBranch": ['d46200b0393442b183a909a658ad22589e712dffd36af5a4846d5778b07a96a6'],
+    "jumpTo": ['fb89a37c475e17e9f6eefd4a302830950b0618a0568a94c47e29583c4dee3f36'],
+    "nextEventCode": ['c7548d9583c852e91b0ffe6198cecc82fee9129ba10234aa0ee2596df05973a4'],
+    "command108": ['053ffb4c0e69c4c66c18a3cf2f3764d4cf6328436c824a72477030f4898a191a'],
+    "command112": ['59d970ec76aa49dd256286168f3a2fb122e03247533834e3703df8f7590ae7ba'],
+    "command113": ['bd7c7ec73d9f35776bcd27e9cf724a24d5bede6d4a92c70a5c73b981e0fa104f'],
+    "command115": ['1c9957515e9011ec37edfcb1519a9adfef6121c2f386380a3ecb4245263f3888'],
+    "command118": ['59d970ec76aa49dd256286168f3a2fb122e03247533834e3703df8f7590ae7ba'],
+    "command119": ['af7534878d04dec2710d59d994ed1d9784dd6fcfd139af23ffacbb6dcac15117'],
+    "command411": ['14a446c78043a1ca6c00b2531de53c3b0e29f9b37147bbc6155baf712a95a1aa'],
+    "command413": ['cb52497e3763b41b5fccfb4c105d73452458bc3c28d02ff2d3892e1afd7b7aa7']
 };
   // Whole-list identity establishes origin; loop slices are rechecked on entry.
   var pollingLists = [
@@ -96,14 +57,13 @@
     var conditionMethods = [prototype.command111, Yanfly.SSV.Game_Interpreter_command111,
       Yanfly.Core.Game_Interpreter_command111];
     var hashes = [
-      '617a68b21ac021fcc91a3ab813554c244470f8283d592bd35e96619c9fa2cdff',
-      '78ac10b42be74944c82a73bb27472c08a062670c0e1844e122fd01fd2c6b1a02',
-      'c94f01bccefd3acac08ab3283e3a6923c6217afa61a9ea7b7064d27efe07f5d7'
+      '74bdac3653dc61061d100f46b5a1d5222b165e7867a051c7fedd399226f8b022',
+      '34ed9fdd7e33f8bc839cefd56f609e895d77aa3fd482c037b1aa45551c455a32',
+      '18024b2b9ef851656957dfcfded2091293e912b1e6586f9fe59695eae6990e37'
     ];
     var crypto = __pmjsBuiltinRequire('node:crypto');
     if (!conditionMethods.every(function(method, index) {
-      return typeof method === 'function' && crypto.createHash('sha256').update(
-        Function.prototype.toString.call(method).replace(/\s/g, '')).digest('hex') === hashes[index];
+      return PMJS.methods.matchesSource(method, hashes[index]);
     })) {
       console.warn('[pmjs-isat] input polling skipped: unrecognized conditional methods');
       return false;
@@ -122,8 +82,7 @@
       if ([0, 1, 11].indexOf(parameters[0]) >= 0) return true;
       if (parameters[0] !== 12 || parameters[1] !== 'RG19.OpenPS5Activity() == true') return false;
       var activity = globalThis.RG19 && RG19.OpenPS5Activity;
-      return typeof activity === 'function' && Function.prototype.toString.call(activity)
-        .replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '').replace(/\s/g, '') === 'function(){}';
+      return PMJS.methods.matchesSource(activity, '3c8ba2ff462be09953dfcbb87f795c51517a1760b83dac83a1394fbd842f29ae');
     }
     var proto = prototype;
     if (!reviewed(proto.executeCommand, 'executeCommand')) return false;

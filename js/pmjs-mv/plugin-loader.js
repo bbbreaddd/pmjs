@@ -6,7 +6,10 @@
     if (PluginManager._pmjsLifecycleInstalled) return true;
 
     PluginManager.loadScript = function(name) {
-      NativeHost.runtime.loadScript(this._path + name);
+      var path = this._path + name;
+      return PMJS.plugins.loadScript(name, path, function() {
+        return NativeHost.runtime.loadScript(path);
+      });
     };
 
     PluginManager.setup = function(plugins) {

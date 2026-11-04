@@ -9,7 +9,6 @@
     if (!PMJS.optimizations.isEnabled(id) || typeof Window_OrangeHud !== 'function' ||
         typeof OrangeHudDefaultLine === 'undefined' || typeof OrangeHudVariableIcon === 'undefined') return;
     var prototype = Window_OrangeHud.prototype;
-    var crypto = __pmjsBuiltinRequire('node:crypto');
     var methods = [prototype.refresh, prototype.drawHud, prototype.drawTextEx,
       OrangeHudDefaultLine.drawLine, OrangeHudVariableIcon.drawLine];
     var hashes = ['e7466e3e6c5677d8cca3dc0ef6c99caca7bc18c9950b15d52ddf3ddbb7a2b24e',
@@ -17,12 +16,15 @@
       'bb13fc2904c33710ef381e51b451fbd694a8b517d4f846fcb6007087c60dcf18',
       '64568cb082e3f33f7a50c9dbe5c26e400292157a6142ce485683505ab0ebf2f1',
       '848307224df9db45d99389ca78c5adc4fdabaaf6776b74788ae0c0cda264e495'];
+    var names = ['Window_OrangeHud.refresh', 'Window_OrangeHud.drawHud', 'Window_OrangeHud.drawTextEx',
+      'OrangeHudDefaultLine.drawLine', 'OrangeHudVariableIcon.drawLine'];
+    var mismatch = null;
     if (!methods.every(function(method, index) {
-      return typeof method === 'function' && crypto.createHash('sha256')
-        .update(Function.prototype.toString.call(method).replace(/\r\n/g, '\n'))
-        .digest('hex') === hashes[index];
+      var recognized = PMJS.methods.matchesSource(method, hashes[index]);
+      if (!recognized) mismatch = names[index];
+      return recognized;
     })) {
-      PMJS.optimizations.refuse(id, 'unrecognized HUD drawing pipeline'); return;
+      PMJS.optimizations.refuse(id, 'unrecognized HUD drawing pipeline', mismatch); return;
     }
     var originalRefresh = methods[0], originalIcon = prototype.drawIcon;
     var states = new WeakMap(), recording = new WeakMap();

@@ -119,7 +119,7 @@ PMJS.mv.bitmap.requestImageFile = pmjsBitmapRequestImageWrap()(Bitmap.prototype.
         }
     };
 }`;
-      if (!methods.matchesSource(guestDecrypt, [reviewed, reviewed.replace(/\n/g, '\r\n')])) return guestDecrypt;
+      if (!methods.matchesSource(guestDecrypt, reviewed)) return guestDecrypt;
       return function(url, bitmap) {
         var path = decodeResourceUrlPath(url)
           .replace(/^file:\/\/\/game\//, '').replace(/^\.\//, '');

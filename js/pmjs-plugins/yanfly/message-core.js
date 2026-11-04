@@ -18,9 +18,7 @@ PMJS.plugins.registerOptimization('YEP_MessageCore', {
       if (!PMJS.optimizations.isEnabled(id)) return;
       var measure = windowProto && windowProto.textWidthExCheck;
       // Reviewed YEP_MessageCore 1.19 measurement path.
-      var expectedBody = ['7cd834749c5ba4a66d6ae196316e4c7a443f92ba7cbe55b1ab391b24febf7df2',
-      '804a24c50bf504ffbd22f3ace97615df230de185b62142f81724943769ced5e5',
-      'e3261a21d77d5bc56ec8f2f6c72ba7a7a6323aadd57cb025904111bb4aa7dda5'];
+      var expectedBody = ['804a24c50bf504ffbd22f3ace97615df230de185b62142f81724943769ced5e5', 'e3261a21d77d5bc56ec8f2f6c72ba7a7a6323aadd57cb025904111bb4aa7dda5'];
       if (!PMJS.methods.matchesSource(measure, expectedBody) ||
           typeof outline !== 'function' || typeof body !== 'function' ||
           bitmapProto._drawTextOutline !== outline ||

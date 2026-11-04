@@ -5,22 +5,30 @@
   var reviewedBitmapLoad = ImageManager.loadBitmapFromUrl;
   var crypto = globalThis.__pmjsBuiltinRequire('crypto');
   var mz = typeof ShaderTilemap === 'undefined';
-  var producers = mz ? ['_addNormalTile', '_addAutotile', '_addTableEdge', '_isTableTile'] :
-    ['_drawNormalTile', '_drawAutotile', '_drawTableEdge', '_isTableTile'];
-  var reviewed = producers.map(function(name) { return [Tilemap.prototype, name, Tilemap.prototype[name]]; });
-  var producerContract = crypto.createHash('sha256').update(JSON.stringify(producers.map(function(name) {
-    return typeof Tilemap.prototype[name] === 'function' ? methods.sourceOf(Tilemap.prototype[name]) : null;
-  }))).digest('hex');
-  var reviewedProducerContract = mz ? producerContract === '68c2143a9a120a448e3cb88e95aeb981ee3d1afca128a9eef04f30d36412115b' :
-    producerContract === '7b711e244ab4120a34c90994cc9752f36d72b8fc94a0d428f3bd33936a817fff';
-  if (!mz) {
-    var shaderProducers = ['_drawNormalTile', '_drawAutotile', '_drawTableEdge'];
-    var shaderContract = crypto.createHash('sha256').update(JSON.stringify(shaderProducers.map(function(name) {
-      return typeof ShaderTilemap.prototype[name] === 'function' ? methods.sourceOf(ShaderTilemap.prototype[name]) : null;
-    }))).digest('hex');
-    reviewedProducerContract = reviewedProducerContract && shaderContract === '2829c68a0d2b1dff64ac1afca9b47ab01c8a0f13ef9aed1276435daf4c00b02f';
-    shaderProducers.forEach(function(name) { reviewed.push([ShaderTilemap.prototype, name, ShaderTilemap.prototype[name]]); });
-  }
+  var contracts = [{ target: Tilemap.prototype, methods: mz ? {
+    _addNormalTile: '43c23024b34b5d1dcf800f5e90b4fbdff32e3fdf6112c1a406c59e7703934dc0',
+    _addAutotile: '884826d62c40cd90cf48d0355e7630ea8bd3bc06b601612677a1ae0c607fb4df',
+    _addTableEdge: 'aaa305f1620271a22583c731638858bb9f220b6961d7dd82cc989e85a083db22',
+    _isTableTile: 'c1e217261601d6125dd0211ece3f248a45025c30cc4be563a79fb29ca03165ca'
+  } : {
+    _drawNormalTile: '6f10cd8b82be621fdbac6c0547f5917eb4060f3a6ad592b0d7b3500f4b098373',
+    _drawAutotile: '75d130a645f6bf591f775cc828f087ed69d16d572b7cb462c95b970b2a1b992e',
+    _drawTableEdge: 'a9170acdcfa7c9193e53e3fdff39efb39eb5c710e5155f2c6fc5853023d79a76',
+    _isTableTile: 'b5b5a0a8584e9a7d6c1fc252aa6fe48f15188996297fe9a8c591305b81004824'
+  } }];
+  if (!mz) contracts.push({ target: ShaderTilemap.prototype, methods: {
+    _drawNormalTile: '5fd670384171babd4362d6e8927b66fdabb5fcdb99b5e053537d52d6bbe4eb83',
+    _drawAutotile: 'f6ab2ddd304f540075f02dd13c05951c1352bac96ca378e24edc2c4a01f0b956',
+    _drawTableEdge: 'f4e9daf4a8a5cce847d39e4e4fe35c0c22dde4dbf0e29bc921707862c6fc4a73'
+  } });
+  var reviewed = [], reviewedProducerContract = true;
+  contracts.forEach(function(contract) {
+    Object.keys(contract.methods).forEach(function(name) {
+      var method = contract.target[name];
+      reviewed.push([contract.target, name, method]);
+      if (!methods.matchesSource(method, contract.methods[name])) reviewedProducerContract = false;
+    });
+  });
   var stats = { selected: 0, refused: 0, unscoped: 0, reasons: Object.create(null) };
   function refuse(reason) { stats.refused++; stats.reasons[reason] = (stats.reasons[reason] || 0)+1; return ''; }
   function stale(reason) {

@@ -188,6 +188,8 @@ function setupEnvironment({ config = {}, env = {} } = {}) {
   };
 
   vm.createContext(context);
+  context.__pmjsBuiltinRequire = require;
+  require('./helpers/runtime-context.cjs').runModule(context, 'js/pmjs-core/methods.js');
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-core/config.js'), 'utf8'), context);
   vm.runInContext(optimizationsSource, context, { filename: 'optimizations.js' });
   vm.runInContext(fs.readFileSync(path.join(runtimeRoot,

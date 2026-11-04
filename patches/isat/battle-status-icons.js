@@ -19,11 +19,8 @@
     var prototype = status && status.prototype;
     var update = prototype && prototype.updateRefreshes;
     var drawIcons = prototype && prototype.drawActorIconsScale;
-    if (typeof update !== 'function' || typeof drawIcons !== 'function' ||
-        Function.prototype.toString.call(update)
-          .indexOf('info[0] !== eval(info[1])') < 0 ||
-        Function.prototype.toString.call(drawIcons)
-          .indexOf('this._checkForRefresh.push([actor.allIcons(), "actor.allIcons()"])') < 0) {
+    if (!PMJS.methods.matchesSource(update, 'ffd96184669de4d75cdbcd5ba90ccca6f0c5fa033941f1d020eead313f466154') ||
+        !PMJS.methods.matchesSource(drawIcons, '5079c41aea8d86f452570edc42bfd1d5463dca629bf0e68eb3dafc34578ee1d1')) {
       PMJS.optimizations.refuse(id, 'unrecognized battle status icon refresh');
       return;
     }

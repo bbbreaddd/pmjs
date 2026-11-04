@@ -11,7 +11,10 @@ function adapter(module, globals) {
     plugins: { onLoaded(name, owner, callback) { loaded.set(name, callback); } },
     phases: { on(name, owner, callback) { phases.set(name, callback); } }
   } });
-  vm.runInContext(fs.readFileSync(require.resolve('../js/pmjs-plugins/' + module + '.js'), 'utf8'), context);
+  const source = module === 'yanfly/save-core'
+    ? require('./helpers/save-core-fixture.cjs').prepareSaveCoreAdapter(context)
+    : fs.readFileSync(require.resolve('../js/pmjs-plugins/' + module + '.js'), 'utf8');
+  vm.runInContext(source, context);
   return { context, install() {
     for (const callback of loaded.values()) callback();
     for (const callback of phases.values()) callback();

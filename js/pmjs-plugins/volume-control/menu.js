@@ -34,16 +34,13 @@
     });
   }
   PMJS.phases.on('beforePlugins', 'pmjs.volume-control.menu', function() {
-    var load = PluginManager.loadScript;
-    PluginManager.loadScript = function(name) {
-      if (name !== 'volume setting.js') return load.apply(this, arguments);
-      var source = NativeHost.fs.readText(this._path + name);
+    PMJS.plugins.interceptLoad('volume setting', 'volume-control/menu', function(next, context) {
+      var source = NativeHost.fs.readText(context.path);
       if (!source || !globalThis.__pmjsBuiltinRequire ||
-          __pmjsBuiltinRequire('crypto').createHash('sha256').update(source).digest('hex') !==
-          '6da9feccde0a45cd1b8bade5f068b5d120b83166fbd43398b63f8314d6e88b94') return load.apply(this, arguments);
+          !PMJS.methods.matchesText(source, '6da9feccde0a45cd1b8bade5f068b5d120b83166fbd43398b63f8314d6e88b94')) return next();
       // This package contains an RGSS volume menu in a JavaScript slot. Its
       // four channels map to the engine's existing persisted volume settings.
       PMJS.phases.on('afterGuestPlugins', 'pmjs.volume-control.menu.install', installVolumeMenu);
-    };
+    });
   });
 })();

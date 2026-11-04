@@ -43,8 +43,7 @@ function fixture(options = {}) {
   delete Guest.prototype.updateTransform;
   let source = adapter;
   for (const name of methodNames) {
-    const digest = crypto.createHash('sha256').update(Function.prototype.toString.call(original[name])
-      .replace(/^function(?:\s+[\w$]+)?\s*\(/, 'function(')).digest('hex');
+    const digest = crypto.createHash('sha256').update(Function.prototype.toString.call(original[name])).digest('hex');
     source = source.replace(new RegExp('(' + name + ": ')[a-f0-9]{64}"), '$1' + digest);
   }
   if (options.unknown) Guest.prototype[options.unknown] = function() { this.calls.push('unknown'); };
@@ -234,4 +233,14 @@ test('native preparation hook returns false for unsupported instance', () => {
   assert.equal(map._pmjsPrepareTiles(), false);
   assert.deepEqual(operations, [['invalidate']]);
   assert.deepEqual(map.calls, []);
+});
+
+test('qualification reports the specific changed method without splitting eligibility', () => {
+  const { context } = fixture({ unknown: '_updateAnimFrames' });
+  for (const id of [painting, animation]) {
+    const record = context.PMJS.optimizations.dump().find(entry => entry.id === id);
+    assert.equal(record.enabled, false);
+    assert.equal(record.refusalReason, 'unrecognized tile preparation composition');
+    assert.equal(record.refusalDetail, 'TiledTilemap._updateAnimFrames');
+  }
 });

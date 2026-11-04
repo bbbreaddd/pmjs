@@ -8,7 +8,7 @@ const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { runModule } = require('./helpers/runtime-context.cjs');
 
-function contextFor(decrypter, XMLHttpRequest, clock = Date, streaming = false) {
+function contextFor(decrypter, XMLHttpRequest, clock = Date, streaming = false, streamingScript = null) {
   const loadedBytes = [];
   const loadedOptions = [];
   const released = [];
@@ -75,14 +75,23 @@ function contextFor(decrypter, XMLHttpRequest, clock = Date, streaming = false) 
     }
     const pitch = { configurable: true,
       get: function() { return -1; }, set: function() { throw new Error('browser pitch used'); } };
-    const functions = { ...replacements, pitchget: pitch.get, pitchset: pitch.set };
     const adapter = fs.readFileSync(path.resolve(__dirname,
       '../js/pmjs-plugins/audio-streaming/native-audio.js'), 'utf8');
-    const fixture = adapter.replace(/(\w+): '[a-f0-9]{64}'/g, (entry, name) => {
-      if (!functions[name]) return entry;
-      const body = Function.prototype.toString.call(functions[name])
-        .replace(/^(async )?function(?:\s+[\w$]+)?\s*\(/, '$1function(');
-      return name + ": '" + createHash('sha256').update(body).digest('hex') + "'";
+    if (streamingScript !== null) {
+      context.NativeHost.fs = { readText: () => streamingScript };
+      context.helperLoads = [];
+      context.PluginManager = { loadScript(name) {
+        return context.PMJS.plugins.loadScript(name, 'js/plugins/' + name, () => context.helperLoads.push(name));
+      } };
+    }
+    const fixture = adapter.replace('f921703e4d5f8c96f94bbf26af9bdc21d761987d3b39e0e7b71a461b29d5385b',
+      streamingScript === null ? 'f921703e4d5f8c96f94bbf26af9bdc21d761987d3b39e0e7b71a461b29d5385b'
+        : createHash('sha256').update(streamingScript).digest('hex')).replace(/var reviewed = ([\s\S]*?);/, (_entry, literal) => {
+      const reviewed = vm.runInNewContext('(' + literal + ')');
+      const digest = fn => createHash('sha256').update(Function.prototype.toString.call(fn)).digest('hex');
+      for (const [name, method] of Object.entries(replacements)) reviewed[name] = digest(method);
+      reviewed.pitch = { get: [digest(pitch.get)], set: [digest(pitch.set)] };
+      return 'var reviewed = ' + JSON.stringify(reviewed) + ';';
     });
     vm.runInContext(fixture, context);
     context.streamingReplacements = replacements;
@@ -231,6 +240,20 @@ test('unknown streaming composition is reported without partially restoring meth
   assert.equal(prototype._load, context.streamingReplacements._load);
   assert.equal(prototype.seek, unknown);
   assert.deepEqual(context.compatHits, [['plugins.audio-streaming.voice', 'unrecognized seek replacement']]);
+});
+
+test('unknown pitch accessors preserve the complete guest decoder composition', () => {
+  const context = contextFor({ hasEncryptedAudio: false }, undefined, Date, true);
+  const prototype = context.WebAudio.prototype;
+  const pitch = { configurable: true,
+    get: function() { return -1; }, set: function(value) { this.authoredPitch = value; } };
+  context.installStreamingPlugin(() => {
+    prototype._load = context.streamingReplacements._load;
+    Object.defineProperty(prototype, 'pitch', pitch);
+  });
+  assert.equal(prototype._load, context.streamingReplacements._load);
+  assert.equal(Object.getOwnPropertyDescriptor(prototype, 'pitch').set, pitch.set);
+  assert.deepEqual(context.compatHits, [['plugins.audio-streaming.voice', 'unrecognized pitch replacement']]);
 });
 
 test('failed streaming load does not run the native composition installer', () => {
@@ -774,3 +797,28 @@ test('MV stop callbacks appended during dispatch run in the same stop', () => {
   assert.deepEqual(events, ['first', 'second', 'appended']);
   audio.clear();
 });
+
+for (const outcome of ['reviewed', 'unknown', 'failed']) {
+  test('streaming helper interception is scoped to the load attempt: ' + outcome, () => {
+    const context = contextFor({ hasEncryptedAudio: false }, undefined, Date, true, 'reviewed streaming fixture');
+    const loader = context.PluginManager.loadScript;
+    const original = context.WebAudio.prototype._load;
+    const load = () => context.installStreamingPlugin(() => {
+      context.PluginManager.loadScript('stbvorbis_stream.js');
+      context.PluginManager.loadScript('OtherHelper.js');
+      context.PluginManager.loadScript('stbvorbis_stream.js');
+      assert.deepEqual(context.helperLoads, ['OtherHelper.js']);
+      if (outcome === 'failed') throw null;
+      context.WebAudio.prototype._load = outcome === 'reviewed'
+        ? context.streamingReplacements._load : function unknownDecoder() {};
+    });
+    if (outcome === 'failed') assert.throws(load, caught => caught === null);
+    else load();
+    assert.equal(context.PluginManager.loadScript, loader);
+    assert.deepEqual(context.helperLoads, outcome === 'unknown'
+      ? ['OtherHelper.js', 'stbvorbis_stream.js', 'stbvorbis_stream.js'] : ['OtherHelper.js']);
+    if (outcome === 'reviewed') assert.equal(context.WebAudio.prototype._load, original);
+    context.PluginManager.loadScript('stbvorbis_stream.js');
+    assert.equal(context.helperLoads.at(-1), 'stbvorbis_stream.js');
+  });
+}

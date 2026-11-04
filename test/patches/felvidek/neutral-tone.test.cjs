@@ -76,6 +76,7 @@ function fixture({ enabled = true, modified = false } = {}) {
     return 'modified-result';
   };
   const original = proto.updateToneChanger;
+  require('../../helpers/runtime-context.cjs').runModule(context, 'js/pmjs-core/methods.js');
   vm.runInContext(adapted, context);
   assert.equal(registration.id, 'felvidek.neutral-tone-bypass');
   assert.equal(registration.owner, 'pmjs-felvidek');

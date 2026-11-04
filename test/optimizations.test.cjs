@@ -334,3 +334,17 @@ test('unreadable exception details cannot suppress the refusal reason or escape 
     '[pmjs-opt] scene.graphics-cache refused for this use: capture failed; fallback: test fallback',
   ]);
 });
+
+test('refusal detail identifies a method without changing reason categories or deduplication', () => {
+  const { PMJS, warnings } = loadRegistry();
+  registerOwnerIds(PMJS, sceneIds);
+  PMJS.optimizations.refuse(sceneIds[0], 'unrecognized pipeline', 'Target.draw');
+  PMJS.optimizations.refuse(sceneIds[0], 'unrecognized pipeline', 'Target.other');
+  const record = PMJS.optimizations.dump().find(entry => entry.id === sceneIds[0]);
+  assert.equal(record.refusalReason, 'unrecognized pipeline');
+  assert.equal(record.refusalDetail, 'Target.draw');
+  assert.deepEqual({ ...record.fallbackCounts }, {});
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /unrecognized pipeline \(Target.draw\)/);
+  assert.equal(PMJS.optimizations.isEnabled(sceneIds[1]), true);
+});

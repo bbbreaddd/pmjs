@@ -16,36 +16,31 @@
   // Match the complete reviewed function, including parameters and literals.
   // Formatting changes safely retain guest behavior until reviewed.
   function matchesReviewedFunction(fn, expected) {
-    if (typeof fn !== 'function' || !globalThis.__pmjsBuiltinRequire) return false;
-    var source = Function.prototype.toString.call(fn)
-      .replace(/^function(?:\s+[\w$]+)?\s*\(/, 'function(');
-    var digest = globalThis.__pmjsBuiltinRequire('crypto').createHash('sha256')
-      .update(source).digest('hex');
-    return expected.indexOf(digest) >= 0;
+    return PMJS.methods.matchesSource(fn, expected);
   }
 
   function isKnownOliviaUpdateHorrorEffects(fn) {
     return !fn?._pmjsOliviaGuard && matchesReviewedFunction(fn, [
       '5a2e127a3a66d10dbac9ea5a08ce2f600c8c51737d8e60141b8e3fab61f4b66f',
-      '7cd8f49ed0c48d2c09f74c0929d746aa386144b15fd2cfef36355e72c242d0c6']);
+      '3d661c4d877d03ab6263383bef281abd7af0762b56a8358036fddb2ab961d6f8']);
   }
 
   function isKnownOliviaNoise(fn) {
     return !fn?._pmjsOliviaGuard && matchesReviewedFunction(fn, [
       '5886848c86d64f40d6342cd985179c8d0f328e8d4231011f044ebcd3b8c2d686',
-      '06a62ec9c00c829546c651d7c248fa5cf1c9d5007094b9868e64630fd4dc6cbe']);
+      '39ecec355e2ba9f146be450dc1db0e3383f1f8145e99bae4aa607fcb3427d751']);
   }
 
   function isKnownOliviaGlitch(fn) {
     return !fn?._pmjsOliviaGuard && matchesReviewedFunction(fn, [
       '1dfffbc540671e82481f9d99431290422c72a8c1b036a25c68e52708457b406c',
-      'faba80faab2954519f730e298bd4b9315b7dc9b5a6c72c60669fabd179ef66ee']);
+      'e9cd9bde2e143ff995b921da4afdaf4f1f580f2fa6340888a36e7536f5e20ea6']);
   }
 
   function isKnownOliviaTV(fn) {
     return !fn?._pmjsOliviaGuard && matchesReviewedFunction(fn, [
       'f5469ca6d318fe389e00824aa5daf6f698f3e4a300b21a79372910c5434f2254',
-      '995aed7c210f48e6e16c01934644f6ba6bf5bcffe81ee1a1bb8b848fcd7a8164']);
+      '16f0ea220202863bd97b9004f9e0645091724d5c16fd1872c1fb04057b56bd50']);
   }
 
   function hasActiveHorrorFilter(sprite) {

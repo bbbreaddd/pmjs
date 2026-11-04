@@ -105,22 +105,22 @@
     if (!PMJS.optimizations.isEnabled(id)) return;
     var prototype = globalThis.Window_BattleStatusUpgrade && Window_BattleStatusUpgrade.prototype;
     var config = globalThis.SRD && SRD.BattleStatusCustomizer;
-    var crypto = __pmjsBuiltinRequire('crypto');
     var methods = {};
+    var mismatch = null;
     if (!prototype || !config || !Object.keys(knownMethods).every(function(name) {
       var fn = prototype[name];
-      if (typeof fn !== 'function') return false;
+      if (typeof fn !== 'function') { mismatch = name; return false; }
       methods[name] = fn;
-      return crypto.createHash('sha256').update(Function.prototype.toString.call(fn)
-        .replace(/\r\n/g, '\n')).digest('hex') === knownMethods[name];
+      var recognized = PMJS.methods.matchesSource(fn, knownMethods[name]);
+      if (!recognized) mismatch = name;
+      return recognized;
     })) {
-      PMJS.optimizations.refuse(id, 'unrecognized battle status drawing pipeline');
+      PMJS.optimizations.refuse(id, 'unrecognized battle status drawing pipeline', mismatch || 'Window_BattleStatusUpgrade/SRD.BattleStatusCustomizer');
       return;
     }
     var originalUpdate = prototype.updateRefreshes;
-    if (typeof originalUpdate !== 'function' || knownUpdates.indexOf(crypto.createHash('sha256')
-        .update(Function.prototype.toString.call(originalUpdate).replace(/\r\n/g, '\n')).digest('hex')) < 0) {
-      PMJS.optimizations.refuse(id, 'battle status refresh checks unavailable');
+    if (typeof originalUpdate !== 'function' || !PMJS.methods.matchesSource(originalUpdate, knownUpdates)) {
+      PMJS.optimizations.refuse(id, 'battle status refresh checks unavailable', 'updateRefreshes');
       return;
     }
     var cached = new WeakMap(), updating = new WeakSet();

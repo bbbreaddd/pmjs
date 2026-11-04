@@ -9,10 +9,7 @@
   PMJS.phases.on('afterGuestPlugins', id, function() {
     if (!PMJS.optimizations.isEnabled(id)) return;
     var manager = globalThis.SceneManager;
-    var sources = [
-      'fd67a99417af28ca8e3b032f8f689fe17a2b83e2bb19e6b8319190aee36ded71',
-      'f7bd76b11be965ea38a28a82c19ff331e4c924d02c37f9c57a904b31d540ef2a'
-    ];
+    var sources = ['f7bd76b11be965ea38a28a82c19ff331e4c924d02c37f9c57a904b31d540ef2a'];
     if (!manager || typeof manager.resume !== 'function' ||
         !PMJS.methods.matchesSource(manager.determineRepeatNumber, sources)) {
       PMJS.optimizations.refuse(id, 'unrecognized repeat timing or missing resume');

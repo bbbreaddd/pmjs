@@ -11,12 +11,14 @@
       _startPlaying: '844585d3eb3c60833793691ba03709dda325f8d5cf2d6bede6dc46a05a6094f3',
       _updatePanner: 'd41b2c7f1084589be29bdbd92c49140ea13e0bd3aa48915392454307d7f39f92'
     };
+    var mismatch;
     if (!globalThis.__pmjsBuiltinRequire || !NativeHost.media.setAudioStereoBalance ||
         Object.keys(reviewed).some(function(name) {
-          return typeof prototype[name] !== 'function' || __pmjsBuiltinRequire('crypto').createHash('sha256')
-            .update(Function.prototype.toString.call(prototype[name])).digest('hex') !== reviewed[name];
+          if (PMJS.methods.matchesSource(prototype[name], reviewed[name])) return false;
+          mismatch = name;
+          return true;
         })) {
-      PMJS.compat.hit('plugins.java-hut.native-audio', 'unrecognized audio method composition');
+      PMJS.compat.hit('plugins.java-hut.native-audio', 'unrecognized audio method composition' + (mismatch ? ': ' + mismatch : ''));
       return;
     }
     prototype._startPlaying = function(offset) {

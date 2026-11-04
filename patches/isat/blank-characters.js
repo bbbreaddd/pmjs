@@ -11,195 +11,192 @@
       PMJS.optimizations.refuse(id, 'unqualified ISAT sources');
       return;
     }
-    var req = typeof __pmjsBuiltinRequire === 'function' ? __pmjsBuiltinRequire : require;
     var refusals = [];
     var hashes = {
       "Sprite_Character": {
         "update": [
-          "a9c8a84156f5a958c8288082830fc79b4be6cf9227259ae6e7de4c59275e6d63"
+          "6bffe01ec98ab0ec3a3033cda99e348aaca341a2e26584cd4689a4d2a2615251"
         ],
         "updateBitmap": [
-          "0ad23bbdcb8599da64e6cdba9c08ee16a48be70048a458e2d6f1bbdc0feef983"
+          "71c23e9a8c236d690977d51279a300364e957a20bf49d242f92ac297a9ac85f9"
         ],
         "isImageChanged": [
-          "e92423027f7224d82502c383d48e2670355d1026281124d59c4e7e09e11fac2a"
+          "eac0bd1a91158ec454d19b0fec02357ef17f76b0d7bd4f0e2ced2e1935cdbeb9", "ae9d40ad596788e34ba124e3aaabd2ba87e2a559c2f9ebe5ba6c7bb197809098"
         ],
         "updateFrame": [
-          "b79ffabdab714138327909a3f01d9d9afd60f63f025bfae134aad51366f052dd"
+          "f9fa3e9e43adcbeea4ed8a637aa167b3d9a6f19eb9b040005345dce9c8619f91"
         ],
         "updateCharacterFrame": [
-          "df204cc18118e6f2fda30f909d02b1ac43e161b37178ae17c888891d562f7d8f",
-          "2bdf1fd784784daca14e0a7a9fc152c857a6e4c7b8cbd54a73a2c15936b8aec9"
+          "719880bcf767f19364aec2737025ca9cd316c19a955c4e314f4c8542b7019e8d",
+          "9fd6a0ad3f31ed2b7d2a6b1c89c188c614aedb920bf2c345fc09f77bc8fec89d"
         ],
         "updatePosition": [
-          "8e809e963340dce69243818d148e91b6458d76149e001ef7fef076a7384544d8"
+          "33d303c624383759b3803f99526bec76e75e95cfb53b9d1834abaf983b8676f1"
         ],
         "updateAnimation": [
-          "9e7fee5b9e71ed5723751fc6547f5f9040bbb5a49b5d6a56802db1de4b5230f0"
+          "52ed1b23f87b3225cf677a6caa5aa7ee66ebb6db5cb722003ccec21b941061ac"
         ],
         "updateOther": [
-          "b3032277645e1c76020e9afc394c6c5ff88cbdc6a6b997ac6feb14e94e60a9a7"
+          "e9c96c8aa36e67085ceb32d432614f20382adae38c63f9a1b288f925fb01f3ae"
         ],
         "updateVisibility": [
-          "b086c3733259d2f3b01a886205f8e7523f4629eff2bf359f35073e14eac53e11"
+          "2be69dbd3f7bb089dbb86f5387de11c1f8647007c662cc4c2c78edd02dd14bc4"
         ],
         "updateBalloon": [
-          "59f08aa025c126497008b3ace825544b661250d1f57b33ed89d09c15b9b5b358",
-          "2cb485166e64389e7d18f40597daabc49019a6b95dcb714ac909d51f7a452f8b"
+          "83534184b260259d66543b87707ca28b0844ce62ecd491dc98ba0b63b95c8d55",
+          "b11edec76ba3617aec03f9658a4c2d95f0e5b3e3fa5f892b7c7976102758ed7f"
         ],
         "setupBalloon": [
-          "645b2a4c7498169766bfcbb85c2aad0d6ff47a8a26e654c779a12414b55ebaba"
+          "480fac3e85315d55d399c44a33efba36d80b496cab5ca75d8d78edc31c89b124"
         ],
         "startBalloon": [
-          "c73398827aceab224def201343956db8ed48e9a6bbcf147f730b02ee714084c8"
+          "a0c30ab65be92f5e5a386a5ec3f2e7be868574ceb8c85bcb2a2b03b0042743d9"
         ],
         "endBalloon": [
-          "9054688d8cf5f11caca79aeca7aaad2ac94ca6cbdf9767e7ce43e8831cbde554"
+          "73dc2b393f5dbc8400fd132250dbe193504767715971723c46bb46b3805c0509"
         ],
         "isBalloonPlaying": [
-          "10eb22c88e6e13c6dcac7a25dea27a5330655aba4452fd338d4595d44d42f51f"
+          "18f92a34954f00c632eed0daa9504bcd80ef2bdb0c800382d6f31fe6a9b269dd"
         ],
         "setupAnimation": [
-          "867b2cf943ca7c6417a513a2d494ec16f34fc802531a1d237d97bc04eadf9790"
+          "a1d8332023fb69796552c4bb24b6e7e39203445740898735374c8348a03cc326"
         ],
         "updateHalfBodySprites": [
-          "0dc95c24a4048049298b1e54559c635f82f11eb5ed780d514bfc099fdb823bc2",
-          "e552fd05edff096b4868f5e1d6b05076d947dba3e2ab07b5a753d4010b45fa0b"
+          "47092631641a26aa9d3d7e9f80e1840b8f0fb9e12e6b2a3a454cb3788a16ff78",
+          "dc65b8c8604adc6a5d1af43015c944195f69dfb3e24e39cb19ee2a766a15a9a4"
         ],
         "patternWidth": [
-          "13e0b1e14099fc5d6678100a59b9d8d23b29f4a42cef09f25061823023846b7f"
+          "46d44179ca8be450446e5486f0833d96341cccf2818bc772256de52f0ab5e3f6"
         ],
         "patternHeight": [
-          "ea8a8a66748df6a374eae65149b6269d1db0c567489eb6aaa41dd764bc3ee67d"
+          "6bcbe7b8a62bed13e40f7f299222c571593ee561cc9d1b6e484d0a006318d7d3"
         ],
         "characterBlockX": [
-          "69e6eac8a0bf113c16d1ef8149ec4dfa2e37cdda5e915225de234687c6fc54e8"
+          "76d7c5af3b172bb03cb15aedf693673a32e4760c0c7a95a79bc420a5983317d1"
         ],
         "characterBlockY": [
-          "cefeada8bcbff467f48b94056bacc93028b9a1095e1cc0a3a9358e85614ff6c0"
+          "20953a88f0212e8821f2ed3cc0e3557ecf2988c1082a7c3dbc6444f89cea6de6"
         ],
         "characterPatternX": [
-          "5a47f7821e60d92a694a70ee33beb90410a52b6e0d5caf706fb95a5d2780cd17"
+          "d8367f4faa2dd88f43d512d35c9c2af9873798f219bac91f4589c9d88f1c6b95"
         ],
         "characterPatternY": [
-          "834752658fb8f0416bdabaf0eed4717e79b2bdde8470c48cf1dd95bbe8786b13"
+          "d82f8f1ef9c986740a1d6e0aed4c655f17a2847ddfe3305a5737859694d8c59d"
         ]
       },
       "Sprite_Base": {
         "update": [
-          "b62977ff0f19215e0016fc40338cfacc02506537d8dd235800a4922741148b32"
+          "fd9d2f86de93fece0c102aac5e1bb5aec263509403dc05be6d099db79a97f263", "2bc8d7a193bc04f901171c8003c18806cebfee25b96652bb8eac70730b268c20"
         ],
         "updateVisibility": [
-          "5a234bec04841ffd890107d71bd1ee9e4d8844bacd925c6c4274668f5b2e33fd"
+          "2c3e4c95bd9c9c047755085370a835ac99d5eee56c5a30e10512d80f95efa1c7", "c5c8e5ccce5781a4a6c50229161df45f731a462ac7afbb4e276f48aa70d1a9e5"
         ],
         "updateAnimationSprites": [
-          "9a633c703b9fcec19ba54f82616731f55a23d63ac5bf9146c0039a55ba80d924"
+          "30575574c798ac1d0086edb495a72ab561e65d4ae6090978004e1ed1a426a2fd"
         ],
         "isAnimationPlaying": [
-          "c8277edd3d7f795f6d62a3ec297989eff1dd7e69bf4a4da9ac5a0e2ed2a0dc68"
+          "f141b61a0662614e922f982e34dab974ea4887c2fcec5fa0c64279490141bf39", "a914b3c62dc7f2d1b5b248ed2ce0365978492d9406cdb896f6ca16f308bff68d"
         ],
         "startAnimation": [
-          "d6d350111544a4d79d911cc4f0ba4b93c5e256cd656b38b8485c1e050d1b71a4",
-          "7f0cbb6518f86cd8d32ccdf09ae831c22dbb8792b1c021f1fecb474b3f9499e6"
+          "10d9ca931693e47717a7eee8a178016285c462a9492a2c2cf93a29ffa91d95b1", "63d5dd7e1364ebbb3b8bb608ddcfc64ffc4ae5080f748c4de4e576e195c588c9",
+          "1e1782e4b008b27e5cd67edb45e6844830f4127c7b2620f424f6bd89da6feab9"
         ]
       },
       "Sprite": {
         "update": [
-          "2ad935d876647e3e2afa96693d068cf66f0277af063815569c2ceb156a195c63"
+          "afc0c175fbd5adfb4ffc57345ca0aea27ec1338fe74789c2c3599dca1c001594", "27950ec1883504d9dc0543d220c7b3149b48aaae13c837b2f7c5a937927877ef"
         ],
         "synchronizeHorrorFiltersWithSource": [
-          "a4ca6324145146f9262ad7d771dce505ad03059792504aea10a402c7c5daf2b6"
+          "77bd772fa8bd00f211d4dd7344afca3b4e2d0590567e2c7d84dbe04bb80a3d00"
         ],
         "updateHorrorEffects": [
-          "37019828d61b5843e7bc754e3dfcfb80e0339d1476b535e52c8c118b371b72f0",
-          "f8c3b893c3baed84440abb6c077de7e2c6a3360f37ad578b8323591ad308f00b"
+          "5a2e127a3a66d10dbac9ea5a08ce2f600c8c51737d8e60141b8e3fab61f4b66f", "3d661c4d877d03ab6263383bef281abd7af0762b56a8358036fddb2ab961d6f8",
+          "9260befd5b45556ad2fa3d618ba31a782c7b84396828aad1f27a2839d2f270fe"
         ],
         "updateHorrorNoise": [
-          "8966a254c2e2b968ad9e670411c6dbc1307bfaf7371384954074394abdbbbd88"
+          "5886848c86d64f40d6342cd985179c8d0f328e8d4231011f044ebcd3b8c2d686", "39ecec355e2ba9f146be450dc1db0e3383f1f8145e99bae4aa607fcb3427d751"
         ],
         "updateHorrorGlitch": [
-          "15144ef769079223bfe9778cc413fff04bceadae56140b24aba394d0759d03a6"
+          "e9cd9bde2e143ff995b921da4afdaf4f1f580f2fa6340888a36e7536f5e20ea6"
         ],
         "updateHorrorTV": [
-          "6235a5c3b482674171f2e812af28210118242cd27786b915eadca721e7c50d63"
+          "f5469ca6d318fe389e00824aa5daf6f698f3e4a300b21a79372910c5434f2254", "16f0ea220202863bd97b9004f9e0645091724d5c16fd1872c1fb04057b56bd50"
         ],
         "setFrame": [
-          "d2da51b9358213d5118bf62a309a473c1a331981b3fb9d03d69a874bf3a19475",
-          "724eaf2b57d0ba388ba49998b3607241e20f5f341fd1a0125ee58c32707d1634"
+          "7249cc11c521d64bf7945f8f41b64df58c8d85b88cb451ee5b1943350e4e5eec",
+          "e845b8472e5abe9f2be443d37c7b695dde240f92f9c252dd48e68c827970eee4"
         ],
         "_refresh": [
-          "acae7d04224dd9b3d2a4de8e94c46112ee2f75e2274c9c903610ade0acea5a20",
-          "7209bd252120e363461290d1133c2e67d5a04179a3a473c1d587a338b8a0717f",
-          "4030923425c2591e4913e9ada805e1bd2ecb38be5533292c6de58c0ab6f33643"
+          "ddde82855ebc9eb4daff5969f4831a8a8d669d0db3aa478fe5442d5d9aab9ea9", "e731cfedc090bebe4fb0aedda70dfb2156a05c270ec88ba0c11914484d78c0d2",
+          "2bd71ec71c58755bc083aa5ab20ebcadfa27175ed4797c1dc84ca8171bbeac56",
+          "4eb530a3a6e2eed80076515ae67787e9943dc3737e603c3f3d87cbcf4349a0b5"
         ]
       },
       "Game_CharacterBase": {
         "tileId": [
-          "ccefe0efc7932c30c5e00b57be18caacd6f7d7988d56c00dd882bad61dea1ce1"
+          "481710e9a33ea748bc40ece465f580d4ff00077d83d624a69c031f811a746bf5"
         ],
         "characterName": [
-          "8ca786b24e8cf719c998d73553551ffc0842257ea2a6cec6fdbf099b2e452855"
+          "b58d9b0f6575bdb0705e0ed33b8036a03aa11901972b8eaa0264a6b8d778eeb6"
         ],
         "characterIndex": [
-          "a17e7cf1abb34748fda7a7765a4f75bd42c477ed27315d676716c5ece87b180d"
+          "59542fc4ef3e8f9c26e2fd4f04fc80754eb47ceafd6a77c604618db069d4f915"
         ],
         "animationId": [
-          "1ace87bd25ad99cbb720717883900291ac7e6337a756c64fcd67c753716c37ef"
+          "1bcaa1f38731d3e5f166ca3c1b95b98c282609c0dd951976ecfee38d6fc8fc19"
         ],
         "balloonId": [
-          "e8a8dd59c0d8f1f44721add8bbe14537cc89717d0a0aaac4f4ac473a40138f4e"
+          "6d829ba381f164a748190b055a171b0baa6966931f4b8649132a1ecea9ae7b72"
         ],
         "isTransparent": [
-          "dd9d9ff814140e09e00ebe29f1fc77fe8ac2e48f986d91c62b1564f4cd4a081a"
+          "d79771b5540c6d63a72c60cdc1172dd4536620ed02e599f677bfe91542804968"
         ],
         "bushDepth": [
-          "82fa43b1f107118a3f6516bb08bb17e5db4d4a58b0f3eac6cac9db51ef3edaa8"
+          "8a4fbfe05d34f416a67d41668d56217bd7155e42736f34e1edda5fb8e3ca92dc"
         ],
         "opacity": [
-          "e2b236216f1e597cd27fb60fe3651833aebc2465f8481137603acb01d1e4159d"
+          "4dcb2ae4b3a1553030ea983ffd0c89ce9183be4156164e7ceaedcb0c40cecc72"
         ],
         "blendMode": [
-          "8f33d005893e2219070f0f5d2bbd57e9a3dc619e575b70d0e9412d9d83069243"
+          "931aa49e6553e52473b52ca64955e1811ce9104fd24dd44c149f21dce817babf", "5e01b0d546de9e1b215013b3faa655289e29cde7b8feba1cece567792b616f9d"
         ],
         "endAnimation": [
-          "d113990fdeacb4ed5d336af6ca11551616e90ca5c43a6b9c7a4cb9b0864eb4ff"
+          "9065933cc8e16535dd5f782b69aab944d2360820514ac4d992aeb275b14a571b"
         ],
         "endBalloon": [
-          "07409581d887bd39c3dc5f5de9970b217b2a1ac7e66cba966afb3101136de92a"
+          "621e0e09cc96adeb02991c4eade244ac0ec0107efc0552692dd40db9b6508b9a"
         ],
         "screenX": [
-          "059c0871416247c9a824cacda458b53396c89210d8115f10aa9dab3c0c69d243"
+          "903553f509554d6d28b7d773178fd88ce1e591f02653403cc664a698716a6625"
         ],
         "screenY": [
-          "85abaf2591c5ad7138d981be6be3c7d0bbadfd43c96242d0267c8967ffa44c0d"
+          "1981e8b2fc1feb72d89d76c2a5017462cd567791cb6a1fd033f13bc19a9a8a28"
         ],
         "screenZ": [
-          "cd565279771a9bc2d80af789edea592d8412dcdca583feda6fa477720796529f"
+          "ec039141a5695e2339edc3cf3281fdfde44472c96b357799e016988070006e68"
         ],
         "scrolledX": [
-          "ba97043a3816ffebf0be1a62f826398ac952b44217601a8bddeaeaad059b2c60"
+          "5e869b56b7d81491a8ec102d02a6c180f426188e3ed5443f12a5f653403a5753"
         ],
         "scrolledY": [
-          "3147a79031d994738da7e45335ae33e3b0841284e3d51436365a03be41a3221c"
+          "b06eeecf1d97d3ce88be0da79cb2fb3511f25d3eddfe48cf29e8e50e593f9aa9"
         ],
         "shiftY": [
-          "680db84b309bfe92aec1321b974057dac9af43e234cbda3b6aa9b0e51d078c55"
+          "f567fa2a0f50532f855cf925ba7476640529748df18395f6331dc36ea9dba125"
         ],
         "jumpHeight": [
-          "0f24616621d4b5d1568863e9309298b1acab36be247d1bc48f3465174203c1a7"
+          "e74c2dd6d43983d1f83290a2064547101c650eb6a703c0ea66ac76e8e1a6a71a"
         ],
         "pattern": [
-          "c02695471190a7154daaab964ab1acb5bf568ce4835de30e3134e3b630c4fa2f"
+          "f448c2f4006cf1441205392c63fe405784c375bd947ae83f444e78c285f87910"
         ],
         "direction": [
-          "811fbb690e1f5ecd518866a594f39a77fc9e1fc3e52f530108a0fd3dd0deb4e9"
+          "ff6d019794c6df7de9b2ac7d43dc5cfa37bbcbb9c61d8ff3cb4d5ec8e5364761", "05461066904aba317fdc295a0f58609eac081e21cd29357696f28fce81f8c719"
         ]
       }
     };
     function digest(method) {
-      if (typeof method !== 'function') return '';
-      var text = Function.prototype.toString.call(method).replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '').replace(/\s/g, '');
-      return req('node:crypto').createHash('sha256').update(text).digest('hex');
+      return typeof method === 'function' ? PMJS.methods.fingerprint(PMJS.methods.sourceOf(method)) : null;
     }
     var prototypes = { Sprite_Character: Sprite_Character.prototype, Sprite_Base: Sprite_Base.prototype,
       Sprite: Sprite.prototype, Game_CharacterBase: Game_CharacterBase.prototype };
@@ -213,20 +210,20 @@
       }
     }
     var stockSpriteUpdate = globalThis.Olivia && Olivia.HorrorEffects && Olivia.HorrorEffects.___Sprite_update___;
-    if (digest(stockSpriteUpdate) !== "78532174ec735787c0a11cd2f13d202337b529b526b9f7115aefdb4d082397ca") refusals.push('Olivia.Sprite_update predecessor');
+    if (!PMJS.methods.matchesSource(stockSpriteUpdate, ["0fd3a3e3f5fa2f6d60b4b6c805f4fe3533b02bcb1e154b7716503b626d32cfa9", "b0cc32cdeda35aad82df8f597061031fe5b8b4e65b710453dddeef90149e7de9"])) refusals.push('Olivia.Sprite_update predecessor');
     var animationPredecessor = globalThis.master2015hp && master2015hp.isatSnp && master2015hp.isatSnp.b_2;
-    var masterAnimation = digest(captured.Sprite_Base.startAnimation) !== "d6d350111544a4d79d911cc4f0ba4b93c5e256cd656b38b8485c1e050d1b71a4";
-    if (masterAnimation && digest(animationPredecessor) !== "d6d350111544a4d79d911cc4f0ba4b93c5e256cd656b38b8485c1e050d1b71a4") {
+    var masterAnimation = !PMJS.methods.matchesSource(captured.Sprite_Base.startAnimation, ["10d9ca931693e47717a7eee8a178016285c462a9492a2c2cf93a29ffa91d95b1", "63d5dd7e1364ebbb3b8bb608ddcfc64ffc4ae5080f748c4de4e576e195c588c9"]);
+    if (masterAnimation && !PMJS.methods.matchesSource(animationPredecessor, ["10d9ca931693e47717a7eee8a178016285c462a9492a2c2cf93a29ffa91d95b1", "63d5dd7e1364ebbb3b8bb608ddcfc64ffc4ae5080f748c4de4e576e195c588c9"])) {
       refusals.push('master2015hp.startAnimation predecessor');
     }
     var refreshRecords = PMJS.methods && PMJS.methods.dump().filter(function(record) { return record.key === 'Sprite._refresh'; }) || [];
-    if (digest(captured.Sprite._refresh) === "4030923425c2591e4913e9ada805e1bd2ecb38be5533292c6de58c0ab6f33643" &&
+    if (PMJS.methods.matchesSource(captured.Sprite._refresh, "4eb530a3a6e2eed80076515ae67787e9943dc3737e603c3f3d87cbcf4349a0b5") &&
         !refreshRecords.some(function(record) { return record.id === 'pmjs.mv.native-sprite-tint' &&
           record.state === 'installed' && record.mutations.length === 0; })) {
       refusals.push('nativeRefresh registration');
     }
     var mapUpdate = Spriteset_Map.prototype.update;
-    if (["4f825e15bc3d6970d76151eac35fd9e8b2238331ec8c862377668b52ba1a82f2", "08ad8110d18bbf8c9a4f622fec172408ccae413eb632f13c47abb1b432dbfa4e"].indexOf(digest(mapUpdate)) < 0) refusals.push('Spriteset_Map.update');
+    if (["e1ef16368f75f8f947b537e1ba65ef5a325f7c441c5f3bcb9ba1990dbebc9308", "3d511e82479f03dfe21a1145f8f713fc032dd953d42e0be1201fd554bdbea1ef"].indexOf(digest(mapUpdate)) < 0) refusals.push('Spriteset_Map.update');
     if (refusals.length) {
       PMJS.optimizations.refuse(id, 'unrecognized blank-character update graph: ' + refusals.join(', '));
       return;

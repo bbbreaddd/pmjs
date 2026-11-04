@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const crypto = require('node:crypto');
 const vm = require('node:vm');
 const test = require('node:test');
+const { runModule } = require('./helpers/runtime-context.cjs');
 
 function loadAdapter(file, pluginSource, context) {
   context.__pmjsBuiltinRequire = require;
@@ -12,6 +13,9 @@ function loadAdapter(file, pluginSource, context) {
   context.PluginManager = { _path: 'js/plugins/', loadScript() { throw new Error('unreviewed script delegated'); },
     parameters: () => ({ PhysicalAttacks: 'false', SkillTypes: '4 7' }) };
   const c = vm.createContext(context);
+  runModule(c, 'js/pmjs-core/methods.js');
+  runModule(c, 'js/pmjs-rpgmaker/plugins.js');
+  c.PluginManager.loadScript = name => c.PMJS.plugins.loadScript(name, 'js/plugins/' + name, () => { throw new Error('unreviewed script delegated'); });
   const source = fs.readFileSync(require.resolve('../js/pmjs-plugins/' + file), 'utf8')
     .replace(/'[a-f0-9]{64}'/, "'" + crypto.createHash('sha256').update(pluginSource).digest('hex') + "'");
   vm.runInContext(source, c);
@@ -75,6 +79,9 @@ for (const [file, name] of [['coelocanth/physical-attacks.js', 'physical_attack_
       NativeHost: { fs: { readText: () => 'changed script' } },
       PluginManager: { _path: 'js/plugins/', loadScript() { throw new Error('guest behavior'); } },
       PMJS: { phases: { on(phase, owner, callback) { callback(); } } } });
+    runModule(context, 'js/pmjs-core/methods.js');
+    runModule(context, 'js/pmjs-rpgmaker/plugins.js');
+    context.PluginManager.loadScript = name => context.PMJS.plugins.loadScript(name, 'js/plugins/' + name, () => { throw new Error('guest behavior'); });
     vm.runInContext(fs.readFileSync(require.resolve('../js/pmjs-plugins/' + file), 'utf8'), context);
     assert.throws(() => context.PluginManager.loadScript(name), /guest behavior/);
   });

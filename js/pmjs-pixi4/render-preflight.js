@@ -34,18 +34,18 @@
   // Reviewed Pixi 4.8.9 / MV 1.6.1 transforms; LF and CRLF are pinned separately.
   var reviewedTransforms = {
     '1a091756d85883232da57aa53141f43968c21abfc58b6b231a46c0faa9014861': 'container',
-    'c44d52cfc99a419e1167eab4728e62535865ba7b08fbf7007256347c54279a05': 'container',
+    '1a091756d85883232da57aa53141f43968c21abfc58b6b231a46c0faa9014861': 'container',
     'f611889101e9659a0c13ef6cdfa1b6a0be5edb374a52ad864169ddf6976d9a8e': 'leaf',
-    '43d25c2c3496afbacdd20beb43bf22665df1c53ee92c01ffcc5e01a9417bb06d': 'leaf',
-    '82e01e278fa992ea039746f47f6a00d322d7d4eb4de96042ab43a243f90abfb5': 'Window',
+    'f611889101e9659a0c13ef6cdfa1b6a0be5edb374a52ad864169ddf6976d9a8e': 'leaf',
     'cfcbeacef1f4ca9ed869519fdba23e734e6e70e75bce5b05bb75718e6fea548a': 'Window',
-    '157efc2a1a0d853d5b1a73253fb03d8e341262a186b777058e2477f94d38699e': 'Tilemap',
+    'cfcbeacef1f4ca9ed869519fdba23e734e6e70e75bce5b05bb75718e6fea548a': 'Window',
     '2169c8e4be4708d97d9be182006b653aa0fcdb74dd7c1cf1270b1dd4f3963e48': 'Tilemap',
-    'b7a7a370946ce0ae21b0627c85c55abd0efd8db9eef430a0afcb92f37637f236': 'ShaderTilemap',
+    '2169c8e4be4708d97d9be182006b653aa0fcdb74dd7c1cf1270b1dd4f3963e48': 'Tilemap',
     '0b7ff0daca0957e3b83d04114304eb6263ab76da0275136f9361ad02b06bbde6': 'ShaderTilemap',
-    '4f9a4db6586f0c4e6ea136575dfbfee6777ab55ee74cc963ee45a2d6f33274b0': 'MVTilingSprite',
+    '0b7ff0daca0957e3b83d04114304eb6263ab76da0275136f9361ad02b06bbde6': 'ShaderTilemap',
     '387766129c695c855bf5a624b0dd29893b5188d97f812d310ff6a7aa41979f8a': 'MVTilingSprite',
-    'abd83186c0164ab387381fbfd697391e57686aa3c68696fa1256d6cc0cd64b55': 'tileLeaf',
+    '387766129c695c855bf5a624b0dd29893b5188d97f812d310ff6a7aa41979f8a': 'MVTilingSprite',
+    '0938d1a3fcf18a6628689547f09640615c0b7a096e445b869559d2e3a6ecaa4f': 'tileLeaf',
     '0938d1a3fcf18a6628689547f09640615c0b7a096e445b869559d2e3a6ecaa4f': 'tileLeaf'
   };
   var containerClass = PIXI.Container;

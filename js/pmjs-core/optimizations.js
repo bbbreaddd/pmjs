@@ -137,7 +137,7 @@ PMJS.optimizations = {
     }
     return 'disabled by ' + state.disabledBy;
   },
-  refuse: function(id, reason) {
+  refuse: function(id, reason, detail) {
     if (pmjsOptimizationFinalized) {
       throw new Error('PMJS optimizations are finalized; cannot refuse: ' + id);
     }
@@ -149,8 +149,9 @@ PMJS.optimizations = {
     state.enabled = false;
     state.disabledBy = 'refusal';
     state.refusalReason = reason;
+    state.refusalDetail = detail || null;
     try {
-      console.warn('[pmjs-opt] ' + id + ' refused: ' + reason +
+      console.warn('[pmjs-opt] ' + id + ' refused: ' + reason + (detail ? ' (' + detail + ')' : '') +
         '; fallback: ' + state.fallback);
     } catch (_) {}
     return state.disabledBy;
@@ -182,6 +183,7 @@ PMJS.optimizations = {
       return { id: id, owner: state.owner, fallback: state.fallback,
         enabled: state.enabled, disabledBy: state.disabledBy,
         refusalReason: state.refusalReason || null,
+        refusalDetail: state.refusalDetail || null,
         fallbackReasons: Object.keys(state.fallbackReasons),
         fallbackCounts: { ...state.fallbackReasons } };
     });

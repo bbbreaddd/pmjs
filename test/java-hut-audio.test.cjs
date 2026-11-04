@@ -21,6 +21,7 @@ function setup(unknown = false) {
   const source = fs.readFileSync(require.resolve('../js/pmjs-plugins/java-hut/native-audio.js'), 'utf8')
     .replace(/(\w+): '[a-f0-9]{64}'/g, (text, name) => name + ": '" + crypto.createHash('sha256')
       .update(functions[name].toString()).digest('hex') + "'");
+  require('./helpers/runtime-context.cjs').runModule(c, 'js/pmjs-core/methods.js');
   vm.runInContext(source, c);
   Audio.prototype.play = play; Audio.prototype._startPlaying = start; Audio.prototype._updatePanner = panner;
   if (unknown) Audio.prototype._startPlaying = function() { return 'unreviewed'; };

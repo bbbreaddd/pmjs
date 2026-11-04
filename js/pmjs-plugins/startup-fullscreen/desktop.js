@@ -2,15 +2,11 @@
 
 (function() {
   PMJS.phases.on('beforePlugins', 'pmjs.startup-fullscreen.desktop', function() {
-    var load = PluginManager.loadScript;
-    PluginManager.loadScript = function(name) {
-      if (String(name).replace(/\.js$/i, '').toLowerCase() !== 'startupfullscreen') {
-        return load.apply(this, arguments);
-      }
+    PMJS.plugins.interceptLoad('StartUpFullScreen', 'pmjs.startup-fullscreen.desktop', function(next) {
       var isNwjs = Utils.isNwjs;
       Utils.isNwjs = function() { return true; };
-      try { return load.apply(this, arguments); }
+      try { return next(); }
       finally { Utils.isNwjs = isNwjs; }
-    };
+    });
   });
 })();

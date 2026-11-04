@@ -17,11 +17,8 @@
       var bitmap = PMJS.mv && PMJS.mv.bitmap;
       var font = typeof Bitmap !== 'undefined' && Bitmap.prototype._makeFontNameText;
       // MV 1.6.1 font builder and YEP_MessageCore 1.19 bold-font wrapper.
-      var stockFontHash = ['50358c83da9dd540dacde12b7c935afcf276d7ed451ea6e21dd1965654de031f',
-      'd5b3e2ff852f5ddb1d2cf0f225ff65d89406c63215200153772b03144e5e4237'];
-      var boldFontHash = ['60d0028b99682318828497993e2e2c1ba0175c4074e5a911903b12493e7d5443',
-      'bedb42165c2f90a3d3060c79b67dcadf46c9619308578463b936805f134b5ede',
-      'b72754a5d6ebdfcba8b1c9fd5843ee1a2b52dfac2ae992c19ef311ad0b4a0183'];
+      var stockFontHash = ['d5b3e2ff852f5ddb1d2cf0f225ff65d89406c63215200153772b03144e5e4237'];
+      var boldFontHash = ['bedb42165c2f90a3d3060c79b67dcadf46c9619308578463b936805f134b5ede', 'b72754a5d6ebdfcba8b1c9fd5843ee1a2b52dfac2ae992c19ef311ad0b4a0183'];
       var fontStillValid;
       if (!matches(font, stockFontHash)) {
         var message = globalThis.Yanfly && Yanfly.Message;

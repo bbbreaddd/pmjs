@@ -146,17 +146,16 @@
 
 
   function hash(text) {
-    return __pmjsBuiltinRequire('crypto').createHash('sha256')
-      .update(text.replace(/\r\n/g, '\n')).digest('hex');
+    return PMJS.methods.fingerprint(text);
   }
   function matchesSource(file, source) {
     var expected = sources[file];
     if (!expected || typeof source !== 'string') return false;
-    return (Array.isArray(expected) ? expected : [expected]).indexOf(hash(source)) >= 0;
+    return PMJS.methods.matchesText(source, expected);
   }
   PMJS.isatSourceMatches = matchesSource;
   PMJS.isatMethodHash = function(method) {
-    return typeof method === 'function' && hash(Function.prototype.toString.call(method));
+    return typeof method === 'function' && hash(PMJS.methods.sourceOf(method));
   };
 
   PMJS.phases.on('afterGuestPlugins', 'pmjs.isat.source-qualification', function() {

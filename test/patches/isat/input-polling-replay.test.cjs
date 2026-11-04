@@ -37,11 +37,9 @@ function fixture(spec, { enabled = true, savedCopy = false } = {}) {
     __pmjsBuiltinRequire: require,
     console: { warn: value => warnings.push(value), log() {} },
     PMJS: { isatSourceQualification: { verified: true },
-      methods: { matchesSource(method, hashes) {
-        return hashes.includes(crypto.createHash('sha256').update(
-          Function.prototype.toString.call(method)).digest('hex'));
-      } }, phases: { on(phase, id, callback) { phases.push({ phase, callback }); } } }
+      phases: { on(phase, id, callback) { phases.push({ phase, callback }); } } }
   });
+  require('../../helpers/runtime-context.cjs').runModule(context, 'js/pmjs-core/methods.js');
   vm.runInContext(`
     var effects = [], waits = [], messages = [], moves = [], pressed = new Set();
     var Graphics = { frameCount: 1 };
@@ -99,6 +97,10 @@ function fixture(spec, { enabled = true, savedCopy = false } = {}) {
     var guestWait = Game_Interpreter.prototype.wait;
     Game_Interpreter.prototype.wait = function(duration) { waits.push(duration); return guestWait.call(this, duration); };
   `, context);
+  const activitySource = fs.readFileSync(path.join(game, 'js/plugins/RG19.js'), 'utf8');
+  const activity = activitySource.match(/RG19\.OpenPS5Activity = (function\(\) \{[^\n]*?\});/);
+  assert.ok(activity, 'reviewed activity method must be available');
+  context.RG19.OpenPS5Activity = vm.runInContext('(' + activity[1] + ')', context);
   if (enabled) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../patches/isat/input-polling.js'), 'utf8'), context);
     const installers = phases.filter(entry => entry.phase === 'afterPlugins');

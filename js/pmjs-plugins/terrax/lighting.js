@@ -21,22 +21,22 @@
   // wrappers retain ordinary behavior until their composition is reviewed.
   function isKnownTerraxCreateLightmask(fn) {
     return PMJS.methods.matchesSource(fn,
-      'd4c1c118e263003d317475cbd0f3d0f2ed52b57c1e4251fa38bfe204c8e580b5');
+      'f66bec947329e01b9797d22c307b1fe2c7ab4c2c1eb1666431517c262ad549cc');
   }
 
   function isKnownTerraxAddSprite(fn) {
     return PMJS.methods.matchesSource(fn,
-      '4d84eff24f4ff08377d5770c777f19b4a28b28cc0fbcc26ba3e772e1ca5135b5');
+      'e7de1587b716859d2dd17c5c0d5454801d1cc0adcf86e89676f8a600f0572d30');
   }
 
   function isKnownTerraxRemoveSprite(fn) {
     return PMJS.methods.matchesSource(fn,
-      '0b9bbbb8af744215d532ed784b9d567f3943446e955c28c43f306f910e887cc4');
+      'f5831f7a3d4387940ddbb7bd4cc5ee237fd338158ba68fbf1317718640e0cf61');
   }
 
   function isKnownTerraxUpdateMask(fn) {
     return PMJS.methods.matchesSource(fn,
-      'c9ba1198824f74c3e3917b1c604e30d39f66ffdac937f28f54ec6b567f6d34b5');
+      '42c09b1b373f5ffbfe3b2f0897cb4ac105d0b495b466efe173089bc2019486eb');
   }
 
   var installedCreateLightmask;

@@ -226,7 +226,7 @@ test('dump reports owner, state, and mutation attribution', () => {
   assert.equal(target.update(), 'changed');
 });
 
-test('source matching retains literal whitespace, comments, parameters and line endings', () => {
+test('source matching retains literal whitespace, comments and parameters', () => {
   const { createHash } = require('node:crypto');
   const ctx = context({ __pmjsBuiltinRequire: require });
   const compile = source => vm.runInNewContext('(' + source + ')');
@@ -237,7 +237,6 @@ test('source matching retains literal whitespace, comments, parameters and line 
     ["function() { return 'a/*b*/c'; }", "function() { return 'ac'; }"],
     ['function() { return /a b/; }', 'function() { return /ab/; }'],
     ['function(value) { return value; }', 'function(other) { return value; }'],
-    ['function() {\r\n return 1;\r\n}', 'function() {\n return 1;\n}']
   ]) {
     const original = compile(source), replacement = compile(changed);
     assert.equal(matches(original, hash(original)), true);
@@ -300,6 +299,62 @@ test('reviewed source strings match exactly through the captured intrinsic reade
   assert.notEqual(ctx.PMJS.methods.sourceOf(changed), source);
   const multiline = 'function() {\n  return 3;\n}';
   const crlf = vm.runInNewContext('(' + multiline.replace(/\n/g, '\r\n') + ')');
-  assert.equal(ctx.PMJS.methods.matchesSource(crlf, multiline), false);
+  assert.equal(ctx.PMJS.methods.matchesSource(crlf, multiline), true);
   assert.equal(ctx.PMJS.methods.matchesSource(crlf, [multiline, multiline.replace(/\n/g, '\r\n')]), true);
+});
+
+test('all source qualification uses LF while preserving function names and bodies', () => {
+  const { createHash } = require('node:crypto');
+  const ctx = context({ __pmjsBuiltinRequire: require });
+  const hash = source => createHash('sha256').update(source).digest('hex');
+  const compile = source => vm.runInNewContext('(' + source + ')');
+  const lf = 'function Named(value) {\n return value;\n}';
+  const crlf = lf.replace(/\n/g, '\r\n');
+  const matches = ctx.PMJS.methods.matchesSource;
+  assert.equal(matches(compile(crlf), hash(lf)), true);
+  assert.equal(matches(compile(lf), hash(lf)), true);
+  assert.equal(matches(compile(crlf), lf), true);
+  assert.equal(matches(compile(lf), crlf), true);
+  for (const changed of [
+    lf.replace('Named', 'Other'), lf.replace('Named', ''),
+    lf.replace('return value;', '/* changed */ return value;'),
+    lf.replace(' return value;', '  return value;'),
+    lf.replace('return value;', 'return "a b";')
+  ]) assert.equal(matches(compile(changed), hash(lf)), false);
+  const asyncSource = 'async function Named(value) { return value; }';
+  assert.equal(matches(compile(asyncSource), hash(asyncSource)), true);
+  assert.equal(matches(compile(asyncSource.replace('Named', 'Other')), hash(asyncSource)), false);
+  assert.equal(ctx.PMJS.methods.matchesText('script\r\n', hash('script\n')), true);
+  assert.equal(ctx.PMJS.methods.fingerprint('script\r\n'), hash('script\n'));
+  assert.equal(ctx.PMJS.methods.matchesText(null, hash('')), false);
+  delete ctx.__pmjsBuiltinRequire;
+  assert.equal(matches(compile(crlf), hash(lf)), false);
+  assert.equal(matches(compile(crlf), lf), true);
+  assert.equal(ctx.PMJS.methods.fingerprint(lf), null);
+});
+
+test('whole-script qualification requires a fingerprint rather than accepting digest text as source', () => {
+  const { createHash } = require('node:crypto');
+  const ctx = context({ __pmjsBuiltinRequire: require });
+  const source = 'globalThis.reviewed = true;';
+  const digest = createHash('sha256').update(source).digest('hex');
+  assert.equal(ctx.PMJS.methods.matchesText(source, digest), true);
+  assert.equal(ctx.PMJS.methods.matchesText(digest, digest), false);
+  assert.equal(ctx.PMJS.methods.matchesText(digest, [digest]), false);
+  assert.equal(ctx.PMJS.methods.matchesText(source, source), false);
+});
+
+test('unavailable hashing refuses fingerprints while preserving exact function-source matching', () => {
+  const reviewed = function() { return 'reviewed'; };
+  const source = Function.prototype.toString.call(reviewed);
+  const digest = require('node:crypto').createHash('sha256').update(source).digest('hex');
+  for (const loader of [
+    () => { throw new Error('crypto unavailable'); },
+    () => ({ createHash() { throw new Error('hashing unavailable'); } })
+  ]) {
+    const ctx = context({ __pmjsBuiltinRequire: loader });
+    assert.equal(ctx.PMJS.methods.matchesSource(reviewed, digest), false);
+    assert.equal(ctx.PMJS.methods.matchesText(source, digest), false);
+    assert.equal(ctx.PMJS.methods.matchesSource(reviewed, source), true);
+  }
 });

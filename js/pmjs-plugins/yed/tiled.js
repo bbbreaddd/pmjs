@@ -13,33 +13,29 @@
   });
 
   var reviewedMethods = {
-    _paintAllTiles: 'e9b49d6deb06b751a5c2d605b252a951bbf3155c5db0ab4a1a2d2fc090ea2aec',
-    _updateLayerPositions: '192c62e166187aeb511ac40046b4299999b4f53fe4dd1a77a5676f734d8eeeeb',
-    _paintObjectLayers: '695762171e06d553823ce50a2c1b54067ae9e124c893b24ba116c42cd4a9dc8e',
-    _paintTilesLayer: '2ffe4cd820664ad0911e7f25db7272416613dfde1d4e2b772373637f0f6773ec',
-    _paintTile: '3179495717cb0e9ee850549aad37258435125b8b91f980e7a965ecb35fd0f40e',
-    _paintPriorityTile: '9d8ed2d54c4397ed8fc7ac5ffb202022c37bb11af28b9611c2e42fd8cf22d1c3',
-    _updateAnim: '61c2fed25261010df7f9b37abb4f691863ef23f2e3d84aad3f50d4599d9d840b',
-    updateTransform: 'b7a7a370946ce0ae21b0627c85c55abd0efd8db9eef430a0afcb92f37637f236',
-    _compareChildOrder: '4a81bea0be0ed6cb764109f1846f04e4bae324b85999d5258bdf920e3f4eb012',
-    _paintTiles: '7b10b95d1b40b756830d4a685e29706839bdc548fd2b1fddd53ada242edc33bc',
-    _getTextureId: 'd61c490aaedc4da890a6f13299bfa605a707146a1eb4fad8a9a303ef17f7d3b3',
-    _getAnimTileId: '6b2481626a353fe2df179a7260405ee1a32b2ca7af8acc6a5a5254d19d47e637',
-    _getPriority: 'aeac6b3ac39790e16616036a059d0114218504718d8bee3dc0dea93b4b4b05d9',
-    _isPriorityTile: 'a83e33b7e55289e825b00d3a60e3f83d622f8843199ce0efbb1ee5e29f45beeb',
-    _getZIndex: 'd04b04844182e1fcc628e8d0b21899fdcde0cc0d7649a720207f862894791b99',
-    _updateAnimFrames: '1784d51ae97e984417d78e6ba34073a9d31e53259873765f040d3693cf9ab8cf',
-    hideOnLevel: '0140d27e86bc6e413e5450c27b2446445b7c26a180de67339b7d54f6926e14aa',
-    _sortChildren: 'f70b7bc23a18ba594dba1664022d1aac77f4285cde92b18e3c4040d995a82210'
+    _paintAllTiles: '1bba1daa9d6fc8acc867abb2a294246a47aadcbcb5fa218ac22fbd5e1beaa89f',
+    _updateLayerPositions: '1a2e2865cc172588e7e32bfbdaee4935dd0049d51c659435981849e370cd43ca',
+    _paintObjectLayers: 'cf071947f708471afc2df032e5f90cb7b8e5c7bda22aab6b8030d1138bf025c4',
+    _paintTilesLayer: '5deda3d868a70344e8fa64fb4f334b93fa565846d50e6a58306978e6a77b403c',
+    _paintTile: '75b4aab273a49dc43676a165418acfff0d94769985666629b8e6bc55d7c7e2ba',
+    _paintPriorityTile: '62ddc0287ad5710cb51507fa58ac284c6c172a459aba35325215584ad1588e81',
+    _updateAnim: 'b7d03e8e83c836f3c7464014c4784cc4e90982fe660545f6701ceda190471b89',
+    updateTransform: '0b7ff0daca0957e3b83d04114304eb6263ab76da0275136f9361ad02b06bbde6',
+    _compareChildOrder: 'db07efd07e95b65b3aa502a0d9ae5f75da827d46e64e5449a6347b01ef22aac8',
+    _paintTiles: '53df696c0ef8be7331a1a992298d58620b6f302bc38e7d317b087ece941e813a',
+    _getTextureId: '040618de07ca6b6897c7765d0990d13f27be85cdc478e534cc3f224c2afb343f',
+    _getAnimTileId: '77cb7812f66610870bc0f6b774091f760ea9bed6b4cad7bf2988778d491306c7',
+    _getPriority: '8f23b6281737b5f857dde3c2d613244d4c43f3cbb7cf5cbb90febd001d391f57',
+    _isPriorityTile: '5e12217040f5abf6272ec5421d73c234cce1f0860371f0cdf89197df0372aa6e',
+    _getZIndex: '2fdeac7553ac8ea51ccdf937cde52e16d28ddf1fcea1f2aa6c149c999e06986d',
+    _updateAnimFrames: 'bf0d3158238176ad550b6a9360ccccde094c035d5c83ab4def866786fa369379',
+    hideOnLevel: 'b34a77a24826714c608486703bf6c0b7e143da74946002bd3a3e672b02752a1a',
+    _sortChildren: '31e0ce88f7b3499320e66a5cc868df35b3a02ea9bb5d03927393927a260050d9'
   };
   var contracts = new WeakMap();
 
   function matches(fn, digest) {
-    if (typeof fn !== 'function' || !globalThis.__pmjsBuiltinRequire) return false;
-    var source = Function.prototype.toString.call(fn)
-      .replace(/^function(?:\s+[\w$]+)?\s*\(/, 'function(');
-    return globalThis.__pmjsBuiltinRequire('crypto').createHash('sha256')
-      .update(source).digest('hex') === digest;
+    return PMJS.methods.matchesSource(fn, digest);
   }
 
   function dataContract(data) {
@@ -61,10 +57,10 @@
     return true;
   }
 
-  function rejectActivation(reason, beforeBoot) {
+  function rejectActivation(reason, beforeBoot, detail) {
     [paintingId, animationId].forEach(function(id) {
-      if (beforeBoot) PMJS.optimizations.refuse(id, reason);
-      else PMJS.optimizations.reportFallback(id, reason);
+      if (beforeBoot) PMJS.optimizations.refuse(id, reason, detail);
+      else PMJS.optimizations.reportFallback(id, reason, detail);
     });
     if (PMJS.maps) PMJS.maps.tiledContract = function() { return reason; };
   }
@@ -80,13 +76,16 @@
     }
     var prototype = constructor.prototype;
     var names = Object.keys(reviewedMethods);
-    var qualified = !Object.prototype.hasOwnProperty.call(prototype, 'updateTransform') &&
+    var mismatch = Object.prototype.hasOwnProperty.call(prototype, 'updateTransform') ? 'updateTransform' : null;
+    var qualified = !mismatch &&
       names.every(function(name) {
-        return name === '_compareChildOrder' && prototype[name] === undefined ||
+        var recognized = name === '_compareChildOrder' && prototype[name] === undefined ||
           matches(prototype[name], reviewedMethods[name]);
+        if (!recognized) mismatch = name;
+        return recognized;
       });
     if (!qualified) {
-      rejectActivation('unrecognized tile preparation composition', beforeBoot);
+      rejectActivation('unrecognized tile preparation composition', beforeBoot, 'TiledTilemap.' + mismatch);
       if (PMJS.maps) PMJS.maps.tiledContract = function() { return 'unreviewed-tiled-methods'; };
       return;
     }

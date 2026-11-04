@@ -8,6 +8,7 @@
   var loadSequence = 0;
   var callbacks = Object.create(null);
   var loadingCallbacks = Object.create(null);
+  var interceptors = Object.create(null);
   var finished = false;
   var bootError = null;
   var optimizationRequirements = [];
@@ -43,7 +44,7 @@
   }
 
   function invokeCallback(plugin, owner, callback, phase, receiver) {
-    try { Reflect.apply(callback, receiver, []); } catch (error) {
+    try { return Reflect.apply(callback, receiver, []); } catch (error) {
       console.error('[pmjs] error running ' + phase + ' callback for ' + plugin +
         ' (owner ' + owner + '):', error);
       throw error;
@@ -188,16 +189,40 @@
       });
     },
 
+    interceptLoad: function(name, owner, callback) {
+      if (typeof callback !== 'function') throw new TypeError('Plugin load interceptor must be a function');
+      var canonical = key(name);
+      var listener = { owner: owner, callback: callback };
+      var list = interceptors[canonical] || (interceptors[canonical] = []);
+      list.push(listener);
+      return function() {
+        var index = list.indexOf(listener);
+        if (index >= 0) list.splice(index, 1);
+      };
+    },
+
+    loadScript: function(name, path, load) {
+      var listeners = (interceptors[key(name)] || []).slice();
+      var context = { name: name, path: path };
+      function next(index) {
+        if (index === listeners.length) return load();
+        return listeners[index].callback(function() { return next(index + 1); }, context);
+      }
+      return next(0);
+    },
+
     execute: function(name, load) {
       var token = null;
       var error = null;
       var loadFailed = false;
+      var cleanups = [];
       try {
         token = PMJS.methods.beginPlugin(name);
         var listeners = loadingCallbacks[key(name)] || [];
         delete loadingCallbacks[key(name)];
         listeners.forEach(function(listener) {
-          invokeCallback(key(name), listener.owner, listener.callback, 'loading', listener);
+          var cleanup = invokeCallback(key(name), listener.owner, listener.callback, 'loading', listener);
+          if (typeof cleanup === 'function') cleanups.push(cleanup);
         });
         load();
       } catch (caught) {
@@ -206,6 +231,18 @@
         failed(name, caught);
         throw caught;
       } finally {
+        var cleanupError, cleanupFailed = false, propagateCleanup = false;
+        cleanups.reverse().forEach(function(cleanup) {
+          try { cleanup(); } catch (caught) {
+            if (!cleanupFailed) { cleanupError = caught; cleanupFailed = true; }
+          }
+        });
+        if (!loadFailed && cleanupFailed) {
+          propagateCleanup = true;
+          error = cleanupError;
+          loadFailed = true;
+          failed(name, error);
+        }
         if (token) {
           try { PMJS.methods.endPlugin(token, { error: error, failed: loadFailed }); }
           catch (auditError) {
@@ -215,6 +252,7 @@
             catch (_) { /* The original load failure is already propagating. */ }
           }
         }
+        if (propagateCleanup) throw cleanupError;
       }
       loaded(name);
       return true;

@@ -11,8 +11,7 @@
     var create = prototype && prototype.createWebGLToneChanger;
     var webgl = prototype && prototype.updateWebGLToneChanger;
     function hash(method) {
-      return typeof method === 'function' && __pmjsBuiltinRequire('crypto').createHash('sha256')
-        .update(Function.prototype.toString.call(method).replace(/\r\n/g, '\n')).digest('hex');
+      return typeof method === 'function' && PMJS.methods.fingerprint(PMJS.methods.sourceOf(method));
     }
     if (typeof globalThis.ToneFilter !== 'function' ||
         hash(create) !== '92ec27688f58bff9c19fcc5f7183e6717d7a23712572a7bedfb3dd0e02d1e677' ||

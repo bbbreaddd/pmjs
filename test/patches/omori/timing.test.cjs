@@ -26,7 +26,7 @@ function fixture({ enabled = true, qualified = true, resume = true, lateChange =
       phases: { on(name, id, callback) { hooks.set(name, callback); } },
       methods: {
         matchesSource(fn, accepted) {
-          assert.equal(accepted.length, 2);
+          assert.equal(accepted.length, 1);
           return qualified && fn === guestRepeat;
         },
         wrap(definition) { wrappers.push(definition); }
