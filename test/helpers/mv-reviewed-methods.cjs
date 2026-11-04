@@ -1,5 +1,5 @@
 'use strict';
-/* global document, XMLHttpRequest, Decrypter, Bitmap */
+/* global document, XMLHttpRequest, Decrypter, Bitmap, $dataSystem, window */
 
 const blur = function() {
     for (var i = 0; i < 2; i++) {
@@ -56,3 +56,57 @@ const decryptImg = function(url, bitmap) {
     };
 };
 module.exports = { blur, decryptImg };
+
+const imageDecryption = {
+  decryptArrayBuffer: function(arrayBuffer) {
+    if (!arrayBuffer) return null;
+    var header = new Uint8Array(arrayBuffer, 0, this._headerlength);
+
+    var i;
+    var ref = this.SIGNATURE + this.VER + this.REMAIN;
+    var refBytes = new Uint8Array(16);
+    for (i = 0; i < this._headerlength; i++) {
+        refBytes[i] = parseInt("0x" + ref.substr(i * 2, 2), 16);
+    }
+    for (i = 0; i < this._headerlength; i++) {
+        if (header[i] !== refBytes[i]) {
+            throw new Error("Header is wrong");
+        }
+    }
+
+    arrayBuffer = this.cutArrayHeader(arrayBuffer, Decrypter._headerlength);
+    var view = new DataView(arrayBuffer);
+    this.readEncryptionkey();
+    if (arrayBuffer) {
+        var byteArray = new Uint8Array(arrayBuffer);
+        for (i = 0; i < this._headerlength; i++) {
+            byteArray[i] = byteArray[i] ^ parseInt(Decrypter._encryptionKey[i], 16);
+            view.setUint8(i, byteArray[i]);
+        }
+    }
+
+    return arrayBuffer;
+},
+  cutArrayHeader: function(arrayBuffer, length) {
+    return arrayBuffer.slice(length);
+},
+  readEncryptionkey: function(){
+    this._encryptionKey = $dataSystem.encryptionKey.split(/(.{2})/).filter(Boolean);
+},
+  extToEncryptExt: function(url) {
+    var ext = url.split('.').pop();
+    var encryptedExt = ext;
+
+    if(ext === "ogg") encryptedExt = ".rpgmvo";
+    else if(ext === "m4a") encryptedExt = ".rpgmvm";
+    else if(ext === "png") encryptedExt = ".rpgmvp";
+    else encryptedExt = ext;
+
+    return url.slice(0, url.lastIndexOf(ext) - 1) + encryptedExt;
+},
+  createBlobUrl: function(arrayBuffer){
+    var blob = new Blob([arrayBuffer]);
+    return window.URL.createObjectURL(blob);
+}
+};
+module.exports.imageDecryption = imageDecryption;

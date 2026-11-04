@@ -257,3 +257,39 @@ test('recognized MV decryptor uses prepared images and falls back on cache error
   failed._image.dispatchEvent({ type: 'load' });
   assert.equal(failed.completed, 1);
 });
+
+test('reviewed MV encrypted images use native files and preserve retries, current keys and plugin fallbacks', () => {
+  const {decryptImg,imageDecryption}=require('./helpers/mv-reviewed-methods.cjs');
+  const requests=[],loads=[];function Bitmap(){};let context;
+  function NativeImage(){context.EventTarget.call(this);}
+  Bitmap.prototype._onLoad=function(){this.completed=true;};Bitmap.prototype._onError=function(){this.failed=true;};
+  const decrypter={_headerlength:16,_xhrOk:400,SIGNATURE:'5250474d56',VER:'000000',REMAIN:'0003010000000000'};
+  context=loadPmjsRuntime({__pmjsBuiltinRequire:require,Bitmap,NativeImage,Decrypter:decrypter,
+    $dataSystem:{encryptionKey:'01'.repeat(16)},NativeHost:{assets:{hasDecrypted:()=>false},images:{loadEncryptedAsync(){}}},
+    XMLHttpRequest:function(){this.open=()=>{};this.send=()=>requests.push(this);}});
+  vm.runInContext(fs.readFileSync(path.join(root,'js/pmjs-web/events.js'),'utf8'),context);
+  NativeImage.prototype=Object.create(context.EventTarget.prototype);
+  vm.runInContext(fs.readFileSync(path.join(root,'js/pmjs-web/filesystem.js'),'utf8'),context);
+  for(const [name,method] of Object.entries({...imageDecryption,decryptImg}))decrypter[name]=vm.runInContext('('+method.toString()+')',context);
+  context.PMJS.images.loadEncrypted=function(image,url,key,logical){loads.push({image,url,key,logical});return true;};
+  vm.runInContext(slice(fs.readFileSync(path.join(root,'js/pmjs-mv/images.js'),'utf8'),
+    'function pmjsBitmapRequestImageWrap','\nPMJS.methods.wrap({'),context);context.PMJS.methods.install();
+  const bitmap=()=>{const b=new Bitmap();b._image=new NativeImage();return b;};
+  const first=bitmap();decrypter.decryptImg('img/a.png',first);
+  assert.equal(loads.length,1);assert.equal(loads[0].url,'img/a.rpgmvp');assert.equal(loads[0].logical,'img/a.png');
+  first._image.dispatchEvent({type:'load'});assert.equal(first.completed,true);assert.equal(decrypter._encryptionKey.length,16);
+  const changed=bitmap();decrypter.decryptImg('img/key.png',changed);context.$dataSystem.encryptionKey='02'.repeat(16);
+  changed._image.dispatchEvent({type:'load'});assert.equal(changed.completed,undefined);assert.equal(requests.length,1);
+  const stale=bitmap();decrypter.decryptImg('img/old.png',stale);const old=stale._image;stale._image=new NativeImage();
+  old.dispatchEvent({type:'load'});old.dispatchEvent({type:'error'});assert.equal(requests.length,1);
+  const failed=bitmap();decrypter.decryptImg('img/fail.png',failed);failed._image.dispatchEvent({type:'error'});assert.equal(requests.length,2);
+  const nativeLoad=context.PMJS.images.loadEncrypted;context.PMJS.images.loadEncrypted=()=>false;
+  decrypter.decryptImg('img/custom-image.png',bitmap());assert.equal(requests.length,3);
+  context.PMJS.images.loadEncrypted=nativeLoad;
+  const original=decrypter.decryptArrayBuffer;decrypter.decryptArrayBuffer=function(value){return original.call(this,value);};
+  decrypter.decryptImg('img/custom.png',bitmap());assert.equal(requests.length,4);
+  decrypter.decryptArrayBuffer=original;let keyReads=0;
+  Object.defineProperty(context.$dataSystem,'encryptionKey',{get(){keyReads++;return '03'.repeat(16);}});
+  decrypter.decryptImg('img/key-provider.png',bitmap());assert.equal(requests.length,5);assert.equal(keyReads,0);
+  decrypter.decryptImg('',bitmap());assert.equal(requests.length,6);
+});

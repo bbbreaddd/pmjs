@@ -120,11 +120,37 @@ PMJS.mv.bitmap.requestImageFile = pmjsBitmapRequestImageWrap()(Bitmap.prototype.
     };
 }`;
       if (!methods.matchesSource(guestDecrypt, reviewed)) return guestDecrypt;
+      var decrypter = globalThis.Decrypter;
+      var cryptoMethods = {};
+      function dataValue(target, name) {
+        var property = Object.getOwnPropertyDescriptor(target, name);
+        return property && property.value;
+      }
+      var cryptoSources = {"decryptArrayBuffer":["3e774a17ba324fbec404643033bf9c075811bdcd2266027dcf37cfe9f77d0c2e","e1d46dc20a7d1f9d300a42ad2efd82ca4bdd463ea0c24890c27fe3b6c127b6ce"],"cutArrayHeader":["515aeca6b56fce9e8357c508ae750007e2f5ede175668d90c812eb1c9410bc67","c01601872a02946c9e72f80773dee3c4c35b769e6e53b20298fce1e4f4aeebb1"],"readEncryptionkey":["dcf34c488f57d4eb1f571dc6794c8ff0304c9e76bacce83208b41244379fb215","5e2f149cbfbb0be175c26a5fd68b4b230870694f1be9ad9719373e9fdb344b1a"],"extToEncryptExt":["ae288edb3656708f7438438a52a0470892aac14ae88ba598c2b3831b72541673","f47e9efa8040298cdd3128d2cf22741d96bca96d38f8b0236f77e5a3b1ff2d62"],"createBlobUrl":["b7bde46429de4db97df024d08935177eda61bbbd9717a404df170b46c1f8df6a","9622d746217b05f094d6f82f56c06756d160d8fc41338f8ed181affc15a3ecf3"]};
+      var supported = Object.keys(cryptoSources).every(function(name) {
+        cryptoMethods[name] = dataValue(decrypter, name);
+        return methods.matchesSource(cryptoMethods[name], cryptoSources[name]);
+      });
+      function nativeKey(target) {
+        if (!supported || target !== decrypter || target !== globalThis.Decrypter || !globalThis.$dataSystem) return null;
+        var header = ['SIGNATURE','VER','REMAIN'].map(function(name) { return dataValue(target, name); });
+        if (dataValue(target, '_headerlength') !== 16 || dataValue(target, '_xhrOk') !== 400 ||
+            !header.every(function(value) { return typeof value === 'string'; }) || header.join('') !== '5250474d560000000003010000000000' ||
+            !Object.keys(cryptoMethods).every(function(name) { return dataValue(target, name) === cryptoMethods[name]; })) return null;
+        var cached = Object.getOwnPropertyDescriptor(target, '_encryptionKey');
+        if (cached && (!('value' in cached) || !cached.writable)) return null;
+        var property = Object.getOwnPropertyDescriptor($dataSystem, 'encryptionKey');
+        return property && typeof property.value === 'string' && /^[a-f0-9]{32}$/i.test(property.value) ? property.value : null;
+      }
       return function(url, bitmap) {
         var path = decodeResourceUrlPath(url)
           .replace(/^file:\/\/\/game\//, '').replace(/^\.\//, '');
-        if (!NativeHost.assets || typeof NativeHost.assets.hasDecrypted !== 'function' ||
-            !NativeHost.assets.hasDecrypted(path)) return guestDecrypt.apply(this, arguments);
+        var prepared = NativeHost.assets && typeof NativeHost.assets.hasDecrypted === 'function' &&
+          NativeHost.assets.hasDecrypted(path);
+        var key = !prepared && typeof url === 'string' && /\.png$/.test(url) && nativeKey(this);
+        if (!prepared && (!key || !PMJS.images.loadEncrypted ||
+            !(bitmap._image instanceof NativeImage) || typeof NativeHost.images.loadEncryptedAsync !== 'function'))
+          return guestDecrypt.apply(this, arguments);
         var decrypter = this;
         var args = arguments;
         var image = bitmap._image;
@@ -135,7 +161,12 @@ PMJS.mv.bitmap.requestImageFile = pmjsBitmapRequestImageWrap()(Bitmap.prototype.
         }
         function onLoad() {
           detach();
-          if (bitmap._image === image) return guestOnLoad.apply(bitmap, arguments);
+          if (bitmap._image !== image) return;
+          if (key) {
+            if (nativeKey(decrypter) !== key) return guestDecrypt.apply(decrypter, args);
+            decrypter.readEncryptionkey();
+          }
+          return guestOnLoad.apply(bitmap, arguments);
         }
         function onError() {
           detach();
@@ -143,7 +174,13 @@ PMJS.mv.bitmap.requestImageFile = pmjsBitmapRequestImageWrap()(Bitmap.prototype.
         }
         image.addEventListener('load', bitmap._loadListener = onLoad);
         image.addEventListener('error', bitmap._errorListener = onError);
-        image.src = url;
+        if (key) {
+          if (!PMJS.images.loadEncrypted(image, decrypter.extToEncryptExt(url), key, path)) {
+            detach();
+            return guestDecrypt.apply(this, arguments);
+          }
+        }
+        else image.src = url;
       };
     }
   });

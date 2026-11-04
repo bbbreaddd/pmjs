@@ -25,9 +25,7 @@ var pendingNativeImageLoads = 0;
 
 NativeImage.prototype = Object.create(GenericElement.prototype);
 NativeImage.prototype.constructor = NativeImage;
-Object.defineProperty(NativeImage.prototype, 'src', {
-  get: function() { return this._src; },
-  set: function(url) {
+function loadSource(url, encryption) {
     if (this._pmjsCanvasOwner) {
       this._pmjsCanvasOwner._releaseNativeCanvas();
       this._pmjsCanvasOwner = null;
@@ -69,6 +67,10 @@ Object.defineProperty(NativeImage.prototype, 'src', {
         var path = decodeResourceUrlPath(source)
           .replace(/^file:\/\/\/game\//, '')
           .replace(/^\.\//, '');
+        if (encryption) {
+          return NativeHost.images.loadEncryptedAsync(path, encryption.key,
+            PMJS.images.shouldRetainPixels(encryption.logicalPath));
+        }
         var prefix = 'generated-assets:/';
         var generated = path.indexOf(prefix) === 0;
         var loader = generated ? NativeHost.assets : NativeHost.images;
@@ -110,8 +112,17 @@ Object.defineProperty(NativeImage.prototype, 'src', {
       }
       loading.then(function(result) { deliver(result, null); }, function(error) { deliver(null, error); });
     }, { errorMode: 'event' });
-  }
+}
+Object.defineProperty(NativeImage.prototype, 'src', {
+  get: function() { return this._src; },
+  set: function(url) { loadSource.call(this, url, null); }
 });
+PMJS.images.loadEncrypted = function(image, url, key, logicalPath) {
+  if (!image || typeof url !== 'string' || !url || Object.getPrototypeOf(image) !== NativeImage.prototype ||
+      Object.prototype.hasOwnProperty.call(image, 'src') || typeof NativeHost.images.loadEncryptedAsync !== 'function') return false;
+  loadSource.call(image, url, { key: key, logicalPath: logicalPath });
+  return true;
+};
 
 return NativeImage;
 })();

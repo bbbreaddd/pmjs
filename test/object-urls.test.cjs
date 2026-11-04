@@ -51,6 +51,24 @@ function settle() {
   return new Promise(resolve => setImmediate(resolve));
 }
 
+test('encrypted file images retain logical pixel policy and discard superseded native handles', async () => {
+  const calls=[],released=[];let resolveLoad;
+  const context=imageContext(()=>{throw new Error('byte loader used');});
+  context.NativeHost.images.loadEncryptedAsync=(...args)=>{calls.push(args);return new Promise(resolve=>{resolveLoad=resolve;});};
+  context.NativeHost.images.release=handle=>released.push(handle);
+  context.PMJS.images.addRetentionRule(path=>path==='img/atlas.png');
+  const image=new context.Image();let loaded=0;image.onload=()=>loaded++;
+  assert.equal(context.PMJS.images.loadEncrypted(image,'img/atlas.rpgmvp','01'.repeat(16),'img/atlas.png'),true);
+  await context.PMJS.tasks.idle();
+  assert.deepEqual(calls,[['img/atlas.rpgmvp','01'.repeat(16),true]]);
+  image.src='';resolveLoad({handle:91,width:8,height:8});
+  await settle();await context.PMJS.tasks.idle();
+  assert.equal(loaded,0);assert.deepEqual(released,[91]);assert.equal(context.PMJS.images.pendingLoads,0);
+  assert.equal(context.PMJS.images.loadEncrypted({},'x','key','x'),false);
+  Object.defineProperty(image,'src',{value:'custom'});
+  assert.equal(context.PMJS.images.loadEncrypted(image,'x','key','x'),false);
+});
+
 test('empty images are complete and clearing a pending source cancels its events', async () => {
   const released = [], events = [];
   let resolveLoad;
