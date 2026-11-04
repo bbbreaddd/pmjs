@@ -284,3 +284,23 @@ test('cgroup v2 descendant paths are probed before cgroup mount root', () => {
   assert.equal(readCgroupFile('memory.events', reader), 'oom_kill 7\n');
   assert.ok(!seen.includes('/sys/fs/cgroup/memory.events'));
 });
+
+test('reclamation sampling shares bounded headroom accounting without detailed metrics', () => {
+  const { reclamationMemoryState } = require('../runner/diagnostics.cjs');
+  const files = {
+    '/proc/self/cgroup': '0::/game\n',
+    '/proc/meminfo': 'MemAvailable: 140000 kB\n',
+    '/sys/fs/cgroup/game/memory.max': String(600 * MiB),
+    '/sys/fs/cgroup/game/memory.current': String(540 * MiB)
+  };
+  const reader = { readFileSync(file) {
+    assert.ok(file in files, 'unexpected detailed memory read: ' + file);
+    return files[file];
+  } };
+  const memoryUsage = () => assert.fail('full memoryUsage is unnecessary');
+  memoryUsage.rss = () => 400 * MiB;
+  const state = reclamationMemoryState({ reader, processObject: { memoryUsage },
+    osObject: { totalmem: () => 1024 * MiB, freemem: () => 0 } });
+  assert.equal(state.availableBytes, 60 * MiB);
+  assert.equal(state.rssBytes, 400 * MiB);
+});

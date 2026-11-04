@@ -197,8 +197,7 @@ function memoryEvents(reader = fs) {
     return result;
   } catch (_) { return null; }
 }
-function memoryState({ reader = fs, processObject = HOST_PROCESS, osObject = os, detailed = false } = {}) {
-  const usage = processObject.memoryUsage();
+function memoryHeadroom(reader, osObject) {
   const total = osObject.totalmem();
   const hostAvailable = memAvailable(reader) ?? osObject.freemem();
   const limitText = readCgroupFile('memory.max', reader);
@@ -218,15 +217,23 @@ function memoryState({ reader = fs, processObject = HOST_PROCESS, osObject = os,
     Math.max(0, cgroupLimit - cgroupUsed) : null;
   const availableBytes = Math.max(0, Math.min(hostAvailable,
     cgroupHeadroom === null ? Infinity : cgroupHeadroom));
+  return { totalBytes: limitBytes, availableBytes, hostAvailableBytes: hostAvailable,
+    cgroupLimitBytes: bounded ? cgroupLimit : null, cgroupUsedBytes: bounded ? cgroupUsed : null };
+}
+
+function reclamationMemoryState({ reader = fs, processObject = HOST_PROCESS, osObject = os } = {}) {
+  return { ...memoryHeadroom(reader, osObject), rssBytes: processObject.memoryUsage.rss() };
+}
+
+function memoryState({ reader = fs, processObject = HOST_PROCESS, osObject = os, detailed = false } = {}) {
+  const usage = processObject.memoryUsage();
   return {
+    ...memoryHeadroom(reader, osObject),
     rssBytes: usage.rss, heapUsedBytes: usage.heapUsed, heapTotalBytes: usage.heapTotal,
     externalBytes: usage.external, arrayBufferBytes: usage.arrayBuffers,
     v8Heap: detailed ? v8HeapDetails() : undefined,
     process: processMemoryDetails(processObject.pid, reader),
     host: detailed ? hostMemoryDetails(reader) : undefined,
-    totalBytes: limitBytes, availableBytes, hostAvailableBytes: hostAvailable,
-    cgroupLimitBytes: bounded ? cgroupLimit : null,
-    cgroupUsedBytes: bounded ? cgroupUsed : null,
     cgroupEvents: memoryEvents(reader), pressure: memoryPressure(reader)
   };
 }
@@ -517,4 +524,4 @@ function createDiagnostics({ logger = console, getNative = () => null,
 }
 
 module.exports = { MEMORY_PRESSURE_BYTES, readCgroupFile, numericFile, memAvailable, memoryEvents, memoryPressure,
-  parseProcessStatus, processMappingDetails, memoryState, gameContext, createDiagnostics };
+  parseProcessStatus, processMappingDetails, memoryState, reclamationMemoryState, gameContext, createDiagnostics };

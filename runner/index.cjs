@@ -16,7 +16,7 @@ const { createStorage, createGameFilesystem } = require('./storage.cjs');
 const { resolveDefaults, validate, PMJS_MV_LOGIC_HZ, PMJS_SUPPORTED_RENDER_HZ,
   parseTimingConfig, resolveSwapDefault } = require('./config.cjs');
 const hostTimers = require('node:timers');
-const { createDiagnostics, memoryState } = require('./diagnostics.cjs');
+const { createDiagnostics, reclamationMemoryState } = require('./diagnostics.cjs');
 const { createMemoryReclaimer } = require('./memory-reclamation.cjs');
 const { createSettings, createInputFilter } = require('./settings.cjs');
 
@@ -351,7 +351,7 @@ async function runSession(input, diagnostics, setNative) {
     preparedCropUploads: options.preparedCropUploads }));
   diagnostics.stage('native-ready');
   const memoryReclaimer = createMemoryReclaimer({ native,
-    readMemory: () => memoryState({ processObject: hostProcess }),
+    readMemory: () => reclamationMemoryState({ processObject: hostProcess }),
     readRss: () => hostProcess.memoryUsage.rss(), now: () => performance.now() });
   const scan = native.runtime.vfsIndexStats?.();
   if (scan) console.log(`[pmjs] startup stage=vfs-index statistics=${JSON.stringify(scan)}`);
@@ -609,14 +609,16 @@ async function runSession(input, diagnostics, setNative) {
           };
           const complete = dispatcher ? dispatcher.runFrame(frame) : frame();
           complete.then(() => {
-            if (memoryReclaimer.pending && typeof globalThis.__pmjsMemoryReclamationBoundary === 'function') {
-              memoryReclaimer.atBoundary(globalThis.__pmjsMemoryReclamationBoundary());
+            if (memoryReclaimer.pending) {
+              // Engines without a boundary hook still get the critical-pressure trim.
+              memoryReclaimer.atBoundary(typeof globalThis.__pmjsMemoryReclamationBoundary === 'function' ?
+                globalThis.__pmjsMemoryReclamationBoundary() : null);
             }
             // Sample one in eight frames: no extra clock read on the other seven.
             if ((++diagnosticsFrameIndex & 7) === 0) {
               const observedAt = performance.now();
               diagnostics.observeFrame(observedAt - now, observedAt);
-              memoryReclaimer.observe(diagnostics.snapshot().memory);
+              memoryReclaimer.poll(observedAt);
             }
             if (!timing.uncapped) {
               deadline = advanceDeadline(deadline, native.runtime.monotonicNow(), timing.renderPeriod);
