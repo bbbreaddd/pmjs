@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import sys
 
-from dependencies import arm64_environment
+from dependencies import arm64_environment, prepare_arm64
 from runtime_artifact import checked_runtime, recognize_runtime
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -57,6 +57,7 @@ def main():
     env = os.environ.copy()
     preset = "dev"
     if args.target == "arm64":
+        prepare_arm64(args.jobs)
         env = arm64_environment()
         preset = "linux-arm64"
     else:
@@ -109,6 +110,6 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (ValueError, subprocess.CalledProcessError) as error:
+    except (ValueError, OSError, subprocess.CalledProcessError) as error:
         print(f"build: {error}", file=sys.stderr)
         sys.exit(1)

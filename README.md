@@ -6,16 +6,7 @@ This project started because I wanted to run In Stars and Time on my RG35XX Plus
 
 PMJS runs the game's original JavaScript through Node.js, including its engine and plugins. Native code handles rendering, audio, input, and other work that would normally go through the browser. Compatibility layers connect the two, with patches where a game needs them. The aim is to preserve the game's logic and behavior while making it practical to run on low-end hardware.
 
-## Build for ARM64
-
-Run these commands from the repository root on Linux. Dependency preparation needs Python 3.12 or newer, CMake 3.20 or newer, Ninja, Git, pkg-config, Make, dpkg-deb, readelf, and LLVM 20 tools: clang-20, clang++-20, llvm-ar-20, and llvm-strip-20. It downloads and builds the target dependencies, including the toolchain and Skia65 component.
-
-```sh
-python3 tools/dependencies.py
-./build.sh --target arm64
-```
-
-Copy the entire `dist/pmjs-arm64/` directory to the target device.
+[Building](docs/BUILDING.md) · [Releases](https://github.com/bbbreaddd/pmjs/releases)
 
 ## Run a game
 

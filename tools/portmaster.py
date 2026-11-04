@@ -11,6 +11,7 @@ import zipfile
 from pathlib import Path
 
 from runtime_artifact import checked_runtime, digest, elf, inventory, static_audit, strip_binary, write_json, source_reference, payload_digest
+from llvm_tools import llvm_strip
 from portmaster_metadata import portname_from_title, read_submission, stage_submission
 
 
@@ -315,8 +316,11 @@ def portmaster(stage, bundle, output, name=None, strip=None, extra_notices=(), s
             shutil.copy2(file, target)
             inspection = elf(target, stripping=True)
             if inspection['needsStrip']:
-                strip = strip or next((tool for tool in ('llvm-strip-20', 'llvm-strip', 'aarch64-linux-gnu-strip')
-                                       if shutil.which(tool)), None)
+                if not strip:
+                    try:
+                        strip = llvm_strip()[0]
+                    except ValueError:
+                        strip = shutil.which('aarch64-linux-gnu-strip')
                 if not strip:
                     raise ValueError('Install llvm-strip or specify --strip; package binaries must be stripped')
                 strip_binary(target, strip, inspection['dynamic'])

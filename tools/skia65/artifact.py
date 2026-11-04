@@ -1,5 +1,6 @@
 import json
 import pathlib
+import re
 
 from provision import ROOT, LOCK, digest
 
@@ -10,6 +11,7 @@ def source_hashes(*, mask_test=False):
     files = [LOCK, ROOT / "third_party/skia65-mask-tail.patch", ROOT / "third_party/skia65-arm-parity.patch"]
     files += [pathlib.Path(__file__).with_name(name) for name in
         ["build.py", "provision.py", "artifact.py", "component_sources.py", "raster.py"]]
+    files += [ROOT / "tools/llvm_tools.py"]
     files += sorted(file for file in (ROOT / "src/skia65").iterdir()
                     if file.is_file() and (mask_test or str(file.relative_to(ROOT)) not in TEST_SOURCES))
     files += [ROOT / "src" / name for name in
@@ -56,8 +58,10 @@ def validate(directory, arch, toolchain=None, *, mask_test=False):
         if (arch == "arm64" and manifest["compilerVersion"] != expected_version) or (
             arch == "x64" and expected_version not in manifest["compilerVersion"]):
             raise RuntimeError("compiler version is not pinned")
-        if manifest["strip"]["version"] != lock["clangVersion"]:
-            raise RuntimeError("strip version is not pinned")
+        version = manifest["strip"]["version"]
+        if (arch == "x64" and version != lock["clangVersion"]) or (arch == "arm64" and
+                not re.fullmatch(r"(?:18|19|20)\.\d+\.\d+", version)):
+            raise RuntimeError("unsupported strip version")
         library = directory / "libpmjs-skia65.so"
         if digest(library) != manifest["librarySha256"] or library.stat().st_size != manifest["libraryBytes"]:
             raise RuntimeError("library checksum or size changed")

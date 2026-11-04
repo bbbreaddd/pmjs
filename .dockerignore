@@ -1,0 +1,12 @@
+.git
+.cache
+node_modules
+build
+build-*
+build-js
+dist
+tmp
+__pycache__
+*.py[cod]
+*.log
+CMakeUserPresets.json

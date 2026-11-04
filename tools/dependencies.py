@@ -3,13 +3,16 @@
 import argparse
 import json
 import os
+import platform
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tarfile
 import urllib.request
 
 from runtime_artifact import digest, write_json
+from llvm_tools import llvm_strip
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -71,6 +74,17 @@ def sources(sdk, output):
 
 
 def prepare_arm64(jobs):
+    if jobs < 1:
+        raise ValueError('--jobs must be positive')
+    if sys.platform != 'linux' or platform.machine().lower() not in ('x86_64', 'amd64'):
+        raise ValueError('ARM64 cross-builds require an x86-64 Linux host')
+    if sys.version_info < (3, 11) or not hasattr(tarfile, 'data_filter'):
+        raise ValueError('ARM64 builds require Python 3.12 or Python 3.11 with tarfile extraction filters')
+    missing = [name for name in ('cmake', 'ninja', 'git', 'pkg-config', 'make', 'dpkg-deb', 'readelf', 'nm')
+               if not shutil.which(name)]
+    if missing:
+        raise ValueError('Missing dependency preparation tools: ' + ', '.join(missing))
+    llvm_strip()
     env = arm64_environment()
 
     sdk = Path(env["PMJS_SDK_ROOT"])
@@ -94,7 +108,7 @@ def prepare_arm64(jobs):
             finally:
                 download.unlink(missing_ok=True)
     run(sys.executable, ROOT / "tools/skia65/build.py", "--arch", "arm64",
-        "--sdk", sdk, "--output", component, "--reuse")
+        "--sdk", sdk, "--output", component, "--jobs", jobs, "--reuse")
 
 
 if __name__ == '__main__':
@@ -102,12 +116,6 @@ if __name__ == '__main__':
     parser.add_argument('--jobs', type=int, default=min(os.cpu_count() or 1, 4))
     args = parser.parse_args()
     try:
-        if args.jobs < 1:
-            raise ValueError('--jobs must be positive')
-        missing = [name for name in ('cmake', 'ninja', 'git', 'pkg-config', 'make', 'dpkg-deb', 'readelf',
-                   'clang-20', 'clang++-20', 'llvm-ar-20', 'llvm-strip-20') if not shutil.which(name)]
-        if missing:
-            raise ValueError('Missing dependency preparation tools: ' + ', '.join(missing))
         prepare_arm64(args.jobs)
         print('ARM64 dependencies ready; run ./build.sh --target arm64')
     except (ValueError, OSError, subprocess.CalledProcessError) as error:

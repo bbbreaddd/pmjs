@@ -70,7 +70,7 @@ class BuildProvenance(unittest.TestCase):
         self.root = Path(self.temporary.name)
         for directory in ('src', 'cmake', 'tools', 'third_party', 'docs', 'js', 'runner', 'profiles', 'bin', 'test', 'dependencies'):
             (self.root / directory).mkdir()
-        for source in ('tools/release.py', 'tools/runtime_artifact.py', 'tools/dependencies.py',
+        for source in ('tools/release.py', 'tools/runtime_artifact.py', 'tools/dependencies.py', 'tools/llvm_tools.py',
                        'cmake/Install.cmake', 'cmake/InstallMetadata.cmake.in',
                        'cmake/build-config.json.in'):
             shutil.copy2(ROOT / source, self.root / source)
@@ -345,7 +345,7 @@ class DependencySources(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix='pmjs dependency sources ', dir=temporary_root)
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        for name in ('tools/release.py', 'tools/runtime_artifact.py', 'tools/dependencies.py',
+        for name in ('tools/release.py', 'tools/runtime_artifact.py', 'tools/dependencies.py', 'tools/llvm_tools.py',
                      'tools/linux-arm64/sdk-recipes.json',
                      'tools/linux-arm64/sdk-packages.json', 'tools/linux-arm64/prepare-sdk.py',
                      'cmake/toolchains/portable-arm64.cmake'):

@@ -560,7 +560,7 @@ fs.writeFileSync(file, JSON.stringify(descriptor));
     def test_package_cli_delegates_bundle_validation_to_python(self):
         bundle = self.create_bundle()
         # The CLI prefix needs its own packager; the minimal target fixture omits it.
-        for name in ('portmaster.py', 'portmaster_metadata.py', 'runtime_artifact.py'):
+        for name in ('portmaster.py', 'portmaster_metadata.py', 'runtime_artifact.py', 'llvm_tools.py'):
             shutil.copy2(ROOT / 'tools' / name, self.stage / 'share/pmjs/tools' / name)
         self.refresh_manifest()
         info = json.loads((self.stage / 'build-info.json').read_text())

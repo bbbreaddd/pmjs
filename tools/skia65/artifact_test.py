@@ -34,6 +34,19 @@ class ArtifactTests(unittest.TestCase):
         self.write()
         self.assertEqual(artifact.validate(self.directory, "x64"), self.manifest)
 
+    def test_arm64_accepts_supported_strip_versions(self):
+        self.library.write_bytes(b"\x7fELF\x02\x01" + bytes(12) + bytes([183, 0]) + b"fixture")
+        self.manifest.update(arch="arm64", configuration=artifact.configuration("arm64", "ar"),
+            compilerVersion="0.15.2", librarySha256=digest(self.library), libraryBytes=self.library.stat().st_size)
+        for version in ("18.1.3", "19.1.7", "20.1.2"):
+            self.manifest["strip"] = {"version": version}
+            self.write()
+            artifact.validate(self.directory, "arm64")
+        self.manifest["strip"] = {"version": "17.0.6"}
+        self.write()
+        with self.assertRaisesRegex(RuntimeError, "unsupported strip version"):
+            artifact.validate(self.directory, "arm64")
+
     def test_changed_producer_inputs_are_rejected(self):
         for key, value in [("arch", "arm64"), ("dependencies", {}), ("sources", {}),
             ("compilerVersion", "clang version 99"), ("strip", {"version": "99"})]:

@@ -8,10 +8,14 @@ import os
 import pathlib
 import shutil
 import subprocess
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from provision import ROOT, LOCK, digest
 from artifact import configuration, source_hashes, validate
 from raster import build_raster, recipe, reusable
+from llvm_tools import llvm_strip
 
 
 def run(arguments, **kwargs):
@@ -55,9 +59,8 @@ def build_locked(options, cache):
         compiler_version = subprocess.check_output([compiler, "--version"], text=True)
         if "clang version " + lock["clangVersion"] + " " not in compiler_version:
             raise RuntimeError("Skia65 requires Clang " + lock["clangVersion"])
-    strip = pathlib.Path(shutil.which("llvm-strip-20") or "")
-    if not strip.is_file() or "LLVM version " + lock["clangVersion"] not in subprocess.check_output([strip, "--version"], text=True):
-        raise RuntimeError("Skia65 requires LLVM strip " + lock["clangVersion"])
+    strip_path, strip_version = llvm_strip(exact=lock["clangVersion"] if options.arch == "x64" else None)
+    strip = pathlib.Path(strip_path)
     compiler_commands = [sdk / "bin/cc", sdk / "bin/c++"] if sdk else [pathlib.Path(c_compiler), compiler]
     args = configuration(options.arch, str(sdk / "bin/ar") if sdk else "llvm-ar-20")
     toolchain = {"compilerSha256": digest(compiler.resolve()), "compilerVersion": compiler_version,
@@ -76,7 +79,13 @@ def build_locked(options, cache):
             print(str(error) + ("; build required" if explain else "; rebuilding"), flush=True)
     identity = hashlib.sha256(json.dumps(toolchain, sort_keys=True).encode()).hexdigest()[:16]
     component = destination / ("component-" + identity)
-    output = destination / ("skia-" + identity)
+    raster_identity = hashlib.sha256(json.dumps(recipe(toolchain, args), sort_keys=True).encode()).hexdigest()[:16]
+    output = destination / ("skia-" + raster_identity)
+    if not output.exists():
+        for previous in destination.glob("skia-*"):
+            if reusable(cache, previous, recipe(toolchain, args)) is None:
+                output = previous
+                break
     if explain:
         reason = reusable(cache, output, recipe(toolchain, args))
         print("Skia65: upstream raster " + ("rebuild (" + reason + ")" if reason else "unchanged"), flush=True)
@@ -103,7 +112,7 @@ def build_locked(options, cache):
     manifest = {"arch": options.arch, "scope": "shared text backend",
         "dependencies": lock, "compilerVersion": compiler_version,
         "compilerSha256": toolchain["compilerSha256"], "configuration": args, "toolchain": toolchain,
-        "strip": {"version": lock["clangVersion"], "sha256": toolchain["stripSha256"], "arguments": ["--strip-debug"]},
+        "strip": {"version": strip_version, "sha256": toolchain["stripSha256"], "arguments": ["--strip-debug"]},
         "sources": source_hashes(mask_test=options.mask_test),
         "adaptations": adaptations,
         "librarySha256": digest(library), "libraryBytes": library.stat().st_size,
@@ -154,5 +163,5 @@ if __name__ == "__main__":
     parser.add_argument("--mask-test", action="store_true")
     try:
         build(parser.parse_args())
-    except (RuntimeError, OSError) as error:
+    except (RuntimeError, ValueError, OSError) as error:
         parser.exit(1, str(error) + "\n")

@@ -14,6 +14,7 @@ import tempfile
 from pathlib import Path
 
 from runtime_artifact import checked_runtime, recognize_runtime, digest, inventory, static_audit, strip_binaries, write_json, source_reference, payload_digest
+from llvm_tools import llvm_strip
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -349,7 +350,7 @@ def main():
             values = cache_values(args.build.resolve())
             tool = None
             if values.get('CMAKE_BUILD_TYPE') in ('Release', 'MinSizeRel'):
-                tool = 'llvm-strip-20' if values.get('PMJS_LINUX_ARM64_BUILD') == 'ON' else values.get('CMAKE_STRIP')
+                tool = llvm_strip()[0] if values.get('PMJS_LINUX_ARM64_BUILD') == 'ON' else values.get('CMAKE_STRIP')
             manifest(args.output.resolve(), args.build.resolve(), ROOT, tool,
                      args.record.resolve() if args.record else None,
                      args.sources.resolve() if args.sources else None, args.sources_url)

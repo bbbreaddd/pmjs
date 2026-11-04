@@ -42,7 +42,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake ninja-build pkg-config git python3 \
-            clang-20=1:20.1.2-0ubuntu1~24.04.3 llvm-20=1:20.1.2-0ubuntu1~24.04.3 \
+            llvm-20=1:20.1.2-0ubuntu1~24.04.3 \
             binutils dpkg-dev
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -71,7 +71,7 @@ jobs:
             .cache/astcenc
           key: >-
             ${{ runner.os }}-${{ runner.arch }}-arm64-v2-${{
-            hashFiles('tools/dependencies.py', 'tools/runtime_artifact.py',
+            hashFiles('tools/dependencies.py', 'tools/runtime_artifact.py', 'tools/llvm_tools.py',
             'tools/linux-arm64/*.py', 'tools/linux-arm64/*.json',
             'tools/skia65/*.py', 'tools/skia65/*.json',
             'tools/effekseer.lock.json', 'tools/lz4.lock.json', 'tools/astcenc.lock.json',
@@ -93,8 +93,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-arm64-v1-
 
-      - name: Prepare ARM64 dependencies
-        run: python3 tools/dependencies.py --jobs 2
+      - name: Build ARM64 runtime
+        run: ./build.sh --target arm64 --jobs 2
 
       - name: Save prepared ARM64 dependencies
         if: steps.dependencies-cache.outputs.cache-hit != 'true'
@@ -108,9 +108,6 @@ jobs:
             .cache/lz4
             .cache/astcenc
           key: ${{ steps.dependencies-cache.outputs.cache-primary-key }}
-
-      - name: Build ARM64 runtime
-        run: ./build.sh --target arm64 --jobs 2
 
       - name: Archive FFmpeg source and build materials
         run: |
