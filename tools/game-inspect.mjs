@@ -7,6 +7,12 @@ import { fileURLToPath } from 'node:url';
 import { discoverAchievements } from './achievement-discovery.mjs';
 import pluginManifest from '../runner/plugin-manifest.cjs';
 
+export function pluginIdentity(name, engine = 'mv') {
+  let value = name.replace(/\.js$/i, '');
+  if (engine === 'mz') value = value.split('/').pop();
+  return value.toLowerCase();
+}
+
 export function preparationInputs(gameDir, config, manifest, adapters = [], hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')) {
   const candidates = ['js/rpg_core.js', 'js/rpg_managers.js', 'js/rmmz_core.js',
     'js/libs/pixi.js', 'js/pixi.js', 'js/libs/pixi-tilemap.js', 'js/pixi-tilemap.js', 'js/plugins.js',
@@ -142,6 +148,7 @@ export function readPluginManifest(gameDir) {
   }
   const source = fs.readFileSync(file, 'utf8');
   const parsed = pluginManifest.parsePluginManifest(source, file);
+  // Adapter inspection requires status === true; loaders use truthiness and tracking uses status !== false.
   const plugins = parsed.plugins.filter(entry => entry && typeof entry.name === 'string')
     .map(entry => ({ name: entry.name, status: entry.status === true }));
   return { plugins, enabled: plugins.filter(entry => entry.status).map(entry => entry.name) };
@@ -152,7 +159,7 @@ export function loadAdapterRegistry(registryPath) {
   if (!Array.isArray(raw.adapters)) {
     throw new Error(`adapter registry requires an adapters array: ${registryPath}`);
   }
-  const seen = new Set();
+  const seen = new Map();
   for (const entry of raw.adapters) {
     if (!entry || !Array.isArray(entry.plugins) || !entry.plugins.length ||
         !entry.plugins.every(plugin => typeof plugin === 'string' && plugin) ||
@@ -161,8 +168,9 @@ export function loadAdapterRegistry(registryPath) {
       throw new Error(`adapter registry entry requires nonempty plugins and modules arrays: ${registryPath}`);
     }
     for (const plugin of entry.plugins) {
-      if (seen.has(plugin)) throw new Error(`duplicate adapter plugin name: ${plugin}`);
-      seen.add(plugin);
+      const identity = pluginIdentity(plugin);
+      if (seen.has(identity)) throw new Error(`duplicate adapter plugin name: ${seen.get(identity)} and ${plugin}`);
+      seen.set(identity, plugin);
     }
   }
   return raw.adapters;
@@ -171,10 +179,10 @@ export function loadAdapterRegistry(registryPath) {
 // Resolve registry adapters against enabled plugin names. Returns the
 // modules to include, in registry order, with the match reason attached.
 export function resolveAdapters(adapters, enabledNames) {
-  const enabled = new Set(enabledNames);
+  const enabled = new Set(enabledNames.map(name => pluginIdentity(name)));
   return adapters
     .flatMap(entry => {
-      const plugin = entry.plugins.find(name => enabled.has(name));
+      const plugin = entry.plugins.find(name => enabled.has(pluginIdentity(name)));
       return plugin ? [{ plugin, modules: entry.modules }] : [];
     });
 }
@@ -188,9 +196,21 @@ export function inspectGame(gameDir, registryPath) {
   const pixi = detectPixiVersion(absolute);
   const manifest = readPluginManifest(absolute);
   const registry = registryPath ? loadAdapterRegistry(registryPath) : [];
-  const matched = resolveAdapters(registry, manifest.enabled);
+  const identities = new Map();
+  for (const name of manifest.enabled) {
+    const identity = pluginIdentity(name, engine.engine);
+    if (!identities.has(identity)) identities.set(identity, []);
+    identities.get(identity).push(name);
+  }
+  const collisions = [...identities.values()].filter(names => names.length > 1);
+  for (const names of collisions) {
+    console.warn(`[pmjs-build] plugin identity collision: ${names.join(', ')}; automatic adapter selection skipped`);
+  }
+  const ambiguous = new Set(collisions.map(names => pluginIdentity(names[0], engine.engine)));
+  const selectable = manifest.enabled.filter(name => !ambiguous.has(pluginIdentity(name, engine.engine)));
+  const matched = resolveAdapters(registry, selectable);
   const unknown = manifest.enabled.filter(name =>
-    !registry.some(entry => entry.plugins.includes(name)));
+    !registry.some(entry => entry.plugins.some(plugin => pluginIdentity(plugin) === pluginIdentity(name))));
   return {
     gameDir: absolute,
     engine: engine.engine,
@@ -201,6 +221,7 @@ export function inspectGame(gameDir, registryPath) {
     pixiTilemapPath: detectPixiTilemapPath(absolute),
     pluginTotal: manifest.plugins.length,
     enabledPlugins: manifest.enabled,
+    selectablePlugins: selectable,
     matchedAdapters: matched,
     unmatchedEnabledPlugins: unknown,
   };

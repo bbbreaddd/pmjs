@@ -193,3 +193,47 @@ test('adapter registry rejects duplicates and malformed entries', async () => {
   const good = path.join(__dirname, '..', 'profiles', 'plugin-adapters.json');
   assert.ok(loadAdapterRegistry(good).length > 0);
 });
+
+
+test('canonical identities match and detect registry collisions', async () => {
+  const { resolveAdapters, loadAdapterRegistry } = await loadInspect();
+  const adapters = [{ plugins: ['YEP_CoreEngine'], modules: ['adapter.js'] }];
+  for (const name of ['YEP_CoreEngine', 'yep_coreengine', 'YEP_CoreEngine.js']) {
+    assert.equal(resolveAdapters(adapters, [name], 'mv').length, 1);
+  }
+  assert.equal(resolveAdapters(adapters, ['folder/yep_coreengine.js'], 'mv').length, 0);
+  const dir = temporaryDirectory('pmjs-identities-');
+  const file = path.join(dir, 'registry.json');
+  fs.writeFileSync(file, JSON.stringify({ adapters: [adapters[0], { plugins: ['yep_coreengine.js'], modules: ['other.js'] }] }));
+  assert.throws(() => loadAdapterRegistry(file), /YEP_CoreEngine and yep_coreengine.js/);
+  fs.writeFileSync(file, JSON.stringify({ adapters: [adapters[0], { plugins: ['folder/yep_coreengine'], modules: ['other.js'] }] }));
+  assert.equal(loadAdapterRegistry(file, 'mv').length, 2);
+});
+
+test('inspection reports matched names and warns on canonical manifest collisions', async t => {
+  const { inspectGame } = await loadInspect();
+  const dir = temporaryDirectory('pmjs-collision-');
+  writeGame(dir, { pluginsJs: 'var $plugins = ' + JSON.stringify([
+    { name: 'yed_tiled.js', status: true }, { name: 'YED_Tiled', status: true },
+    { name: 'Unknown.js', status: true }]) });
+  const warnings = [];
+  t.mock.method(console, 'warn', message => warnings.push(message));
+  const result = inspectGame(dir, path.join(__dirname, '../profiles/plugin-adapters.json'));
+  assert.deepEqual(result.matchedAdapters, []);
+  assert.deepEqual(result.selectablePlugins, ['Unknown.js']);
+  assert.deepEqual(result.unmatchedEnabledPlugins, ['Unknown.js']);
+  assert.match(warnings[0], /yed_tiled.js, YED_Tiled/);
+});
+
+
+test('build identity agrees with runtime tracking for MV and MZ names', async () => {
+  const { pluginIdentity } = await loadInspect();
+  const { loadPmjsRuntime } = require('./helpers/runtime-context.cjs');
+  for (const engine of ['mv', 'mz']) {
+    for (const name of ['YEP_CoreEngine', 'yep_coreengine.js', 'folder/Example.JS']) {
+      const runtime = loadPmjsRuntime({ PMJS_RUNTIME_ENGINE: engine });
+      runtime.PMJS.plugins.snapshotEffectiveManifest([{ name, status: true }]);
+      assert.equal(runtime.PMJS.plugins.dump().guest[0].key, pluginIdentity(name, engine));
+    }
+  }
+});

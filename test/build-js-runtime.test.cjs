@@ -495,3 +495,27 @@ test('full-game and demo ISAT inventories remain explicit and preserve adapter o
     assert.deepEqual(included.filter(name => !baseline.includes(name)), names);
   }
 });
+
+
+test('adapter selection normalizes manifest and override identities', async () => {
+  const root = temporaryDirectory('pmjs-canonical-adapters-');
+  const game = writeMvGame(root, { plugins: [{ name: 'yep_coreengine', status: true }] });
+  const selected = async manifest => (await compose(game, manifest)).modules.some(item => item.module === 'js/pmjs-plugins/yanfly/core-text.js');
+  assert.equal(await selected({}), true);
+  assert.equal(await selected({ adapters: { mode: 'auto', exclude: ['yep_coreengine.JS'] } }), false);
+  assert.equal(await selected({ adapters: ['yep_coreengine.js'] }), true);
+});
+
+
+test('auto selection skips colliding manifest identities unless explicitly included', async t => {
+  const root = temporaryDirectory('pmjs-colliding-adapters-');
+  const game = writeMvGame(root, { plugins: [
+    { name: 'YED_Tiled', status: true }, { name: 'yed_tiled', status: true }
+  ] });
+  const warnings = [];
+  t.mock.method(console, 'warn', message => warnings.push(message));
+  const selected = async manifest => (await compose(game, manifest)).modules.some(item => item.module === 'js/pmjs-plugins/yed/tiled.js');
+  assert.equal(await selected({}), false);
+  assert.equal(await selected({ adapters: { mode: 'auto', include: ['yed_tiled.js'] } }), true);
+  assert.match(warnings[0], /YED_Tiled, yed_tiled/);
+});
