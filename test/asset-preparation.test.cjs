@@ -35,6 +35,44 @@ function fixture() {
     logger: { warn(message) { warnings.push(message); } }, warnings,
     get jobs() { return jobs; }, get installs() { return installs; } };
 }
+test('missing encryption configuration remains ordinary unencrypted preparation', async () => {
+  const f = fixture();
+  const result = await prepareAssets(f);
+  assert.equal(result.error, undefined);
+  assert.equal(f.jobs, 1);
+  assert.deepEqual(f.warnings, []);
+});
+
+for (const failure of ['malformed JSON', 'read failure', 'changing source', 'inspection failure', 'audio view settings']) {
+  test(`unavailable encryption settings preserve ordinary loading: ${failure}`, async () => {
+    const f = fixture();
+    fs.mkdirSync(path.join(f.gameRoot, 'data'));
+    fs.writeFileSync(path.join(f.gameRoot, 'data/System.json'),
+      ['malformed JSON', 'audio view settings'].includes(failure) ? '{' : '{}');
+    if (failure === 'audio view settings') f.native.media = { installAudioViews() {
+      assert.fail('invalid settings must not install audio views');
+    } };
+    if (failure === 'read failure') f.native.fs = { readBytes(source) {
+      if (source === 'data/System.json') throw new Error('read denied');
+      return null;
+    } };
+    if (failure === 'changing source') {
+      let revision = 0;
+      f.native.assets.sourceIdentity = () => ++revision;
+    }
+    if (failure === 'inspection failure') {
+      f.native.assets.sourceIdentity = () => { throw new Error('inspection failed'); };
+    }
+    const result = await prepareAssets(f);
+    assert.match(result.error, /cannot read data\/System.json encryption settings/);
+    assert.equal(f.jobs, 0);
+    assert.equal(result.installed, 0);
+    assert.equal(result.decrypted, 0);
+    assert.equal(f.warnings.length, 1);
+    assert.ok(f.warnings[0].includes(result.error));
+  });
+}
+
 function cachePath(f) {
   return path.join(f.cacheRoot, 'preparation-v1', crypto.createHash('sha256').update(JSON.stringify(path.resolve(f.gameRoot))).digest('hex').slice(0,16));
 }

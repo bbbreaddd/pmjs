@@ -71,8 +71,14 @@ function sourceFile(native, gameRoot, source) {
 }
 async function encryptionSettings(native, gameRoot, files) {
   try {
-    const file = sourceFile(native, gameRoot, 'data/System.json');
-    if (!fs.existsSync(file)) return { images: false, audio: false, key: null };
+    const file = typeof native.assets.sourcePath === 'function'
+      ? native.assets.sourcePath('data/System.json') : path.join(gameRoot, 'data/System.json');
+    if (!file) return { images: false, audio: false, key: null };
+    try { await fsp.stat(file); }
+    catch (error) {
+      if (error.code === 'ENOENT') return { images: false, audio: false, key: null };
+      throw error;
+    }
     let sourceIdentity = native.assets.sourceIdentity?.('data/System.json');
     const read = () => native.fs?.readBytes ? Buffer.from(native.fs.readBytes('data/System.json')) : fsp.readFile(file);
     const data = await read();
@@ -86,7 +92,9 @@ async function encryptionSettings(native, gameRoot, files) {
     return { images: system.hasEncryptedImages === true, audio: system.hasEncryptedAudio === true,
       key: /^[a-f0-9]{32}$/i.test(system.encryptionKey) ? Buffer.from(system.encryptionKey, 'hex') : null,
       hash: files.inspectSync(file, data, 'settings').hash, sourceIdentity };
-  } catch (_) { return { images: false, audio: false, key: null }; }
+  } catch (cause) {
+    return { error: new Error(`cannot read data/System.json encryption settings: ${cause.message}`, { cause }) };
+  }
 }
 function mediaHeader(bytes, extension) {
   if (extension === '.png') return bytes.subarray(0, 8).equals(PNG);
@@ -357,7 +365,7 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
     throw new Error('assetPreparation.workspaceBytes must be an integer from 0 to 268435456');
   const offline = preparationContext === 'offline';
   const audioViewSupport = !offline && typeof native?.media?.installAudioViews === 'function';
-  const audioSettings = audioViewSupport ? await encryptionSettings(native, gameRoot, session.files) : null;
+  let audioSettings;
   const indexedImages = new Map();
   for (const record of portableIndex?.images || []) {
     const records = indexedImages.get(record.source);
@@ -392,6 +400,10 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
   try {
     report('discover');
     if (cancelled()) return result;
+    if (audioViewSupport) {
+      audioSettings = await encryptionSettings(native, gameRoot, session.files);
+      if (audioSettings.error) throw audioSettings.error;
+    }
     validRecipes(recipes);
     if (pageCodec === 'lz4') {
       if (native.assets?.preparationWorkspaceVersion !== 1 || typeof native.assets?.preparationLz4Version !== 'string')
@@ -420,6 +432,7 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
     const sources = session.inventory.filter(source => safeSource(source) || decryptedSource(source));
     const settings = await encryptionSettings(native, gameRoot, session.files);
     result.total = sources.length;
+    if (settings.error) throw settings.error;
     report('discover');
     if (cancelled()) return result;
     if (!sources.length) {
@@ -739,7 +752,9 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
         });
       }
       if (audioViewSupport) {
-        if ((await encryptionSettings(native, gameRoot, session.files)).hash !== audioSettings.hash)
+        const currentSettings = await encryptionSettings(native, gameRoot, session.files);
+        if (currentSettings.error) throw currentSettings.error;
+        if (currentSettings.hash !== audioSettings.hash)
           throw new Error('audio encryption settings changed during preparation');
         result.audioViews = native.media.installAudioViews(result.audioViewEntries);
         result.fallback += result.audioViewEntries.length - result.audioViews;
