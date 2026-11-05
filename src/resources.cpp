@@ -822,6 +822,7 @@ std::optional<ImageInfo> ImageStore::loadPng(const std::filesystem::path& path,
         if (auto image = installPreparedLoad(*source, load, retainCpuPixels)) return image;
       }
       auto pixels = decodePreparedFallback(*load);
+      if (!pixels) pixels = decodeFile(*source);
       if (!pixels) return std::nullopt;
       return installDecoded(*source, std::move(*pixels), retainCpuPixels);
     }
@@ -1646,7 +1647,7 @@ bool ImageStore::updateRgba(ImageHandle handle, const void* pixels) {
 
 bool ImageStore::updateRgbaRegion(ImageHandle handle, int x, int y, int width,
                                   int height, const void* pixels,
-                                  int sourceRowPixels) {
+                                  int sourceRowPixels, bool imageKnownAllZero) {
   const auto info = lookup(handle);
   if (!info || !pixels || x < 0 || y < 0 || width <= 0 || height <= 0 ||
       x + width > info->width || y + height > info->height ||
@@ -1654,7 +1655,7 @@ bool ImageStore::updateRgbaRegion(ImageHandle handle, int x, int y, int width,
   if (!preservePixelReads(handle)) return false;
   auto& slot = slots_[(handle & indexMask) - 1U];
   ++slot.contentRevision;
-  const bool canProveZero = slot.knownAllZero ||
+  const bool canProveZero = imageKnownAllZero || slot.knownAllZero ||
       (x == 0 && y == 0 && width == info->width && height == info->height);
   slot.knownAllZero = false;
   if (!detachSharedTexture(slot)) return false;

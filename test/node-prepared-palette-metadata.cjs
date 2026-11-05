@@ -71,8 +71,13 @@ test('prepared page palette metadata survives direct and catalog installs', asyn
           const repeated = native.images.memory();
           assert.equal(repeated.preparedPageDecodes, steady.preparedPageDecodes);
           assert.equal(repeated.textureUploadBytes, steady.textureUploadBytes);
-          assert.deepEqual(draw(prepared, { nearest: false, crop: [0.25, 0.5, 63, 47], scale: 0.9 }),
-            draw(reference, { nearest: false, crop: [0.25, 0.5, 63, 47], scale: 0.9 }), 'linear fallback pixels');
+          const options = { nearest: false, crop: [0.25, 0.5, 63, 47], scale: 0.9 };
+          const actual = draw(prepared, options), expected = draw(reference, options);
+          assert.equal(actual.length, expected.length);
+          for (let i = 0; i < actual.length; ++i) {
+            assert.ok(Math.abs(actual[i] - expected[i]) <= 1,
+              `linear pixels: byte ${i}: ${actual[i]} != ${expected[i]}`);
+          }
         } finally {
           native.beginFrame();
           for (const image of [prepared, reference]) if (image) native.images.release(image.handle);

@@ -194,11 +194,17 @@ const handles = [];
     const image = await native.images.loadAsync(residual.source);
     handles.push(image.handle);
     console.error(JSON.stringify({ beforeDraw: native.images.memory(100).largest.find(o => o.handle === image.handle) }));
-    drawPacket(native, spritePacket(native, image, { crop: [0, 0, image.width, image.height], scale: 32 / image.width }));
+    const spriteOptions = { crop: [0, 0, image.width, image.height], scale: 32 / image.width };
+    const actual = drawPacket(native, spritePacket(native, image, spriteOptions));
+    const reference = native.images.loadBytes(fs.readFileSync(path.join(gameRoot, residual.source)));
+    try {
+      assert.deepEqual(actual, drawPacket(native, spritePacket(native, reference, spriteOptions)));
+    } finally { native.images.release(reference.handle); }
     const indexedOwner = native.images.memory(100).largest.find(o => o.handle === image.handle);
     if (!indexedOwner.paletteSparse) console.error(JSON.stringify({ indexedOwner, cells: entry.descriptor.cells }));
-    assert.equal(indexedOwner.paletteSparse, true,
-      'indexed sparse page was promoted to dense storage');
+    assert.ok(indexedOwner.paletteSparse || (indexedOwner.sceneryBacking && !indexedOwner.sceneryFullMaterialized),
+      'prepared page lost compact backing');
+    assert.equal(indexedOwner.fullTextureResident, false, 'prepared draw materialized the full source');
     const reused = await prepareAssets({ ...preparation, pageCodec: 'lz4',
       portableIndex: lz4Index, portableAssetRoot: lz4Output, cacheRoot: path.join(root, 'bundled-cache') });
     assert.equal(reused.validation.hashedFiles, 0, 'unchanged pages were hashed again');

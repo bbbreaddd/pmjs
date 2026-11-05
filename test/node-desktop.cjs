@@ -11,6 +11,7 @@ const game = path.join(root, 'game');
 fs.mkdirSync(game);
 fs.writeFileSync(path.join(game, 'package.json'), '{"name":"desktop-test"}');
 native.initialize({ gameRoot: game, width: 32, height: 24, windowTitle: 'Desktop contracts' });
+native.runtime.setFullscreen(false);
 native.storage = createStorage(path.join(root, 'save'));
 createGameFilesystem(native.fs, path.join(root, 'overlay'));
 native.runtime.now = () => 0;

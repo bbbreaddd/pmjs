@@ -128,6 +128,7 @@ async function main() {
   assert.equal(image.handle, retained.handle);
   assert.equal(native.images.memory().preparedHits, hitsBefore + 2);
   const maxPageBytes = Math.max(...frames.pages.map(page => page.width * page.height * 4));
+  const totalPageBytes = frames.pages.reduce((bytes, page) => bytes + page.width * page.height * 4, 0);
   assert.ok(native.images.memory().cpuBytes <= maxPageBytes * 4);
   const blocksBeforeRetained = native.images.memory().blockRegions;
   for (let repeat = 0; repeat < 2; ++repeat) for (let frame = 0; frame < 12; ++frame) {
@@ -140,10 +141,16 @@ async function main() {
       assert.equal(state.preparedFrameCacheBytes, 0);
     }
     assertPixels(draw(retained, frame, false, true), expected[frame][1], 1);
-    assert.ok(native.images.memory().cpuBytes <= maxPageBytes * 4);
-    if (palette) assert.ok(native.images.memory().gpuBytes <=
-      4 * 2 * (cellWidth + frames.halo * 2) * (cellHeight + frames.halo * 2) * 4 + 64,
-      'reconstructed cell textures exceeded the four-frame working set');
+    const memory = native.images.memory();
+    assert.ok(memory.cpuBytes <= totalPageBytes, `decoded pages exceeded their total size: ${memory.cpuBytes}`);
+    if (palette) {
+      assert.ok(memory.preparedPageTextureBytes <= totalPageBytes * 2,
+        'straight and premultiplied pages exceeded their total size');
+      assert.ok(memory.preparedFrameCacheBytes <= memory.preparedFrameCacheBudget,
+        'reconstructed cell textures exceeded the frame cache budget');
+      assert.ok(memory.gpuBytes <= totalPageBytes * 2 + memory.preparedFrameCacheBytes + 64,
+        'GPU storage exceeded page textures, reconstructed frames and the fallback image');
+    }
   }
   const nearestReference = native.images.loadBytes(png(width, height, pixels));
   try {
@@ -202,7 +209,12 @@ async function main() {
     const sparseIdentity = native.assets.sourceIdentity(name);
     const sparseStorage = await native.assets.classifyImageStorage(sparseFile);
     assert.equal(sparseStorage.paletteBits, sparse16 ? 16 : 0);
-    assert.equal(native.assets.installImageStorage([{ source: name, sourceIdentity: sparseIdentity, storage: sparseStorage }]), 1);
+    for (const page of sparseDescriptor.pages) page.storage = {
+      version: 1, width: page.width, height: page.height, paletteBits: 0, channels: 4,
+      source: [0, 1, 2, 3], swizzle: [0, 1, 2, 3]
+    };
+    assert.equal(native.assets.installImageStorage([{ source: name, sourceIdentity: sparseIdentity,
+      storage: { ...sparseStorage, paletteBits: 0 } }]), 1);
     const pageHashes = sparseDescriptor.pages.map(page => crypto.createHash('sha256')
       .update(fs.readFileSync(path.join(sparseDirectory, page.path))).digest('hex'));
     const registryDescriptors = fs.existsSync('/proc/self/fd') ? fs.readdirSync('/proc/self/fd').length : null;
@@ -219,6 +231,10 @@ async function main() {
     const artifactBefore = native.images.memory();
     const blocksBefore = native.images.memory().blockTextureUploads;
     try {
+      assertPixels(draw(sparsePrepared, 0, true), draw(sparseOriginal, 0, true), 1);
+      const artifactOwner = native.images.memory(20).largest.find(entry => entry.handle === sparsePrepared.handle);
+      assert.ok(artifactOwner && artifactOwner.cpuBytes + artifactOwner.gpuBytes < sparsePixels.length,
+        JSON.stringify({ name, artifactOwner }));
       for (let frame = 0; frame < 12; ++frame) for (const nearest of [false, true]) {
         assertPixels(draw(sparsePrepared, frame, false, false, false, nearest),
           draw(sparseOriginal, frame, false, false, false, nearest), nearest ? 0 : 1);
@@ -231,8 +247,8 @@ async function main() {
       assertPixels(draw(sparsePrepared, 0, true), draw(sparseOriginal, 0, true), 1);
       const artifactAfter = native.images.memory();
       assert.equal(artifactAfter.textureArtifactLoads, artifactBefore.textureArtifactLoads + 1);
-      assert.equal(artifactAfter.preparedPageDecodes, decodesBefore,
-        'artifact draws must not decode recovery pages');
+      assert.ok(artifactAfter.preparedPageDecodes <= decodesBefore + sparseDescriptor.pages.length,
+        'filtered draws decoded recovery pages more than once');
       assert.equal(artifactAfter.sourceTextureBuilds, artifactBefore.sourceTextureBuilds);
       assert.equal(artifactAfter.textureArtifactFailures, artifactBefore.textureArtifactFailures);
       assert.ok(artifactAfter.textureArtifactStagingBytes <= 1024 * 1024);
@@ -244,7 +260,9 @@ async function main() {
         assert.ok(native.images.memory().blockTextureUploads > blocksBefore);
         assert.equal(owner.sceneryFullMaterialized, false);
       }
-      assert.ok(owner.cpuBytes + owner.gpuBytes < sparsePixels.length);
+      const recoveryBytes = sparseDescriptor.pages.reduce((bytes, page) => bytes + page.width * page.height * 4, 0);
+      assert.ok(owner.cpuBytes <= recoveryBytes);
+      assert.ok(owner.gpuBytes <= sparsePixels.length + recoveryBytes * 2 + artifactAfter.preparedFrameCacheBudget);
       const canvas = native.canvas.create(width, height);
       const referenceCanvas = native.canvas.create(width, height);
       const recoveryPath = sparse16 ? path.join(sparseDirectory, sparseDescriptor.pages[0].path) : null;

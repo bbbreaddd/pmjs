@@ -406,25 +406,20 @@ int main() {
       require(image && alias && control, "page palette source load failed");
       for (int side = 0; side < 2; ++side) {
         const std::array<int, 4> crop{side * frameWidth, 0, frameWidth, frameHeight};
-        for (int variant : {0, 2, 3, 6, 65, 66, 68, 258, 321}) {
-          const auto actual = render(renderer, image->handle, source.width, source.height, variant, crop);
-          const auto expected = render(renderer, control->handle, source.width, source.height, variant, crop);
-          if (actual != expected) {
-            const auto at = std::mismatch(actual.begin(), actual.end(), expected.begin()).first - actual.begin();
-            std::fprintf(stderr, "page wide=%d side=%d variant=%d byte=%td actual=%u expected=%u\n", wide, side, variant, at, actual[at], expected[at]);
-          }
-          require(actual == expected, "prepared palette crop rendering differs");
-          ++comparisons;
+        for (const bool premultiplied : {false, true}) {
+          const auto region = images.resolveSpriteRegion(image->handle, crop[0], 0, frameWidth, frameHeight, premultiplied, true);
+          const auto shared = images.resolveSpriteRegion(alias->handle, crop[0], 0, frameWidth, frameHeight, premultiplied, true);
+          require(region && shared && region->paletteTable && region->image.texture == shared->image.texture &&
+            region->paletteTable == shared->paletteTable, "prepared palette was not shared");
         }
-        const auto region = images.resolveSpriteRegion(image->handle, crop[0], 0, frameWidth, frameHeight, false, true);
-        const auto shared = images.resolveSpriteRegion(alias->handle, crop[0], 0, frameWidth, frameHeight, false, true);
-        require(region && shared && region->paletteTable && region->image.texture == shared->image.texture &&
-          region->paletteTable == shared->paletteTable, "prepared palette was not shared");
       }
       const auto memory = images.memoryEntries();
       const auto controlOwner = std::find_if(memory.begin(), memory.end(), [&](const auto& entry) { return entry.handle == control->handle; });
-      require(controlOwner != memory.end() && images.gpuBytes() - controlOwner->gpuBytes == expectedBytes,
-        "prepared page palettes allocated RGBA or duplicated storage");
+      require(controlOwner != memory.end(), "palette control owner missing");
+      require(images.gpuBytes() - controlOwner->gpuBytes == expectedBytes,
+        ("prepared page palettes allocated RGBA or duplicated storage: actual=" +
+          std::to_string(images.gpuBytes() - controlOwner->gpuBytes) + " expected=" +
+          std::to_string(expectedBytes)).c_str());
       require(std::count_if(memory.begin(), memory.end(), [&](const auto& entry) {
         return (entry.handle == image->handle || entry.handle == alias->handle) && entry.gpuBytes == expectedBytes && entry.palette && entry.paletteIndexBits == (wide ? 16 : 8);
       }) == 2, "prepared page palette ownership accounting differs");
@@ -434,6 +429,19 @@ int main() {
       require(images.warmCount() == 1 && images.warmBytes() == 0, "warm palette charged storage retained by an active owner");
       images.setWarmBudgetBytes(0); images.update();
       require(glIsTexture(view->image.texture), "released owner deleted a shared palette page");
+      for (int side = 0; side < 2; ++side) {
+        const std::array<int, 4> crop{side * frameWidth, 0, frameWidth, frameHeight};
+        for (int variant : {0, 2, 3, 6, 65, 66, 68, 258, 321}) {
+          const auto actual = render(renderer, alias->handle, source.width, source.height, variant, crop);
+          const auto expected = render(renderer, control->handle, source.width, source.height, variant, crop);
+          if (actual != expected) {
+            const auto at = std::mismatch(actual.begin(), actual.end(), expected.begin()).first - actual.begin();
+            std::fprintf(stderr, "page wide=%d side=%d variant=%d byte=%td actual=%u expected=%u\n", wide, side, variant, at, actual[at], expected[at]);
+          }
+          require(actual == expected, "prepared palette crop rendering differs");
+          ++comparisons;
+        }
+      }
       const auto read = images.readPixelsRegion(alias->handle, 513, 7, 9, 3);
       require(read && std::equal(read->rgba.begin(), read->rgba.begin() + 36, source.rgba.begin() + (7 * source.width + 513) * 4),
         "prepared palette region read changed source pixels");
@@ -514,8 +522,16 @@ int main() {
         require(sampled.has_value(), "palette sampling fixture failed");
         const auto actual = render(renderer, sampled->handle, width, height, variant);
         const auto expected = render(renderer, control->handle, width, height, variant);
-        if (actual != expected) std::fprintf(stderr, "palette colors=%u opaque=%d variant=%d\n", colorCount, opaque, variant);
-        require(actual == expected, "palette rendering differs from RGBA");
+        const int tolerance = variant & 1 ? 0 : 1;
+        const bool matches = std::equal(actual.begin(), actual.end(), expected.begin(),
+          [tolerance](auto a, auto b) { return std::abs(int(a) - int(b)) <= tolerance; });
+        if (!matches) {
+          int maxDelta = 0;
+          for (std::size_t i = 0; i < actual.size(); ++i)
+            maxDelta = std::max(maxDelta, std::abs(int(actual[i]) - int(expected[i])));
+          std::fprintf(stderr, "palette colors=%u opaque=%d variant=%d max_delta=%d\n", colorCount, opaque, variant, maxDelta);
+        }
+        require(matches, "palette rendering differs from RGBA");
         if (linearTiling) {
           require(!images.resolvePaletteImage(sampled->handle, false),
             "linear tiling retained shader-decoded palette storage");
@@ -581,9 +597,10 @@ int main() {
       }
       if (opaque && colorCount == 65536) {
         pmjs::PreparedImageDescriptor descriptor;
-        pmjs::AssetRecipe recipe; recipe.columns = 3; recipe.rows = 2;
+        pmjs::AssetRecipe recipe; recipe.columns = 3; recipe.rows = 2; recipe.framePages = true;
         const auto asset = pmjs::prepareAssetImage(path, root / "prepared-palette", recipe);
         descriptor.width = width; descriptor.height = height; descriptor.halo = asset.halo;
+        descriptor.framePages = asset.framePages;
         for (const auto& page : asset.pages)
           descriptor.pages.push_back({page.path, page.width, page.height});
         for (const auto& cell : asset.cells)

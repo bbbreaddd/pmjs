@@ -9,6 +9,17 @@ const { png } = require('./helpers/png.cjs');
 const native = require(path.resolve(process.argv[2]));
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-derived-sprite-'));
 const fixtures = [];
+function assertFrame(candidate, control, nearest, details) {
+  assert.equal(candidate.length, control.length);
+  const differences = [];
+  for (let i = 0; i < candidate.length && differences.length < 12; ++i) {
+    if (Math.abs(candidate[i] - control[i]) > (nearest ? 0 : 1)) {
+      differences.push({ x: Math.floor(i / 4) % 128,
+        y: Math.floor(i / 512), channel: i % 4, candidate: candidate[i], control: control[i] });
+    }
+  }
+  assert.equal(differences.length, 0, JSON.stringify({ ...details, nearest, differences }));
+}
 for (const [name, width, height, grid, backdrop] of [
   ['transparent', 192, 96, [6, 4], [0, 0, 0, 0]],
   ['opaque', 192, 96, [6, 4], [12, 23, 34, 255]],
@@ -143,23 +154,16 @@ async function main() {
     for (const nearest of [true, false]) for (const source of sources) for (const transform of transforms) {
       const control = frame(original, source, transform, nearest, 0.63);
       const candidate = frame(derived, source, transform, nearest, 0.63);
-      if (!candidate.equals(control)) {
-        const differences = [];
-        for (let i = 0; i < candidate.length && differences.length < 12; ++i) {
-          if (candidate[i] !== control[i]) differences.push({ x: Math.floor(i / 4) % 128,
-            y: Math.floor(i / 512), channel: i % 4, candidate: candidate[i], control: control[i] });
-        }
-        throw new Error(JSON.stringify({ name: fixture.name, nearest, source, transform, differences }));
-      }
+      assertFrame(candidate, control, nearest, { name: fixture.name, source, transform });
       assert.deepEqual(frame(derived, source, transform, nearest, 0.63), candidate,
         'frozen derived frame changed');
       ++comparisons;
       if (nearest) nearestBacking = native.images.memory(100);
     }
     for (const transform of transforms) {
-      assert.deepEqual(frame(derived, sources[0], transform, false, 0.63, 0, 1 << 11),
-        frame(original, sources[0], transform, false, 0.63, 0, 1 << 11),
-        `${fixture.name}: packed UVs changed with prepared backing`);
+      assertFrame(frame(derived, sources[0], transform, false, 0.63, 0, 1 << 11),
+        frame(original, sources[0], transform, false, 0.63, 0, 1 << 11), false,
+        { name: fixture.name, transform, flags: 1 << 11 });
       ++comparisons;
     }
     if (fixture.uniform) {

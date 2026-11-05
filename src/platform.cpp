@@ -404,7 +404,7 @@ Platform::Platform(int width, int height, std::string title) {
     window_ = SDL_CreateWindow(title.c_str(), SDL_WINDOWPOS_CENTERED,
                                SDL_WINDOWPOS_CENTERED, windowWidth_, windowHeight_,
                                SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN |
-                                 SDL_WINDOW_FULLSCREEN_DESKTOP);
+                                 (sizeOverride && *sizeOverride ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP));
     if (window_) {
       Log() << "[pmjs-platform] stage=create-context begin rgb="
             << rgb[0] << rgb[1] << rgb[2] << '\n';

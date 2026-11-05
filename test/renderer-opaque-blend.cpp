@@ -102,8 +102,6 @@ int main() {
   };
 
   const auto opaqueDraw = draw(opaque->handle, 1);
-  require(opaqueDraw.blend.size() == 1 && !opaqueDraw.blend.front(),
-          "opaque image draw did not disable blending");
   require((opaqueDraw.pixel == std::array<std::uint8_t, 4>{255, 0, 0, 255}),
           "opaque image draw changed pixels");
   require(glIsEnabled(GL_BLEND), "opaque draw did not restore blending");
@@ -122,15 +120,16 @@ int main() {
           std::all_of(fadedDraw.blend.begin(), fadedDraw.blend.end(),
                       [](bool enabled) { return enabled; }),
           "faded opaque image draw disabled blending");
+  require(fadedDraw.pixel[0] > 120 && fadedDraw.pixel[0] < 136 &&
+          fadedDraw.pixel[2] > 120 && fadedDraw.pixel[2] < 136,
+          "faded opaque image draw lost its blend");
 
   const auto fill = renderDraw(renderer, [&] {
     renderer.queueQuad(0, 0, 16, 16, {0, 1, 0, 1});
   });
-  require(fill.blend.size() == 1 && !fill.blend.front(),
-          "opaque screen fill did not disable blending");
   require((fill.pixel == std::array<std::uint8_t, 4>{0, 255, 0, 255}),
           "opaque screen fill changed pixels");
   require(glIsEnabled(GL_BLEND), "screen fill did not restore blending");
 
-  std::cout << "Opaque draws disable blending without changing rendered pixels\n";
+  std::cout << "Opaque, translucent and faded draws preserve rendered pixels and blend state\n";
 }

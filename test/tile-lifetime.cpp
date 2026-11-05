@@ -71,7 +71,7 @@ int main() try {
       "catalog replacement duplicated metadata");
     auto image = images.loadPng(root/"source.png", false, "set-0");
     require(image && images.hasTileBacking(image->handle), "prepared load failed");
-    require(fileCount() == baseline+2, "active backing file capture wrong");
+    require(fileCount() == baseline+1, "active backing should capture only the page file");
     const auto prototypeBytes = images.tileMetadataBytes()-catalogBytes;
     require(prototypeBytes > 0, "active backing metadata not accounted");
     auto view = images.createTileSlot(image->handle, 16, 16);
@@ -88,6 +88,7 @@ int main() try {
     const auto covered = images.readPixelsRegion(image->handle, 1, 1, 1, 1);
     require(covered && covered->rgba == std::vector<std::uint8_t>(4, 127) &&
       !images.hasCpuPixels(image->handle), "covered read unnecessarily decoded ordinary source");
+    require(fileCount() == baseline+1, "covered read captured the fallback snapshot");
     auto source = pmjs::ImageStore::openFile(root/"source.png");
     auto pending = images.capturePrepared(*source, "set-0");
     require(pending && images.validatePrepared(*pending, true), "worker snapshot validation failed");
@@ -102,6 +103,7 @@ int main() try {
     require(retained && retained->handle == image->handle && images.hasCpuPixels(image->handle),
       "worker snapshot not transferred into existing view");
     source.reset();
+    require(fileCount() == baseline+2, "fallback read did not retain the page and snapshot files");
     for (int i = 0; i < 10; ++i) {
       const auto region = images.readPixelsRegion(image->handle, 5, 5, 1, 1);
       require(region && region->rgba == std::vector<std::uint8_t>(4, 127), "retained region redecodes source");
@@ -167,6 +169,9 @@ int main() try {
     image = images.loadPng(root/"renumbered.png", false, "changed");
     require(image && !images.hasTileBacking(image->handle) && (images.consumePreparationInvalidations() & 2),
       "unverified renumbered source kept its prepared tile set");
+    const auto fallback = images.readPixelsRegion(image->handle, 0, 0, 1, 1);
+    require(fallback && fallback->rgba == std::vector<std::uint8_t>(4, 127),
+      "rejected prepared data did not recover original source pixels");
     images.release(image->handle); images.update();
   }
   std::filesystem::remove_all(root);

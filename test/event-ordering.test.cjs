@@ -195,7 +195,9 @@ test('runner shutdown cancels browser timers and discards queued results', () =>
     function complete(){return ended;}
   `);
   assert.ok(trace.includes('released') || trace.includes('late-task'));
-  assert.equal(trace.at(-1), 'stopped');
+  const stopped = trace.indexOf('stopped');
+  assert.ok(stopped >= 0);
+  assert.ok(trace.slice(stopped + 1).every(entry => entry === 'released'), trace.join(','));
 });
 
 test('runner XHR checkpoints between DONE and load, and between independent completions', () => {

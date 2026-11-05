@@ -708,11 +708,22 @@ test('overdue scheduler skips expired deadlines without adding a full-period sle
   assert.equal(advanceDeadline(0, 10, period), period);
 });
 test('bootstrap and tick failures reject the run', async () => {
-  const bootstrap = fixture('throw new Error("bootstrap failure")');
-  await assert.rejects(run(bootstrap), /bootstrap failure/);
-  const tick = fixture('globalThis.__pmjsTick=()=>{throw new Error("tick failure")};globalThis.__pmjsRender=()=>{};');
-  tick.addon = writeAddon(tick.gameRoot, [true, true]);
-  await assert.rejects(run(tick), /tick failure/);
+  const clock = require('node:perf_hooks').performance;
+  const oldNow = Object.getOwnPropertyDescriptor(clock, 'now');
+  let now = 0;
+  Object.defineProperty(clock, 'now', { configurable: true, value: () => (now += 100) });
+  try {
+    const bootstrap = fixture('throw new Error("bootstrap failure")');
+    bootstrap.assetPreparation = 'off'; bootstrap.mapPreparation = 'off';
+    await assert.rejects(run(bootstrap), /bootstrap failure/);
+    const tick = fixture('globalThis.__pmjsTick=()=>{throw new Error("tick failure")};globalThis.__pmjsRender=()=>{};');
+    tick.assetPreparation = 'off'; tick.mapPreparation = 'off';
+    tick.addon = writeAddon(tick.gameRoot, [true, true]);
+    await assert.rejects(run(tick), /tick failure/);
+  } finally {
+    if (oldNow) Object.defineProperty(clock, 'now', oldNow);
+    else delete clock.now;
+  }
 });
 
 test('preparation cancellation polls the host, waits for its worker and prevents guest boot', async () => {

@@ -13,7 +13,7 @@ SDL_GLContext SDL_GL_GetCurrentContext() {
   const char* mode = std::getenv("PMJS_IMAGE_FAULT");
   if (mode && std::strcmp(mode, "no-context") == 0) return nullptr;
   using Current = SDL_GLContext (*)();
-  static const auto current = reinterpret_cast<Current>(dlsym(RTLD_NEXT, "SDL_GL_GetCurrentContext"));
+  static const auto current = reinterpret_cast<Current>(dlsym(dlopen("libSDL2-2.0.so.0", RTLD_LAZY), "SDL_GL_GetCurrentContext"));
   return current();
 }
 EGLContext eglGetCurrentContext() {

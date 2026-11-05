@@ -1960,7 +1960,8 @@ bool CanvasStore::uploadSurface(Surface& target) {
     const auto image = images_.createRgba(surface.width, surface.height, pixels.data(), true);
     if (!image) return false;
     target.image = image->handle;
-  } else if (!images_.updateRgbaRegion(target.image, x, y, width, height, pixels.data(), width)) {
+  } else if (!images_.updateRgbaRegion(target.image, x, y, width, height, pixels.data(), width,
+      surface.knownAllZero && target.imageRevision == images_.contentRevision(target.image))) {
     return false;
   }
   target.imageRevision = images_.contentRevision(target.image);

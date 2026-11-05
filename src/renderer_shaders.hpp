@@ -1207,14 +1207,13 @@ constexpr const char* simpleFragmentSource = R"(#version 300 es
     highp vec2 size = vec2(textureSize(image, 0));
     highp vec2 position = roundEven((coord * size - vec2(0.5)) * 256.0) / 256.0;
     highp vec2 pixel = floor(position), weight = fract(position);
-    highp ivec2 weights = ivec2(weight * 256.0);
-    highp ivec4 a = ivec4(floor(paletteColor((pixel + vec2(0.5)) / size) * 255.0 + 0.5));
-    highp ivec4 b = ivec4(floor(paletteColor((pixel + vec2(1.5, 0.5)) / size) * 255.0 + 0.5));
-    highp ivec4 c = ivec4(floor(paletteColor((pixel + vec2(0.5, 1.5)) / size) * 255.0 + 0.5));
-    highp ivec4 d = ivec4(floor(paletteColor((pixel + vec2(1.5)) / size) * 255.0 + 0.5));
-    highp ivec4 top = a * (256 - weights.x) + b * weights.x;
-    highp ivec4 bottom = c * (256 - weights.x) + d * weights.x;
-    return vec4((top * (256 - weights.y) + bottom * weights.y + 32768) / 65536) / 255.0;
+    highp vec4 a = floor(paletteColor((pixel + vec2(0.5)) / size) * 255.0 + 0.5);
+    highp vec4 b = floor(paletteColor((pixel + vec2(1.5, 0.5)) / size) * 255.0 + 0.5);
+    highp vec4 c = floor(paletteColor((pixel + vec2(0.5, 1.5)) / size) * 255.0 + 0.5);
+    highp vec4 d = floor(paletteColor((pixel + vec2(1.5)) / size) * 255.0 + 0.5);
+    highp vec4 top = floor(mix(a, b, weight.x) + 0.5);
+    highp vec4 bottom = floor(mix(c, d, weight.x) + 0.5);
+    return floor(mix(top, bottom, weight.y) + 0.5) / 255.0;
   }
   uniform bool pixiSpritePacking;
   uniform bool texturePremultiplied;
@@ -1457,14 +1456,13 @@ constexpr const char* spriteEffectFragmentSource = R"(#version 300 es
     highp vec2 size = vec2(textureSize(image, 0));
     highp vec2 position = roundEven((coord * size - vec2(0.5)) * 256.0) / 256.0;
     highp vec2 pixel = floor(position), weight = fract(position);
-    highp ivec2 weights = ivec2(weight * 256.0);
-    highp ivec4 a = ivec4(floor(paletteColor((pixel + vec2(0.5)) / size) * 255.0 + 0.5));
-    highp ivec4 b = ivec4(floor(paletteColor((pixel + vec2(1.5, 0.5)) / size) * 255.0 + 0.5));
-    highp ivec4 c = ivec4(floor(paletteColor((pixel + vec2(0.5, 1.5)) / size) * 255.0 + 0.5));
-    highp ivec4 d = ivec4(floor(paletteColor((pixel + vec2(1.5)) / size) * 255.0 + 0.5));
-    highp ivec4 top = a * (256 - weights.x) + b * weights.x;
-    highp ivec4 bottom = c * (256 - weights.x) + d * weights.x;
-    return vec4((top * (256 - weights.y) + bottom * weights.y + 32768) / 65536) / 255.0;
+    highp vec4 a = floor(paletteColor((pixel + vec2(0.5)) / size) * 255.0 + 0.5);
+    highp vec4 b = floor(paletteColor((pixel + vec2(1.5, 0.5)) / size) * 255.0 + 0.5);
+    highp vec4 c = floor(paletteColor((pixel + vec2(0.5, 1.5)) / size) * 255.0 + 0.5);
+    highp vec4 d = floor(paletteColor((pixel + vec2(1.5)) / size) * 255.0 + 0.5);
+    highp vec4 top = floor(mix(a, b, weight.x) + 0.5);
+    highp vec4 bottom = floor(mix(c, d, weight.x) + 0.5);
+    return floor(mix(top, bottom, weight.y) + 0.5) / 255.0;
   }
   uniform bool pixiSpritePacking;
   uniform bool texturePremultiplied;

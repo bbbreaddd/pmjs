@@ -2,7 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const root = path.resolve(__dirname, '../..');
-const requirements = new Set(['js/pmjs-web/elements.js',
+const requirements = new Set(['js/pmjs-web/images.js', 'js/pmjs-web/elements.js',
   'js/pmjs-web/video-element.js', 'js/pmjs-web/image-element.js',
   'js/pmjs-web/document.js']);
 const elementSources = require('../../profiles/mv.json').modules.filter(file => requirements.has(file));

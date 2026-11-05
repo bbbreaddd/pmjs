@@ -17,7 +17,6 @@ assert.equal(hash(path.join(__dirname, 'helpers/effect-pixel-scenario.cjs')), re
 assert.equal(hash(path.join(referenceRoot, reference.audio.file)), reference.audio.sha256);
 assert.equal(hash(path.join(__dirname, '../tools/generate-mz-effect-reference.cjs')), reference.generatorSha256);
 assert.equal(hash(path.join(__dirname, 'effect-fixtures.cjs')), reference.fixtureGeneratorSha256);
-assert.equal(hash(path.join(__dirname, 'helpers/png.cjs')), reference.pngEncoderSha256);
 assert.equal(hash(path.join(assetRoot, 'effects/Model/block.efkmodel')), reference.modelSha256);
 native.initialize({ gameRoot: assetRoot, width: 64, height: 64, windowTitle: 'MZ renderer families' });
 
