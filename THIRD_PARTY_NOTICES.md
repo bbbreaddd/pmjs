@@ -9,6 +9,7 @@ PMJS's MIT license covers its own contributions, not third-party material.
 | Unicode default-ignorable data | Unicode 16.0.0 | Unicode-3.0; `third_party/unicode.LICENSE` |
 | Effekseer and stb portions | Revision pinned in `tools/effekseer.lock.json` | MIT and embedded stb notice; `third_party/effekseer.LICENSE` |
 | Arm ASTC Encoder | 4.7.0, pinned in `tools/astcenc.lock.json` | Apache-2.0; `third_party/astcenc.LICENSE` |
+| Native LZString codec and compatibility vectors | [LZString](https://github.com/pieroxy/lz-string), legacy word-based Base64 format | MIT, copyright 2013 Pieroxy; `third_party/lz-string.LICENSE` |
 | LZ4 block compression | 1.10.0, pinned in `tools/lz4.lock.json` | BSD-2-Clause; `third_party/lz4.LICENSE` |
 | Effekseer effect fixtures | Revision in `test/assets/effects/LICENSE` | MIT; adjacent `LICENSE` |
 | Color-matrix shader contract and pixel-test reference | PixiJS 4.5.4 | MIT; `third_party/pixi4.LICENSE` |

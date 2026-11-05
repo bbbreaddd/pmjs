@@ -169,6 +169,7 @@ endif()
 
 add_library(pmjs_native MODULE
   src/node_addon.cpp
+  src/node_addon_compression.cpp
   src/node_addon_canvas.cpp
   src/node_addon_dialog.cpp
   src/node_addon_common.cpp
@@ -492,6 +493,8 @@ if(BUILD_TESTING)
     $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-video-clock PROPERTIES TIMEOUT 10
     ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
+  add_test(NAME node-compression COMMAND ${NODE_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-compression.cjs" $<TARGET_FILE:pmjs_native>)
   add_test(NAME node-preparation-lock COMMAND ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-preparation-lock.cjs" $<TARGET_FILE:pmjs_native>)
   set_tests_properties(node-preparation-lock PROPERTIES TIMEOUT 15)

@@ -496,7 +496,7 @@ async function runSession(input, diagnostics, setNative) {
       });
     }
     globalThis.NativeHost = { runtime: native.runtime, render: native.render,
-      plugins: native.plugins, mv: native.mv,
+      plugins: native.plugins, mv: native.mv, compression: native.compression,
       scene: native.scene, images: native.images, assets: native.assets, fs: hostFilesystem(native.fs),
       storage: hostFilesystem(native.storage), input: native.input, canvas: native.canvas,
       media: native.media, dialog: native.dialog, effects: native.effects,

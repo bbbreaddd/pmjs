@@ -2,7 +2,8 @@ var pmjsStorageDecodeIntrinsics = {
   fromCharCode: String.fromCharCode, charAt: String.prototype.charAt,
   charCodeAt: String.prototype.charCodeAt, indexOf: String.prototype.indexOf,
   replace: String.prototype.replace, pow: Math.pow,
-  regexpReplace: RegExp.prototype[Symbol.replace], regexpExec: RegExp.prototype.exec
+  regexpReplace: RegExp.prototype[Symbol.replace], regexpExec: RegExp.prototype.exec,
+  hasOwnProperty: Object.prototype.hasOwnProperty, string: String, isNaN: isNaN
 };
 
 function installNativeStorageManager() {
@@ -56,6 +57,35 @@ function installNativeStorageManager() {
       });
   }
 
+  var compressedMethods = ['compressToBase64', 'compress', '_f', '_keyStr'];
+  var reviewedEncoder = lzDescriptors && compressedMethods.every(function(name) {
+    return lzDescriptors[name] && 'value' in lzDescriptors[name];
+  }) && lzDescriptors._f.value === pmjsStorageDecodeIntrinsics.fromCharCode &&
+    lzDescriptors._keyStr.value === 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=' &&
+    PMJS.methods.matchesSource(lzDescriptors.compressToBase64.value,
+      ['ede382b47dc153069ca756f999fbfe132731fbb4b00f3eb2109ab3c2662dc1b2']) &&
+    PMJS.methods.matchesSource(lzDescriptors.compress.value,
+      ['f273a1c3b45edf246193114d92383a97345253182da9a55962f564b4703c0662']);
+  if (reviewedEncoder && NativeHost.compression && lzDescriptors.compressToBase64.writable) {
+    var originalEncoder = lzDescriptors.compressToBase64.value;
+    var nativeEncoder = function(input) {
+      var native = pmjsStorageDecodeIntrinsics;
+      var unchanged = globalThis.LZString === lz &&
+        String === native.string && String.prototype.charAt === native.charAt &&
+        String.prototype.charCodeAt === native.charCodeAt && Math.pow === native.pow &&
+        Object.prototype.hasOwnProperty === native.hasOwnProperty && isNaN === native.isNaN &&
+        compressedMethods.every(function(name) {
+          var descriptor = Object.getOwnPropertyDescriptor(lz, name);
+          return descriptor && 'value' in descriptor && descriptor.value ===
+            (name === 'compressToBase64' ? nativeEncoder : lzDescriptors[name].value);
+        });
+      return typeof input === 'string' && unchanged
+        ? NativeHost.compression.compressLZString(input)
+        : originalEncoder.apply(this, arguments);
+    };
+    lz.compressToBase64 = nativeEncoder;
+  }
+
   function currentReadBurst() {
     if (!PMJS.optimizations.isEnabled('storage.read-burst-coalesce')) {
       return null;
@@ -107,7 +137,9 @@ function installNativeStorageManager() {
     if (raw === null) return null;
     var reuse = burst && storagePath && typeof raw === 'string' && canReuseDecodedText();
     if (reuse && hasBurstEntry(burst.decoded, storagePath)) return burst.decoded[storagePath];
-    var decoded = LZString.decompressFromBase64(raw);
+    var decoded = typeof raw === 'string' && canReuseDecodedText() && NativeHost.compression
+      ? NativeHost.compression.decompressLZString(raw)
+      : LZString.decompressFromBase64(raw);
     if (reuse && typeof decoded === 'string') burst.decoded[storagePath] = decoded;
     return decoded;
   }
