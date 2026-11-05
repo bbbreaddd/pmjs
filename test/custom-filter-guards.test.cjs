@@ -26,6 +26,10 @@ function fixture() {
     }
   }
   sandbox.PIXI.filters.ColorMatrixFilter = ColorMatrixFilter;
+  class AlphaFilter extends Filter {
+    constructor() { super(); this.alpha = 1; }
+  }
+  sandbox.PIXI.filters.AlphaFilter = AlphaFilter;
   class NoiseFilter extends Filter {}
   sandbox.PIXI.filters.NoiseFilter = NoiseFilter;
   sandbox.Graphics = { width: 32, height: 32 };
@@ -44,6 +48,53 @@ function fixture() {
   const node = { getBounds: () => ({ x: 4, y: 4, width: 16, height: 16 }) };
   return { sandbox, Filter, NoiseFilter, node, plans, compatHits, compilations: () => compilations };
 }
+
+test('native and neutral filters do not resolve unused custom shaders', () => {
+  const { sandbox, node, compilations, plans } = fixture();
+  const alpha = new sandbox.PIXI.filters.AlphaFilter();
+  const color = new sandbox.PIXI.filters.ColorMatrixFilter();
+  assert.equal(sandbox.nativeSceneFilter(node, [alpha, color]).groups.length, 0);
+  alpha.alpha = 0.5;
+  assert.equal(sandbox.nativeSceneFilter(node, [alpha]).groups[0].kind, 20);
+  color.matrix[4] = 0.1;
+  assert.equal(sandbox.nativeSceneFilter(node, [alpha, color]).groups.length, 2);
+  alpha.enabled = false;
+  assert.equal(sandbox.nativeSceneFilter(node, [alpha]).groups.length, 0);
+  assert.equal(compilations(), 0);
+  assert.equal(plans.length, 0);
+  assert.equal(alpha.glShaders, undefined);
+  assert.equal(color.glShaders, undefined);
+});
+
+test('a neutral window filter retains its authored isolation pass', () => {
+  const { sandbox, node, plans, compilations } = fixture();
+  sandbox.WindowLayer = class {};
+  const filter = sandbox.WindowLayer.voidFilter = new sandbox.PIXI.filters.AlphaFilter();
+  const layer = new sandbox.WindowLayer();
+  layer.getBounds = node.getBounds;
+  layer.children = [{ _isWindow: true, visible: true, openness: 128 }];
+  const result = sandbox.nativeSceneFilter(layer, [filter]);
+  assert.equal(result.groups[0].kind, 31);
+  assert.equal(compilations(), 1);
+  assert.equal(plans.length, 1);
+  assert.equal(plans[0].passes.length, 1);
+});
+
+test('authored areas and modified filters still resolve programs and report compilation failures', () => {
+  const { sandbox, node, plans, compilations, compatHits } = fixture();
+  const alpha = new sandbox.PIXI.filters.AlphaFilter();
+  node.filterArea = { x: 2, y: 3, width: 12, height: 10 };
+  assert.equal(sandbox.nativeSceneFilter(node, [alpha]).groups[0].kind, 31);
+  assert.equal(compilations(), 1);
+  assert.equal(plans.length, 1);
+  delete node.filterArea;
+  const modified = new sandbox.PIXI.filters.AlphaFilter();
+  modified.fragmentSrc = 'invalid fragment';
+  sandbox.NativeHost.render.createFilterProgram = () => { throw new Error('compile failed'); };
+  assert.equal(sandbox.nativeSceneFilter(node, [modified]).unsupported, true);
+  assert.equal(plans.length, 1);
+  assert.ok(compatHits.some(hit => hit[0] === 'render.filter-program' && hit[1].includes('compile failed')));
+});
 
 test('custom filter passes snapshot mutations and reuse the vertex/fragment program', () => {
   const { sandbox, Filter, node, plans, compilations } = fixture();

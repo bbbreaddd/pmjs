@@ -313,16 +313,6 @@ function nativeSceneFilter(node, activeFilters) {
       }
     }
   }
-  if (typeof NativeHost.render.createFilterPlan === 'function') {
-    try {
-      activeFilters.forEach(function(filter) {
-        if (filter && filter.enabled !== false && filter.fragmentSrc) nativeResolveFilterProgram(filter);
-      });
-    } catch (error) {
-      PMJS.compat.hit('render.filter-program', String(error.message || error));
-      return { blur: 0, groups: [], unsupported: true, filters: activeFilters };
-    }
-  }
   var MvToneFilter = typeof ToneFilter === 'function' ? ToneFilter : null;
   var DisplacementFilter = PIXI.filters && PIXI.filters.DisplacementFilter;
   var NoiseFilter = PIXI.filters && PIXI.filters.NoiseFilter;

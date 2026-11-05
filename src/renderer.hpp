@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <string>
 #include <memory>
+#include <map>
 #include <unordered_map>
 #include <vector>
 #include <variant>
@@ -451,6 +452,9 @@ class Renderer {
   void queryFilterProgramUniforms();
   TileProgramUniforms queryTileProgramUniforms(std::uint32_t program);
   void createPixiPrograms(const std::string& precision);
+  std::uint32_t linkProgram(const char* vertexSource, const char* fragmentSource);
+  std::map<std::pair<std::uint32_t, std::string>, std::uint32_t> shaderStages_;
+  std::size_t shaderStageSourceBytes_ = 0;
   static PrimitiveSurfaceHandle makePrimitiveSurfaceHandle(
       std::size_t index, std::uint16_t generation);
   PrimitiveSurfaceResource* lookupPrimitiveSurface(PrimitiveSurfaceHandle handle);

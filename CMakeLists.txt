@@ -297,6 +297,16 @@ if(BUILD_TESTING)
       "-Wl,--wrap=glTexImage2D" "-Wl,--wrap=glBufferData" "-Wl,--wrap=glGetError")
     add_test(NAME native-tile-allocation-failure COMMAND ${XVFB_RUN} -a $<TARGET_FILE:pmjs-tile-allocation-failure-test>)
     set_tests_properties(native-tile-allocation-failure PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
+    add_executable(pmjs-renderer-shader-cache-test test/renderer-shader-cache.cpp)
+    target_link_libraries(pmjs-renderer-shader-cache-test PRIVATE pmjs_runtime)
+    target_compile_options(pmjs-renderer-shader-cache-test PRIVATE -UNDEBUG)
+    target_link_options(pmjs-renderer-shader-cache-test PRIVATE
+      "-Wl,--wrap=glCreateShader" "-Wl,--wrap=glDeleteShader"
+      "-Wl,--wrap=glCompileShader" "-Wl,--wrap=glLinkProgram"
+      "-Wl,--wrap=glGetShaderiv" "-Wl,--wrap=glGetProgramiv"
+      "-Wl,--wrap=glCreateProgram" "-Wl,--wrap=glDeleteProgram")
+    add_test(NAME native-renderer-shader-cache COMMAND ${XVFB_RUN} -a $<TARGET_FILE:pmjs-renderer-shader-cache-test>)
+    set_tests_properties(native-renderer-shader-cache PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
     add_executable(pmjs-renderer-precision-test test/renderer-precision.cpp)
     target_link_libraries(pmjs-renderer-precision-test PRIVATE pmjs_runtime)
     target_compile_options(pmjs-renderer-precision-test PRIVATE -UNDEBUG)
@@ -800,8 +810,8 @@ if(BUILD_TESTING)
     pmjs_native pmjs-filter-target-lifetime-test pmjs-vfs-test
     pmjs-canvas-pixels-test pmjs-canvas-upload-test)
   if(TARGET pmjs-renderer-precision-test)
-    set_property(TEST native-renderer-precision APPEND PROPERTY LABELS smoke)
-    add_dependencies(pmjs-native-smoke pmjs-renderer-precision-test)
+    set_property(TEST native-renderer-precision native-renderer-shader-cache APPEND PROPERTY LABELS smoke)
+    add_dependencies(pmjs-native-smoke pmjs-renderer-precision-test pmjs-renderer-shader-cache-test)
   endif()
   if(PMJS_ENABLE_SANITIZERS)
     get_property(pmjs_test_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
