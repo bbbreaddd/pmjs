@@ -158,3 +158,179 @@ test('host fixtures preserve caller clocks and method receivers with an optional
   assert.equal(ordinary.NativeHost.runtime.loadScript, undefined);
   assert.equal(mocked.NativeHost.runtime.windowSize().width, 816);
 });
+
+
+test('attributes are separate from arbitrary properties and reflect supported HTML properties', () => {
+  const { c } = setup();
+  const el = c.document.createElement('div');
+  el.setAttribute('DATA-State', '');
+  assert.equal(el.getAttribute('data-state'), '');
+  assert.equal(el.hasAttribute('DATA-STATE'), true);
+  assert.equal(el.getAttribute('constructor'), null);
+  el.custom = 'property';
+  assert.equal(el.getAttribute('custom'), null);
+  el.setAttribute('constructor', 'attribute');
+  assert.equal(el.getAttribute('constructor'), 'attribute');
+  assert.equal(typeof el.constructor, 'function');
+  el.setAttribute('id', 'test');
+  assert.equal(el.id, 'test');
+  el.id = 'changed';
+  assert.equal(el.getAttribute('ID'), 'changed');
+  el.className = 'selected';
+  assert.equal(el.getAttribute('class'), 'selected');
+  el.removeAttribute('ID');
+  assert.equal(el.id, '');
+  assert.equal(el.getAttribute('id'), null);
+  el.removeAttribute('data-state');
+  assert.equal(el.hasAttribute('data-state'), false);
+  const input = c.document.createElement('input');
+  input.setAttribute('maxLength', '4');
+  assert.equal(input.maxLength, 4);
+  assert.equal(input.getAttribute('maxlength'), '4');
+  input.maxLength = 8;
+  assert.equal(input.getAttribute('maxlength'), '8');
+  input.removeAttribute('maxlength');
+  assert.equal(input.maxLength, -1);
+  const canvas = c.document.createElement('canvas');
+  canvas.setAttribute('width', '42');
+  assert.equal(canvas.width, 42);
+  canvas.width = 24;
+  assert.equal(canvas.getAttribute('width'), '24');
+  canvas.removeAttribute('width');
+  assert.equal(canvas.width, 300);
+  assert.equal(canvas.getAttribute('width'), null);
+});
+
+
+test('input and video attributes reflect supported properties', () => {
+  const { c } = setup();
+  const input = c.document.createElement('input');
+  input.setAttribute('value', 'hello');
+  input.setAttribute('disabled', '');
+  input._insertText('!');
+  assert.equal(input.value, 'hello');
+  input.removeAttribute('disabled');
+  input.setAttribute('readonly', '');
+  input._insertText('!');
+  assert.equal(input.value, 'hello');
+  input.removeAttribute('readonly');
+  input._insertText('!');
+  assert.equal(input.value, 'hello!');
+  const video = c.document.createElement('video');
+  video.setAttribute('loop', '');
+  video.setAttribute('preload', 'none');
+  video.setAttribute('width', '320');
+  assert.equal(video.width, 320);
+  video.height = 240;
+  assert.equal(video.getAttribute('height'), '240');
+  video.removeAttribute('width');
+  assert.equal(video.width, 0);
+  assert.equal(video.loop, true);
+  assert.equal(video.preload, 'none');
+  video.removeAttribute('loop');
+  video.removeAttribute('preload');
+  assert.equal(video.loop, false);
+  assert.equal(video.preload, 'auto');
+});
+
+test('removing an encrypted image source cancels its pending load', async () => {
+  let calls = 0;
+  const c = createHostContext({ runtime: { env: () => '' },
+    images: { loadEncryptedAsync() { calls++; return Promise.resolve({ handle: 1 }); }, release() {} }
+  }, { graphics: false });
+  const queued = [];
+  c.PMJS.tasks = { enqueue(fn) { queued.push(fn); } };
+  const image = new c.Image();
+  assert.equal(c.PMJS.images.loadEncrypted(image, 'secret.png_', 'key', 'secret.png'), true);
+  assert.equal(image.getAttribute('src'), 'secret.png_');
+  image.removeAttribute('src');
+  assert.equal(image.getAttribute('src'), null);
+  assert.equal(image.src, '');
+  for (const task of queued) await task();
+  assert.equal(calls, 0);
+});
+
+
+test('numeric attributes preserve authored strings and properties serialize converted integers', () => {
+  const { c } = setup();
+  const canvas = c.document.createElement('canvas');
+  canvas.width = 42.9;
+  assert.equal(canvas.width, 42);
+  assert.equal(canvas.getAttribute('width'), '42');
+  canvas.setAttribute('width', '42.9');
+  assert.equal(canvas.width, 42);
+  assert.equal(canvas.getAttribute('width'), '42.9');
+  canvas.setAttribute('width', 'invalid');
+  assert.equal(canvas.width, 300);
+  assert.equal(canvas.getAttribute('width'), 'invalid');
+  const video = c.document.createElement('video');
+  video.width = 12.8;
+  assert.equal(video.getAttribute('width'), '12');
+  video.setAttribute('width', '15.9');
+  assert.equal(video.width, 15);
+  assert.equal(video.getAttribute('width'), '15.9');
+  video.setAttribute('width', 'bad');
+  assert.equal(video.width, 0);
+  const input = c.document.createElement('input');
+  input.setAttribute('maxlength', 'invalid');
+  assert.equal(input.maxLength, -1);
+  input.maxLength = 4.8;
+  assert.equal(input.getAttribute('maxlength'), '4');
+});
+
+test('reflected input and video descriptors remain configurable', () => {
+  const { c } = setup();
+  const input = c.document.createElement('input');
+  const video = c.document.createElement('video');
+  for (const [element, names] of [[input, ['disabled', 'readOnly', 'type', 'maxLength']],
+    [video, ['width', 'height', 'loop', 'preload']]]) {
+    const proto = Object.getPrototypeOf(element);
+    for (const name of names) {
+      const descriptor = Object.getOwnPropertyDescriptor(proto, name);
+      assert.equal(descriptor.configurable, true, name);
+      Object.defineProperty(proto, name, descriptor);
+    }
+  }
+});
+
+test('unrelated attributes do not touch native canvas resources', () => {
+  const { c } = setup();
+  const canvas = c.document.createElement('canvas');
+  let releases = 0;
+  canvas._releaseNativeCanvas = () => { releases++; };
+  canvas.setAttribute('data-state', 'open');
+  canvas.removeAttribute('data-state');
+  assert.equal(releases, 0);
+  canvas.setAttribute('width', 'invalid');
+  assert.equal(releases, 1);
+});
+
+
+test('canvas dimension properties do not depend on a guest setAttribute override', () => {
+  const { c } = setup();
+  const canvas = c.document.createElement('canvas');
+  let releases = 0;
+  canvas._releaseNativeCanvas = () => { releases++; };
+  canvas.setAttribute = () => {};
+  canvas.width = 42;
+  assert.equal(canvas.width, 42);
+  assert.equal(canvas.getAttribute('width'), '42');
+  assert.equal(releases, 1);
+});
+
+test('removing an image source attribute cancels its pending load', async () => {
+  let calls = 0;
+  const c = createHostContext({ runtime: { env: () => '' },
+    images: { loadAsync() { calls++; return Promise.resolve({ handle: 1 }); }, release() {} }
+  }, { graphics: false });
+  const queued = [];
+  c.PMJS.tasks = { enqueue(fn) { queued.push(fn); } };
+  const image = new c.Image();
+  image.setAttribute('src', 'pending.png');
+  assert.equal(image.src, 'pending.png');
+  image.removeAttribute('src');
+  assert.equal(image.getAttribute('src'), null);
+  assert.equal(image.src, '');
+  for (const task of queued) await task();
+  assert.equal(calls, 0);
+});

@@ -15,7 +15,7 @@ function setup({audioDuration = 4, duration = 6, audio = true} = {}) {
   const calls = [], listeners = new Map();
   const context = {
     performance: {now: () => now},
-    GenericElement: function() {},
+    GenericElement: require('./helpers/video-element-stub.cjs').GenericElement,
     EventTarget: {defineEventHandlerProperty() {}},
     NativeHost: {
       media: {

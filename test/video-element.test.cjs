@@ -568,6 +568,7 @@ test('removing video src releases media and load with no source stays empty', as
   await Promise.resolve();
 
   video.pause();
+  assert.equal(video.getAttribute('src'), 'movies/Opening.mp4');
   video.removeAttribute('src');
   video.load();
 
@@ -757,4 +758,16 @@ test('video completions settling during rendering wait until submission', async 
   await context.PMJS.tasks.idle();
   assert.equal(video.readyState, video.HAVE_ENOUGH_DATA);
   video.src = ''; context.PMJS.tasks.stop();
+});
+
+test('video source attributes cancel pending loads when removed', async () => {
+  const { context, calls } = makeHarness();
+  const video = context.document.createElement('video');
+  video.setAttribute('src', 'movies/pending.mp4');
+  assert.equal(video.src, 'movies/pending.mp4');
+  video.removeAttribute('src');
+  await context.PMJS.tasks.idle();
+  assert.equal(video.src, '');
+  assert.equal(video.getAttribute('src'), null);
+  assert.deepEqual(calls.loadVideo, []);
 });

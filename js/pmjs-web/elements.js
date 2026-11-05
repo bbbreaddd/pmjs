@@ -97,7 +97,10 @@ globalThis.Node = Node;
 globalThis.Element = Element;
 globalThis.HTMLElement = HTMLElement;
 
-function GenericElement(tagName) { HTMLElement.call(this, tagName); }
+function GenericElement(tagName) {
+  HTMLElement.call(this, tagName);
+  this._attributes = Object.create(null);
+}
 GenericElement.prototype = Object.create(HTMLElement.prototype);
 GenericElement.prototype.constructor = GenericElement;
 
@@ -135,22 +138,28 @@ CanvasElement.prototype._ensureNativeCanvas = function() {
   }
   return this._nativeCanvas;
 };
-Object.defineProperty(CanvasElement.prototype, 'width', {
-  get: function() { return this._width; },
-  set: function(value) {
-    this._width = Math.max(0, Number(value) | 0);
-    this._releaseNativeCanvas();
-    if (this._context2d) resetCanvasContextState(this._context2d);
-  }
+function reflectedNonNegativeInteger(value, fallback) {
+  var match = value === null ? null : String(value).match(/^[\t\n\f\r ]*\+?(\d+)/);
+  var result = match ? Number(match[1]) : NaN;
+  return Number.isSafeInteger(result) && result <= 2147483647 ? result : fallback;
+}
+['width', 'height'].forEach(function(name) {
+  Object.defineProperty(CanvasElement.prototype, name, {
+    configurable: true,
+    get: function() { return this['_' + name]; },
+    set: function(value) {
+      var attribute = String(Number(value) >>> 0);
+      this._attributes[name] = attribute;
+      CanvasElement.prototype._attributeChanged.call(this, name, attribute);
+    }
+  });
 });
-Object.defineProperty(CanvasElement.prototype, 'height', {
-  get: function() { return this._height; },
-  set: function(value) {
-    this._height = Math.max(0, Number(value) | 0);
-    this._releaseNativeCanvas();
-    if (this._context2d) resetCanvasContextState(this._context2d);
-  }
-});
+CanvasElement.prototype._attributeChanged = function(name, value) {
+  if (name !== 'width' && name !== 'height') return;
+  this['_' + name] = reflectedNonNegativeInteger(value, name === 'width' ? 300 : 150);
+  this._releaseNativeCanvas();
+  if (this._context2d) resetCanvasContextState(this._context2d);
+};
 CanvasElement.prototype.getContext = function(type, options) {
   if (type === '2d') {
     if (!this._context2d) {
@@ -212,16 +221,34 @@ function removeElementChild(parent, child) {
   return child;
 }
 GenericElement.prototype.removeChild = function(child) { return removeElementChild(this, child); };
-GenericElement.prototype.setAttribute = function(name, value) { this[name] = String(value); };
-GenericElement.prototype.getAttribute = function(name) { return this[name] || null; };
+['id', 'title', 'src', 'type'].forEach(function(name) {
+  Object.defineProperty(GenericElement.prototype, name, {
+    configurable: true,
+    get: function() { return this.getAttribute(name) || ''; },
+    set: function(value) { this._attributes[name] = String(value); }
+  });
+});
+Object.defineProperty(GenericElement.prototype, 'className', {
+  configurable: true,
+  get: function() { return this.getAttribute('class') || ''; },
+  set: function(value) { this._attributes.class = String(value); }
+});
+GenericElement.prototype.setAttribute = function(name, value) {
+  name = String(name).toLowerCase();
+  value = String(value);
+  this._attributes[name] = value;
+  if (this._attributeChanged) this._attributeChanged(name, value);
+};
+GenericElement.prototype.getAttribute = function(name) {
+  name = String(name).toLowerCase();
+  return Object.prototype.hasOwnProperty.call(this._attributes, name) ? this._attributes[name] : null;
+};
+GenericElement.prototype.hasAttribute = function(name) { return this.getAttribute(name) !== null; };
 GenericElement.prototype.removeAttribute = function(name) {
-  name = String(name);
-  if (Object.prototype.hasOwnProperty.call(this, name)) {
-    delete this[name];
-    return;
-  }
-  var descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(this), name);
-  if (descriptor && descriptor.set) this[name] = '';
+  name = String(name).toLowerCase();
+  if (!this.hasAttribute(name)) return;
+  delete this._attributes[name];
+  if (this._attributeChanged) this._attributeChanged(name, null);
 };
 GenericElement.prototype.remove = function() {
   if (this.parentNode) this.parentNode.removeChild(this);
@@ -314,8 +341,6 @@ function prepareConnectedScripts(node) {
 
 function ScriptElement() {
   GenericElement.call(this, 'script');
-  this.src = '';
-  this.type = '';
   this._started = false;
 }
 ScriptElement.prototype = Object.create(GenericElement.prototype);
@@ -366,13 +391,14 @@ AudioElement.prototype.canPlayType = function(type) {
 
 function InputElement() {
   GenericElement.call(this, 'input');
-  this.type = 'text';
-  this.maxLength = -1;
   this._value = '';
   this.selectionStart = this.selectionEnd = 0;
 }
 InputElement.prototype = Object.create(GenericElement.prototype);
 InputElement.prototype.constructor = InputElement;
+InputElement.prototype._attributeChanged = function(name, value) {
+  if (name === 'value' && value !== null) this.value = value;
+};
 Object.defineProperty(InputElement.prototype, 'value', {
   get: function() { return this._value; },
   set: function(value) {
@@ -380,10 +406,28 @@ Object.defineProperty(InputElement.prototype, 'value', {
     this.selectionStart = this.selectionEnd = this._value.length;
   }
 });
-InputElement.prototype.setAttribute = function(name, value) {
-  if (String(name).toLowerCase() === 'maxlength') this.maxLength = Number(value);
-  else GenericElement.prototype.setAttribute.call(this, name, value);
-};
+['disabled', 'readOnly'].forEach(function(property) {
+  var name = property.toLowerCase();
+  Object.defineProperty(InputElement.prototype, property, {
+    configurable: true,
+    get: function() { return this.hasAttribute(name); },
+    set: function(value) { if (value) this._attributes[name] = ''; else delete this._attributes[name]; }
+  });
+});
+Object.defineProperty(InputElement.prototype, 'type', {
+  configurable: true,
+  get: function() { return this.getAttribute('type') || 'text'; },
+  set: function(value) { this._attributes.type = String(value); }
+});
+Object.defineProperty(InputElement.prototype, 'maxLength', {
+  configurable: true,
+  get: function() { return reflectedNonNegativeInteger(this.getAttribute('maxlength'), -1); },
+  set: function(value) {
+    value = Number(value) | 0;
+    if (value < 0) throw new RangeError('maxLength must be nonnegative');
+    this._attributes.maxlength = String(value);
+  }
+});
 InputElement.prototype.setSelectionRange = function(start, end) {
   this.selectionEnd = Math.max(0, Math.min(this.value.length, Number(end) || 0));
   this.selectionStart = Math.max(0, Math.min(this.selectionEnd, Number(start) || 0));

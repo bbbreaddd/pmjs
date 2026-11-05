@@ -25,6 +25,11 @@ var pendingNativeImageLoads = 0;
 
 NativeImage.prototype = Object.create(GenericElement.prototype);
 NativeImage.prototype.constructor = NativeImage;
+NativeImage.prototype._attributeChanged = function(name, value) {
+  if (name !== 'src') return;
+  this.src = value === null ? '' : value;
+  if (value === null) delete this._attributes.src;
+};
 function loadSource(url, encryption) {
     if (this._pmjsCanvasOwner) {
       this._pmjsCanvasOwner._releaseNativeCanvas();
@@ -34,6 +39,7 @@ function loadSource(url, encryption) {
     }
     this._nativeCanvas = null;
     this._src = String(url);
+    this._attributes.src = this._src;
     var source = this._src;
     var generation = ++this._loadGeneration;
     this._pmjsLoadFailed = false;

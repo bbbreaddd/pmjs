@@ -42,7 +42,7 @@ async function main() {
       },
     } },
     performance: { now: () => now },
-    GenericElement: function() {},
+    GenericElement: require('./helpers/video-element-stub.cjs').GenericElement,
     EventTarget: { defineEventHandlerProperty() {} },
   };
   vm.createContext(context);

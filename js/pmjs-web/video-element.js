@@ -19,9 +19,9 @@ function VideoElement() {
   this._nativeImage = null; this._nativeCanvas = null; this._presentationImage = null;
   this._currentTime = 0; this._startedAt = 0; this._startOffset = 0;
   this.duration = 0; this.videoWidth = 0; this.videoHeight = 0;
-  this.width = 0; this.height = 0; this._volume = 1; this._playbackRate = 1;
-  this.loop = false; this._muted = false; this.paused = true; this.ended = false;
-  this.preload = 'auto'; this._loadGeneration = 0; this._playGeneration = 0;
+  this._volume = 1; this._playbackRate = 1;
+  this._muted = false; this.paused = true; this.ended = false;
+  this._loadGeneration = 0; this._playGeneration = 0;
   this._loading = false; this._playRequested = false;
   this._pendingPlayPromises = [];
   this.readyState = 0; this.HAVE_NOTHING = 0; this.HAVE_METADATA = 1;
@@ -29,14 +29,37 @@ function VideoElement() {
 }
 VideoElement.prototype = Object.create(GenericElement.prototype);
 VideoElement.prototype.constructor = VideoElement;
+VideoElement.prototype._attributeChanged = function(name, value) {
+  if (name !== 'src') return;
+  this.src = value === null ? '' : value;
+  if (value === null) delete this._attributes.src;
+};
 ['loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough', 'error',
   'play', 'pause', 'ended'].forEach(function(type) {
   EventTarget.defineEventHandlerProperty(VideoElement.prototype, type);
+});
+['width', 'height'].forEach(function(name) {
+  Object.defineProperty(VideoElement.prototype, name, {
+    configurable: true,
+    get: function() { return reflectedNonNegativeInteger(this.getAttribute(name), 0); },
+    set: function(value) { this._attributes[name] = String(Number(value) >>> 0); }
+  });
+});
+Object.defineProperty(VideoElement.prototype, 'loop', {
+  configurable: true,
+  get: function() { return this.hasAttribute('loop'); },
+  set: function(value) { if (value) this._attributes.loop = ''; else delete this._attributes.loop; }
+});
+Object.defineProperty(VideoElement.prototype, 'preload', {
+  configurable: true,
+  get: function() { return this.getAttribute('preload') || 'auto'; },
+  set: function(value) { this._attributes.preload = String(value); }
 });
 Object.defineProperty(VideoElement.prototype, 'src', {
   get: function() { return this._src; },
   set: function(value) {
     this._src = String(value);
+    this._attributes.src = this._src;
     var generation = ++this._loadGeneration;
     this._releaseMedia();
     this._loading = false;

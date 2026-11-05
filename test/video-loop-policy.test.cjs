@@ -52,7 +52,7 @@ function setup({duration = 2, audioDuration = 0.5, audio = true} = {}) {
   const context = {
     NativeHost: {media},
     performance: {now: () => now},
-    GenericElement: function() {},
+    GenericElement: require('./helpers/video-element-stub.cjs').GenericElement,
     EventTarget: {defineEventHandlerProperty() {}}
   };
   vm.createContext(context);
