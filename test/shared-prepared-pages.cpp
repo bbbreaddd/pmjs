@@ -114,7 +114,9 @@ int main() {
       std::thread right([&] { validB = images.validatePrepared(*pendingB); });
       left.join(); right.join();
       require(validA && validB,"concurrent page validation failed");
+      require(images.cpuBytes() == 0,"private worker pages entered resident accounting before publication");
       auto first = images.installPreparedLoad(*sourceA,std::move(pendingA),false);
+      require(images.cpuBytes() == 29U * 27 * 4,"first publication did not charge its shared page");
       auto second = images.installPreparedLoad(*sourceB,std::move(pendingB),false);
       require(first && second && first->handle != second->handle,"sharing must preserve independent logical handles");
       constexpr std::size_t pageBytes = 29 * 27 * 4;

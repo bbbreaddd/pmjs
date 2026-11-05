@@ -342,7 +342,12 @@ class CanvasStore {
   std::unordered_set<Content*> contents_;
   // Snapshot pixels can materialize after a command was recorded. Track unique
   // dependencies separately from the full content/command graph.
-  std::unordered_map<const ImagePixelSnapshot*, std::size_t> snapshots_;
+  struct SnapshotUse {
+    std::size_t references = 0;
+    std::shared_ptr<MemoryCharge> charge;
+  };
+  std::unordered_map<const ImagePixelSnapshot*, SnapshotUse> snapshots_;
+  std::shared_ptr<MemoryLedger> snapshotMemory_ = std::make_shared<MemoryLedger>();
   std::size_t pixelBytes_ = 0;
   std::vector<Surface> surfaces_;
   std::size_t liveCount_ = 0;

@@ -753,8 +753,13 @@ std::vector<std::uint8_t> CanvasStore::Content::takePixels() {
 }
 
 void CanvasStore::retainSnapshot(const CanvasCommand& command) {
-  if (const auto* draw = std::get_if<DrawImageCmd>(&command); draw && draw->snapshot)
-    ++snapshots_[draw->snapshot.get()];
+  if (const auto* draw = std::get_if<DrawImageCmd>(&command); draw && draw->snapshot) {
+    const auto found = snapshots_.find(draw->snapshot.get());
+    if (found != snapshots_.end()) { ++found->second.references; return; }
+    SnapshotUse use{1, std::make_shared<MemoryCharge>()};
+    draw->snapshot->trackPixels(use.charge, snapshotMemory_);
+    snapshots_.emplace(draw->snapshot.get(), std::move(use));
+  }
 }
 
 void CanvasStore::releaseCommandDependencies(CanvasCommand& cmd) {
@@ -763,7 +768,7 @@ void CanvasStore::releaseCommandDependencies(CanvasCommand& cmd) {
     if constexpr (std::is_same_v<T, DrawImageCmd>) {
       if (c.snapshot) {
         auto found = snapshots_.find(c.snapshot.get());
-        if (--found->second == 0) snapshots_.erase(found);
+        if (--found->second.references == 0) snapshots_.erase(found);
       }
       if (c.source != 0) {
         images_.release(c.source);
@@ -1350,14 +1355,15 @@ CanvasStore::Content* CanvasStore::writableContent(CanvasHandle handle) {
     copy->setPixels(old.pixels);
     copy->mayHaveOverAlpha = old.mayHaveOverAlpha;
     copy->knownAllZero = old.knownAllZero;
-    auto commands = old.commands;
-    for (const auto& command : commands) {
+    copy->commands.reserve(old.commands.size());
+    for (const auto& command : old.commands) {
+      copy->commands.push_back(command);
+      try { retainSnapshot(copy->commands.back()); }
+      catch (...) { copy->commands.pop_back(); throw; }
       if (const auto* draw = std::get_if<DrawImageCmd>(&command); draw && draw->source) {
         images_.retain(draw->source);
       }
     }
-    copy->commands = std::move(commands);
-    for (const auto& command : copy->commands) retainSnapshot(command);
     copy->queuedCommandBytes = old.queuedCommandBytes;
     copy->dependencyDepth = old.dependencyDepth;
     copy->dirtyX0 = old.dirtyX0;
@@ -1972,12 +1978,7 @@ void CanvasStore::uploadDirty() {
 }
 
 std::size_t CanvasStore::cpuBytes() const {
-  std::size_t result = pixelBytes_;
-  for (const auto& [snapshot, references] : snapshots_) {
-    (void)references;
-    if (snapshot->pixels) result += snapshot->pixels->rgba.size();
-  }
-  return result;
+  return pixelBytes_ + snapshotMemory_->bytes();
 }
 
 std::size_t CanvasStore::capacityBytes() const {

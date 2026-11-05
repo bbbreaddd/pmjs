@@ -1,6 +1,7 @@
 #pragma once
 
 #include "image_storage.hpp"
+#include "memory_accounting.hpp"
 
 #include <array>
 #include <atomic>
@@ -52,6 +53,11 @@ struct ImagePixelSnapshot {
   int x = 0, y = 0, width = 0, height = 0;
   bool premultiplied = false;
   std::optional<ImagePixels> pixels;
+  void setPixels(std::optional<ImagePixels> value);
+  void trackPixels(const std::shared_ptr<MemoryCharge>& charge,
+                   const std::shared_ptr<MemoryLedger>& ledger);
+ private:
+  std::vector<std::weak_ptr<MemoryCharge>> accounting_;
 };
 
 struct PreparedImageCell {
@@ -361,7 +367,7 @@ class ImageStore {
   std::size_t liveCount() const { return liveCount_; }
   std::size_t gpuBytes() const { return gpuBytes_; }
   std::size_t peakGpuBytes() const { return peakGpuBytes_; }
-  std::size_t cpuBytes() const;
+  std::size_t cpuBytes() const { return cpuMemory_->bytes(); }
   void setWarmBudgetBytes(std::size_t bytes) { warmBudgetBytes_ = bytes; }
   std::size_t warmBudgetBytes() const { return warmBudgetBytes_; }
   std::size_t warmBytes() const;
@@ -496,8 +502,11 @@ class ImageStore {
     std::filesystem::path sourcePath;
     std::string lastPreparedFallbackReason;
     mutable std::optional<ImagePixels> cachedPixels;
+    mutable MemoryCharge cachedPixelCharge;
     bool live = false;
   };
+  void setCachedPixels(const Slot& slot, std::optional<ImagePixels> pixels) const;
+  std::shared_ptr<MemoryLedger> cpuMemory_ = std::make_shared<MemoryLedger>();
 
   std::shared_ptr<TileLoad> captureTileLoad(const ImageFileSource& source, const std::string& identity) const;
   bool validateTileLoad(TileLoad& load, bool retainCpu);

@@ -520,6 +520,7 @@ struct ImageStore::PaletteBacking {
   int height = 0, indexChannels = 2;
   bool premultipliedReady = false;
   std::vector<std::uint8_t> colors;
+  MemoryCharge cpuCharge;
   std::size_t bytes = 0;
   ~PaletteBacking() {
     const std::array<GLuint, 5> textures{indices, table, premultipliedTable, blocks, residual};
@@ -550,6 +551,22 @@ struct ImageStore::PreparedBacking {
     std::filesystem::path path;
     std::string identity, expectedHash;
     bool verifyHash = false;
+    std::shared_ptr<MemoryLedger> cpuMemory;
+    MemoryCharge pixelCharge, sparseCharge;
+    void setPixels(std::shared_ptr<ImagePixels> value) {
+      pixelCharge.set(cpuMemory, value ? value->rgba.data() : nullptr,
+                      value ? value->rgba.capacity() : 0);
+      pixels = std::move(value);
+    }
+    void setSparse(std::shared_ptr<SparsePalettePage> value) {
+      sparseCharge.set(cpuMemory, value.get(), value ? value->cpuBytes() : 0);
+      sparse = std::move(value);
+    }
+    void publish(const std::shared_ptr<MemoryLedger>& ledger) {
+      cpuMemory = ledger;
+      setPixels(pixels);
+      setSparse(sparse);
+    }
   };
   PreparedImageDescriptor descriptor;
   std::shared_ptr<ImageFileSource> textureSource;
@@ -831,7 +848,7 @@ std::optional<ImageInfo> ImageStore::installDecoded(
     slots_[index].sourcePath = source.path();
     slots_[index].retainCpuPixels = retainCpuPixels;
     if (retainCpuPixels) {
-      slots_[index].cachedPixels = std::move(pixels);
+      setCachedPixels(slots_[index], std::move(pixels));
       slots_[index].cpuPixelFrames = 0;
     }
     pathCache_.emplace(cacheKey, created->handle);
@@ -849,7 +866,7 @@ std::optional<ImageInfo> ImageStore::installDecodedMemory(
   const std::size_t index = (created->handle & indexMask) - 1U;
   // Memory images have no path to decode again after their load bytes are gone.
   slots_[index].retainCpuPixels = true;
-  slots_[index].cachedPixels = std::move(pixels);
+  setCachedPixels(slots_[index], std::move(pixels));
   slots_[index].cpuPixelFrames = 0;
   return created;
 }
@@ -863,17 +880,17 @@ bool ImageStore::retainCpuPixels(ImageHandle handle) {
   if (slot.cachedPixels) {
     slot.retainCpuPixels = true;
     slot.cpuPixelFrames = 0;
-    if (slot.prepared) for (auto& page : slot.prepared->pages) page.pixels.reset();
+    if (slot.prepared) for (auto& page : slot.prepared->pages) page.setPixels({});
     return true;
   }
   if (slot.cacheKey.empty() && !slot.palette && !slot.tiles) return false;
-  slot.cachedPixels = (slot.palette || slot.prepared || slot.tiles) ?
+  setCachedPixels(slot, (slot.palette || slot.prepared || slot.tiles) ?
     readPixelsRegion(handle, 0, 0, info->width, info->height) :
-    readTexturePixels(*info, slot.storage);
+    readTexturePixels(*info, slot.storage));
   if (!slot.cachedPixels) return false;
   slot.retainCpuPixels = true;
   slot.cpuPixelFrames = 0;
-  if (slot.prepared) for (auto& page : slot.prepared->pages) page.pixels.reset();
+  if (slot.prepared) for (auto& page : slot.prepared->pages) page.setPixels({});
   return true;
 }
 
@@ -913,9 +930,9 @@ const ImagePixels* ImageStore::readPixels(ImageHandle handle) const {
     return &*slot.cachedPixels;
   }
   if (slot.cacheKey.empty() && !slot.palette && !slot.tiles) return nullptr;
-  slot.cachedPixels = (slot.palette || slot.prepared || slot.tiles) ?
+  setCachedPixels(slot, (slot.palette || slot.prepared || slot.tiles) ?
     readPixelsRegion(handle, 0, 0, info->width, info->height) :
-    readTexturePixels(*info, slot.storage);
+    readTexturePixels(*info, slot.storage));
   if (!slot.retainCpuPixels) slot.cpuPixelFrames = 60;
   return slot.cachedPixels ? &*slot.cachedPixels : nullptr;
 }
@@ -1002,6 +1019,7 @@ std::shared_ptr<ImageStore::PaletteBacking> ImageStore::makePalette(const ImageP
   result->height = static_cast<int>((colors.size() + 255) / 256);
   entries.resize(static_cast<std::size_t>(result->height) * 256 * 4);
   result->colors = std::move(entries);
+  result->cpuCharge.setOwned(cpuMemory_, result->colors.capacity());
   result->indexChannels = decision ? decision->paletteBits / 8 : colors.size() <= 256 ? 1 : 2;
   if (result->indexChannels == 1 && stagingChannels == 2) {
     for (std::size_t i = 0; i < count; ++i) indices[i] = indices[i * 2];
@@ -1032,6 +1050,7 @@ std::shared_ptr<ImageStore::PaletteBacking> ImageStore::makeSparsePalette(const 
   result->owner = this; result->indexChannels = page.packed ? 1 : page.indexBytes;
   result->height = (page.colors.size() / 4 + 255) / 256;
   result->colors = page.colors; result->colors.resize(std::size_t(result->height) * 1024);
+  result->cpuCharge.setOwned(cpuMemory_, result->colors.capacity());
   const auto record = [&](std::size_t bytes) { result->bytes += bytes; gpuBytes_ += bytes; };
   if (page.packed) {
     result->indices = uploadTexture(page.width, page.height, page.base.data(), ImageChannelStorage{1}, 0, true);
@@ -1218,7 +1237,7 @@ bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
     textureCreates_ += textures.ids.size(); textureEpoch_ += textures.ids.size();
     std::fill(textures.ids.begin(),textures.ids.end(),0);
     gpuBytes_ += bytes; peakGpuBytes_ = std::max(peakGpuBytes_,gpuBytes_); textureUploadBytes_ += bytes;
-    for (auto& p : backing.pages) { p.pixels.reset(); p.sparse.reset(); }
+    for (auto& p : backing.pages) { p.setPixels({}); p.setSparse({}); }
     return true;
   };
   if (layout) {
@@ -1266,7 +1285,7 @@ std::optional<PaletteImageRegion> ImageStore::resolvePaletteImage(ImageHandle ha
       }
     }
     if (slot.palette && slot.prepared)
-      for (auto& page : slot.prepared->pages) page.pixels.reset();
+      for (auto& page : slot.prepared->pages) page.setPixels({});
   }
   if (!slot.palette) return std::nullopt;
   const auto table = paletteTable(*slot.palette, premultiplied);
@@ -1399,7 +1418,7 @@ std::optional<ImageInfo> ImageStore::createImage(int width, int height,
   slot.cacheKey.clear();
   slot.sourcePath.clear();
   slot.lastPreparedFallbackReason.clear();
-  slot.cachedPixels.reset();
+  setCachedPixels(slot, std::nullopt);
   slot.gpuOnly = pixels == nullptr;
   slot.renderTarget = false;
   slot.premultiplied = premultiplied;
@@ -1423,25 +1442,9 @@ std::optional<ImageInfo> ImageStore::createRenderTarget(int width, int height,
   return image;
 }
 
-std::size_t ImageStore::cpuBytes() const {
-  std::size_t result = 0;
-  std::unordered_set<const void*> seen;
-  for (const auto& slot : slots_) {
-    if (slot.live && slot.cachedPixels) result += slot.cachedPixels->rgba.capacity();
-    if (slot.live) {
-      result += paletteCpuBytes(slot);
-      if (slot.prepared) for (const auto& page : slot.prepared->pages)
-        { if (page.palette && !seen.insert(page.palette.get()).second) result -= page.palette->colors.capacity();
-          for (const auto& palette : page.retiredPalettes)
-            if (!seen.insert(palette.get()).second) result -= palette->colors.capacity(); }
-    }
-    if (slot.live && slot.prepared) for (const auto& page : slot.prepared->pages)
-      {
-        if (page.pixels && seen.insert(page.pixels.get()).second) result += page.pixels->rgba.capacity();
-        if (page.sparse && seen.insert(page.sparse.get()).second) result += page.sparse->cpuBytes();
-      }
-  }
-  return result;
+void ImageStore::setCachedPixels(const Slot& slot, std::optional<ImagePixels> pixels) const {
+  slot.cachedPixelCharge.setOwned(cpuMemory_, pixels ? pixels->rgba.capacity() : 0);
+  slot.cachedPixels = std::move(pixels);
 }
 
 std::size_t ImageStore::residentBytes(const Slot& slot) const {
@@ -1637,7 +1640,7 @@ bool ImageStore::updateRgba(ImageHandle handle, const void* pixels) {
     if (!compact) textureUploadBytes_ += static_cast<std::uint64_t>(info->width) *
         static_cast<std::uint64_t>(info->height) * 4U;
   }
-  if (!ok) slot.cachedPixels.reset();
+  if (!ok) setCachedPixels(slot, std::nullopt);
   return ok;
 }
 
@@ -1678,8 +1681,26 @@ bool ImageStore::updateRgbaRegion(ImageHandle handle, int x, int y, int width,
     textureUploadBytes_ += static_cast<std::uint64_t>(width) *
         static_cast<std::uint64_t>(height) * 4U;
   }
-  if (!ok) slot.cachedPixels.reset();
+  if (!ok) setCachedPixels(slot, std::nullopt);
   return ok;
+}
+
+void ImagePixelSnapshot::trackPixels(const std::shared_ptr<MemoryCharge>& charge,
+                                    const std::shared_ptr<MemoryLedger>& ledger) {
+  std::erase_if(accounting_, [](const auto& item) { return item.expired(); });
+  charge->setOwned(ledger, pixels ? pixels->rgba.size() : 0);
+  accounting_.push_back(charge);
+}
+
+void ImagePixelSnapshot::setPixels(std::optional<ImagePixels> value) {
+  pixels = std::move(value);
+  std::erase_if(accounting_, [this](const auto& item) {
+    if (auto charge = item.lock()) {
+      charge->resize(pixels ? pixels->rgba.size() : 0);
+      return false;
+    }
+    return true;
+  });
 }
 
 std::shared_ptr<ImagePixelSnapshot> ImageStore::deferPixelRead(ImageHandle handle,
@@ -1702,8 +1723,8 @@ bool ImageStore::preservePixelReads(ImageHandle handle) {
   if (found == pixelReads_.end()) return true;
   for (const auto& reader : found->second) if (auto snapshot = reader.lock()) {
     if (!snapshot->pixels) {
-      snapshot->pixels = readPixelsRegion(handle, snapshot->x, snapshot->y,
-        snapshot->width, snapshot->height);
+      snapshot->setPixels(readPixelsRegion(handle, snapshot->x, snapshot->y,
+        snapshot->width, snapshot->height));
       if (!snapshot->pixels) return false;
     }
   }
@@ -1788,7 +1809,7 @@ bool ImageStore::promoteAstc(Slot& slot, const void* replacement) {
   peakGpuBytes_ = std::max(peakGpuBytes_, gpuBytes_);
   if (slot.inFlight.load(std::memory_order_acquire) == 0) clearRetiredTextures(slot);
   textureUploadBytes_ += slot.textureBytes(); ++textureEpoch_;
-  if (pixels) { slot.cachedPixels = std::move(pixels); slot.cpuPixelFrames = slot.retainCpuPixels ? 0 : 60; }
+  if (pixels) { setCachedPixels(slot, std::move(pixels)); slot.cpuPixelFrames = slot.retainCpuPixels ? 0 : 60; }
   return true;
 }
 
@@ -2074,7 +2095,7 @@ void ImageStore::destroySlot(std::size_t index) {
   slot.cacheKey.clear();
   slot.sourcePath.clear();
   slot.lastPreparedFallbackReason.clear();
-  slot.cachedPixels.reset();
+  setCachedPixels(slot, std::nullopt);
   slot.prepared.reset();
   slot.tiles.reset();
   slot.live = false;
@@ -2138,7 +2159,7 @@ void ImageStore::update() {
       if (slot.cpuPixelFrames > 0) {
         --slot.cpuPixelFrames;
       } else {
-        slot.cachedPixels.reset();
+        setCachedPixels(slot, std::nullopt);
       }
     }
   }
@@ -2423,8 +2444,8 @@ bool ImageStore::validatePrepared(PreparedLoad& load, bool retainCpu) {
             (page.verifyHash && !contentHashMatches(*bytes, page.expectedHash))) return invalid();
       } else if (!preparedSparsePage(backing, i) && !preparedPixels(backing, i)) return invalid();
       if (!retainCpu && backing.textureSource) {
-        backing.pages[i].pixels.reset();
-        backing.pages[i].sparse.reset();
+        backing.pages[i].setPixels({});
+        backing.pages[i].setSparse({});
       }
     }
     load.validated = true;
@@ -2434,7 +2455,7 @@ bool ImageStore::validatePrepared(PreparedLoad& load, bool retainCpu) {
     load.pixels = backing.descriptor.compression == "astc-4x4" ?
       (load.original ? decodeFile(*load.original) : std::nullopt) :
       readPreparedRegion(backing, 0, 0, backing.descriptor.width, backing.descriptor.height);
-    for (auto& page : backing.pages) page.pixels.reset();
+    for (auto& page : backing.pages) page.setPixels({});
     if (!load.pixels) return false;
   }
   return true;
@@ -2460,10 +2481,10 @@ std::optional<ImageInfo> ImageStore::installPreparedLoad(const ImageFileSource& 
   if (auto cached = acquireCached(source)) {
     auto& slot = slots_[(cached->handle & indexMask) - 1U];
     if (retainCpu && pixels && slot.prepared) {
-      slot.cachedPixels = std::move(pixels);
+      setCachedPixels(slot, std::move(pixels));
       slot.retainCpuPixels = true;
       slot.cpuPixelFrames = 0;
-      for (auto& page : slot.prepared->pages) page.pixels.reset();
+      for (auto& page : slot.prepared->pages) page.setPixels({});
     } else if (retainCpu) retainCpuPixels(cached->handle);
     return cached;
   }
@@ -2521,12 +2542,13 @@ std::optional<ImageInfo> ImageStore::installPreparedLoad(const ImageFileSource& 
     slot.opaque = known->opaque;
     slot.opacityRevision = slot.contentRevision;
   }
-  slot.retainCpuPixels = retainCpu; slot.cachedPixels = std::move(pixels); slot.cpuPixelFrames = 0;
+  slot.retainCpuPixels = retainCpu; setCachedPixels(slot, std::move(pixels)); slot.cpuPixelFrames = 0;
   slot.mipmapsReady = slot.premultipliedMipmapsReady = false;
   slot.mipmapBytes = slot.premultipliedMipmapBytes = 0;
   slot.live = true; markUsed(slot); ++liveCount_; ++preparedHits_;
   const auto handle = makeHandle(index, slot.generation);
   try {
+    for (auto& page : slot.prepared->pages) page.publish(cpuMemory_);
     pathCache_.emplace(slot.cacheKey, handle);
     // Upload a bounded set of immutable pages before publishing image readiness.
     // Larger page sets remain pageable rather than expanding the source sheet.
@@ -2569,7 +2591,7 @@ void ImageStore::trimPreparedPages() const {
       bytes -= page->pixels->rgba.capacity();
       for (auto& [otherSerial, other] : pages) {
         (void)otherSerial;
-        if (other->pixels.get() == storage) other->pixels.reset();
+        if (other->pixels.get() == storage) other->setPixels({});
       }
     }
     if (bytes <= preparedPageCacheBudget) break;
@@ -2578,7 +2600,7 @@ void ImageStore::trimPreparedPages() const {
       bytes -= page->sparse->cpuBytes();
       for (auto& [otherSerial, other] : pages) {
         (void)otherSerial;
-        if (other->sparse.get() == storage) other->sparse.reset();
+        if (other->sparse.get() == storage) other->setSparse({});
       }
     }
   }
@@ -2653,7 +2675,7 @@ std::optional<ImagePixels> ImageStore::readPixelsRegion(ImageHandle handle,
       return readTexturePixels(*info, slot.storage, std::array<int, 4>{x, y, width, height});
     auto* full = readPixels(handle);
     if (!full) {
-      slot.cachedPixels = readTexturePixels(*info, slot.storage);
+      setCachedPixels(slot, readTexturePixels(*info, slot.storage));
       full = slot.cachedPixels ? &*slot.cachedPixels : nullptr;
     }
     if (!full) return std::nullopt;
@@ -2768,7 +2790,7 @@ void ImageStore::reserveFramePage(PreparedBacking& backing, std::size_t index) {
           oldest->shared->lastCpuUse.load(std::memory_order_relaxed)) oldest = &page;
     }
     if (resident < 4) return;
-    oldest->pixels.reset(); oldest->sparse.reset();
+    oldest->setPixels({}); oldest->setSparse({});
   }
 }
 
@@ -2794,12 +2816,12 @@ bool ImageStore::preparedSparsePage(PreparedBacking& backing, std::size_t index)
     }
   }
   std::lock_guard lock(page.shared->mutex);
-  page.sparse = page.shared->sparse.lock();
+  page.setSparse(page.shared->sparse.lock());
   if (!page.sparse) {
     auto parsed = header[4] == 3 ? readIndexedPalettePage(*bytes, preparedPageCacheBudget) :
       readSparsePalettePage(*bytes, preparedPageCacheBudget);
     if (!parsed || parsed->width != d.width || parsed->height != d.height) return false;
-    page.sparse = std::make_shared<SparsePalettePage>(std::move(*parsed));
+    page.setSparse(std::make_shared<SparsePalettePage>(std::move(*parsed)));
     page.shared->sparse = page.sparse;
     backing.pageDecodes->fetch_add(1, std::memory_order_relaxed);
   } else backing.pool->hits.fetch_add(1, std::memory_order_relaxed);
@@ -2815,10 +2837,10 @@ ImagePixels* ImageStore::preparedPixels(PreparedBacking& backing, std::size_t in
   auto& page = backing.pages[index];
   if (!page.pixels && preparedSparsePage(backing, index)) {
     std::lock_guard lock(page.shared->mutex);
-    page.pixels = page.shared->pixels.lock();
+    page.setPixels(page.shared->pixels.lock());
     if (!page.pixels) {
       auto pixels = page.sparse->pixels();
-      page.pixels = std::make_shared<ImagePixels>(ImagePixels{pixels.width, pixels.height, std::move(pixels.rgba)});
+      page.setPixels(std::make_shared<ImagePixels>(ImagePixels{pixels.width, pixels.height, std::move(pixels.rgba)}));
       page.shared->pixels = page.pixels;
     }
     if (!page.storage.channels) {
@@ -2847,7 +2869,7 @@ ImagePixels* ImageStore::preparedPixels(PreparedBacking& backing, std::size_t in
       cachedBytes -= oldest->pixels->rgba.capacity();
       const auto* storage = oldest->pixels.get();
       for (auto& candidate : backing.pages)
-        if (candidate.pixels.get() == storage) candidate.pixels.reset();
+        if (candidate.pixels.get() == storage) candidate.setPixels({});
     }
     if (!page.shared) {
       const auto& source = *page.source;
@@ -2879,22 +2901,22 @@ ImagePixels* ImageStore::preparedPixels(PreparedBacking& backing, std::size_t in
         }
       }
       std::lock_guard lock(page.shared->mutex);
-      page.pixels = page.shared->pixels.lock();
+      page.setPixels(page.shared->pixels.lock());
       if (!page.pixels) {
         auto pixels = pmjs::decodeMemory(encoded.data(), encoded.size(), preparedPageCacheBudget);
         if (!pixels || pixels->width != dimensions.width || pixels->height != dimensions.height) return nullptr;
         backing.pageDecodes->fetch_add(1, std::memory_order_relaxed);
-        page.pixels = std::make_shared<ImagePixels>(std::move(*pixels));
+        page.setPixels(std::make_shared<ImagePixels>(std::move(*pixels)));
         page.shared->pixels = page.pixels;
       } else backing.pool->hits.fetch_add(1, std::memory_order_relaxed);
     } else {
       std::lock_guard lock(page.shared->mutex);
-      page.pixels = page.shared->pixels.lock();
+      page.setPixels(page.shared->pixels.lock());
       if (!page.pixels) {
         auto pixels = decodeFile(*page.source);
         if (!pixels || pixels->width != dimensions.width || pixels->height != dimensions.height) return nullptr;
         backing.pageDecodes->fetch_add(1, std::memory_order_relaxed);
-        page.pixels = std::make_shared<ImagePixels>(std::move(*pixels));
+        page.setPixels(std::make_shared<ImagePixels>(std::move(*pixels)));
         page.shared->pixels = page.pixels;
       } else backing.pool->hits.fetch_add(1, std::memory_order_relaxed);
     }
@@ -2958,7 +2980,7 @@ std::optional<ImageInfo> ImageStore::preparedPage(Slot& slot, std::size_t index,
       view->table = paletteTable(*page.palette, premultiplied);
       if (!view->table) return std::nullopt;
       view->blocks = page.palette->blocks; view->residual = page.palette->residual;
-      page.sparse.reset();
+      page.setSparse({});
       const auto& d = backing.descriptor.pages[index];
       view->image = ImageInfo{0, d.width, d.height, page.palette->indices, premultiplied, false};
       return view->image;
@@ -3421,7 +3443,7 @@ std::optional<BlockImageRegion> ImageStore::resolveBlockRegion(ImageHandle handl
             backing.gpuBytes += bytes; gpuBytes_ += bytes;
             peakGpuBytes_ = std::max(peakGpuBytes_, gpuBytes_);
             textureCreates_ += 2; textureEpoch_ += 2; textureUploadBytes_ += bytes;
-            for (auto& page : backing.pages) { page.pixels.reset(); page.sparse.reset(); }
+            for (auto& page : backing.pages) { page.setPixels({}); page.setSparse({}); }
             ++blockTextureUploads_;
           } else { glDeleteTextures(1, &atlas); glDeleteTextures(1, &table); ++blockUploadFailures_; }
         }
@@ -3562,7 +3584,7 @@ std::optional<BlockImageRegion> ImageStore::resolveBlockRegion(ImageHandle handl
       if (!sharedAtlas) backing.gpuBytes += atlas.size();
     }
     textures = {created[0], created[1], channels, std::move(sharedAtlas)};
-    if (backing.pages.front().sparse) backing.pages.front().pixels.reset();
+    if (backing.pages.front().sparse) backing.pages.front().setPixels({});
     ++blockTextureUploads_;
   }
   ++blockRegions_;
@@ -3571,7 +3593,7 @@ std::optional<BlockImageRegion> ImageStore::resolveBlockRegion(ImageHandle handl
 } catch (const std::bad_alloc&) {
   // Reclaim cache storage without allocating the LRU bookkeeping on this path.
   for (auto& slot : slots_) if (slot.live && slot.prepared)
-    for (auto& page : slot.prepared->pages) page.pixels.reset();
+    for (auto& page : slot.prepared->pages) page.setPixels({});
   // All CPU allocation precedes GL state changes and texture publication.
   if (inspect(handle)) {
     auto& backing = slots_[(handle & indexMask)-1U].prepared;
@@ -3788,7 +3810,7 @@ std::optional<std::size_t> ImageStore::uploadPreparedCrops(Slot& slot, std::uint
     uploaded += crop.size();
   }
   for (auto& page : backing.pages) {
-    if (page.sparse) page.pixels.reset();
+    if (page.sparse) page.setPixels({});
   }
   if (acquired) trimPreparedPages();
   GLint framebuffer = 0, binding = 0, unpackBuffer = 0;

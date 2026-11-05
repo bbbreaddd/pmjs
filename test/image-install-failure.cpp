@@ -40,8 +40,8 @@ int main(int argc, char** argv) try {
     allocationCountdown = 0;
     if (image) { images.release(image->handle); ++successes; }
     images.update();
-    require(images.liveCount() == 0 && images.gpuBytes() == 0,
-      "image installation failure retained a logical owner or GPU storage");
+    require(images.liveCount() == 0 && images.gpuBytes() == 0 && images.cpuBytes() == 0,
+      "image installation failure retained a logical owner or pixel storage");
     const auto retry = images.loadPng(root / "fixture.png");
     require(retry.has_value(), "failed prepared installation prevented retry");
     images.release(retry->handle);
