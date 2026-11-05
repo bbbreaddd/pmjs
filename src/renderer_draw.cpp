@@ -377,6 +377,13 @@ bool Renderer::filterBoundsRect(const RenderCommand* filterBegin,
 }
 
 void Renderer::renderScene() {
+  const auto ensurePixiPrograms = [this] {
+    if (program_) return;
+    GLint previous = 0;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &previous);
+    createPixiPrograms(pixiFragmentPrecision_);
+    glUseProgram(static_cast<GLuint>(previous));
+  };
   struct RestoreReadContext {
     bool& rendering;
     bool previous;
@@ -1258,6 +1265,7 @@ void Renderer::renderScene() {
         scissorActive = false;
       }
       glViewport(0, 0, static_cast<int>(rasterFrame[2] * rasterResolution), static_cast<int>(rasterFrame[3] * rasterResolution));
+      ensurePixiPrograms();
       glUseProgram(program_);
       projectTarget(program_);
       activeProgram = program_;
@@ -1779,6 +1787,7 @@ void Renderer::renderScene() {
       glDisable(GL_BLEND);
       glBindFramebuffer(GL_FRAMEBUFFER, filterTarget_.framebuffer);
       glViewport(0, 0, static_cast<int>(rasterFrame[2] * rasterResolution), static_cast<int>(rasterFrame[3] * rasterResolution));
+      ensurePixiPrograms();
       glUseProgram(program_);
       projectTarget(program_);
       activeProgram = program_;
@@ -1912,6 +1921,7 @@ void Renderer::renderScene() {
         filterDepth == 1 && rasterFrame[2] > 0 && rasterFrame[3] > 0 &&
         std::all_of(rasterFrame.begin(), rasterFrame.end(),
           [&](float value) { return integral(value, 8192); });
+      ensurePixiPrograms();
       const bool nearestTile = nearestTileShader_ &&
         (fourTextures ? nearestFourTileProgram_ : nearestTileProgram_) &&
         layer->second.nearestTileGeometry && layer->second.nearestTileMapping && operation.nearest && !usesOverlay && !command.maskImage &&
@@ -2048,6 +2058,7 @@ void Renderer::renderScene() {
       static_cast<float>(-1 - rasterFrame[0] * sx + transform[4] * sx),
       static_cast<float>(-ySign - rasterFrame[1] * sy + transform[5] * sy), 1};
     if (operation.compact) {
+      ensurePixiPrograms();
       const auto& region = *operation.compact;
       glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, operation.texture);
       const std::array<std::uint32_t, 4> tables{region.indexX, region.indexY, region.phaseX, region.phaseY};
@@ -2116,6 +2127,7 @@ void Renderer::renderScene() {
       (!operation.paletteTable || (operation.nearest && !operation.paletteBlocks));
     const bool simpleSprite = unfilteredSprite && !directSprite;
     if (operation.multiTextureSprite && operation.textureCount > 1) {
+      ensurePixiPrograms();
       const auto& program = multiTextureSprite_;
       if (activeProgram != program.program) {
         glUseProgram(program.program);
@@ -2164,6 +2176,7 @@ void Renderer::renderScene() {
     const auto& spriteEffect = directSprite ? directSprite_ : plainRegion ? plainBitmapRegion_ :
       operation.standaloneBitmapRegion && operation.blur <= 0 &&
         !operation.appliesSpriteColor ? bitmapRegion_ : spriteEffect_;
+    if (simpleSprite) ensurePixiPrograms();
     const std::uint32_t spriteProgram = simpleSprite ? simpleProgram_ : spriteEffect.program;
     if (activeProgram != spriteProgram) {
       glUseProgram(spriteProgram);

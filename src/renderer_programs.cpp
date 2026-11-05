@@ -139,7 +139,6 @@ Renderer::Renderer(int width, int height, ImageStore& images)
     throw std::runtime_error("cannot query GL_MAX_TEXTURE_SIZE");
   }
   using namespace renderer_shaders;
-  createPixiPrograms(pixiFragmentPrecision_);
   generatedTextureProgram_ = linkProgram(vertexSource,
                                           generatedTextureFragmentSource);
   generatedTexturePremultipliedUniform_ = glGetUniformLocation(
@@ -552,7 +551,7 @@ void Renderer::configurePixiFragmentPrecision(const std::string& precision) {
     }
     return;
   }
-  if (precision != pixiFragmentPrecision_) {
+  if (!program_ || precision != pixiFragmentPrecision_) {
     createPixiPrograms(precision);
     pixiFragmentPrecision_ = precision;
   }
