@@ -96,6 +96,54 @@ test('authored areas and modified filters still resolve programs and report comp
   assert.ok(compatHits.some(hit => hit[0] === 'render.filter-program' && hit[1].includes('compile failed')));
 });
 
+test('native filters compile on demand after their authored configuration changes', () => {
+  for (const [property, value] of [
+    ['vertexSrc', 'another vertex'], ['fragmentSrc', 'another fragment'],
+    ['resolution', 2], ['padding', 8], ['autoFit', false], ['blendMode', 1]
+  ]) {
+    const { sandbox, node, compilations, plans, compatHits } = fixture();
+    const filter = new sandbox.PIXI.filters.AlphaFilter();
+    filter.alpha = 0.5;
+    assert.equal(sandbox.nativeSceneFilter(node, [filter]).groups[0].kind, 20);
+    assert.equal(compilations(), 0);
+    filter[property] = value;
+    for (let frame = 0; frame < 2; frame++) {
+      const result = sandbox.nativeSceneFilter(node, [filter]);
+      assert.equal(result.unsupported, false, property);
+      assert.equal(result.groups[0].kind, 31, property);
+    }
+    assert.equal(compilations(), 1, property);
+    assert.equal(plans.length, 2, property);
+    assert.equal(plans[0].resolutions[0], property === 'resolution' ? 2 : 1);
+    assert.equal(plans[0].passes[0].blend, property === 'blendMode' ? 1 : 0);
+    assert.deepEqual(compatHits, []);
+  }
+});
+
+test('a late custom apply hook preserves a previously native filter chain', () => {
+  const { sandbox, node, compilations, plans, compatHits } = fixture();
+  const alpha = new sandbox.PIXI.filters.AlphaFilter();
+  const color = new sandbox.PIXI.filters.ColorMatrixFilter();
+  alpha.alpha = 0.5;
+  color.matrix[4] = 0.1;
+  assert.deepEqual(Array.from(sandbox.nativeSceneFilter(node, [alpha, color]).groups, group => group.kind), [20, 25]);
+  assert.equal(compilations(), 0);
+  let calls = 0;
+  color.apply = function(manager, input, output, clear) {
+    this.uniforms.amount = ++calls;
+    manager.applyFilter(this, input, output, clear);
+  };
+  for (let frame = 0; frame < 2; frame++) {
+    assert.equal(sandbox.nativeSceneFilter(node, [alpha, color]).groups[0].kind, 31);
+    const plan = plans[frame];
+    assert.deepEqual(plan.passes.map(pass => [pass.input, pass.output, pass.clear]), [[0, 2, true], [2, 1, false]]);
+    assert.deepEqual(plan.passes.map(pass => pass.uniforms[0]), [0.25, frame + 1]);
+  }
+  assert.equal(calls, 2);
+  assert.equal(compilations(), 2);
+  assert.deepEqual(compatHits, []);
+});
+
 test('custom filter passes snapshot mutations and reuse the vertex/fragment program', () => {
   const { sandbox, Filter, node, plans, compilations } = fixture();
   const filter = new Filter();
