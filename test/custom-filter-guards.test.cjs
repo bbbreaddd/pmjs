@@ -45,6 +45,25 @@ function fixture() {
   return { sandbox, Filter, NoiseFilter, node, plans, compatHits, compilations: () => compilations };
 }
 
+test('zero-strength screen-effect filters are left out of a custom plan', () => {
+  const { sandbox, Filter, node, plans } = fixture();
+  class BlurFilter {
+    constructor() {
+      this.blurX = 0;
+      this.blurY = 0;
+      this.quality = 4;
+    }
+    get blur() { return this.blurX; }
+  }
+  sandbox.PIXI.filters.BlurFilter = BlurFilter;
+  const blur = new BlurFilter();
+  const filter = new Filter();
+  const result = sandbox.nativeSceneFilter(node, [blur, filter]);
+  assert.equal(result.unsupported, false);
+  assert.equal(plans.length, 1);
+  assert.deepEqual(plans[0].passes.map(pass => pass.uniforms[0]), [0.25]);
+});
+
 test('custom filter passes snapshot mutations and reuse the vertex/fragment program', () => {
   const { sandbox, Filter, node, plans, compilations } = fixture();
   const filter = new Filter();
