@@ -126,3 +126,21 @@ test('XHR resolves runtime file URLs to real filesystem paths in both modes', as
   }
   assert.deepEqual(reads, ['data/a b.json', 'data/a b.json']);
 });
+
+
+test('empty fetch returns a complete empty response without reading the filesystem', async () => {
+  const { context } = fixture();
+  Object.assign(context, { performance, console, TextDecoder });
+  context.NativeHost.fs = { readBytesAsync() { throw new Error('unexpected file read'); } };
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-web/events.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-web/requests.js'), 'utf8'), context);
+  const response = await context.fetch('');
+  assert.equal(response.ok, true);
+  assert.equal(response.status, 200);
+  assert.equal(response.statusText, 'OK');
+  assert.equal(response.url, '');
+  assert.equal(response.headers.get('content-type'), null);
+  assert.equal(await response.text(), '');
+  assert.equal((await response.arrayBuffer()).byteLength, 0);
+  await assert.rejects(response.json(), { name: 'SyntaxError' });
+});

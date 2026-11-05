@@ -5,8 +5,22 @@ function requestArrayBuffer(bytes) {
   return view.slice().buffer;
 }
 
+function localFetchResponse(target, bytes) {
+  var status = bytes === null ? 404 : 200;
+  var body = bytes === null ? new ArrayBuffer(0) : requestArrayBuffer(bytes);
+  var text = function() { return new TextDecoder().decode(body); };
+  return {
+    ok: status >= 200 && status < 300, status: status,
+    statusText: status === 200 ? 'OK' : 'Not Found', url: target,
+    headers: { get: function() { return null; } },
+    text: function() { return Promise.resolve(text()); },
+    json: function() { return Promise.resolve().then(function() { return JSON.parse(text()); }); },
+    arrayBuffer: function() { return Promise.resolve(body.slice(0)); }
+  };
+}
+
 globalThis.fetch = function(url) {
-  if (url === '') return Promise.resolve({ ok: true });
+  if (url === '') return Promise.resolve(localFetchResponse('', new Uint8Array(0)));
   return new Promise(function(resolve, reject) {
     var target = String(url);
     if (/^[a-z][a-z0-9+.-]*:\/\//i.test(target) && !/^file:/i.test(target)) {
@@ -19,17 +33,7 @@ globalThis.fetch = function(url) {
       PMJS.tasks.enqueue(function() {
         if (error) { reject(error); return; }
         try {
-          var status = bytes === null ? 404 : 200;
-          var body = bytes === null ? new ArrayBuffer(0) : requestArrayBuffer(bytes);
-          var text = function() { return new TextDecoder().decode(body); };
-          resolve({
-            ok: status >= 200 && status < 300, status: status,
-            statusText: status === 200 ? 'OK' : 'Not Found', url: target,
-            headers: { get: function() { return null; } },
-            text: function() { return Promise.resolve(text()); },
-            json: function() { return Promise.resolve().then(function() { return JSON.parse(text()); }); },
-            arrayBuffer: function() { return Promise.resolve(body.slice(0)); }
-          });
+          resolve(localFetchResponse(target, bytes));
         } catch (failure) { reject(failure); }
       }, { errorMode: 'event' });
     }
