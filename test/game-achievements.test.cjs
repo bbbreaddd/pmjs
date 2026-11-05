@@ -114,12 +114,17 @@ test('missing sources and malformed achievement data remain visible in inspectio
   assert.deepEqual(report.diagnostics.map(item => item.reason), ['missing-enabled-plugin', 'invalid-data']);
 });
 
-test('non-boolean plugin statuses and unrelated achievement systems do not seed Steam IDs', async () => {
+test('achievement discovery follows plugin status truthiness and excludes unrelated systems', async () => {
   const root = game([{ name: 'OrangeGreenworks' }, { name: 'LocalAchievements' }]);
+  const plugins = [null, { name: 'OrangeGreenworks', status: 'false' }, { name: 'LocalAchievements', status: true }];
   fs.writeFileSync(path.join(root, 'js/plugins.js'),
-    'var $plugins = [null,{"name":"OrangeGreenworks","status":"false"},{"name":"LocalAchievements","status":true}];');
-  map(root, [command(355, "OrangeGreenworks.activateAchievement('DISABLED'); LocalAchievements.unlockAchievement('LOCAL');"),
+    'var $plugins = ' + JSON.stringify(plugins) + ';');
+  map(root, [command(355, "OrangeGreenworks.activateAchievement('STEAM'); LocalAchievements.unlockAchievement('LOCAL');"),
     command(357, 'AbsentProvider', 'ActivateAchievement', '', { 'Name:str': 'ABSENT' })]);
+  assert.deepEqual(ids(await inspect(root)), ['STEAM']);
+  plugins[1].status = 0;
+  fs.writeFileSync(path.join(root, 'js/plugins.js'),
+    'var $plugins = ' + JSON.stringify(plugins) + ';');
   const report = await inspect(root);
   assert.deepEqual(ids(report), []);
   assert.equal(report.coverage, 'no-enabled-provider');
