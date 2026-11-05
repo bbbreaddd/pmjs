@@ -15,7 +15,8 @@
       "modules": [
         "js/pmjs-plugins/yanfly/core-transforms.js",
         "js/pmjs-plugins/yanfly/core-character-presentation.js",
-        "js/pmjs-plugins/yanfly/core-text.js"
+        "js/pmjs-plugins/yanfly/core-text.js",
+        "js/pmjs-plugins/yanfly/core-number-format.js"
       ]
     },
     {

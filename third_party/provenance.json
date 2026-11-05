@@ -2,6 +2,12 @@
   "version": 1,
   "description": "Exceptional source provenance records. Ordinary PMJS contributions use the defaults; classifications require source review.",
   "files": {
+    "js/pmjs-plugins/yanfly/core-number-format.js": {
+      "origin": "compatibility",
+      "source": "PMJS",
+      "license": "MIT",
+      "notice": "LICENSE"
+    },
     "js/pmjs-plugins/dreamx/damage-popup-retirement.js": {
       "origin": "compatibility",
       "source": "PMJS",

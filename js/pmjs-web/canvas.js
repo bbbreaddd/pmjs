@@ -1716,9 +1716,12 @@ CanvasContext2D.prototype.createPattern = function(source, repetition) {
   if (canvasReferenceEngine() === 'mv') delete pattern.setTransform;
   return pattern;
 };
+function measureCanvasText(font, text, style) {
+  return NativeHost.canvas.measureTextMetrics(font.paths, text, font.size, style);
+}
 CanvasContext2D.prototype.measureText = function(text) {
   var font = contextFont(this);
-  return NativeHost.canvas.measureTextMetrics(font.paths, String(text), font.size, nativeTextStyle(this, font));
+  return measureCanvasText(font, String(text), nativeTextStyle(this, font));
 };
 function canvasImageDataInteger(value) {
   return +value | 0;

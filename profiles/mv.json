@@ -20,6 +20,7 @@
     "js/pmjs-plugins/greenworks/compat.js",
     "js/pmjs-plugins/steamworks/compat.js",
     "js/pmjs-web/canvas.js",
+    "js/pmjs-web/text-measurement-cache.js",
     "js/pmjs-web/dialogs.js",
     "js/pmjs-web/object-urls.js",
     "js/pmjs-web/images.js",
