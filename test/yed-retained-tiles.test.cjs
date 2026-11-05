@@ -185,3 +185,25 @@ test('a null native layer conservatively declines before mutation', () => {
   assert.equal(api.prepare(map, 0, 0), false);
   assert.equal(rect.calls, 0);
 });
+
+test('windows over map edges compare the cells they show, with and without wrapping', () => {
+  const { api, map, rect } = fixture();
+  // A 2x2 window at (-1, 0) shows column 0 of the map; column 1 is outside it.
+  assert.equal(api.prepare(map, -1, 0), true);
+  const painted = rect.calls;
+  map.tiledData.layers[0].data[1] = 1;
+  api.prepare(map, -1, 0);
+  assert.equal(rect.calls, painted);
+  map.tiledData.layers[0].data[0] = 2;
+  api.prepare(map, -1, 0);
+  assert.ok(rect.calls > painted);
+  // With horizontal wrapping, the same window shows column 1 at x = -1.
+  map.horizontalWrap = true;
+  api.prepare(map, -1, 0);
+  const wrapped = rect.calls;
+  api.prepare(map, -1, 0);
+  assert.equal(rect.calls, wrapped);
+  map.tiledData.layers[0].data[3] = 1;
+  api.prepare(map, -1, 0);
+  assert.ok(rect.calls > wrapped);
+});

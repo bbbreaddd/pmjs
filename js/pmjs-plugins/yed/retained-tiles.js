@@ -32,7 +32,8 @@
       Math.ceil(map._height / map._tileHeight) + 1];
   }
 
-  function visit(map, x, y, value, points) {
+  // `cells` receives each visible tile layer's window; readCells lists its cells for it.
+  function visit(map, x, y, value, points, cells) {
     var data = map.tiledData, size = windowSize(map);
     value(data); value(data.layers); value(data.tilesets); value(map._layers);
     value(map._priorityTiles); value(map._priorityTiles.length);
@@ -68,11 +69,7 @@
       value(meta.properties && meta.properties.priority); value(meta.properties && meta.properties.zIndex);
       value(meta.properties && meta.properties.hideOnLevel); value(meta.data);
       if (meta.type !== 'tilelayer' || !meta.visible) return;
-      for (var row = 0; row < size[1]; row++) {
-        for (var column = 0; column < size[0]; column++) {
-          value(cell(map, meta, x + column, y + row));
-        }
-      }
+      cells(map, meta, x, y, size);
     });
     data.layers.forEach(function(layer) {
       if (layer.type !== 'objectgroup') return;
@@ -92,6 +89,10 @@
     visit(map, state.x, state.y, function(value) { state.values.push(value); },
       function(points) {
         for (var index = 0; index < points.length; index++) state.values.push(points[index]);
+      },
+      function(target, layer, x, y, size) {
+        var values = readCells(target, layer, x, y, size);
+        for (var index = 0; index < values.length; index++) state.values.push(values[index]);
       });
   }
 
@@ -100,6 +101,24 @@
     if (map.horizontalWrap) x = ((x % width) + width) % width;
     if (map.verticalWrap) y = ((y % height) + height) % height;
     return x < 0 || y < 0 || x >= width || y >= height ? 0 : layer.data[y * width + x] || 0;
+  }
+
+  // The window's cells of one tile layer, row by row, with cell()'s values. Without wrapping this
+  // reads layer.data directly: the check runs on every frame for every visible cell.
+  var cellScratch = [];
+  function readCells(map, layer, x, y, size) {
+    var width = map._mapWidth, height = map._mapHeight, data = layer.data, count = 0;
+    var wraps = map.horizontalWrap || map.verticalWrap;
+    cellScratch.length = size[0] * size[1];
+    for (var row = 0; row < size[1]; row++) {
+      var cy = y + row, inside = cy >= 0 && cy < height, base = cy * width;
+      for (var column = 0; column < size[0]; column++) {
+        var cx = x + column;
+        cellScratch[count++] = wraps ? cell(map, layer, cx, cy) :
+          inside && cx >= 0 && cx < width ? data[base + cx] || 0 : 0;
+      }
+    }
+    return cellScratch;
   }
 
   function source(map, material) {
@@ -273,6 +292,12 @@
         function(points) {
           for (var index = 0; index < points.length; index++) {
             if (state.values[cursor++] !== points[index]) same = false;
+          }
+        },
+        function(target, layer, cx, cy, size) {
+          var values = readCells(target, layer, cx, cy, size);
+          for (var index = 0; index < values.length; index++) {
+            if (state.values[cursor++] !== values[index]) same = false;
           }
         });
       if (cursor !== state.values.length) same = false;
