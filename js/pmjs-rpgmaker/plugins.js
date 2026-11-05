@@ -26,7 +26,7 @@
     return (Array.isArray(records) ? records : []).filter(function(record) {
       return record && typeof record.name === 'string' && record.name;
     }).map(function(record) {
-      return { name: record.name, status: record.status !== false };
+      return { name: record.name, status: !!record.status };
     });
   }
 

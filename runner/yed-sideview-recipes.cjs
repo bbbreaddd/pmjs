@@ -7,7 +7,7 @@ async function yedSideviewFrames(read, logger = console) {
     const manifest = await read('js/plugins.js');
     if (manifest === null) return frames;
     const { plugins } = parsePluginManifest(manifest.toString('utf8'));
-    const plugin = plugins.find(p => p?.status === true && p.name === 'YED_SideviewBattler');
+    const plugin = plugins.find(p => p?.status && p.name === 'YED_SideviewBattler');
     if (!plugin) return frames;
     const parameters = plugin.parameters || {};
     for (const file of ['data/Actors.json', 'data/Enemies.json']) {

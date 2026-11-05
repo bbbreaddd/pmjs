@@ -16,7 +16,8 @@ const processorDiscovery = options => options.portDescriptors?.length ? [] :
 function signature(options) {
   const { native } = options;
   const modules = ['asset-preparation.cjs', 'map-preparation.cjs', 'port-preparation.cjs',
-    'preparation.cjs', 'preparation-state.cjs', 'preparation-files.cjs', 'preparation-catalog.cjs'];
+    'preparation.cjs', 'preparation-state.cjs', 'preparation-files.cjs', 'preparation-catalog.cjs',
+    'yed-sideview-recipes.cjs'];
   return hash(JSON.stringify({ version: 1, modules: modules.map(name => hash(fs.readFileSync(path.join(__dirname, name)))),
     imageProcessor: native.assets.preparationVersion, tileProcessor: native.assets.tilePreparationVersion,
     lz4: native.assets.preparationLz4Version, images: options.images, maps: options.maps,

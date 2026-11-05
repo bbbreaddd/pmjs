@@ -148,9 +148,8 @@ export function readPluginManifest(gameDir) {
   }
   const source = fs.readFileSync(file, 'utf8');
   const parsed = pluginManifest.parsePluginManifest(source, file);
-  // Adapter inspection requires status === true; loaders use truthiness and tracking uses status !== false.
   const plugins = parsed.plugins.filter(entry => entry && typeof entry.name === 'string')
-    .map(entry => ({ name: entry.name, status: entry.status === true }));
+    .map(entry => ({ name: entry.name, status: !!entry.status }));
   return { plugins, enabled: plugins.filter(entry => entry.status).map(entry => entry.name) };
 }
 

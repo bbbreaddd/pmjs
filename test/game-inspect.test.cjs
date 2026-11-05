@@ -110,7 +110,7 @@ test('generated manifests allow trailing commas without changing string values o
   }
 });
 
-test('game inspection ignores malformed records and keeps strict boolean enabled status', async () => {
+test('game inspection ignores malformed records and follows loader truthiness', async () => {
   const { readPluginManifest } = await loadInspect();
   const dir = temporaryDirectory('pmjs-game-plugin-records-');
   writeGame(dir, { pluginsJs: `var $plugins = [
@@ -119,12 +119,16 @@ test('game inspection ignores malformed records and keeps strict boolean enabled
     {"status":true},
     {"name":"Truthy","status":1},
     {"name":"Enabled","status":true},
+    {"name":"Missing"},
+    {"name":"Zero","status":0},
+    {"name":"String","status":"false"},
     {"name":"Commented","status":false} // ignored by the inspector
   ];` });
   assert.deepEqual(readPluginManifest(dir), {
-    plugins: [{ name: 'Truthy', status: false }, { name: 'Enabled', status: true },
-      { name: 'Commented', status: false }],
-    enabled: ['Enabled']
+    plugins: [{ name: 'Truthy', status: true }, { name: 'Enabled', status: true },
+      { name: 'Missing', status: false }, { name: 'Zero', status: false },
+      { name: 'String', status: true }, { name: 'Commented', status: false }],
+    enabled: ['Truthy', 'Enabled', 'String']
   });
 });
 

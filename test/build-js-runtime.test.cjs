@@ -519,3 +519,13 @@ test('auto selection skips colliding manifest identities unless explicitly inclu
   assert.equal(await selected({ adapters: { mode: 'auto', include: ['yed_tiled.js'] } }), true);
   assert.match(warnings[0], /YED_Tiled, yed_tiled/);
 });
+
+
+test('automatic adapter selection follows truthy plugin status', async () => {
+  const root = temporaryDirectory('pmjs-adapter-status-');
+  const game = writeMvGame(root, { plugins: [{ name: 'YED_Tiled', status: 1 }] });
+  const selected = async () => (await compose(game)).modules.some(item => item.module === 'js/pmjs-plugins/yed/tiled.js');
+  assert.equal(await selected(), true);
+  fs.writeFileSync(path.join(game, 'js/plugins.js'), 'var $plugins = ' + JSON.stringify([{ name: 'YED_Tiled' }]) + ';');
+  assert.equal(await selected(), false);
+});

@@ -735,3 +735,29 @@ test('failure stages distinguish delegated script throws from interceptor failur
     assert.equal(entry.failureStage, mode === 'delegate' ? 'guest-script' : mode === 'nested' ? 'loaded-callback' : 'load-interceptor');
   }
 });
+
+
+for (const engine of ['mv', 'mz']) {
+  test(engine + ' loader and tracking agree on plugin status truthiness', () => {
+    const vm = require('node:vm');
+    const fs = require('node:fs');
+    const entries = [
+      { name: 'On', status: true }, { name: 'Number', status: 1 },
+      { name: 'String', status: 'false' }, { name: 'Off', status: false },
+      { name: 'Zero', status: 0 }, { name: 'Empty', status: '' },
+      { name: 'Null', status: null }, { name: 'Missing' }
+    ];
+    const loads = [];
+    const ctx = loadPmjsRuntime({ PMJS_RUNTIME_ENGINE: engine,
+      console: { log() {}, error() {} }, $plugins: entries,
+      NativeHost: { runtime: { loadScript(path) { loads.push(path); } } },
+      PluginManager: { _scripts: [], _path: 'js/plugins/', setParameters() {} }
+    });
+    vm.runInContext(fs.readFileSync(require.resolve('../js/pmjs-' + engine + '/plugin-loader.js'), 'utf8'), ctx);
+    ctx[engine === 'mv' ? 'pmjsMvInitializePlugins' : 'pmjsMzInitializePlugins']();
+    assert.deepEqual(loads, ['js/plugins/On.js', 'js/plugins/Number.js', 'js/plugins/String.js']);
+    const guest = plain(ctx.PMJS.plugins.dump().guest);
+    assert.deepEqual(guest.map(item => [item.name, item.manifestEnabled, item.state]), entries.map((entry, i) =>
+      [entry.name, i < 3, i < 3 ? 'loaded' : 'disabled']));
+  });
+}
