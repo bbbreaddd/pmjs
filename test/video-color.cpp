@@ -5,14 +5,16 @@
 #include <iostream>
 
 int main() {
-  const std::array<std::array<int, 2>, 5> sizes{{{1, 1}, {2, 2}, {7, 5}, {64, 33}, {640, 480}}};
+  const std::array<std::array<int, 2>, 7> sizes{{{1, 1}, {2, 2}, {7, 5}, {64, 33}, {640, 480}, {1, 9}, {9, 1}}};
   // Scalar Rec.601 reference outputs, including per-axis chroma rounding.
-  const std::array<std::array<std::uint64_t, 2>, 5> expected{{
+  const std::array<std::array<std::uint64_t, 2>, 7> expected{{
     {549578233166823072ULL, 549578233166823072ULL},
     {2241029341319229937ULL, 2241029341319229937ULL},
     {10231786645609863056ULL, 15085558196532142704ULL},
     {580058609320180928ULL, 12725006136725203781ULL},
-    {11477640712264574989ULL, 1243290021509014669ULL}
+    {11477640712264574989ULL, 1243290021509014669ULL},
+    {1209435979362453842ULL, 1209435979362453842ULL},
+    {1209435979362453842ULL, 1209435979362453842ULL}
   }};
   for (std::size_t index = 0; index < sizes.size(); ++index) {
     const auto& size = sizes[index];

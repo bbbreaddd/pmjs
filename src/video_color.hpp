@@ -26,16 +26,24 @@ struct VideoYuv420 {
     rgba.resize(yBytes * 4);
     const auto* uPlane = planes.data() + yBytes;
     const auto* vPlane = uPlane + cBytes;
-    const auto chroma = [cw, ch](const std::uint8_t* plane, int x, int y) {
-      // Sample x/2 - 1/4 and y/2 - 1/4, rounding after EACH axis.
-      // GL's 8-bit linear sampling is separable; a single bilerp changes bytes.
-      const int x0 = x / 2 - (x % 2 == 0), y0 = y / 2 - (y % 2 == 0);
-      const int wx = x % 2 == 0 ? 3 : 1, wy = y % 2 == 0 ? 3 : 1;
-      const int left = std::clamp(x0, 0, cw - 1), right = std::clamp(x0 + 1, 0, cw - 1);
-      const int top = std::clamp(y0, 0, ch - 1), bottom = std::clamp(y0 + 1, 0, ch - 1);
-      const int a = (plane[top * cw + left] * (4 - wx) + plane[top * cw + right] * wx + 2) / 4;
-      const int b = (plane[bottom * cw + left] * (4 - wx) + plane[bottom * cw + right] * wx + 2) / 4;
-      return (a * (4 - wy) + b * wy + 2) / 4;
+    std::vector<std::uint8_t> horizontal(static_cast<std::size_t>(width) * 4);
+    std::array<int, 2> filteredRows{-1, -1};
+    const auto filterRow = [&](int row) {
+      const int slot = row % 2;
+      if (filteredRows[slot] == row) return;
+      auto* filteredU = horizontal.data() + static_cast<std::size_t>(slot) * width * 2;
+      auto* filteredV = filteredU + width;
+      const auto* sourceU = uPlane + row * cw;
+      const auto* sourceV = vPlane + row * cw;
+      for (int x = 0; x < width; ++x) {
+        // Centre-sited x/2 - 1/4, with rounding before vertical interpolation.
+        const int x0 = x / 2 - (x % 2 == 0);
+        const int wx = x % 2 == 0 ? 3 : 1;
+        const int left = std::clamp(x0, 0, cw - 1), right = std::clamp(x0 + 1, 0, cw - 1);
+        filteredU[x] = (sourceU[left] * (4 - wx) + sourceU[right] * wx + 2) / 4;
+        filteredV[x] = (sourceV[left] * (4 - wx) + sourceV[right] * wx + 2) / 4;
+      }
+      filteredRows[slot] = row;
     };
     const auto byte = [](double value) {
       return static_cast<std::uint8_t>(std::clamp(static_cast<int>(value + 0.5), 0, 255));
@@ -58,9 +66,19 @@ struct VideoYuv420 {
       return values;
     }();
     for (int y = 0; y < height; ++y) {
+      const int y0 = y / 2 - (y % 2 == 0), wy = y % 2 == 0 ? 3 : 1;
+      const int top = std::clamp(y0, 0, ch - 1), bottom = std::clamp(y0 + 1, 0, ch - 1);
+      filterRow(top);
+      filterRow(bottom);
+      const auto* topU = horizontal.data() + static_cast<std::size_t>(top % 2) * width * 2;
+      const auto* bottomU = horizontal.data() + static_cast<std::size_t>(bottom % 2) * width * 2;
+      const auto* topV = topU + width;
+      const auto* bottomV = bottomU + width;
       for (int x = 0; x < width; ++x) {
         const auto index = static_cast<std::size_t>(y) * width + x;
-        const int luma = planes[index], u = chroma(uPlane, x, y), v = chroma(vPlane, x, y);
+        const int luma = planes[index];
+        const int u = (topU[x] * (4 - wy) + bottomU[x] * wy + 2) / 4;
+        const int v = (topV[x] * (4 - wy) + bottomV[x] * wy + 2) / 4;
         auto* out = rgba.data() + index * 4;
         if (canvas) {
           // The GPU canvas/texture conversion uses the Skia Rec.601 constants.
