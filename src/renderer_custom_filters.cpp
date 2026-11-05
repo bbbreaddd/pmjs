@@ -3,6 +3,7 @@
 #include <GLES3/gl3.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -279,12 +280,14 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, RenderTarget& 
   };
   // Custom groups already have downward-oriented RGBA storage and cleared padding.
   // Borrow only a read-only input; longer chains can write back into target zero.
+  const int sourceLogicalWidth = source.logicalWidth > 0 ? source.logicalWidth : source.width;
+  const int sourceLogicalHeight = source.logicalHeight > 0 ? source.logicalHeight : source.height;
   const bool borrowInput = sourcePaddingKnownZero &&
       plan.resolutions.size() == 2 && plan.passes.size() == 1 &&
       plan.passes[0].input == 0 && plan.passes[0].output == 1 &&
       plan.passes[0].samplers.empty() && sourceResolution == plan.resolutions[0] &&
-      source.width == pot(frame[2] * plan.resolutions[0]) &&
-      source.height == pot(frame[3] * plan.resolutions[0]) &&
+      sourceLogicalWidth == pot(frame[2] * plan.resolutions[0]) &&
+      sourceLogicalHeight == pot(frame[3] * plan.resolutions[0]) &&
       source.framebuffer != output.framebuffer && source.texture != output.texture;
   const bool sourceCache = plan.passes.size() == 1 && borrowInput;
   // Targets are reused only after the complete pass sequence has finished.
@@ -298,12 +301,28 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, RenderTarget& 
   for (std::size_t index = 0; !cacheHit && index < plan.resolutions.size(); ++index) {
     if (index == 1 || (index == 0 && borrowInput)) continue;
     auto& target = customPassTargets_[index];
-    ensureFilterTarget(target, pot(frame[2] * plan.resolutions[index]),
-      pot(frame[3] * plan.resolutions[index]), index);
+    const int requestWidth = pot(frame[2] * plan.resolutions[index]);
+    const int requestHeight = pot(frame[3] * plan.resolutions[index]);
+    if (filterTargetDiagnostics()) {
+      std::fprintf(stderr,
+        "[pmjs-filter-target] slot=%zu frame=%.2fx%.2f res=%.3f pot=%dx%d\n",
+        index, frame[2], frame[3], plan.resolutions[index], requestWidth, requestHeight);
+    }
+    ensureFilterTarget(target, requestWidth, requestHeight, index, frameTick_, true);
     glBindFramebuffer(GL_FRAMEBUFFER, target.framebuffer);
-    glDisable(GL_SCISSOR_TEST);
+    // Clear the logical extent only: the physical tail beyond it is never
+    // written and is cleared when the target is allocated, so content outside
+    // the frame still reads transparent.
     glClearColor(0, 0, 0, 0);
+    if (target.fullClearPending) {
+      glDisable(GL_SCISSOR_TEST);
+      target.fullClearPending = false;
+    } else {
+      glEnable(GL_SCISSOR_TEST);
+      glScissor(0, 0, requestWidth, requestHeight);
+    }
     glClear(GL_COLOR_BUFFER_BIT);
+    glDisable(GL_SCISSOR_TEST);
     if (diagnostics_) ++stats_.filterTargetClears;
   }
   const auto& input = cacheHit ? filterIntermediateTarget_ :
@@ -329,8 +348,10 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, RenderTarget& 
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), nullptr);
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), reinterpret_cast<void*>(2 * sizeof(float)));
   }
-  const float u = frame[2] * resolution / input.width;
-  const float v = frame[3] * resolution / input.height;
+  const int inputLogicalWidth = input.logicalWidth > 0 ? input.logicalWidth : input.width;
+  const int inputLogicalHeight = input.logicalHeight > 0 ? input.logicalHeight : input.height;
+  const float u = frame[2] * resolution / inputLogicalWidth;
+  const float v = frame[3] * resolution / inputLogicalHeight;
   const float right = frame[0] + frame[2], bottom = frame[1] + frame[3];
   const std::array<float, 24> quad{
     frame[0], frame[1], 0, 0, right, frame[1], u, 0, right, bottom, u, v,
@@ -365,6 +386,23 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, RenderTarget& 
         std::lround((command.clip[3] - command.clip[1]) * outputResolution));
     }
     glUseProgram(shader);
+    // The vertex stage still hands the fragment the logical coordinate; the
+    // sampler read is scaled here when the target is physically larger.
+    const RenderTarget* sampled = cacheHit ? &filterIntermediateTarget_ :
+      borrowInput ? &source : &customPassTargets_[pass.input];
+    const int sampleScaleLocation =
+      identity ? custom.identitySampleScaleLocation : custom.sampleScaleLocation;
+    if (sampleScaleLocation >= 0) {
+      const int sampledWidth = sampled->width > 0 ? sampled->width : 1;
+      const int sampledHeight = sampled->height > 0 ? sampled->height : 1;
+      const int sampledLogicalWidth = sampled->logicalWidth > 0 ?
+        sampled->logicalWidth : sampledWidth;
+      const int sampledLogicalHeight = sampled->logicalHeight > 0 ?
+        sampled->logicalHeight : sampledHeight;
+      glUniform2f(sampleScaleLocation,
+        static_cast<float>(sampledLogicalWidth) / sampledWidth,
+        static_cast<float>(sampledLogicalHeight) / sampledHeight);
+    }
     const bool yDown = !final || outputYDown;
     const float sx = 2.0F / targetWidth, sy = (yDown ? 2.0F : -2.0F) / targetHeight;
     const auto& local = pass.transform;
@@ -382,9 +420,10 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, RenderTarget& 
       custom.builtInUniformLocations;
     glUniformMatrix3fv(builtInLocations[0], 1, GL_FALSE, projection.data());
     glUniform4f(builtInLocations[1],
-      input.width / resolution, input.height / resolution, frame[0], frame[1]);
+      inputLogicalWidth / resolution, inputLogicalHeight / resolution, frame[0], frame[1]);
     glUniform4f(builtInLocations[2], 0, 0,
-      (frame[2] - 1) * resolution / input.width, (frame[3] - 1) * resolution / input.height);
+      (frame[2] - 1) * resolution / inputLogicalWidth,
+      (frame[3] - 1) * resolution / inputLogicalHeight);
     glActiveTexture(GL_TEXTURE0);
     const auto inputTexture = cacheHit ? filterIntermediateTarget_.texture :
       borrowInput ? input.texture : customPassTargets_[pass.input].texture;

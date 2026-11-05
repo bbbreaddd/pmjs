@@ -47,6 +47,7 @@ void Renderer::applyBlendMode(BlendMode mode) {
 }
 
 void Renderer::render() {
+  ++frameTick_;
   renderScene();
   presentToDrawable();
 }
@@ -1199,10 +1200,14 @@ void Renderer::renderScene() {
       const int targetWidth = std::max(1, static_cast<int>(rasterFrame[2] * rasterResolution));
       const int targetHeight = std::max(1, static_cast<int>(rasterFrame[3] * rasterResolution));
       if (!reuseFilterContent && diagnostics_) ++stats_.filterTargetAcquires;
+      // Only custom-plan group targets are sampled by renderer-owned shader
+      // math, which carries the logical/physical scale. Other filter paths keep
+      // the exact size they have always requested.
       const bool reused = !reuseFilterContent && ensureFilterTarget(groupTargets_[filterDepth],
         operation.command->customFilterPlan ? pot(targetWidth) : targetWidth,
         operation.command->customFilterPlan ? pot(targetHeight) : targetHeight,
-        customFilterTargetCapacity + filterDepth);
+        customFilterTargetCapacity + filterDepth, frameTick_,
+        operation.command->customFilterPlan != nullptr);
       if (diagnostics_ && reused) ++stats_.filterTargetReuses;
       std::array<int, 4> boundedRect{};
       const bool bounded = !operation.command->customFilterPlan && filterBoundsRect(operation.command, &boundedRect);
@@ -1224,22 +1229,51 @@ void Renderer::renderScene() {
       }
       glBindFramebuffer(GL_FRAMEBUFFER, groupTargets_[filterDepth].framebuffer);
       glViewport(0, 0, static_cast<int>(rasterFrame[2] * rasterResolution), static_cast<int>(rasterFrame[3] * rasterResolution));
-      if (bounded && !multiRegion) {
+      auto& groupTarget = groupTargets_[filterDepth];
+      const int groupLogicalWidth = groupTarget.logicalWidth > 0 ?
+        groupTarget.logicalWidth : groupTarget.width;
+      const int groupLogicalHeight = groupTarget.logicalHeight > 0 ?
+        groupTarget.logicalHeight : groupTarget.height;
+      const bool oversized = groupTarget.width > groupLogicalWidth ||
+        groupTarget.height > groupLogicalHeight;
+      const auto scissorBounds = [&]() {
+        if (!bounded || multiRegion) return;
         glEnable(GL_SCISSOR_TEST);
         rasterScissor(boundedRect[0], height_ - boundedRect[3],
                   std::max(0, boundedRect[2] - boundedRect[0]),
                   std::max(0, boundedRect[3] - boundedRect[1]));
         scissorActive = true;
         activeClip = boundedRect;
-      }
+      };
       glClearColor(0, 0, 0, 0);
-      if (multiRegion) {
+      if (oversized) {
+        // A reused target can be physically larger than the frame. Clear the
+        // logical extent (the physical tail was cleared at allocation and is
+        // never written) so samples outside the content read transparent.
+        if (!reuseFilterContent) {
+          if (groupTarget.fullClearPending) {
+            glDisable(GL_SCISSOR_TEST);
+            groupTarget.fullClearPending = false;
+          } else {
+            glEnable(GL_SCISSOR_TEST);
+            glScissor(0, 0, groupLogicalWidth, groupLogicalHeight);
+          }
+          glClear(GL_COLOR_BUFFER_BIT);
+          if (diagnostics_) ++stats_.filterTargetClears;
+        }
         glDisable(GL_SCISSOR_TEST);
         scissorActive = false;
-      }
-      if (!reuseFilterContent) {
-        glClear(GL_COLOR_BUFFER_BIT);
-        if (diagnostics_) ++stats_.filterTargetClears;
+        scissorBounds();
+      } else {
+        scissorBounds();
+        if (multiRegion) {
+          glDisable(GL_SCISSOR_TEST);
+          scissorActive = false;
+        }
+        if (!reuseFilterContent) {
+          glClear(GL_COLOR_BUFFER_BIT);
+          if (diagnostics_) ++stats_.filterTargetClears;
+        }
       }
       activeBlend = BlendMode::normal;
       applyBlendMode(activeBlend);
@@ -1656,16 +1690,24 @@ void Renderer::renderScene() {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         textureNearestState_[input.texture] = false;
         glUseProgram(custom.program);
+        const int logicalWidth = input.logicalWidth > 0 ? input.logicalWidth : input.width;
+        const int logicalHeight = input.logicalHeight > 0 ? input.logicalHeight : input.height;
         glUniform1i(glGetUniformLocation(custom.program, "pmjsTargetYDown"), targetYDown);
         glUniform1i(glGetUniformLocation(custom.program, "uSampler"), 0);
         glUniform2f(glGetUniformLocation(custom.program, "pmjsScreenSize"), width_, height_);
         glUniform4f(glGetUniformLocation(custom.program, "pmjsFilterFrame"),
           bounds[0], bounds[1], frameWidth, frameHeight);
-        glUniform2f(glGetUniformLocation(custom.program, "pmjsFilterTextureSize"), input.width, input.height);
+        glUniform2f(glGetUniformLocation(custom.program, "pmjsFilterTextureSize"),
+          logicalWidth, logicalHeight);
         glUniform4f(glGetUniformLocation(custom.program, "filterArea"),
-          input.width, input.height, bounds[0], bounds[1]);
+          logicalWidth, logicalHeight, bounds[0], bounds[1]);
         glUniform4f(glGetUniformLocation(custom.program, "filterClamp"), 0, 0,
-          float(frameWidth - 1) / input.width, float(frameHeight - 1) / input.height);
+          float(frameWidth - 1) / logicalWidth, float(frameHeight - 1) / logicalHeight);
+        const GLint sampleScale = glGetUniformLocation(custom.program, "pmjsSampleScale");
+        if (sampleScale >= 0) {
+          glUniform2f(sampleScale, static_cast<float>(logicalWidth) / input.width,
+            static_cast<float>(logicalHeight) / input.height);
+        }
         int offset = 1;
         for (const auto& uniform : custom.uniforms) {
           const float* data = filter.filterParameters.data() + offset;

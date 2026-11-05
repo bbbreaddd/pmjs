@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <string>
 #include <memory>
 #include <unordered_map>
@@ -14,6 +15,37 @@
 #include <variant>
 
 namespace pmjs {
+
+// Filter-target churn premise check: log requested sizes and allocation cost.
+inline bool filterTargetDiagnostics() {
+  static const bool enabled = []() {
+    const char* value = std::getenv("PMJS_FILTER_TARGET_DIAGNOSTICS");
+    return value && std::string(value) == "1";
+  }();
+  return enabled;
+}
+
+// Keeping a filter target while the requested size still fits changes the
+// physical texture size, so sampling coordinates need a logical/physical scale.
+// PMJS_DISABLE_OPT=render.filter-target-reuse restores the exact-size path.
+inline bool filterTargetReuseEnabled() {
+  static const bool enabled = []() {
+    const char* value = std::getenv("PMJS_DISABLE_OPT");
+    if (!value) return true;
+    const std::string list(value);
+    std::size_t start = 0;
+    while (start < list.size()) {
+      auto end = list.find_first_of(", \t\r\n", start);
+      if (end == std::string::npos) end = list.size();
+      if (list.compare(start, end - start, "render.filter-target-reuse") == 0)
+        return false;
+      start = list.find_first_not_of(", \t\r\n", end);
+      if (start == std::string::npos) break;
+    }
+    return true;
+  }();
+  return enabled;
+}
 
 enum class BlendMode : std::uint8_t {
   normal = 0,
@@ -241,6 +273,9 @@ class Renderer {
     std::vector<FilterUniform> uniforms;
     bool identityColorMatrixContract = false;
     std::uint32_t identityProgram = 0;
+    // pmjsSampleScale: logical/physical filter-target size for sampler reads.
+    int sampleScaleLocation = -1;
+    int identitySampleScaleLocation = -1;
     std::vector<int> identityUniformLocations{};
     // projectionMatrix, filterArea, filterClamp, uSampler
     std::array<int, 4> builtInUniformLocations{{-1, -1, -1, -1}};
@@ -423,10 +458,20 @@ class Renderer {
     std::uint32_t depth = 0;
     int width = 0;
     int height = 0;
+    // Size the game and the shader math see. Equal to width/height except while
+    // a reused filter target is physically larger than the current request.
+    int logicalWidth = 0;
+    int logicalHeight = 0;
+    // Frame tick when the target first became larger than its request.
+    std::uint64_t oversizeSince = 0;
+    // New allocations start with undefined storage: the first clear must cover
+    // the whole physical texture, later clears only the logical extent.
+    bool fullClearPending = false;
   };
 
   static constexpr std::size_t customFilterTargetCapacity = 64;
   static constexpr std::size_t filterTargetCacheBudget = 32U * 1024U * 1024U;
+  static constexpr std::uint64_t filterTargetShrinkFrames = 120;
   struct CachedFilterTarget {
     RenderTarget target;
     std::uint64_t lastUse = 0;
@@ -456,7 +501,8 @@ class Renderer {
   PrimitiveSurfaceResource* lookupPrimitiveSurface(PrimitiveSurfaceHandle handle);
   void resizeTargets(int width, int height);
   void ensureTarget(RenderTarget& target, int width, int height);
-  bool ensureFilterTarget(RenderTarget& target, int width, int height, std::size_t slot);
+  bool ensureFilterTarget(RenderTarget& target, int width, int height, std::size_t slot,
+                          std::uint64_t frameTick, bool allowReuse);
   static std::size_t targetStorageBytes(const RenderTarget& target);
   void ensureDepthBuffer(RenderTarget& target);
   void destroyTarget(RenderTarget& target);
@@ -505,6 +551,8 @@ class Renderer {
   bool filterIntermediateUsed_ = false;
   std::array<CachedFilterTarget, customFilterTargetCapacity + scene_packet::maxFilterDepth> filterTargetCache_{};
   std::uint64_t filterTargetCacheClock_ = 0;
+  // Incremented once per rendered frame; drives oversize-target shrinking.
+  std::uint64_t frameTick_ = 0;
   // Native rendering is shared across facades; the first Pixi renderer fixes precision.
   bool pixiPrecisionConfigured_ = false;
   ImageStore& images_;
