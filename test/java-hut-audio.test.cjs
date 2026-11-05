@@ -18,7 +18,7 @@ function setup(unknown = false) {
   const start = function() { throw new Error('browser audio nodes'); };
   const panner = function() { throw new Error('browser panner'); };
   const functions = { play, _startPlaying: start, _updatePanner: panner };
-  const source = fs.readFileSync(require.resolve('../js/pmjs-plugins/java-hut/native-audio.js'), 'utf8')
+  const source = fs.readFileSync(require.resolve('../js/pmjs-mz/java-hut-audio.js'), 'utf8')
     .replace(/(\w+): '[a-f0-9]{64}'/g, (text, name) => name + ": '" + crypto.createHash('sha256')
       .update(functions[name].toString()).digest('hex') + "'");
   require('./helpers/runtime-context.cjs').runModule(c, 'js/pmjs-core/methods.js');

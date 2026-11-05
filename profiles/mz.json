@@ -51,7 +51,7 @@
     "js/pmjs-mz/fonts.js",
     "js/pmjs-rpgmaker/native-audio.js",
     "js/pmjs-mz/audio.js",
-    "js/pmjs-plugins/java-hut/native-audio.js",
+    "js/pmjs-mz/java-hut-audio.js",
     "js/pmjs-mz/plugin-loader.js",
     "js/pmjs-rpgmaker/main-loop.js",
     "js/pmjs-mz/main-loop.js",

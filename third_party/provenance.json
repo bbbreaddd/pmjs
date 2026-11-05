@@ -483,7 +483,7 @@
       "license": "MIT",
       "notice": "LICENSE"
     },
-    "js/pmjs-plugins/java-hut/native-audio.js": {
+    "js/pmjs-mz/java-hut-audio.js": {
       "origin": "compatibility",
       "source": "PMJS",
       "license": "MIT",
