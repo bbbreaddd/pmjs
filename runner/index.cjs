@@ -483,15 +483,19 @@ async function runSession(input, diagnostics, setNative) {
         };
     function hostFilesystem(service) {
       const methods = new Map();
+      for (const name of Reflect.ownKeys(service)) {
+        const value = Reflect.get(service, name);
+        if (typeof value !== 'function' || methods.has(value)) continue;
+        methods.set(value, function(...args) {
+          const tasks = globalThis.PMJS && globalThis.PMJS.tasks;
+          return tasks ? tasks.runHost(value, service, args) : value.apply(service, args);
+        });
+      }
       return new Proxy(service, {
         get(target, name) {
           const value = Reflect.get(target, name);
-          if (typeof value !== 'function') return value;
-          if (!methods.has(value)) methods.set(value, function(...args) {
-            const tasks = globalThis.PMJS && globalThis.PMJS.tasks;
-            return tasks ? tasks.runHost(value, target, args) : value.apply(target, args);
-          });
-          return methods.get(value);
+          // Guest replacements must keep their identity for guarded restoration.
+          return methods.get(value) || value;
         }
       });
     }

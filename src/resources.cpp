@@ -1713,16 +1713,19 @@ std::shared_ptr<ImagePixelSnapshot> ImageStore::deferPixelRead(ImageHandle handl
   snapshot->x = x; snapshot->y = y;
   snapshot->width = width; snapshot->height = height;
   snapshot->premultiplied = info->premultiplied;
-  auto& readers = pixelReads_[handle];
-  std::erase_if(readers, [](const auto& reader) { return reader.expired(); });
-  readers.push_back(snapshot);
+  auto& pending = pixelReads_[handle];
+  if (pending.readers.size() >= pending.sweepAt) {
+    std::erase_if(pending.readers, [](const auto& reader) { return reader.expired(); });
+    pending.sweepAt = std::max(std::size_t{64}, pending.readers.size() * 2);
+  }
+  pending.readers.push_back(snapshot);
   return snapshot;
 }
 
 bool ImageStore::preservePixelReads(ImageHandle handle) {
   const auto found = pixelReads_.find(handle);
   if (found == pixelReads_.end()) return true;
-  for (const auto& reader : found->second) if (auto snapshot = reader.lock()) {
+  for (const auto& reader : found->second.readers) if (auto snapshot = reader.lock()) {
     if (!snapshot->pixels) {
       snapshot->setPixels(readPixelsRegion(handle, snapshot->x, snapshot->y,
         snapshot->width, snapshot->height));

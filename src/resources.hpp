@@ -402,7 +402,11 @@ class ImageStore {
   std::uint64_t preparedFrameUploadBytes_ = 0;
   std::optional<ImagePixels> readTexturePixels(const ImageInfo& image, ImageChannelStorage storage = {},
       std::optional<std::array<int,4>> region = std::nullopt) const;
-  std::unordered_map<ImageHandle, std::vector<std::weak_ptr<ImagePixelSnapshot>>> pixelReads_;
+  struct PixelReads {
+    std::vector<std::weak_ptr<ImagePixelSnapshot>> readers;
+    std::size_t sweepAt = 64;
+  };
+  std::unordered_map<ImageHandle, PixelReads> pixelReads_;
   struct SharedPreparedPage;
   struct PreparedPool;
   struct SharedTexture;
