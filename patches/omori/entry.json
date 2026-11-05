@@ -2,6 +2,7 @@
   "modules": [
     "plugins.js",
     "menu-background.js",
-    "timing.js"
+    "timing.js",
+    "search-limit.js"
   ]
 }

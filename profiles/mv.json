@@ -38,6 +38,7 @@
     "js/pmjs-mv/fpsmeter.js",
     "js/pmjs-rpgmaker/input.js",
     "js/pmjs-mv/engine.js",
+    "js/pmjs-mv/pathfinding.js",
     "js/pmjs-mv/character-presentation.js",
     "js/pmjs-mv/timing.js",
     "js/pmjs-mv/render-prepare.js",
