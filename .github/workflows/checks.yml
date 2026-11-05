@@ -2,6 +2,7 @@ name: Checks
 
 on:
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
@@ -13,6 +14,24 @@ defaults:
 jobs:
   source:
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run licensing
+      - run: python3 tools/test_coverage_test.py
+      - run: npm test
+      - run: python3 test/portmaster-package.py
+
+  native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install native test dependencies
@@ -26,18 +45,40 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
-          cache: npm
-          cache-dependency-path: package-lock.json
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run licensing
-      - run: npm test
-      - run: python3 test/portmaster-package.py
-      - name: Build and run native regressions
+      - name: Configure native tests
+        id: native-configure
+        run: cmake --preset dev
+      - name: Build native smoke suite
+        if: github.event_name == 'pull_request'
+        run: cmake --build --preset dev --target pmjs-native-smoke --parallel 4
+      - name: Build full native suite
+        if: github.event_name != 'pull_request'
+        run: cmake --build --preset dev --parallel 4
+      - name: Run native smoke suite
+        if: github.event_name == 'pull_request'
+        run: ctest --preset dev -L smoke --no-tests=error --timeout 180 --output-junit "$GITHUB_WORKSPACE/build/dev/native-tests.xml"
+      - name: Run full native suite
+        if: github.event_name != 'pull_request'
+        run: ctest --preset dev -L native --no-tests=error --timeout 600 --output-junit "$GITHUB_WORKSPACE/build/dev/native-tests.xml"
+      - name: Verify coverage integration
+        env:
+          PMJS_TEST_BUILD_DIR: build/dev
+        run: python3 tools/test_coverage_test.py
+      - name: Summarize native coverage
+        if: always() && steps.native-configure.outcome == 'success'
         run: |
-          cmake --preset dev
-          cmake --build --preset dev --target pmjs_native pmjs-filter-target-lifetime-test --parallel 4
-          ctest --preset dev -R '^(native-yanfly-core-text|native-srd-shaking-text|native-filter-target-lifetime)$'
+          python3 tools/test_coverage.py build/dev > build/dev/test-coverage.md
+          cat build/dev/test-coverage.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Save native test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-test-results
+          path: |
+            build/dev/native-tests.xml
+            build/dev/test-coverage.md
+            build/dev/Testing/Temporary/LastTest.log
+          if-no-files-found: warn
       - name: Verify relocated runtime graphics
         run: |
           cmake --install build/dev --prefix "$PWD/dist/runtime-host" --component native-addon

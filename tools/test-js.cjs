@@ -7,10 +7,6 @@ const { spawnSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..');
 const testRoot = path.join(root, 'test');
 const excluded = new Set([
-  'canvas-ellipse.test.cjs',
-  'canvas-gradients.test.cjs',
-  'canvas-invalid-state.test.cjs',
-  'canvas-content-revision.test.cjs',
   'text-layout-reference.test.cjs',
   'pixi-filter-boundary-reference.test.cjs'
 ]);
@@ -31,6 +27,7 @@ const hasFileSelection = args.some(argument =>
   argument.startsWith('./test/') ||
   (path.isAbsolute(argument) && argument.startsWith(testRoot + path.sep)));
 const files = hasFileSelection ? [] : listTests();
+if (!hasFileSelection) console.log('JavaScript suite excludes native CTest comparisons: ' + [...excluded].join(', '));
 const result = spawnSync(process.execPath, ['--test', ...args, ...files], {
   cwd: root,
   stdio: 'inherit'

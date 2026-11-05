@@ -789,6 +789,19 @@ if(BUILD_TESTING)
       endif()
     endif()
   endforeach()
+  set_property(TEST
+    native-yanfly-core-text native-srd-shaking-text native-filter-target-lifetime
+    native-vfs native-canvas-pixels native-canvas-upload
+    node-pixi-precision node-filter-bounds node-render-to-canvas
+    node-image-retention node-text-layout node-preparation-progress
+    APPEND PROPERTY LABELS smoke)
+  add_custom_target(pmjs-native-smoke DEPENDS
+    pmjs_native pmjs-filter-target-lifetime-test pmjs-vfs-test
+    pmjs-canvas-pixels-test pmjs-canvas-upload-test)
+  if(TARGET pmjs-renderer-precision-test)
+    set_property(TEST native-renderer-precision APPEND PROPERTY LABELS smoke)
+    add_dependencies(pmjs-native-smoke pmjs-renderer-precision-test)
+  endif()
   if(PMJS_ENABLE_SANITIZERS)
     get_property(pmjs_test_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
     foreach(pmjs_test_target IN LISTS pmjs_test_targets)

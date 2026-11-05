@@ -4,8 +4,7 @@
   "scripts": {
     "lint": "eslint js patches runner tools test example",
     "licensing": "node tools/check-provenance.cjs",
-    "test": "node tools/test-js.cjs",
-    "test:all": "node tools/test-js.cjs"
+    "test": "node tools/test-js.cjs"
   },
   "devDependencies": {
     "eslint": "10.13.0",

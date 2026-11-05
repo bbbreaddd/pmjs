@@ -12,7 +12,11 @@ defaults:
     shell: bash
 
 jobs:
+  checks:
+    uses: ./.github/workflows/checks.yml
+
   build:
+    needs: checks
     name: Build Linux ARM64 runtime
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -36,19 +40,6 @@ jobs:
           echo "build-id=$build_id" >> "$GITHUB_OUTPUT"
           title="PMJS-$build_date-$build_time"
           echo "title=$title" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: package-lock.json
-
-      - name: Check JavaScript and licenses
-        run: |
-          npm ci
-          npm run lint
-          npm run licensing
-          npm test
 
       - name: Restore prepared ARM64 dependencies
         id: dependencies-cache
