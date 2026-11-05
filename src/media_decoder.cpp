@@ -5,6 +5,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/channel_layout.h>
+#include <libavutil/cpu.h>
 #include <libavutil/error.h>
 #include <libavutil/imgutils.h>
 #include <libswresample/swresample.h>
@@ -187,7 +188,7 @@ Format open(AVIOContext* input, std::string* error) {
 }
 
 std::pair<int, Codec> decoder(AVFormatContext* format, AVMediaType type,
-                              std::string* error) {
+                              std::string* error, int threadCount = 1) {
   const int index = av_find_best_stream(format, type, -1, -1, nullptr, 0);
   if (index < 0) {
     fail(error, std::string("media has no ") + av_get_media_type_string(type) +
@@ -207,6 +208,7 @@ std::pair<int, Codec> decoder(AVFormatContext* format, AVMediaType type,
     fail(error, "cannot allocate decoder");
     return {-1, Codec{nullptr}};
   }
+  context->thread_count = threadCount;
   int result = avcodec_parameters_to_context(
     context.get(), format->streams[index]->codecpar);
   if (result >= 0) result = avcodec_open2(context.get(), implementation, nullptr);
@@ -370,7 +372,7 @@ struct VideoDecoderSession::Impl {
     std::string error;
     format = open(path, &error);
     if (!format) throw std::runtime_error(error);
-    auto opened = decoder(format.get(), AVMEDIA_TYPE_VIDEO, &error);
+    auto opened = decoder(format.get(), AVMEDIA_TYPE_VIDEO, &error, std::min(2, av_cpu_count()));
     streamIndex = opened.first;
     codec = std::move(opened.second);
     if (!codec) throw std::runtime_error(error);
