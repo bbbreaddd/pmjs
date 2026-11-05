@@ -260,9 +260,17 @@ class CanvasStore {
   };
 
   struct BlurCmd {};
+  struct PaintRectCmd {
+    std::array<float, 4> rect;
+    uint32_t color;
+    float stroke;
+    std::array<float, 4> gradient;
+    std::vector<float> offsets;
+    std::vector<uint32_t> colors;
+  };
 
   using CanvasCommand = std::variant<FillRectCmd, ClearRectCmd,
-                                     DrawImageCmd, DrawTextCmd, BlurCmd>;
+                                     DrawImageCmd, DrawTextCmd, BlurCmd, PaintRectCmd>;
 
   enum class ContentState {
     Deferred,
@@ -328,6 +336,7 @@ class CanvasStore {
                    const std::string& text, float x, float y, float pixelSize,
                    std::uint32_t rgba, float strokeWidth, const CanvasTextStyle& style);
   bool blurNow(Content& surface);
+  bool paintRectNow(Content& surface, const PaintRectCmd& command);
 
   static void blendPixel(Content& surface, int x, int y, std::uint32_t rgba,
                          std::uint8_t coverage);

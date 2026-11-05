@@ -690,7 +690,7 @@ if(BUILD_TESTING)
     target_compile_options(pmjs-skia65-strided-test PRIVATE -UNDEBUG)
     target_link_libraries(pmjs-skia65-strided-test PRIVATE pmjs_skia65)
     add_test(NAME native-skia65-strided COMMAND pmjs-skia65-strided-test)
-    foreach(PMJS_SKIA_TEST IN ITEMS node-skia65-text node-skia65-canvas node-skia65-cache node-skia65-primitives node-bitmap-text)
+    foreach(PMJS_SKIA_TEST IN ITEMS node-skia65-text node-skia65-canvas node-skia65-cache node-skia65-primitives node-bitmap-text node-canvas-deferred-paints)
       add_test(NAME ${PMJS_SKIA_TEST} COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
         "${CMAKE_CURRENT_SOURCE_DIR}/test/${PMJS_SKIA_TEST}.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
       set_tests_properties(${PMJS_SKIA_TEST} PROPERTIES ENVIRONMENT

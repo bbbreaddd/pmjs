@@ -187,6 +187,51 @@ test('WindowLayer reads public filters after area preparation and skips empty la
   assert.deepEqual(calls, ['area', 'filters']);
 });
 
+test('stock full-screen window layers reuse isolation without resolving a program', () => {
+  let compiled = 0;
+  const h = makeHarness({ beforeWriter(c) {
+    c.PIXI.VERSION = '4.8.9';
+    c.PIXI.filters.AlphaFilter = class AlphaFilter {
+      constructor() {
+        this.vertexSrc = 'attribute vec2 aVertexPosition;';
+        this.fragmentSrc = 'uniform float uAlpha; void main(){gl_FragColor=vec4(uAlpha);}';
+        this.alpha = 1; this.uniforms = { uAlpha:1 }; this.resolution = 1;
+        this.padding = 4; this.autoFit = true; this.blendMode = 0;
+      }
+      apply(manager,input,output,clear) { manager.applyFilter(this,input,output,clear); }
+    };
+    c.PIXI.filters.VoidFilter = c.PIXI.filters.AlphaFilter;
+    c.WindowLayer.voidFilter = new c.PIXI.filters.AlphaFilter();
+    c.NativeHost.render.createFilterProgram = () => { compiled++; return {handle:1,uniforms:[{name:'uAlpha',size:1}]}; };
+    c.NativeHost.render.createFilterPlan = () => ({handle:1,dispose(){}});
+  } });
+  const c = h.sandbox, layer = new c.WindowLayer(), filter = c.WindowLayer.voidFilter;
+  layer.children.push({_isWindow:true,visible:true,openness:255});
+  layer.filterArea = {x:0,y:0,width:64,height:64};
+  c.nativeSceneRenderer = {screen:{width:64,height:64},_activeRenderTarget:{root:true}};
+  assert.equal(c.nativeSceneFilter(layer,[filter]).groups.length,0);
+  assert.equal(compiled,0);
+  const fallbacks = [
+    () => { layer.filterArea.width = 63; },
+    () => { c.nativeSceneFilterDepth = 1; },
+    () => { c.nativeSceneFilterResolution = 2; },
+    () => { c.nativeSceneRenderer._activeRenderTarget.root = false; },
+    () => { filter.alpha = 0.5; },
+    () => { filter.resolution = 2; },
+    () => { filter.fragmentSrc += '\n'; },
+    () => { filter.apply = function(manager,input,output,clear) { manager.applyFilter(this,input,output,clear); }; }
+  ];
+  const original = {fragment:filter.fragmentSrc,apply:filter.apply};
+  for (const change of fallbacks) {
+    layer.filterArea.width = 64; c.nativeSceneFilterDepth = 0; c.nativeSceneFilterResolution = 1;
+    c.nativeSceneRenderer._activeRenderTarget.root = true;
+    filter.alpha = 1; filter.resolution = 1; filter.fragmentSrc = original.fragment; filter.apply = original.apply;
+    change();
+    assert.equal(c.nativeSceneFilter(layer,[filter]).groups[0].kind,31);
+  }
+  assert.ok(compiled > 0);
+});
+
 test('dedicated particle and composite tile renderers never read filters or advanced helpers', () => {
   const h = makeHarness({ beforeWriter(c) {
     c.PIXI.tilemap.CompositeRectTileLayer = class extends c.PIXI.Container {};

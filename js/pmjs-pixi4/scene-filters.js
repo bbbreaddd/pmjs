@@ -273,6 +273,22 @@ function nativeSceneFilter(node, activeFilters) {
   }
   var windowFilter = activeFilters.length === 1 && activeFilters[0];
   if (typeof WindowLayer === 'function' && node instanceof WindowLayer &&
+      windowFilter === WindowLayer.voidFilter && nativeFilterCopiesPixels(windowFilter) &&
+      !nativeFilterNeedsAuthoredProgram(windowFilter) &&
+      Number(String(PIXI.VERSION || '4.5').split('.')[1]) >= 8) {
+    var windowRenderer = nativeSceneRenderer || globalThis.Graphics && Graphics._renderer;
+    var windowTarget = windowRenderer && windowRenderer._activeRenderTarget;
+    var windowScreen = windowRenderer && windowRenderer.screen || globalThis.Graphics;
+    var windowArea = node.filterArea;
+    if (nativeSceneRootTransform === nativeIdentityTransform && nativeSceneFilterResolution === 1 &&
+        nativeSceneFilterDepth === 0 && (!windowTarget || windowTarget.root) &&
+        windowFilter.resolution === 1 && windowScreen && windowArea &&
+        windowArea.x === 0 && windowArea.y === 0 &&
+        windowArea.width === windowScreen.width && windowArea.height === windowScreen.height) {
+      return { blur: 0, groups: [], unsupported: false };
+    }
+  }
+  if (typeof WindowLayer === 'function' && node instanceof WindowLayer &&
       windowFilter === WindowLayer.voidFilter && windowFilter.fragmentSrc && !nativeWindowLayerHasContent(node) &&
       !nativeFilterNeedsAuthoredProgram(windowFilter)) {
     var emptyWindowAlpha = windowFilter.alpha === undefined && windowFilter.uniforms ?

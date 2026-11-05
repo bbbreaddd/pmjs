@@ -1186,6 +1186,8 @@ bool CanvasStore::realizeContent(Content& surface) {
                              c.pixelSize, c.rgba, c.strokeWidth, c.style);
         } else if constexpr (std::is_same_v<T, BlurCmd>) {
           return blurNow(prepared);
+        } else if constexpr (std::is_same_v<T, PaintRectCmd>) {
+          return paintRectNow(prepared, c);
         }
       }, cmd);
       if (!ok) {
@@ -1535,7 +1537,23 @@ bool CanvasStore::paintRect(CanvasHandle handle, const std::array<float, 4>& rec
   if (rect[2] == 0 || rect[3] == 0 || (color & 255) == 0 ||
       (!colors.empty() && std::all_of(colors.begin(), colors.end(), [](uint32_t c) { return !(c & 255); }))) return lookup(handle) != nullptr;
   auto* surface = writableContent(handle);
-  if (!surface || !realizeContent(*surface)) return false;
+  if (!surface) return false;
+  PaintRectCmd command{rect, color, stroke, gradient, offsets, colors};
+#ifdef PMJS_HAS_SKIA65
+  const auto bytes = sizeof(PaintRectCmd) + offsets.size() * sizeof(float) + colors.size() * sizeof(uint32_t);
+  if (surface->state == ContentState::Deferred && surface->commands.size() < 256 &&
+      surface->queuedCommandBytes + bytes < 64 * 1024) {
+    surface->commands.emplace_back(std::move(command));
+    surface->queuedCommandBytes += bytes;
+    return true;
+  }
+#endif
+  return realizeContent(*surface) && paintRectNow(*surface, command);
+}
+
+bool CanvasStore::paintRectNow(Content& target, const PaintRectCmd& command) {
+  auto* surface = &target;
+  const auto& [rect, color, stroke, gradient, offsets, colors] = command;
 #ifdef PMJS_HAS_SKIA65
   const float padding = stroke / 2 + 1;
   const std::array<float, 4> bounds = {rect[0] - padding, rect[1] - padding,
@@ -1759,29 +1777,37 @@ bool CanvasStore::blurMv(CanvasHandle handle) {
   const uint8_t* source = surface->pixels.data();
   for (int pass = 0; pass < 2; ++pass) {
     uint8_t* destination = pass ? surface->pixels.data() : intermediate.data();
-    for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x) {
-      const size_t row = static_cast<size_t>(y) * width;
+    for (int y = 0; y < height; ++y) {
+      const auto* row = source + static_cast<size_t>(y) * width * 4;
+      auto* output = horizontal.data() + static_cast<size_t>(y) * width * 3;
       for (int channel = 0; channel < 3; ++channel) {
-        unsigned sum = 0;
-        for (int dx = -1; dx <= 1; ++dx)
-          sum += scale(source[(row + std::clamp(x + dx, 0, width - 1)) * 4 + channel]);
-        horizontal[(row + x) * 3 + channel] = sum;
+        unsigned left = scale(row[channel]), center = left;
+        for (int x = 0; x < width; ++x) {
+          const unsigned right = scale(row[std::min(x + 1, width - 1) * 4 + channel]);
+          output[x * 3 + channel] = left + center + right;
+          left = center;
+          center = right;
+        }
       }
     }
-    for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x) {
-      const size_t index = static_cast<size_t>(y) * width + x;
-      // The padded edge strips leave all four corners transparent. Thin
-      // canvases can omit two samples on either axis, so count both edges.
-      const unsigned omitted = unsigned((x == 0) + (x == width - 1)) *
-        unsigned((y == 0) + (y == height - 1));
-      for (int channel = 0; channel < 3; ++channel) {
-        unsigned sum = 0;
-        for (int dy = -1; dy <= 1; ++dy)
-          sum += horizontal[(static_cast<size_t>(std::clamp(y + dy, 0, height - 1)) * width + x) * 3 + channel];
-        destination[index * 4 + channel] = std::min(255U,
-          sum - omitted * scale(source[index * 4 + channel]));
+    for (int y = 0; y < height; ++y) {
+      const auto* above = horizontal.data() + static_cast<size_t>(std::max(y - 1, 0)) * width * 3;
+      const auto* center = horizontal.data() + static_cast<size_t>(y) * width * 3;
+      const auto* below = horizontal.data() + static_cast<size_t>(std::min(y + 1, height - 1)) * width * 3;
+      const auto* input = source + static_cast<size_t>(y) * width * 4;
+      auto* output = destination + static_cast<size_t>(y) * width * 4;
+      const unsigned edgeY = unsigned((y == 0) + (y == height - 1));
+      for (int x = 0; x < width; ++x) {
+        // The padded edge strips leave all four corners transparent. Thin
+        // canvases can omit two samples on either axis, so count both edges.
+        const unsigned omitted = unsigned((x == 0) + (x == width - 1)) * edgeY;
+        for (int channel = 0; channel < 3; ++channel) {
+          const unsigned sum = above[x * 3 + channel] + center[x * 3 + channel] + below[x * 3 + channel];
+          output[x * 4 + channel] = std::min(255U,
+            sum - omitted * scale(input[x * 4 + channel]));
+        }
+        output[x * 4 + 3] = 255;
       }
-      destination[index * 4 + 3] = 255;
     }
     source = destination;
   }
