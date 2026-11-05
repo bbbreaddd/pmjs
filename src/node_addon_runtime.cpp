@@ -544,7 +544,7 @@ napi_value renderFrame(napi_env env, napi_callback_info) try {
   value.core.syncDrawableSize();
   value.renderer.render();
   const auto drawn = std::chrono::steady_clock::now();
-  syncExternalMemoryForFrame(env);
+  syncExternalMemory(env);
   const auto accounted = std::chrono::steady_clock::now();
   value.frameUploadMs = std::chrono::duration<double, std::milli>(uploaded - start).count();
   value.frameDrawMs = std::chrono::duration<double, std::milli>(drawn - uploaded).count();
@@ -563,7 +563,7 @@ napi_value renderScene(napi_env env, napi_callback_info) try {
   State& value = host(env);
   value.canvases.uploadDirty();
   value.renderer.renderScene();
-  syncExternalMemoryForFrame(env);
+  syncExternalMemory(env);
   return undefined(env);
 } catch (const std::exception& error) {
   napi_throw_error(env, nullptr, error.what());

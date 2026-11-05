@@ -312,6 +312,34 @@ int main() {
   }
   {
     pmjs::ImageStore accountingImages;
+    accountingImages.setWarmBudgetBytes(0);
+    pmjs::CanvasStore accounting(accountingImages);
+    pmjs::ImagePixels pixels{2, 1, {37, 53, 71, 127, 97, 113, 127, 149}};
+    pixels.rgba.reserve(64);
+    const auto capacity = pixels.rgba.capacity();
+    const auto source = accountingImages.installDecodedMemory(std::move(pixels), true);
+    const auto destination = accounting.create(2, 1);
+    assert(source && destination);
+    assert(accountingImages.cpuBytes() == capacity);
+    assert(accounting.drawImage(destination->handle, source->handle, 0, 0, 2, 1, 0, 0, 2, 1, 1, false));
+    assert(accounting.cpuBytes() == 0);
+    const std::array<std::uint8_t, 8> changed{255, 0, 0, 255, 0, 0, 255, 255};
+    assert(accountingImages.updateRgba(source->handle, changed.data()));
+    assert(accountingImages.cpuBytes() == capacity);
+    assert(accounting.cpuBytes() == 8);
+    assert(accountingImages.release(source->handle));
+    assert(accountingImages.cpuBytes() == capacity);
+    assert(accounting.release(destination->handle));
+    assert(accounting.cpuBytes() == 0 && accountingImages.cpuBytes() == 0);
+    std::vector<std::uint8_t> canvasPixels(8, 0);
+    canvasPixels.reserve(64);
+    const auto canvas = accounting.createPixels(2, 1, std::move(canvasPixels),
+      pmjs::PixelEncoding::StraightRGBA8);
+    assert(canvas && accounting.cpuBytes() == 8);
+    assert(accounting.release(canvas->handle) && accounting.cpuBytes() == 0);
+  }
+  {
+    pmjs::ImageStore accountingImages;
     pmjs::CanvasStore accounting(accountingImages);
     const std::vector<uint8_t> red={255,0,0,255}, blue={0,0,255,255};
     const auto source=accountingImages.createRgba(1,1,red.data(),true); assert(source);

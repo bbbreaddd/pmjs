@@ -482,7 +482,7 @@ std::optional<ImageInfo> ImageStore::insertTileView(std::shared_ptr<TileBacking>
   slot.references = 1; slot.pins = 0; slot.inFlight.store(0);
   slot.cacheKey = std::move(key); slot.sourcePath = std::move(sourcePath);
   slot.gpuOnly = slot.renderTarget = slot.premultiplied = slot.knownAllZero = false;
-  slot.retainCpuPixels = false; slot.cachedPixels.reset(); slot.cpuPixelFrames = 0;
+  slot.retainCpuPixels = false; setCachedPixels(slot, std::nullopt); slot.cpuPixelFrames = 0;
   slot.mipmapsReady = slot.premultipliedMipmapsReady = false;
   slot.mipmapBytes = slot.premultipliedMipmapBytes = 0;
   slot.live = true; markUsed(slot); ++liveCount_;
@@ -501,7 +501,7 @@ std::optional<ImageInfo> ImageStore::installTileLoad(std::shared_ptr<TileLoad> l
     const auto image = inspect(existing->second);
     if (retainCpu) {
       auto& slot = slots_[(image->handle & tileIndexMask)-1U];
-      if (!slot.cachedPixels && load->ordinary) slot.cachedPixels = std::move(load->ordinary);
+      if (!slot.cachedPixels && load->ordinary) setCachedPixels(slot, std::move(load->ordinary));
       retainCpuPixels(image->handle);
     }
     if (tileDiagnostics_) ++tileHits_; return image;
@@ -529,7 +529,7 @@ std::optional<ImageInfo> ImageStore::installTileLoad(std::shared_ptr<TileLoad> l
   auto image = insertTileView(std::move(backing), source.width, source.height, load->key);
   if (!image) return std::nullopt;
   auto& slot = slots_[(image->handle & tileIndexMask)-1U];
-  slot.retainCpuPixels = retainCpu; slot.cachedPixels = std::move(load->ordinary);
+  slot.retainCpuPixels = retainCpu; setCachedPixels(slot, std::move(load->ordinary));
   if (tileDiagnostics_) ++tileHits_; return image;
 }
 std::optional<ImageInfo> ImageStore::createTileSlot(ImageHandle handle, int width, int height) {
@@ -567,8 +567,8 @@ std::optional<ImagePixels> ImageStore::readTileRegion(const Slot& slot, int x, i
       for (int row = 0; row < rows; ++row)
         std::copy_n(ordinary->rgba.data()+static_cast<std::size_t>(row)*ordinary->width*4,
           static_cast<std::size_t>(columns)*4, padded.rgba.data()+static_cast<std::size_t>(row)*slot.width*4);
-      slot.cachedPixels = std::move(padded);
-    } else slot.cachedPixels = std::move(ordinary);
+      setCachedPixels(slot, std::move(padded));
+    } else setCachedPixels(slot, std::move(ordinary));
   }
   if (!slot.retainCpuPixels) slot.cpuPixelFrames = 60;
   const auto& ordinary = *slot.cachedPixels;
