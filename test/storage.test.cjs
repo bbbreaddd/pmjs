@@ -772,3 +772,109 @@ test('save root access rejects a root link redirected after storage creation', t
   assert.throws(() => storage.stat('.'), { code: 'EACCES' });
   assert.throws(() => storage.readDirectory(''), { code: 'EACCES' });
 });
+
+function decodedStorageContext({ disabled = false, reference } = {}) {
+  const storage = createStorage(temporaryDirectory('pmjs-decoded-storage-'));
+  const manager = { localFilePath(id) { return '/save/file' + id; },
+    loadFromLocalFile() {}, localFileExists() {} };
+  const ctx = loadPmjsRuntime({ __pmjsBuiltinRequire: require, NativeHost: { storage },
+    StorageManager: manager, queueMicrotask,
+    PMJS_GAME_CONFIG: { disableOptimizations: disabled ? ['storage.read-burst-coalesce'] : [] } });
+  if (reference) vm.runInContext(reference, ctx);
+  else {
+    // The unit fixture isolates cache lifetimes from source qualification.
+    vm.runInContext(`var decodes = 0; var LZString = {
+      _f: String.fromCharCode, _keyStr: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=',
+      decompress: function(value) { return value; },
+      decompressFromBase64: function(value) { decodes++; return LZString.decompress(value); }
+    };`, ctx);
+    const admitted = [ctx.LZString.decompressFromBase64, ctx.LZString.decompress];
+    ctx.PMJS.methods.matchesSource = fn => admitted.includes(fn);
+  }
+  runModule(ctx, 'js/pmjs-mv/storage.js');
+  ctx.installNativeStorageManager();
+  return { ctx, storage, manager };
+}
+
+test('reviewed decoded strings coalesce without sharing parsed objects and expire on writes and turns', async () => {
+  for (const disabled of [false, true]) {
+    const { ctx, storage, manager } = decodedStorageContext({ disabled });
+    storage.writeText('file0', '{"chapter":1}');
+    const first = JSON.parse(manager.loadFromLocalFile(0));
+    first.chapter = 99;
+    assert.deepEqual(JSON.parse(manager.loadFromLocalFile(0)), { chapter: 1 });
+    assert.equal(ctx.decodes, disabled ? 2 : 1);
+    storage.writeText('file0', '{"chapter":2}');
+    assert.deepEqual(JSON.parse(manager.loadFromLocalFile(0)), { chapter: 2 });
+    assert.equal(ctx.decodes, disabled ? 3 : 2);
+    await new Promise(resolve => queueMicrotask(resolve));
+    manager.loadFromLocalFile(0);
+    assert.equal(ctx.decodes, disabled ? 4 : 3);
+  }
+});
+
+test('decoder replacement, accessors and exceptions remain observable after a cached read', () => {
+  const { ctx, storage, manager } = decodedStorageContext();
+  storage.writeText('file0', 'original');
+  assert.equal(manager.loadFromLocalFile(0), 'original');
+  const decode = ctx.LZString.decompress;
+  let calls = 0;
+  ctx.LZString.decompress = () => { calls++; return 'replacement'; };
+  assert.equal(manager.loadFromLocalFile(0), 'replacement');
+  assert.equal(manager.loadFromLocalFile(0), 'replacement');
+  assert.equal(calls, 2);
+  ctx.LZString.decompress = () => { throw new Error('decode failure'); };
+  assert.throws(() => manager.loadFromLocalFile(0), /decode failure/);
+  ctx.LZString.decompress = decode;
+  assert.equal(manager.loadFromLocalFile(0), 'original');
+  const fromBase64 = ctx.LZString.decompressFromBase64;
+  Object.defineProperty(ctx.LZString, 'decompressFromBase64', {
+    configurable: true, get() { calls++; return fromBase64; }
+  });
+  const before = calls;
+  manager.loadFromLocalFile(0); manager.loadFromLocalFile(0);
+  assert.equal(calls - before, 2, 'do not evaluate decoder accessors during cache admission');
+});
+
+test('decoded cache bypasses changed library state and decoding intrinsics', () => {
+  const { ctx, storage, manager } = decodedStorageContext();
+  storage.writeText('file0', 'original');
+  manager.loadFromLocalFile(0);
+  const key = ctx.LZString._keyStr;
+  ctx.LZString._keyStr = 'custom';
+  manager.loadFromLocalFile(0); manager.loadFromLocalFile(0);
+  assert.equal(ctx.decodes, 3);
+  ctx.LZString._keyStr = key;
+  vm.runInContext('Math.pow = function() { return 2; };', ctx);
+  manager.loadFromLocalFile(0); manager.loadFromLocalFile(0);
+  assert.equal(ctx.decodes, 5);
+});
+
+test('decoded cache preserves backup recovery and missing-file behavior', () => {
+  const { ctx, storage, manager } = decodedStorageContext();
+  storage.writeText('file0.bak', 'backup');
+  assert.equal(manager.loadFromLocalFile(0), 'backup');
+  assert.equal(manager.loadFromLocalFile(0), 'backup');
+  assert.equal(ctx.decodes, 1);
+  storage.writeText('file0.deleted', '');
+  assert.equal(manager.loadFromLocalFile(0), null);
+  storage.writeText('file0', 'replacement');
+  assert.equal(manager.loadFromLocalFile(0), 'replacement');
+});
+
+test('reviewed LZString reference preserves decoded metadata', {
+  skip: !process.env.PMJS_LZ_STRING_REFERENCE && 'set PMJS_LZ_STRING_REFERENCE to a reference library'
+}, async () => {
+  const reference = fs.readFileSync(process.env.PMJS_LZ_STRING_REFERENCE, 'utf8');
+  const { ctx, storage, manager } = decodedStorageContext({ reference });
+  assert.equal(ctx.PMJS.methods.matchesSource(ctx.LZString.decompressFromBase64,
+    ['126b1d999f2babac0c5091b56aff3690654715013c91ce438159f91dc314ca5a']), true);
+  assert.equal(ctx.PMJS.methods.matchesSource(ctx.LZString.decompress,
+    ['0fb41c72b7362f19b9ee6eb4d82af2eca53f24c6232d094964ec1d8589f5e7ce']), true);
+  for (const value of ['', 'null', JSON.stringify([{ chapter: '章', name: 'A\u0000B', time: 1234 }])]) {
+    storage.writeText('file0', ctx.LZString.compressToBase64(value));
+    for (let i = 0; i < 16; i++) assert.equal(manager.loadFromLocalFile(0), value);
+    await new Promise(resolve => queueMicrotask(resolve));
+    assert.equal(manager.loadFromLocalFile(0), value);
+  }
+});

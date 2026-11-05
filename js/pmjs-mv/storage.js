@@ -1,3 +1,10 @@
+var pmjsStorageDecodeIntrinsics = {
+  fromCharCode: String.fromCharCode, charAt: String.prototype.charAt,
+  charCodeAt: String.prototype.charCodeAt, indexOf: String.prototype.indexOf,
+  replace: String.prototype.replace, pow: Math.pow,
+  regexpReplace: RegExp.prototype[Symbol.replace], regexpExec: RegExp.prototype.exec
+};
+
 function installNativeStorageManager() {
   if (!NativeHost.storage || !globalThis.StorageManager) return;
   if (StorageManager._pmjsLoadPatched && StorageManager._pmjsExistsPatched) return;
@@ -22,9 +29,32 @@ function installNativeStorageManager() {
 
   // Coalesces immutable reads within a synchronous turn, until the next
   // microtask checkpoint. Lives underneath the plugin-observable surface, so
-  // plugin wrappers always run; only physical reads underneath coalesce.
+  // plugin wrappers always run; reviewed decoding and physical reads coalesce.
   var readBurst = null;
   var clearScheduled = false;
+  var lz = globalThis.LZString;
+  var lzDescriptors = lz && Object.getOwnPropertyDescriptors(lz);
+  var decodedMethods = lzDescriptors && ['decompressFromBase64', 'decompress', '_f', '_keyStr'];
+  var reviewedDecoder = decodedMethods && decodedMethods.every(function(name) {
+    return lzDescriptors[name] && 'value' in lzDescriptors[name];
+  }) && lzDescriptors._f.value === pmjsStorageDecodeIntrinsics.fromCharCode &&
+    lzDescriptors._keyStr.value === 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=' &&
+    PMJS.methods.matchesSource(lzDescriptors.decompressFromBase64.value,
+      ['126b1d999f2babac0c5091b56aff3690654715013c91ce438159f91dc314ca5a']) &&
+    PMJS.methods.matchesSource(lzDescriptors.decompress.value,
+      ['0fb41c72b7362f19b9ee6eb4d82af2eca53f24c6232d094964ec1d8589f5e7ce']);
+
+  function canReuseDecodedText() {
+    var native = pmjsStorageDecodeIntrinsics;
+    return reviewedDecoder && globalThis.LZString === lz &&
+      String.prototype.charAt === native.charAt && String.prototype.charCodeAt === native.charCodeAt &&
+      String.prototype.indexOf === native.indexOf && String.prototype.replace === native.replace &&
+      Math.pow === native.pow && RegExp.prototype[Symbol.replace] === native.regexpReplace &&
+      RegExp.prototype.exec === native.regexpExec && decodedMethods.every(function(name) {
+        var descriptor = Object.getOwnPropertyDescriptor(lz, name);
+        return descriptor && 'value' in descriptor && descriptor.value === lzDescriptors[name].value;
+      });
+  }
 
   function currentReadBurst() {
     if (!PMJS.optimizations.isEnabled('storage.read-burst-coalesce')) {
@@ -35,6 +65,7 @@ function installNativeStorageManager() {
       readBurst = {
         generation: storageGeneration,
         loads: Object.create(null),
+        decoded: Object.create(null),
         exists: Object.create(null)
       };
     }
@@ -63,7 +94,7 @@ function installNativeStorageManager() {
     return Object.prototype.hasOwnProperty.call(cache, key);
   }
 
-  // Keyed by storage path, not savefileId. Decoding remains guest-observable.
+  // Custom decoders remain observable; only reviewed immutable results coalesce.
   function pmjsReadDecompressed(storagePath) {
     var burst = currentReadBurst();
     var raw;
@@ -73,7 +104,12 @@ function installNativeStorageManager() {
       raw = NativeHost.storage.readText(storagePath);
       if (burst && storagePath) burst.loads[storagePath] = raw;
     }
-    return raw === null ? null : LZString.decompressFromBase64(raw);
+    if (raw === null) return null;
+    var reuse = burst && storagePath && typeof raw === 'string' && canReuseDecodedText();
+    if (reuse && hasBurstEntry(burst.decoded, storagePath)) return burst.decoded[storagePath];
+    var decoded = LZString.decompressFromBase64(raw);
+    if (reuse && typeof decoded === 'string') burst.decoded[storagePath] = decoded;
+    return decoded;
   }
 
   // Null content may recover from a backup; read/decompression errors propagate.
