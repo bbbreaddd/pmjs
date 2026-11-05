@@ -5,6 +5,11 @@ function requestArrayBuffer(bytes) {
   return view.slice().buffer;
 }
 
+function requestMapFallbackPath(path) {
+  return /\/maps\/Map\d+\.json$/i.test(path)
+    ? path.replace(/\/maps\/Map(\d+)\.json$/i, '/maps/map$1.json') : null;
+}
+
 function localFetchResponse(target, bytes) {
   var status = bytes === null ? 404 : 200;
   var body = bytes === null ? new ArrayBuffer(0) : requestArrayBuffer(bytes);
@@ -128,9 +133,9 @@ XMLHttpRequest.prototype.send = function() {
     try {
       var path = requestPath();
       contents = binary ? NativeHost.fs.readBytes(path) : NativeHost.fs.readText(path);
-      if (contents === null && /\/maps\/Map\d+\.json$/i.test(path)) {
-        path = path.replace(/\/maps\/Map(\d+)\.json$/i, '/maps/map$1.json');
-        contents = binary ? NativeHost.fs.readBytes(path) : NativeHost.fs.readText(path);
+      var fallback = contents === null && requestMapFallbackPath(path);
+      if (fallback) {
+        contents = binary ? NativeHost.fs.readBytes(fallback) : NativeHost.fs.readText(fallback);
       }
       if (contents !== null && binary) contents = requestArrayBuffer(contents);
     } catch (_) { contents = null; }
@@ -189,8 +194,9 @@ XMLHttpRequest.prototype.send = function() {
     Promise.resolve().then(function() {
       var path = requestPath();
       return NativeHost.fs.readBytesAsync(path).then(function(bytes) {
-        if (current() && bytes === null && /\/maps\/Map\d+\.json$/i.test(path)) {
-          return NativeHost.fs.readBytesAsync(path.replace(/\/maps\/Map(\d+)\.json$/i, '/maps/map$1.json'));
+        var fallback = current() && bytes === null && requestMapFallbackPath(path);
+        if (fallback) {
+          return NativeHost.fs.readBytesAsync(fallback);
         }
         return bytes;
       });

@@ -449,142 +449,144 @@ napi_value imageMemory(napi_env env, napi_callback_info info) try {
   auto& images = value.images;
   std::size_t limit = 0;
   if (!args.empty()) limit = std::min<std::size_t>(100, asUint32(env, args[0]));
+  const auto setProperty = [env](napi_value object, const char* key, napi_value propertyValue) {
+    check(env, napi_set_named_property(env, object, key, propertyValue), "cannot set image memory property");
+  };
   napi_value result;
   check(env, napi_create_object(env, &result), "cannot create image memory state");
-  check(env, napi_set_named_property(env, result, "liveCount",
-    number(env, images.liveCount())), "cannot set live image count");
-  check(env, napi_set_named_property(env, result, "gpuBytes",
-    number(env, images.gpuBytes())), "cannot set image GPU bytes");
-  check(env, napi_set_named_property(env, result, "peakGpuBytes",
-    number(env, images.peakGpuBytes())), "cannot set peak image GPU bytes");
-  check(env, napi_set_named_property(env, result, "cpuBytes",
-    number(env, images.cpuBytes())), "cannot set image CPU bytes");
-  check(env, napi_set_named_property(env, result, "tileMetadataBytes",
-    number(env, images.tileMetadataBytes())), "cannot set tile metadata bytes");
-  check(env, napi_set_named_property(env, result, "tileVerificationCacheEntries",
-    number(env, images.tileVerificationCacheEntries())), "cannot set tile verification cache entries");
-  check(env, napi_set_named_property(env, result, "tileVerificationCacheEstimatedBytes",
-    number(env, images.tileVerificationCacheEstimatedBytes())), "cannot set tile verification cache bytes");
-  check(env, napi_set_named_property(env, result, "tileVerificationCacheEntryLimit",
-    number(env, pmjs::ImageStore::tileVerificationCacheEntryLimit)), "cannot set tile verification cache entry limit");
-  check(env, napi_set_named_property(env, result, "tileVerificationCacheByteLimit",
-    number(env, pmjs::ImageStore::tileVerificationCacheByteLimit)), "cannot set tile verification cache byte limit");
-  check(env, napi_set_named_property(env, result, "warmBudgetBytes",
-    number(env, images.warmBudgetBytes())), "cannot set image warm budget");
-  check(env, napi_set_named_property(env, result, "warmBytes",
-    number(env, images.warmBytes())), "cannot set warm image bytes");
-  check(env, napi_set_named_property(env, result, "warmCount",
-    number(env, images.warmCount())), "cannot set warm image count");
-  check(env, napi_set_named_property(env, result, "warmFileCount",
-    number(env, images.warmFileCount())), "cannot set warm file count");
-  check(env, napi_set_named_property(env, result, "warmEntryLimit",
-    number(env, pmjs::ImageStore::warmEntryLimit)), "cannot set warm entry limit");
-  check(env, napi_set_named_property(env, result, "warmFileLimit",
-    number(env, pmjs::ImageStore::warmFileLimit)), "cannot set warm file limit");
-  check(env, napi_set_named_property(env, result, "pinnedBytes",
-    number(env, images.pinnedBytes())), "cannot set pinned image bytes");
-  check(env, napi_set_named_property(env, result, "pinnedCount",
-    number(env, images.pinnedCount())), "cannot set pinned image count");
-  check(env, napi_set_named_property(env, result, "cacheHits",
-    number(env, images.cacheHits())), "cannot set image cache hits");
-  check(env, napi_set_named_property(env, result, "warmHits",
-    number(env, images.warmHits())), "cannot set warm image hits");
-  check(env, napi_set_named_property(env, result, "budgetEvictions",
-    number(env, images.budgetEvictions())), "cannot set image budget evictions");
-  check(env, napi_set_named_property(env, result, "textureCreates",
-    number(env, images.textureCreates())), "cannot set texture creates");
-  check(env, napi_set_named_property(env, result, "textureFullUpdates",
-    number(env, images.textureFullUpdates())), "cannot set texture full updates");
-  check(env, napi_set_named_property(env, result, "textureRegionUpdates",
-    number(env, images.textureRegionUpdates())), "cannot set texture region updates");
-  check(env, napi_set_named_property(env, result, "textureUploadBytes",
-    number(env, images.textureUploadBytes())), "cannot set texture upload bytes");
-  check(env, napi_set_named_property(env, result, "pendingDecodeJobs",
-    number(env, value.pendingImageLoads.size())), "cannot set pending image jobs");
-  check(env, napi_set_named_property(env, result, "decodeJobs",
-    number(env, value.imageDecodeJobs)), "cannot set image decode jobs");
-  check(env, napi_set_named_property(env, result, "coalescedRequests",
-    number(env, value.imageDecodeRequestsCoalesced)),
-    "cannot set coalesced image requests");
-  check(env, napi_set_named_property(env, result, "fallbackHandle",
-    uint32(env, images.fallbackHandle())), "cannot set fallback handle");
-  check(env, napi_set_named_property(env, result, "fallbackReferences",
-    number(env, images.fallbackReferences())), "cannot set fallback references");
-  check(env, napi_set_named_property(env, result, "fallbackUses",
-    number(env, images.fallbackUses())), "cannot set fallback uses");
-  napi_set_named_property(env, result, "tileHits", number(env, images.tileHits()));
-  napi_set_named_property(env, result, "tileRegions", number(env, images.tileRegions()));
-  napi_set_named_property(env, result, "tileMaterializations", number(env, images.tileMaterializations()));
-  napi_set_named_property(env, result, "tilePageDecodes", number(env, images.tilePageDecodes()));
-  napi_set_named_property(env, result, "tilePageUploads", number(env, images.tilePageUploads()));
+  setProperty(result, "liveCount",
+    number(env, images.liveCount()));
+  setProperty(result, "gpuBytes",
+    number(env, images.gpuBytes()));
+  setProperty(result, "peakGpuBytes",
+    number(env, images.peakGpuBytes()));
+  setProperty(result, "cpuBytes",
+    number(env, images.cpuBytes()));
+  setProperty(result, "tileMetadataBytes",
+    number(env, images.tileMetadataBytes()));
+  setProperty(result, "tileVerificationCacheEntries",
+    number(env, images.tileVerificationCacheEntries()));
+  setProperty(result, "tileVerificationCacheEstimatedBytes",
+    number(env, images.tileVerificationCacheEstimatedBytes()));
+  setProperty(result, "tileVerificationCacheEntryLimit",
+    number(env, pmjs::ImageStore::tileVerificationCacheEntryLimit));
+  setProperty(result, "tileVerificationCacheByteLimit",
+    number(env, pmjs::ImageStore::tileVerificationCacheByteLimit));
+  setProperty(result, "warmBudgetBytes",
+    number(env, images.warmBudgetBytes()));
+  setProperty(result, "warmBytes",
+    number(env, images.warmBytes()));
+  setProperty(result, "warmCount",
+    number(env, images.warmCount()));
+  setProperty(result, "warmFileCount",
+    number(env, images.warmFileCount()));
+  setProperty(result, "warmEntryLimit",
+    number(env, pmjs::ImageStore::warmEntryLimit));
+  setProperty(result, "warmFileLimit",
+    number(env, pmjs::ImageStore::warmFileLimit));
+  setProperty(result, "pinnedBytes",
+    number(env, images.pinnedBytes()));
+  setProperty(result, "pinnedCount",
+    number(env, images.pinnedCount()));
+  setProperty(result, "cacheHits",
+    number(env, images.cacheHits()));
+  setProperty(result, "warmHits",
+    number(env, images.warmHits()));
+  setProperty(result, "budgetEvictions",
+    number(env, images.budgetEvictions()));
+  setProperty(result, "textureCreates",
+    number(env, images.textureCreates()));
+  setProperty(result, "textureFullUpdates",
+    number(env, images.textureFullUpdates()));
+  setProperty(result, "textureRegionUpdates",
+    number(env, images.textureRegionUpdates()));
+  setProperty(result, "textureUploadBytes",
+    number(env, images.textureUploadBytes()));
+  setProperty(result, "pendingDecodeJobs",
+    number(env, value.pendingImageLoads.size()));
+  setProperty(result, "decodeJobs",
+    number(env, value.imageDecodeJobs));
+  setProperty(result, "coalescedRequests",
+    number(env, value.imageDecodeRequestsCoalesced));
+  setProperty(result, "fallbackHandle",
+    uint32(env, images.fallbackHandle()));
+  setProperty(result, "fallbackReferences",
+    number(env, images.fallbackReferences()));
+  setProperty(result, "fallbackUses",
+    number(env, images.fallbackUses()));
+  setProperty(result, "tileHits", number(env, images.tileHits()));
+  setProperty(result, "tileRegions", number(env, images.tileRegions()));
+  setProperty(result, "tileMaterializations", number(env, images.tileMaterializations()));
+  setProperty(result, "tilePageDecodes", number(env, images.tilePageDecodes()));
+  setProperty(result, "tilePageUploads", number(env, images.tilePageUploads()));
   auto tileRegionSets = moduleObject(env);
-  for (const auto& [identity, count] : images.tileRegionSets()) napi_set_named_property(env, tileRegionSets, identity.c_str(), number(env, count));
-  napi_set_named_property(env, result, "tileRegionSets", tileRegionSets);
+  for (const auto& [identity, count] : images.tileRegionSets()) setProperty(tileRegionSets, identity.c_str(), number(env, count));
+  setProperty(result, "tileRegionSets", tileRegionSets);
   auto tileFallbacks = moduleObject(env);
-  for (const auto& [reason, count] : images.tileFallbacks()) napi_set_named_property(env, tileFallbacks, reason.c_str(), number(env, count));
-  napi_set_named_property(env, result, "tileFallbacks", tileFallbacks);
-  napi_set_named_property(env, result, "preparedHits", number(env, images.preparedHits()));
-  napi_set_named_property(env, result, "preparedRegions", number(env, images.preparedRegions()));
-  napi_set_named_property(env, result, "preparedMaterializations", number(env, images.preparedMaterializations()));
-  napi_set_named_property(env, result, "sceneryWindowHits", number(env, images.sceneryWindowHits()));
-  napi_set_named_property(env, result, "sceneryWindowUploads", number(env, images.sceneryWindowUploads()));
-  napi_set_named_property(env, result, "sceneryScrollWindows", number(env, images.sceneryScrollWindows()));
-  napi_set_named_property(env, result, "sceneryScrollCopyBytes", number(env, images.sceneryScrollCopyBytes()));
-  napi_set_named_property(env, result, "sceneryScrollUploadBytes", number(env, images.sceneryScrollUploadBytes()));
-  napi_set_named_property(env, result, "sceneryScrollFallbacks", number(env, images.sceneryScrollFallbacks()));
-  napi_set_named_property(env, result, "sceneryFullFallbacks", number(env, images.sceneryFullFallbacks()));
-  napi_set_named_property(env, result, "sceneryWindowReadMicros", number(env, images.sceneryWindowReadMicros()));
-  napi_set_named_property(env, result, "sceneryWindowPremultiplyMicros", number(env, images.sceneryWindowPremultiplyMicros()));
-  napi_set_named_property(env, result, "sceneryWindowCreateMicros", number(env, images.sceneryWindowCreateMicros()));
+  for (const auto& [reason, count] : images.tileFallbacks()) setProperty(tileFallbacks, reason.c_str(), number(env, count));
+  setProperty(result, "tileFallbacks", tileFallbacks);
+  setProperty(result, "preparedHits", number(env, images.preparedHits()));
+  setProperty(result, "preparedRegions", number(env, images.preparedRegions()));
+  setProperty(result, "preparedMaterializations", number(env, images.preparedMaterializations()));
+  setProperty(result, "sceneryWindowHits", number(env, images.sceneryWindowHits()));
+  setProperty(result, "sceneryWindowUploads", number(env, images.sceneryWindowUploads()));
+  setProperty(result, "sceneryScrollWindows", number(env, images.sceneryScrollWindows()));
+  setProperty(result, "sceneryScrollCopyBytes", number(env, images.sceneryScrollCopyBytes()));
+  setProperty(result, "sceneryScrollUploadBytes", number(env, images.sceneryScrollUploadBytes()));
+  setProperty(result, "sceneryScrollFallbacks", number(env, images.sceneryScrollFallbacks()));
+  setProperty(result, "sceneryFullFallbacks", number(env, images.sceneryFullFallbacks()));
+  setProperty(result, "sceneryWindowReadMicros", number(env, images.sceneryWindowReadMicros()));
+  setProperty(result, "sceneryWindowPremultiplyMicros", number(env, images.sceneryWindowPremultiplyMicros()));
+  setProperty(result, "sceneryWindowCreateMicros", number(env, images.sceneryWindowCreateMicros()));
   napi_value sceneryWindowRejections;
   check(env, napi_create_object(env, &sceneryWindowRejections),
     "cannot create scenery window rejection counts");
   for (const auto& [reason, count] : images.sceneryWindowRejections())
-    napi_set_named_property(env, sceneryWindowRejections, reason.c_str(), number(env, count));
-  napi_set_named_property(env, result, "sceneryWindowRejections", sceneryWindowRejections);
+    setProperty(sceneryWindowRejections, reason.c_str(), number(env, count));
+  setProperty(result, "sceneryWindowRejections", sceneryWindowRejections);
   napi_value sceneryBackingRejections;
   check(env, napi_create_object(env, &sceneryBackingRejections),
     "cannot create scenery backing rejection counts");
   for (const auto& [reason, count] : images.sceneryBackingRejections())
-    napi_set_named_property(env, sceneryBackingRejections, reason.c_str(), number(env, count));
-  napi_set_named_property(env, result, "sceneryBackingRejections", sceneryBackingRejections);
-  napi_set_named_property(env, result, "preparedPageDecodes", number(env, images.preparedPageDecodes()));
-  napi_set_named_property(env, result, "preparedSharedPageHits", number(env, images.preparedSharedPageHits()));
-  napi_set_named_property(env, result, "preparedSharedTextureHits", number(env, images.preparedSharedTextureHits()));
-  napi_set_named_property(env, result, "preparedRegionReads", number(env, images.preparedRegionReads()));
-  napi_set_named_property(env, result, "preparedFrameCacheBudget", number(env, images.preparedFrameCacheBudget()));
-  napi_set_named_property(env, result, "preparedFrameCacheBytes", number(env, images.preparedFrameCacheBytes()));
-  napi_set_named_property(env, result, "preparedFrameCacheHits", number(env, images.preparedFrameCacheHits()));
-  napi_set_named_property(env, result, "preparedPageTextureBytes", number(env, images.preparedPageTextureBytes()));
-  napi_set_named_property(env, result, "preparedFrameConversions", number(env, images.preparedFrameConversions()));
-  napi_set_named_property(env, result, "preparedFrameConversionMs", number(env, images.preparedFrameConversionMs()));
-  napi_set_named_property(env, result, "preparedFrameCacheBypasses", number(env, images.preparedFrameCacheBypasses()));
-  napi_set_named_property(env, result, "renderReadbacks", number(env, images.renderReadbacks()));
-  napi_set_named_property(env, result, "preparedFrameUploadBytes", number(env, images.preparedFrameUploadBytes()));
-  napi_set_named_property(env, result, "paletteReadbacks", number(env, images.paletteReadbacks()));
-  napi_set_named_property(env, result, "preparedFrameCacheMisses", number(env, images.preparedFrameCacheMisses()));
-  napi_set_named_property(env, result, "preparedFrameCacheEvictions", number(env, images.preparedFrameCacheEvictions()));
-  napi_set_named_property(env, result, "preparedFrameResidentBytes", number(env, images.preparedFrameResidentBytes()));
-  napi_set_named_property(env, result, "preparedFrameEvictedBytes", number(env, images.preparedFrameEvictedBytes()));
-  napi_set_named_property(env, result, "preparedFramePeakResidentBytes", number(env, images.preparedFramePeakResidentBytes()));
-  napi_set_named_property(env, result, "compactUploadFailures", number(env, images.compactUploadFailures()));
-  napi_set_named_property(env, result, "compactTextureUploads", number(env, images.compactTextureUploads()));
-  napi_set_named_property(env, result, "preparedCropUploads", number(env, images.preparedCropUploads()));
-  napi_set_named_property(env, result, "preparedCropUploadBytes", number(env, images.preparedCropUploadBytes()));
-  napi_set_named_property(env, result, "blockTextureUploads", number(env, images.blockTextureUploads()));
-  napi_set_named_property(env, result, "blockUploadFailures", number(env, images.blockUploadFailures()));
-  napi_set_named_property(env, result, "blockRegions", number(env, images.blockRegions()));
-  napi_set_named_property(env, result, "textureArtifactLoads", number(env, images.textureArtifactLoads()));
-  napi_set_named_property(env, result, "textureArtifactFailures", number(env, images.textureArtifactFailures()));
-  napi_set_named_property(env, result, "textureArtifactStagingBytes", number(env, images.textureArtifactStagingBytes()));
-  napi_set_named_property(env, result, "sourceTextureBuilds", number(env, images.sourceTextureBuilds()));
-  napi_set_named_property(env, result, "textureArtifactFailureReason", string(env, images.textureArtifactFailureReason()));
+    setProperty(sceneryBackingRejections, reason.c_str(), number(env, count));
+  setProperty(result, "sceneryBackingRejections", sceneryBackingRejections);
+  setProperty(result, "preparedPageDecodes", number(env, images.preparedPageDecodes()));
+  setProperty(result, "preparedSharedPageHits", number(env, images.preparedSharedPageHits()));
+  setProperty(result, "preparedSharedTextureHits", number(env, images.preparedSharedTextureHits()));
+  setProperty(result, "preparedRegionReads", number(env, images.preparedRegionReads()));
+  setProperty(result, "preparedFrameCacheBudget", number(env, images.preparedFrameCacheBudget()));
+  setProperty(result, "preparedFrameCacheBytes", number(env, images.preparedFrameCacheBytes()));
+  setProperty(result, "preparedFrameCacheHits", number(env, images.preparedFrameCacheHits()));
+  setProperty(result, "preparedPageTextureBytes", number(env, images.preparedPageTextureBytes()));
+  setProperty(result, "preparedFrameConversions", number(env, images.preparedFrameConversions()));
+  setProperty(result, "preparedFrameConversionMs", number(env, images.preparedFrameConversionMs()));
+  setProperty(result, "preparedFrameCacheBypasses", number(env, images.preparedFrameCacheBypasses()));
+  setProperty(result, "renderReadbacks", number(env, images.renderReadbacks()));
+  setProperty(result, "preparedFrameUploadBytes", number(env, images.preparedFrameUploadBytes()));
+  setProperty(result, "paletteReadbacks", number(env, images.paletteReadbacks()));
+  setProperty(result, "preparedFrameCacheMisses", number(env, images.preparedFrameCacheMisses()));
+  setProperty(result, "preparedFrameCacheEvictions", number(env, images.preparedFrameCacheEvictions()));
+  setProperty(result, "preparedFrameResidentBytes", number(env, images.preparedFrameResidentBytes()));
+  setProperty(result, "preparedFrameEvictedBytes", number(env, images.preparedFrameEvictedBytes()));
+  setProperty(result, "preparedFramePeakResidentBytes", number(env, images.preparedFramePeakResidentBytes()));
+  setProperty(result, "compactUploadFailures", number(env, images.compactUploadFailures()));
+  setProperty(result, "compactTextureUploads", number(env, images.compactTextureUploads()));
+  setProperty(result, "preparedCropUploads", number(env, images.preparedCropUploads()));
+  setProperty(result, "preparedCropUploadBytes", number(env, images.preparedCropUploadBytes()));
+  setProperty(result, "blockTextureUploads", number(env, images.blockTextureUploads()));
+  setProperty(result, "blockUploadFailures", number(env, images.blockUploadFailures()));
+  setProperty(result, "blockRegions", number(env, images.blockRegions()));
+  setProperty(result, "textureArtifactLoads", number(env, images.textureArtifactLoads()));
+  setProperty(result, "textureArtifactFailures", number(env, images.textureArtifactFailures()));
+  setProperty(result, "textureArtifactStagingBytes", number(env, images.textureArtifactStagingBytes()));
+  setProperty(result, "sourceTextureBuilds", number(env, images.sourceTextureBuilds()));
+  setProperty(result, "textureArtifactFailureReason", string(env, images.textureArtifactFailureReason()));
   napi_value preparedFallbacks;
   check(env, napi_create_object(env, &preparedFallbacks), "cannot create prepared fallback counts");
   for (const auto& [reason, count] : images.preparedFallbacks())
-    napi_set_named_property(env, preparedFallbacks, reason.c_str(), number(env, count));
-  napi_set_named_property(env, result, "preparedFallbacks", preparedFallbacks);
-  napi_set_named_property(env, result, "storageDecisionHits", number(env, images.storageDecisionHits()));
+    setProperty(preparedFallbacks, reason.c_str(), number(env, count));
+  setProperty(result, "preparedFallbacks", preparedFallbacks);
+  setProperty(result, "storageDecisionHits", number(env, images.storageDecisionHits()));
   auto entries = limit ? images.memoryEntries() : std::vector<pmjs::ImageMemoryEntry>();
   std::sort(entries.begin(), entries.end(), [](const auto& left, const auto& right) {
     return left.gpuBytes + left.cpuBytes > right.gpuBytes + right.cpuBytes;
@@ -609,43 +611,42 @@ napi_value imageMemory(napi_env env, napi_callback_info info) try {
     }
     napi_value item;
     check(env, napi_create_object(env, &item), "cannot create image memory entry");
-    napi_set_named_property(env, item, "handle", uint32(env, entry.handle));
-    napi_set_named_property(env, item, "path", string(env, path));
-    napi_set_named_property(env, item, "width", number(env, entry.width));
-    napi_set_named_property(env, item, "height", number(env, entry.height));
-    napi_set_named_property(env, item, "references", number(env, entry.references));
-    napi_set_named_property(env, item, "inFlight", number(env, entry.inFlight));
-    napi_set_named_property(env, item, "pins", number(env, entry.pins));
-    napi_set_named_property(env, item, "gpuBytes", number(env, entry.gpuBytes));
-    napi_set_named_property(env, item, "cpuBytes", number(env, entry.cpuBytes));
-    napi_set_named_property(env, item, "lastUsedSerial",
+    setProperty(item, "handle", uint32(env, entry.handle));
+    setProperty(item, "path", string(env, path));
+    setProperty(item, "width", number(env, entry.width));
+    setProperty(item, "height", number(env, entry.height));
+    setProperty(item, "references", number(env, entry.references));
+    setProperty(item, "inFlight", number(env, entry.inFlight));
+    setProperty(item, "pins", number(env, entry.pins));
+    setProperty(item, "gpuBytes", number(env, entry.gpuBytes));
+    setProperty(item, "cpuBytes", number(env, entry.cpuBytes));
+    setProperty(item, "lastUsedSerial",
       number(env, entry.lastUsedSerial));
-    napi_set_named_property(env, item, "warm", boolean(env, entry.warm));
-    napi_set_named_property(env, item, "sceneryBacking", boolean(env, entry.sceneryBacking));
-    napi_set_named_property(env, item, "sceneryFullMaterialized",
+    setProperty(item, "warm", boolean(env, entry.warm));
+    setProperty(item, "sceneryBacking", boolean(env, entry.sceneryBacking));
+    setProperty(item, "sceneryFullMaterialized",
       boolean(env, entry.sceneryFullMaterialized));
-    napi_set_named_property(env, item, "palette", boolean(env, entry.palette));
-    napi_set_named_property(env, item, "paletteSparse", boolean(env, entry.paletteSparse));
-    napi_set_named_property(env, item, "paletteIndexBits", number(env, entry.paletteIndexBits));
-    napi_set_named_property(env, item, "fullTextureResident", boolean(env, entry.fullTextureResident));
-    napi_set_named_property(env, item, "astc", boolean(env, entry.astc));
+    setProperty(item, "palette", boolean(env, entry.palette));
+    setProperty(item, "paletteSparse", boolean(env, entry.paletteSparse));
+    setProperty(item, "paletteIndexBits", number(env, entry.paletteIndexBits));
+    setProperty(item, "fullTextureResident", boolean(env, entry.fullTextureResident));
+    setProperty(item, "astc", boolean(env, entry.astc));
     if (entry.sceneryParent) {
-      napi_set_named_property(env, item, "sceneryParent", uint32(env, entry.sceneryParent));
+      setProperty(item, "sceneryParent", uint32(env, entry.sceneryParent));
       napi_value rect;
       check(env, napi_create_array_with_length(env, 4, &rect), "cannot create scenery rectangle");
       for (std::size_t coordinate = 0; coordinate < 4; ++coordinate)
         check(env, napi_set_element(env, rect, coordinate, number(env, entry.sceneryRect[coordinate])),
           "cannot set scenery coordinate");
-      napi_set_named_property(env, item, "sceneryRect", rect);
+      setProperty(item, "sceneryRect", rect);
     }
     if (!entry.sceneryFirstMaterializationCaller.empty())
-      napi_set_named_property(env, item, "sceneryFirstMaterializationCaller",
+      setProperty(item, "sceneryFirstMaterializationCaller",
         string(env, entry.sceneryFirstMaterializationCaller));
     check(env, napi_set_element(env, largest, index, item),
           "cannot append image memory entry");
   }
-  check(env, napi_set_named_property(env, result, "largest", largest),
-        "cannot set image memory list");
+  setProperty(result, "largest", largest);
   syncExternalMemory(env);
   return result;
 } catch (const std::exception& error) {

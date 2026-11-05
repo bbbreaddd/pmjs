@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const test = require('node:test');
-const { prepareAssets, validDescriptor, automaticRecipe } = require('../runner/asset-preparation.cjs');
+const { prepareAssets, validDescriptor, automaticRecipe, pageHeaderMatches } = require('../runner/asset-preparation.cjs');
 const { acquireLock } = require('../runner/preparation-lifetime.cjs');
 const { validate } = require('../runner/index.cjs');
 const { parse } = require('../runner/cli.cjs');
@@ -14,6 +14,17 @@ const { preparationLocks } = require('./helpers/preparation-lock.cjs');
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==', 'base64');
 
+test('lossless page validation rejects short headers before reading their fields', () => {
+  const page = { path: 'page-0.pml4', width: 1, height: 1 };
+  const header = Buffer.alloc(32);
+  header.write('PML4');
+  [1, 1, 1, 4, 1].forEach((value, index) => header.writeUInt32LE(value, 4 + index * 4));
+  assert.equal(pageHeaderMatches(header, page, 33), true);
+  assert.equal(pageHeaderMatches(null, page, 33), false);
+  for (const length of [0, 4, 8, 20, 31]) assert.equal(pageHeaderMatches(header.subarray(0, length), page, 33), false);
+  assert.equal(pageHeaderMatches(PNG.subarray(0, 24), { path: 'page-0.png', width: 1, height: 1 }, PNG.length), true);
+  assert.equal(pageHeaderMatches(PNG.subarray(0, 23), { path: 'page-0.png', width: 1, height: 1 }, PNG.length), false);
+});
 
 function fixture() {
   const root = temporaryDirectory('pmjs-preparation-');
@@ -35,6 +46,22 @@ function fixture() {
     logger: { warn(message) { warnings.push(message); } }, warnings,
     get jobs() { return jobs; }, get installs() { return installs; } };
 }
+test('short PNG recipe headers use ordinary decode fallback without dimension read errors', async () => {
+  for (const length of [8, 16, 23]) {
+    const f = fixture();
+    const source = PNG.subarray(0, length);
+    fs.writeFileSync(path.join(f.gameRoot, f.source), source);
+    let calls = 0;
+    f.native.assets.processImage = async () => { calls++; throw new Error('decoder rejected short PNG'); };
+    const recipes = [{ source: f.source, sourceHash: crypto.createHash('sha256').update(source).digest('hex'), grid: [1, 1] }];
+    const result = await prepareAssets({ ...f, recipes });
+    assert.equal(calls, 1);
+    assert.equal(result.fallback, 1);
+    assert.ok(f.warnings.some(message => message.includes('decoder rejected short PNG')));
+    assert.equal(f.warnings.some(message => /out.of.range|bounds|offset/i.test(message)), false);
+  }
+});
+
 test('missing encryption configuration remains ordinary unencrypted preparation', async () => {
   const f = fixture();
   const result = await prepareAssets(f);

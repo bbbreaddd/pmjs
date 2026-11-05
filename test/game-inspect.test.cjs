@@ -206,6 +206,9 @@ test('canonical identities match and detect registry collisions', async () => {
     assert.equal(resolveAdapters(adapters, [name], 'mv').length, 1);
   }
   assert.equal(resolveAdapters(adapters, ['folder/yep_coreengine.js'], 'mv').length, 0);
+  assert.equal(resolveAdapters(adapters, ['folder/yep_coreengine.js']).length, 0);
+  assert.equal(resolveAdapters(adapters, ['folder/yep_coreengine.js'], 'mz').length, 1);
+  assert.equal(resolveAdapters([{ plugins: ['folder/Example.js'], modules: ['adapter.js'] }], ['Example'], 'mz').length, 1);
   const dir = temporaryDirectory('pmjs-identities-');
   const file = path.join(dir, 'registry.json');
   fs.writeFileSync(file, JSON.stringify({ adapters: [adapters[0], { plugins: ['yep_coreengine.js'], modules: ['other.js'] }] }));
@@ -229,6 +232,29 @@ test('inspection reports matched names and warns on canonical manifest collision
   assert.match(warnings[0], /yed_tiled.js, YED_Tiled/);
 });
 
+
+test('MZ inspection uses basename identities for matching, unknown names and collisions', async t => {
+  const { inspectGame } = await loadInspect();
+  const dir = temporaryDirectory('pmjs-mz-identities-');
+  const plugins = [{ name: 'folder/Example.js', status: true }, { name: 'other/Missing.js', status: true }];
+  writeGame(dir, { rpgCore: null, pixi: "PIXI.VERSION = '5.3.12';", pluginsJs: 'var $plugins = ' + JSON.stringify(plugins) + ';' });
+  fs.writeFileSync(path.join(dir, 'js/rmmz_core.js'), '// RPG Maker MZ v1.8.1\n');
+  const registry = path.join(dir, 'registry.json');
+  fs.writeFileSync(registry, JSON.stringify({ adapters: [{ plugins: ['Example'], modules: ['adapter.js'] }] }));
+  const report = inspectGame(dir, registry);
+  assert.equal(report.engine, 'mz');
+  assert.deepEqual(report.matchedAdapters, [{ plugin: 'Example', modules: ['adapter.js'] }]);
+  assert.deepEqual(report.unmatchedEnabledPlugins, ['other/Missing.js']);
+  const warnings = [];
+  t.mock.method(console, 'warn', message => warnings.push(message));
+  plugins.push({ name: 'another/EXAMPLE', status: true });
+  fs.writeFileSync(path.join(dir, 'js/plugins.js'), 'var $plugins = ' + JSON.stringify(plugins) + ';');
+  const collision = inspectGame(dir, registry);
+  assert.deepEqual(collision.matchedAdapters, []);
+  assert.deepEqual(collision.selectablePlugins, ['other/Missing.js']);
+  assert.deepEqual(collision.unmatchedEnabledPlugins, ['other/Missing.js']);
+  assert.match(warnings[0], /folder\/Example.js, another\/EXAMPLE/);
+});
 
 test('build identity agrees with runtime tracking for MV and MZ names', async () => {
   const { pluginIdentity } = await loadInspect();

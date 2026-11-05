@@ -83,6 +83,19 @@ test('element and document searches visit descendants in tree order', () => {
   assert.deepEqual(Array.from(parent.getElementsByTagName('*')), [child]);
   assert.equal(parent.getElementsByTagName('input').item(1), null);
 });
+test('ID lookup includes the document root and follows document order', () => {
+  const { c } = setup();
+  c.document.documentElement.id = 'root';
+  assert.equal(c.document.getElementById('root'), c.document.documentElement);
+  c.document.head.id = c.document.body.id = 'duplicate';
+  assert.equal(c.document.getElementById('duplicate'), c.document.head);
+  const child = c.document.createElement('div'); child.id = 'nested';
+  c.document.body.appendChild(child);
+  assert.equal(c.document.getElementById('nested'), child);
+  child.remove();
+  assert.equal(c.document.getElementById('nested'), null);
+  assert.equal(c.document.getElementById(''), null);
+});
 test('font stylesheet enumeration preserves rules, paths and prototype extensions', () => {
   const { c } = setup();
   c.PMJS.fonts.registerStylesheet('@font-face {font-family: Pixel; src:url("pixel.ttf");}', 'fonts/gamefont.css');

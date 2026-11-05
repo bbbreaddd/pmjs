@@ -62,6 +62,25 @@ test('font changes, coercion and custom host methods retain ordinary behavior', 
   assert.equal(replacements, 2);
 });
 
+test('installation preserves guest measurement replacements and reports refusal', () => {
+  for (const engine of ['mv', 'mz']) for (const target of ['guest', 'native']) {
+    let replacement;
+    const h = fixture(undefined, true, engine, realm => {
+      replacement = () => ({ width: 777 });
+      if (target === 'guest') realm.measureCanvasText = replacement;
+      else realm.NativeHost.canvas.measureTextMetrics = replacement;
+    });
+    assert.equal(h.context.measureText('AV').width, 777);
+    assert.equal(target === 'guest' ? h.realm.measureCanvasText : h.realm.NativeHost.canvas.measureTextMetrics, replacement);
+    assert.equal(h.realm.PMJS.web.canvas.textMeasurements, undefined);
+    const state = h.realm.PMJS.optimizations.dump().find(entry => entry.id === id);
+    assert.equal(state.enabled, false);
+    assert.equal(state.disabledBy, 'refusal');
+    assert.match(state.refusalReason, /text measurement/);
+    assert.equal(h.calls(), 0);
+  }
+});
+
 test('cached numeric formatting and text measurements activate together', () => {
   const fs = require('node:fs'), vm = require('node:vm');
   const { pinSourceFingerprint } = require('./helpers/reviewed-function-fixture.cjs');

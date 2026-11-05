@@ -24,18 +24,45 @@ try {
     get geometry() { throw getterError; }
   }), error => error === getterError);
 
+  const image = native.images.load('fixture.png');
+  const directory = native.fs.readDirectory('.');
+  assert.ok(directory.includes('fixture.png'));
+  assert.ok(directory.every(name => typeof name === 'string'));
+  assert.throws(() => native.fs.readDirectory('missing-directory'), /cannot read directory/);
+  const memory = native.images.memory(100);
+  assert.equal(typeof memory.tileHits, 'number');
+  assert.equal(typeof memory.sceneryWindowRejections, 'object');
+  assert.equal(typeof memory.preparedFallbacks, 'object');
+  const entry = memory.largest.find(item => item.handle === image.handle);
+  assert.equal(entry.width, image.width);
+  assert.equal(entry.height, image.height);
+  assert.equal(typeof entry.path, 'string');
+  assert.equal(typeof entry.warm, 'boolean');
+
   const setterError = new SyntaxError('result setter failed');
-  const previous = Object.getOwnPropertyDescriptor(Object.prototype, 'x');
-  Object.defineProperty(Object.prototype, 'x', {
-    configurable: true, set() { throw setterError; }
-  });
-  try {
-    assert.throws(() => native.runtime.windowState(), error => error === setterError);
-  } finally {
-    if (previous) Object.defineProperty(Object.prototype, 'x', previous);
-    else delete Object.prototype.x;
+  for (const [key, operation] of [
+    ['x', () => native.runtime.windowState()],
+    ['pointerEvents', () => native.input.snapshot()],
+    ['tileHits', () => native.images.memory(100)],
+    ['handle', () => native.images.memory(100)]
+  ]) {
+    const previous = Object.getOwnPropertyDescriptor(Object.prototype, key);
+    Object.defineProperty(Object.prototype, key, {
+      configurable: true, set() { throw setterError; }
+    });
+    try {
+      assert.throws(operation, error => error === setterError);
+    } finally {
+      if (previous) Object.defineProperty(Object.prototype, key, previous);
+      else delete Object.prototype[key];
+    }
   }
   assert.equal(typeof native.runtime.windowState().width, 'number');
+  const snapshot = native.input.snapshot();
+  for (const key of ['keysDown', 'keysPressed', 'keyEvents', 'pointerEvents', 'gamepads'])
+    assert.ok(Array.isArray(snapshot[key]), key);
+  assert.ok(native.images.memory(100).largest.some(item => item.handle === image.handle));
+  native.images.release(image.handle);
   native.canvas.release(canvas.handle);
 } finally {
   native.runtime.quit();

@@ -296,9 +296,9 @@ napi_value readDirectory(napi_env env, napi_callback_info info) try {
   auto entries = host(env).vfs.readDirectory(asString(env, args.at(0)));
   if (!entries) throw std::runtime_error("cannot read directory");
   napi_value result;
-  napi_create_array_with_length(env, entries->size(), &result);
+  check(env, napi_create_array_with_length(env, entries->size(), &result), "cannot create directory entries");
   for (std::size_t index = 0; index < entries->size(); ++index) {
-    napi_set_element(env, result, index, string(env, (*entries)[index]));
+    check(env, napi_set_element(env, result, index, string(env, (*entries)[index])), "cannot set directory entry");
   }
   return result;
 } catch (const std::exception& error) {
@@ -336,7 +336,8 @@ napi_value inputSnapshot(napi_env env, napi_callback_info) try {
     check(env, napi_set_named_property(env, event, "capsLock", boolean(env, key.capsLock)), "cannot set caps lock");
     check(env, napi_set_named_property(env, event, "code", string(env, key.code)), "cannot set code");
     check(env, napi_set_named_property(env, event, "key", string(env, key.key)), "cannot set key");
-    if (!key.text.empty()) napi_set_named_property(env, event, "text", string(env, key.text));
+    if (!key.text.empty())
+      check(env, napi_set_named_property(env, event, "text", string(env, key.text)), "cannot set key text");
     check(env, napi_set_named_property(env, event, "shift", boolean(env, key.shift)), "cannot set shift");
     check(env, napi_set_named_property(env, event, "ctrl", boolean(env, key.ctrl)), "cannot set ctrl");
     check(env, napi_set_named_property(env, event, "alt", boolean(env, key.alt)), "cannot set alt");
@@ -350,17 +351,17 @@ napi_value inputSnapshot(napi_env env, napi_callback_info) try {
   for (std::size_t i = 0; i < platform.pointerEvents().size(); ++i) {
     const auto& source = platform.pointerEvents()[i];
     napi_value event = moduleObject(env);
-    napi_set_named_property(env, event, "type", string(env, source.type));
-    napi_set_named_property(env, event, "x", number(env, source.x));
-    napi_set_named_property(env, event, "y", number(env, source.y));
-    napi_set_named_property(env, event, "button", uint32(env, source.button));
-    napi_set_named_property(env, event, "buttons", uint32(env, source.buttons));
-    napi_set_named_property(env, event, "deltaX", number(env, source.deltaX));
-    napi_set_named_property(env, event, "deltaY", number(env, source.deltaY));
-    napi_set_named_property(env, event, "cancelled", boolean(env, source.cancelled));
-    napi_set_element(env, pointers, i, event);
+    check(env, napi_set_named_property(env, event, "type", string(env, source.type)), "cannot set pointer type");
+    check(env, napi_set_named_property(env, event, "x", number(env, source.x)), "cannot set pointer x");
+    check(env, napi_set_named_property(env, event, "y", number(env, source.y)), "cannot set pointer y");
+    check(env, napi_set_named_property(env, event, "button", uint32(env, source.button)), "cannot set pointer button");
+    check(env, napi_set_named_property(env, event, "buttons", uint32(env, source.buttons)), "cannot set pointer buttons");
+    check(env, napi_set_named_property(env, event, "deltaX", number(env, source.deltaX)), "cannot set pointer delta x");
+    check(env, napi_set_named_property(env, event, "deltaY", number(env, source.deltaY)), "cannot set pointer delta y");
+    check(env, napi_set_named_property(env, event, "cancelled", boolean(env, source.cancelled)), "cannot set pointer cancellation");
+    check(env, napi_set_element(env, pointers, i, event), "cannot set pointer event");
   }
-  napi_set_named_property(env, result, "pointerEvents", pointers);
+  check(env, napi_set_named_property(env, result, "pointerEvents", pointers), "cannot set pointer events");
   platform.clearPointerEvents();
   const auto pads = platform.gamepads();
   napi_value gamepads;

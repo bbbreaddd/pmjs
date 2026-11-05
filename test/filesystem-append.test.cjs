@@ -128,6 +128,79 @@ test('XHR resolves runtime file URLs to real filesystem paths in both modes', as
 });
 
 
+test('map filename fallback preserves reads, responses and events in both XHR modes', async t => {
+  const { context } = fixture(), reads = [];
+  Object.assign(context, { performance, console, TextDecoder });
+  let available;
+  const read = file => { reads.push(file); return file === available ? '{"found":true}' : null; };
+  context.NativeHost.fs = {
+    readText: read,
+    readBytes: file => { const value = read(file); return value === null ? null : Buffer.from(value); },
+    readBytesAsync: file => Promise.resolve(context.NativeHost.fs.readBytes(file))
+  };
+  for (const module of ['scheduler', 'events', 'requests'])
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-web', module + '.js'), 'utf8'), context);
+  t.after(() => context.PMJS.tasks.stop());
+  for (const async of [false, true]) for (const binary of [false, true]) for (const entry of [
+    { url: 'root/maps/Map001.json', available: 'root/maps/Map001.json', paths: ['root/maps/Map001.json'] },
+    { url: 'root/maps/Map001.json', available: 'root/maps/map001.json', paths: ['root/maps/Map001.json', 'root/maps/map001.json'] },
+    { url: 'root/MAPS/MAP001.JSON', available: 'root/maps/map001.json', paths: ['root/MAPS/MAP001.JSON', 'root/maps/map001.json'] },
+    { url: 'root/maps/Map001.json', paths: ['root/maps/Map001.json', 'root/maps/map001.json'] },
+    { url: 'root/maps/map001.json', paths: ['root/maps/map001.json', 'root/maps/map001.json'] },
+    { url: 'data/missing.json', paths: ['data/missing.json'] }
+  ]) {
+    reads.length = 0;
+    available = entry.available;
+    const request = new context.XMLHttpRequest(), events = [];
+    const done = new Promise(resolve => { request.onloadend = () => { events.push('end'); resolve(); }; });
+    request.onreadystatechange = () => events.push(request.readyState);
+    request.onload = () => events.push('load');
+    request.onerror = () => events.push('error');
+    request.open('GET', entry.url, async);
+    if (binary) request.responseType = 'arraybuffer';
+    request.send();
+    await done;
+    assert.deepEqual(reads, entry.paths);
+    const found = entry.available !== undefined;
+    assert.equal(request.status, found ? 200 : 404);
+    assert.deepEqual(events, [1, ...(async && found ? [2, 3] : []), 4, found ? 'load' : 'error', 'end']);
+    if (found) assert.equal(binary ? new TextDecoder().decode(request.response) : request.responseText, '{"found":true}');
+  }
+});
+
+test('an aborted map read cannot retry or overwrite a reused XHR', async t => {
+  const { context } = fixture(), reads = [];
+  Object.assign(context, { performance, console, TextDecoder });
+  let resolveRead, notifyStarted;
+  const started = new Promise(resolve => { notifyStarted = resolve; });
+  context.NativeHost.fs = {
+    readBytesAsync(file) {
+      reads.push(file);
+      return new Promise(resolve => { resolveRead = resolve; notifyStarted(); });
+    },
+    readText(file) { reads.push(file); return 'replacement'; }
+  };
+  for (const module of ['scheduler', 'events', 'requests'])
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-web', module + '.js'), 'utf8'), context);
+  t.after(() => context.PMJS.tasks.stop());
+  const request = new context.XMLHttpRequest(), events = [];
+  request.onabort = () => events.push('abort');
+  request.onload = () => events.push('load');
+  request.onerror = () => events.push('error');
+  request.onloadend = () => events.push('end');
+  request.open('GET', 'root/maps/Map001.json', true); request.send();
+  await started;
+  request.abort();
+  request.open('GET', 'data/replacement.json', false); request.send();
+  resolveRead(null);
+  await new Promise(setImmediate);
+  assert.deepEqual(reads, ['root/maps/Map001.json', 'data/replacement.json']);
+  assert.deepEqual(events, ['abort', 'end', 'load', 'end']);
+  assert.equal(request.status, 200);
+  assert.equal(request.readyState, request.DONE);
+  assert.equal(request.responseText, 'replacement');
+});
+
 test('empty fetch returns a complete empty response without reading the filesystem', async () => {
   const { context } = fixture();
   Object.assign(context, { performance, console, TextDecoder });

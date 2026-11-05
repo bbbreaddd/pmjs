@@ -113,9 +113,10 @@ function pageHeaderMatches(header, page, size) {
       size === 16 + Math.ceil(page.width / 4) * Math.ceil(page.height / 4) * 16;
   }
   if (page.path.endsWith('.pml4')) {
+    if (!header || header.length < 32) return false;
     const version = header.readUInt32LE(4), width = header.readUInt32LE(8), height = header.readUInt32LE(12);
     const decoded = header.readUInt32LE(16), length = header.readUInt32LE(20), count = width * height;
-    return header.length >= 32 && header.toString('ascii', 0, 4) === 'PML4' && [1, 2, 3].includes(version) &&
+    return header.toString('ascii', 0, 4) === 'PML4' && [1, 2, 3].includes(version) &&
       width === page.width && height === page.height &&
       (version === 1 ? decoded === count * 4 :
         version === 2 ? decoded >= 8 && decoded <= count * 4 :
@@ -580,7 +581,7 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
             }
             if (recipe && (recipeMap.has(logicalSource.toLowerCase()) || policy.recipe)) {
               const header = (await files.inspect(input, 'source')).header;
-              if (header?.subarray(0, 8).equals(PNG)) {
+              if (header?.length >= 24 && header.subarray(0, 8).equals(PNG)) {
                 const width = header.readUInt32BE(16), height = header.readUInt32BE(20);
                 const [columns, rows] = recipe.grid;
                 if (width % columns || height % rows || recipe.crop &&
@@ -811,5 +812,5 @@ async function prepareAssets(options) {
   return result.images;
 }
 
-module.exports = { astcSettings, validLosslessPrefixes, prepareAssetsPhase, prepareAssets, validRecipes,
+module.exports = { astcSettings, validLosslessPrefixes, pageHeaderMatches, prepareAssetsPhase, prepareAssets, validRecipes,
   validDescriptor, validStorageDecision, automaticRecipe, PROCESSOR_IDENTITY };

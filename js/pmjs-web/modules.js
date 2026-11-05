@@ -2,18 +2,20 @@ var moduleCache = Object.create(null);
 var registeredCommonJsModules = Object.create(null);
 var guestTimersModule;
 function registerCommonJsModule(names, exports) {
-  var requestedNames = Array.isArray(names) ? names : [names];
+  var requestedNames = Array.isArray(names) ? Array.prototype.slice.call(names) : [names];
   if (!requestedNames.length) throw new Error('module registration requires a name');
+  var seen = new Set();
   for (var index = 0; index < requestedNames.length; index++) {
     var name = requestedNames[index];
     if (typeof name !== 'string' || !name) {
       throw new Error('module registration names must be non-empty strings');
     }
-    if (Object.prototype.hasOwnProperty.call(registeredCommonJsModules, name)) {
+    if (seen.has(name) || Object.prototype.hasOwnProperty.call(registeredCommonJsModules, name)) {
       throw new Error("module '" + name + "' is already registered");
     }
-    registeredCommonJsModules[name] = exports;
+    seen.add(name);
   }
+  for (var alias of requestedNames) registeredCommonJsModules[alias] = exports;
 }
 function countNwCompatibilityUse(method) {
   PMJS.compat.hit('browser.nwGui', method);

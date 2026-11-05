@@ -7,6 +7,14 @@
   PMJS.optimizations.register({ id: id, owner: 'pmjs-web', fallback: 'ordinary Canvas text measurement' });
   PMJS.phases.on('afterGuestPlugins', id, function() {
     if (!PMJS.optimizations.isEnabled(id)) return;
+    if (measureCanvasText !== original) {
+      PMJS.optimizations.refuse(id, 'guest modified text measurement');
+      return;
+    }
+    if (NativeHost.canvas.measureTextMetrics !== nativeMeasure) {
+      PMJS.optimizations.refuse(id, 'native text measurement changed');
+      return;
+    }
     var entries = new Map(), hits = 0, misses = 0;
     function copy(value) { return Object.assign(Object.create(Object.getPrototypeOf(value)), value); }
     function measured(font, text, style) {
