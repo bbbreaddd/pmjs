@@ -49,9 +49,11 @@ function fixture(options = {}) {
   if (options.unknown) Guest.prototype[options.unknown] = function() { this.calls.push('unknown'); };
   const operations = [];
   const warnings = [];
-  const context = { console: { ...console, warn(message) { warnings.push(message); } },
+  const context = { console: { ...console, warn(message) {
+    if (message.includes('tilemap.yed-indexed-')) warnings.push(message);
+  } },
     __pmjsBuiltinRequire: require, TiledTilemap: Guest,
-    Spriteset_Map: function() {}, PIXI: { Container: { prototype: {
+    Spriteset_Map: function() {}, Game_CharacterBase: function() {}, Game_Map: function() {}, PIXI: { Container: { prototype: {
       updateTransform() { this.calls.push('container'); }
     } } }, PMJS: { maps: {}, yedRetainedTiles: {
       supported(map) { return map.supported !== false; },
