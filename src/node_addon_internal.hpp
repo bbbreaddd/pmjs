@@ -66,6 +66,10 @@ struct State {
 
 extern std::shared_ptr<State> state;
 
+napi_value throwTypeError(napi_env env, const char* message);
+napi_value throwRangeError(napi_env env, const char* message);
+napi_value throwError(napi_env env, const char* message);
+napi_value throwException(napi_env env, const std::exception& error);
 void check(napi_env env, napi_status status, const char* message);
 napi_value undefined(napi_env env);
 napi_value null(napi_env env);

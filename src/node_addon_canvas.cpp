@@ -1,15 +1,17 @@
 #include "node_addon_internal.hpp"
 #include <cmath>
+#include "checked_bounds.hpp"
 
 namespace pmjs::addon {
 napi_value createCanvas(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 3);
-  auto canvas = host(env).canvases.create(asInt32(env, args.at(0)), asInt32(env, args.at(1)),
-    args.size() > 2 && asBoolean(env, args.at(2)));
-  if (!canvas) throw std::runtime_error("invalid canvas dimensions");
+  const auto width = asInt32(env, args.at(0)), height = asInt32(env, args.at(1));
+  if (!checkedImageExtent(width, height)) throw std::range_error("invalid canvas dimensions");
+  auto canvas = host(env).canvases.create(width, height, args.size() > 2 && asBoolean(env, args.at(2)));
+  if (!canvas) throw std::runtime_error("cannot create canvas");
   return imageInfo(env, canvas->handle, canvas->width, canvas->height);
 } catch (const std::exception& error) {
-  napi_throw_range_error(env, nullptr, error.what()); return nullptr;
+  return throwException(env, error);
 }
 
 napi_value copyTransformedPixels(napi_env env, napi_callback_info info) try {
@@ -17,10 +19,10 @@ napi_value copyTransformedPixels(napi_env env, napi_callback_info info) try {
   if (!host(env).canvases.copyTransformedPixels(asUint32(env, args.at(0)), asUint32(env, args.at(1)),
       asInt32(env, args.at(2)), asInt32(env, args.at(3)), asInt32(env, args.at(4)),
       asInt32(env, args.at(5)), asInt32(env, args.at(6))))
-    throw std::invalid_argument("invalid transformed pixel copy");
+    throw std::range_error("invalid transformed pixel copy");
   return undefined(env);
 } catch (const std::exception& error) {
-  napi_throw_range_error(env, nullptr, error.what()); return nullptr;
+  return throwException(env, error);
 }
 
 napi_value captureScene(napi_env env, napi_callback_info) try {
@@ -30,7 +32,7 @@ napi_value captureScene(napi_env env, napi_callback_info) try {
   if (!canvas) throw std::runtime_error("capture failed");
   return imageInfo(env, canvas->handle, canvas->width, canvas->height);
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what()); return nullptr;
+  return throwException(env, error);
 }
 
 napi_value captureSceneRawPremultiplied(napi_env env, napi_callback_info) try {
@@ -45,7 +47,7 @@ napi_value captureSceneRawPremultiplied(napi_env env, napi_callback_info) try {
     buffer, 0, &result), "cannot create raw scene pixel array");
   return result;
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what()); return nullptr;
+  return throwException(env, error);
 }
 
 napi_value captureDrawable(napi_env env, napi_callback_info) try {
@@ -57,11 +59,20 @@ napi_value captureDrawable(napi_env env, napi_callback_info) try {
   if (!canvas) throw std::runtime_error("drawable capture failed");
   return imageInfo(env, canvas->handle, canvas->width, canvas->height);
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what()); return nullptr;
+  return throwException(env, error);
 }
 
 namespace {
+CanvasComposite canvasCompositeArgument(napi_env env, napi_value value) {
+  const auto name = asString(env, value);
+  try { return canvasComposite(name); }
+  catch (const std::invalid_argument& error) { throw std::range_error(error.what()); }
+}
+
 std::span<const uint8_t> canvasBytes(napi_env env, napi_value value) {
+  bool typed = false;
+  check(env, napi_is_typedarray(env, value, &typed), "cannot inspect Canvas byte array");
+  if (!typed) throw std::invalid_argument("Canvas pixels must be a Uint8Array");
   napi_typedarray_type type;
   size_t size = 0, offset = 0;
   void* data = nullptr;
@@ -85,7 +96,7 @@ napi_value canvasElement(napi_env env, napi_value array, uint32_t index) {
   return value;
 }
 template<size_t Size> std::array<double, Size> canvasNumbers(napi_env env, napi_value value) {
-  if (canvasArrayLength(env, value) != Size) throw std::invalid_argument("invalid Canvas geometry length");
+  if (canvasArrayLength(env, value) != Size) throw std::range_error("invalid Canvas geometry length");
   std::array<double, Size> result;
   for (size_t i = 0; i < Size; ++i) result[i] = asNumber(env, canvasElement(env, value, i));
   return result;
@@ -100,7 +111,7 @@ CanvasPaint canvasPaint(napi_env env, napi_value descriptor) {
     if (hasProperty(env, descriptor, "transform")) paint.transform = canvasNumbers<6>(env, property(env, descriptor, "transform"));
     const auto offsets = property(env, descriptor, "offsets"), colors = property(env, descriptor, "colors");
     const auto count = canvasArrayLength(env, offsets);
-    if (canvasArrayLength(env, colors) != count) throw std::invalid_argument("invalid Canvas gradient stops");
+    if (canvasArrayLength(env, colors) != count) throw std::range_error("invalid Canvas gradient stops");
     for (uint32_t i = 0; i < count; ++i) {
       paint.offsets.push_back(asNumber(env, canvasElement(env, offsets, i)));
       paint.colors.push_back(asUint32(env, canvasElement(env, colors, i)));
@@ -113,7 +124,7 @@ CanvasPaint canvasPaint(napi_env env, napi_value descriptor) {
     if (hasProperty(env, descriptor, "smoothing")) paint.smoothing = asBoolean(env, property(env, descriptor, "smoothing"));
     paint.transform = canvasNumbers<6>(env, property(env, descriptor, "transform"));
     paint.pixels = canvasBytes(env, property(env, descriptor, "pixels"));
-  } else throw std::invalid_argument("invalid Canvas paint kind");
+  } else throw std::range_error("invalid Canvas paint kind");
   return paint;
 }
 std::vector<CanvasPath> canvasPaths(napi_env env, napi_value paths) {
@@ -133,7 +144,7 @@ std::vector<CanvasClip> canvasClips(napi_env env, napi_value clips) {
   for (uint32_t i = 0, count = canvasArrayLength(env, clips); i < count; ++i) {
     const auto descriptor = canvasElement(env, clips, i);
     const auto rule = asString(env, property(env, descriptor, "rule"));
-    if (rule != "nonzero" && rule != "evenodd") throw std::invalid_argument("invalid Canvas clip rule");
+    if (rule != "nonzero" && rule != "evenodd") throw std::range_error("invalid Canvas clip rule");
     result.push_back({canvasPaths(env, property(env, descriptor, "paths")), rule == "evenodd"});
   }
   return result;
@@ -146,11 +157,11 @@ napi_value compositePixels(napi_env env, napi_callback_info info) try {
   if (!host(env).canvases.compositePixels(asUint32(env, args.at(0)), asInt32(env, args.at(1)),
       asInt32(env, args.at(2)), asInt32(env, args.at(3)), asInt32(env, args.at(4)),
       canvasBytes(env, args.at(5)), canvasBytes(env, args.at(6)),
-      canvasComposite(asString(env, args.at(7))), asNumber(env, args.at(8))))
-    throw std::invalid_argument("invalid Canvas composite pixels");
+      canvasCompositeArgument(env, args.at(7)), asNumber(env, args.at(8))))
+    throw std::range_error("invalid Canvas composite pixels");
   return undefined(env);
 } catch (const std::exception& error) {
-  napi_throw_range_error(env, nullptr, error.what()); return nullptr;
+  return throwException(env, error);
 }
 
 napi_value paintCircle(napi_env env, napi_callback_info info) try {
@@ -162,14 +173,14 @@ napi_value paintCircle(napi_env env, napi_callback_info info) try {
   const auto transform = canvasNumbers<6>(env, property(env, request, "transform"));
   std::copy(transform.begin(), transform.end(), circle.transform.begin());
   circle.alpha = asNumber(env, property(env, request, "globalAlpha"));
-  circle.composite = canvasComposite(asString(env, property(env, request, "composite")));
+  circle.composite = canvasCompositeArgument(env, property(env, request, "composite"));
   circle.clips = canvasClips(env, property(env, request, "clips"));
   circle.paint = canvasPaint(env, property(env, request, "paint"));
   if (!host(env).canvases.paintCircle(asUint32(env, args.at(0)), circle))
-    throw std::invalid_argument("invalid Canvas circle paint");
+    throw std::range_error("invalid Canvas circle paint");
   return undefined(env);
 } catch (const std::exception& error) {
-  napi_throw_range_error(env, nullptr, error.what()); return nullptr;
+  return throwException(env, error);
 }
 
 napi_value paintPath(napi_env env, napi_callback_info info) try {
@@ -200,12 +211,12 @@ napi_value paintPath(napi_env env, napi_callback_info info) try {
   request.miterLimit = asNumber(env, property(env, descriptor, "miterLimit"));
   request.clear = asBoolean(env, property(env, descriptor, "clear"));
   if (hasProperty(env, descriptor, "rule")) request.evenOdd = asString(env, property(env, descriptor, "rule")) == "evenodd";
-  request.composite = canvasComposite(asString(env, property(env, descriptor, "composite")));
+  request.composite = canvasCompositeArgument(env, property(env, descriptor, "composite"));
   request.paint = canvasPaint(env, property(env, descriptor, "paint"));
   request.clips = canvasClips(env, property(env, descriptor, "clips"));
   return boolean(env, host(env).canvases.paintPath(asUint32(env, args.at(0)), request));
 } catch (const std::exception& error) {
-  napi_throw_range_error(env, nullptr, error.what()); return nullptr;
+  return throwException(env, error);
 }
 
 napi_value paintShadow(napi_env env, napi_callback_info info) try {
@@ -213,7 +224,7 @@ napi_value paintShadow(napi_env env, napi_callback_info info) try {
   const auto descriptor = args.at(2);
   CanvasPaintState paintState;
   paintState.alpha = asNumber(env, property(env, descriptor, "globalAlpha"));
-  paintState.composite = canvasComposite(asString(env, property(env, descriptor, "composite")));
+  paintState.composite = canvasCompositeArgument(env, property(env, descriptor, "composite"));
   paintState.clips = canvasClips(env, property(env, descriptor, "clips"));
   const bool geometryMask = hasProperty(env, descriptor, "paint");
   if (geometryMask) paintState.paint = canvasPaint(env, property(env, descriptor, "paint"));
@@ -222,7 +233,7 @@ napi_value paintShadow(napi_env env, napi_callback_info info) try {
       asNumber(env, property(env, descriptor, "blur")), asUint32(env, property(env, descriptor, "color")), paintState, geometryMask))
     throw std::runtime_error("Canvas shadow rasterization failed");
   return undefined(env);
-} catch(const std::exception& error){napi_throw_range_error(env,nullptr,error.what());return nullptr;}
+} catch(const std::exception& error){return throwException(env, error);}
 
 napi_value drawAffineImage(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info, 3);
@@ -231,34 +242,34 @@ napi_value drawAffineImage(napi_env env, napi_callback_info info) try {
   request.geometry = canvasNumbers<8>(env, property(env, descriptor, "geometry"));
   request.transform = canvasNumbers<6>(env, property(env, descriptor, "transform"));
   request.alpha = asNumber(env, property(env, descriptor, "globalAlpha"));
-  request.composite = canvasComposite(asString(env, property(env, descriptor, "composite")));
+  request.composite = canvasCompositeArgument(env, property(env, descriptor, "composite"));
   request.clips = canvasClips(env, property(env, descriptor, "clips"));
   request.smoothing = asBoolean(env, property(env, descriptor, "smoothing"));
   if (hasProperty(env, descriptor, "paint")) request.paint = canvasPaint(env, property(env, descriptor, "paint"));
   if (!host(env).canvases.drawAffineImage(asUint32(env, args.at(0)), asUint32(env, args.at(1)), request))
-    throw std::invalid_argument("invalid Canvas affine image");
+    throw std::range_error("invalid Canvas affine image");
   return undefined(env);
 } catch (const std::exception& error) {
-  napi_throw_range_error(env, nullptr, error.what()); return nullptr;
+  return throwException(env, error);
 }
 
 napi_value fillRect(napi_env env, napi_callback_info info) try {
   auto a = arguments(env, info, 6);
   if (!host(env).canvases.fillRect(asUint32(env,a.at(0)),asInt32(env,a.at(1)),asInt32(env,a.at(2)),asInt32(env,a.at(3)),asInt32(env,a.at(4)),asUint32(env,a.at(5)))) throw std::runtime_error("invalid canvas");
   return undefined(env);
-} catch (const std::exception& error) { napi_throw_range_error(env,nullptr,error.what()); return nullptr; }
+} catch (const std::exception& error) { return throwException(env, error); }
 
 napi_value fillRadialGradient(napi_env env, napi_callback_info info) try {
   auto a = arguments(env, info, 12);
   bool offsetsArray = false, colorsArray = false;
   check(env, napi_is_array(env, a.at(9), &offsetsArray), "cannot inspect gradient stops");
   check(env, napi_is_array(env, a.at(10), &colorsArray), "cannot inspect gradient colors");
-  if (!offsetsArray || !colorsArray) throw std::runtime_error("gradient stops must be arrays");
+  if (!offsetsArray || !colorsArray) throw std::invalid_argument("gradient stops must be arrays");
   std::uint32_t offsetCount = 0, colorCount = 0;
   check(env, napi_get_array_length(env, a.at(9), &offsetCount), "cannot read gradient stops");
   check(env, napi_get_array_length(env, a.at(10), &colorCount), "cannot read gradient colors");
   if (!offsetCount || offsetCount != colorCount || offsetCount > 64)
-    throw std::runtime_error("invalid gradient stops");
+    throw std::range_error("invalid gradient stops");
   std::vector<float> offsets;
   std::vector<std::uint32_t> colors;
   offsets.reserve(offsetCount); colors.reserve(colorCount);
@@ -280,53 +291,57 @@ napi_value fillRadialGradient(napi_env env, napi_callback_info info) try {
     throw std::runtime_error("invalid radial gradient");
   return undefined(env);
 } catch (const std::exception& error) {
-  napi_throw_range_error(env, nullptr, error.what()); return nullptr;
+  return throwException(env, error);
 }
 
 napi_value clearCanvas(napi_env env, napi_callback_info info) try {
   auto a=arguments(env,info,1); if(!host(env).canvases.clear(asUint32(env,a.at(0)))) throw std::runtime_error("invalid canvas"); return undefined(env);
-} catch(const std::exception& error){napi_throw_range_error(env,nullptr,error.what());return nullptr;}
+} catch(const std::exception& error){return throwException(env, error);}
 
 napi_value clearRect(napi_env env, napi_callback_info info) try {
   auto a=arguments(env,info,5); if(!host(env).canvases.clearRect(asUint32(env,a.at(0)),asInt32(env,a.at(1)),asInt32(env,a.at(2)),asInt32(env,a.at(3)),asInt32(env,a.at(4)))) throw std::runtime_error("invalid canvas"); return undefined(env);
-} catch(const std::exception& error){napi_throw_range_error(env,nullptr,error.what());return nullptr;}
+} catch(const std::exception& error){return throwException(env, error);}
 
 napi_value canvasDrawImage(napi_env env, napi_callback_info info) try {
   auto a=arguments(env,info,12); if(!host(env).canvases.drawImage(asUint32(env,a.at(0)),asUint32(env,a.at(1)),asNumber(env,a.at(2)),asNumber(env,a.at(3)),asNumber(env,a.at(4)),asNumber(env,a.at(5)),asNumber(env,a.at(6)),asNumber(env,a.at(7)),asNumber(env,a.at(8)),asNumber(env,a.at(9)),asNumber(env,a.at(10)), a.size() < 12 || asBoolean(env,a.at(11)))) throw std::runtime_error("invalid canvas image"); return undefined(env);
-} catch(const std::exception& error){napi_throw_range_error(env,nullptr,error.what());return nullptr;}
+} catch(const std::exception& error){return throwException(env, error);}
 
 napi_value canvasDrawImageBatch(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 4);
   auto destination = asUint32(env, args.at(0)), source = asUint32(env, args.at(1));
   float alpha = asNumber(env, args.at(3));
+  bool typed = false;
+  check(env, napi_is_typedarray(env, args.at(2), &typed), "cannot inspect image batch");
+  if (!typed) throw std::invalid_argument("image batch requires Float32Array");
   napi_typedarray_type type;
   size_t length = 0, offset = 0;
   void* data = nullptr;
   napi_value buffer;
   check(env, napi_get_typedarray_info(env, args.at(2), &type, &length, &data, &buffer, &offset),
     "image batch requires Float32Array");
-  if (type != napi_float32_array || length % 9 || length > 9 * 4096 ||
+  if (type != napi_float32_array) throw std::invalid_argument("image batch requires Float32Array");
+  if (length % 9 || length > 9 * 4096 ||
       !std::isfinite(alpha) || alpha < 0 || alpha > 1)
-    throw std::invalid_argument("invalid image batch");
+    throw std::range_error("invalid image batch");
   auto* rows = static_cast<const float*>(data);
   for (size_t i = 0; i < length; i += 9) {
     for (size_t j = 0; j < 9; ++j)
-      if (!std::isfinite(rows[i + j])) throw std::invalid_argument("invalid image batch geometry");
+      if (!std::isfinite(rows[i + j])) throw std::range_error("invalid image batch geometry");
     if (rows[i + 2] <= 0 || rows[i + 3] <= 0 || rows[i + 6] <= 0 || rows[i + 7] <= 0 ||
         (rows[i + 8] != 0 && rows[i + 8] != 1))
-      throw std::invalid_argument("invalid image batch geometry");
+      throw std::range_error("invalid image batch geometry");
   }
   auto& runtime = host(env);
   if (!runtime.canvases.info(destination) ||
       (!runtime.canvases.info(source) && !runtime.images.inspect(source)))
-    throw std::invalid_argument("invalid image batch resource");
+    throw std::runtime_error("invalid image batch resource");
   for (size_t i = 0; i < length; i += 9)
     if (!runtime.canvases.drawImage(destination, source, rows[i], rows[i+1], rows[i+2], rows[i+3],
         rows[i+4], rows[i+5], rows[i+6], rows[i+7], alpha, rows[i+8] != 0))
       throw std::runtime_error("image batch draw failed");
   return undefined(env);
 } catch (const std::exception& error) {
-  napi_throw_range_error(env, nullptr, error.what()); return nullptr;
+  return throwException(env, error);
 }
 
 napi_value paintRect(napi_env env, napi_callback_info info) try {
@@ -342,7 +357,7 @@ napi_value paintRect(napi_env env, napi_callback_info info) try {
   if (!offsetArray || !colorArray) throw std::invalid_argument("gradient stops must be arrays");
   check(env, napi_get_array_length(env, a.at(11), &count), "invalid gradient offsets");
   check(env, napi_get_array_length(env, a.at(12), &colorCount), "invalid gradient colors");
-  if (count != colorCount || count > 64) throw std::invalid_argument("invalid gradient stops");
+  if (count != colorCount || count > 64) throw std::range_error("invalid gradient stops");
   for (uint32_t i = 0; i < count; ++i) {
     napi_value offset, color;
     check(env, napi_get_element(env, a.at(11), i, &offset), "invalid gradient offset");
@@ -351,7 +366,7 @@ napi_value paintRect(napi_env env, napi_callback_info info) try {
   }
   return boolean(env, host(env).canvases.paintRect(asUint32(env, a.at(0)), rect,
     asUint32(env, a.at(5)), asNumber(env, a.at(6)), gradient, offsets, colors));
-} catch(const std::exception& error){napi_throw_range_error(env,nullptr,error.what());return nullptr;}
+} catch(const std::exception& error){return throwException(env, error);}
 
 namespace {
 std::vector<std::filesystem::path> textFontPaths(napi_env env, State& value,
@@ -362,7 +377,7 @@ std::vector<std::filesystem::path> textFontPaths(napi_env env, State& value,
   if (array) {
     std::uint32_t count = 0;
     check(env, napi_get_array_length(env, descriptor, &count), "invalid font list");
-    if (count > 64) throw std::runtime_error("too many fallback fonts");
+    if (count > 64) throw std::range_error("too many fallback fonts");
     for (std::uint32_t i = 0; i < count; ++i) {
       napi_value entry;
       check(env, napi_get_element(env, descriptor, i, &entry), "invalid fallback font");
@@ -392,20 +407,20 @@ CanvasTextStyle textStyle(napi_env env, const std::vector<napi_value>& args, siz
   if (auto value = property("miterLimit")) style.miterLimit = asNumber(env, *value);
   if (auto value = property("lineJoin")) {
     const auto name = asString(env, *value);
-    if (name != "miter" && name != "round" && name != "bevel") throw std::runtime_error("invalid text lineJoin");
+    if (name != "miter" && name != "round" && name != "bevel") throw std::range_error("invalid text lineJoin");
     style.join = name == "miter" ? 0 : name == "round" ? 1 : 2;
   }
   if (auto value = property("lineCap")) {
     const auto name = asString(env, *value);
-    if (name != "butt" && name != "round" && name != "square") throw std::runtime_error("invalid text lineCap");
+    if (name != "butt" && name != "round" && name != "square") throw std::range_error("invalid text lineCap");
     style.cap = name == "butt" ? 0 : name == "round" ? 1 : 2;
   }
-  if (!std::isfinite(style.miterLimit) || style.miterLimit <= 0) throw std::runtime_error("invalid text miterLimit");
+  if (!std::isfinite(style.miterLimit) || style.miterLimit <= 0) throw std::range_error("invalid text miterLimit");
   if (auto value = property("transform")) {
     const auto transform = canvasNumbers<6>(env, *value);
     std::copy(transform.begin(), transform.end(), style.transform.begin());
     if (!std::all_of(style.transform.begin(), style.transform.end(), [](float v) { return std::isfinite(v); }))
-      throw std::invalid_argument("invalid text transform");
+      throw std::range_error("invalid text transform");
     style.transformed = true;
   }
   return style;
@@ -423,7 +438,7 @@ napi_value drawText(napi_env env, napi_callback_info info) try {
   }
   return undefined(env);
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what()); return nullptr;
+  return throwException(env, error);
 }
 
 napi_value measureText(napi_env env, napi_callback_info info) try {
@@ -434,7 +449,7 @@ napi_value measureText(napi_env env, napi_callback_info info) try {
   if (!width) throw std::runtime_error("text measurement failed");
   return number(env, *width);
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what()); return nullptr;
+  return throwException(env, error);
 }
 
 napi_value drawOutlinedText(napi_env env, napi_callback_info info) try {
@@ -452,7 +467,7 @@ napi_value drawOutlinedText(napi_env env, napi_callback_info info) try {
   if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(maxWidth) || maxWidth <= 0 ||
       !std::isfinite(size) || size <= 0 || !std::isfinite(stroke) || stroke < 0 ||
       (align != "left" && align != "center" && align != "right") || style.transformed)
-    throw std::invalid_argument("invalid outlined text layout");
+    throw std::range_error("invalid outlined text layout");
   const auto width = canvases.measureText(paths, text, size, style);
   if (!width || !std::isfinite(*width)) throw std::runtime_error("text measurement failed");
   const double displayedWidth = std::min(*width, maxWidth);
@@ -469,7 +484,7 @@ napi_value drawOutlinedText(napi_env env, napi_callback_info info) try {
     throw std::runtime_error("outlined text draw failed");
   return undefined(env);
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what()); return nullptr;
+  return throwException(env, error);
 }
 
 napi_value canLoadFont(napi_env env, napi_callback_info info) try {
@@ -478,17 +493,17 @@ napi_value canLoadFont(napi_env env, napi_callback_info info) try {
   auto path = value.vfs.resolve(asString(env, a.at(0)));
   return boolean(env, path ? value.canvases.canLoadFont(*path) : false);
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what()); return nullptr;
+  return throwException(env, error);
 }
 
 napi_value pixel(napi_env env, napi_callback_info info) try {
   auto a=arguments(env,info,3); auto value=host(env).canvases.pixel(asUint32(env,a.at(0)),asInt32(env,a.at(1)),asInt32(env,a.at(2))); if(!value) throw std::runtime_error("invalid pixel"); return uint32(env,*value);
-} catch(const std::exception& error){napi_throw_range_error(env,nullptr,error.what());return nullptr;}
+} catch(const std::exception& error){return throwException(env, error);}
 
 template<PixelEncoding encoding>
 napi_value readCanvasPixels(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 5);
-  if (args.size() != 5) throw std::runtime_error("readPixels requires handle and rectangle");
+  if (args.size() != 5) throw std::invalid_argument("readPixels requires handle and rectangle");
   const auto pixels = host(env).canvases.readPixels(asUint32(env, args[0]),
     asInt32(env, args[1]), asInt32(env, args[2]), asInt32(env, args[3]),
     asInt32(env, args[4]), encoding);
@@ -502,7 +517,7 @@ napi_value readCanvasPixels(napi_env env, napi_callback_info info) try {
   check(env, napi_create_typedarray(env, napi_uint8_clamped_array,
     pixels->rgba.size(), buffer, 0, &result), "cannot create pixel array");
   return result;
-} catch(const std::exception& error){napi_throw_range_error(env,nullptr,error.what());return nullptr;}
+} catch(const std::exception& error){return throwException(env, error);}
 
 napi_value encodeCanvasPng(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 1);
@@ -517,7 +532,7 @@ napi_value encodeCanvasPng(napi_env env, napi_callback_info info) try {
   check(env, napi_create_typedarray(env, napi_uint8_array, encoded->size(),
     buffer, 0, &result), "cannot create PNG byte array");
   return result;
-} catch(const std::exception& error){napi_throw_range_error(env,nullptr,error.what());return nullptr;}
+} catch(const std::exception& error){return throwException(env, error);}
 
 napi_value encodeCanvasWebP(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 2);
@@ -533,7 +548,7 @@ napi_value encodeCanvasWebP(napi_env env, napi_callback_info info) try {
   check(env, napi_create_typedarray(env, napi_uint8_array, encoded->size(),
     buffer, 0, &result), "cannot create WebP byte array");
   return result;
-} catch(const std::exception& error){napi_throw_range_error(env,nullptr,error.what());return nullptr;}
+} catch(const std::exception& error){return throwException(env, error);}
 
 napi_value encodeCanvasJpeg(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 2);
@@ -545,12 +560,15 @@ napi_value encodeCanvasJpeg(napi_env env, napi_callback_info info) try {
   std::memcpy(data, encoded->data(), encoded->size());
   check(env, napi_create_typedarray(env, napi_uint8_array, encoded->size(), buffer, 0, &result), "cannot create JPEG byte array");
   return result;
-} catch(const std::exception& error){napi_throw_range_error(env,nullptr,error.what());return nullptr;}
+} catch(const std::exception& error){return throwException(env, error);}
 
 template<PixelEncoding encoding>
 napi_value writeCanvasPixels(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 6);
-  if (args.size() != 6) throw std::runtime_error("writePixels requires handle, rectangle, and pixels");
+  if (args.size() != 6) throw std::invalid_argument("writePixels requires handle, rectangle, and pixels");
+  bool typed = false;
+  check(env, napi_is_typedarray(env, args[5], &typed), "cannot inspect pixel array");
+  if (!typed) throw std::invalid_argument("pixels must be a typed array");
   napi_typedarray_type type;
   std::size_t length = 0;
   void* data = nullptr;
@@ -559,7 +577,7 @@ napi_value writeCanvasPixels(napi_env env, napi_callback_info info) try {
   check(env, napi_get_typedarray_info(env, args[5], &type, &length, &data,
     &buffer, &offset), "pixels must be a typed array");
   if (type != napi_uint8_array && type != napi_uint8_clamped_array) {
-    throw std::runtime_error("pixels must be Uint8Array or Uint8ClampedArray");
+    throw std::invalid_argument("pixels must be Uint8Array or Uint8ClampedArray");
   }
   std::vector<std::uint8_t> pixels(static_cast<std::uint8_t*>(data),
                                    static_cast<std::uint8_t*>(data) + length);
@@ -569,11 +587,11 @@ napi_value writeCanvasPixels(napi_env env, napi_callback_info info) try {
     throw std::runtime_error("invalid canvas pixel data");
   }
   return undefined(env);
-} catch(const std::exception& error){napi_throw_range_error(env,nullptr,error.what());return nullptr;}
+} catch(const std::exception& error){return throwException(env, error);}
 
 napi_value releaseCanvas(napi_env env, napi_callback_info info) try {
   auto a=arguments(env,info,1); if(!host(env).canvases.release(asUint32(env,a.at(0)))) throw std::runtime_error("invalid canvas"); return undefined(env);
-} catch(const std::exception& error){napi_throw_range_error(env,nullptr,error.what());return nullptr;}
+} catch(const std::exception& error){return throwException(env, error);}
 
 napi_value canvasMemory(napi_env env, napi_callback_info) try {
   const auto& canvases = host(env).canvases;
@@ -616,8 +634,7 @@ napi_value canvasMemory(napi_env env, napi_callback_info) try {
   syncExternalMemory(env);
   return result;
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, "cannot create canvas memory state");
-  return nullptr;
+  return throwError(env, "cannot create canvas memory state");
 }
 
 napi_value canvasGlyphStats(napi_env env, napi_callback_info) try {
@@ -690,8 +707,7 @@ napi_value canvasGlyphStats(napi_env env, napi_callback_info) try {
   setLayoutStat("layoutCacheBytes", stats.layoutCacheBytes);
   return result;
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, "cannot get glyph stats");
-  return nullptr;
+  return throwError(env, "cannot get glyph stats");
 }
 
 napi_value setGlyphCacheLimits(napi_env env, napi_callback_info info) try {
@@ -699,8 +715,7 @@ napi_value setGlyphCacheLimits(napi_env env, napi_callback_info info) try {
   host(env).canvases.setGlyphCacheLimits(asUint32(env, a.at(0)), asUint32(env, a.at(1)));
   return undefined(env);
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what());
-  return nullptr;
+  return throwException(env, error);
 }
 
 napi_value measureTextMetrics(napi_env env, napi_callback_info info) try {
@@ -721,12 +736,12 @@ napi_value measureTextMetrics(napi_env env, napi_callback_info info) try {
   set("fontBoundingBoxDescent", metrics->fontDescent);
   return result;
 } catch (const std::exception& error) {
-  napi_throw_type_error(env, nullptr, error.what()); return nullptr;
+  return throwException(env, error);
 }
 
 napi_value blurCanvas(napi_env env, napi_callback_info info) try {
   auto a=arguments(env,info,1); if(!host(env).canvases.blur(asUint32(env,a.at(0)))) throw std::runtime_error("invalid canvas"); return undefined(env);
-} catch(const std::exception& error){napi_throw_range_error(env,nullptr,error.what());return nullptr;}
+} catch(const std::exception& error){return throwException(env, error);}
 
 napi_value blurMvCanvas(napi_env env, napi_callback_info info) try {
   auto a = arguments(env, info, 1);
@@ -735,8 +750,7 @@ napi_value blurMvCanvas(napi_env env, napi_callback_info info) try {
   if (!canvases.info(handle)) throw std::runtime_error("invalid canvas");
   return boolean(env, canvases.blurMv(handle));
 } catch (const std::exception& error) {
-  napi_throw_range_error(env, nullptr, error.what());
-  return nullptr;
+  return throwException(env, error);
 }
 
 void registerCanvasBindings(napi_env env, napi_value exports) {

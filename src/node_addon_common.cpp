@@ -18,11 +18,52 @@ State::State(const std::string& root, int initWidth, int initHeight,
 State::~State() = default;
 
 std::shared_ptr<State> state;
+namespace {
+napi_value raise(napi_env env, const char* message,
+                 napi_status (*throwError)(napi_env, const char*, const char*)) {
+  bool pending = false;
+  if (napi_is_exception_pending(env, &pending) == napi_ok && !pending)
+    throwError(env, nullptr, message);
+  return nullptr;
+}
+}
+
+napi_value throwTypeError(napi_env env, const char* message) {
+  return raise(env, message, napi_throw_type_error);
+}
+
+napi_value throwRangeError(napi_env env, const char* message) {
+  return raise(env, message, napi_throw_range_error);
+}
+
+napi_value throwError(napi_env env, const char* message) {
+  return raise(env, message, napi_throw_error);
+}
+
+napi_value throwException(napi_env env, const std::exception& error) {
+  if (dynamic_cast<const std::invalid_argument*>(&error)) return throwTypeError(env, error.what());
+  if (dynamic_cast<const std::range_error*>(&error) || dynamic_cast<const std::out_of_range*>(&error))
+    return throwRangeError(env, error.what());
+  return throwError(env, error.what());
+}
+
 void check(napi_env env, napi_status status, const char* message) {
-  if (status != napi_ok) {
-    napi_throw_error(env, nullptr, message);
-    throw std::runtime_error(message);
+  if (status == napi_ok) return;
+  switch (status) {
+    case napi_object_expected:
+    case napi_string_expected:
+    case napi_name_expected:
+    case napi_function_expected:
+    case napi_number_expected:
+    case napi_boolean_expected:
+    case napi_array_expected:
+      throwTypeError(env, message);
+      break;
+    default:
+      throwError(env, message);
+      break;
   }
+  throw std::runtime_error(message);
 }
 
 napi_value undefined(napi_env env) {

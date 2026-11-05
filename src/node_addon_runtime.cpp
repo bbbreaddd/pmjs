@@ -69,8 +69,7 @@ napi_value allocatorStats(napi_env env, napi_callback_info) try {
   return undefined(env);
 #endif
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what());
-  return nullptr;
+  return throwException(env, error);
 }
 
 napi_value initialize(napi_env env, napi_callback_info info) try {
@@ -137,8 +136,7 @@ napi_value initialize(napi_env env, napi_callback_info info) try {
   state->images.setPreparedCropUploadsEnabled(cropUploads);
   return undefined(env);
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what());
-  return nullptr;
+  return throwException(env, error);
 }
 
 napi_value vfsIndexStats(napi_env env, napi_callback_info) try {
@@ -150,40 +148,33 @@ napi_value vfsIndexStats(napi_env env, napi_callback_info) try {
   check(env, napi_set_named_property(env, result, "durationMs", number(env, scan.durationMs)), "cannot set scan statistics");
   return result;
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what());
-  return nullptr;
+  return throwException(env, error);
 }
 
 napi_value pollEvents(napi_env env, napi_callback_info) try {
   return boolean(env, host(env).core.pollEvents());
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what());
-  return nullptr;
+  return throwException(env, error);
 } catch (...) {
-  napi_throw_error(env, nullptr, "pollEvents failed");
-  return nullptr;
+  return throwError(env, "pollEvents failed");
 }
 
 napi_value finishLogicStep(napi_env env, napi_callback_info) try {
   host(env).platform.finishLogicStep();
   return undefined(env);
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what());
-  return nullptr;
+  return throwException(env, error);
 } catch (...) {
-  napi_throw_error(env, nullptr, "finishLogicStep failed");
-  return nullptr;
+  return throwError(env, "finishLogicStep failed");
 }
 
 napi_value monotonicNow(napi_env env, napi_callback_info) try {
   const auto now = std::chrono::steady_clock::now().time_since_epoch();
   return number(env, std::chrono::duration<double, std::milli>(now).count());
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what());
-  return nullptr;
+  return throwException(env, error);
 } catch (...) {
-  napi_throw_error(env, nullptr, "monotonicNow failed");
-  return nullptr;
+  return throwError(env, "monotonicNow failed");
 }
 
 napi_value windowState(napi_env env, napi_callback_info) try {
@@ -195,29 +186,25 @@ napi_value windowState(napi_env env, napi_callback_info) try {
   check(env, napi_set_named_property(env, result, "visible",
     boolean(env, platform.windowVisible())), "cannot set window visibility state");
   const auto [x, y] = platform.windowPosition();
-  napi_set_named_property(env, result, "x", number(env, x));
-  napi_set_named_property(env, result, "y", number(env, y));
-  napi_set_named_property(env, result, "fullscreen", boolean(env, platform.fullscreen()));
-  napi_set_named_property(env, result, "width", number(env, platform.windowWidth()));
-  napi_set_named_property(env, result, "height", number(env, platform.windowHeight()));
+  check(env, napi_set_named_property(env, result, "x", number(env, x)), "cannot set property");
+  check(env, napi_set_named_property(env, result, "y", number(env, y)), "cannot set property");
+  check(env, napi_set_named_property(env, result, "fullscreen", boolean(env, platform.fullscreen())), "cannot set property");
+  check(env, napi_set_named_property(env, result, "width", number(env, platform.windowWidth())), "cannot set property");
+  check(env, napi_set_named_property(env, result, "height", number(env, platform.windowHeight())), "cannot set property");
   return result;
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what());
-  return nullptr;
+  return throwException(env, error);
 } catch (...) {
-  napi_throw_error(env, nullptr, "windowState failed");
-  return nullptr;
+  return throwError(env, "windowState failed");
 }
 
 napi_value beginFrame(napi_env env, napi_callback_info) try {
   host(env).renderer.beginFrame();
   return undefined(env);
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what());
-  return nullptr;
+  return throwException(env, error);
 } catch (...) {
-  napi_throw_error(env, nullptr, "beginFrame failed");
-  return nullptr;
+  return throwError(env, "beginFrame failed");
 }
 
 namespace {
@@ -295,7 +282,7 @@ napi_value settingsOverlay(napi_env env, napi_callback_info info) try {
   if (!array) throw std::invalid_argument("settings rows must be an array");
   std::uint32_t count = 0;
   check(env, napi_get_array_length(env, rowsArg, &count), "invalid settings rows");
-  if (count == 0 || count > 16) throw std::invalid_argument("invalid settings row count");
+  if (count == 0 || count > 16) throw std::range_error("invalid settings row count");
   std::vector<std::pair<std::string, std::string>> rows;
   for (std::uint32_t i = 0; i < count; ++i) {
     napi_value row;
@@ -362,12 +349,12 @@ napi_value settingsOverlay(napi_env env, napi_callback_info info) try {
         value.canvases.drawText(value.settingsSurface, value.preparationFonts, label, left, y, size, color);
       } else {
         napi_value line = moduleObject(env);
-        napi_set_named_property(env, line, "text", string(env, label));
-        napi_set_named_property(env, line, "x", number(env, left));
-        napi_set_named_property(env, line, "y", number(env, y - size));
-        napi_set_named_property(env, line, "pixel", number(env, size / 16));
-        napi_set_named_property(env, line, "color", uint32(env, color));
-        napi_set_element(env, fallbackLines, fallbackCount++, line);
+        check(env, napi_set_named_property(env, line, "text", string(env, label)), "cannot set property");
+        check(env, napi_set_named_property(env, line, "x", number(env, left)), "cannot set property");
+        check(env, napi_set_named_property(env, line, "y", number(env, y - size)), "cannot set property");
+        check(env, napi_set_named_property(env, line, "pixel", number(env, size / 16)), "cannot set property");
+        check(env, napi_set_named_property(env, line, "color", uint32(env, color)), "cannot set property");
+        check(env, napi_set_element(env, fallbackLines, fallbackCount++, line), "cannot set array element");
       }
     };
     constexpr std::uint32_t primary = 0xFFFFFFFFU;
@@ -405,15 +392,15 @@ napi_value settingsOverlay(napi_env env, napi_callback_info info) try {
     }
   }
   napi_value result = moduleObject(env);
-  napi_set_named_property(env, result, "canvas", uint32(env, value.settingsSurface));
-  napi_set_named_property(env, result, "hasFont", boolean(env, !value.preparationFonts.empty()));
-  napi_set_named_property(env, result, "scale", number(env, scale));
-  napi_set_named_property(env, result, "width", uint32(env, sw));
-  napi_set_named_property(env, result, "height", uint32(env, sh));
-  napi_set_named_property(env, result, "lines", fallbackLines);
+  check(env, napi_set_named_property(env, result, "canvas", uint32(env, value.settingsSurface)), "cannot set property");
+  check(env, napi_set_named_property(env, result, "hasFont", boolean(env, !value.preparationFonts.empty())), "cannot set property");
+  check(env, napi_set_named_property(env, result, "scale", number(env, scale)), "cannot set property");
+  check(env, napi_set_named_property(env, result, "width", uint32(env, sw)), "cannot set property");
+  check(env, napi_set_named_property(env, result, "height", uint32(env, sh)), "cannot set property");
+  check(env, napi_set_named_property(env, result, "lines", fallbackLines), "cannot set property");
   return result;
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what()); return nullptr;
+  return throwException(env, error);
 }
 
 napi_value settingsPresent(napi_env env, napi_callback_info info) try {
@@ -428,7 +415,7 @@ napi_value settingsPresent(napi_env env, napi_callback_info info) try {
   }
   return undefined(env);
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what()); return nullptr;
+  return throwException(env, error);
 }
 
 napi_value preparationProgress(napi_env env, napi_callback_info info) try {
@@ -438,7 +425,7 @@ napi_value preparationProgress(napi_env env, napi_callback_info info) try {
   const double completed = asNumber(env, property(env, progress, "completed"));
   const double total = asNumber(env, property(env, progress, "total"));
   if (!std::isfinite(completed) || !std::isfinite(total) || completed < 0 || total < 0)
-    throw std::invalid_argument("invalid preparation progress");
+    throw std::range_error("invalid preparation progress");
   const bool terminal = hasProperty(env, progress, "terminal") ?
     asBoolean(env, property(env, progress, "terminal")) :
     (!hasProperty(env, progress, "phase") && completed >= total);
@@ -521,8 +508,7 @@ napi_value preparationProgress(napi_env env, napi_callback_info info) try {
   }
   return undefined(env);
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what());
-  return nullptr;
+  return throwException(env, error);
 }
 
 napi_value preparationClear(napi_env env, napi_callback_info) try {
@@ -533,7 +519,7 @@ napi_value preparationClear(napi_env env, napi_callback_info) try {
   }
   return undefined(env);
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what()); return nullptr;
+  return throwException(env, error);
 }
 
 napi_value renderFrame(napi_env env, napi_callback_info) try {
@@ -551,11 +537,9 @@ napi_value renderFrame(napi_env env, napi_callback_info) try {
   value.frameMemoryMs = std::chrono::duration<double, std::milli>(accounted - drawn).count();
   return undefined(env);
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what());
-  return nullptr;
+  return throwException(env, error);
 } catch (...) {
-  napi_throw_error(env, nullptr, "renderFrame failed");
-  return nullptr;
+  return throwError(env, "renderFrame failed");
 }
 
 // Scene-only; never touches the window framebuffer.
@@ -566,11 +550,9 @@ napi_value renderScene(napi_env env, napi_callback_info) try {
   syncExternalMemory(env);
   return undefined(env);
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what());
-  return nullptr;
+  return throwException(env, error);
 } catch (...) {
-  napi_throw_error(env, nullptr, "renderScene failed");
-  return nullptr;
+  return throwError(env, "renderScene failed");
 }
 
 napi_value swapFrame(napi_env env, napi_callback_info) try {
@@ -578,11 +560,9 @@ napi_value swapFrame(napi_env env, napi_callback_info) try {
   value.platform.swap();
   return undefined(env);
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what());
-  return nullptr;
+  return throwException(env, error);
 } catch (...) {
-  napi_throw_error(env, nullptr, "swapFrame failed");
-  return nullptr;
+  return throwError(env, "swapFrame failed");
 }
 
 napi_value rendererStats(napi_env env, napi_callback_info) try {
@@ -681,8 +661,8 @@ napi_value rendererStats(napi_env env, napi_callback_info) try {
     check(env, napi_set_named_property(env, result, name, number(env, static_cast<double>(value))),
       "cannot set renderer target memory/cache stats");
   }
-  napi_set_named_property(env, result, "tileGeometryGpuBytes", number(env, host(env).renderer.tileGeometryGpuBytes()));
-  napi_set_named_property(env, result, "tileGeometryCpuBytes", number(env, host(env).renderer.tileGeometryCpuBytes()));
+  check(env, napi_set_named_property(env, result, "tileGeometryGpuBytes", number(env, host(env).renderer.tileGeometryGpuBytes())), "cannot set property");
+  check(env, napi_set_named_property(env, result, "tileGeometryCpuBytes", number(env, host(env).renderer.tileGeometryCpuBytes())), "cannot set property");
   check(env, napi_set_named_property(env, result, "filterTargetClears",
     number(env, static_cast<double>(stats.filterTargetClears))),
     "cannot set filter target clears");
@@ -724,19 +704,16 @@ napi_value rendererStats(napi_env env, napi_callback_info) try {
     "cannot set renderer mesh draws");
   return result;
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what());
-  return nullptr;
+  return throwException(env, error);
 }
 
 napi_value quit(napi_env env, napi_callback_info) try {
   host(env).core.requestQuit();
   return undefined(env);
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what());
-  return nullptr;
+  return throwException(env, error);
 } catch (...) {
-  napi_throw_error(env, nullptr, "quit failed");
-  return nullptr;
+  return throwError(env, "quit failed");
 }
 
 napi_value environment(napi_env env, napi_callback_info info) try {
@@ -744,8 +721,7 @@ napi_value environment(napi_env env, napi_callback_info info) try {
   const char* value = std::getenv(asString(env, args.at(0)).c_str());
   return value ? string(env, value) : undefined(env);
 } catch (const std::exception& error) {
-  napi_throw_type_error(env, nullptr, error.what());
-  return nullptr;
+  return throwException(env, error);
 }
 
 
@@ -759,8 +735,7 @@ napi_value displaySize(napi_env env, napi_callback_info) try {
     number(env, platform.displayHeight())), "cannot set display height");
   return result;
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what());
-  return nullptr;
+  return throwException(env, error);
 }
 
 napi_value windowSize(napi_env env, napi_callback_info) try {
@@ -773,8 +748,7 @@ napi_value windowSize(napi_env env, napi_callback_info) try {
     number(env, platform.windowHeight())), "cannot set window height");
   return result;
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what());
-  return nullptr;
+  return throwException(env, error);
 }
 
 napi_value setWindowTitle(napi_env env, napi_callback_info info) try {
@@ -782,8 +756,7 @@ napi_value setWindowTitle(napi_env env, napi_callback_info info) try {
   host(env).platform.setWindowTitle(asString(env, args.at(0)));
   return undefined(env);
 } catch (const std::exception& error) {
-  napi_throw_type_error(env, nullptr, error.what());
-  return nullptr;
+  return throwException(env, error);
 }
 
 napi_value setFullscreen(napi_env env, napi_callback_info info) try {
@@ -791,44 +764,42 @@ napi_value setFullscreen(napi_env env, napi_callback_info info) try {
   host(env).platform.setFullscreen(asBoolean(env, args.at(0)));
   return undefined(env);
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what());
-  return nullptr;
+  return throwException(env, error);
 }
 
 napi_value isFullscreen(napi_env env, napi_callback_info) try {
   return boolean(env, host(env).platform.fullscreen());
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what());
-  return nullptr;
+  return throwException(env, error);
 }
 
 napi_value screens(napi_env env, napi_callback_info) try {
   napi_value result;
   const int count = SDL_GetNumVideoDisplays();
   if (count < 0) throw std::runtime_error(SDL_GetError());
-  napi_create_array_with_length(env, count, &result);
+  check(env, napi_create_array_with_length(env, count, &result), "cannot create array");
   for (int index = 0; index < count; ++index) {
     SDL_Rect bounds{}, work{};
     if (SDL_GetDisplayBounds(index, &bounds) != 0) throw std::runtime_error(SDL_GetError());
     if (SDL_GetDisplayUsableBounds(index, &work) != 0) work = bounds;
     auto rectangle = [&](const SDL_Rect& value) {
       napi_value object = moduleObject(env);
-      napi_set_named_property(env, object, "x", number(env, value.x));
-      napi_set_named_property(env, object, "y", number(env, value.y));
-      napi_set_named_property(env, object, "width", number(env, value.w));
-      napi_set_named_property(env, object, "height", number(env, value.h));
+      check(env, napi_set_named_property(env, object, "x", number(env, value.x)), "cannot set property");
+      check(env, napi_set_named_property(env, object, "y", number(env, value.y)), "cannot set property");
+      check(env, napi_set_named_property(env, object, "width", number(env, value.w)), "cannot set property");
+      check(env, napi_set_named_property(env, object, "height", number(env, value.h)), "cannot set property");
       return object;
     };
     napi_value screen = moduleObject(env);
-    napi_set_named_property(env, screen, "id", number(env, index));
-    napi_set_named_property(env, screen, "bounds", rectangle(bounds));
-    napi_set_named_property(env, screen, "work_area", rectangle(work));
-    napi_set_named_property(env, screen, "scaleFactor", number(env, 1));
-    napi_set_element(env, result, index, screen);
+    check(env, napi_set_named_property(env, screen, "id", number(env, index)), "cannot set property");
+    check(env, napi_set_named_property(env, screen, "bounds", rectangle(bounds)), "cannot set property");
+    check(env, napi_set_named_property(env, screen, "work_area", rectangle(work)), "cannot set property");
+    check(env, napi_set_named_property(env, screen, "scaleFactor", number(env, 1)), "cannot set property");
+    check(env, napi_set_element(env, result, index, screen), "cannot set array element");
   }
   return result;
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what()); return nullptr;
+  return throwException(env, error);
 }
 
 napi_value windowCommand(napi_env env, napi_callback_info info) try {
@@ -840,7 +811,7 @@ napi_value windowCommand(napi_env env, napi_callback_info info) try {
   host(env).platform.windowCommand(command, static_cast<int>(x), static_cast<int>(y));
   return undefined(env);
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what()); return nullptr;
+  return throwException(env, error);
 }
 
 napi_value interceptWindowClose(napi_env env, napi_callback_info info) try {
@@ -848,23 +819,23 @@ napi_value interceptWindowClose(napi_env env, napi_callback_info info) try {
   host(env).platform.interceptWindowClose(asBoolean(env, args.at(0)));
   return undefined(env);
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what()); return nullptr;
+  return throwException(env, error);
 }
 
 napi_value windowEvents(napi_env env, napi_callback_info) try {
   const auto events = host(env).platform.takeWindowEvents();
   napi_value result;
-  napi_create_array_with_length(env, events.size(), &result);
+  check(env, napi_create_array_with_length(env, events.size(), &result), "cannot create array");
   for (std::size_t index = 0; index < events.size(); ++index) {
     napi_value event = moduleObject(env);
-    napi_set_named_property(env, event, "type", string(env, events[index].type));
-    napi_set_named_property(env, event, "x", number(env, events[index].x));
-    napi_set_named_property(env, event, "y", number(env, events[index].y));
-    napi_set_element(env, result, index, event);
+    check(env, napi_set_named_property(env, event, "type", string(env, events[index].type)), "cannot set property");
+    check(env, napi_set_named_property(env, event, "x", number(env, events[index].x)), "cannot set property");
+    check(env, napi_set_named_property(env, event, "y", number(env, events[index].y)), "cannot set property");
+    check(env, napi_set_element(env, result, index, event), "cannot set array element");
   }
   return result;
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what()); return nullptr;
+  return throwException(env, error);
 }
 
 napi_value clipboardText(napi_env env, napi_callback_info info) try {
@@ -880,7 +851,7 @@ napi_value clipboardText(napi_env env, napi_callback_info info) try {
   SDL_free(text);
   return string(env, value);
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what()); return nullptr;
+  return throwException(env, error);
 }
 
 napi_value openExternal(napi_env env, napi_callback_info info) try {
@@ -903,8 +874,7 @@ napi_value openExternal(napi_env env, napi_callback_info info) try {
   SDL_UnloadObject(library);
   return boolean(env, opened);
 } catch (const std::exception& error) {
-  napi_throw_error(env, nullptr, error.what());
-  return nullptr;
+  return throwException(env, error);
 }
 
 void registerRuntimeBindings(napi_env env, napi_value exports) {

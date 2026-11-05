@@ -508,6 +508,7 @@ if(BUILD_TESTING)
     node-window-layer-clears
     node-mask-pixels
     node-renderer-stats
+    node-binding-errors
     node-empty-sprite
     node-derived-sprite
     node-compact-sprite
@@ -792,7 +793,7 @@ if(BUILD_TESTING)
   set_property(TEST
     native-yanfly-core-text native-srd-shaking-text native-filter-target-lifetime
     native-vfs native-canvas-pixels native-canvas-upload
-    node-pixi-precision node-filter-bounds node-render-to-canvas
+    node-pixi-precision node-filter-bounds node-render-to-canvas node-binding-errors
     node-image-retention node-text-layout node-preparation-progress
     APPEND PROPERTY LABELS smoke)
   add_custom_target(pmjs-native-smoke DEPENDS
