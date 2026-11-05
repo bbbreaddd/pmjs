@@ -52,7 +52,7 @@
     if (!imageDescriptor || fingerprint(imageDescriptor.get) !==
         '30f798057f05d98c5459e7a0953cae3044cad215e470e164230e8df87cfe2ece' ||
         fingerprint(imageDescriptor.set) !==
-        '8498aece9ece6d527f67269ce569c0a8a0ca77d2f0a983f5d643c9354f6761ca') return;
+        'bb8134d8eeab017df6f84f26ac1cdd9c9aaaca9252262c5c8177f5ca55b3c0bf') return;
     var original = methods.rotateHue, sources = new WeakMap();
     function ownData(object, key) {
       var descriptor = object && Object.getOwnPropertyDescriptor(object, key);

@@ -189,6 +189,7 @@
   PMJS.plugins.registerOptimization('YED_Tiled', { id: reflectionId, owner: 'plugins/yed/tiled',
     fallback: 'update all reflection sprites' });
   PMJS.phases.on('afterGuestPlugins', reflectionId, function() {
+    if (!PMJS.optimizations.isEnabled(reflectionId)) return;
     var prototype = Spriteset_Map.prototype;
     var create = prototype.createCharacters, update = prototype.update;
     var model = Game_CharacterBase.prototype.updateReflection;
