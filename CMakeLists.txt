@@ -658,6 +658,11 @@ if(BUILD_TESTING)
       "${CMAKE_CURRENT_SOURCE_DIR}/test/node-canvas-composite.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
     set_tests_properties(node-canvas-composite PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
   endif()
+  add_test(NAME node-bitmap-color COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-bitmap-color.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
+  set_tests_properties(node-bitmap-color PROPERTIES
+    ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy"
+    FIXTURES_REQUIRED pmjs_assets)
   add_test(NAME node-mv-blur COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-blur.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-mv-blur PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
@@ -804,7 +809,7 @@ if(BUILD_TESTING)
     native-yanfly-core-text native-srd-shaking-text native-filter-target-lifetime
     native-vfs native-canvas-pixels native-canvas-upload
     node-pixi-precision node-filter-bounds node-render-to-canvas node-binding-errors
-    node-image-retention node-text-layout node-preparation-progress
+    node-image-retention node-text-layout node-preparation-progress node-bitmap-color
     APPEND PROPERTY LABELS smoke)
   add_custom_target(pmjs-native-smoke DEPENDS
     pmjs_native pmjs-filter-target-lifetime-test pmjs-vfs-test

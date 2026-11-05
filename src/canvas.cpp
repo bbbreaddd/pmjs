@@ -1848,6 +1848,88 @@ std::optional<ImagePixels> CanvasStore::readPixels(CanvasHandle handle, int x,
   return result;
 }
 
+namespace {
+// Uint8ClampedArray rounds halfway cases to even, regardless of the host FP mode.
+std::uint8_t clampedByte(double value) {
+  if (!(value > 0)) return 0;
+  if (value >= 255) return 255;
+  const auto lower = static_cast<unsigned>(value);
+  const auto fraction = value - lower;
+  return lower + (fraction > 0.5 || (fraction == 0.5 && (lower & 1)));
+}
+
+template<class Transform>
+void transformStraightPixels(std::vector<std::uint8_t>& pixels, Transform transform) {
+  for (std::size_t at = 0; at < pixels.size(); at += 4) {
+    std::array<std::uint8_t, 4> straight;
+    convertPixel(pixels.data() + at, PixelEncoding::PremultipliedBGRA8,
+                 straight.data(), PixelEncoding::StraightRGBA8);
+    transform(straight);
+    convertPixel(straight.data(), PixelEncoding::StraightRGBA8,
+                 pixels.data() + at, PixelEncoding::PremultipliedBGRA8);
+  }
+}
+}
+
+bool CanvasStore::adjustTone(CanvasHandle handle, double red, double green, double blue) {
+  return transformColor(handle, false, red, green, blue);
+}
+
+bool CanvasStore::rotateHue(CanvasHandle handle, double offset) {
+  return transformColor(handle, true, offset, 0, 0);
+}
+
+bool CanvasStore::transformColor(CanvasHandle handle, bool hue, double red, double green, double blue) {
+  if (!std::isfinite(red) || !std::isfinite(green) || !std::isfinite(blue))
+    throw std::invalid_argument("non-finite bitmap color adjustment");
+  auto* surface = writableContent(handle);
+  if (!surface || !realizeContent(*surface)) return false;
+  if (!hue) {
+    std::array<std::array<std::uint8_t, 256>, 3> channels;
+    for (unsigned value = 0; value < 256; ++value) {
+      channels[0][value] = clampedByte(value + red);
+      channels[1][value] = clampedByte(value + green);
+      channels[2][value] = clampedByte(value + blue);
+    }
+    transformStraightPixels(surface->pixels, [&](auto& pixel) {
+      for (int channel = 0; channel < 3; ++channel) pixel[channel] = channels[channel][pixel[channel]];
+    });
+  } else {
+    const double offset = std::fmod(std::fmod(red, 360) + 360, 360);
+    transformStraightPixels(surface->pixels, [&](auto& pixel) {
+      const double r = pixel[0], g = pixel[1], b = pixel[2];
+      const double cmin = std::min({r, g, b}), cmax = std::max({r, g, b});
+      const double l = (cmin + cmax) / 2, delta = cmax - cmin;
+      double h = 0, saturation = 0;
+      if (delta > 0) {
+        if (r == cmax) {
+          const double sector = (g - b) / delta + 6;
+          h = 60 * (sector >= 6 ? sector - 6 : sector);
+        }
+        else if (g == cmax) h = 60 * ((b - r) / delta + 2);
+        else h = 60 * ((r - g) / delta + 4);
+        saturation = delta / (255 - std::abs(2 * l - 255));
+      }
+      h += offset;
+      if (h >= 360) h -= 360;
+      const double c = (255 - std::abs(2 * l - 255)) * saturation;
+      const double sector = h / 60;
+      // The bounded positive remainders use exact subtraction of binary integers.
+      const double x = c * (1 - std::abs((sector - 2 * std::floor(sector / 2)) - 1));
+      const double m = l - c / 2, cm = c + m, xm = x + m;
+      const std::array<double, 3> rgb = h < 60 ? std::array<double, 3>{cm, xm, m} :
+        h < 120 ? std::array<double, 3>{xm, cm, m} :
+        h < 180 ? std::array<double, 3>{m, cm, xm} :
+        h < 240 ? std::array<double, 3>{m, xm, cm} :
+        h < 300 ? std::array<double, 3>{xm, m, cm} : std::array<double, 3>{cm, m, xm};
+      for (int channel = 0; channel < 3; ++channel) pixel[channel] = clampedByte(rgb[channel]);
+    });
+  }
+  surface->mayHaveOverAlpha = false;
+  markDirty(*surface, 0, 0, surface->width, surface->height);
+  return true;
+}
+
 bool CanvasStore::writePixels(CanvasHandle handle, int x, int y, int width,
                               int height,
                               const std::vector<std::uint8_t>& pixels, PixelEncoding encoding) {

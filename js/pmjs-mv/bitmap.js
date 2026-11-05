@@ -72,6 +72,44 @@ Bitmap.snap = function(stage) {
   }
 })();
 
+(function installNativeColorTransforms() {
+  [
+    ['adjustTone', 'c4b0d310063fa366854c01e7531c5cfe7b086cdb8e7b4ab245423ae9a5c837fe'],
+    ['rotateHue', 'd06dfb21577dc1c8bf7a9cad27445b6689889bb3114583ada6432ea073be0d01']
+  ].forEach(function(entry) {
+    var name = entry[0], original = Bitmap.prototype[name];
+    if (typeof original !== 'function') return;
+    var id = 'bitmap.native-' + name;
+    PMJS.optimizations.register({ id: id, owner: 'pmjs-mv', fallback: 'stock bitmap pixel loop' });
+    function activate() {
+      if (!PMJS.optimizations.isEnabled(id)) return;
+      if (!PMJS.methods.matchesSource(original, entry[1]) || Bitmap.prototype[name] !== original) {
+        PMJS.optimizations.refuse(id, 'modified Bitmap color method');
+        return;
+      }
+      Bitmap.prototype[name] = function() {
+        var count = name === 'adjustTone' ? 3 : 1;
+        if (!(arguments[0] || count === 3 && (arguments[1] || arguments[2])) ||
+            !(this.width > 0 && this.height > 0)) return;
+        for (var i = 0; i < count; ++i) {
+          if (typeof arguments[i] !== 'number' || !Number.isFinite(arguments[i]))
+            return original.apply(this, arguments);
+        }
+        var context = this._context;
+        if (context.canvas.width !== this.width || context.canvas.height !== this.height ||
+            !PMJS.web.canvas[name](context, arguments[0], arguments[1], arguments[2])) {
+          PMJS.optimizations.reportFallback(id, 'unsupported bitmap pixel context');
+          return original.apply(this, arguments);
+        }
+        this._setDirty();
+      };
+    }
+    if (PMJS.phases && typeof PMJS.phases.on === 'function')
+      PMJS.phases.on('afterGuestPlugins', 'pmjs.mv.native-' + name, activate);
+    else activate();
+  });
+})();
+
 // Register pristine blt fast path with PMJS optimizations registry.
 if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
     typeof PMJS.optimizations.register === 'function') {

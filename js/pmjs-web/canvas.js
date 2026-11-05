@@ -1968,6 +1968,9 @@ function canvasIsUntransformedSourceOver(context) {
 var mvBlurCanvasMethods = ['drawImage', 'fillRect', 'save', 'restore'].map(function(name) {
   return { name: name, method: CanvasContext2D.prototype[name] };
 });
+var bitmapPixelMethods = ['getImageData', 'putImageData'].map(function(name) {
+  return { name: name, method: CanvasContext2D.prototype[name] };
+});
 var nativeTextCanvasMethods = ['fillText', 'strokeText', 'save', 'restore'].map(function(name) {
   return { name: name, method: CanvasContext2D.prototype[name] };
 });
@@ -2012,6 +2015,18 @@ Object.assign(PMJS.web.canvas, {
           return context[entry.name] === entry.method;
         })) return false;
     return NativeHost.canvas.blurMv(context.canvas._ensureNativeCanvas().handle);
+  },
+  adjustTone: function(context, red, green, blue) {
+    if (typeof NativeHost.canvas.adjustTone !== 'function' || !context ||
+        !bitmapPixelMethods.every(function(entry) { return context[entry.name] === entry.method; })) return false;
+    NativeHost.canvas.adjustTone(context.canvas._ensureNativeCanvas().handle, red, green, blue);
+    return true;
+  },
+  rotateHue: function(context, offset) {
+    if (typeof NativeHost.canvas.rotateHue !== 'function' || !context ||
+        !bitmapPixelMethods.every(function(entry) { return context[entry.name] === entry.method; })) return false;
+    NativeHost.canvas.rotateHue(context.canvas._ensureNativeCanvas().handle, offset);
+    return true;
   },
   readPixel: function(canvas, context, x, y) {
     if (canvas && (!canvas.width || !canvas.height)) return [0, 0, 0, 0];
@@ -2067,7 +2082,7 @@ Object.assign(PMJS.web.canvas, {
   }
 });
 
-['blur', 'blurMv', 'drawNativeText'].forEach(function(name) {
+['blur', 'blurMv', 'adjustTone', 'rotateHue', 'drawNativeText'].forEach(function(name) {
   var mutate = PMJS.web.canvas[name];
   PMJS.web.canvas[name] = function(target) {
     var result;

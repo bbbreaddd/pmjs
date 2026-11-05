@@ -184,6 +184,8 @@ class CanvasStore {
   // Replace pixels with a nearest-neighbor orthogonal resample and transparent padding.
   bool copyTransformedPixels(CanvasHandle destination, CanvasHandle source,
     int x, int y, int width, int height, int orientation);
+  bool adjustTone(CanvasHandle handle, double red, double green, double blue);
+  bool rotateHue(CanvasHandle handle, double offset);
   bool blur(CanvasHandle handle);
   // Two additive 3x3 passes over opaque black, using Skia65 byte scaling.
   // Returns false without painting when raw RGB exceeds alpha.
@@ -320,6 +322,7 @@ class CanvasStore {
 
   Content* lookupContent(CanvasHandle handle) const;
   Content* writableContent(CanvasHandle handle);
+  bool transformColor(CanvasHandle handle, bool hue, double red, double green, double blue);
   bool realizeContent(Content& surface);
   bool uploadSurface(Surface& surface);
   void discardCommands(Content& surface);
