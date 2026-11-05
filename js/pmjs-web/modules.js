@@ -352,7 +352,6 @@ var hostProcessPid = typeof process !== 'undefined' ? process.pid : undefined;
 var guestArguments = NativeHost.runtime.arguments || [];
 var nwCompatVersion = PMJS.config.nwVersion || (globalThis.PMJS_RUNTIME_ENGINE === 'mz' ? '0.48.4' : '0.29.0');
 var guestProcess = new NwEventEmitter();
-var guestNodeMajor = 9;
 Object.assign(guestProcess, {
   pid: hostProcessPid,
   platform: nativePlatform.platform,
@@ -411,12 +410,9 @@ globalThis.pmjsReportUnhandledPromiseRejection = function(reason, promise, origi
   guestUnhandledPromiseIds.set(promise, id);
   if (guestProcess.emit('unhandledRejection', reason, promise)) return;
   emitGuestPromiseWarning('UnhandledPromiseRejectionWarning', rejectedValueText(reason));
-  var modeHint = guestNodeMajor >= 12
-    ? ' To terminate the node process on unhandled promise rejection, use the CLI flag `--unhandled-rejections=strict` (see https://nodejs.org/api/cli.html#cli_unhandled_rejections_mode).'
-    : '';
   emitGuestPromiseWarning('UnhandledPromiseRejectionWarning',
     'Unhandled promise rejection. This error originated either by throwing inside of an async function without a catch block, ' +
-    'or by rejecting a promise which was not handled with .catch().' + modeHint + ' (rejection id: ' + id + ')', null,
+    'or by rejecting a promise which was not handled with .catch(). (rejection id: ' + id + ')', null,
     rejectedValueStack(reason));
   if (!guestUnhandledDeprecationWarned) {
     guestUnhandledDeprecationWarned = true;

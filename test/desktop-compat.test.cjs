@@ -323,6 +323,29 @@ test('process.versions and process.version reflect host Node and NW.js compatibi
   assert.equal(context.process.versions['node-webkit'], '0.29.0');
 });
 
+test('guest rejection policy is independent of host Node and NW compatibility versions', () => {
+  for (const [engine, nwVersion] of [['mv', undefined], ['mz', undefined], ['mz', '0.99.0']]) {
+    const context = {
+      process: { versions: { node: '25.4.0', v8: '14.0.0' } },
+      nativePlatform: { platform: 'linux', arch: 'x64' },
+      PMJS_RUNTIME_ENGINE: engine,
+      PMJS: { config: { nwVersion } }
+    };
+    vm.createContext(context);
+    runDesktopModules(context);
+    const warnings = [];
+    context.process.on('warning', warning => warnings.push(warning));
+    context.pmjsReportUnhandledPromiseRejection('first rejection', Promise.resolve(), 'node');
+    context.pmjsReportUnhandledPromiseRejection('second rejection', Promise.resolve(), 'node');
+    assert.equal(context.process.versions.node, '25.4.0');
+    assert.equal(context.process.version, 'v25.4.0');
+    assert.equal(context.process.versions.nw, nwVersion || (engine === 'mz' ? '0.48.4' : '0.29.0'));
+    assert.equal(warnings.filter(warning => warning.name === 'UnhandledPromiseRejectionWarning').length, 4);
+    assert.equal(warnings.filter(warning => warning.code === 'DEP0018').length, 1);
+    assert.ok(warnings.every(warning => !warning.message.includes('--unhandled-rejections')));
+  }
+});
+
 test('guest OS identity queries reach Node while filesystem paths remain virtual', () => {
   const hostOs = require('node:os');
   let network;
