@@ -241,6 +241,7 @@ class Renderer {
     bool pixiVertex = false;
     std::vector<FilterUniform> uniforms;
     bool identityColorMatrixContract = false;
+    std::size_t identityVertexLength = 0;
     std::uint32_t identityProgram = 0;
     std::vector<int> identityUniformLocations{};
     // projectionMatrix, filterArea, filterClamp, uSampler
@@ -452,6 +453,7 @@ class Renderer {
   void queryFilterProgramUniforms();
   TileProgramUniforms queryTileProgramUniforms(std::uint32_t program);
   void createPixiPrograms(const std::string& precision);
+  void ensureIdentityFilterProgram(std::uint32_t handle);
   std::uint32_t linkProgram(const char* vertexSource, const char* fragmentSource);
   std::map<std::pair<std::uint32_t, std::string>, std::uint32_t> shaderStages_;
   std::size_t shaderStageSourceBytes_ = 0;

@@ -619,7 +619,6 @@ std::uint32_t Renderer::createFilterProgram(const std::string& fragmentSource, c
   if (vertexSource.size() > 65536 || vertexSource.find('\0') != std::string::npos)
     throw std::invalid_argument("invalid filter vertex source");
   const GLuint program = linkProgram(vertexSource.empty() ? vertex : vertexSource.c_str(), source.c_str());
-  GLuint identityProgram = 0;
   try {
     FilterProgram result{program, vertexSource + "\n" + source, !vertexSource.empty(), {}};
     constexpr std::array<const char*, 4> builtInUniformNames{
@@ -689,33 +688,11 @@ std::uint32_t Renderer::createFilterProgram(const std::string& fragmentSource, c
       result.uniforms.push_back({key, type, glGetUniformLocation(program, key.c_str()),
         components, count});
     }
-    if (result.identityColorMatrixContract) {
-      auto identitySource = source;
-      constexpr std::array<float, 20> identity{1, 0, 0, 0, 0, 0, 1, 0, 0, 0,
-                                             0, 0, 1, 0, 0, 0, 0, 0, 1, 0};
-      for (std::size_t index = 0; index < identity.size(); ++index) {
-        const auto coefficient = "m[" + std::to_string(index) + "]";
-        for (auto at = identitySource.find(coefficient); at != std::string::npos;
-             at = identitySource.find(coefficient, at + 3)) {
-          identitySource.replace(at, coefficient.size(), identity[index] == 1 ? "1.0" : "0.0");
-        }
-      }
-      // Keep un-premultiplication, mixing and re-premultiplication, as well as
-      // the original vertex program and sampling. Only exact matrix constants fold.
-      result.identityUniformLocations.reserve(result.uniforms.size());
-      result.identityProgram = identityProgram = linkProgram(vertexSource.c_str(), identitySource.c_str());
-      for (std::size_t index = 0; index < builtInUniformNames.size(); ++index) {
-        result.identityBuiltInUniformLocations[index] =
-          glGetUniformLocation(result.identityProgram, builtInUniformNames[index]);
-      }
-      for (const auto& uniform : result.uniforms)
-        result.identityUniformLocations.push_back(glGetUniformLocation(result.identityProgram, uniform.name.c_str()));
-    }
+    if (result.identityColorMatrixContract) result.identityVertexLength = vertexSource.size();
     filterPrograms_.push_back(std::move(result));
     return filterPrograms_.size();
   } catch (...) {
     glDeleteProgram(program);
-    if (identityProgram) glDeleteProgram(identityProgram);
     throw;
   }
 }
@@ -747,6 +724,43 @@ std::uint32_t Renderer::registerFilterPlan(const std::shared_ptr<CustomFilterPla
   const auto handle = nextFilterPlan_++;
   filterPlans_[handle] = plan;
   return handle;
+}
+
+void Renderer::ensureIdentityFilterProgram(std::uint32_t handle) {
+  auto& result = filterPrograms_.at(handle - 1);
+  if (result.identityProgram) return;
+  const auto vertexSource = result.source.substr(0, result.identityVertexLength);
+  const auto source = result.source.substr(result.identityVertexLength + 1);
+  constexpr std::array<const char*, 4> builtInUniformNames{
+    "projectionMatrix", "filterArea", "filterClamp", "uSampler"};
+  std::array<int, 4> builtInLocations{};
+  auto identitySource = source;
+  constexpr std::array<float, 20> identity{1, 0, 0, 0, 0, 0, 1, 0, 0, 0,
+                                           0, 0, 1, 0, 0, 0, 0, 0, 1, 0};
+  for (std::size_t index = 0; index < identity.size(); ++index) {
+    const auto coefficient = "m[" + std::to_string(index) + "]";
+    for (auto at = identitySource.find(coefficient); at != std::string::npos;
+         at = identitySource.find(coefficient, at + 3)) {
+      identitySource.replace(at, coefficient.size(), identity[index] == 1 ? "1.0" : "0.0");
+    }
+  }
+  // Keep un-premultiplication, mixing and re-premultiplication, as well as
+  // the original vertex program and sampling. Only exact matrix constants fold.
+  std::vector<int> locations;
+  locations.reserve(result.uniforms.size());
+  const auto program = linkProgram(vertexSource.c_str(), identitySource.c_str());
+  try {
+    for (std::size_t index = 0; index < builtInUniformNames.size(); ++index)
+      builtInLocations[index] = glGetUniformLocation(program, builtInUniformNames[index]);
+    for (const auto& uniform : result.uniforms)
+      locations.push_back(glGetUniformLocation(program, uniform.name.c_str()));
+    result.identityUniformLocations = std::move(locations);
+    result.identityBuiltInUniformLocations = builtInLocations;
+    result.identityProgram = program;
+  } catch (...) {
+    glDeleteProgram(program);
+    throw;
+  }
 }
 
 bool Renderer::releaseFilterPlan(std::uint32_t handle) {

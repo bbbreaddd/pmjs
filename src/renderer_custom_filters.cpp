@@ -268,6 +268,8 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, RenderTarget& 
   if (!cacheKey.empty()) filterIntermediateUsed_ = true;
   if (cacheHit && diagnostics_) ++stats_.filterIntermediateCacheHits;
   if (frame[2] == 0 || frame[3] == 0) return;
+  const bool identity = isIdentityColorMatrixPlan(plan);
+  if (identity) ensureIdentityFilterProgram(plan.passes.front().program);
   const auto pot = [this](float value) {
     if (!std::isfinite(value) || value > maxTextureSize_)
       throw std::invalid_argument("custom filter target exceeds texture size");
@@ -338,7 +340,6 @@ void Renderer::drawCustomFilterPlan(const CustomFilterPlan& plan, RenderTarget& 
   glBindVertexArray(customFilterVertexArray_);
   glBindBuffer(GL_ARRAY_BUFFER, customFilterVertexBuffer_);
   glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad.data(), GL_STREAM_DRAW);
-  const bool identity = isIdentityColorMatrixPlan(plan);
   for (std::size_t passIndex = cacheHit ? plan.passes.size() - 1 : 0;
        passIndex < plan.passes.size(); ++passIndex) {
     const auto& pass = plan.passes[passIndex];

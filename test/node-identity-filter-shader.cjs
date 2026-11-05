@@ -2,6 +2,7 @@
 process.env.PMJS_GRAPHICS_DIAGNOSTICS = '1';
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const { performance } = require('node:perf_hooks');
 const shaders = require('./helpers/color-matrix-shaders.cjs');
 const native = require(path.resolve(process.argv[2]));
 const [width, height] = (process.argv[4] || '256x64').split('x').map(Number);
@@ -11,7 +12,9 @@ assert.throws(() => native.render.createFilterPlan({frame:[0,0,1,1],resolutions:
   /requires at least one pass/);
 const schema = native.scene.schema, noParent = 0xffffffff;
 const identity = [1,0,0,0,0,0,1,0,0,0,0,0,1,0,0,0,0,0,1,0];
+const creationStarted = performance.now();
 const candidate = native.render.createFilterProgram(shaders.fragment, shaders.vertex);
+const creationMs = performance.now() - creationStarted;
 // A semantically identical, unrecognized program keeps every reference operation.
 const reference = native.render.createFilterProgram(shaders.fragment + '\n// reference\n', shaders.vertex);
 const pot=n=>2**Math.ceil(Math.log2(n));
@@ -116,7 +119,11 @@ function render(program,options={}) {
     native.render.renderToCanvas(target.handle);
     pixels=Buffer.from(native.canvas.readPremultipliedPixels(target.handle,0,0,width,height));
     native.canvas.release(target.handle);
-  } else {native.renderScene();pixels=Buffer.from(native.canvas.captureSceneRawPremultiplied());}
+  } else {
+    native.renderScene();
+    if (options.timingOnly) native.render.finish();
+    else pixels=Buffer.from(native.canvas.captureSceneRawPremultiplied());
+  }
   const after=native.render.stats();
   if(queuedImage) assert.ok(!native.images.memory(100).largest.some(item=>item.handle===queuedImage.handle),
     'queued image ownership ends after rendering');
@@ -141,6 +148,27 @@ function compare(name,options) {
   comparisons++;
 }
 try {
+  if (process.argv.includes('--benchmark')) {
+    const timed = (program, options, count = 1) => {
+      native.render.finish();
+      const start = performance.now();
+      let specialized = 0;
+      for (let frame = 0; frame < count; frame++)
+        specialized += render(program, { ...options, timingOnly: true }).specialized;
+      return { ms: (performance.now() - start) / count, specialized };
+    };
+    const firstNonIdentity = timed(candidate, { offset: 0.1 });
+    const firstIdentity = timed(candidate, {});
+    for (let warm = 0; warm < 3; warm++) { timed(reference, {}); timed(candidate, {}); }
+    const general = [], identity = [];
+    for (let sample = 0; sample < 5; sample++) {
+      const order = sample % 2 ? [[candidate, identity], [reference, general]] :
+        [[reference, general], [candidate, identity]];
+      for (const [program, results] of order) results.push(timed(program, {}, 10));
+    }
+    console.log('identity-benchmark ' + JSON.stringify({ width, height, creationMs,
+      firstNonIdentity, firstIdentity, general, identity }));
+  }
   assert.deepEqual(render(reference,{clearRectangleResolution:2}).pixels,
     render(reference,{clearRectangleResolution:1}).pixels,'rectangle clears use the actual target resolution');
   compare('padded opaque group',{});
