@@ -392,10 +392,8 @@ test('primitive recording ships with the selected Terrax adapter', async () => {
   fs.writeFileSync(path.join(game, 'js/plugins/Terrax_Lighting.js'), '// plugin\n');
   const names = (await compose(game)).modules.map(item => item.module);
   const recorder = 'js/pmjs-web/canvas-primitives.js';
-  const bridge = 'js/pmjs-plugins/terrax/bitmap-primitives.js';
   assert.ok(names.includes(recorder));
-  assert.ok(names.indexOf(recorder) < names.indexOf(bridge));
-  assert.ok(names.indexOf(bridge) < names.indexOf('js/pmjs-plugins/terrax/lighting.js'));
+  assert.ok(names.indexOf(recorder) < names.indexOf('js/pmjs-plugins/terrax/lighting.js'));
   const { loadProfile } = await compositionApi;
   for (const profile of ['mv', 'mz']) {
     const { modules } = loadProfile(runtimeRoot, profile);
@@ -468,12 +466,10 @@ test('portable indexes preserve resolved options and processor identities with o
     assert.deepEqual(indexes[1], indexes[0], 'processor identities, recipes and records must be identical');
   });
 
-test('full-game and demo ISAT inventories remain explicit and preserve adapter order', () => {
+test('ISAT inventory remains explicit and preserves adapter order', () => {
   const output = path.join(temporaryDirectory('pmjs-isat-composition-'), 'bootstrap.js');
-  const inventories = ['entry.json', 'demo/entry.json'].map(file => {
-    const inventory = path.join(runtimeRoot, 'patches/isat', file);
-    return require(inventory).modules.map(module => path.resolve(path.dirname(inventory), module));
-  });
+  const inventory = path.join(runtimeRoot, 'patches/isat/entry.json');
+  const modules = require(inventory).modules.map(module => path.resolve(path.dirname(inventory), module));
   function build(adapters) {
     childProcess.execFileSync(process.execPath, [tool, '--profile', 'mv',
       ...adapters.flatMap(file => ['--adapter', file]), '--output', output]);
@@ -482,25 +478,23 @@ test('full-game and demo ISAT inventories remain explicit and preserve adapter o
     return [...bundle.matchAll(/^\/\/ BEGIN (.+)$/gm)].map(match => match[1]);
   }
   const baseline = build([]);
-  const allNames = inventories.flat().map(file => path.basename(file));
+  const allNames = modules.map(file => path.basename(file));
   assert.ok(baseline.every(name => !allNames.includes(name)));
-  for (const modules of inventories) {
-    assert.equal(new Set(modules).size, modules.length);
-    modules.forEach(file => assert.ok(fs.statSync(file).isFile()));
-    const included = build(modules);
-    const names = modules.map(file => path.basename(file));
-    const positions = names.map(file => included.indexOf(file));
-    assert.ok(positions.every((value, index) => value >= 0 && (!index || value > positions[index - 1])));
-    assert.ok(positions.at(-1) < included.indexOf('js/pmjs-mv/bootstrap.js'));
-    assert.deepEqual(included.filter(name => !baseline.includes(name)), names);
-  }
+  assert.equal(new Set(modules).size, modules.length);
+  modules.forEach(file => assert.ok(fs.statSync(file).isFile()));
+  const included = build(modules);
+  const names = modules.map(file => path.basename(file));
+  const positions = names.map(file => included.indexOf(file));
+  assert.ok(positions.every((value, index) => value >= 0 && (!index || value > positions[index - 1])));
+  assert.ok(positions.at(-1) < included.indexOf('js/pmjs-mv/bootstrap.js'));
+  assert.deepEqual(included.filter(name => !baseline.includes(name)), names);
 });
 
 
 test('adapter selection normalizes manifest and override identities', async () => {
   const root = temporaryDirectory('pmjs-canonical-adapters-');
   const game = writeMvGame(root, { plugins: [{ name: 'yep_coreengine', status: true }] });
-  const selected = async manifest => (await compose(game, manifest)).modules.some(item => item.module === 'js/pmjs-plugins/yanfly/core-text.js');
+  const selected = async manifest => (await compose(game, manifest)).modules.some(item => item.module === 'js/pmjs-plugins/yanfly/core-engine.js');
   assert.equal(await selected({}), true);
   assert.equal(await selected({ adapters: { mode: 'auto', exclude: ['yep_coreengine.JS'] } }), false);
   assert.equal(await selected({ adapters: ['yep_coreengine.js'] }), true);
@@ -529,3 +523,16 @@ test('automatic adapter selection follows truthy plugin status', async () => {
   fs.writeFileSync(path.join(game, 'js/plugins.js'), 'var $plugins = ' + JSON.stringify([{ name: 'YED_Tiled' }]) + ';');
   assert.equal(await selected(), false);
 });
+
+for (const [plugin, module] of [
+  ['Olivia_AnimatedPictures', 'js/pmjs-plugins/olivia/animated-pictures.js'],
+  ['YEP_ItemCore', 'js/pmjs-plugins/yanfly/item-core.js']
+]) {
+  test(`${plugin} selects its shared adapter without game patches`, async () => {
+    const root = temporaryDirectory('pmjs-shared-plugin-');
+    const game = writeMvGame(root, { plugins: [{ name: plugin, status: true }] });
+    const selected = async manifest => (await compose(game, manifest)).modules.some(item => item.module === module);
+    assert.equal(await selected({}), true);
+    assert.equal(await selected({ adapters: { mode: 'auto', exclude: [plugin] } }), false);
+  });
+}

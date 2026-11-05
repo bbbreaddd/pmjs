@@ -36,8 +36,6 @@ function loadRegistrySupport(context) {
     'js/pmjs-web/canvas.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..',
     'js/pmjs-web/canvas-primitives.js'), 'utf8'), context);
-  vm.runInContext(fs.readFileSync(path.join(runtimeRoot,
-    'js/pmjs-plugins/terrax/bitmap-primitives.js'), 'utf8'), context);
 
 }
 
@@ -553,8 +551,29 @@ function recorderHarness() {
   drawing.fill = function() { cpu.push({ fill: true }); };
   const bitmap = { _canvas: canvas, destroy() { return 'guest destroyed'; } };
   const originalFillRect = drawing.fillRect;
-  const recorder = context.PMJS.mv.bitmap.createPrimitiveRecorder(bitmap,
-    (reason, detail) => fallbacks.push({ reason, detail }));
+  function SpritesetMap() {}
+  defineKnownCreateLightmask(SpritesetMap, () => ({ _maskBitmap: bitmap, _sprites: [], _addSprite: knownAddSprite, _removeSprite: knownRemoveSprite }));
+  context.Spriteset_Map = SpritesetMap;
+  context.PMJS.optimizations.reportFallback = (_id, reason, detail) => fallbacks.push({ reason, detail });
+  const update = function() { return this._recordFrame(); };
+  const create = SpritesetMap.prototype.createLightmask;
+  SpritesetMap.prototype.createLightmask = function() {
+    create.call(this);
+    this._lightmask._updateMask = update;
+  };
+  const adapted = reviewedFunctionFixture(fixtureSource, {
+    isKnownTerraxCreateLightmask: SpritesetMap.prototype.createLightmask,
+    isKnownTerraxUpdateMask: update
+  });
+  vm.runInContext(adapted, context);
+  context.PMJS.phases.emit('afterGuestPlugins');
+  const scene = new SpritesetMap();
+  scene.createLightmask();
+  const mask = scene._lightmask;
+  const recorder = { record(callback) {
+    mask._recordFrame = callback;
+    return mask._updateMask();
+  } };
   return { context, canvas, drawing, bitmap, recorder, renders, releases, registrations, cpu, originalFillRect, fallbacks };
 }
 

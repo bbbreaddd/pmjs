@@ -13,10 +13,7 @@
         "YEP_CoreEngine"
       ],
       "modules": [
-        "js/pmjs-plugins/yanfly/core-transforms.js",
-        "js/pmjs-plugins/yanfly/core-character-presentation.js",
-        "js/pmjs-plugins/yanfly/core-text.js",
-        "js/pmjs-plugins/yanfly/core-number-format.js"
+        "js/pmjs-plugins/yanfly/core-engine.js"
       ]
     },
     {
@@ -83,7 +80,6 @@
       ],
       "modules": [
         "js/pmjs-web/canvas-primitives.js",
-        "js/pmjs-plugins/terrax/bitmap-primitives.js",
         "js/pmjs-plugins/terrax/lighting.js"
       ]
     },
@@ -205,6 +201,22 @@
       ],
       "modules": [
         "js/pmjs-plugins/orange/hud-contents.js"
+      ]
+    },
+    {
+      "plugins": [
+        "Olivia_AnimatedPictures"
+      ],
+      "modules": [
+        "js/pmjs-plugins/olivia/animated-pictures.js"
+      ]
+    },
+    {
+      "plugins": [
+        "YEP_ItemCore"
+      ],
+      "modules": [
+        "js/pmjs-plugins/yanfly/item-core.js"
       ]
     }
   ]

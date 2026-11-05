@@ -2,12 +2,6 @@
   "version": 1,
   "description": "Exceptional source provenance records. Ordinary PMJS contributions use the defaults; classifications require source review.",
   "files": {
-    "js/pmjs-plugins/yanfly/core-number-format.js": {
-      "origin": "compatibility",
-      "source": "PMJS",
-      "license": "MIT",
-      "notice": "LICENSE"
-    },
     "js/pmjs-plugins/dreamx/damage-popup-retirement.js": {
       "origin": "compatibility",
       "source": "PMJS",
@@ -101,12 +95,6 @@
       "license": "MIT",
       "notice": "LICENSE"
     },
-    "js/pmjs-plugins/terrax/bitmap-primitives.js": {
-      "origin": "compatibility",
-      "source": "PMJS",
-      "license": "MIT",
-      "notice": "LICENSE"
-    },
     "js/pmjs-plugins/terrax/lighting.js": {
       "origin": "permissive",
       "source": "https://github.com/FreezyFz/TerraxLighting/tree/dac2b0eaf1f8128d705bd471942739deca33363c",
@@ -115,12 +103,6 @@
       "notice": "third_party/terrax.LICENSE"
     },
     "js/pmjs-plugins/yanfly/event-mini-label.js": {
-      "origin": "compatibility",
-      "source": "PMJS",
-      "license": "MIT",
-      "notice": "LICENSE"
-    },
-    "js/pmjs-plugins/yanfly/core-text.js": {
       "origin": "compatibility",
       "source": "PMJS",
       "license": "MIT",
@@ -423,12 +405,6 @@
       "license": "MIT",
       "notice": "third_party/pixi4.LICENSE"
     },
-    "js/pmjs-plugins/yanfly/core-character-presentation.js": {
-      "origin": "original"
-    },
-    "js/pmjs-plugins/yanfly/core-transforms.js": {
-      "origin": "original"
-    },
     "js/pmjs-plugins/yanfly/event-copier.js": {
       "origin": "compatibility",
       "source": "PMJS",
@@ -495,6 +471,24 @@
       "revision": "29 June 2007",
       "license": "License document permits verbatim copying and distribution",
       "notice": "third_party/gcc-runtime.LICENSE"
+    },
+    "js/pmjs-plugins/yanfly/core-engine.js": {
+      "origin": "compatibility",
+      "source": "PMJS",
+      "license": "MIT",
+      "notice": "LICENSE"
+    },
+    "js/pmjs-plugins/olivia/animated-pictures.js": {
+      "origin": "compatibility",
+      "source": "PMJS",
+      "license": "MIT",
+      "notice": "LICENSE"
+    },
+    "js/pmjs-plugins/yanfly/item-core.js": {
+      "origin": "compatibility",
+      "source": "PMJS",
+      "license": "MIT",
+      "notice": "LICENSE"
     }
   },
   "defaults": {

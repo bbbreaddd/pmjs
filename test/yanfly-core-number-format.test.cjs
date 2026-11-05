@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const test = require('node:test');
-const source = fs.readFileSync(require.resolve('../js/pmjs-plugins/yanfly/core-number-format.js'),'utf8');
+const source = fs.readFileSync(require.resolve('../js/pmjs-plugins/yanfly/core-engine.js'),'utf8');
 function fixture({enabled=true,recognized=true}={}) {
   const context=vm.createContext({});
   vm.runInContext(`

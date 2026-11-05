@@ -61,6 +61,7 @@
     "js/pmjs-pixi4/renderer-managers.js",
     "js/pmjs-pixi4/renderer-facade.js",
     "js/pmjs-mv/renderer.js",
+    "js/pmjs-mv/neutral-tone.js",
     "js/pmjs-mv/picture-layer-cache.js",
     "js/pmjs-mv/window-frame.js",
     "js/pmjs-rpgmaker/native-audio.js",

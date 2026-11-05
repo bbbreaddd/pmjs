@@ -94,7 +94,7 @@ test('cached numeric formatting and text measurements activate together', () => 
     };
     const adapters = require('../profiles/plugin-adapters.json').adapters;
     const modules = adapters.find(adapter => adapter.plugins.includes('YEP_CoreEngine')).modules;
-    const module = 'js/pmjs-plugins/yanfly/core-number-format.js';
+    const module = 'js/pmjs-plugins/yanfly/core-engine.js';
     assert.ok(modules.includes(module));
     const source = fs.readFileSync(path.join(__dirname, '..', module), 'utf8');
     vm.runInContext(pinSourceFingerprint(source, 'expected', realm.Yanfly.Util.toGroup), realm);

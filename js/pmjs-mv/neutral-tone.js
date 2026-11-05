@@ -1,10 +1,10 @@
 'use strict';
 
 (function() {
-  var id = 'felvidek.neutral-tone-bypass';
-  PMJS.optimizations.register({ id: id, owner: 'pmjs-felvidek',
+  var id = 'mv.neutral-tone-bypass';
+  PMJS.optimizations.register({ id: id, owner: 'pmjs-mv',
     fallback: 'retain the authored neutral screen-tone composition pass' });
-  PMJS.phases.on('afterGuestPlugins', 'pmjs.felvidek.neutral-tone', function() {
+  PMJS.phases.on('afterGuestPlugins', 'pmjs.mv.neutral-tone', function() {
     if (!PMJS.optimizations.isEnabled(id)) return;
     var prototype = globalThis.Spriteset_Base && Spriteset_Base.prototype;
     var update = prototype && prototype.updateToneChanger;

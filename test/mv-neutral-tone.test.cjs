@@ -6,7 +6,7 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 const crypto = require('node:crypto');
-const source = fs.readFileSync(path.join(__dirname, '../../../patches/felvidek/neutral-tone.js'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '../js/pmjs-mv/neutral-tone.js'), 'utf8');
 
 function fixture({ enabled = true, modified = false } = {}) {
   let phase;
@@ -76,10 +76,10 @@ function fixture({ enabled = true, modified = false } = {}) {
     return 'modified-result';
   };
   const original = proto.updateToneChanger;
-  require('../../helpers/runtime-context.cjs').runModule(context, 'js/pmjs-core/methods.js');
+  require('./helpers/runtime-context.cjs').runModule(context, 'js/pmjs-core/methods.js');
   vm.runInContext(adapted, context);
-  assert.equal(registration.id, 'felvidek.neutral-tone-bypass');
-  assert.equal(registration.owner, 'pmjs-felvidek');
+  assert.equal(registration.id, 'mv.neutral-tone-bypass');
+  assert.equal(registration.owner, 'pmjs-mv');
   phase();
   return { context, original, refusal };
 }
@@ -147,7 +147,7 @@ test('non-neutral filter state and explicitly disabled filters retain their auth
   }
 });
 
-const reference = process.env.PMJS_FELVIDEK_REFERENCE_GAME;
+for (const reference of [process.env.PMJS_FELVIDEK_REFERENCE_GAME, process.env.PMJS_ISAT_REFERENCE_GAME]) {
 test('the reviewed effective engine methods qualify without substituted fingerprints', { skip: !reference }, () => {
   const { context } = fixture({ enabled: false });
   const sprites = fs.readFileSync(path.join(reference, 'js/rpg_sprites.js'), 'utf8');
@@ -180,3 +180,5 @@ test('the reviewed effective engine methods qualify without substituted fingerpr
   assert.equal(refusal, undefined);
   assert.notEqual(context.Spriteset_Base.prototype.updateToneChanger, original);
 });
+
+}

@@ -8,7 +8,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 const { makeBitmapTextHarness } = require('./helpers/bitmap-text-harness.cjs');
 const { pinSourceFingerprint } = require('./helpers/reviewed-function-fixture.cjs');
-const adapter = fs.readFileSync(require.resolve('../js/pmjs-plugins/yanfly/core-text.js'), 'utf8');
+const adapter = fs.readFileSync(require.resolve('../js/pmjs-plugins/yanfly/core-engine.js'), 'utf8');
 const optimization = 'plugins.yanfly.core-native-text';
 
 function mockNative(disabled = false) {
@@ -62,17 +62,17 @@ function harness({ native = mockNative(), disabled = false, beforeInstall, stock
   const boldFont = context.Bitmap.prototype._makeFontNameText;
   if (stockFont) context.Bitmap.prototype._makeFontNameText = originalFont;
   const finalMethod = context.Bitmap.prototype.drawText;
-  const loaded = new Map();
+  const loaded = [];
   context.PMJS.plugins = {
     registerOptimization(_plugin, definition) { context.PMJS.optimizations.register(definition); },
-    onLoaded(name, _owner, callback) { loaded.set(name, callback); }
+    onLoaded(name, _owner, callback) { loaded.push(callback); }
   };
   if (beforeInstall) beforeInstall(context);
   let source = pinSourceFingerprint(adapter, 'stockFontHash', originalFont);
   source = pinSourceFingerprint(source, 'boldFontHash', boldFont);
   vm.runInContext(source, context);
   return { context, native, original, originalFont, finalMethod,
-    install() { loaded.get('YEP_CoreEngine')(); context.PMJS.phases.emit('afterGuestPlugins'); },
+    install() { loaded.forEach(callback => callback()); context.PMJS.phases.emit('afterGuestPlugins'); },
     bitmap() { return new context.Bitmap(240, 72); } };
 }
 
