@@ -171,6 +171,43 @@ test('checkpoints above the read budget keep the last valid state', async t => {
   assert.ok(f.warnings.some(message => message.includes('exceeds the storage budget')));
 });
 
+test('a port-only session keeps image and map receipts for the phases it did not run', async t => {
+  const f = fixture();
+  const source = path.join(f.gameRoot, 'img/pictures/a.png');
+  const first = await openPreparation({ ...f.options });
+  first.data.files[source] = { identity: '0:1:2:3:4:5', hash: hash(PNG) };
+  first.markDirty();
+  await first.checkpoint();
+  await first.close();
+
+  const portOnly = await openPreparation({ ...f.options });
+  portOnly.startPhase('port');
+  portOnly.finishPhase('port', 'completed');
+  await portOnly.finish();
+  await portOnly.close();
+
+  const reopened = await openPreparation({ ...f.options });
+  t.after(() => reopened.close());
+  assert.deepEqual(reopened.data.files[source], { identity: '0:1:2:3:4:5', hash: hash(PNG) },
+    'a phase that did not run must not lose its file receipts');
+});
+
+test('an images-only session keeps map receipts', async t => {
+  const f = fixture();
+  const mapSource = path.join(f.gameRoot, 'data/Map001.json');
+  const first = await openPreparation({ ...f.options });
+  first.data.files[mapSource] = { identity: '0:1:2:3:4:5', hash: hash('map') };
+  first.markDirty();
+  await first.checkpoint();
+  await first.close();
+
+  await f.run({ maps: false });
+
+  const reopened = await openPreparation({ ...f.options });
+  t.after(() => reopened.close());
+  assert.ok(reopened.data.files[mapSource], 'map receipts survive an images-only preparation');
+});
+
 test('successful finalization checkpoints once and close does not serialize state again', async t => {
   const f = fixture(), session = await openPreparation({ ...f.options });
   let serializations = 0;

@@ -248,9 +248,12 @@ async function openPreparation({ gameRoot, cacheRoot, native, verifyHashes = fal
         for (const [file, receipt] of Object.entries(session.files.receipts)) {
           if (data.files[file] !== receipt) { data.files[file] = receipt; stateDirty = true; }
         }
-        for (const file of Object.keys(data.files)) if (!session.files.receipts[file]) {
-          delete data.files[file]; stateDirty = true;
-        }
+        // Partial sessions do not visit every phase's files. Prune receipts only
+        // after both image and map preparation complete.
+        if (session.phaseStates.get('images') === 'completed' && session.phaseStates.get('maps') === 'completed')
+          for (const file of Object.keys(data.files)) if (!session.files.receipts[file]) {
+            delete data.files[file]; stateDirty = true;
+          }
         const committed = await session.checkpoint();
         if (!offline) {
           const previousLease = installedLeases.get(native.assets);
