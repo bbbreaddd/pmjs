@@ -128,8 +128,11 @@ PMJS.mv.pictureLayerCache = (function() {
     release(state);
     if (!next) { state.stable = []; state.failed = false; counters.fallbacks++; return; }
     if (!equal(previous, next)) state.failed = false;
-    state.stable = next.ends.map(function(_, index) {
-      return equalPrefix(previous, next, index + 1) ? (state.stable[index] || 0) + 1 : 0;
+    var matched = 0;
+    state.stable = next.ends.map(function(end, index) {
+      if (!previous || previous.ends[index] !== end) return 0;
+      while (matched < end && previous[matched] === next[matched]) matched++;
+      return matched === end ? (state.stable[index] || 0) + 1 : 0;
     });
     if (state.failed) return;
     var count = 0;
