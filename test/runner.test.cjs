@@ -982,3 +982,16 @@ test('supervisor forwards termination to the active session without starting a r
     assert.equal(result.signal, 'SIGTERM'); assert.equal(launches, 1);
   } finally { watcher.close(); }
 });
+
+test('program cache uses the writable preparation root during native initialization', async () => {
+  for (const configured of [false, true]) {
+    const options = fixture('globalThis.__pmjsTick = () => {}; globalThis.__pmjsRender = () => {};');
+    options.assetPreparation = 'off'; options.mapPreparation = 'off';
+    if (configured) options.assetCacheRoot = path.join(options.saveRoot, 'custom-cache');
+    fs.appendFileSync(options.addon,
+      '\nmodule.exports.initialize = options => { module.exports.initialization = options; };');
+    await run(options);
+    assert.equal(require(options.addon).initialization.programCacheRoot,
+      path.join(options.assetCacheRoot || path.join(options.saveRoot, 'asset-cache'), 'programs'));
+  }
+});

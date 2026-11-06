@@ -35,7 +35,7 @@ struct AudioView {
 struct State {
   State(const std::string& root, int initWidth, int initHeight,
         const std::string& assetRoot, const std::string& windowTitle,
-        std::size_t imageWarmCacheBytes);
+        std::size_t imageWarmCacheBytes, const std::string& programCacheRoot);
   ~State();
 
   pmjs::RuntimeCore core;

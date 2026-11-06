@@ -130,7 +130,8 @@ napi_value initialize(napi_env env, napi_callback_info info) try {
   if (title.empty()) throw std::runtime_error("windowTitle must not be empty");
   state = std::make_unique<State>(
     asString(env, property(env, options, "gameRoot")), width, height,
-    assetRoot, title, imageWarmCacheBytes);
+    assetRoot, title, imageWarmCacheBytes,
+    hasProperty(env, options, "programCacheRoot") ? asString(env, property(env, options, "programCacheRoot")) : "");
   state->images.setPreparedFrameCacheBudget(preparedFrameCacheBytes);
   state->images.setCompactSamplingEnabled(compactSampling);
   state->images.setPreparedCropUploadsEnabled(cropUploads);

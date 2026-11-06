@@ -697,7 +697,8 @@ bool ImageStore::detachSharedTexture(Slot& slot) {
   return true;
 }
 
-ImageStore::ImageStore() : preparedPool_(std::make_shared<PreparedPool>()) {
+ImageStore::ImageStore(std::filesystem::path programCacheRoot)
+    : programCache_(std::move(programCacheRoot)), preparedPool_(std::make_shared<PreparedPool>()) {
   const char* diagnostics = std::getenv("PMJS_GRAPHICS_DIAGNOSTICS");
   tileDiagnostics_ = diagnostics && std::string(diagnostics) == "1";
 }
@@ -3189,15 +3190,21 @@ std::optional<ImageInfo> ImageStore::convertPreparedFrame(ImageHandle handle,
       if (!ok) { glDeleteShader(shader); throw std::runtime_error("prepared frame shader compilation failed"); }
       return shader;
     };
-    const auto vs = compile(GL_VERTEX_SHADER, vertex);
-    GLuint fs = 0;
-    try { fs = compile(GL_FRAGMENT_SHADER, fragment); }
-    catch (...) { glDeleteShader(vs); throw; }
-    GLuint program = glCreateProgram();
-    glAttachShader(program, vs); glAttachShader(program, fs); glLinkProgram(program);
-    glDeleteShader(vs); glDeleteShader(fs);
-    GLint ok = 0; glGetProgramiv(program, GL_LINK_STATUS, &ok);
-    if (!ok) { glDeleteProgram(program); throw std::runtime_error("prepared frame shader link failed"); }
+    const auto cacheKey = programCache_.key(vertex, fragment);
+    GLuint program = programCache_.load(cacheKey);
+    if (!program) {
+      const auto vs = compile(GL_VERTEX_SHADER, vertex);
+      GLuint fs = 0;
+      try { fs = compile(GL_FRAGMENT_SHADER, fragment); }
+      catch (...) { glDeleteShader(vs); throw; }
+      program = glCreateProgram();
+      programCache_.prepare(program, cacheKey);
+      glAttachShader(program, vs); glAttachShader(program, fs); glLinkProgram(program);
+      glDeleteShader(vs); glDeleteShader(fs);
+      GLint ok = 0; glGetProgramiv(program, GL_LINK_STATUS, &ok);
+      if (!ok) { glDeleteProgram(program); throw std::runtime_error("prepared frame shader link failed"); }
+      programCache_.store(cacheKey, program);
+    }
     preparedCopyProgram_ = program;
     glGenVertexArrays(1, &preparedCopyVao_);
   }

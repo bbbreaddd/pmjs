@@ -54,34 +54,42 @@ constexpr std::uint16_t primitiveSurfaceGenerationMask = 0x3fffU;
 }  // namespace
 
 std::uint32_t Renderer::linkProgram(const char* vertexSource, const char* fragmentSource) {
-  const auto stage = [this](GLenum type, const char* source) {
-    auto key = std::make_pair(static_cast<std::uint32_t>(type), std::string(source));
-    const auto found = shaderStages_.find(key);
-    if (found != shaderStages_.end()) return ShaderStage(found->second, false);
-    ShaderStage compiled(compileShader(type, source), true);
-    constexpr std::size_t maxStages = 256, maxSourceBytes = 8 * 1024 * 1024;
-    if (shaderStages_.size() < maxStages && key.second.size() <= maxSourceBytes - shaderStageSourceBytes_) {
-      const auto bytes = key.second.size();
-      shaderStages_.emplace(std::move(key), compiled.handle);
-      shaderStageSourceBytes_ += bytes;
-      compiled.temporary = false;
-    }
-    return compiled;
-  };
-  const auto vertex = stage(GL_VERTEX_SHADER, vertexSource);
-  const auto fragment = stage(GL_FRAGMENT_SHADER, fragmentSource);
-  const GLuint program = glCreateProgram();
-  glAttachShader(program, vertex.handle);
-  glAttachShader(program, fragment.handle);
-  glBindAttribLocation(program, 0, "position");
-  glBindAttribLocation(program, 1, "uv");
-  glBindAttribLocation(program, 0, "aVertexPosition");
-  glBindAttribLocation(program, 1, "aTextureCoord");
-  glLinkProgram(program);
+  constexpr std::array<ProgramAttributeBinding, 4> attributes{{
+    {0, "position"}, {1, "uv"}, {0, "aVertexPosition"}, {1, "aTextureCoord"}}};
+  auto& cache = images_.programCache();
+  const auto cacheKey = cache.key(vertexSource, fragmentSource, attributes);
+  GLuint program = cache.load(cacheKey);
+  const bool binaryLoaded = program != 0;
+  if (!program) {
+    const auto stage = [this](GLenum type, const char* source) {
+      auto key = std::make_pair(static_cast<std::uint32_t>(type), std::string(source));
+      const auto found = shaderStages_.find(key);
+      if (found != shaderStages_.end()) return ShaderStage(found->second, false);
+      ShaderStage compiled(compileShader(type, source), true);
+      constexpr std::size_t maxStages = 256, maxSourceBytes = 8 * 1024 * 1024;
+      if (shaderStages_.size() < maxStages && key.second.size() <= maxSourceBytes - shaderStageSourceBytes_) {
+        const auto bytes = key.second.size();
+        shaderStages_.emplace(std::move(key), compiled.handle);
+        shaderStageSourceBytes_ += bytes;
+        compiled.temporary = false;
+      }
+      return compiled;
+    };
+    const auto vertex = stage(GL_VERTEX_SHADER, vertexSource);
+    const auto fragment = stage(GL_FRAGMENT_SHADER, fragmentSource);
+    program = glCreateProgram();
+    cache.prepare(program, cacheKey);
+    glAttachShader(program, vertex.handle);
+    glAttachShader(program, fragment.handle);
+    for (const auto& attribute : attributes)
+      glBindAttribLocation(program, attribute.location, attribute.name);
+    glLinkProgram(program);
+  }
 
   GLint linked = GL_FALSE;
   glGetProgramiv(program, GL_LINK_STATUS, &linked);
   if (linked == GL_TRUE) {
+    if (!binaryLoaded) cache.store(cacheKey, program);
     const GLint projection = glGetUniformLocation(program, "targetProjection");
     if (projection >= 0) {
       GLint previous = 0;

@@ -20,7 +20,7 @@ namespace pmjs {
 class RuntimeCore {
  public:
   RuntimeCore(const std::filesystem::path& root, int width, int height,
-              const std::string& title);
+              const std::string& title, const std::filesystem::path& programCacheRoot = {});
 
   std::optional<ImageHandle> resolveImage(std::uint32_t handle);
   bool submitScene(std::uint32_t version, const std::uint32_t* metadata,

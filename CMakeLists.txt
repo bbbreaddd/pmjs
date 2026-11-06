@@ -111,6 +111,7 @@ set(PMJS_RUNTIME_SOURCES
   src/renderer_core.cpp
   src/renderer_draw.cpp
   src/renderer_custom_filters.cpp
+  src/program_binary_cache.cpp
   src/renderer_programs.cpp
   src/renderer_scene.cpp
   src/resources.cpp
@@ -298,6 +299,13 @@ if(BUILD_TESTING)
       "-Wl,--wrap=glTexImage2D" "-Wl,--wrap=glBufferData" "-Wl,--wrap=glGetError")
     add_test(NAME native-tile-allocation-failure COMMAND ${XVFB_RUN} -a $<TARGET_FILE:pmjs-tile-allocation-failure-test>)
     set_tests_properties(native-tile-allocation-failure PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
+    add_executable(pmjs-program-binary-cache-test test/program-binary-cache.cpp)
+    target_link_libraries(pmjs-program-binary-cache-test PRIVATE pmjs_runtime)
+    target_compile_options(pmjs-program-binary-cache-test PRIVATE -UNDEBUG)
+    add_test(NAME native-program-binary-cache COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/node-program-binary-cache.cjs" $<TARGET_FILE:pmjs-program-binary-cache-test>)
+    set_tests_properties(native-program-binary-cache PROPERTIES
+      ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
     add_executable(pmjs-renderer-shader-cache-test test/renderer-shader-cache.cpp)
     target_link_libraries(pmjs-renderer-shader-cache-test PRIVATE pmjs_runtime)
     target_compile_options(pmjs-renderer-shader-cache-test PRIVATE -UNDEBUG)

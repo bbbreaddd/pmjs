@@ -1,5 +1,7 @@
 #pragma once
 
+#include "program_binary_cache.hpp"
+
 #include "image_storage.hpp"
 #include "memory_accounting.hpp"
 
@@ -190,7 +192,8 @@ class ImageStore {
   static constexpr std::size_t tileVerificationCacheEntryLimit = 64;
   static constexpr std::size_t tileVerificationCacheByteLimit = 32U * 1024U;
 
-  ImageStore();
+  explicit ImageStore(std::filesystem::path programCacheRoot = {});
+  ProgramBinaryCache& programCache() { return programCache_; }
   ~ImageStore();
 
   ImageStore(const ImageStore&) = delete;
@@ -416,6 +419,7 @@ class ImageStore {
   std::uint64_t textureArtifactLoads_ = 0, textureArtifactFailures_ = 0, sourceTextureBuilds_ = 0;
   std::size_t textureArtifactStagingBytes_ = 0;
   std::string textureArtifactFailureReason_;
+  ProgramBinaryCache programCache_;
   std::shared_ptr<PreparedPool> preparedPool_;
   std::unordered_map<std::string, std::weak_ptr<SharedTexture>> preparedTextures_;
   std::unordered_map<std::string, std::weak_ptr<PaletteBacking>> preparedPalettes_;

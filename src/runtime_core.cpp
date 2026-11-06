@@ -10,8 +10,8 @@
 namespace pmjs {
 
 RuntimeCore::RuntimeCore(const std::filesystem::path& root, int width, int height,
-                         const std::string& title)
-    : width_(width), height_(height), platform_(width, height, title),
+                         const std::string& title, const std::filesystem::path& programCacheRoot)
+    : width_(width), height_(height), platform_(width, height, title), images_(programCacheRoot),
       canvases_(images_), renderer_(width, height, images_), vfs_(root),
       media_(root),
       dialog_(platform_, renderer_, canvases_, vfs_, width, height), effects_(vfs_, media_) {

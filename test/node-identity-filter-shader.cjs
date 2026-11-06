@@ -7,7 +7,8 @@ const shaders = require('./helpers/color-matrix-shaders.cjs');
 const native = require(path.resolve(process.argv[2]));
 const [width, height] = (process.argv[4] || '256x64').split('x').map(Number);
 native.initialize({gameRoot: path.resolve(process.argv[3]), width, height,
-  windowTitle: 'identity filter shader'});
+  windowTitle: 'identity filter shader',
+  ...(process.env.PMJS_TEST_PROGRAM_CACHE_ROOT ? { programCacheRoot: process.env.PMJS_TEST_PROGRAM_CACHE_ROOT } : {}) });
 assert.throws(() => native.render.createFilterPlan({frame:[0,0,1,1],resolutions:[1,1],passes:[]}),
   /requires at least one pass/);
 const schema = native.scene.schema, noParent = 0xffffffff;

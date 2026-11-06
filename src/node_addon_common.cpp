@@ -5,8 +5,8 @@ namespace pmjs::addon {
 
 State::State(const std::string& root, int initWidth, int initHeight,
       const std::string& assetRoot, const std::string& windowTitle,
-      std::size_t imageWarmCacheBytes)
-    : core(root, initWidth, initHeight, windowTitle),
+      std::size_t imageWarmCacheBytes, const std::string& programCacheRoot)
+    : core(root, initWidth, initHeight, windowTitle, programCacheRoot),
       width(core.width()), height(core.height()), platform(core.platform()),
       images(core.images()), canvases(core.canvases()),
       renderer(core.renderer()), vfs(core.vfs()) {

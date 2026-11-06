@@ -344,6 +344,7 @@ async function runSession(input, diagnostics, setNative) {
   setNative(native);
   measureStartup('native-initialize', () => native.initialize({ gameRoot: options.gameRoot, assetRoot: options.assetRoot,
     width: options.width, height: options.height, windowTitle: options.title,
+    programCacheRoot: path.join(options.assetPreparation.cacheRoot, 'programs'),
     ...(options.imageWarmCacheBytes === undefined ? {} :
       { imageWarmCacheBytes: options.imageWarmCacheBytes }),
     preparedFrameCacheBytes: options.preparedFrameCacheBytes,
