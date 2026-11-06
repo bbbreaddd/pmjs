@@ -80,6 +80,23 @@ function pmjsScheduleImageCacheTrim() {
 PMJS.images.onLoadComplete(pmjsScheduleImageCacheTrim);
 
 PMJS.mv = PMJS.mv || {};
+PMJS.mv.imageCache = { maxIdleMs: 60000, checks: 0, expired: 0 };
+if (typeof setInterval === 'function' && typeof ImageCache !== 'undefined') {
+  setInterval(function() {
+    var cache = typeof ImageManager !== 'undefined' && ImageManager._imageCache;
+    if (!cache || !cache._items || typeof cache._mustBeHeld !== 'function') return;
+    var policy = PMJS.mv.imageCache, now = Date.now();
+    policy.checks++;
+    Object.keys(cache._items).forEach(function(key) {
+      var item = cache._items[key];
+      var touched = Number(item && item.touch);
+      if (!item || !Number.isFinite(touched) || now - touched <= policy.maxIdleMs || cache._mustBeHeld(item)) return;
+      // Only release cache ownership. Scene and plugin references keep their Bitmap alive.
+      delete cache._items[key];
+      policy.expired++;
+    });
+  }, 1000);
+}
 PMJS.mv.bitmap = PMJS.mv.bitmap || {};
 // Preserve the stock request and native ownership for file-backed plugin adapters.
 PMJS.mv.bitmap.requestImageFile = pmjsBitmapRequestImageWrap()(Bitmap.prototype._requestImage);

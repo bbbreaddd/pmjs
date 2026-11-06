@@ -493,9 +493,7 @@ class ImageStore {
     std::uint32_t pins = 0;
     std::uint64_t lastUsedSerial = 0;
     mutable std::uint16_t cpuPixelFrames = 0;
-    // Atlas CPU pixels are retained for the lifetime of the slot so blt()
-    // never pays a second pixel readback. Freed only in destroySlot
-    // alongside the GPU texture.
+    // Prepared CPU copies age out while their immutable backing remains reloadable.
     bool gpuOnly = false;
     bool renderTarget = false;
     bool premultiplied = false;

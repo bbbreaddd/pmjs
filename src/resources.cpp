@@ -58,6 +58,7 @@ ImageEncryptionKey imageEncryptionKey(const std::string& hex) {
 }
 
 namespace {
+constexpr std::uint16_t retainedCpuIdleFrames = 3600;
 constexpr std::uint32_t indexMask = 0xffffU;
 constexpr std::uint16_t generationMask = 0x7fffU;
 constexpr std::size_t preparedPageCacheBudget = 32U * 1024U * 1024U;
@@ -881,7 +882,7 @@ bool ImageStore::retainCpuPixels(ImageHandle handle) {
   if (slot.astc && !promoteAstc(slot)) return false;
   if (slot.cachedPixels) {
     slot.retainCpuPixels = true;
-    slot.cpuPixelFrames = 0;
+    slot.cpuPixelFrames = slot.prepared ? retainedCpuIdleFrames : 0;
     if (slot.prepared) for (auto& page : slot.prepared->pages) page.setPixels({});
     return true;
   }
@@ -891,7 +892,7 @@ bool ImageStore::retainCpuPixels(ImageHandle handle) {
     readTexturePixels(*info, slot.storage));
   if (!slot.cachedPixels) return false;
   slot.retainCpuPixels = true;
-  slot.cpuPixelFrames = 0;
+  slot.cpuPixelFrames = slot.prepared ? retainedCpuIdleFrames : 0;
   if (slot.prepared) for (auto& page : slot.prepared->pages) page.setPixels({});
   return true;
 }
@@ -928,14 +929,15 @@ const ImagePixels* ImageStore::readPixels(ImageHandle handle) const {
   auto& slot = const_cast<ImageStore*>(this)->slots_[encodedIndex - 1U];
   if (slot.astc && !const_cast<ImageStore*>(this)->promoteAstc(slot)) return nullptr;
   if (slot.cachedPixels) {
-    if (!slot.retainCpuPixels && !slot.cacheKey.empty()) slot.cpuPixelFrames = 60;
+    if (slot.prepared && slot.retainCpuPixels) slot.cpuPixelFrames = retainedCpuIdleFrames;
+    else if (!slot.retainCpuPixels && !slot.cacheKey.empty()) slot.cpuPixelFrames = 60;
     return &*slot.cachedPixels;
   }
   if (slot.cacheKey.empty() && !slot.palette && !slot.tiles) return nullptr;
   setCachedPixels(slot, (slot.palette || slot.prepared || slot.tiles) ?
     readPixelsRegion(handle, 0, 0, info->width, info->height) :
     readTexturePixels(*info, slot.storage));
-  if (!slot.retainCpuPixels) slot.cpuPixelFrames = 60;
+  slot.cpuPixelFrames = slot.retainCpuPixels && slot.prepared ? retainedCpuIdleFrames : 60;
   return slot.cachedPixels ? &*slot.cachedPixels : nullptr;
 }
 
@@ -2158,9 +2160,8 @@ void ImageStore::update() {
   for (std::size_t index = 0; index < slots_.size(); ++index) {
     auto& slot = slots_[index];
     if (!slot.live) continue;
-    // Explicitly retained slots keep CPU pixels for the life of the texture;
-    // on-demand buffers age out here.
-    if (slot.cachedPixels && !slot.retainCpuPixels) {
+    // Prepared backing can reconstruct an idle CPU copy without replacing its image handle.
+    if (slot.cachedPixels && (!slot.retainCpuPixels || (slot.prepared && !slot.pins))) {
       if (slot.cpuPixelFrames > 0) {
         --slot.cpuPixelFrames;
       } else {
@@ -2547,7 +2548,8 @@ std::optional<ImageInfo> ImageStore::installPreparedLoad(const ImageFileSource& 
     slot.opaque = known->opaque;
     slot.opacityRevision = slot.contentRevision;
   }
-  slot.retainCpuPixels = retainCpu; setCachedPixels(slot, std::move(pixels)); slot.cpuPixelFrames = 0;
+  slot.retainCpuPixels = retainCpu; setCachedPixels(slot, std::move(pixels));
+  slot.cpuPixelFrames = retainCpu ? retainedCpuIdleFrames : 0;
   slot.mipmapsReady = slot.premultipliedMipmapsReady = false;
   slot.mipmapBytes = slot.premultipliedMipmapBytes = 0;
   slot.live = true; markUsed(slot); ++liveCount_; ++preparedHits_;
@@ -2671,6 +2673,15 @@ std::optional<ImagePixels> ImageStore::readPixelsRegion(ImageHandle handle,
   if (!info || !extent || x < 0 || y < 0 || x > info->width - width ||
       y > info->height - height) return std::nullopt;
   const auto& slot = slots_[(handle & indexMask) - 1U];
+  if (slot.prepared && slot.cachedPixels) {
+    slot.cpuPixelFrames = slot.retainCpuPixels ? retainedCpuIdleFrames : 60;
+    const auto& full = *slot.cachedPixels;
+    ImagePixels result{width, height, std::vector<std::uint8_t>(extent->rgbaBytes)};
+    for (int row = 0; row < height; ++row)
+      std::copy_n(full.rgba.data() + (static_cast<std::size_t>(y + row) * full.width + x) * 4,
+                  static_cast<std::size_t>(width) * 4, result.rgba.data() + static_cast<std::size_t>(row) * width * 4);
+    return result;
+  }
   // Prepared files remain authoritative when a GPU palette view also exists.
   if (slot.palette && !slot.prepared) return readPalettePixels(slot, std::array<int, 4>{x, y, width, height});
   if (slot.tiles) return readTileRegion(slot, x, y, width, height);
