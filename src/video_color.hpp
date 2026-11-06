@@ -55,7 +55,7 @@ struct VideoYuv420 {
       {1.1643836498260498F, -0.39176228642463684F, -0.8129676580429077F, 0.529305636882782F},
       {1.1643835306167603F, 2.0172319412231445F, 1.2258721153739498e-08F, -1.081675410270691F}
     };
-    static const auto products = [&matrix] {
+    static const auto products = [] {
       std::array<std::array<std::array<float, 256>, 3>, 3> values{};
       for (int channel = 0; channel < 3; ++channel)
         for (int component = 0; component < 3; ++component)
