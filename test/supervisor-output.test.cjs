@@ -8,6 +8,22 @@ const { once } = require('node:events');
 const test = require('node:test');
 const { temporaryDirectory } = require('./helpers/temp.cjs');
 
+test('session workers expose collection without requiring launcher flags', async () => {
+  const directory = temporaryDirectory('supervisor-collection-');
+  const worker = path.join(directory, 'worker.cjs');
+  const resultFile = path.join(directory, 'collection.json');
+  fs.writeFileSync(worker, `
+    process.once('message', () => {
+      require('node:fs').writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({ gc: typeof global.gc }));
+      process.send({ type: 'pmjs-session-complete', reload: false }, () => process.exit(0));
+    });
+  `);
+  const { runSupervised } = require('../runner/supervisor.cjs');
+  const result = await runSupervised({ saveRoot: path.join(directory, 'saves') }, { worker });
+  assert.equal(result.code, 0);
+  assert.equal(JSON.parse(fs.readFileSync(resultFile, 'utf8')).gc, 'function');
+});
+
 for (const stream of ['stdout', 'stderr']) {
   test(`a broken ${stream} reader preserves worker logs across reloads`, async () => {
     const directory = temporaryDirectory('supervisor-output-');

@@ -1,6 +1,7 @@
 'use strict';
 
 const hostProcess = process;
+const hostCollectGarbage = globalThis.gc;
 const { createSubprocesses } = require('./subprocess.cjs');
 const { installPromiseRejectionBridge } = require('./promise-rejections.cjs');
 const { reader: portArtifactReader } = require('./port-preparation.cjs');
@@ -353,7 +354,8 @@ async function runSession(input, diagnostics, setNative) {
   diagnostics.stage('native-ready');
   const memoryReclaimer = createMemoryReclaimer({ native,
     readMemory: () => reclamationMemoryState({ processObject: hostProcess }),
-    readRss: () => hostProcess.memoryUsage.rss(), now: () => performance.now() });
+    readRss: () => hostProcess.memoryUsage.rss(), now: () => performance.now(),
+    collectGarbage: hostCollectGarbage });
   const scan = native.runtime.vfsIndexStats?.();
   if (scan) console.log(`[pmjs] startup stage=vfs-index statistics=${JSON.stringify(scan)}`);
   console.log(`[pmjs] startup stage=host-initialized elapsed_ms=${(performance.now() - startupStarted).toFixed(1)}`);
@@ -413,7 +415,7 @@ async function runSession(input, diagnostics, setNative) {
       invalidatePreparationCatalog = startup.invalidateCatalog;
       native.assets.preparationStats = startup.preparation;
       if (startup.cancelled || startup.preparation.cancelled) { native.runtime.quit(); return; }
-      memoryReclaimer.atBoundary('startup');
+      await memoryReclaimer.atBoundary('startup');
     } else if (native.assets && typeof native.assets.installPrepared === 'function') {
       native.assets.installPrepared([]);
       if (native.assets.installDecrypted) native.assets.installDecrypted([]);
@@ -608,10 +610,10 @@ async function runSession(input, diagnostics, setNative) {
             });
           };
           const complete = dispatcher ? dispatcher.runFrame(frame) : frame();
-          complete.then(() => {
+          complete.then(async () => {
             if (memoryReclaimer.pending) {
               // Engines without a boundary hook still get the critical-pressure trim.
-              memoryReclaimer.atBoundary(typeof globalThis.__pmjsMemoryReclamationBoundary === 'function' ?
+              await memoryReclaimer.atBoundary(typeof globalThis.__pmjsMemoryReclamationBoundary === 'function' ?
                 globalThis.__pmjsMemoryReclamationBoundary() : null);
             }
             // Sample one in eight frames: no extra clock read on the other seven.
@@ -624,7 +626,7 @@ async function runSession(input, diagnostics, setNative) {
               deadline = advanceDeadline(deadline, native.runtime.monotonicNow(), timing.renderPeriod);
             }
             schedule();
-          }, reject);
+          }).catch(reject);
         } catch (error) {
           reject(error);
         }

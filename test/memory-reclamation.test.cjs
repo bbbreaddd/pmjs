@@ -2,10 +2,111 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const { spawnSync } = require('node:child_process');
 const { createMemoryReclaimer } = require('../runner/memory-reclamation.cjs');
 const MiB = 1024 * 1024;
 
-function fixture() {
+test('collection drains finalizers before inspecting free arenas and trimming', async () => {
+  const calls = [];
+  let releaseFinalizers;
+  const f = fixture({
+    collectGarbage() { calls.push('gc'); f.time += 7; },
+    settleFinalizers() {
+      calls.push('finalizers');
+      return new Promise(resolve => { releaseFinalizers = () => { f.free = 64 * MiB; resolve(); }; });
+    }
+  });
+  f.free = 8 * MiB; f.pressure();
+  const pending = f.policy.atBoundary('scene-fade');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls, ['gc', 'finalizers']);
+  assert.equal(f.trims, 0);
+  assert.equal(f.policy.pending, false);
+  f.pressure();
+  assert.equal(f.policy.atBoundary('scene-fade'), null, 'reclamation cannot overlap itself');
+  releaseFinalizers();
+  const result = await pending;
+  assert.equal(f.trims, 1);
+  assert.equal(result.gcMs, 7);
+  assert.equal(result.recoveredBytes, 150 * MiB);
+});
+
+test('collection can reclaim native allocations without a large free arena', async () => {
+  let collections = 0;
+  const f = fixture({ collectGarbage() { collections++; f.rss -= 20 * MiB; },
+    settleFinalizers: async () => {} });
+  f.free = 8 * MiB; f.pressure();
+  const result = await f.policy.atBoundary('scene-fade');
+  assert.equal(collections, 1);
+  assert.equal(f.trims, 0);
+  assert.equal(result.released, false);
+  assert.equal(result.recoveredBytes, 20 * MiB);
+});
+
+test('a failed collection disables reclamation without stopping the game', async () => {
+  const f = fixture({ collectGarbage() { throw new Error('collection failed'); } });
+  f.pressure();
+  assert.equal(await f.policy.atBoundary('scene-fade'), null);
+  f.time += 600000; f.pressure();
+  assert.equal(f.policy.pending, false);
+  assert.equal(f.warnings.length, 1);
+  assert.equal(f.trims, 0);
+});
+
+test('collection respects healthy memory, active decodes, and the reclamation cooldown', async () => {
+  let collections = 0;
+  const f = fixture({ collectGarbage() { collections++; }, settleFinalizers: async () => {} });
+  f.available = 400 * MiB; f.pressure();
+  assert.equal(f.policy.atBoundary('scene-fade'), null);
+  f.available = 160 * MiB; f.pressure(); f.jobs = 1;
+  assert.equal(f.policy.atBoundary('scene-fade'), null);
+  assert.equal(collections, 0);
+  f.jobs = 0;
+  await f.policy.atBoundary('scene-fade');
+  f.time += 1000; f.rss += 64 * MiB; f.pressure();
+  assert.equal(f.policy.atBoundary('scene-fade'), null);
+  assert.equal(collections, 1);
+});
+
+test('real collection releases unreachable resource owners before trim and preserves live owners', () => {
+  const source = `
+    const assert = require('node:assert/strict');
+    const { createMemoryReclaimer } = require(${JSON.stringify(require.resolve('../runner/memory-reclamation.cjs'))});
+    const resources = new Map();
+    const finalizer = new FinalizationRegistry(id => resources.delete(id));
+    function allocate(id) {
+      const owner = {};
+      resources.set(id, Buffer.alloc(1024 * 1024, id));
+      finalizer.register(owner, id);
+      return owner;
+    }
+    const retained = allocate(1);
+    allocate(2);
+    let trimmed = false;
+    const policy = createMemoryReclaimer({
+      native: { runtime: {
+        allocatorStats: () => ({ freeArenaBytes: 64 * 1024 * 1024 }),
+        trimAllocator() {
+          assert.equal(resources.has(2), false, 'unreachable resource must be finalized before trim');
+          assert.equal(resources.get(1)[0], 1, 'live resource contents must survive');
+          trimmed = true; return true;
+        }
+      }, images: { memory: () => ({ pendingDecodeJobs: 0 }) } },
+      readMemory: () => ({ availableBytes: 80 * 1024 * 1024, rssBytes: 500 * 1024 * 1024 }),
+      readRss: () => 450 * 1024 * 1024, now: () => 0, collectGarbage: global.gc,
+      logger: { log() {}, warn(message) { throw new Error(message); } }
+    });
+    policy.atBoundary('startup').then(result => {
+      assert.ok(result); assert.equal(trimmed, true); assert.ok(retained);
+    }).catch(error => { console.error(error); process.exitCode = 1; });
+  `;
+  const child = spawnSync(process.execPath, ['--expose-gc', '-e', source], {
+    encoding: 'utf8', timeout: 10000
+  });
+  assert.equal(child.status, 0, child.stderr || child.error?.message);
+});
+
+function fixture(options = {}) {
   const f = { time: 0, rss: 540 * MiB, available: 160 * MiB,
     free: 160 * MiB, recovery: 150 * MiB, jobs: 0, trims: 0, logs: [], warnings: [] };
   const native = { runtime: {
@@ -15,7 +116,8 @@ function fixture() {
   f.sample = () => ({ availableBytes: f.available, rssBytes: f.rss });
   f.native = native;
   f.policy = createMemoryReclaimer({ native, readMemory: f.sample, readRss: () => f.rss,
-    now: () => f.time, logger: { log: line => f.logs.push(line), warn: line => f.warnings.push(line) } });
+    now: () => f.time, logger: { log: line => f.logs.push(line), warn: line => f.warnings.push(line) },
+    ...options });
   f.pressure = () => { f.policy.observe(f.sample()); f.policy.observe(f.sample()); };
   return f;
 }

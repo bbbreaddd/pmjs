@@ -1,6 +1,7 @@
 'use strict';
 
 const { MEMORY_PRESSURE_BYTES } = require('./diagnostics.cjs');
+const { setImmediate } = require('node:timers');
 const MiB = 1024 * 1024;
 // Below this much available memory the kernel OOM killer is close (the supervisor's
 // critical-memory-pressure threshold). Waiting for a scene fade is then riskier than a
@@ -15,7 +16,9 @@ const SAMPLE_INTERVAL_MS = 500;
 const CRITICAL_MIN_INTERVAL_MS = 10000;
 const CRITICAL_REGROWTH_BYTES = 64 * MiB;
 
-function createMemoryReclaimer({ native, readMemory, readRss, now, logger = console }) {
+function createMemoryReclaimer({ native, readMemory, readRss, now, collectGarbage,
+  settleFinalizers = () => new Promise(resolve => setImmediate(() => setImmediate(resolve))),
+  logger = console }) {
   let disabled = typeof native.runtime.allocatorStats !== 'function' ||
     typeof native.runtime.trimAllocator !== 'function';
   let nextSampleAt = -Infinity;
@@ -23,12 +26,13 @@ function createMemoryReclaimer({ native, readMemory, readRss, now, logger = cons
   let pending = false, startupDone = false, nextAttemptAt = 0, retryAfter = 0;
   let lastRss = 0, lastHeadroom = Infinity;
   let criticalSince = null, criticalPending = false, lastAttemptAt = -Infinity;
+  let collecting = false;
   function resetPressure() {
     lowSamples = 0; pending = false; criticalPending = false; criticalSince = null;
   }
   return {
     poll(timestamp = now()) {
-      if (disabled || timestamp < nextSampleAt) return;
+      if (disabled || collecting || timestamp < nextSampleAt) return;
       nextSampleAt = timestamp + SAMPLE_INTERVAL_MS;
       try { this.observe(readMemory()); }
       catch (error) {
@@ -36,9 +40,9 @@ function createMemoryReclaimer({ native, readMemory, readRss, now, logger = cons
         logger.warn('[pmjs] allocator-reclamation unavailable: ' + error.message);
       }
     },
-    get pending() { return pending && !disabled; },
+    get pending() { return pending && !disabled && !collecting; },
     observe(memory) {
-      if (disabled || !memory || memory === lastSample) return;
+      if (disabled || collecting || !memory || memory === lastSample) return;
       lastSample = memory;
       if (!(memory.availableBytes < MEMORY_PRESSURE_BYTES)) {
         resetPressure(); return;
@@ -57,7 +61,7 @@ function createMemoryReclaimer({ native, readMemory, readRss, now, logger = cons
     // boundary is 'startup', 'scene-fade', or null/other while the game is playing.
     // Without a fade, only sustained critical pressure trims (logged as 'critical-pressure').
     atBoundary(boundary) {
-      if (disabled) return null;
+      if (disabled || collecting) return null;
       const startup = boundary === 'startup';
       const emergency = !startup && boundary !== 'scene-fade';
       if (startup ? startupDone : !pending) return null;
@@ -76,8 +80,7 @@ function createMemoryReclaimer({ native, readMemory, readRss, now, logger = cons
           if (emergency) criticalSince = now();
           return null;
         }
-        const allocator = native.runtime.allocatorStats();
-        if (!allocator) { disabled = true; return null; }
+        if (!native.runtime.allocatorStats()) { disabled = true; return null; }
         pending = false;
         criticalPending = false;
         criticalSince = null;
@@ -87,19 +90,38 @@ function createMemoryReclaimer({ native, readMemory, readRss, now, logger = cons
         lastAttemptAt = now();
         nextAttemptAt = now() + 60000;
         retryAfter = nextAttemptAt;
-        if (allocator.freeArenaBytes < 32 * MiB) return null;
         const started = now();
-        const released = native.runtime.trimAllocator();
-        if (released === undefined) { disabled = true; return null; }
-        const durationMs = now() - started;
-        lastRss = readRss();
-        const recoveredBytes = Math.max(0, before.rssBytes - lastRss);
-        if (recoveredBytes < 8 * MiB) retryAfter = now() + 300000;
-        const result = { boundary: emergency ? 'critical-pressure' : boundary, durationMs, released,
-          recoveredBytes, beforeRssBytes: before.rssBytes, afterRssBytes: lastRss,
-          availableBytes: before.availableBytes };
-        logger.log('[pmjs] allocator-reclamation ' + JSON.stringify(result));
-        return result;
+        const finish = gcMs => {
+          const allocator = native.runtime.allocatorStats();
+          if (!allocator) { disabled = true; return null; }
+          const released = allocator.freeArenaBytes >= 32 * MiB ? native.runtime.trimAllocator() : false;
+          if (released === undefined) { disabled = true; return null; }
+          if (!collectGarbage && allocator.freeArenaBytes < 32 * MiB) return null;
+          lastRss = readRss();
+          const recoveredBytes = Math.max(0, before.rssBytes - lastRss);
+          if (recoveredBytes < 8 * MiB) retryAfter = now() + 300000;
+          const result = { boundary: emergency ? 'critical-pressure' : boundary,
+            durationMs: now() - started, gcMs, released,
+            recoveredBytes, beforeRssBytes: before.rssBytes, afterRssBytes: lastRss,
+            availableBytes: before.availableBytes };
+          logger.log('[pmjs] allocator-reclamation ' + JSON.stringify(result));
+          return result;
+        };
+        if (!collectGarbage) return finish(0);
+        collecting = true;
+        return Promise.resolve().then(() => {
+          const gcStarted = now();
+          collectGarbage();
+          return now() - gcStarted;
+        }).then(async gcMs => {
+          // Native resource finalizers run after collection, before allocator trimming.
+          await settleFinalizers();
+          return finish(gcMs);
+        }).catch(error => {
+          disabled = true;
+          logger.warn('[pmjs] allocator-reclamation unavailable: ' + error.message);
+          return null;
+        }).finally(() => { collecting = false; });
       } catch (error) {
         disabled = true;
         pending = false;
