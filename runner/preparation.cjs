@@ -1,7 +1,7 @@
 'use strict';
 
 const path = require('node:path');
-const { openPreparation, inventory, invalidateResults, invalidateCatalog } = require('./preparation-state.cjs');
+const { openPreparation, inventory, createInvalidators } = require('./preparation-state.cjs');
 const { prepareAssetsPhase } = require('./asset-preparation.cjs');
 const { prepareMapsPhase } = require('./map-preparation.cjs');
 const { prepareForRun } = require('./port-preparation.cjs');
@@ -103,10 +103,7 @@ async function prepareGameAssets(options) {
     result.validation = session.files.stats;
     result.inventory = { files: session.inventory.length, durationMs: session.inventoryMs };
     result.releaseCacheLease = session.releaseLease;
-    const preparationRoot = session.root;
-    result.invalidate = source => invalidateResults({ root: preparationRoot, native,
-      sources: Array.isArray(source) ? source : [source], logger });
-    result.invalidateCatalog = () => invalidateCatalog({ root: preparationRoot, native });
+    Object.assign(result, createInvalidators(session.root, native, logger));
     logger.info?.(`[pmjs] preparation inventory=${result.inventory.files} scan_ms=${result.inventory.durationMs.toFixed(1)} ` +
       `outcomes=${JSON.stringify(result.outcomeCounts)} hashed_files=${result.validation.hashedFiles} hashed_bytes=${result.validation.hashedBytes} reused_files=${result.validation.reusedFiles}`);
     return result;
@@ -116,4 +113,17 @@ async function prepareGameAssets(options) {
   } finally { await session.close(); }
 }
 
-module.exports = { prepareGameAssets };
+function summarizePreparation(value) {
+  const summary = {};
+  for (const [key, item] of Object.entries(value || {})) {
+    if (item === null || ['number', 'boolean', 'string'].includes(typeof item)) summary[key] = item;
+    else if (Array.isArray(item)) summary[key + 'Count'] = item.length;
+  }
+  for (const key of ['maps', 'inventory', 'validation', 'activation', 'phaseMs', 'hashCategories']) {
+    const item = value?.[key];
+    if (item && typeof item === 'object' && !Array.isArray(item)) summary[key] = summarizePreparation(item);
+  }
+  return summary;
+}
+
+module.exports = { prepareGameAssets, summarizePreparation };

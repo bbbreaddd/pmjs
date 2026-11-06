@@ -5,7 +5,7 @@ const { createSubprocesses } = require('./subprocess.cjs');
 const { installPromiseRejectionBridge } = require('./promise-rejections.cjs');
 const { reader: portArtifactReader } = require('./port-preparation.cjs');
 
-const { prepareGameAssets } = require('./preparation.cjs');
+const { prepareGameAssets, summarizePreparation } = require('./preparation.cjs');
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -180,8 +180,8 @@ async function prepareStartupAssets(options, native, settings) {
       options.portArtifacts = Object.fromEntries(cached.portArtifacts);
       options.portArtifactHashes = cached.portArtifactHashes;
       console.log('[pmjs] using completed asset preparation catalog');
-      return { preparation: { ...cached.images, maps: cached.maps, releaseCacheLease: cached.releaseCacheLease,
-        invalidate: cached.invalidate }, cancelled: false, invalidate: cached.invalidate,
+      return { preparation: summarizePreparation({ ...cached.images, maps: cached.maps }),
+        cancelled: false, invalidate: cached.invalidate,
         invalidateCatalog: cached.invalidateCatalog };
     }
   }
@@ -242,7 +242,7 @@ async function prepareStartupAssets(options, native, settings) {
       showProgress();
     } catch (error) { failPreparation(error); }
   }, 16);
-  let preparation, invalidateCatalog, preparationStatus = 'failed', preparationThrew = false;
+  let preparation, invalidate, invalidateCatalog, preparationStatus = 'failed', preparationThrew = false;
   try {
     const all = await prepareGameAssets({ ...preparationOptions, shouldCancel: () => cancelled,
       onProgress: progress => {
@@ -280,9 +280,9 @@ async function prepareStartupAssets(options, native, settings) {
         imported: cacheOutcomes['reused-package'] || 0, invalidated: all.invalidated || 0 },
       commonRefusals
     }));
-    preparation = { ...(all.images || {}), maps: all.maps, cancelled: all.cancelled,
-      inventory: all.inventory, validation: all.validation, releaseCacheLease: all.releaseCacheLease,
-      invalidate: all.invalidate };
+    preparation = summarizePreparation({ ...(all.images || {}), maps: all.maps, cancelled: all.cancelled,
+      inventory: all.inventory, validation: all.validation });
+    invalidate = all.invalidate;
     options.portArtifacts = Object.fromEntries(all.portArtifacts);
     options.portArtifactHashes = all.portArtifactHashes || {};
     invalidateCatalog = all.invalidateCatalog;
@@ -306,7 +306,7 @@ async function prepareStartupAssets(options, native, settings) {
   }
   if (preparationFailed) throw preparationError;
   return { preparation, cancelled,
-    invalidate: preparation.invalidate, invalidateCatalog };
+    invalidate, invalidateCatalog };
 }
 
 async function runSession(input, diagnostics, setNative) {
@@ -411,12 +411,7 @@ async function runSession(input, diagnostics, setNative) {
       const startup = await prepareStartupAssets(options, native, settings);
       invalidatePreparation = startup.invalidate;
       invalidatePreparationCatalog = startup.invalidateCatalog;
-      const { entries, decryptedEntries, releaseCacheLease, invalidateCatalog, ...preparationStats } = startup.preparation;
-      if (preparationStats.maps) {
-        const { entries: mapEntries, ...mapStats } = preparationStats.maps;
-        preparationStats.maps = mapStats;
-      }
-      native.assets.preparationStats = preparationStats;
+      native.assets.preparationStats = startup.preparation;
       if (startup.cancelled || startup.preparation.cancelled) { native.runtime.quit(); return; }
       memoryReclaimer.atBoundary('startup');
     } else if (native.assets && typeof native.assets.installPrepared === 'function') {

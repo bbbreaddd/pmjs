@@ -5,7 +5,7 @@ const fsp = fs.promises;
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { acquireLock, createLease } = require('./preparation-lifetime.cjs');
-const { invalidateResults, invalidateCatalog } = require('./preparation-state.cjs');
+const { createInvalidators } = require('./preparation-state.cjs');
 const { discoverAdapterProcessors, discoverBundledProcessors } = require('./port-preparation.cjs');
 
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -102,8 +102,7 @@ async function loadCatalog(options) {
     return { images: { entries: data.entries, decryptedEntries: data.derived, storageEntries: data.storage,
       installed: data.entries.length, catalogHit: true }, maps: { entries: data.tiles, index: data.mapIndex },
       portArtifacts: new Map(data.portArtifacts), portArtifactHashes: data.artifactHashes, releaseCacheLease: lease,
-      invalidateCatalog: () => invalidateCatalog({ root, native }),
-      invalidate: source => invalidateResults({ root, native, sources: Array.isArray(source) ? source : [source], logger }) };
+      ...createInvalidators(root, native, logger) };
   } catch (error) {
     if (error.code !== 'ENOENT') logger.warn('[pmjs] startup catalog unavailable; preparing assets: ' + error.message);
     return null;

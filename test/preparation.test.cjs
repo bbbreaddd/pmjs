@@ -6,7 +6,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { temporaryDirectory } = require('./helpers/temp.cjs');
 const { preparationLocks } = require('./helpers/preparation-lock.cjs');
-const { prepareGameAssets } = require('../runner/preparation.cjs');
+const { prepareGameAssets, summarizePreparation } = require('../runner/preparation.cjs');
 const { openPreparation } = require('../runner/preparation-state.cjs');
 const { loadCatalog } = require('../runner/preparation-catalog.cjs');
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==', 'base64');
@@ -32,6 +32,70 @@ function fixture() {
   return { root, gameRoot, jobs, installed, warnings, options,
     async run(extra = {}) { const result = await prepareGameAssets({ ...options, ...extra }); result.releaseCacheLease?.(); return result; } };
 }
+
+test('gameplay preparation summaries preserve diagnostics without retaining activation payloads or callbacks', () => {
+  const index = { map: { source: 'map.json' } };
+  const data = { installed: 12, durationMs: 20, cancelled: false, invalidate() {},
+    entries: [{ descriptor: { cells: [1, 2, 3] } }], records: { retained: true },
+    maps: { durationMs: 10, installed: 3, entries: [index], index,
+      compilations: { large: [index] }, mapInputs: { map: index },
+      activation: { accepted: 3, rejected: [{ id: 'bad', reason: 'invalid' }] } },
+    validation: { hashedFiles: 4, hashCategories: { images: 200 } } };
+  const summary = summarizePreparation(data);
+  assert.equal(summary.durationMs, 20);
+  assert.equal(summary.cancelled, false);
+  assert.equal(summary.entriesCount, 1);
+  assert.equal(summary.maps.installed, 3);
+  assert.equal(summary.maps.activation.rejectedCount, 1);
+  assert.equal(summary.validation.hashCategories.images, 200);
+  for (const key of ['records', 'invalidate', 'entries']) assert.equal(summary[key], undefined);
+  for (const key of ['compilations', 'mapInputs', 'index', 'entries']) assert.equal(summary.maps[key], undefined);
+  data.maps.activation.accepted = 99;
+  assert.equal(summary.maps.activation.accepted, 3);
+});
+
+test('invalidation callbacks do not retain completed preparation or catalog payloads', () => {
+  const script = `
+    const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
+    const { temporaryDirectory } = require(${JSON.stringify(require.resolve('./helpers/temp.cjs'))});
+    const { preparationLocks } = require(${JSON.stringify(require.resolve('./helpers/preparation-lock.cjs'))});
+    const { prepareGameAssets } = require(${JSON.stringify(require.resolve('../runner/preparation.cjs'))});
+    const { loadCatalog } = require(${JSON.stringify(require.resolve('../runner/preparation-catalog.cjs'))});
+    const PNG = Buffer.from(${JSON.stringify(PNG.toString('base64'))}, 'base64');
+    const fixture = ${fixture.toString()};
+    async function collect() { for (let i = 0; i < 4; i++) { await new Promise(setImmediate); global.gc(); } }
+    async function main() {
+      const f = fixture(), native = f.options.native;
+      native.assets.installPrepared = (entries, capture) => {
+        for (const entry of entries) if (capture) entry.pageIdentities = entry.descriptor.pages.map(() => 'page-id');
+        return entries.length;
+      };
+      native.assets.installPreparedCatalog = entries => entries.length;
+      native.assets.installDerivedCatalog = () => {};
+      const options = { ...f.options, fastStartup: true };
+      let prepared = await prepareGameAssets(options);
+      const records = new WeakRef(prepared.records), entries = new WeakRef(prepared.images.entries);
+      const invalidate = prepared.invalidate, release = prepared.releaseCacheLease;
+      prepared = null; await collect();
+      assert.equal(records.deref(), undefined, 'callback retained preparation records');
+      assert.equal(entries.deref(), undefined, 'callback retained activation entries');
+      let warm = await loadCatalog(options);
+      assert.ok(warm.images.catalogHit);
+      const catalogEntries = new WeakRef(warm.images.entries);
+      const invalidateWarm = warm.invalidate, invalidateCatalog = warm.invalidateCatalog, releaseWarm = warm.releaseCacheLease;
+      warm = null; await collect();
+      assert.equal(catalogEntries.deref(), undefined, 'callback retained catalog entries');
+      await invalidate('img/pictures/a.png');
+      await invalidateWarm('img/pictures/a.png');
+      await invalidateCatalog();
+      assert.equal(await loadCatalog(options), null);
+      releaseWarm(); release();
+    }
+    main().catch(error => { console.error(error); process.exitCode = 1; });
+  `;
+  const result = require('node:child_process').spawnSync(process.execPath, ['--expose-gc', '-e', script], { encoding: 'utf8', timeout: 30000 });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
 
 test('completed startup catalog restores without inventory, and invalidations force preparation', async () => {
   const f = fixture(), assets = f.options.native.assets;

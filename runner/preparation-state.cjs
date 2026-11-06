@@ -391,4 +391,12 @@ async function applyPendingInvalidations({ root, native, logger = console }) {
   } catch (error) { logger.warn('[pmjs] cannot apply preparation invalidations: ' + error.message); }
 }
 
-module.exports = { openPreparation, inventory, invalidateResults, invalidateCatalog };
+function createInvalidators(root, native, logger) {
+  return {
+    invalidate: source => invalidateResults({ root, native,
+      sources: Array.isArray(source) ? source : [source], logger }),
+    invalidateCatalog: () => invalidateCatalog({ root, native }),
+  };
+}
+
+module.exports = { openPreparation, inventory, invalidateResults, invalidateCatalog, createInvalidators };
