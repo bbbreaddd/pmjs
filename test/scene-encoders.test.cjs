@@ -2548,3 +2548,33 @@ test('hidden children between plain sprites encode like the visible children alo
     assert.deepEqual(submitOnly(harness, plain), withHidden, segmented ? 'segmented' : 'ordinary');
   }
 });
+
+test('empty leaves retain transform servicing and reappear when they gain content', () => {
+  const harness = preparedHarness(), { sandbox, sprite, makeTexture } = harness;
+  const root = new sandbox.PIXI.Container(), empty = new sandbox.PIXI.Container();
+  const blank = sprite(); blank.texture.frame.width = 0;
+  const visible = sprite();
+  root.addChild(empty); root.addChild(blank); root.addChild(visible);
+  let updates = 0;
+  const update = empty.updateTransform;
+  empty.updateTransform = function() { updates++; return update.call(this); };
+  sandbox.renderNativeStage(root);
+  assert.equal(updates, 1);
+  assert.equal(harness.submitted.at(-1).count, 2);
+  empty.addChild(sprite()); blank.texture = makeTexture(32, 32);
+  sandbox.renderNativeStage(root);
+  const packet = harness.submitted.at(-1);
+  assert.equal(updates, 2);
+  assert.equal(packet.count, 5);
+  assert.deepEqual([0, 1, 2, 3, 4].map(index => packetNode(packet, index).parent),
+    [0xffffffff, 0, 1, 0, 0]);
+});
+
+test('empty filtered containers retain their filter scope', () => {
+  const harness = makeHarness(), { sandbox } = harness;
+  const root = new sandbox.PIXI.Container(), empty = new sandbox.PIXI.Container();
+  empty._filters = [new sandbox.PIXI.filters.BlurFilter(4, 1)];
+  root.addChild(empty);
+  const packet = submitOnly(harness, root);
+  assert.deepEqual(packet.metadata.filter((_, index) => index % 7 === 0), [0, 6, 0, 7]);
+});

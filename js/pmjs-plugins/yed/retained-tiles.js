@@ -286,8 +286,10 @@
 
   function prepare(map, x, y) {
     if (!supported(map)) return false;
-    var state = states.get(map), same = !!state, cursor = 0;
-    if (state) {
+    var state = states.get(map);
+    var same = !!state && state.x === x && state.y === y && !map._needsRepaint;
+    var cursor = 0;
+    if (same) {
       visit(map, x, y, function(value) { if (state.values[cursor++] !== value) same = false; },
         function(points) {
           for (var index = 0; index < points.length; index++) {

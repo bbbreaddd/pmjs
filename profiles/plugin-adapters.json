@@ -55,7 +55,8 @@
       ],
       "modules": [
         "js/pmjs-plugins/yed/retained-tiles.js",
-        "js/pmjs-plugins/yed/tiled.js"
+        "js/pmjs-plugins/yed/tiled.js",
+        "js/pmjs-plugins/yed/priority-updates.js"
       ]
     },
     {
