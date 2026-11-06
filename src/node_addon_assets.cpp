@@ -248,8 +248,16 @@ void executeAsset(napi_env, void* opaque) noexcept {
       return;
     }
     work.options.statistics = &work.statistics;
-    work.result = prepareAssetImage("/proc/self/fd/" + std::to_string(work.sourceFd), work.staging,
-      work.recipe, work.layout ? &*work.layout : nullptr, work.options);
+    const auto sourcePath = "/proc/self/fd/" + std::to_string(work.sourceFd);
+    try {
+      work.result = prepareAssetImage(sourcePath, work.staging,
+        work.recipe, work.layout ? &*work.layout : nullptr, work.options);
+    } catch (const AssetPreparationDecodeError&) {
+      // The ordinary loader also accepts signature-detected formats and recoverable PNGs.
+      const auto source = ImageStore::openFile(sourcePath);
+      if (!source || !ImageStore::decodeFile(*source)) throw;
+      work.unsupported = true;
+    }
     struct stat current{};
     if (::fstat(work.sourceFd, &current) != 0 || current.st_size != work.snapshot.st_size ||
         current.st_mtim.tv_sec != work.snapshot.st_mtim.tv_sec || current.st_mtim.tv_nsec != work.snapshot.st_mtim.tv_nsec ||

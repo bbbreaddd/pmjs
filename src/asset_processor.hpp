@@ -10,6 +10,10 @@
 #include <string>
 
 namespace pmjs {
+class AssetPreparationDecodeError : public std::runtime_error {
+ public:
+  using std::runtime_error::runtime_error;
+};
 class AssetPreparationUnsupported : public std::runtime_error {
  public:
   using std::runtime_error::runtime_error;

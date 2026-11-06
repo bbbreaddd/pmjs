@@ -58,7 +58,7 @@ class PngRows {
     png_ = png_create_read_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
     info_ = png_ ? png_create_info_struct(png_) : nullptr;
     if (!info_) { close(); throw std::runtime_error("cannot create PNG reader"); }
-    if (setjmp(png_jmpbuf(png_))) { close(); throw std::runtime_error("invalid preparation PNG"); }
+    if (setjmp(png_jmpbuf(png_))) { close(); throw AssetPreparationDecodeError("invalid preparation PNG"); }
     png_set_chunk_malloc_max(png_, 1024U * 1024U);
     png_init_io(png_, file_);
     png_read_info(png_, info_);
@@ -80,12 +80,12 @@ class PngRows {
   PngRows(const PngRows&) = delete;
   PngRows& operator=(const PngRows&) = delete;
   void read() {
-    if (setjmp(png_jmpbuf(png_))) throw std::runtime_error("cannot decode preparation PNG row");
+    if (setjmp(png_jmpbuf(png_))) throw AssetPreparationDecodeError("cannot decode preparation PNG row");
     png_read_row(png_, row.data(), nullptr);
     transform_.apply(row.data(), width);
   }
   void finish() {
-    if (setjmp(png_jmpbuf(png_))) throw std::runtime_error("cannot finish preparation PNG");
+    if (setjmp(png_jmpbuf(png_))) throw AssetPreparationDecodeError("cannot finish preparation PNG");
     png_read_end(png_, info_);
   }
   int width = 0, height = 0;

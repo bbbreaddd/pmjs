@@ -50,7 +50,7 @@ struct VideoYuv420 {
     };
     // Chromium 65's float32 inverse Rec.601 transfer * limited-range matrix.
     // Keep its small nonzero cross terms and bias rounding at byte boundaries.
-    constexpr float matrix[3][4] = {
+    static constexpr float matrix[3][4] = {
       {1.1643835306167603F, -1.5562882533797233e-08F, 1.5960266590118408F, -0.8710727095603943F},
       {1.1643836498260498F, -0.39176228642463684F, -0.8129676580429077F, 0.529305636882782F},
       {1.1643835306167603F, 2.0172319412231445F, 1.2258721153739498e-08F, -1.081675410270691F}
