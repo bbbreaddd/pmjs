@@ -1,4 +1,6 @@
 'use strict';
+
+const { runOptimizationAdapter } = require('./helpers/runtime-context.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
@@ -36,7 +38,7 @@ function fixture(recognized = true, surfaces = []) {
     Game_Map: Map, $gameMap: new Map(), PMJS: {plugins: {registerOptimization() {}, onLoaded(plugin, id, fn) { fn(); }},
       phases: {on(phase, id, fn) { fn(); }}, methods: {wrap() {}, matchesSource: fn => recognized && known.has(fn)},
       optimizations: {isEnabled: () => enabled, refuse() { refused = true; }} } };
-  vm.runInNewContext(fs.readFileSync(require.resolve('../js/pmjs-plugins/yed/tiled.js'), 'utf8'), context);
+  runOptimizationAdapter(fs.readFileSync(require.resolve('../js/pmjs-plugins/yed/tiled.js'), 'utf8'), context);
   context.$gameMap._reflection = surfaces;
   const scene = new Spriteset();
   assert.equal(scene.createCharacters(), 'created');

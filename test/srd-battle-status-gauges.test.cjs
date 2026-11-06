@@ -92,6 +92,9 @@ function fixture({ disabled = false, unknown = false, composed = false } = {}) {
       refuse(id, reason) { refusals.push(reason); } } } };
   vm.createContext(context);
   require('./helpers/runtime-context.cjs').runModule(context, 'js/pmjs-core/methods.js');
+  const pluginHooks = { ...context.PMJS.plugins };
+  require('./helpers/runtime-context.cjs').runModule(context, 'js/pmjs-rpgmaker/plugins.js');
+  Object.assign(context.PMJS.plugins, pluginHooks);
   vm.runInContext(patched, context);
   loaded.get('SRD_BattleStatusCustomizer')();
   phases.get('beforeBoot')();

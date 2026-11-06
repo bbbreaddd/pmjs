@@ -5,6 +5,7 @@ const test = require('node:test');
 const { loadPmjsRuntime, runModule } = require('./helpers/runtime-context.cjs');
 
 const adapters = [
+  ['yanfly/core-engine', 'YEP_CoreEngine', ['plugins.yanfly.core-native-text', 'plugins.yanfly.core-number-format']],
   ['yanfly/message-core', 'YEP_MessageCore', ['plugins.yanfly.message-word-wrap-measure']],
   ['yanfly/event-mini-label', 'YEP_EventMiniLabel', ['plugins.yanfly.event-mini-label']],
   ['yanfly/slippery-tiles', 'YEP_SlipperyTiles', ['plugins.yanfly.slippery-tiles']],

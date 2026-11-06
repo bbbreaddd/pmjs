@@ -186,59 +186,63 @@
   }
 
   var reflectionId = 'tilemap.yed-reflection-sprites';
-  PMJS.plugins.registerOptimization('YED_Tiled', { id: reflectionId, owner: 'plugins/yed/tiled',
-    fallback: 'update all reflection sprites' });
-  PMJS.phases.on('afterGuestPlugins', reflectionId, function() {
-    if (!PMJS.optimizations.isEnabled(reflectionId)) return;
-    var prototype = Spriteset_Map.prototype;
-    var create = prototype.createCharacters, update = prototype.update;
-    var model = Game_CharacterBase.prototype.updateReflection;
-    var query = Game_Map.prototype.isOnReflection;
-    if (!PMJS.methods.matchesSource(create, '360be50d29482d1126b15bdb08c213765d7caac3dd5572993234b045bb59a841') ||
-        !PMJS.methods.matchesSource(model, '58b6d640f457bba7552a7af7371bddd327142b4089078210f62bb224cb9f2907') ||
-        !PMJS.methods.matchesSource(query, '48b319446b732df6e0a5cca07c43886b64e9bd0b2350cf79822312c4f78344d5')) {
-      PMJS.optimizations.refuse(reflectionId, 'unrecognized reflection composition'); return;
-    }
-    var states = new WeakMap();
-    function reconcile(spriteset, state) {
-      var map = globalThis.$gameMap;
-      var idle = PMJS.optimizations.isEnabled(reflectionId) && map && map === state.map &&
-        Array.isArray(map._reflection) && map._reflection.length === 0 &&
-        Game_CharacterBase.prototype.updateReflection === model && map.isOnReflection === query;
-      for (var i = 0; i < state.sprites.length; i++) {
-        var entry = state.sprites[i], sprite = entry.sprite;
-        var parent = sprite.parent;
-        var park = idle && sprite.update === entry.update && sprite.updateReflect === entry.reflect &&
-          sprite.updatePosition === entry.position && sprite._character.updateReflection === model &&
-          !sprite._balloonSprite && !(sprite._animationSprites && sprite._animationSprites.length);
-        if (park && parent === spriteset._tilemap) state.holder.addChild(sprite);
-        else if (!park && parent === state.holder) spriteset._tilemap.addChild(sprite);
+
+  PMJS.plugins.installOptimization('YED_Tiled', {
+    id: reflectionId, owner: 'plugins/yed/tiled',
+    fallback: 'update all reflection sprites',
+    phaseKey: reflectionId, order: 'module',
+    install: function() {
+      if (!PMJS.optimizations.isEnabled(reflectionId)) return;
+      var prototype = Spriteset_Map.prototype;
+      var create = prototype.createCharacters, update = prototype.update;
+      var model = Game_CharacterBase.prototype.updateReflection;
+      var query = Game_Map.prototype.isOnReflection;
+      if (!PMJS.methods.matchesSource(create, '360be50d29482d1126b15bdb08c213765d7caac3dd5572993234b045bb59a841') ||
+          !PMJS.methods.matchesSource(model, '58b6d640f457bba7552a7af7371bddd327142b4089078210f62bb224cb9f2907') ||
+          !PMJS.methods.matchesSource(query, '48b319446b732df6e0a5cca07c43886b64e9bd0b2350cf79822312c4f78344d5')) {
+        PMJS.optimizations.refuse(reflectionId, 'unrecognized reflection composition'); return;
       }
-    }
-    prototype.createCharacters = function() {
-      var result = create.apply(this, arguments);
-      var sprites = this._characterSprites.filter(function(sprite) {
-        return PMJS.methods.matchesSource(sprite.update, 'b9bd26e3c58172344a22d937c65c0d79dd2c8832149c89907be766bab18f695d') &&
-          PMJS.methods.matchesSource(sprite.updateReflect, 'ecf3960b4fb2252991db3e8e1594db1df648062a46daeaee1c1317131f892fd9') &&
-          PMJS.methods.matchesSource(sprite.updatePosition, 'cae2b6425843e61373801fec2a0ed932315e9d727568ff4fddbf105236836a3f');
-      }).map(function(sprite) {
-        return { sprite: sprite, update: sprite.update, reflect: sprite.updateReflect, position: sprite.updatePosition };
-      });
-      if (sprites.length) {
-        var holder = new PIXI.Container();
-        holder.visible = false;
-        this.addChild(holder);
-        var state = { map: globalThis.$gameMap, holder: holder, sprites: sprites };
-        states.set(this, state);
-        reconcile(this, state);
+      var states = new WeakMap();
+      function reconcile(spriteset, state) {
+        var map = globalThis.$gameMap;
+        var idle = PMJS.optimizations.isEnabled(reflectionId) && map && map === state.map &&
+          Array.isArray(map._reflection) && map._reflection.length === 0 &&
+          Game_CharacterBase.prototype.updateReflection === model && map.isOnReflection === query;
+        for (var i = 0; i < state.sprites.length; i++) {
+          var entry = state.sprites[i], sprite = entry.sprite;
+          var parent = sprite.parent;
+          var park = idle && sprite.update === entry.update && sprite.updateReflect === entry.reflect &&
+            sprite.updatePosition === entry.position && sprite._character.updateReflection === model &&
+            !sprite._balloonSprite && !(sprite._animationSprites && sprite._animationSprites.length);
+          if (park && parent === spriteset._tilemap) state.holder.addChild(sprite);
+          else if (!park && parent === state.holder) spriteset._tilemap.addChild(sprite);
+        }
       }
-      return result;
-    };
-    prototype.update = function() {
-      var state = states.get(this);
-      if (state) reconcile(this, state);
-      return update.apply(this, arguments);
-    };
+      prototype.createCharacters = function() {
+        var result = create.apply(this, arguments);
+        var sprites = this._characterSprites.filter(function(sprite) {
+          return PMJS.methods.matchesSource(sprite.update, 'b9bd26e3c58172344a22d937c65c0d79dd2c8832149c89907be766bab18f695d') &&
+            PMJS.methods.matchesSource(sprite.updateReflect, 'ecf3960b4fb2252991db3e8e1594db1df648062a46daeaee1c1317131f892fd9') &&
+            PMJS.methods.matchesSource(sprite.updatePosition, 'cae2b6425843e61373801fec2a0ed932315e9d727568ff4fddbf105236836a3f');
+        }).map(function(sprite) {
+          return { sprite: sprite, update: sprite.update, reflect: sprite.updateReflect, position: sprite.updatePosition };
+        });
+        if (sprites.length) {
+          var holder = new PIXI.Container();
+          holder.visible = false;
+          this.addChild(holder);
+          var state = { map: globalThis.$gameMap, holder: holder, sprites: sprites };
+          states.set(this, state);
+          reconcile(this, state);
+        }
+        return result;
+      };
+      prototype.update = function() {
+        var state = states.get(this);
+        if (state) reconcile(this, state);
+        return update.apply(this, arguments);
+      };
+    }
   });
 
   PMJS.methods.wrap({

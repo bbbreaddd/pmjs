@@ -63,9 +63,9 @@
     return descriptor && Object.hasOwn(descriptor, 'value') ? descriptor.value : undefined;
   }
   Sprite_Character.prototype.updateCharacterFrame = function() {
-    var dimensions = presentation.dimensions(this);
     var character = this._character, bitmap = this.bitmap, frame = null;
-    if (dimensions && bitmap && bitmap.width === 0 && bitmap.height === 0 &&
+    var dimensions = bitmap && !bitmap.isReady() && presentation.dimensions(this);
+    if (dimensions && bitmap.width === 0 && bitmap.height === 0 &&
         field(this, '_tileId') === 0 && field(this, '_bushDepth') === 0 &&
         typeof field(this, '_isBigCharacter') === 'boolean' && this.setFrame === frameSetter &&
         refreshMethods.has(this._refresh) && refreshMethods.get(this._refresh)() &&

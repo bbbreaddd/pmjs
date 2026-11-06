@@ -88,7 +88,9 @@ test('cached numeric formatting and text measurements activate together', () => 
     vm.runInContext(`var Yanfly = { Param: { DigitGroup: true }, Util: {
       toGroup: function(value) { if (typeof value === 'string' || !Yanfly.Param.DigitGroup) return value; return value.toLocaleString('en'); }
     } };`, realm);
+    runModule(realm, 'js/pmjs-rpgmaker/plugins.js');
     realm.PMJS.plugins = {
+      ...realm.PMJS.plugins,
       registerOptimization(_plugin, definition) { realm.PMJS.optimizations.register(definition); },
       onLoaded(_plugin, _owner, callback) { callback(); }
     };

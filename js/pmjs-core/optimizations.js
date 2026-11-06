@@ -126,6 +126,14 @@ PMJS.optimizations = {
       disabledBy: disabledBy, owner: definition.owner,
       fallback: definition.fallback, fallbackReasons: Object.create(null) };
   },
+  install: function(definition) {
+    PMJS.optimizations.register(definition);
+    if (PMJS.phases && typeof PMJS.phases.on === 'function') {
+      PMJS.phases.on(definition.phase || 'afterGuestPlugins', definition.phaseKey, definition.install);
+    } else {
+      definition.install();
+    }
+  },
   isEnabled: function(id) {
     return pmjsOptimizationState(id).enabled;
   },

@@ -1,4 +1,6 @@
 'use strict';
+
+const { runOptimizationAdapter } = require('../../helpers/runtime-context.cjs');
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, '../../../patches/isat/loop-recovery.js'), 'utf8');
@@ -72,7 +74,7 @@ function fixture(enabled = true, altered = false) {
    return text.replace(digest, context.PMJS.methods.fingerprint(context.PMJS.methods.sourceOf(method)));
  });
  if(altered) vm.runInContext('Game_Actor.prototype.levelUp=function(){this._level++;};',context);
- vm.runInContext(patched,context);hooks.afterGuestPlugins();
+ runOptimizationAdapter(patched,context);hooks.afterGuestPlugins();
  return {context,warnings,run: code => vm.runInContext(code,context)};
 }
 function state(f) {return JSON.parse(f.run('JSON.stringify({level:target._level,exp:target.currentExp(),hp:target._hp,mp:target._mp,skills:target._skills,states:target._states})'));}

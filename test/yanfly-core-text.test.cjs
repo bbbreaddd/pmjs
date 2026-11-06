@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { runModule } = require('./helpers/runtime-context.cjs');
 const { makeBitmapTextHarness } = require('./helpers/bitmap-text-harness.cjs');
 const { pinSourceFingerprint } = require('./helpers/reviewed-function-fixture.cjs');
 const adapter = fs.readFileSync(require.resolve('../js/pmjs-plugins/yanfly/core-engine.js'), 'utf8');
@@ -63,7 +64,9 @@ function harness({ native = mockNative(), disabled = false, beforeInstall, stock
   if (stockFont) context.Bitmap.prototype._makeFontNameText = originalFont;
   const finalMethod = context.Bitmap.prototype.drawText;
   const loaded = [];
+  runModule(context, 'js/pmjs-rpgmaker/plugins.js');
   context.PMJS.plugins = {
+    ...context.PMJS.plugins,
     registerOptimization(_plugin, definition) { context.PMJS.optimizations.register(definition); },
     onLoaded(name, _owner, callback) { loaded.push(callback); }
   };

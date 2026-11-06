@@ -29,12 +29,11 @@ PMJS.phases.on('afterGuestPlugins', 'pmjs.plugins.yanfly.core-character-presenta
 });
 (function() {
   var id = 'plugins.yanfly.core-native-text';
-  PMJS.plugins.registerOptimization('YEP_CoreEngine', {
-    id: id, owner: 'pmjs-plugins/yanfly', fallback: 'captured MV Canvas text drawing'
-  });
 
-  PMJS.plugins.onLoaded('YEP_CoreEngine', 'pmjs.adapter.yanfly-core-text', function() {
-    PMJS.phases.on('afterGuestPlugins', 'pmjs.adapter.yanfly-core-text', function() {
+  PMJS.plugins.installOptimization('YEP_CoreEngine', {
+    id: id, owner: 'pmjs-plugins/yanfly', fallback: 'captured MV Canvas text drawing',
+    phaseKey: 'pmjs.adapter.yanfly-core-text',
+    install: function() {
       if (!PMJS.optimizations.isEnabled(id)) return;
       var core = globalThis.Yanfly && Yanfly.Core;
       var bitmap = PMJS.mv && PMJS.mv.bitmap;
@@ -62,7 +61,7 @@ PMJS.phases.on('afterGuestPlugins', 'pmjs.plugins.yanfly.core-character-presenta
       }
       // Keep plugin wrappers and their side effects above the captured MV leaf.
       core.Bitmap_drawText = draw;
-    });
+    }
   });
 })();
 (function() {
@@ -70,20 +69,18 @@ PMJS.phases.on('afterGuestPlugins', 'pmjs.plugins.yanfly.core-character-presenta
   var localeString = Number.prototype.toLocaleString;
   var NumberFormat = Intl.NumberFormat;
   var formatGetter = Object.getOwnPropertyDescriptor(NumberFormat.prototype, 'format').get;
-  PMJS.plugins.registerOptimization('YEP_CoreEngine', {
-    id: id, owner: 'pmjs-plugins/yanfly', fallback: 'ordinary numeric locale formatting'
-  });
-  PMJS.plugins.onLoaded('YEP_CoreEngine', id, function() {
-    PMJS.phases.on('afterGuestPlugins', id, function() {
-      if (!PMJS.optimizations.isEnabled(id)) return;
-      var original = globalThis.Yanfly && Yanfly.Util && Yanfly.Util.toGroup;
-      var expected = ['dd7535c98792b225ccac00208f5db22411fde8d1ea79fbf5025b37c51756f850'];
-      if (!PMJS.methods.matchesSource(original, expected)) {
-        PMJS.optimizations.refuse(id, 'unrecognized numeric grouping method'); return;
-      }
+  var expected = ['dd7535c98792b225ccac00208f5db22411fde8d1ea79fbf5025b37c51756f850'];
+  PMJS.plugins.optimizeMethod({
+    plugin: 'YEP_CoreEngine', id: id, owner: 'pmjs-plugins/yanfly',
+    fallback: 'ordinary numeric locale formatting', phaseKey: id,
+    getTarget: function() { return globalThis.Yanfly && Yanfly.Util; },
+    method: 'toGroup',
+    recognized: expected,
+    refusalReason: 'unrecognized numeric grouping method',
+    replace: function(original) {
       var format, calls = 0;
       PMJS.plugins.numberFormat = { diagnostics: function() { return { formatted: calls }; } };
-      Yanfly.Util.toGroup = function(value) {
+      return function(value) {
         if (typeof value === 'string' || !Yanfly.Param.DigitGroup) return value;
         if (typeof value !== 'number' || Number.prototype.toLocaleString !== localeString ||
             Intl.NumberFormat !== NumberFormat) return original.apply(this, arguments);
@@ -91,6 +88,6 @@ PMJS.phases.on('afterGuestPlugins', 'pmjs.plugins.yanfly.core-character-presenta
         calls++;
         return format(value);
       };
-    });
+    }
   });
 })();

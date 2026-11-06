@@ -3,8 +3,6 @@
 (function() {
   var id = 'isat.loop-recovery';
   var active = false, inspected = new WeakMap();
-  PMJS.optimizations.register({ id: id, owner: 'pmjs-isat',
-    fallback: 'authored per-level healing and actor refresh' });
 
   function methodMatches(method, expected) {
     return PMJS.methods.matchesSource(method, expected);
@@ -35,50 +33,55 @@
     catch (_) { return false; }
   }
 
-  PMJS.phases.on('afterGuestPlugins', 'pmjs.isat.loop-recovery', function() {
-    if (!PMJS.optimizations.isEnabled(id)) return;
-    var qualification = PMJS.isatSourceQualification;
-    if (!qualification || qualification.verified !== true) {
-      PMJS.optimizations.refuse(id, 'unqualified ISAT sources');
-      return;
-    }
-    var actor = Game_Actor.prototype, interpreter = Game_Interpreter.prototype;
-    var stress = globalThis.Olivia && Olivia.AntiPlayerStress;
-    if (!stress || !methodMatches(actor.changeExp, '3dac5b8e3c39820e280b07824a16f3b48059fea943b085e2c810f0afdb6e0c62') ||
-        !methodMatches(actor.levelUp, '918d2041d2ca50bb31c81a7091cd819836c1995223589a5082d97bdc2f0d17ae') ||
-        !methodMatches(actor.levelUpRecover, '3d2700cd2772a2e9d6bc5c4cbcca5dd07d26a59eae01e9dfb06db201158f6f1f') ||
-        !methodMatches(stress.___Game_Actor_levelUp___, 'add07b8c2c55f285642e3a6ab2421eaa2b19de0110a298c821903f0ac3ca23c5')) {
-      PMJS.optimizations.refuse(id, 'unrecognized experience or level-recovery methods');
-      return;
-    }
-    var command = interpreter.command315, changeExp = actor.changeExp;
-    var levelUp = actor.levelUp, recover = actor.levelUpRecover;
-    var levelUpAlias = stress.___Game_Actor_levelUp___;
-    interpreter.command315 = function() {
-      var previous = active;
-      active = matches(this);
-      try { return command.apply(this, arguments); }
-      finally { active = previous; }
-    };
-    actor.changeExp = function(exp) {
-      if (PMJS.isatSourceQualification !== qualification || !active || this._level !== 1 || [2, 3, 4].indexOf(this._actorId) < 0 ||
-          !this._states || this._states.length || !(this._hp > 0) ||
-          !(exp > this.currentExp()) || this._bypassLevelUpRecover ||
-          this.levelUp !== levelUp || this.levelUpRecover !== recover ||
-          stress.___Game_Actor_levelUp___ !== levelUpAlias) {
-        return changeExp.apply(this, arguments);
+  PMJS.optimizations.install({
+    id: id, owner: 'pmjs-isat',
+    fallback: 'authored per-level healing and actor refresh',
+    phaseKey: 'pmjs.isat.loop-recovery',
+    install: function() {
+      if (!PMJS.optimizations.isEnabled(id)) return;
+      var qualification = PMJS.isatSourceQualification;
+      if (!qualification || qualification.verified !== true) {
+        PMJS.optimizations.refuse(id, 'unqualified ISAT sources');
+        return;
       }
-      var owned = Object.prototype.hasOwnProperty.call(this, '_bypassLevelUpRecover');
-      var previous = this._bypassLevelUpRecover, result;
-      this._bypassLevelUpRecover = true;
-      try { result = changeExp.apply(this, arguments); }
-      finally {
-        if (owned) this._bypassLevelUpRecover = previous;
-        else delete this._bypassLevelUpRecover;
+      var actor = Game_Actor.prototype, interpreter = Game_Interpreter.prototype;
+      var stress = globalThis.Olivia && Olivia.AntiPlayerStress;
+      if (!stress || !methodMatches(actor.changeExp, '3dac5b8e3c39820e280b07824a16f3b48059fea943b085e2c810f0afdb6e0c62') ||
+          !methodMatches(actor.levelUp, '918d2041d2ca50bb31c81a7091cd819836c1995223589a5082d97bdc2f0d17ae') ||
+          !methodMatches(actor.levelUpRecover, '3d2700cd2772a2e9d6bc5c4cbcca5dd07d26a59eae01e9dfb06db201158f6f1f') ||
+          !methodMatches(stress.___Game_Actor_levelUp___, 'add07b8c2c55f285642e3a6ab2421eaa2b19de0110a298c821903f0ac3ca23c5')) {
+        PMJS.optimizations.refuse(id, 'unrecognized experience or level-recovery methods');
+        return;
       }
-      // All level-up and skill-learning calls still run; publish only after recovery.
-      if (this._level > 1) recover.call(this);
-      return result;
-    };
+      var command = interpreter.command315, changeExp = actor.changeExp;
+      var levelUp = actor.levelUp, recover = actor.levelUpRecover;
+      var levelUpAlias = stress.___Game_Actor_levelUp___;
+      interpreter.command315 = function() {
+        var previous = active;
+        active = matches(this);
+        try { return command.apply(this, arguments); }
+        finally { active = previous; }
+      };
+      actor.changeExp = function(exp) {
+        if (PMJS.isatSourceQualification !== qualification || !active || this._level !== 1 || [2, 3, 4].indexOf(this._actorId) < 0 ||
+            !this._states || this._states.length || !(this._hp > 0) ||
+            !(exp > this.currentExp()) || this._bypassLevelUpRecover ||
+            this.levelUp !== levelUp || this.levelUpRecover !== recover ||
+            stress.___Game_Actor_levelUp___ !== levelUpAlias) {
+          return changeExp.apply(this, arguments);
+        }
+        var owned = Object.prototype.hasOwnProperty.call(this, '_bypassLevelUpRecover');
+        var previous = this._bypassLevelUpRecover, result;
+        this._bypassLevelUpRecover = true;
+        try { result = changeExp.apply(this, arguments); }
+        finally {
+          if (owned) this._bypassLevelUpRecover = previous;
+          else delete this._bypassLevelUpRecover;
+        }
+        // All level-up and skill-learning calls still run; publish only after recovery.
+        if (this._level > 1) recover.call(this);
+        return result;
+      };
+    }
   });
 })();

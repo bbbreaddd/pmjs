@@ -1,14 +1,5 @@
 'use strict';
 
-if (typeof PMJS !== 'undefined' && PMJS.plugins &&
-    typeof PMJS.plugins.registerOptimization === 'function') {
-  PMJS.plugins.registerOptimization('YEP_SlipperyTiles', {
-    id: 'plugins.yanfly.slippery-tiles',
-    owner: 'pmjs-plugins/yanfly',
-    fallback: 'stock YEP_SlipperyTiles isSlippery check on every call'
-  });
-}
-
 (function() {
 
   // MV 1.6.1 membership and YEP_SlipperyTiles 1.05 query.
@@ -73,9 +64,11 @@ if (typeof PMJS !== 'undefined' && PMJS.plugins &&
     return true;
   }
 
-  PMJS.plugins.onLoaded('YEP_SlipperyTiles',
-    'pmjs.adapter.yanfly-slippery-tiles', function() {
-      PMJS.phases.on('afterGuestPlugins',
-        'pmjs.adapter.yanfly-slippery-tiles', install);
-    });
+  PMJS.plugins.installOptimization('YEP_SlipperyTiles', {
+    id: 'plugins.yanfly.slippery-tiles',
+    owner: 'pmjs-plugins/yanfly',
+    fallback: 'stock YEP_SlipperyTiles isSlippery check on every call',
+    phaseKey: 'pmjs.adapter.yanfly-slippery-tiles',
+    install: install
+  });
 })();

@@ -22,15 +22,6 @@
     return recorder;
   }
 
-  if (typeof PMJS !== 'undefined' && PMJS.plugins &&
-      typeof PMJS.plugins.registerOptimization === 'function') {
-    PMJS.plugins.registerOptimization('Terrax_Lighting', {
-      id: 'terrax.native-lighting',
-      owner: 'plugins/terrax/lighting',
-      fallback: 'ordinary Terrax Canvas _updateMask and stock light-sprite handling'
-    });
-  }
-
   // Match complete reviewed implementations. Formatting changes and guest
   // wrappers retain ordinary behavior until their composition is reviewed.
   function isKnownTerraxCreateLightmask(fn) {
@@ -136,6 +127,11 @@
     return true;
   }
 
-  PMJS.phases.on('afterGuestPlugins', 'pmjs.adapter.terrax-lighting',
-    installTerraxLightingFastPaths);
+  PMJS.plugins.installOptimization('Terrax_Lighting', {
+    id: 'terrax.native-lighting',
+    owner: 'plugins/terrax/lighting',
+    fallback: 'ordinary Terrax Canvas _updateMask and stock light-sprite handling',
+    phaseKey: 'pmjs.adapter.terrax-lighting', order: 'module',
+    install: installTerraxLightingFastPaths
+  });
 })();

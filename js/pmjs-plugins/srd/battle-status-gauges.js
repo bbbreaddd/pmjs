@@ -2,9 +2,6 @@
 
 (function() {
   var id = 'plugins.srd.battle-status-atb';
-  PMJS.plugins.registerOptimization('SRD_BattleStatusCustomizer', {
-    id: id, owner: 'pmjs-plugins/srd', fallback: 'authored complete battle status refresh'
-  });
 
   // Exact reviewed drawing pipeline; unknown plugin compositions keep full refreshes.
   var knownMethods = {
@@ -230,8 +227,10 @@
     prototype.updateRefreshes = optimizedUpdate;
   }
 
-  PMJS.plugins.onLoaded('SRD_BattleStatusCustomizer', 'pmjs.adapter.srd-battle-status-atb', function() {
+  PMJS.plugins.installOptimization('SRD_BattleStatusCustomizer', {
+    id: id, owner: 'pmjs-plugins/srd', fallback: 'authored complete battle status refresh',
     // Wrap refresh checks after adapters that stabilize icon-array comparisons.
-    PMJS.phases.on('beforeBoot', 'pmjs.adapter.srd-battle-status-atb', install);
+    phaseKey: 'pmjs.adapter.srd-battle-status-atb', phase: 'beforeBoot',
+    install: install
   });
 })();

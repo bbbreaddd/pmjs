@@ -2,17 +2,17 @@
 
 (function() {
   var id = 'plugins.dreamx.damage-popup-retirement';
-  PMJS.plugins.registerOptimization('DreamX_Ext_VE_DamagePopup', {
-    id: id, owner: 'pmjs-plugins/dreamx',
-    fallback: 'authored battler-parent popup removal'
-  });
+
   var victorLoaded = false;
   PMJS.plugins.onLoaded('VE_DamagePopup', 'pmjs.adapter.dreamx-popup-dependency', function() {
     victorLoaded = true;
   });
 
-  PMJS.plugins.onLoaded('DreamX_Ext_VE_DamagePopup', 'pmjs.adapter.dreamx-popup-retirement', function() {
-    PMJS.phases.on('afterGuestPlugins', 'pmjs.adapter.dreamx-popup-retirement', function() {
+  PMJS.plugins.installOptimization('DreamX_Ext_VE_DamagePopup', {
+    id: id, owner: 'pmjs-plugins/dreamx',
+    fallback: 'authored battler-parent popup removal',
+    phaseKey: 'pmjs.adapter.dreamx-popup-retirement',
+    install: function() {
       if (!PMJS.optimizations.isEnabled(id)) return;
       var prototype = globalThis.Sprite_Battler && Sprite_Battler.prototype;
       if (!prototype || !victorLoaded ||
@@ -34,6 +34,6 @@
           this._damages.shift();
         }
       };
-    });
+    }
   });
 })();

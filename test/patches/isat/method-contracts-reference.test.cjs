@@ -1,5 +1,7 @@
 'use strict';
 
+const { runOptimizationAdapter } = require('../../helpers/runtime-context.cjs');
+
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -31,7 +33,7 @@ function fixture(name) {
   });
   const guestMethod = (file, assignment) => method(context, path.join(game, file), assignment);
   function install() {
-    vm.runInContext(fs.readFileSync(require.resolve(`../../../patches/isat/${name}.js`), 'utf8'), context);
+    runOptimizationAdapter(fs.readFileSync(require.resolve(`../../../patches/isat/${name}.js`), 'utf8'), context);
     hooks.forEach(hook => hook());
     assert.deepEqual(refused, []);
   }

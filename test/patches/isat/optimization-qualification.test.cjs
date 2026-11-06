@@ -1,5 +1,7 @@
 'use strict';
 
+const { runOptimizationAdapter } = require('../../helpers/runtime-context.cjs');
+
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const test = require('node:test');
@@ -17,7 +19,7 @@ for (const name of ['choice-width', 'static-events', 'blank-characters', 'loop-r
         optimizations: { register() {}, isEnabled() { return true; }, refuse(...args) { refused.push(args); } },
         phases: { on(_phase, _id, callback) { hooks.push(callback); } }
       } };
-      vm.runInNewContext(fs.readFileSync(require.resolve(`../../../patches/isat/${name}.js`), 'utf8'), context);
+      runOptimizationAdapter(fs.readFileSync(require.resolve(`../../../patches/isat/${name}.js`), 'utf8'), context);
       for (const hook of hooks) hook();
       assert.equal(refused.length, 1);
       assert.match(refused[0][1], /unqualified/);
@@ -36,7 +38,7 @@ test('screen-effects refuses method lookalikes and retains authored side effects
   Spriteset.prototype.updateScreenEffects = Spriteset.prototype.createScreenEffectFilters;
   Spriteset.prototype.update = function() { calls++; };
   const originals = { ...Spriteset.prototype }, hooks = [], refused = [];
-  vm.runInNewContext(fs.readFileSync(require.resolve('../../../patches/isat/screen-effects.js'), 'utf8'), {
+  runOptimizationAdapter(fs.readFileSync(require.resolve('../../../patches/isat/screen-effects.js'), 'utf8'), {
     Spriteset_Base: Spriteset,
     PMJS: { isatSourceQualification: { verified: true }, isatMethodHash: methodHash,
       optimizations: { register() {}, isEnabled() { return true; }, refuse(...args) { refused.push(args); } },

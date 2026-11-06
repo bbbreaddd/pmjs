@@ -3,16 +3,19 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const test = require('node:test');
+const { loadPmjsRuntime } = require('./helpers/runtime-context.cjs');
+const { pinSourceFingerprint } = require('./helpers/reviewed-function-fixture.cjs');
 const source = fs.readFileSync(require.resolve('../js/pmjs-plugins/yanfly/core-engine.js'),'utf8');
 function fixture({enabled=true,recognized=true}={}) {
-  const context=vm.createContext({});
+  const context=loadPmjsRuntime({ __pmjsBuiltinRequire: require,
+    PMJS_GAME_CONFIG: { disableOptimizations: enabled ? [] : ['plugins.yanfly.core-number-format'] } });
   vm.runInContext(`
     var fallbacks=0;
     var Yanfly={Param:{DigitGroup:true},Util:{toGroup:function(value){fallbacks++;if(typeof value==='string'||!Yanfly.Param.DigitGroup)return value;return value.toLocaleString('en');}}};
-    var PMJS={plugins:{registerOptimization(){},onLoaded(_name,_id,fn){fn();}},
-      phases:{on(_name,_id,fn){fn();}},optimizations:{isEnabled:()=>${enabled},refuse(){this.refused=true;}},methods:{matchesSource:()=>${recognized}}};
   `,context);
-  vm.runInContext(source,context);
+  vm.runInContext(recognized ? pinSourceFingerprint(source, 'expected', context.Yanfly.Util.toGroup) : source,context);
+  context.PMJS.plugins.execute('YEP_CoreEngine', () => {});
+  context.PMJS.phases.emit('afterGuestPlugins');
   return {context,run(code){return vm.runInContext(code,context);}};
 }
 test('numeric grouping reuses a formatter with native default English output',()=>{
@@ -33,7 +36,7 @@ test('custom receivers, method replacement and unsupported plugin bodies keep or
   const replaced=fixture();replaced.run('Intl.NumberFormat=function(){throw Error("unexpected constructor");}');
   assert.equal(replaced.run('Yanfly.Util.toGroup(1234)'),'1,234');assert.equal(replaced.context.fallbacks,1);
   const disabled=fixture({enabled:false});assert.equal(disabled.run('Yanfly.Util.toGroup(1234)'),'1,234');assert.equal(disabled.context.fallbacks,1);
-  const unknown=fixture({recognized:false});assert.equal(unknown.context.PMJS.optimizations.refused,true);
+  const unknown=fixture({recognized:false});assert.match(unknown.context.PMJS.optimizations.reason('plugins.yanfly.core-number-format'),/unrecognized numeric grouping method/);
   assert.equal(unknown.run('Yanfly.Util.toGroup(1234)'),'1,234');assert.equal(unknown.context.fallbacks,1);
 });
 

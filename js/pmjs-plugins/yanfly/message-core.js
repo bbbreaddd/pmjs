@@ -1,11 +1,5 @@
 'use strict';
 
-PMJS.plugins.registerOptimization('YEP_MessageCore', {
-  id: 'plugins.yanfly.message-word-wrap-measure',
-  owner: 'pmjs-plugins/yanfly',
-  fallback: 'ordinary YEP word-wrap measurement drawing'
-});
-
 (function() {
   var id = 'plugins.yanfly.message-word-wrap-measure';
   var windowProto = typeof Window_Base !== 'undefined' && Window_Base.prototype;
@@ -13,8 +7,12 @@ PMJS.plugins.registerOptimization('YEP_MessageCore', {
   var outline = bitmapProto && bitmapProto._drawTextOutline;
   var body = bitmapProto && bitmapProto._drawTextBody;
 
-  PMJS.plugins.onLoaded('YEP_MessageCore', 'pmjs.yanfly.message-core', function() {
-    PMJS.phases.on('afterGuestPlugins', 'pmjs.yanfly.message-core', function() {
+  PMJS.plugins.installOptimization('YEP_MessageCore', {
+    id: 'plugins.yanfly.message-word-wrap-measure',
+    owner: 'pmjs-plugins/yanfly',
+    fallback: 'ordinary YEP word-wrap measurement drawing',
+    phaseKey: 'pmjs.yanfly.message-core',
+    install: function() {
       if (!PMJS.optimizations.isEnabled(id)) return;
       var measure = windowProto && windowProto.textWidthExCheck;
       // Reviewed YEP_MessageCore 1.19 measurement path.
@@ -54,6 +52,6 @@ PMJS.plugins.registerOptimization('YEP_MessageCore', {
           else delete contents._drawTextBody;
         }
       };
-    });
+    }
   });
 })();

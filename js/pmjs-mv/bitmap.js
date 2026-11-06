@@ -38,19 +38,14 @@ Bitmap.snap = function(stage) {
   return bitmap;
 };
 
-(function installNativeBlur() {
-  var reviewedBlur = '77eb88ca5b4dfb6af98376695d8cbf490ac594aa3b885bd51dcee77306d16078';
-  var stockBlur = Bitmap.prototype.blur;
-  if (typeof stockBlur !== 'function') return;
-  PMJS.optimizations.register({ id: 'bitmap.native-blur', owner: 'pmjs-mv',
-    fallback: 'stock MV Canvas additive blur' });
-  function activateNativeBlur() {
-    if (!PMJS.optimizations.isEnabled('bitmap.native-blur')) return;
-    if (!PMJS.methods.matchesSource(stockBlur, reviewedBlur) || Bitmap.prototype.blur !== stockBlur) {
-      PMJS.optimizations.refuse('bitmap.native-blur', 'modified Bitmap blur method');
-      return;
-    }
-    Bitmap.prototype.blur = function() {
+PMJS.methods.optimize({
+  id: 'bitmap.native-blur', owner: 'pmjs-mv',
+  fallback: 'stock MV Canvas additive blur',
+  getTarget: function() { return Bitmap.prototype; }, method: 'blur',
+  recognized: '77eb88ca5b4dfb6af98376695d8cbf490ac594aa3b885bd51dcee77306d16078',
+  refusalReason: 'modified Bitmap blur method', phaseKey: 'pmjs.mv.native-blur',
+  replace: function(stockBlur) {
+    return function() {
       var canvas = this._canvas;
       if (canvas.width !== this.width || canvas.height !== this.height) {
         PMJS.optimizations.reportFallback('bitmap.native-blur', 'bitmap and Canvas dimensions differ');
@@ -65,48 +60,38 @@ Bitmap.snap = function(stage) {
       this._setDirty();
     };
   }
-  if (PMJS.phases && typeof PMJS.phases.on === 'function') {
-    PMJS.phases.on('afterGuestPlugins', 'pmjs.mv.native-blur', activateNativeBlur);
-  } else {
-    activateNativeBlur();
-  }
-})();
+});
 
 (function installNativeColorTransforms() {
   [
     ['adjustTone', 'c4b0d310063fa366854c01e7531c5cfe7b086cdb8e7b4ab245423ae9a5c837fe'],
     ['rotateHue', 'd06dfb21577dc1c8bf7a9cad27445b6689889bb3114583ada6432ea073be0d01']
   ].forEach(function(entry) {
-    var name = entry[0], original = Bitmap.prototype[name];
-    if (typeof original !== 'function') return;
+    var name = entry[0];
     var id = 'bitmap.native-' + name;
-    PMJS.optimizations.register({ id: id, owner: 'pmjs-mv', fallback: 'stock bitmap pixel loop' });
-    function activate() {
-      if (!PMJS.optimizations.isEnabled(id)) return;
-      if (!PMJS.methods.matchesSource(original, entry[1]) || Bitmap.prototype[name] !== original) {
-        PMJS.optimizations.refuse(id, 'modified Bitmap color method');
-        return;
-      }
-      Bitmap.prototype[name] = function() {
-        var count = name === 'adjustTone' ? 3 : 1;
-        if (!(arguments[0] || count === 3 && (arguments[1] || arguments[2])) ||
-            !(this.width > 0 && this.height > 0)) return;
-        for (var i = 0; i < count; ++i) {
-          if (typeof arguments[i] !== 'number' || !Number.isFinite(arguments[i]))
+    PMJS.methods.optimize({
+      id: id, owner: 'pmjs-mv', fallback: 'stock bitmap pixel loop',
+      getTarget: function() { return Bitmap.prototype; }, method: name, recognized: entry[1],
+      refusalReason: 'modified Bitmap color method', phaseKey: 'pmjs.mv.native-' + name,
+      replace: function(original) {
+        return function() {
+          var count = name === 'adjustTone' ? 3 : 1;
+          if (!(arguments[0] || count === 3 && (arguments[1] || arguments[2])) ||
+              !(this.width > 0 && this.height > 0)) return;
+          for (var i = 0; i < count; ++i) {
+            if (typeof arguments[i] !== 'number' || !Number.isFinite(arguments[i]))
+              return original.apply(this, arguments);
+          }
+          var context = this._context;
+          if (context.canvas.width !== this.width || context.canvas.height !== this.height ||
+              !PMJS.web.canvas[name](context, arguments[0], arguments[1], arguments[2])) {
+            PMJS.optimizations.reportFallback(id, 'unsupported bitmap pixel context');
             return original.apply(this, arguments);
-        }
-        var context = this._context;
-        if (context.canvas.width !== this.width || context.canvas.height !== this.height ||
-            !PMJS.web.canvas[name](context, arguments[0], arguments[1], arguments[2])) {
-          PMJS.optimizations.reportFallback(id, 'unsupported bitmap pixel context');
-          return original.apply(this, arguments);
-        }
-        this._setDirty();
-      };
-    }
-    if (PMJS.phases && typeof PMJS.phases.on === 'function')
-      PMJS.phases.on('afterGuestPlugins', 'pmjs.mv.native-' + name, activate);
-    else activate();
+          }
+          this._setDirty();
+        };
+      }
+    });
   });
 })();
 
@@ -175,8 +160,7 @@ if (typeof _Bitmap_blt === 'function') {
 // JavaScript implementation when overridden by plugins (e.g. Bitmap Fonts).
 (function installNativeDrawText() {
   if (typeof Bitmap === 'undefined' || !Bitmap.prototype) return;
-  PMJS.optimizations.register({ id: 'bitmap.native-draw-text', owner: 'pmjs-mv',
-    fallback: 'stock MV Canvas fillText and strokeText' });
+
   var stockDrawText = Bitmap.prototype.drawText;
   var stockOutline = Bitmap.prototype._drawTextOutline;
   var stockBody = Bitmap.prototype._drawTextBody;
@@ -241,14 +225,12 @@ if (typeof _Bitmap_blt === 'function') {
     }
     Bitmap.prototype.drawText = draw;
   }
-  if (PMJS.phases && typeof PMJS.phases.on === 'function') {
-    PMJS.phases.on('afterGuestPlugins', 'pmjs.mv.native-draw-text',
-      activateNativeDrawText);
-  } else {
-    activateNativeDrawText();
-  }
+  PMJS.optimizations.install({
+    id: 'bitmap.native-draw-text', owner: 'pmjs-mv',
+    fallback: 'stock MV Canvas fillText and strokeText',
+    phaseKey: 'pmjs.mv.native-draw-text', install: activateNativeDrawText
+  });
 })();
-
 
 // Pixel queries support canvas-backed bitmaps without forcing image readback.
 Bitmap.prototype.getPixel = function(x, y) {

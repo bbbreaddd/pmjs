@@ -76,6 +76,10 @@ function fixture({ enabled = true, modified = false } = {}) {
     return 'modified-result';
   };
   const original = proto.updateToneChanger;
+  const optimizationHooks = { ...context.PMJS.optimizations };
+  context.PMJS.config ||= {};
+  require('./helpers/runtime-context.cjs').runModule(context, 'js/pmjs-core/optimizations.js');
+  Object.assign(context.PMJS.optimizations, optimizationHooks);
   require('./helpers/runtime-context.cjs').runModule(context, 'js/pmjs-core/methods.js');
   vm.runInContext(adapted, context);
   assert.equal(registration.id, 'mv.neutral-tone-bypass');

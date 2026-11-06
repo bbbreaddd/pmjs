@@ -1,5 +1,7 @@
 'use strict';
 
+const { runOptimizationAdapter } = require('../../helpers/runtime-context.cjs');
+
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -57,7 +59,7 @@ function setup({ recognized = true, qualification = { verified: true }, extraWor
     .replace('5079c41aea8d86f452570edc42bfd1d5463dca629bf0e68eb3dafc34578ee1d1', hash(context.Window_BattleStatusUpgrade.prototype.drawActorIconsScale));
   if (!recognized) context.Window_BattleStatusUpgrade.prototype.drawActorIconsScale = function() {};
   const original = context.Window_BattleStatusUpgrade.prototype.updateRefreshes;
-  vm.runInContext(source, context);
+  runOptimizationAdapter(source, context);
   afterPlugins();
   return { context, original, refusal };
 }

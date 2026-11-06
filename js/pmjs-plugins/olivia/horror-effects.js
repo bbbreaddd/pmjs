@@ -4,14 +4,6 @@
 // Skips inactive HorrorEffects updates when filters are absent.
 // Recognize delegated update methods before skipping inactive effects.
 (function() {
-  if (typeof PMJS !== 'undefined' && PMJS.plugins &&
-      typeof PMJS.plugins.registerOptimization === 'function') {
-    PMJS.plugins.registerOptimization('Olivia_HorrorEffects', {
-      id: 'plugins.olivia.horror-effects',
-      owner: 'plugins/olivia/horror-effects',
-      fallback: 'run original Olivia HorrorEffects methods unconditionally on every sprite'
-    });
-  }
 
   function hasActiveHorrorFilter(sprite) {
     var filters = sprite._horrorFilters;
@@ -109,10 +101,12 @@
     return true;
   }
 
-  PMJS.plugins.onLoaded('Olivia_HorrorEffects', 'pmjs.adapter.olivia-horror',
-    function() {
-      PMJS.phases.on('afterGuestPlugins', 'pmjs.adapter.olivia-horror',
-        installOliviaHorrorEffects);
-    });
+  PMJS.plugins.installOptimization('Olivia_HorrorEffects', {
+    id: 'plugins.olivia.horror-effects',
+    owner: 'plugins/olivia/horror-effects',
+    fallback: 'run original Olivia HorrorEffects methods unconditionally on every sprite',
+    phaseKey: 'pmjs.adapter.olivia-horror',
+    install: installOliviaHorrorEffects
+  });
 
 })();

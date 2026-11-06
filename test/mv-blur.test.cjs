@@ -105,3 +105,31 @@ test('native MV blur preserves a custom method already present before installati
   assert.equal(bitmap.stockCalls, 1);
   assert.deepEqual(calls, []);
 });
+
+test('native blur resolves the current Bitmap prototype after guest plugins', () => {
+  for (const override of [false, true]) {
+    const { context } = harness();
+    const previous = context.Bitmap.prototype;
+    const original = previous.blur;
+    const replacement = Object.create(previous);
+    if (override) replacement.blur = function() { return 'plugin'; };
+    context.Bitmap.prototype = replacement;
+    const effective = replacement.blur;
+    context.PMJS.phases.emit('afterGuestPlugins');
+    assert.equal(previous.blur, original);
+    if (override) {
+      assert.equal(replacement.blur, effective);
+      assert.match(context.PMJS.optimizations.reason('bitmap.native-blur'), /modified Bitmap blur/);
+    } else {
+      assert.notEqual(replacement.blur, original);
+    }
+  }
+});
+
+test('a guest locking a reviewed Bitmap method does not turn optional installation into a boot error', () => {
+  const { context } = harness();
+  const original = context.Bitmap.prototype.blur;
+  Object.defineProperty(context.Bitmap.prototype, 'blur', { writable: false });
+  assert.doesNotThrow(() => context.PMJS.phases.emit('afterGuestPlugins'));
+  assert.equal(context.Bitmap.prototype.blur, original);
+});

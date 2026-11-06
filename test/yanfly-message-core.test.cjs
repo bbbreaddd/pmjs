@@ -23,6 +23,9 @@ function install({ enabled = true, changedCharacter = false, changedBody = false
       reportFallback(id, reason) { state.fallbacks.push({ id, reason }); },
       refuse(id, reason) { state.refused = reason; } }
   } });
+  const pluginHooks = { ...context.PMJS.plugins };
+  require('./helpers/runtime-context.cjs').runModule(context, 'js/pmjs-rpgmaker/plugins.js');
+  Object.assign(context.PMJS.plugins, pluginHooks);
   vm.runInContext(`
     function Bitmap() { this.height = 100; }
     Bitmap.prototype._drawTextOutline = function(text) { state.raster.push('outline:' + text); };

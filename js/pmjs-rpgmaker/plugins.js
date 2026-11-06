@@ -166,6 +166,36 @@
       optimizationRequirements.push({ plugin: key(name), id: definition.id });
     },
 
+    installOptimization: function(name, definition) {
+      PMJS.plugins.registerOptimization(name, definition);
+      function schedule() {
+        PMJS.phases.on(definition.phase || 'afterGuestPlugins', definition.phaseKey, definition.install);
+      }
+      if (definition.order === 'module') schedule();
+      else PMJS.plugins.onLoaded(name, definition.phaseKey, schedule);
+    },
+
+    optimizeMethod: function(definition) {
+      var def = definition;
+      PMJS.plugins.installOptimization(def.plugin, {
+        id: def.id, owner: def.owner, fallback: def.fallback, phaseKey: def.phaseKey,
+        install: function() {
+          if (!PMJS.optimizations.isEnabled(def.id)) return;
+          var target = def.getTarget();
+          var original = target && target[def.method];
+          if (def.unavailableReason && typeof original !== 'function') {
+            PMJS.optimizations.refuse(def.id, def.unavailableReason);
+            return;
+          }
+          if (!PMJS.methods.matchesSource(original, def.recognized)) {
+            PMJS.optimizations.refuse(def.id, def.refusalReason);
+            return;
+          }
+          target[def.method] = def.replace(original);
+        }
+      });
+    },
+
     snapshotOriginalManifest: function(records) {
       if (originalManifest) throw new Error('PMJS plugins: original manifest already captured');
       originalManifest = copyManifest(records);
