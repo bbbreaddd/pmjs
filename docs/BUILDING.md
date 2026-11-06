@@ -18,6 +18,17 @@ Use `--jobs N` to set the number of parallel jobs or `--output PATH` to choose a
 
 To package the default ARM64 build, run `python3 tools/release.py package`. Use `--format squashfs` or `--format all` to include SquashFS
 
+Game ZIP packaging with `tools/portmaster.py --submission` requires Pillow
+(`sudo apt install python3-pil` or `python3 -m pip install Pillow`). Packaging
+requires screenshots to be exactly 640×480, compresses PNG artwork, and fits
+supplied covers onto a black 640×480 canvas without cropping. Source files stay
+unchanged.
+
+Artwork compression reduces images to a palette of up to 157 colours, with
+dithering for opaque artwork. Transparent artwork uses alpha-aware octree
+quantization. Use `--no-image-compression` to preserve screenshot bytes and skip
+palette reduction and optimized PNG encoding. Cover fitting still applies.
+
 ### Docker
 
 With Docker Buildx, export the runtime to an empty directory:

@@ -37,7 +37,7 @@ Usage:
       [--include-port-assets] [--asset-cache-root DIR]
   pmjs BUNDLE [--game DIR]
   pmjs package BUNDLE --runtime DIR --output ZIP [--sources FILE --sources-url URL]
-      [--submission DIR] [--layout testing|pr]
+      [--submission DIR] [--layout testing|pr] [--no-image-compression]
   pmjs run --game DIR [--state DIR] [--save-root DIR] [--asset-cache-root DIR]
   pmjs prepare --game DIR [--state DIR] [--config FILE] [--manifest FILE]
   pmjs self-test [--graphics]
@@ -172,13 +172,17 @@ async function main() {
     const layoutAt = args.indexOf('--layout');
     const layout = layoutAt < 0 ? undefined : args.splice(layoutAt, 2)[1];
     if (layoutAt >= 0 && !layout) throw new Error('--layout requires testing or pr');
-    const options = parse(args, ['--runtime', '--output', '--sources', '--submission'], false);
+    const compressImages = !args.includes('--no-image-compression');
+    if (args.filter(value => value === '--no-image-compression').length > 1) throw new Error('duplicate package option');
+    const options = parse(args.filter(value => value !== '--no-image-compression'),
+      ['--runtime', '--output', '--sources', '--submission'], false);
     if (!options['--runtime'] || !options['--output']) throw new Error('package requires --runtime and --output');
     const result = spawnSync('python3', [path.join(share, 'tools/portmaster.py'),
       '--stage', options['--runtime'], '--bundle', path.resolve(bundleArgument), '--output', options['--output'],
       ...(options['--sources'] ? ['--sources', options['--sources']] : []),
       ...(options['--submission'] ? ['--submission', options['--submission']] : []),
       ...(layout ? ['--layout', layout] : []),
+      ...(compressImages ? [] : ['--no-image-compression']),
       ...(sourceUrl ? ['--sources-url', sourceUrl] : [])],
     { stdio: 'inherit', env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } });
     if (result.error) throw result.error;

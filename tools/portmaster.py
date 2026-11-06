@@ -52,10 +52,20 @@ exit "$status"
 
 
 SHARED_RUNTIME_SETUP = '''runtime="@RUNTIME@"
+if [ ! -f "$controlfolder/libs/${runtime}.squashfs" ]; then
+  if [ ! -f "$controlfolder/harbourmaster" ]; then
+    pm_message "This port requires the latest PortMaster to run, please go to https://portmaster.games/ for more info."
+    sleep 5
+    exit 1
+  fi
+  $ESUDO "$controlfolder/harbourmaster" --quiet --no-check runtime_check "${runtime}.squashfs" || exit 1
+fi
 runtime_dir="/tmp/${runtime}-@ID@"
 mkdir -p "$runtime_dir"
-$ESUDO umount "$runtime_dir" || true
-$ESUDO mount "$controlfolder/libs/${runtime}.squashfs" "$runtime_dir"
+if [[ "$PM_CAN_MOUNT" != "N" ]]; then
+  $ESUDO umount "$runtime_dir" || true
+fi
+$ESUDO mount "$controlfolder/libs/${runtime}.squashfs" "$runtime_dir" || exit 1
 '''
 
 
@@ -70,7 +80,9 @@ def launcher_script(identifier, runtime_key=None):
         if not re.fullmatch(r'[a-z0-9][a-z0-9._-]*', runtime_key):
             raise ValueError('Invalid PortMaster runtime key')
         setup = SHARED_RUNTIME_SETUP.replace('@RUNTIME@', runtime_key).rstrip()
-    cleanup = '$ESUDO umount "$runtime_dir"' if runtime_key is not None else ''
+    cleanup = '''if [[ "$PM_CAN_MOUNT" != "N" ]]; then
+  $ESUDO umount "$runtime_dir"
+fi''' if runtime_key is not None else ''
     return (PORTMASTER_LAUNCHER.replace('@RUNTIME_SETUP@', setup)
             .replace('@RUNTIME_CLEANUP@', cleanup).replace('@ID@', identifier))
 
@@ -259,7 +271,7 @@ def checked_bundle(bundle):
 
 
 def portmaster(stage, bundle, output, name=None, strip=None, extra_notices=(), sources=None, sources_url=None,
-               submission=None, release=False, layout="testing"):
+               submission=None, release=False, layout="testing", compress_images=True):
     if layout not in ("testing", "pr"):
         raise ValueError("Package layout must be testing or pr")
     if layout == "pr" and submission is None:
@@ -372,7 +384,7 @@ def portmaster(stage, bundle, output, name=None, strip=None, extra_notices=(), s
                 elif notice != 'LICENSE':
                     bundle_notices.add(stage / 'share/pmjs' / notice)
             stage_submission(payload if layout == "pr" else port, port, submission_details,
-                             stage, info, sorted(bundle_notices), extra_notices)
+                             stage, info, sorted(bundle_notices), extra_notices, compress_images)
             root_files = {file.name.casefold() for file in payload.iterdir() if file.is_file()}
             if identifier.casefold() in root_files:
                 raise ValueError('Port directory name collides with a submission file: ' + identifier)
@@ -417,6 +429,8 @@ def main():
     parser.add_argument('--submission', type=Path, help='Directory containing authored PortMaster metadata')
     parser.add_argument('--layout', choices=('testing', 'pr'), default='testing',
                         help='ZIP layout: testing (default) or PR submission')
+    parser.add_argument('--no-image-compression', action='store_true',
+                        help='Skip artwork palette reduction and optimized PNG encoding')
     parser.add_argument('--release', action='store_true',
                         help='Require authored submission metadata for a PortMaster release')
     parser.add_argument('--notice', type=Path, action='append', default=[], help='Add a port-specific license notice')
@@ -425,7 +439,8 @@ def main():
         portmaster(args.stage.resolve(), args.bundle.resolve(), args.output.resolve(), args.name,
                    args.strip, [file.resolve() for file in args.notice],
                    args.sources.resolve() if args.sources else None, args.sources_url,
-                   args.submission.resolve() if args.submission else None, args.release, args.layout)
+                   args.submission.resolve() if args.submission else None, args.release, args.layout,
+                   not args.no_image_compression)
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         parser.exit(1, str(error) + '\n')
 
