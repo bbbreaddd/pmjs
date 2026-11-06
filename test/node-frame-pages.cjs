@@ -55,7 +55,7 @@ const sparseFixtures = [true, false].map(extended => {
 {
   const name = 'channel-blocks.png', pixels = Buffer.alloc(width * height * 4);
   for (let y = 0; y < height; ++y) for (let x = 0; x < width; ++x)
-    pixels.set([x % 251, y % 251, (x + y) % 251,
+    pixels.set([x % 251, x < width / 2 ? x % 251 : y % 251, x < width / 2 ? x % 251 : (x + y) % 251,
       (Math.floor(x / 8) + Math.floor(y / 8)) % 3 ? 96 + x % 8 * 19 : 0], (y * width + x) * 4);
   const bytes = png(width, height, pixels), file = path.join(root, name);
   fs.writeFileSync(file, bytes);
@@ -64,11 +64,11 @@ const sparseFixtures = [true, false].map(extended => {
 native.initialize({ gameRoot: root, width: 320, height: 280, windowTitle: 'frame pages',
   imageWarmCacheBytes: 0, preparedFrameCacheBytes: 8 * 1024 * 1024 });
 const schema = native.scene.schema;
-function draw(image, frame, whole = false, effect = false, boundary = false, nearest = false) {
+function draw(image, frame, whole = false, effect = false, boundary = false, nearest = false, transform) {
   const rect = whole ? [0, 0, width, height] : [frame % 4 * cellWidth, Math.floor(frame / 4) * cellHeight, cellWidth, cellHeight];
   const values = new Float32Array(schema.valueStride);
   const scale = whole ? 0.25 : boundary ? 1 : 0.87;
-  values.set([scale, boundary ? 0 : 0.01, boundary ? 0 : -0.01, scale, 2.25, 2.5, 1]);
+  values.set([...(transform || [scale, boundary ? 0 : 0.01, boundary ? 0 : -0.01, scale, 2.25, 2.5]), 1]);
   values.set(rect, 9); values.set(rect.slice(2), 13);
   if (effect) { values.set([0.1, -0.1, 0.05, 0.3], 33); values.set([0.2, 0.5, 0.1, 0.25], 37); }
   native.beginFrame();
@@ -138,7 +138,8 @@ async function main() {
       const owner = state.largest.find(entry => entry.handle === retained.handle);
       assert.ok(owner && (owner.fullTextureResident || state.blockRegions > blocksBeforeRetained),
         'zero-fill pages must preserve logical-source sampling');
-      assert.equal(state.preparedFrameCacheBytes, 0);
+      assert.ok(state.preparedFrameCacheBytes > 0 &&
+        state.preparedFrameCacheBytes <= state.preparedFrameCacheBudget);
     }
     assertPixels(draw(retained, frame, false, true), expected[frame][1], 1);
     const memory = native.images.memory();
@@ -233,6 +234,7 @@ async function main() {
     try {
       assertPixels(draw(sparsePrepared, 0, true), draw(sparseOriginal, 0, true), 1);
       const artifactOwner = native.images.memory(20).largest.find(entry => entry.handle === sparsePrepared.handle);
+      const channelBlocks = native.images.memory().blockTextureUploads > blocksBefore;
       assert.ok(artifactOwner && artifactOwner.cpuBytes + artifactOwner.gpuBytes < sparsePixels.length,
         JSON.stringify({ name, artifactOwner }));
       for (let frame = 0; frame < 12; ++frame) for (const nearest of [false, true]) {
@@ -247,7 +249,7 @@ async function main() {
       assertPixels(draw(sparsePrepared, 0, true), draw(sparseOriginal, 0, true), 1);
       const artifactAfter = native.images.memory();
       assert.equal(artifactAfter.textureArtifactLoads, artifactBefore.textureArtifactLoads + 1);
-      assert.ok(artifactAfter.preparedPageDecodes <= decodesBefore + sparseDescriptor.pages.length,
+      if (!channelBlocks) assert.ok(artifactAfter.preparedPageDecodes <= decodesBefore + sparseDescriptor.pages.length,
         'filtered draws decoded recovery pages more than once');
       assert.equal(artifactAfter.sourceTextureBuilds, artifactBefore.sourceTextureBuilds);
       assert.equal(artifactAfter.textureArtifactFailures, artifactBefore.textureArtifactFailures);
@@ -256,9 +258,22 @@ async function main() {
       assert.ok(owner);
       assert.equal(owner.paletteSparse, extended || !!sparse16);
       assert.equal(owner.paletteIndexBits, extended ? 24 : sparse16 ? 16 : 0);
-      if (planar) {
-        assert.ok(native.images.memory().blockTextureUploads > blocksBefore);
+      if (planar) assert.ok(channelBlocks);
+      if (channelBlocks) {
         assert.equal(owner.sceneryFullMaterialized, false);
+        for (const translation of [[0, 0], [0.25, 0], [0, 0.5], [0.25, 0.5]]) {
+          const transform = [1, 0, 0, 1, ...translation];
+          for (const frame of [0, 5, 11]) for (const effect of [false, true]) {
+            assertPixels(draw(sparsePrepared, frame, false, effect, false, false, transform),
+              draw(sparseOriginal, frame, false, effect, false, false, transform), 1);
+          }
+        }
+        const warm = native.images.memory();
+        for (const frame of [0, 5, 11]) draw(sparsePrepared, frame);
+        const reused = native.images.memory();
+        assert.ok(reused.preparedFrameCacheHits > warm.preparedFrameCacheHits);
+        assert.equal(reused.preparedPageDecodes, warm.preparedPageDecodes);
+        assert.equal(reused.textureUploadBytes, warm.textureUploadBytes);
       }
       const recoveryBytes = sparseDescriptor.pages.reduce((bytes, page) => bytes + page.width * page.height * 4, 0);
       assert.ok(owner.cpuBytes <= recoveryBytes);

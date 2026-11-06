@@ -3349,7 +3349,7 @@ std::optional<ImageInfo> ImageStore::convertPreparedFrame(ImageHandle handle,
 
 std::optional<SpriteImageRegion> ImageStore::resolvePreparedFrameRegion(ImageHandle handle,
     float x, float y, float width, float height, bool premultiplied, bool linearPalette,
-    bool cachePaletteSource) {
+    bool cacheSource) {
   if (!preparedFrameBudgetBytes_) return std::nullopt;
   const auto logical = inspect(handle);
   if (!logical || !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(width) ||
@@ -3357,17 +3357,18 @@ std::optional<SpriteImageRegion> ImageStore::resolvePreparedFrameRegion(ImageHan
       x + width > logical->width || y + height > logical->height) return std::nullopt;
   auto& slot = slots_[(handle & indexMask)-1U];
   if (!slot.prepared || slot.tiles || slot.prepared->descriptor.uniform) return std::nullopt;
-  if (slot.prepared->requiresSourceSampling() && !cachePaletteSource) return std::nullopt;
+  if (slot.prepared->requiresSourceSampling() && !cacheSource) return std::nullopt;
   const int left = static_cast<int>(std::floor(x)), top = static_cast<int>(std::floor(y));
   const int right = static_cast<int>(std::ceil(x + width)), bottom = static_cast<int>(std::ceil(y + height));
   // Ordinary whole-source draws need no additional frame texture.
   if (left == 0 && top == 0 && right == logical->width && bottom == logical->height &&
-      (!linearPalette || (hasPaletteStorage(handle) && !cachePaletteSource))) return std::nullopt;
+      (!linearPalette || (hasPaletteStorage(handle) && !cacheSource))) return std::nullopt;
   const std::array<int, 4> source{left, top, right-left, bottom-top};
   const int halo = std::max(1, slot.prepared->descriptor.halo);
   const auto extent = checkedImageExtent(source[2]+2*halo, source[3]+2*halo);
   if (!extent) return std::nullopt;
-  if (linearPalette && (extent->rgbaBytes > preparedFrameBudgetBytes_ || slot.prepared->frameCacheDisabled)) {
+  if ((linearPalette || cacheSource) &&
+      (extent->rgbaBytes > preparedFrameBudgetBytes_ || slot.prepared->frameCacheDisabled)) {
     ++preparedFrameBypasses_;
     return std::nullopt;
   }

@@ -799,9 +799,16 @@ void Renderer::renderScene() {
         command.pixiSpritePacking && !command.premultipliedSpriteTexture, true);
       if (filtered) { derived = std::move(filtered); palette.reset(); }
     }
-    const auto block = !palette && !derived && frameEligible ? images_.resolveBlockRegion(command.image,
+    auto block = !palette && !derived && frameEligible ? images_.resolveBlockRegion(command.image,
       command.pixiSpritePacking && !command.premultipliedSpriteTexture) :
       std::optional<BlockImageRegion>{};
+    if (block && block->planar && !command.nearest && !wholeSource &&
+        double(command.source[2]) * command.source[3] >= 256.0 * 256.0) {
+      derived = images_.resolvePreparedFrameRegion(command.image,
+        command.source[0], command.source[1], command.source[2], command.source[3],
+        command.pixiSpritePacking && !command.premultipliedSpriteTexture, false, true);
+      if (derived) block.reset();
+    }
     if (!palette && !block && !derived && derivedEligible) derived = images_.resolveSpriteRegion(command.image,
       command.source[0], command.source[1], command.source[2], command.source[3],
       command.pixiSpritePacking && !command.premultipliedSpriteTexture);
