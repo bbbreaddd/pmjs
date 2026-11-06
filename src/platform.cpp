@@ -781,7 +781,14 @@ std::vector<Platform::GamepadState> Platform::gamepads() const {
     }
     const int instance = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(controller));
     const char* name = SDL_GameControllerName(controller);
-    GamepadState pad{static_cast<int>(index), instance, true, name ? name : "Game Controller", {}, {}, {}};
+    // Chromium identifies a standard-mapped pad with its vendor and product in the id;
+    // games read those numbers to pick controller-specific glyphs.
+    char id[256];
+    std::snprintf(id, sizeof(id), "%s (STANDARD GAMEPAD Vendor: %04x Product: %04x)",
+                  name && *name ? name : "Game Controller",
+                  static_cast<unsigned>(SDL_GameControllerGetVendor(controller)),
+                  static_cast<unsigned>(SDL_GameControllerGetProduct(controller)));
+    GamepadState pad{static_cast<int>(index), instance, true, id, {}, {}, {}};
     if (!windowFocused_) {
       pad.axes = {0, 0, 0, 0};
       result.push_back(std::move(pad));
