@@ -641,6 +641,10 @@ if(BUILD_TESTING)
     set_tests_properties(node-prepared-linear-palette-${mode} PROPERTIES ENVIRONMENT
       "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
   endforeach()
+  add_test(NAME node-resident-images COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-resident-images.cjs" $<TARGET_FILE:pmjs_native>)
+  set_tests_properties(node-resident-images PROPERTIES ENVIRONMENT
+    "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
   add_test(NAME node-image-cpu-cache COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-image-cpu-cache.cjs" $<TARGET_FILE:pmjs_native>)
   set_tests_properties(node-image-cpu-cache PROPERTIES ENVIRONMENT

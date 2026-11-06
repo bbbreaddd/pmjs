@@ -1,5 +1,6 @@
 #include "log.hpp"
 #include "node_addon_internal.hpp"
+#include "asset_processor.hpp"
 #include <cmath>
 #include <span>
 
@@ -664,6 +665,31 @@ napi_value isOpaqueImage(napi_env env, napi_callback_info info) try {
   napi_throw_error(env, nullptr, error.what()); return nullptr;
 }
 
+napi_value exportResidentImage(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info, 2);
+  if (args.size() != 2) throw std::invalid_argument("exportResident requires an image handle and output directory");
+  const auto directory = std::filesystem::path(asString(env, args[1]));
+  std::filesystem::create_directories(directory);
+  napi_value result;
+  check(env, napi_create_array(env, &result), "cannot create resident image list");
+  std::size_t index = 0;
+  const auto valid = host(env).images.visitResidentImages(asUint32(env, args[0]),
+    [&](const std::string& kind, const ImagePixels* pixels, const std::string& reason) {
+      const auto entry = moduleObject(env);
+      check(env, napi_set_named_property(env, entry, "kind", string(env, kind)), "cannot set resident kind");
+      if (pixels) {
+        const auto file = directory / (std::to_string(index) + "-" + kind + ".png");
+        writePreparedPng(file, pixels->width, pixels->height, pixels->rgba);
+        check(env, napi_set_named_property(env, entry, "file", string(env, file.string())), "cannot set resident file");
+        check(env, napi_set_named_property(env, entry, "width", number(env, pixels->width)), "cannot set resident width");
+        check(env, napi_set_named_property(env, entry, "height", number(env, pixels->height)), "cannot set resident height");
+      } else check(env, napi_set_named_property(env, entry, "unavailable", string(env, reason)), "cannot set resident error");
+      check(env, napi_set_element(env, result, index++, entry), "cannot set resident entry");
+    });
+  if (!valid) throw std::runtime_error("invalid image handle");
+  return result;
+} catch (const std::exception& error) { return throwException(env, error); }
+
 void registerResourceBindings(napi_env env, napi_value exports) {
   napi_value images = moduleObject(env);
   method(env, images, "load", loadImage);
@@ -679,6 +705,7 @@ void registerResourceBindings(napi_env env, napi_value exports) {
   method(env, images, "unpin", unpinImage);
   method(env, images, "touch", touchImage);
   method(env, images, "memory", imageMemory);
+  method(env, images, "exportResident", exportResidentImage);
   napi_value assets = moduleObject(env);
   method(env, assets, "loadImage", loadAssetImage);
   method(env, assets, "loadImageAsync", loadAssetImageAsync);

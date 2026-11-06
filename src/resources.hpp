@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -343,6 +344,8 @@ class ImageStore {
   std::uint64_t textureEpoch() const { return textureEpoch_; }
   bool ensureMipmaps(ImageHandle handle, bool premultiplied);
   const ImagePixels* readPixels(ImageHandle handle) const;
+  using ResidentImageVisitor = std::function<void(const std::string&, const ImagePixels*, const std::string&)>;
+  bool visitResidentImages(ImageHandle handle, const ResidentImageVisitor& visitor) const;
   bool updateRgba(ImageHandle handle, const void* pixels);
   bool updateRgbaRegion(ImageHandle handle, int x, int y, int width, int height,
                         const void* pixels, int sourceRowPixels, bool imageKnownAllZero = false);
@@ -459,6 +462,7 @@ class ImageStore {
   struct TileCatalog;
   struct TilePages;
   struct TileBacking;
+  void visitResidentTileImages(const TileBacking& tiles, const ResidentImageVisitor& visitor) const;
   struct TileLoad;
   struct Slot {
     std::shared_ptr<PaletteBacking> palette, retiredPalette;

@@ -2666,6 +2666,60 @@ void ImageStore::trimPreparedPageTextures() {
   }
 }
 
+bool ImageStore::visitResidentImages(ImageHandle handle, const ResidentImageVisitor& visitor) const {
+  const auto info = inspect(handle);
+  if (!info) return false;
+  const auto& slot = slots_[(handle & indexMask) - 1U];
+  if (slot.cachedPixels) visitor("cpu-rgba", &*slot.cachedPixels, "");
+  const auto texture = [&](const std::string& name, GLuint id, int width, int height,
+                           ImageChannelStorage storage) {
+    if (!id) return;
+    const auto pixels = readTexturePixels({0, width, height, id}, storage);
+    visitor(name, pixels ? &*pixels : nullptr, pixels ? "" : "texture cannot be read as RGBA");
+  };
+  texture("gpu-texture", slot.texture, slot.width, slot.height, slot.storage);
+  if (slot.premultipliedTexture && slot.premultipliedTexture != slot.texture)
+    texture("gpu-premultiplied", slot.premultipliedTexture, slot.width, slot.height, slot.storage);
+  const auto palette = [&](const std::string& name, const std::shared_ptr<PaletteBacking>& backing, int width, int height) {
+    if (!backing) return;
+    if (backing->blocks) {
+      visitor(name, nullptr, "sparse GPU palette requires its resident CPU page for a color preview");
+      return;
+    }
+    Slot view;
+    view.width = width; view.height = height; view.palette = backing;
+    const auto pixels = readPalettePixels(view);
+    visitor(name, pixels ? &*pixels : nullptr, pixels ? "" : "palette cannot be read as RGBA");
+  };
+  palette("gpu-palette", slot.palette, slot.width, slot.height);
+  if (slot.prepared) {
+    const auto& backing = *slot.prepared;
+    for (std::size_t i = 0; i < backing.pages.size(); ++i) {
+      const auto& page = backing.pages[i];
+      const auto name = "page-" + std::to_string(i);
+      const auto& extent = backing.descriptor.pages[i];
+      if (page.pixels) visitor(name + "-cpu-rgba", page.pixels.get(), "");
+      if (page.sparse) {
+        auto decoded = page.sparse->pixels();
+        const ImagePixels pixels{decoded.width, decoded.height, std::move(decoded.rgba)};
+        visitor(name + "-cpu-palette-expanded", &pixels, "");
+      }
+      texture(name + "-gpu", page.texture, extent.width, extent.height, page.storage);
+      texture(name + "-gpu-premultiplied", page.premultipliedTexture, extent.width, extent.height, page.storage);
+      if (!page.sparse || !page.palette || !page.palette->blocks)
+        palette(name + "-gpu-palette", page.palette, extent.width, extent.height);
+    }
+    for (const auto child : backing.cellImages) if (child && child != handle)
+      visitResidentImages(child, [&](const auto& kind, const auto* pixels, const auto& reason) {
+        visitor("frame-" + std::to_string(child) + "-" + kind, pixels, reason);
+      });
+    if (backing.channelAtlas || backing.blockTextures[0].atlas || backing.blockTextures[1].atlas)
+      visitor("gpu-block-storage", nullptr, "block-encoded GPU backing has no RGBA export");
+  }
+  if (slot.tiles) visitResidentTileImages(*slot.tiles, visitor);
+  return true;
+}
+
 std::optional<ImagePixels> ImageStore::readPixelsRegion(ImageHandle handle,
     int x, int y, int width, int height) const {
   auto info = inspect(handle);

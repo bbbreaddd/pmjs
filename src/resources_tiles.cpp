@@ -82,6 +82,13 @@ struct ImageStore::TileBacking {
   std::shared_ptr<TilePages> pages;
   std::size_t source = 0;
 };
+void ImageStore::visitResidentTileImages(const TileBacking& tiles, const ResidentImageVisitor& visitor) const {
+  if (!tiles.pages) return;
+  for (const auto child : tiles.pages->images) if (child)
+    visitResidentImages(child, [&](const auto& kind, const auto* pixels, const auto& reason) {
+      visitor("tile-" + std::to_string(child) + "-" + kind, pixels, reason);
+    });
+}
 struct ImageStore::TileLoad {
   std::shared_ptr<TilePrototype> prototype;
   std::shared_ptr<ImageFileSource> sourceFile;
