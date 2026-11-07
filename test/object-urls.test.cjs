@@ -20,7 +20,7 @@ function imageContext(loadBytesAsync, loadAsync) {
     Blob,
     URL: function URL() {},
     console,
-    PMJS: {},
+    PMJS: { config: {} },
     pmjsGameConfig: {},
     nativeWindowState: { focused: true, visible: true },
     NativeHost: {

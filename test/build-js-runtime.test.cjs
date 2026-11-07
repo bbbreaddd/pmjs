@@ -375,7 +375,7 @@ test('a standalone source copy builds without the surrounding workspace', () => 
   const clone = path.join(root, 'runtime');
   for (const directory of ['js', 'profiles']) fs.cpSync(path.join(__dirname, '..', directory), path.join(clone, directory), { recursive: true });
   fs.mkdirSync(path.join(clone, 'runner'));
-  for (const file of ['plugin-manifest.cjs'])
+  for (const file of ['plugin-manifest.cjs', 'file-overrides.cjs'])
     fs.copyFileSync(path.join(__dirname, '../runner', file), path.join(clone, 'runner', file));
   fs.mkdirSync(path.join(clone, 'tools'));
   for (const file of ['build-js-runtime.mjs', 'build-js-composition.mjs', 'game-inspect.mjs', 'achievement-discovery.mjs']) fs.copyFileSync(path.join(__dirname, '../tools', file), path.join(clone, 'tools', file));

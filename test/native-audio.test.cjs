@@ -13,6 +13,7 @@ function contextFor(prepare) {
   const calls = { plays: [], releases: [], fades: [], params: [], pans: [], master: [], suspensions: [], bindings: [] };
   let nextHandle = 1;
   const context = {
+    PMJS: { config: {} },
     console, __pmjsBuiltinRequire: require,
     Date,
     gamePath: function(value) { return value; },
