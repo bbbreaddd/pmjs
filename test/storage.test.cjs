@@ -179,7 +179,7 @@ for (const disabled of [false, true]) {
 }
 
 function localStorageContext({ storage = createStorage(temporaryDirectory('pmjs-storage-paths-')),
-  disabled = false } = {}) {
+  disabled = false, engine } = {}) {
   const lz = {
     compressToBase64: value => Buffer.from(value).toString('base64'),
     decompressFromBase64: value => value === null ? null : Buffer.from(value, 'base64').toString('utf8'),
@@ -220,6 +220,7 @@ function localStorageContext({ storage = createStorage(temporaryDirectory('pmjs-
     },
   };
   const context = loadPmjsRuntime({
+    PMJS_RUNTIME_ENGINE: engine,
     Buffer, __pmjsBuiltinRequire: require, NativeHost: { storage }, StorageManager: manager, LZString: lz, queueMicrotask,
     PMJS_GAME_CONFIG: { disableOptimizations: disabled ? ['storage.read-burst-coalesce'] : [] },
   });
@@ -229,6 +230,17 @@ function localStorageContext({ storage = createStorage(temporaryDirectory('pmjs-
   guestFs = context.fsModule;
   return { context, manager, storage, lz };
 }
+
+test('MV storage observes plugin writes through the game-relative save mount in the same turn', () => {
+  const { context, manager, storage, lz } = localStorageContext({ engine: 'mv' });
+  context.installNativeStorageManager();
+  storage.writeText('file1.rpgsave', lz.compressToBase64('existing progress'));
+  assert.equal(manager.loadFromLocalFile(1), 'existing progress');
+  context.fsModule.writeFileSync('/game/save/file1.rpgsave', lz.compressToBase64('updated progress'));
+  assert.equal(manager.loadFromLocalFile(1), 'updated progress');
+  manager.saveToLocalFile(1, 'engine write');
+  assert.equal(context.fsModule.readFileSync('save/file1.rpgsave', 'utf8'), lz.compressToBase64('engine write'));
+});
 
 for (const disabled of [false, true]) {
   test('MV primary read errors propagate with backups and deletion markers, cache disabled=' + disabled, () => {

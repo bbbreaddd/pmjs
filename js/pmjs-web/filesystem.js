@@ -54,10 +54,35 @@ function gameDirectoryEntries(path, entries) {
   });
 }
 
+var nativeSaveDirectories =
+  globalThis.PMJS_RUNTIME_ENGINE === 'mv' || globalThis.PMJS_RUNTIME_ENGINE === 'mz' ? ['save'] : [];
+var configuredSaveDirectories = PMJS.config.virtualFiles && PMJS.config.virtualFiles.saveDirectories;
+if (configuredSaveDirectories !== undefined) {
+  if (!Array.isArray(configuredSaveDirectories)) throw new TypeError('virtualFiles.saveDirectories must be an array');
+  configuredSaveDirectories.forEach(function(directory) {
+    if (typeof directory !== 'string' || !directory || directory.charAt(0) === '/' ||
+        directory.charAt(0) === '\\' || directory.replace(/\\/g, '/').split('/').includes('..')) {
+      throw new TypeError('save directory mounts must be game-relative directories');
+    }
+    directory = normalizePath(directory).replace(/\/$/, '');
+    if (directory === '.') throw new TypeError('the game root cannot be a save directory mount');
+    if (!nativeSaveDirectories.includes(directory)) nativeSaveDirectories.push(directory);
+  });
+}
+nativeSaveDirectories.sort(function(left, right) { return right.length - left.length; });
+
 function writablePath(path) {
   var normalized = normalizePath(path);
   if (normalized === '/save' || normalized === '/save/') return '';
-  return normalized.indexOf('/save/') === 0 ? normalized.slice(6) : null;
+  if (normalized.indexOf('/save/') === 0) return normalized.slice(6);
+  var relative = normalized.indexOf('/game/') === 0 ? normalized.slice(6) : normalized;
+  if (relative.charAt(0) === '/') return null;
+  for (var index = 0; index < nativeSaveDirectories.length; index++) {
+    var directory = nativeSaveDirectories[index];
+    if (relative === directory) return '';
+    if (relative.indexOf(directory + '/') === 0) return relative.slice(directory.length + 1);
+  }
+  return null;
 }
 
 var pathModule = Object.assign({}, posixPath, {
@@ -361,7 +386,7 @@ var fsModule = {
       ? NativeHost.storage.readDirectory(writable)
       : NativeHost.fs.readDirectory(gamePath(path));
     if (entries === null) throw Object.assign(new Error('ENOENT: ' + path), { code: 'ENOENT' });
-    var names = gameDirectoryEntries(path, entries);
+    var names = writable !== null ? entries : gameDirectoryEntries(path, entries);
     if (options && options.withFileTypes) return names.map(function(name) {
       var stats = fsModule.lstatSync(pathModule.join(String(path), name));
       return { name: name, isFile: stats.isFile.bind(stats), isDirectory: stats.isDirectory.bind(stats),
