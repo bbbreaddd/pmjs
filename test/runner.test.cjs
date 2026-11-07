@@ -668,6 +668,7 @@ test('runner loads an explicit Greenworks module in the host before bootstrap', 
     if (NativeHost.greenworks.initAPI() !== false) throw new Error('changed backend result');
     globalThis.__pmjsTick=()=>{}; globalThis.__pmjsRender=()=>{};
   `);
+  options.assetPreparation = 'off'; options.mapPreparation = 'off';
   options.greenworksModule = path.join(options.gameRoot, 'greenworks.cjs');
   fs.writeFileSync(options.greenworksModule, `module.exports = {
     hostProcess: process === require('node:process'),

@@ -127,6 +127,12 @@
       "license": "MIT",
       "notice": "LICENSE"
     },
+    "js/pmjs-plugins/yed/priority-updates.js": {
+      "origin": "compatibility",
+      "source": "PMJS priority sprite updates from behavioral contracts",
+      "license": "MIT",
+      "notice": "LICENSE"
+    },
     "js/pmjs-plugins/yed/retained-tiles.js": {
       "origin": "compatibility",
       "source": "PMJS retained tile preparation from behavioral contracts",

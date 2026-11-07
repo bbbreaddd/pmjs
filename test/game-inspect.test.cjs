@@ -85,7 +85,8 @@ while (true) {}
   assert.equal(inspection.pixiPath, path.join('js', 'libs', 'pixi.js'));
   assert.deepEqual(inspection.enabledPlugins, ['YED_Tiled']);
   assert.deepEqual(inspection.matchedAdapters, [
-    { plugin: 'YED_Tiled', modules: ['js/pmjs-plugins/yed/retained-tiles.js', 'js/pmjs-plugins/yed/tiled.js'] },
+    { plugin: 'YED_Tiled', modules: ['js/pmjs-plugins/yed/retained-tiles.js', 'js/pmjs-plugins/yed/tiled.js',
+      'js/pmjs-plugins/yed/priority-updates.js'] },
   ]);
 });
 
