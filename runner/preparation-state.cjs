@@ -98,7 +98,7 @@ async function reclaimLegacyOutputs(cacheRoot, assets, logger) {
   }
 }
 
-async function openPreparation({ gameRoot, cacheRoot, native, verifyHashes = false,
+async function openPreparation({ gameRoot, cacheRoot, native, verifyHashes = false, images = true,
   shouldCancel = () => false, onProgress = () => {}, logger = console, offline = false, sourceRoots = [] }) {
   gameRoot = await fsp.realpath(gameRoot);
   sourceRoots = [gameRoot, ...await Promise.all(sourceRoots.map(root => fsp.realpath(root).catch(() => null)))].filter(Boolean);
@@ -272,6 +272,8 @@ async function openPreparation({ gameRoot, cacheRoot, native, verifyHashes = fal
         }
         if (!committed) return;
         try {
+          if (session.packedFiles === null && session.phaseStates.get('images') === 'completed')
+            await fsp.rename(path.join(root, 'packed-images.json'), path.join(root, 'packed-images.invalid.json'));
           await retainLeases(root, retained);
           async function prune(directory, nested = false) {
             for (const entry of await fsp.readdir(directory, { withFileTypes: true }).catch(error => {
@@ -295,6 +297,8 @@ async function openPreparation({ gameRoot, cacheRoot, native, verifyHashes = fal
         finally { releaseLock(); }
       }
     };
+    if (images === false) native.assets.installPackedFiles?.([]);
+    session.packedFiles = images === false ? new Map() : await require('./packed-cache.cjs').loadPackedCache(root, native, logger);
     session.files = await preparationFiles(session, verifyHashes);
     const started = performance.now();
     session.inventory = await inventory(path.resolve(gameRoot), native, path.dirname(root));

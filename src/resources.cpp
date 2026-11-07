@@ -444,7 +444,15 @@ std::optional<ImagePixels> ImageStore::readTexturePixels(const ImageInfo& image,
 }
 
 ImageFileSource::~ImageFileSource() {
-  if (descriptor_ >= 0) close(descriptor_);
+  if (descriptor_ >= 0 && !pack_) close(descriptor_);
+}
+
+bool ImageFileSource::unchanged() const {
+  struct stat current{};
+  return fstat(descriptor_, &current) == 0 && current.st_size == static_cast<off_t>(fileSize_) &&
+    current.st_mtim.tv_sec == modifiedSeconds_ && current.st_mtim.tv_nsec == modifiedNanoseconds_ &&
+    (!pack_ || current.st_nlink == 0 ||
+      (current.st_ctim.tv_sec == pack_->changedSeconds_ && current.st_ctim.tv_nsec == pack_->changedNanoseconds_));
 }
 
 std::unique_ptr<ImageFileSource> ImageStore::openFile(const std::filesystem::path& path,
@@ -458,9 +466,10 @@ std::unique_ptr<ImageFileSource> ImageStore::openFile(const std::filesystem::pat
   if (source->descriptor_ < 0 || fstat(source->descriptor_, &info) != 0 ||
       !S_ISREG(info.st_mode) || info.st_size <= 0 || info.st_size > 64 * 1024 * 1024) return nullptr;
   source->path_ = resolved;
-  source->size_ = static_cast<std::size_t>(info.st_size);
+  source->size_ = source->fileSize_ = static_cast<std::size_t>(info.st_size);
   source->modifiedSeconds_ = info.st_mtim.tv_sec;
   source->modifiedNanoseconds_ = info.st_mtim.tv_nsec;
+  source->changedSeconds_ = info.st_ctim.tv_sec; source->changedNanoseconds_ = info.st_ctim.tv_nsec;
   source->key_ = fileIdentity(resolved, info);
   source->encryptionKey_ = encryptionKey;
   if (encryptionKey) {
@@ -470,6 +479,44 @@ std::unique_ptr<ImageFileSource> ImageStore::openFile(const std::filesystem::pat
       source->key_ += digits[byte >> 4]; source->key_ += digits[byte & 15];
     }
   }
+  return source;
+}
+
+void ImageStore::installPackedFiles(const std::vector<PackedFile>& files) {
+  std::unordered_map<std::string, std::shared_ptr<ImageFileSource>> packs;
+  std::unordered_map<std::string, PackedSpan> entries;
+  for (const auto& file : files) {
+    const auto name = file.path.lexically_normal().string();
+    const auto extension = file.path.extension();
+    if (!file.path.is_absolute() || (extension != ".pml4" && extension != ".pmtx"))
+      throw std::invalid_argument("invalid packed image path");
+    const auto packName = file.pack.lexically_normal().string();
+    auto& pack = packs[packName];
+    if (!pack) {
+      pack = openFile(file.pack);
+      if (!pack) throw std::runtime_error("cannot open prepared pack");
+    }
+    if (!file.size || file.offset > pack->size_ || file.size > pack->size_ - file.offset)
+      throw std::invalid_argument("packed image range exceeds pack");
+    if (!entries.emplace(name, PackedSpan{pack, file.offset, file.size}).second)
+      throw std::invalid_argument("duplicate packed image path");
+  }
+  packedFiles_ = std::move(entries);
+  packedPackCount_ = packs.size();
+}
+
+std::shared_ptr<ImageFileSource> ImageStore::openPreparedFile(const std::filesystem::path& path) const {
+  const auto found = packedFiles_.find(path.lexically_normal().string());
+  if (found == packedFiles_.end()) return openFile(path);
+  const auto& span = found->second;
+  auto source = std::shared_ptr<ImageFileSource>(new ImageFileSource());
+  source->pack_ = span.pack; source->descriptor_ = span.pack->descriptor_;
+  source->path_ = path.lexically_normal(); source->offset_ = span.offset;
+  source->size_ = span.size; source->fileSize_ = span.pack->size_;
+  source->modifiedSeconds_ = span.pack->modifiedSeconds_;
+  source->modifiedNanoseconds_ = span.pack->modifiedNanoseconds_;
+  source->key_ = span.pack->key_ + "\npacked:" + std::to_string(span.offset) + ":" +
+    std::to_string(span.size) + ":" + found->first;
   return source;
 }
 
@@ -778,18 +825,12 @@ std::optional<std::vector<std::uint8_t>> ImageStore::readCapturedBytes(const Ima
   std::size_t offset = 0;
   while (offset < bytes.size()) {
     const auto read = pread(source.descriptor_, bytes.data() + offset,
-        bytes.size() - offset, static_cast<off_t>(offset));
+        bytes.size() - offset, static_cast<off_t>(source.offset_ + offset));
     if (read < 0 && errno == EINTR) continue;
     if (read <= 0) return std::nullopt;
     offset += static_cast<std::size_t>(read);
   }
-  struct stat current{};
-  // Atomic replacement can unlink this inode and change ctime without changing
-  // its bytes. Size and mtime detect writes to the held source instead.
-  if (fstat(source.descriptor_, &current) != 0 ||
-      current.st_size != static_cast<off_t>(source.size_) ||
-      current.st_mtim.tv_sec != source.modifiedSeconds_ ||
-      current.st_mtim.tv_nsec != source.modifiedNanoseconds_) {
+  if (!source.unchanged()) {
     return std::nullopt;
   }
   if (source.encryptionKey_) {
@@ -1131,7 +1172,7 @@ bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
       if (offset > source->size_ || bytes.size() > source->size_-offset) return false;
       std::size_t done = 0;
       while (done < bytes.size()) {
-        const auto count = pread(source->descriptor_, bytes.data()+done, bytes.size()-done, offset+done);
+        const auto count = pread(source->descriptor_, bytes.data()+done, bytes.size()-done, source->offset_+offset+done);
         if (count <= 0) return false;
         done += count;
       }
@@ -2307,7 +2348,7 @@ bool ImageStore::installPrepared(const std::filesystem::path& sourcePath,
       prepared.path = directory / page.path; prepared.identity = pageIdentities->at(backing->pages.size());
       if (prepared.identity.empty()) return false;
     } else {
-      auto source = openFile(directory / page.path);
+      auto source = openPreparedFile(directory / page.path);
       if (!source) return false;
       prepared.path = source->path(); prepared.identity = source->key();
     }
@@ -2351,11 +2392,7 @@ std::shared_ptr<ImageStore::PreparedLoad> ImageStore::capturePrepared(
   load->invalidations = preparationInvalidations_;
   load->failures = preparationFailures_; load->sourceName = source.path().string();
   if (!prototype) prototype = found->second;
-  struct stat current{};
-  if (fstat(source.descriptor_, &current) != 0 ||
-      current.st_size != static_cast<off_t>(source.size_) ||
-      current.st_mtim.tv_sec != source.modifiedSeconds_ ||
-      current.st_mtim.tv_nsec != source.modifiedNanoseconds_) {
+  if (!source.unchanged()) {
     preparationInvalidations_->fetch_or(1, std::memory_order_relaxed);
     preparationFailures_->record(source.path().string());
     return nullptr;
@@ -2372,7 +2409,8 @@ std::shared_ptr<ImageStore::PreparedLoad> ImageStore::capturePrepared(
     auto& captured = *load->original;
     captured.descriptor_ = fcntl(source.descriptor_, F_DUPFD_CLOEXEC, 0);
     if (captured.descriptor_ < 0) return nullptr;
-    captured.size_ = source.size_; captured.modifiedSeconds_ = source.modifiedSeconds_;
+    captured.size_ = source.size_; captured.fileSize_ = source.fileSize_;
+    captured.offset_ = source.offset_; captured.modifiedSeconds_ = source.modifiedSeconds_;
     captured.modifiedNanoseconds_ = source.modifiedNanoseconds_;
     captured.path_ = source.path_; captured.key_ = source.key_; captured.encryptionKey_ = source.encryptionKey_;
   }
@@ -2381,16 +2419,17 @@ std::shared_ptr<ImageStore::PreparedLoad> ImageStore::capturePrepared(
     auto& captured = *load->sourceToVerify;
     captured.descriptor_ = fcntl(source.descriptor_, F_DUPFD_CLOEXEC, 0);
     if (captured.descriptor_ < 0) return nullptr;
-    captured.size_ = source.size_; captured.modifiedSeconds_ = source.modifiedSeconds_;
+    captured.size_ = source.size_; captured.fileSize_ = source.fileSize_;
+    captured.offset_ = source.offset_; captured.modifiedSeconds_ = source.modifiedSeconds_;
     captured.modifiedNanoseconds_ = source.modifiedNanoseconds_;
     captured.path_ = source.path_; captured.key_ = source.key_;
   }
   backing.texturePath = prototype->texturePath;
   backing.textureHash = prototype->textureHash;
   backing.textureSource = prototype->textureSource ? prototype->textureSource :
-    backing.texturePath.empty() ? nullptr : openFile(backing.texturePath);
+    backing.texturePath.empty() ? nullptr : openPreparedFile(backing.texturePath);
   for (const auto& page : prototype->pages) {
-    auto file = page.source ? page.source : std::shared_ptr<ImageFileSource>(openFile(page.path));
+    auto file = page.source ? page.source : openPreparedFile(page.path);
     if (!file || (file->key() != page.identity &&
         !(validContentHash(page.expectedHash) && inodeOnlyChange(page.identity, file->key())))) {
       preparationInvalidations_->fetch_or(1, std::memory_order_relaxed);
@@ -2871,7 +2910,8 @@ bool ImageStore::preparedSparsePage(PreparedBacking& backing, std::size_t index)
   if (page.sparseChecked && !page.sparseFormat) return false;
   page.sparseChecked = true;
   std::array<std::uint8_t, 8> header{};
-  if (!page.source || pread(page.source->descriptor_, header.data(), header.size(), 0) != ssize_t(header.size()) ||
+  if (!page.source || page.source->size_ < header.size() ||
+      pread(page.source->descriptor_, header.data(), header.size(), page.source->offset_) != ssize_t(header.size()) ||
       std::memcmp(header.data(), "PML4", 4) || (header[4] != 2 && header[4] != 3)) return false;
   const auto bytes = readCapturedBytes(*page.source);
   if (!bytes || (page.verifyHash && !contentHashMatches(*bytes, page.expectedHash))) return false;
@@ -2947,16 +2987,12 @@ ImagePixels* ImageStore::preparedPixels(PreparedBacking& backing, std::size_t in
       std::size_t offset = 0;
       while (offset < encoded.size()) {
         const auto count = pread(source.descriptor_, encoded.data() + offset,
-            encoded.size() - offset, static_cast<off_t>(offset));
+            encoded.size() - offset, static_cast<off_t>(source.offset_ + offset));
         if (count < 0 && errno == EINTR) continue;
         if (count <= 0) return nullptr;
         offset += static_cast<std::size_t>(count);
       }
-      struct stat current{};
-      if (fstat(source.descriptor_, &current) != 0 ||
-          current.st_size != static_cast<off_t>(source.size_) ||
-          current.st_mtim.tv_sec != source.modifiedSeconds_ ||
-          current.st_mtim.tv_nsec != source.modifiedNanoseconds_) return nullptr;
+      if (!source.unchanged()) return nullptr;
       if (page.verifyHash && !contentHashMatches(encoded, page.expectedHash)) return nullptr;
       page.verifyHash = false;
       const auto key = preparedDigest(encoded.data(), encoded.size()) +

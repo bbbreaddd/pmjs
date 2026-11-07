@@ -589,6 +589,8 @@ napi_value imageMemory(napi_env env, napi_callback_info info) try {
     setProperty(preparedFallbacks, reason.c_str(), number(env, count));
   setProperty(result, "preparedFallbacks", preparedFallbacks);
   setProperty(result, "storageDecisionHits", number(env, images.storageDecisionHits()));
+  setProperty(result, "packedFileCount", number(env, images.packedFileCount()));
+  setProperty(result, "packedPackCount", number(env, images.packedPackCount()));
   auto entries = limit ? images.memoryEntries() : std::vector<pmjs::ImageMemoryEntry>();
   std::sort(entries.begin(), entries.end(), [](const auto& left, const auto& right) {
     return left.gpuBytes + left.cpuBytes > right.gpuBytes + right.cpuBytes;

@@ -268,6 +268,10 @@ if(BUILD_TESTING)
   add_test(NAME node-shared-prepared-pages COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-shared-prepared-pages.cjs" $<TARGET_FILE:pmjs_native>)
   set_tests_properties(node-shared-prepared-pages PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
+  add_test(NAME node-packed-cache COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-packed-cache.cjs" $<TARGET_FILE:pmjs_native>)
+  set_tests_properties(node-packed-cache PROPERTIES
+    ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
   add_executable(pmjs-astc-images-test test/astc-images.cpp)
   target_link_libraries(pmjs-astc-images-test PRIVATE pmjs_runtime)
   add_test(NAME native-astc-images COMMAND ${XVFB_RUN} -a $<TARGET_FILE:pmjs-astc-images-test> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
@@ -825,7 +829,7 @@ if(BUILD_TESTING)
     else()
       set_tests_properties(${pmjs_test} PROPERTIES LABELS native)
       if(pmjs_test MATCHES "^node-" AND
-          NOT pmjs_test MATCHES "^node-(writable-filesystem|async-loading|preparation-lock|sparse-palette|prepared-frame-effects|large-prepared-frame|block-sprite(-legacy-index|-disabled)?|compact-sprite-legacy-index)$")
+          NOT pmjs_test MATCHES "^node-(writable-filesystem|async-loading|preparation-lock|sparse-palette|prepared-frame-effects|large-prepared-frame|block-sprite(-legacy-index|-disabled)?|compact-sprite-legacy-index|packed-cache)$")
         set_tests_properties(${pmjs_test} PROPERTIES FIXTURES_REQUIRED pmjs_assets)
       elseif(pmjs_test MATCHES "^native-(media-decoder|audio-seek|effects-gl-state(-es2)?)$" OR
           pmjs_test MATCHES "^js-(text-layout-reference|pixi-filter-boundary-reference)$")
@@ -835,7 +839,7 @@ if(BUILD_TESTING)
   endforeach()
   set_property(TEST
     native-yanfly-core-text native-srd-shaking-text native-filter-target-lifetime
-    native-vfs native-canvas-pixels native-canvas-upload
+    native-vfs native-canvas-pixels native-canvas-upload node-packed-cache
     node-pixi-precision node-filter-bounds node-render-to-canvas node-binding-errors
     node-image-retention node-text-layout node-preparation-progress node-bitmap-color
     APPEND PROPERTY LABELS smoke)

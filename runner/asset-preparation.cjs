@@ -493,7 +493,7 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
           }) };
         }
         if (installDescriptor) {
-          for (const page of descriptorOutputs(installDescriptor)) cacheBytes += (await fsp.stat(path.join(directory, page.path))).size;
+          for (const page of descriptorOutputs(installDescriptor)) cacheBytes += await files.size(path.join(directory, page.path));
           imageEntry = { source: logicalSource, directory, descriptor: installDescriptor, sourceHash, sourceIdentity,
             backingHash: manifest.decrypted ? manifest.outputs[manifest.decrypted] : sourceHash,
             pageHashes: installDescriptor.pages.map(page => manifest.outputs[page.path]),

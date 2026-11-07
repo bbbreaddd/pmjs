@@ -174,10 +174,13 @@ class ImageFileSource {
  private:
   friend class ImageStore;
   ImageFileSource() = default;
+  bool unchanged() const;
   int descriptor_ = -1;
-  std::size_t size_ = 0;
+  std::size_t size_ = 0, offset_ = 0, fileSize_ = 0;
+  std::shared_ptr<ImageFileSource> pack_;
   std::int64_t modifiedSeconds_ = 0;
   std::int64_t modifiedNanoseconds_ = 0;
+  std::int64_t changedSeconds_ = 0, changedNanoseconds_ = 0;
   std::filesystem::path path_;
   std::string key_;
   std::optional<ImageEncryptionKey> encryptionKey_;
@@ -204,6 +207,14 @@ class ImageStore {
   // cannot redirect an in-flight load to a different inode.
   static std::unique_ptr<ImageFileSource> openFile(const std::filesystem::path& path,
       std::optional<ImageEncryptionKey> encryptionKey = std::nullopt);
+  struct PackedFile {
+    std::filesystem::path path, pack;
+    std::size_t offset = 0, size = 0;
+  };
+  void installPackedFiles(const std::vector<PackedFile>& files);
+  std::size_t packedFileCount() const { return packedFiles_.size(); }
+  std::size_t packedPackCount() const { return packedPackCount_; }
+  std::shared_ptr<ImageFileSource> openPreparedFile(const std::filesystem::path& path) const;
   static ImageStorageDecision classifyStorage(const ImagePixels& pixels);
   bool installStorageDecision(const std::filesystem::path& path,
       const std::string& sourceIdentity, ImageStorageDecision decision,
@@ -607,6 +618,12 @@ class ImageStore {
   std::unordered_map<std::string, ImageHandle> pathCache_;
   std::shared_ptr<PreparationFailures> preparationFailures_ = std::make_shared<PreparationFailures>();
   std::shared_ptr<std::atomic<unsigned>> preparationInvalidations_ = std::make_shared<std::atomic<unsigned>>(0);
+  std::size_t packedPackCount_ = 0;
+  struct PackedSpan {
+    std::shared_ptr<ImageFileSource> pack;
+    std::size_t offset = 0, size = 0;
+  };
+  std::unordered_map<std::string, PackedSpan> packedFiles_;
   std::unordered_map<std::string, std::shared_ptr<PreparedBacking>> preparedSources_;
   std::size_t liveCount_ = 0;
   std::size_t gpuBytes_ = 0;

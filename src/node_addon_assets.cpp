@@ -689,6 +689,31 @@ napi_value tileSlot(napi_env env, napi_callback_info info) try {
   return image ? imageInfo(env, image->handle, image->width, image->height) : null(env);
 } catch (const std::exception& error) { napi_throw_error(env, nullptr, error.what()); return nullptr; }
 }
+napi_value installPackedFiles(napi_env env, napi_callback_info info) {
+  try {
+    const auto args = arguments(env, info, 1);
+    const auto input = args.at(0);
+    std::uint32_t count = 0;
+    check(env, napi_get_array_length(env, input, &count), "invalid packed image list");
+    if (count > 100000) throw std::invalid_argument("too many packed images");
+    std::vector<ImageStore::PackedFile> files;
+    files.reserve(count);
+    for (std::uint32_t i = 0; i < count; ++i) {
+      napi_value entry;
+      check(env, napi_get_element(env, input, i, &entry), "invalid packed image");
+      const auto offset = asNumber(env, property(env, entry, "offset"));
+      const auto size = asNumber(env, property(env, entry, "size"));
+      if (!std::isfinite(offset) || !std::isfinite(size) || offset < 0 || size <= 0 ||
+          offset > 64*1024*1024 || size > 64*1024*1024 ||
+          std::floor(offset) != offset || std::floor(size) != size)
+        throw std::invalid_argument("invalid packed image range");
+      files.push_back({asString(env, property(env, entry, "path")),
+        asString(env, property(env, entry, "pack")), std::size_t(offset), std::size_t(size)});
+    }
+    host(env).images.installPackedFiles(files);
+    return number(env, count);
+  } catch (const std::exception& error) { napi_throw_error(env, nullptr, error.what()); return nullptr; }
+}
 void registerAssetMethods(napi_env env, napi_value exports) {
   const auto assets = property(env, exports, "assets");
   method(env, assets, "compressPortArtifact", compressPortArtifact);
@@ -698,6 +723,7 @@ void registerAssetMethods(napi_env env, napi_value exports) {
   method(env, assets, "consumePreparationInvalidations", consumePreparationInvalidations);
   method(env, assets, "consumePreparationFailures", consumePreparationFailures);
   method(env, assets, "processImage", processImage);
+  method(env, assets, "installPackedFiles", installPackedFiles);
   method(env, assets, "classifyImageStorage", classifyImageStorage);
   method(env, assets, "installImageStorage", installImageStorage);
   set(env, assets, "imageStorageVersion", number(env, 1));

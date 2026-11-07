@@ -67,6 +67,16 @@ async function preparationFiles(session, verifyHashes = false) {
   }
   async function inspect(file, category = 'other') {
     file = path.resolve(file);
+    const packed = session.packedFiles?.get(file);
+    if (packed) {
+      const checked = await require('./packed-cache.cjs').inspectPacked(packed, verifyHashes);
+      if (checked.reused) ++stats.reusedFiles;
+      else {
+        ++stats.hashedFiles; stats.hashedBytes += checked.size;
+        stats.hashedBytesByCategory[category] = (stats.hashedBytesByCategory[category] || 0) + checked.size;
+      }
+      return checked;
+    }
     const inspected = await inspectPath(file), actual = inspected.file, before = inspected.stat;
     if (!before.isFile()) throw new Error('preparation input is not a regular file');
     const signature = identity(before);
@@ -119,6 +129,9 @@ async function preparationFiles(session, verifyHashes = false) {
     saveReceipt(file, { identity: receipt?.identity || signature, hash: checksum, header: header.toString('base64') });
     known.set(signature, { hash: checksum, header });
     return { hash: checksum, size: bytes.length, header };
+  }
+  async function size(file) {
+    return session.packedFiles?.get(path.resolve(file))?.size ?? (await fsp.stat(file)).size;
   }
   async function hash(file, category) { return (await inspect(file, category)).hash; }
   async function copyVerified(source, target, expectedHash, category = 'import') {
@@ -199,7 +212,7 @@ async function preparationFiles(session, verifyHashes = false) {
     }
     await session.checkpoint();
   }
-  return { hash, inspect, inspectSync, copyVerified, publish, validatedManifest, validateOutputs, save, stats, receipts: files,
+  return { hash, inspect, inspectSync, size, copyVerified, publish, validatedManifest, validateOutputs, save, stats, receipts: files,
     writeManifest: session.writeManifest,
     publishManifest: session.publishManifest };
 

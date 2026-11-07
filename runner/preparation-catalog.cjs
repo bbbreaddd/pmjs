@@ -12,7 +12,7 @@ const { COMPILER_VERSION } = require('./map-demand.cjs');
 const { fileIdentity } = require('./preparation-files.cjs');
 
 // Bump when catalog contents or preparation decisions change incompatibly.
-const CATALOG_VERSION = 5;
+const CATALOG_VERSION = 6;
 
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const rebuildMarker = 'runtime-settings/rebuild-assets';
@@ -54,7 +54,7 @@ async function saveCatalog(options, session, result) {
     if (session.files.receipts[file]?.hash !== processorHashes[file]) return false;
   const artifactHashes = result.portArtifactHashes;
   if ([...result.portArtifacts.keys()].some(id => !/^[a-f0-9]{64}$/.test(artifactHashes[id] || ''))) return false;
-  const data = { signature: signature(options), entries, derived, tiles, mapIndex: maps.index || {},
+  const data = { signature: signature(options), packedImages: !!session.packedFiles?.size, entries, derived, tiles, mapIndex: maps.index || {},
     storage: images.storageEntries || [], audio: images.audioViewEntries || [], ordinaryFailures,
     portArtifacts: [...result.portArtifacts], artifactHashes, discoveredProcessors, processorHashes, keys: [...keys] };
   const serialized = JSON.stringify(data);
@@ -92,6 +92,7 @@ async function loadCatalog(options) {
     const changed = [...new Set([...Object.keys(data.signature), ...Object.keys(expected)])]
       .filter(key => JSON.stringify(data.signature[key]) !== JSON.stringify(expected[key]));
     if (changed.length) throw new Error('catalog signature changed: ' + changed.join(', '));
+    if (typeof data.packedImages !== 'boolean') throw new Error('invalid packed image catalog state');
     if (!['entries', 'derived', 'tiles', 'storage', 'audio', 'ordinaryFailures', 'portArtifacts', 'keys'].every(key => Array.isArray(data[key])) ||
         !data.mapIndex || typeof data.mapIndex !== 'object' || !data.artifactHashes ||
         !Array.isArray(data.discoveredProcessors) || !data.processorHashes ||
@@ -118,6 +119,9 @@ async function loadCatalog(options) {
         }
       }
     }
+    if (options.images === false) native.assets.installPackedFiles?.([]);
+    const packed = options.images === false ? new Map() : await require('./packed-cache.cjs').loadPackedCache(root, native, logger);
+    if (packed === null || data.packedImages !== (packed.size > 0)) throw new Error('packed image catalog changed');
     releaseLease = await createLease(root, data.keys);
     const derived = installationReport(await native.assets.installDerivedCatalog(data.derived, false, true), 'derived catalog');
     if (derived.rejected.length || derived.accepted.length !== data.derived.length) throw new Error('derived catalog rejected');
