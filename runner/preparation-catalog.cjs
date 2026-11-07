@@ -17,14 +17,14 @@ function signature(options) {
   const { native } = options;
   const modules = ['asset-preparation.cjs', 'map-preparation.cjs', 'port-preparation.cjs',
     'preparation.cjs', 'preparation-state.cjs', 'preparation-files.cjs', 'preparation-catalog.cjs',
-    'yed-sideview-recipes.cjs'];
+    'yed-sideview-recipes.cjs', 'file-overrides.cjs'];
   return hash(JSON.stringify({ version: 1, modules: modules.map(name => hash(fs.readFileSync(path.join(__dirname, name)))),
     imageProcessor: native.assets.preparationVersion, tileProcessor: native.assets.tilePreparationVersion,
     lz4: native.assets.preparationLz4Version, images: options.images, maps: options.maps,
     pageCodec: options.pageCodec, workspaceBytes: options.workspaceBytes, recipes: options.recipes,
     astc: options.astc, losslessPrefixes: options.losslessPrefixes, policyOverrides: options.policyOverrides,
     portableIndex: options.portableIndex, width: options.width, height: options.height,
-    sourceRoots: options.sourceRoots, bundleRoot: options.bundleRoot,
+    sourceRoots: options.sourceRoots, bundleRoot: options.bundleRoot, virtualFiles: options.virtualFiles,
     portDescriptors: options.portDescriptors, adapters: options.adapters }));
 }
 

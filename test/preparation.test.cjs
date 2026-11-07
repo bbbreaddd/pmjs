@@ -117,6 +117,8 @@ test('completed startup catalog restores without inventory, and invalidations fo
   assert.equal(activated.length, 1);
   warm.releaseCacheLease();
   assert.equal(await loadCatalog({ ...options, pageCodec: 'lz4' }), null, 'configuration changes reject the catalog');
+  assert.equal(await loadCatalog({ ...options, virtualFiles: { overrides: { data: { '.json': '.pack' } } } }),
+    null, 'file override changes reject the catalog');
   await warm.invalidate('img/pictures/a.png');
   assert.equal(await loadCatalog(options), null, 'observed failures force a fresh preparation');
   delete f.options.native.fs;

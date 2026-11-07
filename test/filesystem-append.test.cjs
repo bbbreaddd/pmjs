@@ -73,7 +73,7 @@ test('resource URL decoding preserves path policy and decodes exactly once', () 
   }
 });
 
-test('fetch and XMLHttpRequest preserve their separate URL and alias policies', async t => {
+test('fetch and XMLHttpRequest share aliases while preserving URL decoding', async t => {
   const { context } = fixture(), reads = [];
   Object.assign(context, { performance, console, TextDecoder });
   context.PMJS.config.virtualFiles = { extensionAliases: { '.json': '.dat' } };
@@ -91,7 +91,7 @@ test('fetch and XMLHttpRequest preserve their separate URL and alias policies', 
   request.open('GET', './data/a%2520b.json?ignored', false);
   request.send();
   assert.equal(request.status, 200);
-  assert.deepEqual(reads, ['data/a b.dat', 'file:/game/data/a.dat', 'data/a%20b.json']);
+  assert.deepEqual(reads, ['data/a b.dat', 'file:/game/data/a.dat', 'data/a%20b.dat']);
   await assert.rejects(context.fetch('data/%FF.json'), /URI malformed/);
   await assert.rejects(context.fetch('https://example.test/%FF'), /network fetch is unavailable/);
   let errors = 0;
@@ -106,7 +106,7 @@ test('XHR resolves runtime file URLs to real filesystem paths in both modes', as
   const { context } = fixture(), reads = [];
   Object.assign(context, { performance, console, TextDecoder });
   context.PMJS.config.virtualFiles = { extensionAliases: { '.json': '.dat' } };
-  const read = file => { reads.push(file); return file === 'data/a b.json' ? '{"found":true}' : null; };
+  const read = file => { reads.push(file); return file === 'data/a b.dat' ? '{"found":true}' : null; };
   context.NativeHost.fs = {
     readText: read,
     readBytesAsync: file => { const text = read(file); return Promise.resolve(text === null ? null : Buffer.from(text)); }
@@ -124,7 +124,7 @@ test('XHR resolves runtime file URLs to real filesystem paths in both modes', as
     assert.equal(request.status, 200);
     assert.deepEqual(JSON.parse(request.responseText), { found: true });
   }
-  assert.deepEqual(reads, ['data/a b.json', 'data/a b.json']);
+  assert.deepEqual(reads, ['data/a b.dat', 'data/a b.dat']);
 });
 
 

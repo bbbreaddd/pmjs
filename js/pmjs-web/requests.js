@@ -126,7 +126,7 @@ XMLHttpRequest.prototype.send = function() {
     if (!binary) request.responseText = contents;
   }
   function requestPath() {
-    return gamePath(decodeResourceUrlPath(url.replace(/^file:\/\/\/game\//, '')));
+    return gameReadPath(decodeResourceUrlPath(url.replace(/^file:\/\/\/game\//, '')));
   }
   if (!this._async) {
     var contents = null;

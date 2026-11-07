@@ -17,10 +17,15 @@ function gamePath(path) {
 
 function gameReadPath(path) {
   var resolved = gamePath(path);
-  var aliases = PMJS.config.virtualFiles &&
-    PMJS.config.virtualFiles.extensionAliases || {};
+  var files = PMJS.config.virtualFiles || {};
+  if (files.overrides) {
+    var overridden = resolveFileOverride(resolved, files.overrides, function(candidate) {
+      return NativeHost.fs.exists(candidate);
+    });
+    if (overridden !== null) return overridden;
+  }
   var extension = pathModule.extname(resolved);
-  var replacement = aliases[extension.toLowerCase()];
+  var replacement = (files.extensionAliases || {})[extension.toLowerCase()];
   return replacement === undefined
     ? resolved : resolved.slice(0, -extension.length) + replacement;
 }
@@ -35,11 +40,17 @@ function gameDirectoryEntries(path, entries) {
     if (extensions) break;
   }
   if (!extensions) return entries;
+  var seen = new Set();
   return entries.map(function(name) {
     var extension = pathModule.extname(name);
     var replacement = extensions[extension.toLowerCase()];
     return replacement === undefined
       ? name : name.slice(0, -extension.length) + replacement;
+  }).filter(function(name) {
+    var key = name.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
   });
 }
 

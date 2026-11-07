@@ -119,6 +119,23 @@ test('enabled plugin dependencies are stream-hashed without loading plugin sourc
   assert.ok(!reads.includes('js/plugins/LargePlugin.js'));
 });
 
+test('map and plugin overrides are selected and their actual files invalidate preparation', async t => {
+  const f = fixture(t);
+  f.virtualFiles = { overrides: { data: { '.json': '.pack' }, 'js/plugins': { '.js': '.mod' } } };
+  fs.mkdirSync(path.join(f.gameRoot, 'js/plugins'));
+  const plugin = path.join(f.gameRoot, 'js/plugins/Example.mod');
+  fs.writeFileSync(plugin, 'window.example = 1;');
+  fs.writeFileSync(path.join(f.gameRoot, 'js/plugins.js'),
+    'var $plugins = [{"name":"Example","status":true,"parameters":{}}];');
+  fs.writeFileSync(path.join(f.gameRoot, 'data/Map001.pack'), JSON.stringify(f.map));
+  fs.writeFileSync(path.join(f.gameRoot, 'data/Map001.json'), 'invalid base map');
+  assert.equal((await prepareMaps(f)).selected, 1);
+  fs.writeFileSync(plugin, 'window.example = 2;');
+  assert.equal((await prepareMaps(f)).generated, 1, 'override content is part of the preparation identity');
+  fs.unlinkSync(plugin);
+  assert.match((await prepareMaps(f)).error, /missing game input js\/plugins\/Example.js/);
+});
+
 test('shared engine changes during warm map reuse reject installation at the final dependency check', async t => {
   const f = fixture(t);
   await prepareMaps(f);

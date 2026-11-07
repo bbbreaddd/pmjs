@@ -14,6 +14,7 @@ function resolveDefaults(input) {
   let preparedCompactSampling = input.preparedCompactSampling;
   let preparedCropUploads = input.preparedCropUploads;
   let preparationFonts = [];
+  let virtualFiles = input.virtualFiles;
   let configDirectory = process.cwd();
 
   if (input.config) {
@@ -32,6 +33,7 @@ function resolveDefaults(input) {
       preparationFonts = Object.values(cfg.fonts).flat().filter(font => typeof font === 'string');
     }
     assertDisableOptimizationsShape(cfg.disableOptimizations, configPath);
+    if (virtualFiles === undefined) virtualFiles = cfg.virtualFiles;
     configDirectory = path.dirname(configPath);
     if (cfg.assetPreparation !== undefined) {
       assetPreparation = cfg.assetPreparation;
@@ -114,7 +116,7 @@ function resolveDefaults(input) {
     assetPreparation.recipes = JSON.parse(fs.readFileSync(assetPreparation.recipes, 'utf8'));
   }
   assetPreparation.recipes = validRecipes(assetPreparation.recipes || []);
-  return { ...input, width, height, title, assetPreparation, assetPolicyOverrides: policyOverrides, preparationFonts,
+  return { ...input, width, height, title, assetPreparation, assetPolicyOverrides: policyOverrides, preparationFonts, virtualFiles,
     preparedFrameCacheBytes, preparedCompactSampling, preparedCropUploads };
 }
 

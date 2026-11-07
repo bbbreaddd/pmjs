@@ -166,6 +166,7 @@ async function prepareStartupAssets(options, native, settings) {
   const portableIndex = require('./asset-index.cjs').loadAssetIndex(options.assetIndex, native, options);
   const { loadCatalog, rebuildMarker } = require('./preparation-catalog.cjs');
   const preparationOptions = { gameRoot: options.gameRoot,
+    virtualFiles: options.virtualFiles,
     sourceRoots: [path.join(options.saveRoot, 'game-files', 'files')],
     cacheRoot: options.assetPreparation.cacheRoot, native, ...options.assetPreparation,
     images: options.assetPreparation.enabled, recipes: options.assetPreparation.recipes,
