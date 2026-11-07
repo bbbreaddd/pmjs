@@ -6,6 +6,92 @@ const { spawnSync } = require('node:child_process');
 const { createMemoryReclaimer } = require('../runner/memory-reclamation.cjs');
 const MiB = 1024 * 1024;
 
+test('optional allocator hooks do not disable collection of native resource owners', async () => {
+  for (const runtime of [{}, { allocatorStats: () => undefined, trimAllocator: () => undefined }]) {
+    let collections = 0;
+    const sample = () => ({ availableBytes: 80 * MiB, rssBytes: (500 - 20 * collections) * MiB });
+    const policy = createMemoryReclaimer({ native: { runtime, images: { memory: () => ({ pendingDecodeJobs: 0 }) } },
+      readMemory: sample, now: () => 0,
+      collectGarbage() { collections++; }, settleFinalizers: async () => {},
+      logger: { log() {}, warn(message) { assert.fail(message); } } });
+    policy.observe(sample()); policy.observe(sample());
+    const result = await policy.atBoundary('scene-fade');
+    assert.equal(collections, 1);
+    assert.equal(result.released, false);
+    assert.equal(result.recoveredBytes, 20 * MiB);
+  }
+});
+
+test('continuous image decodes cannot postpone critical collection indefinitely', async () => {
+  for (const boundary of [null, 'scene-fade']) {
+    let collections = 0;
+    const f = fixture({ collectGarbage() { collections++; }, settleFinalizers: async () => {} });
+    f.available = 80 * MiB; f.jobs = 4; f.pressure();
+    assert.equal(f.policy.atBoundary(boundary), null);
+    f.time = 1500;
+    assert.equal(f.policy.atBoundary(boundary), null);
+    f.time = 2000;
+    const result = await f.policy.atBoundary(boundary);
+    assert.equal(result.boundary, boundary || 'critical-pressure');
+    assert.equal(collections, 1);
+    assert.equal(f.jobs, 4, 'reclamation does not cancel active decodes');
+  }
+});
+
+test('startup cleanup remains eligible after image decoding defers its first attempt', () => {
+  const f = fixture(); f.jobs = 1;
+  assert.equal(f.policy.atBoundary('startup'), null);
+  f.jobs = 0; f.time += 500;
+  assert.ok(f.policy.atBoundary('startup'));
+  assert.equal(f.trims, 1);
+});
+
+test('swapping cannot hide allocation regrowth during the critical cooldown', async () => {
+  const f = fixture({ collectGarbage() {}, settleFinalizers: async () => {} });
+  f.available = 80 * MiB; f.swap = 100 * MiB; f.pressure(); f.time = 2000;
+  await f.policy.atBoundary(null);
+  f.time += 10000;
+  f.swap += 64 * MiB; f.pressure();
+  assert.equal(f.policy.pending, true, 'resident size can remain flat as allocations move into swap');
+  f.time += 2000;
+  const result = await f.policy.atBoundary(null);
+  assert.equal(result.boundary, 'critical-pressure');
+  assert.equal(result.beforeSwapBytes, 164 * MiB);
+});
+
+test('worsening critical headroom permits a bounded retry without resident growth', () => {
+  const f = fixture(); f.available = 80 * MiB; f.pressure(); f.time = 2000;
+  f.policy.atBoundary(null);
+  f.time += 10000; f.available = 40 * MiB; f.pressure();
+  assert.equal(f.policy.pending, true);
+  f.time += 2000;
+  assert.equal(f.policy.atBoundary(null).boundary, 'critical-pressure');
+  assert.equal(f.trims, 2);
+});
+
+test('critical retries compare headroom against its recovered baseline', () => {
+  const f = fixture(); f.available = 80 * MiB;
+  const trim = f.native.runtime.trimAllocator;
+  f.native.runtime.trimAllocator = () => { const result = trim(); f.available = 160 * MiB; return result; };
+  f.pressure(); f.time = 2000; f.policy.atBoundary(null);
+  f.time += 10000; f.available = 90 * MiB; f.pressure();
+  assert.equal(f.policy.pending, true);
+  f.time += 2000;
+  assert.equal(f.policy.atBoundary(null).boundary, 'critical-pressure');
+});
+
+test('freeing swapped resources counts as progress without claiming recovered resident RAM', async () => {
+  const f = fixture({ collectGarbage() { f.swap -= 20 * MiB; }, settleFinalizers: async () => {} });
+  f.swap = 100 * MiB; f.recovery = 0; f.pressure();
+  const result = await f.policy.atBoundary('scene-fade');
+  assert.equal(result.recoveredBytes, 0);
+  assert.equal(result.recoveredFootprintBytes, 20 * MiB);
+  f.time += 60001;
+  f.available = 400 * MiB; f.policy.observe(f.sample());
+  f.available = 160 * MiB; f.pressure();
+  assert.equal(f.policy.pending, true, 'useful swap recovery must not receive the five-minute low-yield penalty');
+});
+
 test('collection drains finalizers before inspecting free arenas and trimming', async () => {
   const calls = [];
   let releaseFinalizers;
@@ -61,7 +147,7 @@ test('collection respects healthy memory, active decodes, and the reclamation co
   f.available = 160 * MiB; f.pressure(); f.jobs = 1;
   assert.equal(f.policy.atBoundary('scene-fade'), null);
   assert.equal(collections, 0);
-  f.jobs = 0;
+  f.jobs = 0; f.time += 500;
   await f.policy.atBoundary('scene-fade');
   f.time += 1000; f.rss += 64 * MiB; f.pressure();
   assert.equal(f.policy.atBoundary('scene-fade'), null);
@@ -93,7 +179,7 @@ test('real collection releases unreachable resource owners before trim and prese
         }
       }, images: { memory: () => ({ pendingDecodeJobs: 0 }) } },
       readMemory: () => ({ availableBytes: 80 * 1024 * 1024, rssBytes: 500 * 1024 * 1024 }),
-      readRss: () => 450 * 1024 * 1024, now: () => 0, collectGarbage: global.gc,
+      now: () => 0, collectGarbage: global.gc,
       logger: { log() {}, warn(message) { throw new Error(message); } }
     });
     policy.atBoundary('startup').then(result => {
@@ -107,15 +193,15 @@ test('real collection releases unreachable resource owners before trim and prese
 });
 
 function fixture(options = {}) {
-  const f = { time: 0, rss: 540 * MiB, available: 160 * MiB,
+  const f = { time: 0, rss: 540 * MiB, swap: 0, available: 160 * MiB,
     free: 160 * MiB, recovery: 150 * MiB, jobs: 0, trims: 0, logs: [], warnings: [] };
   const native = { runtime: {
     allocatorStats: () => ({ freeArenaBytes: f.free }),
     trimAllocator() { f.trims++; f.time += 56; f.rss -= f.recovery; return f.recovery > 0; }
   }, images: { memory: () => ({ pendingDecodeJobs: f.jobs }) } };
-  f.sample = () => ({ availableBytes: f.available, rssBytes: f.rss });
+  f.sample = () => ({ availableBytes: f.available, rssBytes: f.rss, swapBytes: f.swap });
   f.native = native;
-  f.policy = createMemoryReclaimer({ native, readMemory: f.sample, readRss: () => f.rss,
+  f.policy = createMemoryReclaimer({ native, readMemory: f.sample,
     now: () => f.time, logger: { log: line => f.logs.push(line), warn: line => f.warnings.push(line) },
     ...options });
   f.pressure = () => { f.policy.observe(f.sample()); f.policy.observe(f.sample()); };
@@ -160,7 +246,7 @@ test('active decodes defer a request and small free arenas avoid a trim', () => 
   const f = fixture(); f.pressure(); f.jobs = 1;
   assert.equal(f.policy.atBoundary('scene-fade'), null);
   assert.equal(f.policy.pending, true);
-  f.jobs = 0; f.free = 8 * MiB;
+  f.jobs = 0; f.free = 8 * MiB; f.time += 500;
   assert.equal(f.policy.atBoundary('scene-fade'), null);
   assert.equal(f.policy.pending, false);
   assert.equal(f.trims, 0);
@@ -263,10 +349,10 @@ test('emergency deferrals do not read memory every frame', () => {
   f.available = 80 * MiB; f.pressure(); f.time += 2000;
   f.native.images.memory = () => ({ pendingDecodeJobs: f.jobs });
   const policy = createMemoryReclaimer({ native: f.native, readMemory: () => { reads++; return sample(); },
-    readRss: () => f.rss, now: () => f.time, logger: { log() {}, warn() {} } });
+    now: () => f.time, logger: { log() {}, warn() {} } });
   policy.observe(sample()); policy.observe(sample()); f.time += 2000; f.jobs = 1;
   for (let frame = 0; frame < 30; frame++) policy.atBoundary(null);
-  assert.equal(reads, 1, 'active decodes restart the grace period');
+  assert.equal(reads, 1, 'decode retries are sampled rather than read on every frame');
   f.jobs = 0; f.time += 2000;
   assert.equal(policy.atBoundary(null).boundary, 'critical-pressure');
   f.available = 150 * MiB;
@@ -287,7 +373,7 @@ test('frame polling detects a fresh critical episode without waiting for diagnos
   const policy = createMemoryReclaimer({ native: f.native,
     readMemory: () => reclamationMemoryState({ reader, processObject: { memoryUsage },
       osObject: { totalmem: () => 1024 * MiB, freemem: () => 0 } }),
-    readRss: () => f.rss, now: () => f.time, logger: { log() {}, warn(error) { assert.fail(error); } } });
+    now: () => f.time, logger: { log() {}, warn(error) { assert.fail(error); } } });
   policy.poll();
   f.available = 80 * MiB; // Pressure begins immediately after a healthy sample.
   for (let timestamp = 125; timestamp <= 3000; timestamp += 125) {
@@ -299,7 +385,7 @@ test('frame polling detects a fresh critical episode without waiting for diagnos
   }
   assert.deepEqual(attempts, [2500]);
   assert.equal(f.trims, 1);
-  assert.ok(reads.length <= 8, 'reads are bounded by the sample interval plus live validation');
+  assert.ok(reads.length <= 9, 'reads are bounded by sampling and before/after reclamation validation');
 });
 
 test('live recovery cancels the old critical episode and renews the full grace period', () => {

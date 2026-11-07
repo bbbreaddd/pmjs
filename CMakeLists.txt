@@ -345,7 +345,7 @@ if(BUILD_TESTING)
   add_test(NAME node-async-loading COMMAND ${XVFB_RUN} -a ${CMAKE_COMMAND} -E env
     SDL_AUDIODRIVER=dummy LIBGL_ALWAYS_SOFTWARE=1
     PMJS_NATIVE_ADDON=$<TARGET_FILE:pmjs_native>
-    ${NODE_EXECUTABLE} --test ${CMAKE_CURRENT_SOURCE_DIR}/test/node-async-loading.cjs)
+    ${NODE_EXECUTABLE} --expose-gc --test ${CMAKE_CURRENT_SOURCE_DIR}/test/node-async-loading.cjs)
   pmjs_add_cpp_test(pmjs-checked-bounds-test native-checked-bounds test/checked-bounds.cpp)
   add_test(NAME node-image-recovery COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-image-recovery.cjs" $<TARGET_FILE:pmjs_native>)

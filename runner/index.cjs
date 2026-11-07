@@ -354,7 +354,7 @@ async function runSession(input, diagnostics, setNative) {
   diagnostics.stage('native-ready');
   const memoryReclaimer = createMemoryReclaimer({ native,
     readMemory: () => reclamationMemoryState({ processObject: hostProcess }),
-    readRss: () => hostProcess.memoryUsage.rss(), now: () => performance.now(),
+    now: () => performance.now(),
     collectGarbage: hostCollectGarbage });
   const scan = native.runtime.vfsIndexStats?.();
   if (scan) console.log(`[pmjs] startup stage=vfs-index statistics=${JSON.stringify(scan)}`);
