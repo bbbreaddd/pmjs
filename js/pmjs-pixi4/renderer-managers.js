@@ -511,7 +511,7 @@ NativeTextureGarbageCollector.prototype.run = function() {
     var texture = textures[index];
     var maxIdle = texture && texture.source instanceof CanvasElement ?
       Math.min(this.canvasMaxIdle, this.maxIdle) : this.maxIdle;
-    if (texture && !texture._glRenderTargets &&
+    if (texture &&
         this.count - (Number(texture.touched) || 0) > maxIdle) {
       manager.destroyTexture(texture, true);
     }
