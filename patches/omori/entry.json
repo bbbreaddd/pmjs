@@ -3,6 +3,7 @@
     "plugins.js",
     "menu-background.js",
     "timing.js",
-    "search-limit.js"
+    "search-limit.js",
+    "tile-point-revisions.js"
   ]
 }

@@ -209,7 +209,11 @@ function makeHarness(options = {}) {
   sandbox.window = sandbox;
   vm.createContext(sandbox);
   if (options.beforeWriter) options.beforeWriter(sandbox);
-  for (const relative of writerSources) runModule(sandbox, relative);
+  for (const relative of writerSources) {
+    const override = options.sources && options.sources[relative];
+    if (typeof override === 'string') new vm.Script(override, { filename: relative }).runInContext(sandbox);
+    else runModule(sandbox, relative);
+  }
   const filterPlanner = sandbox.nativeSceneFilter;
   sandbox.nativeSceneFilter = function(node, filters) {
     counts.filterPlans++;
