@@ -502,6 +502,88 @@
       "source": "PMJS",
       "license": "MIT",
       "notice": "LICENSE"
+    },
+    "third_party/rpg-maker-mv.LICENSE": {
+      "origin": "permissive",
+      "source": "https://github.com/rpgtkoolmv/corescript",
+      "revision": "RPG Maker MV 1.6.1",
+      "license": "MIT",
+      "notice": "third_party/rpg-maker-mv.LICENSE"
+    },
+    "test/reference/mv161-input.js": {
+      "origin": "permissive",
+      "source": "https://github.com/rpgtkoolmv/corescript",
+      "revision": "RPG Maker MV 1.6.1",
+      "license": "MIT",
+      "notice": "third_party/rpg-maker-mv.LICENSE"
+    },
+    "test/reference/mv161-touch-input.js": {
+      "origin": "permissive",
+      "source": "https://github.com/rpgtkoolmv/corescript",
+      "revision": "RPG Maker MV 1.6.1",
+      "license": "MIT",
+      "notice": "third_party/rpg-maker-mv.LICENSE"
+    },
+    "third_party/rpg-maker-mv/LICENSE": {
+      "origin": "permissive",
+      "source": "https://github.com/rpgtkoolmv/corescript/tree/182e31449707ba7e406db0485c44c2a9d11e2dcd",
+      "revision": "182e31449707ba7e406db0485c44c2a9d11e2dcd",
+      "license": "MIT",
+      "notice": "third_party/rpg-maker-mv/LICENSE"
+    },
+    "third_party/rpg-maker-mv/README.md": {
+      "origin": "original",
+      "source": "PMJS",
+      "license": "MIT",
+      "notice": "LICENSE"
+    },
+    "third_party/rpg-maker-mv/reference.json": {
+      "origin": "original",
+      "source": "PMJS",
+      "license": "MIT",
+      "notice": "LICENSE"
+    },
+    "third_party/rpg-maker-mv/rpg_core.js": {
+      "origin": "permissive",
+      "source": "RPG Maker MV game-distributed corescript snapshot",
+      "revision": "Header version 1.6.2; exact file hashes in third_party/rpg-maker-mv/reference.json",
+      "license": "MIT",
+      "notice": "third_party/rpg-maker-mv/LICENSE"
+    },
+    "third_party/rpg-maker-mv/rpg_managers.js": {
+      "origin": "permissive",
+      "source": "RPG Maker MV game-distributed corescript snapshot",
+      "revision": "Header version 1.6.2; exact file hashes in third_party/rpg-maker-mv/reference.json",
+      "license": "MIT",
+      "notice": "third_party/rpg-maker-mv/LICENSE"
+    },
+    "third_party/rpg-maker-mv/rpg_objects.js": {
+      "origin": "permissive",
+      "source": "RPG Maker MV game-distributed corescript snapshot",
+      "revision": "Header version 1.6.2; exact file hashes in third_party/rpg-maker-mv/reference.json",
+      "license": "MIT",
+      "notice": "third_party/rpg-maker-mv/LICENSE"
+    },
+    "third_party/rpg-maker-mv/rpg_scenes.js": {
+      "origin": "permissive",
+      "source": "RPG Maker MV game-distributed corescript snapshot",
+      "revision": "Header version 1.6.2; exact file hashes in third_party/rpg-maker-mv/reference.json",
+      "license": "MIT",
+      "notice": "third_party/rpg-maker-mv/LICENSE"
+    },
+    "third_party/rpg-maker-mv/rpg_sprites.js": {
+      "origin": "permissive",
+      "source": "RPG Maker MV game-distributed corescript snapshot",
+      "revision": "Header version 1.6.2; exact file hashes in third_party/rpg-maker-mv/reference.json",
+      "license": "MIT",
+      "notice": "third_party/rpg-maker-mv/LICENSE"
+    },
+    "third_party/rpg-maker-mv/rpg_windows.js": {
+      "origin": "permissive",
+      "source": "RPG Maker MV game-distributed corescript snapshot",
+      "revision": "Header version 1.6.2; exact file hashes in third_party/rpg-maker-mv/reference.json",
+      "license": "MIT",
+      "notice": "third_party/rpg-maker-mv/LICENSE"
     }
   },
   "defaults": {

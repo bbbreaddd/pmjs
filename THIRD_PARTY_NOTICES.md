@@ -5,6 +5,7 @@ PMJS's MIT license covers its own contributions, not third-party material.
 | Material | Origin/version | Terms and retained notice |
 | --- | --- | --- |
 | Native MV core behavior and stock input references | RPG Maker MV 1.6.1 / rpgtkoolmv corescript, copyright 2015 KADOKAWA CORPORATION./YOJI OJIMA | MIT; `third_party/rpg-maker-mv.LICENSE` |
+| MV corescript reference snapshot | Game-distributed files with 1.6.2 headers; hashes in `third_party/rpg-maker-mv/reference.json` | MIT; `third_party/rpg-maker-mv/LICENSE` |
 | Fragment sorting implementation | V8 5.1.281, copyright 2012 | BSD-3-Clause; `third_party/v8.LICENSE` |
 | Terrax lighting compatibility portions and tests | TerraxLighting 1.4.9 | MIT, copyright 2016 Terraxz; `third_party/terrax.LICENSE` |
 | Unicode default-ignorable data | Unicode 16.0.0 | Unicode-3.0; `third_party/unicode.LICENSE` |

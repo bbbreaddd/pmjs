@@ -1,0 +1,29 @@
+{
+  "description": "Exact game-distributed RPG Maker MV corescript snapshot; version identified by file headers. Not reconstructed from community sources and not independently certified as unmodified editor output.",
+  "files": {
+    "rpg_core.js": {
+      "sha256": "a943b1ef85e7b91a6b09c4b125965282d96f0fdce627ef435421778abcb3b178",
+      "headerVersion": "1.6.2"
+    },
+    "rpg_managers.js": {
+      "sha256": "a278bba3057f18e3047036062f2ebba2b5eaa5cec8b1de47f8f9a482c2d3023f",
+      "headerVersion": "1.6.2"
+    },
+    "rpg_objects.js": {
+      "sha256": "f08061195476a7b58f1e8f5631d26d22f5e2df561f3d34bb52fbd9d416543407",
+      "headerVersion": "1.6.2"
+    },
+    "rpg_scenes.js": {
+      "sha256": "8730e7d9490de5386aff4e3c1d3ded6f04c281cdd50a29e7400965d84b1ccfa3",
+      "headerVersion": "1.6.2"
+    },
+    "rpg_sprites.js": {
+      "sha256": "eacdaf2b8bd37069d75eff84dea82595419dd435c5456d6a9435a32f56900fe5",
+      "headerVersion": "1.6.2"
+    },
+    "rpg_windows.js": {
+      "sha256": "8d146d13489b91926b21ff98b4b30460d0eb4cddf0757943922a8a518d09ff0c",
+      "headerVersion": "1.6.2"
+    }
+  }
+}
