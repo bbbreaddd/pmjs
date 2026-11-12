@@ -69,6 +69,7 @@ bool Session::dialogEventCommand(const Value& entry, Interpreter& context) {
     case 352: { // Open Save Screen
       if (!battle_.active) {
         SceneManager::pushScene(*this, Scene::save);
+        ui_.cursor = std::max(0, lastAccessedSavefileId_ - 1);
       }
       return true;
     }

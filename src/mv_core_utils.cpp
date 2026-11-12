@@ -7,9 +7,10 @@
 #include <cstdlib>
 #include <chrono>
 #include <charconv>
+#include <filesystem>
 #include <limits>
-#include <stdexcept>
 #include <set>
+#include <stdexcept>
 #include <type_traits>
 #include "resources.hpp"
 
@@ -37,8 +38,8 @@ void Spriteset_Base::update(const Session& session) {
   toneSprite.setTone(tone[0], tone[1], tone[2], tone[3]);
   const auto flashColor = session.screenFlashColor();
   flashSprite.setColor(static_cast<int>(flashColor[0]), static_cast<int>(flashColor[1]), static_cast<int>(flashColor[2]));
-  flashSprite.opacity = static_cast<int>(flashColor[3]);
-  fadeSprite.opacity = static_cast<int>(255 - session.screenBrightness());
+  flashSprite.setOpacity(static_cast<int>(flashColor[3]));
+  fadeSprite.setOpacity(static_cast<int>(255 - session.screenBrightness()));
 }
 
 void Spriteset_Map::update(const Session& session) {
@@ -86,17 +87,151 @@ std::unordered_map<std::string, Value> DataManager::extractMetadata(const std::s
     const std::size_t end = note.find('>', start + 1);
     if (end == std::string::npos) break;
     const std::string inner = note.substr(start + 1, end - start - 1);
-    if (inner.find('<') == std::string::npos) {
-      const std::size_t colon = inner.find(':');
-      if (colon != std::string::npos) {
-        meta[inner.substr(0, colon)] = Value{inner.substr(colon + 1)};
-      } else if (!inner.empty()) {
-        meta[inner] = Value{true};
-      }
+    const std::size_t nested = inner.find('<');
+    if (nested != std::string::npos) {
+      pos = start + 1 + nested;
+      continue;
+    }
+    const std::size_t colon = inner.find(':');
+    if (colon != std::string::npos) {
+      meta[inner.substr(0, colon)] = Value{inner.substr(colon + 1)};
+    } else if (!inner.empty()) {
+      meta[inner] = Value{true};
     }
     pos = end + 1;
   }
   return meta;
+}
+
+void DataManager::extractMetadata(Value& data) {
+  auto* object = std::get_if<Value::Object>(&data.data);
+  if (!object) return;
+  const auto noteIt = object->find("note");
+  Value::Object metaObject;
+  if (noteIt != object->end()) {
+    for (auto& [key, val] : extractMetadata(noteIt->second.text())) {
+      metaObject.emplace(std::move(key), std::move(val));
+    }
+  }
+  (*object)["meta"] = Value{std::move(metaObject)};
+}
+
+void DataManager::onLoad(Value& object, bool isMap) {
+  if (isMap) {
+    extractMetadata(object);
+    if (auto* mapObject = std::get_if<Value::Object>(&object.data)) {
+      const auto eventsIt = mapObject->find("events");
+      if (eventsIt != mapObject->end()) {
+        if (auto* events = std::get_if<Value::Array>(&eventsIt->second.data)) {
+          for (auto& entry : *events) {
+            if (!entry["note"].null()) extractMetadata(entry);
+          }
+        }
+      }
+    }
+    return;
+  }
+  if (auto* array = std::get_if<Value::Array>(&object.data)) {
+    for (auto& entry : *array) {
+      if (!entry["note"].null()) extractMetadata(entry);
+    }
+  } else if (!object["hasEncryptedImages"].null() || !object["hasEncryptedAudio"].null() ||
+             !object["encryptionKey"].null()) {
+    Decrypter::readEncryptionkey(object);
+  }
+}
+
+bool DataManager::isThisGameFile(const Session& session, int savefileId, bool localMode) {
+  if (savefileId <= 0 || savefileId >= static_cast<int>(session.saveMetadata_.size())) return false;
+  const auto& savefile = session.saveMetadata_[static_cast<std::size_t>(savefileId)];
+  if (savefile.null()) return false;
+  if (localMode) return true;
+  const std::string title = savefile["title"].text();
+  if (title != session.database()["system"]["gameTitle"].text()) return false;
+  const auto& gid = savefile["globalId"];
+  return gid.null() || gid.text() == globalId();
+}
+
+bool DataManager::isAnySavefileExists(const Session& session, bool localMode) {
+  for (int i = 1; i < static_cast<int>(session.saveMetadata_.size()); ++i) {
+    if (isThisGameFile(session, i, localMode)) return true;
+  }
+  return false;
+}
+
+int DataManager::latestSavefileId(const Session& session, bool localMode) {
+  int savefileId = 1;
+  double timestamp = 0.0;
+  for (int i = 1; i < static_cast<int>(session.saveMetadata_.size()); ++i) {
+    const auto& info = session.saveMetadata_[static_cast<std::size_t>(i)];
+    if (isThisGameFile(session, i, localMode) && info["timestamp"].number() > timestamp) {
+      timestamp = info["timestamp"].number();
+      savefileId = i;
+    }
+  }
+  return savefileId;
+}
+
+int DataManager::lastAccessedSavefileId(const Session& session) {
+  return session.lastAccessedSavefileId_;
+}
+
+void DataManager::selectSavefileForNewGame(Session& session, bool /*localMode*/) {
+  session.lastAccessedSavefileId_ = 1;
+  const int numSavefiles = std::max(0, static_cast<int>(session.saveMetadata_.size()) - 1);
+  if (numSavefiles == 0) return;
+  if (numSavefiles < maxSavefiles()) {
+    session.lastAccessedSavefileId_ = numSavefiles + 1;
+    return;
+  }
+  double oldest = std::numeric_limits<double>::max();
+  for (int i = 1; i < static_cast<int>(session.saveMetadata_.size()); ++i) {
+    const auto& info = session.saveMetadata_[static_cast<std::size_t>(i)];
+    if (info.null()) {
+      session.lastAccessedSavefileId_ = i;
+      break;
+    }
+    const double ts = info["timestamp"].number();
+    if (ts < oldest) {
+      oldest = ts;
+      session.lastAccessedSavefileId_ = i;
+    }
+  }
+}
+
+Value DataManager::makeSavefileInfo(const Session& session) {
+  Value::Array characters;
+  Value::Array faces;
+  const std::size_t count = std::min<std::size_t>(4, session.party_.size());
+  for (std::size_t i = 0; i < count; ++i) {
+    const auto actorIt = session.actors_.find(session.party_[i]);
+    if (actorIt == session.actors_.end()) continue;
+    characters.emplace_back(Value::Array{actorIt->second.characterName, actorIt->second.characterIndex});
+    faces.emplace_back(Value::Array{actorIt->second.faceName, actorIt->second.faceIndex});
+  }
+  const std::uint64_t totalSeconds = session.ticks_ / 60;
+  const std::uint64_t hours = totalSeconds / 3600;
+  const std::uint64_t minutes = (totalSeconds / 60) % 60;
+  const std::uint64_t seconds = totalSeconds % 60;
+  char buffer[32];
+  std::snprintf(buffer, sizeof(buffer), "%02llu:%02llu:%02llu",
+                static_cast<unsigned long long>(hours),
+                static_cast<unsigned long long>(minutes),
+                static_cast<unsigned long long>(seconds));
+  const double nowMs = static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::system_clock::now().time_since_epoch()).count());
+  return Value::Object{
+    {"globalId", globalId()},
+    {"title", session.database()["system"]["gameTitle"].text()},
+    {"characters", std::move(characters)},
+    {"faces", std::move(faces)},
+    {"playtime", std::string(buffer)},
+    {"timestamp", nowMs}
+  };
+}
+
+std::string ImageManager::generateCacheKey(const std::string& path, int hue) {
+  return path + ":" + std::to_string(hue);
 }
 
 bool ImageManager::isObjectCharacter(const std::string& filename) {
@@ -124,29 +259,286 @@ std::string ImageManager::pathForFolder(const std::string& folder, const std::st
   return folder + filename + ".png";
 }
 
+ImageCache& ImageManager::imageCache() {
+  static ImageCache cache;
+  return cache;
+}
+
+RequestQueue& ImageManager::requestQueue() {
+  static RequestQueue queue;
+  return queue;
+}
+
+std::uint64_t ImageManager::systemReservationId() {
+  static const std::uint64_t id = 0x53595354ULL;
+  return id;
+}
+
+void ImageManager::setDefaultReservationId(std::uint64_t reservationId) {
+  defaultReservationId_ = reservationId;
+}
+
+std::uint64_t ImageManager::defaultReservationId() {
+  return defaultReservationId_;
+}
+
+void ImageManager::reserve(const std::string& folder, const std::string& filename, int hue, std::size_t pixelCount, std::uint64_t reservationId) {
+  const std::string path = pathForFolder(folder, filename);
+  if (path.empty()) {
+    if (!imageCache().get("empty")) {
+      imageCache().add("empty", 0);
+      imageCache().reserve("empty", 0, systemReservationId());
+    }
+    return;
+  }
+  const std::string key = generateCacheKey(path, hue);
+  if (!imageCache().get(key)) imageCache().add(key, pixelCount);
+  imageCache().reserve(key, pixelCount, reservationId ? reservationId : defaultReservationId_);
+}
+
+void ImageManager::request(const std::string& folder, const std::string& filename, int hue, std::function<void()> startRequest, std::function<bool()> isRequestReady) {
+  const std::string path = pathForFolder(folder, filename);
+  if (path.empty()) return;
+  const std::string key = generateCacheKey(path, hue);
+  if (!imageCache().get(key)) {
+    imageCache().add(key, 0);
+    if (auto* entry = imageCache().get(key)) entry->requestOnly = true;
+    requestQueue().enqueue(key, std::move(startRequest), std::move(isRequestReady));
+  } else {
+    requestQueue().raisePriority(key);
+  }
+}
+
+void ImageManager::releaseReservation(std::uint64_t reservationId) {
+  imageCache().releaseReservation(reservationId);
+}
+
+bool ImageManager::isReady() {
+  return imageCache().isReady();
+}
+
+void ImageManager::update() {
+  requestQueue().update();
+}
+
+void ImageManager::clear() {
+  imageCache().clear();
+}
+
+void ImageManager::clearRequest() {
+  requestQueue().clear();
+}
+
+namespace {
+std::vector<std::string>& staticSeNames() {
+  static std::vector<std::string> names;
+  return names;
+}
+Value makeAudioEntry(const Value& sound, double pos) {
+  return Value::Object{
+    {"name", sound["name"].text()},
+    {"volume", sound["volume"].number(90)},
+    {"pitch", sound["pitch"].number(100)},
+    {"pan", sound["pan"].number(0)},
+    {"pos", pos}
+  };
+}
+}
+
 Value AudioManager::makeEmptyAudioObject() {
-  return Value::Object{{"name", ""}, {"volume", 0}, {"pitch", 0}, {"pan", 0}};
+  return Value::Object{{"name", ""}, {"volume", 0}, {"pitch", 0}, {"pan", 0}, {"pos", 0}};
+}
+
+std::string AudioManager::audioFileExt() {
+  return ".ogg";
+}
+
+bool AudioManager::shouldUseHtml5Audio() {
+  return false;
+}
+
+int AudioManager::bgmVolume(const Session& session) { return session.volumes_[0]; }
+void AudioManager::setBgmVolume(Session& session, int value) {
+  session.volumes_[0] = std::clamp(value, 0, 100);
+  ++session.configurationRevision_;
+}
+
+int AudioManager::bgsVolume(const Session& session) { return session.volumes_[1]; }
+void AudioManager::setBgsVolume(Session& session, int value) {
+  session.volumes_[1] = std::clamp(value, 0, 100);
+  ++session.configurationRevision_;
+}
+
+int AudioManager::meVolume(const Session& session) { return session.volumes_[2]; }
+void AudioManager::setMeVolume(Session& session, int value) {
+  session.volumes_[2] = std::clamp(value, 0, 100);
+  ++session.configurationRevision_;
+}
+
+int AudioManager::seVolume(const Session& session) { return session.volumes_[3]; }
+void AudioManager::setSeVolume(Session& session, int value) {
+  session.volumes_[3] = std::clamp(value, 0, 100);
+  ++session.configurationRevision_;
 }
 
 bool AudioManager::isCurrentBgm(const Session& session, const Value& bgm) {
-  return session.savedBgm_["name"].text() == bgm["name"].text();
+  const std::string name = bgm["name"].text();
+  return !name.empty() && session.savedBgm_["name"].text() == name;
 }
 
-void AudioManager::playBgm(Session& session, const Value& bgm) { session.audio("bgm", bgm); }
-void AudioManager::stopBgm(Session& session) { session.audio("stopBgm", Value{}); }
-void AudioManager::fadeOutBgm(Session& session, int durationSeconds) { session.audio("fadeOutBgm", Value{durationSeconds}); }
-void AudioManager::playBgs(Session& session, const Value& bgs) { session.audio("bgs", bgs); }
-void AudioManager::stopBgs(Session& session) { session.audio("stopBgs", Value{}); }
-void AudioManager::fadeOutBgs(Session& session, int durationSeconds) { session.audio("fadeOutBgs", Value{durationSeconds}); }
-void AudioManager::playMe(Session& session, const Value& me) { session.audio("me", me); }
-void AudioManager::stopMe(Session& session) { session.audio("stopMe", Value{}); }
-void AudioManager::playSe(Session& session, const Value& se) { session.audio("se", se); }
-void AudioManager::stopSe(Session& session) { session.audio("stopSe", Value{}); }
+void AudioManager::playBgm(Session& session, const Value& bgm) {
+  playBgm(session, bgm, bgm["pos"].number(0.0));
+}
+
+void AudioManager::playBgm(Session& session, const Value& bgm, double pos) {
+  Value entry = makeAudioEntry(bgm, pos);
+  if (isCurrentBgm(session, bgm)) {
+    updateBgmParameters(session, entry);
+    session.savedBgm_ = std::move(entry);
+    return;
+  }
+  stopBgm(session);
+  if (!bgm["name"].text().empty()) session.audio("bgm", entry, pos > 0.0);
+}
+
+void AudioManager::replayBgm(Session& session, const Value& bgm) {
+  if (isCurrentBgm(session, bgm)) {
+    updateBgmParameters(session, bgm);
+  } else {
+    playBgm(session, bgm, bgm["pos"].number(0.0));
+  }
+}
+
+void AudioManager::updateBgmParameters(Session& session, const Value& bgm) {
+  session.audio("bgm", bgm, false);
+}
+
+void AudioManager::stopBgm(Session& session) {
+  const auto emptyAudio = makeEmptyAudioObject();
+  session.audio("bgm", emptyAudio);
+}
+
+void AudioManager::fadeOutBgm(Session& session, int durationSeconds) {
+  session.savedBgm_ = makeEmptyAudioObject();
+  session.audio("fade-bgm", Value{durationSeconds});
+}
+
+void AudioManager::fadeInBgm(Session& session, int durationSeconds) {
+  (void)durationSeconds;
+  if (!session.savedBgm_.null() && !session.savedBgm_["name"].text().empty()) {
+    session.audio("bgm", session.savedBgm_, false);
+  }
+}
+
+bool AudioManager::isCurrentBgs(const Session& session, const Value& bgs) {
+  const std::string name = bgs["name"].text();
+  return !name.empty() && session.savedBgs_["name"].text() == name;
+}
+
+void AudioManager::playBgs(Session& session, const Value& bgs) {
+  playBgs(session, bgs, bgs["pos"].number(0.0));
+}
+
+void AudioManager::playBgs(Session& session, const Value& bgs, double pos) {
+  Value entry = makeAudioEntry(bgs, pos);
+  if (isCurrentBgs(session, bgs)) {
+    updateBgsParameters(session, entry);
+    session.savedBgs_ = std::move(entry);
+    return;
+  }
+  stopBgs(session);
+  if (!bgs["name"].text().empty()) session.audio("bgs", entry, pos > 0.0);
+}
+
+void AudioManager::replayBgs(Session& session, const Value& bgs) {
+  if (isCurrentBgs(session, bgs)) {
+    updateBgsParameters(session, bgs);
+  } else {
+    playBgs(session, bgs, bgs["pos"].number(0.0));
+  }
+}
+
+void AudioManager::updateBgsParameters(Session& session, const Value& bgs) {
+  session.audio("bgs", bgs, false);
+}
+
+void AudioManager::stopBgs(Session& session) {
+  const auto emptyAudio = makeEmptyAudioObject();
+  session.audio("bgs", emptyAudio);
+}
+
+void AudioManager::fadeOutBgs(Session& session, int durationSeconds) {
+  session.savedBgs_ = makeEmptyAudioObject();
+  session.audio("fade-bgs", Value{durationSeconds});
+}
+
+void AudioManager::fadeInBgs(Session& session, int durationSeconds) {
+  (void)durationSeconds;
+  if (!session.savedBgs_.null() && !session.savedBgs_["name"].text().empty()) {
+    session.audio("bgs", session.savedBgs_, false);
+  }
+}
+
+void AudioManager::playMe(Session& session, const Value& me) {
+  if (me["name"].text().empty()) {
+    stopMe(session);
+  } else {
+    session.audio("me", me);
+  }
+}
+
+void AudioManager::updateMeParameters(Session& session, const Value& me) {
+  session.audio("me", me, false);
+}
+
+void AudioManager::fadeOutMe(Session& session, int /*durationSeconds*/) {
+  stopMe(session);
+}
+
+void AudioManager::stopMe(Session& session) {
+  session.audio("me", makeEmptyAudioObject());
+}
+
+void AudioManager::playSe(Session& session, const Value& se) {
+  if (!se["name"].text().empty()) session.audio("se", se);
+}
+
+void AudioManager::stopSe(Session& session) {
+  session.audio("stop-se", Value{});
+}
+
+void AudioManager::playStaticSe(Session& session, const Value& se) {
+  if (se["name"].text().empty()) return;
+  loadStaticSe(se);
+  session.audio("se", se);
+}
+
+void AudioManager::loadStaticSe(const Value& se) {
+  const std::string name = se["name"].text();
+  if (!name.empty() && !isStaticSe(se)) staticSeNames().push_back(name);
+}
+
+bool AudioManager::isStaticSe(const Value& se) {
+  const std::string name = se["name"].text();
+  const auto& names = staticSeNames();
+  return !name.empty() && std::find(names.begin(), names.end(), name) != names.end();
+}
+
 void AudioManager::stopAll(Session& session) {
   stopMe(session);
   stopBgm(session);
   stopBgs(session);
   stopSe(session);
+}
+
+Value AudioManager::saveBgm(const Session& session) {
+  if (session.savedBgm_.null() || session.savedBgm_["name"].text().empty()) return makeEmptyAudioObject();
+  return makeAudioEntry(session.savedBgm_, session.savedBgm_["pos"].number(0));
+}
+
+Value AudioManager::saveBgs(const Session& session) {
+  if (session.savedBgs_.null() || session.savedBgs_["name"].text().empty()) return makeEmptyAudioObject();
+  return makeAudioEntry(session.savedBgs_, session.savedBgs_["pos"].number(0));
 }
 
 Value ConfigManager::makeData() const {
@@ -194,6 +586,23 @@ void ConfigManager::readFromSession(const Session& session) {
   seVolume = session.volumes_[3];
 }
 
+void ConfigManager::load(Session& session, const Value& config) {
+  ConfigManager loaded;
+  loaded.applyData(config);
+  loaded.applyToSession(session);
+  ++session.configurationRevision_;
+}
+
+Value ConfigManager::save(const Session& session) {
+  ConfigManager current;
+  current.readFromSession(session);
+  return current.makeData();
+}
+
+bool StorageManager::isLocalMode() {
+  return true;
+}
+
 std::string StorageManager::localFileDirectoryPath(const std::string& baseDir) {
   return baseDir + "/save/";
 }
@@ -214,6 +623,21 @@ std::string StorageManager::webStorageKey(int savefileId) {
   return "RPG File" + std::to_string(savefileId);
 }
 
+bool StorageManager::localFileExists(const std::string& baseDir, int savefileId) {
+  std::error_code ec;
+  return std::filesystem::exists(localFilePath(baseDir, savefileId), ec);
+}
+
+bool StorageManager::localFileBackupExists(const std::string& baseDir, int savefileId) {
+  std::error_code ec;
+  return std::filesystem::exists(localFileBackupPath(baseDir, savefileId), ec);
+}
+
+bool StorageManager::removeLocalFile(const std::string& baseDir, int savefileId) {
+  std::error_code ec;
+  return std::filesystem::remove(localFilePath(baseDir, savefileId), ec);
+}
+
 bool Decrypter::checkImgIgnore(const std::string& url) {
   return std::find(ignoreList.begin(), ignoreList.end(), url) != ignoreList.end();
 }
@@ -232,22 +656,21 @@ std::vector<std::uint8_t> Decrypter::cutArrayHeader(const std::vector<std::uint8
   return std::vector<std::uint8_t>(data.begin() + static_cast<std::ptrdiff_t>(length), data.end());
 }
 
-std::vector<std::uint8_t> Decrypter::decryptArrayBuffer(const std::vector<std::uint8_t>& data, const std::string& hexKey) {
+std::vector<std::uint8_t> Decrypter::decryptArrayBuffer(const std::vector<std::uint8_t>& data, const std::array<std::uint8_t, 16>& key) {
   if (data.empty()) return {};
   if (!hasEncryptedHeader(data)) throw std::runtime_error("Header is wrong");
   if (data.size() < kHeaderLen * 2) throw std::out_of_range("encrypted payload shorter than encryption header");
-  const auto key = imageEncryptionKey(hexKey);
   auto output = cutArrayHeader(data, kHeaderLen);
   for (std::size_t index = 0; index < kHeaderLen; ++index) output[index] ^= key[index];
   return output;
 }
+
+std::vector<std::uint8_t> Decrypter::decryptArrayBuffer(const std::vector<std::uint8_t>& data, const std::string& hexKey) {
+  return decryptArrayBuffer(data, imageEncryptionKey(hexKey));
+}
+
 std::vector<std::uint8_t> Decrypter::decryptArrayBuffer(const std::vector<std::uint8_t>& data) {
-  if (data.empty()) return {};
-  if (!hasEncryptedHeader(data)) throw std::runtime_error("Header is wrong");
-  if (data.size() < kHeaderLen * 2) throw std::out_of_range("encrypted payload shorter than encryption header");
-  auto output = cutArrayHeader(data, kHeaderLen);
-  for (std::size_t index = 0; index < kHeaderLen; ++index) output[index] ^= encryptionKey[index];
-  return output;
+  return decryptArrayBuffer(data, encryptionKey);
 }
 
 std::string Decrypter::extToEncryptExt(const std::string& url) {
@@ -407,6 +830,7 @@ class JsonParser {
   }
 };
 std::string rawJson(const Value& value) {
+  if (value.isUndefined()) throw std::invalid_argument("undefined has no JSON representation");
   if (value.null()) return "null";
   if (const auto* boolean = std::get_if<bool>(&value.data)) return *boolean ? "true" : "false";
   if (const auto* number = std::get_if<double>(&value.data)) return jsonNumber(*number);
@@ -414,11 +838,11 @@ std::string rawJson(const Value& value) {
   std::string out;
   if (const auto* array = std::get_if<Value::Array>(&value.data)) {
     out = "[";
-    for (const auto& child : *array) { if (out.size() > 1) out += ','; out += rawJson(child); }
+    for (const auto& child : *array) { if (out.size() > 1) out += ','; out += child.isUndefined() ? "null" : rawJson(child); }
     return out + ']';
   }
   out = "{";
-  for (const auto& [key, child] : std::get<Value::Object>(value.data)) { if (out.size() > 1) out += ','; out += escapeJsonString(key) + ':' + rawJson(child); }
+  for (const auto& [key, child] : std::get<Value::Object>(value.data)) { if (child.isUndefined()) continue; if (out.size() > 1) out += ','; out += escapeJsonString(key) + ':' + rawJson(child); }
   return out + '}';
 }
 std::string pointerKey(const std::string& key) {
@@ -502,6 +926,10 @@ std::string JsonEx::stringifyGraph(const JsonNode::Ptr& value) {
   };
   return rawJson(encode(value, 0, true));
 }
+std::optional<std::string> JsonEx::stringifyGraphOptional(const JsonNode::Ptr& value) {
+  if (value && std::holds_alternative<Value::Undefined>(value->data)) return std::nullopt;
+  return stringifyGraph(value);
+}
 JsonNode::Ptr JsonEx::parseGraph(const std::string& json) {
   const auto raw = JsonParser(json).parse();
   std::map<int,JsonNode::Ptr> registry;
@@ -571,7 +999,15 @@ void JsonEx::destroyGraph(JsonNode::Ptr& value) {
   value.reset();
 }
 JsonGraph::~JsonGraph() { JsonEx::destroyGraph(root); }
-std::string JsonEx::stringify(const Value& value) { JsonGraph graph(fromValue(value)); return stringifyGraph(graph.root); }
+std::optional<std::string> JsonEx::stringifyOptional(const Value& value) {
+  if (value.isUndefined()) return std::nullopt;
+  JsonGraph graph(fromValue(value)); return stringifyGraphOptional(graph.root);
+}
+std::string JsonEx::stringify(const Value& value) {
+  const auto json = stringifyOptional(value);
+  if (!json) throw std::invalid_argument("undefined has no JSON representation");
+  return *json;
+}
 Value JsonEx::parse(const std::string& json) { JsonGraph graph(parseGraph(json)); return toValue(graph.root); }
 void JsonEx::cleanMetadata(Value& value) {
   if (auto* object = std::get_if<Value::Object>(&value.data)) { object->erase("@"); object->erase("@c"); for (auto& [key, child] : *object) { (void)key; cleanMetadata(child); } }

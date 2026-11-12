@@ -73,7 +73,9 @@ Interpreter readInterpreter(const Value& value, int depth = 0) {
   if (!value["_childInterpreter"].null()) result.children.push_back(readInterpreter(value["_childInterpreter"], depth + 1));
   if (value["_waitMode"].text() == "route") {
     const auto& target = value["_character"];
-    if (target["@"].text() == "Game_Player") result.waitingRoute = -1;
+    if (target["@r"].text() == "/player") result.waitingRoute = -1;
+    else if (target["@r"].text().starts_with("/map/_events/")) result.waitingRoute = std::stoi(target["@r"].text().substr(13));
+    else if (target["@"].text() == "Game_Player") result.waitingRoute = -1;
     else if (target["@"].text() == "Game_Event") result.waitingRoute = target["_eventId"].integer();
     else throw std::invalid_argument("unsupported saved movement-route target");
   } else if (value["_waitMode"].text() == "scroll") result.waitingScroll = true;

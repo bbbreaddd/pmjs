@@ -14,9 +14,15 @@ Presentation::Presentation(RuntimeCore& core, Session& session, Value settings)
   core::bindRuntime(core_);
   core::Graphics::initialize(core_.width(),core_.height());
   core::Graphics::loadFont("GameFont",settings_["fontFile"].text());
+  fonts_ = core::Graphics::fonts("GameFont");
+  if (fonts_.empty()) {
+    const auto font = core_.vfs().resolve(settings_["fontFile"].text());
+    if (!font) throw std::runtime_error("game font unavailable");
+    fonts_.push_back(*font);
+  }
   core::PixelBitmap::setImageLoader([this](const std::string& url)->std::optional<ImageInfo>{return image(url);});
   core::WebAudio::setEncryptionKey(session_.database_["system"]["encryptionKey"].text());
-  core::Graphics::setLoadingCallbacks([this]{session_.resourcesStopped_=true;core_.media().suspendContext(true);},[this]{session_.resourcesStopped_=false;core_.media().suspendContext(false);});
+  core::Graphics::setLoadingCallbacks([this]{session_.resourcesStopped_=true;},[this]{session_.resourcesStopped_=false;});
   core::Graphics::setVideoCallbacks([this](const std::string& url){
     auto file=std::filesystem::path(url).filename();file.replace_extension();session_.movieName_=file.string();session_.moviePlaying_=!session_.movieName_.empty();
   },[this]{return session_.moviePlaying_;},[this](double volume){if(movieAudio_)core_.media().setParameters(movieAudio_,volume,1,0);});
@@ -24,9 +30,6 @@ Presentation::Presentation(RuntimeCore& core, Session& session, Value settings)
   const auto budget = settings_["imageCacheBytes"].number();
   if (budget > 0) imageCache_->limit = static_cast<std::size_t>(budget);
   Decrypter::readEncryptionkey(session_.database_["system"]);
-  const auto font = core_.vfs().resolve(settings_["fontFile"].text());
-  if (!font) throw std::runtime_error("game font unavailable");
-  fonts_.push_back(*font);
   const auto skinSource = core_.vfs().resolve("img/system/Window.png");
   if (!skinSource) throw std::runtime_error("window skin unavailable");
   const auto loaded = core_.images().loadPng(*skinSource, true);
@@ -49,13 +52,14 @@ Presentation::~Presentation() {
   clearMapGeometry();
   clearTiledGeometry();
   clearBattleContents();
+  if (imageCache_) imageCache_->clear();
   for (auto handle : deferredImageReleases_) core_.images().release(handle);
-  for (auto& [key, value] : images_) { (void)key; core_.images().release(value.handle); }
+  deferredImageReleases_.clear();
   coreWindows_.clear(); coreWindowskin_.reset();
   for (auto handle : sounds_) { core_.media().stop(handle); core_.media().release(handle); }
   if (musicEffect_) { core_.media().stop(musicEffect_); core_.media().release(musicEffect_); }
   for (auto& [key, value] : audio_) { (void)key; core_.media().stop(value.second); core_.media().release(value.second); }
-  for (auto surface : weatherSurfaces_) if (surface) core_.canvases().release(surface);
+  coreWeather_.reset();
   if (timerCanvas_) core_.canvases().release(timerCanvas_);
   core_.canvases().release(textCanvas_);
   core::unbindRuntime(core_);
@@ -81,7 +85,7 @@ ImageInfo Presentation::image(const std::string& file, int hue) {
     const auto path = core_.vfs().resolve(encrypted ? Decrypter::extToEncryptExt(file) : file);
     if (!path) throw std::runtime_error("image unavailable: " + file);
     if (encrypted) {
-      const auto source = ImageStore::openFile(*path, imageEncryptionKey(session_.database_["system"]["encryptionKey"].text()));
+      const auto source = ImageStore::openFile(*path, Decrypter::encryptionKey);
       if (!source) throw std::runtime_error("cannot open encrypted image: " + file);
       auto loaded = core_.images().acquireCached(*source);
       if (!loaded) {
@@ -109,57 +113,9 @@ void Presentation::quad(ImageHandle handle, float sx, float sy, float sw, float 
   const auto source = core_.images().inspect(handle);
   if (!source || !core::Sprite::queueFrame(core_.renderer(), *source, {sx,sy,sw,sh}, {width/sw,0,0,height/sh,x,y}, alpha)) throw std::runtime_error("cannot queue image");
 }
-void Presentation::tile(int id, int x, int y, std::vector<TileLayerTile>& geometry) {
-  if (id <= 0) return;
-  const bool tableEdge = id >= 10000;
-  if (tableEdge) id -= 10000;
-  const auto& tileset = session_.database_["tilesets"][session_.mapState_.tilesetId];
-  auto source = [&](int set) {
-    const auto name = tileset["tilesetNames"][set].text();
-    if (name.empty()) throw std::runtime_error("tile refers to an absent tileset image");
-    return image("img/tilesets/" + name + ".png");
-  };
-  if (id < 2048) {
-    const auto bitmap = source(id >= 1536 ? 4 : 5 + id / 256);
-    geometry.push_back({bitmap.handle, {static_cast<float>((id / 128 % 2 * 8 + id % 8) * 48), static_cast<float>(id % 256 / 8 * 48), 48, 48}, {static_cast<float>(x), static_cast<float>(y)}, {0, 0}});
-    return;
-  }
-  const int kind = (id - 2048) / 48, shape = (id - 2048) % 48, column = kind % 8, row = kind / 8;
-  std::array<float, 2> animationOffset{};
-  int set = 0, baseX = 0, baseY = 0;
-  std::string table = "floor";
-  if (id < 2816) {
-    if (kind < 4) { baseX = kind < 2 ? 0 : 6; baseY = kind % 2 * 3; }
-    else {
-      baseX = column / 4 * 8; baseY = row * 6 + column / 2 % 2 * 3;
-      if (kind % 2) { baseX += 6; table = "waterfall"; }
-    }
-  } else if (id < 4352) { set = 1; baseX = column * 2; baseY = (row - 2) * 3; }
-  else if (id < 5888) { set = 2; baseX = column * 2; baseY = (row - 6) * 2; table = "wall"; }
-  else { set = 3; baseX = column * 2; baseY = static_cast<int>(std::floor((row - 10) * 2.5 + (row % 2 ? 0.5 : 0))); if (row % 2) table = "wall"; }
-  if (id < 2816) {
-    if (kind < 2 || (kind >= 4 && kind % 2 == 0)) animationOffset[0] = 96;
-    else if (kind >= 4 && kind % 2) animationOffset[1] = 48;
-  }
-  const auto bitmap = source(set);
-  const auto& quarters = session_.database_["tileTables"][table][shape].array();
-  if (quarters.size() != 4) throw std::runtime_error("invalid autotile shape");
-  const bool tableTile = id >= 2816 && id < 4352 && (tileset["flags"][id].integer() & 128);
-  const auto append = [&](int sx,int sy,int width,int height,int px,int py) {
-    geometry.push_back({bitmap.handle,{float(sx),float(sy),float(width),float(height)}, {float(px),float(py)},animationOffset});
-  };
-  if (tableEdge) {
-    for (int i=0;i<2;++i) append((baseX*2+quarters[i+2][0].integer())*24,
-      (baseY*2+quarters[i+2][1].integer())*24+12,24,12,x+i*24,y);
-  } else for (int i=0;i<4;++i) {
-    const int qsx=quarters[i][0].integer(),qsy=quarters[i][1].integer();
-    const int sx=(baseX*2+qsx)*24,sy=(baseY*2+qsy)*24,px=x+i%2*24,py=y+i/2*24;
-    if (tableTile && (qsy==1 || qsy==5)) {
-      constexpr std::array<int,4> alternate{0,3,2,1};
-      append((baseX*2+(qsy==1?alternate[qsx]:qsx))*24,(baseY*2+3)*24,24,24,px,py);
-      append(sx,sy,24,12,px,py+12);
-    } else append(sx,sy,24,24,px,py);
-  }
+void Presentation::tile(int id,int x,int y,std::vector<TileLayerTile>& geometry) {
+  const auto& tileset=session_.database_["tilesets"][session_.mapState_.tilesetId];
+  stockTilemap_.appendTileGeometry(geometry,id,x,y,[&](int sheet){const auto name=tileset["tilesetNames"][sheet].text();return name.empty()?ImageInfo{}:image("img/tilesets/"+name+".png");});
 }
 void Presentation::character(const Character& value, double cameraX, double cameraY) {
   int characterId = &value == &session_.player_ ? -1 : 0;
@@ -255,9 +211,8 @@ void Presentation::mapParallax(int tileWidth, int tileHeight) {
   const double ox = parallax.parallaxZero ? parallax.parallaxX * tileWidth : parallax.parallaxLoopX ? parallax.parallaxX * tileWidth / 2 : 0;
   const double oy = parallax.parallaxZero ? parallax.parallaxY * tileHeight : parallax.parallaxLoopY ? parallax.parallaxY * tileHeight / 2 : 0;
   const float width = static_cast<float>(core_.width()), height = static_cast<float>(core_.height());
-  if (!core_.renderer().queueTiled(source.handle, {1, 0, 0, 1, 0, 0},
-      {static_cast<float>(ox), static_cast<float>(oy), width, height}, {width, height},
-      1, 0xffffff, BlendMode::normal)) throw std::runtime_error("cannot queue map parallax");
+  if (!core_.renderer().queueTilingFrame(source.handle, {1,0,0,1,0,0},
+      {0,0,float(source.width),float(source.height)},{width,height},{float(-std::floor(-ox+.5)),float(-std::floor(-oy+.5))},1,BlendMode::normal)) throw std::runtime_error("cannot queue map parallax");
 }
 void Presentation::map() {
   const auto& tiled=session_.database_["tiledMaps"][std::to_string(session_.mapId_)];
@@ -302,7 +257,7 @@ void Presentation::window(int x,int y,int width,int height,int selected,int rows
   }
   auto& window=coreWindows_[{x,y,width,height}];if(!window)window=std::make_shared<core::Window>();
   window->windowskin=coreWindowskin_;window->move(x,y,width,height);window->openness=std::clamp(openness,0,255);
-  window->animationCount=session_.ticks_;window->active=selected>=0;
+  window->active=selected>=0;window->synchronize(session_.ticks_);
   const auto& tone=session_.system_.windowTone.null()?session_.database_["system"]["windowTone"]:session_.system_.windowTone;
   window->setTone(tone[0].number(),tone[1].number(),tone[2].number());
   if(selected>=0&&rows>0)window->setCursorRect(0,selected%rows*36,std::max(0,width-36),36);else window->setCursorRect(0,0,0,0);
@@ -896,20 +851,21 @@ void Presentation::captureAudioState() {
 }
 void Presentation::render() {
   core::Graphics::tickStart();core::updateServices();core::Graphics::updateLoading();
-  for (auto handle : deferredImageReleases_) core_.images().release(handle);
-  deferredImageReleases_.clear();
   session_.uiHitTargets_.clear();
   const int sceneId = static_cast<int>(session_.ui_.scene);
   if (sceneId != lastScene_ || session_.mapId_ != lastMap_ || session_.presentationRevision_ != lastPresentationRevision_) {
+    coreWeather_.reset();
     clearMapGeometry();
     clearTiledGeometry();
     clearBattleContents();
     sceneTickOrigin_ = session_.ticks_;
-    for (const auto& [key, value] : images_) { (void)key; core_.images().release(value.handle); }
+    imageCache_->clear();
     images_.clear();
     coreWindows_.clear(); coreWindowskin_.reset(); lastScene_ = sceneId; lastMap_ = session_.mapId_;
     lastPresentationRevision_ = session_.presentationRevision_;
   }
+  for (auto handle : deferredImageReleases_) core_.images().release(handle);
+  deferredImageReleases_.clear();
   processAudio();
   if (session_.ui_.scene != Scene::battle) core_.canvases().clear(textCanvas_);
   const auto scene = session_.ui_.scene; const int width = core_.width(), height = core_.height();

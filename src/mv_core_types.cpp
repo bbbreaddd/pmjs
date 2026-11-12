@@ -106,6 +106,7 @@ std::string numberString(double value) {
   return negative?"-"+text:text;
 }
 std::string stringValue(const Value& value) {
+  if(value.isUndefined())return "undefined";
   if(std::holds_alternative<std::monostate>(value.data))return "null";
   if(const auto* boolean=std::get_if<bool>(&value.data))return *boolean?"true":"false";
   if(const auto* number=std::get_if<double>(&value.data))return numberString(*number);
@@ -114,13 +115,14 @@ std::string stringValue(const Value& value) {
     std::string text;
     for(std::size_t index=0;index<array->size();++index) {
       if(index)text+=',';
-      if(!std::holds_alternative<std::monostate>((*array)[index].data))text+=stringValue((*array)[index]);
+      if(!(*array)[index].null())text+=stringValue((*array)[index]);
     }
     return text;
   }
   return "[object Object]";
 }
 double numberValue(const Value& value) {
+  if(value.isUndefined())return NAN;
   if(std::holds_alternative<std::monostate>(value.data))return 0;
   if(const auto* number=std::get_if<double>(&value.data))return *number;
   if(const auto* boolean=std::get_if<bool>(&value.data))return *boolean?1:0;
@@ -192,6 +194,7 @@ double numberValue(const Value& value) {
 }
 bool strictEquals(const Value& left,const Value& right) {
   if(left.data.index()!=right.data.index())return false;
+  if(left.isUndefined())return true;
   if(std::holds_alternative<std::monostate>(left.data))return true;
   if(const auto* value=std::get_if<bool>(&left.data))return *value==std::get<bool>(right.data);
   if(const auto* value=std::get_if<double>(&left.data))return *value==std::get<double>(right.data);
@@ -224,11 +227,7 @@ void Rectangle::enlarge(const Rectangle& rectangle) {
 }
 std::uint64_t Utils::generateRuntimeId(){static std::atomic<std::uint64_t> next{1};return next++;}
 std::string Utils::rgbToCssColor(double red,double green,double blue) {
-  const auto rounded=[](double number){
-    const double lower=std::floor(number);
-    return numberString(number-lower<0.5?lower:lower+1);
-  };
-  return "rgb("+rounded(red)+","+rounded(green)+","+rounded(blue)+")";
+  return "rgb("+numberString(round(red))+","+numberString(round(green))+","+numberString(round(blue))+")";
 }
 bool Utils::isOptionValid(const std::string& name,const std::vector<std::string>& args,const std::string& search) {
   return option(search.empty()?search:search.substr(1),name)||(!args.empty()&&option(args.front(),name));

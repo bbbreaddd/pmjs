@@ -33,40 +33,11 @@ void Presentation::finishScreen(std::size_t first) {
   core_.renderer().transformQueuedCommands(first, {scale,0,0,scale,x,y});
 }
 void Presentation::weather() {
-  const auto& state = session_.screenEffects_;
-  const auto type = state["_weatherType"].text();
-  const float power = std::max(0.0, state["_weatherPower"].number());
-  if (type == "none" || type.empty() || power <= 0) { weatherParticles_.clear(); weatherTick_ = session_.ticks_; return; }
-  const int kind = type == "storm" ? 1 : type == "snow" ? 2 : 0;
-  const int width = kind == 1 ? 2 : kind == 2 ? 9 : 1, height = kind == 1 ? 100 : kind == 2 ? 9 : 60;
-  if (!weatherSurfaces_[kind]) {
-    const auto surface = core_.canvases().create(width, height);
-    if (!surface) throw std::runtime_error("cannot create weather sprite");
-    weatherSurfaces_[kind] = surface->handle;
-    if (kind == 2) {
-      CanvasCirclePaint circle; circle.x = 4; circle.y = 4; circle.radius = 4; circle.paint.color = 0xffffffff;
-      core_.canvases().paintCircle(surface->handle, circle);
-    } else core_.canvases().fillRect(surface->handle, 0, 0, width, height, 0xffffffff);
-  }
-  weatherParticles_.resize(static_cast<std::size_t>(std::floor(power*10)));
-  const double angle = 3.14159265358979323846/(kind == 1 ? 8 : 16);
-  const float sine = std::sin(angle), cosine = std::cos(angle), speed = kind == 1 ? 8 : kind == 2 ? 3 : 6;
-  const auto& tiled = session_.database_["tiledMaps"][std::to_string(session_.mapId_)];
-  const float originX = cameraX_*tiled["tilewidth"].integer(48), originY = cameraY_*tiled["tileheight"].integer(48);
-  const auto random = [&](int limit) { return std::uniform_int_distribution<int>(0, limit-1)(weatherRandom_); };
-  const std::uint64_t steps = session_.ticks_ >= weatherTick_ ? session_.ticks_-weatherTick_ : 1;
-  for (std::uint64_t tick = 0; tick < steps; ++tick) for (auto& particle : weatherParticles_) {
-    particle.x -= speed*sine; particle.y += speed*cosine; particle.opacity -= speed;
-    if (particle.opacity < 40) {
-      particle.x = random(core_.width()+100)-100+originX; particle.y = random(core_.height()+200)-200+originY;
-      particle.opacity = 160+random(60);
-    }
-  }
-  weatherTick_ = session_.ticks_;
-  core_.renderer().queueQuad(0, 0, core_.width(), core_.height(), {80.0F/255,80.0F/255,80.0F/255,std::floor(power*6)/255});
-  const auto texture = core_.canvases().prepareImage(weatherSurfaces_[kind]);
-  if (!texture) return;
-  for (const auto& particle : weatherParticles_) core_.renderer().queueImage(*texture,
-    {cosine,sine,-sine,cosine,particle.x-originX,particle.y-originY}, {0,0,float(width),float(height)}, particle.opacity/255, 0xffffff, BlendMode::normal);
+  if(!coreWeather_)coreWeather_=std::make_unique<core::Weather>();
+  coreWeather_->type=session_.screenEffects_["_weatherType"].text();
+  coreWeather_->power=session_.screenEffects_["_weatherPower"].number();coreWeather_->width=core_.width();coreWeather_->height=core_.height();
+  const auto& tiled=session_.database_["tiledMaps"][std::to_string(session_.mapId_)];
+  coreWeather_->origin={cameraX_*tiled["tilewidth"].integer(48),cameraY_*tiled["tileheight"].integer(48)};
+  coreWeather_->synchronize(session_.ticks_);coreWeather_->render(core_.renderer());
 }
 }  // namespace pmjs::mv

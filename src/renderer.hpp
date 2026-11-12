@@ -13,6 +13,7 @@
 #include <unordered_map>
 #include <vector>
 #include <variant>
+#include <functional>
 
 namespace pmjs {
 
@@ -277,14 +278,14 @@ class Renderer {
   void clearCompositionRect(float x,float y,float width,float height);
   void clipQueuedCommands(std::size_t first,const std::array<int,4>& bounds);
   bool queueTilingFrame(ImageHandle image,const std::array<float,6>& transform,const std::array<float,4>& frame,
-    const std::array<float,2>& destination,const std::array<float,2>& origin,float alpha,BlendMode blend);
+    const std::array<float,2>& destination,const std::array<float,2>& origin,float alpha,BlendMode blend,bool nearest=false);
   void queueQuad(float x, float y, float width, float height,
                  const std::array<float, 4>& color);
   bool queueImage(ImageHandle image, const std::array<float, 6>& transform,
                   const std::array<float, 4>& source, float alpha,
                   std::uint32_t tint, BlendMode blendMode,
                   const std::array<float, 4>& tone = {},
-                  const std::array<float, 4>& blendColor = {});
+                  const std::array<float, 4>& blendColor = {}, bool nearest = false);
   bool queueTiled(ImageHandle image, const std::array<float, 6>& transform,
                   const std::array<float, 4>& source,
                   const std::array<float, 2>& destination, float alpha,
@@ -299,7 +300,7 @@ class Renderer {
   bool queueTileLayer(std::uint32_t layer,
                       const std::array<float, 6>& transform,
                       const std::array<float, 2>& animation, float alpha,
-                      std::uint32_t tint, BlendMode blendMode);
+                      std::uint32_t tint, BlendMode blendMode, bool nearest = false);
   bool releaseTileLayer(std::uint32_t layer);
   bool clearImageTriangles(ImageHandle image, const std::vector<float>& triangles,
     const std::vector<float>& rectangles = {}, const std::vector<float>& normals = {},
@@ -327,6 +328,7 @@ class Renderer {
   std::vector<std::uint8_t> captureSceneRawPremultiplied();
   // Window backbuffer readback, valid only before swap.
   std::vector<std::uint8_t> captureDrawableRgba(AlphaMode alphaMode = AlphaMode::straight);
+  std::vector<std::uint8_t> snapshotScene(int width, int height, const std::function<void()>& draw);
   std::vector<std::uint8_t> renderToRgba(int width, int height, ImageHandle initialImage = 0, AlphaMode alphaMode = AlphaMode::straight);
   std::optional<ImageInfo> captureOffscreenImage();
   std::optional<ImageInfo> renderToImage(int width, int height, AlphaMode alphaMode = AlphaMode::straight);

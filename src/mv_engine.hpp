@@ -15,10 +15,13 @@
 namespace pmjs::mv {
 
 struct Value {
+  struct Undefined {};
   using Array = std::vector<Value>;
   using Object = std::map<std::string, Value>;
-  std::variant<std::monostate, bool, double, std::string, Array, Object> data;
+  std::variant<std::monostate, bool, double, std::string, Array, Object, Undefined> data;
   Value() = default;
+  static Value undefined(){Value value;value.data=Undefined{};return value;}
+  bool isUndefined()const{return std::holds_alternative<Undefined>(data);}
   Value(bool v) : data(v) {}
   Value(int v) : data(static_cast<double>(v)) {}
   Value(double v) : data(v) {}
@@ -33,7 +36,7 @@ struct Value {
   int integer(int fallback = 0) const;
   bool boolean() const;
   std::string text() const;
-  bool null() const { return std::holds_alternative<std::monostate>(data); }
+  bool null() const { return std::holds_alternative<std::monostate>(data) || isUndefined(); }
 };
 
 using FormulaResolver = std::function<double(const std::string&, const std::vector<double>&)>;
@@ -168,7 +171,7 @@ struct BattleVisual {
 struct Battle {
   bool active = false, canEscape = false, canLose = false, event = false, opening = false;
   int troopId = 0, turn = 0, actorIndex = 0, result = -1, wait = 0;
-  int actionStage = 0, currentVisual = -1;
+  int actionStage = 0, currentVisual = -1, encounterEffect = 0;
   double escapeRatio = 0;
   Value mapBgm, mapBgs;
   std::vector<Battler> enemies;
@@ -260,6 +263,7 @@ class Session {
   void openTitle();
   void openGameOver();
   void startBattle(int troop, bool canEscape, bool canLose, bool event = false);
+  void buildBattleIntro();
   void chooseAction(int actorIndex, int id, int target, bool item = false);
   double parameter(const Battler& battler, int id) const;
   void setRandomStream(std::vector<double> values);
@@ -289,6 +293,7 @@ class Session {
   friend class MapMechanics;
   friend class SceneManager;
   friend class SoundManager;
+  friend class DataManager;
   friend class AudioManager;
   friend class ConfigManager;
   friend class Window_Base;
@@ -356,6 +361,7 @@ class Session {
   bool updateMessageText(bool ok, bool cancel);
   void updateUi(const Input& input, bool ok, bool cancel, int direction);
   bool useItem(int id, int target, bool skill);
+  bool useItemUntargeted(int id, bool skill);
   void changeEquipment(int actor, int slot, int item);
   bool canEquip(const Battler& actor, const Value& item, int slot) const;
   int equipSlotType(const Battler& actor, int slot) const;
@@ -363,6 +369,7 @@ class Session {
   void releaseEquipment(Battler& actor, bool forcing = false);
   void updatePlayerGraphic();
   void advanceEncounter();
+  void advanceEncounterEffect();
   int makeEncounterTroopId();
   void audio(const std::string& kind, const Value& sound, bool restart = false);
   void transfer(int mapId, int x, int y, int direction);
@@ -392,6 +399,7 @@ class Session {
   bool shopEventCommand(const Value& entry, Interpreter& context);
   bool vehicleEventCommand(const Value& entry, Interpreter& context);
   bool animationEventCommand(const Value& entry, Interpreter& context);
+  void ensureScreenEffects();
   void updateScreenState();
   Value screenState() const;
   bool characterEventCommand(const Value& entry, Interpreter& context);
@@ -471,6 +479,7 @@ class Session {
   std::array<int, 4> volumes_{100, 100, 100, 100};
   int configurationRevision_ = 0;
   Value::Array saveMetadata_;
+  int lastAccessedSavefileId_ = 1;
   int lastTitleCommand_ = -1;
   std::mt19937 randomGenerator_{std::random_device{}()};
   std::vector<double> randomStream_;
@@ -480,6 +489,7 @@ class Session {
   std::uint64_t presentationRevision_ = 0;
   int mapId_ = 0;
   bool refreshNeeded_ = true, previousOk_ = false, finished_ = false;
+  int okAge_ = 0;
   bool playerDashing_ = false, battleTest_ = false;
   bool followersVisible_ = false;
   std::optional<std::array<int, 2>> destination_;

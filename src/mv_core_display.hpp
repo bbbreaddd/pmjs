@@ -2,6 +2,7 @@
 #include "mv_core_audio_graphics.hpp"
 #include "renderer.hpp"
 #include <memory>
+#include <random>
 
 namespace pmjs::mv::core {
 struct SpriteFrame {
@@ -12,6 +13,11 @@ SpriteFrame spriteFrame(const Rectangle& requested,double bitmapWidth,double bit
 
 class Container {
  public:
+  Container();
+  Container(const Container&) = delete;
+  Container& operator=(const Container&) = delete;
+  int z=0;
+  std::uint64_t displayId=0;
   Point position, scale{1,1}, pivot, skew;
   double rotation=0,alpha=1;
   bool visible=true,renderable=true,interactive=false;
@@ -32,6 +38,8 @@ class Container {
 class Stage:public Container {};
 class Tilemap : public Container {
  public:
+  Tilemap();
+  bool smooth=false;
   static constexpr int TILE_ID_B = 0;
   static constexpr int TILE_ID_C = 256;
   static constexpr int TILE_ID_D = 512;
@@ -61,6 +69,8 @@ class Tilemap : public Container {
   std::array<const PixelBitmap*, 9> bitmaps{};
 
   void setData(int width, int height, std::vector<int> mapData);
+  void setTileWidth(int value){if(tileWidth!=value){tileWidth=value;refresh();}}
+  void setTileHeight(int value){if(tileHeight!=value){tileHeight=value;refresh();}}
   void update() override;
   void refresh(){++revision_;}
   using ImageResolver=std::function<ImageInfo(int)>;
@@ -83,6 +93,7 @@ class Tilemap : public Container {
   std::uint64_t geometryRevision_=0;
   Renderer* geometryRenderer_=nullptr;
   bool geometryReady_=false;
+  std::shared_ptr<int> layerLifetime_=std::make_shared<int>(0);
  public:
   int readMapData(int x, int y, int z) const;
   void computeTileLayers(int mx, int my, std::vector<int>& lowerTiles, std::vector<int>& upperTiles) const;
@@ -93,7 +104,7 @@ class Tilemap : public Container {
   void drawShadow(PixelBitmap& bitmap, int shadowBits, int dx, int dy) const;
   bool isHigherTile(int tileId) const;
   bool isTableTile(int tileId) const;
-  bool isOverpassPosition(int mx, int my) const;
+  virtual bool isOverpassPosition(int mx, int my) const;
 
   static bool isVisibleTile(int tileId) { return tileId > 0 && tileId < TILE_ID_MAX; }
   static bool isAutotile(int tileId) { return tileId >= TILE_ID_A1; }
@@ -122,11 +133,12 @@ class ShaderTilemap:public Tilemap {public:bool roundPixels=true;};
 class Sprite:public Container {
  public:
   Sprite();
+  ~Sprite() override;
   std::uint64_t spriteId=0;
   Point anchor;
   bool opaque=false,isPicture=false;
   BlendMode blendMode=BlendMode::normal;
-  void setBitmap(std::shared_ptr<PixelBitmap> bitmap);
+  virtual void setBitmap(std::shared_ptr<PixelBitmap> bitmap);
   std::shared_ptr<PixelBitmap> bitmap()const{return bitmap_;}
   void setFrame(double x,double y,double width,double height);
   Rectangle frame()const{return frame_;}
@@ -141,9 +153,11 @@ class Sprite:public Container {
   std::array<double,4> blendColor()const{return blendColor_;}
   std::array<double,4> colorTone()const{return colorTone_;}
   static bool queueFrame(Renderer&,const ImageInfo&,const Rectangle&,const Matrix&,double opacity=1,BlendMode blend=BlendMode::normal,
-    Point anchor={},std::array<double,4> tone={},std::array<double,4> color={});
+    Point anchor={},std::array<double,4> tone={},std::array<double,4> color={},bool nearest=false);
  protected:
   void draw(Renderer&,const Matrix&,double)override;
+  virtual void onBitmapLoad();
+  std::shared_ptr<int> bitmapLifetime_=std::make_shared<int>(0);
   std::shared_ptr<PixelBitmap> bitmap_;
   Rectangle frame_;
   bool refreshFrame_=true;
@@ -153,14 +167,17 @@ class TilingSprite:public Sprite {
  public:
   Point origin;
   double areaWidth=0,areaHeight=0;
+  double width()const{return areaWidth;} double height()const{return areaHeight;}
+  void setWidth(double value){areaWidth=value;} void setHeight(double value){areaHeight=value;}
   void move(double x,double y,double width,double height){position={x,y};areaWidth=width;areaHeight=height;}
  protected:
+  void onBitmapLoad()override{refreshFrame_=false;}
   void draw(Renderer&,const Matrix&,double)override;
 };
 class ScreenSprite:public Container {
  public:
   std::array<float,3> color{};
-  void setColor(double r,double g,double b){color={float(std::clamp(r,0.0,255.0)/255),float(std::clamp(g,0.0,255.0)/255),float(std::clamp(b,0.0,255.0)/255)};}
+  void setColor(double r,double g,double b){color={float(std::clamp(std::floor(r+.5),0.0,255.0)/255),float(std::clamp(std::floor(g+.5),0.0,255.0)/255),float(std::clamp(std::floor(b+.5),0.0,255.0)/255)};}
   void setBlack(){setColor(0,0,0);} void setWhite(){setColor(255,255,255);}
   void setOpacity(double value){alpha=std::clamp(value,0.0,255.0)/255;}
   double opacity()const{return alpha*255;}
@@ -191,25 +208,32 @@ class Window:public Container {
   std::shared_ptr<PixelBitmap> windowskin,contents;
   Point origin;
   Rectangle cursorRect;
-  int width=0,height=0,padding=18,margin=4;
+  double width=0,height=0,padding=18,margin=4;
   double openness=255,opacity=255,backOpacity=192,contentsOpacity=255;
   std::array<double,3> tone{};
   bool active=true,downArrowVisible=false,upArrowVisible=false,pause=false;
   std::uint64_t animationCount=0;
   void update()override;
-  void move(int x,int y,int w,int h){position={double(x),double(y)};width=w;height=h;}
+  void synchronize(std::uint64_t frameCount);
+  void move(double x,double y,double w,double h){position={x,y};width=w;height=h;}
   void setCursorRect(double x,double y,double w,double h){cursorRect={x,y,w,h};}
+  void addChildToBack(std::shared_ptr<Container> child);
   void setTone(double r,double g,double b){tone={r,g,b};}
   bool isOpen()const{return openness>=255;} bool isClosed()const{return openness<=0;}
   Rectangle openBounds()const;
   double cursorAlpha()const;
   void render(Renderer&,const Matrix& world={1,0,0,1,0,0},double opacity=1)override;
  private:
+  std::vector<std::weak_ptr<Container>> backChildren_;
   double pauseAlpha_=0;
-  std::shared_ptr<PixelBitmap> back_;
+  std::optional<std::uint64_t> lastFrame_;
+  std::shared_ptr<PixelBitmap> back_,frameBitmap_,cursorBitmap_;
+  std::array<double,10> cursorKey_{};
+  PixelBitmap* cursorSkin_=nullptr;
   std::array<double,6> backKey_{};
   PixelBitmap* skinKey_=nullptr;
   void refreshBack();
+  void refreshCursor();
 };
 class WindowLayer:public Container {
  public:
@@ -217,4 +241,25 @@ class WindowLayer:public Container {
   void move(double x,double y,double w,double h){position={x,y};width=w;height=h;}
   void render(Renderer&,const Matrix& world={1,0,0,1,0,0},double opacity=1)override;
 };
+class Weather:public Container {
+ public:
+  Weather();
+  std::string type="none";
+  double power=0;
+  Point origin;
+  int width=816,height=624;
+  std::function<double()> random;
+  void update()override;
+  void synchronize(std::uint64_t frame);
+ private:
+  struct Particle{std::shared_ptr<Sprite> sprite;double ax=0,ay=0;};
+  std::vector<Particle> particles_;
+  std::shared_ptr<ScreenSprite> dimmer_;
+  std::array<std::shared_ptr<PixelBitmap>,3> bitmaps_;
+  std::mt19937 randomEngine_{std::random_device{}()};
+  std::optional<std::uint64_t> lastFrame_;
+  int randomInt(int maximum);
+  std::shared_ptr<PixelBitmap> bitmap(int kind);
+};
+
 }

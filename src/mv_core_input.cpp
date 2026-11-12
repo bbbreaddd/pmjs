@@ -97,13 +97,13 @@ bool Input::isTriggered(std::string_view name) const {
   return (escapeCompatible(name) && isTriggered("escape")) || (latest_ && *latest_ == name && pressedTime_ == 0);
 }
 bool Input::isRepeated(std::string_view name) const {
-  const bool repeat = pressedTime_ == 0 || (pressedTime_ >= static_cast<std::uint64_t>(std::max(0, keyRepeatWait)) &&
+  const bool repeat = pressedTime_ == 0 || (pressedTime_ >= keyRepeatWait &&
     keyRepeatInterval != 0 && std::fmod(static_cast<double>(pressedTime_), keyRepeatInterval) == 0);
   return (escapeCompatible(name) && isRepeated("escape")) || (latest_ && *latest_ == name && repeat);
 }
 bool Input::isLongPressed(std::string_view name) const {
   return (escapeCompatible(name) && isLongPressed("escape")) ||
-    (latest_ && *latest_ == name && pressedTime_ >= static_cast<std::uint64_t>(std::max(0, keyRepeatWait)));
+    (latest_ && *latest_ == name && pressedTime_ >= keyRepeatWait);
 }
 }
 

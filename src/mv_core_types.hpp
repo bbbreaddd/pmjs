@@ -4,10 +4,11 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
-namespace pmjs::mv { struct Value; }
+namespace pmjs::mv { struct Value; struct JsonNode; }
 
 namespace pmjs::mv::core {
 struct Point {
@@ -49,6 +50,12 @@ inline double maximum(double first,double second){
   return std::max(first,second);
 }
 inline double clamp(double value,double lower,double upper){return minimum(maximum(value,lower),upper);}
+inline double round(double value){
+  if(!std::isfinite(value)||value==0)return value;
+  if(value>=-0.5&&value<0)return -0.0;
+  const double lower=std::floor(value);
+  return value-lower<0.5?lower:lower+1;
+}
 inline double mod(double value,double divisor){return std::fmod(std::fmod(value,divisor)+divisor,divisor);}
 inline double randomInt(double maximum,const std::function<double()>& random){return std::floor(maximum*random());}
 std::string padZero(std::string value,double length);
@@ -61,6 +68,9 @@ std::string numberString(double value);
 std::string stringValue(const pmjs::mv::Value& value);
 double numberValue(const pmjs::mv::Value& value);
 bool strictEquals(const pmjs::mv::Value& left,const pmjs::mv::Value& right);
+bool strictEquals(const std::shared_ptr<pmjs::mv::JsonNode>& left,const std::shared_ptr<pmjs::mv::JsonNode>& right);
+bool graphArrayEquals(const std::vector<std::shared_ptr<pmjs::mv::JsonNode>>& left,const std::vector<std::shared_ptr<pmjs::mv::JsonNode>>& right);
+bool graphArrayContains(const std::vector<std::shared_ptr<pmjs::mv::JsonNode>>& values,const std::shared_ptr<pmjs::mv::JsonNode>& value);
 bool arrayEquals(const std::vector<pmjs::mv::Value>& left,const std::vector<pmjs::mv::Value>& right);
 bool arrayContains(const std::vector<pmjs::mv::Value>& array,const pmjs::mv::Value& value);
 inline bool equals(const std::vector<pmjs::mv::Value>& left,const std::vector<pmjs::mv::Value>& right){return arrayEquals(left,right);}

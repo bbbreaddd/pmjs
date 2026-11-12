@@ -5,14 +5,17 @@
 #include <memory>
 #include <optional>
 #include <filesystem>
+#include <limits>
 
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <string>
 #include <vector>
 
 namespace pmjs { class RuntimeCore; }
+namespace pmjs::mv { class CacheEntry; }
 namespace pmjs::mv::core {
 void bindRuntime(RuntimeCore& runtime);
 void unbindRuntime(RuntimeCore& runtime);
@@ -31,23 +34,24 @@ class PixelBitmap {
   bool dirty = false;
   bool loaded = true;
   bool error = false;
-  int paintOpacity = 255;
-  int fontSize = 28;
+  double paintOpacity = 255;
+  double fontSize = 28;
   std::string fontFace = "GameFont";
   bool fontItalic = false;
   std::string textColor = "#ffffff";
   std::string outlineColor = "rgba(0, 0, 0, 0.5)";
-  int outlineWidth = 4;
+  double outlineWidth = 4;
   std::vector<std::uint8_t> pixels; // RGBA8888
   std::vector<std::function<void()>> loadListeners;
+  std::shared_ptr<::pmjs::mv::CacheEntry> cacheEntry;
 
-  PixelBitmap() = default;
+  PixelBitmap();
   PixelBitmap(int w, int h);
   PixelBitmap(RuntimeCore& runtime, int w, int h);
   PixelBitmap(const PixelBitmap& source);
   PixelBitmap& operator=(const PixelBitmap& source);
-  PixelBitmap(PixelBitmap&& source);
-  PixelBitmap& operator=(PixelBitmap&& source);
+  PixelBitmap(PixelBitmap&& source) noexcept;
+  PixelBitmap& operator=(PixelBitmap&& source) noexcept;
   ~PixelBitmap() = default;
   static std::shared_ptr<PixelBitmap> load(const std::string& source);
   static std::shared_ptr<PixelBitmap> request(const std::string& source);
@@ -68,37 +72,43 @@ class PixelBitmap {
   void loadUrl(const std::string& source);
 
   void resize(int w, int h);
-  bool isReady() const { return loadingState == "none" || loaded; }
+  bool isReady() const;
   bool isError() const { return error; }
   void touch();
   void checkDirty();
   void addLoadListener(std::function<void()> listener);
   void callLoadListeners();
 
-  void clearRect(int x, int y, int w, int h);
+  void clearRect(double x, double y, double w, double h);
   void clear();
-  void fillRect(int x, int y, int w, int h, const std::string& color);
+  void fillRect(double x, double y, double w, double h, const std::string& color);
   void fillAll(const std::string& color);
-  void gradientFillRect(int x, int y, int w, int h, const std::string& color1, const std::string& color2, bool vertical = false);
-  void drawCircle(int x, int y, int radius, const std::string& color);
-  void blt(const PixelBitmap& source, int sx, int sy, int sw, int sh, int dx, int dy, int dw = -1, int dh = -1);
+  void gradientFillRect(double x, double y, double w, double h, const std::string& color1, const std::string& color2, bool vertical = false);
+  void drawCircle(double x, double y, double radius, const std::string& color);
+  Rectangle rect() const { return {0,0,double(width),double(height)}; }
+  void bltImage(const PixelBitmap& source, double sx, double sy, double sw, double sh, double dx, double dy, double dw = std::numeric_limits<double>::quiet_NaN(), double dh = std::numeric_limits<double>::quiet_NaN());
+  void blt(const PixelBitmap& source, double sx, double sy, double sw, double sh, double dx, double dy, double dw = std::numeric_limits<double>::quiet_NaN(), double dh = std::numeric_limits<double>::quiet_NaN());
 
   std::string getPixel(int x, int y) const;
   std::uint8_t getAlphaPixel(int x, int y) const;
 
-  void adjustTone(int r, int g, int b);
-  void rotateHue(int offset);
+  void adjustTone(double r, double g, double b);
+  void rotateHue(double offset);
   void blur();
   std::string makeFontNameText() const;
 
   static std::array<std::uint8_t, 4> parseCssColor(const std::string& color);
  private:
   mutable std::shared_ptr<BitmapBacking> backing_;
+  std::shared_ptr<BitmapBacking> requestedImage_, originalImage_;
   std::function<void()> failure_;
+  bool decodeAfterRequest_ = false;
   std::shared_ptr<int> lifetime_ = std::make_shared<int>(0);
   void changed();
   void loadNow();
 };
+
+using Bitmap = PixelBitmap;
 
 // rpg_core.js Graphics
 class Graphics {
@@ -107,7 +117,12 @@ class Graphics {
   static inline int height = 624;
   static inline int boxWidth = 816;
   static inline int boxHeight = 624;
-  static inline double scale = 1.0;
+  static inline double scale = 1.0, realScale = 1.0;
+  static inline bool stretchEnabled = true;
+  static inline int fpsMode = 0;
+  static void updateScale();
+  static void onKeyDown(int keyCode, bool control = false, bool alt = false);
+  static bool onPointerDown(double x, double y);
   static inline std::uint64_t frameCount = 0;
   static inline bool webgl = true;
   static inline bool fpsVisible = false;
@@ -125,14 +140,16 @@ class Graphics {
   static void setVideoCallbacks(std::function<void(const std::string&)> play, std::function<bool()> playing, std::function<void(double)> volume);
   static void setLoadingCallbacks(std::function<void()> stop, std::function<void()> resume);
 
-  static void initialize(int w = 816, int h = 624, const std::string& type = "auto");
+  static bool initialize(int w = 816, int h = 624, const std::string& type = "auto");
   static void tickStart();
   static void tickEnd();
   static void render();
-  static bool isWebGL() { return webgl; }
+  static bool isWebGL() { return webgl && boundRuntime(); }
+  static bool canUseCssFontLoading() { return false; }
+  static std::string canPlayVideoType(const std::string& type);
   static bool hasWebGL() { return boundRuntime() != nullptr; }
-  static bool canUseDifferenceBlend() { return true; }
-  static bool canUseSaturationBlend() { return true; }
+  static bool canUseDifferenceBlend() { return boundRuntime() != nullptr; }
+  static bool canUseSaturationBlend() { return boundRuntime() != nullptr; }
   static void setLoadingImage(const std::string& src);
   static void startLoading();
   static void updateLoading();
@@ -140,15 +157,15 @@ class Graphics {
   static void printLoadingError(const std::string& url);
   static void eraseLoadingError();
   static void printError(const std::string& name, const std::string& message);
-  static void showFps() { fpsVisible = true; }
-  static void hideFps() { fpsVisible = false; }
+  static void showFps() { fpsVisible = true; fpsMode = 1; }
+  static void hideFps() { fpsVisible = false; fpsMode = 0; }
   static void loadFont(const std::string& name, const std::string& url);
   static bool isFontLoaded(const std::string& name);
   static void playVideo(const std::string& src);
   static bool isVideoPlaying();
   static void setVideoVolume(double value);
-  static double pageToCanvasX(double x, double canvasLeft = 0.0);
-  static double pageToCanvasY(double y, double canvasTop = 0.0);
+  static double pageToCanvasX(double x, double canvasLeft = std::numeric_limits<double>::quiet_NaN());
+  static double pageToCanvasY(double y, double canvasTop = std::numeric_limits<double>::quiet_NaN());
   static bool isInsideCanvas(double x, double y);
   static void callGC();
 };
@@ -163,7 +180,7 @@ class WebAudio {
   bool loop = false;
   double loopStart = 0.0;
   double loopLength = 0.0;
-  int sampleRate = 44100;
+  int sampleRate = 0;
   double totalTime = 0;
   bool ready = false;
   bool error = false;
@@ -184,17 +201,18 @@ class WebAudio {
   WebAudio& operator=(const WebAudio&) = delete;
   void update();
   std::uint32_t nativeHandle() const { return handle_; }
+  double playbackPosition() const;
   void setVolume(double value);
   void setPitch(double value);
   void setPan(double value);
-  static void initialize(bool noAudio = false);
+  static bool initialize(bool noAudio = false);
   static bool canPlayOgg() { return canPlayOggFlag; }
   static bool canPlayM4a() { return canPlayM4aFlag; }
   static void setMasterVolume(double value);
   static void setEncryptionKey(const std::string& hexadecimal);
 
   void clear();
-  bool isReady() const { return ready; }
+  bool isReady() const;
   bool isError() const { return error; }
   bool isPlaying() const;
   void play(bool loopFlag, double offset = 0.0);
@@ -215,8 +233,11 @@ class WebAudio {
  private:
   std::shared_ptr<CoreServiceBinding> services_;
   std::uint32_t handle_ = 0;
-  bool autoPlay_ = false;
+  bool autoPlay_ = false, loading_ = false;
   double pendingFadeIn_ = -1;
+  std::function<void()> failure_;
+  std::shared_ptr<int> lifetime_ = std::make_shared<int>(0);
+  void failLoad();
   void loadNow();
   void release();
   friend void unbindRuntime(RuntimeCore& runtime);
@@ -246,6 +267,7 @@ class Html5Audio {
   static void fadeIn(double duration);
   static void fadeOut(double duration);
   static double seek();
+  static void addLoadListener(std::function<void()> listener);
 };
 
 class Window;

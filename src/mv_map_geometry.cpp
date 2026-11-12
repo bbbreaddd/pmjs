@@ -13,77 +13,23 @@ double Presentation::scrolledMapY(double y, double cameraY, int tileHeight) cons
   return session_.loopVertical() && y < cameraY - (height - core_.height() / double(tileHeight)) / 2 ? y - cameraY + height : y - cameraY;
 }
 
-void Presentation::clearMapGeometry() {
-  for (const auto& part : lowerMapGeometry_) if (part.layer) core_.renderer().releaseTileLayer(part.layer);
-  for (auto layer : upperMapGeometry_) core_.renderer().releaseTileLayer(layer);
-  lowerMapGeometry_.clear(); upperMapGeometry_.clear(); mapGeometryValid_ = false;
-}
-void Presentation::prepareMapGeometry(int firstX, int firstY, int lastX, int lastY) {
-  const std::array key{session_.mapId_, session_.mapState_.tilesetId, firstX, firstY, lastX, lastY};
-  if (mapGeometryValid_ && mapGeometryKey_ == key && mapGeometryRevision_ == session_.presentationRevision_) return;
-  clearMapGeometry();
-  const auto& data = session_.map();
-  const int width = data["width"].integer(), height = data["height"].integer();
-  const auto& flags = session_.database_["tilesets"][session_.mapState_.tilesetId]["flags"];
-  std::vector<TileLayerTile> lower, upper;
-  const auto flush = [&](std::vector<TileLayerTile>& tiles, bool high) {
-    if (tiles.empty()) return;
-    const auto layer = core_.renderer().createTileLayer(std::move(tiles));
-    tiles.clear();
-    if (!layer) throw std::runtime_error("cannot create map tile geometry");
-    try {
-      if (high) upperMapGeometry_.push_back(layer);
-      else lowerMapGeometry_.push_back({layer, 0, 0});
-    } catch (...) { core_.renderer().releaseTileLayer(layer); throw; }
-  };
-  try {
-    for (int y = firstY; y < lastY; ++y) for (int x = firstX; x < lastX; ++x) {
-      const int mapX = session_.roundMapX(x), mapY = session_.roundMapY(y);
-      if (mapX < 0 || mapY < 0 || mapX >= width || mapY >= height) continue;
-      for (int level = 0; level < 4; ++level) {
-        const int id = data["data"][(level * height + mapY) * width + mapX].integer();
-        const bool high = (flags[id].integer() & 16) != 0;
-        auto& tiles = high ? upper : lower;
-        if (tiles.size() > 65528) flush(tiles, high);
-        tile(id, x * 48, y * 48, tiles);
-        if (level == 1) {
-          const int bits = data["data"][(4 * height + mapY) * width + mapX].integer();
-          if (bits) flush(lower, false);
-          for (int i = 0; i < 4; ++i) if (bits & (1 << i))
-            lowerMapGeometry_.push_back({0, x * 48 + i % 2 * 24, y * 48 + i / 2 * 24});
-          const int aboveY = session_.roundMapY(mapY - 1);
-          const int above = aboveY >= 0 && aboveY < height ? data["data"][(height + aboveY) * width + mapX].integer() : 0;
-          const int ground = data["data"][mapY * width + mapX].integer();
-          const auto table = [&](int tileId) { return tileId >= 2816 && tileId < 4352 && (flags[tileId].integer() & 128); };
-          if (table(above) && !table(id) && !(ground >= 4352 && ground < 8192)) {
-            if (lower.size() > 65528) flush(lower, false);
-            tile(10000 + above, x * 48, y * 48, lower);
-          }
-        }
-      }
-    }
-    flush(lower, false); flush(upper, true);
-    mapGeometryKey_ = key; mapGeometryRevision_ = session_.presentationRevision_; mapGeometryValid_ = true;
-  } catch (...) { clearMapGeometry(); throw; }
-}
-void Presentation::queueMapGeometry(bool upper, int originX, int originY) {
-  const int frame = static_cast<int>(session_.ticks_ / 30);
-  constexpr std::array<float, 4> water{0, 1, 2, 1};
-  const std::array<float, 2> animation{water[frame % 4], static_cast<float>(frame % 3)};
-  const std::array<float, 6> transform{1, 0, 0, 1, -static_cast<float>(originX), -static_cast<float>(originY)};
-  const auto queue = [&](std::uint32_t layer) {
-    if (!core_.renderer().queueTileLayer(layer, transform, animation, 1, 0xffffff, BlendMode::normal))
-      throw std::runtime_error("cannot queue map tile geometry");
-  };
-  if (upper) for (auto layer : upperMapGeometry_) queue(layer);
-  else for (const auto& part : lowerMapGeometry_) {
-    if (part.layer) queue(part.layer);
-    else core_.renderer().queueQuad(part.x - originX, part.y - originY, 24, 24, {0, 0, 0, 0.5F});
+void Presentation::clearMapGeometry(){stockTilemap_.clearGeometry();stockTileset_=-1;stockMapRevision_=0;}
+void Presentation::prepareMapGeometry(int firstX,int firstY,int lastX,int lastY) {
+  if(stockMapRevision_!=session_.presentationRevision_||stockTileset_!=session_.mapState_.tilesetId) {
+    const auto& map=session_.map();std::vector<int> data;
+    data.reserve(map["data"].array().size());for(const auto& value:map["data"].array())data.push_back(value.integer());
+    stockTilemap_.setData(map["width"].integer(),map["height"].integer(),std::move(data));
+    stockTilemap_.flags.clear();for(const auto& flag:session_.database_["tilesets"][session_.mapState_.tilesetId]["flags"].array())stockTilemap_.flags.push_back(flag.integer());
+    stockTilemap_.horizontalWrap=session_.loopHorizontal();stockTilemap_.verticalWrap=session_.loopVertical();
+    stockTilemap_.imageResolver=[this](int sheet){const auto name=session_.database_["tilesets"][session_.mapState_.tilesetId]["tilesetNames"][sheet].text();return name.empty()?ImageInfo{}:image("img/tilesets/"+name+".png");};
+    stockMapRevision_=session_.presentationRevision_;stockTileset_=session_.mapState_.tilesetId;
   }
+  stockTilemap_.prepareGeometry(core_.renderer(),firstX,firstY,lastX,lastY);
 }
+void Presentation::queueMapGeometry(bool upper,int originX,int originY) {
+  stockTilemap_.animationFrame=int(session_.ticks_/30);
+  stockTilemap_.queueGeometry(core_.renderer(),upper,{1,0,0,1,float(-originX),float(-originY)});
 }
-
-namespace pmjs::mv {
 void Presentation::clearMapOverlays() {
   if (destinationCanvas_) core_.canvases().release(destinationCanvas_);
   if (mapNameCanvas_) core_.canvases().release(mapNameCanvas_);

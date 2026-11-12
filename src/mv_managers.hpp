@@ -15,11 +15,19 @@ class SceneManager {
   static void popScene(Session& session);
   static void clearStack(Session& session);
   static bool hasPrevious(const Session& session);
-
+  static bool isCurrentScene(const Session& session, Scene scene);
+  static bool isPreviousScene(const Session& session, Scene scene);
+  static void stop(Session& session);
+  static void resume(Session& session);
+  static void exit(Session& session);
+  static std::string preferableRendererType();
+  static bool shouldUseCanvasRenderer();
 };
 
 class SoundManager {
  public:
+  static void preloadImportantSounds(Session& session);
+  static bool loadSystemSound(Session& session, int index);
   static void playCursor(Session& session);
   static void playOk(Session& session);
   static void playCancel(Session& session);
@@ -55,6 +63,7 @@ class TextManager {
   static std::string param(const Session& session, int paramId);
   static std::string command(const Session& session, int commandId);
   static std::string message(const Session& session, const std::string& key);
+  static std::string format(const std::string& text, const std::vector<std::string>& args);
 
   static std::string level(const Session& s) { return basic(s, 0); }
   static std::string levelA(const Session& s) { return basic(s, 1); }
@@ -151,12 +160,16 @@ class PluginManager {
 
   static void setup(const Value& plugins);
   static const Value& parameters(const std::string& name);
+  static void setParameters(const std::string& name, const Value& parameters);
+  static const std::vector<std::string>& scripts();
+  static void clear();
   static void registerCommand(const std::string& name, CommandHandler handler);
   static bool callCommand(Session& session, const std::string& name, const std::vector<std::string>& args);
 
  private:
   static std::map<std::string, CommandHandler> commands_;
   static std::map<std::string, Value> parameters_;
+  static std::vector<std::string> scripts_;
 };
 
 }  // namespace pmjs::mv

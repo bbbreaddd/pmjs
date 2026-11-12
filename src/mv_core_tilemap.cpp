@@ -7,6 +7,18 @@ namespace pmjs::mv::core {
 const std::array<std::array<std::array<int,2>,4>,48> Tilemap::FLOOR_AUTOTILE_TABLE = {{{{{{2,4}},{{1,4}},{{2,3}},{{1,3}}}},{{{{2,0}},{{1,4}},{{2,3}},{{1,3}}}},{{{{2,4}},{{3,0}},{{2,3}},{{1,3}}}},{{{{2,0}},{{3,0}},{{2,3}},{{1,3}}}},{{{{2,4}},{{1,4}},{{2,3}},{{3,1}}}},{{{{2,0}},{{1,4}},{{2,3}},{{3,1}}}},{{{{2,4}},{{3,0}},{{2,3}},{{3,1}}}},{{{{2,0}},{{3,0}},{{2,3}},{{3,1}}}},{{{{2,4}},{{1,4}},{{2,1}},{{1,3}}}},{{{{2,0}},{{1,4}},{{2,1}},{{1,3}}}},{{{{2,4}},{{3,0}},{{2,1}},{{1,3}}}},{{{{2,0}},{{3,0}},{{2,1}},{{1,3}}}},{{{{2,4}},{{1,4}},{{2,1}},{{3,1}}}},{{{{2,0}},{{1,4}},{{2,1}},{{3,1}}}},{{{{2,4}},{{3,0}},{{2,1}},{{3,1}}}},{{{{2,0}},{{3,0}},{{2,1}},{{3,1}}}},{{{{0,4}},{{1,4}},{{0,3}},{{1,3}}}},{{{{0,4}},{{3,0}},{{0,3}},{{1,3}}}},{{{{0,4}},{{1,4}},{{0,3}},{{3,1}}}},{{{{0,4}},{{3,0}},{{0,3}},{{3,1}}}},{{{{2,2}},{{1,2}},{{2,3}},{{1,3}}}},{{{{2,2}},{{1,2}},{{2,3}},{{3,1}}}},{{{{2,2}},{{1,2}},{{2,1}},{{1,3}}}},{{{{2,2}},{{1,2}},{{2,1}},{{3,1}}}},{{{{2,4}},{{3,4}},{{2,3}},{{3,3}}}},{{{{2,4}},{{3,4}},{{2,1}},{{3,3}}}},{{{{2,0}},{{3,4}},{{2,3}},{{3,3}}}},{{{{2,0}},{{3,4}},{{2,1}},{{3,3}}}},{{{{2,4}},{{1,4}},{{2,5}},{{1,5}}}},{{{{2,0}},{{1,4}},{{2,5}},{{1,5}}}},{{{{2,4}},{{3,0}},{{2,5}},{{1,5}}}},{{{{2,0}},{{3,0}},{{2,5}},{{1,5}}}},{{{{0,4}},{{3,4}},{{0,3}},{{3,3}}}},{{{{2,2}},{{1,2}},{{2,5}},{{1,5}}}},{{{{0,2}},{{1,2}},{{0,3}},{{1,3}}}},{{{{0,2}},{{1,2}},{{0,3}},{{3,1}}}},{{{{2,2}},{{3,2}},{{2,3}},{{3,3}}}},{{{{2,2}},{{3,2}},{{2,1}},{{3,3}}}},{{{{2,4}},{{3,4}},{{2,5}},{{3,5}}}},{{{{2,0}},{{3,4}},{{2,5}},{{3,5}}}},{{{{0,4}},{{1,4}},{{0,5}},{{1,5}}}},{{{{0,4}},{{3,0}},{{0,5}},{{1,5}}}},{{{{0,2}},{{3,2}},{{0,3}},{{3,3}}}},{{{{0,2}},{{1,2}},{{0,5}},{{1,5}}}},{{{{0,4}},{{3,4}},{{0,5}},{{3,5}}}},{{{{2,2}},{{3,2}},{{2,5}},{{3,5}}}},{{{{0,2}},{{3,2}},{{0,5}},{{3,5}}}},{{{{0,0}},{{1,0}},{{0,1}},{{1,1}}}}}};
 const std::array<std::array<std::array<int,2>,4>,16> Tilemap::WALL_AUTOTILE_TABLE = {{{{{{2,2}},{{1,2}},{{2,1}},{{1,1}}}},{{{{0,2}},{{1,2}},{{0,1}},{{1,1}}}},{{{{2,0}},{{1,0}},{{2,1}},{{1,1}}}},{{{{0,0}},{{1,0}},{{0,1}},{{1,1}}}},{{{{2,2}},{{3,2}},{{2,1}},{{3,1}}}},{{{{0,2}},{{3,2}},{{0,1}},{{3,1}}}},{{{{2,0}},{{3,0}},{{2,1}},{{3,1}}}},{{{{0,0}},{{3,0}},{{0,1}},{{3,1}}}},{{{{2,2}},{{1,2}},{{2,3}},{{1,3}}}},{{{{0,2}},{{1,2}},{{0,3}},{{1,3}}}},{{{{2,0}},{{1,0}},{{2,3}},{{1,3}}}},{{{{0,0}},{{1,0}},{{0,3}},{{1,3}}}},{{{{2,2}},{{3,2}},{{2,3}},{{3,3}}}},{{{{0,2}},{{3,2}},{{0,3}},{{3,3}}}},{{{{2,0}},{{3,0}},{{2,3}},{{3,3}}}},{{{{0,0}},{{3,0}},{{0,3}},{{3,3}}}}}};
 const std::array<std::array<std::array<int,2>,4>,4> Tilemap::WATERFALL_AUTOTILE_TABLE = {{{{{{2,0}},{{1,0}},{{2,1}},{{1,1}}}},{{{{0,0}},{{1,0}},{{0,1}},{{1,1}}}},{{{{2,0}},{{3,0}},{{2,1}},{{3,1}}}},{{{{0,0}},{{3,0}},{{0,1}},{{3,1}}}}}};
+namespace {
+class TilemapLayer:public Container {
+ public:TilemapLayer(Tilemap* owner,bool upper,std::weak_ptr<int> lifetime):owner_(owner),upper_(upper),lifetime_(std::move(lifetime)){z=upper?4:0;}
+ protected:void draw(Renderer& renderer,const Matrix& world,double opacity)override {
+   if(lifetime_.expired())return;
+   const auto scroll=multiply(world,{1,0,0,1,float(-std::floor(owner_->origin.x)),float(-std::floor(owner_->origin.y))});
+   owner_->queueGeometry(renderer,upper_,scroll,opacity);
+ }
+ private:Tilemap* owner_;bool upper_;std::weak_ptr<int> lifetime_;
+};
+}
+Tilemap::Tilemap(){addChild(std::make_shared<TilemapLayer>(this,false,layerLifetime_));addChild(std::make_shared<TilemapLayer>(this,true,layerLifetime_));}
 void Tilemap::setData(int w,int h,std::vector<int> values){mapWidth=w;mapHeight=h;data=std::move(values);refresh();}
 void Tilemap::update(){++animationCount;animationFrame=animationCount/30;Container::update();}
 int Tilemap::readMapData(int x,int y,int z)const {
@@ -61,11 +73,12 @@ void Tilemap::drawTile(PixelBitmap& bitmap,int id,int x,int y)const {
   for(const auto& tile:tileRectangles(id,x,y)){const auto* source=bitmaps[tile.sheet];if(!source)continue;
     bitmap.blt(*source,int(tile.source.x+tile.animation.x*water[animationFrame%4]),int(tile.source.y+tile.animation.y*(animationFrame%3)),int(tile.source.width),int(tile.source.height),int(tile.destination.x),int(tile.destination.y));}
 }
+bool Tilemap::isSameKindTile(int id1,int id2){return isAutotile(id1)&&isAutotile(id2)?getAutotileKind(id1)==getAutotileKind(id2):id1==id2;}
 void Tilemap::drawNormalTile(PixelBitmap& bitmap,int id,int x,int y)const{if(!isAutotile(id))drawTile(bitmap,id,x,y);}
 void Tilemap::drawAutotile(PixelBitmap& bitmap,int id,int x,int y)const{if(isAutotile(id))drawTile(bitmap,id,x,y);}
 void Tilemap::drawTableEdge(PixelBitmap& bitmap,int id,int x,int y)const{if(isTileA2(id))drawTile(bitmap,10000+id,x,y);}
 void Tilemap::drawShadow(PixelBitmap& bitmap,int bits,int x,int y)const{for(int i=0;i<4;++i)if(bits&(1<<i))bitmap.fillRect(x+i%2*tileWidth/2,y+i/2*tileHeight/2,tileWidth/2,tileHeight/2,"rgba(0,0,0,0.5)");}
-Tilemap::~Tilemap(){clearGeometry();}
+Tilemap::~Tilemap(){layerLifetime_.reset();clearGeometry();}
 void Tilemap::clearGeometry(){if(geometryRenderer_){for(const auto& part:lowerGeometry_)if(part.layer)geometryRenderer_->releaseTileLayer(part.layer);for(auto layer:upperGeometry_)geometryRenderer_->releaseTileLayer(layer);}lowerGeometry_.clear();upperGeometry_.clear();geometryReady_=false;geometryRenderer_=nullptr;}
 void Tilemap::prepareGeometry(Renderer& renderer,int firstX,int firstY,int lastX,int lastY) {
   const std::array key{firstX,firstY,lastX,lastY};if(geometryReady_&&geometryRenderer_==&renderer&&geometryBounds_==key&&geometryRevision_==revision_)return;
@@ -80,15 +93,16 @@ void Tilemap::prepareGeometry(Renderer& renderer,int firstX,int firstY,int lastX
 }
 void Tilemap::queueGeometry(Renderer& renderer,bool upper,const Matrix& world,double opacity)const {
   constexpr std::array<float,4> water{0,1,2,1};const std::array<float,2> animation{water[animationFrame%4],float(animationFrame%3)};
-  const auto queue=[&](std::uint32_t layer){if(!renderer.queueTileLayer(layer,world,animation,float(opacity),0xffffff,BlendMode::normal))throw std::runtime_error("cannot queue core tile geometry");};
+  const auto queue=[&](std::uint32_t layer){if(!renderer.queueTileLayer(layer,world,animation,float(opacity),0xffffff,BlendMode::normal,!smooth))throw std::runtime_error("cannot queue core tile geometry");};
   if(upper)for(auto layer:upperGeometry_)queue(layer);else for(const auto& part:lowerGeometry_)if(part.layer)queue(part.layer);else{const auto first=renderer.queuedCommandCount();renderer.queueQuad(part.x,part.y,tileWidth/2.0F,tileHeight/2.0F,{0,0,0,float(opacity*.5)});renderer.transformQueuedCommands(first,world);}
 }
 void Tilemap::render(Renderer& renderer,const Matrix& parentWorld,double opacity) {
-  if(!visible||!renderable||alpha<=0)return;for(const auto* bitmap:bitmaps)if(bitmap&&!bitmap->isReady())return;
+  if(!visible||!renderable||alpha<=0||tileWidth<=0||tileHeight<=0)return;for(const auto* bitmap:bitmaps)if(bitmap&&!bitmap->isReady())return;
   const int ox=int(std::floor(origin.x)),oy=int(std::floor(origin.y));
   prepareGeometry(renderer,int(std::floor((ox-margin)/double(tileWidth))),int(std::floor((oy-margin)/double(tileHeight))),int(std::ceil((ox+width+margin)/double(tileWidth))),int(std::ceil((oy+height+margin)/double(tileHeight))));
-  const auto world=multiply(parentWorld,localTransform());const auto scroll=multiply(world,{1,0,0,1,float(-ox),float(-oy)});queueGeometry(renderer,false,scroll,opacity*alpha);
-  std::vector<std::shared_ptr<Container>> sorted=children;std::stable_sort(sorted.begin(),sorted.end(),[](const auto& left,const auto& right){if(left->z!=right->z)return left->z<right->z;if(left->position.y!=right->position.y)return left->position.y<right->position.y;return left->displayId<right->displayId;});
-  for(const auto& child:sorted)if(child->z<4)child->render(renderer,world,opacity*alpha);queueGeometry(renderer,true,scroll,opacity*alpha);for(const auto& child:sorted)if(child->z>=4)child->render(renderer,world,opacity*alpha);
+  const auto world=multiply(parentWorld,localTransform());
+  auto& sorted=children;
+  std::stable_sort(sorted.begin(),sorted.end(),[](const auto& left,const auto& right){if(left->z!=right->z)return left->z<right->z;if(left->position.y!=right->position.y)return left->position.y<right->position.y;return left->displayId<right->displayId;});
+  const auto count=children.size();for(std::size_t i=0;i<count&&i<children.size();++i){auto child=children[i];if(child)child->render(renderer,world,opacity*alpha);}
 }
 }

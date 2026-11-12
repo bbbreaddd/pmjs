@@ -100,8 +100,11 @@ bool Session::screenEventCommand(const Value& entry, Interpreter& context) {
   if (code == 234 && p[3].boolean()) context.wait = p[2].integer();
   return true;
 }
-void Session::updateScreenState() {
+void Session::ensureScreenEffects() {
   if (screenEffects_.null()) screenEffects_ = initialScreen();
+}
+void Session::updateScreenState() {
+  ensureScreenEffects();
   auto& state = std::get<Object>(screenEffects_.data);
   if (fadeOut_ > 0) { brightness_ = brightness_ * (fadeOut_ - 1) / fadeOut_; --fadeOut_; }
   int duration = state["_fadeInDuration"].integer();

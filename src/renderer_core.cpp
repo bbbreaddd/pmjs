@@ -522,10 +522,10 @@ void Renderer::clipQueuedCommands(std::size_t first,const std::array<int,4>& bou
   }
 }
 bool Renderer::queueTilingFrame(ImageHandle image,const std::array<float,6>& transform,const std::array<float,4>& region,
-  const std::array<float,2>& destination,const std::array<float,2>& origin,float alpha,BlendMode blend) {
+  const std::array<float,2>& destination,const std::array<float,2>& origin,float alpha,BlendMode blend,bool nearest) {
   const auto info=images_.inspect(image);if(!info||region[2]<=0||region[3]<=0)return false;
   if(!queueTiled(image,transform,{origin[0],origin[1],destination[0],destination[1]},destination,alpha,0xffffff,blend))return false;
-  auto& command=frame_.commands.back();command.clampedTilingSampling=true;command.atlasTilingSampling=true;
+  auto& command=frame_.commands.back();command.nearest=nearest;command.clampedTilingSampling=true;command.atlasTilingSampling=true;
   command.tilingUvTransform={info->width/region[2],info->height/region[3],0,0};
   command.tilingAtlasMapping={region[2]/info->width,region[3]/info->height,region[0]/info->width,region[1]/info->height};
   command.tilingAtlasBounds={(region[0]+.5F)/info->width,(region[1]+.5F)/info->height,(region[0]+region[2]-.5F)/info->width,(region[1]+region[3]-.5F)/info->height};return true;
@@ -571,10 +571,10 @@ void Renderer::transformQueuedCommands(std::size_t first, const std::array<float
       }
     }
     if (command.clipped) {
-      const auto a = point(command.clip[0], command.clip[1]);
-      const auto b = point(command.clip[2], command.clip[3]);
-      command.clip = {int(std::floor(std::min(a[0], b[0]))), int(std::floor(std::min(a[1], b[1]))),
-        int(std::ceil(std::max(a[0],b[0]))), int(std::ceil(std::max(a[1],b[1])))};
+      const std::array corners{point(command.clip[0],command.clip[1]),point(command.clip[2],command.clip[1]),point(command.clip[2],command.clip[3]),point(command.clip[0],command.clip[3])};
+      float left=corners[0][0],right=left,top=corners[0][1],bottom=top;
+      for(const auto& corner:corners){left=std::min(left,corner[0]);right=std::max(right,corner[0]);top=std::min(top,corner[1]);bottom=std::max(bottom,corner[1]);}
+      command.clip={int(std::floor(left)),int(std::floor(top)),int(std::ceil(right)),int(std::ceil(bottom))};
     }
   }
 }
@@ -584,7 +584,7 @@ bool Renderer::queueImage(ImageHandle image,
                           const std::array<float, 4>& source, float alpha,
                           std::uint32_t tint, BlendMode blendMode,
                           const std::array<float, 4>& tone,
-                          const std::array<float, 4>& blendColor) {
+                          const std::array<float, 4>& blendColor, bool nearest) {
   if (!images_.inspect(image) ||
       !isValidBlendMode(static_cast<std::uint8_t>(blendMode))) return false;
   const std::array<float, 4> color = {
@@ -598,7 +598,7 @@ bool Renderer::queueImage(ImageHandle image,
     frame_.commands.push_back(
         {image, transform, source, {source[2], source[3]}, color, blendMode, false});
     auto& command = frame_.commands.back();
-    command.colorTone = tone; command.blendColor = blendColor;
+    command.colorTone = tone; command.blendColor = blendColor; command.nearest = nearest;
     command.appliesSpriteColor = std::any_of(tone.begin(), tone.end(), [](float channel) { return channel != 0; }) || blendColor[3] > 0;
     sceneSubmittedThisFrame_ = true;
   } catch (...) {
@@ -1067,7 +1067,7 @@ bool Renderer::queueTileLayer(std::uint32_t layer,
                               const std::array<float, 6>& transform,
                               const std::array<float, 2>& animation,
                               float alpha, std::uint32_t tint,
-                              BlendMode blendMode) {
+                              BlendMode blendMode, bool nearest) {
   if (!isValidBlendMode(static_cast<std::uint8_t>(blendMode))) return false;
   const auto found = tileLayers_.find(layer);
   if (found == tileLayers_.end() || found->second.owners == 0) return false;
@@ -1079,7 +1079,7 @@ bool Renderer::queueTileLayer(std::uint32_t layer,
     static_cast<float>(tint & 0xffU) / 255.0F,
     std::clamp(alpha, 0.0F, 1.0F),
   };
-  command.blendMode = blendMode;
+  command.blendMode = blendMode; command.nearest=nearest;
   command.tileLayer = layer;
   command.primitive = RenderCommand::Primitive::tileLayer;
   command.tileAnimation = animation;
@@ -1155,6 +1155,16 @@ std::vector<std::uint8_t> Renderer::captureDrawableRgba(AlphaMode alphaMode) {
       convertPixel(pixels.data() + offset, PixelEncoding::PremultipliedRGBA8,
                    pixels.data() + offset, PixelEncoding::StraightRGBA8);
   return pixels;
+}
+
+std::vector<std::uint8_t> Renderer::snapshotScene(int width,int height,const std::function<void()>& draw) {
+  auto previous=std::move(frame_);
+  const auto projection=sceneProjection_;const bool submitted=sceneSubmittedThisFrame_,clear=clearBeforeRender_;
+  const int queueWidth=queueWidth_,queueHeight=queueHeight_;
+  frame_={};queueWidth_=width;queueHeight_=height;sceneProjection_={1,0,0,1,0,0};clearBeforeRender_=true;sceneSubmittedThisFrame_=false;
+  const auto restore=[&]{discardCommandsFrom(0);frame_=std::move(previous);sceneProjection_=projection;sceneSubmittedThisFrame_=submitted;clearBeforeRender_=clear;queueWidth_=queueWidth;queueHeight_=queueHeight;};
+  try { if(draw)draw();auto pixels=renderToRgba(width,height);restore();return pixels; }
+  catch(...) {restore();throw;}
 }
 
 std::vector<std::uint8_t> Renderer::renderToRgba(int width, int height, ImageHandle initialImage, AlphaMode alphaMode) {

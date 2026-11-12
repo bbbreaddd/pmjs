@@ -1,4 +1,5 @@
 #include "mv_engine.hpp"
+#include "mv_core_utils.hpp"
 #include "mv_managers.hpp"
 #include "mv_windows.hpp"
 #include <algorithm>
@@ -26,16 +27,19 @@ void Session::audio(const std::string& kind, const Value& sound, bool restart) {
 }
 void Session::openTitle() {
   SceneManager::clearStack(*this);
-  ui_ = {}; ui_.scene = Scene::title; finished_ = false;
-  const bool saved = std::any_of(saveMetadata_.begin(), saveMetadata_.end(), [&](const Value& value) { return value["title"].text() == database_["system"]["gameTitle"].text(); });
+  SceneManager::gotoScene(*this, Scene::title);
+  finished_ = false;
+  const bool saved = DataManager::isAnySavefileExists(*this);
   ui_.cursor = lastTitleCommand_ >= 0 ? lastTitleCommand_ : saved ? 1 : 0;
-  audio("bgm", database_["system"]["titleBgm"]); audio("bgs", Value::Object{{"name", ""}});
-  audio("me", Value::Object{{"name", ""}});
+  AudioManager::playBgm(*this, database_["system"]["titleBgm"]);
+  AudioManager::stopBgs(*this);
+  AudioManager::stopMe(*this);
 }
 void Session::openGameOver() {
-  ui_ = {}; ui_.scene = Scene::gameOver;
-  audio("bgm", Value::Object{{"name", ""}}); audio("bgs", Value::Object{{"name", ""}});
-  audio("me", database_["system"]["gameoverMe"]);
+  SceneManager::gotoScene(*this, Scene::gameOver);
+  AudioManager::stopBgm(*this);
+  AudioManager::stopBgs(*this);
+  AudioManager::playMe(*this, database_["system"]["gameoverMe"]);
 }
 void Session::updatePlayerGraphic() {
   if (party_.empty()) { player_.characterName.clear(); return; }
@@ -45,8 +49,11 @@ void Session::updatePlayerGraphic() {
 void Session::completeStorage(bool success) {
   const bool loading = loadRequested_;
   saveRequested_ = false; loadRequested_ = false;
-  audio("se", database_["system"]["sounds"][success ? loading ? 6 : 5 : 3]);
+  if (!success) SoundManager::playBuzzer(*this);
+  else if (loading) SoundManager::playLoad(*this);
+  else SoundManager::playSave(*this);
   if (success) {
+    lastAccessedSavefileId_ = ui_.cursor + 1;
     if (loading) { SceneManager::clearStack(*this); SceneManager::gotoScene(*this,Scene::map); }
     else if (SceneManager::hasPrevious(*this)) SceneManager::popScene(*this);
     else SceneManager::gotoScene(*this,Scene::menu);
@@ -71,6 +78,41 @@ void Session::advanceEncounter() {
   encounterCount_ = randomInt(map()["encounterStep"].integer(30)) + randomInt(map()["encounterStep"].integer(30)) + 1;
   const int troop = makeEncounterTroopId();
   if (!database_["troops"][troop].null()) startBattle(troop, true, false);
+}
+void Session::advanceEncounterEffect() {
+  ensureScreenEffects();
+  auto& state = std::get<Value::Object>(screenEffects_.data);
+  const int speed = 60, duration = --battle_.encounterEffect, n = speed - duration;
+  const double p = static_cast<double>(n) / speed;
+  const double q = ((p - 1) * 20 * p + 5) * p + 1;
+  const double screenTilesX = database_["sceneContract"]["width"].number(816) / 48.0;
+  const double screenTilesY = database_["sceneContract"]["height"].number(624) / 48.0;
+  const double width = map()["width"].number(), height = map()["height"].number();
+  const double cameraX = savedCamera_ ? (*savedCamera_)[0] : width < screenTilesX ? (width - screenTilesX) / 2 : std::clamp(player_.realX - (screenTilesX - 1) / 2, 0.0, width - screenTilesX);
+  const double cameraY = savedCamera_ ? (*savedCamera_)[1] : height < screenTilesY ? (height - screenTilesY) / 2 : std::clamp(player_.realY - (screenTilesY - 1) / 2, 0.0, height - screenTilesY);
+  const double jumpHeight = player_.jumpCount > 0 ? (player_.jumpPeak * player_.jumpPeak - std::pow(std::abs(player_.jumpCount - player_.jumpPeak), 2)) / 2.0 : 0;
+  const double zoomX = std::floor(deltaMapX(player_.realX, cameraX) * 48 + 24 + 0.5);
+  const double zoomY = std::floor((deltaMapY(player_.realY, cameraY) * 48 + 18 - jumpHeight) + 0.5);
+  if (n == 2) {
+    state["_zoomX"] = zoomX; state["_zoomY"] = zoomY; state["_zoomScale"] = 1.0;
+    state["_flashColor"] = Value::Array{255.0, 255.0, 255.0, 255.0}; state["_flashDuration"] = speed / 2;
+  }
+  state["_zoomX"] = zoomX; state["_zoomY"] = zoomY; state["_zoomScale"] = q;
+  if (n == speed / 6) { state["_flashColor"] = Value::Array{255.0, 255.0, 255.0, 255.0}; state["_flashDuration"] = speed / 2; }
+  if (n == speed / 2) {
+    audio("bgm", system_.battleBgm.null() ? database_["system"]["battleBgm"] : system_.battleBgm);
+    fadeOut_ = 24;
+  }
+}
+bool Session::useItemUntargeted(int id, bool skill) {
+  const int user = skill ? ui_.actor : menuItemUser(); if (user < 0) return false;
+  auto& subject = actors_.at(party_[user]); const auto& item = database_[skill ? "skills" : "items"][id];
+  if (!canUse(subject, item) || (!skill && inventory_[id] <= 0)) return false;
+  if (skill) { subject.mp -= static_cast<int>(std::floor(item["mpCost"].number() * trait(subject, 23, 4, true))); subject.tp -= item["tpCost"].integer(); }
+  else if (item["consumable"].boolean()) --inventory_[id];
+  audio("se", database_["system"]["sounds"][skill ? 24 : 23]);
+  applyGlobalEffects(item);
+  return true;
 }
 void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direction) {
   const bool debugTriggered = inputState.pressed.contains("debug") && !previousDebug_;
@@ -164,8 +206,8 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
     lastTitleCommand_ = selected;
     if (selected == 0) { sound(1); newGame(); }
     else if (selected == 1) {
-      if (std::none_of(saveMetadata_.begin(), saveMetadata_.end(), [&](const Value& value) { return value["title"].text() == database_["system"]["gameTitle"].text(); })) sound(3);
-      else enter(Scene::load);
+      if (!DataManager::isAnySavefileExists(*this)) sound(3);
+      else { enter(Scene::load); ui_.cursor = std::max(0, DataManager::latestSavefileId(*this) - 1); }
     }
     else { enter(Scene::options); ui_.slot = 1; }
     return;
@@ -234,15 +276,14 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
     }
     if ((selected == 4 && !system_.formationEnabled) || (selected == 6 && !system_.saveEnabled)) { sound(3); return; }
     const std::array<Scene, 7> scenes{Scene::item, Scene::skill, Scene::equip, Scene::status, Scene::formation, Scene::options, Scene::save};
-    if (selected < 7) enter(scenes[selected]); else { ui_.category = 1; ui_.cursor = 0; }
+    if (selected < 7) { enter(scenes[selected]); if (ui_.scene == Scene::save) ui_.cursor = std::max(0, DataManager::lastAccessedSavefileId(*this) - 1); } else { ui_.category = 1; ui_.cursor = 0; }
     return;
   }
-  if ((pageUp || pageDown) && !party_.empty() && (ui_.scene == Scene::skill || ui_.scene == Scene::equip || ui_.scene == Scene::status)) {
+  if ((pageUp || pageDown) && !party_.empty() && (ui_.scene == Scene::skill || ui_.scene == Scene::equip)) {
     ui_.actor = (ui_.actor+static_cast<int>(party_.size())+(pageDown ? 1 : -1))%static_cast<int>(party_.size());
     menuActorId_ = party_[ui_.actor]; ui_.category = 0; ui_.cursor = 0; ui_.targeting = false; ui_.listMemoryApplied = false; sound(0); return;
   }
   if (ui_.scene == Scene::status) {
-    if (direction == 4 || direction == 6) ui_.actor = (ui_.actor + static_cast<int>(party_.size()) + (direction == 6 ? 1 : -1)) % std::max(1, static_cast<int>(party_.size()));
     if (cancel || ok) enter(Scene::menu);
     return;
   }
@@ -263,7 +304,7 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
     if (ui_.cursor == 0) { ui_.category = 0; ui_.cursor = 0; ui_.actor = battle_.actorIndex; ui_.commandActor = -1; sound(1); }
     else if (!battle_.canEscape) sound(3);
     else {
-      sound(7);
+      SoundManager::playEscape(*this);
       if (battle_.preemptive || random() < battle_.escapeRatio) finishBattle(1);
       else {
         battle_.escapeRatio += 0.1;
@@ -376,6 +417,10 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
         chooseAction(battle_.actorIndex, ui_.pendingId, targets[ui_.cursor], ui_.itemAction); ui_.commandActor = -1;
       }
       else if (!useItem(ui_.pendingId, ui_.cursor, !ui_.itemAction)) { sound(3); return; }
+      else if (!inBattle) {
+        if (reservedCommonEvent_ > 0) { SceneManager::clearStack(*this); SceneManager::gotoScene(*this, Scene::map); return; }
+        if (!party_.empty() && std::all_of(party_.begin(), party_.end(), [&](int id) { return actors_.at(id).hp <= 0; })) { openGameOver(); return; }
+      }
       ui_.targeting = false; if (inBattle) ui_.category = 0; ui_.cursor = 0;
     }
     return;
@@ -402,13 +447,18 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
       if (!skill && entries[ui_.cursor] >= 100000) { sound(3); return; }
       const auto& entry = database_[skill ? "skills" : "items"][entries[ui_.cursor]];
       const int user = !inBattle && !skill ? menuItemUser() : ui_.actor;
-      if (user < 0 || !canUse(actors_.at(party_[user]), entry) || (!inBattle && entry["scope"].integer() <= 6)) { sound(3); return; }
+      if (user < 0 || !canUse(actors_.at(party_[user]), entry)) { sound(3); return; }
       ui_.target = inBattle ? ui_.category : -1; ui_.listCursor = ui_.cursor;
       ui_.pendingId = entries[ui_.cursor]; ui_.itemAction = !skill;
       if (skill) { auto& actor = actors_.at(party_[ui_.actor]); (inBattle ? actor.lastBattleSkill : actor.lastMenuSkill) = ui_.pendingId; }
       else lastItemId_ = ui_.pendingId;
       const int scope = entry["scope"].integer();
-      if (inBattle && scope != 1 && scope != 7 && scope != 9) {
+      if (!inBattle && scope <= 6) {
+        if (!useItemUntargeted(ui_.pendingId, !ui_.itemAction)) { sound(3); return; }
+        ui_.cursor = 0;
+        if (reservedCommonEvent_ > 0) { SceneManager::clearStack(*this); SceneManager::gotoScene(*this, Scene::map); return; }
+        if (!party_.empty() && std::all_of(party_.begin(), party_.end(), [&](int id) { return actors_.at(id).hp <= 0; })) { openGameOver(); return; }
+      } else if (inBattle && scope != 1 && scope != 7 && scope != 9) {
         chooseAction(battle_.actorIndex, ui_.pendingId, scope == 11 ? battle_.actorIndex : -1, ui_.itemAction); ui_.commandActor = -1;
         ui_.category = 0; ui_.cursor = 0;
       } else { ui_.targeting = true; ui_.cursor = 0; if (inBattle) ui_.category = 3; }
@@ -467,9 +517,9 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
       if (!ui_.nameInput.empty()) { std::size_t index = ui_.nameInput.size()-1; while (index && (static_cast<unsigned char>(ui_.nameInput[index])&0xc0)==0x80) --index; ui_.nameInput.erase(index); sound(2); }
       else sound(3);
     } else if (ok) {
-      if (ui_.cursor == 88) { ui_.namePage = (ui_.namePage+1)%nameInputPageCount(database_["system"]["locale"].text()); sound(0); }
+      if (ui_.cursor == 88) { ui_.namePage = (ui_.namePage+1)%nameInputPageCount(database_["system"]["locale"].text()); sound(1); }
       else if (ui_.cursor == 89) {
-        if (ui_.nameInput.empty()) { ui_.nameInput = actors_.at(ui_.nameActorId).name; sound(ui_.nameInput.empty() ? 3 : 0); }
+        if (ui_.nameInput.empty()) { ui_.nameInput = actors_.at(ui_.nameActorId).name; sound(ui_.nameInput.empty() ? 3 : 1); }
         else { actors_.at(ui_.nameActorId).name = ui_.nameInput; leaveEventScene(); sound(1); }
       } else {
         std::size_t count = 0; for (unsigned char ch : ui_.nameInput) if ((ch&0xc0)!=0x80) ++count;
@@ -495,8 +545,8 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
     if (cancel || debugTriggered) { ui_.category = 0; ui_.cursor = ui_.listCursor; sound(2); return; }
     const int id = top+ui_.cursor;
     if (isSwitch && ok) { switches_[id] = !switches_[id]; refreshNeeded_ = true; sound(0); }
-    else if (!isSwitch && (direction == 4 || direction == 6)) {
-      const int amount = (direction == 6 ? 1 : -1)*(inputState.pressed.contains("shift") ? 10 : 1);
+    else if (!isSwitch && (direction == 4 || direction == 6 || pageUp || pageDown)) {
+      const int amount = direction == 6 ? 1 : direction == 4 ? -1 : pageDown ? 10 : -10;
       operateVariable(id,0,variable(id).number()+amount); sound(0);
     }
     return;

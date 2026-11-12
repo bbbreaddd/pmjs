@@ -21,12 +21,9 @@ class Presentation {
   void clearMapGeometry();
   void prepareMapGeometry(int firstX, int firstY, int lastX, int lastY);
   void queueMapGeometry(bool upper, int originX, int originY);
-  struct MapGeometryPart { std::uint32_t layer = 0; int x = 0, y = 0; };
-  std::vector<MapGeometryPart> lowerMapGeometry_;
-  std::vector<std::uint32_t> upperMapGeometry_;
-  std::array<int, 6> mapGeometryKey_{};
-  bool mapGeometryValid_ = false;
-  std::uint64_t mapGeometryRevision_ = 0;
+  core::Tilemap stockTilemap_;
+  int stockTileset_ = -1;
+  std::uint64_t stockMapRevision_ = 0;
   void character(const Character& value, double cameraX, double cameraY);
   double scrolledMapX(double x, double cameraX, int tileWidth) const;
   double scrolledMapY(double y, double cameraY, int tileHeight) const;
@@ -91,11 +88,7 @@ class Presentation {
   void screenTone();
   void finishScreen(std::size_t first);
   void weather();
-  struct WeatherParticle { float x = 0, y = 0, opacity = 0; };
-  std::vector<WeatherParticle> weatherParticles_;
-  std::array<CanvasHandle, 3> weatherSurfaces_{};
-  std::uint64_t weatherTick_ = 0;
-  std::mt19937 weatherRandom_{std::random_device{}()};
+  std::unique_ptr<core::Weather> coreWeather_;
   void battleEffects();
   void battleSprites();
   std::vector<int> battlerIcons(const Battler& actor) const;

@@ -1,5 +1,6 @@
 #include "mv_engine.hpp"
 #include "mv_battle_extra.hpp"
+#include "mv_managers.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -18,7 +19,7 @@ bool Session::enemyEventCommand(const Value& entry) {
   const int code = entry["code"].integer();
   if (code == 340) {
     if (!battle_.active) return true;
-    audio("se", database_["system"]["sounds"][7]);
+    SoundManager::playEscape(*this);
     battle_.result = 1; battle_.active = false; battle_.wait = 0;
     battle_.actions.clear(); battle_.log.clear(); message_ = {};
     ++system_.escapeCount;

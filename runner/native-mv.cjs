@@ -2,11 +2,9 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const vm = require('node:vm');
 const { performance } = require('node:perf_hooks');
 const { loadGame } = require('./mv-engine-data.cjs');
 const { loadSceneData } = require('./mv-scene-data.cjs');
-const { encodeGraph, decodeGraph } = require('./mv-save-codec.cjs');
 const { createStorage } = require('./storage.cjs');
 const { parseTimingConfig, resolveSwapDefault } = require('./config.cjs');
 const { FixedStepClock } = require('./fixed-step-clock.cjs');
@@ -26,15 +24,12 @@ async function runNativeMv(options, hooks = {}) {
   if ([path.join(root, 'save'), path.join(path.dirname(root), 'save')].some(value => canonical(value) === canonical(saveRoot))) throw new Error('experimental engine requires a separate save directory');
   const loaded = options.engineData ? loadSceneData(options.engineData) : loadGame(root), settings = loaded.settings;
   const gameTitle = loaded.database.system.gameTitle;
-  // The verified compression library is a storage codec, not engine behavior.
-  const codecContext = vm.createContext({});
-  vm.runInContext(fs.readFileSync(path.join(root, 'js/libs/lz-string.js'), 'utf8'), codecContext, { timeout: 1000 });
-  const compression = codecContext.LZString;
+  const native = require(path.resolve(options.addon));
+  const compression = { compressToBase64: native.compression.compressLZString, decompressFromBase64: native.compression.decompressLZString };
   const storage = createStorage(options.saveRoot);
   const timing = parseTimingConfig(process.env);
   const swapDefault = resolveSwapDefault(process.env, timing);
   if (swapDefault !== null) process.env.PMJS_SWAP_INTERVAL = swapDefault;
-  const native = require(path.resolve(options.addon));
   native.initialize({ gameRoot: root, width: settings.width, height: settings.height,
     windowTitle: options.title || gameTitle, imageWarmCacheBytes: settings.imageCacheBytes });
   hooks.nativeReady?.(native);
@@ -73,7 +68,7 @@ async function runNativeMv(options, hooks = {}) {
             const file = `file${request.slot}.rpgsave`;
             if (request.save) {
               const contents = engine.save(session);
-              storage.writeText(file, compression.compressToBase64(encodeGraph(contents)));
+              storage.writeText(file, compression.compressToBase64(engine.encodeGraph(contents)));
               const metadata = readStoredJson(storage, compression, 'global.rpgsave', []);
               metadata[request.slot] = { globalId: 'RPGMV', title: gameTitle,
                 characters: contents.party._actors.map(id => [contents.actors._data[id]._characterName, contents.actors._data[id]._characterIndex]),
@@ -81,7 +76,7 @@ async function runNativeMv(options, hooks = {}) {
                 playtime: new Date(contents.system._framesOnSave / 60 * 1000).toISOString().slice(11, 19), timestamp: Date.now() };
               storage.writeText('global.rpgsave', compression.compressToBase64(JSON.stringify(metadata)));
               engine.setSaveMetadata(session, metadata);
-            } else engine.load(session, decodeGraph(compression.decompressFromBase64(storage.readText(file))));
+            } else engine.load(session, engine.decodeGraph(compression.decompressFromBase64(storage.readText(file))));
             engine.completeStorage(session, true);
           } catch (error) { console.error(`Save operation failed: ${error.message}`); engine.completeStorage(session, false); }
         }

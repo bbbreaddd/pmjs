@@ -12,7 +12,8 @@ mv::Value readValue(napi_env env, napi_value value, int depth = 0) {
   napi_valuetype type;
   check(env, napi_typeof(env, value, &type), "cannot inspect engine data");
   switch (type) {
-    case napi_null: case napi_undefined: return {};
+    case napi_null: return {};
+    case napi_undefined: return mv::Value::undefined();
     case napi_boolean: return asBoolean(env, value);
     case napi_number: return asNumber(env, value);
     case napi_string: return asString(env, value);
@@ -47,6 +48,7 @@ mv::Value readValue(napi_env env, napi_value value, int depth = 0) {
   }
 }
 napi_value writeValue(napi_env env, const mv::Value& value) {
+  if (value.isUndefined()) return undefined(env);
   if (value.null()) return null(env);
   if (const auto* item = std::get_if<bool>(&value.data)) return boolean(env, *item);
   if (const auto* item = std::get_if<double>(&value.data)) return number(env, *item);
@@ -128,6 +130,7 @@ napi_value stepEngine(napi_env env, napi_callback_info info) {
       value.focused = focused;
       if (focused) for (const auto& event : platform.keyEvents()) {
         if (event.down) {
+          if (!event.repeat) mv::core::Graphics::onKeyDown(event.keyCode,event.ctrl,event.alt);
           auto& resources = mv::ResourceHandler::shared();
           if (value.input.keyDown(event.keyCode, resources.exists())) resources.retry();
         } else value.input.keyUp(event.keyCode);
@@ -176,6 +179,7 @@ napi_value stepEngine(napi_env env, napi_callback_info info) {
       const char* direction = controls.direction == 2 ? "down" : controls.direction == 4 ? "left" : controls.direction == 6 ? "right" : "up";
       controls.repeatedDirection = value.input.isRepeated(direction) ? controls.direction : 0;
     }
+    if (controls.touchTriggered && controls.touchX && controls.touchY) mv::core::Graphics::onPointerDown(*controls.touchX,*controls.touchY);
     value.session->step(controls); return boolean(env, !value.session->finished());
   } catch (const std::exception& error) { return throwException(env, error); }
 }
@@ -239,6 +243,14 @@ napi_value randomStream(napi_env env, napi_callback_info info) {
     session(env, args[0]).session->setRandomStream(std::move(stream)); return undefined(env);
   } catch (const std::exception& error) { return throwException(env, error); }
 }
+napi_value encodeSaveGraph(napi_env env,napi_callback_info info) {
+  try {const auto args=arguments(env,info);if(args.size()!=1)throw std::invalid_argument("encodeGraph requires state");const auto encoded=mv::JsonEx::stringifyOptional(readValue(env,args[0]));return encoded?string(env,*encoded):undefined(env);}
+  catch(const std::exception& error){return throwException(env,error);}
+}
+napi_value decodeSaveGraph(napi_env env,napi_callback_info info) {
+  try {const auto args=arguments(env,info);if(args.size()!=1)throw std::invalid_argument("decodeGraph requires JSON");return writeValue(env,mv::JsonEx::parse(asString(env,args[0])));}
+  catch(const std::exception& error){return throwException(env,error);}
+}
 napi_value save(napi_env env, napi_callback_info info) {
   try { const auto args = arguments(env, info); if (args.size() != 1) throw std::invalid_argument("save requires session"); auto& value = session(env, args[0]); if (value.presentation) value.presentation->captureAudioState(); return writeValue(env, value.session->save()); }
   catch (const std::exception& error) { return throwException(env, error); }
@@ -277,6 +289,7 @@ void registerMvEngineBindings(napi_env env, napi_value exports) {
   method(env, engine, "startBattle", startBattle); method(env, engine, "chooseAction", chooseAction); method(env, engine, "setRandomStream", randomStream);
   method(env, engine, "configure", configure); method(env, engine, "configuration", configuration);
   method(env, engine, "setSaveMetadata", setSaveMetadata);
+  method(env, engine, "encodeGraph", encodeSaveGraph); method(env, engine, "decodeGraph", decodeSaveGraph);
   method(env, engine, "save", save); method(env, engine, "load", load); method(env, engine, "storageStatus", storageStatus); method(env, engine, "completeStorage", completeStorage);
   check(env, napi_set_named_property(env, exports, "mvEngine", engine), "cannot register engine API");
 }

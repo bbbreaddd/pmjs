@@ -22,8 +22,9 @@ SpriteFrame spriteFrame(const Rectangle& requested,double bitmapWidth,double bit
   r.width=std::clamp(f.width-r.x+f.x,0.0,bitmapWidth-r.x);r.height=std::clamp(f.height-r.y+f.y,0.0,bitmapHeight-r.y);
   result.pivot={f.x-r.x,f.y-r.y};return result;
 }
+Container::Container(){static std::atomic<std::uint64_t> count{0};displayId=count++;}
 Container::~Container(){removeChildren();}
-void Container::update(){const auto copy=children;for(const auto& child:copy)if(child&&child->parent==this)child->update();}
+void Container::update(){const auto count=children.size();for(std::size_t i=0;i<count&&i<children.size();++i){auto child=children[i];if(child)child->update();}}
 void Container::addChild(std::shared_ptr<Container> child){addChildAt(std::move(child),children.size());}
 void Container::addChildAt(std::shared_ptr<Container> child,std::size_t index) {
   if(!child||child.get()==this||index>children.size())throw std::invalid_argument("invalid display child");
@@ -44,32 +45,37 @@ Matrix Container::localTransform()const {
 void Container::render(Renderer& renderer,const Matrix& parentWorld,double opacity) {
   if(!visible||!renderable||alpha<=0)return;
   const auto world=multiply(parentWorld,localTransform());const double worldAlpha=opacity*alpha;
-  draw(renderer,world,worldAlpha);const auto copy=children;
-  for(const auto& child:copy)if(child&&child->parent==this)child->render(renderer,world,worldAlpha);
+  draw(renderer,world,worldAlpha);const auto count=children.size();
+  for(std::size_t i=0;i<count&&i<children.size();++i){auto child=children[i];if(child)child->render(renderer,world,worldAlpha);}
 }
-Sprite::Sprite(){static std::atomic<std::uint64_t> counter{0};spriteId=counter++;}
-void Sprite::setBitmap(std::shared_ptr<PixelBitmap> value){if(bitmap_!=value){bitmap_=std::move(value);refreshFrame_=bool(bitmap_);if(!bitmap_)frame_={};}}
+Sprite::Sprite(){spriteId=displayId;}
+Sprite::~Sprite(){bitmapLifetime_.reset();}
+void Sprite::onBitmapLoad(){if(refreshFrame_&&bitmap_){frame_.width=bitmap_->width;frame_.height=bitmap_->height;refreshFrame_=false;}}
+void Sprite::setBitmap(std::shared_ptr<PixelBitmap> value){if(bitmap_==value)return;bitmap_=std::move(value);refreshFrame_=bool(bitmap_);if(!bitmap_){frame_={};return;}
+  const std::weak_ptr<int> lifetime=bitmapLifetime_;const std::weak_ptr<PixelBitmap> source=bitmap_;
+  bitmap_->addLoadListener([this,lifetime,source]{if(lifetime.expired())return;if(auto bitmap=source.lock();bitmap&&bitmap==bitmap_)onBitmapLoad();});
+}
 void Sprite::setFrame(double x,double y,double width,double height){frame_={x,y,width,height};refreshFrame_=false;}
-bool Sprite::queueFrame(Renderer& renderer,const ImageInfo& image,const Rectangle& requested,const Matrix& world,double opacity,BlendMode blend,Point anchor,std::array<double,4> tone,std::array<double,4> color) {
+bool Sprite::queueFrame(Renderer& renderer,const ImageInfo& image,const Rectangle& requested,const Matrix& world,double opacity,BlendMode blend,Point anchor,std::array<double,4> tone,std::array<double,4> color,bool nearest) {
   const auto frame=spriteFrame(requested,image.width,image.height);if(frame.real.width<=0||frame.real.height<=0)return true;
   const auto placed=translated(world,-anchor.x*frame.real.width-frame.pivot.x,-anchor.y*frame.real.height-frame.pivot.y);
   std::array<float,4> normalizedTone{},normalizedColor{};
   for(int i=0;i<4;++i){normalizedTone[i]=float(tone[i]/255);normalizedColor[i]=float(color[i]/255);}
-  return renderer.queueImage(image.handle,placed,{float(frame.real.x),float(frame.real.y),float(frame.real.width),float(frame.real.height)},float(opacity),0xffffff,blend,normalizedTone,normalizedColor);
+  return renderer.queueImage(image.handle,placed,{float(frame.real.x),float(frame.real.y),float(frame.real.width),float(frame.real.height)},float(opacity),0xffffff,blend,normalizedTone,normalizedColor,nearest);
 }
 void Sprite::draw(Renderer& renderer,const Matrix& world,double opacity) {
   if(!bitmap_)return;bitmap_->touch();if(!bitmap_->isReady())return;
   const auto image=bitmap_->texture();if(!image)return;
-  if(refreshFrame_){frame_={0,0,double(bitmap_->width),double(bitmap_->height)};refreshFrame_=false;}
-  if(!queueFrame(renderer,*image,frame_,world,opacity,blendMode,anchor,colorTone_,blendColor_))throw std::runtime_error("cannot queue core sprite");
+  if(refreshFrame_)onBitmapLoad();
+  if(!queueFrame(renderer,*image,frame_,world,opacity,blendMode,anchor,colorTone_,blendColor_,!bitmap_->smooth))throw std::runtime_error("cannot queue core sprite");
 }
 void TilingSprite::draw(Renderer& renderer,const Matrix& world,double opacity) {
   if(!bitmap_||!bitmap_->isReady()||areaWidth<=0||areaHeight<=0)return;bitmap_->touch();const auto image=bitmap_->texture();if(!image)return;
-  if(refreshFrame_){frame_={0,0,double(bitmap_->width),double(bitmap_->height)};refreshFrame_=false;}
-  const auto frame=spriteFrame(frame_,image->width,image->height);
-  if(frame.real.width<=0||frame.real.height<=0)return;
-  renderer.queueTilingFrame(image->handle,world,{float(frame.real.x),float(frame.real.y),float(frame.real.width),float(frame.real.height)},
-    {float(areaWidth),float(areaHeight)},{float(-std::floor(-origin.x+0.5)),float(-std::floor(-origin.y+0.5))},float(opacity),blendMode);
+  Rectangle region=frame_;if(region.width==0&&region.height==0){region.width=bitmap_->width;region.height=bitmap_->height;}
+  if(region.width<=0||region.height<=0)return;
+  if(region.x<0||region.y<0||region.right()>image->width||region.bottom()>image->height)throw std::invalid_argument("tiling frame outside bitmap");
+  renderer.queueTilingFrame(image->handle,world,{float(region.x),float(region.y),float(region.width),float(region.height)},
+    {float(areaWidth),float(areaHeight)},{float(-std::floor(-origin.x+0.5)),float(-std::floor(-origin.y+0.5))},float(opacity),blendMode,!bitmap_->smooth);
 }
 void ScreenSprite::draw(Renderer& renderer,const Matrix& world,double opacity) {
   const auto first=renderer.queuedCommandCount();renderer.queueQuad(-50000,-50000,100000,100000,{color[0],color[1],color[2],float(opacity)});
@@ -89,19 +95,43 @@ void ToneFilter::adjustHue(double degrees) {
 }
 void ToneFilter::adjustBrightness(double value){const float v=float(value);multiply({v,0,0,0,0,0,v,0,0,0,0,0,v,0,0,0,0,0,1,0});}
 void ToneFilter::adjustContrast(double value){const float v=float(value+1),offset=-.5F*(v-1);multiply({v,0,0,0,offset,0,v,0,0,offset,0,0,v,0,offset,0,0,0,1,0});}
-void ToneSprite::setTone(double r,double g,double b,double gray){tone_={std::clamp(std::round(r),-255.0,255.0),std::clamp(std::round(g),-255.0,255.0),std::clamp(std::round(b),-255.0,255.0),std::clamp(std::round(gray),0.0,255.0)};}
-void ToneSprite::draw(Renderer& renderer,const Matrix&,double){ToneFilter filter;filter.adjustTone(tone_[0],tone_[1],tone_[2]);filter.adjustSaturation(-tone_[3]);filter.apply(renderer);}
+void ToneSprite::setTone(double r,double g,double b,double gray){tone_={std::clamp(std::floor(r+.5),-255.0,255.0),std::clamp(std::floor(g+.5),-255.0,255.0),std::clamp(std::floor(b+.5),-255.0,255.0),std::clamp(std::floor(gray+.5),0.0,255.0)};}
+void ToneSprite::draw(Renderer& renderer,const Matrix&,double){if(std::all_of(tone_.begin(),tone_.end(),[](double value){return value==0;}))return;ToneFilter filter;filter.adjustTone(tone_[0],tone_[1],tone_[2]);filter.adjustSaturation(-tone_[3]);filter.apply(renderer);}
+void Window::addChildToBack(std::shared_ptr<Container> child){std::erase_if(backChildren_,[&](const auto& weak){auto item=weak.lock();return !item||item==child;});Container::addChild(child);backChildren_.insert(backChildren_.begin(),child);}
 void Window::update(){if(active)++animationCount;pauseAlpha_=pause?std::min(1.0,pauseAlpha_+.1):0;Container::update();}
+void Window::synchronize(std::uint64_t frame){const auto delta=lastFrame_&&frame>=*lastFrame_?frame-*lastFrame_:0;lastFrame_=frame;if(active)animationCount+=delta;pauseAlpha_=pause?std::min(1.0,pauseAlpha_+delta*.1):0;}
 Rectangle Window::openBounds()const{return {0,height*(1-std::clamp(openness,0.0,255.0)/255)/2,double(width),height*std::clamp(openness,0.0,255.0)/255};}
 double Window::cursorAlpha()const{const int count=animationCount%40;return std::max(0.0,contentsOpacity-(active?(count<20?count:40-count)*8:0))/255;}
 void Window::refreshBack() {
-  const std::array<double,6> key{double(width),double(height),double(margin),tone[0],tone[1],tone[2]};
-  if(back_&&backKey_==key&&skinKey_==windowskin.get())return;
-  back_.reset();backKey_=key;skinKey_=windowskin.get();const int w=width-margin*2,h=height-margin*2;
-  if(!windowskin||!windowskin->isReady()||w<=0||h<=0)return;
-  back_=std::make_shared<PixelBitmap>(w,h);back_->blt(*windowskin,0,0,96,96,0,0,w,h);
-  for(int y=0;y<h;y+=96)for(int x=0;x<w;x+=96)back_->blt(*windowskin,0,96,std::min(96,w-x),std::min(96,h-y),x,y);
-  back_->adjustTone(int(tone[0]),int(tone[1]),int(tone[2]));
+  const std::array<double,6> key{width,height,margin,tone[0],tone[1],tone[2]};
+  if(frameBitmap_&&backKey_==key&&skinKey_==windowskin.get())return;
+  back_.reset();frameBitmap_.reset();backKey_=key;skinKey_=windowskin.get();
+  if(!windowskin||!windowskin->isReady())return;
+  const double w=width-margin*2,h=height-margin*2;
+  if(w>0&&h>0){back_=std::make_shared<PixelBitmap>(int(w),int(h));back_->blt(*windowskin,0,0,96,96,0,0,w,h);
+    for(double y=0;y<h;y+=96)for(double x=0;x<w;x+=96)back_->blt(*windowskin,0,96,96,96,x,y,96,96);
+    back_->adjustTone(tone[0],tone[1],tone[2]);}
+  if(width<=0||height<=0)return;
+  frameBitmap_=std::make_shared<PixelBitmap>(int(width),int(height));
+  constexpr std::array<std::array<int,2>,8> frameParts{{{1,0},{1,2},{0,1},{2,1},{0,0},{2,0},{0,2},{2,2}}};
+  for(const auto& part:frameParts){const int col=part[0],row=part[1];
+    const double sw=col==1?48:24,sh=row==1?48:24,dw=col==1?width-48:24,dh=row==1?height-48:24;
+    frameBitmap_->blt(*windowskin,col==0?96:col==1?120:168,row==0?0:row==1?24:72,sw,sh,col==0?0:col==1?24:width-24,row==0?0:row==1?24:height-24,dw,dh);
+  }
+}
+void Window::refreshCursor(){
+  const std::array<double,10> key{cursorRect.x,cursorRect.y,cursorRect.width,cursorRect.height,width,height,padding,origin.x,origin.y,0};
+  if(cursorBitmap_&&cursorKey_==key&&cursorSkin_==windowskin.get())return;
+  cursorKey_=key;cursorSkin_=windowskin.get();cursorBitmap_.reset();
+  const double x=cursorRect.x+padding-origin.x,y=cursorRect.y+padding-origin.y,cw=cursorRect.width,ch=cursorRect.height;
+  const double x2=std::max(x,padding),y2=std::max(y,padding),w2=std::min(cw,width-padding-x2),h2=std::min(ch,height-padding-y2);
+  if(!windowskin||!windowskin->isReady()||w2<=0||h2<=0||cw<=0||ch<=0)return;
+  cursorBitmap_=std::make_shared<PixelBitmap>(int(w2),int(h2));const double ox=x-x2,oy=y-y2;
+  constexpr std::array<std::array<int,2>,9> cursorParts{{{1,1},{1,0},{1,2},{0,1},{2,1},{0,0},{2,0},{0,2},{2,2}}};
+  for(const auto& part:cursorParts){const int col=part[0],row=part[1];
+    const double sw=col==1?40:4,sh=row==1?40:4,dw=col==1?cw-8:4,dh=row==1?ch-8:4;
+    cursorBitmap_->blt(*windowskin,col==0?96:col==1?100:140,row==0?96:row==1?100:140,sw,sh,ox+(col==0?0:col==1?4:cw-4),oy+(row==0?0:row==1?4:ch-4),dw,dh);
+  }
 }
 void Window::render(Renderer& renderer,const Matrix& parentWorld,double parentAlpha) {
   if(!visible||!renderable||alpha<=0)return;
@@ -110,29 +140,24 @@ void Window::render(Renderer& renderer,const Matrix& parentWorld,double parentAl
   refreshBack();const auto skin=windowskin?windowskin->texture():std::nullopt;
   const auto piece=[&](const Rectangle& source,const Rectangle& destination,double opacity,const Matrix& matrix) {
     if(!skin||source.width<=0||source.height<=0||destination.width<=0||destination.height<=0)return;
-    Sprite::queueFrame(renderer,*skin,source,translated(matrix,destination.x,destination.y,destination.width/source.width,destination.height/source.height),opacity);
+    Sprite::queueFrame(renderer,*skin,source,translated(matrix,destination.x,destination.y,destination.width/source.width,destination.height/source.height),opacity,BlendMode::normal,{},{},{},!windowskin->smooth);
   };
   if(openness>0&&skin) {
-    if(back_)if(auto back=back_->texture())Sprite::queueFrame(renderer,*back,{0,0,double(back_->width),double(back_->height)},translated(body,margin,margin),worldAlpha*opacity/255*backOpacity/255);
-    constexpr int border=24;
-    for(int row=0;row<3;++row)for(int col=0;col<3;++col) {
-      if(row==1&&col==1)continue;
-      piece({double(col==0?96:col==1?120:168),double(row==0?0:row==1?24:72),double(col==1?48:border),double(row==1?48:border)},
-        {double(col==0?0:col==1?border:width-border),double(row==0?0:row==1?border:height-border),double(col==1?width-border*2:border),double(row==1?height-border*2:border)},worldAlpha*opacity/255,body);
-    }
+    if(back_)if(auto back=back_->texture())Sprite::queueFrame(renderer,*back,{0,0,double(back_->width),double(back_->height)},translated(body,margin,margin),worldAlpha*std::clamp(opacity,0.0,255.0)/255*std::clamp(backOpacity,0.0,255.0)/255,BlendMode::normal,{},{},{},!back_->smooth);
+    if(frameBitmap_)if(auto frame=frameBitmap_->texture())Sprite::queueFrame(renderer,*frame,{0,0,width,height},body,worldAlpha*std::clamp(opacity,0.0,255.0)/255,BlendMode::normal,{},{},{},!frameBitmap_->smooth);
   }
+  for(const auto& weak:backChildren_)if(auto child=weak.lock();child&&child->parent==this)child->render(renderer,world,worldAlpha);
   if(isOpen()) {
-    if(contents)if(auto texture=contents->texture())Sprite::queueFrame(renderer,*texture,{origin.x,origin.y,double(width-padding*2),double(height-padding*2)},translated(world,padding,padding),worldAlpha*contentsOpacity/255);
-    const auto first=renderer.queuedCommandCount();
-    const double cw=cursorRect.width,ch=cursorRect.height,cx=padding+cursorRect.x-origin.x,cy=padding+cursorRect.y-origin.y;
-    if(cw>0&&ch>0)for(int row=0;row<3;++row)for(int col=0;col<3;++col)piece({double(col==0?96:col==1?100:140),double(row==0?96:row==1?100:140),double(col==1?40:4),double(row==1?40:4)},
-      {cx+(col==0?0:col==1?4:cw-4),cy+(row==0?0:row==1?4:ch-4),double(col==1?cw-8:4),double(row==1?ch-8:4)},worldAlpha*cursorAlpha(),world);
-    renderer.clipQueuedCommands(first,bounds(world,{double(padding),double(padding),double(std::max(0,width-padding*2)),double(std::max(0,height-padding*2))}));
+    refreshCursor();
+    if(cursorBitmap_)if(auto cursor=cursorBitmap_->texture())Sprite::queueFrame(renderer,*cursor,{0,0,double(cursorBitmap_->width),double(cursorBitmap_->height)},
+      translated(world,std::max(padding+cursorRect.x-origin.x,padding),std::max(padding+cursorRect.y-origin.y,padding)),worldAlpha*cursorAlpha(),BlendMode::normal,{},{},{},!cursorBitmap_->smooth);
+    if(contents)if(auto texture=contents->texture())Sprite::queueFrame(renderer,*texture,{origin.x,origin.y,double(width-padding*2),double(height-padding*2)},translated(world,padding,padding),worldAlpha*std::clamp(contentsOpacity,0.0,255.0)/255,BlendMode::normal,{},{},{},!contents->smooth);
+
     if(downArrowVisible)piece({132,60,24,12},{width/2.0-12,double(height-18),24,12},worldAlpha,world);
     if(upArrowVisible)piece({132,24,24,12},{width/2.0-12,6,24,12},worldAlpha,world);
     if(pause&&pauseAlpha_>0)piece({double(144+(animationCount/16%2)*24),double(96+(animationCount/32%2)*24),24,24},{width/2.0-12,double(height-24),24,24},worldAlpha*pauseAlpha_,world);
   }
-  for(const auto& child:children)if(child)child->render(renderer,world,worldAlpha);
+  for(const auto& child:children)if(child&&std::none_of(backChildren_.begin(),backChildren_.end(),[&](const auto& weak){return weak.lock()==child;}))child->render(renderer,world,worldAlpha);
 }
 void WindowLayer::render(Renderer& renderer,const Matrix& parentWorld,double parentAlpha) {
   if(!visible||!renderable)return;const auto world=multiply(parentWorld,localTransform());const auto first=renderer.queuedCommandCount();

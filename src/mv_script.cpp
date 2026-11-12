@@ -1,4 +1,5 @@
 #include "mv_engine.hpp"
+#include "mv_managers.hpp"
 #include <algorithm>
 #include <cctype>
 #include <regex>
@@ -63,6 +64,7 @@ void Session::executeNativeScript(const std::string& source,Interpreter& context
       const auto& text=args[i];
       if(text.size()>=2&&(text.front()=='\''||text.front()=='"')&&text.back()==text.front())return text.substr(1,text.size()-2);
       if(text=="true")return true;if(text=="false")return false;
+      if(text=="null")return {};if(text=="undefined")return Value::undefined();
       return evaluateExpression(text);
     };
     if(context.scriptCharacter && name.starts_with("this.")) {
@@ -107,12 +109,32 @@ void Session::executeNativeScript(const std::string& source,Interpreter& context
       screenEventCommand(Value::Object{{"code",231},{"parameters",p}},context);
     }
     else if(name=="$gameScreen.erasePicture")screenEventCommand(Value::Object{{"code",235},{"parameters",Value::Array{value(0)}}},context);
-    else if(name=="SceneManager.goto") {
+    else if(name=="SceneManager.goto"||name=="SceneManager.push") {
       if(args.empty())throw std::invalid_argument("missing native scene");
-      if(args[0]=="Scene_Title")openTitle();else if(args[0]=="Scene_Gameover")openGameOver();
-      else if(args[0]=="Scene_Map"){ui_={};ui_.scene=Scene::map;}
-      else throw std::invalid_argument("unsupported native script scene: "+args[0]);
+      const bool push = name == "SceneManager.push";
+      if(args[0]=="Scene_Title" && !push)openTitle();
+      else if(args[0]=="Scene_Gameover" && !push)openGameOver();
+      else {
+        Scene target = Scene::map;
+        if(args[0]=="Scene_Map")target=Scene::map;
+        else if(args[0]=="Scene_Menu")target=Scene::menu;
+        else if(args[0]=="Scene_Item")target=Scene::item;
+        else if(args[0]=="Scene_Skill")target=Scene::skill;
+        else if(args[0]=="Scene_Equip")target=Scene::equip;
+        else if(args[0]=="Scene_Status")target=Scene::status;
+        else if(args[0]=="Scene_Options")target=Scene::options;
+        else if(args[0]=="Scene_Save")target=Scene::save;
+        else if(args[0]=="Scene_Load")target=Scene::load;
+        else if(args[0]=="Scene_GameEnd")target=Scene::menu;
+        else if(args[0]=="Scene_Name")target=Scene::name;
+        else if(args[0]=="Scene_Shop")target=Scene::shop;
+        else if(args[0]=="Scene_Debug")target=Scene::debug;
+        else throw std::invalid_argument("unsupported native script scene: "+args[0]);
+        if(push)SceneManager::pushScene(*this,target);else SceneManager::gotoScene(*this,target);
+      }
     }
+    else if(name=="SceneManager.pop")SceneManager::popScene(*this);
+    else if(name=="SceneManager.exit")SceneManager::exit(*this);
     else evaluateExpression(statement);
   }
 }

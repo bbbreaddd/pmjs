@@ -22,8 +22,8 @@ class Input {
   Input();
   std::map<int, std::string> keyMapper;
   std::map<int, std::string> gamepadMapper;
-  int keyRepeatWait = 24;
-  int keyRepeatInterval = 6;
+  double keyRepeatWait = 24;
+  double keyRepeatInterval = 6;
 
   void clear();
   bool keyDown(int keyCode, bool resourceRetryPending = false);
@@ -58,7 +58,7 @@ class Input {
 namespace pmjs::mv::core {
 class TouchInput {
  public:
-  int keyRepeatWait = 24, keyRepeatInterval = 6;
+  double keyRepeatWait = 24, keyRepeatInterval = 6;
   void clear();
   void update();
   void mouseDown(int button, double x, double y, bool inside, double now);

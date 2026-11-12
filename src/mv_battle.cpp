@@ -1,5 +1,6 @@
 #include "mv_engine.hpp"
 #include "mv_battle_extra.hpp"
+#include "mv_managers.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -175,7 +176,7 @@ void Session::apply(Battler& subject, Battler& target, const Value& item, Battle
   const double success = item["successRate"].number(100) / 100 * (hitType == 1 ? trait(subject, 22, 0, false) : 1);
   if (random() >= success) { result.missed = true; battle_.log.push_back("Miss!"); return; }
   const double evasion = hitType == 1 ? trait(target, 22, 1, false) : hitType == 2 ? trait(target, 22, 4, false) : 0;
-  if (random() < evasion) { result.evaded = true; audio("se", database_["system"]["sounds"][hitType == 2 ? 19 : 18]); battle_.log.push_back("Evaded!"); return; }
+  if (random() < evasion) { result.evaded = true; if (hitType == 2) SoundManager::playMagicEvasion(*this); else SoundManager::playEvasion(*this); battle_.log.push_back("Evaded!"); return; }
   const auto& damage = item["damage"];
   if (damage["type"].integer()) {
     const bool critical = random() < (damage["critical"].boolean() ? trait(subject, 22, 2, false) * (1 - trait(target, 22, 3, false)) : 0);
@@ -228,14 +229,26 @@ void Session::startBattle(int troop, bool canEscape, bool canLose, bool event) {
   battle_.mapBgm = savedBgm_; battle_.mapBgs = savedBgs_;
   audio("battle-save", {});
   audio("bgs", Value::Object{{"name", ""}});
-  audio("bgm", (system_.battleBgm.null() ? database_["system"]["battleBgm"] : system_.battleBgm));
+  const auto battleBgm = system_.battleBgm.null() ? database_["system"]["battleBgm"] : system_.battleBgm;
+  if (battleTest_) audio("bgm", battleBgm);
+  else {
+    if (savedBgm_.null() || savedBgm_["name"].text() != battleBgm["name"].text()) audio("bgm", Value::Object{{"name", ""}});
+    audio("me", Value::Object{{"name", ""}});
+    SoundManager::playBattleStart(*this);
+    battle_.encounterEffect = 60;
+  }
   battle_.opening = true; ui_.category = 4;
+  if (battleTest_) buildBattleIntro();
+}
+void Session::buildBattleIntro() {
   message_ = {}; messageAge_ = 0;
   std::set<std::string> names;
   for (const auto& enemy : battle_.enemies) if (!enemy.hidden) {
     const auto name = database_["enemies"][enemy.id]["name"].text();
     if (names.insert(name).second) message_.lines.emplace_back(battleMessage("emerge", {name}));
   }
+  if (battle_.preemptive) message_.lines.emplace_back(battleMessage("preemptive", {partyName()}));
+  else if (battle_.surprise) message_.lines.emplace_back(battleMessage("surprise", {partyName()}));
   message_.busy = !message_.lines.empty();
 }
 std::vector<int> Session::battleSelectableTargets(const Value& item) const {
@@ -386,18 +399,19 @@ void Session::resolveAction() {
         apply(target, subject, database_["skills"][1]);
       }
       else if (random() < (magical ? trait(target, 22, 5, false) : 0)) {
-        audio("se", database_["system"]["sounds"][20]); apply(subject, subject, item, &target);
+        SoundManager::playReflection(*this); apply(subject, subject, item, &target);
       }
       else {
         Battler* receiver = &target;
         if (target.hp < parameter(target, 0) / 4 && item["hitType"].integer() != 0) {
           if (target.enemy) {
-            for (auto& member : battle_.enemies) if (!member.hidden && member.hp > 0 && restriction(member) < 4 && hasSpecialFlag(member, 2)) { receiver = &member; break; }
+            for (auto& member : battle_.enemies) if (!member.hidden && BattleMechanics::canSubstitute(*this, member, target)) { receiver = &member; break; }
           } else for (std::size_t index = 0; index < battleMemberCount(); ++index) {
             auto& member = actors_.at(party_[index]);
-            if (member.hp > 0 && restriction(member) < 4 && hasSpecialFlag(member, 2)) { receiver = &member; break; }
+            if (BattleMechanics::canSubstitute(*this, member, target)) { receiver = &member; break; }
           }
         }
+        if (receiver != &target) battle_.log.push_back(battleMessage("substitute", {receiver->name, target.name}));
         apply(subject, *receiver, item);
       }
     }
@@ -441,13 +455,7 @@ void Session::endTurn() {
   battle_.wait = 0;
 }
 std::string Session::battleMessage(const std::string& key, const std::vector<std::string>& arguments) const {
-  auto text = database_["system"]["terms"]["messages"][key].text();
-  for (std::size_t i = 0; i < arguments.size(); ++i) {
-    const auto token = "%" + std::to_string(i + 1);
-    std::size_t at = 0;
-    while ((at = text.find(token, at)) != std::string::npos) { text.replace(at, token.size(), arguments[i]); at += arguments[i].size(); }
-  }
-  return text;
+  return TextManager::format(TextManager::message(*this, key), arguments);
 }
 std::string Session::partyName() const {
   if (party_.empty()) return {};
@@ -485,7 +493,7 @@ void Session::finishBattle(int result) {
   if (hasPartyAbility(4)) gold *= 2;
   gold_ = std::clamp(gold_ + gold, 0, 99999999);
   if (totalExp > 0) {
-    message_.lines.emplace_back(battleMessage("obtainExp", {std::to_string(totalExp)}));
+    message_.lines.emplace_back(battleMessage("obtainExp", {std::to_string(totalExp), TextManager::exp(*this)}));
     for (int id : party_) {
       auto& actor = actors_.at(id);
       {
@@ -603,7 +611,8 @@ bool Session::useItem(int id, int target, bool skill) {
   if (all) { for (int actorId : party_) for (int repeat = 0; repeat < repeats; ++repeat) apply(subject, actors_.at(actorId), item); }
   else for (int repeat = 0; repeat < repeats; ++repeat) apply(subject, item["scope"].integer() == 11 ? subject : actors_.at(party_[target]), item);
   applyGlobalEffects(item);
-  audio("se", database_["system"]["sounds"][skill ? 24 : 23]);
+  if (skill) SoundManager::playUseSkill(*this);
+  else SoundManager::playUseItem(*this);
   return true;
 }
 bool Session::canChangeEquip(const Battler& actor, int slot) const {
@@ -650,6 +659,6 @@ void Session::changeEquipment(int actorId, int slot, int itemId) {
   if (old) ++inventory_[old + (weapon ? 100000 : 200000)];
   if (itemId) --inventory_[key];
   value.equips[slot] = itemId; value.equipKinds[slot] = weapon ? 1 : 2; refreshBattler(value);
-  audio("se", database_["system"]["sounds"][4]);
+  SoundManager::playEquip(*this);
 }
 }  // namespace pmjs::mv

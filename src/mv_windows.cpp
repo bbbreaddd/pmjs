@@ -23,7 +23,9 @@ const std::vector<std::string>& nameInputTable(int page, const std::string& loca
 }
 
 Window_Base::Window_Base(int x, int y, int w, int h)
-  : rect{x, y, w, h}, contents(std::max(0, w - 36), std::max(0, h - 36)) {}
+  : rect{x, y, w, h} {
+  if (core::boundRuntime()) contents.resize(contentsWidth(), contentsHeight());
+}
 
 namespace {
 std::string colorToHex(Color c) {
@@ -40,7 +42,7 @@ std::string colorToHex(Color c) {
 } // namespace
 
 void Window_Base::createContents() {
-  contents.resize(contentsWidth(), contentsHeight());
+  if (core::boundRuntime()) contents.resize(contentsWidth(), contentsHeight());
   drawnTexts.clear();
 }
 
@@ -55,8 +57,11 @@ void Window_Base::drawText(const std::string& text, int x, int y, int maxWidth, 
 void Window_Base::drawGauge(int x, int y, int width, double rate, Color color1, Color color2) {
   const int fillW = static_cast<int>(std::floor(width * std::clamp(rate, 0.0, 1.0)));
   const int gaugeY = y + lineHeight() - 8;
-  contents.fillRect(x, gaugeY, width, 6, colorToHex(gaugeBackColor()));
-  contents.gradientFillRect(x, gaugeY, fillW, 6, colorToHex(color1), colorToHex(color2), false);
+  if (core::boundRuntime()) {
+    if (contents.width != contentsWidth() || contents.height != contentsHeight()) contents.resize(contentsWidth(), contentsHeight());
+    contents.fillRect(x, gaugeY, width, 6, colorToHex(gaugeBackColor()));
+    contents.gradientFillRect(x, gaugeY, fillW, 6, colorToHex(color1), colorToHex(color2), false);
+  }
 }
 
 void Window_Base::drawCurrentAndMax(int current, int max, int x, int y, int width, Color color1, Color color2) {

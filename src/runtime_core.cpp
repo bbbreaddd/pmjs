@@ -6,6 +6,7 @@
 #include <iostream>
 #include <utility>
 #include <vector>
+#include <stdexcept>
 
 namespace pmjs {
 

@@ -1,4 +1,7 @@
 #include "mv_engine.hpp"
+#include "mv_core_types.hpp"
+#include "mv_core_utils.hpp"
+#include "mv_managers.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -9,7 +12,7 @@
 
 namespace pmjs::mv {
 namespace {
-const Value empty;
+const Value empty = Value::undefined();
 const Value::Array emptyArray;
 int dx(int direction) { return direction == 6 ? 1 : direction == 4 ? -1 : 0; }
 int dy(int direction) { return direction == 2 ? 1 : direction == 8 ? -1 : 0; }
@@ -21,57 +24,10 @@ template<class Map> auto lookup(const Map& map, const typename Map::key_type& ke
   return it == map.end() ? typename Map::mapped_type{} : it->second;
 }
 
-double variableNumber(const Value& value) {
-  if (value.null()) return 0;
-  if (const auto* number = std::get_if<double>(&value.data)) return *number;
-  if (const auto* boolean = std::get_if<bool>(&value.data)) return *boolean ? 1 : 0;
-  if (const auto* text = std::get_if<std::string>(&value.data)) {
-    const char* begin = text->c_str(); char* end = nullptr;
-    const double number = std::strtod(begin, &end);
-    if (begin == end) return std::all_of(text->begin(), text->end(), [](unsigned char c) { return std::isspace(c); }) ? 0 : std::numeric_limits<double>::quiet_NaN();
-    while (*end && std::isspace(static_cast<unsigned char>(*end))) ++end;
-    if (!*end) return number;
-  }
-  return std::numeric_limits<double>::quiet_NaN();
-}
-std::string variableText(const Value& value) {
-  if (const auto* text = std::get_if<std::string>(&value.data)) return *text;
-  if (value.null()) return "0";
-  if (const auto* boolean = std::get_if<bool>(&value.data)) return *boolean ? "true" : "false";
-  if (const auto* number = std::get_if<double>(&value.data)) {
-    auto text = std::to_string(*number);
-    if (text.find('.') != std::string::npos) { while (text.back() == '0') text.pop_back(); if (text.back() == '.') text.pop_back(); }
-    return text;
-  }
-  throw std::runtime_error("unsupported variable string conversion");
-}
-
-bool strictEqual(const Value& left, const Value& right) {
-  if (left.data.index() != right.data.index()) return false;
-  if (const auto* number = std::get_if<double>(&left.data)) return *number == right.number();
-  if (const auto* text = std::get_if<std::string>(&left.data)) return *text == right.text();
-  if (const auto* boolean = std::get_if<bool>(&left.data)) return *boolean == right.boolean();
-  return left.null() || &left == &right;
-}
-
-std::u16string utf16(const std::string& text) {
-  std::u16string result;
-  for (std::size_t i = 0; i < text.size();) {
-    const auto first = static_cast<unsigned char>(text[i++]);
-    const int extra = first < 0x80 ? 0 : first < 0xe0 ? 1 : first < 0xf0 ? 2 : 3;
-    std::uint32_t point = first & (extra ? (1 << (6 - extra)) - 1 : 0x7f);
-    for (int j = 0; j < extra; ++j) {
-      if (i == text.size() || (static_cast<unsigned char>(text[i]) & 0xc0) != 0x80) throw std::invalid_argument("invalid UTF-8 variable value");
-      point = (point << 6) | (static_cast<unsigned char>(text[i++]) & 0x3f);
-    }
-    if (point > 0xffff) {
-      point -= 0x10000; result.push_back(static_cast<char16_t>(0xd800 + (point >> 10)));
-      result.push_back(static_cast<char16_t>(0xdc00 + (point & 0x3ff)));
-    } else result.push_back(static_cast<char16_t>(point));
-  }
-  return result;
-}
-
+double variableNumber(const Value& value){return core::numberValue(value);}
+std::string variableText(const Value& value){return core::stringValue(value);}
+bool strictEqual(const Value& left,const Value& right){return core::strictEquals(left,right);}
+std::u16string utf16(const std::string& text){const auto units=core::utf16Units(text);return {units.begin(),units.end()};}
 
 }
 
@@ -105,6 +61,7 @@ std::string Value::text() const { const auto* v = std::get_if<std::string>(&data
 Session::Session(Value database) : database_(std::move(database)) {
   const auto kind = database_["sceneContract"]["kind"].text();
   if (!kind.empty() && kind != "map") throw std::invalid_argument("unsupported scene contract");
+  if (!database_["plugins"].null()) PluginManager::setup(database_["plugins"]);
   if (mapSceneOnly()) return;
   std::map<std::string, double> fields;
   for (const auto* side : {"a", "b"}) for (const auto* stat : {"mhp", "mmp", "atk", "def", "mat", "mdf", "agi", "luk"}) fields[std::string(side) + "." + stat] = 1;
@@ -137,6 +94,7 @@ void Session::newGame() {
   followersGathering_ = false; destination_.reset(); mapTouchCount_ = 0; setupVehicles();
   pendingTransfer_.reset();
   interpreter_.waitingRoute.reset();
+  DataManager::selectSavefileForNewGame(*this);
   const auto& system = database_["system"];
   for (const auto& id : system["partyMembers"].array()) { party_.push_back(id.integer()); initializeActor(id.integer()); }
   if (!party_.empty()) {
@@ -852,7 +810,28 @@ bool Session::command(const Value& entry, Interpreter& context) {
       executeNativeScript(source, context); return true;
     }
     case 655: return true;
-    case 356: return true;
+    case 356: {
+      const std::string text = p[0].text();
+      std::vector<std::string> tokens;
+      std::size_t pos = 0;
+      while (pos < text.size()) {
+        while (pos < text.size() && text[pos] == ' ') ++pos;
+        if (pos >= text.size()) break;
+        const std::size_t end = text.find(' ', pos);
+        if (end == std::string::npos) {
+          tokens.push_back(text.substr(pos));
+          break;
+        }
+        tokens.push_back(text.substr(pos, end - pos));
+        pos = end + 1;
+      }
+      if (!tokens.empty()) {
+        const std::string commandName = std::move(tokens.front());
+        tokens.erase(tokens.begin());
+        PluginManager::callCommand(*this, commandName, tokens);
+      }
+      return true;
+    }
     default:
       if ((code >= 221 && code <= 225) || (code >= 231 && code <= 236)) return screenEventCommand(entry, context);
       if (dialogEventCommand(entry, context) || shopEventCommand(entry, context)) return true;
@@ -973,10 +952,11 @@ void Session::updateTimer() {
 void Session::step(const Input& input) {
   if (mapSceneOnly() && !database_["sceneContract"]["interactiveInput"].boolean() && (input.direction || input.ok || input.cancel || input.dash || input.touchTriggered || input.destinationX || input.destinationY))
     throw std::runtime_error("map-scene session does not support interactive input");
-  if (finished_) return;
+  if (finished_ || resourcesStopped_) return;
   currentInput_ = input;
   ++ticks_;
   const bool ok = input.okTriggered.value_or(input.ok && !previousOk_); previousOk_ = input.ok;
+  okAge_ = input.ok ? okAge_ + 1 : 0;
   const bool cancel = input.cancelTriggered.value_or(input.cancel && !previousCancel_); previousCancel_ = input.cancel;
   if (input.direction != previousDirection_) { previousDirection_ = input.direction; directionAge_ = 0; } else ++directionAge_;
   const int repeatedDirection = input.repeatedDirection.value_or(directionAge_ == 0 || (directionAge_ >= 24 && directionAge_ % 6 == 0) ? input.direction : 0);
@@ -984,7 +964,16 @@ void Session::step(const Input& input) {
   ++ui_.age;
   if (ui_.scene != Scene::map) {
     destination_.reset(); mapTouchCount_ = 0;
-    updateUi(input, ok, cancel, repeatedDirection); updateBattle();
+    if (battle_.encounterEffect > 0) {
+      advanceEncounterEffect();
+      if (battle_.encounterEffect == 0) {
+        fadeOut_ = 0;
+        ensureScreenEffects(); std::get<Value::Object>(screenEffects_.data)["_fadeInDuration"] = 24;
+        buildBattleIntro();
+      }
+    } else {
+      updateUi(input, ok, cancel, repeatedDirection); updateBattle();
+    }
     if (ui_.scene == Scene::battle) { updateTimer(); updateScreenState(); }
     if (ui_.scene == Scene::battle) for (auto& visual : battle_.visuals) {
       const auto& item = database_[visual.action.item ? "items" : "skills"][visual.action.id];
@@ -1000,10 +989,12 @@ void Session::step(const Input& input) {
     return;
   }
   const bool hadMessage = message_.busy;
-  if (message_.busy || cancel) updateUi(input, ok, cancel, repeatedDirection);
-  if (ui_.scene != Scene::map) return;
-  if (hadMessage && !message_.busy) return;
-  updateInterpreter();
+  auto updateMain = [&]() -> bool {
+    bool transferred = false;
+    if (message_.busy || cancel) updateUi(input, ok, cancel, repeatedDirection);
+    if (ui_.scene != Scene::map) return false;
+    if (hadMessage && !message_.busy) return false;
+    updateInterpreter();
   updateMapTouch(input);
   if (!player_.moving()) playerDashing_ = ((input.dash != alwaysDash_) || destination_.has_value()) && !map()["disableDashing"].boolean() && !player_.routeForcing && vehicleType_ < 0;
   if (!interpreter_.running && !message_.busy && !player_.moving() && player_.jumpCount == 0 && !player_.routeForcing && !followersGathering_ && !vehicleGettingOn_ && !vehicleGettingOff_ && (vehicleType_ != 2 || vehicles_[2].altitude >= 48)) {
@@ -1064,11 +1055,18 @@ void Session::step(const Input& input) {
   updateCommonEvents();
   updateMapState();
   updateTimer();
-  if (pendingTransfer_) {
-    const auto target = *pendingTransfer_; pendingTransfer_.reset();
-    transfer(target[0], target[1], target[2], target[3]);
-  }
-  updateScreenState();
+    if (pendingTransfer_) {
+      const auto target = *pendingTransfer_; pendingTransfer_.reset();
+      transfer(target[0], target[1], target[2], target[3]);
+      transferred = true;
+    }
+    updateScreenState();
+    return transferred;
+  };
+  const bool transferred = updateMain();
+  if (!transferred && ui_.scene == Scene::map && (interpreter_.running || message_.busy || std::any_of(events_.begin(), events_.end(), [](const Event& value) { return value.starting; }))
+      && (okAge_ >= 24 || input.touchLongPressed)) updateMain();
+  if (!party_.empty() && std::all_of(party_.begin(), party_.end(), [&](int id) { return actors_.at(id).hp <= 0; })) { openGameOver(); return; }
 }
 Value Session::snapshot() const {
   Value::Object switches, variables, selfSwitches, inventory;
