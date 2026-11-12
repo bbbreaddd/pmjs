@@ -347,9 +347,10 @@ napi_value inputSnapshot(napi_env env, napi_callback_info) try {
   check(env, napi_set_named_property(env, result, "keyEvents", events), "cannot set key events");
   platform.clearKeyEvents();
   napi_value pointers;
-  check(env, napi_create_array_with_length(env, platform.pointerEvents().size(), &pointers), "cannot create pointer events");
-  for (std::size_t i = 0; i < platform.pointerEvents().size(); ++i) {
-    const auto& source = platform.pointerEvents()[i];
+  check(env, napi_create_array(env, &pointers), "cannot create pointer events");
+  std::uint32_t pointerIndex = 0;
+  for (const auto& source : platform.pointerEvents()) {
+    if (source.type.starts_with("touch")) continue;
     napi_value event = moduleObject(env);
     check(env, napi_set_named_property(env, event, "type", string(env, source.type)), "cannot set pointer type");
     check(env, napi_set_named_property(env, event, "x", number(env, source.x)), "cannot set pointer x");
@@ -359,7 +360,7 @@ napi_value inputSnapshot(napi_env env, napi_callback_info) try {
     check(env, napi_set_named_property(env, event, "deltaX", number(env, source.deltaX)), "cannot set pointer delta x");
     check(env, napi_set_named_property(env, event, "deltaY", number(env, source.deltaY)), "cannot set pointer delta y");
     check(env, napi_set_named_property(env, event, "cancelled", boolean(env, source.cancelled)), "cannot set pointer cancellation");
-    check(env, napi_set_element(env, pointers, i, event), "cannot set pointer event");
+    check(env, napi_set_element(env, pointers, pointerIndex++, event), "cannot set pointer event");
   }
   check(env, napi_set_named_property(env, result, "pointerEvents", pointers), "cannot set pointer events");
   platform.clearPointerEvents();

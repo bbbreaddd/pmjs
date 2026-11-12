@@ -31,6 +31,8 @@ class RuntimeCore {
   bool running() const { return running_; }
   void requestQuit() { running_ = false; }
   void syncDrawableSize();
+  void resizeLogicalScreen(int width, int height);
+  std::weak_ptr<void> lifetime() const { return lifetime_; }
 
   int width() const { return width_; }
   int height() const { return height_; }
@@ -56,6 +58,7 @@ class RuntimeCore {
   Effects effects_;
   bool running_ = true;
   std::vector<std::uint32_t> sceneMetadataScratch_;
+  std::shared_ptr<void> lifetime_ = std::make_shared<int>(0);
 };
 
 }  // namespace pmjs

@@ -1,0 +1,261 @@
+#pragma once
+
+#include "mv_core_types.hpp"
+#include "resources.hpp"
+#include <memory>
+#include <optional>
+#include <filesystem>
+
+#include <array>
+#include <cstdint>
+#include <functional>
+#include <string>
+#include <vector>
+
+namespace pmjs { class RuntimeCore; }
+namespace pmjs::mv::core {
+void bindRuntime(RuntimeCore& runtime);
+void unbindRuntime(RuntimeCore& runtime);
+RuntimeCore* boundRuntime();
+void updateServices();
+struct BitmapBacking;
+struct CoreServiceBinding;
+
+// rpg_core.js Bitmap with full RGBA pixel operations
+class PixelBitmap {
+ public:
+  int width = 0;
+  int height = 0;
+  std::string url;
+  bool smooth = false;
+  bool dirty = false;
+  bool loaded = true;
+  bool error = false;
+  int paintOpacity = 255;
+  int fontSize = 28;
+  std::string fontFace = "GameFont";
+  bool fontItalic = false;
+  std::string textColor = "#ffffff";
+  std::string outlineColor = "rgba(0, 0, 0, 0.5)";
+  int outlineWidth = 4;
+  std::vector<std::uint8_t> pixels; // RGBA8888
+  std::vector<std::function<void()>> loadListeners;
+
+  PixelBitmap() = default;
+  PixelBitmap(int w, int h);
+  PixelBitmap(RuntimeCore& runtime, int w, int h);
+  PixelBitmap(const PixelBitmap& source);
+  PixelBitmap& operator=(const PixelBitmap& source);
+  PixelBitmap(PixelBitmap&& source);
+  PixelBitmap& operator=(PixelBitmap&& source);
+  ~PixelBitmap() = default;
+  static std::shared_ptr<PixelBitmap> load(const std::string& source);
+  static std::shared_ptr<PixelBitmap> request(const std::string& source);
+  static std::shared_ptr<PixelBitmap> snap(const std::function<void()>& draw = {});
+  static void setImageLoader(std::function<std::optional<ImageInfo>(const std::string&)> loader);
+  void startRequest();
+  void decode();
+  bool isRequestReady() const;
+  bool isRequestOnly() const;
+  std::string loadingState = "none";
+  std::uint64_t touchedAt = 0;
+  std::uint32_t nativeCanvas() const;
+  std::optional<ImageInfo> texture() const;
+  void syncPixels();
+  void commitPixels();
+  void drawText(const std::string& text, double x, double y, double maxWidth, double lineHeight, const std::string& align = "left");
+  double measureTextWidth(const std::string& text) const;
+  void loadUrl(const std::string& source);
+
+  void resize(int w, int h);
+  bool isReady() const { return loadingState == "none" || loaded; }
+  bool isError() const { return error; }
+  void touch();
+  void checkDirty();
+  void addLoadListener(std::function<void()> listener);
+  void callLoadListeners();
+
+  void clearRect(int x, int y, int w, int h);
+  void clear();
+  void fillRect(int x, int y, int w, int h, const std::string& color);
+  void fillAll(const std::string& color);
+  void gradientFillRect(int x, int y, int w, int h, const std::string& color1, const std::string& color2, bool vertical = false);
+  void drawCircle(int x, int y, int radius, const std::string& color);
+  void blt(const PixelBitmap& source, int sx, int sy, int sw, int sh, int dx, int dy, int dw = -1, int dh = -1);
+
+  std::string getPixel(int x, int y) const;
+  std::uint8_t getAlphaPixel(int x, int y) const;
+
+  void adjustTone(int r, int g, int b);
+  void rotateHue(int offset);
+  void blur();
+  std::string makeFontNameText() const;
+
+  static std::array<std::uint8_t, 4> parseCssColor(const std::string& color);
+ private:
+  mutable std::shared_ptr<BitmapBacking> backing_;
+  std::function<void()> failure_;
+  std::shared_ptr<int> lifetime_ = std::make_shared<int>(0);
+  void changed();
+  void loadNow();
+};
+
+// rpg_core.js Graphics
+class Graphics {
+ public:
+  static inline int width = 816;
+  static inline int height = 624;
+  static inline int boxWidth = 816;
+  static inline int boxHeight = 624;
+  static inline double scale = 1.0;
+  static inline std::uint64_t frameCount = 0;
+  static inline bool webgl = true;
+  static inline bool fpsVisible = false;
+  static inline bool loading = false;
+  static inline int loadingCount = 0;
+  static inline bool videoPlaying = false;
+  static inline double videoVolume = 1.0;
+  static inline std::string loadingImage;
+  static inline std::vector<std::string> loadedFonts;
+  static inline std::string errorName, errorMessage, loadingError;
+  static inline double fps = 0, frameTime = 0;
+  static void resize(int w, int h);
+  static void presentOverlay();
+  static std::vector<std::filesystem::path> fonts(const std::string& family);
+  static void setVideoCallbacks(std::function<void(const std::string&)> play, std::function<bool()> playing, std::function<void(double)> volume);
+  static void setLoadingCallbacks(std::function<void()> stop, std::function<void()> resume);
+
+  static void initialize(int w = 816, int h = 624, const std::string& type = "auto");
+  static void tickStart();
+  static void tickEnd();
+  static void render();
+  static bool isWebGL() { return webgl; }
+  static bool hasWebGL() { return boundRuntime() != nullptr; }
+  static bool canUseDifferenceBlend() { return true; }
+  static bool canUseSaturationBlend() { return true; }
+  static void setLoadingImage(const std::string& src);
+  static void startLoading();
+  static void updateLoading();
+  static void endLoading();
+  static void printLoadingError(const std::string& url);
+  static void eraseLoadingError();
+  static void printError(const std::string& name, const std::string& message);
+  static void showFps() { fpsVisible = true; }
+  static void hideFps() { fpsVisible = false; }
+  static void loadFont(const std::string& name, const std::string& url);
+  static bool isFontLoaded(const std::string& name);
+  static void playVideo(const std::string& src);
+  static bool isVideoPlaying();
+  static void setVideoVolume(double value);
+  static double pageToCanvasX(double x, double canvasLeft = 0.0);
+  static double pageToCanvasY(double y, double canvasTop = 0.0);
+  static bool isInsideCanvas(double x, double y);
+  static void callGC();
+};
+
+// rpg_core.js WebAudio
+class WebAudio {
+ public:
+  std::string url;
+  double volume = 1.0;
+  double pitch = 1.0;
+  double pan = 0.0;
+  bool loop = false;
+  double loopStart = 0.0;
+  double loopLength = 0.0;
+  int sampleRate = 44100;
+  double totalTime = 0;
+  bool ready = false;
+  bool error = false;
+  bool playing = false;
+  double startTime = 0.0;
+  double pauseTime = 0.0;
+  std::vector<std::function<void()>> loadListeners;
+  std::vector<std::function<void()>> stopListeners;
+
+  static inline double masterVolume = 1.0;
+  static inline bool initialized = false;
+  static inline bool canPlayOggFlag = true;
+  static inline bool canPlayM4aFlag = true;
+
+  explicit WebAudio(std::string audioUrl = "");
+  ~WebAudio();
+  WebAudio(const WebAudio&) = delete;
+  WebAudio& operator=(const WebAudio&) = delete;
+  void update();
+  std::uint32_t nativeHandle() const { return handle_; }
+  void setVolume(double value);
+  void setPitch(double value);
+  void setPan(double value);
+  static void initialize(bool noAudio = false);
+  static bool canPlayOgg() { return canPlayOggFlag; }
+  static bool canPlayM4a() { return canPlayM4aFlag; }
+  static void setMasterVolume(double value);
+  static void setEncryptionKey(const std::string& hexadecimal);
+
+  void clear();
+  bool isReady() const { return ready; }
+  bool isError() const { return error; }
+  bool isPlaying() const;
+  void play(bool loopFlag, double offset = 0.0);
+  void stop();
+  void fadeIn(double duration);
+  void fadeOut(double duration);
+  double seek() const;
+  void addLoadListener(std::function<void()> listener);
+  void addStopListener(std::function<void()> listener);
+
+  void readLoopComments(const std::vector<std::uint8_t>& data);
+  void readOgg(const std::vector<std::uint8_t>& data);
+  void readMp4(const std::vector<std::uint8_t>& data);
+  void readMetaData(const std::vector<std::uint8_t>& data, std::size_t index, std::size_t size);
+  static std::uint32_t readLittleEndian(const std::vector<std::uint8_t>& data, std::size_t index);
+  static std::uint32_t readBigEndian(const std::vector<std::uint8_t>& data, std::size_t index);
+  static std::string readFourCharacters(const std::vector<std::uint8_t>& data, std::size_t index);
+ private:
+  std::shared_ptr<CoreServiceBinding> services_;
+  std::uint32_t handle_ = 0;
+  bool autoPlay_ = false;
+  double pendingFadeIn_ = -1;
+  void loadNow();
+  void release();
+  friend void unbindRuntime(RuntimeCore& runtime);
+};
+
+// rpg_core.js Html5Audio
+class Html5Audio {
+ public:
+  static inline std::string url;
+  static inline std::string staticSeUrl;
+  static inline double volume = 1.0;
+  static inline bool ready = false;
+  static inline bool error = false;
+  static inline bool playing = false;
+  static inline bool loop = false;
+  static inline double currentTime = 0.0;
+
+  static void setup(const std::string& audioUrl);
+  static void initialize();
+  static void clear();
+  static void setStaticSe(const std::string& audioUrl);
+  static bool isReady();
+  static bool isError();
+  static bool isPlaying();
+  static void play(bool loopFlag, double offset = 0.0);
+  static void stop();
+  static void fadeIn(double duration);
+  static void fadeOut(double duration);
+  static double seek();
+};
+
+class Window;
+class Sprite;
+using CoreWindow = Window;
+using CoreSprite = Sprite;
+
+// rpg_core.js Tilemap core state
+class Tilemap;
+using CoreTilemap = Tilemap;
+
+}  // namespace pmjs::mv::core
+

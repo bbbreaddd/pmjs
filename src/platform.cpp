@@ -615,6 +615,8 @@ bool Platform::pollEvents() {
             pointerButtons_ &= ~bit;
             pointerEvents_.push_back({"mouseup", pointerX_, pointerY_, button, pointerButtons_, 0, 0, true});
           }
+          if (!touchContacts_.empty()) pointerEvents_.push_back({"touchcancel", 0, 0, 0, 0, 0, 0, true});
+          touchContacts_.clear();
           keysDown_.clear(); keysPressed_.clear(); keyEvents_.clear();
           gamepadDown_.clear(); gamepadPressed_.clear();
           down_ = pressed_ = 0;
@@ -626,6 +628,26 @@ bool Platform::pollEvents() {
         default: break;
       }
     }
+    if (windowFocused_ && (event.type == SDL_FINGERDOWN || event.type == SDL_FINGERMOTION || event.type == SDL_FINGERUP)) {
+#if SDL_VERSION_ATLEAST(2, 0, 12)
+      if (event.tfinger.windowID != 0 && event.tfinger.windowID != SDL_GetWindowID(static_cast<SDL_Window*>(window_))) continue;
+#endif
+      const auto device = static_cast<std::int64_t>(event.tfinger.touchId), finger = static_cast<std::int64_t>(event.tfinger.fingerId);
+      const double x = event.tfinger.x * windowWidth_, y = event.tfinger.y * windowHeight_;
+      auto contact = std::find_if(touchContacts_.begin(), touchContacts_.end(), [&](const auto& current) { return current.device == device && current.finger == finger; });
+      const bool primary = contact == touchContacts_.begin();
+      if (event.type == SDL_FINGERDOWN) {
+        if (contact == touchContacts_.end()) touchContacts_.push_back({device, finger, x, y});
+        else { contact->x = x; contact->y = y; }
+        pointerEvents_.push_back({"touchstart", x, y, 0, 0, 0, 0, false, static_cast<int>(touchContacts_.size()), touchContacts_.size() == 1});
+      } else if (event.type == SDL_FINGERMOTION) {
+        if (contact != touchContacts_.end()) { contact->x = x; contact->y = y; }
+        pointerEvents_.push_back({"touchmove", x, y, 0, 0, 0, 0, false, static_cast<int>(touchContacts_.size()), primary});
+      } else {
+        if (contact != touchContacts_.end()) touchContacts_.erase(contact);
+        pointerEvents_.push_back({"touchend", x, y, 0, 0, 0, 0, false, static_cast<int>(touchContacts_.size()), primary});
+      }
+    }
     if (windowFocused_ && (event.type == SDL_MOUSEMOTION || event.type == SDL_MOUSEBUTTONDOWN ||
         event.type == SDL_MOUSEBUTTONUP || event.type == SDL_MOUSEWHEEL)) {
       const auto pointerWindow = event.type == SDL_MOUSEMOTION ? event.motion.windowID :
@@ -633,7 +655,7 @@ bool Platform::pollEvents() {
       if (pointerWindow != 0 && pointerWindow != SDL_GetWindowID(static_cast<SDL_Window*>(window_))) continue;
       if (event.type == SDL_MOUSEMOTION) {
         pointerX_ = event.motion.x; pointerY_ = event.motion.y;
-        pointerEvents_.push_back({"mousemove", pointerX_, pointerY_, 0, pointerButtons_, 0, 0});
+        pointerEvents_.push_back({"mousemove", pointerX_, pointerY_, 0, pointerButtons_, 0, 0, false, 0, false, event.motion.which == SDL_TOUCH_MOUSEID});
       } else if (event.type == SDL_MOUSEWHEEL) {
 #if SDL_VERSION_ATLEAST(2, 26, 0)
         pointerX_ = event.wheel.mouseX; pointerY_ = event.wheel.mouseY;
@@ -654,7 +676,7 @@ bool Platform::pollEvents() {
           if (event.type == SDL_MOUSEBUTTONDOWN) pointerButtons_ |= bit;
           else pointerButtons_ &= ~bit;
           pointerEvents_.push_back({event.type == SDL_MOUSEBUTTONDOWN ? "mousedown" : "mouseup",
-            pointerX_, pointerY_, button, pointerButtons_, 0, 0});
+            pointerX_, pointerY_, button, pointerButtons_, 0, 0, false, 0, false, event.button.which == SDL_TOUCH_MOUSEID});
         }
       }
     }

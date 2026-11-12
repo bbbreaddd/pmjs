@@ -107,10 +107,38 @@ include(cmake/Astcenc.cmake)
 set(PMJS_RUNTIME_SOURCES
   src/mv_core_input.cpp
   src/mv_core_types.cpp
+  src/mv_core_display.cpp
+  src/mv_core_utils.cpp
+  src/mv_core_audio_graphics.cpp
   src/mv_engine.cpp
+  src/mv_expression.cpp
+  src/mv_script.cpp
+  src/mv_actor_events.cpp
+  src/mv_enemy_events.cpp
+  src/mv_common_events.cpp
+  src/mv_system_events.cpp
+  src/mv_screen_events.cpp
+  src/mv_character_events.cpp
+  src/mv_dialog_events.cpp
+  src/mv_message_window.cpp
+  src/mv_shop_events.cpp
+  src/mv_vehicle_events.cpp
+  src/mv_animation_events.cpp
+  src/mv_animation_playback.cpp
+  src/mv_animation_presentation.cpp
+  src/mv_windows.cpp
+  src/mv_sprites.cpp
+  src/mv_managers.cpp
+  src/mv_battle_extra.cpp
+  src/mv_map_extra.cpp
   src/mv_battle.cpp
   src/mv_scenes.cpp
   src/mv_presentation.cpp
+  src/mv_movie_presentation.cpp
+  src/mv_screen_presentation.cpp
+  src/mv_battler_presentation.cpp
+  src/mv_map_geometry.cpp
+  src/mv_tiled_presentation.cpp
   src/mv_save.cpp
   src/runtime_core.cpp
   src/platform.cpp
@@ -261,7 +289,7 @@ if(BUILD_TESTING)
   add_test(NAME node-mv-core-touch COMMAND ${NODE_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/test/mv-core-touch.cjs" $<TARGET_FILE:pmjs-mv-core-touch-test>)
   pmjs_add_cpp_test(pmjs-mv-core-input-test native-mv-core-input test/mv-core-input.cpp src/mv_core_input.cpp)
   add_test(NAME node-mv-core-input COMMAND ${NODE_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/test/mv-core-input.cjs" $<TARGET_FILE:pmjs-mv-core-input-test>)
-  pmjs_add_cpp_test(pmjs-mv-engine-test native-mv-engine test/mv-engine.cpp src/mv_engine.cpp src/mv_battle.cpp src/mv_scenes.cpp src/mv_save.cpp)
+  pmjs_add_cpp_test(pmjs-mv-engine-test native-mv-engine test/mv-engine.cpp src/mv_engine.cpp src/mv_animation_playback.cpp src/mv_core_utils.cpp src/mv_core_audio_graphics.cpp src/mv_expression.cpp src/mv_script.cpp src/mv_actor_events.cpp src/mv_enemy_events.cpp src/mv_common_events.cpp src/mv_system_events.cpp src/mv_screen_events.cpp src/mv_character_events.cpp src/mv_dialog_events.cpp src/mv_message_window.cpp src/mv_shop_events.cpp src/mv_vehicle_events.cpp src/mv_animation_events.cpp src/mv_windows.cpp src/mv_sprites.cpp src/mv_managers.cpp src/mv_battle_extra.cpp src/mv_map_extra.cpp src/mv_battle.cpp src/mv_scenes.cpp src/mv_save.cpp)
   pmjs_add_cpp_test(pmjs-log-test native-log test/log.cpp)
   target_link_libraries(pmjs-log-test PRIVATE pthread)
   target_link_libraries(pmjs-vfs-test PRIVATE PkgConfig::AVUTIL)

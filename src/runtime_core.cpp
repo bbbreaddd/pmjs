@@ -105,6 +105,12 @@ bool RuntimeCore::pollEvents() {
   return running_;
 }
 
+void RuntimeCore::resizeLogicalScreen(int width,int height) {
+  if(width<=0||height<=0)throw std::invalid_argument("invalid logical screen dimensions");
+  if(!renderer_.setRenderTargetSize(width,height)||!renderer_.setScreenRenderSize(width,height))throw std::runtime_error("cannot resize logical screen");
+  width_=width;height_=height;
+}
+
 void RuntimeCore::syncDrawableSize() {
   const auto size = platform_.drawableSize();
   renderer_.setDrawableSize(size.first, size.second);

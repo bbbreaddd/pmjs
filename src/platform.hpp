@@ -17,7 +17,7 @@ int standardGamepadButton(int sdlButton);
 class Platform {
  public:
   struct KeyEvent { int keyCode; bool down; bool repeat; bool capsLock; std::string code; std::string key; bool shift; bool ctrl; bool alt; bool meta; std::string text; };
-  struct PointerEvent { std::string type; double x, y; int button; std::uint32_t buttons; double deltaX, deltaY; bool cancelled = false; };
+  struct PointerEvent { std::string type; double x, y; int button; std::uint32_t buttons; double deltaX, deltaY; bool cancelled = false; int touchCount = 0; bool primary = false; bool syntheticTouch = false; };
   struct WindowEvent { std::string type; int x = 0, y = 0; };
   struct GamepadState { int index; int instance; bool connected; std::string id; std::vector<int> buttonsDown; std::vector<int> buttonsPressed; std::vector<double> axes; };
   Platform(int width, int height, std::string title);
@@ -77,6 +77,8 @@ class Platform {
   std::vector<int> keysPressed_;
   std::vector<KeyEvent> keyEvents_;
   std::vector<PointerEvent> pointerEvents_;
+  struct TouchContact { std::int64_t device = 0, finger = 0; double x = 0, y = 0; };
+  std::vector<TouchContact> touchContacts_;
   std::uint32_t pointerButtons_ = 0;
   double pointerX_ = 0, pointerY_ = 0;
   std::vector<std::pair<int, std::vector<int>>> gamepadDown_;

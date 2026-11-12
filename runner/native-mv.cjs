@@ -49,19 +49,20 @@ async function runNativeMv(options, hooks = {}) {
     engine.configure(session, readStoredJson(storage, compression, 'config.rpgsave', {}));
     let configurationRevision = engine.storageStatus(session).configurationRevision;
     engine.setSaveMetadata(session, readStoredJson(storage, compression, 'global.rpgsave', []));
-    if (loaded.initialState) engine.load(session, loaded.initialState); else engine.openTitle(session);
+    if (options.battleTest) engine.battleTest(session);
+    else if (loaded.initialState) engine.load(session, loaded.initialState); else engine.openTitle(session);
     hooks.onSession?.({ engine, session, native });
     console.log('[pmjs] engine=native-mv original_engine_scripts=0');
     hooks.stage?.('playing');
     let deadline = performance.now();
     const logicalClock = new FixedStepClock(deadline, { logicHz: timing.logicHz, smooth: timing.catchupMode === 'smooth' });
-    while (native.pollEvents()) {
+    gameLoop: while (native.pollEvents()) {
       const now = performance.now();
       if (!timing.uncapped && now < deadline) { await new Promise(resolve => setTimeout(resolve, deadline - now)); continue; }
       if (!timing.uncapped) deadline = Math.max(deadline + timing.renderPeriod, now - timing.renderPeriod * 4);
       const due = logicalClock.takeSteps(now);
       for (let step = 0; step < due; ++step) {
-        engine.step(session);
+        if (engine.step(session) === false) break gameLoop;
         const request = engine.storageStatus(session);
         if (request.configurationRevision !== configurationRevision) {
           storage.writeText('config.rpgsave', compression.compressToBase64(JSON.stringify(engine.configuration(session))));

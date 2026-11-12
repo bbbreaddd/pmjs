@@ -7,6 +7,7 @@ const { validRecipes, astcSettings, validLosslessPrefixes } = require('./asset-p
 function resolveDefaults(input) {
   let title = input.title;
   let engineData = input.engineData;
+  let battleTest = input.battleTest;
   let width = input.width;
   let height = input.height;
   let assetPreparation = {};
@@ -27,6 +28,10 @@ function resolveDefaults(input) {
     try { cfg = JSON.parse(fs.readFileSync(configPath, 'utf8')); }
     catch (error) { throw new Error(`invalid JSON in config file ${configPath}: ${error.message}`); }
     if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) throw new Error('configuration must be an object');
+    if (battleTest === undefined && cfg.battleTest !== undefined) {
+      if (typeof cfg.battleTest !== 'boolean') throw new Error('battleTest must be a boolean');
+      battleTest = cfg.battleTest;
+    }
     if (title === undefined && cfg.title) title = cfg.title;
     if (engineData === undefined && cfg.engineData !== undefined) {
       if (typeof cfg.engineData !== 'string' || !input.gameRoot) throw new Error('engineData requires a game root and relative file path');
@@ -121,7 +126,7 @@ function resolveDefaults(input) {
     assetPreparation.recipes = JSON.parse(fs.readFileSync(assetPreparation.recipes, 'utf8'));
   }
   assetPreparation.recipes = validRecipes(assetPreparation.recipes || []);
-  return { ...input, engineData, width, height, title, assetPreparation, assetPolicyOverrides: policyOverrides, preparationFonts, virtualFiles,
+  return { ...input, engineData, battleTest, width, height, title, assetPreparation, assetPolicyOverrides: policyOverrides, preparationFonts, virtualFiles,
     preparedFrameCacheBytes, preparedCompactSampling, preparedCropUploads };
 }
 

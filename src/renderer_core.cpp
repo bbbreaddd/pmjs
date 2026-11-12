@@ -507,6 +507,30 @@ void Renderer::discardCommandsFrom(std::size_t first) {  while (frame_.commands.
   }
 }
 
+void Renderer::beginCompositionGroup() {
+  RenderCommand command;command.action=RenderCommand::Action::filterBegin;
+  command.filterKind=scene_packet::FilterKind::alpha;command.filterParameters[0]=1;command.color[3]=1;
+  frame_.commands.push_back(command);sceneSubmittedThisFrame_=true;
+}
+void Renderer::endCompositionGroup(){RenderCommand command;command.action=RenderCommand::Action::filterEnd;command.color[3]=1;frame_.commands.push_back(command);}
+void Renderer::clearCompositionRect(float x,float y,float width,float height){RenderCommand command;command.action=RenderCommand::Action::clearRect;command.clearRectangle={x,y,std::max(0.0F,width),std::max(0.0F,height)};frame_.commands.push_back(command);}
+void Renderer::clipQueuedCommands(std::size_t first,const std::array<int,4>& bounds) {
+  for(std::size_t index=first;index<frame_.commands.size();++index){auto& command=frame_.commands[index];
+    if(command.clipped){command.clip={std::max(command.clip[0],bounds[0]),std::max(command.clip[1],bounds[1]),std::min(command.clip[2],bounds[2]),std::min(command.clip[3],bounds[3])};}
+    else {command.clip=bounds;command.clipped=true;}
+    command.clip[2]=std::max(command.clip[0],command.clip[2]);command.clip[3]=std::max(command.clip[1],command.clip[3]);
+  }
+}
+bool Renderer::queueTilingFrame(ImageHandle image,const std::array<float,6>& transform,const std::array<float,4>& region,
+  const std::array<float,2>& destination,const std::array<float,2>& origin,float alpha,BlendMode blend) {
+  const auto info=images_.inspect(image);if(!info||region[2]<=0||region[3]<=0)return false;
+  if(!queueTiled(image,transform,{origin[0],origin[1],destination[0],destination[1]},destination,alpha,0xffffff,blend))return false;
+  auto& command=frame_.commands.back();command.clampedTilingSampling=true;command.atlasTilingSampling=true;
+  command.tilingUvTransform={info->width/region[2],info->height/region[3],0,0};
+  command.tilingAtlasMapping={region[2]/info->width,region[3]/info->height,region[0]/info->width,region[1]/info->height};
+  command.tilingAtlasBounds={(region[0]+.5F)/info->width,(region[1]+.5F)/info->height,(region[0]+region[2]-.5F)/info->width,(region[1]+region[3]-.5F)/info->height};return true;
+}
+
 void Renderer::queueQuad(float x, float y, float width, float height,
                          const std::array<float, 4>& color) {
   auto boundedColor = color;
@@ -518,10 +542,49 @@ void Renderer::queueQuad(float x, float y, float width, float height,
   sceneSubmittedThisFrame_ = true;
 }
 
+void Renderer::queueTone(const std::array<float, 20>& matrix) {
+  RenderCommand command;
+  command.colorMatrix = matrix; command.appliesColorMatrix = true; command.color[3] = 1;
+  frame_.commands.push_back(command); sceneSubmittedThisFrame_ = true;
+}
+void Renderer::transformQueuedCommands(std::size_t first, const std::array<float, 6>& parent) {
+  const auto point = [&](float x, float y) {
+    return std::array<float, 2>{parent[0]*x+parent[2]*y+parent[4], parent[1]*x+parent[3]*y+parent[5]};
+  };
+  for (std::size_t index = first; index < frame_.commands.size(); ++index) {
+    auto& command = frame_.commands[index];
+    if (command.appliesColorMatrix) continue;
+    if (command.action == RenderCommand::Action::draw && command.primitive == RenderCommand::Primitive::effect) {
+      const auto origin = point(command.effect.viewport[0], command.effect.viewport[1]);
+      command.effect.viewport = {origin[0], origin[1], command.effect.viewport[2]*parent[0], command.effect.viewport[3]*parent[3]};
+    } else if (command.action == RenderCommand::Action::draw) {
+      const auto local = command.transform;
+      command.transform = {parent[0]*local[0]+parent[2]*local[1], parent[1]*local[0]+parent[3]*local[1],
+        parent[0]*local[2]+parent[2]*local[3], parent[1]*local[2]+parent[3]*local[3],
+        parent[0]*local[4]+parent[2]*local[5]+parent[4], parent[1]*local[4]+parent[3]*local[5]+parent[5]};
+      if (command.spriteWorldVertices) for (auto& vertex : command.spriteVertices) vertex = point(vertex[0], vertex[1]);
+      if (command.maskImage) {
+        const auto mask = command.maskTransform;
+        command.maskTransform = {parent[0]*mask[0]+parent[2]*mask[1], parent[1]*mask[0]+parent[3]*mask[1],
+          parent[0]*mask[2]+parent[2]*mask[3], parent[1]*mask[2]+parent[3]*mask[3],
+          parent[0]*mask[4]+parent[2]*mask[5]+parent[4], parent[1]*mask[4]+parent[3]*mask[5]+parent[5]};
+      }
+    }
+    if (command.clipped) {
+      const auto a = point(command.clip[0], command.clip[1]);
+      const auto b = point(command.clip[2], command.clip[3]);
+      command.clip = {int(std::floor(std::min(a[0], b[0]))), int(std::floor(std::min(a[1], b[1]))),
+        int(std::ceil(std::max(a[0],b[0]))), int(std::ceil(std::max(a[1],b[1])))};
+    }
+  }
+}
+
 bool Renderer::queueImage(ImageHandle image,
                           const std::array<float, 6>& transform,
                           const std::array<float, 4>& source, float alpha,
-                          std::uint32_t tint, BlendMode blendMode) {
+                          std::uint32_t tint, BlendMode blendMode,
+                          const std::array<float, 4>& tone,
+                          const std::array<float, 4>& blendColor) {
   if (!images_.inspect(image) ||
       !isValidBlendMode(static_cast<std::uint8_t>(blendMode))) return false;
   const std::array<float, 4> color = {
@@ -534,6 +597,9 @@ bool Renderer::queueImage(ImageHandle image,
   try {
     frame_.commands.push_back(
         {image, transform, source, {source[2], source[3]}, color, blendMode, false});
+    auto& command = frame_.commands.back();
+    command.colorTone = tone; command.blendColor = blendColor;
+    command.appliesSpriteColor = std::any_of(tone.begin(), tone.end(), [](float channel) { return channel != 0; }) || blendColor[3] > 0;
     sceneSubmittedThisFrame_ = true;
   } catch (...) {
     images_.endUse(image);

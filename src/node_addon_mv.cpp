@@ -3,6 +3,7 @@
 #include "mv_presentation.hpp"
 #include "mv_core_input.hpp"
 #include "mv_core_types.hpp"
+#include "mv_core_utils.hpp"
 
 namespace pmjs::addon {
 namespace {
@@ -66,6 +67,7 @@ struct EngineSession {
   std::unique_ptr<mv::Presentation> presentation;
   mv::core::Input input;
   mv::core::TouchInput touch;
+  bool focused = true;
 };
 constexpr napi_type_tag engineSessionTag{0x0578d08b153544caULL, 0x8f758858cefbf452ULL};
 EngineSession& session(napi_env env, napi_value object) {
@@ -96,6 +98,10 @@ napi_value newGame(napi_env env, napi_callback_info info) {
   try { const auto args = arguments(env, info); if (args.size() != 1) throw std::invalid_argument("newGame requires session"); session(env, args[0]).session->newGame(); return undefined(env); }
   catch (const std::exception& error) { return throwException(env, error); }
 }
+napi_value battleTest(napi_env env, napi_callback_info info) {
+  try { const auto args = arguments(env, info); if (args.size() != 1) throw std::invalid_argument("battleTest requires session"); session(env,args[0]).session->setupBattleTest(); return undefined(env); }
+  catch (const std::exception& error) { return throwException(env,error); }
+}
 napi_value stepEngine(napi_env env, napi_callback_info info) {
   try {
     const auto args = arguments(env, info);
@@ -104,12 +110,27 @@ napi_value stepEngine(napi_env env, napi_callback_info info) {
     mv::Input controls;
     if (args.size() == 2) {
       const auto input = readValue(env, args[1]);
-      controls = {input["direction"].integer(), input["ok"].boolean(), input["cancel"].boolean(), input["dash"].boolean()};
+      controls.direction = input["direction"].integer(); controls.ok = input["ok"].boolean();
+      controls.cancel = input["cancel"].boolean(); controls.dash = input["dash"].boolean();
+      if (!input["destinationX"].null()) controls.destinationX = input["destinationX"].integer();
+      if (!input["destinationY"].null()) controls.destinationY = input["destinationY"].integer();
+      if (!input["touchX"].null()) controls.touchX = input["touchX"].number();
+      if (!input["touchY"].null()) controls.touchY = input["touchY"].number();
+      controls.touchTriggered = input["touchTriggered"].boolean(); controls.touchPressed = input["touchPressed"].boolean(); controls.touchCancelled = input["touchCancelled"].boolean();
+      controls.touchRepeated = input["touchRepeated"].boolean(); controls.touchLongPressed = input["touchLongPressed"].boolean();
+      controls.touchMoved = input["touchMoved"].boolean(); controls.touchReleased = input["touchReleased"].boolean();
+      controls.wheelX = input["wheelX"].number(); controls.wheelY = input["wheelY"].number();
+      for (const auto& button : input["pressed"].array()) controls.pressed.insert(button.text());
     } else {
       auto& platform = host(env).platform;
-      if (!platform.windowFocused()) value.input.clear();
-      else for (const auto& event : platform.keyEvents()) {
-        if (event.down) value.input.keyDown(event.keyCode); else value.input.keyUp(event.keyCode);
+      const bool focused = platform.windowFocused();
+      if (!focused && value.focused) value.input.clear();
+      value.focused = focused;
+      if (focused) for (const auto& event : platform.keyEvents()) {
+        if (event.down) {
+          auto& resources = mv::ResourceHandler::shared();
+          if (value.input.keyDown(event.keyCode, resources.exists())) resources.retry();
+        } else value.input.keyUp(event.keyCode);
       }
       std::vector<mv::core::Gamepad> pads;
       for (const auto& source : platform.gamepads()) {
@@ -126,24 +147,36 @@ napi_value stepEngine(napi_env env, napi_callback_info info) {
       const double ratioY = double(drawable.second) / std::max(1, platform.windowHeight());
       const mv::core::Rectangle bounds{0,0,double(host(env).core.width()),double(host(env).core.height())};
       for (const auto& event : platform.pointerEvents()) {
+        if (event.syntheticTouch) continue;
         const double x = std::floor((event.x * ratioX - geometry.viewportX) * bounds.width / std::max(1,geometry.viewportWidth) + 0.5);
         const double y = std::floor((event.y * ratioY - geometry.viewportY) * bounds.height / std::max(1,geometry.viewportHeight) + 0.5);
         if (event.type == "mousedown") value.touch.mouseDown(event.button,x,y,bounds.contains(x,y),static_cast<double>(now));
         else if (event.type == "mouseup") value.touch.mouseUp(event.button,x,y);
         else if (event.type == "mousemove") value.touch.mouseMove(x,y);
         else if (event.type == "wheel") value.touch.wheel(event.deltaX,event.deltaY);
+        else if (event.type == "touchstart") value.touch.touchStart({{x,y}},event.touchCount,host(env).core.width(),host(env).core.height(),static_cast<double>(now));
+        else if (event.type == "touchmove") value.touch.touchMove(x,y);
+        else if (event.type == "touchend") value.touch.touchEnd(x,y);
+        else if (event.type == "touchcancel") value.touch.touchCancel();
       }
       platform.clearPointerEvents();
       value.touch.update();
+      controls.touchX = value.touch.x(); controls.touchY = value.touch.y();
+      controls.touchTriggered = value.touch.isTriggered(); controls.touchPressed = value.touch.isPressed(); controls.touchCancelled = value.touch.isCancelled();
+      controls.touchRepeated = value.touch.isRepeated(); controls.touchLongPressed = value.touch.isLongPressed();
+      controls.touchMoved = value.touch.isMoved(); controls.touchReleased = value.touch.isReleased();
+      controls.wheelX = value.touch.wheelX(); controls.wheelY = value.touch.wheelY();
       controls.direction = value.input.dir4(); controls.ok = value.input.isPressed("ok");
       controls.cancel = value.input.isPressed("cancel") || value.input.isPressed("menu");
       controls.dash = value.input.isPressed("shift");
+      for (const char* button : {"ok","cancel","menu","escape","shift","control","tab","pageup","pagedown","up","down","left","right","debug"})
+        if (value.input.isPressed(button)) controls.pressed.insert(button);
       controls.okTriggered = value.input.isTriggered("ok");
-      controls.cancelTriggered = value.input.isTriggered("cancel") || value.input.isTriggered("menu");
+      controls.cancelTriggered = value.input.isTriggered("cancel") || value.input.isTriggered("menu") || value.touch.isCancelled();
       const char* direction = controls.direction == 2 ? "down" : controls.direction == 4 ? "left" : controls.direction == 6 ? "right" : "up";
       controls.repeatedDirection = value.input.isRepeated(direction) ? controls.direction : 0;
     }
-    value.session->step(controls); return undefined(env);
+    value.session->step(controls); return boolean(env, !value.session->finished());
   } catch (const std::exception& error) { return throwException(env, error); }
 }
 napi_value acknowledge(napi_env env, napi_callback_info info) {
@@ -237,7 +270,7 @@ napi_value completeStorage(napi_env env, napi_callback_info info) {
 }
 void registerMvEngineBindings(napi_env env, napi_value exports) {
   napi_value engine; check(env, napi_create_object(env, &engine), "cannot create engine API");
-  method(env, engine, "create", createEngine); method(env, engine, "newGame", newGame);
+  method(env, engine, "create", createEngine); method(env, engine, "newGame", newGame); method(env, engine, "battleTest", battleTest);
   method(env, engine, "step", stepEngine); method(env, engine, "acknowledge", acknowledge);
   method(env, engine, "snapshot", snapshot); method(env, engine, "dispose", dispose);
   method(env, engine, "attach", attach); method(env, engine, "present", present); method(env, engine, "openTitle", openTitle);

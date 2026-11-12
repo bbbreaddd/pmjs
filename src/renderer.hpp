@@ -269,11 +269,22 @@ class Renderer {
   void setPresentScaleMode(PresentScaleMode mode);
   void resetPresentScaleMode();
   void beginFrame();
+  std::size_t queuedCommandCount() const { return frame_.commands.size(); }
+  void transformQueuedCommands(std::size_t first, const std::array<float, 6>& transform);
+  void queueTone(const std::array<float, 20>& matrix);
+  void beginCompositionGroup();
+  void endCompositionGroup();
+  void clearCompositionRect(float x,float y,float width,float height);
+  void clipQueuedCommands(std::size_t first,const std::array<int,4>& bounds);
+  bool queueTilingFrame(ImageHandle image,const std::array<float,6>& transform,const std::array<float,4>& frame,
+    const std::array<float,2>& destination,const std::array<float,2>& origin,float alpha,BlendMode blend);
   void queueQuad(float x, float y, float width, float height,
                  const std::array<float, 4>& color);
   bool queueImage(ImageHandle image, const std::array<float, 6>& transform,
                   const std::array<float, 4>& source, float alpha,
-                  std::uint32_t tint, BlendMode blendMode);
+                  std::uint32_t tint, BlendMode blendMode,
+                  const std::array<float, 4>& tone = {},
+                  const std::array<float, 4>& blendColor = {});
   bool queueTiled(ImageHandle image, const std::array<float, 6>& transform,
                   const std::array<float, 4>& source,
                   const std::array<float, 2>& destination, float alpha,

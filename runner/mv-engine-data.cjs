@@ -22,11 +22,11 @@ const startupIdentities = {
   'js/libs/lz-string.js': '7acc5ae524455fb67dee09375b4246386241f7dc4708dcdf8af0e78ca8267de7',
   'js/libs/iphone-inline-video.browser.js': '688ce9e9460d08399b898519b6d6811f8bd6722369e266b1f2761002be608f72',
 };
-const eventCodes = new Set([0, 101, 102, 108, 111, 112, 113, 115, 117, 118, 119, 121, 122, 123, 125, 126, 127, 128, 129, 201, 205, 211, 221, 230, 250, 301, 314, 318, 353, 354, 401, 402, 403, 404, 408, 411, 412, 413, 505, 601, 602, 603, 604]);
-const conditionTypes = new Set([0, 1, 2, 4, 5, 6, 7, 8, 9, 10]);
-const routeCodes = new Set([0, 15, 17, 18, 36]);
-const traitCodes = new Set([12, 14, 21, 22, 23, 31, 41, 51, 52, 62]);
-const effectCodes = new Set([11, 12, 21, 41]);
+const eventCodes = new Set([0, 101, 102, 103, 104, 105, 108, 111, 112, 113, 115, 117, 118, 119, 121, 122, 123, 124, 125, 126, 127, 128, 129, 132, 133, 134, 135, 136, 137, 138, 139, 140, 201, 202, 203, 204, 205, 206, 211, 212, 213, 214, 216, 217, 221, 222, 223, 224, 225, 230, 231, 232, 233, 234, 235, 236, 241, 242, 243, 244, 245, 246, 249, 250, 251, 261, 281, 282, 283, 284, 285, 301, 302, 303, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 331, 332, 333, 334, 335, 336, 337, 339, 340, 342, 351, 352, 353, 354, 355, 356, 401, 402, 403, 404, 405, 408, 411, 412, 413, 505, 601, 602, 603, 604, 605, 655]);
+const conditionTypes = new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+const routeCodes = new Set(Array.from({ length: 46 }, (_, index) => index));
+const traitCodes = new Set([11, 12, 13, 14, 21, 22, 23, 31, 32, 33, 34, 41, 42, 43, 44, 51, 52, 53, 54, 55, 61, 62, 63, 64]);
+const effectCodes = new Set([11, 12, 13, 21, 22, 31, 32, 33, 34, 41, 42, 43, 44]);
 const statNames = ['mhp', 'mmp', 'atk', 'def', 'mat', 'mdf', 'agi', 'luk'];
 const hash = source => createHash('sha256').update(source.replace(/\r\n/g, '\n')).digest('hex');
 
@@ -46,17 +46,17 @@ function inspectDatabase(database) {
       if (!eventCodes.has(command.code)) reject(at, `unsupported event command ${command.code}`);
       if (command.code === 111) {
         if (!conditionTypes.has(p[0])) reject(at, `unsupported condition ${p[0]}`);
-        else if (p[0] === 4 && ![0, 3, 4, 5, 6].includes(p[2])) reject(at, `unsupported actor condition ${p[2]}`);
+        else if (p[0] === 4 && ![0, 1, 2, 3, 4, 5, 6].includes(p[2])) reject(at, `unsupported actor condition ${p[2]}`);
       }
       if (command.code === 122) {
-        if (![0, 1, 2, 3].includes(p[3])) reject(at, `unsupported variable operand ${p[3]}`);
+        if (![0, 1, 2, 3, 4].includes(p[3])) reject(at, `unsupported variable operand ${p[3]}`);
         else if (p[3] === 3) {
           const [type, first, second] = p.slice(4);
           const supported = type >= 0 && type <= 7 &&
-            (type !== 3 || second === 0 || second >= 2 && second <= 11) &&
+            (type !== 3 || second >= 0 && second <= 11) &&
             (type !== 4 || second >= 0 && second <= 9) &&
-            (type !== 5 || second >= 0 && second <= 2) &&
-            (type !== 7 || first >= 0 && first <= 9 && first !== 5);
+            (type !== 5 || second >= 0 && second <= 4) &&
+            (type !== 7 || first >= 0 && first <= 9);
           if (!supported) reject(at, `unsupported game-data operand ${type}:${type === 7 ? first : second}`);
         }
       }
@@ -65,26 +65,21 @@ function inspectDatabase(database) {
   }
   for (const [id, map] of Object.entries(database.maps)) {
     const location = `Map${String(id).padStart(3, '0')}.json`;
-    if (![0].includes(map.scrollType)) reject(location, 'looping maps are unsupported');
     if (map.data.length !== map.width * map.height * 6) reject(location, 'invalid map tile count');
     for (const event of map.events.filter(Boolean)) {
       for (const [index, page] of event.pages.entries()) {
         const at = `${location}.events[${event.id}].pages[${index}]`;
-        if (page.moveType !== 0) reject(at, 'autonomous event movement is unsupported');
-        if (page.trigger === 4) reject(at, 'parallel event execution is unsupported');
         inspectRoute(page.moveRoute, `${at}.moveRoute`);
         inspectList(page.list, `${at}.list`);
       }
     }
   }
   for (const event of database.commonEvents.filter(Boolean)) {
-    if (event.trigger !== 0) reject(`CommonEvents.json[${event.id}]`, 'automatic common event is unsupported');
     inspectList(event.list, `CommonEvents.json[${event.id}].list`);
   }
   for (const troop of database.troops.filter(Boolean)) {
     for (const [index, page] of troop.pages.entries()) {
       const at = `Troops.json[${troop.id}].pages[${index}].list`;
-      if (page.list.some(command => command.code !== 0)) reject(at, 'battle event execution is unsupported');
       inspectList(page.list, at);
     }
   }
@@ -93,13 +88,13 @@ function inspectDatabase(database) {
       const at = `${name}[${item.id}]`;
       for (const trait of item.traits || []) {
         if (!traitCodes.has(trait.code)) reject(at, `unsupported trait ${trait.code}`);
-        else if (trait.code === 62 && trait.dataId !== 1) reject(at, `unsupported special battler flag ${trait.dataId}`);
+        else if (trait.code === 62 && ![0, 1, 2, 3].includes(trait.dataId)) reject(at, `unsupported special battler flag ${trait.dataId}`);
       }
       for (const effect of item.effects || []) if (!effectCodes.has(effect.code)) reject(at, `unsupported effect ${effect.code}`);
       if (item.damage?.type) {
         formulas.add(item.damage.formula);
         const arithmetic = item.damage.formula.replace(/\b[ab]\.[A-Za-z]+\b/g, field => statNames.includes(field.slice(2)) ? '0' : field);
-        if (/[^\d\s.+*/()\-]/.test(arithmetic)) reject(`${at}.damage.formula`, 'unsupported damage expression');
+        if (/[^\w\s.$+*/()%<>=!&|^~?:,\[\]\-]/.test(arithmetic)) reject(`${at}.damage.formula`, 'unsupported damage expression');
       }
     }
   }
