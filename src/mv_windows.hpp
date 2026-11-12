@@ -111,6 +111,7 @@ class Window_Selectable : public Window_Base {
   int topRow = 0;
   int maxCols = 1;
   int spacing = 12;
+  bool cursorFixed = false, cursorAll = false;
 
   Window_Selectable(int x, int y, int w, int h);
   static Rect itemRectFor(int itemIndex, int contentsWidth, int columns, int itemHeight, int spacing, int topRow);
@@ -327,12 +328,17 @@ class Window_MenuStatus : public Window_Selectable {
 class Window_MenuActor : public Window_MenuStatus {
  public:
   Window_MenuActor();
+  struct Selection { int index = 0; bool fixed = false, all = false; };
+  static Selection selection(const Session& session, const Value& item, int userIndex);
+  static void rememberTarget(Session& session, int index);
+  void selectForItem(const Session& session, const Value& item, int userIndex);
 };
 
 class Window_ItemCategory : public Window_Command {
  public:
   Window_ItemCategory();
-  void makeCommandList();
+  void makeCommandList(const Session& session);
+  static std::vector<CommandItem> makeCommands(const Session& session);
 };
 
 class Window_SkillType : public Window_Command {
@@ -340,6 +346,7 @@ class Window_SkillType : public Window_Command {
   int actorId = 0;
   Window_SkillType(int x, int y);
   void makeCommandList(const Session& session);
+  static std::vector<CommandItem> makeCommands(const Session& session, int actorId);
 };
 
 class Window_SkillStatus : public Window_Base {
@@ -480,25 +487,32 @@ class Window_NameEdit : public Window_Base {
   static std::string initialName(const std::string& name, int maxLength);
   static bool addCharacter(std::string& name, int maxLength, const std::string& character);
   static bool removeCharacter(std::string& name);
+  static Rect placement(int screenWidth, int screenHeight);
   Window_NameEdit(int actorIdVal, int maxLen, std::string initialName);
   int faceWidth() const { return 144; }
-  int charWidth(bool isJapanese = false) const;
-  int left(bool isJapanese = false) const;
-  Rect itemRect(int charIndex, bool isJapanese = false) const;
-  Rect underlineRect(int charIndex, bool isJapanese = false) const;
+  double charWidth(bool isJapanese = false) const;
+  double left(bool isJapanese = false) const;
+  core::Rectangle itemRect(int charIndex, bool isJapanese = false) const;
+  core::Rectangle underlineRect(int charIndex, bool isJapanese = false) const;
+  void refresh(const core::PixelBitmap* face, int faceIndex, bool isJapanese);
   bool add(const std::string& ch);
   bool back();
-  void restoreDefault();
+  bool restoreDefault();
 };
 
 class Window_NameInput : public Window_Selectable {
  public:
   int page = 0;
+  std::string locale = "en";
   Window_NameInput();
   int maxItems() const override { return 90; }
   bool isOk() const { return index == 89; }
   bool isPageChange() const { return index == 88; }
   std::string character() const;
+  static Rect cellRect(int index);
+  static int moveGridCursor(int index, int direction, bool wrap);
+  static int changePage(int page, bool down, const std::string& locale);
+  void refresh();
 };
 
 class Window_ChoiceList : public Window_Command {
@@ -628,7 +642,7 @@ class Window_DebugEdit : public Window_Selectable {
   int topId = 1;
   Window_DebugEdit(int x, int y, int width);
   int maxItems() const override { return 10; }
-  int currentId() const { return topId + std::max(0, index); }
+  int currentId() const { return topId + index; }
   static std::string itemName(const Session& session, const std::string& mode, int id);
   static std::string itemStatus(const Session& session, const std::string& mode, int id);
   static bool processInput(Session& session, const std::string& mode, int id, bool confirm, int direction, bool pageUp, bool pageDown);

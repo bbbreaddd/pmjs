@@ -54,6 +54,7 @@ Presentation::Presentation(RuntimeCore& core, Session& session, Value settings)
 }
 Presentation::~Presentation() {
   session_.setEnemyBitmapHeightResolver({});
+  clearNameContents();
   clearMapOverlays();
   clearMovie();
   clearMapGeometry();
@@ -245,7 +246,7 @@ void Presentation::map() {
 void Presentation::hitTarget(int x, int y, int width, int height, int index, int action) {
   session_.uiHitTargets_.push_back({x,y,width,height,index,session_.ui_.category,action,session_.ui_.scene});
 }
-void Presentation::window(int x,int y,int width,int height,int selected,int rows,int openness) {
+void Presentation::window(int x,int y,int width,int height,int selected,int rows,int openness,std::shared_ptr<core::PixelBitmap> contents,std::optional<core::Rectangle> cursor) {
   if(openness<=0)return;
   if(selected>=0&&rows>0&&openness>=255){const int base=session_.ui_.cursor-selected;for(int row=0;row<rows;++row)hitTarget(x+18,y+18+row*36,width-36,36,base+row);}
   if(!coreWindowskin_) {
@@ -255,10 +256,12 @@ void Presentation::window(int x,int y,int width,int height,int selected,int rows
   }
   auto& window=coreWindows_[{x,y,width,height}];if(!window)window=std::make_shared<core::Window>();
   window->windowskin=coreWindowskin_;window->move(x,y,width,height);window->openness=std::clamp(openness,0,255);
+  window->contents=std::move(contents);
   window->active=selected>=0;window->synchronize(session_.ticks_);window->animationCount=session_.ticks_;
   const auto& tone=session_.system_.windowTone.null()?session_.database_["system"]["windowTone"]:session_.system_.windowTone;
   window->setTone(tone[0].number(),tone[1].number(),tone[2].number());
-  if(selected>=0&&rows>0)window->setCursorRect(0,selected%rows*36,std::max(0,width-36),36);else window->setCursorRect(0,0,0,0);
+  if(cursor)window->setCursorRect(cursor->x,cursor->y,cursor->width,cursor->height);
+  else if(selected>=0&&rows>0)window->setCursorRect(0,selected%rows*36,std::max(0,width-36),36);else window->setCursorRect(0,0,0,0);
   window->render(core_.renderer());
 }
 void Presentation::text(const std::string& value, int x, int y, int width, int color, int size, bool right, float opacity) {
@@ -439,67 +442,136 @@ void Presentation::message() {
     }
   }
 }
+void Presentation::clearNameContents() {
+  nameGrid_.reset(); nameEdit_.reset(); nameFace_.reset(); nameFaceFile_.clear();
+  nameFaceIndex_ = nameActor_ = -1; nameFaceReady_ = false;
+}
 void Presentation::menu() {
   const auto& ui = session_.ui_; const int width = core_.width(), height = core_.height();
   if (ui.scene == Scene::name) {
-    const int panelWidth = std::min(width,720), px = (width-panelWidth)/2;
-    window(px,0,panelWidth,180); face(ui.nameActorId,px+18,18);
-    text(ui.nameInput,px+180,72,panelWidth-198);
-    const int top = 180, cellWidth = (panelWidth-36)/10;
-    window(px,top,panelWidth,360);
-    const auto& table = nameInputTable(ui.namePage,session_.database_["system"]["locale"].text());
-    core_.renderer().queueQuad(px+18+(ui.cursor%10)*cellWidth,top+18+(ui.cursor/10)*36,cellWidth,36,{0.4F,0.5F,0.8F,0.4F});
+    bool editRedraw = false, gridRedraw = false;
+    if (!nameEdit_ || nameActor_ != ui.nameActorId || nameEdit_->maxLength != std::max(1,ui.nameMaxLength)) {
+      clearNameContents();
+      nameActor_ = ui.nameActorId;
+      nameEdit_ = std::make_shared<Window_NameEdit>(ui.nameActorId,ui.nameMaxLength,ui.nameInput);
+      editRedraw = true;
+    }
+    if (!nameGrid_) { nameGrid_ = std::make_shared<Window_NameInput>(); gridRedraw = true; }
+    const auto& actor = session_.actors_.at(ui.nameActorId);
+    const auto locale = session_.database_["system"]["locale"].text();
+    const bool japanese = locale.starts_with("ja");
+    if (nameGrid_->locale != locale) { nameGrid_->locale = locale; editRedraw = gridRedraw = true; }
+    if (nameGrid_->page != ui.namePage) { nameGrid_->page = ui.namePage; gridRedraw = true; }
+    nameGrid_->index = ui.cursor;
+    if (nameEdit_->name != ui.nameInput) {
+      nameEdit_->name = ui.nameInput;
+      nameEdit_->index = static_cast<int>(core::utf16Length(ui.nameInput));
+      editRedraw = true;
+    }
+    const std::string file = actor.faceName.empty() ? "" : "img/faces/"+actor.faceName+".png";
+    if (file != nameFaceFile_) {
+      nameFaceFile_ = file;
+      nameFace_ = file.empty() ? nullptr : core::PixelBitmap::load(file);
+      editRedraw = true;
+    }
+    const bool faceReady = !nameFace_ || nameFace_->isReady();
+    if (nameFaceReady_ != faceReady || nameFaceIndex_ != actor.faceIndex) {
+      nameFaceReady_ = faceReady; nameFaceIndex_ = actor.faceIndex; editRedraw = true;
+    }
+    const auto color = colors_[0];
+    const auto normalColor = core::Utils::rgbToCssColor((color>>24)&255,(color>>16)&255,(color>>8)&255);
+    nameEdit_->contents.textColor = nameGrid_->contents.textColor = normalColor;
+    if (editRedraw) nameEdit_->refresh(nameFace_.get(),actor.faceIndex,japanese);
+    if (gridRedraw) nameGrid_->refresh();
+    const auto edit = Window_NameEdit::placement(width,height);
+    const int px = edit.x, editY = edit.y, inputY = editY+edit.height+8;
+    nameEdit_->rect = edit; nameGrid_->rect = {px,inputY,480,360};
+    window(px,editY,480,180,-1,0,255,
+      std::shared_ptr<core::PixelBitmap>(nameEdit_,&nameEdit_->contents),nameEdit_->itemRect(nameEdit_->index,japanese));
+    const auto cursor = Window_NameInput::cellRect(ui.cursor);
+    window(px,inputY,480,360,ui.cursor,0,255,
+      std::shared_ptr<core::PixelBitmap>(nameGrid_,&nameGrid_->contents),
+      core::Rectangle{double(cursor.x),double(cursor.y),double(cursor.width),double(cursor.height)});
     for (int cell = 0; cell < 90; ++cell) {
-      hitTarget(px+18+(cell%10)*cellWidth,top+18+(cell/10)*36,cellWidth,36,cell);
-      text(table[cell],px+18+(cell%10)*cellWidth,top+18+(cell/10)*36,cellWidth,0,24);
+      const auto rect = Window_NameInput::cellRect(cell);
+      hitTarget(px+18+rect.x,inputY+18+rect.y,rect.width,rect.height,cell);
     }
     return;
   }
   if (ui.scene == Scene::shop) {
-    window(0,0,width-240,72); window(width-240,0,240,72);
+    const bool statusVisible = ui.category == 1 || ui.category == 3;
+    std::optional<ShopGood> selected;
+    if (ui.category == 3) selected = ShopGood{ui.shopKind,ui.shopId,ui.shopPrice};
+    else if (ui.category == 1) {
+      const auto goods = session_.shopItems(false);
+      if (ui.cursor >= 0 && ui.cursor < static_cast<int>(goods.size())) selected = goods[ui.cursor];
+    }
+    window(0,0,width,108);
+    if (selected) textEx(session_.database_[selected->kind == 0 ? "items" : selected->kind == 1 ? "weapons" : "armors"][selected->id]["description"].text(),24,18,width-48);
+    window(0,108,width-240,72); window(width-240,108,240,72);
     const auto commands = Window_ShopCommand::makeCommands(session_,ui.shopPurchaseOnly);
     for (std::size_t i = 0; i < commands.size(); ++i) {
       const auto rect = Window_Selectable::itemRectFor(static_cast<int>(i),width-276,3,36,12,0);
       if (ui.category == 0) {
-        hitTarget(18+rect.x,18,rect.width,36,static_cast<int>(i));
-        if (ui.cursor == static_cast<int>(i)) core_.renderer().queueQuad(18+rect.x,18,rect.width,36,{0.4F,0.5F,0.8F,0.4F});
+        hitTarget(18+rect.x,126,rect.width,36,static_cast<int>(i));
+        if (ui.cursor == static_cast<int>(i)) core_.renderer().queueQuad(18+rect.x,126,rect.width,36,{0.4F,0.5F,0.8F,0.4F});
       }
-      text(commands[i].name,24+rect.x,18,rect.width-12,0,28,false,commands[i].enabled ? 1 : 160.0F/255);
+      text(commands[i].name,24+rect.x,126,rect.width-12,0,28,false,commands[i].enabled ? 1 : 160.0F/255);
     }
-    text(std::to_string(session_.gold_),width-222,18,180,0,28,true);
-    window(0,72,width,height-72);
+    text(std::to_string(session_.gold_),width-222,126,180,0,28,true);
+    window(0,180,statusVisible ? 456 : width,height-180);
+    if (statusVisible) {
+      window(456,180,width-456,height-180);
+      if (selected) {
+        text(TextManager::possession(session_),480,198,width-564,16);
+        text(std::to_string(Window_ShopStatus::possession(session_,selected->kind,selected->id)),width-84,198,60,0,28,true);
+        const auto rows = Window_ShopStatus::equipInfo(session_,selected->kind,selected->id,ui.shopStatusPage);
+        for (std::size_t index = 0; index < rows.size(); ++index) {
+          const auto& row = rows[index]; const int y = 270+static_cast<int>(36*(index*2.4));
+          const float opacity = row.enabled ? 1 : 160.0F/255;
+          text(session_.actor(row.actorId).name,480,y,168,0,28,false,opacity);
+          if (row.enabled) text((row.paramChange > 0 ? "+" : "")+std::to_string(row.paramChange),width-108,y,84,row.paramChange > 0 ? 24 : row.paramChange < 0 ? 25 : 0,28,true);
+          if (row.equippedItem) {
+            const auto& item = session_.database_[row.equippedItem/100000 == 1 ? "weapons" : "armors"][row.equippedItem%100000];
+            const auto icons = image("img/system/IconSet.png"); const int icon = item["iconIndex"].integer();
+            quad(icons.handle,icon%16*32,icon/16*32,32,32,482,y+38,32,32,opacity);
+            text(item["name"].text(),516,y+36,width-540,0,28,false,opacity);
+          }
+        }
+      }
+    }
     if (ui.category == 3) {
       const auto& item = session_.database_[ui.shopKind == 0 ? "items" : ui.shopKind == 1 ? "weapons" : "armors"][ui.shopId];
-      text(item["name"].text(),24,108,width-48); text("Quantity",24,180,200,16);
-      text(std::to_string(ui.shopItemCount),240,180,120,0,28,true);
-      text(std::to_string(static_cast<std::int64_t>(ui.shopItemCount)*ui.shopPrice),width-240,252,180,0,28,true);
+      text(item["name"].text(),24,216,408); text("×",24,288,200,16);
+      text(std::to_string(ui.shopItemCount),240,288,120,0,28,true);
+      text(std::to_string(static_cast<std::int64_t>(ui.shopItemCount)*ui.shopPrice),252,360,180,0,28,true);
       const std::array<std::string,5> buttons{"-10","-1","+1","+10","OK"};
       const std::array<int,5> actions{7,5,4,6,1};
-      for (int button = 0; button < 5; ++button) { const int bx = 24+button*120; hitTarget(bx,324,108,48,0,actions[button]); text(buttons[button],bx,330,108); }
+      for (int button = 0; button < 5; ++button) { const int bx = 24+button*84; hitTarget(bx,432,72,48,0,actions[button]); text(buttons[button],bx,438,72); }
       return;
     }
     if (ui.category == 0) return;
     const bool selling = ui.category == 2 || ui.category == 4;
     if (selling) {
-      window(0,72,width,72);
+      window(0,180,width,72);
       const std::array<std::string,4> categories{TextManager::item(session_),TextManager::weapon(session_),TextManager::armor(session_),TextManager::keyItem(session_)};
       for (int index = 0; index < 4; ++index) {
         const auto rect = Window_Selectable::itemRectFor(index,width-36,4,36,12,0);
         if (ui.category == 4) {
-          hitTarget(18+rect.x,90,rect.width,36,index);
-          if (ui.cursor == index) core_.renderer().queueQuad(18+rect.x,90,rect.width,36,{0.4F,0.5F,0.8F,0.4F});
+          hitTarget(18+rect.x,198,rect.width,36,index);
+          if (ui.cursor == index) core_.renderer().queueQuad(18+rect.x,198,rect.width,36,{0.4F,0.5F,0.8F,0.4F});
         }
-        text(categories[index],24+rect.x,90,rect.width-12);
+        text(categories[index],24+rect.x,198,rect.width-12);
       }
     }
     const auto goods = session_.shopItems(selling);
-    const int columns = selling ? 2 : 1, baseY = selling ? 162 : 90;
+    const int columns = selling ? 2 : 1, baseY = selling ? 270 : 198;
     const int rows = std::max(1,(height-baseY-18)/36);
     session_.ui_.listPageRows = rows;
     session_.ui_.listTopRow = Window_Selectable::clampTopRow(ui.listTopRow,static_cast<int>(goods.size()),columns,rows);
     const int first = ui.listTopRow*columns;
     for (int index = first; index < std::min(first+rows*columns,static_cast<int>(goods.size())); ++index) {
-      const auto rect = Window_Selectable::itemRectFor(index,width-36,columns,36,12,ui.listTopRow);
+      const auto rect = Window_Selectable::itemRectFor(index,(selling ? width : 456)-36,columns,36,12,ui.listTopRow);
       const int x = 18+rect.x, y = baseY+rect.y;
       if (ui.category != 4) {
         hitTarget(x,y,rect.width,36,index);
@@ -533,26 +605,40 @@ void Presentation::menu() {
     return;
   }
   if (ui.scene == Scene::save || ui.scene == Scene::load) {
-    window(0, 0, width, 72); text(ui.scene == Scene::save ? "Save to which file?" : "Load which file?", 18, 18);
-    const int first = ui.cursor / 4 * 4;
-    window(0, 72, width, height - 72, -1);
-    for (int i = first; i < first + 4; ++i) {
-      const int y = 90+(i-first)*132;
-      hitTarget(18,y,width-36,128,i);
-      if (i == ui.cursor) core_.renderer().queueQuad(18,y,width-36,128,{0.4F,0.5F,0.8F,0.4F});
-      text("File "+std::to_string(i+1),24,y);
-      if (i+1 >= static_cast<int>(session_.saveMetadata_.size())) continue;
-      const auto& slot = session_.saveMetadata_[i+1];
-      if (slot.null()) continue;
-      text(slot["title"].text(),192,y,width-216); text(slot["playtime"].text(),width-210,y+72,180,0,28,true);
-      int offset = 0;
-      for (const auto& entry : slot["characters"].array()) {
-        if (entry[0].text().empty()) continue;
-        const auto source = image("img/characters/"+entry[0].text()+".png");
-        const bool big = entry[0].text().find('$')<2;
-        const int cw = source.width/(big ? 3 : 12), ch = source.height/(big ? 4 : 8), index = entry[1].integer();
-        quad(source.handle,(big ? 1 : index%4*3+1)*cw,(big ? 0 : index/4*4)*ch,cw,ch,192+offset*48,y+72-ch,cw,ch); ++offset;
+    const bool loading = ui.scene == Scene::load;
+    window(0,0,width,72); text(loading ? TextManager::loadMessage(session_) : TextManager::saveMessage(session_),18,18);
+    const int rows = Window_SavefileList::visibleItems(), count = Window_SavefileList::fileCount();
+    if (!ui.listMemoryApplied) { session_.ui_.listTopRow = Window_Selectable::visibleTopRow(ui.cursor,ui.listTopRow,count,1,rows); session_.ui_.listMemoryApplied = true; }
+    session_.ui_.listTopRow = Window_Selectable::clampTopRow(ui.listTopRow,count,1,rows);
+    const int rowHeight = Window_SavefileList::rowHeight(height-72);
+    window(0,72,width,height-72,-1);
+    for (int index = ui.listTopRow; index < std::min(count,ui.listTopRow+rows); ++index) {
+      const auto rect = Window_Selectable::itemRectFor(index,width-36,1,rowHeight,12,ui.listTopRow);
+      const int x = 18+rect.x, y = 90+rect.y, id = index+1;
+      const bool valid = Window_SavefileList::isEnabled(session_,id,true);
+      hitTarget(x,y,rect.width,rect.height,index);
+      if (index == ui.cursor) core_.renderer().queueQuad(x,y,rect.width,rect.height,{0.4F,0.5F,0.8F,0.4F});
+      text(Window_SavefileList::fileLabel(session_,id),x+6,y,180,0,28,false,!loading || valid ? 1 : 160.0F/255);
+      const auto& info = Window_SavefileList::metadata(session_,id);
+      if (info.null()) continue;
+      const float opacity = valid ? 1 : 160.0F/255;
+      if (rect.width-12 >= 420) {
+        text(info["title"].text(),x+198,y,rect.width-204,0,28,false,opacity);
+        if (valid) {
+          int offset = 0;
+          for (const auto& entry : info["characters"].array()) {
+            if (!entry[0].text().empty()) {
+              const auto source = image("img/characters/"+entry[0].text()+".png");
+              Character character; character.characterName = entry[0].text(); character.characterIndex = entry[1].integer();
+              Sprite_Character sprite; sprite.setCharacter(&character);
+              const auto frame = sprite.sourceFrame(source.width,source.height,48,48);
+              quad(source.handle,frame.x,frame.y,frame.width,frame.height,x+226+offset*48-frame.width/2,y+rect.height-4-frame.height,frame.width,frame.height);
+            }
+            ++offset;
+          }
+        }
       }
+      if (rect.y+rect.height-36 >= 36) text(info["playtime"].text(),x+6,y+rect.height-36,rect.width-12,0,28,true,opacity);
     }
     return;
   }
@@ -575,30 +661,27 @@ void Presentation::menu() {
     return;
   }
   if (ui.scene == Scene::debug) {
-    const int switches = std::max(0,static_cast<int>(session_.database_["system"]["switches"].array().size())-1);
-    const int variables = std::max(0,static_cast<int>(session_.database_["system"]["variables"].array().size())-1);
-    const int switchBlocks = (switches+9)/10, variableBlocks = (variables+9)/10;
-    const int selected = ui.category == 0 ? ui.cursor : ui.listCursor;
-    const int rows = std::max(1,(height-36)/36), first = std::max(0,selected-rows+1);
-    window(0,0,246,height,ui.category == 0 ? selected-first : -1,rows);
-    for (int row = 0; row < rows && first+row < switchBlocks+variableBlocks; ++row) {
-      const int index = first+row; const bool sw = index < switchBlocks;
-      const int id = (sw ? index : index-switchBlocks)*10+1;
-      text(std::string(sw ? "S" : "V")+" ["+std::to_string(id)+"-"+std::to_string(id+9)+"]",18,18+row*36,210);
+    const int count = Window_DebugRange::itemCount(session_), selected = ui.category == 0 ? ui.cursor : ui.listCursor;
+    const int rows = std::max(1,(height-36)/36);
+    session_.ui_.listPageRows = rows;
+    session_.ui_.listTopRow = Window_Selectable::clampTopRow(ui.listTopRow,count,1,rows);
+    window(0,0,246,height,-1);
+    for (int index = ui.listTopRow; index < std::min(count,ui.listTopRow+rows); ++index) {
+      const auto rect = Window_Selectable::itemRectFor(index,210,1,36,12,ui.listTopRow);
+      if (ui.category == 0) hitTarget(18,18+rect.y,210,36,index);
+      if (ui.category == 0 && index == selected) core_.renderer().queueQuad(18,18+rect.y,210,36,{0.4F,0.5F,0.8F,0.4F});
+      text(Window_DebugRange::labelFor(session_,index),24,18+rect.y,198);
     }
     window(246,0,width-246,396,ui.category == 1 ? ui.cursor : -1,10);
-    const bool sw = selected < switchBlocks; const int top = (sw ? selected : selected-switchBlocks)*10+1;
+    const auto mode = Window_DebugRange::modeFor(session_,selected);
+    const int top = Window_DebugRange::topIdFor(session_,selected);
     for (int row = 0; row < 10; ++row) {
-      const int id = top+row;
-      const auto& table = session_.database_["system"][sw ? "switches" : "variables"];
-      if (id >= static_cast<int>(table.array().size())) continue;
-      text(std::to_string(id)+": "+table[id].text(),264,18+row*36,width-444);
-      std::string label;
-      if (sw) { const auto it = session_.switches_.find(id); label = it != session_.switches_.end() && it->second ? "ON" : "OFF"; }
-      else { const auto& value = session_.variable(id); if (std::holds_alternative<std::string>(value.data)) label = value.text(); else label = std::to_string(value.number()); }
-      text(label,width-162,18+row*36,126,0,28,true);
+      const int id = top+row, y = 18+row*36;
+      if (ui.category == 1) hitTarget(264,y,width-282,36,row);
+      text(core::numberPadZero(id,4)+": "+Window_DebugEdit::itemName(session_,mode,id),264,y,width-444);
+      text(Window_DebugEdit::itemStatus(session_,mode,id),width-162,y,126,0,28,true);
     }
-    text(sw ? "OK: toggle switch" : "Left/Right: -1/+1   Shift: x10",264,432,width-282);
+    text(mode == "switch" ? "Enter: ON / OFF" : "Left: -1   Right: +1   Pageup: -10   Pagedown: +10",264,432,width-282);
     return;
   }
   if (session_.party_.empty()) return;
@@ -608,7 +691,7 @@ void Presentation::menu() {
     actorStatus(actorId, 24, 18, width - 48, true);
     const std::array<std::string, 6> labels{"Attack", "Defense", "M.Attack", "M.Defense", "Agility", "Luck"};
     for (int i = 0; i < 6; ++i) { text(labels[i], 24, 216 + i * 36, 180, 16); text(std::to_string(static_cast<int>(session_.parameter(session_.actors_.at(actorId), i + 2))), 210, 216 + i * 36, 100, 0, 28, true); }
-    text(session_.actors_.at(actorId).profile, 24, height - 90);
+    textEx(session_.actors_.at(actorId).profile, 24, height - 90, width - 48);
     return;
   }
   if (ui.scene == Scene::equip) {
@@ -679,23 +762,22 @@ void Presentation::menu() {
   const bool skill = ui.scene == Scene::skill;
   std::vector<int> entries;
   if (skill) {
-    const auto types = session_.battleSkillTypes(ui.actor);
+    const auto types = Window_SkillType::makeCommands(session_,actorId);
     for (std::size_t i = 0; i < types.size(); ++i) {
       const int columnWidth = std::max(120,width/std::max(1,static_cast<int>(types.size())));
       if (ui.category == 0 && static_cast<int>(i)==ui.cursor) core_.renderer().queueQuad(18+i*columnWidth,18,columnWidth-12,36,{0.4F,0.5F,0.8F,0.4F});
       if (ui.category == 0) hitTarget(18+i*columnWidth,18,columnWidth-12,36,static_cast<int>(i));
-      text(session_.database_["system"]["skillTypes"][types[i]].text(),24+i*columnWidth,18,columnWidth-24);
+      text(types[i].name,24+i*columnWidth,18,columnWidth-24);
     }
     entries = Window_SkillList::makeSkillList(session_, actorId, ui.skillType);
   } else {
-    static const std::array<std::string,4> categories{"item","weapon","armor","keyItem"};
-    const std::array<std::string,4> labels{TextManager::item(session_),TextManager::weapon(session_),TextManager::armor(session_),TextManager::keyItem(session_)};
+    const auto categories = Window_ItemCategory::makeCommands(session_);
     for (int i = 0; i < 4; ++i) {
       if (ui.category == 0 && ui.cursor == i) core_.renderer().queueQuad(18+i*(width/4),18,width/4-24,36,{0.4F,0.5F,0.8F,0.4F});
       if (ui.category == 0) hitTarget(18+i*(width/4),18,width/4-24,36,i);
-      text(labels[i],24+i*(width/4),18,width/4-36);
+      text(categories[i].name,24+i*(width/4),18,width/4-36);
     }
-    entries = Window_ItemList::makeItemList(session_, categories[std::clamp(ui.slot,0,3)]);
+    entries = Window_ItemList::makeItemList(session_, categories[std::clamp(ui.slot,0,3)].symbol);
   }
   const int rows = std::max(1,(height-108)/36);
   session_.ui_.listPageRows = rows;
@@ -711,7 +793,18 @@ void Presentation::menu() {
     text(entry["name"].text(),x+6,y,std::max(0,rect.width-108));
     text(std::to_string(skill ? entry["mpCost"].integer() : session_.inventory_[encoded]),x+rect.width-86,y,80,0,28,true);
   }
-  if (ui.targeting) { window(width / 2, 72, width / 2, height - 72); for (std::size_t i = 0; i < session_.party_.size(); ++i) { const int y = 90 + static_cast<int>(i) * 180; if (static_cast<int>(i) == ui.cursor) core_.renderer().queueQuad(width / 2 + 18, y, width / 2 - 36, 172, {0.4F, 0.5F, 0.8F, 0.4F}); actorStatus(session_.party_[i], width / 2 + 24, y, width / 2 - 48, true); } }
+  if (ui.targeting) {
+    const auto& item = session_.database_[ui.itemAction ? "items" : "skills"][ui.pendingId];
+    const auto selection = Window_MenuActor::selection(session_,item,ui.actor);
+    window(width / 2, 72, width / 2, height - 72);
+    for (std::size_t i = 0; i < session_.party_.size(); ++i) {
+      const int y = 90 + static_cast<int>(i) * 180;
+      hitTarget(width / 2 + 18,y,width / 2 - 36,172,static_cast<int>(i));
+      if (selection.all || static_cast<int>(i) == (selection.fixed ? selection.index : ui.cursor))
+        core_.renderer().queueQuad(width / 2 + 18,y,width / 2 - 36,172,{0.4F,0.5F,0.8F,0.4F});
+      actorStatus(session_.party_[i], width / 2 + 24, y, width / 2 - 48, true);
+    }
+  }
 }
 void Presentation::clearBattleContents() {
   battlerDisplays_.clear();
@@ -1011,6 +1104,7 @@ void Presentation::render() {
     clearMapGeometry();
     clearTiledGeometry();
     clearBattleContents();
+    clearNameContents();
     sceneTickOrigin_ = session_.ticks_;
     imageCache_->clear();
     images_.clear();

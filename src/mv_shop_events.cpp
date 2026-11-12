@@ -42,6 +42,17 @@ int Session::shopMaximum(const ShopGood& good, bool selling, int money) const {
 
 void Session::updateShop(bool ok, bool cancel, int direction) {
   const auto sound = [&](int id) { SoundManager::playSystemSound(*this, id); };
+  const bool shift = currentInput_.dash || currentInput_.pressed.contains("shift");
+  const bool shiftTriggered = shift && !ui_.shopStatusShiftHeld;
+  ui_.shopStatusShiftHeld = shift;
+  const bool statusVisible = ui_.category == 1 || ui_.category == 3;
+  const bool statusTouched = currentInput_.touchTriggered && currentInput_.touchX && currentInput_.touchY &&
+    *currentInput_.touchX >= 456 && *currentInput_.touchX < core::Graphics::boxWidth &&
+    *currentInput_.touchY >= 180 && *currentInput_.touchY < core::Graphics::boxHeight;
+  if (statusVisible && Window_ShopStatus::maxPages(*this) >= 2 && (shiftTriggered || statusTouched)) {
+    ui_.shopStatusPage = Window_ShopStatus::nextPage(*this,ui_.shopStatusPage);
+    sound(0);
+  }
   const auto leave = [&] {
     if (SceneManager::hasPrevious(*this)) SceneManager::popScene(*this);
     else SceneManager::gotoScene(*this, Scene::map);

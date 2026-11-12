@@ -37,6 +37,13 @@ class Presentation {
   CanvasHandle destinationCanvas_ = 0;
   std::uint64_t mapNameRevision_ = 0, mapNameTick_ = 0, destinationTick_ = 0;
   std::unique_ptr<Window_MapName> mapNameWindow_;
+  std::shared_ptr<Window_NameEdit> nameEdit_;
+  std::shared_ptr<Window_NameInput> nameGrid_;
+  std::shared_ptr<core::PixelBitmap> nameFace_;
+  std::string nameFaceFile_;
+  int nameFaceIndex_ = -1, nameActor_ = -1;
+  bool nameFaceReady_ = false;
+  void clearNameContents();
   Sprite_Destination destinationSprite_;
   bool destinationStarted_ = false;
   void tiledMap(const Value& data);
@@ -70,7 +77,7 @@ class Presentation {
   void mapPictures();
   void mapAmbience();
   void hitTarget(int x, int y, int width, int height, int index, int action = 0);
-  void window(int x, int y, int width, int height, int selected = -1, int rows = 0, int openness = 255);
+  void window(int x, int y, int width, int height, int selected = -1, int rows = 0, int openness = 255, std::shared_ptr<core::PixelBitmap> contents = {}, std::optional<core::Rectangle> cursor = {});
   void textEx(const std::string& value, int x, int y, int width = 0, int size = 28, bool prepared = false);
   void text(const std::string& value, int x, int y, int width = 0, int color = 0, int size = 28, bool right = false, float opacity = 1);
   void face(int actorId, int x, int y);

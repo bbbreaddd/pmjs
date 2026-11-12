@@ -704,10 +704,17 @@ Battler Session::previewEquipment(const Battler& actor, int slot, int item) cons
 }
 bool Session::canEquip(const Battler& actor, const Value& item, int slot) const {
   if (item.null() || item["etypeId"].integer() != equipSlotType(actor, slot)) return false;
+  return canEquipItem(actor,item);
+}
+bool Session::canEquipItem(const Battler& actor, const Value& item) const {
+  if (item.null()) return false;
+  const bool weapon = !item["wtypeId"].null();
+  if (!weapon && item["atypeId"].null()) return false;
+  const int etype = item["etypeId"].integer();
   bool permitted = false;
   for (const auto* object : traitObjects(actor)) for (const auto& entry : (*object)["traits"].array()) {
-    if (entry["code"].integer() == 54 && entry["dataId"].integer() == equipSlotType(actor, slot)) return false;
-    if (entry["code"].integer() == (equipSlotType(actor, slot) == 1 ? 51 : 52) && entry["dataId"].integer() == item[equipSlotType(actor, slot) == 1 ? "wtypeId" : "atypeId"].integer()) permitted = true;
+    if (entry["code"].integer() == 54 && entry["dataId"].integer() == etype) return false;
+    if (entry["code"].integer() == (weapon ? 51 : 52) && entry["dataId"].integer() == item[weapon ? "wtypeId" : "atypeId"].integer()) permitted = true;
   }
   return permitted;
 }

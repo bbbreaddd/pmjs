@@ -258,11 +258,16 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
     return;
   }
   if (ui_.scene == Scene::save || ui_.scene == Scene::load) {
-    cursor(20);
+    const int count = Window_SavefileList::fileCount(), rows = Window_SavefileList::visibleItems();
+    ui_.cursor = std::clamp(ui_.cursor,0,count-1);
+    const int previous = ui_.cursor;
+    if (direction == 2 || direction == 8) Window_Selectable::moveCursor(ui_.cursor,ui_.listTopRow,count,1,rows,direction,true);
+    if (pageDown || pageUp) Window_Selectable::pageCursor(ui_.cursor,ui_.listTopRow,count,1,rows,pageDown);
+    ui_.listTopRow = Window_Selectable::wheelTopRow(ui_.listTopRow,count,1,rows,inputState.wheelY);
+    if (previous != ui_.cursor) sound(0);
     if (cancel) { if (SceneManager::hasPrevious(*this)) { SceneManager::popScene(*this); sound(2); } else if (ui_.scene == Scene::load) openTitle(); else enter(Scene::menu); }
     else if (ok) {
-      const int slot = ui_.cursor+1;
-      if (ui_.scene == Scene::load && (slot >= static_cast<int>(saveMetadata_.size()) || saveMetadata_[slot].null())) sound(3);
+      if (!Window_SavefileList::isEnabled(*this,ui_.cursor+1,ui_.scene == Scene::load)) sound(3);
       else { saveRequested_ = ui_.scene == Scene::save; loadRequested_ = ui_.scene == Scene::load; }
     }
     return;
@@ -469,15 +474,15 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
     return;
   }
   if (ui_.scene == Scene::item && !ui_.targeting && ui_.category == 0) {
-    cursor(4);
+    cursor(static_cast<int>(Window_ItemCategory::makeCommands(*this).size()));
     if (cancel) enter(Scene::menu);
     else if (ok) { ui_.slot = ui_.cursor; ui_.category = 1; ui_.cursor = 0; ui_.listMemoryApplied = false; sound(1); }
     return;
   }
   if (ui_.scene == Scene::skill && !ui_.targeting && ui_.category == 0) {
-    const auto types = battleSkillTypes(ui_.actor); cursor(static_cast<int>(types.size()));
+    const auto types = Window_SkillType::makeCommands(*this, party_[ui_.actor]); cursor(static_cast<int>(types.size()));
     if (cancel) enter(Scene::menu);
-    else if (ok && !types.empty()) { ui_.skillType = types[ui_.cursor]; ui_.commandCursor = ui_.cursor; ui_.category = 1; ui_.cursor = 0; ui_.listMemoryApplied = false; sound(1); }
+    else if (ok && !types.empty()) { ui_.skillType = types[ui_.cursor].ext; ui_.commandCursor = ui_.cursor; ui_.category = 1; ui_.cursor = 0; ui_.listMemoryApplied = false; sound(1); }
     return;
   }
   const bool skill = ui_.scene == Scene::skill || (inBattle && ui_.category == 1);
@@ -485,15 +490,20 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
   if (ui_.targeting || (inBattle && ui_.category == 3)) {
     const auto& entry = database_[ui_.itemAction ? "items" : "skills"][ui_.pendingId];
     const auto targets = inBattle ? battleSelectableTargets(entry) : std::vector<int>{};
-    cursor(inBattle ? static_cast<int>(targets.size()) : static_cast<int>(party_.size()));
+    const auto menuSelection = Window_MenuActor::selection(*this,entry,ui_.actor);
+    if (!inBattle && (menuSelection.fixed || menuSelection.all)) ui_.cursor = menuSelection.index;
+    else cursor(inBattle ? static_cast<int>(targets.size()) : static_cast<int>(party_.size()));
     if (cancel) { ui_.targeting = false; ui_.category = inBattle ? ui_.target : ui_.category; ui_.cursor = !inBattle || ui_.target != 0 ? ui_.listCursor : 0; }
     else if (ok) {
       if (inBattle) {
         if (targets.empty()) { sound(3); return; }
         chooseAction(battle_.actorIndex, ui_.pendingId, targets[ui_.cursor], ui_.itemAction); ui_.commandActor = -1;
       }
-      else if (!useItem(ui_.pendingId, ui_.cursor, !ui_.itemAction)) { sound(3); return; }
-      else if (!inBattle) {
+      else {
+        if (!menuSelection.all) Window_MenuActor::rememberTarget(*this,ui_.cursor);
+        if (!useItem(ui_.pendingId, ui_.cursor, !ui_.itemAction)) { sound(3); return; }
+      }
+      if (!inBattle) {
         if (reservedCommonEvent_ > 0) { SceneManager::clearStack(*this); SceneManager::gotoScene(*this, Scene::map); return; }
         if (!party_.empty() && std::all_of(party_.begin(), party_.end(), [&](int id) { return actors_.at(id).hp <= 0; })) { openGameOver(); return; }
       }
@@ -507,8 +517,8 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
       entries = Window_SkillList::makeSkillList(*this, party_[ui_.actor], ui_.skillType);
     }
     else {
-      static const std::array<std::string,4> categories{"item","weapon","armor","keyItem"};
-      entries = inBattle ? Window_BattleItem::makeItemList(*this) : Window_ItemList::makeItemList(*this, categories[std::clamp(ui_.slot,0,3)]);
+      const auto categories = Window_ItemCategory::makeCommands(*this);
+      entries = inBattle ? Window_BattleItem::makeItemList(*this) : Window_ItemList::makeItemList(*this, categories[std::clamp(ui_.slot,0,3)].symbol);
     }
     if (!ui_.listMemoryApplied) {
       const int remembered = skill ? (inBattle ? actors_.at(party_[ui_.actor]).lastBattleSkill : actors_.at(party_[ui_.actor]).lastMenuSkill) : lastItemId_;
@@ -544,7 +554,11 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
       } else if (inBattle && scope != 1 && scope != 7 && scope != 9) {
         chooseAction(battle_.actorIndex, ui_.pendingId, scope == 11 ? battle_.actorIndex : -1, ui_.itemAction); ui_.commandActor = -1;
         ui_.category = 0; ui_.cursor = 0;
-      } else { ui_.targeting = true; ui_.cursor = 0; if (inBattle) ui_.category = 3; }
+      } else {
+        ui_.targeting = true;
+        ui_.cursor = inBattle ? 0 : Window_MenuActor::selection(*this,entry,ui_.actor).index;
+        if (inBattle) ui_.category = 3;
+      }
     }
   }
   if (ui_.scene == Scene::shop) {
@@ -552,46 +566,44 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
     return;
   }
   if (ui_.scene == Scene::name) {
-    if (direction == 2) ui_.cursor = (ui_.cursor+10)%90;
-    if (direction == 8) ui_.cursor = (ui_.cursor+80)%90;
-    if (direction == 6) ui_.cursor = ui_.cursor/10*10+(ui_.cursor+1)%10;
-    if (direction == 4) ui_.cursor = ui_.cursor/10*10+(ui_.cursor+9)%10;
-    if (direction) sound(0);
-    if (cancel) {
+    const auto locale = database_["system"]["locale"].text();
+    const int previous = ui_.cursor, previousPage = ui_.namePage;
+    ui_.cursor = Window_NameInput::moveGridCursor(ui_.cursor,direction,inputState.directionTriggered.value_or(directionAge_ == 0));
+    if (inputState.pageDownRepeated.value_or(pageDown)) ui_.namePage = Window_NameInput::changePage(ui_.namePage,true,locale);
+    if (inputState.pageUpRepeated.value_or(pageUp)) ui_.namePage = Window_NameInput::changePage(ui_.namePage,false,locale);
+    if (ui_.cursor != previous || ui_.namePage != previousPage) sound(0);
+    if (inputState.shiftTriggered.value_or(false) && ui_.cursor != 89) { ui_.cursor = 89; sound(0); }
+    if (cancel || inputState.cancelRepeated.value_or(false)) {
       if (Window_NameEdit::removeCharacter(ui_.nameInput)) sound(2);
-      else sound(3);
-    } else if (ok) {
-      if (ui_.cursor == 88) { ui_.namePage = (ui_.namePage+1)%nameInputPageCount(database_["system"]["locale"].text()); sound(1); }
+    }
+    if (ok || inputState.okRepeated.value_or(false)) {
+      if (ui_.cursor == 88) { ui_.namePage = Window_NameInput::changePage(ui_.namePage,true,locale); sound(1); }
       else if (ui_.cursor == 89) {
         if (ui_.nameInput.empty()) { ui_.nameInput = Window_NameEdit::initialName(actors_.at(ui_.nameActorId).name, ui_.nameMaxLength); sound(ui_.nameInput.empty() ? 3 : 1); }
         else { actors_.at(ui_.nameActorId).name = ui_.nameInput; leaveEventScene(); sound(1); }
       } else {
-        if (Window_NameEdit::addCharacter(ui_.nameInput, ui_.nameMaxLength, nameInputTable(ui_.namePage,database_["system"]["locale"].text())[ui_.cursor])) sound(1); else sound(3);
+        if (Window_NameEdit::addCharacter(ui_.nameInput, ui_.nameMaxLength, nameInputTable(ui_.namePage,locale)[ui_.cursor])) sound(1); else sound(3);
       }
     }
     return;
   }
   if (ui_.scene == Scene::debug) {
-    const int switchCount = std::max(0,static_cast<int>(database_["system"]["switches"].array().size())-1);
-    const int varCount = std::max(0,static_cast<int>(database_["system"]["variables"].array().size())-1);
-    const int switchBlocks = (switchCount+9)/10, totalBlocks = switchBlocks+(varCount+9)/10;
+    const int total = Window_DebugRange::itemCount(*this);
     if (ui_.category == 0) {
-      if (direction == 2 || direction == 8) cursor(totalBlocks);
+      const int previous = ui_.cursor, rows = std::max(1,ui_.listPageRows);
+      if (direction == 2 || direction == 8) Window_Selectable::moveCursor(ui_.cursor,ui_.listTopRow,total,1,rows,direction,true);
+      if (pageDown || pageUp) Window_Selectable::pageCursor(ui_.cursor,ui_.listTopRow,total,1,rows,pageDown);
+      ui_.listTopRow = Window_Selectable::wheelTopRow(ui_.listTopRow,total,1,rows,inputState.wheelY);
+      if (previous != ui_.cursor) sound(0);
       if (cancel || debugTriggered) { leaveEventScene(); sound(2); }
-      else if ((ok || direction == 6) && totalBlocks > 0) { ui_.listCursor = ui_.cursor; ui_.category = 1; ui_.cursor = 0; sound(1); }
+      else if (ok && total > 0) { ui_.listCursor = ui_.cursor; ui_.category = 1; ui_.cursor = 0; sound(1); }
       return;
     }
-    const bool isSwitch = ui_.listCursor < switchBlocks;
-    const int top = (isSwitch ? ui_.listCursor : ui_.listCursor-switchBlocks)*10+1;
-    const int count = std::min(10,(isSwitch ? switchCount : varCount)-top+1);
-    if (direction == 2 || direction == 8) cursor(count);
+    const auto mode = Window_DebugRange::modeFor(*this,ui_.listCursor);
+    const int top = Window_DebugRange::topIdFor(*this,ui_.listCursor);
+    if (direction == 2 || direction == 8) cursor(10);
     if (cancel || debugTriggered) { ui_.category = 0; ui_.cursor = ui_.listCursor; sound(2); return; }
-    const int id = top+ui_.cursor;
-    if (isSwitch && ok) { switches_[id] = !switches_[id]; refreshNeeded_ = true; sound(0); }
-    else if (!isSwitch && (direction == 4 || direction == 6 || pageUp || pageDown)) {
-      const int amount = direction == 6 ? 1 : direction == 4 ? -1 : pageDown ? 10 : -10;
-      operateVariable(id,0,variable(id).number()+amount); sound(0);
-    }
+    if (Window_DebugEdit::processInput(*this,mode,top+ui_.cursor,inputState.okRepeated.value_or(ok),direction,inputState.pageUpRepeated.value_or(pageUp),inputState.pageDownRepeated.value_or(pageDown))) sound(0);
     return;
   }
 }

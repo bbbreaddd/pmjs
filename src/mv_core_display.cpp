@@ -159,14 +159,26 @@ void Window::render(Renderer& renderer,const Matrix& parentWorld,double parentAl
   }
   for(const auto& child:children)if(child&&std::none_of(backChildren_.begin(),backChildren_.end(),[&](const auto& weak){return weak.lock()==child;}))child->render(renderer,world,worldAlpha);
 }
-void WindowLayer::render(Renderer& renderer,const Matrix& parentWorld,double parentAlpha) {
-  if(!visible||!renderable)return;const auto world=multiply(parentWorld,localTransform());const auto first=renderer.queuedCommandCount();
+WindowLayer::StreamState WindowLayer::begin(Renderer& renderer,const Matrix& parentWorld,double parentAlpha)const {
+  StreamState state{multiply(parentWorld,localTransform()),alpha*parentAlpha,renderer.queuedCommandCount()};
   renderer.beginCompositionGroup();
-  for(const auto& child:children)if(auto* window=dynamic_cast<Window*>(child.get());window&&window->visible&&!window->isClosed()) {
-    const auto region=bounds(multiply(world,window->localTransform()),window->openBounds());
-    renderer.clearCompositionRect(region[0],region[1],region[2]-region[0],region[3]-region[1]);window->render(renderer,world,alpha*parentAlpha);
-  }
-  renderer.endCompositionGroup();renderer.clipQueuedCommands(first,bounds(world,{0,0,width,height}));
-  for(const auto& child:children)if(child&&!dynamic_cast<Window*>(child.get()))child->render(renderer,world,alpha*parentAlpha);
+  return state;
+}
+void WindowLayer::renderWindow(Renderer& renderer,const StreamState& state,Window& window)const {
+  if(!window.visible||window.isClosed())return;
+  const auto region=bounds(multiply(state.world,window.localTransform()),window.openBounds());
+  renderer.clearCompositionRect(region[0],region[1],region[2]-region[0],region[3]-region[1]);
+  window.render(renderer,state.world,state.opacity);
+}
+void WindowLayer::end(Renderer& renderer,const StreamState& state)const {
+  renderer.endCompositionGroup();
+  renderer.clipQueuedCommands(state.firstCommand,bounds(state.world,{0,0,width,height}));
+}
+void WindowLayer::render(Renderer& renderer,const Matrix& parentWorld,double parentAlpha) {
+  if(!visible||!renderable)return;
+  const auto state=begin(renderer,parentWorld,parentAlpha);
+  for(const auto& child:children)if(auto* window=dynamic_cast<Window*>(child.get()))renderWindow(renderer,state,*window);
+  end(renderer,state);
+  for(const auto& child:children)if(child&&!dynamic_cast<Window*>(child.get()))child->render(renderer,state.world,state.opacity);
 }
 }

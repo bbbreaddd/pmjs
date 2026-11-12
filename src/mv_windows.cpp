@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <limits>
 #include <stdexcept>
 
 namespace pmjs::mv {
@@ -337,7 +338,7 @@ Rect Window_Selectable::itemRectForText(int itemIndex) const {
 }
 
 bool Window_Selectable::isCursorMovable() const {
-  return visible && active && openness == 255 && maxItems() > 0;
+  return visible && active && openness == 255 && !cursorFixed && !cursorAll && maxItems() > 0;
 }
 
 void Window_Selectable::cursorDown(bool wrap) {
@@ -903,29 +904,46 @@ void Window_MenuStatus::refresh(const Session& session) {
 Window_MenuActor::Window_MenuActor()
   : Window_MenuStatus(0, 0) {}
 
+Window_MenuActor::Selection Window_MenuActor::selection(const Session& session, const Value& item, int userIndex) {
+  const int scope = item["scope"].integer();
+  if (scope == 11 && DataManager::isSkill(item)) return {userIndex,true,false};
+  if (scope == 2 || scope == 8 || scope == 10) return {0,false,true};
+  const auto& members = session.party();
+  const auto found = std::find(members.begin(),members.end(),session.targetActorId_);
+  return {found == members.end() ? 0 : static_cast<int>(found-members.begin()),false,false};
+}
+
+void Window_MenuActor::rememberTarget(Session& session, int index) {
+  if (index >= 0 && index < static_cast<int>(session.party().size())) session.targetActorId_ = session.party()[index];
+}
+
+void Window_MenuActor::selectForItem(const Session& session, const Value& item, int userIndex) {
+  refresh(session);
+  const auto target = selection(session,item,userIndex);
+  cursorFixed = target.fixed; cursorAll = target.all; select(target.index);
+}
+
 Window_ItemCategory::Window_ItemCategory()
   : Window_Command(0, 0, 816, 72) {
   maxCols = 4;
 }
-void Window_ItemCategory::makeCommandList() {
-  commands.clear();
-  addCommand("Item", "item");
-  addCommand("Weapon", "weapon");
-  addCommand("Armor", "armor");
-  addCommand("Key Item", "keyItem");
+void Window_ItemCategory::makeCommandList(const Session& session) {
+  commands = makeCommands(session);
+}
+std::vector<CommandItem> Window_ItemCategory::makeCommands(const Session& session) {
+  return {{TextManager::item(session),"item"}, {TextManager::weapon(session),"weapon"},
+    {TextManager::armor(session),"armor"}, {TextManager::keyItem(session),"keyItem"}};
 }
 
 Window_SkillType::Window_SkillType(int x, int y)
   : Window_Command(x, y, 240, 144) {}
 void Window_SkillType::makeCommandList(const Session& session) {
-  commands.clear();
-  if (!session.actors().contains(actorId)) return;
-  const auto& skillTypes = session.database()["system"]["skillTypes"].array();
-  for (std::size_t i = 1; i < skillTypes.size(); ++i) {
-    if (!skillTypes[i].text().empty()) {
-      addCommand(skillTypes[i].text(), "skill", true, static_cast<int>(i));
-    }
-  }
+  commands = makeCommands(session, actorId);
+}
+std::vector<CommandItem> Window_SkillType::makeCommands(const Session& session, int actorId) {
+  std::vector<CommandItem> commands;
+  for (int type : Window_ActorCommand::skillTypes(session,actorId)) commands.push_back({session.database()["system"]["skillTypes"][type].text(),"skill",true,type});
+  return commands;
 }
 
 Window_SkillStatus::Window_SkillStatus(int x, int y, int w, int h)
@@ -1098,82 +1116,97 @@ int Window_ShopNumber::changeNumber(int number, int amount, int maximum) {
 Window_ShopStatus::Window_ShopStatus(int x, int y, int w, int h)
   : Window_Base(x, y, w, h) {}
 
-int Window_ShopStatus::maxPages(const Session& session) const {
-  const int total = static_cast<int>(session.party().size());
-  return std::max(1, (total + pageSize() - 1) / pageSize());
+int Window_ShopStatus::maxPages(const Session& session) {
+  return (static_cast<int>(session.party().size())+pageSize()-1)/pageSize();
 }
 
 std::vector<int> Window_ShopStatus::statusMembers(const Session& session) const {
+  return statusMembers(session,pageIndex);
+}
+
+std::vector<int> Window_ShopStatus::statusMembers(const Session& session, int pageIndex) {
   const auto& party = session.party();
-  const int start = pageIndex * pageSize();
-  const int end = std::min(static_cast<int>(party.size()), start + pageSize());
-  std::vector<int> out;
-  for (int i = start; i < end; ++i) {
-    out.push_back(party[static_cast<std::size_t>(i)]);
+  const int start = pageIndex*pageSize(), end = std::min(static_cast<int>(party.size()),start+pageSize());
+  return start < end ? std::vector<int>(party.begin()+start,party.begin()+end) : std::vector<int>{};
+}
+
+int Window_ShopStatus::possession(const Session& session, int kind, int id) {
+  const auto found = session.inventory_.find(kind*100000+id);
+  return found == session.inventory_.end() ? 0 : found->second;
+}
+
+int Window_ShopStatus::currentEquippedItem(const Session& session, const Battler& actor, int etypeId, int paramId) {
+  double worstParam = std::numeric_limits<double>::max();
+  int worstItem = 0;
+  for (std::size_t slot = 0; slot < actor.equips.size(); ++slot) {
+    if (session.equipSlotType(actor,static_cast<int>(slot)) != etypeId || !actor.equips[slot]) continue;
+    const int kind = actor.equipKinds[slot];
+    const auto& item = session.database()[kind == 1 ? "weapons" : "armors"][actor.equips[slot]];
+    if (!item.null() && item["params"][paramId].number() < worstParam) {
+      worstParam = item["params"][paramId].number(); worstItem = kind*100000+actor.equips[slot];
+    }
   }
-  return out;
+  return worstItem;
 }
 
 int Window_ShopStatus::currentEquippedItemId(const Battler& actor, int etypeId, const Session& session) const {
-  int worstParam = 0x7fffffff;
-  int worstItemId = 0;
-  const int pId = paramId();
-  const Value& db = session.database();
-  const Value& container = (itemKind == 1) ? db["weapons"] : db["armors"];
-  for (std::size_t i = 0; i < actor.equips.size(); ++i) {
-    const int eqId = actor.equips[i];
-    const int eqKind = i < actor.equipKinds.size() ? actor.equipKinds[i] : 0;
-    if (eqId <= 0 || eqKind != itemKind) continue;
-    const Value& item = container[eqId];
-    if (item["etypeId"].integer(0) != etypeId) continue;
-    const int val = item["params"][pId].integer(0);
-    if (val < worstParam) {
-      worstParam = val;
-      worstItemId = eqId;
-    }
+  return currentEquippedItem(session,actor,etypeId,paramId())%100000;
+}
+
+std::vector<Window_ShopStatus::EquipInfo> Window_ShopStatus::equipInfo(const Session& session, int kind, int id, int pageIndex) {
+  std::vector<EquipInfo> rows;
+  if (kind != 1 && kind != 2) return rows;
+  const auto& item = session.database()[kind == 1 ? "weapons" : "armors"][id];
+  if (item.null()) return rows;
+  const int parameter = paramId(kind);
+  for (int actorId : statusMembers(session,pageIndex)) {
+    const auto& actor = session.actor(actorId);
+    const int equipped = currentEquippedItem(session,actor,item["etypeId"].integer(),parameter);
+    const auto& previous = session.database()[equipped/100000 == 1 ? "weapons" : "armors"][equipped%100000];
+    const int change = static_cast<int>(item["params"][parameter].number()-previous["params"][parameter].number());
+    rows.push_back({actorId,equipped,change,session.canEquipItem(actor,item)});
   }
-  return worstItemId;
+  return rows;
 }
 
 void Window_ShopStatus::drawEquipInfo(int x, int y, const Session& session) {
-  drawnTexts.clear();
-  const auto members = statusMembers(session);
-  const Value& db = session.database();
-  const Value& container = (itemKind == 1) ? db["weapons"] : db["armors"];
-  const Value& shopItem = container[itemId];
-  const int etypeId = shopItem["etypeId"].integer(0);
-  const int pId = paramId();
-  const int newParam = shopItem["params"][pId].integer(0);
-  const auto& actors = session.actors();
-  for (std::size_t i = 0; i < members.size(); ++i) {
-    auto it = actors.find(members[i]);
-    if (it == actors.end()) continue;
-    const Battler& actor = it->second;
-    const int iy = y + static_cast<int>(lineHeight() * (i * 2.4));
-    resetTextColor();
-    drawText(actor.name, x, iy, 168);
-    const int curId = currentEquippedItemId(actor, etypeId, session);
-    const int curParam = curId > 0 ? container[curId]["params"][pId].integer(0) : 0;
-    const int change = newParam - curParam;
-    changeTextColor(paramchangeTextColor(change));
-    drawText((change > 0 ? "+" : "") + std::to_string(change), x, iy, contentsWidth() - textPadding() - x, "right");
+  const auto rows = equipInfo(session,itemKind,itemId,pageIndex);
+  for (std::size_t index = 0; index < rows.size(); ++index) {
+    const auto& row = rows[index]; const int iy = y+static_cast<int>(lineHeight()*(index*2.4));
+    contents.paintOpacity = row.enabled ? 255 : translucentOpacity();
+    resetTextColor(); drawText(session.actor(row.actorId).name,x,iy,168);
+    if (row.enabled) {
+      changeTextColor(paramchangeTextColor(row.paramChange));
+      drawText((row.paramChange > 0 ? "+" : "")+std::to_string(row.paramChange),x,iy,contentsWidth()-textPadding()-x,"right");
+    }
+    const auto& equipped = session.database()[row.equippedItem/100000 == 1 ? "weapons" : "armors"][row.equippedItem%100000];
+    resetTextColor(); drawItemName(equipped,x,iy+lineHeight());
+    contents.paintOpacity = 255;
   }
+}
+
+int Window_ShopStatus::nextPage(const Session& session, int pageIndex) {
+  const int pages = maxPages(session);
+  return pages >= 2 ? (pageIndex+1)%pages : pageIndex;
 }
 
 void Window_ShopStatus::nextPage(const Session& session) {
-  const int pages = maxPages(session);
-  if (pages >= 2) {
-    pageIndex = (pageIndex + 1) % pages;
-  }
+  pageIndex = nextPage(session,pageIndex);
 }
 
 Window_NameEdit::Window_NameEdit(int actorIdVal, int maxLen, std::string initialName)
-  : Window_Base(168, 72, 480, 144),
+  : Window_Base(0, 0, 480, 180),
     actorId(actorIdVal),
     maxLength(std::max(1, maxLen)),
     name(Window_NameEdit::initialName(initialName, maxLength)),
     defaultName(name) {
   index = static_cast<int>(core::utf16Length(name));
+  active = false;
+  rect = placement(core::Graphics::boxWidth,core::Graphics::boxHeight);
+}
+
+Rect Window_NameEdit::placement(int screenWidth, int screenHeight) {
+  return {(screenWidth-480)/2,(screenHeight-548)/2,480,180};
 }
 
 std::string Window_NameEdit::initialName(const std::string& text, int maxLength) {
@@ -1196,28 +1229,46 @@ bool Window_NameEdit::removeCharacter(std::string& name) {
   return true;
 }
 
-int Window_NameEdit::charWidth(bool isJapanese) const {
-  return isJapanese ? fontSize : std::max(1, fontSize / 2);
+double Window_NameEdit::charWidth(bool isJapanese) const {
+  return core::boundRuntime() ? contents.measureTextWidth(isJapanese ? "Ａ" : "A") : 0;
 }
 
-int Window_NameEdit::left(bool isJapanese) const {
-  const int nameCenter = (contentsWidth() + faceWidth()) / 2;
-  const int nameWidth = (maxLength + 1) * charWidth(isJapanese);
+double Window_NameEdit::left(bool isJapanese) const {
+  const double nameCenter = (contentsWidth() + faceWidth()) / 2.0;
+  const double nameWidth = (maxLength + 1) * charWidth(isJapanese);
   return std::min(nameCenter - nameWidth / 2, contentsWidth() - nameWidth);
 }
 
-Rect Window_NameEdit::itemRect(int charIndex, bool isJapanese) const {
-  const int cw = charWidth(isJapanese);
-  return {left(isJapanese) + charIndex * cw, 54, cw, lineHeight()};
+core::Rectangle Window_NameEdit::itemRect(int charIndex, bool isJapanese) const {
+  const double cw = charWidth(isJapanese);
+  return {left(isJapanese) + charIndex * cw, 54, cw, static_cast<double>(lineHeight())};
 }
 
-Rect Window_NameEdit::underlineRect(int charIndex, bool isJapanese) const {
-  Rect r = itemRect(charIndex, isJapanese);
+core::Rectangle Window_NameEdit::underlineRect(int charIndex, bool isJapanese) const {
+  auto r = itemRect(charIndex, isJapanese);
   r.x += 1;
   r.y += r.height - 4;
   r.width -= 2;
   r.height = 2;
   return r;
+}
+
+void Window_NameEdit::refresh(const core::PixelBitmap* face, int faceIndex, bool isJapanese) {
+  contents.clear();
+  contents.fontSize = fontSize;
+  contents.paintOpacity = 255;
+  if (face && face->isReady()) contents.blt(*face,faceIndex%4*144,faceIndex/4*144,144,144,0,0);
+  contents.paintOpacity = 48;
+  for (int character = 0; character < maxLength; ++character) {
+    const auto rect = underlineRect(character,isJapanese);
+    contents.fillRect(rect.x,rect.y,rect.width,rect.height,contents.textColor);
+  }
+  contents.paintOpacity = 255;
+  const auto units = core::utf16Units(name);
+  for (std::size_t character = 0; character < units.size(); ++character) {
+    const auto rect = itemRect(static_cast<int>(character),isJapanese);
+    contents.drawText(core::stringFromUtf16({units[character]}),rect.x,rect.y,std::numeric_limits<double>::infinity(),rect.height);
+  }
 }
 bool Window_NameEdit::add(const std::string& ch) {
   if (!addCharacter(name, maxLength, ch)) return false;
@@ -1229,18 +1280,51 @@ bool Window_NameEdit::back() {
   index = static_cast<int>(core::utf16Length(name));
   return true;
 }
-void Window_NameEdit::restoreDefault() {
+bool Window_NameEdit::restoreDefault() {
   name = defaultName;
   index = static_cast<int>(core::utf16Length(name));
+  return !name.empty();
 }
 
 Window_NameInput::Window_NameInput()
-  : Window_Selectable(168, 224, 480, 324) {
+  : Window_Selectable(0, 0, 480, 360) {
   maxCols = 10;
+  spacing = 0;
+  index = 0;
+  const auto edit = Window_NameEdit::placement(core::Graphics::boxWidth,core::Graphics::boxHeight);
+  rect.x = edit.x; rect.y = edit.y + edit.height + 8;
 }
 std::string Window_NameInput::character() const {
   if (index < 0 || index >= 88) return "";
-  return nameInputTable(page)[index];
+  return nameInputTable(page,locale)[index];
+}
+
+Rect Window_NameInput::cellRect(int index) {
+  const int column = index % 10;
+  return {column * 42 + column / 5 * 24,index / 10 * 36,42,36};
+}
+
+int Window_NameInput::moveGridCursor(int index, int direction, bool wrap) {
+  if (direction == 2 && (index < 80 || wrap)) return (index + 10) % 90;
+  if (direction == 8 && (index >= 10 || wrap)) return (index + 80) % 90;
+  if (direction == 6) return index % 10 < 9 ? index + 1 : wrap ? index - 9 : index;
+  if (direction == 4) return index % 10 > 0 ? index - 1 : wrap ? index + 9 : index;
+  return index;
+}
+
+int Window_NameInput::changePage(int page, bool down, const std::string& locale) {
+  const int count = nameInputPageCount(locale);
+  return (page + count + (down ? 1 : -1)) % count;
+}
+
+void Window_NameInput::refresh() {
+  contents.clear();
+  contents.fontSize = fontSize;
+  const auto& table = nameInputTable(page,locale);
+  for (int cell = 0; cell < 90; ++cell) {
+    const auto rect = cellRect(cell);
+    contents.drawText(table[cell],rect.x+3,rect.y,rect.width-6,rect.height,"center");
+  }
 }
 
 Window_ChoiceList::Window_ChoiceList()
@@ -1389,7 +1473,7 @@ std::vector<CommandItem> Window_GameEnd::makeCommands(const Session& session) {
 }
 
 Window_DebugRange::Window_DebugRange(int x, int y)
-  : Window_Selectable(x, y, 240, 624) {}
+  : Window_Selectable(x, y, 246, 624) {}
 int Window_DebugRange::maxItems() const {
   return pageCount(maxSwitches)+pageCount(maxVariables);
 }
@@ -1420,7 +1504,7 @@ std::string Window_DebugRange::labelFor(const Session& session, int index) {
 }
 
 Window_DebugEdit::Window_DebugEdit(int x, int y, int width)
-  : Window_Selectable(x, y, width, 624) {}
+  : Window_Selectable(x, y, width, 396) {}
 std::string Window_DebugEdit::itemName(const Session& session, const std::string& mode, int id) {
   return session.database()["system"][mode == "switch" ? "switches" : "variables"][id].text();
 }

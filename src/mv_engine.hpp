@@ -58,6 +58,8 @@ struct Input {
   std::optional<bool> okTriggered = {};
   std::optional<bool> cancelTriggered = {};
   std::optional<int> repeatedDirection = {};
+  std::optional<bool> okRepeated, cancelRepeated, shiftTriggered, directionTriggered;
+  std::optional<bool> pageUpRepeated, pageDownRepeated;
 };
 
 struct Character {
@@ -230,6 +232,8 @@ struct Ui {
   int numberButton = -1;
   int numberButtonFrame = -1;
   bool numberButtonsVisible = false, numberButtonsInitialized = false;
+  int shopStatusPage = 0;
+  bool shopStatusShiftHeld = false;
   int nameActorId = 0, nameMaxLength = 0, namePage = 0;
   std::string nameInput;
   bool shopPurchaseOnly = false;
@@ -330,10 +334,12 @@ class Session {
   friend class Window_BattleLog;
   friend class Window_ShopBuy;
   friend class Window_ShopSell;
+  friend class Window_ShopStatus;
   friend class Window_SavefileList;
   friend class Window_DebugEdit;
   friend class Window_EquipSlot;
   friend class Window_EquipStatus;
+  friend class Window_MenuActor;
   friend class Window_EquipItem;
   friend class Window_SkillType;
   friend class Window_ActorCommand;
@@ -398,6 +404,7 @@ class Session {
   bool useItemUntargeted(int id, bool skill);
   void changeEquipment(int actor, int slot, int item);
   bool canEquip(const Battler& actor, const Value& item, int slot) const;
+  bool canEquipItem(const Battler& actor, const Value& item) const;
   int equipSlotType(const Battler& actor, int slot) const;
   bool canChangeEquip(const Battler& actor, int slot) const;
   void releaseEquipment(Battler& actor, bool forcing = false);
@@ -496,7 +503,7 @@ class Session {
   std::vector<Ui> sceneStack_;
   std::vector<UiHitTarget> uiHitTargets_;
   std::set<std::string> previousUiButtons_;
-  int lastItemId_ = 0, menuActorId_ = 0, touchHoldFrames_ = 0;
+  int lastItemId_ = 0, menuActorId_ = 0, targetActorId_ = 0, touchHoldFrames_ = 0;
   SystemState system_;
   MapState mapState_;
   int timerFrames_ = 0;

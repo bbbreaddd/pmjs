@@ -115,6 +115,12 @@ napi_value stepEngine(napi_env env, napi_callback_info info) {
       controls.direction = input["direction"].integer(); controls.ok = input["ok"].boolean();
       controls.okLongPressed = input["okLongPressed"].boolean();
       controls.inputDate = input["inputDate"].number(); controls.touchDate = input["touchDate"].number();
+      if (!input["okRepeated"].null()) controls.okRepeated = input["okRepeated"].boolean();
+      if (!input["cancelRepeated"].null()) controls.cancelRepeated = input["cancelRepeated"].boolean();
+      if (!input["shiftTriggered"].null()) controls.shiftTriggered = input["shiftTriggered"].boolean();
+      if (!input["directionTriggered"].null()) controls.directionTriggered = input["directionTriggered"].boolean();
+      if (!input["pageUpRepeated"].null()) controls.pageUpRepeated = input["pageUpRepeated"].boolean();
+      if (!input["pageDownRepeated"].null()) controls.pageDownRepeated = input["pageDownRepeated"].boolean();
       controls.cancel = input["cancel"].boolean(); controls.dash = input["dash"].boolean();
       if (!input["destinationX"].null()) controls.destinationX = input["destinationX"].integer();
       if (!input["destinationY"].null()) controls.destinationY = input["destinationY"].integer();
@@ -179,9 +185,15 @@ napi_value stepEngine(napi_env env, napi_callback_info info) {
       controls.okTriggered = value.input.isTriggered("ok");
       controls.okLongPressed = value.input.isLongPressed("ok");
       controls.inputDate = value.input.date(); controls.touchDate = value.touch.date();
+      controls.okRepeated = value.input.isRepeated("ok");
+      controls.cancelRepeated = value.input.isRepeated("cancel");
+      controls.shiftTriggered = value.input.isTriggered("shift");
+      controls.pageUpRepeated = value.input.isRepeated("pageup");
+      controls.pageDownRepeated = value.input.isRepeated("pagedown");
       controls.cancelTriggered = value.input.isTriggered("cancel") || value.input.isTriggered("menu") || value.touch.isCancelled();
       const char* direction = controls.direction == 2 ? "down" : controls.direction == 4 ? "left" : controls.direction == 6 ? "right" : "up";
       controls.repeatedDirection = value.input.isRepeated(direction) ? controls.direction : 0;
+      controls.directionTriggered = controls.direction != 0 && value.input.isTriggered(direction);
     }
     if (controls.touchTriggered && controls.touchX && controls.touchY) mv::core::Graphics::onPointerDown(*controls.touchX,*controls.touchY);
     value.session->step(controls); return boolean(env, !value.session->finished());

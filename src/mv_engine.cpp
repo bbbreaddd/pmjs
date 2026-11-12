@@ -75,6 +75,8 @@ Session::Session(Value database) : database_(std::move(database)) {
 const Value& Session::map() const { return database_["maps"][std::to_string(mapId_)]; }
 
 void Session::newGame() {
+  battleLog_.reset(); resetEnemySprites();
+  lastItemId_ = 0; menuActorId_ = 0; targetActorId_ = 0;
   ++presentationRevision_; battleTest_ = false;
   switches_.clear(); variables_.clear(); selfSwitches_.clear(); inventory_.clear();
   visualEffects_.clear(); nextVisualEffect_ = 0;

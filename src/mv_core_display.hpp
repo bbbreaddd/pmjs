@@ -241,9 +241,13 @@ class Window:public Container {
 };
 class WindowLayer:public Container {
  public:
+  struct StreamState { Matrix world; double opacity; std::size_t firstCommand; };
   double width=0,height=0;
   void move(double x,double y,double w,double h){position={x,y};width=w;height=h;}
   void onRemoveAsAChild()override{removeChildren();}
+  StreamState begin(Renderer&,const Matrix& world={1,0,0,1,0,0},double opacity=1)const;
+  void renderWindow(Renderer&,const StreamState&,Window&)const;
+  void end(Renderer&,const StreamState&)const;
   void render(Renderer&,const Matrix& world={1,0,0,1,0,0},double opacity=1)override;
 };
 class Weather:public Container {
