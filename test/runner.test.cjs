@@ -996,3 +996,11 @@ test('program cache uses the writable preparation root during native initializat
       path.join(options.assetCacheRoot || path.join(options.saveRoot, 'asset-cache'), 'programs'));
   }
 });
+
+
+test('native engine configuration does not require a JavaScript bootstrap', () => {
+  const options = fixture('');
+  delete options.bootstrap;
+  assert.equal(validate({ ...options, engine: 'native-mv' }).bootstrap, undefined);
+  assert.throws(() => validate(options), /bootstrap is required/);
+});

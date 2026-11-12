@@ -6,6 +6,7 @@ const { validRecipes, astcSettings, validLosslessPrefixes } = require('./asset-p
 
 function resolveDefaults(input) {
   let title = input.title;
+  let engineData = input.engineData;
   let width = input.width;
   let height = input.height;
   let assetPreparation = {};
@@ -27,6 +28,10 @@ function resolveDefaults(input) {
     catch (error) { throw new Error(`invalid JSON in config file ${configPath}: ${error.message}`); }
     if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) throw new Error('configuration must be an object');
     if (title === undefined && cfg.title) title = cfg.title;
+    if (engineData === undefined && cfg.engineData !== undefined) {
+      if (typeof cfg.engineData !== 'string' || !input.gameRoot) throw new Error('engineData requires a game root and relative file path');
+      engineData = path.resolve(input.gameRoot, cfg.engineData);
+    }
     if (width === undefined && cfg.display && cfg.display.width) width = Number(cfg.display.width);
     if (height === undefined && cfg.display && cfg.display.height) height = Number(cfg.display.height);
     if (cfg.fonts && typeof cfg.fonts === 'object') {
@@ -116,13 +121,13 @@ function resolveDefaults(input) {
     assetPreparation.recipes = JSON.parse(fs.readFileSync(assetPreparation.recipes, 'utf8'));
   }
   assetPreparation.recipes = validRecipes(assetPreparation.recipes || []);
-  return { ...input, width, height, title, assetPreparation, assetPolicyOverrides: policyOverrides, preparationFonts, virtualFiles,
+  return { ...input, engineData, width, height, title, assetPreparation, assetPolicyOverrides: policyOverrides, preparationFonts, virtualFiles,
     preparedFrameCacheBytes, preparedCompactSampling, preparedCropUploads };
 }
 
 function validate(input) {
   const options = resolveDefaults(input);
-  const requiredPaths = ['addon', 'gameRoot', 'bootstrap', 'saveRoot'];
+  const requiredPaths = ['addon', 'gameRoot', 'saveRoot', ...(options.engine === 'native-mv' ? [] : ['bootstrap'])];
   for (const name of requiredPaths) {
     if (typeof options[name] !== 'string' || !options[name]) {
       throw new Error(`${name} is required`);
@@ -165,7 +170,7 @@ function validate(input) {
       { greenworksModule: path.resolve(options.greenworksModule) }),
     addon: path.resolve(options.addon),
     gameRoot: path.resolve(options.gameRoot),
-    bootstrap: path.resolve(options.bootstrap),
+    ...(options.bootstrap ? { bootstrap: path.resolve(options.bootstrap) } : {}),
     saveRoot: path.resolve(options.saveRoot),
     assetRoot: options.assetRoot ? path.resolve(options.assetRoot) : '',
     assetPreparation: { ...options.assetPreparation,

@@ -99,8 +99,7 @@ async function main() {
   if (disabled) {
     assert.equal(loaded.preparedFrameCacheBytes, 0);
     assert.equal(loaded.preparedFrameCacheMisses, before.preparedFrameCacheMisses);
-    assert.equal(loaded.preparedMaterializations, before.preparedMaterializations,
-      'disabled frame caching must draw prepared pages without expanding the sheet');
+    assert.equal(loaded.sourceTextureBuilds, 0, 'disabled caching must not compile textures during drawing');
     native.images.release(image.handle);
     return;
   }
@@ -138,8 +137,10 @@ async function main() {
   assert.ok(peak.preparedFramePeakResidentBytes >= peak.preparedFrameResidentBytes);
   assert.ok(peak.preparedFrameCacheBytes <= budget);
   assertCenters(render(image, [2]), [2], colors);
+  native.beginFrame();
   const settled = native.images.memory();
   assert.equal(settled.preparedFrameResidentBytes, settled.preparedFrameCacheBytes);
+  assert.equal(settled.sourceTextureBuilds, 0);
   assert.equal(settled.preparedFrameEvictedBytes, 0);
 
   assert.equal(evicted.preparedMaterializations, before.preparedMaterializations);

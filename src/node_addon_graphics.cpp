@@ -438,7 +438,23 @@ napi_value createTileLayer(napi_env env, napi_callback_info info) try {
   }
   std::vector<pmjs::TileLayerTile> tiles;
   tiles.reserve(points.size() / 9U);
+  struct ShadowImage {
+    pmjs::ImageStore& images;
+    pmjs::ImageHandle handle = 0;
+    ~ShadowImage() { if (handle) images.release(handle); }
+  } shadow{value.images};
   for (std::size_t index = 0; index < points.size(); index += 9) {
+    if (points[index + 8] == -1) {
+      if (!shadow.handle) {
+        const std::array<std::uint8_t, 4> rgba{0, 0, 0, 128};
+        const auto image = value.images.createRgba(1, 1, rgba.data());
+        if (!image) throw std::runtime_error("cannot create tile shadow");
+        shadow.handle = image->handle;
+      }
+      tiles.push_back({shadow.handle, {0, 0, points[index + 4], points[index + 5]},
+        {points[index + 2], points[index + 3]}, {0, 0}});
+      continue;
+    }
     auto texture = static_cast<std::size_t>(points[index + 8]);
     if (texture >= images.size()) throw std::runtime_error("invalid texture index");
     tiles.push_back({images[texture], {points[index], points[index + 1], points[index + 4], points[index + 5]},

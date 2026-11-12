@@ -566,8 +566,7 @@ class ImageStore {
   std::unordered_map<std::string, ImageStorageDecision> storageDecisions_;
   std::uint64_t storageDecisionHits_ = 0;
   const ImageStorageDecision* storageDecision(const std::string& key) const;
-  std::shared_ptr<PaletteBacking> makePalette(const ImagePixels& pixels,
-      const ImageStorageDecision* decision = nullptr);
+
   std::optional<ImagePixels> readPalettePixels(const Slot& slot, std::optional<std::array<int, 4>> region = std::nullopt) const;
   bool materializePalette(Slot& slot);
   std::size_t paletteGpuBytes(const Slot& slot) const;

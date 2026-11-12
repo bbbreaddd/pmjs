@@ -987,69 +987,15 @@ std::optional<ImageInfo> ImageStore::createDecoded(const ImagePixels& pixels,
   if (decision && (decision->width != pixels.width || decision->height != pixels.height)) decision = nullptr;
   if (decision) ++storageDecisionHits_;
   auto result = createImage(pixels.width, pixels.height, pixels.rgba.data(), false,
-                     decision ? decision->channels : imageStorage(pixels), makePalette(pixels, decision), decision);
+                     decision ? decision->channels : ImageChannelStorage{}, {}, decision);
   if (!result && decision)
     return createImage(pixels.width, pixels.height, pixels.rgba.data(), false, {});
   return result;
 }
 
-std::shared_ptr<ImageStore::PaletteBacking> ImageStore::makePalette(const ImagePixels& pixels, const ImageStorageDecision* decision) {
-  if (decision && !decision->paletteBits) return {};
-  const auto channels = decision ? 4 : imageStorage(pixels).channels;
-  if (channels == 1) return {};
-  const std::size_t colorLimit = decision ? (decision->paletteBits == 8 ? 256 : 65536) :
-    channels == 2 ? 256 : 65536;
-  const auto count = pixels.rgba.size() / 4;
-  std::unordered_map<std::uint32_t, std::uint16_t> colors;
-  colors.reserve(4096);
-  const int stagingChannels = decision ? decision->paletteBits / 8 : 2;
-  std::vector<std::uint8_t> entries, indices(count * stagingChannels);
-  for (std::size_t i = 0; i < count; ++i) {
-    std::uint32_t key;
-    std::memcpy(&key, pixels.rgba.data() + i * 4, 4);
-    auto found = colors.find(key);
-    if (found == colors.end()) {
-      if (colors.size() == colorLimit) return {};
-      found = colors.emplace(key, static_cast<std::uint16_t>(colors.size())).first;
-      entries.insert(entries.end(), pixels.rgba.data() + i * 4, pixels.rgba.data() + i * 4 + 4);
-    }
-    indices[i * stagingChannels] = found->second & 255;
-    if (stagingChannels == 2) indices[i * 2 + 1] = found->second >> 8;
-  }
-  const int indexChannels = decision ? decision->paletteBits / 8 : colors.size() <= 256 ? 1 : 2;
-  if (count * (channels - indexChannels) <= ((colors.size()+255)/256)*1024) return {};
-  auto result = std::make_shared<PaletteBacking>();
-  result->owner = this;
-  result->height = static_cast<int>((colors.size() + 255) / 256);
-  entries.resize(static_cast<std::size_t>(result->height) * 256 * 4);
-  result->colors = std::move(entries);
-  result->cpuCharge.setOwned(cpuMemory_, result->colors.capacity());
-  result->indexChannels = decision ? decision->paletteBits / 8 : colors.size() <= 256 ? 1 : 2;
-  if (result->indexChannels == 1 && stagingChannels == 2) {
-    for (std::size_t i = 0; i < count; ++i) indices[i] = indices[i * 2];
-    indices.resize(count);
-  }
-  // Normalized indices retain hardware nearest selection at ordinary RGBA
-  // coordinates. Missing green in R8 reads as zero. Never interpolate indices.
-  ImageChannelStorage indexStorage{result->indexChannels};
-  result->indices = uploadTexture(pixels.width, pixels.height, indices.data(), indexStorage, 0, true);
-  if (!result->indices) return {};
-  result->bytes = indices.size();
-  gpuBytes_ += result->bytes;
-  result->table = uploadTexture(256, result->height, result->colors.data(), {});
-  if (!result->table) return {};
-  gpuBytes_ += result->colors.size();
-  result->bytes += result->colors.size();
-  textureCreates_ += 2;
-  ++textureEpoch_;
-  textureUploadBytes_ += result->bytes;
-  peakGpuBytes_ = std::max(peakGpuBytes_, gpuBytes_);
-  return result;
-}
-
 std::shared_ptr<ImageStore::PaletteBacking> ImageStore::makeSparsePalette(const SparsePalettePage& page, bool sparseAllowed) {
   if ((page.packed && (!page.blocks.empty() || !page.residual.empty())) ||
-      (!sparseAllowed && page.indexBytes != 2)) return {};
+      (!sparseAllowed && !page.packed && page.indexBytes != 2)) return {};
   auto result = std::make_shared<PaletteBacking>();
   result->owner = this; result->indexChannels = page.packed ? 1 : page.indexBytes;
   result->height = (page.colors.size() / 4 + 255) / 256;
@@ -1115,7 +1061,6 @@ bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
   auto& backing = *slot.prepared;
   if (backing.textureChecked) return slot.palette || backing.channelAtlas;
   backing.textureChecked = true;
-  std::optional<PreparedTexture> built;
   std::optional<TextureLayout> layout;
   const auto source = std::move(backing.textureSource);
   std::unique_ptr<AVSHA, decltype(&av_free)> artifactDigest(nullptr, &av_free);
@@ -1149,7 +1094,7 @@ bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
   } else if (!backing.descriptor.textureArtifact.empty()) {
     ++textureArtifactFailures_; textureArtifactFailureReason_ = "missing";
   }
-  auto upload = [&](const TextureLayout& l, bool artifact) {
+  auto upload = [&](const TextureLayout& l) {
     if (l.kind == TextureKind::Channels && !compactSamplingEnabled_) return false;
     struct UnpackState {
       std::array<GLenum,4> names{GL_UNPACK_ALIGNMENT,GL_UNPACK_ROW_LENGTH,GL_UNPACK_SKIP_ROWS,GL_UNPACK_SKIP_PIXELS};
@@ -1207,25 +1152,14 @@ bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
       if (l.kind != TextureKind::Channels && i == 1) palette->colors.insert(palette->colors.end(),data.begin(),data.end());
       return true;
     };
-    if (artifact) {
-      if (!readTextureChunks(reader,l,consume,textureArtifactStagingBytes_)) return false;
-      if (artifactDigest) {
-        std::array<std::uint8_t,32> digest{};
-        av_sha_final(artifactDigest.get(), digest.data());
-        constexpr char digits[] = "0123456789abcdef";
-        std::string hash;
-        for (const auto byte : digest) { hash += digits[byte >> 4]; hash += digits[byte & 15]; }
-        if (hashedBytes != source->size_ || hash != backing.textureHash) return false;
-      }
-    } else {
-      for (std::size_t i = 0; i < l.planes.size(); ++i) {
-        if constexpr (std::endian::native == std::endian::big) {
-          auto& data = built->bytes[i];
-          if (textureTexelBytes(l.planes[i].format) >= 12)
-            for (std::size_t j = 0; j < data.size(); j += 4) std::reverse(data.begin()+j,data.begin()+j+4);
-        }
-        if (!consume(i,TextureChunk{0,l.planes[i].height},built->bytes[i])) return false;
-      }
+    if (!readTextureChunks(reader,l,consume,textureArtifactStagingBytes_)) return false;
+    if (artifactDigest) {
+      std::array<std::uint8_t,32> digest{};
+      av_sha_final(artifactDigest.get(), digest.data());
+      constexpr char digits[] = "0123456789abcdef";
+      std::string hash;
+      for (const auto byte : digest) { hash += digits[byte >> 4]; hash += digits[byte & 15]; }
+      if (hashedBytes != source->size_ || hash != backing.textureHash) return false;
     }
     if (l.kind == TextureKind::Channels) {
       backing.channelAtlas = textures.ids[0]; backing.channelTable = textures.ids[1];
@@ -1245,16 +1179,11 @@ bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
     return true;
   };
   if (layout) {
-    if (upload(*layout,true)) { ++textureArtifactLoads_; return true; }
+    if (upload(*layout)) { ++textureArtifactLoads_; return true; }
     ++textureArtifactFailures_; textureArtifactFailureReason_ = "chunk-or-upload";
   }
-  ++sourceTextureBuilds_;
-  auto pixels = readPixelsRegion(handle,0,0,slot.width,slot.height);
-  if (!pixels) return false;
-  const auto* decision = storageDecision(slot.cacheKey);
-  if (decision && (decision->width != slot.width || decision->height != slot.height)) decision = nullptr;
-  built = makePreparedTexture(*pixels,decision);
-  return built && upload(built->layout,false);
+  // Missing prepared data falls back to ordinary textures; compilation belongs to startup.
+  return false;
 } catch (const std::bad_alloc&) {
   ++textureArtifactFailures_; textureArtifactFailureReason_ = "allocation"; return false;
 }
@@ -1269,27 +1198,7 @@ std::optional<PaletteImageRegion> ImageStore::resolvePaletteImage(ImageHandle ha
       if (!slot.palette) return std::nullopt;
     }
     slot.paletteChecked = true;
-    const auto* decision = storageDecision(slot.cacheKey);
-    if (decision && (decision->width != slot.width || decision->height != slot.height)) decision = nullptr;
-    if (decision) ++storageDecisionHits_;
-    const bool sourcePalette = slot.prepared && slot.prepared->requiresSourceSampling();
-    if (decision && !decision->paletteBits && !sourcePalette) return std::nullopt;
-    auto pixels = slot.palette ? std::optional<ImagePixels>{} : readPixelsRegion(handle, 0, 0, slot.width, slot.height);
-    if (pixels) {
-      if (sourcePalette && decision && decision->paletteBits == 16) {
-        auto sparse = makeSparsePalettePage(pixels->width, pixels->height, pixels->rgba);
-        if (sparse) slot.palette = makeSparsePalette(*sparse, true);
-      }
-      if (!slot.palette) slot.palette = makePalette(*pixels, decision);
-      if (!slot.palette && sourcePalette) {
-        auto sparse = makeSparsePalettePage(pixels->width, pixels->height, pixels->rgba, 262144);
-        if (sparse && sparse->indexBytes == 3 &&
-            sparse->gpuBytes() + sparse->colors.size() * 3 < pixels->rgba.size())
-          slot.palette = makeSparsePalette(*sparse, true);
-      }
-    }
-    if (slot.palette && slot.prepared)
-      for (auto& page : slot.prepared->pages) page.setPixels({});
+
   }
   if (!slot.palette) return std::nullopt;
   const auto table = paletteTable(*slot.palette, premultiplied);
@@ -3024,12 +2933,12 @@ std::optional<ImageInfo> ImageStore::preparedPage(Slot& slot, std::size_t index,
       }
       const auto* pixels = sparse ? nullptr : preparedPixels(backing, index);
       if (!sparse && !pixels) return std::nullopt;
-      if (!decision || decision->paletteBits) {
+      if (sparse && (!decision || decision->paletteBits)) {
         auto key = page.shared->key + ":palette:" + std::to_string(decision ? decision->paletteBits : 0) +
           (useSparse ? ":sparse" : ":dense");
         auto palette = preparedPalettes_[key].lock();
         if (!palette) {
-          palette = sparse ? makeSparsePalette(*page.sparse, useSparse) : makePalette(*pixels, decision ? &*decision : nullptr);
+          palette = makeSparsePalette(*page.sparse, useSparse);
           if (!palette && useSparse) {
             page.sparseDisabled = true; useSparse = false;
             key.replace(key.size() - 7, 7, ":dense");
@@ -3492,39 +3401,8 @@ std::optional<BlockImageRegion> ImageStore::resolveBlockRegion(ImageHandle handl
   const auto& descriptor = backing.descriptor;
   if (backing.requiresSourceSampling() && !slot.texture && !slot.premultipliedTexture) {
     if (!backing.channelChecked) {
+      realizeSourceTexture(handle);
       backing.channelChecked = true;
-      auto pixels = readPreparedRegion(backing, 0, 0, logical->width, logical->height);
-      auto channel = pixels ? makeChannelBlockPage(pixels->width, pixels->height, pixels->rgba) :
-        std::optional<ChannelBlockPage>{};
-      if (channel) {
-        const int height = (channel->bytes.size() + 8191) / 8192;
-        GLint maximum = 0;
-        glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maximum);
-        if (maximum >= 2048 && height <= maximum) {
-          channel->bytes.resize(std::size_t(height) * 8192);
-          const auto atlas = uploadTexture(2048, height, channel->bytes.data(), {});
-          GLuint table = 0;
-          if (atlas) {
-            while (glGetError() != GL_NO_ERROR) {}
-            glGenTextures(1, &table); glBindTexture(GL_TEXTURE_2D, table);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32UI, (logical->width + 7) / 8,
-              (logical->height + 7) / 8, 0, GL_RGBA_INTEGER, GL_UNSIGNED_INT, channel->blocks.data());
-          }
-          if (atlas && table && glGetError() == GL_NO_ERROR) {
-            backing.channelAtlas = atlas; backing.channelTable = table; backing.channelHeight = height;
-            const auto bytes = channel->gpuBytes();
-            backing.gpuBytes += bytes; gpuBytes_ += bytes;
-            peakGpuBytes_ = std::max(peakGpuBytes_, gpuBytes_);
-            textureCreates_ += 2; textureEpoch_ += 2; textureUploadBytes_ += bytes;
-            for (auto& page : backing.pages) { page.setPixels({}); page.setSparse({}); }
-            ++blockTextureUploads_;
-          } else { glDeleteTextures(1, &atlas); glDeleteTextures(1, &table); ++blockUploadFailures_; }
-        }
-      }
     }
     if (backing.channelAtlas) {
       ++blockRegions_;

@@ -80,9 +80,16 @@ function stripComments(source) {
   return result;
 }
 
-function parsePluginManifest(source, label = 'js/plugins.js') {
+function parsePluginManifest(source, label = 'js/plugins.js', { literalOnly = false } = {}) {
   try {
-    const array = stripComments(pluginArrayText(String(source)));
+    const arrayText = pluginArrayText(String(source));
+    if (literalOnly) {
+      const declaration = stripComments(String(source).replace(arrayText, '__PMJS_PLUGIN_ARRAY__')).trim();
+      if (!/^(?:var|let|const)\s+\$plugins\s*=\s*__PMJS_PLUGIN_ARRAY__\s*;?$/.test(declaration)) {
+        throw new Error('executable content outside the plugin array');
+      }
+    }
+    const array = stripComments(arrayText);
     let quote = null, escaped = false, json = '';
     for (let index = 0; index < array.length; index += 1) {
       const character = array[index];

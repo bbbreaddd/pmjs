@@ -6,6 +6,7 @@ const { runSupervised } = require('./supervisor.cjs');
 function parse(argv) {
   const result = {};
   const names = new Map([
+    ['--engine', 'engine'], ['--engine-data', 'engineData'],
     ['--addon', 'addon'], ['--game-root', 'gameRoot'], ['--bootstrap', 'bootstrap'],
     ['--save-root', 'saveRoot'], ['--asset-root', 'assetRoot'], ['--title', 'title'],
     ['--width', 'width'], ['--height', 'height'],

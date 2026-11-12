@@ -770,7 +770,7 @@ void Renderer::renderScene() {
     const bool derivedEligible = frameEligible && derivedSampling && !command.appliesSpriteColor;
     const bool wholeSource = logicalInfo && command.source[0] == 0 && command.source[1] == 0 &&
       command.source[2] == logicalInfo->width && command.source[3] == logicalInfo->height;
-    const bool cacheLargePalette = frameEligible && paletteEligible &&
+    const bool cacheLargePalette = frameEligible && paletteEligible && !command.appliesSpriteColor &&
       double(command.source[2]) * command.source[3] >= 256.0 * 256.0 &&
       images_.hasPaletteStorage(command.image);
     auto derived = cacheLargePalette ? images_.resolvePreparedFrameRegion(command.image,

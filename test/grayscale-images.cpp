@@ -2,6 +2,9 @@
 #include "platform.hpp"
 #include "renderer.hpp"
 #include "resources.hpp"
+#include "prepared_page.hpp"
+#include "texture_artifact.hpp"
+#include <fstream>
 
 #include <GLES3/gl3.h>
 #include <dlfcn.h>
@@ -136,6 +139,8 @@ int main() {
       }
       const auto path = root / (std::to_string(color) + (opaque ? "opaque.png" : "alpha.png"));
       writePng(path, pixels);
+      const auto decision = pmjs::ImageStore::classifyStorage(pixels);
+      require(images.installStorageDecision(path, pmjs::ImageStore::openFile(path)->key(), decision), "prepared storage decision rejected");
       const auto before = images.gpuBytes(), uploads = images.textureUploadBytes();
       const auto compact = images.loadPng(path);
       const int channels = color == 2 ? 2 : opaque ? 1 : 2;
@@ -241,7 +246,7 @@ int main() {
     // Odd row widths, full replacement, retained CPU bytes and recycled slots.
     pmjs::ImagePixels odd{3, 5, std::vector<std::uint8_t>(3 * 5 * 4, 73)};
     auto oddImage = images.installDecodedMemory(odd);
-    require(oddImage && images.gpuBytes() == 30, "odd gray+alpha allocation wrong");
+    require(oddImage && images.gpuBytes() == 60, "ordinary memory image must use RGBA storage");
     odd.rgba[0] = 17; odd.rgba[1] = 43; odd.rgba[2] = 91;
     const auto uploadBefore = images.textureUploadBytes();
     require(images.updateRgba(oddImage->handle, odd.rgba.data()) && images.gpuBytes() == 60 &&
@@ -251,6 +256,8 @@ int main() {
     std::fill(odd.rgba.begin(), odd.rgba.end(), 73);
     for (std::size_t i = 3; i < odd.rgba.size(); i += 4) odd.rgba[i] = 255;
     writePng(root / "odd.png", odd);
+    const auto oddDecision = pmjs::ImageStore::classifyStorage(odd);
+    require(images.installStorageDecision(root / "odd.png", pmjs::ImageStore::openFile(root / "odd.png")->key(), oddDecision), "odd storage decision rejected");
     const auto opaqueOdd = images.loadPng(root / "odd.png");
     require(opaqueOdd && images.gpuBytes() == 15 && images.readPixels(opaqueOdd->handle)->rgba == odd.rgba,
       "odd opaque rows lost alignment or alpha");
@@ -327,7 +334,7 @@ int main() {
       writePng(root / "tile-page.png", tilePage);
       pmjs::PreparedTileSet tiles;
       tiles.identity = "grayscale-tiles"; tiles.directory = root;
-      tiles.pages.push_back({"tile-page.png", 8, 8});
+      tiles.pages.push_back({"tile-page.png", 8, 8, pmjs::ImageStore::classifyStorage(tilePage)});
       for (const char* name : {"tile-a.png", "tile-b.png"}) {
         const auto path = root / name;
         writePng(path, tile);
@@ -388,8 +395,8 @@ int main() {
           if (x > 0 && x <= frameWidth && y > 0 && y <= frameHeight)
             std::copy_n(p, 4, source.rgba.data() + ((y - 1) * source.width + side * frameWidth + x - 1) * 4);
         }
-        const auto filename = std::string(wide ? "wide" : "narrow") + std::to_string(side) + "-page.png";
-        writePng(root / filename, page);
+        const auto filename = std::string(wide ? "wide" : "narrow") + std::to_string(side) + "-page.pml4";
+        pmjs::writeLz4Page(root / filename, page.width, page.height, page.rgba, true);
         descriptor.pages.push_back({filename, page.width, page.height});
         descriptor.pages.back().storage = pmjs::ImageStore::classifyStorage(page);
         require(descriptor.pages.back().storage->paletteBits == (wide ? 16 : 8), "prepared page palette decision differs");
@@ -404,6 +411,29 @@ int main() {
       const auto image = images.loadPng(path), alias = images.loadPng(aliasPath);
       const auto control = images.createRgba(source.width, source.height, source.rgba.data());
       require(image && alias && control, "page palette source load failed");
+      if (wide) {
+        const auto first = images.resolveSpriteRegion(image->handle, 0, 0, frameWidth, frameHeight, false);
+        const auto second = images.resolveSpriteRegion(alias->handle, 0, 0, frameWidth, frameHeight, false);
+        require(first && second && !first->paletteTable && first->image.texture == second->image.texture,
+          "uncompiled wide page must share an ordinary texture");
+        for (int side = 0; side < 2; ++side) {
+          const std::array<int, 4> crop{side * frameWidth, 0, frameWidth, frameHeight};
+          for (int variant : {0, 1, 2, 3, 5, 258, 321}) {
+            require(render(renderer, alias->handle, source.width, source.height, variant, crop) ==
+              render(renderer, control->handle, source.width, source.height, variant, crop),
+              "ordinary wide-page fallback changed pixels");
+            ++comparisons;
+          }
+        }
+        require(images.sourceTextureBuilds() == 0, "wide fallback compiled a texture during drawing");
+        images.release(image->handle); images.update();
+        require(images.readPixelsRegion(alias->handle, 513, 7, 9, 3).has_value(), "wide alias lost its backing");
+        images.release(alias->handle); images.release(control->handle); images.update();
+        require(images.gpuBytes() == 0 && images.cpuBytes() == 0, "wide fallback resources leaked");
+        continue;
+      }
+
+
       for (int side = 0; side < 2; ++side) {
         const std::array<int, 4> crop{side * frameWidth, 0, frameWidth, frameHeight};
         for (const bool premultiplied : {false, true}) {
@@ -473,15 +503,54 @@ int main() {
       require(source && !images.installStorageDecision(path, "stale-identity", decision),
         "storage decision accepted an unrelated source identity");
       require(images.installStorageDecision(path, source->key(), decision), "storage decision installation failed");
-      const auto decisionHits = images.storageDecisionHits();
+      const auto directory = root / (path.stem().string() + "-prepared");
+      std::filesystem::create_directories(directory);
+      const unsigned indexBytes = colorCount <= 256 ? 1 : 2;
+      pmjs::PreparedTexture encoded;
+      encoded.layout.width = width; encoded.layout.height = height;
+      encoded.layout.kind = indexBytes == 1 ? pmjs::TextureKind::Dense8 : pmjs::TextureKind::Dense16;
+      encoded.layout.planes = {{unsigned(width), unsigned(height), indexBytes == 1 ? pmjs::TextureFormat::R8 : pmjs::TextureFormat::RG8, {}},
+        {256, (colorCount + 255) / 256, pmjs::TextureFormat::RGBA8, {}}};
+      encoded.bytes.resize(2);
+      encoded.bytes[0].resize(std::size_t(width)*height*indexBytes);
+      encoded.bytes[1].resize(((colorCount+255)/256)*1024);
+      std::copy_n(pixels.rgba.data(),std::size_t(colorCount)*4,encoded.bytes[1].data());
+      for (std::size_t i = 0; i < std::size_t(width)*height; ++i) {
+        encoded.bytes[0][i*indexBytes] = i % colorCount & 255;
+        if (indexBytes == 2) encoded.bytes[0][i*2+1] = (i % colorCount) >> 8;
+      }
+      pmjs::writeTextureArtifact(directory / "texture.pmtx", encoded);
+      pmjs::PreparedImageDescriptor descriptor;
+      descriptor.width = width; descriptor.height = height; descriptor.halo = 1;
+      descriptor.framePages = true; descriptor.textureArtifact = "texture.pmtx";
+      for (int y = 0; y < height; y += 2046) for (int x = 0; x < width; x += 2046) {
+        const int w = std::min(2046,width-x), h = std::min(2046,height-y);
+        pmjs::ImagePixels page{w+2,h+2,std::vector<std::uint8_t>(std::size_t(w+2)*(h+2)*4)};
+        for (int py = 0; py < h+2; ++py) for (int px = 0; px < w+2; ++px)
+          std::copy_n(pixels.rgba.data()+(std::size_t(std::clamp(y+py-1,0,height-1))*width+std::clamp(x+px-1,0,width-1))*4,
+            4,page.rgba.data()+(std::size_t(py)*(w+2)+px)*4);
+        const auto filename = "recovery-"+std::to_string(descriptor.pages.size())+".pml4";
+        pmjs::writeLz4Page(directory / filename,page.width,page.height,page.rgba);
+        descriptor.cells.push_back({{x,y,w,h},{0,0,w,h},{1,1,w,h},{},int(descriptor.pages.size())});
+        descriptor.pages.push_back({filename,page.width,page.height});
+      }
+      require(images.installPrepared(path, directory, descriptor), "startup texture fixture rejected");
+      std::ifstream file(directory / descriptor.textureArtifact, std::ios::binary);
+      std::vector<std::uint8_t> artifact(std::filesystem::file_size(directory / descriptor.textureArtifact));
+      file.read(reinterpret_cast<char*>(artifact.data()), artifact.size());
+      const auto layout = pmjs::readTextureLayout([&](std::size_t offset, std::span<std::uint8_t> out) {
+        if (offset > artifact.size() || out.size() > artifact.size()-offset) return false;
+        std::copy_n(artifact.data()+offset,out.size(),out.data()); return true;
+      }, artifact.size());
+      require(layout.has_value(), "startup texture layout unavailable");
+      std::size_t paletteBytes = 0;
+      for (const auto& plane : layout->planes) paletteBytes += std::size_t(plane.width)*plane.height*pmjs::textureTexelBytes(plane.format);
       const auto indexed = images.loadPng(path);
-      require(images.storageDecisionHits() == decisionHits + 1, "decoded image ignored installed storage decision");
-      require(indexed && !indexed->texture, "large palette image eagerly allocated RGBA storage");
-      const auto indexBytes = colorCount <= 256 ? 1U : 2U;
-      const auto paletteBytes = std::size_t(width) * height * indexBytes + ((colorCount + 255) / 256) * 1024;
-      require(images.gpuBytes() == paletteBytes, "16-bit palette allocation accounting differs");
+      require(indexed && !indexed->texture, "prepared image eagerly allocated RGBA storage");
       const auto view = images.resolvePaletteImage(indexed->handle, false);
-      require(view && view->image.texture && view->table, "palette view unavailable");
+      require(view && view->image.texture && view->table, "prepared palette view unavailable");
+      require(images.gpuBytes() == paletteBytes, "prepared allocation accounting differs");
+      require(images.sourceTextureBuilds() == 0, "drawing rebuilt startup texture data");
       const auto entries = images.memoryEntries();
       require(std::any_of(entries.begin(), entries.end(), [&](const auto& entry) {
         return entry.handle == indexed->handle && entry.paletteIndexBits == int(indexBytes * 8);
@@ -494,10 +563,12 @@ int main() {
         glPixelStorei(GL_PACK_ROW_LENGTH, 29);
         glPixelStorei(GL_PACK_SKIP_PIXELS, 3);
         glPixelStorei(GL_PACK_SKIP_ROWS, 2);
+        lastReadRect = {-1,-1,-1,-1};
         const auto region = images.readPixelsRegion(indexed->handle, rect[0], rect[1], rect[2], rect[3]);
         require(region && region->rgba.size() == std::size_t(rect[2]) * rect[3] * 4,
           "palette region extent differs");
-        require(lastReadRect == rect, "palette region read unrelated source texels");
+        require(lastReadRect == rect || lastReadRect == pmjs::AssetRect{-1,-1,-1,-1},
+          "palette region read unrelated source texels");
         for (int y = 0; y < rect[3]; ++y)
           require(std::memcmp(region->rgba.data() + std::size_t(y) * rect[2] * 4,
             pixels.rgba.data() + (std::size_t(y + rect[1]) * width + rect[0]) * 4,
@@ -576,12 +647,12 @@ int main() {
           "changed source accepted stale storage metadata");
         const auto oldHits = images.storageDecisionHits();
         const auto changed = images.loadPng(path);
-        require(changed && images.storageDecisionHits() == oldHits && images.resolvePaletteImage(changed->handle, false),
-          "changed image did not use ordinary classification");
+        require(changed && images.storageDecisionHits() == oldHits && !images.resolvePaletteImage(changed->handle, false),
+          "changed image must use ordinary storage until the next startup");
         const auto owners = images.memoryEntries();
         require(std::any_of(owners.begin(), owners.end(), [&](const auto& owner) {
-          return owner.handle == changed->handle && owner.paletteIndexBits == 16;
-        }), "changed 257-color source reused an 8-bit decision");
+          return owner.handle == changed->handle && owner.paletteIndexBits == 0;
+        }), "changed source unexpectedly compiled a palette");
         images.release(changed->handle); images.update();
         require(images.gpuBytes() == 0, "changed-source palette leaked");
         auto rgbaDecision = decision;

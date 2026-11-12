@@ -5,6 +5,7 @@ namespace pmjs::addon {
 void registerCompressionBindings(napi_env env, napi_value exports);
 void registerAssetMethods(napi_env env, napi_value exports);
 void registerPreparedAssetBindings(napi_env env, napi_value exports);
+void registerMvEngineBindings(napi_env env, napi_value exports);
 
 napi_value init(napi_env env, napi_value exports) {
   registerRuntimeBindings(env, exports);
@@ -18,6 +19,7 @@ napi_value init(napi_env env, napi_value exports) {
   registerDialogBindings(env, exports);
   registerMediaBindings(env, exports);
   registerEffectBindings(env, exports);
+  registerMvEngineBindings(env, exports);
   return exports;
 }
 

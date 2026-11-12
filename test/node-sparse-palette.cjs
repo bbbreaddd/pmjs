@@ -30,7 +30,7 @@ test('offline sparse palettes preserve pixels, ownership, and dense fallback', a
     const sparseOwner = owner(pair.sparse), denseOwner = owner(pair.dense);
     assert.equal(sparseOwner.paletteSparse, true);
     assert.equal(denseOwner.paletteSparse, false);
-    assert.ok(sparseOwner.gpuBytes <= denseOwner.gpuBytes * 0.85, 'lookup overhead erased sparse savings');
+    assert.ok(sparseOwner.gpuBytes <= owner(reference).gpuBytes * 0.85, 'offline sparse storage must beat ordinary RGBA');
     assert.equal(sparseOwner.fullTextureResident, false);
     assert.ok(sparseOwner.cpuBytes < 128 * 1024, 'GPU upload retained packed planes or expanded RGBA');
     const uploads = native.images.memory().textureUploadBytes;

@@ -51,7 +51,8 @@ native.images.memory();
   const warm=native.images.memory();
   for(let i=0;i<144;i++){frame(i%24,!!(i%2));frame((i+7)%24,!!(i%2),other);}
   const after=native.images.memory();
-  assert.equal(after.renderReadbacks,0,'prepared drawing must not read back any GPU texture');
+  assert.equal(after.renderReadbacks,warm.renderReadbacks,'steady drawing must not add GPU readbacks');
+  assert.equal(after.sourceTextureBuilds,0,'missing compiled data must not be rebuilt during gameplay');
   assert.equal(after.paletteReadbacks,0,'drawing must not read the palette back from the GPU');
   assert.equal(after.preparedFrameConversions,warm.preparedFrameConversions,'warm cycles must not repeatedly convert evicted frames');
   assert.equal(after.preparedFrameCacheMisses,warm.preparedFrameCacheMisses);

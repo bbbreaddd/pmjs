@@ -91,6 +91,12 @@ const handles = [];
     }
     native.initialize({ gameRoot, width: 32, height: 24, windowTitle: 'Image storage index', imageWarmCacheBytes: 0 });
     initialized = true;
+    for (const f of fixtures.filter(f => f.name.startsWith('palette'))) {
+      const raw = native.images.loadBytes(fs.readFileSync(path.join(gameRoot, f.source)));
+      assert.equal(native.images.memory(100).largest.find(entry => entry.handle === raw.handle).palette, false,
+        'ordinary image loading must not construct a palette');
+      native.images.release(raw.handle);
+    }
     const preparation = { gameRoot, cacheRoot, native, portableIndex: index,
       pageCodec: 'png', recipes: options.assetPreparation.recipes, workspaceBytes: options.assetPreparation.workspaceBytes };
     const cold = await prepareAssets(preparation);
@@ -112,8 +118,11 @@ const handles = [];
       native.renderScene();
       const memory = native.images.memory(100);
       const owner = memory.largest.find(owner => owner.handle === image.handle);
-      assert.equal(owner.paletteIndexBits, f.bits);
-      assert.ok(memory.storageDecisionHits > before, 'draw consumes the precomputed decision');
+      const compiled = cold.entries.find(entry => entry.source === f.source)?.descriptor.textureArtifact;
+      assert.equal(owner.paletteIndexBits, compiled ? f.bits : 0);
+      assert.equal(memory.sourceTextureBuilds, 0, 'storage metadata must not trigger gameplay compilation');
+      assert.ok(compiled ? memory.textureArtifactLoads > 0 : memory.storageDecisionHits > before,
+        'draw loads prepared data or uses the ordinary metadata path');
     }
     for (const f of fixtures.filter(f => !f.name.startsWith('palette'))) {
       const image = native.images.load(f.source);

@@ -656,6 +656,7 @@ async function runSession(input, diagnostics, setNative) {
 
 // A separate wrapper covers failures before native initialization's inner try/finally.
 async function run(input, hooks = {}) {
+  const engine = require('./engine-selection.cjs').selectEngine(input);
   // Shared scene walks encounter many display-object subclass shapes.
   const v8 = require('node:v8');
   v8.setFlagsFromString('--max-valid-polymorphic-map-count=128');
@@ -670,6 +671,23 @@ async function run(input, hooks = {}) {
   }
   diagnostics.start();
   try {
+    if (engine === 'native-mv') {
+      const options = validate({ ...input, engine });
+      return await require('./native-mv.cjs').runNativeMv(options, {
+        nativeReady: native => { runtimeNative = native; },
+        prepareAssets: async (native, dimensions) => {
+          native.storage = createStorage(options.saveRoot);
+          if (!options.assetPreparation.enabled) { native.assets.installPrepared([]); return { preparation: {}, cancelled: false }; }
+          diagnostics.stage('asset-preparation');
+          const startup = await prepareStartupAssets({ ...options, width: dimensions.width, height: dimensions.height }, native);
+          native.assets.preparationStats = startup.preparation;
+          return startup;
+        },
+        onSession: hooks.onEngineSession,
+        observeFrame: (duration, now) => diagnostics.observeFrame(duration, now),
+        stage: value => diagnostics.stage(value),
+      });
+    }
     return await runSession(input, diagnostics, native => { runtimeNative = native; });
   } catch (error) {
     diagnostics.report('fatal-error', error);

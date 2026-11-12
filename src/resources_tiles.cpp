@@ -521,7 +521,8 @@ std::optional<ImageInfo> ImageStore::installTileLoad(std::shared_ptr<TileLoad> l
     // Both sampling modes are prewarmed before the image's ready event. Logical
     // views share these allocations; page ownership is independent of display trees.
     for (const auto& pixels : load->decoded->pixels) {
-      auto image = createDecoded(pixels);
+      const auto& storage = descriptor.pages[pages->images.size()].storage;
+      auto image = createDecoded(pixels, storage ? &*storage : nullptr);
       if (!image) { if (tileDiagnostics_) ++tileFallbacks_["page-allocation"]; return std::nullopt; }
       pages->images.push_back(image->handle);
       if (!lookupPremultiplied(image->handle)) { if (tileDiagnostics_) ++tileFallbacks_["page-allocation"]; return std::nullopt; }

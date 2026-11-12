@@ -105,6 +105,13 @@ include(cmake/Skia65.cmake)
 include(cmake/Lz4.cmake)
 include(cmake/Astcenc.cmake)
 set(PMJS_RUNTIME_SOURCES
+  src/mv_core_input.cpp
+  src/mv_core_types.cpp
+  src/mv_engine.cpp
+  src/mv_battle.cpp
+  src/mv_scenes.cpp
+  src/mv_presentation.cpp
+  src/mv_save.cpp
   src/runtime_core.cpp
   src/platform.cpp
   src/dialog.cpp
@@ -169,6 +176,7 @@ if(PMJS_ENABLE_SKIA65)
 endif()
 
 add_library(pmjs_native MODULE
+  src/node_addon_mv.cpp
   src/node_addon.cpp
   src/node_addon_compression.cpp
   src/node_addon_canvas.cpp
@@ -215,6 +223,19 @@ if(BUILD_TESTING)
   find_program(XVFB_RUN xvfb-run REQUIRED)
   find_program(NODE_EXECUTABLE node REQUIRED)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME node-mv-engine COMMAND ${NODE_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-engine.cjs" $<TARGET_FILE:pmjs_native>)
+  add_test(NAME node-mv-interpreter COMMAND ${NODE_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-interpreter.cjs" $<TARGET_FILE:pmjs_native>)
+  add_test(NAME node-shadow-tiles COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-shadow-tiles.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
+  set_tests_properties(node-shadow-tiles PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy" FIXTURES_REQUIRED pmjs_assets)
+  add_test(NAME node-mv-presentation COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-presentation.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
+  set_tests_properties(node-mv-presentation PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy" FIXTURES_REQUIRED pmjs_assets)
+  add_test(NAME node-mv-battle-ui COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-battle-ui.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
+  set_tests_properties(node-mv-battle-ui PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy" FIXTURES_REQUIRED pmjs_assets)
   add_test(NAME build-sdk-cache COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/sdk-cache.py")
   add_test(NAME build-node-sdk COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/node-sdk.py")
   add_test(NAME build-arm64-abi COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/arm64-abi.py")
@@ -235,6 +256,12 @@ if(BUILD_TESTING)
   endfunction()
 
   pmjs_add_cpp_test(pmjs-vfs-test native-vfs test/vfs.cpp $<TARGET_OBJECTS:pmjs_vfs_objects>)
+  pmjs_add_cpp_test(pmjs-mv-core-types-test native-mv-core-types test/mv-core-types.cpp src/mv_core_types.cpp)
+  pmjs_add_cpp_test(pmjs-mv-core-touch-test native-mv-core-touch test/mv-core-touch.cpp src/mv_core_input.cpp)
+  add_test(NAME node-mv-core-touch COMMAND ${NODE_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/test/mv-core-touch.cjs" $<TARGET_FILE:pmjs-mv-core-touch-test>)
+  pmjs_add_cpp_test(pmjs-mv-core-input-test native-mv-core-input test/mv-core-input.cpp src/mv_core_input.cpp)
+  add_test(NAME node-mv-core-input COMMAND ${NODE_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/test/mv-core-input.cjs" $<TARGET_FILE:pmjs-mv-core-input-test>)
+  pmjs_add_cpp_test(pmjs-mv-engine-test native-mv-engine test/mv-engine.cpp src/mv_engine.cpp src/mv_battle.cpp src/mv_scenes.cpp src/mv_save.cpp)
   pmjs_add_cpp_test(pmjs-log-test native-log test/log.cpp)
   target_link_libraries(pmjs-log-test PRIVATE pthread)
   target_link_libraries(pmjs-vfs-test PRIVATE PkgConfig::AVUTIL)

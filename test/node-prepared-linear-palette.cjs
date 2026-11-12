@@ -141,7 +141,7 @@ async function classifiedSheet() {
     assert.equal(owner().fullTextureResident, false,
       'an eligible frame must not allocate the full source palette');
     drawPacket(native, spritePacket(native, image, { ...options, nearest: true }));
-    assert.equal(owner().fullTextureResident, true, 'nearest drawing must retain the full palette fallback');
+    assert.equal(native.images.memory().sourceTextureBuilds, 0, 'nearest fallback must not compile texture data during drawing');
   } finally {
     native.images.release(image.handle);
     native.canvas.release(reference.handle);
@@ -185,9 +185,9 @@ async function classifiedSheet() {
     }
     assert.equal(memory().preparedFrameCacheMisses, 0, 'single-cell linear frames draw their prepared page directly');
     const packet = spritePacket(native, prepared, { nearest: false, crop: [0, 0, 64, 48] });
-    const first = drawPacket(native, packet), uploads = memory().textureUploadBytes, hits = memory().preparedRegions;
+    const first = drawPacket(native, packet), uploads = memory().textureUploadBytes;
     assert.deepEqual(drawPacket(native, packet), first);
-    assert.ok(memory().preparedRegions > hits);
+    assert.equal(memory().sourceTextureBuilds, 0, 'missing compiled data must not trigger a gameplay build');
     assert.equal(memory().paletteReadbacks, 0);
     assert.equal(memory().textureUploadBytes, uploads);
     assert.ok(memory().preparedFrameCacheBytes <= memory().preparedFrameCacheBudget);

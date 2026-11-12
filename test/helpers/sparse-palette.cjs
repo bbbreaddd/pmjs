@@ -40,6 +40,17 @@ async function preparePair(native, root) {
     descriptor: sparse, sparseFile: path.join(sparseDirectory, sparse.pages[0].path) };
 }
 
+async function preparedImage(native, root, source, bytes) {
+  fs.writeFileSync(path.join(root, source), bytes);
+  const directory = path.join(root, source + '-prepared');
+  fs.mkdirSync(directory);
+  const descriptor = await native.assets.processImage(source, directory, { grid: [1, 1], framePages: true });
+  assert.ok(descriptor.textureArtifact, 'fixture must prepare its texture before loading');
+  assert.equal(native.assets.installPrepared([{ source, directory, descriptor,
+    sourceIdentity: native.assets.sourceIdentity(source) }]), 1);
+  return native.images.load(source);
+}
+
 function spritePacket(native, image, { nearest = true, count = 1, crop = [0, 0, 64, 48],
   tone, flash, mipmap = false, standalone = false, premultiplied = false, scale = 1 } = {}) {
   const schema = native.scene.schema;
@@ -66,4 +77,4 @@ function drawPacket(native, packet, capture = true) {
   return capture ? Buffer.from(native.canvas.captureSceneRawPremultiplied()) : null;
 }
 
-module.exports = { fixture, preparePair, spritePacket, drawPacket };
+module.exports = { fixture, preparePair, preparedImage, spritePacket, drawPacket };
