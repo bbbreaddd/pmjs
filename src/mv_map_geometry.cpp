@@ -32,56 +32,55 @@ void Presentation::queueMapGeometry(bool upper,int originX,int originY) {
 }
 void Presentation::clearMapOverlays() {
   if (destinationCanvas_) core_.canvases().release(destinationCanvas_);
-  if (mapNameCanvas_) core_.canvases().release(mapNameCanvas_);
-  destinationCanvas_ = 0; mapNameCanvas_ = 0; mapNameText_.clear();
+  destinationCanvas_ = 0; mapNameWindow_.reset();
+  destinationSprite_.reset(); destinationStarted_ = false;
 }
 void Presentation::mapDestination() {
-  if (!session_.destination_) { destinationAge_ = 0; destinationTick_ = session_.ticks_; return; }
+  if (!session_.destination_) {
+    destinationSprite_.reset(); destinationStarted_ = false; destinationTick_ = session_.ticks_;
+    return;
+  }
   if (!destinationCanvas_) {
     const auto canvas = core_.canvases().create(1, 1);
     if (!canvas) throw std::runtime_error("cannot create destination marker");
     destinationCanvas_ = canvas->handle;
     if (!core_.canvases().fillRect(destinationCanvas_, 0, 0, 1, 1, 0xffffffff)) throw std::runtime_error("cannot draw destination marker");
   }
-  if (destinationTick_ != session_.ticks_) { destinationAge_ = (destinationAge_ + 1) % 20; destinationTick_ = session_.ticks_; }
+  if (!destinationStarted_ || session_.ticks_ < destinationTick_) {
+    destinationSprite_.reset(); destinationSprite_.advance(1); destinationStarted_ = true;
+  } else {
+    destinationSprite_.advance(session_.ticks_ - destinationTick_);
+  }
+  destinationTick_ = session_.ticks_;
   const auto source = core_.canvases().prepareImage(destinationCanvas_);
   if (!source) throw std::runtime_error("cannot prepare destination marker");
   const auto& tiled = session_.database_["tiledMaps"][std::to_string(session_.mapId_)];
   const int tw = tiled["tilewidth"].integer(48), th = tiled["tileheight"].integer(48);
-  const double x = (scrolledMapX((*session_.destination_)[0], cameraX_, tw) + 0.5) * tw;
-  const double y = (scrolledMapY((*session_.destination_)[1], cameraY_, th) + 0.5) * th;
-  const float scale = 1 + destinationAge_ / 20.0F, width = tw * scale, height = th * scale;
+  destinationSprite_.targetX = (*session_.destination_)[0]; destinationSprite_.targetY = (*session_.destination_)[1];
+  const double x = (scrolledMapX(destinationSprite_.targetX, cameraX_, tw) + 0.5) * tw;
+  const double y = (scrolledMapY(destinationSprite_.targetY, cameraY_, th) + 0.5) * th;
+  const float width = tw * destinationSprite_.scale.x, height = th * destinationSprite_.scale.y;
   if (!core_.renderer().queueImage(*source, {width, 0, 0, height, static_cast<float>(x - width / 2), static_cast<float>(y - height / 2)},
-      {0, 0, 1, 1}, (20 - destinationAge_) * 6 / 255.0F, 0xffffff, BlendMode::additive)) throw std::runtime_error("cannot queue destination marker");
+      {0, 0, 1, 1}, destinationSprite_.opacity, 0xffffff, static_cast<BlendMode>(destinationSprite_.blendMode))) throw std::runtime_error("cannot queue destination marker");
 }
 void Presentation::mapName() {
   const auto name = session_.map()["displayName"].text();
-  const bool changed = mapNameRevision_ != session_.presentationRevision_ || mapNameText_ != name;
+  const bool rewound = session_.ticks_ < mapNameTick_;
+  const bool changed = !mapNameWindow_ || rewound || mapNameRevision_ != session_.presentationRevision_ || mapNameWindow_->mapName != name;
   if (changed) {
-    mapNameRevision_ = session_.presentationRevision_; mapNameText_ = name;
-    mapNameShowCount_ = 150; mapNameOpacity_ = 0; mapNameTick_ = session_.ticks_;
-    if (mapNameCanvas_) { core_.canvases().release(mapNameCanvas_); mapNameCanvas_ = 0; }
+    if (!mapNameWindow_ || rewound) mapNameWindow_ = std::make_unique<Window_MapName>();
+    auto& contents = mapNameWindow_->contents;
+    contents.textColor = core::Utils::rgbToCssColor(colors_[0] >> 24, (colors_[0] >> 16) & 255, (colors_[0] >> 8) & 255);
+    mapNameWindow_->open(name);
+    mapNameWindow_->advance(1, session_.mapState_.nameDisplay);
+    mapNameRevision_ = session_.presentationRevision_;
+  } else {
+    mapNameWindow_->advance(session_.ticks_ - mapNameTick_, session_.mapState_.nameDisplay);
   }
-  if (mapNameTick_ != session_.ticks_) {
-    if (mapNameShowCount_ > 0 && session_.mapState_.nameDisplay) { --mapNameShowCount_; mapNameOpacity_ = std::min(255, mapNameOpacity_ + 16); }
-    else mapNameOpacity_ = std::max(0, mapNameOpacity_ - 16);
-    mapNameTick_ = session_.ticks_;
-  }
-  if (name.empty() || mapNameOpacity_ <= 0) return;
-  if (!mapNameCanvas_) {
-    const auto canvas = core_.canvases().create(324, 36);
-    if (!canvas) throw std::runtime_error("cannot create map name contents");
-    mapNameCanvas_ = canvas->handle;
-    const std::vector<float> offsets{0, 1};
-    if (!core_.canvases().paintRect(mapNameCanvas_, {0, 0, 162, 36}, 0xffffffff, 0, {0, 0, 162, 0}, offsets, {0x00000000, 0x00000099}) ||
-        !core_.canvases().paintRect(mapNameCanvas_, {162, 0, 162, 36}, 0xffffffff, 0, {162, 0, 324, 0}, offsets, {0x00000099, 0x00000000})) throw std::runtime_error("cannot draw map name background");
-    const double measured = core_.canvases().measureText(fonts_, name, 28).value_or(0);
-    const float x = std::max(0.0, (324 - measured) / 2), baseline = (36 + 28 * 0.7F) / 2;
-    if (!core_.canvases().drawText(mapNameCanvas_, fonts_, name, x, baseline, 28, 0x00000080, 4) ||
-        !core_.canvases().drawText(mapNameCanvas_, fonts_, name, x, baseline, 28, colors_[0])) throw std::runtime_error("cannot draw map name");
-  }
-  const auto source = core_.canvases().prepareImage(mapNameCanvas_);
-  if (!source || !core_.renderer().queueImage(*source, {1, 0, 0, 1, 18, 18}, {0, 0, 324, 36}, mapNameOpacity_ / 255.0F,
+  mapNameTick_ = session_.ticks_;
+  if (name.empty() || mapNameWindow_->contentsOpacity <= 0) return;
+  const auto source = mapNameWindow_->contents.texture();
+  if (!source || !core_.renderer().queueImage(source->handle, {1, 0, 0, 1, 18, 18}, {0, 0, static_cast<float>(source->width), static_cast<float>(source->height)}, mapNameWindow_->contentsOpacity / 255.0F,
       0xffffff, BlendMode::normal)) throw std::runtime_error("cannot queue map name");
 }
 }

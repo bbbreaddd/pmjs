@@ -46,7 +46,6 @@ std::vector<std::weak_ptr<BitmapBacking>> surfaces;
 std::set<WebAudio*> voices;
 std::vector<std::function<void()>> pendingLoads;
 std::unique_ptr<WebAudio> htmlAudio;
-std::unique_ptr<WebAudio> staticAudio;
 std::vector<std::function<void()>> htmlLoadListeners;
 std::shared_ptr<PixelBitmap> loadingBitmap;
 std::shared_ptr<PixelBitmap> overlayBitmap;
@@ -113,6 +112,12 @@ void bindRuntime(RuntimeCore& core) {
 void unbindRuntime(RuntimeCore& core) {
   auto services=bindings[&core].lock(); if (!services || --services->users>0) return;
   for (auto* voice:voices) if (voice->services_==services) voice->release();
+  if (active==services) {
+    Html5Audio::clear();
+    Html5Audio::initialized=false;
+    Html5Audio::staticSeUrl.clear();
+    pendingLoads.clear();
+  }
   for (auto iterator=surfaces.begin();iterator!=surfaces.end();) {
     if (auto surface=iterator->lock()) { if (surface->services==services) { if(surface->canvas)core.canvases().release(surface->canvas);if(surface->image)core.images().release(surface->image);surface->canvas=0;surface->image=0; }++iterator; }
     else iterator=surfaces.erase(iterator);
@@ -129,7 +134,15 @@ void updateServices() {
   if(boundRuntime())Graphics::updateScale();
   const std::vector<WebAudio*> current(voices.begin(),voices.end());
   for (auto* voice:current) if (voices.contains(voice)) voice->update();
-  if (htmlAudio) { htmlAudio->setVolume(Html5Audio::volume);Html5Audio::ready=htmlAudio->isReady();Html5Audio::error=htmlAudio->isError();Html5Audio::playing=htmlAudio->isPlaying();Html5Audio::currentTime=htmlAudio->playbackPosition(); }
+  if (htmlAudio) {
+    htmlAudio->setVolume(Html5Audio::volume);
+    Html5Audio::ready=htmlAudio->isReady();
+    Html5Audio::error=htmlAudio->isError();
+    const bool nowPlaying=htmlAudio->isPlaying();
+    if (!Html5Audio::loop && Html5Audio::playing && !nowPlaying) Html5Audio::stop();
+    else Html5Audio::playing=nowPlaying;
+    Html5Audio::currentTime=htmlAudio->playbackPosition();
+  }
 }
 PixelBitmap::PixelBitmap() { width=height=1; }
 bool PixelBitmap::isReady() const { return (loadingState=="none"||loaded)&&(!backing_||(backing_->services&&backing_->services->runtime&&!backing_->services->lifetime.expired())); }
@@ -297,13 +310,11 @@ void PixelBitmap::drawCircle(double x,double y,double radius,const std::string& 
 }
 void PixelBitmap::blt(const PixelBitmap& source,double sx,double sy,double sw,double sh,double dx,double dy,double dw,double dh) {
   if(std::isnan(dw)||dw==0)dw=sw;if(std::isnan(dh)||dh==0)dh=sh;
-  if(dw<0){dx+=dw;dw=-dw;}if(dh<0){dy+=dh;dh=-dh;}
   if(sx<0||sy<0||sw<=0||sh<=0||sx+sw>source.width||sy+sh>source.height||dw<=0||dh<=0)return;
   runtime(backing_ ? backing_->services : active).canvases().drawImage(nativeCanvas(),source.nativeCanvas(),sx,sy,sw,sh,dx,dy,dw,dh,paintOpacity/255.0,true);changed();
 }
 void PixelBitmap::bltImage(const PixelBitmap& source,double sx,double sy,double sw,double sh,double dx,double dy,double dw,double dh) {
   if(std::isnan(dw)||dw==0)dw=sw;if(std::isnan(dh)||dh==0)dh=sh;
-  if(dw<0){dx+=dw;dw=-dw;}if(dh<0){dy+=dh;dh=-dh;}
   if(sx<0||sy<0||sw<=0||sh<=0||sx+sw>source.width||sy+sh>source.height||dw<=0||dh<=0)return;
   if(!source.originalImage_||!source.originalImage_->image)throw std::invalid_argument("bitmap has no decoded image source");
   runtime(backing_?backing_->services:active).canvases().drawImage(nativeCanvas(),source.originalImage_->image,sx,sy,sw,sh,dx,dy,dw,dh,paintOpacity/255.0,true);changed();
@@ -328,6 +339,7 @@ double PixelBitmap::measureTextWidth(const std::string& text) const {
 }
 void PixelBitmap::drawText(const std::string& text,double x,double y,double maxWidth,double lineHeight,const std::string& align) {
   auto& core=runtime(backing_ ? backing_->services : active);CanvasTextStyle style;style.italic=fontItalic;
+  if(!maxWidth)maxWidth=0xffffffff;
   const double natural=measureTextWidth(text), actual=maxWidth>0?std::min(natural,maxWidth):natural;
   if(align=="center")x+=(maxWidth-actual)/2;else if(align=="right")x+=maxWidth-actual;
   const double baseline=y+(lineHeight+fontSize*0.7)/2;
@@ -628,87 +640,255 @@ void Graphics::presentOverlay() {
   } else if(!fonts("GameFont").empty())overlayBitmap->drawText((fpsMode==2?std::to_string(int(std::round(frameTime)))+" ms":std::to_string(int(std::round(fps)))+" FPS"),8,4,width-16,28);
   if(const auto image=overlayBitmap->texture())core.renderer().queueImage(image->handle,{1,0,0,1,0,0},{0,0,float(width),float(height)},1,0xffffff,BlendMode::normal);
 }
-WebAudio::WebAudio(std::string source):url(std::move(source)),services_(active) {
-  if(!url.empty())runtime(services_);voices.insert(this);
-  if(!url.empty()){loading_=true;const std::weak_ptr<int> alive=lifetime_;pendingLoads.push_back([this,alive]{if(!alive.expired())loadNow();});}
+WebAudio::WebAudio(std::string source, bool deferLoad, bool reportResourceErrors)
+    : url(std::move(source)), services_(active), useResourceHandler_(reportResourceErrors) {
+  voices.insert(this);
+  if (url.empty() || !services_ || !services_->runtime || services_->lifetime.expired()) return;
+  if (!deferLoad) {
+    loadNow();
+    return;
+  }
+  loading_ = true;
+  const std::weak_ptr<int> alive = lifetime_;
+  pendingLoads.push_back([this, alive] { if (!alive.expired()) loadNow(); });
 }
-WebAudio::~WebAudio() { lifetime_.reset();release();voices.erase(this); }
-bool WebAudio::initialize(bool noAudio) { if(!boundRuntime())return false;active->audioDisabled=noAudio;initialized=true;return !noAudio&&runtime().media().audioAvailable(); }
-void WebAudio::setMasterVolume(double value) { masterVolume=std::clamp(value,0.0,1.0);runtime().media().setMasterVolume(masterVolume); }
+WebAudio::~WebAudio() { lifetime_.reset(); release(); voices.erase(this); }
+bool WebAudio::initialize(bool noAudio) {
+  if (!boundRuntime()) return false;
+  active->audioDisabled = noAudio;
+  initialized = true;
+  return !noAudio && runtime().media().audioAvailable();
+}
+void WebAudio::setMasterVolume(double value) {
+  masterVolume = std::clamp(value, 0.0, 1.0);
+  if (auto* core = boundRuntime()) core->media().setMasterVolume(static_cast<float>(masterVolume));
+}
 void WebAudio::setEncryptionKey(const std::string& hex) {
-  runtime();active->encryptedAudio=hex.size()==32;
-  if(active->encryptedAudio)for(std::size_t index=0;index<16;++index)active->audioKey[index]=std::stoul(hex.substr(index*2,2),nullptr,16);
+  if (!active || active->lifetime.expired()) return;
+  active->encryptedAudio = hex.size() == 32;
+  if (active->encryptedAudio) {
+    for (std::size_t index = 0; index < 16; ++index) {
+      active->audioKey[index] = static_cast<std::uint8_t>(std::stoul(hex.substr(index * 2, 2), nullptr, 16));
+    }
+  } else {
+    active->audioKey = {};
+  }
 }
 void WebAudio::loadNow() {
-  if(!services_)services_=active;
+  if (!services_) services_ = active;
+  if (!services_ || !services_->runtime || services_->lifetime.expired()) { loading_ = false; return; }
   try {
-  auto& core=runtime(services_);ready=false;error=false;loading_=false;
-  std::vector<std::uint8_t> data;
-  std::optional<std::filesystem::path> path;
-  bool encrypted=false;
-  if(const auto bytes=dataUrl(url))data=*bytes;else path=resolve(url,core);
-  if(data.empty()&&!path&&services_->encryptedAudio) {
-    auto alternate=std::filesystem::path(sourcePath(url));alternate.replace_extension(alternate.extension()==".m4a"?".rpgmvm":".rpgmvo");path=resolve(alternate.string(),core);encrypted=bool(path);
+    auto& core = runtime(services_);
+    release();
+    error = false;
+    loading_ = false;
+    loopStart = 0;
+    loopLength = 0;
+    sampleRate = 0;
+    std::vector<std::uint8_t> data;
+    std::optional<std::filesystem::path> path;
+    bool encrypted = false;
+    if (const auto bytes = dataUrl(url)) {
+      data = *bytes;
+    } else {
+      const auto logical = sourcePath(url);
+      const auto encryptedPath = ::pmjs::mv::Decrypter::extToEncryptExt(logical);
+      if (::pmjs::mv::Decrypter::hasEncryptedAudio && encryptedPath != logical) {
+        path = resolve(encryptedPath, core);
+        encrypted = bool(path);
+      }
+      if (!path) path = resolve(url, core);
+      if (!path && services_->encryptedAudio && encryptedPath != logical) {
+        path = resolve(encryptedPath, core);
+        encrypted = bool(path);
+      }
+    }
+    if (!path && data.empty()) { failLoad(); return; }
+    AudioLoadOptions options;
+    if (url.find("/bgm/") != std::string::npos) options.intent = AudioIntent::music;
+    else if (url.find("/bgs/") != std::string::npos) options.intent = AudioIntent::ambient;
+    else if (url.find("/me/") != std::string::npos) options.intent = AudioIntent::jingle;
+    else options.intent = AudioIntent::effect;
+    options.resourceIdentity = url;
+    if (path) options.sourcePath = *path;
+    const auto& key = services_->encryptedAudio ? services_->audioKey : ::pmjs::mv::Decrypter::encryptionKey;
+    std::string failure;
+    handle_ = !data.empty()
+        ? core.media().loadAudioBytes(data, &failure, options)
+        : encrypted
+            ? core.media().loadEncryptedAudio(*path, key, &failure, options)
+            : core.media().loadAudio(path->string(), &failure, options);
+    if (!handle_) { failLoad(); return; }
+    totalTime = core.media().duration(handle_);
+    if (path && !encrypted) {
+      if (const auto info = MediaDecoder::probe(*path)) sampleRate = info->audioSampleRate;
+    }
+    if (path) {
+      std::ifstream file(*path, std::ios::binary);
+      data.assign(std::istreambuf_iterator<char>(file), {});
+    }
+    if (encrypted) data = ::pmjs::mv::Decrypter::decryptArrayBuffer(data, key);
+    readLoopComments(data);
+    if (loopLength <= 0) {
+      loopStart = 0;
+      loopLength = totalTime;
+    }
+    ready = true;
+  } catch (const std::exception&) {
+    failLoad();
+    return;
   }
-  if(!path&&data.empty()){failLoad();return;}
-  AudioLoadOptions options;options.intent=url.find("/bgm/")!=std::string::npos||url.find("/bgs/")!=std::string::npos?AudioIntent::music:AudioIntent::effect;
-  std::string failure;
-  handle_=!data.empty()?core.media().loadAudioBytes(data,&failure,options):encrypted?core.media().loadEncryptedAudio(*path,services_->audioKey,&failure,options):core.media().loadAudio(path->string(),&failure,options);
-  if(!handle_){failLoad();return;}
-  totalTime=core.media().duration(handle_);
-  if(path&&!encrypted)if(const auto info=MediaDecoder::probe(*path))sampleRate=info->audioSampleRate;
-  if(path){std::ifstream file(*path,std::ios::binary);data.assign(std::istreambuf_iterator<char>(file),{});}
-  if(encrypted)data=::pmjs::mv::Decrypter::decryptArrayBuffer(data,services_->audioKey);
-  readLoopComments(data);
-  if(loopLength<=0)loopLength=totalTime;
-  ready=true;
-  } catch(const std::exception&) { failLoad();return; }
-  const std::weak_ptr<int> alive=lifetime_;
-  auto pending=std::move(loadListeners);loadListeners.clear();for(auto& callback:pending){if(callback)callback();if(alive.expired())return;}
-  if(autoPlay_)play(loop,startTime);
+  const std::weak_ptr<int> alive = lifetime_;
+  auto pending = std::move(loadListeners);
+  loadListeners.clear();
+  for (auto& callback : pending) {
+    if (callback) callback();
+    if (alive.expired()) return;
+  }
+  if (autoPlay_) play(loop, startTime);
 }
 void WebAudio::failLoad() {
-  ready=false;loading_=true;
-  if(!failure_) {
-    const std::weak_ptr<int> alive=lifetime_;
-    failure_=::pmjs::mv::ResourceHandler::shared().createLoader(url,[this,alive]{if(!alive.expired())loadNow();},[this,alive]{if(!alive.expired()){error=true;loading_=false;}});
+  ready = false;
+  if (standAlone || !useResourceHandler_) {
+    error = true;
+    loading_ = false;
+    return;
+  }
+  loading_ = true;
+  if (!failure_) {
+    const std::weak_ptr<int> alive = lifetime_;
+    failure_ = ::pmjs::mv::ResourceHandler::shared().createLoader(
+        url,
+        [this, alive] { if (!alive.expired()) loadNow(); },
+        [this, alive] { if (!alive.expired()) { error = true; loading_ = false; } });
   }
   failure_();
 }
-void WebAudio::release() { if(handle_&&services_&&services_->runtime&&!services_->lifetime.expired()){services_->runtime->media().stop(handle_);services_->runtime->media().release(handle_);}handle_=0;playing=false;ready=false; }
-void WebAudio::clear() { stop();release();volume=1;pitch=1;pan=0;loop=false;loopStart=0;loopLength=0;totalTime=0;sampleRate=0;startTime=0;pauseTime=0;error=false;loadListeners.clear();stopListeners.clear();pendingFadeIn_=-1;loading_=false;failure_={};lifetime_=std::make_shared<int>(0); }
-bool WebAudio::isReady() const { return ready&&services_&&services_->runtime&&!services_->lifetime.expired(); }
-bool WebAudio::isPlaying() const { return handle_&&services_&&services_->runtime&&!services_->lifetime.expired()&&services_->runtime->media().isPlaying(handle_); }
-void WebAudio::setVolume(double value) { volume=value;update(); }
-void WebAudio::setPitch(double value) { pitch=value;update(); }
-void WebAudio::setPan(double value) { pan=value;update(); }
-void WebAudio::update() {
-  if(!handle_||!services_||!services_->runtime||services_->lifetime.expired())return;
-  auto& media=services_->runtime->media();media.setParameters(handle_,volume,pitch,pan);
-  if(!media.audioError(handle_).empty()){error=true;stop();return;}
-  if(playing&&!media.isPlaying(handle_)){playing=false;auto callbacks=std::move(stopListeners);stopListeners.clear();for(auto& callback:callbacks)if(callback)callback();}
+void WebAudio::release() {
+  if (handle_ && services_ && services_->runtime && !services_->lifetime.expired()) {
+    services_->runtime->media().stop(handle_);
+    services_->runtime->media().release(handle_);
+  }
+  handle_ = 0;
+  playing = false;
+  ready = false;
 }
-void WebAudio::play(bool loopFlag,double offset) {
-  loop=loopFlag;autoPlay_=true;
-  offset=std::max(0.0,offset);
-  if(!ready){startTime=offset;if(!error&&!loading_&&!url.empty())loadNow();return;}
-  auto& core=runtime(services_);if(services_->audioDisabled)return;
-  if(loopLength>0&&offset>=loopStart+loopLength)offset=loopStart+std::fmod(offset-loopStart,loopLength);
-  core.media().setParameters(handle_,volume,pitch,pan);playing=core.media().play(handle_,loop,offset);pauseTime=offset;
-  startTime=core.media().contextTime()-offset/std::max(0.000001,pitch);
-  if(pendingFadeIn_>=0){core.media().fade(handle_,0,1,pendingFadeIn_,false);pendingFadeIn_=-1;}
+void WebAudio::clear() {
+  stop();
+  release();
+  volume = 1;
+  pitch = 1;
+  pan = 0;
+  loop = false;
+  loopStart = 0;
+  loopLength = 0;
+  totalTime = 0;
+  sampleRate = 0;
+  startTime = 0;
+  pauseTime = 0;
+  error = false;
+  loadListeners.clear();
+  stopListeners.clear();
+  pendingFadeIn_ = -1;
+  loading_ = false;
+  failure_ = {};
+  lifetime_ = std::make_shared<int>(0);
+}
+bool WebAudio::isReady() const { return ready && services_ && services_->runtime && !services_->lifetime.expired(); }
+bool WebAudio::isPlaying() const { return handle_ && services_ && services_->runtime && !services_->lifetime.expired() && services_->runtime->media().isPlaying(handle_); }
+void WebAudio::setVolume(double value) { volume = value; update(); }
+void WebAudio::setPitch(double value) {
+  if (pitch == value) return;
+  const double pos = isPlaying() ? seek() : pauseTime;
+  pitch = value;
+  if (isPlaying() && services_ && services_->runtime && !services_->lifetime.expired()) {
+    startTime = services_->runtime->media().contextTime() - pos / std::max(0.000001, pitch);
+  }
+  update();
+}
+void WebAudio::setPan(double value) { pan = value; update(); }
+void WebAudio::update() {
+  if (!handle_ || !services_ || !services_->runtime || services_->lifetime.expired()) return;
+  auto& media = services_->runtime->media();
+  media.setParameters(handle_, static_cast<float>(volume), static_cast<float>(pitch), 0.0F);
+  media.setEqualPowerPan(handle_, static_cast<float>(std::clamp(pan, -1.0, 1.0)));
+  if (!media.audioError(handle_).empty()) { error = true; stop(); return; }
+  if (playing && !media.isPlaying(handle_)) {
+    playing = false;
+    const std::weak_ptr<int> alive = lifetime_;
+    auto callbacks = std::move(stopListeners);
+    stopListeners.clear();
+    for (auto& callback : callbacks) {
+      if (callback) callback();
+      if (alive.expired()) return;
+    }
+  }
+}
+void WebAudio::play(bool loopFlag, double offset) {
+  loop = loopFlag;
+  autoPlay_ = true;
+  offset = std::max(0.0, offset);
+  if (!ready) {
+    startTime = offset;
+    if (!error && !loading_ && !url.empty() && services_ && services_->runtime && !services_->lifetime.expired()) loadNow();
+    return;
+  }
+  auto& core = runtime(services_);
+  if (services_->audioDisabled) return;
+  if (loopLength > 0 && offset >= loopStart + loopLength) {
+    offset = loopStart + std::fmod(offset - loopStart, loopLength);
+  }
+  core.media().setParameters(handle_, static_cast<float>(volume), static_cast<float>(pitch), 0.0F);
+  core.media().setEqualPowerPan(handle_, static_cast<float>(std::clamp(pan, -1.0, 1.0)));
+  playing = core.media().play(handle_, loop, offset);
+  pauseTime = offset;
+  startTime = core.media().contextTime() - offset / std::max(0.000001, pitch);
+  if (pendingFadeIn_ >= 0) {
+    core.media().fade(handle_, 0.0F, 1.0F, std::max(0.0, pendingFadeIn_), false);
+    pendingFadeIn_ = -1;
+  }
 }
 void WebAudio::stop() {
-  autoPlay_=false;if(handle_&&services_&&services_->runtime&&!services_->lifetime.expired()){pauseTime=services_->runtime->media().position(handle_);services_->runtime->media().stop(handle_);}playing=false;
-  auto callbacks=std::move(stopListeners);stopListeners.clear();for(auto& callback:callbacks)if(callback)callback();
+  autoPlay_ = false;
+  pendingFadeIn_ = -1;
+  if (handle_ && services_ && services_->runtime && !services_->lifetime.expired()) {
+    pauseTime = services_->runtime->media().position(handle_);
+    services_->runtime->media().stop(handle_);
+  }
+  playing = false;
+  const std::weak_ptr<int> alive = lifetime_;
+  auto callbacks = std::move(stopListeners);
+  stopListeners.clear();
+  for (auto& callback : callbacks) {
+    if (callback) callback();
+    if (alive.expired()) return;
+  }
 }
-void WebAudio::fadeIn(double duration) { if(ready&&handle_)runtime(services_).media().fade(handle_,0,1,std::max(0.0,duration),false);else if(autoPlay_)pendingFadeIn_=duration; }
-void WebAudio::fadeOut(double duration) { if(handle_)runtime(services_).media().fade(handle_,1,0,std::max(0.0,duration),false);autoPlay_=false; }
-double WebAudio::playbackPosition() const { return handle_&&services_&&services_->runtime&&!services_->lifetime.expired()?services_->runtime->media().position(handle_):pauseTime; }
+void WebAudio::fadeIn(double duration) {
+  if (ready && handle_ && services_ && services_->runtime && !services_->lifetime.expired()) {
+    services_->runtime->media().fade(handle_, 0.0F, 1.0F, std::max(0.0, duration), false);
+  } else if (autoPlay_) {
+    pendingFadeIn_ = duration;
+  }
+}
+void WebAudio::fadeOut(double duration) {
+  if (handle_ && services_ && services_->runtime && !services_->lifetime.expired()) {
+    services_->runtime->media().fade(handle_, -1.0F, 0.0F, std::max(0.0, duration), false);
+  }
+  autoPlay_ = false;
+  pendingFadeIn_ = -1;
+}
+double WebAudio::playbackPosition() const {
+  return handle_ && services_ && services_->runtime && !services_->lifetime.expired()
+      ? services_->runtime->media().position(handle_)
+      : pauseTime;
+}
 double WebAudio::seek() const {
-  if(!services_||!services_->runtime||services_->lifetime.expired())return 0;
-  double position=(services_->runtime->media().contextTime()-startTime)*pitch;
-  if(loopLength>0&&position>=loopStart+loopLength)position=loopStart+std::fmod(position-loopStart,loopLength);
+  if (!isPlaying()) return pauseTime;
+  double position = (services_->runtime->media().contextTime() - startTime) * pitch;
+  if (loopLength > 0 && position >= loopStart + loopLength) {
+    position = loopStart + std::fmod(position - loopStart, loopLength);
+  }
   return position;
 }
 void WebAudio::addLoadListener(std::function<void()> listener) { if(ready)listener();else loadListeners.push_back(std::move(listener)); }
@@ -735,11 +915,16 @@ std::string WebAudio::readFourCharacters(const std::vector<std::uint8_t>& data, 
 }
 
 void WebAudio::readLoopComments(const std::vector<std::uint8_t>& data) {
+  loopStart = 0;
+  loopLength = 0;
   readOgg(data);
   readMp4(data);
-  if (sampleRate > 0) {
+  if (loopLength > 0 && sampleRate > 0) {
     loopStart /= sampleRate;
     loopLength /= sampleRate;
+  } else {
+    loopStart = 0;
+    loopLength = 0;
   }
 }
 
@@ -757,6 +942,7 @@ void WebAudio::readOgg(const std::vector<std::uint8_t>& data) {
         segments.push_back(data[index++]);
       }
       for (std::size_t i = 0; i < segments.size(); ++i) {
+        if (segments[i] > data.size() - index) break;
         if (index + 5 <= data.size() && readFourCharacters(data, index + 1) == "vorb") {
           const std::uint8_t headerType = data[index];
           if (headerType == 1) {
@@ -790,39 +976,87 @@ void WebAudio::readMp4(const std::vector<std::uint8_t>& data) {
       if (name == "udta" || name == "meta") {
         readMetaData(data, index, size);
       }
-      if (size <= 1) break;
+      if (size <= 1 || size > data.size() - index) break;
       index += size;
     }
   }
 }
 
-void WebAudio::readMetaData(const std::vector<std::uint8_t>& data,std::size_t index,std::size_t size) {
-  const auto limit=std::min(data.size(),index+std::min(size,data.size()-std::min(index,data.size())));
-  for(std::size_t cursor=index;cursor+10<limit;++cursor) {
-    if(readFourCharacters(data,cursor)!="LOOP")continue;
-    std::string text;while(cursor<data.size()&&data[cursor]>0)text+=char(data[cursor++]);
+void WebAudio::readMetaData(const std::vector<std::uint8_t>& data, std::size_t index, std::size_t size) {
+  static const std::regex loopStartRegex("LOOPSTART=([0-9]+)");
+  static const std::regex loopLengthRegex("LOOPLENGTH=([0-9]+)");
+  const auto limit = std::min(data.size(), index + std::min(size, data.size() - std::min(index, data.size())));
+  for (std::size_t cursor = index; cursor + 10 < limit; ++cursor) {
+    if (readFourCharacters(data, cursor) != "LOOP") continue;
+    std::string text;
+    while (cursor < limit && data[cursor] > 0) text += char(data[cursor++]);
     std::smatch match;
-    if(std::regex_search(text,match,std::regex("LOOPSTART=([0-9]+)")))loopStart=std::strtod(match[1].str().c_str(),nullptr);
-    if(std::regex_search(text,match,std::regex("LOOPLENGTH=([0-9]+)")))loopLength=std::strtod(match[1].str().c_str(),nullptr);
-    if(text=="LOOPSTART"||text=="LOOPLENGTH") {
-      cursor=std::min(data.size(),cursor+16);std::string value;
-      while(cursor<data.size()&&data[cursor]>0)value+=char(data[cursor++]);
-      if(text=="LOOPSTART")loopStart=std::strtod(value.c_str(),nullptr);else loopLength=std::strtod(value.c_str(),nullptr);
+    if (std::regex_search(text, match, loopStartRegex)) loopStart = std::strtod(match[1].str().c_str(), nullptr);
+    if (std::regex_search(text, match, loopLengthRegex)) loopLength = std::strtod(match[1].str().c_str(), nullptr);
+    if (text == "LOOPSTART" || text == "LOOPLENGTH") {
+      cursor = std::min(limit, cursor + 16);
+      std::string value;
+      while (cursor < limit && data[cursor] > 0) value += char(data[cursor++]);
+      if (text == "LOOPSTART") loopStart = std::strtod(value.c_str(), nullptr);
+      else loopLength = std::strtod(value.c_str(), nullptr);
     }
   }
 }
 
-void Html5Audio::initialize() { clear(); }
-void Html5Audio::setup(const std::string& source) { clear();url=source;htmlAudio=std::make_unique<WebAudio>(url);ready=htmlAudio->isReady();error=htmlAudio->isError(); }
-void Html5Audio::clear() { htmlAudio.reset();htmlLoadListeners.clear();url.clear();volume=1;ready=false;error=false;playing=false;currentTime=0;loop=false; }
-void Html5Audio::setStaticSe(const std::string& source) { staticSeUrl=source;staticAudio=std::make_unique<WebAudio>(source); }
-bool Html5Audio::isReady() { ready=htmlAudio&&htmlAudio->isReady();return ready; }
-bool Html5Audio::isError() { error=htmlAudio&&htmlAudio->isError();return error; }
-bool Html5Audio::isPlaying() { playing=htmlAudio&&htmlAudio->isPlaying();return playing; }
-void Html5Audio::play(bool repeat,double offset) { if(!htmlAudio&&!url.empty())setup(url);if(htmlAudio){htmlAudio->setVolume(volume);htmlAudio->play(repeat,offset);loop=repeat;playing=htmlAudio->isPlaying();} }
-void Html5Audio::stop() { if(htmlAudio){currentTime=htmlAudio->playbackPosition();htmlAudio->stop();}playing=false; }
-void Html5Audio::fadeIn(double duration) { if(htmlAudio){htmlAudio->setVolume(volume);htmlAudio->fadeIn(duration);} }
-void Html5Audio::fadeOut(double duration) { if(htmlAudio)htmlAudio->fadeOut(duration); }
-double Html5Audio::seek() { currentTime=htmlAudio?htmlAudio->playbackPosition():0;return currentTime; }
-void Html5Audio::addLoadListener(std::function<void()> listener) { if(htmlAudio)htmlAudio->addLoadListener(std::move(listener));else htmlLoadListeners.push_back(std::move(listener)); }
+bool Html5Audio::initialize() {
+  if (!initialized) {
+    clear();
+    initialized = boundRuntime() && runtime().media().audioAvailable();
+  }
+  return initialized;
+}
+void Html5Audio::setup(const std::string& source) {
+  if (!initialized) initialize();
+  clear();
+  url = source;
+  htmlAudio = std::make_unique<WebAudio>(url, /*deferLoad=*/true, /*reportResourceErrors=*/false);
+  ready = htmlAudio->isReady();
+  error = htmlAudio->isError();
+}
+void Html5Audio::clear() {
+  htmlAudio.reset();
+  htmlLoadListeners.clear();
+  url.clear();
+  volume = 1;
+  ready = false;
+  error = false;
+  playing = false;
+  currentTime = 0;
+  loop = false;
+}
+void Html5Audio::setStaticSe(const std::string& source) {
+  if (!initialized) initialize();
+  staticSeUrl = source;
+}
+bool Html5Audio::isReady() { ready = htmlAudio && htmlAudio->isReady(); return ready; }
+bool Html5Audio::isError() { error = htmlAudio && htmlAudio->isError(); return error; }
+bool Html5Audio::isPlaying() { playing = htmlAudio && htmlAudio->isPlaying(); return playing; }
+void Html5Audio::play(bool repeat, double offset) {
+  if (!htmlAudio && !url.empty()) setup(url);
+  if (htmlAudio) {
+    htmlAudio->setVolume(volume);
+    htmlAudio->play(repeat, offset);
+    loop = repeat;
+    playing = htmlAudio->isPlaying();
+  }
+}
+void Html5Audio::stop() {
+  if (htmlAudio) {
+    currentTime = htmlAudio->playbackPosition();
+    htmlAudio->stop();
+  }
+  playing = false;
+}
+void Html5Audio::fadeIn(double duration) { if (htmlAudio) { htmlAudio->setVolume(volume); htmlAudio->fadeIn(duration); } }
+void Html5Audio::fadeOut(double duration) { if (htmlAudio) htmlAudio->fadeOut(duration); }
+double Html5Audio::seek() { currentTime = htmlAudio ? htmlAudio->playbackPosition() : 0; return currentTime; }
+void Html5Audio::addLoadListener(std::function<void()> listener) {
+  if (htmlAudio) htmlAudio->addLoadListener(std::move(listener));
+  else htmlLoadListeners.push_back(std::move(listener));
+}
 }  // namespace pmjs::mv::core

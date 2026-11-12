@@ -1,5 +1,6 @@
 #include "mv_engine.hpp"
 #include "mv_managers.hpp"
+#include "mv_windows.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -16,6 +17,7 @@ bool Session::dialogEventCommand(const Value& entry, Interpreter& context) {
       const int digits = std::clamp(p[1].integer(), 1, 8);
       ui_.variableId = varId;
       ui_.maxDigits = digits; ui_.digitIndex = 0;
+      ui_.numberButton = -1; ui_.numberButtonsInitialized = false;
       int initialValue = variable(varId).integer();
       if (initialValue < 0) initialValue = 0;
       const int maxVal = static_cast<int>(std::pow(10, digits)) - 1;
@@ -30,6 +32,7 @@ bool Session::dialogEventCommand(const Value& entry, Interpreter& context) {
       ui_.variableId = varId;
       ui_.category = itypeId;
       ui_.cursor = 0;
+      ui_.listTopRow = 0;
       message_.busy = true;
       messageAge_ = 0;
       return true;
@@ -57,7 +60,7 @@ bool Session::dialogEventCommand(const Value& entry, Interpreter& context) {
       SceneManager::pushScene(*this, Scene::name);
       ui_.nameActorId = actorId;
       ui_.nameMaxLength = std::max(1, maxChars);
-      ui_.nameInput = actors_.at(actorId).name;
+      ui_.nameInput = Window_NameEdit::initialName(actors_.at(actorId).name, ui_.nameMaxLength);
       return true;
     }
     case 351: { // Open Menu Screen

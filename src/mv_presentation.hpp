@@ -1,6 +1,7 @@
 #pragma once
 #include "mv_engine.hpp"
 #include "mv_core_display.hpp"
+#include "mv_sprites.hpp"
 #include "runtime_core.hpp"
 #include <functional>
 #include "media_decoder.hpp"
@@ -33,10 +34,11 @@ class Presentation {
   void mapShadow();
   void mapName();
   void clearMapOverlays();
-  CanvasHandle destinationCanvas_ = 0, mapNameCanvas_ = 0;
-  std::string mapNameText_;
+  CanvasHandle destinationCanvas_ = 0;
   std::uint64_t mapNameRevision_ = 0, mapNameTick_ = 0, destinationTick_ = 0;
-  int mapNameShowCount_ = 0, mapNameOpacity_ = 0, destinationAge_ = 0;
+  std::unique_ptr<Window_MapName> mapNameWindow_;
+  Sprite_Destination destinationSprite_;
+  bool destinationStarted_ = false;
   void tiledMap(const Value& data);
   void clearTiledGeometry();
   using TiledChunkKey = std::tuple<std::size_t, int, int>;
@@ -93,7 +95,16 @@ class Presentation {
   void battleSprites();
   std::vector<int> battlerIcons(const Battler& actor) const;
   void stateIcons(const Battler& actor, float x, float y, int width);
-  struct BattlerDisplay { bool initialized = false, hidden = false, escaped = false, collapseSoundPlayed = false; int hp = 0; std::uint64_t death = 0, appeared = 0, disappeared = 0, lastBossSound = 0; };
+  struct BattlerDisplay {
+    Sprite_StateIcon stateIcon;
+    std::uint64_t stateIconTick = 0;
+    bool stateIconStarted = false;
+    Sprite_StateOverlay stateOverlay;
+    Sprite_Weapon weapon;
+    std::uint64_t actorSpriteTick = 0, weaponStarted = 0;
+    bool actorSpritesStarted = false;
+    Sprite_Actor actorSprite;
+  };
   std::map<std::pair<bool,int>,BattlerDisplay> battlerDisplays_;
   void visualEffects();
   void animationCells(const Value& animation,int frame,float x,float y,bool mirror);
@@ -118,12 +129,12 @@ class Presentation {
   std::shared_ptr<core::PixelBitmap> coreWindowskin_;
   std::vector<std::filesystem::path> fonts_;
   std::array<std::uint32_t, 32> colors_{};
-  std::map<std::string, std::pair<std::string, std::uint32_t>> audio_;
+  std::map<std::string, std::pair<std::string, std::unique_ptr<core::WebAudio>>> audio_;
   std::map<std::string, Value> audioSettings_;
-  std::uint32_t musicEffect_ = 0;
+  std::unique_ptr<core::WebAudio> musicEffect_;
   int lastScene_ = -1, lastMap_ = -1;
   std::uint64_t lastPresentationRevision_ = 0;
-  std::vector<std::uint32_t> sounds_;
+  std::vector<std::unique_ptr<core::WebAudio>> sounds_;
   double cameraX_ = 0, cameraY_ = 0;
   double sceneTickOrigin_ = 0;
 };

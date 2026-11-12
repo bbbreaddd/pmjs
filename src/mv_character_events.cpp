@@ -134,7 +134,7 @@ void Session::setupMapState() {
   mapState_.lastDisplayX = loopHorizontal() ? std::fmod(std::fmod(player_.realX - (width - 1) / 2, data["width"].number()) + data["width"].number(), data["width"].number()) : endX < 0 ? endX / 2 : std::clamp(player_.realX - (width - 1) / 2, 0.0, endX);
   mapState_.lastDisplayY = loopVertical() ? std::fmod(std::fmod(player_.realY - (height - 1) / 2, data["height"].number()) + data["height"].number(), data["height"].number()) : endY < 0 ? endY / 2 : std::clamp(player_.realY - (height - 1) / 2, 0.0, endY);
   mapState_.parallaxX = mapState_.lastDisplayX; mapState_.parallaxY = mapState_.lastDisplayY;
-  savedCamera_ = std::array{mapState_.lastDisplayX, mapState_.lastDisplayY};
+  savedCamera_.reset();
 }
 
 void Session::updateMapState() {

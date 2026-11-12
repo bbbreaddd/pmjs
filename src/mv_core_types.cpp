@@ -58,6 +58,20 @@ std::vector<std::uint16_t> utf16Units(const std::string& text) {
   return result;
 }
 std::size_t utf16Length(const std::string& text){return utf16Units(text).size();}
+std::string stringFromUtf16(const std::vector<std::uint16_t>& units) {
+  // Preserve lone surrogates so slicing one JavaScript code unit can round-trip.
+  std::string text;
+  for(std::size_t index=0;index<units.size();++index) {
+    std::uint32_t code=units[index];
+    if(code>=0xd800&&code<=0xdbff&&index+1<units.size()&&units[index+1]>=0xdc00&&units[index+1]<=0xdfff)
+      code=0x10000+((code-0xd800)<<10)+(units[++index]-0xdc00);
+    if(code<0x80)text+=static_cast<char>(code);
+    else if(code<0x800){text+=static_cast<char>(0xc0|(code>>6));text+=static_cast<char>(0x80|(code&0x3f));}
+    else if(code<0x10000){text+=static_cast<char>(0xe0|(code>>12));text+=static_cast<char>(0x80|((code>>6)&0x3f));text+=static_cast<char>(0x80|(code&0x3f));}
+    else {text+=static_cast<char>(0xf0|(code>>18));text+=static_cast<char>(0x80|((code>>12)&0x3f));text+=static_cast<char>(0x80|((code>>6)&0x3f));text+=static_cast<char>(0x80|(code&0x3f));}
+  }
+  return text;
+}
 bool contains(const std::string& text,const std::string& sub) {
   const auto first=utf16Units(text),second=utf16Units(sub);
   return std::search(first.begin(),first.end(),second.begin(),second.end())!=first.end()||second.empty();

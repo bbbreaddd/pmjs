@@ -63,6 +63,7 @@ std::string numberPadZero(double value,double length);
 std::string format(const std::string& pattern,const std::vector<std::string>& arguments);
 std::string formatValues(const std::string& pattern,const std::vector<pmjs::mv::Value>& arguments);
 std::vector<std::uint16_t> utf16Units(const std::string& text);
+std::string stringFromUtf16(const std::vector<std::uint16_t>& units);
 std::size_t utf16Length(const std::string& text);
 std::string numberString(double value);
 std::string stringValue(const pmjs::mv::Value& value);

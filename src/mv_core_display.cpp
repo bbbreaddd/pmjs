@@ -34,7 +34,7 @@ void Container::addChildAt(std::shared_ptr<Container> child,std::size_t index) {
 }
 std::shared_ptr<Container> Container::removeChild(Container* child) {
   auto it=std::find_if(children.begin(),children.end(),[&](const auto& p){return p.get()==child;});if(it==children.end())return {};
-  auto result=*it;children.erase(it);result->parent=nullptr;return result;
+  auto result=*it;children.erase(it);result->parent=nullptr;result->onRemoveAsAChild();return result;
 }
 void Container::removeChildren(){for(auto& child:children)if(child)child->parent=nullptr;children.clear();}
 Matrix Container::localTransform()const {
@@ -95,7 +95,7 @@ void ToneFilter::adjustHue(double degrees) {
 }
 void ToneFilter::adjustBrightness(double value){const float v=float(value);multiply({v,0,0,0,0,0,v,0,0,0,0,0,v,0,0,0,0,0,1,0});}
 void ToneFilter::adjustContrast(double value){const float v=float(value+1),offset=-.5F*(v-1);multiply({v,0,0,0,offset,0,v,0,0,offset,0,0,v,0,offset,0,0,0,1,0});}
-void ToneSprite::setTone(double r,double g,double b,double gray){tone_={std::clamp(std::floor(r+.5),-255.0,255.0),std::clamp(std::floor(g+.5),-255.0,255.0),std::clamp(std::floor(b+.5),-255.0,255.0),std::clamp(std::floor(gray+.5),0.0,255.0)};}
+void ToneSprite::setTone(double r,double g,double b,double gray){const auto tone=[](double value,double low,double high){const double clean=std::isnan(value)?0.0:value;return std::clamp(std::floor(clean+.5),low,high);};tone_={tone(r,-255,255),tone(g,-255,255),tone(b,-255,255),tone(gray,0,255)};}
 void ToneSprite::draw(Renderer& renderer,const Matrix&,double){if(std::all_of(tone_.begin(),tone_.end(),[](double value){return value==0;}))return;ToneFilter filter;filter.adjustTone(tone_[0],tone_[1],tone_[2]);filter.adjustSaturation(-tone_[3]);filter.apply(renderer);}
 void Window::addChildToBack(std::shared_ptr<Container> child){std::erase_if(backChildren_,[&](const auto& weak){auto item=weak.lock();return !item||item==child;});Container::addChild(child);backChildren_.insert(backChildren_.begin(),child);}
 void Window::update(){if(active)++animationCount;pauseAlpha_=pause?std::min(1.0,pauseAlpha_+.1):0;Container::update();}

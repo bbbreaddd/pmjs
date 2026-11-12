@@ -99,7 +99,7 @@ try {
   api.step(playable,{ok:true});api.step(playable,{});api.step(playable,{});
   assert.equal(api.snapshot(playable).message.busy,false);
   api.step(playable,{cancel:true});assert.equal(api.snapshot(playable).message.busy,true,'unfinished menu displays a dismissible notice');
-  for(let i=0;i<30;i++)api.step(playable,{});
+  for(let i=0;i<40;i++)api.step(playable,{});
   api.step(playable,{cancel:true});api.step(playable,{});
   assert.equal(api.snapshot(playable).message.busy,false);
   api.step(playable,{direction:8});assert.equal(api.snapshot(playable).player.y,0,'movement resumes after dismissing messages');

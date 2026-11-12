@@ -47,12 +47,14 @@ struct Input {
   bool ok = false;
   bool cancel = false;
   bool dash = false;
+  bool okLongPressed = false;
   std::set<std::string> pressed;
   std::optional<int> destinationX, destinationY;
   std::optional<double> touchX, touchY;
   bool touchTriggered = false, touchPressed = false, touchCancelled = false;
   bool touchRepeated = false, touchLongPressed = false, touchMoved = false, touchReleased = false;
   double wheelX = 0, wheelY = 0;
+  double inputDate = 0, touchDate = 0;
   std::optional<bool> okTriggered = {};
   std::optional<bool> cancelTriggered = {};
   std::optional<int> repeatedDirection = {};
@@ -96,8 +98,11 @@ struct VisualEffect {
   int serial=0,targetType=0,targetId=0,animationId=0,duration=0,lastTimingFrame=-1;
   std::uint64_t started=0;
   bool mirror=false,balloon=false;
+  bool duplicated=false;
   std::array<float,4> flash{};
   int flashDuration=0,hideDuration=0;
+  std::array<float,4> screenFlash{};
+  int screenFlashDuration=0;
 };
 
 struct Event {
@@ -149,6 +154,8 @@ struct Battler {
   std::map<int, int> stateTurns, stateSteps;
   std::array<int, 8> buffs{}, buffTurns{}, paramPlus{};
   ActionResult result;
+  int requestedMotion = -1, requestedWeapon = 0;
+  std::uint64_t motionRequestedAt = 0;
 };
 
 struct Action {
@@ -160,18 +167,23 @@ struct BattleTarget {
   bool enemy = false;
   int index = 0;
   ActionResult result;
+  std::uint64_t impact = 0;
+  bool aliveAtImpact = true;
 };
 struct BattleVisual {
   Action action;
+  bool actionVisual = true;
+  std::size_t invocationCount = 0;
   std::uint64_t movementStarted = 0, started = 0, impact = 0, returned = 0;
-  std::vector<int> lastAudioFrames;
   std::vector<BattleTarget> targets;
+  std::vector<BattleTarget> animationTargets;
 };
 
 struct Battle {
   bool active = false, canEscape = false, canLose = false, event = false, opening = false;
   int troopId = 0, turn = 0, actorIndex = 0, result = -1, wait = 0;
   int actionStage = 0, currentVisual = -1, encounterEffect = 0;
+  int targetIndex = 0;
   double escapeRatio = 0;
   Value mapBgm, mapBgs;
   std::vector<Battler> enemies;
@@ -208,10 +220,16 @@ struct Ui {
   Scene scene = Scene::map;
   int cursor = 0, actor = 0, category = 0, target = -1, slot = -1, pendingId = 0;
   int commandCursor = 0, listCursor = 0, skillType = 0;
+  int listTopRow = 0, listPageRows = 14;
+  std::optional<Battler> equipPreview;
+  int equipPreviewIndex = -1;
   bool targeting = false, itemAction = false, listMemoryApplied = false;
   int commandActor = -1;
   int age = 0;
   int numberInput = 0, maxDigits = 0, variableId = 0, digitIndex = 0;
+  int numberButton = -1;
+  int numberButtonFrame = -1;
+  bool numberButtonsVisible = false, numberButtonsInitialized = false;
   int nameActorId = 0, nameMaxLength = 0, namePage = 0;
   std::string nameInput;
   bool shopPurchaseOnly = false;
@@ -239,6 +257,8 @@ struct MapState {
 };
 
 class Presentation;
+class Window_BattleLog;
+class Sprite_Enemy;
 
 class Session {
  public:
@@ -271,6 +291,11 @@ class Session {
   void load(const Value& contents);
   const Ui& ui() const { return ui_; }
   const Battle& battle() const { return battle_; }
+  void setEnemyBitmapHeightResolver(std::function<int(const Battler&)> resolver);
+  const Sprite_Enemy* enemySprite(std::size_t index) const;
+  bool isBattleEffecting() const;
+  void requestEnemyEffect(std::size_t index, const std::string& effect);
+  void requestActorMotion(int actorId, int motion, int weaponImageId);
   const Battler& actor(int id) const { return actors_.at(id); }
   int gold() const { return gold_; }
   const SystemState& system() const { return system_; }
@@ -282,6 +307,7 @@ class Session {
   void configure(const Value& configuration);
   Value configuration() const;
   int configurationRevision() const { return configurationRevision_; }
+  const Value::Array& audioCommands() const { return audioCommands_; }
   void setSaveMetadata(Value::Array metadata) { saveMetadata_ = std::move(metadata); }
 
  private:
@@ -298,13 +324,21 @@ class Session {
   friend class ConfigManager;
   friend class Window_Base;
   friend class Window_ItemList;
+  friend class Window_EventItem;
   friend class Window_SkillList;
+  friend class Window_BattleItem;
+  friend class Window_BattleLog;
+  friend class Window_ShopBuy;
+  friend class Window_ShopSell;
+  friend class Window_SavefileList;
+  friend class Window_DebugEdit;
   friend class Window_EquipSlot;
+  friend class Window_EquipStatus;
   friend class Window_EquipItem;
   friend class Window_SkillType;
   friend class Window_ActorCommand;
   double evaluateExpression(const std::string& expression, const Battler* subject = nullptr, const Battler* target = nullptr);
-  int requestAnimation(int targetType,int targetId,int animationId,bool mirror=false,bool balloon=false);
+  int requestAnimation(int targetType,int targetId,int animationId,bool mirror=false,bool balloon=false,int delayFrames=0);
   void updateVisualEffects();
   std::array<float,4> effectColor(int targetType,int targetId) const;
   bool effectHidden(int targetType,int targetId) const;
@@ -448,6 +482,16 @@ class Session {
   std::vector<int> party_;
   std::map<int, Battler> actors_;
   Battle battle_;
+  std::shared_ptr<Window_BattleLog> battleLog_;
+  std::vector<std::shared_ptr<Sprite_Enemy>> enemySprites_;
+  std::function<int(const Battler&)> enemyBitmapHeightResolver_;
+  void updateEnemySprites();
+  void resetEnemySprites();
+  Battler previewEquipment(const Battler& actor, int slot, int item) const;
+  std::vector<std::pair<int,int>> stripEquipment(Battler& actor) const;
+  std::vector<ShopGood> shopItems(bool selling) const;
+  int shopMaximum(const ShopGood& good, bool selling, int money) const;
+  void updateShop(bool ok, bool cancel, int direction);
   Ui ui_;
   std::vector<Ui> sceneStack_;
   std::vector<UiHitTarget> uiHitTargets_;

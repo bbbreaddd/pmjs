@@ -424,9 +424,9 @@ void AudioManager::fadeOutBgm(Session& session, int durationSeconds) {
 }
 
 void AudioManager::fadeInBgm(Session& session, int durationSeconds) {
-  (void)durationSeconds;
   if (!session.savedBgm_.null() && !session.savedBgm_["name"].text().empty()) {
     session.audio("bgm", session.savedBgm_, false);
+    if (durationSeconds > 0) session.audio("fade-in-bgm", Value{durationSeconds});
   }
 }
 
@@ -473,9 +473,9 @@ void AudioManager::fadeOutBgs(Session& session, int durationSeconds) {
 }
 
 void AudioManager::fadeInBgs(Session& session, int durationSeconds) {
-  (void)durationSeconds;
   if (!session.savedBgs_.null() && !session.savedBgs_["name"].text().empty()) {
     session.audio("bgs", session.savedBgs_, false);
+    if (durationSeconds > 0) session.audio("fade-in-bgs", Value{durationSeconds});
   }
 }
 
@@ -491,8 +491,9 @@ void AudioManager::updateMeParameters(Session& session, const Value& me) {
   session.audio("me", me, false);
 }
 
-void AudioManager::fadeOutMe(Session& session, int /*durationSeconds*/) {
-  stopMe(session);
+void AudioManager::fadeOutMe(Session& session, int durationSeconds) {
+  if (durationSeconds > 0) session.audio("fade-me", Value{durationSeconds});
+  else stopMe(session);
 }
 
 void AudioManager::stopMe(Session& session) {

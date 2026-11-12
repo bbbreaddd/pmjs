@@ -1,4 +1,5 @@
 #include "mv_engine.hpp"
+#include "mv_sprites.hpp"
 #include "mv_battle_extra.hpp"
 
 #include <algorithm>
@@ -7,6 +8,11 @@
 #include <unordered_map>
 
 namespace pmjs::mv {
+void Session::requestActorMotion(int actorId, int motion, int weaponImageId) {
+  auto& actor = actors_.at(actorId);
+  actor.requestedMotion = motion; actor.requestedWeapon = weaponImageId;
+  actor.motionRequestedAt = ticks_;
+}
 void Session::setupBattleTest() {
   newGame();
   battleTest_ = true; party_.clear(); actors_.clear(); inventory_.clear();
@@ -194,11 +200,7 @@ void Session::applyItemEffect(Battler& subject, Battler& target, const Value& it
     const int value = static_cast<int>(std::floor(effect["value1"].number()));
     if (value) {
       result.tpDamage = -value; target.tp += value; result.success = true;
-      if (battle_.active && target.hp > 0) {
-        const auto name = target.enemy ? database_["enemies"][target.id]["name"].text() : target.name;
-        battle_.log.push_back(battleMessage(std::string(target.enemy ? "enemy" : "actor")+(value > 0 ? "Gain" : "Loss"),
-          {name,database_["system"]["terms"]["basic"][6].text(),std::to_string(std::abs(value))}));
-      }
+
     }
   } else if (code == 21) {
     std::set<int> states;
@@ -470,45 +472,26 @@ bool BattleMechanics::isSkillWtypeOk(const Session& session, const Battler& acto
 }
 
 void BattleMechanics::clearEquipments(Session& session, Battler& actor) {
-  const std::size_t maxSlots = equipSlots(session, actor).size();
-  for (std::size_t i = 0; i < maxSlots; ++i) {
-    if (i < actor.equips.size() && actor.equips[i] > 0) {
-      const int kind = i < actor.equipKinds.size() ? actor.equipKinds[i] : 1;
-      session.gainItem(kind, actor.equips[i], 1, false);
-      actor.equips[i] = 0;
-      if (i < actor.equipKinds.size()) actor.equipKinds[i] = 0;
-    }
+  for (std::size_t slot = 0; slot < actor.equips.size(); ++slot) {
+    if (session.canChangeEquip(actor,static_cast<int>(slot))) session.changeEquipment(actor.id,static_cast<int>(slot),0);
   }
 }
 
 void BattleMechanics::optimizeEquipments(Session& session, Battler& actor) {
-  clearEquipments(session, actor);
-  const auto slots = equipSlots(session, actor);
-  if (actor.equips.size() < slots.size()) actor.equips.resize(slots.size(), 0);
-  if (actor.equipKinds.size() < slots.size()) actor.equipKinds.resize(slots.size(), 0);
-  for (std::size_t slotId = 0; slotId < slots.size(); ++slotId) {
-    const int etypeId = slots[slotId];
-    const int kind = (etypeId == 1) ? 1 : 2;
-    const Value& table = session.database()[kind == 1 ? "weapons" : "armors"];
-    const int count = static_cast<int>(table.array().size());
-    int bestId = 0;
-    int bestPerf = -1000;
-    for (int id = 1; id < count; ++id) {
-      auto invIt = session.inventory_.find(id + kind * 100000);
-      if (invIt == session.inventory_.end() || invIt->second <= 0) continue;
-      const Value& item = table[id];
-      if (item.null() || item["etypeId"].integer(0) != etypeId) continue;
-      const int perf = calcEquipItemPerformance(item);
-      if (perf > bestPerf) {
-        bestPerf = perf;
-        bestId = id;
-      }
+  clearEquipments(session,actor);
+  for (std::size_t slot = 0; slot < actor.equips.size(); ++slot) {
+    if (!session.canChangeEquip(actor,static_cast<int>(slot))) continue;
+    const int kind = session.equipSlotType(actor,static_cast<int>(slot)) == 1 ? 1 : 2;
+    const auto& table = session.database()[kind == 1 ? "weapons" : "armors"];
+    int bestId = 0, bestPerformance = -1000;
+    for (std::size_t id = 1; id < table.array().size(); ++id) {
+      const auto found = session.inventory_.find(static_cast<int>(id)+kind*100000);
+      const auto& item = table[static_cast<int>(id)];
+      if (found == session.inventory_.end() || found->second <= 0 || !session.canEquip(actor,item,static_cast<int>(slot))) continue;
+      const int performance = calcEquipItemPerformance(item);
+      if (performance > bestPerformance) { bestPerformance = performance; bestId = static_cast<int>(id); }
     }
-    if (bestId > 0) {
-      session.gainItem(kind, bestId, -1, false);
-      actor.equips[slotId] = bestId;
-      actor.equipKinds[slotId] = kind;
-    }
+    session.changeEquipment(actor.id,static_cast<int>(slot),bestId);
   }
 }
 
@@ -519,6 +502,69 @@ std::vector<int> BattleMechanics::makeActionOrderSpeeds(const std::vector<int>& 
     return speeds[static_cast<std::size_t>(a)] > speeds[static_cast<std::size_t>(b)];
   });
   return indices;
+}
+
+void Session::setEnemyBitmapHeightResolver(std::function<int(const Battler&)> resolver) {
+  enemyBitmapHeightResolver_ = std::move(resolver);
+}
+
+const Sprite_Enemy* Session::enemySprite(std::size_t index) const {
+  return index < enemySprites_.size() ? enemySprites_[index].get() : nullptr;
+}
+
+bool Session::isBattleEffecting() const {
+  return std::any_of(enemySprites_.begin(), enemySprites_.end(), [](const auto& sprite) {
+    return sprite && (sprite->isEffecting() || (sprite->appeared && !sprite->requestedEffect.empty()));
+  });
+}
+
+void Session::requestEnemyEffect(std::size_t index, const std::string& effect) {
+  if (index >= battle_.enemies.size()) return;
+  if (enemySprites_.size() <= index) enemySprites_.resize(index + 1);
+  auto& sprite = enemySprites_[index];
+  if (!sprite) sprite = std::make_shared<Sprite_Enemy>();
+  sprite->requestedEffect = effect;
+  if (effect == "collapse" || effect == "bossCollapse")
+    audio("se", database_["system"]["sounds"][effect == "bossCollapse" ? 12 : 11]);
+}
+
+void Session::resetEnemySprites() {
+  enemySprites_.clear();
+}
+
+void Session::updateEnemySprites() {
+  enemySprites_.resize(battle_.enemies.size());
+  for (std::size_t index = 0; index < battle_.enemies.size(); ++index) {
+    auto& enemy = battle_.enemies[index];
+    auto& owner = enemySprites_[index];
+    if (!owner) owner = std::make_shared<Sprite_Enemy>();
+    auto& sprite = *owner;
+    if (sprite.initialized && sprite.lastUpdateTick == ticks_) continue;
+    sprite.lastUpdateTick = ticks_;
+    sprite.setBattler(&enemy);
+    if (!sprite.initialized) {
+      sprite.initialized = true;
+      sprite.appeared = enemy.hp > 0 && !enemy.hidden && !enemy.escaped;
+      sprite.opacity = sprite.appeared ? 1 : 0;
+    }
+    if (sprite.appeared && !sprite.requestedEffect.empty()) {
+      if (sprite.requestedEffect == "bossCollapse") {
+        sprite.bitmapHeight = enemyBitmapHeightResolver_ ? std::max(0, enemyBitmapHeightResolver_(enemy)) : 0;
+      }
+      const auto request = std::move(sprite.requestedEffect);
+      sprite.requestedEffect.clear();
+      sprite.startEffect(request);
+    }
+    if (!sprite.appeared && enemy.hp > 0 && !enemy.hidden && !enemy.escaped) {
+      sprite.startEffect("appear");
+    } else if (sprite.appeared && (enemy.hidden || enemy.escaped)) {
+      sprite.startEffect("disappear");
+    }
+    const auto sounds = sprite.bossCollapseSounds;
+    sprite.advance(1);
+    for (auto played = sounds; played < sprite.bossCollapseSounds; ++played)
+      audio("se", database_["system"]["sounds"][13]);
+  }
 }
 
 }  // namespace pmjs::mv

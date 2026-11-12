@@ -21,15 +21,21 @@ Presentation::Presentation(RuntimeCore& core, Session& session, Value settings)
     fonts_.push_back(*font);
   }
   core::PixelBitmap::setImageLoader([this](const std::string& url)->std::optional<ImageInfo>{return image(url);});
-  core::WebAudio::setEncryptionKey(session_.database_["system"]["encryptionKey"].text());
+  Decrypter::readEncryptionkey(session_.database_["system"]);
+  core::WebAudio::setEncryptionKey(Decrypter::hasEncryptedAudio ? session_.database_["system"]["encryptionKey"].text() : "");
   core::Graphics::setLoadingCallbacks([this]{session_.resourcesStopped_=true;},[this]{session_.resourcesStopped_=false;});
   core::Graphics::setVideoCallbacks([this](const std::string& url){
     auto file=std::filesystem::path(url).filename();file.replace_extension();session_.movieName_=file.string();session_.moviePlaying_=!session_.movieName_.empty();
   },[this]{return session_.moviePlaying_;},[this](double volume){if(movieAudio_)core_.media().setParameters(movieAudio_,volume,1,0);});
   imageCache_ = std::make_unique<ImageCache>();
+  session_.setEnemyBitmapHeightResolver([this](const Battler& enemy) {
+    const auto& data = session_.database_["enemies"][enemy.id];
+    const auto name = data["battlerName"].text();
+    if (name.empty()) return 0;
+    return image(std::string(session_.database_["system"]["optSideView"].boolean() ? "img/sv_enemies/" : "img/enemies/") + name + ".png", data["battlerHue"].integer()).height;
+  });
   const auto budget = settings_["imageCacheBytes"].number();
   if (budget > 0) imageCache_->limit = static_cast<std::size_t>(budget);
-  Decrypter::readEncryptionkey(session_.database_["system"]);
   const auto skinSource = core_.vfs().resolve("img/system/Window.png");
   if (!skinSource) throw std::runtime_error("window skin unavailable");
   const auto loaded = core_.images().loadPng(*skinSource, true);
@@ -47,6 +53,7 @@ Presentation::Presentation(RuntimeCore& core, Session& session, Value settings)
   textCanvas_ = canvas->handle;
 }
 Presentation::~Presentation() {
+  session_.setEnemyBitmapHeightResolver({});
   clearMapOverlays();
   clearMovie();
   clearMapGeometry();
@@ -56,9 +63,9 @@ Presentation::~Presentation() {
   for (auto handle : deferredImageReleases_) core_.images().release(handle);
   deferredImageReleases_.clear();
   coreWindows_.clear(); coreWindowskin_.reset();
-  for (auto handle : sounds_) { core_.media().stop(handle); core_.media().release(handle); }
-  if (musicEffect_) { core_.media().stop(musicEffect_); core_.media().release(musicEffect_); }
-  for (auto& [key, value] : audio_) { (void)key; core_.media().stop(value.second); core_.media().release(value.second); }
+  sounds_.clear();
+  musicEffect_.reset();
+  audio_.clear();
   coreWeather_.reset();
   if (timerCanvas_) core_.canvases().release(timerCanvas_);
   core_.canvases().release(textCanvas_);
@@ -126,29 +133,20 @@ void Presentation::character(const Character& value, double cameraX, double came
   const auto& tiled = session_.database_["tiledMaps"][std::to_string(session_.mapId_)];
   const int tw = tiled["tilewidth"].integer(48), th = tiled["tileheight"].integer(48);
   const bool tileImage = value.tileId > 0;
-  bool big = false, object = tileImage;
-  for (char sign : value.characterName) {
-    if (sign != '!' && sign != '$') break;
-    big = big || sign == '$'; object = object || sign == '!';
-  }
+  Sprite_Character sprite;
+  sprite.setCharacter(&value);
+  const bool object = tileImage || ImageManager::isObjectCharacter(value.characterName);
   ImageInfo source;
-  double frameX = 0, frameY = 0, frameWidth = tw, frameHeight = th;
   if (tileImage) {
     const auto& tileset = session_.database_["tilesets"][session_.mapState_.tilesetId];
     const auto name = tileset["tilesetNames"][5 + value.tileId / 256].text();
     if (name.empty()) return;
     source = image("img/tilesets/" + name + ".png");
-    frameX = (value.tileId / 128 % 2 * 8 + value.tileId % 8) * tw;
-    frameY = (value.tileId % 256 / 8 % 16) * th;
   } else {
     source = image("img/characters/" + value.characterName + ".png");
-    frameWidth = value.customFrameWidth > 0 ? value.customFrameWidth : value.singleFrame ? source.width : source.width / (big ? 3.0 : 12.0);
-    frameHeight = value.customFrameHeight > 0 ? value.customFrameHeight : value.singleFrame ? source.height : source.height / (big ? 4.0 : 8.0);
-    const int pattern = value.pattern < 3 ? value.pattern : 1;
-    const int column = value.customFrameX >= 0 ? value.customFrameX : value.singleFrame ? 0 : (big ? 0 : value.characterIndex % 4 * 3) + pattern;
-    const int row = value.customFrameY >= 0 ? value.customFrameY : value.singleFrame ? 0 : (big ? 0 : value.characterIndex / 4 * 4) + (value.direction - 2) / 2;
-    frameX = column * frameWidth; frameY = row * frameHeight;
   }
+  const auto frame = sprite.sourceFrame(source.width, source.height, tw, th);
+  const double frameX = frame.x, frameY = frame.y, frameWidth = frame.width, frameHeight = frame.height;
   const double jumpHeight = value.jumpCount > 0 ? (value.jumpPeak * value.jumpPeak - std::pow(std::abs(value.jumpCount - value.jumpPeak), 2)) / 2.0 : 0;
   const float x = std::floor(scrolledMapX(value.realX, cameraX, tw) * tw + tw / 2.0 + 0.5) + value.spriteOffsetX;
   const float y = std::floor(scrolledMapY(value.realY, cameraY, th) * th + th - (object ? 0 : 6) - jumpHeight + 0.5) + value.spriteOffsetY;
@@ -171,22 +169,22 @@ void Presentation::mapPictures() {
   for(std::size_t index = 0; index < session_.pictures_.size(); ++index) {
     if (index < 1 || index > 200 || (index > 100) != session_.battle_.active) continue;
     const auto& picture = session_.pictures_[index];
-    const auto name=picture["_name"].text();const double opacity=picture["_opacity"].number();
-    if(name.empty()||opacity<=0)continue;
-    const auto source=image("img/pictures/"+name+".png");
+    Sprite_Picture sprite(static_cast<int>(index));
+    sprite.syncFromPicture(picture);
+    if(!sprite.visible||sprite.opacity<=0)continue;
+    const auto source=image("img/pictures/"+sprite.pictureName+".png");
     const auto& frame=picture["_frameData"]["frames"][picture["_frameData"]["frameIndex"].integer()];
     const int sx=frame["x"].integer(),sy=frame["y"].integer(),sw=frame["width"].integer(source.width),sh=frame["height"].integer(source.height);
-    const float width=sw*picture["_scaleX"].number(100)/100,height=sh*picture["_scaleY"].number(100)/100;
-    float x=picture["_x"].number(),y=picture["_y"].number();
+    float x=sprite.position.x,y=sprite.position.y;
     if(picture["_pinnedToMap"].boolean()){x-=cameraX_*tw;y-=cameraY_*th;}
-    const double radians = picture["_angle"].number() * 3.14159265358979323846 / 180;
-    const float a = std::cos(radians) * width / sw, b = std::sin(radians) * width / sw;
-    const float c = -std::sin(radians) * height / sh, d = std::cos(radians) * height / sh;
-    if(picture["_origin"].integer()==1){x-=(a*sw+c*sh)/2;y-=(b*sw+d*sh)/2;}
+    const float a = std::cos(sprite.rotation) * sprite.scale.x, b = std::sin(sprite.rotation) * sprite.scale.x;
+    const float c = -std::sin(sprite.rotation) * sprite.scale.y, d = std::cos(sprite.rotation) * sprite.scale.y;
+    x-=a*sw*sprite.anchor.x+c*sh*sprite.anchor.y;
+    y-=b*sw*sprite.anchor.x+d*sh*sprite.anchor.y;
     std::array<float, 4> tone{};
     for (std::size_t component = 0; component < 4; ++component) tone[component] = picture["_tone"][component].number() / 255;
     if(!core_.renderer().queueImage(source.handle,{a,b,c,d,x,y},
-      {float(sx),float(sy),float(sw),float(sh)},opacity/255,0xffffff,static_cast<BlendMode>(picture["_blendMode"].integer()),tone))throw std::runtime_error("cannot queue picture");
+      {float(sx),float(sy),float(sw),float(sh)},sprite.opacity,0xffffff,static_cast<BlendMode>(sprite.blendMode),tone))throw std::runtime_error("cannot queue picture");
   }
 }
 void Presentation::mapAmbience() {
@@ -257,7 +255,7 @@ void Presentation::window(int x,int y,int width,int height,int selected,int rows
   }
   auto& window=coreWindows_[{x,y,width,height}];if(!window)window=std::make_shared<core::Window>();
   window->windowskin=coreWindowskin_;window->move(x,y,width,height);window->openness=std::clamp(openness,0,255);
-  window->active=selected>=0;window->synchronize(session_.ticks_);
+  window->active=selected>=0;window->synchronize(session_.ticks_);window->animationCount=session_.ticks_;
   const auto& tone=session_.system_.windowTone.null()?session_.database_["system"]["windowTone"]:session_.system_.windowTone;
   window->setTone(tone[0].number(),tone[1].number(),tone[2].number());
   if(selected>=0&&rows>0)window->setCursorRect(0,selected%rows*36,std::max(0,width-36),36);else window->setCursorRect(0,0,0,0);
@@ -374,29 +372,48 @@ void Presentation::message() {
     return;
   }
   if (session_.ui_.maxDigits > 0) {
-    const auto& ui = session_.ui_; const int digitWidth = 28, popupWidth = ui.maxDigits*digitWidth+108;
-    const int px = (core_.width()-popupWidth)/2, py = message.position == 2 ? y-144 : y+height;
-    window(px,py,popupWidth,144);
-    core_.renderer().queueQuad(px+18+ui.digitIndex*digitWidth,py+54,digitWidth,36,{0.4F,0.5F,0.8F,0.4F});
+    const auto& ui = session_.ui_; const int digitWidth = 32, popupWidth = ui.maxDigits*digitWidth+36;
+    const bool bottom = y >= core_.height()/2;
+    const int px = (core_.width()-popupWidth)/2, py = bottom ? y-80 : y+height+8;
+    window(px,py,popupWidth,72);
+    core_.renderer().queueQuad(px+18+ui.digitIndex*digitWidth,py+18,digitWidth,36,{0.4F,0.5F,0.8F,0.4F});
     auto digits = std::to_string(ui.numberInput); digits.insert(0,std::max(0,ui.maxDigits-static_cast<int>(digits.size())),'0');
     for (int digit = 0; digit < ui.maxDigits; ++digit) {
       const int dx = px+18+digit*digitWidth;
-      hitTarget(dx,py+54,digitWidth,36,digit); text(digits.substr(digit,1),dx,py+54,digitWidth);
-      hitTarget(dx,py+18,digitWidth,36,digit,2); text("+",dx,py+18,digitWidth);
-      hitTarget(dx,py+90,digitWidth,36,digit,3); text("-",dx,py+90,digitWidth);
+      const auto value = digits.substr(digit,1);
+      const double measured = core_.canvases().measureText(fonts_,value,28).value_or(0);
+      hitTarget(dx,py+18,digitWidth,36,digit);
+      text(value,dx+static_cast<int>((digitWidth-measured)/2),py+18,digitWidth);
     }
-    hitTarget(px+popupWidth-72,py+54,54,36,0,1); text("OK",px+popupWidth-72,py+54,54);
+    if (ui.numberButtonsVisible) {
+      const auto sheet = image("img/system/ButtonSet.png");
+      const auto bounds = Window_NumberInput::buttonBounds({px,py,popupWidth,72},bottom);
+      for (int index = 0; index < 3; ++index) {
+        Sprite_Button button;
+        const auto cold = Window_NumberInput::buttonFrame(index,false), hot = Window_NumberInput::buttonFrame(index,true);
+        button.setColdFrame(cold.x,cold.y,cold.width,cold.height);
+        button.setHotFrame(hot.x,hot.y,hot.width,hot.height);
+        button.touching = ui.numberButtonFrame == index;
+        button.updateFrame();
+        const auto& frame = button.frame;
+        quad(sheet.handle,frame.x,frame.y,frame.width,frame.height,bounds[index].x,bounds[index].y,bounds[index].width,bounds[index].height);
+        hitTarget(bounds[index].x,bounds[index].y,bounds[index].width,bounds[index].height,index,8+index);
+      }
+    }
     return;
   }
   if (session_.ui_.variableId > 0 && session_.ui_.category > 0) {
-    std::vector<int> items;
-    for (const auto& [id,count] : session_.inventory_) if (id < 100000 && count > 0 && session_.database_["items"][id]["itypeId"].integer(1)==session_.ui_.category) items.push_back(id);
-    const int rows = std::max(1,std::min(4,static_cast<int>(items.size()))), py = message.position == 0 ? core_.height()-(rows*36+36) : 0;
-    const int first = std::max(0,session_.ui_.cursor-rows+1);
-    window(0,py,core_.width(),rows*36+36,session_.ui_.cursor-first,rows);
-    for (int row = 0; row < rows && first+row < static_cast<int>(items.size()); ++row) {
-      const int id = items[first+row]; text(session_.database_["items"][id]["name"].text(),18,py+18+row*36,core_.width()-120);
-      text(std::to_string(session_.inventory_[id]),core_.width()-90,py+18+row*36,60,0,28,true);
+    const auto items = Window_EventItem::makeItemList(session_, session_.ui_.category);
+    const int py = message.position == 0 ? core_.height()-180 : 0;
+    session_.ui_.listTopRow = Window_Selectable::clampTopRow(session_.ui_.listTopRow, static_cast<int>(items.size()), 2, 4);
+    const int first = session_.ui_.listTopRow * 2;
+    window(0,py,core_.width(),180);
+    for (int index = first; index < std::min(first + 8, static_cast<int>(items.size())); ++index) {
+      const auto rect = Window_Selectable::itemRectFor(index, core_.width()-36, 2, 36, 12, session_.ui_.listTopRow);
+      hitTarget(18+rect.x,py+18+rect.y,rect.width,rect.height,index);
+      if (index == session_.ui_.cursor) core_.renderer().queueQuad(18+rect.x,py+18+rect.y,rect.width,rect.height,{0.4F,0.5F,0.8F,0.4F});
+      const int id = items[index]; text(session_.database_["items"][id]["name"].text(),24+rect.x,py+18+rect.y,rect.width-78);
+      text(std::to_string(session_.inventory_[id]),18+rect.x+rect.width-66,py+18+rect.y,60,0,28,true);
     }
     return;
   }
@@ -439,11 +456,15 @@ void Presentation::menu() {
     return;
   }
   if (ui.scene == Scene::shop) {
-    window(0,0,width-240,72,ui.category == 0 ? ui.cursor : -1,1); window(width-240,0,240,72);
-    const std::vector<std::string> commands{"Buy","Sell","Cancel"};
+    window(0,0,width-240,72); window(width-240,0,240,72);
+    const auto commands = Window_ShopCommand::makeCommands(session_,ui.shopPurchaseOnly);
     for (std::size_t i = 0; i < commands.size(); ++i) {
-      if (ui.category == 0) hitTarget(18+static_cast<int>(i)*150,18,144,36,static_cast<int>(i));
-      text(commands[i],18+static_cast<int>(i)*150,18,144,0,28,false,ui.shopPurchaseOnly && i == 1 ? 160.0F/255 : 1);
+      const auto rect = Window_Selectable::itemRectFor(static_cast<int>(i),width-276,3,36,12,0);
+      if (ui.category == 0) {
+        hitTarget(18+rect.x,18,rect.width,36,static_cast<int>(i));
+        if (ui.cursor == static_cast<int>(i)) core_.renderer().queueQuad(18+rect.x,18,rect.width,36,{0.4F,0.5F,0.8F,0.4F});
+      }
+      text(commands[i].name,24+rect.x,18,rect.width-12,0,28,false,commands[i].enabled ? 1 : 160.0F/255);
     }
     text(std::to_string(session_.gold_),width-222,18,180,0,28,true);
     window(0,72,width,height-72);
@@ -451,34 +472,52 @@ void Presentation::menu() {
       const auto& item = session_.database_[ui.shopKind == 0 ? "items" : ui.shopKind == 1 ? "weapons" : "armors"][ui.shopId];
       text(item["name"].text(),24,108,width-48); text("Quantity",24,180,200,16);
       text(std::to_string(ui.shopItemCount),240,180,120,0,28,true);
-      text(std::to_string(ui.shopItemCount*ui.shopPrice),width-240,252,180,0,28,true);
+      text(std::to_string(static_cast<std::int64_t>(ui.shopItemCount)*ui.shopPrice),width-240,252,180,0,28,true);
       const std::array<std::string,5> buttons{"-10","-1","+1","+10","OK"};
       const std::array<int,5> actions{7,5,4,6,1};
       for (int button = 0; button < 5; ++button) { const int bx = 24+button*120; hitTarget(bx,324,108,48,0,actions[button]); text(buttons[button],bx,330,108); }
       return;
     }
-    std::vector<ShopGood> goods;
-    if (ui.category != 2) goods = ui.shopGoods;
-    else for (const auto& [key,count] : session_.inventory_) if (count > 0) {
-      const int kind = key/100000,id = key%100000; const auto& item = session_.database_[kind == 0 ? "items" : kind == 1 ? "weapons" : "armors"][id];
-      if (!item.null() && (kind || item["itypeId"].integer(1)<=2)) goods.push_back({kind,id,item["price"].integer()/2});
+    if (ui.category == 0) return;
+    const bool selling = ui.category == 2 || ui.category == 4;
+    if (selling) {
+      window(0,72,width,72);
+      const std::array<std::string,4> categories{TextManager::item(session_),TextManager::weapon(session_),TextManager::armor(session_),TextManager::keyItem(session_)};
+      for (int index = 0; index < 4; ++index) {
+        const auto rect = Window_Selectable::itemRectFor(index,width-36,4,36,12,0);
+        if (ui.category == 4) {
+          hitTarget(18+rect.x,90,rect.width,36,index);
+          if (ui.cursor == index) core_.renderer().queueQuad(18+rect.x,90,rect.width,36,{0.4F,0.5F,0.8F,0.4F});
+        }
+        text(categories[index],24+rect.x,90,rect.width-12);
+      }
     }
-    const int rows = std::max(1,(height-108)/36), first = std::max(0,ui.cursor-rows+1);
-    if (ui.category) core_.renderer().queueQuad(18,90+(ui.cursor-first)*36,width-36,36,{0.4F,0.5F,0.8F,0.4F});
-    for (int row = 0; row < rows && row+first < static_cast<int>(goods.size()); ++row) {
-      if (ui.category == 1 || ui.category == 2) hitTarget(18,90+row*36,width-36,36,first+row);
-      const auto& good = goods[row+first]; const auto& item = session_.database_[good.kind == 0 ? "items" : good.kind == 1 ? "weapons" : "armors"][good.id];
-      text(item["name"].text(),24,90+row*36,width-240);
-      text(std::to_string(good.price),width-210,90+row*36,180,0,28,true);
+    const auto goods = session_.shopItems(selling);
+    const int columns = selling ? 2 : 1, baseY = selling ? 162 : 90;
+    const int rows = std::max(1,(height-baseY-18)/36);
+    session_.ui_.listPageRows = rows;
+    session_.ui_.listTopRow = Window_Selectable::clampTopRow(ui.listTopRow,static_cast<int>(goods.size()),columns,rows);
+    const int first = ui.listTopRow*columns;
+    for (int index = first; index < std::min(first+rows*columns,static_cast<int>(goods.size())); ++index) {
+      const auto rect = Window_Selectable::itemRectFor(index,width-36,columns,36,12,ui.listTopRow);
+      const int x = 18+rect.x, y = baseY+rect.y;
+      if (ui.category != 4) {
+        hitTarget(x,y,rect.width,36,index);
+        if (ui.cursor == index) core_.renderer().queueQuad(x,y,rect.width,36,{0.4F,0.5F,0.8F,0.4F});
+      }
+      const auto& good = goods[index]; const auto& item = session_.database_[good.kind == 0 ? "items" : good.kind == 1 ? "weapons" : "armors"][good.id];
+      const float opacity = session_.shopMaximum(good,selling,session_.gold_) > 0 ? 1 : 160.0F/255;
+      text(item["name"].text(),x+6,y,rect.width-108,0,28,false,opacity);
+      const int value = selling ? session_.inventory_.at(good.kind*100000+good.id) : good.price;
+      text(std::to_string(value),x+rect.width-86,y,80,0,28,true,opacity);
     }
     return;
   }
   if (ui.scene == Scene::menu) {
-    std::array<std::string,8> labels{"Item","Skill","Equip","Status","Formation","Options","Save","Game End"};
-    const std::array<int,8> terms{4,5,6,7,8,11,9,10};
-    for (std::size_t i = 0; i < labels.size(); ++i) { const auto label = TextManager::term(session_,"commands",terms[i]); if (!label.empty()) labels[i] = label; }
-    window(0, 0, 240, 324, ui.category == 2 ? ui.pendingId : ui.cursor, 8);
-    for (int i = 0; i < 8; ++i) text(labels[i], 24, 18 + i * 36);
+    const auto commands = Window_MenuCommand::makeCommands(session_);
+    const int selected = ui.category == 2 ? ui.pendingId : ui.category == 1 ? ui.commandCursor : ui.cursor;
+    window(0, 0, 240, 36 + static_cast<int>(commands.size()) * 36, selected, static_cast<int>(commands.size()));
+    for (std::size_t i = 0; i < commands.size(); ++i) text(commands[i].name, 24, 18 + static_cast<int>(i) * 36, 192, 0, 28, false, commands[i].enabled ? 1 : 160.0F / 255);
     window(0, height - 72, 240, 72); text(std::to_string(session_.gold_), 24, height - 54, 150, 0, 28, true); text(session_.database_["system"]["currencyUnit"].text(), 192, height - 54);
     window(240, 0, width - 240, height);
     for (std::size_t i = 0; i < session_.party_.size(); ++i) {
@@ -486,7 +525,11 @@ void Presentation::menu() {
       if (ui.category == 2 && static_cast<int>(i) == ui.cursor) core_.renderer().queueQuad(258, 18 + static_cast<int>(i) * 147, width - 276, 147, {0.4F,0.5F,0.8F,0.4F});
       actorStatus(session_.party_[i], 258, 18 + static_cast<int>(i) * 147, width - 276, true);
     }
-    if (ui.category == 1) { window(width / 2 - 120, height / 2 - 54, 240, 108, ui.cursor, 2); text("To Title", width / 2 - 96, height / 2 - 36); text("Cancel", width / 2 - 96, height / 2); }
+    if (ui.category == 1) {
+      const auto endCommands = Window_GameEnd::makeCommands(session_);
+      window(width / 2 - 120, height / 2 - 54, 240, 108, ui.cursor, static_cast<int>(endCommands.size()));
+      for (std::size_t i = 0; i < endCommands.size(); ++i) text(endCommands[i].name, width / 2 - 96, height / 2 - 36 + static_cast<int>(i) * 36);
+    }
     return;
   }
   if (ui.scene == Scene::save || ui.scene == Scene::load) {
@@ -514,9 +557,16 @@ void Presentation::menu() {
     return;
   }
   if (ui.scene == Scene::options) {
-    const int x = width / 2 - 200, y = height / 2 - 126; window(x, y, 400, 252, ui.cursor, 6);
-    const std::array<std::string, 6> labels{"Always Dash", "Command Remember", "BGM Volume", "BGS Volume", "ME Volume", "SE Volume"};
-    for (int i = 0; i < 6; ++i) { text(labels[i], x + 24, y + 18 + i * 36); text(i < 2 ? (i == 0 ? session_.alwaysDash_ : session_.commandRemember_) ? "ON" : "OFF" : std::to_string(session_.volumes_[i - 2]) + "%", x + 300, y + 18 + i * 36); }
+    const auto commands = Window_Options::makeCommands(session_);
+    const auto configuration = session_.configuration();
+    const int x = width / 2 - 200, y = height / 2 - 126; window(x, y, 400, 36 + static_cast<int>(commands.size()) * 36, ui.cursor, static_cast<int>(commands.size()));
+    for (std::size_t i = 0; i < commands.size(); ++i) {
+      const auto& command = commands[i];
+      const auto& value = configuration[command.symbol];
+      const bool volume = command.symbol.find("Volume") != std::string::npos;
+      text(command.name, x + 24, y + 18 + static_cast<int>(i) * 36);
+      text(volume ? std::to_string(value.integer()) + "%" : value.boolean() ? "ON" : "OFF", x + 300, y + 18 + static_cast<int>(i) * 36);
+    }
     return;
   }
   if (ui.scene == Scene::formation) {
@@ -562,14 +612,67 @@ void Presentation::menu() {
     return;
   }
   if (ui.scene == Scene::equip) {
-    actorStatus(actorId, 24, 18, width - 48, true);
-    const std::array<std::string, 3> commands{"Change", "Optimize", "Clear"};
-    for (int i = 0; i < 3; ++i) { if (ui.category == 0 && ui.cursor == i) core_.renderer().queueQuad(330 + i * 140, 18, 130, 36, {0.4F, 0.5F, 0.8F, 0.4F}); text(commands[i], 336 + i * 140, 18); }
-    const auto& actor = session_.actors_.at(actorId);
-    for (std::size_t i = 0; i < actor.equips.size(); ++i) { const int y = 216 + static_cast<int>(i) * 36; if (ui.category == 1 && static_cast<int>(i) == ui.cursor) core_.renderer().queueQuad(18, y, width - 36, 36, {0.4F, 0.5F, 0.8F, 0.4F}); text(session_.database_["system"]["equipTypes"][session_.equipSlotType(actor,static_cast<int>(i))].text(), 24, y, 180, 16); text(session_.database_[i < actor.equipKinds.size() && actor.equipKinds[i] == 1 ? "weapons" : "armors"][actor.equips[i]]["name"].text(), 240, y); }
-    if (ui.category == 2) {
-      window(300, 72, width - 300, height - 72, ui.cursor, 12); text("None", 324, 90); int row = 1;
-      for (const auto& entry : session_.database_[session_.equipSlotType(actor,ui.slot) == 1 ? "weapons" : "armors"].array()) if (session_.canEquip(session_.actors_.at(actorId), entry, ui.slot) && session_.inventory_[entry["id"].integer() + (session_.equipSlotType(actor,ui.slot) == 1 ? 100000 : 200000)] > 0) text(entry["name"].text(), 324, 90 + row++ * 36);
+    const auto& actor = session_.actor(actorId);
+    const auto commands = Window_EquipCommand::makeCommands(session_);
+    window(0,0,width,108); window(0,108,312,288);
+    window(312,108,width-312,72); window(312,180,width-312,216);
+    text(actor.name,24,126,264);
+    const bool previewing = ui.category == 2 && ui.equipPreview.has_value();
+    const auto differences = previewing ? Window_EquipStatus::parameterDifferences(session_,actor,*ui.equipPreview) : std::array<int,6>{};
+    for (int parameter = 0; parameter < 6; ++parameter) {
+      const int y = 162+parameter*36;
+      const int value = static_cast<int>(session_.parameter(actor,parameter+2));
+      text(TextManager::param(session_,parameter+2),24,y,120,16);
+      text(std::to_string(value),150,y,54,0,28,true);
+      if (previewing) {
+        text("→",210,y,32,16);
+        text(std::to_string(value+differences[parameter]),246,y,48,differences[parameter] > 0 ? 24 : differences[parameter] < 0 ? 25 : 0,28,true);
+      }
+    }
+    for (std::size_t index = 0; index < commands.size(); ++index) {
+      const auto rect = Window_Selectable::itemRectFor(static_cast<int>(index),width-348,3,36,12,0);
+      if (ui.category == 0) {
+        hitTarget(330+rect.x,126,rect.width,36,static_cast<int>(index));
+        if (ui.cursor == static_cast<int>(index)) core_.renderer().queueQuad(330+rect.x,126,rect.width,36,{0.4F,0.5F,0.8F,0.4F});
+      }
+      text(commands[index].name,336+rect.x,126,rect.width-12);
+    }
+    const int selectedSlot = ui.category == 1 ? ui.cursor : std::max(0,ui.slot);
+    const int slotTop = Window_Selectable::visibleTopRow(selectedSlot,0,static_cast<int>(actor.equips.size()),1,5);
+    for (int index = slotTop; index < std::min(slotTop+5,static_cast<int>(actor.equips.size())); ++index) {
+      const int y = 198+(index-slotTop)*36;
+      if (ui.category == 1) {
+        hitTarget(330,y,width-348,36,index);
+        if (ui.cursor == index) core_.renderer().queueQuad(330,y,width-348,36,{0.4F,0.5F,0.8F,0.4F});
+      }
+      const float opacity = session_.canChangeEquip(actor,index) ? 1 : 160.0F/255;
+      text(session_.database_["system"]["equipTypes"][session_.equipSlotType(actor,index)].text(),336,y,126,16,28,false,opacity);
+      text(session_.database_[actor.equipKinds[index] == 1 ? "weapons" : "armors"][actor.equips[index]]["name"].text(),480,y,width-510,0,28,false,opacity);
+    }
+    window(0,396,width,height-396);
+    if (ui.category == 1 || ui.category == 2) {
+      const auto choices = Window_EquipItem::makeItemList(session_,actor.id,selectedSlot);
+      const int rows = std::max(1,(height-432)/36);
+      session_.ui_.listPageRows = rows;
+      session_.ui_.listTopRow = Window_Selectable::clampTopRow(ui.listTopRow,static_cast<int>(choices.size()),2,rows);
+      const int first = ui.listTopRow*2;
+      for (int index = first; index < std::min(first+rows*2,static_cast<int>(choices.size())); ++index) {
+        const auto rect = Window_Selectable::itemRectFor(index,width-36,2,36,12,ui.listTopRow);
+        const int x = 18+rect.x, y = 414+rect.y, encoded = choices[index];
+        if (ui.category == 2) {
+          hitTarget(x,y,rect.width,36,index);
+          if (ui.cursor == index) core_.renderer().queueQuad(x,y,rect.width,36,{0.4F,0.5F,0.8F,0.4F});
+        }
+        if (!encoded) continue;
+        const auto& item = session_.database_[encoded/100000 == 1 ? "weapons" : "armors"][encoded%100000];
+        const auto icons = image("img/system/IconSet.png"); const int icon = item["iconIndex"].integer();
+        quad(icons.handle,icon%16*32,icon/16*32,32,32,x+2,y+2,32,32);
+        text(item["name"].text(),x+38,y,rect.width-98);
+        text(std::to_string(session_.inventory_.at(encoded)),x+rect.width-54,y,48,0,28,true);
+      }
+      const int encoded = ui.category == 2 ? choices[std::clamp(ui.cursor,0,static_cast<int>(choices.size())-1)] :
+        actor.equips[selectedSlot]+actor.equipKinds[selectedSlot]*100000;
+      if (encoded%100000) textEx(session_.database_[encoded/100000 == 1 ? "weapons" : "armors"][encoded%100000]["description"].text(),24,18,width-48);
     }
     return;
   }
@@ -583,26 +686,30 @@ void Presentation::menu() {
       if (ui.category == 0) hitTarget(18+i*columnWidth,18,columnWidth-12,36,static_cast<int>(i));
       text(session_.database_["system"]["skillTypes"][types[i]].text(),24+i*columnWidth,18,columnWidth-24);
     }
-    Window_SkillList list(0,0,width,height); list.actorId = actorId; list.skillType = ui.skillType; list.refresh(session_); entries = list.data;
+    entries = Window_SkillList::makeSkillList(session_, actorId, ui.skillType);
   } else {
     static const std::array<std::string,4> categories{"item","weapon","armor","keyItem"};
-    const std::array<std::string,4> labels{"Items","Weapons","Armors","Key Items"};
+    const std::array<std::string,4> labels{TextManager::item(session_),TextManager::weapon(session_),TextManager::armor(session_),TextManager::keyItem(session_)};
     for (int i = 0; i < 4; ++i) {
       if (ui.category == 0 && ui.cursor == i) core_.renderer().queueQuad(18+i*(width/4),18,width/4-24,36,{0.4F,0.5F,0.8F,0.4F});
       if (ui.category == 0) hitTarget(18+i*(width/4),18,width/4-24,36,i);
       text(labels[i],24+i*(width/4),18,width/4-36);
     }
-    Window_ItemList list(0,0,width,height); list.category = categories[std::clamp(ui.slot,0,3)]; list.refresh(session_); entries = list.data;
+    entries = Window_ItemList::makeItemList(session_, categories[std::clamp(ui.slot,0,3)]);
   }
-  const int rows = std::max(1,(height-126)/36), first = std::max(0,ui.cursor-rows+1);
-  for (int row = 0; row < rows && first+row < static_cast<int>(entries.size()); ++row) {
-    const int encoded = entries[first+row], kind = encoded/100000, id = encoded%100000;
-    const int y = 90+row*36;
-    if (!ui.targeting && ui.category != 0) hitTarget(18,y,width-36,36,first+row);
-    if (first+row == ui.cursor && !ui.targeting && ui.category != 0) core_.renderer().queueQuad(18,y,width-36,36,{0.4F,0.5F,0.8F,0.4F});
+  const int rows = std::max(1,(height-108)/36);
+  session_.ui_.listPageRows = rows;
+  session_.ui_.listTopRow = Window_Selectable::clampTopRow(ui.listTopRow, static_cast<int>(entries.size()), 2, rows);
+  const int first = ui.listTopRow * 2;
+  for (int index = first; index < std::min(first + rows * 2, static_cast<int>(entries.size())); ++index) {
+    const int encoded = entries[index], kind = encoded/100000, id = encoded%100000;
+    const auto rect = Window_Selectable::itemRectFor(index, width-36, 2, 36, 12, ui.listTopRow);
+    const int x = 18 + rect.x, y = 90 + rect.y;
+    if (!ui.targeting && ui.category != 0) hitTarget(x,y,rect.width,rect.height,index);
+    if (index == ui.cursor && !ui.targeting && ui.category != 0) core_.renderer().queueQuad(x,y,rect.width,rect.height,{0.4F,0.5F,0.8F,0.4F});
     const auto& entry = session_.database_[skill ? "skills" : kind == 0 ? "items" : kind == 1 ? "weapons" : "armors"][id];
-    text(entry["name"].text(),24,y,width-180);
-    text(std::to_string(skill ? entry["mpCost"].integer() : session_.inventory_[encoded]),width-120,y,80,0,28,true);
+    text(entry["name"].text(),x+6,y,std::max(0,rect.width-108));
+    text(std::to_string(skill ? entry["mpCost"].integer() : session_.inventory_[encoded]),x+rect.width-86,y,80,0,28,true);
   }
   if (ui.targeting) { window(width / 2, 72, width / 2, height - 72); for (std::size_t i = 0; i < session_.party_.size(); ++i) { const int y = 90 + static_cast<int>(i) * 180; if (static_cast<int>(i) == ui.cursor) core_.renderer().queueQuad(width / 2 + 18, y, width / 2 - 36, 172, {0.4F, 0.5F, 0.8F, 0.4F}); actorStatus(session_.party_[i], width / 2 + 24, y, width / 2 - 48, true); } }
 }
@@ -650,28 +757,23 @@ void Presentation::battle() {
   battleSprites();
   battleEffects(); visualEffects();
   screenTone(); mapPictures(); finishScreen(first);
-  const bool input = !session_.battle_.opening && !session_.message_.busy && !session_.battle_.wait && session_.battle_.active;
+  const bool input = !session_.battle_.opening && !session_.message_.busy && !session_.battle_.wait && !session_.battle_.actionStage && (!session_.battleLog_ || !session_.battleLog_->isBusy()) && session_.battle_.active;
   if (input) {
     const bool party = ui.category == 4;
-    std::vector<std::string> commands;
-    std::vector<bool> enabled;
-    if (party) { commands = {"Fight", "Escape"}; enabled = {true, session_.battle_.canEscape}; }
+    std::vector<CommandItem> commands;
+    if (party) commands = Window_PartyCommand::makeCommands(session_, session_.battle_.canEscape);
     else if (session_.battle_.actorIndex < static_cast<int>(session_.battleMemberCount())) {
-      const auto& actor = session_.actors_.at(session_.party_[session_.battle_.actorIndex]);
-      commands.push_back("Attack"); enabled.push_back(session_.canUse(actor, session_.database_["skills"][1]));
-      for (int type : session_.battleSkillTypes(session_.battle_.actorIndex)) { commands.push_back(session_.database_["system"]["skillTypes"][type].text()); enabled.push_back(true); }
-      commands.push_back("Guard"); enabled.push_back(session_.canUse(actor, session_.database_["skills"][2]));
-      commands.push_back("Item"); enabled.push_back(true);
+      commands = Window_ActorCommand::makeCommands(session_, session_.party_[session_.battle_.actorIndex]);
     }
     const int first = ui.cursor >= 4 && ui.category == 0 ? ui.cursor - 3 : 0;
     window(0, height - 180, 192, 180, ui.category == 0 || party ? ui.cursor - first : -1, 4);
     std::vector<std::string> commandKey{std::to_string(first)};
     for (int i = first; i < std::min(first + 4, static_cast<int>(commands.size())); ++i) {
-      commandKey.push_back(commands[i]); commandKey.push_back(enabled[i] ? "1" : "0");
+      commandKey.push_back(commands[i].name); commandKey.push_back(commands[i].enabled ? "1" : "0");
     }
     retainBattleContents(BattleWindow::commands, std::move(commandKey), [&] {
       for (int i = first; i < std::min(first + 4, static_cast<int>(commands.size())); ++i)
-        text(commands[i], 24, height - 162 + (i - first) * 36, 144, 0, 28, false, enabled[i] ? 1 : 160.0F / 255);
+        text(commands[i].name, 24, height - 162 + (i - first) * 36, 144, 0, 28, false, commands[i].enabled ? 1 : 160.0F / 255);
     });
   }
   window(192, height - 180, width - 192, 180);
@@ -694,22 +796,35 @@ void Presentation::battle() {
     }
   });
   if (!session_.battle_.log.empty()) {
-    window(0, 0, width, 108);
-    std::vector<std::string> lines(session_.battle_.log.begin(), session_.battle_.log.begin() + std::min<std::size_t>(2, session_.battle_.log.size()));
+    const auto count = std::min<std::size_t>(Window_BattleLog::maxLines(), session_.battle_.log.size());
+    window(0, 0, width, 36 + static_cast<int>(count) * 36);
+    std::vector<std::string> lines(session_.battle_.log.begin(), session_.battle_.log.begin() + count);
     retainBattleContents(BattleWindow::log, lines, [&] {
       for (std::size_t i = 0; i < lines.size(); ++i) text(lines[i], 18, 18 + static_cast<int>(i) * 36);
     });
   }
   if (ui.category == 1 || ui.category == 2) {
-    window(0, 108, width, height - 288, ui.cursor, 8); std::vector<int> entries;
+    window(0, 108, width, height - 288); std::vector<int> entries;
     if (ui.category == 1) {
-      for (int id : session_.battlerSkills(session_.actors_.at(session_.party_[session_.battle_.actorIndex]))) if (session_.database_["skills"][id]["stypeId"].integer() == ui.skillType) entries.push_back(id);
+      entries = Window_SkillList::makeSkillList(session_, session_.party_[session_.battle_.actorIndex], ui.skillType);
     }
-    else for (const auto& [id, count] : session_.inventory_) if (id < 100000 && count > 0 && session_.database_["items"][id]["occasion"].integer() <= 1) entries.push_back(id);
-    std::vector<std::string> selectionKey{std::to_string(ui.category)};
-    for (int id : entries) selectionKey.push_back(session_.database_[ui.category == 1 ? "skills" : "items"][id]["name"].text());
+    else entries = Window_BattleItem::makeItemList(session_);
+    const int rows = std::max(1, (height - 324) / 36);
+    session_.ui_.listPageRows = rows;
+    session_.ui_.listTopRow = Window_Selectable::clampTopRow(ui.listTopRow, static_cast<int>(entries.size()), 2, rows);
+    const int first = ui.listTopRow * 2, end = std::min(static_cast<int>(entries.size()), first + rows * 2);
+    std::vector<std::string> selectionKey{std::to_string(ui.category), std::to_string(first)};
+    for (int index = first; index < end; ++index) {
+      const auto rect = Window_Selectable::itemRectFor(index, width - 36, 2, 36, 12, ui.listTopRow);
+      hitTarget(18 + rect.x, 126 + rect.y, rect.width, rect.height, index);
+      if (index == ui.cursor) core_.renderer().queueQuad(18 + rect.x, 126 + rect.y, rect.width, rect.height, {0.4F,0.5F,0.8F,0.4F});
+      selectionKey.push_back(session_.database_[ui.category == 1 ? "skills" : "items"][entries[index]]["name"].text());
+    }
     retainBattleContents(BattleWindow::selection, selectionKey, [&] {
-      for (std::size_t i = 1; i < selectionKey.size(); ++i) text(selectionKey[i], 24, 126 + static_cast<int>(i - 1) * 36);
+      for (int index = first; index < end; ++index) {
+        const auto rect = Window_Selectable::itemRectFor(index, width - 36, 2, 36, 12, ui.listTopRow);
+        text(selectionKey[2 + index - first], 24 + rect.x, 126 + rect.y, rect.width - 12);
+      }
     });
   } else if (ui.category == 3) {
     window(0, 108, width, 180, ui.cursor, 4); const auto& skill = session_.database_[ui.itemAction ? "items" : "skills"][ui.pendingId];
@@ -723,55 +838,68 @@ void Presentation::battle() {
 }
 void Presentation::battleEffects() {
   for (const auto& visual : session_.battle_.visuals) {
-    const auto& item = session_.database_[visual.action.item ? "items" : "skills"][visual.action.id];
-    const auto& animation = session_.database_["animations"][item["animationId"].integer()];
-    const int animationAge = static_cast<int>(session_.ticks_) - static_cast<int>(visual.started);
-    const bool screen = animation["position"].integer() == 3;
-    for (std::size_t i = 0; i < visual.targets.size(); ++i) {
-      const int age = animationAge - static_cast<int>(i) * 12, frameIndex = (age - 8) / 4;
-      const auto& target = visual.targets[i]; const bool enemy = target.enemy; const int index = target.index;
-      float targetX, targetY, targetHeight;
+    for (const auto& target : visual.targets) {
+      if (!target.impact || target.impact > session_.ticks_) continue;
+      const auto age = session_.ticks_ - target.impact;
+      if (age >= 90) continue;
+      const bool enemy = target.enemy;
+      const int index = target.index;
+      float x, y;
       if (enemy) {
         const auto& member = session_.database_["troops"][session_.battle_.troopId]["members"][index];
-        const auto& data = session_.database_["enemies"][session_.battle_.enemies[index].id];
-        targetX = member["x"].number(); targetY = member["y"].number();
-        targetHeight = data["battlerName"].text().empty() ? 0 : image(std::string(session_.database_["system"]["optSideView"].boolean() ? "img/sv_enemies/" : "img/enemies/") + data["battlerName"].text() + ".png").height;
+        x = member["x"].number(); y = member["y"].number() - 8;
       } else {
-        if (index >= static_cast<int>(session_.party_.size())) continue;
-        const auto& data = session_.actors_.at(session_.party_[index]);
-        targetX = 600 + index * 32; targetY = 280 + index * 48;
-        targetHeight = data.battlerName.empty() ? 0 : image("img/sv_actors/" + data.battlerName + ".png").height / 6;
+        if (index < 0 || index >= static_cast<int>(session_.party_.size())) continue;
+        x = 600 + index * 32 - 32; y = 280 + index * 48;
       }
-      if (age >= 8 && frameIndex < static_cast<int>(animation["frames"].array().size()) && (!screen || i == 0)) {
-        const int position = animation["position"].integer();
-        const float baseX = screen ? core_.width() / 2.0F : targetX;
-        const float baseY = screen ? core_.height() / 2.0F : targetY - (position == 0 ? targetHeight : position == 1 ? targetHeight / 2 : 0);
-        animationCells(animation,frameIndex,baseX,baseY,!enemy);
-      }
-      const int damageAge = visual.impact ? static_cast<int>(session_.ticks_ - visual.impact) : -1;
-      if (damageAge >= 0 && damageAge < 90 && (target.result.hpAffected || target.result.mpDamage || target.result.missed || target.result.evaded)) {
-        const auto source = image("img/system/Damage.png"); const int w = source.width / 10, h = source.height / 5;
-        const int amount = target.result.hpAffected ? target.result.hpDamage : target.result.mpDamage;
-        const bool missed = target.result.missed || target.result.evaded;
-        const auto digits = std::to_string(std::abs(amount));
-        const std::array<float,4> flash = target.result.critical && damageAge < 60 ? std::array<float,4>{1,0,0,160.0F/255*(60-damageAge)/60} : std::array<float,4>{};
-        const auto popup = [&](float sx,float sy,float sourceWidth,float sourceHeight,float x,float y,float width,float height,float opacity) {
-          core_.renderer().queueImage(source.handle,{width/sourceWidth,0,0,height/sourceHeight,x,y},{sx,sy,sourceWidth,sourceHeight},opacity,0xffffff,BlendMode::normal,{},flash);
-        };
-        if (missed) { popup( 0, h * 4, w * 4, h, targetX - (enemy ? 0 : 32) - w * 2, targetY - (enemy ? 8 : 0) - 40 - h, w * 4, h, std::min(1.0F, (90 - damageAge) / 10.0F)); continue; }
-        for (std::size_t digit = 0; digit < digits.size(); ++digit) {
-          double y = -40, dy = -static_cast<int>(digit);
-          for (int tick = 0; tick <= damageAge; ++tick) { dy += 0.5; y += dy; if (y >= 0) { y = 0; dy *= -0.6; } }
-          popup( (digits[digit] - '0') * w, ((target.result.hpAffected ? 0 : 2) + (amount < 0 ? 1 : 0)) * h, w, h, targetX - (enemy ? 0 : 32) + (static_cast<float>(digit) - (digits.size() - 1) / 2.0F) * w - w / 2, targetY - (enemy ? 8 : 0) + static_cast<int>(std::floor(y + 0.5)) - h, w, h, std::min(1.0F, (90 - damageAge) / 10.0F));
-        }
+      if (!target.result.hpAffected && !target.result.mpDamage && !target.result.missed && !target.result.evaded) continue;
+      const auto source = image("img/system/Damage.png");
+      for (const auto& digit : Sprite_Damage::popup(target.result, age, source.width, source.height, target.aliveAtImpact)) {
+        std::array<float,4> flash{};
+        std::copy(digit.blendColor.begin(), digit.blendColor.end(), flash.begin());
+        core_.renderer().queueImage(source.handle,
+          {1,0,0,1,float(x + digit.x),float(y + digit.y)},
+          {float(digit.source.x),float(digit.source.y),float(digit.source.width),float(digit.source.height)},
+          digit.opacity,0xffffff,BlendMode::normal,{},flash);
       }
     }
   }
 }
+namespace {
+int audioChannelIndex(const std::string& kind) {
+  return kind == "bgm" ? 0 : kind == "bgs" ? 1 : kind == "me" ? 2 : 3;
+}
+void applyAudioParameters(core::WebAudio& voice, const Value& sound, int channelVolume) {
+  voice.setVolume(sound["volume"].number(90) * channelVolume / 10000.0);
+  voice.setPitch(sound["pitch"].number(100) / 100.0);
+  voice.setPan(sound["pan"].number() / 100.0);
+}
+std::unique_ptr<core::WebAudio> loadAudioVoice(RuntimeCore& core, const std::string& kind, const std::string& name) {
+  const std::string stem = "audio/" + kind + "/" + name;
+  std::string url;
+  if (Decrypter::hasEncryptedAudio) {
+    if (core.vfs().resolve(stem + ".rpgmvo")) url = stem + ".ogg";
+    else if (core.vfs().resolve(stem + ".rpgmvm")) url = stem + ".m4a";
+  }
+  if (url.empty()) {
+    if (core.vfs().resolve(stem + ".ogg")) url = stem + ".ogg";
+    else if (core.vfs().resolve(stem + ".m4a")) url = stem + ".m4a";
+    else if (core.vfs().resolve(stem + ".rpgmvo")) url = stem + ".ogg";
+    else if (core.vfs().resolve(stem + ".rpgmvm")) url = stem + ".m4a";
+  }
+  if (url.empty()) throw std::runtime_error("audio unavailable: " + name);
+  auto voice = std::make_unique<core::WebAudio>(url, false, false);
+  if (!voice->isReady()) throw std::runtime_error("audio unavailable: " + name);
+  return voice;
+}
+}  // namespace
+
 void Presentation::processAudio() {
-  if (musicEffect_ && !core_.media().isPlaying(musicEffect_)) {
-    core_.media().release(musicEffect_); musicEffect_ = 0;
-    if (audio_["bgm"].second) core_.media().setSuspended(audio_["bgm"].second, false);
+  if (musicEffect_ && !musicEffect_->isPlaying()) {
+    musicEffect_.reset();
+    if (audio_["bgm"].second && audio_["bgm"].second->nativeHandle()) {
+      core_.media().setSuspended(audio_["bgm"].second->nativeHandle(), false);
+    }
   }
   for (const auto& command : session_.audioCommands_) {
     auto kind = command["kind"].text();
@@ -780,16 +908,29 @@ void Presentation::processAudio() {
     }
     if (kind == "save-bgm") { session_.system_.storedBgm = audioState("bgm"); continue; }
     if (kind == "stop-se") {
-      for (auto handle : sounds_) { core_.media().stop(handle); core_.media().release(handle); }
       sounds_.clear(); continue;
     }
     if (kind == "fade-bgm" || kind == "fade-bgs") {
       const auto channel = kind == "fade-bgm" ? "bgm" : "bgs";
       auto& active = audio_[channel];
       if (active.second && !active.first.empty()) {
-        core_.media().fade(active.second, 1, 0, command["sound"].number(), true);
+        if (active.second->nativeHandle()) {
+          core_.media().fade(active.second->nativeHandle(), -1.0F, 0.0F, command["sound"].number(), true);
+        }
         active.first.clear();
         audioSettings_[channel] = Value::Object{{"name", ""}, {"volume", 0}, {"pitch", 0}, {"pan", 0}, {"pos", 0}};
+      }
+      continue;
+    }
+    if (kind == "fade-in-bgm" || kind == "fade-in-bgs") {
+      const auto channel = kind == "fade-in-bgm" ? "bgm" : "bgs";
+      auto& active = audio_[channel];
+      if (active.second && !active.first.empty()) active.second->fadeIn(command["sound"].number());
+      continue;
+    }
+    if (kind == "fade-me") {
+      if (musicEffect_ && musicEffect_->nativeHandle()) {
+        core_.media().fade(musicEffect_->nativeHandle(), -1.0F, 0.0F, command["sound"].number(), true);
       }
       continue;
     }
@@ -802,47 +943,59 @@ void Presentation::processAudio() {
     const auto name = sound["name"].text();
     if (restore || replay) (kind == "bgm" ? session_.savedBgm_ : session_.savedBgs_) = sound;
     if (kind == "me" && musicEffect_) {
-      core_.media().stop(musicEffect_); core_.media().release(musicEffect_); musicEffect_ = 0;
-      if (audio_["bgm"].second) core_.media().setSuspended(audio_["bgm"].second, false);
+      musicEffect_.reset();
+      if (audio_["bgm"].second && audio_["bgm"].second->nativeHandle()) {
+        core_.media().setSuspended(audio_["bgm"].second->nativeHandle(), false);
+      }
     }
     if (kind == "bgm" || kind == "bgs") {
       audioSettings_[kind] = sound;
       auto& active = audio_[kind];
       const bool changed = active.first != name;
-      if ((active.first != name || name.empty()) && active.second) { core_.media().stop(active.second); core_.media().release(active.second); active = {}; }
+      if ((active.first != name || name.empty()) && active.second) { active.second.reset(); active.first.clear(); }
       if (name.empty()) continue;
       if (active.first != name) {
-        const auto source = core_.vfs().resolve("audio/" + kind + "/" + name + ".ogg");
-        if (!source) throw std::runtime_error("audio unavailable: " + name);
-        std::string error; active.second = core_.media().loadAudio(source->string(), &error); if (!active.second) throw std::runtime_error(error);
-        active.first = name; core_.media().setParameters(active.second, sound["volume"].number(90) * session_.volumes_[kind == "bgm" ? 0 : kind == "bgs" ? 1 : kind == "me" ? 2 : 3] / 10000, sound["pitch"].number(100) / 100, sound["pan"].number() / 100); core_.media().play(active.second, true, 0);
+        active.second = loadAudioVoice(core_, kind, name);
+        active.first = name;
+        applyAudioParameters(*active.second, sound, session_.volumes_[audioChannelIndex(kind)]);
+        active.second->play(true, 0);
       }
-      if (((restore || replay) && changed) || command["restart"].boolean()) core_.media().play(active.second, true, sound["pos"].number());
-      if (replay && changed) core_.media().fade(active.second, 0, 1, 0.5, false);
+      if (((restore || replay) && changed) || command["restart"].boolean()) {
+        active.second->play(true, sound["pos"].number());
+      }
+      if (replay && changed) active.second->fadeIn(0.5);
     } else if (!name.empty()) {
-      const auto source = core_.vfs().resolve("audio/" + kind + "/" + name + ".ogg");
-      if (!source) throw std::runtime_error("audio unavailable: " + name);
-      std::string error; const auto handle = core_.media().loadAudio(source->string(), &error); if (!handle) throw std::runtime_error(error);
-      core_.media().setParameters(handle, sound["volume"].number(90) * session_.volumes_[kind == "bgm" ? 0 : kind == "bgs" ? 1 : kind == "me" ? 2 : 3] / 10000, sound["pitch"].number(100) / 100, sound["pan"].number() / 100); core_.media().play(handle, false, 0);
+      auto voice = loadAudioVoice(core_, kind, name);
+      applyAudioParameters(*voice, sound, session_.volumes_[audioChannelIndex(kind)]);
+      voice->play(false, 0);
       if (kind == "me") {
-        if (musicEffect_) { core_.media().stop(musicEffect_); core_.media().release(musicEffect_); }
-        musicEffect_ = handle;
-      } else sounds_.push_back(handle);
+        musicEffect_ = std::move(voice);
+      } else {
+        sounds_.push_back(std::move(voice));
+      }
     }
   }
   session_.audioCommands_.clear();
-  for (const auto& [kind, active] : audio_) if (active.second) {
+  for (auto& [kind, active] : audio_) if (active.second) {
     const auto& sound = audioSettings_[kind];
-    if (sound["name"].text().empty()) continue;
-    core_.media().setParameters(active.second, sound["volume"].number(90) * session_.volumes_[kind == "bgm" ? 0 : 1] / 10000, sound["pitch"].number(100) / 100, sound["pan"].number() / 100);
-    if (kind == "bgm" && musicEffect_) core_.media().setSuspended(active.second, true);
+    if (sound["name"].text().empty()) {
+      if (!active.second->isPlaying()) active.second.reset();
+      continue;
+    }
+    applyAudioParameters(*active.second, sound, session_.volumes_[kind == "bgm" ? 0 : 1]);
+    if (kind == "bgm" && musicEffect_ && active.second->nativeHandle()) {
+      core_.media().setSuspended(active.second->nativeHandle(), true);
+    }
   }
-  for (auto it = sounds_.begin(); it != sounds_.end();) { if (!core_.media().isPlaying(*it)) { core_.media().release(*it); it = sounds_.erase(it); } else ++it; }
+  for (auto it = sounds_.begin(); it != sounds_.end();) {
+    if (!(*it)->isPlaying()) it = sounds_.erase(it);
+    else ++it;
+  }
 }
 Value Presentation::audioState(const std::string& kind) {
   auto sound = audioSettings_[kind];
   if (sound.null()) sound = Value::Object{{"name", ""}, {"volume", 0}, {"pitch", 100}, {"pan", 0}};
-  std::get<Value::Object>(sound.data)["pos"] = !sound["name"].text().empty() && audio_[kind].second ? core_.media().position(audio_[kind].second) : 0;
+  std::get<Value::Object>(sound.data)["pos"] = !sound["name"].text().empty() && audio_[kind].second ? audio_[kind].second->playbackPosition() : 0;
   return sound;
 }
 void Presentation::captureAudioState() {
@@ -880,9 +1033,9 @@ void Presentation::render() {
     }
     const int openness = std::clamp((session_.ui_.age - 24) * 32, 0, 255);
     const int x = width / 2 - 120, y = height - 240; window(x, y, 240, 144, session_.ui_.cursor, 3, openness);
-    const std::array<std::string, 3> labels{"New Game", "Continue", "Options"}; for (int i = 0; i < 3 && openness == 255; ++i) {
-      const bool enabled = i != 1 || std::any_of(session_.saveMetadata_.begin(), session_.saveMetadata_.end(), [&](const Value& slot) { return slot["title"].text() == session_.database_["system"]["gameTitle"].text(); });
-      text(labels[i], x + 24, y + 18 + i * 36, 192, 0, 28, false, enabled ? 1 : 160.0F / 255);
+    const auto commands = Window_TitleCommand::makeCommands(session_);
+    for (std::size_t i = 0; i < commands.size() && openness == 255; ++i) {
+      text(commands[i].name, x + 24, y + 18 + static_cast<int>(i) * 36, 192, 0, 28, false, commands[i].enabled ? 1 : 160.0F / 255);
     }
   } else if (scene == Scene::gameOver) {
     const auto source = image("img/system/GameOver.png"); quad(source.handle, 0, 0, source.width, source.height, 0, 0, width, height);

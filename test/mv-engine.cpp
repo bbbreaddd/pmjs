@@ -63,8 +63,6 @@ int main() {
     battleRoot["enemies"] = Array{Value{}, Object{{"params", Array{100, 0, 1, 1, 1, 1, 1, 1}}, {"actions", Array{}}}};
     battleRoot["troops"] = Array{Value{}, Object{{"members", Array{Object{{"enemyId", 1}}}}}};
     Session battle(battleData); battle.newGame(); battle.startBattle(1, false, false);
-    require(!battle.message().busy && battle.battle().encounterEffect == 60, "encounter effect defers the battle opening");
-    for (int i = 0; i < 60; ++i) battle.step({});
     require(battle.message().busy, "battle opening waits for enemy introduction");
     battle.acknowledge(); battle.step({});
     auto press = [&](pmjs::mv::Input input) { battle.step(input); battle.step({}); };

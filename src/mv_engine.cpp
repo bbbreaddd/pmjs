@@ -68,7 +68,7 @@ Session::Session(Value database) : database_(std::move(database)) {
   for (const auto* collection : {"skills", "items"}) for (const auto& item : database_[collection].array()) {
     if (item["damage"]["type"].integer() != 0) {
       try { formula(item["damage"]["formula"].text(), fields, [](const auto&, const auto&) { return 0.0; }); }
-      catch (const std::exception& error) { throw std::invalid_argument(std::string(collection) + "[" + std::to_string(item["id"].integer()) + "].damage.formula: " + error.what()); }
+      catch (const std::exception& error) { throw std::invalid_argument(std::string(collection) + "[" + std::to_string(item["id"].integer()) + "] unsupported damage formula: " + error.what()); }
     }
   }
 }
@@ -964,28 +964,8 @@ void Session::step(const Input& input) {
   ++ui_.age;
   if (ui_.scene != Scene::map) {
     destination_.reset(); mapTouchCount_ = 0;
-    if (battle_.encounterEffect > 0) {
-      advanceEncounterEffect();
-      if (battle_.encounterEffect == 0) {
-        fadeOut_ = 0;
-        ensureScreenEffects(); std::get<Value::Object>(screenEffects_.data)["_fadeInDuration"] = 24;
-        buildBattleIntro();
-      }
-    } else {
-      updateUi(input, ok, cancel, repeatedDirection); updateBattle();
-    }
+    updateUi(input, ok, cancel, repeatedDirection); updateBattle();
     if (ui_.scene == Scene::battle) { updateTimer(); updateScreenState(); }
-    if (ui_.scene == Scene::battle) for (auto& visual : battle_.visuals) {
-      const auto& item = database_[visual.action.item ? "items" : "skills"][visual.action.id];
-      const auto& animation = database_["animations"][item["animationId"].integer()];
-      for (std::size_t i = 0; i < visual.targets.size(); ++i) {
-        if (animation["position"].integer() == 3 && i > 0) continue;
-        const int age = static_cast<int>(ticks_) - static_cast<int>(visual.started) - 8 - static_cast<int>(i) * 12;
-        if (age < 0 || age / 4 == visual.lastAudioFrames[i]) continue;
-        visual.lastAudioFrames[i] = age / 4;
-        for (const auto& timing : animation["timings"].array()) if (timing["frame"].integer() == age / 4) audio("se", timing["se"]);
-      }
-    }
     return;
   }
   const bool hadMessage = message_.busy;

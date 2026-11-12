@@ -20,7 +20,8 @@ class TilemapLayer:public Container {
 }
 Tilemap::Tilemap(){addChild(std::make_shared<TilemapLayer>(this,false,layerLifetime_));addChild(std::make_shared<TilemapLayer>(this,true,layerLifetime_));}
 void Tilemap::setData(int w,int h,std::vector<int> values){mapWidth=w;mapHeight=h;data=std::move(values);refresh();}
-void Tilemap::update(){++animationCount;animationFrame=animationCount/30;Container::update();}
+void Tilemap::update(){++animationCount;animationFrame=animationCount/30;Container::update();for(auto* bitmap:bitmaps)if(bitmap)bitmap->touch();}
+bool Tilemap::isReady()const{return std::all_of(bitmaps.begin(),bitmaps.end(),[](const auto* bitmap){return !bitmap||bitmap->isReady();});}
 int Tilemap::readMapData(int x,int y,int z)const {
   if(mapWidth<=0||mapHeight<=0||z<0)return 0;
   if(horizontalWrap)x=(x%mapWidth+mapWidth)%mapWidth;if(verticalWrap)y=(y%mapHeight+mapHeight)%mapHeight;

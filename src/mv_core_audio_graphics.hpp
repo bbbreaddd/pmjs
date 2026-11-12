@@ -192,10 +192,11 @@ class WebAudio {
 
   static inline double masterVolume = 1.0;
   static inline bool initialized = false;
+  static inline bool standAlone = false;
   static inline bool canPlayOggFlag = true;
   static inline bool canPlayM4aFlag = true;
 
-  explicit WebAudio(std::string audioUrl = "");
+  explicit WebAudio(std::string audioUrl = "", bool deferLoad = true, bool reportResourceErrors = true);
   ~WebAudio();
   WebAudio(const WebAudio&) = delete;
   WebAudio& operator=(const WebAudio&) = delete;
@@ -233,7 +234,7 @@ class WebAudio {
  private:
   std::shared_ptr<CoreServiceBinding> services_;
   std::uint32_t handle_ = 0;
-  bool autoPlay_ = false, loading_ = false;
+  bool autoPlay_ = false, loading_ = false, useResourceHandler_ = true;
   double pendingFadeIn_ = -1;
   std::function<void()> failure_;
   std::shared_ptr<int> lifetime_ = std::make_shared<int>(0);
@@ -249,6 +250,7 @@ class Html5Audio {
   static inline std::string url;
   static inline std::string staticSeUrl;
   static inline double volume = 1.0;
+  static inline bool initialized = false;
   static inline bool ready = false;
   static inline bool error = false;
   static inline bool playing = false;
@@ -256,7 +258,7 @@ class Html5Audio {
   static inline double currentTime = 0.0;
 
   static void setup(const std::string& audioUrl);
-  static void initialize();
+  static bool initialize();
   static void clear();
   static void setStaticSe(const std::string& audioUrl);
   static bool isReady();

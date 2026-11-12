@@ -1,6 +1,7 @@
 #pragma once
 #include "mv_core_audio_graphics.hpp"
 #include "renderer.hpp"
+#include <cmath>
 #include <memory>
 #include <random>
 
@@ -30,6 +31,7 @@ class Container {
   void addChildAt(std::shared_ptr<Container> child,std::size_t index);
   std::shared_ptr<Container> removeChild(Container* child);
   void removeChildren();
+  virtual void onRemoveAsAChild() {}
   Matrix localTransform()const;
   void move(double x,double y){position={x,y};}
  protected:
@@ -66,13 +68,15 @@ class Tilemap : public Container {
   int animationFrame = 0;
   std::vector<int> data;
   std::vector<int> flags;
-  std::array<const PixelBitmap*, 9> bitmaps{};
+  std::array<PixelBitmap*, 9> bitmaps{};
 
   void setData(int width, int height, std::vector<int> mapData);
   void setTileWidth(int value){if(tileWidth!=value){tileWidth=value;refresh();}}
   void setTileHeight(int value){if(tileHeight!=value){tileHeight=value;refresh();}}
   void update() override;
-  void refresh(){++revision_;}
+  virtual void refresh(){++revision_;}
+  virtual void refreshTileset() {}
+  bool isReady() const;
   using ImageResolver=std::function<ImageInfo(int)>;
   struct TileRectangle {int sheet=0; Rectangle source; Point destination,animation;};
   std::vector<TileRectangle> tileRectangles(int tileId,int x,int y) const;
@@ -129,7 +133,7 @@ class Tilemap : public Container {
   static bool isWallTypeAutotile(int tileId) { return isRoofTile(tileId) || isWallSideTile(tileId); }
   static bool isWaterfallTypeAutotile(int tileId) { return isWaterfallTile(tileId); }
 };
-class ShaderTilemap:public Tilemap {public:bool roundPixels=true;};
+class ShaderTilemap:public Tilemap {public:bool roundPixels=true;void refreshTileset()override{refresh();}};
 class Sprite:public Container {
  public:
   Sprite();
@@ -177,7 +181,7 @@ class TilingSprite:public Sprite {
 class ScreenSprite:public Container {
  public:
   std::array<float,3> color{};
-  void setColor(double r,double g,double b){color={float(std::clamp(std::floor(r+.5),0.0,255.0)/255),float(std::clamp(std::floor(g+.5),0.0,255.0)/255),float(std::clamp(std::floor(b+.5),0.0,255.0)/255)};}
+  void setColor(double r,double g,double b){const auto channel=[](double value){const double clean=std::isnan(value)?0.0:value;return float(std::clamp(std::floor(clean+.5),0.0,255.0)/255);};color={channel(r),channel(g),channel(b)};}
   void setBlack(){setColor(0,0,0);} void setWhite(){setColor(255,255,255);}
   void setOpacity(double value){alpha=std::clamp(value,0.0,255.0)/255;}
   double opacity()const{return alpha*255;}
@@ -216,9 +220,9 @@ class Window:public Container {
   void update()override;
   void synchronize(std::uint64_t frameCount);
   void move(double x,double y,double w,double h){position={x,y};width=w;height=h;}
-  void setCursorRect(double x,double y,double w,double h){cursorRect={x,y,w,h};}
+  void setCursorRect(double x,double y,double w,double h){const auto value=[](double v){return std::isnan(v)?0.0:std::floor(v);};cursorRect={value(x),value(y),value(w),value(h)};}
   void addChildToBack(std::shared_ptr<Container> child);
-  void setTone(double r,double g,double b){tone={r,g,b};}
+  void setTone(double r,double g,double b){const auto value=[](double v){return std::isnan(v)?0.0:v;};tone={value(r),value(g),value(b)};}
   bool isOpen()const{return openness>=255;} bool isClosed()const{return openness<=0;}
   Rectangle openBounds()const;
   double cursorAlpha()const;
@@ -239,6 +243,7 @@ class WindowLayer:public Container {
  public:
   double width=0,height=0;
   void move(double x,double y,double w,double h){position={x,y};width=w;height=h;}
+  void onRemoveAsAChild()override{removeChildren();}
   void render(Renderer&,const Matrix& world={1,0,0,1,0,0},double opacity=1)override;
 };
 class Weather:public Container {

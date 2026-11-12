@@ -27,6 +27,10 @@ for(const folder of ['bgm','bgs']) {
   fs.mkdirSync(path.join(root,'audio',folder),{recursive:true});
   for(const name of ['Field','Battle']) fs.writeFileSync(path.join(root,'audio',folder,name+'.ogg'),wav);
 }
+const encKey=Buffer.from('000102030405060708090a0b0c0d0e0f','hex');
+const encryptedBody=Buffer.concat([Buffer.from('5250474d560000000003010000000000','hex'),wav]);
+for(let i=0;i<16;++i) encryptedBody[16+i]^=encKey[i];
+fs.writeFileSync(path.join(root,'audio/bgm/Encrypted.rpgmvo'),encryptedBody);
 const native = require(path.resolve(process.argv[2]));
 native.initialize({gameRoot:root,width:320,height:240,windowTitle:'Native message screen fade'});
 const command = (code,parameters=[])=>({code,parameters,indent:0});
@@ -74,6 +78,7 @@ try {
     const saved=native.mvEngine.save(audio);
     saved.system._bgmOnSave.pos=0.25;saved.system._bgsOnSave.pos=0.35;
     native.mvEngine.load(audio,saved);renderAudio();
+    native.mvEngine.setRandomStream(audio,Array(100).fill(0.5));
     native.mvEngine.startBattle(audio,1,true,false);renderAudio();
     const battlePixels=native.canvas.captureSceneRawPremultiplied();
     const gaugePixel=x=>Array.from(battlePixels.subarray((110*320+x)*4,(110*320+x)*4+3));
@@ -90,5 +95,21 @@ try {
     assert.equal(restored._bgmOnSave.name,'Field');assert.ok(restored._bgmOnSave.pos>=0.2,'battle restores the map music position');
     assert.equal(restored._bgsOnSave.name,'Field');assert.ok(restored._bgsOnSave.pos>=0.3,'battle restores the ambient sound position');
   } finally { native.mvEngine.dispose(audio); }
+
+  const encAudio=native.mvEngine.create({
+    system:{startMapId:1,startX:1,startY:1,partyMembers:[1],hasEncryptedAudio:true,encryptionKey:'000102030405060708090a0b0c0d0e0f'},
+    actors:[null,{classId:1,initialLevel:1}],classes:[null,{params:Array.from({length:8},()=>[0,100]),traits:[]}],
+    tilesets:[null,{flags:[0]}],maps:{1:{width:8,height:5,data:Array(8*5*6).fill(0),tilesetId:1,events:[],autoplayBgm:true,bgm:song('Encrypted')}}
+  });
+  try {
+    native.mvEngine.newGame(encAudio);native.mvEngine.attach(encAudio,{fontFile:'font.ttf'});
+    const saved=native.mvEngine.save(encAudio);
+    saved.system._bgmOnSave.pos=0.25;
+    native.mvEngine.load(encAudio,saved);
+    native.beginFrame();native.mvEngine.present(encAudio);native.renderFrame();
+    const state=native.mvEngine.save(encAudio).system;
+    assert.equal(state._bgmOnSave.name,'Encrypted');
+    assert.ok(state._bgmOnSave.pos>=0.2,'encrypted rpgmvo BGM plays and preserves seek position');
+  } finally { native.mvEngine.dispose(encAudio); }
 
 } finally { native.mvEngine.dispose(session);fs.rmSync(root,{recursive:true,force:true}); }

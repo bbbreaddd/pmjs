@@ -271,6 +271,7 @@ void Session::load(const Value& contents) {
   restored.alwaysDash_ = alwaysDash_; restored.commandRemember_ = commandRemember_; restored.volumes_ = volumes_; restored.configurationRevision_ = configurationRevision_;
   restored.randomGenerator_ = randomGenerator_; restored.randomStream_ = randomStream_; restored.randomOffset_ = randomOffset_; restored.randomCalls_ = randomCalls_;
   restored.presentationRevision_ = presentationRevision_ + 1;
+  restored.enemyBitmapHeightResolver_ = enemyBitmapHeightResolver_;
   *this = std::move(restored);
 }
 }

@@ -113,6 +113,8 @@ napi_value stepEngine(napi_env env, napi_callback_info info) {
     if (args.size() == 2) {
       const auto input = readValue(env, args[1]);
       controls.direction = input["direction"].integer(); controls.ok = input["ok"].boolean();
+      controls.okLongPressed = input["okLongPressed"].boolean();
+      controls.inputDate = input["inputDate"].number(); controls.touchDate = input["touchDate"].number();
       controls.cancel = input["cancel"].boolean(); controls.dash = input["dash"].boolean();
       if (!input["destinationX"].null()) controls.destinationX = input["destinationX"].integer();
       if (!input["destinationY"].null()) controls.destinationY = input["destinationY"].integer();
@@ -175,6 +177,8 @@ napi_value stepEngine(napi_env env, napi_callback_info info) {
       for (const char* button : {"ok","cancel","menu","escape","shift","control","tab","pageup","pagedown","up","down","left","right","debug"})
         if (value.input.isPressed(button)) controls.pressed.insert(button);
       controls.okTriggered = value.input.isTriggered("ok");
+      controls.okLongPressed = value.input.isLongPressed("ok");
+      controls.inputDate = value.input.date(); controls.touchDate = value.touch.date();
       controls.cancelTriggered = value.input.isTriggered("cancel") || value.input.isTriggered("menu") || value.touch.isCancelled();
       const char* direction = controls.direction == 2 ? "down" : controls.direction == 4 ? "left" : controls.direction == 6 ? "right" : "up";
       controls.repeatedDirection = value.input.isRepeated(direction) ? controls.direction : 0;

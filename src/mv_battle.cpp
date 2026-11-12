@@ -1,6 +1,7 @@
 #include "mv_engine.hpp"
 #include "mv_battle_extra.hpp"
 #include "mv_managers.hpp"
+#include "mv_windows.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -174,9 +175,9 @@ void Session::apply(Battler& subject, Battler& target, const Value& item, Battle
   result.drain = item["damage"]["type"].integer() == 5 || item["damage"]["type"].integer() == 6;
   const int hitType = item["hitType"].integer();
   const double success = item["successRate"].number(100) / 100 * (hitType == 1 ? trait(subject, 22, 0, false) : 1);
-  if (random() >= success) { result.missed = true; battle_.log.push_back("Miss!"); return; }
+  if (random() >= success) { result.missed = true; return; }
   const double evasion = hitType == 1 ? trait(target, 22, 1, false) : hitType == 2 ? trait(target, 22, 4, false) : 0;
-  if (random() < evasion) { result.evaded = true; if (hitType == 2) SoundManager::playMagicEvasion(*this); else SoundManager::playEvasion(*this); battle_.log.push_back("Evaded!"); return; }
+  if (random() < evasion) { result.evaded = true; return; }
   const auto& damage = item["damage"];
   if (damage["type"].integer()) {
     const bool critical = random() < (damage["critical"].boolean() ? trait(subject, 22, 2, false) * (1 - trait(target, 22, 3, false)) : 0);
@@ -193,14 +194,13 @@ void Session::apply(Battler& subject, Battler& target, const Value& item, Battle
         for (int state : states) { const auto& source = database_["states"][state]; if (source["removeByDamage"].boolean() && random() < source["chanceByDamage"].number() / 100) removeState(target, state); }
         target.tp += static_cast<int>(std::clamp(std::floor(50.0 * actual / parameter(target, 0) * trait(target, 23, 5, true)), -100.0, 100.0));
       }
-      if (type == 5) { auto& receiver = drainTarget ? *drainTarget : subject; receiver.hp += actual; refreshBattler(receiver); }
+      if (type == 5) { auto& receiver = drainTarget ? *drainTarget : subject; receiver.hp += actual; receiver.result.hpAffected = true; receiver.result.hpDamage = -actual; refreshBattler(receiver); }
     } else {
       const int actual = type == 6 || amount > 0 ? std::min(amount, target.mp) : amount;
       result.mpDamage = actual;
-      target.mp -= actual; if (type == 6) { auto& receiver = drainTarget ? *drainTarget : subject; receiver.mp += actual; refreshBattler(receiver); }
+      target.mp -= actual; if (type == 6) { auto& receiver = drainTarget ? *drainTarget : subject; receiver.mp += actual; receiver.result.mpDamage = -actual; refreshBattler(receiver); }
     }
     result.success = true;
-    battle_.log.push_back(std::to_string(amount));
     refreshBattler(target); refreshBattler(subject);
   }
   for (const auto& effect : item["effects"].array()) applyItemEffect(subject, target, item, effect);
@@ -212,7 +212,9 @@ void Session::startBattle(int troop, bool canEscape, bool canLose, bool event) {
   if (mapSceneOnly()) throw std::runtime_error("battle is outside the map-scene contract");
   if (database_["troops"][troop].null()) throw std::invalid_argument("unknown troop");
   ++system_.battleCount;
-  battle_ = {}; battle_.active = true; battle_.troopId = troop; battle_.canEscape = canEscape; battle_.canLose = canLose; battle_.event = event;
+  battle_ = {}; resetEnemySprites(); battle_.active = true; battle_.troopId = troop; battle_.canEscape = canEscape; battle_.canLose = canLose; battle_.event = event;
+  battleLog_ = std::make_shared<Window_BattleLog>(0,0,0,0);
+  battleLog_->bindLines(battle_.log);
   for (const auto& member : database_["troops"][troop]["members"].array()) {
     Battler enemy; enemy.enemy = true; enemy.id = member["enemyId"].integer(); enemy.hidden = member["hidden"].boolean();
     enemy.originalName = database_["enemies"][enemy.id]["name"].text(); enemy.name = enemy.originalName;
@@ -230,15 +232,10 @@ void Session::startBattle(int troop, bool canEscape, bool canLose, bool event) {
   audio("battle-save", {});
   audio("bgs", Value::Object{{"name", ""}});
   const auto battleBgm = system_.battleBgm.null() ? database_["system"]["battleBgm"] : system_.battleBgm;
-  if (battleTest_) audio("bgm", battleBgm);
-  else {
-    if (savedBgm_.null() || savedBgm_["name"].text() != battleBgm["name"].text()) audio("bgm", Value::Object{{"name", ""}});
-    audio("me", Value::Object{{"name", ""}});
-    SoundManager::playBattleStart(*this);
-    battle_.encounterEffect = 60;
-  }
+  audio("bgm", battleBgm);
   battle_.opening = true; ui_.category = 4;
-  if (battleTest_) buildBattleIntro();
+  buildBattleIntro();
+  updateEnemySprites();
 }
 void Session::buildBattleIntro() {
   message_ = {}; messageAge_ = 0;
@@ -272,11 +269,7 @@ std::set<int> Session::battlerSkills(const Battler& actor) const {
   return skills;
 }
 std::vector<int> Session::battleSkillTypes(int actorIndex) const {
-  std::set<int> types;
-  for (const auto* object : traitObjects(actors_.at(party_.at(actorIndex))))
-    for (const auto& entry : (*object)["traits"].array())
-      if (entry["code"].integer() == 41) types.insert(entry["dataId"].integer());
-  return {types.begin(), types.end()};
+  return Window_ActorCommand::skillTypes(*this, party_.at(actorIndex));
 }
 void Session::makeEnemyActions() {
   battle_.actions.clear(); battle_.actorIndex = 0; ui_.category = 4; ui_.cursor = 0;
@@ -346,6 +339,7 @@ void Session::beginTurn() {
   for (auto& action : battle_.actions) action.speed = speeds.at({action.enemy, action.subject});
   std::stable_sort(battle_.actions.begin(), battle_.actions.end(), [](const Action& a, const Action& b) { return a.speed > b.speed; });
   battle_.wait = 1;
+  battleLog_->push({"wait"});
 }
 void Session::executeAction(const Action& selectedAction) {
   Action action = selectedAction;
@@ -356,68 +350,72 @@ void Session::executeAction(const Action& selectedAction) {
   if (!action.forced && !canUse(subject, item)) return;
   if (action.item) { if (inventory_[action.id] <= 0) return; if (item["consumable"].boolean()) --inventory_[action.id]; }
   else { subject.mp -= static_cast<int>(std::floor(item["mpCost"].number() * trait(subject, 23, 4, true))); subject.tp -= item["tpCost"].integer(); }
-  const std::string name = subject.name;
-  auto message = item["message1"].text();
-  for (std::size_t at = message.find("%1"); at != std::string::npos; at = message.find("%1", at + item["name"].text().size())) message.replace(at, 2, item["name"].text());
-  battle_.log.clear(); battle_.log.push_back(name + (message.empty() ? " uses " + item["name"].text() : message));
   const auto targets = actionTargets(action, subject, item);
-  if (!targets.empty()) {
-    if (targets.back()->enemy) subject.lastTargetIndex = static_cast<int>(targets.back() - battle_.enemies.data());
-    else subject.lastTargetIndex = static_cast<int>(std::find(party_.begin(), party_.end(), targets.back()->id) - party_.begin());
-  }
   if (!action.item && action.id == 2) subject.guarding = true;
   applyGlobalEffects(item);
-  const int movement = action.enemy ? 0 : 12;
-  BattleVisual visual; visual.action = action; visual.movementStarted = ticks_; visual.started = ticks_ + movement;
+  BattleVisual visual; visual.action = action;
+  visual.movementStarted = visual.started = std::numeric_limits<std::uint64_t>::max();
+  const int repeats = std::max(0, item["repeats"].integer(1) + ((!action.item && action.id == 1) ? static_cast<int>(std::max(0.0, trait(subject, 34, 0, false))) : 0));
   for (auto* target : targets) {
     BattleTarget visualTarget; visualTarget.enemy = target->enemy;
     if (target->enemy) visualTarget.index = static_cast<int>(target - battle_.enemies.data());
     else { const auto position = std::find(party_.begin(), party_.end(), target->id); visualTarget.index = static_cast<int>(position - party_.begin()); }
-    visual.targets.push_back(visualTarget);
+    for (int repeat = 0; repeat < repeats; ++repeat) visual.targets.push_back(visualTarget);
   }
-  visual.lastAudioFrames.resize(visual.targets.size(), -1);
-  const int frames = static_cast<int>(database_["animations"][item["animationId"].integer()]["frames"].array().size());
-  battle_.wait = std::max(16, movement + (frames ? frames * 4 + 9 + std::max(0, static_cast<int>(targets.size()) - 1) * 12 : 0));
+  visual.animationTargets = visual.targets;
+  visual.invocationCount = visual.targets.size();
+  battle_.wait = 0;
   battle_.visuals.push_back(std::move(visual));
   if (battle_.visuals.size() > 32) battle_.visuals.erase(battle_.visuals.begin());
-  battle_.currentVisual = static_cast<int>(battle_.visuals.size()) - 1; battle_.actionStage = 1;
+  battle_.currentVisual = static_cast<int>(battle_.visuals.size()) - 1; battle_.actionStage = 1; battle_.targetIndex = 0;
+  const int targetId = action.enemy ? -action.subject-1 : subject.id;
+  battleLog_->push({"clear"});
+  battleLog_->push({"performActionStart",0,targetId,battle_.currentVisual});
+  battleLog_->push({"waitForMovement"});
+  battleLog_->push({"performAction",0,targetId,battle_.currentVisual});
+  battleLog_->push({"showAnimation",0,0,battle_.currentVisual});
+  battleLog_->displayAction(*this,subject,item);
 }
 void Session::resolveAction() {
   auto& visual = battle_.visuals.at(battle_.currentVisual); const auto& action = visual.action;
   auto& subject = action.enemy ? battle_.enemies[action.subject] : actors_.at(party_[action.subject]);
   const auto& item = database_[action.item ? "items" : "skills"][action.id];
-  const int repeats = std::max(0, item["repeats"].integer(1) + ((!action.item && action.id == 1) ? static_cast<int>(std::max(0.0, trait(subject, 34, 0, false))) : 0));
-  for (auto& entry : visual.targets) {
+  if (battle_.targetIndex < static_cast<int>(visual.invocationCount)) {
+    auto& entry = visual.targets[battle_.targetIndex++];
     auto& target = entry.enemy ? battle_.enemies[entry.index] : actors_.at(party_[entry.index]);
-    for (int repeat = 0; repeat < repeats; ++repeat) {
-      const bool physical = item["hitType"].integer() == 1, magical = item["hitType"].integer() == 2;
-      if (random() < (physical && target.hp > 0 && restriction(target) < 4 ? trait(target, 22, 6, false) : 0)) {
-        int animation = database_["skills"][1]["animationId"].integer();
-        if (animation < 0 && !target.enemy) for (std::size_t slot = 0; slot < target.equips.size(); ++slot)
-          if (target.equipKinds[slot] == 1 && target.equips[slot]) { animation = database_["weapons"][target.equips[slot]]["animationId"].integer(); break; }
-        if (animation > 0) requestAnimation(subject.enemy ? 2 : 1, subject.enemy ? action.subject : subject.id, animation);
-        apply(target, subject, database_["skills"][1]);
-      }
-      else if (random() < (magical ? trait(target, 22, 5, false) : 0)) {
-        SoundManager::playReflection(*this); apply(subject, subject, item, &target);
-      }
-      else {
-        Battler* receiver = &target;
-        if (target.hp < parameter(target, 0) / 4 && item["hitType"].integer() != 0) {
-          if (target.enemy) {
-            for (auto& member : battle_.enemies) if (!member.hidden && BattleMechanics::canSubstitute(*this, member, target)) { receiver = &member; break; }
-          } else for (std::size_t index = 0; index < battleMemberCount(); ++index) {
-            auto& member = actors_.at(party_[index]);
-            if (BattleMechanics::canSubstitute(*this, member, target)) { receiver = &member; break; }
-          }
-        }
-        if (receiver != &target) battle_.log.push_back(battleMessage("substitute", {receiver->name, target.name}));
-        apply(subject, *receiver, item);
-      }
+    Battler* receiver = &target;
+    Battler* resultSubject = &subject;
+    const bool physical = item["hitType"].integer() == 1, magical = item["hitType"].integer() == 2;
+    if (random() < (physical && target.hp > 0 && restriction(target) < 4 ? trait(target, 22, 6, false) : 0)) {
+      battleLog_->displayCounter(*this,target);
+      apply(target, subject, database_["skills"][1]);
+      receiver = &subject;
+      resultSubject = &target;
     }
-    entry.result = target.result;
+    else if (random() < (magical ? trait(target, 22, 5, false) : 0)) {
+      battleLog_->displayReflection(*this,target);
+      apply(subject, subject, item, &target); receiver = &subject;
+      resultSubject = &target;
+    }
+    else {
+      if (target.hp < parameter(target, 0) / 4 && item["hitType"].integer() != 0) {
+        if (target.enemy) {
+          for (auto& member : battle_.enemies) if (!member.hidden && BattleMechanics::canSubstitute(*this, member, target)) { receiver = &member; break; }
+        } else for (std::size_t index = 0; index < battleMemberCount(); ++index) {
+          auto& member = actors_.at(party_[index]);
+          if (BattleMechanics::canSubstitute(*this, member, target)) { receiver = &member; break; }
+        }
+      }
+      if (receiver != &target) battleLog_->displaySubstitute(*this,*receiver,target);
+      apply(subject, *receiver, item);
+    }
+    subject.lastTargetIndex = entry.index;
+    entry.result = receiver->result;
+    entry.enemy = receiver->enemy;
+    entry.index = receiver->enemy ? static_cast<int>(receiver - battle_.enemies.data()) : static_cast<int>(std::find(party_.begin(), party_.end(), receiver->id) - party_.begin());
+    entry.aliveAtImpact = receiver->hp > 0;
+    battleLog_->displayActionResults(*this,*resultSubject,*receiver);
   }
-  visual.impact = ticks_;
 }
 
 void Session::endBattlerActions(Battler& battler) {
@@ -428,6 +426,9 @@ void Session::endBattlerActions(Battler& battler) {
     battler.buffs[parameter] = 0; battler.result.removedBuffs.push_back(parameter);
   }
   refreshBattler(battler);
+  battleLog_->displayAutoAffectedStatus(*this,battler);
+  battleLog_->displayCurrentState(*this,battler);
+  battleLog_->displayRegeneration(*this,battler);
 }
 void Session::endBattlerTurn(Battler& battler) {
     battler.result = {};
@@ -448,8 +449,13 @@ void Session::endBattlerTurn(Battler& battler) {
     refreshBattler(battler);
 }
 void Session::endTurn() {
-  for (std::size_t index = 0; index < battleMemberCount(); ++index) endBattlerTurn(actors_.at(party_[index]));
-  for (auto& battler : battle_.enemies) endBattlerTurn(battler);
+  const auto finish = [&](Battler& battler) {
+    endBattlerTurn(battler);
+    battleLog_->displayAutoAffectedStatus(*this,battler);
+    battleLog_->displayRegeneration(*this,battler);
+  };
+  for (std::size_t index = 0; index < battleMemberCount(); ++index) finish(actors_.at(party_[index]));
+  for (auto& battler : battle_.enemies) finish(battler);
   battle_.preemptive = false; battle_.surprise = false;
   battle_.turnEnding = true;
   battle_.wait = 0;
@@ -530,20 +536,57 @@ void Session::leaveBattle() {
   encounterCount_ = randomInt(map()["encounterStep"].integer(30)) + randomInt(map()["encounterStep"].integer(30)) + 1;
 }
 void Session::updateBattle() {
-  if (ui_.scene != Scene::battle || message_.busy) return;
-  if (!battle_.active) { if (battle_.result >= 0) leaveBattle(); return; }
-  const bool processingTurn = battle_.wait > 0;
+  updateEnemySprites();
+  if (ui_.scene != Scene::battle) return;
+  if (!battle_.active) { if (battle_.result >= 0 && !message_.busy) leaveBattle(); return; }
+  const bool moving = std::any_of(battle_.visuals.begin(), battle_.visuals.end(), [&](const BattleVisual& visual) {
+    return visual.actionVisual && !visual.action.enemy && ((visual.returned && ticks_ - visual.returned < 12) ||
+      (!visual.returned && ticks_ >= visual.movementStarted && ticks_ - visual.movementStarted < 12));
+  });
+  const bool effecting = isBattleEffecting();
+  battleLog_->tick(*this,currentInput_.okLongPressed || currentInput_.dash || currentInput_.touchLongPressed,effecting,moving);
+  if (message_.busy) return;
+  if (std::any_of(visualEffects_.begin(), visualEffects_.end(), [&](const VisualEffect& effect) {
+    return effect.targetType > 0 && !effect.balloon && (ticks_ < effect.started || ticks_ - effect.started < static_cast<std::uint64_t>(effect.duration));
+  })) return;
+  bool processingTurn = battle_.wait > 0 || battle_.actionStage != 0;
   if (battle_.actionStage) {
     if (battle_.wait > 0 && --battle_.wait > 0) return;
-    if (battle_.actionStage == 1) { resolveAction(); battle_.actionStage = 2; battle_.wait = 36; return; }
+    if (battleLog_->isBusy()) return;
+    if (battle_.actionStage == 1 && battle_.targetIndex < static_cast<int>(battle_.visuals.at(battle_.currentVisual).invocationCount)) {
+      battleLog_->push({"pushBaseLine"});
+      resolveAction();
+      battleLog_->push({"popBaseLine"});
+      battle_.actionStage = 2;
+      return;
+    }
+    if (battle_.actionStage == 1) battle_.actionStage = 2;
+    if (battle_.actionStage == 2) {
+      if (battle_.targetIndex < static_cast<int>(battle_.visuals.at(battle_.currentVisual).invocationCount)) {
+        battle_.actionStage = 1;
+        return;
+      }
+      auto& visual = battle_.visuals.at(battle_.currentVisual);
+      visual.returned = ticks_;
+      battleLog_->push({"waitForNewLine"});
+      battleLog_->push({"clear"});
+      battleLog_->push({"waitForMovement"});
+      battle_.actionStage = 3;
+      battle_.wait = visual.action.enemy ? 0 : 12;
+      return;
+    }
     auto& visual = battle_.visuals.at(battle_.currentVisual); const auto& action = visual.action;
     auto& subject = action.enemy ? battle_.enemies[action.subject] : actors_.at(party_[action.subject]);
     if (std::none_of(battle_.actions.begin(), battle_.actions.end(), [&](const Action& next) { return next.enemy == action.enemy && next.subject == action.subject; })) {
       endBattlerActions(subject);
     }
-    visual.returned = ticks_; battle_.actionStage = 0;
-    if (battle_.forcedExecuting) { battle_.forcedExecuting = false; battle_.wait = battle_.forcedResumeWait; }
+    battle_.actionStage = 0;
+    if (battle_.forcedExecuting) {
+      battle_.forcedExecuting = false; battle_.wait = battle_.forcedResumeWait;
+      processingTurn = battle_.wait > 0;
+    }
   }
+  if (battleLog_->isBusy()) return;
   if (!battle_.forcedActions.empty()) {
     const auto forced = battle_.forcedActions.front(); battle_.forcedActions.erase(battle_.forcedActions.begin());
     battle_.forcedResumeWait = battle_.wait; battle_.forcedExecuting = true;
@@ -623,17 +666,41 @@ bool Session::canChangeEquip(const Battler& actor, int slot) const {
   return true;
 }
 void Session::releaseEquipment(Battler& actor, bool forcing) {
+  const auto removed = stripEquipment(actor);
+  if (!forcing) for (const auto& [kind,id] : removed) gainItem(kind,id,1,false);
+}
+std::vector<std::pair<int,int>> Session::stripEquipment(Battler& actor) const {
+  std::vector<std::pair<int,int>> removed;
   bool changed;
   do {
     changed = false;
     for (std::size_t slot = 0; slot < actor.equips.size(); ++slot) {
       const int id = actor.equips[slot];
       if (id && !canEquip(actor, database_[actor.equipKinds[slot] == 1 ? "weapons" : "armors"][id], static_cast<int>(slot))) {
-        if (!forcing) gainItem(actor.equipKinds[slot], id, 1, false);
+        removed.emplace_back(actor.equipKinds[slot],id);
         actor.equips[slot] = 0; changed = true;
       }
     }
   } while (changed);
+  return removed;
+}
+Battler Session::previewEquipment(const Battler& actor, int slot, int item) const {
+  Battler preview = actor;
+  if (slot < 0 || slot >= static_cast<int>(preview.equips.size())) return preview;
+  const int kind = equipSlotType(actor,slot) == 1 ? 1 : 2;
+  preview.equips[slot] = item;
+  preview.equipKinds[slot] = kind;
+  stripEquipment(preview);
+  std::vector<int> resisted;
+  for (const auto* object : traitObjects(preview)) for (const auto& value : (*object)["traits"].array())
+    if (value["code"].integer() == 14) resisted.push_back(value["dataId"].integer());
+  for (int state : resisted) {
+    std::erase(preview.states,state); preview.stateTurns.erase(state); preview.stateSteps.erase(state);
+  }
+  preview.hp = std::clamp(preview.hp,0,static_cast<int>(parameter(preview,0)));
+  preview.mp = std::clamp(preview.mp,0,static_cast<int>(parameter(preview,1)));
+  preview.tp = std::clamp(preview.tp,0,100);
+  return preview;
 }
 bool Session::canEquip(const Battler& actor, const Value& item, int slot) const {
   if (item.null() || item["etypeId"].integer() != equipSlotType(actor, slot)) return false;
@@ -659,6 +726,5 @@ void Session::changeEquipment(int actorId, int slot, int itemId) {
   if (old) ++inventory_[old + (weapon ? 100000 : 200000)];
   if (itemId) --inventory_[key];
   value.equips[slot] = itemId; value.equipKinds[slot] = weapon ? 1 : 2; refreshBattler(value);
-  SoundManager::playEquip(*this);
 }
 }  // namespace pmjs::mv

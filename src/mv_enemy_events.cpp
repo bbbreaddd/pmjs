@@ -1,6 +1,7 @@
 #include "mv_engine.hpp"
 #include "mv_battle_extra.hpp"
 #include "mv_managers.hpp"
+#include "mv_windows.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -62,6 +63,7 @@ bool Session::enemyEventCommand(const Value& entry) {
           enemy.result.hpDamage = enemyEventInt(-change, std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
           enemy.hp = enemyEventInt(enemy.hp + change, 0, static_cast<int>(parameter(enemy, 0)));
           refreshBattler(enemy);
+          if (enemy.hp <= 0 && battleLog_) battleLog_->performCollapse(*this, enemy);
         }
         break;
       case 332:
@@ -70,10 +72,13 @@ bool Session::enemyEventCommand(const Value& entry) {
         refreshBattler(enemy); break;
       case 342:
         enemy.tp = enemyEventInt(enemy.tp + amount, 0, 100); refreshBattler(enemy); break;
-      case 333:
+      case 333: {
+        const bool alreadyDead = enemy.hp <= 0;
         if (!p[1].integer()) { if (!enemy.hidden) addState(enemy, p[2].integer()); }
         else { removeState(enemy, p[2].integer()); refreshBattler(enemy); }
+        if (!alreadyDead && enemy.hp <= 0 && battleLog_) battleLog_->performCollapse(*this, enemy);
         enemy.result = {}; break;
+      }
       case 334: recover(enemy); break;
       case 335: enemy.hidden = false; BattleMechanics::makeUniqueNames(battle_.enemies, battle_.nameCounts, database_["system"]["locale"].text().starts_with("ja") || database_["system"]["locale"].text().starts_with("zh") || database_["system"]["locale"].text().starts_with("ko")); break;
       case 336:
