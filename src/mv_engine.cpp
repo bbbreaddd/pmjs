@@ -76,6 +76,8 @@ const Value& Session::map() const { return database_["maps"][std::to_string(mapI
 
 void Session::newGame() {
   battleLog_.reset(); resetEnemySprites();
+  newGamePending_ = false; titleWindowOpenness_ = 255;
+  sceneFadeOpacity_ = 0; sceneFadeDuration_ = 0;
   lastItemId_ = 0; menuActorId_ = 0; targetActorId_ = 0;
   ++presentationRevision_; battleTest_ = false;
   switches_.clear(); variables_.clear(); selfSwitches_.clear(); inventory_.clear();
@@ -134,8 +136,8 @@ void Session::transfer(int id, int x, int y, int direction) {
   }
   refreshNeeded_ = true; refreshIfNeeded();
   encounterCount_ = randomInt(map()["encounterStep"].integer(30)) + randomInt(map()["encounterStep"].integer(30)) + 1;
-  if (map()["autoplayBgm"].boolean()) audio("bgm", map()["bgm"]);
-  if (map()["autoplayBgs"].boolean()) audio("bgs", map()["bgs"]);
+  if (map()["autoplayBgm"].boolean()) AudioManager::playBgm(*this, map()["bgm"]);
+  if (map()["autoplayBgs"].boolean()) AudioManager::playBgs(*this, map()["bgs"]);
 }
 
 bool Session::pageEligible(const Value& page, int eventId) const {
@@ -395,7 +397,7 @@ void Session::updateRoute(Character& c) {
       break;
     case 42: c.opacity = parameters[0].integer(); break;
     case 43: c.blendMode = parameters[0].integer(); break;
-    case 44: audio("se", parameters[0]); break;
+    case 44: AudioManager::playSe(*this, parameters[0]); break;
     case 45: {
       Interpreter context; context.mapId = mapId_;
       for (const auto& event : events_) if (&event.character == &c) context.eventId = event.id;
@@ -670,8 +672,11 @@ bool Session::command(const Value& entry, Interpreter& context) {
       if (p[0].text() != "eventMovement" || !std::holds_alternative<bool>(p[1].data))
         throw std::runtime_error("unsupported native event operation");
       eventMovementAllowed_ = p[1].boolean(); return true;
-    case 101:
+    case 101: {
+      const bool continuing = message_.closing && message_.previousOpenness == 255 && message_.background == p[2].integer() && message_.position == p[3].integer();
+      if (message_.closing && message_.openness > 0 && !continuing) return false;
       message_ = {}; message_.busy = true;
+      if (continuing) message_.openness = 255;
       messageAge_ = 0; ui_.cursor = 0;
       message_.faceName = p[0].text(); message_.faceIndex = p[1].integer();
       message_.background = p[2].integer(); message_.position = p[3].integer();
@@ -690,6 +695,7 @@ bool Session::command(const Value& entry, Interpreter& context) {
         ++context.index; dialogEventCommand(context.list[context.index], context);
       }
       return true;
+    }
     case 102: message_ = {}; message_.busy = true; messageAge_ = 0; ui_.cursor = p[2].integer(); message_.choices = p[0].array(); message_.cancelChoice = p[1].integer(); message_.defaultChoice = p[2].integer(); message_.choiceIndent = indent; message_.choicePosition = p[3].integer(2); message_.choiceBackground = p[4].integer(); return true;
     case 111: context.branches[indent] = condition(p, context); if (!context.branches[indent]) skipBranch(indent, context); return true;
     case 121: for (int id = p[0].integer(); id <= p[1].integer(); ++id) switches_[id] = p[2].integer() == 0; refreshNeeded_ = true; return true;
@@ -764,7 +770,7 @@ bool Session::command(const Value& entry, Interpreter& context) {
     }
     case 505: return true;
     case 211: player_.transparent = p[0].integer() == 0; return true;
-    case 250: audio("se", p[0]); return true;
+    case 250: AudioManager::playSe(*this, p[0]); return true;
     case 301: {
       if (battle_.active) return true;
       const int designation = p[0].integer();
@@ -843,7 +849,7 @@ bool Session::command(const Value& entry, Interpreter& context) {
   }
 }
 void Session::advanceInterpreter(Interpreter& context) {
-  if (!context.running || (battle_.active && !context.battleEvent) || message_.busy) return;
+  if (!context.running || pendingTransfer_ || (battle_.active && !context.battleEvent) || message_.busy) return;
   for (int budget = 0; budget <= 100000; ++budget) {
     if (!context.children.empty()) {
       advanceInterpreter(context.children.front());
@@ -884,7 +890,7 @@ void Session::advanceInterpreter(Interpreter& context) {
   }
 }
 void Session::updateInterpreter() {
-  if (battle_.active || message_.busy) return;
+  if (battle_.active || message_.busy || pendingTransfer_) return;
   for (int budget = 0; budget < 10000; ++budget) {
     refreshIfNeeded();
     if (!interpreter_.running && reservedCommonEvent_ > 0) {
@@ -945,7 +951,18 @@ void Session::acknowledge(int choice) {
     for (auto& [id, common] : commonInterpreters_) { (void)id; if (!owner && common) owner = findOwner(findOwner, *common); }
     if (owner) owner->branches[message_.choiceIndent] = choice;
   }
-  message_ = {}; messageOwnerSerial_ = 0;
+  message_.busy = false; message_.closing = true; message_.openness = 255;
+  message_.choices.clear(); messageOwnerSerial_ = 0;
+}
+void Session::updateMessageWindow() {
+  message_.previousOpenness = message_.openness;
+  if (message_.scrolling) return;
+  if (message_.busy) {
+    if (message_.openness < 255) message_.openness = std::min(255, message_.openness + 32);
+  } else if (message_.closing) {
+    message_.openness = std::max(0, message_.openness - 32);
+    if (message_.openness == 0) { message_ = {}; messageOwnerSerial_ = 0; }
+  }
 }
 void Session::updateTimer() {
   if (timerWorking_ && timerFrames_ > 0 && --timerFrames_ == 0 && battle_.active) finishBattle(1);
@@ -956,7 +973,10 @@ void Session::step(const Input& input) {
     throw std::runtime_error("map-scene session does not support interactive input");
   if (finished_ || resourcesStopped_) return;
   currentInput_ = input;
+  const bool sceneFadeComplete = sceneFadeDuration_ <= 0;
   ++ticks_;
+  updateSceneFade();
+  updateMessageWindow();
   const bool ok = input.okTriggered.value_or(input.ok && !previousOk_); previousOk_ = input.ok;
   okAge_ = input.ok ? okAge_ + 1 : 0;
   const bool cancel = input.cancelTriggered.value_or(input.cancel && !previousCancel_); previousCancel_ = input.cancel;
@@ -966,6 +986,11 @@ void Session::step(const Input& input) {
   ++ui_.age;
   if (ui_.scene != Scene::map) {
     destination_.reset(); mapTouchCount_ = 0;
+    if (ui_.scene == Scene::title && newGamePending_) {
+      titleWindowOpenness_ = std::max(0, titleWindowOpenness_ - 32);
+      if (sceneFadeComplete) { newGame(); startSceneFade(false,24); }
+      return;
+    }
     updateUi(input, ok, cancel, repeatedDirection); updateBattle();
     if (ui_.scene == Scene::battle) { updateTimer(); updateScreenState(); }
     return;
@@ -1037,7 +1062,7 @@ void Session::step(const Input& input) {
   updateCommonEvents();
   updateMapState();
   updateTimer();
-    if (pendingTransfer_) {
+    if (pendingTransfer_ && !message_.closing) {
       const auto target = *pendingTransfer_; pendingTransfer_.reset();
       transfer(target[0], target[1], target[2], target[3]);
       transferred = true;
@@ -1069,6 +1094,6 @@ Value Session::snapshot() const {
     for (int skill : actor.skills) skills.emplace_back(skill);
     actors[std::to_string(id)] = Value::Object{{"hp", actor.hp}, {"mp", actor.mp}, {"tp", actor.tp}, {"level", actor.level}, {"parameters", parameters}, {"states", states}, {"skills", skills}};
   }
-  return Value::Object{{"unsupportedAction", unsupportedAction_}, {"camera", savedCamera_ ? Value(Value::Array{(*savedCamera_)[0], (*savedCamera_)[1]}) : Value{}}, {"randomCalls", static_cast<double>(randomCalls_)}, {"battle", Value::Object{{"active", battle_.active}, {"turn", battle_.turn}, {"actorIndex", battle_.actorIndex}, {"wait", battle_.wait}, {"pending", static_cast<int>(battle_.actions.size())}, {"actionStage", battle_.actionStage}, {"enemies", enemies}}}, {"actors", actors}, {"scene", static_cast<int>(ui_.scene)}, {"ui", Value::Object{{"category", ui_.category}, {"cursor", ui_.cursor}, {"skillType", ui_.skillType}}}, {"storage", Value::Object{{"save", saveRequested_}, {"load", loadRequested_}, {"slot", ui_.cursor + 1}}}, {"ticks", static_cast<double>(ticks_)}, {"mapId", mapId_}, {"player", Value::Object{{"x", player_.x}, {"y", player_.y}, {"realX", player_.realX}, {"realY", player_.realY}, {"direction", player_.direction}, {"transparent", player_.transparent}}}, {"events", events}, {"switches", switches}, {"variables", variables}, {"selfSwitches", selfSwitches}, {"inventory", inventory}, {"party", party}, {"interpreter", Value::Object{{"mapId", interpreter_.mapId}, {"eventId", interpreter_.eventId}, {"index", interpreter_.index}, {"wait", interpreter_.wait}, {"running", interpreter_.running}}}, {"message", Value::Object{{"busy", message_.busy}, {"pauseIndex", static_cast<int>(message_.pauseIndex)}, {"age", messageAge_}, {"firstLine", message_.firstLine}, {"pageEnd", message_.pageEnd()}, {"lines", message_.lines}, {"choices", message_.choices}}}};
+  return Value::Object{{"unsupportedAction", unsupportedAction_}, {"camera", savedCamera_ ? Value(Value::Array{(*savedCamera_)[0], (*savedCamera_)[1]}) : Value{}}, {"randomCalls", static_cast<double>(randomCalls_)}, {"battle", Value::Object{{"active", battle_.active}, {"turn", battle_.turn}, {"actorIndex", battle_.actorIndex}, {"wait", battle_.wait}, {"pending", static_cast<int>(battle_.actions.size())}, {"actionStage", battle_.actionStage}, {"enemies", enemies}}}, {"actors", actors}, {"scene", static_cast<int>(ui_.scene)}, {"ui", Value::Object{{"category", ui_.category}, {"cursor", ui_.cursor}, {"skillType", ui_.skillType}}}, {"storage", Value::Object{{"save", saveRequested_}, {"load", loadRequested_}, {"slot", ui_.cursor + 1}}}, {"ticks", static_cast<double>(ticks_)}, {"mapId", mapId_}, {"player", Value::Object{{"x", player_.x}, {"y", player_.y}, {"realX", player_.realX}, {"realY", player_.realY}, {"direction", player_.direction}, {"transparent", player_.transparent}}}, {"events", events}, {"switches", switches}, {"variables", variables}, {"selfSwitches", selfSwitches}, {"inventory", inventory}, {"party", party}, {"interpreter", Value::Object{{"mapId", interpreter_.mapId}, {"eventId", interpreter_.eventId}, {"index", interpreter_.index}, {"wait", interpreter_.wait}, {"running", interpreter_.running}}}, {"message", Value::Object{{"busy", message_.busy}, {"openness", message_.openness}, {"closing", message_.closing}, {"pauseIndex", static_cast<int>(message_.pauseIndex)}, {"age", messageAge_}, {"firstLine", message_.firstLine}, {"pageEnd", message_.pageEnd()}, {"lines", message_.lines}, {"choices", message_.choices}}}};
 }
 }  // namespace pmjs::mv

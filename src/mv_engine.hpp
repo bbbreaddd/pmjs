@@ -119,6 +119,8 @@ struct Event {
 struct Message {
   Value::Array lines, choices;
   int defaultChoice = 0, cancelChoice = -1, choiceIndent = 0;
+  int choiceTopRow = 0, choiceVisibleRows = 8;
+  bool choiceLayoutReady = false;
   int faceIndex = 0, background = 0, position = 2, choicePosition = 2, choiceBackground = 0;
   std::string faceName;
   bool busy = false, scrolling = false, scrollNoFast = false;
@@ -129,6 +131,8 @@ struct Message {
   std::set<int> pageBreaks;
   bool revealPrepared = false, revealFinished = false, textPaused = false, finalPause = false;
   bool pauseSkip = false, lineFast = false, showFast = false, goldWindow = false;
+  int openness = 0, previousOpenness = 0;
+  bool closing = false;
   int revealPage = -1, revealLine = 0, textWait = 0, revealedCount = 0;
   std::size_t revealOffset = 0;
   std::vector<std::string> expandedLines;
@@ -223,6 +227,9 @@ struct Ui {
   int cursor = 0, actor = 0, category = 0, target = -1, slot = -1, pendingId = 0;
   int commandCursor = 0, listCursor = 0, skillType = 0;
   int listTopRow = 0, listPageRows = 14;
+  int targetTopRow = 0;
+  int menuStatusTopRow = 0, menuActorTopRow = 0;
+  int skillTypeTopRow = 0;
   std::optional<Battler> equipPreview;
   int equipPreviewIndex = -1;
   bool targeting = false, itemAction = false, listMemoryApplied = false;
@@ -331,6 +338,8 @@ class Session {
   friend class Window_EventItem;
   friend class Window_SkillList;
   friend class Window_BattleItem;
+  friend class Window_BattleActor;
+  friend class Window_BattleEnemy;
   friend class Window_BattleLog;
   friend class Window_ShopBuy;
   friend class Window_ShopSell;
@@ -399,6 +408,7 @@ class Session {
   std::string battleMessage(const std::string& key, const std::vector<std::string>& arguments = {}) const;
   std::string partyName() const;
   bool updateMessageText(bool ok, bool cancel);
+  void updateMessageWindow();
   void updateUi(const Input& input, bool ok, bool cancel, int direction);
   bool useItem(int id, int target, bool skill);
   bool useItemUntargeted(int id, bool skill);
@@ -532,6 +542,13 @@ class Session {
   Value::Array saveMetadata_;
   int lastAccessedSavefileId_ = 1;
   int lastTitleCommand_ = -1;
+  bool newGamePending_ = false;
+  double sceneFadeOpacity_ = 0;
+  int sceneFadeDuration_ = 0;
+  bool sceneFadeOut_ = false;
+  void startSceneFade(bool fadeOut, int duration);
+  void updateSceneFade();
+  int titleWindowOpenness_ = 255;
   std::mt19937 randomGenerator_{std::random_device{}()};
   std::vector<double> randomStream_;
   std::size_t randomOffset_ = 0;

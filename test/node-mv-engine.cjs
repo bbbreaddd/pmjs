@@ -89,8 +89,9 @@ try {
   api.step(playable,{direction:4});assert.equal(api.snapshot(playable).player.x,1,'directional mask blocks leaving its tile');
   api.step(playable,{direction:2});assert.equal(api.snapshot(playable).player.y,1,'full collision blocks the destination');
   api.step(playable,{direction:6});assert.equal(api.snapshot(playable).player.x,1,'normal event blocks movement');
-  api.step(playable,{ok:true});api.step(playable,{});
+  api.step(playable,{ok:true});api.step(playable,{});api.step(playable,{});
   assert.equal(api.snapshot(playable).message.busy,true);
+  assert.equal(api.snapshot(playable).message.openness,32,'message window opens before revealing text');
   for(let i=0;i<40;i++)api.step(playable,{});
   assert.equal(api.snapshot(playable).message.age,12,'inline pause waits for confirmation');
   api.step(playable,{ok:true});api.step(playable,{});
@@ -98,8 +99,10 @@ try {
   for(let i=0;i<30;i++)api.step(playable,{});
   api.step(playable,{ok:true});api.step(playable,{});api.step(playable,{});
   assert.equal(api.snapshot(playable).message.busy,false);
+  assert.equal(api.snapshot(playable).message.closing,true,'acknowledged message closes before disappearing');
+  assert.equal(api.snapshot(playable).message.openness,191);
   api.step(playable,{cancel:true});assert.equal(api.snapshot(playable).message.busy,true,'unfinished menu displays a dismissible notice');
-  for(let i=0;i<40;i++)api.step(playable,{});
+  for(let i=0;i<50;i++)api.step(playable,{});
   api.step(playable,{cancel:true});api.step(playable,{});
   assert.equal(api.snapshot(playable).message.busy,false);
   api.step(playable,{direction:8});assert.equal(api.snapshot(playable).player.y,0,'movement resumes after dismissing messages');

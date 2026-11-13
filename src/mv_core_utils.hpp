@@ -142,7 +142,7 @@ class AudioManager {
   static void replayBgm(Session& session, const Value& bgm);
   static void updateBgmParameters(Session& session, const Value& bgm);
   static void stopBgm(Session& session);
-  static void fadeOutBgm(Session& session, int durationSeconds);
+  static void fadeOutBgm(Session& session, double durationSeconds);
   static void fadeInBgm(Session& session, int durationSeconds);
 
   static bool isCurrentBgs(const Session& session, const Value& bgs);
@@ -151,12 +151,12 @@ class AudioManager {
   static void replayBgs(Session& session, const Value& bgs);
   static void updateBgsParameters(Session& session, const Value& bgs);
   static void stopBgs(Session& session);
-  static void fadeOutBgs(Session& session, int durationSeconds);
+  static void fadeOutBgs(Session& session, double durationSeconds);
   static void fadeInBgs(Session& session, int durationSeconds);
 
   static void playMe(Session& session, const Value& me);
   static void updateMeParameters(Session& session, const Value& me);
-  static void fadeOutMe(Session& session, int durationSeconds);
+  static void fadeOutMe(Session& session, double durationSeconds);
   static void stopMe(Session& session);
 
   static void playSe(Session& session, const Value& se);

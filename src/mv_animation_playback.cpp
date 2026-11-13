@@ -1,4 +1,5 @@
 #include "mv_engine.hpp"
+#include "mv_core_utils.hpp"
 #include "mv_sprites.hpp"
 #include <algorithm>
 
@@ -28,7 +29,7 @@ void Session::updateVisualEffects() {
     if(frame!=effect.lastTimingFrame) {
       effect.lastTimingFrame=frame;
       for(const auto& timing:Sprite_Animation::timings(animation,frame)) {
-        if(timing.se&&!effect.duplicated)audio("se",*timing.se);
+        if(timing.se&&!effect.duplicated)AudioManager::playSe(*this,*timing.se);
         if(timing.flashScope==1) { effect.flash=timing.flashColor; effect.flashDuration=timing.flashDuration; }
         else if(timing.flashScope==3)effect.hideDuration=timing.flashDuration;
         else if(timing.flashScope==2&&!effect.duplicated) {

@@ -36,7 +36,7 @@ function freshMatches(pixels,label) {
  finally { binding.dispose(fresh); }
 }
 function work() { const images=native.images.memory(0);return {layouts:native.canvas.glyphStats().layoutRequests,regionUpdates:images.textureRegionUpdates,fullUpdates:images.textureFullUpdates}; }
-function enter(saved,escape=true) { api.load(session,saved);api.setRandomStream(session,Array(1000).fill(0.5));api.startBattle(session,1,escape,false);while(api.snapshot(session).message.busy)api.acknowledge(session);api.step(session,{}); }
+function enter(saved,escape=true) { api.load(session,saved);api.setRandomStream(session,Array(1000).fill(0.5));api.startBattle(session,1,escape,false);while(api.snapshot(session).message.busy)api.acknowledge(session);while(api.snapshot(session).message.openness>0)api.step(session,{}); }
 try {
  api.newGame(session);api.attach(session,settings);const baseline=api.save(session);
  enter(baseline);render();const idle=work();

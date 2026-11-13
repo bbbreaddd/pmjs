@@ -268,6 +268,7 @@ void Session::load(const Value& contents) {
   if (!restored.savedBgm_.null()) restored.audio("bgm", restored.savedBgm_, true);
   if (!restored.savedBgs_.null()) restored.audio("bgs", restored.savedBgs_, true);
   restored.lastTitleCommand_ = lastTitleCommand_;
+  restored.newGamePending_ = false; restored.titleWindowOpenness_ = 255;
   restored.loadRequested_ = loadRequested_; restored.saveRequested_ = saveRequested_;
   restored.alwaysDash_ = alwaysDash_; restored.commandRemember_ = commandRemember_; restored.volumes_ = volumes_; restored.configurationRevision_ = configurationRevision_;
   restored.randomGenerator_ = randomGenerator_; restored.randomStream_ = randomStream_; restored.randomOffset_ = randomOffset_; restored.randomCalls_ = randomCalls_;

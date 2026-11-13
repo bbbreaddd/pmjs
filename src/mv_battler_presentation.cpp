@@ -9,7 +9,7 @@ std::vector<int> Presentation::battlerIcons(const Battler& battler) const {
 void Presentation::stateIcons(const Battler& actor, float x, float y, int width) {
   const auto icons = battlerIcons(actor); if (icons.empty()) return;
   const auto source = image("img/system/IconSet.png");
-  for (std::size_t index = 0; index < icons.size() && static_cast<int>(index)*32 < width; ++index)
+  for (std::size_t index = 0; index < icons.size() && static_cast<int>(index + 1)*32 <= width; ++index)
     quad(source.handle,icons[index]%16*32,icons[index]/16*32,32,32,x+index*32,y,32,32);
 }
 void Presentation::battleSprites() {

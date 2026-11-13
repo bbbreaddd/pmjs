@@ -36,7 +36,7 @@ class Presentation {
   void clearMapOverlays();
   CanvasHandle destinationCanvas_ = 0;
   std::uint64_t mapNameRevision_ = 0, mapNameTick_ = 0, destinationTick_ = 0;
-  std::unique_ptr<Window_MapName> mapNameWindow_;
+  std::shared_ptr<Window_MapName> mapNameWindow_;
   std::shared_ptr<Window_NameEdit> nameEdit_;
   std::shared_ptr<Window_NameInput> nameGrid_;
   std::shared_ptr<core::PixelBitmap> nameFace_;
@@ -78,9 +78,15 @@ class Presentation {
   void mapAmbience();
   void hitTarget(int x, int y, int width, int height, int index, int action = 0);
   void window(int x, int y, int width, int height, int selected = -1, int rows = 0, int openness = 255, std::shared_ptr<core::PixelBitmap> contents = {}, std::optional<core::Rectangle> cursor = {});
-  void textEx(const std::string& value, int x, int y, int width = 0, int size = 28, bool prepared = false);
-  void text(const std::string& value, int x, int y, int width = 0, int color = 0, int size = 28, bool right = false, float opacity = 1);
-  void face(int actorId, int x, int y);
+  void flushUiText();
+  void streamUiWindow(core::Window& window);
+  void finishUiLayer();
+  void clearUiContents();
+  double textEx(const std::string& value, double x, double y, int width = 0, int size = 28, bool prepared = false, bool measureOnly = false);
+  void text(const std::string& value, double x, double y, int width = 0, int color = 0, int size = 28, bool right = false, float opacity = 1);
+  void face(int actorId, int x, int y, float opacity = 1);
+  void menuStatus(const Rect& bounds, int topRow, int selected, bool active, bool all = false, bool fixed = false);
+  void simpleActorStatus(int actorId, int x, int y, int width);
   void gauge(const Battler& actor, int stat, int x, int y, int width);
   void actorStatus(int actorId, int x, int y, int width, bool portrait);
   void message();
@@ -89,7 +95,7 @@ class Presentation {
   struct RetainedContents {
     CanvasHandle canvas = 0;
     std::vector<std::string> key;
-    bool valid = false, visible = false;
+    bool valid = false;
   };
   void retainBattleContents(BattleWindow part, std::vector<std::string> key, const std::function<void()>& draw);
   void clearBattleContents();
@@ -127,12 +133,19 @@ class Presentation {
   RuntimeCore& core_;
   Session& session_;
   Value settings_;
-  CanvasHandle textCanvas_ = 0, timerCanvas_ = 0;
+  CanvasHandle textCanvas_ = 0, globalTextCanvas_ = 0, timerCanvas_ = 0;
+  core::WindowLayer uiLayer_;
+  std::optional<core::WindowLayer::StreamState> uiLayerState_;
+  std::optional<std::array<int,4>> uiTextClip_;
+  bool uiTextDirty_ = false;
+  std::size_t uiWindowOrdinal_ = 0;
+  using WindowKey = std::tuple<int,int,int,int,std::size_t>;
+  std::map<WindowKey,CanvasHandle> uiTextCanvases_;
   std::array<RetainedContents, 4> battleContents_;
   std::map<std::string, ImageInfo> images_;
   std::unique_ptr<ImageCache> imageCache_;
   std::vector<ImageHandle> deferredImageReleases_;
-  std::map<std::tuple<int,int,int,int>, std::shared_ptr<core::Window>> coreWindows_;
+  std::map<WindowKey, std::shared_ptr<core::Window>> coreWindows_;
   std::shared_ptr<core::PixelBitmap> coreWindowskin_;
   std::vector<std::filesystem::path> fonts_;
   std::array<std::uint32_t, 32> colors_{};

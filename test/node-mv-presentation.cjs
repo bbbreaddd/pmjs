@@ -53,17 +53,25 @@ function render() { native.beginFrame();native.mvEngine.present(session);native.
 try {
   native.mvEngine.newGame(session); native.mvEngine.attach(session,{fontFile:'font.ttf'});
   assert.equal(render()[0],255);
-  for(let tick=0;tick<30;++tick)native.mvEngine.step(session,{});
+  for(let tick=0;tick<40;++tick)native.mvEngine.step(session,{});
   assert.equal(native.mvEngine.snapshot(session).message.busy,true);
   const pixels=render();
   assert.equal(pixels[0],0,'screen fade hides the map');
   assert.ok(pixels[(80*320+20)*4]>100,'message windows remain above the screen fade');
+  while(native.mvEngine.snapshot(session).message.busy)native.mvEngine.acknowledge(session);
+  for(let tick=0;tick<8;++tick)native.mvEngine.step(session,{});
   native.mvEngine.openTitle(session);
   for(let tick=0;tick<80;++tick)native.mvEngine.step(session,{});
   const title=render(), color=(x,y)=>Array.from(title.subarray((y*320+x)*4,(y*320+x)*4+3));
   const border=color(240,20), center=color(240,25);
   assert.ok(border[0]>border[2], 'cursor preserves its four-pixel top border');
   assert.ok(center[2]>center[0], 'cursor center begins after four pixels rather than stretching its border');
+  native.mvEngine.step(session,{ok:true});
+  assert.equal(native.mvEngine.snapshot(session).scene,0,'new game waits for the title fade');
+  for(let tick=0;tick<48;++tick)native.mvEngine.step(session,{});
+  assert.equal(native.mvEngine.snapshot(session).scene,0,'title remains until the fade completes');
+  native.mvEngine.step(session,{});
+  assert.equal(native.mvEngine.snapshot(session).scene,1,'map starts after the title fade');
   const song=name=>({name,volume:90,pitch:100,pan:0});
   const audio=native.mvEngine.create({
     system:{startMapId:1,startX:1,startY:1,partyMembers:[1],battleBgm:song('Battle')},

@@ -9,19 +9,31 @@
 #include <stdexcept>
 
 namespace pmjs::mv {
+void Session::startSceneFade(bool fadeOut, int duration) {
+  sceneFadeOut_ = fadeOut;
+  sceneFadeDuration_ = duration;
+  sceneFadeOpacity_ = fadeOut ? 0 : 255;
+}
+void Session::updateSceneFade() {
+  if (sceneFadeDuration_ <= 0) return;
+  if (sceneFadeOut_) sceneFadeOpacity_ += (255 - sceneFadeOpacity_) / sceneFadeDuration_;
+  else sceneFadeOpacity_ -= sceneFadeOpacity_ / sceneFadeDuration_;
+  --sceneFadeDuration_;
+}
 void Session::configure(const Value& configuration) {
-  auto volumes = volumes_;
+  Value merged = ConfigManager::save(*this);
+  auto& data = std::get<Value::Object>(merged.data);
   const std::array<const char*, 4> keys{"bgmVolume", "bgsVolume", "meVolume", "seVolume"};
   for (int i = 0; i < 4; ++i) if (!configuration[keys[i]].null()) {
-    volumes[i] = configuration[keys[i]].integer();
-    if (volumes[i] < 0 || volumes[i] > 100) throw std::invalid_argument("volume must be between zero and one hundred");
+    const int volume = configuration[keys[i]].integer();
+    if (volume < 0 || volume > 100) throw std::invalid_argument("volume must be between zero and one hundred");
+    data[keys[i]] = Value{volume};
   }
-  volumes_ = volumes;
-  if (!configuration["alwaysDash"].null()) alwaysDash_ = configuration["alwaysDash"].boolean();
-  if (!configuration["commandRemember"].null()) commandRemember_ = configuration["commandRemember"].boolean();
-  ++configurationRevision_;
+  if (!configuration["alwaysDash"].null()) data["alwaysDash"] = Value{configuration["alwaysDash"].boolean()};
+  if (!configuration["commandRemember"].null()) data["commandRemember"] = Value{configuration["commandRemember"].boolean()};
+  ConfigManager::load(*this, merged);
 }
-Value Session::configuration() const { return Value::Object{{"alwaysDash", alwaysDash_}, {"commandRemember", commandRemember_}, {"bgmVolume", volumes_[0]}, {"bgsVolume", volumes_[1]}, {"meVolume", volumes_[2]}, {"seVolume", volumes_[3]}}; }
+Value Session::configuration() const { return ConfigManager::save(*this); }
 void Session::audio(const std::string& kind, const Value& sound, bool restart) {
   if (kind == "bgm") savedBgm_ = sound;
   if (kind == "bgs") savedBgs_ = sound;
@@ -31,6 +43,8 @@ void Session::openTitle() {
   SceneManager::clearStack(*this);
   SceneManager::gotoScene(*this, Scene::title);
   finished_ = false;
+  newGamePending_ = false; titleWindowOpenness_ = 255;
+  sceneFadeOpacity_ = 0; sceneFadeDuration_ = 0;
   const bool saved = DataManager::isAnySavefileExists(*this);
   ui_.cursor = lastTitleCommand_ >= 0 ? lastTitleCommand_ : saved ? 1 : 0;
   AudioManager::playBgm(*this, database_["system"]["titleBgm"]);
@@ -102,7 +116,7 @@ void Session::advanceEncounterEffect() {
   state["_zoomX"] = zoomX; state["_zoomY"] = zoomY; state["_zoomScale"] = q;
   if (n == speed / 6) { state["_flashColor"] = Value::Array{255.0, 255.0, 255.0, 255.0}; state["_flashDuration"] = speed / 2; }
   if (n == speed / 2) {
-    audio("bgm", system_.battleBgm.null() ? database_["system"]["battleBgm"] : system_.battleBgm);
+    AudioManager::playBgm(*this, system_.battleBgm.null() ? database_["system"]["battleBgm"] : system_.battleBgm);
     fadeOut_ = 24;
   }
 }
@@ -112,11 +126,16 @@ bool Session::useItemUntargeted(int id, bool skill) {
   if (!canUse(subject, item) || (!skill && inventory_[id] <= 0)) return false;
   if (skill) { subject.mp -= static_cast<int>(std::floor(item["mpCost"].number() * trait(subject, 23, 4, true))); subject.tp -= item["tpCost"].integer(); }
   else if (item["consumable"].boolean()) --inventory_[id];
-  audio("se", database_["system"]["sounds"][skill ? 24 : 23]);
+  AudioManager::playSe(*this, database_["system"]["sounds"][skill ? 24 : 23]);
   applyGlobalEffects(item);
   return true;
 }
 void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direction) {
+  const bool selectable = !message_.busy && ui_.scene != Scene::map && ui_.scene != Scene::gameOver;
+  if (selectable) {
+    if (ui_.scene != Scene::shop || ui_.category != 3) ok = inputState.okRepeated.value_or(ok);
+    cancel = inputState.cancelRepeated.value_or(cancel);
+  }
   const bool debugTriggered = inputState.pressed.contains("debug") && !previousDebug_;
   previousDebug_ = inputState.pressed.contains("debug");
   const bool pageUp = inputState.pressed.contains("pageup") && !previousUiButtons_.contains("pageup");
@@ -164,7 +183,9 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
       if (message_.scrollY >= static_cast<double>(message_.lines.size()*36)) { message_ = {}; messageAge_ = 0; }
       return;
     }
-    if (updateMessageText(ok,cancel)) return;
+    const bool messageOk = inputState.okRepeated.value_or(ok) || inputState.touchRepeated;
+    const bool messageCancel = inputState.cancelRepeated.value_or(cancel);
+    if (updateMessageText(messageOk,messageCancel)) return;
     if (ui_.maxDigits > 0) {
       if (!ui_.numberButtonsInitialized) {
         ui_.numberButtonsVisible = inputState.touchDate > inputState.inputDate;
@@ -221,15 +242,28 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
       }
       return;
     }
-    if (message_.choices.empty() || message_.pageEnd() < static_cast<int>(message_.lines.size())) { if (ok || cancel) acknowledge(); }
+    if (message_.choices.empty() || message_.pageEnd() < static_cast<int>(message_.lines.size())) { if (messageOk || messageCancel) acknowledge(); }
     else {
-      cursor(static_cast<int>(message_.choices.size()));
-      if (ok) { acknowledge(ui_.cursor); sound(1); ui_.cursor = 0; }
-      else if (cancel && message_.cancelChoice != -1) { acknowledge(-2); sound(2); ui_.cursor = 0; }
+      const int count = static_cast<int>(message_.choices.size()), previous = ui_.cursor;
+      if (!message_.choiceLayoutReady) {
+        const int screenHeight = database_["sceneContract"]["height"].integer(624);
+        const Rect bounds{0,message_.position*(screenHeight-180)/2,0,180};
+        message_.choiceVisibleRows = Window_ChoiceList::visibleRows(count,bounds,screenHeight);
+        message_.choiceTopRow = Window_Selectable::visibleTopRow(ui_.cursor,0,count,1,message_.choiceVisibleRows);
+        message_.choiceLayoutReady = true;
+      }
+      if (direction) Window_Selectable::moveCursor(ui_.cursor,message_.choiceTopRow,count,1,message_.choiceVisibleRows,direction,directionAge_ == 0);
+      if (pageUp || pageDown) Window_Selectable::pageCursor(ui_.cursor,message_.choiceTopRow,count,1,message_.choiceVisibleRows,pageDown);
+      message_.choiceTopRow = Window_Selectable::wheelTopRow(message_.choiceTopRow,count,1,message_.choiceVisibleRows,inputState.wheelY);
+      if (previous != ui_.cursor) sound(0);
+      if (ok && (ui_.cursor < 0 || ui_.cursor >= count)) sound(3);
+      else if (ok) { acknowledge(ui_.cursor); sound(1); ui_.cursor = 0; }
+      else if ((messageCancel || inputState.touchCancelled) && message_.cancelChoice != -1) { acknowledge(-2); sound(2); ui_.cursor = 0; }
     }
     return;
   }
   if (ui_.scene == Scene::title) {
+    if (newGamePending_) return;
     if (ui_.age < 32) return;
     const auto commands = Window_TitleCommand::makeCommands(*this);
     cursor(static_cast<int>(commands.size()));
@@ -237,7 +271,13 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
     const int selected = ui_.cursor;
     if (selected < 0 || selected >= static_cast<int>(commands.size()) || !commands[selected].enabled) { sound(3); return; }
     lastTitleCommand_ = selected;
-    if (commands[selected].symbol == "newGame") { sound(1); newGame(); }
+    if (commands[selected].symbol == "newGame") {
+      sound(1);
+      AudioManager::fadeOutBgm(*this,48 / 60.0);
+      AudioManager::fadeOutBgs(*this,48 / 60.0);
+      AudioManager::fadeOutMe(*this,48 / 60.0);
+      startSceneFade(true,48); newGamePending_ = true; titleWindowOpenness_ = 255;
+    }
     else if (commands[selected].symbol == "continue") {
       if (!DataManager::isAnySavefileExists(*this)) sound(3);
       else { enter(Scene::load); ui_.cursor = std::max(0, DataManager::latestSavefileId(*this) - 1); }
@@ -284,7 +324,11 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
   if (ui_.scene == Scene::menu) {
     const auto commands = Window_MenuCommand::makeCommands(*this);
     if (ui_.category == 2) {
-      cursor(static_cast<int>(party_.size()));
+      const int previous = ui_.cursor, count = static_cast<int>(party_.size());
+      if (direction) Window_Selectable::moveCursor(ui_.cursor,ui_.menuStatusTopRow,count,1,4,direction,directionAge_ == 0);
+      if (pageDown || pageUp) Window_Selectable::pageCursor(ui_.cursor,ui_.menuStatusTopRow,count,1,4,pageDown);
+      ui_.menuStatusTopRow = Window_Selectable::wheelTopRow(ui_.menuStatusTopRow,count,1,4,inputState.wheelY);
+      if (previous != ui_.cursor) sound(0);
       if (cancel) { ui_.cursor = ui_.pendingId; ui_.category = 0; sound(2); }
       else if (ok && !party_.empty()) {
         const int actor = ui_.cursor;
@@ -309,6 +353,7 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
     if (selected.symbol == "skill" || selected.symbol == "equip" || selected.symbol == "status") {
       ui_.pendingId = ui_.cursor; ui_.category = 2;
       const auto found = std::find(party_.begin(),party_.end(),menuActorId_); ui_.cursor = found == party_.end() ? 0 : static_cast<int>(found-party_.begin());
+      ui_.menuStatusTopRow = Window_Selectable::visibleTopRow(ui_.cursor,0,static_cast<int>(party_.size()),1,4);
       sound(1); return;
     }
     if (selected.symbol == "item") enter(Scene::item);
@@ -318,9 +363,9 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
     else if (selected.symbol == "gameEnd") { ui_.commandCursor = ui_.cursor; ui_.category = 1; ui_.cursor = 0; }
     return;
   }
-  if ((pageUp || pageDown) && !party_.empty() && (ui_.scene == Scene::skill || (ui_.scene == Scene::equip && ui_.category != 2))) {
+  if ((pageUp || pageDown) && !party_.empty() && ((ui_.scene == Scene::skill && ui_.category == 0 && !ui_.targeting) || (ui_.scene == Scene::equip && ui_.category != 2))) {
     ui_.actor = (ui_.actor+static_cast<int>(party_.size())+(pageDown ? 1 : -1))%static_cast<int>(party_.size());
-    menuActorId_ = party_[ui_.actor]; ui_.category = 0; ui_.cursor = 0; ui_.targeting = false; ui_.listMemoryApplied = false; sound(0); return;
+    menuActorId_ = party_[ui_.actor]; ui_.category = 0; ui_.cursor = 0; ui_.skillTypeTopRow = 0; ui_.targeting = false; ui_.listMemoryApplied = false; sound(0); return;
   }
   if (ui_.scene == Scene::status) {
     if (cancel || ok) enter(Scene::menu);
@@ -410,7 +455,7 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
       const int skillId = selected.symbol == "attack" ? 1 : 2;
       sound(1);
       if (skillId == 2) { chooseAction(battle_.actorIndex, 2, battle_.actorIndex); ui_.cursor = 0; ui_.commandActor = -1; }
-      else { ui_.pendingId = 1; ui_.targeting = true; ui_.category = 3; ui_.cursor = 0; ui_.itemAction = false; ui_.target = 0; }
+      else { ui_.pendingId = 1; ui_.targeting = true; ui_.category = 3; ui_.cursor = 0; ui_.targetTopRow = 0; ui_.itemAction = false; ui_.target = 0; }
     } else {
       sound(1); ui_.commandCursor = ui_.cursor;
       if (selected.symbol == "skill") { ui_.skillType = selected.ext; ui_.category = 1; }
@@ -474,13 +519,29 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
     return;
   }
   if (ui_.scene == Scene::item && !ui_.targeting && ui_.category == 0) {
-    cursor(static_cast<int>(Window_ItemCategory::makeCommands(*this).size()));
+    const int previous = ui_.cursor, count = static_cast<int>(Window_ItemCategory::makeCommands(*this).size());
+    int top = 0;
+    if (direction) Window_Selectable::moveCursor(ui_.cursor,top,count,4,1,direction,directionAge_ == 0);
+    if (previous != ui_.cursor) sound(0);
+    ui_.slot = ui_.cursor;
     if (cancel) enter(Scene::menu);
     else if (ok) { ui_.slot = ui_.cursor; ui_.category = 1; ui_.cursor = 0; ui_.listMemoryApplied = false; sound(1); }
     return;
   }
   if (ui_.scene == Scene::skill && !ui_.targeting && ui_.category == 0) {
-    const auto types = Window_SkillType::makeCommands(*this, party_[ui_.actor]); cursor(static_cast<int>(types.size()));
+    const auto types = Window_SkillType::makeCommands(*this, party_[ui_.actor]);
+    if (!ui_.listMemoryApplied) {
+      const int remembered = database_["skills"][actors_.at(party_[ui_.actor]).lastMenuSkill]["stypeId"].integer();
+      const auto found = std::find_if(types.begin(),types.end(),[&](const CommandItem& command){return command.ext == remembered;});
+      ui_.cursor = found == types.end() ? 0 : static_cast<int>(found-types.begin());
+      ui_.skillTypeTopRow = Window_Selectable::visibleTopRow(ui_.cursor,0,static_cast<int>(types.size()),1,4);
+      ui_.listMemoryApplied = true;
+    }
+    const int previous = ui_.cursor;
+    if (direction) Window_Selectable::moveCursor(ui_.cursor,ui_.skillTypeTopRow,static_cast<int>(types.size()),1,4,direction,directionAge_ == 0);
+    ui_.skillTypeTopRow = Window_Selectable::wheelTopRow(ui_.skillTypeTopRow,static_cast<int>(types.size()),1,4,inputState.wheelY);
+    if (previous != ui_.cursor) sound(0);
+    if (!types.empty()) ui_.skillType = types[ui_.cursor].ext;
     if (cancel) enter(Scene::menu);
     else if (ok && !types.empty()) { ui_.skillType = types[ui_.cursor].ext; ui_.commandCursor = ui_.cursor; ui_.category = 1; ui_.cursor = 0; ui_.listMemoryApplied = false; sound(1); }
     return;
@@ -491,8 +552,25 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
     const auto& entry = database_[ui_.itemAction ? "items" : "skills"][ui_.pendingId];
     const auto targets = inBattle ? battleSelectableTargets(entry) : std::vector<int>{};
     const auto menuSelection = Window_MenuActor::selection(*this,entry,ui_.actor);
-    if (!inBattle && (menuSelection.fixed || menuSelection.all)) ui_.cursor = menuSelection.index;
-    else cursor(inBattle ? static_cast<int>(targets.size()) : static_cast<int>(party_.size()));
+    if (inBattle) {
+      const bool enemies = entry["scope"].integer() >= 1 && entry["scope"].integer() <= 6;
+      const int columns = enemies ? Window_BattleEnemy::columns() : Window_BattleActor::columns();
+      const int rows = enemies ? Window_BattleEnemy::visibleRows() : Window_BattleActor::visibleRows();
+      const int count = static_cast<int>(targets.size()), previous = ui_.cursor;
+      ui_.cursor = count ? std::clamp(ui_.cursor,0,count-1) : 0;
+      if (direction) Window_Selectable::moveCursor(ui_.cursor,ui_.targetTopRow,count,columns,rows,direction,true);
+      if (pageDown || pageUp) Window_Selectable::pageCursor(ui_.cursor,ui_.targetTopRow,count,columns,rows,pageDown);
+      ui_.targetTopRow = Window_Selectable::wheelTopRow(ui_.targetTopRow,count,columns,rows,inputState.wheelY);
+      if (previous != ui_.cursor) sound(0);
+    }
+    else {
+      const int previous = ui_.cursor, count = static_cast<int>(party_.size());
+      if (menuSelection.fixed || menuSelection.all) ui_.cursor = menuSelection.index;
+      else if (direction) Window_Selectable::moveCursor(ui_.cursor,ui_.menuActorTopRow,count,1,4,direction,directionAge_ == 0);
+      if (!menuSelection.fixed && !menuSelection.all && (pageDown || pageUp)) Window_Selectable::pageCursor(ui_.cursor,ui_.menuActorTopRow,count,1,4,pageDown);
+      ui_.menuActorTopRow = Window_Selectable::wheelTopRow(ui_.menuActorTopRow,count,1,4,inputState.wheelY);
+      if (previous != ui_.cursor) sound(0);
+    }
     if (cancel) { ui_.targeting = false; ui_.category = inBattle ? ui_.target : ui_.category; ui_.cursor = !inBattle || ui_.target != 0 ? ui_.listCursor : 0; }
     else if (ok) {
       if (inBattle) {
@@ -539,8 +617,8 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
     else if (ok && !entries.empty()) {
       if (!skill && entries[ui_.cursor] >= 100000) { sound(3); return; }
       const auto& entry = database_[skill ? "skills" : "items"][entries[ui_.cursor]];
-      const int user = !inBattle && !skill ? menuItemUser() : ui_.actor;
-      if (user < 0 || !canUse(actors_.at(party_[user]), entry)) { sound(3); return; }
+      const bool enabled = skill ? Window_SkillList::isEnabled(*this,party_[ui_.actor],entries[ui_.cursor]) : Window_ItemList::isEnabled(*this,entries[ui_.cursor]);
+      if (!enabled) { sound(3); return; }
       ui_.target = inBattle ? ui_.category : -1; ui_.listCursor = ui_.cursor;
       ui_.pendingId = entries[ui_.cursor]; ui_.itemAction = !skill;
       if (skill) { auto& actor = actors_.at(party_[ui_.actor]); (inBattle ? actor.lastBattleSkill : actor.lastMenuSkill) = ui_.pendingId; }
@@ -557,7 +635,8 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
       } else {
         ui_.targeting = true;
         ui_.cursor = inBattle ? 0 : Window_MenuActor::selection(*this,entry,ui_.actor).index;
-        if (inBattle) ui_.category = 3;
+        if (!inBattle) ui_.menuActorTopRow = Window_Selectable::visibleTopRow(ui_.cursor,0,static_cast<int>(party_.size()),1,4);
+        if (inBattle) { ui_.category = 3; ui_.targetTopRow = 0; }
       }
     }
   }

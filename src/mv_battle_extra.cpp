@@ -1,6 +1,7 @@
 #include "mv_engine.hpp"
-#include "mv_sprites.hpp"
 #include "mv_battle_extra.hpp"
+#include "mv_core_utils.hpp"
+#include "mv_sprites.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -525,7 +526,7 @@ void Session::requestEnemyEffect(std::size_t index, const std::string& effect) {
   if (!sprite) sprite = std::make_shared<Sprite_Enemy>();
   sprite->requestedEffect = effect;
   if (effect == "collapse" || effect == "bossCollapse")
-    audio("se", database_["system"]["sounds"][effect == "bossCollapse" ? 12 : 11]);
+    AudioManager::playSe(*this, database_["system"]["sounds"][effect == "bossCollapse" ? 12 : 11]);
 }
 
 void Session::resetEnemySprites() {
@@ -563,7 +564,7 @@ void Session::updateEnemySprites() {
     const auto sounds = sprite.bossCollapseSounds;
     sprite.advance(1);
     for (auto played = sounds; played < sprite.bossCollapseSounds; ++played)
-      audio("se", database_["system"]["sounds"][13]);
+      AudioManager::playSe(*this, database_["system"]["sounds"][13]);
   }
 }
 

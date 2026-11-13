@@ -186,6 +186,7 @@ class Window_ItemList : public Window_Selectable {
   bool includes(int kind, int id, const Session& session) const;
   static bool includes(const Session& session, const std::string& category, int kind, int id);
   static std::vector<int> makeItemList(const Session& session, const std::string& category);
+  static bool isEnabled(const Session& session, int encodedItem);
   bool isCurrentItemEnabled() const override;
 };
 
@@ -199,6 +200,8 @@ class Window_SkillList : public Window_Selectable {
   int maxItems() const override { return static_cast<int>(data.size()); }
   void refresh(const Session& session);
   static std::vector<int> makeSkillList(const Session& session, int actorId, int skillType);
+  static bool isEnabled(const Session& session, int actorId, int skillId);
+  static std::pair<int,int> displayedCost(const Session& session, int actorId, int skillId);
   bool isCurrentItemEnabled() const override;
 };
 
@@ -298,6 +301,8 @@ class Window_Help : public Window_Base {
   Window_Help(int numLines = 2);
   void setText(std::string value);
   void clear();
+  static Rect placement(int width, int numLines = 2);
+  static std::string itemDescription(const Value& item);
 };
 
 class Window_Gold : public Window_Base {
@@ -317,11 +322,17 @@ class Window_MenuCommand : public Window_Command {
 
 class Window_MenuStatus : public Window_Selectable {
  public:
+  struct RowLayout { Rect face; core::Rectangle status; };
   int formationMode = 0;
   int pendingIndex = -1;
   std::vector<int> actorIds;
   Window_MenuStatus(int x, int y);
   int maxItems() const override { return static_cast<int>(actorIds.size()); }
+  int itemHeight() const override { return rowHeight(rect.height,padding); }
+  static int rowHeight(int windowHeight, int padding = 18);
+  static Rect rowRect(int index, int windowWidth, int windowHeight, int topRow, int padding = 18);
+  static RowLayout rowLayout(const Rect& row);
+  static Rect placement(int viewportWidth, int viewportHeight, int x = 240, int y = 0);
   void refresh(const Session& session);
 };
 
@@ -332,6 +343,7 @@ class Window_MenuActor : public Window_MenuStatus {
   static Selection selection(const Session& session, const Value& item, int userIndex);
   static void rememberTarget(Session& session, int index);
   void selectForItem(const Session& session, const Value& item, int userIndex);
+  static Rect placement(int viewportWidth, int viewportHeight, int itemIndex);
 };
 
 class Window_ItemCategory : public Window_Command {
@@ -353,6 +365,7 @@ class Window_SkillStatus : public Window_Base {
  public:
   int actorId = 0;
   Window_SkillStatus(int x, int y, int w, int h);
+  static Rect placement(int width);
 };
 
 class Window_EquipStatus : public Window_Base {
@@ -519,6 +532,8 @@ class Window_ChoiceList : public Window_Command {
  public:
   Window_ChoiceList();
   void makeCommandList(const Session& session);
+  static int visibleRows(int count, const Rect& message, int screenHeight);
+  static Rect placement(int count, int choiceWidth, int position, const Rect& message, int screenWidth, int screenHeight);
 };
 
 class Window_NumberInput : public Window_Selectable {
@@ -581,8 +596,16 @@ class Window_ActorCommand : public Window_Command {
 
 class Window_BattleActor : public Window_BattleStatus {
  public:
+  std::vector<int> actorIndices;
   Window_BattleActor(int x, int y);
   int maxItems() const override;
+  void refresh(const Session& session);
+  static constexpr int columns() { return 1; }
+  static constexpr int visibleRows() { return 4; }
+  static bool includes(const Battler& actor);
+  static std::vector<int> makeTargets(const Session& session);
+  static const std::string& nameFor(const Session& session, int partyIndex);
+  static Rect placement(int width, int height);
 };
 
 class Window_BattleEnemy : public Window_Selectable {
@@ -591,6 +614,12 @@ class Window_BattleEnemy : public Window_Selectable {
   Window_BattleEnemy(int x, int y);
   int maxItems() const override { return static_cast<int>(enemyIndices.size()); }
   void refresh(const Session& session);
+  static constexpr int columns() { return 2; }
+  static constexpr int visibleRows() { return 4; }
+  static bool includes(const Battler& enemy);
+  static std::vector<int> makeTargets(const Session& session);
+  static const std::string& nameFor(const Session& session, int enemyIndex);
+  static Rect placement(int width, int height);
 };
 
 class Window_BattleSkill : public Window_SkillList {

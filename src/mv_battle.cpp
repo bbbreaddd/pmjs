@@ -1,5 +1,6 @@
 #include "mv_engine.hpp"
 #include "mv_battle_extra.hpp"
+#include "mv_core_utils.hpp"
 #include "mv_managers.hpp"
 #include "mv_windows.hpp"
 
@@ -230,9 +231,9 @@ void Session::startBattle(int troop, bool canEscape, bool canLose, bool event) {
   ui_ = {}; ui_.scene = Scene::battle;
   battle_.mapBgm = savedBgm_; battle_.mapBgs = savedBgs_;
   audio("battle-save", {});
-  audio("bgs", Value::Object{{"name", ""}});
+  AudioManager::stopBgs(*this);
   const auto battleBgm = system_.battleBgm.null() ? database_["system"]["battleBgm"] : system_.battleBgm;
-  audio("bgm", battleBgm);
+  AudioManager::playBgm(*this, battleBgm);
   battle_.opening = true; ui_.category = 4;
   buildBattleIntro();
   updateEnemySprites();
@@ -249,18 +250,8 @@ void Session::buildBattleIntro() {
   message_.busy = !message_.lines.empty();
 }
 std::vector<int> Session::battleSelectableTargets(const Value& item) const {
-  std::vector<int> targets;
   const int scope = item["scope"].integer();
-  if (scope >= 1 && scope <= 6) {
-    for (std::size_t i = 0; i < battle_.enemies.size(); ++i) {
-      const auto& enemy = battle_.enemies[i];
-      if (enemy.hp > 0 && !enemy.hidden && !enemy.escaped) targets.push_back(static_cast<int>(i));
-    }
-  } else for (std::size_t i = 0; i < battleMemberCount(); ++i) {
-    const auto& actor = actors_.at(party_[i]);
-    if (!actor.escaped && (actor.hp <= 0) == (scope == 9 || scope == 10)) targets.push_back(static_cast<int>(i));
-  }
-  return targets;
+  return scope >= 1 && scope <= 6 ? Window_BattleEnemy::makeTargets(*this) : Window_BattleActor::makeTargets(*this);
 }
 std::set<int> Session::battlerSkills(const Battler& actor) const {
   auto skills = actor.skills;
@@ -514,16 +505,16 @@ void Session::finishBattle(int result) {
     message_.pageBreaks.insert(static_cast<int>(message_.lines.size()));
     for (const auto& [kind, id] : drops) message_.lines.emplace_back(battleMessage("obtainItem", {database_[kind][id]["name"].text()}));
   }
-  if (result == 0) audio("me", (system_.victoryMe.null() ? database_["system"]["victoryMe"] : system_.victoryMe));
-  if (result == 2) audio("me", (system_.defeatMe.null() ? database_["system"]["defeatMe"] : system_.defeatMe));
+  if (result == 0) AudioManager::playMe(*this, (system_.victoryMe.null() ? database_["system"]["victoryMe"] : system_.victoryMe));
+  if (result == 2) AudioManager::playMe(*this, (system_.defeatMe.null() ? database_["system"]["defeatMe"] : system_.defeatMe));
   if (result != 2 || battle_.canLose) {
     savedBgm_ = battle_.mapBgm; savedBgs_ = battle_.mapBgs;
     audio("battle-restore-bgm", {}); audio("battle-restore-bgs", {});
-  } else audio("bgm", Value::Object{{"name", ""}});
+  } else AudioManager::stopBgm(*this);
   if (battle_.event) interpreter_.branches[interpreter_.list[std::max(0, interpreter_.index - 1)]["indent"].integer()] = result;
 }
 void Session::leaveBattle() {
-  if (battleTest_) { audio("bgm", Value::Object{{"name", ""}}); finished_ = true; return; }
+  if (battleTest_) { AudioManager::stopBgm(*this); finished_ = true; return; }
   const int result = battle_.result;
   for (int id : party_) {
     auto& value = actors_.at(id); value.guarding = false; value.escaped = false; value.hidden = false;

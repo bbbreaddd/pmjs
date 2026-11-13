@@ -1,4 +1,5 @@
 #include "mv_managers.hpp"
+#include "mv_core_utils.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -82,7 +83,7 @@ bool SoundManager::loadSystemSound(Session& session, int index) {
 void SoundManager::playSystemSound(Session& session, int index) {
   const auto& sounds = session.database()["system"]["sounds"];
   if (index >= 0 && index < static_cast<int>(sounds.array().size())) {
-    session.audio("se", sounds[index]);
+    AudioManager::playSe(session, sounds[index]);
   }
 }
 

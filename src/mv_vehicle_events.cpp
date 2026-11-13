@@ -1,4 +1,5 @@
 #include "mv_engine.hpp"
+#include "mv_core_utils.hpp"
 #include "mv_map_extra.hpp"
 
 #include <algorithm>
@@ -53,7 +54,7 @@ bool Session::toggleVehicle() {
     vehicleGettingOff_ = true; player_.moveSpeed = vehicleWalkSpeed_; player_.through = false;
     encounterCount_ = randomInt(map()["encounterStep"].integer(30)) + randomInt(map()["encounterStep"].integer(30)) + 1;
     followersGathering_ = true;
-    if (!vehicleWalkingBgm_.null()) audio("bgm", vehicleWalkingBgm_);
+    if (!vehicleWalkingBgm_.null()) AudioManager::playBgm(*this, vehicleWalkingBgm_);
     return true;
   }
   const int x = roundMapX(player_.x + dirX(player_.direction)), y = roundMapY(player_.y + dirY(player_.direction));
@@ -78,7 +79,7 @@ void Session::updateVehicles() {
     vehicle.driving = true; vehicle.character.walkAnime = true; vehicle.character.stepAnime = true;
     vehicleGettingOn_ = false;
     const auto& bgm = system_.vehicleBgm[vehicleType_].null() ? vehicle.bgm : system_.vehicleBgm[vehicleType_];
-    audio("bgm", bgm);
+    AudioManager::playBgm(*this, bgm);
   }
   for (auto& vehicle : vehicles_) {
     if (vehicle.mapId == mapId_) updateCharacter(vehicle.character, false);

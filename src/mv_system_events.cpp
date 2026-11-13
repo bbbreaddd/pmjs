@@ -1,4 +1,5 @@
 #include "mv_engine.hpp"
+#include "mv_core_utils.hpp"
 
 namespace pmjs::mv {
 bool Session::systemEventCommand(const Value& entry) {
@@ -20,23 +21,23 @@ bool Session::systemEventCommand(const Value& entry) {
       if (vehicle >= 0 && vehicle < 3) system_.vehicleBgm[vehicle] = parameters[1];
       return true;
     }
-    case 241: audio("bgm", parameters[0]); return true;
+    case 241: AudioManager::playBgm(*this, parameters[0]); return true;
     case 242:
-      savedBgm_ = Value::Object{{"name", ""}, {"volume", 0}, {"pitch", 0}, {"pan", 0}, {"pos", 0}};
-      audio("fade-bgm", parameters[0]); return true;
+      savedBgm_ = AudioManager::makeEmptyAudioObject();
+      AudioManager::fadeOutBgm(*this, parameters[0].integer()); return true;
     case 243:
-      system_.storedBgm = savedBgm_.null() ? Value(Value::Object{{"name", ""}, {"volume", 0}, {"pitch", 0}, {"pan", 0}, {"pos", 0}}) : savedBgm_;
+      system_.storedBgm = savedBgm_.null() ? AudioManager::makeEmptyAudioObject() : savedBgm_;
       audio("save-bgm", {}); return true;
     case 244:
       if (!system_.storedBgm.null()) { savedBgm_ = system_.storedBgm; audio("replay-bgm", {}); }
       return true;
-    case 245: audio("bgs", parameters[0]); return true;
+    case 245: AudioManager::playBgs(*this, parameters[0]); return true;
     case 246:
-      savedBgs_ = Value::Object{{"name", ""}, {"volume", 0}, {"pitch", 0}, {"pan", 0}, {"pos", 0}};
-      audio("fade-bgs", parameters[0]); return true;
-    case 249: audio("me", parameters[0]); return true;
-    case 250: audio("se", parameters[0]); return true;
-    case 251: audio("stop-se", {}); return true;
+      savedBgs_ = AudioManager::makeEmptyAudioObject();
+      AudioManager::fadeOutBgs(*this, parameters[0].integer()); return true;
+    case 249: AudioManager::playMe(*this, parameters[0]); return true;
+    case 250: AudioManager::playSe(*this, parameters[0]); return true;
+    case 251: AudioManager::stopSe(*this); return true;
     default: return false;
   }
 }

@@ -24,9 +24,18 @@ void Presentation::finishScreen(std::size_t first) {
     }
   }
   const auto& flash = screen["_flashColor"];
-  if (flash[3].number() > 0) core_.renderer().queueQuad(0, 0, width, height,
-    {float(flash[0].number()/255),float(flash[1].number()/255),float(flash[2].number()/255),float(flash[3].number()/255)});
-  if (session_.brightness_ < 255) core_.renderer().queueQuad(0, 0, width, height, {0,0,0,float(1-session_.brightness_/255)});
+  if (flash[3].number() > 0) {
+    core::ScreenSprite flashSprite;
+    flashSprite.setColor(flash[0].number(), flash[1].number(), flash[2].number());
+    flashSprite.setOpacity(flash[3].number());
+    flashSprite.render(core_.renderer());
+  }
+  if (session_.brightness_ < 255) {
+    core::ScreenSprite fadeSprite;
+    fadeSprite.setBlack();
+    fadeSprite.setOpacity(255 - session_.brightness_);
+    fadeSprite.render(core_.renderer());
+  }
   const float scale = screen["_zoomScale"].number(1);
   const float x = std::floor(-screen["_zoomX"].number()*(scale-1)+0.5) + std::floor(screen["_shake"].number()+0.5);
   const float y = std::floor(-screen["_zoomY"].number()*(scale-1)+0.5);

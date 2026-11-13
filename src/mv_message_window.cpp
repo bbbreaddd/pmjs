@@ -6,6 +6,7 @@
 namespace pmjs::mv {
 bool Session::updateMessageText(bool ok, bool cancel) {
   auto& message = message_;
+  if (message.openness < 255) return true;
   if (!message.revealPrepared) {
     message.expandedLines.clear();
     for (const auto& line : message.lines) message.expandedLines.push_back(Window_Base::processEscapeCodes(line.text(),*this));
@@ -14,19 +15,22 @@ bool Session::updateMessageText(bool ok, bool cancel) {
   if (message.revealPage != message.firstLine) {
     message.revealPage = message.firstLine; message.revealLine = message.firstLine; message.revealOffset = 0;
     message.revealFinished = false; message.textPaused = false; message.finalPause = false;
-    message.lineFast = false; message.showFast = false; message.pauseSkip = false; message.textWait = 8; message.revealedCount = 0;
+    message.lineFast = false; message.showFast = false; message.pauseSkip = false; message.textWait = 0; message.revealedCount = 0;
   }
   if (message.textWait > 0) { --message.textWait; return true; }
   if (message.textPaused) {
     if (ok || cancel) { message.textPaused = false; if (message.finalPause) return false; }
     return true;
   }
-  if (message.revealFinished) {
+  const auto finishPage = [&] {
+    message.revealFinished = true;
     const bool lastPage = message.pageEnd() >= static_cast<int>(message.lines.size());
     if (lastPage && (!message.choices.empty() || ui_.maxDigits > 0 || ui_.variableId > 0)) return false;
     if (message.pauseSkip && lastPage) { acknowledge(); return true; }
-    message.textPaused = true; message.finalPause = true; message.textWait = 10; return true;
-  }
+    message.textPaused = true; message.finalPause = true; message.textWait = 10;
+    return true;
+  };
+  if (message.revealFinished) return finishPage();
   if (ok || cancel) message.showFast = true;
   while (message.revealLine < message.pageEnd()) {
     if (message.pauseIndex < message.pauses.size() && message.revealedCount >= message.pauses[message.pauseIndex]) {
@@ -63,9 +67,10 @@ bool Session::updateMessageText(bool ok, bool cancel) {
     message.revealLengths[message.revealLine] = message.revealOffset;
     if (glyph) ++message.revealedCount;
     messageAge_ = message.revealedCount+8;
-    if (message.textWait > 0 || message.textPaused || (glyph && !message.showFast && !message.lineFast)) break;
+    if (message.revealLine + 1 == message.pageEnd() && message.revealOffset >= text.size()) { finishPage(); return true; }
+    if (message.textWait > 0 || message.textPaused || (!message.showFast && !message.lineFast)) break;
   }
-  if (message.revealLine >= message.pageEnd()) message.revealFinished = true;
+  if (message.revealLine >= message.pageEnd()) finishPage();
   return true;
 }
 }  // namespace pmjs::mv

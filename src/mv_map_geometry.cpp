@@ -68,7 +68,7 @@ void Presentation::mapName() {
   const bool rewound = session_.ticks_ < mapNameTick_;
   const bool changed = !mapNameWindow_ || rewound || mapNameRevision_ != session_.presentationRevision_ || mapNameWindow_->mapName != name;
   if (changed) {
-    if (!mapNameWindow_ || rewound) mapNameWindow_ = std::make_unique<Window_MapName>();
+    if (!mapNameWindow_ || rewound) mapNameWindow_ = std::make_shared<Window_MapName>();
     auto& contents = mapNameWindow_->contents;
     contents.textColor = core::Utils::rgbToCssColor(colors_[0] >> 24, (colors_[0] >> 16) & 255, (colors_[0] >> 8) & 255);
     mapNameWindow_->open(name);
@@ -79,9 +79,11 @@ void Presentation::mapName() {
   }
   mapNameTick_ = session_.ticks_;
   if (name.empty() || mapNameWindow_->contentsOpacity <= 0) return;
-  const auto source = mapNameWindow_->contents.texture();
-  if (!source || !core_.renderer().queueImage(source->handle, {1, 0, 0, 1, 18, 18}, {0, 0, static_cast<float>(source->width), static_cast<float>(source->height)}, mapNameWindow_->contentsOpacity / 255.0F,
-      0xffffff, BlendMode::normal)) throw std::runtime_error("cannot queue map name");
+  core::Window window;
+  window.move(0,0,mapNameWindow_->rect.width,mapNameWindow_->rect.height);
+  window.opacity=0;window.contentsOpacity=mapNameWindow_->contentsOpacity;
+  window.contents=std::shared_ptr<core::PixelBitmap>(mapNameWindow_,&mapNameWindow_->contents);
+  streamUiWindow(window);
 }
 }
 

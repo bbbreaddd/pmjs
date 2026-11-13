@@ -418,7 +418,7 @@ void AudioManager::stopBgm(Session& session) {
   session.audio("bgm", emptyAudio);
 }
 
-void AudioManager::fadeOutBgm(Session& session, int durationSeconds) {
+void AudioManager::fadeOutBgm(Session& session, double durationSeconds) {
   session.savedBgm_ = makeEmptyAudioObject();
   session.audio("fade-bgm", Value{durationSeconds});
 }
@@ -467,7 +467,7 @@ void AudioManager::stopBgs(Session& session) {
   session.audio("bgs", emptyAudio);
 }
 
-void AudioManager::fadeOutBgs(Session& session, int durationSeconds) {
+void AudioManager::fadeOutBgs(Session& session, double durationSeconds) {
   session.savedBgs_ = makeEmptyAudioObject();
   session.audio("fade-bgs", Value{durationSeconds});
 }
@@ -491,7 +491,7 @@ void AudioManager::updateMeParameters(Session& session, const Value& me) {
   session.audio("me", me, false);
 }
 
-void AudioManager::fadeOutMe(Session& session, int durationSeconds) {
+void AudioManager::fadeOutMe(Session& session, double durationSeconds) {
   if (durationSeconds > 0) session.audio("fade-me", Value{durationSeconds});
   else stopMe(session);
 }

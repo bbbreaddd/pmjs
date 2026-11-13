@@ -1,6 +1,7 @@
 #include "mv_core_audio_graphics.hpp"
 #include "mv_core_utils.hpp"
 #include "mv_engine.hpp"
+#include "mv_managers.hpp"
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -147,7 +148,8 @@ int main() try {
   }
 
   Value db = Object{
-    {"system", Object{{"startMapId", 1}, {"startX", 1}, {"startY", 1}, {"partyMembers", Array{1}}}},
+    {"system", Object{{"startMapId", 1}, {"startX", 1}, {"startY", 1}, {"partyMembers", Array{1}},
+                      {"sounds", Array{Object{{"name", "Cursor"}, {"volume", 85}, {"pitch", 100}, {"pan", 0}}}}}},
     {"actors", Array{Value{}, Object{{"classId", 1}, {"initialLevel", 1}}}},
     {"tilesets", Array{Value{}, Object{{"flags", Array{0}}}}},
     {"maps", Object{{"1", Object{{"width", 3}, {"height", 3}, {"tilesetId", 1}, {"data", Array(3 * 3 * 6, 0)}, {"events", Array{}}}}}}
@@ -158,11 +160,28 @@ int main() try {
   AudioManager::playBgm(session, bgm);
   AudioManager::fadeInBgm(session, 2);
   AudioManager::fadeOutMe(session, 1);
+  pmjs::mv::SoundManager::playCursor(session);
   const auto& cmds = session.audioCommands();
-  require(cmds.size() >= 3 && cmds[cmds.size() - 2]["kind"].text() == "fade-in-bgm" &&
-          cmds[cmds.size() - 2]["sound"].integer() == 2 &&
-          cmds.back()["kind"].text() == "fade-me" && cmds.back()["sound"].integer() == 1,
-          "AudioManager queues fade-in-bgm and fade-me durations");
+  require(cmds.size() >= 4 && cmds[cmds.size() - 3]["kind"].text() == "fade-in-bgm" &&
+          cmds[cmds.size() - 3]["sound"].integer() == 2 &&
+          cmds[cmds.size() - 2]["kind"].text() == "fade-me" && cmds[cmds.size() - 2]["sound"].integer() == 1 &&
+          cmds.back()["kind"].text() == "se" && cmds.back()["sound"]["name"].text() == "Cursor",
+          "AudioManager and SoundManager queue expected audio commands");
+
+  session.configure(Object{{"bgmVolume", 40}, {"alwaysDash", true}});
+  const auto config = session.configuration();
+  require(config["bgmVolume"].integer() == 40 && config["bgsVolume"].integer() == 100 &&
+          config["meVolume"].integer() == 100 && config["seVolume"].integer() == 100 &&
+          config["alwaysDash"].boolean() && !config["commandRemember"].boolean(),
+          "Session::configure updates partial settings via ConfigManager while preserving defaults");
+  bool rejectedInvalid = false;
+  try {
+    session.configure(Object{{"seVolume", 101}});
+  } catch (const std::invalid_argument&) {
+    rejectedInvalid = true;
+  }
+  require(rejectedInvalid && session.configuration()["seVolume"].integer() == 100,
+          "Session::configure rejects out-of-range volume without mutating state");
 
   std::cout << "native MV core audio checks passed\n";
 } catch (const std::exception& error) {

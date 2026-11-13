@@ -442,10 +442,29 @@ std::vector<int> Window_ItemList::makeItemList(const Session& session, const std
 bool Window_ItemList::isCurrentItemEnabled() const {
   return index >= 0 && index < static_cast<int>(data.size());
 }
+bool Window_ItemList::isEnabled(const Session& session, int encodedItem) {
+  if (encodedItem <= 0 || encodedItem >= 100000) return false;
+  const auto& item = session.database()["items"][encodedItem];
+  if (item.null()) return false;
+  const auto count = session.battle_.active ? session.battleMemberCount() : session.party_.size();
+  for (std::size_t index = 0; index < count; ++index)
+    if (session.canUse(session.actors_.at(session.party_[index]),item)) return true;
+  return false;
+}
 
 Window_SkillList::Window_SkillList(int x, int y, int w, int h)
   : Window_Selectable(x, y, w, h) {
   maxCols = 2;
+}
+bool Window_SkillList::isEnabled(const Session& session, int actorId, int skillId) {
+  const auto& skill = session.database()["skills"][skillId];
+  return !skill.null() && session.actors().contains(actorId) && session.canUse(session.actors().at(actorId),skill);
+}
+std::pair<int,int> Window_SkillList::displayedCost(const Session& session, int actorId, int skillId) {
+  const auto& skill = session.database()["skills"][skillId];
+  if (skill["tpCost"].integer() > 0) return {skill["tpCost"].integer(),29};
+  const int cost = static_cast<int>(std::floor(skill["mpCost"].number()*session.trait(session.actors().at(actorId),23,4,true)));
+  return {cost,cost > 0 ? 23 : 0};
 }
 
 void Window_SkillList::refresh(const Session& session) {
@@ -862,9 +881,11 @@ void Window_BattleLog::displayAffectedStatus(const Session& session, const Battl
 }
 
 Window_Help::Window_Help(int numLines)
-  : Window_Base(0, 0, 816, numLines * 36 + 36) {}
+  : Window_Base(0, 0, core::Graphics::boxWidth, placement(core::Graphics::boxWidth,numLines).height) {}
 void Window_Help::setText(std::string value) { text = std::move(value); }
 void Window_Help::clear() { text.clear(); }
+Rect Window_Help::placement(int width, int numLines) { return {0,0,width,numLines*36+36}; }
+std::string Window_Help::itemDescription(const Value& item) { return item["description"].text(); }
 
 Window_Gold::Window_Gold(int x, int y)
   : Window_Base(x, y, 240, 72) {}
@@ -896,13 +917,36 @@ std::vector<CommandItem> Window_MenuCommand::makeCommands(const Session& session
 }
 
 Window_MenuStatus::Window_MenuStatus(int x, int y)
-  : Window_Selectable(x, y, 576, 624) {}
+  : Window_Selectable(x, y, std::max(0,core::Graphics::boxWidth-240), core::Graphics::boxHeight) {}
+
+int Window_MenuStatus::rowHeight(int windowHeight, int padding) {
+  return static_cast<int>(std::floor((windowHeight-padding*2)/4.0));
+}
+
+Rect Window_MenuStatus::rowRect(int index, int windowWidth, int windowHeight, int topRow, int padding) {
+  return Window_Selectable::itemRectFor(index,std::max(0,windowWidth-padding*2),1,rowHeight(windowHeight,padding),12,topRow);
+}
+
+Window_MenuStatus::RowLayout Window_MenuStatus::rowLayout(const Rect& row) {
+  const double x = row.x + 162;
+  return {{row.x+1,row.y+1,144,144},{x,row.y+row.height/2.0-54,row.width-x-6,108}};
+}
+
+Rect Window_MenuStatus::placement(int viewportWidth, int viewportHeight, int x, int y) {
+  return {x,y,std::max(0,viewportWidth-240),viewportHeight};
+}
 void Window_MenuStatus::refresh(const Session& session) {
   actorIds = session.party();
 }
 
 Window_MenuActor::Window_MenuActor()
-  : Window_MenuStatus(0, 0) {}
+  : Window_MenuStatus(0, 0) { visible = false; }
+
+Rect Window_MenuActor::placement(int viewportWidth, int viewportHeight, int itemIndex) {
+  auto bounds = Window_MenuStatus::placement(viewportWidth,viewportHeight,0,0);
+  if (itemIndex % 2 == 0) bounds.x = viewportWidth-bounds.width;
+  return bounds;
+}
 
 Window_MenuActor::Selection Window_MenuActor::selection(const Session& session, const Value& item, int userIndex) {
   const int scope = item["scope"].integer();
@@ -936,7 +980,7 @@ std::vector<CommandItem> Window_ItemCategory::makeCommands(const Session& sessio
 }
 
 Window_SkillType::Window_SkillType(int x, int y)
-  : Window_Command(x, y, 240, 144) {}
+  : Window_Command(x, y, 240, 180) {}
 void Window_SkillType::makeCommandList(const Session& session) {
   commands = makeCommands(session, actorId);
 }
@@ -948,6 +992,7 @@ std::vector<CommandItem> Window_SkillType::makeCommands(const Session& session, 
 
 Window_SkillStatus::Window_SkillStatus(int x, int y, int w, int h)
   : Window_Base(x, y, w, h) {}
+Rect Window_SkillStatus::placement(int width) { return {240,Window_Help::placement(width).height,std::max(0,width-240),180}; }
 
 Window_EquipStatus::Window_EquipStatus(int x, int y)
   : Window_Base(x, y, 312, 288) {}
@@ -1336,6 +1381,17 @@ void Window_ChoiceList::makeCommandList(const Session& session) {
   }
 }
 
+int Window_ChoiceList::visibleRows(int count, const Rect& message, int screenHeight) {
+  const int center = screenHeight / 2;
+  return std::min(count, message.y < center && message.y + message.height > center ? 4 : 8);
+}
+Rect Window_ChoiceList::placement(int count, int choiceWidth, int position, const Rect& message, int screenWidth, int screenHeight) {
+  const int width = std::min(screenWidth,choiceWidth+36);
+  const int height = visibleRows(count,message,screenHeight)*36+36;
+  return {position == 0 ? 0 : position == 1 ? (screenWidth-width)/2 : screenWidth-width,
+    message.y >= screenHeight/2 ? message.y-height : message.y+message.height,width,height};
+}
+
 Window_NumberInput::Window_NumberInput()
   : Window_Selectable(0, 0, 240, 72) {}
 void Window_NumberInput::changeDigit(bool up) {
@@ -1429,22 +1485,35 @@ std::vector<CommandItem> Window_ActorCommand::makeCommands(const Session& sessio
 }
 
 Window_BattleActor::Window_BattleActor(int x, int y)
-  : Window_BattleStatus(x, y, 624, 180) {}
-int Window_BattleActor::maxItems() const { return 4; }
+  : Window_BattleStatus(x, y, std::max(0,core::Graphics::boxWidth-192), 180) {}
+int Window_BattleActor::maxItems() const { return static_cast<int>(actorIndices.size()); }
+void Window_BattleActor::refresh(const Session& session) { actorIndices = makeTargets(session); }
+bool Window_BattleActor::includes(const Battler& actor) { return !actor.hidden && !actor.escaped; }
+std::vector<int> Window_BattleActor::makeTargets(const Session& session) {
+  std::vector<int> targets;
+  for (std::size_t index = 0; index < session.battleMemberCount(); ++index)
+    if (includes(session.actors().at(session.party()[index]))) targets.push_back(static_cast<int>(index));
+  return targets;
+}
+const std::string& Window_BattleActor::nameFor(const Session& session, int partyIndex) { return session.actors().at(session.party().at(partyIndex)).name; }
+Rect Window_BattleActor::placement(int width, int height) { return {0,height-180,std::max(0,width-192),180}; }
 
 Window_BattleEnemy::Window_BattleEnemy(int x, int y)
-  : Window_Selectable(x, y, 624, 180) {
-  maxCols = 2;
+  : Window_Selectable(x, y, std::max(0,core::Graphics::boxWidth-192), 180) {
+  maxCols = columns();
 }
 void Window_BattleEnemy::refresh(const Session& session) {
-  enemyIndices.clear();
-  const auto& enemies = session.battle().enemies;
-  for (std::size_t i = 0; i < enemies.size(); ++i) {
-    if (!enemies[i].hidden && !enemies[i].escaped && enemies[i].hp > 0) {
-      enemyIndices.push_back(static_cast<int>(i));
-    }
-  }
+  enemyIndices = makeTargets(session);
 }
+bool Window_BattleEnemy::includes(const Battler& enemy) { return !enemy.hidden && !enemy.escaped && enemy.hp > 0; }
+std::vector<int> Window_BattleEnemy::makeTargets(const Session& session) {
+  std::vector<int> targets;
+  const auto& enemies = session.battle().enemies;
+  for (std::size_t i = 0; i < enemies.size(); ++i) if (includes(enemies[i])) targets.push_back(static_cast<int>(i));
+  return targets;
+}
+const std::string& Window_BattleEnemy::nameFor(const Session& session, int enemyIndex) { return session.battle().enemies.at(enemyIndex).name; }
+Rect Window_BattleEnemy::placement(int width, int height) { return {192,height-180,std::max(0,width-192),180}; }
 
 Window_BattleSkill::Window_BattleSkill(int x, int y, int w, int h)
   : Window_SkillList(x, y, w, h) {}
