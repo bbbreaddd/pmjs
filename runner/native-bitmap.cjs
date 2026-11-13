@@ -7,7 +7,7 @@ function createBitmapClass(native, PIXI = null, fonts = null) {
   const instances = new WeakMap();
   const pending = new Set();
   const loadedFonts = new Map();
-  const drawingMethods = new Set(['resize', 'clear', 'clearRect', 'fillRect', 'fillAll', 'gradientFillRect', 'drawCircle', 'drawText', 'blt', 'bltImage', 'rotateHue', 'adjustTone', 'blur']);
+  const drawingMethods = new Set(['resize', 'clear', 'clearRect', 'fillRect', 'fillAll', 'gradientFillRect', 'drawCircle', 'drawText', 'blt', 'bltImage', 'rotateHue', 'adjustTone', 'blur', 'canvasChanged']);
 
   function entry(bitmap) {
     const value = instances.get(bitmap);
@@ -49,7 +49,9 @@ function createBitmapClass(native, PIXI = null, fonts = null) {
       const source = {
         get width() { return api.property(value.handle, 'width'); },
         get height() { return api.property(value.handle, 'height'); },
-        _pmjsNativeTextureSource() { return api.invoke(value.handle, 'surface'); }
+        _pmjsNativeTextureSource() { return api.invoke(value.handle, 'surface'); },
+        _ensureNativeCanvas() { return api.invoke(value.handle, 'canvasSurface'); },
+        _pmjsContentChanged() { invoke(bitmap, 'canvasChanged'); }
       };
       Object.defineProperty(source, '__pmjsContentRevision', { get() { return value.revision; } });
       value.source = source;

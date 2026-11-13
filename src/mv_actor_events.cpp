@@ -99,7 +99,7 @@ bool Session::actorEventCommand(const Value& entry) {
     auto& actor = actors_.at(id);
     switch (code) {
       case 311:
-        if (std::find(actor.states.begin(), actor.states.end(), 1) == actor.states.end()) {
+        if (!actor.hidden && std::find(actor.states.begin(), actor.states.end(), 1) == actor.states.end()) {
           double change = amount;
           if (!p[5].boolean() && actor.hp <= -change) change = 1 - actor.hp;
           actor.result.hpAffected = true;
@@ -118,6 +118,7 @@ bool Session::actorEventCommand(const Value& entry) {
         refreshBattler(actor);
         break;
       case 326:
+        actor.result.tpDamage = boundedInt(-amount, std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
         actor.tp = boundedInt(actor.tp + amount, 0, 100);
         refreshBattler(actor);
         break;

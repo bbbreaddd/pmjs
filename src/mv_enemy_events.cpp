@@ -67,6 +67,7 @@ bool Session::enemyEventCommand(const Value& entry) {
         enemy.mp = enemyEventInt(enemy.mp + amount, 0, static_cast<int>(parameter(enemy, 1)));
         refreshBattler(enemy); break;
       case 342:
+        enemy.result.tpDamage = enemyEventInt(-amount, std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
         enemy.tp = enemyEventInt(enemy.tp + amount, 0, 100); refreshBattler(enemy); break;
       case 333: {
         const bool alreadyDead = enemy.hp <= 0;

@@ -143,6 +143,11 @@ napi_value bitmapOperation(napi_env env, napi_callback_info info) try {
     if (source.services != owner.services) throw std::invalid_argument("cannot blit between bitmap runtimes");
     if (name == "blt") bitmap.blt(*source.bitmap,n(1),n(2),n(3),n(4),n(5),n(6),n(7),n(8));
     else bitmap.bltImage(*source.bitmap,n(1),n(2),n(3),n(4),n(5),n(6),n(7),n(8));
+  } else if (name == "canvasSurface") {
+    return imageInfo(env,bitmap.nativeCanvas(),bitmap.width,bitmap.height);
+  } else if (name == "canvasChanged") {
+    bitmap.pixels.clear();
+    bitmap.dirty = true;
   } else if (name == "surface") {
     const auto image = bitmap.texture();
     if (!image) throw std::runtime_error("cannot prepare bitmap texture");

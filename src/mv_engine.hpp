@@ -124,6 +124,9 @@ struct Message {
   std::string faceName;
   bool busy = false, scrolling = false, scrollNoFast = false;
   double scrollY = 0, scrollSpeed = 2;
+  std::string scrollText;
+  int scrollHeight = 0;
+  bool scrollStarted = false;
   int firstLine = 0;
   std::vector<int> pauses;
   std::size_t pauseIndex = 0;
@@ -165,7 +168,8 @@ struct Battler {
 
 struct Action {
   bool enemy = false, item = false;
-  int subject = 0, id = 1, target = 0, speed = 0;
+  int subject = 0, id = 1, target = 0;
+  double speed = 0;
   bool forced = false;
 };
 struct BattleTarget {
@@ -554,11 +558,17 @@ class Session {
   int lastAccessedSavefileId_ = 1;
   int lastTitleCommand_ = -1;
   bool newGamePending_ = false;
+  std::optional<Scene> pendingScene_;
+  Value pendingLoadBgm_, pendingLoadBgs_;
+  std::uint64_t pendingLoadFrames_ = 0;
   double sceneFadeOpacity_ = 0;
   int sceneFadeDuration_ = 0;
   bool sceneFadeOut_ = false;
-  void startSceneFade(bool fadeOut, int duration);
+  bool sceneFadeWhite_ = false;
+  void startSceneFade(bool fadeOut, int duration, bool white = false);
   void updateSceneFade();
+  void beginSceneTransition(Scene scene, int duration);
+  bool updateSceneTransition(bool fadeComplete);
   int titleWindowOpenness_ = 255;
   std::mt19937 randomGenerator_{std::random_device{}()};
   std::vector<double> randomStream_;
@@ -574,7 +584,9 @@ class Session {
   bool followersVisible_ = false;
   std::optional<std::array<int, 2>> destination_;
   int mapTouchCount_ = 0;
-  std::optional<std::array<int, 4>> pendingTransfer_;
+  std::optional<std::array<int, 5>> pendingTransfer_;
+  bool transferFadeStarted_ = false;
+  void centerPlayer();
   bool eventMovementAllowed_ = true;
 };
 

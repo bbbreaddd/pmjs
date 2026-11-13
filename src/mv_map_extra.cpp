@@ -95,10 +95,11 @@ bool MapMechanics::checkLayeredTilesFlags(const Session& session, int x, int y, 
 }
 
 int MapMechanics::terrainTag(const Session& session, int x, int y) {
+  if (x < 0 || y < 0 || x >= session.map()["width"].integer() || y >= session.map()["height"].integer()) return 0;
   const auto& flags = session.database()["tilesets"][session.mapState_.tilesetId]["flags"];
   for (int z = 3; z >= 0; --z) {
     const int tileId = getTileId(session, x, y, z);
-    if (tileId > 0 && tileId < static_cast<int>(flags.array().size())) {
+    if (tileId >= 0 && tileId < static_cast<int>(flags.array().size())) {
       const int tag = flags[tileId].integer() >> 12;
       if (tag > 0) return tag;
     }
@@ -107,6 +108,7 @@ int MapMechanics::terrainTag(const Session& session, int x, int y) {
 }
 
 int MapMechanics::regionId(const Session& session, int x, int y) {
+  if (x < 0 || y < 0 || x >= session.map()["width"].integer() || y >= session.map()["height"].integer()) return 0;
   // Region layer is layer 5 in map data
   return getTileId(session, x, y, 5);
 }
@@ -392,16 +394,32 @@ bool Session::triggerDestinationAction() {
   const int dx = player_.direction == 6 ? 1 : player_.direction == 4 ? -1 : 0;
   const int dy = player_.direction == 2 ? 1 : player_.direction == 8 ? -1 : 0;
   const int frontX = roundMapX(player_.x + dx), frontY = roundMapY(player_.y + dy);
+  const auto hasStarting = [&] {
+    return std::any_of(events_.begin(), events_.end(), [](const Event& event) { return event.starting; });
+  };
+  const auto checkThere = [&] {
+    startEvent(frontX, frontY, true); startEvent(frontX, frontY, false);
+    if (!hasStarting() && tileFlag(frontX, frontY, 128)) {
+      const int farX = roundMapX(frontX + dx), farY = roundMapY(frontY + dy);
+      startEvent(farX, farY, true); startEvent(farX, farY, false);
+    }
+  };
   if (x == player_.x && y == player_.y) {
-    if (currentInput_.touchTriggered && toggleVehicle()) { destination_.reset(); return true; }
+    const auto& airship = vehicles_[2];
+    if (airship.mapId == mapId_ && airship.character.x == x && airship.character.y == y &&
+        currentInput_.touchTriggered && toggleVehicle()) { destination_.reset(); return true; }
     startEvent(x, y, true);
   } else if (x == frontX && y == frontY) {
-    if (currentInput_.touchTriggered && toggleVehicle()) { destination_.reset(); return true; }
-    startEvent(frontX, frontY, true); startEvent(frontX, frontY, false);
+    const bool waterVehicleAhead = std::any_of(vehicles_.begin(), vehicles_.begin() + 2, [&](const Vehicle& vehicle) {
+      return vehicle.mapId == mapId_ && vehicle.character.x == x && vehicle.character.y == y;
+    });
+    if ((waterVehicleAhead || vehicleType_ == 0 || vehicleType_ == 1) &&
+        currentInput_.touchTriggered && toggleVehicle()) { destination_.reset(); return true; }
+    checkThere();
   } else if (tileFlag(frontX, frontY, 128) && x == roundMapX(frontX + dx) && y == roundMapY(frontY + dy)) {
-    startEvent(x, y, true); startEvent(x, y, false);
+    checkThere();
   }
-  const bool started = std::any_of(events_.begin(), events_.end(), [](const Event& event) { return event.starting; });
+  const bool started = hasStarting();
   if (started) destination_.reset();
   return started;
 }

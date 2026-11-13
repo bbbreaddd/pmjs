@@ -97,6 +97,8 @@ class Window_Base {
 
   // Escape codes parser: \C[n], \I[n], \V[n], \N[n], \P[n], \G, \{, \}
   static std::string processEscapeCodes(const std::string& text, const Session& session);
+  static int textLineHeight(const std::string& preparedText, std::size_t start, int fontSize);
+  static int textHeight(const std::string& preparedText, int fontSize = 28);
 };
 
 class Window_Selectable : public Window_Base {
@@ -560,7 +562,7 @@ class Window_EventItem : public Window_ItemList {
 class Window_ScrollText : public Window_Base {
  public:
   Window_ScrollText();
-  static bool updateMessage(Message& message, const Input& input);
+  static bool updateMessage(Message& message, const Input& input, const Session& session);
 };
 
 class Window_Message : public Window_Base {

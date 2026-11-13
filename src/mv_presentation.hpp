@@ -3,9 +3,11 @@
 #include "mv_core_display.hpp"
 #include "mv_sprites.hpp"
 #include "runtime_core.hpp"
+#include <cstdint>
 #include <functional>
 #include "media_decoder.hpp"
 #include <tuple>
+#include <variant>
 
 namespace pmjs::mv {
 class ImageCache;
@@ -96,8 +98,38 @@ class Presentation {
   void messageInputs();
   void menu();
   enum class BattleWindow { commands, status, log, selection };
+  struct UiTextOp {
+    std::string text;
+    double x = 0;
+    double y = 0;
+    int size = 28;
+    std::uint32_t fill = 0;
+    bool operator==(const UiTextOp&) const = default;
+  };
+  struct UiGaugeOp {
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 6;
+    std::vector<std::uint8_t> pixels;
+    bool operator==(const UiGaugeOp&) const = default;
+  };
+  using UiDrawOp = std::variant<UiTextOp, UiGaugeOp>;
+  void drawUiOp(CanvasHandle canvas, int offsetX, int offsetY, const UiDrawOp& op);
+  struct WindowTextSurface {
+    CanvasHandle canvas = 0;
+    int width = 0;
+    int height = 0;
+    std::vector<UiDrawOp> ops;
+    bool valid = false;
+    bool used = false;
+  };
   struct RetainedContents {
     CanvasHandle canvas = 0;
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
     std::vector<std::string> key;
     bool valid = false;
   };
@@ -138,13 +170,16 @@ class Presentation {
   Session& session_;
   Value settings_;
   CanvasHandle textCanvas_ = 0, globalTextCanvas_ = 0, timerCanvas_ = 0;
+  int textOffsetX_ = 0, textOffsetY_ = 0, textWidth_ = 0, textHeight_ = 0;
   core::WindowLayer uiLayer_;
   std::optional<core::WindowLayer::StreamState> uiLayerState_;
   std::optional<std::array<int,4>> uiTextClip_;
   bool uiTextDirty_ = false;
   std::size_t uiWindowOrdinal_ = 0;
+  std::optional<std::size_t> uiPendingSlot_;
+  std::vector<UiDrawOp> pendingUiOps_;
   using WindowKey = std::tuple<int,int,int,int,std::size_t>;
-  std::map<WindowKey,CanvasHandle> uiTextCanvases_;
+  std::map<std::size_t, WindowTextSurface> uiTextCanvases_;
   std::array<RetainedContents, 4> battleContents_;
   std::map<std::string, ImageInfo> images_;
   std::unique_ptr<ImageCache> imageCache_;

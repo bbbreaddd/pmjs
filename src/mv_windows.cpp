@@ -271,6 +271,36 @@ std::string Window_Base::processEscapeCodes(const std::string& source, const Ses
   return result;
 }
 
+namespace {
+int measureTextLine(const std::string& text, std::size_t start, std::size_t end, int& fontSize) {
+  int maximum = fontSize;
+  for (std::size_t index = start; index + 1 < end; ++index) {
+    if (text[index] != '\x1b') continue;
+    const char code = text[index + 1];
+    if (code == '{' && fontSize <= 96) fontSize += 12;
+    else if (code == '}' && fontSize >= 24) fontSize -= 12;
+    maximum = std::max(maximum, fontSize);
+  }
+  return maximum + 8;
+}
+}
+
+int Window_Base::textLineHeight(const std::string& preparedText, std::size_t start, int fontSize) {
+  const auto newline = preparedText.find('\n', start);
+  return measureTextLine(preparedText, start, newline == std::string::npos ? preparedText.size() : newline, fontSize);
+}
+
+int Window_Base::textHeight(const std::string& preparedText, int fontSize) {
+  int height = 0;
+  std::size_t start = 0;
+  for (;;) {
+    const auto newline = preparedText.find('\n', start);
+    height += measureTextLine(preparedText, start, newline == std::string::npos ? preparedText.size() : newline, fontSize);
+    if (newline == std::string::npos) return height;
+    start = newline + 1;
+  }
+}
+
 Window_Selectable::Window_Selectable(int x, int y, int w, int h)
   : Window_Base(x, y, w, h) {}
 
@@ -1491,10 +1521,21 @@ void Window_Message::clearFlags(Message& message) {
   message.lineFast = false; message.showFast = false;
   message.pauseSkip = false;
 }
-bool Window_ScrollText::updateMessage(Message& message, const Input& input) {
+bool Window_ScrollText::updateMessage(Message& message, const Input& input, const Session& session) {
+  if (!message.scrollStarted) {
+    std::string text;
+    for (std::size_t index = 0; index < message.lines.size(); ++index) {
+      if (index) text += '\n';
+      text += message.lines[index].text();
+    }
+    message.scrollText = Window_Base::processEscapeCodes(text, session);
+    message.scrollHeight = Window_Base::textHeight(message.scrollText);
+    message.scrollStarted = true;
+    return false;
+  }
   const bool fast = !message.scrollNoFast && (input.ok || input.dash || input.pressed.contains("shift") || input.touchPressed);
   message.scrollY += message.scrollSpeed * (fast ? 3 : 1);
-  return message.scrollY >= static_cast<double>(message.lines.size()*36);
+  return message.scrollY >= std::max(message.scrollHeight, 1);
 }
 void Window_Message::updateState(Session& session) {
   if (session.choiceWindow_) session.choiceWindow_->update();
@@ -1609,6 +1650,7 @@ bool Window_Message::updateInput(Session& session, const Input& input, bool ok, 
     if (!window.isOpenAndActive()) return true;
     const int previous = window.index;
     if (direction) Window_Selectable::moveCursor(window.index,window.topRow,window.maxItems(),2,4,direction,input.directionTriggered.value_or(session.directionAge_ == 0));
+    if (pageUp || pageDown) Window_Selectable::pageCursor(window.index,window.topRow,window.maxItems(),2,4,pageDown);
     window.processWheel(input.wheelY);
     if (window.index != previous) sound(0);
     const bool confirm = input.okRepeated.value_or(ok), cancelInput = input.cancelRepeated.value_or(cancel) || input.touchCancelled;

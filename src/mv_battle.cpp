@@ -208,10 +208,11 @@ void Session::apply(Battler& subject, Battler& target, const Value& item, Battle
       if (type == 5) { auto& receiver = drainTarget ? *drainTarget : subject; receiver.hp += actual; receiver.result.hpAffected = true; receiver.result.hpDamage = -actual; refreshBattler(receiver); }
     } else {
       const int actual = type == 6 || amount > 0 ? std::min(amount, target.mp) : amount;
+      if (actual != 0) result.success = true;
       result.mpDamage = actual;
       target.mp -= actual; if (type == 6) { auto& receiver = drainTarget ? *drainTarget : subject; receiver.mp += actual; receiver.result.mpDamage = -actual; refreshBattler(receiver); }
     }
-    result.success = true;
+    if (type == 1 || type == 3 || type == 5) result.success = true;
     refreshBattler(target); refreshBattler(subject);
   }
   for (const auto& effect : item["effects"].array()) applyItemEffect(subject, target, item, effect);
@@ -235,7 +236,7 @@ void Session::startBattle(int troop, bool canEscape, bool canLose, bool event) {
   if (!event) { battle_.preemptive = random() < BattleMechanics::ratePreemptive(*this); battle_.surprise = random() < BattleMechanics::rateSurprise(*this) && !battle_.preemptive; }
   double actorsAgi = 0, enemiesAgi = 0;
   for (std::size_t index = 0; index < battleMemberCount(); ++index) { auto& value = actors_.at(party_[index]); if (!hasSpecialFlag(value, 3)) value.tp = randomInt(25); value.escaped = false; actorsAgi += parameter(value, 6); }
-  for (auto& value : battle_.enemies) { value.tp = randomInt(25); enemiesAgi += parameter(value, 6); }
+  for (auto& value : battle_.enemies) { if (!hasSpecialFlag(value, 3)) value.tp = randomInt(25); enemiesAgi += parameter(value, 6); }
   actorsAgi /= std::max<std::size_t>(1, battleMemberCount()); enemiesAgi /= std::max<std::size_t>(1, battle_.enemies.size());
   battle_.escapeRatio = 0.5 * actorsAgi / std::max(1.0, enemiesAgi);
   ui_ = {}; ui_.scene = Scene::battle;
@@ -276,23 +277,20 @@ void Session::makeEnemyActions() {
   battle_.actions.clear(); battle_.actorIndex = 0; ui_.category = 4; ui_.cursor = 0;
   battle_.remainingActions.assign(battleMemberCount(), 0);
   for (auto& [id, actor] : actors_) { (void)id; actor.guarding = false; }
-  for (std::size_t index = 0; index < battle_.enemies.size(); ++index) {
-    auto& enemy = battle_.enemies[index]; enemy.guarding = false;
-    const int count = battle_.preemptive ? 0 : battleActionCount(enemy);
-    for (int action = 0; action < count; ++action) {
-      const int skill = selectEnemySkill(enemy);
-      if (skill) battle_.actions.push_back({true, false, static_cast<int>(index), skill, -1, 0});
-    }
-  }
   for (std::size_t index = 0; index < battleMemberCount(); ++index) {
-    auto& actor = actors_.at(party_[index]); const int count = battle_.surprise ? 0 : battleActionCount(actor);
+    auto& actor = actors_.at(party_[index]); const int count = battleActionCount(actor);
     const bool automatic = hasSpecialFlag(actor, 0) || restriction(actor) > 0;
-    if (!automatic) battle_.remainingActions[index] = count;
+    if (!automatic) battle_.remainingActions[index] = battle_.surprise ? 0 : count;
     else for (int action = 0; action < count; ++action) {
-      int skill = 1, target = -1;
+      int skill = restriction(actor) > 0 ? 1 : 0, target = -1;
       if (!restriction(actor)) {
         double best = std::numeric_limits<double>::min();
-        auto skills = battlerSkills(actor); skills.insert(1);
+        std::vector<int> skills{1};
+        skills.insert(skills.end(), actor.skills.begin(), actor.skills.end());
+        for (const auto* object : traitObjects(actor)) for (const auto& entry : (*object)["traits"].array()) {
+          const int id = entry["dataId"].integer();
+          if (entry["code"].integer() == 43 && std::find(skills.begin() + 1, skills.end(), id) == skills.end()) skills.push_back(id);
+        }
         for (int id : skills) if (canUse(actor, database_["skills"][id])) {
           int candidateTarget = -1;
           const double score = evaluateAutoAction(actor, database_["skills"][id], candidateTarget);
@@ -300,6 +298,14 @@ void Session::makeEnemyActions() {
         }
       }
       battle_.actions.push_back({false, false, static_cast<int>(index), skill, target, 0});
+    }
+  }
+  for (std::size_t index = 0; index < battle_.enemies.size(); ++index) {
+    auto& enemy = battle_.enemies[index]; enemy.guarding = false;
+    const int count = battleActionCount(enemy);
+    for (int action = 0; action < count; ++action) {
+      const int skill = selectEnemySkill(enemy);
+      battle_.actions.push_back({true, false, static_cast<int>(index), skill, -1, 0});
     }
   }
   while (battle_.actorIndex < static_cast<int>(battleMemberCount()) && !battle_.remainingActions[battle_.actorIndex]) ++battle_.actorIndex;
@@ -320,15 +326,31 @@ void Session::chooseAction(int actorIndex, int id, int target, bool item) {
 }
 void Session::beginTurn() {
   ++battle_.turn;
+  battle_.actions.erase(std::remove_if(battle_.actions.begin(), battle_.actions.end(), [&](const Action& action) {
+    return action.enemy ? battle_.preemptive : battle_.surprise;
+  }), battle_.actions.end());
   const auto& pages = database_["troops"][battle_.troopId]["pages"].array();
   for (std::size_t index = 0; index < pages.size(); ++index) if (pages[index]["span"].integer() == 1) battle_.eventFlags.erase(static_cast<int>(index));
+  const auto includeEmptySubject = [&](bool enemy, int index, const Battler& battler) {
+    if (battler.hp <= 0 || battler.hidden || battler.escaped) return;
+    if (std::none_of(battle_.actions.begin(), battle_.actions.end(), [&](const Action& action) { return action.enemy == enemy && action.subject == index; }))
+      battle_.actions.push_back({enemy, false, index, 0, -1, std::numeric_limits<double>::infinity()});
+  };
+  if (!battle_.surprise) for (std::size_t index = 0; index < battleMemberCount(); ++index)
+    includeEmptySubject(false, static_cast<int>(index), actors_.at(party_[index]));
+  if (!battle_.preemptive) for (std::size_t index = 0; index < battle_.enemies.size(); ++index)
+    includeEmptySubject(true, static_cast<int>(index), battle_.enemies[index]);
   std::stable_sort(battle_.actions.begin(), battle_.actions.end(), [](const Action& a, const Action& b) { return a.enemy != b.enemy ? !a.enemy : a.subject < b.subject; });
   for (auto& action : battle_.actions) {
+    if (std::isinf(action.speed)) continue;
     auto& battler = action.enemy ? battle_.enemies[action.subject] : actors_.at(party_[action.subject]);
     const auto& skill = database_[action.item ? "items" : "skills"][action.id];
-    action.speed = static_cast<int>(parameter(battler, 6)) + randomInt(static_cast<int>(std::floor(5 + parameter(battler, 6) / 4))) + skill["speed"].integer() + ((!action.item && action.id == 1) ? static_cast<int>(trait(battler, 33, 0, false)) : 0);
+    double attackSpeed = 0;
+    if (!action.item && action.id == 1) for (const auto* object : traitObjects(battler)) for (const auto& entry : (*object)["traits"].array())
+      if (entry["code"].integer() == 33) attackSpeed += entry["value"].number();
+    action.speed = parameter(battler, 6) + randomInt(static_cast<int>(std::floor(5 + parameter(battler, 6) / 4))) + skill["speed"].number() + attackSpeed;
   }
-  std::map<std::pair<bool,int>,int> speeds;
+  std::map<std::pair<bool,int>,double> speeds;
   for (const auto& action : battle_.actions) {
     const auto key = std::make_pair(action.enemy, action.subject);
     const auto found = speeds.find(key);
@@ -341,6 +363,7 @@ void Session::beginTurn() {
   battleLog_->push({"wait"});
 }
 void Session::executeAction(const Action& selectedAction) {
+  if (std::isinf(selectedAction.speed)) return;
   Action action = selectedAction;
   auto& subject = action.enemy ? battle_.enemies[action.subject] : actors_.at(party_[action.subject]);
   if (subject.hp <= 0 || subject.hidden || subject.escaped || (!action.forced && restriction(subject) >= 4)) return;
@@ -421,7 +444,7 @@ void Session::endBattlerActions(Battler& battler) {
   battler.result = {};
   const auto states = battler.states;
   for (int state : states) if (database_["states"][state]["autoRemovalTiming"].integer() == 1 && battler.stateTurns[state] == 0) removeState(battler, state);
-  for (int parameter = 0; parameter < 8; ++parameter) if (battler.buffs[parameter] && battler.buffTurns[parameter] == 0) {
+  for (int parameter = 0; parameter < 8; ++parameter) if (battler.hp > 0 && !battler.hidden && battler.buffs[parameter] && battler.buffTurns[parameter] == 0) {
     battler.buffs[parameter] = 0; battler.result.removedBuffs.push_back(parameter);
   }
   refreshBattler(battler);
@@ -499,7 +522,14 @@ void Session::finishBattle(int result) {
   if (hasPartyAbility(4)) gold *= 2;
   gold_ = std::clamp(gold_ + gold, 0, 99999999);
   if (totalExp > 0) {
-    message_.lines.emplace_back(battleMessage("obtainExp", {std::to_string(totalExp), TextManager::exp(*this)}));
+    message_.lines.emplace_back("\\." + battleMessage("obtainExp", {std::to_string(totalExp), TextManager::exp(*this)}));
+  }
+  if (gold > 0) message_.lines.emplace_back("\\." + battleMessage("obtainGold", {std::to_string(gold)}));
+  if (!drops.empty()) {
+    message_.pageBreaks.insert(static_cast<int>(message_.lines.size()));
+    for (const auto& [kind, id] : drops) message_.lines.emplace_back(battleMessage("obtainItem", {database_[kind][id]["name"].text()}));
+  }
+  if (totalExp > 0) {
     for (int id : party_) {
       auto& actor = actors_.at(id);
       {
@@ -508,11 +538,6 @@ void Session::finishBattle(int result) {
         changeActorExp(actor, actor.exp[actor.classId] + gained, true);
       }
     }
-  }
-  if (gold > 0) message_.lines.emplace_back(battleMessage("obtainGold", {std::to_string(gold)}));
-  if (!drops.empty()) {
-    message_.pageBreaks.insert(static_cast<int>(message_.lines.size()));
-    for (const auto& [kind, id] : drops) message_.lines.emplace_back(battleMessage("obtainItem", {database_[kind][id]["name"].text()}));
   }
   if (result == 0) AudioManager::playMe(*this, (system_.victoryMe.null() ? database_["system"]["victoryMe"] : system_.victoryMe));
   if (result == 2) AudioManager::playMe(*this, (system_.defeatMe.null() ? database_["system"]["defeatMe"] : system_.defeatMe));
@@ -537,9 +562,10 @@ void Session::abortBattle() {
 void Session::leaveBattle() {
   if (battleTest_) { AudioManager::stopBgm(*this); finished_ = true; return; }
   const int result = battle_.result;
-  for (int id : party_) {
-    auto& value = actors_.at(id); value.guarding = false; value.escaped = false; value.hidden = false;
-    if (result == 2 && battle_.canLose && value.hp == 0) { value.hp = 1; removeState(value, 1); }
+  for (std::size_t index = 0; index < party_.size(); ++index) {
+    auto& value = actors_.at(party_[index]);
+    if (result == 2 && battle_.canLose && index < 4 && !value.hidden && value.hp == 0) { value.hp = 1; removeState(value, 1); }
+    value.guarding = false; value.escaped = false; value.hidden = false;
     auto states = value.states; for (int state : states) if (database_["states"][state]["removeAtBattleEnd"].boolean()) removeState(value, state);
     value.buffs.fill(0); value.buffTurns.fill(0); if (!hasSpecialFlag(value, 3)) value.tp = 0;
   }
@@ -673,7 +699,7 @@ bool Session::useItem(int id, int target, bool skill) {
   else if (item["consumable"].boolean()) --inventory_[id];
   const int repeats = std::max(0, item["repeats"].integer(1) + ((skill && id == 1) ? static_cast<int>(std::max(0.0, trait(subject, 34, 0, false))) : 0));
   if (all) { for (int actorId : party_) for (int repeat = 0; repeat < repeats; ++repeat) apply(subject, actors_.at(actorId), item); }
-  else for (int repeat = 0; repeat < repeats; ++repeat) apply(subject, item["scope"].integer() == 11 ? subject : actors_.at(party_[target]), item);
+  else for (int repeat = 0; repeat < repeats; ++repeat) apply(subject, actors_.at(party_[target]), item);
   applyGlobalEffects(item);
   if (skill) SoundManager::playUseSkill(*this);
   else SoundManager::playUseItem(*this);

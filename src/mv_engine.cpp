@@ -108,6 +108,7 @@ void Session::newGame() {
   followersVisible_ = database_["system"]["optFollowers"].boolean();
   followersGathering_ = false; destination_.reset(); mapTouchCount_ = 0; setupVehicles();
   pendingTransfer_.reset();
+  transferFadeStarted_ = false;
   interpreter_.waitingRoute.reset();
   DataManager::selectSavefileForNewGame(*this);
   const auto& system = database_["system"];
@@ -148,14 +149,28 @@ void Session::transfer(int id, int x, int y, int direction) {
       event.character.realX = event.character.x; event.character.realY = event.character.y;
       events_.push_back(event);
     }
-    encounterCount_ = randomInt(map()["encounterStep"].integer(30)) + randomInt(map()["encounterStep"].integer(30)) + 1;
     if (map()["autoplayBgm"].boolean()) {
       if (vehicleType_ >= 0) vehicleWalkingBgm_ = map()["bgm"];
       else AudioManager::playBgm(*this, map()["bgm"]);
     }
     if (map()["autoplayBgs"].boolean()) AudioManager::playBgs(*this, map()["bgs"]);
   }
+  centerPlayer();
+  encounterCount_ = randomInt(map()["encounterStep"].integer(30)) + randomInt(map()["encounterStep"].integer(30)) + 1;
   refreshNeeded_ = true; refreshIfNeeded();
+}
+
+void Session::centerPlayer() {
+  const double visibleX = screenWidth_ / 48.0, visibleY = screenHeight_ / 48.0;
+  const double x = player_.x - (visibleX - 1) / 2, y = player_.y - (visibleY - 1) / 2;
+  const double width = map()["width"].number(), height = map()["height"].number();
+  const double endX = width - visibleX, endY = height - visibleY;
+  const double displayX = loopHorizontal() ? std::fmod(std::fmod(x, width) + width, width) : endX < 0 ? endX / 2 : std::clamp(x, 0.0, endX);
+  const double displayY = loopVertical() ? std::fmod(std::fmod(y, height) + height, height) : endY < 0 ? endY / 2 : std::clamp(y, 0.0, endY);
+  savedCamera_ = std::array{displayX, displayY};
+  mapState_.lastDisplayX = displayX; mapState_.lastDisplayY = displayY;
+  mapState_.parallaxX = loopHorizontal() ? x : displayX;
+  mapState_.parallaxY = loopVertical() ? y : displayY;
 }
 
 bool Session::pageEligible(const Value& page, int eventId) const {
@@ -280,6 +295,7 @@ bool Session::move(Character& character, int direction) {
   character.x = roundMapX(character.x + dx(direction)); character.y = roundMapY(character.y + dy(direction));
   character.realX = character.x - dx(direction); character.realY = character.y - dy(direction); character.stopCount = 0;
   if (tileFlag(character.x, character.y, 32) && !character.directionFix) character.direction = 8;
+  if (&character == &player_ && vehicleType_ < 0 && !character.routeForcing) ++steps_;
   return true;
 }
 void Session::jumpCharacter(Character& c, int xPlus, int yPlus) {
@@ -364,6 +380,7 @@ void Session::updateRoute(Character& c) {
           chaseCharacter(followers_[index], index == 0 ? player_ : followers_[index - 1]);
         c.x = roundMapX(c.x + dx(horizontal)); c.y = roundMapY(c.y + dy(vertical));
         c.realX = c.x - dx(horizontal); c.realY = c.y - dy(vertical); c.stopCount = 0;
+        if (&c == &player_ && vehicleType_ < 0 && !c.routeForcing) ++steps_;
       }
       if (c.direction == 10 - horizontal) setDirection(horizontal);
       if (c.direction == 10 - vertical) setDirection(vertical);
@@ -816,9 +833,11 @@ bool Session::command(const Value& entry, Interpreter& context) {
       refreshNeeded_ = true; return true;
     }
     case 201: {
+      if (battle_.active || message_.busy) return false;
       const bool indirect = p[0].integer() != 0;
-      pendingTransfer_ = std::array<int, 4>{indirect ? variable(p[1].integer()).integer() : p[1].integer(),
-        indirect ? variable(p[2].integer()).integer() : p[2].integer(), indirect ? variable(p[3].integer()).integer() : p[3].integer(), p[4].integer()};
+      pendingTransfer_ = std::array<int, 5>{indirect ? variable(p[1].integer()).integer() : p[1].integer(),
+        indirect ? variable(p[2].integer()).integer() : p[2].integer(), indirect ? variable(p[3].integer()).integer() : p[3].integer(), p[4].integer(), p[5].integer()};
+      transferFadeStarted_ = false;
       ++context.index; return false;
     }
     case 204:
@@ -1089,13 +1108,13 @@ void Session::step(const Input& input) {
   const bool hadMessage = message_.busy;
   auto updateMain = [&]() -> bool {
     bool transferred = false;
-    updateUi(input, ok, cancel, repeatedDirection);
+    if (!pendingTransfer_) updateUi(input, ok, cancel, repeatedDirection);
     if (ui_.scene != Scene::map) return false;
     const bool okBlockedByMessage = hadMessage && !message_.busy;
     updateInterpreter();
   updateMapTouch(input);
   if (!player_.moving()) playerDashing_ = ((input.dash != alwaysDash_) || destination_.has_value()) && !map()["disableDashing"].boolean() && !player_.routeForcing && vehicleType_ < 0;
-  if (!interpreter_.running && !message_.busy && !player_.moving() && player_.jumpCount == 0 && !player_.routeForcing && !followersGathering_ && !vehicleGettingOn_ && !vehicleGettingOff_ && (vehicleType_ != 2 || vehicles_[2].altitude >= 48)) {
+  if (!pendingTransfer_ && !interpreter_.running && !message_.busy && !player_.moving() && player_.jumpCount == 0 && !player_.routeForcing && !followersGathering_ && !vehicleGettingOn_ && !vehicleGettingOff_ && (vehicleType_ != 2 || vehicles_[2].altitude >= 48)) {
     const int direction = input.direction ? input.direction : destination_ ? findDirectionTo(player_, (*destination_)[0], (*destination_)[1]) : 0;
     if (direction) {
       if (!move(player_, direction)) startEvent(roundMapX(player_.x + dx(direction)), roundMapY(player_.y + dy(direction)), false);
@@ -1151,7 +1170,6 @@ void Session::step(const Input& input) {
     advanceInterpreter(event.parallel);
   }
   if (wasMoving && !player_.moving()) {
-    if (vehicleType_ < 0 && !player_.routeForcing) ++steps_;
     if (!interpreter_.running) {
       for (int id : party_) actorWalk(actors_.at(id));
       startEvent(player_.x, player_.y, false);
@@ -1165,15 +1183,23 @@ void Session::step(const Input& input) {
   updateMapState();
   updateTimer();
     if (pendingTransfer_ && !message_.closing) {
-      const auto target = *pendingTransfer_; pendingTransfer_.reset();
-      transfer(target[0], target[1], target[2], target[3]);
-      transferred = true;
+      const auto target = *pendingTransfer_;
+      if (!transferFadeStarted_) {
+        transferFadeStarted_ = true;
+        if (target[4] != 2) startSceneFade(true, 24, target[4] == 1);
+      }
+      if (target[4] == 2 || sceneFadeDuration_ <= 0) {
+        pendingTransfer_.reset(); transferFadeStarted_ = false;
+        transfer(target[0], target[1], target[2], target[3]);
+        if (target[4] != 2) startSceneFade(false, 24, target[4] == 1);
+        transferred = true;
+      }
     }
     updateScreenState();
     return transferred;
   };
   const bool transferred = updateMain();
-  if (!transferred && ui_.scene == Scene::map && (interpreter_.running || message_.busy || std::any_of(events_.begin(), events_.end(), [](const Event& value) { return value.starting; }))
+  if (!transferred && !pendingTransfer_ && ui_.scene == Scene::map && (interpreter_.running || message_.busy || std::any_of(events_.begin(), events_.end(), [](const Event& value) { return value.starting; }))
       && (okAge_ >= 24 || input.touchLongPressed)) updateMain();
   if (!party_.empty() && std::all_of(party_.begin(), party_.end(), [&](int id) { return actors_.at(id).hp <= 0; })) { openGameOver(); return; }
 }

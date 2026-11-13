@@ -62,6 +62,8 @@ Presentation::Presentation(RuntimeCore& core, Session& session, Value settings)
   const auto canvas = core_.canvases().create(core_.width(), core_.height());
   if (!canvas) throw std::runtime_error("cannot create UI text surface");
   globalTextCanvas_ = textCanvas_ = canvas->handle;
+  textWidth_ = core_.width();
+  textHeight_ = core_.height();
 }
 Presentation::~Presentation() {
   session_.setEnemyBitmapHeightResolver({});
@@ -278,6 +280,19 @@ void Presentation::window(int x,int y,int width,int height,int selected,int rows
   else if(selected>=0&&rows>0)window->setCursorRect(0,selected%rows*36,std::max(0,width-36),36);else window->setCursorRect(0,0,0,0);
   streamUiWindow(*window);
 }
+void Presentation::drawUiOp(CanvasHandle canvas, int offsetX, int offsetY, const UiDrawOp& op) {
+  if (const auto* textOp = std::get_if<UiTextOp>(&op)) {
+    const double x = textOp->x - offsetX;
+    const double y = textOp->y - offsetY;
+    core_.canvases().drawText(canvas, fonts_, textOp->text, x, y, textOp->size, 128, 4);
+    core_.canvases().drawText(canvas, fonts_, textOp->text, x, y, textOp->size, textOp->fill);
+  } else if (const auto* gaugeOp = std::get_if<UiGaugeOp>(&op)) {
+    const std::vector<std::uint8_t> clip(static_cast<std::size_t>(gaugeOp->width) * gaugeOp->height, 255);
+    if (!core_.canvases().compositePixels(canvas, gaugeOp->x - offsetX, gaugeOp->y - offsetY, gaugeOp->width, gaugeOp->height, gaugeOp->pixels, clip, CanvasComposite::sourceOver, 1)) {
+      throw std::runtime_error("cannot draw status gauge");
+    }
+  }
+}
 void Presentation::streamUiWindow(core::Window& window) {
   flushUiText();
   if(!uiLayerState_) {
@@ -285,42 +300,87 @@ void Presentation::streamUiWindow(core::Window& window) {
     uiLayerState_=uiLayer_.begin(core_.renderer());
   }
   uiLayer_.renderWindow(core_.renderer(),*uiLayerState_,window);
-  const WindowKey key{int(window.position.x),int(window.position.y),int(window.width),int(window.height),uiWindowOrdinal_++};
-  auto& canvas=uiTextCanvases_[key];
-  if(canvas) {
-    const auto previous=core_.canvases().info(canvas);
-    if(previous&&(previous->width!=core_.width()||previous->height!=core_.height())) {
-      core_.canvases().release(canvas);canvas=0;
-    }
-  }
-  if(!canvas) {
-    const auto created=core_.canvases().create(core_.width(),core_.height());
-    if(!created)throw std::runtime_error("cannot create window text contents");
-    canvas=created->handle;
-  }
-  textCanvas_=canvas;core_.canvases().clear(textCanvas_);
-  uiTextClip_=std::array<int,4>{static_cast<int>(window.position.x+window.padding),static_cast<int>(window.position.y+window.padding),static_cast<int>(window.position.x+window.width-window.padding),static_cast<int>(window.position.y+window.height-window.padding)};
-  if(window.openness<255)(*uiTextClip_)[2]=(*uiTextClip_)[0];
+  const int left = static_cast<int>(window.position.x + window.padding);
+  const int top = static_cast<int>(window.position.y + window.padding);
+  const int right = static_cast<int>(window.position.x + window.width - window.padding);
+  const int bottom = static_cast<int>(window.position.y + window.height - window.padding);
+  uiTextClip_ = std::array<int, 4>{left, top, right, bottom};
+  if (window.openness < 255) (*uiTextClip_)[2] = (*uiTextClip_)[0];
+  textOffsetX_ = left;
+  textOffsetY_ = top;
+  textWidth_ = window.openness < 255 ? 0 : std::max(0, right - left);
+  textHeight_ = window.openness < 255 ? 0 : std::max(0, bottom - top);
+  uiPendingSlot_ = uiWindowOrdinal_++;
+  pendingUiOps_.clear();
 }
 void Presentation::flushUiText() {
-  if(!uiTextDirty_)return;
-  const auto texture=core_.canvases().prepareImage(textCanvas_);
-  if(!texture)throw std::runtime_error("cannot prepare window text contents");
-  const auto first=core_.renderer().queuedCommandCount();
-  quad(*texture,0,0,core_.width(),core_.height(),0,0,core_.width(),core_.height());
-  if(uiTextClip_)core_.renderer().clipQueuedCommands(first,*uiTextClip_);
-  uiTextDirty_=false;
+  if (uiPendingSlot_) {
+    const std::size_t slotIndex = *uiPendingSlot_;
+    uiPendingSlot_.reset();
+    auto ops = std::move(pendingUiOps_);
+    pendingUiOps_.clear();
+    if (ops.empty() || textWidth_ <= 0 || textHeight_ <= 0) return;
+    auto& slot = uiTextCanvases_[slotIndex];
+    slot.used = true;
+    if (slot.canvas && (slot.width != textWidth_ || slot.height != textHeight_)) {
+      core_.canvases().release(slot.canvas);
+      slot.canvas = 0;
+      slot.ops.clear();
+      slot.valid = false;
+    }
+    if (!slot.canvas) {
+      const auto created = core_.canvases().create(textWidth_, textHeight_);
+      if (!created) throw std::runtime_error("cannot create window text contents");
+      slot.canvas = created->handle;
+      slot.width = textWidth_;
+      slot.height = textHeight_;
+      slot.ops.clear();
+      slot.valid = false;
+    }
+    if (!slot.valid || slot.ops != ops) {
+      core_.canvases().clear(slot.canvas);
+      for (const auto& op : ops) drawUiOp(slot.canvas, textOffsetX_, textOffsetY_, op);
+      slot.ops = std::move(ops);
+      slot.valid = true;
+    }
+    const auto texture = core_.canvases().prepareImage(slot.canvas);
+    if (!texture) throw std::runtime_error("cannot prepare window text contents");
+    const auto first = core_.renderer().queuedCommandCount();
+    quad(*texture, 0, 0, slot.width, slot.height, textOffsetX_, textOffsetY_, slot.width, slot.height);
+    if (uiTextClip_) core_.renderer().clipQueuedCommands(first, *uiTextClip_);
+    uiTextDirty_ = false;
+    return;
+  }
+  if (!uiTextDirty_ || !textCanvas_) return;
+  const auto texture = core_.canvases().prepareImage(textCanvas_);
+  if (!texture) throw std::runtime_error("cannot prepare window text contents");
+  const auto first = core_.renderer().queuedCommandCount();
+  quad(*texture, 0, 0, textWidth_, textHeight_, textOffsetX_, textOffsetY_, textWidth_, textHeight_);
+  if (uiTextClip_) core_.renderer().clipQueuedCommands(first, *uiTextClip_);
+  uiTextDirty_ = false;
 }
 void Presentation::finishUiLayer() {
   flushUiText();
+  for (auto it = uiTextCanvases_.begin(); it != uiTextCanvases_.end();) {
+    if (!it->second.used) {
+      if (it->second.canvas) core_.canvases().release(it->second.canvas);
+      it = uiTextCanvases_.erase(it);
+    } else {
+      it->second.used = false;
+      ++it;
+    }
+  }
   if(uiLayerState_)uiLayer_.end(core_.renderer(),*uiLayerState_);
   uiLayerState_.reset();uiTextClip_.reset();textCanvas_=globalTextCanvas_;
+  textOffsetX_=0;textOffsetY_=0;textWidth_=core_.width();textHeight_=core_.height();
 }
 void Presentation::clearUiContents() {
   goldWindow_.reset();
-  for(const auto& [key,canvas]:uiTextCanvases_){(void)key;core_.canvases().release(canvas);}
+  for(const auto& [slot,surface]:uiTextCanvases_){(void)slot;if(surface.canvas)core_.canvases().release(surface.canvas);}
   uiTextCanvases_.clear();
+  pendingUiOps_.clear();uiPendingSlot_.reset();
   uiLayerState_.reset();uiTextClip_.reset();uiTextDirty_=false;textCanvas_=globalTextCanvas_;
+  textOffsetX_=0;textOffsetY_=0;textWidth_=core_.width();textHeight_=core_.height();
 }
 void Presentation::goldWindow(int x, int y) {
   const auto toColor = [](std::uint32_t value) { return Color{std::uint8_t(value>>24),std::uint8_t(value>>16),std::uint8_t(value>>8),std::uint8_t(value)}; };
@@ -338,9 +398,19 @@ void Presentation::text(const std::string& value, double x, double y, int width,
   if (value.empty()) return;
   const double measured = core_.canvases().measureText(fonts_, value, size).value_or(0);
   const double destinationX = right ? x + width - measured : x;
-  core_.canvases().drawText(textCanvas_, fonts_, value, destinationX, y + (36 + size * 0.7F) / 2, size, 128, 4);
-  core_.canvases().drawText(textCanvas_, fonts_, value, destinationX, y + (36 + size * 0.7F) / 2, size, (colors_[std::clamp(color, 0, 31)] & 0xffffff00U) | static_cast<std::uint32_t>(255 * opacity));
-  uiTextDirty_=true;
+  const UiDrawOp op = UiTextOp{
+      value,
+      destinationX,
+      y + (36 + size * 0.7F) / 2,
+      size,
+      (colors_[std::clamp(color, 0, 31)] & 0xffffff00U) | static_cast<std::uint32_t>(255 * opacity),
+  };
+  if (uiPendingSlot_) {
+    if (textWidth_ > 0 && textHeight_ > 0) pendingUiOps_.push_back(op);
+    return;
+  }
+  drawUiOp(textCanvas_, textOffsetX_, textOffsetY_, op);
+  uiTextDirty_ = true;
 }
 double Presentation::textEx(const std::string& source, double x, double y, int /*width*/, int size, bool prepared, bool measureOnly) {
   const auto value = prepared ? source : Window_Base::processEscapeCodes(source,session_);
@@ -351,14 +421,7 @@ double Presentation::textEx(const std::string& source, double x, double y, int /
     return fontSize;
   };
   const auto lineHeight = [&](std::size_t start, int fontSize) {
-    int largest = fontSize;
-    for (std::size_t at = start; at < value.size() && value[at] != '\n'; ++at) {
-      if (value[at] != '\x1b' || at + 1 >= value.size()) continue;
-      const char code = value[++at];
-      fontSize = resizeFont(fontSize,code);
-      largest = std::max(largest,fontSize);
-    }
-    return largest + 8;
+    return Window_Base::textLineHeight(value, start, fontSize);
   };
   int height = lineHeight(0,size);
   int color = 0;
@@ -446,9 +509,13 @@ void Presentation::gauge(const Battler& actor, int stat, int x, int y, int width
     const auto color = column < filled ? static_cast<std::uint8_t>(std::floor(first + (last - first) * (column + 0.5) / filled + 0.5)) : static_cast<std::uint8_t>((colors_[19] >> shift) & 255);
     for (int row = 0; row < 6; ++row) pixels[(row * width + column) * 4 + channel] = color;
   }
-  const std::vector<std::uint8_t> clip(static_cast<std::size_t>(width) * 6, 255);
-  if (!core_.canvases().compositePixels(textCanvas_, x, y + 28, width, 6, pixels, clip, CanvasComposite::sourceOver, 1)) throw std::runtime_error("cannot draw status gauge");
-  uiTextDirty_=true;
+  const UiDrawOp op = UiGaugeOp{x, y + 28, width, 6, std::move(pixels)};
+  if (uiPendingSlot_) {
+    if (textWidth_ > 0 && textHeight_ > 0) pendingUiOps_.push_back(op);
+  } else {
+    drawUiOp(textCanvas_, textOffsetX_, textOffsetY_, op);
+    uiTextDirty_ = true;
+  }
   text(session_.database_["system"]["terms"]["basic"][3 + stat * 2].text(), x, y, 44, 16);
   if (stat == 2) { text(std::to_string(amount), x + width - 64, y, 64, 0, 28, true); return; }
   const int valueWidth = static_cast<int>(std::ceil(core_.canvases().measureText(fonts_, "0000", 28).value_or(0)));
@@ -492,8 +559,7 @@ void Presentation::messageBody() {
   if (message.scrolling) {
     core::Window window;window.move(0,0,core_.width(),core_.height());window.opacity=0;
     streamUiWindow(window);
-    for (std::size_t line = 0; line < message.lines.size(); ++line)
-      textEx(message.lines[line].text(), 24, static_cast<int>(19 + line*36 - message.scrollY), core_.width()-48);
+    textEx(message.scrollText, 24, 19 - message.scrollY, core_.width()-48, 28, true);
     return;
   }
   if (message.openness <= 0) return;
@@ -1097,25 +1163,52 @@ void Presentation::clearBattleContents() {
 }
 void Presentation::retainBattleContents(BattleWindow part, std::vector<std::string> key, const std::function<void()>& draw) {
   flushUiText();
+  const int x = uiTextClip_ ? (*uiTextClip_)[0] : 0;
+  const int y = uiTextClip_ ? (*uiTextClip_)[1] : 0;
+  const int width = uiTextClip_ ? std::max(0, (*uiTextClip_)[2] - (*uiTextClip_)[0]) : core_.width();
+  const int height = uiTextClip_ ? std::max(0, (*uiTextClip_)[3] - (*uiTextClip_)[1]) : core_.height();
+  if (width <= 0 || height <= 0) return;
   auto& contents = battleContents_[static_cast<std::size_t>(part)];
+  if (contents.canvas && (contents.width != width || contents.height != height)) {
+    core_.canvases().release(contents.canvas);
+    contents.canvas = 0;
+    contents.valid = false;
+  }
   if (!contents.canvas) {
-    // Preserve logical coordinates and the canvas-area-dependent text blending contract.
-    const auto canvas = core_.canvases().create(core_.width(), core_.height());
+    const auto canvas = core_.canvases().create(width, height);
     if (!canvas) throw std::runtime_error("cannot create battle window contents");
     contents.canvas = canvas->handle;
+    contents.width = width;
+    contents.height = height;
+    contents.valid = false;
   }
-  if (!contents.valid || contents.key != key) {
-    const auto previous = textCanvas_;
+  if (!contents.valid || contents.key != key || contents.x != x || contents.y != y) {
+    const auto previousCanvas = textCanvas_;
+    const int previousOffsetX = textOffsetX_;
+    const int previousOffsetY = textOffsetY_;
+    const int previousWidth = textWidth_;
+    const int previousHeight = textHeight_;
+    const bool previousDirty = uiTextDirty_;
     textCanvas_ = contents.canvas;
+    textOffsetX_ = x;
+    textOffsetY_ = y;
+    textWidth_ = width;
+    textHeight_ = height;
+    uiTextDirty_ = false;
     try { core_.canvases().clear(textCanvas_); draw(); }
-    catch (...) { textCanvas_ = previous; uiTextDirty_=false; throw; }
-    textCanvas_ = previous; uiTextDirty_=false;
-    contents.key = std::move(key); contents.valid = true;
+    catch (...) {
+      textCanvas_ = previousCanvas; textOffsetX_ = previousOffsetX; textOffsetY_ = previousOffsetY;
+      textWidth_ = previousWidth; textHeight_ = previousHeight; uiTextDirty_ = previousDirty;
+      throw;
+    }
+    textCanvas_ = previousCanvas; textOffsetX_ = previousOffsetX; textOffsetY_ = previousOffsetY;
+    textWidth_ = previousWidth; textHeight_ = previousHeight; uiTextDirty_ = previousDirty;
+    contents.key = std::move(key); contents.x = x; contents.y = y; contents.valid = true;
   }
   const auto texture=core_.canvases().prepareImage(contents.canvas);
   if(!texture)throw std::runtime_error("cannot prepare battle window contents");
   const auto first=core_.renderer().queuedCommandCount();
-  quad(*texture,0,0,core_.width(),core_.height(),0,0,core_.width(),core_.height());
+  quad(*texture,0,0,contents.width,contents.height,contents.x,contents.y,contents.width,contents.height);
   if(uiTextClip_)core_.renderer().clipQueuedCommands(first,*uiTextClip_);
 }
 void Presentation::battle() {
@@ -1272,7 +1365,7 @@ void Presentation::battle() {
       }
     }
     retainBattleContents(BattleWindow::selection,selectionKey,[&] {
-      for (int index = first; index < last; ++index) {
+      for (int index = firstTarget; index < last; ++index) {
         const auto rect = Window_Selectable::itemRectFor(index,box.width-36,columns,36,12,ui.targetTopRow);
         const int x = box.x+24+rect.x, y = box.y+18+rect.y;
         if (enemies) text(Window_BattleEnemy::nameFor(session_,targets[index]),x,y,rect.width-12);
@@ -1483,8 +1576,9 @@ void Presentation::render() {
     if(!created)throw std::runtime_error("cannot resize global text contents");
     globalTextCanvas_=created->handle;
   }
-  uiWindowOrdinal_=0;uiLayerState_.reset();uiTextClip_.reset();uiTextDirty_=false;
-  textCanvas_=globalTextCanvas_;core_.canvases().clear(textCanvas_);
+  uiWindowOrdinal_=0;uiPendingSlot_.reset();pendingUiOps_.clear();uiLayerState_.reset();uiTextClip_.reset();uiTextDirty_=false;
+  textCanvas_=globalTextCanvas_;textOffsetX_=0;textOffsetY_=0;textWidth_=core_.width();textHeight_=core_.height();
+  core_.canvases().clear(textCanvas_);
   const auto scene = session_.ui_.scene; const int width = core_.width(), height = core_.height();
   if (scene == Scene::title) {
     for (int layer = 1; layer <= 2; ++layer) { const auto name = session_.database_["system"][layer == 1 ? "title1Name" : "title2Name"].text(); if (name.empty()) continue; const auto source = image("img/titles" + std::to_string(layer) + "/" + name + ".png"); const float scale = std::max(static_cast<float>(width) / source.width, static_cast<float>(height) / source.height); quad(source.handle, 0, 0, source.width, source.height, (width - source.width * scale) / 2, (height - source.height * scale) / 2, source.width * scale, source.height * scale); }
@@ -1513,7 +1607,10 @@ void Presentation::render() {
   }
   finishUiLayer();
   if (scene == Scene::title && session_.ui_.age < 24) core_.renderer().queueQuad(0, 0, width, height, {0, 0, 0, std::floor(255 * (1 - session_.ui_.age / 24.0F)) / 255});
-  if (session_.sceneFadeOpacity_ > 0) core_.renderer().queueQuad(0, 0, width, height, {0, 0, 0, static_cast<float>(session_.sceneFadeOpacity_ / 255)});
+  if (session_.sceneFadeOpacity_ > 0) {
+    const float color = session_.sceneFadeWhite_ ? 1.0F : 0.0F;
+    core_.renderer().queueQuad(0, 0, width, height, {color, color, color, static_cast<float>(session_.sceneFadeOpacity_ / 255)});
+  }
   movie();
   if(movieAudio_)core_.media().setParameters(movieAudio_,core::Graphics::videoVolume,1,0);
   core::Graphics::presentOverlay();core::Graphics::tickEnd();++core::Graphics::frameCount;

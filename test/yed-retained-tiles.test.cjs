@@ -4,8 +4,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-function fixture() {
-  const context = { PMJS: {}, $gameMap: { currentMapLevel: 0 } };
+function fixture(yed) {
+  const context = { PMJS: {}, $gameMap: { currentMapLevel: 0 }, NativeHost: { plugins: { yed } } };
   vm.runInNewContext(fs.readFileSync(require.resolve('../js/pmjs-plugins/yed/retained-tiles.js'), 'utf8'), context);
   const rect = { pointsBuf: [], textures: [{}], calls: 0,
     addRect(...values) { this.calls++; this.pointsBuf.push(values[1], values[2], ...values.slice(3), 0, 0, values[0]); } };
@@ -232,4 +232,52 @@ test('windows over map edges compare the cells they show, with and without wrapp
   map.tiledData.layers[0].data[3] = 1;
   api.prepare(map, -1, 0);
   assert.ok(rect.calls > wrapped);
+});
+
+test('native window fallback still detects live mutations and camera changes', () => {
+  let reads = 0, comparisons = 0;
+  const { api, map, rect } = fixture({
+    readTileWindow() { reads++; return null; },
+    sameTileWindow() { comparisons++; return null; }
+  });
+  api.prepare(map, 0, 0);
+  api.prepare(map, 0, 0);
+  assert.ok(reads > 0);
+  assert.ok(comparisons > 0);
+  assert.equal(rect.calls, 4);
+  map.tiledData.layers[0].data[0] = 2;
+  api.prepare(map, 0, 0);
+  assert.equal(rect.calls, 8);
+  assert.equal(rect.pointsBuf[0], 16);
+  api.prepare(map, 1, 0);
+  assert.equal(rect.calls, 10);
+});
+
+test('native windows retain geometry while observing authored cell edits', {
+  skip: !process.env.PMJS_NATIVE_ADDON
+}, () => {
+  const native = require(process.env.PMJS_NATIVE_ADDON).plugins.yed;
+  let reads = 0, comparisons = 0;
+  const { api, map, rect } = fixture({
+    readTileWindow(...args) { reads++; return native.readTileWindow(...args); },
+    sameTileWindow(...args) { comparisons++; return native.sameTileWindow(...args); }
+  });
+  api.prepare(map, 0, 0);
+  api.prepare(map, 0, 0);
+  assert.equal(rect.calls, 4);
+  assert.ok(reads > 0 && comparisons > 0);
+  map.tiledData.layers[0].data[0] = 2;
+  api.prepare(map, 0, 0);
+  assert.equal(rect.calls, 8);
+  assert.equal(rect.pointsBuf[0], 16);
+  map.horizontalWrap = true;
+  map.verticalWrap = true;
+  api.prepare(map, -1, -1);
+  const painted = rect.calls;
+  api.prepare(map, -1, -1);
+  assert.equal(rect.calls, painted);
+  map.tiledData.layers[0].data[3] = 1;
+  api.prepare(map, -1, -1);
+  assert.equal(rect.calls, painted + 4);
+  assert.equal(rect.pointsBuf[0], 0);
 });

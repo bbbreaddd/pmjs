@@ -826,6 +826,7 @@ void registerGraphicsBindings(napi_env env, napi_value exports) {
   method(env, render, "createMesh", createMesh);
   method(env, render, "releaseMesh", releaseMesh);
   napi_value plugins = moduleObject(env), mpp = moduleObject(env), mv = moduleObject(env);
+  registerYedBindings(env, plugins);
 #ifdef PMJS_HAS_SKIA65
   napi_set_named_property(env, mpp, "polygonBitmaps", boolean(env, true));
 #else

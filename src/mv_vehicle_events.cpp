@@ -3,6 +3,7 @@
 #include "mv_map_extra.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 namespace pmjs::mv {
 namespace {
@@ -36,7 +37,7 @@ bool Session::vehicleLandingOk(int type) const {
   const int reverseBit = 1 << ((10 - player_.direction) / 2 - 1);
   if (!tilePassage(x, y, reverseBit)) return false;
   for (const auto& event : events_) if (event.priority == 1 && !event.character.through && event.character.x == x && event.character.y == y) return false;
-  for (int index = 0; index < 2; ++index) if (index != type && vehicles_[index].mapId == mapId_ && vehicles_[index].character.x == x && vehicles_[index].character.y == y) return false;
+  for (int index = 0; index < 2; ++index) if (!vehicles_[index].character.through && vehicles_[index].mapId == mapId_ && vehicles_[index].character.x == x && vehicles_[index].character.y == y) return false;
   return true;
 }
 
@@ -51,7 +52,7 @@ bool Session::toggleVehicle() {
       const bool through = player_.through; player_.through = true;
       move(player_, player_.direction); player_.through = through; player_.transparent = false;
     }
-    vehicleGettingOff_ = true; player_.moveSpeed = vehicleWalkSpeed_; player_.through = false;
+    vehicleGettingOff_ = true; player_.moveSpeed = 4; player_.through = false;
     encounterCount_ = randomInt(map()["encounterStep"].integer(30)) + randomInt(map()["encounterStep"].integer(30)) + 1;
     followersGathering_ = true;
     if (!vehicleWalkingBgm_.null()) AudioManager::playBgm(*this, vehicleWalkingBgm_);
@@ -61,7 +62,7 @@ bool Session::toggleVehicle() {
   if (vehicles_[2].mapId == mapId_ && vehicles_[2].character.x == player_.x && vehicles_[2].character.y == player_.y) vehicleType_ = 2;
   else for (int index : {1, 0}) if (vehicles_[index].mapId == mapId_ && vehicles_[index].character.x == x && vehicles_[index].character.y == y) { vehicleType_ = index; break; }
   if (vehicleType_ < 0) return false;
-  vehicleWalkSpeed_ = player_.moveSpeed; vehicleWalkingBgm_ = savedBgm_;
+  vehicleWalkSpeed_ = player_.moveSpeed;
   vehicleGettingOn_ = true;
   if (vehicleType_ != 2) {
     const bool through = player_.through; player_.through = true;
@@ -76,6 +77,7 @@ void Session::updateVehicles() {
     auto& vehicle = vehicles_[vehicleType_];
     if (!player_.directionFix) player_.direction = vehicle.character.direction;
     player_.moveSpeed = vehicle.character.moveSpeed; player_.transparent = true; player_.through = vehicleType_ == 2;
+    vehicleWalkingBgm_ = AudioManager::saveBgm(*this);
     vehicle.driving = true; vehicle.character.walkAnime = true; vehicle.character.stepAnime = true;
     vehicleGettingOn_ = false;
     const auto& bgm = system_.vehicleBgm[vehicleType_].null() ? vehicle.bgm : system_.vehicleBgm[vehicleType_];
@@ -108,9 +110,11 @@ bool Session::vehicleEventCommand(const Value& entry, Interpreter& context) {
       auto& vehicle = vehicles_[index];
       const bool indirect = p[1].integer() != 0;
       vehicle.mapId = indirect ? variable(p[2].integer()).integer() : p[2].integer();
-      vehicle.character.x = indirect ? variable(p[3].integer()).integer() : p[3].integer();
-      vehicle.character.y = indirect ? variable(p[4].integer()).integer() : p[4].integer();
-      vehicle.character.realX = vehicle.character.x; vehicle.character.realY = vehicle.character.y;
+      const double x = indirect ? variable(p[3].integer()).number() : p[3].number();
+      const double y = indirect ? variable(p[4].integer()).number() : p[4].number();
+      vehicle.character.x = Value(std::floor(x + 0.5)).integer();
+      vehicle.character.y = Value(std::floor(y + 0.5)).integer();
+      vehicle.character.realX = x; vehicle.character.realY = y;
       if (vehicle.driving) {
         vehicle.mapId = mapId_; vehicle.character.x = player_.x; vehicle.character.y = player_.y;
         vehicle.character.realX = player_.realX; vehicle.character.realY = player_.realY; vehicle.character.direction = player_.direction;

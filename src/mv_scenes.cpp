@@ -9,8 +9,9 @@
 #include <stdexcept>
 
 namespace pmjs::mv {
-void Session::startSceneFade(bool fadeOut, int duration) {
+void Session::startSceneFade(bool fadeOut, int duration, bool white) {
   sceneFadeOut_ = fadeOut;
+  sceneFadeWhite_ = white;
   sceneFadeDuration_ = duration;
   sceneFadeOpacity_ = fadeOut ? 0 : 255;
 }
@@ -19,6 +20,37 @@ void Session::updateSceneFade() {
   if (sceneFadeOut_) sceneFadeOpacity_ += (255 - sceneFadeOpacity_) / sceneFadeDuration_;
   else sceneFadeOpacity_ -= sceneFadeOpacity_ / sceneFadeDuration_;
   --sceneFadeDuration_;
+}
+void Session::beginSceneTransition(Scene scene, int duration) {
+  pendingScene_ = scene;
+  const double seconds = duration / 60.0;
+  AudioManager::fadeOutBgm(*this, seconds);
+  AudioManager::fadeOutBgs(*this, seconds);
+  AudioManager::fadeOutMe(*this, seconds);
+  startSceneFade(true, duration);
+}
+bool Session::updateSceneTransition(bool fadeComplete) {
+  if (!pendingScene_) {
+    if (ui_.scene == Scene::title && !newGamePending_ && fadeComplete)
+      titleWindowOpenness_ = std::min(255, titleWindowOpenness_ + 32);
+    return false;
+  }
+  if (!fadeComplete) return true;
+  const Scene next = *pendingScene_;
+  pendingScene_.reset();
+  if (next == Scene::title) {
+    if (ui_.scene == Scene::gameOver) AudioManager::stopAll(*this);
+    openTitle();
+  } else if (next == Scene::map) {
+    SceneManager::clearStack(*this);
+    SceneManager::gotoScene(*this, Scene::map);
+    ticks_ = pendingLoadFrames_;
+    if (!pendingLoadBgm_.null()) AudioManager::playBgm(*this, pendingLoadBgm_, 0.0);
+    if (!pendingLoadBgs_.null()) AudioManager::playBgs(*this, pendingLoadBgs_, 0.0);
+    pendingLoadBgm_ = {}; pendingLoadBgs_ = {};
+    startSceneFade(false, 24);
+  }
+  return true;
 }
 void Session::configure(const Value& configuration) {
   Value merged = ConfigManager::save(*this);
@@ -43,8 +75,9 @@ void Session::openTitle() {
   SceneManager::clearStack(*this);
   SceneManager::gotoScene(*this, Scene::title);
   finished_ = false;
-  newGamePending_ = false; titleWindowOpenness_ = 255;
-  sceneFadeOpacity_ = 0; sceneFadeDuration_ = 0;
+  newGamePending_ = false; titleWindowOpenness_ = 0;
+  pendingScene_.reset();
+  startSceneFade(false, 24);
   const bool saved = DataManager::isAnySavefileExists(*this);
   ui_.cursor = lastTitleCommand_ >= 0 ? lastTitleCommand_ : saved ? 1 : 0;
   AudioManager::playBgm(*this, database_["system"]["titleBgm"]);
@@ -71,7 +104,9 @@ void Session::completeStorage(bool success) {
   else SoundManager::playSave(*this);
   if (success) {
     lastAccessedSavefileId_ = ui_.cursor + 1;
-    if (loading) { SceneManager::clearStack(*this); SceneManager::gotoScene(*this,Scene::map); }
+    if (loading) {
+      beginSceneTransition(Scene::map, 24);
+    }
     else if (SceneManager::hasPrevious(*this)) SceneManager::popScene(*this);
     else SceneManager::gotoScene(*this,Scene::menu);
   }
@@ -128,7 +163,8 @@ bool Session::useItemUntargeted(int id, bool skill) {
   if (!canUse(subject, item) || (!skill && inventory_[id] <= 0)) return false;
   if (skill) { subject.mp -= static_cast<int>(std::floor(item["mpCost"].number() * trait(subject, 23, 4, true))); subject.tp -= item["tpCost"].integer(); }
   else if (item["consumable"].boolean()) --inventory_[id];
-  AudioManager::playSe(*this, database_["system"]["sounds"][skill ? 24 : 23]);
+  if (skill) SoundManager::playUseSkill(*this);
+  else SoundManager::playUseItem(*this);
   applyGlobalEffects(item);
   return true;
 }
@@ -203,7 +239,7 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
   auto leaveEventScene = [&] { if (SceneManager::hasPrevious(*this)) SceneManager::popScene(*this); else SceneManager::gotoScene(*this, Scene::map); };
   if (message_.busy) {
     if (message_.scrolling) {
-      if (Window_ScrollText::updateMessage(message_,inputState)) { message_ = {}; messageAge_ = 0; }
+      if (Window_ScrollText::updateMessage(message_,inputState,*this)) { message_ = {}; messageAge_ = 0; }
       return;
     }
     const bool messageOk = inputState.okRepeated.value_or(ok) || inputState.touchRepeated;
@@ -240,7 +276,7 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
     return;
   }
   if (ui_.scene == Scene::gameOver) {
-    if (sceneFadeDuration_ <= 0 && (ok || inputState.touchTriggered)) openTitle();
+    if (sceneFadeDuration_ <= 0 && (ok || inputState.touchTriggered)) beginSceneTransition(Scene::title, 24);
     return;
   }
   if (ui_.scene == Scene::map) {
@@ -300,6 +336,7 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
       else if (ok && !party_.empty()) {
         const int actor = ui_.cursor;
         const auto& command = commands.at(ui_.pendingId).symbol;
+        ui_.cursor = ui_.pendingId; ui_.category = 0;
         push(command == "skill" ? Scene::skill : command == "equip" ? Scene::equip : Scene::status); ui_.actor = actor; menuActorId_ = party_[actor];
       }
       return;
@@ -308,7 +345,7 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
       const auto endCommands = Window_GameEnd::makeCommands(*this);
       cursor(static_cast<int>(endCommands.size()));
       if (cancel || (ok && endCommands[ui_.cursor].symbol == "cancel")) { ui_.category = 0; ui_.cursor = ui_.commandCursor; sound(2); }
-      else if (ok) { sound(1); AudioManager::fadeOutBgm(*this, 24 / 60.0); AudioManager::fadeOutBgs(*this, 24 / 60.0); AudioManager::fadeOutMe(*this, 24 / 60.0); openTitle(); }
+      else if (ok) { sound(1); beginSceneTransition(Scene::title, 24); }
       return;
     }
     ui_.cursor = std::clamp(ui_.cursor, 0, static_cast<int>(commands.size()) - 1);
@@ -450,6 +487,7 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
       if (cancel) leaveMenuSubScene();
       else if (ok) {
         const auto& command = commands.at(ui_.cursor).symbol;
+        sound(1);
         if (command == "equip") { ui_.commandCursor = ui_.cursor; ui_.category = 1; ui_.cursor = 0; }
         else {
           SoundManager::playEquip(*this);

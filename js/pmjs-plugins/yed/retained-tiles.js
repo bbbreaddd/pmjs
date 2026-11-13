@@ -108,6 +108,12 @@
   var cellScratch = [];
   function readCells(map, layer, x, y, size) {
     var width = map._mapWidth, height = map._mapHeight, data = layer.data, count = 0;
+    var native = typeof NativeHost !== 'undefined' && NativeHost.plugins && NativeHost.plugins.yed;
+    if (native && typeof native.readTileWindow === 'function') {
+      var values = native.readTileWindow(data, width, height, x, y, size[0], size[1],
+        !!map.horizontalWrap, !!map.verticalWrap);
+      if (values !== null) return values;
+    }
     var wraps = map.horizontalWrap || map.verticalWrap;
     cellScratch.length = size[0] * size[1];
     for (var row = 0; row < size[1]; row++) {
@@ -297,6 +303,15 @@
           }
         },
         function(target, layer, cx, cy, size) {
+          var native = typeof NativeHost !== 'undefined' && NativeHost.plugins && NativeHost.plugins.yed;
+          var compared = native && typeof native.sameTileWindow === 'function' ?
+            native.sameTileWindow(layer.data, state.values, target._mapWidth, target._mapHeight,
+              cx, cy, size[0], size[1], cursor, !!target.horizontalWrap, !!target.verticalWrap) : null;
+          if (typeof compared === 'boolean') {
+            cursor += size[0] * size[1];
+            if (!compared) same = false;
+            return;
+          }
           var values = readCells(target, layer, cx, cy, size);
           for (var index = 0; index < values.length; index++) {
             if (state.values[cursor++] !== values[index]) same = false;

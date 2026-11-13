@@ -195,20 +195,46 @@ PixelBitmap& PixelBitmap::operator=(const PixelBitmap& source) {
   backing_.reset();requestedImage_.reset();originalImage_=source.originalImage_;lifetime_=std::make_shared<int>(0);failure_={};loadListeners.clear();
   width=source.width;height=source.height;url=source.url;smooth=source.smooth;loaded=source.loaded;error=source.error;loadingState=source.loadingState;
   paintOpacity=source.paintOpacity;fontSize=source.fontSize;fontFace=source.fontFace;fontItalic=source.fontItalic;textColor=source.textColor;outlineColor=source.outlineColor;outlineWidth=source.outlineWidth;
-  pixels=source.pixels;
-  if (!pixels.empty()) commitPixels();
+  pixels.clear();
+  if (source.backing_ && source.backing_->image) {
+    backing_ = source.backing_;
+  } else if (source.backing_ && source.backing_->canvas) {
+    auto& core = runtime(source.backing_->services);
+    const auto image = source.texture();
+    const auto canvas = core.canvases().create(width, height);
+    if (!image || !canvas) throw std::runtime_error("cannot copy bitmap surface");
+    backing_ = std::make_shared<BitmapBacking>();
+    backing_->services = source.backing_->services;
+    backing_->canvas = canvas->handle;
+    surfaces.push_back(backing_);
+    if (!core.canvases().drawImage(backing_->canvas, image->handle, 0, 0, width, height,
+                                  0, 0, width, height, 1, false))
+      throw std::runtime_error("cannot copy bitmap pixels");
+  }
   dirty=true;return *this;
 }
 std::uint32_t PixelBitmap::nativeCanvas() const {
-  if (!backing_) {
-    auto& core=runtime();const auto surface=core.canvases().create(std::max(1,width),std::max(1,height));
+  if (!backing_ || !backing_->canvas) {
+    const auto services = backing_ ? backing_->services : active;
+    auto& core = runtime(services);
+    const auto surface = core.canvases().create(std::max(1,width), std::max(1,height));
     if (!surface) throw std::runtime_error("cannot allocate bitmap surface");
-    backing_=std::make_shared<BitmapBacking>();backing_->services=active;backing_->canvas=surface->handle;surfaces.push_back(backing_);
+    auto writable = std::make_shared<BitmapBacking>();
+    writable->services = services;
+    writable->canvas = surface->handle;
+    if (backing_ && backing_->image &&
+        !core.canvases().drawImage(writable->canvas, backing_->image, 0, 0, width, height,
+                                   0, 0, width, height, 1, false))
+      throw std::runtime_error("cannot copy bitmap image");
+    backing_ = std::move(writable);
+    surfaces.push_back(backing_);
   }
   runtime(backing_->services);return backing_->canvas;
 }
 std::optional<ImageInfo> PixelBitmap::texture() const {
-  auto& core=runtime(backing_ ? backing_->services : active);const auto image=core.canvases().prepareImage(nativeCanvas());
+  auto& core=runtime(backing_ ? backing_->services : active);
+  if (backing_ && backing_->image) return core.images().inspect(backing_->image);
+  const auto image=core.canvases().prepareImage(nativeCanvas());
   return image ? core.images().inspect(*image) : std::optional<ImageInfo>{};
 }
 void PixelBitmap::syncPixels() {
@@ -222,9 +248,9 @@ void PixelBitmap::commitPixels() {
   if (!core.canvases().replacePixels(nativeCanvas(),pixels,PixelEncoding::StraightRGBA8)) throw std::runtime_error("cannot write bitmap pixels");
   dirty=true;
 }
-void PixelBitmap::changed() { dirty=true;syncPixels(); }
+void PixelBitmap::changed() { dirty=true;pixels.clear(); }
 void PixelBitmap::resize(int w,int h) {
-  width=std::max(1,w);height=std::max(1,h);backing_.reset();nativeCanvas();changed();
+  width=std::max(1,w);height=std::max(1,h);backing_.reset();changed();
 }
 void PixelBitmap::touch() { touchedAt=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();if(cacheEntry)cacheEntry->touch(); }
 void PixelBitmap::checkDirty() { if (dirty) { texture();dirty=false; } }
@@ -266,14 +292,13 @@ void PixelBitmap::loadNow() {
     if(requested)source=core.images().inspect(requestedImage_->image);
     else if(const auto loaded=bitmapSource(url,core)){source=loaded->info;borrowed=!loaded->owned;}
     if (!source) throw std::runtime_error("cannot load bitmap");
-    resize(source->width,source->height);
-    const bool copied=core.canvases().drawImage(nativeCanvas(),source->handle,0,0,width,height,0,0,width,height,1,smooth);
-    if (!copied) { if(!borrowed)core.images().release(source->handle);throw std::runtime_error("cannot realize loaded bitmap"); }
     if(requested)originalImage_=requestedImage_;
     else {
       if(borrowed&&!core.images().retain(source->handle))throw std::runtime_error("cannot retain bitmap source image");
       originalImage_=std::make_shared<BitmapBacking>();originalImage_->services=active;originalImage_->image=source->handle;surfaces.push_back(originalImage_);
     }
+    width = source->width; height = source->height;
+    backing_ = originalImage_;
     requestedImage_.reset();
     loaded=true;error=false;loadingState="loaded";changed();
   } catch (const std::exception&) { loaded=false;loadingState="requesting";if(failure_)failure_();else{error=true;loadingState="error";} }
@@ -328,7 +353,9 @@ void PixelBitmap::drawCircle(double x,double y,double radius,const std::string& 
 void PixelBitmap::blt(const PixelBitmap& source,double sx,double sy,double sw,double sh,double dx,double dy,double dw,double dh) {
   if(std::isnan(dw)||dw==0)dw=sw;if(std::isnan(dh)||dh==0)dh=sh;
   if(sx<0||sy<0||sw<=0||sh<=0||sx+sw>source.width||sy+sh>source.height||dw<=0||dh<=0)return;
-  runtime(backing_ ? backing_->services : active).canvases().drawImage(nativeCanvas(),source.nativeCanvas(),sx,sy,sw,sh,dx,dy,dw,dh,paintOpacity/255.0,true);changed();
+  const auto image = source.texture();
+  if (!image) throw std::runtime_error("cannot prepare blit source");
+  runtime(backing_ ? backing_->services : active).canvases().drawImage(nativeCanvas(),image->handle,sx,sy,sw,sh,dx,dy,dw,dh,paintOpacity/255.0,true);changed();
 }
 void PixelBitmap::bltImage(const PixelBitmap& source,double sx,double sy,double sw,double sh,double dx,double dy,double dw,double dh) {
   if(std::isnan(dw)||dw==0)dw=sw;if(std::isnan(dh)||dh==0)dh=sh;

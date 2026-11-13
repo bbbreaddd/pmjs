@@ -216,6 +216,7 @@ add_library(pmjs_native MODULE
   src/node_addon_common.cpp
   src/node_addon_entry.cpp
   src/node_addon_effects.cpp
+  src/node_addon_yed.cpp
   src/node_addon_graphics.cpp
   src/node_addon_media.cpp
   src/node_addon_video.cpp
@@ -295,6 +296,13 @@ if(BUILD_TESTING)
   add_test(NAME node-mv-core-input COMMAND ${NODE_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/test/mv-core-input.cjs" $<TARGET_FILE:pmjs-mv-core-input-test>)
   pmjs_add_cpp_test(pmjs-mv-core-display-test native-mv-core-display test/mv-core-display.cpp)
   target_link_libraries(pmjs-mv-core-display-test PRIVATE pmjs_runtime)
+  add_executable(pmjs-mv-core-bitmap-test test/mv-core-bitmap.cpp)
+  target_include_directories(pmjs-mv-core-bitmap-test PRIVATE src)
+  target_link_libraries(pmjs-mv-core-bitmap-test PRIVATE pmjs_runtime)
+  add_test(NAME native-mv-core-bitmap COMMAND ${XVFB_RUN} -a $<TARGET_FILE:pmjs-mv-core-bitmap-test>
+    "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
+  set_tests_properties(native-mv-core-bitmap PROPERTIES
+    ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy" FIXTURES_REQUIRED pmjs_assets)
   pmjs_add_cpp_test(pmjs-mv-core-audio-test native-mv-core-audio test/mv-core-audio.cpp)
   target_link_libraries(pmjs-mv-core-audio-test PRIVATE pmjs_runtime)
   pmjs_add_cpp_test(pmjs-mv-engine-test native-mv-engine test/mv-engine.cpp)
@@ -529,6 +537,8 @@ if(BUILD_TESTING)
     add_test(NAME "js-${PMJS_TEST_NAME}" COMMAND ${NODE_EXECUTABLE} --test
       "${CMAKE_CURRENT_SOURCE_DIR}/${PMJS_JS_TEST}")
   endforeach()
+  set_tests_properties(js-yed-native-window js-yed-retained-tiles
+    PROPERTIES ENVIRONMENT "PMJS_NATIVE_ADDON=$<TARGET_FILE:pmjs_native>")
   set_tests_properties(js-text-layout-reference js-pixi-filter-boundary-reference
     PROPERTIES ENVIRONMENT "PMJS_NATIVE_ADDON=$<TARGET_FILE:pmjs_native>;PMJS_TEST_ASSET_ROOT=${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   add_custom_target(pmjs-test-fixtures

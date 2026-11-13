@@ -5,6 +5,7 @@ const path = require('node:path');
 const { validRecipes, astcSettings, validLosslessPrefixes } = require('./asset-preparation.cjs');
 
 function resolveDefaults(input) {
+  let bitmapBackend = input.bitmapBackend;
   let title = input.title;
   let engineData = input.engineData;
   let battleTest = input.battleTest;
@@ -33,6 +34,7 @@ function resolveDefaults(input) {
       battleTest = cfg.battleTest;
     }
     if (title === undefined && cfg.title) title = cfg.title;
+    if (bitmapBackend === undefined) bitmapBackend = cfg.bitmapBackend;
     if (engineData === undefined && cfg.engineData !== undefined) {
       if (typeof cfg.engineData !== 'string' || !input.gameRoot) throw new Error('engineData requires a game root and relative file path');
       engineData = path.resolve(input.gameRoot, cfg.engineData);
@@ -126,12 +128,13 @@ function resolveDefaults(input) {
     assetPreparation.recipes = JSON.parse(fs.readFileSync(assetPreparation.recipes, 'utf8'));
   }
   assetPreparation.recipes = validRecipes(assetPreparation.recipes || []);
-  return { ...input, engineData, battleTest, width, height, title, assetPreparation, assetPolicyOverrides: policyOverrides, preparationFonts, virtualFiles,
+  return { ...input, bitmapBackend, engineData, battleTest, width, height, title, assetPreparation, assetPolicyOverrides: policyOverrides, preparationFonts, virtualFiles,
     preparedFrameCacheBytes, preparedCompactSampling, preparedCropUploads };
 }
 
 function validate(input) {
   const options = resolveDefaults(input);
+  if (options.bitmapBackend !== undefined && !['javascript', 'native'].includes(options.bitmapBackend)) throw new Error('bitmapBackend must be javascript or native');
   const requiredPaths = ['addon', 'gameRoot', 'saveRoot', ...(options.engine === 'native-mv' ? [] : ['bootstrap'])];
   for (const name of requiredPaths) {
     if (typeof options[name] !== 'string' || !options[name]) {

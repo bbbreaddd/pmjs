@@ -180,6 +180,7 @@ void Session::load(const Value& contents) {
     throw std::invalid_argument("save is outside the declared map-scene scope");
   if (database_["maps"][std::to_string(mapId)].null()) throw std::invalid_argument("save refers to an unknown map");
   Session restored(database_);
+  restored.setScreenSize(screenWidth_, screenHeight_);
   restored.switches_.clear(); restored.variables_.clear(); restored.selfSwitches_.clear(); restored.inventory_.clear(); restored.party_.clear(); restored.actors_.clear();
   const auto& switches = contents["switches"]["_data"].array();
   for (std::size_t i = 0; i < switches.size(); ++i) if (!switches[i].null()) restored.switches_[i] = switches[i].boolean();
@@ -253,7 +254,7 @@ void Session::load(const Value& contents) {
     restored.interpreter_ = readInterpreter(contents["map"]["_interpreter"]);
   }
   restored.commonInterpreters_.clear();
-  for (const auto& common : contents["map"]["_commonEvents"].array()) {
+  if (!mapUpdated) for (const auto& common : contents["map"]["_commonEvents"].array()) {
     const int id = common["_commonEventId"].integer();
     if (!common["_interpreter"].null() && restored.database_["commonEvents"][id]["trigger"].integer() == 2)
       restored.commonInterpreters_[id] = std::make_shared<Interpreter>(readInterpreter(common["_interpreter"]));
@@ -275,17 +276,26 @@ void Session::load(const Value& contents) {
   restored.system_.storedBgm = contents["system"]["_savedBgm"];
   const Value bgmOnSave = contents["system"]["_bgmOnSave"], bgsOnSave = contents["system"]["_bgsOnSave"];
   restored.savedBgm_ = {}; restored.savedBgs_ = {};
-  if (!bgmOnSave.null()) {
+  if (!loadRequested_ && !bgmOnSave.null()) {
     if (bgmOnSave["name"].text().empty()) AudioManager::stopBgm(restored);
     else restored.audio("bgm", bgmOnSave, true);
   }
-  if (!bgsOnSave.null()) {
+  if (!loadRequested_ && !bgsOnSave.null()) {
     if (bgsOnSave["name"].text().empty()) AudioManager::stopBgs(restored);
     else restored.audio("bgs", bgsOnSave, true);
   }
   restored.lastTitleCommand_ = lastTitleCommand_;
+  restored.lastAccessedSavefileId_ = lastAccessedSavefileId_;
+  if (mapUpdated) restored.transfer(mapId, restored.player_.x, restored.player_.y, restored.player_.direction);
   restored.newGamePending_ = false; restored.titleWindowOpenness_ = 255;
   restored.loadRequested_ = loadRequested_; restored.saveRequested_ = saveRequested_;
+  if (loadRequested_) {
+    restored.ui_ = ui_;
+    restored.pendingLoadBgm_ = bgmOnSave;
+    restored.pendingLoadBgs_ = bgsOnSave;
+    restored.pendingLoadFrames_ = restored.ticks_;
+    restored.ticks_ = ticks_;
+  }
   restored.alwaysDash_ = alwaysDash_; restored.commandRemember_ = commandRemember_; restored.volumes_ = volumes_; restored.configurationRevision_ = configurationRevision_;
   restored.randomGenerator_ = randomGenerator_; restored.randomStream_ = randomStream_; restored.randomOffset_ = randomOffset_; restored.randomCalls_ = randomCalls_;
   restored.presentationRevision_ = presentationRevision_ + 1;

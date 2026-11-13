@@ -57,7 +57,6 @@ int Session::battleActionCount(const Battler& battler) {
   return count;
 }
 int Session::selectEnemySkill(const Battler& enemy) {
-  if (restriction(enemy) > 0) return 1;
   std::vector<const Value*> choices;
   int maximum = 0;
   for (const auto& entry : database_["enemies"][enemy.id]["actions"].array()) {
@@ -125,7 +124,7 @@ std::vector<Battler*> Session::actionTargets(const Action& action, Battler& subj
       if (enemies && action.target < static_cast<int>(battle_.enemies.size())) selected = &battle_.enemies[action.target];
       if (!enemies && action.target < static_cast<int>(battleMemberCount())) selected = &actors_.at(party_[action.target]);
       if (std::find(candidates.begin(), candidates.end(), selected) == candidates.end()) selected = candidates.front();
-    } else if (dead) selected = candidates[randomInt(static_cast<int>(candidates.size()))];
+    } else if (dead) selected = candidates.front();
     else selected = weighted();
     if (selected) targets.push_back(selected);
   }
@@ -137,9 +136,10 @@ int Session::damageValue(Battler& subject, Battler& target, const Value& item, b
   const int hitType = item["hitType"].integer();
   double value = 0;
   try { value = std::max(0.0, evaluateExpression(damage["formula"].text(), &subject, &target)); }
-  catch (const std::exception&) { return 0; }
+  catch (const std::exception&) { value = 0; }
   const int type = damage["type"].integer();
   if (type == 3 || type == 4) value = -value;
+  const bool recovery = value < 0;
   double elementRate = 1;
   if (damage["elementId"].integer() >= 0) elementRate = trait(target, 11, damage["elementId"].integer(), true);
   else {
@@ -159,7 +159,7 @@ int Session::damageValue(Battler& subject, Battler& target, const Value& item, b
   value *= elementRate;
   if (hitType == 1) value *= trait(target, 23, 6, true);
   if (hitType == 2) value *= trait(target, 23, 7, true);
-  if (value < 0) value *= trait(target, 23, 2, true);
+  if (recovery) value *= trait(target, 23, 2, true);
   if (critical) value *= 3;
   if (!std::isfinite(value)) return 0;
   const int amplitude = static_cast<int>(std::floor(std::clamp(std::abs(value) * damage["variance"].number() / 100, 0.0, 999999999.0)));
@@ -193,7 +193,7 @@ double Session::evaluateAutoAction(Battler& subject, const Value& item, int& tar
       targetIndex = target->enemy ? static_cast<int>(target - battle_.enemies.data()) : static_cast<int>(std::find(party_.begin(), party_.end(), target->id) - party_.begin());
     }
   }
-  score *= item["repeats"].integer(1) + (item["id"].integer() == 1 ? std::max(0.0, trait(subject, 34, 0, false)) : 0);
+  score *= std::floor(item["repeats"].integer(1) + (item["id"].integer() == 1 ? std::max(0.0, trait(subject, 34, 0, false)) : 0));
   return score > 0 ? score + random() : score;
 }
 
@@ -235,15 +235,28 @@ void Session::applyItemEffect(Battler& subject, Battler& target, const Value& it
         target.buffs[id] = std::clamp(target.buffs[id] + (code == 31 ? 1 : -1), -2, 2);
         const bool matchingPolarity = code == 31 ? target.buffs[id] > 0 : target.buffs[id] < 0;
         if (matchingPolarity) target.buffTurns[id] = std::max(target.buffTurns[id], effect["value1"].integer());
-        else if (!target.buffs[id]) target.buffTurns[id] = 0;
-        (code == 31 ? result.addedBuffs : result.addedDebuffs).push_back(id);
+        auto& added = code == 31 ? result.addedBuffs : result.addedDebuffs;
+        if (std::find(added.begin(), added.end(), id) == added.end()) added.push_back(id);
       }
       result.success = true;
     } else if ((code == 33 && target.buffs[id] > 0) || (code == 34 && target.buffs[id] < 0)) {
-      target.buffs[id] = 0; target.buffTurns[id] = 0; result.removedBuffs.push_back(id); result.success = true;
+      if (target.hp > 0 && !target.hidden) {
+        target.buffs[id] = 0; target.buffTurns[id] = 0;
+        if (std::find(result.removedBuffs.begin(), result.removedBuffs.end(), id) == result.removedBuffs.end()) result.removedBuffs.push_back(id);
+      }
+      result.success = true;
     }
   } else if (code == 41) {
-    if (id == 0) { target.escaped = true; target.hidden = true; target.states.clear(); target.stateTurns.clear(); target.buffs.fill(0); target.buffTurns.fill(0); SoundManager::playEscape(*this); result.success = true; }
+    if (id == 0) {
+      if (battle_.active) {
+        target.escaped = true; target.hidden = true;
+        const int index = target.enemy ? static_cast<int>(&target - battle_.enemies.data()) : static_cast<int>(std::find(party_.begin(), party_.end(), target.id) - party_.begin());
+        battle_.actions.erase(std::remove_if(battle_.actions.begin(), battle_.actions.end(), [&](const Action& action) { return action.enemy == target.enemy && action.subject == index; }), battle_.actions.end());
+        if (!target.enemy && index < static_cast<int>(battle_.remainingActions.size())) battle_.remainingActions[index] = 0;
+      }
+      target.states.clear(); target.stateTurns.clear(); target.stateSteps.clear();
+      SoundManager::playEscape(*this); result.success = true;
+    }
   } else if (code == 42) {
     if (id < 0 || id > 7) throw std::invalid_argument("invalid growth parameter");
     target.paramPlus[id] += static_cast<int>(std::floor(effect["value1"].number())); result.success = true;

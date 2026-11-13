@@ -139,6 +139,7 @@ struct PreparationInstallReport {
 
 void registerRuntimeBindings(napi_env env, napi_value exports);
 void registerPlatformBindings(napi_env env, napi_value exports);
+void registerYedBindings(napi_env env, napi_value plugins);
 void registerGraphicsBindings(napi_env env, napi_value exports);
 void registerResourceBindings(napi_env env, napi_value exports);
 void registerCanvasBindings(napi_env env, napi_value exports);

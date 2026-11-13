@@ -36,7 +36,6 @@ bool Session::dialogEventCommand(const Value& entry, Interpreter& context) {
       message_.scrollSpeed = p[0].number(2)/2; message_.scrollNoFast = p[1].boolean();
       message_.scrollY = -static_cast<double>(screenHeight_);
       messageAge_ = 0;
-      ui_.cursor = 0;
       while (context.index + 1 < static_cast<int>(context.list.size()) &&
              context.list[context.index + 1]["code"].integer() == 405) {
         ++context.index;

@@ -40,6 +40,7 @@ function enter(saved,escape=true) { api.load(session,saved);api.setRandomStream(
 try {
  api.newGame(session);api.attach(session,settings);const baseline=api.save(session);
  enter(baseline);render();const idle=work();
+ assert.ok(native.canvas.memory().cpuPixelBytes < 816 * 624 * 4, 'window-sized battle text canvases stay smaller than one full-screen surface');
  api.step(session,{});const first=render();assert.deepEqual(work(),idle,'unchanged status and commands do not rasterize or upload again');
  for(let i=0;i<8;++i)api.step(session,{});const blink=render();
  assert.deepEqual(work(),idle,'cursor animation does not invalidate window contents');assert.notDeepEqual(blink,first,'cursor continues to animate');
@@ -61,6 +62,16 @@ try {
  assert.equal(updated,true);freshMatches(render(),'action MP cost and battle log refresh retained contents');
  for(let tick=0;tick<500;++tick) { api.step(session,{});if(api.snapshot(session).actors[2].mp===85)break; }
  freshMatches(render(),'a different actor action updates the log and status');
+ api.load(session,baseline);for(let tick=0;tick<60;++tick)api.step(session,{});render();const mapBytes=native.canvas.memory().cpuPixelBytes;
+ api.step(session,{cancel:true});for(let tick=0;tick<60;++tick)api.step(session,{});
+ const menuFirst=render();const menuIdle=work();
+ assert.ok(native.canvas.memory().cpuPixelBytes - mapBytes < 816 * 624 * 4, 'menu windows use window-sized text surfaces rather than full-screen canvases');
+ api.step(session,{});assert.deepEqual(render(),menuFirst);
+ assert.deepEqual(work(),menuIdle,'unchanged menu windows do not clear, rasterize, or upload again');
+ press({direction:2});const menuMoved=render();
+ assert.deepEqual(work(),menuIdle,'moving the menu cursor reuses window text contents');
+ assert.notDeepEqual(menuMoved,menuFirst,'moving the menu cursor visibly updates the selection');
+ freshMatches(menuMoved,'reused menu window contents match fresh drawing');
  let settled;
  for(let cycle=0;cycle<3;++cycle) {
    api.openTitle(session);for(let tick=0;tick<40;++tick)api.step(session,{});render();

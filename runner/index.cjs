@@ -19,6 +19,7 @@ const { resolveDefaults, validate, PMJS_MV_LOGIC_HZ, PMJS_SUPPORTED_RENDER_HZ,
 const hostTimers = require('node:timers');
 const { createDiagnostics, reclamationMemoryState } = require('./diagnostics.cjs');
 const { createMemoryReclaimer } = require('./memory-reclamation.cjs');
+const { createBitmapClass } = require('./native-bitmap.cjs');
 const { createSettings, createInputFilter } = require('./settings.cjs');
 
 function sendSupervisorHeartbeat(processHandle, heartbeat) {
@@ -343,6 +344,7 @@ async function runSession(input, diagnostics, setNative) {
   }
   diagnostics.stage('native-initialize');
   const native = require(options.addon);
+  let nativeBitmap;
   setNative(native);
   measureStartup('native-initialize', () => native.initialize({ gameRoot: options.gameRoot, assetRoot: options.assetRoot,
     width: options.width, height: options.height, windowTitle: options.title,
@@ -433,7 +435,13 @@ async function runSession(input, diagnostics, setNative) {
     native.runtime.loadScript = relative => {
       const source = native.fs.readText(relative);
       if (source === null) throw new Error(`cannot load script: ${relative}`);
-      return executeScript(source, path.join(options.gameRoot, relative));
+      const result = executeScript(source, path.join(options.gameRoot, relative));
+      if (options.bitmapBackend === 'native' && relative === 'js/rpg_core.js' && !nativeBitmap) {
+        nativeBitmap = createBitmapClass(native, globalThis.PIXI, globalThis.PMJS?.fonts);
+        globalThis.Bitmap = nativeBitmap;
+        console.log('[pmjs] bitmap_backend=native');
+      }
+      return result;
     };
     native.runtime.runScript = source => executeScript(String(source), 'inline-script.js');
     const packageFile = [path.join(options.gameRoot, 'package.json'),
@@ -575,6 +583,7 @@ async function runSession(input, diagnostics, setNative) {
         if (dispatcher && dispatcher.stopped) return;
         try {
           flushPreparationInvalidations();
+          if (nativeBitmap) nativeBitmap.updateLoads();
           if (!native.pollEvents()) { flushPreparationInvalidations(true); resolve(); return; }
           let windowState;
           if (typeof globalThis.__pmjsUpdateWindowState === 'function') {

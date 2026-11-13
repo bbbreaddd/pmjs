@@ -236,13 +236,13 @@ bool Sprite_Actor::isMotionLooping(BattlerMotion m) {
 
 void Sprite_Actor::synchronizeMotion(BattlerMotion requested, std::uint64_t requestedAt, std::uint64_t tick, BattlerMotion fallback) {
   if (!motionInitialized_ || tick < motionTick_ || requested != requestedMotion_ ||
-      (!isMotionLooping(requested) && requestedAt != requestedAt_)) {
+      (requestedAt != requestedAt_ && motion != requested)) {
     motion = requested;
     motionStarted_ = isMotionLooping(requested) ? tick : std::min(requestedAt, tick);
     requestedMotion_ = requested;
-    requestedAt_ = requestedAt;
     motionInitialized_ = true;
   }
+  requestedAt_ = requestedAt;
   motionTick_ = tick;
   if (!isMotionLooping(motion) && tick - motionStarted_ >= 36) {
     motion = fallback;
@@ -378,7 +378,7 @@ core::Rectangle Sprite_Balloon::sourceFrame(std::uint64_t age, int balloonId) {
 
 void Sprite_Timer::update(int frames) {
   totalSeconds = frames / 60;
-  const int minutes = totalSeconds / 60;
+  const int minutes = totalSeconds / 60 % 60;
   const int seconds = totalSeconds % 60;
   std::ostringstream ss;
   ss << std::setfill('0') << std::setw(2) << minutes << ":"
