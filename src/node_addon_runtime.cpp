@@ -523,8 +523,7 @@ napi_value preparationClear(napi_env env, napi_callback_info) try {
   return throwException(env, error);
 }
 
-napi_value renderFrame(napi_env env, napi_callback_info) try {
-  State& value = host(env);
+void renderPreparedFrame(napi_env env, State& value) {
   const auto start = std::chrono::steady_clock::now();
   value.canvases.uploadDirty();
   const auto uploaded = std::chrono::steady_clock::now();
@@ -536,6 +535,10 @@ napi_value renderFrame(napi_env env, napi_callback_info) try {
   value.frameUploadMs = std::chrono::duration<double, std::milli>(uploaded - start).count();
   value.frameDrawMs = std::chrono::duration<double, std::milli>(drawn - uploaded).count();
   value.frameMemoryMs = std::chrono::duration<double, std::milli>(accounted - drawn).count();
+}
+
+napi_value renderFrame(napi_env env, napi_callback_info) try {
+  renderPreparedFrame(env, host(env));
   return undefined(env);
 } catch (const std::exception& error) {
   return throwException(env, error);

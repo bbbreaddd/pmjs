@@ -70,6 +70,23 @@ module.exports = {
   return { gameRoot, saveRoot, addonPath, engineData, logPath };
 }
 
+test('runtime bindings install before native state initialization', async t => {
+  const game = createBasicGameFixture(t, {
+    width: 816, height: 624, imageCacheBytes: 1000000, fontFile: 'fonts/game.ttf'
+  });
+  const order = [];
+  await runNativeMv({ ...game, addon: game.addonPath }, {
+    prepareAssets: async () => ({ cancelled: false, preparation: { cancelled: false } }),
+    async installRuntime({ engine }) {
+      await Promise.resolve();
+      order.push('bindings');
+      engine.load = () => order.push('load');
+    },
+    onSession() { order.push('session'); }
+  });
+  assert.deepEqual(order, ['bindings', 'load', 'session']);
+});
+
 test('runNativeMv applies Community_Basic host settings and respects fullscreen/PMJS_WINDOW_SIZE guards', async t => {
   const prevFullscreen = process.env.STUB_FULLSCREEN;
   const prevWindowSize = process.env.PMJS_WINDOW_SIZE;

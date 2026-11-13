@@ -3,30 +3,7 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const api = require(require('node:path').resolve(process.argv[2])).mvEngine;
-const command = (code, parameters = [], indent = 0) => ({ code, parameters, indent });
-const variable = (id, value) => command(122, [id, id, 0, 0, value]);
-
-function fixture(program) {
-  const actor = id => ({ id, name: `Actor ${id}`, classId: 1, initialLevel: 1, equips: [1, 0, 1, 0, 0] });
-  return {
-    system: { startMapId: 1, startX: 1, startY: 1, partyMembers: [1], variables: Array(100).fill('') },
-    actors: [null, actor(1), actor(2)],
-    classes: [null, { params: Array.from({ length: 8 }, () => [0, 10]), learnings: [{ level: 1, skillId: 2 }],
-      traits: [{ code: 51, dataId: 1, value: 1 }, { code: 52, dataId: 1, value: 1 }] }],
-    skills: [null, { id: 1 }, { id: 2 }], items: [null, { id: 1 }],
-    weapons: [null, { id: 1, etypeId: 1, wtypeId: 1, params: Array(8).fill(0) }],
-    armors: [null, { id: 1, etypeId: 3, atypeId: 1, params: Array(8).fill(0) }],
-    states: [null, { id: 1 }], tilesets: [null, { flags: [0] }],
-    commonEvents: [null, { id: 1, list: [command(122, [20, 20, 1, 0, 1]), command(115), variable(20, 999), command(0)] }],
-    maps: { 1: { width: 5, height: 5, data: Array(150).fill(0), tilesetId: 1,
-      events: [null, { id: 1, x: 3, y: 1, pages: [
-        { conditions: {}, trigger: 3, priorityType: 1, image: { direction: 2, pattern: 1 },
-          list: [...program, command(123, ['A', 0]), command(0)] },
-        { conditions: { selfSwitchValid: true, selfSwitchCh: 'A' }, trigger: 0,
-          priorityType: 1, image: { direction: 2, pattern: 1 }, list: [command(0)] },
-      ] }] } },
-  };
-}
+const { fixture, command, variable } = require('./helpers/mv-session-fixture.cjs');
 
 function session(t, data) {
   const handle = api.create(data);
@@ -176,7 +153,7 @@ test('cleared branch state remains cleared across save/load and recursive common
 });
 
 test('variable transfers resolve coordinates once and preserve the requested direction', t => {
-  const data = fixture([variable(1, 2), variable(2, 4), variable(3, 3), command(201, [1, 1, 2, 3, 8, 0])]);
+  const data = fixture([variable(1, 2), variable(2, 4), variable(3, 3), command(201, [1, 1, 2, 3, 8, 2])]);
   data.maps[2] = { ...data.maps[1], events: [] };
   const handle = session(t, data);
   api.step(handle, {});

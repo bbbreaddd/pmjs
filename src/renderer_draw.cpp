@@ -549,7 +549,8 @@ void Renderer::renderScene() {
                   !command.appliesColorMatrix &&
                   command.blendMode == BlendMode::normal;
     }
-    if (cleanTail) composedToneCommand = &frame_.commands[toneIndex];
+    if (cleanTail && !frame_.commands[toneIndex].canvasTone && !frame_.commands[toneIndex].clipped)
+      composedToneCommand = &frame_.commands[toneIndex];
   }
   struct DrawOperation {
     std::uint32_t tileLayer = 0;
@@ -679,7 +680,7 @@ void Renderer::renderScene() {
       continue;
     }
     if (command.appliesColorMatrix) {
-      const std::array<float, 72> vertices = {
+      std::array<float, 72> vertices = {
         -1,  1, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1,
          1,  1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1,
          1, -1, 1, 0, 1, 1, 1, 1, 0, 0, 1, 1,
@@ -687,10 +688,26 @@ void Renderer::renderScene() {
          1, -1, 1, 0, 1, 1, 1, 1, 0, 0, 1, 1,
         -1, -1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1,
       };
+      if (command.canvasTone) {
+        const auto& transform = command.transform;
+        const std::array<std::array<float, 2>, 4> corners{{
+          {0, 0}, {command.destination[0], 0}, command.destination, {0, command.destination[1]}
+        }};
+        constexpr std::array<std::size_t, 6> order{0, 1, 2, 0, 2, 3};
+        for (std::size_t index = 0; index < order.size(); ++index) {
+          const auto& point = corners[order[index]];
+          const float x = (transform[0] * point[0] + transform[2] * point[1] + transform[4]) * viewportMapping[0] + viewportMapping[2];
+          const float y = (transform[1] * point[0] + transform[3] * point[1] + transform[5]) * viewportMapping[1] + viewportMapping[3];
+          vertices[index * 12] = x * 2 / width_ - 1;
+          vertices[index * 12 + 1] = 1 - y * 2 / height_;
+        }
+      }
       DrawOperation operation{};
       operation.first = static_cast<GLsizei>(vertices_.size() / 12U);
       operation.count = 6;
       operation.matrixCommand = &command;
+      operation.clip = command.clip;
+      operation.clipped = command.clipped;
       operations.push_back(operation);
       vertices_.insert(vertices_.end(), vertices.begin(), vertices.end());
       continue;
@@ -1790,8 +1807,21 @@ void Renderer::renderScene() {
         applyBlendMode(activeBlend);
         continue;
       }
-      ensureTarget(filterTarget_, width_, height_);
+      const auto& matrixSource = filterDepth == 0 ? rootTarget : groupTargets_[filterDepth - 1];
+      const bool boundedTone = operation.matrixCommand->canvasTone || operation.clipped;
+      const int matrixWidth = boundedTone ? matrixSource.width : width_;
+      const int matrixHeight = boundedTone ? matrixSource.height : height_;
+      ensureTarget(filterTarget_, matrixWidth, matrixHeight);
       glDisable(GL_BLEND);
+      glDisable(GL_SCISSOR_TEST);
+      scissorActive = false;
+      if (boundedTone) {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, filterDepth == 0 ? rootFramebuffer :
+                          groupTargets_[filterDepth - 1].framebuffer);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, filterTarget_.framebuffer);
+        glBlitFramebuffer(0, 0, matrixWidth, matrixHeight, 0, 0, matrixWidth, matrixHeight,
+                          GL_COLOR_BUFFER_BIT, GL_NEAREST);
+      }
       glBindFramebuffer(GL_FRAMEBUFFER, filterTarget_.framebuffer);
       glViewport(0, 0, static_cast<int>(rasterFrame[2] * rasterResolution), static_cast<int>(rasterFrame[3] * rasterResolution));
       ensurePixiPrograms();
@@ -1804,7 +1834,7 @@ void Renderer::renderScene() {
       glUniform1i(filterImageYDownUniform_, targetYDown);
       glBindTexture(GL_TEXTURE_2D, filterDepth == 0 ? rootTexture :
                     groupTargets_[filterDepth - 1].texture);
-      glUniform2f(textureSizeUniform_, static_cast<float>(width_), static_cast<float>(height_));
+      glUniform2f(textureSizeUniform_, static_cast<float>(matrixWidth), static_cast<float>(matrixHeight));
       glUniform1f(blurUniform_, 0);
       glUniform2f(blurDirectionUniform_, 0, 0);
       glUniform1i(displacementEnabledUniform_, 0);
@@ -1812,13 +1842,25 @@ void Renderer::renderScene() {
       glUniform1i(pixiFilterKindUniform_, 0);
       glUniform1i(maskEnabledUniform_, 0);
       glUniform1i(colorMatrixEnabledUniform_, 1);
+      glUniform1i(canvasToneEnabledUniform_, operation.matrixCommand->canvasTone);
+      if (operation.matrixCommand->canvasTone)
+        glUniform4fv(canvasToneUniform_, 1, operation.matrixCommand->colorTone.data());
       glUniform1i(spriteColorEnabledUniform_, 0);
       glUniform1i(premultipliedInputUniform_, 1);
       glUniform1fv(colorMatrixUniform_, 20,
                    operation.matrixCommand->colorMatrix.data());
       glUniform1f(colorMatrixAlphaUniform_,
                   operation.matrixCommand->color[3]);
+      if (operation.clipped) {
+        glEnable(GL_SCISSOR_TEST);
+        scissorActive = true;
+        activeClip = operation.clip;
+        rasterScissor(activeClip[0], height_ - activeClip[3],
+                      std::max(0, activeClip[2] - activeClip[0]),
+                      std::max(0, activeClip[3] - activeClip[1]));
+      }
       glDrawArrays(GL_TRIANGLES, operation.first, operation.count);
+      glUniform1i(canvasToneEnabledUniform_, 0);
       if (diagnostics_) {
         ++stats_.drawCalls;
         ++stats_.filterDrawCalls;

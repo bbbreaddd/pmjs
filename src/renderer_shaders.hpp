@@ -128,6 +128,8 @@ constexpr const char* fragmentSource = R"(#version 300 es
   uniform bool colorMatrixEnabled;
   uniform float colorMatrix[20];
   uniform float colorMatrixAlpha;
+  uniform bool canvasToneEnabled;
+  uniform vec4 canvasTone;
   uniform bool spriteColorEnabled;
   uniform vec4 spriteColorTone;
   uniform vec4 spriteBlendColor;
@@ -263,6 +265,27 @@ constexpr const char* fragmentSource = R"(#version 300 es
   }
   void main() {
     vec2 sampleUv = vertexUv;
+    if (canvasToneEnabled) {
+      vec4 backdrop = texelFetch(image, ivec2(gl_FragCoord.xy), 0);
+      float gray = canvasTone.a;
+      if (gray > 0.0) {
+        float luminosity = dot(backdrop.rgb, vec3(0.3, 0.59, 0.11));
+        backdrop.rgb = backdrop.rgb * (1.0 - gray) + vec3(gray * (luminosity + 1.0 - backdrop.a));
+        backdrop.a = gray + backdrop.a * (1.0 - gray);
+      }
+      vec3 lighter = max(canvasTone.rgb, vec3(0.0));
+      if (any(greaterThan(lighter, vec3(0.0)))) {
+        backdrop.rgb = min(backdrop.rgb + lighter, vec3(1.0));
+        backdrop.a = 1.0;
+      }
+      vec3 darker = max(-canvasTone.rgb, vec3(0.0));
+      if (any(greaterThan(darker, vec3(0.0)))) {
+        backdrop.rgb = max(backdrop.rgb - darker, vec3(0.0));
+        backdrop.a = 1.0;
+      }
+      outputColor = backdrop;
+      return;
+    }
     if (pixiFilterKind == 1) {
       bool pixi5 = pixiFilterParameters[9] == 1.0;
       // Native filter textures have inverted Y; retain stock interpolation before rounding.

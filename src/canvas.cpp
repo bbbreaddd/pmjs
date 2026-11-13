@@ -1398,6 +1398,21 @@ std::optional<CanvasInfo> CanvasStore::create(int width, int height, bool opaque
   return CanvasInfo{makeHandle(index, surface.generation), width, height};
 }
 
+bool CanvasStore::resize(CanvasHandle handle, int width, int height) {
+  auto* surface = lookup(handle);
+  if (!surface || !checkedImageExtent(width, height)) return false;
+  auto content = std::make_shared<Content>(*this);
+  content->width = width;
+  content->height = height;
+  content->opaque = surface->content->opaque;
+  const auto image = surface->image;
+  surface->content = std::move(content);
+  surface->image = 0;
+  surface->imageRevision.reset();
+  if (image) images_.release(image);
+  return true;
+}
+
 std::optional<CanvasInfo> CanvasStore::createPixels(
     int width, int height, std::vector<std::uint8_t> pixels, PixelEncoding encoding) {
   const auto extent = checkedImageExtent(width, height);

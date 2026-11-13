@@ -11,13 +11,16 @@
 
 namespace pmjs::mv {
 class ImageCache;
+class Window_Base;
 class Presentation {
  public:
   Presentation(RuntimeCore& core, Session& session, Value settings);
   ~Presentation();
   void render();
+  bool renderFrame(const std::function<void()>& drawFrame);
   void captureAudioState();
  private:
+  void renderStage();
   ImageInfo image(const std::string& file, int hue = 0);
   void quad(ImageHandle handle, float sx, float sy, float sw, float sh, float x, float y, float width, float height, float alpha = 1);
   void tile(int id, int x, int y, std::vector<TileLayerTile>& geometry);
@@ -79,7 +82,7 @@ class Presentation {
   void mapPictures();
   void mapAmbience();
   void hitTarget(int x, int y, int width, int height, int index, int action = 0);
-  void window(int x, int y, int width, int height, int selected = -1, int rows = 0, int openness = 255, std::shared_ptr<core::PixelBitmap> contents = {}, std::optional<core::Rectangle> cursor = {});
+  void window(int x, int y, int width, int height, int selected = -1, int rows = 0, int openness = 255, std::shared_ptr<core::PixelBitmap> contents = {}, std::optional<core::Rectangle> cursor = {}, const Window_Base* model = nullptr);
   void flushUiText();
   void streamUiWindow(core::Window& window);
   void finishUiLayer();
@@ -163,6 +166,7 @@ class Presentation {
   std::unique_ptr<VideoDecoderSession> movieDecoder_;
   std::string movieFile_;
   std::uint64_t movieStarted_ = 0;
+  std::uint64_t movieRequest_ = 0;
   ImageHandle movieImage_ = 0;
   std::uint32_t movieAudio_ = 0;
   Value audioState(const std::string& kind);

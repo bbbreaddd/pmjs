@@ -12,7 +12,8 @@ class TilemapLayer:public Container {
  public:TilemapLayer(Tilemap* owner,bool upper,std::weak_ptr<int> lifetime):owner_(owner),upper_(upper),lifetime_(std::move(lifetime)){z=upper?4:0;}
  protected:void draw(Renderer& renderer,const Matrix& world,double opacity)override {
    if(lifetime_.expired())return;
-   const auto scroll=multiply(world,{1,0,0,1,float(-std::floor(owner_->origin.x)),float(-std::floor(owner_->origin.y))});
+   const auto origin=owner_->scrollOrigin();
+   const auto scroll=multiply(world,{1,0,0,1,float(-origin.x),float(-origin.y)});
    owner_->queueGeometry(renderer,upper_,scroll,opacity);
  }
  private:Tilemap* owner_;bool upper_;std::weak_ptr<int> lifetime_;
@@ -99,7 +100,7 @@ void Tilemap::queueGeometry(Renderer& renderer,bool upper,const Matrix& world,do
 }
 void Tilemap::render(Renderer& renderer,const Matrix& parentWorld,double opacity) {
   if(!visible||!renderable||alpha<=0||tileWidth<=0||tileHeight<=0)return;for(const auto* bitmap:bitmaps)if(bitmap&&!bitmap->isReady())return;
-  const int ox=int(std::floor(origin.x)),oy=int(std::floor(origin.y));
+  const auto origin=scrollOrigin();const double ox=origin.x,oy=origin.y;
   prepareGeometry(renderer,int(std::floor((ox-margin)/double(tileWidth))),int(std::floor((oy-margin)/double(tileHeight))),int(std::ceil((ox+width+margin)/double(tileWidth))),int(std::ceil((oy+height+margin)/double(tileHeight))));
   const auto world=multiply(parentWorld,localTransform());
   auto& sorted=children;

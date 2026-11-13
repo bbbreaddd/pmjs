@@ -45,6 +45,7 @@ bool nearestTileGeometry(const std::vector<TileLayerTile>& tiles) {
 }  // namespace
 
 void Renderer::finish() { glFinish(); }
+void Renderer::flush() { glFlush(); }
 
 PresentScaleMode Renderer::presentScaleModeFromEnvironment() {
   const char* value = std::getenv("PMJS_PRESENT_SCALE");
@@ -532,12 +533,12 @@ bool Renderer::queueTilingFrame(ImageHandle image,const std::array<float,6>& tra
 }
 
 void Renderer::queueQuad(float x, float y, float width, float height,
-                         const std::array<float, 4>& color) {
+                         const std::array<float, 4>& color, BlendMode blendMode) {
   auto boundedColor = color;
   boundedColor[3] = std::clamp(boundedColor[3], 0.0F, 1.0F);
   frame_.commands.push_back(
       {0, {width, 0, 0, height, x, y}, {0, 0, 1, 1}, {1, 1}, boundedColor,
-       BlendMode::normal, false});
+       blendMode, false});
   frame_.commands.back().primitive = RenderCommand::Primitive::screenFill;
   sceneSubmittedThisFrame_ = true;
 }
@@ -547,13 +548,27 @@ void Renderer::queueTone(const std::array<float, 20>& matrix) {
   command.colorMatrix = matrix; command.appliesColorMatrix = true; command.color[3] = 1;
   frame_.commands.push_back(command); sceneSubmittedThisFrame_ = true;
 }
+void Renderer::queueTone(const std::array<float, 4>& canvasTone,
+                         const std::array<float, 6>& transform,
+                         const std::array<float, 2>& extent) {
+  if (extent[0] <= 0 || extent[1] <= 0) return;
+  RenderCommand command{};
+  command.appliesColorMatrix = true;
+  command.canvasTone = true;
+  command.colorTone = canvasTone;
+  command.transform = transform;
+  command.destination = extent;
+  command.color[3] = 1;
+  frame_.commands.push_back(command);
+  sceneSubmittedThisFrame_ = true;
+}
 void Renderer::transformQueuedCommands(std::size_t first, const std::array<float, 6>& parent) {
   const auto point = [&](float x, float y) {
     return std::array<float, 2>{parent[0]*x+parent[2]*y+parent[4], parent[1]*x+parent[3]*y+parent[5]};
   };
   for (std::size_t index = first; index < frame_.commands.size(); ++index) {
     auto& command = frame_.commands[index];
-    if (command.appliesColorMatrix) continue;
+    if (command.appliesColorMatrix && !command.canvasTone) continue;
     if (command.action == RenderCommand::Action::draw && command.primitive == RenderCommand::Primitive::effect) {
       const auto origin = point(command.effect.viewport[0], command.effect.viewport[1]);
       command.effect.viewport = {origin[0], origin[1], command.effect.viewport[2]*parent[0], command.effect.viewport[3]*parent[3]};

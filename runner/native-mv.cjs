@@ -15,6 +15,14 @@ function readStoredJson(storage, compression, file, fallback) {
   return JSON.parse(compression.decompressFromBase64(bytes));
 }
 
+function loadSaveMetadata(storage, compression) {
+  const metadata = readStoredJson(storage, compression, 'global.rpgsave', []) || [];
+  for (let slot = 1; slot < metadata.length; ++slot) {
+    if (!fs.existsSync(storage.resolvePath(`file${slot}.rpgsave`))) delete metadata[slot];
+  }
+  return metadata;
+}
+
 async function runNativeMv(options, hooks = {}) {
   hooks.stage?.('startup');
   if (!options.gameRoot || !options.addon || !options.saveRoot) throw new Error('native-mv requires game-root, addon and an isolated save-root');
@@ -45,9 +53,13 @@ async function runNativeMv(options, hooks = {}) {
   try {
     engine.attach(session, settings);
     engine.configure(session, { alwaysDash: settings.alwaysDash });
-    engine.configure(session, readStoredJson(storage, compression, 'config.rpgsave', {}) || {});
+    let configuration = {};
+    try { configuration = readStoredJson(storage, compression, 'config.rpgsave', {}) || {}; }
+    catch (error) { console.error(`Configuration load failed: ${error.message}`); }
+    engine.configure(session, configuration);
     let configurationRevision = engine.storageStatus(session).configurationRevision;
-    engine.setSaveMetadata(session, readStoredJson(storage, compression, 'global.rpgsave', []));
+    engine.setSaveMetadata(session, loadSaveMetadata(storage, compression));
+    await hooks.installRuntime?.({ engine, session, native });
     if (options.battleTest) engine.battleTest(session);
     else if (loaded.initialState) engine.load(session, loaded.initialState); else engine.openTitle(session);
     hooks.onSession?.({ engine, session, native });
@@ -73,7 +85,7 @@ async function runNativeMv(options, hooks = {}) {
             if (request.save) {
               const contents = engine.save(session);
               storage.writeText(file, compression.compressToBase64(engine.encodeGraph(contents)));
-              const metadata = readStoredJson(storage, compression, 'global.rpgsave', []);
+              const metadata = loadSaveMetadata(storage, compression);
               const members = contents.party._actors.map(id => contents.actors._data[id]).filter(actor => actor && !actor._hidden).slice(0, 4);
               const seconds = Math.floor((contents.system._framesOnSave || 0) / 60);
               const pad = value => String(value).padStart(2, '0');
@@ -90,8 +102,10 @@ async function runNativeMv(options, hooks = {}) {
         }
         native.finishLogicStep();
       }
-      native.beginFrame(); engine.present(session); native.renderFrame(); native.swapFrame();
-      const presentedAt = performance.now(); hooks.observeFrame?.(presentedAt - now, presentedAt);
+      if (engine.render(session)) {
+        native.swapFrame();
+        const presentedAt = performance.now(); hooks.observeFrame?.(presentedAt - now, presentedAt);
+      }
     }
   } finally { engine.dispose(session); }
   return { code: 0 };

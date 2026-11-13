@@ -577,6 +577,7 @@ bool Sprite_Button::isButtonTouched(double touchX, double touchY) const {
 Sprite_Picture::Sprite_Picture(int id) : pictureId(id) {}
 
 void Sprite_Picture::syncFromPicture(const Value& state) {
+  if (pictureName != state["_name"].text()) sourceFrame.reset();
   pictureName = state["_name"].text();
   visible = !pictureName.empty();
   if (!visible) return;

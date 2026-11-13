@@ -692,6 +692,7 @@ async function run(input, hooks = {}) {
           native.assets.preparationStats = startup.preparation;
           return startup;
         },
+        installRuntime: hooks.installEngineRuntime,
         onSession: hooks.onEngineSession,
         observeFrame: (duration, now) => diagnostics.observeFrame(duration, now),
         stage: value => diagnostics.stage(value),

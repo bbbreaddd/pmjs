@@ -6,7 +6,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <chrono>
-#include <charconv>
 #include <filesystem>
 #include <limits>
 #include <set>
@@ -721,27 +720,7 @@ std::string escapeJsonString(const std::string& text) {
 }
 std::string jsonNumber(double value) {
   if (!std::isfinite(value)) return "null";
-  if (!value) return "0";
-  char buffer[128];
-  const auto result = std::to_chars(buffer, buffer + sizeof(buffer), value, std::chars_format::general);
-  if (result.ec != std::errc{}) throw std::runtime_error("cannot encode JSON number");
-  std::string number(buffer, result.ptr);
-  const auto exponentAt = number.find('e');
-  if (exponentAt == std::string::npos) return number;
-  const int exponent = std::stoi(number.substr(exponentAt + 1));
-  if (std::abs(value) >= 1e-6 && std::abs(value) < 1e21) {
-    const bool negative = number[0] == '-';
-    std::string mantissa = number.substr(negative ? 1 : 0, exponentAt - (negative ? 1 : 0));
-    const auto decimalAt = mantissa.find('.');
-    const int before = decimalAt == std::string::npos ? static_cast<int>(mantissa.size()) : static_cast<int>(decimalAt);
-    if (decimalAt != std::string::npos) mantissa.erase(decimalAt, 1);
-    const int point = before + exponent;
-    if (point <= 0) mantissa = "0." + std::string(-point, '0') + mantissa;
-    else if (point >= static_cast<int>(mantissa.size())) mantissa += std::string(point - mantissa.size(), '0');
-    else mantissa.insert(point, ".");
-    return negative ? "-" + mantissa : mantissa;
-  }
-  return number.substr(0, exponentAt) + "e" + (exponent >= 0 ? "+" : "-") + std::to_string(std::abs(exponent));
+  return core::numberString(value);
 }
 class JsonParser {
  public:
@@ -885,12 +864,25 @@ JsonNode::Ptr JsonEx::fromValue(const Value& value) {
   auto result = root; link(result); return result;
 }
 Value JsonEx::toValue(const JsonNode::Ptr& value) {
-  std::map<const JsonNode*,std::string> ancestors;
+  // Prefer shallow owners before expanding shared and circular references.
+  std::map<const JsonNode*,std::string> paths;
+  std::vector<std::pair<JsonNode::Ptr,std::string>> pending;
+  const auto enqueue = [&](const JsonNode::Ptr& node, const std::string& path) {
+    if (node && (std::holds_alternative<JsonNode::Array>(node->data) || std::holds_alternative<JsonNode::Object>(node->data)) &&
+        paths.emplace(node.get(), path).second) pending.emplace_back(node, path);
+  };
+  enqueue(value, "");
+  for (std::size_t index = 0; index < pending.size(); ++index) {
+    const auto [node, path] = pending[index];
+    if (const auto* array = std::get_if<JsonNode::Array>(&node->data))
+      for (std::size_t child = 0; child < array->size(); ++child) enqueue((*array)[child], path + '/' + std::to_string(child));
+    else if (const auto* object = std::get_if<JsonNode::Object>(&node->data))
+      for (const auto& [key, child] : *object) enqueue(child, path + '/' + pointerKey(key));
+  }
   std::function<Value(const JsonNode::Ptr&,const std::string&,int)> convert = [&](const JsonNode::Ptr& node, const std::string& path, int depth) -> Value {
     if (!node) return {};
-    if (const auto found = ancestors.find(node.get()); found != ancestors.end()) return Value::Object{{"@r",found->second}};
+    if (const auto found = paths.find(node.get()); found != paths.end() && found->second != path) return Value::Object{{"@r",found->second}};
     if (depth >= kMaxDepth) throw std::runtime_error("Object too deep");
-    ancestors[node.get()] = path;
     Value result;
     if (const auto* array = std::get_if<JsonNode::Array>(&node->data)) {
       Value::Array body; for (std::size_t index = 0; index < array->size(); ++index) body.push_back(convert((*array)[index], path + '/' + std::to_string(index), depth + 1)); result = std::move(body);
@@ -898,7 +890,7 @@ Value JsonEx::toValue(const JsonNode::Ptr& value) {
       Value::Object body; if (!node->constructorName.empty()) body["@"] = node->constructorName;
       for (const auto& [key, child] : *object) body[key] = convert(child, path + '/' + pointerKey(key), depth + 1); result = std::move(body);
     } else std::visit([&](const auto& primitive) { using Type = std::decay_t<decltype(primitive)>; if constexpr (!std::is_same_v<Type,JsonNode::Array> && !std::is_same_v<Type,JsonNode::Object>) result.data = primitive; }, node->data);
-    ancestors.erase(node.get()); return result;
+    return result;
   };
   return convert(value, "", 0);
 }
@@ -1118,7 +1110,7 @@ ResourceHandler& ResourceHandler::shared() { static ResourceHandler handler; ret
 ResourceHandler::Callback ResourceHandler::createLoader(const std::string& url, Callback retryMethod, Callback resignMethod, std::vector<int> intervals) {
   auto entry = std::make_shared<LoaderEntry>(); entry->url = url; entry->retryMethod = std::move(retryMethod); entry->resignMethod = std::move(resignMethod); entry->retryInterval = std::move(intervals);
   return [this, entry]() {
-    if (entry->retryCount < entry->retryInterval.size()) { scheduled_.push_back({time_ + entry->retryInterval[entry->retryCount++], entry->retryMethod}); return; }
+    if (entry->retryCount < entry->retryInterval.size()) { scheduled_.push_back({time_ + std::max(0, entry->retryInterval[entry->retryCount++]), entry->retryMethod}); return; }
     if (entry->resignMethod) entry->resignMethod();
     if (!entry->url.empty()) {
       if (reloaders.empty()) { if (printLoadingError) printLoadingError(entry->url); if (stop) stop(); }
@@ -1128,11 +1120,12 @@ ResourceHandler::Callback ResourceHandler::createLoader(const std::string& url, 
 }
 void ResourceHandler::update(double milliseconds) {
   time_ += milliseconds;
-  std::vector<Callback> ready;
+  std::vector<Scheduled> ready;
   for (auto it = scheduled_.begin(); it != scheduled_.end();) {
-    if (it->time <= time_) { ready.push_back(std::move(it->callback)); it = scheduled_.erase(it); } else ++it;
+    if (it->time <= time_) { ready.push_back(std::move(*it)); it = scheduled_.erase(it); } else ++it;
   }
-  for (const auto& callback : ready) if (callback) callback();
+  std::stable_sort(ready.begin(), ready.end(), [](const Scheduled& first, const Scheduled& second) { return first.time < second.time; });
+  for (const auto& entry : ready) if (entry.callback) entry.callback();
 }
 void ResourceHandler::retry() {
   if (reloaders.empty()) return;

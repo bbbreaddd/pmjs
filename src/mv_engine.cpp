@@ -93,12 +93,15 @@ void Session::newGame() {
   ++presentationRevision_; battleTest_ = false;
   switches_.clear(); variables_.clear(); selfSwitches_.clear(); inventory_.clear();
   visualEffects_.clear(); nextVisualEffect_ = 0;
-  moviePlaying_ = false; movieName_.clear();
+  moviePlaying_ = false; movieExplicitSource_ = false; movieRequest_ = 0; movieName_.clear();
   reservedCommonEvent_ = 0;
   sceneStack_.clear(); messageOwnerSerial_ = 0; nextInterpreterSerial_ = 0;
   party_.clear(); events_.clear(); interpreter_ = {}; message_ = {}; player_ = {};
+  mapId_ = 0; mapState_ = {}; commonInterpreters_.clear();
+  for (auto& follower : followers_) { follower = {}; follower.through = true; }
+  uiHitTargets_.clear(); previousUiButtons_.clear(); previousDebug_ = false;
   actors_.clear(); battle_ = {}; ui_ = {}; system_ = {}; gold_ = 0; steps_ = 0; brightness_ = 255; fadeOut_ = 0;
-  pictures_.clear(); ambience_ = {}; savedCamera_.reset();
+  pictures_.clear(); pictureSprites_.clear(); ambience_ = {}; savedCamera_.reset();
   audioCommands_.clear(); previousCancel_ = false; directionAge_ = 0; previousDirection_ = 0;
   screenEffects_ = {};
   savedBgm_ = {}; savedBgs_ = {}; saveRequested_ = false; loadRequested_ = false; menuCalling_ = false;
@@ -109,6 +112,7 @@ void Session::newGame() {
   followersGathering_ = false; destination_.reset(); mapTouchCount_ = 0; setupVehicles();
   pendingTransfer_.reset();
   transferFadeStarted_ = false;
+  pendingScene_.reset(); pendingLoadBgm_ = {}; pendingLoadBgs_ = {}; pendingLoadFrames_ = 0; pendingLoadMapUpdated_ = false;
   interpreter_.waitingRoute.reset();
   DataManager::selectSavefileForNewGame(*this);
   const auto& system = database_["system"];
@@ -133,12 +137,6 @@ void Session::transfer(int id, int x, int y, int direction) {
   if (!player_.directionFix && direction) player_.direction = direction;
   player_.stopCount = 0;
   mapId_ = id; player_.x = x; player_.y = y; player_.realX = x; player_.realY = y;
-  if (vehicleType_ >= 0 && vehicles_[vehicleType_].driving) {
-    auto& vehicle = vehicles_[vehicleType_]; vehicle.mapId = mapId_;
-    vehicle.character.x = player_.x; vehicle.character.y = player_.y; vehicle.character.realX = player_.realX; vehicle.character.realY = player_.realY;
-    vehicle.character.direction = player_.direction;
-  }
-  for (auto& follower : followers_) { follower = player_; follower.through = true; }
   if (changedMap) {
     setupMapState(); commonInterpreters_.clear();
     events_.clear();
@@ -155,14 +153,26 @@ void Session::transfer(int id, int x, int y, int direction) {
     }
     if (map()["autoplayBgs"].boolean()) AudioManager::playBgs(*this, map()["bgs"]);
   }
+  locatePlayer(x, y);
+  refreshNeeded_ = true; refreshIfNeeded();
+}
+
+void Session::locatePlayer(double x, double y) {
+  locateCharacter(player_, x, y);
   centerPlayer();
   encounterCount_ = randomInt(map()["encounterStep"].integer(30)) + randomInt(map()["encounterStep"].integer(30)) + 1;
-  refreshNeeded_ = true; refreshIfNeeded();
+  if (vehicleType_ >= 0 && vehicles_[vehicleType_].driving) {
+    auto& vehicle = vehicles_[vehicleType_]; vehicle.mapId = mapId_;
+    vehicle.character.x = player_.x; vehicle.character.y = player_.y;
+    vehicle.character.realX = player_.realX; vehicle.character.realY = player_.realY;
+    vehicle.character.direction = player_.direction;
+  }
+  synchronizeFollowers();
 }
 
 void Session::centerPlayer() {
   const double visibleX = screenWidth_ / 48.0, visibleY = screenHeight_ / 48.0;
-  const double x = player_.x - (visibleX - 1) / 2, y = player_.y - (visibleY - 1) / 2;
+  const double x = player_.realX - (visibleX - 1) / 2, y = player_.realY - (visibleY - 1) / 2;
   const double width = map()["width"].number(), height = map()["height"].number();
   const double endX = width - visibleX, endY = height - visibleY;
   const double displayX = loopHorizontal() ? std::fmod(std::fmod(x, width) + width, width) : endX < 0 ? endX / 2 : std::clamp(x, 0.0, endX);
@@ -495,7 +505,7 @@ void Session::startEvent(int x, int y, bool action) {
   }
 }
 void Session::startInterpreter(const Event& event) {
-  interpreter_ = {}; interpreter_.mapId = mapId_; interpreter_.eventId = event.id;
+  interpreter_.clear(); interpreter_.mapId = mapId_; interpreter_.eventId = event.id;
   interpreter_.list = map()["events"][event.id]["pages"][event.page]["list"].array(); interpreter_.running = true;
   for (const auto& entry : interpreter_.list) if (entry["code"].integer() == 129) {
     const int actor = entry["parameters"][0].integer();
@@ -698,7 +708,6 @@ bool Session::condition(const Value& p, const Interpreter& context) {
 bool Session::command(const Value& entry, Interpreter& context) {
   const int code = entry["code"].integer(), indent = entry["indent"].integer();
   if (!context.serial) context.serial = ++nextInterpreterSerial_;
-  if (code == 101 || code == 102 || code == 103 || code == 104 || code == 105) messageOwnerSerial_ = context.serial;
   const auto& p = entry["parameters"];
   switch (code) {
     case 0: case 108: case 408: case 118: return true;
@@ -750,6 +759,7 @@ bool Session::command(const Value& entry, Interpreter& context) {
       const bool continuing = message_.closing && message_.previousOpenness == 255 && message_.background == p[2].integer() && message_.position == p[3].integer();
       if (message_.busy && !continuing) return false;
       if (message_.closing && message_.openness > 0 && !continuing) return false;
+      messageOwnerSerial_ = context.serial;
       message_ = {}; message_.busy = true;
       context.waitingMessage = true;
       if (continuing) message_.openness = 255;
@@ -774,6 +784,7 @@ bool Session::command(const Value& entry, Interpreter& context) {
     }
     case 102:
       if (message_.busy) return false;
+      messageOwnerSerial_ = context.serial;
       message_ = {}; message_.busy = true; context.waitingMessage = true;
       messageAge_ = 0; message_.choices = p[0].array();
       message_.cancelChoice = p[1].integer();
@@ -875,7 +886,12 @@ bool Session::command(const Value& entry, Interpreter& context) {
     case 314: case 318: {
       const int actorId = p[0].integer() ? static_cast<int>(variableNumber(lookup(variables_, p[1].integer()))) : p[1].integer();
       std::vector<int> selected;
-      if (!actorId) selected = party_;
+      if (!actorId) {
+        for (std::size_t index = 0; index < party_.size(); ++index) {
+          if (battle_.active && (index >= 4 || actors_.at(party_[index]).hidden)) continue;
+          selected.push_back(party_[index]);
+        }
+      }
       else if (actorId > 0 && !database_["actors"][actorId].null()) {
         if (!actors_.contains(actorId)) initializeActor(actorId);
         selected.push_back(actorId);
@@ -890,7 +906,7 @@ bool Session::command(const Value& entry, Interpreter& context) {
     case 339:
       enemyEventCommand(entry); context.waitingAction = battle_.forcedExecuting || !battle_.forcedActions.empty(); return true;
     case 353: openGameOver(); return true;
-    case 354: openTitle(); return true;
+    case 354: beginSceneTransition(Scene::title, 24); return false;
     case 402: if (!context.branches.contains(indent) || context.branches.at(indent) != p[0].integer()) skipBranch(indent, context); return true;
     case 403: if (!context.branches.contains(indent) || context.branches.at(indent) != -2) skipBranch(indent, context); return true;
     case 404: context.branches.erase(indent); return true;
@@ -929,7 +945,8 @@ bool Session::command(const Value& entry, Interpreter& context) {
       if (!tokens.empty()) {
         const std::string commandName = std::move(tokens.front());
         tokens.erase(tokens.begin());
-        PluginManager::callCommand(*this, commandName, tokens);
+        if (!runtimeHooks_ || !runtimeHooks_->pluginCommand || !runtimeHooks_->pluginCommand(context.runtime, commandName, tokens))
+          PluginManager::callCommand(*this, commandName, tokens);
       }
       return true;
     }
@@ -937,6 +954,7 @@ bool Session::command(const Value& entry, Interpreter& context) {
       if ((code >= 221 && code <= 225) || (code >= 231 && code <= 236)) return screenEventCommand(entry, context);
       if (code == 103 || code == 104 || code == 105) {
         if (message_.busy) return false;
+        messageOwnerSerial_ = context.serial;
         if (dialogEventCommand(entry, context)) { context.waitingMessage = true; return true; }
       }
       if (dialogEventCommand(entry, context) || shopEventCommand(entry, context)) return true;
@@ -944,6 +962,40 @@ bool Session::command(const Value& entry, Interpreter& context) {
       if (actorEventCommand(entry) || enemyEventCommand(entry) || systemEventCommand(entry) || characterEventCommand(entry, context)) return true;
       return true;
   }
+}
+bool Session::updateWaitModeBase(Interpreter& context) {
+    if (context.waitingMessage) {
+      if (message_.busy) return true;
+      context.waitingMessage = false;
+    }
+    if (context.waitingEffect) {
+      if (std::any_of(visualEffects_.begin(),visualEffects_.end(),[&](const VisualEffect& effect){return effect.serial==context.waitingEffect;})) return true;
+      context.waitingEffect = 0;
+    }
+    if (context.waitingVideo) {
+      if (moviePlaying_) return true;
+      context.waitingVideo = false;
+    }
+    if (context.waitingGather) {
+      if (followersGathering_) return true;
+      context.waitingGather = false;
+    }
+    if (context.waitingAction) {
+      if (battle_.forcedExecuting || !battle_.forcedActions.empty()) return true;
+      context.waitingAction = false;
+    }
+    if (context.waitingScroll) {
+      if (mapState_.scrollRest > 0) return true;
+      context.waitingScroll = false;
+    }
+    if (context.waitingRoute) {
+      const int id = *context.waitingRoute == 0 ? context.eventId : *context.waitingRoute;
+      const auto* target = routeCharacter(id, context);
+      if (target && target->routeForcing) return true;
+      context.waitingRoute.reset();
+    }
+  context.runtime->waitMode.clear();
+  return false;
 }
 void Session::advanceInterpreter(Interpreter& context) {
   if (!context.running || pendingTransfer_ || (battle_.active && !context.battleEvent)) return;
@@ -953,37 +1005,8 @@ void Session::advanceInterpreter(Interpreter& context) {
       if (context.children.front().running) return;
       context.children.clear();
     }
-    if (context.wait > 0) { --context.wait; return; }
-    if (context.waitingMessage) {
-      if (message_.busy) return;
-      context.waitingMessage = false;
-    }
-    if (context.waitingEffect) {
-      if (std::any_of(visualEffects_.begin(),visualEffects_.end(),[&](const VisualEffect& effect){return effect.serial==context.waitingEffect;})) return;
-      context.waitingEffect = 0;
-    }
-    if (context.waitingVideo) {
-      if (moviePlaying_) return;
-      context.waitingVideo = false;
-    }
-    if (context.waitingGather) {
-      if (followersGathering_) return;
-      context.waitingGather = false;
-    }
-    if (context.waitingAction) {
-      if (battle_.forcedExecuting || !battle_.forcedActions.empty()) return;
-      context.waitingAction = false;
-    }
-    if (context.waitingScroll) {
-      if (mapState_.scrollRest > 0) return;
-      context.waitingScroll = false;
-    }
-    if (context.waitingRoute) {
-      const int id = *context.waitingRoute == 0 ? context.eventId : *context.waitingRoute;
-      const auto* target = routeCharacter(id, context);
-      if (target && target->routeForcing) return;
-      context.waitingRoute.reset();
-    }
+    const auto scriptWait = runtimeHooks_ && runtimeHooks_->wait ? runtimeHooks_->wait(context.runtime, "updateWait") : std::optional<bool>{};
+    if (scriptWait ? *scriptWait : updateWaitBase(context)) return;
     if (context.index >= static_cast<int>(context.list.size())) { context.running = false; return; }
     if (!command(context.list[context.index], context)) return;
     ++context.index;
@@ -997,7 +1020,7 @@ void Session::updateInterpreter() {
     refreshIfNeeded();
     if (!interpreter_.running && reservedCommonEvent_ > 0) {
       const auto& source = database_["commonEvents"][reservedCommonEvent_]; reservedCommonEvent_ = 0;
-      if (!source.null()) { interpreter_ = {}; interpreter_.mapId = mapId_; interpreter_.list = source["list"].array(); interpreter_.running = true; }
+      if (!source.null()) { interpreter_.clear(); interpreter_.mapId = mapId_; interpreter_.list = source["list"].array(); interpreter_.running = true; }
     }
     if (!interpreter_.running) {
       const auto it = std::find_if(events_.begin(), events_.end(), [&](const Event& event) {
@@ -1014,7 +1037,7 @@ void Session::updateInterpreter() {
           if (enabled != switches_.end() && enabled->second) { automatic = &event; break; }
         }
         if (!automatic) return;
-        interpreter_ = {}; interpreter_.mapId = mapId_;
+        interpreter_.clear(); interpreter_.mapId = mapId_;
         interpreter_.list = (*automatic)["list"].array(); interpreter_.running = true;
       }
     }
@@ -1024,7 +1047,7 @@ void Session::updateInterpreter() {
       if (!event.character.directionFix) event.character.direction = event.prelockDirection;
       event.prelockDirection = 0;
     }
-    interpreter_ = {};
+    interpreter_.clear();
   }
 }
 
@@ -1032,6 +1055,84 @@ int Message::pageEnd() const {
   int end = std::min(firstLine + 4, static_cast<int>(lines.size()));
   for (int boundary : pageBreaks) if (boundary > firstLine) { end = std::min(end, boundary); break; }
   return end;
+}
+Interpreter* Session::findRuntimeInterpreter(const std::shared_ptr<RuntimeInterpreter>& object) {
+  const auto search = [&](auto&& self, Interpreter& root) -> Interpreter* {
+    if (root.runtime == object) return &root;
+    for (auto& child : root.children) if (auto* found = self(self, child)) return found;
+    return nullptr;
+  };
+  if (auto* found = search(search, interpreter_)) return found;
+  if (auto* found = search(search, battle_.interpreter)) return found;
+  for (auto& event : events_) if (auto* found = search(search, event.parallel)) return found;
+  for (auto& [id, common] : commonInterpreters_) { (void)id; if (common) if (auto* found = search(search, *common)) return found; }
+  return nullptr;
+}
+bool Session::invokeWaitBase(const std::shared_ptr<RuntimeInterpreter>& object) {
+  if (auto* context = findRuntimeInterpreter(object)) return updateWaitModeBase(*context);
+  object->waitMode.clear(); return false;
+}
+bool Session::invokeInterpreterWaitBase(const std::shared_ptr<RuntimeInterpreter>& object, const std::string& method) {
+  if (method == "updateWaitMode") return invokeWaitBase(object);
+  auto* context = findRuntimeInterpreter(object);
+  if (!context) throw std::runtime_error("interpreter is no longer attached to the session");
+  if (method == "updateWaitCount") return updateWaitCountBase(*context);
+  if (method != "updateWait") throw std::invalid_argument("unknown native interpreter wait method: " + method);
+  return updateWaitBase(*context);
+}
+bool Session::updateWaitCountBase(Interpreter& context) {
+  if (context.wait > 0) { --context.wait; return true; }
+  return false;
+}
+bool Session::updateWaitBase(Interpreter& context) {
+  const auto dispatch = [&](const std::string& name, bool (Session::*native)(Interpreter&)) {
+    const auto scripted = runtimeHooks_ && runtimeHooks_->wait ? runtimeHooks_->wait(context.runtime, name) : std::optional<bool>{};
+    return scripted ? *scripted : (this->*native)(context);
+  };
+  return dispatch("updateWaitCount", &Session::updateWaitCountBase) || dispatch("updateWaitMode", &Session::updateWaitModeBase);
+}
+Value Session::runtimeInterpreterField(const std::shared_ptr<RuntimeInterpreter>& object, const std::string& field, const std::optional<Value>& value) {
+  auto* context = findRuntimeInterpreter(object);
+  if (!context) throw std::runtime_error("interpreter is no longer attached to the session");
+  if (field == "running" && !value) return context->running;
+  int* target = nullptr;
+  if (field == "_mapId") target = &context->mapId;
+  else if (field == "_eventId") target = &context->eventId;
+  else if (field == "_index") target = &context->index;
+  else if (field == "_waitCount") target = &context->wait;
+  else if (field == "_depth") target = &context->depth;
+  else throw std::invalid_argument("interpreter field is not bound: " + field);
+  if (value) {
+    const double number = value->number(-1);
+    if (!std::isfinite(number) || number < 0 || number > std::numeric_limits<int>::max() || number != std::floor(number))
+      throw std::invalid_argument("interpreter field requires a nonnegative integer");
+    *target = static_cast<int>(number);
+  }
+  return *target;
+}
+void Session::setRuntimeWaitMode(const std::shared_ptr<RuntimeInterpreter>& object, std::string mode) {
+  if (auto* context = findRuntimeInterpreter(object)) {
+    context->waitingMessage = mode == "message";
+    context->waitingVideo = mode == "video";
+    context->waitingGather = mode == "gather";
+    context->waitingAction = mode == "action";
+    context->waitingScroll = mode == "scroll";
+    context->waitingEffect = 0;
+    context->waitingRoute.reset();
+  }
+  object->waitMode = std::move(mode);
+}
+std::string Session::runtimeWaitMode(const std::shared_ptr<RuntimeInterpreter>& object) {
+  if (!object->waitMode.empty()) return object->waitMode;
+  const auto* context = findRuntimeInterpreter(object);
+  if (!context) return {};
+  if (context->waitingMessage) return "message";
+  if (context->waitingVideo) return "video";
+  if (context->waitingGather) return "gather";
+  if (context->waitingAction) return "action";
+  if (context->waitingScroll) return "scroll";
+  if (context->waitingRoute) return "route";
+  return {};
 }
 Interpreter* Session::findInterpreter(std::uint64_t serial) {
   if (!serial) return nullptr;
@@ -1094,6 +1195,7 @@ void Session::step(const Input& input) {
   const int repeatedDirection = input.repeatedDirection.value_or(directionAge_ == 0 || (directionAge_ >= 24 && directionAge_ % 6 == 0) ? input.direction : 0);
   if (ui_.scene == Scene::map || ui_.scene == Scene::battle) updateVisualEffects();
   ++ui_.age;
+  if (updateSceneTransition(sceneFadeComplete)) return;
   if (ui_.scene != Scene::map) {
     destination_.reset(); mapTouchCount_ = 0;
     if (ui_.scene == Scene::title && newGamePending_) {
@@ -1175,7 +1277,7 @@ void Session::step(const Input& input) {
       startEvent(player_.x, player_.y, false);
       const auto event = std::find_if(events_.begin(), events_.end(), [](const Event& value) { return value.starting; });
       if (event != events_.end()) { event->starting = false; startInterpreter(*event); }
-      else if (!message_.busy) advanceEncounter();
+      else if (!message_.busy && !pendingTransfer_ && !pendingScene_) advanceEncounter();
     }
   }
   if (!player_.moving() && player_.jumpCount <= 0) player_.bushDepth = tileFlag(player_.x, player_.y, 64) && player_.characterName.find('!') >= 2 ? 12 : 0;

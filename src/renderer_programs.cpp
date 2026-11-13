@@ -362,6 +362,8 @@ void Renderer::queryFilterProgramUniforms() {
   colorMatrixEnabledUniform_ = glGetUniformLocation(program_, "colorMatrixEnabled");
   colorMatrixUniform_ = glGetUniformLocation(program_, "colorMatrix");
   colorMatrixAlphaUniform_ = glGetUniformLocation(program_, "colorMatrixAlpha");
+  canvasToneEnabledUniform_ = glGetUniformLocation(program_, "canvasToneEnabled");
+  canvasToneUniform_ = glGetUniformLocation(program_, "canvasTone");
   spriteColorEnabledUniform_ = glGetUniformLocation(program_, "spriteColorEnabled");
   spriteColorToneUniform_ = glGetUniformLocation(program_, "spriteColorTone");
   spriteBlendColorUniform_ = glGetUniformLocation(program_, "spriteBlendColor");

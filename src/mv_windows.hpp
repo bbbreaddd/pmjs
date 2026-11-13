@@ -35,6 +35,7 @@ class Window_Base {
   int standardBackOpacity = 192;
   int openness = 255;
   bool active = true;
+  std::uint64_t animationCount = 0;
   bool visible = true;
   bool opening = false, closing = false;
   int fontSize = 28;

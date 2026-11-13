@@ -89,6 +89,7 @@ napi_value property(napi_env env, napi_value object, const char* name);
 bool hasProperty(napi_env env, napi_value object, const char* name);
 State& host(napi_env env);
 void syncExternalMemory(napi_env env);
+void renderPreparedFrame(napi_env env, State& value);
 napi_value imageInfo(napi_env env, std::uint32_t handle, int width, int height);
 std::optional<pmjs::ImageHandle> resolveImage(State& value, std::uint32_t handle);
 napi_value rendererStats(napi_env env, napi_callback_info info);

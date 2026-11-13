@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <filesystem>
+#include <cmath>
 #include <limits>
 
 #include <array>
@@ -23,18 +24,40 @@ RuntimeCore* boundRuntime();
 void updateServices();
 struct BitmapBacking;
 struct CoreServiceBinding;
+class Container;
 
 // rpg_core.js Bitmap with full RGBA pixel operations
 class PixelBitmap {
  public:
+  class PaintOpacity {
+   public:
+    operator double() const { return value_; }
+    PaintOpacity& operator=(double value) {
+      if (value_ != value) {
+        value_ = value;
+        contextCreated_ = true;
+        const double alpha = value / 255.0;
+        if (std::isfinite(alpha) && alpha >= 0 && alpha <= 1) alpha_ = alpha;
+      }
+      return *this;
+    }
+    double alpha() const { return alpha_; }
+    void resetContext() { alpha_ = 1; contextCreated_ = true; }
+    bool hasContext() const { return contextCreated_; }
+    void markContext() const { contextCreated_ = true; }
+   private:
+    double value_ = 255;
+    double alpha_ = 1;
+    mutable bool contextCreated_ = false;
+  };
   int width = 0;
   int height = 0;
   std::string url;
   bool smooth = false;
-  bool dirty = false;
+  mutable bool dirty = false;
   bool loaded = true;
   bool error = false;
-  double paintOpacity = 255;
+  PaintOpacity paintOpacity;
   double fontSize = 28;
   std::string fontFace = "GameFont";
   bool fontItalic = false;
@@ -64,6 +87,8 @@ class PixelBitmap {
   std::string loadingState = "none";
   std::uint64_t touchedAt = 0;
   std::uint32_t nativeCanvas() const;
+  int canvasWidth() const { nativeCanvas(); return canvasWidth_; }
+  int canvasHeight() const { nativeCanvas(); return canvasHeight_; }
   std::optional<ImageInfo> texture() const;
   void syncPixels();
   void commitPixels();
@@ -100,10 +125,14 @@ class PixelBitmap {
   static std::array<std::uint8_t, 4> parseCssColor(const std::string& color);
  private:
   mutable std::shared_ptr<BitmapBacking> backing_;
+  mutable int canvasWidth_ = 0, canvasHeight_ = 0;
   std::shared_ptr<BitmapBacking> requestedImage_, originalImage_;
   std::function<void()> failure_;
   bool decodeAfterRequest_ = false;
-  std::shared_ptr<int> lifetime_ = std::make_shared<int>(0);
+  struct LoadOwner { PixelBitmap* bitmap; };
+  std::shared_ptr<LoadOwner> lifetime_ = std::make_shared<LoadOwner>(LoadOwner{this});
+  static PixelBitmap* loadTarget(const std::weak_ptr<LoadOwner>& owner);
+  void enableDecode();
   void changed();
   void loadNow();
 };
@@ -124,6 +153,8 @@ class Graphics {
   static void onKeyDown(int keyCode, bool control = false, bool alt = false);
   static bool onPointerDown(double x, double y);
   static inline std::uint64_t frameCount = 0;
+  static inline int skipCount = 0, maxSkip = 3;
+  static inline bool rendered = false;
   static inline bool webgl = true;
   static inline bool fpsVisible = false;
   static inline bool loading = false;
@@ -140,10 +171,11 @@ class Graphics {
   static void setVideoCallbacks(std::function<void(const std::string&)> play, std::function<bool()> playing, std::function<void(double)> volume);
   static void setLoadingCallbacks(std::function<void()> stop, std::function<void()> resume);
 
-  static bool initialize(int w = 816, int h = 624, const std::string& type = "auto");
+  static bool initialize(int w = 800, int h = 600, const std::string& type = "auto");
   static void tickStart();
   static void tickEnd();
-  static void render();
+  static bool render(const std::function<void()>& stage = {}, const std::function<void()>& drawFrame = {});
+  static bool render(Container& stage);
   static bool isWebGL() { return webgl && boundRuntime(); }
   static bool canUseCssFontLoading() { return false; }
   static std::string canPlayVideoType(const std::string& type);
@@ -235,7 +267,6 @@ class WebAudio {
   std::shared_ptr<CoreServiceBinding> services_;
   std::uint32_t handle_ = 0;
   bool autoPlay_ = false, loading_ = false, useResourceHandler_ = true;
-  double pendingFadeIn_ = -1;
   std::function<void()> failure_;
   std::shared_ptr<int> lifetime_ = std::make_shared<int>(0);
   void failLoad();

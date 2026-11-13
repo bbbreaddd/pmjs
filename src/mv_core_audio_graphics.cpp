@@ -84,20 +84,68 @@ std::optional<std::vector<std::uint8_t>> dataUrl(const std::string& url) {
   const auto decoded=sourcePath(body);return std::vector<std::uint8_t>(decoded.begin(),decoded.end());
 }
 struct LoadedImage { ImageInfo info;bool owned=false; };
-std::optional<LoadedImage> bitmapSource(const std::string& url,RuntimeCore& core) {
+std::optional<LoadedImage> bitmapSource(const std::string& url,RuntimeCore& core,const std::shared_ptr<CoreServiceBinding>& services) {
   if(const auto bytes=dataUrl(url)) {
     auto pixels=ImageStore::decodeMemory(bytes->data(),bytes->size());
     if(!pixels)return std::nullopt;
     const auto image=core.images().installDecodedMemory(std::move(*pixels),true);
     return image?std::optional<LoadedImage>{{*image,true}}:std::nullopt;
   }
-  if(active->imageLoader) { const auto image=active->imageLoader(url);return image?std::optional<LoadedImage>{{*image,false}}:std::nullopt; }
+  if(services->imageLoader) { const auto image=services->imageLoader(url);return image?std::optional<LoadedImage>{{*image,false}}:std::nullopt; }
   const auto path=resolve(url,core);if(!path)return std::nullopt;
   const auto image=core.images().loadPng(*path,true);return image?std::optional<LoadedImage>{{*image,true}}:std::nullopt;
 }
 std::uint32_t color(const std::string& text,double opacity=255) {
   const auto rgba=PixelBitmap::parseCssColor(text);
   return (std::uint32_t(rgba[0])<<24)|(std::uint32_t(rgba[1])<<16)|(std::uint32_t(rgba[2])<<8)|std::uint32_t(std::clamp(int(std::round(rgba[3]*opacity/255.0)),0,255));
+}
+std::uint32_t drawingColor(const std::string& text,double opacity=255) {
+  try { return color(text,opacity); }
+  catch (const std::invalid_argument&) { return color("black",opacity); }
+  catch (const std::out_of_range&) { return color("black",opacity); }
+}
+std::string fontFamilyKey(std::string family) {
+  std::transform(family.begin(),family.end(),family.begin(),[](unsigned char ch){return ch>='A'&&ch<='Z'?char(ch-'A'+'a'):char(ch);});
+  return family;
+}
+std::optional<std::vector<std::string>> fontFamilies(const std::string& text) {
+  static const std::regex unquoted(R"((?:--|-?[_a-zA-Z\x80-\xff])[-_a-zA-Z0-9\x80-\xff]*(?:\s+(?:--|-?[_a-zA-Z\x80-\xff])[-_a-zA-Z0-9\x80-\xff]*)*)");
+  std::vector<std::string> result;
+  std::size_t position=0;
+  while (position<text.size()) {
+    while(position<text.size()&&std::isspace(static_cast<unsigned char>(text[position])))++position;
+    if(position==text.size())return std::nullopt;
+    if(text[position]=='\''||text[position]=='"') {
+      const char quote=text[position++];const auto begin=position;
+      while(position<text.size()&&text[position]!=quote&&text[position]!='\r'&&text[position]!='\n')++position;
+      if(position==begin||position==text.size()||text[position]!=quote)return std::nullopt;
+      result.push_back(text.substr(begin,position-begin));
+      ++position;
+      while(position<text.size()&&std::isspace(static_cast<unsigned char>(text[position])))++position;
+      if(position<text.size()&&text[position]!=',')return std::nullopt;
+    } else {
+      const auto comma=text.find(',',position),end=comma==std::string::npos?text.size():comma;
+      auto family=text.substr(position,end-position);
+      const auto last=family.find_last_not_of(" \t\r\n\f\v");
+      if(last==std::string::npos)return std::nullopt;
+      family.resize(last+1);
+      if(!std::regex_match(family,unquoted))return std::nullopt;
+      const auto reserved=fontFamilyKey(family);
+      if(reserved=="inherit"||reserved=="initial"||reserved=="unset"||reserved=="revert"||reserved=="default")return std::nullopt;
+      std::istringstream words(family);family.clear();
+      for(std::string word;words>>word;){if(!family.empty())family+=' ';family+=word;}
+      result.push_back(std::move(family));
+      position=end;
+    }
+    if(position==text.size())return result;
+    if(++position==text.size())return std::nullopt;
+  }
+  return std::nullopt;
+}
+struct BitmapFont { std::string families;double size;bool italic; };
+BitmapFont bitmapFont(const PixelBitmap& bitmap) {
+  if(!std::isfinite(bitmap.fontSize)||bitmap.fontSize<=0||!fontFamilies(bitmap.fontFace))return {"sans-serif",10,false};
+  return {bitmap.fontFace,bitmap.fontSize,bitmap.fontItalic};
 }
 }
 RuntimeCore* boundRuntime() { return active && !active->lifetime.expired() ? active->runtime : nullptr; }
@@ -114,6 +162,7 @@ void unbindRuntime(RuntimeCore& core) {
   for (auto* voice:voices) if (voice->services_==services) voice->release();
   if (active==services) {
     Html5Audio::clear();
+    Html5Audio::url.clear();
     Html5Audio::initialized=false;
     Html5Audio::staticSeUrl.clear();
     pendingLoads.clear();
@@ -144,7 +193,7 @@ void updateServices() {
     Html5Audio::currentTime=htmlAudio->playbackPosition();
   }
 }
-PixelBitmap::PixelBitmap() { width=height=1; }
+PixelBitmap::PixelBitmap() { width=height=canvasWidth_=canvasHeight_=1;paintOpacity.markContext(); }
 bool PixelBitmap::isReady() const { return (loadingState=="none"||loaded)&&(!backing_||(backing_->services&&backing_->services->runtime&&!backing_->services->lifetime.expired())); }
 PixelBitmap::PixelBitmap(int w,int h) { resize(w,h); }
 PixelBitmap::PixelBitmap(RuntimeCore& core,int w,int h) { if (boundRuntime()!=&core) bindRuntime(core);resize(w,h); }
@@ -160,6 +209,9 @@ PixelBitmap::PixelBitmap(PixelBitmap&& source) noexcept
       backing_(std::move(source.backing_)), requestedImage_(std::move(source.requestedImage_)),
       originalImage_(std::move(source.originalImage_)), failure_(std::move(source.failure_)),
       decodeAfterRequest_(source.decodeAfterRequest_), lifetime_(std::move(source.lifetime_)) {
+  if (lifetime_) lifetime_->bitmap = this;
+  canvasWidth_=source.canvasWidth_;canvasHeight_=source.canvasHeight_;
+  source.canvasWidth_=source.canvasHeight_=0;
   source.width = source.height = 0;
   source.dirty = false;
   source.loaded = false;
@@ -169,11 +221,14 @@ PixelBitmap::PixelBitmap(PixelBitmap&& source) noexcept
 PixelBitmap& PixelBitmap::operator=(PixelBitmap&& source) noexcept {
   if (this == &source) return *this;
   backing_ = std::move(source.backing_);
+  canvasWidth_=source.canvasWidth_;canvasHeight_=source.canvasHeight_;
+  source.canvasWidth_=source.canvasHeight_=0;
   requestedImage_ = std::move(source.requestedImage_);
   originalImage_ = std::move(source.originalImage_);
   failure_ = std::move(source.failure_);
   decodeAfterRequest_ = source.decodeAfterRequest_;
   lifetime_ = std::move(source.lifetime_);
+  if (lifetime_) lifetime_->bitmap = this;
   width = source.width; height = source.height;
   url = std::move(source.url); smooth = source.smooth; dirty = source.dirty;
   loaded = source.loaded; error = source.error; loadingState = std::move(source.loadingState);
@@ -192,24 +247,28 @@ PixelBitmap& PixelBitmap::operator=(PixelBitmap&& source) noexcept {
 }
 PixelBitmap& PixelBitmap::operator=(const PixelBitmap& source) {
   if (this==&source) return *this;
-  backing_.reset();requestedImage_.reset();originalImage_=source.originalImage_;lifetime_=std::make_shared<int>(0);failure_={};loadListeners.clear();
+  backing_.reset();requestedImage_.reset();originalImage_=source.originalImage_;lifetime_=std::make_shared<LoadOwner>(LoadOwner{this});failure_={};loadListeners.clear();
   width=source.width;height=source.height;url=source.url;smooth=source.smooth;loaded=source.loaded;error=source.error;loadingState=source.loadingState;
   paintOpacity=source.paintOpacity;fontSize=source.fontSize;fontFace=source.fontFace;fontItalic=source.fontItalic;textColor=source.textColor;outlineColor=source.outlineColor;outlineWidth=source.outlineWidth;
   pixels.clear();
+  canvasWidth_=source.canvasWidth_;canvasHeight_=source.canvasHeight_;
   if (source.backing_ && source.backing_->image) {
     backing_ = source.backing_;
   } else if (source.backing_ && source.backing_->canvas) {
     auto& core = runtime(source.backing_->services);
     const auto image = source.texture();
-    const auto canvas = core.canvases().create(width, height);
+    const auto canvas = core.canvases().create(canvasWidth_, canvasHeight_);
     if (!image || !canvas) throw std::runtime_error("cannot copy bitmap surface");
     backing_ = std::make_shared<BitmapBacking>();
     backing_->services = source.backing_->services;
     backing_->canvas = canvas->handle;
     surfaces.push_back(backing_);
-    if (!core.canvases().drawImage(backing_->canvas, image->handle, 0, 0, width, height,
-                                  0, 0, width, height, 1, false))
+    if (!core.canvases().drawImage(backing_->canvas, image->handle, 0, 0, canvasWidth_, canvasHeight_,
+                                  0, 0, canvasWidth_, canvasHeight_, 1, false))
       throw std::runtime_error("cannot copy bitmap pixels");
+  } else if (source.backing_) {
+    backing_=std::make_shared<BitmapBacking>();
+    backing_->services=source.backing_->services;
   }
   dirty=true;return *this;
 }
@@ -217,16 +276,20 @@ std::uint32_t PixelBitmap::nativeCanvas() const {
   if (!backing_ || !backing_->canvas) {
     const auto services = backing_ ? backing_->services : active;
     auto& core = runtime(services);
-    const auto surface = core.canvases().create(std::max(1,width), std::max(1,height));
+    const int canvasWidth=canvasWidth_>0?canvasWidth_:std::max(1,width);
+    const int canvasHeight=canvasHeight_>0?canvasHeight_:std::max(1,height);
+    const auto surface = core.canvases().create(canvasWidth,canvasHeight);
     if (!surface) throw std::runtime_error("cannot allocate bitmap surface");
     auto writable = std::make_shared<BitmapBacking>();
     writable->services = services;
     writable->canvas = surface->handle;
-    if (backing_ && backing_->image &&
+    if (loaded && backing_ && backing_->image &&
         !core.canvases().drawImage(writable->canvas, backing_->image, 0, 0, width, height,
                                    0, 0, width, height, 1, false))
       throw std::runtime_error("cannot copy bitmap image");
     backing_ = std::move(writable);
+    canvasWidth_=canvasWidth;canvasHeight_=canvasHeight;paintOpacity.markContext();
+    dirty=true;
     surfaces.push_back(backing_);
   }
   runtime(backing_->services);return backing_->canvas;
@@ -239,66 +302,105 @@ std::optional<ImageInfo> PixelBitmap::texture() const {
 }
 void PixelBitmap::syncPixels() {
   auto& core=runtime(backing_ ? backing_->services : active);
-  const auto data=core.canvases().readPixels(nativeCanvas(),0,0,width,height);
+  const auto canvas=nativeCanvas();
+  const auto data=core.canvases().readPixels(canvas,0,0,canvasWidth_,canvasHeight_);
   if (!data) throw std::runtime_error("cannot read bitmap pixels");pixels=data->rgba;
 }
 void PixelBitmap::commitPixels() {
-  if (pixels.size()!=static_cast<std::size_t>(width)*height*4) throw std::invalid_argument("invalid bitmap pixel count");
+  const auto canvas=nativeCanvas();
+  if (pixels.size()!=static_cast<std::size_t>(canvasWidth_)*canvasHeight_*4) throw std::invalid_argument("invalid bitmap pixel count");
   auto& core=runtime(backing_ ? backing_->services : active);
-  if (!core.canvases().replacePixels(nativeCanvas(),pixels,PixelEncoding::StraightRGBA8)) throw std::runtime_error("cannot write bitmap pixels");
+  if (!core.canvases().replacePixels(canvas,pixels,PixelEncoding::StraightRGBA8)) throw std::runtime_error("cannot write bitmap pixels");
   dirty=true;
 }
 void PixelBitmap::changed() { dirty=true;pixels.clear(); }
 void PixelBitmap::resize(int w,int h) {
-  width=std::max(1,w);height=std::max(1,h);backing_.reset();changed();
+  const auto services = backing_ ? backing_->services : active;
+  const int canvasWidth=std::max(1,w),canvasHeight=std::max(1,h);
+  if (backing_ && backing_->canvas) {
+    if(!runtime(services).canvases().resize(backing_->canvas,canvasWidth,canvasHeight))throw std::runtime_error("cannot resize bitmap canvas");
+  } else {
+    backing_.reset();
+    if (services) { backing_=std::make_shared<BitmapBacking>();backing_->services=services; }
+  }
+  canvasWidth_=canvasWidth;canvasHeight_=canvasHeight;
+  if (isReady() && !originalImage_) { width=canvasWidth_;height=canvasHeight_; }
+  paintOpacity.resetContext();
+  changed();
 }
 void PixelBitmap::touch() { touchedAt=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();if(cacheEntry)cacheEntry->touch(); }
 void PixelBitmap::checkDirty() { if (dirty) { texture();dirty=false; } }
 void PixelBitmap::setImageLoader(std::function<std::optional<ImageInfo>(const std::string&)> loader) { runtime();active->imageLoader=std::move(loader); }
-std::shared_ptr<PixelBitmap> PixelBitmap::load(const std::string& source) { auto bitmap=std::make_shared<PixelBitmap>();bitmap->loadUrl(source);return bitmap; }
-std::shared_ptr<PixelBitmap> PixelBitmap::request(const std::string& source) { auto bitmap=std::make_shared<PixelBitmap>();bitmap->url=source;bitmap->width=bitmap->height=0;bitmap->loadingState="pending";bitmap->loaded=false;return bitmap; }
+std::shared_ptr<PixelBitmap> PixelBitmap::load(const std::string& source) { auto bitmap=std::make_shared<PixelBitmap>();bitmap->canvasWidth_=bitmap->canvasHeight_=0;bitmap->paintOpacity=PaintOpacity{};bitmap->loadUrl(source);return bitmap; }
+std::shared_ptr<PixelBitmap> PixelBitmap::request(const std::string& source) { auto bitmap=std::make_shared<PixelBitmap>();bitmap->canvasWidth_=bitmap->canvasHeight_=0;bitmap->paintOpacity=PaintOpacity{};bitmap->url=source;bitmap->width=bitmap->height=0;bitmap->loadingState="pending";bitmap->loaded=false;return bitmap; }
 void PixelBitmap::startRequest() {
   if (loadingState!="pending") return;
+  if (!lifetime_) lifetime_=std::make_shared<LoadOwner>(LoadOwner{this});
+  if (!backing_ && active) { backing_=std::make_shared<BitmapBacking>();backing_->services=active; }
+  decodeAfterRequest_=false;
   loadingState="requesting";
-  try {
-    auto& core=runtime();const auto source=bitmapSource(url,core);
-    if(!source)throw std::runtime_error("cannot request bitmap");
-    if(!source->owned&&!core.images().retain(source->info.handle))throw std::runtime_error("cannot retain requested bitmap");
-    requestedImage_=std::make_shared<BitmapBacking>();requestedImage_->services=active;requestedImage_->image=source->info.handle;surfaces.push_back(requestedImage_);
-    width=source->info.width;height=source->info.height;loadingState="requestCompleted";
-  } catch(const std::exception&) {
-    if(!failure_) { const std::weak_ptr<int> alive=lifetime_;
-      failure_=::pmjs::mv::ResourceHandler::shared().createLoader(url,[this,alive]{if(!alive.expired()){if(decodeAfterRequest_)loadNow();else{loadingState="pending";startRequest();}}},[this,alive]{if(!alive.expired()){error=true;loadingState="error";}});
-    }
-    failure_();
-  }
+  const std::weak_ptr<LoadOwner> alive=lifetime_;
+  pendingLoads.push_back([alive]{if(auto* bitmap=loadTarget(alive))bitmap->loadNow();});
 }
 bool PixelBitmap::isRequestReady() const { return loadingState!="pending" && loadingState!="requesting" && loadingState!="decrypting"; }
 bool PixelBitmap::isRequestOnly() const { return !decodeAfterRequest_&&!isReady(); }
-void PixelBitmap::decode() { if (!loaded) loadUrl(url); }
-void PixelBitmap::loadUrl(const std::string& source) {
-  url=source;loaded=false;error=false;decodeAfterRequest_=true;loadingState="requesting";if(!backing_)width=height=0;
+PixelBitmap* PixelBitmap::loadTarget(const std::weak_ptr<LoadOwner>& owner) {
+  const auto target=owner.lock();
+  return target ? target->bitmap : nullptr;
+}
+void PixelBitmap::enableDecode() {
+  if (!lifetime_) lifetime_=std::make_shared<LoadOwner>(LoadOwner{this});
+  decodeAfterRequest_=true;
   if (!failure_) {
-    const std::weak_ptr<int> alive=lifetime_;
-    failure_=::pmjs::mv::ResourceHandler::shared().createLoader(url,[alive,this]{if(!alive.expired())loadNow();},[alive,this]{if(!alive.expired()){error=true;loadingState="error";}});
+    const std::weak_ptr<LoadOwner> alive=lifetime_;
+    failure_=::pmjs::mv::ResourceHandler::shared().createLoader(url,
+      [alive]{if(auto* bitmap=loadTarget(alive))bitmap->loadNow();},
+      [alive]{if(auto* bitmap=loadTarget(alive)){bitmap->error=true;bitmap->loadingState="error";}});
   }
-  const std::weak_ptr<int> alive=lifetime_;
-  pendingLoads.push_back([this,alive]{if(!alive.expired())loadNow();});
+}
+void PixelBitmap::decode() {
+  if (isReady()) return;
+  if (loadingState=="requesting"||loadingState=="decrypting") enableDecode();
+  else loadUrl(url);
+}
+void PixelBitmap::loadUrl(const std::string& source) {
+  url=source;loaded=false;error=false;loadingState="requesting";width=height=0;
+  if (!backing_ && active) { backing_=std::make_shared<BitmapBacking>();backing_->services=active; }
+  enableDecode();
+  const std::weak_ptr<LoadOwner> alive=lifetime_;
+  pendingLoads.push_back([alive]{if(auto* bitmap=loadTarget(alive))bitmap->loadNow();});
 }
 void PixelBitmap::loadNow() {
   try {
-    auto& core=runtime();std::optional<ImageInfo> source;
+    if (decodeAfterRequest_ && paintOpacity.hasContext() && (!backing_ || !backing_->canvas)) nativeCanvas();
+    const auto services=backing_?backing_->services:active;
+    auto& core=runtime(services);std::optional<ImageInfo> source;
     const bool requested=bool(requestedImage_);bool borrowed=requested;
     if(requested)source=core.images().inspect(requestedImage_->image);
-    else if(const auto loaded=bitmapSource(url,core)){source=loaded->info;borrowed=!loaded->owned;}
+    else if(const auto loaded=bitmapSource(url,core,services)){source=loaded->info;borrowed=!loaded->owned;}
     if (!source) throw std::runtime_error("cannot load bitmap");
+    if (!decodeAfterRequest_) {
+      if (!requested) {
+        if(borrowed&&!core.images().retain(source->handle))throw std::runtime_error("cannot retain requested bitmap source image");
+        requestedImage_=std::make_shared<BitmapBacking>();requestedImage_->services=services;requestedImage_->image=source->handle;surfaces.push_back(requestedImage_);
+      }
+      loaded=false;error=false;loadingState="purged";width=height=0;
+      return;
+    }
     if(requested)originalImage_=requestedImage_;
     else {
       if(borrowed&&!core.images().retain(source->handle))throw std::runtime_error("cannot retain bitmap source image");
-      originalImage_=std::make_shared<BitmapBacking>();originalImage_->services=active;originalImage_->image=source->handle;surfaces.push_back(originalImage_);
+      originalImage_=std::make_shared<BitmapBacking>();originalImage_->services=services;originalImage_->image=source->handle;surfaces.push_back(originalImage_);
     }
     width = source->width; height = source->height;
-    backing_ = originalImage_;
+    loaded=true;
+    if (!backing_ || !backing_->canvas) backing_ = originalImage_;
+    else if (canvasWidth_<width || canvasHeight_<height) {
+      if(!core.canvases().resize(backing_->canvas,width,height))throw std::runtime_error("cannot resize loaded bitmap canvas");
+      canvasWidth_=width;canvasHeight_=height;
+      paintOpacity.resetContext();
+      if(!core.canvases().drawImage(backing_->canvas,source->handle,0,0,width,height,0,0,width,height,1,false))throw std::runtime_error("cannot draw loaded bitmap image");
+    }
     requestedImage_.reset();
     loaded=true;error=false;loadingState="loaded";changed();
   } catch (const std::exception&) { loaded=false;loadingState="requesting";if(failure_)failure_();else{error=true;loadingState="error";} }
@@ -326,7 +428,7 @@ void PixelBitmap::clearRect(double x,double y,double w,double h) {
   }
   changed();
 }
-void PixelBitmap::clear() { runtime(backing_ ? backing_->services : active).canvases().clear(nativeCanvas());changed(); }
+void PixelBitmap::clear() { clearRect(0,0,width,height); }
 void PixelBitmap::fillRect(double x,double y,double w,double h,const std::string& value) {
   if(w<0){x+=w;w=-w;}if(h<0){y+=h;h=-h;}
   if(!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(w)||!std::isfinite(h))return;
@@ -335,41 +437,42 @@ void PixelBitmap::fillRect(double x,double y,double w,double h,const std::string
     return coordinate == std::trunc(coordinate) && coordinate >= std::numeric_limits<int>::min() && coordinate <= std::numeric_limits<int>::max();
   });
   auto& canvases = runtime(backing_?backing_->services:active).canvases();
-  const bool drawn = integral ? canvases.fillRect(nativeCanvas(),int(x),int(y),int(w),int(h),color(value,paintOpacity))
-    : canvases.paintRect(nativeCanvas(),{float(x),float(y),float(w),float(h)},color(value,paintOpacity),0,{},{},{});
+  const bool drawn = integral ? canvases.fillRect(nativeCanvas(),int(x),int(y),int(w),int(h),drawingColor(value,paintOpacity.alpha()*255))
+    : canvases.paintRect(nativeCanvas(),{float(x),float(y),float(w),float(h)},drawingColor(value,paintOpacity.alpha()*255),0,{},{},{});
   if(!drawn)throw std::runtime_error("cannot fill bitmap rectangle");
   changed();
 }
 void PixelBitmap::fillAll(const std::string& value) { fillRect(0,0,width,height,value); }
 void PixelBitmap::gradientFillRect(double x,double y,double w,double h,const std::string& first,const std::string& second,bool vertical) {
+  if(!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(x+(vertical?0:w))||!std::isfinite(y+(vertical?h:0)))throw std::invalid_argument("bitmap gradient endpoints must be finite");
   const std::array<float,4> gradient{float(x),float(y),float(x+(vertical ? 0 : w)),float(y+(vertical ? h : 0))};
   if(w<0){x+=w;w=-w;}if(h<0){y+=h;h=-h;}
-  runtime(backing_ ? backing_->services : active).canvases().paintRect(nativeCanvas(),{float(x),float(y),float(w),float(h)},0,0,gradient,{0,1},{color(first,paintOpacity),color(second,paintOpacity)});changed();
+  runtime(backing_ ? backing_->services : active).canvases().paintRect(nativeCanvas(),{float(x),float(y),float(w),float(h)},0,0,gradient,{0,1},{color(first,paintOpacity.alpha()*255),color(second,paintOpacity.alpha()*255)});changed();
 }
 void PixelBitmap::drawCircle(double x,double y,double radius,const std::string& value) {
-  CanvasCirclePaint circle;circle.x=x;circle.y=y;circle.radius=radius;circle.paint.color=color(value);circle.alpha=paintOpacity/255.0;
+  if(radius<0)throw std::invalid_argument("bitmap circle radius must be nonnegative");
+  CanvasCirclePaint circle;circle.x=x;circle.y=y;circle.radius=radius;circle.paint.color=drawingColor(value);circle.alpha=paintOpacity.alpha();
   runtime(backing_ ? backing_->services : active).canvases().paintCircle(nativeCanvas(),circle);changed();
 }
 void PixelBitmap::blt(const PixelBitmap& source,double sx,double sy,double sw,double sh,double dx,double dy,double dw,double dh) {
   if(std::isnan(dw)||dw==0)dw=sw;if(std::isnan(dh)||dh==0)dh=sh;
-  if(sx<0||sy<0||sw<=0||sh<=0||sx+sw>source.width||sy+sh>source.height||dw<=0||dh<=0)return;
+  if(!(sx>=0&&sy>=0&&sw>0&&sh>0&&sx+sw<=source.width&&sy+sh<=source.height&&dw>0&&dh>0))return;
+  source.nativeCanvas();
   const auto image = source.texture();
   if (!image) throw std::runtime_error("cannot prepare blit source");
-  runtime(backing_ ? backing_->services : active).canvases().drawImage(nativeCanvas(),image->handle,sx,sy,sw,sh,dx,dy,dw,dh,paintOpacity/255.0,true);changed();
+  runtime(backing_ ? backing_->services : active).canvases().drawImage(nativeCanvas(),image->handle,sx,sy,sw,sh,dx,dy,dw,dh,paintOpacity.alpha(),true);changed();
 }
 void PixelBitmap::bltImage(const PixelBitmap& source,double sx,double sy,double sw,double sh,double dx,double dy,double dw,double dh) {
   if(std::isnan(dw)||dw==0)dw=sw;if(std::isnan(dh)||dh==0)dh=sh;
-  if(sx<0||sy<0||sw<=0||sh<=0||sx+sw>source.width||sy+sh>source.height||dw<=0||dh<=0)return;
+  if(!(sx>=0&&sy>=0&&sw>0&&sh>0&&sx+sw<=source.width&&sy+sh<=source.height&&dw>0&&dh>0))return;
   if(!source.originalImage_||!source.originalImage_->image)throw std::invalid_argument("bitmap has no decoded image source");
-  runtime(backing_?backing_->services:active).canvases().drawImage(nativeCanvas(),source.originalImage_->image,sx,sy,sw,sh,dx,dy,dw,dh,paintOpacity/255.0,true);changed();
+  runtime(backing_?backing_->services:active).canvases().drawImage(nativeCanvas(),source.originalImage_->image,sx,sy,sw,sh,dx,dy,dw,dh,paintOpacity.alpha(),true);changed();
 }
 std::string PixelBitmap::getPixel(int x,int y) const {
-  if(x<0||y<0||x>=width||y>=height)return "#000000";
   const auto value=runtime(backing_ ? backing_->services : active).canvases().pixel(nativeCanvas(),x,y).value_or(0);
   char text[8];std::snprintf(text,sizeof(text),"#%06x",unsigned(value>>8));return text;
 }
 std::uint8_t PixelBitmap::getAlphaPixel(int x,int y) const {
-  if(x<0||y<0||x>=width||y>=height)return 0;
   return runtime(backing_ ? backing_->services : active).canvases().pixel(nativeCanvas(),x,y).value_or(0)&255;
 }
 void PixelBitmap::adjustTone(double r,double g,double b) { runtime(backing_ ? backing_->services : active).canvases().adjustTone(nativeCanvas(),r,g,b);changed(); }
@@ -377,20 +480,25 @@ void PixelBitmap::rotateHue(double offset) { runtime(backing_ ? backing_->servic
 void PixelBitmap::blur() { if(!runtime(backing_ ? backing_->services : active).canvases().blurMv(nativeCanvas()))throw std::runtime_error("bitmap blur failed");changed(); }
 std::string PixelBitmap::makeFontNameText() const { return std::string(fontItalic ? "Italic " : "")+numberString(fontSize)+"px "+fontFace; }
 double PixelBitmap::measureTextWidth(const std::string& text) const {
-  CanvasTextStyle style;style.italic=fontItalic;
-  const auto width=runtime(backing_ ? backing_->services : active).canvases().measureText(Graphics::fonts(fontFace),text,fontSize,style);
+  nativeCanvas();
+  const auto font=bitmapFont(*this);CanvasTextStyle style;style.italic=font.italic;
+  const auto width=runtime(backing_ ? backing_->services : active).canvases().measureText(Graphics::fonts(font.families),text,font.size,style);
   if(!width)throw std::runtime_error("bitmap font is unavailable");return *width;
 }
 void PixelBitmap::drawText(const std::string& text,double x,double y,double maxWidth,double lineHeight,const std::string& align) {
-  auto& core=runtime(backing_ ? backing_->services : active);CanvasTextStyle style;style.italic=fontItalic;
-  if(!maxWidth)maxWidth=0xffffffff;
+  nativeCanvas();
+  const auto font=bitmapFont(*this);
+  auto& core=runtime(backing_ ? backing_->services : active);CanvasTextStyle style;style.italic=font.italic;style.join=1;
+  if(!maxWidth||std::isnan(maxWidth))maxWidth=0xffffffff;
+  if(maxWidth<0){changed();return;}
   const double natural=measureTextWidth(text), actual=maxWidth>0?std::min(natural,maxWidth):natural;
   if(align=="center")x+=(maxWidth-actual)/2;else if(align=="right")x+=maxWidth-actual;
   const double baseline=y+(lineHeight+fontSize*0.7)/2;
   if(natural>0&&actual<natural) {style.transformed=true;style.transform={float(actual/natural),0,0,1,float(x*(1-actual/natural)),0};}
-  const auto fonts=Graphics::fonts(fontFace);
-  if(outlineWidth>0)core.canvases().drawText(nativeCanvas(),fonts,text,x,baseline,fontSize,color(outlineColor),outlineWidth,style);
-  core.canvases().drawText(nativeCanvas(),fonts,text,x,baseline,fontSize,color(textColor,paintOpacity),0,style);changed();
+  const auto fonts=Graphics::fonts(font.families);
+  const double strokeWidth=std::isfinite(outlineWidth)&&outlineWidth>0?outlineWidth:1;
+  core.canvases().drawText(nativeCanvas(),fonts,text,x,baseline,font.size,drawingColor(outlineColor),strokeWidth,style);
+  core.canvases().drawText(nativeCanvas(),fonts,text,x,baseline,font.size,drawingColor(textColor,paintOpacity.alpha()*255),0,style);changed();
 }
 
 std::array<std::uint8_t,4> PixelBitmap::parseCssColor(const std::string& source) {
@@ -568,11 +676,17 @@ std::array<std::uint8_t,4> PixelBitmap::parseCssColor(const std::string& source)
     channels=hue<1?std::array<double,3>{chroma,x,0}:hue<2?std::array<double,3>{x,chroma,0}:hue<3?std::array<double,3>{0,chroma,x}:hue<4?std::array<double,3>{0,x,chroma}:hue<5?std::array<double,3>{x,0,chroma}:std::array<double,3>{chroma,0,x};
     for(auto& channel:channels)channel=mode=="hwb"?(second+third>=1?second/(second+third):channel*(1-second-third)+second)*255:(channel+m)*255;
   } else throw std::invalid_argument("invalid bitmap color");
+  if(!std::isfinite(alpha)||!std::all_of(channels.begin(),channels.end(),[](double value){return std::isfinite(value);}))throw std::invalid_argument("invalid bitmap color");
   const auto byte=[](double value){return std::uint8_t(std::clamp(std::round(value),0.0,255.0));};return {byte(channels[0]),byte(channels[1]),byte(channels[2]),byte(alpha*255)};
 }
 bool Graphics::initialize(int w,int h,const std::string& type) {
+  if(w==0)w=800;
+  if(h==0)h=600;
   if(type!="auto"&&type!="webgl"&&type!="canvas")throw std::invalid_argument("invalid graphics renderer type");
+  scale=1;realScale=1;stretchEnabled=true;fpsMode=0;fpsVisible=false;
+  videoPlaying=false;videoVolume=1;loadingImage.clear();loadingBitmap.reset();overlayBitmap.reset();
   resize(w,h);boxWidth=w;boxHeight=h;frameCount=0;loading=false;loadingCount=0;errorName.clear();errorMessage.clear();loadingError.clear();
+  skipCount=0;maxSkip=3;rendered=false;fps=0;frameTime=0;
   webgl=true;previousFrame=std::chrono::steady_clock::now();return boundRuntime()!=nullptr;
 }
 void Graphics::resize(int w,int h) {
@@ -581,17 +695,44 @@ void Graphics::resize(int w,int h) {
   updateScale();overlayBitmap.reset();
 }
 void Graphics::tickStart() {
-  const auto now=std::chrono::steady_clock::now();const auto interval=std::chrono::duration<double>(now-previousFrame).count();
-  if(interval>0)fps=fps>0?fps*0.9+0.1/interval:1/interval;previousFrame=now;startedFrame=now;
+  startedFrame=std::chrono::steady_clock::now();
 }
-void Graphics::tickEnd() { frameTime=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-startedFrame).count(); }
-void Graphics::render() { updateServices();presentOverlay();runtime().canvases().uploadDirty();runtime().renderer().render();++frameCount; }
+void Graphics::tickEnd() {
+  if(!rendered)return;
+  const auto now=std::chrono::steady_clock::now();
+  const auto interval=std::chrono::duration<double>(now-previousFrame).count();
+  if(interval>0)fps=fps>0?fps*0.9+0.1/interval:1/interval;
+  previousFrame=now;frameTime=std::chrono::duration<double,std::milli>(now-startedFrame).count();
+}
+bool Graphics::render(const std::function<void()>& stage,const std::function<void()>& drawFrame) {
+  tickStart();updateServices();updateLoading();
+  if(skipCount>0) {
+    --skipCount;rendered=false;++frameCount;
+    return false;
+  }
+  auto& core=runtime();
+  const auto started=std::chrono::steady_clock::now();
+  if(stage){core.renderer().beginFrame();stage();}
+  presentOverlay();
+  if(drawFrame)drawFrame();
+  else {
+    core.canvases().uploadDirty();core.syncDrawableSize();core.renderer().render();
+  }
+  core.renderer().flush();
+  const auto elapsed=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-started).count();
+  skipCount=static_cast<int>(std::min<std::int64_t>(elapsed/15,std::max(0,maxSkip)));
+  rendered=true;++frameCount;tickEnd();
+  return true;
+}
+bool Graphics::render(Container& stage) {
+  return render([&stage]{stage.render(runtime().renderer());});
+}
 void Graphics::setLoadingImage(const std::string& source) { loadingImage=source;loadingBitmap=PixelBitmap::load(source); }
 void Graphics::startLoading() { loading=true;loadingCount=0; }
 void Graphics::updateLoading() { if(loading)++loadingCount; }
 void Graphics::endLoading() { loading=false;loadingCount=0; }
-void Graphics::printLoadingError(const std::string& source) { loadingError=source;if(active&&active->stop)active->stop(); }
-void Graphics::eraseLoadingError() { loadingError.clear();if(active&&active->resume)active->resume(); }
+void Graphics::printLoadingError(const std::string& source) { if(errorName.empty()){loadingError=source;loading=false;} }
+void Graphics::eraseLoadingError() { if(errorName.empty()){loadingError.clear();startLoading();} }
 void Graphics::printError(const std::string& name,const std::string& message) {
   errorName=name;errorMessage=message;loading=false;if(active&&active->stop)active->stop();
   std::fprintf(stderr,"%s: %s\n",name.c_str(),message.c_str());
@@ -604,18 +745,16 @@ void Graphics::setLoadingCallbacks(std::function<void()> stop,std::function<void
 void Graphics::loadFont(const std::string& family,const std::string& source) {
   auto& core=runtime();const auto path=resolve(source,core);
   if(!path||!core.canvases().canLoadFont(*path))return;
-  active->fonts[family]=*path;
+  active->fonts[fontFamilyKey(family)]=*path;
   if(std::find(loadedFonts.begin(),loadedFonts.end(),family)==loadedFonts.end())loadedFonts.push_back(family);
 }
-bool Graphics::isFontLoaded(const std::string& family) { return active&&active->fonts.contains(family); }
+bool Graphics::isFontLoaded(const std::string& family) { return active&&active->fonts.contains(fontFamilyKey(family)); }
 std::vector<std::filesystem::path> Graphics::fonts(const std::string& families) {
-  runtime();std::vector<std::filesystem::path> result;std::istringstream input(families);
-  for(std::string family;std::getline(input,family,',');) {
-    const auto begin=family.find_first_not_of(" \t\"'"),end=family.find_last_not_of(" \t\"'");
-    if(begin==std::string::npos)continue;family=family.substr(begin,end-begin+1);
-    if(const auto found=active->fonts.find(family);found!=active->fonts.end())result.push_back(found->second);
+  runtime();std::vector<std::filesystem::path> result;
+  if(const auto parsed=fontFamilies(families))for(const auto& family:*parsed) {
+    if(const auto found=active->fonts.find(fontFamilyKey(family));found!=active->fonts.end())result.push_back(found->second);
   }
-  if(result.empty())if(const auto found=active->fonts.find("GameFont");found!=active->fonts.end())result.push_back(found->second);
+  if(result.empty())if(const auto found=active->fonts.find("gamefont");found!=active->fonts.end())result.push_back(found->second);
   return result;
 }
 std::string Graphics::canPlayVideoType(const std::string& type) {
@@ -629,7 +768,7 @@ void Graphics::setVideoCallbacks(std::function<void(const std::string&)> play,st
 }
 void Graphics::playVideo(const std::string& source) {
   runtime();if(!active->videoPlay)throw std::logic_error("native video presentation is not attached");
-  active->videoPlay(source);videoPlaying=active->videoPlaying?active->videoPlaying():true;
+  active->videoPlay(sourcePath(source));videoPlaying=active->videoPlaying?active->videoPlaying():true;
 }
 bool Graphics::isVideoPlaying() { videoPlaying=active&&active->videoPlaying&&active->videoPlaying();return videoPlaying; }
 void Graphics::setVideoVolume(double value) { videoVolume=std::clamp(value,0.0,1.0);if(active&&active->videoVolume)active->videoVolume(videoVolume); }
@@ -667,7 +806,7 @@ void Graphics::presentOverlay() {
   if(!active||!active->runtime||active->lifetime.expired())return;
   auto& core=runtime();
   if(loading && loadingCount>=20 && loadingBitmap && loadingBitmap->isReady()) {
-    if(const auto image=loadingBitmap->texture())core.renderer().queueImage(image->handle,{1,0,0,1,float((width-image->width)/2),float((height-image->height)/2)},
+    if(const auto image=loadingBitmap->texture())core.renderer().queueImage(image->handle,{1,0,0,1,(width-image->width)/2.0F,(height-image->height)/2.0F},
       {0,0,float(image->width),float(image->height)},float(std::clamp((loadingCount-20)/30.0,0.0,1.0)),0xffffff,BlendMode::normal);
   }
   if(errorName.empty()&&loadingError.empty()&&!fpsVisible)return;
@@ -783,13 +922,12 @@ void WebAudio::loadNow() {
     return;
   }
   const std::weak_ptr<int> alive = lifetime_;
-  auto pending = std::move(loadListeners);
-  loadListeners.clear();
-  for (auto& callback : pending) {
+  while (!loadListeners.empty()) {
+    auto callback = std::move(loadListeners.front());
+    loadListeners.erase(loadListeners.begin());
     if (callback) callback();
     if (alive.expired()) return;
   }
-  if (autoPlay_) play(loop, startTime);
 }
 void WebAudio::failLoad() {
   ready = false;
@@ -818,7 +956,9 @@ void WebAudio::release() {
   ready = false;
 }
 void WebAudio::clear() {
+  const std::weak_ptr<int> alive = lifetime_;
   stop();
+  if (alive.expired()) return;
   release();
   volume = 1;
   pitch = 1;
@@ -833,7 +973,6 @@ void WebAudio::clear() {
   error = false;
   loadListeners.clear();
   stopListeners.clear();
-  pendingFadeIn_ = -1;
   loading_ = false;
   failure_ = {};
   lifetime_ = std::make_shared<int>(0);
@@ -843,11 +982,8 @@ bool WebAudio::isPlaying() const { return handle_ && services_ && services_->run
 void WebAudio::setVolume(double value) { volume = value; update(); }
 void WebAudio::setPitch(double value) {
   if (pitch == value) return;
-  const double pos = isPlaying() ? seek() : pauseTime;
   pitch = value;
-  if (isPlaying() && services_ && services_->runtime && !services_->lifetime.expired()) {
-    startTime = services_->runtime->media().contextTime() - pos / std::max(0.000001, pitch);
-  }
+  if (isPlaying()) play(loop, 0);
   update();
 }
 void WebAudio::setPan(double value) { pan = value; update(); }
@@ -858,25 +994,21 @@ void WebAudio::update() {
   media.setEqualPowerPan(handle_, static_cast<float>(std::clamp(pan, -1.0, 1.0)));
   if (!media.audioError(handle_).empty()) { error = true; stop(); return; }
   if (playing && !media.isPlaying(handle_)) {
-    playing = false;
-    const std::weak_ptr<int> alive = lifetime_;
-    auto callbacks = std::move(stopListeners);
-    stopListeners.clear();
-    for (auto& callback : callbacks) {
-      if (callback) callback();
-      if (alive.expired()) return;
-    }
+    stop();
   }
 }
 void WebAudio::play(bool loopFlag, double offset) {
-  loop = loopFlag;
-  autoPlay_ = true;
-  offset = std::max(0.0, offset);
   if (!ready) {
-    startTime = offset;
+    autoPlay_ = true;
+    const std::weak_ptr<int> alive = lifetime_;
+    addLoadListener([this, alive, loopFlag, offset] {
+      if (!alive.expired() && autoPlay_) play(loopFlag, offset);
+    });
     if (!error && !loading_ && !url.empty() && services_ && services_->runtime && !services_->lifetime.expired()) loadNow();
     return;
   }
+  loop = loopFlag;
+  offset = std::max(0.0, offset);
   auto& core = runtime(services_);
   if (services_->audioDisabled) return;
   if (loopLength > 0 && offset >= loopStart + loopLength) {
@@ -887,40 +1019,36 @@ void WebAudio::play(bool loopFlag, double offset) {
   playing = core.media().play(handle_, loop, offset);
   pauseTime = offset;
   startTime = core.media().contextTime() - offset / std::max(0.000001, pitch);
-  if (pendingFadeIn_ >= 0) {
-    core.media().fade(handle_, 0.0F, 1.0F, std::max(0.0, pendingFadeIn_), false);
-    pendingFadeIn_ = -1;
-  }
 }
 void WebAudio::stop() {
   autoPlay_ = false;
-  pendingFadeIn_ = -1;
   if (handle_ && services_ && services_->runtime && !services_->lifetime.expired()) {
     pauseTime = services_->runtime->media().position(handle_);
     services_->runtime->media().stop(handle_);
   }
   playing = false;
   const std::weak_ptr<int> alive = lifetime_;
-  auto callbacks = std::move(stopListeners);
-  stopListeners.clear();
-  for (auto& callback : callbacks) {
+  while (!stopListeners.empty()) {
+    auto callback = std::move(stopListeners.front());
+    stopListeners.erase(stopListeners.begin());
     if (callback) callback();
     if (alive.expired()) return;
   }
 }
 void WebAudio::fadeIn(double duration) {
-  if (ready && handle_ && services_ && services_->runtime && !services_->lifetime.expired()) {
-    services_->runtime->media().fade(handle_, 0.0F, 1.0F, std::max(0.0, duration), false);
+  if (ready) {
+    if (playing && handle_ && services_ && services_->runtime && !services_->lifetime.expired())
+      services_->runtime->media().fade(handle_, 0.0F, 1.0F, std::max(0.0, duration), false);
   } else if (autoPlay_) {
-    pendingFadeIn_ = duration;
+    const std::weak_ptr<int> alive = lifetime_;
+    addLoadListener([this, alive, duration] { if (!alive.expired()) fadeIn(duration); });
   }
 }
 void WebAudio::fadeOut(double duration) {
-  if (handle_ && services_ && services_->runtime && !services_->lifetime.expired()) {
-    services_->runtime->media().fade(handle_, -1.0F, 0.0F, std::max(0.0, duration), false);
+  if (playing && handle_ && services_ && services_->runtime && !services_->lifetime.expired()) {
+    services_->runtime->media().fade(handle_, 1.0F, 0.0F, std::max(0.0, duration), false);
   }
   autoPlay_ = false;
-  pendingFadeIn_ = -1;
 }
 double WebAudio::playbackPosition() const {
   return handle_ && services_ && services_->runtime && !services_->lifetime.expired()
@@ -935,7 +1063,7 @@ double WebAudio::seek() const {
   }
   return position;
 }
-void WebAudio::addLoadListener(std::function<void()> listener) { if(ready)listener();else loadListeners.push_back(std::move(listener)); }
+void WebAudio::addLoadListener(std::function<void()> listener) { loadListeners.push_back(std::move(listener)); }
 void WebAudio::addStopListener(std::function<void()> listener) { stopListeners.push_back(std::move(listener)); }
 std::uint32_t WebAudio::readLittleEndian(const std::vector<std::uint8_t>& data, std::size_t index) {
   if (index + 4 > data.size()) return 0;
@@ -1056,16 +1184,13 @@ bool Html5Audio::initialize() {
 }
 void Html5Audio::setup(const std::string& source) {
   if (!initialized) initialize();
+  const std::string nextUrl = source;
   clear();
-  url = source;
-  htmlAudio = std::make_unique<WebAudio>(url, /*deferLoad=*/true, /*reportResourceErrors=*/false);
-  ready = htmlAudio->isReady();
-  error = htmlAudio->isError();
+  url = nextUrl;
 }
 void Html5Audio::clear() {
   htmlAudio.reset();
   htmlLoadListeners.clear();
-  url.clear();
   volume = 1;
   ready = false;
   error = false;
@@ -1081,7 +1206,11 @@ bool Html5Audio::isReady() { ready = htmlAudio && htmlAudio->isReady(); return r
 bool Html5Audio::isError() { error = htmlAudio && htmlAudio->isError(); return error; }
 bool Html5Audio::isPlaying() { playing = htmlAudio && htmlAudio->isPlaying(); return playing; }
 void Html5Audio::play(bool repeat, double offset) {
-  if (!htmlAudio && !url.empty()) setup(url);
+  if (!htmlAudio && !url.empty()) {
+    htmlAudio = std::make_unique<WebAudio>(url, /*deferLoad=*/true, /*reportResourceErrors=*/false);
+    for (auto& listener : htmlLoadListeners) htmlAudio->addLoadListener(std::move(listener));
+    htmlLoadListeners.clear();
+  }
   if (htmlAudio) {
     htmlAudio->setVolume(volume);
     htmlAudio->play(repeat, offset);
@@ -1097,7 +1226,12 @@ void Html5Audio::stop() {
   playing = false;
 }
 void Html5Audio::fadeIn(double duration) { if (htmlAudio) { htmlAudio->setVolume(volume); htmlAudio->fadeIn(duration); } }
-void Html5Audio::fadeOut(double duration) { if (htmlAudio) htmlAudio->fadeOut(duration); }
+void Html5Audio::fadeOut(double duration) {
+  if (htmlAudio && htmlAudio->isPlaying()) {
+    htmlAudio->setVolume(volume);
+    runtime().media().fade(htmlAudio->nativeHandle(), 1.0F, 0.0F, std::max(0.0, duration), false);
+  }
+}
 double Html5Audio::seek() { currentTime = htmlAudio ? htmlAudio->playbackPosition() : 0; return currentTime; }
 void Html5Audio::addLoadListener(std::function<void()> listener) {
   if (htmlAudio) htmlAudio->addLoadListener(std::move(listener));

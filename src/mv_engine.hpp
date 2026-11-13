@@ -39,6 +39,33 @@ struct Value {
   bool null() const { return std::holds_alternative<std::monostate>(data) || isUndefined(); }
 };
 
+class Sprite_Picture;
+std::uint64_t nextRuntimeIdentity();
+struct RuntimeObject {
+  const std::uint64_t identity = nextRuntimeIdentity();
+  virtual ~RuntimeObject() = default;
+};
+struct RuntimeTone : RuntimeObject {
+  std::array<double, 4> values{};
+  Value snapshot() const;
+};
+struct RuntimePicture : RuntimeObject {
+  Value state;
+  std::shared_ptr<RuntimeTone> tone, toneTarget;
+  int slot = -1;
+  std::shared_ptr<Sprite_Picture> sprite;
+  Value snapshot() const;
+  void restore(const Value& value);
+};
+struct RuntimeInterpreter : RuntimeObject { std::string waitMode; };
+struct RuntimeHooks {
+  std::function<bool(const std::shared_ptr<RuntimePicture>&, const std::string&, const Value::Array&)> picture;
+  std::function<void(const std::shared_ptr<RuntimePicture>&)> sprite;
+  std::function<std::optional<bool>(const std::shared_ptr<RuntimeInterpreter>&, const std::string&)> wait;
+  std::function<void(const std::shared_ptr<RuntimeInterpreter>&, const std::string&)> script;
+  std::function<bool(const std::shared_ptr<RuntimeInterpreter>&, const std::string&, const std::vector<std::string>&)> pluginCommand;
+};
+
 using FormulaResolver = std::function<double(const std::string&, const std::vector<double>&)>;
 double formula(const std::string& expression, const std::map<std::string, double>& fields, const FormulaResolver& resolver = {});
 
@@ -83,6 +110,7 @@ struct Character {
 };
 
 struct Interpreter {
+  std::shared_ptr<RuntimeInterpreter> runtime = std::make_shared<RuntimeInterpreter>();
   int mapId = 0, eventId = 0, index = 0, wait = 0, depth = 0;
   std::uint64_t serial = 0;
   bool running = false, battleEvent = false, waitingAction = false;
@@ -94,6 +122,12 @@ struct Interpreter {
   std::optional<int> scriptCharacter;
   std::optional<int> waitingRoute;
   std::vector<Interpreter> children;
+  void clear() {
+    auto identity = runtime;
+    *this = Interpreter{};
+    runtime = std::move(identity);
+    runtime->waitMode.clear();
+  }
 };
 
 struct VisualEffect {
@@ -171,6 +205,7 @@ struct Action {
   int subject = 0, id = 1, target = 0;
   double speed = 0;
   bool forced = false;
+  int actorId = 0;
 };
 struct BattleTarget {
   bool enemy = false;
@@ -178,6 +213,7 @@ struct BattleTarget {
   ActionResult result;
   std::uint64_t impact = 0;
   bool aliveAtImpact = true;
+  int actorId = 0;
 };
 struct BattleVisual {
   Action action;
@@ -198,7 +234,7 @@ struct Battle {
   Value mapBgm, mapBgs;
   std::vector<Battler> enemies;
   std::vector<Action> actions, forcedActions;
-  bool forcedExecuting = false, turnEnding = false, preemptive = false, surprise = false;
+  bool forcedExecuting = false, forcedTurn = false, turnEnding = false, preemptive = false, surprise = false;
   int forcedResumeWait = 0;
   Interpreter interpreter;
   std::set<int> eventFlags;
@@ -277,6 +313,16 @@ class Sprite_Enemy;
 class Session {
  public:
   explicit Session(Value database);
+  void setRuntimeHooks(std::shared_ptr<RuntimeHooks> hooks) { runtimeHooks_ = std::move(hooks); }
+  std::shared_ptr<RuntimePicture> runtimePicture(int id) const;
+  std::shared_ptr<RuntimePicture> createRuntimePicture(int slot = -1);
+  void dispatchPicture(const std::shared_ptr<RuntimePicture>& picture, const std::string& method, const Value::Array& arguments = {});
+  void invokePictureBase(const std::shared_ptr<RuntimePicture>& picture, const std::string& method, const Value::Array& arguments = {});
+  bool invokeWaitBase(const std::shared_ptr<RuntimeInterpreter>& interpreter);
+  bool invokeInterpreterWaitBase(const std::shared_ptr<RuntimeInterpreter>& interpreter, const std::string& method);
+  Value runtimeInterpreterField(const std::shared_ptr<RuntimeInterpreter>& interpreter, const std::string& field, const std::optional<Value>& value = {});
+  void setRuntimeWaitMode(const std::shared_ptr<RuntimeInterpreter>& interpreter, std::string mode);
+  std::string runtimeWaitMode(const std::shared_ptr<RuntimeInterpreter>& interpreter);
   void newGame();
   void setupBattleTest();
   void step(const Input& input);
@@ -396,7 +442,8 @@ class Session {
   void applyItemEffect(Battler& subject, Battler& target, const Value& item, const Value& effect);
   void applyGlobalEffects(const Value& item);
   bool updateTroopEvents();
-  void forceBattleAction(bool enemy, int subject, int skill, int target);
+  void forceBattleAction(bool enemy, int subject, int skill, int target, int actorId = 0);
+  void forceActorAction(int actorId, int skill, int target);
   bool hasSpecialFlag(const Battler& battler, int flag) const;
   bool hasPartyAbility(int ability) const;
   void resolveAction();
@@ -451,6 +498,10 @@ class Session {
   void refreshCommonEvents();
   void updateCommonEvents();
   void advanceInterpreter(Interpreter& context);
+  bool updateWaitModeBase(Interpreter& context);
+  bool updateWaitCountBase(Interpreter& context);
+  bool updateWaitBase(Interpreter& context);
+  Interpreter* findRuntimeInterpreter(const std::shared_ptr<RuntimeInterpreter>& interpreter);
   bool command(const Value& entry, Interpreter& context);
   bool actorEventCommand(const Value& entry);
   bool enemyEventCommand(const Value& entry);
@@ -540,13 +591,17 @@ class Session {
   int directionAge_ = 0, previousDirection_ = 0, messageAge_ = 0;
   std::string movieName_;
   bool moviePlaying_ = false;
+  bool movieExplicitSource_ = false;
+  std::uint64_t movieRequest_ = 0;
   Input currentInput_;
   bool resourcesStopped_ = false;
   bool previousDebug_ = false;
   bool previousCancel_ = false, saveRequested_ = false, loadRequested_ = false, menuCalling_ = false;
   Value::Array audioCommands_;
   Value savedBgm_, savedBgs_;
-  Value::Array pictures_;
+  std::vector<std::shared_ptr<RuntimePicture>> pictures_;
+  std::map<int, std::shared_ptr<Sprite_Picture>> pictureSprites_;
+  std::shared_ptr<RuntimeHooks> runtimeHooks_;
   Value screenEffects_;
   Value ambience_;
   Value unsupportedAction_;
@@ -561,6 +616,7 @@ class Session {
   std::optional<Scene> pendingScene_;
   Value pendingLoadBgm_, pendingLoadBgs_;
   std::uint64_t pendingLoadFrames_ = 0;
+  bool pendingLoadMapUpdated_ = false;
   double sceneFadeOpacity_ = 0;
   int sceneFadeDuration_ = 0;
   bool sceneFadeOut_ = false;
@@ -587,6 +643,7 @@ class Session {
   std::optional<std::array<int, 5>> pendingTransfer_;
   bool transferFadeStarted_ = false;
   void centerPlayer();
+  void locatePlayer(double x, double y);
   bool eventMovementAllowed_ = true;
 };
 

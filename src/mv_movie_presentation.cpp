@@ -10,15 +10,16 @@ void Presentation::clearMovie() {
 }
 void Presentation::movie() {
   if(!session_.moviePlaying_) { if(movieDecoder_)clearMovie(); return; }
-  if(!movieDecoder_||movieFile_!=session_.movieName_) {
+  if(!movieDecoder_||movieFile_!=session_.movieName_||movieRequest_!=session_.movieRequest_) {
     clearMovie();
     std::optional<std::filesystem::path> path;
-    for(const char* suffix:{".webm",".mp4"}) {
+    if(session_.movieExplicitSource_) path=core_.vfs().resolve(session_.movieName_);
+    else for(const char* suffix:{".webm",".mp4"}) {
       path=core_.vfs().resolve("movies/"+session_.movieName_+suffix);if(path)break;
     }
     if(!path)throw std::runtime_error("movie unavailable: "+session_.movieName_);
     movieDecoder_=std::make_unique<VideoDecoderSession>(*path);
-    movieFile_=session_.movieName_;movieStarted_=session_.ticks_;
+    movieFile_=session_.movieName_;movieStarted_=session_.ticks_;movieRequest_=session_.movieRequest_;
     if(!movieDecoder_->info().audioCodec.empty()) {
       std::string error;movieAudio_=core_.media().loadAudio(path->string(),&error);
       if(!movieAudio_)throw std::runtime_error("cannot open movie audio: "+error);

@@ -256,6 +256,8 @@ class Sprite_Button : public Sprite_Base {
 
 class Sprite_Picture : public Sprite_Base {
  public:
+  const std::uint64_t runtimeIdentity = nextRuntimeIdentity();
+  std::optional<std::array<double, 4>> sourceFrame;
   int pictureId = 0;
   std::string pictureName;
   int origin = 0;

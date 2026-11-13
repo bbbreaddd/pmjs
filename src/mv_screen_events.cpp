@@ -1,10 +1,19 @@
 #include "mv_engine.hpp"
+#include "mv_sprites.hpp"
+#include <atomic>
 #include <cmath>
 
 namespace pmjs::mv {
+std::uint64_t nextRuntimeIdentity() { static std::atomic<std::uint64_t> next{0}; return ++next; }
 namespace {
 using Object = Value::Object;
 using Array = Value::Array;
+std::shared_ptr<RuntimeTone> makeTone(const Value& value) {
+  if (value.null()) return {};
+  auto tone = std::make_shared<RuntimeTone>();
+  for (std::size_t i = 0; i < 4; ++i) tone->values[i] = value[i].number();
+  return tone;
+}
 Object initialScreen() {
   return {{"@", "Game_Screen"}, {"_fadeInDuration", 0}, {"_tone", Array{0,0,0,0}}, {"_toneTarget", Array{0,0,0,0}}, {"_toneDuration", 0},
     {"_flashColor", Array{0,0,0,0}}, {"_flashDuration", 0}, {"_shakePower", 0}, {"_shakeSpeed", 0}, {"_shakeDuration", 0}, {"_shakeDirection", 1}, {"_shake", 0},
@@ -18,9 +27,24 @@ void tweenTone(Object& state) {
   state["_toneDuration"] = duration - 1;
 }
 }
+Value RuntimeTone::snapshot() const { return Array{values[0], values[1], values[2], values[3]}; }
+Value RuntimePicture::snapshot() const {
+  auto result = std::get<Object>(state.data);
+  result["_tone"] = tone ? tone->snapshot() : Value{};
+  result["_toneTarget"] = toneTarget ? toneTarget->snapshot() : Value{};
+  return result;
+}
+void RuntimePicture::restore(const Value& value) {
+  state = value;
+  tone = makeTone(state["_tone"]); toneTarget = makeTone(state["_toneTarget"]);
+  auto& fields = std::get<Object>(state.data);
+  fields.erase("_tone"); fields.erase("_toneTarget");
+}
 Value Session::screenState() const {
   auto state = screenEffects_.null() ? initialScreen() : std::get<Object>(screenEffects_.data);
-  state["_brightness"] = brightness_; state["_fadeOutDuration"] = fadeOut_; state["_pictures"] = pictures_;
+  state["_brightness"] = brightness_; state["_fadeOutDuration"] = fadeOut_; Array savedPictures;
+  for (const auto& picture : pictures_) savedPictures.push_back(picture ? picture->snapshot() : Value{});
+  state["_pictures"] = std::move(savedPictures);
   return state;
 }
 std::array<double, 4> Session::screenTone() const {
@@ -75,25 +99,19 @@ bool Session::screenEventCommand(const Value& entry, Interpreter& context) {
   if (code == 231) {
     const auto x = p[3].integer() ? variable(p[4].integer()) : p[4];
     const auto y = p[3].integer() ? variable(p[5].integer()) : p[5];
-    pictures_[id] = Object{{"@", "Game_Picture"}, {"_name", p[1]}, {"_origin", p[2]}, {"_x", x}, {"_y", y},
-      {"_scaleX", p[6]}, {"_scaleY", p[7]}, {"_opacity", p[8]}, {"_blendMode", p[9]},
-      {"_targetX", x}, {"_targetY", y}, {"_targetScaleX", p[6]}, {"_targetScaleY", p[7]}, {"_targetOpacity", p[8]}, {"_duration", 0},
-      {"_tone", Value{}}, {"_toneTarget", Value{}}, {"_toneDuration", 0}, {"_angle", 0}, {"_rotationSpeed", 0}};
+    pictures_[id] = createRuntimePicture(id);
+    dispatchPicture(pictures_[id], "initialize");
+    dispatchPicture(pictures_[id], "show", {p[1], p[2], x, y, p[6], p[7], p[8], p[9]});
     return true;
   }
-  if (!pictures_[id].null()) {
-    auto& picture = std::get<Object>(pictures_[id].data);
+  if (pictures_[id]) {
     if (code == 232) {
-      picture["_origin"] = p[2];
-      picture["_targetX"] = p[3].integer() ? variable(p[4].integer()) : p[4];
-      picture["_targetY"] = p[3].integer() ? variable(p[5].integer()) : p[5];
-      picture["_targetScaleX"] = p[6]; picture["_targetScaleY"] = p[7]; picture["_targetOpacity"] = p[8];
-      picture["_blendMode"] = p[9]; picture["_duration"] = p[10];
-    } else if (code == 233) picture["_rotationSpeed"] = p[1];
+      const auto x = p[3].integer() ? variable(p[4].integer()) : p[4];
+      const auto y = p[3].integer() ? variable(p[5].integer()) : p[5];
+      dispatchPicture(pictures_[id], "move", {p[2], x, y, p[6], p[7], p[8], p[9], p[10]});
+    } else if (code == 233) dispatchPicture(pictures_[id], "rotate", {p[1]});
     else if (code == 234) {
-      if (picture["_tone"].null()) picture["_tone"] = Array{0,0,0,0};
-      picture["_toneTarget"] = p[1]; picture["_toneDuration"] = p[2];
-      if (!p[2].integer()) picture["_tone"] = p[1];
+      dispatchPicture(pictures_[id], "tint", {p[1], p[2]});
     }
   }
   if (code == 232 && p[11].boolean()) context.wait = p[10].integer();
@@ -135,17 +153,86 @@ void Session::updateScreenState() {
     state[prefix + "Duration"] = duration - 1;
     if (std::string(name) == "weather" && duration == 1 && state["_weatherPowerTarget"].number() == 0) state["_weatherType"] = "none";
   }
-  for (auto& value : pictures_) {
-    if (value.null()) continue;
-    auto& picture = std::get<Object>(value.data);
-    duration = picture["_duration"].integer();
+  const auto activePictures = pictures_;
+  for (const auto& picture : activePictures) {
+    if (!picture) continue;
+    dispatchPicture(picture, "update");
+    if (runtimeHooks_ && runtimeHooks_->sprite) runtimeHooks_->sprite(picture);
+  }
+}
+std::shared_ptr<RuntimePicture> Session::createRuntimePicture(int slot) {
+  auto picture = std::make_shared<RuntimePicture>();
+  picture->state = Object{}; picture->slot = slot;
+  if (slot >= 0) {
+    auto& sprite = pictureSprites_[slot];
+    if (!sprite) sprite = std::make_shared<Sprite_Picture>(slot);
+    picture->sprite = sprite;
+  } else picture->sprite = std::make_shared<Sprite_Picture>(slot);
+  return picture;
+}
+std::shared_ptr<RuntimePicture> Session::runtimePicture(int id) const {
+  const int slot = id + (battle_.active ? 100 : 0);
+  return slot >= 0 && slot < static_cast<int>(pictures_.size()) ? pictures_[slot] : nullptr;
+}
+void Session::dispatchPicture(const std::shared_ptr<RuntimePicture>& value, const std::string& method, const Array& arguments) {
+  if (!runtimeHooks_ || !runtimeHooks_->picture || !runtimeHooks_->picture(value, method, arguments))
+    invokePictureBase(value, method, arguments);
+}
+void Session::invokePictureBase(const std::shared_ptr<RuntimePicture>& value, const std::string& method, const Array& arguments) {
+  auto& picture = std::get<Object>(value->state.data);
+  const auto dispatch = [&](const std::string& name) {
+    dispatchPicture(value, name);
+  };
+  if (method == "initialize") {
+    dispatch("initBasic"); dispatch("initTarget"); dispatch("initTone"); dispatch("initRotation");
+  } else if (method == "initBasic") {
+    picture["@"] = "Game_Picture"; picture["_name"] = "";
+    for (const auto* key : {"_origin", "_x", "_y", "_blendMode"}) picture[key] = 0;
+    picture["_scaleX"] = picture["_scaleY"] = 100; picture["_opacity"] = 255;
+  } else if (method == "initTarget") {
+    for (const auto& pair : {std::pair{"_x", "_targetX"}, {"_y", "_targetY"}, {"_scaleX", "_targetScaleX"}, {"_scaleY", "_targetScaleY"}, {"_opacity", "_targetOpacity"}})
+      picture[pair.second] = picture[pair.first];
+    picture["_duration"] = 0;
+  } else if (method == "initTone") {
+    value->tone.reset(); value->toneTarget.reset(); picture["_toneDuration"] = 0;
+  } else if (method == "initRotation") {
+    picture["_angle"] = 0; picture["_rotationSpeed"] = 0;
+  } else if (method == "show") {
+    if (arguments.size() != 8) throw std::invalid_argument("picture show requires eight arguments");
+    const char* keys[] = {"_name", "_origin", "_x", "_y", "_scaleX", "_scaleY", "_opacity", "_blendMode"};
+    for (std::size_t i = 0; i < 8; ++i) picture[keys[i]] = arguments[i];
+    dispatch("initTarget"); dispatch("initTone"); dispatch("initRotation");
+  } else if (method == "move") {
+    if (arguments.size() != 8) throw std::invalid_argument("picture move requires eight arguments");
+    const char* keys[] = {"_origin", "_targetX", "_targetY", "_targetScaleX", "_targetScaleY", "_targetOpacity", "_blendMode", "_duration"};
+    for (std::size_t i = 0; i < 8; ++i) picture[keys[i]] = arguments[i];
+  } else if (method == "rotate") {
+    if (arguments.size() != 1) throw std::invalid_argument("picture rotate requires one argument");
+    picture["_rotationSpeed"] = arguments[0];
+  } else if (method == "tint") {
+    if (arguments.size() != 2 || arguments[0].array().size() != 4) throw std::invalid_argument("picture tint requires four components and a duration");
+    if (!value->tone) value->tone = std::make_shared<RuntimeTone>();
+    value->toneTarget = makeTone(arguments[0]); picture["_toneDuration"] = arguments[1];
+    if (!arguments[1].integer()) value->tone = makeTone(arguments[0]);
+  } else if (method == "update") {
+    dispatch("updateMove"); dispatch("updateTone"); dispatch("updateRotation");
+  } else if (method == "updateMove") {
+    const int duration = picture["_duration"].integer();
     if (duration > 0) {
       for (const auto& pair : {std::pair{"_x", "_targetX"}, {"_y", "_targetY"}, {"_scaleX", "_targetScaleX"}, {"_scaleY", "_targetScaleY"}, {"_opacity", "_targetOpacity"}})
         picture[pair.first] = (picture[pair.first].number() * (duration - 1) + picture[pair.second].number()) / duration;
       picture["_duration"] = duration - 1;
     }
-    tweenTone(picture);
-    picture["_angle"] = picture["_angle"].number() + picture["_rotationSpeed"].number() / 2;
+  } else if (method == "updateTone") {
+    const int duration = picture["_toneDuration"].integer();
+    if (duration > 0 && value->tone && value->toneTarget) {
+      for (std::size_t i = 0; i < 4; ++i)
+        value->tone->values[i] = (value->tone->values[i] * (duration - 1) + value->toneTarget->values[i]) / duration;
+      picture["_toneDuration"] = duration - 1;
+    }
   }
+  else if (method == "updateRotation") picture["_angle"] = picture["_angle"].number() + picture["_rotationSpeed"].number() / 2;
+  else if (method == "syncSprite") value->sprite->syncFromPicture(value->state);
+  else throw std::invalid_argument("unknown native picture method: " + method);
 }
 }  // namespace pmjs::mv

@@ -36,7 +36,12 @@ std::shared_ptr<Container> Container::removeChild(Container* child) {
   auto it=std::find_if(children.begin(),children.end(),[&](const auto& p){return p.get()==child;});if(it==children.end())return {};
   auto result=*it;children.erase(it);result->parent=nullptr;result->onRemoveAsAChild();return result;
 }
-void Container::removeChildren(){for(auto& child:children)if(child)child->parent=nullptr;children.clear();}
+void Container::removeChildren() {
+  auto removed=std::move(children);
+  children.clear();
+  for(auto& child:removed)if(child)child->parent=nullptr;
+  for(auto& child:removed)if(child)child->onRemoveAsAChild();
+}
 Matrix Container::localTransform()const {
   const double a=std::cos(rotation+skew.y)*scale.x,b=std::sin(rotation+skew.y)*scale.x;
   const double c=-std::sin(rotation-skew.x)*scale.y,d=std::cos(rotation-skew.x)*scale.y;
@@ -50,12 +55,13 @@ void Container::render(Renderer& renderer,const Matrix& parentWorld,double opaci
 }
 Sprite::Sprite(){spriteId=displayId;}
 Sprite::~Sprite(){bitmapLifetime_.reset();}
-void Sprite::onBitmapLoad(){if(refreshFrame_&&bitmap_){frame_.width=bitmap_->width;frame_.height=bitmap_->height;refreshFrame_=false;}}
-void Sprite::setBitmap(std::shared_ptr<PixelBitmap> value){if(bitmap_==value)return;bitmap_=std::move(value);refreshFrame_=bool(bitmap_);if(!bitmap_){frame_={};return;}
+void Sprite::onBitmapLoad(){if(refreshFrame_&&bitmap_){frame_.width=bitmap_->width;frame_.height=bitmap_->height;refreshFrame_=false;}refreshFrameGeometry();}
+void Sprite::refreshFrameGeometry(){pivot=spriteFrame(frame_,bitmap_?bitmap_->width:0,bitmap_?bitmap_->height:0).pivot;}
+void Sprite::setBitmap(std::shared_ptr<PixelBitmap> value){if(bitmap_==value)return;bitmap_=std::move(value);refreshFrame_=bool(bitmap_);if(!bitmap_)return;
   const std::weak_ptr<int> lifetime=bitmapLifetime_;const std::weak_ptr<PixelBitmap> source=bitmap_;
-  bitmap_->addLoadListener([this,lifetime,source]{if(lifetime.expired())return;if(auto bitmap=source.lock();bitmap&&bitmap==bitmap_)onBitmapLoad();});
+  bitmap_->addLoadListener([this,lifetime,source]{if(lifetime.expired())return;if(auto bitmap=source.lock()){if(bitmap==bitmap_)onBitmapLoad();else refreshFrameGeometry();}});
 }
-void Sprite::setFrame(double x,double y,double width,double height){frame_={x,y,width,height};refreshFrame_=false;}
+void Sprite::setFrame(double x,double y,double width,double height){refreshFrame_=false;if(frame_.x!=x||frame_.y!=y||frame_.width!=width||frame_.height!=height){frame_={x,y,width,height};refreshFrameGeometry();}}
 bool Sprite::queueFrame(Renderer& renderer,const ImageInfo& image,const Rectangle& requested,const Matrix& world,double opacity,BlendMode blend,Point anchor,std::array<double,4> tone,std::array<double,4> color,bool nearest) {
   const auto frame=spriteFrame(requested,image.width,image.height);if(frame.real.width<=0||frame.real.height<=0)return true;
   const auto placed=translated(world,-anchor.x*frame.real.width-frame.pivot.x,-anchor.y*frame.real.height-frame.pivot.y);
@@ -66,8 +72,8 @@ bool Sprite::queueFrame(Renderer& renderer,const ImageInfo& image,const Rectangl
 void Sprite::draw(Renderer& renderer,const Matrix& world,double opacity) {
   if(!bitmap_)return;bitmap_->touch();if(!bitmap_->isReady())return;
   const auto image=bitmap_->texture();if(!image)return;
-  if(refreshFrame_)onBitmapLoad();
-  if(!queueFrame(renderer,*image,frame_,world,opacity,blendMode,anchor,colorTone_,blendColor_,!bitmap_->smooth))throw std::runtime_error("cannot queue core sprite");
+  const auto clipping=spriteFrame(frame_,image->width,image->height).pivot;
+  if(!queueFrame(renderer,*image,frame_,translated(world,clipping.x,clipping.y),opacity,blendMode,anchor,colorTone_,blendColor_,!bitmap_->smooth))throw std::runtime_error("cannot queue core sprite");
 }
 void TilingSprite::draw(Renderer& renderer,const Matrix& world,double opacity) {
   if(!bitmap_||!bitmap_->isReady()||areaWidth<=0||areaHeight<=0)return;bitmap_->touch();const auto image=bitmap_->texture();if(!image)return;
@@ -77,8 +83,18 @@ void TilingSprite::draw(Renderer& renderer,const Matrix& world,double opacity) {
   renderer.queueTilingFrame(image->handle,world,{float(region.x),float(region.y),float(region.width),float(region.height)},
     {float(areaWidth),float(areaHeight)},{float(-std::floor(-origin.x+0.5)),float(-std::floor(-origin.y+0.5))},float(opacity),blendMode,!bitmap_->smooth);
 }
+void ScreenSprite::setColor(double r,double g,double b) {
+  const std::array<double,3> requested{r,g,b};
+  if(channels_==requested)return;
+  for(std::size_t index=0;index<channels_.size();++index) {
+    const double value=std::isnan(requested[index])?0.0:requested[index];
+    channels_[index]=std::clamp(std::floor(value+.5),0.0,255.0);
+    color[index]=float(channels_[index]/255);
+  }
+  fillRect_={-Graphics::width*5.0,-Graphics::height*5.0,Graphics::width*10.0,Graphics::height*10.0};
+}
 void ScreenSprite::draw(Renderer& renderer,const Matrix& world,double opacity) {
-  const auto first=renderer.queuedCommandCount();renderer.queueQuad(-50000,-50000,100000,100000,{color[0],color[1],color[2],float(opacity)});
+  const auto first=renderer.queuedCommandCount();renderer.queueQuad(fillRect_.x,fillRect_.y,fillRect_.width,fillRect_.height,{color[0],color[1],color[2],float(opacity)},blendMode);
   renderer.transformQueuedCommands(first,world);
 }
 void ToneFilter::reset(){matrix={1,0,0,0,0,0,1,0,0,0,0,0,1,0,0,0,0,0,1,0};}
@@ -96,10 +112,15 @@ void ToneFilter::adjustHue(double degrees) {
 void ToneFilter::adjustBrightness(double value){const float v=float(value);multiply({v,0,0,0,0,0,v,0,0,0,0,0,v,0,0,0,0,0,1,0});}
 void ToneFilter::adjustContrast(double value){const float v=float(value+1),offset=-.5F*(v-1);multiply({v,0,0,0,offset,0,v,0,0,offset,0,0,v,0,offset,0,0,0,1,0});}
 void ToneSprite::setTone(double r,double g,double b,double gray){const auto tone=[](double value,double low,double high){const double clean=std::isnan(value)?0.0:value;return std::clamp(std::floor(clean+.5),low,high);};tone_={tone(r,-255,255),tone(g,-255,255),tone(b,-255,255),tone(gray,0,255)};}
-void ToneSprite::draw(Renderer& renderer,const Matrix&,double){if(std::all_of(tone_.begin(),tone_.end(),[](double value){return value==0;}))return;ToneFilter filter;filter.adjustTone(tone_[0],tone_[1],tone_[2]);filter.adjustSaturation(-tone_[3]);filter.apply(renderer);}
+void ToneSprite::draw(Renderer& renderer,const Matrix& world,double) {
+  if(std::all_of(tone_.begin(),tone_.end(),[](double value){return value==0;}))return;
+  std::array<float,4> tone;
+  for(std::size_t index=0;index<tone.size();++index)tone[index]=float(tone_[index]/255);
+  renderer.queueTone(tone,world,{float(Graphics::width),float(Graphics::height)});
+}
 void Window::addChildToBack(std::shared_ptr<Container> child){std::erase_if(backChildren_,[&](const auto& weak){auto item=weak.lock();return !item||item==child;});Container::addChild(child);backChildren_.insert(backChildren_.begin(),child);}
-void Window::update(){if(active)++animationCount;pauseAlpha_=pause?std::min(1.0,pauseAlpha_+.1):0;Container::update();}
-void Window::synchronize(std::uint64_t frame){const auto delta=lastFrame_&&frame>=*lastFrame_?frame-*lastFrame_:0;lastFrame_=frame;if(active)animationCount+=delta;pauseAlpha_=pause?std::min(1.0,pauseAlpha_+delta*.1):0;}
+void Window::update(){if(active)++animationCount;Container::update();}
+void Window::synchronize(std::uint64_t frame){const auto delta=!lastFrame_?1:frame>=*lastFrame_?frame-*lastFrame_:0;lastFrame_=frame;if(active)animationCount+=delta;}
 Rectangle Window::openBounds()const{return {0,height*(1-std::clamp(openness,0.0,255.0)/255)/2,double(width),height*std::clamp(openness,0.0,255.0)/255};}
 double Window::cursorAlpha()const{const int count=animationCount%40;return std::max(0.0,contentsOpacity-(active?(count<20?count:40-count)*8:0))/255;}
 void Window::refreshBack() {
@@ -135,6 +156,7 @@ void Window::refreshCursor(){
 }
 void Window::render(Renderer& renderer,const Matrix& parentWorld,double parentAlpha) {
   if(!visible||!renderable||alpha<=0)return;
+  pauseAlpha_=pause?std::min(1.0,pauseAlpha_+.1):0;
   const auto world=multiply(parentWorld,localTransform());const double worldAlpha=alpha*parentAlpha;
   const auto open=openBounds();const auto body=translated(world,0,open.y,1,std::clamp(openness,0.0,255.0)/255);
   refreshBack();const auto skin=windowskin?windowskin->texture():std::nullopt;

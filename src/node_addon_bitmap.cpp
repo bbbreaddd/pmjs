@@ -95,7 +95,7 @@ napi_value bitmapProperty(napi_env env, napi_callback_info info) try {
   const auto text = [&](std::string& value) { if (write) value = asString(env,args[2]); return string(env,value); };
   const auto flag = [&](bool& value) { if (write) value = asBoolean(env,args[2]); return boolean(env,value); };
   if (name == "paintOpacity") {
-    if (write) bitmap.paintOpacity = std::clamp(asNumber(env,args[2]),0.0,255.0);
+    if (write) bitmap.paintOpacity = asNumber(env,args[2]);
     return number(env,bitmap.paintOpacity);
   }
   if (name == "fontSize") return numeric(bitmap.fontSize);
@@ -134,7 +134,12 @@ napi_value bitmapOperation(napi_env env, napi_callback_info info) try {
   else if (name == "fillAll") bitmap.fillAll(s(0));
   else if (name == "gradientFillRect") bitmap.gradientFillRect(n(0),n(1),n(2),n(3),s(4),s(5),asBoolean(env,value(6)));
   else if (name == "drawCircle") bitmap.drawCircle(n(0),n(1),n(2),s(3));
-  else if (name == "drawText") bitmap.drawText(s(0),n(1),n(2),n(3),n(4),s(5));
+  else if (name == "drawText") {
+    if (args.size() <= 2) return undefined(env);
+    napi_valuetype type;
+    check(env,napi_typeof(env,value(0),&type),"cannot inspect bitmap text");
+    if (type != napi_undefined) bitmap.drawText(s(0),n(1),n(2),n(3),n(4),s(5));
+  }
   else if (name == "measureTextWidth") return number(env,bitmap.measureTextWidth(s(0)));
   else if (name == "getPixel") return string(env,bitmap.getPixel(asInt32(env,value(0)),asInt32(env,value(1))));
   else if (name == "getAlphaPixel") return number(env,bitmap.getAlphaPixel(asInt32(env,value(0)),asInt32(env,value(1))));
@@ -144,7 +149,7 @@ napi_value bitmapOperation(napi_env env, napi_callback_info info) try {
     if (name == "blt") bitmap.blt(*source.bitmap,n(1),n(2),n(3),n(4),n(5),n(6),n(7),n(8));
     else bitmap.bltImage(*source.bitmap,n(1),n(2),n(3),n(4),n(5),n(6),n(7),n(8));
   } else if (name == "canvasSurface") {
-    return imageInfo(env,bitmap.nativeCanvas(),bitmap.width,bitmap.height);
+    return imageInfo(env,bitmap.nativeCanvas(),bitmap.canvasWidth(),bitmap.canvasHeight());
   } else if (name == "canvasChanged") {
     bitmap.pixels.clear();
     bitmap.dirty = true;

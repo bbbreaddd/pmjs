@@ -213,7 +213,13 @@ void Session::load(const Value& contents) {
     contents["system"]["_versionId"].integer() != database_["system"]["versionId"].integer();
   restored.transfer(mapId, contents["player"]["_x"].integer(), contents["player"]["_y"].integer(), contents["player"]["_direction"].integer());
   restored.audioCommands_.clear();
-  restored.pictures_ = contents["screen"]["_pictures"].array();
+  for (const auto& state : contents["screen"]["_pictures"].array()) {
+    if (state.null()) restored.pictures_.push_back(nullptr);
+    else {
+      auto picture = restored.createRuntimePicture(static_cast<int>(restored.pictures_.size()));
+      picture->restore(state); restored.pictures_.push_back(std::move(picture));
+    }
+  }
   restored.screenEffects_ = contents["screen"];
   std::get<Object>(restored.screenEffects_.data).erase("_pictures");
   restored.ambience_ = contents["player"]["_ambienceData"];
@@ -289,17 +295,22 @@ void Session::load(const Value& contents) {
   if (mapUpdated) restored.transfer(mapId, restored.player_.x, restored.player_.y, restored.player_.direction);
   restored.newGamePending_ = false; restored.titleWindowOpenness_ = 255;
   restored.loadRequested_ = loadRequested_; restored.saveRequested_ = saveRequested_;
+  restored.previousOk_ = previousOk_; restored.previousCancel_ = previousCancel_;
+  restored.previousDirection_ = previousDirection_; restored.directionAge_ = directionAge_;
+  restored.previousUiButtons_ = previousUiButtons_;
   if (loadRequested_) {
     restored.ui_ = ui_;
     restored.pendingLoadBgm_ = bgmOnSave;
     restored.pendingLoadBgs_ = bgsOnSave;
     restored.pendingLoadFrames_ = restored.ticks_;
+    restored.pendingLoadMapUpdated_ = mapUpdated;
     restored.ticks_ = ticks_;
   }
   restored.alwaysDash_ = alwaysDash_; restored.commandRemember_ = commandRemember_; restored.volumes_ = volumes_; restored.configurationRevision_ = configurationRevision_;
   restored.randomGenerator_ = randomGenerator_; restored.randomStream_ = randomStream_; restored.randomOffset_ = randomOffset_; restored.randomCalls_ = randomCalls_;
   restored.presentationRevision_ = presentationRevision_ + 1;
   restored.enemyBitmapHeightResolver_ = enemyBitmapHeightResolver_;
+  restored.runtimeHooks_ = runtimeHooks_;
   *this = std::move(restored);
 }
 }

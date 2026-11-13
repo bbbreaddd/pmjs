@@ -2,6 +2,7 @@
 #include "mv_managers.hpp"
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <regex>
 #include <stdexcept>
 
@@ -27,6 +28,7 @@ std::vector<std::string> split(const std::string& text,char delimiter) {
 }
 }
 void Session::executeNativeScript(const std::string& source,Interpreter& context) {
+  if (runtimeHooks_ && runtimeHooks_->script) { runtimeHooks_->script(context.runtime, source); return; }
   for(auto statement:split(source,';')) {
     statement=trim(statement); if(statement.empty())continue;
     const auto open=statement.find('('),close=statement.rfind(')');
@@ -45,9 +47,9 @@ void Session::executeNativeScript(const std::string& source,Interpreter& context
       if(method=="setHp")actor.hp=static_cast<int>(number(0));
       else if(method=="setMp")actor.mp=static_cast<int>(number(0));
       else if(method=="setTp")actor.tp=static_cast<int>(number(0));
-      else if(method=="gainHp") {const int delta=static_cast<int>(number(0)); actor.result={}; actor.result.hpAffected=true; actor.result.hpDamage=-delta; actor.hp+=delta;}
-      else if(method=="gainMp") {const int delta=static_cast<int>(number(0)); actor.result={}; actor.result.mpDamage=-delta; actor.mp+=delta;}
-      else if(method=="gainTp") {const int delta=static_cast<int>(number(0)); actor.result={}; actor.result.tpDamage=-delta; actor.tp+=delta;}
+      else if(method=="gainHp") {const int delta=static_cast<int>(number(0)); actor.result.hpAffected=true; actor.result.hpDamage=-delta; actor.hp+=delta;}
+      else if(method=="gainMp") {const int delta=static_cast<int>(number(0)); actor.result.mpDamage=-delta; actor.mp+=delta;}
+      else if(method=="gainTp") {const int delta=static_cast<int>(number(0)); actor.result.tpDamage=-delta; actor.tp+=delta;}
       else if(method=="recoverAll")recover(actor);
       else if(method=="addState")addState(actor,static_cast<int>(number(0)));
       else if(method=="removeState")removeState(actor,static_cast<int>(number(0)));
@@ -70,24 +72,31 @@ void Session::executeNativeScript(const std::string& source,Interpreter& context
     if(context.scriptCharacter && name.starts_with("this.")) {
       auto* character=routeCharacter(*context.scriptCharacter,context); if(!character)continue;
       const auto method=name.substr(5);
-      const int first=static_cast<int>(number(0));
-      if(method=="setDirection") {if(!character->directionFix&&first)character->direction=first;character->stopCount=0;}
-      else if(method=="setMoveSpeed")character->moveSpeed=first;
-      else if(method=="setMoveFrequency")character->moveFrequency=first;
-      else if(method=="setPattern")character->pattern=first;
-      else if(method=="setOpacity")character->opacity=first;
-      else if(method=="setBlendMode")character->blendMode=first;
+      if(method=="setDirection") {const int direction=static_cast<int>(number(0));if(!character->directionFix&&direction)character->direction=direction;character->stopCount=0;}
+      else if(method=="setMoveSpeed")character->moveSpeed=static_cast<int>(number(0));
+      else if(method=="setMoveFrequency")character->moveFrequency=static_cast<int>(number(0));
+      else if(method=="setPattern")character->pattern=static_cast<int>(number(0));
+      else if(method=="setOpacity")character->opacity=static_cast<int>(number(0));
+      else if(method=="setBlendMode")character->blendMode=static_cast<int>(number(0));
       else if(method=="setThrough")character->through=value(0).boolean();
       else if(method=="setTransparent")character->transparent=value(0).boolean();
       else if(method=="setWalkAnime")character->walkAnime=value(0).boolean();
       else if(method=="setStepAnime")character->stepAnime=value(0).boolean();
       else if(method=="setDirectionFix")character->directionFix=value(0).boolean();
       else if(method=="setImage"){character->characterName=value(0).text();character->characterIndex=static_cast<int>(number(1));character->tileId=0;}
-      else if(method=="moveStraight")move(*character,first);
+      else if(method=="moveStraight")move(*character,static_cast<int>(number(0)));
       else if(method=="moveForward")move(*character,character->direction);
       else if(method=="moveBackward") {const bool fixed=character->directionFix;character->directionFix=true;move(*character,10-character->direction);character->directionFix=fixed;}
       else if(method=="turn180"){if(!character->directionFix)character->direction=10-character->direction;character->stopCount=0;}
-      else if(method=="locate"||method=="setPosition") locateCharacter(*character,first,static_cast<int>(number(1)));
+      else if(method=="locate") {
+        if(character==&player_)locatePlayer(number(0),number(1));
+        else locateCharacter(*character,number(0),number(1));
+      }
+      else if(method=="setPosition") {
+        character->realX=number(0);character->realY=number(1);
+        character->x=Value(std::floor(character->realX+0.5)).integer();
+        character->y=Value(std::floor(character->realY+0.5)).integer();
+      }
       else throw std::invalid_argument("unsupported native character script call: "+method);
       continue;
     }

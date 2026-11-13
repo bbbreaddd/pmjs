@@ -159,10 +159,9 @@ void Session::chaseCharacter(Character& follower, const Character& leader) {
 }
 void Session::synchronizeFollowers() {
   for (auto& follower : followers_) {
-    follower.x = player_.x; follower.y = player_.y; follower.realX = player_.realX; follower.realY = player_.realY;
+    locateCharacter(follower, player_.realX, player_.realY);
     if (!follower.directionFix) follower.direction = player_.direction;
-    if (follower.walkAnime || follower.stepAnime) follower.pattern = 1;
-    follower.animationCount = 0; follower.stopCount = 0;
+    follower.stopCount = 0;
   }
 }
 void Session::updateFollowers() {

@@ -12,7 +12,7 @@ void Session::locateCharacter(Character& character, double x, double y) {
   character.realY = y;
   if (character.walkAnime || character.stepAnime) character.pattern = 1;
   character.animationCount = 0;
-  bool normalPriority = &character == &player_;
+  bool normalPriority = &character != &vehicles_[2].character;
   for (auto& event : events_) if (&event.character == &character) {
     normalPriority = event.priority == 1;
     event.prelockDirection = 0;
@@ -31,23 +31,8 @@ bool Session::characterEventCommand(const Value& entry, Interpreter& context) {
       auto* target = routeCharacter(p[0].integer(), context);
       if (!target) return true;
       const auto relocate = [&](Character& character, double x, double y) {
-        locateCharacter(character, x, y);
-        if (&character != &player_) return;
-        centerPlayer();
-        const int encounterStep = map()["encounterStep"].integer(30);
-        encounterCount_ = randomInt(encounterStep) + randomInt(encounterStep) + 1;
-        if (vehicleType_ >= 0 && vehicles_[vehicleType_].driving) {
-          auto& vehicle = vehicles_[vehicleType_];
-          vehicle.mapId = mapId_;
-          vehicle.character.x = player_.x; vehicle.character.y = player_.y;
-          vehicle.character.realX = player_.realX; vehicle.character.realY = player_.realY;
-          vehicle.character.direction = player_.direction;
-        }
-        for (auto& follower : followers_) {
-          locateCharacter(follower, x, y);
-          if (!follower.directionFix) follower.direction = player_.direction;
-          follower.stopCount = 0;
-        }
+        if (&character == &player_) locatePlayer(x, y);
+        else locateCharacter(character, x, y);
       };
       if (p[1].integer() == 0) relocate(*target, p[2].number(), p[3].number());
       else if (p[1].integer() == 1) relocate(*target, variable(p[2].integer()).number(), variable(p[3].integer()).number());

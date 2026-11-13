@@ -47,6 +47,14 @@ bool Session::updateSceneTransition(bool fadeComplete) {
     ticks_ = pendingLoadFrames_;
     if (!pendingLoadBgm_.null()) AudioManager::playBgm(*this, pendingLoadBgm_, 0.0);
     if (!pendingLoadBgs_.null()) AudioManager::playBgs(*this, pendingLoadBgs_, 0.0);
+    if (pendingLoadMapUpdated_) {
+      if (map()["autoplayBgm"].boolean()) {
+        if (vehicleType_ >= 0) vehicleWalkingBgm_ = map()["bgm"];
+        else AudioManager::playBgm(*this, map()["bgm"], 0.0);
+      }
+      if (map()["autoplayBgs"].boolean()) AudioManager::playBgs(*this, map()["bgs"], 0.0);
+    }
+    pendingLoadMapUpdated_ = false;
     pendingLoadBgm_ = {}; pendingLoadBgs_ = {};
     startSceneFade(false, 24);
   }

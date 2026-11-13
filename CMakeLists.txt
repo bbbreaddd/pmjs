@@ -258,6 +258,8 @@ if(BUILD_TESTING)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   add_test(NAME node-mv-engine COMMAND ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-engine.cjs" $<TARGET_FILE:pmjs_native>)
+  add_test(NAME node-mv-script-runtime COMMAND ${NODE_EXECUTABLE} --expose-gc
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-script-runtime.cjs" $<TARGET_FILE:pmjs_native>)
   add_test(NAME node-mv-interpreter COMMAND ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-interpreter.cjs" $<TARGET_FILE:pmjs_native>)
   add_test(NAME node-shadow-tiles COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}

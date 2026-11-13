@@ -87,6 +87,7 @@ struct RenderCommand {
   std::array<float, 6> maskTransform{};
   std::array<float, 20> colorMatrix{};
   bool appliesColorMatrix = false;
+  bool canvasTone = false;
   std::array<float, 4> colorTone{};
   std::array<float, 4> blendColor{};
   bool appliesSpriteColor = false;
@@ -273,6 +274,9 @@ class Renderer {
   std::size_t queuedCommandCount() const { return frame_.commands.size(); }
   void transformQueuedCommands(std::size_t first, const std::array<float, 6>& transform);
   void queueTone(const std::array<float, 20>& matrix);
+  void queueTone(const std::array<float, 4>& canvasTone,
+                 const std::array<float, 6>& transform,
+                 const std::array<float, 2>& extent);
   void beginCompositionGroup();
   void endCompositionGroup();
   void clearCompositionRect(float x,float y,float width,float height);
@@ -280,7 +284,7 @@ class Renderer {
   bool queueTilingFrame(ImageHandle image,const std::array<float,6>& transform,const std::array<float,4>& frame,
     const std::array<float,2>& destination,const std::array<float,2>& origin,float alpha,BlendMode blend,bool nearest=false);
   void queueQuad(float x, float y, float width, float height,
-                 const std::array<float, 4>& color);
+                 const std::array<float, 4>& color, BlendMode blendMode = BlendMode::normal);
   bool queueImage(ImageHandle image, const std::array<float, 6>& transform,
                   const std::array<float, 4>& source, float alpha,
                   std::uint32_t tint, BlendMode blendMode,
@@ -324,6 +328,7 @@ class Renderer {
   void drawPresentationOverlay();
   void drawOverlay(ImageHandle image, const std::array<float, 4>& rect, float opacity, bool fullDrawable = false);
   void finish();
+  void flush();
   std::vector<std::uint8_t> captureSceneRgba(AlphaMode alphaMode = AlphaMode::straight);
   std::vector<std::uint8_t> captureSceneRawPremultiplied();
   // Window backbuffer readback, valid only before swap.
@@ -665,6 +670,8 @@ class Renderer {
   int colorMatrixEnabledUniform_ = -1;
   int colorMatrixUniform_ = -1;
   int colorMatrixAlphaUniform_ = -1;
+  int canvasToneEnabledUniform_ = -1;
+  int canvasToneUniform_ = -1;
   int spriteColorEnabledUniform_ = -1;
   int spriteColorToneUniform_ = -1;
   int spriteBlendColorUniform_ = -1;

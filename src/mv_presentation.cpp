@@ -33,7 +33,7 @@ Presentation::Presentation(RuntimeCore& core, Session& session, Value settings)
   core::WebAudio::setEncryptionKey(Decrypter::hasEncryptedAudio ? session_.database_["system"]["encryptionKey"].text() : "");
   core::Graphics::setLoadingCallbacks([this]{session_.resourcesStopped_=true;},[this]{session_.resourcesStopped_=false;});
   core::Graphics::setVideoCallbacks([this](const std::string& url){
-    auto file=std::filesystem::path(url).filename();file.replace_extension();session_.movieName_=file.string();session_.moviePlaying_=!session_.movieName_.empty();
+    session_.movieName_=url;session_.movieExplicitSource_=true;++session_.movieRequest_;session_.moviePlaying_=!url.empty();
   },[this]{return session_.moviePlaying_;},[this](double volume){if(movieAudio_)core_.media().setParameters(movieAudio_,volume,1,0);});
   imageCache_ = std::make_unique<ImageCache>();
   session_.setEnemyBitmapHeightResolver([this](const Battler& enemy) {
@@ -184,13 +184,18 @@ void Presentation::mapPictures() {
   const int tw=tiled["tilewidth"].integer(48),th=tiled["tileheight"].integer(48);
   for(std::size_t index = 0; index < session_.pictures_.size(); ++index) {
     if (index < 1 || index > 200 || (index > 100) != session_.battle_.active) continue;
-    const auto& picture = session_.pictures_[index];
-    Sprite_Picture sprite(static_cast<int>(index));
+    const auto& object = session_.pictures_[index];
+    if (!object) continue;
+    const auto& picture = object->state;
+    auto& sprite = *object->sprite;
     sprite.syncFromPicture(picture);
     if(!sprite.visible||sprite.opacity<=0)continue;
     const auto source=image("img/pictures/"+sprite.pictureName+".png");
     const auto& frame=picture["_frameData"]["frames"][picture["_frameData"]["frameIndex"].integer()];
-    const int sx=frame["x"].integer(),sy=frame["y"].integer(),sw=frame["width"].integer(source.width),sh=frame["height"].integer(source.height);
+    const double sx = sprite.sourceFrame ? (*sprite.sourceFrame)[0] : frame["x"].number();
+    const double sy = sprite.sourceFrame ? (*sprite.sourceFrame)[1] : frame["y"].number();
+    const double sw = sprite.sourceFrame ? (*sprite.sourceFrame)[2] : frame["width"].number(source.width);
+    const double sh = sprite.sourceFrame ? (*sprite.sourceFrame)[3] : frame["height"].number(source.height);
     float x=sprite.position.x,y=sprite.position.y;
     if(picture["_pinnedToMap"].boolean()){x-=cameraX_*tw;y-=cameraY_*th;}
     const float a = std::cos(sprite.rotation) * sprite.scale.x, b = std::sin(sprite.rotation) * sprite.scale.x;
@@ -198,7 +203,7 @@ void Presentation::mapPictures() {
     x-=a*sw*sprite.anchor.x+c*sh*sprite.anchor.y;
     y-=b*sw*sprite.anchor.x+d*sh*sprite.anchor.y;
     std::array<float, 4> tone{};
-    for (std::size_t component = 0; component < 4; ++component) tone[component] = picture["_tone"][component].number() / 255;
+    if (object->tone) for (std::size_t component = 0; component < 4; ++component) tone[component] = object->tone->values[component] / 255;
     if(!core_.renderer().queueImage(source.handle,{a,b,c,d,x,y},
       {float(sx),float(sy),float(sw),float(sh)},sprite.opacity,0xffffff,static_cast<BlendMode>(sprite.blendMode),tone))throw std::runtime_error("cannot queue picture");
   }
@@ -261,7 +266,7 @@ void Presentation::map() {
 void Presentation::hitTarget(int x, int y, int width, int height, int index, int action) {
   session_.uiHitTargets_.push_back({x,y,width,height,index,session_.ui_.category,action,session_.ui_.scene});
 }
-void Presentation::window(int x,int y,int width,int height,int selected,int rows,int openness,std::shared_ptr<core::PixelBitmap> contents,std::optional<core::Rectangle> cursor) {
+void Presentation::window(int x,int y,int width,int height,int selected,int rows,int openness,std::shared_ptr<core::PixelBitmap> contents,std::optional<core::Rectangle> cursor,const Window_Base* model) {
   if(openness<=0)return;
   if(selected>=0&&rows>0&&openness>=255){const int base=session_.ui_.cursor-selected;for(int row=0;row<rows;++row)hitTarget(x+18,y+18+row*36,width-36,36,base+row);}
   if(!coreWindowskin_) {
@@ -273,7 +278,9 @@ void Presentation::window(int x,int y,int width,int height,int selected,int rows
   auto& window=coreWindows_[key];if(!window)window=std::make_shared<core::Window>();
   window->windowskin=coreWindowskin_;window->move(x,y,width,height);window->openness=std::clamp(openness,0,255);
   window->contents=std::move(contents);
-  window->active=selected>=0;window->synchronize(session_.ticks_);window->animationCount=session_.ticks_;
+  window->active=model?model->active:selected>=0||(cursor&&cursor->width>0&&cursor->height>0);
+  if(model)window->animationCount=model->animationCount;
+  else window->synchronize(session_.ticks_);
   const auto& tone=session_.system_.windowTone.null()?session_.database_["system"]["windowTone"]:session_.system_.windowTone;
   window->setTone(tone[0].number(),tone[1].number(),tone[2].number());
   if(cursor)window->setCursorRect(cursor->x,cursor->y,cursor->width,cursor->height);
@@ -618,9 +625,9 @@ void Presentation::messageInputs() {
       const auto& rect = model.rect;
       const auto selected = model.itemRect(model.index);
       const core::Rectangle cursor{double(selected.x),double(selected.y),model.index >= model.topRow && model.index < model.topRow+model.maxPageRows() ? double(selected.width) : 0,36};
-      if (model.background == 0) window(rect.x,rect.y,rect.width,rect.height,model.active ? model.index : -1,0,model.openness,{},cursor);
+      if (model.background == 0) window(rect.x,rect.y,rect.width,rect.height,model.active ? model.index : -1,0,model.openness,{},cursor,&model);
       else {
-        core::Window node; node.move(rect.x,rect.y,rect.width,rect.height); node.opacity=0; node.openness=model.openness; node.active=model.active; node.cursorRect=cursor;
+        core::Window node; node.move(rect.x,rect.y,rect.width,rect.height); node.opacity=0; node.openness=model.openness; node.active=model.active; node.cursorRect=cursor; node.animationCount=model.animationCount;
         streamUiWindow(node);
         if (model.background == 1) drawDimmerBackground(core_.renderer(), rect.x, rect.y, rect.width, rect.height, 18, model.openness / 255.0F);
       }
@@ -646,7 +653,7 @@ void Presentation::messageInputs() {
       if (model.contentsDirty) model.refresh();
       const auto& rect = model.rect;
       const core::Rectangle cursor{double(model.index*32),0,32,36};
-      window(rect.x,rect.y,rect.width,rect.height,model.active ? model.index : -1,0,model.openness,std::shared_ptr<core::PixelBitmap>(session_.numberWindow_,&model.contents),cursor);
+      window(rect.x,rect.y,rect.width,rect.height,model.active ? model.index : -1,0,model.openness,std::shared_ptr<core::PixelBitmap>(session_.numberWindow_,&model.contents),cursor,&model);
       if (model.openness == 255 && model.active) for (int digit = 0; digit < model.maxDigits; ++digit) hitTarget(rect.x+18+digit*32,rect.y+18,32,36,digit);
       if (model.buttonsVisible) {
         const auto sheet = image("img/system/ButtonSet.png");
@@ -670,7 +677,7 @@ void Presentation::messageInputs() {
       const auto& rect = model.rect;
       const auto selected = model.itemRect(model.index);
       const core::Rectangle cursor{double(selected.x),double(selected.y),model.index >= model.topIndex() && model.index < model.topIndex()+model.maxPageItems() ? double(selected.width) : 0,36};
-      window(rect.x,rect.y,rect.width,rect.height,model.active ? model.index : -1,0,model.openness,{},cursor);
+      window(rect.x,rect.y,rect.width,rect.height,model.active ? model.index : -1,0,model.openness,{},cursor,&model);
       if (model.openness == 255) for (int index = model.topIndex(); index < std::min(model.topIndex()+model.maxPageItems(),model.maxItems()); ++index) {
         const auto cell = model.itemRect(index); const int id = model.data[index];
         if (model.active) hitTarget(rect.x+18+cell.x,rect.y+18+cell.y,cell.width,cell.height,index);
@@ -730,7 +737,7 @@ void Presentation::menu() {
     const int px = edit.x, editY = edit.y, inputY = editY+edit.height+8;
     nameEdit_->rect = edit; nameGrid_->rect = {px,inputY,480,360};
     window(px,editY,480,180,-1,0,255,
-      std::shared_ptr<core::PixelBitmap>(nameEdit_,&nameEdit_->contents),nameEdit_->itemRect(nameEdit_->index,japanese));
+      std::shared_ptr<core::PixelBitmap>(nameEdit_,&nameEdit_->contents),nameEdit_->itemRect(nameEdit_->index,japanese),nameEdit_.get());
     const auto cursor = Window_NameInput::cellRect(ui.cursor);
     window(px,inputY,480,360,ui.cursor,0,255,
       std::shared_ptr<core::PixelBitmap>(nameGrid_,&nameGrid_->contents),
@@ -1396,7 +1403,8 @@ void Presentation::battleEffects() {
         x = member["x"].number(); y = member["y"].number() - 8;
       } else {
         if (!session_.database_["system"]["optSideView"].boolean()) continue;
-        if (index < 0 || index >= static_cast<int>(session_.party_.size())) continue;
+        if (index < 0 || index >= static_cast<int>(session_.battleMemberCount())) continue;
+        if (session_.actors_.at(session_.party_[index]).hidden) continue;
         x = 600 + index * 32 - 32; y = 280 + index * 48;
       }
       if (!target.result.hpAffected && !target.result.mpDamage && !target.result.missed && !target.result.evaded) continue;
@@ -1551,6 +1559,15 @@ void Presentation::captureAudioState() {
 }
 void Presentation::render() {
   core::Graphics::tickStart();core::updateServices();core::Graphics::updateLoading();
+  processAudio();renderStage();
+  core::Graphics::presentOverlay();core::Graphics::rendered=true;
+  core::Graphics::tickEnd();++core::Graphics::frameCount;
+}
+bool Presentation::renderFrame(const std::function<void()>& drawFrame) {
+  processAudio();
+  return core::Graphics::render([this]{renderStage();},drawFrame);
+}
+void Presentation::renderStage() {
   session_.uiHitTargets_.clear();
   const int sceneId = static_cast<int>(session_.ui_.scene);
   if (sceneId != lastScene_ || session_.mapId_ != lastMap_ || session_.presentationRevision_ != lastPresentationRevision_) {
@@ -1568,7 +1585,6 @@ void Presentation::render() {
   }
   for (auto handle : deferredImageReleases_) core_.images().release(handle);
   deferredImageReleases_.clear();
-  processAudio();
   const auto globalCanvas=core_.canvases().info(globalTextCanvas_);
   if(globalCanvas&&(globalCanvas->width!=core_.width()||globalCanvas->height!=core_.height())) {
     core_.canvases().release(globalTextCanvas_);
@@ -1613,6 +1629,5 @@ void Presentation::render() {
   }
   movie();
   if(movieAudio_)core_.media().setParameters(movieAudio_,core::Graphics::videoVolume,1,0);
-  core::Graphics::presentOverlay();core::Graphics::tickEnd();++core::Graphics::frameCount;
 }
 }  // namespace pmjs::mv

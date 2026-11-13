@@ -128,6 +128,7 @@ class CanvasStore {
   CanvasStore& operator=(const CanvasStore&) = delete;
 
   std::optional<CanvasInfo> create(int width, int height, bool opaque = false);
+  bool resize(CanvasHandle handle, int width, int height);
   std::optional<CanvasInfo> createPixels(int width, int height,
                                        std::vector<std::uint8_t> pixels, PixelEncoding encoding);
   bool fillRect(CanvasHandle handle, int x, int y, int width, int height,

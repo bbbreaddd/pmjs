@@ -29,7 +29,7 @@ bool Session::animationEventCommand(const Value& entry, Interpreter& context) {
     }
     case 261: { // Play Movie
       if (message_.busy) return false;
-      if (!p[0].text().empty()) { movieName_ = p[0].text(); moviePlaying_ = true; context.waitingVideo = true; }
+      if (!p[0].text().empty()) { movieName_ = p[0].text(); movieExplicitSource_ = false; ++movieRequest_; moviePlaying_ = true; context.waitingVideo = true; }
       return true;
     }
     default:

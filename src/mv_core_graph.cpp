@@ -8,7 +8,7 @@ bool strictEquals(const JsonNode::Ptr& left,const JsonNode::Ptr& right) {
   if(left->data.index()!=right->data.index())return false;
   if(std::holds_alternative<std::monostate>(left->data)||std::holds_alternative<Value::Undefined>(left->data))return true;
   if(const auto* number=std::get_if<double>(&left->data))return *number==std::get<double>(right->data);
-  if(const auto* text=std::get_if<std::string>(&left->data))return *text==std::get<std::string>(right->data);
+  if(const auto* text=std::get_if<std::string>(&left->data))return utf16Units(*text)==utf16Units(std::get<std::string>(right->data));
   if(const auto* boolean=std::get_if<bool>(&left->data))return *boolean==std::get<bool>(right->data);
   return left.get()==right.get();
 }

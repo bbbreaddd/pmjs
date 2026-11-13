@@ -235,7 +235,12 @@ void Session::startBattle(int troop, bool canEscape, bool canLose, bool event) {
   BattleMechanics::makeUniqueNames(battle_.enemies, battle_.nameCounts, database_["system"]["locale"].text().starts_with("ja") || database_["system"]["locale"].text().starts_with("zh") || database_["system"]["locale"].text().starts_with("ko"));
   if (!event) { battle_.preemptive = random() < BattleMechanics::ratePreemptive(*this); battle_.surprise = random() < BattleMechanics::rateSurprise(*this) && !battle_.preemptive; }
   double actorsAgi = 0, enemiesAgi = 0;
-  for (std::size_t index = 0; index < battleMemberCount(); ++index) { auto& value = actors_.at(party_[index]); if (!hasSpecialFlag(value, 3)) value.tp = randomInt(25); value.escaped = false; actorsAgi += parameter(value, 6); }
+  for (int id : party_) {
+    auto& value = actors_.at(id);
+    if (!hasSpecialFlag(value, 3)) value.tp = randomInt(25);
+    value.escaped = false; value.requestedMotion = -1; value.requestedWeapon = 0;
+  }
+  for (std::size_t index = 0; index < battleMemberCount(); ++index) actorsAgi += parameter(actors_.at(party_[index]), 6);
   for (auto& value : battle_.enemies) { if (!hasSpecialFlag(value, 3)) value.tp = randomInt(25); enemiesAgi += parameter(value, 6); }
   actorsAgi /= std::max<std::size_t>(1, battleMemberCount()); enemiesAgi /= std::max<std::size_t>(1, battle_.enemies.size());
   battle_.escapeRatio = 0.5 * actorsAgi / std::max(1.0, enemiesAgi);
@@ -279,11 +284,12 @@ void Session::makeEnemyActions() {
   for (auto& [id, actor] : actors_) { (void)id; actor.guarding = false; }
   for (std::size_t index = 0; index < battleMemberCount(); ++index) {
     auto& actor = actors_.at(party_[index]); const int count = battleActionCount(actor);
-    const bool automatic = hasSpecialFlag(actor, 0) || restriction(actor) > 0;
+    const bool autoBattle = hasSpecialFlag(actor, 0);
+    const bool automatic = autoBattle || restriction(actor) > 0;
     if (!automatic) battle_.remainingActions[index] = battle_.surprise ? 0 : count;
     else for (int action = 0; action < count; ++action) {
-      int skill = restriction(actor) > 0 ? 1 : 0, target = -1;
-      if (!restriction(actor)) {
+      int skill = autoBattle ? 0 : 1, target = -1;
+      if (autoBattle) {
         double best = std::numeric_limits<double>::min();
         std::vector<int> skills{1};
         skills.insert(skills.end(), actor.skills.begin(), actor.skills.end());
@@ -365,8 +371,8 @@ void Session::beginTurn() {
 void Session::executeAction(const Action& selectedAction) {
   if (std::isinf(selectedAction.speed)) return;
   Action action = selectedAction;
-  auto& subject = action.enemy ? battle_.enemies[action.subject] : actors_.at(party_[action.subject]);
-  if (subject.hp <= 0 || subject.hidden || subject.escaped || (!action.forced && restriction(subject) >= 4)) return;
+  auto& subject = action.enemy ? battle_.enemies[action.subject] : actors_.at(action.actorId ? action.actorId : party_[action.subject]);
+  if (!action.forced && (subject.hp <= 0 || subject.hidden || subject.escaped || restriction(subject) >= 4)) return;
   if (!action.forced && restriction(subject) > 0) { action.id = 1; action.item = false; action.target = -1; }
   const auto& item = database_[action.item ? "items" : "skills"][action.id];
   if (!action.forced && !canUse(subject, item)) return;
@@ -381,7 +387,11 @@ void Session::executeAction(const Action& selectedAction) {
   for (auto* target : targets) {
     BattleTarget visualTarget; visualTarget.enemy = target->enemy;
     if (target->enemy) visualTarget.index = static_cast<int>(target - battle_.enemies.data());
-    else { const auto position = std::find(party_.begin(), party_.end(), target->id); visualTarget.index = static_cast<int>(position - party_.begin()); }
+    else {
+      const auto position = std::find(party_.begin(), party_.end(), target->id);
+      visualTarget.index = position == party_.end() ? -1 : static_cast<int>(position - party_.begin());
+      visualTarget.actorId = target->id;
+    }
     for (int repeat = 0; repeat < repeats; ++repeat) visual.targets.push_back(visualTarget);
   }
   visual.animationTargets = visual.targets;
@@ -400,11 +410,11 @@ void Session::executeAction(const Action& selectedAction) {
 }
 void Session::resolveAction() {
   auto& visual = battle_.visuals.at(battle_.currentVisual); const auto& action = visual.action;
-  auto& subject = action.enemy ? battle_.enemies[action.subject] : actors_.at(party_[action.subject]);
+  auto& subject = action.enemy ? battle_.enemies[action.subject] : actors_.at(action.actorId ? action.actorId : party_[action.subject]);
   const auto& item = database_[action.item ? "items" : "skills"][action.id];
   if (battle_.targetIndex < static_cast<int>(visual.invocationCount)) {
     auto& entry = visual.targets[battle_.targetIndex++];
-    auto& target = entry.enemy ? battle_.enemies[entry.index] : actors_.at(party_[entry.index]);
+    auto& target = entry.enemy ? battle_.enemies[entry.index] : actors_.at(entry.actorId ? entry.actorId : party_[entry.index]);
     Battler* receiver = &target;
     Battler* resultSubject = &subject;
     const bool physical = item["hitType"].integer() == 1, magical = item["hitType"].integer() == 2;
@@ -434,7 +444,12 @@ void Session::resolveAction() {
     subject.lastTargetIndex = entry.index;
     entry.result = receiver->result;
     entry.enemy = receiver->enemy;
-    entry.index = receiver->enemy ? static_cast<int>(receiver - battle_.enemies.data()) : static_cast<int>(std::find(party_.begin(), party_.end(), receiver->id) - party_.begin());
+    if (receiver->enemy) { entry.index = static_cast<int>(receiver - battle_.enemies.data()); entry.actorId = 0; }
+    else {
+      const auto position = std::find(party_.begin(), party_.end(), receiver->id);
+      entry.index = position == party_.end() ? -1 : static_cast<int>(position - party_.begin());
+      entry.actorId = receiver->id;
+    }
     entry.aliveAtImpact = receiver->hp > 0;
     battleLog_->displayActionResults(*this,*resultSubject,*receiver);
   }
@@ -465,10 +480,10 @@ void Session::endBattlerTurn(Battler& battler) {
     }
     auto states = battler.states;
     for (int state : states) {
-      if (battler.stateTurns[state] > 0) --battler.stateTurns[state];
+      if (!battle_.forcedTurn && battler.stateTurns[state] > 0) --battler.stateTurns[state];
       if (database_["states"][state]["autoRemovalTiming"].integer() == 2 && battler.stateTurns[state] == 0) removeState(battler, state);
     }
-    for (int i = 0; i < 8; ++i) if (battler.buffTurns[i] > 0) --battler.buffTurns[i];
+    if (!battle_.forcedTurn) for (int i = 0; i < 8; ++i) if (battler.buffTurns[i] > 0) --battler.buffTurns[i];
     refreshBattler(battler);
 }
 void Session::endTurn() {
@@ -479,6 +494,7 @@ void Session::endTurn() {
   };
   for (std::size_t index = 0; index < battleMemberCount(); ++index) finish(actors_.at(party_[index]));
   for (auto& battler : battle_.enemies) finish(battler);
+  battle_.forcedTurn = false;
   battle_.preemptive = false; battle_.surprise = false;
   battle_.turnEnding = true;
   battle_.wait = 0;
@@ -495,8 +511,10 @@ void Session::finishBattle(int result) {
   battle_.result = result; battle_.active = false; battle_.wait = 0; battle_.log.clear();
   message_ = {}; message_.busy = true; messageAge_ = 0;
   message_.lines.emplace_back(battleMessage(result == 0 ? "victory" : result == 1 ? "escapeStart" : "defeat", {partyName()}));
-  if (result != 2) for (int id : party_) {
-    auto& actor = actors_.at(id); const auto states = actor.states;
+  if (result != 2) for (std::size_t index = 0; index < battleMemberCount(); ++index) {
+    auto& actor = actors_.at(party_[index]);
+    if (actor.hidden) continue;
+    const auto states = actor.states;
     for (int state : states) if (database_["states"][state]["removeAtBattleEnd"].boolean()) removeState(actor, state);
   }
   std::vector<std::pair<std::string, int>> drops;
@@ -534,7 +552,7 @@ void Session::finishBattle(int result) {
       auto& actor = actors_.at(id);
       {
         const auto position = std::find(party_.begin(), party_.end(), id);
-        const double gained = std::floor(totalExp * trait(actor, 23, 9, true) * (position - party_.begin() < 4 || database_["system"]["optExtraExp"].boolean() ? 1 : 0) + 0.5);
+        const double gained = std::floor(totalExp * trait(actor, 23, 9, true) * ((position - party_.begin() < 4 && !actor.hidden) || database_["system"]["optExtraExp"].boolean() ? 1 : 0) + 0.5);
         changeActorExp(actor, actor.exp[actor.classId] + gained, true);
       }
     }
@@ -565,9 +583,12 @@ void Session::leaveBattle() {
   for (std::size_t index = 0; index < party_.size(); ++index) {
     auto& value = actors_.at(party_[index]);
     if (result == 2 && battle_.canLose && index < 4 && !value.hidden && value.hp == 0) { value.hp = 1; removeState(value, 1); }
-    value.guarding = false; value.escaped = false; value.hidden = false;
+    value.result = {};
     auto states = value.states; for (int state : states) if (database_["states"][state]["removeAtBattleEnd"].boolean()) removeState(value, state);
-    value.buffs.fill(0); value.buffTurns.fill(0); if (!hasSpecialFlag(value, 3)) value.tp = 0;
+    if (value.hp > 0 && !value.hidden) { value.buffs.fill(0); value.buffTurns.fill(0); }
+    if (!hasSpecialFlag(value, 3)) value.tp = 0;
+    refreshBattler(value);
+    value.guarding = false; value.escaped = false; value.hidden = false;
   }
   if (result == 2 && !battle_.canLose) { openGameOver(); return; }
   ui_ = {}; ui_.scene = Scene::map;
@@ -578,7 +599,7 @@ void Session::updateBattle() {
   if (ui_.scene != Scene::battle) return;
   if (!battle_.active) { if (battle_.result >= 0 && !message_.busy) leaveBattle(); return; }
   const bool moving = std::any_of(battle_.visuals.begin(), battle_.visuals.end(), [&](const BattleVisual& visual) {
-    return visual.actionVisual && !visual.action.enemy && ((visual.returned && ticks_ - visual.returned < 12) ||
+    return visual.actionVisual && !visual.action.enemy && visual.action.subject >= 0 && visual.action.subject < static_cast<int>(battleMemberCount()) && ((visual.returned && ticks_ - visual.returned < 12) ||
       (!visual.returned && ticks_ >= visual.movementStarted && ticks_ - visual.movementStarted < 12));
   });
   const bool effecting = isBattleEffecting();
@@ -610,12 +631,12 @@ void Session::updateBattle() {
       battleLog_->push({"clear"});
       battleLog_->push({"waitForMovement"});
       battle_.actionStage = 3;
-      battle_.wait = visual.action.enemy ? 0 : 12;
+      battle_.wait = visual.action.enemy || visual.action.subject < 0 || visual.action.subject >= static_cast<int>(battleMemberCount()) ? 0 : 12;
       return;
     }
     auto& visual = battle_.visuals.at(battle_.currentVisual); const auto& action = visual.action;
-    auto& subject = action.enemy ? battle_.enemies[action.subject] : actors_.at(party_[action.subject]);
-    if (std::none_of(battle_.actions.begin(), battle_.actions.end(), [&](const Action& next) { return next.enemy == action.enemy && next.subject == action.subject; })) {
+    auto& subject = action.enemy ? battle_.enemies[action.subject] : actors_.at(action.actorId ? action.actorId : party_[action.subject]);
+    if (std::none_of(battle_.actions.begin(), battle_.actions.end(), [&](const Action& next) { return next.enemy == action.enemy && next.subject == action.subject && next.actorId == action.actorId; })) {
       endBattlerActions(subject);
     }
     battle_.actionStage = 0;
@@ -627,7 +648,7 @@ void Session::updateBattle() {
   if (battleLog_->isBusy()) return;
   if (!battle_.forcedActions.empty()) {
     const auto forced = battle_.forcedActions.front(); battle_.forcedActions.erase(battle_.forcedActions.begin());
-    battle_.forcedResumeWait = battle_.wait; battle_.forcedExecuting = true;
+    battle_.forcedResumeWait = battle_.wait; battle_.forcedExecuting = true; battle_.forcedTurn = true;
     executeAction(forced);
     if (!battle_.actionStage) { battle_.forcedExecuting = false; battle_.wait = battle_.forcedResumeWait; }
     return;
@@ -652,8 +673,8 @@ void Session::updateBattle() {
   if (battle_.actions.empty()) { endTurn(); return; }
   const auto action = battle_.actions.front(); battle_.actions.erase(battle_.actions.begin()); executeAction(action);
   if (!battle_.actionStage &&
-      std::none_of(battle_.actions.begin(), battle_.actions.end(), [&](const Action& next) { return next.enemy == action.enemy && next.subject == action.subject; })) {
-    auto& subject = action.enemy ? battle_.enemies[action.subject] : actors_.at(party_[action.subject]);
+      std::none_of(battle_.actions.begin(), battle_.actions.end(), [&](const Action& next) { return next.enemy == action.enemy && next.subject == action.subject && next.actorId == action.actorId; })) {
+    auto& subject = action.enemy ? battle_.enemies[action.subject] : actors_.at(action.actorId ? action.actorId : party_[action.subject]);
     endBattlerActions(subject);
   }
   if (!battle_.wait) battle_.wait = 1;

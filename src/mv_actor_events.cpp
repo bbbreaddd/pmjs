@@ -83,7 +83,11 @@ bool Session::actorEventCommand(const Value& entry) {
   const auto& p = entry["parameters"];
   const int actorId = p[0].integer() ? variable(p[1].integer()).integer() : p[1].integer();
   std::vector<int> selected;
-  if (!actorId) selected = party_;
+  if (!actorId) {
+    const std::size_t count = battle_.active ? battleMemberCount() : party_.size();
+    for (std::size_t index = 0; index < count; ++index)
+      if (!battle_.active || !actors_.at(party_[index]).hidden) selected.push_back(party_[index]);
+  }
   else if (!database_["actors"][actorId].null()) {
     if (!actors_.contains(actorId)) initializeActor(actorId);
     selected.push_back(actorId);

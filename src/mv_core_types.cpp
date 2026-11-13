@@ -99,7 +99,7 @@ std::string numberString(double value) {
   if(value==0)return "0";
   const bool negative=value<0;
   char buffer[64];
-  const auto written=std::to_chars(buffer,buffer+sizeof(buffer),std::abs(value));
+  const auto written=std::to_chars(buffer,buffer+sizeof(buffer),std::abs(value),std::chars_format::scientific);
   if(written.ec!=std::errc{})throw std::runtime_error("cannot format number");
   std::string text(buffer,written.ptr),digits;
   const auto exponentAt=text.find_first_of("eE"),decimalAt=text.find('.');

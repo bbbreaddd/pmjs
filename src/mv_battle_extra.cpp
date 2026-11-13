@@ -45,8 +45,12 @@ bool Session::hasSpecialFlag(const Battler& battler, int flag) const {
   return false;
 }
 bool Session::hasPartyAbility(int ability) const {
-  for (std::size_t index = 0; index < battleMemberCount(); ++index) for (const auto* object : traitObjects(actors_.at(party_[index]))) for (const auto& entry : (*object)["traits"].array())
+  for (std::size_t index = 0; index < battleMemberCount(); ++index) {
+    const auto& actor = actors_.at(party_[index]);
+    if (actor.hidden) continue;
+    for (const auto* object : traitObjects(actor)) for (const auto& entry : (*object)["traits"].array())
     if (entry["code"].integer() == 64 && entry["dataId"].integer() == ability) return true;
+  }
   return false;
 }
 int Session::battleActionCount(const Battler& battler) {
@@ -231,7 +235,7 @@ void Session::applyItemEffect(Battler& subject, Battler& target, const Value& it
   } else if (code >= 31 && code <= 34) {
     if (id < 0 || id > 7) throw std::invalid_argument("invalid buff parameter");
     if (code == 31 || (code == 32 && random() < trait(target, 12, id, true) * luck)) {
-      if (target.hp > 0) {
+      if (target.hp > 0 && !target.hidden) {
         target.buffs[id] = std::clamp(target.buffs[id] + (code == 31 ? 1 : -1), -2, 2);
         const bool matchingPolarity = code == 31 ? target.buffs[id] > 0 : target.buffs[id] < 0;
         if (matchingPolarity) target.buffTurns[id] = std::max(target.buffTurns[id], effect["value1"].integer());
@@ -277,12 +281,22 @@ void Session::actorWalk(Battler& actor) {
     actor.hp -= damage; actor.result.hpAffected = true; actor.result.hpDamage = damage; refreshBattler(actor);
     if (damage > 0) flashDamage();
   }
-  if (vehicleType_ >= 0) return;
+  if (vehicleType_ >= 0 || player_.routeForcing) return;
   if (steps_ % 20 == 0) { endBattlerTurn(actor); if (actor.result.hpDamage > 0) flashDamage(); }
   const auto states = actor.states;
   for (int state : states) if (database_["states"][state]["removeByWalking"].boolean() && actor.stateSteps[state] > 0) {
     if (--actor.stateSteps[state] == 0) removeState(actor, state);
   }
+  const auto showStateMessages = [&](const std::vector<int>& ids, const char* field) {
+    for (int state : ids) {
+      const auto text = database_["states"][state][field].text();
+      if (text.empty()) continue;
+      if (!message_.busy) { message_ = {}; messageAge_ = 0; }
+      message_.lines.emplace_back(actor.name + text); message_.busy = true;
+    }
+  };
+  showStateMessages(actor.result.addedStates, "message1");
+  showStateMessages(actor.result.removedStates, "message4");
 }
 
 void Session::applyGlobalEffects(const Value& item) {
@@ -330,10 +344,21 @@ bool Session::updateTroopEvents() {
   }
   return false;
 }
-void Session::forceBattleAction(bool enemy, int subject, int skill, int target) {
+void Session::forceActorAction(int actorId, int skill, int target) {
+  if (!battle_.active || database_["actors"][actorId].null() || database_["skills"][skill].null()) return;
+  if (!actors_.contains(actorId)) initializeActor(actorId);
+  const auto position = std::find(party_.begin(), party_.end(), actorId);
+  const int index = position == party_.end() ? -1 : static_cast<int>(position - party_.begin());
+  forceBattleAction(false, index, skill, target, actorId);
+}
+void Session::forceBattleAction(bool enemy, int subject, int skill, int target, int actorId) {
   if (!battle_.active || database_["skills"][skill].null()) return;
-  if (enemy ? subject < 0 || subject >= static_cast<int>(battle_.enemies.size()) : subject < 0 || subject >= static_cast<int>(battleMemberCount())) return;
-  auto& battler = enemy ? battle_.enemies[subject] : actors_.at(party_[subject]);
+  if (enemy) {
+    if (subject < 0 || subject >= static_cast<int>(battle_.enemies.size())) return;
+  } else if (actorId) {
+    if (!actors_.contains(actorId)) return;
+  } else if (subject < 0 || subject >= static_cast<int>(battleMemberCount())) return;
+  auto& battler = enemy ? battle_.enemies[subject] : actors_.at(actorId ? actorId : party_[subject]);
   if (std::find(battler.states.begin(), battler.states.end(), 1) != battler.states.end()) return;
   if (target == -2) target = battler.lastTargetIndex;
   else if (target == -1) {
@@ -361,8 +386,12 @@ void Session::forceBattleAction(bool enemy, int subject, int skill, int target) 
       if (target < 0) return;
     }
   }
-  battle_.actions.erase(std::remove_if(battle_.actions.begin(), battle_.actions.end(), [&](const Action& action) { return action.enemy == enemy && action.subject == subject; }), battle_.actions.end());
-  battle_.forcedActions.push_back({enemy, false, subject, skill, target, 0, true});
+  battle_.actions.erase(std::remove_if(battle_.actions.begin(), battle_.actions.end(), [&](const Action& action) {
+    if (action.enemy != enemy) return false;
+    if (enemy) return action.subject == subject;
+    return (action.actorId ? action.actorId : party_[action.subject]) == battler.id;
+  }), battle_.actions.end());
+  battle_.forcedActions.push_back({enemy, false, subject, skill, target, 0, true, actorId});
 }
 
 bool BattleMechanics::hasEncounterHalf(const Session& session) { return session.hasPartyAbility(0); }

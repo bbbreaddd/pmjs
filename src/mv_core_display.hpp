@@ -76,6 +76,7 @@ class Tilemap : public Container {
   void update() override;
   virtual void refresh(){++revision_;}
   virtual void refreshTileset() {}
+  virtual Point scrollOrigin()const{return {std::floor(origin.x),std::floor(origin.y)};}
   bool isReady() const;
   using ImageResolver=std::function<ImageInfo(int)>;
   struct TileRectangle {int sheet=0; Rectangle source; Point destination,animation;};
@@ -133,7 +134,12 @@ class Tilemap : public Container {
   static bool isWallTypeAutotile(int tileId) { return isRoofTile(tileId) || isWallSideTile(tileId); }
   static bool isWaterfallTypeAutotile(int tileId) { return isWaterfallTile(tileId); }
 };
-class ShaderTilemap:public Tilemap {public:bool roundPixels=true;void refreshTileset()override{refresh();}};
+class ShaderTilemap:public Tilemap {
+ public:
+  bool roundPixels=true;
+  Point scrollOrigin()const override{return roundPixels?Tilemap::scrollOrigin():origin;}
+  void refreshTileset()override{refresh();}
+};
 class Sprite:public Container {
  public:
   Sprite();
@@ -148,12 +154,12 @@ class Sprite:public Container {
   Rectangle frame()const{return frame_;}
   double width()const{return frame_.width;}
   double height()const{return frame_.height;}
-  void setWidth(double width){frame_.width=width;}
-  void setHeight(double height){frame_.height=height;}
+  void setWidth(double width){frame_.width=width;refreshFrameGeometry();}
+  void setHeight(double height){frame_.height=height;refreshFrameGeometry();}
   double opacity()const{return alpha*255;}
   void setOpacity(double value){alpha=std::clamp(value,0.0,255.0)/255;}
-  void setBlendColor(std::array<double,4> value){blendColor_=value;}
-  void setColorTone(std::array<double,4> value){colorTone_=value;}
+  void setBlendColor(std::array<double,4> value){if(blendColor_!=value){blendColor_=value;refreshFrameGeometry();}}
+  void setColorTone(std::array<double,4> value){if(colorTone_!=value){colorTone_=value;refreshFrameGeometry();}}
   std::array<double,4> blendColor()const{return blendColor_;}
   std::array<double,4> colorTone()const{return colorTone_;}
   static bool queueFrame(Renderer&,const ImageInfo&,const Rectangle&,const Matrix&,double opacity=1,BlendMode blend=BlendMode::normal,
@@ -161,6 +167,7 @@ class Sprite:public Container {
  protected:
   void draw(Renderer&,const Matrix&,double)override;
   virtual void onBitmapLoad();
+  virtual void refreshFrameGeometry();
   std::shared_ptr<int> bitmapLifetime_=std::make_shared<int>(0);
   std::shared_ptr<PixelBitmap> bitmap_;
   Rectangle frame_;
@@ -176,16 +183,22 @@ class TilingSprite:public Sprite {
   void move(double x,double y,double width,double height){position={x,y};areaWidth=width;areaHeight=height;}
  protected:
   void onBitmapLoad()override{refreshFrame_=false;}
+  void refreshFrameGeometry()override{}
   void draw(Renderer&,const Matrix&,double)override;
 };
 class ScreenSprite:public Container {
  public:
+  ScreenSprite(){alpha=0;}
   std::array<float,3> color{};
-  void setColor(double r,double g,double b){const auto channel=[](double value){const double clean=std::isnan(value)?0.0:value;return float(std::clamp(std::floor(clean+.5),0.0,255.0)/255);};color={channel(r),channel(g),channel(b)};}
+  BlendMode blendMode=BlendMode::normal;
+  void setColor(double r,double g,double b);
   void setBlack(){setColor(0,0,0);} void setWhite(){setColor(255,255,255);}
   void setOpacity(double value){alpha=std::clamp(value,0.0,255.0)/255;}
   double opacity()const{return alpha*255;}
  protected:void draw(Renderer&,const Matrix&,double)override;
+ private:
+  std::array<double,3> channels_{};
+  Rectangle fillRect_{-Graphics::width*5.0,-Graphics::height*5.0,Graphics::width*10.0,Graphics::height*10.0};
 };
 class ToneFilter {
  public:
@@ -203,7 +216,8 @@ class ToneFilter {
 class ToneSprite:public Container {
  public:
   void setTone(double r,double g,double b,double gray);
-  void reset(){setTone(0,0,0,0);}
+  void clear(){setTone(0,0,0,0);}
+  void reset(){clear();}
  protected:void draw(Renderer&,const Matrix&,double)override;
  private:std::array<double,4> tone_{};
 };

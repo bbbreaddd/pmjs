@@ -171,6 +171,7 @@ void Window_Base::drawCurrencyValue(int value, const std::string& unit, int x, i
 }
 
 void Window_Base::update() {
+  if (active) ++animationCount;
   if (opening) { openness = advanceOpenness(openness,true); opening = openness < 255; }
   if (closing) { openness = advanceOpenness(openness,false); closing = openness > 0; }
 }
@@ -744,7 +745,7 @@ void Window_BattleLog::showAnimation(Session& session, int visualIndex) {
   if (animationId >= 0) animations.push_back(animationId);
   else if (action.enemy) { SoundManager::playEnemyAttack(session); return; }
   else {
-    const auto& actor = session.actors_.at(session.party_.at(action.subject));
+    const auto& actor = session.actors_.at(action.actorId ? action.actorId : session.party_.at(action.subject));
     for (std::size_t slot = 0; slot < actor.equips.size(); ++slot)
       if (actor.equips[slot] && actor.equipKinds[slot] == 1) animations.push_back(session.database()["weapons"][actor.equips[slot]]["animationId"].integer());
     if (animations.empty()) animations.push_back(1);
@@ -753,7 +754,9 @@ void Window_BattleLog::showAnimation(Session& session, int visualIndex) {
   for (std::size_t pass = 0; pass < animations.size(); ++pass)
     for (std::size_t index = 0; index < visual.animationTargets.size(); ++index) {
       const auto& target = visual.animationTargets[index];
-      session.requestAnimation(target.enemy ? 2 : 1,target.enemy ? target.index : session.party_.at(target.index),
+      if (!target.enemy && (target.index < 0 || target.index >= static_cast<int>(session.battleMemberCount()))) continue;
+      const int targetId = target.enemy ? target.index : target.actorId ? target.actorId : session.party_.at(target.index);
+      session.requestAnimation(target.enemy ? 2 : 1,targetId,
         animations[pass],pass == 1,false,8+static_cast<int>(index)*12);
     }
 }
@@ -769,6 +772,10 @@ void Window_BattleLog::queuePopup(Session& session, const Battler& target, int v
     auto& visual = session.battle_.visuals.at(visualIndex);
     BattleTarget entry; entry.enemy = target.enemy;
     entry.index = target.enemy ? -battlerId(session,target)-1 : static_cast<int>(std::find(session.party_.begin(),session.party_.end(),target.id)-session.party_.begin());
+    if (!target.enemy) {
+      entry.actorId = target.id;
+      if (entry.index == static_cast<int>(session.party_.size())) entry.index = -1;
+    }
     entry.result = result; entry.aliveAtImpact = target.hp > 0;
     recordIndex = static_cast<int>(visual.targets.size());
     visual.targets.push_back(std::move(entry));
@@ -1571,6 +1578,7 @@ bool Window_Message::startInput(Session& session) {
       window.makeCommandList(session); window.background = message.choiceBackground; window.positionType = message.choicePosition;
       window.rect = Window_ChoiceList::placement(window.maxItems(),96,window.positionType,bounds,width,height);
       window.topRow = 0; window.select(message.defaultChoice); window.open(); window.activate();
+      window.update();
     }
     return true;
   }
@@ -1586,6 +1594,7 @@ bool Window_Message::startInput(Session& session) {
       window.select(0); window.button = window.buttonFrameIndex = -1;
       window.buttonsVisible = session.currentInput_.touchDate > session.currentInput_.inputDate;
       window.contentsDirty = true; window.open(); window.activate();
+      window.update();
     }
     return true;
   }
@@ -1596,6 +1605,7 @@ bool Window_Message::startInput(Session& session) {
       window.itypeId = message.itemType; window.refresh(session);
       window.rect = Window_EventItem::placement(bounds,width,height);
       window.topRow = 0; window.select(0); window.open(); window.activate();
+      window.update();
     }
     return true;
   }
