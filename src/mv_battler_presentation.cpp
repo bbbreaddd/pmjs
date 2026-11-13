@@ -33,7 +33,15 @@ void Presentation::battleSprites() {
     const int cursor = session_.ui_.cursor;
     return cursor >= 0 && cursor < static_cast<int>(targets.size()) && targets[cursor] == index;
   };
-  for (std::size_t index = 0; index < session_.battle_.enemies.size(); ++index) {
+  std::vector<std::size_t> enemyOrder;
+  enemyOrder.reserve(session_.battle_.enemies.size());
+  for (std::size_t index = 0; index < session_.battle_.enemies.size(); ++index) enemyOrder.push_back(index);
+  const auto& troopMembers = session_.database_["troops"][session_.battle_.troopId]["members"];
+  std::stable_sort(enemyOrder.begin(), enemyOrder.end(), [&](std::size_t a, std::size_t b) {
+    const double ay = troopMembers[a]["y"].number(), by = troopMembers[b]["y"].number();
+    return ay != by ? ay < by : b < a;
+  });
+  for (std::size_t index : enemyOrder) {
     const auto& enemy = session_.battle_.enemies[index];
     auto& display = battlerDisplays_[{true,static_cast<int>(index)}];
     display.stateIcon.setup(&enemy);
@@ -95,11 +103,22 @@ void Presentation::battleSprites() {
     if (actor.hidden || actor.escaped || actor.battlerName.empty() || session_.effectHidden(1,actor.id)) continue;
     float x = 600+index*32, y = 280+index*48;
     const bool inputting = session_.battle_.active && !session_.battle_.opening && !session_.battle_.wait && session_.ui_.category != 4 && session_.battle_.actorIndex == static_cast<int>(index);
-    int motion = actor.hp <= 0 ? 17 : session_.battle_.result == 0 ? 13 : session_.battle_.result == 1 ? 12 : actor.guarding ? 3 : inputting ? 0 : actor.hp < session_.parameter(actor,0)/4 ? 14 : 1;
-    if (!actor.states.empty()) {
-      const auto& value = session_.database_["states"][actor.states.front()];
-      if (actor.hp > 0 && !inputting && !actor.guarding && value["motion"].integer()) motion = value["motion"].integer() == 1 ? 15 : value["motion"].integer() == 2 ? 16 : 17;
-    }
+    const int stateMotion = actor.states.empty() ? 0 : session_.database_["states"][actor.states.front()]["motion"].integer();
+    const bool chanting = !inputting && (session_.battle_.actionStage > 0 || session_.battle_.turnEnding) &&
+      std::any_of(session_.battle_.actions.begin(), session_.battle_.actions.end(), [&](const Action& pending) {
+        return !pending.enemy && pending.subject == static_cast<int>(index) && !pending.item &&
+          session_.database_["skills"][pending.id]["hitType"].integer() == 2;
+      });
+    int motion = 1;
+    if (session_.battle_.result == 0 && actor.hp > 0) motion = 13;
+    else if (session_.battle_.result == 1 && actor.hp > 0) motion = 12;
+    else if (inputting) motion = 0;
+    else if (stateMotion == 3 || actor.hp <= 0) motion = 17;
+    else if (stateMotion == 2) motion = 16;
+    else if (chanting) motion = 2;
+    else if (actor.guarding) motion = 3;
+    else if (stateMotion == 1) motion = 15;
+    else if (actor.hp < session_.parameter(actor,0)/4) motion = 14;
     const auto fallbackMotion = static_cast<BattlerMotion>(motion);
     const BattleVisual* action = nullptr;
     for (auto visual = session_.battle_.visuals.rbegin(); visual != session_.battle_.visuals.rend(); ++visual)

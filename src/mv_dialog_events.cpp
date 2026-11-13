@@ -15,24 +15,17 @@ bool Session::dialogEventCommand(const Value& entry, Interpreter& context) {
     case 103: { // Input Number
       const int varId = p[0].integer();
       const int digits = std::clamp(p[1].integer(), 1, 8);
-      ui_.variableId = varId;
-      ui_.maxDigits = digits; ui_.digitIndex = 0;
-      ui_.numberButton = -1; ui_.numberButtonsInitialized = false;
-      int initialValue = variable(varId).integer();
-      if (initialValue < 0) initialValue = 0;
-      const int maxVal = static_cast<int>(std::pow(10, digits)) - 1;
-      ui_.numberInput = std::clamp(initialValue, 0, maxVal);
+      message_.numberVariableId = varId;
+      message_.numberDigits = digits;
       message_.busy = true;
       messageAge_ = 0;
       return true;
     }
     case 104: { // Select Item
       const int varId = p[0].integer();
-      const int itypeId = p.array().size() > 1 ? p[1].integer() : 1;
-      ui_.variableId = varId;
-      ui_.category = itypeId;
-      ui_.cursor = 0;
-      ui_.listTopRow = 0;
+      const int itypeId = (p.array().size() > 1 && p[1].integer() != 0) ? p[1].integer() : 2;
+      message_.itemVariableId = varId;
+      message_.itemType = itypeId;
       message_.busy = true;
       messageAge_ = 0;
       return true;
@@ -41,7 +34,7 @@ bool Session::dialogEventCommand(const Value& entry, Interpreter& context) {
       message_ = {};
       message_.busy = true; message_.scrolling = true;
       message_.scrollSpeed = p[0].number(2)/2; message_.scrollNoFast = p[1].boolean();
-      message_.scrollY = -database_["sceneContract"]["height"].number(624);
+      message_.scrollY = -static_cast<double>(screenHeight_);
       messageAge_ = 0;
       ui_.cursor = 0;
       while (context.index + 1 < static_cast<int>(context.list.size()) &&
@@ -73,17 +66,6 @@ bool Session::dialogEventCommand(const Value& entry, Interpreter& context) {
       if (!battle_.active) {
         SceneManager::pushScene(*this, Scene::save);
         ui_.cursor = std::max(0, lastAccessedSavefileId_ - 1);
-      }
-      return true;
-    }
-    case 217: { // Gather Followers
-      if (battle_.active) return true;
-      for (auto& follower : followers_) {
-        follower.x = player_.x;
-        follower.y = player_.y;
-        follower.realX = player_.realX;
-        follower.realY = player_.realY;
-        follower.direction = player_.direction;
       }
       return true;
     }

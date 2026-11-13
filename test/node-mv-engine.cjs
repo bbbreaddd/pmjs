@@ -108,3 +108,19 @@ try {
   api.step(playable,{direction:8});assert.equal(api.snapshot(playable).player.y,0,'movement resumes after dismissing messages');
   assert.throws(()=>api.save(playable),/cannot export/);
 } finally {api.dispose(playable);}
+const hostSettingsFixture=structuredClone(fixture);
+hostSettingsFixture.maps[1]={width:20,height:20,data:Array(20*20*6).fill(0),tilesetId:1,events:[]};
+hostSettingsFixture.system.startX=10;hostSettingsFixture.system.startY=10;
+hostSettingsFixture.sceneContract={width:480,height:384};
+const dashSession=api.create(hostSettingsFixture);
+try {
+  api.newGame(dashSession);
+  api.configure(dashSession,{alwaysDash:true});
+  assert.equal(api.configuration(dashSession).alwaysDash,true);
+  api.configure(dashSession,{});
+  assert.equal(api.configuration(dashSession).alwaysDash,true,'empty config preserves Community_Basic alwaysDash');
+  api.configure(dashSession,{alwaysDash:false});
+  assert.equal(api.configuration(dashSession).alwaysDash,false,'saved config overrides Community_Basic alwaysDash');
+  const savedCamera=api.save(dashSession).map._displayX;
+  assert.equal(savedCamera,5.5,'camera centers player using screenWidth (480px = 10 tiles) instead of hardcoded 816px');
+} finally {api.dispose(dashSession);}

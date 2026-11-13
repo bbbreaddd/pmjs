@@ -36,6 +36,7 @@ class Window_Base {
   int openness = 255;
   bool active = true;
   bool visible = true;
+  bool opening = false, closing = false;
   int fontSize = 28;
   Color textColor{255, 255, 255, 255};
 
@@ -54,21 +55,14 @@ class Window_Base {
   int contentsOpacity = 255;
   core::PixelBitmap contents;
 
-  struct TextDrawRecord {
-    std::string text;
-    int x = 0;
-    int y = 0;
-    int maxWidth = 0;
-    std::string align = "left";
-    Color color{255, 255, 255, 255};
-  };
-  std::vector<TextDrawRecord> drawnTexts;
-
   void createContents();
   void changeTextColor(Color color) { textColor = color; }
   void resetTextColor() { textColor = normalColor(); }
-  int textWidth(const std::string& text) const;
-  void drawText(const std::string& text, int x, int y, int maxWidth = 0, const std::string& align = "left");
+  double textWidth(const std::string& text) const;
+  void drawText(const std::string& text, double x, double y, double maxWidth = 0, const std::string& align = "left");
+  void open() { opening = openness < 255; closing = false; }
+  void close() { closing = openness > 0; opening = false; }
+  static int advanceOpenness(int openness, bool opening);
   void drawGauge(int x, int y, int width, double rate, Color color1, Color color2);
   void drawCurrentAndMax(int current, int max, int x, int y, int width, Color color1, Color color2);
   void drawActorHp(const Battler& actor, const Session& session, int x, int y, int width = 186);
@@ -80,7 +74,7 @@ class Window_Base {
   void drawActorLevel(const Battler& actor, const Session& session, int x, int y);
   void drawActorSimpleStatus(const Battler& actor, const Session& session, int x, int y, int width);
   void drawItemName(const Value& item, int x, int y, int width = 312);
-  void drawCurrencyValue(int value, const std::string& unit, int x, int y, int width);
+  void drawCurrencyValue(int value, const std::string& unit, int x, int y, int width, Color valueColor = normalColor(), Color unitColor = systemColor());
 
   static Color normalColor();
   static Color systemColor();
@@ -309,6 +303,7 @@ class Window_Gold : public Window_Base {
  public:
   int value = 0;
   std::string currencyUnit;
+  Color valueColor = normalColor(), unitColor = systemColor();
   Window_Gold(int x, int y);
   void refresh(const Session& session);
 };
@@ -530,6 +525,7 @@ class Window_NameInput : public Window_Selectable {
 
 class Window_ChoiceList : public Window_Command {
  public:
+  int background = 0, positionType = 2;
   Window_ChoiceList();
   void makeCommandList(const Session& session);
   static int visibleRows(int count, const Rect& message, int screenHeight);
@@ -540,9 +536,13 @@ class Window_NumberInput : public Window_Selectable {
  public:
   int maxDigits = 1;
   int number = 0;
+  int button = -1, buttonFrameIndex = -1;
+  bool buttonsVisible = false, buttonsAbove = false, contentsDirty = true;
   Window_NumberInput();
   int maxItems() const override { return maxDigits; }
   void changeDigit(bool up);
+  void refresh();
+  static Rect placement(int digits, const Rect& message, int screenWidth, int screenHeight);
   static int changeDigit(int number, int maxDigits, int index, bool up);
   static Rect buttonFrame(int index, bool hot);
   static std::array<Rect, 3> buttonBounds(Rect window, bool messageBottom);
@@ -554,28 +554,23 @@ class Window_EventItem : public Window_ItemList {
   Window_EventItem();
   static std::vector<int> makeItemList(const Session& session, int itemType);
   void refresh(const Session& session) override;
+  static Rect placement(const Rect& message, int screenWidth, int screenHeight);
 };
 
 class Window_ScrollText : public Window_Base {
  public:
-  std::string text;
-  double scrollY = 0.0;
-  int scrollSpeed = 2;
-  bool noFastForward = false;
   Window_ScrollText();
+  static bool updateMessage(Message& message, const Input& input);
 };
 
 class Window_Message : public Window_Base {
  public:
-  std::string textState;
-  int positionType = 2;
-  int background = 0;
-  int waitCount = 0;
-  bool pauseSign = false;
-  bool lineShowFast = false;
-  bool showFast = false;
   Window_Message();
-  void clearFlags();
+  static void clearFlags(Message& message);
+  static bool startInput(Session& session);
+  static bool updateInput(Session& session, const Input& input, bool ok, bool cancel, int direction, bool pageUp, bool pageDown);
+  static void terminate(Session& session);
+  static void updateState(Session& session);
 };
 
 class Window_PartyCommand : public Window_Command {

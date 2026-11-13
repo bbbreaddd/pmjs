@@ -1,4 +1,5 @@
 #include "mv_engine.hpp"
+#include "mv_core_utils.hpp"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -55,7 +56,7 @@ Value writeInterpreter(const Interpreter& context, int depth = 0) {
   const Value reference = context.waitingRoute ? Value(Object{{"@r", target < 0 ? "/player" : "/map/_events/" + std::to_string(target)}}) : Value{};
   return instance("Game_Interpreter", {{"_depth", depth}, {"_mapId", context.mapId}, {"_eventId", context.eventId},
     {"_list", context.running ? Value(context.list) : Value{}}, {"_index", context.index}, {"_waitCount", context.wait},
-    {"_waitMode", context.waitingRoute ? "route" : context.waitingScroll ? "scroll" : context.waitingGather ? "gather" : context.waitingVideo ? "video" : context.waitingEffect ? "animation" : context.waitingAction ? "action" : ""}, {"_character", reference},
+    {"_waitMode", context.waitingRoute ? "route" : context.waitingScroll ? "scroll" : context.waitingGather ? "gather" : context.waitingVideo ? "video" : context.waitingEffect ? "animation" : context.waitingAction ? "action" : context.waitingMessage ? "message" : ""}, {"_character", reference},
     {"_childInterpreter", context.children.empty() ? Value{} : writeInterpreter(context.children.front(), depth + 1)},
     {"_comments", ""}, {"_branch", entries(context.branches)}, {"_params", Array{}}, {"_indent", 0}, {"_frameCount", 0}, {"_freezeChecker", 0}});
 }
@@ -81,7 +82,8 @@ Interpreter readInterpreter(const Value& value, int depth = 0) {
   } else if (value["_waitMode"].text() == "scroll") result.waitingScroll = true;
   else if (value["_waitMode"].text() == "gather") result.waitingGather = true;
   else if (value["_waitMode"].text() == "action") result.waitingAction = true;
-  else if (value["_waitMode"].text() == "animation" || value["_waitMode"].text() == "balloon" || value["_waitMode"].text() == "video" || value["_waitMode"].text() == "image") {}
+  else if (value["_waitMode"].text() == "message") result.waitingMessage = true;
+  else if (value["_waitMode"].text() == "transfer" || value["_waitMode"].text() == "animation" || value["_waitMode"].text() == "balloon" || value["_waitMode"].text() == "video" || value["_waitMode"].text() == "image") {}
   else if (!value["_waitMode"].text().empty()) throw std::invalid_argument("unsupported saved interpreter wait");
   return result;
 }
@@ -93,7 +95,7 @@ Character readCharacter(const Value& value) {
   result.jumpCount = value["_jumpCount"].integer(); result.jumpPeak = value["_jumpPeak"].integer();
   result.movementSuccess = value["_movementSuccess"].null() || value["_movementSuccess"].boolean();
   result.tileId = value["_tileId"].integer(); result.characterName = value["_characterName"].text(); result.characterIndex = value["_characterIndex"].integer();
-  result.through = value["_through"].boolean(); result.transparent = value["_transparent"].boolean(); result.walkAnime = value["_walkAnime"].boolean(); result.stepAnime = value["_stepAnime"].boolean(); result.directionFix = value["_directionFix"].boolean();
+  result.through = value["_through"].boolean(); result.transparent = value["_transparent"].boolean(); result.walkAnime = value["_walkAnime"].null() || value["_walkAnime"].boolean(); result.stepAnime = value["_stepAnime"].boolean(); result.directionFix = value["_directionFix"].boolean();
   result.bushDepth = value["_bushDepth"].integer();
   result.opacity = value["_opacity"].integer(255); result.blendMode = value["_blendMode"].integer();
   result.singleFrame = value["_singleFrame"].boolean();
@@ -163,7 +165,7 @@ Value Session::save() {
   const double displayX = mapState_.lastDisplayX;
   const double displayY = mapState_.lastDisplayY;
   return Object{
-    {"system", instance("Game_System", {{"_walkingBgm", vehicleWalkingBgm_}, {"_saveEnabled", system_.saveEnabled}, {"_menuEnabled", system_.menuEnabled}, {"_encounterEnabled", system_.encounterEnabled}, {"_formationEnabled", system_.formationEnabled}, {"_battleCount", system_.battleCount}, {"_winCount", system_.winCount}, {"_escapeCount", system_.escapeCount}, {"_saveCount", system_.saveCount}, {"_versionId", database_["system"]["versionId"]}, {"_framesOnSave", static_cast<double>(ticks_)}, {"_bgmOnSave", savedBgm_.null() ? map()["bgm"] : savedBgm_}, {"_bgsOnSave", savedBgs_.null() ? map()["bgs"] : savedBgs_}, {"_windowTone", system_.windowTone}, {"_battleBgm", system_.battleBgm}, {"_victoryMe", system_.victoryMe}, {"_defeatMe", system_.defeatMe}, {"_savedBgm", system_.storedBgm}})},
+    {"system", instance("Game_System", {{"_walkingBgm", vehicleWalkingBgm_}, {"_saveEnabled", system_.saveEnabled}, {"_menuEnabled", system_.menuEnabled}, {"_encounterEnabled", system_.encounterEnabled}, {"_formationEnabled", system_.formationEnabled}, {"_battleCount", system_.battleCount}, {"_winCount", system_.winCount}, {"_escapeCount", system_.escapeCount}, {"_saveCount", system_.saveCount}, {"_versionId", database_["system"]["versionId"]}, {"_framesOnSave", static_cast<double>(ticks_)}, {"_bgmOnSave", AudioManager::saveBgm(*this)}, {"_bgsOnSave", AudioManager::saveBgs(*this)}, {"_windowTone", system_.windowTone}, {"_battleBgm", system_.battleBgm}, {"_victoryMe", system_.victoryMe}, {"_defeatMe", system_.defeatMe}, {"_savedBgm", system_.storedBgm}})},
     {"screen", screenState()},
     {"timer", instance("Game_Timer", {{"_frames", timerFrames_}, {"_working", timerWorking_}})}, {"switches", instance("Game_Switches", {{"_data", switches}})}, {"variables", instance("Game_Variables", {{"_data", variables}})}, {"selfSwitches", instance("Game_SelfSwitches", {{"_data", selfSwitches}})}, {"actors", instance("Game_Actors", {{"_data", actors}})},
     {"party", instance("Game_Party", {{"_inBattle", false}, {"_gold", gold_}, {"_steps", steps_}, {"_lastItem", item(lastItemId_,"item")}, {"_menuActorId", menuActorId_ ? menuActorId_ : party_.empty() ? 0 : party_[0]}, {"_targetActorId", targetActorId_}, {"_actors", numbers(party_)}, {"_items", items}, {"_weapons", weapons}, {"_armors", armors}})},
@@ -206,22 +208,27 @@ void Session::load(const Value& contents) {
     actor.stateSteps.clear(); if (const auto* values = std::get_if<Object>(&value["_stateSteps"].data)) for (const auto& [key, steps] : *values) actor.stateSteps[std::stoi(key)] = steps.integer();
     for (int i = 0; i < 8; ++i) { actor.paramPlus[i] = value["_paramPlus"][i].integer(); actor.buffs[i] = value["_buffs"][i].integer(); actor.buffTurns[i] = value["_buffTurns"][i].integer(); }
   }
+  const bool mapUpdated = !contents["system"]["_versionId"].null() && !database_["system"]["versionId"].null() &&
+    contents["system"]["_versionId"].integer() != database_["system"]["versionId"].integer();
   restored.transfer(mapId, contents["player"]["_x"].integer(), contents["player"]["_y"].integer(), contents["player"]["_direction"].integer());
+  restored.audioCommands_.clear();
   restored.pictures_ = contents["screen"]["_pictures"].array();
   restored.screenEffects_ = contents["screen"];
   std::get<Object>(restored.screenEffects_.data).erase("_pictures");
   restored.ambience_ = contents["player"]["_ambienceData"];
-  restored.savedCamera_ = std::array{contents["map"]["_displayX"].number(), contents["map"]["_displayY"].number()};
   const auto& savedMap = contents["map"];
-  restored.mapState_.tilesetId = savedMap["_tilesetId"].integer();
-  restored.mapState_.scrollDirection = savedMap["_scrollDirection"].integer(2); restored.mapState_.scrollSpeed = savedMap["_scrollSpeed"].integer(4); restored.mapState_.scrollRest = savedMap["_scrollRest"].number();
-  restored.mapState_.nameDisplay = savedMap["_nameDisplay"].boolean();
-  restored.mapState_.battleback1Name = savedMap["_battleback1Name"]; restored.mapState_.battleback2Name = savedMap["_battleback2Name"];
-  restored.mapState_.parallaxName = savedMap["_parallaxName"].text(); restored.mapState_.parallaxZero = savedMap["_parallaxZero"].boolean();
-  restored.mapState_.parallaxLoopX = savedMap["_parallaxLoopX"].boolean(); restored.mapState_.parallaxLoopY = savedMap["_parallaxLoopY"].boolean();
-  restored.mapState_.parallaxSx = savedMap["_parallaxSx"].number(); restored.mapState_.parallaxSy = savedMap["_parallaxSy"].number();
-  restored.mapState_.parallaxX = savedMap["_parallaxX"].number(); restored.mapState_.parallaxY = savedMap["_parallaxY"].number();
-  restored.mapState_.lastDisplayX = savedMap["_displayX"].number(); restored.mapState_.lastDisplayY = savedMap["_displayY"].number();
+  if (!mapUpdated) {
+    restored.savedCamera_ = std::array{savedMap["_displayX"].number(), savedMap["_displayY"].number()};
+    restored.mapState_.tilesetId = savedMap["_tilesetId"].integer();
+    restored.mapState_.scrollDirection = savedMap["_scrollDirection"].integer(2); restored.mapState_.scrollSpeed = savedMap["_scrollSpeed"].integer(4); restored.mapState_.scrollRest = savedMap["_scrollRest"].number();
+    restored.mapState_.nameDisplay = savedMap["_nameDisplay"].boolean();
+    restored.mapState_.battleback1Name = savedMap["_battleback1Name"]; restored.mapState_.battleback2Name = savedMap["_battleback2Name"];
+    restored.mapState_.parallaxName = savedMap["_parallaxName"].text(); restored.mapState_.parallaxZero = savedMap["_parallaxZero"].boolean();
+    restored.mapState_.parallaxLoopX = savedMap["_parallaxLoopX"].boolean(); restored.mapState_.parallaxLoopY = savedMap["_parallaxLoopY"].boolean();
+    restored.mapState_.parallaxSx = savedMap["_parallaxSx"].number(); restored.mapState_.parallaxSy = savedMap["_parallaxSy"].number();
+    restored.mapState_.parallaxX = savedMap["_parallaxX"].number(); restored.mapState_.parallaxY = savedMap["_parallaxY"].number();
+    restored.mapState_.lastDisplayX = savedMap["_displayX"].number(); restored.mapState_.lastDisplayY = savedMap["_displayY"].number();
+  }
   restored.followersVisible_ = contents["player"]["_followers"]["_visible"].boolean();
   restored.followersGathering_ = contents["player"]["_followers"]["_gathering"].boolean();
   const auto vehicleType = contents["player"]["_vehicleType"].text();
@@ -237,12 +244,14 @@ void Session::load(const Value& contents) {
   }
   restored.player_ = readCharacter(contents["player"]); restored.playerDashing_ = contents["player"]["_dashing"].boolean(); restored.encounterCount_ = contents["player"]["_encounterCount"].number();
   for (int i = 0; i < 3; ++i) restored.followers_[i] = readCharacter(contents["player"]["_followers"]["_data"][i]);
-  for (auto& event : restored.events_) {
-    const auto& saved = contents["map"]["_events"][event.id]; if (saved.null()) throw std::invalid_argument("save is missing a map event");
-    event.character = readCharacter(saved); event.page = saved["_pageIndex"].integer(); event.moveType = saved["_moveType"].integer(); event.trigger = saved["_trigger"].integer(); event.priority = saved["_priorityType"].integer(1); event.erased = saved["_erased"].boolean(); event.starting = saved["_starting"].boolean(); event.originalDirection = saved["_originalDirection"].integer(); event.originalPattern = saved["_originalPattern"].integer(); event.prelockDirection = saved["_prelockDirection"].integer();
-    if (!saved["_interpreter"].null()) event.parallel = readInterpreter(saved["_interpreter"]);
+  if (!mapUpdated) {
+    for (auto& event : restored.events_) {
+      const auto& saved = contents["map"]["_events"][event.id]; if (saved.null()) continue;
+      event.character = readCharacter(saved); event.page = saved["_pageIndex"].integer(); event.moveType = saved["_moveType"].integer(); event.trigger = saved["_trigger"].integer(); event.priority = saved["_priorityType"].integer(1); event.erased = saved["_erased"].boolean(); event.starting = saved["_starting"].boolean(); event.originalDirection = saved["_originalDirection"].integer(); event.originalPattern = saved["_originalPattern"].integer(); event.prelockDirection = saved["_prelockDirection"].integer();
+      if (!saved["_interpreter"].null()) event.parallel = readInterpreter(saved["_interpreter"]);
+    }
+    restored.interpreter_ = readInterpreter(contents["map"]["_interpreter"]);
   }
-  restored.interpreter_ = readInterpreter(contents["map"]["_interpreter"]);
   restored.commonInterpreters_.clear();
   for (const auto& common : contents["map"]["_commonEvents"].array()) {
     const int id = common["_commonEventId"].integer();
@@ -264,9 +273,16 @@ void Session::load(const Value& contents) {
   restored.timerFrames_ = contents["timer"]["_frames"].integer();
   restored.timerWorking_ = contents["timer"]["_working"].boolean();
   restored.system_.storedBgm = contents["system"]["_savedBgm"];
-  restored.savedBgm_ = contents["system"]["_bgmOnSave"]; restored.savedBgs_ = contents["system"]["_bgsOnSave"];
-  if (!restored.savedBgm_.null()) restored.audio("bgm", restored.savedBgm_, true);
-  if (!restored.savedBgs_.null()) restored.audio("bgs", restored.savedBgs_, true);
+  const Value bgmOnSave = contents["system"]["_bgmOnSave"], bgsOnSave = contents["system"]["_bgsOnSave"];
+  restored.savedBgm_ = {}; restored.savedBgs_ = {};
+  if (!bgmOnSave.null()) {
+    if (bgmOnSave["name"].text().empty()) AudioManager::stopBgm(restored);
+    else restored.audio("bgm", bgmOnSave, true);
+  }
+  if (!bgsOnSave.null()) {
+    if (bgsOnSave["name"].text().empty()) AudioManager::stopBgs(restored);
+    else restored.audio("bgs", bgsOnSave, true);
+  }
   restored.lastTitleCommand_ = lastTitleCommand_;
   restored.newGamePending_ = false; restored.titleWindowOpenness_ = 255;
   restored.loadRequested_ = loadRequested_; restored.saveRequested_ = saveRequested_;

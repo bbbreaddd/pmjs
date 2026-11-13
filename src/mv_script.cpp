@@ -45,9 +45,9 @@ void Session::executeNativeScript(const std::string& source,Interpreter& context
       if(method=="setHp")actor.hp=static_cast<int>(number(0));
       else if(method=="setMp")actor.mp=static_cast<int>(number(0));
       else if(method=="setTp")actor.tp=static_cast<int>(number(0));
-      else if(method=="gainHp")actor.hp+=static_cast<int>(number(0));
-      else if(method=="gainMp")actor.mp+=static_cast<int>(number(0));
-      else if(method=="gainTp")actor.tp+=static_cast<int>(number(0));
+      else if(method=="gainHp") {const int delta=static_cast<int>(number(0)); actor.result={}; actor.result.hpAffected=true; actor.result.hpDamage=-delta; actor.hp+=delta;}
+      else if(method=="gainMp") {const int delta=static_cast<int>(number(0)); actor.result={}; actor.result.mpDamage=-delta; actor.mp+=delta;}
+      else if(method=="gainTp") {const int delta=static_cast<int>(number(0)); actor.result={}; actor.result.tpDamage=-delta; actor.tp+=delta;}
       else if(method=="recoverAll")recover(actor);
       else if(method=="addState")addState(actor,static_cast<int>(number(0)));
       else if(method=="removeState")removeState(actor,static_cast<int>(number(0)));
@@ -87,12 +87,12 @@ void Session::executeNativeScript(const std::string& source,Interpreter& context
       else if(method=="moveForward")move(*character,character->direction);
       else if(method=="moveBackward") {const bool fixed=character->directionFix;character->directionFix=true;move(*character,10-character->direction);character->directionFix=fixed;}
       else if(method=="turn180"){if(!character->directionFix)character->direction=10-character->direction;character->stopCount=0;}
-      else if(method=="locate"||method=="setPosition") {character->x=roundMapX(first);character->y=roundMapY(static_cast<int>(number(1)));character->realX=character->x;character->realY=character->y;}
+      else if(method=="locate"||method=="setPosition") locateCharacter(*character,first,static_cast<int>(number(1)));
       else throw std::invalid_argument("unsupported native character script call: "+method);
       continue;
     }
     if(name=="$gameVariables.setValue")operateVariable(static_cast<int>(number(0)),0,value(1));
-    else if(name=="$gameSwitches.setValue") { switches_[static_cast<int>(number(0))]=value(1).boolean();refreshNeeded_=true; }
+    else if(name=="$gameSwitches.setValue") { const int switchId=static_cast<int>(number(0)); if(switchId>0) { switches_[switchId]=value(1).boolean();refreshNeeded_=true; } }
     else if(name=="$gameTemp.reserveCommonEvent")reservedCommonEvent_=static_cast<int>(number(0));
     else if(name=="$gameParty.gainGold"||name=="$gameParty.loseGold")gold_=static_cast<int>(std::clamp(gold_+(name.ends_with("loseGold")?-1:1)*number(0),0.0,99999999.0));
     else if(name=="$gameTimer.start") {timerFrames_=static_cast<int>(number(0));timerWorking_=true;}
@@ -112,8 +112,8 @@ void Session::executeNativeScript(const std::string& source,Interpreter& context
     else if(name=="SceneManager.goto"||name=="SceneManager.push") {
       if(args.empty())throw std::invalid_argument("missing native scene");
       const bool push = name == "SceneManager.push";
-      if(args[0]=="Scene_Title" && !push)openTitle();
-      else if(args[0]=="Scene_Gameover" && !push)openGameOver();
+      if(args[0]=="Scene_Title")openTitle();
+      else if(args[0]=="Scene_Gameover")openGameOver();
       else {
         Scene target = Scene::map;
         if(args[0]=="Scene_Map")target=Scene::map;

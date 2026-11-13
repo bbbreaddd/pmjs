@@ -44,7 +44,7 @@ bool MapMechanics::isPassable(const Session& session, int x, int y, int d) {
 std::vector<int> MapMechanics::eventsXy(const Session& session, int x, int y) {
   std::vector<int> out;
   for (const auto& ev : session.events()) {
-    if (!ev.erased && ev.character.x == x && ev.character.y == y) {
+    if (ev.character.x == x && ev.character.y == y) {
       out.push_back(ev.id);
     }
   }
@@ -164,7 +164,12 @@ void Session::synchronizeFollowers() {
   }
 }
 void Session::updateFollowers() {
-  const std::size_t visibleCount = followersVisible_ ? std::min(followers_.size(), party_.empty() ? std::size_t(0) : party_.size() - 1) : 0;
+  std::vector<int> battleMembers;
+  battleMembers.reserve(4);
+  for (std::size_t index = 0; index < party_.size() && index < 4; ++index) {
+    if (!actors_.at(party_[index]).hidden) battleMembers.push_back(party_[index]);
+  }
+  const std::size_t visibleCount = followersVisible_ ? std::min(followers_.size(), battleMembers.empty() ? std::size_t(0) : battleMembers.size() - 1) : 0;
   if (followersGathering_) {
     bool moving = false;
     for (std::size_t index = 0; index < visibleCount; ++index) moving = moving || followers_[index].moving();
@@ -180,8 +185,8 @@ void Session::updateFollowers() {
     follower.transparent = player_.transparent || index >= visibleCount;
     follower.opacity = player_.opacity; follower.blendMode = player_.blendMode;
     follower.walkAnime = player_.walkAnime; follower.stepAnime = player_.stepAnime; follower.directionFix = player_.directionFix;
-    if (index + 1 < party_.size()) {
-      const auto& actor = actors_.at(party_[index + 1]); follower.characterName = actor.characterName; follower.characterIndex = actor.characterIndex;
+    if (index + 1 < battleMembers.size()) {
+      const auto& actor = actors_.at(battleMembers[index + 1]); follower.characterName = actor.characterName; follower.characterIndex = actor.characterIndex;
     } else { follower.characterName.clear(); follower.characterIndex = 0; }
     updateCharacter(follower, false);
   }
@@ -365,7 +370,7 @@ int Session::findDirectionTo(const Character& c, int goalX, int goalY) const {
 }
 
 void Session::updateMapTouch(const Input& input) {
-  const bool allowed = !interpreter_.running && !message_.busy && !player_.routeForcing && !followersGathering_ && !vehicleGettingOn_ && !vehicleGettingOff_;
+  const bool allowed = !interpreter_.running && !message_.busy && !player_.routeForcing && !followersGathering_ && !vehicleGettingOn_ && !vehicleGettingOff_ && (vehicleType_ != 2 || vehicles_[2].altitude >= 48);
   if (!allowed || input.touchCancelled || input.direction) { destination_.reset(); mapTouchCount_ = 0; return; }
   if (input.destinationX && input.destinationY) destination_ = std::array{roundMapX(*input.destinationX), roundMapY(*input.destinationY)};
   if (input.touchTriggered || mapTouchCount_ > 0) {

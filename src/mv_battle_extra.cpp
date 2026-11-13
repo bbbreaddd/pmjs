@@ -1,6 +1,7 @@
 #include "mv_engine.hpp"
 #include "mv_battle_extra.hpp"
 #include "mv_core_utils.hpp"
+#include "mv_managers.hpp"
 #include "mv_sprites.hpp"
 
 #include <algorithm>
@@ -64,8 +65,10 @@ int Session::selectEnemySkill(const Battler& enemy) {
     const double a = entry["conditionParam1"].number(), b = entry["conditionParam2"].number();
     bool valid = type == 0;
     if (type == 1) valid = b == 0 ? battle_.turn == a : battle_.turn > 0 && battle_.turn >= a && std::fmod(battle_.turn, b) == std::fmod(a, b);
-    if (type == 2) valid = enemy.hp / parameter(enemy, 0) >= a && enemy.hp / parameter(enemy, 0) <= b;
-    if (type == 3) valid = enemy.mp / parameter(enemy, 1) >= a && enemy.mp / parameter(enemy, 1) <= b;
+    const double mhp = parameter(enemy, 0), mmp = parameter(enemy, 1);
+    const double hpRate = mhp > 0 ? enemy.hp / mhp : 0.0, mpRate = mmp > 0 ? enemy.mp / mmp : 0.0;
+    if (type == 2) valid = hpRate >= a && hpRate <= b;
+    if (type == 3) valid = mpRate >= a && mpRate <= b;
     if (type == 4) valid = std::find(enemy.states.begin(), enemy.states.end(), static_cast<int>(a)) != enemy.states.end();
     if (type == 5) { valid = false; for (std::size_t index = 0; index < battleMemberCount(); ++index) valid = valid || actors_.at(party_[index]).level >= a; }
     if (type == 6) { const auto it = switches_.find(static_cast<int>(a)); valid = it != switches_.end() && it->second; }
@@ -107,6 +110,7 @@ std::vector<Battler*> Session::actionTargets(const Action& action, Battler& subj
       choice -= trait(*candidate, 23, 0, true);
       if (choice <= 0 && !selected) selected = candidate;
     }
+    if (!selected && !candidates.empty()) selected = candidates.back();
     return selected;
   };
   std::vector<Battler*> targets;
@@ -141,7 +145,16 @@ int Session::damageValue(Battler& subject, Battler& target, const Value& item, b
   else {
     std::vector<int> elements;
     for (const auto* object : traitObjects(subject)) for (const auto& entry : (*object)["traits"].array()) if (entry["code"].integer() == 31) elements.push_back(entry["dataId"].integer());
-    if (!elements.empty()) { elementRate = 0; for (int id : elements) elementRate = std::max(elementRate, trait(target, 11, id, true)); }
+    if (!subject.enemy) {
+      bool hasWeapon = false;
+      for (std::size_t i = 0; i < subject.equips.size(); ++i) if (subject.equips[i] > 0 && (i < subject.equipKinds.size() ? subject.equipKinds[i] : (i == 0 ? 1 : 2)) == 1) { hasWeapon = true; break; }
+      if (!hasWeapon) {
+        bool hasBareHands = false;
+        for (int id : elements) if (id == 1) { hasBareHands = true; break; }
+        if (!hasBareHands) elements.push_back(1);
+      }
+    }
+    if (!elements.empty()) { elementRate = trait(target, 11, elements[0], true); for (std::size_t i = 1; i < elements.size(); ++i) elementRate = std::max(elementRate, trait(target, 11, elements[i], true)); }
   }
   value *= elementRate;
   if (hitType == 1) value *= trait(target, 23, 6, true);
@@ -168,7 +181,7 @@ double Session::evaluateAutoAction(Battler& subject, const Value& item, int& tar
   else if (opponent) {
     for (auto& enemy : battle_.enemies) if (enemy.hp > 0 && !enemy.hidden && !enemy.escaped) candidates.push_back(&enemy);
   } else for (std::size_t index = 0; index < battleMemberCount(); ++index) {
-    auto& actor = actors_.at(party_[index]); if ((actor.hp <= 0) == dead && !actor.escaped) candidates.push_back(&actor);
+    auto& actor = actors_.at(party_[index]); if (!actor.hidden && (actor.hp <= 0) == dead && !actor.escaped) candidates.push_back(&actor);
   }
   double score = 0;
   for (auto* target : candidates) {
@@ -206,7 +219,7 @@ void Session::applyItemEffect(Battler& subject, Battler& target, const Value& it
   } else if (code == 21) {
     std::set<int> states;
     if (id) states.insert(id);
-    else for (const auto* object : traitObjects(subject)) for (const auto& entry : (*object)["traits"].array()) if (entry["code"].integer() == 32) states.insert(entry["dataId"].integer());
+    else for (const auto* object : traitObjects(subject)) for (const auto& entry : (*object)["traits"].array()) if (entry["code"].integer() == 32 && entry["dataId"].integer() > 0) states.insert(entry["dataId"].integer());
     for (int state : states) {
       double chance = effect["value1"].number();
       if (!id || item["hitType"].integer() != 0) chance *= trait(target, 13, state, true) * luck;
@@ -220,8 +233,9 @@ void Session::applyItemEffect(Battler& subject, Battler& target, const Value& it
     if (code == 31 || (code == 32 && random() < trait(target, 12, id, true) * luck)) {
       if (target.hp > 0) {
         target.buffs[id] = std::clamp(target.buffs[id] + (code == 31 ? 1 : -1), -2, 2);
-        if (target.buffs[id]) target.buffTurns[id] = std::max(target.buffTurns[id], effect["value1"].integer());
-        else target.buffTurns[id] = 0;
+        const bool matchingPolarity = code == 31 ? target.buffs[id] > 0 : target.buffs[id] < 0;
+        if (matchingPolarity) target.buffTurns[id] = std::max(target.buffTurns[id], effect["value1"].integer());
+        else if (!target.buffs[id]) target.buffTurns[id] = 0;
         (code == 31 ? result.addedBuffs : result.addedDebuffs).push_back(id);
       }
       result.success = true;
@@ -229,7 +243,7 @@ void Session::applyItemEffect(Battler& subject, Battler& target, const Value& it
       target.buffs[id] = 0; target.buffTurns[id] = 0; result.removedBuffs.push_back(id); result.success = true;
     }
   } else if (code == 41) {
-    if (id == 0) { target.escaped = true; target.hidden = true; target.states.clear(); target.stateTurns.clear(); target.buffs.fill(0); target.buffTurns.fill(0); result.success = true; }
+    if (id == 0) { target.escaped = true; target.hidden = true; target.states.clear(); target.stateTurns.clear(); target.buffs.fill(0); target.buffTurns.fill(0); SoundManager::playEscape(*this); result.success = true; }
   } else if (code == 42) {
     if (id < 0 || id > 7) throw std::invalid_argument("invalid growth parameter");
     target.paramPlus[id] += static_cast<int>(std::floor(effect["value1"].number())); result.success = true;
@@ -285,14 +299,17 @@ bool Session::updateTroopEvents() {
     }
     if (c["enemyValid"].boolean()) {
       const int id = c["enemyIndex"].integer();
-      if (id < 0 || id >= static_cast<int>(battle_.enemies.size()) || battle_.enemies[id].hp / parameter(battle_.enemies[id], 0) * 100 > c["enemyHp"].number()) continue;
+      if (id < 0 || id >= static_cast<int>(battle_.enemies.size()) || battle_.enemies[id].hp / std::max(1.0, parameter(battle_.enemies[id], 0)) * 100 > c["enemyHp"].number()) continue;
     }
     if (c["actorValid"].boolean()) {
       const int id = c["actorId"].integer();
       if (!actors_.contains(id)) { if (database_["actors"][id].null()) continue; initializeActor(id); }
-      if (actors_.at(id).hp / parameter(actors_.at(id), 0) * 100 > c["actorHp"].number()) continue;
+      if (actors_.at(id).hp / std::max(1.0, parameter(actors_.at(id), 0)) * 100 > c["actorHp"].number()) continue;
     }
-    if (c["switchValid"].boolean() && !switches_[c["switchId"].integer()]) continue;
+    if (c["switchValid"].boolean()) {
+      const auto sw = switches_.find(c["switchId"].integer());
+      if (sw == switches_.end() || !sw->second) continue;
+    }
     battle_.interpreter = {}; battle_.interpreter.battleEvent = true; battle_.interpreter.mapId = mapId_;
     battle_.interpreter.list = page["list"].array(); battle_.interpreter.running = true;
     if (page["span"].integer() <= 1) battle_.eventFlags.insert(static_cast<int>(index));
@@ -384,12 +401,13 @@ void BattleMechanics::makeUniqueNames(std::vector<Battler>& enemies, std::map<st
 }
 
 bool BattleMechanics::isDualWield(const Session& session, const Battler& actor) {
+  int slotType = 0;
   for (const auto* object : session.traitObjects(actor)) {
     for (const auto& entry : (*object)["traits"].array()) {
-      if (entry["code"].integer() == 55 && entry["dataId"].integer() == 1) return true;
+      if (entry["code"].integer() == 55) slotType = std::max(slotType, entry["dataId"].integer());
     }
   }
-  return false;
+  return slotType == 1;
 }
 
 std::vector<int> BattleMechanics::equipSlots(const Session& session, const Battler& actor) {
@@ -429,7 +447,7 @@ double BattleMechanics::magicReflectionRate(const Session& session, const Battle
 }
 
 bool BattleMechanics::canSubstitute(const Session& session, const Battler& candidate, const Battler& target) {
-  if (&candidate == &target || candidate.hp <= 0 || session.restriction(candidate) > 0) return false;
+  if (&candidate == &target || candidate.hp <= 0 || candidate.hidden || candidate.escaped || session.restriction(candidate) >= 4) return false;
   if (!session.hasSpecialFlag(candidate, 2)) return false;
   const double maxHp = session.parameter(target, 0);
   return maxHp > 0 && target.hp < maxHp * 0.25;

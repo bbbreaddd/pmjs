@@ -1,6 +1,7 @@
 #include "mv_windows.hpp"
 #include "mv_managers.hpp"
 #include "mv_core_utils.hpp"
+#include "mv_sprites.hpp"
 
 #include <cmath>
 #include <sstream>
@@ -27,11 +28,13 @@ const std::vector<std::string>& nameInputTable(int page, const std::string& loca
 
 Window_Base::Window_Base(int x, int y, int w, int h)
   : rect{x, y, w, h} {
-  if (core::boundRuntime()) contents.resize(contentsWidth(), contentsHeight());
+  contents.width = std::max(1,contentsWidth());
+  contents.height = std::max(1,contentsHeight());
 }
 
 namespace {
-std::string colorToHex(Color c) {
+std::string colorToCss(Color c) {
+  if (c.a != 255) return "rgba("+std::to_string(c.r)+","+std::to_string(c.g)+","+std::to_string(c.b)+","+std::to_string(c.a/255.0)+")";
   static const char kHex[] = "0123456789abcdef";
   std::string out = "#";
   out.push_back(kHex[(c.r >> 4) & 0xf]);
@@ -45,35 +48,36 @@ std::string colorToHex(Color c) {
 } // namespace
 
 void Window_Base::createContents() {
-  if (core::boundRuntime()) contents.resize(contentsWidth(), contentsHeight());
-  drawnTexts.clear();
+  contents.resize(contentsWidth(), contentsHeight());
 }
 
-int Window_Base::textWidth(const std::string& text) const {
-  return static_cast<int>(text.size()) * (fontSize / 2);
+double Window_Base::textWidth(const std::string& text) const {
+  core::PixelBitmap metrics;
+  metrics.fontFace = contents.fontFace; metrics.fontItalic = contents.fontItalic; metrics.fontSize = fontSize;
+  return metrics.measureTextWidth(text);
 }
 
-void Window_Base::drawText(const std::string& text, int x, int y, int maxWidth, const std::string& align) {
-  drawnTexts.push_back({text, x, y, maxWidth, align, textColor});
+void Window_Base::drawText(const std::string& text, double x, double y, double maxWidth, const std::string& align) {
+  if (contents.width != contentsWidth() || contents.height != contentsHeight()) contents.resize(contentsWidth(),contentsHeight());
+  contents.fontSize = fontSize; contents.textColor = colorToCss(textColor);
+  contents.drawText(text,x,y,maxWidth,lineHeight(),align);
 }
 
 void Window_Base::drawGauge(int x, int y, int width, double rate, Color color1, Color color2) {
   const int fillW = static_cast<int>(std::floor(width * std::clamp(rate, 0.0, 1.0)));
   const int gaugeY = y + lineHeight() - 8;
-  if (core::boundRuntime()) {
-    if (contents.width != contentsWidth() || contents.height != contentsHeight()) contents.resize(contentsWidth(), contentsHeight());
-    contents.fillRect(x, gaugeY, width, 6, colorToHex(gaugeBackColor()));
-    contents.gradientFillRect(x, gaugeY, fillW, 6, colorToHex(color1), colorToHex(color2), false);
-  }
+  if (contents.width != contentsWidth() || contents.height != contentsHeight()) contents.resize(contentsWidth(), contentsHeight());
+  contents.fillRect(x, gaugeY, width, 6, colorToCss(gaugeBackColor()));
+  contents.gradientFillRect(x, gaugeY, fillW, 6, colorToCss(color1), colorToCss(color2), false);
 }
 
 void Window_Base::drawCurrentAndMax(int current, int max, int x, int y, int width, Color color1, Color color2) {
-  const int labelWidth = textWidth("HP");
-  const int valueWidth = textWidth("0000");
-  const int slashWidth = textWidth("/");
-  const int x1 = x + width - valueWidth;
-  const int x2 = x1 - slashWidth;
-  const int x3 = x2 - valueWidth;
+  const double labelWidth = textWidth("HP");
+  const double valueWidth = textWidth("0000");
+  const double slashWidth = textWidth("/");
+  const double x1 = x + width - valueWidth;
+  const double x2 = x1 - slashWidth;
+  const double x3 = x2 - valueWidth;
   if (x3 >= x + labelWidth) {
     changeTextColor(color1);
     drawText(std::to_string(current), x3, y, valueWidth, "right");
@@ -158,17 +162,19 @@ void Window_Base::drawItemName(const Value& item, int x, int y, int width) {
   drawText(item["name"].text(), x + iconBoxWidth, y, width - iconBoxWidth);
 }
 
-void Window_Base::drawCurrencyValue(int value, const std::string& unit, int x, int y, int width) {
-  const int unitWidth = std::min(80, textWidth(unit));
-  resetTextColor();
+void Window_Base::drawCurrencyValue(int value, const std::string& unit, int x, int y, int width, Color valueColor, Color unitColor) {
+  const double unitWidth = std::min(80.0, textWidth(unit));
+  changeTextColor(valueColor);
   drawText(std::to_string(value), x, y, width - unitWidth - 6, "right");
-  changeTextColor(systemColor());
+  changeTextColor(unitColor);
   drawText(unit, x + width - unitWidth, y, unitWidth, "right");
 }
 
 void Window_Base::update() {
-  if (openness < 255) openness = std::min(255, openness + 32);
+  if (opening) { openness = advanceOpenness(openness,true); opening = openness < 255; }
+  if (closing) { openness = advanceOpenness(openness,false); closing = openness > 0; }
 }
+int Window_Base::advanceOpenness(int openness, bool opening) { return std::clamp(openness + (opening ? 32 : -32),0,255); }
 
 Color Window_Base::normalColor() { return {255, 255, 255, 255}; }
 Color Window_Base::systemColor() { return {128, 204, 255, 255}; }
@@ -214,36 +220,54 @@ Color Window_Base::textColorAt(int idx) {
 
 std::string Window_Base::processEscapeCodes(const std::string& source, const Session& session) {
   std::string result = source;
-  for (int pass = 0; pass < 2; ++pass) {
+  const auto replaceVariables = [&](const std::string& input) {
     std::string expanded;
-    for (std::size_t index = 0; index < result.size();) {
-      if (result[index] != '\\' || index+1 >= result.size()) { expanded += result[index++]; continue; }
-      const char code = std::toupper(static_cast<unsigned char>(result[index+1]));
-      if (code == '\\') { expanded += '\x1f'; index += 2; continue; }
-      if (code == 'G') { expanded += session.database()["system"]["currencyUnit"].text(); index += 2; continue; }
-      if ((code == 'V' || code == 'N' || code == 'P') && index+2 < result.size() && result[index+2]=='[') {
-        const auto end = result.find(']',index+3);
+    for (std::size_t index = 0; index < input.size();) {
+      if (input[index] == '\\' && index + 1 < input.size() && input[index + 1] == '\\') {
+        expanded += '\x1f';
+        index += 2;
+        continue;
+      }
+      if (input[index] == '\\' && index + 3 < input.size() &&
+          std::toupper(static_cast<unsigned char>(input[index + 1])) == 'V' && input[index + 2] == '[') {
+        const auto end = input.find(']', index + 3);
         if (end != std::string::npos) {
-          const int id = std::atoi(result.substr(index+3,end-index-3).c_str());
-          if (code == 'V') {
-            const auto& value = session.variable(id);
-            if (std::holds_alternative<std::string>(value.data)) expanded += value.text();
-            else if (std::holds_alternative<bool>(value.data)) expanded += value.boolean() ? "true" : "false";
-            else { std::ostringstream text; text << value.number(); expanded += text.str(); }
-          } else {
-            const int actor = code == 'P' ? (id > 0 && id <= static_cast<int>(session.party_.size()) ? session.party_[id-1] : 0) : id;
-            if (session.actors().contains(actor)) expanded += session.actors().at(actor).name;
-            else expanded += session.database_["actors"][actor]["name"].text();
-          }
-          index = end+1; continue;
+          const int id = std::atoi(input.substr(index + 3, end - index - 3).c_str());
+          const auto& value = session.variable(id);
+          if (std::holds_alternative<std::string>(value.data)) expanded += value.text();
+          else if (std::holds_alternative<bool>(value.data)) expanded += value.boolean() ? "true" : "false";
+          else { std::ostringstream text; text << value.number(); expanded += text.str(); }
+          index = end + 1;
+          continue;
         }
       }
-      expanded += result[index++];
+      expanded += input[index++];
     }
-    result = std::move(expanded);
+    return expanded;
+  };
+  result = replaceVariables(result);
+  result = replaceVariables(result);
+  std::string expanded;
+  for (std::size_t index = 0; index < result.size();) {
+    if (result[index] != '\\' || index + 1 >= result.size()) { expanded += result[index++]; continue; }
+    const char code = std::toupper(static_cast<unsigned char>(result[index + 1]));
+    if (code == 'G') { expanded += session.database()["system"]["currencyUnit"].text(); index += 2; continue; }
+    if ((code == 'N' || code == 'P') && index + 2 < result.size() && result[index + 2] == '[') {
+      const auto end = result.find(']', index + 3);
+      if (end != std::string::npos) {
+        const int id = std::atoi(result.substr(index + 3, end - index - 3).c_str());
+        const int actor = code == 'P' ? (id > 0 && id <= static_cast<int>(session.party_.size()) ? session.party_[id - 1] : 0) : id;
+        if (session.actors().contains(actor)) expanded += session.actors().at(actor).name;
+        else expanded += session.database_["actors"][actor]["name"].text();
+        index = end + 1;
+        continue;
+      }
+    }
+    expanded += result[index++];
   }
-  std::replace(result.begin(),result.end(),'\\','\x1b');
-  std::replace(result.begin(),result.end(),'\x1f','\\');
+  result = std::move(expanded);
+  std::replace(result.begin(), result.end(), '\\', '\x1b');
+  std::replace(result.begin(), result.end(), '\x1f', '\\');
   return result;
 }
 
@@ -892,6 +916,9 @@ Window_Gold::Window_Gold(int x, int y)
 void Window_Gold::refresh(const Session& session) {
   value = session.gold();
   currencyUnit = session.database()["system"]["currencyUnit"].text();
+  if (!core::boundRuntime()) return;
+  contents.clear();
+  drawCurrencyValue(value,currencyUnit,textPadding(),0,contentsWidth()-textPadding()*2,valueColor,unitColor);
 }
 
 Window_MenuCommand::Window_MenuCommand(int x, int y)
@@ -968,7 +995,7 @@ void Window_MenuActor::selectForItem(const Session& session, const Value& item, 
 }
 
 Window_ItemCategory::Window_ItemCategory()
-  : Window_Command(0, 0, 816, 72) {
+  : Window_Command(0, 0, core::Graphics::boxWidth, 72) {
   maxCols = 4;
 }
 void Window_ItemCategory::makeCommandList(const Session& session) {
@@ -1065,7 +1092,7 @@ void Window_EquipItem::refresh(const Session& session) {
 }
 
 Window_Status::Window_Status()
-  : Window_Selectable(0, 0, 816, 624) {}
+  : Window_Selectable(0, 0, core::Graphics::boxWidth, core::Graphics::boxHeight) {}
 
 Window_Options::Window_Options()
   : Window_Command(0, 0, 400, 324) {}
@@ -1373,7 +1400,7 @@ void Window_NameInput::refresh() {
 }
 
 Window_ChoiceList::Window_ChoiceList()
-  : Window_Command(0, 0, 240, 144) {}
+  : Window_Command(0, 0, 240, 144) { openness = 0; active = false; }
 void Window_ChoiceList::makeCommandList(const Session& session) {
   commands.clear();
   for (std::size_t i = 0; i < session.message().choices.size(); ++i) {
@@ -1393,9 +1420,21 @@ Rect Window_ChoiceList::placement(int count, int choiceWidth, int position, cons
 }
 
 Window_NumberInput::Window_NumberInput()
-  : Window_Selectable(0, 0, 240, 72) {}
+  : Window_Selectable(0, 0, 240, 72) { openness = 0; active = false; }
 void Window_NumberInput::changeDigit(bool up) {
   number = changeDigit(number, maxDigits, index, up);
+  contentsDirty = true;
+}
+void Window_NumberInput::refresh() {
+  if (contents.width != contentsWidth() || contents.height != contentsHeight()) contents.resize(contentsWidth(),contentsHeight());
+  contents.clear();
+  const auto digits = core::numberPadZero(number,maxDigits);
+  for (int digit = 0; digit < maxDigits; ++digit) drawText(digits.substr(digit,1),digit*32,0,32,"center");
+  contentsDirty = false;
+}
+Rect Window_NumberInput::placement(int digits, const Rect& message, int screenWidth, int screenHeight) {
+  const int width = digits*32+36;
+  return {(screenWidth-width)/2,message.y >= screenHeight/2 ? message.y-80 : message.y+message.height+8,width,72};
 }
 
 int Window_NumberInput::changeDigit(int number, int maxDigits, int index, bool up) {
@@ -1424,7 +1463,10 @@ std::array<Rect, 3> Window_NumberInput::buttonBounds(Rect window, bool messageBo
 }
 
 Window_EventItem::Window_EventItem()
-  : Window_ItemList(0, 0, 816, 180) {}
+  : Window_ItemList(0, 0, core::Graphics::boxWidth, 180) { openness = 0; active = false; }
+Rect Window_EventItem::placement(const Rect& message, int screenWidth, int screenHeight) {
+  return {0,message.y >= screenHeight/2 ? 0 : screenHeight-180,screenWidth,180};
+}
 
 std::vector<int> Window_EventItem::makeItemList(const Session& session, int itemType) {
   std::vector<int> entries;
@@ -1441,19 +1483,146 @@ void Window_EventItem::refresh(const Session& session) {
 }
 
 Window_ScrollText::Window_ScrollText()
-  : Window_Base(0, 0, 816, 624) {}
+  : Window_Base(0, 0, core::Graphics::boxWidth, core::Graphics::boxHeight) {}
 
 Window_Message::Window_Message()
-  : Window_Base(0, 444, 816, 180) {}
-void Window_Message::clearFlags() {
-  lineShowFast = false;
-  showFast = false;
-  pauseSign = false;
-  waitCount = 0;
+  : Window_Base(0, core::Graphics::boxHeight - 180, core::Graphics::boxWidth, 180) {}
+void Window_Message::clearFlags(Message& message) {
+  message.lineFast = false; message.showFast = false;
+  message.pauseSkip = false;
+}
+bool Window_ScrollText::updateMessage(Message& message, const Input& input) {
+  const bool fast = !message.scrollNoFast && (input.ok || input.dash || input.pressed.contains("shift") || input.touchPressed);
+  message.scrollY += message.scrollSpeed * (fast ? 3 : 1);
+  return message.scrollY >= static_cast<double>(message.lines.size()*36);
+}
+void Window_Message::updateState(Session& session) {
+  if (session.choiceWindow_) session.choiceWindow_->update();
+  if (session.numberWindow_) session.numberWindow_->update();
+  if (session.eventItemWindow_) session.eventItemWindow_->update();
+  auto& message = session.message_;
+  message.previousOpenness = message.openness;
+  if (message.scrolling) return;
+  if (message.busy && !message.lines.empty()) message.openness = advanceOpenness(message.openness,true);
+  else if (message.closing) {
+    message.openness = advanceOpenness(message.openness,false);
+    if (!message.openness) { message = {}; session.messageOwnerSerial_ = 0; }
+  }
+}
+void Window_Message::terminate(Session& session) {
+  auto& message = session.message_;
+  message.busy = false; message.closing = message.openness > 0;
+  message.choices.clear(); message.numberVariableId = message.numberDigits = 0;
+  message.itemVariableId = message.itemType = 0;
+  session.messageOwnerSerial_ = 0;
+  const auto close = [](auto& window) { if (window && window->active) { window->close(); window->deactivate(); } };
+  close(session.choiceWindow_); close(session.numberWindow_); close(session.eventItemWindow_);
+}
+bool Window_Message::startInput(Session& session) {
+  auto& message = session.message_;
+  const int width = session.screenWidth_;
+  const int height = session.screenHeight_;
+  const Rect bounds{0,message.position*(height-180)/2,width,180};
+  if (!message.choices.empty()) {
+    if (!session.choiceWindow_) session.choiceWindow_ = std::make_shared<Window_ChoiceList>();
+    auto& window = *session.choiceWindow_;
+    if (!window.active) {
+      window.makeCommandList(session); window.background = message.choiceBackground; window.positionType = message.choicePosition;
+      window.rect = Window_ChoiceList::placement(window.maxItems(),96,window.positionType,bounds,width,height);
+      window.topRow = 0; window.select(message.defaultChoice); window.open(); window.activate();
+    }
+    return true;
+  }
+  if (message.numberDigits > 0) {
+    if (!session.numberWindow_) session.numberWindow_ = std::make_shared<Window_NumberInput>();
+    auto& window = *session.numberWindow_;
+    if (!window.active) {
+      window.maxDigits = message.numberDigits;
+      const int maximum = static_cast<int>(std::pow(10,window.maxDigits))-1;
+      window.number = std::clamp(session.variable(message.numberVariableId).integer(),0,maximum);
+      window.rect = Window_NumberInput::placement(window.maxDigits,bounds,width,height);
+      window.buttonsAbove = bounds.y >= height/2;
+      window.select(0); window.button = window.buttonFrameIndex = -1;
+      window.buttonsVisible = session.currentInput_.touchDate > session.currentInput_.inputDate;
+      window.contentsDirty = true; window.open(); window.activate();
+    }
+    return true;
+  }
+  if (message.itemVariableId > 0) {
+    if (!session.eventItemWindow_) session.eventItemWindow_ = std::make_shared<Window_EventItem>();
+    auto& window = *session.eventItemWindow_;
+    if (!window.active) {
+      window.itypeId = message.itemType; window.refresh(session);
+      window.rect = Window_EventItem::placement(bounds,width,height);
+      window.topRow = 0; window.select(0); window.open(); window.activate();
+    }
+    return true;
+  }
+  return false;
+}
+bool Window_Message::updateInput(Session& session, const Input& input, bool ok, bool cancel, int direction, bool pageUp, bool pageDown) {
+  const auto sound = [&](int id) { SoundManager::playSystemSound(session,id); };
+  if (session.choiceWindow_ && session.choiceWindow_->active) {
+    auto& window = *session.choiceWindow_;
+    if (!window.isOpenAndActive()) return true;
+    const int previous = window.index;
+    if (direction) Window_Selectable::moveCursor(window.index,window.topRow,window.maxItems(),1,window.maxPageRows(),direction,input.directionTriggered.value_or(session.directionAge_ == 0));
+    if (pageUp || pageDown) Window_Selectable::pageCursor(window.index,window.topRow,window.maxItems(),1,window.maxPageRows(),pageDown);
+    window.processWheel(input.wheelY);
+    if (window.index != previous) sound(0);
+    if (ok) {
+      if (window.index < 0 || window.index >= window.maxItems()) sound(3);
+      else { session.acknowledge(window.index); sound(1); }
+    } else if ((input.cancelRepeated.value_or(cancel) || input.touchCancelled) && session.message_.cancelChoice != -1) {
+      session.acknowledge(-2); sound(2);
+    }
+    return true;
+  }
+  if (session.numberWindow_ && session.numberWindow_->active) {
+    auto& window = *session.numberWindow_;
+    if (!window.isOpenAndActive()) return true;
+    window.buttonFrameIndex = window.button;
+    if (window.buttonsVisible && input.touchX && input.touchY) {
+      int touching = -1;
+      for (int index = 0; index < 3; ++index) {
+        const auto target = std::find_if(session.uiHitTargets_.rbegin(),session.uiHitTargets_.rend(),[&](const auto& target) {
+          return target.scene == session.ui_.scene && target.category == session.ui_.category && target.action == 8+index;
+        });
+        if (target == session.uiHitTargets_.rend()) continue;
+        Sprite_Button button;
+        const auto cold = Window_NumberInput::buttonFrame(index,false), hot = Window_NumberInput::buttonFrame(index,true);
+        button.setColdFrame(cold.x,cold.y,cold.width,cold.height); button.setHotFrame(hot.x,hot.y,hot.width,hot.height);
+        button.position = {float(target->x),float(target->y)}; button.touching = window.button == index;
+        const bool clicked = button.updateTouch(input.touchTriggered,input.touchReleased,*input.touchX,*input.touchY);
+        if (button.touching) touching = index;
+        if (clicked) { if (index == 2) ok = true; else { window.changeDigit(index == 1); sound(0); } }
+      }
+      window.button = touching;
+    }
+    if (ok) { session.operateVariable(session.message_.numberVariableId,0,window.number); terminate(session); sound(1); return true; }
+    if (direction == 6 || direction == 4) { window.index = (window.index+window.maxDigits+(direction == 6 ? 1 : -1))%window.maxDigits; sound(0); }
+    if (direction == 8 || direction == 2) { window.changeDigit(direction == 8); sound(0); }
+    return true;
+  }
+  if (session.eventItemWindow_ && session.eventItemWindow_->active) {
+    auto& window = *session.eventItemWindow_;
+    if (!window.isOpenAndActive()) return true;
+    const int previous = window.index;
+    if (direction) Window_Selectable::moveCursor(window.index,window.topRow,window.maxItems(),2,4,direction,input.directionTriggered.value_or(session.directionAge_ == 0));
+    window.processWheel(input.wheelY);
+    if (window.index != previous) sound(0);
+    const bool confirm = input.okRepeated.value_or(ok), cancelInput = input.cancelRepeated.value_or(cancel) || input.touchCancelled;
+    if (confirm || cancelInput) {
+      const int item = confirm && window.index >= 0 && window.index < window.maxItems() ? window.data[window.index] : 0;
+      session.operateVariable(session.message_.itemVariableId,0,item); terminate(session); sound(confirm ? 1 : 2);
+    }
+    return true;
+  }
+  return false;
 }
 
 Window_PartyCommand::Window_PartyCommand()
-  : Window_Command(0, 444, 192, 180) {}
+  : Window_Command(0, core::Graphics::boxHeight - 180, 192, 180) {}
 void Window_PartyCommand::makeCommandList(const Session& session, bool canEscape) {
   commands = makeCommands(session, canEscape);
 }
@@ -1462,7 +1631,7 @@ std::vector<CommandItem> Window_PartyCommand::makeCommands(const Session& sessio
 }
 
 Window_ActorCommand::Window_ActorCommand()
-  : Window_Command(0, 444, 192, 180) {}
+  : Window_Command(0, core::Graphics::boxHeight - 180, 192, 180) {}
 void Window_ActorCommand::makeCommandList(const Session& session) {
   commands = makeCommands(session, actorId);
 }
@@ -1522,7 +1691,7 @@ Window_BattleItem::Window_BattleItem(int x, int y, int w, int h)
   : Window_ItemList(x, y, w, h) {}
 
 Window_TitleCommand::Window_TitleCommand()
-  : Window_Command(288, 360, 240, 144) {}
+  : Window_Command((core::Graphics::boxWidth - 240) / 2, core::Graphics::boxHeight - 144 - 96, 240, 144) {}
 void Window_TitleCommand::makeCommandList(const Session& session) {
   commands = makeCommands(session);
 }
@@ -1533,7 +1702,7 @@ std::vector<CommandItem> Window_TitleCommand::makeCommands(const Session& sessio
 }
 
 Window_GameEnd::Window_GameEnd()
-  : Window_Command(288, 252, 240, 108) {}
+  : Window_Command((core::Graphics::boxWidth - 240) / 2, (core::Graphics::boxHeight - 108) / 2, 240, 108) {}
 void Window_GameEnd::makeCommandList(const Session& session) {
   commands = makeCommands(session);
 }
@@ -1542,7 +1711,7 @@ std::vector<CommandItem> Window_GameEnd::makeCommands(const Session& session) {
 }
 
 Window_DebugRange::Window_DebugRange(int x, int y)
-  : Window_Selectable(x, y, 246, 624) {}
+  : Window_Selectable(x, y, 246, core::Graphics::boxHeight) {}
 int Window_DebugRange::maxItems() const {
   return pageCount(maxSwitches)+pageCount(maxVariables);
 }
@@ -1633,6 +1802,7 @@ void Window_MapName::refresh() {
   if (!core::boundRuntime()) return;
   if (contents.width != contentsWidth() || contents.height != contentsHeight()) contents.resize(contentsWidth(), contentsHeight());
   contents.clear();
+  contents.fontSize = fontSize;
   if (mapName.empty()) return;
   const double width = contentsWidth(), half = width / 2;
   contents.gradientFillRect(0, 0, half, lineHeight(), "rgba(0,0,0,0)", "rgba(0,0,0,0.6)");

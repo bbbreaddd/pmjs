@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { inspectDatabase } = require('../runner/mv-engine-data.cjs');
+const { inspectDatabase, resolveBasicSettings } = require('../runner/mv-engine-data.cjs');
 const { parsePluginManifest } = require('../runner/plugin-manifest.cjs');
 
 function data() {
@@ -66,4 +66,57 @@ test('keeps unimplemented actor, timer and screen-coordinate forms outside admis
     'unsupported condition 3', 'unsupported actor condition 1', 'unsupported game-data operand 3:1',
     'unsupported game-data operand 5:3', 'unsupported game-data operand 7:5',
   ]);
+});
+
+test('resolves Community_Basic screen, cache, dash, rendering and window settings', () => {
+  assert.deepEqual(resolveBasicSettings({ plugins: [] }), {
+    width: 816, height: 624, imageCacheBytes: 10000000, alwaysDash: false, renderingMode: 'auto',
+  });
+  assert.deepEqual(resolveBasicSettings({
+    plugins: [{
+      name: 'Community_Basic',
+      status: true,
+      parameters: {
+        screenWidth: '1024',
+        screenHeight: '576',
+        cacheLimit: '25',
+        alwaysDash: 'ON',
+        renderingMode: 'WebGL',
+      },
+    }],
+  }), {
+    width: 1024,
+    height: 576,
+    imageCacheBytes: 25000000,
+    alwaysDash: true,
+    renderingMode: 'webgl',
+    windowWidth: 1024,
+    windowHeight: 576,
+  });
+  assert.deepEqual(resolveBasicSettings({
+    plugins: [{
+      name: 'Community_Basic',
+      status: true,
+      parameters: {
+        screenWidth: '816',
+        screenHeight: '624',
+        changeWindowWidthTo: '1280',
+        changeWindowHeightTo: '720',
+      },
+    }],
+  }), {
+    width: 816,
+    height: 624,
+    imageCacheBytes: 10000000,
+    alwaysDash: false,
+    renderingMode: 'auto',
+    windowWidth: 1280,
+    windowHeight: 720,
+  });
+  assert.throws(() => resolveBasicSettings({
+    plugins: [{ name: 'Community_Basic', status: true, parameters: { renderingMode: 'canvas' } }],
+  }), /unsupported rendering mode/);
+  assert.throws(() => resolveBasicSettings({
+    plugins: [{ name: 'Community_Basic', status: true, parameters: { screenWidth: '0' } }],
+  }), /invalid dimensions/);
 });

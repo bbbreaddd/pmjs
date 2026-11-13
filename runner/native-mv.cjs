@@ -33,6 +33,10 @@ async function runNativeMv(options, hooks = {}) {
   native.initialize({ gameRoot: root, width: settings.width, height: settings.height,
     windowTitle: options.title || gameTitle, imageWarmCacheBytes: settings.imageCacheBytes });
   hooks.nativeReady?.(native);
+  if (settings.windowWidth && settings.windowHeight && !process.env.PMJS_WINDOW_SIZE &&
+      typeof native.runtime?.isFullscreen === 'function' && !native.runtime.isFullscreen()) {
+    native.runtime.windowCommand('resize', settings.windowWidth, settings.windowHeight);
+  }
   const startup = await hooks.prepareAssets(native, settings);
   if (startup.cancelled || startup.preparation.cancelled) { native.runtime.quit(); return { code: 0 }; }
   const engine = native.mvEngine;
@@ -41,7 +45,7 @@ async function runNativeMv(options, hooks = {}) {
   try {
     engine.attach(session, settings);
     engine.configure(session, { alwaysDash: settings.alwaysDash });
-    engine.configure(session, readStoredJson(storage, compression, 'config.rpgsave', {}));
+    engine.configure(session, readStoredJson(storage, compression, 'config.rpgsave', {}) || {});
     let configurationRevision = engine.storageStatus(session).configurationRevision;
     engine.setSaveMetadata(session, readStoredJson(storage, compression, 'global.rpgsave', []));
     if (options.battleTest) engine.battleTest(session);
@@ -70,10 +74,14 @@ async function runNativeMv(options, hooks = {}) {
               const contents = engine.save(session);
               storage.writeText(file, compression.compressToBase64(engine.encodeGraph(contents)));
               const metadata = readStoredJson(storage, compression, 'global.rpgsave', []);
+              const members = contents.party._actors.map(id => contents.actors._data[id]).filter(actor => actor && !actor._hidden).slice(0, 4);
+              const seconds = Math.floor((contents.system._framesOnSave || 0) / 60);
+              const pad = value => String(value).padStart(2, '0');
+              const playtime = `${pad(Math.floor(seconds / 3600))}:${pad(Math.floor(seconds / 60) % 60)}:${pad(seconds % 60)}`;
               metadata[request.slot] = { globalId: 'RPGMV', title: gameTitle,
-                characters: contents.party._actors.map(id => [contents.actors._data[id]._characterName, contents.actors._data[id]._characterIndex]),
-                faces: contents.party._actors.map(id => [contents.actors._data[id]._faceName, contents.actors._data[id]._faceIndex]),
-                playtime: new Date(contents.system._framesOnSave / 60 * 1000).toISOString().slice(11, 19), timestamp: Date.now() };
+                characters: members.map(actor => [actor._characterName, actor._characterIndex]),
+                faces: members.map(actor => [actor._faceName, actor._faceIndex]),
+                playtime, timestamp: Date.now() };
               storage.writeText('global.rpgsave', compression.compressToBase64(JSON.stringify(metadata)));
               engine.setSaveMetadata(session, metadata);
             } else engine.load(session, engine.decodeGraph(compression.decompressFromBase64(storage.readText(file))));

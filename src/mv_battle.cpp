@@ -37,12 +37,13 @@ void Session::initializeActor(int id) {
   value.name = source["name"].text(); value.nickname = source["nickname"].text(); value.profile = source["profile"].text();
   value.characterName = source["characterName"].text(); value.characterIndex = source["characterIndex"].integer();
   value.faceName = source["faceName"].text(); value.faceIndex = source["faceIndex"].integer(); value.battlerName = source["battlerName"].text();
-  for (const auto& item : source["equips"].array()) value.equips.push_back(item.integer());
   const auto equipTypes = database_["system"]["equipTypes"].array().size();
-  value.equips.resize(equipTypes > 1 ? equipTypes - 1 : 5);
-  value.equipKinds.assign(value.equips.size(), 2);
+  const std::size_t slotCount = equipTypes > 1 ? equipTypes - 1 : 5;
+  value.equipKinds.assign(slotCount, 2);
   if (!value.equipKinds.empty()) value.equipKinds[0] = 1;
-  for (std::size_t slot = 0; slot < value.equips.size(); ++slot) value.equipKinds[slot] = equipSlotType(value, static_cast<int>(slot)) == 1 ? 1 : 2;
+  for (std::size_t slot = 0; slot < slotCount; ++slot) value.equipKinds[slot] = equipSlotType(value, static_cast<int>(slot)) == 1 ? 1 : 2;
+  for (const auto& item : source["equips"].array()) value.equips.push_back(item.integer());
+  value.equips.resize(slotCount);
   actors_[id] = value;
   auto& result = actors_.at(id);
   releaseEquipment(result, true);
@@ -81,7 +82,7 @@ double Session::parameter(const Battler& battler, int id) const {
   }
   base += battler.paramPlus[id];
   const double value = base * trait(battler, 21, id, true) * (1 + battler.buffs[id] * 0.25);
-  return jsRound(std::clamp(value, id == 0 ? 1.0 : 0.0, id == 0 && battler.enemy ? 999999.0 : id < 2 ? 9999.0 : 999.0));
+  return jsRound(std::clamp(value, id == 1 ? 0.0 : 1.0, id == 0 && battler.enemy ? 999999.0 : id < 2 ? 9999.0 : 999.0));
 }
 int Session::restriction(const Battler& battler) const {
   int result = 0;
@@ -126,14 +127,17 @@ void Session::addState(Battler& battler, int state) {
     }
     const int oldRestriction = restriction(battler);
     battler.states.push_back(state);
-    if (restriction(battler) > oldRestriction) {
+    const int newRestriction = restriction(battler);
+    if ((oldRestriction == 0 && newRestriction > 0) || state == 1) {
       if (battle_.active) {
         const int index = battler.enemy ? static_cast<int>(&battler - battle_.enemies.data()) : static_cast<int>(std::find(party_.begin(), party_.end(), battler.id) - party_.begin());
         battle_.actions.erase(std::remove_if(battle_.actions.begin(), battle_.actions.end(), [&](const Action& action) { return action.enemy == battler.enemy && action.subject == index; }), battle_.actions.end());
         if (!battler.enemy && index < static_cast<int>(battle_.remainingActions.size())) battle_.remainingActions[index] = 0;
       }
-      const auto states = battler.states;
-      for (int existing : states) if (database_["states"][existing]["removeByRestriction"].boolean()) removeState(battler, existing);
+      if (oldRestriction == 0 && newRestriction > 0) {
+        const auto states = battler.states;
+        for (int existing : states) if (database_["states"][existing]["removeByRestriction"].boolean()) removeState(battler, existing);
+      }
     }
   }
   std::stable_sort(battler.states.begin(), battler.states.end(), [&](int a, int b) { const auto pa = database_["states"][a]["priority"].integer(), pb = database_["states"][b]["priority"].integer(); return pa != pb ? pa > pb : a < b; });
@@ -143,7 +147,7 @@ void Session::addState(Battler& battler, int state) {
   refreshBattler(battler);
 }
 bool Session::canUse(const Battler& battler, const Value& item) const {
-  if (item.null() || battler.hp <= 0 || battler.hidden || restriction(battler) >= 4) return false;
+  if (item.null() || battler.hp <= 0 || battler.hidden || battler.escaped || restriction(battler) >= 4) return false;
   const int occasion = item["occasion"].integer();
   if (occasion == 3 || (occasion == 1 && !battle_.active) || (occasion == 2 && battle_.active)) return false;
   if (!item["stypeId"].null()) {
@@ -160,6 +164,9 @@ bool Session::canUse(const Battler& battler, const Value& item) const {
       if (entry["code"].integer() == 42 && entry["dataId"].integer() == item["stypeId"].integer()) return false;
       if (entry["code"].integer() == 44 && entry["dataId"].integer() == item["id"].integer()) return false;
     }
+  } else if (!item["itypeId"].null() && item["id"].integer() > 0) {
+    const auto it = inventory_.find(item["id"].integer());
+    if (it == inventory_.end() || it->second <= 0) return false;
   }
   return true;
 }
@@ -168,7 +175,6 @@ void Session::apply(Battler& subject, Battler& target, const Value& item, Battle
   subject.result = {}; target.result = {};
   auto& result = target.result;
   result.used = canApply(target, item);
-  if (!result.used) { (void)random(); return; }
   if (target.hidden || target.escaped) return;
   const int scope = item["scope"].integer();
   if ((scope == 9 || scope == 10) != (target.hp == 0)) return;
@@ -176,15 +182,19 @@ void Session::apply(Battler& subject, Battler& target, const Value& item, Battle
   result.drain = item["damage"]["type"].integer() == 5 || item["damage"]["type"].integer() == 6;
   const int hitType = item["hitType"].integer();
   const double success = item["successRate"].number(100) / 100 * (hitType == 1 ? trait(subject, 22, 0, false) : 1);
-  if (random() >= success) { result.missed = true; return; }
+  const bool missed = result.used && random() >= success;
+  result.missed = missed;
   const double evasion = hitType == 1 ? trait(target, 22, 1, false) : hitType == 2 ? trait(target, 22, 4, false) : 0;
-  if (random() < evasion) { result.evaded = true; return; }
+  const bool evaded = !missed && random() < evasion;
+  result.evaded = evaded;
+  if (!result.used || missed || evaded) return;
   const auto& damage = item["damage"];
-  if (damage["type"].integer()) {
+  if (damage["type"].integer() > 0) {
     const bool critical = random() < (damage["critical"].boolean() ? trait(subject, 22, 2, false) * (1 - trait(target, 22, 3, false)) : 0);
     result.critical = critical;
     const int type = damage["type"].integer();
     const int amount = damageValue(subject, target, item, critical);
+    if (amount == 0) result.critical = false;
     if (type == 1 || type == 3 || type == 5) {
       const int actual = type == 5 ? std::min(amount, target.hp) : amount;
       result.hpAffected = true; result.hpDamage = actual;
@@ -269,7 +279,6 @@ void Session::makeEnemyActions() {
   for (std::size_t index = 0; index < battle_.enemies.size(); ++index) {
     auto& enemy = battle_.enemies[index]; enemy.guarding = false;
     const int count = battle_.preemptive ? 0 : battleActionCount(enemy);
-    if (!count) endBattlerActions(enemy);
     for (int action = 0; action < count; ++action) {
       const int skill = selectEnemySkill(enemy);
       if (skill) battle_.actions.push_back({true, false, static_cast<int>(index), skill, -1, 0});
@@ -277,13 +286,12 @@ void Session::makeEnemyActions() {
   }
   for (std::size_t index = 0; index < battleMemberCount(); ++index) {
     auto& actor = actors_.at(party_[index]); const int count = battle_.surprise ? 0 : battleActionCount(actor);
-    if (!count) endBattlerActions(actor);
     const bool automatic = hasSpecialFlag(actor, 0) || restriction(actor) > 0;
     if (!automatic) battle_.remainingActions[index] = count;
     else for (int action = 0; action < count; ++action) {
       int skill = 1, target = -1;
       if (!restriction(actor)) {
-        double best = std::numeric_limits<double>::lowest();
+        double best = std::numeric_limits<double>::min();
         auto skills = battlerSkills(actor); skills.insert(1);
         for (int id : skills) if (canUse(actor, database_["skills"][id])) {
           int candidateTarget = -1;
@@ -389,7 +397,7 @@ void Session::resolveAction() {
       resultSubject = &target;
     }
     else {
-      if (target.hp < parameter(target, 0) / 4 && item["hitType"].integer() != 0) {
+      if (target.hp > 0 && target.hp < parameter(target, 0) / 4.0 && item["hitType"].integer() != 0) {
         if (target.enemy) {
           for (auto& member : battle_.enemies) if (!member.hidden && BattleMechanics::canSubstitute(*this, member, target)) { receiver = &member; break; }
         } else for (std::size_t index = 0; index < battleMemberCount(); ++index) {
@@ -430,6 +438,7 @@ void Session::endBattlerTurn(Battler& battler) {
       const int mpValue = static_cast<int>(std::floor(parameter(battler, 1) * trait(battler, 22, 8, false)));
       battler.result.mpDamage = -mpValue; battler.mp += mpValue;
       battler.tp += static_cast<int>(std::floor(100 * trait(battler, 22, 9, false)));
+      refreshBattler(battler);
     }
     auto states = battler.states;
     for (int state : states) {
@@ -511,7 +520,19 @@ void Session::finishBattle(int result) {
     savedBgm_ = battle_.mapBgm; savedBgs_ = battle_.mapBgs;
     audio("battle-restore-bgm", {}); audio("battle-restore-bgs", {});
   } else AudioManager::stopBgm(*this);
-  if (battle_.event) interpreter_.branches[interpreter_.list[std::max(0, interpreter_.index - 1)]["indent"].integer()] = result;
+  setBattleEventResult(result);
+}
+void Session::abortBattle() {
+  if (!battle_.active) return;
+  SoundManager::playEscape(*this);
+  battle_.aborting = false;
+  battle_.result = 1; battle_.active = false; battle_.wait = 0;
+  battle_.actions.clear(); battle_.log.clear(); message_ = {};
+  ++system_.escapeCount;
+  savedBgm_ = battle_.mapBgm; savedBgs_ = battle_.mapBgs;
+  audio("battle-restore-bgm", {}); audio("battle-restore-bgs", {});
+  setBattleEventResult(1);
+  leaveBattle();
 }
 void Session::leaveBattle() {
   if (battleTest_) { AudioManager::stopBgm(*this); finished_ = true; return; }
@@ -587,7 +608,7 @@ void Session::updateBattle() {
   }
   if (updateTroopEvents()) return;
   if (!battle_.active || message_.busy) return;
-  if (std::none_of(party_.begin(), party_.begin() + static_cast<std::ptrdiff_t>(battleMemberCount()), [&](int id) { const auto& member = actors_.at(id); return !member.hidden && !member.escaped; })) { enemyEventCommand(Value::Object{{"code", 340}}); return; }
+  if (battle_.aborting || std::none_of(party_.begin(), party_.begin() + static_cast<std::ptrdiff_t>(battleMemberCount()), [&](int id) { const auto& member = actors_.at(id); return !member.hidden && !member.escaped; })) { abortBattle(); return; }
   const bool defeated = std::none_of(party_.begin(), party_.begin() + static_cast<std::ptrdiff_t>(battleMemberCount()), [&](int id) { return actors_.at(id).hp > 0 && !actors_.at(id).escaped; });
   const bool victorious = std::none_of(battle_.enemies.begin(), battle_.enemies.end(), [](const Battler& battler) { return battler.hp > 0 && !battler.hidden && !battler.escaped; });
   if (defeated || victorious) { finishBattle(defeated ? 2 : 0); return; }
@@ -604,6 +625,11 @@ void Session::updateBattle() {
   if (battle_.wait > 0 && --battle_.wait > 0) return;
   if (battle_.actions.empty()) { endTurn(); return; }
   const auto action = battle_.actions.front(); battle_.actions.erase(battle_.actions.begin()); executeAction(action);
+  if (!battle_.actionStage &&
+      std::none_of(battle_.actions.begin(), battle_.actions.end(), [&](const Action& next) { return next.enemy == action.enemy && next.subject == action.subject; })) {
+    auto& subject = action.enemy ? battle_.enemies[action.subject] : actors_.at(party_[action.subject]);
+    endBattlerActions(subject);
+  }
   if (!battle_.wait) battle_.wait = 1;
 }
 int Session::menuItemUser() const {
@@ -624,9 +650,13 @@ bool Session::canApply(const Battler& target, const Value& item) const {
     const int code = effect["code"].integer();
     if (code == 11 && (target.hp < parameter(target, 0) || effect["value1"].number() < 0 || effect["value2"].number() < 0)) return true;
     if (code == 12 && (target.mp < parameter(target, 1) || effect["value1"].number() < 0 || effect["value2"].number() < 0)) return true;
-    if (code == 13 && target.tp < 100) return true;
+    if (code == 13) return true;
     if (code == 21 && !contains(target.states, effect["dataId"].integer())) return true;
     if (code == 22 && contains(target.states, effect["dataId"].integer())) return true;
+    if (code == 31 && target.buffs[effect["dataId"].integer()] < 2) return true;
+    if (code == 32 && target.buffs[effect["dataId"].integer()] > -2) return true;
+    if (code == 33 && target.buffs[effect["dataId"].integer()] > 0) return true;
+    if (code == 34 && target.buffs[effect["dataId"].integer()] < 0) return true;
     if (code == 41 || code == 42 || code == 44) return true;
     if (code == 43 && !target.enemy && !target.skills.contains(effect["dataId"].integer())) return true;
   }
@@ -721,8 +751,9 @@ void Session::changeEquipment(int actorId, int slot, int itemId) {
     if (!canEquip(value, item, slot)) return;
   }
   const int old = value.equips[slot];
-  if (old) ++inventory_[old + (weapon ? 100000 : 200000)];
-  if (itemId) --inventory_[key];
-  value.equips[slot] = itemId; value.equipKinds[slot] = weapon ? 1 : 2; refreshBattler(value);
+  const int kindIndex = weapon ? 1 : 2;
+  if (old) gainItem(kindIndex, old, 1, false);
+  if (itemId) gainItem(kindIndex, itemId, -1, false);
+  value.equips[slot] = itemId; value.equipKinds[slot] = kindIndex; refreshBattler(value);
 }
 }  // namespace pmjs::mv

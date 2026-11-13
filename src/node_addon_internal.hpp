@@ -142,6 +142,7 @@ void registerPlatformBindings(napi_env env, napi_value exports);
 void registerGraphicsBindings(napi_env env, napi_value exports);
 void registerResourceBindings(napi_env env, napi_value exports);
 void registerCanvasBindings(napi_env env, napi_value exports);
+void registerBitmapBindings(napi_env env, napi_value exports);
 void registerDialogBindings(napi_env env, napi_value exports);
 void registerMediaBindings(napi_env env, napi_value exports);
 void registerEffectBindings(napi_env env, napi_value exports);

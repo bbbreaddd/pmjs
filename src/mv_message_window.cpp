@@ -6,8 +6,31 @@
 namespace pmjs::mv {
 bool Session::updateMessageText(bool ok, bool cancel) {
   auto& message = message_;
+  if (message.lines.empty()) { Window_Message::startInput(*this); return false; }
   if (message.openness < 255) return true;
   if (!message.revealPrepared) {
+    Value::Array splitLines;
+    std::set<int> updatedBreaks;
+    for (std::size_t lineIndex = 0; lineIndex < message.lines.size(); ++lineIndex) {
+      if (message.pageBreaks.contains(static_cast<int>(lineIndex))) {
+        updatedBreaks.insert(static_cast<int>(splitLines.size()));
+      }
+      const std::string text = message.lines[lineIndex].text();
+      std::size_t start = 0;
+      for (;;) {
+        const auto br = text.find('\f', start);
+        if (br == std::string::npos) {
+          splitLines.emplace_back(text.substr(start));
+          break;
+        }
+        splitLines.emplace_back(text.substr(start, br - start));
+        start = br + 1;
+        if (start < text.size() && text[start] == '\n') ++start;
+        updatedBreaks.insert(static_cast<int>(splitLines.size()));
+      }
+    }
+    message.lines = std::move(splitLines);
+    message.pageBreaks = std::move(updatedBreaks);
     message.expandedLines.clear();
     for (const auto& line : message.lines) message.expandedLines.push_back(Window_Base::processEscapeCodes(line.text(),*this));
     message.revealLengths.assign(message.lines.size(),0); message.revealPrepared = true;
@@ -15,7 +38,7 @@ bool Session::updateMessageText(bool ok, bool cancel) {
   if (message.revealPage != message.firstLine) {
     message.revealPage = message.firstLine; message.revealLine = message.firstLine; message.revealOffset = 0;
     message.revealFinished = false; message.textPaused = false; message.finalPause = false;
-    message.lineFast = false; message.showFast = false; message.pauseSkip = false; message.textWait = 0; message.revealedCount = 0;
+    Window_Message::clearFlags(message); message.textWait = 0; message.revealedCount = 0;
   }
   if (message.textWait > 0) { --message.textWait; return true; }
   if (message.textPaused) {
@@ -25,7 +48,7 @@ bool Session::updateMessageText(bool ok, bool cancel) {
   const auto finishPage = [&] {
     message.revealFinished = true;
     const bool lastPage = message.pageEnd() >= static_cast<int>(message.lines.size());
-    if (lastPage && (!message.choices.empty() || ui_.maxDigits > 0 || ui_.variableId > 0)) return false;
+    if (lastPage && Window_Message::startInput(*this)) return false;
     if (message.pauseSkip && lastPage) { acknowledge(); return true; }
     message.textPaused = true; message.finalPause = true; message.textWait = 10;
     return true;

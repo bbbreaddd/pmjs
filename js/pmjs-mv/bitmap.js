@@ -160,6 +160,7 @@ if (typeof _Bitmap_blt === 'function') {
 // JavaScript implementation when overridden by plugins (e.g. Bitmap Fonts).
 (function installNativeDrawText() {
   if (typeof Bitmap === 'undefined' || !Bitmap.prototype) return;
+  if (Bitmap.nativeBacking) return;
 
   var stockDrawText = Bitmap.prototype.drawText;
   var stockOutline = Bitmap.prototype._drawTextOutline;
@@ -233,6 +234,7 @@ if (typeof _Bitmap_blt === 'function') {
 })();
 
 // Pixel queries support canvas-backed bitmaps without forcing image readback.
+if (!Bitmap.nativeBacking) {
 Bitmap.prototype.getPixel = function(x, y) {
   var data = PMJS.web.canvas.readPixel(this._canvas, this._context, x, y);
   if (data) {
@@ -250,5 +252,6 @@ Bitmap.prototype.getAlphaPixel = function(x, y) {
     'x=' + x + ' y=' + y + ' w=' + this.width + ' h=' + this.height);
   return 0;
 };
+}
 
 // Preserve the engine's paintOpacity descriptor, including fractional values.

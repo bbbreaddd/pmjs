@@ -5,6 +5,20 @@
 
 namespace pmjs::mv {
 
+void Session::locateCharacter(Character& character, double x, double y) {
+  character.x = roundMapX(Value(std::floor(x + 0.5)).integer());
+  character.y = roundMapY(Value(std::floor(y + 0.5)).integer());
+  character.realX = character.x;
+  character.realY = character.y;
+  if (character.walkAnime || character.stepAnime) character.pattern = 1;
+  character.animationCount = 0;
+  bool normalPriority = &character == &player_;
+  for (const auto& event : events_) if (&event.character == &character) normalPriority = event.priority == 1;
+  const bool bush = normalPriority && character.characterName.find('!') >= 2 && tileFlag(character.x, character.y, 64);
+  if (!bush) character.bushDepth = 0;
+  else if (!character.moving()) character.bushDepth = 12;
+}
+
 bool Session::characterEventCommand(const Value& entry, Interpreter& context) {
   const auto& p = entry["parameters"];
   switch (entry["code"].integer()) {
@@ -12,29 +26,17 @@ bool Session::characterEventCommand(const Value& entry, Interpreter& context) {
       if (battle_.active) return true;
       auto* target = routeCharacter(p[0].integer(), context);
       if (!target) return true;
-      const auto locate = [&](Character& character, double x, double y) {
-        character.x = Value(std::floor(x + 0.5)).integer();
-        character.y = Value(std::floor(y + 0.5)).integer();
-        character.realX = x; character.realY = y;
-        if (character.walkAnime || character.stepAnime) character.pattern = 1;
-        character.animationCount = 0;
-        bool normalPriority = &character == &player_;
-        for (const auto& event : events_) if (&event.character == &character) normalPriority = event.priority == 1;
-        const bool bush = normalPriority && character.characterName.find('!') >= 2 && tileFlag(character.x, character.y, 64);
-        if (!bush) character.bushDepth = 0;
-        else if (!character.moving()) character.bushDepth = 12;
-      };
       const auto relocate = [&](Character& character, double x, double y) {
-        locate(character, x, y);
+        locateCharacter(character, x, y);
         if (&character != &player_) return;
-        const double visibleX = database_["sceneContract"]["width"].number(816) / 48;
-        const double visibleY = database_["sceneContract"]["height"].number(624) / 48;
+        const double visibleX = screenWidth_ / 48.0;
+        const double visibleY = screenHeight_ / 48.0;
         savedCamera_ = std::array{std::clamp(x - (visibleX - 1) / 2, 0.0, std::max(0.0, map()["width"].number() - visibleX)),
           std::clamp(y - (visibleY - 1) / 2, 0.0, std::max(0.0, map()["height"].number() - visibleY))};
         const int encounterStep = map()["encounterStep"].integer(30);
         encounterCount_ = randomInt(encounterStep) + randomInt(encounterStep) + 1;
         for (auto& follower : followers_) {
-          locate(follower, x, y);
+          locateCharacter(follower, x, y);
           if (!follower.directionFix) follower.direction = player_.direction;
           follower.stopCount = 0;
         }
@@ -128,8 +130,8 @@ void Session::setupMapState() {
   mapState_.parallaxZero = !mapState_.parallaxName.empty() && mapState_.parallaxName.front() == '!';
   mapState_.parallaxLoopX = data["parallaxLoopX"].boolean(); mapState_.parallaxLoopY = data["parallaxLoopY"].boolean();
   mapState_.parallaxSx = data["parallaxSx"].number(); mapState_.parallaxSy = data["parallaxSy"].number();
-  const double width = database_["sceneContract"]["width"].number(816) / 48;
-  const double height = database_["sceneContract"]["height"].number(624) / 48;
+  const double width = screenWidth_ / 48.0;
+  const double height = screenHeight_ / 48.0;
   const double endX = data["width"].number() - width, endY = data["height"].number() - height;
   mapState_.lastDisplayX = loopHorizontal() ? std::fmod(std::fmod(player_.realX - (width - 1) / 2, data["width"].number()) + data["width"].number(), data["width"].number()) : endX < 0 ? endX / 2 : std::clamp(player_.realX - (width - 1) / 2, 0.0, endX);
   mapState_.lastDisplayY = loopVertical() ? std::fmod(std::fmod(player_.realY - (height - 1) / 2, data["height"].number()) + data["height"].number(), data["height"].number()) : endY < 0 ? endY / 2 : std::clamp(player_.realY - (height - 1) / 2, 0.0, endY);
@@ -138,8 +140,8 @@ void Session::setupMapState() {
 }
 
 void Session::updateMapState() {
-  const double width = database_["sceneContract"]["width"].number(816) / 48;
-  const double height = database_["sceneContract"]["height"].number(624) / 48;
+  const double width = screenWidth_ / 48.0;
+  const double height = screenHeight_ / 48.0;
   const double endX = map()["width"].number() - width, endY = map()["height"].number() - height;
   if (mapState_.scrollRest > 0) {
     if (!savedCamera_) savedCamera_ = std::array{mapState_.lastDisplayX, mapState_.lastDisplayY};
@@ -165,7 +167,7 @@ void Session::updateMapState() {
 void Session::updateSelfMovement(Event& event) {
   auto& character = event.character;
   if (event.prelockDirection != 0 || character.stopCount <= 30 * (5 - character.moveFrequency)) return;
-  const double width = database_["sceneContract"]["width"].number(816), height = database_["sceneContract"]["height"].number(624);
+  const double width = screenWidth_, height = screenHeight_;
   const double endX = map()["width"].number() - width / 48, endY = map()["height"].number() - height / 48;
   const double displayX = savedCamera_ ? (*savedCamera_)[0] : endX < 0 ? endX / 2 : std::clamp(player_.realX - (width / 48 - 1) / 2, 0.0, endX);
   const double displayY = savedCamera_ ? (*savedCamera_)[1] : endY < 0 ? endY / 2 : std::clamp(player_.realY - (height / 48 - 1) / 2, 0.0, endY);

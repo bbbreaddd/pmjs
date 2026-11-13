@@ -82,6 +82,8 @@ class Presentation {
   void streamUiWindow(core::Window& window);
   void finishUiLayer();
   void clearUiContents();
+  void goldWindow(int x, int y);
+  std::shared_ptr<Window_Gold> goldWindow_;
   double textEx(const std::string& value, double x, double y, int width = 0, int size = 28, bool prepared = false, bool measureOnly = false);
   void text(const std::string& value, double x, double y, int width = 0, int color = 0, int size = 28, bool right = false, float opacity = 1);
   void face(int actorId, int x, int y, float opacity = 1);
@@ -90,6 +92,8 @@ class Presentation {
   void gauge(const Battler& actor, int stat, int x, int y, int width);
   void actorStatus(int actorId, int x, int y, int width, bool portrait);
   void message();
+  void messageBody();
+  void messageInputs();
   void menu();
   enum class BattleWindow { commands, status, log, selection };
   struct RetainedContents {

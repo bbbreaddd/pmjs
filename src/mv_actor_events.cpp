@@ -1,4 +1,6 @@
 #include "mv_engine.hpp"
+#include "mv_core_types.hpp"
+#include "mv_windows.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -8,7 +10,7 @@
 namespace pmjs::mv {
 namespace {
 int boundedInt(double value, int minimum, int maximum) {
-  if (std::isnan(value)) throw std::runtime_error("non-numeric actor event operand");
+  if (std::isnan(value)) return 0;
   return static_cast<int>(std::clamp(value, static_cast<double>(minimum), static_cast<double>(maximum)));
 }
 }
@@ -90,8 +92,8 @@ bool Session::actorEventCommand(const Value& entry) {
   if (code != 313) {
     const int offset = code == 317 ? 3 : 2;
     const auto& value = p[offset + 1].integer() ? variable(p[offset + 2].integer()) : p[offset + 2];
-    if (!std::holds_alternative<double>(value.data)) throw std::runtime_error("non-numeric actor event operand");
-    amount = value.number() * (p[offset].integer() ? -1 : 1);
+    const double numeric = core::numberValue(value);
+    amount = (std::isnan(numeric) ? 0.0 : numeric) * (p[offset].integer() ? -1 : 1);
   }
   for (int id : selected) {
     auto& actor = actors_.at(id);
@@ -104,6 +106,10 @@ bool Session::actorEventCommand(const Value& entry) {
           actor.result.hpDamage = boundedInt(-change, std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
           actor.hp = boundedInt(actor.hp + change, 0, static_cast<int>(parameter(actor, 0)));
           refreshBattler(actor);
+          if ((actor.hp <= 0 || std::find(actor.states.begin(), actor.states.end(), 1) != actor.states.end()) &&
+              battle_.active && battleLog_) {
+            battleLog_->performCollapse(*this, actor);
+          }
         }
         break;
       case 312:
@@ -115,14 +121,20 @@ bool Session::actorEventCommand(const Value& entry) {
         actor.tp = boundedInt(actor.tp + amount, 0, 100);
         refreshBattler(actor);
         break;
-      case 313:
+      case 313: {
+        const bool alreadyDead = actor.hp <= 0 || std::find(actor.states.begin(), actor.states.end(), 1) != actor.states.end();
         if (!p[2].integer()) addState(actor, p[3].integer());
         else {
           removeState(actor, p[3].integer());
           refreshBattler(actor);
         }
+        if (!alreadyDead && (actor.hp <= 0 || std::find(actor.states.begin(), actor.states.end(), 1) != actor.states.end()) &&
+            battle_.active && battleLog_) {
+          battleLog_->performCollapse(*this, actor);
+        }
         actor.result = {};
         break;
+      }
       case 315: changeActorExp(actor, actor.exp[actor.classId] + amount, p[5].boolean()); break;
       case 316: {
         const int maximum = database_["actors"][actor.id]["maxLevel"].integer(99);

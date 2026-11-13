@@ -207,6 +207,7 @@ if(PMJS_ENABLE_SKIA65)
 endif()
 
 add_library(pmjs_native MODULE
+  src/node_addon_bitmap.cpp
   src/node_addon_mv.cpp
   src/node_addon.cpp
   src/node_addon_compression.cpp

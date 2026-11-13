@@ -148,8 +148,7 @@ bool DataManager::isThisGameFile(const Session& session, int savefileId, bool lo
   if (localMode) return true;
   const std::string title = savefile["title"].text();
   if (title != session.database()["system"]["gameTitle"].text()) return false;
-  const auto& gid = savefile["globalId"];
-  return gid.null() || gid.text() == globalId();
+  return savefile["globalId"].text() == globalId();
 }
 
 bool DataManager::isAnySavefileExists(const Session& session, bool localMode) {
@@ -202,10 +201,10 @@ void DataManager::selectSavefileForNewGame(Session& session, bool /*localMode*/)
 Value DataManager::makeSavefileInfo(const Session& session) {
   Value::Array characters;
   Value::Array faces;
-  const std::size_t count = std::min<std::size_t>(4, session.party_.size());
+  const std::size_t count = session.battleMemberCount();
   for (std::size_t i = 0; i < count; ++i) {
     const auto actorIt = session.actors_.find(session.party_[i]);
-    if (actorIt == session.actors_.end()) continue;
+    if (actorIt == session.actors_.end() || actorIt->second.hidden) continue;
     characters.emplace_back(Value::Array{actorIt->second.characterName, actorIt->second.characterIndex});
     faces.emplace_back(Value::Array{actorIt->second.faceName, actorIt->second.faceIndex});
   }
@@ -406,6 +405,7 @@ void AudioManager::replayBgm(Session& session, const Value& bgm) {
     updateBgmParameters(session, bgm);
   } else {
     playBgm(session, bgm, bgm["pos"].number(0.0));
+    if (!bgm["name"].text().empty()) session.audio("fade-in-bgm", Value{0.5});
   }
 }
 
@@ -423,7 +423,7 @@ void AudioManager::fadeOutBgm(Session& session, double durationSeconds) {
   session.audio("fade-bgm", Value{durationSeconds});
 }
 
-void AudioManager::fadeInBgm(Session& session, int durationSeconds) {
+void AudioManager::fadeInBgm(Session& session, double durationSeconds) {
   if (!session.savedBgm_.null() && !session.savedBgm_["name"].text().empty()) {
     session.audio("bgm", session.savedBgm_, false);
     if (durationSeconds > 0) session.audio("fade-in-bgm", Value{durationSeconds});
@@ -455,6 +455,7 @@ void AudioManager::replayBgs(Session& session, const Value& bgs) {
     updateBgsParameters(session, bgs);
   } else {
     playBgs(session, bgs, bgs["pos"].number(0.0));
+    if (!bgs["name"].text().empty()) session.audio("fade-in-bgs", Value{0.5});
   }
 }
 
@@ -472,7 +473,7 @@ void AudioManager::fadeOutBgs(Session& session, double durationSeconds) {
   session.audio("fade-bgs", Value{durationSeconds});
 }
 
-void AudioManager::fadeInBgs(Session& session, int durationSeconds) {
+void AudioManager::fadeInBgs(Session& session, double durationSeconds) {
   if (!session.savedBgs_.null() && !session.savedBgs_["name"].text().empty()) {
     session.audio("bgs", session.savedBgs_, false);
     if (durationSeconds > 0) session.audio("fade-in-bgs", Value{durationSeconds});

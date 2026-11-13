@@ -16,6 +16,7 @@ napi_value init(napi_env env, napi_value exports) {
   registerAssetMethods(env, exports);
   registerPreparedAssetBindings(env, exports);
   registerCanvasBindings(env, exports);
+  registerBitmapBindings(env, exports);
   registerDialogBindings(env, exports);
   registerMediaBindings(env, exports);
   registerEffectBindings(env, exports);

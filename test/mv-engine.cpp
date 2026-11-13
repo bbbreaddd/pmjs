@@ -1,4 +1,5 @@
 #include "mv_engine.hpp"
+#include "mv_windows.hpp"
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -108,7 +109,72 @@ int main() {
     coreButtons.step(held);
     require(coreButtons.ui().scene == pmjs::mv::Scene::title, "held state must not override native core trigger timing");
     held.okTriggered = true; coreButtons.step(held);
+    require(coreButtons.ui().scene == pmjs::mv::Scene::title, "new game waits for the 48-frame title fadeout");
+    for (int tick = 0; tick < 49; ++tick) coreButtons.step({});
     require(coreButtons.ui().scene == pmjs::mv::Scene::map, "native core trigger must reach the scene even while held state stays true");
+
+    Value mvRegDb = database();
+    auto& mvRegRoot = std::get<Object>(mvRegDb.data);
+    std::get<Object>(mvRegRoot["system"].data)["currencyUnit"] = "G";
+    std::get<Object>(mvRegRoot["system"].data)["partyMembers"] = Array{1, 2};
+    mvRegRoot["actors"] = Array{
+      Value{},
+      Object{{"name", "Omori"}, {"classId", 1}, {"initialLevel", 1}},
+      Object{{"name", "Aubrey"}, {"classId", 1}, {"initialLevel", 1}}
+    };
+    Array regParams; for (int i = 0; i < 8; ++i) regParams.emplace_back(Array{0, i == 2 ? 0 : 100});
+    mvRegRoot["classes"] = Array{Value{}, Object{{"params", regParams}, {"traits", Array{}}}};
+    mvRegRoot["skills"] = Array{Value{}, Object{{"occasion", 1}, {"scope", 1}, {"successRate", 100}, {"hitType", 0}, {"damage", Object{{"type", 1}, {"elementId", -1}, {"formula", "a.atk * 10"}, {"variance", 0}}}}};
+    mvRegRoot["enemies"] = Array{Value{}, Object{{"params", Array{1000, 0, 1, 1, 1, 1, 1, 1}}, {"traits", Array{Object{{"code", 11}, {"dataId", 1}, {"value", 2.0}}}}, {"actions", Array{}}}};
+    mvRegRoot["troops"] = Array{Value{}, Object{{"members", Array{Object{{"enemyId", 1}}}}}};
+    auto& mvRegMap = std::get<Object>(std::get<Object>(mvRegRoot["maps"].data)["1"].data);
+    auto defaultPage = page({
+      command(122, {1, 1, 0, 0, "\\V[2]"}),
+      command(122, {2, 2, 0, 0, "\\N[1]"}),
+      command(101),
+      command(401, {"First\fSecond"}),
+      command(123, {"A", 0}),
+      command(0)
+    }, 3);
+    std::get<Object>(defaultPage.data).erase("walkAnime");
+    mvRegMap["events"] = Array{Value{}, Object{{"id", 1}, {"x", 3}, {"y", 1}, {"pages", Array{defaultPage, page({command(0)}, 0, Object{{"selfSwitchValid", true}, {"selfSwitchCh", "A"}})}}}};
+    Session mvReg(mvRegDb);
+    mvReg.newGame();
+    for (int i = 0; i < 10; ++i) mvReg.step({});
+    require(mvReg.player().walkAnime && !mvReg.events()[0].character.walkAnime,
+            "player walkAnime starts true while event page matches missing page.walkAnime");
+    require(mvReg.message().busy && mvReg.message().lines.size() == 2 && mvReg.message().pageEnd() == 1,
+            "\\f splits show text into separate message pages");
+    mvReg.acknowledge(); mvReg.step({});
+    require(mvReg.message().busy && mvReg.message().firstLine == 1, "page break advances to second page");
+    mvReg.acknowledge(); mvReg.step({});
+    require(pmjs::mv::Window_Message::processEscapeCodes("\\V[1]-\\N[2]-\\P[1]-\\G", mvReg) == "Omori-Aubrey-Omori-G",
+            "processEscapeCodes resolves nested \\V before \\N, \\P, and \\G");
+    mvReg.step({0, false, true});
+    mvReg.step({});
+    for (int i = 0; i < 3; ++i) { mvReg.step({2}); mvReg.step({}); }
+    mvReg.step({0, true});
+    mvReg.step({});
+    mvReg.step({0, true});
+    mvReg.step({});
+    mvReg.step({0, true});
+    mvReg.step({});
+    require(mvReg.ui().scene == pmjs::mv::Scene::status, "Scene_Status ignores ok input");
+    pmjs::mv::Input pageDownInput;
+    pageDownInput.pressed.insert("pagedown");
+    mvReg.step(pageDownInput);
+    mvReg.step({});
+    require(mvReg.ui().actor == 1, "Scene_Status cycles actor on pagedown");
+    mvReg.step({0, false, true}); mvReg.step({});
+    mvReg.step({0, false, true}); mvReg.step({});
+    mvReg.setRandomStream(std::vector<double>(64, 0.5));
+    mvReg.startBattle(1, true, false);
+    mvReg.acknowledge(); mvReg.step({});
+    mvReg.chooseAction(0, 1, 0);
+    mvReg.chooseAction(1, 1, 0);
+    for (int tick = 0; tick < 200 && mvReg.battle().turn < 2 && mvReg.battle().active; ++tick) mvReg.step({});
+    require(mvReg.battle().enemies[0].hp <= 960, "paramMin(atk)=1 and bare-hands normal attack uses element 1");
+
     std::cout << "native MV simulation checks passed\n";
   } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

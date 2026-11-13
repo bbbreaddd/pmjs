@@ -12,6 +12,12 @@ function decodeGraph(json) {
       if (registry.has(value['@c'])) throw new Error('duplicate save reference');
       registry.set(value['@c'], body);
     }
+    if (body !== value) {
+      for (const key of Object.keys(value)) {
+        if (['__proto__', 'constructor', 'prototype'].includes(key)) throw new Error('invalid save field');
+        if (key !== '@a' && key !== '@c') body[key] = value[key];
+      }
+    }
     for (const key of Object.keys(body)) {
       if (['__proto__', 'constructor', 'prototype'].includes(key)) throw new Error('invalid save field');
       if (key !== '@c') body[key] = index(body[key], depth + 1);
@@ -19,6 +25,7 @@ function decodeGraph(json) {
     delete body['@c'];
     return body;
   }
+  const resolved = new Map();
   function expand(value, ancestors = new Set()) {
     if (!value || typeof value !== 'object') return value;
     if (Object.hasOwn(value, '@r')) {
@@ -26,9 +33,19 @@ function decodeGraph(json) {
       value = registry.get(value['@r']);
     }
     if (ancestors.has(value)) throw new Error('cyclic save state is unsupported');
+    if (resolved.has(value)) return resolved.get(value);
     const chain = new Set(ancestors).add(value);
-    if (Array.isArray(value)) return value.map(item => expand(item, chain));
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, expand(item, chain)]));
+    const out = Array.isArray(value) ? [] : {};
+    if (Array.isArray(value)) {
+      for (let i = 0; i < value.length; ++i) out.push(expand(value[i], chain));
+      for (const key of Object.keys(value)) {
+        if (!Object.hasOwn(out, key)) out[key] = expand(value[key], chain);
+      }
+    } else {
+      for (const [key, item] of Object.entries(value)) out[key] = expand(item, chain);
+    }
+    resolved.set(value, out);
+    return out;
   }
   return expand(index(JSON.parse(json)));
 }

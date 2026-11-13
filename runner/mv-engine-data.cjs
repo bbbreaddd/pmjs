@@ -101,6 +101,39 @@ function inspectDatabase(database) {
   return { issues, eventCodes: [...commands].sort((a, b) => a - b), routeCodes: [...routes].sort((a, b) => a - b), formulas: [...formulas].sort() };
 }
 
+const basicPluginHash = '30a0f7ab476384f14271c1e0694b45ba0069e8702d5f2f4afa64e148f340c2d6';
+
+function resolveBasicSettings(manifest, verifyPluginSource) {
+  const parseNumber = (value, fallback) => {
+    if (value === undefined || value === null || value === '') return fallback;
+    const parsed = Number(value);
+    return Number.isNaN(parsed) ? fallback : parsed;
+  };
+  let settings = { width: 816, height: 624, imageCacheBytes: 10000000, alwaysDash: false, renderingMode: 'auto' };
+  for (const plugin of manifest.plugins.filter(item => item.status)) {
+    if (plugin.name !== 'Community_Basic') throw new Error(`js/plugins.js: unsupported plugin ${plugin.name}`);
+    const file = `js/plugins/${plugin.name}.js`;
+    if (verifyPluginSource) verifyPluginSource(file, basicPluginHash);
+    const p = plugin.parameters || {};
+    const width = parseNumber(p.screenWidth, 816), height = parseNumber(p.screenHeight, 624);
+    const cacheLimit = parseNumber(p.cacheLimit, 10);
+    const renderingMode = String(p.renderingMode || 'auto').toLowerCase();
+    if (!['auto', 'webgl'].includes(renderingMode)) throw new Error(`${file}: unsupported rendering mode`);
+    const imageCacheBytes = cacheLimit * 1000000;
+    if (![width, height, imageCacheBytes].every(value => Number.isSafeInteger(value) && value > 0)) throw new Error(`${file}: invalid dimensions or cache budget`);
+    const windowWidthTo = parseNumber(p.changeWindowWidthTo, 0), windowHeightTo = parseNumber(p.changeWindowHeightTo, 0);
+    if (![windowWidthTo, windowHeightTo].every(value => Number.isSafeInteger(value) && value >= 0)) throw new Error(`${file}: invalid window dimensions`);
+    const windowWidth = windowWidthTo || (width !== 816 ? width : 0);
+    const windowHeight = windowHeightTo || (height !== 624 ? height : 0);
+    settings = {
+      width, height, imageCacheBytes, renderingMode,
+      alwaysDash: String(p.alwaysDash || '').toLowerCase() === 'on',
+      ...(windowWidth > 0 && windowHeight > 0 ? { windowWidth, windowHeight } : {}),
+    };
+  }
+  return settings;
+}
+
 function loadGame(root) {
   const identities = {};
   const read = file => {
@@ -125,18 +158,10 @@ function loadGame(root) {
     ...Object.keys(coreIdentities).map(name => `js/${name}.js`), 'js/plugins.js', 'js/main.js'];
   if (JSON.stringify(scripts) !== JSON.stringify(expectedScripts)) throw new Error('index.html: unsupported script loading order');
   const manifest = parsePluginManifest(read('js/plugins.js'), 'js/plugins.js', { literalOnly: true });
-  let settings = { width: 816, height: 624, imageCacheBytes: 10000000, alwaysDash: false };
-  for (const plugin of manifest.plugins.filter(item => item.status)) {
-    if (plugin.name !== 'Community_Basic') throw new Error(`js/plugins.js: unsupported plugin ${plugin.name}`);
-    const file = `js/plugins/${plugin.name}.js`;
+  const settings = resolveBasicSettings(manifest, (file, expected) => {
     read(file);
-    if (identities[file] !== '30a0f7ab476384f14271c1e0694b45ba0069e8702d5f2f4afa64e148f340c2d6') throw new Error(`${file}: unsupported plugin implementation`);
-    const p = plugin.parameters;
-    settings = { width: Number(p.screenWidth || 816), height: Number(p.screenHeight || 624),
-      imageCacheBytes: Number(p.cacheLimit || 10) * 1000000, alwaysDash: p.alwaysDash === 'on' };
-    if (p.renderingMode && !['auto', 'webgl'].includes(p.renderingMode.toLowerCase())) throw new Error(`${file}: unsupported rendering mode`);
-    if (![settings.width, settings.height, settings.imageCacheBytes].every(value => Number.isSafeInteger(value) && value > 0)) throw new Error(`${file}: invalid dimensions or cache budget`);
-  }
+    if (identities[file] !== expected) throw new Error(`${file}: unsupported plugin implementation`);
+  });
   const database = {};
   database.tileTables = {};
   const coreSource = fs.readFileSync(path.join(root, 'js/rpg_core.js'), 'utf8');
@@ -162,4 +187,4 @@ function loadGame(root) {
   return { database, settings, contract, identities };
 }
 
-module.exports = { loadGame, inspectDatabase };
+module.exports = { loadGame, inspectDatabase, resolveBasicSettings };

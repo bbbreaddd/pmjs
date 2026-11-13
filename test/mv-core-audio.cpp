@@ -183,6 +183,41 @@ int main() try {
   require(rejectedInvalid && session.configuration()["seVolume"].integer() == 100,
           "Session::configure rejects out-of-range volume without mutating state");
 
+  AudioManager::stopBgm(session);
+  const auto replayed = Object{{"name", "Field"}, {"volume", 80}, {"pitch", 100}, {"pan", 0}, {"pos", 1.5}};
+  AudioManager::replayBgm(session, replayed);
+  const auto& replayCmds = session.audioCommands();
+  require(replayCmds.size() >= 2 &&
+          replayCmds[replayCmds.size() - 2]["kind"].text() == "bgm" &&
+          approx(replayCmds[replayCmds.size() - 2]["sound"]["pos"].number(), 1.5) &&
+          replayCmds.back()["kind"].text() == "fade-in-bgm" &&
+          approx(replayCmds.back()["sound"].number(), 0.5),
+          "AudioManager::replayBgm starts non-current BGM at pos with 0.5s fade-in");
+
+  Value titledDb = Object{
+    {"system", Object{{"startMapId", 1}, {"startX", 1}, {"startY", 1}, {"partyMembers", Array{1}}, {"gameTitle", "Title"}}},
+    {"actors", Array{Value{}, Object{{"characterName", "Hero"}, {"characterIndex", 2}, {"faceName", "Faces"}, {"faceIndex", 3}}}},
+    {"tilesets", Array{Value{}, Object{{"flags", Array{0}}}}},
+    {"maps", Object{{"1", Object{{"width", 3}, {"height", 3}, {"tilesetId", 1}, {"data", Array(3 * 3 * 6, 0)}, {"events", Array{}}}}}}
+  };
+  Session saveSession(titledDb);
+  saveSession.newGame();
+  saveSession.setSaveMetadata(Array{
+    Value{},
+    Object{{"title", "Title"}},
+    Object{{"globalId", "RPGMV"}, {"title", "Title"}}
+  });
+  require(!pmjs::mv::DataManager::isThisGameFile(saveSession, 1, false) &&
+          pmjs::mv::DataManager::isThisGameFile(saveSession, 2, false),
+          "DataManager::isThisGameFile requires matching globalId when not in local mode");
+  auto savedHidden = saveSession.save();
+  auto& actorsData = std::get<Array>(std::get<Object>(std::get<Object>(savedHidden.data)["actors"].data)["_data"].data);
+  std::get<Object>(actorsData[1].data)["_hidden"] = true;
+  saveSession.load(savedHidden);
+  const auto saveInfo = pmjs::mv::DataManager::makeSavefileInfo(saveSession);
+  require(saveInfo["characters"].array().empty() && saveInfo["faces"].array().empty(),
+          "DataManager::makeSavefileInfo excludes hidden actors");
+
   std::cout << "native MV core audio checks passed\n";
 } catch (const std::exception& error) {
   std::cerr << error.what() << '\n';

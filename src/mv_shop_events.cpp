@@ -120,7 +120,13 @@ void Session::updateShop(bool ok, bool cancel, int direction) {
 
 bool Session::shopEventCommand(const Value& entry, Interpreter& context) {
   if (entry["code"].integer() != 302) return false;
-  if (battle_.active) return true;
+  if (battle_.active) {
+    while (context.index + 1 < static_cast<int>(context.list.size()) &&
+           context.list[context.index + 1]["code"].integer() == 605) {
+      ++context.index;
+    }
+    return true;
+  }
 
   const auto& p = entry["parameters"];
   SceneManager::pushScene(*this, Scene::shop);

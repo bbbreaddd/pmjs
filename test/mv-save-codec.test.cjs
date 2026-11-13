@@ -22,3 +22,12 @@ test('native save references target the same player object in a stock graph', ()
   assert.equal(encoded.map._interpreter._character['@r'], encoded.player['@c']);
   assert.deepEqual(decodeGraph(JSON.stringify(encoded)).map._interpreter._character, graph.player);
 });
+
+test('save codec decodes DAG shared @r references and keeps outer keys on @a wrappers', () => {
+  const dag = decodeGraph('{"@c":1,"left":{"@c":2,"name":"shared"},"right":{"@r":2}}');
+  assert.equal(dag.left, dag.right);
+  assert.equal(dag.left.name, 'shared');
+  const wrapped = decodeGraph('{"list":{"@a":[10,20],"meta":"kept"}}');
+  assert.deepEqual([...wrapped.list], [10, 20]);
+  assert.equal(wrapped.list.meta, 'kept');
+});

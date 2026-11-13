@@ -286,16 +286,33 @@ std::shared_ptr<PixelBitmap> PixelBitmap::snap(const std::function<void()>& draw
 void PixelBitmap::addLoadListener(std::function<void()> listener) { if(isReady())listener();else loadListeners.push_back(std::move(listener)); }
 void PixelBitmap::callLoadListeners() { auto pending=std::move(loadListeners);loadListeners.clear();for(auto& listener:pending)if(listener)listener(); }
 void PixelBitmap::clearRect(double x,double y,double w,double h) {
+  if(w<0){x+=w;w=-w;}if(h<0){y+=h;h=-h;}
   if(!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(w)||!std::isfinite(h))return;
-  CanvasPathPaint path;path.paths={{{x,y},{x+w,y},{x+w,y+h},{x,y+h}}};path.closed={1};path.clear=true;
-  if(!runtime(backing_?backing_->services:active).canvases().paintPath(nativeCanvas(),path))throw std::runtime_error("cannot clear bitmap rectangle");
+  const std::array<double,4> rectangle{x,y,w,h};
+  const bool integral = std::all_of(rectangle.begin(),rectangle.end(),[](double coordinate) {
+    return coordinate == std::trunc(coordinate) && coordinate >= std::numeric_limits<int>::min() && coordinate <= std::numeric_limits<int>::max();
+  });
+  auto& canvases = runtime(backing_?backing_->services:active).canvases();
+  if (integral) {
+    if(!canvases.clearRect(nativeCanvas(),int(x),int(y),int(w),int(h)))throw std::runtime_error("cannot clear bitmap rectangle");
+  } else {
+    CanvasPathPaint path;path.paths={{{x,y},{x+w,y},{x+w,y+h},{x,y+h}}};path.closed={1};path.clear=true;
+    if(!canvases.paintPath(nativeCanvas(),path))throw std::runtime_error("cannot clear bitmap rectangle");
+  }
   changed();
 }
 void PixelBitmap::clear() { runtime(backing_ ? backing_->services : active).canvases().clear(nativeCanvas());changed(); }
 void PixelBitmap::fillRect(double x,double y,double w,double h,const std::string& value) {
   if(w<0){x+=w;w=-w;}if(h<0){y+=h;h=-h;}
   if(!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(w)||!std::isfinite(h))return;
-  if(!runtime(backing_?backing_->services:active).canvases().paintRect(nativeCanvas(),{float(x),float(y),float(w),float(h)},color(value,paintOpacity),0,{},{},{}))throw std::runtime_error("cannot fill bitmap rectangle");
+  const std::array<double,4> rectangle{x,y,w,h};
+  const bool integral = std::all_of(rectangle.begin(),rectangle.end(),[](double coordinate) {
+    return coordinate == std::trunc(coordinate) && coordinate >= std::numeric_limits<int>::min() && coordinate <= std::numeric_limits<int>::max();
+  });
+  auto& canvases = runtime(backing_?backing_->services:active).canvases();
+  const bool drawn = integral ? canvases.fillRect(nativeCanvas(),int(x),int(y),int(w),int(h),color(value,paintOpacity))
+    : canvases.paintRect(nativeCanvas(),{float(x),float(y),float(w),float(h)},color(value,paintOpacity),0,{},{},{});
+  if(!drawn)throw std::runtime_error("cannot fill bitmap rectangle");
   changed();
 }
 void PixelBitmap::fillAll(const std::string& value) { fillRect(0,0,width,height,value); }

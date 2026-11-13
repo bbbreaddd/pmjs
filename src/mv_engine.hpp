@@ -88,7 +88,7 @@ struct Interpreter {
   bool running = false, battleEvent = false, waitingAction = false;
   Value::Array list;
   std::map<int, int> branches;
-  bool waitingScroll = false, waitingGather = false;
+  bool waitingScroll = false, waitingGather = false, waitingMessage = false;
   int waitingEffect = 0;
   bool waitingVideo = false;
   std::optional<int> scriptCharacter;
@@ -119,8 +119,7 @@ struct Event {
 struct Message {
   Value::Array lines, choices;
   int defaultChoice = 0, cancelChoice = -1, choiceIndent = 0;
-  int choiceTopRow = 0, choiceVisibleRows = 8;
-  bool choiceLayoutReady = false;
+  int numberVariableId = 0, numberDigits = 0, itemVariableId = 0, itemType = 0;
   int faceIndex = 0, background = 0, position = 2, choicePosition = 2, choiceBackground = 0;
   std::string faceName;
   bool busy = false, scrolling = false, scrollNoFast = false;
@@ -186,10 +185,11 @@ struct BattleVisual {
 };
 
 struct Battle {
-  bool active = false, canEscape = false, canLose = false, event = false, opening = false;
+  bool active = false, canEscape = false, canLose = false, event = false, opening = false, aborting = false;
   int troopId = 0, turn = 0, actorIndex = 0, result = -1, wait = 0;
   int actionStage = 0, currentVisual = -1, encounterEffect = 0;
-  int targetIndex = 0;
+  int targetIndex = 0, eventIndent = 0;
+  std::uint64_t eventSerial = 0;
   double escapeRatio = 0;
   Value mapBgm, mapBgs;
   std::vector<Battler> enemies;
@@ -235,10 +235,6 @@ struct Ui {
   bool targeting = false, itemAction = false, listMemoryApplied = false;
   int commandActor = -1;
   int age = 0;
-  int numberInput = 0, maxDigits = 0, variableId = 0, digitIndex = 0;
-  int numberButton = -1;
-  int numberButtonFrame = -1;
-  bool numberButtonsVisible = false, numberButtonsInitialized = false;
   int shopStatusPage = 0;
   bool shopStatusShiftHeld = false;
   int nameActorId = 0, nameMaxLength = 0, namePage = 0;
@@ -269,6 +265,9 @@ struct MapState {
 
 class Presentation;
 class Window_BattleLog;
+class Window_ChoiceList;
+class Window_NumberInput;
+class Window_EventItem;
 class Sprite_Enemy;
 
 class Session {
@@ -289,6 +288,9 @@ class Session {
   const Message& message() const { return message_; }
   const Value& database() const { return database_; }
   const Value& map() const;
+  int screenWidth() const { return screenWidth_; }
+  int screenHeight() const { return screenHeight_; }
+  void setScreenSize(int width, int height);
   bool mapSceneOnly() const { return database_["sceneContract"]["kind"].text() == "map"; }
   bool finished() const { return finished_; }
   void openTitle();
@@ -349,6 +351,7 @@ class Session {
   friend class Window_EquipSlot;
   friend class Window_EquipStatus;
   friend class Window_MenuActor;
+  friend class Window_Message;
   friend class Window_EquipItem;
   friend class Window_SkillType;
   friend class Window_ActorCommand;
@@ -404,7 +407,10 @@ class Session {
   void updateMapTouch(const Input& input);
   bool triggerDestinationAction();
   void finishBattle(int result);
+  void abortBattle();
   void leaveBattle();
+  Interpreter* findInterpreter(std::uint64_t serial);
+  void setBattleEventResult(int result);
   std::string battleMessage(const std::string& key, const std::vector<std::string>& arguments = {}) const;
   std::string partyName() const;
   bool updateMessageText(bool ok, bool cancel);
@@ -431,6 +437,8 @@ class Session {
   bool tileFlag(int x, int y, int flag) const;
   bool move(Character& character, int direction);
   void updateCharacter(Character& character, bool dash, int idlePattern = 1);
+  void locateCharacter(Character& character, double x, double y);
+  void jumpCharacter(Character& character, int xPlus, int yPlus);
   Character* routeCharacter(int id, const Interpreter& context);
   void updateRoute(Character& character);
   void startEvent(int x, int y, bool action);
@@ -500,6 +508,9 @@ class Session {
   std::map<int, Battler> actors_;
   Battle battle_;
   std::shared_ptr<Window_BattleLog> battleLog_;
+  std::shared_ptr<Window_ChoiceList> choiceWindow_;
+  std::shared_ptr<Window_NumberInput> numberWindow_;
+  std::shared_ptr<Window_EventItem> eventItemWindow_;
   std::vector<std::shared_ptr<Sprite_Enemy>> enemySprites_;
   std::function<int(const Battler&)> enemyBitmapHeightResolver_;
   void updateEnemySprites();
@@ -528,7 +539,7 @@ class Session {
   Input currentInput_;
   bool resourcesStopped_ = false;
   bool previousDebug_ = false;
-  bool previousCancel_ = false, saveRequested_ = false, loadRequested_ = false;
+  bool previousCancel_ = false, saveRequested_ = false, loadRequested_ = false, menuCalling_ = false;
   Value::Array audioCommands_;
   Value savedBgm_, savedBgs_;
   Value::Array pictures_;
@@ -555,6 +566,7 @@ class Session {
   std::uint64_t randomCalls_ = 0;
   std::uint64_t ticks_ = 0;
   std::uint64_t presentationRevision_ = 0;
+  int screenWidth_ = 816, screenHeight_ = 624;
   int mapId_ = 0;
   bool refreshNeeded_ = true, previousOk_ = false, finished_ = false;
   int okAge_ = 0;

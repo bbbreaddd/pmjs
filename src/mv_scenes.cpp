@@ -53,6 +53,7 @@ void Session::openTitle() {
 }
 void Session::openGameOver() {
   SceneManager::gotoScene(*this, Scene::gameOver);
+  startSceneFade(false, 48);
   AudioManager::stopBgm(*this);
   AudioManager::stopBgs(*this);
   AudioManager::playMe(*this, database_["system"]["gameoverMe"]);
@@ -101,14 +102,15 @@ void Session::advanceEncounterEffect() {
   const int speed = 60, duration = --battle_.encounterEffect, n = speed - duration;
   const double p = static_cast<double>(n) / speed;
   const double q = ((p - 1) * 20 * p + 5) * p + 1;
-  const double screenTilesX = database_["sceneContract"]["width"].number(816) / 48.0;
-  const double screenTilesY = database_["sceneContract"]["height"].number(624) / 48.0;
+  const double screenTilesX = screenWidth_ / 48.0;
+  const double screenTilesY = screenHeight_ / 48.0;
   const double width = map()["width"].number(), height = map()["height"].number();
   const double cameraX = savedCamera_ ? (*savedCamera_)[0] : width < screenTilesX ? (width - screenTilesX) / 2 : std::clamp(player_.realX - (screenTilesX - 1) / 2, 0.0, width - screenTilesX);
   const double cameraY = savedCamera_ ? (*savedCamera_)[1] : height < screenTilesY ? (height - screenTilesY) / 2 : std::clamp(player_.realY - (screenTilesY - 1) / 2, 0.0, height - screenTilesY);
   const double jumpHeight = player_.jumpCount > 0 ? (player_.jumpPeak * player_.jumpPeak - std::pow(std::abs(player_.jumpCount - player_.jumpPeak), 2)) / 2.0 : 0;
+  const double shiftY = player_.characterName.find('!') < 2 ? 0.0 : 6.0;
   const double zoomX = std::floor(deltaMapX(player_.realX, cameraX) * 48 + 24 + 0.5);
-  const double zoomY = std::floor((deltaMapY(player_.realY, cameraY) * 48 + 18 - jumpHeight) + 0.5);
+  const double zoomY = std::floor((deltaMapY(player_.realY, cameraY) * 48 + 24 - shiftY - jumpHeight) + 0.5);
   if (n == 2) {
     state["_zoomX"] = zoomX; state["_zoomY"] = zoomY; state["_zoomScale"] = 1.0;
     state["_flashColor"] = Value::Array{255.0, 255.0, 255.0, 255.0}; state["_flashDuration"] = speed / 2;
@@ -148,16 +150,36 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
     bool hit = false;
     for (auto target = uiHitTargets_.rbegin(); target != uiHitTargets_.rend(); ++target) {
       if (target->scene != ui_.scene || target->category != ui_.category || x < target->x || y < target->y || x >= target->x+target->width || y >= target->y+target->height) continue;
-      if (message_.busy && ui_.maxDigits > 0 && target->action >= 8 && target->action <= 10) { hit = true; break; }
+      if (message_.busy && numberWindow_ && numberWindow_->active) {
+        if (!numberWindow_->isOpenAndActive()) { hit = true; break; }
+        if (!target->action) numberWindow_->select(target->index);
+        hit = true; break;
+      }
+      if (message_.busy && choiceWindow_ && choiceWindow_->active) {
+        if (choiceWindow_->isOpenAndActive()) {
+          const bool same = choiceWindow_->index == target->index;
+          choiceWindow_->select(target->index);
+          if (!same) sound(0);
+          if (same && inputState.touchTriggered) ok = true;
+        }
+        hit = true; break;
+      }
+      if (message_.busy && eventItemWindow_ && eventItemWindow_->active) {
+        if (eventItemWindow_->isOpenAndActive()) {
+          const bool same = eventItemWindow_->index == target->index;
+          eventItemWindow_->select(target->index);
+          if (!same) sound(0);
+          if (same && inputState.touchTriggered) ok = true;
+        }
+        hit = true; break;
+      }
       if (target->action && inputState.touchTriggered) {
         if (target->action == 1) ok = true;
-        else if (target->action == 2 || target->action == 3) { ui_.digitIndex = target->index; direction = target->action == 2 ? 8 : 2; }
         else direction = target->action == 4 ? 6 : target->action == 5 ? 4 : target->action == 6 ? 8 : 2;
-      } else if (message_.busy && ui_.maxDigits > 0) ui_.digitIndex = target->index;
-      else { const bool same = ui_.cursor == target->index; ui_.cursor = target->index; if (!same) sound(0); if (same && inputState.touchTriggered) ok = true; }
+      } else { const bool same = ui_.cursor == target->index; ui_.cursor = target->index; if (!same) sound(0); if (same && inputState.touchTriggered) ok = true; }
       hit = true; break;
     }
-    if (!hit && message_.busy && message_.choices.empty() && ui_.maxDigits == 0 && ui_.variableId == 0 && inputState.touchTriggered) ok = true;
+    if (!hit && message_.busy && message_.choices.empty() && message_.numberDigits == 0 && message_.itemVariableId == 0 && inputState.touchTriggered) ok = true;
   }
   touchHoldFrames_ = inputState.touchPressed ? touchHoldFrames_+1 : 0;
   if (touchHoldFrames_ >= 10 && touchHoldFrames_%6 == 0 && inputState.touchX && inputState.touchY && ui_.category != 0 &&
@@ -176,92 +198,22 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
     if (direction == 8 || direction == 4) { ui_.cursor = (ui_.cursor + count - 1) % count; sound(0); }
   };
   auto enter = [&](Scene scene) { SceneManager::gotoScene(*this, scene); sound(1); };
+  auto push = [&](Scene scene) { SceneManager::pushScene(*this, scene); sound(1); };
+  auto leaveMenuSubScene = [&] { if (SceneManager::hasPrevious(*this)) SceneManager::popScene(*this); else SceneManager::gotoScene(*this, Scene::menu); sound(2); };
   auto leaveEventScene = [&] { if (SceneManager::hasPrevious(*this)) SceneManager::popScene(*this); else SceneManager::gotoScene(*this, Scene::map); };
   if (message_.busy) {
     if (message_.scrolling) {
-      message_.scrollY += message_.scrollSpeed * (!message_.scrollNoFast && (inputState.ok || inputState.cancel || inputState.touchPressed) ? 3 : 1);
-      if (message_.scrollY >= static_cast<double>(message_.lines.size()*36)) { message_ = {}; messageAge_ = 0; }
+      if (Window_ScrollText::updateMessage(message_,inputState)) { message_ = {}; messageAge_ = 0; }
       return;
     }
     const bool messageOk = inputState.okRepeated.value_or(ok) || inputState.touchRepeated;
     const bool messageCancel = inputState.cancelRepeated.value_or(cancel);
     if (updateMessageText(messageOk,messageCancel)) return;
-    if (ui_.maxDigits > 0) {
-      if (!ui_.numberButtonsInitialized) {
-        ui_.numberButtonsVisible = inputState.touchDate > inputState.inputDate;
-        ui_.numberButtonsInitialized = true;
-        ui_.numberButton = -1;
-      }
-      ui_.numberButtonFrame = ui_.numberButton;
-      if (ui_.numberButtonsVisible && inputState.touchX && inputState.touchY) {
-        int touching = -1;
-        for (int index = 0; index < 3; ++index) {
-          const auto target = std::find_if(uiHitTargets_.rbegin(),uiHitTargets_.rend(),[&](const auto& target) {
-            return target.scene == ui_.scene && target.category == ui_.category && target.action == 8+index;
-          });
-          if (target == uiHitTargets_.rend()) continue;
-          Sprite_Button button;
-          const auto cold = Window_NumberInput::buttonFrame(index,false), hot = Window_NumberInput::buttonFrame(index,true);
-          button.setColdFrame(cold.x,cold.y,cold.width,cold.height);
-          button.setHotFrame(hot.x,hot.y,hot.width,hot.height);
-          button.position = {static_cast<float>(target->x),static_cast<float>(target->y)};
-          button.touching = ui_.numberButton == index;
-          const bool clicked = button.updateTouch(inputState.touchTriggered,inputState.touchReleased,*inputState.touchX,*inputState.touchY);
-          if (button.touching) touching = index;
-          if (clicked) {
-            if (index == 2) ok = true;
-            else { ui_.numberInput = Window_NumberInput::changeDigit(ui_.numberInput,ui_.maxDigits,ui_.digitIndex,index == 1); sound(0); }
-          }
-        }
-        ui_.numberButton = touching;
-      } else if (!ui_.numberButtonsVisible) ui_.numberButton = -1;
-      if (ok) {
-        operateVariable(ui_.variableId, 0, ui_.numberInput); ui_.maxDigits = 0;
-        ui_.numberButton = ui_.numberButtonFrame = -1;
-        ui_.numberButtonsVisible = ui_.numberButtonsInitialized = false;
-        message_ = {}; sound(1); return;
-      }
-      if (direction == 6 || direction == 4) { ui_.digitIndex = (ui_.digitIndex + ui_.maxDigits + (direction == 6 ? 1 : -1)) % ui_.maxDigits; sound(0); }
-      if (direction == 8 || direction == 2) {
-        ui_.numberInput = Window_NumberInput::changeDigit(ui_.numberInput, ui_.maxDigits, ui_.digitIndex, direction == 8); sound(0);
-      }
-      return;
-    }
-    if (ui_.variableId > 0 && ui_.category > 0) {
-      const auto items = Window_EventItem::makeItemList(*this, ui_.category);
-      const int oldCursor = ui_.cursor;
-      if (direction) Window_Selectable::moveCursor(ui_.cursor, ui_.listTopRow, static_cast<int>(items.size()), 2, 4, direction, directionAge_ == 0);
-      ui_.listTopRow = Window_Selectable::wheelTopRow(ui_.listTopRow, static_cast<int>(items.size()), 2, 4, inputState.wheelY);
-      if (oldCursor != ui_.cursor) sound(0);
-      if (ok && !items.empty()) {
-        operateVariable(ui_.variableId, 0, items[ui_.cursor]);
-        ui_.variableId = 0; ui_.category = 0; message_.busy = false; message_ = {}; sound(1);
-      } else if (cancel || (ok && items.empty())) {
-        operateVariable(ui_.variableId, 0, 0);
-        ui_.variableId = 0; ui_.category = 0; message_.busy = false; message_ = {}; sound(2);
-      }
-      return;
-    }
-    if (message_.choices.empty() || message_.pageEnd() < static_cast<int>(message_.lines.size())) { if (messageOk || messageCancel) acknowledge(); }
-    else {
-      const int count = static_cast<int>(message_.choices.size()), previous = ui_.cursor;
-      if (!message_.choiceLayoutReady) {
-        const int screenHeight = database_["sceneContract"]["height"].integer(624);
-        const Rect bounds{0,message_.position*(screenHeight-180)/2,0,180};
-        message_.choiceVisibleRows = Window_ChoiceList::visibleRows(count,bounds,screenHeight);
-        message_.choiceTopRow = Window_Selectable::visibleTopRow(ui_.cursor,0,count,1,message_.choiceVisibleRows);
-        message_.choiceLayoutReady = true;
-      }
-      if (direction) Window_Selectable::moveCursor(ui_.cursor,message_.choiceTopRow,count,1,message_.choiceVisibleRows,direction,directionAge_ == 0);
-      if (pageUp || pageDown) Window_Selectable::pageCursor(ui_.cursor,message_.choiceTopRow,count,1,message_.choiceVisibleRows,pageDown);
-      message_.choiceTopRow = Window_Selectable::wheelTopRow(message_.choiceTopRow,count,1,message_.choiceVisibleRows,inputState.wheelY);
-      if (previous != ui_.cursor) sound(0);
-      if (ok && (ui_.cursor < 0 || ui_.cursor >= count)) sound(3);
-      else if (ok) { acknowledge(ui_.cursor); sound(1); ui_.cursor = 0; }
-      else if ((messageCancel || inputState.touchCancelled) && message_.cancelChoice != -1) { acknowledge(-2); sound(2); ui_.cursor = 0; }
-    }
+    if (Window_Message::updateInput(*this,inputState,ok,cancel,direction,pageUp,pageDown)) return;
+    if (messageOk || messageCancel) acknowledge();
     return;
   }
+
   if (ui_.scene == Scene::title) {
     if (newGamePending_) return;
     if (ui_.age < 32) return;
@@ -273,27 +225,38 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
     lastTitleCommand_ = selected;
     if (commands[selected].symbol == "newGame") {
       sound(1);
-      AudioManager::fadeOutBgm(*this,48 / 60.0);
-      AudioManager::fadeOutBgs(*this,48 / 60.0);
-      AudioManager::fadeOutMe(*this,48 / 60.0);
-      startSceneFade(true,48); newGamePending_ = true; titleWindowOpenness_ = 255;
+      AudioManager::fadeOutBgm(*this, 48 / 60.0);
+      AudioManager::fadeOutBgs(*this, 48 / 60.0);
+      AudioManager::fadeOutMe(*this, 48 / 60.0);
+      startSceneFade(true, 48);
+      newGamePending_ = true;
+      titleWindowOpenness_ = 255;
     }
     else if (commands[selected].symbol == "continue") {
       if (!DataManager::isAnySavefileExists(*this)) sound(3);
-      else { enter(Scene::load); ui_.cursor = std::max(0, DataManager::latestSavefileId(*this) - 1); }
+      else { push(Scene::load); ui_.cursor = std::max(0, DataManager::latestSavefileId(*this) - 1); }
     }
-    else { enter(Scene::options); ui_.slot = 1; }
+    else { push(Scene::options); ui_.slot = 1; }
     return;
   }
-  if (ui_.scene == Scene::gameOver) { if (ok || cancel) openTitle(); return; }
+  if (ui_.scene == Scene::gameOver) {
+    if (sceneFadeDuration_ <= 0 && (ok || inputState.touchTriggered)) openTitle();
+    return;
+  }
   if (ui_.scene == Scene::map) {
     if (debugTriggered && !interpreter_.running) { SceneManager::pushScene(*this,Scene::debug); return; }
-    if (cancel && system_.menuEnabled && !interpreter_.running && !player_.moving()) {
-      if (mapSceneOnly()) {
-        message_ = {}; message_.busy = true; messageAge_ = 0;
-        message_.lines = database_["sceneContract"]["menuNotice"].array();
-        if (message_.lines.empty()) throw std::runtime_error("menus are outside the map-scene contract");
-      } else enter(Scene::menu);
+    if (!system_.menuEnabled || interpreter_.running) {
+      menuCalling_ = false;
+    } else {
+      if (cancel) menuCalling_ = true;
+      if (menuCalling_ && !player_.moving()) {
+        menuCalling_ = false;
+        if (mapSceneOnly()) {
+          message_ = {}; message_.busy = true; messageAge_ = 0;
+          message_.lines = database_["sceneContract"]["menuNotice"].array();
+          if (message_.lines.empty()) throw std::runtime_error("menus are outside the map-scene contract");
+        } else enter(Scene::menu);
+      }
     }
     return;
   }
@@ -305,7 +268,7 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
     if (pageDown || pageUp) Window_Selectable::pageCursor(ui_.cursor,ui_.listTopRow,count,1,rows,pageDown);
     ui_.listTopRow = Window_Selectable::wheelTopRow(ui_.listTopRow,count,1,rows,inputState.wheelY);
     if (previous != ui_.cursor) sound(0);
-    if (cancel) { if (SceneManager::hasPrevious(*this)) { SceneManager::popScene(*this); sound(2); } else if (ui_.scene == Scene::load) openTitle(); else enter(Scene::menu); }
+    if (cancel) { if (SceneManager::hasPrevious(*this)) { SceneManager::popScene(*this); sound(2); } else if (ui_.scene == Scene::load) { openTitle(); sound(2); } else { SceneManager::gotoScene(*this, Scene::menu); sound(2); } }
     else if (ok) {
       if (!Window_SavefileList::isEnabled(*this,ui_.cursor+1,ui_.scene == Scene::load)) sound(3);
       else { saveRequested_ = ui_.scene == Scene::save; loadRequested_ = ui_.scene == Scene::load; }
@@ -318,7 +281,11 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
     if (ok || direction == 4 || direction == 6) {
       if (ui_.cursor >= 0 && ui_.cursor < static_cast<int>(commands.size()) && Window_Options::processInput(commands[ui_.cursor].symbol, direction, ok, *this)) sound(0);
     }
-    if (cancel) { const bool title = ui_.slot == 1; if (title) openTitle(); else enter(Scene::menu); }
+    if (cancel) {
+      if (SceneManager::hasPrevious(*this)) { SceneManager::popScene(*this); sound(2); }
+      else if (ui_.slot == 1) { openTitle(); sound(2); }
+      else leaveMenuSubScene();
+    }
     return;
   }
   if (ui_.scene == Scene::menu) {
@@ -333,20 +300,20 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
       else if (ok && !party_.empty()) {
         const int actor = ui_.cursor;
         const auto& command = commands.at(ui_.pendingId).symbol;
-        enter(command == "skill" ? Scene::skill : command == "equip" ? Scene::equip : Scene::status); ui_.actor = actor; menuActorId_ = party_[actor];
+        push(command == "skill" ? Scene::skill : command == "equip" ? Scene::equip : Scene::status); ui_.actor = actor; menuActorId_ = party_[actor];
       }
       return;
     }
     if (ui_.category == 1) {
       const auto endCommands = Window_GameEnd::makeCommands(*this);
       cursor(static_cast<int>(endCommands.size()));
-      if (cancel || (ok && endCommands[ui_.cursor].symbol == "cancel")) { ui_.category = 0; ui_.cursor = ui_.commandCursor; }
-      else if (ok) openTitle();
+      if (cancel || (ok && endCommands[ui_.cursor].symbol == "cancel")) { ui_.category = 0; ui_.cursor = ui_.commandCursor; sound(2); }
+      else if (ok) { sound(1); AudioManager::fadeOutBgm(*this, 24 / 60.0); AudioManager::fadeOutBgs(*this, 24 / 60.0); AudioManager::fadeOutMe(*this, 24 / 60.0); openTitle(); }
       return;
     }
     ui_.cursor = std::clamp(ui_.cursor, 0, static_cast<int>(commands.size()) - 1);
     cursor(static_cast<int>(commands.size()));
-    if (cancel) { enter(Scene::map); return; }
+    if (cancel) { SceneManager::gotoScene(*this, Scene::map); sound(2); return; }
     if (!ok) return;
     const auto& selected = commands[ui_.cursor];
     if (!selected.enabled) { sound(3); return; }
@@ -356,25 +323,32 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
       ui_.menuStatusTopRow = Window_Selectable::visibleTopRow(ui_.cursor,0,static_cast<int>(party_.size()),1,4);
       sound(1); return;
     }
-    if (selected.symbol == "item") enter(Scene::item);
-    else if (selected.symbol == "formation") enter(Scene::formation);
-    else if (selected.symbol == "options") enter(Scene::options);
-    else if (selected.symbol == "save") { enter(Scene::save); ui_.cursor = std::max(0, DataManager::lastAccessedSavefileId(*this) - 1); }
-    else if (selected.symbol == "gameEnd") { ui_.commandCursor = ui_.cursor; ui_.category = 1; ui_.cursor = 0; }
+    if (selected.symbol == "item") push(Scene::item);
+    else if (selected.symbol == "formation") push(Scene::formation);
+    else if (selected.symbol == "options") push(Scene::options);
+    else if (selected.symbol == "save") { push(Scene::save); ui_.cursor = std::max(0, DataManager::lastAccessedSavefileId(*this) - 1); }
+    else if (selected.symbol == "gameEnd") { ui_.commandCursor = ui_.cursor; ui_.category = 1; ui_.cursor = 0; sound(1); }
     return;
   }
-  if ((pageUp || pageDown) && !party_.empty() && ((ui_.scene == Scene::skill && ui_.category == 0 && !ui_.targeting) || (ui_.scene == Scene::equip && ui_.category != 2))) {
+  if ((pageUp || pageDown) && !party_.empty() && ((ui_.scene == Scene::skill && ui_.category == 0 && !ui_.targeting) || (ui_.scene == Scene::equip && ui_.category != 2) || ui_.scene == Scene::status)) {
     ui_.actor = (ui_.actor+static_cast<int>(party_.size())+(pageDown ? 1 : -1))%static_cast<int>(party_.size());
     menuActorId_ = party_[ui_.actor]; ui_.category = 0; ui_.cursor = 0; ui_.skillTypeTopRow = 0; ui_.targeting = false; ui_.listMemoryApplied = false; sound(0); return;
   }
   if (ui_.scene == Scene::status) {
-    if (cancel || ok) enter(Scene::menu);
+    if (cancel) leaveMenuSubScene();
     return;
   }
   if (ui_.scene == Scene::formation) {
-    cursor(static_cast<int>(party_.size()));
-    if (cancel) { if (ui_.target >= 0) ui_.target = -1; else enter(Scene::menu); }
-    else if (ok) {
+    const int count = static_cast<int>(party_.size()), previous = ui_.cursor;
+    ui_.cursor = std::clamp(ui_.cursor, 0, std::max(0, count - 1));
+    if (direction) Window_Selectable::moveCursor(ui_.cursor, ui_.menuStatusTopRow, count, 1, 4, direction, directionAge_ == 0);
+    if (pageDown || pageUp) Window_Selectable::pageCursor(ui_.cursor, ui_.menuStatusTopRow, count, 1, 4, pageDown);
+    ui_.menuStatusTopRow = Window_Selectable::wheelTopRow(ui_.menuStatusTopRow, count, 1, 4, inputState.wheelY);
+    if (previous != ui_.cursor) sound(0);
+    if (cancel) { if (ui_.target >= 0) { ui_.target = -1; sound(2); } else leaveMenuSubScene(); }
+    else if (ok && !party_.empty()) {
+      if (!system_.formationEnabled) { sound(3); return; }
+      sound(1);
       if (ui_.target < 0) ui_.target = ui_.cursor;
       else { std::swap(party_[ui_.target], party_[ui_.cursor]); ui_.target = -1; updatePlayerGraphic(); }
     }
@@ -473,7 +447,7 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
       const int previous = ui_.cursor;
       Window_Selectable::moveCursor(ui_.cursor,topRow,static_cast<int>(commands.size()),3,1,direction,directionAge_ == 0);
       if (previous != ui_.cursor) sound(0);
-      if (cancel) enter(Scene::menu);
+      if (cancel) leaveMenuSubScene();
       else if (ok) {
         const auto& command = commands.at(ui_.cursor).symbol;
         if (command == "equip") { ui_.commandCursor = ui_.cursor; ui_.category = 1; ui_.cursor = 0; }
@@ -524,7 +498,7 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
     if (direction) Window_Selectable::moveCursor(ui_.cursor,top,count,4,1,direction,directionAge_ == 0);
     if (previous != ui_.cursor) sound(0);
     ui_.slot = ui_.cursor;
-    if (cancel) enter(Scene::menu);
+    if (cancel) leaveMenuSubScene();
     else if (ok) { ui_.slot = ui_.cursor; ui_.category = 1; ui_.cursor = 0; ui_.listMemoryApplied = false; sound(1); }
     return;
   }
@@ -542,7 +516,7 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
     ui_.skillTypeTopRow = Window_Selectable::wheelTopRow(ui_.skillTypeTopRow,static_cast<int>(types.size()),1,4,inputState.wheelY);
     if (previous != ui_.cursor) sound(0);
     if (!types.empty()) ui_.skillType = types[ui_.cursor].ext;
-    if (cancel) enter(Scene::menu);
+    if (cancel) leaveMenuSubScene();
     else if (ok && !types.empty()) { ui_.skillType = types[ui_.cursor].ext; ui_.commandCursor = ui_.cursor; ui_.category = 1; ui_.cursor = 0; ui_.listMemoryApplied = false; sound(1); }
     return;
   }
@@ -571,7 +545,7 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
       ui_.menuActorTopRow = Window_Selectable::wheelTopRow(ui_.menuActorTopRow,count,1,4,inputState.wheelY);
       if (previous != ui_.cursor) sound(0);
     }
-    if (cancel) { ui_.targeting = false; ui_.category = inBattle ? ui_.target : ui_.category; ui_.cursor = !inBattle || ui_.target != 0 ? ui_.listCursor : 0; }
+    if (cancel) { ui_.targeting = false; ui_.category = inBattle ? ui_.target : ui_.category; ui_.cursor = !inBattle || ui_.target != 0 ? ui_.listCursor : 0; sound(2); }
     else if (ok) {
       if (inBattle) {
         if (targets.empty()) { sound(3); return; }
@@ -585,7 +559,7 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
         if (reservedCommonEvent_ > 0) { SceneManager::clearStack(*this); SceneManager::gotoScene(*this, Scene::map); return; }
         if (!party_.empty() && std::all_of(party_.begin(), party_.end(), [&](int id) { return actors_.at(id).hp <= 0; })) { openGameOver(); return; }
       }
-      ui_.targeting = false; if (inBattle) ui_.category = 0; ui_.cursor = 0;
+      if (inBattle) { ui_.targeting = false; ui_.category = 0; ui_.cursor = 0; }
     }
     return;
   }
@@ -613,7 +587,7 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
     if (pageUp) Window_Selectable::pageCursor(ui_.cursor, ui_.listTopRow, count, 2, ui_.listPageRows, false);
     ui_.listTopRow = Window_Selectable::wheelTopRow(ui_.listTopRow, count, 2, ui_.listPageRows, inputState.wheelY);
     if (previous != ui_.cursor) sound(0);
-    if (cancel) { if (inBattle) { ui_.category = 0; ui_.cursor = ui_.commandCursor; } else if (ui_.scene == Scene::item) { ui_.category = 0; ui_.cursor = ui_.slot; sound(2); } else if (ui_.scene == Scene::skill) { ui_.category = 0; ui_.cursor = ui_.commandCursor; sound(2); } else enter(Scene::menu); }
+    if (cancel) { if (inBattle) { ui_.category = 0; ui_.cursor = ui_.commandCursor; sound(2); } else if (ui_.scene == Scene::item) { ui_.category = 0; ui_.cursor = ui_.slot; sound(2); } else if (ui_.scene == Scene::skill) { ui_.category = 0; ui_.cursor = ui_.commandCursor; sound(2); } else leaveMenuSubScene(); }
     else if (ok && !entries.empty()) {
       if (!skill && entries[ui_.cursor] >= 100000) { sound(3); return; }
       const auto& entry = database_[skill ? "skills" : "items"][entries[ui_.cursor]];
@@ -626,7 +600,6 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
       const int scope = entry["scope"].integer();
       if (!inBattle && scope <= 6) {
         if (!useItemUntargeted(ui_.pendingId, !ui_.itemAction)) { sound(3); return; }
-        ui_.cursor = 0;
         if (reservedCommonEvent_ > 0) { SceneManager::clearStack(*this); SceneManager::gotoScene(*this, Scene::map); return; }
         if (!party_.empty() && std::all_of(party_.begin(), party_.end(), [&](int id) { return actors_.at(id).hp <= 0; })) { openGameOver(); return; }
       } else if (inBattle && scope != 1 && scope != 7 && scope != 9) {

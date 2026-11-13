@@ -1,4 +1,5 @@
 #include "mv_engine.hpp"
+#include "mv_core_types.hpp"
 #include "mv_battle_extra.hpp"
 #include "mv_managers.hpp"
 #include "mv_windows.hpp"
@@ -11,7 +12,7 @@
 namespace pmjs::mv {
 namespace {
 int enemyEventInt(double value, int minimum, int maximum) {
-  if (std::isnan(value)) throw std::runtime_error("non-numeric enemy event operand");
+  if (std::isnan(value)) return 0;
   return static_cast<int>(std::clamp(value, static_cast<double>(minimum), static_cast<double>(maximum)));
 }
 }
@@ -19,16 +20,7 @@ int enemyEventInt(double value, int minimum, int maximum) {
 bool Session::enemyEventCommand(const Value& entry) {
   const int code = entry["code"].integer();
   if (code == 340) {
-    if (!battle_.active) return true;
-    SoundManager::playEscape(*this);
-    battle_.result = 1; battle_.active = false; battle_.wait = 0;
-    battle_.actions.clear(); battle_.log.clear(); message_ = {};
-    ++system_.escapeCount;
-    savedBgm_ = battle_.mapBgm; savedBgs_ = battle_.mapBgs;
-    audio("battle-restore-bgm", {}); audio("battle-restore-bgs", {});
-    if (battle_.event && interpreter_.index > 0 && interpreter_.index <= static_cast<int>(interpreter_.list.size()))
-      interpreter_.branches[interpreter_.list[interpreter_.index - 1]["indent"].integer()] = 1;
-    leaveBattle();
+    if (battle_.active) battle_.aborting = true;
     return true;
   }
   if (code == 339) {
@@ -37,9 +29,13 @@ bool Session::enemyEventCommand(const Value& entry) {
       if (p[1].integer() < 0) for (std::size_t index = 0; index < battle_.enemies.size(); ++index)
         forceBattleAction(true, static_cast<int>(index), p[2].integer(), p[3].integer());
       else forceBattleAction(true, p[1].integer(), p[2].integer(), p[3].integer());
+    } else if (p[1].integer() == 0) {
+      for (std::size_t index = 0; index < battleMemberCount(); ++index)
+        forceBattleAction(false, static_cast<int>(index), p[2].integer(), p[3].integer());
     } else {
-      const auto actor = std::find(party_.begin(), party_.end(), p[1].integer());
-      if (actor != party_.end()) forceBattleAction(false, static_cast<int>(actor - party_.begin()), p[2].integer(), p[3].integer());
+      const auto end = party_.begin() + static_cast<std::ptrdiff_t>(battleMemberCount());
+      const auto actor = std::find(party_.begin(), end, p[1].integer());
+      if (actor != end) forceBattleAction(false, static_cast<int>(actor - party_.begin()), p[2].integer(), p[3].integer());
     }
     return true;
   }
@@ -48,8 +44,8 @@ bool Session::enemyEventCommand(const Value& entry) {
   double amount = 0;
   if (code == 331 || code == 332 || code == 342) {
     const auto& operand = p[2].integer() ? variable(p[3].integer()) : p[3];
-    if (!std::holds_alternative<double>(operand.data)) throw std::runtime_error("non-numeric enemy event operand");
-    amount = operand.number() * (p[1].integer() ? -1 : 1);
+    const double numeric = core::numberValue(operand);
+    amount = (std::isnan(numeric) ? 0.0 : numeric) * (p[1].integer() ? -1 : 1);
   }
   for (std::size_t index = 0; index < battle_.enemies.size(); ++index) {
     if (p[0].integer() >= 0 && p[0].integer() != static_cast<int>(index)) continue;
@@ -82,11 +78,12 @@ bool Session::enemyEventCommand(const Value& entry) {
       case 334: recover(enemy); break;
       case 335: enemy.hidden = false; BattleMechanics::makeUniqueNames(battle_.enemies, battle_.nameCounts, database_["system"]["locale"].text().starts_with("ja") || database_["system"]["locale"].text().starts_with("zh") || database_["system"]["locale"].text().starts_with("ko")); break;
       case 336:
-        if (database_["enemies"][p[1].integer()].null()) throw std::invalid_argument("unknown enemy transform target");
+        if (database_["enemies"][p[1].integer()].null()) break;
         enemy.id = p[1].integer();
         if (enemy.originalName != database_["enemies"][enemy.id]["name"].text()) { enemy.letter.clear(); enemy.plural = false; }
         enemy.originalName = database_["enemies"][enemy.id]["name"].text(); refreshBattler(enemy);
         for (auto& action : battle_.actions) if (action.enemy && action.subject == static_cast<int>(index)) action.id = selectEnemySkill(enemy);
+        battle_.actions.erase(std::remove_if(battle_.actions.begin(), battle_.actions.end(), [&](const Action& action) { return action.enemy && action.subject == static_cast<int>(index) && action.id == 0; }), battle_.actions.end());
         BattleMechanics::makeUniqueNames(battle_.enemies, battle_.nameCounts, database_["system"]["locale"].text().starts_with("ja") || database_["system"]["locale"].text().starts_with("zh") || database_["system"]["locale"].text().starts_with("ko")); break;
     }
   }
