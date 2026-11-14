@@ -12,6 +12,19 @@ void Session::dispatchGameDataMutation(const std::string& kind, const std::strin
     invokeGameDataBase(kind, method, arguments);
 }
 Value Session::invokeGameDataBase(const std::string& kind, const std::string& method, const Value::Array& arguments) {
+  if (kind=="timer") {
+    if (method=="frames") { if (!arguments.empty()) timerFrames_=arguments[0].integer(); return timerFrames_; }
+    if (method=="working") { if (!arguments.empty()) timerWorking_=arguments[0].boolean(); return timerWorking_; }
+    if (method=="seconds") return static_cast<int>(std::floor(timerFrames_/60.0));
+    if (method=="isWorking") return timerWorking_;
+    if (method=="initialize") { timerFrames_=0; timerWorking_=false; }
+    else if (method=="start") { timerFrames_=arguments.at(0).integer(); timerWorking_=true; }
+    else if (method=="stop") timerWorking_=false;
+    else if (method=="update") { if ((arguments.empty() || arguments[0].boolean()) && timerWorking_ && timerFrames_>0 && --timerFrames_==0) dispatchGameDataMutation("timer","onExpire",{}); }
+    else if (method=="onExpire") { if (battle_.active) { battle_.aborting=true; if (!battle_.interpreter.running && !message_.busy) abortBattle(); } }
+    else throw std::invalid_argument("timer operation is not bound: "+method);
+    return Value::undefined();
+  }
   if (kind == "screen") return invokeScreenBase(method, arguments);
   if (kind == "map" && method == "invalidateTileShadows") { if (!arguments.empty()) runtimeTileShadows_ = arguments[0].boolean(); ++presentationRevision_; return Value::undefined(); }
   if (kind == "map" && method == "cameraNormal") {
@@ -21,9 +34,23 @@ Value Session::invokeGameDataBase(const std::string& kind, const std::string& me
     }
     return !cameraTarget_;
   }
+  if (kind == "map") {
+    if (method == "tileWidth") return tileWidth();
+    if (method == "tileHeight") return tileHeight();
+    if (method == "width" || method == "height" || method == "displayName" || method == "encounterStep") return map()[method];
+    if (method == "isLoopHorizontal") return loopHorizontal();
+    if (method == "isLoopVertical") return loopVertical();
+    if (method == "isEventRunning") return interpreter_.running;
+    if (method == "eventIds") { Value::Array ids; for (const auto& event : events_) ids.emplace_back(event.id); return ids; }
+    if (method == "displayX") return mapState_.lastDisplayX;
+    if (method == "displayY") return mapState_.lastDisplayY;
+    if (method == "refreshIfNeeded") { refreshIfNeeded(); return Value::undefined(); }
+    throw std::invalid_argument("map operation is not bound: " + method);
+  }
   if (kind == "system") {
     if (method == "isSideView") return database_["system"]["optSideView"].boolean();
     if (method == "initialize") { system_ = {}; return Value::undefined(); }
+    if (method == "playtime") return static_cast<int>(ticks_ / 60);
     bool* flag = nullptr; int* count = nullptr;
     if (method == "saveEnabled") flag = &system_.saveEnabled;
     else if (method == "menuEnabled") flag = &system_.menuEnabled;
@@ -33,6 +60,7 @@ Value Session::invokeGameDataBase(const std::string& kind, const std::string& me
     else if (method == "winCount") count = &system_.winCount;
     else if (method == "escapeCount") count = &system_.escapeCount;
     else if (method == "saveCount") count = &system_.saveCount;
+    else if (method == "versionId") count = &system_.versionId;
     if (flag) { if (!arguments.empty()) *flag = arguments[0].boolean(); return *flag; }
     if (count) { if (!arguments.empty()) *count = arguments[0].integer(); return *count; }
     throw std::invalid_argument("system operation is not bound: " + method);
@@ -55,11 +83,46 @@ Value Session::invokeGameDataBase(const std::string& kind, const std::string& me
       battle_.wait == 0 && battle_.actionStage == 0 && !battle_.forcedExecuting &&
       battle_.actorIndex < static_cast<int>(battleMemberCount());
   }
+  if (kind == "battle") {
+    if (method == "enemyCount") return static_cast<int>(battle_.enemies.size());
+    if (method == "troopId") return battle_.troopId;
+    if (method == "turnCount") return battle_.turn;
+    if (method == "isEventRunning") return battle_.interpreter.running;
+    if (method == "canEscape") return battle_.canEscape;
+    if (method == "canLose") return battle_.canLose;
+    if (method == "isAborting") return battle_.aborting;
+    if (method == "isTurnEnd") return battle_.turnEnding;
+    if (method == "actorId") return battle_.active && battle_.actorIndex >= 0 && battle_.actorIndex < static_cast<int>(battleMemberCount()) ? party_[battle_.actorIndex] : 0;
+    throw std::invalid_argument("battle operation is not bound: " + method);
+  }
   if (kind == "party") {
     if (method == "initialize") { inventory_.clear(); party_.clear(); gold_ = 0; steps_ = 0; return Value::undefined(); }
     if (method == "members") { Value::Array ids; for (int id : partyMembers()) ids.emplace_back(id); return ids; }
     if (method == "gold") return gold_;
     if (method == "inBattle") return battle_.active;
+    if (method == "allMembers") { Value::Array ids; for (int id : party_) ids.emplace_back(id); return ids; }
+    if (method == "steps") return steps_;
+    if (method == "increaseSteps") { ++steps_; return Value::undefined(); }
+    if (method == "goldValue") { if (!arguments.empty()) gold_ = arguments[0].integer(); return gold_; }
+    if (method == "menuActorId" || method == "targetActorId") {
+      auto& id = method == "menuActorId" ? menuActorId_ : targetActorId_;
+      if (!arguments.empty()) id = arguments[0].integer();
+      return id;
+    }
+    if (method == "addActor" || method == "removeActor") {
+      const int id = arguments.at(0).integer();
+      const auto found = std::find(party_.begin(), party_.end(), id);
+      if (method == "addActor" && found == party_.end() && !database_["actors"][id].null()) {
+        runtimeActor(id); party_.push_back(id);
+      } else if (method == "removeActor" && found != party_.end()) party_.erase(found);
+      updatePlayerGraphic(); refreshNeeded_ = true; return Value::undefined();
+    }
+    if (method == "swapOrder") {
+      const int first = arguments.at(0).integer(), second = arguments.at(1).integer();
+      if (first < 0 || second < 0 || first >= static_cast<int>(party_.size()) || second >= static_cast<int>(party_.size()))
+        throw std::invalid_argument("party index is out of bounds");
+      std::swap(party_[first], party_[second]); updatePlayerGraphic(); return Value::undefined();
+    }
     throw std::invalid_argument("party operation is not bound: " + method);
   }
   if (kind == "inventory") {
@@ -109,7 +172,63 @@ Value Session::invokeGameDataBase(const std::string& kind, const std::string& me
     dispatchGameDataMutation(kind, "onChange", {}); return Value::undefined();
   }
   if (kind != "variables" && kind != "switches") throw std::invalid_argument("game data store is not bound: " + kind);
-  if (method == "clear") { if (kind == "variables") variables_.clear(); else switches_.clear(); return Value::undefined(); }
+  auto& dataLength = kind == "variables" ? variableDataLength_ : switchDataLength_;
+  const auto length = [&]() { return std::max(dataLength, kind == "variables" ? (variables_.empty() ? 0 : variables_.rbegin()->first + 1) : (switches_.empty() ? 0 : switches_.rbegin()->first + 1)); };
+  if (method == "dataLength") {
+    if (!arguments.empty()) {
+      const auto& value = arguments[0];
+      if (!std::holds_alternative<double>(value.data) || value.number() < 0 || value.number() > 2147483647.0 || value.number() != value.integer()) throw std::invalid_argument("invalid game data array length");
+      dataLength = value.integer();
+      if (kind == "variables") std::erase_if(variables_, [&](const auto& entry) { return entry.first >= dataLength; });
+      else std::erase_if(switches_, [&](const auto& entry) { return entry.first >= dataLength; });
+    }
+    return length();
+  }
+  if (method == "dataKeys") {
+    Value::Array keys;
+    if (kind == "variables") for (const auto& [id,value] : variables_) { (void)value; keys.emplace_back(std::to_string(id)); }
+    else for (const auto& [id,value] : switches_) { (void)value; keys.emplace_back(std::to_string(id)); }
+    return keys;
+  }
+  if (method == "replaceData") {
+    const double size = arguments.at(0).number();
+    if (!std::isfinite(size) || size < 0 || size > 2147483647.0 || std::floor(size) != size) throw std::invalid_argument("invalid game data array length");
+    const int count = static_cast<int>(size);
+    const auto& entries = arguments.at(1);
+    if (!std::holds_alternative<Value::Object>(entries.data)) throw std::invalid_argument("game data entries must be an object");
+    std::map<int,Value> replacement;
+    for (const auto& [key,value] : std::get<Value::Object>(entries.data)) {
+      std::size_t consumed; const int id = std::stoi(key,&consumed);
+      if (consumed != key.size() || std::to_string(id) != key || id < 0 || id >= count) throw std::invalid_argument("invalid game data array index");
+      if (std::holds_alternative<Value::Array>(value.data) || std::holds_alternative<Value::Object>(value.data)) throw std::invalid_argument("object variable assignment is not bound");
+      replacement.emplace(id,value);
+    }
+    if (kind == "variables") variables_ = std::move(replacement);
+    else { switches_.clear(); for (const auto& [id,value] : replacement) switches_[id] = value.boolean(); }
+    dataLength = count; return Value::undefined();
+  }
+  if (method == "rawValue" || method == "rawHas" || method == "rawSet" || method == "rawDelete") {
+    const int id = arguments.at(0).integer();
+    if (id < 0 || id >= 2147483647) throw std::invalid_argument("invalid game data array index");
+    const bool exists = kind == "variables" ? variables_.contains(id) : switches_.contains(id);
+    if (method == "rawHas") return exists;
+    if (method == "rawDelete") {
+      dataLength = length();
+      if (kind == "variables") variables_.erase(id); else switches_.erase(id);
+      return Value::undefined();
+    }
+    if (method == "rawSet") {
+      const auto& value = arguments.at(1);
+      if (std::holds_alternative<Value::Array>(value.data) || std::holds_alternative<Value::Object>(value.data)) throw std::invalid_argument("object variable assignment is not bound");
+      if (kind == "variables") variables_[id] = value; else switches_[id] = value.boolean();
+      dataLength = std::max(dataLength,id + 1); return Value::undefined();
+    }
+    if (!exists) return Value::undefined();
+    const Value value = kind == "variables" ? variables_.at(id) : Value(switches_.at(id));
+    if (std::holds_alternative<Value::Array>(value.data) || std::holds_alternative<Value::Object>(value.data)) throw std::invalid_argument("object variable views are not bound");
+    return value;
+  }
+  if (method == "clear") { if (kind == "variables") variables_.clear(); else switches_.clear(); dataLength = 0; return Value::undefined(); }
   if (method == "onChange") { refreshNeeded_ = true; return Value::undefined(); }
   if (arguments.empty()) throw std::invalid_argument("game data access requires an ID");
   const int id = arguments[0].integer();

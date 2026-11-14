@@ -1,17 +1,26 @@
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
-const { createRequire } = require('node:module');
+const { createRequire, Module } = require('node:module');
 const { createScriptRuntime } = require('./mv-script-runtime.cjs');
 const { installDatabase } = require('./native-database.cjs');
 const { installWeb } = require('./native-web.cjs');
 const { installStorage } = require('./native-storage.cjs');
 const { installCoreServices } = require('./native-core-services.cjs');
 
-function installPlugins(runtime, gameRoot, manifest) {
+function installPlugins(runtime, gameRoot, manifest, beforePlugins) {
   const scope = runtime.scope;
-  scope.require = createRequire(path.resolve(gameRoot, 'package.json'));
-  scope.process = process;
+  if (!scope.require) {
+    const gameRequire = createRequire(path.resolve(gameRoot, 'package.json'));
+    const gameProcess = Object.create(process);
+    const main = new Module('.');
+    main.filename = path.resolve(gameRoot, 'index.html'); main.path = path.resolve(gameRoot); main.loaded = true;
+    main.paths = gameRequire.resolve.paths('.') || [];
+    scope.require = Object.assign(function(name) { return name === 'process' || name === 'node:process' ? gameProcess : gameRequire(name); }, gameRequire);
+    scope.require.main = main; main.require = scope.require;
+    Object.defineProperty(gameProcess, 'mainModule', { configurable: true, enumerable: true, writable: true, value: main });
+    scope.process = gameProcess;
+  }
   scope.Buffer = Buffer;
   runtime.runScript('globalThis.window = globalThis; globalThis.global = globalThis;');
   const queue = [];
@@ -22,7 +31,19 @@ function installPlugins(runtime, gameRoot, manifest) {
     try {
       while (queue.length) {
         const file = queue.shift();
-        try { runtime.runScript(fs.readFileSync(file, 'utf8'), file); }
+        try {
+          const source = fs.readFileSync(file, 'utf8');
+          const execute=() => {
+            if (scope.pmjsExecuteScriptElement) {
+              const script = scope.document.createElement('script');
+              script.src = 'file:///game/' + path.relative(gameRoot, file).split(path.sep).join('/');
+              script.textContent = source;
+              scope.pmjsExecuteScriptElement(script);
+            } else runtime.runScript(source, file);
+          };
+          if (scope.PMJS?.plugins) scope.PMJS.plugins.execute(path.basename(file,'.js'),execute);
+          else execute();
+        }
         catch (error) { manager._errorUrls.push(file); throw error; }
       }
     } finally { loading = false; }
@@ -57,7 +78,16 @@ function installPlugins(runtime, gameRoot, manifest) {
       loadQueued();
     }
   };
+  beforePlugins?.(runtime);
+  const lifecycle=scope.PMJS;
+  lifecycle?.plugins?.snapshotOriginalManifest(scope.$plugins);
+  lifecycle?.plugins?.snapshotEffectiveManifest(scope.$plugins);
+  lifecycle?.phases?.emit('beforePlugins');
   manager.setup(scope.$plugins);
+  lifecycle?.plugins?.finish();
+  lifecycle?.phases?.emit('afterGuestPlugins');
+  lifecycle?.phases?.emit('afterPlugins');
+  lifecycle?.methods?.install();
   return manager;
 }
 
@@ -74,7 +104,7 @@ function createRuntimeBindings(engine, session, options) {
 
 function createPluginRuntime(engine, session, options) {
   const runtime = createRuntimeBindings(engine, session, options);
-  installPlugins(runtime, options.gameRoot, options.manifest);
+  installPlugins(runtime, options.gameRoot, options.manifest, options.beforePlugins);
   return runtime;
 }
 

@@ -12,6 +12,7 @@ test('native scenes dispatch original methods and retain transferred sprite reso
   const root = temporaryDirectory('native-scenes');
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, 'img/system'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'img/system/GameOver.png'), png(32, 32, new Uint8Array(32 * 32 * 4).fill(255)));
   fs.writeFileSync(path.join(root, 'img/system/Window.png'), png(192, 192, new Uint8Array(192 * 192 * 4).fill(255)));
   fs.copyFileSync(path.join(process.argv[3], 'testfont.ttf'), path.join(root, 'font.ttf'));
   fs.mkdirSync(path.join(root, 'img/tilesets'), { recursive: true });
@@ -53,6 +54,41 @@ test('native scenes dispatch original methods and retain transferred sprite reso
   engine.attach(session, { width: 32, height: 32, fontFile: 'font.ttf' });
   const runtime = createScriptRuntime(engine, session, { native }); runtime.installScenes();
   const { scope } = runtime;
+  await t.test('plugin input dictionaries and latest-button queries share native state', () => {
+    const input = scope.Input, state = input._currentState;
+    input.clear(); assert.equal(input._latestButton, null);
+    state.ok = true; assert.equal(input.isPressed('ok'), true);
+    input._latestButton = 'ok'; assert.equal(input._latestButton, 'ok'); assert.equal(input.isTriggered('ok'), true);
+    assert.equal(state[input._latestButton], true);
+    input._currentState = { cancel: true }; assert.equal(input._currentState, state);
+    assert.equal(input.isPressed('ok'), false); assert.equal(input.isPressed('cancel'), true);
+    delete state.cancel; assert.equal(state.cancel, undefined);
+    input.clear(); assert.equal(Object.keys(state).length, 0);
+  });
+  await t.test('game-end scenes create native command windows and close through inherited lifecycle', () => {
+    const scene = new scope.Scene_GameEnd();
+    assert.equal(scene instanceof scope.Scene_MenuBase, true);
+    scene.create();
+    assert.equal(scene._commandWindow instanceof scope.Window_GameEnd, true);
+    assert.equal(scene._backgroundSprite.opacity, 128);
+    scene._commandWindow.openness = 255; scene.stop();
+    assert.equal(scene._commandWindow.closing, true);
+  });
+  await t.test('named command windows share their native command and selection model', () => {
+    const initialize=scope.Window_PartyCommand.prototype.initialize;
+    scope.Window_PartyCommand.prototype.initialize=function(...args) { initialize.apply(this,args); this.pluginMarker=17; };
+    try {
+      const window=new scope.Window_PartyCommand();
+      assert.ok(window instanceof scope.Window_Command);
+      assert.equal(window.maxItems(),2);
+      assert.equal(window.commandSymbol(0),'fight');
+      assert.equal(window.commandSymbol(1),'escape');
+      window.select(1); assert.equal(window.currentSymbol(),'escape');
+      assert.equal(window.pluginMarker,17);
+      window.addCommand('Custom','custom',true,42);
+      window.select(2); assert.equal(window.currentExt(),42);
+    } finally { scope.Window_PartyCommand.prototype.initialize=initialize; }
+  });
   await t.test('described native classes preserve type boundaries and typed movement arguments', () => {
     const actor = new scope.Sprite_Actor(), base = new scope.Sprite_Battler();
     assert.ok(actor instanceof scope.Sprite_Battler);
@@ -215,6 +251,180 @@ test('native scenes dispatch original methods and retain transferred sprite reso
   assert.throws(() => runtime.step(), error => error === sentinel);
   second.update = () => { assert.throws(() => scope.SceneManager.update(), /already running/); };
   runtime.step();
+  await t.test('native transitions commit through script lifecycle, readiness and one scene stack', async () => {
+    const data = fixture([]);
+    data.system.versionId = 0;
+    data.commonEvents.push({ id: 2, list: [{ code: 353, indent: 0, parameters: [] }, { code: 0, indent: 0, parameters: [] }] });
+    data.enemies = [null, { name: 'Enemy', params: [100, 20, 10, 10, 10, 10, 10, 10], actions: [], traits: [] }];
+    data.troops = [null, { members: [{ enemyId: 1, x: 100, y: 100 }], pages: [] }];
+    const session = engine.create(data);
+    try {
+      engine.attach(session, { width: 32, height: 32, fontFile: 'font.ttf' });
+      const runtime = createScriptRuntime(engine, session, { native }); runtime.installScenes();
+      const { scope } = runtime, trace = [];
+      scope.$dataSystem = data.system;
+      scope.observeTransition = (scene, hook) => {
+        assert.equal(scope.SceneManager._scene, scene);
+        trace.push([scene.constructor.name, hook, engine.snapshot(session).scene]);
+        if (scene.constructor === scope.Scene_Title && hook === 'stop') {
+          const tick = engine.snapshot(session).ticks;
+          engine.step(session, {});
+          assert.equal(engine.snapshot(session).ticks, tick, 'scene hooks run outside the native frame and pending execution stays paused');
+        }
+      };
+      runtime.runScript(`
+        var mapReady = false;
+        for (var type of [Scene_Title, Scene_Map]) {
+          for (var hook of ['create', 'start', 'stop', 'terminate']) {
+            (function(type, hook, original) {
+              type.prototype[hook] = function() {
+                observeTransition(this, hook);
+                original.call(this);
+                if (type === Scene_Title && hook === 'stop') this.startFadeOut(3);
+              };
+            })(type, hook, type.prototype[hook]);
+          }
+        }
+        Scene_Map.prototype.isReady = function() { return mapReady; };
+      `);
+      async function reach(type, started = false) {
+        for (let frame = 0; frame < 300; ++frame) {
+          runtime.step({});
+          if (scope.SceneManager._scene?.constructor === type && !scope.SceneManager.isSceneChanging() && (!started || scope.SceneManager.isCurrentSceneStarted())) return;
+          await new Promise(resolve => setImmediate(resolve));
+        }
+        assert.fail('scene did not reach ' + type.name);
+      }
+      runtime.start(); await reach(scope.Scene_Title);
+      scope.DataManager.setupNewGame();
+      assert.equal(engine.snapshot(session).scene, 0, 'game object initialization does not change the active scene');
+      for (let frame = 0; frame < 40; ++frame) runtime.step({});
+      runtime.step({ ok: true });
+      for (let frame = 0; frame < 100 && !scope.SceneManager.isSceneChanging(); ++frame) runtime.step({});
+      assert.equal(scope.SceneManager.isNextScene(scope.Scene_Map), true);
+      const title = scope.SceneManager._scene, pendingTick = engine.snapshot(session).ticks;
+      for (let frame = 0; frame < 3; ++frame) {
+        runtime.step({});
+        assert.equal(scope.SceneManager._scene, title);
+        assert.equal(engine.snapshot(session).scene, 0, 'native presentation stays on title while script stop is busy');
+        assert.equal(engine.snapshot(session).ticks, pendingTick);
+      }
+      await reach(scope.Scene_Map);
+      assert.equal(engine.snapshot(session).scene, 1);
+      assert.equal(scope.SceneManager.isCurrentSceneStarted(), false);
+      runtime.step({}); assert.equal(engine.snapshot(session).ticks, pendingTick, 'native map waits for script readiness');
+      scope.mapReady = true; runtime.step({});
+      assert.equal(engine.snapshot(session).ticks, pendingTick + 1);
+      assert.deepEqual(trace.filter(row => row[0] === 'Scene_Title').map(row => row[1]), ['create', 'start', 'stop', 'terminate']);
+      assert.deepEqual(trace.filter(row => row[0] === 'Scene_Map'), [['Scene_Map', 'create', 1], ['Scene_Map', 'start', 1]]);
+      for (let frame = 0; frame < 5; ++frame) runtime.step({});
+      runtime.step({ cancel: true });
+      const stoppedTick = engine.snapshot(session).ticks, stopCount = trace.filter(row => row[1] === 'stop').length;
+      scope.SceneManager.stop(); runtime.step({});
+      assert.equal(engine.snapshot(session).scene, 1);
+      assert.equal(engine.snapshot(session).ticks, stoppedTick);
+      assert.equal(trace.filter(row => row[1] === 'stop').length, stopCount);
+      scope.SceneManager.resume(); await reach(scope.Scene_Menu);
+      assert.equal(engine.snapshot(session).scene, 2);
+      assert.deepEqual(scope.SceneManager._stack, [scope.Scene_Map]);
+      runtime.step({}); runtime.step({ ok: true }); await reach(scope.Scene_Item);
+      assert.equal(engine.snapshot(session).scene, 3);
+      assert.deepEqual(scope.SceneManager._stack, [scope.Scene_Map, scope.Scene_Menu]);
+      runtime.step({}); runtime.step({ cancel: true }); await reach(scope.Scene_Menu);
+      assert.deepEqual(scope.SceneManager._stack, [scope.Scene_Map]);
+      runtime.step({}); runtime.step({ cancel: true }); await reach(scope.Scene_Map);
+      assert.deepEqual(scope.SceneManager._stack, []);
+
+      runtime.runScript(`
+        function PluginMenu() { this.initialize.apply(this, arguments); }
+        PluginMenu.prototype = Object.create(Scene_Menu.prototype);
+        PluginMenu.prototype.constructor = PluginMenu;
+        var originalSceneGoto = SceneManager.goto;
+        SceneManager.goto = function(type) {
+          return originalSceneGoto.call(this, type === Scene_Menu ? PluginMenu : type);
+        };
+      `);
+      runtime.step({}); runtime.step({ cancel: true }); await reach(scope.PluginMenu);
+      assert.equal(scope.SceneManager.nativeDriven, true);
+      assert.equal(engine.snapshot(session).scene, 2);
+      runtime.step({}); runtime.step({ cancel: true }); await reach(scope.Scene_Map);
+      scope.SceneManager.goto = scope.originalSceneGoto;
+
+      scope.SceneManager.push(scope.Scene_Options); await reach(scope.Scene_Options, true);
+      engine.configure(session, { alwaysDash: false });
+      const optionWindow = scope.SceneManager._scene._optionsWindow;
+      let scriptOk = 0;
+      optionWindow.processOk = () => { ++scriptOk; };
+      const isRepeated = scope.Input.isRepeated;
+      scope.Input.isRepeated = name => name === 'ok';
+      runtime.step({ ok: true });
+      scope.Input.isRepeated = isRepeated;
+      assert.equal(scriptOk, 0, 'native menus have one input owner');
+      assert.equal(engine.configuration(session).alwaysDash, true);
+      runtime.step({}); runtime.step({ cancel: true }); await reach(scope.Scene_Map);
+      assert.deepEqual(scope.SceneManager._stack, []);
+
+      const saved = engine.save(session);
+      engine.setSaveMetadata(session, [null, { title: '', globalId: 'RPGMV' }]);
+      scope.SceneManager.goto(scope.Scene_Load); await reach(scope.Scene_Load);
+      engine.load(session, saved);
+      assert.equal(engine.snapshot(session).scene, 10, 'loading game objects waits for the scene transition');
+      runtime.step({}); runtime.step({ ok: true });
+      assert.equal(engine.storageStatus(session).load, true);
+      engine.load(session, saved); engine.completeStorage(session, true);
+      await reach(scope.Scene_Map);
+      assert.equal(engine.snapshot(session).scene, 1);
+      assert.deepEqual(scope.SceneManager._stack, []);
+
+      runtime.runScript(`
+        function PluginMap() { this.initialize.apply(this, arguments); }
+        PluginMap.prototype = Object.create(Scene_Map.prototype);
+        PluginMap.prototype.constructor = PluginMap;
+      `);
+      scope.SceneManager.goto(scope.PluginMap); await reach(scope.PluginMap);
+      let battleEnemy;
+      const setBattler = scope.Sprite_Enemy.prototype.setBattler;
+      scope.Sprite_Enemy.prototype.setBattler = function(enemy) { setBattler.call(this, enemy); battleEnemy = enemy; };
+      engine.startBattle(session, 1, true, true);
+      assert.equal(engine.snapshot(session).scene, 1);
+      await reach(scope.Scene_Battle);
+      assert.equal(engine.snapshot(session).scene, 11);
+      assert.deepEqual(scope.SceneManager._stack, [scope.PluginMap]);
+      battleEnemy.setHp(0);
+      for (let frame = 0; frame < 300 && scope.SceneManager._scene?.constructor !== scope.PluginMap; ++frame) {
+        if (engine.snapshot(session).message.busy) engine.acknowledge(session);
+        runtime.step({});
+      }
+      assert.equal(scope.SceneManager._scene?.constructor, scope.PluginMap);
+      assert.equal(engine.snapshot(session).battle.active, false);
+      assert.equal(engine.snapshot(session).scene, 1);
+      assert.deepEqual(scope.SceneManager._stack, []);
+
+      scope.SceneManager.goto(scope.Scene_Load); await reach(scope.Scene_Load);
+      assert.equal(engine.snapshot(session).scene, 10);
+      scope.SceneManager._scene.onLoadSuccess(); await reach(scope.Scene_Map);
+      assert.equal(engine.snapshot(session).scene, 1);
+      assert.equal(scope.SceneManager._stack.length, 0);
+      runtime.runScript(`
+        function CustomScene() { this.initialize.apply(this, arguments); }
+        CustomScene.prototype = Object.create(Scene_Base.prototype);
+        CustomScene.prototype.constructor = CustomScene;
+      `);
+      scope.SceneManager.goto(scope.CustomScene); await reach(scope.CustomScene);
+      scope.SceneManager.push(scope.Scene_Options); await reach(scope.Scene_Options, true);
+      runtime.step({}); runtime.step({ cancel: true }); await reach(scope.CustomScene);
+      assert.equal(engine.snapshot(session).scene, 1);
+      assert.deepEqual(scope.SceneManager._stack, []);
+      scope.SceneManager.goto(scope.Scene_Map); await reach(scope.Scene_Map);
+
+      scope.$gameTemp.reserveCommonEvent(2);
+      assert.equal(engine.snapshot(session).scene, 1);
+      await reach(scope.Scene_Gameover, true);
+      assert.equal(engine.snapshot(session).scene, 12);
+      scope.SceneManager._scene.gotoTitle(); await reach(scope.Scene_Title);
+      assert.equal(engine.snapshot(session).scene, 0);
+    } finally { engine.dispose(session); }
+  });
   await t.test('script pre-title redirects reserve native map transfers and advance native events', async () => {
     const engine = native.mvEngine, database = fixture([]);
     database.maps[2] = structuredClone(database.maps[1]);
@@ -396,7 +606,9 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       engine.newGame(session);
       assert.equal(engine.save(session).actors._data[1]._name, 'Plugin Actor');
       assert.equal(engine.snapshot(session).actors[1].parameters[0], 77);
-      assert.throws(() => manager.loadDataFile('$dataExtra', 'Extra.json'), /before game state initialization/);
+      manager.loadDataFile('$dataExtra', 'Extra.json');
+      assert.equal(runtime.database.isReady(), true);
+      assert.equal(engine.databaseInvoke(session, 'read', 'plugin:$dataExtra'), runtime.scope.$dataExtra);
     } finally { engine.dispose(session); }
   });
 
@@ -453,6 +665,7 @@ test('native scenes dispatch original methods and retain transferred sprite reso
         this._homeX = 16; this._homeY = 24; observed = this;
       };
       engine.newGame(actorSession); engine.startBattle(actorSession, 1, true, true);
+      actorRuntime.scope.SceneManager.update();
       const capture = () => {
         native.beginFrame(); engine.present(actorSession); native.renderFrame();
         return Array.from(native.canvas.captureSceneRawPremultiplied().subarray((12 * 32 + 16) * 4, (12 * 32 + 16) * 4 + 4));
@@ -494,6 +707,7 @@ test('native scenes dispatch original methods and retain transferred sprite reso
           }
         };
         engine.newGame(enemySession); engine.startBattle(enemySession, 1, true, true);
+        enemyRuntime.scope.SceneManager.update();
         const capture = () => {
           native.beginFrame(); engine.present(enemySession); native.renderFrame();
           return Array.from(native.canvas.captureSceneRawPremultiplied().subarray((12 * 32 + 16) * 4, (12 * 32 + 16) * 4 + 4));

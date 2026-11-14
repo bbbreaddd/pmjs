@@ -24,18 +24,18 @@
     return 'file:///game/' + normalized;
   }
 
-  if (typeof NativeHost !== 'undefined' && NativeHost.runtime &&
-      typeof NativeHost.runtime.loadScript === 'function') {
-    var rawLoadScript = NativeHost.runtime.loadScript;
+  if (typeof NativeHost !== 'undefined' && NativeHost.runtime) {
     globalThis.pmjsExecuteScriptElement = function(script) {
       currentScriptStack.push(script);
       try {
-        NativeHost.runtime.runScript(script.textContent);
+        if (typeof NativeHost.runtime.evalScript === 'function') return NativeHost.runtime.evalScript(script.textContent, script.src);
+        return NativeHost.runtime.runScript(script.textContent);
       } finally {
         currentScriptStack.pop();
       }
     };
-    NativeHost.runtime.loadScript = function(path) {
+    var rawLoadScript = NativeHost.runtime.loadScript;
+    if (typeof rawLoadScript === 'function') NativeHost.runtime.loadScript = function(path) {
       if (typeof gameReadPath === 'function') path = gameReadPath(path);
       var script = {
         src: resolveScriptVirtualSrc(path)

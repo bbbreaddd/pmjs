@@ -299,7 +299,7 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
           message_ = {}; message_.busy = true; messageAge_ = 0;
           message_.lines = database_["sceneContract"]["menuNotice"].array();
           if (message_.lines.empty()) throw std::runtime_error("menus are outside the map-scene contract");
-        } else enter(Scene::menu);
+        } else push(Scene::menu);
       }
     }
     return;
@@ -358,7 +358,7 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
     }
     ui_.cursor = std::clamp(ui_.cursor, 0, static_cast<int>(commands.size()) - 1);
     cursor(static_cast<int>(commands.size()));
-    if (cancel) { SceneManager::gotoScene(*this, Scene::map); sound(2); return; }
+    if (cancel) { if (SceneManager::hasPrevious(*this)) SceneManager::popScene(*this); else SceneManager::gotoScene(*this, Scene::map); sound(2); return; }
     if (!ok) return;
     const auto& selected = commands[ui_.cursor];
     if (!selected.enabled) { sound(3); return; }

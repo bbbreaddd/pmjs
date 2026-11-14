@@ -30,12 +30,14 @@ using WindowLayer = core::WindowLayer;
 class Spriteset_Base {
  public:
   std::array<int, 4> tone{0, 0, 0, 0};
-  ScreenSprite flashSprite;
-  ScreenSprite fadeSprite;
-  ToneSprite toneSprite;
+  std::shared_ptr<ScreenSprite> flashSprite=std::make_shared<ScreenSprite>();
+  std::shared_ptr<ScreenSprite> fadeSprite=std::make_shared<ScreenSprite>();
+  std::shared_ptr<ToneSprite> toneSprite=std::make_shared<ToneSprite>();
 
   virtual ~Spriteset_Base() = default;
   virtual void update(const Session& session);
+  void updateTone(const Session& session);
+  void updateScreen(const Session& session);
 };
 
 class Spriteset_Map : public Spriteset_Base {

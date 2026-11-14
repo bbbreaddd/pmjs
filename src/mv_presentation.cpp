@@ -1612,7 +1612,9 @@ void Presentation::render() {
   core::Graphics::tickStart();core::updateServices();core::Graphics::updateLoading();
   processAudio();renderStage();
   core::Graphics::presentOverlay();core::Graphics::rendered=true;
-  core::Graphics::tickEnd();++core::Graphics::frameCount;
+  core::Graphics::tickEnd();
+  if (!core::Graphics::frameCountWritten) ++core::Graphics::frameCount;
+  core::Graphics::frameCountWritten=false;
 }
 bool Presentation::renderFrame(const std::function<void()>& drawFrame) {
   processAudio();

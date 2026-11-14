@@ -1,7 +1,7 @@
 'use strict';
 
 // Class names remain data. Loading a save never evaluates constructors or scripts.
-function decodeGraph(json) {
+function decodeGraph(json, options = {}) {
   const registry = new Map();
   function index(value, depth = 0) {
     if (depth > 128) throw new Error('save nesting limit exceeded');
@@ -32,17 +32,18 @@ function decodeGraph(json) {
       if (!registry.has(value['@r'])) throw new Error('missing save reference');
       value = registry.get(value['@r']);
     }
-    if (ancestors.has(value)) throw new Error('cyclic save state is unsupported');
+    if (ancestors.has(value) && !options.allowCycles) throw new Error('cyclic save state is unsupported');
     if (resolved.has(value)) return resolved.get(value);
     const chain = new Set(ancestors).add(value);
-    const out = Array.isArray(value) ? [] : {};
+    const out = options.createObject ? options.createObject(value, Array.isArray(value)) : Array.isArray(value) ? [] : {};
+    if (options.allowCycles) resolved.set(value, out);
     if (Array.isArray(value)) {
-      for (let i = 0; i < value.length; ++i) out.push(expand(value[i], chain));
+      for (let i = 0; i < value.length; ++i) Object.defineProperty(out, i, { value: expand(value[i], chain), writable: true, enumerable: true, configurable: true });
       for (const key of Object.keys(value)) {
-        if (!Object.hasOwn(out, key)) out[key] = expand(value[key], chain);
+        if (!Object.hasOwn(out, key)) Object.defineProperty(out, key, { value: expand(value[key], chain), writable: true, enumerable: true, configurable: true });
       }
     } else {
-      for (const [key, item] of Object.entries(value)) out[key] = expand(item, chain);
+      for (const [key, item] of Object.entries(value)) Object.defineProperty(out, key, { value: expand(item, chain), writable: true, enumerable: true, configurable: true });
     }
     resolved.set(value, out);
     return out;
@@ -50,20 +51,21 @@ function decodeGraph(json) {
   return expand(index(JSON.parse(json)));
 }
 
-function encodeGraph(contents) {
+function encodeGraph(contents, options = {}) {
   let sequence = 0;
   const seen = new Map();
   const emitted = new Set();
   function identify(value, depth = 0) {
-    if (depth > 128) throw new Error('save nesting limit exceeded');
+    if (depth > (options.maxDepth ?? 128)) throw new Error('save nesting limit exceeded');
     if (!value || typeof value !== 'object' || seen.has(value) || Object.hasOwn(value, '@r')) return;
     seen.set(value, ++sequence);
     for (const item of Object.values(value)) identify(item, depth + 1);
   }
   identify(contents);
   function encode(value, depth = 0) {
-    if (depth > 128) throw new Error('save nesting limit exceeded');
+    if (depth > (options.maxDepth ?? 128)) throw new Error('save nesting limit exceeded');
     if (!value || typeof value !== 'object') return value;
+    if (!Array.isArray(value) && Object.prototype.toString.call(value) !== '[object Object]') return value;
     if (typeof value['@r'] === 'string') {
       let target = contents;
       for (const key of value['@r'].split('/').slice(1)) {
@@ -77,9 +79,11 @@ function encodeGraph(contents) {
     if (emitted.has(value)) return { '@r': id };
     emitted.add(value);
     if (Array.isArray(value)) return { '@c': id, '@a': value.map(item => encode(item, depth + 1)) };
-    return { '@c': id, ...Object.fromEntries(Object.entries(value).map(([key, item]) => [key, encode(item, depth + 1)])) };
+    const metadata = options.className?.(value);
+    return { '@c': id, ...(metadata ? { '@': metadata } : {}), ...Object.fromEntries(Object.entries(value).map(([key, item]) => [key, encode(item, depth + 1)])) };
   }
-  return JSON.stringify(encode(contents));
+  const encoded = encode(contents);
+  return JSON.stringify(options.rootArray && Array.isArray(contents) ? encoded['@a'] : encoded);
 }
 
 module.exports = { decodeGraph, encodeGraph };

@@ -915,6 +915,7 @@ void WebAudio::loadNow() {
             ? core.media().loadEncryptedAudio(*path, key, &failure, options)
             : core.media().loadAudio(path->string(), &failure, options);
     if (!handle_) { failLoad(); return; }
+    core.media().bindContext(handle_);
     totalTime = core.media().duration(handle_);
     if (path && !encrypted) {
       if (const auto info = MediaDecoder::probe(*path)) sampleRate = info->audioSampleRate;

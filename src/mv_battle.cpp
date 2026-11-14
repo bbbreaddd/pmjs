@@ -258,7 +258,7 @@ void Session::startBattle(int troop, bool canEscape, bool canLose, bool event) {
   for (auto& value : battle_.enemies) { if (!hasSpecialFlag(value, 3)) value.tp = randomInt(25); enemiesAgi += parameter(value, 6); }
   actorsAgi /= std::max<std::size_t>(1, battleMemberCount()); enemiesAgi /= std::max<std::size_t>(1, battle_.enemies.size());
   battle_.escapeRatio = 0.5 * actorsAgi / std::max(1.0, enemiesAgi);
-  ui_ = {}; ui_.scene = Scene::battle;
+  SceneManager::pushScene(*this, Scene::battle);
   battle_.mapBgm = savedBgm_; battle_.mapBgs = savedBgs_;
   audio("battle-save", {});
   AudioManager::stopBgs(*this);
@@ -613,7 +613,8 @@ void Session::leaveBattle() {
     value.guarding = false; value.escaped = false; value.hidden = false;
   }
   if (result == 2 && !battle_.canLose) { openGameOver(); return; }
-  ui_ = {}; ui_.scene = Scene::map;
+  if (SceneManager::hasPrevious(*this)) SceneManager::popScene(*this);
+  else SceneManager::gotoScene(*this, Scene::map);
   encounterCount_ = randomInt(map()["encounterStep"].integer(30)) + randomInt(map()["encounterStep"].integer(30)) + 1;
 }
 void Session::updateBattle() {

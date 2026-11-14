@@ -47,6 +47,13 @@ bool Input::keyDown(int keyCode, bool resourceRetryPending) {
   if (resourceRetryPending && found->second == "ok") return true;
   setCurrent(found->second, true); return false;
 }
+void Input::eraseCurrent(const std::string& name) {
+  current_.erase(name); order_.erase(std::remove(order_.begin(), order_.end(), name), order_.end());
+}
+void Input::replaceCurrent(const std::vector<std::pair<std::string, bool>>& values) {
+  current_.clear(); order_.clear();
+  for (const auto& [name, pressed] : values) setCurrent(name, pressed);
+}
 void Input::keyUp(int keyCode) {
   const auto found = keyMapper.find(keyCode);
   if (found != keyMapper.end() && !found->second.empty()) setCurrent(found->second, false);

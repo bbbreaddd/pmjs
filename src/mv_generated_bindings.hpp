@@ -11,7 +11,8 @@ struct GeneratedRuntimeObject : RuntimeBoundObject, std::enable_shared_from_this
   std::shared_ptr<GeneratedRuntimeObject> nativeLease();
   Session* context = nullptr;
   Session& checkedSession() const;
-  std::shared_ptr<core::PixelBitmap> bitmap(const std::string& method,const Value::Array& arguments);
+  std::shared_ptr<core::PixelBitmap> bitmap(const std::string& method,const Value::Array& arguments,const std::string& slot);
+  bool dispatchObject(const std::string& method,const std::shared_ptr<RuntimeObject>& argument);
   virtual void initializeNative() = 0;
  private:
   std::size_t nativeOwners_ = 0;

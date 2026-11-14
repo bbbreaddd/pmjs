@@ -8,10 +8,10 @@ function installDatabase(runtime, engine, session, gameRoot) {
   const parse = runtime.runScript('(function(text) { return JSON.parse(text); })');
   const object = runtime.runScript('(function() { return {}; })');
   const keys = new Map(databaseFiles.map(file => [file.name, file.key]));
-  const loaded = new Set();
+  const loaded = new Set(), tables = {};
   let generation = 0, published = -1, failure = null;
   const writable = () => {
-    if (!engine.databaseInvoke(session, 'canWrite')) throw new Error('Database loading is only bound before game state initialization');
+    if (published < 0 && !engine.databaseInvoke(session, 'canWrite')) throw new Error('Database loading is only bound before game state initialization');
   };
   manager._databaseFiles = parse(JSON.stringify(databaseFiles.map(({ name, src }) => ({ name, src }))));
   manager._errorUrl = null;
@@ -58,9 +58,11 @@ function installDatabase(runtime, engine, session, gameRoot) {
       if (published !== generation) {
         writable();
         const names = new Set([...scope.DataManager._databaseFiles.map(file => file.name), ...loaded]);
-        const tables = {};
-        for (const name of names) tables[keys.get(name) || 'plugin:' + name] = scope[name];
-        engine.databaseInvoke(session, 'publish', tables);
+        for (const name of names) {
+          const key = keys.get(name) || 'plugin:' + name;
+          if (!Object.hasOwn(tables, key)) Object.defineProperty(tables, key, { enumerable: true, get() { return scope[name]; } });
+        }
+        if (published < 0) engine.databaseInvoke(session, 'publish', tables);
         published = generation;
       }
       return true;

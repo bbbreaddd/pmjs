@@ -28,8 +28,8 @@ const std::vector<std::string>& nameInputTable(int page, const std::string& loca
 
 Window_Base::Window_Base(int x, int y, int w, int h)
   : rect{x, y, w, h} {
-  contents.width = std::max(1,contentsWidth());
-  contents.height = std::max(1,contentsHeight());
+  drawingContents().width = std::max(1,contentsWidth());
+  drawingContents().height = std::max(1,contentsHeight());
 }
 
 namespace {
@@ -48,27 +48,27 @@ std::string colorToCss(Color c) {
 } // namespace
 
 void Window_Base::createContents() {
-  contents.resize(contentsWidth(), contentsHeight());
+  drawingContents().resize(contentsWidth(), contentsHeight());
 }
 
 double Window_Base::textWidth(const std::string& text) const {
   core::PixelBitmap metrics;
-  metrics.fontFace = contents.fontFace; metrics.fontItalic = contents.fontItalic; metrics.fontSize = fontSize;
+  metrics.fontFace = drawingContents().fontFace; metrics.fontItalic = drawingContents().fontItalic; metrics.fontSize = fontSize;
   return metrics.measureTextWidth(text);
 }
 
 void Window_Base::drawText(const std::string& text, double x, double y, double maxWidth, const std::string& align) {
-  if (contents.width != contentsWidth() || contents.height != contentsHeight()) contents.resize(contentsWidth(),contentsHeight());
-  contents.fontSize = fontSize; contents.textColor = colorToCss(textColor);
-  contents.drawText(text,x,y,maxWidth,lineHeight(),align);
+  if (drawingContents().width != contentsWidth() || drawingContents().height != contentsHeight()) drawingContents().resize(contentsWidth(),contentsHeight());
+  drawingContents().fontSize = fontSize; drawingContents().textColor = colorToCss(textColor);
+  drawingContents().drawText(text,x,y,maxWidth,lineHeight(),align);
 }
 
 void Window_Base::drawGauge(int x, int y, int width, double rate, Color color1, Color color2) {
   const int fillW = static_cast<int>(std::floor(width * std::clamp(rate, 0.0, 1.0)));
   const int gaugeY = y + lineHeight() - 8;
-  if (contents.width != contentsWidth() || contents.height != contentsHeight()) contents.resize(contentsWidth(), contentsHeight());
-  contents.fillRect(x, gaugeY, width, 6, colorToCss(gaugeBackColor()));
-  contents.gradientFillRect(x, gaugeY, fillW, 6, colorToCss(color1), colorToCss(color2), false);
+  if (drawingContents().width != contentsWidth() || drawingContents().height != contentsHeight()) drawingContents().resize(contentsWidth(), contentsHeight());
+  drawingContents().fillRect(x, gaugeY, width, 6, colorToCss(gaugeBackColor()));
+  drawingContents().gradientFillRect(x, gaugeY, fillW, 6, colorToCss(color1), colorToCss(color2), false);
 }
 
 void Window_Base::drawCurrentAndMax(int current, int max, int x, int y, int width, Color color1, Color color2) {
@@ -998,7 +998,7 @@ void Window_Gold::refresh(const Session& session) {
   value = session.gold();
   currencyUnit = session.database()["system"]["currencyUnit"].text();
   if (!core::boundRuntime()) return;
-  contents.clear();
+  drawingContents().clear();
   drawCurrencyValue(value,currencyUnit,textPadding(),0,contentsWidth()-textPadding()*2,valueColor,unitColor);
 }
 
@@ -1326,7 +1326,7 @@ void Window_ShopStatus::drawEquipInfo(int x, int y, const Session& session) {
   const auto rows = equipInfo(session,itemKind,itemId,pageIndex);
   for (std::size_t index = 0; index < rows.size(); ++index) {
     const auto& row = rows[index]; const int iy = y+static_cast<int>(lineHeight()*(index*2.4));
-    contents.paintOpacity = row.enabled ? 255 : translucentOpacity();
+    drawingContents().paintOpacity = row.enabled ? 255 : translucentOpacity();
     resetTextColor(); drawText(session.actor(row.actorId).name,x,iy,168);
     if (row.enabled) {
       changeTextColor(paramchangeTextColor(row.paramChange));
@@ -1334,7 +1334,7 @@ void Window_ShopStatus::drawEquipInfo(int x, int y, const Session& session) {
     }
     const auto& equipped = session.database()[row.equippedItem/100000 == 1 ? "weapons" : "armors"][row.equippedItem%100000];
     resetTextColor(); drawItemName(equipped,x,iy+lineHeight());
-    contents.paintOpacity = 255;
+    drawingContents().paintOpacity = 255;
   }
 }
 
@@ -1383,7 +1383,7 @@ bool Window_NameEdit::removeCharacter(std::string& name) {
 }
 
 double Window_NameEdit::charWidth(bool isJapanese) const {
-  return core::boundRuntime() ? contents.measureTextWidth(isJapanese ? "Ａ" : "A") : 0;
+  return core::boundRuntime() ? drawingContents().measureTextWidth(isJapanese ? "Ａ" : "A") : 0;
 }
 
 double Window_NameEdit::left(bool isJapanese) const {
@@ -1407,20 +1407,20 @@ core::Rectangle Window_NameEdit::underlineRect(int charIndex, bool isJapanese) c
 }
 
 void Window_NameEdit::refresh(const core::PixelBitmap* face, int faceIndex, bool isJapanese) {
-  contents.clear();
-  contents.fontSize = fontSize;
-  contents.paintOpacity = 255;
-  if (face && face->isReady()) contents.blt(*face,faceIndex%4*144,faceIndex/4*144,144,144,0,0);
-  contents.paintOpacity = 48;
+  drawingContents().clear();
+  drawingContents().fontSize = fontSize;
+  drawingContents().paintOpacity = 255;
+  if (face && face->isReady()) drawingContents().blt(*face,faceIndex%4*144,faceIndex/4*144,144,144,0,0);
+  drawingContents().paintOpacity = 48;
   for (int character = 0; character < maxLength; ++character) {
     const auto rect = underlineRect(character,isJapanese);
-    contents.fillRect(rect.x,rect.y,rect.width,rect.height,contents.textColor);
+    drawingContents().fillRect(rect.x,rect.y,rect.width,rect.height,drawingContents().textColor);
   }
-  contents.paintOpacity = 255;
+  drawingContents().paintOpacity = 255;
   const auto units = core::utf16Units(name);
   for (std::size_t character = 0; character < units.size(); ++character) {
     const auto rect = itemRect(static_cast<int>(character),isJapanese);
-    contents.drawText(core::stringFromUtf16({units[character]}),rect.x,rect.y,std::numeric_limits<double>::infinity(),rect.height);
+    drawingContents().drawText(core::stringFromUtf16({units[character]}),rect.x,rect.y,std::numeric_limits<double>::infinity(),rect.height);
   }
 }
 bool Window_NameEdit::add(const std::string& ch) {
@@ -1471,12 +1471,12 @@ int Window_NameInput::changePage(int page, bool down, const std::string& locale)
 }
 
 void Window_NameInput::refresh() {
-  contents.clear();
-  contents.fontSize = fontSize;
+  drawingContents().clear();
+  drawingContents().fontSize = fontSize;
   const auto& table = nameInputTable(page,locale);
   for (int cell = 0; cell < 90; ++cell) {
     const auto rect = cellRect(cell);
-    contents.drawText(table[cell],rect.x+3,rect.y,rect.width-6,rect.height,"center");
+    drawingContents().drawText(table[cell],rect.x+3,rect.y,rect.width-6,rect.height,"center");
   }
 }
 
@@ -1507,8 +1507,8 @@ void Window_NumberInput::changeDigit(bool up) {
   contentsDirty = true;
 }
 void Window_NumberInput::refresh() {
-  if (contents.width != contentsWidth() || contents.height != contentsHeight()) contents.resize(contentsWidth(),contentsHeight());
-  contents.clear();
+  if (drawingContents().width != contentsWidth() || drawingContents().height != contentsHeight()) drawingContents().resize(contentsWidth(),contentsHeight());
+  drawingContents().clear();
   const auto digits = core::numberPadZero(number,maxDigits);
   for (int digit = 0; digit < maxDigits; ++digit) drawText(digits.substr(digit,1),digit*32,0,32,"center");
   contentsDirty = false;
@@ -1901,14 +1901,14 @@ void Window_MapName::advance(std::uint64_t ticks, bool nameDisplay) {
 
 void Window_MapName::refresh() {
   if (!core::boundRuntime()) return;
-  if (contents.width != contentsWidth() || contents.height != contentsHeight()) contents.resize(contentsWidth(), contentsHeight());
-  contents.clear();
-  contents.fontSize = fontSize;
+  if (drawingContents().width != contentsWidth() || drawingContents().height != contentsHeight()) drawingContents().resize(contentsWidth(), contentsHeight());
+  drawingContents().clear();
+  drawingContents().fontSize = fontSize;
   if (mapName.empty()) return;
   const double width = contentsWidth(), half = width / 2;
-  contents.gradientFillRect(0, 0, half, lineHeight(), "rgba(0,0,0,0)", "rgba(0,0,0,0.6)");
-  contents.gradientFillRect(half, 0, half, lineHeight(), "rgba(0,0,0,0.6)", "rgba(0,0,0,0)");
-  contents.drawText(mapName, 0, 0, width, lineHeight(), "center");
+  drawingContents().gradientFillRect(0, 0, half, lineHeight(), "rgba(0,0,0,0)", "rgba(0,0,0,0.6)");
+  drawingContents().gradientFillRect(half, 0, half, lineHeight(), "rgba(0,0,0,0.6)", "rgba(0,0,0,0)");
+  drawingContents().drawText(mapName, 0, 0, width, lineHeight(), "center");
 }
 
 }  // namespace pmjs::mv

@@ -153,6 +153,7 @@ class Graphics {
   static void onKeyDown(int keyCode, bool control = false, bool alt = false);
   static bool onPointerDown(double x, double y);
   static inline std::uint64_t frameCount = 0;
+  static inline bool frameCountWritten = false;
   static inline int skipCount = 0, maxSkip = 3;
   static inline bool rendered = false;
   static inline bool webgl = true;

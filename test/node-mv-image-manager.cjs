@@ -102,4 +102,30 @@ test('native image cache preserves identity, reservations, requests and retained
   const measure = new scope.Bitmap(1, 1); measure.fontSize = 28;
   for (const line of lines) assert.ok(measure.measureTextWidth(line) <= 604);
   assert.equal(scope.$gameMessage.allText(), text);
+  await t.test('ImageCache constructors and plugin entry mutations use native cache ownership', () => {
+    const ImageCache = manager._imageCache.constructor, initialize = ImageCache.prototype.initialize, limit = ImageCache.limit;
+    let initializations = 0;
+    ImageCache.prototype.initialize = function() { this.pluginContainers = {}; ++initializations; initialize.call(this); };
+    try {
+      const cache = new ImageCache(), first = new Bitmap(3, 3), second = new Bitmap(2, 2);
+      first.fillAll('red'); first.pluginState = {};
+      cache.add('first', first); cache.add('second', second);
+      assert.deepEqual(Object.keys(cache._items), ['first', 'second']);
+      assert.equal('first' in cache._items, true);
+      const entry = cache._items.first;
+      assert.equal(entry.bitmap, first); entry.touch = 123; assert.equal(entry.touch, 123);
+      entry.reservationId = 'scene'; assert.equal(entry.reservationId, 'scene');
+      assert.equal(cache._mustBeHeld(entry), true);
+      ImageCache.limit = 0; cache._truncateCache();
+      assert.equal(cache.get('first'), first); assert.equal(cache.get('second'), null);
+      delete cache._items.first;
+      assert.equal(cache.get('first'), null); assert.equal(entry.bitmap.getPixel(0, 0), '#ff0000');
+      cache.reserve('reserved', first, 'new-scene'); cache._truncateCache();
+      assert.equal(cache.get('reserved'), first);
+      cache.releaseReservation('new-scene'); cache._truncateCache();
+      assert.equal(cache.get('reserved'), null); assert.ok(first.pluginState);
+      manager.clear(); assert.equal(initializations, 2); assert.ok(manager._imageCache.pluginContainers);
+    } finally { ImageCache.limit = limit; ImageCache.prototype.initialize = initialize; }
+  });
+
 });

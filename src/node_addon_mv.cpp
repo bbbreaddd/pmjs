@@ -8,11 +8,17 @@
 #include "mv_sprites.hpp"
 #include "mv_generated_bindings.hpp"
 #include "mv_windows.hpp"
+#include "mv_window_bindings.hpp"
+#include <cstring>
 #include <cmath>
 
 namespace pmjs::addon {
 namespace {
-mv::Value readValue(napi_env env, napi_value value, int depth = 0) {
+struct DatabaseGraph;
+void collectDatabase(const std::shared_ptr<DatabaseGraph>& graph);
+void disconnectDatabase(const std::shared_ptr<DatabaseGraph>& graph);
+napi_value databaseObject(const mv::Value& value);
+mv::Value readValue(napi_env env, napi_value value, int depth = 0, bool databaseProjection = false) {
   if (depth > 128) throw std::invalid_argument("engine data nesting limit exceeded");
   napi_valuetype type;
   check(env, napi_typeof(env, value, &type), "cannot inspect engine data");
@@ -32,7 +38,7 @@ mv::Value readValue(napi_env env, napi_value value, int depth = 0) {
         for (std::uint32_t i = 0; i < length; ++i) {
           napi_value item;
           check(env, napi_get_element(env, value, i, &item), "cannot read engine item");
-          result.push_back(readValue(env, item, depth + 1));
+          result.push_back(readValue(env, item, depth + 1, databaseProjection));
         }
         return result;
       }
@@ -45,14 +51,20 @@ mv::Value readValue(napi_env env, napi_value value, int depth = 0) {
         napi_value key, item;
         check(env, napi_get_element(env, keys, i, &key), "cannot read engine key");
         check(env, napi_get_property(env, value, key, &item), "cannot read engine field");
-        result.emplace(asString(env, key), readValue(env, item, depth + 1));
+        if (databaseProjection) {
+          napi_valuetype memberType; check(env,napi_typeof(env,item,&memberType),"cannot inspect database member");
+          if (memberType==napi_function || memberType==napi_symbol || memberType==napi_undefined) continue;
+        }
+        result.emplace(asString(env, key), readValue(env, item, depth + 1, databaseProjection));
       }
       return result;
     }
+    case napi_function: case napi_symbol: if (databaseProjection) return mv::Value::undefined(); [[fallthrough]];
     default: throw std::invalid_argument("engine data must contain only JSON values");
   }
 }
 napi_value writeValue(napi_env env, const mv::Value& value) {
+  if (value.reader) { if (auto object = databaseObject(value)) return object; return writeValue(env, value.snapshot()); }
   if (value.isUndefined()) return undefined(env);
   if (value.null()) return null(env);
   if (const auto* item = std::get_if<bool>(&value.data)) return boolean(env, *item);
@@ -74,13 +86,16 @@ struct EngineSession {
     bool rooted;
   };
   std::shared_ptr<const int> runtimeOwner = std::make_shared<const int>(0);
-  int runtimeCalls = 0;
+  int runtimeCalls = 0, sceneCalls = 0;
   bool stepping = false;
   bool touchPrepared = false;
+  bool sceneRequestsSuppressed = false;
   napi_env env = nullptr;
   napi_ref runtimeSelf = nullptr;
   std::map<std::uint64_t, RuntimeReference> runtimeReferences;
+  std::shared_ptr<DatabaseGraph> database;
   ~EngineSession() {
+    disconnectDatabase(database);
     if (session) session->setRuntimeHooks({});
     for (const auto& [id, ref] : runtimeReferences) { (void)id; napi_delete_reference(env, ref.reference); }
     if (runtimeSelf) napi_delete_reference(env, runtimeSelf);
@@ -93,10 +108,21 @@ struct EngineSession {
   mv::core::TouchInput touch;
   bool focused = true;
 };
+struct SceneTransitionScope {
+  EngineSession& owner;
+  explicit SceneTransitionScope(EngineSession& value) : owner(value) { ++owner.sceneCalls; }
+  ~SceneTransitionScope() { if (--owner.sceneCalls == 0 && !owner.stepping && !owner.runtimeCalls) owner.session->deferScriptScene(); }
+};
+struct RuntimeSceneState : mv::RuntimeObject {
+  mv::Ui state;
+  explicit RuntimeSceneState(const mv::Ui& value) : state(value) {}
+};
 struct RuntimeCallScope {
-  int& depth;
-  explicit RuntimeCallScope(EngineSession& owner) : depth(owner.runtimeCalls) { ++depth; }
-  ~RuntimeCallScope() { --depth; }
+  EngineSession& owner;
+  explicit RuntimeCallScope(EngineSession& value) : owner(value) { ++owner.runtimeCalls; }
+  ~RuntimeCallScope() {
+    if (--owner.runtimeCalls == 0 && !owner.stepping && !owner.sceneCalls) owner.session->deferScriptScene();
+  }
 };
 constexpr napi_type_tag engineSessionTag{0x0578d08b153544caULL, 0x8f758858cefbf452ULL};
 EngineSession& session(napi_env env, napi_value object) {
@@ -109,7 +135,137 @@ EngineSession& session(napi_env env, napi_value object) {
   EngineSession* value = nullptr;
   check(env, napi_unwrap(env, object, reinterpret_cast<void**>(&value)), "invalid engine session");
   if (!value || !value->session) throw std::runtime_error("engine session is disposed");
+  if (!value->stepping && !value->runtimeCalls && !value->sceneCalls) collectDatabase(value->database);
   return *value;
+}
+struct DatabaseGraph {
+  napi_env env;
+  EngineSession* owner;
+  napi_ref roots = nullptr;
+  std::uint64_t nextIdentity = 0;
+  std::vector<std::shared_ptr<void>> pins;
+  DatabaseGraph(napi_env environment, EngineSession& session, napi_value object) : env(environment), owner(&session) {
+    auto references = moduleObject(env);
+    check(env, napi_set_named_property(env, object, "__mvDatabaseReferences", references), "cannot attach database references");
+    check(env, napi_create_reference(env, references, 0, &roots), "cannot reference database roots");
+  }
+  ~DatabaseGraph() { napi_delete_reference(env, roots); }
+  napi_value references() const {
+    napi_value result = nullptr;
+    check(env, napi_get_reference_value(env, roots, &result), "cannot retrieve database roots");
+    if (!result || !owner) throw std::runtime_error("database session is unavailable");
+    return result;
+  }
+  template<class T> std::shared_ptr<T> pin(std::shared_ptr<T> value) { pins.push_back(value); return value; }
+};
+void collectDatabase(const std::shared_ptr<DatabaseGraph>& graph) { if (graph) graph->pins.clear(); }
+void disconnectDatabase(const std::shared_ptr<DatabaseGraph>& graph) { if (graph) { graph->owner = nullptr; graph->pins.clear(); } }
+bool sameDatabaseValue(const mv::Value& left, const mv::Value& right) {
+  if (left.reader || right.reader) return left.reader == right.reader;
+  if (left.data.index() != right.data.index()) return false;
+  if (const auto* value = std::get_if<bool>(&left.data)) return *value == std::get<bool>(right.data);
+  if (const auto* value = std::get_if<double>(&left.data)) return *value == std::get<double>(right.data);
+  if (const auto* value = std::get_if<std::string>(&left.data)) return *value == std::get<std::string>(right.data);
+  return true;
+}
+struct DatabaseReader : mv::ValueReader {
+  std::weak_ptr<DatabaseGraph> graph;
+  napi_env env;
+  napi_ref reference = nullptr;
+  std::string identity;
+  bool isArray = false, overlay = false;
+  std::shared_ptr<mv::ValueReader> fallback;
+  mutable std::set<std::string> knownFields;
+  mutable std::map<std::string, std::weak_ptr<mv::Value>> fields;
+  mutable std::weak_ptr<mv::Value::Array> items;
+  DatabaseReader(const std::shared_ptr<DatabaseGraph>& context, napi_value object, bool root) : graph(context), env(context->env), overlay(root) {
+    identity = std::to_string(++context->nextIdentity);
+    check(env, napi_is_array(env, object, &isArray), "cannot inspect database collection");
+    if (overlay) {
+      napi_value keys; std::uint32_t length;
+      check(env, napi_get_property_names(env, object, &keys), "cannot inspect database tables");
+      check(env, napi_get_array_length(env, keys, &length), "cannot inspect database table count");
+      for (std::uint32_t index = 0; index < length; ++index) {
+        napi_value key; check(env, napi_get_element(env, keys, index, &key), "cannot inspect database table name");
+        knownFields.insert(asString(env, key));
+      }
+    }
+    check(env, napi_set_named_property(env, context->references(), identity.c_str(), object), "cannot retain database object");
+    check(env, napi_create_reference(env, object, 0, &reference), "cannot reference database object");
+  }
+  ~DatabaseReader() override {
+    if (const auto context = graph.lock()) {
+      napi_value roots = nullptr;
+      if (napi_get_reference_value(env, context->roots, &roots) == napi_ok && roots) {
+        napi_value key; bool removed;
+        if (napi_create_string_utf8(env, identity.c_str(), identity.size(), &key) == napi_ok) napi_delete_property(env, roots, key, &removed);
+      }
+    }
+    napi_delete_reference(env, reference);
+  }
+  std::shared_ptr<DatabaseGraph> context() const {
+    auto result = graph.lock();
+    if (!result || !result->owner) throw std::runtime_error("database session is unavailable");
+    return result;
+  }
+  napi_value object() const {
+    context();
+    napi_value result = nullptr;
+    check(env, napi_get_reference_value(env, reference, &result), "cannot retrieve database object");
+    if (!result) throw std::runtime_error("database object is unavailable");
+    return result;
+  }
+  const mv::Value* retain(const std::string& key, napi_value value) const {
+    auto owner = context();
+    mv::Value current;
+    napi_valuetype type; check(env, napi_typeof(env, value, &type), "cannot inspect database value");
+    auto previous = fields[key].lock();
+    if (type == napi_object) {
+      if (previous && previous->reader) {
+        const auto reader = std::dynamic_pointer_cast<DatabaseReader>(previous->reader);
+        bool same = false;
+        if (reader) check(env, napi_strict_equals(env, reader->object(), value, &same), "cannot compare database objects");
+        if (same) return previous.get();
+      }
+      auto reader = std::make_shared<DatabaseReader>(owner, value, false);
+      current.data = reader->isArray ? mv::Value(mv::Value::Array{}).data : mv::Value(mv::Value::Object{}).data;
+      current.reader = std::move(reader);
+    } else {
+      current = readValue(env, value,0,true);
+      if (previous && sameDatabaseValue(*previous, current)) return previous.get();
+    }
+    auto result = owner->pin(std::make_shared<mv::Value>(std::move(current)));
+    fields[key] = result;
+    return result.get();
+  }
+  const mv::Value* field(const std::string& key) const override {
+    auto owner = context(); RuntimeCallScope call(*owner->owner);
+    auto source = object();
+    if (overlay) {
+      bool present; check(env, napi_has_named_property(env, source, key.c_str(), &present), "cannot inspect database field");
+      if (!present && !knownFields.contains(key)) return fallback ? fallback->field(key) : nullptr;
+      if (present) knownFields.insert(key);
+    }
+    napi_value value; check(env, napi_get_named_property(env, source, key.c_str(), &value), "cannot read database field");
+    return retain(key, value);
+  }
+  const mv::Value* element(std::size_t index) const override { return field(std::to_string(index)); }
+  const mv::Value::Array& array() const override {
+    static const mv::Value::Array empty;
+    if (!isArray) return empty;
+    auto owner = context(); RuntimeCallScope call(*owner->owner);
+    std::uint32_t length; check(env, napi_get_array_length(env, object(), &length), "cannot read database length");
+    auto result = std::make_shared<mv::Value::Array>(); result->reserve(length);
+    for (std::uint32_t index = 0; index < length; ++index) result->push_back(element(index)->reference());
+    if (auto previous = items.lock(); previous && previous->size() == result->size() && std::equal(previous->begin(), previous->end(), result->begin(), sameDatabaseValue)) return *previous;
+    items = owner->pin(result);
+    return *result;
+  }
+  mv::Value snapshot() const override { auto owner = context(); RuntimeCallScope call(*owner->owner); return readValue(env, object(),0,true); }
+};
+napi_value databaseObject(const mv::Value& value) {
+  const auto reader = std::dynamic_pointer_cast<DatabaseReader>(value.reader);
+  return reader && !reader->overlay ? reader->object() : nullptr;
 }
 struct RuntimePayload {
   std::shared_ptr<const int> owner;
@@ -146,6 +302,12 @@ napi_value runtimeHandle(EngineSession& owner, const std::shared_ptr<mv::Runtime
   check(env, napi_define_properties(env, result, 1, &identityProperty), "cannot set runtime identity");
   if (const auto bound = std::dynamic_pointer_cast<mv::RuntimeBoundObject>(object))
     check(env, napi_set_named_property(env, result, "bindingType", string(env, bound->bindingType())), "cannot set runtime binding type");
+  if (const auto character=std::dynamic_pointer_cast<mv::RuntimeCharacter>(object)) {
+    check(env,napi_set_named_property(env,result,"entityType",string(env,"character")),"cannot set entity type");
+    check(env,napi_set_named_property(env,result,"entityId",number(env,character->id)),"cannot set entity ID");
+  } else if (const auto actor=std::dynamic_pointer_cast<mv::RuntimeActor>(object)) {
+    check(env,napi_set_named_property(env,result,"entityType",string(env,actor->value().enemy ? "enemy" : "actor")),"cannot set entity type");
+  }
   if (const auto picture = std::dynamic_pointer_cast<mv::RuntimePicture>(object)) {
     napi_value spriteIdentity;
     check(env, napi_create_bigint_uint64(env, picture->sprite->runtimeIdentity, &spriteIdentity), "cannot identify picture sprite");
@@ -295,14 +457,18 @@ napi_value databaseInvoke(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info);
   if (args.size() < 2 || args.size() > 3) throw std::invalid_argument("database operation requires session, method and optional data");
   auto& owner = session(env, args[0]); const auto method = asString(env, args[1]);
-  if (method == "canWrite") return boolean(env, owner.session->mapId() == 0 && !owner.session->inBattle());
+  if (method == "canWrite") return boolean(env, owner.session->canWriteDatabase());
   if (method == "read" && args.size() == 3) return writeValue(env, owner.session->database()[asString(env, args[2])]);
   if (method == "publish" && args.size() == 3) {
     if (owner.runtimeCalls || owner.stepping) throw std::runtime_error("cannot replace database tables during a script callback or step");
     RuntimeCallScope scope(owner);
-    auto tables = readValue(env,args[2]);
-    if (!std::holds_alternative<mv::Value::Object>(tables.data)) throw std::invalid_argument("database publication requires named tables");
-    owner.session->setDatabaseTables(std::move(tables));
+    napi_valuetype type; check(env,napi_typeof(env,args[2],&type),"cannot inspect database tables");
+    if (type!=napi_object) throw std::invalid_argument("database publication requires named tables");
+    owner.session->setDatabaseTables(mv::Value::Object{});
+    if (!owner.database) owner.database = std::make_shared<DatabaseGraph>(env, owner, args[0]);
+    auto reader = std::make_shared<DatabaseReader>(owner.database, args[2], true);
+    reader->fallback = owner.session->database().reader;
+    owner.session->setDatabaseReader(std::move(reader));
     return undefined(env);
   }
   if (method == "metadata" && args.size() == 3) {
@@ -365,6 +531,13 @@ napi_value connectRuntime(napi_env env, napi_callback_info info) try {
   check(env, napi_set_named_property(env, args[0], "__mvRuntime", args[1]), "cannot attach runtime");
   check(env, napi_create_reference(env, args[0], 0, &owner.runtimeSelf), "cannot reference runtime owner");
   auto hooks = std::make_shared<mv::RuntimeHooks>();
+  hooks->scene = [&owner](const std::string& method, int scene) -> std::optional<bool> {
+    if (owner.sceneRequestsSuppressed) return {};
+    const auto result = callRuntime(owner, "scene", {string(owner.env, method), number(owner.env, scene)});
+    napi_valuetype type; check(owner.env, napi_typeof(owner.env, result, &type), "cannot inspect scene result");
+    if (type == napi_null) return {};
+    return asBoolean(owner.env, result);
+  };
   hooks->picture = [&owner](const auto& object, const std::string& method, const mv::Value::Array& arguments) {
     return asBoolean(owner.env, callRuntime(owner, "picture", {runtimeHandle(owner, object), string(owner.env, method), writeValue(owner.env, arguments)}));
   };
@@ -417,8 +590,15 @@ napi_value connectRuntime(napi_env env, napi_callback_info info) try {
   hooks->systemBitmap = [&owner](const auto& object, const std::string& name) {
     return bitmapForRuntime(owner.env, callRuntime(owner, "systemBitmap", {runtimeHandle(owner, object), string(owner.env, name)}), owner.owner->core);
   };
-  hooks->nativeBitmap = [&owner](const auto& object,const std::string& method,const mv::Value::Array& arguments) {
-    return bitmapForRuntime(owner.env,callRuntime(owner,"nativeBitmap",{runtimeHandle(owner,object),string(owner.env,method),writeValue(owner.env,arguments)}),owner.owner->core);
+  hooks->nativeBitmap = [&owner](const auto& object,const std::string& method,const mv::Value::Array& arguments,const std::string& slot) {
+    return bitmapForRuntime(owner.env,callRuntime(owner,"nativeBitmap",{runtimeHandle(owner,object),string(owner.env,method),writeValue(owner.env,arguments),string(owner.env,slot)}),owner.owner->core);
+  };
+  hooks->boundObjectMethod = [&owner](const auto& object,const std::string& method,const auto& argument) -> std::optional<mv::Value> {
+    const auto result=callRuntime(owner,"boundObjectMethod",{runtimeHandle(owner,object),string(owner.env,method),argument ? runtimeHandle(owner,argument) : null(owner.env)});
+    napi_valuetype type; check(owner.env,napi_typeof(owner.env,result,&type),"cannot inspect object override");
+    if (type==napi_null) return {};
+    napi_value value; check(owner.env,napi_get_named_property(owner.env,result,"value",&value),"cannot read object override result");
+    return readValue(owner.env,value);
   };
   hooks->actorLifecycle = [&owner](const auto& object, const std::string& method) {
     return asBoolean(owner.env, callRuntime(owner, "actorLifecycle", {runtimeHandle(owner, object), string(owner.env, method)}));
@@ -544,6 +724,7 @@ napi_value interpreterWaitInvoke(napi_env env, napi_callback_info info) try {
 napi_value interpreterCommandInvoke(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info, 3); auto& owner = session(env, args.at(0));
   requireRuntimeOwner(owner, args.at(1));
+  SceneTransitionScope transition(owner);
   RuntimeCallScope callScope(owner);
   napi_valuetype type;
   check(env, napi_typeof(env, args.at(2), &type), "cannot inspect command code");
@@ -569,6 +750,7 @@ napi_value interpreterLifecycle(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info);
   if (args.size() != 3 && args.size() != 5) throw std::invalid_argument("interpreterLifecycle requires session, interpreter, method and optional list/event ID");
   auto& owner = session(env, args[0]); requireRuntimeOwner(owner, args[1]);
+  SceneTransitionScope transition(owner);
   RuntimeCallScope callScope(owner);
   std::shared_ptr<mv::RuntimeCommandList> list;
   int eventId = 0;
@@ -591,9 +773,38 @@ napi_value ownsPictureSprite(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info, 2); auto& owner = session(env, args.at(0)); requireRuntimeOwner(owner, args.at(1));
   return boolean(env, owner.session->ownsPictureSprite(*runtimeAs<mv::RuntimePicture>(env, args[1])));
 } catch (const std::exception& error) { return throwException(env, error); }
+napi_value windowClasses(napi_env env,napi_callback_info) try {
+  mv::Value::Array result;
+  for (const auto& binding:mv::windowBindings()) {
+    mv::Value::Array fields; for (const auto& field:binding.fields) fields.emplace_back(field);
+    result.emplace_back(mv::Value::Object{{"name",binding.name},{"parent",binding.parent},{"arguments",binding.arguments},{"fields",fields},{"selectable",binding.selectable},{"command",binding.command},{"data",binding.data}});
+  }
+  return writeValue(env,result);
+} catch (const std::exception& error) { return throwException(env,error); }
+napi_value windowModel(napi_env env,napi_callback_info info) try {
+  const auto args=arguments(env,info); auto& owner=session(env,args.at(0));
+  const auto name=asString(env,args.at(2)),operation=asString(env,args.at(3));
+  const auto values=readValue(env,args.at(4)).array();
+  for (const auto& binding:mv::windowBindings()) if (binding.name==name) {
+    if (operation=="construct") setWindowModelForRuntime(env,args[1],owner.owner->core,binding.create(*owner.session,values));
+    auto model=windowModelForRuntime(env,args[1],owner.owner->core);
+    return writeValue(env,binding.invoke(*model,*owner.session,operation=="construct" ? "geometry" : operation,values));
+  }
+  throw std::invalid_argument("unknown native window class: "+name);
+} catch (const std::exception& error) { return throwException(env,error); }
 napi_value coreService(napi_env env,napi_callback_info info) try {
   const auto args=arguments(env,info); const auto methodName=asString(env,args.at(0));
   using Decrypter=mv::Decrypter;
+  if (methodName=="printError") { mv::core::Graphics::printError(asString(env,args.at(1)),asString(env,args.at(2))); return undefined(env); }
+  if (methodName=="audioMasterVolume") return number(env,mv::core::WebAudio::masterVolume);
+  if (methodName=="initializeGraphics") return boolean(env,mv::core::Graphics::initialize(asInt32(env,args.at(1)),asInt32(env,args.at(2)),"webgl"));
+  if (methodName=="isVideoPlaying") return boolean(env,mv::core::Graphics::isVideoPlaying());
+  if (methodName=="startLoading") { mv::core::Graphics::startLoading(); return undefined(env); }
+  if (methodName=="endLoading") { mv::core::Graphics::endLoading(); return undefined(env); }
+  if (methodName=="updateLoading") { mv::core::Graphics::updateLoading(); return undefined(env); }
+  if (methodName=="tickStart") { mv::core::Graphics::tickStart(); return undefined(env); }
+  if (methodName=="tickEnd") { mv::core::Graphics::tickEnd(); return undefined(env); }
+  if (methodName=="isFontLoaded") return boolean(env,mv::core::Graphics::isFontLoaded(asString(env,args.at(1))));
   if (methodName=="extToEncryptExt") return string(env,Decrypter::extToEncryptExt(asString(env,args.at(1))));
   if (methodName=="checkImgIgnore") return boolean(env,Decrypter::checkImgIgnore(asString(env,args.at(1))));
   if (methodName=="readEncryptionkey") { Decrypter::readEncryptionkey(readValue(env,args.at(1))); return undefined(env); }
@@ -643,6 +854,7 @@ napi_value messageChoices(napi_env env, napi_callback_info info) try {
 } catch (const std::exception& error) { return throwException(env, error); }
 napi_value interpreterControl(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info, 4); auto& owner = session(env, args.at(0)); requireRuntimeOwner(owner, args.at(1));
+  SceneTransitionScope transition(owner);
   RuntimeCallScope callScope(owner); const auto parameters = readValue(env, args.at(3));
   owner.session->invokeInterpreterControl(runtimeAs<mv::RuntimeInterpreter>(env, args[1]), asString(env, args[2]), parameters.array());
   return undefined(env);
@@ -802,11 +1014,11 @@ napi_value createEngine(napi_env env, napi_callback_info info) {
   } catch (const std::exception& error) { return throwException(env, error); }
 }
 napi_value newGame(napi_env env, napi_callback_info info) {
-  try { const auto args = arguments(env, info); if (args.size() != 1) throw std::invalid_argument("newGame requires session"); auto& owner = session(env, args[0]); if (owner.runtimeCalls) throw std::runtime_error("cannot reset a session during a script callback"); owner.session->newGame(); return undefined(env); }
+  try { const auto args = arguments(env, info); if (args.size() != 1) throw std::invalid_argument("newGame requires session"); auto& owner = session(env, args[0]); if (owner.runtimeCalls) throw std::runtime_error("cannot reset a session during a script callback"); SceneTransitionScope transition(owner); owner.session->newGame(); return undefined(env); }
   catch (const std::exception& error) { return throwException(env, error); }
 }
 napi_value battleTest(napi_env env, napi_callback_info info) {
-  try { const auto args = arguments(env, info); if (args.size() != 1) throw std::invalid_argument("battleTest requires session"); auto& owner = session(env, args[0]); if (owner.runtimeCalls) throw std::runtime_error("cannot reset a session during a script callback"); owner.session->setupBattleTest(); return undefined(env); }
+  try { const auto args = arguments(env, info); if (args.size() != 1) throw std::invalid_argument("battleTest requires session"); auto& owner = session(env, args[0]); if (owner.runtimeCalls) throw std::runtime_error("cannot reset a session during a script callback"); SceneTransitionScope transition(owner); owner.session->setupBattleTest(); return undefined(env); }
   catch (const std::exception& error) { return throwException(env,error); }
 }
 napi_value stepEngine(napi_env env, napi_callback_info info) {
@@ -818,7 +1030,7 @@ napi_value stepEngine(napi_env env, napi_callback_info info) {
     struct StepScope {
       EngineSession& owner;
       explicit StepScope(EngineSession& value) : owner(value) { owner.stepping = true; }
-      ~StepScope() { owner.stepping = false; owner.touchPrepared = false; }
+      ~StepScope() { owner.session->deferScriptScene(); owner.stepping = false; owner.touchPrepared = false; }
     } stepScope(value);
     mv::Input controls;
     if (args.size() == 2) {
@@ -891,11 +1103,11 @@ napi_value stepEngine(napi_env env, napi_callback_info info) {
       controls.directionTriggered = controls.direction != 0 && value.input.isTriggered(direction);
     }
     if (controls.touchTriggered && controls.touchX && controls.touchY) mv::core::Graphics::onPointerDown(*controls.touchX,*controls.touchY);
-    value.session->step(controls); collectRuntime(value); return boolean(env, !value.session->finished());
+    value.session->step(controls); value.session->deferScriptScene(); collectRuntime(value); return boolean(env, !value.session->finished());
   } catch (const std::exception& error) { return throwException(env, error); }
 }
 napi_value acknowledge(napi_env env, napi_callback_info info) {
-  try { const auto args = arguments(env, info); if (args.empty() || args.size() > 2) throw std::invalid_argument("acknowledge requires session and optional choice"); session(env, args[0]).session->acknowledge(args.size() == 2 ? asInt32(env, args[1]) : -1); return undefined(env); }
+  try { const auto args = arguments(env, info); if (args.empty() || args.size() > 2) throw std::invalid_argument("acknowledge requires session and optional choice"); auto& owner = session(env, args[0]); SceneTransitionScope transition(owner); owner.session->acknowledge(args.size() == 2 ? asInt32(env, args[1]) : -1); return undefined(env); }
   catch (const std::exception& error) { return throwException(env, error); }
 }
 napi_value snapshot(napi_env env, napi_callback_info info) {
@@ -946,9 +1158,34 @@ napi_value render(napi_env env, napi_callback_info info) {
   } catch (const std::exception& error) { return throwException(env, error); }
 }
 napi_value openTitle(napi_env env, napi_callback_info info) {
-  try { const auto args = arguments(env, info); if (args.size() != 1) throw std::invalid_argument("openTitle requires session"); session(env, args[0]).session->openTitle(); return undefined(env); }
+  try { const auto args = arguments(env, info); if (args.size() != 1) throw std::invalid_argument("openTitle requires session"); auto& owner = session(env, args[0]); SceneTransitionScope transition(owner); owner.session->openTitle(); return undefined(env); }
   catch (const std::exception& error) { return throwException(env, error); }
 }
+napi_value sceneControl(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info);
+  if (args.size() < 2 || args.size() > 3) throw std::invalid_argument("scene control requires session, method and optional state");
+  auto& owner = session(env, args[0]); const auto method = asString(env, args[1]);
+  SceneTransitionScope transition(owner);
+  if (method == "capture") return runtimeHandle(owner, std::make_shared<RuntimeSceneState>(owner.session->ui()));
+  if (method == "restore" && args.size() == 3) {
+    requireRuntimeOwner(owner, args[2]);
+    owner.session->prepareScriptScene(runtimeAs<RuntimeSceneState>(env, args[2])->state);
+  } else if ((method == "prepare" || method == "commit") && args.size() == 3) {
+    const int kind = asInt32(env, args[2]);
+    if (kind < -1 || kind > static_cast<int>(mv::Scene::debug) || (method == "prepare" && kind < 0))
+      throw std::invalid_argument("invalid native scene kind");
+    if (method == "prepare") { mv::Ui state; state.scene = static_cast<mv::Scene>(kind); owner.session->prepareScriptScene(std::move(state)); }
+    else owner.session->commitScriptScene(kind < 0 ? std::optional<mv::Scene>{} : std::optional<mv::Scene>{static_cast<mv::Scene>(kind)});
+  } else if (method == "title") {
+    struct Guard {
+      bool& suppressed;
+      explicit Guard(bool& flag) : suppressed(flag) { suppressed = true; }
+      ~Guard() { suppressed = false; }
+    } guard(owner.sceneRequestsSuppressed);
+    owner.session->openTitle();
+  } else throw std::invalid_argument("scene control is not bound: " + method);
+  return undefined(env);
+} catch (const std::exception& error) { return throwException(env, error); }
 napi_value scriptStage(napi_env env, napi_callback_info info) {
   try {
     const auto args = arguments(env, info);
@@ -982,6 +1219,7 @@ napi_value entity(napi_env env, napi_callback_info info) try {
   std::shared_ptr<mv::RuntimeObject> object;
   if (kind == "character") object = owner.session->runtimeCharacter(id);
   else if (kind == "actor") object = owner.session->runtimeActor(id);
+  else if (kind == "enemy") object = owner.session->runtimeEnemy(id);
   else throw std::invalid_argument("entity kind is not bound: " + kind);
   return object ? runtimeHandle(owner, object) : null(env);
 } catch (const std::exception& error) { return throwException(env, error); }
@@ -998,12 +1236,37 @@ napi_value entityField(napi_env env, napi_callback_info info) try {
     else if (field == "realX") scalar = &value.realX; else if (field == "realY") scalar = &value.realY;
     else if (field == "direction") integer = &value.direction; else if (field == "opacity") integer = &value.opacity;
     else if (field == "moveRouteIndex") integer = &value.routeIndex;
-    else if (field == "transparent") flag = &value.transparent; else if (field == "characterName") text = &value.characterName;
+    else if (field == "moveSpeed") integer = &value.moveSpeed;
+    else if (field == "pattern") integer = &value.pattern;
+    else if (field == "tileId") integer = &value.tileId;
+    else if (field == "jumpCount") integer = &value.jumpCount;
+    else if (field == "movementSuccess") flag = &value.movementSuccess;
+    else if (field == "directionFix") flag = &value.directionFix;
+    else if (field == "transparent") flag = &value.transparent; else if (field == "through") flag = &value.through; else if (field == "characterName") text = &value.characterName;
   } else if (auto actor = std::dynamic_pointer_cast<mv::RuntimeActor>(object)) {
     auto& value = actor->value();
     if (field == "id") integer = &value.id;
     else if (field == "classId") integer = &value.classId;
     if (field == "enemy") return boolean(env, value.enemy);
+    if (field == "hidden") flag = &value.hidden;
+    if (field == "level") integer = &value.level;
+    else if (field == "profile") text = &value.profile;
+    else if (field == "characterName") text = &value.characterName;
+    else if (field == "characterIndex") integer = &value.characterIndex;
+    else if (field == "faceName") text = &value.faceName;
+    else if (field == "faceIndex") integer = &value.faceIndex;
+    else if (field == "battlerName") text = &value.battlerName;
+    else if (field == "result.used") flag = &value.result.used;
+    else if (field == "result.missed") flag = &value.result.missed;
+    else if (field == "result.evaded") flag = &value.result.evaded;
+    else if (field == "result.physical") flag = &value.result.physical;
+    else if (field == "result.drain") flag = &value.result.drain;
+    else if (field == "result.critical") flag = &value.result.critical;
+    else if (field == "result.success") flag = &value.result.success;
+    else if (field == "result.hpAffected") flag = &value.result.hpAffected;
+    else if (field == "result.hpDamage") integer = &value.result.hpDamage;
+    else if (field == "result.mpDamage") integer = &value.result.mpDamage;
+    else if (field == "result.tpDamage") integer = &value.result.tpDamage;
     if (field == "screenX") scalar = &value.screenX; else if (field == "screenY") scalar = &value.screenY;
     if (field == "hp") integer = &value.hp; else if (field == "mp") integer = &value.mp; else if (field == "tp") integer = &value.tp;
     else if (field == "name") text = &value.name; else if (field == "nickname") text = &value.nickname;
@@ -1096,11 +1359,12 @@ napi_value describeClassBindings(napi_env env, napi_callback_info) try {
     mv::Value::Array fields, methods, events, statics;
     for (const auto& field : binding.fields) fields.emplace_back(mv::Value::Object{{"name", field.name}, {"writable", bool(field.set)}, {"kind", field.kind}});
     for (const auto& field : binding.displays) fields.emplace_back(mv::Value::Object{{"name", field.name}, {"writable", bool(field.set)}, {"kind", "display"}});
+    for (const auto& field : binding.references) fields.emplace_back(mv::Value::Object{{"name", field.name}, {"writable", bool(field.set)}, {"kind", "object"}});
     for (const auto& method : binding.methods) {
       mv::Value::Array kinds, aliases;
       for (const auto& kind : method.argumentKinds) kinds.emplace_back(kind);
       for (const auto& [property, index] : method.aliases) aliases.emplace_back(mv::Value::Object{{"property", property}, {"index", static_cast<int>(index)}});
-      methods.emplace_back(mv::Value::Object{{"name", method.name}, {"arity", static_cast<int>(method.arity)}, {"argumentKinds", kinds}, {"aliases", aliases}, {"returnsValue", method.returnsValue}, {"defaults",method.defaults}});
+      methods.emplace_back(mv::Value::Object{{"name", method.name}, {"arity", static_cast<int>(method.arity)}, {"argumentKinds", kinds}, {"aliases", aliases}, {"returnsValue", method.returnsValue}, {"defaults",method.defaults}, {"inherited",method.inherited}});
     }
     for (const auto& event:binding.events) events.emplace_back(event.name);
     for (const auto& method:binding.statics) statics.emplace_back(mv::Value::Object{{"name",method.name},{"defaults",method.defaults}});
@@ -1137,12 +1401,18 @@ napi_value boundField(napi_env env, napi_callback_info info) try {
 } catch (const std::exception& error) { return throwException(env,error); }
 napi_value invokeBoundMethod(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env,info);
-  if (args.size() != 3) throw std::invalid_argument("class invocation requires model, method and arguments");
+  if (args.size() < 3 || args.size() > 4) throw std::invalid_argument("class invocation requires model, method and arguments");
   const auto object = runtimeAs<mv::RuntimeBoundObject>(env,args[0]); const auto name = asString(env,args[1]);
   const auto& payload = runtimePayload(env,args[0]);
   bool array = false; check(env,napi_is_array(env,args[2],&array),"cannot inspect native arguments");
   if (!array) throw std::invalid_argument("native method arguments must be an array");
-  for (auto* binding = findBindingClass(object->bindingType()); binding; binding = findBindingClass(binding->parent))
+  const auto* selected=findBindingClass(object->bindingType());
+  if (args.size()==4) {
+    const auto declaring=asString(env,args[3]);
+    while (selected && selected->name!=declaring) selected=findBindingClass(selected->parent);
+    if (!selected) throw std::invalid_argument("declaring class is not an ancestor of the native object");
+  }
+  for (auto* binding = selected; binding; binding = findBindingClass(binding->parent))
     for (const auto& method : binding->methods) if (method.name == name) {
       std::uint32_t length = 0; check(env,napi_get_array_length(env,args[2],&length),"cannot read native arguments");
       if (length != method.arity) throw std::invalid_argument("native method argument count differs");
@@ -1214,16 +1484,69 @@ napi_value boundDisplayField(napi_env env, napi_callback_info info) try {
     }
   throw std::invalid_argument("native display field is not bound: " + name);
 } catch (const std::exception& error) { return throwException(env,error); }
+napi_value boundReferenceField(napi_env env,napi_callback_info info) try {
+  const auto args=arguments(env,info); if (args.size()<3 || args.size()>4) throw std::invalid_argument("reference requires session, object, field and optional value");
+  auto& owner=session(env,args[0]); requireRuntimeOwner(owner,args[1]);
+  const auto object=runtimeAs<mv::RuntimeBoundObject>(env,args[1]); const auto name=asString(env,args[2]);
+  for (auto* binding=findBindingClass(object->bindingType());binding;binding=findBindingClass(binding->parent))
+    for (const auto& field:binding->references) if (field.name==name) {
+      if (args.size()==4) {
+        napi_valuetype type; check(env,napi_typeof(env,args[3],&type),"cannot inspect reference");
+        if (type==napi_null) field.set(*object,{});
+        else { requireRuntimeOwner(owner,args[3]); field.set(*object,runtimePayload(env,args[3]).object); }
+      }
+      const auto value=field.get(*object); return value ? runtimeHandle(owner,value) : null(env);
+    }
+  throw std::invalid_argument("reference field is not bound: "+name);
+} catch (const std::exception& error) { return throwException(env,error); }
 napi_value actorInvoke(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info);
-  if (args.size() != 3) throw std::invalid_argument("actorInvoke requires session, actor and method");
+  if (args.size() < 3 || args.size() > 4) throw std::invalid_argument("actorInvoke requires session, actor, method and optional arguments");
   auto& owner = session(env, args[0]); requireRuntimeOwner(owner, args[1]); RuntimeCallScope callScope(owner);
   const auto object = runtimeAs<mv::RuntimeActor>(env, args[1]);
   const auto method = asString(env, args[2]);
   if (method == "initSkills") owner.session->initializeActorSkills(object);
   else if (method == "initMembers") owner.session->initializeActorMembers(object);
-  else throw std::invalid_argument("actor operation is not bound: " + method);
+  else return writeValue(env, owner.session->runtimeBattlerCommand(object, method, args.size() == 4 ? readValue(env, args[3]).array() : mv::Value::Array{}));
   return undefined(env);
+} catch (const std::exception& error) { return throwException(env, error); }
+napi_value battlerArray(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info);
+  if (args.size() < 2 || args.size() > 3) throw std::invalid_argument("battlerArray requires actor, field and optional array");
+  auto& battler = runtimeAs<mv::RuntimeActor>(env, args[0])->value();
+  const auto field = asString(env, args[1]);
+  auto access = [&](auto& data, bool fixed) -> napi_value {
+    if (args.size() == 3) {
+      const auto value = readValue(env, args[2]);
+      if (!std::holds_alternative<mv::Value::Array>(value.data)) throw std::invalid_argument("battler collection requires an array");
+      if (fixed && value.array().size() != data.size()) throw std::invalid_argument("battler parameter array must contain eight entries");
+      std::vector<int> replacement;
+      for (const auto& item : value.array()) replacement.push_back(item.integer());
+      if constexpr (requires { data.resize(replacement.size()); }) data.resize(replacement.size());
+      std::copy(replacement.begin(), replacement.end(), data.begin());
+    }
+    mv::Value::Array result;
+    for (int value : data) result.emplace_back(value);
+    return writeValue(env, result);
+  };
+  if (field == "states") return access(battler.states, false);
+  if (field == "buffs") return access(battler.buffs, true);
+  if (field == "buffTurns") return access(battler.buffTurns, true);
+  if (field == "paramPlus") return access(battler.paramPlus, true);
+  if (field == "equips") return access(battler.equips, false);
+  if (field == "equipKinds") return access(battler.equipKinds, false);
+  if (field == "result.addedStates") return access(battler.result.addedStates, false);
+  if (field == "result.removedStates") return access(battler.result.removedStates, false);
+  if (field == "result.addedBuffs") return access(battler.result.addedBuffs, false);
+  if (field == "result.addedDebuffs") return access(battler.result.addedDebuffs, false);
+  if (field == "result.removedBuffs") return access(battler.result.removedBuffs, false);
+  if (field == "skills") {
+    std::vector<int> skills(battler.skills.begin(), battler.skills.end());
+    const auto result = access(skills, false);
+    if (args.size() == 3) battler.skills = std::set<int>(skills.begin(), skills.end());
+    return result;
+  }
+  throw std::invalid_argument("battler array is not bound: " + field);
 } catch (const std::exception& error) { return throwException(env, error); }
 napi_value characterCommand(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info);
@@ -1238,7 +1561,8 @@ napi_value characterCommand(napi_env env, napi_callback_info info) try {
 napi_value gameDataInvoke(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info);
   if (args.size() != 4) throw std::invalid_argument("gameDataInvoke requires session, store, method and arguments");
-  auto& owner = session(env, args[0]); RuntimeCallScope callScope(owner);
+  auto& owner = session(env, args[0]); SceneTransitionScope transition(owner);
+  RuntimeCallScope callScope(owner);
   const auto kind = asString(env, args[1]), method = asString(env, args[2]);
   const auto parameters = readValue(env, args[3]);
   if (kind == "variables" && method == "setValue" &&
@@ -1265,6 +1589,8 @@ napi_value managerInvoke(napi_env env, napi_callback_info info) {
     else if (method == "fadeOutBgs") mv::AudioManager::fadeOutBgs(value, sound.number());
     else if (method == "fadeOutMe") mv::AudioManager::fadeOutMe(value, sound.number());
     else if (method == "preloadImportantSounds") mv::SoundManager::preloadImportantSounds(value);
+    else if (method == "playSystemSound") mv::SoundManager::playSystemSound(value, sound.integer());
+    else if (method == "loadSystemSound") mv::SoundManager::loadSystemSound(value, sound.integer());
     else if (method == "playBuzzer") mv::SoundManager::playBuzzer(value);
     else if (method == "playOk") mv::SoundManager::playOk(value);
     else if (method == "playCancel") mv::SoundManager::playCancel(value);
@@ -1305,7 +1631,7 @@ napi_value displayAnimation(napi_env env, napi_callback_info info) {
   } catch (const std::exception& error) { return throwException(env, error); }
 }
 napi_value startBattle(napi_env env, napi_callback_info info) {
-  try { const auto args = arguments(env, info); if (args.size() != 4) throw std::invalid_argument("startBattle requires session, troop, canEscape, canLose"); auto& owner = session(env, args[0]); if (owner.runtimeCalls) throw std::runtime_error("cannot replace battle state during a script callback"); owner.session->startBattle(asInt32(env, args[1]), asBoolean(env, args[2]), asBoolean(env, args[3])); return undefined(env); }
+  try { const auto args = arguments(env, info); if (args.size() != 4) throw std::invalid_argument("startBattle requires session, troop, canEscape, canLose"); auto& owner = session(env, args[0]); if (owner.runtimeCalls) throw std::runtime_error("cannot replace battle state during a script callback"); SceneTransitionScope transition(owner); owner.session->startBattle(asInt32(env, args[1]), asBoolean(env, args[2]), asBoolean(env, args[3])); return undefined(env); }
   catch (const std::exception& error) { return throwException(env, error); }
 }
 napi_value chooseAction(napi_env env, napi_callback_info info) {
@@ -1333,7 +1659,7 @@ napi_value save(napi_env env, napi_callback_info info) {
   catch (const std::exception& error) { return throwException(env, error); }
 }
 napi_value load(napi_env env, napi_callback_info info) {
-  try { const auto args = arguments(env, info); if (args.size() != 2) throw std::invalid_argument("load requires session and contents"); auto& owner = session(env, args[0]); if (owner.runtimeCalls) throw std::runtime_error("cannot load a session during a script callback"); owner.session->load(readValue(env, args[1])); return undefined(env); }
+  try { const auto args = arguments(env, info); if (args.size() != 2) throw std::invalid_argument("load requires session and contents"); auto& owner = session(env, args[0]); if (owner.runtimeCalls) throw std::runtime_error("cannot load a session during a script callback"); SceneTransitionScope transition(owner); owner.session->load(readValue(env, args[1])); return undefined(env); }
   catch (const std::exception& error) { return throwException(env, error); }
 }
 napi_value storageStatus(napi_env env, napi_callback_info info) {
@@ -1353,13 +1679,14 @@ napi_value configuration(napi_env env, napi_callback_info info) {
   catch (const std::exception& error) { return throwException(env, error); }
 }
 napi_value completeStorage(napi_env env, napi_callback_info info) {
-  try { const auto args = arguments(env, info); if (args.size() != 2) throw std::invalid_argument("completeStorage requires session and success"); session(env, args[0]).session->completeStorage(asBoolean(env, args[1])); return undefined(env); }
+  try { const auto args = arguments(env, info); if (args.size() != 2) throw std::invalid_argument("completeStorage requires session and success"); auto& owner = session(env, args[0]); SceneTransitionScope transition(owner); owner.session->completeStorage(asBoolean(env, args[1])); return undefined(env); }
   catch (const std::exception& error) { return throwException(env, error); }
 }
 }
 void registerMvEngineBindings(napi_env env, napi_value exports) {
   napi_value engine; check(env, napi_create_object(env, &engine), "cannot create engine API");
   method(env, engine, "connectRuntime", connectRuntime);
+  method(env,engine,"windowClasses",windowClasses); method(env,engine,"windowModel",windowModel);
   method(env, engine, "picture", runtimePicture); method(env, engine, "createPicture", createRuntimePicture);
   method(env, engine, "pictureField", pictureField); method(env, engine, "pictureInvoke", pictureInvoke);
   method(env, engine, "pictureTone", pictureTone); method(env, engine, "toneComponent", toneComponent);
@@ -1383,7 +1710,7 @@ void registerMvEngineBindings(napi_env env, napi_value exports) {
   method(env, engine, "step", stepEngine); method(env, engine, "acknowledge", acknowledge);
   method(env, engine, "snapshot", snapshot); method(env, engine, "dispose", dispose);
   method(env, engine, "attach", attach); method(env, engine, "present", present); method(env, engine, "render", render); method(env, engine, "openTitle", openTitle);
-  method(env, engine, "scriptStage", scriptStage);
+  method(env, engine, "scriptStage", scriptStage); method(env, engine, "sceneControl", sceneControl);
   method(env, engine, "managerInvoke", managerInvoke);
   method(env, engine, "gameDataInvoke", gameDataInvoke);
   method(env, engine, "entity", entity); method(env, engine, "entityField", entityField);
@@ -1391,10 +1718,11 @@ void registerMvEngineBindings(napi_env env, napi_value exports) {
   method(env,classBindings,"describe",describeClassBindings); method(env,classBindings,"create",createBoundObject);
   method(env,classBindings,"field",boundField); method(env,classBindings,"invoke",invokeBoundMethod); method(env,classBindings,"active",boundObjectActive);
   method(env,classBindings,"display",boundDisplay);
-  method(env,classBindings,"displayField",boundDisplayField);
+  method(env,classBindings,"displayField",boundDisplayField); method(env,classBindings,"reference",boundReferenceField);
   method(env,classBindings,"listen",listenBoundObject); method(env,classBindings,"invokeStatic",invokeBoundStatic);
   check(env,napi_set_named_property(env,engine,"classBindings",classBindings),"cannot export class bindings");
   method(env, engine, "actionRate", actionRate); method(env, engine, "actorState", actorState); method(env, engine, "actorInvoke", actorInvoke); method(env, engine, "characterCommand", characterCommand);
+  method(env, engine, "battlerArray", battlerArray);
   method(env, engine, "displayAnimation", displayAnimation);
   method(env, engine, "playerTransfer", playerTransfer);
   method(env, engine, "updateTouch", updateTouch);

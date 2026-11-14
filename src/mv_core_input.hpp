@@ -36,10 +36,15 @@ class Input {
   int dir4() const { return dir4_; }
   int dir8() const { return dir8_; }
   double date() const { return date_; }
+  const auto& currentState() const { return current_; }
+  const auto& latestButton() const { return latest_; }
+  void setLatestButton(std::optional<std::string> value) { latest_ = std::move(value); }
+  void setCurrent(const std::string& name, bool pressed);
+  void eraseCurrent(const std::string& name);
+  void replaceCurrent(const std::vector<std::pair<std::string, bool>>& values);
   static bool shouldPreventDefault(int keyCode);
 
  private:
-  void setCurrent(const std::string& name, bool pressed);
   void updateGamepad(const Gamepad& gamepad);
   bool current(std::string_view name) const;
   static bool escapeCompatible(std::string_view name);

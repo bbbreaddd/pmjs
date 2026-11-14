@@ -29,10 +29,14 @@ Session& GeneratedRuntimeObject::checkedSession() const {
   if (!context || hooks.expired()) throw std::runtime_error("native sprite session has ended");
   return *context;
 }
-std::shared_ptr<core::PixelBitmap> GeneratedRuntimeObject::bitmap(const std::string& method,const Value::Array& arguments) {
+std::shared_ptr<core::PixelBitmap> GeneratedRuntimeObject::bitmap(const std::string& method,const Value::Array& arguments,const std::string& slot) {
   const auto owner=hooks.lock();
   if (!owner || !owner->nativeBitmap) throw std::runtime_error("native bitmap services are unavailable");
-  return owner->nativeBitmap(shared_from_this(),method,arguments);
+  return owner->nativeBitmap(shared_from_this(),method,arguments,slot);
+}
+bool GeneratedRuntimeObject::dispatchObject(const std::string& method,const std::shared_ptr<RuntimeObject>& argument) {
+  const auto owner=hooks.lock();
+  return owner && owner->boundObjectMethod && owner->boundObjectMethod(shared_from_this(),method,argument).has_value();
 }
 namespace {
 Value audioBufferMetadata(const core::WebAudio& audio) {
@@ -77,12 +81,20 @@ Value audioBufferMetadata(const core::WebAudio& audio) {
     void base_##Native() { NativeType::Native(); clearListeners(); }
 #define MV_BIND_CONTEXT() \
     Session& modelSession() const override { return GeneratedRuntimeObject::checkedSession(); } \
-    std::shared_ptr<core::PixelBitmap> modelBitmap(const std::string& method,const Value::Array& arguments) override { return GeneratedRuntimeObject::bitmap(method,arguments); }
+    std::shared_ptr<core::PixelBitmap> modelBitmap(const std::string& method,const Value::Array& arguments,const std::string& slot) override { return GeneratedRuntimeObject::bitmap(method,arguments,slot); }
+#define MV_BIND_INITIALIZE_OBJECT(Native, Arg, Parameter) \
+    void Native(Arg Parameter) override { if (!dispatchObject("initialize",Parameter)) NativeType::Native(Parameter); } \
+    void base_##Native(Arg Parameter) { NativeType::Native(Parameter); } \
+    void initializeNative() override { Native({}); }
 #define MV_BIND_OBJECT1(Name, Native, Arg, Parameter) \
-    void Native(Arg Parameter) override { NativeType::Native(Parameter); } \
+    void Native(Arg Parameter) override { if (!dispatchObject(#Name,Parameter)) NativeType::Native(Parameter); } \
     void base_##Native(Arg Parameter) { NativeType::Native(Parameter); }
+#define MV_BIND_INHERITED_BEGIN()
+#define MV_BIND_INHERITED_END()
+#define MV_BIND_OWN(Name)
 #define MV_BIND_FIELD(Name, Native)
 #define MV_BIND_POINT(Name, Native)
+#define MV_BIND_REFERENCE(Name, Native)
 #define MV_BIND_DISPLAY(Name, Native)
 #define MV_BIND_PROPERTY(Name, Native, Setter)
 #define MV_BIND_READONLY(Name, Expression)
@@ -91,7 +103,11 @@ Value audioBufferMetadata(const core::WebAudio& audio) {
 #define MV_BIND_STATIC1(Name, Native, Result, Arg, Default)
 #define MV_BIND_END() };
 #include "mv_binding_schema.def"
+#undef MV_BIND_INHERITED_BEGIN
+#undef MV_BIND_INHERITED_END
+#undef MV_BIND_OWN
 #undef MV_BIND_CONTEXT
+#undef MV_BIND_INITIALIZE_OBJECT
 #undef MV_BIND_OBJECT1
 #undef MV_BIND_OBJECT
 #undef MV_BIND_INITIALIZE1
@@ -109,31 +125,38 @@ Value audioBufferMetadata(const core::WebAudio& audio) {
 #undef MV_BIND_INITIALIZE
 #undef MV_BIND_FIELD
 #undef MV_BIND_POINT
+#undef MV_BIND_REFERENCE
 #undef MV_BIND_DISPLAY
 #undef MV_BIND_END
 
 std::vector<ClassBinding> generatedClassBindings() {
   std::vector<ClassBinding> result;
 #define MV_BIND_CLASS(Name, Native, Parent, ...) \
-  { using Type = Bound##Name; \
-    const auto get = [](RuntimeBoundObject& object) -> Type& { return dynamic_cast<Type&>(object); }; \
+  { using Type = Bound##Name; using NativeType = Native; \
+    const auto get = [](RuntimeBoundObject& object) -> NativeType& { return dynamic_cast<NativeType&>(object); }; \
     ClassBinding binding{#Name, #Parent, #Native, [] { return std::make_shared<Type>(); }, {}, {}}; \
-    binding.generated = true;
+    binding.generated = true; bool inherited=false;
+#define MV_BIND_INHERITED_BEGIN() inherited=true;
+#define MV_BIND_INHERITED_END() inherited=false;
+#define MV_BIND_OWN(Name) for (auto& method:binding.methods) if (method.name==#Name) method.inherited=false;
 #define MV_BIND_CONTEXT()
-#define MV_BIND_OBJECT1(Name, Native, Arg, Parameter) MV_BIND_VOID(Name,Native)
+#define MV_BIND_INITIALIZE_OBJECT(Native, Arg, Parameter) \
+    binding.initializer="_initializeNative"; binding.constructorDefaults={Value{}}; \
+    binding.methods.push_back(bindingFunction("_initializeNative",+[](RuntimeBoundObject& object,Arg Parameter) { dynamic_cast<NativeType&>(object).NativeType::Native(Parameter); }));
+#define MV_BIND_OBJECT1(Name, Native, Arg, Parameter) binding.methods.push_back(bindingFunction(#Name,+[](RuntimeBoundObject& object,Arg Parameter) { dynamic_cast<NativeType&>(object).NativeType::Native(Parameter); }));
 #define MV_BIND_OBJECT(Name, Native, Parent, ...) MV_BIND_CLASS(Name, Native, Parent, __VA_ARGS__)
-#define MV_BIND_VOID(Name, Native) binding.methods.push_back(bindingMethod(#Name, get, &Type::base_##Native));
+#define MV_BIND_VOID(Name, Native) { auto method=bindingFunction(#Name,+[](RuntimeBoundObject& object) { dynamic_cast<NativeType&>(object).NativeType::Native(); }); method.inherited=inherited; binding.methods.push_back(std::move(method)); }
 #define MV_BIND_INITIALIZE(Native) \
     binding.initializer = "_initializeNative"; \
-    binding.methods.push_back(bindingMethod("_initializeNative", get, &Type::base_##Native));
+    binding.methods.push_back(bindingFunction("_initializeNative",+[](RuntimeBoundObject& object) { dynamic_cast<NativeType&>(object).NativeType::Native(); }));
 #define MV_BIND_INITIALIZE1(Native, TypeName, Parameter, Default) \
     binding.initializer="_initializeNative"; binding.constructorDefaults={Default}; \
-    binding.methods.push_back(bindingMethod("_initializeNative",get,&Type::base_##Native));
+    binding.methods.push_back(bindingFunction("_initializeNative",+[](RuntimeBoundObject& object,TypeName Parameter) { dynamic_cast<NativeType&>(object).NativeType::Native(Parameter); }));
 #define MV_BIND_VOID1(Name, Native, Arg, Parameter, Default) \
-    { auto method=bindingMethod(#Name,get,&Type::base_##Native); method.defaults={Default}; binding.methods.push_back(std::move(method)); }
+    { auto method=bindingFunction(#Name,+[](RuntimeBoundObject& object,Arg Parameter) { dynamic_cast<NativeType&>(object).NativeType::Native(Parameter); }); method.defaults={Default}; binding.methods.push_back(std::move(method)); }
 #define MV_BIND_VOID2(Name, Native, T1, P1, D1, T2, P2, D2) \
-    { auto method=bindingMethod(#Name,get,&Type::base_##Native); method.defaults={D1,D2}; binding.methods.push_back(std::move(method)); }
-#define MV_BIND_VALUE0(Name, Native, Result) MV_BIND_VOID(Name,Native)
+    { auto method=bindingFunction(#Name,+[](RuntimeBoundObject& object,T1 P1,T2 P2) { dynamic_cast<NativeType&>(object).NativeType::Native(P1,P2); }); method.defaults={D1,D2}; binding.methods.push_back(std::move(method)); }
+#define MV_BIND_VALUE0(Name, Native, Result) binding.methods.push_back(bindingFunction(#Name,+[](RuntimeBoundObject& object) -> Result { return dynamic_cast<NativeType&>(object).NativeType::Native(); }));
 #define MV_BIND_RESET(Name, Native) MV_BIND_VOID(Name,Native)
 #define MV_BIND_PROPERTY(Name, Native, Setter) \
     binding.fields.push_back(bindingProperty(#Name,[get](RuntimeBoundObject& object) { return get(object).Native; }, \
@@ -151,11 +174,17 @@ std::vector<ClassBinding> generatedClassBindings() {
     binding.fields.push_back(bindingField(#Name, [get](RuntimeBoundObject& object) -> auto& { return get(object).Native; }));
 #define MV_BIND_POINT(Name, Native) \
     binding.fields.push_back(bindingPoint(#Name, [get](RuntimeBoundObject& object) -> auto& { return get(object).Native; }));
+#define MV_BIND_REFERENCE(Name, Native) \
+    binding.references.push_back(bindingReference(#Name,[get](RuntimeBoundObject& object) -> auto& { return get(object).Native; }));
 #define MV_BIND_DISPLAY(Name, Native) \
     binding.displays.push_back(bindingDisplayField(#Name, [get](RuntimeBoundObject& object) -> auto& { return get(object).Native; }));
 #define MV_BIND_END() result.push_back(std::move(binding)); }
 #include "mv_binding_schema.def"
+#undef MV_BIND_INHERITED_BEGIN
+#undef MV_BIND_INHERITED_END
+#undef MV_BIND_OWN
 #undef MV_BIND_CONTEXT
+#undef MV_BIND_INITIALIZE_OBJECT
 #undef MV_BIND_OBJECT1
 #undef MV_BIND_OBJECT
 #undef MV_BIND_INITIALIZE1
@@ -173,6 +202,7 @@ std::vector<ClassBinding> generatedClassBindings() {
 #undef MV_BIND_INITIALIZE
 #undef MV_BIND_FIELD
 #undef MV_BIND_POINT
+#undef MV_BIND_REFERENCE
 #undef MV_BIND_DISPLAY
 #undef MV_BIND_END
   return result;

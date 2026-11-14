@@ -5,6 +5,9 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   const api = native.mvDisplay, runtime = api.open();
   const nodes = new WeakMap(), registry = new Map();
   let currentRoot = null, nextRoot = null;
+  let requestedKind = null, pendingNative = null;
+  let acceptingNative = false, hasRun = false;
+  const sceneInfo = new WeakMap(), stackStates = [];
   function entry(object) {
     const value = nodes.get(object);
     if (!value) throw new TypeError('Display object is not initialized');
@@ -13,6 +16,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   function attach(object, kind, existing = null) {
     if (nodes.has(object)) throw new Error('Display object is already initialized');
     const handle = existing || api.create(runtime, kind);
+    options.initializeEvents?.(object);
     nodes.set(object, { handle, children: new Map(), parent: null, bitmaps: new Map(), points: new Map() });
     registry.set(handle.identity, new WeakRef(object));
   }
@@ -73,6 +77,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     return result;
   }
   function Container() { this.initialize.apply(this, arguments); }
+  if (options.containerPrototype) Object.setPrototypeOf(Container.prototype, options.containerPrototype);
   Container.prototype.initialize = function() { attach(this, 'container'); };
   for (const field of ['x', 'y', 'rotation', 'alpha', 'visible', 'renderable', 'z']) prop(Container, field);
   point(Container, 'position', 'x', 'y'); point(Container, 'scale', 'scaleX', 'scaleY');
@@ -113,6 +118,14 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   Container.prototype.show = function() { this.visible = true; };
   Container.prototype.hide = function() { this.visible = false; };
   function inherit(type, base) { type.prototype = Object.create(base.prototype); type.prototype.constructor = type; }
+  Container.prototype.destroy = function(settings = {}) {
+    if (this._destroyed) return;
+    if (settings === true || settings.children) for (const child of this.children) child.destroy(settings);
+    this.removeChildren();
+    if (this.parent) this.parent.removeChild(this);
+    this.visible = false; this.renderable = false; this._destroyed = true;
+    this.removeAllListeners?.();
+  };
   function Sprite() { this.initialize.apply(this, arguments); }
   inherit(Sprite, Container);
   Sprite.prototype.initialize = function(bitmap) { attach(this, 'sprite'); if (bitmap) this.bitmap = bitmap; };
@@ -288,11 +301,12 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     Window_Base.prototype.update.call(this); this.processCursorMove(); this.processHandling();
   };
   Window_Selectable.prototype.processCursorMove = function() {
+    if (usesNativeInput(this)) return;
     const before = this.index();
     api.invoke(entry(this).handle, 'processCursorMove', this, Input);
     if (before !== this.index()) options.soundManager?.()?.playCursor();
   };
-  Window_Selectable.prototype.processHandling = function() { api.invoke(entry(this).handle, 'processHandling', this, Input); };
+  Window_Selectable.prototype.processHandling = function() { if (usesNativeInput(this)) return; api.invoke(entry(this).handle, 'processHandling', this, Input); };
   for (const method of ['processOk', 'processCancel', 'processPagedown', 'processPageup'])
     Window_Selectable.prototype[method] = function() { api.invoke(entry(this).handle, method, this, options.soundManager?.()); };
   Window_Selectable.prototype.isCurrentItemEnabled = function() { return true; };
@@ -347,7 +361,8 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   };
   Window_Command.prototype.makeCommandList = function() {};
   Window_Command.prototype.addCommand = function(name, symbol, enabled = true, ext = null) {
-    api.invoke(entry(this).handle, 'addCommand', String(name), String(symbol), Boolean(enabled)); entry(this).extensions.push(ext);
+    const own=entry(this), index=api.invoke(own.handle,'commandCount');
+    api.invoke(own.handle, 'addCommand', String(name), String(symbol), Boolean(enabled)); own.extensions[index]=ext;
   };
   Window_Command.prototype.commandName = function(index) { return api.invoke(entry(this).handle, 'command', index).name; };
   Window_Command.prototype.isCommandEnabled = function(index) { return api.invoke(entry(this).handle, 'command', index).enabled; };
@@ -358,7 +373,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   Window_Command.prototype.commandSymbol = function(index) { return api.invoke(entry(this).handle, 'command', index).symbol; };
   Window_Command.prototype.currentData = function() {
     const data = api.invoke(entry(this).handle, 'command', this.index());
-    return data ? { ...data, ext: entry(this).extensions[this.index()] } : null;
+    return data ? { ...data, ext: entry(this).extensions?.[this.index()] ?? data.ext } : null;
   };
   Window_Command.prototype.currentExt = function() { return this.currentData()?.ext ?? null; };
   Window_Command.prototype.drawItem = function(index) {
@@ -368,6 +383,60 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   Window_Command.prototype.itemTextAlign = function() { return 'left'; };
   Window_Command.prototype.findSymbol = function(symbol) { for (let i = 0; i < this.maxItems(); ++i) if (this.commandSymbol(i) === symbol) return i; return -1; };
   Window_Command.prototype.selectSymbol = function(symbol) { const index = this.findSymbol(symbol); this.select(index >= 0 ? index : 0); };
+  const nativeWindows = {};
+  const windowBases = { Window_Base, Window_Selectable, Window_Command };
+  const windowDescriptions = new Map((options.windowClasses?.() || []).map(item => [item.name, item]));
+  function installWindow(name) {
+    if (nativeWindows[name] || windowBases[name]) return nativeWindows[name] || windowBases[name];
+    const description = windowDescriptions.get(name);
+    if (!description) throw new Error('Unknown native window parent: ' + name);
+    const Parent = installWindow(description.parent);
+    const Type = function() { this.initialize.apply(this, arguments); };
+    Object.defineProperty(Type, 'name', { value: name });
+    inherit(Type, Parent); nativeWindows[name] = Type;
+    const invoke = (object, method, args = []) => options.windowModel(entry(object).handle, name, method, args);
+    Type.prototype.initialize = function(...args) {
+      if (!nodes.has(this)) attach(this, 'window');
+      const nativeArgs = args.slice(0, description.arguments);
+      if (name === 'Window_NameEdit') nativeArgs.splice(0, nativeArgs.length, options.actorId(args[0]), args[1], args[0]?.name() || '');
+      const rect = invoke(this, 'construct', nativeArgs);
+      if (description.arguments === 0 && args.length) this._messageWindow = args[0];
+      if (description.command) Window_Command.prototype.initialize.call(this, rect[0], rect[1]);
+      else {
+        (description.selectable ? Window_Selectable : Window_Base).prototype.initialize.call(this, ...rect);
+        this.refresh();
+      }
+    };
+    Type.prototype.windowWidth = function() { return invoke(this, 'geometry')[2]; };
+    Type.prototype.windowHeight = function() { return invoke(this, 'geometry')[3]; };
+    if (description.command) Type.prototype.makeCommandList = function() { invoke(this, 'makeCommandList'); };
+    else {
+      Type.prototype.refresh = function() {
+        invoke(this, 'refreshModel');
+        if (this.contents) {
+          this.contents.clear();
+          if (description.selectable) this.drawAllItems(); else invoke(this, 'drawContent');
+        }
+      };
+      if (description.selectable) {
+        for (const method of ['maxItems', 'itemHeight', 'maxCols', 'isCurrentItemEnabled'])
+          Type.prototype[method] = function() { return invoke(this, method); };
+        Type.prototype.drawItem = function(index) { invoke(this, 'drawItem', [index]); };
+      }
+    }
+    const fieldNames = { actorId: '_actor', skillType: '_stypeId' };
+    for (const field of description.fields) {
+      Object.defineProperty(Type.prototype, fieldNames[field] || '_' + field, {
+        configurable: true,
+        get() { const value = invoke(this, field); return field === 'actorId' ? options.actor(value) : value; },
+        set(value) { invoke(this, field, [field === 'actorId' ? options.actorId(value) : value]); }
+      });
+      const method = field === 'actorId' ? 'setActor' : field === 'skillType' ? 'setStypeId' : 'set' + field[0].toUpperCase() + field.slice(1);
+      Type.prototype[method] = function(value) { this[fieldNames[field] || '_' + field] = value; this.refresh(); };
+    }
+    return Type;
+  }
+  for (const name of windowDescriptions.keys()) installWindow(name);
   function Scene_Base() { this.initialize.apply(this, arguments); }
   inherit(Scene_Base, Container);
   Scene_Base.prototype.initialize = function() { attach(this, 'scene'); this._imageReservationId ??= String(entry(this).handle.identity); };
@@ -418,6 +487,19 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     this.addChild(this._backgroundSprite);
   };
   Scene_MenuBase.prototype.setBackgroundOpacity = function(opacity) { this._backgroundSprite.opacity = opacity; };
+  function Scene_GameEnd() { this.initialize.apply(this, arguments); }
+  inherit(Scene_GameEnd, Scene_MenuBase);
+  Scene_GameEnd.prototype.create = function() { Scene_MenuBase.prototype.create.call(this); this.createCommandWindow(); };
+  Scene_GameEnd.prototype.stop = function() { Scene_MenuBase.prototype.stop.call(this); this._commandWindow.close(); };
+  Scene_GameEnd.prototype.createBackground = function() { Scene_MenuBase.prototype.createBackground.call(this); this.setBackgroundOpacity(128); };
+  Scene_GameEnd.prototype.createCommandWindow = function() {
+    const Window_GameEnd = options.sceneClass('Window_GameEnd');
+    this._commandWindow = new Window_GameEnd();
+    this._commandWindow.setHandler('toTitle', this.commandToTitle.bind(this));
+    this._commandWindow.setHandler('cancel', this.popScene.bind(this));
+    this.addWindow(this._commandWindow);
+  };
+  Scene_GameEnd.prototype.commandToTitle = function() { this.fadeOutAll(); SceneManager.goto(Scene_Title); };
   Scene_MenuBase.prototype.nextActor = function() {
     options.gameParty().makeMenuActorNext(); this.updateActor(); this.onActorChange();
   };
@@ -497,7 +579,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   Scene_Options.prototype.createOptionsWindow = function() {
     this._optionsWindow = new Window_Options(); this._optionsWindow.setHandler('cancel', this.popScene.bind(this)); this.addWindow(this._optionsWindow);
   };
-  Scene_Options.prototype.terminate = function() { Scene_MenuBase.prototype.terminate.call(this); options.configManager().save(); };
+  Scene_Options.prototype.terminate = function() { Scene_MenuBase.prototype.terminate.call(this); options.configManager().save?.(); };
   function Scene_Gameover() { this.initialize.apply(this, arguments); }
   inherit(Scene_Gameover, Scene_Base);
   Scene_Gameover.prototype.create = function() { Scene_Base.prototype.create.call(this); this.playGameoverMusic(); this.createBackground(); };
@@ -507,7 +589,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   };
   Scene_Gameover.prototype.start = function() { Scene_Base.prototype.start.call(this); this.startFadeIn(this.slowFadeSpeed(), false); };
   Scene_Gameover.prototype.update = function() {
-    if (this.isActive() && !this.isBusy() && this.isTriggered()) this.gotoTitle();
+    if (!nativeDriven(this) && this.isActive() && !this.isBusy() && this.isTriggered()) this.gotoTitle();
     Scene_Base.prototype.update.call(this);
   };
   Scene_Gameover.prototype.isTriggered = function() { return Input.isTriggered('ok') || options.touchInput().isTriggered(); };
@@ -524,7 +606,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     options.soundManager().playLoad(); this.fadeOutAll(); this.reloadMapIfUpdated();
     SceneManager.goto(Scene_Map); this._loadSuccess = true;
   };
-  Scene_Load.prototype.reloadMapIfUpdated = function() { options.reloadMapIfUpdated(); };
+  Scene_Load.prototype.reloadMapIfUpdated = function() { options.reloadMapIfUpdated?.(); };
   function Scene_ItemBase() { this.initialize.apply(this, arguments); }
   inherit(Scene_ItemBase, Scene_MenuBase);
   Scene_ItemBase.prototype.initialize = function() { Scene_MenuBase.prototype.initialize.call(this); };
@@ -557,7 +639,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   Scene_Boot.prototype.start = function() { Scene_Base.prototype.start.call(this); SceneManager.goto(Scene_Title); };
   function Scene_Title() { this.initialize.apply(this, arguments); }
   inherit(Scene_Title, Scene_Base);
-  Scene_Title.prototype.start = function() { Scene_Base.prototype.start.call(this); options.openTitle?.(); };
+  Scene_Title.prototype.start = function() { Scene_Base.prototype.start.call(this); SceneManager.clearStack(); if (!sceneInfo.get(this)?.nativeRequested) options.openTitle?.(); };
   function Scene_Map() { this.initialize.apply(this, arguments); }
   inherit(Scene_Map, Scene_Base);
   Scene_Map.prototype.create = function() {
@@ -565,12 +647,62 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     if (options.mapSpriteset) this._spriteset = options.mapSpriteset;
     options.performTransfer?.();
   };
-  const Graphics = {
+  function Scene_Equip() { this.initialize.apply(this, arguments); }
+  inherit(Scene_Equip, Scene_MenuBase);
+  function Scene_Status() { this.initialize.apply(this, arguments); }
+  inherit(Scene_Status, Scene_MenuBase);
+  function Scene_Save() { this.initialize.apply(this, arguments); }
+  inherit(Scene_Save, Scene_File);
+  function Scene_Shop() { this.initialize.apply(this, arguments); }
+  inherit(Scene_Shop, Scene_MenuBase);
+  function Scene_Name() { this.initialize.apply(this, arguments); }
+  inherit(Scene_Name, Scene_MenuBase);
+  function Scene_Debug() { this.initialize.apply(this, arguments); }
+  inherit(Scene_Debug, Scene_MenuBase);
+  Scene_Map.prototype.start = function() { Scene_Base.prototype.start.call(this); SceneManager.clearStack(); };
+  const nativeScenes = [Scene_Title, Scene_Map, Scene_Menu, Scene_Item, Scene_Skill, Scene_Equip, Scene_Status,
+    Scene_Menu, Scene_Options, Scene_Save, Scene_Load, Scene_Battle, Scene_Gameover, Scene_Shop, Scene_Name, Scene_Debug];
+  function sceneClass(kind) {
+    const type = nativeScenes[kind];
+    return options.sceneClass?.(type.name) || type;
+  }
+  function kindOf(scene) {
+    if (!scene) return -1;
+    if (requestedKind !== null && requestedKind >= 0 && scene instanceof sceneClass(requestedKind)) return requestedKind;
+    return nativeScenes.findIndex((type, kind) => scene instanceof sceneClass(kind));
+  }
+  function nativeDriven(scene) {
+    if (!scene) return false;
+    const kind = sceneInfo.get(scene)?.kind ?? kindOf(scene);
+    return kind >= 0 && (sceneInfo.get(scene)?.nativeRequested || scene.constructor === sceneClass(kind) || scene instanceof Scene_Map);
+  }
+  function usesNativeInput(object) {
+    while (object.parent) object = object.parent;
+    return object === SceneManager._scene && nativeDriven(object);
+  }
+  function prepareScene(scene) {
+    const kind = kindOf(scene);
+    if (scene) sceneInfo.set(scene, { kind, nativeRequested: requestedKind !== null });
+    if (!(acceptingNative && kind === requestedKind) && (kind >= 0 || (requestedKind !== null && requestedKind >= 0)))
+      options.sceneControl?.('prepare', kind >= 0 ? kind : requestedKind);
+  }
+  function Graphics() { throw new Error('Graphics is a static class'); }
+  Object.defineProperties(Graphics, Object.getOwnPropertyDescriptors({
     get width() { return native.render.presentation().sourceWidth; },
     get height() { return native.render.presentation().sourceHeight; },
     get boxWidth() { return this.width; }, get boxHeight() { return this.height; },
-    get frameCount() { return api.scene(runtime, 'frameCount'); }
-  };
+    get frameCount() { return api.scene(runtime, 'frameCount'); },
+    set frameCount(value) { api.scene(runtime,'frameCount',Number(value)); }
+  }));
+  Graphics.initialize = function(width,height) { return options.coreService('initializeGraphics',width,height); };
+  Graphics._rendererType = 'native'; Graphics._skipCount = 0; Graphics._maxSkip = 3;
+  Graphics._renderer = { type: 'native', clear() { native.render.clearScene(0,0,0,1); }, render(stage) { options.submitStage(entry(stage).handle); } };
+  Graphics.render = function(stage) { if (stage) this._renderer.render(stage); };
+  for (const method of ['startLoading','endLoading','updateLoading','isVideoPlaying','tickStart','tickEnd'])
+    Graphics[method] = (...args) => options.coreService(method,...args);
+  Graphics.printError = function(name,message) { console.error(message?.stack || message); options.coreService('printError',String(name),String(message)); };
+  Graphics.loadFont = (family, source) => Bitmap.loadFont(family, String(source).replace(/^\/game\//, ''));
+  Graphics.isFontLoaded = family => options.coreService('isFontLoaded', family);
   Graphics._isFullScreen = () => native.runtime.isFullscreen();
   Graphics._requestFullScreen = () => native.runtime.setFullscreen(true);
   Graphics._cancelFullScreen = () => native.runtime.setFullscreen(false);
@@ -578,58 +710,143 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   for (const method of ['clear', 'update', 'isPressed', 'isTriggered', 'isRepeated', 'isLongPressed'])
     Input[method] = (...args) => api.input(runtime, method, ...args);
   for (const field of ['dir4', 'dir8', 'date']) Object.defineProperty(Input, field, { get() { return api.input(runtime, field); } });
-  for (const name of ['keyMapper', 'gamepadMapper']) {
+  Object.defineProperty(Input, '_latestButton', { configurable: true, get() { return api.input(runtime, '_latestButton'); }, set(value) { api.input(runtime, '_latestButton', value); } });
+  for (const name of ['keyMapper', 'gamepadMapper', '_currentState']) {
     const view = new Proxy({}, {
       get(target, key) { return api.input(runtime, name)[key]; },
       ownKeys() { return Reflect.ownKeys(api.input(runtime, name)); },
       getOwnPropertyDescriptor(target, key) { const map = api.input(runtime, name); return Object.hasOwn(map, key) ? { configurable: true, enumerable: true, writable: true, value: map[key] } : undefined; },
-      set(target, key, value) { api.input(runtime, name, Number(key), String(value)); return true; },
-      deleteProperty(target, key) { api.input(runtime, name, Number(key), null); return true; }
+      set(target, key, value) { api.input(runtime, name, name === '_currentState' ? String(key) : Number(key), name === '_currentState' ? Boolean(value) : String(value)); return true; },
+      deleteProperty(target, key) { api.input(runtime, name, name === '_currentState' ? String(key) : Number(key), null); return true; }
     });
     Object.defineProperty(Input, name, { configurable: true, enumerable: true, get() { return view; }, set(value) { api.input(runtime, name, value); } });
   }
   function dispatch(handle, method) {
     if (method === 'transitionBusy') return SceneManager.isCurrentSceneBusy();
-    const scene = wrap(handle), fn = scene[method];
+    const scene = wrap(handle);
+    if (method === 'create') options.sceneControl?.('commit', sceneInfo.get(scene)?.kind ?? kindOf(scene));
+    const fn = scene[method];
     if (typeof fn !== 'function') throw new TypeError('Scene.' + method + ' is not callable');
     return fn.call(scene);
   }
-  const SceneManager = {
-    run(type) { this.goto(type); },
+  function SceneManager() { throw new Error('SceneManager is a static class'); }
+  Object.defineProperties(SceneManager, Object.getOwnPropertyDescriptors({
+    run(type) { this.initialize(); this.goto(type); },
+    initialize() { this.ticker ||= options.createTicker?.(); this.initGraphics(); this.initAudio(); this.initInput(); this.checkPluginErrors(); },
+    initGraphics() { (options.graphics?.() || Graphics).initialize(Graphics.width,Graphics.height); },
+    initAudio() { options.webAudio().initialize(); },
+    initInput() { Input.clear(); options.touchInput().clear(); },
+    checkPluginErrors() { options.checkPluginErrors(); },
     goto(type) {
+      pendingNative = null;
+      hasRun = true;
       const next = type ? new type() : null;
       if (next && !(next instanceof Scene_Base)) throw new TypeError('Scene transition requires Scene_Base');
       nextRoot = next;
       api.scene(runtime, 'goto', next ? entry(next).handle : null, dispatch);
+      prepareScene(next);
     },
-    update() {
-      Input.update();
-      ImageManager.update();
-      api.scene(runtime, 'update', dispatch);
+    update(deltaTime = 1) { this.updateManagers(); this.updateMain(); this.renderScene(); },
+    updateManagers() { ImageManager.update(); },
+    updateInputData() { Input.update(); },
+    updateMain() { this.updateInputData(); this.changeScene(); this.updateScene(); },
+    changeScene() {
+      if (pendingNative && !api.scene(runtime, 'stopped')) {
+        const request = pendingNative;
+        pendingNative = null;
+        requestedKind = request.kind; acceptingNative = true;
+        try { this.goto(request.type); }
+        finally { requestedKind = null; acceptingNative = false; }
+        if (!api.scene(runtime, 'changing')) options.sceneControl?.('commit', sceneInfo.get(this._scene)?.kind ?? kindOf(this._scene));
+      }
+      api.scene(runtime,'change',dispatch);
       currentRoot = wrap(api.scene(runtime, 'current')); nextRoot = wrap(api.scene(runtime, 'next'));
+      if (!currentRoot && !nextRoot) options.sceneControl?.('commit', -1);
+    },
+    updateScene() {
+      api.scene(runtime,'updateScene',dispatch);
+      currentRoot = wrap(api.scene(runtime, 'current')); nextRoot = wrap(api.scene(runtime, 'next'));
+      if (!currentRoot && !nextRoot) options.sceneControl?.('commit', -1);
       for (const [id, reference] of registry) if (!reference.deref()) registry.delete(id);
     },
+    renderScene() {
+      if (nativeDriven(this._scene)) { options.submitStage(null); return; }
+      if (this._scene && this.isCurrentSceneStarted()) (options.graphics?.() || Graphics).render(this._scene);
+    },
+    onSceneStart() { Graphics.endLoading(); },
+    catchException(error) { throw error; },
+    get _stopped() { return api.scene(runtime,'stopped'); },
+    set _stopped(value) { api.scene(runtime,'stopped',Boolean(value)); },
+    get _sceneStarted() { return api.scene(runtime,'started'); },
+    set _sceneStarted(value) { api.scene(runtime,'started',Boolean(value)); },
     get _scene() { return wrap(api.scene(runtime, 'current')); },
     get _nextScene() { return wrap(api.scene(runtime, 'next')); },
     set _nextScene(next) {
+      pendingNative = null;
       if (next !== null && !(next instanceof Scene_Base)) throw new TypeError('Next scene requires Scene_Base');
       nextRoot = next;
       api.scene(runtime, 'next', next ? entry(next).handle : null);
+      prepareScene(next);
     },
-    isSceneChanging() { return api.scene(runtime, 'changing'); },
+    backgroundBitmap() { return this._backgroundBitmap || null; },
+    isSceneChanging() { return Boolean(pendingNative) || api.scene(runtime, 'changing'); },
     isCurrentSceneBusy() { return Boolean(this._scene && this._scene.isBusy()); },
     isCurrentSceneStarted() { return api.scene(runtime, 'started'); },
     stop() { api.scene(runtime, 'stopped', true); }, resume() { api.scene(runtime, 'stopped', false); },
-    clearStack() { this._stack.length = 0; }, _stack: [],
-    push(type) { if (this._scene) this._stack.push(this._scene.constructor); this.goto(type); },
-    pop() { this.goto(this._stack.pop() || null); },
+    clearStack() { this._stack.length = 0; stackStates.length = 0; }, _stack: [],
+    push(type) {
+      if (this._scene) {
+        const previous = this._scene.constructor;
+        stackStates[this._stack.length] = { type: previous, kind: sceneInfo.get(this._scene)?.kind ?? kindOf(this._scene), nativeRequested: Boolean(sceneInfo.get(this._scene)?.nativeRequested), state: options.sceneControl?.('capture') };
+        this._stack.push(previous);
+      }
+      this.goto(type);
+    },
+    pop() {
+      const previous = stackStates[this._stack.length - 1], type = this._stack.pop() || null;
+      stackStates.length = this._stack.length;
+      this.goto(type);
+      if (type && previous?.type === type && previous.state && this._nextScene?.constructor === type) {
+        sceneInfo.set(this._nextScene, { kind: previous.kind, nativeRequested: previous.nativeRequested || requestedKind !== null });
+        options.sceneControl?.('restore', previous.state);
+      }
+    },
     prepareNextScene(...args) { this._nextScene.prepare(...args); },
-    isNextScene(type) { return this._nextScene?.constructor === type; },
+    isNextScene(type) { return pendingNative ? pendingNative.type === type : this._nextScene?.constructor === type; },
+    get nativeDriven() { return nativeDriven(this._scene); },
+    get canStep() { return !api.scene(runtime, 'stopped') && !this.isSceneChanging() && (!hasRun || this.isCurrentSceneStarted()); },
     get stageHandle() { return currentRoot ? entry(currentRoot).handle : null; }
-  };
-  return { Container, Stage: Container, Sprite, Sprite_Button, Sprite_Base, Sprite_Animation, TilingSprite, ScreenSprite, Window, WindowLayer, Window_Base, Window_Selectable, Window_Command, Window_MenuCommand, Window_Options, Window_Message,
-    Scene_Base, Scene_Battle, Scene_MenuBase, Scene_Menu, Scene_Options, Scene_Gameover, Scene_File, Scene_Load, Scene_ItemBase, Scene_Item, Scene_Skill, Scene_Boot, Scene_Title, Scene_Map, SceneManager, Graphics, Input,
+  }));
+  return { ...nativeWindows, Container, Stage: Container, Sprite, Sprite_Button, Sprite_Base, Sprite_Animation, TilingSprite, ScreenSprite, Window, WindowLayer, Window_Base, Window_Selectable, Window_Command, Window_MenuCommand, Window_Options, Window_Message,
+    Scene_Base, Scene_Battle, Scene_MenuBase, Scene_Menu, Scene_Options, Scene_Gameover, Scene_GameEnd, Scene_File, Scene_Load, Scene_Save, Scene_Equip, Scene_Status, Scene_Shop, Scene_Name, Scene_Debug, Scene_ItemBase, Scene_Item, Scene_Skill, Scene_Boot, Scene_Title, Scene_Map, SceneManager, Graphics, Input,
     GlitchFilter,
+    requestScene(method, kind) {
+      if (method === 'ownsScenes') return true;
+      if (method === 'hasPrevious') return SceneManager._stack.length > 0;
+      if (method === 'isPreviousScene') {
+        const previous = stackStates[SceneManager._stack.length - 1];
+        return previous && previous.type === SceneManager._stack.at(-1) ? previous.kind === kind : SceneManager._stack.at(-1) === sceneClass(kind);
+      }
+      if (method === 'clearStack') { SceneManager.clearStack(); return true; }
+      let type = sceneClass(kind), state;
+      if (method === 'push') {
+        const scene = SceneManager._scene, previousType = pendingNative?.type || scene?.constructor;
+        if (previousType) {
+          stackStates[SceneManager._stack.length] = { type: previousType, kind: pendingNative?.kind ?? sceneInfo.get(scene)?.kind ?? kindOf(scene), nativeRequested: Boolean(pendingNative || sceneInfo.get(scene)?.nativeRequested), state: options.sceneControl?.('capture') };
+          SceneManager._stack.push(previousType);
+        }
+      } else if (method === 'pop') {
+        const previous = stackStates[SceneManager._stack.length - 1];
+        type = SceneManager._stack.pop() || null;
+        stackStates.length = SceneManager._stack.length;
+        if (type && previous?.type === type) { kind = previous.kind; state = previous.state; }
+        else kind = nativeScenes.findIndex((base, index) => type === sceneClass(index));
+      }
+      pendingNative = { type, kind };
+      if (state) options.sceneControl?.('restore', state);
+      else if (kind >= 0) options.sceneControl?.('prepare', kind);
+      return true;
+    },
     displayHandle: object => entry(object).handle,
     displayField(handle, field, ...value) {
       return wrap(options.boundDisplayField(handle, field, runtime, ...value.map(object => object == null ? null : entry(object).handle)));

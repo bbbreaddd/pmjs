@@ -24,6 +24,8 @@ void Session::detachRuntimeEntities(bool all) {
 std::shared_ptr<RuntimeCharacter> Session::runtimeCharacter(int id) {
   if (auto object = runtimeCharacters_[id].lock()) return object;
   Character* character = id == -1 ? &player_ : nullptr;
+  if (id <= -5 && id >= -7) character=&vehicles_[static_cast<std::size_t>(-id-5)].character;
+  if (id <= -2 && id >= -4) character=&followers_[static_cast<std::size_t>(-id-2)];
   if (id > 0) for (auto& event : events_) if (event.id == id) { character = &event.character; break; }
   if (!character) { runtimeCharacters_.erase(id); return {}; }
   auto object = std::make_shared<RuntimeCharacter>(); object->id = id; object->mapId = mapId_; object->attached = character;
@@ -37,6 +39,9 @@ std::shared_ptr<RuntimeActor> Session::runtimeActor(int id) {
   if (auto object = runtimeActors_[id].lock()) return object;
   auto object = std::make_shared<RuntimeActor>(); object->id = id; object->attached = &actors_.at(id);
   runtimeActors_[id] = object; return object;
+}
+std::shared_ptr<RuntimeActor> Session::runtimeEnemy(int index) {
+  return index >= 0 && index < static_cast<int>(battle_.enemies.size()) ? runtimeBattler(battle_.enemies[index]) : nullptr;
 }
 void Session::detachRuntimeEnemies() {
   for (const auto& [index, weak] : runtimeEnemies_) { (void)index; if (auto object = weak.lock()) object->detach(); }
@@ -66,9 +71,33 @@ void Session::initializeActorMembers(const std::shared_ptr<RuntimeActor>& object
 }
 Value Session::runtimeCharacterCommand(const std::shared_ptr<RuntimeCharacter>& object, const std::string& method, const Value::Array& arguments) {
   auto& character = object->value();
+  if (method.starts_with("followers.")) {
+    const auto action=method.substr(10);
+    if (action=="visible") { if (!arguments.empty()) followersVisible_=arguments[0].boolean(); return followersVisible_; }
+    if (action=="gather") { followersGathering_=true; return Value::undefined(); }
+    if (action=="isGathering") return followersGathering_;
+    if (action=="isMoving") return std::any_of(followers_.begin(),followers_.end(),[](const auto& follower) { return follower.moving(); });
+    if (action=="isGathered") return std::all_of(followers_.begin(),followers_.end(),[&](const auto& follower) { return !follower.moving() && follower.x==player_.x && follower.y==player_.y; });
+    if (action=="synchronize") { synchronizeFollowers(arguments.at(0).number(),arguments.at(1).number()); for (auto& follower:followers_) follower.direction=arguments.at(2).integer(); }
+    else if (action=="updateMove") { for (int i=2;i>=0;--i) chaseCharacter(followers_[i],i ? followers_[i-1] : player_); }
+    else if (action=="update" || action=="refresh") updateFollowers();
+    else if (action=="jumpAll") { for (auto& follower:followers_) { follower.jumpPeak=player_.jumpPeak; follower.jumpCount=player_.jumpCount; follower.x=player_.x; follower.y=player_.y; } }
+    else throw std::invalid_argument("follower operation is not bound: "+action);
+    return Value::undefined();
+  }
+  if (method=="isLandOk" && object->id<=-5 && object->id>=-7) return vehicleLandingOk(-object->id-5,arguments.at(0).integer(),arguments.at(1).integer(),arguments.at(2).integer());
+  if (method=="initialize") { character=Character{}; character.through=object->id<=-2; return Value::undefined(); }
+  if (method=="update") { updateCharacter(character,false); return Value::undefined(); }
+
   if (method == "isDashing" && arguments.empty() && object->attached == &player_) return playerDashing_;
   if (method == "findDirectionTo" && arguments.size() == 2) return findDirectionTo(character, arguments[0].integer(), arguments[1].integer());
   if (method == "refresh" && arguments.empty() && object->attached == &player_) { updatePlayerGraphic(); return Value::undefined(); }
+  if ((method == "screenX" || method == "screenY") && arguments.empty()) return characterScreenPosition(character)[method == "screenX" ? 0 : 1];
+  if (method == "jump" && arguments.size() == 2) { jumpCharacter(character, arguments[0].integer(), arguments[1].integer()); return Value::undefined(); }
+  if ((method == "setMoveRoute" || method == "forceMoveRoute") && arguments.size() == 1) {
+    setCharacterRoute(character, arguments[0], method == "forceMoveRoute");
+    return Value::undefined();
+  }
   if (method == "moveStraight" && arguments.size() == 1) move(character, arguments[0].integer());
   else if (method == "setMovementSuccess" && arguments.size() == 1) character.movementSuccess = arguments[0].boolean();
   else if (method == "setPosition" && arguments.size() == 2) {
@@ -86,6 +115,14 @@ Value Session::runtimeCharacterCommand(const std::shared_ptr<RuntimeCharacter>& 
     character.stopCount = 0;
   } else throw std::invalid_argument("character operation is not bound: " + method);
   return Value::undefined();
+}
+void Session::setCharacterRoute(Character& character, const Value& route, bool forcing) {
+  if (forcing && !character.routeForcing) {
+    character.originalRoute = Value::Object{{"list", character.route}, {"repeat", character.routeRepeat}, {"skippable", character.routeSkippable}, {"wait", false}};
+    character.originalRouteIndex = character.routeIndex;
+  }
+  character.route = route["list"].array(); character.routeIndex = 0; character.routeWait = 0;
+  character.routeRepeat = route["repeat"].boolean(); character.routeSkippable = route["skippable"].boolean(); character.routeForcing = forcing;
 }
 void Session::setCameraTarget(std::shared_ptr<RuntimeCharacter> target, double speed) {
   if (!target) throw std::invalid_argument("camera target must be a native character");

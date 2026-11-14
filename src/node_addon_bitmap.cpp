@@ -179,8 +179,11 @@ napi_value cacheImage(napi_env env, napi_callback_info info) try {
   if (operation == "keys") {
     napi_value keys;
     check(env,napi_create_array(env,&keys),"cannot list cache keys");
+    std::vector<std::pair<std::uint64_t,std::string>> ordered;
+    for (const auto& [name,entry]:runtime->imageCache.items) ordered.emplace_back(entry.order,name);
+    std::sort(ordered.begin(),ordered.end());
     std::uint32_t index=0;
-    for (const auto& [name,entry]:runtime->imageCache.items) { (void)entry; check(env,napi_set_element(env,keys,index++,string(env,name)),"cannot list cache key"); }
+    for (const auto& [order,name]:ordered) { (void)order; check(env,napi_set_element(env,keys,index++,string(env,name)),"cannot list cache key"); }
     return keys;
   }
   if (operation == "truncate") { runtime->imageCache.truncateCache(); return undefined(env); }

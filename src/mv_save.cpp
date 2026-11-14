@@ -119,7 +119,8 @@ Value Session::save() {
   if (mapSceneOnly()) throw std::runtime_error("map-scene session cannot export a gameplay save");
   if (ui_.scene == Scene::battle || message_.busy || pendingTransfer_) throw std::runtime_error("cannot save during a battle, message or transfer");
   ++system_.saveCount;
-  Array switches, variables;
+  system_.versionId = database_["system"]["versionId"].integer();
+  Array switches(switchDataLength_), variables(variableDataLength_);
   for (const auto& [id, value] : switches_) { if (switches.size() <= static_cast<std::size_t>(id)) switches.resize(id + 1); switches[id] = value; }
   for (const auto& [id, value] : variables_) { if (variables.size() <= static_cast<std::size_t>(id)) variables.resize(id + 1); variables[id] = value; }
   Object selfSwitches; for (const auto& [key, value] : selfSwitches_) if (value) selfSwitches[key] = value;
@@ -186,11 +187,13 @@ void Session::load(const Value& contents) {
     throw std::invalid_argument("save is outside the declared map-scene scope");
   if (database_["maps"][std::to_string(mapId)].null()) throw std::invalid_argument("save refers to an unknown map");
   Session restored(database_);
+  restored.gameObjectsInitialized_ = true;
   restored.setScreenSize(screenWidth_, screenHeight_);
   restored.switches_.clear(); restored.variables_.clear(); restored.selfSwitches_.clear(); restored.inventory_.clear(); restored.party_.clear(); restored.actors_.clear();
   const auto& switches = contents["switches"]["_data"].array();
   for (std::size_t i = 0; i < switches.size(); ++i) if (!switches[i].null()) restored.switches_[i] = switches[i].boolean();
   const auto& variables = contents["variables"]["_data"].array();
+  restored.switchDataLength_ = static_cast<int>(switches.size()); restored.variableDataLength_ = static_cast<int>(variables.size());
   for (std::size_t i = 0; i < variables.size(); ++i) if (!variables[i].null()) restored.variables_[i] = variables[i];
   if (const auto* values = std::get_if<Object>(&contents["selfSwitches"]["_data"].data)) for (const auto& [key, value] : *values) restored.selfSwitches_[key] = value.boolean();
   for (const auto& member : contents["party"]["_actors"].array()) { const int id = member.integer(); restored.initializeActor(id); restored.party_.push_back(id); }
@@ -276,6 +279,7 @@ void Session::load(const Value& contents) {
   restored.system_.encounterEnabled = system["_encounterEnabled"].boolean(); restored.system_.formationEnabled = system["_formationEnabled"].boolean();
   restored.system_.battleCount = system["_battleCount"].integer(); restored.system_.winCount = system["_winCount"].integer();
   restored.system_.escapeCount = system["_escapeCount"].integer(); restored.system_.saveCount = system["_saveCount"].integer();
+  restored.system_.versionId = system["_versionId"].integer();
   restored.system_.battleBgm = system["_battleBgm"]; restored.system_.victoryMe = system["_victoryMe"]; restored.system_.defeatMe = system["_defeatMe"]; restored.system_.windowTone = system["_windowTone"];
   for (int vehicle = 0; vehicle < 3; ++vehicle) restored.system_.vehicleBgm[vehicle] = contents["map"]["_vehicles"][vehicle]["_bgm"];
   restored.lastItemId_ = contents["party"]["_lastItem"]["_itemId"].integer(); restored.menuActorId_ = contents["party"]["_menuActorId"].integer();
@@ -304,6 +308,11 @@ void Session::load(const Value& contents) {
   restored.previousOk_ = previousOk_; restored.previousCancel_ = previousCancel_;
   restored.previousDirection_ = previousDirection_; restored.directionAge_ = directionAge_;
   restored.previousUiButtons_ = previousUiButtons_;
+  if (runtimeHooks_ && runtimeHooks_->scene && runtimeHooks_->scene("ownsScenes", 0).value_or(false)) {
+    restored.ui_ = ui_;
+    restored.scriptScenePrevious_ = scriptScenePrevious_;
+    restored.scriptSceneNext_ = scriptSceneNext_;
+  }
   if (loadRequested_) {
     restored.ui_ = ui_;
     restored.pendingLoadBgm_ = bgmOnSave;
@@ -318,6 +327,7 @@ void Session::load(const Value& contents) {
   restored.enemyBitmapHeightResolver_ = enemyBitmapHeightResolver_;
   restored.messageTextLayoutResolver_ = messageTextLayoutResolver_;
   restored.runtimeHooks_ = runtimeHooks_;
+  restored.database_.reader = database_.reader;
   detachRuntimeEntities(true);
   *this = std::move(restored);
 }

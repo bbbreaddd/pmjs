@@ -19,7 +19,11 @@ class ScriptSceneManager {
   bool started = false, changing = false, stopped = false;
   void goTo(std::shared_ptr<ScriptScene> next, const Dispatch& dispatch);
   void update(const Dispatch& dispatch);
+  void changeScene(const Dispatch& dispatch);
+  void updateScene(const Dispatch& dispatch);
  private:
   bool updating_ = false;
+  void changeSceneImpl(const Dispatch& dispatch);
+  void updateSceneImpl(const Dispatch& dispatch);
 };
 }

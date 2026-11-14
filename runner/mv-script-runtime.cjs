@@ -4,6 +4,15 @@ const vm = require('node:vm');
 const { createSceneBindings } = require('./native-scenes.cjs');
 const { installTilemap } = require('./native-tilemap.cjs');
 const { installClassBindings } = require('./native-class-bindings.cjs');
+const { installTextManager, installSoundManager } = require('./native-managers.cjs');
+const { installBattlerBindings } = require('./native-battlers.cjs');
+const { installPartyBindings } = require('./native-party.cjs');
+const { installJsonEx } = require('./native-jsonex.cjs');
+const { installBattleData } = require('./native-battle-data.cjs');
+const { installMapBindings } = require('./native-game-map.cjs');
+const { installActionBindings } = require('./native-actions.cjs');
+const { installTroopBindings } = require('./native-troop.cjs');
+const { installDataArray } = require('./native-data-arrays.cjs');
 
 function createScriptRuntime(engine, session, options = {}) {
   const pictures = new WeakMap(), interpreters = new WeakMap(), sprites = new WeakMap(), frames = new WeakMap(), tones = new WeakMap();
@@ -352,6 +361,7 @@ function createScriptRuntime(engine, session, options = {}) {
       return engine.gameDataInvoke(session, kind, method, args);
     };
     Type.prototype.initialize = function() { this.clear(); };
+    if (kind !== 'selfSwitches') installDataArray(Type.prototype, engine, session, kind, values => GuestArray.from(values));
     const object = Object.create(Type.prototype);
     scope[name] = Type; scope['$game' + name.slice(5)] = object;
     gameDataDefaults.set(kind, defaults); gameDataStores.set(kind, object);
@@ -367,6 +377,15 @@ function createScriptRuntime(engine, session, options = {}) {
   Object.setPrototypeOf(scope.$gameScreen, Game_Screen.prototype);
   scope.Game_Screen = Game_Screen;
   gameDataDefaults.set('screen', screenDefaults); gameDataStores.set('screen', scope.$gameScreen);
+  function Game_Timer() { throw new Error('Game_Timer construction is engine-owned'); }
+  const timerDefaults={};
+  for (const method of ['initialize','start','stop','update','seconds','isWorking','onExpire'])
+    Game_Timer.prototype[method]=timerDefaults[method]=function(...args) { return engine.gameDataInvoke(session,'timer',method,args); };
+  for (const [field,method] of [['_frames','frames'],['_working','working']]) Object.defineProperty(Game_Timer.prototype,field,{
+    configurable:true,get() { return engine.gameDataInvoke(session,'timer',method,[]); },set(value) { engine.gameDataInvoke(session,'timer',method,[value]); }
+  });
+  scope.Game_Timer=Game_Timer; scope.$gameTimer=Object.create(Game_Timer.prototype);
+  gameDataDefaults.set('timer',timerDefaults); gameDataStores.set('timer',scope.$gameTimer);
   function Game_System() { throw new Error('Game_System construction is engine-owned'); }
   Game_System.prototype.isSideView = function() { return engine.gameDataInvoke(session, 'system', 'isSideView', []); };
   Game_System.prototype.initialize = function() { engine.gameDataInvoke(session, 'system', 'initialize', []); };
@@ -401,9 +420,9 @@ function createScriptRuntime(engine, session, options = {}) {
     return scope.$dataCommonEvents[engine.gameDataInvoke(session, 'temp', 'commonEventId', [])];
   };
   scope.Game_Temp = Game_Temp; scope.$gameTemp = Object.create(Game_Temp.prototype);
-  scope.BattleManager = {
+  scope.BattleManager = Object.assign(function BattleManager() { throw new Error('BattleManager is a static class'); }, {
     isInputting() { return engine.gameDataInvoke(session, 'battle', 'isInputting', []); }
-  };
+  });
   function Game_Party() { throw new Error('Game_Party construction is engine-owned'); }
   const partyDefaults = {};
   for (const method of ['initialize', 'gold', 'inBattle'])
@@ -434,6 +453,43 @@ function createScriptRuntime(engine, session, options = {}) {
   Game_Character.prototype = Object.create(Game_CharacterBase.prototype); Game_Character.prototype.constructor = Game_Character;
   function Game_Player() { this.initialize.apply(this, arguments); }
   Game_Player.prototype = Object.create(Game_Character.prototype); Game_Player.prototype.constructor = Game_Player;
+  function Game_Follower() { this.initialize.apply(this, arguments); }
+  Game_Follower.prototype = Object.create(Game_Character.prototype); Game_Follower.prototype.constructor = Game_Follower;
+  Game_Follower.prototype.initialize = function(memberIndex) {
+    const handle=engine.entity(session, 'character', -memberIndex-1);
+    if (!handle) throw new RangeError('Native follower index is outside the party capacity');
+    remember(this,handle,characters);
+    engine.characterCommand(session,handle,'initialize',[]);
+  };
+  Object.defineProperty(Game_Follower.prototype,'_memberIndex',{ configurable:true,get() { return -engine.entityField(characters.get(this),'id')-1; } });
+  Game_Follower.prototype.actor = function() { return scope.$gameParty.battleMembers()[this._memberIndex] || null; };
+  Game_Follower.prototype.isVisible = function() { return Boolean(this.actor()) && scope.$gamePlayer.followers().isVisible(); };
+  Game_Follower.prototype.update = function() { engine.characterCommand(session,characters.get(this),'update',[]); };
+  function Game_Followers() { this.initialize.apply(this,arguments); }
+  Game_Followers.prototype.initialize = function() { this._data=[1,2,3].map(index => new Game_Follower(index)); };
+  const followerInvoke=(method,...args) => engine.characterCommand(session,engine.entity(session,'character',-1),'followers.'+method,args);
+  Game_Followers.prototype.isVisible=function() { return followerInvoke('visible'); };
+  Game_Followers.prototype.show=function() { followerInvoke('visible',true); };
+  Game_Followers.prototype.hide=function() { followerInvoke('visible',false); };
+  Game_Followers.prototype.follower=function(index) { return this._data[index]; };
+  Game_Followers.prototype.forEach=function(callback,thisArg) { this._data.forEach(callback,thisArg); };
+  Game_Followers.prototype.reverseEach=function(callback,thisArg) { this._data.slice().reverse().forEach(callback,thisArg); };
+  Game_Followers.prototype.visibleFollowers=function() { return this._data.filter(follower => follower.isVisible()); };
+  for (const method of ['gather','isGathering','isGathered','updateMove','jumpAll','synchronize','refresh','update'])
+    Game_Followers.prototype[method]=function(...args) { return followerInvoke(method,...args); };
+  Game_Followers.prototype.areMoving=function() { return followerInvoke('isMoving'); };
+  let followers;
+  Game_Player.prototype.followers=function() { return followers ||= new Game_Followers(); };
+  function Game_Vehicle() { this.initialize.apply(this,arguments); }
+  Game_Vehicle.prototype=Object.create(Game_Character.prototype); Game_Vehicle.prototype.constructor=Game_Vehicle;
+  Game_Vehicle.prototype.initialize=function(type) {
+    const index=['boat','ship','airship'].indexOf(type);
+    if (index<0) throw new RangeError('Unknown vehicle type: '+type);
+    remember(this,engine.entity(session,'character',-5-index),characters);
+  };
+  Object.defineProperty(Game_Vehicle.prototype,'_type',{ configurable:true,get() { return ['boat','ship','airship'][-engine.entityField(characters.get(this),'id')-5]; } });
+  for (const type of ['Boat','Ship','Airship']) Game_Vehicle.prototype['is'+type]=function() { return this._type===type.toLowerCase(); };
+  Game_Vehicle.prototype.isLandOk=function(x,y,direction) { return engine.characterCommand(session,characters.get(this),'isLandOk',[x,y,direction]); };
   function Game_Event() { this.initialize.apply(this, arguments); }
   Game_Event.prototype = Object.create(Game_Character.prototype); Game_Event.prototype.constructor = Game_Event;
   function Game_BattlerBase() { throw new Error('Battler construction is engine-owned'); }
@@ -478,7 +534,7 @@ function createScriptRuntime(engine, session, options = {}) {
       ...(writable ? { set(value) { engine.entityField(store.get(this), field, value); } } : {})
     });
   }
-  for (const field of ['x', 'y', 'realX', 'realY', 'direction', 'opacity', 'transparent', 'characterName', 'moveRouteIndex'])
+  for (const field of ['x', 'y', 'realX', 'realY', 'direction', 'opacity', 'transparent', 'through', 'characterName', 'moveRouteIndex'])
     entityProperty(Game_CharacterBase, characters, '_' + field, field);
   for (const field of ['x', 'y']) entityProperty(Game_CharacterBase, characters, field, field, false);
   Game_CharacterBase.prototype.direction = function() { return this._direction; };
@@ -486,7 +542,7 @@ function createScriptRuntime(engine, session, options = {}) {
   Game_Player.prototype.isDashing = function() { return engine.characterCommand(session, characters.get(this), 'isDashing', []); };
   Game_CharacterBase.prototype.locate = function(x, y) { engine.characterCommand(session, characters.get(this), 'locate', [x, y]); };
   Game_CharacterBase.prototype.setDirection = function(direction) { engine.characterCommand(session, characters.get(this), 'setDirection', [direction]); };
-  for (const method of ['findDirectionTo', 'moveStraight', 'setMovementSuccess', 'setPosition', 'refresh'])
+  for (const method of ['findDirectionTo', 'moveStraight', 'setMovementSuccess', 'setPosition', 'refresh', 'update'])
     Game_CharacterBase.prototype[method] = function(...args) { return engine.characterCommand(session, characters.get(this), method, args); };
   Game_Event.prototype.eventId = function() { return engine.entityField(characters.get(this), 'id'); };
   entityProperty(Game_Event, characters, '_mapId', 'mapId', false);
@@ -500,7 +556,8 @@ function createScriptRuntime(engine, session, options = {}) {
   Game_Actor.prototype.actor = function() { return scope.$dataActors[this._actorId]; };
   Game_Actor.prototype.currentClass = function() { return scope.$dataClasses[this._classId]; };
   Game_Enemy.prototype.enemy = function() { return scope.$dataEnemies[this._enemyId]; };
-  scope.DataManager = {};
+  scope.DataManager = function DataManager() { throw new Error('DataManager is a static class'); };
+  installTextManager(scope);
   for (const [method, table] of Object.entries({ isSkill: '$dataSkills', isItem: '$dataItems', isWeapon: '$dataWeapons', isArmor: '$dataArmors' }))
     scope.DataManager[method] = function(item) { return item && scope[table].includes(item); };
   Game_Actor.prototype.name = function() { return this._name; };
@@ -510,19 +567,25 @@ function createScriptRuntime(engine, session, options = {}) {
     Game_Actor.prototype[method] = nativeActorMethods[method] = function() { return engine.actorInvoke(session, actors.get(this), method); };
   function wrapEntity(handle, type, store) {
     if (!handle) return null;
-    return registry.get(handle.identity)?.deref() || remember(Object.create(type.prototype), handle, store);
+    return registry.get(handle.identity)?.deref() || remember(Object.create((scope[type.name] || type).prototype), handle, store);
   }
-  Object.assign(scope, { Game_CharacterBase, Game_Character, Game_Player, Game_Event, Game_BattlerBase, Game_Battler, Game_Enemy, Game_Actor });
+  Object.assign(scope, { Game_CharacterBase, Game_Character, Game_Player, Game_Follower, Game_Followers, Game_Vehicle, Game_Event, Game_BattlerBase, Game_Battler, Game_Enemy, Game_Actor });
+  installBattleData(scope, values => GuestArray.from(values));
+  installBattlerBindings(scope, engine, session, actors, values => GuestArray.from(values));
+  installActionBindings(scope);
   Object.defineProperty(scope, '$gamePlayer', { configurable: true, enumerable: true,
     get() { return wrapEntity(engine.entity(session, 'character', -1), Game_Player, characters); } });
   function Game_Actors() { throw new Error('Game_Actors construction is engine-owned'); }
   Game_Actors.prototype.actor = function(id) { return wrapEntity(engine.entity(session, 'actor', id), Game_Actor, actors); };
   scope.Game_Actors = Game_Actors; scope.$gameActors = Object.create(Game_Actors.prototype);
+  installPartyBindings(scope, engine, session, values => GuestArray.from(values));
+  installTroopBindings(scope, engine, session, index => wrapEntity(engine.entity(session, 'enemy', index), Game_Enemy, actors), values => GuestArray.from(values));
   function Game_Map() { throw new Error('Game_Map construction is engine-owned'); }
   Object.defineProperties(Game_Map.prototype, Object.getOwnPropertyDescriptors(scope.$gameMap));
   for (const key of Object.keys(scope.$gameMap)) delete scope.$gameMap[key];
   Object.setPrototypeOf(scope.$gameMap, Game_Map.prototype); scope.Game_Map = Game_Map;
   Game_Map.prototype.event = function(id) { return wrapEntity(engine.entity(session, 'character', id), Game_Event, characters); };
+  installMapBindings(scope, engine, session, values => GuestArray.from(values), characters);
   Game_Map.prototype.camTargetSet = function(target, speed) {
     const handle = characters.get(target);
     if (!handle) throw new TypeError('Camera target must be a native character');
@@ -564,15 +627,35 @@ function createScriptRuntime(engine, session, options = {}) {
   }
   const context = vm.createContext(scope);
   vm.runInContext(`Object.defineProperties(Array.prototype, {
+    equals: {value: function(other) {
+      if (!other || this.length !== other.length) return false;
+      for (var index = 0; index < this.length; ++index) {
+        var value = this[index], compared = other[index];
+        if (Array.isArray(value) && Array.isArray(compared)) { if (!value.equals(compared)) return false; }
+        else if (value !== compared) return false;
+      }
+      return true;
+    }},
     clone: {value: function() {return this.slice(0);}},
     contains: {value: function(value) {return this.indexOf(value) >= 0;}}
   }); String.prototype.contains = function(value) {return this.indexOf(value) >= 0;};
+  Number.prototype.clamp = function(min, max) { return Math.min(max, Math.max(min, this)); };
+  Number.prototype.mod = function(divisor) { return ((this % divisor) + divisor) % divisor; };
+  String.prototype.format = function(...args) { return this.replace(/%([0-9]+)/g, (match, index) => args[Number(index) - 1]); };
+  String.prototype.padZero = function(length) { return String(this).padStart(length, '0'); };
+  Number.prototype.padZero = function(length) { return String(this).padZero(length); };
   Math.randomInt = function(max) {return Math.floor(max * Math.random());};`, context);
   GuestArray = vm.runInContext('Array', context);
+  installJsonEx({ scope, runScript(source) { return vm.runInContext(source, context); } });
   vm.runInContext('Math', context).random = () => engine.random(session);
   const tilemapBinding = installTilemap({ scope }, engine, session);
   let rateAction = null;
+  function wrapRuntimeEntity(handle) {
+    if (handle.entityType === 'character') return wrapEntity(handle,handle.entityId > 0 ? Game_Event : handle.entityId === -1 ? Game_Player : handle.entityId <= -5 ? Game_Vehicle : handle.entityId <= -2 ? Game_Follower : Game_Character,characters);
+    return wrapEntity(handle,handle.entityType === 'enemy' ? Game_Enemy : Game_Actor,actors);
+  }
   const callbacks = {
+    scene(method, kind) { return scenes ? scenes.requestScene(method, kind) : null; },
     tileShadow(...args) { return tilemapBinding.draw(...args); },
     actionRate(method, subjectHandle, targetHandle, item, id) {
       if (method === 'itemHit') rateAction = null;
@@ -598,9 +681,13 @@ function createScriptRuntime(engine, session, options = {}) {
       sprite.bitmap = scope.ImageManager.loadSystem(name);
       return bitmapHandle(scope.Bitmap, sprite.bitmap);
     },
-    nativeBitmap(handle, method, args) {
-      const sprite=classBindings.wrap(handle,handle.bindingType);
-      sprite.bitmap=scope.ImageManager[method](...args);
+    boundObjectMethod(handle, method, argument) {
+      return classBindings ? classBindings.dispatch(handle,handle.bindingType,method,() => [argument ? wrapRuntimeEntity(argument) : null]) : null;
+    },
+    nativeBitmap(handle, method, args, slot) {
+      const root=classBindings.wrap(handle,handle.bindingType);
+      const sprite=slot ? root[slot] : root;
+      sprite.bitmap=method === 'createBitmap' ? new scope.Bitmap(...args) : scope.ImageManager[method](...args);
       return bitmapHandle(scope.Bitmap,sprite.bitmap);
     },
     enemySpriteBattler(handle, enemyHandle) {
@@ -750,7 +837,21 @@ function createScriptRuntime(engine, session, options = {}) {
       if (!options.native) throw new Error('Scene bindings require native graphics services');
       if (scenes) return scenes;
       scenes = createSceneBindings(options.native, scope.Bitmap, scope.ImageManager, {
-        openTitle() { engine.openTitle(session); },
+        containerPrototype: scope.PIXI?.Container?.prototype,
+        initializeEvents(object) { if (scope.PIXI?.utils?.EventEmitter) scope.PIXI.utils.EventEmitter.call(object); },
+        createTicker() { return scope.PIXI?.ticker ? new scope.PIXI.ticker.Ticker() : null; },
+        graphics() { return scope.Graphics; },
+        webAudio() { return scope.WebAudio; },
+        checkPluginErrors() { scope.PluginManager?.checkErrors(); },
+        submitStage(handle) { engine.scriptStage(session,handle); },
+        coreService(...args) { return engine.coreService(...args); },
+        windowClasses() { return engine.windowClasses(); },
+        windowModel(handle, name, method, args) { return engine.windowModel(session, handle, name, method, args); },
+        actor(id) { return id ? scope.$gameActors.actor(id) : null; },
+        actorId(actor) { return actor ? actor.actorId() : 0; },
+        openTitle() { engine.sceneControl(session, 'title'); },
+        sceneClass(name) { return scope[name]; },
+        sceneControl(method, ...args) { return engine.sceneControl(session, method, ...args); },
         menuCommands() { return engine.managerInvoke(session, 'menuCommands'); },
         optionCommands() { return engine.managerInvoke(session, 'optionCommands'); },
         configManager() { return scope.ConfigManager; },
@@ -760,12 +861,6 @@ function createScriptRuntime(engine, session, options = {}) {
         gameParty() { return scope.$gameParty; },
         battleManager() { return scope.BattleManager; },
         soundManager() { return scope.SoundManager; },
-        reloadMapIfUpdated() {
-          if (scope.$gameSystem.versionId() !== scope.$dataSystem.versionId) {
-            scope.$gamePlayer.reserveTransfer(scope.$gameMap.mapId(), scope.$gamePlayer.x, scope.$gamePlayer.y);
-            scope.$gamePlayer.requestMapReload();
-          }
-        },
         mapSpriteset: { _pictureContainer: { children: pictureChildren } },
         fadeAudio(seconds) {
           scope.AudioManager.fadeOutBgm(seconds);
@@ -782,9 +877,11 @@ function createScriptRuntime(engine, session, options = {}) {
         boundDisplayField(handle, field, runtime, ...value) { return engine.classBindings.displayField(handle, field, runtime, ...value); }
       });
       Object.assign(scope, scenes);
-      classBindings = installClassBindings(scope, engine.classBindings, session, { unwrap: object => actors.get(object) || characters.get(object), initializeDisplay: scenes.initializeDisplay, displayField: scenes.displayField });
+      classBindings = installClassBindings(scope, engine.classBindings, session, { unwrap: object => actors.get(object) || characters.get(object), initializeDisplay: scenes.initializeDisplay, displayField: scenes.displayField,
+        wrapReference: wrapRuntimeEntity });
       scope.navigator = {
-        platform: process.platform, userAgent: 'pmjs native runtime', language: 'en-US',
+        ...scope.navigator,
+        platform: scope.navigator?.platform || process.platform, userAgent: 'pmjs native runtime', language: 'en-US',
         getGamepads() {
           const result = [];
           for (const pad of options.native.input.snapshot().gamepads) {
@@ -795,17 +892,23 @@ function createScriptRuntime(engine, session, options = {}) {
         }
       };
       scope.AudioManager = {};
+      scope.AudioManager._path = 'audio/';
       scope.AudioManager.audioFileExt = function() { return scope.WebAudio.canPlayOgg() ? '.ogg' : '.m4a'; };
       scope.AudioManager.createBuffer = function(folder, name) {
-        return new scope.WebAudio('audio/' + folder + '/' + encodeURIComponent(name) + this.audioFileExt());
+        return new scope.WebAudio(this._path + folder + '/' + encodeURIComponent(name) + this.audioFileExt());
       };
       for (const method of ['playBgm', 'playBgs', 'playSe', 'playMe', 'stopBgm', 'stopBgs', 'stopMe', 'stopSe', 'fadeOutBgm', 'fadeOutBgs', 'fadeOutMe'])
         scope.AudioManager[method] = (...args) => engine.managerInvoke(session, method, ...args);
       scope.AudioManager.stopAll = function() { this.stopMe(); this.stopBgm(); this.stopBgs(); this.stopSe(); };
-      scope.SoundManager = {};
-      for (const method of ['preloadImportantSounds', 'playBuzzer', 'playLoad', 'playCursor', 'playOk', 'playCancel']) scope.SoundManager[method] = () => engine.managerInvoke(session, method);
+      installSoundManager(scope, engine, session);
       Object.assign(scope.DataManager, {
-        createGameObjects() { engine.newGame(session); scope.$gameTemp.initialize(); scope.$gameSystem.initialize(); },
+        createGameObjects() {
+          for (const name of ['Temp','System','Timer','Screen','Party','Troop','Map','Actors']) {
+            const object=scope['$game'+name], Type=scope['Game_'+name];
+            if (object && Type) Object.setPrototypeOf(object,Type.prototype);
+          }
+          engine.newGame(session); scope.$gameTemp.initialize(); scope.$gameSystem.initialize(); scope.$gameTimer.initialize();
+        },
         setupNewGame() { this.createGameObjects(); }
       });
       Game_Player.prototype.reserveTransfer = function(mapId, x, y, direction = 0, fadeType = 0) {
@@ -821,7 +924,7 @@ function createScriptRuntime(engine, session, options = {}) {
         engine.playerTransfer(session, 'perform');
       };
       for (const method of ['isBattleTest', 'isEventTest', 'isAnySavefileExists']) scope.DataManager[method] = () => engine.managerInvoke(session, method);
-      scope.ConfigManager = {};
+      scope.ConfigManager = function ConfigManager() { throw new Error('ConfigManager is a static class'); };
       for (const field of ['alwaysDash', 'commandRemember', 'bgmVolume', 'bgsVolume', 'meVolume', 'seVolume']) Object.defineProperty(scope.ConfigManager, field, {
         enumerable: true, configurable: true, get() { return engine.configuration(session)[field]; }, set(value) { engine.configure(session, { [field]: value }); }
       });
@@ -842,11 +945,13 @@ function createScriptRuntime(engine, session, options = {}) {
         classBindings.sweep();
         tilemapBinding.update();
         engine.updateTouch(session);
-        scope.SceneManager.update();
+        if (scope.SceneManager._stopped) return true;
+        scope.SceneManager.ticker?.update(scope.performance?.now() ?? performance.now());
+        scope.SceneManager.update(1);
         const scene = scope.SceneManager._scene;
-        const builtin = !scene || scene.constructor === scope.Scene_Title || scene instanceof scope.Scene_Map;
+        const builtin = !scene || scope.SceneManager.nativeDriven;
         engine.scriptStage(session, builtin ? null : scope.SceneManager.stageHandle);
-        if (!builtin) return true;
+        if (!builtin || !scope.SceneManager.canStep) return true;
         return input === undefined ? engine.step(session) : engine.step(session, input);
       };
       return scenes;

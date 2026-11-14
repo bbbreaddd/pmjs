@@ -55,3 +55,34 @@ test('native plugin loading reports missing enabled files instead of skipping th
   const r = runtime();
   assert.throws(() => installPlugins(r, game({}), { plugins: [plugin('Missing')] }), /Missing\.js/);
 });
+
+test('native plugin evaluation exposes the current script and restores it after errors', () => {
+  const r = runtime();
+  r.scope.document = { createElement() { return {}; } };
+  r.scope.NativeHost = { runtime: { evalScript: (source, filename) => r.runScript(source, filename) } };
+  r.runScript(fs.readFileSync(path.join(__dirname, '../js/pmjs-web/script-loader.js'), 'utf8'));
+  const root = game({ Current: `var currentUrl = document.currentScript.src;
+    var ownParameters = PluginManager.parameters(currentUrl.split('/').pop().replace('.js', ''));
+    throw new Error(ownParameters.message);` });
+  assert.throws(() => installPlugins(r, root, { plugins: [plugin('Current', true, { message: 'from current script' })] }), /from current script/);
+  assert.equal(r.scope.currentUrl, 'file:///game/js/plugins/Current.js');
+  assert.equal(r.scope.document.currentScript, null);
+});
+
+test('plugin main module resolves to the game without modifying the host process', () => {
+  const r = runtime(), hostMain = process.mainModule;
+  const root = game({ Main: `var mainFilename = process.mainModule.filename;
+    var processMatches = require('node:process') === process;
+    var mainMatches = require.main === process.mainModule && require.main.require('process') === process;` });
+  installPlugins(r, root, { plugins: [plugin('Main')] });
+  assert.equal(r.scope.mainFilename, path.join(root, 'index.html'));
+  assert.equal(r.scope.processMatches, true); assert.equal(r.scope.mainMatches, true);
+  assert.equal(process.mainModule, hostMain);
+});
+
+test('engine array equality compares sparse elements rather than skipping them', () => {
+  const r = runtime();
+  assert.equal(r.runScript('Array(1).equals([1])'), false);
+  assert.equal(r.runScript('Array(1).equals([undefined])'), true);
+  assert.equal(r.runScript('[1, [2]].equals([1, [2]])'), true);
+});

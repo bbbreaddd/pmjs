@@ -34,6 +34,7 @@ function installClassBindings(scope, bindings, session, options = {}) {
       get() {
         const handle = models.get(this);
         if (field.kind === 'display') return options.displayField(handle, field.name);
+        if (field.kind === 'object') { const reference=bindings.reference(session,handle,field.name); return reference ? options.wrapReference(reference) : null; }
         if (field.kind !== 'point') return bindings.field(handle, field.name);
         let cache = points.get(this);
         if (!cache) { cache = new Map(); points.set(this, cache); }
@@ -51,12 +52,14 @@ function installClassBindings(scope, bindings, session, options = {}) {
       },
       ...(field.writable ? { set(value) {
         if (field.kind === 'display') options.displayField(models.get(this), field.name, value);
+        else if (field.kind === 'object') bindings.reference(session,models.get(this),field.name,value == null ? null : models.get(value) || options.unwrap(value));
         else if (field.kind === 'point') bindings.field(models.get(this), field.name, { x: value.x, y: value.y });
         else bindings.field(models.get(this), field.name, value);
       } } : {})
     });
     const methods = new Map(); defaults.set(description.name, methods);
     for (const method of description.methods) {
+      if (method.inherited) continue;
       const forward = function(...args) {
         if (method.defaults?.length) args = method.defaults.map((value, index) => args[index] === undefined ? value : args[index]);
         const nativeArgs = args.map((value, index) => {
@@ -66,7 +69,7 @@ function installClassBindings(scope, bindings, session, options = {}) {
           if (!handle) throw new TypeError('Native object argument is not bound');
           return handle;
         });
-        const value = bindings.invoke(models.get(this), method.name, nativeArgs);
+        const value = bindings.invoke(models.get(this), method.name, nativeArgs, description.name);
         for (const alias of method.aliases || []) this[alias.property] = args[alias.index];
         return value;
       };

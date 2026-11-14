@@ -35,17 +35,38 @@ std::u16string utf16(const std::string& text){const auto units=core::utf16Units(
 
 InterpreterOperation::InterpreterOperation(std::vector<std::shared_ptr<RuntimeInterpreter>>& operations, const std::shared_ptr<RuntimeInterpreter>& interpreter) : stack(operations) { stack.push_back(interpreter); }
 InterpreterOperation::~InterpreterOperation() { stack.pop_back(); }
+Value::Value(const Value& value) : data(value.reader ? value.snapshot().data : value.data) {}
+Value& Value::operator=(const Value& value) {
+  if (this != &value) { Value copy(value); *this = std::move(copy); }
+  return *this;
+}
+Value Value::reference() const {
+  Value result; result.data = data; result.reader = reader; return result;
+}
+Value Value::snapshot() const {
+  if (!reader) return *this;
+  auto result = reader->snapshot();
+  if (const auto* base = std::get_if<Object>(&data); base && !base->empty()) {
+    auto merged = *base;
+    for (auto& [key, value] : std::get<Object>(result.data)) merged[key] = std::move(value);
+    return merged;
+  }
+  return result;
+}
 const Value& Value::operator[](const std::string& key) const {
+  if (reader) if (const auto* value = reader->field(key)) return *value;
   const auto* object = std::get_if<Object>(&data);
   if (!object) return empty;
   const auto it = object->find(key);
   return it == object->end() ? empty : it->second;
 }
 const Value& Value::operator[](std::size_t index) const {
+  if (reader) if (const auto* value = reader->element(index)) return *value;
   const auto* items = std::get_if<Array>(&data);
   return items && index < items->size() ? (*items)[index] : empty;
 }
 const Value::Array& Value::array() const {
+  if (reader) return reader->array();
   const auto* items = std::get_if<Array>(&data); return items ? *items : emptyArray;
 }
 double Value::number(double fallback) const { const auto* v = std::get_if<double>(&data); return v ? *v : fallback; }
@@ -77,10 +98,14 @@ void Session::setScreenSize(int width, int height) {
   screenHeight_ = height;
 }
 void Session::setDatabaseTables(Value tables) {
-  if (mapId_ != 0 || battle_.active) throw std::runtime_error("database tables must be published before game state initialization");
+  if (!canWriteDatabase()) throw std::runtime_error("database tables must be published before game state initialization");
   auto& root = std::get<Value::Object>(database_.data);
   for (auto& [key,value] : std::get<Value::Object>(tables.data)) root[key] = std::move(value);
   ++presentationRevision_;
+}
+void Session::setDatabaseReader(std::shared_ptr<ValueReader> reader) {
+  if (!canWriteDatabase()) throw std::runtime_error("database tables must be published before game state initialization");
+  database_.reader = std::move(reader);
 }
 const Value& Session::map() const { return database_["maps"][std::to_string(mapId_)]; }
 int Session::tileWidth() const {
@@ -90,7 +115,29 @@ int Session::tileHeight() const {
   return database_["tiledMaps"][std::to_string(mapId_)]["tileheight"].integer(48);
 }
 
+void Session::prepareScriptScene(Ui state) {
+  if (!scriptScenePrevious_) scriptScenePrevious_ = ui_;
+  scriptSceneNext_.reset();
+  ui_ = std::move(state);
+}
+void Session::deferScriptScene() {
+  if (!scriptScenePrevious_ || scriptSceneNext_) return;
+  scriptSceneNext_ = std::move(ui_);
+  ui_ = *scriptScenePrevious_;
+}
+void Session::commitScriptScene(std::optional<Scene> scene) {
+  if (scriptScenePrevious_) {
+    if (scriptSceneNext_ && (!scene || scriptSceneNext_->scene == *scene)) ui_ = std::move(*scriptSceneNext_);
+    else ui_ = *scriptScenePrevious_;
+  }
+  scriptScenePrevious_.reset(); scriptSceneNext_.reset();
+  if (scene && ui_.scene != *scene) { ui_ = {}; ui_.scene = *scene; }
+}
+
 void Session::newGame() {
+  gameObjectsInitialized_ = true;
+  const Ui previousUi = ui_;
+  const bool scriptScenes = runtimeHooks_ && runtimeHooks_->scene && runtimeHooks_->scene("ownsScenes", 0).value_or(false);
   detachRuntimeEntities(true);
   battleLog_.reset(); resetEnemySprites();
   choiceWindow_.reset(); numberWindow_.reset(); eventItemWindow_.reset();
@@ -99,6 +146,7 @@ void Session::newGame() {
   lastItemId_ = 0; menuActorId_ = 0; targetActorId_ = 0;
   ++presentationRevision_; battleTest_ = false;
   switches_.clear(); variables_.clear(); selfSwitches_.clear(); inventory_.clear();
+  switchDataLength_ = variableDataLength_ = 0;
   visualEffects_.clear(); nextVisualEffect_ = 0;
   moviePlaying_ = false; movieExplicitSource_ = false; movieRequest_ = 0; movieName_.clear();
   reservedCommonEvent_ = 0;
@@ -107,7 +155,7 @@ void Session::newGame() {
   mapId_ = 0; mapState_ = {}; commonInterpreters_.clear();
   for (auto& follower : followers_) { follower = {}; follower.through = true; }
   uiHitTargets_.clear(); previousUiButtons_.clear(); previousDebug_ = false;
-  actors_.clear(); battle_ = {}; ui_ = {}; system_ = {}; gold_ = 0; steps_ = 0; brightness_ = 255; fadeOut_ = 0;
+  actors_.clear(); battle_ = {}; ui_ = scriptScenes ? previousUi : Ui{}; system_ = {}; gold_ = 0; steps_ = 0; brightness_ = 255; fadeOut_ = 0;
   pictures_.clear(); pictureSprites_.clear(); ambience_ = {}; savedCamera_.reset();
   audioCommands_.clear(); previousCancel_ = false; directionAge_ = 0; previousDirection_ = 0;
   screenEffects_ = {};
@@ -910,12 +958,7 @@ bool Session::command(const EventCommand& entry, Interpreter& context) {
       refreshIfNeeded();
       if (auto* target = routeCharacter(p[0].integer(), context)) {
         const auto& route = p[1];
-        if (!target->routeForcing) {
-          target->originalRoute = Value::Object{{"list", target->route}, {"repeat", target->routeRepeat}, {"skippable", target->routeSkippable}, {"wait", false}};
-          target->originalRouteIndex = target->routeIndex;
-        }
-        target->route = route["list"].array(); target->routeIndex = 0; target->routeWait = 0;
-        target->routeForcing = true; target->routeRepeat = route["repeat"].boolean(); target->routeSkippable = route["skippable"].boolean();
+        setCharacterRoute(*target, route, true);
         if (route["wait"].boolean()) context.waitingRoute = p[0].integer();
       }
       return true;
@@ -1359,17 +1402,12 @@ void Session::acknowledge(int choice) {
 void Session::updateMessageWindow() {
   Window_Message::updateState(*this);
 }
-void Session::updateTimer() {
-  if (timerWorking_ && timerFrames_ > 0 && --timerFrames_ == 0 && battle_.active) {
-    battle_.aborting = true;
-    if (!battle_.interpreter.running && !message_.busy) abortBattle();
-  }
-}
+void Session::updateTimer() { dispatchGameDataMutation("timer","update",{true}); }
 
 void Session::step(const Input& input) {
   if (mapSceneOnly() && !database_["sceneContract"]["interactiveInput"].boolean() && (input.direction || input.ok || input.cancel || input.dash || input.touchTriggered || input.destinationX || input.destinationY))
     throw std::runtime_error("map-scene session does not support interactive input");
-  if (finished_ || resourcesStopped_) return;
+  if (finished_ || resourcesStopped_ || scriptScenePrevious_) return;
   currentInput_ = input;
   const bool sceneFadeComplete = sceneFadeDuration_ <= 0;
   ++ticks_;
@@ -1385,7 +1423,7 @@ void Session::step(const Input& input) {
     destination_.reset(); mapTouchCount_ = 0;
     if (ui_.scene == Scene::title && newGamePending_) {
       titleWindowOpenness_ = std::max(0, titleWindowOpenness_ - 32);
-      if (sceneFadeComplete) { newGame(); startSceneFade(false,24); }
+      if (sceneFadeComplete) { SceneManager::clearStack(*this); SceneManager::gotoScene(*this, Scene::map); newGame(); startSceneFade(false,24); }
       return;
     }
     if (ui_.scene == Scene::battle) { updateTimer(); updateScreenState(); updateBattle(); updateVisualEffects(); }

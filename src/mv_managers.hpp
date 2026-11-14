@@ -22,6 +22,8 @@ class SceneManager {
   static void exit(Session& session);
   static std::string preferableRendererType();
   static bool shouldUseCanvasRenderer();
+ private:
+  static std::optional<bool> scriptOperation(const Session& session, const std::string& method, Scene scene = Scene::map);
 };
 
 class SoundManager {

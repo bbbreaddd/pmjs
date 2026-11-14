@@ -21,6 +21,11 @@ struct BindingDisplayField {
   std::function<std::shared_ptr<core::Container>(RuntimeBoundObject&)> get;
   std::function<void(RuntimeBoundObject&, std::shared_ptr<core::Container>)> set;
 };
+struct BindingReferenceField {
+  std::string name;
+  std::function<std::shared_ptr<RuntimeObject>(RuntimeBoundObject&)> get;
+  std::function<void(RuntimeBoundObject&,std::shared_ptr<RuntimeObject>)> set;
+};
 using BindingArgument = std::variant<Value, std::shared_ptr<RuntimeObject>>;
 using BindingArguments = std::vector<BindingArgument>;
 struct BindingMethod {
@@ -31,6 +36,7 @@ struct BindingMethod {
   std::vector<std::pair<std::string, std::size_t>> aliases;
   bool returnsValue = true;
   Value::Array defaults{};
+  bool inherited = false;
 };
 struct BindingEvent {
   std::string name;
@@ -52,6 +58,7 @@ struct ClassBinding {
   bool generated = false;
   std::vector<BindingEvent> events{};
   std::vector<BindingStatic> statics{};
+  std::vector<BindingReferenceField> references{};
 };
 
 template<class T> T bindingArgument(const Value& value) {
@@ -91,6 +98,14 @@ template<class Get> BindingDisplayField bindingDisplayField(std::string name, Ge
       get(object) = std::move(typed);
     }};
 }
+template<class Get> BindingReferenceField bindingReference(std::string name,Get get) {
+  using Pointer=std::remove_reference_t<std::invoke_result_t<Get,RuntimeBoundObject&>>;
+  return {std::move(name),[get](RuntimeBoundObject& object) { return get(object); },
+    [get](RuntimeBoundObject& object,std::shared_ptr<RuntimeObject> value) {
+      auto typed=std::dynamic_pointer_cast<typename Pointer::element_type>(value);
+      if (value && !typed) throw std::invalid_argument("reference field has the wrong native type"); get(object)=std::move(typed);
+    }};
+}
 template<class T> struct BindingObjectArgument : std::false_type {};
 template<class T> struct BindingObjectArgument<std::shared_ptr<T>> : std::is_base_of<RuntimeObject, T> {};
 template<class T> T bindingMethodArgument(const BindingArgument& argument) {
@@ -108,6 +123,12 @@ Value invokeBinding(Method method, State& state, const BindingArguments& values,
     std::invoke(method, state, bindingMethodArgument<std::decay_t<Args>>(values[I])...);
     return Value::undefined();
   } else return Value(std::invoke(method, state, bindingMethodArgument<std::decay_t<Args>>(values[I])...));
+}
+template<class R, class... Args> BindingMethod bindingFunction(std::string name,R(*function)(RuntimeBoundObject&,Args...)) {
+  return {std::move(name),sizeof...(Args),[function](RuntimeBoundObject& object,const BindingArguments& values) {
+    if (values.size()!=sizeof...(Args)) throw std::invalid_argument("native function argument count differs");
+    return invokeBinding<R,Args...>(function,object,values,std::index_sequence_for<Args...>{});
+  },{(BindingObjectArgument<std::decay_t<Args>>::value ? "object" : "value")...},{},!std::is_void_v<R>};
 }
 template<class R, class... Args, class Get, class Method>
 BindingMethod bindingMethodImpl(std::string name, Get get, Method method) {

@@ -4,6 +4,12 @@
 #include <cmath>
 
 namespace pmjs::mv {
+std::array<float,6> Session::screenTransform() const {
+  const auto scale=screenEffects_["_zoomScale"].number(1);
+  const auto x=std::floor(-screenEffects_["_zoomX"].number()*(scale-1)+0.5)+std::floor(screenEffects_["_shake"].number()+0.5);
+  const auto y=std::floor(-screenEffects_["_zoomY"].number()*(scale-1)+0.5);
+  return {float(scale),0,0,float(scale),float(x),float(y)};
+}
 std::uint64_t nextRuntimeIdentity() { static std::atomic<std::uint64_t> next{0}; return ++next; }
 namespace {
 using Object = Value::Object;

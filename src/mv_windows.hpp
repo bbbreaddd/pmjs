@@ -55,6 +55,9 @@ class Window_Base {
   int fittingHeight(int numLines) const { return numLines * lineHeight() + standardPadding() * 2; }
   int contentsOpacity = 255;
   core::PixelBitmap contents;
+  void setDrawingContents(std::shared_ptr<core::PixelBitmap> value) { drawingContents_=std::move(value); }
+  core::PixelBitmap& drawingContents() { return drawingContents_ ? *drawingContents_ : contents; }
+  const core::PixelBitmap& drawingContents() const { return drawingContents_ ? *drawingContents_ : contents; }
 
   void createContents();
   void changeTextColor(Color color) { textColor = color; }
@@ -102,6 +105,8 @@ class Window_Base {
   static int obtainEscapeParam(const std::string& text, std::size_t& index);
   static int textLineHeight(const std::string& preparedText, std::size_t start, int fontSize);
   static int textHeight(const std::string& preparedText, int fontSize = 28);
+ private:
+  std::shared_ptr<core::PixelBitmap> drawingContents_;
 };
 
 class Window_Selectable : public Window_Base {

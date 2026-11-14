@@ -16,12 +16,20 @@
 namespace pmjs::mv {
 namespace core { class Container; class PixelBitmap; class WebAudio; }
 
+struct ValueReader;
 struct Value {
   struct Undefined {};
   using Array = std::vector<Value>;
   using Object = std::map<std::string, Value>;
   std::variant<std::monostate, bool, double, std::string, Array, Object, Undefined> data;
+  std::shared_ptr<ValueReader> reader;
   Value() = default;
+  Value(const Value& value);
+  Value& operator=(const Value& value);
+  Value(Value&&) noexcept = default;
+  Value& operator=(Value&&) noexcept = default;
+  Value snapshot() const;
+  Value reference() const;
   static Value undefined(){Value value;value.data=Undefined{};return value;}
   bool isUndefined()const{return std::holds_alternative<Undefined>(data);}
   Value(bool v) : data(v) {}
@@ -39,6 +47,14 @@ struct Value {
   bool boolean() const;
   std::string text() const;
   bool null() const { return std::holds_alternative<std::monostate>(data) || isUndefined(); }
+};
+
+struct ValueReader {
+  virtual ~ValueReader() = default;
+  virtual const Value* field(const std::string& key) const = 0;
+  virtual const Value* element(std::size_t index) const = 0;
+  virtual const Value::Array& array() const = 0;
+  virtual Value snapshot() const = 0;
 };
 
 struct EventCommand {
@@ -117,6 +133,7 @@ struct InterpreterOperation {
   ~InterpreterOperation();
 };
 struct RuntimeHooks {
+  std::function<std::optional<bool>(const std::string&, int)> scene;
   std::function<bool(const std::shared_ptr<RuntimePicture>&, const std::string&, const Value::Array&)> picture;
   std::function<void(const std::shared_ptr<RuntimePicture>&)> sprite;
   std::function<void()> updateSprites;
@@ -142,7 +159,8 @@ struct RuntimeHooks {
   std::function<std::optional<Value>(const std::shared_ptr<RuntimeObject>&, const std::string&, const Value::Array&)> boundMethod;
   std::function<void(const std::shared_ptr<RuntimeObject>&, std::uint32_t)> boundListener;
   std::function<std::shared_ptr<core::WebAudio>(const std::string&, const std::string&)> audioBuffer;
-  std::function<std::shared_ptr<core::PixelBitmap>(const std::shared_ptr<RuntimeObject>&,const std::string&,const Value::Array&)> nativeBitmap;
+  std::function<std::shared_ptr<core::PixelBitmap>(const std::shared_ptr<RuntimeObject>&,const std::string&,const Value::Array&,const std::string&)> nativeBitmap;
+  std::function<std::optional<Value>(const std::shared_ptr<RuntimeObject>&,const std::string&,const std::shared_ptr<RuntimeObject>&)> boundObjectMethod;
   std::function<std::shared_ptr<core::PixelBitmap>(const std::shared_ptr<RuntimeObject>&, const std::string&)> systemBitmap;
 };
 
@@ -386,6 +404,7 @@ struct Ui {
 struct SystemState {
   bool saveEnabled = true, menuEnabled = true, encounterEnabled = true, formationEnabled = true;
   int battleCount = 0, winCount = 0, escapeCount = 0, saveCount = 0;
+  int versionId = 0;
   Value storedBgm, battleBgm, victoryMe, defeatMe, windowTone;
   std::array<Value, 3> vehicleBgm;
 };
@@ -425,6 +444,7 @@ class Session {
   void initializeActorSkills(const std::shared_ptr<RuntimeActor>& actor);
   void initializeActorMembers(const std::shared_ptr<RuntimeActor>& actor);
   Value runtimeCharacterCommand(const std::shared_ptr<RuntimeCharacter>& character, const std::string& method, const Value::Array& arguments);
+  std::array<double,2> runtimeCharacterScreenPosition(const std::shared_ptr<RuntimeCharacter>& character) const { return characterScreenPosition(character->value()); }
   void setCameraTarget(std::shared_ptr<RuntimeCharacter> target, double speed);
   std::shared_ptr<RuntimePicture> runtimePicture(int id) const;
   std::shared_ptr<RuntimePicture> createRuntimePicture(int slot = -1);
@@ -454,6 +474,9 @@ class Session {
   void dispatchGameDataMutation(const std::string& kind, const std::string& method, const Value::Array& arguments);
   void setRuntimeWaitMode(const std::shared_ptr<RuntimeInterpreter>& interpreter, std::string mode);
   std::string runtimeWaitMode(const std::shared_ptr<RuntimeInterpreter>& interpreter);
+  void prepareScriptScene(Ui state);
+  void deferScriptScene();
+  void commitScriptScene(std::optional<Scene> scene);
   void newGame();
   void setupBattleTest();
   void step(const Input& input);
@@ -467,14 +490,18 @@ class Session {
   std::array<double, 4> screenTone() const;
   std::array<double, 4> screenFlashColor() const;
   double screenBrightness() const { return brightness_; }
+  std::array<float,6> screenTransform() const;
   const Character& player() const { return player_; }
   const std::vector<Event>& events() const { return events_; }
   const Message& message() const { return message_; }
   std::shared_ptr<RuntimeActor> runtimeBattler(Battler& battler);
+  std::shared_ptr<RuntimeActor> runtimeEnemy(int index);
   void detachRuntimeEnemies();
   double actionRateBase(const std::string& method, const Battler& subject, const Battler& target, const Value& item) const;
   const Value& database() const { return database_; }
+  bool canWriteDatabase() const { return !gameObjectsInitialized_; }
   void setDatabaseTables(Value tables);
+  void setDatabaseReader(std::shared_ptr<ValueReader> reader);
   const Value& map() const;
   int screenWidth() const { return screenWidth_; }
   int screenHeight() const { return screenHeight_; }
@@ -488,6 +515,7 @@ class Session {
   void buildBattleIntro();
   void chooseAction(int actorIndex, int id, int target, bool item = false);
   double parameter(const Battler& battler, int id) const;
+  Value runtimeBattlerCommand(const std::shared_ptr<RuntimeActor>& actor, const std::string& method, const Value::Array& arguments);
   void setRandomStream(std::vector<double> values);
   Value save();
   void load(const Value& contents);
@@ -642,6 +670,7 @@ class Session {
   void jumpCharacter(Character& character, int xPlus, int yPlus);
   Character* routeCharacter(int id, const Interpreter& context);
   void updateRoute(Character& character);
+  void setCharacterRoute(Character& character, const Value& route, bool forcing);
   void startEvent(int x, int y, bool action);
   void startInterpreter(const Event& event);
   void setupInterpreter(Interpreter& interpreter, Value::Array list, int eventId = 0);
@@ -695,6 +724,7 @@ class Session {
   void updateMapVehicles();
   bool toggleVehicle();
   bool vehicleLandingOk(int type) const;
+  bool vehicleLandingOk(int type,int x,int y,int direction) const;
   void checkEventTouch(Event& event, int x, int y);
   void skipBranch(int indent, Interpreter& context);
   bool condition(const Value& parameters, const Interpreter& context);
@@ -705,6 +735,7 @@ class Session {
   void gainItem(int kind, int id, double amount, bool includeEquipped);
   void refreshIfNeeded();
   Value database_;
+  bool gameObjectsInitialized_ = false;
   Character player_;
   std::array<Character, 3> followers_;
   std::array<Vehicle, 3> vehicles_{};
@@ -722,6 +753,7 @@ class Session {
   int reservedCommonEvent_ = 0;
   std::map<int, bool> switches_;
   std::map<int, Value> variables_;
+  int switchDataLength_ = 0, variableDataLength_ = 0;
   std::map<std::string, bool> selfSwitches_;
   std::map<int, int> inventory_;
   std::vector<int> party_;
@@ -742,6 +774,7 @@ class Session {
   int shopMaximum(const ShopGood& good, bool selling, int money) const;
   void updateShop(bool ok, bool cancel, int direction, bool pageUp, bool pageDown);
   Ui ui_;
+  std::optional<Ui> scriptScenePrevious_, scriptSceneNext_;
   std::vector<Ui> sceneStack_;
   std::vector<UiHitTarget> uiHitTargets_;
   std::set<std::string> previousUiButtons_;

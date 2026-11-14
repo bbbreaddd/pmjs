@@ -27,14 +27,15 @@ void Session::setupVehicles() {
   }
 }
 
-bool Session::vehicleLandingOk(int type) const {
+bool Session::vehicleLandingOk(int type) const { return vehicleLandingOk(type,player_.x,player_.y,player_.direction); }
+bool Session::vehicleLandingOk(int type,int sourceX,int sourceY,int direction) const {
   if (type == 2) {
-    if (!MapMechanics::isAirshipLandOk(*this, player_.x, player_.y)) return false;
-    return std::none_of(events_.begin(), events_.end(), [&](const Event& event) { return event.character.x == player_.x && event.character.y == player_.y; });
+    if (!MapMechanics::isAirshipLandOk(*this, sourceX, sourceY)) return false;
+    return std::none_of(events_.begin(), events_.end(), [&](const Event& event) { return event.character.x == sourceX && event.character.y == sourceY; });
   }
-  const int x = roundMapX(player_.x + dirX(player_.direction)), y = roundMapY(player_.y + dirY(player_.direction));
+  const int x = roundMapX(sourceX + dirX(direction)), y = roundMapY(sourceY + dirY(direction));
   if (x < 0 || y < 0 || x >= map()["width"].integer() || y >= map()["height"].integer()) return false;
-  const int reverseBit = 1 << ((10 - player_.direction) / 2 - 1);
+  const int reverseBit = 1 << ((10 - direction) / 2 - 1);
   if (!tilePassage(x, y, reverseBit)) return false;
   for (const auto& event : events_) if (event.priority == 1 && !event.character.through && event.character.x == x && event.character.y == y) return false;
   for (int index = 0; index < 2; ++index) if (!vehicles_[index].character.through && vehicles_[index].mapId == mapId_ && vehicles_[index].character.x == x && vehicles_[index].character.y == y) return false;

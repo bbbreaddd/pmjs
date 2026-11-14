@@ -1,4 +1,6 @@
 'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
 
 function prepareGame({ loaded, gameRoot, loadTiledMap }) {
   loaded.database.tiledMaps = { 87: loadTiledMap(gameRoot, 'maps/map87.json') };
@@ -10,7 +12,13 @@ function prepareGame({ loaded, gameRoot, loadTiledMap }) {
 }
 
 function createRuntime(options) {
-  return options.createPluginRuntime(options.engine, options.session, options);
+  return options.createPluginRuntime(options.engine, options.session, {
+    ...options,
+    beforePlugins(runtime) {
+      runtime.runScript(fs.readFileSync(path.join(__dirname,'plugins.js'),'utf8'),'omori/plugins.js');
+      options.beforePlugins?.(runtime);
+    }
+  });
 }
 
 module.exports = { prepareGame, createRuntime };

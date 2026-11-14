@@ -3,6 +3,18 @@
 #include <stdexcept>
 
 namespace pmjs::mv {
+namespace {
+class SceneUpdateGuard {
+ public:
+  explicit SceneUpdateGuard(bool& flag) : flag_(flag) {
+    if (flag_) throw std::runtime_error("scene update is already running");
+    flag_ = true;
+  }
+  ~SceneUpdateGuard() { flag_ = false; }
+ private:
+  bool& flag_;
+};
+}
 void ScriptScene::startFade(bool out, int duration, bool white) {
   if (!fadeSprite) { fadeSprite = std::make_shared<core::ScreenSprite>(); addChild(fadeSprite); }
   if (white) fadeSprite->setWhite(); else fadeSprite->setBlack();
@@ -21,14 +33,28 @@ void ScriptSceneManager::goTo(std::shared_ptr<ScriptScene> next, const Dispatch&
   if (scene) dispatch(scene, "stop");
 }
 void ScriptSceneManager::update(const Dispatch& dispatch) {
-  if (updating_) throw std::runtime_error("scene update is already running");
-  struct Guard { bool& flag; explicit Guard(bool& value) : flag(value) { flag = true; } ~Guard() { flag = false; } } guard(updating_);
+  SceneUpdateGuard guard(updating_);
+  if (stopped) return;
+  changeSceneImpl(dispatch);
+  updateSceneImpl(dispatch);
+}
+void ScriptSceneManager::changeScene(const Dispatch& dispatch) {
+  SceneUpdateGuard guard(updating_);
+  if (!stopped) changeSceneImpl(dispatch);
+}
+void ScriptSceneManager::updateScene(const Dispatch& dispatch) {
+  SceneUpdateGuard guard(updating_);
+  if (!stopped) updateSceneImpl(dispatch);
+}
+void ScriptSceneManager::changeSceneImpl(const Dispatch& dispatch) {
   if (stopped) return;
   if (changing && (!scene || !dispatch(scene, "transitionBusy"))) {
     if (scene) { dispatch(scene, "terminate"); dispatch(scene, "detachReservation"); }
     scene = std::move(nextScene); changing = false; started = false;
     if (scene) { dispatch(scene, "attachReservation"); dispatch(scene, "create"); }
   }
+}
+void ScriptSceneManager::updateSceneImpl(const Dispatch& dispatch) {
   if (!scene) return;
   if (!started && dispatch(scene, "isReady")) { dispatch(scene, "start"); started = true; }
   if (started) dispatch(scene, "update");

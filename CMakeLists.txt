@@ -118,6 +118,7 @@ set(PMJS_RUNTIME_SOURCES
   src/mv_expression.cpp
   src/mv_script.cpp
   src/mv_script_entities.cpp
+  src/mv_script_battlers.cpp
   src/mv_actor_events.cpp
   src/mv_enemy_events.cpp
   src/mv_common_events.cpp
@@ -132,6 +133,7 @@ set(PMJS_RUNTIME_SOURCES
   src/mv_animation_playback.cpp
   src/mv_animation_presentation.cpp
   src/mv_windows.cpp
+  src/mv_window_bindings.cpp
   src/mv_sprites.cpp
   src/mv_generated_bindings.cpp
   src/mv_managers.cpp
@@ -264,6 +266,8 @@ if(BUILD_TESTING)
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-engine.cjs" $<TARGET_FILE:pmjs_native>)
   add_test(NAME node-mv-script-runtime COMMAND ${NODE_EXECUTABLE} --expose-gc
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-script-runtime.cjs" $<TARGET_FILE:pmjs_native>)
+  add_test(NAME node-mv-database COMMAND ${NODE_EXECUTABLE} --expose-gc
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-database.cjs" $<TARGET_FILE:pmjs_native>)
   add_test(NAME node-mv-interpreter COMMAND ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-interpreter.cjs" $<TARGET_FILE:pmjs_native>)
   add_test(NAME node-mv-image-manager COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}

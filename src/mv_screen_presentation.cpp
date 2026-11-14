@@ -37,10 +37,7 @@ void Presentation::finishScreen(std::size_t first) {
     fadeSprite.setOpacity(255 - session_.brightness_);
     fadeSprite.render(core_.renderer());
   }
-  const float scale = screen["_zoomScale"].number(1);
-  const float x = std::floor(-screen["_zoomX"].number()*(scale-1)+0.5) + std::floor(screen["_shake"].number()+0.5);
-  const float y = std::floor(-screen["_zoomY"].number()*(scale-1)+0.5);
-  core_.renderer().transformQueuedCommands(first, {scale,0,0,scale,x,y});
+  core_.renderer().transformQueuedCommands(first, session_.screenTransform());
 }
 void Presentation::weather() {
   if(!coreWeather_) {

@@ -1,5 +1,12 @@
 'use strict';
 const bitmapFactories = new WeakMap();
+function findBitmapFactory(Type) {
+  for (let current=Type;current;current=Object.getPrototypeOf(current)) {
+    const factory=bitmapFactories.get(current);
+    if (factory) return factory;
+  }
+  return null;
+}
 let nextReservation = 2n;
 
 function createBitmapClass(native, PIXI = null, fonts = null) {
@@ -183,7 +190,7 @@ function createBitmapClass(native, PIXI = null, fonts = null) {
 }
 
 function createImageManager(native, Bitmap) {
-  const factory = bitmapFactories.get(Bitmap);
+  const factory = findBitmapFactory(Bitmap);
   if (!factory) throw new TypeError('ImageManager requires the native Bitmap constructor');
   if (factory.manager) return factory.manager;
   const api = native.mvBitmap, states = new WeakMap(), known = new Map();
@@ -235,6 +242,7 @@ function createImageManager(native, Bitmap) {
     this._items = new Proxy({}, {
       get: (target, key) => typeof key === 'string' ? record(this, key) : undefined,
       ownKeys: () => api.cacheImage(state.runtime, 'keys', ''),
+      has: (target, key) => typeof key === 'string' && Boolean(record(this, key)),
       getOwnPropertyDescriptor: (target, key) => record(this, key) ? { enumerable: true, configurable: true } : undefined,
       deleteProperty: (target, key) => { api.cacheImage(state.runtime, 'remove', String(key)); state.records.delete(key); synchronize(state); return true; },
       set: (target, key, value) => { this.add(key, value.bitmap); const entry = record(this, key); if (value.touch !== undefined) entry.touch = value.touch; if (value.reservationId !== undefined) entry.reservationId = value.reservationId; return true; }
@@ -306,7 +314,7 @@ function createImageManager(native, Bitmap) {
 }
 
 function bitmapHandle(Bitmap, bitmap) {
-  const factory = bitmapFactories.get(Bitmap);
+  const factory = findBitmapFactory(Bitmap);
   if (!factory) throw new TypeError('Native Bitmap constructor is unavailable');
   return factory.handle(bitmap);
 }

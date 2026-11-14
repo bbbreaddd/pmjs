@@ -32,13 +32,18 @@ std::string Utils::escapeHtml(const std::string& str) {
 }
 
 void Spriteset_Base::update(const Session& session) {
+  updateTone(session); updateScreen(session);
+}
+void Spriteset_Base::updateTone(const Session& session) {
   const auto screenTone = session.screenTone();
   for (int i = 0; i < 4; ++i) tone[i] = static_cast<int>(screenTone[i]);
-  toneSprite.setTone(tone[0], tone[1], tone[2], tone[3]);
+  toneSprite->setTone(tone[0], tone[1], tone[2], tone[3]);
+}
+void Spriteset_Base::updateScreen(const Session& session) {
   const auto flashColor = session.screenFlashColor();
-  flashSprite.setColor(static_cast<int>(flashColor[0]), static_cast<int>(flashColor[1]), static_cast<int>(flashColor[2]));
-  flashSprite.setOpacity(static_cast<int>(flashColor[3]));
-  fadeSprite.setOpacity(static_cast<int>(255 - session.screenBrightness()));
+  flashSprite->setColor(static_cast<int>(flashColor[0]), static_cast<int>(flashColor[1]), static_cast<int>(flashColor[2]));
+  flashSprite->setOpacity(static_cast<int>(flashColor[3]));
+  fadeSprite->setOpacity(static_cast<int>(255 - session.screenBrightness()));
 }
 
 void Spriteset_Map::update(const Session& session) {
@@ -836,6 +841,7 @@ JsonNode::Ptr JsonEx::fromValue(const Value& value) {
   std::map<std::string,JsonNode::Ptr> paths;
   std::vector<std::pair<JsonNode::Ptr,std::string>> references;
   std::function<JsonNode::Ptr(const Value&,const std::string&,int)> convert = [&](const Value& value, const std::string& path, int depth) -> JsonNode::Ptr {
+    if (value.reader) return convert(value.snapshot(), path, depth);
     if (depth >= kMaxDepth) throw std::runtime_error("Object too deep");
     auto node = std::make_shared<JsonNode>(); paths[path] = node;
     if (const auto* array = std::get_if<Value::Array>(&value.data)) {

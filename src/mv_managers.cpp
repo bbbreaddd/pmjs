@@ -17,16 +17,24 @@ std::string toLowerAscii(std::string text) {
 }
 }
 
+std::optional<bool> SceneManager::scriptOperation(const Session& session, const std::string& method, Scene scene) {
+  if (session.runtimeHooks_ && session.runtimeHooks_->scene) return session.runtimeHooks_->scene(method, static_cast<int>(scene));
+  return {};
+}
+
 void SceneManager::gotoScene(Session& session, Scene scene) {
+  if (scriptOperation(session, "goto", scene).has_value()) return;
   session.ui_ = {}; session.ui_.scene = scene;
 }
 
 void SceneManager::pushScene(Session& session, Scene scene) {
+  if (scriptOperation(session, "push", scene).has_value()) return;
   session.sceneStack_.push_back(session.ui_);
   gotoScene(session, scene);
 }
 
 void SceneManager::popScene(Session& session) {
+  if (scriptOperation(session, "pop").has_value()) return;
   if (!session.sceneStack_.empty()) {
     session.ui_ = session.sceneStack_.back();
     session.sceneStack_.pop_back();
@@ -34,10 +42,12 @@ void SceneManager::popScene(Session& session) {
 }
 
 void SceneManager::clearStack(Session& session) {
+  if (scriptOperation(session, "clearStack").has_value()) return;
   session.sceneStack_.clear();
 }
 
 bool SceneManager::hasPrevious(const Session& session) {
+  if (const auto result = scriptOperation(session, "hasPrevious")) return *result;
   return !session.sceneStack_.empty();
 }
 
@@ -46,6 +56,7 @@ bool SceneManager::isCurrentScene(const Session& session, Scene scene) {
 }
 
 bool SceneManager::isPreviousScene(const Session& session, Scene scene) {
+  if (const auto result = scriptOperation(session, "isPreviousScene", scene)) return *result;
   return !session.sceneStack_.empty() && session.sceneStack_.back().scene == scene;
 }
 

@@ -31,6 +31,30 @@ test('script variables and switches share native state and dispatch setter overr
   assert.throws(() => scope.$gameVariables.setValue(8, []), /object variable assignment/);
 });
 
+test('raw game-data arrays preserve sparse indexes and bypass setter callbacks', t => {
+  const { session, scope } = create(t, []);
+  const variables = scope.$gameVariables, switches = scope.$gameSwitches;
+  let changes = 0; scope.Game_Switches.prototype.onChange = function() { ++changes; };
+  const data = switches._data;
+  data[13] = true; assert.equal(switches.value(13), true); assert.equal(changes, 0);
+  assert.equal(data.length, 14); assert.equal(0 in data, false);
+  delete data[13]; assert.equal(data.length, 14); assert.equal(switches.value(13), false);
+  data.length = 20;
+  assert.equal(api.save(session).switches._data.length, 20);
+  variables._data[4] = 3.5; assert.equal(variables.value(4), 3.5);
+  variables.setValue(4, 8.9); assert.equal(variables._data[4], 8);
+  variables._data = [, , 9];
+  assert.equal(variables._data.length, 3); assert.deepEqual(Object.keys(variables._data), ['2']);
+  assert.equal(variables.value(4), 0); assert.equal(variables.value(2), 9);
+  assert.throws(() => { variables._data = [1, {}]; }, /object variable assignment/);
+  assert.equal(variables.value(2), 9); assert.equal(variables._data.length, 3);
+  switches.clear(); assert.equal(data.length, 0);
+  assert.equal(Array.isArray(data), true);
+  const before = variables._data.length;
+  assert.throws(() => { variables._data.length = 1.5; }, /array length/);
+  assert.equal(variables._data.length, before);
+});
+
 test('screen and self-switch script methods operate on the native save state', t => {
   const { session, scope, step } = create(t, [command(223, [[10, 20, 30, 0], 0, false]), command(355, [
     '$gameScreen.startTint([40, 50, 60, 0], 0);\n' +
@@ -138,6 +162,140 @@ test('database type checks use table identity and preserve null results', t => {
     assert.equal(manager[method](null), null);
     assert.equal(manager[method](undefined), undefined);
   }
+});
+
+test('battler state and parameter arrays remain live across native commands and saved aliases', t => {
+  const data = fixture([]);
+  data.states.push({ id: 2, priority: 50, restriction: 2, minTurns: 2, maxTurns: 2, iconIndex: 19,
+    traits: [{ code: 22, dataId: 1, value: 0.25 }, { code: 23, dataId: 4, value: 0.5 }] });
+  const session = api.create(data); t.after(() => api.dispose(session));
+  const { scope } = createScriptRuntime(api, session);
+  for (const [name, value] of Object.entries(data)) scope['$data' + name[0].toUpperCase() + name.slice(1)] = value;
+  api.newGame(session);
+  const actor = scope.$gameActors.actor(1), states = actor._states;
+  states.pluginTag = { retained: true };
+  const original = scope.Game_Battler.prototype.addState;
+  scope.Game_Battler.prototype.addState = function(id) { original.call(this, id); this.pluginState = id; };
+  actor.addState(2);
+  const result = actor.result();
+  assert.equal(result instanceof scope.Game_ActionResult, true);
+  assert.equal(result.addedStateObjects()[0], data.states[2]);
+  result.hpDamage = 7; result.pushAddedBuff(2); result.pushAddedBuff(2);
+  assert.equal(api.save(session).actors._data[1]._result.hpDamage, 7);
+  assert.deepEqual(api.save(session).actors._data[1]._result.addedBuffs, [2]);
+  assert.equal(actor._states, states); assert.deepEqual(Array.from(states), [2]);
+  assert.equal(actor._states.pluginTag.retained, true);
+  assert.equal(actor.states()[0], data.states[2]); assert.equal(actor.pluginState, 2);
+  assert.equal(actor.isConfused(), true); assert.equal(actor.eva, 0.25);
+  assert.equal(actor.skillMpCost({ mpCost: 7 }), 3);
+  assert.deepEqual(Array.from(actor.stateIcons()), [19]);
+  actor._buffs[2] = 1; actor._paramPlus[2] = 3;
+  assert.equal(actor.atk, 16);
+  assert.equal(api.save(session).actors._data[1]._buffs[2], 1);
+  actor.removeState(2);
+  assert.deepEqual(Array.from(states), []); assert.equal(actor.isConfused(), false);
+  states.push(2); assert.equal(actor.isStateAffected(2), true);
+  assert.deepEqual(api.save(session).actors._data[1]._states, [2]);
+  assert.throws(() => { actor._buffs = [1]; }, /eight entries/);
+  assert.equal(actor._buffs.length, 8);
+  actor.recoverAll(); assert.deepEqual(Array.from(states), []);
+  actor.clearResult(); assert.equal(actor.result(), result); assert.equal(result.isStatusAffected(), false);
+  actor.hide(); assert.equal(actor.isAlive(), false); actor.appear(); assert.equal(actor.isAlive(), true);
+});
+
+test('actor skills, equipment identity and image fields share native save state', t => {
+  const data = fixture([]), session = api.create(data); t.after(() => api.dispose(session));
+  const { scope } = createScriptRuntime(api, session);
+  for (const [name, value] of Object.entries(data)) scope['$data' + name[0].toUpperCase() + name.slice(1)] = value;
+  api.newGame(session);
+  const actor = scope.$gameActors.actor(1);
+  assert.equal(actor.weapons()[0], data.weapons[1]); assert.equal(actor.hasArmor(data.armors[1]), true);
+  actor.learnSkill(1); assert.deepEqual(Array.from(actor.skills()), [data.skills[1], data.skills[2]]);
+  actor.forgetSkill(2); assert.equal(actor.isLearnedSkill(2), false);
+  actor.setFaceImage('Portrait', 3); actor.setProfile('Profile');
+  const saved = api.save(session).actors._data[1];
+  assert.deepEqual(saved._skills, [1]); assert.equal(saved._faceName, 'Portrait'); assert.equal(saved._faceIndex, 3);
+  assert.equal(actor.profile(), 'Profile');
+});
+
+test('party methods share native inventory, equipment, gold and membership', t => {
+  const data = fixture([]), session = api.create(data); t.after(() => api.dispose(session));
+  const runtime = createScriptRuntime(api, session), { scope } = runtime;
+  for (const [name, value] of Object.entries(data)) scope['$data' + name[0].toUpperCase() + name.slice(1)] = value;
+  api.newGame(session);
+  const party = scope.$gameParty, actor = scope.$gameActors.actor(1);
+  assert.equal(party instanceof scope.Game_Unit, true);
+  assert.equal(runtime.runScript('$gameParty.members() instanceof Array && $gameParty.members().contains($gameActors.actor(1))'), true);
+  assert.equal(runtime.runScript('$gameActors.actor(1)._states instanceof Array'), true);
+  party.addActor(2); party.swapOrder(0, 1);
+  assert.equal(party.leader(), scope.$gameActors.actor(2));
+  party.removeActor(2); assert.equal(party.size(), 1);
+  party.setMenuActor(actor); assert.equal(party.menuActor(), actor);
+  party.gainGold(30); party.loseGold(8); assert.equal(api.save(session).party._gold, 22);
+  party.increaseSteps(); assert.equal(party.steps(), 1);
+  const original = scope.Game_Party.prototype.gainItem;
+  scope.Game_Party.prototype.maxItems = function() { return 3; };
+  scope.Game_Party.prototype.gainItem = function(...args) { original.apply(this, args); this.lastGain = args[0]; };
+  party.gainItem(data.items[1], 9); assert.equal(party.numItems(data.items[1]), 3);
+  assert.equal(party.items()[0], data.items[1]); assert.equal(party.lastGain, data.items[1]);
+  assert.equal(api.save(session).party._items[1], 3);
+  assert.equal(party.hasItem(data.weapons[1], true), true);
+  party.loseItem(data.weapons[1], 1, true);
+  assert.equal(actor.hasWeapon(data.weapons[1]), false);
+  assert.equal(api.save(session).actors._data[1]._equips[0]._itemId, 0);
+});
+
+test('map queries use native events and system helpers update native counters', t => {
+  const data = fixture([]); data.maps[1].displayName = 'Area'; data.maps[1].encounterStep = 30;
+  data.system.locale = 'zh_CN'; data.system.versionId = 42;
+  const session = api.create(data); t.after(() => api.dispose(session));
+  const { scope } = createScriptRuntime(api, session); scope.$dataSystem = data.system;
+  api.newGame(session);
+  const map = scope.$gameMap, system = scope.$gameSystem, event = map.event(1);
+  assert.equal(map.width(), 5); assert.equal(map.tileWidth(), 48); assert.equal(map.displayName(), 'Area');
+  assert.equal(map.events()[0], event); assert.equal(map.eventsXyNt(3, 1)[0], event);
+  event._through = true; assert.equal(map.eventsXyNt(3, 1).length, 0);
+  assert.equal(map.eventsXy(3, 1)[0], event);
+  assert.equal(Boolean(system.isChinese()), true); assert.equal(system.isKorean(), null); assert.equal(system.versionId(), 0);
+  system.onBattleStart(); system.onBattleWin(); system.onBattleEscape();
+  const saved = api.save(session).system;
+  assert.equal(system.versionId(), 42);
+  assert.equal(saved._battleCount, 1); assert.equal(saved._winCount, 1); assert.equal(saved._escapeCount, 1);
+  assert.equal(system.playtimeText(), '00:00:00');
+});
+
+test('action queries honor authored scopes and dispatch global effects into native game state', t => {
+  const data = fixture([]);
+  data.skills[2] = { id: 2, scope: 4, hitType: 1, tpGain: 12, damage: { type: 5, elementId: -1, critical: true },
+    effects: [{ code: 44, dataId: 1 }] };
+  data.classes[1].traits.push({ code: 22, dataId: 2, value: 0.3 });
+  const session = api.create(data); t.after(() => api.dispose(session));
+  const { scope } = createScriptRuntime(api, session);
+  for (const [name, value] of Object.entries(data)) scope['$data' + name[0].toUpperCase() + name.slice(1)] = value;
+  api.newGame(session);
+  const actor = scope.$gameActors.actor(1), action = new scope.Game_Action(actor);
+  action.setItemObject(data.skills[2]);
+  assert.equal(action.isForOpponent(), true); assert.equal(action.isForRandom(), true); assert.equal(action.numTargets(), 2);
+  assert.equal(action.needsSelection(), false); assert.equal(action.isDrain(), true); assert.equal(action.isHpEffect(), true);
+  assert.equal(action.isPhysical(), true); assert.equal(action.itemCri({ cev: 0.2 }), 0.24);
+  action.applyGlobal(); assert.equal(scope.$gameTemp.reservedCommonEvent(), data.commonEvents[1]);
+  action.applyItemUserEffect(); assert.equal(actor.tp, 12);
+  action.makeSuccess(actor); assert.equal(api.save(session).actors._data[1]._result.success, true);
+  action.setAttack(); assert.equal(action.item(), data.skills[1]);
+});
+
+test('scripted movement routes and jumps use native character state', t => {
+  const { session, scope, step } = create(t, []);
+  const player = scope.$gamePlayer;
+  player.setMoveSpeed(6); assert.equal(player.realMoveSpeed(), 6);
+  player.setThrough(true); player.setTransparent(true);
+  player.forceMoveRoute({ list: [{ code: scope.Game_Character.ROUTE_SCRIPT, parameters: ['this.setDirection(6); this.setPattern(2);'] },
+    { code: 0 }], repeat: false, skippable: false });
+  step(); assert.equal(player.direction(), 6);
+  assert.equal(api.save(session).player._pattern, 2);
+  assert.equal(api.save(session).player._through, true);
+  player.jump(1, 0); assert.equal(player.isJumping(), true);
+  assert.equal(player.x, 2); assert.equal(Number.isFinite(player.screenY()), true);
 });
 
 test('party dictionaries expose native inventory and import category snapshots atomically', t => {
@@ -910,6 +1068,10 @@ test('native battle actions dispatch hit and evasion aliases with retained battl
     assert.equal(target.isEnemy(), true); assert.equal(target.isActor(), false);
     assert.equal(target.enemy(), data.enemies[1]);
     assert.equal(target._enemyId, 1);
+    assert.equal(scope.$gameTroop.members()[0], target);
+    assert.equal(target.index(), 0); assert.equal(target.friendsUnit(), scope.$gameTroop);
+    assert.equal(this.opponentsUnit(), scope.$gameTroop);
+    assert.equal(this.friendsUnit(), scope.$gameParty);
     assert.equal(hit.call(this, target), 0.5);
     return 1;
   };
@@ -923,6 +1085,7 @@ test('native battle actions dispatch hit and evasion aliases with retained battl
   api.startBattle(session, 1, true, true); api.acknowledge(session);
   for (let i = 0; i < 120 && !scope.BattleManager.isInputting(); ++i) api.step(session, {});
   assert.equal(scope.BattleManager.isInputting(), true);
+  assert.equal(scope.BattleManager.actor(), scope.$gameActors.actor(1));
   api.chooseAction(session, 0, 2, 0, false);
   for (let i = 0; i < 120 && !calls; ++i) { api.acknowledge(session); api.step(session, {}); }
   assert.equal(calls, 1);
