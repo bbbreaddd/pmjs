@@ -129,6 +129,21 @@ void Session::setCameraTarget(std::shared_ptr<RuntimeCharacter> target, double s
   cameraTarget_ = std::move(target); cameraSpeed_ = speed && !std::isnan(speed) ? speed : 800;
   if (!savedCamera_) savedCamera_ = std::array{mapState_.lastDisplayX, mapState_.lastDisplayY};
 }
+std::array<double, 3> Session::runtimeMapShadow() const {
+  const auto& airship = vehicles_[2];
+  if (airship.mapId != mapId_ || airship.altitude <= 0) return {0, 0, 0};
+  const double tw = tileWidth(), th = tileHeight();
+  const double width = map()["width"].number(), height = map()["height"].number();
+  const double visibleX = screenWidth_ / tw, visibleY = screenHeight_ / th;
+  const double cameraX = savedCamera_ ? (*savedCamera_)[0] : width < visibleX ? (width - visibleX) / 2 : std::clamp(player_.realX - (visibleX - 1) / 2, 0.0, width - visibleX);
+  const double cameraY = savedCamera_ ? (*savedCamera_)[1] : height < visibleY ? (height - visibleY) / 2 : std::clamp(player_.realY - (visibleY - 1) / 2, 0.0, height - visibleY);
+  const double realX = airship.character.realX, realY = airship.character.realY;
+  const double x = loopHorizontal() && realX < cameraX - (width - visibleX) / 2 ? realX - cameraX + width : realX - cameraX;
+  const double y = loopVertical() && realY < cameraY - (height - visibleY) / 2 ? realY - cameraY + height : realY - cameraY;
+  const bool object = airship.character.characterName.find('!') < 2;
+  return {std::floor(x * tw + tw / 2 + .5), std::floor(y * th + th - (object ? 0 : 6) + .5),
+    255.0 * std::clamp(airship.altitude / 48.0F, 0.0F, 1.0F)};
+}
 std::array<double, 2> Session::characterScreenPosition(const Character& character) const {
   const double tw = tileWidth(), th = tileHeight();
   const double width = map()["width"].number(), height = map()["height"].number();

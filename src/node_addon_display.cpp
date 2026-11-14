@@ -142,6 +142,8 @@ napi_value field(napi_env env, napi_callback_info info) try {
     else if (name == "seed") scalar = &filter->value->seed; else if (name == "enabled") flag = &filter->value->enabled;
   }
   if (sprite) {
+    if(name=="opaque")flag=&sprite->opaque;else if(name=="_isPicture")flag=&sprite->isPicture;
+    else if(name=="spriteId") {if(args.size()==3)sprite->spriteId=std::uint64_t(asNumber(env,args[2]));return number(env,sprite->spriteId);}
     if (name == "anchorX") scalar = &sprite->anchor.x; else if (name == "anchorY") scalar = &sprite->anchor.y;
     else if (name == "blendMode") {
       if (args.size() == 3) sprite->blendMode = asBlendMode(env, args[2]);

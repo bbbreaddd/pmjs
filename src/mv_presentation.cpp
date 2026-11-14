@@ -151,6 +151,7 @@ void Presentation::tile(int id,int x,int y,std::vector<TileLayerTile>& geometry)
   stockTilemap_.appendTileGeometry(geometry,id,x,y,[&](int sheet){const auto name=tileset["tilesetNames"][sheet].text();return name.empty()?ImageInfo{}:image("img/tilesets/"+name+".png");});
 }
 void Presentation::character(const Character& value, double cameraX, double cameraY) {
+  if(graphCharacterRenderer_ && graphCharacterRenderer_(value,core_.renderer(),{1,0,0,1,0,0},1))return;
   int characterId = &value == &session_.player_ ? -1 : 0;
   for (const auto& event : session_.events_) if (&event.character == &value) characterId = event.id;
   const auto flash = session_.effectColor(0, characterId);
@@ -251,11 +252,13 @@ void Presentation::mapParallax(int tileWidth, int tileHeight) {
   if (!core_.renderer().queueTilingFrame(source.handle, {1,0,0,1,0,0},
       {0,0,float(source.width),float(source.height)},{width,height},{float(-std::floor(-ox+.5)),float(-std::floor(-oy+.5))},1,BlendMode::normal)) throw std::runtime_error("cannot queue map parallax");
 }
-void Presentation::map(bool drawAmbience) {
+void Presentation::map(bool drawNativeOverlays) {
   const auto& tiled=session_.database_["tiledMaps"][std::to_string(session_.mapId_)];
   if(!tiled.null()) {
-    mapParallax(tiled["tilewidth"].integer(48), tiled["tileheight"].integer(48));
-    tiledMap(tiled);mapDestination();if(drawAmbience)mapAmbience();return;
+    if(drawNativeOverlays)mapParallax(tiled["tilewidth"].integer(48), tiled["tileheight"].integer(48));
+    tiledMap(tiled);
+    if(drawNativeOverlays) { mapDestination(); mapAmbience(); }
+    return;
   }
   const auto& mapData = session_.map();
   const int width = mapData["width"].integer(), height = mapData["height"].integer();
@@ -263,7 +266,7 @@ void Presentation::map(bool drawAmbience) {
   cameraX_ = session_.savedCamera_ ? (*session_.savedCamera_)[0] : width < screenX ? (width - screenX) / 2 : std::clamp(session_.player_.realX - (screenX - 1) / 2, 0.0, width - screenX);
   cameraY_ = session_.savedCamera_ ? (*session_.savedCamera_)[1] : height < screenY ? (height - screenY) / 2 : std::clamp(session_.player_.realY - (screenY - 1) / 2, 0.0, height - screenY);
   const int originX = static_cast<int>(std::floor(cameraX_ * 48)), originY = static_cast<int>(std::floor(cameraY_ * 48));
-  mapParallax(48, 48);
+  if(drawNativeOverlays)mapParallax(48, 48);
   const int firstX = static_cast<int>(std::floor(originX / 48.0)), firstY = static_cast<int>(std::floor(originY / 48.0));
   prepareMapGeometry(session_.loopHorizontal() ? firstX : std::max(0, firstX), session_.loopVertical() ? firstY : std::max(0, firstY),
     session_.loopHorizontal() ? (originX + core_.width()) / 48 + 1 : std::min(width, (originX + core_.width()) / 48 + 1),
@@ -278,8 +281,7 @@ void Presentation::map(bool drawAmbience) {
   for (const auto& sprite : characters) if (sprite.priority < 2) character(*sprite.value, cameraX_, cameraY_);
   queueMapGeometry(true, originX, originY);
   for (const auto& sprite : characters) if (sprite.priority >= 2) character(*sprite.value, cameraX_, cameraY_);
-  mapShadow();
-  mapDestination();
+  if(drawNativeOverlays) { mapShadow(); mapDestination(); }
 }
 void Presentation::hitTarget(int x, int y, int width, int height, int index, int action) {
   session_.uiHitTargets_.push_back({x,y,width,height,index,session_.ui_.category,action,session_.ui_.scene});
@@ -1667,6 +1669,34 @@ bool Presentation::renderFrame(const std::function<void()>& drawFrame) {
   processAudio();
   return core::Graphics::render([this]{renderStage();},drawFrame);
 }
+void Presentation::bindMapSpriteset(NativeMapSpriteset& spriteset) {
+  const std::weak_ptr<int> lifetime=presentationLifetime_;
+  const auto characters=spriteset.characterRenderer();
+  auto world=[this,lifetime,characters](const core::Matrix& matrix,double opacity) {
+    if(lifetime.expired())throw std::runtime_error("native map presentation has ended");
+    using CharacterRenderer=decltype(graphCharacterRenderer_);
+    struct Restore { CharacterRenderer& target; CharacterRenderer previous; ~Restore() { target=std::move(previous); } } restore{graphCharacterRenderer_,std::move(graphCharacterRenderer_)};
+    graphCharacterRenderer_=characters;
+    renderMapLayer("world",matrix,opacity);
+  };
+  const auto layer=[this,lifetime](std::string name) {
+    return [this,lifetime,name=std::move(name)](const core::Matrix& matrix,double opacity) {
+      if(lifetime.expired())throw std::runtime_error("native map presentation has ended");
+      renderMapLayer(name,matrix,opacity);
+    };
+  };
+  spriteset.bindMapLayers(std::move(world),layer("pictures"),layer("weather"));
+}
+void Presentation::renderMapLayer(const std::string& layer,const core::Matrix& world,double opacity) {
+  if(layer!="world"&&layer!="pictures"&&layer!="weather")throw std::invalid_argument("unknown map presentation layer: "+layer);
+  prepareRenderResources();
+  const auto first=core_.renderer().queuedCommandCount();
+  if(layer=="world") {
+    if(session_.mapId_>0) { map(false); visualEffects(); }
+  } else if(layer=="pictures")mapPictures();
+  else weather();
+  core_.renderer().transformQueuedCommands(first,world,static_cast<float>(opacity));
+}
 void Presentation::prepareRenderResources() {
   const int sceneId = static_cast<int>(session_.ui_.scene);
   if (sceneId != lastScene_ || session_.mapId_ != lastMap_ || session_.presentationRevision_ != lastPresentationRevision_) {
@@ -1692,6 +1722,11 @@ void Presentation::prepareRenderResources() {
     globalTextCanvas_=created->handle;
   }
 }
+void Presentation::prepareUiFrame() {
+  uiWindowOrdinal_=0;uiPendingSlot_.reset();pendingUiOps_.clear();uiLayerState_.reset();uiTextClip_.reset();uiTextDirty_=false;
+  textCanvas_=globalTextCanvas_;textOffsetX_=0;textOffsetY_=0;textWidth_=core_.width();textHeight_=core_.height();
+  core_.canvases().clear(textCanvas_);
+}
 void Presentation::finishSceneOverlays() {
   if (session_.sceneFadeOpacity_ > 0) {
     const float color = session_.sceneFadeWhite_ ? 1.0F : 0.0F;
@@ -1706,12 +1741,10 @@ void Presentation::renderStage() {
   if (scriptStage_) {
     core_.renderer().clearScene(0,0,0,1);
     scriptStage_->render(core_.renderer());
-    if(session_.ui_.scene==Scene::map)finishSceneOverlays();
+    if(session_.ui_.scene==Scene::map) { prepareUiFrame(); message(); finishUiLayer(); finishSceneOverlays(); }
     return;
   }
-  uiWindowOrdinal_=0;uiPendingSlot_.reset();pendingUiOps_.clear();uiLayerState_.reset();uiTextClip_.reset();uiTextDirty_=false;
-  textCanvas_=globalTextCanvas_;textOffsetX_=0;textOffsetY_=0;textWidth_=core_.width();textHeight_=core_.height();
-  core_.canvases().clear(textCanvas_);
+  prepareUiFrame();
   const auto scene = session_.ui_.scene; const int width = core_.width(), height = core_.height();
   if (scene == Scene::title) {
     for (int layer = 1; layer <= 2; ++layer) { const auto name = session_.database_["system"][layer == 1 ? "title1Name" : "title2Name"].text(); if (name.empty()) continue; const auto source = image("img/titles" + std::to_string(layer) + "/" + name + ".png"); const float scale = std::max(static_cast<float>(width) / source.width, static_cast<float>(height) / source.height); quad(source.handle, 0, 0, source.width, source.height, (width - source.width * scale) / 2, (height - source.height * scale) / 2, source.width * scale, source.height * scale); }

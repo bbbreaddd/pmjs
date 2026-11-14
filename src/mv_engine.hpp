@@ -448,6 +448,7 @@ class Session {
   void initializeActorMembers(const std::shared_ptr<RuntimeActor>& actor);
   Value runtimeCharacterCommand(const std::shared_ptr<RuntimeCharacter>& character, const std::string& method, const Value::Array& arguments);
   std::array<double,2> runtimeCharacterScreenPosition(const std::shared_ptr<RuntimeCharacter>& character) const { return characterScreenPosition(character->value()); }
+  std::array<double, 3> runtimeMapShadow() const;
   void setCameraTarget(std::shared_ptr<RuntimeCharacter> target, double speed);
   std::shared_ptr<RuntimePicture> runtimePicture(int id) const;
   std::shared_ptr<RuntimePicture> createRuntimePicture(int slot = -1);
@@ -455,7 +456,7 @@ class Session {
   bool inBattle() const { return battle_.active; }
   bool playerTransferring() const { return pendingTransfer_.has_value(); }
   int playerNewMapId() const { return pendingTransfer_ ? (*pendingTransfer_)[0] : 0; }
-  int playerFadeType() const { return pendingTransfer_ ? (*pendingTransfer_)[4] : 0; }
+  int playerFadeType() const { return playerFadeType_; }
   void reservePlayerTransfer(int mapId, int x, int y, int direction, int fadeType);
   void performPlayerTransfer();
   void dispatchPicture(const std::shared_ptr<RuntimePicture>& picture, const std::string& method, const Value::Array& arguments = {});
@@ -669,6 +670,8 @@ class Session {
   void audio(const std::string& kind, const Value& sound, bool restart = false);
   void transfer(int mapId, int x, int y, int direction);
   void setupMap(int mapId);
+  void initializeMap();
+  void autoplayMap();
   void refresh();
   bool pageEligible(const Value& page, int eventId) const;
   bool passable(int x, int y, int direction, const Character& character) const;
@@ -857,6 +860,7 @@ class Session {
   bool followersVisible_ = false;
   std::optional<std::array<int, 2>> destination_;
   int mapTouchCount_ = 0;
+  int playerFadeType_ = 0;
   std::optional<std::array<int, 5>> pendingTransfer_;
   bool transferFadeStarted_ = false;
   void centerPlayer();

@@ -272,7 +272,7 @@ class Renderer {
   void resetPresentScaleMode();
   void beginFrame();
   std::size_t queuedCommandCount() const { return frame_.commands.size(); }
-  void transformQueuedCommands(std::size_t first, const std::array<float, 6>& transform);
+  void transformQueuedCommands(std::size_t first, const std::array<float, 6>& transform, float opacity = 1);
   void queueTone(const std::array<float, 20>& matrix);
   void queueTone(const std::array<float, 4>& canvasTone,
                  const std::array<float, 6>& transform,

@@ -566,6 +566,7 @@ function createScriptRuntime(engine, session, options = {}) {
   Game_Actor.prototype.currentClass = function() { return scope.$dataClasses[this._classId]; };
   Game_Enemy.prototype.enemy = function() { return scope.$dataEnemies[this._enemyId]; };
   const context = vm.createContext(scope);
+  GuestArray = vm.runInContext("Array", context);
   installCoreUtilities({ runScript(source) { return vm.runInContext(source, context); } });
   installManagerReference({ scope, runScript: (source, filename) => new vm.Script(source, { filename }).runInContext(context) }, 'DataManager');
   const referenceDatabaseLoad = scope.DataManager.loadDatabase;
@@ -597,10 +598,10 @@ function createScriptRuntime(engine, session, options = {}) {
       if (typeof key === 'string' && /^(0|[1-9][0-9]*)$/.test(key)) return actorIds().includes(Number(key)) ? scope.$gameActors.actor(Number(key)) : null;
       return Reflect.get(target, key, receiver);
     },
-    ownKeys(target) { target.length = Math.max(0, ...actorIds()) + 1; return actorIds().map(String).concat('length'); },
+    ownKeys(target) { target.length = Math.max(0, ...actorIds()) + 1; return [...new Set(actorIds().map(String).concat(Reflect.ownKeys(target)))]; },
     getOwnPropertyDescriptor(target, key) {
       if (key === 'length') { target.length = Math.max(0, ...actorIds()) + 1; return Reflect.getOwnPropertyDescriptor(target, key); }
-      return actorIds().includes(Number(key)) ? { configurable: true, enumerable: true, writable: true, value: scope.$gameActors.actor(Number(key)) } : Reflect.getOwnPropertyDescriptor(target, key);
+      return typeof key === 'string' && actorIds().includes(Number(key)) ? { configurable: true, enumerable: true, writable: true, value: scope.$gameActors.actor(Number(key)) } : Reflect.getOwnPropertyDescriptor(target, key);
     }
   });
   Object.defineProperty(Game_Actors.prototype, '_data', { configurable: true, get() { return actorArray; } });
@@ -614,7 +615,19 @@ function createScriptRuntime(engine, session, options = {}) {
     if (this !== scope.$gameMap) throw new Error('Detached map setup is not bound');
     return engine.gameDataInvoke(session, 'map', 'setup', [Number(mapId)]);
   };
-  gameDataDefaults.set('map', { setup: nativeMapSetup });
+  const nativeMapInitialize = Game_Map.prototype.initialize = function() {
+    if (this !== scope.$gameMap) throw new Error('Detached map initialization is not bound');
+    return engine.gameDataInvoke(session, 'map', 'initialize', []);
+  };
+  Game_Map.prototype.autoplay = function() {
+    if (this !== scope.$gameMap) throw new Error('Detached map autoplay is not bound');
+    return engine.gameDataInvoke(session, 'map', 'autoplay', []);
+  };
+  const nativeMapSetupScroll = Game_Map.prototype.setupScroll = function() {
+    if (this !== scope.$gameMap) throw new Error('Detached map scrolling is not bound');
+    return engine.gameDataInvoke(session, 'map', 'setupScroll', []);
+  };
+  gameDataDefaults.set('map', { setup: nativeMapSetup, initialize: nativeMapInitialize, setupScroll: nativeMapSetupScroll });
   gameDataStores.set('map', scope.$gameMap);
   Object.defineProperty(Game_Map.prototype, '_events', { configurable: true, get() {
     const result = GuestArray.from([null]); for (const event of this.events()) result[event.eventId()] = event; return result;

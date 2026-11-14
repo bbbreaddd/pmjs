@@ -576,12 +576,13 @@ void Renderer::queueTone(const std::array<float, 4>& canvasTone,
   frame_.commands.push_back(command);
   sceneSubmittedThisFrame_ = true;
 }
-void Renderer::transformQueuedCommands(std::size_t first, const std::array<float, 6>& parent) {
+void Renderer::transformQueuedCommands(std::size_t first, const std::array<float, 6>& parent, float opacity) {
   const auto point = [&](float x, float y) {
     return std::array<float, 2>{parent[0]*x+parent[2]*y+parent[4], parent[1]*x+parent[3]*y+parent[5]};
   };
   for (std::size_t index = first; index < frame_.commands.size(); ++index) {
     auto& command = frame_.commands[index];
+    if(command.action==RenderCommand::Action::draw)command.color[3]*=opacity;
     if (command.appliesColorMatrix && !command.canvasTone) continue;
     if (command.action == RenderCommand::Action::draw && command.primitive == RenderCommand::Primitive::effect) {
       const auto origin = point(command.effect.viewport[0], command.effect.viewport[1]);

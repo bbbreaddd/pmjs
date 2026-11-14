@@ -58,17 +58,18 @@ async function runNativeMv(options, hooks = {}) {
   try {
     engine.attach(session, settings);
     engine.configure(session, { alwaysDash: settings.alwaysDash });
-    let configuration = {};
-    try { configuration = readStoredJson(storage, compression, 'config.rpgsave', {}) || {}; }
-    catch (error) { console.error(`Configuration load failed: ${error.message}`); }
-    engine.configure(session, configuration);
     let configurationRevision = engine.storageStatus(session).configurationRevision;
     engine.setSaveMetadata(session, loadSaveMetadata(storage, compression));
     const runtimeOptions = { engine, session, native, manifest: loaded.manifest, database, settings, storage, gameRoot: root, config, guestArguments: options.guestArguments,
       createPluginRuntime: require('./native-plugins.cjs').createPluginRuntime };
     const scriptRuntime = hooks.installRuntime ? await hooks.installRuntime(runtimeOptions) :
       adapter ? adapter.createRuntime(runtimeOptions) : loaded.manifest ? require('./native-plugins.cjs').createPluginRuntime(engine, session, runtimeOptions) : null;
-    scriptRuntime?.scope?.ConfigManager?.load();
+    if (scriptRuntime?.scope?.ConfigManager) scriptRuntime.scope.ConfigManager.load();
+    else {
+      try { engine.configure(session, readStoredJson(storage, compression, 'config.rpgsave', {}) || {}); }
+      catch (error) { console.error(`Configuration load failed: ${error.message}`); }
+    }
+    configurationRevision = engine.storageStatus(session).configurationRevision;
     if (options.battleTest) engine.battleTest(session);
     else if (loaded.initialState) engine.load(session, loaded.initialState);
     else if (scriptRuntime?.start) scriptRuntime.start(); else engine.openTitle(session);
@@ -87,11 +88,12 @@ async function runNativeMv(options, hooks = {}) {
         if ((scriptRuntime?.step ? await scriptRuntime.step() : engine.step(session)) === false) break gameLoop;
         const request = engine.storageStatus(session);
         if (request.configurationRevision !== configurationRevision) {
-          storage.writeText('config.rpgsave', compression.compressToBase64(JSON.stringify(engine.configuration(session))));
+          if (scriptRuntime?.scope?.ConfigManager) scriptRuntime.scope.ConfigManager.save();
+          else storage.writeText('config.rpgsave', compression.compressToBase64(JSON.stringify(engine.configuration(session))));
           configurationRevision = request.configurationRevision;
         }
         if (request.save || request.load) {
-          if (scriptRuntime?.completeStorage) { scriptRuntime.completeStorage(request); continue; }
+          if (scriptRuntime?.completeStorage) { scriptRuntime.completeStorage(request); native.finishLogicStep(); continue; }
           try {
             const file = `file${request.slot}.rpgsave`;
             if (request.save) {

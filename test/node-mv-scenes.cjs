@@ -143,6 +143,27 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       window._colorTone[0] = 20; assert.equal(window._colorTone[0], 20);
     } finally { scope.Window.prototype._refreshFrame = original; engine.scriptStage(session, null); }
   });
+  await t.test('sprite bitmap-load aliases and mutable color arrays reach native rendering', () => {
+    const bitmap = new scope.Bitmap(32, 32); bitmap.fillAll('white');
+    class PluginSprite extends scope.Sprite {
+      _onBitmapLoad(value) { super._onBitmapLoad(value); this.loadedBitmap = value; this.setFrame(0, 0, 16, 16); }
+    }
+    const sprite = new PluginSprite(bitmap), stage = new scope.Container(); stage.addChild(sprite);
+    assert.equal(sprite.loadedBitmap, bitmap); assert.equal(sprite._bitmap, bitmap); assert.equal(sprite.width, 16);
+    const tone = sprite._colorTone, blend = sprite._blendColor;
+    assert.equal(tone, sprite._colorTone); assert.equal(blend, sprite._blendColor);
+    tone[0] = -255; tone[2] = -255;
+    const capture = () => {
+      native.beginFrame(); scope.Graphics.render(stage); engine.present(session); native.renderFrame();
+      return Array.from(native.canvas.captureSceneRawPremultiplied().subarray(0, 4));
+    };
+    try {
+      assert.deepEqual(capture(), [0,255,0,255]);
+      sprite._colorTone = [0,0,0,0]; blend[0] = 255; blend[3] = 255;
+      assert.deepEqual(capture(), [255,0,0,255]);
+      sprite.opaque = true; sprite._isPicture = true; assert.equal(sprite.opaque, true); assert.equal(sprite._isPicture, true);
+    } finally { engine.scriptStage(session, null); }
+  });
   await t.test('Graphics dimensions preserve independent layout sizes and resize native output', () => {
     const vm = require('node:vm');
     const source = fs.readFileSync(path.join(__dirname, '../third_party/rpg-maker-mv/rpg_core.js'), 'utf8');

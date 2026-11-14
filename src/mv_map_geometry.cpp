@@ -98,15 +98,11 @@ void Presentation::mapName() {
 
 namespace pmjs::mv {
 void Presentation::mapShadow() {
-  const auto& airship = session_.vehicles_[2];
-  if (airship.mapId != session_.mapId_ || airship.altitude <= 0) return;
+  if (graphCharacterRenderer_) return;
+  const auto shadow = session_.runtimeMapShadow();
+  if (shadow[2] <= 0) return;
   const auto source = image("img/system/Shadow1.png");
-  const auto& tiled = session_.database_["tiledMaps"][std::to_string(session_.mapId_)];
-  const int tw = tiled["tilewidth"].integer(48), th = tiled["tileheight"].integer(48);
-  const double x = std::floor(scrolledMapX(airship.character.realX, cameraX_, tw) * tw + tw / 2.0 + 0.5);
-  const bool object = airship.character.characterName.find('!') < 2;
-  const double y = std::floor(scrolledMapY(airship.character.realY, cameraY_, th) * th + th - (object ? 0 : 6) + 0.5);
-  quad(source.handle, 0, 0, source.width, source.height, x - source.width / 2.0, y - source.height,
-    source.width, source.height, std::clamp(airship.altitude / 48.0F, 0.0F, 1.0F));
+  quad(source.handle, 0, 0, source.width, source.height, shadow[0] - source.width / 2.0, shadow[1] - source.height,
+    source.width, source.height, shadow[2] / 255.0);
 }
 }

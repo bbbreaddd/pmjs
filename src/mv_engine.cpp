@@ -160,7 +160,7 @@ void Session::newGame() {
   reservedCommonEvent_ = 0;
   sceneStack_.clear(); messageOwnerSerial_ = 0; nextInterpreterSerial_ = 0;
   party_.clear(); events_.clear(); interpreter_ = {}; message_ = {}; closingMessage_.reset(); player_ = {};
-  mapId_ = 0; mapState_ = {}; commonInterpreters_.clear();
+  dispatchGameDataMutation("map", "initialize", {});
   for (auto& follower : followers_) { follower = {}; follower.through = true; }
   uiHitTargets_.clear(); previousUiButtons_.clear(); previousDebug_ = false;
   actors_.clear(); battle_ = {}; ui_ = scriptScenes ? previousUi : Ui{}; system_ = {}; gold_ = 0; steps_ = 0; brightness_ = 255; fadeOut_ = 0;
@@ -173,7 +173,7 @@ void Session::newGame() {
   playerDashing_ = false;
   followersVisible_ = database_["system"]["optFollowers"].boolean();
   followersGathering_ = false; destination_.reset(); mapTouchCount_ = 0; setupVehicles();
-  pendingTransfer_.reset();
+  pendingTransfer_.reset(); playerFadeType_ = 0;
   transferFadeStarted_ = false;
   pendingScene_.reset(); pendingLoadBgm_ = {}; pendingLoadBgs_ = {}; pendingLoadFrames_ = 0; pendingLoadMapUpdated_ = false;
   interpreter_.waitingRoute.reset();
@@ -187,11 +187,13 @@ void Session::newGame() {
     player_.characterIndex = actor.characterIndex;
   }
   player_.transparent = system["optTransparent"].boolean();
-  transfer(system["startMapId"].integer(), system["startX"].integer(), system["startY"].integer(), 2);
+  if (scriptScenes) reservePlayerTransfer(system["startMapId"].integer(), system["startX"].integer(), system["startY"].integer(), 2, 0);
+  else transfer(system["startMapId"].integer(), system["startX"].integer(), system["startY"].integer(), 2);
   dispatchMessage("clear");
 }
 
 void Session::reservePlayerTransfer(int mapId, int x, int y, int direction, int fadeType) {
+  playerFadeType_ = fadeType;
   pendingTransfer_ = std::array<int, 5>{mapId, x, y, direction, fadeType};
   transferFadeStarted_ = false;
 }
@@ -218,16 +220,28 @@ void Session::transfer(int id, int x, int y, int direction) {
   player_.x = x; player_.y = y; player_.realX = x; player_.realY = y;
   if (changedMap) {
     dispatchGameDataMutation("map", "setup", {id});
-    if (map()["autoplayBgm"].boolean()) {
-      if (vehicleType_ >= 0) vehicleWalkingBgm_ = map()["bgm"];
-      else AudioManager::playBgm(*this, map()["bgm"]);
-    }
-    if (map()["autoplayBgs"].boolean()) AudioManager::playBgs(*this, map()["bgs"]);
+    const bool scriptScenes = runtimeHooks_ && runtimeHooks_->scene && runtimeHooks_->scene("ownsScenes", 0).value_or(false);
+    if (!scriptScenes) autoplayMap();
   }
   locatePlayer(x, y);
   refreshNeeded_ = true; refreshIfNeeded();
 }
 
+void Session::initializeMap() {
+  detachRuntimeEntities(false);
+  mapId_ = 0; mapState_ = {}; events_.clear(); commonInterpreters_.clear();
+  interpreter_ = {}; destination_.reset(); mapTouchCount_ = 0;
+  savedCamera_.reset(); cameraTarget_.reset();
+  refreshNeeded_ = false;
+  ++presentationRevision_;
+}
+void Session::autoplayMap() {
+  if (map()["autoplayBgm"].boolean()) {
+    if (vehicleType_ >= 0) vehicleWalkingBgm_ = map()["bgm"];
+    else AudioManager::playBgm(*this, map()["bgm"]);
+  }
+  if (map()["autoplayBgs"].boolean()) AudioManager::playBgs(*this, map()["bgs"]);
+}
 void Session::setupMap(int id) {
   if (mapData(id).null()) throw std::invalid_argument("map not loaded: " + std::to_string(id));
   mapId_ = id;
@@ -244,6 +258,7 @@ void Session::setupMap(int id) {
     events_.push_back(event);
   }
   refreshNeeded_ = true; refreshIfNeeded();
+  dispatchGameDataMutation("map", "setupScroll", {});
 }
 
 void Session::locatePlayer(double x, double y) {
@@ -962,9 +977,8 @@ bool Session::command(const EventCommand& entry, Interpreter& context) {
     case 201: {
       if (battle_.active || message_.busy) return false;
       const bool indirect = p[0].integer() != 0;
-      pendingTransfer_ = std::array<int, 5>{indirect ? variable(p[1].integer()).integer() : p[1].integer(),
-        indirect ? variable(p[2].integer()).integer() : p[2].integer(), indirect ? variable(p[3].integer()).integer() : p[3].integer(), p[4].integer(), p[5].integer()};
-      transferFadeStarted_ = false;
+      reservePlayerTransfer(indirect ? variable(p[1].integer()).integer() : p[1].integer(),
+        indirect ? variable(p[2].integer()).integer() : p[2].integer(), indirect ? variable(p[3].integer()).integer() : p[3].integer(), p[4].integer(), p[5].integer());
       ++context.index; return false;
     }
     case 204:
@@ -1545,16 +1559,24 @@ void Session::step(const Input& input, bool mapDestination, bool mapFastForward,
     if (!player_.moving() && player_.jumpCount <= 0) player_.bushDepth = tileFlag(player_.x, player_.y, 64) && player_.characterName.find('!') >= 2 ? 12 : 0;
     updateTimer();
     if (pendingTransfer_ && !message_.closing) {
-      const auto target = *pendingTransfer_;
-      if (!transferFadeStarted_) {
-        transferFadeStarted_ = true;
-        if (target[4] != 2) startSceneFade(true, 24, target[4] == 1);
-      }
-      if (target[4] == 2 || sceneFadeDuration_ <= 0) {
-        pendingTransfer_.reset(); transferFadeStarted_ = false;
-        transfer(target[0], target[1], target[2], target[3]);
-        if (target[4] != 2) startSceneFade(false, 24, target[4] == 1);
-        transferred = true;
+      const bool scriptScenes = runtimeHooks_ && runtimeHooks_->scene && runtimeHooks_->scene("ownsScenes", 0).value_or(false);
+      if (scriptScenes) {
+        if (!transferFadeStarted_) {
+          transferFadeStarted_ = true;
+          SceneManager::gotoScene(*this, Scene::map);
+        }
+      } else {
+        const auto target = *pendingTransfer_;
+        if (!transferFadeStarted_) {
+          transferFadeStarted_ = true;
+          if (target[4] != 2) startSceneFade(true, 24, target[4] == 1);
+        }
+        if (target[4] == 2 || sceneFadeDuration_ <= 0) {
+          pendingTransfer_.reset(); transferFadeStarted_ = false;
+          transfer(target[0], target[1], target[2], target[3]);
+          if (target[4] != 2) startSceneFade(false, 24, target[4] == 1);
+          transferred = true;
+        }
       }
     }
     updateScreenState();

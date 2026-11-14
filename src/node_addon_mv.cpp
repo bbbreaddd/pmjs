@@ -7,6 +7,7 @@
 #include "mv_managers.hpp"
 #include "mv_sprites.hpp"
 #include "mv_generated_bindings.hpp"
+#include "mv_bound_sprites.hpp"
 #include "mv_windows.hpp"
 #include "mv_window_bindings.hpp"
 #include <cstring>
@@ -1353,6 +1354,16 @@ napi_value sceneControl(napi_env env, napi_callback_info info) try {
   } else throw std::invalid_argument("scene control is not bound: " + method);
   return undefined(env);
 } catch (const std::exception& error) { return throwException(env, error); }
+napi_value bindMapSpriteset(napi_env env,napi_callback_info info) try {
+  const auto args=arguments(env,info);
+  if(args.size()!=2)throw std::invalid_argument("map spriteset binding requires session and native spriteset");
+  auto& owner=session(env,args[0]); requireRuntimeOwner(owner,args[1]);
+  if(!owner.presentation)throw std::runtime_error("presentation is not attached");
+  const auto spriteset=std::dynamic_pointer_cast<mv::NativeMapSpriteset>(runtimeAs<mv::GeneratedRuntimeObject>(env,args[1]));
+  if(!spriteset)throw std::invalid_argument("map spriteset must use the native Spriteset_Map binding");
+  owner.presentation->bindMapSpriteset(*spriteset);
+  return undefined(env);
+} catch(const std::exception& error) { return throwException(env,error); }
 napi_value scriptStage(napi_env env, napi_callback_info info) {
   try {
     const auto args = arguments(env, info);
@@ -1888,6 +1899,7 @@ void registerMvEngineBindings(napi_env env, napi_value exports) {
   method(env, engine, "step", stepEngine); method(env, engine, "mapScene", mapScene); method(env, engine, "acknowledge", acknowledge);
   method(env, engine, "snapshot", snapshot); method(env, engine, "dispose", dispose);
   method(env, engine, "attach", attach); method(env, engine, "present", present); method(env, engine, "render", render); method(env, engine, "openTitle", openTitle);
+  method(env,engine,"bindMapSpriteset",bindMapSpriteset);
   method(env, engine, "scriptStage", scriptStage); method(env, engine, "sceneControl", sceneControl);
   method(env, engine, "managerInvoke", managerInvoke);
   method(env, engine, "gameDataInvoke", gameDataInvoke);

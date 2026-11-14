@@ -225,6 +225,7 @@ function createBitmapClass(native, PIXI = null, fonts = null, contextClass = () 
       return invoke(this, name, entry(source).handle, sx, sy, sw, sh, dx, dy, dw, dh);
     };
   }
+  Bitmap.bindPixi = function(pixi, fontRegistry = fonts) { PIXI = pixi; fonts = fontRegistry; };
   Bitmap.loadFont = function(family, source) {
     family = String(family); source = String(source);
     api.loadFont(runtime, family, source);

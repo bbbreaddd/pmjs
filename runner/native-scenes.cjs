@@ -70,6 +70,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
         const own = entry(this);
         api.invoke(own.handle, name, value == null ? null : bitmapHandle(Bitmap, value));
         own.bitmaps.set(name, value);
+        if (name === "bitmap" && value) { this._refreshFrame = true; value.addLoadListener(bitmap => this._onBitmapLoad(bitmap)); }
         if (name === "windowskin" && value) value.addLoadListener(() => this._onWindowskinLoad());
       }
     });
@@ -173,8 +174,8 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   inherit(Sprite, Container);
   Sprite.prototype.initialize = function(bitmap) { attach(this, 'sprite'); if (bitmap) this.bitmap = bitmap; };
   bitmapProperty(Sprite, 'bitmap'); point(Sprite, 'anchor', 'anchorX', 'anchorY');
-  for (const field of ['width', 'height', 'opacity', 'blendMode']) prop(Sprite, field);
-  Sprite.prototype.setFrame = function(x, y, w, h) { api.invoke(entry(this).handle, 'frame', x, y, w, h); };
+  for (const field of ['width', 'height', 'opacity', 'blendMode', 'opaque', '_isPicture', 'spriteId']) prop(Sprite, field);
+  Sprite.prototype.setFrame = function(x, y, w, h) { this._refreshFrame = false; api.invoke(entry(this).handle, 'frame', x, y, w, h); };
   Object.defineProperty(Sprite.prototype, '_frame', { get() {
     const own = entry(this);
     if (!own.frame) {
@@ -188,6 +189,29 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     return own.frame;
   } });
   Sprite.prototype._refresh = function() { api.invoke(entry(this).handle, 'refreshSprite'); };
+  Sprite.prototype._onBitmapLoad = function(bitmap) {
+    if (bitmap === this.bitmap && this._refreshFrame) { this._refreshFrame = false; this.setFrame(0, 0, bitmap.width, bitmap.height); }
+    this._refresh();
+  };
+  Object.defineProperty(Sprite.prototype, '_bitmap', { configurable: true, get() { return this.bitmap; }, set(value) { this.bitmap = value; } });
+  Sprite.prototype._isInBitmapRect = function(x, y, width, height) { return this.bitmap && x >= 0 && y >= 0 && x + width <= this.bitmap.width && y + height <= this.bitmap.height; };
+  Sprite.prototype._needsTint = function() { const tone = this._colorTone; return tone[0] || tone[1] || tone[2] || tone[3] || this._blendColor[3] > 0; };
+  for (const [name, method] of [['_colorTone','tone'], ['_blendColor','blend']]) Object.defineProperty(Sprite.prototype, name, {
+    configurable: true,
+    get() {
+      const own = entry(this);
+      if (!own[name]) {
+        const target = options.createArray ? options.createArray() : []; target.push(0, 0, 0, 0);
+        own[name] = new Proxy(target, {
+          get(array, key) { return key === 'length' || ['0','1','2','3'].includes(key) ? Reflect.get(api.invoke(own.handle, method), key) : Reflect.get(array, key); },
+          set(array, key, value) { const color = api.invoke(own.handle, method); color[key] = value; api.invoke(own.handle, method, ...color); return Reflect.set(array, key, value); }
+        });
+      }
+      return own[name];
+    },
+    set(value) { api.invoke(entry(this).handle, method, ...value); }
+  });
+
   Sprite.prototype.getColorTone = function() { return api.invoke(entry(this).handle, 'tone'); };
   Sprite.prototype.setColorTone = function(value) { api.invoke(entry(this).handle, 'tone', ...value); };
   Sprite.prototype.getBlendColor = function() { return api.invoke(entry(this).handle, 'blend'); };

@@ -38,6 +38,12 @@ Value Session::invokeGameDataBase(const std::string& kind, const std::string& me
     return !cameraTarget_;
   }
   if (kind == "map") {
+    if (method == "initialize") { initializeMap(); return Value::undefined(); }
+    if (method == "setupScroll") {
+      mapState_.scrollDirection = 2; mapState_.scrollRest = 0; mapState_.scrollSpeed = 4;
+      return Value::undefined();
+    }
+    if (method == "autoplay") { autoplayMap(); return Value::undefined(); }
     if (method == "setup") { setupMap(arguments.at(0).integer()); return Value::undefined(); }
     if (method == "tileWidth") return tileWidth();
     if (method == "tileHeight") return tileHeight();

@@ -34,6 +34,8 @@ class Presentation {
   std::shared_ptr<core::Container> scriptStage_;
   std::shared_ptr<int> presentationLifetime_ = std::make_shared<int>(0);
   void prepareRenderResources();
+  void prepareUiFrame();
+  std::function<bool(const Character&,Renderer&,const core::Matrix&,double)> graphCharacterRenderer_;
   void renderMapLayer(const std::string& layer,const core::Matrix& world,double opacity);
   void finishSceneOverlays();
   void renderStage();
@@ -49,7 +51,7 @@ class Presentation {
   void character(const Character& value, double cameraX, double cameraY);
   double scrolledMapX(double x, double cameraX, int tileWidth) const;
   double scrolledMapY(double y, double cameraY, int tileHeight) const;
-  void map(bool drawAmbience = true);
+  void map(bool drawNativeOverlays = true);
   void mapParallax(int tileWidth, int tileHeight);
   void mapDestination();
   void mapShadow();

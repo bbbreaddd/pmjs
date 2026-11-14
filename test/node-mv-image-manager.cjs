@@ -54,6 +54,11 @@ test('native image cache preserves identity, reservations, requests and retained
     for (let i = 0; i < 100 && !bitmap.isReady(); i++) { manager.update(); await new Promise(resolve => setTimeout(resolve, 10)); }
     assert.equal(bitmap.isReady(), true);
   }
+  const retry = Bitmap.request('img/pictures/Sheet.png');
+  let recovered = 0; retry.addLoadListener(() => recovered++);
+  retry._loadingState = 'error'; assert.equal(retry.isError(), true); assert.equal(retry.isReady(), false);
+  Bitmap.updateLoads(); assert.equal(recovered, 0);
+  retry.decode(); await ready(retry); assert.equal(recovered, 1);
   const sheet = manager.reservePicture('Sheet', 0, 'event');
   await ready(sheet);
   assert.equal(manager.loadPicture('Sheet'), sheet);

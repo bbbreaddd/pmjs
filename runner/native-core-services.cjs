@@ -4,6 +4,7 @@ const { installAudioElement } = require('./native-audio-element.cjs');
 
 function installCoreServices(runtime, engine) {
   const scope = runtime.scope;
+  if (scope.PIXI) scope.Bitmap?.bindPixi(scope.PIXI, scope.PMJS?.fonts);
   if (!scope.ResourceHandler) installCoreUtilities(runtime);
   if (scope.WebAudio && scope.EventTarget) installAudioElement(scope);
   if (scope.PIXI?.Point) {
