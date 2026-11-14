@@ -1722,9 +1722,17 @@ void Renderer::renderScene() {
         continue;
       }
 
-      glUniform1i(exactCompositionCopyUniform_, filter.exactCompositionCopy);
+      bool exactCopy=filter.exactCompositionCopy;
+      // Copies inside an authored filter retain that filter pipeline's precision.
+      for(int depth=0;depth<filterDepth&&exactCopy;++depth)
+        exactCopy=filterCommands[depth]->exactCompositionCopy;
       glUniform1i(filterTargetYDownUniform_, targetYDown);
       glUniform1i(filterImageYDownUniform_, sourceYDown);
+      if(exactCopy) {
+        glUseProgram(compositionCopyProgram_);projectTarget(compositionCopyProgram_);
+        glUniform1i(compositionCopyTargetYDownUniform_, targetYDown);
+        glUniform1i(compositionCopyImageYDownUniform_, sourceYDown);
+      }
       glBindFramebuffer(GL_FRAMEBUFFER, filterDepth == 0 ? rootFramebuffer :
                         groupTargets_[filterDepth - 1].framebuffer);
       glBindTexture(GL_TEXTURE_2D, compositeTexture);
@@ -1777,7 +1785,7 @@ void Renderer::renderScene() {
         }
       }
       if (pictureBlend) glEnable(GL_BLEND);
-      glUniform1i(exactCompositionCopyUniform_, 0);
+      if(exactCopy) {glUseProgram(program_);projectTarget(program_);}
       glUniform1i(displacementEnabledUniform_, 0);
       glUniform1i(noiseGlitchEnabledUniform_, 0);
       glUniform1i(pixiFilterKindUniform_, 0);

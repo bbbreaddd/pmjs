@@ -36,24 +36,7 @@ void Session::initializeActor(int id) {
   actors_.try_emplace(id); actors_.at(id).id = id;
   const auto object = runtimeActor(id);
   if (!runtimeHooks_ || !runtimeHooks_->actorLifecycle || !runtimeHooks_->actorLifecycle(object, "initialize", {})) initializeActorMembers(object);
-  Battler value; value.id = id; value.level = source["initialLevel"].integer(1); value.classId = source["classId"].integer();
-  value.name = source["name"].text(); value.nickname = source["nickname"].text(); value.profile = source["profile"].text();
-  value.characterName = source["characterName"].text(); value.characterIndex = source["characterIndex"].integer();
-  value.faceName = source["faceName"].text(); value.faceIndex = source["faceIndex"].integer(); value.battlerName = source["battlerName"].text();
-  const auto equipTypes = database_["system"]["equipTypes"].array().size();
-  const std::size_t slotCount = equipTypes > 0 ? equipTypes - 1 : 0;
-  value.equipKinds.assign(slotCount, 2);
-  if (!value.equipKinds.empty()) value.equipKinds[0] = 1;
-  for (std::size_t slot = 0; slot < slotCount; ++slot) value.equipKinds[slot] = equipSlotType(value, static_cast<int>(slot)) == 1 ? 1 : 2;
-  for (const auto& item : source["equips"].array()) value.equips.push_back(item.integer());
-  value.equips.resize(slotCount);
-  actors_[id] = value;
-  auto& result = actors_.at(id);
-  if (runtimeHooks_ && runtimeHooks_->actorLifecycle) runtimeHooks_->actorLifecycle(object, "initImages", {});
-  releaseEquipment(result, true);
-  result.exp[result.classId] = actorExpForLevel(result, result.level);
-  if (!runtimeHooks_ || !runtimeHooks_->actorLifecycle || !runtimeHooks_->actorLifecycle(object, "initSkills", {})) initializeActorSkills(object);
-  recover(result);
+  if (!dispatchActorMethod(object->value(), "setup", {id}, object)) runtimeBattlerCommand(object, "setup", {id});
 }
 std::vector<const Value*> Session::traitObjects(const Battler& battler) const {
   std::vector<const Value*> result;
@@ -315,36 +298,16 @@ void Session::makeEnemyActions() {
   battle_.remainingActions.assign(battleMemberCount(), 0);
   for (auto& [id, actor] : actors_) { (void)id; actor.guarding = false; }
   for (std::size_t index = 0; index < battleMemberCount(); ++index) {
-    auto& actor = actors_.at(party_[index]); const int count = battleActionCount(actor);
-    const bool autoBattle = hasSpecialFlag(actor, 0);
-    const bool automatic = autoBattle || restriction(actor) > 0;
-    if (!automatic) battle_.remainingActions[index] = battle_.surprise ? 0 : count;
-    else for (int action = 0; action < count; ++action) {
-      int skill = autoBattle ? 0 : 1, target = -1;
-      if (autoBattle) {
-        double best = std::numeric_limits<double>::min();
-        std::vector<int> skills{1};
-        skills.insert(skills.end(), actor.skills.begin(), actor.skills.end());
-        for (const auto* object : traitObjects(actor)) for (const auto& entry : (*object)["traits"].array()) {
-          const int id = entry["dataId"].integer();
-          if (entry["code"].integer() == 43 && std::find(skills.begin() + 1, skills.end(), id) == skills.end()) skills.push_back(id);
-        }
-        for (int id : skills) if (canUse(actor, database_["skills"][id])) {
-          int candidateTarget = -1;
-          const double score = evaluateAutoAction(actor, database_["skills"][id], candidateTarget);
-          if (score > best) { best = score; skill = id; target = candidateTarget; }
-        }
-      }
-      battle_.actions.push_back({false, false, static_cast<int>(index), skill, target, 0});
-    }
+    auto& actor = actors_.at(party_[index]); const auto owner = runtimeBattler(actor);
+    if (!dispatchActorMethod(actor, "makeActions", {}, owner)) makeBattlerActionsBase(owner);
+    const bool automatic = hasSpecialFlag(actor, 0) || restriction(actor) > 0;
+    if (!automatic) battle_.remainingActions[index] = battle_.surprise ? 0 : static_cast<int>(actor.actions.size());
+    else for (const auto& action : actor.actions) battle_.actions.push_back(action->value);
   }
-  for (std::size_t index = 0; index < battle_.enemies.size(); ++index) {
-    auto& enemy = battle_.enemies[index]; enemy.guarding = false;
-    const int count = battleActionCount(enemy);
-    for (int action = 0; action < count; ++action) {
-      const int skill = selectEnemySkill(enemy);
-      battle_.actions.push_back({true, false, static_cast<int>(index), skill, -1, 0});
-    }
+  for (auto& enemy : battle_.enemies) {
+    enemy.guarding = false; const auto owner = runtimeBattler(enemy);
+    if (!dispatchActorMethod(enemy, "makeActions", {}, owner)) makeBattlerActionsBase(owner);
+    for (const auto& action : enemy.actions) battle_.actions.push_back(action->value);
   }
   while (battle_.actorIndex < static_cast<int>(battleMemberCount()) && !battle_.remainingActions[battle_.actorIndex]) ++battle_.actorIndex;
   if (battle_.actorIndex == static_cast<int>(battleMemberCount())) beginTurn();
@@ -355,7 +318,11 @@ void Session::chooseAction(int actorIndex, int id, int target, bool item) {
   const auto& source = database_[item ? "items" : "skills"][id];
   if (source.null() || !canUse(subject, source) || (item && inventory_[id] <= 0)) throw std::invalid_argument("unavailable action");
   if (!item && id != 1 && id != 2 && !battlerSkills(subject).contains(id)) throw std::invalid_argument("unlearned skill");
-  battle_.actions.push_back({false, item, actorIndex, id, target, 0});
+  const auto position = subject.actions.size() - static_cast<std::size_t>(battle_.remainingActions[actorIndex]);
+  if (position >= subject.actions.size()) throw std::runtime_error("battle action input index is outside its slots");
+  const auto action = subject.actions[position];
+  action->value.item = item; action->value.id = id; action->value.target = target;
+  battle_.actions.push_back(action->value);
   if (--battle_.remainingActions[actorIndex] > 0) return;
   battle_.actorIndex = actorIndex + 1;
   while (battle_.actorIndex < static_cast<int>(battleMemberCount()) && !battle_.remainingActions[battle_.actorIndex]) ++battle_.actorIndex;
@@ -407,6 +374,7 @@ void Session::makeBattleActionOrders() {
 void Session::executeAction(const Action& selectedAction) {
   if (!managerCalls_.contains({"BattleManager", "startAction"})) {
     battle_.pendingAction = selectedAction; ++battle_.actionSerial;
+    currentRuntimeAction();
     if (dispatchManager("BattleManager", "startAction")) return;
   }
   battle_.phase = "action";

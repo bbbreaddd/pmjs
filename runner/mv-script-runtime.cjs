@@ -1,6 +1,7 @@
 'use strict';
 const { createBitmapClass, createImageManager, bitmapHandle } = require('./native-bitmap.cjs');
 const vm = require('node:vm');
+const { installBattlerSprites } = require('./native-battler-sprites.cjs');
 const { installBattleManager } = require('./native-battle-manager.cjs');
 const { installManagerReference } = require('./native-manager-reference.cjs');
 const { createSceneBindings } = require('./native-scenes.cjs');
@@ -31,7 +32,7 @@ function createScriptRuntime(engine, session, options = {}) {
     '_toneDuration', '_angle', '_rotationSpeed'];
   const defaults = Object.create(null);
   const collectionHandles = new WeakMap();
-  const characters = new WeakMap(), actors = new WeakMap();
+  const characters = new WeakMap(), actors = new WeakMap(), actionHandles = new WeakMap();
   let GuestArray;
   function decorateArray(array) {
     Object.defineProperties(array, {
@@ -565,8 +566,25 @@ function createScriptRuntime(engine, session, options = {}) {
   Game_BattlerBase.prototype.isActor = function() { return !engine.entityField(actors.get(this), 'enemy'); };
   Game_BattlerBase.prototype.isEnemy = function() { return engine.entityField(actors.get(this), 'enemy'); };
   Game_BattlerBase.prototype.attackSkillId = function() { return 1; };
+  function wrapAction(handle, target) {
+    if (!handle) return null;
+    const existing = registry.get(handle.identity)?.deref();
+    if (existing) return existing;
+    const object = remember(target || Object.create(Game_Action.prototype), handle, actionHandles);
+    for (const [property, field] of Object.entries({ _itemId: 'id', _isItem: 'item', _targetIndex: 'target', _forcing: 'forced' }))
+      Object.defineProperty(object, property, { configurable: true, enumerable: true,
+        get() { return engine.actionField(session, handle, field); },
+        set(value) { engine.actionField(session, handle, field, value); }
+      });
+    let subject;
+    Object.defineProperty(object, '_subject', { configurable: true,
+      get() { subject = wrapRuntimeEntity(engine.actionSubject(session, handle)); return subject; },
+      set(value) { engine.actionSubject(session, handle, actors.get(value)); subject = value; }
+    });
+    return object;
+  }
   function Game_Action(subject, forcing = false) { this.initialize(subject, forcing); }
-  Game_Action.prototype.initialize = function(subject, forcing) { this._subject = subject; this._forcing = forcing; this.clear(); };
+  Game_Action.prototype.initialize = function(subject, forcing) { wrapAction(engine.createAction(session, actors.get(subject) || null, Boolean(forcing)), this); this.clear(); };
   Game_Action.prototype.clear = function() { this._itemId = 0; this._isItem = false; this._targetIndex = -1; };
   Game_Action.prototype.subject = function() { return this._subject; };
   Game_Action.prototype.setSkill = function(id) { this._itemId = id; this._isItem = false; };
@@ -631,7 +649,7 @@ function createScriptRuntime(engine, session, options = {}) {
   GuestArray = vm.runInContext("Array", context);
   installCoreUtilities({ runScript(source) { return vm.runInContext(source, context); } });
   installManagerReference({ scope, runScript: (source, filename) => new vm.Script(source, { filename }).runInContext(context) }, 'DataManager');
-  if (engine.gameDataInvoke) installBattleManager({ scope, runScript: (source, filename) => new vm.Script(source, { filename }).runInContext(context) }, engine, session);
+  if (engine.gameDataInvoke) installBattleManager({ scope, wrapAction, runScript: (source, filename) => new vm.Script(source, { filename }).runInContext(context) }, engine, session);
   const referenceDatabaseLoad = scope.DataManager.loadDatabase;
   if (engine.databaseInvoke) scope.$dataSystem = engine.databaseInvoke(session, 'read', 'system');
   installTextManager(scope);
@@ -650,8 +668,18 @@ function createScriptRuntime(engine, session, options = {}) {
   }
   Object.assign(scope, { Game_CharacterBase, Game_Character, Game_Player, Game_Follower, Game_Followers, Game_Vehicle, Game_Event, Game_BattlerBase, Game_Battler, Game_Enemy, Game_Actor });
   installBattleData(scope, values => GuestArray.from(values));
-  installBattlerBindings(scope, engine, session, actors, values => GuestArray.from(values), () => vm.runInContext('({})', context));
-  installActionBindings(scope);
+  installBattlerBindings(scope, engine, session, actors, values => GuestArray.from(values), () => vm.runInContext('({})', context), { actionHandles, wrapAction });
+  nativeActorMethods.setup = Game_Actor.prototype.setup;
+  installActionBindings(scope, vm.runInContext(`(function(item, a, b, v) {
+    try {
+      const sign = [3, 4].includes(item.damage.type) ? -1 : 1;
+      const value = Math.max(eval(item.damage.formula), 0) * sign;
+      return isNaN(value) ? 0 : value;
+    } catch (error) { return 0; }
+  })`, context));
+  const nativeMakeActions = new Map([Game_Actor, Game_Enemy].map(Type => [Type, Object.fromEntries(
+    ['makeActions', 'clearActions', 'makeActionTimes', 'actionPlusSet', 'canMove', 'isAutoBattle', 'isConfused', 'setActionState', 'requestMotionRefresh'].map(method => [method, Type.prototype[method]]))]));
+  const nativeBaseMakeActions = Game_Battler.prototype.makeActions;
   const nativePerformMethods = new Map([Game_Actor, Game_Enemy].map(Type => [Type, Object.fromEntries(
     ['performDamage', 'performMiss', 'performRecovery', 'performEvasion', 'performMagicEvasion', 'performCounter', 'performReflection', 'performCollapse', 'requestMotion', 'performAttack', 'requestEffect', 'isSpriteVisible'].map(method => [method, Type.prototype[method]]))]));
   const nativePerformBase = Object.fromEntries(['performDamage', 'performMiss', 'performRecovery', 'performEvasion', 'performMagicEvasion', 'performCounter', 'performReflection', 'performCollapse'].map(method => [method, Game_Battler.prototype[method]]));
@@ -713,7 +741,7 @@ function createScriptRuntime(engine, session, options = {}) {
     return engine.gameDataInvoke(session, 'map', 'setupScroll', []);
   };
   const mapDefaults = { setup: nativeMapSetup, initialize: nativeMapInitialize, setupScroll: nativeMapSetupScroll };
-  for (const method of ['setDisplayPos', 'scrollDown', 'scrollLeft', 'scrollRight', 'scrollUp', 'updateParallax'])
+  for (const method of ['setDisplayPos', 'scrollDown', 'scrollLeft', 'scrollRight', 'scrollUp', 'updateParallax', 'update'])
     Game_Map.prototype[method] = mapDefaults[method] = function(...args) { return engine.gameDataInvoke(session, 'map', method, args); };
   Game_Player.prototype.center = function(x, y) { scope.$gameMap.setDisplayPos(x - (scope.$gameMap.screenTileX() - 1) / 2, y - (scope.$gameMap.screenTileY() - 1) / 2); };
   gameDataDefaults.set('map', mapDefaults);
@@ -815,6 +843,7 @@ function createScriptRuntime(engine, session, options = {}) {
   const tilemapBinding = installTilemap({ scope, runScript(source) { return vm.runInContext(source, context); } }, engine, session);
   let rateAction = null;
   function wrapRuntimeEntity(handle) {
+    if (!handle) return null;
     if (handle.entityType === 'character') return wrapEntity(handle,handle.entityId > 0 ? Game_Event : handle.entityId === -1 ? Game_Player : handle.entityId >= -7 && handle.entityId <= -5 ? Game_Vehicle : handle.entityId <= -2 ? Game_Follower : Game_Character,characters);
     return wrapEntity(handle,handle.entityType === 'enemy' ? Game_Enemy : Game_Actor,actors);
   }
@@ -873,7 +902,11 @@ function createScriptRuntime(engine, session, options = {}) {
       if (!classBindings) return false;
       return classBindings.dispatch(handle, 'Sprite_Enemy', 'setBattler', () => [wrapEntity(enemyHandle, Game_Enemy, actors)]) !== null;
     },
-    actorSpriteHome(handle, index) { return classBindings ? classBindings.dispatch(handle, 'Sprite_Actor', 'setActorHome', [index]) !== null : false; },
+    actorSpriteHome(handle, index) {
+      if (!classBindings) return false;
+      classBindings.wrap(handle, 'Sprite_Actor').setBattler(scope.$gameParty.battleMembers()[index]);
+      return classBindings.dispatch(handle, 'Sprite_Actor', 'setActorHome', [index]) !== null;
+    },
     characterPosition(handle) {
       const character = wrapRuntimeEntity(handle);
       if (character.screenX === nativeCharacterPosition.screenX && character.screenY === nativeCharacterPosition.screenY) return undefined;
@@ -906,6 +939,8 @@ function createScriptRuntime(engine, session, options = {}) {
       const type = engine.entityField(handle, 'enemy') ? Game_Enemy : Game_Actor;
       const actor = wrapEntity(handle, type, actors);
       if (actor[method] === nativeActorMethods[method]) return false;
+      if (method === 'makeActions' && Game_Battler.prototype.makeActions === nativeBaseMakeActions &&
+          Object.entries(nativeMakeActions.get(type)).every(([name, original]) => actor[name] === original)) return false;
       if (Object.hasOwn(nativePerformBase, method) && Game_Battler.prototype[method] === nativePerformBase[method] &&
           Object.entries(nativePerformMethods.get(type)).every(([name, original]) => actor[name] === original)) return false;
 
@@ -1127,6 +1162,7 @@ function createScriptRuntime(engine, session, options = {}) {
           const table = scope['$data' + type[0].toUpperCase() + type.slice(1)];
           return table ? Array.prototype.indexOf.call(table, object) : -1;
         },
+        gameTemp() { return scope.$gameTemp; },
         gameTroop() { return scope.$gameTroop; },
         battleManager() { return scope.BattleManager; },
         soundManager() { return scope.SoundManager; },
@@ -1179,6 +1215,7 @@ function createScriptRuntime(engine, session, options = {}) {
       scope.Sprite_Actor.prototype.damageOffsetX = function() { return -32; };
       scope.Sprite_Enemy.prototype.damageOffsetY = function() { return -8; };
       scope.Sprite_Actor.MOTIONS = vm.runInContext('(' + '{\n    walk:     { index: 0,  loop: true  },\n    wait:     { index: 1,  loop: true  },\n    chant:    { index: 2,  loop: true  },\n    guard:    { index: 3,  loop: true  },\n    damage:   { index: 4,  loop: false },\n    evade:    { index: 5,  loop: false },\n    thrust:   { index: 6,  loop: false },\n    swing:    { index: 7,  loop: false },\n    missile:  { index: 8,  loop: false },\n    skill:    { index: 9,  loop: false },\n    spell:    { index: 10, loop: false },\n    item:     { index: 11, loop: false },\n    escape:   { index: 12, loop: true  },\n    victory:  { index: 13, loop: true  },\n    dying:    { index: 14, loop: true  },\n    abnormal: { index: 15, loop: true  },\n    sleep:    { index: 16, loop: true  },\n    dead:     { index: 17, loop: true  }\n}' + ')', context);
+      installBattlerSprites(scope);
       scope.Sprite_Picture.prototype.picture = function() { return scope.$gameScreen.picture(this._pictureId); };
       installWeatherParticles(result);
       installAudioMetadata(result);
@@ -1189,7 +1226,10 @@ function createScriptRuntime(engine, session, options = {}) {
           const result = [];
           for (const pad of options.native.input.snapshot().gamepads) {
             while (result.length <= pad.index) result.push(null);
-            result[pad.index] = pad;
+            const down = new Set(pad.buttonsDown);
+            const count = Math.max(17, ...pad.buttonsDown.map(button => button + 1));
+            result[pad.index] = { ...pad, mapping: 'standard', timestamp: scope.performance?.now() ?? performance.now(),
+              buttons: GuestArray.from({ length: count }, (_, index) => ({ pressed: down.has(index), touched: down.has(index), value: down.has(index) ? 1 : 0 })) };
           }
           return result;
         }

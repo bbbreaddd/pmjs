@@ -90,6 +90,15 @@ std::vector<std::uint8_t> buildSyntheticMp4(std::uint32_t timescale, const std::
 }  // namespace
 
 int main() try {
+  using pmjs::mv::core::Graphics;
+  Graphics::startLoading();
+  Graphics::updateLoading();
+  const auto loadingCount = Graphics::loadingCount;
+  Graphics::clearUpperCanvas();
+  require(Graphics::upperCanvasCleared && Graphics::loadingCount == loadingCount, "clearing overlay preserves loading progress");
+  Graphics::updateLoading();
+  require(!Graphics::upperCanvasCleared && Graphics::loadingCount == loadingCount + 1, "loading update repaints cleared overlay");
+  Graphics::endLoading();
   require(!WebAudio::initialize(false), "unbound WebAudio initialize returns false");
   WebAudio::setMasterVolume(1.5);
   require(WebAudio::masterVolume == 1.0, "masterVolume clamps high");

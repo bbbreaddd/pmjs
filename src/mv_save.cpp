@@ -129,17 +129,21 @@ Value Session::save(bool recordSave) {
   Array actors(database_["actors"].array().size());
   for (const auto& [id, actor] : actors_) {
     Array equips; for (std::size_t slot = 0; slot < actor.equips.size(); ++slot) equips.emplace_back(item(actor.equips[slot], actor.equipKinds[slot] == 1 ? "weapon" : "armor"));
+    Array actions;
+    for (const auto& action : actor.actions) actions.emplace_back(instance("Game_Action", {
+      {"_subjectActorId", action->value.actorId}, {"_subjectEnemyIndex", action->value.enemy ? action->value.subject : -1},
+      {"_forcing", action->value.forced}, {"_item", item(action->value.id, action->value.item ? "item" : "skill")}, {"_targetIndex", action->value.target}}));
     actors[id] = instance("Game_Actor", {{"_actorId", id}, {"_name", actor.name}, {"_nickname", actor.nickname}, {"_profile", actor.profile}, {"_classId", actor.classId}, {"_level", actor.level},
       {"_characterName", actor.characterName}, {"_characterIndex", actor.characterIndex}, {"_faceName", actor.faceName}, {"_faceIndex", actor.faceIndex}, {"_battlerName", actor.battlerName},
       {"_hp", actor.hp}, {"_mp", actor.mp}, {"_tp", actor.tp}, {"_hidden", actor.hidden}, {"_paramPlus", numbers(actor.paramPlus)}, {"_states", numbers(actor.states)}, {"_stateTurns", entries(actor.stateTurns)}, {"_stateSteps", entries(actor.stateSteps)},
       {"_buffs", numbers(actor.buffs)}, {"_buffTurns", numbers(actor.buffTurns)}, {"_skills", numbers(actor.skills)}, {"_equips", equips}, {"_exp", entries(actor.exp)},
-      {"_actions", Array{}}, {"_speed", 0}, {"_result", writeResult(actor.result)},
-      {"_actionState", ""}, {"_lastTargetIndex", actor.lastTargetIndex}, {"_animations", Array{}}, {"_damagePopup", false}, {"_effectType", Value{}}, {"_motionType", Value{}}, {"_weaponImageId", 0}, {"_motionRefresh", false}, {"_selected", false},
-      {"_actionInputIndex", 0}, {"_lastMenuSkill", item(actor.lastMenuSkill,"skill")}, {"_lastBattleSkill", item(actor.lastBattleSkill,"skill")}, {"_lastCommandSymbol", actor.lastCommandSymbol}});
+      {"_actions", actions}, {"_speed", 0}, {"_result", writeResult(actor.result)},
+      {"_actionState", actor.actionState}, {"_lastTargetIndex", actor.lastTargetIndex}, {"_animations", Array{}}, {"_damagePopup", false}, {"_effectType", Value{}}, {"_motionType", Value{}}, {"_weaponImageId", 0}, {"_motionRefresh", actor.motionRefresh}, {"_selected", actor.selected},
+      {"_actionInputIndex", actor.actionInputIndex}, {"_lastMenuSkill", item(actor.lastMenuSkill,"skill")}, {"_lastBattleSkill", item(actor.lastBattleSkill,"skill")}, {"_lastCommandSymbol", actor.lastCommandSymbol}});
   }
   Value player = character(player_, "Game_Player");
   auto& p = object(player);
-  p["_vehicleType"] = vehicleType_ < 0 ? "walk" : vehicleType_ == 0 ? "boat" : vehicleType_ == 1 ? "ship" : "airship"; p["_vehicleGettingOn"] = vehicleGettingOn_; p["_vehicleGettingOff"] = vehicleGettingOff_; p["_dashing"] = playerDashing_; p["_needsMapReload"] = false; p["_transferring"] = false;
+  p["_vehicleType"] = vehicleType_ < 0 ? "walk" : vehicleType_ == 0 ? "boat" : vehicleType_ == 1 ? "ship" : "airship"; p["_vehicleGettingOn"] = vehicleGettingOn_; p["_vehicleGettingOff"] = vehicleGettingOff_; p["_dashing"] = playerDashing_; p["_needsMapReload"] = playerNeedsMapReload_; p["_transferring"] = false;
   p["_newMapId"] = 0; p["_newX"] = 0; p["_newY"] = 0; p["_newDirection"] = 0; p["_fadeType"] = 0; p["_encounterCount"] = encounterCount_;
   Array followers;
   for (std::size_t i = 1; i <= followers_.size(); ++i) { auto follower = character(followers_[i - 1], "Game_Follower"); auto& f = object(follower); f["_memberIndex"] = static_cast<int>(i); f["_through"] = true; followers.emplace_back(follower); }
@@ -210,6 +214,16 @@ void Session::load(const Value& contents) {
     actor.characterName = value["_characterName"].text(); actor.characterIndex = value["_characterIndex"].integer();
     actor.faceName = value["_faceName"].text(); actor.faceIndex = value["_faceIndex"].integer(); actor.battlerName = value["_battlerName"].text();
     actor.level = value["_level"].integer(); actor.hp = value["_hp"].integer(); actor.mp = value["_mp"].integer(); actor.tp = value["_tp"].integer(); actor.hidden = value["_hidden"].boolean();
+    actor.actionState = value["_actionState"].text(); actor.actionInputIndex = value["_actionInputIndex"].integer();
+    actor.selected = value["_selected"].boolean(); actor.motionRefresh = value["_motionRefresh"].boolean();
+    actor.actions.clear();
+    for (const auto& saved : value["_actions"].array()) {
+      auto action = std::make_shared<RuntimeAction>();
+      action->value.actorId = saved["_subjectActorId"].integer(); action->value.enemy = action->value.actorId == 0;
+      action->value.subject = saved["_subjectEnemyIndex"].integer(-1); action->value.forced = saved["_forcing"].boolean();
+      action->value.item = saved["_item"]["_dataClass"].text() == "item"; action->value.id = saved["_item"]["_itemId"].integer(); action->value.target = saved["_targetIndex"].integer(-1);
+      actor.actions.push_back(std::move(action));
+    }
     actor.result = readResult(value["_result"]); actor.lastTargetIndex = value["_lastTargetIndex"].integer();
     actor.skills.clear(); for (const auto& skill : value["_skills"].array()) actor.skills.insert(skill.integer());
     actor.states.clear(); for (const auto& state : value["_states"].array()) actor.states.push_back(state.integer());
@@ -250,6 +264,7 @@ void Session::load(const Value& contents) {
   const auto vehicleType = contents["player"]["_vehicleType"].text();
   if (vehicleType != "walk" && vehicleType != "boat" && vehicleType != "ship" && vehicleType != "airship") throw std::invalid_argument("unknown saved vehicle type");
   restored.vehicleType_ = vehicleType == "boat" ? 0 : vehicleType == "ship" ? 1 : vehicleType == "airship" ? 2 : -1;
+  restored.playerNeedsMapReload_ = contents["player"]["_needsMapReload"].boolean();
   restored.vehicleGettingOn_ = contents["player"]["_vehicleGettingOn"].boolean(); restored.vehicleGettingOff_ = contents["player"]["_vehicleGettingOff"].boolean();
   restored.vehicleWalkingBgm_ = contents["system"]["_walkingBgm"]; restored.vehicleWalkSpeed_ = 4;
   for (int index = 0; index < 3; ++index) {

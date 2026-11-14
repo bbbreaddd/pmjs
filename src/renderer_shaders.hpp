@@ -79,7 +79,6 @@ constexpr const char* vertexSource = R"(#version 300 es
   uniform bool atlasTilingSampling;
   uniform vec4 tilingUvTransform;
   out vec2 vertexUv;
-  out highp vec2 compositionUv;
   out vec2 filterCoord;
   out vec4 vertexColor;
   out vec4 vertexUvClamp;
@@ -87,7 +86,7 @@ constexpr const char* vertexSource = R"(#version 300 es
     gl_Position = vec4(spriteWorldVertices ? (spriteProjection * vec3(position, 1.0)).xy : position, 0.0, 1.0);
     if (targetYDown && !spriteWorldVertices) gl_Position.y = -gl_Position.y;
     if (!spriteWorldVertices) gl_Position.xy = (targetProjection * vec3(gl_Position.xy, 1.0)).xy;
-    vertexUv = uv;compositionUv=uv;
+    vertexUv = uv;
     if (atlasTilingSampling) {
       mat3 transform = mat3(tilingUvTransform.x, 0.0, 0.0,
         0.0, tilingUvTransform.y, 0.0, tilingUvTransform.zw, 1.0);
@@ -96,6 +95,19 @@ constexpr const char* vertexSource = R"(#version 300 es
     filterCoord = vec2(uv.x, 1.0 - uv.y);
     vertexColor = color;
     vertexUvClamp = uvClamp;
+  }
+)";
+constexpr const char* compositionCopyFragmentSource = R"(#version 300 es
+  precision highp float;
+  uniform sampler2D image;
+  uniform bool imageYDown;
+  in highp vec2 vertexUv;
+  in highp vec4 vertexColor;
+  out vec4 outputColor;
+  void main() {
+    vec2 coordinate=vertexUv;
+    if(imageYDown)coordinate.y=1.0-coordinate.y;
+    outputColor=texture(image,coordinate)*vertexColor;
   }
 )";
 constexpr const char* fragmentSource = R"(#version 300 es
@@ -115,7 +127,6 @@ constexpr const char* fragmentSource = R"(#version 300 es
   uniform float pixiFilterParameters[10];
   uniform sampler2D bloomImage;
   uniform bool premultipliedInput;
-  uniform bool exactCompositionCopy;
   uniform sampler2D maskImage;
   uniform bool maskEnabled;
   uniform float maskTransform[6];
@@ -136,7 +147,6 @@ constexpr const char* fragmentSource = R"(#version 300 es
   uniform vec4 spriteColorTone;
   uniform vec4 spriteBlendColor;
   in vec2 vertexUv;
-  in highp vec2 compositionUv;
   in vec2 filterCoord;
   in vec4 vertexColor;
   in vec4 vertexUvClamp;
@@ -267,13 +277,6 @@ constexpr const char* fragmentSource = R"(#version 300 es
     return texture(image, vec2(uv.x, imageYDown ? 1.0 - uv.y : uv.y));
   }
   void main() {
-    if (exactCompositionCopy) {
-      // Internal targets need texel-aligned copies at non-power-of-two sizes.
-      highp vec2 coordinate=compositionUv;
-      if(imageYDown)coordinate.y=1.0-coordinate.y;
-      outputColor=texture(image,coordinate)*vertexColor;
-      return;
-    }
     vec2 sampleUv = vertexUv;
     if (canvasToneEnabled) {
       vec4 backdrop = texelFetch(image, ivec2(gl_FragCoord.xy), 0);

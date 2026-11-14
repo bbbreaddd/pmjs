@@ -53,6 +53,7 @@ std::shared_ptr<RuntimeActor> Session::runtimeActor(int id) {
   // Initialization may publish this actor through a script lifecycle override.
   if (auto object = runtimeActors_[id].lock()) return object;
   auto object = std::make_shared<RuntimeActor>(); object->id = id; object->attached = &actors_.at(id);
+  for (const auto& action : object->value().actions) { runtimeActions_[action->identity] = action; if (action->subject.expired() && !action->value.enemy && action->value.actorId == id) action->subject = object; }
   runtimeActors_[id] = object; return object;
 }
 std::shared_ptr<RuntimeActor> Session::runtimeEnemy(int index) {
@@ -72,6 +73,7 @@ std::shared_ptr<RuntimeActor> Session::runtimeBattler(Battler& battler) {
     const int index = static_cast<int>(i);
     if (auto object = runtimeEnemies_[index].lock()) return object;
     auto object = std::make_shared<RuntimeActor>(); object->id = index; object->attached = &battler;
+    for (const auto& action : battler.actions) { runtimeActions_[action->identity] = action; if (action->subject.expired() && action->value.enemy && action->value.subject == index) action->subject = object; }
     runtimeEnemies_[index] = object; return object;
   }
   auto object = std::make_shared<RuntimeActor>(); object->id = battler.id; object->retained = std::make_unique<Battler>(battler); return object;
@@ -94,6 +96,7 @@ std::shared_ptr<RuntimeCharacter> Session::runtimeCharacterFor(Character& charac
 }
 Value Session::runtimeCharacterCommand(const std::shared_ptr<RuntimeCharacter>& object, const std::string& method, const Value::Array& arguments) {
   auto& character = object->value();
+  if (method == "needsMapReload") { if (!arguments.empty()) playerNeedsMapReload_ = arguments[0].boolean(); return playerNeedsMapReload_; }
   if (method == "originalPattern") {
     if (!arguments.empty()) object->originalPattern = arguments[0].integer();
     if (object->attached) for (auto& event : events_) if (&event.character == &character) {
@@ -160,7 +163,7 @@ Value Session::runtimeCharacterCommand(const std::shared_ptr<RuntimeCharacter>& 
   if (method=="initMembers") { character = Character{}; return Value::undefined(); }
   if (method=="initPlayerMembers" && object->id == -1) {
     vehicleType_ = -1; vehicleGettingOn_ = false; vehicleGettingOff_ = false;
-    playerDashing_ = false; encounterCount_ = 0; pendingTransfer_.reset(); playerFadeType_ = 0;
+    playerDashing_ = false; playerNeedsMapReload_ = false; encounterCount_ = 0; pendingTransfer_.reset(); playerFadeType_ = 0;
     transferFadeStarted_ = false;
     return Value::undefined();
   }

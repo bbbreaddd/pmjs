@@ -7,24 +7,9 @@ function installBattleManager(runtime, engine, session) {
   const invoke = (method, ...args) => engine.gameDataInvoke(session, 'battle', method, args);
   for (const name of ['_phase', '_battleTest', '_actorIndex', '_escapeRatio', '_preemptive', '_surprise', '_canEscape', '_canLose', '_turnForced', '_mapBgm', '_mapBgs'])
     Object.defineProperty(manager, name, { configurable: true, get() { return invoke('field', name); }, set(value) { invoke('field', name, value); } });
-  let action, epoch = 0;
-  const initialize = manager.initMembers;
-  manager.initMembers = function() { ++epoch; return initialize.call(this); };
   const battler = value => value.actorId ? scope.$gameActors.actor(value.actorId) : scope.$gameTroop.members()[value.enemyIndex];
   const identity = object => object.isActor() ? { actorId: object.actorId(), enemyIndex: -1 } : { actorId: 0, enemyIndex: object.index() };
-  function currentAction() {
-    const state = invoke('action');
-    if (!state) return null;
-    if (action?.serial === state.serial && action.epoch === epoch) return action.object;
-    const object = Object.create(scope.Game_Action.prototype), serial = state.serial, generation = epoch;
-    let last = state, subject = battler(state);
-    const live = () => generation === epoch && invoke('action')?.serial === serial;
-    const read = () => { if (live()) { last = invoke('action'); subject = battler(last); } return last; };
-    for (const [property, field] of Object.entries({ _itemId: 'id', _isItem: 'item', _targetIndex: 'target', _forcing: 'forced' }))
-      Object.defineProperty(object, property, { configurable: true, enumerable: true, get() { return read()[field]; }, set(value) { if (live()) invoke('action', field, value, serial); last[field] = value; } });
-    Object.defineProperty(object, '_subject', { configurable: true, get() { read(); return subject; }, set(value) { const target = identity(value); subject = value; if (live()) invoke('subject', target.actorId, target.enemyIndex); Object.assign(last, target); } });
-    action = { serial, epoch, object }; return object;
-  }
+  function currentAction() { return runtime.wrapAction(engine.currentAction(session)); }
   Object.defineProperty(manager, '_action', { configurable: true, get: currentAction, set(value) {
     const current = currentAction();
     if (!current || !value || current === value) return;

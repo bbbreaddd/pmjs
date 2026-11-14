@@ -217,8 +217,23 @@ napi_value field(napi_env env, napi_callback_info info) try {
   throw std::invalid_argument("display field is not bound: " + name);
 } catch (const std::exception& error) { return throwException(env, error); }
 napi_value children(napi_env env, napi_callback_info info) try {
-  const auto args = arguments(env, info); if (args.size() != 1) throw std::invalid_argument("children requires display handle");
+  const auto args = arguments(env, info); if (args.empty() || args.size() > 2) throw std::invalid_argument("children requires display handle and optional previous list");
   auto& owner = display(env, args[0]); napi_value result;
+  if (args.size() == 2) {
+    bool array = false;
+    check(env, napi_is_array(env, args[1], &array), "cannot inspect previous child list");
+    if (array) {
+      std::uint32_t length;
+      check(env, napi_get_array_length(env, args[1], &length), "cannot inspect previous child count");
+      bool same = length == owner.node->children.size();
+      for (std::uint32_t i = 0; same && i < length; ++i) {
+        napi_value child;
+        check(env, napi_get_element(env, args[1], i, &child), "cannot inspect previous child");
+        same = display(env, child).node == owner.node->children[i];
+      }
+      if (same) return args[1];
+    }
+  }
   check(env, napi_create_array_with_length(env, owner.node->children.size(), &result), "cannot list display children");
   for (std::size_t i = 0; i < owner.node->children.size(); ++i)
     check(env, napi_set_element(env, result, i, wrap(env, owner.services, owner.node->children[i])), "cannot list display child");

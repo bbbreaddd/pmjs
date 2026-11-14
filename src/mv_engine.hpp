@@ -331,6 +331,7 @@ struct Battler {
   int actionInputIndex = 0;
   bool selected = false;
   int requestedMotion = -1, requestedWeapon = 0;
+  bool motionRefresh = false;
   std::uint64_t motionRequestedAt = 0;
   bool isAlive() const { return !hidden && std::find(states.begin(), states.end(), 1) == states.end(); }
   bool isDead() const { return !hidden && std::find(states.begin(), states.end(), 1) != states.end(); }
@@ -556,6 +557,7 @@ class Session {
   void synchronizeRuntimeAction(const std::shared_ptr<RuntimeAction>& action);
   void replaceBattlerActions(const std::shared_ptr<RuntimeActor>& owner, std::vector<std::shared_ptr<RuntimeAction>> actions);
   void makeBattlerActionsBase(const std::shared_ptr<RuntimeActor>& owner, bool basic = false);
+  void fillBattlerActions(const std::shared_ptr<RuntimeActor>& owner);
   void removeBattlerAction(std::uint64_t identity);
   void detachRuntimeEnemies();
   double actionRateBase(const std::string& method, const Battler& subject, const Battler& target, const Value& item) const;
@@ -935,7 +937,7 @@ class Session {
   int mapId_ = 0;
   bool refreshNeeded_ = true, previousOk_ = false, finished_ = false;
   int okAge_ = 0;
-  bool playerDashing_ = false, battleTest_ = false;
+  bool playerDashing_ = false, battleTest_ = false, playerNeedsMapReload_ = false;
   bool followersVisible_ = false;
   std::optional<std::array<int, 2>> destination_;
   int mapTouchCount_ = 0;

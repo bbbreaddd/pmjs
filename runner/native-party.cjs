@@ -20,6 +20,10 @@ function installPartyBindings(scope, engine, session, createArray) {
   Game_Unit.prototype.smoothTarget = function(index) { const member = this.members()[Math.max(index, 0)]; return member && member.isAlive() ? member : this.aliveMembers()[0]; };
   Game_Unit.prototype.smoothDeadTarget = function(index) { const member = this.members()[Math.max(index, 0)]; return member && member.isDead() ? member : this.deadMembers()[0]; };
   Game_Unit.prototype.substituteBattler = function() { return this.members().find(member => member.isSubstitute()); };
+  Game_Unit.prototype.onBattleStart = function() { for (const member of this.members()) member.onBattleStart(); this._inBattle = true; };
+  Game_Unit.prototype.onBattleEnd = function() { this._inBattle = false; for (const member of this.members()) member.onBattleEnd(); };
+  Game_Unit.prototype.clearActions = function() { for (const member of this.members()) member.clearActions(); };
+  party.performEscape = function() { for (const member of this.members()) member.performEscape(); };
   scope.Game_Unit = Game_Unit;
   Object.setPrototypeOf(party, Game_Unit.prototype);
   party.hasPartyAbility = function(id) { return this.battleMembers().some(actor => actor.partyAbility(id)); };

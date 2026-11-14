@@ -219,7 +219,8 @@ void Session::transfer(int id, int x, int y, int direction) {
     return true;
   });
   destination_.reset(); mapTouchCount_ = 0;
-  const bool changedMap = id != mapId_;
+  const bool changedMap = id != mapId_ || playerNeedsMapReload_;
+  playerNeedsMapReload_ = false;
   if (!player_.directionFix && direction) player_.direction = direction;
   player_.stopCount = 0;
   player_.x = x; player_.y = y; player_.realX = x; player_.realY = y;
@@ -1275,6 +1276,10 @@ std::set<std::uint64_t> Session::runtimeObjectIdentities() const {
   std::set<std::uint64_t> identities;
   for (const auto& effect : visualEffects_) if (effect.balloonSprite) identities.insert(effect.balloonSprite->identity);
   if (weatherRuntime_) identities.insert(weatherRuntime_->identity);
+  const auto actions = [&](const Battler& battler) { for (const auto& action : battler.actions) identities.insert(action->identity); };
+  for (const auto& [id, actor] : actors_) { (void)id; actions(actor); }
+  for (const auto& enemy : battle_.enemies) actions(enemy);
+  if (battle_.runtimeAction) identities.insert(battle_.runtimeAction->identity);
   for (const auto& [id, event] : runtimeCommonEvents_) { (void)id; identities.insert(event->identity); }
   for (const auto& [id, weak] : runtimeCharacters_) { (void)id; if (const auto object = weak.lock()) identities.insert(object->identity); }
   for (const auto& [id, weak] : runtimeActors_) { (void)id; if (const auto object = weak.lock()) identities.insert(object->identity); }
@@ -1539,17 +1544,7 @@ void Session::step(const Input& input, bool mapDestination, bool mapFastForward,
     bool transferred = false;
     if (ui_.scene != Scene::map) return false;
     const bool okBlockedByMessage = hadMessage && !message_.busy;
-    updateInterpreter();
-    updateMapScroll();
-    for (auto& event : events_) {
-      updateCharacter(event.character, false, event.originalPattern);
-      if (event.page < 0 || event.trigger != 4) continue;
-      if (!event.parallel.running) setupInterpreter(event.parallel, map()["events"][event.id]["pages"][event.page]["list"].array(), event.id);
-      advanceInterpreter(event.parallel);
-    }
-    updateCommonEvents();
-    updateMapVehicles();
-    updateMapState();
+    dispatchGameDataMutation("map", "update", {ui_.scene == Scene::map});
     const double previousX = player_.realX, previousY = player_.realY;
     const bool wasMoving = player_.moving();
     if (!player_.moving()) playerDashing_ = ((input.dash != alwaysDash_) || destination_.has_value()) && !map()["disableDashing"].boolean() && !player_.routeForcing && vehicleType_ < 0;

@@ -93,6 +93,7 @@ class Sprite_Battler : public Sprite_Base {
   int movementDuration = 0;
   BattlerMotion motion = BattlerMotion::wait;
   int motionCount = 0;
+  int selectionEffectCount = 0;
   int pattern = 0;
   std::vector<Sprite_Damage> damagePopups;
 
@@ -128,7 +129,12 @@ class Sprite_Actor : public Sprite_Battler {
 };
 
 struct RuntimeBattlerSprite : RuntimeBoundObject {
+  std::shared_ptr<RuntimeActor> boundBattler;
+  std::shared_ptr<core::Sprite> drawable = std::make_shared<core::Sprite>();
   virtual Sprite_Battler& state() = 0;
+  std::shared_ptr<core::Container> displayObject() override { return drawable; }
+  virtual void setBattler(std::shared_ptr<RuntimeActor> value) { boundBattler = std::move(value); state().setBattler(boundBattler ? &boundBattler->value() : nullptr); }
+  void updateMove() { state().updateMove(); drawable->position = {state().position.x, state().position.y}; }
 };
 struct RuntimeBaseBattlerSprite : RuntimeBattlerSprite {
   Sprite_Battler value;
@@ -167,7 +173,7 @@ struct RuntimeEnemySprite : RuntimeBattlerSprite {
   std::shared_ptr<RuntimeActor> enemy;
   Sprite_Battler& state() override { return *value; }
   const char* bindingType() const override { return "Sprite_Enemy"; }
-  void setBattler(std::shared_ptr<RuntimeActor> battler) {
+  void setBattler(std::shared_ptr<RuntimeActor> battler) override {
     if (battler && !battler->value().enemy) throw std::invalid_argument("enemy sprite requires an enemy battler");
     enemy = std::move(battler); value->setBattler(enemy ? &enemy->value() : nullptr);
     if (enemy) value->setHome(enemy->value().screenX, enemy->value().screenY);

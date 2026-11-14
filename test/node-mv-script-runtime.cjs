@@ -1545,3 +1545,52 @@ test('native common-event ticking honors class aliases and preserves detached in
   common.refresh(); assert.notEqual(common._interpreter, currentInterpreter); assert.equal(restored._interpreter, currentInterpreter);
   retained.setup([variable(23, 9), command(0)]); retained.update(); assert.equal(scope.$gameVariables.value(23), 9);
 });
+
+
+test('battler action slots share native identities and survive action replacement and saves', t => {
+  const data = fixture([]), session = api.create(data); t.after(() => api.dispose(session));
+  const { scope } = createScriptRuntime(api, session);
+  for (const name of ['actors', 'classes', 'weapons', 'armors', 'states', 'system', 'skills', 'items']) scope['$data' + name[0].toUpperCase() + name.slice(1)] = data[name];
+  api.newGame(session);
+  const actor = scope.$gameActors.actor(1);
+  actor.makeActions();
+  assert.equal(actor.numActions(), 1);
+  const action = actor.currentAction();
+  assert.equal(action, actor._actions[0]);
+  assert.equal(action.subject(), actor);
+  action.setSkill(2); action.setTarget(3);
+  const replacement = new scope.Game_Action(actor, true);
+  replacement.setItem(1); replacement.setTarget(2);
+  actor.setAction(0, replacement);
+  assert.equal(actor.currentAction(), replacement);
+  actor.setActionState('waiting'); actor.select();
+  const saved = api.save(session);
+  assert.equal(saved.actors._data[1]._actions[0]._item._dataClass, 'item');
+  assert.equal(saved.actors._data[1]._actions[0]._forcing, true);
+  api.load(session, saved);
+  const restored = scope.$gameActors.actor(1);
+  assert.equal(restored.numActions(), 1);
+  assert.equal(restored.currentAction().subject(), restored);
+  assert.equal(restored.currentAction()._targetIndex, 2);
+  assert.equal(restored._actionState, 'waiting'); assert.equal(restored.isSelected(), true);
+  assert.equal(action.subject(), actor);
+  actor.clearActions(); assert.equal(actor.numActions(), 0);
+  assert.equal(replacement.subject(), actor);
+  assert.equal(restored.numActions(), 1);
+});
+
+test('script actions apply authored recovery effects and evaluate formulas in the game context', t => {
+  const data = fixture([]), session = api.create(data); t.after(() => api.dispose(session));
+  data.items[1] = { id: 1, itypeId: 1, hitType: 0, scope: 7, successRate: 100, repeats: 1, tpGain: 0,
+    damage: { type: 0, elementId: 0 }, effects: [{ code: 11, dataId: 0, value1: 0, value2: 3 }] };
+  const { scope } = createScriptRuntime(api, session);
+  for (const name of ['actors', 'classes', 'weapons', 'armors', 'states', 'system', 'skills', 'items']) scope['$data' + name[0].toUpperCase() + name.slice(1)] = data[name];
+  api.newGame(session);
+  const actor = scope.$gameActors.actor(1), action = new scope.Game_Action(actor);
+  actor.setHp(1); action.setItem(1); action.apply(actor);
+  assert.equal(actor.hp, 4); assert.equal(actor.result().success, true); assert.equal(actor.result().hpDamage, -3);
+  scope.$gameVariables.setValue(1, 7);
+  data.items[1].damage = { type: 1, formula: '$gameVariables.value(1) + a.hp - b.hp', variance: 0, elementId: 0 };
+  assert.equal(action.evalDamageFormula(actor), 7);
+  assert.equal(action.makeDamageValue(actor, false), 7);
+});

@@ -50,6 +50,21 @@ Value Session::invokeGameDataBase(const std::string& kind, const std::string& me
     return !cameraTarget_;
   }
   if (kind == "map") {
+    if (method == "update") {
+    refreshIfNeeded();
+    if (arguments.empty() || arguments[0].boolean()) updateInterpreter();
+    updateMapScroll();
+    for (auto& event : events_) {
+      updateCharacter(event.character, false, event.originalPattern);
+      if (event.page < 0 || event.trigger != 4) continue;
+      if (!event.parallel.running) setupInterpreter(event.parallel, map()["events"][event.id]["pages"][event.page]["list"].array(), event.id);
+      advanceInterpreter(event.parallel);
+    }
+    updateCommonEvents();
+    updateMapVehicles();
+    updateMapState();
+      return Value::undefined();
+    }
     if (method == "initialize") { initializeMap(); return Value::undefined(); }
     if (method == "setDisplayPos") { setDisplayPosition(arguments.at(0).number(), arguments.at(1).number()); return Value::undefined(); }
     if (method == "updateParallax") { updateMapParallax(); return Value::undefined(); }
@@ -134,6 +149,7 @@ Value Session::invokeGameDataBase(const std::string& kind, const std::string& me
     if (method == "processTurn") {
   if (battle_.actions.empty()) { endTurn(); return Value::undefined(); }
   const auto action = battle_.actions.front(); battle_.actions.erase(battle_.actions.begin()); executeAction(action);
+  removeBattlerAction(action.identity);
   if (!battle_.actionStage &&
       std::none_of(battle_.actions.begin(), battle_.actions.end(), [&](const Action& next) { return next.enemy == action.enemy && next.subject == action.subject && next.actorId == action.actorId; })) {
     auto& subject = action.enemy ? battle_.enemies[action.subject] : actors_.at(action.actorId ? action.actorId : party_[action.subject]);

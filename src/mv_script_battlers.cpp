@@ -44,6 +44,56 @@ Value Session::runtimeBattlerCommand(const std::shared_ptr<RuntimeActor>& actor,
     if (field == "stateTurns") return access(battler.stateTurns);
     if (field == "stateSteps") return access(battler.stateSteps);
   }
+  if (method == "setup") {
+    const auto& source = database_["actors"][id];
+    if (source.null()) throw std::invalid_argument("unknown actor");
+  auto& value = actor->value(); value.id = id; value.level = source["initialLevel"].integer(1); value.classId = source["classId"].integer();
+  value.name = source["name"].text(); value.nickname = source["nickname"].text(); value.profile = source["profile"].text();
+  value.characterName = source["characterName"].text(); value.characterIndex = source["characterIndex"].integer();
+  value.faceName = source["faceName"].text(); value.faceIndex = source["faceIndex"].integer(); value.battlerName = source["battlerName"].text();
+  const auto equipTypes = database_["system"]["equipTypes"].array().size();
+  const std::size_t slotCount = equipTypes > 0 ? equipTypes - 1 : 0;
+  value.equipKinds.assign(slotCount, 2);
+  if (!value.equipKinds.empty()) value.equipKinds[0] = 1;
+  for (std::size_t slot = 0; slot < slotCount; ++slot) value.equipKinds[slot] = equipSlotType(value, static_cast<int>(slot)) == 1 ? 1 : 2;
+  value.equips.clear();
+  for (const auto& item : source["equips"].array()) value.equips.push_back(item.integer());
+  value.equips.resize(slotCount);
+  auto& result = value;
+  if (runtimeHooks_ && runtimeHooks_->actorLifecycle) runtimeHooks_->actorLifecycle(actor, "initImages", {});
+  releaseEquipment(result, true);
+  result.exp.clear();
+  result.exp[result.classId] = actorExpForLevel(result, result.level);
+  if (!runtimeHooks_ || !runtimeHooks_->actorLifecycle || !runtimeHooks_->actorLifecycle(actor, "initSkills", {})) initializeActorSkills(actor);
+  value.paramPlus.fill(0);
+  recover(result);
+    return Value::undefined();
+  }
+  if (method == "transform") {
+    const auto& source = database_["enemies"][id]; if (source.null()) throw std::invalid_argument("unknown enemy");
+    const bool changed = source["name"].text() != database_["enemies"][battler.id]["name"].text();
+    battler.id = id; battler.originalName = source["name"].text();
+    if (changed) { battler.name = source["name"].text(); battler.letter.clear(); battler.plural = false; }
+    refreshBattler(battler);
+    if (!battler.actions.empty() && !dispatchActorMethod(battler, "makeActions", {}, actor)) makeBattlerActionsBase(actor);
+    return Value::undefined();
+  }
+  if (method == "startAnimation") {
+    if (actor->attached) {
+      const auto subject = createRuntimeAction(actor)->value;
+      requestAnimation(battler.enemy ? 2 : 1, battler.enemy ? subject.subject : battler.id, id, values[1].boolean(), false, values[2].integer());
+    }
+    return Value::undefined();
+  }
+  if (method == "makeActions" || method == "makeActionsBase") { makeBattlerActionsBase(actor, method == "makeActionsBase"); return Value::undefined(); }
+  if (method == "fillActions") { fillBattlerActions(actor); return Value::undefined(); }
+  if (method == "actionPlusSet") {
+    Value::Array result; for (const auto* object : traitObjects(battler)) for (const auto& trait : (*object)["traits"].array()) if (trait["code"].integer() == 61) result.push_back(trait["value"]);
+    return result;
+  }
+  if (method == "actionState") { if (!arguments.empty()) battler.actionState = values[0].text(); return battler.actionState; }
+  if (method == "actionInputIndex") { if (!arguments.empty()) battler.actionInputIndex = id; return battler.actionInputIndex; }
+  if (method == "selected") { if (!arguments.empty()) battler.selected = values[0].boolean(); return battler.selected; }
   if (method == "attackMotion") {
     int weapon = 0;
     for (std::size_t slot = 0; slot < battler.equips.size(); ++slot) if (battler.equips[slot] && battler.equipKinds[slot] == 1) { weapon = battler.equips[slot]; break; }
@@ -63,9 +113,10 @@ Value Session::runtimeBattlerCommand(const std::shared_ptr<RuntimeActor>& actor,
   if (method == "performBase" || method == "performDerived") {
     performBattlerPresentation(battler, values[0].text(), method == "performBase"); return Value::undefined();
   }
+  if (method == "motionRefresh") { if (!arguments.empty()) battler.motionRefresh = values[0].boolean(); return battler.motionRefresh; }
   if (method == "requestMotion") { battler.requestedMotion = id; battler.motionRequestedAt = ticks_; return Value::undefined(); }
   if (method == "motionType") return battler.requestedMotion;
-  if (method == "clearMotion") { battler.requestedMotion = -1; return Value::undefined(); }
+  if (method == "clearMotion") { battler.requestedMotion = -1; battler.motionRefresh = false; return Value::undefined(); }
   if (method == "requestEffect") {
     if (battler.enemy) for (std::size_t index = 0; index < battle_.enemies.size(); ++index) if (&battle_.enemies[index] == &battler) { requestEnemyEffect(index, values[0].text()); break; }
     return Value::undefined();

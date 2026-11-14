@@ -167,6 +167,9 @@ Renderer::Renderer(int width, int height, ImageStore& images)
                                           generatedTextureFragmentSource);
   generatedTexturePremultipliedUniform_ = glGetUniformLocation(
     generatedTextureProgram_, "preservePremultiplied");
+  compositionCopyProgram_ = linkProgram(vertexSource, compositionCopyFragmentSource);
+  compositionCopyTargetYDownUniform_ = glGetUniformLocation(compositionCopyProgram_, "targetYDown");
+  compositionCopyImageYDownUniform_ = glGetUniformLocation(compositionCopyProgram_, "imageYDown");
   presentationProgram_ = linkProgram(presentationVertexSource,
                                      presentationFragmentSource);
   presentationLayerUniform_ = glGetUniformLocation(presentationProgram_, "presentationLayer");
@@ -349,7 +352,6 @@ void Renderer::queryFilterProgramUniforms() {
   bloomImageUniform_ = glGetUniformLocation(program_, "bloomImage");
   premultipliedInputUniform_ =
     glGetUniformLocation(program_, "premultipliedInput");
-  exactCompositionCopyUniform_ = glGetUniformLocation(program_, "exactCompositionCopy");
   maskEnabledUniform_ = glGetUniformLocation(program_, "maskEnabled");
   maskImageUniform_ = glGetUniformLocation(program_, "maskImage");
   maskTransformUniform_ = glGetUniformLocation(program_, "maskTransform");
@@ -841,6 +843,7 @@ void Renderer::releaseResources(bool constructorFailure) {
   if (nearestFourTileProgram_) glDeleteProgram(nearestFourTileProgram_);
   if (meshPostTintOverlayProgram_) glDeleteProgram(meshPostTintOverlayProgram_);
   if (canvasTriangleBitmapProgram_) glDeleteProgram(canvasTriangleBitmapProgram_);
+  if (compositionCopyProgram_) glDeleteProgram(compositionCopyProgram_);
   if (clearTriangleProgram_) glDeleteProgram(clearTriangleProgram_);
   if (primitiveSurfaceProgram_) glDeleteProgram(primitiveSurfaceProgram_);
   for (const auto& [key, shader] : shaderStages_) glDeleteShader(shader);

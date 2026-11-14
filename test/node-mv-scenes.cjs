@@ -61,6 +61,35 @@ test('native scenes dispatch original methods and retain transferred sprite reso
   engine.attach(session, { width: 32, height: 32, fontFile: 'font.ttf' });
   const runtime = createScriptRuntime(engine, session, { native }); runtime.installScenes();
   const { scope } = runtime;
+  await t.test('gamepad overrides receive browser button records without mutating native snapshots', () => {
+    const snapshot = native.input.snapshot, update = scope.Input._updateGamepadState;
+    const pad = { index: 2, connected: true, id: 'Controller', buttonsDown: [0, 15], axes: [0.25, -0.5] };
+    let received;
+    native.input.snapshot = () => ({ gamepads: [pad] });
+    scope.Input._updateGamepadState = value => { received = value; };
+    try {
+      scope.Input._pollGamepads();
+      assert.equal(received.index, 2);
+      assert.equal(received.buttons.length, 17);
+      assert.equal(received.buttons[0].pressed, true);
+      assert.equal(received.buttons[1].value, 0);
+      assert.equal(received.buttons[15].pressed, true);
+      assert.deepEqual(received.axes, pad.axes);
+      assert.equal(pad.buttons, undefined);
+    } finally { native.input.snapshot = snapshot; scope.Input._updateGamepadState = update; }
+  });
+  await t.test('Graphics clears a plugin upper canvas through its drawing context', () => {
+    const calls = [], previous = scope.Graphics._upperCanvas;
+    scope.Graphics._upperCanvas = { getContext(type) {
+      assert.equal(type, '2d');
+      return { clearRect(...args) { calls.push(args); } };
+    } };
+    try {
+      scope.Graphics._clearUpperCanvas();
+      assert.deepEqual(calls, [[0, 0, scope.Graphics.width, scope.Graphics.height]]);
+    } finally { scope.Graphics._upperCanvas = previous; }
+    assert.doesNotThrow(() => scope.Graphics._clearUpperCanvas());
+  });
   await t.test('equipment scene commands change native equipment and preserve window selection', () => {
     const equipData = fixture([]), equipSession = engine.create(equipData);
     const dimensions = [scope.Graphics.boxWidth, scope.Graphics.boxHeight];
@@ -84,6 +113,42 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       scope.Graphics.boxWidth = dimensions[0]; scope.Graphics.boxHeight = dimensions[1];
       engine.dispose(equipSession);
     }
+  });
+  await t.test('item scene helpers select native inventory and apply effects to the selected actor', () => {
+    const itemData = fixture([]);
+    itemData.items[1] = { id: 1, name: 'Potion', iconIndex: 0, itypeId: 1, hitType: 0, scope: 7,
+      occasion: 0, successRate: 100, repeats: 2, tpGain: 0, consumable: true,
+      damage: { type: 0, elementId: 0 }, effects: [{ code: 11, dataId: 0, value1: 0, value2: 3 }] };
+    const itemSession = engine.create(itemData), dimensions = [scope.Graphics.boxWidth, scope.Graphics.boxHeight];
+    try {
+      engine.attach(itemSession, { width: 640, height: 480, fontFile: 'font.ttf' });
+      const r = createScriptRuntime(engine, itemSession, { native }); r.installScenes();
+      const s = r.scope;
+      for (const name of ['actors', 'classes', 'weapons', 'armors', 'states', 'system', 'skills', 'items']) s['$data' + name[0].toUpperCase() + name.slice(1)] = itemData[name];
+      s.Graphics.boxWidth = 640; s.Graphics.boxHeight = 480; engine.newGame(itemSession);
+      const actor = s.$gameActors.actor(1); actor.setHp(1); s.$gameParty.gainItem(itemData.items[1], 2);
+      const scene = new s.Scene_Item(); scene.createWindowLayer(); scene.createHelpWindow();
+      scene._categoryWindow = new s.Window_ItemCategory(); scene.createItemWindow(); scene.createActorWindow();
+      scene._itemWindow.setCategory('item'); scene._itemWindow.refresh(); scene._itemWindow.select(0); scene._actorWindow.select(0);
+      assert.equal(scene.item(), itemData.items[1]); scene.applyItem();
+      assert.equal(actor.hp, 7); assert.equal(actor.result().success, true);
+      scene.onItemCancel(); assert.equal(scene._itemWindow.index(), -1); assert.equal(scene._categoryWindow.active, true);
+    } finally {
+      scope.Graphics.boxWidth = dimensions[0]; scope.Graphics.boxHeight = dimensions[1]; engine.dispose(itemSession);
+    }
+  });
+  await t.test('battle log queues preserve plugin arguments and wait for movement before drawing text', () => {
+    const log = new scope.Window_BattleLog(), token = { value: 7 }, calls = [];
+    log.record = value => calls.push(value);
+    log.push('record', token); log.update(); assert.equal(calls[0], token);
+    let moving = true;
+    log.setSpriteset({ isAnyoneMoving: () => moving, isEffecting: () => false });
+    log.setWaitMode('movement'); log.push('addText', 'Ready');
+    log.update(); assert.equal(log.numLines(), 0);
+    moving = false; log.update(); assert.deepEqual(log._lines, ['Ready']);
+    assert.equal(log._waitCount, log.messageSpeed());
+    log.pushBaseLine(); log.addText('Next'); log.popBaseLine(); assert.deepEqual(log._lines, ['Ready']);
+    log.clear(); assert.equal(log.numLines(), 0);
   });
   await t.test('shop windows use native prices and window tones without stale values', () => {
     const previousItems = scope.$dataItems, previousTone = Array.from(scope.$gameSystem.windowTone());
@@ -708,6 +773,7 @@ test('native scenes dispatch original methods and retain transferred sprite reso
     const source=fs.readFileSync(path.join(__dirname,'../third_party/rpg-maker-mv/rpg_core.js'),'utf8');
     const size=native.runtime.windowState(),reference=vm.createContext({document:{},window:{innerWidth:size.width,innerHeight:size.height}});
     vm.runInContext(source.slice(source.indexOf('function Graphics()'),source.indexOf('function Input()')),reference);
+    const pixelRatio=native.render.presentation().drawableWidth/size.width;
     let calls=0;
     try {
       graphics.initialize(32,32);graphics._updateAllElements=function() {++calls;};
@@ -715,14 +781,14 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       assert.equal(calls,2);assert.equal(graphics._width,40);assert.equal(graphics._scale,1.5);
       assert.equal(native.render.presentation().sourceWidth,32,'an override may defer the logical surface resize');
       graphics._stretchEnabled=false;update.call(graphics);
-      assert.equal(native.render.presentation().sourceWidth,40);assert.equal(native.render.presentation().viewportWidth,60);
+      assert.equal(native.render.presentation().sourceWidth,40);assert.equal(native.render.presentation().viewportWidth,Math.round(60*pixelRatio));
       assert.equal(graphics._realScale,1.5);assert.equal(graphics.boxWidth,32);
       assert.equal(graphics.pageToCanvasX((size.width-40*1.5)/2+9),6);
       graphics._updateRealScale=function() {this._realScale=2;};update.call(graphics);
-      assert.equal(native.render.presentation().viewportWidth,80);assert.equal(graphics._realScale,2);
+      assert.equal(native.render.presentation().viewportWidth,Math.round(80*pixelRatio));assert.equal(graphics._realScale,2);
       const stage=new scope.Container();native.beginFrame();graphics.render(stage);engine.present(session);native.renderFrame();
       assert.equal(graphics._realScale,2,'ordinary service updates preserve the overridden scale');
-      assert.equal(native.render.presentation().viewportWidth,80);engine.scriptStage(session,null);
+      assert.equal(native.render.presentation().viewportWidth,Math.round(80*pixelRatio));engine.scriptStage(session,null);
       graphics._updateRealScale=realScale;graphics._updateAllElements=update;
       const stock=reference.Graphics;
       for(const stretch of [false,true]) {

@@ -2,11 +2,98 @@
 // RPG Maker MV behavior: Copyright (c) 2015 KADOKAWA CORPORATION./YOJI OJIMA.
 // MIT license: third_party/rpg-maker-mv.LICENSE.
 const { installEquipArray } = require('./native-equips.cjs');
+const { nativeArray } = require('./native-array.cjs');
 const { nativeDictionary } = require('./native-dictionary.cjs');
 
-function installBattlerBindings(scope, engine, session, handles, createArray, createObject = () => ({})) {
+function installBattlerBindings(scope, engine, session, handles, createArray, createObject = () => ({}), actions) {
   const base = scope.Game_BattlerBase.prototype, battler = scope.Game_Battler.prototype;
   const invoke = (object, method, ...args) => engine.actorInvoke(session, handles.get(object), method, args);
+  const actionViews = new WeakMap();
+  function actionArray(object) {
+    if (!actionViews.has(object)) actionViews.set(object, nativeArray(() => createArray([]),
+      () => createArray(engine.battlerActions(session, handles.get(object)).map(handle => actions.wrapAction(handle))),
+      values => engine.battlerActions(session, handles.get(object), values.map(value => {
+        const handle = actions.actionHandles.get(value);
+        if (!handle) throw new TypeError('Battler actions require Game_Action objects');
+        return handle;
+      }))));
+    return actionViews.get(object);
+  }
+  Object.defineProperty(battler, '_actions', { configurable: true, enumerable: true,
+    get() { return actionArray(this).view; }, set(values) { actionArray(this).replace(values); }
+  });
+  for (const [property, field] of [['_actionState', 'actionState'], ['_actionInputIndex', 'actionInputIndex'], ['_selected', 'selected']])
+    Object.defineProperty(battler, property, { configurable: true, enumerable: true,
+      get() { return invoke(this, field); }, set(value) { invoke(this, field, value); }
+    });
+  battler.clearActions = function() { this._actions = []; };
+  battler.currentAction = function() { return this._actions[0]; };
+  battler.action = function(index) { return this._actions[index]; };
+  battler.numActions = function() { return this._actions.length; };
+  battler.setAction = function(index, action) { this._actions[index] = action; };
+  battler.removeCurrentAction = function() { this._actions.shift(); };
+  battler.actionPlusSet = function() { return createArray(invoke(this, 'actionPlusSet')); };
+  battler.makeActionTimes = function() { return this.actionPlusSet().reduce((count, chance) => count + (Math.random() < chance ? 1 : 0), 1); };
+  battler.makeActions = function() {
+    this.clearActions();
+    if (this.canMove()) for (let index = 0, count = this.makeActionTimes(); index < count; ++index) this._actions.push(new scope.Game_Action(this));
+  };
+  battler.setActionState = function(state) { this._actionState = state; this.requestMotionRefresh(); };
+  battler.isSelected = function() { return this._selected; };
+  battler.select = function() { this._selected = true; };
+  battler.deselect = function() { this._selected = false; };
+  for (const Type of [scope.Game_Actor, scope.Game_Enemy]) Type.prototype.makeActions = function() {
+    battler.makeActions.call(this);
+    if (this.isActor()) this.setActionState(this.numActions() ? 'undecided' : 'waiting');
+    invoke(this, 'fillActions');
+    if (this.isEnemy() || this.isAutoBattle() || this.isConfused()) this.setActionState('waiting');
+  };
+  battler.initTp = function() { this.setTp(Math.floor(Math.random() * 25)); };
+  battler.clearTp = function() { this.setTp(0); };
+  battler.onBattleStart = function() { this.setActionState('undecided'); this.clearMotion(); if (!this.isPreserveTp()) this.initTp(); };
+  battler.onBattleEnd = function() {
+    this.clearResult(); this.removeBattleStates(); this.removeAllBuffs(); this.clearActions();
+    if (!this.isPreserveTp()) this.clearTp();
+    this.appear();
+  };
+  // These base presentation hooks intentionally have no effect in MV.
+  battler.performAction = function(action) {};
+  battler.performSubstitute = function(target) {};
+  battler.performActionStart = function(action) { if (!action.isGuard()) this.setActionState('acting'); };
+  battler.performActionEnd = function() { this.setActionState('done'); };
+  scope.Game_Actor.prototype.performAction = function(action) {
+    battler.performAction.call(this, action);
+    if (action.isAttack()) this.performAttack();
+    else if (action.isGuard()) this.requestMotion('guard');
+    else if (action.isMagicSkill()) this.requestMotion('spell');
+    else if (action.isSkill()) this.requestMotion('skill');
+    else if (action.isItem()) this.requestMotion('item');
+  };
+  base.onRestrict = function() {};
+  battler.onRestrict = function() {
+    base.onRestrict.call(this); this.clearActions();
+    for (const state of this.states()) if (state.removeByRestriction) this.removeState(state.id);
+  };
+  base.sortStates = function() { this._states.sort((a, b) => (scope.$dataStates[b].priority - scope.$dataStates[a].priority) || a - b); };
+  base.addNewState = function(id) {
+    if (id === this.deathStateId()) this.die();
+    const restricted = this.isRestricted(); this._states.push(id); this.sortStates();
+    if (!restricted && this.isRestricted()) this.onRestrict();
+  };
+  scope.Game_Actor.prototype.inputtingAction = function() { return this.action(this._actionInputIndex); };
+  scope.Game_Actor.prototype.selectNextCommand = function() {
+    if (this._actionInputIndex < this.numActions() - 1) { ++this._actionInputIndex; return true; }
+    return false;
+  };
+  scope.Game_Actor.prototype.selectPreviousCommand = function() {
+    if (this._actionInputIndex > 0) { --this._actionInputIndex; return true; }
+    return false;
+  };
+  scope.Game_Actor.prototype.setup = function(id) { invoke(this, 'setup', id); };
+  scope.Game_Actor.prototype.testEscape = function(item) { return item.effects.some(effect => effect && effect.code === scope.Game_Action.EFFECT_SPECIAL); };
+  scope.Game_Enemy.prototype.transform = function(id) { invoke(this, 'transform', id); };
+  battler.startAnimation = function(id, mirror, delay) { invoke(this, 'startAnimation', id, Boolean(mirror), delay || 0); };
+  scope.Game_Actor.prototype.startAnimation = function(id, mirror, delay) { battler.startAnimation.call(this, id, !mirror, delay); };
   const read = (object, field) => createArray(engine.battlerArray(handles.get(object), field));
   const write = (object, field, value) => engine.battlerArray(handles.get(object), field, value);
   const mutations = new Set(['copyWithin', 'fill', 'pop', 'push', 'reverse', 'shift', 'sort', 'splice', 'unshift']);
@@ -183,6 +270,8 @@ function installBattlerBindings(scope, engine, session, handles, createArray, cr
   const motions = ['walk', 'wait', 'chant', 'guard', 'damage', 'evade', 'thrust', 'swing', 'missile', 'skill', 'spell', 'item', 'escape', 'victory', 'dying', 'abnormal', 'sleep', 'dead'];
   battler.requestMotion = function(type) { invoke(this, 'requestMotion', motions.indexOf(type)); };
   battler.motionType = function() { return motions[invoke(this, 'motionType')]; };
+  battler.requestMotionRefresh = function() { invoke(this, 'motionRefresh', true); };
+  battler.isMotionRefreshRequested = function() { return invoke(this, 'motionRefresh'); };
   battler.clearMotion = function() { invoke(this, 'clearMotion'); };
   battler.startWeaponAnimation = function(id) { invoke(this, 'startWeaponAnimation', id); };
   for (const method of ['performDamage', 'performMiss', 'performRecovery', 'performEvasion', 'performMagicEvasion', 'performCounter', 'performReflection', 'performCollapse'])

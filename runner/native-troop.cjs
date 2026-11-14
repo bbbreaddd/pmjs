@@ -18,6 +18,8 @@ function installTroopBindings(scope, engine, session, wrapEnemy, createArray) {
   scope.$gameTroop = Object.create(Game_Troop.prototype);
   scope.Game_Enemy.prototype.index = function() { return this.friendsUnit().members().indexOf(this); };
   scope.Game_Enemy.prototype.friendsUnit = function() { return scope.$gameTroop; };
+  scope.Game_Enemy.prototype.battlerName = function() { return this.enemy().battlerName; };
+  scope.Game_Enemy.prototype.battlerHue = function() { return this.enemy().battlerHue; };
   scope.Game_Enemy.prototype.opponentsUnit = function() { return scope.$gameParty; };
   scope.Game_Actor.prototype.index = function() { return scope.$gameParty.members().indexOf(this); };
   scope.Game_Actor.prototype.friendsUnit = function() { return scope.$gameParty; };

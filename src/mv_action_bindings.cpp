@@ -26,7 +26,8 @@ void Session::setRuntimeActionSubject(const std::shared_ptr<RuntimeAction>& acti
 std::shared_ptr<RuntimeActor> Session::runtimeActionSubject(const std::shared_ptr<RuntimeAction>& action) {
   refreshRuntimeAction(action);
   if (const auto subject = action->subject.lock()) return subject;
-  const auto subject = action->value.enemy ? runtimeEnemy(action->value.subject) : runtimeActor(action->value.actorId);
+  const int actorId = action->value.actorId ? action->value.actorId : action->value.subject >= 0 && action->value.subject < static_cast<int>(party_.size()) ? party_[action->value.subject] : 0;
+  const auto subject = action->value.enemy ? runtimeEnemy(action->value.subject) : runtimeActor(actorId);
   action->subject = subject; return subject;
 }
 void Session::refreshRuntimeAction(const std::shared_ptr<RuntimeAction>& action) {
@@ -82,26 +83,35 @@ void Session::replaceBattlerActions(const std::shared_ptr<RuntimeActor>& owner, 
   }
 }
 void Session::makeBattlerActionsBase(const std::shared_ptr<RuntimeActor>& owner, bool basic) {
-  auto& battler = owner->value(); std::vector<std::shared_ptr<RuntimeAction>> actions;
-  const int count = battleActionCount(battler);
-  for (int index = 0; index < count; ++index) {
-    const auto action = createRuntimeAction(owner);
-    if (!basic && battler.enemy) action->value.id = selectEnemySkill(battler);
-    else if (!basic && (hasSpecialFlag(battler, 0) || restriction(battler) > 0)) {
+  std::vector<std::shared_ptr<RuntimeAction>> actions;
+  const int count = battleActionCount(owner->value());
+  for (int index = 0; index < count; ++index) actions.push_back(createRuntimeAction(owner));
+  replaceBattlerActions(owner, std::move(actions));
+  if (!basic) {
+    fillBattlerActions(owner);
+    auto& battler = owner->value();
+    battler.actionState = battler.enemy || hasSpecialFlag(battler, 0) || restriction(battler) > 0 || battler.actions.empty() ? "waiting" : "undecided";
+    battler.motionRefresh = true;
+  }
+}
+void Session::fillBattlerActions(const std::shared_ptr<RuntimeActor>& owner) {
+  auto& battler = owner->value();
+  for (const auto& action : battler.actions) {
+    if (battler.enemy) action->value.id = selectEnemySkill(battler);
+    else if (hasSpecialFlag(battler, 0) || restriction(battler) > 0) {
       action->value.id = 1;
       if (hasSpecialFlag(battler, 0)) {
-        double best = -1;
-        auto skills = battlerSkills(battler); skills.insert(1);
+        double best = -1; auto skills = battlerSkills(battler); skills.insert(1);
         for (int id : skills) if (canUse(battler, database_["skills"][id])) {
           int target = -1; const double score = evaluateAutoAction(battler, database_["skills"][id], target);
           if (score > best) { best = score; action->value.id = id; action->value.target = target; }
         }
       }
     }
-    actions.push_back(action);
+    synchronizeRuntimeAction(action);
   }
-  replaceBattlerActions(owner, std::move(actions));
 }
+
 void Session::removeBattlerAction(std::uint64_t identity) {
   const auto remove = [&](Battler& battler) { std::erase_if(battler.actions, [&](const auto& action) { return action->identity == identity; }); };
   for (auto& [id, battler] : actors_) { (void)id; remove(battler); }

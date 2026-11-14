@@ -6,6 +6,11 @@ const { nativeArray } = require('./native-array.cjs');
 function installMapBindings(scope, engine, session, createArray, handles) {
   const map = scope.Game_Map.prototype, system = scope.Game_System.prototype;
   const invoke = (method, ...args) => engine.gameDataInvoke(session, 'map', method, args);
+  scope.Game_Player.prototype.requestMapReload = function() { engine.characterCommand(session, handles.get(this), 'needsMapReload', [true]); };
+  Object.defineProperty(scope.Game_Player.prototype, '_needsMapReload', { configurable: true,
+    get() { return engine.characterCommand(session, handles.get(this), 'needsMapReload', []); },
+    set(value) { engine.characterCommand(session, handles.get(this), 'needsMapReload', [Boolean(value)]); }
+  });
   map.tilesetId = function() { return invoke('tilesetId'); };
   map.tileset = function() { return scope.$dataTilesets[this.tilesetId()]; };
   map.tilesetFlags = function() { const tileset=this.tileset();return tileset?tileset.flags:createArray([]); };

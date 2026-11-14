@@ -619,6 +619,9 @@ class Renderer {
   };
   SpriteEffectProgram spriteEffect_, bitmapRegion_, directSprite_;
   SpriteEffectProgram plainBitmapRegion_;
+  std::uint32_t compositionCopyProgram_ = 0;
+  int compositionCopyTargetYDownUniform_ = -1;
+  int compositionCopyImageYDownUniform_ = -1;
   std::uint32_t clearTriangleProgram_ = 0;
   int clearTrianglePointsUniform_ = -1;
   int clearTriangleNormalsUniform_ = -1;
@@ -669,7 +672,6 @@ class Renderer {
   int pixiFilterParametersUniform_ = -1;
   int bloomImageUniform_ = -1;
   int premultipliedInputUniform_ = -1;
-  int exactCompositionCopyUniform_ = -1;
   int maskEnabledUniform_ = -1;
   int maskImageUniform_ = -1;
   int maskTransformUniform_ = -1;

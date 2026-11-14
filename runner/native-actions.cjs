@@ -2,8 +2,12 @@
 // RPG Maker MV behavior: Copyright (c) 2015 KADOKAWA CORPORATION./YOJI OJIMA.
 // MIT license: third_party/rpg-maker-mv.LICENSE.
 
-function installActionBindings(scope) {
+const { installActionEffects } = require('./native-action-effects.cjs');
+
+function installActionBindings(scope, evaluateFormula) {
   const Action = scope.Game_Action, action = Action.prototype;
+  installActionEffects(Action);
+  action.evalDamageFormula = function(target) { return evaluateFormula.call(this, this.item(), this.subject(), target, scope.$gameVariables._data); };
   action.numRepeats = function() {
       let repeats = this.item().repeats;
       if (this.isAttack()) {

@@ -1,6 +1,10 @@
 'use strict';
 // RPG Maker MV behavior: Copyright (c) 2015 KADOKAWA CORPORATION./YOJI OJIMA.
 // MIT license: third_party/rpg-maker-mv.LICENSE.
+const { installMessageWindow } = require('./native-message-window.cjs');
+const { installBattleLog } = require('./native-battle-log.cjs');
+const { installBattleScene } = require('./native-battle-scene.cjs');
+const { installSceneCommands } = require('./native-scene-commands.cjs');
 const { installWindowParts } = require('./native-window-parts.cjs');
 const { installWindowLayer } = require('./native-window-layer.cjs');
 const { bitmapDrawingOverrides, bitmapHandle, snapBitmap, wrapBitmapHandle, bitmapFromSource } = require('./native-bitmap.cjs');
@@ -125,7 +129,9 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     });
   }
   function children(object) {
-    const own = entry(object), handles = api.children(own.handle), live = new Set();
+    const own = entry(object), handles = api.children(own.handle, own.childHandles);
+    if (handles === own.childHandles) return own.childValues;
+    const live = new Set();
     const result = handles.map(handle => {
       live.add(handle.identity);
       const child = own.children.get(handle.identity) || wrap(handle);
@@ -136,6 +142,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
       if (entry(child).parent === object) entry(child).parent = null;
       own.children.delete(id);
     }
+    own.childHandles = handles; own.childValues = result;
     return result;
   }
   function Container() { this.initialize.apply(this, arguments); }
@@ -156,7 +163,11 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     if (!own.childArray) {
       const target = options.createArray ? options.createArray() : [];
       const mutators = new Set(['push', 'pop', 'shift', 'unshift', 'splice', 'sort', 'reverse', 'copyWithin', 'fill']);
-      function refresh() { const values = children(object); target.splice(0, target.length, ...values); }
+      let currentValues;
+      function refresh() {
+        const values = children(object);
+        if (values !== currentValues) { target.splice(0, target.length, ...values); currentValues = values; }
+      }
       function commit(values) {
         api.invoke(own.handle, 'replaceChildren', ...values.map(child => entry(child).handle));
         refresh();
@@ -848,6 +859,48 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   for (const name of windowDescriptions.keys()) installWindow(name);
   nativeWindows.Window_Gold.prototype.value = function() { return options.gameParty().gold(); };
   nativeWindows.Window_Gold.prototype.currencyUnit = function() { return options.textManager().currencyUnit; };
+  nativeWindows.Window_ItemCategory.prototype.setItemWindow = function(window) { this._itemWindow = window; window.setCategory(this.currentSymbol()); };
+  nativeWindows.Window_ItemCategory.prototype.update = function() {
+    Window_Command.prototype.update.call(this);
+    if (this._itemWindow) this._itemWindow.setCategory(this.currentSymbol());
+  };
+  nativeWindows.Window_MenuStatus.prototype.drawItemBackground = function(index) {
+      if (index === this._pendingIndex) {
+          var rect = this.itemRect(index);
+          var color = this.pendingColor();
+          this.changePaintOpacity(false);
+          this.contents.fillRect(rect.x, rect.y, rect.width, rect.height, color);
+          this.changePaintOpacity(true);
+      }
+  };
+  nativeWindows.Window_ShopStatus.prototype.currentEquippedItem = function(actor, etypeId) {
+      var list = [];
+      var equips = actor.equips();
+      var slots = actor.equipSlots();
+      for (var i = 0; i < slots.length; i++) {
+          if (slots[i] === etypeId) {
+              list.push(equips[i]);
+          }
+      }
+      var paramId = this.paramId();
+      var worstParam = Number.MAX_VALUE;
+      var worstItem = null;
+      for (var j = 0; j < list.length; j++) {
+          if (list[j] && list[j].params[paramId] < worstParam) {
+              worstParam = list[j].params[paramId];
+              worstItem = list[j];
+          }
+      }
+      return worstItem;
+  };
+  nativeWindows.Window_ShopStatus.prototype.drawPossession = function(x, y) {
+      var width = this.contents.width - this.textPadding() - x;
+      var possessionWidth = this.textWidth('0000');
+      this.changeTextColor(this.systemColor());
+      this.drawText(options.textManager().possession, x, y, width - possessionWidth);
+      this.resetTextColor();
+      this.drawText(options.gameParty().numItems(this._item), x, y, width, 'right');
+  };
   const shopBuy = nativeWindows.Window_ShopBuy.prototype;
   function shopItem(window, index) {
     const item = options.windowModel(entry(window).handle, 'Window_ShopBuy', 'shopItem', [index]);
@@ -1108,6 +1161,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     this._windowLayer.move((Graphics.width-Graphics.boxWidth)/2,(Graphics.height-Graphics.boxHeight)/2,Graphics.boxWidth,Graphics.boxHeight);
     this.addChild(this._windowLayer);
   };
+  Scene_Base.prototype.checkGameover = function() { if (options.gameParty().isAllDead()) SceneManager.goto(Scene_Gameover); };
   Scene_Base.prototype.addWindow = function(window) { this._windowLayer.addChild(window); };
   function Scene_Battle() { this.initialize.apply(this, arguments); }
   inherit(Scene_Battle, Scene_Base);
@@ -1521,6 +1575,8 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     options.gameScreen().clearZoom();
     for (const child of [this._fadeSprite, this._mapNameWindow, this._windowLayer, this._spriteset]) if (child) this.removeChild(child);
   };
+  installBattleScene({ Scene_Battle, Scene_Base, SceneManager, Graphics }, options);
+  installSceneCommands({ Scene_Title, Scene_Menu, Scene_ItemBase, Scene_Item, Scene_Skill, Scene_Map, Scene_Load, Scene_Options, SceneManager, Sprite, Bitmap, Graphics, ImageManager }, options);
   const nativeScenes = [Scene_Title, Scene_Map, Scene_Menu, Scene_Item, Scene_Skill, Scene_Equip, Scene_Status,
     Scene_Menu, Scene_Options, Scene_Save, Scene_Load, Scene_Battle, Scene_Gameover, Scene_Shop, Scene_Name, Scene_Debug];
   function sceneClass(kind) {
@@ -1601,6 +1657,25 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     if (this._upperCanvas) this._upperCanvas.getContext('2d').clearRect(0, 0, this.width, this.height);
     options.coreService('clearUpperCanvas');
   };
+  Graphics._centerElement = function(element) {
+    Object.assign(element.style, { position: 'absolute', margin: 'auto', top: 0, left: 0, right: 0, bottom: 0,
+      width: element.width * this._realScale + 'px', height: element.height * this._realScale + 'px' });
+  };
+  Graphics._updateErrorPrinter = function() {
+    if (!this._errorPrinter) this._errorPrinter = { style: {} };
+    this._errorPrinter.width = this._width * 0.9; this._errorPrinter.height = 40;
+    Object.assign(this._errorPrinter.style, { textAlign: 'center', textShadow: '1px 1px 3px #000', fontSize: '20px', zIndex: 99 });
+    this._centerElement(this._errorPrinter);
+  };
+  Graphics._applyCanvasFilter = function() {
+    if (this._canvas) Object.assign(this._canvas.style, { opacity: 0.5, filter: 'blur(8px)', webkitFilter: 'blur(8px)' });
+  };
+  Graphics._onVideoEnd = function() {
+    if (this._video) this._video.style.opacity = 0;
+    if (this._canvas) this._canvas.style.opacity = 1;
+    options.coreService('videoEnded');
+  };
+  Graphics._switchFPSMeter = function() { options.coreService('switchFPSMeter'); };
   Graphics.loadFont = (family, source) => Bitmap.loadFont(family, String(source).replace(/^\/game\//, ''));
   Graphics.isFontLoaded = family => options.coreService('isFontLoaded', family);
   Graphics._isFullScreen = () => native.runtime.isFullscreen();
@@ -1689,6 +1764,8 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     if (method === 'isReady' && !result) SceneManager.onSceneLoading();
     return result;
   }
+  installMessageWindow({ Window_Message, ImageManager, Input }, options);
+  installBattleLog({ Window_BattleLog: nativeWindows.Window_BattleLog, Window_Base, Bitmap, Sprite, Graphics, Input }, options);
   function SceneManager() { throw new Error('SceneManager is a static class'); }
   Object.defineProperties(SceneManager, Object.getOwnPropertyDescriptors({
     run(type) { try { this.initialize(); this.goto(type); this.requestUpdate(); } catch (error) { this.catchException(error); } },

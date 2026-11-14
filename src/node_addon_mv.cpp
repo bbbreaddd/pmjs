@@ -862,6 +862,40 @@ napi_value toneComponent(napi_env env, napi_callback_info info) try {
   if (args.size() == 3) tone->values[index] = asNumber(env, args[2]);
   return number(env, tone->values[index]);
 } catch (const std::exception& error) { return throwException(env, error); }
+napi_value createAction(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info, 3); auto& owner = session(env, args[0]);
+  std::shared_ptr<mv::RuntimeActor> subject; napi_valuetype type; check(env, napi_typeof(env, args[1], &type), "cannot inspect action subject");
+  if (type != napi_null) { requireRuntimeOwner(owner, args[1]); subject = runtimeAs<mv::RuntimeActor>(env, args[1]); }
+  return runtimeHandle(owner, owner.session->createRuntimeAction(subject, asBoolean(env, args[2])));
+} catch (const std::exception& error) { return throwException(env, error); }
+napi_value actionField(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info); auto& owner = session(env, args.at(0)); requireRuntimeOwner(owner, args.at(1)); RuntimeCallScope scope(owner);
+  return writeValue(env, owner.session->runtimeActionField(runtimeAs<mv::RuntimeAction>(env, args[1]), asString(env, args.at(2)), args.size() == 4 ? std::optional<mv::Value>{readValue(env, args[3])} : std::nullopt));
+} catch (const std::exception& error) { return throwException(env, error); }
+napi_value actionSubject(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info); auto& owner = session(env, args.at(0)); requireRuntimeOwner(owner, args.at(1)); RuntimeCallScope scope(owner);
+  const auto action = runtimeAs<mv::RuntimeAction>(env, args[1]);
+  if (args.size() == 3) { requireRuntimeOwner(owner, args[2]); owner.session->setRuntimeActionSubject(action, runtimeAs<mv::RuntimeActor>(env, args[2])); }
+  const auto subject = owner.session->runtimeActionSubject(action); return subject ? runtimeHandle(owner, subject) : null(env);
+} catch (const std::exception& error) { return throwException(env, error); }
+napi_value currentAction(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info, 1); auto& owner = session(env, args[0]); RuntimeCallScope scope(owner);
+  const auto action = owner.session->currentRuntimeAction(); return action ? runtimeHandle(owner, action) : null(env);
+} catch (const std::exception& error) { return throwException(env, error); }
+napi_value battlerActions(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info); auto& owner = session(env, args.at(0)); requireRuntimeOwner(owner, args.at(1)); RuntimeCallScope scope(owner);
+  const auto battler = runtimeAs<mv::RuntimeActor>(env, args[1]);
+  if (args.size() == 3) {
+    bool array = false; check(env, napi_is_array(env, args[2], &array), "cannot inspect battler actions"); if (!array) throw std::invalid_argument("battler actions require an array");
+    uint32_t length = 0; check(env, napi_get_array_length(env, args[2], &length), "cannot read action count");
+    std::vector<std::shared_ptr<mv::RuntimeAction>> actions;
+    for (uint32_t index = 0; index < length; ++index) { napi_value value; check(env, napi_get_element(env, args[2], index, &value), "cannot read action"); requireRuntimeOwner(owner, value); actions.push_back(runtimeAs<mv::RuntimeAction>(env, value)); }
+    owner.session->replaceBattlerActions(battler, std::move(actions));
+  }
+  napi_value result; check(env, napi_create_array_with_length(env, battler->value().actions.size(), &result), "cannot create actions");
+  for (std::size_t index = 0; index < battler->value().actions.size(); ++index) check(env, napi_set_element(env, result, index, runtimeHandle(owner, battler->value().actions[index])), "cannot set action");
+  return result;
+} catch (const std::exception& error) { return throwException(env, error); }
 napi_value createCommonEvent(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info, 2); auto& owner = session(env, args.at(0));
   auto event = std::make_shared<mv::RuntimeCommonEvent>(); event->id = asInt32(env, args.at(1)); event->initialized = true;
@@ -1068,6 +1102,8 @@ napi_value windowModel(napi_env env,napi_callback_info info) try {
 napi_value coreService(napi_env env,napi_callback_info info) try {
   const auto args=arguments(env,info); const auto methodName=asString(env,args.at(0));
   using Decrypter=mv::Decrypter;
+  if (methodName=="switchFPSMeter") { mv::core::Graphics::onKeyDown(113); return undefined(env); }
+  if (methodName=="videoEnded") { mv::core::Graphics::videoPlaying = false; return undefined(env); }
   if (methodName=="clearUpperCanvas") { mv::core::Graphics::clearUpperCanvas(); return undefined(env); }
   if (methodName=="printError") { mv::core::Graphics::printError(asString(env,args.at(1)),asString(env,args.at(2))); return undefined(env); }
   if (methodName=="audioMasterVolume") return number(env,mv::core::WebAudio::masterVolume);
@@ -1675,6 +1711,9 @@ napi_value actionRate(napi_env env, napi_callback_info info) try {
 const std::vector<mv::ClassBinding>& bindingClasses() {
   using namespace mv;
   const auto battler = [](RuntimeBoundObject& object) -> Sprite_Battler& { return dynamic_cast<RuntimeBattlerSprite&>(object).state(); };
+  const auto battlerObject = [](RuntimeBoundObject& object) -> RuntimeBattlerSprite& { return dynamic_cast<RuntimeBattlerSprite&>(object); };
+  auto setBattler = bindingMethod("setBattler", battlerObject, &RuntimeBattlerSprite::setBattler); setBattler.aliases = {{"_battler", 0}};
+  auto setActor = setBattler; setActor.aliases.push_back({"_actor", 0});
   const auto actor = [](RuntimeBoundObject& object) -> Sprite_Actor& { return dynamic_cast<RuntimeActorSprite&>(object).value; };
   const auto enemy = [](RuntimeBoundObject& object) -> Sprite_Enemy& { return *dynamic_cast<RuntimeEnemySprite&>(object).value; };
   const auto enemyObject = [](RuntimeBoundObject& object) -> RuntimeEnemySprite& { return dynamic_cast<RuntimeEnemySprite&>(object); };
@@ -1705,18 +1744,30 @@ const std::vector<mv::ClassBinding>& bindingClasses() {
       bindingField("_offsetY", [battler](RuntimeBoundObject& object) -> float& { return battler(object).offset.y; }),
       bindingField("_targetOffsetX", [battler](RuntimeBoundObject& object) -> float& { return battler(object).targetOffset.x; }),
       bindingField("_targetOffsetY", [battler](RuntimeBoundObject& object) -> float& { return battler(object).targetOffset.y; }),
-      bindingField("_movementDuration", [battler](RuntimeBoundObject& object) -> int& { return battler(object).movementDuration; })
+      bindingField("_movementDuration", [battler](RuntimeBoundObject& object) -> int& { return battler(object).movementDuration; }),
+      bindingField("_motionCount", [battler](RuntimeBoundObject& object) -> int& { return battler(object).motionCount; }),
+      bindingField("_pattern", [battler](RuntimeBoundObject& object) -> int& { return battler(object).pattern; }),
+      bindingField("_selectionEffectCount", [battler](RuntimeBoundObject& object) -> int& { return battler(object).selectionEffectCount; }),
+      BindingField{"_motionIndex", [battler](RuntimeBoundObject& object) { return Value(static_cast<int>(battler(object).motion)); },
+        [battler](RuntimeBoundObject& object, const Value& value) { const int index = value.integer(); if (index < 0 || index > 17) throw std::invalid_argument("invalid battler motion"); battler(object).motion = static_cast<BattlerMotion>(index); }},
+      BindingField{"opacity", [battler](RuntimeBoundObject& object) { return Value(battler(object).opacity * 255); },
+        [battlerObject](RuntimeBoundObject& object, const Value& value) { auto& owner = battlerObject(object); owner.state().opacity = static_cast<float>(value.number() / 255); owner.drawable->setOpacity(value.number()); }}
     }, {
+      setBattler,
       bindingMethod("setHome", battler, &Sprite_Battler::setHome),
       bindingMethod("startMove", battler, &Sprite_Battler::startMove),
-      bindingMethod("updateMove", battler, &Sprite_Battler::updateMove),
+      bindingMethod("updateMove", battlerObject, &RuntimeBattlerSprite::updateMove),
       bindingMethod("isMoving", battler, &Sprite_Battler::isMoving)
-    }},
+    }, "setBattler", {Value{}}},
     {"Sprite_Actor", "Sprite_Battler", "pmjs::mv::Sprite_Actor", [] { return std::make_shared<RuntimeActorSprite>(); }, {}, {
+      setActor,
+      bindingMethod("refreshMotion", actor, &Sprite_Actor::refreshMotion),
       bindingMethod("setActorHome", actor, &Sprite_Actor::setActorHome),
       bindingMethod("retreat", actor, &Sprite_Actor::retreat)
-    }},
+    }, "setBattler", {Value{}}},
     {"Sprite_Enemy", "Sprite_Battler", "pmjs::mv::Sprite_Enemy", [] { return std::make_shared<RuntimeEnemySprite>(); }, {
+      bindingField("_shake", [enemy](RuntimeBoundObject& object) -> double& { return enemy(object).shake; }),
+      bindingField("_appeared", [enemy](RuntimeBoundObject& object) -> bool& { return enemy(object).appeared; }),
       bindingField("_effectDuration", [enemy](RuntimeBoundObject& object) -> int& { return enemy(object).effectDuration; }),
       bindingField("_effectType", [enemy](RuntimeBoundObject& object) -> std::string& { return enemy(object).effectType; })
     }, {setEnemy, bindingMethod("startEffect", enemy, &Sprite_Enemy::startEffect),
@@ -2105,6 +2156,8 @@ void registerMvEngineBindings(napi_env env, napi_value exports) {
   method(env, engine, "interpreterPluginCommand", interpreterPluginCommand);
   method(env, engine, "interpreterCommandInvoke", interpreterCommandInvoke);
   method(env, engine, "interpreterCollection", interpreterCollection);
+  method(env, engine, "createAction", createAction); method(env, engine, "actionField", actionField); method(env, engine, "actionSubject", actionSubject);
+  method(env, engine, "currentAction", currentAction); method(env, engine, "battlerActions", battlerActions);
   method(env, engine, "createCommonEvent", createCommonEvent); method(env, engine, "commonEvents", commonEvents);
   method(env, engine, "commonEventId", commonEventId); method(env, engine, "commonEventInterpreter", commonEventInterpreter);
   method(env, engine, "createInterpreter", createInterpreter); method(env, engine, "createCommandList", createCommandList); method(env, engine, "interpreterChild", interpreterChild);
