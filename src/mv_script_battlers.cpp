@@ -1,5 +1,6 @@
 #include "mv_engine.hpp"
 #include "mv_managers.hpp"
+#include "mv_windows.hpp"
 #include <stdexcept>
 #include <cmath>
 #include <limits>
@@ -43,6 +44,13 @@ Value Session::runtimeBattlerCommand(const std::shared_ptr<RuntimeActor>& actor,
     if (field == "exp") return access(battler.exp);
     if (field == "stateTurns") return access(battler.stateTurns);
     if (field == "stateSteps") return access(battler.stateSteps);
+  }
+  if (method == "damagePopup") {
+    if (!arguments.empty()) {
+      battler.damagePopup = values[0].boolean();
+      if (battler.damagePopup && actor->attached) { Window_BattleLog log(0,0,0,0); log.displayRegeneration(*this, battler); }
+    }
+    return battler.damagePopup;
   }
   if (method == "setup") {
     const auto& source = database_["actors"][id];

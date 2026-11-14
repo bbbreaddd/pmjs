@@ -100,6 +100,7 @@ class CharacterSprite : public BoundSpriteContext {
  public:
   Sprite_Character state;
   std::shared_ptr<RuntimeCharacter> character;
+  std::shared_ptr<RuntimeBalloon> balloonSprite;
   std::shared_ptr<core::Sprite> upperBody,lowerBody;
   int tilesetId=0,tileId=0,loadedIndex=0;
   std::string loadedName;
@@ -110,6 +111,20 @@ class CharacterSprite : public BoundSpriteContext {
   virtual void initializeCharacter(std::shared_ptr<RuntimeCharacter> value) { initMembers(); setCharacter(std::move(value)); }
   virtual void initMembers() { anchor={0.5,1}; hiding=false; tilesetId=tileId=loadedIndex=0; loadedName.clear(); state=Sprite_Character{}; }
   virtual void setCharacter(std::shared_ptr<RuntimeCharacter> value) { character=std::move(value); state.setCharacter(character ? &character->value() : nullptr); }
+  virtual void setupBalloon() {
+    const auto active = modelSession().runtimeCharacterBalloon(character);
+    if (balloonSprite != active) {
+      if (balloonSprite && balloonSprite->drawable->parent) balloonSprite->drawable->parent->removeChild(balloonSprite->drawable.get());
+      balloonSprite = active;
+      if (balloonSprite && parent) parent->addChild(balloonSprite->drawable);
+    }
+    if (balloonSprite) balloonSprite->drawable->position = {position.x, position.y - height()};
+  }
+  virtual void endBalloon() {
+    modelSession().runtimeCharacterBalloon(character, true);
+    if (balloonSprite && balloonSprite->drawable->parent) balloonSprite->drawable->parent->removeChild(balloonSprite->drawable.get());
+    balloonSprite.reset();
+  }
   virtual bool isTile() const { return tileId>0; }
   virtual bool isObjectCharacter() const { return character && (character->value().tileId>0 || ImageManager::isObjectCharacter(character->value().characterName)); }
   virtual bool isImageChanged() const {

@@ -138,7 +138,7 @@ Value Session::save(bool recordSave) {
       {"_hp", actor.hp}, {"_mp", actor.mp}, {"_tp", actor.tp}, {"_hidden", actor.hidden}, {"_paramPlus", numbers(actor.paramPlus)}, {"_states", numbers(actor.states)}, {"_stateTurns", entries(actor.stateTurns)}, {"_stateSteps", entries(actor.stateSteps)},
       {"_buffs", numbers(actor.buffs)}, {"_buffTurns", numbers(actor.buffTurns)}, {"_skills", numbers(actor.skills)}, {"_equips", equips}, {"_exp", entries(actor.exp)},
       {"_actions", actions}, {"_speed", 0}, {"_result", writeResult(actor.result)},
-      {"_actionState", actor.actionState}, {"_lastTargetIndex", actor.lastTargetIndex}, {"_animations", Array{}}, {"_damagePopup", false}, {"_effectType", Value{}}, {"_motionType", Value{}}, {"_weaponImageId", 0}, {"_motionRefresh", actor.motionRefresh}, {"_selected", actor.selected},
+      {"_actionState", actor.actionState}, {"_lastTargetIndex", actor.lastTargetIndex}, {"_animations", Array{}}, {"_damagePopup", actor.damagePopup}, {"_effectType", Value{}}, {"_motionType", Value{}}, {"_weaponImageId", 0}, {"_motionRefresh", actor.motionRefresh}, {"_selected", actor.selected},
       {"_actionInputIndex", actor.actionInputIndex}, {"_lastMenuSkill", item(actor.lastMenuSkill,"skill")}, {"_lastBattleSkill", item(actor.lastBattleSkill,"skill")}, {"_lastCommandSymbol", actor.lastCommandSymbol}});
   }
   Value player = character(player_, "Game_Player");
@@ -215,7 +215,7 @@ void Session::load(const Value& contents) {
     actor.faceName = value["_faceName"].text(); actor.faceIndex = value["_faceIndex"].integer(); actor.battlerName = value["_battlerName"].text();
     actor.level = value["_level"].integer(); actor.hp = value["_hp"].integer(); actor.mp = value["_mp"].integer(); actor.tp = value["_tp"].integer(); actor.hidden = value["_hidden"].boolean();
     actor.actionState = value["_actionState"].text(); actor.actionInputIndex = value["_actionInputIndex"].integer();
-    actor.selected = value["_selected"].boolean(); actor.motionRefresh = value["_motionRefresh"].boolean();
+    actor.selected = value["_selected"].boolean(); actor.damagePopup = value["_damagePopup"].boolean(); actor.motionRefresh = value["_motionRefresh"].boolean();
     actor.actions.clear();
     for (const auto& saved : value["_actions"].array()) {
       auto action = std::make_shared<RuntimeAction>();

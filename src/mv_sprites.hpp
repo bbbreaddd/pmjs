@@ -131,6 +131,7 @@ class Sprite_Actor : public Sprite_Battler {
 struct RuntimeBattlerSprite : RuntimeBoundObject {
   std::shared_ptr<RuntimeActor> boundBattler;
   std::shared_ptr<core::Sprite> drawable = std::make_shared<core::Sprite>();
+  RuntimeBattlerSprite() { drawable->anchor = {0.5, 1}; }
   virtual Sprite_Battler& state() = 0;
   std::shared_ptr<core::Container> displayObject() override { return drawable; }
   virtual void setBattler(std::shared_ptr<RuntimeActor> value) { boundBattler = std::move(value); state().setBattler(boundBattler ? &boundBattler->value() : nullptr); }
@@ -138,12 +139,12 @@ struct RuntimeBattlerSprite : RuntimeBoundObject {
 };
 struct RuntimeBaseBattlerSprite : RuntimeBattlerSprite {
   Sprite_Battler value;
-  Sprite_Battler& state() override { return value; }
+  Sprite_Battler& state() override { if (boundBattler) value.setBattler(&boundBattler->value()); return value; }
   const char* bindingType() const override { return "Sprite_Battler"; }
 };
 struct RuntimeActorSprite : RuntimeBattlerSprite {
   Sprite_Actor value;
-  Sprite_Battler& state() override { return value; }
+  Sprite_Battler& state() override { if (boundBattler) value.setBattler(&boundBattler->value()); return value; }
   const char* bindingType() const override { return "Sprite_Actor"; }
 };
 
@@ -171,7 +172,7 @@ struct RuntimeEnemySprite : RuntimeBattlerSprite {
   std::shared_ptr<Sprite_Enemy> value;
   explicit RuntimeEnemySprite(std::shared_ptr<Sprite_Enemy> sprite = std::make_shared<Sprite_Enemy>()) : value(std::move(sprite)) {}
   std::shared_ptr<RuntimeActor> enemy;
-  Sprite_Battler& state() override { return *value; }
+  Sprite_Battler& state() override { if (enemy) value->setBattler(&enemy->value()); return *value; }
   const char* bindingType() const override { return "Sprite_Enemy"; }
   void setBattler(std::shared_ptr<RuntimeActor> battler) override {
     if (battler && !battler->value().enemy) throw std::invalid_argument("enemy sprite requires an enemy battler");

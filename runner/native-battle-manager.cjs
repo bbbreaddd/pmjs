@@ -60,6 +60,15 @@ function installBattleManager(runtime, engine, session) {
   manager.endBattle = function(result) { invoke('endBattle', result); if (this._eventCallback) this._eventCallback(result); };
   manager.isInputting = () => invoke('isInputting');
   manager.actor = () => { const id = invoke('actorId'); return id ? scope.$gameActors.actor(id) : null; };
+  manager.selectNextCommand = function() {
+    const actor = this.actor(), action = actor?.inputtingAction();
+    if (action?._itemId > 0) engine.chooseAction(session, this._actorIndex, action._itemId, action._targetIndex, action._isItem);
+    else if (this._actorIndex < 0) {
+      const index = scope.$gameParty.battleMembers().findIndex(member => member.canInput() && member.numActions());
+      this._actorIndex = index;
+    }
+  };
+  manager.selectPreviousCommand = function() { return invoke('previousCommand'); };
   manager.setup = function(troopId, canEscape, canLose, event = true) {
     this.initMembers(); return invoke('setup', troopId, canEscape, canLose, event);
   };

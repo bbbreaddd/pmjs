@@ -329,7 +329,7 @@ struct Battler {
   std::vector<std::shared_ptr<RuntimeAction>> actions;
   std::string actionState = "undecided";
   int actionInputIndex = 0;
-  bool selected = false;
+  bool selected = false, damagePopup = false;
   int requestedMotion = -1, requestedWeapon = 0;
   bool motionRefresh = false;
   std::uint64_t motionRequestedAt = 0;
@@ -478,6 +478,7 @@ class Session {
   bool dispatchManager(const std::string& manager, const std::string& method, const Value::Array& arguments = {});
   void setRuntimeHooks(std::shared_ptr<RuntimeHooks> hooks) { runtimeHooks_ = std::move(hooks); }
   std::shared_ptr<RuntimeBalloon> createBalloon();
+  std::shared_ptr<RuntimeBalloon> runtimeCharacterBalloon(const std::shared_ptr<RuntimeCharacter>& character, bool end = false);
   std::shared_ptr<RuntimeBoundObject> createGeneratedBinding(const std::string& name);
   std::set<std::uint64_t> runtimeObjectIdentities() const;
   std::shared_ptr<RuntimeCharacter> runtimeCharacter(int id);

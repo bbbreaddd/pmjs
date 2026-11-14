@@ -1,6 +1,7 @@
 'use strict';
 const { createBitmapClass, createImageManager, bitmapHandle } = require('./native-bitmap.cjs');
 const vm = require('node:vm');
+const { installBattleSpriteset } = require('./native-battle-spriteset.cjs');
 const { installBattlerSprites } = require('./native-battler-sprites.cjs');
 const { installBattleManager } = require('./native-battle-manager.cjs');
 const { installManagerReference } = require('./native-manager-reference.cjs');
@@ -579,12 +580,20 @@ function createScriptRuntime(engine, session, options = {}) {
     let subject;
     Object.defineProperty(object, '_subject', { configurable: true,
       get() { subject = wrapRuntimeEntity(engine.actionSubject(session, handle)); return subject; },
-      set(value) { engine.actionSubject(session, handle, actors.get(value)); subject = value; }
+      set(value) {
+        if (value != null && !actors.has(value)) throw new TypeError('Action subject requires a battler from this runtime');
+        engine.actionSubject(session, handle, actors.get(value) || null); subject = value;
+      }
     });
     return object;
   }
   function Game_Action(subject, forcing = false) { this.initialize(subject, forcing); }
-  Game_Action.prototype.initialize = function(subject, forcing) { wrapAction(engine.createAction(session, actors.get(subject) || null, Boolean(forcing)), this); this.clear(); };
+  Game_Action.prototype.initialize = function(subject, forcing) {
+    if (subject != null && !actors.has(subject)) throw new TypeError('Action subject requires a battler from this runtime');
+    if (actionHandles.has(this)) { this._subject = subject; this._forcing = Boolean(forcing); }
+    else wrapAction(engine.createAction(session, actors.get(subject) || null, Boolean(forcing)), this);
+    this.clear();
+  };
   Game_Action.prototype.clear = function() { this._itemId = 0; this._isItem = false; this._targetIndex = -1; };
   Game_Action.prototype.subject = function() { return this._subject; };
   Game_Action.prototype.setSkill = function(id) { this._itemId = id; this._isItem = false; };
@@ -844,6 +853,7 @@ function createScriptRuntime(engine, session, options = {}) {
   let rateAction = null;
   function wrapRuntimeEntity(handle) {
     if (!handle) return null;
+    if (handle.bindingType && classBindings) return classBindings.wrap(handle, handle.bindingType);
     if (handle.entityType === 'character') return wrapEntity(handle,handle.entityId > 0 ? Game_Event : handle.entityId === -1 ? Game_Player : handle.entityId >= -7 && handle.entityId <= -5 ? Game_Vehicle : handle.entityId <= -2 ? Game_Follower : Game_Character,characters);
     return wrapEntity(handle,handle.entityType === 'enemy' ? Game_Enemy : Game_Actor,actors);
   }
@@ -1216,6 +1226,7 @@ function createScriptRuntime(engine, session, options = {}) {
       scope.Sprite_Enemy.prototype.damageOffsetY = function() { return -8; };
       scope.Sprite_Actor.MOTIONS = vm.runInContext('(' + '{\n    walk:     { index: 0,  loop: true  },\n    wait:     { index: 1,  loop: true  },\n    chant:    { index: 2,  loop: true  },\n    guard:    { index: 3,  loop: true  },\n    damage:   { index: 4,  loop: false },\n    evade:    { index: 5,  loop: false },\n    thrust:   { index: 6,  loop: false },\n    swing:    { index: 7,  loop: false },\n    missile:  { index: 8,  loop: false },\n    skill:    { index: 9,  loop: false },\n    spell:    { index: 10, loop: false },\n    item:     { index: 11, loop: false },\n    escape:   { index: 12, loop: true  },\n    victory:  { index: 13, loop: true  },\n    dying:    { index: 14, loop: true  },\n    abnormal: { index: 15, loop: true  },\n    sleep:    { index: 16, loop: true  },\n    dead:     { index: 17, loop: true  }\n}' + ')', context);
       installBattlerSprites(scope);
+      installBattleSpriteset(scope);
       scope.Sprite_Picture.prototype.picture = function() { return scope.$gameScreen.picture(this._pictureId); };
       installWeatherParticles(result);
       installAudioMetadata(result);

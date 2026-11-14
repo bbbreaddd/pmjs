@@ -7,6 +7,21 @@ namespace pmjs::mv {
 std::shared_ptr<RuntimeBalloon> Session::createBalloon() {
   auto object = std::make_shared<RuntimeBalloon>(); object->hooks = runtimeHooks_; return object;
 }
+std::shared_ptr<RuntimeBalloon> Session::runtimeCharacterBalloon(const std::shared_ptr<RuntimeCharacter>& character, bool end) {
+  if (!character || !character->attached || (character->id > 0 && character->mapId != mapId_)) return {};
+  const int target = character->id < 0 ? -1 : character->id;
+  std::shared_ptr<RuntimeBalloon> result;
+  for (auto& effect : visualEffects_) if (effect.balloon && effect.targetType == 0 && effect.targetId == target) {
+    if (end) {
+      effect.duration = 0;
+      if (effect.balloonSprite) { effect.balloonSprite->active = false; effect.balloonSprite->value.duration = 0; }
+    } else if (effect.balloonSprite && effect.balloonSprite->active) {
+      result = effect.balloonSprite;
+      if (!result->initialized) { result->call("initialize"); result->initialized = true; result->call("setup", {effect.animationId}); }
+    }
+  }
+  return result;
+}
 int Session::requestAnimation(int targetType,int targetId,int animationId,bool mirror,bool balloon,int delayFrames) {
   if(animationId<=0)return 0;
   const auto& animation=database_["animations"][animationId];

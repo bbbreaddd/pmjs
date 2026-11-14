@@ -1558,7 +1558,10 @@ test('battler action slots share native identities and survive action replacemen
   const action = actor.currentAction();
   assert.equal(action, actor._actions[0]);
   assert.equal(action.subject(), actor);
-  action.setSkill(2); action.setTarget(3);
+  action.setSkill(2); action.setTarget(3); action.initialize(actor, true);
+  assert.equal(actor.currentAction(), action);
+  assert.equal(api.save(session).actors._data[1]._actions[0]._item._itemId, 0);
+  action._subject = null; assert.equal(action.subject(), null); action._subject = actor;
   const replacement = new scope.Game_Action(actor, true);
   replacement.setItem(1); replacement.setTarget(2);
   actor.setAction(0, replacement);
@@ -1593,4 +1596,26 @@ test('script actions apply authored recovery effects and evaluate formulas in th
   data.items[1].damage = { type: 1, formula: '$gameVariables.value(1) + a.hp - b.hp', variance: 0, elementId: 0 };
   assert.equal(action.evalDamageFormula(actor), 7);
   assert.equal(action.makeDamageValue(actor, false), 7);
+});
+
+
+test('replacing an unconfirmed action preserves earlier native command selections', t => {
+  const data = fixture([]);
+  data.classes[1].traits.push({ code: 61, dataId: 0, value: 1 });
+  data.skills[2] = { id: 2, stypeId: 1, hitType: 1, successRate: 100, scope: 1, occasion: 0,
+    damage: { type: 1, formula: '1', variance: 0, critical: false, elementId: 0 }, effects: [] };
+  data.enemies = [null, { name: 'Enemy', params: [100, 20, 10, 10, 10, 10, 10, 10], actions: [], traits: [] }];
+  data.troops = [null, { members: [{ enemyId: 1, x: 100, y: 100 }], pages: [] }];
+  const session = api.create(data); t.after(() => api.dispose(session));
+  const { scope } = createScriptRuntime(api, session); api.newGame(session);
+  api.startBattle(session, 1, true, true); api.acknowledge(session);
+  for (let i = 0; i < 120 && !scope.BattleManager.isInputting(); ++i) api.step(session, {});
+  const actor = scope.BattleManager.actor(); assert.equal(actor.numActions(), 2);
+  actor.inputtingAction().setSkill(2); actor.inputtingAction().setTarget(0); scope.BattleManager.selectNextCommand();
+  assert.equal(actor._actionInputIndex, 1);
+  scope.BattleManager.selectPreviousCommand(); assert.equal(actor._actionInputIndex, 0);
+  scope.BattleManager.selectNextCommand(); assert.equal(actor._actionInputIndex, 1);
+  const replacement = new scope.Game_Action(actor); replacement.setSkill(2); replacement.setTarget(0);
+  actor.setAction(1, replacement); assert.equal(scope.BattleManager.inputtingAction(), replacement);
+  scope.BattleManager.selectNextCommand(); assert.equal(scope.BattleManager.isInputting(), false);
 });

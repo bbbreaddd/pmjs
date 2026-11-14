@@ -1,6 +1,7 @@
 'use strict';
 // RPG Maker MV behavior: Copyright (c) 2015 KADOKAWA CORPORATION./YOJI OJIMA.
 // MIT license: third_party/rpg-maker-mv.LICENSE.
+const { installWindowTouch } = require('./native-window-touch.cjs');
 const { installMessageWindow } = require('./native-message-window.cjs');
 const { installBattleLog } = require('./native-battle-log.cjs');
 const { installBattleScene } = require('./native-battle-scene.cjs');
@@ -395,6 +396,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   for (const field of ['slices', 'offset', 'direction', 'fillMode', 'seed', 'enabled']) prop(GlitchFilter, field);
   Container.prototype.canvasToLocalX = function(x) { return api.invoke(entry(this).handle, 'canvasLocalX', x); };
   Container.prototype.canvasToLocalY = function(y) { return api.invoke(entry(this).handle, 'canvasLocalY', y); };
+  Object.defineProperty(Sprite.prototype, 'spriteId', { configurable: true, get() { return Number(entry(this).handle.identity); } });
   function Sprite_Button() { this.initialize.apply(this, arguments); }
   inherit(Sprite_Button, Sprite);
   Sprite_Button.prototype.initialize = function() { Sprite.prototype.initialize.call(this); this._clickHandler = null; this._touching = false; };
@@ -422,8 +424,114 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   };
   function Sprite_Animation() { this.initialize.apply(this, arguments); }
   inherit(Sprite_Animation, Sprite);
-  const animationInitialize = Sprite_Animation.prototype.initialize = function() { Sprite.prototype.initialize.call(this); this.setupRate(); };
+  const animationInitialize = Sprite_Animation.prototype.initialize = function() { Sprite.prototype.initialize.call(this); this._flashColor = [0, 0, 0, 0]; this._flashDuration = 0; this._screenFlashDuration = 0; this._hidingDuration = 0; this.setupRate(); };
   const animationSetupRate = Sprite_Animation.prototype.setupRate = function() { this._rate = 4; };
+  Sprite_Animation.prototype.updatePosition = function() {
+      if (this._animation.position === 3) {
+          this.x = this.parent.width / 2;
+          this.y = this.parent.height / 2;
+      } else {
+          var parent = this._target.parent;
+          var grandparent = parent ? parent.parent : null;
+          this.x = this._target.x;
+          this.y = this._target.y;
+          if (this.parent === grandparent) {
+              this.x += parent.x;
+              this.y += parent.y;
+          }
+          if (this._animation.position === 0) {
+              this.y -= this._target.height;
+          } else if (this._animation.position === 1) {
+              this.y -= this._target.height / 2;
+          }
+      }
+  };
+
+  Sprite_Animation.prototype.processTimingData = function(timing) {
+      var duration = timing.flashDuration * this._rate;
+      switch (timing.flashScope) {
+      case 1:
+          this.startFlash(timing.flashColor, duration);
+          break;
+      case 2:
+          this.startScreenFlash(timing.flashColor, duration);
+          break;
+      case 3:
+          this.startHiding(duration);
+          break;
+      }
+      if (!this._duplicated && timing.se) {
+          options.audioManager().playSe(timing.se);
+      }
+  };
+
+  Sprite_Animation.prototype.startFlash = function(color, duration) {
+      this._flashColor = Array.from(color);
+      this._flashDuration = duration;
+  };
+
+  Sprite_Animation.prototype.startScreenFlash = function(color, duration) {
+      this._screenFlashDuration = duration;
+      if (!this._screenFlashSprite) { this._screenFlashSprite = new ScreenSprite(); this.addChild(this._screenFlashSprite); }
+      if (this._screenFlashSprite) {
+          this._screenFlashSprite.setColor(color[0], color[1], color[2]);
+          this._screenFlashSprite.opacity = color[3];
+      }
+  };
+
+  Sprite_Animation.prototype.startHiding = function(duration) {
+      this._hidingDuration = duration;
+      this._target.hide();
+  };
+  Sprite_Animation.prototype.update = function() { Sprite.prototype.update.call(this); this.updateFlash(); this.updateScreenFlash(); this.updateHiding(); };
+  Sprite_Animation.prototype.updateFlash = function() {
+      if (this._flashDuration > 0) {
+          var d = this._flashDuration--;
+          this._flashColor[3] *= (d - 1) / d;
+          this._target.setBlendColor(this._flashColor);
+      }
+  };
+
+  Sprite_Animation.prototype.updateScreenFlash = function() {
+      if (this._screenFlashDuration > 0) {
+          var d = this._screenFlashDuration--;
+          if (this._screenFlashSprite) {
+              this._screenFlashSprite.x = -this.absoluteX();
+              this._screenFlashSprite.y = -this.absoluteY();
+              this._screenFlashSprite.opacity *= (d - 1) / d;
+              this._screenFlashSprite.visible = (this._screenFlashDuration > 0);
+          }
+      }
+  };
+
+  Sprite_Animation.prototype.updateHiding = function() {
+      if (this._hidingDuration > 0) {
+          this._hidingDuration--;
+          if (this._hidingDuration === 0) {
+              this._target.show();
+          }
+      }
+  };
+
+  Sprite_Animation.prototype.absoluteX = function() {
+      var x = 0;
+      var object = this;
+      while (object) {
+          x += object.x;
+          object = object.parent;
+      }
+      return x;
+  };
+
+  Sprite_Animation.prototype.absoluteY = function() {
+      var y = 0;
+      var object = this;
+      while (object) {
+          y += object.y;
+          object = object.parent;
+      }
+      return y;
+  };
   function TilingSprite() { this.initialize.apply(this, arguments); }
   inherit(TilingSprite, Sprite);
   TilingSprite.prototype.initialize = function(bitmap) { attach(this, 'tiling'); if (bitmap) this.bitmap = bitmap; };
@@ -622,14 +730,18 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   Window_Message.prototype.clearFlags = function() { options.messageWindow('clearFlags'); };
   Window_Message.prototype.terminateMessage = function() { this.close(); options.messageWindow('terminateMessage'); };
   Window_Message.prototype.startInput = function() { return options.messageWindow('startInput'); };
-  for (const field of ['_showFast', '_lineShowFast', '_pauseSkip']) Object.defineProperty(Window_Message.prototype, field, {
+  for (const field of ['_showFast', '_lineShowFast', '_pauseSkip', '_waitCount', 'pause']) Object.defineProperty(Window_Message.prototype, field, {
     configurable: true, get() { return options.messageWindowField(field); }, set(value) { options.messageWindowField(field, value); }
+  });
+  Object.defineProperty(Window_Message.prototype, 'pause', { configurable: true,
+    get() { return options.messageWindowField('pause'); },
+    set(value) { api.field(entry(this).handle, 'pause', Boolean(value)); options.messageWindowField('pause', Boolean(value)); }
   });
   function Window_Selectable() { this.initialize.apply(this, arguments); }
   inherit(Window_Selectable, Window_Base);
   Window_Selectable.prototype.initialize = function(x, y, width, height) {
     Window_Base.prototype.initialize.call(this, x, y, width, height);
-    this._index = -1; this._handlers = {}; this.deactivate();
+    this._index = -1; this._handlers = {}; this._stayCount = 0; this._touching = false; this.deactivate();
   };
   prop(Window_Selectable, '_index', 'index');
   prop(Window_Selectable, '_cursorFixed', 'cursorFixed'); prop(Window_Selectable, '_cursorAll', 'cursorAll');
@@ -657,7 +769,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     const rect = api.invoke(entry(this).handle, 'itemRect', index, this.maxCols(), this.itemHeight(), this.spacing(), this.itemWidth());
     return { x: rect[0], y: rect[1], width: rect[2], height: rect[3] };
   };
-  Window_Selectable.prototype.select = function(index) { this._index = index; this.ensureCursorVisible(); this.updateCursor(); this.callUpdateHelp(); };
+  Window_Selectable.prototype.select = function(index) { this._stayCount = 0; this._index = index; this.ensureCursorVisible(); this.updateCursor(); this.callUpdateHelp(); };
   Window_Selectable.prototype.ensureCursorVisible = function() { api.invoke(entry(this).handle, 'ensureCursorVisible', this.maxItems(), this.maxCols(), this.maxPageRows()); };
   Window_Selectable.prototype.isCursorMovable = function() {
     return api.invoke(entry(this).handle, 'cursorMovable', this.isOpenAndActive(), this._cursorFixed, this._cursorAll, this.maxItems());
@@ -669,7 +781,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
       else this.updateCursor();
     };
   Window_Selectable.prototype.update = function() {
-    Window_Base.prototype.update.call(this); this.processCursorMove(); this.processHandling();
+    Window_Base.prototype.update.call(this); ++this._stayCount; this.processCursorMove(); this.processHandling(); this.processTouch();
   };
   Window_Selectable.prototype.processCursorMove = function() {
     if (usesNativeInput(this)) return;
@@ -1764,6 +1876,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     if (method === 'isReady' && !result) SceneManager.onSceneLoading();
     return result;
   }
+  installWindowTouch(Window_Selectable, options, usesNativeInput);
   installMessageWindow({ Window_Message, ImageManager, Input }, options);
   installBattleLog({ Window_BattleLog: nativeWindows.Window_BattleLog, Window_Base, Bitmap, Sprite, Graphics, Input }, options);
   function SceneManager() { throw new Error('SceneManager is a static class'); }

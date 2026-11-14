@@ -14,13 +14,14 @@ function installMapBindings(scope, engine, session, createArray, handles) {
   map.tilesetId = function() { return invoke('tilesetId'); };
   map.tileset = function() { return scope.$dataTilesets[this.tilesetId()]; };
   map.tilesetFlags = function() { const tileset=this.tileset();return tileset?tileset.flags:createArray([]); };
-  for (const method of ['tileWidth', 'tileHeight', 'width', 'height', 'displayName', 'encounterStep', 'isLoopHorizontal', 'isLoopVertical', 'isEventRunning', 'displayX', 'displayY'])
+  for (const method of ['tileWidth', 'tileHeight', 'width', 'height', 'displayName', 'encounterStep', 'isLoopHorizontal', 'isLoopVertical', 'isEventRunning', 'displayX', 'displayY', 'battleback1Name', 'battleback2Name', 'isOverworld'])
     map[method] = function() { return invoke(method); };
   for (const field of ['displayX', 'displayY']) Object.defineProperty(map, '_' + field, {
     configurable: true,
     get() { return invoke(field); },
     set(value) { invoke(field, Number(value)); }
   });
+  map.autotileType = function(x, y, z) { return invoke('autotileType', x, y, z); };
   map.adjustX = function(x) { return invoke('adjustX', Number(x)); };
   map.adjustY = function(y) { return invoke('adjustY', Number(y)); };
   map.events = function() { return createArray(invoke('eventIds')).map(id => this.event(id)); };

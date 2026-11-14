@@ -16,6 +16,8 @@ bool Session::messageBusy() {
 Value Session::runtimeMessageField(const std::string& field, const std::optional<Value>& value) {
   bool* flag=field=="_showFast" ? &message_.showFast : field=="_lineShowFast" ? &message_.lineFast : field=="_pauseSkip" ? &message_.pauseSkip : nullptr;
   if (flag) { if (value) *flag=value->boolean(); return *flag; }
+  if (field == "pause") { if (value) message_.textPaused = value->boolean(); return message_.textPaused; }
+  if (field == "_waitCount") { if (value) message_.textWait = value->integer(); return message_.textWait; }
   if (field == "_faceName") { if (value) message_.faceName = value->text(); return message_.faceName; }
   int* target = nullptr;
   if (field == "_faceIndex") target = &message_.faceIndex;

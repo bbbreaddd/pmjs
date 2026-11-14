@@ -11,7 +11,7 @@ std::shared_ptr<RuntimeAction> Session::createRuntimeAction(const std::shared_pt
 }
 void Session::setRuntimeActionSubject(const std::shared_ptr<RuntimeAction>& action, const std::shared_ptr<RuntimeActor>& subject) {
   action->subject = subject;
-  if (!subject) { action->value.actorId = 0; action->value.subject = -1; return; }
+  if (!subject) { action->value.actorId = 0; action->value.subject = -1; synchronizeRuntimeAction(action); return; }
   action->value.enemy = subject->value().enemy;
   if (action->value.enemy) {
     const auto found = std::find_if(battle_.enemies.begin(), battle_.enemies.end(), [&](const Battler& value) { return &value == &subject->value(); });
@@ -65,6 +65,10 @@ std::shared_ptr<RuntimeAction> Session::currentRuntimeAction() {
 }
 void Session::replaceBattlerActions(const std::shared_ptr<RuntimeActor>& owner, std::vector<std::shared_ptr<RuntimeAction>> actions) {
   auto& battler = owner->value(); const auto old = battler.actions;
+  const auto partyPosition = std::find(party_.begin(), party_.end(), battler.id);
+  const auto partyIndex = static_cast<std::size_t>(partyPosition - party_.begin());
+  const bool input = owner->attached && !battler.enemy && battle_.phase == "input" && partyIndex < battle_.remainingActions.size() && !hasSpecialFlag(battler, 0) && restriction(battler) == 0;
+  const auto confirmed = input ? old.size() - std::min(old.size(), static_cast<std::size_t>(std::max(0, battle_.remainingActions[partyIndex]))) : old.size();
   for (const auto& action : actions) { if (!action) throw std::invalid_argument("battler actions require action objects"); runtimeActions_[action->identity] = action; }
   battler.actions = std::move(actions);
   if (!owner->attached) return;
@@ -74,15 +78,15 @@ void Session::replaceBattlerActions(const std::shared_ptr<RuntimeActor>& owner, 
   const bool scheduled = first != battle_.actions.end();
   battle_.actions.erase(std::remove_if(battle_.actions.begin(), battle_.actions.end(), belongs), battle_.actions.end());
   if (scheduled) {
-    std::vector<Action> replacement; for (const auto& entry : battler.actions) replacement.push_back(entry->value);
+    std::vector<Action> replacement;
+    const auto count = input ? std::min(confirmed, battler.actions.size()) : battler.actions.size();
+    for (std::size_t index = 0; index < count; ++index) replacement.push_back(battler.actions[index]->value);
     battle_.actions.insert(battle_.actions.begin() + std::min(position, battle_.actions.size()), replacement.begin(), replacement.end());
   }
-  if (!battler.enemy && battle_.phase == "input") {
-    const auto found = std::find(party_.begin(), party_.end(), battler.id); const auto index = found - party_.begin();
-    if (index < static_cast<std::ptrdiff_t>(battle_.remainingActions.size())) battle_.remainingActions[index] = static_cast<int>(battler.actions.size());
-  }
+  if (input) battle_.remainingActions[partyIndex] = static_cast<int>(battler.actions.size() - std::min(confirmed, battler.actions.size()));
 }
 void Session::makeBattlerActionsBase(const std::shared_ptr<RuntimeActor>& owner, bool basic) {
+  owner->value().actionInputIndex = 0;
   std::vector<std::shared_ptr<RuntimeAction>> actions;
   const int count = battleActionCount(owner->value());
   for (int index = 0; index < count; ++index) actions.push_back(createRuntimeAction(owner));

@@ -82,6 +82,14 @@ Value Session::invokeGameDataBase(const std::string& kind, const std::string& me
     if (method == "adjustY") return runtimeMapAdjustedPosition(0, arguments.at(0).number())[1];
     if (method == "tileWidth") return tileWidth();
     if (method == "tileHeight") return tileHeight();
+    if (method == "battleback1Name") return mapState_.battleback1Name;
+    if (method == "battleback2Name") return mapState_.battleback2Name;
+    if (method == "isOverworld") return database_["tilesets"][mapState_.tilesetId]["mode"].integer(-1) == 0;
+    if (method == "autotileType") {
+      const int x = arguments.at(0).integer(), y = arguments.at(1).integer(), z = arguments.at(2).integer();
+      const int tile = map()["data"][(z * map()["height"].integer() + y) * map()["width"].integer() + x].integer();
+      return tile >= 2048 ? (tile - 2048) / 48 : -1;
+    }
     if (method == "tilesetId") return mapState_.tilesetId;
     if (method == "width" || method == "height" || method == "displayName" || method == "encounterStep") return map()[method];
     if (method == "isLoopHorizontal") return loopHorizontal();
@@ -299,6 +307,21 @@ Value Session::invokeGameDataBase(const std::string& kind, const std::string& me
     if (method == "canLose") return battle_.canLose;
     if (method == "isAborting") return battle_.aborting;
     if (method == "isTurnEnd") return battle_.turnEnding;
+    if (method == "previousCommand") {
+      int index = battle_.actorIndex;
+      if (index < 0 || index >= static_cast<int>(battleMemberCount())) return false;
+      auto position = actors_.at(party_[index]).actions.size() - battle_.remainingActions[index];
+      if (!position) {
+        do { --index; } while (index >= 0 && (actors_.at(party_[index]).actions.empty() || hasSpecialFlag(actors_.at(party_[index]), 0) || restriction(actors_.at(party_[index])) > 0));
+        if (index < 0) { battle_.actorIndex = -1; return false; }
+        position = actors_.at(party_[index]).actions.size();
+      }
+      auto& actor = actors_.at(party_[index]); --position;
+      const auto identity = actor.actions.at(position)->identity;
+      std::erase_if(battle_.actions, [&](const Action& action) { return action.identity == identity; });
+      battle_.remainingActions[index] = static_cast<int>(actor.actions.size() - position); actor.actionInputIndex = static_cast<int>(position); battle_.actorIndex = index;
+      return true;
+    }
     if (method == "actorId") return battle_.active && battle_.actorIndex >= 0 && battle_.actorIndex < static_cast<int>(battleMemberCount()) ? party_[battle_.actorIndex] : 0;
     throw std::invalid_argument("battle operation is not bound: " + method);
   }

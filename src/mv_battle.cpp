@@ -323,6 +323,7 @@ void Session::chooseAction(int actorIndex, int id, int target, bool item) {
   const auto action = subject.actions[position];
   action->value.item = item; action->value.id = id; action->value.target = target;
   battle_.actions.push_back(action->value);
+  subject.actionInputIndex = static_cast<int>(position) + 1;
   if (--battle_.remainingActions[actorIndex] > 0) return;
   battle_.actorIndex = actorIndex + 1;
   while (battle_.actorIndex < static_cast<int>(battleMemberCount()) && !battle_.remainingActions[battle_.actorIndex]) ++battle_.actorIndex;

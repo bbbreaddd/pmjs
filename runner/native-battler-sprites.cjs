@@ -187,6 +187,7 @@ function installBattlerSprites(scope) {
   Sprite_Enemy.prototype.updateInstantCollapse = function() {
       this.opacity = 0;
   };
+  Sprite_Battler.prototype.isEffecting = function() { return false; };
   Object.defineProperty(Sprite_Actor.prototype, '_motion', { configurable: true,
     get() { return Object.values(Sprite_Actor.MOTIONS).find(motion => motion.index === this._motionIndex); },
     set(value) { this._motionIndex = value ? value.index : 1; }

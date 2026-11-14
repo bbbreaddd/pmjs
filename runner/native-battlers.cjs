@@ -80,6 +80,15 @@ function installBattlerBindings(scope, engine, session, handles, createArray, cr
     const restricted = this.isRestricted(); this._states.push(id); this.sortStates();
     if (!restricted && this.isRestricted()) this.onRestrict();
   };
+  battler.startDamagePopup = function() { invoke(this, 'damagePopup', true); };
+  battler.isDamagePopupRequested = function() { return invoke(this, 'damagePopup'); };
+  battler.clearDamagePopup = function() { invoke(this, 'damagePopup', false); };
+  battler.escape = function() { if (scope.$gameParty.inBattle()) this.hide(); this.clearActions(); this.clearStates(); scope.SoundManager.playEscape(); };
+  battler.isInputting = function() { return this._actionState === 'inputting'; };
+  battler.isActing = function() { return this._actionState === 'acting'; };
+  scope.Game_Actor.prototype.attackAnimationId1 = function() { return this.hasNoWeapons() ? this.bareHandsAnimationId() : this.weapons()[0].animationId; };
+  scope.Game_Actor.prototype.attackAnimationId2 = function() { return this.weapons()[1]?.animationId || 0; };
+  scope.Game_Actor.prototype.bareHandsAnimationId = function() { return 1; };
   scope.Game_Actor.prototype.inputtingAction = function() { return this.action(this._actionInputIndex); };
   scope.Game_Actor.prototype.selectNextCommand = function() {
     if (this._actionInputIndex < this.numActions() - 1) { ++this._actionInputIndex; return true; }

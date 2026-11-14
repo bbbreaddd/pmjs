@@ -875,7 +875,12 @@ napi_value actionField(napi_env env, napi_callback_info info) try {
 napi_value actionSubject(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info); auto& owner = session(env, args.at(0)); requireRuntimeOwner(owner, args.at(1)); RuntimeCallScope scope(owner);
   const auto action = runtimeAs<mv::RuntimeAction>(env, args[1]);
-  if (args.size() == 3) { requireRuntimeOwner(owner, args[2]); owner.session->setRuntimeActionSubject(action, runtimeAs<mv::RuntimeActor>(env, args[2])); }
+  if (args.size() == 3) {
+    napi_valuetype type; check(env, napi_typeof(env, args[2], &type), "cannot inspect action subject");
+    std::shared_ptr<mv::RuntimeActor> subject;
+    if (type != napi_null) { requireRuntimeOwner(owner, args[2]); subject = runtimeAs<mv::RuntimeActor>(env, args[2]); }
+    owner.session->setRuntimeActionSubject(action, subject);
+  }
   const auto subject = owner.session->runtimeActionSubject(action); return subject ? runtimeHandle(owner, subject) : null(env);
 } catch (const std::exception& error) { return throwException(env, error); }
 napi_value currentAction(napi_env env, napi_callback_info info) try {
@@ -1714,7 +1719,7 @@ const std::vector<mv::ClassBinding>& bindingClasses() {
   const auto battlerObject = [](RuntimeBoundObject& object) -> RuntimeBattlerSprite& { return dynamic_cast<RuntimeBattlerSprite&>(object); };
   auto setBattler = bindingMethod("setBattler", battlerObject, &RuntimeBattlerSprite::setBattler); setBattler.aliases = {{"_battler", 0}};
   auto setActor = setBattler; setActor.aliases.push_back({"_actor", 0});
-  const auto actor = [](RuntimeBoundObject& object) -> Sprite_Actor& { return dynamic_cast<RuntimeActorSprite&>(object).value; };
+  const auto actor = [](RuntimeBoundObject& object) -> Sprite_Actor& { auto& owner = dynamic_cast<RuntimeActorSprite&>(object); owner.state(); return owner.value; };
   const auto enemy = [](RuntimeBoundObject& object) -> Sprite_Enemy& { return *dynamic_cast<RuntimeEnemySprite&>(object).value; };
   const auto enemyObject = [](RuntimeBoundObject& object) -> RuntimeEnemySprite& { return dynamic_cast<RuntimeEnemySprite&>(object); };
   auto setEnemy = bindingMethod("setBattler", enemyObject, &RuntimeEnemySprite::setBattler);

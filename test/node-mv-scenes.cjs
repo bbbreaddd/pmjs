@@ -28,6 +28,8 @@ test('native scenes dispatch original methods and retain transferred sprite reso
   fs.writeFileSync(path.join(root, 'img/sv_actors/Actor.png'), png(216, 144, actorPixels));
   fs.writeFileSync(path.join(root, 'img/system/Shadow1.png'), png(48, 24, new Uint8Array(48 * 24 * 4)));
   fs.writeFileSync(path.join(root, 'img/system/Shadow2.png'), png(48, 24, new Uint8Array(48 * 24 * 4)));
+  fs.writeFileSync(path.join(root, 'img/system/States.png'), png(96, 96, new Uint8Array(96 * 96 * 4)));
+  fs.writeFileSync(path.join(root, 'img/system/IconSet.png'), png(512, 32, new Uint8Array(512 * 32 * 4)));
   for (const directory of ['enemies', 'sv_enemies']) {
     fs.mkdirSync(path.join(root, 'img', directory), { recursive: true });
     const pixels = new Uint8Array(24 * 24 * 4);
@@ -150,6 +152,62 @@ test('native scenes dispatch original methods and retain transferred sprite reso
     log.pushBaseLine(); log.addText('Next'); log.popBaseLine(); assert.deepEqual(log._lines, ['Ready']);
     log.clear(); assert.equal(log.numLines(), 0);
   });
+  await t.test('actor sprite helpers share native motion counters and draw the selected frame', async () => {
+    const actor = scope.$gameActors.actor(1), originalName = actor.battlerName();
+    try {
+      actor.setBattlerImage('Actor');
+      const sprite = new scope.Sprite_Actor(actor);
+      assert.equal(sprite._actor, actor); assert.equal(sprite._battler, actor);
+      sprite.updateBitmap();
+      for (let i = 0; i < 100 && !sprite._mainSprite.bitmap.isReady(); ++i) {
+        native.beginFrame(); engine.present(session); native.renderFrame(); scope.ImageManager.update();
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+      assert.equal(sprite._mainSprite.bitmap.isReady(), true);
+      sprite.startMotion('walk');
+      for (let i = 0; i < 12; ++i) sprite.updateMotionCount();
+      assert.equal(sprite._pattern, 1); assert.equal(sprite._motionCount, 0);
+      sprite.updateFrame(); assert.equal(sprite._mainSprite._frame.x, 24); assert.equal(sprite._mainSprite._frame.height, 24);
+      actor.select(); sprite.updateSelectionEffect(); assert.deepEqual(Array.from(sprite._mainSprite.getBlendColor()), [255, 255, 255, 64]);
+      actor.deselect(); sprite.updateSelectionEffect(); assert.deepEqual(Array.from(sprite._mainSprite.getBlendColor()), [0, 0, 0, 0]);
+      sprite.updateShadow(); assert.equal(sprite._shadowSprite.visible, true);
+      sprite.createWeaponSprite(); sprite.createStateSprite(); assert.equal(sprite.children.includes(sprite._weaponSprite), true);
+    } finally { actor.setBattlerImage(originalName); actor.deselect(); }
+  });
+  await t.test('animation timing applies flashes and restores a hidden native target', () => {
+    const parent = new scope.Sprite(), target = new scope.Sprite(new scope.Bitmap(20, 20)), animation = new scope.Sprite_Animation();
+    parent.addChild(target); parent.addChild(animation); target.x = 7; target.y = 19;
+    animation._target = target; animation._animation = { position: 0 }; animation.updatePosition();
+    assert.equal(animation.x, 7); assert.equal(animation.y, -1);
+    animation.processTimingData({ flashDuration: 2, flashScope: 1, flashColor: [255, 0, 0, 80] }); animation.update();
+    assert.equal(animation._flashDuration, 7); assert.deepEqual(Array.from(target.getBlendColor()), [255, 0, 0, 70]);
+    animation.processTimingData({ flashDuration: 1, flashScope: 3 }); assert.equal(target.visible, false);
+    for (let i = 0; i < 4; ++i) animation.update(); assert.equal(target.visible, true);
+    animation.processTimingData({ flashDuration: 1, flashScope: 2, flashColor: [10, 20, 30, 120] });
+    assert.equal(animation._screenFlashSprite.opacity, 120);
+  });
+  await t.test('selectable touch helpers hit native window rows and confirm the selected target', () => {
+    const window = new scope.Window_Selectable(10, 20, 200, 120), touch = scope.TouchInput;
+    let confirmed = 0; window.maxItems = () => 2; window.setHandler('ok', () => ++confirmed); window.activate(); window.select(0);
+    const x = 10 + window.padding + 2, y = 20 + window.padding + window.lineHeight() + 2;
+    try {
+      touch._onTrigger(x, y); touch.update(); assert.equal(window.isTouchedInsideFrame(), true);
+      window.processTouch(); assert.equal(window.index(), 1);
+      touch._onTrigger(x, y); touch.update(); window.processTouch(); assert.equal(confirmed, 1);
+      assert.equal(scope.Window_BattleActor.prototype.processTouch, scope.Window_Selectable.prototype.processTouch);
+      assert.equal(scope.Window_BattleEnemy.prototype.isTouchedInsideFrame, scope.Window_Selectable.prototype.isTouchedInsideFrame);
+    } finally { touch.clear(); }
+  });
+  await t.test('message helpers share native waits and clear the final input pause', () => {
+    const message = new scope.Window_Message();
+    scope.$gameMessage.add('Hello');
+    try {
+      message.startMessage(); assert.equal(message._textState.text, 'Hello'); assert.equal(message._textState.index, 0);
+      message.startPause(); assert.equal(message.pause, true); assert.equal(message._waitCount, 10);
+      assert.equal(message.updateWait(), true); assert.equal(message._waitCount, 9);
+      message.pause = false;
+    } finally { message.terminateMessage(); }
+  });
   await t.test('shop windows use native prices and window tones without stale values', () => {
     const previousItems = scope.$dataItems, previousTone = Array.from(scope.$gameSystem.windowTone());
     const item = { id: 1, name: 'Potion', iconIndex: 0, price: 25, itypeId: 1 };
@@ -206,6 +264,26 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       scope.$gameVariables.setValue(5, 'Name');
       assert.equal(window.convertEscapeCharacters('\\V[5]'), 'Name');
     } finally { scope.ImageManager.loadSystem = load; scope.Window_Base.prototype.drawIcon = original; if (previousSystem === undefined) delete scope.$dataSystem; else scope.$dataSystem = previousSystem; }
+  });
+  await t.test('unchanged child handles are reused and native reordering invalidates them', () => {
+    const bindings = runtime.installScenes(), api = native.mvDisplay;
+    const parent = new scope.Container(), first = new scope.Container(), second = new scope.Container(), other = new scope.Container();
+    parent.addChild(first, second);
+    const handle = bindings.displayHandle(parent), previous = api.children(handle);
+    const list = parent.children;
+    assert.equal(list[0], first);
+    assert.equal(api.children(handle, previous), previous);
+    api.invoke(handle, 'add', bindings.displayHandle(second), 0);
+    assert.notEqual(api.children(handle, previous), previous);
+    assert.equal(list[0], second);
+    assert.equal(list[1], first);
+    other.addChild(second);
+    assert.equal(list.length, 1);
+    assert.equal(list[0], first);
+    assert.equal(second.parent, other);
+    list.push(second);
+    assert.equal(other.children.length, 0);
+    assert.equal(list[1], second);
   });
   await t.test('mutable children preserve array identity and change native ordering and snapshots', () => {
     const stage = new scope.Stage(), red = new scope.Sprite(new scope.Bitmap(32, 32)), green = new scope.Sprite(new scope.Bitmap(32, 32));
