@@ -494,6 +494,15 @@ function createScriptRuntime(engine, session, options = {}) {
   for (const field of ['hp', 'mp', 'tp', 'name', 'nickname']) entityProperty(Game_Actor, actors, '_' + field, field);
   for (const field of ['hp', 'mp', 'tp']) entityProperty(Game_BattlerBase, actors, field, field, false);
   Game_Actor.prototype.actorId = function() { return engine.entityField(actors.get(this), 'id'); };
+  entityProperty(Game_Actor, actors, '_actorId', 'id');
+  entityProperty(Game_Actor, actors, '_classId', 'classId');
+  entityProperty(Game_Enemy, actors, '_enemyId', 'id');
+  Game_Actor.prototype.actor = function() { return scope.$dataActors[this._actorId]; };
+  Game_Actor.prototype.currentClass = function() { return scope.$dataClasses[this._classId]; };
+  Game_Enemy.prototype.enemy = function() { return scope.$dataEnemies[this._enemyId]; };
+  scope.DataManager = {};
+  for (const [method, table] of Object.entries({ isSkill: '$dataSkills', isItem: '$dataItems', isWeapon: '$dataWeapons', isArmor: '$dataArmors' }))
+    scope.DataManager[method] = function(item) { return item && scope[table].includes(item); };
   Game_Actor.prototype.name = function() { return this._name; };
   Game_Actor.prototype.isStateAffected = function(id) { return engine.actorState(actors.get(this), id); };
   const nativeActorMethods = {};
@@ -588,6 +597,11 @@ function createScriptRuntime(engine, session, options = {}) {
       const sprite = classBindings.wrap(handle, 'Sprite_Balloon');
       sprite.bitmap = scope.ImageManager.loadSystem(name);
       return bitmapHandle(scope.Bitmap, sprite.bitmap);
+    },
+    nativeBitmap(handle, method, args) {
+      const sprite=classBindings.wrap(handle,handle.bindingType);
+      sprite.bitmap=scope.ImageManager[method](...args);
+      return bitmapHandle(scope.Bitmap,sprite.bitmap);
     },
     enemySpriteBattler(handle, enemyHandle) {
       if (!classBindings) return false;
@@ -790,10 +804,10 @@ function createScriptRuntime(engine, session, options = {}) {
       scope.AudioManager.stopAll = function() { this.stopMe(); this.stopBgm(); this.stopBgs(); this.stopSe(); };
       scope.SoundManager = {};
       for (const method of ['preloadImportantSounds', 'playBuzzer', 'playLoad', 'playCursor', 'playOk', 'playCancel']) scope.SoundManager[method] = () => engine.managerInvoke(session, method);
-      scope.DataManager = {
+      Object.assign(scope.DataManager, {
         createGameObjects() { engine.newGame(session); scope.$gameTemp.initialize(); scope.$gameSystem.initialize(); },
         setupNewGame() { this.createGameObjects(); }
-      };
+      });
       Game_Player.prototype.reserveTransfer = function(mapId, x, y, direction = 0, fadeType = 0) {
         if (this !== scope.$gamePlayer) throw new Error('Detached player transfer is not bound');
         engine.playerTransfer(session, 'reserve', mapId, x, y, direction, fadeType);

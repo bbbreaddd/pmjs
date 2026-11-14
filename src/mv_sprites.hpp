@@ -289,6 +289,7 @@ class Sprite_Button : public Sprite_Base {
   void setHotFrame(int x, int y, int w, int h);
   void updateFrame();
   bool updateTouch(bool triggered, bool released, double touchX, double touchY, bool parentVisible = true);
+  bool updateTouchState(bool triggered, bool released, bool hit, bool parentVisible);
   bool isButtonTouched(double touchX, double touchY) const;
  private:
   bool hasColdFrame_ = false, hasHotFrame_ = false;
@@ -320,6 +321,9 @@ class Sprite_StateIcon : public Sprite_Base {
   void update(const Session& session);
   void advance(const Session& session, std::uint64_t ticks);
   static std::vector<int> allIcons(const Battler& battler, const Session& session);
+  std::uint64_t advanceCount(std::uint64_t ticks, int wait = 40);
+  void updateIcon(const Session& session, std::uint64_t changes = 1);
+  void updateFrame(int width = 32, int height = 32);
 };
 
 class Sprite_StateOverlay : public Sprite_Base {

@@ -1,5 +1,6 @@
 #include "mv_generated_bindings.hpp"
 #include "mv_core_display.hpp"
+#include "mv_bound_sprites.hpp"
 
 namespace pmjs::mv {
 bool GeneratedRuntimeObject::dispatchOverride(const std::string& method) {
@@ -23,6 +24,15 @@ std::shared_ptr<GeneratedRuntimeObject> GeneratedRuntimeObject::nativeLease() {
   ++nativeOwners_; active=true;
   auto self=shared_from_this();
   return {this,[self](GeneratedRuntimeObject*) { if (--self->nativeOwners_==0) self->active=false; }};
+}
+Session& GeneratedRuntimeObject::checkedSession() const {
+  if (!context || hooks.expired()) throw std::runtime_error("native sprite session has ended");
+  return *context;
+}
+std::shared_ptr<core::PixelBitmap> GeneratedRuntimeObject::bitmap(const std::string& method,const Value::Array& arguments) {
+  const auto owner=hooks.lock();
+  if (!owner || !owner->nativeBitmap) throw std::runtime_error("native bitmap services are unavailable");
+  return owner->nativeBitmap(shared_from_this(),method,arguments);
 }
 namespace {
 Value audioBufferMetadata(const core::WebAudio& audio) {
@@ -65,6 +75,12 @@ Value audioBufferMetadata(const core::WebAudio& audio) {
 #define MV_BIND_RESET(Name, Native) \
     void Native() override { if (!dispatchOverride(#Name)) base_##Native(); } \
     void base_##Native() { NativeType::Native(); clearListeners(); }
+#define MV_BIND_CONTEXT() \
+    Session& modelSession() const override { return GeneratedRuntimeObject::checkedSession(); } \
+    std::shared_ptr<core::PixelBitmap> modelBitmap(const std::string& method,const Value::Array& arguments) override { return GeneratedRuntimeObject::bitmap(method,arguments); }
+#define MV_BIND_OBJECT1(Name, Native, Arg, Parameter) \
+    void Native(Arg Parameter) override { NativeType::Native(Parameter); } \
+    void base_##Native(Arg Parameter) { NativeType::Native(Parameter); }
 #define MV_BIND_FIELD(Name, Native)
 #define MV_BIND_POINT(Name, Native)
 #define MV_BIND_DISPLAY(Name, Native)
@@ -75,6 +91,8 @@ Value audioBufferMetadata(const core::WebAudio& audio) {
 #define MV_BIND_STATIC1(Name, Native, Result, Arg, Default)
 #define MV_BIND_END() };
 #include "mv_binding_schema.def"
+#undef MV_BIND_CONTEXT
+#undef MV_BIND_OBJECT1
 #undef MV_BIND_OBJECT
 #undef MV_BIND_INITIALIZE1
 #undef MV_BIND_VOID1
@@ -101,6 +119,8 @@ std::vector<ClassBinding> generatedClassBindings() {
     const auto get = [](RuntimeBoundObject& object) -> Type& { return dynamic_cast<Type&>(object); }; \
     ClassBinding binding{#Name, #Parent, #Native, [] { return std::make_shared<Type>(); }, {}, {}}; \
     binding.generated = true;
+#define MV_BIND_CONTEXT()
+#define MV_BIND_OBJECT1(Name, Native, Arg, Parameter) MV_BIND_VOID(Name,Native)
 #define MV_BIND_OBJECT(Name, Native, Parent, ...) MV_BIND_CLASS(Name, Native, Parent, __VA_ARGS__)
 #define MV_BIND_VOID(Name, Native) binding.methods.push_back(bindingMethod(#Name, get, &Type::base_##Native));
 #define MV_BIND_INITIALIZE(Native) \
@@ -135,6 +155,8 @@ std::vector<ClassBinding> generatedClassBindings() {
     binding.displays.push_back(bindingDisplayField(#Name, [get](RuntimeBoundObject& object) -> auto& { return get(object).Native; }));
 #define MV_BIND_END() result.push_back(std::move(binding)); }
 #include "mv_binding_schema.def"
+#undef MV_BIND_CONTEXT
+#undef MV_BIND_OBJECT1
 #undef MV_BIND_OBJECT
 #undef MV_BIND_INITIALIZE1
 #undef MV_BIND_VOID1
@@ -165,6 +187,6 @@ std::shared_ptr<GeneratedRuntimeObject> createGeneratedObject(const std::string&
   throw std::invalid_argument("generated native class is not bound: " + name);
 }
 std::shared_ptr<RuntimeBoundObject> Session::createGeneratedBinding(const std::string& name) {
-  return createGeneratedObject(name, runtimeHooks_);
+  auto object=createGeneratedObject(name, runtimeHooks_); object->context=this; return object;
 }
 }

@@ -142,6 +142,7 @@ struct RuntimeHooks {
   std::function<std::optional<Value>(const std::shared_ptr<RuntimeObject>&, const std::string&, const Value::Array&)> boundMethod;
   std::function<void(const std::shared_ptr<RuntimeObject>&, std::uint32_t)> boundListener;
   std::function<std::shared_ptr<core::WebAudio>(const std::string&, const std::string&)> audioBuffer;
+  std::function<std::shared_ptr<core::PixelBitmap>(const std::shared_ptr<RuntimeObject>&,const std::string&,const Value::Array&)> nativeBitmap;
   std::function<std::shared_ptr<core::PixelBitmap>(const std::shared_ptr<RuntimeObject>&, const std::string&)> systemBitmap;
 };
 

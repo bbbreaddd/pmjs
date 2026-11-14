@@ -9,6 +9,7 @@ namespace {
 using namespace mv::core;
 struct BoundGlitchFilter : Container { std::shared_ptr<GlitchFilter> value = std::make_shared<GlitchFilter>(); };
 struct BoundSprite : Sprite {
+  mv::Sprite_Button button;
   struct Animation {
     mv::Value source;
     mv::Sprite_Animation state;
@@ -108,6 +109,12 @@ napi_value field(napi_env env, napi_callback_info info) try {
   else if (name == "visible") flag = &node.visible; else if (name == "renderable") flag = &node.renderable;
   else if (name == "z") integer = &node.z;
   auto sprite = std::dynamic_pointer_cast<Sprite>(owner.node);
+  if (name=="buttonTouching") {
+    const auto button=std::dynamic_pointer_cast<BoundSprite>(owner.node);
+    if (!button) throw std::invalid_argument("button state requires a sprite");
+    if (args.size()==3) button->button.touching=asBoolean(env,args[2]);
+    return boolean(env,button->button.touching);
+  }
   auto tiling = std::dynamic_pointer_cast<TilingSprite>(owner.node);
   auto window = std::dynamic_pointer_cast<BoundWindow>(owner.node);
   if (auto layer = std::dynamic_pointer_cast<WindowLayer>(owner.node)) {
@@ -185,6 +192,25 @@ napi_value invoke(napi_env env, napi_callback_info info) try {
   auto window = std::dynamic_pointer_cast<BoundWindow>(owner.node);
   auto scene = std::dynamic_pointer_cast<mv::ScriptScene>(owner.node);
   auto scalar = [&](std::size_t index) { if (index >= args.size()) throw std::invalid_argument("missing display argument"); return asNumber(env, args[index]); };
+  if (method=="canvasLocalX" || method=="canvasLocalY") {
+    double value=scalar(2); for (auto* current=&node;current;current=current->parent) value-=method=="canvasLocalX" ? current->position.x : current->position.y;
+    return number(env,value);
+  }
+  if (method=="buttonCold" || method=="buttonHot" || method=="buttonFrame" || method=="buttonTouch" || method=="buttonHit") {
+    const auto target=std::dynamic_pointer_cast<BoundSprite>(owner.node);
+    if (!target) throw std::invalid_argument("button operation requires a sprite");
+    auto& button=target->button;
+    if (method=="buttonCold") button.setColdFrame(scalar(2),scalar(3),scalar(4),scalar(5));
+    else if (method=="buttonHot") button.setHotFrame(scalar(2),scalar(3),scalar(4),scalar(5));
+    else if (method=="buttonFrame") { button.updateFrame(); const auto& f=button.frame; target->setFrame(f.x,f.y,f.width,f.height); }
+    else if (method=="buttonTouch") return boolean(env,button.updateTouchState(asBoolean(env,args.at(2)),asBoolean(env,args.at(3)),asBoolean(env,args.at(4)),asBoolean(env,args.at(5))));
+    else {
+      double x=scalar(2),y=scalar(3); for (auto* current=&node;current;current=current->parent) { x-=current->position.x; y-=current->position.y; }
+      button.visible=node.visible; button.position={}; button.frame={0,0,int(target->width()),int(target->height())};
+      return boolean(env,button.isButtonTouched(x,y));
+    }
+    return undefined(env);
+  }
   if (method == "add" || method == "remove") {
     if (args.size() < 3) throw std::invalid_argument("missing display child");
     auto& child = display(env, args[2]); if (child.services != owner.services) throw std::invalid_argument("display child belongs to another runtime");

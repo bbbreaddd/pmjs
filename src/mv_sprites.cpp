@@ -588,11 +588,14 @@ void Sprite_Button::updateFrame() {
 }
 
 bool Sprite_Button::updateTouch(bool triggered, bool released, double touchX, double touchY, bool parentVisible) {
+  return updateTouchState(triggered,released,isButtonTouched(touchX,touchY),parentVisible);
+}
+bool Sprite_Button::updateTouchState(bool triggered,bool released,bool hit,bool parentVisible) {
   updateFrame();
   bool clicked = false;
   if (visible && parentVisible) {
-    if (triggered && isButtonTouched(touchX, touchY)) touching = true;
-    if (touching && (released || !isButtonTouched(touchX, touchY))) {
+    if (triggered && hit) touching = true;
+    if (touching && (released || !hit)) {
       touching = false;
       clicked = released;
     }
@@ -647,10 +650,14 @@ std::vector<int> Sprite_StateIcon::allIcons(const Battler& value, const Session&
 }
 
 void Sprite_StateIcon::advance(const Session& session, std::uint64_t ticks) {
-  const auto remainder = animationCount + ticks % 40;
-  const auto changes = ticks / 40 + remainder / 40;
-  animationCount = static_cast<int>(remainder % 40);
-  if (!changes) return;
+  if (const auto changes=advanceCount(ticks)) { updateIcon(session,changes); updateFrame(); }
+}
+std::uint64_t Sprite_StateIcon::advanceCount(std::uint64_t ticks,int wait) {
+  const auto period=static_cast<std::uint64_t>(std::max(1,wait));
+  const auto remainder=animationCount+ticks%period,changes=ticks/period+remainder/period;
+  animationCount=static_cast<int>(remainder%period); return changes;
+}
+void Sprite_StateIcon::updateIcon(const Session& session,std::uint64_t changes) {
   const auto icons = battler && battler->hp > 0 && !battler->hidden ? allIcons(*battler, session) : std::vector<int>{};
   if (icons.empty()) {
     animationIndex = 0;
@@ -662,7 +669,9 @@ void Sprite_StateIcon::advance(const Session& session, std::uint64_t ticks) {
     animationIndex = static_cast<int>((animationIndex + (changes - 1) % icons.size()) % icons.size());
     iconIndex = icons[animationIndex];
   }
-  frame = {iconIndex % 16 * 32, iconIndex / 16 * 32, 32, 32};
+}
+void Sprite_StateIcon::updateFrame(int width,int height) {
+  frame = {iconIndex % 16 * width, iconIndex / 16 * height, width, height};
 }
 
 void Sprite_StateOverlay::setup(const Battler* b) {

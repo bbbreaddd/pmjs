@@ -417,6 +417,9 @@ napi_value connectRuntime(napi_env env, napi_callback_info info) try {
   hooks->systemBitmap = [&owner](const auto& object, const std::string& name) {
     return bitmapForRuntime(owner.env, callRuntime(owner, "systemBitmap", {runtimeHandle(owner, object), string(owner.env, name)}), owner.owner->core);
   };
+  hooks->nativeBitmap = [&owner](const auto& object,const std::string& method,const mv::Value::Array& arguments) {
+    return bitmapForRuntime(owner.env,callRuntime(owner,"nativeBitmap",{runtimeHandle(owner,object),string(owner.env,method),writeValue(owner.env,arguments)}),owner.owner->core);
+  };
   hooks->actorLifecycle = [&owner](const auto& object, const std::string& method) {
     return asBoolean(owner.env, callRuntime(owner, "actorLifecycle", {runtimeHandle(owner, object), string(owner.env, method)}));
   };
@@ -998,7 +1001,8 @@ napi_value entityField(napi_env env, napi_callback_info info) try {
     else if (field == "transparent") flag = &value.transparent; else if (field == "characterName") text = &value.characterName;
   } else if (auto actor = std::dynamic_pointer_cast<mv::RuntimeActor>(object)) {
     auto& value = actor->value();
-    if (field == "id") return number(env, value.id);
+    if (field == "id") integer = &value.id;
+    else if (field == "classId") integer = &value.classId;
     if (field == "enemy") return boolean(env, value.enemy);
     if (field == "screenX") scalar = &value.screenX; else if (field == "screenY") scalar = &value.screenY;
     if (field == "hp") integer = &value.hp; else if (field == "mp") integer = &value.mp; else if (field == "tp") integer = &value.tp;

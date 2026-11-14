@@ -104,6 +104,42 @@ test('native actor skill initialization dispatches script extensions for initial
   assert.equal(calls, 2); assert.deepEqual(second.equipped, [0, 0, 0, 0]);
 });
 
+test('battler database lookups retain script object identity and native class changes', t => {
+  const data = fixture([command(321, [1, 2, false])]);
+  data.classes.push({ ...data.classes[1], name: 'Second class' });
+  const session = api.create(data); t.after(() => api.dispose(session));
+  const runtime = createScriptRuntime(api, session);
+  const { scope } = runtime;
+  scope.$dataActors = data.actors; scope.$dataClasses = data.classes;
+  api.newGame(session);
+  const actor = scope.$gameActors.actor(1);
+  assert.equal(actor.actor(), data.actors[1]);
+  assert.equal(actor.currentClass(), data.classes[1]);
+  const original = scope.Game_Actor.prototype.currentClass;
+  let calls = 0;
+  scope.Game_Actor.prototype.currentClass = function() { ++calls; return original.call(this); };
+  api.step(session, {});
+  assert.equal(actor.currentClass(), data.classes[2]); assert.equal(calls, 1);
+  actor._classId = 1;
+  assert.equal(api.save(session).actors._data[1]._classId, 1);
+  data.actors[1].pluginValue = 42;
+  assert.equal(actor.actor().pluginValue, 42);
+});
+
+test('database type checks use table identity and preserve null results', t => {
+  const data = fixture([]);
+  const session = api.create(data); t.after(() => api.dispose(session));
+  const runtime = createScriptRuntime(api, session);
+  const manager = runtime.scope.DataManager;
+  for (const [method, key] of [['isSkill', 'skills'], ['isItem', 'items'], ['isWeapon', 'weapons'], ['isArmor', 'armors']]) {
+    runtime.scope['$data' + key[0].toUpperCase() + key.slice(1)] = data[key];
+    assert.equal(manager[method](data[key][1]), true);
+    assert.equal(manager[method]({ ...data[key][1] }), false);
+    assert.equal(manager[method](null), null);
+    assert.equal(manager[method](undefined), undefined);
+  }
+});
+
 test('party dictionaries expose native inventory and import category snapshots atomically', t => {
   const { scope, step, session } = create(t, [command(126, [1, 0, 0, 3])]);
   step();
@@ -864,6 +900,7 @@ test('native battle actions dispatch hit and evasion aliases with retained battl
   const session = api.create(data); t.after(() => api.dispose(session));
   const { scope } = createScriptRuntime(api, session); api.newGame(session);
   scope.$dataSkills = data.skills; scope.$dataItems = data.items;
+  scope.$dataEnemies = data.enemies;
   const hit = scope.Game_Action.prototype.itemHit, eva = scope.Game_Action.prototype.itemEva;
   let enemy, calls = 0;
   scope.Game_Action.prototype.itemHit = function(target) {
@@ -871,6 +908,8 @@ test('native battle actions dispatch hit and evasion aliases with retained battl
     assert.equal(this.subject(), scope.$gameActors.actor(1));
     assert.ok(target instanceof scope.Game_BattlerBase);
     assert.equal(target.isEnemy(), true); assert.equal(target.isActor(), false);
+    assert.equal(target.enemy(), data.enemies[1]);
+    assert.equal(target._enemyId, 1);
     assert.equal(hit.call(this, target), 0.5);
     return 1;
   };

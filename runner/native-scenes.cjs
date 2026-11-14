@@ -142,6 +142,24 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   });
   function GlitchFilter() { attach(this, 'glitch'); }
   for (const field of ['slices', 'offset', 'direction', 'fillMode', 'seed', 'enabled']) prop(GlitchFilter, field);
+  Container.prototype.canvasToLocalX = function(x) { return api.invoke(entry(this).handle, 'canvasLocalX', x); };
+  Container.prototype.canvasToLocalY = function(y) { return api.invoke(entry(this).handle, 'canvasLocalY', y); };
+  function Sprite_Button() { this.initialize.apply(this, arguments); }
+  inherit(Sprite_Button, Sprite);
+  Sprite_Button.prototype.initialize = function() { Sprite.prototype.initialize.call(this); this._clickHandler = null; this._touching = false; };
+  prop(Sprite_Button, '_touching', 'buttonTouching');
+  Sprite_Button.prototype.setColdFrame = function(x, y, w, h) { api.invoke(entry(this).handle, 'buttonCold', x, y, w, h); };
+  Sprite_Button.prototype.setHotFrame = function(x, y, w, h) { api.invoke(entry(this).handle, 'buttonHot', x, y, w, h); };
+  Sprite_Button.prototype.updateFrame = function() { api.invoke(entry(this).handle, 'buttonFrame'); };
+  Sprite_Button.prototype.setClickHandler = function(handler) { this._clickHandler = handler; };
+  Sprite_Button.prototype.callClickHandler = function() { if (this._clickHandler) this._clickHandler(); };
+  Sprite_Button.prototype.isActive = function() { for (let node = this; node; node = node.parent) if (!node.visible) return false; return true; };
+  Sprite_Button.prototype.isButtonTouched = function() { const touch = options.touchInput(); return api.invoke(entry(this).handle, 'buttonHit', touch.x, touch.y); };
+  Sprite_Button.prototype.updateTouch = function() {
+    const touch = options.touchInput();
+    if (api.invoke(entry(this).handle, 'buttonTouch', touch.isTriggered(), touch.isReleased(), this.isButtonTouched(), this.isActive())) this.callClickHandler();
+  };
+  Sprite_Button.prototype.update = function() { Sprite.prototype.update.call(this); this.updateFrame(); this.updateTouch(); };
   function Sprite_Base() { this.initialize.apply(this, arguments); }
   inherit(Sprite_Base, Sprite);
   Sprite_Base.prototype.initialize = function() { Sprite.prototype.initialize.call(this); };
@@ -609,7 +627,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     isNextScene(type) { return this._nextScene?.constructor === type; },
     get stageHandle() { return currentRoot ? entry(currentRoot).handle : null; }
   };
-  return { Container, Stage: Container, Sprite, Sprite_Base, Sprite_Animation, TilingSprite, ScreenSprite, Window, WindowLayer, Window_Base, Window_Selectable, Window_Command, Window_MenuCommand, Window_Options, Window_Message,
+  return { Container, Stage: Container, Sprite, Sprite_Button, Sprite_Base, Sprite_Animation, TilingSprite, ScreenSprite, Window, WindowLayer, Window_Base, Window_Selectable, Window_Command, Window_MenuCommand, Window_Options, Window_Message,
     Scene_Base, Scene_Battle, Scene_MenuBase, Scene_Menu, Scene_Options, Scene_Gameover, Scene_File, Scene_Load, Scene_ItemBase, Scene_Item, Scene_Skill, Scene_Boot, Scene_Title, Scene_Map, SceneManager, Graphics, Input,
     GlitchFilter,
     displayHandle: object => entry(object).handle,

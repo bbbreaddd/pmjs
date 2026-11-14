@@ -9,6 +9,9 @@ struct GeneratedRuntimeObject : RuntimeBoundObject, std::enable_shared_from_this
   void listen(const BindingEvent& event, std::uint32_t token);
   void clearListeners();
   std::shared_ptr<GeneratedRuntimeObject> nativeLease();
+  Session* context = nullptr;
+  Session& checkedSession() const;
+  std::shared_ptr<core::PixelBitmap> bitmap(const std::string& method,const Value::Array& arguments);
   virtual void initializeNative() = 0;
  private:
   std::size_t nativeOwners_ = 0;
