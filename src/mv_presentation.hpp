@@ -90,6 +90,8 @@ class Presentation {
   void goldWindow(int x, int y);
   std::shared_ptr<Window_Gold> goldWindow_;
   double textEx(const std::string& value, double x, double y, int width = 0, int size = 28, bool prepared = false, bool measureOnly = false);
+  std::string messageTextLayout(const std::string& value, bool face);
+  double messageTextWidth(bool face) const;
   void text(const std::string& value, double x, double y, int width = 0, int color = 0, int size = 28, bool right = false, float opacity = 1);
   void face(int actorId, int x, int y, float opacity = 1);
   void menuStatus(const Rect& bounds, int topRow, int selected, bool active, bool all = false, bool fixed = false);

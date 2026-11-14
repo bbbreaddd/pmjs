@@ -55,12 +55,13 @@ int main() {
     require(messages.events()[0].page == 1, "self-switch refresh changes active page");
     auto battleData = database();
     auto& battleRoot = std::get<Object>(battleData.data);
+    battleRoot["states"] = Array{Value{}, Object{{"id", 1}, {"restriction", 4}}};
     std::get<Object>(battleRoot["system"].data)["partyMembers"] = Array{1, 2};
     std::get<Object>(battleRoot["system"].data)["skillTypes"] = Array{"", "Magic"};
     battleRoot["actors"] = Array{Value{}, Object{{"classId", 1}, {"initialLevel", 1}}, Object{{"classId", 1}, {"initialLevel", 1}}};
     Array params; for (int i = 0; i < 8; ++i) params.emplace_back(Array{0, 100});
     battleRoot["classes"] = Array{Value{}, Object{{"params", params}, {"traits", Array{Object{{"code", 41}, {"dataId", 1}, {"value", 1}}}}}};
-    battleRoot["skills"] = Array{Value{}, Object{{"occasion", 1}, {"scope", 1}}, Object{{"occasion", 1}, {"scope", 11}}};
+    battleRoot["skills"] = Array{Value{}, Object{{"id", 1}, {"stypeId", 1}, {"occasion", 1}, {"scope", 1}}, Object{{"id", 2}, {"stypeId", 0}, {"occasion", 1}, {"scope", 11}}};
     battleRoot["enemies"] = Array{Value{}, Object{{"params", Array{100, 0, 1, 1, 1, 1, 1, 1}}, {"actions", Array{}}}};
     battleRoot["troops"] = Array{Value{}, Object{{"members", Array{Object{{"enemyId", 1}}}}}};
     Session battle(battleData); battle.newGame(); battle.startBattle(1, false, false);
@@ -77,13 +78,13 @@ int main() {
     press({0, false, true});
     require(battle.ui().category == 0 && battle.ui().cursor == 1, "skill cancel returns to the selected command");
     press({2}); press({0, true});
-    require(battle.battle().actorIndex == 1 && battle.battle().actions.size() == 1, "guard advances to next actor");
+    require(battle.battle().actorIndex == 1 && std::count_if(battle.battle().actions.begin(), battle.battle().actions.end(), [](const auto& action) { return !action.enemy; }) == 1, "guard advances to next actor");
     press({0, false, true});
     require(battle.battle().actorIndex == 0 && battle.ui().category == 0, "cancel revisits previous actor");
     press({0, false, true});
     require(battle.ui().category == 4, "cancel from first actor returns to party commands");
     press({0, true}); press({2}); press({2}); press({0, true});
-    require(battle.battle().actorIndex == 1 && battle.battle().actions.size() == 1, "revising an actor replaces its earlier action");
+    require(battle.battle().actorIndex == 1 && std::count_if(battle.battle().actions.begin(), battle.battle().actions.end(), [](const auto& action) { return !action.enemy; }) == 1, "revising an actor replaces its earlier action");
     auto& battleSystem = std::get<Object>(battleRoot["system"].data);
     battleSystem["partyMembers"] = Array{1};
     battleSystem["terms"] = Object{{"messages", Object{{"victory", "%1 won!"}, {"obtainItem", "Found %1!"}}}};
@@ -124,7 +125,7 @@ int main() {
     };
     Array regParams; for (int i = 0; i < 8; ++i) regParams.emplace_back(Array{0, i == 2 ? 0 : 100});
     mvRegRoot["classes"] = Array{Value{}, Object{{"params", regParams}, {"traits", Array{}}}};
-    mvRegRoot["skills"] = Array{Value{}, Object{{"occasion", 1}, {"scope", 1}, {"successRate", 100}, {"hitType", 0}, {"damage", Object{{"type", 1}, {"elementId", -1}, {"formula", "a.atk * 10"}, {"variance", 0}}}}};
+    mvRegRoot["skills"] = Array{Value{}, Object{{"id", 1}, {"stypeId", 1}, {"occasion", 1}, {"scope", 1}, {"successRate", 100}, {"hitType", 0}, {"damage", Object{{"type", 1}, {"elementId", -1}, {"formula", "a.atk * 10"}, {"variance", 0}}}}};
     mvRegRoot["enemies"] = Array{Value{}, Object{{"params", Array{1000, 0, 1, 1, 1, 1, 1, 1}}, {"traits", Array{Object{{"code", 11}, {"dataId", 1}, {"value", 2.0}}}}, {"actions", Array{}}}};
     mvRegRoot["troops"] = Array{Value{}, Object{{"members", Array{Object{{"enemyId", 1}}}}}};
     auto& mvRegMap = std::get<Object>(std::get<Object>(mvRegRoot["maps"].data)["1"].data);
@@ -143,7 +144,7 @@ int main() {
     for (int i = 0; i < 10; ++i) mvReg.step({});
     require(mvReg.player().walkAnime && !mvReg.events()[0].character.walkAnime,
             "player walkAnime starts true while event page matches missing page.walkAnime");
-    require(mvReg.message().busy && mvReg.message().lines.size() == 2 && mvReg.message().pageEnd() == 1,
+    require(mvReg.message().busy && mvReg.message().lines.size() == 1 && mvReg.message().expandedLines.size() == 2 && mvReg.message().pageEnd() == 1,
             "\\f splits show text into separate message pages");
     mvReg.acknowledge(); mvReg.step({});
     require(mvReg.message().busy && mvReg.message().firstLine == 1, "page break advances to second page");

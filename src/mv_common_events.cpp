@@ -22,8 +22,7 @@ void Session::updateCommonEvents() {
     if (found == commonInterpreters_.end()) continue;
     const auto context = found->second;
     if (!context->running) {
-      *context = {}; context->mapId = mapId_;
-      context->list = database_["commonEvents"][id]["list"].array(); context->running = true;
+      setupInterpreter(*context, database_["commonEvents"][id]["list"].array());
     }
     advanceInterpreter(*context);
   }

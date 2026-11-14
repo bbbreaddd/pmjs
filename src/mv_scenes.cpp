@@ -352,7 +352,7 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
     if (ui_.category == 1) {
       const auto endCommands = Window_GameEnd::makeCommands(*this);
       cursor(static_cast<int>(endCommands.size()));
-      if (cancel || (ok && endCommands[ui_.cursor].symbol == "cancel")) { ui_.category = 0; ui_.cursor = ui_.commandCursor; sound(2); }
+      if (cancel || (ok && endCommands[ui_.cursor].symbol == "cancel")) { ui_.category = 0; ui_.cursor = ui_.commandCursor; sound(ok ? 1 : 2); }
       else if (ok) { sound(1); beginSceneTransition(Scene::title, 24); }
       return;
     }
@@ -407,7 +407,8 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
     if (!ok) return;
     const auto& selected = commands[ui_.cursor];
     if (!selected.enabled) { sound(3); return; }
-    if (selected.symbol == "fight") { ui_.category = 0; ui_.cursor = 0; ui_.actor = battle_.actorIndex; ui_.commandActor = -1; sound(1); }
+    sound(1);
+    if (selected.symbol == "fight") { ui_.category = 0; ui_.cursor = 0; ui_.actor = battle_.actorIndex; ui_.commandActor = -1; }
     else if (selected.symbol == "escape") {
       SoundManager::playEscape(*this);
       if (battle_.preemptive || random() < battle_.escapeRatio) finishBattle(1);
@@ -441,7 +442,7 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
         int previous = battle_.actorIndex - 1;
         while (previous >= 0) {
           const auto& prevActor = actors_.at(party_[previous]);
-          if (prevActor.hp > 0 && restriction(prevActor) == 0 && !hasSpecialFlag(prevActor, 0) && popActorAction(previous)) break;
+          if (prevActor.isAlive() && restriction(prevActor) == 0 && !hasSpecialFlag(prevActor, 0) && popActorAction(previous)) break;
           --previous;
         }
         if (previous < 0) { ui_.category = 4; }
@@ -595,6 +596,7 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
     else if (ok) {
       if (inBattle) {
         if (targets.empty()) { sound(3); return; }
+        sound(1);
         chooseAction(battle_.actorIndex, ui_.pendingId, targets[ui_.cursor], ui_.itemAction); ui_.commandActor = -1;
       }
       else {
@@ -603,7 +605,7 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
       }
       if (!inBattle) {
         if (reservedCommonEvent_ > 0) { SceneManager::clearStack(*this); SceneManager::gotoScene(*this, Scene::map); return; }
-        if (!party_.empty() && std::all_of(party_.begin(), party_.end(), [&](int id) { return actors_.at(id).hp <= 0; })) { openGameOver(); return; }
+        if (!party_.empty() && std::none_of(party_.begin(), party_.end(), [&](int id) { return actors_.at(id).isAlive(); })) { openGameOver(); return; }
       }
       if (inBattle) { ui_.targeting = false; ui_.category = 0; ui_.cursor = 0; }
     }
@@ -639,6 +641,7 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
       const auto& entry = database_[skill ? "skills" : "items"][entries[ui_.cursor]];
       const bool enabled = skill ? Window_SkillList::isEnabled(*this,party_[ui_.actor],entries[ui_.cursor]) : Window_ItemList::isEnabled(*this,entries[ui_.cursor]);
       if (!enabled) { sound(3); return; }
+      sound(1);
       ui_.target = inBattle ? ui_.category : -1; ui_.listCursor = ui_.cursor;
       ui_.pendingId = entries[ui_.cursor]; ui_.itemAction = !skill;
       if (skill) { auto& actor = actors_.at(party_[ui_.actor]); (inBattle ? actor.lastBattleSkill : actor.lastMenuSkill) = ui_.pendingId; }
@@ -647,7 +650,7 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
       if (!inBattle && scope <= 6) {
         if (!useItemUntargeted(ui_.pendingId, !ui_.itemAction)) { sound(3); return; }
         if (reservedCommonEvent_ > 0) { SceneManager::clearStack(*this); SceneManager::gotoScene(*this, Scene::map); return; }
-        if (!party_.empty() && std::all_of(party_.begin(), party_.end(), [&](int id) { return actors_.at(id).hp <= 0; })) { openGameOver(); return; }
+        if (!party_.empty() && std::none_of(party_.begin(), party_.end(), [&](int id) { return actors_.at(id).isAlive(); })) { openGameOver(); return; }
       } else if (inBattle && scope != 1 && scope != 7 && scope != 9) {
         chooseAction(battle_.actorIndex, ui_.pendingId, scope == 11 ? battle_.actorIndex : -1, ui_.itemAction); ui_.commandActor = -1;
         ui_.category = 0; ui_.cursor = 0;
@@ -660,7 +663,7 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
     }
   }
   if (ui_.scene == Scene::shop) {
-    updateShop(ok, cancel, direction);
+    updateShop(ok, cancel, direction, pageUp, pageDown);
     return;
   }
   if (ui_.scene == Scene::name) {

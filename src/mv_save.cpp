@@ -54,11 +54,13 @@ Object& object(Value& value) { return std::get<Object>(value.data); }
 Value writeInterpreter(const Interpreter& context, int depth = 0) {
   const int target = context.waitingRoute && *context.waitingRoute == 0 ? context.eventId : context.waitingRoute.value_or(-1);
   const Value reference = context.waitingRoute ? Value(Object{{"@r", target < 0 ? "/player" : "/map/_events/" + std::to_string(target)}}) : Value{};
+  const Value parameters = context.runtime->parameterIndex < 0 ? context.runtime->parameterList->root :
+    context.runtime->parameterList->resolve({std::to_string(context.runtime->parameterIndex), "parameters"});
   return instance("Game_Interpreter", {{"_depth", depth}, {"_mapId", context.mapId}, {"_eventId", context.eventId},
     {"_list", context.running ? Value(context.list) : Value{}}, {"_index", context.index}, {"_waitCount", context.wait},
     {"_waitMode", context.waitingRoute ? "route" : context.waitingScroll ? "scroll" : context.waitingGather ? "gather" : context.waitingVideo ? "video" : context.waitingEffect ? "animation" : context.waitingAction ? "action" : context.waitingMessage ? "message" : ""}, {"_character", reference},
     {"_childInterpreter", context.children.empty() ? Value{} : writeInterpreter(context.children.front(), depth + 1)},
-    {"_comments", ""}, {"_branch", entries(context.branches)}, {"_params", Array{}}, {"_indent", 0}, {"_frameCount", 0}, {"_freezeChecker", 0}});
+    {"_comments", context.runtime->comments}, {"_branch", entries(context.branches)}, {"_params", parameters}, {"_indent", context.runtime->indent}, {"_frameCount", 0}, {"_freezeChecker", 0}});
 }
 Interpreter readInterpreter(const Value& value, int depth = 0) {
   if (depth >= 100) throw std::invalid_argument("saved interpreter nesting limit exceeded");
@@ -70,7 +72,11 @@ Interpreter readInterpreter(const Value& value, int depth = 0) {
   if (result.index < 0 || (result.running && result.index > static_cast<int>(result.list.size()) + 1) || result.wait < 0)
     throw std::invalid_argument("invalid saved interpreter position");
   if (const auto* values = std::get_if<Object>(&value["_branch"].data)) for (const auto& [key, branch] : *values)
-    if (!branch.null()) result.branches[std::stoi(key)] = std::holds_alternative<bool>(branch.data) ? int(branch.boolean()) : branch.integer();
+    result.branches[std::stoi(key)] = branch;
+  auto parameters = std::make_shared<RuntimeCommandList>();
+  parameters->root = value["_params"].null() ? Value(Array{}) : value["_params"];
+  result.runtime->parameterList = parameters; result.runtime->indent = value["_indent"].integer();
+  result.runtime->comments = value["_comments"].text();
   if (!value["_childInterpreter"].null()) result.children.push_back(readInterpreter(value["_childInterpreter"], depth + 1));
   if (value["_waitMode"].text() == "route") {
     const auto& target = value["_character"];
@@ -141,7 +147,7 @@ Value Session::save() {
   for (const auto& event : events_) {
     auto value = character(event.character, "Game_Event"); auto& e = object(value);
     e["_mapId"] = mapId_; e["_eventId"] = event.id; e["_moveType"] = event.moveType; e["_trigger"] = event.trigger; e["_starting"] = event.starting; e["_erased"] = event.erased; e["_pageIndex"] = event.page;
-    e["_originalPattern"] = event.originalPattern; e["_originalDirection"] = event.originalDirection; e["_prelockDirection"] = event.prelockDirection; e["_locked"] = event.prelockDirection != 0; e["_priorityType"] = event.priority; e["_interpreter"] = event.trigger == 4 ? writeInterpreter(event.parallel) : Value{};
+    e["_originalPattern"] = event.originalPattern; e["_originalDirection"] = event.originalDirection; e["_prelockDirection"] = event.prelockDirection; e["_locked"] = event.locked; e["_priorityType"] = event.priority; e["_interpreter"] = event.trigger == 4 ? writeInterpreter(event.parallel) : Value{};
     events[event.id] = value;
   }
   Array commonEvents;
@@ -224,11 +230,11 @@ void Session::load(const Value& contents) {
   std::get<Object>(restored.screenEffects_.data).erase("_pictures");
   restored.ambience_ = contents["player"]["_ambienceData"];
   const auto& savedMap = contents["map"];
+  restored.mapState_.nameDisplay = savedMap["_nameDisplay"].boolean();
   if (!mapUpdated) {
     restored.savedCamera_ = std::array{savedMap["_displayX"].number(), savedMap["_displayY"].number()};
     restored.mapState_.tilesetId = savedMap["_tilesetId"].integer();
     restored.mapState_.scrollDirection = savedMap["_scrollDirection"].integer(2); restored.mapState_.scrollSpeed = savedMap["_scrollSpeed"].integer(4); restored.mapState_.scrollRest = savedMap["_scrollRest"].number();
-    restored.mapState_.nameDisplay = savedMap["_nameDisplay"].boolean();
     restored.mapState_.battleback1Name = savedMap["_battleback1Name"]; restored.mapState_.battleback2Name = savedMap["_battleback2Name"];
     restored.mapState_.parallaxName = savedMap["_parallaxName"].text(); restored.mapState_.parallaxZero = savedMap["_parallaxZero"].boolean();
     restored.mapState_.parallaxLoopX = savedMap["_parallaxLoopX"].boolean(); restored.mapState_.parallaxLoopY = savedMap["_parallaxLoopY"].boolean();
@@ -254,7 +260,7 @@ void Session::load(const Value& contents) {
   if (!mapUpdated) {
     for (auto& event : restored.events_) {
       const auto& saved = contents["map"]["_events"][event.id]; if (saved.null()) continue;
-      event.character = readCharacter(saved); event.page = saved["_pageIndex"].integer(); event.moveType = saved["_moveType"].integer(); event.trigger = saved["_trigger"].integer(); event.priority = saved["_priorityType"].integer(1); event.erased = saved["_erased"].boolean(); event.starting = saved["_starting"].boolean(); event.originalDirection = saved["_originalDirection"].integer(); event.originalPattern = saved["_originalPattern"].integer(); event.prelockDirection = saved["_prelockDirection"].integer();
+      event.character = readCharacter(saved); event.page = saved["_pageIndex"].integer(); event.moveType = saved["_moveType"].integer(); event.trigger = saved["_trigger"].integer(); event.priority = saved["_priorityType"].integer(1); event.erased = saved["_erased"].boolean(); event.starting = saved["_starting"].boolean(); event.originalDirection = saved["_originalDirection"].integer(); event.originalPattern = saved["_originalPattern"].integer(); event.prelockDirection = saved["_prelockDirection"].integer(); event.locked = saved["_locked"].boolean();
       if (!saved["_interpreter"].null()) event.parallel = readInterpreter(saved["_interpreter"]);
     }
     restored.interpreter_ = readInterpreter(contents["map"]["_interpreter"]);
@@ -310,6 +316,7 @@ void Session::load(const Value& contents) {
   restored.randomGenerator_ = randomGenerator_; restored.randomStream_ = randomStream_; restored.randomOffset_ = randomOffset_; restored.randomCalls_ = randomCalls_;
   restored.presentationRevision_ = presentationRevision_ + 1;
   restored.enemyBitmapHeightResolver_ = enemyBitmapHeightResolver_;
+  restored.messageTextLayoutResolver_ = messageTextLayoutResolver_;
   restored.runtimeHooks_ = runtimeHooks_;
   *this = std::move(restored);
 }

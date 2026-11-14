@@ -145,21 +145,13 @@ void Session::chaseCharacter(Character& follower, const Character& leader) {
   const int sy = static_cast<int>(deltaMapY(leader.y, follower.y));
   if (sx && sy) {
     const int horizontal = sx > 0 ? 6 : 4, vertical = sy > 0 ? 2 : 8;
-    follower.x = roundMapX(follower.x + (sx > 0 ? 1 : -1));
-    follower.y = roundMapY(follower.y + (sy > 0 ? 1 : -1));
-    follower.realX = follower.x - (sx > 0 ? 1 : -1);
-    follower.realY = follower.y - (sy > 0 ? 1 : -1);
-    if (!follower.directionFix) {
-      if (follower.direction == 10 - horizontal) follower.direction = horizontal;
-      if (follower.direction == 10 - vertical) follower.direction = vertical;
-    }
-    follower.stopCount = 0;
+    moveDiagonal(follower, horizontal, vertical);
   } else if (sx || sy) move(follower, sy ? sy > 0 ? 2 : 8 : sx > 0 ? 6 : 4);
   follower.moveSpeed = player_.moveSpeed + (playerDashing_ ? 1 : 0);
 }
-void Session::synchronizeFollowers() {
+void Session::synchronizeFollowers(double x, double y) {
   for (auto& follower : followers_) {
-    locateCharacter(follower, player_.realX, player_.realY);
+    locateCharacter(follower, x, y);
     if (!follower.directionFix) follower.direction = player_.direction;
     follower.stopCount = 0;
   }
@@ -182,26 +174,28 @@ void Session::updateFollowers() {
     if (gathered) followersGathering_ = false;
   }
   for (std::size_t index = 0; index < followers_.size(); ++index) {
-    auto& follower = followers_[index]; follower.moveSpeed = player_.moveSpeed + (playerDashing_ ? 1 : 0);
+    auto& follower = followers_[index];
+    updateCharacter(follower, false);
+    follower.moveSpeed = player_.moveSpeed + (playerDashing_ ? 1 : 0);
     follower.transparent = player_.transparent || index >= visibleCount;
     follower.opacity = player_.opacity; follower.blendMode = player_.blendMode;
     follower.walkAnime = player_.walkAnime; follower.stepAnime = player_.stepAnime; follower.directionFix = player_.directionFix;
     if (index + 1 < battleMembers.size()) {
       const auto& actor = actors_.at(battleMembers[index + 1]); follower.characterName = actor.characterName; follower.characterIndex = actor.characterIndex;
     } else { follower.characterName.clear(); follower.characterIndex = 0; }
-    updateCharacter(follower, false);
   }
 }
 void Session::checkEventTouch(Event& event, int x, int y) {
   if (interpreter_.running || event.page < 0 || event.trigger != 2 || event.priority != 1 || event.character.jumpCount > 0) return;
   if (player_.x != x || player_.y != y || map()["events"][event.id]["pages"][event.page]["list"].array().size() <= 1) return;
-  if (!event.prelockDirection) {
+  if (!event.locked) {
     event.prelockDirection = event.character.direction;
     const int sx = static_cast<int>(deltaMapX(player_.x, event.character.x)), sy = static_cast<int>(deltaMapY(player_.y, event.character.y));
     if (!event.character.directionFix) {
       if (std::abs(sx) > std::abs(sy)) event.character.direction = sx > 0 ? 6 : 4;
       else if (sy) event.character.direction = sy > 0 ? 2 : 8;
     }
+    event.locked = true;
   }
   event.starting = true;
 }
@@ -429,12 +423,11 @@ int Session::makeEncounterTroopId() {
     const auto& regions = entry["regionSet"].array();
     return regions.empty() || std::any_of(regions.begin(), regions.end(), [&](const Value& value) { return value.integer() == region; });
   };
-  int total = 0;
-  for (const auto& entry : map()["encounterList"].array()) if (eligible(entry)) total += entry["weight"].integer();
-  if (total <= 0) return 0;
-  int selected = randomInt(total);
+  double total = 0;
+  for (const auto& entry : map()["encounterList"].array()) if (eligible(entry)) total += entry["weight"].number();
+  double selected = random() * total;
   for (const auto& entry : map()["encounterList"].array()) if (eligible(entry)) {
-    selected -= entry["weight"].integer();
+    selected -= entry["weight"].number();
     if (selected < 0) return entry["troopId"].integer();
   }
   return 0;

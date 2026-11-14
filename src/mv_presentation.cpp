@@ -1,4 +1,5 @@
 #include "mv_presentation.hpp"
+#include <regex>
 #include "mv_windows.hpp"
 #include "mv_managers.hpp"
 #include "mv_battle_extra.hpp"
@@ -42,6 +43,7 @@ Presentation::Presentation(RuntimeCore& core, Session& session, Value settings)
     if (name.empty()) return 0;
     return image(std::string(session_.database_["system"]["optSideView"].boolean() ? "img/sv_enemies/" : "img/enemies/") + name + ".png", data["battlerHue"].integer()).height;
   });
+  session_.setMessageTextLayoutResolver([this](const std::string& text, bool face) { return messageTextLayout(text, face); });
   const auto budget = settings_["imageCacheBytes"].number();
   if (budget > 0) {
     imageCache_->limit = static_cast<std::size_t>(budget);
@@ -66,6 +68,7 @@ Presentation::Presentation(RuntimeCore& core, Session& session, Value settings)
   textHeight_ = core_.height();
 }
 Presentation::~Presentation() {
+  session_.setMessageTextLayoutResolver({});
   session_.setEnemyBitmapHeightResolver({});
   clearNameContents();
   clearMapOverlays();
@@ -190,7 +193,8 @@ void Presentation::mapPictures() {
     auto& sprite = *object->sprite;
     sprite.syncFromPicture(picture);
     if(!sprite.visible||sprite.opacity<=0)continue;
-    const auto source=image("img/pictures/"+sprite.pictureName+".png");
+    if (sprite.bitmap && !sprite.bitmap->isReady()) continue;
+    const auto source = sprite.bitmap ? *sprite.bitmap->texture() : image("img/pictures/"+sprite.pictureName+".png");
     const auto& frame=picture["_frameData"]["frames"][picture["_frameData"]["frameIndex"].integer()];
     const double sx = sprite.sourceFrame ? (*sprite.sourceFrame)[0] : frame["x"].number();
     const double sy = sprite.sourceFrame ? (*sprite.sourceFrame)[1] : frame["y"].number();
@@ -435,22 +439,15 @@ double Presentation::textEx(const std::string& source, double x, double y, int /
   for (std::size_t index = 0; index < value.size();) {
     if (value[index] == '\n') { x = initialX; y += height; ++index; height = lineHeight(index,size); continue; }
     if (value[index] == '\f') { ++index; continue; }
-    if (value[index] == '\x1b' && index+1 < value.size()) {
-      const char code = std::toupper(static_cast<unsigned char>(value[index+1]));
-      if (code == '{' || code == '}') {
-        size = resizeFont(size,code);
-        index += 2; continue;
+    if (value[index] == '\x1b') {
+      const auto code = Window_Base::obtainEscapeCode(value,index);
+      if (code == "{" || code == "}") size = resizeFont(size,code[0]);
+      else if (code == "C" || code == "I") {
+        const int argument = Window_Base::obtainEscapeParam(value,index);
+        if (code == "C") color = argument;
+        else { if (!measureOnly) { const auto icon = image("img/system/IconSet.png"); quad(icon.handle,argument%16*32,static_cast<double>(argument/16)*32,32,32,x+2,y+2,32,32); } x += 36; }
       }
-      if ((code == 'C' || code == 'I') && index+2 < value.size() && value[index+2]=='[') {
-        const auto end = value.find(']',index+3);
-        if (end != std::string::npos) {
-          const int argument = std::atoi(value.substr(index+3,end-index-3).c_str());
-          if (code == 'C') color = argument;
-          else { if (!measureOnly) { const auto icon = image("img/system/IconSet.png"); quad(icon.handle,argument%16*32,argument/16*32,32,32,x+2,y+2,32,32); } x += 36; }
-          index = end+1; continue;
-        }
-      }
-      if (code == '.' || code == '|' || code == '!' || code == '>' || code == '<' || code == '^' || code == '$') { index += 2; continue; }
+      continue;
     }
     std::size_t length = 1;
     const auto lead = static_cast<unsigned char>(value[index]);
@@ -560,8 +557,39 @@ void Presentation::actorStatus(int actorId, int x, int y, int width, bool portra
   stateIcons(actor,x+84,y+36,std::max(0,width-84));
   for (int i = 0; i < 2; ++i) gauge(actor, i, x, y + 72 + i * 36, std::min(186, width));
 }
+double Presentation::messageTextWidth(bool face) const {
+  const auto& style = settings_["messageStyle"];
+  const auto padding = style["padding"].integer(18), inset = style["inset"].integer();
+  const auto x = face ? 186 : inset + padding + style["textInset"].integer();
+  return core_.width() - inset * 2 - x - padding;
+}
+std::string Presentation::messageTextLayout(const std::string& source, bool face) {
+  const auto& style = settings_["messageStyle"];
+  if (!style["wordWrapTags"].boolean()) return source;
+  static const std::regex marker("<WordWrap>", std::regex::icase), breaks("<(BR|line break)>", std::regex::icase), newlines("[\\n\\r]+");
+  const bool wrap = std::regex_search(source, marker);
+  auto text = std::regex_replace(source, marker, "");
+  if (wrap) text = std::regex_replace(text, newlines, style["wordWrapSpace"].boolean() ? " " : "");
+  text = std::regex_replace(text, breaks, wrap ? "\n" : "");
+  const auto width = messageTextWidth(face);
+  if (!wrap || width <= 0) return text;
+  std::string result, prefix;
+  for (std::size_t i = 0; i < text.size(); ++i) {
+    if (text[i] == ' ') {
+      const auto end = text.find_first_of(" \n\f", i + 1);
+      const auto word = text.substr(i, end == std::string::npos ? end : end - i);
+      if (textEx(prefix + word, 0, 0, 0, style["fontSize"].integer(28), true, true) > width) {
+        result += '\n'; prefix += '\n';
+      }
+    }
+    result += text[i]; prefix += text[i];
+    if (text[i] == '\f') prefix.clear();
+  }
+  return result;
+}
 void Presentation::messageBody() {
-  const auto& message = session_.message_;
+  const auto& windowState = session_.message_;
+  const auto& message = windowState.closing && session_.closingMessage_ ? *session_.closingMessage_ : windowState;
   if (!message.busy && !message.closing) return;
   if (message.scrolling) {
     core::Window window;window.move(0,0,core_.width(),core_.height());window.opacity=0;
@@ -569,19 +597,19 @@ void Presentation::messageBody() {
     textEx(message.scrollText, 24, 19 - message.scrollY, core_.width()-48, 28, true);
     return;
   }
-  if (message.openness <= 0) return;
+  if (windowState.openness <= 0) return;
   const auto& style = settings_["messageStyle"];
   const int lineHeight = style["lineHeight"].integer(36), padding = style["padding"].integer(18);
   const int inset = style["inset"].integer(), width = core_.width() - inset * 2;
   const int height = lineHeight * 4 + padding * 2;
   const int y = message.position * (core_.height() - height) / 2 + (message.position == 2 ? -style["bottomInset"].integer() : message.position == 0 ? style["bottomInset"].integer() : 0);
-  if (message.background == 0) window(inset, y, width, height, -1, 0, message.openness);
+  if (message.background == 0) window(inset, y, width, height, -1, 0, windowState.openness);
   else {
-    core::Window window;window.move(inset,y,width,height);window.opacity=0;window.padding=padding;window.openness=message.openness;
+    core::Window window;window.move(inset,y,width,height);window.opacity=0;window.padding=padding;window.openness=windowState.openness;
     streamUiWindow(window);
-    if (message.background == 1) drawDimmerBackground(core_.renderer(), inset, y, width, height, padding, message.openness / 255.0F);
+    if (message.background == 1) drawDimmerBackground(core_.renderer(), inset, y, width, height, padding, windowState.openness / 255.0F);
   }
-  if (message.openness < 255) return;
+  if (windowState.openness < 255) return;
   int x = inset + padding + style["textInset"].integer();
   if (!message.faceName.empty()) { const auto bitmap = image("img/faces/" + message.faceName + ".png"); quad(bitmap.handle, message.faceIndex % 4 * 144, message.faceIndex / 4 * 144, 144, 144, 18, y + 18, 144, 144); x = 186; }
   std::string visible;
@@ -590,7 +618,7 @@ void Presentation::messageBody() {
     if (index != message.firstLine) visible += '\n';
     visible += message.expandedLines[index].substr(0,message.revealLengths[index]);
   }
-  textEx(visible,x,y+padding+style["textOffsetY"].integer(),width-x-padding,style["fontSize"].integer(28),true);
+  textEx(visible,x,y+padding+style["textOffsetY"].integer(),messageTextWidth(!message.faceName.empty()),style["fontSize"].integer(28),true);
   if (message.goldWindow) goldWindow(core_.width()-240,message.position == 0 ? core_.height()-72 : 0);
   if (message.textPaused) {
     if (!style["pauseImage"].text().empty()) {

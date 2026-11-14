@@ -29,6 +29,11 @@ double variableNumber(const Value& value){return core::numberValue(value);}
 std::string variableText(const Value& value){return core::stringValue(value);}
 bool strictEqual(const Value& left,const Value& right){return core::strictEquals(left,right);}
 std::u16string utf16(const std::string& text){const auto units=core::utf16Units(text);return {units.begin(),units.end()};}
+struct InterpreterOperation {
+  std::vector<std::shared_ptr<RuntimeInterpreter>>& stack;
+  InterpreterOperation(std::vector<std::shared_ptr<RuntimeInterpreter>>& operations, const std::shared_ptr<RuntimeInterpreter>& interpreter) : stack(operations) { stack.push_back(interpreter); }
+  ~InterpreterOperation() { stack.pop_back(); }
+};
 
 }
 
@@ -96,7 +101,7 @@ void Session::newGame() {
   moviePlaying_ = false; movieExplicitSource_ = false; movieRequest_ = 0; movieName_.clear();
   reservedCommonEvent_ = 0;
   sceneStack_.clear(); messageOwnerSerial_ = 0; nextInterpreterSerial_ = 0;
-  party_.clear(); events_.clear(); interpreter_ = {}; message_ = {}; player_ = {};
+  party_.clear(); events_.clear(); interpreter_ = {}; message_ = {}; closingMessage_.reset(); player_ = {};
   mapId_ = 0; mapState_ = {}; commonInterpreters_.clear();
   for (auto& follower : followers_) { follower = {}; follower.through = true; }
   uiHitTargets_.clear(); previousUiButtons_.clear(); previousDebug_ = false;
@@ -124,6 +129,7 @@ void Session::newGame() {
   }
   player_.transparent = system["optTransparent"].boolean();
   transfer(system["startMapId"].integer(), system["startX"].integer(), system["startY"].integer(), 2);
+  dispatchMessage("clear");
 }
 
 void Session::transfer(int id, int x, int y, int direction) {
@@ -167,7 +173,7 @@ void Session::locatePlayer(double x, double y) {
     vehicle.character.realX = player_.realX; vehicle.character.realY = player_.realY;
     vehicle.character.direction = player_.direction;
   }
-  synchronizeFollowers();
+  synchronizeFollowers(x, y);
 }
 
 void Session::centerPlayer() {
@@ -304,9 +310,36 @@ bool Session::move(Character& character, int direction) {
     chaseCharacter(followers_[index], index == 0 ? player_ : followers_[index - 1]);
   character.x = roundMapX(character.x + dx(direction)); character.y = roundMapY(character.y + dy(direction));
   character.realX = character.x - dx(direction); character.realY = character.y - dy(direction); character.stopCount = 0;
-  if (tileFlag(character.x, character.y, 32) && !character.directionFix) character.direction = 8;
-  if (&character == &player_ && vehicleType_ < 0 && !character.routeForcing) ++steps_;
+  increaseCharacterSteps(character);
   return true;
+}
+void Session::increaseCharacterSteps(Character& character) {
+  character.stopCount = 0;
+  if (tileFlag(character.x, character.y, 32) && !character.directionFix) character.direction = 8;
+  bool normal = &character != &vehicles_[2].character;
+  for (const auto& event : events_) if (&event.character == &character) normal = event.priority == 1;
+  const bool bush = normal && character.tileId == 0 && !ImageManager::isObjectCharacter(character.characterName) &&
+    tileFlag(character.x, character.y, 64) && character.jumpCount <= 0;
+  if (!bush) character.bushDepth = 0;
+  else if (!character.moving()) character.bushDepth = 12;
+  if (&character == &player_ && vehicleType_ < 0 && !character.routeForcing) ++steps_;
+}
+bool Session::moveDiagonal(Character& character, int horizontal, int vertical) {
+  const bool pass = (passable(character.x, character.y, vertical, character) && passable(character.x, roundMapY(character.y + dy(vertical)), horizontal, character)) ||
+    (passable(character.x, character.y, horizontal, character) && passable(roundMapX(character.x + dx(horizontal)), character.y, vertical, character));
+  character.movementSuccess = pass;
+  if (pass) {
+    if (&character == &player_) for (int index = static_cast<int>(followers_.size()) - 1; index >= 0; --index)
+      chaseCharacter(followers_[index], index == 0 ? player_ : followers_[index - 1]);
+    character.x = roundMapX(character.x + dx(horizontal)); character.y = roundMapY(character.y + dy(vertical));
+    character.realX = character.x - dx(horizontal); character.realY = character.y - dy(vertical);
+    increaseCharacterSteps(character);
+  }
+  if (character.direction == 10 - horizontal || character.direction == 10 - vertical) {
+    if (!character.directionFix) character.direction = character.direction == 10 - horizontal ? horizontal : vertical;
+    character.stopCount = 0;
+  }
+  return pass;
 }
 void Session::jumpCharacter(Character& c, int xPlus, int yPlus) {
   if (std::abs(xPlus) > std::abs(yPlus)) {
@@ -318,11 +351,13 @@ void Session::jumpCharacter(Character& c, int xPlus, int yPlus) {
   c.jumpPeak = 10 + static_cast<int>(std::floor(std::hypot(xPlus, yPlus) + 0.5)) - c.moveSpeed;
   c.jumpCount = c.jumpPeak * 2; c.stopCount = 0; c.animationCount = 0;
   if (c.walkAnime || c.stepAnime) c.pattern = 1;
+  if (&c == &player_ && c.jumpCount > 0) for (auto& follower : followers_)
+    jumpCharacter(follower, static_cast<int>(deltaMapX(c.x, follower.x)), static_cast<int>(deltaMapY(c.y, follower.y)));
 }
 
 void Session::updateCharacter(Character& c, bool dash, int idlePattern) {
   bool locked = false;
-  for (const auto& event : events_) if (&event.character == &c && event.prelockDirection) { locked = true; break; }
+  for (const auto& event : events_) if (&event.character == &c && event.locked) { locked = true; break; }
   if (!c.moving() && c.jumpCount <= 0) {
     if (locked) c.stopCount = 0;
     else ++c.stopCount;
@@ -340,7 +375,7 @@ void Session::updateCharacter(Character& c, bool dash, int idlePattern) {
     c.realX = c.realX < c.x ? std::min(c.realX + distance, static_cast<double>(c.x)) : std::max(c.realX - distance, static_cast<double>(c.x));
     c.realY = c.realY < c.y ? std::min(c.realY + distance, static_cast<double>(c.y)) : std::max(c.realY - distance, static_cast<double>(c.y));
   }
-  bool normal = &c == &player_;
+  bool normal = &c != &vehicles_[2].character;
   for (const auto& event : events_) if (&event.character == &c) normal = event.priority == 1;
   const bool bush = normal && c.characterName.find('!') >= 2 && tileFlag(c.x, c.y, 64) && c.jumpCount <= 0;
   if (!bush) c.bushDepth = 0;
@@ -382,18 +417,7 @@ void Session::updateRoute(Character& c) {
     case 5: case 6: case 7: case 8: {
       const int horizontal = code == 5 || code == 7 ? 4 : 6;
       const int vertical = code <= 6 ? 2 : 8;
-      const bool pass = (passable(c.x, c.y, vertical, c) && passable(c.x, roundMapY(c.y + dy(vertical)), horizontal, c)) ||
-        (passable(c.x, c.y, horizontal, c) && passable(roundMapX(c.x + dx(horizontal)), c.y, vertical, c));
-      c.movementSuccess = pass;
-      if (pass) {
-        if (&c == &player_) for (int index = static_cast<int>(followers_.size()) - 1; index >= 0; --index)
-          chaseCharacter(followers_[index], index == 0 ? player_ : followers_[index - 1]);
-        c.x = roundMapX(c.x + dx(horizontal)); c.y = roundMapY(c.y + dy(vertical));
-        c.realX = c.x - dx(horizontal); c.realY = c.y - dy(vertical); c.stopCount = 0;
-        if (&c == &player_ && vehicleType_ < 0 && !c.routeForcing) ++steps_;
-      }
-      if (c.direction == 10 - horizontal) setDirection(horizontal);
-      if (c.direction == 10 - vertical) setDirection(vertical);
+      moveDiagonal(c, horizontal, vertical);
       break;
     }
     case 9: {
@@ -417,13 +441,6 @@ void Session::updateRoute(Character& c) {
     case 14: {
       const int x = parameters[0].integer(), y = parameters[1].integer();
       jumpCharacter(c, x, y);
-      if (&c == &player_) {
-        for (auto& follower : followers_) {
-          const int sx = static_cast<int>(deltaMapX(player_.x, follower.x));
-          const int sy = static_cast<int>(deltaMapY(player_.y, follower.y));
-          jumpCharacter(follower, sx, sy);
-        }
-      }
       break;
     }
     case 0:
@@ -492,7 +509,8 @@ void Session::startEvent(int x, int y, bool action) {
       const bool samePosition = x == player_.x && y == player_.y;
       if (samePosition == (e.priority == 1)) continue;
       if (map()["events"][e.id]["pages"][e.page]["list"].array().size() <= 1) continue;
-      if (!e.prelockDirection && e.trigger <= 2) {
+      if (!e.locked && e.trigger <= 2) {
+        e.locked = true;
         e.prelockDirection = e.character.direction;
         if (!e.character.directionFix) {
           const int horizontal = static_cast<int>(deltaMapX(player_.x, e.character.x)), vertical = static_cast<int>(deltaMapY(player_.y, e.character.y));
@@ -505,8 +523,7 @@ void Session::startEvent(int x, int y, bool action) {
   }
 }
 void Session::startInterpreter(const Event& event) {
-  interpreter_.clear(); interpreter_.mapId = mapId_; interpreter_.eventId = event.id;
-  interpreter_.list = map()["events"][event.id]["pages"][event.page]["list"].array(); interpreter_.running = true;
+  setupInterpreter(interpreter_, map()["events"][event.id]["pages"][event.page]["list"].array(), event.id);
   for (const auto& entry : interpreter_.list) if (entry["code"].integer() == 129) {
     const int actor = entry["parameters"][0].integer();
     if (!actors_.count(actor)) initializeActor(actor);
@@ -526,7 +543,9 @@ void Session::operateVariable(int id, int operation, const Value& operand) {
   Value result;
   const auto& old = variable(id);
   if (operation == 0) result = operand;
-  else if (operation == 1 && (std::holds_alternative<std::string>(old.data) || std::holds_alternative<std::string>(operand.data))) {
+  else if (operation == 1 && (std::holds_alternative<std::string>(old.data) || std::holds_alternative<std::string>(operand.data) ||
+      std::holds_alternative<Value::Array>(old.data) || std::holds_alternative<Value::Object>(old.data) ||
+      std::holds_alternative<Value::Array>(operand.data) || std::holds_alternative<Value::Object>(operand.data))) {
     try { result = variableText(old) + variableText(operand); }
     catch (const std::runtime_error&) { result = 0; }
   } else {
@@ -554,7 +573,7 @@ void Session::gainItem(int kind, int id, double amount, bool includeEquipped) {
   if (stored) inventory_[key] = stored; else inventory_.erase(key);
   if (kind && includeEquipped && count < 0) {
     double remaining = -count;
-    for (int actorId : party_) {
+    for (int actorId : partyMembers()) {
       auto& actor = actors_.at(actorId);
       for (std::size_t slot = 0; slot < actor.equips.size() && remaining > 0; ++slot) {
         if ((slot < actor.equipKinds.size() ? actor.equipKinds[slot] : slot == 0 ? 1 : 2) == kind && actor.equips[slot] == id) {
@@ -564,6 +583,14 @@ void Session::gainItem(int kind, int id, double amount, bool includeEquipped) {
     }
   }
   refreshNeeded_ = true;
+}
+
+std::vector<int> Session::partyMembers() const {
+  if (!battle_.active) return party_;
+  std::vector<int> members;
+  for (std::size_t index = 0; index < battleMemberCount(); ++index)
+    if (!actors_.at(party_[index]).hidden) members.push_back(party_[index]);
+  return members;
 }
 
 Value Session::gameDataOperand(int type, int first, int second, const Interpreter& context) {
@@ -603,20 +630,25 @@ Value Session::gameDataOperand(int type, int first, int second, const Interprete
     if (second == 0) return character->x;
     if (second == 1) return character->y;
     if (second == 2) return character->direction;
-    if (second == 3) return static_cast<int>(std::floor(deltaMapX(character->realX, cameraX) * tw + tw / 2.0 + 0.5));
+    const double screenX = character->realX - cameraX + (loopHorizontal() && character->realX < cameraX - (width - visibleX) / 2 ? width : 0);
+    const double screenY = character->realY - cameraY + (loopVertical() && character->realY < cameraY - (height - visibleY) / 2 ? height : 0);
+    if (second == 3) return static_cast<int>(std::floor(screenX * tw + tw / 2.0 + 0.5));
     if (second == 4) {
       const bool object = character->tileId > 0 || ImageManager::isObjectCharacter(character->characterName);
       const double shiftY = object ? 0.0 : 6.0;
       const double jumpHeight = character->jumpCount > 0 ? (character->jumpPeak * character->jumpPeak - std::pow(std::abs(character->jumpCount - character->jumpPeak), 2)) / 2.0 : 0.0;
-      return static_cast<int>(std::floor(deltaMapY(character->realY, cameraY) * th + th - shiftY - jumpHeight + 0.5));
+      return static_cast<int>(std::floor(screenY * th + th - shiftY - jumpHeight + 0.5));
     }
     return 0;
   }
-  if (type == 6) return first >= 0 && first < static_cast<int>(party_.size()) ? party_[first] : 0;
+  if (type == 6) {
+    const auto members = partyMembers();
+    return first >= 0 && first < static_cast<int>(members.size()) ? members[first] : 0;
+  }
   if (type == 7) {
     switch (first) {
       case 0: return mapId_;
-      case 1: return static_cast<int>(party_.size());
+      case 1: return static_cast<int>(partyMembers().size());
       case 2: return gold_;
       case 3: return steps_;
       case 4: return static_cast<double>((ticks_ ? ticks_ - 1 : 0) / 60);
@@ -653,7 +685,10 @@ bool Session::condition(const Value& p, const Interpreter& context) {
     if (!actors_.contains(id)) initializeActor(id);
     const auto& actor = actors_.at(id);
     switch (p[2].integer()) {
-      case 0: return std::find(party_.begin(), party_.end(), id) != party_.end();
+      case 0: {
+        const auto members = partyMembers();
+        return std::find(members.begin(), members.end(), id) != members.end();
+      }
       case 1: return actor.name == p[3].text();
       case 2: return actor.classId == argument;
       case 3: return battlerSkills(actor).contains(argument);
@@ -686,7 +721,7 @@ bool Session::condition(const Value& p, const Interpreter& context) {
     const int kind = p[0].integer() - 8, id = p[1].integer();
     if (database_[kind == 0 ? "items" : kind == 1 ? "weapons" : "armors"][id].null()) return false;
     if (lookup(inventory_, id + kind * 100000) > 0) return true;
-    if (kind && p[2].boolean()) for (int actorId : party_) {
+    if (kind && p[2].boolean()) for (int actorId : partyMembers()) {
       const auto& actor = actors_.at(actorId); const auto& equips = actor.equips;
       for (std::size_t slot = 0; slot < equips.size(); ++slot) if ((slot < actor.equipKinds.size() ? actor.equipKinds[slot] : slot == 0 ? 1 : 2) == kind && equips[slot] == id) return true;
     }
@@ -726,20 +761,16 @@ bool Session::command(const Value& entry, Interpreter& context) {
       const auto& source = database_["commonEvents"][p[0].integer()]["list"];
       if (source.null()) return true;
       if (context.depth >= 99) throw std::runtime_error("common event nesting limit exceeded");
-      Interpreter child; child.mapId = mapId_; child.eventId = context.mapId == mapId_ ? context.eventId : 0;
-      child.depth = context.depth + 1; child.battleEvent = context.battleEvent;
-      child.list = source.array(); child.running = true; context.children.push_back(std::move(child));
+      const int eventId = context.mapId == mapId_ ? context.eventId : 0;
+      context.children.emplace_back();
+      auto& child = context.children.back(); child.depth = context.depth + 1; child.battleEvent = context.battleEvent;
+      setupInterpreter(child, source.array(), eventId);
       return true;
     }
     case 119:
       for (int index = 0; index < static_cast<int>(context.list.size()); ++index) {
         if (context.list[index]["code"].integer() != 118 || !strictEqual(context.list[index]["parameters"][0], p[0])) continue;
-        int branchIndent = indent;
-        for (int i = std::min(index, context.index); i <= std::max(index, context.index); ++i) {
-          const int nextIndent = context.list[i]["indent"].integer();
-          if (nextIndent != branchIndent) { context.branches.erase(branchIndent); branchIndent = nextIndent; }
-        }
-        context.index = index;
+        jumpTo(context, index);
         return false;
       }
       return true;
@@ -756,26 +787,23 @@ bool Session::command(const Value& entry, Interpreter& context) {
         throw std::runtime_error("unsupported native event operation");
       eventMovementAllowed_ = p[1].boolean(); return true;
     case 101: {
-      const bool continuing = message_.closing && message_.previousOpenness == 255 && message_.background == p[2].integer() && message_.position == p[3].integer();
+      const auto& previous = closingMessage_ ? *closingMessage_ : message_;
+      const bool continuing = message_.closing && message_.previousOpenness == 255 && previous.background == p[2].integer() && previous.position == p[3].integer();
       if (message_.busy && !continuing) return false;
-      if (message_.closing && message_.openness > 0 && !continuing) return false;
+      dispatchMessage("clear"); message_.busy = true;
       messageOwnerSerial_ = context.serial;
-      message_ = {}; message_.busy = true;
       context.waitingMessage = true;
       if (continuing) message_.openness = 255;
       messageAge_ = 0;
-      message_.faceName = p[0].text(); message_.faceIndex = p[1].integer();
-      message_.background = p[2].integer(); message_.position = p[3].integer();
+      dispatchMessage("setFaceImage", {p[0], p[1]});
+      dispatchMessage("setBackground", {p[2]}); dispatchMessage("setPositionType", {p[3]});
       while (context.index + 1 < static_cast<int>(context.list.size()) && context.list[context.index + 1]["code"].integer() == 401) {
-        ++context.index; message_.lines.push_back(context.list[context.index]["parameters"][0]);
+        ++context.index; dispatchMessage("add", {context.list[context.index]["parameters"][0]});
       }
       if (context.index + 1 < static_cast<int>(context.list.size()) && context.list[context.index + 1]["code"].integer() == 102) {
         ++context.index;
         const auto& choices = context.list[context.index]["parameters"];
-        message_.choices = choices[0].array(); message_.cancelChoice = choices[1].integer();
-        if (message_.cancelChoice >= static_cast<int>(message_.choices.size())) message_.cancelChoice = -2;
-        message_.choicePosition = choices[3].integer(2); message_.choiceBackground = choices[4].integer();
-        message_.defaultChoice = choices[2].integer(); message_.choiceIndent = context.list[context.index]["indent"].integer();
+        setupChoices(context, choices);
       } else if (context.index + 1 < static_cast<int>(context.list.size()) &&
                  (context.list[context.index + 1]["code"].integer() == 103 || context.list[context.index + 1]["code"].integer() == 104)) {
         ++context.index; dialogEventCommand(context.list[context.index], context);
@@ -785,13 +813,9 @@ bool Session::command(const Value& entry, Interpreter& context) {
     case 102:
       if (message_.busy) return false;
       messageOwnerSerial_ = context.serial;
-      message_ = {}; message_.busy = true; context.waitingMessage = true;
-      messageAge_ = 0; message_.choices = p[0].array();
-      message_.cancelChoice = p[1].integer();
-      if (message_.cancelChoice >= static_cast<int>(message_.choices.size())) message_.cancelChoice = -2;
-      message_.defaultChoice = p[2].integer(); message_.choiceIndent = indent;
-      message_.choicePosition = p[3].integer(2); message_.choiceBackground = p[4].integer(); return true;
-    case 111: context.branches[indent] = condition(p, context); if (!context.branches[indent]) skipBranch(indent, context); return true;
+      dispatchMessage("clear"); context.waitingMessage = true;
+      setupChoices(context, p); return true;
+    case 111: context.branches[indent] = condition(p, context); if (!context.branches[indent].boolean()) skipBranch(indent, context); return true;
     case 121: for (int id = p[0].integer(); id <= p[1].integer(); ++id) switches_[id] = p[2].integer() == 0; refreshNeeded_ = true; return true;
     case 122: {
       if (p[3].integer() == 2) {
@@ -907,10 +931,10 @@ bool Session::command(const Value& entry, Interpreter& context) {
       enemyEventCommand(entry); context.waitingAction = battle_.forcedExecuting || !battle_.forcedActions.empty(); return true;
     case 353: openGameOver(); return true;
     case 354: beginSceneTransition(Scene::title, 24); return false;
-    case 402: if (!context.branches.contains(indent) || context.branches.at(indent) != p[0].integer()) skipBranch(indent, context); return true;
-    case 403: if (!context.branches.contains(indent) || context.branches.at(indent) != -2) skipBranch(indent, context); return true;
+    case 402: if (!context.branches.contains(indent) || !strictEqual(context.branches.at(indent), p[0])) skipBranch(indent, context); return true;
+    case 403: if (!context.branches.contains(indent) || !strictEqual(context.branches.at(indent), -2)) skipBranch(indent, context); return true;
     case 404: context.branches.erase(indent); return true;
-    case 411: if (!context.branches.contains(indent) || context.branches.at(indent)) skipBranch(indent, context); return true;
+    case 411: if (!context.branches.contains(indent) || !strictEqual(context.branches.at(indent), false)) skipBranch(indent, context); return true;
     case 412: context.branches.erase(indent); return true;
     case 413:
       do {
@@ -918,7 +942,7 @@ bool Session::command(const Value& entry, Interpreter& context) {
         --context.index;
       } while (context.list[context.index]["indent"].integer() != indent);
       return true;
-    case 601: case 602: case 603: if (!context.branches.contains(indent) || context.branches.at(indent) != code - 601) skipBranch(indent, context); return true;
+    case 601: case 602: case 603: if (!context.branches.contains(indent) || !strictEqual(context.branches.at(indent), code - 601)) skipBranch(indent, context); return true;
     case 604: context.branches.erase(indent); return true;
     case 230: context.wait = p[0].integer(); return true;
     case 355: {
@@ -965,7 +989,7 @@ bool Session::command(const Value& entry, Interpreter& context) {
 }
 bool Session::updateWaitModeBase(Interpreter& context) {
     if (context.waitingMessage) {
-      if (message_.busy) return true;
+      if (messageBusy()) return true;
       context.waitingMessage = false;
     }
     if (context.waitingEffect) {
@@ -999,6 +1023,7 @@ bool Session::updateWaitModeBase(Interpreter& context) {
 }
 void Session::advanceInterpreter(Interpreter& context) {
   if (!context.running || pendingTransfer_ || (battle_.active && !context.battleEvent)) return;
+  InterpreterOperation operation(activeInterpreterOperations_, context.runtime);
   for (int budget = 0; budget <= 100000; ++budget) {
     if (!context.children.empty()) {
       advanceInterpreter(context.children.front());
@@ -1007,52 +1032,87 @@ void Session::advanceInterpreter(Interpreter& context) {
     }
     const auto scriptWait = runtimeHooks_ && runtimeHooks_->wait ? runtimeHooks_->wait(context.runtime, "updateWait") : std::optional<bool>{};
     if (scriptWait ? *scriptWait : updateWaitBase(context)) return;
-    if (context.index >= static_cast<int>(context.list.size())) { context.running = false; return; }
-    if (!command(context.list[context.index], context)) return;
-    ++context.index;
+    const auto scripted = runtimeHooks_ && runtimeHooks_->command ? runtimeHooks_->command(context.runtime, "executeCommand") : std::optional<bool>{};
+    if (!(scripted ? *scripted : executeCommandBase(context)) || !context.running) return;
     if ((message_.busy && context.waitingMessage) || finished_ || (context.battleEvent ? ui_.scene != Scene::battle : ui_.scene != Scene::map)) return;
   }
 }
+bool Session::setupStartingMapEvent() {
+  refreshIfNeeded();
+  if (reservedCommonEvent_ > 0) {
+    const auto& source = database_["commonEvents"][reservedCommonEvent_]; reservedCommonEvent_ = 0;
+    if (!source.null()) setupInterpreter(interpreter_, source["list"].array());
+  }
+  if (!interpreter_.running) {
+    const auto it = std::find_if(events_.begin(), events_.end(), [&](const Event& event) {
+      return event.page >= 0 && (event.starting || event.trigger == 3) &&
+        map()["events"][event.id]["pages"][event.page]["list"].array().size() > 1;
+    });
+    if (it != events_.end()) {
+      it->starting = false; startInterpreter(*it);
+    } else {
+      const Value* automatic = nullptr;
+      for (const auto& event : database_["commonEvents"].array()) {
+        if (event.null() || event["trigger"].integer() != 1) continue;
+        const auto enabled = switches_.find(event["switchId"].integer());
+        if (enabled != switches_.end() && enabled->second) { automatic = &event; break; }
+      }
+      if (!automatic) return false;
+      setupInterpreter(interpreter_, (*automatic)["list"].array());
+    }
+  }
+  return interpreter_.running;
+}
+
 void Session::updateInterpreter() {
   if (battle_.active || pendingTransfer_) return;
   if (!interpreter_.running && message_.busy) return;
   for (int budget = 0; budget < 10000; ++budget) {
     refreshIfNeeded();
-    if (!interpreter_.running && reservedCommonEvent_ > 0) {
-      const auto& source = database_["commonEvents"][reservedCommonEvent_]; reservedCommonEvent_ = 0;
-      if (!source.null()) { interpreter_.clear(); interpreter_.mapId = mapId_; interpreter_.list = source["list"].array(); interpreter_.running = true; }
-    }
-    if (!interpreter_.running) {
-      const auto it = std::find_if(events_.begin(), events_.end(), [&](const Event& event) {
-        return event.page >= 0 && (event.starting || event.trigger == 3) &&
-          map()["events"][event.id]["pages"][event.page]["list"].array().size() > 1;
-      });
-      if (it != events_.end()) {
-        it->starting = false; startInterpreter(*it);
-      } else {
-        const Value* automatic = nullptr;
-        for (const auto& event : database_["commonEvents"].array()) {
-          if (event.null() || event["trigger"].integer() != 1) continue;
-          const auto enabled = switches_.find(event["switchId"].integer());
-          if (enabled != switches_.end() && enabled->second) { automatic = &event; break; }
-        }
-        if (!automatic) return;
-        interpreter_.clear(); interpreter_.mapId = mapId_;
-        interpreter_.list = (*automatic)["list"].array(); interpreter_.running = true;
-      }
-    }
+    if (!interpreter_.running && !setupStartingMapEvent()) return;
     advanceInterpreter(interpreter_);
     if (interpreter_.running || message_.busy || battle_.active || finished_ || ui_.scene != Scene::map) return;
-    for (auto& event : events_) if (event.id == interpreter_.eventId && event.prelockDirection) {
-      if (!event.character.directionFix) event.character.direction = event.prelockDirection;
-      event.prelockDirection = 0;
+    for (auto& event : events_) if (event.id == interpreter_.eventId && event.locked) {
+      event.locked = false;
+      if (!event.character.directionFix && event.prelockDirection) event.character.direction = event.prelockDirection;
+      event.character.stopCount = 0;
     }
-    interpreter_.clear();
+    dispatchInterpreterLifecycle(interpreter_, "clear");
   }
+}
+bool Session::executeCommandBase(Interpreter& context) {
+  if (context.index < 0) throw std::runtime_error("interpreter command index is negative before dispatch");
+  if (context.index >= static_cast<int>(context.list.size())) {
+    dispatchInterpreterLifecycle(context, "terminate"); return true;
+  }
+  const Value entry = context.list[context.index];
+  context.runtime->indent = entry["indent"].integer();
+  context.runtime->parameterList = context.list.storage;
+  context.runtime->parameterIndex = context.index;
+  const std::string method = "command" + std::to_string(entry["code"].integer());
+  const auto scripted = entry["code"].integer() != 9000 && runtimeHooks_ && runtimeHooks_->command ?
+    runtimeHooks_->command(context.runtime, method) : std::optional<bool>{};
+  if (!(scripted ? *scripted : command(entry, context))) return false;
+  ++context.index;
+  return true;
+}
+bool Session::invokeInterpreterCommandBase(const std::shared_ptr<RuntimeInterpreter>& object, const std::string& method) {
+  auto* context = findRuntimeInterpreter(object);
+  if (!context) throw std::runtime_error("interpreter is no longer attached to the session");
+  InterpreterOperation operation(activeInterpreterOperations_, object);
+  if (method == "executeCommand") return executeCommandBase(*context);
+  if (!method.starts_with("command") || method.size() <= 7 ||
+      method.find_first_not_of("0123456789", 7) != std::string::npos)
+    throw std::invalid_argument("unknown native interpreter command method: " + method);
+  const int code = std::stoi(method.substr(7));
+  const Value parameters = object->parameterIndex < 0 ? object->parameterList->root :
+    object->parameterList->resolve({std::to_string(object->parameterIndex), "parameters"});
+  return command(Value::Object{{"code", code}, {"indent", object->indent}, {"parameters", parameters}}, *context);
 }
 
 int Message::pageEnd() const {
-  int end = std::min(firstLine + 4, static_cast<int>(lines.size()));
+  const int count = static_cast<int>(revealPrepared ? expandedLines.size() : lines.size());
+  int end = revealPrepared ? count : std::min(firstLine + 4, count);
   for (int boundary : pageBreaks) if (boundary > firstLine) { end = std::min(end, boundary); break; }
   return end;
 }
@@ -1067,6 +1127,30 @@ Interpreter* Session::findRuntimeInterpreter(const std::shared_ptr<RuntimeInterp
   for (auto& event : events_) if (auto* found = search(search, event.parallel)) return found;
   for (auto& [id, common] : commonInterpreters_) { (void)id; if (common) if (auto* found = search(search, *common)) return found; }
   return nullptr;
+}
+std::set<std::uint64_t> Session::runtimeObjectIdentities() const {
+  std::set<std::uint64_t> identities;
+  for (const auto& picture : pictures_) if (picture) {
+    identities.insert(picture->identity);
+    if (picture->tone) identities.insert(picture->tone->identity);
+    if (picture->toneTarget) identities.insert(picture->toneTarget->identity);
+  }
+  const auto collection = [&](const std::shared_ptr<RuntimeCommandList>& list) {
+    identities.insert(list->identity);
+    for (const auto& [path, weak] : list->views) { (void)path; if (const auto view = weak.lock()) identities.insert(view->identity); }
+  };
+  collection(message_.choices.storage);
+  const auto visit = [&](auto&& self, const Interpreter& interpreter) -> void {
+    identities.insert(interpreter.runtime->identity);
+    identities.insert(interpreter.branches.storage->identity);
+    collection(interpreter.list.storage);
+    collection(interpreter.runtime->parameterList);
+    for (const auto& child : interpreter.children) self(self, child);
+  };
+  visit(visit, interpreter_); visit(visit, battle_.interpreter);
+  for (const auto& event : events_) visit(visit, event.parallel);
+  for (const auto& [id, common] : commonInterpreters_) { (void)id; if (common) visit(visit, *common); }
+  return identities;
 }
 bool Session::invokeWaitBase(const std::shared_ptr<RuntimeInterpreter>& object) {
   if (auto* context = findRuntimeInterpreter(object)) return updateWaitModeBase(*context);
@@ -1095,20 +1179,80 @@ Value Session::runtimeInterpreterField(const std::shared_ptr<RuntimeInterpreter>
   auto* context = findRuntimeInterpreter(object);
   if (!context) throw std::runtime_error("interpreter is no longer attached to the session");
   if (field == "running" && !value) return context->running;
+  if (field == "_comments") { if (value) object->comments = value->text(); return object->comments; }
   int* target = nullptr;
   if (field == "_mapId") target = &context->mapId;
   else if (field == "_eventId") target = &context->eventId;
   else if (field == "_index") target = &context->index;
   else if (field == "_waitCount") target = &context->wait;
   else if (field == "_depth") target = &context->depth;
+  else if (field == "_indent") target = &object->indent;
   else throw std::invalid_argument("interpreter field is not bound: " + field);
   if (value) {
     const double number = value->number(-1);
-    if (!std::isfinite(number) || number < 0 || number > std::numeric_limits<int>::max() || number != std::floor(number))
-      throw std::invalid_argument("interpreter field requires a nonnegative integer");
+    if (!std::isfinite(number) || number < (field == "_index" ? -1 : 0) || number > std::numeric_limits<int>::max() || number != std::floor(number))
+      throw std::invalid_argument("interpreter field requires an integer in its supported range");
     *target = static_cast<int>(number);
   }
   return *target;
+}
+std::shared_ptr<RuntimeObject> Session::runtimeInterpreterCollection(const std::shared_ptr<RuntimeInterpreter>& object, const std::string& field) {
+  auto* context = findRuntimeInterpreter(object);
+  if (!context) throw std::runtime_error("interpreter is no longer attached to the session");
+  if (field == "_list") return context->running ? context->list.storage : nullptr;
+  if (field == "_params") {
+    if (object->parameterIndex < 0) return object->parameterList;
+    return object->parameterList->view({std::to_string(object->parameterIndex), "parameters"});
+  }
+  if (field == "_branch") return context->branches.storage;
+  throw std::invalid_argument("interpreter collection is not bound: " + field);
+}
+void Session::setRuntimeInterpreterList(const std::shared_ptr<RuntimeInterpreter>& object, const std::shared_ptr<RuntimeCommandList>& list) {
+  auto* context = findRuntimeInterpreter(object);
+  if (!context) throw std::runtime_error("interpreter is no longer attached to the session");
+  assignInterpreterList(*context, list);
+}
+void Session::assignInterpreterList(Interpreter& context, const std::shared_ptr<RuntimeCommandList>& list) {
+  if (list && !std::holds_alternative<Value::Array>(list->root.data)) throw std::invalid_argument("interpreter list requires a command array");
+  context.list.storage = list ? list : std::make_shared<RuntimeCommandList>();
+  context.running = bool(list);
+}
+void Session::setupInterpreter(Interpreter& context, Value::Array list, int eventId) {
+  auto source = std::make_shared<RuntimeCommandList>(); source->root = std::move(list);
+  dispatchInterpreterLifecycle(context, "setup", source, eventId);
+}
+void Session::dispatchInterpreterLifecycle(Interpreter& context, const std::string& method, const std::shared_ptr<RuntimeCommandList>& list, int eventId) {
+  if (!runtimeHooks_ || !runtimeHooks_->interpreterLifecycle) { interpreterLifecycleBase(context, method, list, eventId); return; }
+  const auto object = context.runtime;
+  InterpreterOperation operation(activeInterpreterOperations_, object);
+  if (!runtimeHooks_->interpreterLifecycle(object, method, list, eventId))
+    invokeInterpreterLifecycleBase(object, method, list, eventId);
+}
+void Session::invokeInterpreterLifecycleBase(const std::shared_ptr<RuntimeInterpreter>& object, const std::string& method, const std::shared_ptr<RuntimeCommandList>& list, int eventId) {
+  bool active = false;
+  for (const auto& operation : activeInterpreterOperations_) {
+    if (operation == object) active = true;
+    else if (active) throw std::runtime_error("cannot reset an ancestor interpreter during a descendant operation");
+  }
+  auto* context = findRuntimeInterpreter(object);
+  if (!context) throw std::runtime_error("interpreter is no longer attached to the session");
+  interpreterLifecycleBase(*context, method, list, eventId);
+}
+void Session::interpreterLifecycleBase(Interpreter& context, const std::string& method, const std::shared_ptr<RuntimeCommandList>& list, int eventId) {
+  const auto object = context.runtime;
+  if (method == "clear") {
+    const int depth = context.depth; const bool battleEvent = context.battleEvent;
+    context.clear(); context.depth = depth; context.battleEvent = battleEvent;
+    object->comments.clear();
+  } else if (method == "setup") {
+    if (list && !std::holds_alternative<Value::Array>(list->root.data)) throw std::invalid_argument("interpreter setup requires a command array");
+    dispatchInterpreterLifecycle(context, "clear");
+    context.mapId = mapId_; context.eventId = eventId;
+    assignInterpreterList(context, list);
+    if (list && runtimeHooks_ && runtimeHooks_->requestImages) runtimeHooks_->requestImages(list);
+  } else if (method == "terminate") {
+    assignInterpreterList(context, {}); object->comments.clear();
+  } else throw std::invalid_argument("unknown interpreter lifecycle method: " + method);
 }
 void Session::setRuntimeWaitMode(const std::shared_ptr<RuntimeInterpreter>& object, std::string mode) {
   if (auto* context = findRuntimeInterpreter(object)) {
@@ -1157,14 +1301,15 @@ void Session::setBattleEventResult(int result) {
 }
 void Session::acknowledge(int choice) {
   if (!message_.busy) return;
-  if (message_.pageEnd() < static_cast<int>(message_.lines.size())) {
+  if (message_.pageEnd() < static_cast<int>(message_.revealPrepared ? message_.expandedLines.size() : message_.lines.size())) {
     message_.firstLine = message_.pageEnd(); messageAge_ = 0; return;
   }
   if (!message_.choices.empty()) {
     if (choice == -2 && message_.cancelChoice >= 0) choice = message_.cancelChoice;
     if (choice < 0 && !(choice == -2 && message_.cancelChoice == -2)) throw std::invalid_argument("invalid choice");
     if (choice >= static_cast<int>(message_.choices.size())) throw std::invalid_argument("choice outside list");
-    if (auto* owner = findInterpreter(messageOwnerSerial_)) owner->branches[message_.choiceIndent] = choice;
+    const bool scripted = runtimeHooks_ && runtimeHooks_->choice && runtimeHooks_->choice(choice);
+    if (!scripted) if (auto* owner = findInterpreter(messageOwnerSerial_)) owner->branches[message_.choiceIndent] = choice;
   }
   if (!message_.openness && !message_.lines.empty()) message_.openness = 255;
   Window_Message::terminate(*this);
@@ -1187,13 +1332,11 @@ void Session::step(const Input& input) {
   const bool sceneFadeComplete = sceneFadeDuration_ <= 0;
   ++ticks_;
   updateSceneFade();
-  updateMessageWindow();
   const bool ok = input.okTriggered.value_or(input.ok && !previousOk_); previousOk_ = input.ok;
   okAge_ = input.ok ? okAge_ + 1 : 0;
   const bool cancel = input.cancelTriggered.value_or(input.cancel && !previousCancel_); previousCancel_ = input.cancel;
   if (input.direction != previousDirection_) { previousDirection_ = input.direction; directionAge_ = 0; } else ++directionAge_;
   const int repeatedDirection = input.repeatedDirection.value_or(directionAge_ == 0 || (directionAge_ >= 24 && directionAge_ % 6 == 0) ? input.direction : 0);
-  if (ui_.scene == Scene::map || ui_.scene == Scene::battle) updateVisualEffects();
   ++ui_.age;
   if (updateSceneTransition(sceneFadeComplete)) return;
   if (ui_.scene != Scene::map) {
@@ -1203,87 +1346,97 @@ void Session::step(const Input& input) {
       if (sceneFadeComplete) { newGame(); startSceneFade(false,24); }
       return;
     }
-    updateUi(input, ok, cancel, repeatedDirection); updateBattle();
-    if (ui_.scene == Scene::battle) { updateTimer(); updateScreenState(); }
+    if (ui_.scene == Scene::battle) { updateTimer(); updateScreenState(); updateBattle(); updateVisualEffects(); }
+    updateMessageWindow();
+    updateUi(input, ok, cancel, repeatedDirection);
     return;
   }
+  updateMapTouch(input);
   const bool hadMessage = message_.busy;
   auto updateMain = [&]() -> bool {
     bool transferred = false;
-    if (!pendingTransfer_) updateUi(input, ok, cancel, repeatedDirection);
     if (ui_.scene != Scene::map) return false;
     const bool okBlockedByMessage = hadMessage && !message_.busy;
     updateInterpreter();
-  updateMapTouch(input);
-  if (!player_.moving()) playerDashing_ = ((input.dash != alwaysDash_) || destination_.has_value()) && !map()["disableDashing"].boolean() && !player_.routeForcing && vehicleType_ < 0;
-  if (!pendingTransfer_ && !interpreter_.running && !message_.busy && !player_.moving() && player_.jumpCount == 0 && !player_.routeForcing && !followersGathering_ && !vehicleGettingOn_ && !vehicleGettingOff_ && (vehicleType_ != 2 || vehicles_[2].altitude >= 48)) {
-    const int direction = input.direction ? input.direction : destination_ ? findDirectionTo(player_, (*destination_)[0], (*destination_)[1]) : 0;
-    if (direction) {
-      if (!move(player_, direction)) startEvent(roundMapX(player_.x + dx(direction)), roundMapY(player_.y + dy(direction)), false);
-    } else if (ok && !okBlockedByMessage && !toggleVehicle()) {
-      startEvent(player_.x, player_.y, true);
-      const auto hasStarting = [&] {
-        return std::any_of(events_.begin(), events_.end(), [](const Event& event) { return event.starting; });
-      };
-      if (!hasStarting()) {
-        const int frontX = roundMapX(player_.x + dx(player_.direction)), frontY = roundMapY(player_.y + dy(player_.direction));
-        startEvent(frontX, frontY, true);
-        startEvent(frontX, frontY, false);
-        if (!hasStarting() && tileFlag(frontX, frontY, 128)) {
-          const int farX = roundMapX(frontX + dx(player_.direction)), farY = roundMapY(frontY + dy(player_.direction));
-          startEvent(farX, farY, true);
-          startEvent(farX, farY, false);
+    updateMapScroll();
+    for (auto& event : events_) {
+      updateCharacter(event.character, false, event.originalPattern);
+      if (event.page < 0 || event.trigger != 4) continue;
+      if (!event.parallel.running) setupInterpreter(event.parallel, map()["events"][event.id]["pages"][event.page]["list"].array(), event.id);
+      advanceInterpreter(event.parallel);
+    }
+    updateCommonEvents();
+    updateMapVehicles();
+    updateMapState();
+    const double previousX = player_.realX, previousY = player_.realY;
+    const bool wasMoving = player_.moving();
+    if (!player_.moving()) playerDashing_ = ((input.dash != alwaysDash_) || destination_.has_value()) && !map()["disableDashing"].boolean() && !player_.routeForcing && vehicleType_ < 0;
+    if (!pendingTransfer_ && !interpreter_.running && !message_.busy && !player_.moving() && player_.jumpCount == 0 && !player_.routeForcing && !followersGathering_ && !vehicleGettingOn_ && !vehicleGettingOff_ && (vehicleType_ != 2 || vehicles_[2].altitude >= 48)) {
+      const int direction = input.direction ? input.direction : destination_ ? findDirectionTo(player_, (*destination_)[0], (*destination_)[1]) : 0;
+      if (direction) {
+        if (!move(player_, direction)) startEvent(roundMapX(player_.x + dx(direction)), roundMapY(player_.y + dy(direction)), false);
+      }
+    }
+    updateCharacter(player_, playerDashing_);
+    if (savedCamera_) {
+      const auto& tiled = database_["tiledMaps"][std::to_string(mapId_)];
+      const double visibleX = static_cast<double>(screenWidth_) / tiled["tilewidth"].number(48);
+      const double visibleY = static_cast<double>(screenHeight_) / tiled["tileheight"].number(48);
+      const std::array<double, 2> old{previousX, previousY}, now{player_.realX, player_.realY};
+      const std::array<double, 2> visible{visibleX, visibleY}, extent{map()["width"].number(), map()["height"].number()};
+      for (int axis = 0; axis < 2; ++axis) {
+        auto& display = (*savedCamera_)[axis]; const double center = (visible[axis] - 1) / 2;
+        const bool loop = axis == 0 ? loopHorizontal() : loopVertical();
+        const double movement = axis == 0 ? deltaMapX(now[axis], old[axis]) : deltaMapY(now[axis], old[axis]);
+        const double before = loop ? axis == 0 ? deltaMapX(old[axis], display) : deltaMapY(old[axis], display) : old[axis] - display;
+        const double after = before + movement;
+        if ((movement > 0 && after > center) || (movement < 0 && after < center)) {
+          if (loop) display = std::fmod(display + movement + extent[axis], extent[axis]);
+          else display = extent[axis] < visible[axis] ? (extent[axis] - visible[axis]) / 2 : std::clamp(display + movement, 0.0, extent[axis] - visible[axis]);
         }
       }
     }
-  }
-  const double previousX = player_.realX, previousY = player_.realY;
-  const bool wasMoving = player_.moving();
-  updateCharacter(player_, playerDashing_);
-  if (savedCamera_) {
-    const auto& tiled = database_["tiledMaps"][std::to_string(mapId_)];
-    const double visibleX = static_cast<double>(screenWidth_) / tiled["tilewidth"].number(48);
-    const double visibleY = static_cast<double>(screenHeight_) / tiled["tileheight"].number(48);
-    const std::array<double, 2> old{previousX, previousY}, now{player_.realX, player_.realY};
-    const std::array<double, 2> visible{visibleX, visibleY}, extent{map()["width"].number(), map()["height"].number()};
-    for (int axis = 0; axis < 2; ++axis) {
-      auto& display = (*savedCamera_)[axis]; const double center = (visible[axis] - 1) / 2;
-      const bool loop = axis == 0 ? loopHorizontal() : loopVertical();
-      const double movement = axis == 0 ? deltaMapX(now[axis], old[axis]) : deltaMapY(now[axis], old[axis]);
-      const double before = loop ? axis == 0 ? deltaMapX(old[axis], display) : deltaMapY(old[axis], display) : old[axis] - display;
-      const double after = before + movement;
-      if ((movement > 0 && after > center) || (movement < 0 && after < center)) {
-        if (loop) display = std::fmod(display + movement + extent[axis], extent[axis]);
-        else display = extent[axis] < visible[axis] ? (extent[axis] - visible[axis]) / 2 : std::clamp(display + movement, 0.0, extent[axis] - visible[axis]);
+    updateMapDisplay();
+    updateVehicles();
+    if (!player_.moving() && !interpreter_.running) {
+      bool started = false;
+      if (wasMoving) {
+        for (int id : partyMembers()) actorWalk(actors_.at(id));
+        startEvent(player_.x, player_.y, false);
+        started = setupStartingMapEvent();
+      }
+      if (!started && !message_.busy && !pendingTransfer_ && !player_.routeForcing && !followersGathering_ && !vehicleGettingOn_ && !vehicleGettingOff_) {
+        bool acted = false;
+        if (ok && !okBlockedByMessage) {
+          acted = toggleVehicle();
+          if (!acted) {
+            startEvent(player_.x, player_.y, true);
+            acted = setupStartingMapEvent();
+            if (!acted) {
+              const int frontX = roundMapX(player_.x + dx(player_.direction)), frontY = roundMapY(player_.y + dy(player_.direction));
+              startEvent(frontX, frontY, true); startEvent(frontX, frontY, false);
+              acted = setupStartingMapEvent();
+              if (!acted && tileFlag(frontX, frontY, 128)) {
+                const int farX = roundMapX(frontX + dx(player_.direction)), farY = roundMapY(frontY + dy(player_.direction));
+                startEvent(farX, farY, true); startEvent(farX, farY, false);
+                acted = setupStartingMapEvent();
+              }
+            }
+          }
+        }
+        if (!acted && destination_) {
+          acted = triggerDestinationAction();
+          if (acted) setupStartingMapEvent();
+        }
+        if (!acted) {
+          if (wasMoving && !pendingScene_) advanceEncounter();
+          else if (!wasMoving) destination_.reset();
+        }
       }
     }
-  }
-  if (!player_.moving() && destination_) { triggerDestinationAction(); if (!wasMoving) destination_.reset(); }
-  updateFollowers();
-  updateVehicles();
-  for (auto& event : events_) {
-    updateCharacter(event.character, false, event.originalPattern);
-    if (event.page < 0 || event.trigger != 4) continue;
-    if (!event.parallel.running) {
-      event.parallel = {}; event.parallel.mapId = mapId_; event.parallel.eventId = event.id;
-      event.parallel.list = map()["events"][event.id]["pages"][event.page]["list"].array();
-      event.parallel.running = true;
-    }
-    advanceInterpreter(event.parallel);
-  }
-  if (wasMoving && !player_.moving()) {
-    if (!interpreter_.running) {
-      for (int id : party_) actorWalk(actors_.at(id));
-      startEvent(player_.x, player_.y, false);
-      const auto event = std::find_if(events_.begin(), events_.end(), [](const Event& value) { return value.starting; });
-      if (event != events_.end()) { event->starting = false; startInterpreter(*event); }
-      else if (!message_.busy && !pendingTransfer_ && !pendingScene_) advanceEncounter();
-    }
-  }
-  if (!player_.moving() && player_.jumpCount <= 0) player_.bushDepth = tileFlag(player_.x, player_.y, 64) && player_.characterName.find('!') >= 2 ? 12 : 0;
-  updateCommonEvents();
-  updateMapState();
-  updateTimer();
+    updateFollowers();
+    if (!player_.moving() && player_.jumpCount <= 0) player_.bushDepth = tileFlag(player_.x, player_.y, 64) && player_.characterName.find('!') >= 2 ? 12 : 0;
+    updateTimer();
     if (pendingTransfer_ && !message_.closing) {
       const auto target = *pendingTransfer_;
       if (!transferFadeStarted_) {
@@ -1301,9 +1454,13 @@ void Session::step(const Input& input) {
     return transferred;
   };
   const bool transferred = updateMain();
-  if (!transferred && !pendingTransfer_ && ui_.scene == Scene::map && (interpreter_.running || message_.busy || std::any_of(events_.begin(), events_.end(), [](const Event& value) { return value.starting; }))
+  if (!transferred && !pendingTransfer_ && ui_.scene == Scene::map && (interpreter_.running || std::any_of(events_.begin(), events_.end(), [](const Event& value) { return value.starting; }))
       && (okAge_ >= 24 || input.touchLongPressed)) updateMain();
-  if (!party_.empty() && std::all_of(party_.begin(), party_.end(), [&](int id) { return actors_.at(id).hp <= 0; })) { openGameOver(); return; }
+  updateVisualEffects();
+  updateMessageWindow();
+  if (!pendingTransfer_) updateUi(input, ok, cancel, repeatedDirection);
+  const auto members = partyMembers();
+  if (!members.empty() && std::all_of(members.begin(), members.end(), [&](int id) { return actors_.at(id).isDead(); })) { openGameOver(); return; }
 }
 Value Session::snapshot() const {
   Value::Object switches, variables, selfSwitches, inventory;
@@ -1324,6 +1481,6 @@ Value Session::snapshot() const {
     for (int skill : actor.skills) skills.emplace_back(skill);
     actors[std::to_string(id)] = Value::Object{{"hp", actor.hp}, {"mp", actor.mp}, {"tp", actor.tp}, {"level", actor.level}, {"parameters", parameters}, {"states", states}, {"skills", skills}};
   }
-  return Value::Object{{"unsupportedAction", unsupportedAction_}, {"camera", savedCamera_ ? Value(Value::Array{(*savedCamera_)[0], (*savedCamera_)[1]}) : Value{}}, {"randomCalls", static_cast<double>(randomCalls_)}, {"battle", Value::Object{{"active", battle_.active}, {"turn", battle_.turn}, {"actorIndex", battle_.actorIndex}, {"wait", battle_.wait}, {"pending", static_cast<int>(battle_.actions.size())}, {"actionStage", battle_.actionStage}, {"enemies", enemies}}}, {"actors", actors}, {"scene", static_cast<int>(ui_.scene)}, {"ui", Value::Object{{"category", ui_.category}, {"cursor", ui_.cursor}, {"skillType", ui_.skillType}}}, {"storage", Value::Object{{"save", saveRequested_}, {"load", loadRequested_}, {"slot", ui_.cursor + 1}}}, {"ticks", static_cast<double>(ticks_)}, {"mapId", mapId_}, {"player", Value::Object{{"x", player_.x}, {"y", player_.y}, {"realX", player_.realX}, {"realY", player_.realY}, {"direction", player_.direction}, {"transparent", player_.transparent}}}, {"events", events}, {"switches", switches}, {"variables", variables}, {"selfSwitches", selfSwitches}, {"inventory", inventory}, {"party", party}, {"interpreter", Value::Object{{"mapId", interpreter_.mapId}, {"eventId", interpreter_.eventId}, {"index", interpreter_.index}, {"wait", interpreter_.wait}, {"running", interpreter_.running}}}, {"message", Value::Object{{"busy", message_.busy}, {"openness", message_.openness}, {"closing", message_.closing}, {"pauseIndex", static_cast<int>(message_.pauseIndex)}, {"age", messageAge_}, {"firstLine", message_.firstLine}, {"pageEnd", message_.pageEnd()}, {"lines", message_.lines}, {"choices", message_.choices}}}};
+  return Value::Object{{"unsupportedAction", unsupportedAction_}, {"camera", savedCamera_ ? Value(Value::Array{(*savedCamera_)[0], (*savedCamera_)[1]}) : Value{}}, {"randomCalls", static_cast<double>(randomCalls_)}, {"battle", Value::Object{{"active", battle_.active}, {"turn", battle_.turn}, {"actorIndex", battle_.actorIndex}, {"wait", battle_.wait}, {"pending", static_cast<int>(battle_.actions.size())}, {"actionStage", battle_.actionStage}, {"enemies", enemies}}}, {"actors", actors}, {"scene", static_cast<int>(ui_.scene)}, {"ui", Value::Object{{"category", ui_.category}, {"cursor", ui_.cursor}, {"skillType", ui_.skillType}}}, {"storage", Value::Object{{"save", saveRequested_}, {"load", loadRequested_}, {"slot", ui_.cursor + 1}}}, {"ticks", static_cast<double>(ticks_)}, {"mapId", mapId_}, {"player", Value::Object{{"x", player_.x}, {"y", player_.y}, {"realX", player_.realX}, {"realY", player_.realY}, {"direction", player_.direction}, {"transparent", player_.transparent}}}, {"events", events}, {"switches", switches}, {"variables", variables}, {"selfSwitches", selfSwitches}, {"inventory", inventory}, {"party", party}, {"interpreter", Value::Object{{"mapId", interpreter_.mapId}, {"eventId", interpreter_.eventId}, {"index", interpreter_.index}, {"wait", interpreter_.wait}, {"running", interpreter_.running}}}, {"message", Value::Object{{"busy", message_.busy}, {"openness", message_.openness}, {"closing", message_.closing}, {"pauseIndex", static_cast<int>(message_.pauseIndex)}, {"age", messageAge_}, {"firstLine", message_.firstLine}, {"pageEnd", message_.pageEnd()}, {"lines", message_.lines}, {"choices", Value(message_.choices.values())}}}};
 }
 }  // namespace pmjs::mv

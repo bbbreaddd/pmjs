@@ -97,7 +97,7 @@ void Window_Base::drawActorHp(const Battler& actor, const Session& session, int 
   changeTextColor(systemColor());
   const std::string label = TextManager::hpA(session);
   drawText(label.empty() ? "HP" : label, x, y, 44);
-  drawCurrentAndMax(actor.hp, mhp, x, y, width, hpColor(actor.hp, mhp), normalColor());
+  drawCurrentAndMax(actor.hp, mhp, x, y, width, hpColor(actor, mhp), normalColor());
 }
 
 void Window_Base::drawActorMp(const Battler& actor, const Session& session, int x, int y, int width) {
@@ -122,7 +122,7 @@ void Window_Base::drawActorTp(const Battler& actor, int x, int y, int width, con
 
 void Window_Base::drawActorName(const Battler& actor, const Session& session, int x, int y, int width) {
   const int mhp = static_cast<int>(std::max(1.0, session.parameter(actor, 0)));
-  changeTextColor(hpColor(actor.hp, mhp));
+  changeTextColor(hpColor(actor, mhp));
   drawText(actor.name, x, y, width);
 }
 
@@ -193,9 +193,9 @@ Color Window_Base::tpGaugeColor1() { return {0, 160, 96, 255}; }
 Color Window_Base::tpGaugeColor2() { return {0, 224, 128, 255}; }
 Color Window_Base::tpCostColor() { return {0, 224, 128, 255}; }
 
-Color Window_Base::hpColor(int hp, int mhp) {
-  if (hp == 0) return deathColor();
-  if (mhp > 0 && hp < mhp / 4) return crisisColor();
+Color Window_Base::hpColor(const Battler& actor, int mhp) {
+  if (actor.isDead()) return deathColor();
+  if (actor.isAlive() && actor.hp < mhp / 4.0) return crisisColor();
   return normalColor();
 }
 
@@ -270,6 +270,27 @@ std::string Window_Base::processEscapeCodes(const std::string& source, const Ses
   std::replace(result.begin(), result.end(), '\\', '\x1b');
   std::replace(result.begin(), result.end(), '\x1f', '\\');
   return result;
+}
+
+std::string Window_Base::obtainEscapeCode(const std::string& text, std::size_t& index) {
+  if (index >= text.size()) return {};
+  ++index;
+  const std::size_t start = index;
+  if (index < text.size() && std::string("$.|^!><{}\\").find(text[index]) != std::string::npos) ++index;
+  else while (index < text.size() && ((text[index] >= 'A' && text[index] <= 'Z') || (text[index] >= 'a' && text[index] <= 'z'))) ++index;
+  std::string code = text.substr(start, index - start);
+  for (char& character : code) character = std::toupper(static_cast<unsigned char>(character));
+  return code;
+}
+
+int Window_Base::obtainEscapeParam(const std::string& text, std::size_t& index) {
+  if (index >= text.size() || text[index] != '[') return 0;
+  std::size_t end = index + 1;
+  while (end < text.size() && text[end] >= '0' && text[end] <= '9') ++end;
+  if (end == index + 1 || end >= text.size() || text[end] != ']') return 0;
+  const double value = std::strtod(text.c_str() + index + 1, nullptr);
+  index = end + 1;
+  return static_cast<int>(std::min(value, static_cast<double>(std::numeric_limits<int>::max())));
 }
 
 namespace {
@@ -776,7 +797,7 @@ void Window_BattleLog::queuePopup(Session& session, const Battler& target, int v
       entry.actorId = target.id;
       if (entry.index == static_cast<int>(session.party_.size())) entry.index = -1;
     }
-    entry.result = result; entry.aliveAtImpact = target.hp > 0;
+    entry.result = result; entry.aliveAtImpact = target.isAlive();
     recordIndex = static_cast<int>(visual.targets.size());
     visual.targets.push_back(std::move(entry));
   }
@@ -899,14 +920,14 @@ void Window_BattleLog::displayHpDamage(const Session& session, const Battler& ta
 }
 void Window_BattleLog::displayMpDamage(const Session& session, const Battler& target) {
   const auto& result = target.result;
-  if (target.hp <= 0 || result.mpDamage == 0) return;
+  if (!target.isAlive() || result.mpDamage == 0) return;
   const int damage = result.mpDamage;
   if (damage < 0) push({"performRecovery",0,battlerId(session,target)});
   const auto key = std::string(target.enemy ? "enemy" : "actor")+(damage > 0 ? (result.drain ? "Drain" : "Loss") : "Recovery");
   push({"addText",0,0,0,TextManager::format(TextManager::message(session,key),{target.name,TextManager::mp(session),std::to_string(std::abs(damage))})});
 }
 void Window_BattleLog::displayTpDamage(const Session& session, const Battler& target) {
-  if (target.hp <= 0 || target.result.tpDamage == 0) return;
+  if (!target.isAlive() || target.result.tpDamage == 0) return;
   const int damage = target.result.tpDamage;
   if (damage < 0) push({"performRecovery",0,battlerId(session,target)});
   const auto key = std::string(target.enemy ? "enemy" : "actor")+(damage > 0 ? "Loss" : "Gain");
@@ -1551,10 +1572,13 @@ void Window_Message::updateState(Session& session) {
   auto& message = session.message_;
   message.previousOpenness = message.openness;
   if (message.scrolling) return;
-  if (message.busy && !message.lines.empty()) message.openness = advanceOpenness(message.openness,true);
-  else if (message.closing) {
+  if (message.closing) {
     message.openness = advanceOpenness(message.openness,false);
-    if (!message.openness) { message = {}; session.messageOwnerSerial_ = 0; }
+    if (!message.openness) { message.closing = false; message.windowStarted = false; session.closingMessage_.reset(); }
+  } else if (message.busy && !message.lines.empty()) {
+    session.closingMessage_.reset();
+    if (message.windowStarted) message.openness = advanceOpenness(message.openness,true);
+    else message.windowStarted = true;
   }
 }
 void Window_Message::terminate(Session& session) {
@@ -1562,6 +1586,8 @@ void Window_Message::terminate(Session& session) {
   message.busy = false; message.closing = message.openness > 0;
   message.choices.clear(); message.numberVariableId = message.numberDigits = 0;
   message.itemVariableId = message.itemType = 0;
+  session.closingMessage_ = message;
+  session.dispatchMessage("clear");
   session.messageOwnerSerial_ = 0;
   const auto close = [](auto& window) { if (window && window->active) { window->close(); window->deactivate(); } };
   close(session.choiceWindow_); close(session.numberWindow_); close(session.eventItemWindow_);
@@ -1726,7 +1752,7 @@ Window_BattleEnemy::Window_BattleEnemy(int x, int y)
 void Window_BattleEnemy::refresh(const Session& session) {
   enemyIndices = makeTargets(session);
 }
-bool Window_BattleEnemy::includes(const Battler& enemy) { return !enemy.hidden && !enemy.escaped && enemy.hp > 0; }
+bool Window_BattleEnemy::includes(const Battler& enemy) { return enemy.isAlive(); }
 std::vector<int> Window_BattleEnemy::makeTargets(const Session& session) {
   std::vector<int> targets;
   const auto& enemies = session.battle().enemies;

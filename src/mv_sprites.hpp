@@ -260,6 +260,8 @@ class Sprite_Picture : public Sprite_Base {
   std::optional<std::array<double, 4>> sourceFrame;
   int pictureId = 0;
   std::string pictureName;
+  std::string bitmapName;
+  std::shared_ptr<core::PixelBitmap> bitmap;
   int origin = 0;
 
   explicit Sprite_Picture(int id);

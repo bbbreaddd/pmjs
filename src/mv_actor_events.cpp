@@ -83,11 +83,7 @@ bool Session::actorEventCommand(const Value& entry) {
   const auto& p = entry["parameters"];
   const int actorId = p[0].integer() ? variable(p[1].integer()).integer() : p[1].integer();
   std::vector<int> selected;
-  if (!actorId) {
-    const std::size_t count = battle_.active ? battleMemberCount() : party_.size();
-    for (std::size_t index = 0; index < count; ++index)
-      if (!battle_.active || !actors_.at(party_[index]).hidden) selected.push_back(party_[index]);
-  }
+  if (!actorId) selected = partyMembers();
   else if (!database_["actors"][actorId].null()) {
     if (!actors_.contains(actorId)) initializeActor(actorId);
     selected.push_back(actorId);
@@ -103,15 +99,14 @@ bool Session::actorEventCommand(const Value& entry) {
     auto& actor = actors_.at(id);
     switch (code) {
       case 311:
-        if (!actor.hidden && std::find(actor.states.begin(), actor.states.end(), 1) == actor.states.end()) {
+        if (actor.isAlive()) {
           double change = amount;
           if (!p[5].boolean() && actor.hp <= -change) change = 1 - actor.hp;
           actor.result.hpAffected = true;
           actor.result.hpDamage = boundedInt(-change, std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
           actor.hp = boundedInt(actor.hp + change, 0, static_cast<int>(parameter(actor, 0)));
           refreshBattler(actor);
-          if ((actor.hp <= 0 || std::find(actor.states.begin(), actor.states.end(), 1) != actor.states.end()) &&
-              battle_.active && battleLog_) {
+          if (actor.isDead() && battle_.active && battleLog_) {
             battleLog_->performCollapse(*this, actor);
           }
         }
@@ -127,14 +122,13 @@ bool Session::actorEventCommand(const Value& entry) {
         refreshBattler(actor);
         break;
       case 313: {
-        const bool alreadyDead = actor.hp <= 0 || std::find(actor.states.begin(), actor.states.end(), 1) != actor.states.end();
+        const bool alreadyDead = actor.isDead();
         if (!p[2].integer()) addState(actor, p[3].integer());
         else {
           removeState(actor, p[3].integer());
           refreshBattler(actor);
         }
-        if (!alreadyDead && (actor.hp <= 0 || std::find(actor.states.begin(), actor.states.end(), 1) != actor.states.end()) &&
-            battle_.active && battleLog_) {
+        if (!alreadyDead && actor.isDead() && battle_.active && battleLog_) {
           battleLog_->performCollapse(*this, actor);
         }
         actor.result = {};

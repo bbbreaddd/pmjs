@@ -188,9 +188,13 @@ double Session::evaluateExpression(const std::string& expression,const Battler* 
     if(name=="Math.random")return random();
     if(name=="Math.randomInt")return core::randomInt(args.empty()?std::numeric_limits<double>::quiet_NaN():args[0],[&]{return random();});
     const int first=args.empty()?0:static_cast<int>(args[0]);
-    if(name=="v[]"||name=="$gameVariables.value")return variable(first).number();
+    if(name=="v[]") {
+      const auto value=variables_.find(first);
+      return value==variables_.end()?std::numeric_limits<double>::quiet_NaN():core::numberValue(value->second);
+    }
+    if(name=="$gameVariables.value")return core::numberValue(variable(first));
     if(name=="$gameSwitches.value") { auto it=switches_.find(first);return it!=switches_.end()&&it->second; }
-    if(name=="$gameParty.gold")return gold_; if(name=="$gameParty.size")return party_.size();
+    if(name=="$gameParty.gold")return gold_; if(name=="$gameParty.size")return partyMembers().size();
     if(name=="$gameParty.steps")return steps_; if(name=="$gameMap.mapId")return mapId_;
     if(name=="$gamePlayer.x")return player_.x; if(name=="$gamePlayer.y")return player_.y;
     if(name=="$gamePlayer.direction")return player_.direction;

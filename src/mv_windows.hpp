@@ -92,12 +92,14 @@ class Window_Base {
   static Color tpGaugeColor1();
   static Color tpGaugeColor2();
   static Color tpCostColor();
-  static Color hpColor(int hp, int mhp);
+  static Color hpColor(const Battler& actor, int mhp);
   static Color paramchangeTextColor(int change);
   static Color textColorAt(int index);
 
   // Escape codes parser: \C[n], \I[n], \V[n], \N[n], \P[n], \G, \{, \}
   static std::string processEscapeCodes(const std::string& text, const Session& session);
+  static std::string obtainEscapeCode(const std::string& text, std::size_t& index);
+  static int obtainEscapeParam(const std::string& text, std::size_t& index);
   static int textLineHeight(const std::string& preparedText, std::size_t start, int fontSize);
   static int textHeight(const std::string& preparedText, int fontSize = 28);
 };

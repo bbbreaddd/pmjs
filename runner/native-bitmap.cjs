@@ -1,4 +1,6 @@
 'use strict';
+const bitmapFactories = new WeakMap();
+let nextReservation = 2n;
 
 function createBitmapClass(native, PIXI = null, fonts = null) {
   const api = native.mvBitmap;
@@ -72,10 +74,12 @@ function createBitmapClass(native, PIXI = null, fonts = null) {
   function Bitmap() { this.initialize.apply(this, arguments); }
   Object.defineProperty(Bitmap, 'nativeBacking', { value: true });
   Bitmap.prototype.initialize = function(width = 0, height = 0) {
-    const handle = api.create(runtime, Math.max(0, Math.trunc(Number(width) || 0)), Math.max(0, Math.trunc(Number(height) || 0)));
     const old = instances.get(this);
+    width = Math.max(0, Math.trunc(Number(width) || 0)); height = Math.max(0, Math.trunc(Number(height) || 0));
+    const handle = old?.managed ? old.handle : api.create(runtime, width, height);
+    if (old?.managed) api.invoke(handle, 'reset', width, height);
     if (old?.pending) pending.delete(old.pending);
-    instances.set(this, { handle, listeners: [], pending: null, revision: 0, textureRevision: -1, texture: null });
+    instances.set(this, { handle, managed: Boolean(old?.managed), listeners: [], pending: null, revision: 0, textureRevision: -1, texture: null });
   };
   function loadBitmap(Type, url, requestOnly) {
     const bitmap = Object.create(Type.prototype);
@@ -90,8 +94,8 @@ function createBitmapClass(native, PIXI = null, fonts = null) {
   }
   Bitmap.load = function(url) { return loadBitmap(this, url, false); };
   Bitmap.request = function(url) { return loadBitmap(this, url, true); };
-  Bitmap.updateLoads = function() {
-    api.updateLoads(runtime);
+  Bitmap.updateLoads = function(servicesUpdated = false) {
+    if (!servicesUpdated) api.updateLoads(runtime);
     for (const reference of [...pending]) {
       const bitmap = reference.deref();
       if (!bitmap) { pending.delete(reference); continue; }
@@ -167,7 +171,81 @@ function createBitmapClass(native, PIXI = null, fonts = null) {
     Object.defineProperty(surface, 'bitmap', { value: bitmap });
     return surface;
   };
+  bitmapFactories.set(Bitmap, { runtime, handle(bitmap) { return entry(bitmap).handle; }, adopt(result) {
+    const bitmap = Object.create(Bitmap.prototype);
+    bitmap.initialize();
+    const value = entry(bitmap); value.handle = result.handle; value.managed = true; value.revision++;
+    value.pending = new WeakRef(bitmap); pending.add(value.pending);
+    return bitmap;
+  } });
   return Bitmap;
 }
 
-module.exports = { createBitmapClass };
+function createImageManager(native, Bitmap) {
+  const factory = bitmapFactories.get(Bitmap);
+  if (!factory) throw new TypeError('ImageManager requires the native Bitmap constructor');
+  if (factory.manager) return factory.manager;
+  const api = native.mvBitmap, runtime = factory.runtime;
+  const known = new Map(), roots = new Map(), reservations = new Map([[1, 1n]]);
+  let defaultReservation = null;
+  function reservation(id) {
+    if (!id) return 0n;
+    if (!reservations.has(id)) reservations.set(id, nextReservation++);
+    return reservations.get(id);
+  }
+  function load(path, hue, smooth, mode, id) {
+    if (!path) { hue = 0; smooth = false; mode = 'reserve'; id = 1; }
+    const result = api.managedImage(runtime, path, Number(hue) || 0, Boolean(smooth), mode, reservation(id));
+    let bitmap = known.get(result.identity)?.deref();
+    if (!bitmap) { bitmap = factory.adopt(result); known.set(result.identity, new WeakRef(bitmap)); }
+    roots.set(result.identity, bitmap);
+    return bitmap;
+  }
+  function synchronize(state) {
+    const live = new Set(state.identities);
+    for (const id of roots.keys()) if (!live.has(id)) roots.delete(id);
+    for (const [id, reference] of known) if (!reference.deref()) known.delete(id);
+  }
+  const manager = {
+    faceWidth: 144, faceHeight: 144,
+    loadBitmap(folder, filename, hue = 0, smooth = true) { return load(api.imagePath(folder, String(filename || '')), hue, smooth, 'load', 0); },
+    reserveBitmap(folder, filename, hue = 0, smooth = true, id = defaultReservation) {
+      return load(api.imagePath(folder, String(filename || '')), hue, smooth, 'reserve', id);
+    },
+    requestBitmap(folder, filename, hue = 0, smooth = true) { return load(api.imagePath(folder, String(filename || '')), hue, smooth, 'request', 0); },
+    loadNormalBitmap(path, hue = 0) { return load(String(path), hue, true, 'load', 0); },
+    reserveNormalBitmap(path, hue = 0, id = defaultReservation) { return load(String(path), hue, true, 'reserve', id); },
+    requestNormalBitmap(path, hue = 0) { return load(String(path), hue, true, 'request', 0); },
+    loadEmptyBitmap() { return load('', 0, false, 'reserve', 1); },
+    isReady() { const state = api.imageManager(runtime, 'state'); if (state.error) throw new Error('Failed to load: ' + state.error); return state.ready; },
+    update() { synchronize(api.imageManager(runtime, 'update')); Bitmap.updateLoads(true); },
+    clear() { synchronize(api.imageManager(runtime, 'clear')); },
+    clearRequest() { api.imageManager(runtime, 'clearRequests'); },
+    setDefaultReservationId(id) { defaultReservation = id; },
+    releaseReservation(id) { if (reservations.has(id)) api.imageManager(runtime, 'release', reservations.get(id)); },
+    setCacheLimit(pixels) { api.imageManager(runtime, 'limit', pixels); },
+    isObjectCharacter(name) { return api.imageNameFlag('object', String(name)); },
+    isBigCharacter(name) { return api.imageNameFlag('big', String(name)); },
+    isZeroParallax(name) { return api.imageNameFlag('zero', String(name)); }
+  };
+  const folders = { Animation: ['animations', true], Battleback1: ['battlebacks1', true], Battleback2: ['battlebacks2', true],
+    Enemy: ['enemies', true], Character: ['characters', false], Face: ['faces', true], Parallax: ['parallaxes', true],
+    Picture: ['pictures', true], SvActor: ['sv_actors', false], SvEnemy: ['sv_enemies', true], System: ['system', false],
+    Tileset: ['tilesets', false], Title1: ['titles1', true], Title2: ['titles2', true] };
+  for (const [name, [folder, smooth]] of Object.entries(folders)) {
+    manager['load' + name] = function(filename, hue = 0) { return this.loadBitmap('img/' + folder + '/', filename, hue, smooth); };
+    manager['reserve' + name] = function(filename, hue = 0, id = defaultReservation) { return this.reserveBitmap('img/' + folder + '/', filename, hue, smooth, id); };
+    manager['request' + name] = function(filename, hue = 0) { return this.requestBitmap('img/' + folder + '/', filename, hue, smooth); };
+  }
+  manager._systemReservationId = 1;
+  manager.reserveSystem = function(filename, hue = 0, id) { return this.reserveBitmap('img/system/', filename, hue, false, id || this._systemReservationId); };
+  factory.manager = manager;
+  return manager;
+}
+
+function bitmapHandle(Bitmap, bitmap) {
+  const factory = bitmapFactories.get(Bitmap);
+  if (!factory) throw new TypeError('Native Bitmap constructor is unavailable');
+  return factory.handle(bitmap);
+}
+module.exports = { createBitmapClass, createImageManager, bitmapHandle };

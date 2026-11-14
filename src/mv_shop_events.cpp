@@ -40,7 +40,7 @@ int Session::shopMaximum(const ShopGood& good, bool selling, int money) const {
   return std::max(0, std::min(99 - owned, good.price > 0 ? money / good.price : 99));
 }
 
-void Session::updateShop(bool ok, bool cancel, int direction) {
+void Session::updateShop(bool ok, bool cancel, int direction, bool pageUp, bool pageDown) {
   const auto sound = [&](int id) { SoundManager::playSystemSound(*this, id); };
   const bool shift = currentInput_.dash || currentInput_.pressed.contains("shift");
   const bool shiftTriggered = shift && !ui_.shopStatusShiftHeld;
@@ -53,10 +53,10 @@ void Session::updateShop(bool ok, bool cancel, int direction) {
     ui_.shopStatusPage = Window_ShopStatus::nextPage(*this,ui_.shopStatusPage);
     sound(0);
   }
-  const auto leave = [&] {
+  const auto leave = [&](bool confirmed = false) {
     if (SceneManager::hasPrevious(*this)) SceneManager::popScene(*this);
     else SceneManager::gotoScene(*this, Scene::map);
-    sound(2);
+    sound(confirmed ? 1 : 2);
   };
   if (ui_.category == 0) {
     const auto commands = Window_ShopCommand::makeCommands(*this, ui_.shopPurchaseOnly);
@@ -68,7 +68,7 @@ void Session::updateShop(bool ok, bool cancel, int direction) {
     else if (ok) {
       const auto& command = commands.at(ui_.cursor);
       if (!command.enabled) sound(3);
-      else if (command.symbol == "cancel") leave();
+      else if (command.symbol == "cancel") leave(true);
       else { ui_.category = command.symbol == "buy" ? 1 : 4; ui_.cursor = 0; ui_.slot = 0; ui_.listTopRow = 0; sound(1); }
     }
     return;
@@ -84,7 +84,7 @@ void Session::updateShop(bool ok, bool cancel, int direction) {
     return;
   }
   if (ui_.category == 3) {
-    if (direction) {
+    if (direction && !ok && !cancel) {
       const int previous = ui_.shopItemCount;
       const int change = direction == 6 ? 1 : direction == 4 ? -1 : direction == 8 ? 10 : -10;
       ui_.shopItemCount = Window_ShopNumber::changeNumber(ui_.shopItemCount, change, ui_.shopMaxNumber);
@@ -106,6 +106,7 @@ void Session::updateShop(bool ok, bool cancel, int direction) {
   ui_.cursor = std::clamp(ui_.cursor, 0, std::max(0, count - 1));
   ui_.listTopRow = Window_Selectable::clampTopRow(ui_.listTopRow, count, columns, ui_.listPageRows);
   if (direction) Window_Selectable::moveCursor(ui_.cursor, ui_.listTopRow, count, columns, ui_.listPageRows, direction, directionAge_ == 0);
+  if (pageDown || pageUp) Window_Selectable::pageCursor(ui_.cursor, ui_.listTopRow, count, columns, ui_.listPageRows, pageDown);
   if (previous != ui_.cursor) sound(0);
   ui_.listTopRow = Window_Selectable::wheelTopRow(ui_.listTopRow, count, columns, ui_.listPageRows, currentInput_.wheelY);
   if (cancel) { ui_.category = selling ? 4 : 0; ui_.cursor = selling ? ui_.slot : 0; sound(2); }

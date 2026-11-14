@@ -114,7 +114,9 @@ bool Session::characterEventCommand(const Value& entry, Interpreter& context) {
 
 void Session::setupMapState() {
   const auto& data = map();
+  const bool nameDisplay = mapState_.nameDisplay;
   mapState_ = {};
+  mapState_.nameDisplay = nameDisplay;
   mapState_.tilesetId = data["tilesetId"].integer();
   if (data["specifyBattleback"].boolean()) {
     mapState_.battleback1Name = data["battleback1Name"]; mapState_.battleback2Name = data["battleback2Name"];
@@ -133,7 +135,7 @@ void Session::setupMapState() {
   savedCamera_ = std::array{mapState_.lastDisplayX, mapState_.lastDisplayY};
 }
 
-void Session::updateMapState() {
+void Session::updateMapScroll() {
   const double width = screenWidth_ / 48.0;
   const double height = screenHeight_ / 48.0;
   const double endX = map()["width"].number() - width, endY = map()["height"].number() - height;
@@ -149,24 +151,37 @@ void Session::updateMapState() {
     }
     mapState_.scrollRest = *savedCamera_ == before ? 0 : mapState_.scrollRest - distance;
   }
+  updateMapDisplay();
+}
+
+void Session::updateMapDisplay() {
+  const double width = screenWidth_ / 48.0;
+  const double height = screenHeight_ / 48.0;
+  const double endX = map()["width"].number() - width, endY = map()["height"].number() - height;
   const double displayX = savedCamera_ ? (*savedCamera_)[0] : endX < 0 ? endX / 2 : std::clamp(player_.realX - (width - 1) / 2, 0.0, endX);
   const double displayY = savedCamera_ ? (*savedCamera_)[1] : endY < 0 ? endY / 2 : std::clamp(player_.realY - (height - 1) / 2, 0.0, endY);
   if (!loopHorizontal() || mapState_.parallaxLoopX) mapState_.parallaxX += deltaMapX(displayX, mapState_.lastDisplayX);
   if (!loopVertical() || mapState_.parallaxLoopY) mapState_.parallaxY += deltaMapY(displayY, mapState_.lastDisplayY);
   mapState_.lastDisplayX = displayX; mapState_.lastDisplayY = displayY;
+}
+
+void Session::updateMapState() {
   if (mapState_.parallaxLoopX) mapState_.parallaxX += mapState_.parallaxSx / 96;
   if (mapState_.parallaxLoopY) mapState_.parallaxY += mapState_.parallaxSy / 96;
 }
 
 void Session::updateSelfMovement(Event& event) {
   auto& character = event.character;
-  if (event.prelockDirection != 0 || character.stopCount <= 30 * (5 - character.moveFrequency)) return;
+  if (event.locked || character.stopCount <= 30 * (5 - character.moveFrequency)) return;
   const double width = screenWidth_, height = screenHeight_;
   const double endX = map()["width"].number() - width / 48, endY = map()["height"].number() - height / 48;
   const double displayX = savedCamera_ ? (*savedCamera_)[0] : endX < 0 ? endX / 2 : std::clamp(player_.realX - (width / 48 - 1) / 2, 0.0, endX);
   const double displayY = savedCamera_ ? (*savedCamera_)[1] : endY < 0 ? endY / 2 : std::clamp(player_.realY - (height / 48 - 1) / 2, 0.0, endY);
-  const double px = deltaMapX(character.realX, displayX) * 48 + 24 - width / 2;
-  const double py = deltaMapY(character.realY, displayY) * 48 + 24 - height / 2;
+  double scrolledX = character.realX - displayX, scrolledY = character.realY - displayY;
+  if (loopHorizontal() && character.realX < displayX - endX / 2) scrolledX += map()["width"].number();
+  if (loopVertical() && character.realY < displayY - endY / 2) scrolledY += map()["height"].number();
+  const double px = scrolledX * 48 + 24 - width / 2;
+  const double py = scrolledY * 48 + 24 - height / 2;
   if (px < -width || px > width || py < -height || py > height) return;
   const auto moveRandom = [&] {
     const int direction = 2 + randomInt(4) * 2;

@@ -7,6 +7,64 @@
 #include <stdexcept>
 
 namespace pmjs::mv {
+Value Session::imageRequests(const RuntimeCommandList& list) {
+  Value::Array requests;
+  const auto request = [&](const char* method, const Value& name, const Value& hue = Value(0)) {
+    requests.emplace_back(Value::Object{{"method", method}, {"arguments", Value::Array{name, hue}}});
+  };
+  for (const auto& command : list.root.array()) {
+    const auto& p = command["parameters"];
+    switch (command["code"].integer()) {
+      case 101: request("requestFace", p[0]); break;
+      case 117: if (!database_["commonEvents"][p[0].integer()].null()) requests.emplace_back(Value::Object{{"commonEvent", p[0]}}); break;
+      case 129:
+        if (!database_["actors"][p[0].integer()].null()) {
+          if (!actors_.contains(p[0].integer())) initializeActor(p[0].integer());
+          if (!p[1].integer()) request("requestCharacter", actors_.at(p[0].integer()).characterName);
+        }
+        break;
+      case 205:
+        for (const auto& route : p[1]["list"].array()) if (route["code"].integer() == 41) request("requestCharacter", route["parameters"][0]);
+        break;
+      case 212: case 337:
+        if (p[1].integer()) {
+          const auto& animation = database_["animations"][p[1].integer()];
+          request("requestAnimation", animation["animation1Name"], animation["animation1Hue"]);
+          request("requestAnimation", animation["animation2Name"], animation["animation2Hue"]);
+        }
+        break;
+      case 216: if (!p[0].integer()) for (const auto& follower : followers_) request("requestCharacter", follower.characterName); break;
+      case 231: request("requestPicture", p[1]); break;
+      case 282: for (const auto& name : database_["tilesets"][p[0].integer()]["tilesetNames"].array()) request("requestTileset", name); break;
+      case 283: if (battle_.active) { request("requestBattleback1", p[0]); request("requestBattleback2", p[1]); } break;
+      case 284: if (!battle_.active) request("requestParallax", p[0]); break;
+      case 322: request("requestCharacter", p[1]); request("requestFace", p[3]); request("requestSvActor", p[5]); break;
+      case 323: if (p[0].integer() >= 0 && p[0].integer() < 3) request("requestCharacter", p[1]); break;
+      case 336: {
+        const auto& enemy = database_["enemies"][p[1].integer()];
+        request(database_["system"]["optSideView"].boolean() ? "requestSvEnemy" : "requestEnemy", enemy["battlerName"], enemy["battlerHue"]);
+        break;
+      }
+    }
+  }
+  return requests;
+}
+Value& RuntimeCommandList::resolve(const std::vector<std::string>& path) {
+  Value* value = &root;
+  for (const auto& key : path) {
+    if (auto* array = std::get_if<Value::Array>(&value->data)) value = &array->at(std::stoul(key));
+    else value = &std::get<Value::Object>(value->data).at(key);
+  }
+  return *value;
+}
+std::shared_ptr<RuntimeCommandView> RuntimeCommandList::view(const std::vector<std::string>& path) {
+  auto& cached = views[path];
+  if (auto value = cached.lock()) return value;
+  auto value = std::make_shared<RuntimeCommandView>();
+  value->list = shared_from_this(); value->path = path;
+  cached = value;
+  return value;
+}
 namespace {
 std::string trim(std::string text) {
   const auto first=text.find_first_not_of(" \t\r\n"),last=text.find_last_not_of(" \t\r\n");

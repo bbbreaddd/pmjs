@@ -46,11 +46,16 @@ bool Session::toggleVehicle() {
   if (vehicleType_ >= 0) {
     if (!vehicleLandingOk(vehicleType_)) return false;
     auto& vehicle = vehicles_[vehicleType_];
-    if (vehicleType_ == 2 && !player_.directionFix) player_.direction = 2;
-    synchronizeFollowers(); vehicle.driving = false; vehicle.character.walkAnime = false; vehicle.character.stepAnime = false; vehicle.character.direction = 4;
+    if (vehicleType_ == 2) {
+      if (!player_.directionFix) player_.direction = 2;
+      player_.stopCount = 0;
+    }
+    synchronizeFollowers(player_.x, player_.y); vehicle.driving = false; vehicle.character.walkAnime = false; vehicle.character.stepAnime = false;
+    if (!vehicle.character.directionFix) vehicle.character.direction = 4;
+    vehicle.character.stopCount = 0;
     if (vehicleType_ != 2) {
-      const bool through = player_.through; player_.through = true;
-      move(player_, player_.direction); player_.through = through; player_.transparent = false;
+      player_.through = true;
+      move(player_, player_.direction); player_.through = false; player_.transparent = false;
     }
     vehicleGettingOff_ = true; player_.moveSpeed = 4; player_.through = false;
     encounterCount_ = randomInt(map()["encounterStep"].integer(30)) + randomInt(map()["encounterStep"].integer(30)) + 1;
@@ -65,38 +70,48 @@ bool Session::toggleVehicle() {
   vehicleWalkSpeed_ = player_.moveSpeed;
   vehicleGettingOn_ = true;
   if (vehicleType_ != 2) {
-    const bool through = player_.through; player_.through = true;
-    move(player_, player_.direction); player_.through = through;
+    player_.through = true;
+    move(player_, player_.direction); player_.through = false;
   }
   followersGathering_ = true;
   return true;
 }
 
-void Session::updateVehicles() {
-  if (vehicleType_ >= 0 && vehicleGettingOn_ && !followersGathering_ && !player_.moving()) {
-    auto& vehicle = vehicles_[vehicleType_];
-    if (!player_.directionFix) player_.direction = vehicle.character.direction;
-    player_.moveSpeed = vehicle.character.moveSpeed; player_.transparent = true; player_.through = vehicleType_ == 2;
-    vehicleWalkingBgm_ = AudioManager::saveBgm(*this);
-    vehicle.driving = true; vehicle.character.walkAnime = true; vehicle.character.stepAnime = true;
-    vehicleGettingOn_ = false;
-    const auto& bgm = system_.vehicleBgm[vehicleType_].null() ? vehicle.bgm : system_.vehicleBgm[vehicleType_];
-    AudioManager::playBgm(*this, bgm);
-  }
+void Session::updateMapVehicles() {
   for (auto& vehicle : vehicles_) {
-    if (vehicle.mapId == mapId_) updateCharacter(vehicle.character, false);
-    if (vehicle.driving && !vehicleGettingOff_) {
-      vehicle.mapId = mapId_; vehicle.character.x = player_.x; vehicle.character.y = player_.y;
-      vehicle.character.realX = player_.realX; vehicle.character.realY = player_.realY; vehicle.character.direction = player_.direction;
-    }
+    updateCharacter(vehicle.character, false);
     if (vehicle.type == 2) {
       vehicle.altitude = std::clamp(vehicle.altitude + (vehicle.driving ? 1 : -1), 0, 48);
       vehicle.character.stepAnime = vehicle.altitude >= 48; vehicle.character.spriteOffsetY = -vehicle.altitude;
     }
     vehicle.character.transparent = vehicle.mapId != mapId_;
   }
-  if (vehicleType_ >= 0 && vehicleGettingOff_ && !followersGathering_ && vehicles_[vehicleType_].altitude == 0) {
-    vehicleGettingOff_ = false; vehicleType_ = -1; player_.transparent = false;
+}
+
+void Session::updateVehicles() {
+  if (vehicleType_ < 0 || followersGathering_) return;
+  auto& vehicle = vehicles_[vehicleType_];
+  if (vehicleGettingOn_) {
+    if (player_.moving()) return;
+    if (!player_.directionFix) player_.direction = vehicle.character.direction;
+    player_.stopCount = 0;
+    player_.moveSpeed = vehicle.character.moveSpeed; player_.transparent = true; player_.through = vehicleType_ == 2;
+    vehicleWalkingBgm_ = AudioManager::saveBgm(*this);
+    vehicle.driving = true; vehicle.character.walkAnime = true; vehicle.character.stepAnime = true;
+    vehicleGettingOn_ = false;
+    const auto& bgm = system_.vehicleBgm[vehicleType_].null() ? vehicle.bgm : system_.vehicleBgm[vehicleType_];
+    AudioManager::playBgm(*this, bgm);
+  } else if (vehicleGettingOff_) {
+    if (vehicle.altitude <= 0) {
+      vehicleGettingOff_ = false; vehicleType_ = -1; player_.transparent = false;
+    }
+  } else {
+    vehicle.character.x = player_.x; vehicle.character.y = player_.y;
+    vehicle.character.realX = player_.realX; vehicle.character.realY = player_.realY; vehicle.character.direction = player_.direction;
+    const bool bush = vehicle.type != 2 && vehicle.character.jumpCount <= 0 &&
+      vehicle.character.characterName.find('!') >= 2 && tileFlag(vehicle.character.x, vehicle.character.y, 64);
+    if (!bush) vehicle.character.bushDepth = 0;
+    else if (!vehicle.character.moving()) vehicle.character.bushDepth = 12;
   }
 }
 

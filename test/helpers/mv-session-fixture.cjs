@@ -6,7 +6,8 @@ const variable = (id, value) => command(122, [id, id, 0, 0, value]);
 function fixture(program) {
   const actor = id => ({ id, name: `Actor ${id}`, classId: 1, initialLevel: 1, equips: [1, 0, 1, 0, 0] });
   return {
-    system: { startMapId: 1, startX: 1, startY: 1, partyMembers: [1], variables: Array(100).fill('') },
+    system: { startMapId: 1, startX: 1, startY: 1, partyMembers: [1], variables: Array(100).fill(''),
+      equipTypes: ['', 'Weapon', 'Shield', 'Head', 'Body', 'Accessory'] },
     actors: [null, actor(1), actor(2)],
     classes: [null, { params: Array.from({ length: 8 }, () => [0, 10]), learnings: [{ level: 1, skillId: 2 }],
       traits: [{ code: 51, dataId: 1, value: 1 }, { code: 52, dataId: 1, value: 1 }] }],

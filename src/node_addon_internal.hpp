@@ -22,7 +22,10 @@
 #include <vector>
 #include <utility>
 
+namespace pmjs::mv::core { class PixelBitmap; }
 namespace pmjs::addon {
+
+std::shared_ptr<mv::core::PixelBitmap> bitmapForRuntime(napi_env env, napi_value object, RuntimeCore& runtime);
 
 void trimPreparationMemory() noexcept;
 

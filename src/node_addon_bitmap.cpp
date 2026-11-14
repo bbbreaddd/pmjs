@@ -1,17 +1,20 @@
 #include "node_addon_internal.hpp"
 #include "mv_core_audio_graphics.hpp"
+#include "mv_core_utils.hpp"
 #include <algorithm>
 
 namespace pmjs::addon {
 namespace {
 struct BitmapServices {
   std::shared_ptr<State> owner;
+  mv::ImageCache imageCache;
+  mv::RequestQueue requests;
   explicit BitmapServices(std::shared_ptr<State> value) : owner(std::move(value)) {
     if (mv::core::boundRuntime() && mv::core::boundRuntime() != &owner->core)
       throw std::runtime_error("bitmap graphics services belong to another runtime");
     mv::core::bindRuntime(owner->core);
   }
-  ~BitmapServices() { mv::core::unbindRuntime(owner->core); }
+  ~BitmapServices() { requests.clear(); imageCache.clear(); mv::core::unbindRuntime(owner->core); }
   void checkRuntime() const {
     if (mv::core::boundRuntime() != &owner->core)
       throw std::runtime_error("bitmap graphics runtime is no longer active");
@@ -48,6 +51,7 @@ struct BitmapOwner {
   std::shared_ptr<BitmapServices> services;
   std::shared_ptr<mv::core::PixelBitmap> bitmap;
 };
+napi_value wrapBitmap(napi_env env, const std::shared_ptr<BitmapServices>& runtime, const std::shared_ptr<mv::core::PixelBitmap>& bitmap);
 constexpr napi_type_tag bitmapTag{0xcff2e109a3e94cc1ULL, 0xa3a765dc21c1ec70ULL};
 BitmapOwner& unwrapBitmap(napi_env env, napi_value object) {
   bool tagged = false;
@@ -71,6 +75,9 @@ napi_value createBitmap(napi_env env, napi_callback_info info) try {
     if (type == napi_boolean && asBoolean(env,args[2])) bitmap = mv::core::PixelBitmap::request(asString(env,args[1]));
     else bitmap->resize(asInt32(env,args[1]),asInt32(env,args[2]));
   }
+  return wrapBitmap(env, runtime, bitmap);
+} catch (const std::exception& error) { return throwException(env, error); }
+napi_value wrapBitmap(napi_env env, const std::shared_ptr<BitmapServices>& runtime, const std::shared_ptr<mv::core::PixelBitmap>& bitmap) {
   auto owner = std::make_unique<BitmapOwner>(BitmapOwner{runtime, bitmap});
   napi_value result = moduleObject(env);
   check(env, napi_type_tag_object(env, result, &bitmapTag), "cannot identify bitmap");
@@ -79,6 +86,102 @@ napi_value createBitmap(napi_env env, napi_callback_info info) try {
   }, nullptr, nullptr), "cannot own bitmap");
   owner.release();
   return result;
+}
+
+napi_value managedImage(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info);
+  if (args.size() != 6) throw std::invalid_argument("managed image requires runtime, path, hue, smooth, mode and reservation");
+  auto runtime = services(env, args[0]);
+  const auto path = asString(env, args[1]); const int hue = asInt32(env, args[2]);
+  const auto mode = asString(env, args[4]);
+  const auto key = mv::ImageManager::generateCacheKey(path, hue);
+  auto* cached = runtime->imageCache.get(key);
+  if (!cached || !cached->bitmap) {
+    auto bitmap = path.empty() ? std::make_shared<mv::core::PixelBitmap>() :
+      mode == "request" ? mv::core::PixelBitmap::request(path) : mv::core::PixelBitmap::load(path);
+    if (hue) {
+      std::weak_ptr<mv::core::PixelBitmap> weak = bitmap;
+      bitmap->addLoadListener([weak, hue] { if (auto image = weak.lock()) image->rotateHue(hue); });
+    }
+    runtime->imageCache.reserve(key, 0, 0);
+    cached = runtime->imageCache.get(key); cached->bitmap = std::move(bitmap);
+    cached->bitmapIdentity = mv::nextRuntimeIdentity(); cached->requestOnly = mode == "request";
+    if (mode == "request") {
+      std::weak_ptr<mv::core::PixelBitmap> weak = cached->bitmap;
+      runtime->requests.enqueue(key, [weak] { if (auto image = weak.lock()) image->startRequest(); },
+        [weak] { const auto image = weak.lock(); return !image || image->isRequestReady(); });
+    }
+  } else if (mode == "request") runtime->requests.raisePriority(key);
+  if (mode != "request") { cached->requestOnly = false; cached->bitmap->decode(); }
+  if (mode == "reserve") {
+    std::uint64_t id; bool lossless;
+    check(env, napi_get_value_bigint_uint64(env, args[5], &id, &lossless), "invalid image reservation");
+    if (!lossless) throw std::invalid_argument("image reservation outside supported range");
+    cached->reservationId = id;
+  }
+  cached->bitmap->smooth = asBoolean(env, args[3]);
+  cached->ready = cached->bitmap->isReady(); cached->error = cached->bitmap->isError();
+  cached->pixelCount = static_cast<std::size_t>(cached->bitmap->width) * cached->bitmap->height;
+  const auto bitmap = cached->bitmap; const auto identity = cached->bitmapIdentity;
+  runtime->imageCache.truncateCache();
+  napi_value result = moduleObject(env), id;
+  check(env, napi_create_bigint_uint64(env, identity, &id), "cannot identify managed bitmap");
+  check(env, napi_set_named_property(env, result, "identity", id), "cannot set managed bitmap identity");
+  check(env, napi_set_named_property(env, result, "handle", wrapBitmap(env, runtime, bitmap)), "cannot wrap managed bitmap");
+  return result;
+} catch (const std::exception& error) { return throwException(env, error); }
+
+napi_value imageManagerOperation(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info);
+  auto runtime = services(env, args.at(0)); const auto operation = asString(env, args.at(1));
+  if (operation == "clear") runtime->imageCache.clear();
+  else if (operation == "release") {
+    std::uint64_t id; bool lossless;
+    check(env, napi_get_value_bigint_uint64(env, args.at(2), &id, &lossless), "invalid image reservation");
+    if (!lossless) throw std::invalid_argument("image reservation outside supported range");
+    runtime->imageCache.releaseReservation(id);
+  } else if (operation == "clearRequests") runtime->requests.clear();
+  else if (operation == "limit") runtime->imageCache.limit = std::max(0, asInt32(env, args.at(2)));
+  else if (operation == "update") {
+    runtime->requests.update();
+    mv::core::updateServices();
+    for (auto& [key, entry] : runtime->imageCache.items) {
+      (void)key;
+      if (!entry.bitmap) continue;
+      entry.ready = entry.bitmap->isReady(); entry.error = entry.bitmap->isError();
+      entry.pixelCount = static_cast<std::size_t>(entry.bitmap->width) * entry.bitmap->height;
+    }
+    runtime->imageCache.truncateCache();
+  } else if (operation != "state") throw std::invalid_argument("unknown image manager operation");
+  for (auto& [key, entry] : runtime->imageCache.items) {
+    (void)key;
+    if (entry.bitmap) { entry.ready = entry.bitmap->isReady(); entry.error = entry.bitmap->isError(); }
+  }
+  napi_value result = moduleObject(env), ids;
+  check(env, napi_create_array(env, &ids), "cannot create managed bitmap identities");
+  std::uint32_t index = 0;
+  for (const auto& [key, entry] : runtime->imageCache.items) {
+    (void)key; napi_value id;
+    check(env, napi_create_bigint_uint64(env, entry.bitmapIdentity, &id), "cannot identify managed bitmap");
+    check(env, napi_set_element(env, ids, index++, id), "cannot list managed bitmaps");
+  }
+  check(env, napi_set_named_property(env, result, "identities", ids), "cannot set managed bitmap identities");
+  check(env, napi_set_named_property(env, result, "ready", boolean(env, runtime->imageCache.isReady())), "cannot set image readiness");
+  const auto* error = runtime->imageCache.getErrorBitmap();
+  check(env, napi_set_named_property(env, result, "error", error ? string(env, error->key) : null(env)), "cannot set image error");
+  return result;
+} catch (const std::exception& error) { return throwException(env, error); }
+napi_value imagePath(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info, 2);
+  return string(env, mv::ImageManager::pathForFolder(asString(env, args.at(0)), asString(env, args.at(1))));
+} catch (const std::exception& error) { return throwException(env, error); }
+napi_value imageNameFlag(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info, 2); const auto name = asString(env, args.at(1));
+  const auto flag = asString(env, args.at(0));
+  if (flag == "object") return boolean(env, mv::ImageManager::isObjectCharacter(name));
+  if (flag == "big") return boolean(env, mv::ImageManager::isBigCharacter(name));
+  if (flag == "zero") return boolean(env, mv::ImageManager::isZeroParallax(name));
+  throw std::invalid_argument("unknown image filename flag");
 } catch (const std::exception& error) { return throwException(env, error); }
 
 napi_value bitmapProperty(napi_env env, napi_callback_info info) try {
@@ -122,6 +225,7 @@ napi_value bitmapOperation(napi_env env, napi_callback_info info) try {
   if (name == "isRequestOnly") return boolean(env,bitmap.isRequestOnly());
   if (name == "isRequestReady") return boolean(env,bitmap.isRequestReady());
   if (name == "resize") bitmap.resize(asInt32(env,value(0)),asInt32(env,value(1)));
+  else if (name == "reset") bitmap = mv::core::PixelBitmap(asInt32(env,value(0)),asInt32(env,value(1)));
   else if (name == "decode") bitmap.decode();
   else if (name == "startRequest") bitmap.startRequest();
   else if (name == "touch") bitmap.touch();
@@ -179,6 +283,12 @@ napi_value loadBitmapFont(napi_env env, napi_callback_info info) try {
 } catch (const std::exception& error) { return throwException(env,error); }
 
 }
+std::shared_ptr<mv::core::PixelBitmap> bitmapForRuntime(napi_env env, napi_value object, RuntimeCore& runtime) {
+  auto& bitmap = unwrapBitmap(env, object);
+  bitmap.services->checkRuntime();
+  if (&bitmap.services->owner->core != &runtime) throw std::invalid_argument("bitmap belongs to another graphics runtime");
+  return bitmap.bitmap;
+}
 void registerBitmapBindings(napi_env env, napi_value exports) {
   auto bindings = moduleObject(env);
   method(env,bindings,"open",openBitmapRuntime);
@@ -187,6 +297,9 @@ void registerBitmapBindings(napi_env env, napi_value exports) {
   method(env,bindings,"property",bitmapProperty);
   method(env,bindings,"invoke",bitmapOperation);
   method(env,bindings,"updateLoads",updateBitmapLoads);
+  method(env,bindings,"managedImage",managedImage); method(env,bindings,"imageManager",imageManagerOperation);
+  method(env,bindings,"imagePath",imagePath);
+  method(env,bindings,"imageNameFlag",imageNameFlag);
   check(env,napi_set_named_property(env,exports,"mvBitmap",bindings),"cannot register bitmap API");
 }
 }

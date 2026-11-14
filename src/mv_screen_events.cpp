@@ -159,6 +159,11 @@ void Session::updateScreenState() {
     dispatchPicture(picture, "update");
     if (runtimeHooks_ && runtimeHooks_->sprite) runtimeHooks_->sprite(picture);
   }
+  if (runtimeHooks_ && runtimeHooks_->updateSprites) runtimeHooks_->updateSprites();
+}
+bool Session::ownsPictureSprite(const RuntimePicture& picture) const {
+  const auto found = pictureSprites_.find(picture.slot);
+  return found != pictureSprites_.end() && found->second == picture.sprite;
 }
 std::shared_ptr<RuntimePicture> Session::createRuntimePicture(int slot) {
   auto picture = std::make_shared<RuntimePicture>();
@@ -232,7 +237,11 @@ void Session::invokePictureBase(const std::shared_ptr<RuntimePicture>& value, co
     }
   }
   else if (method == "updateRotation") picture["_angle"] = picture["_angle"].number() + picture["_rotationSpeed"].number() / 2;
-  else if (method == "syncSprite") value->sprite->syncFromPicture(value->state);
+  else if (method == "syncSprite") {
+    if (value->slot < 0) value->sprite->syncFromPicture(value->state);
+    else if (value->slot < static_cast<int>(pictures_.size()) && pictures_[value->slot]) value->sprite->syncFromPicture(pictures_[value->slot]->state);
+    else value->sprite->visible = false;
+  }
   else throw std::invalid_argument("unknown native picture method: " + method);
 }
 }  // namespace pmjs::mv

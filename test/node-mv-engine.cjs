@@ -3,7 +3,7 @@
 const assert = require('node:assert/strict');
 const api = require(require('node:path').resolve(process.argv[2])).mvEngine;
 const fixture = {
-  system: { startMapId: 1, startX: 1, startY: 1, partyMembers: [1] },
+  system: { startMapId: 1, startX: 1, startY: 1, partyMembers: [1], equipTypes: ['', 'Weapon', 'Shield', 'Head', 'Body', 'Accessory'] },
   actors: [null, { characterName: 'Actor', characterIndex: 0 }],
   tilesets: [null, { flags: [0] }],
   maps: { 1: { width: 4, height: 4, data: Array(4 * 4 * 6).fill(0), tilesetId: 1, events: [] } },
@@ -54,7 +54,7 @@ try {
   assert.equal(roundtrip.player._spriteOffsetX,-3);
   assert.equal(roundtrip.player._customFrameWidth,16);
   assert.equal(roundtrip.map._interpreter._childInterpreter._waitCount,2);
-  assert.equal(roundtrip.map._interpreter._branch[0],1);
+  assert.equal(roundtrip.map._interpreter._branch[0],true);
   api.step(resumed,{});api.step(resumed,{});
   assert.equal(api.snapshot(resumed).switches[2],undefined,'parent must wait for child');
   api.step(resumed,{});

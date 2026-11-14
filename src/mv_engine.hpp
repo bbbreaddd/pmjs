@@ -11,6 +11,7 @@
 #include <set>
 #include <random>
 #include <functional>
+#include <algorithm>
 
 namespace pmjs::mv {
 
@@ -57,13 +58,62 @@ struct RuntimePicture : RuntimeObject {
   Value snapshot() const;
   void restore(const Value& value);
 };
-struct RuntimeInterpreter : RuntimeObject { std::string waitMode; };
+struct RuntimeCommandView;
+struct RuntimeCommandList : RuntimeObject, std::enable_shared_from_this<RuntimeCommandList> {
+  Value root = Value::Array{};
+  std::map<std::vector<std::string>, std::weak_ptr<RuntimeCommandView>> views;
+  std::shared_ptr<RuntimeCommandView> view(const std::vector<std::string>& path);
+  Value& resolve(const std::vector<std::string>& path);
+};
+struct RuntimeCommandView : RuntimeObject {
+  std::shared_ptr<RuntimeCommandList> list;
+  std::vector<std::string> path;
+  Value& value() const { return list->resolve(path); }
+};
+struct RuntimeArray {
+  std::shared_ptr<RuntimeCommandList> storage = std::make_shared<RuntimeCommandList>();
+  RuntimeArray& operator=(Value::Array values) { storage = std::make_shared<RuntimeCommandList>(); storage->root = std::move(values); return *this; }
+  void clear() { storage = std::make_shared<RuntimeCommandList>(); }
+  Value::Array& values() { return std::get<Value::Array>(storage->root.data); }
+  const Value::Array& values() const { return std::get<Value::Array>(storage->root.data); }
+  operator Value::Array() const { return values(); }
+  std::size_t size() const { return values().size(); }
+  bool empty() const { return values().empty(); }
+  Value& operator[](std::size_t index) { return values()[index]; }
+  const Value& operator[](std::size_t index) const { return values()[index]; }
+  auto begin() const { return values().begin(); }
+  auto end() const { return values().end(); }
+};
+using InterpreterList = RuntimeArray;
+struct RuntimeBranches : RuntimeObject { std::map<int, Value> values; };
+struct InterpreterBranches {
+  std::shared_ptr<RuntimeBranches> storage = std::make_shared<RuntimeBranches>();
+  Value& operator[](int key) { return storage->values[key]; }
+  const Value& at(int key) const { return storage->values.at(key); }
+  bool contains(int key) const { return storage->values.contains(key); }
+  void erase(int key) { storage->values.erase(key); }
+  auto begin() const { return storage->values.begin(); }
+  auto end() const { return storage->values.end(); }
+};
+struct RuntimeInterpreter : RuntimeObject {
+  std::string waitMode;
+  std::string comments;
+  int indent = 0;
+  std::shared_ptr<RuntimeCommandList> parameterList = std::make_shared<RuntimeCommandList>();
+  int parameterIndex = -1;
+};
 struct RuntimeHooks {
   std::function<bool(const std::shared_ptr<RuntimePicture>&, const std::string&, const Value::Array&)> picture;
   std::function<void(const std::shared_ptr<RuntimePicture>&)> sprite;
+  std::function<void()> updateSprites;
   std::function<std::optional<bool>(const std::shared_ptr<RuntimeInterpreter>&, const std::string&)> wait;
+  std::function<std::optional<bool>(const std::shared_ptr<RuntimeInterpreter>&, const std::string&)> command;
   std::function<void(const std::shared_ptr<RuntimeInterpreter>&, const std::string&)> script;
   std::function<bool(const std::shared_ptr<RuntimeInterpreter>&, const std::string&, const std::vector<std::string>&)> pluginCommand;
+  std::function<bool(const std::shared_ptr<RuntimeInterpreter>&, const std::string&, const std::shared_ptr<RuntimeCommandList>&, int)> interpreterLifecycle;
+  std::function<std::optional<bool>(const std::string&, const Value::Array&)> message;
+  std::function<void(const std::shared_ptr<RuntimeCommandList>&)> requestImages;
+  std::function<bool(int)> choice;
 };
 
 using FormulaResolver = std::function<double(const std::string&, const std::vector<double>&)>;
@@ -114,8 +164,8 @@ struct Interpreter {
   int mapId = 0, eventId = 0, index = 0, wait = 0, depth = 0;
   std::uint64_t serial = 0;
   bool running = false, battleEvent = false, waitingAction = false;
-  Value::Array list;
-  std::map<int, int> branches;
+  InterpreterList list;
+  InterpreterBranches branches;
   bool waitingScroll = false, waitingGather = false, waitingMessage = false;
   int waitingEffect = 0;
   bool waitingVideo = false;
@@ -124,8 +174,10 @@ struct Interpreter {
   std::vector<Interpreter> children;
   void clear() {
     auto identity = runtime;
+    auto branchState = branches;
     *this = Interpreter{};
     runtime = std::move(identity);
+    branches = std::move(branchState);
     runtime->waitMode.clear();
   }
 };
@@ -142,6 +194,7 @@ struct VisualEffect {
 };
 
 struct Event {
+  bool locked = false;
   int id = 0, page = -1, trigger = 0, priority = 1, moveType = 0;
   int prelockDirection = 0;
   int originalDirection = -1, originalPattern = -1;
@@ -151,7 +204,8 @@ struct Event {
 };
 
 struct Message {
-  Value::Array lines, choices;
+  Value::Array lines;
+  RuntimeArray choices;
   int defaultChoice = 0, cancelChoice = -1, choiceIndent = 0;
   int numberVariableId = 0, numberDigits = 0, itemVariableId = 0, itemType = 0;
   int faceIndex = 0, background = 0, position = 2, choicePosition = 2, choiceBackground = 0;
@@ -168,6 +222,7 @@ struct Message {
   bool revealPrepared = false, revealFinished = false, textPaused = false, finalPause = false;
   bool pauseSkip = false, lineFast = false, showFast = false, goldWindow = false;
   int openness = 0, previousOpenness = 0;
+  bool windowStarted = false;
   bool closing = false;
   int revealPage = -1, revealLine = 0, textWait = 0, revealedCount = 0;
   std::size_t revealOffset = 0;
@@ -198,6 +253,8 @@ struct Battler {
   ActionResult result;
   int requestedMotion = -1, requestedWeapon = 0;
   std::uint64_t motionRequestedAt = 0;
+  bool isAlive() const { return !hidden && std::find(states.begin(), states.end(), 1) == states.end(); }
+  bool isDead() const { return !hidden && std::find(states.begin(), states.end(), 1) != states.end(); }
 };
 
 struct Action {
@@ -314,13 +371,27 @@ class Session {
  public:
   explicit Session(Value database);
   void setRuntimeHooks(std::shared_ptr<RuntimeHooks> hooks) { runtimeHooks_ = std::move(hooks); }
+  std::set<std::uint64_t> runtimeObjectIdentities() const;
   std::shared_ptr<RuntimePicture> runtimePicture(int id) const;
   std::shared_ptr<RuntimePicture> createRuntimePicture(int slot = -1);
+  bool ownsPictureSprite(const RuntimePicture& picture) const;
+  bool inBattle() const { return battle_.active; }
   void dispatchPicture(const std::shared_ptr<RuntimePicture>& picture, const std::string& method, const Value::Array& arguments = {});
   void invokePictureBase(const std::shared_ptr<RuntimePicture>& picture, const std::string& method, const Value::Array& arguments = {});
   bool invokeWaitBase(const std::shared_ptr<RuntimeInterpreter>& interpreter);
   bool invokeInterpreterWaitBase(const std::shared_ptr<RuntimeInterpreter>& interpreter, const std::string& method);
   Value runtimeInterpreterField(const std::shared_ptr<RuntimeInterpreter>& interpreter, const std::string& field, const std::optional<Value>& value = {});
+  std::shared_ptr<RuntimeObject> runtimeInterpreterCollection(const std::shared_ptr<RuntimeInterpreter>& interpreter, const std::string& field);
+  void setRuntimeInterpreterList(const std::shared_ptr<RuntimeInterpreter>& interpreter, const std::shared_ptr<RuntimeCommandList>& list);
+  void invokeInterpreterLifecycleBase(const std::shared_ptr<RuntimeInterpreter>& interpreter, const std::string& method,
+    const std::shared_ptr<RuntimeCommandList>& list = {}, int eventId = 0);
+  bool invokeInterpreterCommandBase(const std::shared_ptr<RuntimeInterpreter>& interpreter, const std::string& method);
+  Value invokeMessageBase(const std::string& method, const Value::Array& arguments = {});
+  Value runtimeMessageField(const std::string& field, const std::optional<Value>& value = {});
+  Value imageRequests(const RuntimeCommandList& list);
+  std::shared_ptr<RuntimeCommandList> messageChoices() const { return message_.choices.storage; }
+  void invokeInterpreterControl(const std::shared_ptr<RuntimeInterpreter>& interpreter, const std::string& method, const Value::Array& arguments);
+  double scriptRandom() { return random(); }
   void setRuntimeWaitMode(const std::shared_ptr<RuntimeInterpreter>& interpreter, std::string mode);
   std::string runtimeWaitMode(const std::shared_ptr<RuntimeInterpreter>& interpreter);
   void newGame();
@@ -329,6 +400,7 @@ class Session {
   void acknowledge(int choice = -1);
   Value snapshot() const;
   int mapId() const { return mapId_; }
+  void setMessageTextLayoutResolver(std::function<std::string(const std::string&, bool)> resolver) { messageTextLayoutResolver_ = std::move(resolver); }
   const MapState& mapState() const { return mapState_; }
   std::array<double, 4> screenTone() const;
   std::array<double, 4> screenFlashColor() const;
@@ -430,6 +502,7 @@ class Session {
   std::vector<int> battleSkillTypes(int actorIndex) const;
   std::set<int> battlerSkills(const Battler& actor) const;
   std::size_t battleMemberCount() const { return party_.size() < 4 ? party_.size() : 4; }
+  std::vector<int> partyMembers() const;
   std::vector<int> battleSelectableTargets(const Value& item) const;
   void makeEnemyActions();
   void beginTurn();
@@ -466,6 +539,10 @@ class Session {
   std::string partyName() const;
   bool updateMessageText(bool ok, bool cancel);
   void updateMessageWindow();
+  void dispatchMessage(const std::string& method, const Value::Array& arguments = {});
+  bool messageBusy();
+  void setupChoices(Interpreter& interpreter, const Value& parameters);
+  void jumpTo(Interpreter& interpreter, int index);
   void updateUi(const Input& input, bool ok, bool cancel, int direction);
   bool useItem(int id, int target, bool skill);
   bool useItemUntargeted(int id, bool skill);
@@ -487,6 +564,8 @@ class Session {
   bool tilePassage(int x, int y, int bit) const;
   bool tileFlag(int x, int y, int flag) const;
   bool move(Character& character, int direction);
+  bool moveDiagonal(Character& character, int horizontal, int vertical);
+  void increaseCharacterSteps(Character& character);
   void updateCharacter(Character& character, bool dash, int idlePattern = 1);
   void locateCharacter(Character& character, double x, double y);
   void jumpCharacter(Character& character, int xPlus, int yPlus);
@@ -494,7 +573,15 @@ class Session {
   void updateRoute(Character& character);
   void startEvent(int x, int y, bool action);
   void startInterpreter(const Event& event);
+  void setupInterpreter(Interpreter& interpreter, Value::Array list, int eventId = 0);
+  void dispatchInterpreterLifecycle(Interpreter& interpreter, const std::string& method,
+    const std::shared_ptr<RuntimeCommandList>& list = {}, int eventId = 0);
+  void interpreterLifecycleBase(Interpreter& interpreter, const std::string& method,
+    const std::shared_ptr<RuntimeCommandList>& list, int eventId);
+  void assignInterpreterList(Interpreter& interpreter, const std::shared_ptr<RuntimeCommandList>& list);
+  std::vector<std::shared_ptr<RuntimeInterpreter>> activeInterpreterOperations_;
   void updateInterpreter();
+  bool setupStartingMapEvent();
   void refreshCommonEvents();
   void updateCommonEvents();
   void advanceInterpreter(Interpreter& context);
@@ -503,6 +590,7 @@ class Session {
   bool updateWaitBase(Interpreter& context);
   Interpreter* findRuntimeInterpreter(const std::shared_ptr<RuntimeInterpreter>& interpreter);
   bool command(const Value& entry, Interpreter& context);
+  bool executeCommandBase(Interpreter& context);
   bool actorEventCommand(const Value& entry);
   bool enemyEventCommand(const Value& entry);
   double actorExpForLevel(const Battler& actor, int level) const;
@@ -519,6 +607,8 @@ class Session {
   bool characterEventCommand(const Value& entry, Interpreter& context);
   void setupMapState();
   void updateMapState();
+  void updateMapScroll();
+  void updateMapDisplay();
   void updateSelfMovement(Event& event);
   bool loopHorizontal() const;
   bool loopVertical() const;
@@ -527,10 +617,11 @@ class Session {
   double deltaMapX(double x1, double x2) const;
   double deltaMapY(double y1, double y2) const;
   void chaseCharacter(Character& follower, const Character& leader);
-  void synchronizeFollowers();
+  void synchronizeFollowers(double x, double y);
   void updateFollowers();
   void setupVehicles();
   void updateVehicles();
+  void updateMapVehicles();
   bool toggleVehicle();
   bool vehicleLandingOk(int type) const;
   void checkEventTouch(Event& event, int x, int y);
@@ -553,6 +644,8 @@ class Session {
   Interpreter interpreter_;
   std::map<int, std::shared_ptr<Interpreter>> commonInterpreters_;
   Message message_;
+  std::optional<Message> closingMessage_;
+  std::function<std::string(const std::string&, bool)> messageTextLayoutResolver_;
   std::uint64_t messageOwnerSerial_ = 0, nextInterpreterSerial_ = 0;
   int reservedCommonEvent_ = 0;
   std::map<int, bool> switches_;
@@ -574,7 +667,7 @@ class Session {
   std::vector<std::pair<int,int>> stripEquipment(Battler& actor) const;
   std::vector<ShopGood> shopItems(bool selling) const;
   int shopMaximum(const ShopGood& good, bool selling, int money) const;
-  void updateShop(bool ok, bool cancel, int direction);
+  void updateShop(bool ok, bool cancel, int direction, bool pageUp, bool pageDown);
   Ui ui_;
   std::vector<Ui> sceneStack_;
   std::vector<UiHitTarget> uiHitTargets_;

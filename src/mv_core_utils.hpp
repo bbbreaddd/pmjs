@@ -291,6 +291,8 @@ class ImageCache {
   static constexpr std::size_t kLimit = 10 * 1000 * 1000;
   struct Entry {
     std::string key;
+    std::shared_ptr<core::PixelBitmap> bitmap;
+    std::uint64_t bitmapIdentity = 0;
     std::size_t pixelCount = 0;
     std::uint64_t touch = 0, order = 0;
     std::optional<std::uint64_t> reservationId;

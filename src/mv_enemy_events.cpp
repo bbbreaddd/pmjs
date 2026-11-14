@@ -30,8 +30,7 @@ bool Session::enemyEventCommand(const Value& entry) {
         forceBattleAction(true, static_cast<int>(index), p[2].integer(), p[3].integer());
       else forceBattleAction(true, p[1].integer(), p[2].integer(), p[3].integer());
     } else if (p[1].integer() == 0) {
-      for (std::size_t index = 0; index < battleMemberCount(); ++index)
-        forceBattleAction(false, static_cast<int>(index), p[2].integer(), p[3].integer());
+      for (int actorId : partyMembers()) forceActorAction(actorId, p[2].integer(), p[3].integer());
     } else {
       forceActorAction(p[1].integer(), p[2].integer(), p[3].integer());
     }
@@ -50,14 +49,14 @@ bool Session::enemyEventCommand(const Value& entry) {
     auto& enemy = battle_.enemies[index];
     switch (code) {
       case 331:
-        if (!enemy.hidden && std::find(enemy.states.begin(), enemy.states.end(), 1) == enemy.states.end()) {
+        if (enemy.isAlive()) {
           double change = amount;
           if (!p[4].boolean() && enemy.hp <= -change) change = 1 - enemy.hp;
           enemy.result.hpAffected = true;
           enemy.result.hpDamage = enemyEventInt(-change, std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
           enemy.hp = enemyEventInt(enemy.hp + change, 0, static_cast<int>(parameter(enemy, 0)));
           refreshBattler(enemy);
-          if (enemy.hp <= 0 && battleLog_) battleLog_->performCollapse(*this, enemy);
+          if (enemy.isDead() && battleLog_) battleLog_->performCollapse(*this, enemy);
         }
         break;
       case 332:
@@ -68,10 +67,10 @@ bool Session::enemyEventCommand(const Value& entry) {
         enemy.result.tpDamage = enemyEventInt(-amount, std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
         enemy.tp = enemyEventInt(enemy.tp + amount, 0, 100); refreshBattler(enemy); break;
       case 333: {
-        const bool alreadyDead = enemy.hp <= 0;
+        const bool alreadyDead = enemy.isDead();
         if (!p[1].integer()) { if (!enemy.hidden) addState(enemy, p[2].integer()); }
         else { removeState(enemy, p[2].integer()); refreshBattler(enemy); }
-        if (!alreadyDead && enemy.hp <= 0 && battleLog_) battleLog_->performCollapse(*this, enemy);
+        if (!alreadyDead && enemy.isDead() && battleLog_) battleLog_->performCollapse(*this, enemy);
         enemy.result = {}; break;
       }
       case 334: recover(enemy); break;
