@@ -1,3 +1,11 @@
+if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
+    typeof PMJS.optimizations.register === 'function') {
+  PMJS.optimizations.register({ id: 'scene.filter-intermediate-cache', owner: 'pmjs-pixi4',
+    fallback: 'execute every authored filter pass each frame' });
+  PMJS.optimizations.register({ id: 'scene.constant-black-group', owner: 'pmjs-pixi4',
+    fallback: 'draw every source primitive of the black color-matrix group' });
+}
+
 var nativeCustomFilterPlans = [];
 function disposeNativeCustomFilterPlans(plans) {
   if (!plans) return;

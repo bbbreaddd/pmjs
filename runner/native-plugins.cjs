@@ -45,12 +45,16 @@ function installPlugins(runtime, gameRoot, manifest, beforePlugins) {
           if (scope.PMJS?.plugins) scope.PMJS.plugins.execute(path.basename(file,'.js'),execute);
           else execute();
         }
-        catch (error) { manager._errorUrls.push(file); throw error; }
+        catch (error) {
+          if (error.code !== 'ENOENT' && error.code !== 'EACCES') throw error;
+          manager.onError({ target: { _url: file } });
+        }
       }
     } finally { loading = false; }
   }
   scope.$plugins = runtime.runScript('JSON.parse(' + JSON.stringify(JSON.stringify(manifest.plugins)) + ')');
-  const manager = scope.PluginManager = {
+  const manager = scope.PluginManager = runtime.runScript('(function PluginManager() { throw new Error("This is a static class"); })');
+  Object.assign(manager, {
     _path: 'js/plugins/',
     _scripts: runtime.runScript('[]'),
     _parameters: runtime.runScript('({})'),
@@ -61,6 +65,7 @@ function installPlugins(runtime, gameRoot, manifest, beforePlugins) {
       queue.push(path.resolve(gameRoot, this._path, name));
       loadQueued();
     },
+    onError(event) { this._errorUrls.push(event.target._url); },
     checkErrors() {
       const url = this._errorUrls.shift();
       if (url) throw new Error('Failed to load: ' + url);
@@ -78,7 +83,7 @@ function installPlugins(runtime, gameRoot, manifest, beforePlugins) {
       finally { --scheduling; }
       loadQueued();
     }
-  };
+  });
   beforePlugins?.(runtime);
   const lifecycle=scope.PMJS;
   lifecycle?.plugins?.snapshotOriginalManifest(scope.$plugins);

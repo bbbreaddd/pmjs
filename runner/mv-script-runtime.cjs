@@ -1,10 +1,15 @@
 'use strict';
 const { createBitmapClass, createImageManager, bitmapHandle } = require('./native-bitmap.cjs');
 const vm = require('node:vm');
+const { installBattleManager } = require('./native-battle-manager.cjs');
 const { installManagerReference } = require('./native-manager-reference.cjs');
 const { createSceneBindings } = require('./native-scenes.cjs');
 const { installTilemap } = require('./native-tilemap.cjs');
 const { installClassBindings } = require('./native-class-bindings.cjs');
+const { installWeatherParticles } = require('./native-weather.cjs');
+const { installAudioMetadata } = require('./native-audio-metadata.cjs');
+const { installInputEvents } = require('./native-input-events.cjs');
+const { installSpriteTextures } = require('./native-sprite-textures.cjs');
 const { installTextManager, installSoundManager, installAudioManager } = require('./native-managers.cjs');
 const { installBattlerBindings } = require('./native-battlers.cjs');
 const { installPartyBindings } = require('./native-party.cjs');
@@ -17,11 +22,10 @@ const { installTroopBindings } = require('./native-troop.cjs');
 const { installDataArray } = require('./native-data-arrays.cjs');
 
 function createScriptRuntime(engine, session, options = {}) {
-  const pictures = new WeakMap(), interpreters = new WeakMap(), sprites = new WeakMap(), frames = new WeakMap(), tones = new WeakMap();
-  const registry = new Map(), roots = new Map(), spriteSlots = new Map(), scripts = new Map();
+  const pictures = new WeakMap(), interpreters = new WeakMap(), tones = new WeakMap(), commonEvents = new WeakMap();
+  const registry = new Map(), roots = new Map(), scripts = new Map();
   const conditions = new Map();
   const values = new Map();
-  const pictureChildren = [];
   const fields = ['_name', '_origin', '_x', '_y', '_scaleX', '_scaleY', '_opacity', '_blendMode',
     '_targetX', '_targetY', '_targetScaleX', '_targetScaleY', '_targetOpacity', '_duration',
     '_toneDuration', '_angle', '_rotationSpeed'];
@@ -131,10 +135,10 @@ function createScriptRuntime(engine, session, options = {}) {
   function wrapPicture(handle) {
     return registry.get(handle.identity)?.deref() || attachPicture(Object.create(Game_Picture.prototype), handle);
   }
-  function wrapInterpreter(handle) {
+  function wrapInterpreter(handle, target) {
     let object = registry.get(handle.identity)?.deref();
     if (!object) {
-      object = remember(Object.create(Game_Interpreter.prototype), handle, interpreters);
+      object = remember(target || Object.create(Game_Interpreter.prototype), handle, interpreters);
       for (const field of ['_mapId', '_eventId', '_index', '_waitCount', '_depth', '_indent']) Object.defineProperty(object, field, {
         configurable: true, enumerable: true,
         get() { return engine.interpreterField(session, handle, field); },
@@ -148,8 +152,7 @@ function createScriptRuntime(engine, session, options = {}) {
           views.set(field, value); return value;
         },
         ...(field === '_list' ? { set(value) {
-          const source = value === null ? null : collectionHandles.get(value);
-          if (value !== null && !source) throw new TypeError('Interpreter list assignment requires a native command array');
+          const source = value === null ? null : collectionHandles.get(value) || engine.createCommandList(session, value);
           engine.interpreterSetList(session, handle, source);
           views.set(field, value);
         } } : {})
@@ -179,7 +182,54 @@ function createScriptRuntime(engine, session, options = {}) {
     ['blendMode', '_blendMode'], ['angle', '_angle'], ['tone', '_tone']]) {
     Game_Picture.prototype[name] = function() { return this[field]; };
   }
-  function Game_Interpreter() { throw new Error('Interpreter construction is not bound'); }
+  Game_Picture.prototype.erase = function() { this._name = ''; };
+  function Game_Interpreter() { this.initialize.apply(this, arguments); }
+  Game_Interpreter.prototype.initialize = function(depth = 0) {
+    wrapInterpreter(engine.createInterpreter(session, Number(depth)), this); this.clear();
+  };
+  Game_Interpreter.prototype.update = function() { return engine.interpreterLifecycle(session, interpreters.get(this), 'update'); };
+  Object.defineProperty(Game_Interpreter.prototype, '_childInterpreter', { configurable: true,
+    get() { const handle = engine.interpreterChild(session, interpreters.get(this)); return handle ? wrapInterpreter(handle) : null; }
+  });
+  Game_Interpreter.prototype.setupChild = function(list, eventId = 0) {
+    const source = collectionHandles.get(list) || engine.createCommandList(session, list);
+    return engine.interpreterLifecycle(session, interpreters.get(this), 'setupChild', source, Number(eventId));
+  };
+  Game_Interpreter.prototype.setupReservedCommonEvent = function() {
+    if (!scope.$gameTemp.isCommonEventReserved()) return false;
+    this.setup(scope.$gameTemp.reservedCommonEvent().list); scope.$gameTemp.clearCommonEvent(); return true;
+  };
+  function wrapCommonEvent(handle, target) {
+    let object = registry.get(handle.identity)?.deref();
+    if (!object) {
+      object = remember(target || Object.create(Game_CommonEvent.prototype), handle, commonEvents);
+      Object.defineProperties(object, {
+        _commonEventId: { configurable: true, enumerable: true, get() { return engine.commonEventId(session, handle); }, set(value) { engine.commonEventId(session, handle, value); } },
+        _interpreter: { configurable: true, enumerable: true,
+          get() { const interpreter = engine.commonEventInterpreter(session, handle); return interpreter ? wrapInterpreter(interpreter) : null; },
+          set(value) { engine.commonEventInterpreter(session, handle, value ? interpreters.get(value) : null); }
+        }
+      });
+    }
+    return object;
+  }
+  function Game_CommonEvent() { this.initialize.apply(this, arguments); }
+  Game_CommonEvent.prototype.initialize = function(id) {
+    if (!commonEvents.has(this)) wrapCommonEvent(engine.createCommonEvent(session, id), this);
+    this._commonEventId = id; this.refresh();
+  };
+  Game_CommonEvent.prototype.event = function() { return (scope.$dataCommonEvents || engine.databaseInvoke(session, 'read', 'commonEvents'))[this._commonEventId]; };
+  Game_CommonEvent.prototype.list = function() { return this.event().list; };
+  Game_CommonEvent.prototype.isActive = function() { const event = this.event(); return event.trigger === 2 && scope.$gameSwitches.value(event.switchId); };
+  Game_CommonEvent.prototype.refresh = function() {
+    if (this.isActive()) { if (!this._interpreter) this._interpreter = new scope.Game_Interpreter(); }
+    else this._interpreter = null;
+  };
+  Game_CommonEvent.prototype.update = function() {
+    if (this._interpreter) { if (!this._interpreter.isRunning()) this._interpreter.setup(this.list()); this._interpreter.update(); }
+  };
+  const nativeCommonEventMethods = Object.fromEntries(['initialize', 'event', 'list', 'refresh', 'isActive', 'update'].map(method => [method, Game_CommonEvent.prototype[method]]));
+  const nativeInterpreterUpdate = Game_Interpreter.prototype.update;
   const nativeLifecycle = Object.create(null);
   Game_Interpreter.requestImages = function(list, commonList) {
     if (!list || !scope.ImageManager) return;
@@ -200,8 +250,7 @@ function createScriptRuntime(engine, session, options = {}) {
       const handle = interpreters.get(this);
       if (!handle) throw new TypeError('Interpreter is not initialized');
       if (method !== 'setup') return engine.interpreterLifecycle(session, handle, method);
-      const source = list === null ? null : collectionHandles.get(list);
-      if (list !== null && !source) throw new TypeError('Interpreter setup requires a native command array');
+      const source = list === null ? null : collectionHandles.get(list) || engine.createCommandList(session, list);
       return engine.interpreterLifecycle(session, handle, method, source, Number(eventId));
     };
   }
@@ -236,6 +285,31 @@ function createScriptRuntime(engine, session, options = {}) {
     };
   }
   Game_Interpreter.prototype.isOnCurrentMap = function() { return this._mapId === scope.$gameMap.mapId(); };
+  Game_Interpreter.prototype.character = function(id) {
+    if (scope.$gameParty.inBattle()) return null;
+    if (id < 0) return scope.$gamePlayer;
+    return this.isOnCurrentMap() ? scope.$gameMap.event(id > 0 ? id : this._eventId) : null;
+  };
+  Game_Interpreter.prototype.gameDataOperand = function(type, first, second) {
+    return engine.interpreterOperand(session, interpreters.get(this), type, first, second);
+  };
+  Game_Interpreter.prototype.operateValue = function(operation, operandType, operand) {
+    const value = operandType === 0 ? operand : scope.$gameVariables.value(operand);
+    return operation === 0 ? value : -value;
+  };
+  Game_Interpreter.prototype.operateVariable = function(id, operation, value) {
+    try {
+      const previous = scope.$gameVariables.value(id);
+      switch (operation) {
+        case 0: scope.$gameVariables.setValue(id, value); break;
+        case 1: scope.$gameVariables.setValue(id, previous + value); break;
+        case 2: scope.$gameVariables.setValue(id, previous - value); break;
+        case 3: scope.$gameVariables.setValue(id, previous * value); break;
+        case 4: scope.$gameVariables.setValue(id, previous / value); break;
+        case 5: scope.$gameVariables.setValue(id, previous % value); break;
+      }
+    } catch (error) { scope.$gameVariables.setValue(id, 0); }
+  };
   Game_Interpreter.prototype.currentCommand = function() { return this._list[this._index]; };
   Game_Interpreter.prototype.nextEventCode = function() { return this._list[this._index + 1]?.code || 0; };
   Game_Interpreter.prototype.isRunning = function() { return engine.interpreterField(session, interpreters.get(this), 'running'); };
@@ -253,16 +327,17 @@ function createScriptRuntime(engine, session, options = {}) {
   function Game_Message() { throw new Error('Message construction is engine-owned'); }
   const nativeMessage = Object.create(null);
   let choiceView = null;
-  for (const method of ['clear', 'add', 'setFaceImage', 'setBackground', 'setPositionType', 'faceName', 'faceIndex',
+  for (const method of ['initialize', 'clear', 'add', 'newPage', 'setFaceImage', 'setBackground', 'setPositionType', 'faceName', 'faceIndex',
     'background', 'positionType', 'hasText', 'isBusy', 'isChoice', 'isNumberInput', 'isItemChoice', 'isScrollMode',
     'scrollSpeed', 'scrollNoFast', 'setScroll', 'allText', 'setChoices', 'setChoiceBackground', 'setChoicePositionType',
-    'choiceDefaultType', 'choiceCancelType', 'choiceBackground', 'choicePositionType']) {
+    'choiceDefaultType', 'choiceCancelType', 'choiceBackground', 'choicePositionType', 'numInputVariableId', 'numInputMaxDigits', 'itemChoiceVariableId', 'itemChoiceItypeId']) {
     Game_Message.prototype[method] = nativeMessage[method] = function(...args) {
       const result = engine.messageInvoke(session, method, args);
       if (method === 'clear') { this._choiceCallback = null; choiceView = null; }
       return result;
     };
   }
+  Game_Message.prototype.scrollMode = function() { return this.isScrollMode(); };
   const gameMessage = Object.create(Game_Message.prototype);
   gameMessage._choiceCallback = null;
   Game_Message.prototype.choices = function() { choiceView = wrapCollection(engine.messageChoices(session)); return choiceView; };
@@ -278,78 +353,18 @@ function createScriptRuntime(engine, session, options = {}) {
       set(value) { engine.messageField(session, field, value); }
     });
   }
-  function Sprite_Picture() { throw new Error('Picture sprite construction is engine-owned'); }
-  const spriteBitmaps = new WeakMap();
-  Object.defineProperty(Sprite_Picture.prototype, '_pictureName', {
-    configurable: true,
-    get() { return engine.pictureBitmap(session, sprites.get(this), 'name'); },
-    set(value) { engine.pictureBitmap(session, sprites.get(this), 'name', String(value)); }
-  });
-  Object.defineProperty(Sprite_Picture.prototype, 'bitmap', {
-    configurable: true,
-    get() { return spriteBitmaps.get(this) || null; },
-    set(value) {
-      engine.pictureBitmap(session, sprites.get(this), 'bitmap', value === null ? null : bitmapHandle(scope.Bitmap, value));
-      spriteBitmaps.set(this, value);
-    }
-  });
-  Sprite_Picture.prototype.initialize = function(id) { this._pictureId = id; };
-  Sprite_Picture.prototype.picture = function() { return scope.$gameScreen.picture(this._pictureId); };
-  Sprite_Picture.prototype.loadBitmap = function() { this.bitmap = scope.ImageManager.loadPicture(this._pictureName); };
-  Sprite_Picture.prototype.updateBitmap = function() {
-    if (!scope.ImageManager) return;
-    const picture = this.picture();
-    if (!picture) { this._pictureName = ''; this.bitmap = null; return; }
-    const name = picture.name();
-    if (name !== this._pictureName) { this._pictureName = name; this.loadBitmap(); }
-  };
-  Sprite_Picture.prototype.update = function() { this.updateBitmap(); this.updateOther(); };
-  Sprite_Picture.prototype.updateOther = function() {
-    engine.pictureInvoke(session, sprites.get(this), 'syncSprite');
-  };
-  Sprite_Picture.prototype.setFrame = function(x, y, width, height) {
-    engine.pictureFrame(sprites.get(this), x, y, width, height);
-  };
-  Object.defineProperty(Sprite_Picture.prototype, '_frame', { get() {
-    let frame = frames.get(this);
-    if (!frame) {
-      const sprite = this;
-      frame = {};
-      ['x', 'y', 'width', 'height'].forEach((field, index) => Object.defineProperty(frame, field, {
-        enumerable: true,
-        get() { return (engine.pictureFrame(sprites.get(sprite)) || [0, 0, 0, 0])[index]; },
-        set(value) {
-          const rect = engine.pictureFrame(sprites.get(sprite)) || [0, 0, 0, 0];
-          rect[index] = Number(value);
-          engine.pictureFrame(sprites.get(sprite), ...rect);
-        }
-      }));
-      frames.set(sprite, frame);
-    }
-    return frame;
-  } });
-  function ensureSprite(handle) {
-    const slot = handle.slot;
-    if (slot < 0) return null;
-    let sprite = spriteSlots.get(slot);
-    if (!sprite || sprites.get(sprite).spriteIdentity !== handle.spriteIdentity) {
-      sprite = Object.create(Sprite_Picture.prototype);
-      spriteSlots.set(slot, sprite);
-      sprites.set(sprite, handle);
-      pictureChildren[slot > 100 ? slot - 100 : slot] = sprite;
-      engine.pictureInvoke(session, handle, 'syncSprite');
-      sprite.initialize(slot > 100 ? slot - 100 : slot);
-    } else sprites.set(sprite, handle);
-    return sprite;
-  }
   function Point() { this.initialize.apply(this, arguments); }
   Point.prototype.initialize = function(x, y) { this.x = x || 0; this.y = y || 0; };
+  Point.prototype.set = function(x = 0, y = x) { this.x = x; this.y = y; };
+  Point.prototype.clone = function() { return new Point(this.x, this.y); };
+  Point.prototype.copy = function(point) { this.set(point.x, point.y); return this; };
+  Point.prototype.equals = function(point) { return this.x === point.x && this.y === point.y; };
   function Rectangle() { this.initialize.apply(this, arguments); }
   Rectangle.prototype.initialize = function(x, y, width, height) {
     this.x = x || 0; this.y = y || 0; this.width = width || 0; this.height = height || 0;
   };
   Rectangle.emptyRectangle = new Rectangle(0, 0, 0, 0);
-  const scope = { Game_Picture, Game_Interpreter, Game_Message, $gameMessage: gameMessage, Sprite_Picture, Point, Rectangle,
+  const scope = { Game_Picture, Game_Interpreter, Game_CommonEvent, Game_Message, $gameMessage: gameMessage, Point, Rectangle,
     $gameMap: { mapId: () => engine.mapId(session),
       get _mapId() { return engine.mapId(session); },
       requestRefresh() { engine.gameDataInvoke(session, 'variables', 'onChange', []); } },
@@ -357,10 +372,8 @@ function createScriptRuntime(engine, session, options = {}) {
       const handle = engine.picture(session, id);
       if (!handle) return null;
       const picture = wrapPicture(handle);
-      ensureSprite(handle);
       return picture;
-    } },
-    SceneManager: { _scene: { _spriteset: { _pictureContainer: { children: pictureChildren } } } }
+    } }
   };
   const gameDataDefaults = new Map(), gameDataStores = new Map();
   for (const [name, kind] of [['Game_Variables', 'variables'], ['Game_Switches', 'switches'], ['Game_SelfSwitches', 'selfSwitches']]) {
@@ -377,12 +390,19 @@ function createScriptRuntime(engine, session, options = {}) {
   }
   function Game_Screen() { throw new Error('Game_Screen construction is engine-owned'); }
   const screenDefaults = {};
+  Game_Screen.prototype.maxPictures = function() { return 100; };
+  Game_Screen.prototype.realPictureId = function(id) { return scope.$gameParty.inBattle() ? id + this.maxPictures() : id; };
   Game_Screen.prototype.picture = scope.$gameScreen.picture;
   delete scope.$gameScreen.picture;
-  for (const method of ['startTint', 'startFlash', 'startShake', 'startFadeOut', 'startFadeIn', 'startZoom', 'setZoom', 'changeWeather',
+  for (const method of ['initialize', 'clear', 'update', 'updateShake', 'onBattleStart', 'clearPictures', 'eraseBattlePictures', 'startTint', 'startFlash', 'startShake', 'startFadeOut', 'startFadeIn', 'startZoom', 'setZoom', 'changeWeather',
     'showPicture', 'movePicture', 'rotatePicture', 'tintPicture', 'erasePicture',
     'clearFade', 'clearTone', 'clearFlash', 'clearShake', 'clearZoom', 'clearWeather', 'brightness', 'shake', 'zoomX', 'zoomY', 'zoomScale', 'weatherType', 'weatherPower'])
     Game_Screen.prototype[method] = screenDefaults[method] = function(...args) { return engine.gameDataInvoke(session, 'screen', method, args); };
+  for (const field of ['_shake', '_shakePower', '_shakeSpeed', '_shakeDuration', '_shakeDirection', '_zoomX', '_zoomY', '_zoomScale', '_zoomScaleTarget', '_zoomDuration', '_flashDuration', '_toneDuration', '_weatherType', '_weatherPower', '_weatherPowerTarget', '_weatherDuration'])
+    Object.defineProperty(Game_Screen.prototype, field, { configurable: true,
+      get() { return engine.gameDataInvoke(session, 'screen', field, []); },
+      set(value) { engine.gameDataInvoke(session, 'screen', field, [value]); }
+    });
   Object.setPrototypeOf(scope.$gameScreen, Game_Screen.prototype);
   scope.Game_Screen = Game_Screen;
   gameDataDefaults.set('screen', screenDefaults); gameDataStores.set('screen', scope.$gameScreen);
@@ -416,6 +436,7 @@ function createScriptRuntime(engine, session, options = {}) {
     Game_System.prototype[name] = function() { return this['_' + name]; };
   }
   scope.Game_System = Game_System; scope.$gameSystem = Object.create(Game_System.prototype);
+  gameDataDefaults.set('system', { initialize: Game_System.prototype.initialize }); gameDataStores.set('system', scope.$gameSystem);
   function Game_Temp() { throw new Error('Game_Temp construction is engine-owned'); }
   Game_Temp.prototype.initialize = function() {
     engine.gameDataInvoke(session, 'temp', 'initialize', []);
@@ -429,6 +450,7 @@ function createScriptRuntime(engine, session, options = {}) {
     return scope.$dataCommonEvents[engine.gameDataInvoke(session, 'temp', 'commonEventId', [])];
   };
   scope.Game_Temp = Game_Temp; scope.$gameTemp = Object.create(Game_Temp.prototype);
+  gameDataDefaults.set('temp', { initialize: Game_Temp.prototype.initialize }); gameDataStores.set('temp', scope.$gameTemp);
   scope.BattleManager = Object.assign(function BattleManager() { throw new Error('BattleManager is a static class'); }, {
     isInputting() { return engine.gameDataInvoke(session, 'battle', 'isInputting', []); }
   });
@@ -458,19 +480,36 @@ function createScriptRuntime(engine, session, options = {}) {
     Object.defineProperty(Game_Party.prototype, field, { configurable: true, get() { return view; }, set(value) { invoke('replace', value); } });
   }
   function Game_CharacterBase() { throw new Error('Character construction is engine-owned'); }
+  Game_CharacterBase.prototype.initialize = function() { this.initMembers(); };
+  Game_CharacterBase.prototype.initMembers = function() {
+    engine.characterCommand(session, characters.get(this), 'initMembers', []);
+  };
   function Game_Character() { this.initialize.apply(this, arguments); }
   Game_Character.prototype = Object.create(Game_CharacterBase.prototype); Game_Character.prototype.constructor = Game_Character;
+  Game_Character.prototype.initialize = function() { Game_CharacterBase.prototype.initialize.call(this); };
+  Game_Character.prototype.initMembers = function() { Game_CharacterBase.prototype.initMembers.call(this); };
   function Game_Player() { this.initialize.apply(this, arguments); }
   Game_Player.prototype = Object.create(Game_Character.prototype); Game_Player.prototype.constructor = Game_Player;
+  Game_Player.prototype.initialize = function() {
+    this.initMembers();
+    this.setTransparent(scope.$dataSystem.optTransparent);
+  };
+  Game_Player.prototype.initMembers = function() {
+    if (this !== scope.$gamePlayer) throw new Error('Detached player initialization is not bound');
+    Game_Character.prototype.initMembers.call(this);
+    engine.characterCommand(session, characters.get(this), 'initPlayerMembers', []);
+    playerFollowers.set(this, new Game_Followers());
+  };
   function Game_Follower() { this.initialize.apply(this, arguments); }
   Game_Follower.prototype = Object.create(Game_Character.prototype); Game_Follower.prototype.constructor = Game_Follower;
   Game_Follower.prototype.initialize = function(memberIndex) {
-    const handle=engine.entity(session, 'character', -memberIndex-1);
+    const handle=engine.entity(session, 'follower', memberIndex);
     if (!handle) throw new RangeError('Native follower index is outside the party capacity');
     remember(this,handle,characters);
-    engine.characterCommand(session,handle,'initialize',[]);
+    Game_Character.prototype.initialize.call(this);
+    this.setThrough(true);
   };
-  Object.defineProperty(Game_Follower.prototype,'_memberIndex',{ configurable:true,get() { return -engine.entityField(characters.get(this),'id')-1; } });
+  Object.defineProperty(Game_Follower.prototype,'_memberIndex',{ configurable:true,get() { return engine.entityField(characters.get(this),'memberIndex'); } });
   Game_Follower.prototype.actor = function() { return scope.$gameParty.battleMembers()[this._memberIndex] || null; };
   Game_Follower.prototype.isVisible = function() { return Boolean(this.actor()) && scope.$gamePlayer.followers().isVisible(); };
   Game_Follower.prototype.update = function() { engine.characterCommand(session,characters.get(this),'update',[]); };
@@ -487,8 +526,15 @@ function createScriptRuntime(engine, session, options = {}) {
   for (const method of ['gather','isGathering','isGathered','updateMove','jumpAll','synchronize','refresh','update'])
     Game_Followers.prototype[method]=function(...args) { return followerInvoke(method,...args); };
   Game_Followers.prototype.areMoving=function() { return followerInvoke('isMoving'); };
-  let followers;
-  Game_Player.prototype.followers=function() { return followers ||= new Game_Followers(); };
+  const playerFollowers = new WeakMap();
+  Object.defineProperty(Game_Player.prototype, '_followers', { configurable: true,
+    get() { return this.followers(); }, set(value) { playerFollowers.set(this, value); }
+  });
+  Game_Player.prototype.followers=function() {
+    let followers = playerFollowers.get(this);
+    if (!followers) { followers = new Game_Followers(); playerFollowers.set(this, followers); }
+    return followers;
+  };
   function Game_Vehicle() { this.initialize.apply(this,arguments); }
   Game_Vehicle.prototype=Object.create(Game_Character.prototype); Game_Vehicle.prototype.constructor=Game_Vehicle;
   Game_Vehicle.prototype.initialize=function(type) {
@@ -498,13 +544,16 @@ function createScriptRuntime(engine, session, options = {}) {
   };
   Object.defineProperty(Game_Vehicle.prototype,'_type',{ configurable:true,get() { return ['boat','ship','airship'][-engine.entityField(characters.get(this),'id')-5]; } });
   for (const type of ['Boat','Ship','Airship']) Game_Vehicle.prototype['is'+type]=function() { return this._type===type.toLowerCase(); };
+  Game_Vehicle.prototype.canMove = function() { return engine.characterCommand(session, characters.get(this), 'vehicleCanMove', []); };
   Game_Vehicle.prototype.isLandOk=function(x,y,direction) { return engine.characterCommand(session,characters.get(this),'isLandOk',[x,y,direction]); };
   function Game_Event() { this.initialize.apply(this, arguments); }
   Game_Event.prototype = Object.create(Game_Character.prototype); Game_Event.prototype.constructor = Game_Event;
   function Game_BattlerBase() { throw new Error('Battler construction is engine-owned'); }
+  Game_BattlerBase.prototype.initialize = function() { this.initMembers(); };
   Game_BattlerBase.prototype.maxTp = function() { return 100; };
   function Game_Battler() { throw new Error('Battler construction is engine-owned'); }
   Game_Battler.prototype = Object.create(Game_BattlerBase.prototype); Game_Battler.prototype.constructor = Game_Battler;
+  Game_Battler.prototype.initialize = function() { Game_BattlerBase.prototype.initialize.call(this); };
   function Game_Enemy() { throw new Error('Enemy construction is engine-owned'); }
   Game_Enemy.prototype = Object.create(Game_Battler.prototype); Game_Enemy.prototype.constructor = Game_Enemy;
   for (const field of ['screenX', 'screenY']) Object.defineProperty(Game_Enemy.prototype, '_' + field, {
@@ -551,9 +600,21 @@ function createScriptRuntime(engine, session, options = {}) {
   Game_Player.prototype.isDashing = function() { return engine.characterCommand(session, characters.get(this), 'isDashing', []); };
   Game_CharacterBase.prototype.locate = function(x, y) { engine.characterCommand(session, characters.get(this), 'locate', [x, y]); };
   Game_CharacterBase.prototype.setDirection = function(direction) { engine.characterCommand(session, characters.get(this), 'setDirection', [direction]); };
-  for (const method of ['findDirectionTo', 'moveStraight', 'setMovementSuccess', 'setPosition', 'refresh', 'update'])
+  for (const method of ['findDirectionTo', 'moveStraight', 'setMovementSuccess', 'setPosition', 'refresh', 'update', 'straighten'])
     Game_CharacterBase.prototype[method] = function(...args) { return engine.characterCommand(session, characters.get(this), method, args); };
   Game_Event.prototype.eventId = function() { return engine.entityField(characters.get(this), 'id'); };
+  Object.defineProperty(Game_Event.prototype, '_pageIndex', { configurable: true,
+    get() { return engine.characterCommand(session, characters.get(this), 'pageIndex', []); },
+    set(value) { engine.characterCommand(session, characters.get(this), 'pageIndex', [Number(value)]); }
+  });
+  Game_Event.prototype.event = function() {
+    engine.characterCommand(session, characters.get(this), 'pageIndex', []);
+    if (this._mapId !== scope.$gameMap.mapId()) throw new Error('Event data belongs to another map');
+    return scope.$dataMap.events[this._eventId];
+  };
+  Game_Event.prototype.page = function() { return this.event().pages[this._pageIndex]; };
+  Game_Event.prototype.list = function() { return this.page().list; };
+
   entityProperty(Game_Event, characters, '_mapId', 'mapId', false);
   entityProperty(Game_Event, characters, '_eventId', 'id', false);
   for (const field of ['hp', 'mp', 'tp', 'name', 'nickname']) entityProperty(Game_Actor, actors, '_' + field, field);
@@ -566,17 +627,22 @@ function createScriptRuntime(engine, session, options = {}) {
   Game_Actor.prototype.currentClass = function() { return scope.$dataClasses[this._classId]; };
   Game_Enemy.prototype.enemy = function() { return scope.$dataEnemies[this._enemyId]; };
   const context = vm.createContext(scope);
+  const guestNow=vm.runInContext('(function() {return Date.now();})',context);
   GuestArray = vm.runInContext("Array", context);
   installCoreUtilities({ runScript(source) { return vm.runInContext(source, context); } });
   installManagerReference({ scope, runScript: (source, filename) => new vm.Script(source, { filename }).runInContext(context) }, 'DataManager');
+  if (engine.gameDataInvoke) installBattleManager({ scope, runScript: (source, filename) => new vm.Script(source, { filename }).runInContext(context) }, engine, session);
   const referenceDatabaseLoad = scope.DataManager.loadDatabase;
+  if (engine.databaseInvoke) scope.$dataSystem = engine.databaseInvoke(session, 'read', 'system');
   installTextManager(scope);
   for (const [method, table] of Object.entries({ isSkill: '$dataSkills', isItem: '$dataItems', isWeapon: '$dataWeapons', isArmor: '$dataArmors' }))
-    scope.DataManager[method] = function(item) { return item && scope[table].includes(item); };
+    scope.DataManager[method] = function(item) { return item && (scope[table] || engine.databaseInvoke(session, 'read', table.slice(5).toLowerCase())).includes(item); };
   Game_Actor.prototype.name = function() { return this._name; };
   Game_Actor.prototype.isStateAffected = function(id) { return engine.actorState(actors.get(this), id); };
+  const nativeMoveCommand = function(command) { return engine.characterCommand(session, characters.get(this), 'processMoveCommand', [command]); };
+  Game_Character.prototype.processMoveCommand = nativeMoveCommand;
   const nativeActorMethods = {};
-  for (const method of ['initMembers', 'initSkills'])
+  for (const method of ['initMembers', 'initSkills', 'initImages'])
     Game_Actor.prototype[method] = nativeActorMethods[method] = function() { return engine.actorInvoke(session, actors.get(this), method); };
   function wrapEntity(handle, type, store) {
     if (!handle) return null;
@@ -584,29 +650,48 @@ function createScriptRuntime(engine, session, options = {}) {
   }
   Object.assign(scope, { Game_CharacterBase, Game_Character, Game_Player, Game_Follower, Game_Followers, Game_Vehicle, Game_Event, Game_BattlerBase, Game_Battler, Game_Enemy, Game_Actor });
   installBattleData(scope, values => GuestArray.from(values));
-  installBattlerBindings(scope, engine, session, actors, values => GuestArray.from(values));
+  installBattlerBindings(scope, engine, session, actors, values => GuestArray.from(values), () => vm.runInContext('({})', context));
   installActionBindings(scope);
+  const nativePerformMethods = new Map([Game_Actor, Game_Enemy].map(Type => [Type, Object.fromEntries(
+    ['performDamage', 'performMiss', 'performRecovery', 'performEvasion', 'performMagicEvasion', 'performCounter', 'performReflection', 'performCollapse', 'requestMotion', 'performAttack', 'requestEffect', 'isSpriteVisible'].map(method => [method, Type.prototype[method]]))]));
+  const nativePerformBase = Object.fromEntries(['performDamage', 'performMiss', 'performRecovery', 'performEvasion', 'performMagicEvasion', 'performCounter', 'performReflection', 'performCollapse'].map(method => [method, Game_Battler.prototype[method]]));
+
   Object.defineProperty(scope, '$gamePlayer', { configurable: true, enumerable: true,
     get() { return wrapEntity(engine.entity(session, 'character', -1), Game_Player, characters); } });
   function Game_Actors() { throw new Error('Game_Actors construction is engine-owned'); }
   Game_Actors.prototype.actor = function(id) { return wrapEntity(engine.entity(session, 'actor', id), Game_Actor, actors); };
   scope.Game_Actors = Game_Actors; scope.$gameActors = Object.create(Game_Actors.prototype);
   const actorIds = () => engine.gameDataInvoke(session, 'actors', 'ids', []);
+  const actorLength = () => { const ids = actorIds(); return ids.length ? Math.max(...ids) + 1 : 0; };
   const actorArray = new Proxy(GuestArray.from([]), {
     get(target, key, receiver) {
-      if (key === 'length') return Math.max(0, ...actorIds()) + 1;
-      if (typeof key === 'string' && /^(0|[1-9][0-9]*)$/.test(key)) return actorIds().includes(Number(key)) ? scope.$gameActors.actor(Number(key)) : null;
+      if (key === 'length') return actorLength();
+      if (typeof key === 'string' && /^(0|[1-9][0-9]*)$/.test(key)) return actorIds().includes(Number(key)) ? scope.$gameActors.actor(Number(key)) : undefined;
       return Reflect.get(target, key, receiver);
     },
-    ownKeys(target) { target.length = Math.max(0, ...actorIds()) + 1; return [...new Set(actorIds().map(String).concat(Reflect.ownKeys(target)))]; },
+    set(target, key, value) {
+      if (key === 'length' || typeof key === 'string' && /^(0|[1-9][0-9]*)$/.test(key)) {
+        if (value === (key === 'length' ? actorLength() : scope.$gameActors._data[key])) return true;
+        throw new TypeError('Native actor entries must be changed through Game_Actor methods');
+      }
+      return Reflect.set(target, key, value);
+    },
+    deleteProperty(target, key) {
+      if (typeof key === 'string' && actorIds().includes(Number(key))) throw new TypeError('Native actors cannot be deleted while bound');
+      return Reflect.deleteProperty(target, key);
+    },
+    has(target, key) { return typeof key === 'string' && /^(0|[1-9][0-9]*)$/.test(key) ? actorIds().includes(Number(key)) : Reflect.has(target, key); },
+    ownKeys(target) { target.length = actorLength(); return [...new Set(actorIds().map(String).concat(Reflect.ownKeys(target)))]; },
     getOwnPropertyDescriptor(target, key) {
-      if (key === 'length') { target.length = Math.max(0, ...actorIds()) + 1; return Reflect.getOwnPropertyDescriptor(target, key); }
+      if (key === 'length') { target.length = actorLength(); return Reflect.getOwnPropertyDescriptor(target, key); }
       return typeof key === 'string' && actorIds().includes(Number(key)) ? { configurable: true, enumerable: true, writable: true, value: scope.$gameActors.actor(Number(key)) } : Reflect.getOwnPropertyDescriptor(target, key);
     }
   });
   Object.defineProperty(Game_Actors.prototype, '_data', { configurable: true, get() { return actorArray; } });
   installPartyBindings(scope, engine, session, values => GuestArray.from(values));
-  installTroopBindings(scope, engine, session, index => wrapEntity(engine.entity(session, 'enemy', index), Game_Enemy, actors), values => GuestArray.from(values));
+  const troopDefaults = installTroopBindings(scope, engine, session, index => wrapEntity(engine.entity(session, 'enemy', index), Game_Enemy, actors), values => GuestArray.from(values));
+  gameDataDefaults.set('troop', troopDefaults); gameDataStores.set('troop', scope.$gameTroop);
+  Object.defineProperty(scope.Game_Troop.prototype, '_interpreter', { configurable: true, get() { return wrapInterpreter(engine.scriptInterpreter(session, -1)); } });
   function Game_Map() { throw new Error('Game_Map construction is engine-owned'); }
   Object.defineProperties(Game_Map.prototype, Object.getOwnPropertyDescriptors(scope.$gameMap));
   for (const key of Object.keys(scope.$gameMap)) delete scope.$gameMap[key];
@@ -627,15 +712,33 @@ function createScriptRuntime(engine, session, options = {}) {
     if (this !== scope.$gameMap) throw new Error('Detached map scrolling is not bound');
     return engine.gameDataInvoke(session, 'map', 'setupScroll', []);
   };
-  gameDataDefaults.set('map', { setup: nativeMapSetup, initialize: nativeMapInitialize, setupScroll: nativeMapSetupScroll });
+  const mapDefaults = { setup: nativeMapSetup, initialize: nativeMapInitialize, setupScroll: nativeMapSetupScroll };
+  for (const method of ['setDisplayPos', 'scrollDown', 'scrollLeft', 'scrollRight', 'scrollUp', 'updateParallax'])
+    Game_Map.prototype[method] = mapDefaults[method] = function(...args) { return engine.gameDataInvoke(session, 'map', method, args); };
+  Game_Player.prototype.center = function(x, y) { scope.$gameMap.setDisplayPos(x - (scope.$gameMap.screenTileX() - 1) / 2, y - (scope.$gameMap.screenTileY() - 1) / 2); };
+  gameDataDefaults.set('map', mapDefaults);
   gameDataStores.set('map', scope.$gameMap);
   Object.defineProperty(Game_Map.prototype, '_events', { configurable: true, get() {
     const result = GuestArray.from([null]); for (const event of this.events()) result[event.eventId()] = event; return result;
   } });
+  Object.defineProperty(Game_Map.prototype, '_commonEvents', { configurable: true, get() { return GuestArray.from(engine.commonEvents(session).map(handle => wrapCommonEvent(handle))); } });
   Object.defineProperty(Game_Map.prototype, '_interpreter', { configurable: true, get() { return wrapInterpreter(engine.scriptInterpreter(session, 0)); } });
   Object.defineProperty(Game_Event.prototype, '_interpreter', { configurable: true, get() { const handle = engine.scriptInterpreter(session, this.eventId()); return handle ? wrapInterpreter(handle) : null; } });
   Game_Map.prototype.event = function(id) { return wrapEntity(engine.entity(session, 'character', id), Game_Event, characters); };
+  Game_Map.prototype.vehicles = function() {
+    return GuestArray.from([-5, -6, -7].map(id => wrapEntity(engine.entity(session, 'character', id), Game_Vehicle, characters)));
+  };
+  for (const [index, type] of ['boat', 'ship', 'airship'].entries()) Game_Map.prototype[type] = function() { return this.vehicles()[index]; };
+  Game_Map.prototype.vehicle = function(type) { return this.vehicles()[['boat', 'ship', 'airship'].indexOf(type)] || null; };
   installMapBindings(scope, engine, session, values => GuestArray.from(values), characters);
+  gameDataDefaults.get('system').setWindowTone = Game_System.prototype.setWindowTone;
+  const nativeEventMethods = {};
+  for (const method of ['setupPage', 'updateSelfMovement']) Game_Event.prototype[method] = nativeEventMethods[method] = function() { return engine.characterCommand(session, characters.get(this), method, []); };
+  const nativePatternMethods = new Map([Game_CharacterBase, Game_Event].map(Type => [Type,
+    Object.fromEntries(['updatePattern', 'maxPattern', 'hasStepAnime', 'resetPattern', 'setPattern'].map(method => [method, Type.prototype[method]]))]));
+  const nativePageQueries = { findProperPageIndex: Game_Event.prototype.findProperPageIndex, meetsConditions: Game_Event.prototype.meetsConditions };
+
+  const nativeCharacterPosition = { screenX: Game_CharacterBase.prototype.screenX, screenY: Game_CharacterBase.prototype.screenY };
   Game_Map.prototype.camTargetSet = function(target, speed) {
     const handle = characters.get(target);
     if (!handle) throw new TypeError('Camera target must be a native character');
@@ -657,7 +760,7 @@ function createScriptRuntime(engine, session, options = {}) {
     mousedown: '_onMouseDown', mousemove: '_onMouseMove', mouseup: '_onMouseUp', wheel: '_onWheel',
     touchstart: '_onTouchStart', touchmove: '_onTouchMove', touchend: '_onTouchEnd', touchcancel: '_onTouchCancel', pointerdown: '_onPointerDown'
   };
-  scope.TouchInput = {};
+  scope.TouchInput = vm.runInContext('(function TouchInput() { throw new Error("This is a static class"); })', context);
   for (const method of ['clear', 'update', 'isPressed', 'isTriggered', 'isCancelled', 'isMoved', 'isReleased', 'isRepeated', 'isLongPressed'])
     scope.TouchInput[method] = () => engine.touchInvoke(session, method);
   for (const method of ['_onLeftButtonDown', '_onMiddleButtonDown', '_onRightButtonDown', ...Object.values(touchHandlers).filter(name => name !== '_onMouseDown')])
@@ -677,8 +780,13 @@ function createScriptRuntime(engine, session, options = {}) {
     const base = scope.TouchInput[method] = function(x, y) { engine.touchInvoke(session, method, { x, y }); };
     touchTransitions.set(method, base);
   }
+  for(const field of ['_mousePressed','_screenPressed','_pressedTime','_x','_y','_date',
+    '_triggered','_cancelled','_moved','_released','_wheelX','_wheelY'])
+    Object.defineProperty(scope.TouchInput,field,{configurable:true,get() {return engine.touchInvoke(session,field);},set(value) {engine.touchInvoke(session,field,value);}});
+  scope.TouchInput._events=vm.runInContext('({triggered:false,cancelled:false,moved:false,released:false,wheelX:0,wheelY:0})',context);
   if (options.native) {
-    scope.Bitmap = createBitmapClass(options.native, null, null, () => scope.CanvasRenderingContext2D);
+    scope.Bitmap = createBitmapClass(options.native, null, null, () => scope.CanvasRenderingContext2D, () => scope.document?.createElement('canvas'), () => GuestArray.from([]), (...args) => new scope.Rectangle(...args));
+    scope.Bitmap.bindClock(guestNow);
     scope.ImageManager = createImageManager(options.native, scope.Bitmap, scope.RequestQueue);
     scope.ImageCache = scope.ImageManager._imageCache.constructor;
   }
@@ -707,12 +815,18 @@ function createScriptRuntime(engine, session, options = {}) {
   const tilemapBinding = installTilemap({ scope, runScript(source) { return vm.runInContext(source, context); } }, engine, session);
   let rateAction = null;
   function wrapRuntimeEntity(handle) {
-    if (handle.entityType === 'character') return wrapEntity(handle,handle.entityId > 0 ? Game_Event : handle.entityId === -1 ? Game_Player : handle.entityId <= -5 ? Game_Vehicle : handle.entityId <= -2 ? Game_Follower : Game_Character,characters);
+    if (handle.entityType === 'character') return wrapEntity(handle,handle.entityId > 0 ? Game_Event : handle.entityId === -1 ? Game_Player : handle.entityId >= -7 && handle.entityId <= -5 ? Game_Vehicle : handle.entityId <= -2 ? Game_Follower : Game_Character,characters);
     return wrapEntity(handle,handle.entityType === 'enemy' ? Game_Enemy : Game_Actor,actors);
   }
   const callbacks = {
+    resourceLoader(url,retry,resign,intervals) {if(typeof scope.setTimeout!=='function')return undefined;return scope.ResourceHandler.createLoader(url,retry,resign,intervals);},
+    resourceExists() {return scope.ResourceHandler.exists();},
+    resourceRetry() {scope.ResourceHandler.retry();},
     scene(method, kind) { return scenes ? scenes.requestScene(method, kind) : null; },
     tileShadow(...args) { return tilemapBinding.draw(...args); },
+    tilemapState(value) { tilemapBinding.state(value); },
+    tilemapGeometry(...args) { return tilemapBinding.geometry(...args); },
+    tilemapOperation(...args) { return tilemapBinding.operation(...args); },
     actionRate(method, subjectHandle, targetHandle, item, id) {
       if (method === 'itemHit') rateAction = null;
       if (scope.Game_Action.prototype[method] === nativeActionRates[method]) {
@@ -720,17 +834,26 @@ function createScriptRuntime(engine, session, options = {}) {
         return undefined;
       }
       const wrapBattler = handle => wrapEntity(handle, engine.entityField(handle, 'enemy') ? Game_Enemy : Game_Actor, actors);
-      const action = rateAction || new scope.Game_Action(wrapBattler(subjectHandle));
-      if (!rateAction) action[item ? 'setItem' : 'setSkill'](id);
+      const current = scope.BattleManager._action;
+      const live = current && current.subject() === wrapBattler(subjectHandle) && current._itemId === id && current._isItem === item;
+      const action = rateAction || (live ? current : new scope.Game_Action(wrapBattler(subjectHandle)));
+      if (!rateAction && !live) action[item ? 'setItem' : 'setSkill'](id);
       if (method === 'itemHit') rateAction = action;
       try { return action[method](wrapBattler(targetHandle)); }
       finally { if (method === 'itemEva') rateAction = null; }
     },
+    boundOverride(handle,method) {return classBindings?classBindings.overridden(handle,handle.bindingType,method):false;},
     boundMethod(handle, method, args) {
       return classBindings ? classBindings.dispatch(handle, handle.bindingType, method, args) : null;
     },
     retainBoundObject(handle) { classBindings.wrap(handle, handle.bindingType); },
     boundListener(handle, token) { classBindings.deliver(handle, token); },
+    manager(name, method, args) {
+      const manager = scope[name];
+      if (typeof manager?.[method] !== 'function') return false;
+      if (name === 'BattleManager' && method === 'invokeAction') args = [manager._subject, manager._targets[0]];
+      manager[method](...args); return true;
+    },
     audioBuffer(kind, name) { return classBindings ? classBindings.handle(scope.AudioManager.createBuffer(kind, name)) : null; },
     systemBitmap(handle, name) {
       const sprite = classBindings.wrap(handle, 'Sprite_Balloon');
@@ -741,25 +864,75 @@ function createScriptRuntime(engine, session, options = {}) {
       return classBindings ? classBindings.dispatch(handle,handle.bindingType,method,() => [argument ? wrapRuntimeEntity(argument) : null]) : null;
     },
     nativeBitmap(handle, method, args, slot) {
-      const root=classBindings.wrap(handle,handle.bindingType);
-      const sprite=slot ? root[slot] : root;
-      sprite.bitmap=method === 'createBitmap' ? new scope.Bitmap(...args) : scope.ImageManager[method](...args);
-      return bitmapHandle(scope.Bitmap,sprite.bitmap);
+      const object=classBindings.wrap(handle,handle.bindingType);
+      const bitmap=method === 'createBitmap' ? new scope.Bitmap(...args) : scope.ImageManager[method](...args);
+      if (slot) object[slot].bitmap=bitmap;
+      return bitmapHandle(scope.Bitmap,bitmap);
     },
     enemySpriteBattler(handle, enemyHandle) {
       if (!classBindings) return false;
       return classBindings.dispatch(handle, 'Sprite_Enemy', 'setBattler', () => [wrapEntity(enemyHandle, Game_Enemy, actors)]) !== null;
     },
     actorSpriteHome(handle, index) { return classBindings ? classBindings.dispatch(handle, 'Sprite_Actor', 'setActorHome', [index]) !== null : false; },
-    actorLifecycle(handle, method) {
-      const actor = wrapEntity(handle, Game_Actor, actors);
+    characterPosition(handle) {
+      const character = wrapRuntimeEntity(handle);
+      if (character.screenX === nativeCharacterPosition.screenX && character.screenY === nativeCharacterPosition.screenY) return undefined;
+      if (typeof character.screenX !== 'function' || typeof character.screenY !== 'function') throw new TypeError('Character screen position methods must be callable');
+      const point = [character.screenX(), character.screenY()];
+      if (!point.every(Number.isFinite)) {
+        const describe = value => typeof value === 'number' && !Number.isFinite(value) ? String(value) : value;
+        const details = { id: handle.entityId, type: character.constructor.name, x: describe(point[0]), y: describe(point[1]) };
+        for (const key of ['_realX','_realY','_jumpCount','_jumpPeak','_spriteOffsetX','_spriteOffsetY']) details[key] = describe(character[key]);
+        for (const method of ['scrolledX','scrolledY','shiftY','jumpHeight','spriteOffsetX','spriteOffsetY']) {
+          try { details[method] = describe(character[method]()); } catch (error) { details[method] = String(error); }
+        }
+        throw new TypeError('Character position override returned invalid coordinates: ' + JSON.stringify(details));
+      }
+      return point;
+    },
+    characterLifecycle(handle, method) {
+      if (method === 'updatePattern') {
+        const Type = handle.entityId > 0 ? Game_Event : handle.entityId === -1 ? Game_Player : handle.entityId >= -7 && handle.entityId <= -5 ? Game_Vehicle : Game_Follower;
+        const object = registry.get(handle.identity)?.deref() || Type.prototype;
+        const defaults = nativePatternMethods.get(handle.entityId > 0 ? Game_Event : Game_CharacterBase);
+        if (Object.entries(defaults).every(([name, original]) => object[name] === original)) return false;
+      }
+      if (Object.hasOwn(nativeEventMethods, method) && (registry.get(handle.identity)?.deref() || Game_Event.prototype)[method] === nativeEventMethods[method]) return false;
+      const character = wrapRuntimeEntity(handle);
+      if (typeof character[method] !== 'function') throw new TypeError('Character.' + method + ' is not callable');
+      character[method](); return true;
+    },
+    actorLifecycle(handle, method, args = []) {
+      const type = engine.entityField(handle, 'enemy') ? Game_Enemy : Game_Actor;
+      const actor = wrapEntity(handle, type, actors);
       if (actor[method] === nativeActorMethods[method]) return false;
-      if (typeof actor[method] !== 'function') throw new TypeError('Game_Actor.' + method + ' is not callable');
-      actor[method](); return true;
+      if (Object.hasOwn(nativePerformBase, method) && Game_Battler.prototype[method] === nativePerformBase[method] &&
+          Object.entries(nativePerformMethods.get(type)).every(([name, original]) => actor[name] === original)) return false;
+
+      if (typeof actor[method] !== 'function') throw new TypeError(type.name + '.' + method + ' is not callable');
+      actor[method](...args); return true;
+    },
+    commonEventLifecycle(handle, method) {
+      const object = registry.get(handle.identity)?.deref() || Game_CommonEvent.prototype;
+      if (Object.entries(nativeCommonEventMethods).every(([name, original]) => object[name] === original) &&
+          (method !== 'update' || Game_Interpreter.prototype.update === nativeInterpreterUpdate)) return false;
+      const event = wrapCommonEvent(handle);
+      event[method](...(method === 'initialize' ? [event._commonEventId] : [])); return true;
+    },
+    eventPage(handle) {
+      const object = registry.get(handle.identity)?.deref() || Game_Event.prototype;
+      if (Object.entries(nativePageQueries).every(([method, original]) => object[method] === original)) return undefined;
+      return wrapRuntimeEntity(handle).findProperPageIndex();
+    },
+    characterRouteCommand(handle, command) {
+      const prototype = handle.entityId > 0 ? Game_Event.prototype : handle.entityId === -1 ? Game_Player.prototype : handle.entityId >= -7 && handle.entityId <= -5 ? Game_Vehicle.prototype : Game_Follower.prototype;
+      const existing = registry.get(handle.identity)?.deref();
+      if ((existing || prototype).processMoveCommand === nativeMoveCommand) return false;
+      const character = wrapRuntimeEntity(handle);
+      character.processMoveCommand(vm.runInContext('JSON.parse(' + JSON.stringify(JSON.stringify(command)) + ')', context)); return true;
     },
     characterScript(handle, source) {
-      const type = engine.entityField(handle, 'id') === -1 ? Game_Player : Game_Event;
-      const character = wrapEntity(handle, type, characters);
+      const character = wrapRuntimeEntity(handle);
       if (typeof character.processMoveRouteScriptCall === 'function') return character.processMoveRouteScriptCall(source);
       const fn = new vm.Script('(function() {\n' + source + '\n})', { filename: 'mv-route-script.js' }).runInContext(context);
       return fn.call(character);
@@ -840,21 +1013,6 @@ function createScriptRuntime(engine, session, options = {}) {
       if (method === defaults[name]) return false;
       method.apply(picture, args); return true;
     },
-    sprite(handle) { ensureSprite(handle); },
-    updateSprites() {
-      const battle = engine.inBattle(session);
-      for (const [slot, sprite] of spriteSlots) {
-        const logical = slot > 100 ? slot - 100 : slot;
-        if (!engine.ownsPictureSprite(session, sprites.get(sprite))) {
-          spriteSlots.delete(slot);
-          if (pictureChildren[logical] === sprite) delete pictureChildren[logical];
-          continue;
-        }
-        if ((slot > 100) !== battle) continue;
-        pictureChildren[logical] = sprite;
-        sprite.update();
-      }
-    },
     wait(handle, name) {
       const interpreter = wrapInterpreter(handle);
       if (interpreter[name] === nativeWait[name]) return undefined;
@@ -892,6 +1050,23 @@ function createScriptRuntime(engine, session, options = {}) {
   };
   engine.connectRuntime(session, callbacks);
   let scenes, classBindings, renderSubmitted = false, mapUpdated = false, frameInput;
+  function scriptInput() {
+    const input=scope.Input,touch=scope.TouchInput,direction=input.dir4;
+    const directionName=({2:'down',4:'left',6:'right',8:'up'})[direction];
+    const pressed=[...new Set([...Object.keys(input._currentState),'ok','cancel','menu','escape','shift','control','tab','pageup','pagedown','up','down','left','right','debug'])]
+      .filter(name=>input.isPressed(name));
+    return {
+      direction,pressed,ok:!!input.isPressed('ok'),cancel:!!(input.isPressed('cancel')||input.isPressed('menu')),dash:!!input.isPressed('shift'),
+      inputDate:input.date,touchDate:touch.date,okTriggered:!!input.isTriggered('ok'),okLongPressed:!!input.isLongPressed('ok'),
+      okRepeated:!!input.isRepeated('ok'),cancelRepeated:!!input.isRepeated('cancel'),shiftTriggered:!!input.isTriggered('shift'),
+      pageUpRepeated:!!input.isRepeated('pageup'),pageDownRepeated:!!input.isRepeated('pagedown'),
+      cancelTriggered:!!(input.isTriggered('cancel')||input.isTriggered('menu')||touch.isCancelled()),
+      directionTriggered:!!(directionName&&input.isTriggered(directionName)),repeatedDirection:directionName&&input.isRepeated(directionName)?direction:0,
+      touchX:touch.x,touchY:touch.y,touchTriggered:!!touch.isTriggered(),touchPressed:!!touch.isPressed(),touchCancelled:!!touch.isCancelled(),
+      touchRepeated:!!touch.isRepeated(),touchLongPressed:!!touch.isLongPressed(),touchMoved:!!touch.isMoved(),touchReleased:!!touch.isReleased(),
+      wheelX:touch.wheelX,wheelY:touch.wheelY
+    };
+  }
   const result = {
     scope,
     runScript(source, filename = 'mv-plugin.js') { return new vm.Script(source, { filename }).runInContext(context); },
@@ -899,10 +1074,24 @@ function createScriptRuntime(engine, session, options = {}) {
       if (!options.native) throw new Error('Scene bindings require native graphics services');
       if (scenes) return scenes;
       scenes = createSceneBindings(options.native, scope.Bitmap, scope.ImageManager, {
+        pointPrototype() { return scope.PIXI?.Point?.prototype || scope.Point.prototype; },
+        rectangleClass() { return scope.Rectangle; },
         createArray() { return vm.runInContext("[]", context); },
+        createVertices:vm.runInContext('(function() {return new Float32Array(8);})',context),
+        updateTouch() { engine.updateTouch(session); },
+        utils() { return scope.Utils; },
+        eventTarget() { return scope.window; },
+        now() { return performance.now(); },
+        date:guestNow,
+        reload() { scope.location.reload(); },
         runScript(source) { return vm.runInContext(source, context); },
         resourceHandler() { return scope.ResourceHandler; },
         gamepads() { return scope.navigator?.getGamepads?.() || []; },
+        attachTilemap(object) { tilemapBinding.attach(object); },
+        compileFilters(node, filters) { return scope.PMJS?.rpgmaker?.nativeFilters?.compile(node, filters); },
+        matrix(values) { return scope.PIXI?.Matrix ? new scope.PIXI.Matrix(...values) : Object.fromEntries(['a','b','c','d','tx','ty'].map((key,i) => [key,values[i]])); },
+        rectangle(x,y,width,height) { return new scope.Rectangle(x,y,width,height); },
+        graphicsClass() { return scope.PIXI?.Graphics; },
         colorMatrixFilterClass() { return scope.PIXI?.filters?.ColorMatrixFilter; },
         glitchFilterClass() { return scope.PIXI?.filters?.GlitchFilter; },
         containerPrototype: scope.PIXI?.Container?.prototype,
@@ -913,6 +1102,7 @@ function createScriptRuntime(engine, session, options = {}) {
         checkPluginErrors() { scope.PluginManager?.checkErrors(); },
         submitStage(handle) { renderSubmitted=true; engine.scriptStage(session,handle); },
         coreService(...args) { return engine.coreService(...args); },
+        screenSize(width,height) { engine.setScreenSize(session,width,height); },
         windowClasses() { return engine.windowClasses(); },
         windowModel(handle, name, method, args) { return engine.windowModel(session, handle, name, method, args); },
         actor(id) { return id ? scope.$gameActors.actor(id) : null; },
@@ -927,21 +1117,32 @@ function createScriptRuntime(engine, session, options = {}) {
         audioManager() { return scope.AudioManager; },
         gameoverMusic() { scope.AudioManager.stopBgm(); scope.AudioManager.stopBgs(); scope.AudioManager.playMe(scope.$dataSystem.gameoverMe); },
         gameParty() { return scope.$gameParty; },
+        gameSystem() { return scope.$gameSystem; },
         gameVariables() { return scope.$gameVariables; },
         actorName(id) { return scope.$gameActors.actor(id)?.name() || ''; },
         textManager() { return scope.TextManager; },
+        dataManager() { return scope.DataManager; },
+        databaseObject(type, id) { const table = scope['$data' + type[0].toUpperCase() + type.slice(1)]; return id === undefined ? table : table[id]; },
+        databaseIndex(type, object) {
+          const table = scope['$data' + type[0].toUpperCase() + type.slice(1)];
+          return table ? Array.prototype.indexOf.call(table, object) : -1;
+        },
+        gameTroop() { return scope.$gameTroop; },
         battleManager() { return scope.BattleManager; },
         soundManager() { return scope.SoundManager; },
         gamePlayer() { return scope.$gamePlayer; },
         gameMap() { return scope.$gameMap; },
         gameMessage() { return scope.$gameMessage; },
         gameScreen() { return scope.$gameScreen; },
-        loadMap(id) { result.mapDatabase.load(id); },
-        isMapReady() { return result.mapDatabase.isReady(); },
+        loadMap(id) {
+          if (result.mapDatabase) result.mapDatabase.load(id);
+          else scope.DataManager.loadMapData(id);
+        },
+        isMapReady() { return result.mapDatabase ? result.mapDatabase.isReady() : scope.DataManager.isMapLoaded(); },
         bindMapSpriteset(object) { engine.bindMapSpriteset(session, classBindings.handle(object)); },
         mapPhase(phase) {
           if (phase === 'update') mapUpdated = true;
-          return phase === 'destination' && frameInput !== undefined ? engine.mapScene(session, phase, frameInput) : engine.mapScene(session, phase);
+          return phase === 'destination' ? engine.mapScene(session,phase,frameInput===undefined?scriptInput():frameInput) : engine.mapScene(session, phase);
         },
         fadeAudio(seconds) {
           scope.AudioManager.fadeOutBgm(seconds);
@@ -958,8 +1159,29 @@ function createScriptRuntime(engine, session, options = {}) {
         boundDisplayField(handle, field, runtime, ...value) { return engine.classBindings.displayField(handle, field, runtime, ...value); }
       });
       Object.assign(scope, scenes);
-      classBindings = installClassBindings(scope, engine.classBindings, session, { unwrap: object => actors.get(object) || characters.get(object), initializeDisplay: scenes.initializeDisplay, displayField: scenes.displayField,
+      installInputEvents(result);
+      installSpriteTextures(result,scenes);
+      if (scope.PIXI) {
+        const PixiContainer = function Container() { scenes.Container.prototype.initialize.call(this); };
+        Object.setPrototypeOf(PixiContainer, scope.PIXI.Container);
+        PixiContainer.prototype = scenes.Container.prototype;
+        const descriptors = Object.getOwnPropertyDescriptors(scope.PIXI);
+        descriptors.Container = { value: PixiContainer, writable: true, configurable: true, enumerable: true };
+        scope.PIXI = Object.create(Object.getPrototypeOf(scope.PIXI), descriptors);
+      }
+      tilemapBinding.configure(scenes);
+      classBindings = installClassBindings(scope, engine.classBindings, session, { unwrap: object => actors.get(object) || characters.get(object), initializeDisplay: scenes.initializeDisplay, displayField: scenes.displayField, displayListField: scenes.displayListField,
+        bytes:vm.runInContext('(function(bytes) { return new Uint8Array(bytes); })',context),
+        xhr:vm.runInContext('(function(xhr) { return {response:new Uint8Array(xhr.response).buffer,responseURL:xhr.responseURL,status:xhr.status}; })',context),
         wrapReference: wrapRuntimeEntity });
+      scope.Sprite_Battler.prototype.damageOffsetX = function() { return 0; };
+      scope.Sprite_Battler.prototype.damageOffsetY = function() { return 0; };
+      scope.Sprite_Actor.prototype.damageOffsetX = function() { return -32; };
+      scope.Sprite_Enemy.prototype.damageOffsetY = function() { return -8; };
+      scope.Sprite_Actor.MOTIONS = vm.runInContext('(' + '{\n    walk:     { index: 0,  loop: true  },\n    wait:     { index: 1,  loop: true  },\n    chant:    { index: 2,  loop: true  },\n    guard:    { index: 3,  loop: true  },\n    damage:   { index: 4,  loop: false },\n    evade:    { index: 5,  loop: false },\n    thrust:   { index: 6,  loop: false },\n    swing:    { index: 7,  loop: false },\n    missile:  { index: 8,  loop: false },\n    skill:    { index: 9,  loop: false },\n    spell:    { index: 10, loop: false },\n    item:     { index: 11, loop: false },\n    escape:   { index: 12, loop: true  },\n    victory:  { index: 13, loop: true  },\n    dying:    { index: 14, loop: true  },\n    abnormal: { index: 15, loop: true  },\n    sleep:    { index: 16, loop: true  },\n    dead:     { index: 17, loop: true  }\n}' + ')', context);
+      scope.Sprite_Picture.prototype.picture = function() { return scope.$gameScreen.picture(this._pictureId); };
+      installWeatherParticles(result);
+      installAudioMetadata(result);
       scope.navigator = {
         ...scope.navigator,
         platform: scope.navigator?.platform || process.platform, userAgent: 'pmjs native runtime', language: 'en-US',
@@ -972,15 +1194,23 @@ function createScriptRuntime(engine, session, options = {}) {
           return result;
         }
       };
-      installAudioManager(scope,engine,session,classBindings,values => GuestArray.from(values));
+      scope.ImageManager.cache = new scope.CacheMap(scope.ImageManager);
+      installAudioManager(scope,engine,session,classBindings,values => GuestArray.from(values),result);
       installSoundManager(scope, engine, session);
+      if (!result.mapDatabase) {
+        scope.DataManager.loadMapData = function(id) {
+          scope.$dataMap = engine.databaseInvoke(session, 'read', 'maps')[id] || { data: [], events: [], width: 100, height: 100, scrollType: 3 };
+          this.onLoad(scope.$dataMap);
+        };
+        scope.DataManager.isMapLoaded = function() { this.checkError(); return Boolean(scope.$dataMap); };
+      }
       Object.assign(scope.DataManager, {
         createGameObjects() {
           for (const name of ['Temp','System','Timer','Screen','Party','Troop','Map','Actors']) {
             const object=scope['$game'+name], Type=scope['Game_'+name];
             if (object && Type) Object.setPrototypeOf(object,Type.prototype);
           }
-          engine.newGame(session); scope.$gameTemp.initialize(); scope.$gameSystem.initialize(); scope.$gameTimer.initialize();
+          engine.newGame(session, !result.completeStorage); scope.$gameTemp.initialize(); scope.$gameSystem.initialize(); scope.$gameTimer.initialize();
         },
         setupNewGame() { this.createGameObjects(); }
       });
@@ -1000,18 +1230,21 @@ function createScriptRuntime(engine, session, options = {}) {
       };
       for (const method of ['isBattleTest', 'isEventTest', 'isAnySavefileExists']) scope.DataManager[method] = () => engine.managerInvoke(session, method);
       scope.ConfigManager = function ConfigManager() { throw new Error('ConfigManager is a static class'); };
-      for (const field of ['alwaysDash', 'commandRemember', 'bgmVolume', 'bgsVolume', 'meVolume', 'seVolume']) Object.defineProperty(scope.ConfigManager, field, {
+      for (const field of ['alwaysDash', 'commandRemember']) Object.defineProperty(scope.ConfigManager, field, {
         enumerable: true, configurable: true, get() { return engine.configuration(session)[field]; }, set(value) { engine.configure(session, { [field]: value }); }
       });
-      for (const field of ['bgmVolume', 'bgsVolume', 'meVolume', 'seVolume']) Object.defineProperty(scope.AudioManager, field, {
+      for (const field of ['bgmVolume', 'bgsVolume', 'meVolume', 'seVolume']) Object.defineProperty(scope.ConfigManager, field, {
         enumerable: true, configurable: true,
-        get() { return engine.configuration(session)[field]; }, set(value) { engine.configure(session, { [field]: value }); }
+        get() { return scope.AudioManager[field]; }, set(value) { scope.AudioManager[field]=value; }
       });
       function Window_TitleCommand() { this.initialize.apply(this, arguments); }
       Window_TitleCommand.prototype = Object.create(scope.Window_Command.prototype);
       Window_TitleCommand.prototype.constructor = Window_TitleCommand;
       Window_TitleCommand.prototype.makeCommandList = function() {
         for (const command of engine.managerInvoke(session, 'titleCommands')) this.addCommand(command.name, command.symbol, command.enabled);
+      };
+      Window_TitleCommand.prototype.updatePlacement = function() {
+        this.x = (scope.Graphics.boxWidth - this.width) / 2; this.y = scope.Graphics.boxHeight - this.height - 96;
       };
       Window_TitleCommand.initCommandPosition = () => engine.managerInvoke(session, 'initTitleCommandPosition');
       scope.Window_TitleCommand = Window_TitleCommand;
@@ -1021,16 +1254,18 @@ function createScriptRuntime(engine, session, options = {}) {
         mapUpdated=false; frameInput=input;
         classBindings.sweep();
         tilemapBinding.update();
-        engine.updateTouch(session);
         if (scope.SceneManager._stopped) return true;
         scope.SceneManager.ticker?.update(scope.performance?.now() ?? performance.now());
         scope.SceneManager.update(1);
         scenes.updateFilters();
         const scene = scope.SceneManager._scene;
+        if (scope.SceneManager._exiting && !scene) return false;
         const builtin = !scene || scope.SceneManager.nativeDriven;
         if (!renderSubmitted) engine.scriptStage(session, builtin ? null : scope.SceneManager.stageHandle);
         if (mapUpdated || !builtin || !scope.SceneManager.canStep) return true;
-        return input === undefined ? engine.step(session) : engine.step(session, input);
+        const running = engine.step(session,input===undefined?scriptInput():input);
+        scenes.prepareNativeRequest();
+        return running;
       };
       return scenes;
     }

@@ -194,22 +194,56 @@ Window.prototype._updatePauseSign = function() {
   const raw = new Map(hooks.map(name => [name, Window.prototype[name]])), defaults = new Map();
   const states = new WeakMap();
   function state(window) {
-    if (!states.has(window)) states.set(window, { active: false, parts: {}, signature: null });
+    if (!states.has(window)) states.set(window, { active: false, parts: {}, signature: null, nativeOpacity: {} });
     return states.get(window);
   }
-  function activate(window) {
+  function needsParts(window) {
+    return bridge.spriteHooksActive() || bridge.bitmapHooksActive() ||
+      [...defaults].some(([name, method]) => window[name] !== method);
+  }
+  function signature(window) {
+    return [window.width,window.height,window.padding,window.margin,window.windowskin];
+  }
+  function remember(window) { state(window).signature = signature(window); }
+  function rememberCursor(window) { state(window).nativeCursor = bridge.cursor(window); }
+  function rememberTone(window) { state(window).nativeTone = bridge.tone(window); }
+  const opacityParts = { opacity: '_windowSpriteContainer', backOpacity: '_windowBackSprite', contentsOpacity: '_windowContentsSprite' };
+  function restoreOpacity(window) {
+    if (!state(window).active) return;
+    for (const [name, part] of Object.entries(opacityParts)) {
+      const value = bridge.opacity(window, name); state(window).nativeOpacity[name] = value;
+      if (part === '_windowSpriteContainer' || state(window).parts[part]) window[part].alpha = value / 255;
+    }
+  }
+  function synchronizeOpacity(window) {
+    const value = state(window);
+    if (!value.active) return;
+    for (const [name, part] of Object.entries(opacityParts)) {
+      const current = bridge.opacity(window, name);
+      if (current !== value.nativeOpacity[name]) {
+        value.nativeOpacity[name] = current;
+        if (part === '_windowSpriteContainer' || value.parts[part]) window[part].alpha = current / 255;
+      }
+    }
+  }
+  function activate(window, requested) {
     const value = state(window);
     if (value.active) return;
     value.active = true; bridge.activate(window);
-    window._createAllParts();
-    for (const name of refresh) window[name]();
+    if (requested !== '_createAllParts') {
+      raw.get('_createAllParts').call(window);
+      for (const name of refresh) if (name !== requested) raw.get(name).call(window);
+      window._windowContentsSprite.bitmap = window.contents;
+      restoreOpacity(window);
+    }
+    remember(window); rememberCursor(window); rememberTone(window);
   }
   for (const name of hooks) {
     const implementation = raw.get(name);
     const method = Window.prototype[name] = function(...args) {
       if (!state(this).active) {
-        if (name === '_createAllParts' && hooks.every(hook => this[hook] === defaults.get(hook))) return bridge.refresh(this);
-        activate(this); return;
+        if ((name === '_createAllParts' || refresh.includes(name)) && !needsParts(this)) return bridge.refresh(this);
+        activate(this, name);
       }
       return implementation.apply(this, args);
     };
@@ -217,7 +251,8 @@ Window.prototype._updatePauseSign = function() {
   }
   const nativeRefresh = bridge.refresh;
   Window.prototype._refreshAllParts = function() {
-    if (!state(this).active && hooks.every(name => this[name] === defaults.get(name))) return nativeRefresh(this);
+    remember(this);
+    if (!state(this).active && !needsParts(this)) return nativeRefresh(this);
     activate(this); for (const name of refresh) this[name]();
   };
   defaults.set('_refreshAllParts', Window.prototype._refreshAllParts);
@@ -231,46 +266,86 @@ Window.prototype._updatePauseSign = function() {
   }
   Object.defineProperty(Window.prototype, '_colorTone', { configurable: true,
     get() {
-      const value = state(this), thisWindow = this;
-      if (!value.tone) value.tone = new Proxy([0,0,0], {
-        get(target, key) { if (key === '0' || key === '1' || key === '2') return bridge.tone(thisWindow)[Number(key)]; return Reflect.get(target, key); },
-        set(target, key, channel) { const tone = bridge.tone(thisWindow); tone[key] = channel; bridge.setTone(thisWindow, tone); return true; }
-      });
+      activate(this); const value = state(this);
+      if (!value.tone) value.tone = [...bridge.tone(this)];
       return value.tone;
-    }, set(value) { bridge.setTone(this, value); }
+    }, set(value) {
+      activate(this); state(this).tone = value;
+      bridge.setTone(this, value); rememberTone(this);
+    }
   });
   Object.defineProperty(Window.prototype, '_cursorRect', { configurable: true,
     get() {
-      const value = state(this), window = this;
-      if (!value.cursor) {
-        value.cursor = new Rectangle();
-        ['x','y','width','height'].forEach((name, index) => Object.defineProperty(value.cursor, name, { configurable: true,
-          get() { return bridge.cursor(window)[index]; },
-          set(channel) { const rectangle = bridge.cursor(window); rectangle[index] = channel; window.setCursorRect(...rectangle); }
-        }));
-      }
+      activate(this); const value = state(this);
+      if (!value.cursor) value.cursor = new Rectangle(...bridge.cursor(this));
       return value.cursor;
+    }, set(value) {
+      activate(this); state(this).cursor = value;
+      bridge.setCursor(this, [value.x,value.y,value.width,value.height]); rememberCursor(this);
     }
   });
-  Object.defineProperty(Window.prototype, '_windowskin', { configurable: true, get() { return this.windowskin; }, set(value) { this.windowskin = value; } });
-  Window.prototype.setTone = function(r,g,b) { bridge.setTone(this, [r,g,b]); this._refreshBack(); };
+  Object.defineProperty(Window.prototype, '_windowskin', { configurable: true, get() { return this.windowskin; }, set(value) { activate(this); bridge.setWindowskin(this, value); remember(this); } });
+  Window.prototype.setTone = function(r,g,b) {
+    const tone = state(this).tone || bridge.tone(this);
+    if (r !== tone[0] || g !== tone[1] || b !== tone[2]) {
+      state(this).tone = [r,g,b]; bridge.setTone(this, [r,g,b]); rememberTone(this); this._refreshBack();
+    }
+  };
   Window.prototype.addChildToBack = function(child) { return this.addChildAt(child, this.children.indexOf(this._windowSpriteContainer) + 1); };
   function prepare(window) {
     const value = state(window);
-    if (!value.active && [...defaults].every(([name, method]) => window[name] === method)) return;
+    if (!value.active && !needsParts(window)) return;
     activate(window);
-    const rect = bridge.cursor(window), tone = bridge.tone(window);
-    const signature = [window.width,window.height,window.padding,window.margin,window.windowskin,window.windowskin?.isReady(),window.origin.x,window.origin.y,...rect,...tone];
-    if (!value.signature || signature.some((item, index) => item !== value.signature[index])) {
-      value.signature = signature; window._refreshAllParts();
+    const current = signature(window);
+    if (!value.signature || current.some((item, index) => item !== value.signature[index])) {
+      remember(window); window._refreshAllParts();
     }
-    window._windowSpriteContainer.alpha = window.opacity / 255;
-    window._windowBackSprite.alpha = window.backOpacity / 255;
+    const cursor = bridge.cursor(window), tone = bridge.tone(window);
+    if (value.nativeCursor && cursor.some((item, index) => item !== value.nativeCursor[index])) {
+      updateCursor(window, cursor); window._refreshCursor();
+    }
+    if (value.nativeTone && tone.some((item, index) => item !== value.nativeTone[index])) {
+      value.tone = [...tone]; rememberTone(window); window._refreshBack();
+    }
+    synchronizeOpacity(window);
     window._windowContentsSprite.bitmap = window.contents;
-    window._windowContentsSprite.alpha = window.contentsOpacity / 255;
     window.updateTransform();
   }
-  return { prepare };
+  function cursorValues(window) {
+    const rectangle = state(window).cursor;
+    return rectangle ? [rectangle.x,rectangle.y,rectangle.width,rectangle.height] : bridge.cursor(window);
+  }
+  function updateCursor(window, values) {
+    const rectangle = state(window).cursor;
+    if (rectangle) [rectangle.x,rectangle.y,rectangle.width,rectangle.height] = values;
+    rememberCursor(window);
+  }
+  return { prepare, remember, cursorValues, updateCursor,
+    created(window) { restoreOpacity(window); rememberCursor(window); rememberTone(window); },
+    opacity(window, name) {
+      synchronizeOpacity(window);
+      const part = opacityParts[name];
+      if (state(window).active && (part === '_windowSpriteContainer' || state(window).parts[part])) return window[part].alpha * 255;
+      return bridge.opacity(window, name);
+    },
+    setOpacity(window, name, value) {
+      state(window).nativeOpacity[name] = bridge.opacity(window, name);
+      const part = opacityParts[name];
+      if (state(window).active && (part === '_windowSpriteContainer' || state(window).parts[part])) window[part].alpha = Math.max(0, Math.min(value, 255)) / 255;
+    },
+    privateChange(window) { activate(window); },
+    beforeChange(window) { if (!state(window).active && needsParts(window)) activate(window); },
+    initialize(window) {
+      if (needsParts(window)) {
+        state(window).active = true; bridge.activate(window);
+      }
+      remember(window);
+    },
+    contents(window) {
+      if (state(window).active && state(window).parts._windowContentsSprite)
+        window._windowContentsSprite.bitmap = window.contents;
+    }
+  };
 })`);
   return factory(types.Window, types.Sprite, types.Bitmap, bridge);
 }

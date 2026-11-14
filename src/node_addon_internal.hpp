@@ -26,6 +26,7 @@ namespace pmjs::mv::core { class PixelBitmap; class Container; }
 namespace pmjs::mv { struct Value; class Window_Base; }
 namespace pmjs::addon {
 
+napi_value wrapRuntimeBitmap(napi_env env,const std::shared_ptr<mv::core::PixelBitmap>& bitmap,RuntimeCore& runtime);
 std::shared_ptr<mv::core::PixelBitmap> bitmapForRuntime(napi_env env, napi_value object, RuntimeCore& runtime);
 std::shared_ptr<mv::core::Container> displayForRuntime(napi_env env, napi_value object, RuntimeCore& runtime);
 napi_value wrapRuntimeDisplay(napi_env env, napi_value services, const std::shared_ptr<mv::core::Container>& node, RuntimeCore& runtime);

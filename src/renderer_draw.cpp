@@ -1722,6 +1722,7 @@ void Renderer::renderScene() {
         continue;
       }
 
+      glUniform1i(exactCompositionCopyUniform_, filter.exactCompositionCopy);
       glUniform1i(filterTargetYDownUniform_, targetYDown);
       glUniform1i(filterImageYDownUniform_, sourceYDown);
       glBindFramebuffer(GL_FRAMEBUFFER, filterDepth == 0 ? rootFramebuffer :
@@ -1776,6 +1777,7 @@ void Renderer::renderScene() {
         }
       }
       if (pictureBlend) glEnable(GL_BLEND);
+      glUniform1i(exactCompositionCopyUniform_, 0);
       glUniform1i(displacementEnabledUniform_, 0);
       glUniform1i(noiseGlitchEnabledUniform_, 0);
       glUniform1i(pixiFilterKindUniform_, 0);

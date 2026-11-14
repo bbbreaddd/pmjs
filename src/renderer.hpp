@@ -96,6 +96,8 @@ struct RenderCommand {
   bool packedSpriteColor = false;
   bool floatSpriteUv = false;
   bool spriteWorldVertices = false;
+  // Callback vertices already include transforms deferred by native map rendering.
+  bool absoluteSpriteVertices = false;
   bool standaloneBitmapRegion = false;
   std::array<std::array<float, 2>, 4> spriteVertices{};
   bool appliesMeshPostTintOverlay = false;
@@ -109,6 +111,7 @@ struct RenderCommand {
   std::shared_ptr<const CustomFilterPlan> customFilterPlan{};
   std::array<float, 21> filterParameters{};
   float filterResolution = 1.0F;
+  bool exactCompositionCopy = false;
   Primitive primitive = Primitive::sprite;
   EffectDraw effect{};
   bool clampedTilingSampling = false;
@@ -273,11 +276,17 @@ class Renderer {
   void beginFrame();
   std::size_t queuedCommandCount() const { return frame_.commands.size(); }
   void transformQueuedCommands(std::size_t first, const std::array<float, 6>& transform, float opacity = 1);
+  void setQueuedSpriteVertices(std::size_t first,const std::array<std::array<float,2>,4>& vertices);
+  const std::array<float,6>& callbackWorldTransform()const{return callbackWorldTransform_;}
+  void setCallbackWorldTransform(const std::array<float,6>& value){callbackWorldTransform_=value;}
   void queueTone(const std::array<float, 20>& matrix);
   void queueTone(const std::array<float, 4>& canvasTone,
                  const std::array<float, 6>& transform,
                  const std::array<float, 2>& extent);
+  void markSceneSubmitted() { sceneSubmittedThisFrame_ = true; }
   void beginCompositionGroup();
+  RenderCommand nativeFilter(unsigned kind, std::uint32_t resource, const std::vector<float>& parameters, float resolution = 1);
+  void beginNativeFilter(const RenderCommand& command);
   void beginColorMatrix(const std::array<float,20>& matrix,float alpha);
   void beginNoiseGlitch(double seed, double slices, double offset);
   void endCompositionGroup();
@@ -537,6 +546,7 @@ class Renderer {
   std::array<float, 4> clearColor_{0.0F, 0.0F, 0.0F, 1.0F};
   bool clearBeforeRender_ = true;
   std::array<float, 6> sceneProjection_{1, 0, 0, 1, 0, 0};
+  std::array<float,6> callbackWorldTransform_{1,0,0,1,0,0};
   bool sceneSubmittedThisFrame_ = false;
   bool hasValidSceneFrame_ = false;
   FramePacket frame_;
@@ -659,6 +669,7 @@ class Renderer {
   int pixiFilterParametersUniform_ = -1;
   int bloomImageUniform_ = -1;
   int premultipliedInputUniform_ = -1;
+  int exactCompositionCopyUniform_ = -1;
   int maskEnabledUniform_ = -1;
   int maskImageUniform_ = -1;
   int maskTransformUniform_ = -1;

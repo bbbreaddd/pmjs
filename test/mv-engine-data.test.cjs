@@ -155,6 +155,15 @@ test('loads modified MV without stock script identities or a plugin allowlist', 
   assert.equal(loaded.database.maps[1].events[1].pages[0].list[0].code, 9999);
 });
 
+test('runtime startup leaves map files to the map loader', () => {
+  const root = gameFiles();
+  fs.writeFileSync(path.join(root, 'data/Map001.json'), 'invalid until requested');
+  const loaded = loadGame(root, { loadMaps: false });
+  assert.deepEqual(loaded.database.maps, {});
+  assert.equal(loaded.database.system.startMapId, 1);
+  assert.equal(Object.hasOwn(loaded.identities, 'data/Map001.json'), false);
+});
+
 test('unused map index entries do not require unshipped map files at startup', () => {
   const root = gameFiles();
   fs.writeFileSync(path.join(root, 'data/MapInfos.json'), JSON.stringify([null, { id: 1 }, { id: 2 }]));

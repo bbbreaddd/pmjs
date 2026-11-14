@@ -38,13 +38,17 @@ test('native descriptions generate inherited classes, fields and method signatur
 test('generated defaults support aliases and retain wrapper state while native models are active', () => {
   const { scope, bindings, bridge, session, initializations } = fixture();
   const handle = bindings.create(session, 'NamedCounter');
-  assert.equal(bridge.dispatch(handle, 'NamedCounter', 'add', [1]), null);
+  let argumentsRead=false;
+  assert.equal(bridge.overridden(handle,'NamedCounter','add'),false);
+  assert.equal(bridge.dispatch(handle, 'NamedCounter', 'add', ()=> {argumentsRead=true;return [1];}), null);
+  assert.equal(argumentsRead,false,'unchanged native methods must not materialize callback arguments');
   assert.equal(initializations(), 0, 'unchanged native methods must not construct script wrappers');
   const original = scope.Counter.prototype.add;
   const seen = [];
   scope.Counter.prototype.add = function(value) {
     this.calls = (this.calls || 0) + 1; seen.push(this); return original.call(this, value * 2);
   };
+  assert.equal(bridge.overridden(handle,'NamedCounter','add'),true);
   assert.equal(bridge.dispatch(handle, 'NamedCounter', 'add', [2]).value, 4);
   bridge.dispatch(handle, 'NamedCounter', 'add', [3]);
   assert.equal(seen[0], seen[1]); assert.equal(seen[0].calls, 2); assert.equal(handle.value, 10);
@@ -68,4 +72,28 @@ test('reference arguments and constructor aliases preserve the original script o
   assert.equal(calls[1], nativeTarget); assert.equal(holder._target, target);
   assert.throws(() => holder.setTarget({}), /object argument is not bound/);
   assert.equal(calls.length, 2); assert.equal(holder._target, target);
+});
+
+
+test('derived initializer aliases enter later parent overrides without duplicating native construction', () => {
+  const { scope, initializations } = fixture(), calls = [];
+  const childInitialize = scope.NamedCounter.prototype.initialize;
+  scope.NamedCounter.prototype.initialize = function(...args) { calls.push('child'); childInitialize.apply(this, args); this.pluginChild = true; };
+  const parentInitialize = scope.Counter.prototype.initialize;
+  scope.Counter.prototype.initialize = function(...args) { calls.push('parent'); parentInitialize.apply(this, args); this.pluginParent = true; };
+  const object = new scope.NamedCounter();
+  assert.deepEqual(calls, ['child', 'parent']); assert.equal(initializations(), 1);
+  assert.equal(object.label, 'NamedCounter'); assert.equal(object.pluginChild, true); assert.equal(object.pluginParent, true);
+});
+
+
+test('native-created descendant initializers dispatch later parent overrides', () => {
+  const { scope, bindings, bridge, session, initializations } = fixture();
+  const initialize = scope.Counter.prototype.initialize;
+  let calls = 0;
+  scope.Counter.prototype.initialize = function(...args) { ++calls; initialize.apply(this, args); this.pluginParent = true; };
+  const handle = bindings.create(session, 'NamedCounter');
+  assert.deepEqual(bridge.dispatch(handle, 'NamedCounter', 'initialize', []), { value: undefined });
+  assert.equal(calls, 1); assert.equal(initializations(), 1);
+  assert.equal(bridge.wrap(handle, 'NamedCounter').pluginParent, true);
 });

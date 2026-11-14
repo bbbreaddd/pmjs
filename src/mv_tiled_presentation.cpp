@@ -1,4 +1,5 @@
 #include "mv_presentation.hpp"
+#include "mv_bound_sprites.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -10,6 +11,20 @@ constexpr int chunkWidth = 32;
 constexpr std::size_t maxChunks = 512;
 int property(const Value& value) {
   return value.text().empty() ? value.integer() : std::stoi(value.text());
+}
+bool hiddenOnLevel(const Value& layer,int level) {
+  const auto& value=layer["properties"]["hideOnLevel"];
+  if(std::holds_alternative<double>(value.data))return std::isfinite(value.number())&&std::trunc(value.number())==level;
+  if(!std::holds_alternative<std::string>(value.data))return false;
+  try {
+    const auto text=value.text();
+    const auto first=text.find_first_not_of(" \t\r\n");
+    if(first==std::string::npos)return false;
+    const auto digit=first+(text[first]=='+'||text[first]=='-');
+    const bool hex=text.compare(digit,2,"0x")==0||text.compare(digit,2,"0X")==0;
+    return std::stoi(text,nullptr,hex ? 16 : 10)==level;
+  } catch(const std::invalid_argument&) { return false; }
+    catch(const std::out_of_range&) { return false; }
 }
 }
 
@@ -131,7 +146,7 @@ void Presentation::tiledMap(const Value& data) {
   auto& bounds = tiledNextBounds_;
   bounds.clear(); bounds.reserve(layers.size());
   for (const auto& layer : layers) {
-    if (!layer["visible"].null() && !layer["visible"].boolean()) { bounds.push_back({}); continue; }
+    if ((!layer["visible"].null() && !layer["visible"].boolean()) || hiddenOnLevel(layer,graphMapLevel_)) { bounds.push_back({}); continue; }
     const int dx = layer["offsetx"].integer(), dy = layer["offsety"].integer();
     const int firstX = static_cast<int>(std::floor(double(ox - dx) / tw)), firstY = static_cast<int>(std::floor(double(oy - dy) / th));
     bounds.push_back({session_.loopHorizontal() ? firstX : std::max(0, firstX),
@@ -158,13 +173,13 @@ void Presentation::tiledMap(const Value& data) {
         std::tuple(right.z, right.sorted ? right.y - oy : 0, right.priority, right.order);
     });
   }
-  struct Actor { int z, y; std::size_t order; const Character* character; };
+  struct Actor { int z; double y; std::size_t order; const Character* character; const NativeMapDrawEntry* graph = nullptr; };
   std::vector<Actor> actors;
   std::size_t order = tiledDraws_.size();
   const auto actor = [&](const Character& value, int priority) {
     const bool object = value.characterName.find('!') < 2;
     const int y = static_cast<int>(std::floor(scrolledMapY(value.realY, cameraY_, th) * th + th - (object ? 0 : 6) + 0.5) + value.spriteOffsetY);
-    actors.push_back({priority * 2 + 1, y, order++, &value});
+    actors.push_back({priority * 2 + 1, static_cast<double>(y), order++, &value});
   };
   for (const auto& event : session_.events_) if (event.page >= 0) actor(event.character, event.priority);
   for (const auto& vehicle : session_.vehicles_) if (vehicle.mapId == session_.mapId_) actor(vehicle.character, vehicle.type == 2 ? vehicle.altitude > 0 ? 2 : 0 : 1);
@@ -174,12 +189,13 @@ void Presentation::tiledMap(const Value& data) {
   if (airship.mapId == session_.mapId_ && airship.altitude > 0) {
     const bool object = airship.character.characterName.find('!') < 2;
     const int y = static_cast<int>(std::floor(scrolledMapY(airship.character.realY, cameraY_, th) * th + th - (object ? 0 : 6) + 0.5));
-    actors.push_back({6, y, order++, nullptr});
+    actors.push_back({6, static_cast<double>(y), order++, nullptr});
   }
+  for(const auto& entry : graphMapDrawEntries_) actors.push_back({entry.z,entry.y,order++,nullptr,&entry});
   std::stable_sort(actors.begin(), actors.end(), [](const Actor& left, const Actor& right) {
     return std::tie(left.z, left.y, left.order) < std::tie(right.z, right.y, right.order);
   });
-  const auto drawActor = [&](const Actor& value) { if (value.character) character(*value.character, cameraX_, cameraY_); else mapShadow(); };
+  const auto drawActor = [&](const Actor& value) { if(value.graph) value.graph->draw(core_.renderer(),{1,0,0,1,0,0},1); else if (value.character) character(*value.character, cameraX_, cameraY_); else mapShadow(); };
   std::size_t nextActor = 0;
   const double age = (session_.ticks_ - sceneTickOrigin_) * 1000 / 60;
   for (const auto& draw : tiledDraws_) {

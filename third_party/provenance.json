@@ -619,6 +619,55 @@
       "license": "MIT",
       "notice": "third_party/rpg-maker-mv.LICENSE",
       "revision": "1.6.2"
+    },
+    "runner/native-tilemap-drawing.cjs": {
+      "origin": "permissive",
+      "source": "RPG Maker MV rpg_core.js 1.6.2",
+      "license": "MIT",
+      "notice": "third_party/rpg-maker-mv.LICENSE",
+      "revision": "1.6.2"
+    },
+    "runner/native-weather.cjs": {
+      "origin": "permissive",
+      "source": "RPG Maker MV rpg_core.js 1.6.2",
+      "license": "MIT",
+      "notice": "third_party/rpg-maker-mv.LICENSE",
+      "revision": "1.6.2"
+    },
+    "runner/native-input-events.cjs": {
+      "origin": "permissive",
+      "source": "RPG Maker MV rpg_core.js 1.6.2",
+      "license": "MIT",
+      "notice": "third_party/rpg-maker-mv.LICENSE",
+      "revision": "1.6.2"
+    },
+    "runner/native-audio-metadata.cjs": {
+      "origin": "permissive",
+      "source": "RPG Maker MV rpg_core.js 1.6.2",
+      "license": "MIT",
+      "notice": "third_party/rpg-maker-mv.LICENSE",
+      "revision": "1.6.2"
+    },
+    "runner/native-window-layer.cjs": {
+      "origin": "permissive",
+      "source": "RPG Maker MV rpg_core.js 1.6.2",
+      "license": "MIT",
+      "notice": "third_party/rpg-maker-mv.LICENSE",
+      "revision": "1.6.2"
+    },
+    "runner/native-sprite-render-hooks.cjs": {
+      "origin": "permissive",
+      "source": "RPG Maker MV rpg_core.js 1.6.2",
+      "license": "MIT",
+      "notice": "third_party/rpg-maker-mv.LICENSE",
+      "revision": "1.6.2"
+    },
+    "runner/native-sprite-textures.cjs": {
+      "origin": "permissive",
+      "source": "RPG Maker MV rpg_core.js 1.6.2",
+      "license": "MIT",
+      "notice": "third_party/rpg-maker-mv.LICENSE",
+      "revision": "1.6.2"
     }
   },
   "defaults": {

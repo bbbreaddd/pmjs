@@ -16,6 +16,19 @@ function game(files) {
 const runtime = () => createScriptRuntime({ connectRuntime() {}, utilsInvoke(_session, name) { return name === 'RPGMAKER_NAME' ? 'MV' : '1.6.1'; } }, {});
 const plugin = (name, status = true, parameters = {}) => ({ name, status, parameters });
 
+test('web host retains inherited addon services and shared service identity', () => {
+  const root = game({});
+  fs.writeFileSync(path.join(root, 'index.html'), '');
+  const host = { fs: { stat() {} }, media: { setAudioContextSuspended() {} }, runtime: {} };
+  const native = Object.create(host);
+  const r = { scope: {}, runScript() {} };
+  require('../runner/native-web.cjs').installWeb(r, { native, gameRoot: root, settings: { width: 640, height: 480 } });
+  assert.equal(r.scope.NativeHost.media, host.media);
+  assert.equal(r.scope.NativeHost.fs, host.fs);
+  host.media.laterMethod = () => 7;
+  assert.equal(r.scope.NativeHost.media.laterMethod(), 7);
+});
+
 test('native plugins execute once in enabled order with parameters and shared prototypes', () => {
   const root = game({
     First: `var nodeFiles = typeof require('node:fs').readFileSync; var guestWindow = window === globalThis;
@@ -48,12 +61,16 @@ test('native plugin failures stop startup and preserve the thrown error and sour
   r.scope.pluginFailure = failure;
   assert.throws(() => installPlugins(r, root, { plugins: [plugin('Bad'), plugin('Later')] }), error => error === failure);
   assert.equal(r.scope.ranLater, undefined);
-  assert.match(r.scope.PluginManager._errorUrls[0], /Bad\.js$/);
+  assert.equal(r.scope.PluginManager._errorUrls.length, 0);
 });
 
 test('native plugin loading reports missing enabled files instead of skipping them', () => {
   const r = runtime();
-  assert.throws(() => installPlugins(r, game({}), { plugins: [plugin('Missing')] }), /Missing\.js/);
+  const manager = installPlugins(r, game({}), { plugins: [plugin('Missing')] });
+  assert.throws(() => manager.checkErrors(), /Missing\.js/);
+  let failed; manager.onError = event => { failed = event.target._url; };
+  manager.loadScript('Again.js'); assert.match(failed, /Again\.js$/);
+  assert.doesNotThrow(() => manager.checkErrors());
 });
 
 test('native plugin evaluation exposes the current script and restores it after errors', () => {

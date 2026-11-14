@@ -360,27 +360,27 @@ bool AudioManager::shouldUseHtml5Audio() {
   return false;
 }
 
-int AudioManager::bgmVolume(const Session& session) { return session.volumes_[0]; }
-void AudioManager::setBgmVolume(Session& session, int value) {
-  session.volumes_[0] = std::clamp(value, 0, 100);
+double AudioManager::bgmVolume(const Session& session) { return session.volumes_[0]; }
+void AudioManager::setBgmVolume(Session& session, double value) {
+  session.volumes_[0] = value;
   ++session.configurationRevision_;
 }
 
-int AudioManager::bgsVolume(const Session& session) { return session.volumes_[1]; }
-void AudioManager::setBgsVolume(Session& session, int value) {
-  session.volumes_[1] = std::clamp(value, 0, 100);
+double AudioManager::bgsVolume(const Session& session) { return session.volumes_[1]; }
+void AudioManager::setBgsVolume(Session& session, double value) {
+  session.volumes_[1] = value;
   ++session.configurationRevision_;
 }
 
-int AudioManager::meVolume(const Session& session) { return session.volumes_[2]; }
-void AudioManager::setMeVolume(Session& session, int value) {
-  session.volumes_[2] = std::clamp(value, 0, 100);
+double AudioManager::meVolume(const Session& session) { return session.volumes_[2]; }
+void AudioManager::setMeVolume(Session& session, double value) {
+  session.volumes_[2] = value;
   ++session.configurationRevision_;
 }
 
-int AudioManager::seVolume(const Session& session) { return session.volumes_[3]; }
-void AudioManager::setSeVolume(Session& session, int value) {
-  session.volumes_[3] = std::clamp(value, 0, 100);
+double AudioManager::seVolume(const Session& session) { return session.volumes_[3]; }
+void AudioManager::setSeVolume(Session& session, double value) {
+  session.volumes_[3] = value;
   ++session.configurationRevision_;
 }
 
@@ -394,6 +394,7 @@ void AudioManager::playBgm(Session& session, const Value& bgm) {
 }
 
 void AudioManager::playBgm(Session& session, const Value& bgm, double pos) {
+  if (session.dispatchManager("AudioManager", "playBgm", {bgm, pos})) return;
   Value entry = makeAudioEntry(bgm, pos);
   if (isCurrentBgm(session, bgm)) {
     updateBgmParameters(session, entry);
@@ -405,6 +406,7 @@ void AudioManager::playBgm(Session& session, const Value& bgm, double pos) {
 }
 
 void AudioManager::replayBgm(Session& session, const Value& bgm) {
+  if (session.dispatchManager("AudioManager", "replayBgm", {bgm})) return;
   if (isCurrentBgm(session, bgm)) {
     updateBgmParameters(session, bgm);
   } else {
@@ -414,20 +416,24 @@ void AudioManager::replayBgm(Session& session, const Value& bgm) {
 }
 
 void AudioManager::updateBgmParameters(Session& session, const Value& bgm) {
+  if (session.dispatchManager("AudioManager", "updateBgmParameters", {bgm})) return;
   session.audio("bgm", bgm, false);
 }
 
 void AudioManager::stopBgm(Session& session) {
+  if (session.dispatchManager("AudioManager", "stopBgm", {})) return;
   const auto emptyAudio = makeEmptyAudioObject();
   session.audio("bgm", emptyAudio);
 }
 
 void AudioManager::fadeOutBgm(Session& session, double durationSeconds) {
+  if (session.dispatchManager("AudioManager", "fadeOutBgm", {durationSeconds})) return;
   session.savedBgm_ = makeEmptyAudioObject();
   session.audio("fade-bgm", Value{durationSeconds});
 }
 
 void AudioManager::fadeInBgm(Session& session, double durationSeconds) {
+  if (session.dispatchManager("AudioManager", "fadeInBgm", {durationSeconds})) return;
   if (!session.savedBgm_.null() && !session.savedBgm_["name"].text().empty()) {
     session.audio("bgm", session.savedBgm_, false);
     if (durationSeconds > 0) session.audio("fade-in-bgm", Value{durationSeconds});
@@ -444,6 +450,7 @@ void AudioManager::playBgs(Session& session, const Value& bgs) {
 }
 
 void AudioManager::playBgs(Session& session, const Value& bgs, double pos) {
+  if (session.dispatchManager("AudioManager", "playBgs", {bgs, pos})) return;
   Value entry = makeAudioEntry(bgs, pos);
   if (isCurrentBgs(session, bgs)) {
     updateBgsParameters(session, entry);
@@ -455,6 +462,7 @@ void AudioManager::playBgs(Session& session, const Value& bgs, double pos) {
 }
 
 void AudioManager::replayBgs(Session& session, const Value& bgs) {
+  if (session.dispatchManager("AudioManager", "replayBgs", {bgs})) return;
   if (isCurrentBgs(session, bgs)) {
     updateBgsParameters(session, bgs);
   } else {
@@ -464,20 +472,24 @@ void AudioManager::replayBgs(Session& session, const Value& bgs) {
 }
 
 void AudioManager::updateBgsParameters(Session& session, const Value& bgs) {
+  if (session.dispatchManager("AudioManager", "updateBgsParameters", {bgs})) return;
   session.audio("bgs", bgs, false);
 }
 
 void AudioManager::stopBgs(Session& session) {
+  if (session.dispatchManager("AudioManager", "stopBgs", {})) return;
   const auto emptyAudio = makeEmptyAudioObject();
   session.audio("bgs", emptyAudio);
 }
 
 void AudioManager::fadeOutBgs(Session& session, double durationSeconds) {
+  if (session.dispatchManager("AudioManager", "fadeOutBgs", {durationSeconds})) return;
   session.savedBgs_ = makeEmptyAudioObject();
   session.audio("fade-bgs", Value{durationSeconds});
 }
 
 void AudioManager::fadeInBgs(Session& session, double durationSeconds) {
+  if (session.dispatchManager("AudioManager", "fadeInBgs", {durationSeconds})) return;
   if (!session.savedBgs_.null() && !session.savedBgs_["name"].text().empty()) {
     session.audio("bgs", session.savedBgs_, false);
     if (durationSeconds > 0) session.audio("fade-in-bgs", Value{durationSeconds});
@@ -485,6 +497,7 @@ void AudioManager::fadeInBgs(Session& session, double durationSeconds) {
 }
 
 void AudioManager::playMe(Session& session, const Value& me) {
+  if (session.dispatchManager("AudioManager", "playMe", {me})) return;
   if (me["name"].text().empty()) {
     stopMe(session);
   } else {
@@ -493,27 +506,33 @@ void AudioManager::playMe(Session& session, const Value& me) {
 }
 
 void AudioManager::updateMeParameters(Session& session, const Value& me) {
+  if (session.dispatchManager("AudioManager", "updateMeParameters", {me})) return;
   session.audio("me", me, false);
 }
 
 void AudioManager::fadeOutMe(Session& session, double durationSeconds) {
+  if (session.dispatchManager("AudioManager", "fadeOutMe", {durationSeconds})) return;
   if (durationSeconds > 0) session.audio("fade-me", Value{durationSeconds});
   else stopMe(session);
 }
 
 void AudioManager::stopMe(Session& session) {
+  if (session.dispatchManager("AudioManager", "stopMe", {})) return;
   session.audio("me", makeEmptyAudioObject());
 }
 
 void AudioManager::playSe(Session& session, const Value& se) {
+  if (session.dispatchManager("AudioManager", "playSe", {se})) return;
   if (!se["name"].text().empty()) session.audio("se", se);
 }
 
 void AudioManager::stopSe(Session& session) {
+  if (session.dispatchManager("AudioManager", "stopSe", {})) return;
   session.audio("stop-se", Value{});
 }
 
 void AudioManager::playStaticSe(Session& session, const Value& se) {
+  if (session.dispatchManager("AudioManager", "playStaticSe", {se})) return;
   if (se["name"].text().empty()) return;
   loadStaticSe(se);
   session.audio("se", se);
@@ -531,6 +550,7 @@ bool AudioManager::isStaticSe(const Value& se) {
 }
 
 void AudioManager::stopAll(Session& session) {
+  if (session.dispatchManager("AudioManager", "stopAll", {})) return;
   stopMe(session);
   stopBgm(session);
   stopBgs(session);
@@ -1113,9 +1133,25 @@ void RequestQueue::raisePriority(const std::string& key) {
 }
 void RequestQueue::clear() { queue.clear(); }
 ResourceHandler& ResourceHandler::shared() { static ResourceHandler handler; return handler; }
-ResourceHandler::Callback ResourceHandler::createLoader(const std::string& url, Callback retryMethod, Callback resignMethod, std::vector<int> intervals) {
-  auto entry = std::make_shared<LoaderEntry>(); entry->url = url; entry->retryMethod = std::move(retryMethod); entry->resignMethod = std::move(resignMethod); entry->retryInterval = std::move(intervals);
-  return [this, entry]() {
+void ResourceHandler::addCompatibility(Compatibility hooks) {
+  std::erase_if(compatibility_,[](const auto& hooks){return hooks.lifetime.expired();});compatibility_.push_back(std::move(hooks));
+}
+const ResourceHandler::Compatibility* ResourceHandler::compatibility() const {
+  for(auto it=compatibility_.rbegin();it!=compatibility_.rend();++it)if(!it->lifetime.expired())return &*it;return nullptr;
+}
+bool ResourceHandler::exists() const {
+  if(const auto hooks=compatibility();hooks&&hooks->exists)if(const auto value=hooks->exists())return *value||!reloaders.empty();
+  return !reloaders.empty();
+}
+ResourceHandler::Callback ResourceHandler::createLoader(const std::string& url,Callback retry,Callback resign) {return makeLoader(url,std::move(retry),std::move(resign),std::nullopt);}
+ResourceHandler::Callback ResourceHandler::createLoader(const std::string& url,Callback retry,Callback resign,std::vector<int> intervals) {return makeLoader(url,std::move(retry),std::move(resign),std::move(intervals));}
+ResourceHandler::Callback ResourceHandler::makeLoader(const std::string& url,Callback retryMethod,Callback resignMethod,std::optional<std::vector<int>> intervals) {
+  if(const auto hooks=compatibility();hooks&&hooks->createLoader)if(auto loader=hooks->createLoader(url,retryMethod,resignMethod,intervals))return *loader;
+
+  auto entry = std::make_shared<LoaderEntry>(); entry->url = url; entry->retryMethod = std::move(retryMethod); entry->resignMethod = std::move(resignMethod); entry->retryInterval = intervals.value_or(std::vector<int>{500,1000,3000});
+  return [this,entry,intervals,delegate=std::optional<Callback>{},checked=false]() mutable {
+    if(!checked) {checked=true;if(const auto hooks=compatibility();hooks&&hooks->createLoader)delegate=hooks->createLoader(entry->url,entry->retryMethod,entry->resignMethod,intervals);}
+    if(delegate) {(*delegate)();return;}
     if (entry->retryCount < entry->retryInterval.size()) { scheduled_.push_back({time_ + std::max(0, entry->retryInterval[entry->retryCount++]), entry->retryMethod}); return; }
     if (entry->resignMethod) entry->resignMethod();
     if (!entry->url.empty()) {
@@ -1134,6 +1170,7 @@ void ResourceHandler::update(double milliseconds) {
   for (const auto& entry : ready) if (entry.callback) entry.callback();
 }
 void ResourceHandler::retry() {
+  if(const auto hooks=compatibility();hooks&&hooks->retry)hooks->retry();
   if (reloaders.empty()) return;
   if (eraseLoadingError) eraseLoadingError(); if (resume) resume();
   const auto callbacks = reloaders;

@@ -3,6 +3,7 @@
 #include "mv_core_types.hpp"
 #include "resources.hpp"
 #include <memory>
+#include <atomic>
 #include <optional>
 #include <filesystem>
 #include <cmath>
@@ -29,6 +30,8 @@ class Container;
 // rpg_core.js Bitmap with full RGBA pixel operations
 class PixelBitmap {
  public:
+  static inline std::atomic<std::uint64_t> nextIdentity{1};
+  const std::uint64_t nativeIdentity=nextIdentity++;
   class PaintOpacity {
    public:
     operator double() const { return value_; }
@@ -78,8 +81,10 @@ class PixelBitmap {
   ~PixelBitmap() = default;
   static std::shared_ptr<PixelBitmap> load(const std::string& source);
   static std::shared_ptr<PixelBitmap> request(const std::string& source);
+  std::optional<ImageInfo> imageSource() const;
   static std::shared_ptr<PixelBitmap> snap(const std::function<void()>& draw = {});
   static void setImageLoader(std::function<std::optional<ImageInfo>(const std::string&)> loader);
+  static void addImageLoader(std::weak_ptr<void> lifetime,std::function<std::optional<ImageInfo>(const std::string&)> loader);
   void startRequest();
   void decode();
   bool isRequestReady() const;
@@ -103,6 +108,9 @@ class PixelBitmap {
   void checkDirty();
   void addLoadListener(std::function<void()> listener);
   void callLoadListeners();
+  std::function<bool()> loadHook,errorHook;
+  void completeLoad();
+  void notifyError();
 
   void clearRect(double x, double y, double w, double h);
   void clear();
@@ -150,6 +158,7 @@ class Graphics {
   static inline bool stretchEnabled = true;
   static inline int fpsMode = 0;
   static void updateScale();
+  static void updateElements();
   static void onKeyDown(int keyCode, bool control = false, bool alt = false);
   static bool onPointerDown(double x, double y);
   static inline std::uint64_t frameCount = 0;
@@ -171,6 +180,8 @@ class Graphics {
   static std::vector<std::filesystem::path> fonts(const std::string& family);
   static void setVideoCallbacks(std::function<void(const std::string&)> play, std::function<bool()> playing, std::function<void(double)> volume);
   static void setLoadingCallbacks(std::function<void()> stop, std::function<void()> resume);
+  static void addLoadingCallbacks(std::weak_ptr<void> lifetime,std::function<void()> stop,std::function<void()> resume);
+  static void addVideoCallbacks(std::weak_ptr<void> lifetime,std::function<void(const std::string&)> play,std::function<bool()> playing,std::function<void(double)> volume);
 
   static bool initialize(int w = 800, int h = 600, const std::string& type = "auto");
   static void tickStart();
@@ -187,6 +198,8 @@ class Graphics {
   static void startLoading();
   static void updateLoading();
   static void endLoading();
+  inline static bool upperCanvasCleared = false;
+  static void clearUpperCanvas() { upperCanvasCleared = true; }
   static void printLoadingError(const std::string& url);
   static void eraseLoadingError();
   static void printError(const std::string& name, const std::string& message);
@@ -204,6 +217,13 @@ class Graphics {
 };
 
 // rpg_core.js WebAudio
+struct AudioResponse {
+  std::vector<std::uint8_t> response;
+  std::string responseURL;
+  int status=200;
+  // Guest responses always decode their supplied bytes; untouched native responses may stream a file.
+  bool nativeSource=false;
+};
 class WebAudio {
  public:
   std::string url;
@@ -247,6 +267,12 @@ class WebAudio {
   static void setEncryptionKey(const std::string& hexadecimal);
 
   virtual void initializeSource(const std::string& source);
+  virtual void load(const std::string& source);
+  virtual void onLoad();
+  virtual void onXhrLoad(const AudioResponse& response);
+  virtual void startPlaying(bool loopFlag,double offset);
+  bool autoPlay() const {return autoPlay_;}
+  void setAutoPlay(bool value) {autoPlay_=value;}
   void finishLoading();
   virtual void clear();
   virtual bool isReady() const;
@@ -261,6 +287,7 @@ class WebAudio {
   void addStopListener(std::function<void()> listener);
 
   void readLoopComments(const std::vector<std::uint8_t>& data);
+  virtual void readLoopMetadata(const std::vector<std::uint8_t>& data);
   void readOgg(const std::vector<std::uint8_t>& data);
   void readMp4(const std::vector<std::uint8_t>& data);
   void readMetaData(const std::vector<std::uint8_t>& data, std::size_t index, std::size_t size);
@@ -270,6 +297,9 @@ class WebAudio {
  private:
   std::shared_ptr<CoreServiceBinding> services_;
   std::uint32_t handle_ = 0;
+  std::string requestUrl_;
+  struct PendingLoad;
+  std::shared_ptr<PendingLoad> pendingLoad_;
   bool autoPlay_ = false, loading_ = false, useResourceHandler_ = true;
   std::uint64_t loadGeneration_ = 0;
   std::function<void()> failure_;

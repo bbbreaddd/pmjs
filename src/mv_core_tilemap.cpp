@@ -24,14 +24,15 @@ void Tilemap::setData(int w,int h,std::vector<int> values){mapWidth=w;mapHeight=
 void Tilemap::update(){++animationCount;animationFrame=animationCount/30;Container::update();for(auto* bitmap:bitmaps)if(bitmap)bitmap->touch();}
 bool Tilemap::isReady()const{return std::all_of(bitmaps.begin(),bitmaps.end(),[](const auto* bitmap){return !bitmap||bitmap->isReady();});}
 int Tilemap::readMapData(int x,int y,int z)const {
+  if(readOverride)if(auto value=readOverride(x,y,z))return *value;
   if(mapWidth<=0||mapHeight<=0||z<0)return 0;
   if(horizontalWrap)x=(x%mapWidth+mapWidth)%mapWidth;if(verticalWrap)y=(y%mapHeight+mapHeight)%mapHeight;
   if(x<0||y<0||x>=mapWidth||y>=mapHeight)return 0;
   const auto index=(std::size_t(z)*mapHeight+y)*mapWidth+x;return index<data.size()?data[index]:0;
 }
-bool Tilemap::isHigherTile(int id)const{return id>=0&&id<int(flags.size())&&(flags[id]&16);}
-bool Tilemap::isTableTile(int id)const{return isTileA2(id)&&id<int(flags.size())&&(flags[id]&128);}
-bool Tilemap::isOverpassPosition(int,int)const{return false;}
+bool Tilemap::isHigherTile(int id)const{if(classifyOverride)if(auto value=classifyOverride("_isHigherTile",id,0))return *value;return id>=0&&id<int(flags.size())&&(flags[id]&16);}
+bool Tilemap::isTableTile(int id)const{if(classifyOverride)if(auto value=classifyOverride("_isTableTile",id,0))return *value;return isTileA2(id)&&id<int(flags.size())&&(flags[id]&128);}
+bool Tilemap::isOverpassPosition(int x,int y)const{if(classifyOverride)if(auto value=classifyOverride("_isOverpassPosition",x,y))return *value;return false;}
 void Tilemap::computeTileLayers(int x,int y,std::vector<int>& lower,std::vector<int>& upper)const {
   lower.clear();upper.clear();const int t0=readMapData(x,y,0),t1=readMapData(x,y,1),t2=readMapData(x,y,2),t3=readMapData(x,y,3),above=readMapData(x,y-1,1);
   (isHigherTile(t0)?upper:lower).push_back(t0);(isHigherTile(t1)?upper:lower).push_back(t1);
@@ -81,13 +82,28 @@ void Tilemap::drawAutotile(PixelBitmap& bitmap,int id,int x,int y)const{if(isAut
 void Tilemap::drawTableEdge(PixelBitmap& bitmap,int id,int x,int y)const{if(isTileA2(id))drawTile(bitmap,10000+id,x,y);}
 void Tilemap::drawShadow(PixelBitmap& bitmap,int bits,int x,int y)const{for(int i=0;i<4;++i)if(bits&(1<<i))bitmap.fillRect(x+i%2*tileWidth/2,y+i/2*tileHeight/2,tileWidth/2,tileHeight/2,"rgba(0,0,0,0.5)");}
 Tilemap::~Tilemap(){layerLifetime_.reset();clearGeometry();}
-void Tilemap::clearGeometry(){if(geometryRenderer_){for(const auto& part:lowerGeometry_)if(part.layer)geometryRenderer_->releaseTileLayer(part.layer);for(auto layer:upperGeometry_)geometryRenderer_->releaseTileLayer(layer);}lowerGeometry_.clear();upperGeometry_.clear();geometryReady_=false;geometryRenderer_=nullptr;}
+void Tilemap::clearGeometry(){if(geometryRenderer_){for(const auto& part:lowerGeometry_)if(part.layer)geometryRenderer_->releaseTileLayer(part.layer);for(const auto& part:upperGeometry_)if(part.layer)geometryRenderer_->releaseTileLayer(part.layer);}lowerGeometry_.clear();upperGeometry_.clear();geometryReady_=false;geometryRenderer_=nullptr;}
 void Tilemap::prepareGeometry(Renderer& renderer,int firstX,int firstY,int lastX,int lastY) {
   const std::array key{firstX,firstY,lastX,lastY};if(geometryReady_&&geometryRenderer_==&renderer&&geometryBounds_==key&&geometryRevision_==revision_)return;
   clearGeometry();geometryRenderer_=&renderer;std::vector<TileLayerTile> lower,upper;std::vector<int> lowIds,highIds;
   const auto images=[&](int sheet){if(imageResolver)return imageResolver(sheet);if(bitmaps[sheet])if(auto image=bitmaps[sheet]->texture())return *image;return ImageInfo{};};
-  const auto flush=[&](std::vector<TileLayerTile>& tiles,bool high){if(tiles.empty())return;const auto layer=renderer.createTileLayer(std::move(tiles));tiles.clear();if(!layer)throw std::runtime_error("cannot create core tile geometry");try{if(high)upperGeometry_.push_back(layer);else lowerGeometry_.push_back({layer,0,0});}catch(...){renderer.releaseTileLayer(layer);throw;}};
-  try {for(int y=firstY;y<lastY;++y)for(int x=firstX;x<lastX;++x){computeTileLayers(x,y,lowIds,highIds);
+  const auto flush=[&](std::vector<TileLayerTile>& tiles,bool high){if(tiles.empty())return;const auto layer=renderer.createTileLayer(std::move(tiles));tiles.clear();if(!layer)throw std::runtime_error("cannot create core tile geometry");try{if(high)upperGeometry_.push_back({layer,0,0});else lowerGeometry_.push_back({layer,0,0});}catch(...){renderer.releaseTileLayer(layer);throw;}};
+  try {
+    const auto custom=paintGeometry?paintGeometry(firstX,firstY,lastX,lastY):std::optional<std::array<std::vector<TileRectangle>,2>>{};
+    if(custom) {
+      for(int high=0;high<2;++high) {
+        auto& tiles=high?upper:lower;auto& geometry=high?upperGeometry_:lowerGeometry_;
+        for(const auto& tile:(*custom)[high]) {
+          if(tile.sheet==-1) {flush(tiles,high);geometry.push_back({0,tile.destination.x,tile.destination.y,tile.source.width,tile.source.height});continue;}
+          if(tile.sheet<0||tile.sheet>=int(bitmaps.size()))throw std::invalid_argument("tile geometry sheet is invalid");
+          const auto image=images(tile.sheet);if(!image.handle)continue;
+          if(tiles.size()>65528)flush(tiles,high);
+          tiles.push_back({image.handle,{float(tile.source.x),float(tile.source.y),float(tile.source.width),float(tile.source.height)},
+            {float(tile.destination.x),float(tile.destination.y)},{float(tile.animation.x),float(tile.animation.y)}});
+        }
+        flush(tiles,high);
+      }
+    } else for(int y=firstY;y<lastY;++y)for(int x=firstX;x<lastX;++x){computeTileLayers(x,y,lowIds,highIds);
     for(int id:lowIds){if(id<0){flush(lower,false);
       const auto custom = shadowGeometry ? shadowGeometry(-id,x*tileWidth,y*tileHeight) : std::optional<std::vector<Rectangle>>{};
       if(custom) {for(const auto& rect:*custom)lowerGeometry_.push_back({0,rect.x,rect.y,rect.width,rect.height});}
@@ -98,17 +114,22 @@ void Tilemap::prepareGeometry(Renderer& renderer,int firstX,int firstY,int lastX
   }catch(...){clearGeometry();throw;}
 }
 void Tilemap::queueGeometry(Renderer& renderer,bool upper,const Matrix& world,double opacity)const {
+  renderer.markSceneSubmitted();
   constexpr std::array<float,4> water{0,1,2,1};const std::array<float,2> animation{water[animationFrame%4],float(animationFrame%3)};
   const auto queue=[&](std::uint32_t layer){if(!renderer.queueTileLayer(layer,world,animation,float(opacity),0xffffff,BlendMode::normal,!smooth))throw std::runtime_error("cannot queue core tile geometry");};
-  if(upper)for(auto layer:upperGeometry_)queue(layer);else for(const auto& part:lowerGeometry_)if(part.layer)queue(part.layer);else{const auto first=renderer.queuedCommandCount();renderer.queueQuad(part.x,part.y,part.width,part.height,{0,0,0,float(opacity*.5)});renderer.transformQueuedCommands(first,world);}
+  for(const auto& part:upper?upperGeometry_:lowerGeometry_)if(part.layer)queue(part.layer);else{const auto first=renderer.queuedCommandCount();renderer.queueQuad(part.x,part.y,part.width,part.height,{0,0,0,float(opacity*.5)});renderer.transformQueuedCommands(first,world);}
+}
+void Tilemap::sortChildren() {
+  auto& sorted=children;
+  if(!customChildOrder)std::stable_sort(sorted.begin(),sorted.end(),[](const auto& left,const auto& right){if(left->z!=right->z)return left->z<right->z;if(left->position.y!=right->position.y)return left->position.y<right->position.y;const auto* a=dynamic_cast<const Sprite*>(left.get());const auto* b=dynamic_cast<const Sprite*>(right.get());return (a?a->spriteId:double(left->displayId))<(b?b->spriteId:double(right->displayId));});
 }
 void Tilemap::render(Renderer& renderer,const Matrix& parentWorld,double opacity) {
+  const auto prepare=prepareRender;if(prepare)prepare();
   if(!visible||!renderable||alpha<=0||tileWidth<=0||tileHeight<=0)return;for(const auto* bitmap:bitmaps)if(bitmap&&!bitmap->isReady())return;
   const auto origin=scrollOrigin();const double ox=origin.x,oy=origin.y;
   prepareGeometry(renderer,int(std::floor((ox-margin)/double(tileWidth))),int(std::floor((oy-margin)/double(tileHeight))),int(std::ceil((ox+width+margin)/double(tileWidth))),int(std::ceil((oy+height+margin)/double(tileHeight))));
   const auto world=multiply(parentWorld,localTransform());
-  auto& sorted=children;
-  std::stable_sort(sorted.begin(),sorted.end(),[](const auto& left,const auto& right){if(left->z!=right->z)return left->z<right->z;if(left->position.y!=right->position.y)return left->position.y<right->position.y;return left->displayId<right->displayId;});
+  sortChildren();
   const auto count=children.size();for(std::size_t i=0;i<count&&i<children.size();++i){auto child=children[i];if(child)child->render(renderer,world,opacity*alpha);}
 }
 }

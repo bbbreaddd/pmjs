@@ -1,0 +1,35 @@
+'use strict';
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const { installMapBindings } = require('../runner/native-game-map.cjs');
+
+test('character pursuit follows looping map distances and retries the blocked primary axis', () => {
+  const scope = {};
+  for (const name of ['Game_Map', 'Game_System', 'Game_CharacterBase', 'Game_Character', 'Game_Player', 'Game_Event']) scope[name] = function() {};
+  Object.setPrototypeOf(scope.Game_Character.prototype, scope.Game_CharacterBase.prototype);
+  for (const name of ['Game_Player', 'Game_Event']) Object.setPrototypeOf(scope[name].prototype, scope.Game_Character.prototype);
+  scope.$gameMap = new scope.Game_Map();
+  installMapBindings(scope, {}, null, values => values, new WeakMap());
+  Object.assign(scope.$gameMap, { width: () => 20, height: () => 10, isLoopHorizontal: () => true, isLoopVertical: () => false });
+  const actor = new scope.Game_Character(), moves = [];
+  Object.assign(actor, { x: 19, y: 4, moveStraight(direction) { moves.push(direction); }, isMovementSucceeded: () => false });
+  assert.equal(actor.deltaXFrom(1), -2);
+  assert.equal(actor.deltaYFrom(2), 2);
+  actor.moveTowardCharacter({ x: 1, y: 2 });
+  assert.deepEqual(moves, [8, 6]);
+  moves.length = 0;
+  scope.$gamePlayer = { x: 1, y: 2 };
+  actor.moveAwayFromPlayer(); assert.deepEqual(moves, [2, 4]);
+  moves.length = 0;
+  actor.isMovementSucceeded = () => true;
+  actor.moveTowardPlayer(); assert.deepEqual(moves, [8]);
+  moves.length = 0;
+  actor.moveTowardCharacter(actor); assert.deepEqual(moves, []);
+  scope.Graphics = { width: 480, height: 480 };
+  Object.assign(scope.$gameMap, { displayX: () => 18, displayY: () => 0, tileWidth: () => 48, tileHeight: () => 48 });
+  actor._realX = 1; actor._realY = 4;
+  assert.equal(actor.scrolledX(), 3); assert.equal(actor.isNearTheScreen(), true);
+  scope.$gameMap.isLoopHorizontal = () => false;
+  actor._realX = -20; assert.equal(actor.isNearTheScreen(), false);
+  assert.equal(actor.deltaXFrom(1), 18);
+});

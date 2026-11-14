@@ -312,6 +312,11 @@ bool Session::updateTroopEvents() {
     advanceInterpreter(battle_.interpreter);
     if (battle_.interpreter.running) return true;
   }
+  if (runtimeHooks_ && runtimeHooks_->gameDataMutation && runtimeHooks_->gameDataMutation("troop", "setupBattleEvent", {})) return battle_.interpreter.running;
+  return setupTroopEvents();
+}
+bool Session::setupTroopEvents() {
+  if (battle_.interpreter.running) return false;
   if (reservedCommonEvent_ > 0) {
     const int id = reservedCommonEvent_; reservedCommonEvent_ = 0;
     battle_.interpreter.battleEvent = true;
@@ -579,8 +584,7 @@ void Session::requestEnemyEffect(std::size_t index, const std::string& effect) {
   auto& sprite = enemySprites_[index];
   if (!sprite) sprite = std::make_shared<Sprite_Enemy>();
   sprite->requestedEffect = effect;
-  if (effect == "collapse" || effect == "bossCollapse")
-    AudioManager::playSe(*this, database_["system"]["sounds"][effect == "bossCollapse" ? 12 : 11]);
+
 }
 
 void Session::resetEnemySprites() {

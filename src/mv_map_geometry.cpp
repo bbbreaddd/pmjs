@@ -13,16 +13,59 @@ double Presentation::scrolledMapY(double y, double cameraY, int tileHeight) cons
   return session_.loopVertical() && y < cameraY - (height - core_.height() / double(tileHeight)) / 2 ? y - cameraY + height : y - cameraY;
 }
 
-void Presentation::clearMapGeometry(){stockTilemap_.clearGeometry();stockTileset_=-1;stockMapRevision_=0;}
+void Presentation::clearMapGeometry(){stockTilemap_.clearGeometry();stockTilemap_.imageResolver={};stockTileset_=-1;stockMapRevision_=0;graphTilemapId_=0;graphTilemapRevision_=0;}
 void Presentation::prepareMapGeometry(int firstX,int firstY,int lastX,int lastY) {
-  if(stockMapRevision_!=session_.presentationRevision_||stockTileset_!=session_.mapState_.tilesetId) {
+  if(stockMapRevision_!=session_.presentationRevision_||stockTileset_!=session_.mapState_.tilesetId||(!graphTilemap_&&graphTilemapId_)) {
     const auto& map=session_.map();std::vector<int> data;
     data.reserve(map["data"].array().size());for(const auto& value:map["data"].array())data.push_back(value.integer());
     stockTilemap_.setData(map["width"].integer(),map["height"].integer(),std::move(data));
     stockTilemap_.flags.clear();for(const auto& flag:session_.database_["tilesets"][session_.mapState_.tilesetId]["flags"].array())stockTilemap_.flags.push_back(flag.integer());
     stockTilemap_.horizontalWrap=session_.loopHorizontal();stockTilemap_.verticalWrap=session_.loopVertical();
     stockTilemap_.imageResolver=[this](int sheet){const auto name=session_.database_["tilesets"][session_.mapState_.tilesetId]["tilesetNames"][sheet].text();return name.empty()?ImageInfo{}:image("img/tilesets/"+name+".png");};
-    stockMapRevision_=session_.presentationRevision_;stockTileset_=session_.mapState_.tilesetId;
+    if(!graphTilemap_&&(session_.runtimeTileFunctions_||session_.runtimeTileDrawing_) && session_.runtimeHooks_ && session_.runtimeHooks_->tilemapState)
+      session_.runtimeHooks_->tilemapState(Value::Object{{"_mapWidth",stockTilemap_.mapWidth},{"_mapHeight",stockTilemap_.mapHeight},{"_mapData",map["data"].reference()},{"flags",session_.database_["tilesets"][session_.mapState_.tilesetId]["flags"].reference()},{"horizontalWrap",stockTilemap_.horizontalWrap},{"verticalWrap",stockTilemap_.verticalWrap}});
+    stockMapRevision_=session_.presentationRevision_;stockTileset_=session_.mapState_.tilesetId;graphTilemapId_=0;
+  }
+  if(graphTilemap_) {
+    const auto& source=*graphTilemap_;
+    if(stockTilemap_.tileWidth!=source.tileWidth||stockTilemap_.tileHeight!=source.tileHeight||
+       stockTilemap_.mapWidth!=source.mapWidth||stockTilemap_.mapHeight!=source.mapHeight||
+       stockTilemap_.horizontalWrap!=source.horizontalWrap||stockTilemap_.verticalWrap!=source.verticalWrap||
+       graphTilemapId_!=source.displayId||graphTilemapRevision_!=source.revision_) {
+      stockTilemap_.tileWidth=source.tileWidth;stockTilemap_.tileHeight=source.tileHeight;
+      stockTilemap_.setData(source.mapWidth,source.mapHeight,source.data);
+      stockTilemap_.flags=source.flags;stockTilemap_.horizontalWrap=source.horizontalWrap;stockTilemap_.verticalWrap=source.verticalWrap;
+      graphTilemapId_=source.displayId;graphTilemapRevision_=source.revision_;stockTilemap_.refresh();
+    }
+    stockTilemap_.imageResolver=[source=graphTilemap_](int sheet) {
+      if(sheet>=0&&sheet<int(source->bitmaps.size()))if(auto* bitmap=source->bitmaps[sheet])if(auto image=bitmap->texture())return *image;
+      return ImageInfo{};
+    };
+  }
+  stockTilemap_.readOverride={};stockTilemap_.classifyOverride={};
+  if(session_.runtimeTileFunctions_ && session_.runtimeHooks_ && session_.runtimeHooks_->tilemapOperation) {
+    stockTilemap_.readOverride=[this](int x,int y,int z)->std::optional<int> {
+      const auto value=session_.runtimeHooks_->tilemapOperation("_readMapData",x,y,z);return value?std::optional<int>{value->integer()}:std::nullopt;
+    };
+    stockTilemap_.classifyOverride=[this](const std::string& method,int first,int second)->std::optional<bool> {
+      const auto value=session_.runtimeHooks_->tilemapOperation(method,first,second,0);return value?std::optional<bool>{value->boolean()}:std::nullopt;
+    };
+  }
+  stockTilemap_.paintGeometry={};
+  if(session_.runtimeTileDrawing_ && session_.runtimeHooks_ && session_.runtimeHooks_->tilemapGeometry) {
+    stockTilemap_.paintGeometry=[this](int firstX,int firstY,int lastX,int lastY)->std::optional<std::array<std::vector<core::Tilemap::TileRectangle>,2>> {
+      const auto result=session_.runtimeHooks_->tilemapGeometry(firstX,firstY,lastX,lastY,stockTilemap_.tileWidth,stockTilemap_.tileHeight);
+      if(!result)return {};
+      if(result->array().size()!=2)throw std::invalid_argument("tile drawing requires two layers");
+      std::array<std::vector<core::Tilemap::TileRectangle>,2> layers;
+      for(int layer=0;layer<2;++layer)for(const auto& record:(*result)[layer].array()) {
+        if(record.array().size()!=9)throw std::invalid_argument("tile drawing requires nine rectangle fields");
+        for(const auto& value:record.array())if(!std::isfinite(value.number()))throw std::invalid_argument("tile drawing rectangle must be finite");
+        layers[layer].push_back({record[0].integer(),{record[1].number(),record[2].number(),record[5].number(),record[6].number()},
+          {record[3].number(),record[4].number()},{record[7].number()*stockTilemap_.tileWidth,record[8].number()*stockTilemap_.tileHeight}});
+      }
+      return layers;
+    };
   }
   stockTilemap_.shadowGeometry = {};
   if (session_.runtimeTileShadows_) stockTilemap_.shadowGeometry = [this](int bits,int x,int y) -> std::optional<std::vector<core::Rectangle>> {
@@ -36,7 +79,7 @@ void Presentation::prepareMapGeometry(int firstX,int firstY,int lastX,int lastY)
   stockTilemap_.prepareGeometry(core_.renderer(),firstX,firstY,lastX,lastY);
 }
 void Presentation::queueMapGeometry(bool upper,int originX,int originY) {
-  stockTilemap_.animationFrame=int(session_.ticks_/30);
+  stockTilemap_.animationFrame=graphTilemap_?graphTilemap_->animationFrame:int(session_.ticks_/30);
   stockTilemap_.queueGeometry(core_.renderer(),upper,{1,0,0,1,float(-originX),float(-originY)});
 }
 void Presentation::clearMapOverlays() {

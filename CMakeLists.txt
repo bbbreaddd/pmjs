@@ -119,6 +119,7 @@ set(PMJS_RUNTIME_SOURCES
   src/mv_script.cpp
   src/mv_script_entities.cpp
   src/mv_script_battlers.cpp
+  src/mv_action_bindings.cpp
   src/mv_actor_events.cpp
   src/mv_enemy_events.cpp
   src/mv_common_events.cpp
@@ -268,11 +269,18 @@ if(BUILD_TESTING)
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-script-runtime.cjs" $<TARGET_FILE:pmjs_native>)
   add_test(NAME node-mv-database COMMAND ${NODE_EXECUTABLE} --expose-gc
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-database.cjs" $<TARGET_FILE:pmjs_native>)
+  add_test(NAME node-mv-battle-manager COMMAND ${NODE_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-battle-manager.cjs" $<TARGET_FILE:pmjs_native>)
+  add_test(NAME node-mv-save-manager COMMAND ${NODE_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-save-manager.cjs" $<TARGET_FILE:pmjs_native>)
   add_test(NAME node-mv-interpreter COMMAND ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-interpreter.cjs" $<TARGET_FILE:pmjs_native>)
   add_test(NAME node-mv-image-manager COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-image-manager.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-mv-image-manager PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy" FIXTURES_REQUIRED pmjs_assets)
+  add_test(NAME node-mv-manager-lifecycle COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-manager-lifecycle.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
+  set_tests_properties(node-mv-manager-lifecycle PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy" FIXTURES_REQUIRED pmjs_assets)
   add_test(NAME node-mv-scenes COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-scenes.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-mv-scenes PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy" FIXTURES_REQUIRED pmjs_assets)

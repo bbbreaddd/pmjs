@@ -1,4 +1,5 @@
 'use strict';
+const { installManagerReference } = require('./native-manager-reference.cjs');
 
 function installTextManager(scope) {
   function TextManager() { throw new Error('TextManager is a static class'); }
@@ -25,8 +26,8 @@ function installTextManager(scope) {
 
 function installSoundManager(scope, engine, session) {
   function SoundManager() { throw new Error('SoundManager is a static class'); }
-  SoundManager.playSystemSound = function(index) { engine.managerInvoke(session, 'playSystemSound', index); };
-  SoundManager.loadSystemSound = function(index) { engine.managerInvoke(session, 'loadSystemSound', index); };
+  SoundManager.playSystemSound = function(index) { if (scope.$dataSystem) scope.AudioManager.playStaticSe(scope.$dataSystem.sounds[index]); };
+  SoundManager.loadSystemSound = function(index) { if (scope.$dataSystem) scope.AudioManager.loadStaticSe(scope.$dataSystem.sounds[index]); };
   SoundManager.preloadImportantSounds = function() { for (let i = 0; i < 4; ++i) this.loadSystemSound(i); };
   const sounds = ['Cursor', 'Ok', 'Cancel', 'Buzzer', 'Equip', 'Save', 'Load', 'BattleStart', 'Escape', 'EnemyAttack',
     'EnemyDamage', 'EnemyCollapse', 'BossCollapse1', 'BossCollapse2', 'ActorDamage', 'ActorCollapse', 'Recovery', 'Miss',
@@ -35,26 +36,20 @@ function installSoundManager(scope, engine, session) {
   scope.SoundManager = SoundManager;
 }
 
-function installAudioManager(scope,engine,session,bindings,createArray = values => values) {
-  function AudioManager() { throw new Error('AudioManager is a static class'); }
+function installAudioManager(scope,engine,session,bindings,createArray = values => values,runtime) {
+  const AudioManager = installManagerReference(runtime, 'AudioManager');
   const invoke=(kind,operation,...args) => engine.audioManager(session,kind,operation,...args);
   const wrap=handle => handle ? bindings.wrap(handle,'WebAudio') : null;
   AudioManager._path='audio/';
   AudioManager.audioFileExt=function() { return scope.WebAudio.canPlayOgg() ? '.ogg' : '.m4a'; };
   AudioManager.createBuffer=function(folder,name) { return new scope.WebAudio(this._path+folder+'/'+encodeURIComponent(name)+this.audioFileExt()); };
-  for (const method of ['playBgm','playBgs','playSe','playMe','stopBgm','stopBgs','stopMe','stopSe',
-    'fadeOutBgm','fadeOutBgs','fadeOutMe','fadeInBgm','fadeInBgs','replayBgm','replayBgs','playStaticSe'])
-    AudioManager[method]=function(...args) { engine.managerInvoke(session,method,...args); invoke('bgm','flush'); };
-  AudioManager.stopAll=function() { this.stopMe(); this.stopBgm(); this.stopBgs(); this.stopSe(); };
-  AudioManager.shouldUseHtml5Audio=function() { return engine.managerInvoke(session,'shouldUseHtml5Audio'); };
-  AudioManager.makeEmptyAudioObject=function() { return {name:'',volume:0,pitch:0,pan:0,pos:0}; };
+  AudioManager.shouldUseHtml5Audio = () => false;
   for (const kind of ['bgm','bgs','me']) {
     const suffix=kind[0].toUpperCase()+kind.slice(1);
     Object.defineProperty(AudioManager,'_'+kind+'Buffer',{
       configurable:true,get() { return wrap(invoke(kind,'buffer')); },
       set(value) { invoke(kind,'buffer',value ? bindings.handle(value) : null); }
     });
-    AudioManager['update'+suffix+'Parameters']=function(sound) { invoke(kind,'parameters',sound); };
     if (kind==='me') continue;
     const current=new Proxy({}, {
       get(target,key) { return invoke(kind,'current')?.[key]; },
@@ -65,12 +60,10 @@ function installAudioManager(scope,engine,session,bindings,createArray = values 
     Object.defineProperty(AudioManager,'_current'+suffix,{
       configurable:true,get() { return invoke(kind,'current') ? current : null; },set(value) { invoke(kind,'current',value); }
     });
-    AudioManager['isCurrent'+suffix]=function(sound) { return engine.managerInvoke(session,'isCurrent'+suffix,sound); };
-    AudioManager['updateCurrent'+suffix]=function(sound,pos=0) { invoke(kind,'current',{name:sound.name,volume:sound.volume,pitch:sound.pitch,pan:sound.pan,pos}); };
-    AudioManager['save'+suffix]=function() { const sound=invoke(kind,'current'); return sound ? {...sound,pos:this['_'+kind+'Buffer']?.seek() || 0} : this.makeEmptyAudioObject(); };
+
   }
-  for (const kind of ['bgm','bgs','me','se']) for (const prefix of ['', '_']) Object.defineProperty(AudioManager,prefix+kind+'Volume',{
-    configurable:true,get() { return scope.ConfigManager[kind+'Volume']; },set(value) { scope.ConfigManager[kind+'Volume']=value; }
+  for (const kind of ['bgm','bgs','me','se']) Object.defineProperty(AudioManager,'_'+kind+'Volume',{
+    configurable:true,get() { return invoke(kind,'volume'); },set(value) { invoke(kind,'volume',value); }
   });
   const readEffects=() => invoke('se','buffers').map(wrap);
   const writeEffects=items => invoke('se','buffers',items.map(item => item ? bindings.handle(item) : null));
@@ -96,7 +89,6 @@ function installAudioManager(scope,engine,session,bindings,createArray = values 
     }
   });
   Object.defineProperty(AudioManager,'_seBuffers',{configurable:true,get() { return effects; },set(value) { writeEffects(value); }});
-  AudioManager.updateSeParameters=function(buffer,sound) { invoke('se','parameters',bindings.handle(buffer),sound); };
   scope.AudioManager=AudioManager;
 }
 

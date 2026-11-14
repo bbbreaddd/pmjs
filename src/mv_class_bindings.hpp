@@ -1,5 +1,6 @@
 #pragma once
 #include "mv_engine.hpp"
+#include "mv_core_audio_graphics.hpp"
 #include <type_traits>
 #include <stdexcept>
 #include <utility>
@@ -20,6 +21,10 @@ struct BindingDisplayField {
   std::string name;
   std::function<std::shared_ptr<core::Container>(RuntimeBoundObject&)> get;
   std::function<void(RuntimeBoundObject&, std::shared_ptr<core::Container>)> set;
+};
+struct BindingDisplayListField {
+  std::string name;
+  std::function<std::vector<std::shared_ptr<core::Container>>&(RuntimeBoundObject&)> items;
 };
 struct BindingReferenceField {
   std::string name;
@@ -55,6 +60,7 @@ struct ClassBinding {
   std::string initializer{};
   Value::Array constructorDefaults{};
   std::vector<BindingDisplayField> displays{};
+  std::vector<BindingDisplayListField> displayLists{};
   bool generated = false;
   std::vector<BindingEvent> events{};
   std::vector<BindingStatic> statics{};
@@ -62,11 +68,25 @@ struct ClassBinding {
 };
 
 template<class T> T bindingArgument(const Value& value) {
-  if constexpr (std::is_same_v<T, bool>) return value.boolean();
+  if constexpr (std::is_same_v<T, Value>) return value.reference();
+  else if constexpr (std::is_same_v<T, bool>) return value.boolean();
   else if constexpr (std::is_integral_v<T>) return static_cast<T>(value.integer());
   else if constexpr (std::is_floating_point_v<T>) return static_cast<T>(value.number());
   else if constexpr (std::is_same_v<T, std::string>) return value.text();
+  else if constexpr (std::is_same_v<T, std::vector<std::uint8_t>>) {
+    T result;result.reserve(value.array().size());for(const auto& item:value.array())result.push_back(static_cast<std::uint8_t>(item.integer()));return result;
+  }
+  else if constexpr (std::is_same_v<T,core::AudioResponse>) {
+    return {bindingArgument<std::vector<std::uint8_t>>(value["response"]),value["responseURL"].text(),value["status"].integer(200)};
+  }
   else static_assert(std::is_same_v<T, void>, "binding argument type requires a conversion");
+}
+template<class T> Value bindingValue(const T& value) {return Value(value);}
+inline Value bindingValue(const std::vector<std::uint8_t>& bytes) {
+  Value::Array result;result.reserve(bytes.size());for(auto byte:bytes)result.emplace_back(int(byte));return result;
+}
+inline Value bindingValue(const core::AudioResponse& response) {
+  return Value::Object{{"response",bindingValue(response.response)},{"responseURL",response.responseURL},{"status",response.status}};
 }
 template<class Result, class Function, class... Args> Value invokeBindingStatic(Function function, Args... args) {
   if constexpr (std::is_void_v<Result>) { function(args...); return Value::undefined(); }
@@ -98,6 +118,9 @@ template<class Get> BindingDisplayField bindingDisplayField(std::string name, Ge
       get(object) = std::move(typed);
     }};
 }
+template<class Get> BindingDisplayListField bindingDisplayList(std::string name,Get get) {
+  return {std::move(name),[get](RuntimeBoundObject& object) -> std::vector<std::shared_ptr<core::Container>>& { return get(object); }};
+}
 template<class Get> BindingReferenceField bindingReference(std::string name,Get get) {
   using Pointer=std::remove_reference_t<std::invoke_result_t<Get,RuntimeBoundObject&>>;
   return {std::move(name),[get](RuntimeBoundObject& object) { return get(object); },
@@ -128,14 +151,14 @@ template<class R, class... Args> BindingMethod bindingFunction(std::string name,
   return {std::move(name),sizeof...(Args),[function](RuntimeBoundObject& object,const BindingArguments& values) {
     if (values.size()!=sizeof...(Args)) throw std::invalid_argument("native function argument count differs");
     return invokeBinding<R,Args...>(function,object,values,std::index_sequence_for<Args...>{});
-  },{(BindingObjectArgument<std::decay_t<Args>>::value ? "object" : "value")...},{},!std::is_void_v<R>};
+  },{(BindingObjectArgument<std::decay_t<Args>>::value ? "object" : std::is_same_v<std::decay_t<Args>,std::vector<std::uint8_t>> ? "bytes" : std::is_same_v<std::decay_t<Args>,core::AudioResponse> ? "xhr" : "value")...},{},!std::is_void_v<R>};
 }
 template<class R, class... Args, class Get, class Method>
 BindingMethod bindingMethodImpl(std::string name, Get get, Method method) {
   return {std::move(name), sizeof...(Args), [get, method](RuntimeBoundObject& object, const BindingArguments& values) {
     if (values.size() != sizeof...(Args)) throw std::invalid_argument("native method argument count differs");
     return invokeBinding<R, Args...>(method, get(object), values, std::index_sequence_for<Args...>{});
-  }, { (BindingObjectArgument<std::decay_t<Args>>::value ? "object" : "value")... }, {}, !std::is_void_v<R>};
+  }, { (BindingObjectArgument<std::decay_t<Args>>::value ? "object" : std::is_same_v<std::decay_t<Args>,std::vector<std::uint8_t>> ? "bytes" : std::is_same_v<std::decay_t<Args>,core::AudioResponse> ? "xhr" : "value")... }, {}, !std::is_void_v<R>};
 }
 template<class Get, class Owner, class R, class... Args>
 BindingMethod bindingMethod(std::string name, Get get, R (Owner::*method)(Args...)) {

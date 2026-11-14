@@ -129,14 +129,14 @@ class AudioManager {
   static Value makeEmptyAudioObject();
   static std::string audioFileExt();
   static bool shouldUseHtml5Audio();
-  static int bgmVolume(const Session& session);
-  static void setBgmVolume(Session& session, int value);
-  static int bgsVolume(const Session& session);
-  static void setBgsVolume(Session& session, int value);
-  static int meVolume(const Session& session);
-  static void setMeVolume(Session& session, int value);
-  static int seVolume(const Session& session);
-  static void setSeVolume(Session& session, int value);
+  static double bgmVolume(const Session& session);
+  static void setBgmVolume(Session& session, double value);
+  static double bgsVolume(const Session& session);
+  static void setBgsVolume(Session& session, double value);
+  static double meVolume(const Session& session);
+  static void setMeVolume(Session& session, double value);
+  static double seVolume(const Session& session);
+  static void setSeVolume(Session& session, double value);
 
   static bool isCurrentBgm(const Session& session, const Value& bgm);
   static void playBgm(Session& session, const Value& bgm);
@@ -176,10 +176,10 @@ class ConfigManager {
  public:
   bool alwaysDash = false;
   bool commandRemember = false;
-  int bgmVolume = 100;
-  int bgsVolume = 100;
-  int meVolume = 100;
-  int seVolume = 100;
+  double bgmVolume = 100;
+  double bgsVolume = 100;
+  double meVolume = 100;
+  double seVolume = 100;
 
   Value makeData() const;
   void applyData(const Value& config);
@@ -296,7 +296,8 @@ class ImageCache {
     std::shared_ptr<core::PixelBitmap> bitmap;
     std::uint64_t bitmapIdentity = 0;
     std::size_t pixelCount = 0;
-    std::uint64_t touch = 0, order = 0;
+    double touch = 0;
+    std::uint64_t order = 0;
     std::optional<std::uint64_t> reservationId;
     bool ready = true, error = false, requestOnly = false;
     std::function<void()> release;
@@ -344,12 +345,24 @@ class ResourceHandler {
   Callback stop, resume;
   std::function<void(const std::string&)> printLoadingError;
   Callback eraseLoadingError;
-  bool exists() const { return !reloaders.empty(); }
-  Callback createLoader(const std::string& url, Callback retryMethod = {}, Callback resignMethod = {}, std::vector<int> retryInterval = {500,1000,3000});
+  using LoaderFactory=std::function<std::optional<Callback>(const std::string&,Callback,Callback,const std::optional<std::vector<int>>&)>;
+  struct Compatibility {
+    std::weak_ptr<void> lifetime;
+    LoaderFactory createLoader;
+    std::function<std::optional<bool>()> exists;
+    std::function<bool()> retry;
+  };
+  void addCompatibility(Compatibility hooks);
+  bool exists() const;
+  Callback createLoader(const std::string& url, Callback retryMethod = {}, Callback resignMethod = {});
+  Callback createLoader(const std::string& url, Callback retryMethod, Callback resignMethod, std::vector<int> retryInterval);
   void update(double milliseconds);
   void retry();
   void clear();
  private:
+  const Compatibility* compatibility() const;
+  Callback makeLoader(const std::string&,Callback,Callback,std::optional<std::vector<int>>);
+  std::vector<Compatibility> compatibility_;
   double time_ = 0;
   struct Scheduled { double time; Callback callback; };
   std::vector<Scheduled> scheduled_;

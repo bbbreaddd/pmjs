@@ -3,6 +3,10 @@
 #include "mv_bound_sprites.hpp"
 
 namespace pmjs::mv {
+bool GeneratedRuntimeObject::hasOverride(const std::string& method) {
+  const auto owner=hooks.lock();
+  return owner&&owner->boundMethod&&(!owner->boundOverride||owner->boundOverride(shared_from_this(),method));
+}
 bool GeneratedRuntimeObject::dispatchOverride(const std::string& method) {
   return dispatchValue(method).has_value();
 }
@@ -68,7 +72,7 @@ Value audioBufferMetadata(const core::WebAudio& audio) {
     void base_##Native(Type Parameter) { NativeType::Native(Parameter); } \
     void initializeNative() override { Native(Default); }
 #define MV_BIND_VOID1(Name, Native, Type, Parameter, Default) \
-    void Native(Type Parameter) override { if (!dispatchValue(#Name,{Parameter})) NativeType::Native(Parameter); } \
+    void Native(Type Parameter) override { if (!hasOverride(#Name)||!dispatchValue(#Name,{bindingValue(Parameter)})) NativeType::Native(Parameter); } \
     void base_##Native(Type Parameter) { NativeType::Native(Parameter); }
 #define MV_BIND_VOID2(Name, Native, T1, P1, D1, T2, P2, D2) \
     void Native(T1 P1,T2 P2) override { if (!dispatchValue(#Name,{P1,P2})) NativeType::Native(P1,P2); } \
@@ -96,6 +100,7 @@ Value audioBufferMetadata(const core::WebAudio& audio) {
 #define MV_BIND_POINT(Name, Native)
 #define MV_BIND_REFERENCE(Name, Native)
 #define MV_BIND_DISPLAY(Name, Native)
+#define MV_BIND_DISPLAY_LIST(Name, Native)
 #define MV_BIND_PROPERTY(Name, Native, Setter)
 #define MV_BIND_READONLY(Name, Expression)
 #define MV_BIND_EVENT(Name, Native)
@@ -127,6 +132,7 @@ Value audioBufferMetadata(const core::WebAudio& audio) {
 #undef MV_BIND_POINT
 #undef MV_BIND_REFERENCE
 #undef MV_BIND_DISPLAY
+#undef MV_BIND_DISPLAY_LIST
 #undef MV_BIND_END
 
 std::vector<ClassBinding> generatedClassBindings() {
@@ -153,7 +159,7 @@ std::vector<ClassBinding> generatedClassBindings() {
     binding.initializer="_initializeNative"; binding.constructorDefaults={Default}; \
     binding.methods.push_back(bindingFunction("_initializeNative",+[](RuntimeBoundObject& object,TypeName Parameter) { dynamic_cast<NativeType&>(object).NativeType::Native(Parameter); }));
 #define MV_BIND_VOID1(Name, Native, Arg, Parameter, Default) \
-    { auto method=bindingFunction(#Name,+[](RuntimeBoundObject& object,Arg Parameter) { dynamic_cast<NativeType&>(object).NativeType::Native(Parameter); }); method.defaults={Default}; binding.methods.push_back(std::move(method)); }
+    { auto method=bindingFunction(#Name,+[](RuntimeBoundObject& object,Arg Parameter) { dynamic_cast<NativeType&>(object).NativeType::Native(Parameter); }); method.defaults={bindingValue(Default)}; binding.methods.push_back(std::move(method)); }
 #define MV_BIND_VOID2(Name, Native, T1, P1, D1, T2, P2, D2) \
     { auto method=bindingFunction(#Name,+[](RuntimeBoundObject& object,T1 P1,T2 P2) { dynamic_cast<NativeType&>(object).NativeType::Native(P1,P2); }); method.defaults={D1,D2}; binding.methods.push_back(std::move(method)); }
 #define MV_BIND_VALUE0(Name, Native, Result) binding.methods.push_back(bindingFunction(#Name,+[](RuntimeBoundObject& object) -> Result { return dynamic_cast<NativeType&>(object).NativeType::Native(); }));
@@ -178,6 +184,8 @@ std::vector<ClassBinding> generatedClassBindings() {
     binding.references.push_back(bindingReference(#Name,[get](RuntimeBoundObject& object) -> auto& { return get(object).Native; }));
 #define MV_BIND_DISPLAY(Name, Native) \
     binding.displays.push_back(bindingDisplayField(#Name, [get](RuntimeBoundObject& object) -> auto& { return get(object).Native; }));
+#define MV_BIND_DISPLAY_LIST(Name, Native) \
+    binding.displayLists.push_back(bindingDisplayList(#Name,[get](RuntimeBoundObject& object) -> auto& { return get(object).Native; }));
 #define MV_BIND_END() result.push_back(std::move(binding)); }
 #include "mv_binding_schema.def"
 #undef MV_BIND_INHERITED_BEGIN
@@ -204,6 +212,7 @@ std::vector<ClassBinding> generatedClassBindings() {
 #undef MV_BIND_POINT
 #undef MV_BIND_REFERENCE
 #undef MV_BIND_DISPLAY
+#undef MV_BIND_DISPLAY_LIST
 #undef MV_BIND_END
   return result;
 }

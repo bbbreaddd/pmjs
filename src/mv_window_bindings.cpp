@@ -1,5 +1,7 @@
 #include "mv_window_bindings.hpp"
 #include <type_traits>
+#include <cmath>
+#include <limits>
 
 namespace pmjs::mv {
 namespace {
@@ -23,7 +25,20 @@ template<class T> Value windowOperation(Window_Base& base,Session& session,const
     return Value::undefined();
   }
   if (method=="data") {
-    if constexpr (requires { window.data; }) { Value::Array data; for (auto id:window.data) data.emplace_back(id); return data; }
+    if constexpr (requires { window.data; }) {
+      if (!values.empty()) {
+        const auto replacementValue = value(0);
+        if (!std::holds_alternative<Value::Array>(replacementValue.data)) throw std::invalid_argument("window data requires an array");
+        std::vector<int> replacement;
+        for (const auto& entry : replacementValue.array()) {
+          const double id = entry.number(-1);
+          if (!std::isfinite(id) || id < 0 || id > std::numeric_limits<int>::max() || std::floor(id) != id) throw std::invalid_argument("window data requires nonnegative integer IDs");
+          replacement.push_back(static_cast<int>(id));
+        }
+        window.data = std::move(replacement);
+      }
+      Value::Array data; for (auto id:window.data) data.emplace_back(id); return data;
+    }
   }
   if (method=="drawItem" || method=="drawContent") {
     const int index=value(0).integer(),width=window.contentsWidth();
@@ -44,11 +59,29 @@ template<class T> Value windowOperation(Window_Base& base,Session& session,const
       if (actor!=session.actors().end()) window.drawActorSimpleStatus(actor->second,session,0,0,width);
     } else if constexpr (std::is_same_v<T,Window_Gold>) {
       window.drawCurrencyValue(session.gold(),session.database()["system"]["currencyUnit"].text(),0,0,width);
+    } else if constexpr (std::is_same_v<T,Window_NumberInput>) { window.refresh();
+    } else if constexpr (std::is_same_v<T,Window_MapName>) {
+      window.mapName=session.invokeGameDataBase("map","displayName",{}).text(); window.refresh();
     } else if constexpr (std::is_same_v<T,Window_Help>) window.drawText(window.text,0,0,width);
     else if constexpr (std::is_base_of_v<Window_Command,T>) {
       if (index>=0 && index<int(window.commands.size())) window.drawText(window.commands[index].name,0,y,width);
     } else throw std::invalid_argument("native window drawing method is not bound: "+std::string(typeid(T).name()));
     return Value::undefined();
+  }
+  if constexpr (std::is_same_v<T,Window_ShopBuy>) {
+    if (method == "shopItem") {
+      const int index = value(0).integer();
+      if (index < 0 || index >= static_cast<int>(window.goods.size())) return Value{};
+      return Value::Array{window.goods[index].kind, window.goods[index].id};
+    }
+    if (method == "priceForItem") {
+      for (std::size_t index = 0; index < window.goods.size(); ++index)
+        if (window.goods[index].kind == value(0).integer() && window.goods[index].id == value(1).integer()) return window.goods[index].price;
+      return 0;
+    }
+  }
+  if constexpr (std::is_same_v<T,Window_EquipSlot>) {
+    if (method == "actorId") { if (!values.empty()) window.setActor(value(0).integer(), session); return window.actorId; }
   }
 #define FIELD(Name) \
   if (method==#Name) { if constexpr (requires { window.Name; }) { \

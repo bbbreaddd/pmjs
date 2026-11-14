@@ -4,6 +4,7 @@
 #include "mv_sprites.hpp"
 #include <cmath>
 #include <stdexcept>
+#include <limits>
 
 namespace pmjs::mv {
 Session::~Session() { detachRuntimeEntities(true); }
@@ -21,14 +22,28 @@ void Session::detachRuntimeEntities(bool all) {
     runtimeActors_.clear(); cameraTarget_.reset();
   }
 }
+void Session::initializeRuntimeCharacter(const std::shared_ptr<RuntimeCharacter>& object, const std::string& method) {
+  if (runtimeHooks_ && runtimeHooks_->characterLifecycle && runtimeHooks_->characterLifecycle(object, method)) return;
+  runtimeCharacterCommand(object, "initMembers", {});
+  if (object->id == -1) runtimeCharacterCommand(object, "initPlayerMembers", {});
+}
+std::shared_ptr<RuntimeCharacter> Session::runtimeFollower(int memberIndex) {
+  if (memberIndex < 1 || memberIndex > std::numeric_limits<int>::max() - 4)
+    throw std::invalid_argument("follower member index is outside the supported integer range");
+  const auto count = static_cast<std::size_t>(memberIndex);
+  while (followers_.size() < count) { followers_.emplace_back(); followers_.back().through = true; }
+  return runtimeCharacter(memberIndex <= 3 ? -memberIndex - 1 : -memberIndex - 4);
+}
 std::shared_ptr<RuntimeCharacter> Session::runtimeCharacter(int id) {
   if (auto object = runtimeCharacters_[id].lock()) return object;
   Character* character = id == -1 ? &player_ : nullptr;
   if (id <= -5 && id >= -7) character=&vehicles_[static_cast<std::size_t>(-id-5)].character;
   if (id <= -2 && id >= -4) character=&followers_[static_cast<std::size_t>(-id-2)];
+  if (id <= -8) { const auto index = static_cast<std::size_t>(-static_cast<long long>(id)-5); if (index < followers_.size()) character=&followers_[index]; }
   if (id > 0) for (auto& event : events_) if (event.id == id) { character = &event.character; break; }
   if (!character) { runtimeCharacters_.erase(id); return {}; }
   auto object = std::make_shared<RuntimeCharacter>(); object->id = id; object->mapId = mapId_; object->attached = character;
+  if (id > 0) for (const auto& event : events_) if (event.id == id) { object->originalPattern = event.originalPattern; break; }
   runtimeCharacters_[id] = object; return object;
 }
 std::shared_ptr<RuntimeActor> Session::runtimeActor(int id) {
@@ -64,13 +79,69 @@ std::shared_ptr<RuntimeActor> Session::runtimeBattler(Battler& battler) {
 void Session::initializeActorSkills(const std::shared_ptr<RuntimeActor>& object) {
   auto& actor = object->value(); actor.skills.clear();
   for (const auto& learning : database_["classes"][actor.classId]["learnings"].array())
-    if (learning["level"].integer() <= actor.level) actor.skills.insert(learning["skillId"].integer());
+    if (learning["level"].integer() <= actor.level && !dispatchActorMethod(actor, "learnSkill", {learning["skillId"]}, object))
+      actor.skills.insert(learning["skillId"].integer());
 }
 void Session::initializeActorMembers(const std::shared_ptr<RuntimeActor>& object) {
   const int id = object->id; object->value() = Battler{}; object->value().id = id;
 }
+std::shared_ptr<RuntimeCharacter> Session::runtimeCharacterFor(Character& character) {
+  if (&character == &player_) return runtimeCharacter(-1);
+  for (const auto& event : events_) if (&event.character == &character) return runtimeCharacter(event.id);
+  for (std::size_t index = 0; index < vehicles_.size(); ++index) if (&vehicles_[index].character == &character) return runtimeCharacter(-5 - static_cast<int>(index));
+  for (std::size_t index = 0; index < followers_.size(); ++index) if (&followers_[index] == &character) return runtimeFollower(index + 1);
+  return nullptr;
+}
 Value Session::runtimeCharacterCommand(const std::shared_ptr<RuntimeCharacter>& object, const std::string& method, const Value::Array& arguments) {
   auto& character = object->value();
+  if (method == "originalPattern") {
+    if (!arguments.empty()) object->originalPattern = arguments[0].integer();
+    if (object->attached) for (auto& event : events_) if (&event.character == &character) {
+      if (!arguments.empty()) event.originalPattern = object->originalPattern;
+      object->originalPattern = event.originalPattern; break;
+    }
+    return object->originalPattern;
+  }
+  if (method == "processMoveCommand") { processRouteCommand(character, arguments.at(0)); return Value::undefined(); }
+  if (method == "isMoveRouteForcing") return character.routeForcing;
+  if (method == "isNormalPriority") {
+    for (const auto& event : events_) if (&event.character == &character) return event.priority == 1;
+    return true;
+  }
+  if (method == "requestAnimation" || method == "requestBalloon") {
+    if (object->attached && (object->id < 0 || object->mapId == mapId_)) requestAnimation(0, object->id, arguments.at(0).integer(), false, method == "requestBalloon");
+    return Value::undefined();
+  }
+  if (method == "vehicleType") {
+    if (!arguments.empty()) { const int type = arguments[0].integer(); if (type < -1 || type > 2) throw std::invalid_argument("invalid vehicle type"); vehicleType_ = type; }
+    return vehicleType_;
+  }
+  if (method == "vehicleGettingOn") { if (!arguments.empty()) vehicleGettingOn_ = arguments[0].boolean(); return vehicleGettingOn_; }
+  if (method == "vehicleGettingOff") { if (!arguments.empty()) vehicleGettingOff_ = arguments[0].boolean(); return vehicleGettingOff_; }
+  if (method == "getOnVehicle") return &character == &player_ && vehicleType_ < 0 && toggleVehicle();
+  if (method == "getOffVehicle") return &character == &player_ && vehicleType_ >= 0 && toggleVehicle();
+  if (method == "vehicleCanMove" && object->id <= -5 && object->id >= -7) return object->id != -7 || vehicles_[2].altitude >= 48;
+  if (method == "setupPage" || method == "updateSelfMovement") {
+    for (auto& event : events_) if (&event.character == &character) {
+      if (method == "setupPage") setupEventPage(event); else updateSelfMovement(event);
+      return Value::undefined();
+    }
+    throw std::runtime_error("event is no longer attached to the current map");
+  }
+  if (method == "pageIndex") {
+    if (object->id <= 0 || !object->attached || object->mapId != mapId_)
+      throw std::runtime_error("event is no longer attached to the current map");
+    const auto found = std::find_if(events_.begin(), events_.end(), [&](const Event& event) { return event.id == object->id && &event.character == object->attached; });
+    if (found == events_.end()) throw std::runtime_error("event is no longer attached to the current map");
+    if (!arguments.empty()) {
+      const double index = arguments[0].number(-3);
+      const auto count = map()["events"][object->id]["pages"].array().size();
+      if (!std::isfinite(index) || index != std::floor(index) || index < -2 || index >= static_cast<double>(count))
+        throw std::invalid_argument("event page index is outside its page range");
+      found->page = static_cast<int>(index);
+    }
+    return found->page;
+  }
   if (method.starts_with("followers.")) {
     const auto action=method.substr(10);
     if (action=="visible") { if (!arguments.empty()) followersVisible_=arguments[0].boolean(); return followersVisible_; }
@@ -79,19 +150,37 @@ Value Session::runtimeCharacterCommand(const std::shared_ptr<RuntimeCharacter>& 
     if (action=="isMoving") return std::any_of(followers_.begin(),followers_.end(),[](const auto& follower) { return follower.moving(); });
     if (action=="isGathered") return std::all_of(followers_.begin(),followers_.end(),[&](const auto& follower) { return !follower.moving() && follower.x==player_.x && follower.y==player_.y; });
     if (action=="synchronize") { synchronizeFollowers(arguments.at(0).number(),arguments.at(1).number()); for (auto& follower:followers_) follower.direction=arguments.at(2).integer(); }
-    else if (action=="updateMove") { for (int i=2;i>=0;--i) chaseCharacter(followers_[i],i ? followers_[i-1] : player_); }
+    else if (action=="updateMove") { for (int i=static_cast<int>(followers_.size())-1;i>=0;--i) chaseCharacter(followers_[i],i ? followers_[i-1] : player_); }
     else if (action=="update" || action=="refresh") updateFollowers();
     else if (action=="jumpAll") { for (auto& follower:followers_) { follower.jumpPeak=player_.jumpPeak; follower.jumpCount=player_.jumpCount; follower.x=player_.x; follower.y=player_.y; } }
     else throw std::invalid_argument("follower operation is not bound: "+action);
     return Value::undefined();
   }
   if (method=="isLandOk" && object->id<=-5 && object->id>=-7) return vehicleLandingOk(-object->id-5,arguments.at(0).integer(),arguments.at(1).integer(),arguments.at(2).integer());
+  if (method=="initMembers") { character = Character{}; return Value::undefined(); }
+  if (method=="initPlayerMembers" && object->id == -1) {
+    vehicleType_ = -1; vehicleGettingOn_ = false; vehicleGettingOff_ = false;
+    playerDashing_ = false; encounterCount_ = 0; pendingTransfer_.reset(); playerFadeType_ = 0;
+    transferFadeStarted_ = false;
+    return Value::undefined();
+  }
   if (method=="initialize") { character=Character{}; character.through=object->id<=-2; return Value::undefined(); }
   if (method=="update") { updateCharacter(character,false); return Value::undefined(); }
+  if (method=="straighten") {
+    if (character.walkAnime || character.stepAnime) character.pattern=1;
+    character.animationCount=0; return Value::undefined();
+  }
 
   if (method == "isDashing" && arguments.empty() && object->attached == &player_) return playerDashing_;
   if (method == "findDirectionTo" && arguments.size() == 2) return findDirectionTo(character, arguments[0].integer(), arguments[1].integer());
   if (method == "refresh" && arguments.empty() && object->attached == &player_) { updatePlayerGraphic(); return Value::undefined(); }
+  if (method == "isObjectCharacter") return character.tileId > 0 || ImageManager::isObjectCharacter(character.characterName);
+  if (method == "jumpHeight") return (character.jumpPeak * character.jumpPeak - std::pow(std::abs(character.jumpCount - character.jumpPeak), 2)) / 2;
+  if (method == "screenZ") {
+    int priority = 1;
+    for (const auto& event : events_) if (&event.character == &character) { priority = event.priority; break; }
+    return priority * 2 + 1;
+  }
   if ((method == "screenX" || method == "screenY") && arguments.empty()) return characterScreenPosition(character)[method == "screenX" ? 0 : 1];
   if (method == "jump" && arguments.size() == 2) { jumpCharacter(character, arguments[0].integer(), arguments[1].integer()); return Value::undefined(); }
   if ((method == "setMoveRoute" || method == "forceMoveRoute") && arguments.size() == 1) {
@@ -129,28 +218,35 @@ void Session::setCameraTarget(std::shared_ptr<RuntimeCharacter> target, double s
   cameraTarget_ = std::move(target); cameraSpeed_ = speed && !std::isnan(speed) ? speed : 800;
   if (!savedCamera_) savedCamera_ = std::array{mapState_.lastDisplayX, mapState_.lastDisplayY};
 }
+std::array<double, 2> Session::runtimeMapAdjustedPosition(double x, double y) const {
+  const double tw = tileWidth(), th = tileHeight();
+  const double width = map()["width"].number(), height = map()["height"].number();
+  const double visibleX = screenWidth_ / tw, visibleY = screenHeight_ / th;
+  const double cameraX = savedCamera_ ? (*savedCamera_)[0] : width < visibleX ? (width - visibleX) / 2 : std::clamp(player_.realX - (visibleX - 1) / 2, 0.0, width - visibleX);
+  const double cameraY = savedCamera_ ? (*savedCamera_)[1] : height < visibleY ? (height - visibleY) / 2 : std::clamp(player_.realY - (visibleY - 1) / 2, 0.0, height - visibleY);
+  return {loopHorizontal() && x < cameraX - (width - visibleX) / 2 ? x - cameraX + width : x - cameraX,
+    loopVertical() && y < cameraY - (height - visibleY) / 2 ? y - cameraY + height : y - cameraY};
+}
 std::array<double, 3> Session::runtimeMapShadow() const {
   const auto& airship = vehicles_[2];
   if (airship.mapId != mapId_ || airship.altitude <= 0) return {0, 0, 0};
   const double tw = tileWidth(), th = tileHeight();
-  const double width = map()["width"].number(), height = map()["height"].number();
-  const double visibleX = screenWidth_ / tw, visibleY = screenHeight_ / th;
-  const double cameraX = savedCamera_ ? (*savedCamera_)[0] : width < visibleX ? (width - visibleX) / 2 : std::clamp(player_.realX - (visibleX - 1) / 2, 0.0, width - visibleX);
-  const double cameraY = savedCamera_ ? (*savedCamera_)[1] : height < visibleY ? (height - visibleY) / 2 : std::clamp(player_.realY - (visibleY - 1) / 2, 0.0, height - visibleY);
-  const double realX = airship.character.realX, realY = airship.character.realY;
-  const double x = loopHorizontal() && realX < cameraX - (width - visibleX) / 2 ? realX - cameraX + width : realX - cameraX;
-  const double y = loopVertical() && realY < cameraY - (height - visibleY) / 2 ? realY - cameraY + height : realY - cameraY;
+  const auto scrolled = runtimeMapAdjustedPosition(airship.character.realX, airship.character.realY);
+  const double x = scrolled[0], y = scrolled[1];
   const bool object = airship.character.characterName.find('!') < 2;
   return {std::floor(x * tw + tw / 2 + .5), std::floor(y * th + th - (object ? 0 : 6) + .5),
     255.0 * std::clamp(airship.altitude / 48.0F, 0.0F, 1.0F)};
 }
+std::array<double, 2> Session::runtimeCharacterScreenPosition(const std::shared_ptr<RuntimeCharacter>& character) const {
+  if (runtimeHooks_ && runtimeHooks_->characterPosition)
+    if (const auto point = runtimeHooks_->characterPosition(character)) return *point;
+  const auto point = characterScreenPosition(character->value());
+  return {point[0] + character->value().spriteOffsetX, point[1] + character->value().spriteOffsetY};
+}
 std::array<double, 2> Session::characterScreenPosition(const Character& character) const {
   const double tw = tileWidth(), th = tileHeight();
-  const double width = map()["width"].number(), height = map()["height"].number();
-  const double visibleX = screenWidth_ / tw, visibleY = screenHeight_ / th;
-  const double cameraX = savedCamera_ ? (*savedCamera_)[0] : width < visibleX ? (width - visibleX) / 2 : std::clamp(player_.realX - (visibleX - 1) / 2, 0.0, width - visibleX);
-  const double cameraY = savedCamera_ ? (*savedCamera_)[1] : height < visibleY ? (height - visibleY) / 2 : std::clamp(player_.realY - (visibleY - 1) / 2, 0.0, height - visibleY);
-  const double x = deltaMapX(character.realX, cameraX), y = deltaMapY(character.realY, cameraY);
+  const auto scrolled = runtimeMapAdjustedPosition(character.realX, character.realY);
+  const double x = scrolled[0], y = scrolled[1];
   const bool object = character.tileId > 0 || ImageManager::isObjectCharacter(character.characterName);
   const double jump = character.jumpCount > 0 ? (character.jumpPeak * character.jumpPeak - std::pow(std::abs(character.jumpCount - character.jumpPeak), 2)) / 2 : 0;
   return {std::floor(x * tw + tw / 2 + .5), std::floor(y * th + th - (object ? 0 : 6) - jump + .5)};

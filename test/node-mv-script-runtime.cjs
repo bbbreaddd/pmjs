@@ -128,8 +128,58 @@ test('native actor skill initialization dispatches script extensions for initial
   assert.equal(calls, 2); assert.deepEqual(second.equipped, [0, 0, 0, 0]);
 });
 
+test('new-game screen initialization dispatches plugin reset methods and saved originals', t => {
+  const session = api.create(fixture([])); t.after(() => api.dispose(session));
+  const { scope } = createScriptRuntime(api, session);
+  const systemInit = scope.Game_System.prototype.initialize, tempInit = scope.Game_Temp.prototype.initialize;
+  const initialized = [];
+  scope.Game_System.prototype.initialize = function() { systemInit.call(this); this.pluginWeather = []; initialized.push('system'); };
+  scope.Game_Temp.prototype.initialize = function() { tempInit.call(this); this.pluginCache = {}; initialized.push('temp'); };
+  const clear = scope.Game_Screen.prototype.clear, shake = scope.Game_Screen.prototype.clearShake;
+  const calls = [];
+  scope.Game_Screen.prototype.clear = function() { calls.push('clear'); clear.call(this); this.effectReady = true; };
+  scope.Game_Screen.prototype.clearShake = function() { calls.push('shake'); shake.call(this); this.vector = { x: 0, y: 0 }; };
+  api.newGame(session);
+  assert.deepEqual(calls, ['clear', 'shake']); assert.equal(scope.$gameScreen.effectReady, true);
+  assert.deepEqual(initialized, ['temp', 'system']); assert.deepEqual(scope.$gameSystem.pluginWeather, []); assert.deepEqual(scope.$gameTemp.pluginCache, {});
+  assert.equal(scope.$gameScreen.vector.x, 0); assert.equal(scope.$gameScreen.shake(), 0);
+  const updateShake = scope.Game_Screen.prototype.updateShake;
+  let updates = 0;
+  scope.Game_Screen.prototype.updateShake = function() { ++updates; updateShake.call(this); };
+  scope.$gameScreen.startShake(5, 5, 2); scope.$gameScreen.update();
+  assert.equal(updates, 1); assert.equal(scope.$gameScreen._shakeDuration, 1);
+  assert.equal(scope.$gameScreen._shake, scope.$gameScreen.shake());
+  scope.$gameScreen._shake = 7; assert.equal(scope.$gameScreen.shake(), 7);
+  scope.$gameScreen.showPicture(1, 'Test', 0, 0, 0, 100, 100, 255, 0);
+  const picture = scope.$gameScreen.picture(1);
+  scope.$gameScreen.clearPictures(); assert.equal(scope.$gameScreen.picture(1), null);
+  assert.equal(picture.name(), 'Test');
+});
+
+test('native actor image initialization invokes plugin aliases before refresh', t => {
+  const data = fixture([]); data.actors[1].faceName = 'ActorFace'; data.actors[1].faceIndex = 3;
+  const session = api.create(data); t.after(() => api.dispose(session));
+  const { scope } = createScriptRuntime(api, session);
+  for (const key of ['actors', 'classes', 'weapons', 'armors', 'states', 'system', 'items', 'skills']) scope['$data' + key[0].toUpperCase() + key.slice(1)] = data[key];
+  const original = scope.Game_Actor.prototype.initImages;
+  let calls = 0;
+  scope.Game_Actor.prototype.initImages = function() { original.call(this); this.defaultFace = this.faceName(); ++calls; };
+  api.newGame(session);
+  const actor = scope.$gameActors.actor(1);
+  assert.equal(calls, 1); assert.equal(actor.defaultFace, 'ActorFace'); assert.equal(actor.faceIndex(), 3);
+  actor.setFaceImage('Changed', 1); actor.initImages(); assert.equal(actor.faceName(), 'ActorFace');
+  actor.setMp(1); actor.gainMp(3); assert.equal(actor.mp, 4);
+  assert.equal(actor._result, actor.result());
+  assert.equal(api.save(session).actors._data[1]._result.mpDamage, -3);
+  const item = actor._equips[0]; item.setObject(null);
+  assert.equal(api.save(session).actors._data[1]._equips[0]._itemId, 0);
+  scope.$gameParty.gainItem(scope.$dataWeapons[1], 1); actor.changeEquip(0, scope.$dataWeapons[1]);
+  assert.equal(actor.equips()[0], scope.$dataWeapons[1]); assert.equal(scope.$gameParty.numItems(scope.$dataWeapons[1]), 0);
+});
+
 test('battler database lookups retain script object identity and native class changes', t => {
   const data = fixture([command(321, [1, 2, false])]);
+  data.classes[1].expParams = [30, 20, 30, 30];
   data.classes.push({ ...data.classes[1], name: 'Second class' });
   const session = api.create(data); t.after(() => api.dispose(session));
   const runtime = createScriptRuntime(api, session);
@@ -373,7 +423,7 @@ test('native frame dispatch reaches nested instance overrides and saved native o
   assert.equal(api.save(session).screen._pictures[1]._x, 11);
 });
 
-test('native interpreter waits for a script-driven finite picture animation and sprite frame', t => {
+test('native interpreter waits for a script-driven finite picture animation', t => {
   const { session, scope, step } = create(t, [show(), command(355, [
     'const p = $gameScreen.picture(1); p.framesRemaining = 3; this.setWaitMode("frames");'
   ]), variable(9, 99), command(230, [8])]);
@@ -387,23 +437,11 @@ test('native interpreter waits for a script-driven finite picture animation and 
     if (this._waitMode === 'frames' && scope.$gameScreen.picture(1).framesRemaining > 0) return true;
     return nativeWait.call(this);
   };
-  const baseSprite = scope.Sprite_Picture.prototype.updateOther;
-  scope.Sprite_Picture.prototype.updateOther = function() {
-    baseSprite.call(this);
-    const remaining = this.picture().framesRemaining;
-    this.setFrame((3 - remaining) * 8, 0, 8, 8);
-  };
   step(); step();
   assert.equal(api.snapshot(session).variables[9], undefined);
   step();
   assert.equal(scope.$gameScreen.picture(1).framesRemaining, 0);
   assert.equal(api.snapshot(session).variables[9], undefined);
-  const sprite = scope.SceneManager._scene._spriteset._pictureContainer.children[1];
-  assert.deepEqual([sprite._frame.x, sprite._frame.width], [24, 8]);
-  const frame = sprite._frame;
-  frame.x = 16;
-  assert.equal(sprite._frame, frame);
-  assert.equal(sprite._frame.x, 16);
   step();
   assert.equal(api.snapshot(session).variables[9], 99);
 });
@@ -561,6 +599,99 @@ test('live command and parameter views change native execution and retain replac
   assert.equal(parameters[0], program[1].parameters[0]);
 });
 
+test('native experience and class commands dispatch progression aliases on the same actor state', t => {
+  const data = fixture([command(315, [0, 1, 0, 0, 250, false]), command(230, [10])]);
+  data.actors[1].maxLevel = 5;
+  Object.assign(data.classes[1], { expParams: [0, 100, 0, 30], params: Array.from({ length: 8 }, () => [0, 10, 20, 30, 40, 50]), learnings: [{ level: 1, skillId: 2 }, { level: 2, skillId: 3 }] });
+  data.classes.push({ ...data.classes[1], id: 2, learnings: [] });
+  data.skills.push({ id: 3 });
+  data.states.push({ id: 2, minTurns: 3, maxTurns: 3, stepsToRemove: 5, autoRemovalTiming: 2, restriction: 0, traits: [] });
+  const session = api.create(data); t.after(() => api.dispose(session));
+  const { scope } = createScriptRuntime(api, session);
+  for (const key of ['actors', 'classes', 'weapons', 'armors', 'states', 'system', 'items', 'skills']) scope['$data' + key[0].toUpperCase() + key.slice(1)] = data[key];
+  const trace = [], actors = [];
+  for (const name of ['changeExp', 'levelUp', 'levelDown', 'learnSkill', 'refresh']) {
+    const original = scope.Game_Actor.prototype[name];
+    scope.Game_Actor.prototype[name] = function(...args) { trace.push([name, ...args]); actors.push(this); return original.apply(this, args); };
+  }
+  api.newGame(session); trace.length = 0; actors.length = 0;
+  const actor = scope.$gameActors.actor(1), exp = actor._exp;
+  api.step(session, {});
+  assert.equal(actor.level, 3); assert.equal(actor.currentExp(), 250); assert.equal(exp[1], 250);
+  assert.equal(actor.isLearnedSkill(3), true);
+  assert.deepEqual(trace.map(row => row[0]), ['changeExp', 'levelUp', 'learnSkill', 'levelUp', 'refresh']);
+  assert.deepEqual(trace[0], ['changeExp', 250, false]); assert.ok(actors.every(value => value === actor));
+  actor.changeClass(2, false); assert.equal(actor.level, 1); assert.equal(actor.currentClass(), data.classes[2]);
+  actor.changeClass(1, false); assert.equal(actor.level, 3); assert.equal(actor._exp, exp);
+  actor.addState(2); assert.equal(actor._stateTurns[2], 3); assert.equal(actor._stateSteps[2], 5);
+  actor.updateStateTurns(); actor.updateStateTurns(); actor.updateStateTurns(); actor.removeStatesAuto(2);
+  assert.equal(actor.isStateAffected(2), false); assert.equal(actor.result().isStateRemoved(2), true);
+  assert.equal(actor.isStateAddable(2), false); actor.clearResult(); assert.equal(actor.isStateAddable(2), true);
+  assert.throws(() => { actor._stateTurns = { 2: {} }; }, /numbers/);
+  const retained = actor; api.newGame(session); const replacement = scope.$gameActors.actor(1);
+  trace.length = 0; actors.length = 0;
+  retained.changeExp(400, false);
+  assert.equal(retained.level, 5); assert.equal(replacement.level, 1); assert.ok(actors.every(value => value === retained));
+});
+
+test('map display and scrolling APIs share native camera and parallax state', t => {
+  const data = fixture([]), map = data.maps[1];
+  Object.assign(map, { width: 100, height: 80, scrollType: 3, parallaxLoopX: true, parallaxLoopY: true, parallaxSx: 4, parallaxSy: -2, data: Array(100 * 80 * 6).fill(0) });
+  const session = api.create(data); t.after(() => api.dispose(session));
+  const { scope } = createScriptRuntime(api, session); scope.Graphics = { width: 816, height: 624 };
+  const original = scope.Game_Map.prototype.setDisplayPos;
+  let centers = 0;
+  scope.Game_Map.prototype.setDisplayPos = function(x, y) { ++centers; original.call(this, x, y); };
+  api.newGame(session); assert.equal(centers, 1);
+  const gameMap = scope.$gameMap;
+  gameMap.setDisplayPos(99, 79); gameMap.scrollRight(3); gameMap.scrollDown(5);
+  assert.equal(gameMap.displayX(), 2); assert.equal(gameMap.displayY(), 4);
+  assert.equal(api.save(session).map._parallaxX, 102); assert.equal(api.save(session).map._parallaxY, 84);
+  gameMap.updateParallax();
+  assert.ok(Math.abs(api.save(session).map._parallaxX - (102 + 4 / 96)) < 1e-9);
+  scope.$gamePlayer.center(50, 40); assert.equal(gameMap.displayX(), 42); assert.equal(gameMap.displayY(), 34);
+  const plain = fixture([command(204, [6, 1, 4, false]), command(230, [10])]); Object.assign(plain.maps[1], { width: 100, height: 80, data: Array(100 * 80 * 6).fill(0) });
+  const other = api.create(plain); t.after(() => api.dispose(other));
+  const view = createScriptRuntime(api, other).scope; api.newGame(other);
+  view.$gameMap.setDisplayPos(10, 12); view.$gameMap.scrollLeft(50); view.$gameMap.scrollUp(50);
+  assert.equal(view.$gameMap.displayX(), 0); assert.equal(view.$gameMap.displayY(), 0);
+  view.$gameMap.scrollRight(1000); view.$gameMap.scrollDown(1000);
+  assert.equal(view.$gameMap.displayX(), 83); assert.equal(view.$gameMap.displayY(), 67);
+  const scroll = view.Game_Map.prototype.scrollRight, parallax = view.Game_Map.prototype.updateParallax, distances = [];
+  let parallaxUpdates = 0;
+  view.Game_Map.prototype.scrollRight = function(distance) { distances.push(distance); scroll.call(this, distance); };
+  view.Game_Map.prototype.updateParallax = function() { ++parallaxUpdates; parallax.call(this); };
+  view.$gameMap.setDisplayPos(10, 12);
+  for (let frame = 0; frame < 3; ++frame) api.step(other, {});
+  assert.ok(distances.length > 0); assert.ok(distances.every(distance => distance === 1 / 16)); assert.equal(parallaxUpdates, 3);
+});
+
+test('message input getters expose native number and item event requests', t => {
+  const number = create(t, [command(103, [7, 3])]); number.step();
+  assert.equal(number.scope.$gameMessage.numInputVariableId(), 7); assert.equal(number.scope.$gameMessage.numInputMaxDigits(), 3);
+  const item = create(t, [command(104, [9, 2])]); item.step();
+  assert.equal(item.scope.$gameMessage.itemChoiceVariableId(), 9); assert.equal(item.scope.$gameMessage.itemChoiceItypeId(), 2);
+});
+
+test('interpreter utility APIs operate on native variables and resolve current-map characters', t => {
+  const { scope, session } = create(t, []);
+  const interpreter = scope.$gameMap._interpreter;
+  interpreter.operateVariable(3, 0, 7);
+  interpreter.operateVariable(3, 1, 4);
+  interpreter.operateVariable(3, 3, 2);
+  assert.equal(api.snapshot(session).variables[3], 22);
+  assert.equal(interpreter.operateValue(1, 1, 3), -22);
+  assert.equal(interpreter.gameDataOperand(7, 0, 0), scope.$gameMap.mapId());
+  assert.equal(interpreter.gameDataOperand(3, 1, 2), scope.$gameActors.actor(1).hp);
+  interpreter.operateVariable(3, 4, 4);
+  assert.equal(scope.$gameVariables.value(3), 5);
+  assert.equal(interpreter.character(-1), scope.$gamePlayer);
+  const map = interpreter._mapId;
+  interpreter._mapId = scope.$gameMap.mapId() + 1;
+  assert.equal(interpreter.character(1), null);
+  interpreter._mapId = map;
+});
+
 test('native conditional branches dispatch skip overrides and saved originals exactly once', t => {
   const { scope, session, step } = create(t, [command(111, [0, 1, 0]), { ...variable(3, 99), indent: 1 },
     command(411), { ...variable(4, 7), indent: 1 }, command(412)]);
@@ -655,7 +786,10 @@ test('script setup replacement can attach the native source list without calling
   step();
   assert.equal(api.snapshot(session).variables[9], 81);
   assert.equal(interpreter._list, source);
-  assert.throws(() => { interpreter._list = []; }, /native command array/);
+  assert.throws(() => { interpreter._list = {}; }, /command list requires an array/);
+  assert.equal(interpreter._list, source);
+  interpreter._list = []; assert.equal(interpreter._list.length, 0);
+  assert.equal(source[0].parameters[4], 81);
 });
 
 test('common-event setup preserves child depth and rejects clearing an active parent', t => {
@@ -1020,6 +1154,19 @@ test('script Utils delegates native helpers and uses configured guest options', 
   assert.equal(Utils.isAndroidChrome(), false);
 });
 
+test('live bootstrap database preserves authored objects through native initialization', t => {
+  const database = fixture([]);
+  const session = api.create({});
+  t.after(() => api.dispose(session));
+  api.databaseInvoke(session, 'publish', database);
+  assert.equal(api.databaseInvoke(session, 'read', 'system'), database.system);
+  database.actors[1].name = 'Live bootstrap actor';
+  api.newGame(session);
+  assert.equal(api.entityField(api.entity(session, 'actor', 1), 'name'), 'Live bootstrap actor');
+  assert.equal(api.mapId(session), 1);
+  assert.equal(api.databaseInvoke(session, 'readMap', 1), database.maps[1]);
+});
+
 test('database bindings require named tables and preserve script-only metadata', t => {
   const session = api.create(fixture([]));
   t.after(() => api.dispose(session));
@@ -1107,4 +1254,294 @@ test('native battle actions dispatch hit and evasion aliases with retained battl
   const retainedHp = enemy.hp;
   api.startBattle(session, 1, true, true);
   assert.equal(enemy.hp, retainedHp, 'old enemy reference must retain its previous state');
+});
+
+test('turn completion dispatches actor and enemy overrides and shares regeneration and buff state', t => {
+  const data = fixture([command(301, [0, 1, false, false]), command(230, [20])]);
+  data.classes[1].traits.push({ code: 22, dataId: 7, value: 0.1 }, { code: 22, dataId: 8, value: 0.2 }, { code: 22, dataId: 9, value: 0.05 });
+  data.enemies = [null, { id: 1, name: 'Enemy', params: Array(8).fill(10), traits: [], actions: [], exp: 0, gold: 0 }];
+  data.troops = [null, { id: 1, members: [{ enemyId: 1, x: 0, y: 0, hidden: false }], pages: [] }];
+  const session = api.create(data); t.after(() => api.dispose(session));
+  const { scope } = createScriptRuntime(api, session);
+  const seen = [], original = scope.Game_Battler.prototype.onTurnEnd;
+  scope.Game_Battler.prototype.onTurnEnd = function() { seen.push(this); return original.call(this); };
+  api.newGame(session);
+  const actor = scope.$gameActors.actor(1);
+  actor.setHp(4); actor.setMp(1);
+  api.step(session, {});
+  actor.setTp(0); actor.addBuff(2, 1);
+  api.gameDataInvoke(session, 'battle', 'endTurn', []);
+  assert.equal(actor.hp, 5); assert.equal(actor.mp, 3); assert.equal(actor.tp, 5);
+  assert.equal(actor._buffTurns[2], 0); assert.equal(actor.buff(2), 1);
+  actor.onAllActionsEnd(); assert.equal(actor.buff(2), 0);
+  assert.deepEqual(Array.from(actor.result().removedBuffs), [2]);
+  assert.equal(seen[0], actor);
+  assert.equal(seen[1], scope.$gameTroop.members()[0]);
+  assert.ok(seen[1] instanceof scope.Game_Enemy);
+  for (const name of ['actors', 'classes', 'weapons', 'armors', 'states', 'system', 'enemies'])
+    scope['$data' + name[0].toUpperCase() + name.slice(1)] = data[name];
+  let gains = 0; const gainHp = actor.gainHp;
+  actor.gainHp = function(value) { ++gains; return gainHp.call(this, value); };
+  actor.setHp(4); actor.setMp(1); actor.setTp(0); actor.onTurnEnd();
+  assert.equal(gains, 1); assert.equal(actor.hp, 5); assert.equal(actor.mp, 3); assert.equal(actor.tp, 5);
+  actor.addDebuff(2, 2); assert.equal(actor.buff(2), -1);
+  actor.addBuff(2, 1); assert.equal(actor.buff(2), 0); assert.equal(actor._buffTurns[2], 2);
+  actor.addBuff(2, 3); assert.equal(actor.buff(2), 1); assert.equal(actor._buffTurns[2], 3);
+});
+
+test('action targeting, damage and equipment optimization use live native battlers and inventory', t => {
+  const data = fixture([]);
+  data.skills[1] = { id: 1, scope: 7, repeats: 2, hitType: 0, effects: [], damage: { type: 5 } };
+  data.weapons.push({ id: 2, etypeId: 1, wtypeId: 1, params: [0, 0, 5, 0, 0, 0, 0, 0] });
+  data.states.push({ id: 2, removeByDamage: true, chanceByDamage: 100, traits: [], minTurns: 1, maxTurns: 1 });
+  const session = api.create(data); t.after(() => api.dispose(session));
+  const { scope } = createScriptRuntime(api, session);
+  for (const name of ['actors', 'classes', 'weapons', 'armors', 'states', 'system', 'skills', 'items'])
+    scope['$data' + name[0].toUpperCase() + name.slice(1)] = data[name];
+  api.newGame(session);
+  const actor = scope.$gameActors.actor(1), target = scope.$gameActors.actor(2);
+  const action = new scope.Game_Action(actor); action.setSkill(1); action.setTarget(0);
+  assert.deepEqual(Array.from(action.makeTargets()), [actor, actor]);
+  assert.equal(action.testApply(actor), false);
+  actor.setHp(4); assert.equal(action.testApply(actor), false);
+  assert.equal(action.testItemEffect(actor, { code: 11, value1: 0, value2: 1 }), true);
+  target.setHp(3); target.addState(2); target.setTp(0);
+  action.executeDamage(target, 9);
+  assert.equal(target.hp, 0); assert.equal(actor.hp, 7);
+  assert.equal(target.result().hpDamage, 3); assert.equal(target.result().success, true);
+  assert.equal(target.isStateAffected(2), false);
+  assert.equal(target.tp, 15);
+  actor.result().critical = true; action.executeDamage(actor, 0); assert.equal(actor.result().critical, false);
+  scope.$gameParty.gainItem(data.weapons[2], 1);
+  let comparisons = 0; const score = actor.calcEquipItemPerformance;
+  actor.calcEquipItemPerformance = function(item) { ++comparisons; return score.call(this, item); };
+  actor.optimizeEquipments();
+  assert.equal(actor.equips()[0], data.weapons[2]); assert.ok(comparisons > 0);
+  assert.equal(scope.$gameParty.numItems(data.weapons[2]), 0);
+  assert.equal(scope.$gameParty.numItems(data.weapons[1]), 1);
+});
+
+test('script-created interpreters and common events execute native commands with independent state', t => {
+  const data = fixture([]), session = api.create(data); t.after(() => api.dispose(session));
+  const { scope } = createScriptRuntime(api, session); scope.$dataCommonEvents = data.commonEvents;
+  api.newGame(session);
+  const interpreter = new scope.Game_Interpreter(3);
+  assert.equal(interpreter._depth, 3); assert.equal(interpreter.isRunning(), false);
+  const source = [variable(7, 12), command(230, [2]), variable(8, 21), command(0)];
+  interpreter.setup(source, 9); interpreter.update();
+  assert.equal(scope.$gameVariables.value(7), 12); assert.equal(interpreter.isRunning(), true);
+  assert.equal(interpreter._eventId, 9); assert.equal(interpreter._waitCount, 1);
+  interpreter.update(); interpreter.update(); interpreter.update();
+  assert.equal(scope.$gameVariables.value(8), 21); assert.equal(interpreter.isRunning(), false);
+  assert.equal(source.length, 4); assert.equal(source[0].code, 122);
+  interpreter.setup([variable(10, 5), command(0)]);
+  interpreter.setupChild([variable(9, 4), command(230, [1]), command(0)], 11);
+  const child = interpreter._childInterpreter;
+  assert.equal(child._depth, 4); assert.equal(child._eventId, 11);
+  interpreter.update(); assert.equal(scope.$gameVariables.value(9), 4); assert.equal(scope.$gameVariables.value(10), 0);
+  interpreter.update(); interpreter.update(); assert.equal(scope.$gameVariables.value(10), 5);
+  data.commonEvents[1] = { id: 1, trigger: 2, switchId: 1, list: [variable(12, 18), command(0)] };
+  const common = new scope.Game_CommonEvent(1); assert.equal(common._interpreter, null);
+  scope.$gameSwitches.setValue(1, true); common.refresh(); common.update();
+  assert.equal(scope.$gameVariables.value(12), 18);
+  const retained = common._interpreter; scope.$gameSwitches.setValue(1, false); common.refresh();
+  assert.equal(common._interpreter, null); retained.setup([variable(13, 7), command(0)]); retained.update();
+  assert.equal(scope.$gameVariables.value(13), 7);
+  api.newGame(session); retained.setup([variable(14, 8), command(0)]); retained.update();
+  assert.equal(scope.$gameVariables.value(14), 8);
+  scope.$gameVariables.setValue(12, 0);
+  scope.$gameTemp.reserveCommonEvent(1); assert.equal(interpreter.setupReservedCommonEvent(), true);
+  assert.equal(scope.$gameTemp.isCommonEventReserved(), false); interpreter.update();
+  assert.equal(scope.$gameVariables.value(12), 18);
+});
+
+test('window tone events dispatch aliases and expose shared native tone values', t => {
+  const { session, scope, step } = create(t, [command(138, [[12, -8, 20]])]);
+  const original = scope.Game_System.prototype.setWindowTone; let calls = 0;
+  scope.Game_System.prototype.setWindowTone = function(tone) { ++calls; return original.call(this, tone); };
+  step(); assert.equal(calls, 1);
+  const tone = scope.$gameSystem.windowTone(); assert.deepEqual(Array.from(tone), [12, -8, 20]);
+  tone[1] = 6; assert.deepEqual(api.save(session).system._windowTone, [12, 6, 20]);
+  scope.$gameSystem.setWindowTone([1, 2, 3]); assert.deepEqual(Array.from(tone), [1, 2, 3]);
+});
+
+test('native movement routes dispatch processMoveCommand aliases without losing route state', t => {
+  const route = { list: [{ code: 42, parameters: [123] }, { code: 27, parameters: [4] }, { code: 0, parameters: [] }], repeat: false, skippable: true, wait: true };
+  const data = fixture([command(205, [-1, route]), variable(15, 1)]); data.system.switches = Array(100).fill('');
+  const session = api.create(data); t.after(() => api.dispose(session));
+  const { scope } = createScriptRuntime(api, session); api.newGame(session);
+  const step = () => api.step(session, {});
+  const original = scope.Game_Character.prototype.processMoveCommand, seen = [];
+  scope.Game_Character.prototype.processMoveCommand = function(command) {
+    seen.push([this, command.code]);
+    if (command.code === 42) command.parameters[0] += 1;
+    original.call(this, command);
+  };
+  for (let frame = 0; frame < 12; ++frame) step();
+  assert.equal(scope.$gamePlayer._opacity, 124); assert.equal(scope.$gameSwitches.value(4), true);
+  assert.equal(scope.$gameVariables.value(15), 1);
+  assert.deepEqual(seen.map(entry => entry[1]), [42, 27, 0]);
+  assert.ok(seen.every(entry => entry[0] === scope.$gamePlayer));
+  assert.equal(scope.$gamePlayer.isMoveRouteForcing(), false);
+  assert.equal(route.list[0].parameters[0], 123);
+  const index = scope.$gamePlayer._moveRouteIndex;
+  scope.$gamePlayer.processMoveCommand({ code: 42, parameters: [66] });
+  assert.equal(scope.$gamePlayer._opacity, 67); assert.equal(scope.$gamePlayer._moveRouteIndex, index);
+  assert.equal(api.snapshot(session).switches[4], true);
+});
+
+test('player vehicle and encounter queries share native boarding and movement state', t => {
+  const data = fixture([]);
+  data.system.boat = { startMapId: 1, startX: 1, startY: 2, characterName: '', characterIndex: 0, bgm: { name: '', volume: 90, pitch: 100, pan: 0 } };
+  const session = api.create(data); t.after(() => api.dispose(session));
+  const { scope } = createScriptRuntime(api, session);
+  for (const name of ['actors', 'classes', 'weapons', 'armors', 'states', 'system', 'skills', 'items'])
+    scope['$data' + name[0].toUpperCase() + name.slice(1)] = data[name];
+  scope.Input = { isPressed: () => false };
+  api.newGame(session);
+  const player = scope.$gamePlayer;
+  assert.equal(player._followers, player.followers()); assert.equal(player.isInVehicle(), false);
+  assert.equal(player.canMove(), true); assert.equal(player.canEncounter(), true);
+  data.classes[1].traits.push({ code: 64, dataId: 1, value: 1 }); assert.equal(player.canEncounter(), false);
+  assert.equal(player.getOnVehicle(), true); assert.equal(player.isInBoat(), true);
+  assert.equal(player.vehicle(), scope.$gameMap.boat()); assert.equal(player._vehicleGettingOn, true);
+  assert.equal(player.canMove(), false); assert.equal(player.getOnVehicle(), false);
+  for (let frame = 0; frame < 40; ++frame) api.step(session, {});
+  assert.equal(player._vehicleGettingOn, false); assert.equal(player.canMove(), true);
+  player._vehicleGettingOff = true; assert.equal(player.canMove(), false); player._vehicleGettingOff = false;
+  assert.equal(scope.$gameMap.event(1).isNormalPriority(), true);
+  assert.equal(scope.$gameMap.event(1).isCollidedWithPlayerCharacters(player.x, player.y), true);
+  player.setThrough(true); assert.equal(scope.$gameMap.event(1).isCollidedWithPlayerCharacters(player.x, player.y), false);
+});
+
+test('troop APIs share event flags, interpreter state and retained enemy identity', t => {
+  const data = fixture([command(301, [0, 1, true, true]), command(230, [20])]);
+  data.enemies = [null, { id: 1, name: 'First', params: Array(8).fill(10), traits: [], actions: [], exp: 0, gold: 0 },
+    { id: 2, name: 'Second', params: Array(8).fill(20), traits: [], actions: [], exp: 0, gold: 0 }];
+  const page = { span: 1, conditions: { switchValid: true, switchId: 1 }, list: [command(122, [21, 21, 1, 0, 1]), command(0)] };
+  data.troops = [null, { id: 1, members: [{ enemyId: 1, x: 0, y: 0, hidden: false }], pages: [page] },
+    { id: 2, members: [{ enemyId: 2, x: 0, y: 0, hidden: false }], pages: [] }];
+  const session = api.create(data); t.after(() => api.dispose(session));
+  const { scope } = createScriptRuntime(api, session); scope.$dataTroops = data.troops;
+  let setups = 0, turns = 0;
+  const setup = scope.Game_Troop.prototype.setup, increaseTurn = scope.Game_Troop.prototype.increaseTurn;
+  scope.Game_Troop.prototype.setup = function(id) { ++setups; return setup.call(this, id); };
+  scope.Game_Troop.prototype.increaseTurn = function() { ++turns; return increaseTurn.call(this); };
+  api.newGame(session); api.step(session, {});
+  assert.equal(setups, 1); const troop = scope.$gameTroop, first = troop.members()[0];
+  scope.$gameSwitches.setValue(1, true);
+  troop.setupBattleEvent(); assert.equal(troop._interpreter.isRunning(), true); troop.updateInterpreter();
+  assert.equal(scope.$gameVariables.value(21), 1);
+  troop.setupBattleEvent(); troop.updateInterpreter(); assert.equal(scope.$gameVariables.value(21), 1);
+  troop.increaseTurn(); assert.equal(troop.turnCount(), 1);
+  troop.setupBattleEvent(); troop.updateInterpreter(); assert.equal(scope.$gameVariables.value(21), 2);
+  api.gameDataInvoke(session, 'battle', 'startTurn', []); assert.equal(turns, 2); assert.equal(troop.turnCount(), 2);
+  troop.setup(2); assert.equal(troop.turnCount(), 0); assert.equal(troop.troop(), data.troops[2]);
+  const second = troop.members()[0]; assert.notEqual(first, second); assert.equal(second.hp, 20);
+  first.setHp(3); assert.equal(first.hp, 3); assert.equal(second.hp, 20);
+});
+
+test('native event refresh dispatches page-condition and setup aliases on the same event', t => {
+  const data = fixture([]), pages = data.maps[1].events[1].pages;
+  pages[0].trigger = 0; pages[0].image.characterName = 'First';
+  pages[1].trigger = 0; pages[1].conditions = { switch1Valid: true, switch1Id: 1 }; pages[1].image.characterName = 'Second';
+  const session = api.create(data); t.after(() => api.dispose(session));
+  const { scope } = createScriptRuntime(api, session); scope.$dataMap = data.maps[1];
+  const condition = scope.Game_Event.prototype.meetsConditions, setup = scope.Game_Event.prototype.setupPage;
+  const update = scope.Game_Event.prototype.updateSelfMovement, configured = []; let updates = 0;
+  scope.Game_Event.prototype.meetsConditions = function(page) {
+    if (page === pages[1]) return scope.$gameVariables.value(3) === 7;
+    return condition.call(this, page);
+  };
+  scope.Game_Event.prototype.setupPage = function() { setup.call(this); this._opacity = 100 + this._pageIndex; configured.push(this); };
+  scope.Game_Event.prototype.updateSelfMovement = function() { ++updates; return update.call(this); };
+  api.newGame(session); const event = scope.$gameMap.event(1);
+  assert.equal(event._pageIndex, 0); assert.equal(event._characterName, 'First'); assert.equal(event._opacity, 100);
+  assert.equal(configured[0], event);
+  scope.$gameVariables.setValue(3, 7); api.step(session, {});
+  assert.equal(event._pageIndex, 1); assert.equal(event.findProperPageIndex(), 1);
+  assert.equal(event._characterName, 'Second'); assert.equal(event._opacity, 101);
+  assert.equal(configured[1], event); assert.ok(updates > 0);
+  scope.$gameVariables.setValue(3, 0); api.step(session, {}); assert.equal(event._pageIndex, 0);
+  assert.equal(condition.call(event, { conditions: { variableValid: true, variableId: 3, variableValue: 1 } }), false);
+});
+
+test('party last-item memory preserves item classes, native saves and retained views', t => {
+  const data = fixture([]), session = api.create(data); t.after(() => api.dispose(session));
+  const { scope } = createScriptRuntime(api, session);
+  for (const name of ['items', 'weapons', 'armors', 'skills']) scope['$data' + name[0].toUpperCase() + name.slice(1)] = data[name];
+  api.newGame(session); const party = scope.$gameParty, memory = party._lastItem;
+  assert.equal(party.lastItem(), null);
+  party.setLastItem(data.weapons[1]); assert.equal(party.lastItem(), data.weapons[1]); assert.equal(memory._dataClass, 'weapon');
+  const saved = api.save(session); assert.equal(saved.party._lastItem._dataClass, 'weapon');
+  party.setLastItem(data.items[1]); assert.equal(memory.object(), data.items[1]);
+  api.load(session, saved); assert.equal(party.lastItem(), data.weapons[1]); assert.equal(memory, party._lastItem);
+  const replacement = new scope.Game_Item(data.armors[1]); party._lastItem = replacement; replacement.setObject(null);
+  assert.equal(party.lastItem(), data.armors[1]); assert.notEqual(party._lastItem, replacement);
+  memory.setObject(data.skills[1]); assert.equal(party.lastItem(), data.skills[1]);
+  party.setLastItem(null); assert.equal(party.lastItem(), null);
+});
+
+test('character pattern overrides affect native animation and retain event defaults after replacement', t => {
+  const { session, scope, step } = create(t, []), player = scope.$gamePlayer;
+  player._stepAnime = true; player._pattern = 1; let calls = 0;
+  player.maxPattern = function() { ++calls; return 2; };
+  for (let frame = 0; frame < 15; ++frame) step();
+  assert.ok(calls > 0); assert.equal(player._pattern, 0); assert.equal(player._animationCount, 0);
+  player._stepAnime = false; player._stopCount = 1; player.updatePattern(); assert.equal(player._pattern, 1);
+  const event = scope.$gameMap.event(1); event._originalPattern = 2; event.setPattern(0); event.resetPattern();
+  assert.equal(event._pattern, 2); assert.equal(event.isOriginalPattern(), true);
+  api.newGame(session); event.setPattern(0); event.resetPattern(); assert.equal(event._pattern, 2);
+  assert.notEqual(scope.$gameMap.event(1), event); assert.equal(scope.$gameMap.event(1)._originalPattern, 1);
+});
+
+test('native battle presentation dispatches damage aliases and public motion requests', t => {
+  const data = fixture([command(301, [0, 1, true, true]), command(230, [20])]);
+  data.system.optSideView = true; data.system.attackMotions = [null, { type: 1, weaponImageId: 2 }];
+  data.skills[1] = { id: 1, name: 'Attack', scope: 1, occasion: 1, hitType: 0, successRate: 100, repeats: 1, speed: 0,
+    mpCost: 0, tpCost: 0, tpGain: 0, stypeId: 1, animationId: 0, damage: { type: 1, formula: '2', elementId: 0, variance: 0, critical: false }, effects: [] };
+  data.enemies = [null, { id: 1, name: 'Enemy', params: [4, 10, 10, 10, 10, 10, 10, 10], traits: [],
+    actions: [{ skillId: 1, conditionType: 0, rating: 5 }], exp: 0, gold: 0 }];
+  data.troops = [null, { id: 1, members: [{ enemyId: 1, x: 0, y: 0, hidden: false }], pages: [] }];
+  const session = api.create(data); t.after(() => api.dispose(session));
+  const { scope } = createScriptRuntime(api, session); let damages = 0; const motions = [];
+  const performDamage = scope.Game_Actor.prototype.performDamage, requestMotion = scope.Game_Battler.prototype.requestMotion;
+  scope.Game_Actor.prototype.performDamage = function() { ++damages; return performDamage.call(this); };
+  scope.Game_Battler.prototype.requestMotion = function(type) { motions.push(type); return requestMotion.call(this, type); };
+  api.newGame(session); const actor = scope.$gameActors.actor(1);
+  actor.performDamage(); assert.equal(actor.motionType(), 'damage'); actor.clearMotion(); assert.equal(actor.motionType(), undefined);
+  actor.performAttack(); assert.equal(actor.motionType(), 'swing'); assert.deepEqual(motions, ['damage', 'swing']);
+  actor.isSpriteVisible = () => false; actor.performDamage(); assert.equal(scope.$gameScreen._shakePower, 5);
+  delete actor.isSpriteVisible; damages = 0;
+  api.step(session, {});
+  for (let frame = 0; frame < 800 && api.snapshot(session).battle.active; ++frame) {
+    if (api.snapshot(session).message.busy) api.acknowledge(session);
+    api.step(session, { ok: frame % 2 === 0 });
+  }
+  assert.ok(damages > 0, 'native damage playback must dispatch the actor alias');
+  assert.ok(motions.filter(type => type === 'damage').length > 1);
+});
+
+test('native common-event ticking honors class aliases and preserves detached interpreters', t => {
+  const data = fixture([]);
+  data.commonEvents[1] = { id: 1, trigger: 2, switchId: 1, list: [command(122, [21, 21, 1, 0, 1]), command(230, [2]), command(0)] };
+  const session = api.create(data); t.after(() => api.dispose(session));
+  const { scope } = createScriptRuntime(api, session); scope.$dataCommonEvents = data.commonEvents;
+  const initialize = scope.Game_CommonEvent.prototype.initialize, update = scope.Game_CommonEvent.prototype.update, isActive = scope.Game_CommonEvent.prototype.isActive;
+  scope.Game_CommonEvent.prototype.initialize = function(id) { initialize.call(this, id); this.pluginInitialized = true; };
+  scope.Game_CommonEvent.prototype.isActive = function() { return isActive.call(this) && scope.$gameVariables.value(3) === 7; };
+  scope.Game_CommonEvent.prototype.update = function() { this.pluginUpdates = (this.pluginUpdates || 0) + 1; return update.call(this); };
+  api.newGame(session); const common = scope.$gameMap._commonEvents[0];
+  assert.equal(common.pluginInitialized, true); assert.equal(common, scope.$gameMap._commonEvents[0]); assert.equal(common._interpreter, null);
+  scope.$gameSwitches.setValue(1, true); api.step(session, {}); assert.equal(common._interpreter, null);
+  scope.$gameVariables.setValue(3, 7); api.step(session, {});
+  assert.equal(scope.$gameVariables.value(21), 1); assert.ok(common.pluginUpdates > 0);
+  const retained = common._interpreter, saved = api.save(session);
+  assert.equal(saved.map._commonEvents[0]._interpreter._waitCount, retained._waitCount);
+  scope.$gameSwitches.setValue(1, false); api.step(session, {}); assert.equal(common._interpreter, null);
+  retained.setup([variable(22, 8), command(0)]); retained.update(); assert.equal(scope.$gameVariables.value(22), 8);
+  api.load(session, saved); const restored = scope.$gameMap._commonEvents[0], currentInterpreter = restored._interpreter;
+  assert.notEqual(restored, common); assert.equal(currentInterpreter._waitCount, saved.map._commonEvents[0]._interpreter._waitCount);
+  common.refresh(); assert.notEqual(common._interpreter, currentInterpreter); assert.equal(restored._interpreter, currentInterpreter);
+  retained.setup([variable(23, 9), command(0)]); retained.update(); assert.equal(scope.$gameVariables.value(23), 9);
 });

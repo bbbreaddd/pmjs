@@ -1,4 +1,6 @@
 'use strict';
+// RPG Maker MV behavior: Copyright (c) 2015 KADOKAWA CORPORATION./YOJI OJIMA.
+// MIT license: third_party/rpg-maker-mv.LICENSE.
 
 function installWindowDrawing(Window_Base, ImageManager, options) {
   const base = Window_Base.prototype, escape = String.fromCharCode(27);

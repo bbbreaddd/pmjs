@@ -82,6 +82,7 @@ bool SceneManager::shouldUseCanvasRenderer() {
 }
 
 void SoundManager::preloadImportantSounds(Session& session) {
+  if (session.dispatchManager("SoundManager", "preloadImportantSounds")) return;
   for (int index = 0; index < 4; ++index) loadSystemSound(session, index);
 }
 
@@ -92,36 +93,37 @@ bool SoundManager::loadSystemSound(Session& session, int index) {
 }
 
 void SoundManager::playSystemSound(Session& session, int index) {
+  if (session.dispatchManager("SoundManager", "playSystemSound", {index})) return;
   const auto& sounds = session.database()["system"]["sounds"];
   if (index >= 0 && index < static_cast<int>(sounds.array().size())) {
     AudioManager::playSe(session, sounds[index]);
   }
 }
 
-void SoundManager::playCursor(Session& session) { playSystemSound(session, 0); }
-void SoundManager::playOk(Session& session) { playSystemSound(session, 1); }
-void SoundManager::playCancel(Session& session) { playSystemSound(session, 2); }
-void SoundManager::playBuzzer(Session& session) { playSystemSound(session, 3); }
-void SoundManager::playEquip(Session& session) { playSystemSound(session, 4); }
-void SoundManager::playSave(Session& session) { playSystemSound(session, 5); }
-void SoundManager::playLoad(Session& session) { playSystemSound(session, 6); }
-void SoundManager::playBattleStart(Session& session) { playSystemSound(session, 7); }
-void SoundManager::playEscape(Session& session) { playSystemSound(session, 8); }
-void SoundManager::playEnemyAttack(Session& session) { playSystemSound(session, 9); }
-void SoundManager::playEnemyDamage(Session& session) { playSystemSound(session, 10); }
-void SoundManager::playEnemyCollapse(Session& session) { playSystemSound(session, 11); }
-void SoundManager::playBossCollapse1(Session& session) { playSystemSound(session, 12); }
-void SoundManager::playBossCollapse2(Session& session) { playSystemSound(session, 13); }
-void SoundManager::playActorDamage(Session& session) { playSystemSound(session, 14); }
-void SoundManager::playActorCollapse(Session& session) { playSystemSound(session, 15); }
-void SoundManager::playRecovery(Session& session) { playSystemSound(session, 16); }
-void SoundManager::playMiss(Session& session) { playSystemSound(session, 17); }
-void SoundManager::playEvasion(Session& session) { playSystemSound(session, 18); }
-void SoundManager::playMagicEvasion(Session& session) { playSystemSound(session, 19); }
-void SoundManager::playReflection(Session& session) { playSystemSound(session, 20); }
-void SoundManager::playShop(Session& session) { playSystemSound(session, 21); }
-void SoundManager::playUseItem(Session& session) { playSystemSound(session, 22); }
-void SoundManager::playUseSkill(Session& session) { playSystemSound(session, 23); }
+void SoundManager::playCursor(Session& session) { if (!session.dispatchManager("SoundManager", "playCursor")) playSystemSound(session, 0); }
+void SoundManager::playOk(Session& session) { if (!session.dispatchManager("SoundManager", "playOk")) playSystemSound(session, 1); }
+void SoundManager::playCancel(Session& session) { if (!session.dispatchManager("SoundManager", "playCancel")) playSystemSound(session, 2); }
+void SoundManager::playBuzzer(Session& session) { if (!session.dispatchManager("SoundManager", "playBuzzer")) playSystemSound(session, 3); }
+void SoundManager::playEquip(Session& session) { if (!session.dispatchManager("SoundManager", "playEquip")) playSystemSound(session, 4); }
+void SoundManager::playSave(Session& session) { if (!session.dispatchManager("SoundManager", "playSave")) playSystemSound(session, 5); }
+void SoundManager::playLoad(Session& session) { if (!session.dispatchManager("SoundManager", "playLoad")) playSystemSound(session, 6); }
+void SoundManager::playBattleStart(Session& session) { if (!session.dispatchManager("SoundManager", "playBattleStart")) playSystemSound(session, 7); }
+void SoundManager::playEscape(Session& session) { if (!session.dispatchManager("SoundManager", "playEscape")) playSystemSound(session, 8); }
+void SoundManager::playEnemyAttack(Session& session) { if (!session.dispatchManager("SoundManager", "playEnemyAttack")) playSystemSound(session, 9); }
+void SoundManager::playEnemyDamage(Session& session) { if (!session.dispatchManager("SoundManager", "playEnemyDamage")) playSystemSound(session, 10); }
+void SoundManager::playEnemyCollapse(Session& session) { if (!session.dispatchManager("SoundManager", "playEnemyCollapse")) playSystemSound(session, 11); }
+void SoundManager::playBossCollapse1(Session& session) { if (!session.dispatchManager("SoundManager", "playBossCollapse1")) playSystemSound(session, 12); }
+void SoundManager::playBossCollapse2(Session& session) { if (!session.dispatchManager("SoundManager", "playBossCollapse2")) playSystemSound(session, 13); }
+void SoundManager::playActorDamage(Session& session) { if (!session.dispatchManager("SoundManager", "playActorDamage")) playSystemSound(session, 14); }
+void SoundManager::playActorCollapse(Session& session) { if (!session.dispatchManager("SoundManager", "playActorCollapse")) playSystemSound(session, 15); }
+void SoundManager::playRecovery(Session& session) { if (!session.dispatchManager("SoundManager", "playRecovery")) playSystemSound(session, 16); }
+void SoundManager::playMiss(Session& session) { if (!session.dispatchManager("SoundManager", "playMiss")) playSystemSound(session, 17); }
+void SoundManager::playEvasion(Session& session) { if (!session.dispatchManager("SoundManager", "playEvasion")) playSystemSound(session, 18); }
+void SoundManager::playMagicEvasion(Session& session) { if (!session.dispatchManager("SoundManager", "playMagicEvasion")) playSystemSound(session, 19); }
+void SoundManager::playReflection(Session& session) { if (!session.dispatchManager("SoundManager", "playReflection")) playSystemSound(session, 20); }
+void SoundManager::playShop(Session& session) { if (!session.dispatchManager("SoundManager", "playShop")) playSystemSound(session, 21); }
+void SoundManager::playUseItem(Session& session) { if (!session.dispatchManager("SoundManager", "playUseItem")) playSystemSound(session, 22); }
+void SoundManager::playUseSkill(Session& session) { if (!session.dispatchManager("SoundManager", "playUseSkill")) playSystemSound(session, 23); }
 
 std::string TextManager::currencyUnit(const Session& session) {
   return session.database()["system"]["currencyUnit"].text();

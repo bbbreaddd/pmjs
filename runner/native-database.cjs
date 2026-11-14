@@ -23,7 +23,6 @@ function installDatabase(runtime, engine, session, gameRoot) {
   for (const file of databaseFiles) scope[file.name] = null;
   scope.$dataMap = null;
   manager.loadDatabase = function() {
-    writable();
     ++generation; loaded.clear(); failure = null; this._errorUrl = null;
     const test = this.isBattleTest() || this.isEventTest();
     for (const file of this._databaseFiles) this.loadDataFile(file.name, (test ? 'Test_' : '') + file.src);
@@ -31,17 +30,18 @@ function installDatabase(runtime, engine, session, gameRoot) {
   };
   manager.loadDataFile = function(name, src) {
     const map = name === '$dataMap';
-    if (!map) writable();
     const file = path.resolve(gameRoot, 'data', src);
     scope[name] = null;
+    let data;
     try {
-      const data = parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+      data = parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
       if (data === null) throw new Error('Database file contains null: ' + file);
-      scope[name] = data;
-      if (!map && published >= 0) expose(name);
-      this.onLoad(data);
-      if (!map) { loaded.add(name); ++generation; }
-    } catch (error) { this._errorUrl = file; failure = error; throw error; }
+    } catch (error) { this._errorUrl ||= file; failure ||= error; return; }
+    scope[name] = data;
+    if (!map && published >= 0) expose(name);
+    this.onLoad(data);
+    if (!map) { loaded.add(name); ++generation; }
+
   };
   const mapId = value => {
     const id = Number(value);
@@ -66,7 +66,7 @@ function installDatabase(runtime, engine, session, gameRoot) {
     scope.$dataMap = parse('{"data":[],"events":[],"width":100,"height":100,"scrollType":3}');
   };
   manager.isMapLoaded = function() { this.checkError(); return Boolean(scope.$dataMap); };
-  manager.checkError = function() { if (failure) throw failure; };
+  manager.checkError = function() { if (this._errorUrl) throw failure || new Error('Failed to load: ' + this._errorUrl); };
   manager.isDatabaseLoaded = function() {
     this.checkError();
     return this._databaseFiles.every(file => Boolean(scope[file.name]));
@@ -86,10 +86,9 @@ function installDatabase(runtime, engine, session, gameRoot) {
     isReady() {
       if (!scope.DataManager.isDatabaseLoaded()) return false;
       if (published !== generation) {
-        writable();
         const names = new Set([...scope.DataManager._databaseFiles.map(file => file.name), ...loaded]);
         for (const name of names) expose(name);
-        if (published < 0) engine.databaseInvoke(session, 'publish', tables);
+        if (published < 0) { writable(); engine.databaseInvoke(session, 'publish', tables); }
         published = generation;
       }
       return true;

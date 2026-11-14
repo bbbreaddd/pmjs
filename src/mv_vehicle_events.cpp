@@ -17,6 +17,7 @@ void Session::setupVehicles() {
   vehicleWalkingBgm_ = {}; vehicleWalkSpeed_ = 4;
   for (int type = 0; type < 3; ++type) {
     auto& vehicle = vehicles_[type]; vehicle = {}; vehicle.type = type;
+    initializeRuntimeCharacter(runtimeCharacter(-5-type), "initMembers");
     const auto& source = database_["system"][vehicleName(type)];
     vehicle.mapId = source["startMapId"].integer();
     vehicle.character.x = source["startX"].integer(); vehicle.character.y = source["startY"].integer();

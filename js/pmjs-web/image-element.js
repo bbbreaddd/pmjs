@@ -136,10 +136,17 @@ return NativeImage;
 function nativeImageFromResource(resource) {
   if (!resource) return null;
   var image = new NativeImage();
-  image._nativeImage = trackNativeResource(resource, 'image');
-  image._pmjsOwnedTextureSource = true;
-  image.width = image.naturalWidth = Number(resource.width) || 0;
-  image.height = image.naturalHeight = Number(resource.height) || 0;
-  image.complete = true;
+  image._adoptNativeResource(resource);
   return image;
 }
+NativeImage.prototype._adoptNativeResource = function(resource) {
+  if (this._pmjsCanvasOwner) this._pmjsCanvasOwner._releaseNativeCanvas();
+  else if (this._nativeCanvas) releaseNativeResource(this._nativeCanvas, 'canvas');
+  this._pmjsCanvasOwner = null; this._nativeCanvas = null; ++this._loadGeneration;
+  releaseNativeResource(this._nativeImage, 'image');
+  this._nativeImage = trackNativeResource(resource, 'image');
+  this._pmjsOwnedTextureSource = true;
+  this.width = this.naturalWidth = Number(resource.width) || 0;
+  this.height = this.naturalHeight = Number(resource.height) || 0;
+  this.complete = true;
+};

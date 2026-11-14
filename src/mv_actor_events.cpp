@@ -22,17 +22,26 @@ double Session::actorExpForLevel(const Battler& actor, int level) const {
     (6 + std::pow(level, 2) / 50 / denominator) + (level - 1) * extra + 0.5);
 }
 
+bool Session::dispatchActorMethod(Battler& actor, const std::string& method, const Value::Array& args, const std::shared_ptr<RuntimeActor>& owner) {
+  return runtimeHooks_ && runtimeHooks_->actorLifecycle && runtimeHooks_->actorLifecycle(owner ? owner : runtimeBattler(actor), method, args);
+}
 void Session::changeActorExp(Battler& actor, double exp, bool show) {
+  if (!dispatchActorMethod(actor, "changeExp", {exp, show})) changeActorExpBase(actor, exp, show);
+}
+void Session::changeActorExpBase(Battler& actor, double exp, bool show, const std::shared_ptr<RuntimeActor>& owner) {
   actor.exp[actor.classId] = std::max(exp, 0.0);
   const int lastLevel = actor.level;
   const auto lastSkills = actor.skills;
   const int maximum = database_["actors"][actor.id]["maxLevel"].integer(99);
   while (actor.level < maximum && actor.exp[actor.classId] >= actorExpForLevel(actor, actor.level + 1)) {
-    ++actor.level;
-    for (const auto& learning : database_["classes"][actor.classId]["learnings"].array())
-      if (learning["level"].integer() == actor.level) actor.skills.insert(learning["skillId"].integer());
+    if (!dispatchActorMethod(actor, "levelUp", {}, owner)) {
+      ++actor.level;
+      for (const auto& learning : database_["classes"][actor.classId]["learnings"].array())
+        if (learning["level"].integer() == actor.level) actor.skills.insert(learning["skillId"].integer());
+    }
   }
-  while (actor.level > 1 && actor.exp[actor.classId] < actorExpForLevel(actor, actor.level)) --actor.level;
+  while (actor.level > 1 && actor.exp[actor.classId] < actorExpForLevel(actor, actor.level))
+    if (!dispatchActorMethod(actor, "levelDown", {}, owner)) --actor.level;
   if (show && actor.level > lastLevel) {
     if (!message_.lines.empty()) message_.pageBreaks.insert(static_cast<int>(message_.lines.size()));
     message_.lines.emplace_back(battleMessage("levelUp", {actor.name, database_["system"]["terms"]["basic"][0].text(), std::to_string(actor.level)}));
@@ -40,8 +49,7 @@ void Session::changeActorExp(Battler& actor, double exp, bool show) {
       message_.lines.emplace_back(battleMessage("obtainSkill", {database_["skills"][skill]["name"].text()}));
     message_.busy = true; messageAge_ = 0;
   }
-  releaseEquipment(actor);
-  refreshBattler(actor);
+  if (!dispatchActorMethod(actor, "refresh", {}, owner)) { releaseEquipment(actor); refreshBattler(actor); }
 }
 
 bool Session::actorEventCommand(const EventCommand& entry) {
@@ -66,8 +74,10 @@ bool Session::actorEventCommand(const EventCommand& entry) {
     else if (code == 321) {
       const int klass = p[1].integer();
       if (database_["classes"][klass].null()) return true;
-      if (p[2].boolean()) actor.exp[klass] = actor.exp[actor.classId];
-      actor.classId = klass; changeActorExp(actor, actor.exp[klass], false);
+      if (!dispatchActorMethod(actor, "changeClass", {klass, p[2]})) {
+        if (p[2].boolean()) actor.exp[klass] = actor.exp[actor.classId];
+        actor.classId = klass; changeActorExp(actor, actor.exp[klass], false);
+      }
     }
     else if (code == 320) actor.name = p[1].text();
     else if (code == 324) actor.nickname = p[1].text();

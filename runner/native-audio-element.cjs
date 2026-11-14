@@ -4,12 +4,12 @@ function installAudioElement(scope) {
   class Audio extends scope.EventTarget {
     constructor(source) {
       super(); this._src = ''; this._volume = 1; this._offset = 0;
-      this.paused = true; this.loop = false; this.preload = 'auto'; this._buffer = null;
+      this.paused = true; this.ended=false;this.loop = false; this.preload = 'auto'; this._buffer = null;this._generation=0;this._loading=false;this._playingBuffer=null;this._loadPromise=null;
       if (source) this.src = source;
     }
     get src() { return this._src; }
     set src(value) {
-      this.pause(); this._src = String(value); this._buffer = null; this._offset = 0;
+      this.pause();++this._generation;this._loading=false;this._loadPromise=null;this._playingBuffer=null;this._src = String(value); this._buffer = null; this._offset = 0;this.ended=false;
       if (this._src) this.load();
     }
     get currentSrc() { return this.src; }
@@ -22,6 +22,7 @@ function installAudioElement(scope) {
     get currentTime() { return this.paused || !this._buffer ? this._offset : this._buffer.seek(); }
     set currentTime(value) {
       this._offset = Number(value);
+      this.ended=false;
       if (!this.paused && this._buffer) this._buffer.play(this.loop, this._offset);
     }
     get duration() { return this._buffer?._totalTime || NaN; }
@@ -33,8 +34,19 @@ function installAudioElement(scope) {
       return '';
     }
     load() {
-      if (!this.src || this._buffer) return;
-      const buffer = this._buffer = new scope.WebAudio(this.src);
+      if (!this.src || this._buffer || this._loading) return;
+      const blob=scope.pmjsResolveObjectURL?.(this.src);
+      if(blob) {
+        const generation=this._generation;this._loading=true;
+        this._loadPromise=blob.arrayBuffer().then(bytes=>{
+          if(generation!==this._generation)return;
+          this._loading=false;this._installBuffer('data:audio/octet-stream;base64,'+Buffer.from(bytes).toString('base64'));
+          if(!this.paused)this.play();
+        },()=>{if(generation===this._generation){this._loading=false;this.dispatchEvent({type:'error'});}});
+      } else this._installBuffer(this.src);
+    }
+    _installBuffer(source) {
+      const buffer = this._buffer = new scope.WebAudio(source);
       buffer.volume = this.volume;
       const update = buffer.update;
       let reportedError = false;
@@ -51,20 +63,23 @@ function installAudioElement(scope) {
       });
     }
     play() {
-      this.load();
+      if(this.ended) {this._offset=0;this.ended=false;}
+      this.paused=false;this.load();
       const buffer = this._buffer;
-      if (!buffer) return Promise.resolve();
-      this.paused = false;
+      if (!buffer) return this._loadPromise || Promise.resolve();
+      if(this._playingBuffer===buffer&&buffer.isPlaying())return Promise.resolve();
+      this._playingBuffer=buffer;
       buffer.addStopListener(() => {
         if (this._buffer === buffer && !this.paused && !this.loop) {
-          this.paused = true; this.dispatchEvent({ type: 'ended' });
+          this._offset=buffer.seek();this.paused = true;this.ended=true;this._playingBuffer=null; this.dispatchEvent({ type: 'ended' });
         }
       });
       buffer.play(this.loop, this._offset);
       return Promise.resolve();
     }
     pause() {
-      if (!this._buffer || this.paused) return;
+      if (this.paused) return;
+      if(!this._buffer){this.paused=true;return;}
       this._offset = this._buffer.seek(); this.paused = true; this._buffer.stop();
     }
   }

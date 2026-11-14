@@ -14,13 +14,19 @@ test('native scenes dispatch original methods and retain transferred sprite reso
   fs.mkdirSync(path.join(root, 'img/system'), { recursive: true });
   fs.writeFileSync(path.join(root, 'img/system/GameOver.png'), png(32, 32, new Uint8Array(32 * 32 * 4).fill(255)));
   fs.writeFileSync(path.join(root, 'img/system/Window.png'), png(192, 192, new Uint8Array(192 * 192 * 4).fill(255)));
+  fs.writeFileSync(path.join(root,'img/system/Retry.png'),Buffer.from('invalid image'));
   fs.copyFileSync(path.join(process.argv[3], 'testfont.ttf'), path.join(root, 'font.ttf'));
+  fs.writeFileSync(path.join(root,'index.html'),'<html></html>');
   fs.mkdirSync(path.join(root, 'img/tilesets'), { recursive: true });
   fs.writeFileSync(path.join(root, 'img/tilesets/B.png'), png(96, 48, new Uint8Array(96 * 48 * 4).fill(255)));
+  const tilePixels = new Uint8Array(96 * 48 * 4);
+  for (let y=0;y<48;++y) for(let x=0;x<96;++x) tilePixels.set(x<48 ? [0,0,255,255] : [255,0,0,255], (y*96+x)*4);
+  fs.writeFileSync(path.join(root, 'img/tilesets/Parity.png'), png(96,48,tilePixels));
   fs.mkdirSync(path.join(root, 'img/sv_actors'), { recursive: true });
   const actorPixels = new Uint8Array(216 * 144 * 4);
   for (let i = 0; i < actorPixels.length; i += 4) { actorPixels[i] = 255; actorPixels[i + 3] = 255; }
   fs.writeFileSync(path.join(root, 'img/sv_actors/Actor.png'), png(216, 144, actorPixels));
+  fs.writeFileSync(path.join(root, 'img/system/Shadow1.png'), png(48, 24, new Uint8Array(48 * 24 * 4)));
   fs.writeFileSync(path.join(root, 'img/system/Shadow2.png'), png(48, 24, new Uint8Array(48 * 24 * 4)));
   for (const directory of ['enemies', 'sv_enemies']) {
     fs.mkdirSync(path.join(root, 'img', directory), { recursive: true });
@@ -49,11 +55,76 @@ test('native scenes dispatch original methods and retain transferred sprite reso
   t.after(() => native.runtime.quit());
   const engine = native.mvEngine, data = fixture([]);
   data.animations = [null, { id: 1, frames: [[]], timings: [] }];
+  data.items[1].itypeId = 1;
   const session = engine.create(data);
   t.after(() => engine.dispose(session));
   engine.attach(session, { width: 32, height: 32, fontFile: 'font.ttf' });
   const runtime = createScriptRuntime(engine, session, { native }); runtime.installScenes();
   const { scope } = runtime;
+  await t.test('equipment scene commands change native equipment and preserve window selection', () => {
+    const equipData = fixture([]), equipSession = engine.create(equipData);
+    const dimensions = [scope.Graphics.boxWidth, scope.Graphics.boxHeight];
+    try {
+      engine.attach(equipSession, { width: 640, height: 480, fontFile: 'font.ttf' });
+      const r = createScriptRuntime(engine, equipSession, { native }); r.installScenes();
+      const s = r.scope;
+      for (const name of ['actors', 'classes', 'weapons', 'armors', 'states', 'system', 'skills', 'items'])
+        s['$data' + name[0].toUpperCase() + name.slice(1)] = equipData[name];
+      s.Graphics.boxWidth = 640; s.Graphics.boxHeight = 480;
+      engine.newGame(equipSession);
+      const scene = new s.Scene_Equip(); scene.create();
+      assert.equal(scene._slotWindow._actor, s.$gameActors.actor(1));
+      scene.commandEquip(); assert.equal(scene._slotWindow.index(), 0);
+      scene.onSlotOk(); assert.equal(scene._itemWindow.active, true);
+      scene.onItemCancel(); assert.equal(scene._itemWindow.index(), -1);
+      scene.commandClear(); assert.equal(scene.actor().equips()[0], null);
+      scene.commandOptimize(); assert.equal(scene.actor().equips()[0], equipData.weapons[1]);
+      assert.equal(scene._commandWindow.active, true);
+    } finally {
+      scope.Graphics.boxWidth = dimensions[0]; scope.Graphics.boxHeight = dimensions[1];
+      engine.dispose(equipSession);
+    }
+  });
+  await t.test('shop windows use native prices and window tones without stale values', () => {
+    const previousItems = scope.$dataItems, previousTone = Array.from(scope.$gameSystem.windowTone());
+    const item = { id: 1, name: 'Potion', iconIndex: 0, price: 25, itypeId: 1 };
+    const loadSystem = scope.ImageManager.loadSystem, icons = new scope.Bitmap(32, 32);
+    scope.ImageManager.loadSystem = function(name, ...args) { return name === 'IconSet' ? icons : loadSystem.call(this, name, ...args); };
+    scope.$dataItems = [null, item];
+    try {
+      const shop = new scope.Window_ShopBuy(0, 0, 200, [[0, 1, 1, 15], [0, 1, 1, 50]]);
+      assert.equal(shop.price(item), 15); shop.setMoney(14); assert.equal(shop.isEnabled(item), false);
+      const party = scope.$gameParty, gold = party.gold(), count = party.numItems(item), scene = new scope.Scene_Shop();
+      scene._item = item; scene._buyWindow = shop;
+      try {
+        party.gainGold(100 - gold); scene.doBuy(2); assert.equal(party.gold(), 70); assert.equal(party.numItems(item), count + 2);
+        scene.doSell(1); assert.equal(party.gold(), 82); assert.equal(party.numItems(item), count + 1);
+      } finally { party.gainGold(gold - party.gold()); party.gainItem(item, count - party.numItems(item)); }
+
+      shop.setMoney(15); assert.equal(shop.isEnabled(item), true); shop.select(1); assert.equal(shop.item(), item);
+      const defaults = new scope.Window_ShopBuy(0, 0, 200, [[0, 1, 0, 0]]);
+      assert.equal(defaults.price(item), 25);
+      const window = new scope.Window_Base(0, 0, 100, 100);
+      scope.$gameSystem.setWindowTone([12, -8, 20]); window.updateTone(); assert.deepEqual(Array.from(window._colorTone), [12, -8, 20]);
+    } finally { scope.ImageManager.loadSystem = loadSystem; scope.$dataItems = previousItems; scope.$gameSystem.setWindowTone(previousTone); }
+  });
+  await t.test('savefile drawing dispatches aliases with current save metadata', () => {
+    const manager = scope.DataManager, methods = ['maxSavefiles', 'isThisGameFile', 'loadSavefileInfo'];
+    const originals = methods.map(method => manager[method]), draw = scope.Window_SavefileList.prototype.drawFileId, seen = [];
+    manager.maxSavefiles = () => 2; manager.isThisGameFile = id => id === 1;
+    manager.loadSavefileInfo = id => id === 1 ? { title: 'Saved game', playtime: '0:01', characters: [] } : null;
+    scope.Window_SavefileList.prototype.drawFileId = function(id, x, y) { seen.push(id); return draw.call(this, id, x, y); };
+    try {
+      const window = new scope.Window_SavefileList(0, 0, 640, 300);
+      assert.deepEqual(seen, [1, 2]); assert.equal(window.maxItems(), 2);
+      const editor = new scope.Window_NameEdit(scope.$gameActors.actor(1), 12);
+      assert.equal(editor.name(), 'Actor 1'); editor._name = 'Edited'; assert.equal(editor.name(), 'Edited');
+      window.setMode('save'); seen.length = 0; window.refresh(); assert.deepEqual(seen, [1, 2]);
+    } finally {
+      methods.forEach((method, index) => { manager[method] = originals[index]; });
+      scope.Window_SavefileList.prototype.drawFileId = draw;
+    }
+  });
   await t.test('window escape drawing uses native icon pixels and saved plugin aliases', () => {
     const previousSystem = scope.$dataSystem; scope.$dataSystem = data.system;
     const bitmap = new scope.Bitmap(512, 32); bitmap.fillRect(32, 0, 32, 32, '#00ff00');
@@ -100,13 +171,18 @@ test('native scenes dispatch original methods and retain transferred sprite reso
     scope.PIXI = { filters: { ColorMatrixFilter } };
     const stage = new scope.Container(), background = new scope.ScreenSprite();
     background.setColor(40, 80, 120); background.opacity = 255; stage.addChild(background);
-    const filter = new ColorMatrixFilter(); stage.filters = [filter];
+    const filter = new ColorMatrixFilter(),assigned=[filter]; stage.filters = assigned;
     const capture = () => {
       native.beginFrame(); scope.Graphics.render(stage); engine.present(session); native.renderFrame();
       return Array.from(native.canvas.captureSceneRawPremultiplied().subarray(0, 4));
     };
     try {
       assert.deepEqual(capture(), [80,40,120,255]);
+      assert.notEqual(stage.filters,assigned);assert.notEqual(stage._filters,assigned);assert.notEqual(stage.filters,stage.filters);
+      assigned.length=0;const copy=stage.filters;copy.length=0;assert.deepEqual(capture(),[80,40,120,255]);
+      const raw=stage._filters;raw.length=0;assert.deepEqual(capture(),[40,80,120,255]);
+      raw.push(filter);assert.deepEqual(capture(),[80,40,120,255]);
+      stage._filters=assigned;assert.equal(stage._filters,assigned);assigned.push(filter);assert.deepEqual(capture(),[80,40,120,255]);
       filter.alpha = 0; assert.deepEqual(capture(), [40,80,120,255]);
       stage.filters = null; background.setBlack();
       const tone = new scope.ToneSprite(); tone.setTone(255, 0, 0, 0); stage.addChild(tone);
@@ -119,7 +195,66 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       layer.addChild(window); stage.addChild(layer);
       filter.alpha = 1; filter.matrix = [0,0,0,0,1, 0,0,0,0,0, 0,0,0,0,0, 0,0,0,1,0];
       layer.filters = [filter]; assert.deepEqual(capture(), [255,0,0,255]);
-    } finally { scope.PIXI = previousPixi; engine.scriptStage(session, null); }
+    } finally {for(const child of stage.children)child.filters=null;stage.filters=null;scope.PIXI = previousPixi;engine.scriptStage(session, null);}
+  });
+  await t.test('native display tree events expose actual ownership and WindowLayer removal overrides', () => {
+    const first = new scope.Container(), second = new scope.Container(), child = new scope.Sprite();
+    const events = [];
+    child.emit = function(name,parent) {
+      events.push([name,parent,this.parent,parent.children.includes(this)]); return true;
+    };
+    first.addChild(child); second.addChild(child); second.removeChild(child);
+    assert.deepEqual(events,[['added',first,first,true],['removed',first,null,false],
+      ['added',second,second,true],['removed',second,null,false]]);
+    const failure = {eventFailure:true};
+    child.emit = function() { throw failure; };
+    assert.throws(() => first.addChild(child),error => error === failure); assert.equal(child.parent,first);
+    assert.throws(() => first.removeChild(child),error => error === failure); assert.equal(child.parent,null);
+    delete child.emit;
+    const original = scope.WindowLayer.prototype.onRemoveAsAChild;
+    let calls = 0, lateCalls = 0;
+    scope.WindowLayer.prototype.onRemoveAsAChild = function() { ++calls; };
+    try {
+      const layer = new scope.WindowLayer(), content = new scope.Sprite();
+      first.addChild(layer); layer.addChild(content);
+      layer.onRemoveAsAChild = function() { ++lateCalls; };
+      first.removeChild(layer);
+      assert.equal(calls,1); assert.equal(lateCalls,0,'the removal listener retains its registered method');
+      assert.equal(layer.children[0],content); assert.equal(content.parent,layer);
+      original.call(layer); assert.equal(layer.children.length,0); assert.equal(content.parent,null);
+      scope.WindowLayer.prototype.onRemoveAsAChild = function() { ++calls; original.call(this); };
+      const aliased = new scope.WindowLayer(), sprite = new scope.Sprite();
+      aliased.addChild(sprite); first.addChild(aliased); first.removeChild(aliased);
+      assert.equal(calls,2); assert.equal(aliased.children.length,0); assert.equal(sprite.parent,null);
+    } finally { scope.WindowLayer.prototype.onRemoveAsAChild = original; }
+  });
+  await t.test('window mask overrides and window classification control native overlap clearing', () => {
+    const dimensions=['width','height','boxWidth','boxHeight'].map(name=>scope.Graphics[name]);
+    scope.Graphics.initialize(32,32);
+    const stage=new scope.Container(),background=new scope.ScreenSprite();background.setColor(0,0,255);background.opacity=255;stage.addChild(background);
+    const layer=new scope.WindowLayer();layer.move(4,6,28,26);stage.addChild(layer);
+    const first=new scope.Window(),second=new scope.Window();first.move(0,0,24,24);second.move(8,8,24,24);
+    first.padding=0;first.contents=new scope.Bitmap(24,24);first.contents.fillAll('red');layer.addChild(first,second);
+    const mask=layer._maskWindow;
+    const capture=()=> {
+      native.beginFrame();scope.Graphics.render(stage);engine.present(session);native.renderFrame();
+      const offset=(12*scope.Graphics.width+12)*4;
+      return Array.from(native.canvas.captureSceneRawPremultiplied().subarray(offset,offset+4));
+    };
+    try {
+      assert.equal(second._isWindow,true);assert.deepEqual(capture(),[0,0,255,255]);
+      layer._maskWindow=function(window,shift) {mask.call(this,window,shift);if(window===second)this._windowRect.width=0;};
+      assert.deepEqual(capture(),[255,0,0,255]);
+      const failure={maskFailure:true};layer._maskWindow=function() {throw failure;};
+      assert.throws(capture,error=>error===failure);
+      delete layer._maskWindow;assert.deepEqual(capture(),[0,0,255,255]);
+      second._isWindow=false;assert.deepEqual(capture(),[255,0,0,255]);second._isWindow=true;
+      layer._maskWindow=function(window,shift) {mask.call(this,window,shift);if(window===first)this.removeChild(window);};
+      assert.deepEqual(capture(),[255,0,0,255]);assert.equal(first.parent,null);
+    } finally {
+      delete layer._maskWindow;engine.scriptStage(session,null);scope.Graphics.initialize(dimensions[0],dimensions[1]);
+      scope.Graphics.boxWidth=dimensions[2];scope.Graphics.boxHeight=dimensions[3];
+    }
   });
   await t.test('window refresh aliases generate bitmaps consumed by native rendering', () => {
     const stage = new scope.Container(), window = new scope.Window();
@@ -135,6 +270,7 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       return Array.from(native.canvas.captureSceneRawPremultiplied().subarray(0, 4));
     };
     try {
+      window._refreshAllParts();
       assert.deepEqual(capture(), [255,0,0,255]); assert.ok(calls > 0);
       const count = calls; capture(); assert.equal(calls, count, 'unchanged native windows reuse plugin-generated parts');
       window.width = 40; assert.deepEqual(capture(), [255,0,0,255]); assert.ok(calls > count);
@@ -143,8 +279,68 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       window._colorTone[0] = 20; assert.equal(window._colorTone[0], 20);
     } finally { scope.Window.prototype._refreshFrame = original; engine.scriptStage(session, null); }
   });
+  await t.test('window refresh callbacks follow reference assignment and constructor order', () => {
+    const vm = require('node:vm');
+    const source = fs.readFileSync(path.join(__dirname, '../third_party/rpg-maker-mv/rpg_core.js'), 'utf8');
+    function ReferenceContainer() { this.children = []; }
+    ReferenceContainer.prototype.addChild = function(child) { this.children.push(child); };
+    function ReferenceSprite() { this.anchor = { x: 0, y: 0 }; }
+    const reference = vm.createContext({ PIXI: { Container: ReferenceContainer },
+      Sprite: ReferenceSprite, Bitmap: function() {}, Point: scope.Point, Rectangle: scope.Rectangle });
+    vm.runInContext(source.slice(source.indexOf('function Window()'), source.indexOf('function WindowLayer()')), reference);
+    function sequence(Type) {
+      const names = ['_createAllParts','_refreshAllParts','_refreshCursor','_refreshBack'];
+      const saved = new Map(names.map(name => [name, Type.prototype[name]]));
+      const events = [];
+      Type.prototype._createAllParts = function() {
+        events.push('create'); saved.get('_createAllParts').call(this);
+      };
+      for (const name of names.slice(1)) Type.prototype[name] = function() { events.push(name); };
+      try {
+        const window = new Type();
+        window.width = 32; window.width = 32; window.height = 32;
+        window.padding = 4; window.margin = 2;
+        window.move(3,4,32,32); window.move(3,4,40,32);
+        window.setCursorRect(1.8,2.8,8.8,9.8); window.setCursorRect(1,2,8,9);
+        window._cursorRect.x = 3;
+        const previousTone = window._colorTone;
+        window.setTone(1,2,3); window.setTone(1,2,3);
+        events.push(previousTone !== window._colorTone, previousTone[0]);
+        const cursor = window._cursorRect;
+        window.setCursorRect(4,2,8,9); events.push(cursor === window._cursorRect,cursor.x);
+        const replacement = new scope.Rectangle(5,6,7,8);
+        window._cursorRect = replacement; events.push(window._cursorRect === replacement);
+        return events;
+      } finally { for (const [name, method] of saved) Type.prototype[name] = method; }
+    }
+    assert.deepEqual(sequence(scope.Window), sequence(reference.Window));
+  });
+  await t.test('window refresh suppression preserves existing native frame pixels', () => {
+    const stage = new scope.Container(), window = new scope.Window();
+    const skin = new scope.Bitmap(192,192); skin.fillAll('white');
+    window.windowskin = skin; window.move(0,0,24,24); window.backOpacity = 0; stage.addChild(window);
+    const original = scope.Window.prototype._refreshAllParts;
+    let calls = 0;
+    scope.Window.prototype._refreshAllParts = function() { ++calls; };
+    const capture = () => {
+      native.beginFrame(); scope.Graphics.render(stage); engine.present(session); native.renderFrame();
+      const pixels = native.canvas.captureSceneRawPremultiplied();
+      return Array.from(pixels.subarray(28*4,28*4+4));
+    };
+    try {
+      window._width = 32; assert.equal(calls,0);
+      assert.deepEqual(capture(),[0,0,0,255]);
+      window.width = 32; assert.equal(calls,1);
+      assert.deepEqual(capture(),[0,0,0,255]); assert.equal(calls,1);
+      original.call(window);
+      assert.equal(window._windowFrameSprite.bitmap.width,32);
+      assert.equal(window._windowFrameSprite.bitmap.getPixel(28,2),'#ffffff');
+      assert.deepEqual(capture(),[255,255,255,255]);
+    } finally { scope.Window.prototype._refreshAllParts = original; engine.scriptStage(session,null); }
+  });
   await t.test('sprite bitmap-load aliases and mutable color arrays reach native rendering', () => {
     const bitmap = new scope.Bitmap(32, 32); bitmap.fillAll('white');
+    assert.ok(bitmap.rect instanceof scope.Rectangle); assert.equal(bitmap.rect.width,32);
     class PluginSprite extends scope.Sprite {
       _onBitmapLoad(value) { super._onBitmapLoad(value); this.loadedBitmap = value; this.setFrame(0, 0, 16, 16); }
     }
@@ -163,6 +359,317 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       assert.deepEqual(capture(), [255,0,0,255]);
       sprite.opaque = true; sprite._isPicture = true; assert.equal(sprite.opaque, true); assert.equal(sprite._isPicture, true);
     } finally { engine.scriptStage(session, null); }
+  });
+  await t.test('native filter groups consume mutable alpha and authored shader passes', () => {
+    const { installFilterCompiler } = require('../runner/native-filter-compiler.cjs');
+    const previous = { PIXI: scope.PIXI, PMJS: scope.PMJS, NativeHost: scope.NativeHost };
+    function AlphaFilter() { this.alpha = 0.5; }
+    scope.PIXI = { filters: { AlphaFilter } };
+    scope.PMJS = { config:{},rpgmaker: {}, compat: { hit() {} } };
+    runtime.runScript(fs.readFileSync(path.join(__dirname,'../js/pmjs-core/optimizations.js'),'utf8'));
+    scope.NativeHost = native;
+    installFilterCompiler(runtime);
+    const bitmap = new scope.Bitmap(4,4); bitmap.fillAll('red');
+    const sprite = new scope.Sprite(bitmap), parent = new scope.Container(); parent.addChild(sprite);
+    const capture = () => {
+      native.beginFrame(); scope.Graphics.render(parent); engine.present(session); native.renderFrame();
+      return Array.from(native.canvas.captureSceneRawPremultiplied().subarray(0,4));
+    };
+    try {
+      const alpha = new AlphaFilter(); sprite.filters = [alpha];
+      assert.ok(Math.abs(capture()[0]-128)<=1);
+      alpha.alpha = 0.25; assert.ok(Math.abs(capture()[0]-64)<=1);
+      parent.x = 3; sprite.x = 2;
+      const bounds = sprite.getBounds(); assert.equal(bounds.x,5); assert.equal(bounds.width,4);
+      parent.x = sprite.x = 0;
+      const shader = { resolution:1,padding:0,uniforms:{},
+        fragmentSrc:'precision mediump float; varying vec2 vTextureCoord; uniform sampler2D uSampler; void main(){vec4 c=texture2D(uSampler,vTextureCoord);gl_FragColor=vec4(0.0,c.r,0.0,c.a);}',
+        apply(manager,input,output,clear) {manager.applyFilter(this,input,output,clear);} };
+      sprite.filters = [shader]; assert.deepEqual(capture(),[0,255,0,255]);
+      sprite.filters = null; assert.deepEqual(capture(),[255,0,0,255]);
+    } finally {
+      sprite.filters = null; engine.scriptStage(session,null);
+      Object.assign(scope,previous);
+    }
+  });
+  await t.test('Sprite render aliases dispatch into native drawing and honor suppressed rendering', () => {
+    const bitmap=new scope.Bitmap(4,4);bitmap.fillAll('red');const sprite=new scope.Sprite(bitmap);
+    const original=scope.Sprite.prototype._renderWebGL;let calls=0,canvasCalls=0;
+    const capture=()=>{native.beginFrame();scope.Graphics.render(sprite);engine.present(session);native.renderFrame();return Array.from(native.canvas.captureSceneRawPremultiplied().subarray(0,4));};
+    try {
+      assert.deepEqual(capture(),[255,0,0,255]);
+      scope.Sprite.prototype._renderWebGL=function(renderer) {++calls;this.bitmap.fillAll('green');original.call(this,renderer);};
+      assert.deepEqual(capture(),[0,128,0,255]);assert.equal(calls,1);
+      sprite._renderWebGL=function() {};assert.deepEqual(capture(),[0,0,0,255]);
+      delete sprite._renderWebGL;assert.deepEqual(capture(),[0,128,0,255]);assert.equal(calls,2);
+      scope.Sprite.prototype._renderWebGL=original;bitmap.fillAll('red');
+      sprite._renderCanvas=function() {++canvasCalls;};assert.deepEqual(capture(),[255,0,0,255]);assert.equal(canvasCalls,0);
+      sprite._renderWebGL=function() {throw new Error('sprite render override failed');};assert.throws(capture,/sprite render override failed/);
+      delete sprite._renderWebGL;assert.deepEqual(capture(),[255,0,0,255]);
+    } finally {scope.Sprite.prototype._renderWebGL=original;delete sprite._renderWebGL;delete sprite._renderCanvas;engine.scriptStage(session,null);}
+  });
+  await t.test('tiling render aliases and blend preparation control native drawing', () => {
+    const bitmap = new scope.Bitmap(2,2); bitmap.fillAll('red');
+    const sprite = new scope.TilingSprite(bitmap); sprite.move(0,0,8,8);
+    const render = sprite._renderWebGL_PIXI;
+    let aliases = 0, preparations = 0;
+    const capture = () => {
+      native.beginFrame(); scope.Graphics.render(sprite); engine.present(session); native.renderFrame();
+      return Array.from(native.canvas.captureSceneRawPremultiplied().subarray(0,4));
+    };
+    try {
+      assert.equal(sprite.pluginName,'picture'); assert.deepEqual(capture(),[255,0,0,255]);
+      sprite._renderWebGL_PIXI = function(renderer) { ++aliases; bitmap.fillAll('blue'); render.call(this,renderer); };
+      sprite._speedUpCustomBlendModes = function() { ++preparations; };
+      assert.deepEqual(capture(),[0,0,255,255]); assert.equal(aliases,1); assert.equal(preparations,1);
+      sprite._renderWebGL_PIXI = function() {};
+      assert.deepEqual(capture(),[0,0,0,255]);
+      delete sprite._renderWebGL_PIXI; delete sprite._speedUpCustomBlendModes;
+      bitmap.fillAll('red'); assert.deepEqual(capture(),[255,0,0,255]);
+    } finally { delete sprite._renderWebGL_PIXI; delete sprite._speedUpCustomBlendModes; engine.scriptStage(session,null); }
+  });
+  await t.test('sprite object renderers and vertex overrides control native pixels', () => {
+    const bitmap=new scope.Bitmap(4,4);bitmap.fillAll('red');const sprite=new scope.Sprite(bitmap);
+    const renderer=scope.Graphics._renderer,batch=renderer.plugins.sprite,render=batch.render,calculate=sprite.calculateVertices;
+    const capture=()=> {native.beginFrame();scope.Graphics.render(sprite);engine.present(session);native.renderFrame();return native.canvas.captureSceneRawPremultiplied();};
+    const pixel=(pixels,x,y=0)=>Array.from(pixels.subarray((y*scope.Graphics.width+x)*4,(y*scope.Graphics.width+x)*4+4));
+    try {
+      assert.equal(renderer.type,1);assert.equal(renderer.width,scope.Graphics.width);
+      batch.render=function(object) {object.bitmap.fillAll('blue');render.call(this,object);};
+      assert.deepEqual(pixel(capture(),0),[0,0,255,255]);
+      batch.render=function() {};assert.deepEqual(pixel(capture(),0),[0,0,0,255]);
+      batch.render=render;bitmap.fillAll('red');
+      Object.defineProperty(sprite,'_renderWebGL',{configurable:true,writable:true,value:function(renderer) {
+        this.calculateVertices();renderer.setObjectRenderer(renderer.plugins[this.pluginName]);renderer.plugins[this.pluginName].render(this);
+      }});
+      assert.deepEqual(pixel(capture(),0),[255,0,0,255]);delete sprite._renderWebGL;
+      sprite.calculateVertices=function() {calculate.call(this);for(let i=0;i<8;i+=2)this.vertexData[i]+=6;};
+      let pixels=capture();assert.deepEqual(pixel(pixels,0),[0,0,0,255]);assert.deepEqual(pixel(pixels,6),[255,0,0,255]);
+      assert.ok(sprite.vertexData instanceof runtime.runScript('Float32Array'));
+      sprite.calculateVertices=function() {calculate.call(this);this.vertexData[0]+=2;};
+      pixels=capture();assert.deepEqual(pixel(pixels,0),[0,0,0,255]);assert.deepEqual(pixel(pixels,0,3),[255,0,0,255]);
+      delete sprite.calculateVertices;
+      const original=scope.Sprite.prototype._renderWebGL;
+      sprite._renderWebGL=function(renderer) {this.x+=5;original.call(this,renderer);};
+      assert.deepEqual(pixel(capture(),0),[255,0,0,255]);assert.equal(sprite.x,5);
+      assert.deepEqual(pixel(capture(),5),[255,0,0,255]);assert.equal(sprite.x,10);
+      sprite.x=0;sprite._renderWebGL=function(renderer) {original.call(this,renderer);};
+      const parent=new scope.Container();parent.x=8;parent.addChild(sprite);
+      const snapshot=scope.Bitmap.snap(sprite);assert.equal(snapshot.getPixel(0,0),'#ff0000');assert.equal(snapshot.getAlphaPixel(8,0),0);
+      parent.removeChild(sprite);delete sprite._renderWebGL;
+      let custom=0;const plugin={render(object) {++custom;render.call(batch,object);}};
+      renderer.plugins.custom=plugin;sprite.pluginName='custom';assert.equal(renderer.plugins.custom,plugin);
+      assert.deepEqual(pixel(capture(),0),[255,0,0,255]);assert.equal(custom,1);
+      sprite.pluginName='missing';assert.throws(capture,/Unsupported sprite object renderer: missing/);
+    } finally {batch.render=render;delete renderer.plugins.custom;delete sprite._renderWebGL;delete sprite.calculateVertices;sprite.pluginName='sprite';engine.scriptStage(session,null);}
+  });
+  await t.test('Sprite texture frames and saved tint hooks control native pixels', () => {
+    const { installSpriteTextures } = require('../runner/native-sprite-textures.cjs');
+    const textureSession=engine.create(fixture([]));
+    try {
+      engine.attach(textureSession,{width:32,height:32,fontFile:'font.ttf'});
+      const textureRuntime=createScriptRuntime(engine,textureSession,{native}), display=textureRuntime.installScenes(), guest=textureRuntime.scope;
+      function BaseTexture(source) {this.source=source;this._updateID=0;this.width=source?.width||0;this.height=source?.height||0;}
+      BaseTexture.prototype.update=function() {++this._updateID;this.width=this.source?.width||this.width;this.height=this.source?.height||this.height;};
+      BaseTexture.prototype.emit=function() {};
+      function Texture(baseTexture) {this.baseTexture=baseTexture;this.frame=new guest.Rectangle();this._updateID=0;}
+      guest.PIXI={BaseTexture,Texture,SCALE_MODES:{NEAREST:0,LINEAR:1}};guest.Bitmap.bindPixi(guest.PIXI);
+      installSpriteTextures(textureRuntime,display);
+      const bitmap=new guest.Bitmap(4,4);bitmap.fillAll('red');bitmap.fillRect(2,0,2,4,'blue');
+      const sprite=new guest.Sprite(bitmap);
+      const capture=()=>{native.beginFrame();guest.Graphics.render(sprite);engine.present(textureSession);native.renderFrame();return Array.from(native.canvas.captureSceneRawPremultiplied().subarray(0,4));};
+      assert.deepEqual(capture(),[255,0,0,255]);
+      assert.ok(sprite.texture instanceof Texture);assert.equal(sprite._realFrame.width,4);
+      sprite.texture.frame=new guest.Rectangle(2,0,2,4);assert.deepEqual(capture(),[0,0,255,255]);
+      const replacement=new guest.Bitmap(4,4);replacement.fillAll('green');
+      sprite.texture.baseTexture=replacement.baseTexture;assert.deepEqual(capture(),[0,128,0,255]);
+      sprite.texture.baseTexture=bitmap.baseTexture;sprite.texture.frame=new guest.Rectangle(0,0,4,4);
+      sprite.texture.orig=new guest.Rectangle(0,0,4,4);sprite.texture.rotate=2;
+      assert.deepEqual(capture(),[0,0,255,255]);
+      sprite.texture.rotate=0;sprite.texture.frame=new guest.Rectangle(2,0,2,4);sprite.texture.trim=new guest.Rectangle(1,1,2,4);
+      assert.deepEqual(capture(),[0,0,0,255]);sprite.x=sprite.y=-1;assert.deepEqual(capture(),[0,0,255,255]);sprite.x=sprite.y=0;
+      sprite.texture.trim=null;sprite.texture.orig=null;sprite.texture.frame=new guest.Rectangle(0,0,2,2);sprite.texture.baseTexture.resolution=2;
+      assert.deepEqual(capture(),[255,0,0,255]);
+      const scaled=native.canvas.captureSceneRawPremultiplied();assert.deepEqual(Array.from(scaled.subarray(4,8)),[0,0,255,255]);assert.deepEqual(Array.from(scaled.subarray(8,12)),[0,0,0,255]);
+      sprite.texture.baseTexture.resolution=1;
+      let tintCalls=0;
+      sprite._createTinter=function() {this._tintTexture=replacement.baseTexture;};
+      sprite._executeTint=function() {++tintCalls;replacement.fillAll('#ff00ff');};
+      sprite.setColorTone([20,0,0,0]);assert.ok(tintCalls>0);assert.deepEqual(capture(),[255,0,255,255]);
+      sprite._colorTone[0]=40;assert.ok(tintCalls>1);assert.deepEqual(capture(),[255,0,255,255]);
+      assert.equal(sprite.bitmap,bitmap);
+    } finally {engine.dispose(textureSession);}
+  });
+  await t.test('engine tilemap mutations control native map data, origin, dimensions and bitmap ownership', async () => {
+    const mapData=fixture([]);mapData.system.startX=0;mapData.system.startY=0;mapData.maps[1].width=2;mapData.maps[1].height=1;
+    mapData.maps[1].data=[0,1,...Array(10).fill(0)];mapData.maps[1].events=[null];
+    mapData.tilesets[1]={flags:[0,0],tilesetNames:['','','','','','Parity','','','']};
+    const mapSession=engine.create(mapData);
+    try {
+      engine.attach(mapSession,{width:32,height:32,fontFile:'font.ttf'});
+      const r=createScriptRuntime(engine,mapSession,{native});r.installScenes();
+      r.scope.$dataMap=r.runScript('('+JSON.stringify(mapData.maps[1])+')');
+      r.scope.$dataTilesets=r.runScript('('+JSON.stringify(mapData.tilesets)+')');
+      engine.newGame(mapSession);engine.playerTransfer(mapSession,'perform');
+      const scene=new r.scope.Scene_Map();scene.createSpriteset();
+      const tilemap=scene._spriteset._tilemap;
+      assert.equal(tilemap.parent,scene._spriteset._baseSprite);
+      assert.ok(tilemap instanceof r.scope.ShaderTilemap);
+      assert.equal(tilemap.bitmaps[5],r.scope.ImageManager.loadTileset('Parity'));
+      for(let i=0;i<100&&!tilemap.bitmaps[5].isReady();++i) {r.scope.ImageManager.update();await new Promise(resolve=>setTimeout(resolve,10));}
+      assert.equal(tilemap.bitmaps[5].isReady(),true);
+      const capture=()=> {native.beginFrame();r.scope.Graphics.render(scene);engine.present(mapSession);native.renderFrame();return Array.from(native.canvas.captureSceneRawPremultiplied().subarray(0,4));};
+      tilemap.origin.x=0;tilemap.origin.y=0;assert.deepEqual(capture(),[0,0,0,255]);
+      tilemap.origin.x=48;assert.deepEqual(capture(),[255,0,0,255]);
+      tilemap.setData(1,1,r.runScript('[1,0,0,0,0,0]'));tilemap.origin.x=0;tilemap.refresh();
+      assert.deepEqual(capture(),[255,0,0,255]);
+      tilemap.tileWidth=24;assert.deepEqual(capture(),[0,0,255,255]);
+      const green=new r.scope.Bitmap(96,48);green.fillAll('#00ff00');tilemap.bitmaps[5]=green;tilemap.refreshTileset();
+      assert.deepEqual(capture(),[0,255,0,255]);
+      tilemap.origin.x=24;assert.deepEqual(capture(),[0,0,0,255]);
+      tilemap.horizontalWrap=true;tilemap.refresh();assert.deepEqual(capture(),[0,255,0,255]);
+      green.fillAll('#ff00ff');tilemap.refreshTileset();assert.deepEqual(capture(),[255,0,255,255]);
+      const player=scene._spriteset._characterSprites.find(sprite=>sprite._character===r.scope.$gamePlayer);
+      player.bitmap=new r.scope.Bitmap(4,4);player.bitmap.fillAll('#00ff00');player.setFrame(0,0,4,4);player.anchor.set(0,0);player.position.set(0,0);
+      scene._spriteset._baseSprite.x=5;capture();const baseline=Buffer.from(native.canvas.captureSceneRawPremultiplied());
+      assert.deepEqual(Array.from(baseline.subarray(5*4,6*4)),[0,255,0,255]);
+      const render=player._renderWebGL;player._renderWebGL=function(renderer) {render.call(this,renderer);};
+      capture();const aliased=Buffer.from(native.canvas.captureSceneRawPremultiplied());
+      assert.deepEqual(Array.from(aliased.subarray(5*4,6*4)),[0,255,0,255],'an alias must preserve native map transforms');
+      assert.deepEqual(aliased,baseline);
+      scene._spriteset._baseSprite.x=0;
+      const red=new r.scope.Sprite(new r.scope.Bitmap(4,4)),greenSprite=new r.scope.Sprite(green);
+      red.bitmap.fillAll('#ff0000');greenSprite.setFrame(0,0,4,4);green.fillAll('#00ff00');
+      red.z=99;greenSprite.z=99;red.spriteId=10;greenSprite.spriteId=-2;
+      tilemap.addChild(red,greenSprite);assert.deepEqual(capture(),[255,0,0,255]);
+      red.spriteId=-3;assert.deepEqual(capture(),[0,255,0,255]);
+      tilemap._compareChildOrder=(a,b)=>a.z-b.z||b.spriteId-a.spriteId;
+      assert.deepEqual(capture(),[255,0,0,255]);
+      tilemap._sortChildren=function() {this.children.reverse();};
+      assert.deepEqual(capture(),[0,255,0,255]);
+      delete tilemap._sortChildren;delete tilemap._compareChildOrder;
+      assert.deepEqual(capture(),[0,255,0,255]);
+    } finally {engine.dispose(mapSession);}
+  });
+  await t.test('constructed tilemaps render native bitmaps and dispatch drawing and classification overrides', async () => {
+    const sheet = scope.ImageManager.loadTileset('Parity');
+    for (let attempt=0;attempt<100 && !sheet.isReady();++attempt) { scope.ImageManager.update(); await new Promise(resolve => setTimeout(resolve,5)); }
+    assert.equal(sheet.isReady(), true);
+    for (const Type of [scope.Tilemap, scope.ShaderTilemap]) {
+      const tilemap = new Type();
+      tilemap.bitmaps[5] = sheet; tilemap.flags[1] = 0;
+      tilemap.setData(1, 1, runtime.runScript('[1,0,0,0,0,0]')); tilemap.update();
+      const capture = () => {
+        native.beginFrame(); scope.Graphics.render(tilemap); engine.present(session); native.renderFrame();
+        return Array.from(native.canvas.captureSceneRawPremultiplied().subarray(0, 4));
+      };
+      try {
+        assert.deepEqual(capture(), [255,0,0,255], Type.name);
+        const blocker = new scope.Sprite(new scope.Bitmap(32, 32)); blocker.bitmap.fillAll('white'); blocker.z = 3;
+        tilemap.addChild(blocker); assert.deepEqual(capture(), [255,255,255,255]);
+        tilemap._isHigherTile = id => id === 1; tilemap.refresh(); for(let frame=0;frame<30;++frame)tilemap.update(); assert.deepEqual(capture(), [255,0,0,255]);
+        tilemap.removeChild(blocker);
+        const draw = tilemap._drawTile;
+        tilemap._drawTile = function(layer, id, x, y) {
+          draw.call(this, layer, id, x, y);
+          if (id === 1) { if (layer.addRect) layer.addRect(5,0,0,x,y,48,48); else layer.bltImage(sheet,0,0,48,48,x,y); }
+        };
+        tilemap.refresh(); for(let frame=0;frame<30;++frame)tilemap.update(); assert.deepEqual(capture(), [0,0,255,255]);
+        tilemap._readMapData = () => 0; for(let frame=0;frame<30;++frame)tilemap.update(); assert.deepEqual(capture(), [0,0,0,255]);
+      } finally { engine.scriptStage(session, null); }
+    }
+  });
+  await t.test('weather particles consume guest randomness and dispatch mutable particle hooks', () => {
+    const vm = require('node:vm');
+    const source = fs.readFileSync(path.join(__dirname, '../third_party/rpg-maker-mv/rpg_core.js'), 'utf8');
+    const reference = vm.createContext({ PIXI: { Container: function() { this.children = []; } },
+      Graphics: scope.Graphics, Point: scope.Point, Bitmap: scope.Bitmap, ScreenSprite: scope.ScreenSprite, Sprite: scope.Sprite });
+    reference.PIXI.Container.prototype.addChild = function(child) { this.children.push(child); };
+    reference.PIXI.Container.prototype.removeChild = function(child) { this.children.splice(this.children.indexOf(child), 1); };
+    vm.runInContext(source.slice(source.indexOf('function Weather()'), source.indexOf('function ToneFilter()')), reference);
+    vm.runInContext('Math.randomInt = n => Math.floor(n * 0.25)', reference);
+    const original = runtime.runScript('Math.randomInt');
+    runtime.runScript('Math.randomInt = n => Math.floor(n * 0.25)');
+    try {
+      const actual = new scope.Weather(), expected = new reference.Weather();
+      actual.power = expected.power = 0.2; actual.origin.set(7, 11); expected.origin.set(7, 11);
+      for (const type of ['rain', 'storm', 'snow', 'none']) {
+        actual.type = expected.type = type;
+        for (let frame = 0; frame < 4; ++frame) {
+          actual.update(); expected.update();
+          assert.equal(actual._sprites.length, expected._sprites.length);
+          actual._sprites.forEach((sprite, i) => {
+            for (const field of ['ax', 'ay', 'x', 'y', 'rotation', 'opacity']) assert.equal(sprite[field], expected._sprites[i][field]);
+          });
+        }
+      }
+      assert.equal(actual._sprites[0].bitmap, actual._snowBitmap);
+      actual.type = 'rain'; let updates = 0;
+      const update = actual._updateRainSprite;
+      actual._updateRainSprite = function(sprite) { ++updates; update.call(this, sprite); sprite.ax = 21; };
+      actual.update(); assert.equal(updates, 2); assert.equal(actual._sprites[0].x, 14);
+      actual._rainBitmap.fillAll('red'); assert.equal(actual._sprites[0].bitmap.getPixel(0, 0), '#ff0000');
+      actual.power = 0; actual.update(); assert.equal(actual._sprites.length, 0);
+    } finally { runtime.scope.__savedRandomInt = original; runtime.runScript('Math.randomInt = __savedRandomInt'); delete runtime.scope.__savedRandomInt; }
+  });
+  await t.test('Input gamepad mutations and array replacement match the reference', () => {
+    const vm = require('node:vm');
+    const source = fs.readFileSync(path.join(__dirname, '../third_party/rpg-maker-mv/rpg_core.js'), 'utf8');
+    const reference = vm.createContext({});
+    vm.runInContext(source.slice(source.indexOf('function Input()'),source.indexOf('function TouchInput()')),reference);
+    const pad = { index: 0, connected: true, buttons: [{ pressed: true }], axes: [0,0] };
+    function sequence(input) {
+      input.clear(); const states = input._gamepadStates, result = [];
+      input._updateGamepadState(pad); result.push(input.isPressed('ok'));
+      const buttons = states[0]; input._currentState.ok = false;
+      input._updateGamepadState(pad); result.push(input.isPressed('ok'),states[0]===buttons);
+      buttons[0] = false; input._updateGamepadState(pad); result.push(input.isPressed('ok'));
+      states[0][0] = false; input._updateGamepadState(pad); result.push(input.isPressed('ok'));
+      const replacement = [[false]]; input._gamepadStates = replacement;
+      input._currentState.ok = false; input._updateGamepadState(pad);
+      result.push(input.isPressed('ok'),input._gamepadStates===replacement);
+      input.clear(); states[0][0] = false;
+      result.push(input._gamepadStates===states,states.length);
+      return result;
+    }
+    try { assert.deepEqual(sequence(scope.Input),sequence(reference.Input)); }
+    finally { scope.Input.clear(); }
+  });
+  await t.test('native bitmap failures use replaceable guest ResourceHandler callbacks and retries', () => {
+    const resources=scope.ResourceHandler, factory=resources.createLoader, intervals=resources._defaultRetryInterval, timeout=scope.setTimeout;
+    const timers=[],created=[];
+    scope.setTimeout=(callback,delay)=>{timers.push({callback,delay});return timers.length;};
+    resources._defaultRetryInterval=runtime.runScript('[2]');
+    resources.createLoader=function(url,...args) {created.push(url);return factory.call(this,url,...args);};
+    try {
+      const bitmap=scope.Bitmap.load('img/system/Retry.png');let loaded=0;bitmap.addLoadListener(()=>++loaded);
+      assert.equal(bitmap.getAlphaPixel(0,0),0);
+      scope.ImageManager.update();assert.deepEqual(created,['img/system/Retry.png']);assert.equal(timers[0].delay,2);
+      assert.equal(bitmap.isError(),false);timers.shift().callback();
+      assert.equal(bitmap.isError(),true);assert.equal(resources.exists(),true);assert.equal(resources._reloaders.length,1);
+      fs.writeFileSync(path.join(root,'img/system/Retry.png'),png(1,1,[0,255,0,255]));
+      scope.Input._onKeyDown({keyCode:13,preventDefault(){}});
+      scope.ImageManager.update();assert.equal(bitmap.isReady(),true);assert.equal(bitmap.getPixel(0,0),'#00ff00');
+      assert.equal(loaded,1);assert.equal(resources.exists(),false);assert.equal(resources._reloaders.length,0);
+    } finally {
+      resources.createLoader=factory;resources._defaultRetryInterval=intervals;resources._reloaders.length=0;
+      scope.setTimeout=timeout;scope.SceneManager.resume();scope.Input.clear();
+    }
+  });
+  await t.test('native retry callbacks do not retain collected script sessions', {skip:!global.gc}, async () => {
+    function transient() {
+      const temporarySession=engine.create(fixture([]));engine.attach(temporarySession,{width:32,height:32,fontFile:'font.ttf'});
+      const temporaryRuntime=createScriptRuntime(engine,temporarySession,{native});temporaryRuntime.installScenes();
+      temporaryRuntime.scope.setTimeout=()=>0;
+      temporaryRuntime.scope.ImageManager.loadSystem('Window');temporaryRuntime.scope.ImageManager.update();
+      return {session:new WeakRef(temporarySession),runtime:new WeakRef(temporaryRuntime)};
+    }
+    const references=transient();
+    for(let attempt=0;attempt<20;++attempt) {
+      await new Promise(resolve=>setImmediate(resolve));global.gc();await new Promise(resolve=>setImmediate(resolve));
+      if(!references.session.deref()&&!references.runtime.deref())break;
+    }
+    assert.equal(references.session.deref(),undefined);assert.equal(references.runtime.deref(),undefined);
   });
   await t.test('Graphics dimensions preserve independent layout sizes and resize native output', () => {
     const vm = require('node:vm');
@@ -184,9 +691,81 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       const window = new scope.Window_Options();
       assert.equal(window.x, (30 - window.width) / 2);
       assert.equal(window.y, (28 - window.height) / 2);
+      const scene=new scope.Scene_Base();scene.createWindowLayer();
+      assert.equal(scene._windowLayer.x,(stock.width-stock.boxWidth)/2);assert.equal(scene._windowLayer.y,(stock.height-stock.boxHeight)/2);
+      const marker=new scope.Window();marker.padding=0;marker.move(0,0,8,8);marker.opacity=0;
+      marker.contents=new scope.Bitmap(8,8);marker.contents.fillAll('#00ff00');scene.addWindow(marker);
+      native.beginFrame();graphics.render(scene);engine.present(session);native.renderFrame();
+      const pixels=native.canvas.captureSceneRawPremultiplied(),offset=(((stock.height-stock.boxHeight)/2+4)*stock.width+(stock.width-stock.boxWidth)/2+4)*4;
+      assert.deepEqual(Array.from(pixels.subarray(offset,offset+4)),[0,255,0,255]);
+      assert.deepEqual(Array.from(pixels.subarray(0,4)),[0,0,0,255]);engine.scriptStage(session,null);
       stock.initialize(); graphics.initialize();
       for (const name of ['width', 'height', 'boxWidth', 'boxHeight']) assert.equal(graphics[name], stock[name]);
-    } finally { graphics.initialize(32, 32); }
+    } finally {engine.scriptStage(session,null);graphics.initialize(32, 32);}
+  });
+  await t.test('Graphics resize overrides and scale control native surfaces and coordinate conversion', () => {
+    const vm=require('node:vm'),graphics=scope.Graphics,update=graphics._updateAllElements,realScale=graphics._updateRealScale;
+    const source=fs.readFileSync(path.join(__dirname,'../third_party/rpg-maker-mv/rpg_core.js'),'utf8');
+    const size=native.runtime.windowState(),reference=vm.createContext({document:{},window:{innerWidth:size.width,innerHeight:size.height}});
+    vm.runInContext(source.slice(source.indexOf('function Graphics()'),source.indexOf('function Input()')),reference);
+    let calls=0;
+    try {
+      graphics.initialize(32,32);graphics._updateAllElements=function() {++calls;};
+      graphics.width=40;graphics.width=40;graphics.scale=1.5;
+      assert.equal(calls,2);assert.equal(graphics._width,40);assert.equal(graphics._scale,1.5);
+      assert.equal(native.render.presentation().sourceWidth,32,'an override may defer the logical surface resize');
+      graphics._stretchEnabled=false;update.call(graphics);
+      assert.equal(native.render.presentation().sourceWidth,40);assert.equal(native.render.presentation().viewportWidth,60);
+      assert.equal(graphics._realScale,1.5);assert.equal(graphics.boxWidth,32);
+      assert.equal(graphics.pageToCanvasX((size.width-40*1.5)/2+9),6);
+      graphics._updateRealScale=function() {this._realScale=2;};update.call(graphics);
+      assert.equal(native.render.presentation().viewportWidth,80);assert.equal(graphics._realScale,2);
+      const stage=new scope.Container();native.beginFrame();graphics.render(stage);engine.present(session);native.renderFrame();
+      assert.equal(graphics._realScale,2,'ordinary service updates preserve the overridden scale');
+      assert.equal(native.render.presentation().viewportWidth,80);engine.scriptStage(session,null);
+      graphics._updateRealScale=realScale;graphics._updateAllElements=update;
+      const stock=reference.Graphics;
+      for(const stretch of [false,true]) {
+        stock._width=40;stock._height=32;stock._scale=1.5;stock._stretchEnabled=stretch;stock._updateRealScale();
+        graphics._stretchEnabled=stretch;graphics._updateAllElements();assert.equal(graphics._realScale,stock._realScale);
+      }
+    } finally {graphics._updateAllElements=update;graphics._updateRealScale=realScale;graphics.initialize(32,32);}
+  });
+  await t.test('Graphics dimensions also update native map scrolling limits', () => {
+    const data=fixture([]);Object.assign(data.maps[1],{width:10,height:10,scrollType:0,data:Array(10*10*6).fill(0)});
+    const mapSession=engine.create(data);
+    try {
+      engine.attach(mapSession,{width:32,height:32,fontFile:'font.ttf'});
+      const r=createScriptRuntime(engine,mapSession,{native});r.installScenes();engine.newGame(mapSession);engine.playerTransfer(mapSession,'perform');
+      r.scope.Graphics.width=96;r.scope.Graphics.height=144;
+      r.scope.$gameMap.setDisplayPos(999,999);
+      assert.equal(r.scope.$gameMap.displayX(),8);assert.equal(r.scope.$gameMap.displayY(),7);
+    } finally {engine.dispose(mapSession);scope.Graphics.initialize(32,32);}
+  });
+  await t.test('Input dictionaries retain assigned objects and detach cleared state', () => {
+    const input = scope.Input, mapper = input.keyMapper;
+    assert.equal(runtime.runScript('Input instanceof Function && TouchInput instanceof Function'),true);
+    assert.throws(() => new input(),/static class/); assert.throws(() => new scope.TouchInput(),/static class/);
+    input.clear();
+    try {
+      const current = runtime.runScript('({right: "synthetic"})');
+      const previous = runtime.runScript('({})');
+      const customMapper = runtime.runScript('({65: "custom"})');
+      input._currentState = current; input._previousState = previous; input.keyMapper = customMapper;
+      assert.equal(input._currentState,current); assert.equal(input._previousState,previous);
+      assert.equal(input.keyMapper,customMapper); assert.equal(input.isPressed('right'),true);
+      input._onKeyDown({keyCode:65}); input.update();
+      assert.equal(input._currentState,current); assert.equal(input._previousState,previous);
+      assert.equal(input.isPressed('custom'),true); assert.equal(input.isTriggered('custom'),true);
+      assert.equal(previous.right,'synthetic');
+      current.right = 'changed'; input.update(); assert.equal(previous.right,'changed');
+      input._onKeyUp({keyCode:65}); input.update(); assert.equal(input.isPressed('custom'),false);
+      input.clear(); assert.notEqual(input._currentState,current); assert.notEqual(input._previousState,previous);
+      current.ok = true; previous.ok = false;
+      assert.equal(input.isPressed('ok'),false);
+      assert.equal(Object.getPrototypeOf(input._currentState),runtime.runScript('Object.prototype'));
+      assert.equal(input.keyMapper,customMapper,'clear preserves the assigned mapper');
+    } finally { input.keyMapper = mapper; input.clear(); }
   });
   await t.test('plugin repeat settings affect native repeated and long-pressed queries', () => {
     const vm = require('node:vm');
@@ -207,6 +786,18 @@ test('native scenes dispatch original methods and retain transferred sprite reso
           assert.equal(input[method]('ok'), stock[method]('ok'), method + ' frame ' + frame);
       }
     } finally { input.clear(); input.keyRepeatWait = 24; input.keyRepeatInterval = 6; }
+  });
+  await t.test('ScreenSprite legacy anchor access resets native scaling and sets opacity', () => {
+    const sprite = new scope.ScreenSprite(), warning = scope.ScreenSprite.warnYep;
+    let warnings = 0; scope.ScreenSprite.warnYep = function() { ++warnings; };
+    try {
+      sprite.scale.set(2,3); const anchor = sprite.anchor;
+      assert.equal(anchor.x,0); assert.equal(anchor.y,0); assert.equal(sprite.scale.x,1); assert.equal(sprite.scale.y,1);
+      assert.notEqual(sprite.anchor,anchor); assert.equal(warnings,2);
+      sprite.setWhite(); sprite.anchor = 128; assert.equal(sprite.opacity,128);
+      native.beginFrame(); scope.Graphics.render(sprite); engine.present(session); native.renderFrame();
+      assert.deepEqual(Array.from(native.canvas.captureSceneRawPremultiplied().subarray(0,4)),[128,128,128,255]);
+    } finally { scope.ScreenSprite.warnYep = warning; engine.scriptStage(session,null); }
   });
   await t.test('window indicators and ScreenSprite blend assignments reach native pixels', () => {
     class PluginWindow extends scope.Window {}
@@ -315,16 +906,17 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       input._onLostFocus(); assert.equal(input._latestButton, null);
     } finally { input._updateDirection = direction; input._pollGamepads = poll; input.isPressed = query; input.clear(); }
   });
-  await t.test('plugin input dictionaries and latest-button queries share native state', () => {
-    const input = scope.Input, state = input._currentState;
-    input.clear(); assert.equal(input._latestButton, null);
+  await t.test('plugin input dictionaries and latest-button queries use reference state identity', () => {
+    const input = scope.Input;
+    input.clear(); const state = input._currentState; assert.equal(input._latestButton, null);
     state.ok = true; assert.equal(input.isPressed('ok'), true);
     input._latestButton = 'ok'; assert.equal(input._latestButton, 'ok'); assert.equal(input.isTriggered('ok'), true);
     assert.equal(state[input._latestButton], true);
-    input._currentState = { cancel: true }; assert.equal(input._currentState, state);
+    const replacement = { cancel: true }; input._currentState = replacement;
+    assert.equal(input._currentState, replacement);
     assert.equal(input.isPressed('ok'), false); assert.equal(input.isPressed('cancel'), true);
-    delete state.cancel; assert.equal(state.cancel, undefined);
-    input.clear(); assert.equal(Object.keys(state).length, 0);
+    delete replacement.cancel; assert.equal(input.isPressed('cancel'), false);
+    input.clear(); assert.equal(state.ok, true); assert.notEqual(input._currentState,replacement);
   });
   await t.test('game-end scenes create native command windows and close through inherited lifecycle', () => {
     const scene = new scope.Scene_GameEnd();
@@ -335,6 +927,94 @@ test('native scenes dispatch original methods and retain transferred sprite reso
     scene._commandWindow.openness = 255; scene.stop();
     assert.equal(scene._commandWindow.closing, true);
   });
+  await t.test('window backgrounds use native dimmer pixels and track openness', () => {
+    const window = new scope.Window_Base(0, 0, 80, 80);
+    window.setBackgroundType(1);
+    const dimmer = window._dimmerSprite;
+    assert.equal(window.opacity, 0); assert.equal(dimmer.parent, window);
+    assert.equal(dimmer.bitmap.getAlphaPixel(40, 40), 153);
+    window.openness = 128; window.update(); assert.equal(dimmer.opacity, 128);
+    window.setBackgroundType(2); assert.equal(dimmer.visible, false);
+    window.setBackgroundType(0); assert.equal(window.opacity, 255);
+    window.setBackgroundType(1); assert.equal(window._dimmerSprite, dimmer);
+  });
+  await t.test('selectable scrolling, selection and help use the live native window', () => {
+    const window = new scope.Window_Selectable(0, 0, 240, 144);
+    window.maxItems = () => 20;
+    window.drawItem = () => {};
+    let refreshes = 0;
+    const refresh = window.refresh;
+    window.refresh = function() { ++refreshes; refresh.call(this); };
+    assert.equal(window.maxTopRow(), 17);
+    window.setTopRow(99); assert.equal(window.topRow(), 17);
+    window.setTopRow(17); assert.equal(refreshes, 1);
+    window.setBottomRow(4); assert.equal(window.topRow(), 2);
+    window.resetScroll(); assert.equal(window.topRow(), 0);
+    window.setCursorAll(true); assert.equal(window.cursorAll(), true);
+    const help = new scope.Window_Help();
+    window.setHelpWindow(help);
+    window.setHelpWindowItem({ description: 'Plugin item description' });
+    assert.equal(help._text, 'Plugin item description');
+    window.setHelpWindowItem(null); assert.equal(help._text, '');
+  });
+  await t.test('item windows return the original database entry selected in the native model', () => {
+    const previous = scope.$dataItems; scope.$dataItems = data.items;
+    try {
+      scope.$gameParty.gainItem(data.items[1], 1);
+      const window = new scope.Window_ItemList(0, 0, 100, 100);
+      window.select(0);
+      assert.equal(window.item(), data.items[1]); assert.equal(window.includes(data.items[1]), true);
+      const view = window._data, makeItemList = window.makeItemList;
+      window.makeItemList = function() { makeItemList.call(this); this._data.push(data.items[1]); };
+      window.refresh(); assert.equal(window.maxItems(), 2); assert.equal(window._data, view);
+      window.select(1); assert.equal(window.item(), data.items[1]);
+      window._data.splice(0, 1); assert.equal(window.maxItems(), 1);
+      assert.throws(() => { window._data = [{}]; }, /registered database/); assert.equal(window.maxItems(), 1);
+      window.makeItemList = makeItemList; window.refresh();
+      assert.equal(window.needsNumber(), true);
+      window.select(-1); assert.equal(window.item(), null);
+      scope.$gameParty.loseItem(data.items[1], 1);
+    } finally { if (previous === undefined) delete scope.$dataItems; else scope.$dataItems = previous; }
+  });
+  await t.test('scroll text fallback draws and advances a native window from message state', () => {
+    const previousSystem = scope.$dataSystem; scope.$dataSystem = data.system;
+    const message = scope.$gameMessage;
+    try {
+      message.clear(); message.setScroll(2, false); message.add('Scrolling text');
+      const window = new scope.Window_ScrollText();
+      assert.equal(window.visible, false); window.update();
+      assert.equal(window.visible, true); assert.equal(window._text, 'Scrolling text');
+      assert.equal(window.contents.height, 36); assert.equal(window.origin.y, -window.height);
+      window.isFastForward = () => false; window.update(); assert.equal(window.origin.y, -window.height + 1);
+      window.isFastForward = () => true; window.update(); assert.equal(window.origin.y, -window.height + 4);
+      window.terminateMessage(); assert.equal(message.hasText(), false); assert.equal(window.visible, false);
+    } finally { message.clear(); if (previousSystem === undefined) delete scope.$dataSystem; else scope.$dataSystem = previousSystem; }
+  });
+  await t.test('choice and event-item handlers finish native messages and write native variables', () => {
+    const message = scope.$gameMessage, previousSystem = scope.$dataSystem, previousItems = scope.$dataItems;
+    const variableData = scope.$gameVariables._data, length = variableData.length, hadValue = 87 in variableData, previousValue = variableData[87];
+    const hadGetter = Object.hasOwn(message, 'itemChoiceVariableId'), itemVariable = message.itemChoiceVariableId;
+    scope.$dataSystem = data.system; scope.$dataItems = data.items;
+    let terminated = 0, selected = -1;
+    const owner = { y: 0, height: 24, terminateMessage() { ++terminated; message.clear(); } };
+    try {
+      message.clear(); const choice = new scope.Window_ChoiceList(owner);
+      assert.equal(choice.active, false); assert.equal(choice.openness, 0);
+      message.setChoices(['First', 'Second'], 1, -2); message.setChoiceCallback(index => { selected = index; });
+      choice.start(); assert.equal(choice.maxItems(), 2); assert.equal(choice.index(), 1);
+      choice.callOkHandler(); assert.equal(selected, 1); assert.equal(terminated, 1);
+      const item = new scope.Window_EventItem(owner);
+      item._data = [data.items[1]]; item.select(0); message.itemChoiceVariableId = () => 87;
+      item.onOk(); assert.equal(engine.snapshot(session).variables[87], 1); assert.equal(terminated, 2);
+      item.onCancel(); assert.equal(engine.snapshot(session).variables[87], 0); assert.equal(terminated, 3);
+    } finally {
+      message.clear();
+      if (hadGetter) message.itemChoiceVariableId = itemVariable; else delete message.itemChoiceVariableId;
+      if (hadValue) variableData[87] = previousValue; else delete variableData[87]; variableData.length = length;
+      if (previousSystem === undefined) delete scope.$dataSystem; else scope.$dataSystem = previousSystem;
+      if (previousItems === undefined) delete scope.$dataItems; else scope.$dataItems = previousItems;
+    }
+  });
   await t.test('named command windows share their native command and selection model', () => {
     const initialize=scope.Window_PartyCommand.prototype.initialize;
     scope.Window_PartyCommand.prototype.initialize=function(...args) { initialize.apply(this,args); this.pluginMarker=17; };
@@ -344,6 +1024,10 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       assert.equal(window.maxItems(),2);
       assert.equal(window.commandSymbol(0),'fight');
       assert.equal(window.commandSymbol(1),'escape');
+      const originalName = window.commandName(0);
+      window._list[0].enabled = false; assert.equal(window.isCommandEnabled(0), false);
+      window._list = window._list.map(command => ({ ...command, name: command.name + '!' }));
+      assert.equal(window.commandName(0), originalName + '!');
       window.select(1); assert.equal(window.currentSymbol(),'escape');
       assert.equal(window.pluginMarker,17);
       window.addCommand('Custom','custom',true,42);
@@ -520,10 +1204,13 @@ test('native scenes dispatch original methods and retain transferred sprite reso
   window.contents.fillAll('#0000ff'); assert.equal(window.contents.getPixel(0, 0), '#0000ff');
   assert.throws(() => sprite.addChild(second), /cyclic/);
   const sentinel = new Error('scene exception');
+  const catchException = scope.SceneManager.catchException;
+  scope.SceneManager.catchException = error => { throw error; };
   second.update = () => { throw sentinel; };
   assert.throws(() => runtime.step(), error => error === sentinel);
   second.update = () => { assert.throws(() => scope.SceneManager.update(), /already running/); };
   runtime.step();
+  scope.SceneManager.catchException = catchException;
   await t.test('native transitions commit through script lifecycle, readiness and one scene stack', async () => {
     const data = fixture([]);
     data.system.versionId = 0;
@@ -535,6 +1222,7 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       engine.attach(session, { width: 32, height: 32, fontFile: 'font.ttf' });
       const runtime = createScriptRuntime(engine, session, { native }); runtime.installScenes();
       const { scope } = runtime, trace = [];
+      scope.SceneManager.catchException = error => { throw error; };
       scope.$dataSystem = data.system;
       scope.observeTransition = (scene, hook) => {
         assert.equal(scope.SceneManager._scene, scene);
@@ -558,7 +1246,8 @@ test('native scenes dispatch original methods and retain transferred sprite reso
             })(type, hook, type.prototype[hook]);
           }
         }
-        Scene_Map.prototype.isReady = function() { return mapReady; };
+        var originalMapReady = Scene_Map.prototype.isReady;
+        Scene_Map.prototype.isReady = function() { return mapReady && originalMapReady.call(this); };
       `);
       async function reach(type, started = false) {
         for (let frame = 0; frame < 300; ++frame) {
@@ -568,12 +1257,12 @@ test('native scenes dispatch original methods and retain transferred sprite reso
         }
         assert.fail('scene did not reach ' + type.name);
       }
-      runtime.start(); await reach(scope.Scene_Title);
+      runtime.start(); await reach(scope.Scene_Title, true);
       scope.DataManager.setupNewGame();
       assert.equal(engine.snapshot(session).scene, 0, 'game object initialization does not change the active scene');
-      for (let frame = 0; frame < 40; ++frame) runtime.step({});
+      for (let frame = 0; frame < 40; ++frame) { runtime.step({}); await new Promise(resolve => setImmediate(resolve)); }
       runtime.step({ ok: true });
-      for (let frame = 0; frame < 100 && !scope.SceneManager.isSceneChanging(); ++frame) runtime.step({});
+      for (let frame = 0; frame < 100 && !scope.SceneManager.isSceneChanging(); ++frame) { runtime.step({}); await new Promise(resolve => setImmediate(resolve)); }
       assert.equal(scope.SceneManager.isNextScene(scope.Scene_Map), true);
       const title = scope.SceneManager._scene, pendingTick = engine.snapshot(session).ticks;
       for (let frame = 0; frame < 3; ++frame) {
@@ -586,7 +1275,7 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       assert.equal(engine.snapshot(session).scene, 1);
       assert.equal(scope.SceneManager.isCurrentSceneStarted(), false);
       runtime.step({}); assert.equal(engine.snapshot(session).ticks, pendingTick, 'native map waits for script readiness');
-      scope.mapReady = true; runtime.step({});
+      scope.mapReady = true; await reach(scope.Scene_Map, true);
       assert.equal(engine.snapshot(session).ticks, pendingTick + 1);
       assert.deepEqual(trace.filter(row => row[0] === 'Scene_Title').map(row => row[1]), ['create', 'start', 'stop', 'terminate']);
       assert.deepEqual(trace.filter(row => row[0] === 'Scene_Map'), [['Scene_Map', 'create', 1], ['Scene_Map', 'start', 1]]);
@@ -660,15 +1349,16 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       scope.Sprite_Enemy.prototype.setBattler = function(enemy) { setBattler.call(this, enemy); battleEnemy = enemy; };
       engine.startBattle(session, 1, true, true);
       assert.equal(engine.snapshot(session).scene, 1);
-      await reach(scope.Scene_Battle);
+      await reach(scope.Scene_Battle, true);
       assert.equal(engine.snapshot(session).scene, 11);
       assert.deepEqual(scope.SceneManager._stack, [scope.PluginMap]);
       battleEnemy.setHp(0);
       for (let frame = 0; frame < 300 && scope.SceneManager._scene?.constructor !== scope.PluginMap; ++frame) {
         if (engine.snapshot(session).message.busy) engine.acknowledge(session);
         runtime.step({});
+        await new Promise(resolve => setImmediate(resolve));
       }
-      assert.equal(scope.SceneManager._scene?.constructor, scope.PluginMap);
+      assert.equal(scope.SceneManager._scene?.constructor, scope.PluginMap, JSON.stringify({ battle: engine.snapshot(session).battle, busy: scope.$gameMessage.isBusy(), enemyHp: battleEnemy.hp, enemyStates: Array.from(battleEnemy._states), phase: scope.BattleManager._phase, stopped: scope.SceneManager._stopped, started: scope.SceneManager.isCurrentSceneStarted(), canStep: scope.SceneManager.canStep, changing: scope.SceneManager.isSceneChanging(), nativeDriven: scope.SceneManager.nativeDriven }));
       assert.equal(engine.snapshot(session).battle.active, false);
       assert.equal(engine.snapshot(session).scene, 1);
       assert.deepEqual(scope.SceneManager._stack, []);
@@ -721,7 +1411,7 @@ test('native scenes dispatch original methods and retain transferred sprite reso
         };
       `);
       runtime.start();
-      for (let index = 0; index < 20 && !(runtime.scope.SceneManager._scene instanceof runtime.scope.Intro); ++index) {
+      for (let index = 0; index < 100 && !(runtime.scope.SceneManager._scene instanceof runtime.scope.Intro && runtime.scope.SceneManager.isCurrentSceneStarted()); ++index) {
         runtime.step({}); await new Promise(resolve => setImmediate(resolve));
       }
       assert.ok(runtime.scope.SceneManager._scene instanceof runtime.scope.Intro);
@@ -731,7 +1421,10 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       runtime.step({});
       assert.equal(engine.snapshot(session).ticks, tick + 1);
       runtime.scope.SceneManager.goto(runtime.scope.Scene_Title);
-      runtime.step({});
+      for(let frame=0;frame<180&&!(runtime.scope.SceneManager._scene instanceof runtime.scope.Scene_Title);++frame) {
+        runtime.step({});await new Promise(resolve=>setImmediate(resolve));
+      }
+      assert.ok(runtime.scope.SceneManager._scene instanceof runtime.scope.Scene_Title);
       assert.equal(engine.snapshot(session).scene, 0);
     } finally { engine.dispose(session); }
   });
@@ -766,7 +1459,7 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       touch._onMouseUp(event); runtime.step();
       assert.equal(touch.isReleased(), true); assert.equal(touch.isPressed(), false);
       assert.deepEqual(transitions.at(-1), ["_onRelease", 16, 16]);
-      touch._onWheel({ deltaX: 2, deltaY: 5 }); runtime.step();
+      touch._onWheel({ deltaX: 2, deltaY: 5, preventDefault() {} }); runtime.step();
       assert.equal(touch.wheelX, 2); assert.equal(touch.wheelY, 5);
       runtime.step(); assert.equal(touch.wheelY, 0);
       touch.clear();
@@ -884,6 +1577,7 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       assert.equal(runtime.scope.$dataActors[1], actor);
       assert.equal(engine.databaseInvoke(session, 'read', 'plugin:$dataExtra').layout, 'custom');
       engine.newGame(session);
+      engine.playerTransfer(session, 'perform');
       assert.equal(engine.save(session).actors._data[1]._name, 'Plugin Actor');
       assert.equal(engine.snapshot(session).actors[1].parameters[0], 77);
       manager.loadDataFile('$dataExtra', 'Extra.json');
@@ -901,6 +1595,7 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       engine.attach(shadowSession, { width: 32, height: 32, fontFile: 'font.ttf' });
       const shadowRuntime = createScriptRuntime(engine, shadowSession, { native }); shadowRuntime.installScenes();
       engine.newGame(shadowSession);
+      engine.playerTransfer(shadowSession, 'perform');
       const capture = () => {
         native.beginFrame(); engine.present(shadowSession); native.renderFrame();
         return native.canvas.captureSceneRawPremultiplied()[(16 * 32 + 16) * 4];
@@ -922,6 +1617,33 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       shadowRuntime.runScript('ShaderTilemap.prototype._drawShadow = originalShadow;');
       shadowRuntime.step();
       assert.ok(capture() < 200, 'restoring the default must invalidate cached geometry');
+      shadowRuntime.runScript(`
+        var originalRead = Tilemap.prototype._readMapData;
+        var readCalls = 0;
+        Tilemap.prototype._readMapData = function(x,y,z) { ++readCalls; return z === 0 ? 0 : originalRead.call(this,x,y,z); };
+      `);
+      shadowRuntime.step(); assert.equal(capture(), 0); assert.ok(shadowRuntime.scope.readCalls > 0);
+      shadowRuntime.runScript('Tilemap.prototype._readMapData = originalRead;'); shadowRuntime.step();
+      assert.ok(capture() > 60 && capture() < 200);
+      shadowRuntime.runScript(`
+        var originalDrawTile = ShaderTilemap.prototype._drawTile;
+        var drawTileCalls = 0;
+        ShaderTilemap.prototype._drawTile = function() { ++drawTileCalls; };
+      `);
+      shadowRuntime.step(); assert.equal(capture(),0); assert.ok(shadowRuntime.scope.drawTileCalls>0);
+      shadowRuntime.runScript('ShaderTilemap.prototype._drawTile = originalDrawTile;');shadowRuntime.step();
+      assert.ok(capture()>60&&capture()<200);
+      shadowRuntime.runScript(`
+        var originalPaintTiles = ShaderTilemap.prototype._paintTiles;
+        var paintCalls = 0;
+        ShaderTilemap.prototype._paintTiles = function() { ++paintCalls; };
+      `);
+      shadowRuntime.step(); const emptyPaint=capture(); assert.ok(shadowRuntime.scope.paintCalls>0,'native geometry must invoke the paint override'); assert.equal(emptyPaint,0);
+      shadowRuntime.runScript('ShaderTilemap.prototype._paintTiles = originalPaintTiles;');shadowRuntime.step();
+      assert.ok(capture()>60&&capture()<200);
+      shadowRuntime.runScript('Tilemap.isVisibleTile = function() { return false; };');shadowRuntime.step();
+      assert.equal(capture(),0);
+
     } finally { engine.dispose(shadowSession); }
   });
 
@@ -1049,6 +1771,7 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       manual.update(); assert.equal(manual._duration, 37); assert.equal(manual.frameIndex(), 0);
       observed = null;
       engine.newGame(balloonSession);
+      engine.playerTransfer(balloonSession, 'perform');
       for (let i = 0; i < 4; ++i) engine.step(balloonSession);
       assert.ok(observed instanceof Balloon);
       const retained = observed, marker = retained.marker;
@@ -1115,6 +1838,7 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       assert.throws(() => { manual._dimmerSprite = new Container(); }, /wrong native type/);
       assert.equal(manual._dimmerSprite, dimmer);
       engine.newGame(weatherSession);
+      engine.playerTransfer(weatherSession, 'perform');
       runtime.scope.$gameScreen.changeWeather('rain', 9, 0);
       const capture = () => {
         native.beginFrame(); engine.present(weatherSession); native.renderFrame();
@@ -1164,6 +1888,29 @@ test('native scenes dispatch original methods and retain transferred sprite reso
     } finally { manager.stopAll(); scope.ConfigManager.bgmVolume=volume; }
   });
 
+  await t.test('audio response overrides can defer readiness and replace bytes before native decoding', () => {
+    const audioSession=engine.create(fixture([]));
+    try {
+      engine.attach(audioSession,{width:32,height:32,fontFile:'font.ttf'});
+      const r=createScriptRuntime(engine,audioSession,{native});r.installScenes();
+      const {WebAudio}=r.scope,original=WebAudio.prototype._onXhrLoad;let response,loaded=0,responses=0;
+      WebAudio.prototype._onXhrLoad=function(xhr) {response=xhr;++responses;};
+      const audio=new WebAudio('audio/bgm/Tone.ogg');audio.addLoadListener(()=>++loaded);
+      native.beginFrame();engine.present(audioSession);native.renderFrame();
+      assert.ok(response.response instanceof r.runScript('ArrayBuffer'));assert.equal(response.response.byteLength,wave.length);
+      assert.equal(response.status,200);assert.equal(audio.isReady(),false);assert.equal(loaded,0);
+      native.beginFrame();engine.present(audioSession);native.renderFrame();assert.equal(responses,1,'a deferred response must not start another request');
+      const shorter=Buffer.from(wave.subarray(0,44+48000*4));shorter.writeUInt32LE(shorter.length-8,4);shorter.writeUInt32LE(shorter.length-44,40);
+      response.response=r.runScript('(function(bytes) {return new Uint8Array(bytes).buffer;})')(Array.from(shorter));
+      original.call(audio,response);
+      assert.equal(audio.isReady(),true);assert.equal(loaded,1);assert.equal(audio._buffer.length,48000);assert.equal(audio._totalTime,1);
+      audio.play(true,0.25);assert.equal(audio.isPlaying(),true);audio.stop();
+      WebAudio.prototype._onXhrLoad=function(xhr) {xhr.response=response.response;original.call(this,xhr);};
+      const immediate=new WebAudio('audio/bgm/Tone.ogg');
+      native.beginFrame();engine.present(audioSession);native.renderFrame();
+      assert.equal(immediate.isReady(),true);assert.equal(immediate._totalTime,1);
+    } finally {engine.dispose(audioSession);}
+  });
   await t.test('generated audio bindings share native playback, listeners and engine buffer creation', () => {
     const audioSession = engine.create(fixture([]));
     let retained;
@@ -1174,7 +1921,14 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       assert.equal(typeof WebAudio.initialize(), 'boolean');
       assert.equal(WebAudio.canPlayOgg(), true); WebAudio.setMasterVolume(1);
       const initialize = WebAudio.prototype.initialize, play = WebAudio.prototype.play;
-      const played = [];
+      const played = [], lifecycle=[];
+      for (const method of ['_load','_onLoad','_startPlaying','_readLoopComments']) {
+        const original=WebAudio.prototype[method];
+        WebAudio.prototype[method]=function(...args) {
+          if(method==='_readLoopComments') {assert.ok(args[0] instanceof runtime.runScript('Uint8Array'));assert.equal(args[0].buffer.byteLength,wave.length);}
+          lifecycle.push([method,this]);return original.apply(this,args);
+        };
+      }
       WebAudio.prototype.initialize = function(url) { initialize.call(this, url); this.pluginState = {}; };
       WebAudio.prototype.play = function(loop, offset) { played.push(this); return play.call(this, loop, offset); };
       class CustomAudio extends WebAudio { customMethod() { return this.pluginState; } }
@@ -1192,6 +1946,10 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       const present = () => { native.beginFrame(); engine.present(audioSession); native.renderFrame(); };
       present();
       assert.equal(audio.isReady(), true); assert.equal(audio.isError(), false);
+      assert.deepEqual(lifecycle.map(([method])=>method),['_load','_readLoopComments','_onLoad','_startPlaying']);
+      assert.ok(lifecycle.every(([,object])=>object===audio));
+      assert.equal(audio._autoPlay,true);assert.equal(audio._loop,true);
+      assert.equal(audio._url,'audio/bgm/Tone.ogg');
       assert.deepEqual(order, [['first', false], ['second', true], ['late', true]]);
       assert.equal(played[0], audio); assert.equal(played[1], audio);
       assert.equal(audio._buffer.length, audioFrames); assert.equal(audio._buffer.sampleRate, 48000);
@@ -1237,6 +1995,72 @@ test('native scenes dispatch original methods and retain transferred sprite reso
     assert.equal(retained._buffer.length, audioFrames);
   });
 
+  await t.test('plugin input states and query overrides drive native player movement', () => {
+    const data=fixture([]);data.maps[1].events=[null];const inputSession=engine.create(data);
+    try {
+      engine.attach(inputSession,{width:32,height:32,fontFile:'font.ttf'});
+      const r=createScriptRuntime(engine,inputSession,{native});r.installScenes();
+      engine.newGame(inputSession);engine.playerTransfer(inputSession,'perform');
+      engine.sceneControl(inputSession,'commit',1);
+      r.scope.SceneManager.initInput();
+      r.scope.Input._currentState.right=true;r.step();
+      assert.equal(engine.snapshot(inputSession).player.x,2);
+      r.scope.$gamePlayer.locate(2,1);r.scope.Input.clear();
+      const pressed=r.scope.Input.isPressed;
+      r.scope.Input.isPressed=function(name) {return name==='left'||pressed.call(this,name);};
+      r.step();assert.equal(engine.snapshot(inputSession).player.x,1);
+    } finally {engine.dispose(inputSession);}
+  });
+  await t.test('input initialization dispatches setup overrides and document events into native state', () => {
+    const {installWeb}=require('../runner/native-web.cjs'),{createStorage}=require('../runner/storage.cjs');
+    const inputSession=engine.create(fixture([]));
+    try {
+      engine.attach(inputSession,{width:32,height:32,fontFile:'font.ttf'});
+      const r=createScriptRuntime(engine,inputSession,{native});
+      installWeb(r,{native,gameRoot:root,storage:createStorage(path.join(root,'storage')),settings:{width:32,height:32}});
+      r.installScenes();const {Input,TouchInput,document}=r.scope;
+      r.runScript('Date.now=function() {return 456;};');
+      r.scope.Graphics.pageToCanvasX=x=>x;r.scope.Graphics.pageToCanvasY=y=>y;
+      const keyboardSetup=Input._setupEventHandlers,touchSetup=TouchInput._setupEventHandlers;let setups=0,triggers=0;
+      Input._setupEventHandlers=function() {++setups;keyboardSetup.call(this);};
+      TouchInput._setupEventHandlers=function() {++setups;touchSetup.call(this);};
+      const trigger=TouchInput._onTrigger;TouchInput._onTrigger=function(x,y) {++triggers;trigger.call(this,x,y);};
+      r.scope.SceneManager.initInput();assert.equal(setups,2);
+      document.dispatchEvent({type:'keydown',keyCode:13,preventDefault(){}});Input.update();assert.equal(Input.isTriggered('ok'),true);
+      assert.equal(Input.date,456);Input._date=321;assert.equal(Input.date,321);
+      document.dispatchEvent({type:'keyup',keyCode:13});Input.update();assert.equal(Input.isPressed('ok'),false);
+      document.dispatchEvent({type:'mousedown',button:0,pageX:2,pageY:3,preventDefault(){}});TouchInput.update();
+      assert.equal(triggers,1);assert.equal(TouchInput.isTriggered(),true);assert.equal(TouchInput.x,2);assert.equal(TouchInput.y,3);
+      assert.equal(TouchInput.date,456);
+      document.dispatchEvent({type:'mouseup',button:0,pageX:2,pageY:3});TouchInput.update();assert.equal(TouchInput.isReleased(),true);
+      TouchInput._events={triggered:true,cancelled:false,moved:false,released:false,wheelX:4,wheelY:-2};TouchInput._date=123;
+      const events=TouchInput._events;
+      TouchInput.update();assert.equal(TouchInput.isTriggered(),true);assert.equal(TouchInput.wheelX,4);assert.equal(TouchInput.date,123);
+      assert.equal(TouchInput._events,events);assert.equal(events.triggered,false);TouchInput.clear();assert.notEqual(TouchInput._events,events);
+      Input._currentState.ok=true;r.scope.dispatchEvent({type:'blur'});assert.equal(Input.isPressed('ok'),false);
+    } finally {engine.dispose(inputSession);}
+  });
+  await t.test('Html5Audio plays decrypted Blob sources through native audio without changing host URL state', async () => {
+    const {installWeb}=require('../runner/native-web.cjs'),{installCoreServices}=require('../runner/native-core-services.cjs');
+    const {createStorage}=require('../runner/storage.cjs');
+    const audioSession=engine.create(fixture([])),hostCreateURL=URL.createObjectURL;
+    let html;
+    try {
+      engine.attach(audioSession,{width:32,height:32,fontFile:'font.ttf'});
+      const r=createScriptRuntime(engine,audioSession,{native});
+      installWeb(r,{native,gameRoot:root,storage:createStorage(path.join(root,'storage')),settings:{width:32,height:32}});
+      r.installScenes();installCoreServices(r,engine);
+      assert.equal(URL.createObjectURL,hostCreateURL);assert.notEqual(r.scope.URL,URL);
+      const blob=new r.scope.Blob([new Uint8Array(wave)],{type:'audio/wav'});
+      assert.ok(blob.slice() instanceof r.scope.Blob);
+      const url=r.scope.URL.createObjectURL(blob);html=r.scope.Html5Audio;
+      html.setup(url);html._unlocked=true;html.play(true,0.1);await html._audioElement._loadPromise;
+      for(let frame=0;frame<3;++frame){native.beginFrame();engine.present(audioSession);native.renderFrame();}
+      assert.equal(html.isReady(),true);assert.equal(html.isPlaying(),true);assert.equal(html._audioElement.src,url);
+      assert.ok(html.seek()>=0.1-1/48000&&html.seek()<audioFrames/48000);html.volume=0.4;assert.equal(html._audioElement._buffer.volume,0.4);
+      html.stop();assert.equal(html.isPlaying(),false);r.scope.URL.revokeObjectURL(url);
+    } finally {html?.stop();engine.dispose(audioSession);}
+  });
   await t.test('native audio presentation restores its position without script bindings', () => {
     const data = fixture([]);
     data.maps[1].autoplayBgm = true;

@@ -12,10 +12,6 @@ if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
   PMJS.optimizations.register({ id: 'scene.tiling-texture-cache',
     owner: 'pmjs-pixi4',
     fallback: 're-rasterize the tiling source canvas on every use' });
-  PMJS.optimizations.register({ id: 'scene.filter-intermediate-cache', owner: 'pmjs-pixi4',
-    fallback: 'execute every authored filter pass each frame' });
-  PMJS.optimizations.register({ id: 'scene.constant-black-group', owner: 'pmjs-pixi4',
-    fallback: 'draw every source primitive of the black color-matrix group' });
   PMJS.optimizations.register({ id: 'scene.graphics-cache', owner: 'pmjs-pixi4',
     fallback: 're-rasterize vector graphics on every use' });
   PMJS.optimizations.register({ id: 'scene.retained-mesh-geometry', owner: 'pmjs-pixi4',

@@ -484,6 +484,7 @@ bool Renderer::setScreenRenderSize(int width, int height) {
 void Renderer::beginFrame() {
   clearBeforeRender_ = true;
   sceneProjection_ = {1, 0, 0, 1, 0, 0};
+  callbackWorldTransform_={1,0,0,1,0,0};
   sceneSubmittedThisFrame_ = false;
   discardCommandsFrom(0);
   images_.update();
@@ -510,7 +511,24 @@ void Renderer::discardCommandsFrom(std::size_t first) {  while (frame_.commands.
 
 void Renderer::beginCompositionGroup() {
   RenderCommand command;command.action=RenderCommand::Action::filterBegin;
-  command.filterKind=scene_packet::FilterKind::alpha;command.filterParameters[0]=1;command.color[3]=1;
+  command.filterKind=scene_packet::FilterKind::alpha;command.filterParameters[0]=1;command.color[3]=1;command.exactCompositionCopy=true;
+  frame_.commands.push_back(command);sceneSubmittedThisFrame_=true;
+}
+RenderCommand Renderer::nativeFilter(unsigned kind,std::uint32_t resource,const std::vector<float>& parameters,float resolution) {
+  if(kind>31||parameters.size()>21||!std::isfinite(resolution)||resolution<=0||resolution>16)throw std::invalid_argument("invalid native filter group");
+  for(float value:parameters)if(!std::isfinite(value))throw std::invalid_argument("native filter parameters must be finite");
+  RenderCommand command;command.action=RenderCommand::Action::filterBegin;command.filterKind=static_cast<scene_packet::FilterKind>(kind);command.color[3]=1;command.filterResolution=resolution;
+  std::copy(parameters.begin(),parameters.end(),command.filterParameters.begin());
+  if(command.filterKind==scene_packet::FilterKind::custom) {
+    auto found=filterPlans_.find(resource);
+    if(found==filterPlans_.end()||!(command.customFilterPlan=found->second.lock()))throw std::invalid_argument("native filter plan is unavailable");
+  } else if(command.filterKind==scene_packet::FilterKind::displacement||command.filterKind==scene_packet::FilterKind::alphaMask) {
+    if(!images_.lookup(resource))throw std::invalid_argument("native filter image is unavailable");command.image=resource;
+  } else if(resource)throw std::invalid_argument("unexpected native filter resource");
+  return command;
+}
+void Renderer::beginNativeFilter(const RenderCommand& command) {
+  if(command.image&&!images_.beginUse(command.image))throw std::invalid_argument("native filter image was released");
   frame_.commands.push_back(command);sceneSubmittedThisFrame_=true;
 }
 void Renderer::beginColorMatrix(const std::array<float,20>& matrix,float alpha) {
@@ -592,7 +610,7 @@ void Renderer::transformQueuedCommands(std::size_t first, const std::array<float
       command.transform = {parent[0]*local[0]+parent[2]*local[1], parent[1]*local[0]+parent[3]*local[1],
         parent[0]*local[2]+parent[2]*local[3], parent[1]*local[2]+parent[3]*local[3],
         parent[0]*local[4]+parent[2]*local[5]+parent[4], parent[1]*local[4]+parent[3]*local[5]+parent[5]};
-      if (command.spriteWorldVertices) for (auto& vertex : command.spriteVertices) vertex = point(vertex[0], vertex[1]);
+      if (command.spriteWorldVertices&&!command.absoluteSpriteVertices) for (auto& vertex : command.spriteVertices) vertex = point(vertex[0], vertex[1]);
       if (command.maskImage) {
         const auto mask = command.maskTransform;
         command.maskTransform = {parent[0]*mask[0]+parent[2]*mask[1], parent[1]*mask[0]+parent[3]*mask[1],
@@ -609,6 +627,14 @@ void Renderer::transformQueuedCommands(std::size_t first, const std::array<float
   }
 }
 
+void Renderer::setQueuedSpriteVertices(std::size_t first,const std::array<std::array<float,2>,4>& vertices) {
+  for(const auto& vertex:vertices)for(float coordinate:vertex)if(!std::isfinite(coordinate))throw std::invalid_argument("sprite vertices must be finite");
+  for(std::size_t i=first;i<frame_.commands.size();++i) {
+    auto& command=frame_.commands[i];
+    if(command.action!=RenderCommand::Action::draw||command.primitive!=RenderCommand::Primitive::sprite)throw std::invalid_argument("vertex overrides require sprite commands");
+    command.spriteWorldVertices=true;command.absoluteSpriteVertices=true;command.spriteVertices=vertices;
+  }
+}
 bool Renderer::queueImage(ImageHandle image,
                           const std::array<float, 6>& transform,
                           const std::array<float, 4>& source, float alpha,
@@ -1189,10 +1215,11 @@ std::vector<std::uint8_t> Renderer::captureDrawableRgba(AlphaMode alphaMode) {
 
 std::vector<std::uint8_t> Renderer::snapshotScene(int width,int height,const std::function<void()>& draw) {
   auto previous=std::move(frame_);
+  const auto callbackTransform=callbackWorldTransform_;callbackWorldTransform_={1,0,0,1,0,0};
   const auto projection=sceneProjection_;const bool submitted=sceneSubmittedThisFrame_,clear=clearBeforeRender_;
   const int queueWidth=queueWidth_,queueHeight=queueHeight_;
   frame_={};queueWidth_=width;queueHeight_=height;sceneProjection_={1,0,0,1,0,0};clearBeforeRender_=true;sceneSubmittedThisFrame_=false;
-  const auto restore=[&]{discardCommandsFrom(0);frame_=std::move(previous);sceneProjection_=projection;sceneSubmittedThisFrame_=submitted;clearBeforeRender_=clear;queueWidth_=queueWidth;queueHeight_=queueHeight;};
+  const auto restore=[&]{discardCommandsFrom(0);frame_=std::move(previous);sceneProjection_=projection;callbackWorldTransform_=callbackTransform;sceneSubmittedThisFrame_=submitted;clearBeforeRender_=clear;queueWidth_=queueWidth;queueHeight_=queueHeight;};
   try { if(draw)draw();auto pixels=renderToRgba(width,height);restore();return pixels; }
   catch(...) {restore();throw;}
 }

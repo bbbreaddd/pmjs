@@ -6,6 +6,7 @@
 
 namespace pmjs::mv::core {
 namespace {
+thread_local bool destroyingDisplayTree=false;
 Matrix translated(const Matrix& world,double x,double y,double sx=1,double sy=1){return multiply(world,{float(sx),0,0,float(sy),float(x),float(y)});}
 std::array<int,4> bounds(const Matrix& matrix,const Rectangle& rect) {
   const auto point=[&](double x,double y){return Point{matrix[0]*x+matrix[2]*y+matrix[4],matrix[1]*x+matrix[3]*y+matrix[5]};};
@@ -23,24 +24,33 @@ SpriteFrame spriteFrame(const Rectangle& requested,double bitmapWidth,double bit
   result.pivot={f.x-r.x,f.y-r.y};return result;
 }
 Container::Container(){static std::atomic<std::uint64_t> count{0};displayId=count++;}
-Container::~Container(){removeChildren();}
+Container::~Container(){
+  const bool previous=destroyingDisplayTree;destroyingDisplayTree=true;
+  removeChildren();destroyingDisplayTree=previous;
+}
 void Container::update(){const auto count=children.size();for(std::size_t i=0;i<count&&i<children.size();++i){auto child=children[i];if(child)child->update();}}
 void Container::addChild(std::shared_ptr<Container> child){addChildAt(std::move(child),children.size());}
 void Container::addChildAt(std::shared_ptr<Container> child,std::size_t index) {
   if(!child||child.get()==this||index>children.size())throw std::invalid_argument("invalid display child");
   for(auto* p=this;p;p=p->parent)if(p==child.get())throw std::invalid_argument("cyclic display hierarchy");
   if(child->parent)child->parent->removeChild(child.get());
-  index=std::min(index,children.size());child->parent=this;children.insert(children.begin()+index,std::move(child));
+  index=std::min(index,children.size());child->parent=this;children.insert(children.begin()+index,child);
+  const auto added=child->addedHook;if(added&&!destroyingDisplayTree)added(*this);
 }
 std::shared_ptr<Container> Container::removeChild(Container* child) {
   auto it=std::find_if(children.begin(),children.end(),[&](const auto& p){return p.get()==child;});if(it==children.end())return {};
-  auto result=*it;children.erase(it);result->parent=nullptr;result->onRemoveAsAChild();return result;
+  auto result=*it;children.erase(it);result->parent=nullptr;result->notifyRemoved(*this);return result;
 }
 void Container::removeChildren() {
   auto removed=std::move(children);
   children.clear();
   for(auto& child:removed)if(child)child->parent=nullptr;
-  for(auto& child:removed)if(child)child->onRemoveAsAChild();
+  for(auto& child:removed)if(child)child->notifyRemoved(*this);
+}
+void Container::notifyRemoved(Container& previousParent) {
+  const auto removed=removedHook;
+  if(!destroyingDisplayTree&&removed&&removed(previousParent))return;
+  onRemoveAsAChild();
 }
 Matrix Container::localTransform()const {
   const double a=std::cos(rotation+skew.y)*scale.x,b=std::sin(rotation+skew.y)*scale.x;
@@ -49,6 +59,7 @@ Matrix Container::localTransform()const {
 }
 int Container::beginFilters(Renderer& renderer) const {
   int count=0;
+  for(const auto& group:filterGroups) {renderer.beginNativeFilter(group);++count;}
   for (const auto& filter:glitchFilters) if (filter && filter->enabled) {
     if (filter->colorMatrix) renderer.beginColorMatrix(*filter->colorMatrix,float(filter->alpha));
     else if (filter->slices>0) renderer.beginNoiseGlitch(filter->seed,filter->slices,filter->offset);
@@ -58,6 +69,8 @@ int Container::beginFilters(Renderer& renderer) const {
   return count;
 }
 void Container::render(Renderer& renderer,const Matrix& parentWorld,double opacity) {
+  renderer.markSceneSubmitted();
+  const auto prepare=prepareRender;if(prepare)prepare();
   if(!visible||!renderable||alpha<=0)return;
   int filters=beginFilters(renderer);
   const auto world=multiply(parentWorld,localTransform());const double worldAlpha=opacity*alpha;
@@ -69,7 +82,7 @@ Sprite::Sprite(){spriteId=displayId;}
 Sprite::~Sprite(){bitmapLifetime_.reset();}
 void Sprite::onBitmapLoad(){if(refreshFrame_&&bitmap_){frame_.width=bitmap_->width;frame_.height=bitmap_->height;refreshFrame_=false;}refreshFrameGeometry();}
 void Sprite::refreshFrameGeometry(){pivot=spriteFrame(frame_,bitmap_?bitmap_->width:0,bitmap_?bitmap_->height:0).pivot;}
-void Sprite::setBitmap(std::shared_ptr<PixelBitmap> value){if(bitmap_==value)return;bitmap_=std::move(value);refreshFrame_=bool(bitmap_);if(!bitmap_)return;
+void Sprite::setBitmap(std::shared_ptr<PixelBitmap> value){if(bitmap_==value)return;bitmap_=std::move(value);refreshFrame_=bool(bitmap_);const auto hook=bitmapAssignedHook;if(hook&&hook(bitmap_))return;if(!bitmap_)return;
   const std::weak_ptr<int> lifetime=bitmapLifetime_;const std::weak_ptr<PixelBitmap> source=bitmap_;
   bitmap_->addLoadListener([this,lifetime,source]{if(lifetime.expired())return;if(auto bitmap=source.lock()){if(bitmap==bitmap_)onBitmapLoad();else refreshFrameGeometry();}});
 }
@@ -82,12 +95,36 @@ bool Sprite::queueFrame(Renderer& renderer,const ImageInfo& image,const Rectangl
   return renderer.queueImage(image.handle,placed,{float(frame.real.x),float(frame.real.y),float(frame.real.width),float(frame.real.height)},float(opacity),0xffffff,blend,normalizedTone,normalizedColor,nearest);
 }
 void Sprite::draw(Renderer& renderer,const Matrix& world,double opacity) {
+  if(renderHook) {
+    const auto previous=renderContext;renderContext=RenderContext{&renderer,world,opacity,multiply(renderer.callbackWorldTransform(),world)};
+    bool handled=false;
+    const auto hook=renderHook;
+    try {handled=hook();} catch(...) {renderContext=previous;throw;}
+    renderContext=previous;if(handled)return;
+  }
+  drawDefault(renderer,world,opacity);
+}
+void Sprite::drawDefault(Renderer& renderer,const Matrix& world,double opacity) {
+  if(textureOverride) {
+    const auto& texture=*textureOverride;if(!texture.bitmap||!texture.bitmap->isReady())return;
+    texture.bitmap->touch();const auto image=texture.bitmap->texture();if(!image)return;
+    if(!queueFrame(renderer,*image,texture.frame,multiply(world,{float(1/texture.resolution),0,0,float(1/texture.resolution),0,0}),opacity,blendMode,anchor,{},{},!texture.bitmap->smooth))throw std::runtime_error("cannot queue sprite texture");
+    return;
+  }
   if(!bitmap_)return;bitmap_->touch();if(!bitmap_->isReady())return;
   const auto image=bitmap_->texture();if(!image)return;
   const auto clipping=spriteFrame(frame_,image->width,image->height).pivot;
   if(!queueFrame(renderer,*image,frame_,translated(world,clipping.x,clipping.y),opacity,blendMode,anchor,colorTone_,blendColor_,!bitmap_->smooth))throw std::runtime_error("cannot queue core sprite");
 }
-void TilingSprite::draw(Renderer& renderer,const Matrix& world,double opacity) {
+void TilingSprite::drawDefault(Renderer& renderer,const Matrix& world,double opacity) {
+  if(textureOverride) {
+    const auto& texture=*textureOverride;if(!texture.bitmap||!texture.bitmap->isReady()||areaWidth<=0||areaHeight<=0)return;
+    const auto image=texture.bitmap->texture();if(!image)return;const auto resolution=texture.resolution;
+    renderer.queueTilingFrame(image->handle,multiply(world,{float(1/resolution),0,0,float(1/resolution),0,0}),
+      {float(texture.frame.x),float(texture.frame.y),float(texture.frame.width),float(texture.frame.height)},
+      {float(areaWidth*resolution),float(areaHeight*resolution)},{float(-std::floor(-origin.x+0.5)*resolution),float(-std::floor(-origin.y+0.5)*resolution)},float(opacity),blendMode,!texture.bitmap->smooth);
+    return;
+  }
   if(!bitmap_||!bitmap_->isReady()||areaWidth<=0||areaHeight<=0)return;bitmap_->touch();const auto image=bitmap_->texture();if(!image)return;
   Rectangle region=frame_;if(region.width==0&&region.height==0){region.width=bitmap_->width;region.height=bitmap_->height;}
   if(region.width<=0||region.height<=0)return;
@@ -237,8 +274,10 @@ WindowLayer::StreamState WindowLayer::begin(Renderer& renderer,const Matrix& par
 }
 void WindowLayer::renderWindow(Renderer& renderer,const StreamState& state,Window& window)const {
   if(!window.visible||window.isClosed())return;
-  const auto region=bounds(multiply(state.world,window.localTransform()),window.openBounds());
-  renderer.clearCompositionRect(region[0],region[1],region[2]-region[0],region[3]-region[1]);
+  // The mask uses layer X for both axes in the bundled MV implementation.
+  windowMaskRect={position.x+window.position.x,position.x+window.position.y+window.height/2*(1-window.openness/255),window.width,window.height*window.openness/255};
+  const auto hook=maskHook;if(hook)if(const auto rectangle=hook(window))windowMaskRect=*rectangle;
+  renderer.clearCompositionRect(float(windowMaskRect.x),float(windowMaskRect.y),float(windowMaskRect.width),float(windowMaskRect.height));
   window.render(renderer,state.world,state.opacity);
 }
 void WindowLayer::end(Renderer& renderer,const StreamState& state)const {
@@ -246,12 +285,13 @@ void WindowLayer::end(Renderer& renderer,const StreamState& state)const {
   renderer.clipQueuedCommands(state.firstCommand,bounds(state.world,{0,0,width,height}));
 }
 void WindowLayer::render(Renderer& renderer,const Matrix& parentWorld,double parentAlpha) {
+  const auto prepare=prepareRender;if(prepare)prepare();
   if(!visible||!renderable)return;
   int filters=beginFilters(renderer);
   const auto state=begin(renderer,parentWorld,parentAlpha);
-  for(const auto& child:children)if(auto* window=dynamic_cast<Window*>(child.get()))renderWindow(renderer,state,*window);
+  for(std::size_t index=0;index<children.size();++index) {const auto child=children[index];if(auto* window=dynamic_cast<Window*>(child.get());window&&window->isWindow)renderWindow(renderer,state,*window);}
   end(renderer,state);
-  for(const auto& child:children)if(child&&!dynamic_cast<Window*>(child.get()))child->render(renderer,state.world,state.opacity);
+  for(std::size_t index=0;index<children.size();++index) {const auto child=children[index];if(child) {const auto* window=dynamic_cast<Window*>(child.get());if(!window||!window->isWindow)child->render(renderer,state.world,state.opacity);}}
   while (filters-- > 0) renderer.endCompositionGroup();
 }
 }

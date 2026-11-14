@@ -61,17 +61,17 @@ bool Session::updateSceneTransition(bool fadeComplete) {
   return true;
 }
 void Session::configure(const Value& configuration) {
-  Value merged = ConfigManager::save(*this);
-  auto& data = std::get<Value::Object>(merged.data);
   const std::array<const char*, 4> keys{"bgmVolume", "bgsVolume", "meVolume", "seVolume"};
+  auto volumes = volumes_;
   for (int i = 0; i < 4; ++i) if (!configuration[keys[i]].null()) {
-    const int volume = configuration[keys[i]].integer();
-    if (volume < 0 || volume > 100) throw std::invalid_argument("volume must be between zero and one hundred");
-    data[keys[i]] = Value{volume};
+    const double volume = configuration[keys[i]].number();
+    if (!std::isfinite(volume) || volume < 0 || volume > 100) throw std::invalid_argument("volume must be between zero and one hundred");
+    volumes[i] = volume;
   }
-  if (!configuration["alwaysDash"].null()) data["alwaysDash"] = Value{configuration["alwaysDash"].boolean()};
-  if (!configuration["commandRemember"].null()) data["commandRemember"] = Value{configuration["commandRemember"].boolean()};
-  ConfigManager::load(*this, merged);
+  volumes_ = volumes;
+  if (!configuration["alwaysDash"].null()) alwaysDash_ = configuration["alwaysDash"].boolean();
+  if (!configuration["commandRemember"].null()) commandRemember_ = configuration["commandRemember"].boolean();
+  ++configurationRevision_;
 }
 Value Session::configuration() const { return ConfigManager::save(*this); }
 void Session::audio(const std::string& kind, const Value& sound, bool restart) {
@@ -410,18 +410,7 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
     sound(1);
     if (selected.symbol == "fight") { ui_.category = 0; ui_.cursor = 0; ui_.actor = battle_.actorIndex; ui_.commandActor = -1; }
     else if (selected.symbol == "escape") {
-      SoundManager::playEscape(*this);
-      if (battle_.preemptive || random() < battle_.escapeRatio) finishBattle(1);
-      else {
-        battle_.escapeRatio += 0.1;
-        battle_.actions.erase(std::remove_if(battle_.actions.begin(), battle_.actions.end(), [](const Action& action) { return !action.enemy; }), battle_.actions.end());
-        battle_.actorIndex = static_cast<int>(battleMemberCount());
-        std::fill(battle_.remainingActions.begin(),battle_.remainingActions.end(),0);
-        battle_.log.clear();
-        message_ = {}; message_.busy = true; messageAge_ = 0;
-        message_.lines = {battleMessage("escapeStart", {partyName()}), battleMessage("escapeFailure")};
-        beginTurn();
-      }
+      if (!dispatchManager("BattleManager", "processEscape")) invokeGameDataBase("battle", "processEscape", {});
     }
     return;
   }
@@ -621,7 +610,7 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
       entries = inBattle ? Window_BattleItem::makeItemList(*this) : Window_ItemList::makeItemList(*this, categories[std::clamp(ui_.slot,0,3)].symbol);
     }
     if (!ui_.listMemoryApplied) {
-      const int remembered = skill ? (inBattle ? actors_.at(party_[ui_.actor]).lastBattleSkill : actors_.at(party_[ui_.actor]).lastMenuSkill) : lastItemId_;
+      const int remembered = skill ? (inBattle ? actors_.at(party_[ui_.actor]).lastBattleSkill : actors_.at(party_[ui_.actor]).lastMenuSkill) : lastItemKind_ == 2 ? lastItemId_ : lastItemKind_ == 3 ? 100000 + lastItemId_ : lastItemKind_ == 4 ? 200000 + lastItemId_ : 0;
       const auto found = std::find(entries.begin(),entries.end(),remembered);
       ui_.cursor = found == entries.end() ? 0 : static_cast<int>(found-entries.begin()); ui_.listMemoryApplied = true;
       ui_.listTopRow = Window_Selectable::visibleTopRow(ui_.cursor, 0, static_cast<int>(entries.size()), 2, ui_.listPageRows);
@@ -645,7 +634,7 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
       ui_.target = inBattle ? ui_.category : -1; ui_.listCursor = ui_.cursor;
       ui_.pendingId = entries[ui_.cursor]; ui_.itemAction = !skill;
       if (skill) { auto& actor = actors_.at(party_[ui_.actor]); (inBattle ? actor.lastBattleSkill : actor.lastMenuSkill) = ui_.pendingId; }
-      else lastItemId_ = ui_.pendingId;
+      else { lastItemKind_ = ui_.pendingId / 100000 + 2; lastItemId_ = ui_.pendingId % 100000; }
       const int scope = entry["scope"].integer();
       if (!inBattle && scope <= 6) {
         if (!useItemUntargeted(ui_.pendingId, !ui_.itemAction)) { sound(3); return; }

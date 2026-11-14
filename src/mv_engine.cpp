@@ -142,7 +142,7 @@ void Session::commitScriptScene(std::optional<Scene> scene) {
   if (scene && ui_.scene != *scene) { ui_ = {}; ui_.scene = *scene; }
 }
 
-void Session::newGame() {
+void Session::newGame(bool setupStartingState) {
   gameObjectsInitialized_ = true;
   const Ui previousUi = ui_;
   const bool scriptScenes = runtimeHooks_ && runtimeHooks_->scene && runtimeHooks_->scene("ownsScenes", 0).value_or(false);
@@ -151,7 +151,7 @@ void Session::newGame() {
   choiceWindow_.reset(); numberWindow_.reset(); eventItemWindow_.reset();
   newGamePending_ = false; titleWindowOpenness_ = 255;
   sceneFadeOpacity_ = 0; sceneFadeDuration_ = 0;
-  lastItemId_ = 0; menuActorId_ = 0; targetActorId_ = 0;
+  lastItemKind_ = 0; lastItemId_ = 0; menuActorId_ = 0; targetActorId_ = 0;
   ++presentationRevision_; battleTest_ = false;
   switches_.clear(); variables_.clear(); selfSwitches_.clear(); inventory_.clear();
   switchDataLength_ = variableDataLength_ = 0;
@@ -159,14 +159,18 @@ void Session::newGame() {
   moviePlaying_ = false; movieExplicitSource_ = false; movieRequest_ = 0; movieName_.clear();
   reservedCommonEvent_ = 0;
   sceneStack_.clear(); messageOwnerSerial_ = 0; nextInterpreterSerial_ = 0;
-  party_.clear(); events_.clear(); interpreter_ = {}; message_ = {}; closingMessage_.reset(); player_ = {};
+  party_.clear(); events_.clear(); interpreter_ = {}; message_ = {}; closingMessage_.reset();
   dispatchGameDataMutation("map", "initialize", {});
+  followers_.resize(3);
   for (auto& follower : followers_) { follower = {}; follower.through = true; }
   uiHitTargets_.clear(); previousUiButtons_.clear(); previousDebug_ = false;
   actors_.clear(); battle_ = {}; ui_ = scriptScenes ? previousUi : Ui{}; system_ = {}; gold_ = 0; steps_ = 0; brightness_ = 255; fadeOut_ = 0;
   pictures_.clear(); pictureSprites_.clear(); ambience_ = {}; savedCamera_.reset();
   audioCommands_.clear(); previousCancel_ = false; directionAge_ = 0; previousDirection_ = 0;
   screenEffects_ = {};
+  dispatchGameDataMutation("temp", "initialize", {});
+  dispatchGameDataMutation("system", "initialize", {});
+  dispatchGameDataMutation("screen", "initialize", {});
   savedBgm_ = {}; savedBgs_ = {}; saveRequested_ = false; loadRequested_ = false; menuCalling_ = false;
   timerFrames_ = 0; timerWorking_ = false;
   ticks_ = 0; previousOk_ = false; finished_ = false;
@@ -177,19 +181,20 @@ void Session::newGame() {
   transferFadeStarted_ = false;
   pendingScene_.reset(); pendingLoadBgm_ = {}; pendingLoadBgs_ = {}; pendingLoadFrames_ = 0; pendingLoadMapUpdated_ = false;
   interpreter_.waitingRoute.reset();
-  DataManager::selectSavefileForNewGame(*this);
+  if (setupStartingState) DataManager::selectSavefileForNewGame(*this);
   const auto& system = database_["system"];
+  initializeRuntimeCharacter(runtimeCharacter(-1), "initialize");
   dispatchGameDataMutation("party", "initialize", {});
-  for (const auto& id : system["partyMembers"].array()) { party_.push_back(id.integer()); initializeActor(id.integer()); }
+  if (setupStartingState) for (const auto& id : system["partyMembers"].array()) { party_.push_back(id.integer()); initializeActor(id.integer()); }
   if (!party_.empty()) {
     const auto& actor = actors_.at(party_[0]);
     player_.characterName = actor.characterName;
     player_.characterIndex = actor.characterIndex;
   }
   player_.transparent = system["optTransparent"].boolean();
-  if (scriptScenes) reservePlayerTransfer(system["startMapId"].integer(), system["startX"].integer(), system["startY"].integer(), 2, 0);
-  else transfer(system["startMapId"].integer(), system["startX"].integer(), system["startY"].integer(), 2);
-  dispatchMessage("clear");
+  if (setupStartingState && scriptScenes) reservePlayerTransfer(system["startMapId"].integer(), system["startX"].integer(), system["startY"].integer(), 2, 0);
+  else if (setupStartingState) transfer(system["startMapId"].integer(), system["startX"].integer(), system["startY"].integer(), 2);
+  dispatchMessage("initialize");
 }
 
 void Session::reservePlayerTransfer(int mapId, int x, int y, int direction, int fadeType) {
@@ -229,7 +234,7 @@ void Session::transfer(int id, int x, int y, int direction) {
 
 void Session::initializeMap() {
   detachRuntimeEntities(false);
-  mapId_ = 0; mapState_ = {}; events_.clear(); commonInterpreters_.clear();
+  mapId_ = 0; mapState_ = {}; events_.clear(); commonInterpreters_.clear(); runtimeCommonEvents_.clear();
   interpreter_ = {}; destination_.reset(); mapTouchCount_ = 0;
   savedCamera_.reset(); cameraTarget_.reset();
   refreshNeeded_ = false;
@@ -247,15 +252,17 @@ void Session::setupMap(int id) {
   mapId_ = id;
   detachRuntimeEntities(false);
   if (cameraTarget_) cameraTarget_ = runtimeCharacter(-1);
-  setupMapState(); commonInterpreters_.clear();
+  setupMapState(); commonInterpreters_.clear(); runtimeCommonEvents_.clear();
   events_.clear();
   events_.reserve(map()["events"].array().size());
   for (const auto& data : map()["events"].array()) {
     if (data.null()) continue;
     Event event; event.id = data["id"].integer();
-    event.character.x = data["x"].integer(); event.character.y = data["y"].integer();
-    event.character.realX = event.character.x; event.character.realY = event.character.y;
     events_.push_back(event);
+    auto& created = events_.back();
+    initializeRuntimeCharacter(runtimeCharacter(created.id), "initMembers");
+    created.character.x = data["x"].integer(); created.character.y = data["y"].integer();
+    created.character.realX = created.character.x; created.character.realY = created.character.y;
   }
   refreshNeeded_ = true; refreshIfNeeded();
   dispatchGameDataMutation("map", "setupScroll", {});
@@ -278,6 +285,11 @@ void Session::centerPlayer() {
   if (cameraTarget_ && &cameraTarget_->value() != &player_) return;
   const double visibleX = double(screenWidth_) / tileWidth(), visibleY = double(screenHeight_) / tileHeight();
   const double x = player_.realX - (visibleX - 1) / 2, y = player_.realY - (visibleY - 1) / 2;
+  dispatchGameDataMutation("map", "setDisplayPos", {x, y});
+}
+
+void Session::setDisplayPosition(double x, double y) {
+  const double visibleX = double(screenWidth_) / tileWidth(), visibleY = double(screenHeight_) / tileHeight();
   const double width = map()["width"].number(), height = map()["height"].number();
   const double endX = width - visibleX, endY = height - visibleY;
   const double displayX = loopHorizontal() ? std::fmod(std::fmod(x, width) + width, width) : endX < 0 ? endX / 2 : std::clamp(x, 0.0, endX);
@@ -303,36 +315,44 @@ void Session::refresh() {
   for (auto& event : events_) {
     const auto& pages = map()["events"][event.id]["pages"].array();
     int selected = -1;
-    if (!event.erased) for (int i = static_cast<int>(pages.size()) - 1; i >= 0; --i) if (pageEligible(pages[i], event.id)) { selected = i; break; }
+    const auto object = runtimeHooks_ && (runtimeHooks_->eventPage || runtimeHooks_->characterLifecycle) ? runtimeCharacter(event.id) : nullptr;
+    const auto scripted = !event.erased && object && runtimeHooks_->eventPage ? runtimeHooks_->eventPage(object) : std::optional<int>{};
+    if (scripted) selected = *scripted;
+    else if (!event.erased) for (int index = static_cast<int>(pages.size()) - 1; index >= 0; --index) if (pageEligible(pages[index], event.id)) { selected = index; break; }
+    if (selected < -1 || selected >= static_cast<int>(pages.size())) throw std::invalid_argument("event page selection is outside its page range");
     if (selected == event.page) continue;
     event.page = selected; event.parallel = {};
-    if (selected < 0) {
-      event.character.characterName.clear(); event.character.characterIndex = 0; event.character.tileId = 0;
-      event.moveType = 0; event.trigger = 0; event.character.through = true;
-      continue;
-    }
-    const auto& p = pages[selected]; const auto& image = p["image"];
-    event.moveType = p["moveType"].integer();
-    event.trigger = p["trigger"].integer(); event.priority = p["priorityType"].integer();
-    event.character.through = p["through"].boolean();
-    event.character.directionFix = p["directionFix"].boolean();
-    event.character.walkAnime = p["walkAnime"].boolean(); event.character.stepAnime = p["stepAnime"].boolean();
-    event.character.moveSpeed = p["moveSpeed"].integer(3);
-    event.character.moveFrequency = p["moveFrequency"].integer(3);
-    event.character.characterName = image["characterName"].text(); event.character.characterIndex = image["characterIndex"].integer();
-    event.character.tileId = image["tileId"].integer();
-    event.character.route = p["moveRoute"]["list"].array(); event.character.routeIndex = 0;
-    event.character.routeRepeat = p["moveRoute"]["repeat"].boolean(); event.character.routeSkippable = p["moveRoute"]["skippable"].boolean();
-    event.character.routeForcing = false; event.character.routeWait = 0;
-    const int direction = image["direction"].integer(2), pattern = image["pattern"].integer(1);
-    if (event.originalDirection != direction) {
-      event.originalDirection = direction; event.character.direction = direction; event.prelockDirection = 0;
-    }
-    if (event.originalPattern != pattern) {
-      event.originalPattern = pattern; event.character.pattern = pattern;
-    }
+    if (!object || !runtimeHooks_->characterLifecycle || !runtimeHooks_->characterLifecycle(object, "setupPage")) setupEventPage(event);
   }
   refreshCommonEvents();
+}
+void Session::setupEventPage(Event& event) {
+  if (event.page < 0) {
+    event.character.characterName.clear(); event.character.characterIndex = 0; event.character.tileId = 0;
+    event.moveType = 0; event.trigger = 0; event.character.through = true;
+    return;
+  }
+  const auto& p = map()["events"][event.id]["pages"][event.page]; const auto& image = p["image"];
+  event.moveType = p["moveType"].integer();
+  event.trigger = p["trigger"].integer(); event.priority = p["priorityType"].integer();
+  event.character.through = p["through"].boolean();
+  event.character.directionFix = p["directionFix"].boolean();
+  event.character.walkAnime = p["walkAnime"].boolean(); event.character.stepAnime = p["stepAnime"].boolean();
+  event.character.moveSpeed = p["moveSpeed"].integer(3);
+  event.character.moveFrequency = p["moveFrequency"].integer(3);
+  event.character.characterName = image["characterName"].text(); event.character.characterIndex = image["characterIndex"].integer();
+  event.character.tileId = image["tileId"].integer();
+  event.character.route = p["moveRoute"]["list"].array(); event.character.routeIndex = 0;
+  event.character.routeRepeat = p["moveRoute"]["repeat"].boolean(); event.character.routeSkippable = p["moveRoute"]["skippable"].boolean();
+  event.character.routeForcing = false; event.character.routeWait = 0;
+  const int direction = image["direction"].integer(2), pattern = image["pattern"].integer(1);
+  if (event.originalDirection != direction) {
+    event.originalDirection = direction; event.character.direction = direction; event.prelockDirection = 0;
+  }
+  if (event.originalPattern != pattern) {
+    event.originalPattern = pattern; event.character.pattern = pattern;
+  }
+  if (const auto object = runtimeCharacters_[event.id].lock()) object->originalPattern = event.originalPattern;
 }
 
 bool Session::tilePassage(int x, int y, int bit) const {
@@ -461,7 +481,11 @@ void Session::updateCharacter(Character& c, bool dash, int idlePattern) {
     if (locked) c.stopCount = 0;
     else ++c.stopCount;
     if (c.routeForcing) updateRoute(c);
-    else for (auto& event : events_) if (&event.character == &c && event.page >= 0) { updateSelfMovement(event); break; }
+    else for (auto& event : events_) if (&event.character == &c && event.page >= 0) {
+      const auto object = runtimeHooks_ && runtimeHooks_->characterLifecycle ? runtimeCharacter(event.id) : nullptr;
+      if (!object || !runtimeHooks_->characterLifecycle(object, "updateSelfMovement")) updateSelfMovement(event);
+      break;
+    }
   }
   if (c.jumpCount > 0) {
     --c.jumpCount;
@@ -482,7 +506,9 @@ void Session::updateCharacter(Character& c, bool dash, int idlePattern) {
   if (c.moving() && c.walkAnime) c.animationCount += 1.5;
   else if (c.stepAnime || c.pattern != idlePattern) ++c.animationCount;
   if (c.animationCount >= (9 - c.moveSpeed - (dash ? 1 : 0)) * 3) {
-    c.pattern = !c.stepAnime && c.stopCount > 0 ? idlePattern : (c.pattern + 1) % 4; c.animationCount = 0;
+    const auto object = runtimeHooks_ && runtimeHooks_->characterLifecycle ? runtimeCharacterFor(c) : nullptr;
+    if (!object || !runtimeHooks_->characterLifecycle(object, "updatePattern")) c.pattern = !c.stepAnime && c.stopCount > 0 ? idlePattern : (c.pattern + 1) % 4;
+    c.animationCount = 0;
   }
 }
 
@@ -499,7 +525,15 @@ void Session::updateRoute(Character& c) {
     if (c.routeForcing) throw std::runtime_error("movement route missing terminator");
     return;
   }
-  const auto& instruction = c.route[c.routeIndex];
+  const auto instruction = c.route[c.routeIndex];
+  c.movementSuccess = true;
+  const auto object = runtimeHooks_ && runtimeHooks_->characterRouteCommand ? runtimeCharacterFor(c) : nullptr;
+  if (!object || !runtimeHooks_->characterRouteCommand(object, instruction)) processRouteCommand(c, instruction);
+  if (!c.movementSuccess && !c.routeSkippable) return;
+  ++c.routeIndex;
+  if (c.routeRepeat && c.routeIndex >= static_cast<int>(c.route.size()) - 1) c.routeIndex = 0;
+}
+void Session::processRouteCommand(Character& c, const Value& instruction) {
   const int code = instruction["code"].integer();
   const auto& parameters = instruction["parameters"];
   const auto setDirection = [&](int direction) {
@@ -510,7 +544,6 @@ void Session::updateRoute(Character& c) {
     const int clockwise = c.direction == 2 ? 4 : c.direction == 4 ? 8 : c.direction == 8 ? 6 : 2;
     setDirection(right ? clockwise : 10 - clockwise);
   };
-  c.movementSuccess = true;
   switch (code) {
     case 1: case 2: case 3: case 4: move(c, code * 2); break;
     case 5: case 6: case 7: case 8: {
@@ -599,9 +632,6 @@ void Session::updateRoute(Character& c) {
     }
     default: throw std::runtime_error("unsupported movement route command");
   }
-  if (!c.movementSuccess && !c.routeSkippable) return;
-  ++c.routeIndex;
-  if (c.routeRepeat && c.routeIndex >= static_cast<int>(c.route.size()) - 1) c.routeIndex = 0;
 }
 
 void Session::startEvent(int x, int y, bool action) {
@@ -870,6 +900,7 @@ bool Session::command(const EventCommand& entry, Interpreter& context) {
       const int eventId = context.mapId == mapId_ ? context.eventId : 0;
       context.children.emplace_back();
       auto& child = context.children.back(); child.depth = context.depth + 1; child.battleEvent = context.battleEvent;
+      child.runtime->detachedRoot = context.runtime->detachedRoot;
       setupInterpreter(child, source.array(), eventId);
       return true;
     }
@@ -1233,6 +1264,7 @@ Interpreter* Session::findRuntimeInterpreter(const std::shared_ptr<RuntimeInterp
     for (auto& child : root.children) if (auto* found = self(self, child)) return found;
     return nullptr;
   };
+  if (const auto root = object->detachedRoot.lock()) return search(search, *root);
   if (auto* found = search(search, interpreter_)) return found;
   if (auto* found = search(search, battle_.interpreter)) return found;
   for (auto& event : events_) if (auto* found = search(search, event.parallel)) return found;
@@ -1243,6 +1275,7 @@ std::set<std::uint64_t> Session::runtimeObjectIdentities() const {
   std::set<std::uint64_t> identities;
   for (const auto& effect : visualEffects_) if (effect.balloonSprite) identities.insert(effect.balloonSprite->identity);
   if (weatherRuntime_) identities.insert(weatherRuntime_->identity);
+  for (const auto& [id, event] : runtimeCommonEvents_) { (void)id; identities.insert(event->identity); }
   for (const auto& [id, weak] : runtimeCharacters_) { (void)id; if (const auto object = weak.lock()) identities.insert(object->identity); }
   for (const auto& [id, weak] : runtimeActors_) { (void)id; if (const auto object = weak.lock()) identities.insert(object->identity); }
   for (const auto& picture : pictures_) if (picture) {
@@ -1290,6 +1323,12 @@ bool Session::updateWaitBase(Interpreter& context) {
   };
   return dispatch("updateWaitCount", &Session::updateWaitCountBase) || dispatch("updateWaitMode", &Session::updateWaitModeBase);
 }
+Value Session::runtimeGameDataOperand(const std::shared_ptr<RuntimeInterpreter>& object, int type, int first, int second) {
+  InterpreterOperation operation(activeInterpreterOperations_, object);
+  auto* context = findRuntimeInterpreter(object);
+  if (!context) throw std::runtime_error("interpreter is no longer attached to the session");
+  return gameDataOperand(type, first, second, *context);
+}
 Value Session::runtimeInterpreterField(const std::shared_ptr<RuntimeInterpreter>& object, const std::string& field, const std::optional<Value>& value) {
   auto* context = findRuntimeInterpreter(object);
   if (!context) throw std::runtime_error("interpreter is no longer attached to the session");
@@ -1321,6 +1360,17 @@ std::shared_ptr<RuntimeObject> Session::runtimeInterpreterCollection(const std::
   }
   if (field == "_branch") return context->branches.storage;
   throw std::invalid_argument("interpreter collection is not bound: " + field);
+}
+std::shared_ptr<RuntimeInterpreter> Session::createRuntimeInterpreter(int depth) {
+  if (depth < 0 || depth > 99) throw std::invalid_argument("interpreter depth must be between 0 and 99");
+  auto context = std::make_shared<Interpreter>();
+  context->depth = depth; context->runtime->detachedRoot = context;
+  return std::shared_ptr<RuntimeInterpreter>(context, context->runtime.get());
+}
+std::shared_ptr<RuntimeInterpreter> Session::runtimeChildInterpreter(const std::shared_ptr<RuntimeInterpreter>& object) {
+  auto* context = findRuntimeInterpreter(object);
+  if (!context) throw std::runtime_error("interpreter is no longer attached to the session");
+  return context->children.empty() ? nullptr : context->children.front().runtime;
 }
 std::shared_ptr<RuntimeInterpreter> Session::runtimeInterpreter(int eventId) const {
   if (eventId == 0) return interpreter_.runtime;
@@ -1361,6 +1411,14 @@ void Session::invokeInterpreterLifecycleBase(const std::shared_ptr<RuntimeInterp
 }
 void Session::interpreterLifecycleBase(Interpreter& context, const std::string& method, const std::shared_ptr<RuntimeCommandList>& list, int eventId) {
   const auto object = context.runtime;
+  if (method == "update") { advanceInterpreter(context); return; }
+  if (method == "setupChild") {
+    if (context.depth >= 99) throw std::runtime_error("common event nesting limit exceeded");
+    context.children.clear(); context.children.emplace_back();
+    auto& child = context.children.back(); child.depth = context.depth + 1; child.battleEvent = context.battleEvent;
+    child.runtime->detachedRoot = object->detachedRoot;
+    dispatchInterpreterLifecycle(child, "setup", list, eventId); return;
+  }
   if (method == "clear") {
     const int depth = context.depth; const bool battleEvent = context.battleEvent;
     context.clear(); context.depth = depth; context.battleEvent = battleEvent;
@@ -1464,7 +1522,10 @@ void Session::step(const Input& input, bool mapDestination, bool mapFastForward,
     destination_.reset(); mapTouchCount_ = 0;
     if (ui_.scene == Scene::title && newGamePending_) {
       titleWindowOpenness_ = std::max(0, titleWindowOpenness_ - 32);
-      if (sceneFadeComplete) { SceneManager::clearStack(*this); SceneManager::gotoScene(*this, Scene::map); newGame(); startSceneFade(false,24); }
+      if (sceneFadeComplete) {
+        if (runtimeHooks_ && runtimeHooks_->scene && runtimeHooks_->scene("newGame", static_cast<int>(Scene::map)).value_or(false)) { newGamePending_ = false; return; }
+        SceneManager::clearStack(*this); SceneManager::gotoScene(*this, Scene::map); newGame(); startSceneFade(false,24);
+      }
       return;
     }
     if (ui_.scene == Scene::battle) { updateTimer(); updateScreenState(); updateBattle(); updateVisualEffects(); }
@@ -1588,14 +1649,21 @@ void Session::step(const Input& input, bool mapDestination, bool mapFastForward,
   updateVisualEffects();
   updateMessageWindow();
   mapSceneInput_ = input; mapSceneOk_ = ok; mapSceneCancel_ = cancel;
-  mapSceneRepeatedDirection_ = repeatedDirection; mapSceneChangesPending_ = true;
+  mapSceneRepeatedDirection_ = repeatedDirection; mapSceneChangesPending_ = true; mapSceneUiPending_ = true;
+  if (!mapSceneChanges && message_.busy) {
+    mapSceneUiPending_ = false;
+    if (!pendingTransfer_) updateUi(input, ok, cancel, repeatedDirection);
+  }
   if (mapSceneChanges) finishMapScene();
 }
 void Session::finishMapScene() {
   if (!mapSceneChangesPending_) return;
   mapSceneChangesPending_ = false;
   if (finished_ || resourcesStopped_ || ui_.scene != Scene::map) return;
-  if (!pendingTransfer_) updateUi(mapSceneInput_, mapSceneOk_, mapSceneCancel_, mapSceneRepeatedDirection_);
+  if (mapSceneUiPending_) {
+    mapSceneUiPending_ = false;
+    if (!pendingTransfer_) updateUi(mapSceneInput_, mapSceneOk_, mapSceneCancel_, mapSceneRepeatedDirection_);
+  }
   const auto members = partyMembers();
   if (!members.empty() && std::all_of(members.begin(), members.end(), [&](int id) { return actors_.at(id).isDead(); })) { openGameOver(); return; }
 }

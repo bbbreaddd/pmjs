@@ -35,7 +35,7 @@ void Session::initializeActor(int id) {
   if (source.null()) throw std::invalid_argument("unknown actor " + std::to_string(id));
   actors_.try_emplace(id); actors_.at(id).id = id;
   const auto object = runtimeActor(id);
-  if (!runtimeHooks_ || !runtimeHooks_->actorLifecycle || !runtimeHooks_->actorLifecycle(object, "initMembers")) initializeActorMembers(object);
+  if (!runtimeHooks_ || !runtimeHooks_->actorLifecycle || !runtimeHooks_->actorLifecycle(object, "initialize", {})) initializeActorMembers(object);
   Battler value; value.id = id; value.level = source["initialLevel"].integer(1); value.classId = source["classId"].integer();
   value.name = source["name"].text(); value.nickname = source["nickname"].text(); value.profile = source["profile"].text();
   value.characterName = source["characterName"].text(); value.characterIndex = source["characterIndex"].integer();
@@ -49,9 +49,10 @@ void Session::initializeActor(int id) {
   value.equips.resize(slotCount);
   actors_[id] = value;
   auto& result = actors_.at(id);
+  if (runtimeHooks_ && runtimeHooks_->actorLifecycle) runtimeHooks_->actorLifecycle(object, "initImages", {});
   releaseEquipment(result, true);
   result.exp[result.classId] = actorExpForLevel(result, result.level);
-  if (!runtimeHooks_ || !runtimeHooks_->actorLifecycle || !runtimeHooks_->actorLifecycle(object, "initSkills")) initializeActorSkills(object);
+  if (!runtimeHooks_ || !runtimeHooks_->actorLifecycle || !runtimeHooks_->actorLifecycle(object, "initSkills", {})) initializeActorSkills(object);
   recover(result);
 }
 std::vector<const Value*> Session::traitObjects(const Battler& battler) const {
@@ -233,20 +234,33 @@ void Session::apply(Battler& subject, Battler& target, const Value& item, Battle
   refreshBattler(subject);
 }
 
-void Session::startBattle(int troop, bool canEscape, bool canLose, bool event) {
-  if (mapSceneOnly()) throw std::runtime_error("battle is outside the map-scene contract");
+void Session::setupTroopBase(int troop) {
   if (database_["troops"][troop].null()) throw std::invalid_argument("unknown troop");
-  ++system_.battleCount;
-  detachRuntimeEnemies();
-  battle_ = {}; resetEnemySprites(); battle_.active = true; battle_.troopId = troop; battle_.canEscape = canEscape; battle_.canLose = canLose; battle_.event = event;
-  battleLog_ = std::make_shared<Window_BattleLog>(0,0,0,0);
-  battleLog_->bindLines(battle_.log);
+  detachRuntimeEnemies(); resetEnemySprites(); battle_.troopId = troop;
+  battle_.enemies.clear(); battle_.nameCounts.clear(); battle_.eventFlags.clear(); battle_.turn = 0;
+  dispatchInterpreterLifecycle(battle_.interpreter, "clear");
   for (const auto& member : database_["troops"][troop]["members"].array()) {
     Battler enemy; enemy.screenX = member["x"].number(); enemy.screenY = member["y"].number(); enemy.enemy = true; enemy.id = member["enemyId"].integer(); enemy.hidden = member["hidden"].boolean();
     enemy.originalName = database_["enemies"][enemy.id]["name"].text(); enemy.name = enemy.originalName;
     recover(enemy); battle_.enemies.push_back(enemy);
   }
   BattleMechanics::makeUniqueNames(battle_.enemies, battle_.nameCounts, database_["system"]["locale"].text().starts_with("ja") || database_["system"]["locale"].text().starts_with("zh") || database_["system"]["locale"].text().starts_with("ko"));
+}
+void Session::increaseTroopTurnBase() {
+  const auto& pages = database_["troops"][battle_.troopId]["pages"].array();
+  for (std::size_t index = 0; index < pages.size(); ++index) if (pages[index]["span"].integer() == 1) battle_.eventFlags.erase(static_cast<int>(index));
+  ++battle_.turn;
+}
+void Session::startBattle(int troop, bool canEscape, bool canLose, bool event) {
+  if (dispatchManager("BattleManager", "setup", {troop, canEscape, canLose, event})) return;
+  if (mapSceneOnly()) throw std::runtime_error("battle is outside the map-scene contract");
+  if (database_["troops"][troop].null()) throw std::invalid_argument("unknown troop");
+  ++system_.battleCount;
+  detachRuntimeEnemies();
+  battle_ = {}; battle_.phase = "start"; resetEnemySprites(); battle_.active = true; battle_.troopId = troop; battle_.canEscape = canEscape; battle_.canLose = canLose; battle_.event = event;
+  battleLog_ = std::make_shared<Window_BattleLog>(0,0,0,0);
+  battleLog_->bindLines(battle_.log);
+  if (!runtimeHooks_ || !runtimeHooks_->gameDataMutation || !runtimeHooks_->gameDataMutation("troop", "setup", {troop})) setupTroopBase(troop);
   if (!event) { battle_.preemptive = random() < BattleMechanics::ratePreemptive(*this); battle_.surprise = random() < BattleMechanics::rateSurprise(*this) && !battle_.preemptive; }
   double actorsAgi = 0, enemiesAgi = 0;
   for (int id : party_) {
@@ -259,11 +273,13 @@ void Session::startBattle(int troop, bool canEscape, bool canLose, bool event) {
   actorsAgi /= std::max<std::size_t>(1, battleMemberCount()); enemiesAgi /= std::max<std::size_t>(1, battle_.enemies.size());
   battle_.escapeRatio = 0.5 * actorsAgi / std::max(1.0, enemiesAgi);
   SceneManager::pushScene(*this, Scene::battle);
-  battle_.mapBgm = savedBgm_; battle_.mapBgs = savedBgs_;
+  battle_.mapBgm = AudioManager::saveBgm(*this); battle_.mapBgs = AudioManager::saveBgs(*this);
   audio("battle-save", {});
-  AudioManager::stopBgs(*this);
-  const auto battleBgm = system_.battleBgm.null() ? database_["system"]["battleBgm"] : system_.battleBgm;
-  AudioManager::playBgm(*this, battleBgm);
+  if (!dispatchManager("BattleManager", "playBattleBgm")) {
+    AudioManager::stopBgs(*this);
+    const auto battleBgm = system_.battleBgm.null() ? database_["system"]["battleBgm"] : system_.battleBgm;
+    AudioManager::playBgm(*this, battleBgm);
+  }
   battle_.opening = true; ui_.category = 4;
   buildBattleIntro();
   updateEnemySprites();
@@ -293,6 +309,8 @@ std::vector<int> Session::battleSkillTypes(int actorIndex) const {
   return Window_ActorCommand::skillTypes(*this, party_.at(actorIndex));
 }
 void Session::makeEnemyActions() {
+  if (dispatchManager("BattleManager", "startInput")) return;
+  battle_.phase = "input";
   battle_.actions.clear(); battle_.actorIndex = 0; ui_.category = 4; ui_.cursor = 0;
   battle_.remainingActions.assign(battleMemberCount(), 0);
   for (auto& [id, actor] : actors_) { (void)id; actor.guarding = false; }
@@ -345,12 +363,18 @@ void Session::chooseAction(int actorIndex, int id, int target, bool item) {
   beginTurn();
 }
 void Session::beginTurn() {
-  ++battle_.turn;
+  if (dispatchManager("BattleManager", "startTurn")) return;
+  battle_.phase = "turn";
+  if (!runtimeHooks_ || !runtimeHooks_->gameDataMutation || !runtimeHooks_->gameDataMutation("troop", "increaseTurn", {})) increaseTroopTurnBase();
+  makeBattleActionOrders();
+  battle_.wait = 1;
+  battleLog_->push({"wait"});
+}
+void Session::makeBattleActionOrders() {
+  if (dispatchManager("BattleManager", "makeActionOrders")) return;
   battle_.actions.erase(std::remove_if(battle_.actions.begin(), battle_.actions.end(), [&](const Action& action) {
     return action.enemy ? battle_.preemptive : battle_.surprise;
   }), battle_.actions.end());
-  const auto& pages = database_["troops"][battle_.troopId]["pages"].array();
-  for (std::size_t index = 0; index < pages.size(); ++index) if (pages[index]["span"].integer() == 1) battle_.eventFlags.erase(static_cast<int>(index));
   const auto includeEmptySubject = [&](bool enemy, int index, const Battler& battler) {
     if (!battler.isAlive() || battler.escaped) return;
     if (std::none_of(battle_.actions.begin(), battle_.actions.end(), [&](const Action& action) { return action.enemy == enemy && action.subject == index; }))
@@ -379,12 +403,15 @@ void Session::beginTurn() {
   }
   for (auto& action : battle_.actions) action.speed = speeds.at({action.enemy, action.subject});
   std::stable_sort(battle_.actions.begin(), battle_.actions.end(), [](const Action& a, const Action& b) { return a.speed > b.speed; });
-  battle_.wait = 1;
-  battleLog_->push({"wait"});
 }
 void Session::executeAction(const Action& selectedAction) {
+  if (!managerCalls_.contains({"BattleManager", "startAction"})) {
+    battle_.pendingAction = selectedAction; ++battle_.actionSerial;
+    if (dispatchManager("BattleManager", "startAction")) return;
+  }
+  battle_.phase = "action";
   if (std::isinf(selectedAction.speed)) return;
-  Action action = selectedAction;
+  Action action = battle_.pendingAction.value_or(selectedAction);
   auto& subject = action.enemy ? battle_.enemies[action.subject] : actors_.at(action.actorId ? action.actorId : party_[action.subject]);
   if (!action.forced && (!subject.isAlive() || subject.escaped || restriction(subject) >= 4)) return;
   if (!action.forced && restriction(subject) > 0) { action.id = 1; action.item = false; action.target = -1; }
@@ -413,6 +440,7 @@ void Session::executeAction(const Action& selectedAction) {
   battle_.wait = 0;
   battle_.visuals.push_back(std::move(visual));
   if (battle_.visuals.size() > 32) battle_.visuals.erase(battle_.visuals.begin());
+  battle_.pendingAction.reset();
   battle_.currentVisual = static_cast<int>(battle_.visuals.size()) - 1; battle_.actionStage = 1; battle_.targetIndex = 0;
   const int targetId = action.enemy ? -action.subject-1 : subject.id;
   battleLog_->push({"clear"});
@@ -423,6 +451,7 @@ void Session::executeAction(const Action& selectedAction) {
   battleLog_->displayAction(*this,subject,item);
 }
 void Session::resolveAction() {
+  if (dispatchManager("BattleManager", "invokeAction")) return;
   auto& visual = battle_.visuals.at(battle_.currentVisual); const auto& action = visual.action;
   auto& subject = action.enemy ? battle_.enemies[action.subject] : actors_.at(action.actorId ? action.actorId : party_[action.subject]);
   const auto& item = database_[action.item ? "items" : "skills"][action.id];
@@ -469,46 +498,103 @@ void Session::resolveAction() {
   }
 }
 
+void Session::performBattlerPresentation(Battler& battler, const std::string& method, bool base) {
+  static const std::array<const char*, 11> methods{"performMiss", "performRecovery", "performEvasion", "performCounter", "performMagicEvasion", "performReflection", "performDamage", "performCollapse", "performAttack", "actorDamageSound", "enemyDamageSound"};
+  if (std::none_of(methods.begin(), methods.end(), [&](const char* name) { return method == name; })) throw std::invalid_argument("unknown battler presentation method: " + method);
+  if (base) {
+    if (method == "performMiss") SoundManager::playMiss(*this);
+    else if (method == "performRecovery") SoundManager::playRecovery(*this);
+    else if (method == "performEvasion" || method == "performCounter") SoundManager::playEvasion(*this);
+    else if (method == "performMagicEvasion") SoundManager::playMagicEvasion(*this);
+    else if (method == "performReflection") SoundManager::playReflection(*this);
+    return;
+  }
+  if (battler.enemy) {
+    const auto position = std::find_if(battle_.enemies.begin(), battle_.enemies.end(), [&](const Battler& value) { return &value == &battler; });
+    if (method == "enemyDamageSound") { SoundManager::playEnemyDamage(*this); return; }
+    if (method == "performDamage") {
+      SoundManager::playEnemyDamage(*this);
+      if (position != battle_.enemies.end()) requestEnemyEffect(position - battle_.enemies.begin(), "blink");
+    } else if (method == "performCollapse") {
+      int type = 0;
+      for (const auto* object : traitObjects(battler)) for (const auto& trait : (*object)["traits"].array())
+        if (trait["code"].integer() == 63) type = std::max(type, trait["dataId"].integer());
+      if (position != battle_.enemies.end() && type <= 2) requestEnemyEffect(position - battle_.enemies.begin(), type == 1 ? "bossCollapse" : type == 2 ? "instantCollapse" : "collapse");
+      if (type == 0) SoundManager::playEnemyCollapse(*this);
+      else if (type == 1) SoundManager::playBossCollapse1(*this);
+    }
+  } else if (method == "actorDamageSound") SoundManager::playActorDamage(*this);
+  else if (method == "performDamage") {
+    if (database_["system"]["optSideView"].boolean()) { battler.requestedMotion = 4; battler.motionRequestedAt = ticks_; }
+    else dispatchGameDataMutation("screen", "startShake", {5, 5, 10});
+    SoundManager::playActorDamage(*this);
+  } else if (method == "performEvasion" || method == "performMagicEvasion") {
+    battler.requestedMotion = 5; battler.motionRequestedAt = ticks_;
+  } else if (method == "performAttack") {
+    int weapon = 0;
+    for (std::size_t slot = 0; slot < battler.equips.size(); ++slot)
+      if (battler.equips[slot] && battler.equipKinds[slot] == 1) { weapon = battler.equips[slot]; break; }
+    const auto& attack = database_["system"]["attackMotions"][database_["weapons"][weapon]["wtypeId"].integer()];
+    if (!attack.null()) { battler.requestedMotion = 6 + attack["type"].integer(); battler.requestedWeapon = attack["weaponImageId"].integer(); battler.motionRequestedAt = ticks_; }
+  } else if (method == "performCollapse" && battle_.active) SoundManager::playActorCollapse(*this);
+}
 void Session::endBattlerActions(Battler& battler) {
-  battler.result = {};
-  const auto states = battler.states;
-  for (int state : states) {
-    const auto turns=battler.stateTurns.find(state);
-    if (database_["states"][state]["autoRemovalTiming"].integer() == 1 && turns!=battler.stateTurns.end() && turns->second == 0) removeState(battler, state);
-  }
-  for (int parameter = 0; parameter < 8; ++parameter) if (battler.isAlive() && battler.buffs[parameter] && battler.buffTurns[parameter] == 0) {
-    battler.buffs[parameter] = 0; battler.result.removedBuffs.push_back(parameter);
-    refreshBattler(battler);
-  }
+  if (!dispatchActorMethod(battler, "onAllActionsEnd", {})) endBattlerActionsBase(battler);
   battleLog_->displayAutoAffectedStatus(*this,battler);
   battleLog_->displayCurrentState(*this,battler);
   battleLog_->displayRegeneration(*this,battler);
 }
+void Session::endBattlerActionsBase(Battler& battler) {
+  battler.result = {};
+  removeStatesAuto(battler, 1);
+  for (int parameter = 0; parameter < 8; ++parameter) if (battler.isAlive() && battler.buffs[parameter] && battler.buffTurns[parameter] == 0) {
+    battler.buffs[parameter] = 0; battler.result.removedBuffs.push_back(parameter);
+    refreshBattler(battler);
+  }
+}
+void Session::regenerateBattlerPart(Battler& battler, int part, const std::shared_ptr<RuntimeActor>& owner) {
+  if (part == 0) {
+    const int change = static_cast<int>(std::floor(parameter(battler, 0) * trait(battler, 22, 7, false)));
+    const int maximum = database_["system"]["optSlipDeath"].boolean() ? battler.hp : std::max(battler.hp - 1, 0);
+    const int value = std::max(change, -maximum);
+    if (value != 0 && !dispatchActorMethod(battler, "gainHp", {value}, owner)) {
+      battler.result.hpDamage = -value; battler.result.hpAffected = true; battler.hp += value; refreshBattler(battler);
+    }
+  } else if (part == 1) {
+    const int value = static_cast<int>(std::floor(parameter(battler, 1) * trait(battler, 22, 8, false)));
+    if (value != 0 && !dispatchActorMethod(battler, "gainMp", {value}, owner)) {
+      battler.result.mpDamage = -value; battler.mp += value; refreshBattler(battler);
+    }
+  } else {
+    const int value = static_cast<int>(std::floor(100 * trait(battler, 22, 9, false)));
+    if (!dispatchActorMethod(battler, "gainSilentTp", {value}, owner)) { battler.tp += value; refreshBattler(battler); }
+  }
+}
+void Session::regenerateBattlerBase(Battler& battler) {
+  if (battler.isAlive()) for (int part = 0; part < 3; ++part) regenerateBattlerPart(battler, part);
+}
+void Session::removeStatesAuto(Battler& battler, int timing, const std::shared_ptr<RuntimeActor>& owner) {
+  const auto states = battler.states;
+  for (int state : states) {
+    const auto turns = battler.stateTurns.find(state);
+    if (database_["states"][state]["autoRemovalTiming"].integer() == timing && turns != battler.stateTurns.end() && turns->second == 0 &&
+        !dispatchActorMethod(battler, "removeState", {state}, owner)) removeState(battler, state);
+  }
+}
 void Session::endBattlerTurn(Battler& battler) {
-    battler.result = {};
-    if (battler.isAlive()) {
-      const int hpChange = static_cast<int>(std::floor(parameter(battler, 0) * trait(battler, 22, 7, false)));
-      const int hpValue = std::max(hpChange, -(battler.hp - (database_["system"]["optSlipDeath"].boolean() ? 0 : 1)));
-      battler.result.hpDamage = -hpValue; battler.result.hpAffected = hpValue != 0; battler.hp += hpValue;
-      if (hpValue != 0) refreshBattler(battler);
-      const int mpValue = static_cast<int>(std::floor(parameter(battler, 1) * trait(battler, 22, 8, false)));
-      battler.result.mpDamage = -mpValue; battler.mp += mpValue;
-      if (mpValue != 0) refreshBattler(battler);
-      battler.tp += static_cast<int>(std::floor(100 * trait(battler, 22, 9, false)));
-      refreshBattler(battler);
-    }
-    auto states = battler.states;
-    if (!battle_.forcedTurn) for (int state : states) {
-      const auto turns=battler.stateTurns.find(state);
-      if (turns!=battler.stateTurns.end() && turns->second > 0) --turns->second;
-    }
-    if (!battle_.forcedTurn) for (int i = 0; i < 8; ++i) if (battler.buffTurns[i] > 0) --battler.buffTurns[i];
-    for (int state : states) {
-      const auto turns=battler.stateTurns.find(state);
-      if (database_["states"][state]["autoRemovalTiming"].integer() == 2 && turns!=battler.stateTurns.end() && turns->second == 0) removeState(battler, state);
-    }
+  if (!dispatchActorMethod(battler, "onTurnEnd", {})) endBattlerTurnBase(battler);
+}
+void Session::endBattlerTurnBase(Battler& battler) {
+  battler.result = {}; regenerateBattlerBase(battler);
+  if (!battle_.forcedTurn) {
+    for (int state : battler.states) { const auto turns = battler.stateTurns.find(state); if (turns != battler.stateTurns.end() && turns->second > 0) --turns->second; }
+    for (int index = 0; index < 8; ++index) if (battler.buffTurns[index] > 0) --battler.buffTurns[index];
+  }
+  removeStatesAuto(battler, 2);
 }
 void Session::endTurn() {
+  if (dispatchManager("BattleManager", "endTurn")) return;
+  battle_.phase = "turnEnd";
   const auto finish = [&](Battler& battler) {
     endBattlerTurn(battler);
     battleLog_->displayAutoAffectedStatus(*this,battler);
@@ -530,6 +616,8 @@ std::string Session::partyName() const {
   return party_.size() == 1 ? leader : battleMessage("partyName", {leader});
 }
 void Session::finishBattle(int result) {
+  if (result != 1 && dispatchManager("BattleManager", result == 0 ? "processVictory" : "processDefeat")) return;
+  battle_.phase = "battleEnd";
   battle_.result = result; battle_.active = false; battle_.wait = 0; battle_.log.clear();
   message_ = {}; message_.busy = true; messageAge_ = 0;
   message_.lines.emplace_back(battleMessage(result == 0 ? "victory" : result == 1 ? "escapeStart" : "defeat", {partyName()}));
@@ -538,6 +626,17 @@ void Session::finishBattle(int result) {
     if (actor.hidden) continue;
     const auto states = actor.states;
     for (int state : states) if (database_["states"][state]["removeAtBattleEnd"].boolean()) removeState(actor, state);
+  }
+  if (result == 0 && dispatchManager("BattleManager", "makeRewards")) {
+    ++system_.winCount;
+    message_.lines.clear();
+    dispatchManager("BattleManager", "displayVictoryMessage");
+    dispatchManager("BattleManager", "displayRewards");
+    dispatchManager("BattleManager", "gainRewards");
+    dispatchManager("BattleManager", "playVictoryMe");
+    dispatchManager("BattleManager", "replayBgmAndBgs");
+    if (!dispatchManager("BattleManager", "endBattle", {0})) setBattleEventResult(0);
+    return;
   }
   std::vector<std::pair<std::string, int>> drops;
   int gold = 0;
@@ -580,14 +679,16 @@ void Session::finishBattle(int result) {
     }
   }
   if (result == 0) AudioManager::playMe(*this, (system_.victoryMe.null() ? database_["system"]["victoryMe"] : system_.victoryMe));
-  if (result == 2) AudioManager::playMe(*this, (system_.defeatMe.null() ? database_["system"]["defeatMe"] : system_.defeatMe));
+  if (result == 2 && !dispatchManager("BattleManager", "playDefeatMe")) AudioManager::playMe(*this, (system_.defeatMe.null() ? database_["system"]["defeatMe"] : system_.defeatMe));
   if (result != 2 || battle_.canLose) {
     savedBgm_ = battle_.mapBgm; savedBgs_ = battle_.mapBgs;
     audio("battle-restore-bgm", {}); audio("battle-restore-bgs", {});
   } else AudioManager::stopBgm(*this);
-  setBattleEventResult(result);
+  if (!dispatchManager("BattleManager", "endBattle", {result})) setBattleEventResult(result);
 }
 void Session::abortBattle() {
+  if (dispatchManager("BattleManager", "processAbort")) return;
+  battle_.phase = "battleEnd";
   if (!battle_.active) return;
   SoundManager::playEscape(*this);
   battle_.aborting = false;
@@ -596,10 +697,12 @@ void Session::abortBattle() {
   ++system_.escapeCount;
   savedBgm_ = battle_.mapBgm; savedBgs_ = battle_.mapBgs;
   audio("battle-restore-bgm", {}); audio("battle-restore-bgs", {});
-  setBattleEventResult(1);
+  if (!dispatchManager("BattleManager", "endBattle", {1})) setBattleEventResult(1);
   leaveBattle();
 }
 void Session::leaveBattle() {
+  if (dispatchManager("BattleManager", "updateBattleEnd")) return;
+  battle_.phase.clear();
   if (battleTest_) { AudioManager::stopBgm(*this); finished_ = true; return; }
   const int result = battle_.result;
   for (std::size_t index = 0; index < party_.size(); ++index) {
@@ -617,7 +720,22 @@ void Session::leaveBattle() {
   else SceneManager::gotoScene(*this, Scene::map);
   encounterCount_ = randomInt(map()["encounterStep"].integer(30)) + randomInt(map()["encounterStep"].integer(30)) + 1;
 }
+void Session::endBattleAction() {
+    auto& visual = battle_.visuals.at(battle_.currentVisual); const auto& action = visual.action;
+    auto& subject = action.enemy ? battle_.enemies[action.subject] : actors_.at(action.actorId ? action.actorId : party_[action.subject]);
+    if (std::none_of(battle_.actions.begin(), battle_.actions.end(), [&](const Action& next) { return next.enemy == action.enemy && next.subject == action.subject && next.actorId == action.actorId; })) {
+      endBattlerActions(subject);
+    }
+    battle_.actionStage = 0;
+    if (battle_.forcedExecuting) {
+      battle_.forcedExecuting = false; battle_.wait = battle_.forcedResumeWait;
+
+    }
+  battle_.phase = "turn";
+}
 void Session::updateBattle() {
+  if (dispatchManager("BattleManager", "update")) return;
+  if (!battle_.phase.empty() && battle_.phase != "start" && battle_.phase != "input" && battle_.phase != "turn" && battle_.phase != "action" && battle_.phase != "turnEnd" && battle_.phase != "battleEnd" && battle_.phase != "aborting") return;
   updateEnemySprites();
   if (ui_.scene != Scene::battle) return;
   if (!battle_.active) { if (battle_.result >= 0 && !message_.busy) leaveBattle(); return; }
@@ -657,16 +775,8 @@ void Session::updateBattle() {
       battle_.wait = visual.action.enemy || visual.action.subject < 0 || visual.action.subject >= static_cast<int>(battleMemberCount()) ? 0 : 12;
       return;
     }
-    auto& visual = battle_.visuals.at(battle_.currentVisual); const auto& action = visual.action;
-    auto& subject = action.enemy ? battle_.enemies[action.subject] : actors_.at(action.actorId ? action.actorId : party_[action.subject]);
-    if (std::none_of(battle_.actions.begin(), battle_.actions.end(), [&](const Action& next) { return next.enemy == action.enemy && next.subject == action.subject && next.actorId == action.actorId; })) {
-      endBattlerActions(subject);
-    }
-    battle_.actionStage = 0;
-    if (battle_.forcedExecuting) {
-      battle_.forcedExecuting = false; battle_.wait = battle_.forcedResumeWait;
-      processingTurn = battle_.wait > 0;
-    }
+    if (!dispatchManager("BattleManager", "endAction")) invokeGameDataBase("battle", "endAction", {});
+    processingTurn = battle_.wait > 0;
   }
   if (battleLog_->isBusy()) return;
   if (!battle_.forcedActions.empty()) {
@@ -693,14 +803,7 @@ void Session::updateBattle() {
     return;
   }
   if (battle_.wait > 0 && --battle_.wait > 0) return;
-  if (battle_.actions.empty()) { endTurn(); return; }
-  const auto action = battle_.actions.front(); battle_.actions.erase(battle_.actions.begin()); executeAction(action);
-  if (!battle_.actionStage &&
-      std::none_of(battle_.actions.begin(), battle_.actions.end(), [&](const Action& next) { return next.enemy == action.enemy && next.subject == action.subject && next.actorId == action.actorId; })) {
-    auto& subject = action.enemy ? battle_.enemies[action.subject] : actors_.at(action.actorId ? action.actorId : party_[action.subject]);
-    endBattlerActions(subject);
-  }
-  if (!battle_.wait) battle_.wait = 1;
+  if (!dispatchManager("BattleManager", "processTurn")) invokeGameDataBase("battle", "processTurn", {});
 }
 int Session::menuItemUser() const {
   int selected = -1; double maximum = -1;

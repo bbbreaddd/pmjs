@@ -62,7 +62,29 @@ std::array<double, 4> Session::screenFlashColor() const {
   return {color[0].number(), color[1].number(), color[2].number(), color[3].number()};
 }
 Value Session::invokeScreenBase(const std::string& method, const Value::Array& arguments) {
+  if (method == "maxPictures") return 100;
+  if (method == "update") { updateScreenStateBase(); return Value::undefined(); }
+  if (method == "updateShake") { updateScreenShake(); return Value::undefined(); }
+  if (method == "initialize") { dispatchGameDataMutation("screen", "clear", {}); return Value::undefined(); }
+  if (method == "clear" || method == "onBattleStart") {
+    for (const auto* operation : {"clearFade", "clearTone", "clearFlash", "clearShake", "clearZoom", "clearWeather"}) {
+      if (method == "onBattleStart" && (std::string(operation) == "clearTone" || std::string(operation) == "clearWeather")) continue;
+      dispatchGameDataMutation("screen", operation, {});
+    }
+    dispatchGameDataMutation("screen", method == "clear" ? "clearPictures" : "eraseBattlePictures", {});
+    return Value::undefined();
+  }
+  if (method == "clearPictures" || method == "eraseBattlePictures") {
+    if (method == "clearPictures") pictures_.clear();
+    else if (pictures_.size() > 101) pictures_.resize(101);
+    std::erase_if(pictureSprites_, [&](const auto& entry) { return method == "clearPictures" || entry.first > 100; });
+    return Value::undefined();
+  }
   ensureScreenEffects(); auto& state = std::get<Object>(screenEffects_.data);
+  if (!method.empty() && method[0] == '_' && state.contains(method) && !std::holds_alternative<Array>(state[method].data) && !std::holds_alternative<Object>(state[method].data)) {
+    if (!arguments.empty()) state[method] = arguments[0];
+    return state[method];
+  }
   const auto argument = [&](std::size_t index) -> const Value& {
     if (index >= arguments.size()) throw std::invalid_argument("missing screen argument");
     return arguments[index];
@@ -166,29 +188,24 @@ bool Session::screenEventCommand(const EventCommand& entry, Interpreter& context
 void Session::ensureScreenEffects() {
   if (screenEffects_.null()) screenEffects_ = initialScreen();
 }
-void Session::updateScreenState() {
-  ensureScreenEffects();
-  auto& state = std::get<Object>(screenEffects_.data);
-  if (fadeOut_ > 0) { brightness_ = brightness_ * (fadeOut_ - 1) / fadeOut_; --fadeOut_; }
-  int duration = state["_fadeInDuration"].integer();
-  if (duration > 0) { brightness_ = (brightness_ * (duration - 1) + 255) / duration; state["_fadeInDuration"] = duration - 1; }
-  tweenTone(state);
-  duration = state["_flashDuration"].integer();
-  if (duration > 0) {
-    auto& color = std::get<Array>(state["_flashColor"].data); color[3] = color[3].number() * (duration - 1) / duration;
-    state["_flashDuration"] = duration - 1;
+void Session::updateScreenState() { dispatchGameDataMutation("screen", "update", {}); }
+void Session::updateScreenStateBase() {
+  {
+    ensureScreenEffects();
+    auto& state = std::get<Object>(screenEffects_.data);
+    if (fadeOut_ > 0) { brightness_ = brightness_ * (fadeOut_ - 1) / fadeOut_; --fadeOut_; }
+    int duration = state["_fadeInDuration"].integer();
+    if (duration > 0) { brightness_ = (brightness_ * (duration - 1) + 255) / duration; state["_fadeInDuration"] = duration - 1; }
+    tweenTone(state);
+    duration = state["_flashDuration"].integer();
+    if (duration > 0) {
+      auto& color = std::get<Array>(state["_flashColor"].data); color[3] = color[3].number() * (duration - 1) / duration;
+      state["_flashDuration"] = duration - 1;
+    }
   }
-  duration = state["_shakeDuration"].integer();
-  double shake = state["_shake"].number();
-  if (duration > 0 || shake != 0) {
-    const double power = state["_shakePower"].number();
-    const double delta = power * state["_shakeSpeed"].number() * state["_shakeDirection"].number(1) / 10;
-    shake = duration <= 1 && shake * (shake + delta) < 0 ? 0 : shake + delta;
-    state["_shake"] = shake;
-    if (shake > power * 2) state["_shakeDirection"] = -1;
-    if (shake < -power * 2) state["_shakeDirection"] = 1;
-    state["_shakeDuration"] = duration - 1;
-  }
+  dispatchGameDataMutation("screen", "updateShake", {});
+  ensureScreenEffects(); auto& state = std::get<Object>(screenEffects_.data);
+  int duration = 0;
   for (const auto& name : {"zoom", "weather"}) {
     const std::string prefix = std::string("_") + name;
     duration = state[prefix + "Duration"].integer();
@@ -205,6 +222,20 @@ void Session::updateScreenState() {
     if (runtimeHooks_ && runtimeHooks_->sprite) runtimeHooks_->sprite(picture);
   }
   if (runtimeHooks_ && runtimeHooks_->updateSprites) runtimeHooks_->updateSprites();
+}
+void Session::updateScreenShake() {
+  ensureScreenEffects(); auto& state = std::get<Object>(screenEffects_.data);
+  const int duration = state["_shakeDuration"].integer();
+  double shake = state["_shake"].number();
+  if (duration > 0 || shake != 0) {
+    const double power = state["_shakePower"].number();
+    const double delta = power * state["_shakeSpeed"].number() * state["_shakeDirection"].number(1) / 10;
+    shake = duration <= 1 && shake * (shake + delta) < 0 ? 0 : shake + delta;
+    state["_shake"] = shake;
+    if (shake > power * 2) state["_shakeDirection"] = -1;
+    if (shake < -power * 2) state["_shakeDirection"] = 1;
+    state["_shakeDuration"] = duration - 1;
+  }
 }
 bool Session::ownsPictureSprite(const RuntimePicture& picture) const {
   const auto found = pictureSprites_.find(picture.slot);

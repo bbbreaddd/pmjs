@@ -57,7 +57,7 @@ test('all tile classification helpers and tables match the bundled MV', () => {
   }
 });
 
-test('Html5Audio uses native voices for readiness, playback, volume, seeking and errors', () => {
+test('Html5Audio uses native voices for readiness, playback, volume, seeking and errors', async () => {
   const { installAudioElement } = require('../runner/native-audio-element.cjs');
   const runtime = environment(), buffers = [];
   class EventTarget {
@@ -72,6 +72,7 @@ test('Html5Audio uses native voices for readiness, playback, volume, seeking and
     update() {}
     isReady() { return this.ready; }
     isError() { return this.failed; }
+    isPlaying() { return this.playing; }
     play(loop, position) { this.loop = loop; this.position = position; this.playing = true; }
     stop() { this.playing = false; this.onStop?.(); }
     seek() { return this.position; }
@@ -89,6 +90,53 @@ test('Html5Audio uses native voices for readiness, playback, volume, seeking and
   assert.equal(loaded, 1); assert.equal(buffer.playing, true); assert.equal(buffer.loop, true);
   assert.equal(audio.seek(), 3); audio.volume = 0.5; assert.equal(buffer.volume, 0.5);
   audio.stop(); assert.equal(buffer.playing, false); assert.equal(audio.isPlaying(), false);
+  audio.play(false,1);buffer.position=5;buffer.playing=false;buffer.onStop();
+  assert.equal(audio.seek(),5);assert.equal(audio.isPlaying(),false);assert.equal(audio._audioElement.ended,true);
+  audio._audioElement.play();assert.equal(buffer.position,0);assert.equal(audio._audioElement.ended,false);audio.stop();
   audio.setup('missing.ogg'); audio.play(false, 0);
   const failure = buffers.at(-1); failure.failed = true; failure.update(); assert.equal(audio.isError(), true);
+  runtime.scope.pmjsResolveObjectURL=url=>url==='blob:test'?{arrayBuffer:()=>Promise.resolve(Uint8Array.from([1,2,3]).buffer)}:null;
+  const objectAudio=new runtime.scope.Audio('blob:test');await objectAudio.play();
+  const objectBuffer=buffers.at(-1);assert.equal(objectAudio.src,'blob:test');
+  assert.equal(objectBuffer.url,'data:audio/octet-stream;base64,AQID');assert.equal(objectBuffer.playing,true);
+  objectAudio.pause();assert.equal(objectBuffer.playing,false);
+  let resolvePending;
+  runtime.scope.pmjsResolveObjectURL=url=>url==='blob:pending'?{arrayBuffer:()=>new Promise(resolve=>{resolvePending=resolve;})}:null;
+  const changed=new runtime.scope.Audio('blob:pending');changed.src='replacement.ogg';
+  const count=buffers.length;resolvePending(Uint8Array.from([4,5]).buffer);await Promise.resolve();
+  assert.equal(buffers.length,count);assert.equal(buffers.at(-1).url,'replacement.ogg');
+
+});
+
+test('Decrypter exposes mutable hooks and routes decoded image and audio callbacks', () => {
+  const runtime = environment(), requests = [], blobs = [];
+  class Request {
+    open(method, url) { this.method = method; this.url = url; }
+    send() { requests.push(this); }
+  }
+  Object.assign(runtime.scope, { XMLHttpRequest: Request,
+    $dataSystem: { encryptionKey: '00112233445566778899aabbccddeeff' },
+    Blob: class { constructor(parts) { this.parts = parts; } },
+    window: { URL: { createObjectURL(blob) { blobs.push(blob); return 'blob:' + blobs.length; } } },
+    Bitmap: function() {}, AudioManager: { createDecryptBuffer(...args) { this.args = args; } } });
+  installCoreUtilities(runtime);
+  const decrypter = runtime.scope.Decrypter, header = decrypter.SIGNATURE + decrypter.VER + decrypter.REMAIN;
+  const bytes = Uint8Array.from({ length: 48 }, (_, index) => index < 16 ? parseInt(header.slice(index * 2, index * 2 + 2), 16) : index - 16);
+  for (let i = 0; i < 16; ++i) bytes[16 + i] ^= i * 17;
+  let cuts = 0;
+  const cut = decrypter.cutArrayHeader;
+  decrypter.cutArrayHeader = function(...args) { ++cuts; return cut.apply(this, args); };
+  assert.deepEqual(Array.from(new Uint8Array(decrypter.decryptArrayBuffer(bytes.buffer))), Array.from({ length: 32 }, (_, index) => index));
+  assert.equal(cuts, 1); decrypter._encryptionKey = ['custom']; assert.equal(decrypter._encryptionKey[0], 'custom');
+  const bitmap = { _image: { listeners: {}, addEventListener(name, callback) { this.listeners[name] = callback; } } };
+  runtime.scope.Bitmap.prototype._onLoad = function() { this.loaded = true; };
+  runtime.scope.Bitmap.prototype._onError = function() { this.failed = true; };
+  decrypter.decryptImg('image.png', bitmap);
+  const image = requests[0]; image.status = 200; image.response = bytes.buffer; image.onload.call(image);
+  assert.equal(image.url, 'image.rpgmvp'); assert.equal(bitmap._image.src, 'blob:1');
+  bitmap._image.listeners.load(); assert.equal(bitmap.loaded, true);
+  bitmap._image.listeners.error(); assert.equal(bitmap.failed, true);
+  decrypter.decryptHTML5Audio('music.rpgmvo', { name: 'music' }, 4);
+  const audio = requests[1]; audio.status = 200; audio.response = bytes.buffer; audio.onload.call(audio);
+  assert.equal(runtime.scope.AudioManager.args[0], 'blob:2'); assert.equal(runtime.scope.AudioManager.args[2], 4);
 });

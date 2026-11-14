@@ -1,6 +1,10 @@
 'use strict';
+// RPG Maker MV behavior: Copyright (c) 2015 KADOKAWA CORPORATION./YOJI OJIMA.
+// MIT license: third_party/rpg-maker-mv.LICENSE.
+const { installEquipArray } = require('./native-equips.cjs');
+const { nativeDictionary } = require('./native-dictionary.cjs');
 
-function installBattlerBindings(scope, engine, session, handles, createArray) {
+function installBattlerBindings(scope, engine, session, handles, createArray, createObject = () => ({})) {
   const base = scope.Game_BattlerBase.prototype, battler = scope.Game_Battler.prototype;
   const invoke = (object, method, ...args) => engine.actorInvoke(session, handles.get(object), method, args);
   const read = (object, field) => createArray(engine.battlerArray(handles.get(object), field));
@@ -50,6 +54,104 @@ function installBattlerBindings(scope, engine, session, handles, createArray) {
     }
   }
   defineArrays(base, ['states', 'buffs', 'buffTurns', 'paramPlus'].map(field => ['_' + field, field]));
+  function defineDictionary(prototype, property, field) {
+    const views = new WeakMap();
+    const dictionary = object => {
+      if (!views.has(object)) views.set(object, nativeDictionary(createObject, (method, ...args) => invoke(object, field + '.' + method, ...args)));
+      return views.get(object);
+    };
+    Object.defineProperty(prototype, property, { configurable: true, enumerable: true,
+      get() { return dictionary(this).view; }, set(value) { dictionary(this).replace(value); }
+    });
+  }
+  defineDictionary(base, '_stateTurns', 'stateTurns');
+  base.initMembers = function() {
+    this._hp = 1; this._mp = 0; this._tp = 0; this._hidden = false;
+    this.clearParamPlus(); this.clearStates(); this.clearBuffs();
+  };
+  base.clearParamPlus = function() { this._paramPlus = Array(8).fill(0); };
+  base.clearStates = function() { this._states = []; this._stateTurns = {}; };
+  base.isStateExpired = function(id) { return this._stateTurns[id] === 0; };
+  base.updateStateTurns = function() { for (const id of this._states) if (this._stateTurns[id] > 0) --this._stateTurns[id]; };
+  base.stateResistSet = function() { return this.traitsSet(14); };
+  base.isStateResist = function(id) { return this.stateResistSet().includes(id); };
+  battler.isStateRestrict = function(id) { return scope.$dataStates[id].removeByRestriction && this.isRestricted(); };
+  battler.isStateAddable = function(id) { return this.isAlive() && scope.$dataStates[id] && !this.isStateResist(id) && !this.result().isStateRemoved(id) && !this.isStateRestrict(id); };
+  battler.removeStatesAuto = function(timing) {
+    if (!scope.$dataStates) return invoke(this, 'removeStatesAuto', timing);
+    for (const state of this.states()) if (this.isStateExpired(state.id) && state.autoRemovalTiming === timing) this.removeState(state.id);
+  };
+  base.clearBuffs = function() { this._buffs = Array(8).fill(0); this._buffTurns = Array(8).fill(0); };
+  base.eraseBuff = function(id) { this._buffs[id] = 0; this._buffTurns[id] = 0; };
+  base.buffLength = function() { return this._buffs.length; };
+  base.buff = function(id) { return this._buffs[id]; };
+  base.isBuffAffected = function(id) { return this._buffs[id] > 0; };
+  base.isDebuffAffected = function(id) { return this._buffs[id] < 0; };
+  base.isBuffOrDebuffAffected = function(id) { return this._buffs[id] !== 0; };
+  base.isMaxBuffAffected = function(id) { return this._buffs[id] === 2; };
+  base.isMaxDebuffAffected = function(id) { return this._buffs[id] === -2; };
+  base.increaseBuff = function(id) { if (!this.isMaxBuffAffected(id)) ++this._buffs[id]; };
+  base.decreaseBuff = function(id) { if (!this.isMaxDebuffAffected(id)) --this._buffs[id]; };
+  base.overwriteBuffTurns = function(id, turns) { if (this._buffTurns[id] < turns) this._buffTurns[id] = turns; };
+  base.isBuffExpired = function(id) { return this._buffTurns[id] === 0; };
+  for (const [method, change, affected, result] of [
+    ['addBuff', 'increaseBuff', 'isBuffAffected', 'pushAddedBuff'],
+    ['addDebuff', 'decreaseBuff', 'isDebuffAffected', 'pushAddedDebuff']
+  ]) battler[method] = function(id, turns) {
+    if (this.isAlive()) { this[change](id); if (this[affected](id)) this.overwriteBuffTurns(id, turns); this.result()[result](id); this.refresh(); }
+  };
+  battler.removeBuff = function(id) { if (this.isAlive() && this.isBuffOrDebuffAffected(id)) { this.eraseBuff(id); this.result().pushRemovedBuff(id); this.refresh(); } };
+  battler.removeAllBuffs = function() { for (let id = 0; id < this.buffLength(); ++id) this.removeBuff(id); };
+  battler.removeBuffsAuto = function() { for (let id = 0; id < this.buffLength(); ++id) if (this.isBuffExpired(id)) this.removeBuff(id); };
+  battler.removeBattleStates = function() {
+    if (!scope.$dataStates) return invoke(this, 'removeBattleStates');
+    for (const state of this.states()) if (state.removeAtBattleEnd) this.removeState(state.id);
+  };
+  function hasParameterData(object) {
+    return scope.$dataSystem && scope.$dataStates && (object.isActor()
+      ? scope.$dataActors && scope.$dataClasses && scope.$dataWeapons && scope.$dataArmors : scope.$dataEnemies);
+  }
+  battler.maxSlipDamage = function() { return scope.$dataSystem ? (scope.$dataSystem.optSlipDeath ? this.hp : Math.max(this.hp - 1, 0)) : invoke(this, 'maxSlipDamage'); };
+  battler.regenerateHp = function() {
+    if (!hasParameterData(this)) return invoke(this, 'regenerateHp');
+    const value = Math.max(Math.floor(this.mhp * this.hrg), -this.maxSlipDamage()); if (value !== 0) this.gainHp(value);
+  };
+  battler.regenerateMp = function() {
+    if (!hasParameterData(this)) return invoke(this, 'regenerateMp');
+    const value = Math.floor(this.mmp * this.mrg); if (value !== 0) this.gainMp(value);
+  };
+  battler.regenerateTp = function() { if (!hasParameterData(this)) return invoke(this, 'regenerateTp'); this.gainSilentTp(Math.floor(100 * this.trg)); };
+  battler.regenerateAll = function() { if (this.isAlive()) { this.regenerateHp(); this.regenerateMp(); this.regenerateTp(); } };
+  battler.onAllActionsEnd = function() { this.clearResult(); this.removeStatesAuto(1); this.removeBuffsAuto(); };
+  battler.onTurnEnd = function() {
+    this.clearResult(); this.regenerateAll();
+    if (!scope.BattleManager.isForcedTurn()) { this.updateStateTurns(); this.updateBuffTurns(); }
+    this.removeStatesAuto(2);
+  };
+
+  battler.onDamage = function(value) {
+      this.removeStatesByDamage();
+      this.chargeTpByDamage(value / this.mhp);
+  };
+  battler.removeStatesByDamage = function() {
+      this.states().forEach(function(state) {
+          if (state.removeByDamage && Math.floor(Math.random() * 100) < state.chanceByDamage) {
+              this.removeState(state.id);
+          }
+      }, this);
+  };
+  battler.chargeTpByDamage = function(damageRate) {
+      const value = Math.floor(50 * damageRate * this.tcr);
+      this.gainSilentTp(value);
+  };
+  battler.consumeItem = function(item) { scope.$gameParty.consumeItem(item); };
+  battler.useItem = function(item) {
+      if (scope.DataManager.isSkill(item)) {
+          this.paySkillCost(item);
+      } else if (scope.DataManager.isItem(item)) {
+          this.consumeItem(item);
+      }
+  };
   const results = new WeakMap();
   battler.result = function() {
     if (!results.has(this)) {
@@ -64,6 +166,27 @@ function installBattlerBindings(scope, engine, session, handles, createArray) {
     }
     return results.get(this);
   };
+  const resultFor = battler.result;
+  Object.defineProperty(battler, '_result', { configurable: true, enumerable: true,
+    get() { return resultFor.call(this); },
+    set(value) {
+      const result = resultFor.call(this);
+      for (const key of ['used', 'missed', 'evaded', 'physical', 'drain', 'critical', 'success', 'hpAffected', 'hpDamage', 'mpDamage', 'tpDamage', 'addedStates', 'removedStates', 'addedBuffs', 'addedDebuffs', 'removedBuffs']) result[key] = value[key];
+    }
+  });
+  for (const kind of ['Hp', 'Mp', 'Tp']) battler['gain' + kind] = function(value) {
+    const field = kind.toLowerCase(), result = this.result();
+    result[field + 'Damage'] = -value;
+    if (kind === 'Hp') result.hpAffected = true;
+    this['set' + kind](this[field] + value);
+  };
+  const motions = ['walk', 'wait', 'chant', 'guard', 'damage', 'evade', 'thrust', 'swing', 'missile', 'skill', 'spell', 'item', 'escape', 'victory', 'dying', 'abnormal', 'sleep', 'dead'];
+  battler.requestMotion = function(type) { invoke(this, 'requestMotion', motions.indexOf(type)); };
+  battler.motionType = function() { return motions[invoke(this, 'motionType')]; };
+  battler.clearMotion = function() { invoke(this, 'clearMotion'); };
+  battler.startWeaponAnimation = function(id) { invoke(this, 'startWeaponAnimation', id); };
+  for (const method of ['performDamage', 'performMiss', 'performRecovery', 'performEvasion', 'performMagicEvasion', 'performCounter', 'performReflection', 'performCollapse'])
+    battler[method] = function() { invoke(this, 'performBase', method); };
   battler.clearResult = function() { this.result().clear(); };
   Object.defineProperty(base, '_hidden', { configurable: true,
     get() { return engine.entityField(handles.get(this), 'hidden'); },
@@ -153,7 +276,7 @@ function installBattlerBindings(scope, engine, session, handles, createArray) {
   base.actionPlusSet = function() { return this.traits(constants.TRAIT_ACTION_PLUS).map(trait => trait.value); };
   base.specialFlag = function(id) { return this.traitsSet(constants.TRAIT_SPECIAL_FLAG).includes(id); };
   base.partyAbility = function(id) { return this.traitsSet(constants.TRAIT_PARTY_ABILITY).includes(id); };
-  base.collapseType = function() { return Math.max(0, ...this.traitsSet(constants.TRAIT_COLLAPSE_TYPE)); };
+  base.collapseType = function() { return hasParameterData(this) ? Math.max(0, ...this.traitsSet(constants.TRAIT_COLLAPSE_TYPE)) : invoke(this, 'collapseType'); };
   base.isAutoBattle = function() { return this.specialFlag(constants.FLAG_ID_AUTO_BATTLE); };
   base.isGuard = function() { return this.specialFlag(constants.FLAG_ID_GUARD) && this.canMove(); };
   base.isSubstitute = function() { return this.specialFlag(constants.FLAG_ID_SUBSTITUTE) && this.canMove(); };
@@ -178,6 +301,61 @@ function installBattlerBindings(scope, engine, session, handles, createArray) {
   base.addParam = function(id, value) { this._paramPlus[id] += value; this.refresh(); };
 
   const actor = scope.Game_Actor.prototype, enemy = scope.Game_Enemy.prototype;
+  actor.performCollapse = function() { battler.performCollapse.call(this); invoke(this, 'performDerived', 'performCollapse'); };
+  for (const method of ['performEvasion', 'performMagicEvasion']) actor[method] = function() { battler[method].call(this); this.requestMotion('evade'); };
+  actor.isSpriteVisible = function() { return scope.$gameSystem.isSideView(); };
+  actor.performDamage = function() {
+    battler.performDamage.call(this);
+    if (this.isSpriteVisible()) this.requestMotion('damage'); else scope.$gameScreen.startShake(5, 5, 10);
+    invoke(this, 'performDerived', 'actorDamageSound');
+  };
+  actor.performAttack = function() {
+    let attack;
+    if (scope.$dataSystem?.attackMotions && scope.$dataWeapons) {
+      const weapons = this.weapons(); attack = scope.$dataSystem.attackMotions[weapons[0] ? weapons[0].wtypeId : 0];
+    } else attack = invoke(this, 'attackMotion');
+    if (attack) { if (attack.type >= 0 && attack.type <= 2) this.requestMotion(['thrust', 'swing', 'missile'][attack.type]); this.startWeaponAnimation(attack.weaponImageId); }
+  };
+  enemy.performDamage = function() { battler.performDamage.call(this); this.requestEffect('blink'); invoke(this, 'performDerived', 'enemyDamageSound'); };
+  enemy.performCollapse = function() {
+    battler.performCollapse.call(this); const type = this.collapseType();
+    if (type >= 0 && type <= 2) this.requestEffect(['collapse', 'bossCollapse', 'instantCollapse'][type]);
+    invoke(this, 'collapseSound', type);
+  };
+  actor.performCounter = function() { battler.performCounter.call(this); this.performAttack(); };
+  actor.performEscape = function() { if (this.canMove()) this.requestMotion('escape'); };
+  enemy.requestEffect = function(type) { invoke(this, 'requestEffect', type); };
+
+  actor.optimizeEquipments = function() {
+      const maxSlots = this.equipSlots().length;
+      this.clearEquipments();
+      for (let i = 0; i < maxSlots; i++) {
+          if (this.isEquipChangeOk(i)) {
+              this.changeEquip(i, this.bestEquipItem(i));
+          }
+      }
+  };
+  actor.bestEquipItem = function(slotId) {
+      const etypeId = this.equipSlots()[slotId];
+      const items = scope.$gameParty.equipItems().filter(function(item) {
+          return item.etypeId === etypeId && this.canEquip(item);
+      }, this);
+      let bestItem = null;
+      let bestPerformance = -1000;
+      for (let i = 0; i < items.length; i++) {
+          const performance = this.calcEquipItemPerformance(items[i]);
+          if (performance > bestPerformance) {
+              bestPerformance = performance;
+              bestItem = items[i];
+          }
+      }
+      return bestItem;
+  };
+  actor.calcEquipItemPerformance = function(item) {
+      return item.params.reduce(function(a, b) {
+          return a + b;
+      });
+  };
   defineArrays(actor, [['_skills', 'skills']]);
   for (const field of ['level', 'nickname', 'profile', 'characterName', 'characterIndex', 'faceName', 'faceIndex', 'battlerName']) {
     Object.defineProperty(actor, '_' + field, { configurable: true,
@@ -191,6 +369,53 @@ function installBattlerBindings(scope, engine, session, handles, createArray) {
   actor.setCharacterImage = function(name, index) { this._characterName = name; this._characterIndex = index; };
   actor.setFaceImage = function(name, index) { this._faceName = name; this._faceIndex = index; };
   actor.setBattlerImage = function(name) { this._battlerName = name; };
+  defineDictionary(actor, '_exp', 'exp');
+  defineDictionary(actor, '_stateSteps', 'stateSteps');
+  actor.currentExp = function() { return invoke(this, 'currentExp'); };
+  actor.changeExp = function(exp, show) { invoke(this, 'changeExp', Math.max(exp, 0), Boolean(show)); };
+  actor.levelUp = function() { if (!scope.$dataClasses) { invoke(this, 'levelUp'); return; } ++this._level; for (const learning of this.currentClass().learnings) if (learning.level === this._level) this.learnSkill(learning.skillId); };
+  actor.levelDown = function() { --this._level; };
+  actor.changeClass = function(id, keepExp) {
+    if (keepExp) this._exp[id] = this.currentExp();
+    this._classId = id; this.changeExp(this._exp[id] || 0, false); this.refresh();
+  };
+  actor.refresh = function() {
+    if (!scope.$dataSystem || !scope.$dataWeapons || !scope.$dataArmors || !scope.$dataClasses || !scope.$dataStates) { invoke(this, 'actorRefresh'); return; }
+    this.releaseUnequippableItems(false); base.refresh.call(this);
+  };
+  installEquipArray(scope, read, write, createArray);
+  actor.equipSlots = function() {
+    const slots = createArray(scope.$dataSystem.equipTypes.slice(1).map((value, index) => index + 1));
+    if (slots.length >= 2 && this.isDualWield()) slots[1] = 1;
+    return slots;
+  };
+  actor.isEquipChangeOk = function(slot) { const type = this.equipSlots()[slot]; return !this.isEquipTypeLocked(type) && !this.isEquipTypeSealed(type); };
+  actor.tradeItemWithParty = function(item, previous) {
+    if (item && !scope.$gameParty.hasItem(item)) return false;
+    scope.$gameParty.gainItem(previous, 1); scope.$gameParty.loseItem(item, 1); return true;
+  };
+  actor.changeEquip = function(slot, item) {
+    if (this.tradeItemWithParty(item, this.equips()[slot]) && (!item || this.equipSlots()[slot] === item.etypeId)) {
+      this._equips[slot].setObject(item); this.refresh();
+    }
+  };
+  actor.forceChangeEquip = function(slot, item) { this._equips[slot].setObject(item); this.releaseUnequippableItems(true); this.refresh(); };
+  actor.changeEquipById = function(type, id) { const slot = type - 1; this.changeEquip(slot, scope[this.equipSlots()[slot] === 1 ? '$dataWeapons' : '$dataArmors'][id]); };
+  actor.releaseUnequippableItems = function(forcing) {
+    for (;;) {
+      const slots = this.equipSlots(), equips = this.equips();
+      let changed = false;
+      for (let index = 0; index < equips.length; ++index) {
+        const item = equips[index];
+        if (item && (!this.canEquip(item) || item.etypeId !== slots[index])) {
+          if (!forcing) this.tradeItemWithParty(null, item);
+          this._equips[index].setObject(null); changed = true;
+        }
+      }
+      if (!changed) break;
+    }
+  };
+  actor.clearEquipments = function() { for (let slot = 0; slot < this.equipSlots().length; ++slot) if (this.isEquipChangeOk(slot)) this.changeEquip(slot, null); };
   actor.equips = function() { const kinds = read(this, 'equipKinds'); return read(this, 'equips').map((id, i) => id > 0 ? scope[kinds[i] === 1 ? '$dataWeapons' : '$dataArmors'][id] : null); };
   actor.weapons = function() { return this.equips().filter(item => scope.DataManager.isWeapon(item)); };
   actor.armors = function() { return this.equips().filter(item => scope.DataManager.isArmor(item)); };

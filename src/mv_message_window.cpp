@@ -28,6 +28,7 @@ Value Session::runtimeMessageField(const std::string& field, const std::optional
   return *target;
 }
 Value Session::invokeMessageBase(const std::string& method, const Value::Array& args) {
+  if (method == "initialize") { dispatchMessage("clear"); return Value::undefined(); }
   if (method=="window.clearFlags") { Window_Message::clearFlags(message_); return Value::undefined(); }
   if (method=="window.terminateMessage") { Window_Message::terminate(*this); return Value::undefined(); }
   if (method=="window.startInput") return Window_Message::startInput(*this);
@@ -35,6 +36,10 @@ Value Session::invokeMessageBase(const std::string& method, const Value::Array& 
     if (index >= args.size()) throw std::invalid_argument("missing message argument");
     return args[index];
   };
+  if (method == "numInputVariableId") return message_.numberVariableId;
+  if (method == "numInputMaxDigits") return message_.numberDigits;
+  if (method == "itemChoiceVariableId") return message_.itemVariableId;
+  if (method == "itemChoiceItypeId") return message_.itemType;
   if (method == "clear") {
     const auto openness = message_.openness, previous = message_.previousOpenness;
     const bool started = message_.windowStarted, closing = message_.closing;
@@ -42,6 +47,7 @@ Value Session::invokeMessageBase(const std::string& method, const Value::Array& 
     message_.windowStarted = started; message_.closing = closing;
     messageAge_ = 0; messageOwnerSerial_ = 0;
   }
+  else if (method == "newPage") { if (!message_.lines.empty()) message_.pageBreaks.insert(static_cast<int>(message_.lines.size())); }
   else if (method == "add") {
     message_.lines.push_back(argument(0)); message_.busy = true;
     if (message_.closing && closingMessage_ && closingMessage_->background == message_.background && closingMessage_->position == message_.position)

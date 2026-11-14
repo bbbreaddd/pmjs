@@ -6,6 +6,23 @@ const globalName = key => '$game' + key[0].toUpperCase() + key.slice(1);
 function installSaveManager(runtime, engine, session) {
   const scope = runtime.scope, manager = scope.DataManager;
   let projections = new WeakMap();
+  const stringify = scope.JsonEx.stringify;
+  scope.JsonEx.stringify = function(object) {
+    if (!runtime.projectSaveObject) return stringify.call(this, object);
+    const seen = new WeakMap();
+    function project(value) {
+      if (!value || typeof value !== 'object') return value;
+      if (seen.has(value)) return seen.get(value);
+      const body = runtime.projectSaveObject(value);
+      const copy = Array.isArray(value) ? [] : Object.create(Object.getPrototypeOf(value));
+      seen.set(value, copy);
+      for (const key of Object.keys(body)) Object.defineProperty(copy, key, {
+        configurable: true, enumerable: true, writable: true, value: project(body[key])
+      });
+      return copy;
+    }
+    return stringify.call(this, project(object));
+  };
   const nativeContents = () => decodeGraph(encodeGraph(engine.save(session, false)), { allowCycles: true });
   function pair(snapshot, live, forward, reverse, visited = new Set()) {
     if (!snapshot || typeof snapshot !== 'object' || !live || typeof live !== 'object' || visited.has(snapshot)) return;
@@ -39,13 +56,27 @@ function installSaveManager(runtime, engine, session) {
       return result;
     };
   }
+  manager.isAnySavefileExists = function() {
+    const info = this.loadGlobalInfo();
+    if (info) for (let index = 1; index < info.length; ++index) if (this.isThisGameFile(index)) return true;
+    return false;
+  };
   manager.makeSaveContents = function() {
     capture();
     return Object.fromEntries(roots.map(key => [key, scope[globalName(key)]]));
   };
   manager.extractSaveContents = function(contents) {
-    const json = scope.JsonEx.stringify(contents);
-    engine.load(session, engine.decodeGraph(json));
+    const before = nativeContents();
+    function core(schema, value) {
+      if (!schema || typeof schema !== 'object') return value;
+      if (!value || typeof value !== 'object') return value;
+      if (Array.isArray(schema)) return Array.from(value, (item, index) => core(schema[index] || schema.find(entry => entry && typeof entry === 'object'), item));
+      const result = {};
+      const keys = schema['@'] ? Object.keys(schema) : [...new Set([...Object.keys(schema), ...Object.keys(value)])];
+      for (const key of keys) result[key] = key === '@' ? schema[key] : core(schema[key], value[key]);
+      return result;
+    }
+    engine.load(session, engine.decodeGraph(encodeGraph(core(before, contents))));
     const schema = nativeContents(), { forward: parsedToLive } = bindings(contents);
     const nativeSchema = bindings(schema).reverse;
     const visited = new WeakMap();
@@ -57,7 +88,7 @@ function installSaveManager(runtime, engine, session) {
       const known = nativeSchema.get(target);
       for (const key of Object.keys(object)) {
         const value = restore(object[key]);
-        if (!known || !Object.hasOwn(known, key) || !(key in target)) target[key] = value;
+        if (!known || !Object.hasOwn(known, key) || (!Array.isArray(target) && !(key in target))) target[key] = value;
       }
       return target;
     }
@@ -93,6 +124,11 @@ function installSaveManager(runtime, engine, session) {
   };
   manager.isBattleTest = () => scope.Utils.isOptionValid('btest');
   manager.isEventTest = () => scope.Utils.isOptionValid('etest');
+  scope.Game_System.prototype.playtime = function() { return Math.floor(scope.Graphics.frameCount / 60); };
+  scope.Game_System.prototype.playtimeText = function() {
+    const time = this.playtime();
+    return [Math.floor(time / 3600), Math.floor(time / 60) % 60, time % 60].map(value => String(value).padStart(2, '0')).join(':');
+  };
   scope.Game_System.prototype.onBeforeSave = function() {
     engine.save(session);
     this._framesOnSave = scope.Graphics.frameCount;
@@ -109,6 +145,7 @@ function installSaveManager(runtime, engine, session) {
     for (const id of scope.$dataSystem.partyMembers) this.addActor(id);
   };
   runtime.completeStorage = function(request) {
+    if (request.save) scope.$gameSystem.onBeforeSave();
     const success = request.save ? manager.saveGame(request.slot) : manager.loadGame(request.slot);
     if (request.save && success) scope.StorageManager.cleanBackup(request.slot);
     if (request.load && success) scope.$gameSystem.onAfterLoad();

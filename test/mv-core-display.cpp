@@ -14,6 +14,20 @@ int main() try {
   require(frame.real.width == 16 && frame.real.height == 8, "sprite frame clamps to the bitmap");
   require(frame.pivot.x == -4 && frame.pivot.y == -3, "sprite frame keeps the clipped pivot");
 
+  {
+    auto child=std::make_shared<Container>();
+    int additions=0,removals=0;
+    child->addedHook=[&](Container& parent){++additions;require(child->parent==&parent,"added hook sees the actual parent");};
+    child->removedHook=[&](Container& parent){++removals;require(child->parent==nullptr,"removed hook sees detached ownership");require(parent.children.empty(),"removed hook sees updated siblings");return true;};
+    {
+      auto parent=std::make_shared<Container>();parent->addChild(child);parent->removeChild(child.get());
+      require(additions==1&&removals==1,"display mutation invokes registered hooks once");
+      parent->addChild(child);
+    }
+    require(additions==2&&removals==1,"native tree destruction does not enter script callbacks");
+    require(child->parent==nullptr,"native tree destruction still detaches retained children");
+  }
+
   ScreenSprite screen;
   screen.setColor(NAN, -5, 127.6);
   require(screen.color[0] == 0.0f, "screen color maps NaN to zero");

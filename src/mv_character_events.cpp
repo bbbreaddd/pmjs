@@ -157,15 +157,30 @@ void Session::updateMapScroll() {
     if (!savedCamera_) savedCamera_ = std::array{mapState_.lastDisplayX, mapState_.lastDisplayY};
     const auto before = *savedCamera_;
     const double distance = std::pow(2.0, mapState_.scrollSpeed) / 256;
-    switch (mapState_.scrollDirection) {
-      case 2: if (loopVertical()) (*savedCamera_)[1] = std::fmod((*savedCamera_)[1] + distance, map()["height"].number()); else if (endY >= 0) (*savedCamera_)[1] = std::min((*savedCamera_)[1] + distance, endY); break;
-      case 4: if (loopHorizontal()) (*savedCamera_)[0] = std::fmod((*savedCamera_)[0] - distance + map()["width"].number(), map()["width"].number()); else if (endX >= 0) (*savedCamera_)[0] = std::max((*savedCamera_)[0] - distance, 0.0); break;
-      case 6: if (loopHorizontal()) (*savedCamera_)[0] = std::fmod((*savedCamera_)[0] + distance, map()["width"].number()); else if (endX >= 0) (*savedCamera_)[0] = std::min((*savedCamera_)[0] + distance, endX); break;
-      case 8: if (loopVertical()) (*savedCamera_)[1] = std::fmod((*savedCamera_)[1] - distance + map()["height"].number(), map()["height"].number()); else if (endY >= 0) (*savedCamera_)[1] = std::max((*savedCamera_)[1] - distance, 0.0); break;
-    }
+    const std::string method = mapState_.scrollDirection == 2 ? "scrollDown" : mapState_.scrollDirection == 4 ? "scrollLeft" : mapState_.scrollDirection == 6 ? "scrollRight" : "scrollUp";
+    dispatchGameDataMutation("map", method, {distance});
     mapState_.scrollRest = *savedCamera_ == before ? 0 : mapState_.scrollRest - distance;
   }
   updateMapDisplay();
+}
+
+void Session::scrollMapDirection(int direction, double distance) {
+  const bool horizontal = direction == 4 || direction == 6, positive = direction == 2 || direction == 6;
+  const bool loop = horizontal ? loopHorizontal() : loopVertical();
+  const double size = map()[horizontal ? "width" : "height"].number();
+  const double visible = horizontal ? double(screenWidth_) / tileWidth() : double(screenHeight_) / tileHeight();
+  auto& display = horizontal ? mapState_.lastDisplayX : mapState_.lastDisplayY;
+  auto& parallax = horizontal ? mapState_.parallaxX : mapState_.parallaxY;
+  const bool parallaxLoop = horizontal ? mapState_.parallaxLoopX : mapState_.parallaxLoopY;
+  const double delta = positive ? distance : -distance, previous = display;
+  if (loop) {
+    display = std::fmod(std::fmod(display + delta, size) + size, size);
+    if (parallaxLoop) parallax += delta;
+  } else if (size >= visible) {
+    display = positive ? std::min(display + delta, size - visible) : std::max(display + delta, 0.0);
+    parallax += display - previous;
+  }
+  savedCamera_ = std::array{mapState_.lastDisplayX, mapState_.lastDisplayY};
 }
 
 void Session::updateMapDisplay() {
@@ -179,7 +194,8 @@ void Session::updateMapDisplay() {
   mapState_.lastDisplayX = displayX; mapState_.lastDisplayY = displayY;
 }
 
-void Session::updateMapState() {
+void Session::updateMapState() { dispatchGameDataMutation("map", "updateParallax", {}); }
+void Session::updateMapParallax() {
   if (mapState_.parallaxLoopX) mapState_.parallaxX += mapState_.parallaxSx / 96;
   if (mapState_.parallaxLoopY) mapState_.parallaxY += mapState_.parallaxSy / 96;
 }

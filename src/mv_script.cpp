@@ -1,4 +1,5 @@
 #include "mv_engine.hpp"
+#include "mv_core_utils.hpp"
 #include "mv_managers.hpp"
 #include <algorithm>
 #include <cctype>
@@ -7,6 +8,16 @@
 #include <stdexcept>
 
 namespace pmjs::mv {
+bool Session::dispatchManager(const std::string& manager, const std::string& method, const Value::Array& arguments) {
+  if (!runtimeHooks_ || !runtimeHooks_->manager) return false;
+  const auto key = std::make_pair(manager, method);
+  if (!managerCalls_.insert(key).second) return false;
+  try {
+    const bool handled = runtimeHooks_->manager(manager, method, arguments);
+    managerCalls_.erase(key); return handled;
+  } catch (...) { managerCalls_.erase(key); throw; }
+}
+
 void Session::dispatchGameDataMutation(const std::string& kind, const std::string& method, const Value::Array& arguments) {
   if (!runtimeHooks_ || !runtimeHooks_->gameDataMutation || !runtimeHooks_->gameDataMutation(kind, method, arguments))
     invokeGameDataBase(kind, method, arguments);
@@ -29,6 +40,7 @@ Value Session::invokeGameDataBase(const std::string& kind, const std::string& me
     Value::Array result; for (const auto& [id, actor] : actors_) { (void)actor; result.emplace_back(id); } return result;
   }
   if (kind == "screen") return invokeScreenBase(method, arguments);
+  if (kind == "map" && method == "invalidateTileFunctions") { if(!arguments.empty())runtimeTileFunctions_=arguments[0].boolean();if(arguments.size()>1)runtimeTileDrawing_=arguments[1].boolean();++presentationRevision_;return Value::undefined(); }
   if (kind == "map" && method == "invalidateTileShadows") { if (!arguments.empty()) runtimeTileShadows_ = arguments[0].boolean(); ++presentationRevision_; return Value::undefined(); }
   if (kind == "map" && method == "cameraNormal") {
     if (!arguments.empty()) {
@@ -39,25 +51,45 @@ Value Session::invokeGameDataBase(const std::string& kind, const std::string& me
   }
   if (kind == "map") {
     if (method == "initialize") { initializeMap(); return Value::undefined(); }
+    if (method == "setDisplayPos") { setDisplayPosition(arguments.at(0).number(), arguments.at(1).number()); return Value::undefined(); }
+    if (method == "updateParallax") { updateMapParallax(); return Value::undefined(); }
+    if (method == "scrollDown" || method == "scrollLeft" || method == "scrollRight" || method == "scrollUp") {
+      scrollMapDirection(method == "scrollDown" ? 2 : method == "scrollLeft" ? 4 : method == "scrollRight" ? 6 : 8, arguments.at(0).number());
+      return Value::undefined();
+    }
     if (method == "setupScroll") {
       mapState_.scrollDirection = 2; mapState_.scrollRest = 0; mapState_.scrollSpeed = 4;
       return Value::undefined();
     }
     if (method == "autoplay") { autoplayMap(); return Value::undefined(); }
     if (method == "setup") { setupMap(arguments.at(0).integer()); return Value::undefined(); }
+    if (method == "adjustX") return runtimeMapAdjustedPosition(arguments.at(0).number(), 0)[0];
+    if (method == "adjustY") return runtimeMapAdjustedPosition(0, arguments.at(0).number())[1];
     if (method == "tileWidth") return tileWidth();
     if (method == "tileHeight") return tileHeight();
+    if (method == "tilesetId") return mapState_.tilesetId;
     if (method == "width" || method == "height" || method == "displayName" || method == "encounterStep") return map()[method];
     if (method == "isLoopHorizontal") return loopHorizontal();
     if (method == "isLoopVertical") return loopVertical();
     if (method == "isEventRunning") return interpreter_.running;
     if (method == "eventIds") { Value::Array ids; for (const auto& event : events_) ids.emplace_back(event.id); return ids; }
-    if (method == "displayX") return mapState_.lastDisplayX;
-    if (method == "displayY") return mapState_.lastDisplayY;
+    if (method == "displayX" || method == "displayY") {
+      const int axis = method == "displayX" ? 0 : 1;
+      double& coordinate = axis == 0 ? mapState_.lastDisplayX : mapState_.lastDisplayY;
+      if (!arguments.empty()) {
+        const double value = arguments[0].number();
+        if (!std::isfinite(value)) throw std::invalid_argument("map display coordinate must be finite");
+        coordinate = value;
+        if (savedCamera_) (*savedCamera_)[axis] = value;
+      }
+      return coordinate;
+    }
     if (method == "refreshIfNeeded") { refreshIfNeeded(); return Value::undefined(); }
     throw std::invalid_argument("map operation is not bound: " + method);
   }
   if (kind == "system") {
+    if (method == "windowTone") return system_.windowTone.null() ? database_["system"]["windowTone"] : system_.windowTone;
+    if (method == "setWindowTone") { system_.windowTone = arguments.at(0); return Value::undefined(); }
     if (method == "isSideView") return database_["system"]["optSideView"].boolean();
     if (method == "initialize") { system_ = {}; return Value::undefined(); }
     if (method == "playtime") return static_cast<int>(ticks_ / 60);
@@ -94,6 +126,155 @@ Value Session::invokeGameDataBase(const std::string& kind, const std::string& me
       battle_.actorIndex < static_cast<int>(battleMemberCount());
   }
   if (kind == "battle") {
+    if (method == "updateBattleEnd") { leaveBattle(); return Value::undefined(); }
+    if (method == "nextSubject") {
+      if(battle_.actions.empty())return {};
+      const auto& action=battle_.actions.front(); return Value::Object{{"actorId",action.enemy?0:action.actorId?action.actorId:party_.at(action.subject)},{"enemyIndex",action.enemy?action.subject:-1}};
+    }
+    if (method == "processTurn") {
+  if (battle_.actions.empty()) { endTurn(); return Value::undefined(); }
+  const auto action = battle_.actions.front(); battle_.actions.erase(battle_.actions.begin()); executeAction(action);
+  if (!battle_.actionStage &&
+      std::none_of(battle_.actions.begin(), battle_.actions.end(), [&](const Action& next) { return next.enemy == action.enemy && next.subject == action.subject && next.actorId == action.actorId; })) {
+    auto& subject = action.enemy ? battle_.enemies[action.subject] : actors_.at(action.actorId ? action.actorId : party_[action.subject]);
+    endBattlerActions(subject);
+  }
+  if (!battle_.wait) battle_.wait = 1;
+      return Value::undefined();
+    }
+
+    if (method == "playVictoryMe" || method == "playDefeatMe") {
+      const auto& sound=method=="playVictoryMe" ? system_.victoryMe : system_.defeatMe;
+      AudioManager::playMe(*this,sound.null()?database_["system"][method=="playVictoryMe"?"victoryMe":"defeatMe"]:sound); return Value::undefined();
+    }
+    if (method == "playBattleBgm") { AudioManager::playBgm(*this,system_.battleBgm.null()?database_["system"]["battleBgm"]:system_.battleBgm);AudioManager::stopBgs(*this);return Value::undefined(); }
+    if (method == "replayBgmAndBgs") { AudioManager::replayBgm(*this,battle_.mapBgm);AudioManager::replayBgs(*this,battle_.mapBgs);return Value::undefined(); }
+
+    if (method == "rewards") {
+      int gold=0, exp=0; Value::Array items;
+      for (const auto& enemy : battle_.enemies) if(enemy.isDead()) {
+        const auto& source=database_["enemies"][enemy.id]; gold+=source["gold"].integer(); exp+=source["exp"].integer();
+        for(const auto& drop:source["dropItems"].array()) if(drop["kind"].integer()>0 && random()*drop["denominator"].number()<(hasPartyAbility(5)?2:1)) items.emplace_back(Value::Object{{"kind",drop["kind"]},{"id",drop["dataId"]}});
+      }
+      return Value::Object{{"gold",gold*(hasPartyAbility(4)?2:1)},{"exp",exp},{"items",items}};
+    }
+    if (method == "gainExp") {
+      const double exp=arguments[0].number();
+      for (std::size_t index=0;index<party_.size();++index) { auto& actor=actors_.at(party_[index]); const double gain=std::floor(exp*trait(actor,23,9,true)*((index<4 && !actor.hidden)||database_["system"]["optExtraExp"].boolean()?1:0)+0.5); changeActorExp(actor,actor.exp[actor.classId]+gain,true); }
+      return Value::undefined();
+    }
+
+    if (method == "processEscape") {
+      SoundManager::playEscape(*this);
+      const bool success = battle_.preemptive || random() < battle_.escapeRatio;
+      if (success) finishBattle(1);
+      else {
+        battle_.escapeRatio += 0.1;
+        battle_.actions.erase(std::remove_if(battle_.actions.begin(), battle_.actions.end(), [](const Action& action) { return !action.enemy; }), battle_.actions.end());
+        battle_.actorIndex = static_cast<int>(battleMemberCount());
+        std::fill(battle_.remainingActions.begin(),battle_.remainingActions.end(),0);
+        battle_.log.clear();
+        message_ = {}; message_.busy = true; messageAge_ = 0;
+        message_.lines = {battleMessage("escapeStart", {partyName()}), battleMessage("escapeFailure")};
+        beginTurn();
+      }
+      return success;
+    }
+    if (method == "endBattle") { const int result=arguments[0].integer(); battle_.result=result; battle_.active=false; battle_.phase="battleEnd"; setBattleEventResult(result); return Value::undefined(); }
+
+    if (method == "action") {
+      Action* action = battle_.pendingAction ? &*battle_.pendingAction : battle_.actionStage && battle_.currentVisual >= 0 ? &battle_.visuals.at(battle_.currentVisual).action : nullptr;
+      if (!action) return {};
+      if (arguments.size() > 1) {
+        if (arguments.size() < 3 || arguments[2].number() != static_cast<double>(battle_.actionSerial)) throw std::invalid_argument("battle action is no longer current");
+        const auto field = arguments[0].text(); const auto& value = arguments[1];
+        if (field == "id") action->id = value.integer();
+        else if (field == "item") action->item = value.boolean();
+        else if (field == "target") action->target = value.integer();
+        else if (field == "forced") action->forced = value.boolean();
+        else throw std::invalid_argument("battle action field is not bound: " + field);
+      }
+      const int actorId = action->enemy ? 0 : action->actorId ? action->actorId : party_.at(action->subject);
+      return Value::Object{{"serial",static_cast<double>(battle_.actionSerial)}, {"id", action->id}, {"item",action->item}, {"target",action->target}, {"forced",action->forced}, {"actorId",actorId}, {"enemyIndex",action->enemy ? action->subject : -1}};
+    }
+    if (method == "subject") {
+      Action* action = battle_.pendingAction ? &*battle_.pendingAction : battle_.actionStage && battle_.currentVisual >= 0 ? &battle_.visuals.at(battle_.currentVisual).action : nullptr;
+      if (action && arguments.size() == 2) {
+        action->enemy = arguments[1].integer() >= 0;
+        action->actorId = arguments[0].integer();
+        if (action->enemy) action->subject = arguments[1].integer();
+        else { const auto found = std::find(party_.begin(), party_.end(), action->actorId); if (found == party_.end()) throw std::invalid_argument("battle subject is not in the party"); action->subject = static_cast<int>(found-party_.begin()); }
+      }
+      return Value::undefined();
+    }
+    if (method == "targets") {
+      if (!battle_.actionStage || battle_.currentVisual < 0) return Value::Array{};
+      auto& visual = battle_.visuals.at(battle_.currentVisual);
+      if (!arguments.empty()) {
+        visual.targets.resize(battle_.targetIndex);
+        for (const auto& value : arguments[0].array()) {
+          BattleTarget target; target.enemy = value["enemyIndex"].integer(-1) >= 0;
+          target.actorId = value["actorId"].integer();
+          if (target.enemy) { target.index=value["enemyIndex"].integer(); if(target.index<0 || target.index>=static_cast<int>(battle_.enemies.size())) throw std::invalid_argument("unknown battle target"); }
+          else { const auto found=std::find(party_.begin(),party_.end(),target.actorId); if(found==party_.end())throw std::invalid_argument("battle target is not in the party"); target.index=static_cast<int>(found-party_.begin()); }
+          visual.targets.push_back(target);
+        }
+        visual.invocationCount = visual.targets.size(); visual.animationTargets = visual.targets;
+      }
+      Value::Array result;
+      for (std::size_t index = battle_.targetIndex; index < visual.invocationCount; ++index) { const auto& target=visual.targets[index]; result.emplace_back(Value::Object{{"actorId",target.enemy ? 0 : target.actorId ? target.actorId : party_.at(target.index)}, {"enemyIndex",target.enemy ? target.index : -1}}); }
+      return result;
+    }
+    if (method == "makeActionOrders") { makeBattleActionOrders(); return Value::undefined(); }
+    if (method == "orders") {
+      const auto key = [&](const Action& action) { return action.enemy ? -action.subject-1 : action.actorId ? action.actorId : party_.at(action.subject); };
+      if (!arguments.empty()) {
+        std::vector<Action> reordered;
+        for (const auto& value : arguments[0].array()) {
+          const int id = value["enemyIndex"].integer(-1) >= 0 ? -value["enemyIndex"].integer()-1 : value["actorId"].integer();
+          for (const auto& action : battle_.actions) if (key(action)==id) reordered.push_back(action);
+        }
+        battle_.actions = std::move(reordered);
+      }
+      Value::Array result; std::set<int> seen;
+      for (const auto& action : battle_.actions) if (seen.insert(key(action)).second) result.emplace_back(Value::Object{{"actorId",action.enemy ? 0 : key(action)}, {"enemyIndex",action.enemy ? action.subject : -1}});
+      return result;
+    }
+    if (method == "startAction") { if (battle_.pendingAction) executeAction(*battle_.pendingAction); return Value::undefined(); }
+    if (method == "invokeAction") { resolveAction(); return Value::undefined(); }
+    if (method == "endAction") { endBattleAction(); return Value::undefined(); }
+
+    if (method == "setup") { startBattle(arguments[0].integer(), arguments[1].boolean(), arguments[2].boolean(), arguments.size()<4 || arguments[3].boolean()); return Value::undefined(); }
+    if (method == "field") {
+      const auto field = arguments[0].text(); const bool write = arguments.size() > 1;
+      const auto& value = arguments.size() > 1 ? arguments[1] : arguments[0];
+      if (field == "_phase") {
+        if (write) { battle_.phase = value.text(); if(battle_.phase=="aborting")battle_.aborting=true; if(battle_.phase=="battleEnd")battle_.active=false; }
+        return battle_.phase.empty() ? Value{} : Value(battle_.phase);
+      }
+      if (field == "_battleTest") { if(write)battleTest_=value.boolean();return battleTest_; }
+      if (field == "_actorIndex") { if (write) battle_.actorIndex = value.integer(); return battle_.actorIndex; }
+      if (field == "_escapeRatio") { if (write) battle_.escapeRatio = value.number(); return battle_.escapeRatio; }
+      if (field == "_preemptive") { if (write) battle_.preemptive = value.boolean(); return battle_.preemptive; }
+      if (field == "_surprise") { if (write) battle_.surprise = value.boolean(); return battle_.surprise; }
+      if (field == "_canEscape") { if (write) battle_.canEscape = value.boolean(); return battle_.canEscape; }
+      if (field == "_canLose") { if (write) battle_.canLose = value.boolean(); return battle_.canLose; }
+      if (field == "_turnForced") { if (write) battle_.forcedTurn = value.boolean(); return battle_.forcedTurn; }
+      if (field == "_mapBgm") { if (write) battle_.mapBgm = value; return battle_.mapBgm; }
+      if (field == "_mapBgs") { if (write) battle_.mapBgs = value; return battle_.mapBgs; }
+      throw std::invalid_argument("battle field is not bound: " + field);
+    }
+    if (method == "update") { updateBattle(); return Value::undefined(); }
+    if (method == "startInput") { makeEnemyActions(); return Value::undefined(); }
+    if (method == "startTurn") { beginTurn(); return Value::undefined(); }
+    if (method == "endTurn") { endTurn(); return Value::undefined(); }
+    if (method == "processVictory") { finishBattle(0); return Value::undefined(); }
+    if (method == "processDefeat") { finishBattle(2); return Value::undefined(); }
+    if (method == "processAbort") { abortBattle(); return Value::undefined(); }
+    if (method == "setupTroop") { setupTroopBase(arguments.at(0).integer()); return Value::undefined(); }
+    if (method == "increaseTurn") { increaseTroopTurnBase(); return Value::undefined(); }
+    if (method == "setupBattleEvent") { setupTroopEvents(); return Value::undefined(); }
+    if (method == "updateInterpreter") { advanceInterpreter(battle_.interpreter); return Value::undefined(); }
     if (method == "enemyCount") return static_cast<int>(battle_.enemies.size());
     if (method == "troopId") return battle_.troopId;
     if (method == "turnCount") return battle_.turn;
@@ -106,7 +287,15 @@ Value Session::invokeGameDataBase(const std::string& kind, const std::string& me
     throw std::invalid_argument("battle operation is not bound: " + method);
   }
   if (kind == "party") {
-    if (method == "initialize") { inventory_.clear(); party_.clear(); gold_ = 0; steps_ = 0; return Value::undefined(); }
+    if (method == "initialize") { inventory_.clear(); party_.clear(); gold_ = 0; steps_ = 0; lastItemKind_ = 0; lastItemId_ = 0; return Value::undefined(); }
+    if (method == "lastItem") {
+      if (!arguments.empty()) {
+        const int kind = arguments.at(0).integer(), id = arguments.at(1).integer();
+        if (kind < 0 || kind > 4 || id < 0) throw std::invalid_argument("invalid remembered item");
+        lastItemKind_ = kind; lastItemId_ = id;
+      }
+      return Value::Array{lastItemKind_, lastItemId_};
+    }
     if (method == "members") { Value::Array ids; for (int id : partyMembers()) ids.emplace_back(id); return ids; }
     if (method == "gold") return gold_;
     if (method == "inBattle") return battle_.active;

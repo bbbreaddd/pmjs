@@ -484,7 +484,12 @@ ResourceHandler.retry = function() {
         this._reloaders.length = 0;
     }
 };
-if (typeof PIXI !== "undefined" && PIXI.filters && PIXI.filters.ColorMatrixFilter) {
+`);
+  installToneFilter(runtime);
+}
+
+function installToneFilter(runtime) {
+  runtime.runScript(`if (typeof PIXI !== "undefined" && PIXI.filters && PIXI.filters.ColorMatrixFilter) {
 function ToneFilter() {
     PIXI.filters.ColorMatrixFilter.call(this);
 }
@@ -515,4 +520,24 @@ globalThis.ToneFilter = ToneFilter;
 }`);
 }
 
-module.exports = { installCoreUtilities };
+function installScreenSprite(runScript, ScreenSprite) {
+  runScript(`(function(ScreenSprite) {
+    ScreenSprite.YEPWarned = false;
+    ScreenSprite.warnYep = function() {
+      if (!ScreenSprite.YEPWarned) {
+        console.log("Deprecation warning. Please update YEP_CoreEngine. ScreenSprite is not a sprite, it has graphics inside.");
+        ScreenSprite.YEPWarned = true;
+      }
+    };
+    Object.defineProperty(ScreenSprite.prototype, 'anchor', {
+      get: function() {
+        ScreenSprite.warnYep(); this.scale.x = 1; this.scale.y = 1;
+        return {x:0,y:0};
+      },
+      set: function(value) { this.alpha = value.clamp(0,255) / 255; },
+      configurable: true
+    });
+  })`)(ScreenSprite);
+}
+
+module.exports = { installCoreUtilities, installToneFilter, installScreenSprite };

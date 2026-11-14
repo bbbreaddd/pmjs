@@ -142,7 +142,7 @@ Value Session::save(bool recordSave) {
   p["_vehicleType"] = vehicleType_ < 0 ? "walk" : vehicleType_ == 0 ? "boat" : vehicleType_ == 1 ? "ship" : "airship"; p["_vehicleGettingOn"] = vehicleGettingOn_; p["_vehicleGettingOff"] = vehicleGettingOff_; p["_dashing"] = playerDashing_; p["_needsMapReload"] = false; p["_transferring"] = false;
   p["_newMapId"] = 0; p["_newX"] = 0; p["_newY"] = 0; p["_newDirection"] = 0; p["_fadeType"] = 0; p["_encounterCount"] = encounterCount_;
   Array followers;
-  for (int i = 1; i < 4; ++i) { auto follower = character(followers_[i - 1], "Game_Follower"); auto& f = object(follower); f["_memberIndex"] = i; f["_through"] = true; followers.emplace_back(follower); }
+  for (std::size_t i = 1; i <= followers_.size(); ++i) { auto follower = character(followers_[i - 1], "Game_Follower"); auto& f = object(follower); f["_memberIndex"] = static_cast<int>(i); f["_through"] = true; followers.emplace_back(follower); }
   p["_followers"] = instance("Game_Followers", {{"_visible", followersVisible_}, {"_gathering", followersGathering_}, {"_data", followers}});
   Array events(database_["maps"][std::to_string(mapId_)]["events"].array().size());
   for (const auto& event : events_) {
@@ -175,7 +175,7 @@ Value Session::save(bool recordSave) {
     {"system", instance("Game_System", {{"_walkingBgm", vehicleWalkingBgm_}, {"_saveEnabled", system_.saveEnabled}, {"_menuEnabled", system_.menuEnabled}, {"_encounterEnabled", system_.encounterEnabled}, {"_formationEnabled", system_.formationEnabled}, {"_battleCount", system_.battleCount}, {"_winCount", system_.winCount}, {"_escapeCount", system_.escapeCount}, {"_saveCount", system_.saveCount}, {"_versionId", database_["system"]["versionId"]}, {"_framesOnSave", static_cast<double>(ticks_)}, {"_bgmOnSave", AudioManager::saveBgm(*this)}, {"_bgsOnSave", AudioManager::saveBgs(*this)}, {"_windowTone", system_.windowTone}, {"_battleBgm", system_.battleBgm}, {"_victoryMe", system_.victoryMe}, {"_defeatMe", system_.defeatMe}, {"_savedBgm", system_.storedBgm}})},
     {"screen", screenState()},
     {"timer", instance("Game_Timer", {{"_frames", timerFrames_}, {"_working", timerWorking_}})}, {"switches", instance("Game_Switches", {{"_data", switches}})}, {"variables", instance("Game_Variables", {{"_data", variables}})}, {"selfSwitches", instance("Game_SelfSwitches", {{"_data", selfSwitches}})}, {"actors", instance("Game_Actors", {{"_data", actors}})},
-    {"party", instance("Game_Party", {{"_inBattle", false}, {"_gold", gold_}, {"_steps", steps_}, {"_lastItem", item(lastItemId_,"item")}, {"_menuActorId", menuActorId_ ? menuActorId_ : party_.empty() ? 0 : party_[0]}, {"_targetActorId", targetActorId_}, {"_actors", numbers(party_)}, {"_items", items}, {"_weapons", weapons}, {"_armors", armors}})},
+    {"party", instance("Game_Party", {{"_inBattle", false}, {"_gold", gold_}, {"_steps", steps_}, {"_lastItem", item(lastItemId_,lastItemKind_ == 1 ? "skill" : lastItemKind_ == 2 ? "item" : lastItemKind_ == 3 ? "weapon" : lastItemKind_ == 4 ? "armor" : "")}, {"_menuActorId", menuActorId_ ? menuActorId_ : party_.empty() ? 0 : party_[0]}, {"_targetActorId", targetActorId_}, {"_actors", numbers(party_)}, {"_items", items}, {"_weapons", weapons}, {"_armors", armors}})},
     {"map", instance("Game_Map", {{"_interpreter", interpreter}, {"_mapId", mapId_}, {"_tilesetId", mapState_.tilesetId}, {"_events", events}, {"_commonEvents", commonEvents}, {"_vehicles", vehicles}, {"_displayX", displayX}, {"_displayY", displayY}, {"_nameDisplay", mapState_.nameDisplay}, {"_scrollDirection", mapState_.scrollDirection}, {"_scrollRest", mapState_.scrollRest}, {"_scrollSpeed", mapState_.scrollSpeed}, {"_parallaxName", mapState_.parallaxName}, {"_parallaxZero", mapState_.parallaxZero}, {"_parallaxLoopX", mapState_.parallaxLoopX}, {"_parallaxLoopY", mapState_.parallaxLoopY}, {"_parallaxSx", mapState_.parallaxSx}, {"_parallaxSy", mapState_.parallaxSy}, {"_parallaxX", mapState_.parallaxX}, {"_parallaxY", mapState_.parallaxY}, {"_battleback1Name", mapState_.battleback1Name}, {"_battleback2Name", mapState_.battleback2Name}, {"_needsRefresh", false}})}, {"player", player}};
 }
 
@@ -259,7 +259,9 @@ void Session::load(const Value& contents) {
     vehicle.altitude = savedVehicle["_altitude"].integer(); vehicle.driving = savedVehicle["_driving"].boolean(); vehicle.bgm = savedVehicle["_bgm"];
   }
   restored.player_ = readCharacter(contents["player"]); restored.playerDashing_ = contents["player"]["_dashing"].boolean(); restored.encounterCount_ = contents["player"]["_encounterCount"].number();
-  for (int i = 0; i < 3; ++i) restored.followers_[i] = readCharacter(contents["player"]["_followers"]["_data"][i]);
+  const auto& savedFollowers = contents["player"]["_followers"]["_data"].array();
+  restored.followers_.resize(std::max(std::size_t(3), savedFollowers.size()));
+  for (std::size_t i = 0; i < savedFollowers.size(); ++i) restored.followers_[i] = readCharacter(savedFollowers[i]);
   if (!mapUpdated) {
     for (auto& event : restored.events_) {
       const auto& saved = contents["map"]["_events"][event.id]; if (saved.null()) continue;
@@ -268,7 +270,7 @@ void Session::load(const Value& contents) {
     }
     restored.interpreter_ = readInterpreter(contents["map"]["_interpreter"]);
   }
-  restored.commonInterpreters_.clear();
+  restored.commonInterpreters_.clear(); restored.runtimeCommonEvents_.clear();
   if (!mapUpdated) for (const auto& common : contents["map"]["_commonEvents"].array()) {
     const int id = common["_commonEventId"].integer();
     if (!common["_interpreter"].null() && restored.database_["commonEvents"][id]["trigger"].integer() == 2)
@@ -282,6 +284,8 @@ void Session::load(const Value& contents) {
   restored.system_.versionId = system["_versionId"].integer();
   restored.system_.battleBgm = system["_battleBgm"]; restored.system_.victoryMe = system["_victoryMe"]; restored.system_.defeatMe = system["_defeatMe"]; restored.system_.windowTone = system["_windowTone"];
   for (int vehicle = 0; vehicle < 3; ++vehicle) restored.system_.vehicleBgm[vehicle] = contents["map"]["_vehicles"][vehicle]["_bgm"];
+  const auto lastItemClass = contents["party"]["_lastItem"]["_dataClass"].text();
+  restored.lastItemKind_ = lastItemClass == "skill" ? 1 : lastItemClass == "item" ? 2 : lastItemClass == "weapon" ? 3 : lastItemClass == "armor" ? 4 : 0;
   restored.lastItemId_ = contents["party"]["_lastItem"]["_itemId"].integer(); restored.menuActorId_ = contents["party"]["_menuActorId"].integer();
   restored.targetActorId_ = contents["party"]["_targetActorId"].integer();
   restored.gold_ = contents["party"]["_gold"].integer(); restored.steps_ = contents["party"]["_steps"].integer(); restored.ticks_ = contents["system"]["_framesOnSave"].number(); restored.brightness_ = contents["screen"]["_brightness"].number(255); restored.fadeOut_ = contents["screen"]["_fadeOutDuration"].integer();

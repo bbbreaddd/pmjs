@@ -349,6 +349,7 @@ void Renderer::queryFilterProgramUniforms() {
   bloomImageUniform_ = glGetUniformLocation(program_, "bloomImage");
   premultipliedInputUniform_ =
     glGetUniformLocation(program_, "premultipliedInput");
+  exactCompositionCopyUniform_ = glGetUniformLocation(program_, "exactCompositionCopy");
   maskEnabledUniform_ = glGetUniformLocation(program_, "maskEnabled");
   maskImageUniform_ = glGetUniformLocation(program_, "maskImage");
   maskTransformUniform_ = glGetUniformLocation(program_, "maskTransform");

@@ -2,7 +2,8 @@
 
 function installClassBindings(scope, bindings, session, options = {}) {
   const descriptions = bindings.describe();
-  const points = new WeakMap(), returnValues = new WeakMap(), listeners = new WeakMap();
+  const displayFields = new WeakMap();
+  const points = new WeakMap(), returnValues = new WeakMap(), argumentKinds = new WeakMap(), listeners = new WeakMap();
   let nextListener = 1;
   const schemas = new Map(descriptions.map(description => [description.name, description]));
   const prototypes = new Map(), models = new WeakMap(), instances = new Map(), active = new Map(), defaults = new Map(), installed = new Map();
@@ -20,26 +21,37 @@ function installClassBindings(scope, bindings, session, options = {}) {
     Object.defineProperty(Type, 'name', { value: description.name });
     Type.prototype = Object.create(parent.prototype); Type.prototype.constructor = Type;
     prototypes.set(Type.prototype, description);
-    if (!schemas.has(description.parent)) Type.prototype.initialize = function(...args) {
-      const nativeType = descriptionFor(this);
-      if (!models.has(this)) {
-        const handle = bindings.create(session, nativeType.name);
-        models.set(this, handle); instances.set(handle.identity, new WeakRef(this));
-        if (!options.initializeDisplay?.(this, handle)) parent.prototype.initialize?.apply(this, args);
-      }
-      if (nativeType.initializer) this[nativeType.initializer](...nativeType.constructorDefaults.map((value, index) => args[index] === undefined ? value : args[index]));
-    };
+    if (schemas.has(description.parent)) {
+      Type.prototype.initialize = function(...args) { parent.prototype.initialize.apply(this, args); };
+    } else {
+      Type.prototype.initialize = function(...args) {
+        const nativeType = descriptionFor(this);
+        if (!models.has(this)) {
+          const handle = bindings.create(session, nativeType.name);
+          models.set(this, handle); instances.set(handle.identity, new WeakRef(this));
+          if (!options.initializeDisplay?.(this, handle)) parent.prototype.initialize?.apply(this, args);
+        }
+        if (nativeType.initializer) this[nativeType.initializer](...nativeType.constructorDefaults.map((value, index) => args[index] === undefined ? value : args[index]));
+      };
+    }
     for (const field of description.fields) Object.defineProperty(Type.prototype, field.name, {
       configurable: true,
       get() {
         const handle = models.get(this);
-        if (field.kind === 'display') return options.displayField(handle, field.name);
+        if (field.kind === 'display') {
+          let fields=displayFields.get(this);
+          if (!fields) { fields=new Map(); displayFields.set(this,fields); }
+          const child=options.displayField(handle,field.name);
+          if (fields.get(field.name)!==child) fields.set(field.name,child);
+          return child;
+        }
+        if (field.kind === 'displayList') return options.displayListField(handle, field.name);
         if (field.kind === 'object') { const reference=bindings.reference(session,handle,field.name); return reference ? options.wrapReference(reference) : null; }
         if (field.kind !== 'point') return bindings.field(handle, field.name);
         let cache = points.get(this);
         if (!cache) { cache = new Map(); points.set(this, cache); }
         if (!cache.has(field.name)) {
-          const point = {};
+          const point = Object.create(scope.PIXI?.Point?.prototype || scope.Point?.prototype || Object.prototype);
           for (const key of ['x', 'y']) Object.defineProperty(point, key, {
             enumerable: true,
             get() { return bindings.field(handle, field.name)[key]; },
@@ -51,7 +63,13 @@ function installClassBindings(scope, bindings, session, options = {}) {
         return cache.get(field.name);
       },
       ...(field.writable ? { set(value) {
-        if (field.kind === 'display') options.displayField(models.get(this), field.name, value);
+        if (field.kind === 'display') {
+          const child=options.displayField(models.get(this),field.name,value);
+          let fields=displayFields.get(this);
+          if (!fields) { fields=new Map(); displayFields.set(this,fields); }
+          fields.set(field.name,child);
+        }
+        else if (field.kind === 'displayList') options.displayListField(models.get(this), field.name, value);
         else if (field.kind === 'object') bindings.reference(session,models.get(this),field.name,value == null ? null : models.get(value) || options.unwrap(value));
         else if (field.kind === 'point') bindings.field(models.get(this), field.name, { x: value.x, y: value.y });
         else bindings.field(models.get(this), field.name, value);
@@ -63,6 +81,12 @@ function installClassBindings(scope, bindings, session, options = {}) {
       const forward = function(...args) {
         if (method.defaults?.length) args = method.defaults.map((value, index) => args[index] === undefined ? value : args[index]);
         const nativeArgs = args.map((value, index) => {
+          if (method.argumentKinds?.[index] === 'bytes') return Array.from(value);
+          if (method.argumentKinds?.[index] === 'xhr') {
+            const response=value.response;
+            const bytes=Array.isArray(response)?response:ArrayBuffer.isView(response)?new Uint8Array(response.buffer,response.byteOffset,response.byteLength):new Uint8Array(response);
+            return {response:Array.from(bytes),responseURL:value.responseURL||'',status:value.status??200};
+          }
           if (method.argumentKinds?.[index] !== 'object') return value;
           if (value === null) return null;
           const handle = models.get(value) || options.unwrap?.(value);
@@ -76,6 +100,7 @@ function installClassBindings(scope, bindings, session, options = {}) {
       Object.defineProperties(forward, { name: { value: method.name }, length: { value: method.arity } });
       Type.prototype[method.name] = forward; methods.set(method.name, forward);
       returnValues.set(forward, method.returnsValue !== false);
+      argumentKinds.set(forward,method.argumentKinds||[]);
     }
     for (const event of description.events || []) Type.prototype[event] = function(listener) {
       if (typeof listener !== 'function') throw new TypeError('Listener must be a function');
@@ -98,6 +123,11 @@ function installClassBindings(scope, bindings, session, options = {}) {
       if (defaults.get(description.name)?.has(method)) return defaults.get(description.name).get(method);
     throw new Error('Native default is unavailable: ' + type + '.' + method);
   }
+  function parentInitializerChanged(type) {
+    for (let parent = schemas.get(schemas.get(type).parent); parent; parent = schemas.get(parent.parent))
+      if (scope[parent.name].prototype.initialize !== original(parent.name, 'initialize')) return true;
+    return false;
+  }
   function wrap(handle, type) {
     let object = active.get(handle.identity) || instances.get(handle.identity)?.deref();
     if (!object) {
@@ -110,8 +140,12 @@ function installClassBindings(scope, bindings, session, options = {}) {
     if (bindings.active(handle)) active.set(handle.identity, object);
     return object;
   }
+  function overridden(handle,type,method) {
+    const native=original(type,method),existing=active.get(handle.identity)||instances.get(handle.identity)?.deref();
+    return (existing||scope[type].prototype)[method]!==native||method==='initialize'&&parentInitializerChanged(type);
+  }
   return {
-    descriptions, wrap,
+    descriptions, wrap, overridden,
     handle(object) { const handle = models.get(object); if (!handle) throw new TypeError('Object is not bound'); return handle; },
     deliver(handle, token) {
       const object = active.get(handle.identity) || instances.get(handle.identity)?.deref();
@@ -122,11 +156,15 @@ function installClassBindings(scope, bindings, session, options = {}) {
       if (callback) callback();
     },
     dispatch(handle, type, method, args) {
-      const existing = active.get(handle.identity) || instances.get(handle.identity)?.deref();
       const native = original(type, method);
-      if ((existing ? existing[method] : scope[type].prototype[method]) === native) return null;
+      if (!overridden(handle,type,method)) return null;
       const object = wrap(handle, type);
-      const value = object[method](...(typeof args === 'function' ? args() : args));
+      const values=typeof args==='function'?args():args,kinds=argumentKinds.get(native)||[];
+      const value = object[method](...values.map((value,index)=> {
+        if(kinds[index]==='bytes')return options.bytes?options.bytes(value):new Uint8Array(value);
+        if(kinds[index]==='xhr')return options.xhr?options.xhr(value):{...value,response:new Uint8Array(value.response).buffer};
+        return value;
+      }));
       return { value: returnValues.get(native) ? value : undefined };
     },
     sweep() {

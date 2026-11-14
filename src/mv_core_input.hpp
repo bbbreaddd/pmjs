@@ -31,7 +31,9 @@ class Input {
   void updateDirection();
   void updateGamepad(const Gamepad& gamepad);
   auto& previousState() { return previous_; }
+  auto& gamepadStates() { return gamepadStates_; }
   double& pressedTime() { return pressedTime_; }
+  double& dateState() {return date_;}
   char& preferredAxis() { return preferredAxis_; }
   int& direction4() { return dir4_; }
   int& direction8() { return dir8_; }
@@ -100,6 +102,13 @@ class TouchInput {
   double wheelX() const { return frame_.wheelX; }
   double wheelY() const { return frame_.wheelY; }
   double date() const { return date_; }
+  bool& mousePressedState() {return mousePressed_;}
+  bool& screenPressedState() {return screenPressed_;}
+  double& pressedTimeState() {return pressedTime_;}
+  double& xState() {return x_;}
+  double& yState() {return y_;}
+  double& dateState() {return date_;}
+  auto& frameEvents() {return frame_;}
  private:
   void trigger(double x, double y, double now);
   void cancel(double x, double y);

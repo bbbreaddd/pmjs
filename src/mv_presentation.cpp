@@ -30,11 +30,17 @@ Presentation::Presentation(RuntimeCore& core, Session& session, Value settings)
     if (!font) throw std::runtime_error("game font unavailable");
     fonts_.push_back(*font);
   }
-  core::PixelBitmap::setImageLoader([this](const std::string& url)->std::optional<ImageInfo>{return image(url);});
+  core::PixelBitmap::addImageLoader(presentationLifetime_,[this](const std::string& url)->std::optional<ImageInfo>{return image(url);});
+  ResourceHandler::shared().addCompatibility({presentationLifetime_,
+    [this](const std::string& url,std::function<void()> retry,std::function<void()> resign,const std::optional<std::vector<int>>& intervals)->std::optional<std::function<void()>> {
+      const auto hooks=session_.runtimeHooks_;if(!hooks||!hooks->resourceLoader)return {};return hooks->resourceLoader(url,std::move(retry),std::move(resign),intervals);
+    },
+    [this]()->std::optional<bool> {const auto hooks=session_.runtimeHooks_;if(!hooks||!hooks->resourceExists)return {};return hooks->resourceExists();},
+    [this] {const auto hooks=session_.runtimeHooks_;if(!hooks||!hooks->resourceRetry)return false;hooks->resourceRetry();return true;}});
   Decrypter::readEncryptionkey(session_.database_["system"]);
   core::WebAudio::setEncryptionKey(Decrypter::hasEncryptedAudio ? session_.database_["system"]["encryptionKey"].text() : "");
-  core::Graphics::setLoadingCallbacks([this]{session_.resourcesStopped_=true;},[this]{session_.resourcesStopped_=false;});
-  core::Graphics::setVideoCallbacks([this](const std::string& url){
+  core::Graphics::addLoadingCallbacks(presentationLifetime_,[this]{session_.resourcesStopped_=true;},[this]{session_.resourcesStopped_=false;});
+  core::Graphics::addVideoCallbacks(presentationLifetime_,[this](const std::string& url){
     session_.movieName_=url;session_.movieExplicitSource_=true;++session_.movieRequest_;session_.moviePlaying_=!url.empty();
   },[this]{return session_.moviePlaying_;},[this](double volume){if(movieAudio_)core_.media().setParameters(movieAudio_,volume,1,0);});
   imageCache_ = std::make_unique<ImageCache>();
@@ -265,22 +271,49 @@ void Presentation::map(bool drawNativeOverlays) {
   const double screenX = core_.width() / 48.0, screenY = core_.height() / 48.0;
   cameraX_ = session_.savedCamera_ ? (*session_.savedCamera_)[0] : width < screenX ? (width - screenX) / 2 : std::clamp(session_.player_.realX - (screenX - 1) / 2, 0.0, width - screenX);
   cameraY_ = session_.savedCamera_ ? (*session_.savedCamera_)[1] : height < screenY ? (height - screenY) / 2 : std::clamp(session_.player_.realY - (screenY - 1) / 2, 0.0, height - screenY);
-  const int originX = static_cast<int>(std::floor(cameraX_ * 48)), originY = static_cast<int>(std::floor(cameraY_ * 48));
+  const int tw=graphTilemap_?graphTilemap_->tileWidth:48,th=graphTilemap_?graphTilemap_->tileHeight:48;
+  if(tw<=0||th<=0)return;
+  const int originX = static_cast<int>(std::floor(graphTilemap_?graphTilemap_->origin.x:cameraX_*tw));
+  const int originY = static_cast<int>(std::floor(graphTilemap_?graphTilemap_->origin.y:cameraY_*th));
   if(drawNativeOverlays)mapParallax(48, 48);
-  const int firstX = static_cast<int>(std::floor(originX / 48.0)), firstY = static_cast<int>(std::floor(originY / 48.0));
-  prepareMapGeometry(session_.loopHorizontal() ? firstX : std::max(0, firstX), session_.loopVertical() ? firstY : std::max(0, firstY),
-    session_.loopHorizontal() ? (originX + core_.width()) / 48 + 1 : std::min(width, (originX + core_.width()) / 48 + 1),
-    session_.loopVertical() ? (originY + core_.height()) / 48 + 1 : std::min(height, (originY + core_.height()) / 48 + 1));
-  queueMapGeometry(false, originX, originY);
+  const int margin=graphTilemap_?graphTilemap_->margin:0;
+  const int firstX = static_cast<int>(std::floor((originX-margin)/double(tw))), firstY = static_cast<int>(std::floor((originY-margin)/double(th)));
+  const int columns=static_cast<int>(std::ceil((graphTilemap_?graphTilemap_->width:core_.width())/double(tw)))+1;
+  const int rows=static_cast<int>(std::ceil((graphTilemap_?graphTilemap_->height:core_.height())/double(th)))+1;
+  prepareMapGeometry(firstX,firstY,firstX+columns,firstY+rows);
   struct Sprite { const Character* value; int priority; }; std::vector<Sprite> characters;
   for (const auto& event : session_.events_) if (event.page >= 0) characters.push_back({&event.character, event.priority});
   for (const auto& vehicle : session_.vehicles_) if (vehicle.mapId == session_.mapId_) characters.push_back({&vehicle.character, vehicle.type == 2 ? vehicle.altitude > 0 ? 2 : 0 : 1});
   for (auto follower = session_.followers_.rbegin(); follower != session_.followers_.rend(); ++follower) characters.push_back({&*follower, 1});
   characters.push_back({&session_.player_, 1});
   std::stable_sort(characters.begin(), characters.end(), [&](const Sprite& a, const Sprite& b) { return a.priority != b.priority ? a.priority < b.priority : scrolledMapY(a.value->realY, cameraY_, 48) < scrolledMapY(b.value->realY, cameraY_, 48); });
-  for (const auto& sprite : characters) if (sprite.priority < 2) character(*sprite.value, cameraX_, cameraY_);
-  queueMapGeometry(true, originX, originY);
-  for (const auto& sprite : characters) if (sprite.priority >= 2) character(*sprite.value, cameraX_, cameraY_);
+  if(graphMapDrawEntries_.empty()) {
+    queueMapGeometry(false, originX, originY);
+    for (const auto& sprite : characters) if (sprite.priority < 2) character(*sprite.value, cameraX_, cameraY_);
+    queueMapGeometry(true, originX, originY);
+    for (const auto& sprite : characters) if (sprite.priority >= 2) character(*sprite.value, cameraX_, cameraY_);
+  } else {
+    struct Draw { int z; double y; std::size_t order; const Character* character; const NativeMapDrawEntry* graph; };
+    std::vector<Draw> draws;
+    for(const auto& sprite : characters) {
+      const auto& value=*sprite.value;
+      const bool object=value.characterName.find('!')<2;
+      const double y=std::floor(scrolledMapY(value.realY,cameraY_,48)*48+48-(object?0:6)+0.5)+value.spriteOffsetY;
+      draws.push_back({sprite.priority*2+1,y,draws.size(),sprite.value,nullptr});
+    }
+    for(const auto& entry : graphMapDrawEntries_) draws.push_back({entry.z,entry.y,draws.size(),nullptr,&entry});
+    std::stable_sort(draws.begin(),draws.end(),[](const Draw& a,const Draw& b){return std::tie(a.z,a.y,a.order)<std::tie(b.z,b.y,b.order);});
+    const auto draw=[&](const Draw& value) {
+      if(value.graph)value.graph->draw(core_.renderer(),{1,0,0,1,0,0},1);
+      else character(*value.character,cameraX_,cameraY_);
+    };
+    auto next=draws.begin();
+    while(next!=draws.end()&&(next->z<0||(next->z==0&&next->y<0)))draw(*next++);
+    queueMapGeometry(false,originX,originY);
+    while(next!=draws.end()&&(next->z<4||(next->z==4&&next->y<0)))draw(*next++);
+    queueMapGeometry(true,originX,originY);
+    while(next!=draws.end())draw(*next++);
+  }
   if(drawNativeOverlays) { mapShadow(); mapDestination(); }
 }
 void Presentation::hitTarget(int x, int y, int width, int height, int index, int action) {
@@ -1471,7 +1504,7 @@ namespace {
 int audioChannelIndex(const std::string& kind) {
   return kind == "bgm" ? 0 : kind == "bgs" ? 1 : kind == "me" ? 2 : 3;
 }
-void applyAudioParameters(core::WebAudio& voice, const Value& sound, int channelVolume) {
+void applyAudioParameters(core::WebAudio& voice, const Value& sound, double channelVolume) {
   voice.setVolume(sound["volume"].number(90) * channelVolume / 10000.0);
   voice.setPitch(sound["pitch"].number(100) / 100.0);
   voice.setPan(sound["pan"].number() / 100.0);
@@ -1672,29 +1705,41 @@ bool Presentation::renderFrame(const std::function<void()>& drawFrame) {
 void Presentation::bindMapSpriteset(NativeMapSpriteset& spriteset) {
   const std::weak_ptr<int> lifetime=presentationLifetime_;
   const auto characters=spriteset.characterRenderer();
-  auto world=[this,lifetime,characters](const core::Matrix& matrix,double opacity) {
+  const auto mapLevel=spriteset.mapLevelReader();
+  const auto entries=spriteset.mapDrawEntries();
+  const auto mapGraph=spriteset.mapGraph;
+  auto world=[this,lifetime,characters,mapLevel,entries,mapGraph](const core::Matrix& matrix,double opacity) {
     if(lifetime.expired())throw std::runtime_error("native map presentation has ended");
     using CharacterRenderer=decltype(graphCharacterRenderer_);
-    struct Restore { CharacterRenderer& target; CharacterRenderer previous; ~Restore() { target=std::move(previous); } } restore{graphCharacterRenderer_,std::move(graphCharacterRenderer_)};
+    struct Restore {
+      Presentation& target;
+      CharacterRenderer characters;
+      int level;
+      std::vector<NativeMapDrawEntry> entries;
+      std::shared_ptr<core::Tilemap> tilemap;
+      ~Restore() {
+        target.graphCharacterRenderer_=std::move(characters);
+        target.graphMapLevel_=level;
+        target.graphMapDrawEntries_=std::move(entries);
+        target.graphTilemap_=std::move(tilemap);
+      }
+    } restore{*this,std::move(graphCharacterRenderer_),graphMapLevel_,std::move(graphMapDrawEntries_),std::move(graphTilemap_)};
+    graphTilemap_=std::dynamic_pointer_cast<core::Tilemap>(mapGraph->tilemap.lock());
     graphCharacterRenderer_=characters;
-    renderMapLayer("world",matrix,opacity);
+    graphMapLevel_=mapLevel();
+    graphMapDrawEntries_=entries();
+    std::stable_sort(graphMapDrawEntries_.begin(),graphMapDrawEntries_.end(),[](const NativeMapDrawEntry& a,const NativeMapDrawEntry& b){return a.order<b.order;});
+    renderMapWorld(matrix,opacity);
   };
-  const auto layer=[this,lifetime](std::string name) {
-    return [this,lifetime,name=std::move(name)](const core::Matrix& matrix,double opacity) {
-      if(lifetime.expired())throw std::runtime_error("native map presentation has ended");
-      renderMapLayer(name,matrix,opacity);
-    };
-  };
-  spriteset.bindMapLayers(std::move(world),layer("pictures"),layer("weather"));
+  spriteset.bindMapLayers(std::move(world));
 }
-void Presentation::renderMapLayer(const std::string& layer,const core::Matrix& world,double opacity) {
-  if(layer!="world"&&layer!="pictures"&&layer!="weather")throw std::invalid_argument("unknown map presentation layer: "+layer);
+void Presentation::renderMapWorld(const core::Matrix& world,double opacity) {
   prepareRenderResources();
-  const auto first=core_.renderer().queuedCommandCount();
-  if(layer=="world") {
-    if(session_.mapId_>0) { map(false); visualEffects(); }
-  } else if(layer=="pictures")mapPictures();
-  else weather();
+  auto& renderer=core_.renderer();const auto previous=renderer.callbackWorldTransform();
+  struct Restore {Renderer& renderer;core::Matrix transform;~Restore(){renderer.setCallbackWorldTransform(transform);}} restore{renderer,previous};
+  renderer.setCallbackWorldTransform(core::multiply(previous,world));
+  const auto first=renderer.queuedCommandCount();
+  if(session_.mapId_>0) { map(false); visualEffects(); }
   core_.renderer().transformQueuedCommands(first,world,static_cast<float>(opacity));
 }
 void Presentation::prepareRenderResources() {

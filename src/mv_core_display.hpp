@@ -31,14 +31,19 @@ class Container {
   Container* parent=nullptr;
   std::vector<std::shared_ptr<Container>> children;
   std::vector<std::shared_ptr<GlitchFilter>> glitchFilters;
+  std::vector<RenderCommand> filterGroups;
   virtual ~Container();
   virtual void update();
+  std::function<void()> prepareRender;
+  std::function<void(Container&)> addedHook;
+  std::function<bool(Container&)> removedHook;
   virtual void render(Renderer& renderer,const Matrix& world={1,0,0,1,0,0},double opacity=1);
   void addChild(std::shared_ptr<Container> child);
   void addChildAt(std::shared_ptr<Container> child,std::size_t index);
   std::shared_ptr<Container> removeChild(Container* child);
   void removeChildren();
   virtual void onRemoveAsAChild() {}
+  void notifyRemoved(Container& previousParent);
   Matrix localTransform()const;
   int beginFilters(Renderer& renderer) const;
   void move(double x,double y){position={x,y};}
@@ -70,6 +75,8 @@ class Tilemap : public Container {
   int mapWidth = 0;
   int mapHeight = 0;
   Point origin;
+  void sortChildren();
+  bool customChildOrder = false;
   bool horizontalWrap = false;
   bool verticalWrap = false;
   int animationCount = 0;
@@ -77,6 +84,7 @@ class Tilemap : public Container {
   std::vector<int> data;
   std::vector<int> flags;
   std::array<PixelBitmap*, 9> bitmaps{};
+  std::array<std::shared_ptr<PixelBitmap>, 9> bitmapOwners{};
 
   void setData(int width, int height, std::vector<int> mapData);
   void setTileWidth(int value){if(tileWidth!=value){tileWidth=value;refresh();}}
@@ -101,13 +109,16 @@ class Tilemap : public Container {
  private:
   struct GeometryPart {std::uint32_t layer=0;double x=0,y=0,width=0,height=0;};
   std::vector<GeometryPart> lowerGeometry_;
-  std::vector<std::uint32_t> upperGeometry_;
+  std::vector<GeometryPart> upperGeometry_;
   std::array<int,4> geometryBounds_{};
   std::uint64_t geometryRevision_=0;
   Renderer* geometryRenderer_=nullptr;
   bool geometryReady_=false;
   std::shared_ptr<int> layerLifetime_=std::make_shared<int>(0);
  public:
+  std::function<std::optional<std::array<std::vector<TileRectangle>,2>>(int,int,int,int)> paintGeometry;
+  std::function<std::optional<int>(int,int,int)> readOverride;
+  std::function<std::optional<bool>(const std::string&,int,int)> classifyOverride;
   int readMapData(int x, int y, int z) const;
   void computeTileLayers(int mx, int my, std::vector<int>& lowerTiles, std::vector<int>& upperTiles) const;
   void drawTile(PixelBitmap& bitmap, int tileId, int dx, int dy) const;
@@ -153,10 +164,22 @@ class Sprite:public Container {
  public:
   Sprite();
   ~Sprite() override;
-  std::uint64_t spriteId=0;
+  double spriteId=0;
+  double ax=0,ay=0;
   Point anchor;
   bool opaque=false,isPicture=false;
   BlendMode blendMode=BlendMode::normal;
+  struct TextureOverride {std::shared_ptr<PixelBitmap> bitmap;Rectangle frame;double resolution=1;};
+  std::optional<TextureOverride> textureOverride;
+  struct RenderContext {Renderer* renderer;Matrix world;double opacity;Matrix callbackWorld;};
+  std::optional<RenderContext> renderContext;
+  std::function<bool()> renderHook;
+  std::function<bool(const std::shared_ptr<PixelBitmap>&)> bitmapAssignedHook;
+  void resetBitmapListener(){bitmapLifetime_=std::make_shared<int>(0);}
+  bool refreshFrame()const{return refreshFrame_;}
+  void setRefreshFrame(bool value){refreshFrame_=value;}
+  virtual void drawDefault(Renderer&,const Matrix&,double);
+
   virtual void setBitmap(std::shared_ptr<PixelBitmap> bitmap);
   std::shared_ptr<PixelBitmap> bitmap()const{return bitmap_;}
   void setFrame(double x,double y,double width,double height);
@@ -194,7 +217,7 @@ class TilingSprite:public Sprite {
  protected:
   void onBitmapLoad()override{refreshFrame_=false;}
   void refreshFrameGeometry()override{}
-  void draw(Renderer&,const Matrix&,double)override;
+  void drawDefault(Renderer&,const Matrix&,double)override;
 };
 class ScreenSprite:public Container {
  public:
@@ -245,7 +268,7 @@ class Window:public Container {
   double width=0,height=0,padding=18,margin=4;
   double openness=255,opacity=255,backOpacity=192,contentsOpacity=255;
   std::array<double,3> tone{};
-  bool active=true,downArrowVisible=false,upArrowVisible=false,pause=false;
+  bool isWindow=true,active=true,downArrowVisible=false,upArrowVisible=false,pause=false;
   std::uint64_t animationCount=0;
   void update()override;
   void synchronizeSkinContainer();
@@ -276,6 +299,8 @@ class WindowLayer:public Container {
  public:
   struct StreamState { Matrix world; double opacity; std::size_t firstCommand; };
   double width=0,height=0;
+  mutable Rectangle windowMaskRect;
+  std::function<std::optional<Rectangle>(Window&)> maskHook;
   void move(double x,double y,double w,double h){position={x,y};width=w;height=h;}
   void onRemoveAsAChild()override{removeChildren();}
   StreamState begin(Renderer&,const Matrix& world={1,0,0,1,0,0},double opacity=1)const;
@@ -293,6 +318,7 @@ class Weather:public Container {
   int width=816,height=624;
   std::function<double()> random;
   std::shared_ptr<ScreenSprite> dimmerSprite;
+  std::vector<std::shared_ptr<Container>> sprites;
   virtual void createBitmaps();
   virtual void createDimmer();
   virtual void updateDimmer();
@@ -302,8 +328,6 @@ class Weather:public Container {
   void update()override;
   void synchronize(std::uint64_t frame);
  private:
-  struct Particle{std::shared_ptr<Sprite> sprite;double ax=0,ay=0;};
-  std::vector<Particle> particles_;
   std::array<std::shared_ptr<PixelBitmap>,3> bitmaps_;
   std::mt19937 randomEngine_{std::random_device{}()};
   std::optional<std::uint64_t> lastFrame_;

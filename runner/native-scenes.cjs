@@ -1,14 +1,27 @@
 'use strict';
+// RPG Maker MV behavior: Copyright (c) 2015 KADOKAWA CORPORATION./YOJI OJIMA.
+// MIT license: third_party/rpg-maker-mv.LICENSE.
 const { installWindowParts } = require('./native-window-parts.cjs');
-const { bitmapHandle, snapBitmap } = require('./native-bitmap.cjs');
+const { installWindowLayer } = require('./native-window-layer.cjs');
+const { bitmapDrawingOverrides, bitmapHandle, snapBitmap, wrapBitmapHandle, bitmapFromSource } = require('./native-bitmap.cjs');
 const { installWindowDrawing } = require('./native-window-drawing.cjs');
+const { commandList } = require('./native-command-list.cjs');
+const { installSpriteRenderHooks } = require('./native-sprite-render-hooks.cjs');
+const { createObjectRenderer } = require('./native-object-renderer.cjs');
+const { nativeArray } = require('./native-array.cjs');
+const { installInputState } = require('./native-input-state.cjs');
+const { installScreenSprite } = require('./native-core-utilities.cjs');
 
 function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   const api = native.mvDisplay, runtime = api.open();
   const nodes = new WeakMap(), registry = new Map();
+  const displayLists = new WeakMap();
   const nativeFilters = new WeakMap(), filterUpdates = new Set();
   let currentRoot = null, nextRoot = null;
+  let spriteRenderHooks;
+  let objectRenderer;
   let windowParts;
+  let windowLayerParts;
   function prepareWindow(object) {
     const own = entry(object);
     if (own.prepareWindow) return;
@@ -23,23 +36,53 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     if (!value) throw new TypeError('Display object is not initialized');
     return value;
   }
+  function treeHooks(object, kind) {
+    const own = entry(object), removal = kind === 'windowLayer' ? object.onRemoveAsAChild : null;
+    if (removal && object.on) object.on('removed',removal);
+    own.added = parent => { object.emit?.('added',wrap(parent)); return true; };
+    own.removed = parent => {
+      if (object.emit) { object.emit('removed',wrap(parent)); return true; }
+      if (removal) { removal.call(object,wrap(parent)); return true; }
+      return false;
+    };
+    api.invoke(own.handle,'displayTreeHooks',own.added,own.removed);
+  }
   function attach(object, kind, existing = null) {
     if (nodes.has(object)) throw new Error('Display object is already initialized');
     const handle = existing || api.create(runtime, kind);
     options.initializeEvents?.(object);
-    nodes.set(object, { handle, children: new Map(), parent: null, bitmaps: new Map(), points: new Map() });
+    nodes.set(object, { handle, children: new Map(), parent: null, bitmaps: new Map(), points: new Map(), filters:null });
     registry.set(handle.identity, new WeakRef(object));
+    treeHooks(object,kind);
     if (kind === "window") prepareWindow(object);
+    if(object instanceof Sprite)registerSprite(object);
   }
   function wrap(handle) {
     if (!handle) return null;
     const existing = registry.get(handle.identity)?.deref();
     if (existing) return existing;
-    const types = { scene: Scene_Base, window: Window, windowLayer: WindowLayer, sprite: Sprite, tiling: TilingSprite, screen: ScreenSprite, tone: ToneSprite, container: Container, glitch: GlitchFilter };
+    const types = { scene: Scene_Base, window: Window, windowLayer: WindowLayer, sprite: Sprite, tiling: TilingSprite, tilemap: TilemapDisplay, screen: ScreenSprite, tone: ToneSprite, container: Container, glitch: GlitchFilter };
     const object = Object.create(types[handle.kind].prototype);
-    nodes.set(object, { handle, children: new Map(), parent: null, bitmaps: new Map(), points: new Map() });
+    nodes.set(object, { handle, children: new Map(), parent: null, bitmaps: new Map(), points: new Map(), filters:null });
     registry.set(handle.identity, new WeakRef(object));
+    options.initializeEvents?.(object); treeHooks(object,handle.kind);
+    if(handle.kind==='window') prepareWindow(object);
+    if(handle.kind==='windowLayer') initializeWindowLayer(object);
+    if(handle.kind==='tilemap')options.attachTilemap?.(object);
+    if(object instanceof Sprite)registerSprite(object);
     return object;
+  }
+  function registerSprite(object) {
+    object._canvas=null;object._context=null;object._tintTexture=null;
+    spriteRenderHooks?.register(object);
+    const own=entry(object);
+    own.bitmapAssigned=handle=>{
+      const bitmap=wrapBitmapHandle(Bitmap,handle);own.bitmaps.set('bitmap',bitmap);
+      if(bitmap)bitmap.addLoadListener(value=>object._onBitmapLoad(value));
+      else {object._refreshFrame=false;object._pmjsBitmapCleared?.();}
+    };
+    api.invoke(own.handle,'spriteBitmapAssignedHook',own.bitmapAssigned);
+    const bitmap=api.invoke(own.handle,'bitmap');if(bitmap)own.bitmapAssigned(bitmap);
   }
   function prop(type, name, field = name) {
     Object.defineProperty(type.prototype, name, {
@@ -52,7 +95,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     Object.defineProperty(type.prototype, name, { configurable: true, get() {
       const value = entry(this);
       if (!value.points.has(name)) {
-        const handle = value.handle, point = {};
+        const handle = value.handle, point = Object.create(options.pointPrototype?.() || Object.prototype);
         for (const [key, field] of [['x', x], ['y', y]]) Object.defineProperty(point, key, {
           enumerable: true, get() { return api.field(handle, field); }, set(value) { api.field(handle, field, value); }
         });
@@ -65,12 +108,18 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   function bitmapProperty(type, name) {
     Object.defineProperty(type.prototype, name, {
       configurable: true,
-      get() { return entry(this).bitmaps.get(name) || null; },
+      get() {
+        const bitmap=wrapBitmapHandle(Bitmap,api.invoke(entry(this).handle,name));
+        entry(this).bitmaps.set(name,bitmap);return bitmap;
+      },
       set(value) {
+        if(this[name]===value)return;
         const own = entry(this);
+        if (name === 'windowskin') windowParts?.beforeChange(this);
         api.invoke(own.handle, name, value == null ? null : bitmapHandle(Bitmap, value));
         own.bitmaps.set(name, value);
-        if (name === "bitmap" && value) { this._refreshFrame = true; value.addLoadListener(bitmap => this._onBitmapLoad(bitmap)); }
+        if (name === "contents") windowParts?.contents(this);
+        if (name === "windowskin") windowParts?.remember(this);
         if (name === "windowskin" && value) value.addLoadListener(() => this._onWindowskinLoad());
       }
     });
@@ -98,7 +147,10 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   for (const field of ['x', 'y', 'rotation', 'alpha', 'visible', 'renderable', 'z']) prop(Container, field);
   point(Container, 'position', 'x', 'y'); point(Container, 'scale', 'scaleX', 'scaleY');
   point(Container, 'pivot', 'pivotX', 'pivotY'); point(Container, 'skew', 'skewX', 'skewY');
-  Object.defineProperty(Container.prototype, 'parent', { get() { return entry(this).parent; } });
+  function TilemapDisplay() { throw new Error('Map tilemaps are created by the native spriteset'); }
+  inherit(TilemapDisplay, Container);
+  point(TilemapDisplay, 'origin', 'originX', 'originY');
+  Object.defineProperty(Container.prototype, 'parent', { get() {const own=entry(this);own.parent=wrap(api.invoke(own.handle,'parent'));return own.parent;} });
   Object.defineProperty(Container.prototype, 'children', { get() {
     const object = this, own = entry(object);
     if (!own.childArray) {
@@ -155,6 +207,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   };
   Container.prototype.getChildIndex = function(child) { const index = this.children.indexOf(child); if (index < 0) throw new Error('Display object is not a child'); return index; };
   Container.prototype.getChildAt = function(index) { const child = this.children[index]; if (!child) throw new RangeError('Child index is outside the display tree'); return child; };
+  Container.prototype.removeChildAt = function(index) { const child = this.getChildAt(index); this.removeChild(child); return child; };
   Container.prototype.setChildIndex = function(child, index) { if (this.getChildIndex(child) < 0) return; this.addChildAt(child, index); };
   Container.prototype.update = function() { this.updateChildren(); };
   Container.prototype.updateChildren = function() { for (const child of this.children) if (typeof child.update === 'function') child.update(); };
@@ -174,12 +227,38 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   inherit(Sprite, Container);
   Sprite.prototype.initialize = function(bitmap) { attach(this, 'sprite'); if (bitmap) this.bitmap = bitmap; };
   bitmapProperty(Sprite, 'bitmap'); point(Sprite, 'anchor', 'anchorX', 'anchorY');
-  for (const field of ['width', 'height', 'opacity', 'blendMode', 'opaque', '_isPicture', 'spriteId']) prop(Sprite, field);
+  Sprite.prototype.pluginName='sprite';
+  Sprite.prototype.calculateVertices=function() {
+    const texture=this.texture,frame=texture&&(texture.orig||texture.frame);
+    let width=frame?frame.width:this.width,height=frame?frame.height:this.height;
+    if(!frame&&this.bitmap) {
+      const requested=this._frame,x=Math.max(0,Math.min(Math.floor(requested.x),this.bitmap.width)),y=Math.max(0,Math.min(Math.floor(requested.y),this.bitmap.height));
+      width=Math.max(0,Math.min(Math.floor(requested.width)-x+Math.floor(requested.x),this.bitmap.width-x));
+      height=Math.max(0,Math.min(Math.floor(requested.height)-y+Math.floor(requested.y),this.bitmap.height-y));
+    }
+    let left=-this.anchor.x*width,top=-this.anchor.y*height;
+    if(texture?.trim) {left+=texture.trim.x;top+=texture.trim.y;width=texture.trim.width;height=texture.trim.height;}
+    const matrix=this.worldTransform,vertices=this.vertexData||(this.vertexData=options.createVertices?options.createVertices():new Float32Array(8));
+    for(const [index,x,y] of [[0,left,top],[2,left+width,top],[4,left+width,top+height],[6,left,top+height]]) {
+      vertices[index]=matrix.a*x+matrix.c*y+matrix.tx;vertices[index+1]=matrix.b*x+matrix.d*y+matrix.ty;
+    }
+  };
+  spriteRenderHooks=installSpriteRenderHooks(Sprite,{
+    renderDefault(object,renderer) {objectRenderer.route(object,renderer);},
+    defer(callback) { options.runScript('setTimeout')(callback,0); },
+    filterArea() { return options.rectangle(0,0,Graphics.width,Graphics.height); },
+    requiresHook(object) {return objectRenderer?.requiresHook(object)||false;},
+    rendererChanged() {return objectRenderer?.changed()||false;},
+    isWebGL() {return options.coreService('isWebGL');},
+    renderer() {return options.graphics()._renderer;},
+    setHook(object,callback) {entry(object).renderHook=callback;api.invoke(entry(object).handle,'spriteRenderHook',callback);}
+  });
+  for (const field of ['width', 'height', 'opacity', 'blendMode', 'opaque', '_isPicture', 'spriteId', 'ax', 'ay', '_refreshFrame']) prop(Sprite, field);
   Sprite.prototype.setFrame = function(x, y, w, h) { this._refreshFrame = false; api.invoke(entry(this).handle, 'frame', x, y, w, h); };
   Object.defineProperty(Sprite.prototype, '_frame', { get() {
     const own = entry(this);
     if (!own.frame) {
-      own.frame = {};
+      own.frame = new (options.rectangleClass?.() || Object)();
       ['x', 'y', 'width', 'height'].forEach((field, index) => Object.defineProperty(own.frame, field, {
         enumerable: true,
         get() { return api.invoke(own.handle, 'frame')[index]; },
@@ -190,32 +269,70 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   } });
   Sprite.prototype._refresh = function() { api.invoke(entry(this).handle, 'refreshSprite'); };
   Sprite.prototype._onBitmapLoad = function(bitmap) {
-    if (bitmap === this.bitmap && this._refreshFrame) { this._refreshFrame = false; this.setFrame(0, 0, bitmap.width, bitmap.height); }
+    if (bitmap === this.bitmap && this._refreshFrame) { this._refreshFrame = false; this._frame.width=bitmap.width;this._frame.height=bitmap.height; }
     this._refresh();
   };
   Object.defineProperty(Sprite.prototype, '_bitmap', { configurable: true, get() { return this.bitmap; }, set(value) { this.bitmap = value; } });
-  Sprite.prototype._isInBitmapRect = function(x, y, width, height) { return this.bitmap && x >= 0 && y >= 0 && x + width <= this.bitmap.width && y + height <= this.bitmap.height; };
+  Sprite.prototype._isInBitmapRect = function(x, y, width, height) { return this.bitmap && x + width > 0 && y + height > 0 && x < this.bitmap.width && y < this.bitmap.height; };
   Sprite.prototype._needsTint = function() { const tone = this._colorTone; return tone[0] || tone[1] || tone[2] || tone[3] || this._blendColor[3] > 0; };
   for (const [name, method] of [['_colorTone','tone'], ['_blendColor','blend']]) Object.defineProperty(Sprite.prototype, name, {
     configurable: true,
     get() {
-      const own = entry(this);
+      const own = entry(this), object=this;
       if (!own[name]) {
         const target = options.createArray ? options.createArray() : []; target.push(0, 0, 0, 0);
         own[name] = new Proxy(target, {
           get(array, key) { return key === 'length' || ['0','1','2','3'].includes(key) ? Reflect.get(api.invoke(own.handle, method), key) : Reflect.get(array, key); },
-          set(array, key, value) { const color = api.invoke(own.handle, method); color[key] = value; api.invoke(own.handle, method, ...color); return Reflect.set(array, key, value); }
+          set(array, key, value) { const color = api.invoke(own.handle, method); color[key] = value; api.invoke(own.handle, method, ...color); object._refresh(); return Reflect.set(array, key, value); }
         });
       }
       return own[name];
     },
-    set(value) { api.invoke(entry(this).handle, method, ...value); }
+    set(value) { api.invoke(entry(this).handle, method, ...value); this._refresh(); }
   });
 
-  Sprite.prototype.getColorTone = function() { return api.invoke(entry(this).handle, 'tone'); };
+  Sprite.prototype.getColorTone = function() { const values = options.createArray ? options.createArray() : []; values.push(...api.invoke(entry(this).handle, 'tone')); return values; };
   Sprite.prototype.setColorTone = function(value) { api.invoke(entry(this).handle, 'tone', ...value); };
-  Sprite.prototype.getBlendColor = function() { return api.invoke(entry(this).handle, 'blend'); };
+  Sprite.prototype.getBlendColor = function() { const values = options.createArray ? options.createArray() : []; values.push(...api.invoke(entry(this).handle, 'blend')); return values; };
   Sprite.prototype.setBlendColor = function(value) { api.invoke(entry(this).handle, 'blend', ...value); };
+  Object.defineProperty(Container.prototype, 'worldTransform', { configurable: true, get() {
+    const own=entry(this);
+    if(own.handle.kind==='sprite'||own.handle.kind==='tiling') {const rendered=api.invoke(own.handle,'renderWorld');if(rendered)return options.matrix(rendered);}
+    const a = Math.cos(this.rotation + this.skew.y) * this.scale.x, b = Math.sin(this.rotation + this.skew.y) * this.scale.x;
+    const c = -Math.sin(this.rotation - this.skew.x) * this.scale.y, d = Math.cos(this.rotation - this.skew.x) * this.scale.y;
+    const tx = this.x - this.pivot.x * a - this.pivot.y * c, ty = this.y - this.pivot.x * b - this.pivot.y * d;
+    const parent = this.parent?.worldTransform;
+    return options.matrix(parent ? [parent.a*a+parent.c*b,parent.b*a+parent.d*b,parent.a*c+parent.c*d,parent.b*c+parent.d*d,parent.a*tx+parent.c*ty+parent.tx,parent.b*tx+parent.d*ty+parent.ty] : [a,b,c,d,tx,ty]);
+  } });
+  Container.prototype.getBounds = function() {
+    let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+    const add = (x,y) => { left=Math.min(left,x);top=Math.min(top,y);right=Math.max(right,x);bottom=Math.max(bottom,y); };
+    const matrix = this.worldTransform;
+    let x=0,y=0,width=0,height=0;
+    if (this instanceof Sprite) {
+      const bitmap=this.bitmap, frame=api.invoke(entry(this).handle,'frame');
+      if (bitmap) {
+        const clippedSize = (offset, size, extent) => {
+          const start = Math.max(0, Math.min(Math.floor(offset), extent));
+          return Math.max(0, Math.min(Math.floor(size) - start + Math.floor(offset), extent - start));
+        };
+        width=clippedSize(frame[0],frame[2],bitmap.width);height=clippedSize(frame[1],frame[3],bitmap.height);
+      }
+      x=-this.anchor.x*width;y=-this.anchor.y*height;
+      if(this instanceof TilingSprite) {width=this.width;height=this.height;x=0;y=0;}
+    } else if(this instanceof Window) {width=this.width;height=this.height;}
+    else if(this instanceof ScreenSprite) {x=-Graphics.width*5;y=-Graphics.height*5;width=Graphics.width*10;height=Graphics.height*10;}
+    if(width>0&&height>0)for(const [px,py] of [[x,y],[x+width,y],[x,y+height],[x+width,y+height]])add(matrix.a*px+matrix.c*py+matrix.tx,matrix.b*px+matrix.d*py+matrix.ty);
+    for(const child of this.children)if(child.visible&&child.renderable) {const bounds=child.getBounds();if(bounds.width>0&&bounds.height>0){add(bounds.x,bounds.y);add(bounds.x+bounds.width,bounds.y+bounds.height);}}
+    return options.rectangle(Number.isFinite(left)?left:0,Number.isFinite(top)?top:0,Number.isFinite(right)?right-left:0,Number.isFinite(bottom)?bottom-top:0);
+  };
+  const filteredDisplays = new Set();
+  function compileDisplayFilters(object) {
+    const filters=entry(object).filters || [];
+    const groups=options.compileFilters?.(object, filters);
+    if(groups) {api.invoke(entry(object).handle,'filterGroups',groups);return true;}
+    return false;
+  }
   function filterHandle(filter) {
     if (nodes.has(filter)) return entry(filter).handle;
     let binding=nativeFilters.get(filter);
@@ -228,6 +345,12 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     return binding.handle;
   }
   function updateFilters() {
+    spriteRenderHooks.update();
+    for (const weak of filteredDisplays) {
+      const object=weak.deref();
+      if(!object)filteredDisplays.delete(weak);
+      else if(!compileDisplayFilters(object))api.invoke(entry(object).handle,'filters',...(entry(object).filters||[]).map(filterHandle));
+    }
     for (const binding of filterUpdates) {
       const filter=binding.source.deref();
       if (!filter) { filterUpdates.delete(binding); continue; }
@@ -240,9 +363,22 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
         api.field(binding.handle,field,filter[field]);
     }
   }
+  function assignFilters(object,value) {
+      const own=entry(object), previous=own.filters; own.filters=value;
+      try {
+        const compiled=compileDisplayFilters(object);
+        if (!compiled) api.invoke(own.handle, 'filters', ...(value || []).map(filterHandle));
+        if (!own.filterRef) {own.filterRef=new WeakRef(object);filteredDisplays.add(own.filterRef);}
+        updateFilters();
+      } catch(error) {own.filters=previous;throw error;}
+  }
   Object.defineProperty(Container.prototype, 'filters', {
-    get() { return entry(this).filters || null; },
-    set(value) { api.invoke(entry(this).handle, 'filters', ...(value || []).map(filterHandle)); entry(this).filters = value; updateFilters(); }
+    configurable:true,
+    get() {const filters=entry(this).filters;return filters&&filters.slice();},
+    set(value) {assignFilters(this,value&&value.slice());}
+  });
+  Object.defineProperty(Container.prototype,'_filters',{
+    configurable:true,get() {return entry(this).filters;},set(value) {assignFilters(this,value);}
   });
   function GlitchFilter() { attach(this, 'glitch'); }
   for (const field of ['slices', 'offset', 'direction', 'fillMode', 'seed', 'enabled']) prop(GlitchFilter, field);
@@ -280,6 +416,9 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   function TilingSprite() { this.initialize.apply(this, arguments); }
   inherit(TilingSprite, Sprite);
   TilingSprite.prototype.initialize = function(bitmap) { attach(this, 'tiling'); if (bitmap) this.bitmap = bitmap; };
+  TilingSprite.prototype.pluginName='picture';
+  spriteRenderHooks.installTiling(TilingSprite);
+  TilingSprite.prototype._onBitmapLoad=function() {this._refreshFrame=false;this._refresh();};
   point(TilingSprite, 'origin', 'originX', 'originY');
   TilingSprite.prototype.move = function(x, y, w, h) { this.x = x; this.y = y; this.width = w; this.height = h; };
   function ScreenSprite() { this.initialize.apply(this, arguments); }
@@ -289,6 +428,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   ScreenSprite.prototype.setColor = function(r, g, b) { api.invoke(entry(this).handle, 'color', r, g, b); };
   ScreenSprite.prototype.setBlack = function() { this.setColor(0, 0, 0); };
   ScreenSprite.prototype.setWhite = function() { this.setColor(255, 255, 255); };
+  installScreenSprite(options.runScript, ScreenSprite);
   function ToneSprite() { this.initialize.apply(this, arguments); }
   inherit(ToneSprite, Container);
   ToneSprite.prototype.initialize = function() { attach(this, 'tone'); this.clear(); };
@@ -301,28 +441,86 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     if (!nodes.has(this)) attach(this, 'window');
     if (entry(this).windowInitialized) throw new Error('Window is already initialized');
     entry(this).windowInitialized = true;
+    this._windowArrowSprites = options.runScript('[]');
+    windowParts.initialize(this);
     this._createAllParts();
+    windowParts.created(this);
   };
   for (const field of ['width', 'height', 'padding', 'margin', 'openness', 'opacity', 'backOpacity', 'contentsOpacity', 'active', 'opening', 'closing', 'pause', 'upArrowVisible', 'downArrowVisible']) prop(Window, field);
-  prop(Window, "_animationCount");
-  for (const field of ['width', 'height', 'padding', 'margin', 'openness', 'opening', 'closing']) prop(Window, '_' + field, field);
+  for (const field of ['width', 'height', 'padding', 'margin']) {
+    Object.defineProperty(Window.prototype, field, { configurable: true, enumerable: true,
+      get() { return api.field(entry(this).handle, field); },
+      set(value) {
+        windowParts.beforeChange(this);
+        api.field(entry(this).handle, field, value);
+        windowParts.remember(this); this._refreshAllParts();
+      }
+    });
+  }
+  for (const field of ['opacity', 'backOpacity', 'contentsOpacity']) {
+    Object.defineProperty(Window.prototype, field, { configurable: true, enumerable: true,
+      get() { return windowParts.opacity(this, field); },
+      set(value) { api.field(entry(this).handle, field, value); windowParts.setOpacity(this, field, value); }
+    });
+  }
+  prop(Window, "_animationCount"); prop(Window,"_isWindow");
+  for (const field of ['width', 'height', 'padding', 'margin']) {
+    Object.defineProperty(Window.prototype, '_' + field, { configurable: true,
+      get() { return api.field(entry(this).handle, field); },
+      set(value) {
+        windowParts.privateChange(this); api.field(entry(this).handle, field, value);
+        windowParts.remember(this);
+      }
+    });
+  }
+  for (const field of ['openness', 'opening', 'closing']) prop(Window, '_' + field, field);
   prop(Window,'_openness','rawOpenness');
   Object.defineProperty(Window.prototype,'_windowSpriteContainer',{ configurable:true,get() {
+    windowParts?.privateChange(this);
     const part=wrap(api.invoke(entry(this).handle,'windowPart','container')); entry(part).parent=this; return part;
   } });
   point(Window, 'origin', 'originX', 'originY');
   bitmapProperty(Window, 'contents'); bitmapProperty(Window, 'windowskin');
-  Window.prototype.move = TilingSprite.prototype.move;
+  Window.prototype.move = function(x, y, width, height) {
+    this.x = x || 0; this.y = y || 0;
+    if (this.width !== width || this.height !== height) {
+      windowParts.beforeChange(this);
+      const handle = entry(this).handle;
+      api.field(handle, 'width', width || 0); api.field(handle, 'height', height || 0);
+      windowParts.remember(this); this._refreshAllParts();
+    }
+  };
+  Window.prototype.addChildToBack = function(child) {
+    const own = entry(this), value = entry(child), previous = value.parent;
+    api.invoke(own.handle, 'addBack', value.handle);
+    if (previous) entry(previous).children.delete(value.handle.identity);
+    own.children.set(value.handle.identity, child); value.parent = this; return child;
+  };
   Window.prototype.isOpen = function() { return this.openness >= 255; };
   Window.prototype.isClosed = function() { return this.openness <= 0; };
-  Window.prototype.setCursorRect = function(x, y, w, h) { api.invoke(entry(this).handle, 'cursor', ...[x, y, w, h].map(value => Math.floor(value || 0))); };
+  Window.prototype.setCursorRect = function(x, y, w, h) {
+    const rectangle = [x,y,w,h].map(value => Math.floor(value || 0));
+    const previous = windowParts.cursorValues(this);
+    if (rectangle.some((value, index) => value !== previous[index])) {
+      api.invoke(entry(this).handle, 'cursor', ...rectangle); windowParts.updateCursor(this, rectangle); this._refreshCursor();
+    }
+  };
   Window.prototype._createAllParts = function() { api.invoke(entry(this).handle, 'refreshWindow'); };
   Window.prototype._refreshAllParts = function() { api.invoke(entry(this).handle, 'refreshWindow'); };
   Window.prototype.update = function() { api.invoke(entry(this).handle, 'tick'); this.updateChildren(); };
   function WindowLayer() { this.initialize.apply(this, arguments); }
   inherit(WindowLayer, Container);
-  WindowLayer.prototype.initialize = function() { attach(this, 'windowLayer'); };
+  function initializeWindowLayer(object) {
+    const own=entry(object);
+    own.prepareLayer=()=>windowLayerParts.prepare(object);
+    api.invoke(own.handle,'displayPrepare',own.prepareLayer);
+    object.filterArea = options.rectangle();
+    if (WindowLayer.voidFilter) object.filters = [WindowLayer.voidFilter];
+  }
+  WindowLayer.prototype.initialize = function() { attach(this, 'windowLayer'); initializeWindowLayer(this); };
+  WindowLayer.prototype.onRemoveAsAChild = function() { this.removeChildren(); };
   prop(WindowLayer, 'width'); prop(WindowLayer, 'height');
+  prop(WindowLayer, '_width', 'width'); prop(WindowLayer, '_height', 'height');
   WindowLayer.prototype.move = function(x, y, width, height) { this.x = x; this.y = y; this.width = width; this.height = height; };
   function Window_Base() { this.initialize.apply(this, arguments); }
   inherit(Window_Base, Window);
@@ -358,6 +556,28 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   Window_Base.prototype.isClosed = function() { return this.openness <= 0; };
   Window_Base.prototype.isOpening = function() { return this.opening; };
   Window_Base.prototype.isClosing = function() { return this.closing; };
+  Window_Base.prototype.dimColor1 = function() { return 'rgba(0, 0, 0, 0.6)'; };
+  Window_Base.prototype.dimColor2 = function() { return 'rgba(0, 0, 0, 0)'; };
+  Window_Base.prototype.setBackgroundType = function(type) {
+    this.opacity = type === 0 ? 255 : 0;
+    if (type === 1) this.showBackgroundDimmer(); else this.hideBackgroundDimmer();
+  };
+  Window_Base.prototype.showBackgroundDimmer = function() {
+    if (!this._dimmerSprite) { this._dimmerSprite = new Sprite(new Bitmap(0, 0)); this.addChildToBack(this._dimmerSprite); }
+    if (this._dimmerSprite.bitmap.width !== this.width || this._dimmerSprite.bitmap.height !== this.height) this.refreshDimmerBitmap();
+    this._dimmerSprite.visible = true; this.updateBackgroundDimmer();
+  };
+  Window_Base.prototype.hideBackgroundDimmer = function() { if (this._dimmerSprite) this._dimmerSprite.visible = false; };
+  Window_Base.prototype.updateBackgroundDimmer = function() { if (this._dimmerSprite) this._dimmerSprite.opacity = this.openness; };
+  Window_Base.prototype.refreshDimmerBitmap = function() {
+    if (!this._dimmerSprite) return;
+    const bitmap = this._dimmerSprite.bitmap, w = this.width, h = this.height, m = this.padding, c1 = this.dimColor1(), c2 = this.dimColor2();
+    bitmap.resize(w, h); bitmap.gradientFillRect(0, 0, w, m, c2, c1, true);
+    bitmap.fillRect(0, m, w, h - m * 2, c1); bitmap.gradientFillRect(0, h - m, w, m, c1, c2, true);
+    this._dimmerSprite.setFrame(0, 0, w, h);
+  };
+  Window_Base.prototype.updateTone = function() { const tone = options.gameSystem().windowTone(); this.setTone(tone[0] || 0, tone[1] || 0, tone[2] || 0); };
+  Window_Base.prototype.update = function() { Window.prototype.update.call(this); this.updateTone(); this.updateBackgroundDimmer(); };
   Window_Base.prototype.activate = function() { this.active = true; return this; };
   Window_Base.prototype.deactivate = function() { this.active = false; return this; };
   function Window_Message() { this.initialize.apply(this, arguments); }
@@ -398,11 +618,25 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   inherit(Window_Selectable, Window_Base);
   Window_Selectable.prototype.initialize = function(x, y, width, height) {
     Window_Base.prototype.initialize.call(this, x, y, width, height);
-    this._handlers = {}; this.deactivate(); this.select(-1);
+    this._index = -1; this._handlers = {}; this.deactivate();
   };
   prop(Window_Selectable, '_index', 'index');
   prop(Window_Selectable, '_cursorFixed', 'cursorFixed'); prop(Window_Selectable, '_cursorAll', 'cursorAll');
   Window_Selectable.prototype.index = function() { return this._index; };
+  Window_Selectable.prototype.cursorAll = function() { return this._cursorAll; };
+  Window_Selectable.prototype.setCursorAll = function(value) { this._cursorAll = value; };
+  Window_Selectable.prototype.setCursorFixed = function(value) { this._cursorFixed = value; };
+  Window_Selectable.prototype.reselect = function() { this.select(this._index); };
+  Window_Selectable.prototype.isHorizontal = function() { return this.maxPageRows() === 1; };
+  Window_Selectable.prototype.setHelpWindow = function(window) { this._helpWindow = window; this.callUpdateHelp(); };
+  Window_Selectable.prototype.setHelpWindowItem = function(item) { if (this._helpWindow) this._helpWindow.setItem(item); };
+  Window_Selectable.prototype.maxTopRow = function() { return Math.max(0, this.maxRows() - this.maxPageRows()); };
+  Window_Selectable.prototype.setTopRow = function(row) {
+    const next = Math.max(0, Math.min(row, this.maxTopRow()));
+    if (this.topRow() !== next) { api.field(entry(this).handle, 'topRow', next); this.refresh(); this.updateCursor(); }
+  };
+  Window_Selectable.prototype.setBottomRow = function(row) { this.setTopRow(row - (this.maxPageRows() - 1)); };
+  Window_Selectable.prototype.resetScroll = function() { this.setTopRow(0); };
   Window_Selectable.prototype.maxCols = function() { return 1; };
   Window_Selectable.prototype.maxItems = function() { return 0; };
   Window_Selectable.prototype.spacing = function() { return 12; };
@@ -483,9 +717,28 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   Window_Command.prototype.maxItems = function() { return nodes.has(this) ? api.invoke(entry(this).handle, 'commandCount') : 0; };
   Window_Command.prototype.clearCommandList = function() {
     if (!nodes.has(this)) attach(this, 'window');
+    entry(this).commandList?.detach();
     api.invoke(entry(this).handle, 'clearCommands'); entry(this).extensions = [];
   };
   Window_Command.prototype.makeCommandList = function() {};
+  Window_Command.prototype.refresh = function() { this.clearCommandList(); this.makeCommandList(); this.createContents(); this.drawAllItems(); };
+  function commandsFor(window) {
+    const own = entry(window);
+    if (!own.commandList) own.commandList = commandList(
+      () => Array.from({ length: api.invoke(own.handle, 'commandCount') }, (_, index) => { const command = api.invoke(own.handle, 'command', index); return { ...command, ext: own.extensions?.[index] ?? command.ext }; }),
+      values => {
+        api.invoke(own.handle, 'clearCommands'); own.extensions = [];
+        for (const value of values) window.addCommand(value.name, value.symbol, value.enabled, value.ext);
+      },
+      (index, value) => {
+        api.invoke(own.handle, 'setCommand', index, String(value.name), String(value.symbol), Boolean(value.enabled)); own.extensions[index] = value.ext;
+      },
+      values => Object.assign(options.createArray(), values));
+    return own.commandList;
+  }
+  Object.defineProperty(Window_Command.prototype, '_list', { configurable: true,
+    get() { return commandsFor(this).view; }, set(value) { commandsFor(this).assign(value); }
+  });
   Window_Command.prototype.addCommand = function(name, symbol, enabled = true, ext = null) {
     const own=entry(this), index=api.invoke(own.handle,'commandCount');
     api.invoke(own.handle, 'addCommand', String(name), String(symbol), Boolean(enabled)); own.extensions[index]=ext;
@@ -538,7 +791,8 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     if (description.command) Type.prototype.makeCommandList = function() { invoke(this, 'makeCommandList'); };
     else {
       Type.prototype.refresh = function() {
-        invoke(this, 'refreshModel');
+        if (description.data && typeof this.makeItemList === 'function') this.makeItemList();
+        else invoke(this, 'refreshModel');
         if (this.contents) {
           this.contents.clear();
           if (description.selectable) this.drawAllItems(); else invoke(this, 'drawContent');
@@ -550,6 +804,35 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
         Type.prototype.drawItem = function(index) { invoke(this, 'drawItem', [index]); };
       }
     }
+    if (description.data) {
+      const skillData = name === 'Window_SkillList' || name === 'Window_BattleSkill';
+      Type.prototype.isCurrentItemEnabled = function() {
+        return options.databaseObject(skillData ? 'skills' : 'items') ? this.isEnabled(this.item()) : invoke(this, 'isCurrentItemEnabled');
+      };
+      function list(object) {
+        const own = entry(object);
+        if (!own.itemData) own.itemData = nativeArray(() => options.createArray(),
+          () => invoke(object, 'data').map(encoded => skillData ? options.databaseObject('skills', encoded)
+            : options.databaseObject(encoded >= 200000 ? 'armors' : encoded >= 100000 ? 'weapons' : 'items', encoded % 100000)),
+          items => {
+            const ids = Array.from(items, item => {
+              if (item == null) return 0;
+              const types = skillData ? ['skills'] : ['items', 'weapons', 'armors'];
+              for (let kind = 0; kind < types.length; ++kind) {
+                const index = options.databaseIndex(types[kind], item);
+                if (index >= 0) return index + kind * 100000;
+              }
+              throw new TypeError('Window data requires registered database objects');
+            });
+            invoke(object, 'data', [ids]);
+          });
+        return own.itemData;
+      }
+      Object.defineProperty(Type.prototype, '_data', { configurable: true,
+        get() { return list(this).view; }, set(value) { list(this).replace(value); }
+      });
+      Type.prototype.item = function() { return this._data[this.index()] || null; };
+    }
     const fieldNames = { actorId: '_actor', skillType: '_stypeId' };
     for (const field of description.fields) {
       Object.defineProperty(Type.prototype, fieldNames[field] || '_' + field, {
@@ -558,11 +841,245 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
         set(value) { invoke(this, field, [field === 'actorId' ? options.actorId(value) : value]); }
       });
       const method = field === 'actorId' ? 'setActor' : field === 'skillType' ? 'setStypeId' : 'set' + field[0].toUpperCase() + field.slice(1);
-      Type.prototype[method] = function(value) { this[fieldNames[field] || '_' + field] = value; this.refresh(); };
+      Type.prototype[method] = function(value) { const property = fieldNames[field] || '_' + field; if (this[property] !== value) { this[property] = value; this.refresh(); } };
     }
     return Type;
   }
   for (const name of windowDescriptions.keys()) installWindow(name);
+  nativeWindows.Window_Gold.prototype.value = function() { return options.gameParty().gold(); };
+  nativeWindows.Window_Gold.prototype.currencyUnit = function() { return options.textManager().currencyUnit; };
+  const shopBuy = nativeWindows.Window_ShopBuy.prototype;
+  function shopItem(window, index) {
+    const item = options.windowModel(entry(window).handle, 'Window_ShopBuy', 'shopItem', [index]);
+    return item ? options.databaseObject(['items', 'weapons', 'armors'][item[0]], item[1]) : null;
+  }
+  shopBuy.item = function() { return shopItem(this, this.index()); };
+  shopBuy.drawItem = function(index) {
+    const item = shopItem(this, index), rect = this.itemRect(index); rect.width -= this.textPadding();
+    this.changePaintOpacity(this.isEnabled(item)); this.drawItemName(item, rect.x, rect.y, rect.width - 96);
+    this.drawText(this.price(item), rect.x + rect.width - 96, rect.y, 96, 'right'); this.changePaintOpacity(true);
+  };
+  shopBuy.isCurrentItemEnabled = function() { return this.isEnabled(this.item()); };
+  shopBuy.price = function(item) {
+    for (const [kind, table] of ['items', 'weapons', 'armors'].entries()) {
+      const id = options.databaseIndex(table, item);
+      if (id > 0) {
+        const price = options.windowModel(entry(this).handle, 'Window_ShopBuy', 'priceForItem', [kind, id]);
+        return price < 0 ? item.price : price;
+      }
+    }
+    return 0;
+  };
+  shopBuy.isEnabled = function(item) { return item && this.price(item) <= this._money && !options.gameParty().hasMaxItems(item); };
+  const shopNumber = nativeWindows.Window_ShopNumber.prototype;
+  shopNumber.maxDigits = function() { return 2; };
+  shopNumber.itemY = function() { return Math.round(this.contentsHeight() / 2 - this.lineHeight() * 1.5); };
+  shopNumber.cursorWidth = function() { return this.maxDigits() * this.textWidth('0') + this.textPadding() * 2; };
+  shopNumber.cursorX = function() { return this.contentsWidth() - this.cursorWidth() - this.textPadding(); };
+  const actorCommand = nativeWindows.Window_ActorCommand.prototype;
+  actorCommand.addAttackCommand = function() { this.addCommand(options.textManager().attack, 'attack', this._actor.canAttack()); };
+  actorCommand.addGuardCommand = function() { this.addCommand(options.textManager().guard, 'guard', this._actor.canGuard()); };
+  actorCommand.addItemCommand = function() { this.addCommand(options.textManager().item, 'item'); };
+  actorCommand.addSkillCommands = function() {
+    for (const id of this._actor.addedSkillTypes().sort((a, b) => a - b)) this.addCommand(options.databaseObject('system').skillTypes[id], 'skill', true, id);
+  };
+  actorCommand.makeCommandList = function() {
+    if (this._actor) { this.addAttackCommand(); this.addSkillCommands(); this.addGuardCommand(); this.addItemCommand(); }
+  };
+  const savefile = nativeWindows.Window_SavefileList.prototype;
+  savefile.maxItems = function() {
+      return options.dataManager().maxSavefiles();
+  };
+  savefile.maxVisibleItems = function() {
+      return 5;
+  };
+  savefile.itemHeight = function() {
+      const innerHeight = this.height - this.padding * 2;
+      return Math.floor(innerHeight / this.maxVisibleItems());
+  };
+  savefile.drawItem = function(index) {
+      const id = index + 1;
+      const valid = options.dataManager().isThisGameFile(id);
+      const info = options.dataManager().loadSavefileInfo(id);
+      const rect = this.itemRectForText(index);
+      this.resetTextColor();
+      if (this._mode === 'load') {
+          this.changePaintOpacity(valid);
+      }
+      this.drawFileId(id, rect.x, rect.y);
+      if (info) {
+          this.changePaintOpacity(valid);
+          this.drawContents(info, rect, valid);
+          this.changePaintOpacity(true);
+      }
+  };
+  savefile.drawFileId = function(id, x, y) {
+      this.drawText(options.textManager().file + ' ' + id, x, y, 180);
+  };
+  savefile.drawContents = function(info, rect, valid) {
+      const bottom = rect.y + rect.height;
+      if (rect.width >= 420) {
+          this.drawGameTitle(info, rect.x + 192, rect.y, rect.width - 192);
+          if (valid) {
+              this.drawPartyCharacters(info, rect.x + 220, bottom - 4);
+          }
+      }
+      const lineHeight = this.lineHeight();
+      const y2 = bottom - lineHeight;
+      if (y2 >= lineHeight) {
+          this.drawPlaytime(info, rect.x, y2, rect.width);
+      }
+  };
+  savefile.drawGameTitle = function(info, x, y, width) {
+      if (info.title) {
+          this.drawText(info.title, x, y, width);
+      }
+  };
+  savefile.drawPartyCharacters = function(info, x, y) {
+      if (info.characters) {
+          for (let i = 0; i < info.characters.length; i++) {
+              const data = info.characters[i];
+              this.drawCharacter(data[0], data[1], x + i * 48, y);
+          }
+      }
+  };
+  savefile.drawPlaytime = function(info, x, y, width) {
+      if (info.playtime) {
+          this.drawText(info.playtime, x, y, width, 'right');
+      }
+  };
+  nativeWindows.Window_NameEdit.prototype.name = function() { return this._name; };
+  const scrollText = nativeWindows.Window_ScrollText.prototype;
+  scrollText.initialize = function() {
+    this._text = ''; this._allTextHeight = 0;
+    Window_Base.prototype.initialize.call(this, 0, 0, Graphics.boxWidth, Graphics.boxHeight);
+    this.opacity = 0; this.hide();
+  };
+  scrollText.contentsHeight = function() { return Math.max(this._allTextHeight, 1); };
+  scrollText.startMessage = function() { this._text = options.gameMessage().allText(); this.refresh(); this.show(); };
+  scrollText.refresh = function() {
+    const state = { index: 0, text: this.convertEscapeCharacters(this._text) };
+    this.resetFontSettings(); this._allTextHeight = this.calcTextHeight(state, true); this.createContents();
+    this.origin.y = -this.height; this.drawTextEx(this._text, this.textPadding(), 1);
+  };
+  scrollText.update = function() {
+    Window_Base.prototype.update.call(this);
+    const message = options.gameMessage();
+    if (message.scrollMode()) {
+      if (this._text) this.updateMessage();
+      if (!this._text && message.hasText()) this.startMessage();
+    }
+  };
+  scrollText.updateMessage = function() { this.origin.y += this.scrollSpeed(); if (this.origin.y >= this.contents.height) this.terminateMessage(); };
+  scrollText.scrollSpeed = function() { return options.gameMessage().scrollSpeed() / 2 * (this.isFastForward() ? this.fastForwardRate() : 1); };
+  scrollText.isFastForward = function() { return !options.gameMessage().scrollNoFast() && (Input.isPressed('ok') || Input.isPressed('shift') || options.touchInput().isPressed()); };
+  scrollText.fastForwardRate = function() { return 3; };
+  scrollText.terminateMessage = function() { this._text = null; options.gameMessage().clear(); this.hide(); };
+  const choice = nativeWindows.Window_ChoiceList.prototype;
+  const initializeChoice = choice.initialize;
+  choice.initialize = function(messageWindow) { initializeChoice.call(this, messageWindow); this.openness = 0; this.deactivate(); this._background = 0; };
+  choice.contentsHeight = function() { return this.maxItems() * this.itemHeight(); };
+  choice.drawItem = function(index) { const rect = this.itemRectForText(index); this.drawTextEx(this.commandName(index), rect.x, rect.y); };
+  choice.isCancelEnabled = function() { return options.gameMessage().choiceCancelType() !== -1; };
+  choice.isOkTriggered = function() { return Input.isTriggered('ok'); };
+  choice.callOkHandler = function() { options.gameMessage().onChoice(this.index()); this._messageWindow.terminateMessage(); this.close(); };
+  choice.callCancelHandler = function() { options.gameMessage().onChoice(options.gameMessage().choiceCancelType()); this._messageWindow.terminateMessage(); this.close(); };
+  choice.updatePlacement = function() {
+    this.width = this.windowWidth(); this.height = this.windowHeight();
+    const position = options.gameMessage().choicePositionType(), message = this._messageWindow;
+    if (position === 0) this.x = 0;
+    else if (position === 1) this.x = (Graphics.boxWidth - this.width) / 2;
+    else if (position === 2) this.x = Graphics.boxWidth - this.width;
+    this.y = message.y >= Graphics.boxHeight / 2 ? message.y - this.height : message.y + message.height;
+  };
+  choice.numVisibleRows = function() {
+    const message = this._messageWindow, center = Graphics.boxHeight / 2;
+    return Math.min(options.gameMessage().choices().length, message.y < center && message.y + message.height > center ? 4 : 8);
+  };
+  choice.windowHeight = function() { return this.fittingHeight(this.numVisibleRows()); };
+  choice.textWidthEx = function(text) { return this.drawTextEx(text, 0, this.contents.height); };
+  choice.maxChoiceWidth = function() { return Math.max(96, ...options.gameMessage().choices().map(text => this.textWidthEx(text) + this.textPadding() * 2)); };
+  choice.windowWidth = function() { return Math.min(this.maxChoiceWidth() + this.padding * 2, Graphics.boxWidth); };
+  choice.updateBackground = function() { this._background = options.gameMessage().choiceBackground(); this.setBackgroundType(this._background); };
+  choice.selectDefault = function() { this.select(options.gameMessage().choiceDefaultType()); };
+  choice.start = function() { this.updatePlacement(); this.updateBackground(); this.refresh(); this.selectDefault(); this.open(); this.activate(); };
+  const numberInput = nativeWindows.Window_NumberInput.prototype;
+  numberInput.maxCols = function() { return this._maxDigits; };
+  numberInput.spacing = function() { return 0; };
+  numberInput.itemWidth = function() { return 32; };
+  numberInput.windowWidth = function() { return this.maxCols() * this.itemWidth() + this.padding * 2; };
+  numberInput.windowHeight = function() { return this.fittingHeight(1); };
+  numberInput.updatePlacement = function() {
+    const message = this._messageWindow;
+    this.width = this.windowWidth(); this.height = this.windowHeight(); this.x = (Graphics.boxWidth - this.width) / 2;
+    this.y = message.y >= Graphics.boxHeight / 2 ? message.y - this.height - 8 : message.y + message.height + 8;
+  };
+  nativeWindows.Window_EventItem.prototype.updatePlacement = function() { this.y = this._messageWindow.y >= Graphics.boxHeight / 2 ? 0 : Graphics.boxHeight - this.height; };
+  nativeWindows.Window_ItemList.prototype.makeItemList = function() {
+    if (!options.databaseObject('items')) return options.windowModel(entry(this).handle, 'Window_ItemList', 'refreshModel', []);
+    this._data = options.gameParty().allItems().filter(item => this.includes(item));
+    if (this.includes(null)) this._data.push(null);
+  };
+  nativeWindows.Window_SkillList.prototype.makeItemList = function() {
+    if (!options.databaseObject('skills')) return options.windowModel(entry(this).handle, 'Window_SkillList', 'refreshModel', []);
+    this._data = this._actor ? this._actor.skills().filter(item => this.includes(item)) : [];
+  };
+  nativeWindows.Window_EventItem.prototype.includes = function(item) { return options.dataManager().isItem(item) && item.itypeId === options.gameMessage().itemChoiceItypeId(); };
+  const eventItem = nativeWindows.Window_EventItem.prototype, initializeEventItem = eventItem.initialize;
+  eventItem.initialize = function(messageWindow) {
+    initializeEventItem.call(this, messageWindow); this.openness = 0; this.deactivate();
+    this.setHandler('ok', this.onOk.bind(this)); this.setHandler('cancel', this.onCancel.bind(this));
+  };
+  eventItem.isEnabled = function() { return true; };
+  eventItem.onOk = function() {
+    const item = this.item(); options.gameVariables().setValue(options.gameMessage().itemChoiceVariableId(), item ? item.id : 0);
+    this._messageWindow.terminateMessage(); this.close();
+  };
+  eventItem.onCancel = function() { options.gameVariables().setValue(options.gameMessage().itemChoiceVariableId(), 0); this._messageWindow.terminateMessage(); this.close(); };
+  nativeWindows.Window_ItemList.prototype.includes = function(item) {
+    const manager = options.dataManager();
+    switch (this._category) {
+      case 'item': return manager.isItem(item) && item.itypeId === 1;
+      case 'keyItem': return manager.isItem(item) && item.itypeId === 2;
+      case 'weapon': return manager.isWeapon(item);
+      case 'armor': return manager.isArmor(item);
+      default: return false;
+    }
+  };
+  nativeWindows.Window_ItemList.prototype.isEnabled = function(item) { return options.gameParty().canUse(item); };
+  nativeWindows.Window_ItemList.prototype.needsNumber = function() { return true; };
+  nativeWindows.Window_SkillList.prototype.includes = function(item) { return item && item.stypeId === this._stypeId; };
+  nativeWindows.Window_SkillList.prototype.isEnabled = function(item) { return this._actor && this._actor.canUse(item); };
+  nativeWindows.Window_EquipItem.prototype.isEnabled = function() { return true; };
+  nativeWindows.Window_ShopSell.prototype.isEnabled = function(item) { return item && item.price > 0; };
+  nativeWindows.Window_EquipItem.prototype.includes = function(item) {
+    if (item === null) return true;
+    return !!(this._actor && item.etypeId === this._actor.equipSlots()[this._slotId] && this._actor.canEquip(item));
+  };
+  nativeWindows.Window_EquipSlot.prototype.maxItems = function() { return this._actor ? this._actor.equipSlots().length : 0; };
+  nativeWindows.Window_EquipSlot.prototype.isEnabled = function(index) { return this._actor ? this._actor.isEquipChangeOk(index) : false; };
+  nativeWindows.Window_EquipSlot.prototype.isCurrentItemEnabled = function() { return this.isEnabled(this.index()); };
+  nativeWindows.Window_EquipSlot.prototype.drawItem = function(index) {
+    if (!this._actor) return;
+    const rect = this.itemRectForText(index);
+    this.changeTextColor(this.systemColor()); this.changePaintOpacity(this.isEnabled(index));
+    this.drawText(this.slotName(index), rect.x, rect.y, 138);
+    this.drawItemName(this._actor.equips()[index], rect.x + 138, rect.y, rect.width - 138);
+    this.changePaintOpacity(true);
+  };
+  nativeWindows.Window_EquipSlot.prototype.update = function() {
+    Window_Selectable.prototype.update.call(this);
+    if (this._itemWindow) this._itemWindow.setSlotId(this.index());
+  };
+  nativeWindows.Window_EquipSlot.prototype.item = function() { return this._actor ? this._actor.equips()[this.index()] : null; };
+  nativeWindows.Window_EquipSlot.prototype.slotName = function(index) { return this._actor ? options.databaseObject('system').equipTypes[this._actor.equipSlots()[index]] : ''; };
+  nativeWindows.Window_EquipItem.prototype.setStatusWindow = function(window) { this._statusWindow = window; this.callUpdateHelp(); };
+  nativeWindows.Window_EquipSlot.prototype.setStatusWindow = function(window) { this._statusWindow = window; this.callUpdateHelp(); };
+  nativeWindows.Window_EquipSlot.prototype.setItemWindow = function(window) { this._itemWindow = window; this.update(); };
+  nativeWindows.Window_BattleActor.prototype.actor = function() { return options.gameParty().members()[this.index()]; };
+  nativeWindows.Window_BattleEnemy.prototype.enemy = function() { return options.gameTroop().aliveMembers()[this.index()]; };
+  nativeWindows.Window_Help.prototype.clear = function() { this.setText(''); };
+  nativeWindows.Window_Help.prototype.setItem = function(item) { this.setText(item ? item.description : ''); };
   function Scene_Base() { this.initialize.apply(this, arguments); }
   inherit(Scene_Base, Container);
   Scene_Base.prototype.initialize = function() { attach(this, 'scene'); this._imageReservationId ??= String(entry(this).handle.identity); };
@@ -587,7 +1104,9 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     this.startFadeOut(this.slowFadeSpeed());
   };
   Scene_Base.prototype.createWindowLayer = function() {
-    this._windowLayer = new WindowLayer(); this._windowLayer.move(0, 0, Graphics.boxWidth, Graphics.boxHeight); this.addChild(this._windowLayer);
+    this._windowLayer = new WindowLayer();
+    this._windowLayer.move((Graphics.width-Graphics.boxWidth)/2,(Graphics.height-Graphics.boxHeight)/2,Graphics.boxWidth,Graphics.boxHeight);
+    this.addChild(this._windowLayer);
   };
   Scene_Base.prototype.addWindow = function(window) { this._windowLayer.addChild(window); };
   function Scene_Battle() { this.initialize.apply(this, arguments); }
@@ -605,6 +1124,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     Scene_Base.prototype.create.call(this);
     this.createBackground(); this.updateActor(); this.createWindowLayer();
   };
+  Scene_MenuBase.prototype.createHelpWindow = function() { this._helpWindow = new nativeWindows.Window_Help(); this.addWindow(this._helpWindow); };
   Scene_MenuBase.prototype.actor = function() { return this._actor; };
   Scene_MenuBase.prototype.updateActor = function() { this._actor = options.gameParty().menuActor(); };
   Scene_MenuBase.prototype.createBackground = function() {
@@ -725,9 +1245,20 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   function Scene_File() { this.initialize.apply(this, arguments); }
   inherit(Scene_File, Scene_MenuBase);
   Scene_File.prototype.initialize = function() { Scene_MenuBase.prototype.initialize.call(this); };
+  Scene_File.prototype.savefileId = function() { return this._listWindow.index() + 1; };
+  Scene_File.prototype.mode = function() { return null; };
+  Scene_File.prototype.firstSavefileIndex = function() { return 0; };
+  Scene_File.prototype.helpWindowText = function() { return ''; };
+  Scene_File.prototype.createHelpWindow = function() {
+    this._helpWindow = new nativeWindows.Window_Help(1); this._helpWindow.setText(this.helpWindowText()); this.addWindow(this._helpWindow);
+  };
+  Scene_File.prototype.activateListWindow = function() { this._listWindow.activate(); };
   function Scene_Load() { this.initialize.apply(this, arguments); }
   inherit(Scene_Load, Scene_File);
   Scene_Load.prototype.initialize = function() { Scene_File.prototype.initialize.call(this); this._loadSuccess = false; };
+  Scene_Load.prototype.mode = function() { return 'load'; };
+  Scene_Load.prototype.firstSavefileIndex = function() { return options.dataManager().latestSavefileId() - 1; };
+  Scene_Load.prototype.helpWindowText = function() { return options.textManager().loadMessage; };
   Scene_Load.prototype.onLoadSuccess = function() {
     options.soundManager().playLoad(); this.fadeOutAll(); this.reloadMapIfUpdated();
     SceneManager.goto(Scene_Map); this._loadSuccess = true;
@@ -805,6 +1336,8 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   Scene_Map.prototype.updateMainMultiply = function() { this.updateMain(); if (this.isFastForward()) this.updateMain(); };
   Scene_Map.prototype.isFastForward = function() { return options.gameMap().isEventRunning() && !SceneManager.isSceneChanging() && (Input.isLongPressed('ok') || options.touchInput().isLongPressed()); };
   Scene_Map.prototype.isSceneChangeOk = function() { return this.isActive() && !options.gameMessage().isBusy(); };
+  Scene_Map.prototype.isMenuEnabled = function() { return options.gameSystem().isMenuEnabled() && !options.gameMap().isEventRunning(); };
+  Scene_Map.prototype.isMenuCalled = function() { return Input.isTriggered('menu') || options.touchInput().isCancelled(); };
   Scene_Map.prototype.updateScene = function() { options.mapPhase('sceneChange'); };
   Scene_Map.prototype.updateWaitCount = function() { if (this._waitCount > 0) { --this._waitCount; return true; } return false; };
   Scene_Map.prototype.update = function() {
@@ -819,12 +1352,121 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   };
   function Scene_Equip() { this.initialize.apply(this, arguments); }
   inherit(Scene_Equip, Scene_MenuBase);
+  Scene_Equip.prototype.create = function() {
+      Scene_MenuBase.prototype.create.call(this);
+      this.createHelpWindow();
+      this.createStatusWindow();
+      this.createCommandWindow();
+      this.createSlotWindow();
+      this.createItemWindow();
+      this.refreshActor();
+  };
+  Scene_Equip.prototype.createStatusWindow = function() {
+      this._statusWindow = new (options.sceneClass('Window_EquipStatus'))(0, this._helpWindow.height);
+      this.addWindow(this._statusWindow);
+  };
+  Scene_Equip.prototype.createCommandWindow = function() {
+      const wx = this._statusWindow.width;
+      const wy = this._helpWindow.height;
+      const ww = Graphics.boxWidth - this._statusWindow.width;
+      this._commandWindow = new (options.sceneClass('Window_EquipCommand'))(wx, wy, ww);
+      this._commandWindow.setHelpWindow(this._helpWindow);
+      this._commandWindow.setHandler('equip',    this.commandEquip.bind(this));
+      this._commandWindow.setHandler('optimize', this.commandOptimize.bind(this));
+      this._commandWindow.setHandler('clear',    this.commandClear.bind(this));
+      this._commandWindow.setHandler('cancel',   this.popScene.bind(this));
+      this._commandWindow.setHandler('pagedown', this.nextActor.bind(this));
+      this._commandWindow.setHandler('pageup',   this.previousActor.bind(this));
+      this.addWindow(this._commandWindow);
+  };
+  Scene_Equip.prototype.createSlotWindow = function() {
+      const wx = this._statusWindow.width;
+      const wy = this._commandWindow.y + this._commandWindow.height;
+      const ww = Graphics.boxWidth - this._statusWindow.width;
+      const wh = this._statusWindow.height - this._commandWindow.height;
+      this._slotWindow = new (options.sceneClass('Window_EquipSlot'))(wx, wy, ww, wh);
+      this._slotWindow.setHelpWindow(this._helpWindow);
+      this._slotWindow.setStatusWindow(this._statusWindow);
+      this._slotWindow.setHandler('ok',       this.onSlotOk.bind(this));
+      this._slotWindow.setHandler('cancel',   this.onSlotCancel.bind(this));
+      this.addWindow(this._slotWindow);
+  };
+  Scene_Equip.prototype.createItemWindow = function() {
+      const wx = 0;
+      const wy = this._statusWindow.y + this._statusWindow.height;
+      const ww = Graphics.boxWidth;
+      const wh = Graphics.boxHeight - wy;
+      this._itemWindow = new (options.sceneClass('Window_EquipItem'))(wx, wy, ww, wh);
+      this._itemWindow.setHelpWindow(this._helpWindow);
+      this._itemWindow.setStatusWindow(this._statusWindow);
+      this._itemWindow.setHandler('ok',     this.onItemOk.bind(this));
+      this._itemWindow.setHandler('cancel', this.onItemCancel.bind(this));
+      this._slotWindow.setItemWindow(this._itemWindow);
+      this.addWindow(this._itemWindow);
+  };
+  Scene_Equip.prototype.refreshActor = function() {
+      const actor = this.actor();
+      this._statusWindow.setActor(actor);
+      this._slotWindow.setActor(actor);
+      this._itemWindow.setActor(actor);
+  };
+  Scene_Equip.prototype.commandEquip = function() {
+      this._slotWindow.activate();
+      this._slotWindow.select(0);
+  };
+  Scene_Equip.prototype.commandOptimize = function() {
+      options.soundManager().playEquip();
+      this.actor().optimizeEquipments();
+      this._statusWindow.refresh();
+      this._slotWindow.refresh();
+      this._commandWindow.activate();
+  };
+  Scene_Equip.prototype.commandClear = function() {
+      options.soundManager().playEquip();
+      this.actor().clearEquipments();
+      this._statusWindow.refresh();
+      this._slotWindow.refresh();
+      this._commandWindow.activate();
+  };
+  Scene_Equip.prototype.onSlotOk = function() {
+      this._itemWindow.activate();
+      this._itemWindow.select(0);
+  };
+  Scene_Equip.prototype.onSlotCancel = function() {
+      this._slotWindow.deselect();
+      this._commandWindow.activate();
+  };
+  Scene_Equip.prototype.onItemOk = function() {
+      options.soundManager().playEquip();
+      this.actor().changeEquip(this._slotWindow.index(), this._itemWindow.item());
+      this._slotWindow.activate();
+      this._slotWindow.refresh();
+      this._itemWindow.deselect();
+      this._itemWindow.refresh();
+      this._statusWindow.refresh();
+  };
+  Scene_Equip.prototype.onItemCancel = function() {
+      this._slotWindow.activate();
+      this._itemWindow.deselect();
+  };
+  Scene_Equip.prototype.onActorChange = function() {
+      this.refreshActor();
+      this._commandWindow.activate();
+  };
   function Scene_Status() { this.initialize.apply(this, arguments); }
   inherit(Scene_Status, Scene_MenuBase);
   function Scene_Save() { this.initialize.apply(this, arguments); }
   inherit(Scene_Save, Scene_File);
+  Scene_Save.prototype.mode = function() { return 'save'; };
+  Scene_Save.prototype.firstSavefileIndex = function() { return options.dataManager().lastAccessedSavefileId() - 1; };
+  Scene_Save.prototype.helpWindowText = function() { return options.textManager().saveMessage; };
   function Scene_Shop() { this.initialize.apply(this, arguments); }
   inherit(Scene_Shop, Scene_MenuBase);
+  Scene_Shop.prototype.buyingPrice = function() { return this._buyWindow.price(this._item); };
+  Scene_Shop.prototype.sellingPrice = function() { return Math.floor(this._item.price / 2); };
+  Scene_Shop.prototype.doBuy = function(number) { options.gameParty().loseGold(number * this.buyingPrice()); options.gameParty().gainItem(this._item, number); };
+  Scene_Shop.prototype.doSell = function(number) { options.gameParty().gainGold(number * this.sellingPrice()); options.gameParty().loseItem(this._item, number); };
+
   function Scene_Name() { this.initialize.apply(this, arguments); }
   inherit(Scene_Name, Scene_MenuBase);
   function Scene_Debug() { this.initialize.apply(this, arguments); }
@@ -835,11 +1477,38 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     else if (this.needsFadeIn()) this.startFadeIn(this.fadeSpeed(), false);
     this.menuCalling = false;
   };
+  Scene_Map.prototype.launchBattle = function() {
+    this.stopAudioOnBattleStart(); options.sceneClass('SoundManager').playBattleStart();
+    this.startEncounterEffect(); this._mapNameWindow.hide();
+  };
+  Scene_Map.prototype.stopAudioOnBattleStart = function() {
+    options.audioManager().stopBgs(); options.audioManager().stopMe(); options.audioManager().stopSe();
+  };
+  Scene_Map.prototype.startEncounterEffect = function() {
+    this._spriteset.hideCharacters(); this._encounterEffectDuration = this.encounterEffectSpeed();
+  };
+  Scene_Map.prototype.encounterEffectSpeed = function() { return 60; };
+  Scene_Map.prototype.snapForBattleBackground = function() {
+    this._windowLayer.visible = false;
+    try { SceneManager.snapForBackground(); } finally { this._windowLayer.visible = true; }
+  };
+  Scene_Map.prototype.startFlashForEncounter = function(duration) { options.gameScreen().startFlash([255, 255, 255, 255], duration); };
+  Scene_Map.prototype.updateEncounterEffect = function() {
+    if (this._encounterEffectDuration <= 0) return;
+    --this._encounterEffectDuration;
+    const speed = this.encounterEffectSpeed(), elapsed = speed - this._encounterEffectDuration, progress = elapsed / speed;
+    const x = options.gamePlayer().screenX(), y = options.gamePlayer().screenY() - 24;
+    if (elapsed === 2) { options.gameScreen().setZoom(x, y, 1); this.snapForBattleBackground(); this.startFlashForEncounter(speed / 2); }
+    options.gameScreen().setZoom(x, y, ((progress - 1) * 20 * progress + 5) * progress + 1);
+    if (elapsed === Math.floor(speed / 6)) this.startFlashForEncounter(speed / 2);
+    if (elapsed === Math.floor(speed / 2)) { options.battleManager().playBattleBgm(); this.startFadeOut(this.fadeSpeed()); }
+    if (this._encounterEffectDuration === 0) options.gameScreen().clearZoom();
+  };
   Scene_Map.prototype.needsSlowFadeOut = function() { return SceneManager.isNextScene(options.sceneClass('Scene_Title')) || SceneManager.isNextScene(options.sceneClass('Scene_Gameover')); };
   Scene_Map.prototype.stop = function() {
     Scene_Base.prototype.stop.call(this); options.gamePlayer().straighten(); this._mapNameWindow.close();
     if (this.needsSlowFadeOut()) this.startFadeOut(this.slowFadeSpeed(), false);
-    else if (SceneManager.isNextScene(Scene_Map)) this.fadeOutForTransfer();
+    else if (SceneManager.isNextScene(options.sceneClass('Scene_Map'))) this.fadeOutForTransfer();
     else if (SceneManager.isNextScene(options.sceneClass('Scene_Battle'))) this.launchBattle();
   };
   Scene_Map.prototype.fadeOutForTransfer = function() { const fade = options.gamePlayer().fadeType(); if (fade === 0 || fade === 1) this.startFadeOut(this.fadeSpeed(), fade === 1); };
@@ -848,7 +1517,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     Scene_Base.prototype.terminate.call(this);
     if (!SceneManager.isNextScene(options.sceneClass('Scene_Battle'))) { this._spriteset.update(); this._mapNameWindow.hide(); SceneManager.snapForBackground(); }
     else ImageManager.clearRequest();
-    if (SceneManager.isNextScene(Scene_Map)) ImageManager.clearRequest();
+    if (SceneManager.isNextScene(options.sceneClass('Scene_Map'))) ImageManager.clearRequest();
     options.gameScreen().clearZoom();
     for (const child of [this._fadeSprite, this._mapNameWindow, this._windowLayer, this._spriteset]) if (child) this.removeChild(child);
   };
@@ -884,25 +1553,60 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     get frameCount() { return api.scene(runtime, 'frameCount'); },
     set frameCount(value) { api.scene(runtime,'frameCount',Number(value)); }
   }));
-  for (const field of ['width', 'height', 'boxWidth', 'boxHeight']) Object.defineProperty(Graphics, field, {
-    configurable: true,
-    get() { return options.coreService('graphicsDimension', field); },
-    set(value) { options.coreService('graphicsDimension', field, Number(value)); }
-  });
-  Graphics.initialize = function(width,height) { return options.coreService('initializeGraphics',width || 800,height || 600); };
+  for (const field of ['width', 'height', 'boxWidth', 'boxHeight']) {
+    Object.defineProperty(Graphics, '_' + field, { configurable: true,
+      get() { return options.coreService('graphicsDimension', field); },
+      set(value) {
+        options.coreService('graphicsDimension', field, Number(value));
+        if (!field.startsWith('box')) options.screenSize?.(this._width,this._height);
+      }
+    });
+    Object.defineProperty(Graphics, field, { configurable: true,
+      get() { return this['_' + field]; },
+      set(value) {
+        if (field.startsWith('box')) this['_' + field] = value;
+        else if (this['_' + field] !== value) { this['_' + field] = value; this._updateAllElements(); }
+      }
+    });
+  }
+  for (const [name,field] of [['_scale','scale'],['_realScale','realScale'],['_stretchEnabled','stretchEnabled'],['_videoVolume','videoVolume']])
+    Object.defineProperty(Graphics,name,{configurable:true,get() {return options.coreService('graphicsState',field);},
+      set(value) {options.coreService('graphicsState',field,field==='stretchEnabled'?Boolean(value):Number(value));}});
+  Object.defineProperty(Graphics,'scale',{configurable:true,get() {return this._scale;},
+    set(value) {if(this._scale!==value) {this._scale=value;this._updateAllElements();}}});
+  Graphics._updateRealScale=function() {options.coreService('updateGraphicsScale');};
+  Graphics._updateAllElements=function() {this._updateRealScale();options.coreService('updateGraphicsElements');};
+  Graphics.initialize = function(width,height) {
+    const result=options.coreService('initializeGraphics',width || 800,height || 600);
+    options.screenSize?.(this.width,this.height);return result;
+  };
   Object.assign(Graphics, { BLEND_NORMAL: 0, BLEND_ADD: 1, BLEND_MULTIPLY: 2, BLEND_SCREEN: 3 });
   Graphics._rendererType = 'native'; Graphics._skipCount = 0; Graphics._maxSkip = 3;
-  Graphics._renderer = { type: 'native', clear() { native.render.clearScene(0,0,0,1); }, render(stage) { updateFilters(); options.submitStage(entry(stage).handle); } };
+  objectRenderer=createObjectRenderer({
+    graphicsInfo() { return native.render.graphicsInfo(); },
+    draw(object,vertices) {const own=entry(object);own.prepareRender?.();api.invoke(own.handle,'renderSprite',...(vertices?Array.from(vertices):[]));},
+    isTiling(object) {return entry(object).handle.kind==='tiling';},
+    clear() {native.render.clearScene(0,0,0,1);},update:updateFilters,
+    submit(stage) {options.submitStage(entry(stage).handle);},dimension(field) {return Graphics[field];}
+  });
+  Graphics._renderer=objectRenderer.renderer;
   Graphics.render = function(stage) { if (stage) this._renderer.render(stage); };
   for (const method of ['startLoading','endLoading','updateLoading','isVideoPlaying','tickStart','tickEnd','playVideo','canPlayVideoType','setVideoVolume','pageToCanvasX','pageToCanvasY','isInsideCanvas','isWebGL','hasWebGL','canUseDifferenceBlend','canUseSaturationBlend','setLoadingImage','printLoadingError','eraseLoadingError','callGC','showFps','hideFps'])
     Graphics[method] = (...args) => options.coreService(method,...args);
+  Graphics.pageToCanvasX=x=>options.coreService('pageToCanvasX',Number(x));
+  Graphics.pageToCanvasY=y=>options.coreService('pageToCanvasY',Number(y));
+  Graphics.isInsideCanvas=(x,y)=>options.coreService('isInsideCanvas',Number(x),Number(y));
   Graphics.printError = function(name,message) { console.error(message?.stack || message); options.coreService('printError',String(name),String(message)); };
+  Graphics._clearUpperCanvas = function() {
+    if (this._upperCanvas) this._upperCanvas.getContext('2d').clearRect(0, 0, this.width, this.height);
+    options.coreService('clearUpperCanvas');
+  };
   Graphics.loadFont = (family, source) => Bitmap.loadFont(family, String(source).replace(/^\/game\//, ''));
   Graphics.isFontLoaded = family => options.coreService('isFontLoaded', family);
   Graphics._isFullScreen = () => native.runtime.isFullscreen();
   Graphics._requestFullScreen = () => native.runtime.setFullscreen(true);
   Graphics._cancelFullScreen = () => native.runtime.setFullscreen(false);
-  const Input = {};
+  const Input = options.runScript('(function Input() { throw new Error("This is a static class"); })');
   for (const method of ['clear', 'update', 'isPressed', 'isTriggered', 'isRepeated', 'isLongPressed'])
     Input[method] = (...args) => api.input(runtime, method, ...args);
   for (const field of ['dir4', 'dir8', 'date']) Object.defineProperty(Input, field, { get() { return api.input(runtime, field); } });
@@ -911,20 +1615,14 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     get() { return api.input(runtime, field); },
     set(value) { api.input(runtime, field, Number(value)); }
   });
-  for (const field of ['_pressedTime', '_preferredAxis', '_dir4', '_dir8']) Object.defineProperty(Input, field, {
+  for (const field of ['_pressedTime', '_preferredAxis', '_dir4', '_dir8','_date']) Object.defineProperty(Input, field, {
     configurable: true, get() { return api.input(runtime, field); }, set(value) { api.input(runtime, field, value); }
   });
   Object.defineProperty(Input, '_latestButton', { configurable: true, get() { return api.input(runtime, '_latestButton'); }, set(value) { api.input(runtime, '_latestButton', value); } });
-  for (const name of ['keyMapper', 'gamepadMapper', '_currentState', '_previousState']) {
-    const view = new Proxy({}, {
-      get(target, key) { return api.input(runtime, name)[key]; },
-      ownKeys() { return Reflect.ownKeys(api.input(runtime, name)); },
-      getOwnPropertyDescriptor(target, key) { const map = api.input(runtime, name); return Object.hasOwn(map, key) ? { configurable: true, enumerable: true, writable: true, value: map[key] } : undefined; },
-      set(target, key, value) { api.input(runtime, name, name.endsWith('State') ? String(key) : Number(key), name.endsWith('State') ? Boolean(value) : String(value)); return true; },
-      deleteProperty(target, key) { api.input(runtime, name, name.endsWith('State') ? String(key) : Number(key), null); return true; }
-    });
-    Object.defineProperty(Input, name, { configurable: true, enumerable: true, get() { return view; }, set(value) { api.input(runtime, name, value); } });
-  }
+  const inputState = installInputState(Input, (name, ...args) => api.input(runtime, name, ...args),
+    () => options.runScript('({})'), () => options.createArray ? options.createArray() : []);
+  const clearInput = Input.clear;
+  Input.clear = function() { clearInput(); inputState.reset(); };
   Input._isEscapeCompatible = function(name) { return name === 'cancel' || name === 'menu'; };
   Input._shouldPreventDefault = function(code) { return [8, 33, 34, 37, 38, 39, 40].includes(code); };
   Input._onKeyDown = function(event) {
@@ -939,31 +1637,35 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   Input._pollGamepads = function() {
     for (const pad of options.gamepads?.() || []) if (pad?.connected) this._updateGamepadState(pad);
   };
-  Input._updateGamepadState = function(pad) { api.input(runtime, 'updateGamepad', pad); };
+  Input._updateGamepadState = function(pad) { inputState.push(); api.input(runtime, 'updateGamepad', pad); inputState.pull(pad.index); };
+  Input._signX = function() { return Number(this.isPressed('right')) - Number(this.isPressed('left')); };
+  Input._signY = function() { return Number(this.isPressed('down')) - Number(this.isPressed('up')); };
+  Input._makeNumpadDirection = function(x,y) { return x || y ? 5-y*3+x : 0; };
+  const directionHooks=new Map(['_signX','_signY','_makeNumpadDirection'].map(name=>[name,Input[name]]));
   let nativeIsPressed;
   Input._updateDirection = function() {
-    if (this.isPressed === nativeIsPressed) return api.input(runtime, 'updateDirection');
-    let x = Number(this.isPressed('right')) - Number(this.isPressed('left'));
-    let y = Number(this.isPressed('down')) - Number(this.isPressed('up'));
-    this._dir8 = x || y ? 5 - y * 3 + x : 0;
+    if (this.isPressed === nativeIsPressed && [...directionHooks].every(([name,method])=>this[name]===method)) { inputState.push(); return api.input(runtime, 'updateDirection'); }
+    let x = this._signX(), y = this._signY();
+    this._dir8 = this._makeNumpadDirection(x,y);
     if (x && y) { if (this._preferredAxis === 'x') y = 0; else x = 0; }
     else if (x) this._preferredAxis = 'y'; else if (y) this._preferredAxis = 'x';
-    this._dir4 = x || y ? 5 - y * 3 + x : 0;
+    this._dir4 = this._makeNumpadDirection(x,y);
   };
-  const inputHooks = new Map(['_onKeyDown', '_onKeyUp', '_onLostFocus', '_pollGamepads', '_updateGamepadState', '_updateDirection', '_shouldPreventDefault', '_isEscapeCompatible'].map(name => [name, Input[name]]));
-  const updateInput = Input.update;
+  const inputHooks = new Map(['_onKeyDown', '_onKeyUp', '_onLostFocus', '_pollGamepads', '_updateGamepadState', '_updateDirection', '_shouldPreventDefault', '_isEscapeCompatible',...directionHooks.keys()].map(name => [name, Input[name]]));
   Input.update = function() {
-    if ([...inputHooks].every(([name, method]) => this[name] === method)) return updateInput();
+    const now=options.date?options.date():Date.now();
+    inputState.push();
     for (const event of api.input(runtime, 'events')) {
       if (event.type === 'blur') this._onLostFocus();
       else if (event.type === 'keydown') this._onKeyDown(event);
       else this._onKeyUp(event);
     }
-    this._pollGamepads(); api.input(runtime, 'advance'); this._updateDirection();
+    this._pollGamepads(); inputState.push(); api.input(runtime, 'advance',now); inputState.pull(); this._updateDirection();
   };
   for (const method of ['isPressed', 'isTriggered', 'isRepeated', 'isLongPressed']) {
     const base = Input[method];
     Input[method] = function(name) {
+      if (method === 'isPressed') return Boolean((this._isEscapeCompatible(name) && this.isPressed('escape')) || this._currentState[name]);
       if (this._isEscapeCompatible === inputHooks.get('_isEscapeCompatible')) return base(name);
       if (this._isEscapeCompatible(name) && this[method]('escape')) return true;
       if (method === 'isPressed') return !!this._currentState[name];
@@ -981,15 +1683,40 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     if (method === 'create') options.sceneControl?.('commit', sceneInfo.get(scene)?.kind ?? kindOf(scene));
     const fn = scene[method];
     if (typeof fn !== 'function') throw new TypeError('Scene.' + method + ' is not callable');
-    return fn.call(scene);
+    const result = fn.call(scene);
+    if (method === 'create') SceneManager.onSceneCreate();
+    if (method === 'start') { SceneManager._sceneStarted = true; SceneManager.onSceneStart(); }
+    if (method === 'isReady' && !result) SceneManager.onSceneLoading();
+    return result;
   }
   function SceneManager() { throw new Error('SceneManager is a static class'); }
   Object.defineProperties(SceneManager, Object.getOwnPropertyDescriptors({
-    run(type) { this.initialize(); this.goto(type); },
-    initialize() { this.ticker ||= options.createTicker?.(); this.initGraphics(); this.initAudio(); this.initInput(); this.checkPluginErrors(); },
-    initGraphics() { (options.graphics?.() || Graphics).initialize(Graphics.width,Graphics.height); },
+    run(type) { try { this.initialize(); this.goto(type); this.requestUpdate(); } catch (error) { this.catchException(error); } },
+    initialize() { this.ticker ||= options.createTicker?.(); this.initGraphics(); this.checkFileAccess(); this.initAudio(); this.initInput(); this.initNwjs(); this.checkPluginErrors(); this.setupErrorHandlers(); },
+    initGraphics() {
+      const graphics = options.graphics?.() || Graphics;
+      graphics.initialize(this._screenWidth, this._screenHeight, this.preferableRendererType());
+      graphics.boxWidth = this._boxWidth; graphics.boxHeight = this._boxHeight;
+      graphics.setLoadingImage('img/system/Loading.png');
+      if (this.preferableRendererType() === 'webgl') this.checkWebGL();
+    },
+    preferableRendererType() { return options.utils?.().isOptionValid('canvas') ? 'canvas' : options.utils?.().isOptionValid('webgl') ? 'webgl' : 'auto'; },
+    shouldUseCanvasRenderer() { return Boolean(options.utils?.().isMobileDevice()); },
+    checkFileAccess() { if (options.utils && !options.utils().canReadGameFiles()) throw new Error('Local game files are unavailable'); },
+    checkWebGL() { if (!Graphics.hasWebGL()) throw new Error('WebGL is unavailable'); },
+    initNwjs() { this._nativeWindow = native.runtime; },
+    setupErrorHandlers() {
+      if (this._errorHandlers) return;
+      const target = options.eventTarget?.();
+      if (target?.addEventListener) { target.addEventListener('error', this.onError.bind(this)); target.addEventListener('keydown', this.onKeyDown.bind(this)); this._errorHandlers = true; }
+    },
+    requestUpdate() { this._updateRequested = !this._stopped; },
+    tickStart() { Graphics.tickStart(); }, tickEnd() { Graphics.tickEnd(); },
+    _getTimeInMsWithoutMobileSafari() { return options.now?.() ?? Date.now(); },
+    onError(event) { this.catchException(event.error || new Error(event.message)); },
+    onKeyDown(event) { if (!event.ctrlKey && !event.altKey && event.keyCode === 116) options.reload?.(); },
     initAudio() { options.webAudio().initialize(); },
-    initInput() { Input.clear(); options.touchInput().clear(); },
+    initInput() { Input.initialize(); options.touchInput().initialize(); },
     checkPluginErrors() { options.checkPluginErrors(); },
     goto(type) {
       pendingNative = null;
@@ -1000,14 +1727,19 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
       api.scene(runtime, 'goto', next ? entry(next).handle : null, dispatch);
       prepareScene(next);
     },
-    update(deltaTime = 1) { this.updateManagers(); this.updateMain(); this.renderScene(); },
+    update(deltaTime = 1) {
+      if (this._stopped) return;
+      try { this.tickStart(); this.updateManagers(); this.updateMain(); this.renderScene(); this.tickEnd(); this.requestUpdate(); }
+      catch (error) { this.catchException(error); }
+    },
     updateManagers() { ImageManager.update(); },
-    updateInputData() { Input.update(); },
+    updateInputData() { Input.update(); options.updateTouch?.(); },
     updateMain() { this.updateInputData(); this.changeScene(); this.updateScene(); },
     changeScene() {
       if (pendingNative && !api.scene(runtime, 'stopped')) {
         const request = pendingNative;
         pendingNative = null;
+        if (request.newGame) { this.clearStack(); options.dataManager().setupNewGame(); }
         requestedKind = request.kind; acceptingNative = true;
         try { this.goto(request.type); }
         finally { requestedKind = null; acceptingNative = false; }
@@ -1017,7 +1749,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
       if (api.scene(runtime, 'changing') && previousScene && !this.isCurrentSceneBusy()) this._previousClass = previousScene.constructor;
       api.scene(runtime,'change',dispatch);
       currentRoot = wrap(api.scene(runtime, 'current')); nextRoot = wrap(api.scene(runtime, 'next'));
-      if (!currentRoot && !nextRoot) options.sceneControl?.('commit', -1);
+      if (!currentRoot && !nextRoot) { options.sceneControl?.('commit', -1); if (this._exiting) this.terminate(); }
     },
     updateScene() {
       api.scene(runtime,'updateScene',dispatch);
@@ -1028,10 +1760,17 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     isPreviousScene(type) { return this._previousClass === type; },
     renderScene() {
       if (nativeDriven(this._scene) && !(this._scene instanceof Scene_Map)) { options.submitStage(null); return; }
+      if (this._scene instanceof Scene_Map && !this.isCurrentSceneStarted()) { options.submitStage(entry(this._scene).handle); return; }
       if (this._scene && this.isCurrentSceneStarted()) (options.graphics?.() || Graphics).render(this._scene);
     },
+    onSceneCreate() { Graphics.startLoading(); },
     onSceneStart() { Graphics.endLoading(); },
-    catchException(error) { throw error; },
+    onSceneLoading() { Graphics.updateLoading(); },
+    catchException(error) { options.coreService('printError', error.name || 'Error', error.message || String(error)); options.audioManager()?.stopAll(); this.stop(); },
+    exit() { this.goto(null); this._exiting = true; },
+    terminate() { options.sceneControl?.('exit'); },
+    snap() { return Bitmap.snap(this._scene); },
+    snapForBackground() { this._backgroundBitmap = this.snap(); this._backgroundBitmap.blur(); },
     get _stopped() { return api.scene(runtime,'stopped'); },
     set _stopped(value) { api.scene(runtime,'stopped',Boolean(value)); },
     get _sceneStarted() { return api.scene(runtime,'started'); },
@@ -1049,7 +1788,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     isSceneChanging() { return Boolean(pendingNative) || api.scene(runtime, 'changing'); },
     isCurrentSceneBusy() { return Boolean(this._scene && this._scene.isBusy()); },
     isCurrentSceneStarted() { return api.scene(runtime, 'started'); },
-    stop() { api.scene(runtime, 'stopped', true); }, resume() { api.scene(runtime, 'stopped', false); },
+    stop() { api.scene(runtime, 'stopped', true); }, resume() { api.scene(runtime, 'stopped', false); this.requestUpdate(); this._currentTime = this._getTimeInMsWithoutMobileSafari(); this._accumulator = 0; },
     clearStack() { this._stack.length = 0; stackStates.length = 0; }, _stack: [],
     push(type) {
       if (this._scene) {
@@ -1060,6 +1799,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
       this.goto(type);
     },
     pop() {
+      if (!this._stack.length) { this.exit(); return; }
       const previous = stackStates[this._stack.length - 1], type = this._stack.pop() || null;
       stackStates.length = this._stack.length;
       this.goto(type);
@@ -1074,16 +1814,45 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     get canStep() { return !api.scene(runtime, 'stopped') && !this.isSceneChanging() && (!hasRun || this.isCurrentSceneStarted()); },
     get stageHandle() { return currentRoot ? entry(currentRoot).handle : null; }
   }));
+  windowLayerParts=installWindowLayer(options.runScript,WindowLayer,{
+    rectangle(object) {return api.invoke(entry(object).handle,'windowLayerMask');},
+    hook(object,callback) {
+      const own=entry(object);own.windowMask=callback?handle=>callback(wrap(handle)):null;
+      api.invoke(own.handle,'windowLayerMask',own.windowMask);
+    },
+    mask() {
+      const Type=options.graphicsClass?.();
+      if(Type) {const mask=new Type();mask.beginFill(0xffffff,1);mask.drawRect(0,0,0,0);mask.endFill();return mask;}
+      const rectangle=options.rectangle();
+      return {graphicsData:[{shape:rectangle}],getBounds() {return rectangle;}};
+    }
+  });
   windowParts = installWindowParts(options.runScript, { Window, Sprite, Bitmap }, {
+    spriteHooksActive() {return spriteRenderHooks.overridden();},
+    bitmapHooksActive() {return bitmapDrawingOverrides(Bitmap);},
+    setCursor(object, rectangle) { api.invoke(entry(object).handle, 'cursor', ...rectangle); },
+    setWindowskin(object, bitmap) {
+      api.invoke(entry(object).handle, 'windowskin', bitmap == null ? null : bitmapHandle(Bitmap, bitmap));
+      entry(object).bitmaps.set('windowskin', bitmap);
+    },
     activate(object) { api.invoke(entry(object).handle, 'windowCustomParts'); },
     refresh(object) { api.invoke(entry(object).handle, 'refreshWindow'); },
+    opacity(object, name) { return api.field(entry(object).handle, name); },
     tone(object) { return api.invoke(entry(object).handle, 'windowTone'); },
     setTone(object, value) { api.invoke(entry(object).handle, 'windowTone', ...value); },
     cursor(object) { return api.invoke(entry(object).handle, 'cursorRect'); }
   });
-  return { updateFilters, ...nativeWindows, Container, Stage, Sprite, Sprite_Button, Sprite_Base, Sprite_Animation, TilingSprite, ScreenSprite, ToneSprite, Window, WindowLayer, Window_Base, Window_Selectable, Window_Command, Window_MenuCommand, Window_Options, Window_Message,
+  Object.assign(SceneManager, { _screenWidth: Graphics.width, _screenHeight: Graphics.height, _boxWidth: Graphics.boxWidth, _boxHeight: Graphics.boxHeight,
+    _deltaTime: 1 / 60, _currentTime: 0, _accumulator: 0, _exiting: false, _previousClass: null, _backgroundBitmap: null });
+  return { bitmapFromSource, transformTexture(source, destination, x,y,width,height,rotation) { native.canvas.copyTransformedPixels(destination._canvas._ensureNativeCanvas().handle,source._canvas._ensureNativeCanvas().handle,x,y,width,height,rotation);destination._canvas._pmjsContentChanged(); }, setSpriteTexture(object, bitmap, frame, resolution=1) { api.invoke(entry(object).handle,'spriteTexture',bitmap ? bitmapHandle(Bitmap,bitmap) : null,...(frame ? [frame.x,frame.y,frame.width,frame.height,resolution] : [])); }, updateFilters, ...nativeWindows, Container, Stage, Sprite, Sprite_Button, Sprite_Base, Sprite_Animation, TilingSprite, ScreenSprite, ToneSprite, Window, WindowLayer, Window_Base, Window_Selectable, Window_Command, Window_MenuCommand, Window_Options, Window_Message,
     Scene_Base, Scene_Battle, Scene_MenuBase, Scene_Menu, Scene_Options, Scene_Gameover, Scene_GameEnd, Scene_File, Scene_Load, Scene_Save, Scene_Equip, Scene_Status, Scene_Shop, Scene_Name, Scene_Debug, Scene_ItemBase, Scene_Item, Scene_Skill, Scene_Boot, Scene_Title, Scene_Map, SceneManager, Graphics, Input,
     GlitchFilter,
+    prepareNativeRequest() {
+      if (pendingNative?.newGame) {
+        pendingNative.newGame = false;
+        SceneManager.clearStack(); options.dataManager().setupNewGame();
+      }
+    },
     requestScene(method, kind) {
       if (method === 'ownsScenes') return true;
       if (method === 'hasPrevious') return SceneManager._stack.length > 0;
@@ -1106,10 +1875,73 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
         if (type && previous?.type === type) { kind = previous.kind; state = previous.state; }
         else kind = nativeScenes.findIndex((base, index) => type === sceneClass(index));
       }
-      pendingNative = { type, kind };
+      pendingNative = { type, kind, newGame: method === 'newGame' };
       if (state) options.sceneControl?.('restore', state);
       else if (kind >= 0) options.sceneControl?.('prepare', kind);
       return true;
+    },
+    prepareDisplay(object, prepare) { const own = entry(object); own.prepareRender = prepare; api.invoke(own.handle, 'displayPrepare', prepare); },
+    tilemapBitmaps(object) { return api.invoke(entry(object).handle,'tilemapBitmaps').map(handle=>wrapBitmapHandle(Bitmap,handle)); },
+    tilemapField(object,field,...value) {return api.field(entry(object).handle,field,...value);},
+    tilemapState(object) {
+      api.invoke(entry(object).handle,'tilemapState',object._tileWidth,object._tileHeight,object._mapWidth,object._mapHeight,
+        object._mapData,object.flags,object.horizontalWrap,object.verticalWrap,object.bitmaps.map(bitmap=>bitmap?bitmapHandle(Bitmap,bitmap):null));
+    },
+    displayListField(handle, field, ...assigned) {
+      let fields = displayLists.get(handle);
+      if (!fields) { fields = new Map(); displayLists.set(handle, fields); }
+      const read = () => options.boundDisplayField(handle, field, runtime).map(wrap);
+      const write = values => {
+        if (!Array.isArray(values)) throw new TypeError('Native display lists require an array');
+        options.boundDisplayField(handle, field, runtime, values.map(object => entry(object).handle));
+      };
+      if (assigned.length) write(assigned[0]);
+      if (!fields.has(field)) {
+        const target = options.createArray ? options.createArray() : [];
+        const mutators = new Set(['push','pop','shift','unshift','splice','sort','reverse','fill','copyWithin']), methods = new Map();
+        const index = key => typeof key === 'string' && /^(0|[1-9][0-9]*)$/.test(key) && Number(key)<4294967295;
+        const refresh = () => {
+          const values=read(); target.length=0; target.length=values.length;
+          for (let i=0;i<values.length;++i) if (i in values) target[i]=values[i];
+        };
+        const proxy = new Proxy(target, {
+          get(array, key, receiver) {
+            refresh();
+            if (mutators.has(key)) {
+              if (!methods.has(key)) methods.set(key,function(...args) {
+                if (this!==proxy) return Array.prototype[key].apply(this,args);
+                refresh(); const values=target.slice(), result=Array.prototype[key].apply(values,args);
+                write(values); refresh(); return result===values ? proxy : result;
+              });
+              return methods.get(key);
+            }
+            return Reflect.get(array,key,receiver);
+          },
+          set(array,key,value) {
+            if (key!=='length' && !index(key)) return Reflect.set(array,key,value);
+            refresh(); const values=target.slice(); Reflect.set(values,key,value);
+            write(values); refresh(); return true;
+          },
+          deleteProperty(array,key) {
+            if (!index(key)) return Reflect.deleteProperty(array,key);
+            refresh(); const values=target.slice(); delete values[key]; write(values); refresh(); return true;
+          },
+          has(array,key) { refresh(); return Reflect.has(array,key); },
+          ownKeys(array) { refresh(); return Reflect.ownKeys(array); },
+          getOwnPropertyDescriptor(array,key) { refresh(); return Reflect.getOwnPropertyDescriptor(array,key); },
+          defineProperty(array,key,descriptor) {
+            if (key!=='length' && !index(key)) return Reflect.defineProperty(array,key,descriptor);
+            if (descriptor.get || descriptor.set || descriptor.writable===false || descriptor.configurable===false || index(key) && descriptor.enumerable===false)
+              throw new TypeError('Native display list entries require ordinary writable data properties');
+            if ('value' in descriptor) {
+              refresh(); const values=target.slice(); Reflect.set(values,key,descriptor.value); write(values); refresh();
+            }
+            return true;
+          }
+        });
+        fields.set(field,proxy);
+      }
+      return fields.get(field);
     },
     displayHandle: object => entry(object).handle,
     displayField(handle, field, ...value) {

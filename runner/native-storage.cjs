@@ -53,9 +53,14 @@ function installStorage(runtime, native, storage) {
     config.makeData = function() { return Object.fromEntries(fields.map(field => [field, this[field]])); };
     config.readFlag = function(data, name) { return Boolean(data[name]); };
     config.readVolume = function(data, name) { return name in data ? Math.max(0, Math.min(100, Number(data[name]))) : 100; };
-    config.applyData = function(data) { for (const field of fields) this[field] = field.endsWith('Volume') ? this.readVolume(data, field) : this.readFlag(data, field); };
+    config.applyData = function(data) { for (const field of fields) Reflect.set(this, field, field.endsWith('Volume') ? this.readVolume(data, field) : this.readFlag(data, field)); };
     config.save = function() { manager.save(-1, JSON.stringify(this.makeData())); };
-    config.load = function() { const json = manager.load(-1); this.applyData(json ? parse(json) : {}); };
+    config.load = function() {
+      let data;
+      try { const json = manager.load(-1); data = json ? parse(json) : {}; }
+      catch (error) { runtime.scope.console?.error(error); }
+      this.applyData(data || {});
+    };
   }
   return manager;
 }

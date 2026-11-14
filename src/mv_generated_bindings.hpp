@@ -5,6 +5,7 @@ namespace pmjs::mv {
 struct GeneratedRuntimeObject : RuntimeBoundObject, std::enable_shared_from_this<GeneratedRuntimeObject> {
   std::weak_ptr<RuntimeHooks> hooks;
   bool dispatchOverride(const std::string& method);
+  bool hasOverride(const std::string& method);
   std::optional<Value> dispatchValue(const std::string& method, const Value::Array& arguments = {});
   void listen(const BindingEvent& event, std::uint32_t token);
   void clearListeners();

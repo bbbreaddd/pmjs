@@ -1,9 +1,17 @@
 'use strict';
-const { installCoreUtilities } = require('./native-core-utilities.cjs');
+const { installCoreUtilities, installToneFilter } = require('./native-core-utilities.cjs');
 const { installAudioElement } = require('./native-audio-element.cjs');
+const { installFilterCompiler } = require('./native-filter-compiler.cjs');
 
 function installCoreServices(runtime, engine) {
   const scope = runtime.scope;
+  installToneFilter(runtime);
+  installFilterCompiler(runtime);
+  if (scope.Sprite && scope.PIXI?.filters?.VoidFilter && !scope.Sprite.voidFilter)
+    scope.Sprite.voidFilter = new scope.PIXI.filters.VoidFilter();
+  if (scope.WindowLayer && scope.PIXI?.filters?.VoidFilter && !scope.WindowLayer.voidFilter)
+    scope.WindowLayer.voidFilter = new scope.PIXI.filters.VoidFilter();
+  if(scope.Image && scope.nativeImageFromResource) scope.Bitmap?.bindImages({ create: () => new scope.Image(), fromResource: scope.nativeImageFromResource });
   if (scope.PIXI) scope.Bitmap?.bindPixi(scope.PIXI, scope.PMJS?.fonts);
   if (!scope.ResourceHandler) installCoreUtilities(runtime);
   if (scope.WebAudio && scope.EventTarget) installAudioElement(scope);

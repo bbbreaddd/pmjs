@@ -14,7 +14,9 @@ bool Session::systemEventCommand(const EventCommand& entry) {
       encounterCount_ = randomInt(map()["encounterStep"].integer(30)) + randomInt(map()["encounterStep"].integer(30)) + 1;
       return true;
     case 137: system_.formationEnabled = parameters[0].integer() != 0; return true;
-    case 138: system_.windowTone = parameters[0]; return true;
+    case 138:
+      if (!runtimeHooks_ || !runtimeHooks_->gameDataMutation || !runtimeHooks_->gameDataMutation("system", "setWindowTone", {parameters[0]})) system_.windowTone = parameters[0];
+      return true;
     case 139: system_.defeatMe = parameters[0]; return true;
     case 140: {
       const int vehicle = parameters[0].integer();

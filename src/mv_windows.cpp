@@ -828,35 +828,47 @@ void Window_BattleLog::queuePopup(Session& session, const Battler& target, int v
 }
 
 void Window_BattleLog::performDamage(Session& session, Battler& target) {
-  if (target.enemy) {
-    SoundManager::playEnemyDamage(session);
-    session.requestEnemyEffect(static_cast<std::size_t>(-battlerId(session,target)-1),"blink");
-  } else SoundManager::playActorDamage(session);
+  if (session.dispatchActorMethod(target, "performDamage", {})) return;
+  session.performBattlerPresentation(target, "performDamage", true);
+  session.performBattlerPresentation(target, "performDamage", false);
 }
-void Window_BattleLog::performMiss(Session& session, Battler&) { SoundManager::playMiss(session); }
-void Window_BattleLog::performRecovery(Session& session, Battler&) { SoundManager::playRecovery(session); }
-void Window_BattleLog::performEvasion(Session& session, Battler&) { SoundManager::playEvasion(session); }
-void Window_BattleLog::performMagicEvasion(Session& session, Battler&) { SoundManager::playMagicEvasion(session); }
+void Window_BattleLog::performMiss(Session& session, Battler& target) {
+  if (session.dispatchActorMethod(target, "performMiss", {})) return;
+  session.performBattlerPresentation(target, "performMiss", true);
+  session.performBattlerPresentation(target, "performMiss", false);
+}
+void Window_BattleLog::performRecovery(Session& session, Battler& target) {
+  if (session.dispatchActorMethod(target, "performRecovery", {})) return;
+  session.performBattlerPresentation(target, "performRecovery", true);
+  session.performBattlerPresentation(target, "performRecovery", false);
+}
+void Window_BattleLog::performEvasion(Session& session, Battler& target) {
+  if (session.dispatchActorMethod(target, "performEvasion", {})) return;
+  session.performBattlerPresentation(target, "performEvasion", true);
+  session.performBattlerPresentation(target, "performEvasion", false);
+}
+void Window_BattleLog::performMagicEvasion(Session& session, Battler& target) {
+  if (session.dispatchActorMethod(target, "performMagicEvasion", {})) return;
+  session.performBattlerPresentation(target, "performMagicEvasion", true);
+  session.performBattlerPresentation(target, "performMagicEvasion", false);
+}
 void Window_BattleLog::performCounter(Session& session, Battler& target) {
-  SoundManager::playEvasion(session);
-  if (target.enemy) return;
-  int weapon = 0;
-  for (std::size_t slot = 0; slot < target.equips.size(); ++slot)
-    if (target.equips[slot] && target.equipKinds[slot] == 1) { weapon = target.equips[slot]; break; }
-  const auto& attack = session.database()["system"]["attackMotions"][session.database()["weapons"][weapon]["wtypeId"].integer()];
-  if (!attack.null()) session.requestActorMotion(target.id,6+attack["type"].integer(),attack["weaponImageId"].integer());
+  if (session.dispatchActorMethod(target, "performCounter", {})) return;
+  session.performBattlerPresentation(target, "performCounter", true);
+  session.performBattlerPresentation(target, "performAttack", false);
 }
-void Window_BattleLog::performReflection(Session& session, Battler&) { SoundManager::playReflection(session); }
+void Window_BattleLog::performReflection(Session& session, Battler& target) {
+  if (session.dispatchActorMethod(target, "performReflection", {})) return;
+  session.performBattlerPresentation(target, "performReflection", true);
+  session.performBattlerPresentation(target, "performReflection", false);
+}
+
 void Window_BattleLog::performSubstitute(Battler& substitute, Battler& target) {
   (void)substitute; (void)target;
 }
 void Window_BattleLog::performCollapse(Session& session, Battler& target) {
-  if (!target.enemy) { SoundManager::playActorCollapse(session); return; }
-  int type = 0;
-  for (const auto* object : session.traitObjects(target)) for (const auto& trait : (*object)["traits"].array())
-    if (trait["code"].integer() == 63) type = std::max(type,trait["dataId"].integer());
-  session.requestEnemyEffect(static_cast<std::size_t>(-battlerId(session,target)-1),
-    type == 1 ? "bossCollapse" : type == 2 ? "instantCollapse" : "collapse");
+  if (session.dispatchActorMethod(target, "performCollapse", {})) return;
+  session.performBattlerPresentation(target, "performCollapse", false);
 }
 
 void Window_BattleLog::displayAction(const Session& session, const Battler& subject, const Value& item) {
@@ -1239,9 +1251,8 @@ Window_ShopBuy::Window_ShopBuy(int x, int y, int h, std::vector<ShopGood> shopGo
 int Window_ShopBuy::price(int itemIndex, const Session& session) const {
   if (itemIndex < 0 || itemIndex >= static_cast<int>(goods.size())) return 0;
   const auto& good = goods[itemIndex];
-  (void)session;
   const auto first = std::find_if(goods.begin(), goods.end(), [&](const ShopGood& other) { return other.kind == good.kind && other.id == good.id; });
-  return first->price;
+  return first->price < 0 ? session.database()[first->kind == 1 ? "weapons" : first->kind == 2 ? "armors" : "items"][first->id]["price"].integer() : first->price;
 }
 bool Window_ShopBuy::isEnabled(int itemIndex, const Session& session) const {
   if (itemIndex < 0 || itemIndex >= static_cast<int>(goods.size())) return false;

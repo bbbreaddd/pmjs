@@ -13,6 +13,7 @@ namespace pmjs::mv {
 class ImageCache;
 class Window_Base;
 class NativeMapSpriteset;
+struct NativeMapDrawEntry;
 class Presentation {
  public:
   Presentation(RuntimeCore& core, Session& session, Value settings);
@@ -36,7 +37,9 @@ class Presentation {
   void prepareRenderResources();
   void prepareUiFrame();
   std::function<bool(const Character&,Renderer&,const core::Matrix&,double)> graphCharacterRenderer_;
-  void renderMapLayer(const std::string& layer,const core::Matrix& world,double opacity);
+  int graphMapLevel_ = 0;
+  std::vector<NativeMapDrawEntry> graphMapDrawEntries_;
+  void renderMapWorld(const core::Matrix& world,double opacity);
   void finishSceneOverlays();
   void renderStage();
   ImageInfo image(const std::string& file, int hue = 0);
@@ -46,6 +49,9 @@ class Presentation {
   void prepareMapGeometry(int firstX, int firstY, int lastX, int lastY);
   void queueMapGeometry(bool upper, int originX, int originY);
   core::Tilemap stockTilemap_;
+  std::shared_ptr<core::Tilemap> graphTilemap_;
+  std::uint64_t graphTilemapRevision_ = 0;
+  std::uint64_t graphTilemapId_ = 0;
   int stockTileset_ = -1;
   std::uint64_t stockMapRevision_ = 0;
   void character(const Character& value, double cameraX, double cameraY);

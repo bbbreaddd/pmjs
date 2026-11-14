@@ -130,7 +130,7 @@ function detectRpgMakerEngine(root) {
   throw new Error('cannot identify RPG Maker MV or MZ: missing core script');
 }
 
-function loadGame(root) {
+function loadGame(root, { loadMaps = true } = {}) {
   const identities = {};
   const read = file => {
     const source = fs.readFileSync(path.join(root, file), 'utf8');
@@ -155,7 +155,7 @@ function loadGame(root) {
   identities[settings.fontFile] = createHash('sha256').update(fs.readFileSync(path.join(root, settings.fontFile))).digest('hex');
   for (const file of databaseFiles) database[file.key] = JSON.parse(read('data/' + file.src));
   database.maps = {};
-  for (const info of database.mapInfos.filter(Boolean)) {
+  for (const info of loadMaps ? database.mapInfos.filter(Boolean) : []) {
     const file = `data/Map${String(info.id).padStart(3, '0')}.json`;
     if (!fs.existsSync(path.join(root, file))) continue;
     database.maps[info.id] = JSON.parse(read(file));

@@ -39,6 +39,8 @@ struct DisplayServices {
   std::shared_ptr<State> owner;
   mv::ScriptSceneManager scenes;
   Input input;
+  std::map<Container*,std::weak_ptr<Container>> nodes;
+  std::uint64_t wraps=0;
   bool focused = true;
   explicit DisplayServices(std::shared_ptr<State> value) : owner(std::move(value)) {
     if (boundRuntime() && boundRuntime() != &owner->core) throw std::runtime_error("display graphics services belong to another runtime");
@@ -65,6 +67,7 @@ std::string kind(const std::shared_ptr<Container>& node) {
   if (std::dynamic_pointer_cast<mv::ScriptScene>(node)) return "scene";
   if (std::dynamic_pointer_cast<BoundWindow>(node)) return "window";
   if (std::dynamic_pointer_cast<WindowLayer>(node)) return "windowLayer";
+  if (std::dynamic_pointer_cast<Tilemap>(node)) return "tilemap";
   if (std::dynamic_pointer_cast<TilingSprite>(node)) return "tiling";
   if (std::dynamic_pointer_cast<Sprite>(node)) return "sprite";
   if (std::dynamic_pointer_cast<ScreenSprite>(node)) return "screen";
@@ -73,6 +76,8 @@ std::string kind(const std::shared_ptr<Container>& node) {
 }
 napi_value wrap(napi_env env, const std::shared_ptr<DisplayServices>& runtime, const std::shared_ptr<Container>& node) {
   if (!node) return null(env);
+  runtime->nodes[node.get()]=node;
+  if(++runtime->wraps%256==0)std::erase_if(runtime->nodes,[](const auto& entry){return entry.second.expired();});
   auto value = std::make_unique<DisplayOwner>(DisplayOwner{runtime, node, kind(node)});
   auto result = moduleObject(env); napi_value identity;
   check(env, napi_create_bigint_uint64(env, node->displayId, &identity), "cannot identify display object");
@@ -142,8 +147,10 @@ napi_value field(napi_env env, napi_callback_info info) try {
     else if (name == "seed") scalar = &filter->value->seed; else if (name == "enabled") flag = &filter->value->enabled;
   }
   if (sprite) {
+    if(name=="_refreshFrame") {if(args.size()==3)sprite->setRefreshFrame(asBoolean(env,args[2]));return boolean(env,sprite->refreshFrame());}
+    if(name=="ax")scalar=&sprite->ax;else if(name=="ay")scalar=&sprite->ay;
     if(name=="opaque")flag=&sprite->opaque;else if(name=="_isPicture")flag=&sprite->isPicture;
-    else if(name=="spriteId") {if(args.size()==3)sprite->spriteId=std::uint64_t(asNumber(env,args[2]));return number(env,sprite->spriteId);}
+    else if(name=="spriteId") {if(args.size()==3)sprite->spriteId=asNumber(env,args[2]);return number(env,sprite->spriteId);}
     if (name == "anchorX") scalar = &sprite->anchor.x; else if (name == "anchorY") scalar = &sprite->anchor.y;
     else if (name == "blendMode") {
       if (args.size() == 3) sprite->blendMode = asBlendMode(env, args[2]);
@@ -158,6 +165,23 @@ napi_value field(napi_env env, napi_callback_info info) try {
     if (name == "originX") scalar = &tiling->origin.x; else if (name == "originY") scalar = &tiling->origin.y;
     else if (name == "width") scalar = &tiling->areaWidth; else if (name == "height") scalar = &tiling->areaHeight;
   }
+  if (const auto tilemap = std::dynamic_pointer_cast<Tilemap>(owner.node)) {
+    if(name=="tileWidth"||name=="tileHeight") {
+      if(args.size()==3) {if(name=="tileWidth")tilemap->setTileWidth(asInt32(env,args[2]));else tilemap->setTileHeight(asInt32(env,args[2]));}
+      return number(env,name=="tileWidth"?tilemap->tileWidth:tilemap->tileHeight);
+    }
+    int* value=name=="mapWidth"?&tilemap->mapWidth:name=="mapHeight"?&tilemap->mapHeight:
+      name=="width"?&tilemap->width:name=="height"?&tilemap->height:name=="margin"?&tilemap->margin:
+      name=="animationFrame"?&tilemap->animationFrame:name=="animationCount"?&tilemap->animationCount:nullptr;
+    if(value) {if(args.size()==3) {const auto next=asInt32(env,args[2]);if(*value!=next){*value=next;if(name!="animationFrame"&&name!="animationCount")tilemap->refresh();}}return number(env,*value);}
+    if(name=="customChildOrder") {if(args.size()==3)tilemap->customChildOrder=asBoolean(env,args[2]);return boolean(env,tilemap->customChildOrder);}
+    if(name=="horizontalWrap"||name=="verticalWrap") {
+      auto& wrap=name=="horizontalWrap"?tilemap->horizontalWrap:tilemap->verticalWrap;
+      if(args.size()==3) {const bool next=asBoolean(env,args[2]);if(wrap!=next){wrap=next;tilemap->refresh();}}return boolean(env,wrap);
+    }
+    if (name == "originX") scalar = &tilemap->origin.x;
+    else if (name == "originY") scalar = &tilemap->origin.y;
+  }
   if (window) {
     if (name=="_animationCount") {if(args.size()==3)window->animationCount=std::uint64_t(asNumber(env,args[2]));return number(env,window->animationCount);}
     if (name == "originX") scalar = &window->origin.x; else if (name == "originY") scalar = &window->origin.y;
@@ -167,6 +191,7 @@ napi_value field(napi_env env, napi_callback_info info) try {
     else if (name == "backOpacity") scalar = &window->backOpacity; else if (name == "contentsOpacity") scalar = &window->contentsOpacity;
     else if (name == "active") flag = &window->active; else if (name == "opening") flag = &window->opening;
     else if (name == "pause") flag = &window->pause;
+    else if (name == "_isWindow") flag = &window->isWindow;
     else if (name == "upArrowVisible") flag = &window->upArrowVisible;
     else if (name == "downArrowVisible") flag = &window->downArrowVisible;
     else if (name == "closing") flag = &window->closing; else if (name == "index") integer = &window->selection().index;
@@ -217,19 +242,123 @@ napi_value invoke(napi_env env, napi_callback_info info) try {
   auto window = std::dynamic_pointer_cast<BoundWindow>(owner.node);
   auto scene = std::dynamic_pointer_cast<mv::ScriptScene>(owner.node);
   auto scalar = [&](std::size_t index) { if (index >= args.size()) throw std::invalid_argument("missing display argument"); return asNumber(env, args[index]); };
-  if(method=="windowPrepare" && window) {
+  if(method=="parent") {
+    auto* target=node.parent;if(!target)return null(env);
+    auto parent=owner.services->nodes[target].lock();
+    if(!parent) {
+      auto* root=target;while(root->parent)root=root->parent;
+      const auto find=[&](auto&& self,const std::shared_ptr<Container>& candidate)->std::shared_ptr<Container> {
+        if(!candidate)return {};if(candidate.get()==target)return candidate;
+        for(const auto& child:candidate->children)if(auto found=self(self,child))return found;
+        return {};
+      };
+      parent=find(find,owner.services->nodes[root].lock());
+    }
+    if(!parent)throw std::runtime_error("native display parent has no live tree owner");
+    return wrap(env,owner.services,parent);
+  }
+  if(method=="tilemapState"||method=="tilemapBitmaps") {
+    const auto tilemap=std::dynamic_pointer_cast<Tilemap>(owner.node);
+    if(!tilemap)throw std::invalid_argument("display is not a tilemap");
+    if(method=="tilemapBitmaps") {
+      napi_value result;check(env,napi_create_array_with_length(env,tilemap->bitmaps.size(),&result),"cannot list tile bitmaps");
+      for(std::size_t i=0;i<tilemap->bitmaps.size();++i) {
+        check(env,napi_set_element(env,result,i,wrapRuntimeBitmap(env,tilemap->bitmapOwners[i],owner.services->owner->core)),"cannot list tile bitmap");
+      }
+      return result;
+    }
+    if(args.size()!=11)throw std::invalid_argument("tilemap state requires dimensions, map data, flags, wrapping and bitmaps");
+    const auto integers=[&](napi_value array) {
+      std::uint32_t length;check(env,napi_get_array_length(env,array,&length),"tile data must be an array");std::vector<int> values;values.reserve(length);
+      for(std::uint32_t i=0;i<length;++i) {napi_value value;check(env,napi_get_element(env,array,i,&value),"cannot read tile data");values.push_back(asInt32(env,value));}
+      return values;
+    };
+    tilemap->setTileWidth(int(scalar(2)));tilemap->setTileHeight(int(scalar(3)));
+    tilemap->setData(int(scalar(4)),int(scalar(5)),integers(args[6]));tilemap->flags=integers(args[7]);
+    tilemap->horizontalWrap=asBoolean(env,args[8]);tilemap->verticalWrap=asBoolean(env,args[9]);
+    std::array<std::shared_ptr<PixelBitmap>,9> bitmaps;
+    std::uint32_t length;check(env,napi_get_array_length(env,args[10],&length),"tile bitmaps must be an array");
+    for(std::uint32_t i=0;i<std::min(length,std::uint32_t(bitmaps.size()));++i) {
+      napi_value value;check(env,napi_get_element(env,args[10],i,&value),"cannot read tile bitmap");napi_valuetype type;check(env,napi_typeof(env,value,&type),"cannot inspect tile bitmap");
+      if(type!=napi_null&&type!=napi_undefined)bitmaps[i]=bitmapForRuntime(env,value,owner.services->owner->core);
+    }
+    tilemap->bitmapOwners=std::move(bitmaps);for(std::size_t i=0;i<tilemap->bitmaps.size();++i)tilemap->bitmaps[i]=tilemap->bitmapOwners[i].get();
+    tilemap->refresh();return undefined(env);
+  }
+  if(method=="windowLayerMask") {
+    const auto layer=std::dynamic_pointer_cast<WindowLayer>(owner.node);
+    if(!layer)throw std::invalid_argument("window mask requires a window layer");
+    if(args.size()>2) {
+      napi_valuetype type;check(env,napi_typeof(env,args[2],&type),"cannot inspect window mask hook");
+      if(type==napi_null)layer->maskHook={};
+      else {
+        struct Callback {
+          napi_env env;napi_ref reference=nullptr;std::weak_ptr<DisplayServices> services;std::weak_ptr<WindowLayer> layer;
+          ~Callback(){if(reference)napi_delete_reference(env,reference);}
+        };
+        auto callback=std::make_shared<Callback>();callback->env=env;callback->services=owner.services;callback->layer=layer;
+        check(env,napi_create_reference(env,args[2],0,&callback->reference),"cannot retain window mask hook");
+        layer->maskHook=[callback](Window& window)->std::optional<Rectangle> {
+          const auto owner=callback->services.lock();const auto layer=callback->layer.lock();if(!owner||!layer)return {};
+          napi_value function=nullptr,receiver,result;check(callback->env,napi_get_reference_value(callback->env,callback->reference,&function),"cannot read window mask hook");if(!function)return {};
+          const auto node=std::find_if(layer->children.begin(),layer->children.end(),[&](const auto& child){return child.get()==&window;});
+          if(node==layer->children.end())return {};
+          const auto argument=wrap(callback->env,owner,*node);
+          check(callback->env,napi_get_global(callback->env,&receiver),"cannot read window mask receiver");
+          check(callback->env,napi_call_function(callback->env,receiver,function,1,&argument,&result),"window mask hook failed");
+          std::array<double,4> values;
+          for(std::uint32_t index=0;index<values.size();++index) {
+            napi_value value;check(callback->env,napi_get_element(callback->env,result,index,&value),"cannot read window mask rectangle");values[index]=asNumber(callback->env,value);
+            if(!std::isfinite(values[index]))throw std::invalid_argument("window mask rectangle must be finite");
+          }
+          return Rectangle{values[0],values[1],values[2],values[3]};
+        };
+      }
+    }
+    const auto& rectangle=layer->windowMaskRect; napi_value result;
+    check(env,napi_create_array_with_length(env,4,&result),"cannot create window mask rectangle");
+    const std::array values{rectangle.x,rectangle.y,rectangle.width,rectangle.height};
+    for(std::uint32_t index=0;index<values.size();++index)check(env,napi_set_element(env,result,index,number(env,values[index])),"cannot return window mask rectangle");
+    return result;
+  }
+  if(method=="displayTreeHooks") {
+    struct Callback {
+      napi_env env;napi_ref reference;std::weak_ptr<DisplayServices> services;
+      ~Callback(){napi_delete_reference(env,reference);}
+      bool invoke(Container& parent)const {
+        const auto owner=services.lock();if(!owner)return false;
+        napi_value function=nullptr,receiver,result;
+        check(env,napi_get_reference_value(env,reference,&function),"cannot read display tree hook");if(!function)return false;
+        const auto found=owner->nodes.find(&parent);
+        const auto argument=found==owner->nodes.end()?null(env):wrap(env,owner,found->second.lock());
+        check(env,napi_get_global(env,&receiver),"cannot read display tree receiver");
+        check(env,napi_call_function(env,receiver,function,1,&argument,&result),"display tree hook failed");
+        return asBoolean(env,result);
+      }
+    };
+    const auto callback=[&](napi_value function) {
+      auto value=std::make_shared<Callback>();value->env=env;value->services=owner.services;value->reference=nullptr;
+      check(env,napi_create_reference(env,function,0,&value->reference),"cannot retain display tree hook");return value;
+    };
+    const auto added=callback(args.at(2)),removed=callback(args.at(3));
+    node.addedHook=[added](Container& parent){added->invoke(parent);};
+    node.removedHook=[removed](Container& parent){return removed->invoke(parent);};
+    return undefined(env);
+  }
+  if((method=="windowPrepare" && window) || method=="displayPrepare") {
     struct Callback {
       napi_env env; napi_ref reference;
       ~Callback(){napi_delete_reference(env,reference);}
     };
     napi_ref reference;check(env,napi_create_reference(env,args.at(2),0,&reference),"cannot reference window preparation");
     auto callback=std::shared_ptr<Callback>(new Callback{env,reference});
-    window->prepareParts=[callback] {
+    auto prepare=[callback] {
       napi_value function;check(callback->env,napi_get_reference_value(callback->env,callback->reference,&function),"cannot resolve window preparation");
       if(!function)return;
       napi_value receiver,result;check(callback->env,napi_get_global(callback->env,&receiver),"cannot resolve window receiver");
       check(callback->env,napi_call_function(callback->env,receiver,function,0,nullptr,&result),"window preparation failed");
     };
+    if(method=="windowPrepare")window->prepareParts=std::move(prepare);else node.prepareRender=std::move(prepare);
     return undefined(env);
   }
   if(method=="windowCustomParts" && window){window->enableCustomParts();return undefined(env);}
@@ -267,6 +396,69 @@ napi_value invoke(napi_env env, napi_callback_info info) try {
     }
     return undefined(env);
   }
+  if(method=="spriteBitmapAssignedHook") {
+    if(!sprite)throw std::invalid_argument("bitmap load hook requires a sprite");
+    struct Callback {napi_env env;napi_ref reference;std::weak_ptr<DisplayServices> services;~Callback(){napi_delete_reference(env,reference);}};
+    auto callback=std::make_shared<Callback>();callback->env=env;callback->services=owner.services;
+    check(env,napi_create_reference(env,args.at(2),0,&callback->reference),"cannot retain bitmap load hook");
+    sprite->resetBitmapListener();
+    sprite->bitmapAssignedHook=[callback](const std::shared_ptr<PixelBitmap>& bitmap) {
+      const auto services=callback->services.lock();if(!services)return false;
+      napi_value function=nullptr,receiver,result;check(callback->env,napi_get_reference_value(callback->env,callback->reference,&function),"cannot read bitmap load hook");if(!function)return false;
+      const auto argument=wrapRuntimeBitmap(callback->env,bitmap,services->owner->core);
+      check(callback->env,napi_get_global(callback->env,&receiver),"cannot read bitmap load hook receiver");check(callback->env,napi_call_function(callback->env,receiver,function,1,&argument,&result),"sprite bitmap load hook failed");return true;
+    };
+    return undefined(env);
+  }
+  if(method=="renderWorld") {
+    if(!sprite||!sprite->renderContext)return null(env);
+    napi_value result;check(env,napi_create_array_with_length(env,6,&result),"cannot read sprite rendering transform");
+    for(int i=0;i<6;++i)check(env,napi_set_element(env,result,i,number(env,sprite->renderContext->callbackWorld[i])),"cannot read sprite rendering transform");return result;
+  }
+  if(method=="renderSprite") {
+    if(!sprite||!sprite->renderContext)throw std::logic_error("sprite default rendering requires an active sprite render hook");
+    const auto context=*sprite->renderContext;const auto first=context.renderer->queuedCommandCount();
+    std::optional<std::array<std::array<float,2>,4>> vertices;
+    if(args.size()>2) {
+      if(args.size()!=10)throw std::invalid_argument("sprite rendering requires eight vertex coordinates");
+      vertices.emplace();for(int i=0;i<4;++i)for(int axis=0;axis<2;++axis) {const auto value=scalar(2+i*2+axis);if(!std::isfinite(value))throw std::invalid_argument("sprite vertices must be finite");(*vertices)[i][axis]=float(value);}
+    }
+    sprite->drawDefault(*context.renderer,context.world,context.opacity);
+    if(vertices)context.renderer->setQueuedSpriteVertices(first,*vertices);
+    return undefined(env);
+  }
+  if(method=="spriteRenderHook") {
+    if(!sprite)throw std::invalid_argument("render hook requires a sprite");
+    napi_valuetype type;check(env,napi_typeof(env,args.at(2),&type),"cannot inspect sprite render hook");
+    if(type==napi_null){sprite->renderHook={};return undefined(env);}
+    if(type!=napi_function)throw std::invalid_argument("sprite render hook must be callable");
+    struct Callback {napi_env env;napi_ref reference;~Callback(){napi_delete_reference(env,reference);}};
+    auto callback=std::make_shared<Callback>();callback->env=env;check(env,napi_create_reference(env,args[2],0,&callback->reference),"cannot retain sprite render hook");
+    sprite->renderHook=[callback] {napi_value function,receiver,result;check(callback->env,napi_get_reference_value(callback->env,callback->reference,&function),"cannot read sprite render hook");if(!function)return false;
+      check(callback->env,napi_get_global(callback->env,&receiver),"cannot read render hook receiver");check(callback->env,napi_call_function(callback->env,receiver,function,0,nullptr,&result),"sprite render hook failed");return asBoolean(callback->env,result);};
+    return undefined(env);
+  }
+  if(method=="spriteTexture") {
+    if(!sprite)throw std::invalid_argument("texture requires a sprite");
+    napi_valuetype type;check(env,napi_typeof(env,args.at(2),&type),"cannot inspect sprite texture");
+    if(type==napi_null) sprite->textureOverride.reset();
+    else {if(args.size()!=8)throw std::invalid_argument("sprite texture requires bitmap, frame and resolution");const auto resolution=scalar(7);if(!std::isfinite(resolution)||resolution<=0)throw std::invalid_argument("texture resolution must be positive");sprite->textureOverride=Sprite::TextureOverride{bitmapForRuntime(env,args[2],owner.services->owner->core),{scalar(3),scalar(4),scalar(5),scalar(6)},resolution};}
+    return undefined(env);
+  }
+  if(method=="filterGroups") {
+    const auto groups=args.at(2);std::uint32_t length;check(env,napi_get_array_length(env,groups,&length),"cannot count native filter groups");
+    std::vector<RenderCommand> commands;commands.reserve(length);
+    const auto property=[&](napi_value object,const char* key) {napi_value value;check(env,napi_get_named_property(env,object,key,&value),"cannot read native filter group");return value;};
+    for(std::uint32_t i=0;i<length;++i) {
+      napi_value group;check(env,napi_get_element(env,groups,i,&group),"cannot read native filter group");
+      const auto values=property(group,"parameters");std::uint32_t count;check(env,napi_get_array_length(env,values,&count),"cannot count native filter parameters");
+      std::vector<float> parameters;parameters.reserve(count);
+      for(std::uint32_t j=0;j<count;++j) {napi_value value;check(env,napi_get_element(env,values,j,&value),"cannot read native filter parameter");parameters.push_back(float(asNumber(env,value)));}
+      auto resolution=property(group,"resolution");napi_valuetype type;check(env,napi_typeof(env,resolution,&type),"cannot inspect filter resolution");
+      commands.push_back(owner.services->owner->renderer.nativeFilter(asUint32(env,property(group,"kind")),asUint32(env,property(group,"resource")),parameters,type==napi_undefined?1:float(asNumber(env,resolution))));
+    }
+    node.filterGroups=std::move(commands);node.glitchFilters.clear();return undefined(env);
+  }
   if (method=="filterMatrix") {
     auto filter=std::dynamic_pointer_cast<BoundGlitchFilter>(owner.node);
     if (!filter || args.size()!=4) throw std::invalid_argument("color filter requires a matrix and alpha");
@@ -282,11 +474,14 @@ napi_value invoke(napi_env env, napi_callback_info info) try {
     if (!tone || args.size()!=6) throw std::invalid_argument("tone requires four channels");
     tone->setTone(scalar(2),scalar(3),scalar(4),scalar(5));return undefined(env);
   }
-  if (method == "add" || method == "remove") {
+  if (method == "add" || method == "addBack" || method == "remove") {
     if (args.size() < 3) throw std::invalid_argument("missing display child");
     auto& child = display(env, args[2]); if (child.services != owner.services) throw std::invalid_argument("display child belongs to another runtime");
     if (child.kind == "glitch") throw std::invalid_argument("filter is not a display child");
-    if (method == "add") node.addChildAt(child.node, args.size() > 3 ? asUint32(env, args[3]) : node.children.size());
+    if (method == "addBack") {
+      if (!window) throw std::invalid_argument("back children require a window");
+      window->addChildToBack(child.node);
+    } else if (method == "add") node.addChildAt(child.node, args.size() > 3 ? asUint32(env, args[3]) : node.children.size());
     else node.removeChild(child.node.get());
   } else if (method == "replaceChildren") {
     std::vector<std::shared_ptr<Container>> replacement;
@@ -316,9 +511,13 @@ napi_value invoke(napi_env env, napi_callback_info info) try {
       if (!glitch) throw std::invalid_argument("filter type is not bound");
       filters.push_back(glitch->value);
     }
-    node.glitchFilters = std::move(filters);
+    node.glitchFilters = std::move(filters);node.filterGroups.clear();
   }
   else if (method == "bitmap" || method == "contents" || method == "windowskin") {
+    if(args.size()==2) {
+      const auto bitmap=method=="bitmap"&&sprite?sprite->bitmap():method=="contents"&&window?window->contents:method=="windowskin"&&window?window->windowskin:nullptr;
+      return wrapRuntimeBitmap(env,bitmap,owner.services->owner->core);
+    }
     if (args.size() != 3) throw std::invalid_argument("bitmap assignment requires bitmap or null");
     napi_valuetype type; check(env, napi_typeof(env, args[2], &type), "cannot inspect bitmap");
     auto bitmap = type == napi_null ? nullptr : bitmapForRuntime(env, args[2], owner.services->owner->core);
@@ -376,6 +575,11 @@ napi_value invoke(napi_env env, napi_callback_info info) try {
     window->selection().maxCols = asInt32(env, args[2]);
     const int row = window->selection().row();
     return boolean(env, row >= window->selection().topRow && row <= std::max(0, window->selection().topRow + asInt32(env, args[3]) - 1));
+  } else if (method == "setCommand" && window) {
+    const auto index = asUint32(env, args.at(2));
+    if (index >= window->command().commands.size()) throw std::out_of_range("command index is outside the list");
+    auto& value = window->command().commands[index];
+    value.name = asString(env, args.at(3)); value.symbol = asString(env, args.at(4)); value.enabled = asBoolean(env, args.at(5));
   } else if (method == "clearCommands" && window) window->command().commands.clear();
   else if (method == "addCommand" && window) {
     if (args.size() != 5) throw std::invalid_argument("command requires name, symbol and enabled flag");
@@ -503,12 +707,37 @@ napi_value inputOperation(napi_env env, napi_callback_info info) try {
     return number(env, value);
   }
   if (method=="_dir4" || method=="_dir8") {auto& value=method=="_dir4"?input.direction4():input.direction8();if(args.size()==3)value=asInt32(env,args[2]);return number(env,value);}
+  if(method=="_date") {if(args.size()==3)input.dateState()=asNumber(env,args[2]);return number(env,input.date());}
   if (method=="_pressedTime") {
     if(args.size()==3)input.pressedTime()=asNumber(env,args[2]);return number(env,input.pressedTime());
   }
   if (method=="_preferredAxis") {
     if(args.size()==3) {const auto value=asString(env,args[2]);input.preferredAxis()=value.empty()?0:value[0];}
     return string(env,input.preferredAxis()?std::string(1,input.preferredAxis()):"");
+  }
+  if (method=="_gamepadStates") {
+    auto& states=input.gamepadStates();
+    const auto read=[&](napi_value array) {
+      std::uint32_t count;check(env,napi_get_array_length(env,array,&count),"cannot count gamepad states");
+      std::vector<std::optional<bool>> values;values.reserve(count);
+      for(std::uint32_t i=0;i<count;++i) {napi_value item;napi_valuetype type;check(env,napi_get_element(env,array,i,&item),"cannot read gamepad state");check(env,napi_typeof(env,item,&type),"cannot inspect gamepad state");values.push_back(type==napi_undefined||type==napi_null?std::optional<bool>{}:asBoolean(env,item));}
+      return values;
+    };
+    if(args.size()==4) {
+      const int index=asInt32(env,args[2]);napi_valuetype type;check(env,napi_typeof(env,args[3],&type),"cannot inspect gamepad states");
+      if(type==napi_null)states.erase(index);else states[index]=read(args[3]);
+    } else if(args.size()==3) {
+      napi_value keys;check(env,napi_get_property_names(env,args[2],&keys),"cannot inspect gamepad state indices");
+      std::uint32_t count;check(env,napi_get_array_length(env,keys,&count),"cannot count gamepad state indices");states.clear();
+      for(std::uint32_t i=0;i<count;++i) {napi_value key,value;check(env,napi_get_element(env,keys,i,&key),"cannot read gamepad index");check(env,napi_get_property(env,args[2],key,&value),"cannot read gamepad states");states[std::stoi(asString(env,key))]=read(value);}
+    }
+    napi_value result;check(env,napi_create_array(env,&result),"cannot create gamepad states");
+    for(const auto& [index,values]:states) {
+      napi_value array;check(env,napi_create_array_with_length(env,values.size(),&array),"cannot create gamepad buttons");
+      for(std::uint32_t i=0;i<values.size();++i)if(values[i])check(env,napi_set_element(env,array,i,boolean(env,*values[i])),"cannot return gamepad button");
+      check(env,napi_set_element(env,result,index,array),"cannot return gamepad states");
+    }
+    return result;
   }
   if (method=="_previousState") {
     auto& previous=input.previousState();
@@ -574,7 +803,7 @@ napi_value inputOperation(napi_env env, napi_callback_info info) try {
     return result;
   }
   if (method=="advance") {
-    const auto now=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    const auto now=args.size()>2?asNumber(env,args[2]):double(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
     input.advance(double(now));return undefined(env);
   }
   if (method=="updateDirection") {input.updateDirection();return undefined(env);}
@@ -599,9 +828,9 @@ napi_value inputOperation(napi_env env, napi_callback_info info) try {
       for (const int button : source.buttonsDown) if (button >= 0 && button < 17) pad.buttons[button] = true;
       pads.push_back(std::move(pad));
     }
-    const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    const auto now = args.size()>2?asNumber(env,args[2]):double(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
     input.update(pads, now);
-  } else if (method == "clear") input.clear();
+  } else if (method == "clear") { input.clear();runtime->focused=runtime->owner->platform.windowFocused(); }
   else if (method == "keyDown" || method == "keyUp") {
     if (args.size() != 3) throw std::invalid_argument("key operation requires key code");
     if (method == "keyDown") input.keyDown(asInt32(env, args[2])); else input.keyUp(asInt32(env, args[2]));
