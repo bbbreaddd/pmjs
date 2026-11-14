@@ -40,12 +40,16 @@ function createObjectRenderer(bridge) {
     render(stage) {bridge.update();this._lastObjectRendered=stage;bridge.submit(stage);}
   };
   for(const field of ['width','height'])Object.defineProperty(renderer,field,{enumerable:true,get() {return bridge.dimension(field);}});
-  const originals=new Map(Object.entries(plugins));
+  const originals=Object.entries(plugins), names=new Set(Object.keys(plugins));
   function changed() {
-    return renderer.plugins!==plugins||renderer.setObjectRenderer!==setObjectRenderer||
-      Object.values(plugins.picture.drawModes||{}).some(Boolean)||
-      [...originals].some(([name,value])=>renderer.plugins[name]!==value||value.render!==renderSprite)||
-      Object.keys(renderer.plugins).some(name=>!originals.has(name)&&typeof renderer.plugins[name]?.render==='function');
+    if(renderer.plugins!==plugins||renderer.setObjectRenderer!==setObjectRenderer)return true;
+    for(const mode of Object.values(plugins.picture.drawModes||{}))if(mode)return true;
+    for(let i=0;i<originals.length;++i) {
+      const original=originals[i];
+      if(plugins[original[0]]!==original[1]||original[1].render!==renderSprite)return true;
+    }
+    for(const name of Object.keys(plugins))if(!names.has(name)&&typeof plugins[name]?.render==='function')return true;
+    return false;
   }
   return {
     renderer,

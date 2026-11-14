@@ -212,6 +212,30 @@ test('native image cache preserves identity, reservations, requests and retained
   const measure = new scope.Bitmap(1, 1); measure.fontSize = 28;
   for (const line of lines) assert.ok(measure.measureTextWidth(line) <= 604);
   assert.equal(scope.$gameMessage.allText(), text);
+  await t.test('unchanged cache updates avoid native writes while observing live entry edits', () => {
+    let writes=0;
+    const bindings=Object.create(native.mvBitmap);
+    bindings.cacheImage=function(...args) {
+      if(args[1]==='setEntry')++writes;
+      return native.mvBitmap.cacheImage(...args);
+    };
+    const host=Object.create(native);
+    Object.defineProperty(host,'mvBitmap',{value:bindings});
+    const LocalBitmap=createBitmapClass(host), images=createImageManager(host,LocalBitmap);
+    const first=new LocalBitmap(2,2),second=new LocalBitmap(3,3),cache=images._imageCache;
+    cache.add('retained',first);images.update();writes=0;
+    images.update();images.update();assert.equal(writes,0);
+    cache._items.retained.touch=-123;images.update();assert.equal(writes,1);
+    cache._items.retained.reservationId='scene';images.update();assert.equal(writes,2);
+    cache._items.retained.bitmap=second;images.update();assert.equal(writes,3);
+    images.update();assert.equal(writes,3);
+    second.resize(5,4);images.update();assert.equal(second.width,5);
+    const item=cache._items.retained;
+    cache._items={replacement:{...item,key:'replacement'}};images.update();
+    assert.equal(cache.get('retained'),null);assert.equal(cache.get('replacement'),second);
+    first.fillAll('red');assert.equal(first.getPixel(0,0),'#ff0000');
+    images.clear();
+  });
   await t.test('ImageCache constructors and plugin entry mutations use native cache ownership', () => {
     const ImageCache = manager._imageCache.constructor, initialize = ImageCache.prototype.initialize, limit = ImageCache.limit;
     let initializations = 0;

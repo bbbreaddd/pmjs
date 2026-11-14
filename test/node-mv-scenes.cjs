@@ -192,6 +192,46 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       Type.prototype.battleback1Name = originalName; scope.ImageManager.loadBattleback1 = load1; scope.ImageManager.loadBattleback2 = load2;
     }
   });
+  await t.test('character frame aliases and fade sprites share their native producers', () => {
+    const player = scope.$gamePlayer, sprite = new scope.Sprite_Character(player);
+    sprite.bitmap = new scope.Bitmap(144, 96); sprite._characterIndex = 5; sprite._isBigCharacter = false;
+    const pattern = player.pattern(), direction = player.direction();
+    try {
+      player.setPattern(2); player.setDirection(6);
+      const width = sprite.patternWidth;
+      let calls = 0;
+      sprite.patternWidth = function() { ++calls; return width.call(this) + 8; };
+      sprite.updateCharacterFrame();
+      assert.ok(calls > 0); assert.equal(sprite._frame.width, 20);
+      assert.equal(sprite._frame.x, 100); assert.equal(sprite.characterPatternY(), 2);
+    } finally { player.setPattern(pattern); player.setDirection(direction); }
+    const scene = new scope.Scene_Base();
+    scene.createFadeSprite(true); const fade = scene._fadeSprite;
+    scene.startFadeOut(2, true); scene.updateFade();
+    assert.equal(scene._fadeSprite, fade); assert.equal(fade.opacity, 127.5);
+    assert.equal(scene.children.filter(child => child === fade).length, 1);
+  });
+  await t.test('animation cell overrides use their saved original and finish the script timeline', () => {
+    const parent = new scope.Sprite(), target = new scope.Sprite_Base(); parent.addChild(target);
+    const cells = scope.Sprite_Animation.prototype.updateAllCellSprites, rate = scope.Sprite_Animation.prototype.setupRate;
+    const load = scope.ImageManager.loadAnimation, bitmap = new scope.Bitmap(192, 192);
+    let cellCalls = 0, rateCalls = 0;
+    scope.ImageManager.loadAnimation = () => bitmap;
+    scope.Sprite_Animation.prototype.setupRate = function() { ++rateCalls; rate.call(this); this._rate = 2; };
+    scope.Sprite_Animation.prototype.updateAllCellSprites = function(frame) { ++cellCalls; cells.call(this, frame); };
+    try {
+      target.startAnimation({ position: 1, frames: [[[0, 12, 5, 100, 0, false, 255, 0]]], timings: [] }, false, 0);
+      assert.equal(rateCalls, 1);
+      const animation = target._animationSprites[0]; parent.update();
+      assert.equal(cellCalls, 1); assert.equal(animation.currentFrameIndex(), 0);
+      assert.equal(animation._cellSprites[0].x, 12); assert.equal(animation._cellSprites[0].visible, true);
+      for (let index = 0; index < 4; ++index) parent.update();
+      assert.equal(target.isAnimationPlaying(), false); assert.equal(animation.parent, null);
+    } finally {
+      scope.ImageManager.loadAnimation = load; scope.Sprite_Animation.prototype.setupRate = rate;
+      scope.Sprite_Animation.prototype.updateAllCellSprites = cells;
+    }
+  });
   await t.test('animation timing applies flashes and restores a hidden native target', () => {
     const parent = new scope.Sprite(), target = new scope.Sprite(new scope.Bitmap(20, 20)), animation = new scope.Sprite_Animation();
     parent.addChild(target); parent.addChild(animation); target.x = 7; target.y = 19;
@@ -247,6 +287,13 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       assert.equal(defaults.price(item), 25);
       const window = new scope.Window_Base(0, 0, 100, 100);
       scope.$gameSystem.setWindowTone([12, -8, 20]); window.updateTone(); assert.deepEqual(Array.from(window._colorTone), [12, -8, 20]);
+      const windowTone=scope.$gameSystem.windowTone;
+      try {
+        scope.$gameSystem.windowTone=()=>[3,4,5];window.updateTone();
+        assert.deepEqual(Array.from(window._colorTone),[3,4,5]);
+      } finally {scope.$gameSystem.windowTone=windowTone;}
+      scope.$gameSystem.windowTone()[1]=9;window.updateTone();
+      assert.deepEqual(Array.from(window._colorTone),[12,9,20]);
     } finally { scope.ImageManager.loadSystem = loadSystem; scope.$dataItems = previousItems; scope.$gameSystem.setWindowTone(previousTone); }
   });
   await t.test('savefile drawing dispatches aliases with current save metadata', () => {
@@ -283,16 +330,58 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       assert.equal(window.convertEscapeCharacters('\\V[5]'), 'Name');
     } finally { scope.ImageManager.loadSystem = load; scope.Window_Base.prototype.drawIcon = original; if (previousSystem === undefined) delete scope.$dataSystem; else scope.$dataSystem = previousSystem; }
   });
+  await t.test('script frames pump image managers once and direct native calls still progress loads', () => {
+    const temporarySession=engine.create(fixture([]));
+    try {
+      const r=createScriptRuntime(engine,temporarySession,{native});r.installScenes();engine.newGame(temporarySession);
+      let updates=0;r.scope.ImageManager.update=()=>{++updates;};
+      r.scope.SceneManager.update=()=>{
+        r.scope.ImageManager.update();
+        engine.mapScene(temporarySession,'destination',{});
+        engine.mapScene(temporarySession,'sceneChange');
+      };
+      r.step({});assert.equal(updates,1);
+      engine.mapScene(temporarySession,'destination',{});assert.equal(updates,2);
+      const sentinel=new Error('frame failure');r.scope.SceneManager.update=()=>{throw sentinel;};
+      assert.throws(()=>r.step({}),error=>error===sentinel);
+      engine.mapScene(temporarySession,'destination',{});assert.equal(updates,3);
+    } finally {engine.dispose(temporarySession);}
+  });
+  await t.test('native handle reuse remains weak and retained resources survive handle collection', {skip:!global.gc}, async () => {
+    const api=native.mvDisplay, display=api.open(), graphics=native.mvBitmap.open();
+    const parent=api.create(display,'container'), sprite=api.create(display,'sprite');
+    api.invoke(parent,'add',sprite);
+    let image=native.mvBitmap.create(graphics,2,2);
+    native.mvBitmap.invoke(image,'fillAll','red');api.invoke(sprite,'bitmap',image);
+    assert.equal(api.invoke(sprite,'bitmap'),image);
+    assert.equal(api.invoke(sprite,'parent'),parent);
+    const weakImage=new WeakRef(image);image=null;
+    let child=api.create(display,'container');api.field(child,'x',17);api.invoke(parent,'add',child);
+    const weakChild=new WeakRef(child);child=null;
+    for(let cycle=0;cycle<4;++cycle) {await new Promise(resolve=>setImmediate(resolve));global.gc();}
+    assert.equal(weakImage.deref(),undefined);assert.equal(weakChild.deref(),undefined);
+    const revived=api.invoke(sprite,'bitmap'), children=api.children(parent);
+    assert.equal(native.mvBitmap.invoke(revived,'getPixel',0,0),'#ff0000');
+    assert.equal(api.invoke(sprite,'bitmap'),revived);
+    assert.equal(api.field(children[1],'x'),17);assert.equal(api.children(parent)[1],children[1]);
+    api.invoke(sprite,'bitmap',null);
+    assert.equal(native.mvBitmap.invoke(revived,'getPixel',0,0),'#ff0000');
+    assert.equal(api.invoke(sprite,'bitmap'),null);
+  });
   await t.test('unchanged child handles are reused and native reordering invalidates them', () => {
     const bindings = runtime.installScenes(), api = native.mvDisplay;
     const parent = new scope.Container(), first = new scope.Container(), second = new scope.Container(), other = new scope.Container();
     parent.addChild(first, second);
     const handle = bindings.displayHandle(parent), previous = api.children(handle);
+    const snapshot=api.childSnapshot(handle);
+    assert.equal(api.childSnapshot(handle,snapshot),snapshot);
+    assert.equal(snapshot.handles.length,2);
     const list = parent.children;
     assert.equal(list[0], first);
     assert.equal(api.children(handle, previous), previous);
     api.invoke(handle, 'add', bindings.displayHandle(second), 0);
     assert.notEqual(api.children(handle, previous), previous);
+    assert.notEqual(api.childSnapshot(handle,snapshot),snapshot);
     assert.equal(list[0], second);
     assert.equal(list[1], first);
     other.addChild(second);

@@ -10,6 +10,7 @@ struct BitmapServices {
   std::shared_ptr<State> owner;
   mv::ImageCache imageCache;
   mv::RequestQueue requests;
+  std::map<std::uint64_t,napi_ref> handles;
   bool externalCachePolicy=false;
   explicit BitmapServices(std::shared_ptr<State> value) : owner(std::move(value)) {
     if (mv::core::boundRuntime() && mv::core::boundRuntime() != &owner->core)
@@ -53,6 +54,7 @@ napi_value openBitmapRuntime(napi_env env, napi_callback_info info) try {
 struct BitmapOwner {
   std::shared_ptr<BitmapServices> services;
   std::shared_ptr<mv::core::PixelBitmap> bitmap;
+  napi_ref handleReference=nullptr;
 };
 napi_value wrapBitmap(napi_env env, const std::shared_ptr<BitmapServices>& runtime, const std::shared_ptr<mv::core::PixelBitmap>& bitmap);
 constexpr napi_type_tag bitmapTag{0xcff2e109a3e94cc1ULL, 0xa3a765dc21c1ec70ULL};
@@ -81,15 +83,29 @@ napi_value createBitmap(napi_env env, napi_callback_info info) try {
   return wrapBitmap(env, runtime, bitmap);
 } catch (const std::exception& error) { return throwException(env, error); }
 napi_value wrapBitmap(napi_env env, const std::shared_ptr<BitmapServices>& runtime, const std::shared_ptr<mv::core::PixelBitmap>& bitmap) {
+  const auto found=runtime->handles.find(bitmap->nativeIdentity);
+  if(found!=runtime->handles.end()) {
+    napi_value existing=nullptr;
+    check(env,napi_get_reference_value(env,found->second,&existing),"cannot retrieve bitmap handle");
+    if(existing)return existing;
+    runtime->handles.erase(found);
+  }
   auto owner = std::make_unique<BitmapOwner>(BitmapOwner{runtime, bitmap});
   napi_value result = moduleObject(env);
   napi_value identity;check(env,napi_create_bigint_uint64(env,bitmap->nativeIdentity,&identity),"cannot identify bitmap object");
   check(env,napi_set_named_property(env,result,"identity",identity),"cannot publish bitmap identity");
   check(env, napi_type_tag_object(env, result, &bitmapTag), "cannot identify bitmap");
-  check(env, napi_wrap(env, result, owner.get(), [](napi_env, void* data, void*) {
-    delete static_cast<BitmapOwner*>(data);
+  check(env, napi_wrap(env, result, owner.get(), [](napi_env env, void* data, void*) {
+    auto* value=static_cast<BitmapOwner*>(data);
+    auto& handles=value->services->handles;
+    const auto found=handles.find(value->bitmap->nativeIdentity);
+    if(found!=handles.end()&&found->second==value->handleReference)handles.erase(found);
+    if(value->handleReference)napi_delete_reference(env,value->handleReference);
+    delete value;
   }, nullptr, nullptr), "cannot own bitmap");
-  owner.release();
+  auto* value=owner.release();
+  check(env,napi_create_reference(env,result,0,&value->handleReference),"cannot cache bitmap handle");
+  runtime->handles[bitmap->nativeIdentity]=value->handleReference;
   return result;
 }
 

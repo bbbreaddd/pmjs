@@ -327,6 +327,9 @@ bool Session::setupTroopEvents() {
   for (std::size_t index = 0; index < pages.size(); ++index) {
     const auto& page = pages[index]; const auto& c = page["conditions"];
     if (battle_.eventFlags.contains(static_cast<int>(index))) continue;
+    const auto scripted = runtimeHooks_ && runtimeHooks_->troopConditions ? runtimeHooks_->troopConditions(page) : std::optional<bool>{};
+    if (scripted && !*scripted) continue;
+    if (!scripted) {
     if (!c["turnEnding"].boolean() && !c["turnValid"].boolean() && !c["enemyValid"].boolean() && !c["actorValid"].boolean() && !c["switchValid"].boolean()) continue;
     if (c["turnEnding"].boolean() && !battle_.turnEnding) continue;
     if (c["turnValid"].boolean()) {
@@ -345,6 +348,7 @@ bool Session::setupTroopEvents() {
     if (c["switchValid"].boolean()) {
       const auto sw = switches_.find(c["switchId"].integer());
       if (sw == switches_.end() || !sw->second) continue;
+    }
     }
     battle_.interpreter.battleEvent = true;
     setupInterpreter(battle_.interpreter, page["list"].array());

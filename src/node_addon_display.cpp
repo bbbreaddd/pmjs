@@ -40,6 +40,7 @@ struct DisplayServices {
   mv::ScriptSceneManager scenes;
   Input input;
   std::map<Container*,std::weak_ptr<Container>> nodes;
+  std::map<std::uint64_t,napi_ref> handles;
   std::uint64_t wraps=0;
   bool focused = true;
   explicit DisplayServices(std::shared_ptr<State> value) : owner(std::move(value)) {
@@ -48,7 +49,7 @@ struct DisplayServices {
   }
   ~DisplayServices() { scenes.scene.reset(); scenes.nextScene.reset(); unbindRuntime(owner->core); }
 };
-struct DisplayOwner { std::shared_ptr<DisplayServices> services; std::shared_ptr<Container> node; std::string kind; };
+struct DisplayOwner { std::shared_ptr<DisplayServices> services; std::shared_ptr<Container> node; std::string kind; napi_ref handleReference=nullptr; };
 constexpr napi_type_tag servicesTag{0xb35341ad709ea415ULL, 0x849010442b3af827ULL};
 constexpr napi_type_tag displayTag{0x25a787ced299548cULL, 0xb38331dc9ba9b429ULL};
 template<class T> T& unwrap(napi_env env, napi_value object, const napi_type_tag& tag) {
@@ -76,6 +77,13 @@ std::string kind(const std::shared_ptr<Container>& node) {
 }
 napi_value wrap(napi_env env, const std::shared_ptr<DisplayServices>& runtime, const std::shared_ptr<Container>& node) {
   if (!node) return null(env);
+  const auto found=runtime->handles.find(node->displayId);
+  if(found!=runtime->handles.end()) {
+    napi_value existing=nullptr;
+    check(env,napi_get_reference_value(env,found->second,&existing),"cannot retrieve display handle");
+    if(existing)return existing;
+    runtime->handles.erase(found);
+  }
   runtime->nodes[node.get()]=node;
   if(++runtime->wraps%256==0)std::erase_if(runtime->nodes,[](const auto& entry){return entry.second.expired();});
   auto value = std::make_unique<DisplayOwner>(DisplayOwner{runtime, node, kind(node)});
@@ -84,8 +92,18 @@ napi_value wrap(napi_env env, const std::shared_ptr<DisplayServices>& runtime, c
   check(env, napi_set_named_property(env, result, "identity", identity), "cannot set display identity");
   check(env, napi_set_named_property(env, result, "kind", string(env, value->kind)), "cannot set display kind");
   check(env, napi_type_tag_object(env, result, &displayTag), "cannot tag display object");
-  check(env, napi_wrap(env, result, value.get(), [](napi_env, void* data, void*) { delete static_cast<DisplayOwner*>(data); }, nullptr, nullptr), "cannot own display object");
-  value.release(); return result;
+  check(env, napi_wrap(env, result, value.get(), [](napi_env env, void* data, void*) {
+    auto* owner=static_cast<DisplayOwner*>(data);
+    auto& handles=owner->services->handles;
+    const auto found=handles.find(owner->node->displayId);
+    if(found!=handles.end()&&found->second==owner->handleReference)handles.erase(found);
+    if(owner->handleReference)napi_delete_reference(env,owner->handleReference);
+    delete owner;
+  }, nullptr, nullptr), "cannot own display object");
+  auto* owner=value.release();
+  check(env,napi_create_reference(env,result,0,&owner->handleReference),"cannot cache display handle");
+  runtime->handles[node->displayId]=owner->handleReference;
+  return result;
 }
 napi_value open(napi_env env, napi_callback_info) try {
   host(env);
@@ -239,6 +257,39 @@ napi_value children(napi_env env, napi_callback_info info) try {
     check(env, napi_set_element(env, result, i, wrap(env, owner.services, owner.node->children[i])), "cannot list display child");
   return result;
 } catch (const std::exception& error) { return throwException(env, error); }
+struct ChildSnapshot { std::vector<std::uint64_t> identities; };
+constexpr napi_type_tag childSnapshotTag{0x3bd4596c96ba4a8dULL,0xab934236fc6a104eULL};
+napi_value childSnapshot(napi_env env,napi_callback_info info) try {
+  const auto args=arguments(env,info);
+  if(args.empty()||args.size()>2)throw std::invalid_argument("child snapshot requires display handle and optional previous snapshot");
+  auto& owner=display(env,args[0]);
+  if(args.size()==2) {
+    napi_valuetype type;check(env,napi_typeof(env,args[1],&type),"cannot inspect child snapshot");
+    if(type==napi_object) {
+      bool tagged=false;check(env,napi_check_object_type_tag(env,args[1],&childSnapshotTag,&tagged),"cannot identify child snapshot");
+      if(tagged) {
+        const auto& previous=unwrap<ChildSnapshot>(env,args[1],childSnapshotTag);
+        bool same=previous.identities.size()==owner.node->children.size();
+        for(std::size_t i=0;same&&i<previous.identities.size();++i)same=previous.identities[i]==owner.node->children[i]->displayId;
+        if(same)return args[1];
+      }
+    }
+  }
+  auto snapshot=std::make_unique<ChildSnapshot>();
+  napi_value handles;check(env,napi_create_array_with_length(env,owner.node->children.size(),&handles),"cannot list child snapshot");
+  for(std::size_t i=0;i<owner.node->children.size();++i) {
+    const auto& child=owner.node->children[i];snapshot->identities.push_back(child->displayId);
+    check(env,napi_set_element(env,handles,i,wrap(env,owner.services,child)),"cannot wrap child snapshot");
+  }
+  check(env,napi_object_freeze(env,handles),"cannot freeze child snapshot handles");
+  auto result=moduleObject(env);
+  check(env,napi_set_named_property(env,result,"handles",handles),"cannot publish child snapshot");
+  check(env,napi_type_tag_object(env,result,&childSnapshotTag),"cannot tag child snapshot");
+  check(env,napi_wrap(env,result,snapshot.get(),[](napi_env,void* data,void*) {delete static_cast<ChildSnapshot*>(data);},nullptr,nullptr),"cannot own child snapshot");
+  snapshot.release();
+  check(env,napi_object_freeze(env,result),"cannot freeze child snapshot");
+  return result;
+} catch(const std::exception& error) {return throwException(env,error);}
 napi_value callWindow(napi_env env, napi_value receiver, const char* name, std::vector<napi_value> arguments = {}) {
   napi_value method, result;
   check(env, napi_get_named_property(env, receiver, name, &method), "cannot read window method");
@@ -673,6 +724,10 @@ napi_value invoke(napi_env env, napi_callback_info info) try {
     check(env, napi_set_named_property(env, result, "enabled", boolean(env, command.enabled)), "cannot return command state");
     check(env,napi_set_named_property(env,result,"ext",number(env,command.ext)),"cannot return command extension");
     return result;
+  } else if (method == "fadeSprite" && scene) {
+    if (args.size() > 2) scene->fadeSprite = std::dynamic_pointer_cast<ScreenSprite>(display(env, args[2]).node);
+    if (!scene->fadeSprite) { scene->fadeSprite = std::make_shared<ScreenSprite>(); scene->addChild(scene->fadeSprite); }
+    return wrap(env, owner.services, scene->fadeSprite);
   } else if (method == "fade" && scene) scene->startFade(asBoolean(env, args[2]), asInt32(env, args[3]), asBoolean(env, args[4]));
   else if (method == "updateFade" && scene) scene->updateFade();
   else throw std::invalid_argument("display operation is not bound: " + method);
@@ -900,7 +955,7 @@ void startDisplayAnimation(napi_env env, napi_value object, RuntimeCore& runtime
 void registerDisplayBindings(napi_env env, napi_value exports) {
   auto api = moduleObject(env);
   method(env, api, "open", open); method(env, api, "create", create); method(env, api, "field", field);
-  method(env, api, "children", children); method(env, api, "invoke", invoke); method(env, api, "scene", sceneOperation);
+  method(env, api, "children", children); method(env, api, "childSnapshot", childSnapshot); method(env, api, "invoke", invoke); method(env, api, "scene", sceneOperation);
   method(env, api, "input", inputOperation);
   check(env, napi_set_named_property(env, exports, "mvDisplay", api), "cannot export display bindings");
 }

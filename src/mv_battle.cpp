@@ -219,16 +219,15 @@ void Session::apply(Battler& subject, Battler& target, const Value& item, Battle
 
 void Session::setupTroopBase(int troop) {
   if (database_["troops"][troop].null()) throw std::invalid_argument("unknown troop");
-  detachRuntimeEnemies(); resetEnemySprites(); battle_.troopId = troop;
-  battle_.enemies.clear(); battle_.nameCounts.clear(); battle_.eventFlags.clear(); battle_.turn = 0;
-  dispatchInterpreterLifecycle(battle_.interpreter, "clear");
+  if (!runtimeHooks_ || !runtimeHooks_->gameDataMutation || !runtimeHooks_->gameDataMutation("troop", "clear", {})) invokeGameDataBase("battle", "clearTroop", {});
+  battle_.troopId = troop;
   for (const auto& member : database_["troops"][troop]["members"].array()) {
     Battler enemy; enemy.screenX = member["x"].number(); enemy.screenY = member["y"].number(); enemy.enemy = true; enemy.id = member["enemyId"].integer(); enemy.hidden = member["hidden"].boolean();
     enemy.originalName = database_["enemies"][enemy.id]["name"].text(); enemy.name = enemy.originalName;
     recover(enemy); battle_.enemies.push_back(enemy);
   }
   for (auto& enemy : battle_.enemies) dispatchActorMethod(enemy, "setup", {enemy.id, enemy.screenX, enemy.screenY});
-  BattleMechanics::makeUniqueNames(battle_.enemies, battle_.nameCounts, database_["system"]["locale"].text().starts_with("ja") || database_["system"]["locale"].text().starts_with("zh") || database_["system"]["locale"].text().starts_with("ko"));
+  if (!runtimeHooks_ || !runtimeHooks_->gameDataMutation || !runtimeHooks_->gameDataMutation("troop", "makeUniqueNames", {})) invokeGameDataBase("battle", "makeUniqueNames", {});
 }
 void Session::increaseTroopTurnBase() {
   const auto& pages = database_["troops"][battle_.troopId]["pages"].array();

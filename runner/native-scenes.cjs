@@ -13,7 +13,7 @@ const { installWindowDrawing } = require('./native-window-drawing.cjs');
 const { commandList } = require('./native-command-list.cjs');
 const { installSpriteRenderHooks } = require('./native-sprite-render-hooks.cjs');
 const { createObjectRenderer } = require('./native-object-renderer.cjs');
-const { nativeArray } = require('./native-array.cjs');
+const { nativeArray, readNativeArray } = require('./native-array.cjs');
 const { installInputState } = require('./native-input-state.cjs');
 const { installScreenSprite } = require('./native-core-utilities.cjs');
 
@@ -130,8 +130,9 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     });
   }
   function children(object) {
-    const own = entry(object), handles = api.children(own.handle, own.childHandles);
-    if (handles === own.childHandles) return own.childValues;
+    const own = entry(object), snapshot = api.childSnapshot(own.handle, own.childSnapshot);
+    if (snapshot === own.childSnapshot) return own.childValues;
+    const handles = snapshot.handles;
     const live = new Set();
     const result = handles.map(handle => {
       live.add(handle.identity);
@@ -143,7 +144,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
       if (entry(child).parent === object) entry(child).parent = null;
       own.children.delete(id);
     }
-    own.childHandles = handles; own.childValues = result;
+    own.childSnapshot = snapshot; own.childValues = result;
     return result;
   }
   function Container() { this.initialize.apply(this, arguments); }
@@ -423,16 +424,19 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   };
   Sprite_Base.prototype.isAnimationPlaying = function() { return Boolean(this._animationSprites?.length) || api.invoke(entry(this).handle, 'isAnimationPlaying'); };
   Sprite_Base.prototype.startAnimation = function(animation, mirror, delay) {
-    const stock = Object.entries(nativeAnimationMethods).every(([name, original]) => Sprite_Animation.prototype[name] === original);
+    const stock = Object.entries(nativeAnimationMethods).every(([name, original]) => ['initialize', 'setupRate'].includes(name) || Sprite_Animation.prototype[name] === original);
     if (!stock) {
       const sprite = new Sprite_Animation(); sprite.setup(this._effectTarget || this, animation, mirror, delay);
       this.parent.addChild(sprite); (this._animationSprites ||= []).push(sprite); return;
     }
-    options.startAnimation(entry(this).handle, animation.id, mirror, delay, stock ? 4 : new Sprite_Animation()._rate);
+    const defaultRate = Sprite_Animation.prototype.initialize === animationInitialize && Sprite_Animation.prototype.setupRate === animationSetupRate;
+    let rate = 4;
+    if (!defaultRate) { const sprite = new Sprite_Animation(); sprite.setupRate(); rate = sprite._rate; }
+    options.startAnimation(entry(this).handle, animation.id, mirror, delay, rate);
   };
   function Sprite_Animation() { this.initialize.apply(this, arguments); }
   inherit(Sprite_Animation, Sprite);
-  const animationInitialize = Sprite_Animation.prototype.initialize = function() { Sprite.prototype.initialize.call(this); this.initMembers(); this.setupRate(); };
+  const animationInitialize = Sprite_Animation.prototype.initialize = function() { Sprite.prototype.initialize.call(this); this.initMembers(); };
   Sprite_Animation.prototype.initMembers = function() {
       this._target = null;
       this._animation = null;
@@ -874,7 +878,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     bitmap.fillRect(0, m, w, h - m * 2, c1); bitmap.gradientFillRect(0, h - m, w, m, c1, c2, true);
     this._dimmerSprite.setFrame(0, 0, w, h);
   };
-  Window_Base.prototype.updateTone = function() { const tone = options.gameSystem().windowTone(); this.setTone(tone[0] || 0, tone[1] || 0, tone[2] || 0); };
+  Window_Base.prototype.updateTone = function() { const tone = readNativeArray(options.gameSystem().windowTone()); this.setTone(tone[0] || 0, tone[1] || 0, tone[2] || 0); };
   Window_Base.prototype.update = function() { Window.prototype.update.call(this); this.updateTone(); this.updateBackgroundDimmer(); };
   Window_Base.prototype.activate = function() { this.active = true; return this; };
   Window_Base.prototype.deactivate = function() { this.active = false; return this; };
@@ -1456,7 +1460,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   Scene_Base.prototype.update = function() { this.updateFade(); this.updateChildren(); };
   Scene_Base.prototype.createFadeSprite = function(white) {
       if (!this._fadeSprite) {
-          this._fadeSprite = new ScreenSprite();
+          this._fadeSprite = wrap(api.invoke(entry(this).handle, 'fadeSprite'));
           this.addChild(this._fadeSprite);
       }
       if (white) {
@@ -1465,8 +1469,8 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
           this._fadeSprite.setBlack();
       }
   };
-  Scene_Base.prototype.startFadeIn = function(duration, white = false) { api.invoke(entry(this).handle, 'fade', false, duration, white); };
-  Scene_Base.prototype.startFadeOut = function(duration, white = false) { api.invoke(entry(this).handle, 'fade', true, duration, white); };
+  Scene_Base.prototype.startFadeIn = function(duration, white = false) { this.createFadeSprite(white); api.invoke(entry(this).handle, 'fadeSprite', entry(this._fadeSprite).handle); api.invoke(entry(this).handle, 'fade', false, duration, white); };
+  Scene_Base.prototype.startFadeOut = function(duration, white = false) { this.createFadeSprite(white); api.invoke(entry(this).handle, 'fadeSprite', entry(this._fadeSprite).handle); api.invoke(entry(this).handle, 'fade', true, duration, white); };
   Scene_Base.prototype.fadeSpeed = function() { return 24; };
   Scene_Base.prototype.slowFadeSpeed = function() { return this.fadeSpeed() * 2; };
   Scene_Base.prototype.fadeOutAll = function() {

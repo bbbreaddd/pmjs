@@ -1,4 +1,5 @@
 #include "mv_engine.hpp"
+#include "mv_battle_extra.hpp"
 #include "mv_core_utils.hpp"
 #include "mv_managers.hpp"
 #include <algorithm>
@@ -317,6 +318,13 @@ Value Session::invokeGameDataBase(const std::string& kind, const std::string& me
     if (method == "processVictory") { finishBattle(0); return Value::undefined(); }
     if (method == "processDefeat") { finishBattle(2); return Value::undefined(); }
     if (method == "processAbort") { abortBattle(); return Value::undefined(); }
+    if (method == "clearTroop") {
+      detachRuntimeEnemies(); resetEnemySprites(); battle_.enemies.clear(); battle_.troopId=0; battle_.nameCounts.clear(); battle_.eventFlags.clear(); battle_.turn=0;
+      dispatchInterpreterLifecycle(battle_.interpreter, "clear"); return Value::undefined();
+    }
+    if (method == "makeUniqueNames") {
+      BattleMechanics::makeUniqueNames(battle_.enemies, battle_.nameCounts, database_["system"]["locale"].text().starts_with("ja") || database_["system"]["locale"].text().starts_with("zh") || database_["system"]["locale"].text().starts_with("ko")); return Value::undefined();
+    }
     if (method == "setupTroop") { setupTroopBase(arguments.at(0).integer()); return Value::undefined(); }
     if (method == "increaseTurn") { increaseTroopTurnBase(); return Value::undefined(); }
     if (method == "setupBattleEvent") { setupTroopEvents(); return Value::undefined(); }

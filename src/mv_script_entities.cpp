@@ -149,6 +149,13 @@ Value Session::runtimeCharacterCommand(const std::shared_ptr<RuntimeCharacter>& 
     }
     throw std::runtime_error("event is no longer attached to the current map");
   }
+  if (method == "initEventMembers") {
+    for (auto& event : events_) if (&event.character == &character) {
+      const int id = event.id; event = Event{}; event.id = id; object->originalPattern = event.originalPattern;
+      return Value::undefined();
+    }
+    throw std::runtime_error("event is no longer attached to the current map");
+  }
   if (method == "needsMapReload") { if (!arguments.empty()) playerNeedsMapReload_ = arguments[0].boolean(); return playerNeedsMapReload_; }
   if (method == "originalPattern") {
     if (!arguments.empty()) object->originalPattern = arguments[0].integer();

@@ -1767,6 +1767,7 @@ test('native level changes and enemy setup invoke plugin aliases with live battl
   database.troops = [null, { members: [{ enemyId: 1, x: 30, y: 40 }], pages: [] }];
   const session = api.create(database); t.after(() => api.dispose(session));
   const runtime = createScriptRuntime(api, session), scope = runtime.scope;
+  for (const table of ['actors', 'classes', 'skills', 'items', 'weapons', 'armors', 'states', 'enemies', 'troops']) scope['$data' + table[0].toUpperCase() + table.slice(1)] = api.databaseInvoke(session, 'read', table);
   let learned, setupCalls = 0;
   scope.Game_Actor.prototype.displayLevelUp = function(skills) { learned = skills; };
   const setup = scope.Game_Enemy.prototype.setup;
@@ -1791,12 +1792,44 @@ test('native player movement and character interpolation honor saved plugin orig
   const { scope, step } = create(t, []);
   scope.$gameMap.event(1)._trigger = 0;
   const original = scope.Game_Player.prototype.moveByInput;
-  let movementCalls = 0, interpolationCalls = 0;
+  let movementCalls = 0, interpolationCalls = 0, stoppedCalls = 0;
+  const stopped = scope.Game_Player.prototype.updateNonmoving;
+  scope.Game_Player.prototype.updateNonmoving = function(...args) { ++stoppedCalls; return stopped.apply(this, args); };
   scope.Game_Player.prototype.getInputDirection = function() { return 2; };
   scope.Game_Player.prototype.moveByInput = function() { ++movementCalls; return original.call(this); };
   const interpolate = scope.Game_CharacterBase.prototype.updateMove;
   scope.Game_Player.prototype.updateMove = function() { ++interpolationCalls; return interpolate.call(this); };
   step();
-  assert.equal(movementCalls, 1); assert.equal(scope.$gamePlayer.y, 2); assert.equal(interpolationCalls, 1);
+  assert.equal(movementCalls, 1); assert.equal(scope.$gamePlayer.y, 2); assert.equal(interpolationCalls, 1); assert.equal(stoppedCalls, 0);
   assert.ok(scope.$gamePlayer._realY > 1 && scope.$gamePlayer._realY < 2);
+});
+
+test('event initialization resolves later character aliases before page settings', t => {
+  const session = api.create(fixture([])); t.after(() => api.dispose(session));
+  const { scope } = createScriptRuntime(api, session);
+  const eventInit = scope.Game_Event.prototype.initMembers;
+  scope.Game_Event.prototype.initMembers = function() { eventInit.call(this); this.eventInitialized = true; };
+  const characterInit = scope.Game_Character.prototype.initMembers;
+  scope.Game_Character.prototype.initMembers = function() { characterInit.call(this); this.movementMemory = {}; };
+  const settings = scope.Game_Event.prototype.setupPageSettings;
+  scope.Game_Event.prototype.setupPageSettings = function() {
+    settings.call(this); this.movementMemory.speed = this._moveSpeed;
+  };
+  api.newGame(session);
+  const event = scope.$gameMap.event(1);
+  assert.equal(event.eventInitialized, true); assert.equal(event.movementMemory.speed, event._moveSpeed);
+});
+
+test('published Tiled maps replace native dimensions and passage without retaining caller arrays', t => {
+  const { session, scope } = create(t, []);
+  const tiled = { width: 5, height: 5, tilewidth: 24, tileheight: 24, passage: Array(25).fill(0) };
+  tiled.passage[2 * 5 + 1] = 15;
+  api.databaseInvoke(session, 'publishTiledMap', 1, tiled);
+  assert.equal(scope.$gameMap.tileWidth(), 24);
+  assert.equal(scope.$gamePlayer.canPass(1, 1, 2), false);
+  tiled.passage.fill(0);
+  assert.equal(scope.$gamePlayer.canPass(1, 1, 2), false);
+  api.databaseInvoke(session, 'publishTiledMap', 1, null);
+  assert.equal(scope.$gameMap.tileWidth(), 48);
+  assert.equal(scope.$gamePlayer.canPass(1, 1, 2), true);
 });

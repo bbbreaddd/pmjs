@@ -5,6 +5,20 @@ function installTroopBindings(scope, engine, session, wrapEnemy, createArray) {
   function Game_Troop() { throw new Error('Troop construction is engine-owned'); }
   Game_Troop.prototype = Object.create(scope.Game_Unit.prototype);
   Game_Troop.prototype.constructor = Game_Troop;
+  Game_Troop.prototype.clear = function() { invoke('clearTroop'); };
+  Game_Troop.prototype.makeUniqueNames = function() { invoke('makeUniqueNames'); };
+  Game_Troop.prototype.meetsConditions = function(page) {
+    const c = page.conditions;
+    if (!c.turnEnding && !c.turnValid && !c.enemyValid && !c.actorValid && !c.switchValid) return false;
+    if (c.turnEnding && !scope.BattleManager.isTurnEnd()) return false;
+    if (c.turnValid) {
+      const turn = this.turnCount(), a = c.turnA, b = c.turnB;
+      if (b === 0 ? turn !== a : turn < 1 || turn < a || turn % b !== a % b) return false;
+    }
+    if (c.enemyValid) { const enemy = this.members()[c.enemyIndex]; if (!enemy || enemy.hpRate() * 100 > c.enemyHp) return false; }
+    if (c.actorValid) { const actor = scope.$gameActors.actor(c.actorId); if (!actor || actor.hpRate() * 100 > c.actorHp) return false; }
+    return !c.switchValid || scope.$gameSwitches.value(c.switchId);
+  };
   Game_Troop.prototype.setup = function(id) { invoke('setupTroop', id); };
   for (const method of ['increaseTurn', 'setupBattleEvent', 'updateInterpreter']) Game_Troop.prototype[method] = function() { invoke(method); };
   Game_Troop.prototype.inBattle = function() { return scope.$gameParty.inBattle(); };
@@ -26,7 +40,7 @@ function installTroopBindings(scope, engine, session, wrapEnemy, createArray) {
   scope.Game_Actor.prototype.opponentsUnit = function() { return scope.$gameTroop; };
   for (const method of ['friendsUnit', 'opponentsUnit']) scope.Game_Action.prototype[method] = function() { return this.subject()[method](); };
   const defaults = {};
-  for (const method of ['setup', 'increaseTurn', 'setupBattleEvent']) defaults[method] = Game_Troop.prototype[method];
+  for (const method of ['setup', 'clear', 'makeUniqueNames', 'increaseTurn', 'setupBattleEvent']) defaults[method] = Game_Troop.prototype[method];
   for (const method of ['canEscape', 'canLose', 'isAborting', 'isTurnEnd']) scope.BattleManager[method] = function() { return invoke(method); };
   scope.BattleManager.actor = function() { const id=invoke('actorId'); return id ? scope.$gameActors.actor(id) : null; };
   return defaults;

@@ -550,6 +550,10 @@ function createScriptRuntime(engine, session, options = {}) {
   Game_Vehicle.prototype.isLandOk=function(x,y,direction) { return engine.characterCommand(session,characters.get(this),'isLandOk',[x,y,direction]); };
   function Game_Event() { this.initialize.apply(this, arguments); }
   Game_Event.prototype = Object.create(Game_Character.prototype); Game_Event.prototype.constructor = Game_Event;
+  Game_Event.prototype.initMembers = function() {
+    Game_Character.prototype.initMembers.call(this);
+    engine.characterCommand(session, characters.get(this), 'initEventMembers', []);
+  };
   function Game_BattlerBase() { throw new Error('Battler construction is engine-owned'); }
   Game_BattlerBase.prototype.initialize = function() { this.initMembers(); };
   Game_BattlerBase.prototype.maxTp = function() { return 100; };
@@ -729,6 +733,7 @@ function createScriptRuntime(engine, session, options = {}) {
   Object.defineProperty(Game_Actors.prototype, '_data', { configurable: true, get() { return actorArray; } });
   installPartyBindings(scope, engine, session, values => GuestArray.from(values));
   const troopDefaults = installTroopBindings(scope, engine, session, index => wrapEntity(engine.entity(session, 'enemy', index), Game_Enemy, actors), values => GuestArray.from(values));
+  const nativeTroopConditions = scope.Game_Troop.prototype.meetsConditions;
   gameDataDefaults.set('troop', troopDefaults); gameDataStores.set('troop', scope.$gameTroop);
   Object.defineProperty(scope.Game_Troop.prototype, '_interpreter', { configurable: true, get() { return wrapInterpreter(engine.scriptInterpreter(session, -1)); } });
   function Game_Map() { throw new Error('Game_Map construction is engine-owned'); }
@@ -871,6 +876,7 @@ function createScriptRuntime(engine, session, options = {}) {
     if (handle.entityType === 'character') return wrapEntity(handle,handle.entityId > 0 ? Game_Event : handle.entityId === -1 ? Game_Player : handle.entityId >= -7 && handle.entityId <= -5 ? Game_Vehicle : handle.entityId <= -2 ? Game_Follower : Game_Character,characters);
     return wrapEntity(handle,handle.entityType === 'enemy' ? Game_Enemy : Game_Actor,actors);
   }
+  let scriptFrameDepth=0;
   const callbacks = {
     resourceLoader(url,retry,resign,intervals) {if(typeof scope.setTimeout!=='function')return undefined;return scope.ResourceHandler.createLoader(url,retry,resign,intervals);},
     resourceExists() {return scope.ResourceHandler.exists();},
@@ -947,9 +953,14 @@ function createScriptRuntime(engine, session, options = {}) {
       }
       return point;
     },
+    troopConditions(page) {
+      if (scope.$gameTroop.meetsConditions === nativeTroopConditions) return undefined;
+      return scope.$gameTroop.meetsConditions(page);
+    },
     characterQuery(handle, method, args) {
       const Type = handle.entityId > 0 ? Game_Event : handle.entityId === -1 ? Game_Player : handle.entityId >= -7 && handle.entityId <= -5 ? Game_Vehicle : Game_Follower;
       const object = registry.get(handle.identity)?.deref() || Type.prototype;
+      if (method === 'updateNonmoving' && scope.$gamePlayer.isMoving()) return null;
       if (method === 'moveByInput' || method === 'updateNonmoving') {
         const names = method === 'moveByInput' ? ['moveByInput', 'getInputDirection', 'canMove', 'executeMove'] : ['updateNonmoving'];
         if (names.every(name => object[name] === nativePlayerQueries[name])) return null;
@@ -1124,7 +1135,7 @@ function createScriptRuntime(engine, session, options = {}) {
       return true;
     },
     collect(active) {
-      if (options.native) scope.ImageManager.update();
+      if (options.native && !scriptFrameDepth) scope.ImageManager.update();
       for (const id of roots.keys()) if (!active[String(id)]) roots.delete(id);
       for (const [id, reference] of registry) if (!reference.deref()) registry.delete(id);
     }
@@ -1337,22 +1348,25 @@ function createScriptRuntime(engine, session, options = {}) {
       scope.Window_TitleCommand = Window_TitleCommand;
       result.start = () => scope.SceneManager.run(scope.Scene_Boot);
       result.step = input => {
-        renderSubmitted=false;
-        mapUpdated=false; frameInput=input;
-        classBindings.sweep();
-        tilemapBinding.update();
-        if (scope.SceneManager._stopped) return true;
-        scope.SceneManager.ticker?.update(scope.performance?.now() ?? performance.now());
-        scope.SceneManager.update(1);
-        scenes.updateFilters();
-        const scene = scope.SceneManager._scene;
-        if (scope.SceneManager._exiting && !scene) return false;
-        const builtin = !scene || scope.SceneManager.nativeDriven;
-        if (!renderSubmitted) engine.scriptStage(session, builtin ? null : scope.SceneManager.stageHandle);
-        if (mapUpdated || !builtin || !scope.SceneManager.canStep) return true;
-        const running = engine.step(session,input===undefined?scriptInput():input);
-        scenes.prepareNativeRequest();
-        return running;
+        ++scriptFrameDepth;
+        try {
+          renderSubmitted=false;
+          mapUpdated=false; frameInput=input;
+          classBindings.sweep();
+          tilemapBinding.update();
+          if (scope.SceneManager._stopped) return true;
+          scope.SceneManager.ticker?.update(scope.performance?.now() ?? performance.now());
+          scope.SceneManager.update(1);
+          scenes.updateFilters();
+          const scene = scope.SceneManager._scene;
+          if (scope.SceneManager._exiting && !scene) return false;
+          const builtin = !scene || scope.SceneManager.nativeDriven;
+          if (!renderSubmitted) engine.scriptStage(session, builtin ? null : scope.SceneManager.stageHandle);
+          if (mapUpdated || !builtin || !scope.SceneManager.canStep) return true;
+          const running = engine.step(session,input===undefined?scriptInput():input);
+          scenes.prepareNativeRequest();
+          return running;
+        } finally { --scriptFrameDepth; }
       };
       return scenes;
     }

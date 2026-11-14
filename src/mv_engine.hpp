@@ -161,6 +161,7 @@ struct RuntimeHooks {
   std::function<bool(const std::shared_ptr<RuntimeInterpreter>&, const std::string&, const Value::Array&)> interpreterControl;
   std::function<void(const std::shared_ptr<RuntimeInterpreter>&)> setupChoiceCallback;
   std::function<bool(const std::string&, const std::string&, const Value::Array&)> gameDataMutation;
+  std::function<std::optional<bool>(const Value&)> troopConditions;
   std::function<std::optional<bool>()> setupAutorunCommonEvent;
   std::function<std::optional<std::function<void()>>(const std::string&,std::function<void()>,std::function<void()>,const std::optional<std::vector<int>>&)> resourceLoader;
   std::function<bool()> resourceExists;

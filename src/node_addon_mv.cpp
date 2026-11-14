@@ -771,6 +771,11 @@ napi_value connectRuntime(napi_env env, napi_callback_info info) try {
   hooks->gameDataMutation = [&owner](const std::string& kind, const std::string& method, const mv::Value::Array& args) {
     return asBoolean(owner.env, callRuntime(owner, "gameDataMutation", {string(owner.env, kind), string(owner.env, method), writeValue(owner.env, args)}));
   };
+  hooks->troopConditions = [&owner](const mv::Value& page) -> std::optional<bool> {
+    const auto result = callRuntime(owner, "troopConditions", {writeValue(owner.env, page)});
+    napi_valuetype type; check(owner.env, napi_typeof(owner.env, result, &type), "cannot inspect troop conditions");
+    return type == napi_undefined ? std::optional<bool>{} : std::optional<bool>{asBoolean(owner.env, result)};
+  };
   hooks->setupAutorunCommonEvent = [&owner]() -> std::optional<bool> {
     const auto result = callRuntime(owner, "setupAutorunCommonEvent", {});
     napi_valuetype type; check(owner.env, napi_typeof(owner.env, result, &type), "cannot inspect autorun query result");

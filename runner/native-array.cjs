@@ -1,5 +1,7 @@
 'use strict';
 
+const readers = new WeakMap();
+
 function nativeArray(createArray, read, write) {
   const target = createArray();
   const numeric = key => typeof key === 'string' && /^(0|[1-9][0-9]*)$/.test(key);
@@ -33,7 +35,13 @@ function nativeArray(createArray, read, write) {
     defineProperty() { throw new TypeError('Native arrays do not support custom descriptors'); },
     preventExtensions() { throw new TypeError('Native arrays must remain extensible'); }
   });
+  readers.set(view, read);
   return { view, replace };
 }
 
-module.exports = { nativeArray };
+function readNativeArray(value) {
+  const read = readers.get(value);
+  return read ? read() : value;
+}
+
+module.exports = { nativeArray, readNativeArray };

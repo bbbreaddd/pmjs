@@ -49,7 +49,9 @@ class DamageSprite : public BoundSpriteContext {
   virtual int digitHeight() const { return damageBitmap ? damageBitmap->height/5 : 0; }
   virtual void createMiss() { result.missed=true; rebuild(); }
   virtual void createDigits(int row,int value) { result=ActionResult{}; result.hpAffected=row==0; if (result.hpAffected) result.hpDamage=value; else result.mpDamage=value; rebuild(); }
-  virtual void setupCriticalEffect() { result.critical=true; state.isCritical=true; state.flashDuration=60; }
+  virtual void setupCriticalEffect() { result.critical=true; state.isCritical=true; state.flashColor={255,0,0,160}; state.flashDuration=60; }
+  virtual void updateFlash() { if (state.flashDuration > 0) { const int duration=state.flashDuration--; state.flashColor[3] *= (duration-1.0)/duration; } }
+  virtual void updateOpacity() { if (state.duration < 10) setOpacity(255.0*state.duration/10); }
   virtual bool isPlaying() const { return state.isPlaying(); }
   void rebuild() {
     for (const auto& digit:digits) removeChild(digit.get()); digits.clear();
@@ -59,12 +61,14 @@ class DamageSprite : public BoundSpriteContext {
     }
   }
   void update() override {
-    core::Sprite::update(); state.update();
+    core::Sprite::update();
+    if (state.duration > 0) --state.duration;
+    updateFlash(); updateOpacity();
     if (!damageBitmap) return;
     const auto cells=Sprite_Damage::popup(result,std::clamp(90-state.duration,0,90),damageBitmap->width,damageBitmap->height);
     for (std::size_t i=0;i<digits.size();++i) {
       digits[i]->visible=i<cells.size(); if (i>=cells.size()) continue;
-      digits[i]->position={cells[i].x,cells[i].y}; digits[i]->alpha=cells[i].opacity; digits[i]->setBlendColor(cells[i].blendColor);
+      digits[i]->position={cells[i].x,cells[i].y}; digits[i]->alpha=1; digits[i]->setBlendColor(state.flashColor);
     }
   }
 };
@@ -127,6 +131,13 @@ class CharacterSprite : public BoundSpriteContext {
   }
   virtual bool isTile() const { return tileId>0; }
   virtual bool isObjectCharacter() const { return character && (character->value().tileId>0 || ImageManager::isObjectCharacter(character->value().characterName)); }
+  virtual int characterBlockX() const { return state.isBigCharacter ? 0 : loadedIndex % 4 * 3; }
+  virtual int characterBlockY() const { return state.isBigCharacter ? 0 : loadedIndex / 4 * 4; }
+  virtual int characterPatternX() const { return character ? character->value().pattern == 3 ? 1 : character->value().pattern : 0; }
+  virtual int characterPatternY() const { return character ? (character->value().direction - 2) / 2 : 0; }
+  virtual double patternWidth() const { return isTile() ? modelSession().tileWidth() : bitmap() ? bitmap()->width / (state.isBigCharacter ? 3.0 : 12.0) : 0; }
+  virtual double patternHeight() const { return isTile() ? modelSession().tileHeight() : bitmap() ? bitmap()->height / (state.isBigCharacter ? 4.0 : 8.0) : 0; }
+  virtual void updateAnimation() { setupBalloon(); }
   virtual bool isImageChanged() const {
     return character && (tilesetId!=modelSession().mapState().tilesetId || tileId!=character->value().tileId || loadedName!=character->value().characterName || loadedIndex!=character->value().characterIndex);
   }
@@ -147,7 +158,8 @@ class CharacterSprite : public BoundSpriteContext {
   }
   virtual void updateCharacterFrame() {
     const auto image=bitmap(); if (!image) return;
-    const auto frame=state.sourceFrame(image->width,image->height,modelSession().tileWidth(),modelSession().tileHeight());
+    const auto frame = isTile() ? state.sourceFrame(image->width,image->height,modelSession().tileWidth(),modelSession().tileHeight()) :
+      core::Rectangle{(characterBlockX()+characterPatternX())*patternWidth(), (characterBlockY()+characterPatternY())*patternHeight(), patternWidth(), patternHeight()};
     updateHalfBodySprites();
     if (state.bushDepth>0) {
       const double depth=std::min<double>(state.bushDepth,frame.height);
@@ -163,7 +175,7 @@ class CharacterSprite : public BoundSpriteContext {
   virtual void updateVisibility() { visible=character && !hiding && !character->value().transparent; }
   virtual void hide() { hiding=true; updateVisibility(); }
   virtual void show() { hiding=false; updateVisibility(); }
-  void update() override { core::Sprite::update(); if (!character) return; state.setCharacter(&character->value()); updateBitmap(); updateFrame(); updatePosition(); updateOther(); }
+  void update() override { core::Sprite::update(); if (!character) return; state.setCharacter(&character->value()); updateBitmap(); updateFrame(); updatePosition(); updateAnimation(); updateOther(); }
 };
 class NativePictureSprite : public BoundSpriteContext {
  public:
