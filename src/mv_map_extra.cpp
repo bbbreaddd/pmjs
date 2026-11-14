@@ -109,7 +109,7 @@ int MapMechanics::terrainTag(const Session& session, int x, int y) {
 
 int MapMechanics::regionId(const Session& session, int x, int y) {
   if (x < 0 || y < 0 || x >= session.map()["width"].integer() || y >= session.map()["height"].integer()) return 0;
-  const auto& tiled = session.database()["tiledMaps"][std::to_string(session.mapId())];
+  const auto& tiled = session.tiledMapData(session.mapId());
   if (!tiled.null()) return tiled["regions"][y * tiled["width"].integer() + x].integer();
   // Region layer is layer 5 in map data
   return getTileId(session, x, y, 5);
@@ -373,7 +373,7 @@ void Session::updateMapTouch(const Input& input) {
   if (input.touchTriggered || mapTouchCount_ > 0) {
     if ((input.touchPressed || input.touchTriggered) && input.touchX && input.touchY) {
       if (mapTouchCount_ == 0 || mapTouchCount_ >= 15) {
-        const auto& tiled = database_["tiledMaps"][std::to_string(mapId_)];
+        const auto& tiled = tiledMapData(mapId_);
         const int tw = tiled["tilewidth"].integer(48), th = tiled["tileheight"].integer(48);
         destination_ = std::array{roundMapX(static_cast<int>(std::floor(mapState_.lastDisplayX + *input.touchX / tw))),
           roundMapY(static_cast<int>(std::floor(mapState_.lastDisplayY + *input.touchY / th)))};

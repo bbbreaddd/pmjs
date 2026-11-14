@@ -106,7 +106,7 @@ void Presentation::mapDestination() {
   destinationTick_ = session_.ticks_;
   const auto source = core_.canvases().prepareImage(destinationCanvas_);
   if (!source) throw std::runtime_error("cannot prepare destination marker");
-  const auto& tiled = session_.database_["tiledMaps"][std::to_string(session_.mapId_)];
+  const auto& tiled = session_.tiledMapData(session_.mapId_);
   const int tw = tiled["tilewidth"].integer(48), th = tiled["tileheight"].integer(48);
   destinationSprite_.targetX = (*session_.destination_)[0]; destinationSprite_.targetY = (*session_.destination_)[1];
   const double x = (scrolledMapX(destinationSprite_.targetX, cameraX_, tw) + 0.5) * tw;

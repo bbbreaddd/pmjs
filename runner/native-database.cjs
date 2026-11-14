@@ -95,6 +95,7 @@ function installDatabase(runtime, engine, session, gameRoot) {
     }
   };
   runtime.mapDatabase = {
+    get requestedMapId() { return requestedMapId; },
     load(id) {
       beginMapLoad(id);
       scope.DataManager.loadMapData(requestedMapId);

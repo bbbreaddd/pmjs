@@ -1,6 +1,7 @@
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
+const { loadTiledMap } = require('../../runner/tiled-map-data.cjs');
 
 function prepareGame({ loaded, gameRoot, loadTiledMap }) {
   loaded.database.tiledMaps = {
@@ -26,6 +27,19 @@ function createRuntime(options) {
     }
   });
   if (runtime.scope.Imported?.YED_Tiled) {
+    const isMapReady = runtime.mapDatabase.isReady;
+    let publishedMap = null, publishedId = null;
+    runtime.mapDatabase.isReady = function() {
+      if (!isMapReady.call(this)) return false;
+      const id = this.requestedMapId, map = runtime.scope.$dataMap;
+      if (publishedMap !== map || publishedId !== id) {
+        const source = 'maps/map' + id + '.json';
+        const tiled = fs.existsSync(path.join(options.gameRoot, source)) ? loadTiledMap(options.gameRoot, source) : null;
+        options.engine.databaseInvoke(options.session, 'publishTiledMap', id, tiled);
+        publishedMap = map; publishedId = id;
+      }
+      return true;
+    };
     const prototype = runtime.scope.Spriteset_Map.prototype;
     for (const [name, method] of Object.entries(nativeMapMethods)) {
       if (typeof method !== 'function') throw new Error('Native map method is unavailable: ' + name);

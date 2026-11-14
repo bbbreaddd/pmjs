@@ -3,6 +3,44 @@
 // MIT license: third_party/rpg-maker-mv.LICENSE.
 
 function installMessageWindow({ Window_Message, ImageManager, Input }, options) {
+  Window_Message.prototype.updateLoading = function() {
+      if (this._faceBitmap) {
+          if (this._faceBitmap.isReady()) {
+              this.drawMessageFace();
+              this._faceBitmap = null;
+              return false;
+          } else {
+              return true;
+          }
+      } else {
+          return false;
+      }
+  };
+  
+  Window_Message.prototype.updateMessage = function() {
+      if (this._textState) {
+          while (!this.isEndOfText(this._textState)) {
+              if (this.needsNewPage(this._textState)) {
+                  this.newPage(this._textState);
+              }
+              this.updateShowFast();
+              this.processCharacter(this._textState);
+              if (!this._showFast && !this._lineShowFast) {
+                  break;
+              }
+              if (this.pause || this._waitCount > 0) {
+                  break;
+              }
+          }
+          if (this.isEndOfText(this._textState)) {
+              this.onEndOfText();
+          }
+          return true;
+      } else {
+          return false;
+      }
+  };
+
   Window_Message.prototype.startMessage = function() {
       this._textState = {};
       this._textState.index = 0;

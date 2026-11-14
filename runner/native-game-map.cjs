@@ -11,6 +11,13 @@ function installMapBindings(scope, engine, session, createArray, handles) {
     get() { return engine.characterCommand(session, handles.get(this), 'needsMapReload', []); },
     set(value) { engine.characterCommand(session, handles.get(this), 'needsMapReload', [Boolean(value)]); }
   });
+  map.distance = function(x1, y1, x2, y2) { return Math.abs(this.deltaX(x1, x2)) + Math.abs(this.deltaY(y1, y2)); };
+  map.canvasToMapX = function(x) { return this.roundX(Math.floor((this.displayX() * this.tileWidth() + x) / this.tileWidth())); };
+  map.canvasToMapY = function(y) { return this.roundY(Math.floor((this.displayY() * this.tileHeight() + y) / this.tileHeight())); };
+  for (const method of ['regionId', 'terrainTag', 'checkLayeredTilesFlags', 'changeTileset', 'changeBattleback', 'isDashDisabled', 'isNameDisplayEnabled'])
+    map[method] = function(...args) { return invoke(method, ...args); };
+  map.eraseEvent = function(id) { invoke('eraseEvent', id); };
+  map.isAnyEventStarting = function() { return invoke('isAnyEventStarting'); };
   map.tilesetId = function() { return invoke('tilesetId'); };
   map.tileset = function() { return scope.$dataTilesets[this.tilesetId()]; };
   map.tilesetFlags = function() { const tileset=this.tileset();return tileset?tileset.flags:createArray([]); };
@@ -35,6 +42,9 @@ function installMapBindings(scope, engine, session, createArray, handles) {
   map.roundY = function(y) { return this.isLoopVertical() ? (y % this.height() + this.height()) % this.height() : y; };
   for (const [method, pattern] of Object.entries({ isJapanese: /^ja/, isChinese: /^zh/, isKorean: /^ko/, isRussian: /^ru/ }))
     system[method] = function() { const match = scope.$dataSystem.locale.match(pattern); return match && Object.assign(createArray(match), match); };
+  system.saveBgm = function() { this._savedBgm = scope.AudioManager.saveBgm(); };
+  system.replayBgm = function() { if (this._savedBgm) scope.AudioManager.replayBgm(this._savedBgm); };
+  system.victoryMe = function() { return this._victoryMe || scope.$dataSystem.victoryMe; };
   system.isCJK = function() { return this.isJapanese() || this.isChinese() || this.isKorean(); };
   const tones = new WeakMap();
   system.windowTone = function() {
@@ -94,7 +104,9 @@ function installMapBindings(scope, engine, session, createArray, handles) {
   player.vehicle = function() { return scope.$gameMap.vehicle(this._vehicleType); };
   player.isInVehicle = function() { return this.isInBoat() || this.isInShip() || this.isInAirship(); };
   player.areFollowersGathering = function() { return this.followers().isGathering(); };
-  player.isDebugThrough = function() { return scope.Input.isPressed('control') && scope.$gameTemp.isPlaytest(); };
+  player.isDebugThrough = function() { return Boolean(scope.Input?.isPressed('control') && scope.$gameTemp.isPlaytest()); };
+  player.centerX = function() { return (scope.Graphics.width / scope.$gameMap.tileWidth() - 1) / 2; };
+  player.centerY = function() { return (scope.Graphics.height / scope.$gameMap.tileHeight() - 1) / 2; };
   player.canMove = function() {
     return !scope.$gameMap.isEventRunning() && !scope.$gameMessage.isBusy() && !this.isMoveRouteForcing() && !this.areFollowersGathering() &&
       !this._vehicleGettingOn && !this._vehicleGettingOff && (!this.isInVehicle() || this.vehicle().canMove());
@@ -126,11 +138,53 @@ function installMapBindings(scope, engine, session, createArray, handles) {
   character.pos = function(x, y) { return this._x === x && this._y === y; };
   character.isThrough = function() { return this._through; };
   character.posNt = function(x, y) { return this.pos(x, y) && !this.isThrough(); };
-  for (const field of ['moveSpeed', 'pattern', 'tileId', 'jumpCount', 'movementSuccess', 'directionFix', 'stopCount', 'animationCount', 'stepAnime', 'walkAnime'])
+  for (const field of ['moveSpeed', 'pattern', 'tileId', 'jumpCount', 'movementSuccess', 'directionFix', 'stopCount', 'animationCount', 'stepAnime', 'walkAnime', 'characterIndex', 'moveFrequency', 'bushDepth'])
     Object.defineProperty(character, '_' + field, { configurable: true,
       get() { return engine.entityField(handles.get(this), field); },
       set(value) { engine.entityField(handles.get(this), field, value); }
     });
+  character.characterIndex = function() { return this._characterIndex; };
+  character.moveFrequency = function() { return this._moveFrequency; };
+  character.opacity = function() { return this._opacity; };
+  character.setOpacity = function(value) { this._opacity = value; };
+  character.setStepAnime = function(value) { this._stepAnime = value; };
+  character.setWalkAnime = function(value) { this._walkAnime = value; };
+  character.isTransparent = function() { return this._transparent; };
+  character.resetStopCount = function() { this._stopCount = 0; };
+  character.checkStop = function(threshold) { return this._stopCount > threshold; };
+  character.animationWait = function() { return (9 - this.realMoveSpeed()) * 3; };
+  character.regionId = function() { return scope.$gameMap.regionId(this._x, this._y); };
+  for (const method of ['isMapPassable', 'isCollidedWithCharacters', 'isOnBush', 'increaseSteps', 'setImage'])
+    character[method] = function(...args) { return engine.characterCommand(session, handles.get(this), method, args); };
+  character.canPass = function(x, y, direction) {
+    const map = scope.$gameMap, nx = map.roundXWithDirection(x, direction), ny = map.roundYWithDirection(y, direction);
+    if (!map.isValid(nx, ny)) return false;
+    if (this.isThrough() || this.isDebugThrough()) return true;
+    return this.isMapPassable(x, y, direction) && !this.isCollidedWithCharacters(nx, ny);
+  };
+  character.isDebugThrough ||= function() { return false; };
+  character.canPassDiagonally = function(x, y, horizontal, vertical) {
+    const nx = scope.$gameMap.roundXWithDirection(x, horizontal), ny = scope.$gameMap.roundYWithDirection(y, vertical);
+    return (this.canPass(x, y, vertical) && this.canPass(x, ny, horizontal)) || (this.canPass(x, y, horizontal) && this.canPass(nx, y, vertical));
+  };
+  map.roundXWithDirection = function(x, direction) { return this.roundX(x + (direction === 6 ? 1 : direction === 4 ? -1 : 0)); };
+  map.roundYWithDirection = function(y, direction) { return this.roundY(y + (direction === 2 ? 1 : direction === 8 ? -1 : 0)); };
+  const movable = scope.Game_Character.prototype;
+  movable.moveForward = function() { this.moveStraight(this.direction()); };
+  movable.turn180 = function() { this.setDirection(10 - this.direction()); };
+  movable.turnRight90 = function() { this.setDirection({ 2: 4, 4: 8, 6: 2, 8: 6 }[this.direction()]); };
+  movable.turnLeft90 = function() { this.setDirection({ 2: 6, 4: 2, 6: 8, 8: 4 }[this.direction()]); };
+  movable.turnTowardCharacter = function(target) {
+    const x = this.deltaXFrom(target.x), y = this.deltaYFrom(target.y);
+    if (Math.abs(x) > Math.abs(y)) this.setDirection(x > 0 ? 4 : 6);
+    else if (y !== 0) this.setDirection(y > 0 ? 8 : 2);
+  };
+  movable.turnAwayFromCharacter = function(target) {
+    const x = this.deltaXFrom(target.x), y = this.deltaYFrom(target.y);
+    if (Math.abs(x) > Math.abs(y)) this.setDirection(x > 0 ? 6 : 4);
+    else if (y !== 0) this.setDirection(y > 0 ? 2 : 8);
+  };
+  movable.turnTowardPlayer = function() { this.turnTowardCharacter(scope.$gamePlayer); };
   character.characterName = function() { return this._characterName; };
   character.tileId = function() { return this._tileId; };
   character.hasStepAnime = function() { return this._stepAnime; };
@@ -166,7 +220,96 @@ function installMapBindings(scope, engine, session, createArray, handles) {
   character.screenY = function() { return Math.round(this.scrolledY() * scope.$gameMap.tileHeight() + scope.$gameMap.tileHeight() - this.shiftY() - this.jumpHeight()); };
   for (const method of ['setMoveRoute', 'forceMoveRoute']) scope.Game_Character.prototype[method] = function(route) { engine.characterCommand(session, handles.get(this), method, [route]); };
   Object.assign(scope.Game_Character, { ROUTE_MOVE_DOWN: 1, ROUTE_MOVE_LEFT: 2, ROUTE_MOVE_RIGHT: 3, ROUTE_MOVE_UP: 4,
-    ROUTE_MOVE_LOWER_L: 5, ROUTE_MOVE_LOWER_R: 6, ROUTE_MOVE_UPPER_L: 7, ROUTE_MOVE_UPPER_R: 8, ROUTE_SCRIPT: 45 });
+    ROUTE_WAIT: 15, ROUTE_CHANGE_OPACITY: 42, ROUTE_MOVE_LOWER_L: 5, ROUTE_MOVE_LOWER_R: 6, ROUTE_MOVE_UPPER_L: 7, ROUTE_MOVE_UPPER_R: 8, ROUTE_SCRIPT: 45 });
+  const followers = scope.Game_Followers.prototype;
+  followers.areGathering = function() { return this.isGathering(); };
+  followers.isSomeoneCollided = function(x, y) { return this.visibleFollowers().some(follower => follower.pos(x, y)); };
+  scope.Game_Vehicle.prototype.vehicle = function() { return scope.$dataSystem[this._type] || null; };
+  scope.Game_Vehicle.prototype.loadSystemSettings = function() { engine.characterCommand(session, handles.get(this), 'loadSystemSettings', []); };
+  scope.Game_CharacterBase.prototype.checkEventTriggerTouch = function(x, y) {};
+  for (const method of ['updateStop', 'updateMove']) scope.Game_CharacterBase.prototype[method] = function() { return engine.characterCommand(session, handles.get(this), method, []); };
+  scope.Game_Character.prototype.updateRoutineMove = function() { return engine.characterCommand(session, handles.get(this), 'updateRoutineMove', []); };
+  for (const method of ['isStarting', 'lock', 'unlock', 'start', 'setupPageSettings', 'updateParallel', 'checkEventTriggerAuto']) scope.Game_Event.prototype[method] = function() { return engine.characterCommand(session, handles.get(this), method, []); };
+  scope.Game_Event.prototype.isTriggerIn = function(triggers) { return triggers.includes(this._trigger); };
+  for (const field of ['trigger', 'starting', 'locked', 'prelockDirection']) Object.defineProperty(scope.Game_Event.prototype, '_' + field, { configurable: true,
+    get() { return engine.characterCommand(session, handles.get(this), 'event.' + field, []); },
+    set(value) { engine.characterCommand(session, handles.get(this), 'event.' + field, [value]); }
+  });
+  for (const method of ['makeEncounterCount', 'makeEncounterTroopId', 'updateNonmoving']) scope.Game_Player.prototype[method] = function(...args) { return engine.characterCommand(session, handles.get(this), method, args); };
+  scope.Game_Player.prototype.executeMove = function(direction) { this.moveStraight(direction); };
+  scope.Game_Player.prototype.startMapEvent = function(x, y, triggers, normal) {
+      if (!scope.$gameMap.isEventRunning()) {
+          scope.$gameMap.eventsXy(x, y).forEach(function(event) {
+              if (event.isTriggerIn(triggers) && event.isNormalPriority() === normal) {
+                  event.start();
+              }
+          });
+      }
+  };
+  
+  scope.Game_Player.prototype.moveByInput = function() {
+      if (!this.isMoving() && this.canMove()) {
+          var direction = this.getInputDirection();
+          if (direction > 0) {
+              scope.$gameTemp.clearDestination();
+          } else if (scope.$gameTemp.isDestinationValid()){
+              var x = scope.$gameTemp.destinationX();
+              var y = scope.$gameTemp.destinationY();
+              direction = this.findDirectionTo(x, y);
+          }
+          if (direction > 0) {
+              this.executeMove(direction);
+          }
+      }
+  };
+  
+  scope.Game_Player.prototype.updateScroll = function(lastScrolledX, lastScrolledY) {
+      var x1 = lastScrolledX;
+      var y1 = lastScrolledY;
+      var x2 = this.scrolledX();
+      var y2 = this.scrolledY();
+      if (y2 > y1 && y2 > this.centerY()) {
+          scope.$gameMap.scrollDown(y2 - y1);
+      }
+      if (x2 < x1 && x2 < this.centerX()) {
+          scope.$gameMap.scrollLeft(x1 - x2);
+      }
+      if (x2 > x1 && x2 > this.centerX()) {
+          scope.$gameMap.scrollRight(x2 - x1);
+      }
+      if (y2 < y1 && y2 < this.centerY()) {
+          scope.$gameMap.scrollUp(y1 - y2);
+      }
+  };
+  
+  scope.Game_Player.prototype.checkEventTriggerHere = function(triggers) {
+      if (this.canStartLocalEvents()) {
+          this.startMapEvent(this.x, this.y, triggers, false);
+      }
+  };
+  
+  scope.Game_Player.prototype.canStartLocalEvents = function() {
+      return !this.isInAirship();
+  };
+  
+  scope.Game_Player.prototype.isNormal = function() {
+      return this._vehicleType === 'walk' && !this.isMoveRouteForcing();
+  };
+  
+  scope.Game_Player.prototype.getInputDirection = function() {
+      return scope.Input.dir4;
+  };
+  
+  scope.Game_Event.prototype.checkEventTriggerTouch = function (x, y) {
+      if (!scope.$gameMap.isEventRunning()) {
+          if (this._trigger === 2 && scope.$gamePlayer.pos(x, y)) {
+              if (!this.isJumping() && this.isNormalPriority()) {
+                  this.start();
+              }
+          }
+      }
+  };
+  return new Map([scope.Game_CharacterBase, scope.Game_Character, scope.Game_Player, scope.Game_Event, scope.Game_Follower, scope.Game_Vehicle].filter(Boolean).map(Type => [Type, Object.fromEntries(['canPass', 'canPassDiagonally', 'isMapPassable', 'isCollidedWithCharacters', 'isThrough', 'isDebugThrough'].map(name => [name, Type.prototype[name]]))]));
 }
 
 module.exports = { installMapBindings };

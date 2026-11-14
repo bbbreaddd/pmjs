@@ -16,7 +16,7 @@ void Presentation::animationCells(const Value& animation,int frame,float baseX,f
   }
 }
 void Presentation::visualEffects() {
-  const auto& tiled=session_.database_["tiledMaps"][std::to_string(session_.mapId_)];
+  const auto& tiled=session_.tiledMapData(session_.mapId_);
   const int tw=tiled["tilewidth"].integer(48),th=tiled["tileheight"].integer(48);
   for(const auto& effect:session_.visualEffects_) {
     if(session_.ticks_<effect.started||effect.duplicated)continue;

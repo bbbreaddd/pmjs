@@ -277,7 +277,7 @@ class NativeMapSpriteset : public NativeSpriteset {
     loadTileset(); baseSprite->addChild(tilemap);
   }
   virtual void loadTileset() {
-    const auto& session=modelSession(); const auto& data=session.database()["tiledMaps"][std::to_string(session.mapId())];
+    const auto& session=modelSession(); const auto& data=session.tiledMapData(session.mapId());
     tilesetBitmaps.clear();
     if(!data.null()) {
       tilesetSource=&data["tilesets"];
@@ -325,7 +325,7 @@ class NativeMapSpriteset : public NativeSpriteset {
   }
   virtual void hideCharacters() { for(const auto& node:mapGraph->characters)if(auto sprite=std::dynamic_pointer_cast<CharacterSprite>(node);sprite&&!sprite->isTile())sprite->hide(); }
   virtual void updateTileset() {
-    const auto& session=modelSession();const auto& data=session.database()["tiledMaps"][std::to_string(session.mapId())];
+    const auto& session=modelSession();const auto& data=session.tiledMapData(session.mapId());
     const auto& current=data.null()?session.database()["tilesets"][session.mapState().tilesetId]:data["tilesets"];
     const bool same = current.reader && tileset.reader ? current.reader->sameSource(*tileset.reader) :
       !current.reader && !tileset.reader && &current == tilesetSource;

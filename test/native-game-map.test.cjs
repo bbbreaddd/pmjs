@@ -5,9 +5,9 @@ const { installMapBindings } = require('../runner/native-game-map.cjs');
 
 test('character pursuit follows looping map distances and retries the blocked primary axis', () => {
   const scope = {};
-  for (const name of ['Game_Map', 'Game_System', 'Game_CharacterBase', 'Game_Character', 'Game_Player', 'Game_Event']) scope[name] = function() {};
+  for (const name of ['Game_Map', 'Game_System', 'Game_CharacterBase', 'Game_Character', 'Game_Player', 'Game_Event', 'Game_Followers', 'Game_Follower', 'Game_Vehicle']) scope[name] = function() {};
   Object.setPrototypeOf(scope.Game_Character.prototype, scope.Game_CharacterBase.prototype);
-  for (const name of ['Game_Player', 'Game_Event']) Object.setPrototypeOf(scope[name].prototype, scope.Game_Character.prototype);
+  for (const name of ['Game_Player', 'Game_Event', 'Game_Followers', 'Game_Follower', 'Game_Vehicle']) Object.setPrototypeOf(scope[name].prototype, scope.Game_Character.prototype);
   scope.$gameMap = new scope.Game_Map();
   installMapBindings(scope, {}, null, values => values, new WeakMap());
   Object.assign(scope.$gameMap, { width: () => 20, height: () => 10, isLoopHorizontal: () => true, isLoopVertical: () => false });

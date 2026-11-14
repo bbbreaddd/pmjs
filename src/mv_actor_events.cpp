@@ -42,7 +42,9 @@ void Session::changeActorExpBase(Battler& actor, double exp, bool show, const st
   }
   while (actor.level > 1 && actor.exp[actor.classId] < actorExpForLevel(actor, actor.level))
     if (!dispatchActorMethod(actor, "levelDown", {}, owner)) --actor.level;
-  if (show && actor.level > lastLevel) {
+  Value::Array learnedSkills;
+  if (show && actor.level > lastLevel) for (int skill : actor.skills) if (!lastSkills.contains(skill)) learnedSkills.push_back(database_["skills"][skill]);
+  if (show && actor.level > lastLevel && !dispatchActorMethod(actor, "displayLevelUp", {Value(learnedSkills)}, owner)) {
     if (!message_.lines.empty()) message_.pageBreaks.insert(static_cast<int>(message_.lines.size()));
     message_.lines.emplace_back(battleMessage("levelUp", {actor.name, database_["system"]["terms"]["basic"][0].text(), std::to_string(actor.level)}));
     for (int skill : actor.skills) if (!lastSkills.contains(skill))

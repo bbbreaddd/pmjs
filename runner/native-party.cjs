@@ -22,6 +22,7 @@ function installPartyBindings(scope, engine, session, createArray) {
   Game_Unit.prototype.substituteBattler = function() { return this.members().find(member => member.isSubstitute()); };
   Game_Unit.prototype.onBattleStart = function() { for (const member of this.members()) member.onBattleStart(); this._inBattle = true; };
   Game_Unit.prototype.onBattleEnd = function() { this._inBattle = false; for (const member of this.members()) member.onBattleEnd(); };
+  Game_Unit.prototype.select = function(activeMember) { for (const member of this.members()) member === activeMember ? member.select() : member.deselect(); };
   Game_Unit.prototype.clearActions = function() { for (const member of this.members()) member.clearActions(); };
   party.performEscape = function() { for (const member of this.members()) member.performEscape(); };
   scope.Game_Unit = Game_Unit;
@@ -68,6 +69,7 @@ function installPartyBindings(scope, engine, session, createArray) {
   party.lastItem = function() { return this._lastItem.object(); };
   party.setLastItem = function(item) { this._lastItem.setObject(item); };
   party.equipItems = function() { return this.weapons().concat(this.armors()); };
+  party.performVictory = function() { for (const actor of this.members()) actor.performVictory(); };
   party.removeBattleStates = function() { for (const actor of this.members()) actor.removeBattleStates(); };
   party.allItems = function() { return this.items().concat(this.weapons(), this.armors()); };
   party.itemContainer = function(item) { return scope.DataManager.isItem(item) ? this._items : scope.DataManager.isWeapon(item) ? this._weapons : scope.DataManager.isArmor(item) ? this._armors : null; };

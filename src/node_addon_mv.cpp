@@ -557,6 +557,11 @@ napi_value databaseInvoke(napi_env env, napi_callback_info info) try {
     if(id<0)throw std::invalid_argument("map id must not be negative");
     return writeValue(env,owner.session->mapData(id));
   }
+  if(method=="publishTiledMap" && args.size()==4) {
+    if(owner.runtimeCalls || owner.stepping) throw std::runtime_error("cannot replace map data during a script callback or step");
+    owner.session->setTiledMapData(asInt32(env,args[2]), readValue(env,args[3]));
+    return undefined(env);
+  }
   if(method=="publishMap" && args.size()==4) {
     if(owner.runtimeCalls || owner.stepping)throw std::runtime_error("cannot replace map data during a script callback or step");
     const int id=asInt32(env,args[2]);
@@ -725,6 +730,12 @@ napi_value connectRuntime(napi_env env, napi_callback_info info) try {
     const double x = point[0].number(), y = point[1].number();
     if (!std::isfinite(x) || !std::isfinite(y)) throw std::invalid_argument("character position override must return finite coordinates");
     return std::array<double, 2>{x, y};
+  };
+  hooks->characterQuery = [&owner](const auto& object, const std::string& method, const mv::Value::Array& values) -> std::optional<mv::Value> {
+    const auto result = callRuntime(owner, "characterQuery", {runtimeHandle(owner, object), string(owner.env, method), writeValue(owner.env, values)});
+    napi_valuetype type; check(owner.env, napi_typeof(owner.env, result, &type), "cannot inspect character query result");
+    if (type == napi_null || type == napi_undefined) return std::nullopt;
+    return readValue(owner.env, property(owner.env, result, "value"));
   };
   hooks->characterLifecycle = [&owner](const auto& object, const std::string& method) {
     return asBoolean(owner.env, callRuntime(owner, "characterLifecycle", {runtimeHandle(owner, object), string(owner.env, method)}));
@@ -1671,6 +1682,9 @@ napi_value entityField(napi_env env, napi_callback_info info) try {
     else if (field == "direction") integer = &value.direction; else if (field == "opacity") integer = &value.opacity;
     else if (field == "moveRouteIndex") integer = &value.routeIndex;
     else if (field == "moveSpeed") integer = &value.moveSpeed;
+    else if (field == "moveFrequency") integer = &value.moveFrequency;
+    else if (field == "characterIndex") integer = &value.characterIndex;
+    else if (field == "bushDepth") integer = &value.bushDepth;
     else if (field == "stopCount") integer = &value.stopCount;
     else if (field == "animationCount") scalar = &value.animationCount;
     else if (field == "stepAnime") flag = &value.stepAnime;
@@ -1687,6 +1701,8 @@ napi_value entityField(napi_env env, napi_callback_info info) try {
     else if (field == "classId") integer = &value.classId;
     if (field == "enemy") return boolean(env, value.enemy);
     if (field == "hidden") flag = &value.hidden;
+    if (field == "letter") text = &value.letter;
+    if (field == "plural") flag = &value.plural;
     if (field == "level") integer = &value.level;
     else if (field == "profile") text = &value.profile;
     else if (field == "characterName") text = &value.characterName;

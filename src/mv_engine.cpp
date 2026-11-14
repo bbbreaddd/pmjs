@@ -119,12 +119,22 @@ void Session::setMapData(int id,Value data) {
   ++presentationRevision_; refreshNeeded_=true;
 }
 const Value& Session::mapData(int id) const { return id==runtimeMapId_ ? runtimeMapData_ : database_["maps"][std::to_string(id)]; }
+void Session::setTiledMapData(int id, Value data) {
+  if (id < 0) throw std::invalid_argument("map id must not be negative");
+  std::erase_if(runtimeTiledMaps_, [&](const auto& entry) { return entry.first != mapId_ && entry.first != id; });
+  runtimeTiledMaps_[id] = std::move(data);
+  ++presentationRevision_;
+}
+const Value& Session::tiledMapData(int id) const {
+  const auto found = runtimeTiledMaps_.find(id);
+  return found != runtimeTiledMaps_.end() ? found->second : database_["tiledMaps"][std::to_string(id)];
+}
 const Value& Session::map() const { return mapData(mapId_); }
 int Session::tileWidth() const {
-  return database_["tiledMaps"][std::to_string(mapId_)]["tilewidth"].integer(48);
+  return tiledMapData(mapId_)["tilewidth"].integer(48);
 }
 int Session::tileHeight() const {
-  return database_["tiledMaps"][std::to_string(mapId_)]["tileheight"].integer(48);
+  return tiledMapData(mapId_)["tileheight"].integer(48);
 }
 
 void Session::prepareScriptScene(Ui state) {
@@ -337,6 +347,11 @@ void Session::setupEventPage(Event& event) {
     event.moveType = 0; event.trigger = 0; event.character.through = true;
     return;
   }
+  const auto object = runtimeHooks_ && runtimeHooks_->characterLifecycle ? runtimeCharacter(event.id) : nullptr;
+  if (!object || !runtimeHooks_->characterLifecycle(object, "setupPageSettings")) setupEventPageSettings(event);
+}
+void Session::setupEventPageSettings(Event& event) {
+  if (event.page < 0) return;
   const auto& p = map()["events"][event.id]["pages"][event.page]; const auto& image = p["image"];
   event.moveType = p["moveType"].integer();
   event.trigger = p["trigger"].integer(); event.priority = p["priorityType"].integer();
@@ -362,7 +377,7 @@ void Session::setupEventPage(Event& event) {
 
 bool Session::tilePassage(int x, int y, int bit) const {
   x = roundMapX(x); y = roundMapY(y);
-  const auto& tiled = database_["tiledMaps"][std::to_string(mapId_)];
+  const auto& tiled = tiledMapData(mapId_);
   if (!tiled.null()) {
     const int width = tiled["width"].integer(), height = tiled["height"].integer();
     if (x < 0 || y < 0 || x >= width || y >= height) return false;
@@ -390,27 +405,40 @@ bool Session::tilePassage(int x, int y, int bit) const {
 }
 
 bool Session::passable(int x, int y, int direction, const Character& character) const {
+  if (runtimeHooks_ && runtimeHooks_->characterQuery) {
+    const auto object = const_cast<Session*>(this)->runtimeCharacterFor(const_cast<Character&>(character));
+    if (object) if (const auto result = runtimeHooks_->characterQuery(object, "canPass", {x, y, direction})) return result->boolean();
+  }
+  return passableBase(x, y, direction, character);
+}
+bool Session::characterMapPassable(int x, int y, int direction, const Character& character) const {
+  if (direction != 2 && direction != 4 && direction != 6 && direction != 8) return false;
   const int nx = roundMapX(x + dx(direction)), ny = roundMapY(y + dy(direction));
-  if (nx < 0 || ny < 0 || nx >= map()["width"].integer() || ny >= map()["height"].integer()) return false;
-  if (character.through) return true;
+  if (&character == &player_ && vehicleType_ >= 0) return vehicleType_ == 2 || tilePassage(nx, ny, vehicleType_ == 0 ? 512 : 1024);
   const int bit = 1 << (direction / 2 - 1), reverse = 1 << ((10 - direction) / 2 - 1);
-  if (&character == &player_ && vehicleType_ >= 0) {
-    if (vehicleType_ < 2 && !tilePassage(nx, ny, vehicleType_ == 0 ? 512 : 1024)) return false;
-  } else if (!tilePassage(x, y, bit) || !tilePassage(nx, ny, reverse)) return false;
+  return tilePassage(x, y, bit) && tilePassage(nx, ny, reverse);
+}
+bool Session::characterCollision(int x, int y, const Character& character) const {
   for (int index = 0; index < 2; ++index) {
     const auto& vehicle = vehicles_[index];
     if (vehicle.mapId == mapId_ && !vehicle.character.through && &vehicle.character != &character &&
-        !(&character == &player_ && vehicleType_ == index) && vehicle.character.x == nx && vehicle.character.y == ny) return false;
+        !(&character == &player_ && vehicleType_ == index) && vehicle.character.x == x && vehicle.character.y == y) return true;
   }
   bool isEvent = false;
   for (const auto& event : events_) if (&event.character == &character) { isEvent = true; break; }
-  for (const auto& event : events_) if (event.page >= 0 && &event.character != &character && !event.character.through && (isEvent || event.priority == 1) && event.character.x == nx && event.character.y == ny) return false;
+  for (const auto& event : events_) if (event.page >= 0 && &event.character != &character && !event.character.through && (isEvent || event.priority == 1) && event.character.x == x && event.character.y == y) return true;
   for (const auto& event : events_) if (&event.character == &character && event.priority == 1) {
-    if (!player_.through && player_.x == nx && player_.y == ny) return false;
+    if (!player_.through && player_.x == x && player_.y == y) return true;
     if (followersVisible_) for (std::size_t i = 0; i < followers_.size() && i + 1 < party_.size(); ++i)
-      if (!actors_.at(party_[i + 1]).hidden && followers_[i].x == nx && followers_[i].y == ny) return false;
+      if (!actors_.at(party_[i + 1]).hidden && followers_[i].x == x && followers_[i].y == y) return true;
   }
-  return true;
+  return false;
+}
+bool Session::passableBase(int x, int y, int direction, const Character& character) const {
+  if (direction != 2 && direction != 4 && direction != 6 && direction != 8) return false;
+  const int nx = roundMapX(x + dx(direction)), ny = roundMapY(y + dy(direction));
+  if (nx < 0 || ny < 0 || nx >= map()["width"].integer() || ny >= map()["height"].integer()) return false;
+  return character.through || (characterMapPassable(x, y, direction, character) && !characterCollision(nx, ny, character));
 }
 bool Session::tileFlag(int x, int y, int flag) const {
   x = roundMapX(x); y = roundMapY(y);
@@ -449,7 +477,11 @@ void Session::increaseCharacterSteps(Character& character) {
   if (&character == &player_ && vehicleType_ < 0 && !character.routeForcing) ++steps_;
 }
 bool Session::moveDiagonal(Character& character, int horizontal, int vertical) {
-  const bool pass = (passable(character.x, character.y, vertical, character) && passable(character.x, roundMapY(character.y + dy(vertical)), horizontal, character)) ||
+  std::optional<Value> scripted;
+  if (runtimeHooks_ && runtimeHooks_->characterQuery) {
+    if (const auto object = runtimeCharacterFor(character)) scripted = runtimeHooks_->characterQuery(object, "canPassDiagonally", {character.x, character.y, horizontal, vertical});
+  }
+  const bool pass = scripted ? scripted->boolean() : (passable(character.x, character.y, vertical, character) && passable(character.x, roundMapY(character.y + dy(vertical)), horizontal, character)) ||
     (passable(character.x, character.y, horizontal, character) && passable(roundMapX(character.x + dx(horizontal)), character.y, vertical, character));
   character.movementSuccess = pass;
   if (pass) {
@@ -479,29 +511,39 @@ void Session::jumpCharacter(Character& c, int xPlus, int yPlus) {
     jumpCharacter(follower, static_cast<int>(deltaMapX(c.x, follower.x)), static_cast<int>(deltaMapY(c.y, follower.y)));
 }
 
-void Session::updateCharacter(Character& c, bool dash, int idlePattern) {
+void Session::updateCharacterStop(Character& c) {
   bool locked = false;
   for (const auto& event : events_) if (&event.character == &c && event.locked) { locked = true; break; }
   if (!c.moving() && c.jumpCount <= 0) {
     if (locked) c.stopCount = 0;
     else ++c.stopCount;
-    if (c.routeForcing) updateRoute(c);
+    if (c.routeForcing) {
+      const auto object = runtimeHooks_ && runtimeHooks_->characterLifecycle ? runtimeCharacterFor(c) : nullptr;
+      if (!object || !runtimeHooks_->characterLifecycle(object, "updateRoutineMove")) updateRoute(c);
+    }
     else for (auto& event : events_) if (&event.character == &c && event.page >= 0) {
       const auto object = runtimeHooks_ && runtimeHooks_->characterLifecycle ? runtimeCharacter(event.id) : nullptr;
       if (!object || !runtimeHooks_->characterLifecycle(object, "updateSelfMovement")) updateSelfMovement(event);
       break;
     }
   }
+}
+void Session::updateCharacterMove(Character& c, bool dash) {
+    const double scale = tiledMapData(mapId_)["movementScale"].number(1);
+    const double distance = std::pow(2.0, c.moveSpeed + (dash ? 1 : 0)) / 256 * scale;
+    c.realX = c.realX < c.x ? std::min(c.realX + distance, static_cast<double>(c.x)) : std::max(c.realX - distance, static_cast<double>(c.x));
+    c.realY = c.realY < c.y ? std::min(c.realY + distance, static_cast<double>(c.y)) : std::max(c.realY - distance, static_cast<double>(c.y));
+}
+void Session::updateCharacter(Character& c, bool dash, int idlePattern) {
+  const auto object = runtimeHooks_ && runtimeHooks_->characterLifecycle ? runtimeCharacterFor(c) : nullptr;
+  if (!c.moving() && c.jumpCount <= 0 && (!object || !runtimeHooks_->characterLifecycle(object, "updateStop"))) updateCharacterStop(c);
   if (c.jumpCount > 0) {
     --c.jumpCount;
     c.realX = (c.realX * c.jumpCount + c.x) / (c.jumpCount + 1.0);
     c.realY = (c.realY * c.jumpCount + c.y) / (c.jumpCount + 1.0);
     if (c.jumpCount == 0) { c.x = roundMapX(c.x); c.y = roundMapY(c.y); c.realX = c.x; c.realY = c.y; }
   } else if (c.moving()) {
-    const double scale = database_["tiledMaps"][std::to_string(mapId_)]["movementScale"].number(1);
-    const double distance = std::pow(2.0, c.moveSpeed + (dash ? 1 : 0)) / 256 * scale;
-    c.realX = c.realX < c.x ? std::min(c.realX + distance, static_cast<double>(c.x)) : std::max(c.realX - distance, static_cast<double>(c.x));
-    c.realY = c.realY < c.y ? std::min(c.realY + distance, static_cast<double>(c.y)) : std::max(c.realY - distance, static_cast<double>(c.y));
+    if (!object || !runtimeHooks_->characterLifecycle(object, "updateMove")) updateCharacterMove(c, dash);
   }
   bool normal = &c != &vehicles_[2].character;
   for (const auto& event : events_) if (&event.character == &c) normal = event.priority == 1;
@@ -648,16 +690,8 @@ void Session::startEvent(int x, int y, bool action) {
       const bool samePosition = x == player_.x && y == player_.y;
       if (samePosition == (e.priority == 1)) continue;
       if (map()["events"][e.id]["pages"][e.page]["list"].arrayLength() <= 1) continue;
-      if (!e.locked && e.trigger <= 2) {
-        e.locked = true;
-        e.prelockDirection = e.character.direction;
-        if (!e.character.directionFix) {
-          const int horizontal = static_cast<int>(deltaMapX(player_.x, e.character.x)), vertical = static_cast<int>(deltaMapY(player_.y, e.character.y));
-          if (std::abs(horizontal) > std::abs(vertical)) e.character.direction = horizontal > 0 ? 6 : 4;
-          else if (vertical) e.character.direction = vertical > 0 ? 2 : 8;
-        }
-      }
-      e.starting = true;
+      const auto object = runtimeCharacter(e.id);
+      if (!runtimeHooks_ || !runtimeHooks_->characterLifecycle || !runtimeHooks_->characterLifecycle(object, "start")) runtimeCharacterCommand(object, "start", {});
     }
   }
 }
@@ -758,7 +792,7 @@ Value Session::gameDataOperand(int type, int first, int second, const Interprete
     if (battle_.active || (first >= 0 && context.mapId != mapId_)) return 0;
     const auto* character = routeCharacter(first, context);
     if (!character) return 0;
-    const auto& tiled = database_["tiledMaps"][std::to_string(mapId_)];
+    const auto& tiled = tiledMapData(mapId_);
     const int tw = tiled.null() ? 48 : tiled["tilewidth"].integer(48);
     const int th = tiled.null() ? 48 : tiled["tileheight"].integer(48);
     const int width = map()["width"].integer(), height = map()["height"].integer();
@@ -1510,6 +1544,44 @@ void Session::updateMessageWindow() {
 }
 void Session::updateTimer() { dispatchGameDataMutation("timer","update",{true}); }
 
+void Session::updatePlayerNonmoving(bool wasMoving, bool okBlockedByMessage) {
+    if (!player_.moving() && !interpreter_.running) {
+      bool started = false;
+      if (wasMoving) {
+        for (int id : partyMembers()) actorWalk(actors_.at(id));
+        startEvent(player_.x, player_.y, false);
+        started = setupStartingMapEvent();
+      }
+      if (!started && !message_.busy && !pendingTransfer_ && !player_.routeForcing && !followersGathering_ && !vehicleGettingOn_ && !vehicleGettingOff_) {
+        bool acted = false;
+        if (currentInput_.ok && !okBlockedByMessage) {
+          acted = toggleVehicle();
+          if (!acted) {
+            startEvent(player_.x, player_.y, true);
+            acted = setupStartingMapEvent();
+            if (!acted) {
+              const int frontX = roundMapX(player_.x + dx(player_.direction)), frontY = roundMapY(player_.y + dy(player_.direction));
+              startEvent(frontX, frontY, true); startEvent(frontX, frontY, false);
+              acted = setupStartingMapEvent();
+              if (!acted && tileFlag(frontX, frontY, 128)) {
+                const int farX = roundMapX(frontX + dx(player_.direction)), farY = roundMapY(frontY + dy(player_.direction));
+                startEvent(farX, farY, true); startEvent(farX, farY, false);
+                acted = setupStartingMapEvent();
+              }
+            }
+          }
+        }
+        if (!acted && destination_) {
+          acted = triggerDestinationAction();
+          if (acted) setupStartingMapEvent();
+        }
+        if (!acted) {
+          if (wasMoving && !pendingScene_) advanceEncounter();
+          else if (!wasMoving) destination_.reset();
+        }
+      }
+    }
+}
 void Session::step(const Input& input) { step(input, true, true, true); }
 void Session::stepMapScene(const Input& input) { step(input, false, false, false); }
 void Session::updateMapSceneDestination(const Input& input) {
@@ -1555,7 +1627,8 @@ void Session::step(const Input& input, bool mapDestination, bool mapFastForward,
     const double previousX = player_.realX, previousY = player_.realY;
     const bool wasMoving = player_.moving();
     if (!player_.moving()) playerDashing_ = ((input.dash != alwaysDash_) || destination_.has_value()) && !map()["disableDashing"].boolean() && !player_.routeForcing && vehicleType_ < 0;
-    if (!pendingTransfer_ && !interpreter_.running && !message_.busy && !player_.moving() && player_.jumpCount == 0 && !player_.routeForcing && !followersGathering_ && !vehicleGettingOn_ && !vehicleGettingOff_ && (vehicleType_ != 2 || vehicles_[2].altitude >= 48)) {
+    const auto inputOverride = runtimeHooks_ && runtimeHooks_->characterQuery ? runtimeHooks_->characterQuery(runtimeCharacter(-1), "moveByInput", {}) : std::optional<Value>{};
+    if (!inputOverride && !pendingTransfer_ && !interpreter_.running && !message_.busy && !player_.moving() && player_.jumpCount == 0 && !player_.routeForcing && !followersGathering_ && !vehicleGettingOn_ && !vehicleGettingOff_ && (vehicleType_ != 2 || vehicles_[2].altitude >= 48)) {
       const int direction = input.direction ? input.direction : destination_ ? findDirectionTo(player_, (*destination_)[0], (*destination_)[1]) : 0;
       if (direction) {
         if (!move(player_, direction)) startEvent(roundMapX(player_.x + dx(direction)), roundMapY(player_.y + dy(direction)), false);
@@ -1563,7 +1636,7 @@ void Session::step(const Input& input, bool mapDestination, bool mapFastForward,
     }
     updateCharacter(player_, playerDashing_);
     if (savedCamera_) {
-      const auto& tiled = database_["tiledMaps"][std::to_string(mapId_)];
+      const auto& tiled = tiledMapData(mapId_);
       const double visibleX = static_cast<double>(screenWidth_) / tiled["tilewidth"].number(48);
       const double visibleY = static_cast<double>(screenHeight_) / tiled["tileheight"].number(48);
       const std::array<double, 2> old{previousX, previousY}, now{player_.realX, player_.realY};
@@ -1582,42 +1655,9 @@ void Session::step(const Input& input, bool mapDestination, bool mapFastForward,
     }
     updateMapDisplay();
     updateVehicles();
-    if (!player_.moving() && !interpreter_.running) {
-      bool started = false;
-      if (wasMoving) {
-        for (int id : partyMembers()) actorWalk(actors_.at(id));
-        startEvent(player_.x, player_.y, false);
-        started = setupStartingMapEvent();
-      }
-      if (!started && !message_.busy && !pendingTransfer_ && !player_.routeForcing && !followersGathering_ && !vehicleGettingOn_ && !vehicleGettingOff_) {
-        bool acted = false;
-        if (ok && !okBlockedByMessage) {
-          acted = toggleVehicle();
-          if (!acted) {
-            startEvent(player_.x, player_.y, true);
-            acted = setupStartingMapEvent();
-            if (!acted) {
-              const int frontX = roundMapX(player_.x + dx(player_.direction)), frontY = roundMapY(player_.y + dy(player_.direction));
-              startEvent(frontX, frontY, true); startEvent(frontX, frontY, false);
-              acted = setupStartingMapEvent();
-              if (!acted && tileFlag(frontX, frontY, 128)) {
-                const int farX = roundMapX(frontX + dx(player_.direction)), farY = roundMapY(frontY + dy(player_.direction));
-                startEvent(farX, farY, true); startEvent(farX, farY, false);
-                acted = setupStartingMapEvent();
-              }
-            }
-          }
-        }
-        if (!acted && destination_) {
-          acted = triggerDestinationAction();
-          if (acted) setupStartingMapEvent();
-        }
-        if (!acted) {
-          if (wasMoving && !pendingScene_) advanceEncounter();
-          else if (!wasMoving) destination_.reset();
-        }
-      }
-    }
+    const auto playerObject = runtimeCharacter(-1);
+    const auto handledNonmoving = runtimeHooks_ && runtimeHooks_->characterQuery ? runtimeHooks_->characterQuery(playerObject, "updateNonmoving", {wasMoving}) : std::optional<Value>{};
+    if (!handledNonmoving) updatePlayerNonmoving(wasMoving, okBlockedByMessage);
     updateFollowers();
     if (!player_.moving() && player_.jumpCount <= 0) player_.bushDepth = tileFlag(player_.x, player_.y, 64) && player_.characterName.find('!') >= 2 ? 12 : 0;
     updateTimer();

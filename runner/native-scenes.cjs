@@ -397,6 +397,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   Container.prototype.canvasToLocalX = function(x) { return api.invoke(entry(this).handle, 'canvasLocalX', x); };
   Container.prototype.canvasToLocalY = function(y) { return api.invoke(entry(this).handle, 'canvasLocalY', y); };
   Object.defineProperty(Sprite.prototype, 'spriteId', { configurable: true, get() { return Number(entry(this).handle.identity); } });
+  Sprite._counter = 0;
   function Sprite_Button() { this.initialize.apply(this, arguments); }
   inherit(Sprite_Button, Sprite);
   Sprite_Button.prototype.initialize = function() { Sprite.prototype.initialize.call(this); this._clickHandler = null; this._touching = false; };
@@ -416,15 +417,190 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   function Sprite_Base() { this.initialize.apply(this, arguments); }
   inherit(Sprite_Base, Sprite);
   Sprite_Base.prototype.initialize = function() { Sprite.prototype.initialize.call(this); };
-  Sprite_Base.prototype.update = function() { Sprite.prototype.update.call(this); api.invoke(entry(this).handle, 'updateAnimations'); };
-  Sprite_Base.prototype.isAnimationPlaying = function() { return api.invoke(entry(this).handle, 'isAnimationPlaying'); };
+  Sprite_Base.prototype.update = function() {
+    Sprite.prototype.update.call(this); api.invoke(entry(this).handle, 'updateAnimations');
+    if (this._animationSprites) this._animationSprites = this._animationSprites.filter(sprite => { if (sprite.isPlaying()) return true; sprite.remove(); return false; });
+  };
+  Sprite_Base.prototype.isAnimationPlaying = function() { return Boolean(this._animationSprites?.length) || api.invoke(entry(this).handle, 'isAnimationPlaying'); };
   Sprite_Base.prototype.startAnimation = function(animation, mirror, delay) {
-    const stock = Sprite_Animation.prototype.initialize === animationInitialize && Sprite_Animation.prototype.setupRate === animationSetupRate;
+    const stock = Object.entries(nativeAnimationMethods).every(([name, original]) => Sprite_Animation.prototype[name] === original);
+    if (!stock) {
+      const sprite = new Sprite_Animation(); sprite.setup(this._effectTarget || this, animation, mirror, delay);
+      this.parent.addChild(sprite); (this._animationSprites ||= []).push(sprite); return;
+    }
     options.startAnimation(entry(this).handle, animation.id, mirror, delay, stock ? 4 : new Sprite_Animation()._rate);
   };
   function Sprite_Animation() { this.initialize.apply(this, arguments); }
   inherit(Sprite_Animation, Sprite);
-  const animationInitialize = Sprite_Animation.prototype.initialize = function() { Sprite.prototype.initialize.call(this); this._flashColor = [0, 0, 0, 0]; this._flashDuration = 0; this._screenFlashDuration = 0; this._hidingDuration = 0; this.setupRate(); };
+  const animationInitialize = Sprite_Animation.prototype.initialize = function() { Sprite.prototype.initialize.call(this); this.initMembers(); this.setupRate(); };
+  Sprite_Animation.prototype.initMembers = function() {
+      this._target = null;
+      this._animation = null;
+      this._mirror = false;
+      this._delay = 0;
+      this._rate = 4;
+      this._duration = 0;
+      this._flashColor = [0, 0, 0, 0];
+      this._flashDuration = 0;
+      this._screenFlashDuration = 0;
+      this._hidingDuration = 0;
+      this._bitmap1 = null;
+      this._bitmap2 = null;
+      this._cellSprites = [];
+      this._screenFlashSprite = null;
+      this._duplicated = false;
+      this.z = 8;
+  };
+  
+  Sprite_Animation.prototype.setup = function(target, animation, mirror, delay) {
+      this._target = target;
+      this._animation = animation;
+      this._mirror = mirror;
+      this._delay = delay;
+      if (this._animation) {
+          this.remove();
+          this.setupRate();
+          this.setupDuration();
+          this.loadBitmaps();
+          this.createSprites();
+      }
+  };
+  
+  Sprite_Animation.prototype.remove = function() {
+      if (this.parent && this.parent.removeChild(this)) {
+          this._target.setBlendColor([0, 0, 0, 0]);
+          this._target.show();
+      }
+  };
+  
+  Sprite_Animation.prototype.setupDuration = function() {
+      this._duration = this._animation.frames.length * this._rate + 1;
+  };
+  
+  Sprite_Animation.prototype.isPlaying = function() {
+      return this._duration > 0;
+  };
+  
+  Sprite_Animation.prototype.loadBitmaps = function() {
+      var name1 = this._animation.animation1Name;
+      var name2 = this._animation.animation2Name;
+      var hue1 = this._animation.animation1Hue;
+      var hue2 = this._animation.animation2Hue;
+      this._bitmap1 = ImageManager.loadAnimation(name1, hue1);
+      this._bitmap2 = ImageManager.loadAnimation(name2, hue2);
+  };
+  
+  Sprite_Animation.prototype.isReady = function() {
+      return this._bitmap1 && this._bitmap1.isReady() && this._bitmap2 && this._bitmap2.isReady();
+  };
+  
+  Sprite_Animation.prototype.createSprites = function() {
+      if (!Sprite_Animation._checker2[this._animation]) {
+          this.createCellSprites();
+          if (this._animation.position === 3) {
+              Sprite_Animation._checker2[this._animation] = true;
+          }
+          this.createScreenFlashSprite();
+      }
+      if (Sprite_Animation._checker1[this._animation]) {
+          this._duplicated = true;
+      } else {
+          this._duplicated = false;
+          if (this._animation.position === 3) {
+              Sprite_Animation._checker1[this._animation] = true;
+          }
+      }
+  };
+  
+  Sprite_Animation.prototype.createCellSprites = function() {
+      this._cellSprites = [];
+      for (var i = 0; i < 16; i++) {
+          var sprite = new Sprite();
+          sprite.anchor.x = 0.5;
+          sprite.anchor.y = 0.5;
+          this._cellSprites.push(sprite);
+          this.addChild(sprite);
+      }
+  };
+  
+  Sprite_Animation.prototype.createScreenFlashSprite = function() {
+      this._screenFlashSprite = new ScreenSprite();
+      this.addChild(this._screenFlashSprite);
+  };
+  
+  Sprite_Animation.prototype.updateMain = function() {
+      if (this.isPlaying() && this.isReady()) {
+          if (this._delay > 0) {
+              this._delay--;
+          } else {
+              this._duration--;
+              this.updatePosition();
+              if (this._duration % this._rate === 0) {
+                  this.updateFrame();
+              }
+          }
+      }
+  };
+  
+  Sprite_Animation.prototype.updateFrame = function() {
+      if (this._duration > 0) {
+          var frameIndex = this.currentFrameIndex();
+          this.updateAllCellSprites(this._animation.frames[frameIndex]);
+          this._animation.timings.forEach(function(timing) {
+              if (timing.frame === frameIndex) {
+                  this.processTimingData(timing);
+              }
+          }, this);
+      }
+  };
+  
+  Sprite_Animation.prototype.currentFrameIndex = function() {
+      return (this._animation.frames.length -
+              Math.floor((this._duration + this._rate - 1) / this._rate));
+  };
+  
+  Sprite_Animation.prototype.updateAllCellSprites = function(frame) {
+      for (var i = 0; i < this._cellSprites.length; i++) {
+          var sprite = this._cellSprites[i];
+          if (i < frame.length) {
+              this.updateCellSprite(sprite, frame[i]);
+          } else {
+              sprite.visible = false;
+          }
+      }
+  };
+  
+  Sprite_Animation.prototype.updateCellSprite = function(sprite, cell) {
+      var pattern = cell[0];
+      if (pattern >= 0) {
+          var sx = pattern % 5 * 192;
+          var sy = Math.floor(pattern % 100 / 5) * 192;
+          var mirror = this._mirror;
+          sprite.bitmap = pattern < 100 ? this._bitmap1 : this._bitmap2;
+          sprite.setFrame(sx, sy, 192, 192);
+          sprite.x = cell[1];
+          sprite.y = cell[2];
+          sprite.rotation = cell[4] * Math.PI / 180;
+          sprite.scale.x = cell[3] / 100;
+  
+          if(cell[5]){
+              sprite.scale.x *= -1;
+          }
+          if(mirror){
+              sprite.x *= -1;
+              sprite.rotation *= -1;
+              sprite.scale.x *= -1;
+          }
+  
+          sprite.scale.y = cell[3] / 100;
+          sprite.opacity = cell[6];
+          sprite.blendMode = cell[7];
+          sprite.visible = true;
+      } else {
+          sprite.visible = false;
+      }
+  };
+  Sprite_Animation._checker1 = {}; Sprite_Animation._checker2 = {};
   const animationSetupRate = Sprite_Animation.prototype.setupRate = function() { this._rate = 4; };
   Sprite_Animation.prototype.updatePosition = function() {
       if (this._animation.position === 3) {
@@ -483,7 +659,10 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
       this._hidingDuration = duration;
       this._target.hide();
   };
-  Sprite_Animation.prototype.update = function() { Sprite.prototype.update.call(this); this.updateFlash(); this.updateScreenFlash(); this.updateHiding(); };
+  Sprite_Animation.prototype.update = function() {
+    Sprite.prototype.update.call(this); this.updateMain(); this.updateFlash(); this.updateScreenFlash(); this.updateHiding();
+    Sprite_Animation._checker1 = {}; Sprite_Animation._checker2 = {};
+  };
   Sprite_Animation.prototype.updateFlash = function() {
       if (this._flashDuration > 0) {
           var d = this._flashDuration--;
@@ -699,6 +878,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   Window_Base.prototype.update = function() { Window.prototype.update.call(this); this.updateTone(); this.updateBackgroundDimmer(); };
   Window_Base.prototype.activate = function() { this.active = true; return this; };
   Window_Base.prototype.deactivate = function() { this.active = false; return this; };
+  const nativeAnimationMethods = Object.fromEntries(Object.getOwnPropertyNames(Sprite_Animation.prototype).filter(name => typeof Sprite_Animation.prototype[name] === 'function').map(name => [name, Sprite_Animation.prototype[name]]));
   function Window_Message() { this.initialize.apply(this, arguments); }
   inherit(Window_Message, Window_Base);
   Window_Message.prototype.initialize = function() {
@@ -751,6 +931,8 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   Window_Selectable.prototype.setCursorFixed = function(value) { this._cursorFixed = value; };
   Window_Selectable.prototype.reselect = function() { this.select(this._index); };
   Window_Selectable.prototype.isHorizontal = function() { return this.maxPageRows() === 1; };
+  Window_Selectable.prototype.showHelpWindow = function() { if (this._helpWindow) this._helpWindow.show(); };
+  Window_Selectable.prototype.hideHelpWindow = function() { if (this._helpWindow) this._helpWindow.hide(); };
   Window_Selectable.prototype.setHelpWindow = function(window) { this._helpWindow = window; this.callUpdateHelp(); };
   Window_Selectable.prototype.setHelpWindowItem = function(item) { if (this._helpWindow) this._helpWindow.setItem(item); };
   Window_Selectable.prototype.maxTopRow = function() { return Math.max(0, this.maxRows() - this.maxPageRows()); };
@@ -884,6 +1066,8 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   };
   Window_Command.prototype.itemTextAlign = function() { return 'left'; };
   Window_Command.prototype.findSymbol = function(symbol) { for (let i = 0; i < this.maxItems(); ++i) if (this.commandSymbol(i) === symbol) return i; return -1; };
+  Window_Command.prototype.findExt = function(ext) { return this._list.findIndex(command => command.ext === ext); };
+  Window_Command.prototype.selectExt = function(ext) { const index = this.findExt(ext); this.select(index >= 0 ? index : 0); };
   Window_Command.prototype.selectSymbol = function(symbol) { const index = this.findSymbol(symbol); this.select(index >= 0 ? index : 0); };
   const nativeWindows = {};
   const windowBases = { Window_Base, Window_Selectable, Window_Command };
@@ -1243,6 +1427,16 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   nativeWindows.Window_EquipSlot.prototype.setItemWindow = function(window) { this._itemWindow = window; this.update(); };
   nativeWindows.Window_BattleActor.prototype.actor = function() { return options.gameParty().members()[this.index()]; };
   nativeWindows.Window_BattleEnemy.prototype.enemy = function() { return options.gameTroop().aliveMembers()[this.index()]; };
+  nativeWindows.Window_MapName.prototype.drawBackground = function(x, y, width, height) {
+      var color1 = this.dimColor1();
+      var color2 = this.dimColor2();
+      this.contents.gradientFillRect(x, y, width / 2, height, color2, color1);
+      this.contents.gradientFillRect(x + width / 2, y, width / 2, height, color1, color2);
+  };
+  nativeWindows.Window_SkillList.prototype.selectLast = function() {
+    const skill = this._actor ? (options.gameParty().inBattle() ? this._actor.lastBattleSkill() : this._actor.lastMenuSkill()) : null;
+    const index = this._data.indexOf(skill); this.select(index >= 0 ? index : 0);
+  };
   nativeWindows.Window_Help.prototype.clear = function() { this.setText(''); };
   nativeWindows.Window_Help.prototype.setItem = function(item) { this.setText(item ? item.description : ''); };
   function Scene_Base() { this.initialize.apply(this, arguments); }
@@ -1260,6 +1454,17 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   Scene_Base.prototype.detachReservation = function() { ImageManager.releaseReservation(this._imageReservationId); };
   Scene_Base.prototype.updateFade = function() { api.invoke(entry(this).handle, 'updateFade'); };
   Scene_Base.prototype.update = function() { this.updateFade(); this.updateChildren(); };
+  Scene_Base.prototype.createFadeSprite = function(white) {
+      if (!this._fadeSprite) {
+          this._fadeSprite = new ScreenSprite();
+          this.addChild(this._fadeSprite);
+      }
+      if (white) {
+          this._fadeSprite.setWhite();
+      } else {
+          this._fadeSprite.setBlack();
+      }
+  };
   Scene_Base.prototype.startFadeIn = function(duration, white = false) { api.invoke(entry(this).handle, 'fade', false, duration, white); };
   Scene_Base.prototype.startFadeOut = function(duration, white = false) { api.invoke(entry(this).handle, 'fade', true, duration, white); };
   Scene_Base.prototype.fadeSpeed = function() { return 24; };
@@ -1321,6 +1526,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   Scene_MenuBase.prototype.onActorChange = function() {};
   function Window_MenuCommand() { this.initialize.apply(this, arguments); }
   inherit(Window_MenuCommand, Window_Command);
+  Window_MenuCommand.initCommandPosition = function() { this._lastCommandSymbol = null; };
   Window_MenuCommand.prototype.makeCommandList = function() {
     for (const command of options.menuCommands()) this.addCommand(command.name, command.symbol, command.enabled);
   };
@@ -1452,6 +1658,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   inherit(Scene_Skill, Scene_ItemBase);
   function Scene_Boot() { this.initialize.apply(this, arguments); }
   inherit(Scene_Boot, Scene_Base);
+  Scene_Boot.prototype.loadSystemWindowImage = function() { ImageManager.reserveSystem('Window'); };
   Scene_Boot.prototype.create = function() { Scene_Base.prototype.create.call(this); options.loadDatabase?.(); Scene_Boot.loadSystemImages(); };
   Scene_Boot.prototype.isReady = function() {
     return Scene_Base.prototype.isReady.call(this) && (options.isDatabaseReady ? options.isDatabaseReady() : true);
@@ -1497,6 +1704,48 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     this._messageWindow.subWindows().forEach(window => this.addWindow(window));
   };
   Scene_Map.prototype.createScrollTextWindow = function() { this._scrollTextWindow = new (options.sceneClass('Window_ScrollText'))(); this.addWindow(this._scrollTextWindow); };
+  Scene_Map.prototype.processMapTouch = function() {
+      if (options.touchInput().isTriggered() || this._touchCount > 0) {
+          if (options.touchInput().isPressed()) {
+              if (this._touchCount === 0 || this._touchCount >= 15) {
+                  var x = options.gameMap().canvasToMapX(options.touchInput().x);
+                  var y = options.gameMap().canvasToMapY(options.touchInput().y);
+                  options.gameTemp().setDestination(x, y);
+              }
+              this._touchCount++;
+          } else {
+              this._touchCount = 0;
+          }
+      }
+  };
+  
+  Scene_Map.prototype.updateEncounter = function() {
+     if (options.gamePlayer().executeEncounter()) {
+         SceneManager.push(options.sceneClass('Scene_Battle'));
+     }
+  };
+  
+  Scene_Map.prototype.updateCallMenu = function() {
+      if (this.isMenuEnabled()) {
+          if (this.isMenuCalled()) {
+              this.menuCalling = true;
+          }
+          if (this.menuCalling && !options.gamePlayer().isMoving()) {
+              this.callMenu();
+          }
+      } else {
+          this.menuCalling = false;
+      }
+  };
+  
+  Scene_Map.prototype.callMenu = function() {
+      options.soundManager().playOk();
+      SceneManager.push(Scene_Menu);
+      Window_MenuCommand.initCommandPosition();
+      options.gameTemp().clearDestination();
+      this._mapNameWindow.hide();
+      this._waitCount = 2;
+  };
   Scene_Map.prototype.updateDestination = function() { options.mapPhase('destination'); };
   Scene_Map.prototype.updateMain = function() { options.mapPhase('update'); };
   Scene_Map.prototype.updateMainMultiply = function() { this.updateMain(); if (this.isFastForward()) this.updateMain(); };
@@ -1743,6 +1992,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   Object.defineProperty(Graphics,'scale',{configurable:true,get() {return this._scale;},
     set(value) {if(this._scale!==value) {this._scale=value;this._updateAllElements();}}});
   Graphics._updateRealScale=function() {options.coreService('updateGraphicsScale');};
+  Graphics._createAllElements=function() { this._updateAllElements(); };
   Graphics._updateAllElements=function() {this._updateRealScale();options.coreService('updateGraphicsElements');};
   Graphics.initialize = function(width,height) {
     const result=options.coreService('initializeGraphics',width || 800,height || 600);

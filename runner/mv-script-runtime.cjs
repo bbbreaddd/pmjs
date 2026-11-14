@@ -396,7 +396,7 @@ function createScriptRuntime(engine, session, options = {}) {
   Game_Screen.prototype.realPictureId = function(id) { return scope.$gameParty.inBattle() ? id + this.maxPictures() : id; };
   Game_Screen.prototype.picture = scope.$gameScreen.picture;
   delete scope.$gameScreen.picture;
-  for (const method of ['initialize', 'clear', 'update', 'updateShake', 'onBattleStart', 'clearPictures', 'eraseBattlePictures', 'startTint', 'startFlash', 'startShake', 'startFadeOut', 'startFadeIn', 'startZoom', 'setZoom', 'changeWeather',
+  for (const method of ['initialize', 'clear', 'update', 'updateShake', 'updateWeather', 'onBattleStart', 'clearPictures', 'eraseBattlePictures', 'startTint', 'startFlash', 'startShake', 'startFadeOut', 'startFadeIn', 'startZoom', 'setZoom', 'changeWeather',
     'showPicture', 'movePicture', 'rotatePicture', 'tintPicture', 'erasePicture',
     'clearFade', 'clearTone', 'clearFlash', 'clearShake', 'clearZoom', 'clearWeather', 'brightness', 'shake', 'zoomX', 'zoomY', 'zoomScale', 'weatherType', 'weatherPower'])
     Game_Screen.prototype[method] = screenDefaults[method] = function(...args) { return engine.gameDataInvoke(session, 'screen', method, args); };
@@ -679,6 +679,8 @@ function createScriptRuntime(engine, session, options = {}) {
   installBattleData(scope, values => GuestArray.from(values));
   installBattlerBindings(scope, engine, session, actors, values => GuestArray.from(values), () => vm.runInContext('({})', context), { actionHandles, wrapAction });
   nativeActorMethods.setup = Game_Actor.prototype.setup;
+  const nativeEnemySetup = Game_Enemy.prototype.setup;
+  nativeActorMethods.displayLevelUp = Game_Actor.prototype.displayLevelUp;
   installActionBindings(scope, vm.runInContext(`(function(item, a, b, v) {
     try {
       const sign = [3, 4].includes(item.damage.type) ? -1 : 1;
@@ -746,9 +748,8 @@ function createScriptRuntime(engine, session, options = {}) {
     return engine.gameDataInvoke(session, 'map', 'autoplay', []);
   };
   const nativeMapAutorun = Game_Map.prototype.setupAutorunCommonEvent = function() {
-    const events = scope.$dataCommonEvents || engine.databaseInvoke(session, 'read', 'commonEvents');
-    for (let index = 0; index < events.length; ++index) {
-      const event = events[index];
+    for (let index = 0; index < scope.$dataCommonEvents.length; ++index) {
+      const event = scope.$dataCommonEvents[index];
       if (event && event.trigger === 1 && scope.$gameSwitches.value(event.switchId)) {
         this._interpreter.setup(event.list);
         return true;
@@ -761,7 +762,7 @@ function createScriptRuntime(engine, session, options = {}) {
     return engine.gameDataInvoke(session, 'map', 'setupScroll', []);
   };
   const mapDefaults = { setup: nativeMapSetup, initialize: nativeMapInitialize, setupScroll: nativeMapSetupScroll };
-  for (const method of ['setDisplayPos', 'scrollDown', 'scrollLeft', 'scrollRight', 'scrollUp', 'updateParallax', 'update'])
+  for (const method of ['setDisplayPos', 'scrollDown', 'scrollLeft', 'scrollRight', 'scrollUp', 'updateParallax', 'update', 'updateScroll'])
     Game_Map.prototype[method] = mapDefaults[method] = function(...args) { return engine.gameDataInvoke(session, 'map', method, args); };
   Game_Player.prototype.center = function(x, y) { scope.$gameMap.setDisplayPos(x - (scope.$gameMap.screenTileX() - 1) / 2, y - (scope.$gameMap.screenTileY() - 1) / 2); };
   gameDataDefaults.set('map', mapDefaults);
@@ -778,10 +779,12 @@ function createScriptRuntime(engine, session, options = {}) {
   };
   for (const [index, type] of ['boat', 'ship', 'airship'].entries()) Game_Map.prototype[type] = function() { return this.vehicles()[index]; };
   Game_Map.prototype.vehicle = function(type) { return this.vehicles()[['boat', 'ship', 'airship'].indexOf(type)] || null; };
-  installMapBindings(scope, engine, session, values => GuestArray.from(values), characters);
+  const nativeCharacterQueries = installMapBindings(scope, engine, session, values => GuestArray.from(values), characters);
   gameDataDefaults.get('system').setWindowTone = Game_System.prototype.setWindowTone;
   const nativeEventMethods = {};
-  for (const method of ['setupPage', 'updateSelfMovement']) Game_Event.prototype[method] = nativeEventMethods[method] = function() { return engine.characterCommand(session, characters.get(this), method, []); };
+  for (const method of ['setupPage', 'updateSelfMovement', 'setupPageSettings', 'start', 'lock', 'unlock', 'checkEventTriggerAuto', 'updateParallel']) Game_Event.prototype[method] = nativeEventMethods[method] = function() { return engine.characterCommand(session, characters.get(this), method, []); };
+  const nativeCharacterUpdates = Object.fromEntries(['updateStop', 'updateMove', 'updateRoutineMove'].map(method => [method, Game_Character.prototype[method]]));
+  const nativePlayerQueries = Object.fromEntries(['moveByInput', 'getInputDirection', 'canMove', 'executeMove', 'updateNonmoving'].map(method => [method, Game_Player.prototype[method]]));
   const nativePatternMethods = new Map([Game_CharacterBase, Game_Event].map(Type => [Type,
     Object.fromEntries(['updatePattern', 'maxPattern', 'hasStepAnime', 'resetPattern', 'setPattern'].map(method => [method, Type.prototype[method]]))]));
   const nativePageQueries = { findProperPageIndex: Game_Event.prototype.findProperPageIndex, meetsConditions: Game_Event.prototype.meetsConditions };
@@ -944,7 +947,22 @@ function createScriptRuntime(engine, session, options = {}) {
       }
       return point;
     },
+    characterQuery(handle, method, args) {
+      const Type = handle.entityId > 0 ? Game_Event : handle.entityId === -1 ? Game_Player : handle.entityId >= -7 && handle.entityId <= -5 ? Game_Vehicle : Game_Follower;
+      const object = registry.get(handle.identity)?.deref() || Type.prototype;
+      if (method === 'moveByInput' || method === 'updateNonmoving') {
+        const names = method === 'moveByInput' ? ['moveByInput', 'getInputDirection', 'canMove', 'executeMove'] : ['updateNonmoving'];
+        if (names.every(name => object[name] === nativePlayerQueries[name])) return null;
+        return { value: wrapRuntimeEntity(handle)[method](...args) };
+      }
+      if (Object.entries(nativeCharacterQueries.get(Type)).every(([name, original]) => object[name] === original) && !object.isDebugThrough()) return null;
+      return { value: wrapRuntimeEntity(handle)[method](...args) };
+    },
     characterLifecycle(handle, method) {
+      if (Object.hasOwn(nativeCharacterUpdates, method)) {
+        const Type = handle.entityId > 0 ? Game_Event : handle.entityId === -1 ? Game_Player : Game_Character;
+        if ((registry.get(handle.identity)?.deref() || Type.prototype)[method] === nativeCharacterUpdates[method]) return false;
+      }
       if (method === 'updatePattern') {
         const Type = handle.entityId > 0 ? Game_Event : handle.entityId === -1 ? Game_Player : handle.entityId >= -7 && handle.entityId <= -5 ? Game_Vehicle : Game_Follower;
         const object = registry.get(handle.identity)?.deref() || Type.prototype;
@@ -959,6 +977,7 @@ function createScriptRuntime(engine, session, options = {}) {
     actorLifecycle(handle, method, args = []) {
       const type = engine.entityField(handle, 'enemy') ? Game_Enemy : Game_Actor;
       const actor = wrapEntity(handle, type, actors);
+      if (method === 'setup' && type === Game_Enemy && actor.setup === nativeEnemySetup) return false;
       if (actor[method] === nativeActorMethods[method]) return false;
       if (method === 'makeActions' && Game_Battler.prototype.makeActions === nativeBaseMakeActions &&
           Object.entries(nativeMakeActions.get(type)).every(([name, original]) => actor[name] === original)) return false;

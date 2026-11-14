@@ -163,7 +163,7 @@ void Presentation::character(const Character& value, double cameraX, double came
   const auto flash = session_.effectColor(0, characterId);
   if (session_.effectHidden(0, characterId)) return;
   if (value.transparent || value.opacity <= 0 || (value.tileId <= 0 && value.characterName.empty())) return;
-  const auto& tiled = session_.database_["tiledMaps"][std::to_string(session_.mapId_)];
+  const auto& tiled = session_.tiledMapData(session_.mapId_);
   const int tw = tiled["tilewidth"].integer(48), th = tiled["tileheight"].integer(48);
   const bool tileImage = value.tileId > 0;
   Sprite_Character sprite;
@@ -198,7 +198,7 @@ void Presentation::character(const Character& value, double cameraX, double came
 }
 
 void Presentation::mapPictures() {
-  const auto& tiled=session_.database_["tiledMaps"][std::to_string(session_.mapId_)];
+  const auto& tiled=session_.tiledMapData(session_.mapId_);
   const int tw=tiled["tilewidth"].integer(48),th=tiled["tileheight"].integer(48);
   for(std::size_t index = 0; index < session_.pictures_.size(); ++index) {
     if (index < 1 || index > 200 || (index > 100) != session_.battle_.active) continue;
@@ -235,7 +235,7 @@ void Presentation::mapPictures() {
 }
 void Presentation::mapAmbience() {
   const auto name=session_.ambience_["name"].text();if(name.empty())return;
-  const auto& tiled=session_.database_["tiledMaps"][std::to_string(session_.mapId_)];
+  const auto& tiled=session_.tiledMapData(session_.mapId_);
   const int tw=tiled["tilewidth"].integer(48),th=tiled["tileheight"].integer(48);
   const auto& player=session_.player_;const bool object=player.characterName.find('!')<2;
   const float x=session_.ambience_["useCustomPosition"].boolean() ? session_.ambience_["x"].number() : std::floor((player.realX-cameraX_)*tw+tw/2.0+0.5);
@@ -259,7 +259,7 @@ void Presentation::mapParallax(int tileWidth, int tileHeight) {
       {0,0,float(source.width),float(source.height)},{width,height},{float(-std::floor(-ox+.5)),float(-std::floor(-oy+.5))},1,BlendMode::normal)) throw std::runtime_error("cannot queue map parallax");
 }
 void Presentation::map(bool drawNativeOverlays) {
-  const auto& tiled=session_.database_["tiledMaps"][std::to_string(session_.mapId_)];
+  const auto& tiled=session_.tiledMapData(session_.mapId_);
   if(!tiled.null()) {
     if(drawNativeOverlays)mapParallax(tiled["tilewidth"].integer(48), tiled["tileheight"].integer(48));
     tiledMap(tiled);

@@ -96,6 +96,59 @@ std::shared_ptr<RuntimeCharacter> Session::runtimeCharacterFor(Character& charac
 }
 Value Session::runtimeCharacterCommand(const std::shared_ptr<RuntimeCharacter>& object, const std::string& method, const Value::Array& arguments) {
   auto& character = object->value();
+  if (method == "isMapPassable") return characterMapPassable(arguments.at(0).integer(), arguments.at(1).integer(), arguments.at(2).integer(), character);
+  if (method == "isCollidedWithCharacters") return characterCollision(arguments.at(0).integer(), arguments.at(1).integer(), character);
+  if (method == "isOnBush") return tileFlag(character.x, character.y, 64);
+  if (method == "increaseSteps") { increaseCharacterSteps(character); return Value::undefined(); }
+  if (method == "setImage") {
+    character.characterName = arguments.at(0).text(); character.characterIndex = arguments.at(1).integer(); character.tileId = 0;
+    return Value::undefined();
+  }
+  if (method == "updateStop") { updateCharacterStop(character); return Value::undefined(); }
+  if (method == "updateMove") { updateCharacterMove(character, &character == &player_ && playerDashing_); return Value::undefined(); }
+  if (method == "updateRoutineMove") { updateRoute(character); return Value::undefined(); }
+  if (method == "makeEncounterTroopId") return makeEncounterTroopId();
+  if (method == "makeEncounterCount") { const int step = map()["encounterStep"].integer(); encounterCount_ = std::floor(random() * step) + std::floor(random() * step) + 1; return Value::undefined(); }
+  if (method == "updateNonmoving") { updatePlayerNonmoving(arguments.at(0).boolean(), false); return Value::undefined(); }
+  if (method == "loadSystemSettings" && object->id >= -7 && object->id <= -5) {
+    auto& vehicle = vehicles_[-object->id - 5];
+    const auto& data = database_["system"][object->id == -5 ? "boat" : object->id == -6 ? "ship" : "airship"];
+    vehicle.mapId = data["startMapId"].integer();
+    locateCharacter(character, data["startX"].number(), data["startY"].number());
+    character.characterName = data["characterName"].text(); character.characterIndex = data["characterIndex"].integer();
+    return Value::undefined();
+  }
+  if (method.starts_with("event.") || method == "isStarting" || method == "lock" || method == "unlock" || method == "start" || method == "setupPageSettings" || method == "updateParallel" || method == "checkEventTriggerAuto") {
+    for (auto& event : events_) if (&event.character == &character) {
+      if (method == "event.trigger") { if (!arguments.empty()) event.trigger = arguments[0].integer(); return event.trigger; }
+      if (method == "event.starting") { if (!arguments.empty()) event.starting = arguments[0].boolean(); return event.starting; }
+      if (method == "event.locked") { if (!arguments.empty()) event.locked = arguments[0].boolean(); return event.locked; }
+      if (method == "event.prelockDirection") { if (!arguments.empty()) event.prelockDirection = arguments[0].integer(); return event.prelockDirection; }
+      if (method == "isStarting") return event.starting;
+      if (method == "setupPageSettings") setupEventPageSettings(event);
+      if (method == "unlock" && event.locked) { event.locked = false; if (!character.directionFix && event.prelockDirection) character.direction = event.prelockDirection; }
+      if (method == "lock" && !event.locked) {
+        event.prelockDirection = character.direction;
+        if (!character.directionFix) {
+          const auto x = deltaMapX(player_.x, character.x), y = deltaMapY(player_.y, character.y);
+          if (std::abs(x) > std::abs(y)) character.direction = x > 0 ? 6 : 4;
+          else if (y) character.direction = y > 0 ? 2 : 8;
+        }
+        event.locked = true;
+      }
+      if (method == "start" && event.page >= 0 && map()["events"][event.id]["pages"][event.page]["list"].arrayLength() > 1) {
+        event.starting = true;
+        if (event.trigger <= 2 && (!runtimeHooks_ || !runtimeHooks_->characterLifecycle || !runtimeHooks_->characterLifecycle(object, "lock"))) runtimeCharacterCommand(object, "lock", {});
+      }
+      if (method == "checkEventTriggerAuto" && event.trigger == 3 && (!runtimeHooks_ || !runtimeHooks_->characterLifecycle || !runtimeHooks_->characterLifecycle(object, "start"))) runtimeCharacterCommand(object, "start", {});
+      if (method == "updateParallel" && event.page >= 0 && event.trigger == 4) {
+        if (!event.parallel.running) setupInterpreter(event.parallel, map()["events"][event.id]["pages"][event.page]["list"].array(), event.id);
+        advanceInterpreter(event.parallel);
+      }
+      return Value::undefined();
+    }
+    throw std::runtime_error("event is no longer attached to the current map");
+  }
   if (method == "needsMapReload") { if (!arguments.empty()) playerNeedsMapReload_ = arguments[0].boolean(); return playerNeedsMapReload_; }
   if (method == "originalPattern") {
     if (!arguments.empty()) object->originalPattern = arguments[0].integer();

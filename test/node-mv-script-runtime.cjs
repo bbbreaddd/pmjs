@@ -1416,6 +1416,22 @@ test('idle autorun queries preserve live definitions, priority, aliases and exce
   assert.throws(() => api.step(session, {}), error => error === failure);
 });
 
+test('autorun discovery observes replacement of the database during a live query', t => {
+  const data = fixture([]); data.maps[1].events = [null];
+  data.commonEvents = [null, { id: 1, trigger: 0, list: [command(0)] }];
+  const session = api.create(data); t.after(() => api.dispose(session));
+  const { scope } = createScriptRuntime(api, session);
+  scope.$dataCommonEvents = data.commonEvents; api.newGame(session);
+  const replacement = [null, null, { id: 2, trigger: 1, switchId: 1,
+    list: [variable(15, 99), command(230, [30]), command(0)] }];
+  const setup = scope.Game_Interpreter.prototype.setup; let selected;
+  scope.Game_Interpreter.prototype.setup = function(list, ...args) { selected = list; return setup.call(this, list, ...args); };
+  Object.defineProperty(data.commonEvents[1], 'trigger', { get() { scope.$dataCommonEvents = replacement; return 0; } });
+  scope.$gameSwitches.setValue(1, true); api.step(session, {});
+  assert.equal(scope.$gameVariables.value(15), 99);
+  assert.equal(selected, replacement[2].list);
+});
+
 test('map parallel common events retain setup membership while refreshing live switch state', t => {
   const data = fixture([]);
   data.commonEvents = [null,
@@ -1715,4 +1731,72 @@ test('a retained action owns its original script subject across collection and a
   assert.ok(subject.deref(), 'retaining an action must retain its subject');
   assert.equal(action.subject(), subject.deref());
   assert.notEqual(action.subject(), scope.$gameActors.actor(1));
+});
+
+
+test('native movement enters passability aliases and saved originals use native map and collision data', t => {
+  const { scope } = create(t, []), player = scope.$gamePlayer;
+  const canPass = scope.Game_CharacterBase.prototype.canPass;
+  assert.equal(player.canPass(1, 1, 6), true);
+  assert.equal(player.canPass(2, 1, 6), false, 'the native event occupies the next tile');
+  let checks = 0;
+  scope.Game_Player.prototype.canPass = function(x, y, direction) { ++checks; return direction !== 6 && canPass.call(this, x, y, direction); };
+  player.moveStraight(6); assert.equal(player.x, 1); assert.equal(player.isMovementSucceeded(), false); assert.equal(checks, 1);
+  delete scope.Game_Player.prototype.canPass;
+  const mapPassable = scope.Game_CharacterBase.prototype.isMapPassable;
+  scope.Game_Player.prototype.isMapPassable = function() { return false; };
+  player.moveStraight(2); assert.equal(player.y, 1); assert.equal(player.isMovementSucceeded(), false);
+  delete scope.Game_Player.prototype.isMapPassable;
+  assert.equal(mapPassable.call(player, 1, 1, 2), true);
+  scope.Game_Player.prototype.canPassDiagonally = function() { return false; };
+  player.processMoveCommand({ code: 5, parameters: [] }); assert.equal(player.x, 1); assert.equal(player.y, 1);
+  delete scope.Game_Player.prototype.canPassDiagonally;
+  player.setThrough(true); player.moveForward(); assert.equal(player.y, 2);
+  player.setOpacity(123); player.setWalkAnime(false); player.setStepAnime(true);
+  assert.equal(player.opacity(), 123); assert.equal(player.hasWalkAnime(), false); assert.equal(player.hasStepAnime(), true);
+  player.setImage('Actor', 3); assert.equal(player.characterName(), 'Actor'); assert.equal(player.characterIndex(), 3);
+});
+
+test('native level changes and enemy setup invoke plugin aliases with live battlers', t => {
+  const database = fixture([]);
+  database.actors[1].maxLevel = 3;
+  database.classes[1].expParams = [30, 20, 30, 30];
+  database.classes[1].learnings.push({ level: 2, skillId: 3 });
+  database.skills.push({ id: 3, name: 'New skill' });
+  database.enemies = [null, { id: 1, name: 'Enemy', gold: 12, params: [50, 10, 5, 5, 5, 5, 5, 5], dropItems: [{ kind: 1, dataId: 1, denominator: 1 }] }];
+  database.troops = [null, { members: [{ enemyId: 1, x: 30, y: 40 }], pages: [] }];
+  const session = api.create(database); t.after(() => api.dispose(session));
+  const runtime = createScriptRuntime(api, session), scope = runtime.scope;
+  let learned, setupCalls = 0;
+  scope.Game_Actor.prototype.displayLevelUp = function(skills) { learned = skills; };
+  const setup = scope.Game_Enemy.prototype.setup;
+  scope.Game_Enemy.prototype.setup = function(...args) { ++setupCalls; setup.apply(this, args); this.pluginSetup = true; };
+  api.newGame(session);
+  const actor = scope.$gameActors.actor(1);
+  actor.changeLevel(2, true);
+  assert.equal(actor.level, 2); assert.equal(learned[0].id, 3);
+  assert.equal(actor.currentLevelExp(), actor.currentExp());
+  assert.ok(actor.nextLevelExp() > actor.currentLevelExp());
+  scope.$gameTroop.setup(1);
+  const enemy = scope.$gameTroop.members()[0];
+  assert.equal(setupCalls, 1); assert.equal(enemy.pluginSetup, true);
+  assert.equal(enemy.hp, 50); assert.equal(enemy.screenX(), 30); assert.equal(enemy.enemyId(), 1);
+  assert.equal(enemy.gold(), 12); assert.equal(enemy.name(), 'Enemy');
+  assert.equal(enemy.makeDropItems()[0], scope.$dataItems[1]);
+  scope.$gameTroop.select(enemy); assert.equal(enemy.isSelected(), true);
+  scope.$gameTroop.select(null); assert.equal(enemy.isSelected(), false);
+});
+
+test('native player movement and character interpolation honor saved plugin originals', t => {
+  const { scope, step } = create(t, []);
+  scope.$gameMap.event(1)._trigger = 0;
+  const original = scope.Game_Player.prototype.moveByInput;
+  let movementCalls = 0, interpolationCalls = 0;
+  scope.Game_Player.prototype.getInputDirection = function() { return 2; };
+  scope.Game_Player.prototype.moveByInput = function() { ++movementCalls; return original.call(this); };
+  const interpolate = scope.Game_CharacterBase.prototype.updateMove;
+  scope.Game_Player.prototype.updateMove = function() { ++interpolationCalls; return interpolate.call(this); };
+  step();
+  assert.equal(movementCalls, 1); assert.equal(scope.$gamePlayer.y, 2); assert.equal(interpolationCalls, 1);
+  assert.ok(scope.$gamePlayer._realY > 1 && scope.$gamePlayer._realY < 2);
 });

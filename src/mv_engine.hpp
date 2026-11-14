@@ -177,6 +177,7 @@ struct RuntimeHooks {
   std::function<void(const std::shared_ptr<RuntimeObject>&, const std::string&)> characterScript;
   std::function<bool(const std::shared_ptr<RuntimeObject>&, const std::string&, const Value::Array&)> actorLifecycle;
   std::function<bool(const std::shared_ptr<RuntimeObject>&, const std::string&)> characterLifecycle;
+  std::function<std::optional<Value>(const std::shared_ptr<RuntimeObject>&, const std::string&, const Value::Array&)> characterQuery;
   std::function<std::optional<std::array<double, 2>>(const std::shared_ptr<RuntimeObject>&)> characterPosition;
   std::function<bool(const std::shared_ptr<RuntimeObject>&, int)> actorSpriteHome;
   std::function<bool(const std::shared_ptr<RuntimeObject>&, const std::shared_ptr<RuntimeObject>&)> enemySpriteBattler;
@@ -572,6 +573,8 @@ class Session {
   void setDatabaseReader(std::shared_ptr<ValueReader> reader);
   void setMapData(int id,Value data);
   const Value& mapData(int id) const;
+  void setTiledMapData(int id, Value data);
+  const Value& tiledMapData(int id) const;
   const Value& map() const;
   int screenWidth() const { return screenWidth_; }
   int screenHeight() const { return screenHeight_; }
@@ -751,11 +754,17 @@ class Session {
   void refresh();
   bool pageEligible(const Value& page, int eventId) const;
   bool passable(int x, int y, int direction, const Character& character) const;
+  bool passableBase(int x, int y, int direction, const Character& character) const;
+  bool characterMapPassable(int x, int y, int direction, const Character& character) const;
+  bool characterCollision(int x, int y, const Character& character) const;
   bool tilePassage(int x, int y, int bit) const;
   bool tileFlag(int x, int y, int flag) const;
   bool move(Character& character, int direction);
   bool moveDiagonal(Character& character, int horizontal, int vertical);
   void increaseCharacterSteps(Character& character);
+  void updateCharacterMove(Character& character, bool dash);
+  void updateCharacterStop(Character& character);
+  void updatePlayerNonmoving(bool wasMoving, bool okBlockedByMessage);
   void updateCharacter(Character& character, bool dash, int idlePattern = 1);
   void locateCharacter(Character& character, double x, double y);
   void jumpCharacter(Character& character, int xPlus, int yPlus);
@@ -808,6 +817,7 @@ class Session {
   void updateMapScroll();
   void updateMapDisplay();
   void updateSelfMovement(Event& event);
+  void setupEventPageSettings(Event& event);
   void setupEventPage(Event& event);
   bool loopHorizontal() const;
   bool loopVertical() const;
@@ -834,6 +844,7 @@ class Session {
   void gainItem(int kind, int id, double amount, bool includeEquipped);
   void refreshIfNeeded();
   Value database_;
+  std::map<int, Value> runtimeTiledMaps_;
   Value runtimeMapData_;
   int runtimeMapId_ = -1;
   bool gameObjectsInitialized_ = false;

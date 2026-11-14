@@ -52,6 +52,15 @@ Value Session::runtimeBattlerCommand(const std::shared_ptr<RuntimeActor>& actor,
     }
     return battler.damagePopup;
   }
+  if (method == "expForLevel") return actorExpForLevel(battler, id);
+  if (method == "enemySetup") {
+    const auto& source = database_["enemies"][id];
+    if (source.null()) throw std::invalid_argument("unknown enemy");
+    battler.id = id; battler.enemy = true; battler.originalName = source["name"].text(); battler.name = battler.originalName;
+    battler.screenX = values[1].number(); battler.screenY = values[2].number();
+    if (!dispatchActorMethod(battler, "recoverAll", {}, actor)) recover(battler);
+    return Value::undefined();
+  }
   if (method == "setup") {
     const auto& source = database_["actors"][id];
     if (source.null()) throw std::invalid_argument("unknown actor");

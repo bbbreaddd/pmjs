@@ -227,6 +227,7 @@ void Session::setupTroopBase(int troop) {
     enemy.originalName = database_["enemies"][enemy.id]["name"].text(); enemy.name = enemy.originalName;
     recover(enemy); battle_.enemies.push_back(enemy);
   }
+  for (auto& enemy : battle_.enemies) dispatchActorMethod(enemy, "setup", {enemy.id, enemy.screenX, enemy.screenY});
   BattleMechanics::makeUniqueNames(battle_.enemies, battle_.nameCounts, database_["system"]["locale"].text().starts_with("ja") || database_["system"]["locale"].text().starts_with("zh") || database_["system"]["locale"].text().starts_with("ko"));
 }
 void Session::increaseTroopTurnBase() {

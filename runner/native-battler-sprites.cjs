@@ -4,6 +4,9 @@
 
 function installBattlerSprites(scope) {
   const { Sprite_Battler, Sprite_Actor, Sprite_Enemy, Sprite_Base, Sprite, Sprite_Weapon, Sprite_StateOverlay, Sprite_StateIcon, ImageManager, Graphics } = scope;
+  Sprite_Actor.prototype.setupWeaponAnimation = function() {
+    if (this._actor.isWeaponAnimationRequested()) { this._weaponSprite.setup(this._actor.weaponImageId()); this._actor.clearWeaponAnimation(); }
+  };
   Sprite_Battler.prototype.initMembers = function() {
       this.anchor.x = 0.5;
       this.anchor.y = 1;

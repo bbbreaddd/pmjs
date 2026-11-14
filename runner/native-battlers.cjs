@@ -531,6 +531,33 @@ function installBattlerBindings(scope, engine, session, handles, createArray, cr
   actor.learnSkill = function(id) { write(this, 'skills', [...new Set(read(this, 'skills').concat(id))].sort((a, b) => a - b)); };
   actor.forgetSkill = function(id) { write(this, 'skills', read(this, 'skills').filter(value => value !== id)); };
   actor.maxLevel = function() { return this.actor().maxLevel; };
+  actor.expForLevel = function(level) { return invoke(this, 'expForLevel', level); };
+  actor.currentLevelExp = function() { return this.expForLevel(this._level); };
+  actor.nextLevelExp = function() { return this.expForLevel(this._level + 1); };
+  actor.changeLevel = function(level, show) { this.changeExp(this.expForLevel(Math.max(1, Math.min(this.maxLevel(), level))), show); };
+  actor.benchMembersExpRate = function() { return scope.$dataSystem.optExtraExp ? 1 : 0; };
+  actor.finalExpRate = function() { return this.exr * (this.isBattleMember() ? 1 : this.benchMembersExpRate()); };
+  actor.displayLevelUp = function(newSkills) {
+    const format = (text, ...args) => text.replace(/%([0-9]+)/g, (match, index) => args[Number(index) - 1]);
+    scope.$gameMessage.newPage();
+    scope.$gameMessage.add(format(scope.TextManager.levelUp, this._name, scope.TextManager.level, this._level));
+    for (const skill of newSkills) scope.$gameMessage.add(format(scope.TextManager.obtainSkill, skill.name));
+  };
+  actor.performVictory = function() { if (this.canMove()) this.requestMotion('victory'); };
+  enemy.enemyId = function() { return this._enemyId; };
+  enemy.gold = function() { return this.enemy().gold; };
+  enemy.name = function() { return this.originalName() + (this._plural ? this._letter : ''); };
+  enemy.originalName = function() { return this.enemy().name; };
+  for (const field of ['letter', 'plural']) Object.defineProperty(enemy, '_' + field, { configurable: true,
+    get() { return engine.entityField(handles.get(this), field); },
+    set(value) { engine.entityField(handles.get(this), field, value); }
+  });
+  enemy.setup = function(id, x, y) { invoke(this, 'enemySetup', id, x, y); };
+  enemy.dropItemRate = function() { return scope.$gameParty.hasDropItemDouble() ? 2 : 1; };
+  enemy.itemObject = function(kind, id) { return kind === 1 ? scope.$dataItems[id] : kind === 2 ? scope.$dataWeapons[id] : kind === 3 ? scope.$dataArmors[id] : null; };
+  enemy.makeDropItems = function() {
+    return this.enemy().dropItems.reduce((items, drop) => drop.kind > 0 && Math.random() * drop.denominator < this.dropItemRate() ? items.concat(this.itemObject(drop.kind, drop.dataId)) : items, createArray([]));
+  };
   actor.isMaxLevel = function() { return this._level >= this.maxLevel(); };
   actor.isClass = function(value) { return this.currentClass() === value; };
   actor.isSkillWtypeOk = function(skill) { return (!skill.requiredWtypeId1 && !skill.requiredWtypeId2) || this.weapons().some(item => item.wtypeId === skill.requiredWtypeId1 || item.wtypeId === skill.requiredWtypeId2); };

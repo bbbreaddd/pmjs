@@ -64,6 +64,16 @@ std::array<double, 4> Session::screenFlashColor() const {
 Value Session::invokeScreenBase(const std::string& method, const Value::Array& arguments) {
   if (method == "maxPictures") return 100;
   if (method == "update") { updateScreenStateBase(); return Value::undefined(); }
+  if (method == "updateWeather") {
+    ensureScreenEffects(); auto& state = std::get<Object>(screenEffects_.data);
+    const int duration = state["_weatherDuration"].integer();
+    if (duration > 0) {
+      state["_weatherPower"] = (state["_weatherPower"].number() * (duration - 1) + state["_weatherPowerTarget"].number()) / duration;
+      state["_weatherDuration"] = duration - 1;
+      if (duration == 1 && state["_weatherPowerTarget"].number() == 0) state["_weatherType"] = "none";
+    }
+    return Value::undefined();
+  }
   if (method == "updateShake") { updateScreenShake(); return Value::undefined(); }
   if (method == "initialize") { dispatchGameDataMutation("screen", "clear", {}); return Value::undefined(); }
   if (method == "clear" || method == "onBattleStart") {
@@ -206,7 +216,7 @@ void Session::updateScreenStateBase() {
   dispatchGameDataMutation("screen", "updateShake", {});
   ensureScreenEffects(); auto& state = std::get<Object>(screenEffects_.data);
   int duration = 0;
-  for (const auto& name : {"zoom", "weather"}) {
+  for (const auto& name : {"zoom"}) {
     const std::string prefix = std::string("_") + name;
     duration = state[prefix + "Duration"].integer();
     if (duration <= 0) continue;
@@ -215,6 +225,7 @@ void Session::updateScreenStateBase() {
     state[prefix + "Duration"] = duration - 1;
     if (std::string(name) == "weather" && duration == 1 && state["_weatherPowerTarget"].number() == 0) state["_weatherType"] = "none";
   }
+  dispatchGameDataMutation("screen", "updateWeather", {});
   const auto activePictures = pictures_;
   for (const auto& picture : activePictures) {
     if (!picture) continue;

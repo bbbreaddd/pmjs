@@ -7,6 +7,7 @@ const { installActionEffects } = require('./native-action-effects.cjs');
 function installActionBindings(scope, evaluateFormula) {
   const Action = scope.Game_Action, action = Action.prototype;
   installActionEffects(Action);
+  action.isValid = function() { return (this._forcing && this.item()) || this.subject().canUse(this.item()); };
   action.evalDamageFormula = function(target) { return evaluateFormula.call(this, this.item(), this.subject(), target, scope.$gameVariables._data); };
   action.numRepeats = function() {
       let repeats = this.item().repeats;

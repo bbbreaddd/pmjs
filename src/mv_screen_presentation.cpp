@@ -52,7 +52,7 @@ void Presentation::weather() {
   }
   coreWeather_->type=session_.screenEffects_["_weatherType"].text();
   coreWeather_->power=session_.screenEffects_["_weatherPower"].number();coreWeather_->width=core_.width();coreWeather_->height=core_.height();
-  const auto& tiled=session_.database_["tiledMaps"][std::to_string(session_.mapId_)];
+  const auto& tiled=session_.tiledMapData(session_.mapId_);
   coreWeather_->origin={cameraX_*tiled["tilewidth"].integer(48),cameraY_*tiled["tileheight"].integer(48)};
   coreWeather_->synchronize(session_.ticks_);coreWeather_->render(core_.renderer());
 }

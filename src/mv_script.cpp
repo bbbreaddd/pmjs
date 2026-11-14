@@ -53,7 +53,7 @@ Value Session::invokeGameDataBase(const std::string& kind, const std::string& me
     if (method == "update") {
     refreshIfNeeded();
     if (arguments.empty() || arguments[0].boolean()) updateInterpreter();
-    updateMapScroll();
+    dispatchGameDataMutation("map", "updateScroll", {});
     for (auto& event : events_) {
       updateCharacter(event.character, false, event.originalPattern);
       if (event.page < 0 || event.trigger != 4) continue;
@@ -66,6 +66,28 @@ Value Session::invokeGameDataBase(const std::string& kind, const std::string& me
       return Value::undefined();
     }
     if (method == "initialize") { initializeMap(); return Value::undefined(); }
+    if (method == "updateScroll") { updateMapScroll(); return Value::undefined(); }
+    if (method == "regionId") {
+      const int x = arguments.at(0).integer(), y = arguments.at(1).integer(), width = map()["width"].integer(), height = map()["height"].integer();
+      return x >= 0 && y >= 0 && x < width && y < height ? map()["data"][(5 * height + y) * width + x].integer() : 0;
+    }
+    if (method == "terrainTag") {
+      const int x = arguments.at(0).integer(), y = arguments.at(1).integer(), width = map()["width"].integer(), height = map()["height"].integer();
+      if (x < 0 || y < 0 || x >= width || y >= height) return 0;
+      const auto& flags = database_["tilesets"][mapState_.tilesetId]["flags"];
+      for (int z = 3; z >= 0; --z) { const int tag = flags[map()["data"][(z * height + y) * width + x].integer()].integer() >> 12; if (tag > 0) return tag; }
+      return 0;
+    }
+    if (method == "checkLayeredTilesFlags") return tileFlag(arguments.at(0).integer(), arguments.at(1).integer(), arguments.at(2).integer());
+    if (method == "isDashDisabled") return map()["disableDashing"].boolean();
+    if (method == "isNameDisplayEnabled") return mapState_.nameDisplay;
+    if (method == "isAnyEventStarting") return std::any_of(events_.begin(), events_.end(), [](const Event& event) { return event.starting; });
+    if (method == "eraseEvent") {
+      for (auto& event : events_) if (event.id == arguments.at(0).integer()) event.erased = true;
+      refreshNeeded_ = true; refreshIfNeeded(); return Value::undefined();
+    }
+    if (method == "changeTileset") { mapState_.tilesetId = arguments.at(0).integer(); ++presentationRevision_; refreshNeeded_ = true; refreshIfNeeded(); return Value::undefined(); }
+    if (method == "changeBattleback") { mapState_.battleback1Name = arguments.at(0); mapState_.battleback2Name = arguments.at(1); ++presentationRevision_; return Value::undefined(); }
     if (method == "setDisplayPos") { setDisplayPosition(arguments.at(0).number(), arguments.at(1).number()); return Value::undefined(); }
     if (method == "updateParallax") { updateMapParallax(); return Value::undefined(); }
     if (method == "scrollDown" || method == "scrollLeft" || method == "scrollRight" || method == "scrollUp") {

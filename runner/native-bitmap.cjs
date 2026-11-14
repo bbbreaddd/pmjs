@@ -342,13 +342,18 @@ function createImageManager(native, Bitmap, RequestQueue = createRequestQueueCla
     if(!item) {
       api.cacheImage(state.runtime,'remove',key);state.records.delete(key);return;
     }
-    let result=state.records.get(key);
+    const bitmap=item.bitmap, handle=factory.handle(bitmap), touch=Number(item.touch);
+    const reservationId=item.reservationId==null?null:reservation(item.reservationId);
+    const previous=state.records.get(key);
+    if(previous && previous.handle===handle && Object.is(previous.touch,touch) && previous.reservationId===reservationId)return;
+    let result=previous;
     if(!result)result=api.cacheImage(state.runtime,'entry',key);
-    if(!result)result=api.cacheImage(state.runtime,'add',key,factory.handle(item.bitmap));
-    api.cacheImage(state.runtime,'setEntry',key,{bitmap:factory.handle(item.bitmap),touch:Number(item.touch),
-      reservationId:item.reservationId==null?null:reservation(item.reservationId)});
-    factory.manage(item.bitmap);known.set(result.identity,new WeakRef(item.bitmap));state.roots.set(result.identity,item.bitmap);
-    state.records.set(key,{identity:result.identity});
+    if(!result)result=api.cacheImage(state.runtime,'add',key,handle);
+    api.cacheImage(state.runtime,'setEntry',key,{bitmap:handle,touch,reservationId});
+    if(!previous || previous.handle!==handle) {
+      factory.manage(bitmap);known.set(result.identity,new WeakRef(bitmap));state.roots.set(result.identity,bitmap);
+    }
+    state.records.set(key,{identity:result.identity,handle,touch,reservationId});
   }
   function synchronizeItems(cache) {
     const state=states.get(cache),items=cache._items,keys=Object.keys(items),live=new Set(keys);
