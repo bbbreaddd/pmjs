@@ -537,7 +537,8 @@ test('every Canvas painting entry point invalidates a solid-mask proof', () => {
   for (const [name, draw] of Object.entries(operations)) {
     const h = harness(), canvas = new h.CanvasElement(); canvas.width = canvas.height = 10;
     h.PMJS.fonts = { resolveDescriptor: () => ({ size: 18, faces: [{ path: 'fixture.ttf' }] }) };
-    Object.assign(h.NativeHost.canvas, { writePixels() {}, blur() {}, blurMv: () => true });
+    Object.assign(h.NativeHost.canvas, { writePixels() {}, blur() {}, blurMv: () => true,
+      writePremultipliedPixels() {}, readPremultipliedPixels: (_h, _x, _y, w, hh) => new Uint8Array(w * hh * 4) });
     const c = canvas.getContext('2d'), owner = h.PMJS.web.canvas;
     owner.trackMaskFill(c, 0, 0, 10, 10, 'white', () => c.fillRect(0, 0, 10, 10));
     assert.ok(owner.unitMaskRect(canvas));

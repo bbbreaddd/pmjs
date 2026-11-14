@@ -188,8 +188,10 @@ class CanvasStore {
   bool rotateHue(CanvasHandle handle, double offset);
   bool blur(CanvasHandle handle);
   // Two additive 3x3 passes over opaque black, using Skia65 byte scaling.
-  // Returns false without painting when raw RGB exceeds alpha.
-  bool blurMv(CanvasHandle handle);
+  // scale: optional R,G,B x 256 per-sample "lighter" scale table; laneWidth: the rasterizer's
+  // measured source-over batch width (see blurMvCanvas). Returns false without painting when
+  // the canvas holds alpha-zero pixels with nonzero RGB and laneWidth is 0.
+  bool blurMv(CanvasHandle handle, const uint8_t* scale = nullptr, int laneWidth = 0);
   bool release(CanvasHandle handle);
   bool realize(CanvasHandle handle);
   std::optional<CanvasInfo> info(CanvasHandle handle) const;

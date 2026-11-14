@@ -758,11 +758,31 @@ napi_value blurCanvas(napi_env env, napi_callback_info info) try {
 } catch(const std::exception& error){return throwException(env, error);}
 
 napi_value blurMvCanvas(napi_env env, napi_callback_info info) try {
-  auto a = arguments(env, info, 1);
+  auto a = arguments(env, info, 3);
   auto& canvases = host(env).canvases;
   const auto handle = asUint32(env, a.at(0));
   if (!canvases.info(handle)) throw std::runtime_error("invalid canvas");
-  return boolean(env, canvases.blurMv(handle));
+  // Optional per-channel sample scale table (R, G, B x 256 entries), measured from the
+  // platform's own "lighter" drawImage at globalAlpha 1/9; without it the Skia65 x86 encoding.
+  const uint8_t* scale = nullptr;
+  if (a.size() > 1) {
+    napi_valuetype type;
+    check(env, napi_typeof(env, a[1], &type), "cannot inspect blur scale");
+    if (type != napi_undefined && type != napi_null) {
+      const auto table = canvasBytes(env, a[1]);
+      if (table.size() != 768) throw std::invalid_argument("blur scale table must have 768 entries");
+      scale = table.data();
+    }
+  }
+  // Optional source-over batch width measured from the stock path (0: alpha-zero RGB refused).
+  int laneWidth = 0;
+  if (a.size() > 2) {
+    napi_valuetype type;
+    check(env, napi_typeof(env, a[2], &type), "cannot inspect blur lane width");
+    if (type == napi_number) laneWidth = asInt32(env, a[2]);
+    if (laneWidth < 0 || laneWidth > 64) throw std::invalid_argument("blur lane width must be 0-64");
+  }
+  return boolean(env, canvases.blurMv(handle, scale, laneWidth));
 } catch (const std::exception& error) {
   return throwException(env, error);
 }

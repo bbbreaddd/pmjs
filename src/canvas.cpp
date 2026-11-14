@@ -1761,29 +1761,93 @@ bool CanvasStore::blur(CanvasHandle handle) {
   return blurNow(*surface);
 }
 
-bool CanvasStore::blurMv(CanvasHandle handle) {
+bool CanvasStore::blurMv(CanvasHandle handle, const uint8_t* scaleTable, int laneWidth) {
   auto* sourceContent = lookupContent(handle);
   if (!sourceContent || !realizeContent(*sourceContent)) return false;
-  // Raw alpha-zero RGB has rasterizer-dependent source-over behavior. Preserve
-  // the ordinary drawing path for noncanonical premultiplied inputs.
-  if (sourceContent->mayHaveOverAlpha) return false;
+  // Noncanonical premultiplied pixels with RGB above a nonzero alpha are copied
+  // exactly by the stock blur's source-over pad step and then summed with
+  // "lighter" like canonical pixels. Alpha-zero pixels with nonzero RGB are not:
+  // the rasterizer copies a drawn span in batches of laneWidth pixels from its
+  // start, skips a batch whose pixels all have zero alpha, and drops alpha-zero
+  // pixels one by one in the scalar tail. laneWidth is measured on this platform
+  // (0: unknown, keep the ordinary drawing path).
+  bool alphaZeroRgb = false;
+  if (sourceContent->mayHaveOverAlpha) {
+    const auto& pixels = sourceContent->pixels;
+    for (size_t i = 0; i + 3 < pixels.size() && !alphaZeroRgb; i += 4)
+      alphaZeroRgb = !pixels[i + 3] && (pixels[i] | pixels[i + 1] | pixels[i + 2]);
+    if (alphaZeroRgb && laneWidth <= 0) return false;
+  }
   auto* surface = writableContent(handle);
   if (!surface) return false;
   const int width = surface->width, height = surface->height;
   const size_t count = static_cast<size_t>(width) * height;
   std::vector<uint8_t> intermediate(count * 4), horizontal(count * 3);
-  // Skia65 encodes opacity 1/9 as paint alpha 28, then scales by (alpha + 1)/256.
-  const auto scale = [](uint8_t channel) { return (unsigned(channel) * 29) >> 8; };
+  // Per-sample contribution of one "lighter" drawImage at globalAlpha 1/9. The rasterizer's own
+  // rounding differs by platform (x86 Skia65 encodes 1/9 as paint alpha 28 and scales by
+  // (alpha + 1)/256; arm64 rounds c/9), so callers pass the table measured from the stock path.
+  // Storage is BGRA (byte 0 blue, byte 2 red); the table is R, G, B x 256.
+  const auto scale = [scaleTable](int channel, uint8_t value) -> unsigned {
+    if (scaleTable) return scaleTable[(2 - channel) * 256 + value];
+    return (unsigned(value) * 29) >> 8;
+  };
   const uint8_t* source = surface->pixels.data();
   for (int pass = 0; pass < 2; ++pass) {
     uint8_t* destination = pass ? surface->pixels.data() : intermediate.data();
+    if (pass == 0 && alphaZeroRgb) {
+      // Rebuild the stock blur's padded copy explicitly. The centre copy and the four edge
+      // strips are separate drawImage spans: each source row (width pixels) for the centre and
+      // the top/bottom strips, one pixel per row for the side strips. An alpha-zero pixel
+      // survives only inside a full batch that holds a pixel with nonzero alpha. The corners
+      // stay transparent. Then sum the 3x3 "lighter" draws.
+      const int paddedWidth = width + 2;
+      std::vector<uint8_t> padded(static_cast<size_t>(paddedWidth) * (height + 2) * 4, 0);
+      const int fullBatches = width / laneWidth;
+      std::vector<uint8_t> batchHasAlpha(static_cast<size_t>(fullBatches));
+      const auto copyRow = [&](int sy, int dy) {
+        const uint8_t* row = source + static_cast<size_t>(sy) * width * 4;
+        for (int batch = 0; batch < fullBatches; ++batch) {
+          batchHasAlpha[batch] = 0;
+          for (int i = batch * laneWidth; i < (batch + 1) * laneWidth; ++i)
+            if (row[i * 4 + 3]) { batchHasAlpha[batch] = 1; break; }
+        }
+        uint8_t* to = padded.data() + (static_cast<size_t>(dy) * paddedWidth + 1) * 4;
+        for (int x = 0; x < width; ++x) {
+          const uint8_t* from = row + x * 4;
+          if (!from[3] && (from[0] | from[1] | from[2]) &&
+              (laneWidth == 1 || x >= fullBatches * laneWidth || !batchHasAlpha[x / laneWidth])) continue;
+          std::memcpy(to + x * 4, from, 4);
+        }
+      };
+      for (int y = 0; y < height; ++y) copyRow(y, y + 1);
+      copyRow(0, 0);
+      copyRow(height - 1, height + 1);
+      for (int y = 0; y < height; ++y) for (const auto [sx, dx] : {std::pair{0, 0}, std::pair{width - 1, width + 1}}) {
+        // A one-pixel span is all tail: an alpha-zero pixel is dropped.
+        const uint8_t* from = source + (static_cast<size_t>(y) * width + sx) * 4;
+        if (!from[3]) continue;
+        std::memcpy(padded.data() + (static_cast<size_t>(y + 1) * paddedWidth + dx) * 4, from, 4);
+      }
+      for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x) {
+        uint8_t* output = destination + (static_cast<size_t>(y) * width + x) * 4;
+        for (int channel = 0; channel < 3; ++channel) {
+          unsigned sum = 0;
+          for (int dy = 0; dy < 3; ++dy) for (int dx = 0; dx < 3; ++dx)
+            sum += scale(channel, padded[(static_cast<size_t>(y + dy) * paddedWidth + x + dx) * 4 + channel]);
+          output[channel] = static_cast<uint8_t>(std::min(255U, sum));
+        }
+        output[3] = 255;
+      }
+      source = destination;
+      continue;
+    }
     for (int y = 0; y < height; ++y) {
       const auto* row = source + static_cast<size_t>(y) * width * 4;
       auto* output = horizontal.data() + static_cast<size_t>(y) * width * 3;
       for (int channel = 0; channel < 3; ++channel) {
-        unsigned left = scale(row[channel]), center = left;
+        unsigned left = scale(channel, row[channel]), center = left;
         for (int x = 0; x < width; ++x) {
-          const unsigned right = scale(row[std::min(x + 1, width - 1) * 4 + channel]);
+          const unsigned right = scale(channel, row[std::min(x + 1, width - 1) * 4 + channel]);
           output[x * 3 + channel] = left + center + right;
           left = center;
           center = right;
@@ -1804,7 +1868,7 @@ bool CanvasStore::blurMv(CanvasHandle handle) {
         for (int channel = 0; channel < 3; ++channel) {
           const unsigned sum = above[x * 3 + channel] + center[x * 3 + channel] + below[x * 3 + channel];
           output[x * 4 + channel] = std::min(255U,
-            sum - omitted * scale(input[x * 4 + channel]));
+            sum - omitted * scale(channel, input[x * 4 + channel]));
         }
         output[x * 4 + 3] = 255;
       }
