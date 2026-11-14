@@ -72,6 +72,7 @@ class MediaService {
   std::string audioError(std::uint32_t handle) const;
   double position(std::uint32_t handle) const;
   double duration(std::uint32_t handle) const;
+  std::uint64_t audioFrames(std::uint32_t handle) const;
   int sourceChannels(std::uint32_t handle) const;
   std::size_t bufferedFrames(std::uint32_t handle) const;
   bool release(std::uint32_t handle);

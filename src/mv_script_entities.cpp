@@ -8,6 +8,8 @@
 namespace pmjs::mv {
 Session::~Session() { detachRuntimeEntities(true); }
 void Session::detachRuntimeEntities(bool all) {
+  if (all) for (auto& effect : visualEffects_) if (effect.balloonSprite) effect.balloonSprite->active = false;
+  if (all && weatherRuntime_) weatherRuntime_->active = false;
   for (auto it = runtimeCharacters_.begin(); it != runtimeCharacters_.end();) {
     if (!all && it->first < 0) { ++it; continue; }
     if (auto object = it->second.lock()) object->detach();

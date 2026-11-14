@@ -351,9 +351,9 @@ void Sprite_Enemy::advance(std::uint64_t ticks) {
   if (effectDuration == 0) effectType.clear();
 }
 
-void Sprite_Balloon::setup(int id) {
+void Sprite_Balloon::setup(int id, int speed, int waitTime) {
   balloonId = id;
-  duration = durationFrames;
+  duration = 8 * speed + waitTime;
 }
 
 void Sprite_Balloon::update() {
@@ -364,8 +364,8 @@ void Sprite_Balloon::advance(std::uint64_t ticks) {
   duration -= static_cast<int>(std::min<std::uint64_t>(ticks, std::max(0, duration)));
 }
 
-int Sprite_Balloon::frameIndex() const {
-  return 7 - std::max(static_cast<int>(std::floor((duration - 12) / 8.0)), 0);
+int Sprite_Balloon::frameIndex(int speed, int waitTime) const {
+  return 7 - std::max(static_cast<int>(std::floor((duration - waitTime) / double(speed))), 0);
 }
 
 core::Rectangle Sprite_Balloon::sourceFrame(std::uint64_t age, int balloonId) {
@@ -374,6 +374,38 @@ core::Rectangle Sprite_Balloon::sourceFrame(std::uint64_t age, int balloonId) {
   sprite.setup(balloonId);
   sprite.advance(age);
   return {sprite.frameIndex() * 48.0, (balloonId - 1) * 48.0, 48, 48};
+}
+
+Value RuntimeBalloon::call(const std::string& method, const Value::Array& arguments) {
+  if (auto binding = hooks.lock(); binding && binding->boundMethod)
+    if (auto result = binding->boundMethod(shared_from_this(), method, arguments)) return *result;
+  return invoke(method, arguments);
+}
+
+Value RuntimeBalloon::invoke(const std::string& method, const Value::Array& arguments) {
+  if (method == "initialize" || method == "_initializeBalloon") {
+    call("initMembers"); call("loadBitmap"); initialized = true;
+  } else if (method == "initMembers") {
+    value.balloonId = 0; value.duration = 0;
+    drawable->anchor = {0.5, 1}; drawable->z = 7;
+  } else if (method == "loadBitmap") {
+    const auto binding = hooks.lock();
+    drawable->setBitmap(binding && binding->systemBitmap ? binding->systemBitmap(shared_from_this(), "Balloon") : core::PixelBitmap::load("img/system/Balloon.png"));
+    drawable->setFrame(0, 0, 0, 0);
+  } else if (method == "setup") {
+    value.setup(arguments.at(0).integer(), call("speed").integer(), call("waitTime").integer());
+  } else if (method == "update") {
+    drawable->update();
+    if (value.duration > 0) { value.advance(1); if (value.duration > 0) call("updateFrame"); }
+  } else if (method == "updateFrame") {
+    drawable->setFrame(call("frameIndex").integer() * 48, (value.balloonId - 1) * 48, 48, 48);
+  } else if (method == "frameIndex") {
+    return value.frameIndex(call("speed").integer(), call("waitTime").integer());
+  } else if (method == "speed") return 8;
+  else if (method == "waitTime") return 12;
+  else if (method == "isPlaying") return value.isPlaying();
+  else throw std::invalid_argument("balloon method is not bound: " + method);
+  return Value::undefined();
 }
 
 void Sprite_Timer::update(int frames) {

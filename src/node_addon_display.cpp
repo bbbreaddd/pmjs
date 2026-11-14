@@ -438,6 +438,11 @@ std::shared_ptr<mv::core::Container> displayForRuntime(napi_env env, napi_value 
   if (&value.services->owner->core != &runtime) throw std::invalid_argument("display belongs to another host");
   return value.node;
 }
+napi_value wrapRuntimeDisplay(napi_env env, napi_value object, const std::shared_ptr<mv::core::Container>& node, RuntimeCore& runtime) {
+  auto owner = services(env, object);
+  if (&owner->owner->core != &runtime) throw std::invalid_argument("display belongs to another host");
+  return wrap(env, owner, node);
+}
 void startDisplayAnimation(napi_env env, napi_value object, RuntimeCore& runtime, const mv::Value& animation, bool mirror, int delay, int rate) {
   auto sprite = std::dynamic_pointer_cast<BoundSprite>(displayForRuntime(env, object, runtime));
   if (!sprite) throw std::invalid_argument("animation target must be a sprite");

@@ -37,9 +37,8 @@ void Presentation::visualEffects() {
     } else if(effect.targetType==2) {
       if(!session_.battle_.active||effect.targetId>=static_cast<int>(session_.battle_.enemies.size()))continue;
       const auto& enemy=session_.battle_.enemies[effect.targetId];
-      const auto& member=session_.database_["troops"][session_.battle_.troopId]["members"][effect.targetId];
-      x=member["x"].number();y=member["y"].number();
-      if(const auto* sprite=session_.enemySprite(effect.targetId))x+=sprite->shake;
+      x=enemy.screenX;y=enemy.screenY;
+      if(const auto* sprite=session_.enemySprite(effect.targetId)){x=sprite->homePosition.x+sprite->offset.x+sprite->shake;y=sprite->homePosition.y+sprite->offset.y;}
       const auto name=session_.database_["enemies"][enemy.id]["battlerName"].text();
       if(!name.empty())height=image(std::string("img/")+(session_.database_["system"]["optSideView"].boolean()?"sv_enemies/":"enemies/")+name+".png").height;
     } else {
@@ -52,6 +51,10 @@ void Presentation::visualEffects() {
     }
     const int age=static_cast<int>(session_.ticks_-effect.started);
     if(effect.balloon) {
+      if (const auto& sprite = effect.balloonSprite) {
+        if (sprite->initialized) sprite->drawable->render(core_.renderer(), {1, 0, 0, 1, x, y-height});
+        continue;
+      }
       const auto source=image("img/system/Balloon.png");
       const auto frame=Sprite_Balloon::sourceFrame(age,effect.animationId);
       if(frame.width>0)quad(source.handle,frame.x,frame.y,frame.width,frame.height,x-24,y-height-48,frame.width,frame.height);

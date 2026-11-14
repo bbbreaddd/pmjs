@@ -599,10 +599,12 @@ void Session::updateEnemySprites() {
     if (sprite.initialized && sprite.lastUpdateTick == ticks_) continue;
     sprite.lastUpdateTick = ticks_;
     if (!sprite.initialized) {
-      auto object = std::make_shared<RuntimeEnemySprite>(); object->value = owner; object->active = true;
-      auto battler = runtimeBattler(enemy); object->enemy = battler;
-      runtimeEnemySprites_[index] = object;
-      if (!runtimeHooks_ || !runtimeHooks_->enemySpriteBattler || !runtimeHooks_->enemySpriteBattler(object, battler)) object->setBattler(battler);
+      if (runtimeHooks_ && runtimeHooks_->enemySpriteBattler) {
+        auto object = std::make_shared<RuntimeEnemySprite>(owner); object->active = true;
+        auto battler = runtimeBattler(enemy); object->enemy = battler;
+        runtimeEnemySprites_[index] = object;
+        if (!runtimeHooks_->enemySpriteBattler(object, battler)) object->setBattler(battler);
+      } else { sprite.setBattler(&enemy); sprite.setHome(enemy.screenX, enemy.screenY); }
       sprite.initialized = true;
       sprite.appeared = enemy.isAlive() && !enemy.escaped;
       sprite.opacity = sprite.appeared ? 1 : 0;
@@ -621,7 +623,7 @@ void Session::updateEnemySprites() {
       sprite.startEffect("disappear");
     }
     const auto sounds = sprite.bossCollapseSounds;
-    sprite.advance(1);
+    sprite.updateMove(); sprite.advance(1);
     for (auto played = sounds; played < sprite.bossCollapseSounds; ++played)
       AudioManager::playSe(*this, database_["system"]["sounds"][13]);
   }

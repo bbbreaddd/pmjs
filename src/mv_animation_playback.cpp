@@ -4,6 +4,9 @@
 #include <algorithm>
 
 namespace pmjs::mv {
+std::shared_ptr<RuntimeBalloon> Session::createBalloon() {
+  auto object = std::make_shared<RuntimeBalloon>(); object->hooks = runtimeHooks_; return object;
+}
 int Session::requestAnimation(int targetType,int targetId,int animationId,bool mirror,bool balloon,int delayFrames) {
   if(animationId<=0)return 0;
   const auto& animation=database_["animations"][animationId];
@@ -18,12 +21,23 @@ int Session::requestAnimation(int targetType,int targetId,int animationId,bool m
     return !existing.balloon&&existing.animationId==animationId&&existing.started==effect.started;
   });
   effect.duration=balloon?Sprite_Balloon::durationFrames:Sprite_Animation::durationFor(animation);
+  if (balloon && runtimeHooks_ && runtimeHooks_->boundMethod) { effect.balloonSprite = createBalloon(); effect.balloonSprite->active = true; }
   visualEffects_.push_back(effect);return effect.serial;
 }
 void Session::updateVisualEffects() {
   for(auto& effect:visualEffects_) {
     if(ticks_<effect.started)continue;
-    if(effect.balloon)continue;
+    if(effect.balloon) {
+      if (auto& sprite = effect.balloonSprite) {
+        if (!sprite->initialized) {
+          sprite->call("initialize"); sprite->initialized = true;
+          sprite->call("setup", {effect.animationId});
+        }
+        sprite->call("update");
+        sprite->active = sprite->call("isPlaying").boolean();
+      }
+      continue;
+    }
     const auto& animation=database_["animations"][effect.animationId];
     const int frame=Sprite_Animation::frameAtAge(animation,ticks_-effect.started);
     if(frame!=effect.lastTimingFrame) {
@@ -42,7 +56,10 @@ void Session::updateVisualEffects() {
     Sprite_Animation::updateFlash(effect.screenFlash,effect.screenFlashDuration);
     if(effect.hideDuration>0)--effect.hideDuration;
   }
-  std::erase_if(visualEffects_,[&](const VisualEffect& effect){return ticks_>=effect.started&&ticks_-effect.started>=static_cast<std::uint64_t>(effect.duration);});
+  std::erase_if(visualEffects_,[&](const VisualEffect& effect){
+    if (effect.balloonSprite) return !effect.balloonSprite->active;
+    return ticks_>=effect.started&&ticks_-effect.started>=static_cast<std::uint64_t>(effect.duration);
+  });
 }
 std::array<float,4> Session::effectColor(int type,int id) const {
   std::array<float,4> result{};

@@ -10,9 +10,9 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     if (!value) throw new TypeError('Display object is not initialized');
     return value;
   }
-  function attach(object, kind) {
+  function attach(object, kind, existing = null) {
     if (nodes.has(object)) throw new Error('Display object is already initialized');
-    const handle = api.create(runtime, kind);
+    const handle = existing || api.create(runtime, kind);
     nodes.set(object, { handle, children: new Map(), parent: null, bitmaps: new Map(), points: new Map() });
     registry.set(handle.identity, new WeakRef(object));
   }
@@ -222,6 +222,21 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   Window_Base.prototype.isClosing = function() { return this.closing; };
   Window_Base.prototype.activate = function() { this.active = true; return this; };
   Window_Base.prototype.deactivate = function() { this.active = false; return this; };
+  function Window_Message() { this.initialize.apply(this, arguments); }
+  inherit(Window_Message, Window_Base);
+  Window_Message.prototype.initialize = function() {
+    Window_Base.prototype.initialize.call(this, 0, Graphics.boxHeight - this.windowHeight(), this.windowWidth(), this.windowHeight());
+    this.openness = 0; this.clearFlags();
+  };
+  Window_Message.prototype.windowWidth = function() { return Graphics.boxWidth; };
+  Window_Message.prototype.windowHeight = function() { return this.fittingHeight(this.numVisibleRows()); };
+  Window_Message.prototype.numVisibleRows = function() { return 4; };
+  Window_Message.prototype.clearFlags = function() { options.messageWindow('clearFlags'); };
+  Window_Message.prototype.terminateMessage = function() { this.close(); options.messageWindow('terminateMessage'); };
+  Window_Message.prototype.startInput = function() { return options.messageWindow('startInput'); };
+  for (const field of ['_showFast', '_lineShowFast', '_pauseSkip']) Object.defineProperty(Window_Message.prototype, field, {
+    configurable: true, get() { return options.messageWindowField(field); }, set(value) { options.messageWindowField(field, value); }
+  });
   function Window_Selectable() { this.initialize.apply(this, arguments); }
   inherit(Window_Selectable, Window_Base);
   Window_Selectable.prototype.initialize = function(x, y, width, height) {
@@ -542,7 +557,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   Graphics._requestFullScreen = () => native.runtime.setFullscreen(true);
   Graphics._cancelFullScreen = () => native.runtime.setFullscreen(false);
   const Input = {};
-  for (const method of ['clear', 'isPressed', 'isTriggered', 'isRepeated', 'isLongPressed'])
+  for (const method of ['clear', 'update', 'isPressed', 'isTriggered', 'isRepeated', 'isLongPressed'])
     Input[method] = (...args) => api.input(runtime, method, ...args);
   for (const field of ['dir4', 'dir8', 'date']) Object.defineProperty(Input, field, { get() { return api.input(runtime, field); } });
   for (const name of ['keyMapper', 'gamepadMapper']) {
@@ -570,7 +585,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
       api.scene(runtime, 'goto', next ? entry(next).handle : null, dispatch);
     },
     update() {
-      api.input(runtime, 'update');
+      Input.update();
       ImageManager.update();
       api.scene(runtime, 'update', dispatch);
       currentRoot = wrap(api.scene(runtime, 'current')); nextRoot = wrap(api.scene(runtime, 'next'));
@@ -594,9 +609,17 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     isNextScene(type) { return this._nextScene?.constructor === type; },
     get stageHandle() { return currentRoot ? entry(currentRoot).handle : null; }
   };
-  return { Container, Stage: Container, Sprite, Sprite_Base, Sprite_Animation, TilingSprite, ScreenSprite, Window, WindowLayer, Window_Base, Window_Selectable, Window_Command, Window_MenuCommand, Window_Options,
+  return { Container, Stage: Container, Sprite, Sprite_Base, Sprite_Animation, TilingSprite, ScreenSprite, Window, WindowLayer, Window_Base, Window_Selectable, Window_Command, Window_MenuCommand, Window_Options, Window_Message,
     Scene_Base, Scene_Battle, Scene_MenuBase, Scene_Menu, Scene_Options, Scene_Gameover, Scene_File, Scene_Load, Scene_ItemBase, Scene_Item, Scene_Skill, Scene_Boot, Scene_Title, Scene_Map, SceneManager, Graphics, Input,
     GlitchFilter,
-    displayHandle: object => entry(object).handle };
+    displayHandle: object => entry(object).handle,
+    displayField(handle, field, ...value) {
+      return wrap(options.boundDisplayField(handle, field, runtime, ...value.map(object => object == null ? null : entry(object).handle)));
+    },
+    initializeDisplay(object, handle) {
+      const display = options.boundDisplay(handle, runtime);
+      if (!display) return false;
+      attach(object, display.kind, display); return true;
+    } };
 }
 module.exports = { createSceneBindings };

@@ -833,9 +833,21 @@ WebAudio::WebAudio(std::string source, bool deferLoad, bool reportResourceErrors
   }
   loading_ = true;
   const std::weak_ptr<int> alive = lifetime_;
-  pendingLoads.push_back([this, alive] { if (!alive.expired()) loadNow(); });
+  const auto generation=loadGeneration_;
+  pendingLoads.push_back([this, alive, generation] { if (!alive.expired() && generation==loadGeneration_) loadNow(); });
 }
 WebAudio::~WebAudio() { lifetime_.reset(); release(); voices.erase(this); }
+void WebAudio::initializeSource(const std::string& source) {
+  if (!initialized) initialize();
+  clear(); url=source;
+  if (!services_) services_=active;
+  if (url.empty() || !services_ || !services_->runtime || services_->lifetime.expired()) return;
+  loading_=true;
+  const std::weak_ptr<int> alive=lifetime_;
+  const auto generation=loadGeneration_;
+  pendingLoads.push_back([this,alive,generation] { if (!alive.expired() && generation==loadGeneration_) loadNow(); });
+}
+void WebAudio::finishLoading() { if (loading_) loadNow(); }
 bool WebAudio::initialize(bool noAudio) {
   if (!boundRuntime()) return false;
   active->audioDisabled = noAudio;
@@ -858,6 +870,7 @@ void WebAudio::setEncryptionKey(const std::string& hex) {
   }
 }
 void WebAudio::loadNow() {
+  ++loadGeneration_;
   if (!services_) services_ = active;
   if (!services_ || !services_->runtime || services_->lifetime.expired()) { loading_ = false; return; }
   try {
@@ -956,6 +969,7 @@ void WebAudio::release() {
   ready = false;
 }
 void WebAudio::clear() {
+  ++loadGeneration_;
   const std::weak_ptr<int> alive = lifetime_;
   stop();
   if (alive.expired()) return;
@@ -1054,6 +1068,10 @@ double WebAudio::playbackPosition() const {
   return handle_ && services_ && services_->runtime && !services_->lifetime.expired()
       ? services_->runtime->media().position(handle_)
       : pauseTime;
+}
+std::uint64_t WebAudio::bufferFrameCount() const {
+  return handle_ && services_ && services_->runtime && !services_->lifetime.expired()
+      ? services_->runtime->media().audioFrames(handle_) : 0;
 }
 double WebAudio::seek() const {
   if (!isPlaying()) return pauseTime;

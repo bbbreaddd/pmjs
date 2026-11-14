@@ -14,6 +14,7 @@
 #include <algorithm>
 
 namespace pmjs::mv {
+namespace core { class Container; class PixelBitmap; class WebAudio; }
 
 struct Value {
   struct Undefined {};
@@ -48,6 +49,7 @@ struct EventCommand {
 };
 
 class Sprite_Picture;
+struct RuntimeBoundObject;
 std::uint64_t nextRuntimeIdentity();
 struct RuntimeObject {
   const std::uint64_t identity = nextRuntimeIdentity();
@@ -137,6 +139,10 @@ struct RuntimeHooks {
   std::function<bool(const std::shared_ptr<RuntimeObject>&, const std::string&)> actorLifecycle;
   std::function<bool(const std::shared_ptr<RuntimeObject>&, int)> actorSpriteHome;
   std::function<bool(const std::shared_ptr<RuntimeObject>&, const std::shared_ptr<RuntimeObject>&)> enemySpriteBattler;
+  std::function<std::optional<Value>(const std::shared_ptr<RuntimeObject>&, const std::string&, const Value::Array&)> boundMethod;
+  std::function<void(const std::shared_ptr<RuntimeObject>&, std::uint32_t)> boundListener;
+  std::function<std::shared_ptr<core::WebAudio>(const std::string&, const std::string&)> audioBuffer;
+  std::function<std::shared_ptr<core::PixelBitmap>(const std::shared_ptr<RuntimeObject>&, const std::string&)> systemBitmap;
 };
 
 using FormulaResolver = std::function<double(const std::string&, const std::vector<double>&)>;
@@ -210,6 +216,7 @@ struct VisualEffect {
   std::uint64_t started=0;
   bool mirror=false,balloon=false;
   bool duplicated=false;
+  std::shared_ptr<struct RuntimeBalloon> balloonSprite;
   std::array<float,4> flash{};
   int flashDuration=0,hideDuration=0;
   std::array<float,4> screenFlash{};
@@ -409,6 +416,8 @@ class Session {
   Session(Session&&) = default;
   Session& operator=(Session&&) = default;
   void setRuntimeHooks(std::shared_ptr<RuntimeHooks> hooks) { runtimeHooks_ = std::move(hooks); }
+  std::shared_ptr<RuntimeBalloon> createBalloon();
+  std::shared_ptr<RuntimeBoundObject> createGeneratedBinding(const std::string& name);
   std::set<std::uint64_t> runtimeObjectIdentities() const;
   std::shared_ptr<RuntimeCharacter> runtimeCharacter(int id);
   std::shared_ptr<RuntimeActor> runtimeActor(int id);
@@ -540,6 +549,7 @@ class Session {
   std::array<float,4> effectColor(int targetType,int targetId) const;
   bool effectHidden(int targetType,int targetId) const;
   std::vector<VisualEffect> visualEffects_;
+  std::shared_ptr<RuntimeBoundObject> weatherRuntime_;
   int nextVisualEffect_ = 0;
   void executeNativeScript(const std::string& source, Interpreter& context);
   void initializeActor(int id);

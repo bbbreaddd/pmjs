@@ -21,6 +21,29 @@ test('native scenes dispatch original methods and retain transferred sprite reso
   for (let i = 0; i < actorPixels.length; i += 4) { actorPixels[i] = 255; actorPixels[i + 3] = 255; }
   fs.writeFileSync(path.join(root, 'img/sv_actors/Actor.png'), png(216, 144, actorPixels));
   fs.writeFileSync(path.join(root, 'img/system/Shadow2.png'), png(48, 24, new Uint8Array(48 * 24 * 4)));
+  for (const directory of ['enemies', 'sv_enemies']) {
+    fs.mkdirSync(path.join(root, 'img', directory), { recursive: true });
+    const pixels = new Uint8Array(24 * 24 * 4);
+    for (let i = 0; i < pixels.length; i += 4) { pixels[i] = 255; pixels[i + 3] = 255; }
+    fs.writeFileSync(path.join(root, 'img', directory, 'Enemy.png'), png(24, 24, pixels));
+  }
+  const balloonPixels = new Uint8Array(256 * 48 * 4);
+  for (let y = 0; y < 48; ++y) for (let x = 0; x < 256; ++x) {
+    const offset = (y * 256 + x) * 4;
+    balloonPixels[offset + (y < 24 ? 0 : 1)] = 255; balloonPixels[offset + 3] = 255;
+  }
+  fs.writeFileSync(path.join(root, 'img/system/Reactions.png'), png(256, 48, balloonPixels));
+  fs.writeFileSync(path.join(root, 'img/system/Balloon.png'), png(256, 48, balloonPixels));
+  fs.mkdirSync(path.join(root, 'img/parallaxes'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'img/parallaxes/Background.png'), png(1, 1, [0, 0, 0, 255]));
+  const audioFrames = 96000, wave = Buffer.alloc(44 + audioFrames * 4);
+  wave.write('RIFF'); wave.writeUInt32LE(wave.length - 8, 4); wave.write('WAVEfmt ', 8);
+  wave.writeUInt32LE(16, 16); wave.writeUInt16LE(1, 20); wave.writeUInt16LE(2, 22);
+  wave.writeUInt32LE(48000, 24); wave.writeUInt32LE(192000, 28);
+  wave.writeUInt16LE(4, 32); wave.writeUInt16LE(16, 34);
+  wave.write('data', 36); wave.writeUInt32LE(wave.length - 44, 40);
+  fs.mkdirSync(path.join(root, 'audio/bgm'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'audio/bgm/Tone.ogg'), wave);
   native.initialize({ gameRoot: root, width: 32, height: 32, windowTitle: 'Native scenes' });
   t.after(() => native.runtime.quit());
   const engine = native.mvEngine, data = fixture([]);
@@ -303,6 +326,40 @@ test('native scenes dispatch original methods and retain transferred sprite reso
     assert.equal(window.statusText(window.index()), '0%');
   });
 
+  await t.test('selectable windows dispatch native navigation and mutable OK/cancel handlers', async () => {
+    const engine = native.mvEngine, session = engine.create(fixture([]));
+    try {
+      engine.attach(session, { width: 32, height: 32, fontFile: 'font.ttf' });
+      const runtime = createScriptRuntime(engine, session, { native }); runtime.installScenes(); engine.newGame(session);
+      const { scope } = runtime, held = new Set(), trace = [];
+      scope.Input.isRepeated = scope.Input.isTriggered = name => held.has(name);
+      const window = new scope.Window_Command(0, 0);
+      window.addCommand('First', 'first'); window.addCommand('Second', 'second'); window.select(0);
+      const dataWindow = new scope.Window_Selectable(0, 0, 200, 160); dataWindow.maxItems = () => 3;
+      function Menu() { this.initialize(); }
+      Menu.prototype = Object.create(scope.Scene_Base.prototype); Menu.prototype.constructor = Menu;
+      Menu.prototype.create = function() { this.createWindowLayer(); this.addWindow(window); this.addWindow(dataWindow); };
+      scope.SceneManager.run(Menu);
+      for (let i = 0; i < 100 && !scope.SceneManager.isCurrentSceneStarted(); ++i) { runtime.step(); await new Promise(resolve => setTimeout(resolve, 1)); }
+      assert.equal(scope.SceneManager.isCurrentSceneStarted(), true);
+      const down = window.cursorDown; let downCalls = 0;
+      window.cursorDown = function(wrap) { ++downCalls; down.call(this, wrap); };
+      held.add('down'); runtime.step(); assert.equal(window.index(), 1); assert.equal(downCalls, 1);
+      window._cursorFixed = true; held.clear(); held.add('up'); runtime.step(); assert.equal(window.index(), 1);
+      window._cursorFixed = false; runtime.step(); assert.equal(window.index(), 0);
+      const updateInput = window.updateInputData;
+      window.updateInputData = function() { held.clear(); trace.push('input'); updateInput.call(this); };
+      scope.SoundManager.playOk = () => trace.push('ok-sound'); scope.SoundManager.playCancel = () => trace.push('cancel-sound');
+      window.setHandler('first', () => { trace.push('first'); assert.equal(window.active, false); });
+      window.setHandler('cancel', () => { trace.push('cancel'); assert.equal(window.active, false); });
+      held.clear(); held.add('ok'); runtime.step(); assert.deepEqual(trace, ['ok-sound', 'input', 'first']);
+      window.activate(); trace.length = 0; held.add('cancel'); runtime.step();
+      assert.deepEqual(trace, ['cancel-sound', 'input', 'cancel']);
+      window.deactivate(); dataWindow.select(0); dataWindow.activate(); held.add('down'); runtime.step();
+      assert.equal(dataWindow.index(), 1, 'plugin-owned item lists must use their overridden maxItems');
+    } finally { engine.dispose(session); }
+  });
+
   await t.test('plugin database metadata and notetag changes reach native actor initialization', () => {
     const { databaseFiles } = require('../runner/mv-engine-data.cjs');
     const { installDatabase } = require('../runner/native-database.cjs');
@@ -410,6 +467,274 @@ test('native scenes dispatch original methods and retain transferred sprite reso
     } finally { engine.dispose(actorSession); }
     assert.equal(observed._homeX, -100);
     assert.equal(observed.isMoving(), false);
+  });
+
+  await t.test('enemy battler aliases reposition native pixels in front and side view', () => {
+    for (const sideView of [false, true]) {
+      const data = fixture([]); data.system.optSideView = sideView;
+      data.enemies = [null, { name: 'Enemy', battlerName: 'Enemy', params: [100, 20, 10, 10, 10, 10, 10, 10], actions: [], traits: [] }];
+      data.troops = [null, { members: [{ enemyId: 1, x: sideView ? 16 : 408, y: 320 }], pages: [] }];
+      const enemySession = engine.create(data);
+      let retainedSprite, retainedEnemy;
+      try {
+        engine.attach(enemySession, { width: 32, height: 32, fontFile: 'font.ttf' });
+        const enemyRuntime = createScriptRuntime(engine, enemySession, { native }); enemyRuntime.installScenes();
+        const { scope } = enemyRuntime, original = scope.Sprite_Enemy.prototype.setBattler;
+        let seen, calls = 0;
+        scope.Sprite_Enemy.prototype.setBattler = function(enemy) {
+          original.call(this, enemy); ++calls; seen = this;
+          assert.equal(this._enemy, enemy); assert.equal(this._battler, enemy);
+          if (!enemy.adjustedY) {
+            this._homeY += Math.floor((scope.Graphics.boxHeight - 624) / 2);
+            enemy._screenY = this._homeY; enemy.adjustedY = true;
+          }
+          if (!scope.$gameSystem.isSideView() && !enemy.adjustedX) {
+            this._homeX += (scope.Graphics.boxWidth - 816) / 2;
+            enemy._screenX = this._homeX; enemy.adjustedX = true;
+          }
+        };
+        engine.newGame(enemySession); engine.startBattle(enemySession, 1, true, true);
+        const capture = () => {
+          native.beginFrame(); engine.present(enemySession); native.renderFrame();
+          return Array.from(native.canvas.captureSceneRawPremultiplied().subarray((12 * 32 + 16) * 4, (12 * 32 + 16) * 4 + 4));
+        };
+        assert.deepEqual(capture(), [255, 0, 0, 255]);
+        assert.equal(calls, 1); assert.equal(seen._homeX, 16); assert.equal(seen._homeY, 24);
+        const enemy = seen._enemy;
+        assert.equal(enemy.screenX(), 16); assert.equal(enemy.screenY(), 24);
+        assert.equal(scope.$gameSystem.isSideView(), sideView);
+        seen._homeX = -100; assert.deepEqual(capture(), [0, 0, 0, 255]);
+        seen.setBattler(enemy); assert.equal(seen._homeX, 16); assert.equal(seen._homeY, 24);
+        assert.deepEqual(capture(), [255, 0, 0, 255]);
+        seen.startEffect('whiten'); assert.equal(seen.isEffecting(), true); assert.equal(seen._effectDuration, 16);
+        assert.throws(() => original.call(seen, scope.$gameActors.actor(1)), /requires an enemy battler/);
+        assert.equal(seen._enemy, enemy, 'rejected native references must preserve aliases');
+        const foreign = engine.create(fixture([]));
+        try {
+          const model = engine.classBindings.create(enemySession, 'Sprite_Enemy');
+          assert.throws(() => engine.classBindings.invoke(model, 'setBattler', [engine.entity(foreign, 'actor', 1)]), /another session/);
+        } finally { engine.dispose(foreign); }
+        retainedSprite = seen; retainedEnemy = enemy;
+        engine.startBattle(enemySession, 1, true, true);
+        assert.notEqual(seen, retainedSprite); assert.notEqual(seen._enemy, retainedEnemy);
+        assert.equal(retainedEnemy.screenY(), 24); assert.equal(retainedSprite._homeX, 16);
+      } finally { engine.dispose(enemySession); }
+      assert.equal(retainedSprite._enemy, retainedEnemy);
+      assert.equal(retainedEnemy.screenY(), 24); assert.equal(retainedSprite._homeY, 24);
+    }
+  });
+
+  await t.test('balloon overrides change native event rendering and retain their original object', async () => {
+    const data = fixture([{ code: 213, parameters: [-1, 2, true], indent: 0 }]);
+    data.maps[1].parallaxName = 'Background';
+    const balloonSession = engine.create(data);
+    let observed;
+    try {
+      engine.attach(balloonSession, { width: 32, height: 32, fontFile: 'font.ttf' });
+      const runtime = createScriptRuntime(engine, balloonSession, { native }); runtime.installScenes();
+      const { Sprite_Balloon: Balloon, ImageManager } = runtime.scope;
+      const stock = new Balloon(); stock.setup(1); stock.update();
+      assert.equal(stock.bitmap, ImageManager.loadSystem('Balloon'));
+      assert.equal(stock._frame.width, 48); assert.equal(stock._duration, 75);
+      const initialize = Balloon.prototype.initialize;
+      Balloon.prototype.initialize = function() {
+        initialize.call(this); this.marker = {}; this.y = 48; observed = this;
+      };
+      Balloon.prototype.loadBitmap = function() {
+        this.bitmap = ImageManager.loadSystem('Reactions'); this.setFrame(0, 0, 0, 0);
+      };
+      Balloon.prototype.updateFrame = function() {
+        this.setFrame(this.frameIndex() * 32, (this._balloonId - 1) * 24, 32, 24);
+      };
+      class CustomBalloon extends Balloon { customMethod() { return this.marker; } }
+      const manual = new CustomBalloon(); manual.setup(2); manual.update();
+      assert.ok(manual instanceof Balloon); assert.equal(manual.customMethod(), manual.marker);
+      assert.equal(manual._duration, 75); assert.equal(manual._frame.width, 32);
+      manual.speed = () => 4; manual.waitTime = () => 6;
+      manual.setup(2); assert.equal(manual._duration, 38);
+      manual.update(); assert.equal(manual._duration, 37); assert.equal(manual.frameIndex(), 0);
+      observed = null;
+      engine.newGame(balloonSession);
+      for (let i = 0; i < 4; ++i) engine.step(balloonSession);
+      assert.ok(observed instanceof Balloon);
+      const retained = observed, marker = retained.marker;
+      assert.equal(retained.bitmap, manual.bitmap, 'native initialization must use the shared image cache');
+      assert.equal(retained._frame.height, 24); assert.equal(retained._frame.y, 24);
+      const capture = () => {
+        native.beginFrame(); engine.present(balloonSession); native.renderFrame();
+        return native.canvas.captureSceneRawPremultiplied();
+      };
+      for (let i = 0; i < 100 && !retained.bitmap.isReady(); ++i) {
+        capture(); ImageManager.update(); await new Promise(resolve => setTimeout(resolve, 5));
+      }
+      assert.equal(retained.bitmap.isReady(), true, JSON.stringify({ state: retained.bitmap._loadingState, url: retained.bitmap.url, error: retained.bitmap.isError() }));
+      assert.equal(retained.bitmap.height, 48);
+      const greenCount = () => {
+        const rgba = capture(); let count = 0;
+        for (let i = 0; i < rgba.length; i += 4) if (rgba[i] < 10 && rgba[i + 1] > 240 && rgba[i + 2] < 10) ++count;
+        return count;
+      };
+      assert.ok(greenCount() > 0, 'event balloons must draw the script-selected image and frame');
+      retained.x = 1000; assert.equal(greenCount(), 0, 'script properties must affect the actual native drawable');
+      retained.x = 0; assert.ok(greenCount() > 0);
+      for (let i = 0; i < 80; ++i) engine.step(balloonSession);
+      assert.equal(retained.isPlaying(), false); assert.equal(retained.marker, marker);
+      assert.equal(greenCount(), 0, 'finished effects must leave the native renderer');
+      retained.setup(2); retained.update(); assert.equal(retained._duration, 75);
+      Balloon.prototype.updateFrame = function() { throw new Error('balloon override failed'); };
+      assert.throws(() => retained.update(), /balloon override failed/);
+    } finally { engine.dispose(balloonSession); }
+    assert.equal(observed._balloonId, 2, 'retained script references must survive session disposal');
+  });
+
+  await t.test('generated weather bindings dispatch aliases into the native weather renderer', () => {
+    const data = fixture([]); data.maps[1].parallaxName = 'Background';
+    const weatherSession = engine.create(data);
+    let observed, retained;
+    try {
+      engine.attach(weatherSession, { width: 32, height: 32, fontFile: 'font.ttf' });
+      const runtime = createScriptRuntime(engine, weatherSession, { native }); runtime.installScenes();
+      const { Weather, Container, ScreenSprite } = runtime.scope;
+      const schema = engine.classBindings.describe().find(type => type.name === 'Weather');
+      assert.equal(schema.parent, 'Container');
+      assert.equal(schema.methods.find(method => method.name === '_createDimmer').returnsValue, false);
+      const initialize = Weather.prototype.initialize, createDimmer = Weather.prototype._createDimmer;
+      Weather.prototype.initialize = function() { initialize.call(this); this.initializedByPlugin = true; };
+      Weather.prototype._createDimmer = function() {
+        createDimmer.call(this); this._dimmerSprite.setColor(255, 255, 255);
+        this.pluginState = {}; observed = this;
+        return this;
+      };
+      Weather.prototype._updateAllSprites = function() { this.updateCalls = (this.updateCalls || 0) + 1; return this; };
+      class CustomWeather extends Weather { customMethod() { return this.pluginState; } }
+      const manual = new CustomWeather();
+      assert.ok(manual instanceof Container); assert.equal(manual.customMethod(), manual.pluginState);
+      assert.equal(manual.initializedByPlugin, true);
+      assert.ok(manual._dimmerSprite instanceof ScreenSprite);
+      assert.equal(manual._dimmerSprite, manual.children[0]);
+      const origin = manual.origin; origin.set(3, 4);
+      manual.origin = { x: 8, y: 9 }; assert.equal(origin.x, 8); assert.equal(origin.y, 9);
+      origin.x = 12; assert.equal(manual.origin.x, 12);
+      manual.origin = origin; assert.equal(manual.origin.x, 12);
+      manual.power = 9; manual.update(); assert.equal(manual._dimmerSprite.opacity, 54);
+      const dimmer = manual._dimmerSprite;
+      assert.throws(() => { manual._dimmerSprite = new Container(); }, /wrong native type/);
+      assert.equal(manual._dimmerSprite, dimmer);
+      engine.newGame(weatherSession);
+      runtime.scope.$gameScreen.changeWeather('rain', 9, 0);
+      const capture = () => {
+        native.beginFrame(); engine.present(weatherSession); native.renderFrame();
+        return Array.from(native.canvas.captureSceneRawPremultiplied().subarray(0, 4));
+      };
+      assert.deepEqual(capture(), [54, 54, 54, 255]);
+      retained = observed;
+      assert.notEqual(retained, manual); assert.ok(retained instanceof Weather);
+      assert.equal(retained.initializedByPlugin, true); assert.equal(retained.type, 'rain');
+      assert.equal(retained._dimmerSprite.opacity, 54);
+      const state = retained.pluginState, calls = retained.updateCalls;
+      engine.step(weatherSession); capture();
+      assert.equal(observed, retained); assert.equal(retained.pluginState, state);
+      assert.ok(retained.updateCalls > calls);
+      retained._dimmerSprite.setBlack(); assert.deepEqual(capture(), [0, 0, 0, 255]);
+      retained._dimmerSprite.setWhite(); assert.deepEqual(capture(), [54, 54, 54, 255]);
+      Weather.prototype._updateDimmer = function() { throw new Error('weather override failed'); };
+      engine.step(weatherSession); assert.throws(capture, /weather override failed/);
+      Weather.prototype._updateDimmer = function() { this._dimmerSprite.opacity = 0; };
+      engine.step(weatherSession); assert.deepEqual(capture(), [0, 0, 0, 255]);
+    } finally { engine.dispose(weatherSession); }
+    assert.equal(retained.initializedByPlugin, true);
+    retained._dimmerSprite.setWhite(); assert.equal(retained._dimmerSprite.opacity, 0);
+  });
+
+  await t.test('generated audio bindings share native playback, listeners and engine buffer creation', () => {
+    const audioSession = engine.create(fixture([]));
+    let retained;
+    try {
+      engine.attach(audioSession, { width: 32, height: 32, fontFile: 'font.ttf' });
+      const runtime = createScriptRuntime(engine, audioSession, { native }); runtime.installScenes();
+      const { WebAudio, AudioManager } = runtime.scope;
+      assert.equal(typeof WebAudio.initialize(), 'boolean');
+      assert.equal(WebAudio.canPlayOgg(), true); WebAudio.setMasterVolume(1);
+      const initialize = WebAudio.prototype.initialize, play = WebAudio.prototype.play;
+      const played = [];
+      WebAudio.prototype.initialize = function(url) { initialize.call(this, url); this.pluginState = {}; };
+      WebAudio.prototype.play = function(loop, offset) { played.push(this); return play.call(this, loop, offset); };
+      class CustomAudio extends WebAudio { customMethod() { return this.pluginState; } }
+      const audio = new CustomAudio('audio/bgm/Tone.ogg');
+      assert.equal(audio.isReady(), false); assert.equal(audio._buffer, null);
+      assert.equal(audio.customMethod(), audio.pluginState);
+      const order = [];
+      audio.addLoadListener(() => {
+        order.push(['first', audio.isPlaying()]);
+        audio.addLoadListener(() => order.push(['late', audio.isPlaying()]));
+      });
+      audio.play(true, 0.25);
+      audio.addLoadListener(() => order.push(['second', audio.isPlaying()]));
+      engine.newGame(audioSession);
+      const present = () => { native.beginFrame(); engine.present(audioSession); native.renderFrame(); };
+      present();
+      assert.equal(audio.isReady(), true); assert.equal(audio.isError(), false);
+      assert.deepEqual(order, [['first', false], ['second', true], ['late', true]]);
+      assert.equal(played[0], audio); assert.equal(played[1], audio);
+      assert.equal(audio._buffer.length, audioFrames); assert.equal(audio._buffer.sampleRate, 48000);
+      assert.ok(audio.seek() >= 0.25 && audio.seek() < 0.5);
+      audio.volume = 0.3; audio.pan = -0.25; audio.pitch = 1.1;
+      assert.equal(audio.volume, 0.3); assert.equal(audio.pan, -0.25); assert.equal(audio.pitch, 1.1);
+      audio.addStopListener(() => { assert.equal(audio.isPlaying(), false); order.push('stop'); });
+      audio.stop(); audio.stop(); assert.equal(order.filter(value => value === 'stop').length, 1);
+      let discarded = false;
+      audio.addLoadListener(() => { discarded = true; }); audio.clear();
+      assert.equal(audio._buffer, null);
+      initialize.call(audio, 'audio/bgm/Tone.ogg');
+      let loaded = 0; audio.addLoadListener(() => ++loaded); present(); present();
+      assert.equal(loaded, 1); assert.equal(discarded, false);
+      retained = new WebAudio('audio/bgm/Tone.ogg');
+      let nativeLoads = 0; retained.addLoadListener(() => ++nativeLoads);
+      const state = retained.pluginState, requests = [];
+      AudioManager.createBuffer = function(kind, name) { requests.push([kind, name]); return retained; };
+      AudioManager.playBgm({ name: 'Tone', volume: 60, pitch: 100, pan: 0 }); present();
+      assert.deepEqual(requests, [['bgm', 'Tone']]);
+      assert.equal(played.at(-1), retained); assert.equal(retained.pluginState, state);
+      assert.equal(retained.isPlaying(), true); assert.equal(retained.volume, 0.6);
+      assert.equal(retained._buffer.length, audioFrames);
+      present(); assert.equal(nativeLoads, 1, 'synchronous engine loading must cancel the queued load');
+      AudioManager.stopBgm(); present();
+      assert.equal(retained.isPlaying(), false); assert.equal(retained.isReady(), true);
+      retained.play(true); assert.equal(retained.isPlaying(), true); retained.stop();
+      AudioManager.playSe({ name: 'Tone', volume: 60, pitch: 100, pan: 0 }); present();
+      assert.equal(retained.isPlaying(), true);
+      AudioManager.stopSe(); present(); assert.equal(retained.isPlaying(), false);
+      assert.equal(retained.isReady(), true);
+      const bad = new WebAudio('audio/bgm/Tone.ogg');
+      bad.addLoadListener(() => { throw new Error('audio listener failed'); });
+      assert.throws(present, /audio listener failed/);
+      assert.equal(bad.isReady(), true);
+      bad.addStopListener(() => { throw new Error('audio stop failed'); });
+      assert.throws(() => bad.stop(), /audio stop failed/);
+      present();
+      AudioManager.playBgm({ name: 'Tone', volume: 60, pitch: 100, pan: 0 }); present();
+      WebAudio.prototype.stop = function() { throw new Error('destructor must not invoke script'); };
+    } finally { engine.dispose(audioSession); }
+    assert.equal(retained.isPlaying(), false); assert.equal(retained.isReady(), true);
+    assert.equal(retained._buffer.length, audioFrames);
+  });
+
+  await t.test('native audio presentation restores its position without script bindings', () => {
+    const data = fixture([]);
+    data.maps[1].autoplayBgm = true;
+    data.maps[1].bgm = { name: 'Tone', volume: 80, pitch: 100, pan: 0 };
+    const audioSession = engine.create(data);
+    try {
+      engine.attach(audioSession, { width: 32, height: 32, fontFile: 'font.ttf' });
+      engine.newGame(audioSession);
+      const present = () => { native.beginFrame(); engine.present(audioSession); native.renderFrame(); };
+      present();
+      const saved = engine.save(audioSession);
+      saved.system._bgmOnSave.pos = 0.35;
+      engine.load(audioSession, saved); present();
+      const restored = engine.save(audioSession).system._bgmOnSave;
+      assert.equal(restored.name, 'Tone'); assert.ok(restored.pos >= 0.35);
+    } finally { engine.dispose(audioSession); }
   });
 
 });

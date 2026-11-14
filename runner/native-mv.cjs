@@ -64,7 +64,7 @@ async function runNativeMv(options, hooks = {}) {
     engine.configure(session, configuration);
     let configurationRevision = engine.storageStatus(session).configurationRevision;
     engine.setSaveMetadata(session, loadSaveMetadata(storage, compression));
-    const runtimeOptions = { engine, session, native, manifest: loaded.manifest, database, settings, storage, gameRoot: root, guestArguments: options.guestArguments,
+    const runtimeOptions = { engine, session, native, manifest: loaded.manifest, database, settings, storage, gameRoot: root, config, guestArguments: options.guestArguments,
       createPluginRuntime: require('./native-plugins.cjs').createPluginRuntime };
     const scriptRuntime = hooks.installRuntime ? await hooks.installRuntime(runtimeOptions) :
       adapter ? adapter.createRuntime(runtimeOptions) : loaded.manifest ? require('./native-plugins.cjs').createPluginRuntime(engine, session, runtimeOptions) : null;
@@ -81,8 +81,9 @@ async function runNativeMv(options, hooks = {}) {
       if (!timing.uncapped && now < deadline) { await new Promise(resolve => setTimeout(resolve, deadline - now)); continue; }
       if (!timing.uncapped) deadline = Math.max(deadline + timing.renderPeriod, now - timing.renderPeriod * 4);
       const due = logicalClock.takeSteps(now);
+      await scriptRuntime?.beforeFrame?.();
       for (let step = 0; step < due; ++step) {
-        if ((scriptRuntime?.step ? scriptRuntime.step() : engine.step(session)) === false) break gameLoop;
+        if ((scriptRuntime?.step ? await scriptRuntime.step() : engine.step(session)) === false) break gameLoop;
         const request = engine.storageStatus(session);
         if (request.configurationRevision !== configurationRevision) {
           storage.writeText('config.rpgsave', compression.compressToBase64(JSON.stringify(engine.configuration(session))));

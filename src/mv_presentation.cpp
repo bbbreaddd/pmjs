@@ -80,10 +80,16 @@ Presentation::~Presentation() {
   for (auto handle : deferredImageReleases_) core_.images().release(handle);
   deferredImageReleases_.clear();
   coreWindows_.clear(); coreWindowskin_.reset();
+  const auto stopVoice=[this](const std::shared_ptr<core::WebAudio>& voice) {
+    if (voice && voice->nativeHandle()) core_.media().stop(voice->nativeHandle());
+  };
+  for (const auto& sound:sounds_) stopVoice(sound);
+  stopVoice(musicEffect_);
+  for (const auto& [kind,voice]:audio_) { (void)kind; stopVoice(voice.second); }
   sounds_.clear();
   musicEffect_.reset();
   audio_.clear();
-  coreWeather_.reset();
+  clearWeather();
   if (timerCanvas_) core_.canvases().release(timerCanvas_);
   clearUiContents();
   core_.canvases().release(globalTextCanvas_);
@@ -1434,8 +1440,10 @@ void Presentation::battleEffects() {
       const int index = target.index;
       float x, y;
       if (enemy) {
-        const auto& member = session_.database_["troops"][session_.battle_.troopId]["members"][index];
-        x = member["x"].number(); y = member["y"].number() - 8;
+        const auto* sprite = session_.enemySprite(index);
+        if (!sprite) continue;
+        x = sprite->homePosition.x + sprite->offset.x + sprite->shake;
+        y = sprite->homePosition.y + sprite->offset.y - 8;
       } else {
         if (!session_.database_["system"]["optSideView"].boolean()) continue;
         if (index < 0 || index >= static_cast<int>(session_.battleMemberCount())) continue;
@@ -1464,7 +1472,14 @@ void applyAudioParameters(core::WebAudio& voice, const Value& sound, int channel
   voice.setPitch(sound["pitch"].number(100) / 100.0);
   voice.setPan(sound["pan"].number() / 100.0);
 }
-std::unique_ptr<core::WebAudio> loadAudioVoice(RuntimeCore& core, const std::string& kind, const std::string& name) {
+std::shared_ptr<core::WebAudio> loadAudioVoice(RuntimeCore& core, const std::shared_ptr<RuntimeHooks>& hooks, const std::string& kind, const std::string& name) {
+  if (hooks && hooks->audioBuffer) {
+    if (auto voice=hooks->audioBuffer(kind,name)) {
+      voice->finishLoading();
+      if (!voice->isReady()) throw std::runtime_error("audio unavailable: "+name);
+      return voice;
+    }
+  }
   const std::string stem = "audio/" + kind + "/" + name;
   std::string url;
   if (Decrypter::hasEncryptedAudio) {
@@ -1478,7 +1493,7 @@ std::unique_ptr<core::WebAudio> loadAudioVoice(RuntimeCore& core, const std::str
     else if (core.vfs().resolve(stem + ".rpgmvm")) url = stem + ".m4a";
   }
   if (url.empty()) throw std::runtime_error("audio unavailable: " + name);
-  auto voice = std::make_unique<core::WebAudio>(url, false, false);
+  auto voice = std::make_shared<core::WebAudio>(url, false, false);
   if (!voice->isReady()) throw std::runtime_error("audio unavailable: " + name);
   return voice;
 }
@@ -1498,6 +1513,7 @@ void Presentation::processAudio() {
     }
     if (kind == "save-bgm") { session_.system_.storedBgm = audioState("bgm"); continue; }
     if (kind == "stop-se") {
+      for (const auto& sound:sounds_) sound->stop();
       sounds_.clear(); continue;
     }
     if (kind == "fade-bgm" || kind == "fade-bgs") {
@@ -1533,7 +1549,7 @@ void Presentation::processAudio() {
     const auto name = sound["name"].text();
     if (restore || replay) (kind == "bgm" ? session_.savedBgm_ : session_.savedBgs_) = sound;
     if (kind == "me" && musicEffect_) {
-      musicEffect_.reset();
+      musicEffect_->stop(); musicEffect_.reset();
       if (audio_["bgm"].second && audio_["bgm"].second->nativeHandle()) {
         core_.media().setSuspended(audio_["bgm"].second->nativeHandle(), false);
       }
@@ -1542,10 +1558,10 @@ void Presentation::processAudio() {
       audioSettings_[kind] = sound;
       auto& active = audio_[kind];
       const bool changed = active.first != name;
-      if ((active.first != name || name.empty()) && active.second) { active.second.reset(); active.first.clear(); }
+      if ((active.first != name || name.empty()) && active.second) { active.second->stop(); active.second.reset(); active.first.clear(); }
       if (name.empty()) continue;
       if (active.first != name) {
-        active.second = loadAudioVoice(core_, kind, name);
+        active.second = loadAudioVoice(core_, session_.runtimeHooks_, kind, name);
         active.first = name;
         applyAudioParameters(*active.second, sound, session_.volumes_[audioChannelIndex(kind)]);
         active.second->play(true, 0);
@@ -1555,7 +1571,7 @@ void Presentation::processAudio() {
       }
       if (replay && changed) active.second->fadeIn(0.5);
     } else if (!name.empty()) {
-      auto voice = loadAudioVoice(core_, kind, name);
+      auto voice = loadAudioVoice(core_, session_.runtimeHooks_, kind, name);
       applyAudioParameters(*voice, sound, session_.volumes_[audioChannelIndex(kind)]);
       voice->play(false, 0);
       if (kind == "me") {
@@ -1607,7 +1623,7 @@ void Presentation::renderStage() {
   if (scriptStage_) { scriptStage_->render(core_.renderer()); return; }
   const int sceneId = static_cast<int>(session_.ui_.scene);
   if (sceneId != lastScene_ || session_.mapId_ != lastMap_ || session_.presentationRevision_ != lastPresentationRevision_) {
-    coreWeather_.reset();
+    clearWeather();
     clearMapGeometry();
     clearTiledGeometry();
     clearBattleContents();

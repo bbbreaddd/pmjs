@@ -368,6 +368,7 @@ function createScriptRuntime(engine, session, options = {}) {
   scope.Game_Screen = Game_Screen;
   gameDataDefaults.set('screen', screenDefaults); gameDataStores.set('screen', scope.$gameScreen);
   function Game_System() { throw new Error('Game_System construction is engine-owned'); }
+  Game_System.prototype.isSideView = function() { return engine.gameDataInvoke(session, 'system', 'isSideView', []); };
   Game_System.prototype.initialize = function() { engine.gameDataInvoke(session, 'system', 'initialize', []); };
   for (const name of ['save', 'menu', 'encounter', 'formation']) {
     const field = name + 'Enabled', label = name[0].toUpperCase() + name.slice(1);
@@ -441,6 +442,12 @@ function createScriptRuntime(engine, session, options = {}) {
   Game_Battler.prototype = Object.create(Game_BattlerBase.prototype); Game_Battler.prototype.constructor = Game_Battler;
   function Game_Enemy() { throw new Error('Enemy construction is engine-owned'); }
   Game_Enemy.prototype = Object.create(Game_Battler.prototype); Game_Enemy.prototype.constructor = Game_Enemy;
+  for (const field of ['screenX', 'screenY']) Object.defineProperty(Game_Enemy.prototype, '_' + field, {
+    configurable: true, get() { return engine.entityField(actors.get(this), field); },
+    set(value) { engine.entityField(actors.get(this), field, value); }
+  });
+  Game_Enemy.prototype.screenX = function() { return this._screenX; };
+  Game_Enemy.prototype.screenY = function() { return this._screenY; };
   Game_BattlerBase.prototype.isActor = function() { return !engine.entityField(actors.get(this), 'enemy'); };
   Game_BattlerBase.prototype.isEnemy = function() { return engine.entityField(actors.get(this), 'enemy'); };
   Game_BattlerBase.prototype.attackSkillId = function() { return 1; };
@@ -544,6 +551,7 @@ function createScriptRuntime(engine, session, options = {}) {
   if (options.native) {
     scope.Bitmap = createBitmapClass(options.native);
     scope.ImageManager = createImageManager(options.native, scope.Bitmap);
+    scope.ImageCache = scope.ImageManager._imageCache.constructor;
   }
   const context = vm.createContext(scope);
   vm.runInContext(`Object.defineProperties(Array.prototype, {
@@ -569,6 +577,21 @@ function createScriptRuntime(engine, session, options = {}) {
       if (method === 'itemHit') rateAction = action;
       try { return action[method](wrapBattler(targetHandle)); }
       finally { if (method === 'itemEva') rateAction = null; }
+    },
+    boundMethod(handle, method, args) {
+      return classBindings ? classBindings.dispatch(handle, handle.bindingType, method, args) : null;
+    },
+    retainBoundObject(handle) { classBindings.wrap(handle, handle.bindingType); },
+    boundListener(handle, token) { classBindings.deliver(handle, token); },
+    audioBuffer(kind, name) { return classBindings ? classBindings.handle(scope.AudioManager.createBuffer(kind, name)) : null; },
+    systemBitmap(handle, name) {
+      const sprite = classBindings.wrap(handle, 'Sprite_Balloon');
+      sprite.bitmap = scope.ImageManager.loadSystem(name);
+      return bitmapHandle(scope.Bitmap, sprite.bitmap);
+    },
+    enemySpriteBattler(handle, enemyHandle) {
+      if (!classBindings) return false;
+      return classBindings.dispatch(handle, 'Sprite_Enemy', 'setBattler', () => [wrapEntity(enemyHandle, Game_Enemy, actors)]) !== null;
     },
     actorSpriteHome(handle, index) { return classBindings ? classBindings.dispatch(handle, 'Sprite_Actor', 'setActorHome', [index]) !== null : false; },
     actorLifecycle(handle, method) {
@@ -738,10 +761,14 @@ function createScriptRuntime(engine, session, options = {}) {
         loadDatabase() { if (result.database) result.database.load(); else scope.DataManager.loadDatabase?.(); },
         isDatabaseReady() { return result.database ? result.database.isReady() : true; },
         startAnimation(handle, id, mirror, delay, rate) { engine.displayAnimation(session, handle, id, mirror, delay, rate); },
-        performTransfer() { engine.playerTransfer(session, 'perform'); }
+        performTransfer() { engine.playerTransfer(session, 'perform'); },
+        messageWindow(method) { return engine.messageInvoke(session, 'window.' + method, []); },
+        messageWindowField(field, ...value) { return engine.messageField(session, field, ...value); },
+        boundDisplay(handle, runtime) { return engine.classBindings.display(handle, runtime); },
+        boundDisplayField(handle, field, runtime, ...value) { return engine.classBindings.displayField(handle, field, runtime, ...value); }
       });
       Object.assign(scope, scenes);
-      classBindings = installClassBindings(scope, engine.classBindings, session);
+      classBindings = installClassBindings(scope, engine.classBindings, session, { unwrap: object => actors.get(object) || characters.get(object), initializeDisplay: scenes.initializeDisplay, displayField: scenes.displayField });
       scope.navigator = {
         platform: process.platform, userAgent: 'pmjs native runtime', language: 'en-US',
         getGamepads() {
@@ -754,6 +781,10 @@ function createScriptRuntime(engine, session, options = {}) {
         }
       };
       scope.AudioManager = {};
+      scope.AudioManager.audioFileExt = function() { return scope.WebAudio.canPlayOgg() ? '.ogg' : '.m4a'; };
+      scope.AudioManager.createBuffer = function(folder, name) {
+        return new scope.WebAudio('audio/' + folder + '/' + encodeURIComponent(name) + this.audioFileExt());
+      };
       for (const method of ['playBgm', 'playBgs', 'playSe', 'playMe', 'stopBgm', 'stopBgs', 'stopMe', 'stopSe', 'fadeOutBgm', 'fadeOutBgs', 'fadeOutMe'])
         scope.AudioManager[method] = (...args) => engine.managerInvoke(session, method, ...args);
       scope.AudioManager.stopAll = function() { this.stopMe(); this.stopBgm(); this.stopBgs(); this.stopSe(); };

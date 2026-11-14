@@ -146,7 +146,8 @@ class Presentation {
   void screenTone();
   void finishScreen(std::size_t first);
   void weather();
-  std::unique_ptr<core::Weather> coreWeather_;
+  void clearWeather();
+  std::shared_ptr<core::Weather> coreWeather_;
   void battleEffects();
   void battleSprites();
   std::vector<int> battlerIcons(const Battler& actor) const;
@@ -196,12 +197,12 @@ class Presentation {
   std::shared_ptr<core::PixelBitmap> coreWindowskin_;
   std::vector<std::filesystem::path> fonts_;
   std::array<std::uint32_t, 32> colors_{};
-  std::map<std::string, std::pair<std::string, std::unique_ptr<core::WebAudio>>> audio_;
+  std::map<std::string, std::pair<std::string, std::shared_ptr<core::WebAudio>>> audio_;
   std::map<std::string, Value> audioSettings_;
-  std::unique_ptr<core::WebAudio> musicEffect_;
+  std::shared_ptr<core::WebAudio> musicEffect_;
   int lastScene_ = -1, lastMap_ = -1;
   std::uint64_t lastPresentationRevision_ = 0;
-  std::vector<std::unique_ptr<core::WebAudio>> sounds_;
+  std::vector<std::shared_ptr<core::WebAudio>> sounds_;
   double cameraX_ = 0, cameraY_ = 0;
   double sceneTickOrigin_ = 0;
 };

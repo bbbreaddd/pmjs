@@ -133,6 +133,7 @@ set(PMJS_RUNTIME_SOURCES
   src/mv_animation_presentation.cpp
   src/mv_windows.cpp
   src/mv_sprites.cpp
+  src/mv_generated_bindings.cpp
   src/mv_managers.cpp
   src/mv_battle_extra.cpp
   src/mv_map_extra.cpp

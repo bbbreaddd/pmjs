@@ -1,5 +1,6 @@
 #include "mv_presentation.hpp"
 #include "mv_sprites.hpp"
+#include "mv_generated_bindings.hpp"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -42,11 +43,24 @@ void Presentation::finishScreen(std::size_t first) {
   core_.renderer().transformQueuedCommands(first, {scale,0,0,scale,x,y});
 }
 void Presentation::weather() {
-  if(!coreWeather_)coreWeather_=std::make_unique<core::Weather>();
+  if(!coreWeather_) {
+    if (session_.runtimeHooks_ && session_.runtimeHooks_->boundMethod) {
+      auto object=createGeneratedObject("Weather",session_.runtimeHooks_);
+      object->active=true;
+      try { object->initializeNative(); }
+      catch (...) { object->active=false; throw; }
+      session_.weatherRuntime_=object;
+      coreWeather_=std::dynamic_pointer_cast<core::Weather>(object);
+    } else coreWeather_=std::make_shared<core::Weather>();
+  }
   coreWeather_->type=session_.screenEffects_["_weatherType"].text();
   coreWeather_->power=session_.screenEffects_["_weatherPower"].number();coreWeather_->width=core_.width();coreWeather_->height=core_.height();
   const auto& tiled=session_.database_["tiledMaps"][std::to_string(session_.mapId_)];
   coreWeather_->origin={cameraX_*tiled["tilewidth"].integer(48),cameraY_*tiled["tileheight"].integer(48)};
   coreWeather_->synchronize(session_.ticks_);coreWeather_->render(core_.renderer());
+}
+void Presentation::clearWeather() {
+  if (session_.weatherRuntime_) session_.weatherRuntime_->active=false;
+  session_.weatherRuntime_.reset(); coreWeather_.reset();
 }
 }  // namespace pmjs::mv

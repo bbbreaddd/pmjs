@@ -274,18 +274,25 @@ class WindowLayer:public Container {
 };
 class Weather:public Container {
  public:
-  Weather();
+  explicit Weather(bool initializeNow = true);
+  virtual void initialize();
   std::string type="none";
   double power=0;
   Point origin;
   int width=816,height=624;
   std::function<double()> random;
+  std::shared_ptr<ScreenSprite> dimmerSprite;
+  virtual void createBitmaps();
+  virtual void createDimmer();
+  virtual void updateDimmer();
+  virtual void updateAllSprites();
+  virtual void addSprite();
+  virtual void removeSprite();
   void update()override;
   void synchronize(std::uint64_t frame);
  private:
   struct Particle{std::shared_ptr<Sprite> sprite;double ax=0,ay=0;};
   std::vector<Particle> particles_;
-  std::shared_ptr<ScreenSprite> dimmer_;
   std::array<std::shared_ptr<PixelBitmap>,3> bitmaps_;
   std::mt19937 randomEngine_{std::random_device{}()};
   std::optional<std::uint64_t> lastFrame_;

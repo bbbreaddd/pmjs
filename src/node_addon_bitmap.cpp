@@ -176,22 +176,60 @@ napi_value cacheImage(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info);
   if (args.size() < 3 || args.size() > 4) throw std::invalid_argument("image cache requires runtime, operation, key and optional bitmap");
   auto runtime = services(env, args[0]); const auto operation = asString(env, args[1]), key = asString(env, args[2]);
+  if (operation == "keys") {
+    napi_value keys;
+    check(env,napi_create_array(env,&keys),"cannot list cache keys");
+    std::uint32_t index=0;
+    for (const auto& [name,entry]:runtime->imageCache.items) { (void)entry; check(env,napi_set_element(env,keys,index++,string(env,name)),"cannot list cache key"); }
+    return keys;
+  }
+  if (operation == "truncate") { runtime->imageCache.truncateCache(); return undefined(env); }
   if (operation == "remove") { runtime->imageCache.items.erase(key); return undefined(env); }
   if (operation == "add") {
     if (args.size() != 4) throw std::invalid_argument("cache insertion requires bitmap");
     auto& image = unwrapBitmap(env, args[3]);
-    if (image.services != runtime) throw std::invalid_argument("cached bitmap belongs to another runtime");
+    if (&image.services->owner->core != &runtime->owner->core) throw std::invalid_argument("cached bitmap belongs to another runtime");
     runtime->imageCache.reserve(key, 0, 0);
     auto* entry = runtime->imageCache.get(key);
     entry->bitmap = image.bitmap; entry->bitmapIdentity = mv::nextRuntimeIdentity(); entry->reservationId.reset();
     entry->requestOnly = image.bitmap->isRequestOnly(); entry->ready = image.bitmap->isReady(); entry->error = image.bitmap->isError();
     entry->pixelCount = static_cast<std::size_t>(image.bitmap->width) * image.bitmap->height;
-  } else if (operation != "get") throw std::invalid_argument("image cache operation is not bound: " + operation);
-  auto* entry = runtime->imageCache.get(key); if (!entry || !entry->bitmap) return null(env);
+  } else if (operation != "get" && operation != "entry" && operation != "setEntry" && operation != "held" && operation != "error")
+    throw std::invalid_argument("image cache operation is not bound: " + operation);
+  mv::ImageCache::Entry* entry=nullptr;
+  if (operation == "get" || operation == "add") entry=runtime->imageCache.get(key);
+  else if (operation == "error") {
+    for (auto& [name,item]:runtime->imageCache.items) { (void)name; if (item.bitmap) item.error=item.bitmap->isError(); }
+    entry=runtime->imageCache.getErrorBitmap();
+  } else {
+    const auto found=runtime->imageCache.items.find(key); if (found!=runtime->imageCache.items.end()) entry=&found->second;
+  }
+  if (!entry || !entry->bitmap) return null(env);
+  if (operation == "held") { entry->ready=entry->bitmap->isReady(); return boolean(env,runtime->imageCache.mustBeHeld(*entry)); }
+  if (operation == "setEntry") {
+    if (args.size()!=4) throw std::invalid_argument("cache update requires properties");
+    napi_value value;
+    bool has=false; check(env,napi_has_named_property(env,args[3],"touch",&has),"cannot inspect touch");
+    if (has) { check(env,napi_get_named_property(env,args[3],"touch",&value),"cannot read touch"); entry->touch=static_cast<std::uint64_t>(asNumber(env,value)); }
+    check(env,napi_has_named_property(env,args[3],"reservationId",&has),"cannot inspect reservation");
+    if (has) {
+      check(env,napi_get_named_property(env,args[3],"reservationId",&value),"cannot read reservation");
+      napi_valuetype type; check(env,napi_typeof(env,value,&type),"cannot inspect reservation ID");
+      if (type==napi_null || type==napi_undefined) entry->reservationId.reset();
+      else { std::uint64_t id; bool lossless; check(env,napi_get_value_bigint_uint64(env,value,&id,&lossless),"invalid reservation ID"); if (!lossless) throw std::invalid_argument("reservation ID outside range"); entry->reservationId=id; }
+    }
+  }
   auto result = moduleObject(env); napi_value identity;
   check(env, napi_create_bigint_uint64(env, entry->bitmapIdentity, &identity), "cannot identify cached bitmap");
   check(env, napi_set_named_property(env, result, "identity", identity), "cannot set cached identity");
   check(env, napi_set_named_property(env, result, "handle", wrapBitmap(env, runtime, entry->bitmap)), "cannot return cached bitmap");
+  if (operation == "entry" || operation == "setEntry" || operation == "error") {
+    check(env,napi_set_named_property(env,result,"key",string(env,entry->key)),"cannot return cache key");
+    check(env,napi_set_named_property(env,result,"touch",number(env,entry->touch)),"cannot return cache touch");
+    napi_value reservation=null(env);
+    if (entry->reservationId) check(env,napi_create_bigint_uint64(env,*entry->reservationId,&reservation),"cannot return reservation");
+    check(env,napi_set_named_property(env,result,"reservationId",reservation),"cannot return reservation ID");
+  }
   return result;
 } catch (const std::exception& error) { return throwException(env, error); }
 napi_value imagePath(napi_env env, napi_callback_info info) try {

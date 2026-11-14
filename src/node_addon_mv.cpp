@@ -6,6 +6,7 @@
 #include "mv_core_utils.hpp"
 #include "mv_managers.hpp"
 #include "mv_sprites.hpp"
+#include "mv_generated_bindings.hpp"
 #include "mv_windows.hpp"
 #include <cmath>
 
@@ -143,6 +144,8 @@ napi_value runtimeHandle(EngineSession& owner, const std::shared_ptr<mv::Runtime
   check(env, napi_create_bigint_uint64(env, object->identity, &identity), "cannot create runtime identity");
   const napi_property_descriptor identityProperty{"identity", nullptr, nullptr, nullptr, nullptr, identity, napi_default, nullptr};
   check(env, napi_define_properties(env, result, 1, &identityProperty), "cannot set runtime identity");
+  if (const auto bound = std::dynamic_pointer_cast<mv::RuntimeBoundObject>(object))
+    check(env, napi_set_named_property(env, result, "bindingType", string(env, bound->bindingType())), "cannot set runtime binding type");
   if (const auto picture = std::dynamic_pointer_cast<mv::RuntimePicture>(object)) {
     napi_value spriteIdentity;
     check(env, napi_create_bigint_uint64(env, picture->sprite->runtimeIdentity, &spriteIdentity), "cannot identify picture sprite");
@@ -385,8 +388,34 @@ napi_value connectRuntime(napi_env env, napi_callback_info info) try {
   hooks->characterScript = [&owner](const auto& object, const std::string& source) {
     callRuntime(owner, "characterScript", {runtimeHandle(owner, object), string(owner.env, source)});
   };
+  hooks->enemySpriteBattler = [&owner](const auto& object, const auto& battler) {
+    return asBoolean(owner.env, callRuntime(owner, "enemySpriteBattler", {runtimeHandle(owner, object), runtimeHandle(owner, battler)}));
+  };
   hooks->actorSpriteHome = [&owner](const auto& object, int index) {
     return asBoolean(owner.env, callRuntime(owner, "actorSpriteHome", {runtimeHandle(owner, object), number(owner.env, index)}));
+  };
+  hooks->boundMethod = [&owner](const auto& object, const std::string& method, const mv::Value::Array& arguments) -> std::optional<mv::Value> {
+    auto result = callRuntime(owner, "boundMethod", {runtimeHandle(owner, object), string(owner.env, method), writeValue(owner.env, arguments)});
+    napi_valuetype type; check(owner.env, napi_typeof(owner.env, result, &type), "cannot inspect method override");
+    if (type == napi_null) return {};
+    napi_value value; check(owner.env, napi_get_named_property(owner.env, result, "value", &value), "cannot read method result");
+    return readValue(owner.env, value);
+  };
+  hooks->boundListener = [&owner](const auto& object, std::uint32_t token) {
+    callRuntime(owner,"boundListener",{runtimeHandle(owner,object),number(owner.env,token)});
+  };
+  hooks->audioBuffer = [&owner](const std::string& kind,const std::string& name) -> std::shared_ptr<mv::core::WebAudio> {
+    const auto result=callRuntime(owner,"audioBuffer",{string(owner.env,kind),string(owner.env,name)});
+    napi_valuetype type; check(owner.env,napi_typeof(owner.env,result,&type),"cannot inspect audio factory");
+    if (type==napi_null) return {};
+    const auto object=runtimeAs<mv::GeneratedRuntimeObject>(owner.env,result);
+    if (!std::dynamic_pointer_cast<mv::core::WebAudio>(object)) throw std::invalid_argument("audio buffer must use a native WebAudio binding");
+    auto audio=std::dynamic_pointer_cast<mv::core::WebAudio>(object->nativeLease());
+    callRuntime(owner,"retainBoundObject",{runtimeHandle(owner,object)});
+    return audio;
+  };
+  hooks->systemBitmap = [&owner](const auto& object, const std::string& name) {
+    return bitmapForRuntime(owner.env, callRuntime(owner, "systemBitmap", {runtimeHandle(owner, object), string(owner.env, name)}), owner.owner->core);
   };
   hooks->actorLifecycle = [&owner](const auto& object, const std::string& method) {
     return asBoolean(owner.env, callRuntime(owner, "actorLifecycle", {runtimeHandle(owner, object), string(owner.env, method)}));
@@ -559,6 +588,35 @@ napi_value ownsPictureSprite(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info, 2); auto& owner = session(env, args.at(0)); requireRuntimeOwner(owner, args.at(1));
   return boolean(env, owner.session->ownsPictureSprite(*runtimeAs<mv::RuntimePicture>(env, args[1])));
 } catch (const std::exception& error) { return throwException(env, error); }
+napi_value coreService(napi_env env,napi_callback_info info) try {
+  const auto args=arguments(env,info); const auto methodName=asString(env,args.at(0));
+  using Decrypter=mv::Decrypter;
+  if (methodName=="extToEncryptExt") return string(env,Decrypter::extToEncryptExt(asString(env,args.at(1))));
+  if (methodName=="checkImgIgnore") return boolean(env,Decrypter::checkImgIgnore(asString(env,args.at(1))));
+  if (methodName=="readEncryptionkey") { Decrypter::readEncryptionkey(readValue(env,args.at(1))); return undefined(env); }
+  if (methodName=="encryptionKey") {
+    constexpr char digits[]="0123456789abcdef"; mv::Value::Array values;
+    for (auto byte:Decrypter::encryptionKey) values.emplace_back(std::string{digits[byte>>4],digits[byte&15]});
+    return writeValue(env,values);
+  }
+  if (methodName=="hasEncryptedImages" || methodName=="hasEncryptedAudio") {
+    auto& flag=methodName=="hasEncryptedImages" ? Decrypter::hasEncryptedImages : Decrypter::hasEncryptedAudio;
+    if (args.size()>1) flag=asBoolean(env,args[1]); return boolean(env,flag);
+  }
+  if (methodName=="decryptArrayBuffer" || methodName=="cutArrayHeader") {
+    bool array=false; check(env,napi_is_arraybuffer(env,args.at(1),&array),"cannot inspect encrypted bytes");
+    if (!array) throw std::invalid_argument("decryption requires an ArrayBuffer");
+    void* data=nullptr; std::size_t length=0;
+    check(env,napi_get_arraybuffer_info(env,args[1],&data,&length),"cannot read encrypted bytes");
+    const auto* start=static_cast<const std::uint8_t*>(data);
+    std::vector<std::uint8_t> bytes; if (length) bytes.assign(start,start+length);
+    const auto result=methodName=="decryptArrayBuffer" ? Decrypter::decryptArrayBuffer(bytes) : Decrypter::cutArrayHeader(bytes,Decrypter::kHeaderLen);
+    napi_value output; void* destination=nullptr;
+    check(env,napi_create_arraybuffer(env,result.size(),&destination,&output),"cannot allocate decrypted bytes");
+    if (!result.empty()) std::memcpy(destination,result.data(),result.size()); return output;
+  }
+  throw std::invalid_argument("core service is not bound: "+methodName);
+} catch (const std::exception& error) { return throwException(env,error); }
 napi_value messageInvoke(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info, 3); auto& owner = session(env, args.at(0));
   RuntimeCallScope callScope(owner);
@@ -942,6 +1000,7 @@ napi_value entityField(napi_env env, napi_callback_info info) try {
     auto& value = actor->value();
     if (field == "id") return number(env, value.id);
     if (field == "enemy") return boolean(env, value.enemy);
+    if (field == "screenX") scalar = &value.screenX; else if (field == "screenY") scalar = &value.screenY;
     if (field == "hp") integer = &value.hp; else if (field == "mp") integer = &value.mp; else if (field == "tp") integer = &value.tp;
     else if (field == "name") text = &value.name; else if (field == "nickname") text = &value.nickname;
   } else throw std::invalid_argument("entity handle is not bound");
@@ -971,7 +1030,28 @@ const std::vector<mv::ClassBinding>& bindingClasses() {
   using namespace mv;
   const auto battler = [](RuntimeBoundObject& object) -> Sprite_Battler& { return dynamic_cast<RuntimeBattlerSprite&>(object).state(); };
   const auto actor = [](RuntimeBoundObject& object) -> Sprite_Actor& { return dynamic_cast<RuntimeActorSprite&>(object).value; };
-  static const std::vector<ClassBinding> classes{
+  const auto enemy = [](RuntimeBoundObject& object) -> Sprite_Enemy& { return *dynamic_cast<RuntimeEnemySprite&>(object).value; };
+  const auto enemyObject = [](RuntimeBoundObject& object) -> RuntimeEnemySprite& { return dynamic_cast<RuntimeEnemySprite&>(object); };
+  auto setEnemy = bindingMethod("setBattler", enemyObject, &RuntimeEnemySprite::setBattler);
+  setEnemy.aliases = {{"_battler", 0}, {"_enemy", 0}};
+  const auto balloon = [](RuntimeBoundObject& object) -> RuntimeBalloon& { return dynamic_cast<RuntimeBalloon&>(object); };
+  const auto balloonMethods = [balloon] {
+    std::vector<BindingMethod> result;
+    for (const auto* name : {"_initializeBalloon", "initMembers", "loadBitmap", "setup", "update", "updateFrame", "frameIndex", "speed", "waitTime", "isPlaying"}) {
+      const std::size_t arity = std::string(name) == "setup" ? 1 : 0;
+      result.push_back({name, arity, [balloon, method = std::string(name)](RuntimeBoundObject& object, const BindingArguments& arguments) {
+        Value::Array values; for (const auto& argument : arguments) values.push_back(std::get<Value>(argument));
+        return balloon(object).invoke(method, values);
+      }, std::vector<std::string>(arity, "value"), {}, std::string(name) == "frameIndex" || std::string(name) == "speed" || std::string(name) == "waitTime" || std::string(name) == "isPlaying"});
+    }
+    return result;
+  };
+  static const std::vector<ClassBinding> classes = [&] {
+  std::vector<ClassBinding> result{
+    {"Sprite_Balloon", "Sprite_Base", "pmjs::mv::Sprite_Balloon", [] { return std::make_shared<RuntimeBalloon>(); }, {
+      bindingField("_balloonId", [balloon](RuntimeBoundObject& object) -> int& { return balloon(object).value.balloonId; }),
+      bindingField("_duration", [balloon](RuntimeBoundObject& object) -> int& { return balloon(object).value.duration; })
+    }, balloonMethods(), "_initializeBalloon", {}},
     {"Sprite_Battler", "Sprite_Base", "pmjs::mv::Sprite_Battler", [] { return std::make_shared<RuntimeBaseBattlerSprite>(); }, {
       bindingField("_homeX", [battler](RuntimeBoundObject& object) -> float& { return battler(object).homePosition.x; }),
       bindingField("_homeY", [battler](RuntimeBoundObject& object) -> float& { return battler(object).homePosition.y; }),
@@ -989,8 +1069,17 @@ const std::vector<mv::ClassBinding>& bindingClasses() {
     {"Sprite_Actor", "Sprite_Battler", "pmjs::mv::Sprite_Actor", [] { return std::make_shared<RuntimeActorSprite>(); }, {}, {
       bindingMethod("setActorHome", actor, &Sprite_Actor::setActorHome),
       bindingMethod("retreat", actor, &Sprite_Actor::retreat)
-    }}
+    }},
+    {"Sprite_Enemy", "Sprite_Battler", "pmjs::mv::Sprite_Enemy", [] { return std::make_shared<RuntimeEnemySprite>(); }, {
+      bindingField("_effectDuration", [enemy](RuntimeBoundObject& object) -> int& { return enemy(object).effectDuration; }),
+      bindingField("_effectType", [enemy](RuntimeBoundObject& object) -> std::string& { return enemy(object).effectType; })
+    }, {setEnemy, bindingMethod("startEffect", enemy, &Sprite_Enemy::startEffect),
+      bindingMethod("isEffecting", enemy, &Sprite_Enemy::isEffecting)}, "setBattler", {Value{}}}
   };
+  auto generated = generatedClassBindings();
+  result.insert(result.end(), std::make_move_iterator(generated.begin()), std::make_move_iterator(generated.end()));
+  return result;
+  }();
   return classes;
 }
 const mv::ClassBinding* findBindingClass(const std::string& name) {
@@ -1000,10 +1089,18 @@ const mv::ClassBinding* findBindingClass(const std::string& name) {
 napi_value describeClassBindings(napi_env env, napi_callback_info) try {
   mv::Value::Array classes;
   for (const auto& binding : bindingClasses()) {
-    mv::Value::Array fields, methods;
-    for (const auto& field : binding.fields) fields.emplace_back(mv::Value::Object{{"name", field.name}, {"writable", bool(field.set)}});
-    for (const auto& method : binding.methods) methods.emplace_back(mv::Value::Object{{"name", method.name}, {"arity", static_cast<int>(method.arity)}});
-    classes.emplace_back(mv::Value::Object{{"name", binding.name}, {"parent", binding.parent}, {"nativeType", binding.nativeType}, {"fields", fields}, {"methods", methods}});
+    mv::Value::Array fields, methods, events, statics;
+    for (const auto& field : binding.fields) fields.emplace_back(mv::Value::Object{{"name", field.name}, {"writable", bool(field.set)}, {"kind", field.kind}});
+    for (const auto& field : binding.displays) fields.emplace_back(mv::Value::Object{{"name", field.name}, {"writable", bool(field.set)}, {"kind", "display"}});
+    for (const auto& method : binding.methods) {
+      mv::Value::Array kinds, aliases;
+      for (const auto& kind : method.argumentKinds) kinds.emplace_back(kind);
+      for (const auto& [property, index] : method.aliases) aliases.emplace_back(mv::Value::Object{{"property", property}, {"index", static_cast<int>(index)}});
+      methods.emplace_back(mv::Value::Object{{"name", method.name}, {"arity", static_cast<int>(method.arity)}, {"argumentKinds", kinds}, {"aliases", aliases}, {"returnsValue", method.returnsValue}, {"defaults",method.defaults}});
+    }
+    for (const auto& event:binding.events) events.emplace_back(event.name);
+    for (const auto& method:binding.statics) statics.emplace_back(mv::Value::Object{{"name",method.name},{"defaults",method.defaults}});
+    classes.emplace_back(mv::Value::Object{{"name", binding.name}, {"parent", binding.parent}, {"nativeType", binding.nativeType}, {"fields", fields}, {"methods", methods}, {"initializer", binding.initializer}, {"constructorDefaults", binding.constructorDefaults}, {"events",events}, {"statics",statics}});
   }
   return writeValue(env, classes);
 } catch (const std::exception& error) { return throwException(env,error); }
@@ -1013,7 +1110,11 @@ napi_value createBoundObject(napi_env env, napi_callback_info info) try {
   auto& owner = session(env,args[0]); const auto name = asString(env,args[1]);
   const auto* binding = findBindingClass(name);
   if (!binding) throw std::invalid_argument("native class is not bound: " + name);
-  return runtimeHandle(owner,binding->create());
+  std::shared_ptr<mv::RuntimeBoundObject> object;
+  if (name == "Sprite_Balloon") object = owner.session->createBalloon();
+  else if (binding->generated) object = owner.session->createGeneratedBinding(name);
+  else object = binding->create();
+  return runtimeHandle(owner, object);
 } catch (const std::exception& error) { return throwException(env,error); }
 napi_value boundField(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env,info);
@@ -1034,16 +1135,80 @@ napi_value invokeBoundMethod(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env,info);
   if (args.size() != 3) throw std::invalid_argument("class invocation requires model, method and arguments");
   const auto object = runtimeAs<mv::RuntimeBoundObject>(env,args[0]); const auto name = asString(env,args[1]);
-  const auto values = readValue(env,args[2]);
-  if (!std::holds_alternative<mv::Value::Array>(values.data)) throw std::invalid_argument("native method arguments must be an array");
+  const auto& payload = runtimePayload(env,args[0]);
+  bool array = false; check(env,napi_is_array(env,args[2],&array),"cannot inspect native arguments");
+  if (!array) throw std::invalid_argument("native method arguments must be an array");
   for (auto* binding = findBindingClass(object->bindingType()); binding; binding = findBindingClass(binding->parent))
-    for (const auto& method : binding->methods) if (method.name == name) return writeValue(env,method.invoke(*object,values.array()));
+    for (const auto& method : binding->methods) if (method.name == name) {
+      std::uint32_t length = 0; check(env,napi_get_array_length(env,args[2],&length),"cannot read native arguments");
+      if (length != method.arity) throw std::invalid_argument("native method argument count differs");
+      mv::BindingArguments values;
+      for (std::uint32_t index = 0; index < length; ++index) {
+        napi_value value; check(env,napi_get_element(env,args[2],index,&value),"cannot read native argument");
+        if (method.argumentKinds[index] == "object") {
+          napi_valuetype type; check(env,napi_typeof(env,value,&type),"cannot inspect native object argument");
+          if (type == napi_null) values.emplace_back(std::shared_ptr<mv::RuntimeObject>{});
+          else {
+            const auto& argument = runtimePayload(env,value);
+            if (argument.owner != payload.owner) throw std::invalid_argument("native object argument belongs to another session");
+            values.emplace_back(argument.object);
+          }
+        } else values.emplace_back(readValue(env,value));
+      }
+      return writeValue(env,method.invoke(*object,values));
+    }
   throw std::invalid_argument("native method is not bound: " + name);
 } catch (const std::exception& error) { return throwException(env,error); }
 napi_value boundObjectActive(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env,info);
   if (args.size() != 1) throw std::invalid_argument("class activity requires model");
   return boolean(env,runtimeAs<mv::RuntimeBoundObject>(env,args[0])->active);
+} catch (const std::exception& error) { return throwException(env,error); }
+napi_value listenBoundObject(napi_env env,napi_callback_info info) try {
+  const auto args=arguments(env,info);
+  if (args.size()!=3) throw std::invalid_argument("listener requires object, method and token");
+  const auto object=runtimeAs<mv::GeneratedRuntimeObject>(env,args[0]);
+  const auto name=asString(env,args[1]);
+  std::uint32_t token; check(env,napi_get_value_uint32(env,args[2],&token),"invalid listener token");
+  for (const auto& event:findBindingClass(object->bindingType())->events) if (event.name==name) {
+    object->listen(event,token); return undefined(env);
+  }
+  throw std::invalid_argument("native listener is not bound: "+name);
+} catch (const std::exception& error) { return throwException(env,error); }
+napi_value invokeBoundStatic(napi_env env,napi_callback_info info) try {
+  const auto args=arguments(env,info);
+  if (args.size()!=3) throw std::invalid_argument("static invocation requires class, method and arguments");
+  const auto* binding=findBindingClass(asString(env,args[0]));
+  if (!binding) throw std::invalid_argument("native class is not bound");
+  const auto name=asString(env,args[1]); const auto values=readValue(env,args[2]);
+  for (const auto& method:binding->statics) if (method.name==name) {
+    if (!std::holds_alternative<mv::Value::Array>(values.data) || values.array().size()!=method.defaults.size()) throw std::invalid_argument("static argument count differs");
+    return writeValue(env,method.invoke(values.array()));
+  }
+  throw std::invalid_argument("native static method is not bound: "+name);
+} catch (const std::exception& error) { return throwException(env,error); }
+napi_value boundDisplay(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info);
+  if (args.size() != 2) throw std::invalid_argument("bound display requires object and display services");
+  const auto object = runtimeAs<mv::RuntimeBoundObject>(env, args[0]);
+  auto node = object->displayObject();
+  return node ? wrapRuntimeDisplay(env, args[1], node, state->core) : null(env);
+} catch (const std::exception& error) { return throwException(env,error); }
+napi_value boundDisplayField(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info);
+  if (args.size() < 3 || args.size() > 4) throw std::invalid_argument("display field requires model, name, services and optional value");
+  const auto object = runtimeAs<mv::RuntimeBoundObject>(env, args[0]);
+  const auto name = asString(env, args[1]);
+  for (auto* binding = findBindingClass(object->bindingType()); binding; binding = findBindingClass(binding->parent))
+    for (const auto& field : binding->displays) if (field.name == name) {
+      if (args.size() == 4) {
+        if (!field.set) throw std::invalid_argument("native display field is read-only: " + name);
+        napi_valuetype type; check(env, napi_typeof(env, args[3], &type), "cannot inspect display field");
+        field.set(*object, type == napi_null ? nullptr : displayForRuntime(env, args[3], state->core));
+      }
+      return wrapRuntimeDisplay(env, args[2], field.get(*object), state->core);
+    }
+  throw std::invalid_argument("native display field is not bound: " + name);
 } catch (const std::exception& error) { return throwException(env,error); }
 napi_value actorInvoke(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info);
@@ -1202,6 +1367,7 @@ void registerMvEngineBindings(napi_env env, napi_value exports) {
   method(env, engine, "mapId", mapId);
   method(env, engine, "inBattle", inBattle); method(env, engine, "ownsPictureSprite", ownsPictureSprite);
   method(env, engine, "messageInvoke", messageInvoke); method(env, engine, "messageField", messageField);
+  method(env, engine, "coreService", coreService);
   method(env, engine, "imageRequests", imageRequests); method(env, engine, "commonEventList", commonEventList);
   method(env, engine, "messageChoices", messageChoices); method(env, engine, "interpreterControl", interpreterControl);
   method(env, engine, "random", scriptRandom);
@@ -1220,6 +1386,9 @@ void registerMvEngineBindings(napi_env env, napi_value exports) {
   auto classBindings = moduleObject(env);
   method(env,classBindings,"describe",describeClassBindings); method(env,classBindings,"create",createBoundObject);
   method(env,classBindings,"field",boundField); method(env,classBindings,"invoke",invokeBoundMethod); method(env,classBindings,"active",boundObjectActive);
+  method(env,classBindings,"display",boundDisplay);
+  method(env,classBindings,"displayField",boundDisplayField);
+  method(env,classBindings,"listen",listenBoundObject); method(env,classBindings,"invokeStatic",invokeBoundStatic);
   check(env,napi_set_named_property(env,engine,"classBindings",classBindings),"cannot export class bindings");
   method(env, engine, "actionRate", actionRate); method(env, engine, "actorState", actorState); method(env, engine, "actorInvoke", actorInvoke); method(env, engine, "characterCommand", characterCommand);
   method(env, engine, "displayAnimation", displayAnimation);

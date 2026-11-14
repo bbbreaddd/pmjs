@@ -598,6 +598,11 @@ double MediaService::position(std::uint32_t handle) const {
 double MediaService::duration(std::uint32_t handle) const {
   auto voice = impl_->voice(handle); return voice ? voice->mix.duration : 0;
 }
+std::uint64_t MediaService::audioFrames(std::uint32_t handle) const {
+  auto voice=impl_->voice(handle); if (!voice) return 0;
+  std::lock_guard lock(voice->mutex);
+  return voice->mix.asset ? voice->mix.asset->samples.size()/2 : static_cast<std::uint64_t>(std::max(0.0,std::round(voice->mix.duration*48000)));
+}
 std::size_t MediaService::bufferedFrames(std::uint32_t handle) const {
   auto voice = impl_->voice(handle); if (!voice) return 0;
   std::lock_guard lock(voice->mutex); return voice->mix.asset ? voice->mix.asset->samples.size() / 2

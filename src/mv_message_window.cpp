@@ -14,6 +14,8 @@ bool Session::messageBusy() {
   return scripted ? *scripted : invokeMessageBase("isBusy").boolean();
 }
 Value Session::runtimeMessageField(const std::string& field, const std::optional<Value>& value) {
+  bool* flag=field=="_showFast" ? &message_.showFast : field=="_lineShowFast" ? &message_.lineFast : field=="_pauseSkip" ? &message_.pauseSkip : nullptr;
+  if (flag) { if (value) *flag=value->boolean(); return *flag; }
   if (field == "_faceName") { if (value) message_.faceName = value->text(); return message_.faceName; }
   int* target = nullptr;
   if (field == "_faceIndex") target = &message_.faceIndex;
@@ -26,6 +28,9 @@ Value Session::runtimeMessageField(const std::string& field, const std::optional
   return *target;
 }
 Value Session::invokeMessageBase(const std::string& method, const Value::Array& args) {
+  if (method=="window.clearFlags") { Window_Message::clearFlags(message_); return Value::undefined(); }
+  if (method=="window.terminateMessage") { Window_Message::terminate(*this); return Value::undefined(); }
+  if (method=="window.startInput") return Window_Message::startInput(*this);
   const auto argument = [&](std::size_t index) -> const Value& {
     if (index >= args.size()) throw std::invalid_argument("missing message argument");
     return args[index];

@@ -52,3 +52,20 @@ test('generated defaults support aliases and retain wrapper state while native m
   handle.active = false; bridge.sweep();
   assert.equal(seen[0].value, 10, 'retired wrappers must retain native model access');
 });
+
+test('reference arguments and constructor aliases preserve the original script object', () => {
+  const calls = [], target = {}, nativeTarget = {}, handles = new WeakMap([[target, nativeTarget]]);
+  function External() {}
+  External.prototype.initialize = function() {};
+  const scope = { External }, bindings = {
+    describe: () => [{ name: 'Holder', parent: 'External', fields: [], initializer: 'setTarget', constructorDefaults: [null],
+      methods: [{ name: 'setTarget', arity: 1, argumentKinds: ['object'], aliases: [{ property: '_target', index: 0 }] }] }],
+    create: () => ({}), invoke(handle, method, args) { calls.push(args[0]); }, active: () => true
+  };
+  installClassBindings(scope, bindings, {}, { unwrap: object => handles.get(object) });
+  const empty = new scope.Holder(); assert.equal(empty._target, null); assert.equal(calls[0], null);
+  const holder = new scope.Holder(target);
+  assert.equal(calls[1], nativeTarget); assert.equal(holder._target, target);
+  assert.throws(() => holder.setTarget({}), /object argument is not bound/);
+  assert.equal(calls.length, 2); assert.equal(holder._target, target);
+});

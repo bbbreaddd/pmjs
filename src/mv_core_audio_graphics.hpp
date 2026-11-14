@@ -229,12 +229,13 @@ class WebAudio {
   static inline bool canPlayM4aFlag = true;
 
   explicit WebAudio(std::string audioUrl = "", bool deferLoad = true, bool reportResourceErrors = true);
-  ~WebAudio();
+  virtual ~WebAudio();
   WebAudio(const WebAudio&) = delete;
   WebAudio& operator=(const WebAudio&) = delete;
-  void update();
+  virtual void update();
   std::uint32_t nativeHandle() const { return handle_; }
   double playbackPosition() const;
+  std::uint64_t bufferFrameCount() const;
   void setVolume(double value);
   void setPitch(double value);
   void setPan(double value);
@@ -244,15 +245,17 @@ class WebAudio {
   static void setMasterVolume(double value);
   static void setEncryptionKey(const std::string& hexadecimal);
 
-  void clear();
-  bool isReady() const;
-  bool isError() const { return error; }
-  bool isPlaying() const;
-  void play(bool loopFlag, double offset = 0.0);
-  void stop();
-  void fadeIn(double duration);
-  void fadeOut(double duration);
-  double seek() const;
+  virtual void initializeSource(const std::string& source);
+  void finishLoading();
+  virtual void clear();
+  virtual bool isReady() const;
+  virtual bool isError() const { return error; }
+  virtual bool isPlaying() const;
+  virtual void play(bool loopFlag, double offset = 0.0);
+  virtual void stop();
+  virtual void fadeIn(double duration);
+  virtual void fadeOut(double duration);
+  virtual double seek() const;
   void addLoadListener(std::function<void()> listener);
   void addStopListener(std::function<void()> listener);
 
@@ -267,6 +270,7 @@ class WebAudio {
   std::shared_ptr<CoreServiceBinding> services_;
   std::uint32_t handle_ = 0;
   bool autoPlay_ = false, loading_ = false, useResourceHandler_ = true;
+  std::uint64_t loadGeneration_ = 0;
   std::function<void()> failure_;
   std::shared_ptr<int> lifetime_ = std::make_shared<int>(0);
   void failLoad();

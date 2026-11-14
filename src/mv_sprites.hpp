@@ -2,6 +2,7 @@
 
 #include "mv_engine.hpp"
 #include "mv_class_bindings.hpp"
+#include "mv_core_display.hpp"
 #include "mv_windows.hpp"
 #include <string>
 #include <vector>
@@ -161,7 +162,8 @@ class Sprite_Enemy : public Sprite_Battler {
 };
 
 struct RuntimeEnemySprite : RuntimeBattlerSprite {
-  std::shared_ptr<Sprite_Enemy> value = std::make_shared<Sprite_Enemy>();
+  std::shared_ptr<Sprite_Enemy> value;
+  explicit RuntimeEnemySprite(std::shared_ptr<Sprite_Enemy> sprite = std::make_shared<Sprite_Enemy>()) : value(std::move(sprite)) {}
   std::shared_ptr<RuntimeActor> enemy;
   Sprite_Battler& state() override { return *value; }
   const char* bindingType() const override { return "Sprite_Enemy"; }
@@ -178,12 +180,23 @@ class Sprite_Balloon : public Sprite_Base {
   int balloonId = 0;
   int duration = 0;
 
-  void setup(int id);
+  void setup(int id, int speed = 8, int waitTime = 12);
   void update() override;
   void advance(std::uint64_t ticks);
   static core::Rectangle sourceFrame(std::uint64_t age, int balloonId);
-  int frameIndex() const;
+  int frameIndex(int speed = 8, int waitTime = 12) const;
   bool isPlaying() const { return duration > 0; }
+};
+
+struct RuntimeBalloon : RuntimeBoundObject, std::enable_shared_from_this<RuntimeBalloon> {
+  Sprite_Balloon value;
+  std::shared_ptr<core::Sprite> drawable = std::make_shared<core::Sprite>();
+  std::weak_ptr<RuntimeHooks> hooks;
+  bool initialized = false;
+  const char* bindingType() const override { return "Sprite_Balloon"; }
+  std::shared_ptr<core::Container> displayObject() override { return drawable; }
+  Value call(const std::string& method, const Value::Array& arguments = {});
+  Value invoke(const std::string& method, const Value::Array& arguments);
 };
 
 class Sprite_Timer : public Sprite_Base {

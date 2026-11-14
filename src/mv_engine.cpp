@@ -3,6 +3,7 @@
 #include "mv_core_utils.hpp"
 #include "mv_managers.hpp"
 #include "mv_windows.hpp"
+#include "mv_sprites.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -149,7 +150,11 @@ void Session::transfer(int id, int x, int y, int direction) {
   if (target.null()) throw std::invalid_argument("map not loaded: " + std::to_string(id));
   if (x < 0 || y < 0 || x >= target["width"].integer() || y >= target["height"].integer()) throw std::invalid_argument("transfer outside map");
   ++presentationRevision_;
-  std::erase_if(visualEffects_, [](const VisualEffect& effect) { return effect.targetType == 0; });
+  std::erase_if(visualEffects_, [](const VisualEffect& effect) {
+    if (effect.targetType != 0) return false;
+    if (effect.balloonSprite) effect.balloonSprite->active = false;
+    return true;
+  });
   destination_.reset(); mapTouchCount_ = 0;
   const bool changedMap = id != mapId_;
   if (!player_.directionFix && direction) player_.direction = direction;
@@ -1163,6 +1168,8 @@ Interpreter* Session::findRuntimeInterpreter(const std::shared_ptr<RuntimeInterp
 }
 std::set<std::uint64_t> Session::runtimeObjectIdentities() const {
   std::set<std::uint64_t> identities;
+  for (const auto& effect : visualEffects_) if (effect.balloonSprite) identities.insert(effect.balloonSprite->identity);
+  if (weatherRuntime_) identities.insert(weatherRuntime_->identity);
   for (const auto& [id, weak] : runtimeCharacters_) { (void)id; if (const auto object = weak.lock()) identities.insert(object->identity); }
   for (const auto& [id, weak] : runtimeActors_) { (void)id; if (const auto object = weak.lock()) identities.insert(object->identity); }
   for (const auto& picture : pictures_) if (picture) {

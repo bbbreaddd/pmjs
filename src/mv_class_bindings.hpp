@@ -8,11 +8,18 @@ namespace pmjs::mv {
 struct RuntimeBoundObject : RuntimeObject {
   bool active = false;
   virtual const char* bindingType() const = 0;
+  virtual std::shared_ptr<core::Container> displayObject() { return {}; }
 };
 struct BindingField {
   std::string name;
   std::function<Value(RuntimeBoundObject&)> get;
   std::function<void(RuntimeBoundObject&, const Value&)> set;
+  std::string kind = "value";
+};
+struct BindingDisplayField {
+  std::string name;
+  std::function<std::shared_ptr<core::Container>(RuntimeBoundObject&)> get;
+  std::function<void(RuntimeBoundObject&, std::shared_ptr<core::Container>)> set;
 };
 using BindingArgument = std::variant<Value, std::shared_ptr<RuntimeObject>>;
 using BindingArguments = std::vector<BindingArgument>;
@@ -22,12 +29,29 @@ struct BindingMethod {
   std::function<Value(RuntimeBoundObject&, const BindingArguments&)> invoke;
   std::vector<std::string> argumentKinds;
   std::vector<std::pair<std::string, std::size_t>> aliases;
+  bool returnsValue = true;
+  Value::Array defaults{};
+};
+struct BindingEvent {
+  std::string name;
+  std::function<void(RuntimeBoundObject&, std::function<void()>)> add;
+};
+struct BindingStatic {
+  std::string name;
+  std::function<Value(const Value::Array&)> invoke;
+  Value::Array defaults;
 };
 struct ClassBinding {
   std::string name, parent, nativeType;
   std::function<std::shared_ptr<RuntimeBoundObject>()> create;
   std::vector<BindingField> fields;
   std::vector<BindingMethod> methods;
+  std::string initializer{};
+  Value::Array constructorDefaults{};
+  std::vector<BindingDisplayField> displays{};
+  bool generated = false;
+  std::vector<BindingEvent> events{};
+  std::vector<BindingStatic> statics{};
 };
 
 template<class T> T bindingArgument(const Value& value) {
@@ -37,10 +61,35 @@ template<class T> T bindingArgument(const Value& value) {
   else if constexpr (std::is_same_v<T, std::string>) return value.text();
   else static_assert(std::is_same_v<T, void>, "binding argument type requires a conversion");
 }
+template<class Result, class Function, class... Args> Value invokeBindingStatic(Function function, Args... args) {
+  if constexpr (std::is_void_v<Result>) { function(args...); return Value::undefined(); }
+  else return Value(function(args...));
+}
 template<class Get> BindingField bindingField(std::string name, Get get) {
   using T = std::remove_reference_t<std::invoke_result_t<Get, RuntimeBoundObject&>>;
   return {std::move(name), [get](RuntimeBoundObject& object) { return Value(get(object)); },
     [get](RuntimeBoundObject& object, const Value& value) { get(object) = bindingArgument<T>(value); }};
+}
+template<class Get> BindingField bindingPoint(std::string name, Get get) {
+  return {std::move(name), [get](RuntimeBoundObject& object) {
+    const auto& point = get(object); return Value::Object{{"x", point.x}, {"y", point.y}};
+  }, [get](RuntimeBoundObject& object, const Value& value) {
+    get(object) = {value["x"].number(), value["y"].number()};
+  }, "point"};
+}
+template<class Get, class Set> BindingField bindingProperty(std::string name, Get get, Set set) {
+  using T = std::remove_cvref_t<std::invoke_result_t<Get, RuntimeBoundObject&>>;
+  return {std::move(name), [get](RuntimeBoundObject& object) { return Value(get(object)); },
+    [set](RuntimeBoundObject& object, const Value& value) { set(object, bindingArgument<T>(value)); }};
+}
+template<class Get> BindingDisplayField bindingDisplayField(std::string name, Get get) {
+  using Pointer = std::remove_reference_t<std::invoke_result_t<Get, RuntimeBoundObject&>>;
+  return {std::move(name), [get](RuntimeBoundObject& object) { return get(object); },
+    [get](RuntimeBoundObject& object, std::shared_ptr<core::Container> value) {
+      auto typed = std::dynamic_pointer_cast<typename Pointer::element_type>(value);
+      if (value && !typed) throw std::invalid_argument("display field has the wrong native type");
+      get(object) = std::move(typed);
+    }};
 }
 template<class T> struct BindingObjectArgument : std::false_type {};
 template<class T> struct BindingObjectArgument<std::shared_ptr<T>> : std::is_base_of<RuntimeObject, T> {};
@@ -65,7 +114,7 @@ BindingMethod bindingMethodImpl(std::string name, Get get, Method method) {
   return {std::move(name), sizeof...(Args), [get, method](RuntimeBoundObject& object, const BindingArguments& values) {
     if (values.size() != sizeof...(Args)) throw std::invalid_argument("native method argument count differs");
     return invokeBinding<R, Args...>(method, get(object), values, std::index_sequence_for<Args...>{});
-  }, { (BindingObjectArgument<std::decay_t<Args>>::value ? "object" : "value")... }, {}};
+  }, { (BindingObjectArgument<std::decay_t<Args>>::value ? "object" : "value")... }, {}, !std::is_void_v<R>};
 }
 template<class Get, class Owner, class R, class... Args>
 BindingMethod bindingMethod(std::string name, Get get, R (Owner::*method)(Args...)) {

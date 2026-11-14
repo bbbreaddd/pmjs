@@ -22,6 +22,7 @@ Value Session::invokeGameDataBase(const std::string& kind, const std::string& me
     return !cameraTarget_;
   }
   if (kind == "system") {
+    if (method == "isSideView") return database_["system"]["optSideView"].boolean();
     if (method == "initialize") { system_ = {}; return Value::undefined(); }
     bool* flag = nullptr; int* count = nullptr;
     if (method == "saveEnabled") flag = &system_.saveEnabled;

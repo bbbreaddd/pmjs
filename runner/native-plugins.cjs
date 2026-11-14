@@ -4,7 +4,9 @@ const path = require('node:path');
 const { createRequire } = require('node:module');
 const { createScriptRuntime } = require('./mv-script-runtime.cjs');
 const { installDatabase } = require('./native-database.cjs');
+const { installWeb } = require('./native-web.cjs');
 const { installStorage } = require('./native-storage.cjs');
+const { installCoreServices } = require('./native-core-services.cjs');
 
 function installPlugins(runtime, gameRoot, manifest) {
   const scope = runtime.scope;
@@ -61,9 +63,12 @@ function installPlugins(runtime, gameRoot, manifest) {
 
 function createRuntimeBindings(engine, session, options) {
   const runtime = createScriptRuntime(engine, session, { native: options.native, guestArguments: options.guestArguments });
+  const drain = installWeb(runtime, options);
   runtime.installScenes();
+  installCoreServices(runtime, engine);
   installDatabase(runtime, engine, session, options.gameRoot);
   installStorage(runtime, options.native, options.storage);
+  runtime.beforeFrame = drain;
   return runtime;
 }
 
