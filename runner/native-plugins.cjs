@@ -6,6 +6,7 @@ const { createScriptRuntime } = require('./mv-script-runtime.cjs');
 const { installDatabase } = require('./native-database.cjs');
 const { installWeb } = require('./native-web.cjs');
 const { installStorage } = require('./native-storage.cjs');
+const { installSaveManager } = require('./native-save-manager.cjs');
 const { installCoreServices } = require('./native-core-services.cjs');
 
 function installPlugins(runtime, gameRoot, manifest, beforePlugins) {
@@ -98,6 +99,7 @@ function createRuntimeBindings(engine, session, options) {
   installCoreServices(runtime, engine);
   installDatabase(runtime, engine, session, options.gameRoot);
   installStorage(runtime, options.native, options.storage);
+  installSaveManager(runtime, engine, session);
   runtime.beforeFrame = drain;
   return runtime;
 }

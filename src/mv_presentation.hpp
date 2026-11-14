@@ -12,6 +12,7 @@
 namespace pmjs::mv {
 class ImageCache;
 class Window_Base;
+class NativeMapSpriteset;
 class Presentation {
  public:
   Presentation(RuntimeCore& core, Session& session, Value settings);
@@ -19,9 +20,22 @@ class Presentation {
   void render();
   bool renderFrame(const std::function<void()>& drawFrame);
   void captureAudioState();
+  void flushAudio();
+  std::shared_ptr<core::WebAudio> audioBuffer(const std::string& kind) const;
+  void setAudioBuffer(const std::string& kind,std::shared_ptr<core::WebAudio> buffer);
+  Value currentAudio(const std::string& kind) const;
+  void setCurrentAudio(const std::string& kind,Value sound);
+  void updateAudioParameters(const std::string& kind,const Value& sound,const std::shared_ptr<core::WebAudio>& buffer = {});
+  const std::vector<std::shared_ptr<core::WebAudio>>& soundBuffers() const { return sounds_; }
+  void setSoundBuffers(std::vector<std::shared_ptr<core::WebAudio>> buffers);
+  void bindMapSpriteset(NativeMapSpriteset& spriteset);
   void setScriptStage(std::shared_ptr<core::Container> stage) { scriptStage_ = std::move(stage); }
  private:
   std::shared_ptr<core::Container> scriptStage_;
+  std::shared_ptr<int> presentationLifetime_ = std::make_shared<int>(0);
+  void prepareRenderResources();
+  void renderMapLayer(const std::string& layer,const core::Matrix& world,double opacity);
+  void finishSceneOverlays();
   void renderStage();
   ImageInfo image(const std::string& file, int hue = 0);
   void quad(ImageHandle handle, float sx, float sy, float sw, float sh, float x, float y, float width, float height, float alpha = 1);
@@ -35,7 +49,7 @@ class Presentation {
   void character(const Character& value, double cameraX, double cameraY);
   double scrolledMapX(double x, double cameraX, int tileWidth) const;
   double scrolledMapY(double y, double cameraY, int tileHeight) const;
-  void map();
+  void map(bool drawAmbience = true);
   void mapParallax(int tileWidth, int tileHeight);
   void mapDestination();
   void mapShadow();
@@ -200,6 +214,7 @@ class Presentation {
   std::map<std::string, std::pair<std::string, std::shared_ptr<core::WebAudio>>> audio_;
   std::map<std::string, Value> audioSettings_;
   std::shared_ptr<core::WebAudio> musicEffect_;
+  bool processingAudio_ = false;
   int lastScene_ = -1, lastMap_ = -1;
   std::uint64_t lastPresentationRevision_ = 0;
   std::vector<std::shared_ptr<core::WebAudio>> sounds_;

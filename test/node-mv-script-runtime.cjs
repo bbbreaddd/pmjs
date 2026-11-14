@@ -561,6 +561,17 @@ test('live command and parameter views change native execution and retain replac
   assert.equal(parameters[0], program[1].parameters[0]);
 });
 
+test('native conditional branches dispatch skip overrides and saved originals exactly once', t => {
+  const { scope, session, step } = create(t, [command(111, [0, 1, 0]), { ...variable(3, 99), indent: 1 },
+    command(411), { ...variable(4, 7), indent: 1 }, command(412)]);
+  const original = scope.Game_Interpreter.prototype.skipBranch;
+  const calls = [];
+  scope.Game_Interpreter.prototype.skipBranch = function() { calls.push(arguments.length); return original.call(this); };
+  step();
+  assert.deepEqual(calls, [0]);
+  assert.equal(api.snapshot(session).variables[3] || 0, 0); assert.equal(api.snapshot(session).variables[4], 7);
+});
+
 test('a script can rewind the first native command with index minus one and a counted wait', t => {
   const { session, step } = create(t, [command(355, ['if (!this.retried) { this.retried = true; this.wait(1); this._index = -1; }']),
     variable(9, 42), command(230, [20])]);
@@ -1009,15 +1020,19 @@ test('script Utils delegates native helpers and uses configured guest options', 
   assert.equal(Utils.isAndroidChrome(), false);
 });
 
-test('database publication validates the full payload before replacing native tables', t => {
+test('database bindings require named tables and preserve script-only metadata', t => {
   const session = api.create(fixture([]));
   t.after(() => api.dispose(session));
   const before = api.databaseInvoke(session, 'read', 'actors');
-  assert.throws(() => api.databaseInvoke(session, 'publish', {
-    actors: [null, { name: 'Changed' }], invalid: { callback() {} }
-  }), /JSON values/);
+  for (const invalid of [null, [], 'invalid'])
+    assert.throws(() => api.databaseInvoke(session, 'publish', invalid), /named tables/);
   assert.deepEqual(api.databaseInvoke(session, 'read', 'actors'), before);
+  const actors = [null, { id: 1, name: 'Changed', describe() { return this.name; } }];
+  api.databaseInvoke(session, 'publish', { actors });
+  assert.equal(api.databaseInvoke(session, 'read', 'actors'), actors);
   api.newGame(session);
+  assert.equal(api.entityField(api.entity(session, 'actor', 1), 'name'), 'Changed');
+  assert.equal(actors[1].describe(), 'Changed');
   assert.throws(() => api.databaseInvoke(session, 'publish', { actors: [] }), /before game state initialization/);
 });
 

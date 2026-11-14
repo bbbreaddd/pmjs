@@ -54,6 +54,246 @@ test('native scenes dispatch original methods and retain transferred sprite reso
   engine.attach(session, { width: 32, height: 32, fontFile: 'font.ttf' });
   const runtime = createScriptRuntime(engine, session, { native }); runtime.installScenes();
   const { scope } = runtime;
+  await t.test('window escape drawing uses native icon pixels and saved plugin aliases', () => {
+    const previousSystem = scope.$dataSystem; scope.$dataSystem = data.system;
+    const bitmap = new scope.Bitmap(512, 32); bitmap.fillRect(32, 0, 32, 32, '#00ff00');
+    const load = scope.ImageManager.loadSystem, original = scope.Window_Base.prototype.drawIcon;
+    let calls = 0;
+    scope.ImageManager.loadSystem = function(name, ...args) { return name === 'IconSet' ? bitmap : load.call(this, name, ...args); };
+    scope.Window_Base.prototype.drawIcon = function(...args) { ++calls; return original.apply(this, args); };
+    try {
+      const window = new scope.Window_Base(0, 0, 100, 100);
+      assert.equal(window.drawTextEx('\\I[1]', 0, 0), 36);
+      assert.equal(calls, 1); assert.equal(window.contents.getPixel(16, 16), '#00ff00');
+      assert.equal(window.calcTextHeight({ index: 0, text: '\x1b{A\x1b}' }, false), 48);
+      assert.equal(window.contents.fontSize, 28);
+      scope.$gameVariables.setValue(5, 'Name');
+      assert.equal(window.convertEscapeCharacters('\\V[5]'), 'Name');
+    } finally { scope.ImageManager.loadSystem = load; scope.Window_Base.prototype.drawIcon = original; if (previousSystem === undefined) delete scope.$dataSystem; else scope.$dataSystem = previousSystem; }
+  });
+  await t.test('mutable children preserve array identity and change native ordering and snapshots', () => {
+    const stage = new scope.Stage(), red = new scope.Sprite(new scope.Bitmap(32, 32)), green = new scope.Sprite(new scope.Bitmap(32, 32));
+    red.bitmap.fillAll('red'); green.bitmap.fillAll('#00ff00');
+    const children = stage.children;
+    assert.equal(children, stage.children); assert.equal(stage.interactive, false);
+    children.push(red); stage.addChild(green); assert.equal(children.length, 2);
+    const capture = () => {
+      native.beginFrame(); scope.Graphics.render(stage); engine.present(session); native.renderFrame();
+      return Array.from(native.canvas.captureSceneRawPremultiplied().subarray(0, 4));
+    };
+    try {
+      assert.deepEqual(capture(), [0, 255, 0, 255]);
+      assert.equal(children.reverse(), children); assert.deepEqual(capture(), [255, 0, 0, 255]);
+      children.sort((left, right) => left === green ? 1 : -1); assert.deepEqual(capture(), [0, 255, 0, 255]);
+      const snapshot = scope.Bitmap.snap(stage);
+      assert.equal(snapshot.getPixel(0, 0), '#00ff00');
+      children.splice(1, 1); assert.equal(green.parent, null); assert.deepEqual(capture(), [255, 0, 0, 255]);
+      children.length = 0; assert.equal(red.parent, null); assert.equal(stage.children, children);
+      assert.deepEqual(capture(), [0, 0, 0, 255]);
+    } finally { engine.scriptStage(session, null); }
+  });
+  await t.test('color matrix filters and ToneSprite fields control native compositing', () => {
+    const previousPixi = scope.PIXI;
+    class ColorMatrixFilter {
+      constructor() { this.matrix = [0,1,0,0,0, 1,0,0,0,0, 0,0,1,0,0, 0,0,0,1,0]; this.alpha = 1; }
+    }
+    scope.PIXI = { filters: { ColorMatrixFilter } };
+    const stage = new scope.Container(), background = new scope.ScreenSprite();
+    background.setColor(40, 80, 120); background.opacity = 255; stage.addChild(background);
+    const filter = new ColorMatrixFilter(); stage.filters = [filter];
+    const capture = () => {
+      native.beginFrame(); scope.Graphics.render(stage); engine.present(session); native.renderFrame();
+      return Array.from(native.canvas.captureSceneRawPremultiplied().subarray(0, 4));
+    };
+    try {
+      assert.deepEqual(capture(), [80,40,120,255]);
+      filter.alpha = 0; assert.deepEqual(capture(), [40,80,120,255]);
+      stage.filters = null; background.setBlack();
+      const tone = new scope.ToneSprite(); tone.setTone(255, 0, 0, 0); stage.addChild(tone);
+      assert.deepEqual(capture(), [255,0,0,255]);
+      tone._red = 0; assert.deepEqual(capture(), [0,0,0,255]);
+      stage.removeChild(tone);
+      const layer = new scope.WindowLayer(), window = new scope.Window();
+      layer.move(0, 0, 32, 32); window.move(0, 0, 32, 32);
+      window.windowskin = new scope.Bitmap(192, 192); window.windowskin.fillAll('white');
+      layer.addChild(window); stage.addChild(layer);
+      filter.alpha = 1; filter.matrix = [0,0,0,0,1, 0,0,0,0,0, 0,0,0,0,0, 0,0,0,1,0];
+      layer.filters = [filter]; assert.deepEqual(capture(), [255,0,0,255]);
+    } finally { scope.PIXI = previousPixi; engine.scriptStage(session, null); }
+  });
+  await t.test('window refresh aliases generate bitmaps consumed by native rendering', () => {
+    const stage = new scope.Container(), window = new scope.Window();
+    const skin = new scope.Bitmap(192, 192); skin.fillAll('white');
+    window.windowskin = skin; window.move(0, 0, 32, 32); window.backOpacity = 0; stage.addChild(window);
+    const original = scope.Window.prototype._refreshFrame;
+    let calls = 0;
+    scope.Window.prototype._refreshFrame = function() {
+      ++calls; original.call(this); this._windowFrameSprite.bitmap.fillAll('#ff0000');
+    };
+    const capture = () => {
+      native.beginFrame(); scope.Graphics.render(stage); engine.present(session); native.renderFrame();
+      return Array.from(native.canvas.captureSceneRawPremultiplied().subarray(0, 4));
+    };
+    try {
+      assert.deepEqual(capture(), [255,0,0,255]); assert.ok(calls > 0);
+      const count = calls; capture(); assert.equal(calls, count, 'unchanged native windows reuse plugin-generated parts');
+      window.width = 40; assert.deepEqual(capture(), [255,0,0,255]); assert.ok(calls > count);
+      window._windowFrameSprite.bitmap.fillAll('#00ff00'); assert.deepEqual(capture(), [0,255,0,255]);
+      window._animationCount = 17; assert.equal(window._animationCount, 17);
+      window._colorTone[0] = 20; assert.equal(window._colorTone[0], 20);
+    } finally { scope.Window.prototype._refreshFrame = original; engine.scriptStage(session, null); }
+  });
+  await t.test('Graphics dimensions preserve independent layout sizes and resize native output', () => {
+    const vm = require('node:vm');
+    const source = fs.readFileSync(path.join(__dirname, '../third_party/rpg-maker-mv/rpg_core.js'), 'utf8');
+    const reference = vm.createContext({ document: {} });
+    vm.runInContext(source.slice(source.indexOf('function Graphics()'), source.indexOf('function Input()')), reference);
+    const stock = reference.Graphics, graphics = scope.Graphics;
+    for (const method of ['_testCanvasBlendModes', '_modifyExistingElements', '_updateRealScale', '_createAllElements',
+      '_disableTextSelection', '_disableContextMenu', '_setupEventHandlers', '_setupCssFontLoading', '_updateAllElements']) stock[method] = () => {};
+    stock._defaultStretchMode = () => false;
+    try {
+      stock.initialize(48, 40); graphics.initialize(48, 40);
+      for (const [field, value] of [['boxWidth', 30], ['boxHeight', 28], ['width', 64], ['height', 56], ['width', 64]]) {
+        stock[field] = value; graphics[field] = value;
+        for (const name of ['width', 'height', 'boxWidth', 'boxHeight']) assert.equal(graphics[name], stock[name]);
+        assert.equal(native.render.presentation().sourceWidth, stock.width);
+        assert.equal(native.render.presentation().sourceHeight, stock.height);
+      }
+      const window = new scope.Window_Options();
+      assert.equal(window.x, (30 - window.width) / 2);
+      assert.equal(window.y, (28 - window.height) / 2);
+      stock.initialize(); graphics.initialize();
+      for (const name of ['width', 'height', 'boxWidth', 'boxHeight']) assert.equal(graphics[name], stock[name]);
+    } finally { graphics.initialize(32, 32); }
+  });
+  await t.test('plugin repeat settings affect native repeated and long-pressed queries', () => {
+    const vm = require('node:vm');
+    const source = fs.readFileSync(path.join(__dirname, '../third_party/rpg-maker-mv/rpg_core.js'), 'utf8');
+    const reference = vm.createContext({ navigator: { getGamepads: () => [] } });
+    vm.runInContext(source.slice(source.indexOf('function Input()'), source.indexOf('function TouchInput()')), reference);
+    const stock = reference.Input, input = scope.Input;
+    stock.clear(); input.clear(); input.update();
+    stock._currentState.ok = true; input._currentState.ok = true;
+    try {
+      for (let frame = 0; frame < 16; ++frame) {
+        if (frame === 0 || frame === 7) {
+          stock.keyRepeatWait = input.keyRepeatWait = frame === 0 ? 4 : 2;
+          stock.keyRepeatInterval = input.keyRepeatInterval = frame === 0 ? 3 : 2;
+        }
+        stock.update(); input.update();
+        for (const method of ['isPressed', 'isTriggered', 'isRepeated', 'isLongPressed'])
+          assert.equal(input[method]('ok'), stock[method]('ok'), method + ' frame ' + frame);
+      }
+    } finally { input.clear(); input.keyRepeatWait = 24; input.keyRepeatInterval = 6; }
+  });
+  await t.test('window indicators and ScreenSprite blend assignments reach native pixels', () => {
+    class PluginWindow extends scope.Window {}
+    const stage = new scope.Container(), window = new PluginWindow();
+    const skin = new scope.Bitmap(192, 192);
+    skin.fillAll('white'); window.windowskin = skin; window.move(0, 0, 32, 32);
+    window.opacity = 0; stage.addChild(window);
+    const capture = (x, y) => {
+      native.beginFrame(); scope.Graphics.render(stage); engine.present(session); native.renderFrame();
+      const pixels = native.canvas.captureSceneRawPremultiplied();
+      return Array.from(pixels.subarray((y * 32 + x) * 4, (y * 32 + x + 1) * 4));
+    };
+    for (const [field, x, y] of [['upArrowVisible', 16, 7], ['downArrowVisible', 16, 15], ['pause', 16, 20]]) {
+      window[field] = true; window.update();
+      assert.ok(capture(x, y)[0] > 0, field);
+      window[field] = false; window.update(); assert.equal(capture(x, y)[0], 0, field);
+    }
+    stage.removeChild(window);
+    const background = new scope.ScreenSprite(), foreground = new scope.ScreenSprite();
+    background.setColor(80, 120, 160); foreground.setColor(64, 96, 128);
+    background.opacity = foreground.opacity = 255;
+    stage.addChild(background); stage.addChild(foreground);
+    const expected = [[64, 96, 128], [144, 216, 255], [20, 45, 80], [124, 171, 208]];
+    for (let mode = 0; mode < 4; ++mode) {
+      foreground.blendMode = mode;
+      const actual = capture(0, 0);
+      expected[mode].forEach((value, channel) => assert.ok(Math.abs(actual[channel] - value) <= 1, 'blend ' + mode + ': ' + actual));
+    }
+    stage.removeChild(background); stage.removeChild(foreground);
+    engine.scriptStage(session, null);
+  });
+  await t.test('window chrome transforms native pixels and survives detachment', async t => {
+    const stage = new scope.Container();
+    const background = new scope.ScreenSprite();
+    background.setBlack(); background.opacity = 255; stage.addChild(background);
+    let window = new scope.Window(), skin = new scope.Bitmap(192, 192);
+    skin.fillAll('white'); window.windowskin = skin; window.move(0, 0, 32, 32);
+    stage.addChild(window);
+    const capture = (x, y) => {
+      native.beginFrame(); scope.Graphics.render(stage); engine.present(session); native.renderFrame();
+      const offset = (y * 32 + x) * 4;
+      return Array.from(native.canvas.captureSceneRawPremultiplied().subarray(offset, offset + 4));
+    };
+    try {
+      window.openness = 128;
+      assert.equal(capture(16, 2)[0], 0, 'ordinary openness closes vertically');
+      assert.equal(capture(2, 16)[0], 255, 'ordinary openness keeps the full width');
+      const chrome = window._windowSpriteContainer;
+      assert.equal(window._windowSpriteContainer, chrome);
+      chrome.scale.set(0.5, 1); chrome.position.set(8, 0);
+      window._openness = 192;
+      assert.equal(capture(4, 16)[0], 0, 'the authored chrome transform closes horizontally');
+      assert.deepEqual(capture(16, 2), [255, 255, 255, 255], 'raw openness must not replace authored chrome geometry');
+      chrome.alpha = 0;
+      assert.equal(capture(16, 16)[0], 0, 'chrome alpha affects the actual native skin');
+      chrome.alpha = 1;
+      stage.addChild(chrome); stage.removeChild(window);
+      const formerWindow = new WeakRef(window);
+      window = null; skin = null;
+      assert.deepEqual(capture(16, 2), [255, 255, 255, 255], 'a reparented chrome node keeps its cached skin');
+      await t.test('retained chrome renders after its native parent is collected', { skip: !global.gc }, async () => {
+        for (let cycle = 0; cycle < 3; ++cycle) { await new Promise(resolve => setImmediate(resolve)); global.gc(); }
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(formerWindow.deref(), undefined);
+        assert.deepEqual(capture(16, 2), [255, 255, 255, 255], 'cached skin resources belong to the retained chrome');
+      });
+    } finally { engine.scriptStage(session, null); }
+  });
+  await t.test('default weather dimmer pixels follow the bundled MV color and opacity', () => {
+    const reference = fs.readFileSync(path.join(__dirname, '../third_party/rpg-maker-mv/rpg_core.js'), 'utf8');
+    const vm = require('node:vm'), stock = { power: 9, addChild() {} };
+    const context = vm.createContext({ Weather: { prototype: {} }, ScreenSprite: function() {
+      this.setColor = (...color) => { this.color = color; };
+    } });
+    for (const method of ['_createDimmer', '_updateDimmer']) {
+      const definition = reference.match(new RegExp('Weather\\.prototype\\.' + method + ' = function\\(\\) \\{[\\s\\S]*?\\n\\};'))[0];
+      vm.runInContext(definition, context);
+    }
+    const weather = new scope.Weather(), stage = new scope.Container(), background = new scope.ScreenSprite();
+    background.opacity = 255; stage.addChild(background); stage.addChild(weather);
+    context.Weather.prototype._createDimmer.call(stock);
+    try {
+      for (const power of [0, 9]) {
+        stock.power = weather.power = power;
+        context.Weather.prototype._updateDimmer.call(stock); weather.update();
+        native.beginFrame(); scope.Graphics.render(stage); engine.present(session); native.renderFrame();
+        const expected = Array.from(stock._dimmerSprite.color, channel => Math.round(channel * stock._dimmerSprite.opacity / 255));
+        assert.deepEqual(Array.from(native.canvas.captureSceneRawPremultiplied().subarray(0, 4)), [...expected, 255]);
+      }
+    } finally { engine.scriptStage(session, null); }
+  });
+  await t.test('Input overrides observe event, gamepad and direction boundaries with writable previous state', () => {
+    const input = scope.Input, direction = input._updateDirection, poll = input._pollGamepads, query = input.isPressed;
+    const trace = [];
+    try {
+      input.clear(); input._onKeyDown({ keyCode: 90 });
+      assert.equal(input.isPressed('ok'), true);
+      input._previousState.ok = false; input._pressedTime = 7; input._preferredAxis = 'x';
+      input._pollGamepads = function() { trace.push('poll'); };
+      input._updateDirection = function() { trace.push('direction'); return direction.call(this); };
+      input.isPressed = function(name) { return name === 'right' || name === 'down'; };
+      input.update();
+      assert.deepEqual(trace, ['poll', 'direction']); assert.equal(input.dir8, 3); assert.equal(input.dir4, 6);
+      assert.equal(input._previousState.ok, true); assert.equal(input._pressedTime, 0);
+      input._onKeyUp({ keyCode: 90 }); assert.equal(input._currentState.ok, false);
+      input._onLostFocus(); assert.equal(input._latestButton, null);
+    } finally { input._updateDirection = direction; input._pollGamepads = poll; input.isPressed = query; input.clear(); }
+  });
   await t.test('plugin input dictionaries and latest-button queries share native state', () => {
     const input = scope.Input, state = input._currentState;
     input.clear(); assert.equal(input._latestButton, null);
@@ -231,6 +471,18 @@ test('native scenes dispatch original methods and retain transferred sprite reso
     return Array.from(native.canvas.captureSceneRawPremultiplied().subarray((y * 32 + x) * 4, (y * 32 + x + 1) * 4));
   };
   assert.deepEqual(draw(2, 3), [255, 0, 0, 255]);
+  await t.test('scene rendering honors the stage selected by a Graphics.render override', () => {
+    const original = scope.Graphics.render, selected = new scope.Container();
+    const bitmap = new scope.Bitmap(2, 2); bitmap.fillAll('blue');
+    const marker = new scope.Sprite(bitmap); selected.addChild(marker);
+    let submitted;
+    scope.Graphics.render = function(stage) { submitted = stage; original.call(this, selected); };
+    try {
+      runtime.step();
+      assert.equal(submitted, first, 'SceneManager must dispatch the mutable rendering method');
+      assert.deepEqual(draw(0, 0), [0, 0, 255, 255], 'the host must preserve the override-selected stage');
+    } finally { scope.Graphics.render = original; scope.SceneManager.renderScene(); }
+  });
   scope.SceneManager.goto(scope.Second);
   runtime.step(); assert.equal(scope.SceneManager._scene, first);
   runtime.step(); assert.equal(scope.SceneManager._scene, first);
@@ -471,6 +723,11 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       const touch = runtime.scope.TouchInput, geometry = native.render.presentation();
       const event = { button: 0, pageX: geometry.viewportX + geometry.viewportWidth / 2, pageY: geometry.viewportY + geometry.viewportHeight / 2 };
       touch.keyRepeatWait = 2;
+      const transitions = [];
+      for (const name of ['_onTrigger', '_onMove', '_onRelease', '_onCancel']) {
+        const base = touch[name];
+        touch[name] = function(x, y) { transitions.push([name, x, y]); return base.call(this, x, y); };
+      }
       let leftCalls = 0;
       const left = touch._onLeftButtonDown;
       touch._onLeftButtonDown = function(event) { ++leftCalls; left.call(this, event); };
@@ -481,11 +738,13 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       assert.equal(touch.isPressed(), true);
       assert.equal(touch.isLongPressed(), false, 'input must update only once per native frame');
       assert.equal(touch.x, 16); assert.equal(touch.y, 16);
+      assert.deepEqual(transitions[0], ["_onTrigger", 16, 16]);
       runtime.step();
       assert.equal(touch.isTriggered(), false);
       assert.equal(touch.isLongPressed(), true);
       touch._onMouseUp(event); runtime.step();
       assert.equal(touch.isReleased(), true); assert.equal(touch.isPressed(), false);
+      assert.deepEqual(transitions.at(-1), ["_onRelease", 16, 16]);
       touch._onWheel({ deltaX: 2, deltaY: 5 }); runtime.step();
       assert.equal(touch.wheelX, 2); assert.equal(touch.wheelY, 5);
       runtime.step(); assert.equal(touch.wheelY, 0);
@@ -858,6 +1117,30 @@ test('native scenes dispatch original methods and retain transferred sprite reso
     } finally { engine.dispose(weatherSession); }
     assert.equal(retained.initializedByPlugin, true);
     retained._dimmerSprite.setWhite(); assert.equal(retained._dimmerSprite.opacity, 0);
+  });
+
+  await t.test('audio manager properties retain shared native voices and effect-list identity', () => {
+    const manager=scope.AudioManager, voice=new scope.WebAudio(''), volume=scope.ConfigManager.bgmVolume;
+    voice.pluginMarker={kept:true};
+    try {
+      scope.ConfigManager.bgmVolume=80;
+      manager._bgmBuffer=voice;
+      manager.updateCurrentBgm({name:'Tone',volume:60,pitch:125,pan:-50},0);
+      manager.updateBgmParameters(manager._currentBgm);
+      assert.equal(manager._bgmBuffer,voice);
+      assert.equal(manager._bgmBuffer.pluginMarker,voice.pluginMarker);
+      assert.ok(Math.abs(voice.volume-0.48)<1e-9); assert.equal(voice.pitch,1.25); assert.equal(voice.pan,-0.5);
+      manager._currentBgm.pos=0.25;
+      assert.equal(engine.audioManager(session,'bgm','current').pos,0.25);
+      const effects=manager._seBuffers;
+      assert.equal(runtime.runScript('AudioManager._seBuffers instanceof Array'),true);
+      effects.push(voice);
+      assert.equal(manager._seBuffers,effects); assert.equal(effects[0],voice);
+      manager._seBuffers=effects.filter(buffer=>buffer===voice);
+      assert.equal(effects.length,1); assert.equal(effects.clone()[0],voice);
+      manager.stopAll();
+      assert.equal(manager._bgmBuffer,null); assert.equal(effects.length,0);
+    } finally { manager.stopAll(); scope.ConfigManager.bgmVolume=volume; }
   });
 
   await t.test('generated audio bindings share native playback, listeners and engine buffer creation', () => {

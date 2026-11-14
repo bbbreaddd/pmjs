@@ -88,6 +88,7 @@ function installBattlerBindings(scope, engine, session, handles, createArray) {
   base.appear = function() { this._hidden = false; };
   base.isAlive = function() { return this.isAppeared() && !this.isDeathStateAffected(); };
   base.isDead = function() { return this.isAppeared() && this.isDeathStateAffected(); };
+  base.isDying = function() { return this.isAlive() && this.hp < this.mhp / 4; };
   base.isRestricted = function() { return this.isAppeared() && this.restriction() > 0; };
   base.canMove = function() { return this.isAppeared() && this.restriction() < 4; };
   base.isConfused = function() { return this.isAppeared() && this.restriction() >= 1 && this.restriction() <= 3; };

@@ -513,6 +513,12 @@ void Renderer::beginCompositionGroup() {
   command.filterKind=scene_packet::FilterKind::alpha;command.filterParameters[0]=1;command.color[3]=1;
   frame_.commands.push_back(command);sceneSubmittedThisFrame_=true;
 }
+void Renderer::beginColorMatrix(const std::array<float,20>& matrix,float alpha) {
+  RenderCommand command;command.action=RenderCommand::Action::filterBegin;
+  command.filterKind=scene_packet::FilterKind::colorMatrix;command.color[3]=1;
+  std::copy(matrix.begin(),matrix.end(),command.filterParameters.begin());command.filterParameters[20]=alpha;
+  frame_.commands.push_back(command);sceneSubmittedThisFrame_=true;
+}
 void Renderer::beginNoiseGlitch(double seed, double slices, double offset) {
   RenderCommand command; command.action = RenderCommand::Action::filterBegin;
   command.filterKind = scene_packet::FilterKind::noiseGlitch;

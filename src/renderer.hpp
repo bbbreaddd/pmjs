@@ -278,6 +278,7 @@ class Renderer {
                  const std::array<float, 6>& transform,
                  const std::array<float, 2>& extent);
   void beginCompositionGroup();
+  void beginColorMatrix(const std::array<float,20>& matrix,float alpha);
   void beginNoiseGlitch(double seed, double slices, double offset);
   void endCompositionGroup();
   void clearCompositionRect(float x,float y,float width,float height);

@@ -80,12 +80,17 @@ void Input::updateGamepad(const Gamepad& pad) {
 }
 void Input::update(const std::vector<Gamepad>& pads, double now) {
   for (const auto& pad : pads) if (pad.connected) updateGamepad(pad);
+  advance(now); updateDirection();
+}
+void Input::advance(double now) {
   if (latest_ && current(*latest_)) ++pressedTime_; else latest_.reset();
   for (const auto& name : order_) {
     const bool down = current(name);
     if (down && !previous_[name]) { latest_ = name; pressedTime_ = 0; date_ = now; }
     previous_[name] = down;
   }
+}
+void Input::updateDirection() {
   int x = int(isPressed("right")) - int(isPressed("left"));
   int y = int(isPressed("down")) - int(isPressed("up"));
   dir8_ = direction(x, y);
@@ -117,22 +122,26 @@ bool Input::isLongPressed(std::string_view name) const {
 namespace pmjs::mv::core {
 void TouchInput::clear() { pending_={};frame_={};mousePressed_=false;screenPressed_=false;pressedTime_=0;x_=0;y_=0;date_=0; }
 void TouchInput::update() { frame_=pending_;pending_={};if(isPressed())++pressedTime_; }
-void TouchInput::trigger(double x,double y,double now) { pending_.triggered=true;x_=x;y_=y;date_=now; }
-void TouchInput::cancel(double x,double y) { pending_.cancelled=true;x_=x;y_=y; }
+void TouchInput::trigger(double x,double y,double now) { if(transition&&transition("_onTrigger",x,y))return;applyTrigger(x,y,now); }
+void TouchInput::applyTrigger(double x,double y,double now) { pending_.triggered=true;x_=x;y_=y;date_=now; }
+void TouchInput::cancel(double x,double y) { if(transition&&transition("_onCancel",x,y))return;applyCancel(x,y); }
+void TouchInput::applyCancel(double x,double y) { pending_.cancelled=true;x_=x;y_=y; }
 void TouchInput::mouseDown(int button,double x,double y,bool inside,double now) {
   if(!inside)return;
   if(button==0){mousePressed_=true;pressedTime_=0;trigger(x,y,now);}else if(button==2)cancel(x,y);
 }
 void TouchInput::mouseMove(double x,double y) { if(mousePressed_)touchMove(x,y); }
-void TouchInput::mouseUp(int button,double x,double y) { if(button==0){mousePressed_=false;pending_.released=true;x_=x;y_=y;} }
+void TouchInput::mouseUp(int button,double x,double y) { if(button==0){mousePressed_=false;if(!transition||!transition("_onRelease",x,y))applyRelease(x,y);} }
 void TouchInput::wheel(double x,double y) { pending_.wheelX+=x;pending_.wheelY+=y; }
 void TouchInput::touchStart(const std::vector<std::array<double,2>>& changed,int touches,int width,int height,double now) {
   for(const auto& point:changed)if(point[0]>=0&&point[1]>=0&&point[0]<width&&point[1]<height){
     screenPressed_=true;pressedTime_=0;if(touches>=2)cancel(point[0],point[1]);else trigger(point[0],point[1],now);
   }
 }
-void TouchInput::touchMove(double x,double y){pending_.moved=true;x_=x;y_=y;}
-void TouchInput::touchEnd(double x,double y){screenPressed_=false;pending_.released=true;x_=x;y_=y;}
+void TouchInput::touchMove(double x,double y){if(!transition||!transition("_onMove",x,y))applyMove(x,y);}
+void TouchInput::applyMove(double x,double y){pending_.moved=true;x_=x;y_=y;}
+void TouchInput::touchEnd(double x,double y){screenPressed_=false;if(!transition||!transition("_onRelease",x,y))applyRelease(x,y);}
+void TouchInput::applyRelease(double x,double y){pending_.released=true;x_=x;y_=y;}
 void TouchInput::pointerDown(bool touch,bool primary,double x,double y,bool inside){if(touch&&!primary&&inside)cancel(x,y);}
 bool TouchInput::isRepeated()const{return isPressed()&&(frame_.triggered||(pressedTime_>=keyRepeatWait&&keyRepeatInterval!=0&&std::fmod(pressedTime_,keyRepeatInterval)==0));}
 }

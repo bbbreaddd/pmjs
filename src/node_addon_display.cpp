@@ -29,8 +29,10 @@ struct BoundWindow : Window {
   bool opening = false, closing = false;
   void tick() {
     if (active) ++animationCount;
+    const auto previousOpenness=openness;
     if (opening) { openness = std::min(255.0, openness + 32); if (openness == 255) opening = false; }
     if (closing) { openness = std::max(0.0, openness - 32); if (openness == 0) closing = false; }
+    if(openness!=previousOpenness)synchronizeSkinContainer();
   }
 };
 struct DisplayServices {
@@ -66,6 +68,7 @@ std::string kind(const std::shared_ptr<Container>& node) {
   if (std::dynamic_pointer_cast<TilingSprite>(node)) return "tiling";
   if (std::dynamic_pointer_cast<Sprite>(node)) return "sprite";
   if (std::dynamic_pointer_cast<ScreenSprite>(node)) return "screen";
+  if (std::dynamic_pointer_cast<ToneSprite>(node)) return "tone";
   return "container";
 }
 napi_value wrap(napi_env env, const std::shared_ptr<DisplayServices>& runtime, const std::shared_ptr<Container>& node) {
@@ -96,6 +99,7 @@ napi_value create(napi_env env, napi_callback_info info) try {
   else if (type == "sprite") node = std::make_shared<BoundSprite>();
   else if (type == "tiling") node = std::make_shared<TilingSprite>();
   else if (type == "screen") node = std::make_shared<ScreenSprite>();
+  else if (type == "tone") node = std::make_shared<ToneSprite>();
   else if (type == "window") node = std::make_shared<BoundWindow>();
   else if (type == "windowLayer") node = std::make_shared<WindowLayer>();
   else if (type == "container") node = std::make_shared<Container>();
@@ -124,6 +128,10 @@ napi_value field(napi_env env, napi_callback_info info) try {
   }
   auto tiling = std::dynamic_pointer_cast<TilingSprite>(owner.node);
   auto window = std::dynamic_pointer_cast<BoundWindow>(owner.node);
+  if (auto tone = std::dynamic_pointer_cast<ToneSprite>(owner.node)) {
+    if (name=="_red") scalar=&tone->tone_[0]; else if (name=="_green") scalar=&tone->tone_[1];
+    else if (name=="_blue") scalar=&tone->tone_[2]; else if (name=="_gray") scalar=&tone->tone_[3];
+  }
   if (auto layer = std::dynamic_pointer_cast<WindowLayer>(owner.node)) {
     if (name == "width") scalar = &layer->width; else if (name == "height") scalar = &layer->height;
   }
@@ -140,17 +148,25 @@ napi_value field(napi_env env, napi_callback_info info) try {
       return number(env, static_cast<int>(sprite->blendMode));
     }
   }
+  if (auto screen = std::dynamic_pointer_cast<ScreenSprite>(owner.node); screen && name == "blendMode") {
+    if (args.size() == 3) screen->blendMode = asBlendMode(env, args[2]);
+    return number(env, static_cast<int>(screen->blendMode));
+  }
   if (tiling) {
     if (name == "originX") scalar = &tiling->origin.x; else if (name == "originY") scalar = &tiling->origin.y;
     else if (name == "width") scalar = &tiling->areaWidth; else if (name == "height") scalar = &tiling->areaHeight;
   }
   if (window) {
+    if (name=="_animationCount") {if(args.size()==3)window->animationCount=std::uint64_t(asNumber(env,args[2]));return number(env,window->animationCount);}
     if (name == "originX") scalar = &window->origin.x; else if (name == "originY") scalar = &window->origin.y;
     if (name == "width") scalar = &window->width; else if (name == "height") scalar = &window->height;
     else if (name == "padding") scalar = &window->padding; else if (name == "margin") scalar = &window->margin;
-    else if (name == "openness") scalar = &window->openness; else if (name == "opacity") scalar = &window->opacity;
+    else if (name == "openness" || name == "rawOpenness") scalar = &window->openness; else if (name == "opacity") scalar = &window->opacity;
     else if (name == "backOpacity") scalar = &window->backOpacity; else if (name == "contentsOpacity") scalar = &window->contentsOpacity;
     else if (name == "active") flag = &window->active; else if (name == "opening") flag = &window->opening;
+    else if (name == "pause") flag = &window->pause;
+    else if (name == "upArrowVisible") flag = &window->upArrowVisible;
+    else if (name == "downArrowVisible") flag = &window->downArrowVisible;
     else if (name == "closing") flag = &window->closing; else if (name == "index") integer = &window->selection().index;
     else if (name == "topRow") integer = &window->selection().topRow;
     else if (name == "cursorFixed") flag = &window->selection().cursorFixed;
@@ -168,7 +184,7 @@ napi_value field(napi_env env, napi_callback_info info) try {
     if (args.size() == 3) { if (name == "width") sprite->setWidth(asNumber(env, args[2])); else sprite->setHeight(asNumber(env, args[2])); }
     return number(env, name == "width" ? sprite->width() : sprite->height());
   }
-  if (scalar) { if (args.size() == 3) { *scalar = asNumber(env, args[2]); if (window) window->synchronizeModel(); } return number(env, *scalar); }
+  if (scalar) { if (args.size() == 3) { *scalar = asNumber(env, args[2]); if (window) { if(name=="openness")window->synchronizeSkinContainer(); window->synchronizeModel(); } } return number(env, *scalar); }
   if (flag) { if (args.size() == 3) { *flag = asBoolean(env, args[2]); if (window) window->synchronizeModel(); } return boolean(env, *flag); }
   if (integer) { if (args.size() == 3) *integer = asInt32(env, args[2]); return number(env, *integer); }
   throw std::invalid_argument("display field is not bound: " + name);
@@ -199,6 +215,37 @@ napi_value invoke(napi_env env, napi_callback_info info) try {
   auto window = std::dynamic_pointer_cast<BoundWindow>(owner.node);
   auto scene = std::dynamic_pointer_cast<mv::ScriptScene>(owner.node);
   auto scalar = [&](std::size_t index) { if (index >= args.size()) throw std::invalid_argument("missing display argument"); return asNumber(env, args[index]); };
+  if(method=="windowPrepare" && window) {
+    struct Callback {
+      napi_env env; napi_ref reference;
+      ~Callback(){napi_delete_reference(env,reference);}
+    };
+    napi_ref reference;check(env,napi_create_reference(env,args.at(2),0,&reference),"cannot reference window preparation");
+    auto callback=std::shared_ptr<Callback>(new Callback{env,reference});
+    window->prepareParts=[callback] {
+      napi_value function;check(callback->env,napi_get_reference_value(callback->env,callback->reference,&function),"cannot resolve window preparation");
+      if(!function)return;
+      napi_value receiver,result;check(callback->env,napi_get_global(callback->env,&receiver),"cannot resolve window receiver");
+      check(callback->env,napi_call_function(callback->env,receiver,function,0,nullptr,&result),"window preparation failed");
+    };
+    return undefined(env);
+  }
+  if(method=="windowCustomParts" && window){window->enableCustomParts();return undefined(env);}
+  if(method=="windowTone" && window) {
+    if(args.size()==5)window->setTone(scalar(2),scalar(3),scalar(4));
+    napi_value result;check(env,napi_create_array_with_length(env,3,&result),"cannot create window tone");
+    for(std::uint32_t i=0;i<3;++i)check(env,napi_set_element(env,result,i,number(env,window->tone[i])),"cannot write window tone");return result;
+  }
+  if(method=="cursorRect" && window) {
+    napi_value result;check(env,napi_create_array_with_length(env,4,&result),"cannot create cursor rectangle");
+    const auto& rect=window->cursorRect;const double values[]{rect.x,rect.y,rect.width,rect.height};
+    for(std::uint32_t i=0;i<4;++i)check(env,napi_set_element(env,result,i,number(env,values[i])),"cannot write cursor rectangle");return result;
+  }
+  if(method=="windowPart" && window) {
+    if(args.size()!=3 || asString(env,args[2])!="container")throw std::invalid_argument("window part is not bound");
+    window->skinContainerExposed=true; window->refreshSkinContainer();
+    return wrap(env,owner.services,window->skinContainer);
+  }
   if (method=="canvasLocalX" || method=="canvasLocalY") {
     double value=scalar(2); for (auto* current=&node;current;current=current->parent) value-=method=="canvasLocalX" ? current->position.x : current->position.y;
     return number(env,value);
@@ -218,15 +265,47 @@ napi_value invoke(napi_env env, napi_callback_info info) try {
     }
     return undefined(env);
   }
+  if (method=="filterMatrix") {
+    auto filter=std::dynamic_pointer_cast<BoundGlitchFilter>(owner.node);
+    if (!filter || args.size()!=4) throw std::invalid_argument("color filter requires a matrix and alpha");
+    napi_value length;check(env,napi_get_named_property(env,args[2],"length",&length),"cannot read color matrix length");
+    if(asUint32(env,length)!=20)throw std::invalid_argument("color matrix requires twenty values");
+    std::array<float,20> matrix;
+    for (std::uint32_t i=0;i<matrix.size();++i) {napi_value value;check(env,napi_get_element(env,args[2],i,&value),"cannot read color matrix");matrix[i]=float(asNumber(env,value));}
+    filter->value->colorMatrix=matrix;filter->value->alpha=asNumber(env,args[3]);
+    return undefined(env);
+  }
+  if (method=="toneColor") {
+    auto tone=std::dynamic_pointer_cast<ToneSprite>(owner.node);
+    if (!tone || args.size()!=6) throw std::invalid_argument("tone requires four channels");
+    tone->setTone(scalar(2),scalar(3),scalar(4),scalar(5));return undefined(env);
+  }
   if (method == "add" || method == "remove") {
     if (args.size() < 3) throw std::invalid_argument("missing display child");
     auto& child = display(env, args[2]); if (child.services != owner.services) throw std::invalid_argument("display child belongs to another runtime");
     if (child.kind == "glitch") throw std::invalid_argument("filter is not a display child");
     if (method == "add") node.addChildAt(child.node, args.size() > 3 ? asUint32(env, args[3]) : node.children.size());
     else node.removeChild(child.node.get());
+  } else if (method == "replaceChildren") {
+    std::vector<std::shared_ptr<Container>> replacement;
+    for (std::size_t i=2;i<args.size();++i) {
+      auto& child=display(env,args[i]);
+      if (child.services!=owner.services || child.kind=="glitch") throw std::invalid_argument("invalid display child");
+      for (auto* parent=&node;parent;parent=parent->parent)
+        if (parent==child.node.get()) throw std::invalid_argument("cyclic display hierarchy");
+      if (std::find(replacement.begin(),replacement.end(),child.node)!=replacement.end()) throw std::invalid_argument("duplicate display child");
+      replacement.push_back(child.node);
+    }
+    const auto previous=node.children;
+    for (const auto& child:previous)
+      if (std::find(replacement.begin(),replacement.end(),child)==replacement.end()) node.removeChild(child.get());
+    for (const auto& child:replacement) {
+      if (child->parent && child->parent!=&node) child->parent->removeChild(child.get());
+      child->parent=&node;
+    }
+    node.children=std::move(replacement);
   } else if (method == "removeChildren") node.removeChildren();
   else if (method == "filters") {
-    if (window) throw std::invalid_argument("window filters are not bound");
     std::vector<std::shared_ptr<GlitchFilter>> filters;
     for (std::size_t i = 2; i < args.size(); ++i) {
       auto& filter = display(env, args[i]);
@@ -416,6 +495,31 @@ napi_value sceneOperation(napi_env env, napi_callback_info info) try {
 napi_value inputOperation(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info); if (args.size() < 2) throw std::invalid_argument("input operation requires runtime and operation");
   auto runtime = services(env, args[0]); auto& input = runtime->input; const auto method = asString(env, args[1]);
+  if (method == "keyRepeatWait" || method == "keyRepeatInterval") {
+    auto& value = method == "keyRepeatWait" ? input.keyRepeatWait : input.keyRepeatInterval;
+    if (args.size() == 3) value = asNumber(env, args[2]);
+    return number(env, value);
+  }
+  if (method=="_dir4" || method=="_dir8") {auto& value=method=="_dir4"?input.direction4():input.direction8();if(args.size()==3)value=asInt32(env,args[2]);return number(env,value);}
+  if (method=="_pressedTime") {
+    if(args.size()==3)input.pressedTime()=asNumber(env,args[2]);return number(env,input.pressedTime());
+  }
+  if (method=="_preferredAxis") {
+    if(args.size()==3) {const auto value=asString(env,args[2]);input.preferredAxis()=value.empty()?0:value[0];}
+    return string(env,input.preferredAxis()?std::string(1,input.preferredAxis()):"");
+  }
+  if (method=="_previousState") {
+    auto& previous=input.previousState();
+    if(args.size()==4) {
+      const auto key=asString(env,args[2]);napi_valuetype type;check(env,napi_typeof(env,args[3],&type),"cannot inspect previous input state");
+      if(type==napi_null)previous.erase(key);else previous[key]=asBoolean(env,args[3]);
+    } else if(args.size()==3) {
+      napi_value keys;check(env,napi_get_property_names(env,args[2],&keys),"cannot inspect previous input keys");
+      std::uint32_t count;check(env,napi_get_array_length(env,keys,&count),"cannot count previous input keys");previous.clear();
+      for(std::uint32_t i=0;i<count;++i) {napi_value key,value;check(env,napi_get_element(env,keys,i,&key),"cannot read previous input key");check(env,napi_get_property(env,args[2],key,&value),"cannot read previous input value");previous[asString(env,key)]=asBoolean(env,value);}
+    }
+    auto result=moduleObject(env);for(const auto& [key,value]:previous)check(env,napi_set_named_property(env,result,key.c_str(),boolean(env,value)),"cannot return previous input state");return result;
+  }
   if (method == "_latestButton") {
     if (args.size() == 3) { napi_valuetype type; check(env,napi_typeof(env,args[2],&type),"cannot inspect latest button");
       input.setLatestButton(type == napi_null || type == napi_undefined ? std::optional<std::string>{} : asString(env,args[2])); }
@@ -458,6 +562,29 @@ napi_value inputOperation(napi_env env, napi_callback_info info) try {
     auto result = moduleObject(env);
     for (const auto& [key, value] : mapper) check(env, napi_set_named_property(env, result, std::to_string(key).c_str(), string(env, value)), "cannot return input binding");
     return result;
+  }
+  if (method=="events") {
+    auto& platform=runtime->owner->platform;const bool focused=platform.windowFocused();
+    napi_value result;check(env,napi_create_array(env,&result),"cannot create input events");std::uint32_t index=0;
+    const auto append=[&](const char* type,int code) {auto event=moduleObject(env);check(env,napi_set_named_property(env,event,"type",string(env,type)),"cannot write input type");check(env,napi_set_named_property(env,event,"keyCode",number(env,code)),"cannot write input key");check(env,napi_set_element(env,result,index++,event),"cannot append input event");};
+    if(!focused&&runtime->focused)append("blur",0);runtime->focused=focused;
+    if(focused)for(const auto& event:platform.keyEvents())append(event.down?"keydown":"keyup",event.keyCode);
+    return result;
+  }
+  if (method=="advance") {
+    const auto now=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    input.advance(double(now));return undefined(env);
+  }
+  if (method=="updateDirection") {input.updateDirection();return undefined(env);}
+  if (method=="updateGamepad") {
+    const auto object=args.at(2);Gamepad pad;
+    const auto get=[&](napi_value parent,const char* key){napi_value value;check(env,napi_get_named_property(env,parent,key,&value),"cannot read gamepad");return value;};
+    pad.index=asInt32(env,get(object,"index"));pad.connected=asBoolean(env,get(object,"connected"));
+    for(const char* key:{"buttons","axes"}) {
+      const auto array=get(object,key);std::uint32_t length;check(env,napi_get_array_length(env,array,&length),"cannot count gamepad values");
+      for(std::uint32_t i=0;i<length;++i) {napi_value value;check(env,napi_get_element(env,array,i,&value),"cannot read gamepad value");if(std::string_view(key)=="axes")pad.axes.push_back(asNumber(env,value));else pad.buttons.push_back(asBoolean(env,get(value,"pressed")));}
+    }
+    input.updateGamepad(pad);return undefined(env);
   }
   if (method == "update") {
     auto& platform = runtime->owner->platform; const bool focused = platform.windowFocused();
@@ -514,6 +641,7 @@ void setWindowModelForRuntime(napi_env env,napi_value object,RuntimeCore& runtim
   const auto& rect=window->model->rect;
   window->move(rect.x,rect.y,rect.width,rect.height); window->padding=window->model->padding;
   window->active=window->model->active; window->openness=window->model->openness;
+  window->synchronizeSkinContainer();
 }
 void startDisplayAnimation(napi_env env, napi_value object, RuntimeCore& runtime, const mv::Value& animation, bool mirror, int delay, int rate) {
   auto sprite = std::dynamic_pointer_cast<BoundSprite>(displayForRuntime(env, object, runtime));

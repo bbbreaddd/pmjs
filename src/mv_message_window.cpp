@@ -118,6 +118,7 @@ void Session::invokeInterpreterControl(const std::shared_ptr<RuntimeInterpreter>
   if (!context) throw std::runtime_error("interpreter is no longer attached to the session");
   if (args.size() != 1) throw std::invalid_argument("interpreter control requires one argument");
   if (method == "jumpTo") jumpToBase(*context, args[0].integer());
+  else if (method == "skipBranch") context->skipBranch(args[0].integer());
   else if (method == "setupChoices") setupChoicesBase(*context, args[0]);
   else if (method == "setupNumInput" || method == "setupItemChoice") {
     if (!context->serial) context->serial = ++nextInterpreterSerial_;

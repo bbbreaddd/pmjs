@@ -1,6 +1,7 @@
 #include "node_addon_internal.hpp"
 #include "mv_core_audio_graphics.hpp"
 #include "mv_core_utils.hpp"
+#include "mv_core_display.hpp"
 #include <algorithm>
 
 namespace pmjs::addon {
@@ -94,25 +95,26 @@ napi_value managedImage(napi_env env, napi_callback_info info) try {
   auto runtime = services(env, args[0]);
   const auto path = asString(env, args[1]); const int hue = asInt32(env, args[2]);
   const auto mode = asString(env, args[4]);
+  const bool request = mode == "request" || mode == "requestExternal";
   const auto key = mv::ImageManager::generateCacheKey(path, hue);
   auto* cached = runtime->imageCache.get(key);
   if (!cached || !cached->bitmap) {
     auto bitmap = path.empty() ? std::make_shared<mv::core::PixelBitmap>() :
-      mode == "request" ? mv::core::PixelBitmap::request(path) : mv::core::PixelBitmap::load(path);
+      request ? mv::core::PixelBitmap::request(path) : mv::core::PixelBitmap::load(path);
     if (hue) {
       std::weak_ptr<mv::core::PixelBitmap> weak = bitmap;
       bitmap->addLoadListener([weak, hue] { if (auto image = weak.lock()) image->rotateHue(hue); });
     }
     runtime->imageCache.reserve(key, 0, 0);
     cached = runtime->imageCache.get(key); cached->bitmap = std::move(bitmap);
-    cached->bitmapIdentity = mv::nextRuntimeIdentity(); cached->requestOnly = mode == "request";
+    cached->bitmapIdentity = mv::nextRuntimeIdentity(); cached->requestOnly = request;
     if (mode == "request") {
       std::weak_ptr<mv::core::PixelBitmap> weak = cached->bitmap;
       runtime->requests.enqueue(key, [weak] { if (auto image = weak.lock()) image->startRequest(); },
         [weak] { const auto image = weak.lock(); return !image || image->isRequestReady(); });
     }
   } else if (mode == "request") runtime->requests.raisePriority(key);
-  if (mode != "request") { cached->requestOnly = false; cached->bitmap->decode(); }
+  if (!request) { cached->requestOnly = false; cached->bitmap->decode(); }
   if (mode == "reserve") {
     std::uint64_t id; bool lossless;
     check(env, napi_get_value_bigint_uint64(env, args[5], &id, &lossless), "invalid image reservation");
@@ -212,7 +214,16 @@ napi_value cacheImage(napi_env env, napi_callback_info info) try {
   if (operation == "setEntry") {
     if (args.size()!=4) throw std::invalid_argument("cache update requires properties");
     napi_value value;
-    bool has=false; check(env,napi_has_named_property(env,args[3],"touch",&has),"cannot inspect touch");
+    bool has=false;
+    check(env,napi_has_named_property(env,args[3],"bitmap",&has),"cannot inspect cache bitmap");
+    if(has) {
+      check(env,napi_get_named_property(env,args[3],"bitmap",&value),"cannot read cache bitmap");
+      auto& replacement=unwrapBitmap(env,value);
+      if(replacement.services!=runtime)throw std::invalid_argument("cached bitmap belongs to another runtime");
+      entry->bitmap=replacement.bitmap;entry->pixelCount=std::size_t(entry->bitmap->width)*entry->bitmap->height;
+      entry->ready=entry->bitmap->isReady();entry->error=entry->bitmap->isError();entry->requestOnly=entry->bitmap->isRequestOnly();
+    }
+ check(env,napi_has_named_property(env,args[3],"touch",&has),"cannot inspect touch");
     if (has) { check(env,napi_get_named_property(env,args[3],"touch",&value),"cannot read touch"); entry->touch=static_cast<std::uint64_t>(asNumber(env,value)); }
     check(env,napi_has_named_property(env,args[3],"reservationId",&has),"cannot inspect reservation");
     if (has) {
@@ -257,7 +268,10 @@ napi_value bitmapProperty(napi_env env, napi_callback_info info) try {
   if (name == "width" && !write) return number(env, bitmap.width);
   if (name == "height" && !write) return number(env, bitmap.height);
   if ((name == "url" || name == "_url") && !write) return string(env, bitmap.url);
-  if (name == "_loadingState" && !write) return string(env, bitmap.loadingState);
+  if (name == "_loadingState") {
+    if(write) {bitmap.loadingState=asString(env,args[2]);bitmap.error=bitmap.loadingState=="error";bitmap.loaded=bitmap.loadingState=="loaded"||bitmap.loadingState=="none";}
+    return string(env,bitmap.loadingState);
+  }
   const auto numeric = [&](double& value) { if (write) value = asNumber(env,args[2]); return number(env,value); };
   const auto text = [&](std::string& value) { if (write) value = asString(env,args[2]); return string(env,value); };
   const auto flag = [&](bool& value) { if (write) value = asBoolean(env,args[2]); return boolean(env,value); };
@@ -284,6 +298,11 @@ napi_value bitmapOperation(napi_env env, napi_callback_info info) try {
   const auto value = [&](std::size_t index) { if (index+2 >= args.size()) throw std::invalid_argument("missing bitmap argument"); return args[index+2]; };
   const auto n = [&](std::size_t index) { return asNumber(env,value(index)); };
   const auto s = [&](std::size_t index) { return asString(env,value(index)); };
+  if (name == "snap") {
+    auto stage=displayForRuntime(env,value(0),owner.services->owner->core);
+    owner.bitmap=mv::core::PixelBitmap::snap([&] { stage->render(owner.services->owner->core.renderer()); });
+    return undefined(env);
+  }
   if (name == "isReady") return boolean(env,bitmap.isReady());
   if (name == "isError") return boolean(env,bitmap.isError());
   if (name == "isRequestOnly") return boolean(env,bitmap.isRequestOnly());

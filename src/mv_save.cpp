@@ -115,10 +115,10 @@ Character readCharacter(const Value& value) {
 }
 }
 
-Value Session::save() {
+Value Session::save(bool recordSave) {
   if (mapSceneOnly()) throw std::runtime_error("map-scene session cannot export a gameplay save");
   if (ui_.scene == Scene::battle || message_.busy || pendingTransfer_) throw std::runtime_error("cannot save during a battle, message or transfer");
-  ++system_.saveCount;
+  if (recordSave) ++system_.saveCount;
   system_.versionId = database_["system"]["versionId"].integer();
   Array switches(switchDataLength_), variables(variableDataLength_);
   for (const auto& [id, value] : switches_) { if (switches.size() <= static_cast<std::size_t>(id)) switches.resize(id + 1); switches[id] = value; }
@@ -186,7 +186,7 @@ void Session::load(const Value& contents) {
   if (mapSceneOnly() && database_["sceneContract"]["mapId"].integer() != mapId)
     throw std::invalid_argument("save is outside the declared map-scene scope");
   if (database_["maps"][std::to_string(mapId)].null()) throw std::invalid_argument("save refers to an unknown map");
-  Session restored(database_);
+  Session restored(database_.reference());
   restored.gameObjectsInitialized_ = true;
   restored.setScreenSize(screenWidth_, screenHeight_);
   restored.switches_.clear(); restored.variables_.clear(); restored.selfSwitches_.clear(); restored.inventory_.clear(); restored.party_.clear(); restored.actors_.clear();
@@ -327,7 +327,6 @@ void Session::load(const Value& contents) {
   restored.enemyBitmapHeightResolver_ = enemyBitmapHeightResolver_;
   restored.messageTextLayoutResolver_ = messageTextLayoutResolver_;
   restored.runtimeHooks_ = runtimeHooks_;
-  restored.database_.reader = database_.reader;
   detachRuntimeEntities(true);
   *this = std::move(restored);
 }

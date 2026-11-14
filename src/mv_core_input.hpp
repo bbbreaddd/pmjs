@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <array>
 #include <map>
 #include <optional>
@@ -26,6 +27,14 @@ class Input {
   double keyRepeatInterval = 6;
 
   void clear();
+  void advance(double nowMilliseconds);
+  void updateDirection();
+  void updateGamepad(const Gamepad& gamepad);
+  auto& previousState() { return previous_; }
+  double& pressedTime() { return pressedTime_; }
+  char& preferredAxis() { return preferredAxis_; }
+  int& direction4() { return dir4_; }
+  int& direction8() { return dir8_; }
   bool keyDown(int keyCode, bool resourceRetryPending = false);
   void keyUp(int keyCode);
   void update(const std::vector<Gamepad>& gamepads, double nowMilliseconds);
@@ -45,14 +54,13 @@ class Input {
   static bool shouldPreventDefault(int keyCode);
 
  private:
-  void updateGamepad(const Gamepad& gamepad);
   bool current(std::string_view name) const;
   static bool escapeCompatible(std::string_view name);
   std::map<std::string, bool, std::less<>> current_, previous_;
   std::vector<std::string> order_;
   std::map<int, std::vector<std::optional<bool>>> gamepadStates_;
   std::optional<std::string> latest_;
-  std::uint64_t pressedTime_ = 0;
+  double pressedTime_ = 0;
   char preferredAxis_ = 0;
   int dir4_ = 0, dir8_ = 0;
   double date_ = 0;
@@ -63,6 +71,11 @@ class Input {
 namespace pmjs::mv::core {
 class TouchInput {
  public:
+  std::function<bool(const char*,double,double)> transition;
+  void applyTrigger(double x,double y,double now);
+  void applyCancel(double x,double y);
+  void applyMove(double x,double y);
+  void applyRelease(double x,double y);
   double keyRepeatWait = 24, keyRepeatInterval = 6;
   void clear();
   void update();

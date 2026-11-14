@@ -12,6 +12,8 @@ struct SpriteFrame {
 };
 SpriteFrame spriteFrame(const Rectangle& requested,double bitmapWidth,double bitmapHeight);
 struct GlitchFilter {
+  std::optional<std::array<float,20>> colorMatrix;
+  double alpha = 1;
   double slices = 5, offset = 100, direction = 0, fillMode = 0, seed = 0;
   bool enabled = true;
 };
@@ -38,6 +40,7 @@ class Container {
   void removeChildren();
   virtual void onRemoveAsAChild() {}
   Matrix localTransform()const;
+  int beginFilters(Renderer& renderer) const;
   void move(double x,double y){position={x,y};}
  protected:
   virtual void draw(Renderer&,const Matrix&,double){}
@@ -226,11 +229,17 @@ class ToneSprite:public Container {
   void clear(){setTone(0,0,0,0);}
   void reset(){clear();}
  protected:void draw(Renderer&,const Matrix&,double)override;
- private:std::array<double,4> tone_{};
+ public:std::array<double,4> tone_{};
 };
 class Window:public Container {
  public:
+  Window();
+  bool customParts=false;
+  std::function<void()> prepareParts;
+  void enableCustomParts();
   std::shared_ptr<PixelBitmap> windowskin,contents;
+  const std::shared_ptr<Container> skinContainer;
+  bool skinContainerExposed=false;
   Point origin;
   Rectangle cursorRect;
   double width=0,height=0,padding=18,margin=4;
@@ -239,6 +248,8 @@ class Window:public Container {
   bool active=true,downArrowVisible=false,upArrowVisible=false,pause=false;
   std::uint64_t animationCount=0;
   void update()override;
+  void synchronizeSkinContainer();
+  void refreshSkinContainer();
   void synchronize(std::uint64_t frameCount);
   void move(double x,double y,double w,double h){position={x,y};width=w;height=h;}
   void setCursorRect(double x,double y,double w,double h){const auto value=[](double v){return std::isnan(v)?0.0:std::floor(v);};cursorRect={value(x),value(y),value(w),value(h)};}

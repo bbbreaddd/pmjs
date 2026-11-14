@@ -1,4 +1,5 @@
 #include "mv_presentation.hpp"
+#include "mv_bound_sprites.hpp"
 #include <regex>
 #include "mv_windows.hpp"
 #include "mv_managers.hpp"
@@ -68,6 +69,7 @@ Presentation::Presentation(RuntimeCore& core, Session& session, Value settings)
   textHeight_ = core_.height();
 }
 Presentation::~Presentation() {
+  presentationLifetime_.reset();
   session_.setMessageTextLayoutResolver({});
   session_.setEnemyBitmapHeightResolver({});
   clearNameContents();
@@ -249,11 +251,11 @@ void Presentation::mapParallax(int tileWidth, int tileHeight) {
   if (!core_.renderer().queueTilingFrame(source.handle, {1,0,0,1,0,0},
       {0,0,float(source.width),float(source.height)},{width,height},{float(-std::floor(-ox+.5)),float(-std::floor(-oy+.5))},1,BlendMode::normal)) throw std::runtime_error("cannot queue map parallax");
 }
-void Presentation::map() {
+void Presentation::map(bool drawAmbience) {
   const auto& tiled=session_.database_["tiledMaps"][std::to_string(session_.mapId_)];
   if(!tiled.null()) {
     mapParallax(tiled["tilewidth"].integer(48), tiled["tileheight"].integer(48));
-    tiledMap(tiled);mapDestination();mapAmbience();return;
+    tiledMap(tiled);mapDestination();if(drawAmbience)mapAmbience();return;
   }
   const auto& mapData = session_.map();
   const int width = mapData["width"].integer(), height = mapData["height"].integer();
@@ -1499,89 +1501,134 @@ std::shared_ptr<core::WebAudio> loadAudioVoice(RuntimeCore& core, const std::sha
 }
 }  // namespace
 
+void Presentation::flushAudio() { processAudio(); }
+std::shared_ptr<core::WebAudio> Presentation::audioBuffer(const std::string& kind) const {
+  if(kind=="me")return musicEffect_;
+  if(kind!="bgm"&&kind!="bgs")throw std::invalid_argument("unknown music channel: "+kind);
+  const auto found=audio_.find(kind);
+  return found==audio_.end() ? nullptr : found->second.second;
+}
+void Presentation::setAudioBuffer(const std::string& kind,std::shared_ptr<core::WebAudio> buffer) {
+  audioBuffer(kind);
+  processAudio();
+  if(kind=="me")musicEffect_=std::move(buffer);
+  else audio_[kind].second=std::move(buffer);
+}
+Value Presentation::currentAudio(const std::string& kind) const {
+  const Value* sound=nullptr;
+  if(kind=="bgm")sound=&session_.savedBgm_;
+  else if(kind=="bgs")sound=&session_.savedBgs_;
+  else if(kind=="me") {
+    const auto found=audioSettings_.find(kind);
+    if(found!=audioSettings_.end())sound=&found->second;
+  } else throw std::invalid_argument("unknown music channel: "+kind);
+  return sound&&!(*sound)["name"].text().empty() ? *sound : Value{};
+}
+void Presentation::setCurrentAudio(const std::string& kind,Value sound) {
+  audioBuffer(kind);
+  if(kind=="bgm")session_.savedBgm_=sound;
+  else if(kind=="bgs")session_.savedBgs_=sound;
+  audioSettings_[kind]=std::move(sound);
+  if(kind!="me")audio_[kind].first=audioSettings_[kind]["name"].text();
+}
+void Presentation::updateAudioParameters(const std::string& kind,const Value& sound,const std::shared_ptr<core::WebAudio>& buffer) {
+  if(kind!="bgm"&&kind!="bgs"&&kind!="me"&&kind!="se")throw std::invalid_argument("unknown audio channel: "+kind);
+  const auto voice=kind=="se" ? buffer : buffer ? buffer : audioBuffer(kind);
+  if(voice)applyAudioParameters(*voice,sound,session_.volumes_[audioChannelIndex(kind)]);
+}
+void Presentation::setSoundBuffers(std::vector<std::shared_ptr<core::WebAudio>> buffers) {
+  processAudio(); sounds_=std::move(buffers);
+}
+
 void Presentation::processAudio() {
+  if(processingAudio_)throw std::runtime_error("audio command processing is already running");
+  struct Guard { bool& active; ~Guard() { active=false; } } guard{processingAudio_};
+  processingAudio_=true;
   if (musicEffect_ && !musicEffect_->isPlaying()) {
     musicEffect_.reset();
     if (audio_["bgm"].second && audio_["bgm"].second->nativeHandle()) {
       core_.media().setSuspended(audio_["bgm"].second->nativeHandle(), false);
     }
   }
-  for (const auto& command : session_.audioCommands_) {
-    auto kind = command["kind"].text();
-    if (kind == "battle-save") {
-      session_.battle_.mapBgm = audioState("bgm"); session_.battle_.mapBgs = audioState("bgs"); continue;
-    }
-    if (kind == "save-bgm") { session_.system_.storedBgm = audioState("bgm"); continue; }
-    if (kind == "stop-se") {
-      for (const auto& sound:sounds_) sound->stop();
-      sounds_.clear(); continue;
-    }
-    if (kind == "fade-bgm" || kind == "fade-bgs") {
-      const auto channel = kind == "fade-bgm" ? "bgm" : "bgs";
-      auto& active = audio_[channel];
-      if (active.second && !active.first.empty()) {
-        if (active.second->nativeHandle()) {
-          core_.media().fade(active.second->nativeHandle(), -1.0F, 0.0F, command["sound"].number(), true);
+  while(!session_.audioCommands_.empty()) {
+    auto commands=std::move(session_.audioCommands_); session_.audioCommands_.clear();
+    for (const auto& command : commands) {
+      auto kind = command["kind"].text();
+      if (kind == "battle-save") {
+        session_.battle_.mapBgm = audioState("bgm"); session_.battle_.mapBgs = audioState("bgs"); continue;
+      }
+      if (kind == "save-bgm") { session_.system_.storedBgm = audioState("bgm"); continue; }
+      if (kind == "stop-se") {
+        for (const auto& sound:sounds_) sound->stop();
+        sounds_.clear(); continue;
+      }
+      if (kind == "fade-bgm" || kind == "fade-bgs") {
+        const auto channel = kind == "fade-bgm" ? "bgm" : "bgs";
+        auto& active = audio_[channel];
+        if (active.second && !active.first.empty()) {
+          if (active.second->nativeHandle()) {
+            core_.media().fade(active.second->nativeHandle(), -1.0F, 0.0F, command["sound"].number(), true);
+          }
+          active.first.clear();
+          audioSettings_[channel] = Value::Object{{"name", ""}, {"volume", 0}, {"pitch", 0}, {"pan", 0}, {"pos", 0}};
         }
-        active.first.clear();
-        audioSettings_[channel] = Value::Object{{"name", ""}, {"volume", 0}, {"pitch", 0}, {"pan", 0}, {"pos", 0}};
+        continue;
       }
-      continue;
-    }
-    if (kind == "fade-in-bgm" || kind == "fade-in-bgs") {
-      const auto channel = kind == "fade-in-bgm" ? "bgm" : "bgs";
-      auto& active = audio_[channel];
-      if (active.second && !active.first.empty()) active.second->fadeIn(command["sound"].number());
-      continue;
-    }
-    if (kind == "fade-me") {
-      if (musicEffect_ && musicEffect_->nativeHandle()) {
-        core_.media().fade(musicEffect_->nativeHandle(), -1.0F, 0.0F, command["sound"].number(), true);
+      if (kind == "fade-in-bgm" || kind == "fade-in-bgs") {
+        const auto channel = kind == "fade-in-bgm" ? "bgm" : "bgs";
+        auto& active = audio_[channel];
+        if (active.second && !active.first.empty()) active.second->fadeIn(command["sound"].number());
+        continue;
       }
-      continue;
-    }
-    const bool replay = kind == "replay-bgm";
-    if (replay && session_.system_.storedBgm.null()) continue;
-    if (replay) kind = "bgm";
-    const bool restore = kind == "battle-restore-bgm" || kind == "battle-restore-bgs";
-    if (restore) kind = kind == "battle-restore-bgm" ? "bgm" : "bgs";
-    const auto sound = replay ? session_.system_.storedBgm : restore ? kind == "bgm" ? session_.battle_.mapBgm : session_.battle_.mapBgs : command["sound"];
-    const auto name = sound["name"].text();
-    if (restore || replay) (kind == "bgm" ? session_.savedBgm_ : session_.savedBgs_) = sound;
-    if (kind == "me" && musicEffect_) {
-      musicEffect_->stop(); musicEffect_.reset();
-      if (audio_["bgm"].second && audio_["bgm"].second->nativeHandle()) {
-        core_.media().setSuspended(audio_["bgm"].second->nativeHandle(), false);
+      if (kind == "fade-me") {
+        if (musicEffect_ && musicEffect_->nativeHandle()) {
+          core_.media().fade(musicEffect_->nativeHandle(), -1.0F, 0.0F, command["sound"].number(), true);
+        }
+        continue;
       }
-    }
-    if (kind == "bgm" || kind == "bgs") {
-      audioSettings_[kind] = sound;
-      auto& active = audio_[kind];
-      const bool changed = active.first != name;
-      if ((active.first != name || name.empty()) && active.second) { active.second->stop(); active.second.reset(); active.first.clear(); }
-      if (name.empty()) continue;
-      if (active.first != name) {
-        active.second = loadAudioVoice(core_, session_.runtimeHooks_, kind, name);
-        active.first = name;
-        applyAudioParameters(*active.second, sound, session_.volumes_[audioChannelIndex(kind)]);
-        active.second->play(true, 0);
+      const bool replay = kind == "replay-bgm";
+      if (replay && session_.system_.storedBgm.null()) continue;
+      if (replay) kind = "bgm";
+      const bool restore = kind == "battle-restore-bgm" || kind == "battle-restore-bgs";
+      if (restore) kind = kind == "battle-restore-bgm" ? "bgm" : "bgs";
+      const auto sound = replay ? session_.system_.storedBgm : restore ? kind == "bgm" ? session_.battle_.mapBgm : session_.battle_.mapBgs : command["sound"];
+      const auto name = sound["name"].text();
+      if (restore || replay) (kind == "bgm" ? session_.savedBgm_ : session_.savedBgs_) = sound;
+      if (kind == "me") audioSettings_[kind]=sound;
+      if (kind == "me" && musicEffect_) {
+        musicEffect_->stop(); musicEffect_.reset();
+        if (audio_["bgm"].second && audio_["bgm"].second->nativeHandle()) {
+          core_.media().setSuspended(audio_["bgm"].second->nativeHandle(), false);
+        }
       }
-      if (((restore || replay) && changed) || command["restart"].boolean()) {
-        active.second->play(true, sound["pos"].number());
-      }
-      if (replay && changed) active.second->fadeIn(0.5);
-    } else if (!name.empty()) {
-      auto voice = loadAudioVoice(core_, session_.runtimeHooks_, kind, name);
-      applyAudioParameters(*voice, sound, session_.volumes_[audioChannelIndex(kind)]);
-      voice->play(false, 0);
-      if (kind == "me") {
-        musicEffect_ = std::move(voice);
-      } else {
-        sounds_.push_back(std::move(voice));
+      if (kind == "bgm" || kind == "bgs") {
+        audioSettings_[kind] = sound;
+        auto& active = audio_[kind];
+        const bool changed = active.first != name;
+        if ((active.first != name || name.empty()) && active.second) { active.second->stop(); active.second.reset(); active.first.clear(); }
+        if (name.empty()) continue;
+        if (active.first != name) {
+          active.second = loadAudioVoice(core_, session_.runtimeHooks_, kind, name);
+          active.first = name;
+          applyAudioParameters(*active.second, sound, session_.volumes_[audioChannelIndex(kind)]);
+          active.second->play(true, 0);
+        }
+        if (((restore || replay) && changed) || command["restart"].boolean()) {
+          active.second->play(true, sound["pos"].number());
+        }
+        if (replay && changed) active.second->fadeIn(0.5);
+      } else if (!name.empty()) {
+        auto voice = loadAudioVoice(core_, session_.runtimeHooks_, kind, name);
+        applyAudioParameters(*voice, sound, session_.volumes_[audioChannelIndex(kind)]);
+        voice->play(false, 0);
+        if (kind == "me") {
+          musicEffect_ = std::move(voice);
+        } else {
+          sounds_.push_back(std::move(voice));
+        }
       }
     }
   }
-  session_.audioCommands_.clear();
   for (auto& [kind, active] : audio_) if (active.second) {
     const auto& sound = audioSettings_[kind];
     if (sound["name"].text().empty()) {
@@ -1620,9 +1667,7 @@ bool Presentation::renderFrame(const std::function<void()>& drawFrame) {
   processAudio();
   return core::Graphics::render([this]{renderStage();},drawFrame);
 }
-void Presentation::renderStage() {
-  session_.uiHitTargets_.clear();
-  if (scriptStage_) { scriptStage_->render(core_.renderer()); return; }
+void Presentation::prepareRenderResources() {
   const int sceneId = static_cast<int>(session_.ui_.scene);
   if (sceneId != lastScene_ || session_.mapId_ != lastMap_ || session_.presentationRevision_ != lastPresentationRevision_) {
     clearWeather();
@@ -1645,6 +1690,24 @@ void Presentation::renderStage() {
     const auto created=core_.canvases().create(core_.width(),core_.height());
     if(!created)throw std::runtime_error("cannot resize global text contents");
     globalTextCanvas_=created->handle;
+  }
+}
+void Presentation::finishSceneOverlays() {
+  if (session_.sceneFadeOpacity_ > 0) {
+    const float color = session_.sceneFadeWhite_ ? 1.0F : 0.0F;
+    core_.renderer().queueQuad(0,0,core_.width(),core_.height(),{color,color,color,static_cast<float>(session_.sceneFadeOpacity_/255)});
+  }
+  movie();
+  if(movieAudio_)core_.media().setParameters(movieAudio_,core::Graphics::videoVolume,1,0);
+}
+void Presentation::renderStage() {
+  session_.uiHitTargets_.clear();
+  prepareRenderResources();
+  if (scriptStage_) {
+    core_.renderer().clearScene(0,0,0,1);
+    scriptStage_->render(core_.renderer());
+    if(session_.ui_.scene==Scene::map)finishSceneOverlays();
+    return;
   }
   uiWindowOrdinal_=0;uiPendingSlot_.reset();pendingUiOps_.clear();uiLayerState_.reset();uiTextClip_.reset();uiTextDirty_=false;
   textCanvas_=globalTextCanvas_;textOffsetX_=0;textOffsetY_=0;textWidth_=core_.width();textHeight_=core_.height();
@@ -1677,11 +1740,6 @@ void Presentation::renderStage() {
   }
   finishUiLayer();
   if (scene == Scene::title && session_.ui_.age < 24) core_.renderer().queueQuad(0, 0, width, height, {0, 0, 0, std::floor(255 * (1 - session_.ui_.age / 24.0F)) / 255});
-  if (session_.sceneFadeOpacity_ > 0) {
-    const float color = session_.sceneFadeWhite_ ? 1.0F : 0.0F;
-    core_.renderer().queueQuad(0, 0, width, height, {color, color, color, static_cast<float>(session_.sceneFadeOpacity_ / 255)});
-  }
-  movie();
-  if(movieAudio_)core_.media().setParameters(movieAudio_,core::Graphics::videoVolume,1,0);
+  finishSceneOverlays();
 }
 }  // namespace pmjs::mv

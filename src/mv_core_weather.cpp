@@ -9,7 +9,7 @@ void Weather::initialize() {
 }
 void Weather::createBitmaps() { for (int kind=0;kind<3;++kind) { bitmaps_[kind].reset(); bitmap(kind); } }
 void Weather::createDimmer() {
-  dimmerSprite=std::make_shared<ScreenSprite>(); dimmerSprite->setColor(95,95,95); addChild(dimmerSprite);
+  dimmerSprite=std::make_shared<ScreenSprite>(); dimmerSprite->setColor(80,80,80); addChild(dimmerSprite);
 }
 void Weather::updateDimmer() { if (dimmerSprite) dimmerSprite->setOpacity(std::floor(power*6)); }
 void Weather::addSprite() {

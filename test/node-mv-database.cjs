@@ -51,19 +51,21 @@ test('native parameters read nested edits, array changes, record and table repla
   delete table[1]; assert.equal(hp(), 1);
   table[1] = replacement; assert.equal(hp(), 70);
   assert.equal(original.params[0][1], 43, 'replaced records retain their own identity and contents');
+  replacement.metadata = { owner: replacement };
   const saved = api.save(session);
   replacement.params[0][1] = 90;
   api.load(session, saved);
   assert.equal(hp(), 90, 'save loading preserves the live database binding');
   assert.equal(scope.$dataClasses, table);
-  fs.writeFileSync(path.join(root, 'data/ClassesReload.json'), JSON.stringify([null, { ...replacement, params: Array.from({ length: 8 }, () => [0, 120]) }]));
+  const fileRecord = { ...replacement }; delete fileRecord.metadata;
+  fs.writeFileSync(path.join(root, 'data/ClassesReload.json'), JSON.stringify([null, { ...fileRecord, params: Array.from({ length: 8 }, () => [0, 120]) }]));
   scope.DataManager.loadDataFile('$dataClasses', 'ClassesReload.json');
-  assert.equal(runtime.database.isReady(), true);
   assert.equal(hp(), 120);
+  assert.equal(runtime.database.isReady(), true);
   fs.writeFileSync(path.join(root, 'data/Extra.json'), '{"value":17}');
   scope.DataManager.loadDataFile('$dataExtra', 'Extra.json');
-  assert.equal(runtime.database.isReady(), true);
   assert.equal(api.databaseInvoke(session, 'read', 'plugin:$dataExtra'), scope.$dataExtra);
+  assert.equal(runtime.database.isReady(), true);
 });
 
 test('native initialization and common events consume current database contents', t => {
@@ -126,6 +128,9 @@ test('successive startup publications retain live bindings for earlier tables', 
   data.classes[1].params[0][1] = 35;
   assert.equal(api.snapshot(session).actors[1].parameters[0], 35);
   assert.equal(api.databaseInvoke(session, 'read', 'classes'), data.classes);
+  api.actorInvoke(session, api.entity(session, 'actor', 1), 'recoverAll');
+  const saved = api.save(session); api.load(session, saved);
+  assert.equal(api.snapshot(session).actors[1].hp, 35);
   delete classes.classes;
   assert.equal(api.snapshot(session).actors[1].parameters[0], 1);
 });

@@ -68,6 +68,7 @@ async function runNativeMv(options, hooks = {}) {
       createPluginRuntime: require('./native-plugins.cjs').createPluginRuntime };
     const scriptRuntime = hooks.installRuntime ? await hooks.installRuntime(runtimeOptions) :
       adapter ? adapter.createRuntime(runtimeOptions) : loaded.manifest ? require('./native-plugins.cjs').createPluginRuntime(engine, session, runtimeOptions) : null;
+    scriptRuntime?.scope?.ConfigManager?.load();
     if (options.battleTest) engine.battleTest(session);
     else if (loaded.initialState) engine.load(session, loaded.initialState);
     else if (scriptRuntime?.start) scriptRuntime.start(); else engine.openTitle(session);
@@ -90,6 +91,7 @@ async function runNativeMv(options, hooks = {}) {
           configurationRevision = request.configurationRevision;
         }
         if (request.save || request.load) {
+          if (scriptRuntime?.completeStorage) { scriptRuntime.completeStorage(request); continue; }
           try {
             const file = `file${request.slot}.rpgsave`;
             if (request.save) {

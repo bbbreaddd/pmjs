@@ -55,3 +55,5 @@ endif()
 configure_file(cmake/build-config.json.in build-config.json @ONLY)
 configure_file(cmake/InstallMetadata.cmake.in InstallMetadata.cmake @ONLY)
 install(SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/InstallMetadata.cmake")
+
+install(DIRECTORY third_party/rpg-maker-mv DESTINATION share/pmjs/third_party)

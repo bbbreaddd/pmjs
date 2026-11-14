@@ -22,7 +22,34 @@ test('native image cache preserves identity, reservations, requests and retained
   fs.writeFileSync(path.join(root, 'img/system/Window.png'), png(192, 192, new Uint8Array(192 * 192 * 4).fill(255)));
   native.initialize({ gameRoot: root, width: 32, height: 32, windowTitle: 'Native image cache' });
   t.after(() => native.runtime.quit());
-  const Bitmap = createBitmapClass(native), manager = createImageManager(native, Bitmap);
+  const { createHostContext } = require('./helpers/mz-host-context.cjs');
+  const web = createHostContext(native, { graphics: false });
+  const Bitmap = createBitmapClass(native, null, null, () => web.CanvasRenderingContext2D), manager = createImageManager(native, Bitmap);
+  const direct = new Bitmap(4, 4);
+  direct.fillAll('#ff0000');
+  const context = direct._context;
+  assert.equal(context, direct._canvas.getContext('2d'));
+  assert.deepEqual(Array.from(context.getImageData(0, 0, 1, 1).data), [255, 0, 0, 255]);
+  const revision = direct._canvas.__pmjsContentRevision;
+  context.fillStyle = '#00ff00'; context.fillRect(0, 0, 2, 2);
+  assert.equal(direct.getPixel(0, 0), '#00ff00');
+  assert.ok(direct._canvas.__pmjsContentRevision > revision);
+  const image = context.createImageData(1, 1); image.data.set([0, 0, 255, 255]);
+  context.putImageData(image, 1, 1); assert.equal(direct.getPixel(1, 1), '#0000ff');
+  direct._canvas.width = 5; assert.equal(direct.width, 5);
+  assert.equal(direct._context, context); assert.equal(direct.getAlphaPixel(0, 0), 0);
+  let outlineCalls = 0, bodyCalls = 0;
+  direct._drawTextOutline = function() { ++outlineCalls; };
+  direct._drawTextBody = function() { ++bodyCalls; this._context.fillStyle = '#ff00ff'; this._context.fillRect(0, 0, 1, 1); };
+  direct.drawText('X', 0, 0, 4, 4, 'left');
+  assert.equal(outlineCalls, 1); assert.equal(bodyCalls, 1); assert.equal(direct.getPixel(0, 0), '#ff00ff');
+  const queue = manager._requestQueue, trace = [];
+  const entry = name => ({ startRequest() { trace.push(name); }, isRequestReady() { return false; } });
+  queue.enqueue('first', entry('first')); queue.enqueue('second', entry('second'));
+  const pending = queue._queue; queue.raisePriority('second'); queue.update();
+  assert.equal(queue._queue, pending); assert.deepEqual(trace, ['second']);
+  pending.reverse(); queue.update(); assert.deepEqual(trace, ['second', 'first']);
+  manager.clearRequest(); assert.equal(pending.length, 0);
   async function ready(bitmap) {
     for (let i = 0; i < 100 && !bitmap.isReady(); i++) { manager.update(); await new Promise(resolve => setTimeout(resolve, 10)); }
     assert.equal(bitmap.isReady(), true);
@@ -30,6 +57,12 @@ test('native image cache preserves identity, reservations, requests and retained
   const sheet = manager.reservePicture('Sheet', 0, 'event');
   await ready(sheet);
   assert.equal(manager.loadPicture('Sheet'), sheet);
+  const cached = manager._imageCache._items[manager._generateCacheKey('img/pictures/Sheet.png', 0)];
+  const reservationId = cached.reservationId, original = cached.bitmap;
+  const swapped = new Bitmap(2, 2); swapped.fillAll('#123456'); cached.bitmap = swapped;
+  assert.equal(cached.reservationId, reservationId); assert.equal(manager.loadPicture('Sheet'), swapped);
+  assert.equal(original.getPixel(0, 0), '#ff0000'); cached.bitmap = original;
+  assert.equal(manager.loadPicture('Sheet'), original);
   assert.equal(sheet.getPixel(0, 0), '#ff0000');
   const authored = new Bitmap(4, 4); authored.fillAll('#0000ff');
   manager._imageCache.add('authored', authored);
@@ -58,6 +91,7 @@ test('native image cache preserves identity, reservations, requests and retained
   assert.equal(destination.getPixel(0, 0), '#ff0000');
   manager.setCacheLimit(1000);
   const requested = manager.requestPicture('Sheet');
+  assert.equal(manager._requestQueue._queue[0].value, requested);
   assert.equal(manager.isReady(), true);
   assert.equal(manager.loadPicture('Sheet'), requested);
   let notified = 0; requested.addLoadListener(() => notified++);

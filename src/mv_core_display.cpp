@@ -47,12 +47,19 @@ Matrix Container::localTransform()const {
   const double c=-std::sin(rotation-skew.x)*scale.y,d=std::cos(rotation-skew.x)*scale.y;
   return {float(a),float(b),float(c),float(d),float(position.x-pivot.x*a-pivot.y*c),float(position.y-pivot.x*b-pivot.y*d)};
 }
+int Container::beginFilters(Renderer& renderer) const {
+  int count=0;
+  for (const auto& filter:glitchFilters) if (filter && filter->enabled) {
+    if (filter->colorMatrix) renderer.beginColorMatrix(*filter->colorMatrix,float(filter->alpha));
+    else if (filter->slices>0) renderer.beginNoiseGlitch(filter->seed,filter->slices,filter->offset);
+    else continue;
+    ++count;
+  }
+  return count;
+}
 void Container::render(Renderer& renderer,const Matrix& parentWorld,double opacity) {
   if(!visible||!renderable||alpha<=0)return;
-  int filters = 0;
-  for (const auto& filter : glitchFilters) if (filter && filter->enabled && filter->slices > 0) {
-    renderer.beginNoiseGlitch(filter->seed, filter->slices, filter->offset); ++filters;
-  }
+  int filters=beginFilters(renderer);
   const auto world=multiply(parentWorld,localTransform());const double worldAlpha=opacity*alpha;
   draw(renderer,world,worldAlpha);const auto count=children.size();
   for(std::size_t i=0;i<count&&i<children.size();++i){auto child=children[i];if(child)child->render(renderer,world,worldAlpha);}
@@ -123,10 +130,36 @@ void ToneSprite::draw(Renderer& renderer,const Matrix& world,double) {
   for(std::size_t index=0;index<tone.size();++index)tone[index]=float(tone_[index]/255);
   renderer.queueTone(tone,world,{float(Graphics::width),float(Graphics::height)});
 }
+class WindowSkinContainer final : public Container {
+ public:
+  bool customParts=false;
+  std::shared_ptr<PixelBitmap> back,frame;
+  double width=0,height=0,margin=0,paintOpacity=1,backOpacity=1;
+  bool hasChrome=false;
+ protected:
+  void draw(Renderer& renderer,const Matrix& world,double worldAlpha) override {
+    if(customParts)return;
+    if(!hasChrome)return;
+    if(back)if(auto texture=back->texture())Sprite::queueFrame(renderer,*texture,{0,0,double(back->width),double(back->height)},translated(world,margin,margin),worldAlpha*paintOpacity*backOpacity,BlendMode::normal,{},{},{},!back->smooth);
+    if(frame)if(auto texture=frame->texture())Sprite::queueFrame(renderer,*texture,{0,0,width,height},world,worldAlpha*paintOpacity,BlendMode::normal,{},{},{},!frame->smooth);
+  }
+};
+void Window::enableCustomParts(){customParts=true;std::static_pointer_cast<WindowSkinContainer>(skinContainer)->customParts=true;}
+Window::Window() : skinContainer(std::make_shared<WindowSkinContainer>()) { addChild(skinContainer); }
+void Window::synchronizeSkinContainer() {
+  skinContainer->scale.y=std::clamp(openness,0.0,255.0)/255;
+  skinContainer->position.y=height*(1-skinContainer->scale.y)/2;
+}
 void Window::addChildToBack(std::shared_ptr<Container> child){std::erase_if(backChildren_,[&](const auto& weak){auto item=weak.lock();return !item||item==child;});Container::addChild(child);backChildren_.insert(backChildren_.begin(),child);}
 void Window::update(){if(active)++animationCount;Container::update();}
 void Window::synchronize(std::uint64_t frame){const auto delta=!lastFrame_?1:frame>=*lastFrame_?frame-*lastFrame_:0;lastFrame_=frame;if(active)animationCount+=delta;}
-Rectangle Window::openBounds()const{return {0,height*(1-std::clamp(openness,0.0,255.0)/255)/2,double(width),height*std::clamp(openness,0.0,255.0)/255};}
+Rectangle Window::openBounds()const{
+  if(skinContainerExposed) {
+    const auto region=bounds(skinContainer->localTransform(),{0,0,width,height});
+    return {double(region[0]),double(region[1]),double(region[2]-region[0]),double(region[3]-region[1])};
+  }
+  return {0,height*(1-std::clamp(openness,0.0,255.0)/255)/2,double(width),height*std::clamp(openness,0.0,255.0)/255};
+}
 double Window::cursorAlpha()const{const int count=animationCount%40;return std::max(0.0,contentsOpacity-(active?(count<20?count:40-count)*8:0))/255;}
 void Window::refreshBack() {
   const std::array<double,6> key{width,height,margin,tone[0],tone[1],tone[2]};
@@ -159,20 +192,30 @@ void Window::refreshCursor(){
     cursorBitmap_->blt(*windowskin,col==0?96:col==1?100:140,row==0?96:row==1?100:140,sw,sh,ox+(col==0?0:col==1?4:cw-4),oy+(row==0?0:row==1?4:ch-4),dw,dh);
   }
 }
+void Window::refreshSkinContainer() {
+  refreshBack();
+  auto& skin=*std::static_pointer_cast<WindowSkinContainer>(skinContainer);
+  skin.back=back_; skin.frame=frameBitmap_;
+  skin.width=width; skin.height=height; skin.margin=margin;
+  skin.paintOpacity=std::clamp(opacity,0.0,255.0)/255;
+  skin.backOpacity=std::clamp(backOpacity,0.0,255.0)/255;
+  skin.hasChrome=openness>0&&windowskin&&windowskin->texture().has_value();
+}
 void Window::render(Renderer& renderer,const Matrix& parentWorld,double parentAlpha) {
+  if(prepareParts)prepareParts();
+  if(customParts){Container::render(renderer,parentWorld,parentAlpha);return;}
   if(!visible||!renderable||alpha<=0)return;
+  int filters=beginFilters(renderer);
   pauseAlpha_=pause?std::min(1.0,pauseAlpha_+.1):0;
   const auto world=multiply(parentWorld,localTransform());const double worldAlpha=alpha*parentAlpha;
-  const auto open=openBounds();const auto body=translated(world,0,open.y,1,std::clamp(openness,0.0,255.0)/255);
-  refreshBack();const auto skin=windowskin?windowskin->texture():std::nullopt;
+  if(!skinContainerExposed)synchronizeSkinContainer();
+  refreshSkinContainer();
+  if(skinContainer->parent==this)skinContainer->render(renderer,world,worldAlpha);
+  const auto skin=windowskin?windowskin->texture():std::nullopt;
   const auto piece=[&](const Rectangle& source,const Rectangle& destination,double opacity,const Matrix& matrix) {
     if(!skin||source.width<=0||source.height<=0||destination.width<=0||destination.height<=0)return;
     Sprite::queueFrame(renderer,*skin,source,translated(matrix,destination.x,destination.y,destination.width/source.width,destination.height/source.height),opacity,BlendMode::normal,{},{},{},!windowskin->smooth);
   };
-  if(openness>0&&skin) {
-    if(back_)if(auto back=back_->texture())Sprite::queueFrame(renderer,*back,{0,0,double(back_->width),double(back_->height)},translated(body,margin,margin),worldAlpha*std::clamp(opacity,0.0,255.0)/255*std::clamp(backOpacity,0.0,255.0)/255,BlendMode::normal,{},{},{},!back_->smooth);
-    if(frameBitmap_)if(auto frame=frameBitmap_->texture())Sprite::queueFrame(renderer,*frame,{0,0,width,height},body,worldAlpha*std::clamp(opacity,0.0,255.0)/255,BlendMode::normal,{},{},{},!frameBitmap_->smooth);
-  }
   for(const auto& weak:backChildren_)if(auto child=weak.lock();child&&child->parent==this)child->render(renderer,world,worldAlpha);
   if(isOpen()) {
     refreshCursor();
@@ -184,7 +227,8 @@ void Window::render(Renderer& renderer,const Matrix& parentWorld,double parentAl
     if(upArrowVisible)piece({132,24,24,12},{width/2.0-12,6,24,12},worldAlpha,world);
     if(pause&&pauseAlpha_>0)piece({double(144+(animationCount/16%2)*24),double(96+(animationCount/32%2)*24),24,24},{width/2.0-12,double(height-24),24,24},worldAlpha*pauseAlpha_,world);
   }
-  for(const auto& child:children)if(child&&std::none_of(backChildren_.begin(),backChildren_.end(),[&](const auto& weak){return weak.lock()==child;}))child->render(renderer,world,worldAlpha);
+  for(const auto& child:children)if(child&&child!=skinContainer&&std::none_of(backChildren_.begin(),backChildren_.end(),[&](const auto& weak){return weak.lock()==child;}))child->render(renderer,world,worldAlpha);
+  while (filters-- > 0) renderer.endCompositionGroup();
 }
 WindowLayer::StreamState WindowLayer::begin(Renderer& renderer,const Matrix& parentWorld,double parentAlpha)const {
   StreamState state{multiply(parentWorld,localTransform()),alpha*parentAlpha,renderer.queuedCommandCount()};
@@ -203,9 +247,11 @@ void WindowLayer::end(Renderer& renderer,const StreamState& state)const {
 }
 void WindowLayer::render(Renderer& renderer,const Matrix& parentWorld,double parentAlpha) {
   if(!visible||!renderable)return;
+  int filters=beginFilters(renderer);
   const auto state=begin(renderer,parentWorld,parentAlpha);
   for(const auto& child:children)if(auto* window=dynamic_cast<Window*>(child.get()))renderWindow(renderer,state,*window);
   end(renderer,state);
   for(const auto& child:children)if(child&&!dynamic_cast<Window*>(child.get()))child->render(renderer,state.world,state.opacity);
+  while (filters-- > 0) renderer.endCompositionGroup();
 }
 }

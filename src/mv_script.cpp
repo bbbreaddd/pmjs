@@ -25,6 +25,9 @@ Value Session::invokeGameDataBase(const std::string& kind, const std::string& me
     else throw std::invalid_argument("timer operation is not bound: "+method);
     return Value::undefined();
   }
+  if (kind == "actors" && method == "ids") {
+    Value::Array result; for (const auto& [id, actor] : actors_) { (void)actor; result.emplace_back(id); } return result;
+  }
   if (kind == "screen") return invokeScreenBase(method, arguments);
   if (kind == "map" && method == "invalidateTileShadows") { if (!arguments.empty()) runtimeTileShadows_ = arguments[0].boolean(); ++presentationRevision_; return Value::undefined(); }
   if (kind == "map" && method == "cameraNormal") {
@@ -35,6 +38,7 @@ Value Session::invokeGameDataBase(const std::string& kind, const std::string& me
     return !cameraTarget_;
   }
   if (kind == "map") {
+    if (method == "setup") { setupMap(arguments.at(0).integer()); return Value::undefined(); }
     if (method == "tileWidth") return tileWidth();
     if (method == "tileHeight") return tileHeight();
     if (method == "width" || method == "height" || method == "displayName" || method == "encounterStep") return map()[method];

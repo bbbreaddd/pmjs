@@ -220,6 +220,9 @@ struct Interpreter {
   std::optional<int> scriptCharacter;
   std::optional<int> waitingRoute;
   std::vector<Interpreter> children;
+  void skipBranch(int indent) {
+    while (index + 1 < static_cast<int>(list.size()) && list[index + 1]["indent"].integer() > indent) ++index;
+  }
   void clear() {
     auto identity = runtime;
     auto branchState = branches;
@@ -451,6 +454,8 @@ class Session {
   bool ownsPictureSprite(const RuntimePicture& picture) const;
   bool inBattle() const { return battle_.active; }
   bool playerTransferring() const { return pendingTransfer_.has_value(); }
+  int playerNewMapId() const { return pendingTransfer_ ? (*pendingTransfer_)[0] : 0; }
+  int playerFadeType() const { return pendingTransfer_ ? (*pendingTransfer_)[4] : 0; }
   void reservePlayerTransfer(int mapId, int x, int y, int direction, int fadeType);
   void performPlayerTransfer();
   void dispatchPicture(const std::shared_ptr<RuntimePicture>& picture, const std::string& method, const Value::Array& arguments = {});
@@ -480,6 +485,9 @@ class Session {
   void newGame();
   void setupBattleTest();
   void step(const Input& input);
+  void stepMapScene(const Input& input);
+  void updateMapSceneDestination(const Input& input);
+  void finishMapScene();
   void acknowledge(int choice = -1);
   Value snapshot() const;
   int mapId() const { return mapId_; }
@@ -502,6 +510,8 @@ class Session {
   bool canWriteDatabase() const { return !gameObjectsInitialized_; }
   void setDatabaseTables(Value tables);
   void setDatabaseReader(std::shared_ptr<ValueReader> reader);
+  void setMapData(int id,Value data);
+  const Value& mapData(int id) const;
   const Value& map() const;
   int screenWidth() const { return screenWidth_; }
   int screenHeight() const { return screenHeight_; }
@@ -517,7 +527,8 @@ class Session {
   double parameter(const Battler& battler, int id) const;
   Value runtimeBattlerCommand(const std::shared_ptr<RuntimeActor>& actor, const std::string& method, const Value::Array& arguments);
   void setRandomStream(std::vector<double> values);
-  Value save();
+  Value save(bool recordSave = true);
+  std::shared_ptr<RuntimeInterpreter> runtimeInterpreter(int eventId) const;
   void load(const Value& contents);
   const Ui& ui() const { return ui_; }
   const Battle& battle() const { return battle_; }
@@ -657,6 +668,7 @@ class Session {
   int makeEncounterTroopId();
   void audio(const std::string& kind, const Value& sound, bool restart = false);
   void transfer(int mapId, int x, int y, int direction);
+  void setupMap(int mapId);
   void refresh();
   bool pageEligible(const Value& page, int eventId) const;
   bool passable(int x, int y, int direction, const Character& character) const;
@@ -735,6 +747,8 @@ class Session {
   void gainItem(int kind, int id, double amount, bool includeEquipped);
   void refreshIfNeeded();
   Value database_;
+  Value runtimeMapData_;
+  int runtimeMapId_ = -1;
   bool gameObjectsInitialized_ = false;
   Character player_;
   std::array<Character, 3> followers_;
@@ -792,6 +806,10 @@ class Session {
   bool moviePlaying_ = false;
   bool movieExplicitSource_ = false;
   std::uint64_t movieRequest_ = 0;
+  void step(const Input& input, bool mapDestination, bool mapFastForward, bool mapSceneChanges);
+  Input mapSceneInput_;
+  bool mapSceneChangesPending_ = false, mapSceneOk_ = false, mapSceneCancel_ = false;
+  int mapSceneRepeatedDirection_ = 0;
   Input currentInput_;
   bool resourcesStopped_ = false;
   bool previousDebug_ = false;

@@ -109,6 +109,10 @@ std::vector<napi_value> arguments(napi_env env, napi_callback_info info,
   std::size_t count = limit;
   check(env, napi_get_cb_info(env, info, &count, values.data(), nullptr, nullptr),
         "cannot read arguments");
+  if(count>values.size()) {
+    values.resize(count);
+    check(env,napi_get_cb_info(env,info,&count,values.data(),nullptr,nullptr),"cannot read remaining arguments");
+  }
   values.resize(count);
   return values;
 }

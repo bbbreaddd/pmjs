@@ -55,11 +55,13 @@ function encodeGraph(contents, options = {}) {
   let sequence = 0;
   const seen = new Map();
   const emitted = new Set();
+  const projected = new WeakMap();
+  const body = value => { if (!options.project) return value; if (!projected.has(value)) projected.set(value, options.project(value)); return projected.get(value); };
   function identify(value, depth = 0) {
     if (depth > (options.maxDepth ?? 128)) throw new Error('save nesting limit exceeded');
     if (!value || typeof value !== 'object' || seen.has(value) || Object.hasOwn(value, '@r')) return;
     seen.set(value, ++sequence);
-    for (const item of Object.values(value)) identify(item, depth + 1);
+    for (const item of Object.values(body(value))) identify(item, depth + 1);
   }
   identify(contents);
   function encode(value, depth = 0) {
@@ -78,9 +80,9 @@ function encodeGraph(contents, options = {}) {
     const id = seen.get(value);
     if (emitted.has(value)) return { '@r': id };
     emitted.add(value);
-    if (Array.isArray(value)) return { '@c': id, '@a': value.map(item => encode(item, depth + 1)) };
+    if (Array.isArray(value)) return { '@c': id, '@a': body(value).map(item => encode(item, depth + 1)), ...Object.fromEntries(Object.entries(body(value)).filter(([key]) => !/^(0|[1-9][0-9]*)$/.test(key)).map(([key, item]) => [key, encode(item, depth + 1)])) };
     const metadata = options.className?.(value);
-    return { '@c': id, ...(metadata ? { '@': metadata } : {}), ...Object.fromEntries(Object.entries(value).map(([key, item]) => [key, encode(item, depth + 1)])) };
+    return { '@c': id, ...(metadata ? { '@': metadata } : {}), ...Object.fromEntries(Object.entries(body(value)).map(([key, item]) => [key, encode(item, depth + 1)])) };
   }
   const encoded = encode(contents);
   return JSON.stringify(options.rootArray && Array.isArray(contents) ? encoded['@a'] : encoded);

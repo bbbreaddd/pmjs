@@ -1,12 +1,14 @@
 'use strict';
 const { createBitmapClass, createImageManager, bitmapHandle } = require('./native-bitmap.cjs');
 const vm = require('node:vm');
+const { installManagerReference } = require('./native-manager-reference.cjs');
 const { createSceneBindings } = require('./native-scenes.cjs');
 const { installTilemap } = require('./native-tilemap.cjs');
 const { installClassBindings } = require('./native-class-bindings.cjs');
-const { installTextManager, installSoundManager } = require('./native-managers.cjs');
+const { installTextManager, installSoundManager, installAudioManager } = require('./native-managers.cjs');
 const { installBattlerBindings } = require('./native-battlers.cjs');
 const { installPartyBindings } = require('./native-party.cjs');
+const { installCoreUtilities } = require('./native-core-utilities.cjs');
 const { installJsonEx } = require('./native-jsonex.cjs');
 const { installBattleData } = require('./native-battle-data.cjs');
 const { installMapBindings } = require('./native-game-map.cjs');
@@ -225,6 +227,9 @@ function createScriptRuntime(engine, session, options = {}) {
   Game_Interpreter.prototype.wait = function(duration) { this._waitCount = duration; };
   Game_Interpreter.prototype.eventId = function() { return this._eventId; };
   const nativeControl = Object.create(null);
+  Game_Interpreter.prototype.skipBranch = nativeControl.skipBranch = function() {
+    return engine.interpreterControl(session, interpreters.get(this), 'skipBranch', [this._indent]);
+  };
   for (const method of ['jumpTo', 'setupChoices', 'setupNumInput', 'setupItemChoice']) {
     Game_Interpreter.prototype[method] = nativeControl[method] = function(argument) {
       return engine.interpreterControl(session, interpreters.get(this), method, [argument]);
@@ -337,10 +342,14 @@ function createScriptRuntime(engine, session, options = {}) {
     } else sprites.set(sprite, handle);
     return sprite;
   }
-  function Rectangle(x = 0, y = 0, width = 0, height = 0) {
-    this.x = x; this.y = y; this.width = width; this.height = height;
-  }
-  const scope = { Game_Picture, Game_Interpreter, Game_Message, $gameMessage: gameMessage, Sprite_Picture, Rectangle,
+  function Point() { this.initialize.apply(this, arguments); }
+  Point.prototype.initialize = function(x, y) { this.x = x || 0; this.y = y || 0; };
+  function Rectangle() { this.initialize.apply(this, arguments); }
+  Rectangle.prototype.initialize = function(x, y, width, height) {
+    this.x = x || 0; this.y = y || 0; this.width = width || 0; this.height = height || 0;
+  };
+  Rectangle.emptyRectangle = new Rectangle(0, 0, 0, 0);
+  const scope = { Game_Picture, Game_Interpreter, Game_Message, $gameMessage: gameMessage, Sprite_Picture, Point, Rectangle,
     $gameMap: { mapId: () => engine.mapId(session),
       get _mapId() { return engine.mapId(session); },
       requestRefresh() { engine.gameDataInvoke(session, 'variables', 'onChange', []); } },
@@ -556,7 +565,10 @@ function createScriptRuntime(engine, session, options = {}) {
   Game_Actor.prototype.actor = function() { return scope.$dataActors[this._actorId]; };
   Game_Actor.prototype.currentClass = function() { return scope.$dataClasses[this._classId]; };
   Game_Enemy.prototype.enemy = function() { return scope.$dataEnemies[this._enemyId]; };
-  scope.DataManager = function DataManager() { throw new Error('DataManager is a static class'); };
+  const context = vm.createContext(scope);
+  installCoreUtilities({ runScript(source) { return vm.runInContext(source, context); } });
+  installManagerReference({ scope, runScript: (source, filename) => new vm.Script(source, { filename }).runInContext(context) }, 'DataManager');
+  const referenceDatabaseLoad = scope.DataManager.loadDatabase;
   installTextManager(scope);
   for (const [method, table] of Object.entries({ isSkill: '$dataSkills', isItem: '$dataItems', isWeapon: '$dataWeapons', isArmor: '$dataArmors' }))
     scope.DataManager[method] = function(item) { return item && scope[table].includes(item); };
@@ -578,12 +590,37 @@ function createScriptRuntime(engine, session, options = {}) {
   function Game_Actors() { throw new Error('Game_Actors construction is engine-owned'); }
   Game_Actors.prototype.actor = function(id) { return wrapEntity(engine.entity(session, 'actor', id), Game_Actor, actors); };
   scope.Game_Actors = Game_Actors; scope.$gameActors = Object.create(Game_Actors.prototype);
+  const actorIds = () => engine.gameDataInvoke(session, 'actors', 'ids', []);
+  const actorArray = new Proxy(GuestArray.from([]), {
+    get(target, key, receiver) {
+      if (key === 'length') return Math.max(0, ...actorIds()) + 1;
+      if (typeof key === 'string' && /^(0|[1-9][0-9]*)$/.test(key)) return actorIds().includes(Number(key)) ? scope.$gameActors.actor(Number(key)) : null;
+      return Reflect.get(target, key, receiver);
+    },
+    ownKeys(target) { target.length = Math.max(0, ...actorIds()) + 1; return actorIds().map(String).concat('length'); },
+    getOwnPropertyDescriptor(target, key) {
+      if (key === 'length') { target.length = Math.max(0, ...actorIds()) + 1; return Reflect.getOwnPropertyDescriptor(target, key); }
+      return actorIds().includes(Number(key)) ? { configurable: true, enumerable: true, writable: true, value: scope.$gameActors.actor(Number(key)) } : Reflect.getOwnPropertyDescriptor(target, key);
+    }
+  });
+  Object.defineProperty(Game_Actors.prototype, '_data', { configurable: true, get() { return actorArray; } });
   installPartyBindings(scope, engine, session, values => GuestArray.from(values));
   installTroopBindings(scope, engine, session, index => wrapEntity(engine.entity(session, 'enemy', index), Game_Enemy, actors), values => GuestArray.from(values));
   function Game_Map() { throw new Error('Game_Map construction is engine-owned'); }
   Object.defineProperties(Game_Map.prototype, Object.getOwnPropertyDescriptors(scope.$gameMap));
   for (const key of Object.keys(scope.$gameMap)) delete scope.$gameMap[key];
   Object.setPrototypeOf(scope.$gameMap, Game_Map.prototype); scope.Game_Map = Game_Map;
+  const nativeMapSetup = Game_Map.prototype.setup = function(mapId) {
+    if (this !== scope.$gameMap) throw new Error('Detached map setup is not bound');
+    return engine.gameDataInvoke(session, 'map', 'setup', [Number(mapId)]);
+  };
+  gameDataDefaults.set('map', { setup: nativeMapSetup });
+  gameDataStores.set('map', scope.$gameMap);
+  Object.defineProperty(Game_Map.prototype, '_events', { configurable: true, get() {
+    const result = GuestArray.from([null]); for (const event of this.events()) result[event.eventId()] = event; return result;
+  } });
+  Object.defineProperty(Game_Map.prototype, '_interpreter', { configurable: true, get() { return wrapInterpreter(engine.scriptInterpreter(session, 0)); } });
+  Object.defineProperty(Game_Event.prototype, '_interpreter', { configurable: true, get() { const handle = engine.scriptInterpreter(session, this.eventId()); return handle ? wrapInterpreter(handle) : null; } });
   Game_Map.prototype.event = function(id) { return wrapEntity(engine.entity(session, 'character', id), Game_Event, characters); };
   installMapBindings(scope, engine, session, values => GuestArray.from(values), characters);
   Game_Map.prototype.camTargetSet = function(target, speed) {
@@ -596,10 +633,12 @@ function createScriptRuntime(engine, session, options = {}) {
     set(value) { engine.gameDataInvoke(session, 'map', 'cameraNormal', [value]); } });
   scope.Utils = function() { throw new Error('Utils is a static class'); };
   for (const field of ['RPGMAKER_NAME', 'RPGMAKER_VERSION']) scope.Utils[field] = engine.utilsInvoke(session, field);
-  for (const method of ['isNwjs', 'canReadGameFiles', 'isSupportPassiveEvent', 'generateRuntimeId', 'rgbToCssColor', 'escapeHtml'])
+  for (const method of ['isNwjs', 'canReadGameFiles', 'isSupportPassiveEvent', 'rgbToCssColor', 'escapeHtml'])
     scope.Utils[method] = (...args) => engine.utilsInvoke(session, method, args);
   for (const method of ['isMobileDevice', 'isMobileSafari', 'isAndroidChrome'])
     scope.Utils[method] = () => engine.utilsInvoke(session, method, [scope.navigator?.userAgent || '']);
+  scope.Utils._id = 1;
+  scope.Utils.generateRuntimeId = function() { return this._id++; };
   scope.Utils.isOptionValid = name => engine.utilsInvoke(session, 'isOptionValid', [String(name), options.guestArguments || [], '']);
   const touchHandlers = {
     mousedown: '_onMouseDown', mousemove: '_onMouseMove', mouseup: '_onMouseUp', wheel: '_onWheel',
@@ -620,18 +659,22 @@ function createScriptRuntime(engine, session, options = {}) {
     get() { return engine.touchInvoke(session, field); },
     ...(['keyRepeatWait', 'keyRepeatInterval'].includes(field) ? { set(value) { engine.touchInvoke(session, field, value); } } : {})
   });
+  const touchTransitions = new Map();
+  for (const method of ['_onTrigger', '_onCancel', '_onMove', '_onRelease']) {
+    const base = scope.TouchInput[method] = function(x, y) { engine.touchInvoke(session, method, { x, y }); };
+    touchTransitions.set(method, base);
+  }
   if (options.native) {
-    scope.Bitmap = createBitmapClass(options.native);
-    scope.ImageManager = createImageManager(options.native, scope.Bitmap);
+    scope.Bitmap = createBitmapClass(options.native, null, null, () => scope.CanvasRenderingContext2D);
+    scope.ImageManager = createImageManager(options.native, scope.Bitmap, scope.RequestQueue);
     scope.ImageCache = scope.ImageManager._imageCache.constructor;
   }
-  const context = vm.createContext(scope);
   vm.runInContext(`Object.defineProperties(Array.prototype, {
     equals: {value: function(other) {
       if (!other || this.length !== other.length) return false;
       for (var index = 0; index < this.length; ++index) {
         var value = this[index], compared = other[index];
-        if (Array.isArray(value) && Array.isArray(compared)) { if (!value.equals(compared)) return false; }
+        if (value instanceof Array && compared instanceof Array) { if (!value.equals(compared)) return false; }
         else if (value !== compared) return false;
       }
       return true;
@@ -639,16 +682,16 @@ function createScriptRuntime(engine, session, options = {}) {
     clone: {value: function() {return this.slice(0);}},
     contains: {value: function(value) {return this.indexOf(value) >= 0;}}
   }); String.prototype.contains = function(value) {return this.indexOf(value) >= 0;};
-  Number.prototype.clamp = function(min, max) { return Math.min(max, Math.max(min, this)); };
+  Number.prototype.clamp = function(min, max) { return Math.min(Math.max(this, min), max); };
   Number.prototype.mod = function(divisor) { return ((this % divisor) + divisor) % divisor; };
   String.prototype.format = function(...args) { return this.replace(/%([0-9]+)/g, (match, index) => args[Number(index) - 1]); };
-  String.prototype.padZero = function(length) { return String(this).padStart(length, '0'); };
+  String.prototype.padZero = function(length) { var value = this; while (value.length < length) value = '0' + value; return value; };
   Number.prototype.padZero = function(length) { return String(this).padZero(length); };
   Math.randomInt = function(max) {return Math.floor(max * Math.random());};`, context);
   GuestArray = vm.runInContext('Array', context);
   installJsonEx({ scope, runScript(source) { return vm.runInContext(source, context); } });
   vm.runInContext('Math', context).random = () => engine.random(session);
-  const tilemapBinding = installTilemap({ scope }, engine, session);
+  const tilemapBinding = installTilemap({ scope, runScript(source) { return vm.runInContext(source, context); } }, engine, session);
   let rateAction = null;
   function wrapRuntimeEntity(handle) {
     if (handle.entityType === 'character') return wrapEntity(handle,handle.entityId > 0 ? Game_Event : handle.entityId === -1 ? Game_Player : handle.entityId <= -5 ? Game_Vehicle : handle.entityId <= -2 ? Game_Follower : Game_Character,characters);
@@ -728,6 +771,12 @@ function createScriptRuntime(engine, session, options = {}) {
       event.preventDefault = function() { this.defaultPrevented = true; };
       event.stopPropagation = function() { this.cancelBubble = true; };
       handler.call(scope.TouchInput, event);
+    },
+    touchTransition(method, x, y) {
+      const fn = scope.TouchInput[method];
+      if (fn === touchTransitions.get(method)) return false;
+      if (typeof fn !== 'function') throw new TypeError('TouchInput.' + method + ' is not callable');
+      fn.call(scope.TouchInput, x, y); return true;
     },
     touchUpdate() { scope.TouchInput.update(); },
     command(handle, name) {
@@ -829,7 +878,7 @@ function createScriptRuntime(engine, session, options = {}) {
     }
   };
   engine.connectRuntime(session, callbacks);
-  let scenes, classBindings;
+  let scenes, classBindings, renderSubmitted = false, mapUpdated = false, frameInput;
   const result = {
     scope,
     runScript(source, filename = 'mv-plugin.js') { return new vm.Script(source, { filename }).runInContext(context); },
@@ -837,13 +886,19 @@ function createScriptRuntime(engine, session, options = {}) {
       if (!options.native) throw new Error('Scene bindings require native graphics services');
       if (scenes) return scenes;
       scenes = createSceneBindings(options.native, scope.Bitmap, scope.ImageManager, {
+        createArray() { return vm.runInContext("[]", context); },
+        runScript(source) { return vm.runInContext(source, context); },
+        resourceHandler() { return scope.ResourceHandler; },
+        gamepads() { return scope.navigator?.getGamepads?.() || []; },
+        colorMatrixFilterClass() { return scope.PIXI?.filters?.ColorMatrixFilter; },
+        glitchFilterClass() { return scope.PIXI?.filters?.GlitchFilter; },
         containerPrototype: scope.PIXI?.Container?.prototype,
         initializeEvents(object) { if (scope.PIXI?.utils?.EventEmitter) scope.PIXI.utils.EventEmitter.call(object); },
         createTicker() { return scope.PIXI?.ticker ? new scope.PIXI.ticker.Ticker() : null; },
         graphics() { return scope.Graphics; },
         webAudio() { return scope.WebAudio; },
         checkPluginErrors() { scope.PluginManager?.checkErrors(); },
-        submitStage(handle) { engine.scriptStage(session,handle); },
+        submitStage(handle) { renderSubmitted=true; engine.scriptStage(session,handle); },
         coreService(...args) { return engine.coreService(...args); },
         windowClasses() { return engine.windowClasses(); },
         windowModel(handle, name, method, args) { return engine.windowModel(session, handle, name, method, args); },
@@ -859,15 +914,28 @@ function createScriptRuntime(engine, session, options = {}) {
         audioManager() { return scope.AudioManager; },
         gameoverMusic() { scope.AudioManager.stopBgm(); scope.AudioManager.stopBgs(); scope.AudioManager.playMe(scope.$dataSystem.gameoverMe); },
         gameParty() { return scope.$gameParty; },
+        gameVariables() { return scope.$gameVariables; },
+        actorName(id) { return scope.$gameActors.actor(id)?.name() || ''; },
+        textManager() { return scope.TextManager; },
         battleManager() { return scope.BattleManager; },
         soundManager() { return scope.SoundManager; },
-        mapSpriteset: { _pictureContainer: { children: pictureChildren } },
+        gamePlayer() { return scope.$gamePlayer; },
+        gameMap() { return scope.$gameMap; },
+        gameMessage() { return scope.$gameMessage; },
+        gameScreen() { return scope.$gameScreen; },
+        loadMap(id) { result.mapDatabase.load(id); },
+        isMapReady() { return result.mapDatabase.isReady(); },
+        bindMapSpriteset(object) { engine.bindMapSpriteset(session, classBindings.handle(object)); },
+        mapPhase(phase) {
+          if (phase === 'update') mapUpdated = true;
+          return phase === 'destination' && frameInput !== undefined ? engine.mapScene(session, phase, frameInput) : engine.mapScene(session, phase);
+        },
         fadeAudio(seconds) {
           scope.AudioManager.fadeOutBgm(seconds);
           scope.AudioManager.fadeOutBgs(seconds);
           scope.AudioManager.fadeOutMe(seconds);
         },
-        loadDatabase() { if (result.database) result.database.load(); else scope.DataManager.loadDatabase?.(); },
+        loadDatabase() { if (result.database) result.database.load(); else if (scope.XMLHttpRequest || scope.DataManager.loadDatabase !== referenceDatabaseLoad) scope.DataManager.loadDatabase?.(); },
         isDatabaseReady() { return result.database ? result.database.isReady() : true; },
         startAnimation(handle, id, mirror, delay, rate) { engine.displayAnimation(session, handle, id, mirror, delay, rate); },
         performTransfer() { engine.playerTransfer(session, 'perform'); },
@@ -891,15 +959,7 @@ function createScriptRuntime(engine, session, options = {}) {
           return result;
         }
       };
-      scope.AudioManager = {};
-      scope.AudioManager._path = 'audio/';
-      scope.AudioManager.audioFileExt = function() { return scope.WebAudio.canPlayOgg() ? '.ogg' : '.m4a'; };
-      scope.AudioManager.createBuffer = function(folder, name) {
-        return new scope.WebAudio(this._path + folder + '/' + encodeURIComponent(name) + this.audioFileExt());
-      };
-      for (const method of ['playBgm', 'playBgs', 'playSe', 'playMe', 'stopBgm', 'stopBgs', 'stopMe', 'stopSe', 'fadeOutBgm', 'fadeOutBgs', 'fadeOutMe'])
-        scope.AudioManager[method] = (...args) => engine.managerInvoke(session, method, ...args);
-      scope.AudioManager.stopAll = function() { this.stopMe(); this.stopBgm(); this.stopBgs(); this.stopSe(); };
+      installAudioManager(scope,engine,session,classBindings,values => GuestArray.from(values));
       installSoundManager(scope, engine, session);
       Object.assign(scope.DataManager, {
         createGameObjects() {
@@ -919,6 +979,8 @@ function createScriptRuntime(engine, session, options = {}) {
         if (this !== scope.$gamePlayer) throw new Error('Detached player transfer is not bound');
         return engine.playerTransfer(session, 'isTransferring');
       };
+      Game_Player.prototype.newMapId = function() { return engine.playerTransfer(session, 'newMapId'); };
+      Game_Player.prototype.fadeType = function() { return engine.playerTransfer(session, 'fadeType'); };
       Game_Player.prototype.performTransfer = function() {
         if (this !== scope.$gamePlayer) throw new Error('Detached player transfer is not bound');
         engine.playerTransfer(session, 'perform');
@@ -942,16 +1004,19 @@ function createScriptRuntime(engine, session, options = {}) {
       scope.Window_TitleCommand = Window_TitleCommand;
       result.start = () => scope.SceneManager.run(scope.Scene_Boot);
       result.step = input => {
+        renderSubmitted=false;
+        mapUpdated=false; frameInput=input;
         classBindings.sweep();
         tilemapBinding.update();
         engine.updateTouch(session);
         if (scope.SceneManager._stopped) return true;
         scope.SceneManager.ticker?.update(scope.performance?.now() ?? performance.now());
         scope.SceneManager.update(1);
+        scenes.updateFilters();
         const scene = scope.SceneManager._scene;
         const builtin = !scene || scope.SceneManager.nativeDriven;
-        engine.scriptStage(session, builtin ? null : scope.SceneManager.stageHandle);
-        if (!builtin || !scope.SceneManager.canStep) return true;
+        if (!renderSubmitted) engine.scriptStage(session, builtin ? null : scope.SceneManager.stageHandle);
+        if (mapUpdated || !builtin || !scope.SceneManager.canStep) return true;
         return input === undefined ? engine.step(session) : engine.step(session, input);
       };
       return scenes;

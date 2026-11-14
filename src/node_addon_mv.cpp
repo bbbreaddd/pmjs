@@ -89,6 +89,7 @@ struct EngineSession {
   int runtimeCalls = 0, sceneCalls = 0;
   bool stepping = false;
   bool touchPrepared = false;
+  std::optional<mv::Input> mapSceneInput;
   bool sceneRequestsSuppressed = false;
   napi_env env = nullptr;
   napi_ref runtimeSelf = nullptr;
@@ -205,7 +206,7 @@ struct DatabaseReader : mv::ValueReader {
   }
   std::shared_ptr<DatabaseGraph> context() const {
     auto result = graph.lock();
-    if (!result || !result->owner) throw std::runtime_error("database session is unavailable");
+    if (!result || !result->owner || !result->owner->session) throw std::runtime_error("database session is unavailable");
     return result;
   }
   napi_value object() const {
@@ -261,7 +262,15 @@ struct DatabaseReader : mv::ValueReader {
     items = owner->pin(result);
     return *result;
   }
-  mv::Value snapshot() const override { auto owner = context(); RuntimeCallScope call(*owner->owner); return readValue(env, object(),0,true); }
+  mv::Value snapshot() const override {
+    auto owner = context(); RuntimeCallScope call(*owner->owner);
+    auto result = readValue(env, object(), 0, true);
+    if (!overlay) return result;
+    auto merged = fallback ? std::get<mv::Value::Object>(fallback->snapshot().data) : mv::Value::Object{};
+    for (const auto& key : knownFields) merged[key] = mv::Value::undefined();
+    for (auto& [key, value] : std::get<mv::Value::Object>(result.data)) merged[key] = std::move(value);
+    return merged;
+  }
 };
 napi_value databaseObject(const mv::Value& value) {
   const auto reader = std::dynamic_pointer_cast<DatabaseReader>(value.reader);
@@ -429,7 +438,16 @@ napi_value touchInvoke(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info);
   if (args.size() < 2 || args.size() > 3) throw std::invalid_argument("touch operation requires session, method and optional event or value");
   auto& owner = session(env, args[0]); auto& touch = owner.touch; const auto method = asString(env, args[1]);
-  if (method == "clear") touch.clear();
+  if (method=="_onTrigger" || method=="_onCancel" || method=="_onMove" || method=="_onRelease") {
+    const auto value=readValue(env,args.at(2));const double x=value["x"].number(),y=value["y"].number();
+    if(method=="_onTrigger") {
+      const auto now=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+      touch.applyTrigger(x,y,double(now));
+    } else if(method=="_onCancel")touch.applyCancel(x,y);
+    else if(method=="_onMove")touch.applyMove(x,y);
+    else touch.applyRelease(x,y);
+  }
+  else if (method == "clear") touch.clear();
   else if (method == "update") touch.update();
   else if (method == "keyRepeatWait" || method == "keyRepeatInterval") {
     auto& value = method == "keyRepeatWait" ? touch.keyRepeatWait : touch.keyRepeatInterval;
@@ -455,15 +473,37 @@ napi_value touchInvoke(napi_env env, napi_callback_info info) try {
 } catch (const std::exception& error) { return throwException(env, error); }
 napi_value databaseInvoke(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info);
-  if (args.size() < 2 || args.size() > 3) throw std::invalid_argument("database operation requires session, method and optional data");
+  if (args.size() < 2 || args.size() > 4) throw std::invalid_argument("database operation requires session, method and operation arguments");
   auto& owner = session(env, args[0]); const auto method = asString(env, args[1]);
   if (method == "canWrite") return boolean(env, owner.session->canWriteDatabase());
   if (method == "read" && args.size() == 3) return writeValue(env, owner.session->database()[asString(env, args[2])]);
+  if(method=="readMap" && args.size()==3) {
+    const int id=asInt32(env,args[2]);
+    if(id<0)throw std::invalid_argument("map id must not be negative");
+    return writeValue(env,owner.session->mapData(id));
+  }
+  if(method=="publishMap" && args.size()==4) {
+    if(owner.runtimeCalls || owner.stepping)throw std::runtime_error("cannot replace map data during a script callback or step");
+    const int id=asInt32(env,args[2]);
+    if(id<0)throw std::invalid_argument("map id must not be negative");
+    napi_valuetype type; check(env,napi_typeof(env,args[3],&type),"cannot inspect map data");
+    bool array=false;
+    if(type==napi_object)check(env,napi_is_array(env,args[3],&array),"cannot inspect map data");
+    if(type!=napi_object || array)throw std::invalid_argument("map publication requires a map object");
+    RuntimeCallScope scope(owner);
+    if(!owner.database)owner.database=std::make_shared<DatabaseGraph>(env,owner,args[0]);
+    mv::Value map(mv::Value::Object{});
+    map.reader=std::make_shared<DatabaseReader>(owner.database,args[3],false);
+    owner.session->setMapData(id,std::move(map));
+    return undefined(env);
+  }
   if (method == "publish" && args.size() == 3) {
     if (owner.runtimeCalls || owner.stepping) throw std::runtime_error("cannot replace database tables during a script callback or step");
     RuntimeCallScope scope(owner);
     napi_valuetype type; check(env,napi_typeof(env,args[2],&type),"cannot inspect database tables");
-    if (type!=napi_object) throw std::invalid_argument("database publication requires named tables");
+    bool array = false;
+    if (type == napi_object) check(env, napi_is_array(env, args[2], &array), "cannot inspect database tables");
+    if (type != napi_object || array) throw std::invalid_argument("database publication requires named tables");
     owner.session->setDatabaseTables(mv::Value::Object{});
     if (!owner.database) owner.database = std::make_shared<DatabaseGraph>(env, owner, args[0]);
     auto reader = std::make_shared<DatabaseReader>(owner.database, args[2], true);
@@ -523,6 +563,7 @@ void collectRuntime(EngineSession& owner) {
   callRuntime(owner, "collect", {active});
 }
 void requireRuntimeOwner(EngineSession& owner, napi_value object);
+std::shared_ptr<mv::core::WebAudio> retainAudioBuffer(EngineSession& owner,napi_value value);
 napi_value connectRuntime(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info);
   if (args.size() != 2) throw std::invalid_argument("connectRuntime requires session and callbacks");
@@ -530,6 +571,9 @@ napi_value connectRuntime(napi_env env, napi_callback_info info) try {
   if (owner.runtimeSelf) throw std::runtime_error("session runtime is already connected");
   check(env, napi_set_named_property(env, args[0], "__mvRuntime", args[1]), "cannot attach runtime");
   check(env, napi_create_reference(env, args[0], 0, &owner.runtimeSelf), "cannot reference runtime owner");
+  owner.touch.transition=[&owner](const char* method,double x,double y) {
+    return asBoolean(owner.env,callRuntime(owner,"touchTransition",{string(owner.env,method),number(owner.env,x),number(owner.env,y)}));
+  };
   auto hooks = std::make_shared<mv::RuntimeHooks>();
   hooks->scene = [&owner](const std::string& method, int scene) -> std::optional<bool> {
     if (owner.sceneRequestsSuppressed) return {};
@@ -578,14 +622,7 @@ napi_value connectRuntime(napi_env env, napi_callback_info info) try {
     callRuntime(owner,"boundListener",{runtimeHandle(owner,object),number(owner.env,token)});
   };
   hooks->audioBuffer = [&owner](const std::string& kind,const std::string& name) -> std::shared_ptr<mv::core::WebAudio> {
-    const auto result=callRuntime(owner,"audioBuffer",{string(owner.env,kind),string(owner.env,name)});
-    napi_valuetype type; check(owner.env,napi_typeof(owner.env,result,&type),"cannot inspect audio factory");
-    if (type==napi_null) return {};
-    const auto object=runtimeAs<mv::GeneratedRuntimeObject>(owner.env,result);
-    if (!std::dynamic_pointer_cast<mv::core::WebAudio>(object)) throw std::invalid_argument("audio buffer must use a native WebAudio binding");
-    auto audio=std::dynamic_pointer_cast<mv::core::WebAudio>(object->nativeLease());
-    callRuntime(owner,"retainBoundObject",{runtimeHandle(owner,object)});
-    return audio;
+    return retainAudioBuffer(owner,callRuntime(owner,"audioBuffer",{string(owner.env,kind),string(owner.env,name)}));
   };
   hooks->systemBitmap = [&owner](const auto& object, const std::string& name) {
     return bitmapForRuntime(owner.env, callRuntime(owner, "systemBitmap", {runtimeHandle(owner, object), string(owner.env, name)}), owner.owner->core);
@@ -708,6 +745,11 @@ napi_value toneComponent(napi_env env, napi_callback_info info) try {
   if (args.size() == 3) tone->values[index] = asNumber(env, args[2]);
   return number(env, tone->values[index]);
 } catch (const std::exception& error) { return throwException(env, error); }
+napi_value scriptInterpreter(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info, 2); auto& owner = session(env, args.at(0));
+  const auto value = owner.session->runtimeInterpreter(asInt32(env, args.at(1)));
+  return value ? runtimeHandle(owner, value) : null(env);
+} catch (const std::exception& error) { return throwException(env, error); }
 napi_value interpreterField(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info);
   if (args.size() != 3 && args.size() != 4) throw std::invalid_argument("interpreterField requires session, interpreter, field and optional value");
@@ -781,6 +823,67 @@ napi_value windowClasses(napi_env env,napi_callback_info) try {
   }
   return writeValue(env,result);
 } catch (const std::exception& error) { return throwException(env,error); }
+std::shared_ptr<mv::core::WebAudio> retainAudioBuffer(EngineSession& owner,napi_value value) {
+  napi_valuetype type; check(owner.env,napi_typeof(owner.env,value,&type),"cannot inspect audio buffer");
+  if(type==napi_null || type==napi_undefined)return {};
+  requireRuntimeOwner(owner,value);
+  const auto object=runtimeAs<mv::GeneratedRuntimeObject>(owner.env,value);
+  if(!std::dynamic_pointer_cast<mv::core::WebAudio>(object))throw std::invalid_argument("audio buffer must use a native WebAudio binding");
+  auto voice=std::dynamic_pointer_cast<mv::core::WebAudio>(object->nativeLease());
+  callRuntime(owner,"retainBoundObject",{runtimeHandle(owner,object)});
+  return voice;
+}
+napi_value audioBufferHandle(EngineSession& owner,const std::shared_ptr<mv::core::WebAudio>& voice) {
+  if(!voice)return null(owner.env);
+  const auto object=std::dynamic_pointer_cast<mv::GeneratedRuntimeObject>(voice);
+  if(!object)throw std::runtime_error("native audio voice has no script binding");
+  return runtimeHandle(owner,object);
+}
+napi_value audioManager(napi_env env,napi_callback_info info) try {
+  const auto args=arguments(env,info);
+  if(args.size()<3 || args.size()>5)throw std::invalid_argument("audio manager requires session, channel, operation and optional values");
+  auto& owner=session(env,args[0]);
+  if(!owner.presentation)throw std::runtime_error("presentation is not attached");
+  const auto kind=asString(env,args[1]),operation=asString(env,args[2]);
+  if(kind!="bgm" && kind!="bgs" && kind!="me" && kind!="se")throw std::invalid_argument("unknown audio channel: "+kind);
+  RuntimeCallScope callScope(owner);
+  auto& presentation=*owner.presentation;
+  if(operation=="flush" && args.size()==3) { presentation.flushAudio(); return undefined(env); }
+  if(operation=="buffer" && kind!="se" && args.size()<=4) {
+    if(args.size()==4)presentation.setAudioBuffer(kind,retainAudioBuffer(owner,args[3]));
+    return audioBufferHandle(owner,presentation.audioBuffer(kind));
+  }
+  if(operation=="current" && kind!="se" && args.size()<=4) {
+    if(args.size()==4)presentation.setCurrentAudio(kind,readValue(env,args[3]));
+    return writeValue(env,presentation.currentAudio(kind));
+  }
+  if(operation=="buffers" && kind=="se" && args.size()<=4) {
+    if(args.size()==4) {
+      bool array=false; check(env,napi_is_array(env,args[3],&array),"cannot inspect sound buffers");
+      if(!array)throw std::invalid_argument("sound buffers must be an array");
+      std::uint32_t length=0; check(env,napi_get_array_length(env,args[3],&length),"cannot count sound buffers");
+      std::vector<std::shared_ptr<mv::core::WebAudio>> buffers; buffers.reserve(length);
+      for(std::uint32_t i=0;i<length;++i) {
+        napi_value value; check(env,napi_get_element(env,args[3],i,&value),"cannot read sound buffer");
+        auto voice=retainAudioBuffer(owner,value);
+        if(!voice)throw std::invalid_argument("sound buffers cannot contain empty entries");
+        buffers.push_back(std::move(voice));
+      }
+      presentation.setSoundBuffers(std::move(buffers));
+    }
+    napi_value result; check(env,napi_create_array_with_length(env,presentation.soundBuffers().size(),&result),"cannot return sound buffers");
+    std::uint32_t index=0;
+    for(const auto& voice:presentation.soundBuffers())check(env,napi_set_element(env,result,index++,audioBufferHandle(owner,voice)),"cannot return sound buffer");
+    return result;
+  }
+  if(operation=="parameters") {
+    if(kind=="se" && args.size()==5)presentation.updateAudioParameters(kind,readValue(env,args[4]),retainAudioBuffer(owner,args[3]));
+    else if(kind!="se" && args.size()==4)presentation.updateAudioParameters(kind,readValue(env,args[3]));
+    else throw std::invalid_argument("audio parameters require channel data, and a buffer for sound effects");
+    return undefined(env);
+  }
+  throw std::invalid_argument("audio manager operation is not bound: "+operation);
+} catch(const std::exception& error) { return throwException(env,error); }
 napi_value windowModel(napi_env env,napi_callback_info info) try {
   const auto args=arguments(env,info); auto& owner=session(env,args.at(0));
   const auto name=asString(env,args.at(2)),operation=asString(env,args.at(3));
@@ -797,7 +900,41 @@ napi_value coreService(napi_env env,napi_callback_info info) try {
   using Decrypter=mv::Decrypter;
   if (methodName=="printError") { mv::core::Graphics::printError(asString(env,args.at(1)),asString(env,args.at(2))); return undefined(env); }
   if (methodName=="audioMasterVolume") return number(env,mv::core::WebAudio::masterVolume);
+  if (methodName=="graphicsDimension") {
+    using Graphics=mv::core::Graphics;
+    const auto field=asString(env,args.at(1));
+    if (field=="width" || field=="height") {
+      auto& dimension=field=="width" ? Graphics::width : Graphics::height;
+      if (args.size()>2) {
+        const int value=asInt32(env,args[2]);
+        if (value!=dimension) Graphics::resize(field=="width" ? value : Graphics::width,field=="height" ? value : Graphics::height);
+      }
+      return number(env,dimension);
+    }
+    if (field=="boxWidth" || field=="boxHeight") {
+      auto& dimension=field=="boxWidth" ? Graphics::boxWidth : Graphics::boxHeight;
+      if (args.size()>2) dimension=asInt32(env,args[2]);
+      return number(env,dimension);
+    }
+    throw std::invalid_argument("unknown graphics dimension: "+field);
+  }
   if (methodName=="initializeGraphics") return boolean(env,mv::core::Graphics::initialize(asInt32(env,args.at(1)),asInt32(env,args.at(2)),"webgl"));
+  if (methodName=="playVideo") { mv::core::Graphics::playVideo(asString(env,args.at(1))); return undefined(env); }
+  if (methodName=="canPlayVideoType") return string(env,mv::core::Graphics::canPlayVideoType(asString(env,args.at(1))));
+  if (methodName=="setVideoVolume") { mv::core::Graphics::setVideoVolume(asNumber(env,args.at(1))); return undefined(env); }
+  if (methodName=="pageToCanvasX") return number(env,mv::core::Graphics::pageToCanvasX(asNumber(env,args.at(1))));
+  if (methodName=="pageToCanvasY") return number(env,mv::core::Graphics::pageToCanvasY(asNumber(env,args.at(1))));
+  if (methodName=="isInsideCanvas") return boolean(env,mv::core::Graphics::isInsideCanvas(asNumber(env,args.at(1)),asNumber(env,args.at(2))));
+  if (methodName=="isWebGL") return boolean(env,mv::core::Graphics::isWebGL());
+  if (methodName=="hasWebGL") return boolean(env,mv::core::Graphics::hasWebGL());
+  if (methodName=="canUseDifferenceBlend") return boolean(env,mv::core::Graphics::canUseDifferenceBlend());
+  if (methodName=="canUseSaturationBlend") return boolean(env,mv::core::Graphics::canUseSaturationBlend());
+  if (methodName=="setLoadingImage") { mv::core::Graphics::setLoadingImage(asString(env,args.at(1))); return undefined(env); }
+  if (methodName=="printLoadingError") { mv::core::Graphics::printLoadingError(asString(env,args.at(1))); return undefined(env); }
+  if (methodName=="eraseLoadingError") { mv::core::Graphics::eraseLoadingError(); return undefined(env); }
+  if (methodName=="callGC") { mv::core::Graphics::callGC(); return undefined(env); }
+  if (methodName=="showFps") { mv::core::Graphics::showFps(); return undefined(env); }
+  if (methodName=="hideFps") { mv::core::Graphics::hideFps(); return undefined(env); }
   if (methodName=="isVideoPlaying") return boolean(env,mv::core::Graphics::isVideoPlaying());
   if (methodName=="startLoading") { mv::core::Graphics::startLoading(); return undefined(env); }
   if (methodName=="endLoading") { mv::core::Graphics::endLoading(); return undefined(env); }
@@ -1021,20 +1158,10 @@ napi_value battleTest(napi_env env, napi_callback_info info) {
   try { const auto args = arguments(env, info); if (args.size() != 1) throw std::invalid_argument("battleTest requires session"); auto& owner = session(env, args[0]); if (owner.runtimeCalls) throw std::runtime_error("cannot reset a session during a script callback"); SceneTransitionScope transition(owner); owner.session->setupBattleTest(); return undefined(env); }
   catch (const std::exception& error) { return throwException(env,error); }
 }
-napi_value stepEngine(napi_env env, napi_callback_info info) {
-  try {
-    const auto args = arguments(env, info);
-    if (args.empty() || args.size() > 2) throw std::invalid_argument("step requires session and optional logical input");
-    auto& value = session(env, args[0]);
-    if (value.stepping || value.runtimeCalls) throw std::runtime_error("native frame is already updating or executing a script callback");
-    struct StepScope {
-      EngineSession& owner;
-      explicit StepScope(EngineSession& value) : owner(value) { owner.stepping = true; }
-      ~StepScope() { owner.session->deferScriptScene(); owner.stepping = false; owner.touchPrepared = false; }
-    } stepScope(value);
+mv::Input acquireEngineInput(napi_env env, EngineSession& value, napi_value logicalInput = nullptr) {
     mv::Input controls;
-    if (args.size() == 2) {
-      const auto input = readValue(env, args[1]);
+    if (logicalInput) {
+      const auto input = readValue(env, logicalInput);
       controls.direction = input["direction"].integer(); controls.ok = input["ok"].boolean();
       controls.okLongPressed = input["okLongPressed"].boolean();
       controls.inputDate = input["inputDate"].number(); controls.touchDate = input["touchDate"].number();
@@ -1103,7 +1230,47 @@ napi_value stepEngine(napi_env env, napi_callback_info info) {
       controls.directionTriggered = controls.direction != 0 && value.input.isTriggered(direction);
     }
     if (controls.touchTriggered && controls.touchX && controls.touchY) mv::core::Graphics::onPointerDown(*controls.touchX,*controls.touchY);
+    return controls;
+}
+napi_value stepEngine(napi_env env, napi_callback_info info) {
+  try {
+    const auto args = arguments(env, info);
+    if (args.empty() || args.size() > 2) throw std::invalid_argument("step requires session and optional logical input");
+    auto& value = session(env, args[0]);
+    if (value.stepping || value.runtimeCalls) throw std::runtime_error("native frame is already updating or executing a script callback");
+    struct StepScope {
+      EngineSession& owner;
+      explicit StepScope(EngineSession& value) : owner(value) { owner.stepping = true; }
+      ~StepScope() { owner.session->deferScriptScene(); owner.stepping = false; owner.touchPrepared = false; }
+    } stepScope(value);
+    const auto controls = acquireEngineInput(env, value, args.size() == 2 ? args[1] : nullptr);
     value.session->step(controls); value.session->deferScriptScene(); collectRuntime(value); return boolean(env, !value.session->finished());
+  } catch (const std::exception& error) { return throwException(env, error); }
+}
+napi_value mapScene(napi_env env, napi_callback_info info) {
+  try {
+    const auto args = arguments(env, info);
+    if (args.size() < 2 || args.size() > 3) throw std::invalid_argument("mapScene requires session, phase and optional logical input");
+    auto& value = session(env, args[0]);
+    const auto phase = asString(env, args[1]);
+    if (phase != "destination" && phase != "update" && phase != "sceneChange") throw std::invalid_argument("unknown map scene phase: " + phase);
+    if (value.stepping || value.runtimeCalls) throw std::runtime_error("native frame is already updating or executing a script callback");
+    struct MapScope {
+      EngineSession& owner;
+      explicit MapScope(EngineSession& value) : owner(value) { owner.stepping = true; }
+      ~MapScope() { owner.session->deferScriptScene(); owner.stepping = false; }
+    } scope(value);
+    if (phase == "sceneChange") {
+      value.session->finishMapScene();
+      value.mapSceneInput.reset(); value.touchPrepared = false;
+    } else {
+      if (args.size() == 3 || phase == "destination" || !value.mapSceneInput)
+        value.mapSceneInput = acquireEngineInput(env, value, args.size() == 3 ? args[2] : nullptr);
+      if (phase == "destination") value.session->updateMapSceneDestination(*value.mapSceneInput);
+      else value.session->stepMapScene(*value.mapSceneInput);
+    }
+    value.session->deferScriptScene(); collectRuntime(value);
+    return boolean(env, !value.session->finished());
   } catch (const std::exception& error) { return throwException(env, error); }
 }
 napi_value acknowledge(napi_env env, napi_callback_info info) {
@@ -1202,6 +1369,8 @@ napi_value playerTransfer(napi_env env, napi_callback_info info) try {
   if (args.size() < 2) throw std::invalid_argument("player transfer requires session and operation");
   auto& owner = session(env, args[0]); const auto operation = asString(env, args[1]);
   if (operation == "isTransferring") return boolean(env, owner.session->playerTransferring());
+  if (operation == "newMapId") return number(env, owner.session->playerNewMapId());
+  if (operation == "fadeType") return number(env, owner.session->playerFadeType());
   if (operation == "reserve") {
     if (args.size() != 7) throw std::invalid_argument("reserve transfer requires map, coordinates, direction and fade");
     owner.session->reservePlayerTransfer(asInt32(env, args[2]), asInt32(env, args[3]), asInt32(env, args[4]), asInt32(env, args[5]), asInt32(env, args[6]));
@@ -1577,7 +1746,15 @@ napi_value managerInvoke(napi_env env, napi_callback_info info) {
     auto& value = *session(env, args[0]).session; const auto method = asString(env, args[1]);
     const auto sound = args.size() > 2 ? readValue(env, args[2]) : mv::Value{};
     const double position = args.size() > 3 ? asNumber(env, args[3]) : 0;
-    if (method == "playBgm") mv::AudioManager::playBgm(value, sound, position);
+    if (method == "isCurrentBgm") return boolean(env,mv::AudioManager::isCurrentBgm(value,sound));
+    else if (method == "isCurrentBgs") return boolean(env,mv::AudioManager::isCurrentBgs(value,sound));
+    else if (method == "shouldUseHtml5Audio") return boolean(env,mv::AudioManager::shouldUseHtml5Audio());
+    else if (method == "fadeInBgm") mv::AudioManager::fadeInBgm(value,sound.number());
+    else if (method == "fadeInBgs") mv::AudioManager::fadeInBgs(value,sound.number());
+    else if (method == "replayBgm") mv::AudioManager::replayBgm(value,sound);
+    else if (method == "replayBgs") mv::AudioManager::replayBgs(value,sound);
+    else if (method == "playStaticSe") mv::AudioManager::playStaticSe(value,sound);
+    else if (method == "playBgm") mv::AudioManager::playBgm(value, sound, position);
     else if (method == "playBgs") mv::AudioManager::playBgs(value, sound, position);
     else if (method == "playSe") mv::AudioManager::playSe(value, sound);
     else if (method == "playMe") mv::AudioManager::playMe(value, sound);
@@ -1655,7 +1832,7 @@ napi_value decodeSaveGraph(napi_env env,napi_callback_info info) {
   catch(const std::exception& error){return throwException(env,error);}
 }
 napi_value save(napi_env env, napi_callback_info info) {
-  try { const auto args = arguments(env, info); if (args.size() != 1) throw std::invalid_argument("save requires session"); auto& value = session(env, args[0]); if (value.presentation) value.presentation->captureAudioState(); return writeValue(env, value.session->save()); }
+  try { const auto args = arguments(env, info); if (args.size() < 1 || args.size() > 2) throw std::invalid_argument("save requires session and optional counter flag"); auto& value = session(env, args[0]); if (value.presentation) value.presentation->captureAudioState(); return writeValue(env, value.session->save(args.size() < 2 || asBoolean(env, args[1]))); }
   catch (const std::exception& error) { return throwException(env, error); }
 }
 napi_value load(napi_env env, napi_callback_info info) {
@@ -1686,6 +1863,7 @@ napi_value completeStorage(napi_env env, napi_callback_info info) {
 void registerMvEngineBindings(napi_env env, napi_value exports) {
   napi_value engine; check(env, napi_create_object(env, &engine), "cannot create engine API");
   method(env, engine, "connectRuntime", connectRuntime);
+  method(env,engine,"audioManager",audioManager);
   method(env,engine,"windowClasses",windowClasses); method(env,engine,"windowModel",windowModel);
   method(env, engine, "picture", runtimePicture); method(env, engine, "createPicture", createRuntimePicture);
   method(env, engine, "pictureField", pictureField); method(env, engine, "pictureInvoke", pictureInvoke);
@@ -1707,7 +1885,7 @@ void registerMvEngineBindings(napi_env env, napi_value exports) {
   method(env, engine, "pictureFrame", pictureFrame);
   method(env, engine, "pictureBitmap", pictureBitmap);
   method(env, engine, "create", createEngine); method(env, engine, "newGame", newGame); method(env, engine, "battleTest", battleTest);
-  method(env, engine, "step", stepEngine); method(env, engine, "acknowledge", acknowledge);
+  method(env, engine, "step", stepEngine); method(env, engine, "mapScene", mapScene); method(env, engine, "acknowledge", acknowledge);
   method(env, engine, "snapshot", snapshot); method(env, engine, "dispose", dispose);
   method(env, engine, "attach", attach); method(env, engine, "present", present); method(env, engine, "render", render); method(env, engine, "openTitle", openTitle);
   method(env, engine, "scriptStage", scriptStage); method(env, engine, "sceneControl", sceneControl);
@@ -1733,7 +1911,7 @@ void registerMvEngineBindings(napi_env env, napi_value exports) {
   method(env, engine, "configure", configure); method(env, engine, "configuration", configuration);
   method(env, engine, "setSaveMetadata", setSaveMetadata);
   method(env, engine, "encodeGraph", encodeSaveGraph); method(env, engine, "decodeGraph", decodeSaveGraph);
-  method(env, engine, "save", save); method(env, engine, "load", load); method(env, engine, "storageStatus", storageStatus); method(env, engine, "completeStorage", completeStorage);
+  method(env, engine, "scriptInterpreter", scriptInterpreter); method(env, engine, "save", save); method(env, engine, "load", load); method(env, engine, "storageStatus", storageStatus); method(env, engine, "completeStorage", completeStorage);
   check(env, napi_set_named_property(env, exports, "mvEngine", engine), "cannot register engine API");
 }
 }

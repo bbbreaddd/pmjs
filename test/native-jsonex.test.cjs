@@ -26,5 +26,19 @@ test('JsonEx copies plugin objects with cycles, shared arrays and prototypes wit
   scope.JsonEx.stringify = function(...args) { ++calls; return original.apply(this, args); };
   scope.JsonEx.makeDeepCopy({ value: 1 }); assert.equal(calls, 1);
   scope.JsonEx.maxDepth = 1;
-  assert.throws(() => scope.JsonEx.stringify({ nested: { tooDeep: {} } }), /nesting limit/);
+  assert.throws(() => scope.JsonEx.stringify({ nested: { tooDeep: {} } }), /Object too deep/);
+});
+
+
+test('JsonEx dispatches replaceable encoding hooks and removes graph metadata', () => {
+  const scope = {}, context = vm.createContext(scope);
+  installJsonEx({ scope, runScript(source) { return vm.runInContext(source, context); } });
+  vm.runInContext(`
+    var calls = 0, encode = JsonEx._encode;
+    JsonEx._encode = function(...args) { ++calls; return encode.apply(this, args); };
+    var graph = { first: [1, 2] }; graph.second = graph.first;
+    var result = JsonEx.parse(JsonEx.stringify(graph));
+    if (calls < 2 || result.first !== result.second) throw new Error('hook or alias mismatch');
+    if (Object.keys(graph).some(key => key[0] === '@') || Object.keys(graph.first).some(key => key[0] === '@')) throw new Error('metadata retained');
+  `, context);
 });

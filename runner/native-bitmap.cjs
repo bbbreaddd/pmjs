@@ -1,4 +1,5 @@
 'use strict';
+const { createRequestQueueClass } = require('./native-request-queue.cjs');
 const bitmapFactories = new WeakMap();
 function findBitmapFactory(Type) {
   for (let current=Type;current;current=Object.getPrototypeOf(current)) {
@@ -9,14 +10,14 @@ function findBitmapFactory(Type) {
 }
 let nextReservation = 2n;
 
-function createBitmapClass(native, PIXI = null, fonts = null) {
+function createBitmapClass(native, PIXI = null, fonts = null, contextClass = () => globalThis.CanvasRenderingContext2D) {
   const api = native.mvBitmap;
   if (!api) throw new Error('Native Bitmap bindings are unavailable');
   const runtime = api.open();
   const instances = new WeakMap();
   const pending = new Set();
   const loadedFonts = new Map();
-  const drawingMethods = new Set(['resize', 'clear', 'clearRect', 'fillRect', 'fillAll', 'gradientFillRect', 'drawCircle', 'drawText', 'blt', 'bltImage', 'rotateHue', 'adjustTone', 'blur', 'canvasChanged']);
+  const drawingMethods = new Set(['resize', 'clear', 'clearRect', 'fillRect', 'fillAll', 'gradientFillRect', 'drawCircle', 'drawText', 'blt', 'bltImage', 'rotateHue', 'adjustTone', 'blur', 'canvasChanged', 'snap']);
 
   function entry(bitmap) {
     const value = instances.get(bitmap);
@@ -34,6 +35,8 @@ function createBitmapClass(native, PIXI = null, fonts = null) {
         if (face && loadedFonts.get(face.family) !== face.path) Bitmap.loadFont(face.family, face.path);
       }
     }
+    if (drawingMethods.has(method) && value.source?._context2d)
+      api.property(value.handle, 'paintOpacity', value.source._context2d.globalAlpha * 255);
     const result = api.invoke(value.handle, method, ...args);
     if (drawingMethods.has(method)) {
       value.revision++;
@@ -57,7 +60,19 @@ function createBitmapClass(native, PIXI = null, fonts = null) {
     if (!value.source) {
       const source = {
         get width() { return api.property(value.handle, 'width'); },
+        set width(width) { bitmap.resize(width, this.height); if (this._context2d) contextClass().call(this._context2d, this); },
         get height() { return api.property(value.handle, 'height'); },
+        set height(height) { bitmap.resize(this.width, height); if (this._context2d) contextClass().call(this._context2d, this); },
+        getContext(type) {
+          if (type !== '2d') return null;
+          if (!this._context2d) {
+            const Type = contextClass();
+            if (!Type) throw new Error('Canvas 2D bindings are unavailable');
+            this._context2d = new Type(this);
+            this._context2d.globalAlpha = bitmap.paintOpacity / 255;
+          }
+          return this._context2d;
+        },
         _pmjsNativeTextureSource() { return api.invoke(value.handle, 'surface'); },
         _ensureNativeCanvas() { return api.invoke(value.handle, 'canvasSurface'); },
         _pmjsContentChanged() { invoke(bitmap, 'canvasChanged'); }
@@ -108,15 +123,21 @@ function createBitmapClass(native, PIXI = null, fonts = null) {
       if (!bitmap) { pending.delete(reference); continue; }
       const value = entry(bitmap);
       if (value.pending !== reference) { pending.delete(reference); continue; }
-      if (bitmap.isError()) { pending.delete(reference); value.pending = null; value.listeners.length = 0; continue; }
+      if (bitmap.isError()) { pending.delete(reference); value.pending = null; bitmap._onError(); continue; }
       if (!bitmap.isReady()) continue;
       value.revision++;
       synchronizeTexture(bitmap, value);
-      while (value.listeners.length) value.listeners.shift()(bitmap);
       pending.delete(reference);
       value.pending = null;
+      bitmap._onLoad();
     }
   };
+  Bitmap.prototype._callLoadListeners = function() {
+    const listeners = entry(this).listeners;
+    while (listeners.length) listeners.shift()(this);
+  };
+  Bitmap.prototype._onLoad = function() { this._callLoadListeners(); };
+  Bitmap.prototype._onError = function() { this._loadingState = 'error'; };
   Bitmap.prototype.addLoadListener = function(listener) {
     if (typeof listener !== 'function') throw new TypeError('Bitmap listener must be a function');
     if (this.isReady()) listener(this);
@@ -134,9 +155,14 @@ function createBitmapClass(native, PIXI = null, fonts = null) {
       get() { return bitmapSource(this); }
     });
   }
+  Object.defineProperty(Bitmap.prototype, '_context', { configurable: true, get() { return this._canvas.getContext('2d'); } });
   Bitmap.prototype._setDirty = function() { entry(this).revision++; };
   Bitmap.prototype.checkDirty = function() { synchronizeTexture(this, entry(this)); };
-  for (const name of ['width', 'height', 'url', '_url', '_loadingState']) {
+  Object.defineProperty(Bitmap.prototype, '_loadingState', { configurable: true,
+    get() { return api.property(entry(this).handle, '_loadingState'); },
+    set(value) { api.property(entry(this).handle, '_loadingState', String(value)); }
+  });
+  for (const name of ['width', 'height', 'url', '_url']) {
     Object.defineProperty(Bitmap.prototype, name, {
       configurable: true,
       get() { return api.property(entry(this).handle, name); }
@@ -145,24 +171,54 @@ function createBitmapClass(native, PIXI = null, fonts = null) {
   for (const name of ['paintOpacity', 'fontSize', 'fontFace', 'fontItalic', 'textColor', 'outlineColor', 'outlineWidth', 'smooth']) {
     Object.defineProperty(Bitmap.prototype, name, {
       configurable: true,
-      get() { return api.property(entry(this).handle, name); },
+      get() {
+        const context = entry(this).source?._context2d;
+        return name === 'paintOpacity' && context ? context.globalAlpha * 255 : api.property(entry(this).handle, name);
+      },
       set(value) {
         if (['fontFace', 'textColor', 'outlineColor'].includes(name)) value = String(value);
         else if (name === 'fontItalic' || name === 'smooth') value = Boolean(value);
         else value = Number(value);
         api.property(entry(this).handle, name, value);
+        const context = entry(this).source?._context2d;
+        if (name === "paintOpacity" && context) context.globalAlpha = value / 255;
       }
     });
   }
   for (const name of ['isReady', 'isError', 'isRequestOnly', 'isRequestReady', 'decode', 'startRequest', 'touch', 'rotateHue', 'adjustTone', 'blur', 'clear', 'clearRect', 'fillRect', 'fillAll', 'drawCircle', 'measureTextWidth', 'getPixel', 'getAlphaPixel', 'resize']) {
     Bitmap.prototype[name] = function(...args) { return invoke(this, name, ...args); };
   }
+  const decode = Bitmap.prototype.decode;
+  Bitmap.prototype.decode = function() {
+    const result = decode.call(this), value = entry(this);
+    if (!this.isReady() && !value.pending) { value.pending = new WeakRef(this); pending.add(value.pending); }
+    return result;
+  };
   Bitmap.prototype.gradientFillRect = function(x, y, width, height, first, second, vertical = false) {
     return invoke(this, 'gradientFillRect', x, y, width, height, first, second, Boolean(vertical));
   };
+  const drawTextOutline = Bitmap.prototype._drawTextOutline = function(text, x, y, maxWidth) {
+    const context = this._context;
+    context.strokeStyle = this.outlineColor; context.lineWidth = this.outlineWidth; context.lineJoin = 'round';
+    context.strokeText(text, x, y, maxWidth);
+  };
+  const drawTextBody = Bitmap.prototype._drawTextBody = function(text, x, y, maxWidth) {
+    this._context.fillStyle = this.textColor; this._context.fillText(text, x, y, maxWidth);
+  };
+  Bitmap.prototype._makeFontNameText = function() { return (this.fontItalic ? 'Italic ' : '') + this.fontSize + 'px ' + this.fontFace; };
   Bitmap.prototype.drawText = function(text, x, y, maxWidth = 0x7fffffff, lineHeight, align = 'left') {
     if (text === undefined) return;
-    return invoke(this, 'drawText', String(text), x, y, maxWidth, lineHeight, align);
+    if (this._drawTextOutline === drawTextOutline && this._drawTextBody === drawTextBody)
+      return invoke(this, 'drawText', String(text), x, y, maxWidth, lineHeight, align);
+    const context = this._context, alpha = context.globalAlpha;
+    const tx = x + (align === 'center' ? maxWidth / 2 : align === 'right' ? maxWidth : 0);
+    const ty = y + lineHeight - (lineHeight - this.fontSize * 0.7) / 2;
+    context.save();
+    try {
+      context.font = this._makeFontNameText(); context.textAlign = align; context.textBaseline = 'alphabetic';
+      context.globalAlpha = 1; this._drawTextOutline(text, tx, ty, maxWidth);
+      context.globalAlpha = alpha; this._drawTextBody(text, tx, ty, maxWidth);
+    } finally { context.restore(); this._setDirty(); }
   };
   for (const name of ['blt', 'bltImage']) {
     Bitmap.prototype[name] = function(source, sx, sy, sw, sh, dx, dy, dw = sw, dh = sh) {
@@ -179,7 +235,7 @@ function createBitmapClass(native, PIXI = null, fonts = null) {
     Object.defineProperty(surface, 'bitmap', { value: bitmap });
     return surface;
   };
-  bitmapFactories.set(Bitmap, { runtime, handle(bitmap) { return entry(bitmap).handle; }, manage(bitmap) { entry(bitmap).managed = true; }, adopt(result) {
+  bitmapFactories.set(Bitmap, { runtime, snap(stage) { const bitmap = new Bitmap(); invoke(bitmap, 'snap', stage); return bitmap; }, handle(bitmap) { return entry(bitmap).handle; }, manage(bitmap) { entry(bitmap).managed = true; }, adopt(result) {
     const bitmap = Object.create(Bitmap.prototype);
     bitmap.initialize();
     const value = entry(bitmap); value.handle = result.handle; value.managed = true; value.revision++;
@@ -189,7 +245,7 @@ function createBitmapClass(native, PIXI = null, fonts = null) {
   return Bitmap;
 }
 
-function createImageManager(native, Bitmap) {
+function createImageManager(native, Bitmap, RequestQueue = createRequestQueueClass()) {
   const factory = findBitmapFactory(Bitmap);
   if (!factory) throw new TypeError('ImageManager requires the native Bitmap constructor');
   if (factory.manager) return factory.manager;
@@ -218,7 +274,19 @@ function createImageManager(native, Bitmap) {
     const state = states.get(cache), result = api.cacheImage(state.runtime, 'entry', String(key));
     if (!result) return undefined;
     if (state.records.get(key)?.identity === result.identity) return state.records.get(key).value;
-    const bitmap = adopt(state, result), value = { bitmap, key: result.key };
+    let bitmap = adopt(state, result);
+    const value = { key: result.key };
+    Object.defineProperty(value, 'bitmap', { configurable: true, enumerable: true,
+      get() { return bitmap; },
+      set(next) {
+        const current = api.cacheImage(state.runtime, 'entry', String(key));
+        if (current?.identity === result.identity) {
+          api.cacheImage(state.runtime, 'setEntry', String(key), { bitmap: factory.handle(next) });
+          factory.manage(next); known.set(result.identity, new WeakRef(next)); state.roots.set(result.identity, next);
+        }
+        bitmap = next;
+      }
+    });
     for (const field of ['touch', 'reservationId']) Object.defineProperty(value, field, {
       enumerable: true,
       get() {
@@ -271,8 +339,15 @@ function createImageManager(native, Bitmap) {
     if (!path) { hue = 0; smooth = false; mode = 'reserve'; id = 1; }
     const cache = manager._imageCache, state = states.get(cache);
     api.imageManager(state.runtime, 'limit', ImageCache.limit);
-    const result = api.managedImage(state.runtime, path, Number(hue) || 0, Boolean(smooth), mode, reservation(id));
-    const bitmap = adopt(state, result); cache._truncateCache(); return bitmap;
+    const key = manager._generateCacheKey(path, hue);
+    const existing = mode === 'request' ? cache.get(key) : null;
+    const result = api.managedImage(state.runtime, path, Number(hue) || 0, Boolean(smooth), mode === 'request' ? 'requestExternal' : mode, reservation(id));
+    const bitmap = adopt(state, result);
+    if (mode === 'request') {
+      if (!existing) manager._requestQueue.enqueue(key, bitmap);
+      manager._requestQueue.raisePriority(key);
+    }
+    cache._truncateCache(); return bitmap;
   }
   const manager = {
     faceWidth: 144, faceHeight: 144,
@@ -285,9 +360,9 @@ function createImageManager(native, Bitmap) {
     requestNormalBitmap(path, hue = 0) { return load(String(path), hue, true, 'request', 0); },
     loadEmptyBitmap() { return load('', 0, false, 'reserve', 1); },
     isReady() { const error = this._imageCache.getErrorBitmap(); if (error) throw new Error('Failed to load: ' + error.url); return this._imageCache.isReady(); },
-    update() { const state = states.get(this._imageCache); synchronize(state, api.imageManager(state.runtime, 'update')); Bitmap.updateLoads(true); },
+    update() { this._requestQueue.update(); const state = states.get(this._imageCache); synchronize(state, api.imageManager(state.runtime, 'update')); Bitmap.updateLoads(true); },
     clear() { this._imageCache = new ImageCache(); },
-    clearRequest() { api.imageManager(states.get(this._imageCache).runtime, 'clearRequests'); },
+    clearRequest() { this._requestQueue.clear(); api.imageManager(states.get(this._imageCache).runtime, 'clearRequests'); },
     setDefaultReservationId(id) { defaultReservation = id; },
     releaseReservation(id) { this._imageCache.releaseReservation(id); },
     setCacheLimit(pixels) { ImageCache.limit = pixels; api.imageManager(states.get(this._imageCache).runtime, 'limit', pixels); },
@@ -307,7 +382,7 @@ function createImageManager(native, Bitmap) {
   manager._systemReservationId = 1;
   manager._imageCache = Object.create(ImageCache.prototype);
   states.set(manager._imageCache, { runtime: factory.runtime }); manager._imageCache.initialize();
-  manager._requestQueue = { _queue: { get length() { return api.imageManager(states.get(manager._imageCache).runtime, 'state').requestCount; } } };
+  manager._requestQueue = new RequestQueue();
   manager.reserveSystem = function(filename, hue = 0, id) { return this.reserveBitmap('img/system/', filename, hue, false, id || this._systemReservationId); };
   factory.manager = manager;
   return manager;
@@ -318,4 +393,9 @@ function bitmapHandle(Bitmap, bitmap) {
   if (!factory) throw new TypeError('Native Bitmap constructor is unavailable');
   return factory.handle(bitmap);
 }
-module.exports = { createBitmapClass, createImageManager, bitmapHandle };
+function snapBitmap(Bitmap, stage) {
+  const factory = findBitmapFactory(Bitmap);
+  if (!factory) throw new TypeError('Snapshot requires the native Bitmap constructor');
+  return factory.snap(stage);
+}
+module.exports = { createBitmapClass, createImageManager, bitmapHandle, snapBitmap };

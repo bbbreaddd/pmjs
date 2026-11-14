@@ -107,7 +107,15 @@ void Session::setDatabaseReader(std::shared_ptr<ValueReader> reader) {
   if (!canWriteDatabase()) throw std::runtime_error("database tables must be published before game state initialization");
   database_.reader = std::move(reader);
 }
-const Value& Session::map() const { return database_["maps"][std::to_string(mapId_)]; }
+void Session::setMapData(int id,Value data) {
+  if(id<0)throw std::invalid_argument("map id must not be negative");
+  if(!std::holds_alternative<Value::Object>(data.data) || data["width"].integer()<=0 || data["height"].integer()<=0)
+    throw std::invalid_argument("map publication requires a map object with positive dimensions");
+  runtimeMapId_=id; runtimeMapData_=std::move(data);
+  ++presentationRevision_; refreshNeeded_=true;
+}
+const Value& Session::mapData(int id) const { return id==runtimeMapId_ ? runtimeMapData_ : database_["maps"][std::to_string(id)]; }
+const Value& Session::map() const { return mapData(mapId_); }
 int Session::tileWidth() const {
   return database_["tiledMaps"][std::to_string(mapId_)]["tilewidth"].integer(48);
 }
@@ -194,7 +202,7 @@ void Session::performPlayerTransfer() {
   pendingTransfer_.reset(); transferFadeStarted_ = false;
 }
 void Session::transfer(int id, int x, int y, int direction) {
-  const auto& target = database_["maps"][std::to_string(id)];
+  const auto& target = mapData(id);
   if (target.null()) throw std::invalid_argument("map not loaded: " + std::to_string(id));
   if (x < 0 || y < 0 || x >= target["width"].integer() || y >= target["height"].integer()) throw std::invalid_argument("transfer outside map");
   ++presentationRevision_;
@@ -207,20 +215,9 @@ void Session::transfer(int id, int x, int y, int direction) {
   const bool changedMap = id != mapId_;
   if (!player_.directionFix && direction) player_.direction = direction;
   player_.stopCount = 0;
-  mapId_ = id; player_.x = x; player_.y = y; player_.realX = x; player_.realY = y;
+  player_.x = x; player_.y = y; player_.realX = x; player_.realY = y;
   if (changedMap) {
-    detachRuntimeEntities(false);
-    if (cameraTarget_) cameraTarget_ = runtimeCharacter(-1);
-    setupMapState(); commonInterpreters_.clear();
-    events_.clear();
-    events_.reserve(map()["events"].array().size());
-    for (const auto& data : map()["events"].array()) {
-      if (data.null()) continue;
-      Event event; event.id = data["id"].integer();
-      event.character.x = data["x"].integer(); event.character.y = data["y"].integer();
-      event.character.realX = event.character.x; event.character.realY = event.character.y;
-      events_.push_back(event);
-    }
+    dispatchGameDataMutation("map", "setup", {id});
     if (map()["autoplayBgm"].boolean()) {
       if (vehicleType_ >= 0) vehicleWalkingBgm_ = map()["bgm"];
       else AudioManager::playBgm(*this, map()["bgm"]);
@@ -228,6 +225,24 @@ void Session::transfer(int id, int x, int y, int direction) {
     if (map()["autoplayBgs"].boolean()) AudioManager::playBgs(*this, map()["bgs"]);
   }
   locatePlayer(x, y);
+  refreshNeeded_ = true; refreshIfNeeded();
+}
+
+void Session::setupMap(int id) {
+  if (mapData(id).null()) throw std::invalid_argument("map not loaded: " + std::to_string(id));
+  mapId_ = id;
+  detachRuntimeEntities(false);
+  if (cameraTarget_) cameraTarget_ = runtimeCharacter(-1);
+  setupMapState(); commonInterpreters_.clear();
+  events_.clear();
+  events_.reserve(map()["events"].array().size());
+  for (const auto& data : map()["events"].array()) {
+    if (data.null()) continue;
+    Event event; event.id = data["id"].integer();
+    event.character.x = data["x"].integer(); event.character.y = data["y"].integer();
+    event.character.realX = event.character.x; event.character.realY = event.character.y;
+    events_.push_back(event);
+  }
   refreshNeeded_ = true; refreshIfNeeded();
 }
 
@@ -604,7 +619,8 @@ void Session::startInterpreter(const Event& event) {
   }
 }
 void Session::skipBranch(int indent, Interpreter& context) {
-  while (context.index + 1 < static_cast<int>(context.list.size()) && context.list[context.index + 1]["indent"].integer() > indent) ++context.index;
+  if (runtimeHooks_ && runtimeHooks_->interpreterControl && runtimeHooks_->interpreterControl(context.runtime, "skipBranch", {})) return;
+  context.skipBranch(indent);
 }
 const Value& Session::variable(int id) const {
   static const Value zero(0);
@@ -1292,6 +1308,12 @@ std::shared_ptr<RuntimeObject> Session::runtimeInterpreterCollection(const std::
   if (field == "_branch") return context->branches.storage;
   throw std::invalid_argument("interpreter collection is not bound: " + field);
 }
+std::shared_ptr<RuntimeInterpreter> Session::runtimeInterpreter(int eventId) const {
+  if (eventId == 0) return interpreter_.runtime;
+  if (eventId == -1) return battle_.interpreter.runtime;
+  for (const auto& event : events_) if (event.id == eventId) return event.trigger == 4 ? event.parallel.runtime : nullptr;
+  return nullptr;
+}
 void Session::setRuntimeInterpreterList(const std::shared_ptr<RuntimeInterpreter>& object, const std::shared_ptr<RuntimeCommandList>& list) {
   auto* context = findRuntimeInterpreter(object);
   if (!context) throw std::runtime_error("interpreter is no longer attached to the session");
@@ -1404,7 +1426,12 @@ void Session::updateMessageWindow() {
 }
 void Session::updateTimer() { dispatchGameDataMutation("timer","update",{true}); }
 
-void Session::step(const Input& input) {
+void Session::step(const Input& input) { step(input, true, true, true); }
+void Session::stepMapScene(const Input& input) { step(input, false, false, false); }
+void Session::updateMapSceneDestination(const Input& input) {
+  if (!finished_ && !resourcesStopped_ && ui_.scene == Scene::map) updateMapTouch(input);
+}
+void Session::step(const Input& input, bool mapDestination, bool mapFastForward, bool mapSceneChanges) {
   if (mapSceneOnly() && !database_["sceneContract"]["interactiveInput"].boolean() && (input.direction || input.ok || input.cancel || input.dash || input.touchTriggered || input.destinationX || input.destinationY))
     throw std::runtime_error("map-scene session does not support interactive input");
   if (finished_ || resourcesStopped_ || scriptScenePrevious_) return;
@@ -1431,7 +1458,7 @@ void Session::step(const Input& input) {
     updateUi(input, ok, cancel, repeatedDirection);
     return;
   }
-  updateMapTouch(input);
+  if (mapDestination) updateMapTouch(input);
   const bool hadMessage = message_.busy;
   auto updateMain = [&]() -> bool {
     bool transferred = false;
@@ -1534,11 +1561,19 @@ void Session::step(const Input& input) {
     return transferred;
   };
   const bool transferred = updateMain();
-  if (!transferred && !pendingTransfer_ && ui_.scene == Scene::map && (interpreter_.running || std::any_of(events_.begin(), events_.end(), [](const Event& value) { return value.starting; }))
+  if (mapFastForward && !transferred && !pendingTransfer_ && ui_.scene == Scene::map && (interpreter_.running || std::any_of(events_.begin(), events_.end(), [](const Event& value) { return value.starting; }))
       && (okAge_ >= 24 || input.touchLongPressed)) updateMain();
   updateVisualEffects();
   updateMessageWindow();
-  if (!pendingTransfer_) updateUi(input, ok, cancel, repeatedDirection);
+  mapSceneInput_ = input; mapSceneOk_ = ok; mapSceneCancel_ = cancel;
+  mapSceneRepeatedDirection_ = repeatedDirection; mapSceneChangesPending_ = true;
+  if (mapSceneChanges) finishMapScene();
+}
+void Session::finishMapScene() {
+  if (!mapSceneChangesPending_) return;
+  mapSceneChangesPending_ = false;
+  if (finished_ || resourcesStopped_ || ui_.scene != Scene::map) return;
+  if (!pendingTransfer_) updateUi(mapSceneInput_, mapSceneOk_, mapSceneCancel_, mapSceneRepeatedDirection_);
   const auto members = partyMembers();
   if (!members.empty() && std::all_of(members.begin(), members.end(), [&](int id) { return actors_.at(id).isDead(); })) { openGameOver(); return; }
 }

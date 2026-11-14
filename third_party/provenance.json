@@ -584,6 +584,41 @@
       "revision": "Header version 1.6.2; exact file hashes in third_party/rpg-maker-mv/reference.json",
       "license": "MIT",
       "notice": "third_party/rpg-maker-mv/LICENSE"
+    },
+    "runner/native-core-utilities.cjs": {
+      "origin": "permissive",
+      "source": "RPG Maker MV rpg_core.js 1.6.2",
+      "license": "MIT",
+      "notice": "third_party/rpg-maker-mv.LICENSE",
+      "revision": "1.6.2"
+    },
+    "runner/native-tilemap-statics.cjs": {
+      "origin": "permissive",
+      "source": "RPG Maker MV rpg_core.js 1.6.2",
+      "license": "MIT",
+      "notice": "third_party/rpg-maker-mv.LICENSE",
+      "revision": "1.6.2"
+    },
+    "runner/native-jsonex.cjs": {
+      "origin": "permissive",
+      "source": "RPG Maker MV rpg_core.js 1.6.2",
+      "license": "MIT",
+      "notice": "third_party/rpg-maker-mv.LICENSE",
+      "revision": "1.6.2"
+    },
+    "runner/native-window-parts.cjs": {
+      "origin": "permissive",
+      "source": "RPG Maker MV rpg_core.js 1.6.2",
+      "license": "MIT",
+      "notice": "third_party/rpg-maker-mv.LICENSE",
+      "revision": "1.6.2"
+    },
+    "runner/native-request-queue.cjs": {
+      "origin": "permissive",
+      "source": "RPG Maker MV rpg_core.js 1.6.2",
+      "license": "MIT",
+      "notice": "third_party/rpg-maker-mv.LICENSE",
+      "revision": "1.6.2"
     }
   },
   "defaults": {

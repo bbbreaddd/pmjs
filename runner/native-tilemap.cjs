@@ -1,4 +1,5 @@
 'use strict';
+const { installTilemapStatics } = require('./native-tilemap-statics.cjs');
 
 function installTilemap(runtime, engine, session) {
   const scope = runtime.scope;
@@ -22,6 +23,7 @@ function installTilemap(runtime, engine, session) {
   });
   Tilemap.prototype.refresh = function() { engine.gameDataInvoke(session, 'map', 'invalidateTileShadows', [tilemap._drawShadow !== base]); };
   Object.assign(scope, { Tilemap, ShaderTilemap });
+  installTilemapStatics(runtime);
   return {
     update() {
       if (tilemap._drawShadow !== previous) { previous = tilemap._drawShadow; tilemap.refresh(); }
