@@ -577,7 +577,7 @@ function createScriptRuntime(engine, session, options = {}) {
         get() { return engine.actionField(session, handle, field); },
         set(value) { engine.actionField(session, handle, field, value); }
       });
-    let subject;
+    let subject = wrapRuntimeEntity(engine.actionSubject(session, handle));
     Object.defineProperty(object, '_subject', { configurable: true,
       get() { subject = wrapRuntimeEntity(engine.actionSubject(session, handle)); return subject; },
       set(value) {
@@ -744,6 +744,17 @@ function createScriptRuntime(engine, session, options = {}) {
   Game_Map.prototype.autoplay = function() {
     if (this !== scope.$gameMap) throw new Error('Detached map autoplay is not bound');
     return engine.gameDataInvoke(session, 'map', 'autoplay', []);
+  };
+  const nativeMapAutorun = Game_Map.prototype.setupAutorunCommonEvent = function() {
+    const events = scope.$dataCommonEvents || engine.databaseInvoke(session, 'read', 'commonEvents');
+    for (let index = 0; index < events.length; ++index) {
+      const event = events[index];
+      if (event && event.trigger === 1 && scope.$gameSwitches.value(event.switchId)) {
+        this._interpreter.setup(event.list);
+        return true;
+      }
+    }
+    return false;
   };
   const nativeMapSetupScroll = Game_Map.prototype.setupScroll = function() {
     if (this !== scope.$gameMap) throw new Error('Detached map scrolling is not bound');
@@ -995,6 +1006,12 @@ function createScriptRuntime(engine, session, options = {}) {
       if (fn === gameDataDefaults.get(kind)[method]) return false;
       if (typeof fn !== 'function') throw new TypeError('Game_' + kind + '.' + method + ' is not callable');
       fn.apply(object, args); return true;
+    },
+    setupAutorunCommonEvent() {
+      const method = scope.$gameMap.setupAutorunCommonEvent;
+      if (method === nativeMapAutorun && !scope.$dataCommonEvents) return undefined;
+      if (typeof method !== 'function') throw new TypeError('Game_Map.setupAutorunCommonEvent is not callable');
+      return Boolean(method.call(scope.$gameMap));
     },
     touchEvent(event) {
       const method = touchHandlers[event.type], handler = scope.TouchInput[method];

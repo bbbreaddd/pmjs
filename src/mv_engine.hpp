@@ -43,6 +43,7 @@ struct Value {
   const Value& operator[](const std::string& key) const;
   const Value& operator[](std::size_t index) const;
   const Array& array() const;
+  std::size_t arrayLength() const;
   double number(double fallback = 0) const;
   int integer(int fallback = 0) const;
   bool boolean() const;
@@ -52,9 +53,11 @@ struct Value {
 
 struct ValueReader {
   virtual ~ValueReader() = default;
+  virtual bool sameSource(const ValueReader& other) const { return this == &other; }
   virtual const Value* field(const std::string& key) const = 0;
   virtual const Value* element(std::size_t index) const = 0;
   virtual const Value::Array& array() const = 0;
+  virtual std::size_t arrayLength() const { return array().size(); }
   virtual Value snapshot() const = 0;
 };
 
@@ -158,6 +161,7 @@ struct RuntimeHooks {
   std::function<bool(const std::shared_ptr<RuntimeInterpreter>&, const std::string&, const Value::Array&)> interpreterControl;
   std::function<void(const std::shared_ptr<RuntimeInterpreter>&)> setupChoiceCallback;
   std::function<bool(const std::string&, const std::string&, const Value::Array&)> gameDataMutation;
+  std::function<std::optional<bool>()> setupAutorunCommonEvent;
   std::function<std::optional<std::function<void()>>(const std::string&,std::function<void()>,std::function<void()>,const std::optional<std::vector<int>>&)> resourceLoader;
   std::function<bool()> resourceExists;
   std::function<void()> resourceRetry;
@@ -327,7 +331,7 @@ struct Battler {
   std::array<int, 8> buffs{}, buffTurns{}, paramPlus{};
   ActionResult result;
   std::vector<std::shared_ptr<RuntimeAction>> actions;
-  std::string actionState = "undecided";
+  std::string actionState;
   int actionInputIndex = 0;
   bool selected = false, damagePopup = false;
   int requestedMotion = -1, requestedWeapon = 0;
@@ -587,7 +591,7 @@ class Session {
   std::shared_ptr<RuntimeInterpreter> runtimeInterpreter(int eventId) const;
   std::shared_ptr<RuntimeInterpreter> createRuntimeInterpreter(int depth);
   std::shared_ptr<RuntimeCommonEvent> runtimeCommonEvent(int id);
-  std::vector<std::shared_ptr<RuntimeCommonEvent>> runtimeCommonEventObjects();
+  std::vector<std::shared_ptr<RuntimeCommonEvent>> runtimeCommonEventObjects(bool initialize = true);
   void setRuntimeCommonInterpreter(const std::shared_ptr<RuntimeCommonEvent>& event, const std::shared_ptr<RuntimeInterpreter>& interpreter);
   void refreshRuntimeCommonEvent(const std::shared_ptr<RuntimeCommonEvent>& event, const std::string& method);
   std::shared_ptr<RuntimeInterpreter> runtimeChildInterpreter(const std::shared_ptr<RuntimeInterpreter>& object);
@@ -844,6 +848,8 @@ class Session {
   Interpreter interpreter_;
   std::map<int, std::shared_ptr<Interpreter>> commonInterpreters_;
   std::map<int, std::shared_ptr<RuntimeCommonEvent>> runtimeCommonEvents_;
+  std::vector<std::shared_ptr<RuntimeCommonEvent>> mapCommonEvents_;
+  bool mapCommonEventsReady_ = false;
   Message message_;
   std::optional<Message> closingMessage_;
   std::function<std::string(const std::string&, bool)> messageTextLayoutResolver_;

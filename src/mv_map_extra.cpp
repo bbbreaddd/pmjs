@@ -99,7 +99,7 @@ int MapMechanics::terrainTag(const Session& session, int x, int y) {
   const auto& flags = session.database()["tilesets"][session.mapState_.tilesetId]["flags"];
   for (int z = 3; z >= 0; --z) {
     const int tileId = getTileId(session, x, y, z);
-    if (tileId >= 0 && tileId < static_cast<int>(flags.array().size())) {
+    if (tileId >= 0 && tileId < static_cast<int>(flags.arrayLength())) {
       const int tag = flags[tileId].integer() >> 12;
       if (tag > 0) return tag;
     }
@@ -189,7 +189,7 @@ void Session::updateFollowers() {
 }
 void Session::checkEventTouch(Event& event, int x, int y) {
   if (interpreter_.running || event.page < 0 || event.trigger != 2 || event.priority != 1 || event.character.jumpCount > 0) return;
-  if (player_.x != x || player_.y != y || map()["events"][event.id]["pages"][event.page]["list"].array().size() <= 1) return;
+  if (player_.x != x || player_.y != y || map()["events"][event.id]["pages"][event.page]["list"].arrayLength() <= 1) return;
   if (!event.locked) {
     event.prelockDirection = event.character.direction;
     const int sx = static_cast<int>(deltaMapX(player_.x, event.character.x)), sy = static_cast<int>(deltaMapY(player_.y, event.character.y));

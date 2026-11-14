@@ -69,6 +69,10 @@ const Value::Array& Value::array() const {
   if (reader) return reader->array();
   const auto* items = std::get_if<Array>(&data); return items ? *items : emptyArray;
 }
+std::size_t Value::arrayLength() const {
+  if (reader) return reader->arrayLength();
+  const auto* items = std::get_if<Array>(&data); return items ? items->size() : 0;
+}
 double Value::number(double fallback) const { const auto* v = std::get_if<double>(&data); return v ? *v : fallback; }
 int Value::integer(int fallback) const {
   const auto v = number(fallback);
@@ -235,7 +239,7 @@ void Session::transfer(int id, int x, int y, int direction) {
 
 void Session::initializeMap() {
   detachRuntimeEntities(false);
-  mapId_ = 0; mapState_ = {}; events_.clear(); commonInterpreters_.clear(); runtimeCommonEvents_.clear();
+  mapId_ = 0; mapState_ = {}; events_.clear(); commonInterpreters_.clear(); runtimeCommonEvents_.clear(); mapCommonEvents_.clear(); mapCommonEventsReady_ = false;
   interpreter_ = {}; destination_.reset(); mapTouchCount_ = 0;
   savedCamera_.reset(); cameraTarget_.reset();
   refreshNeeded_ = false;
@@ -253,9 +257,9 @@ void Session::setupMap(int id) {
   mapId_ = id;
   detachRuntimeEntities(false);
   if (cameraTarget_) cameraTarget_ = runtimeCharacter(-1);
-  setupMapState(); commonInterpreters_.clear(); runtimeCommonEvents_.clear();
+  setupMapState(); commonInterpreters_.clear(); runtimeCommonEvents_.clear(); mapCommonEvents_.clear(); mapCommonEventsReady_ = false;
   events_.clear();
-  events_.reserve(map()["events"].array().size());
+  events_.reserve(map()["events"].arrayLength());
   for (const auto& data : map()["events"].array()) {
     if (data.null()) continue;
     Event event; event.id = data["id"].integer();
@@ -362,7 +366,7 @@ bool Session::tilePassage(int x, int y, int bit) const {
   if (!tiled.null()) {
     const int width = tiled["width"].integer(), height = tiled["height"].integer();
     if (x < 0 || y < 0 || x >= width || y >= height) return false;
-    if (tiled["passage"].array().size() != static_cast<std::size_t>(width * height))
+    if (tiled["passage"].arrayLength() != static_cast<std::size_t>(width * height))
       throw std::runtime_error("tile collision data is unavailable");
     return !(tiled["passage"][y * width + x].integer() & bit);
   }
@@ -602,7 +606,7 @@ void Session::processRouteCommand(Character& c, const Value& instruction) {
     }
     case 27: case 28: {
       const int id = parameters[0].integer();
-      if (id > 0 && id < static_cast<int>(database_["system"]["switches"].array().size())) {
+      if (id > 0 && id < static_cast<int>(database_["system"]["switches"].arrayLength())) {
         switches_[id] = code == 27; refreshNeeded_ = true;
       }
       break;
@@ -643,7 +647,7 @@ void Session::startEvent(int x, int y, bool action) {
         ((action && e.trigger == 0) || (!action && (e.trigger == 1 || e.trigger == 2)))) {
       const bool samePosition = x == player_.x && y == player_.y;
       if (samePosition == (e.priority == 1)) continue;
-      if (map()["events"][e.id]["pages"][e.page]["list"].array().size() <= 1) continue;
+      if (map()["events"][e.id]["pages"][e.page]["list"].arrayLength() <= 1) continue;
       if (!e.locked && e.trigger <= 2) {
         e.locked = true;
         e.prelockDirection = e.character.direction;
@@ -675,7 +679,7 @@ const Value& Session::variable(int id) const {
 }
 
 void Session::operateVariable(int id, int operation, const Value& operand) {
-  if (id <= 0 || (!database_["system"]["variables"].null() && id >= static_cast<int>(database_["system"]["variables"].array().size()))) return;
+  if (id <= 0 || (!database_["system"]["variables"].null() && id >= static_cast<int>(database_["system"]["variables"].arrayLength()))) return;
   Value result;
   const auto& old = variable(id);
   if (operation == 0) result = operand;
@@ -1183,11 +1187,14 @@ bool Session::setupStartingMapEvent() {
   if (!interpreter_.running) {
     const auto it = std::find_if(events_.begin(), events_.end(), [&](const Event& event) {
       return event.page >= 0 && (event.starting || event.trigger == 3) &&
-        map()["events"][event.id]["pages"][event.page]["list"].array().size() > 1;
+        map()["events"][event.id]["pages"][event.page]["list"].arrayLength() > 1;
     });
     if (it != events_.end()) {
       it->starting = false; startInterpreter(*it);
     } else {
+      if (runtimeHooks_ && runtimeHooks_->setupAutorunCommonEvent) {
+        if (const auto handled = runtimeHooks_->setupAutorunCommonEvent()) return *handled;
+      }
       const Value* automatic = nullptr;
       for (const auto& event : database_["commonEvents"].array()) {
         if (event.null() || event["trigger"].integer() != 1) continue;

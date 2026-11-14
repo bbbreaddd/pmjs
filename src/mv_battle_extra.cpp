@@ -462,7 +462,7 @@ bool BattleMechanics::isDualWield(const Session& session, const Battler& actor) 
 }
 
 std::vector<int> BattleMechanics::equipSlots(const Session& session, const Battler& actor) {
-  const auto size = session.database()["system"]["equipTypes"].array().size();
+  const auto size = session.database()["system"]["equipTypes"].arrayLength();
   std::vector<int> slots(size > 0 ? size - 1 : 0);
   for (std::size_t index = 0; index < slots.size(); ++index) slots[index] = static_cast<int>(index) + 1;
   if (slots.size() >= 2 && isDualWield(session, actor)) slots[1] = 1;
@@ -544,7 +544,7 @@ void BattleMechanics::optimizeEquipments(Session& session, Battler& actor) {
     const int kind = session.equipSlotType(actor,static_cast<int>(slot)) == 1 ? 1 : 2;
     const auto& table = session.database()[kind == 1 ? "weapons" : "armors"];
     int bestId = 0, bestPerformance = -1000;
-    for (std::size_t id = 1; id < table.array().size(); ++id) {
+    for (std::size_t id = 1; id < table.arrayLength(); ++id) {
       const auto found = session.inventory_.find(static_cast<int>(id)+kind*100000);
       const auto& item = table[static_cast<int>(id)];
       if (found == session.inventory_.end() || found->second <= 0 || !session.canEquip(actor,item,static_cast<int>(slot))) continue;

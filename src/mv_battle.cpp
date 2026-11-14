@@ -245,11 +245,12 @@ void Session::startBattle(int troop, bool canEscape, bool canLose, bool event) {
   battleLog_->bindLines(battle_.log);
   if (!runtimeHooks_ || !runtimeHooks_->gameDataMutation || !runtimeHooks_->gameDataMutation("troop", "setup", {troop})) setupTroopBase(troop);
   if (!event) { battle_.preemptive = random() < BattleMechanics::ratePreemptive(*this); battle_.surprise = random() < BattleMechanics::rateSurprise(*this) && !battle_.preemptive; }
+  for (auto& enemy : battle_.enemies) enemy.actionState = "undecided";
   double actorsAgi = 0, enemiesAgi = 0;
   for (int id : party_) {
     auto& value = actors_.at(id);
     if (!hasSpecialFlag(value, 3)) value.tp = randomInt(25);
-    value.escaped = false; value.requestedMotion = -1; value.requestedWeapon = 0;
+    value.escaped = false; value.actionState = "undecided"; value.requestedMotion = -1; value.requestedWeapon = 0;
   }
   for (std::size_t index = 0; index < battleMemberCount(); ++index) actorsAgi += parameter(actors_.at(party_[index]), 6);
   for (auto& value : battle_.enemies) { if (!hasSpecialFlag(value, 3)) value.tp = randomInt(25); enemiesAgi += parameter(value, 6); }

@@ -72,6 +72,7 @@ test('reference arguments and constructor aliases preserve the original script o
   assert.equal(calls[1], nativeTarget); assert.equal(holder._target, target);
   assert.throws(() => holder.setTarget({}), /object argument is not bound/);
   assert.equal(calls.length, 2); assert.equal(holder._target, target);
+  holder.setTarget(undefined); assert.equal(calls[2], null); assert.equal(holder._target, undefined);
 });
 
 

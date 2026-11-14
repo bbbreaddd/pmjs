@@ -158,6 +158,7 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       actor.setBattlerImage('Actor');
       const sprite = new scope.Sprite_Actor(actor);
       assert.equal(sprite._actor, actor); assert.equal(sprite._battler, actor);
+      sprite.alpha = 0.5; assert.equal(sprite.opacity, 127.5); sprite.opacity = 300; assert.equal(sprite.alpha, 1);
       sprite.updateBitmap();
       for (let i = 0; i < 100 && !sprite._mainSprite.bitmap.isReady(); ++i) {
         native.beginFrame(); engine.present(session); native.renderFrame(); scope.ImageManager.update();
@@ -173,6 +174,23 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       sprite.updateShadow(); assert.equal(sprite._shadowSprite.visible, true);
       sprite.createWeaponSprite(); sprite.createStateSprite(); assert.equal(sprite.children.includes(sprite._weaponSprite), true);
     } finally { actor.setBattlerImage(originalName); actor.deselect(); }
+  });
+  await t.test('battleback aliases supply the bitmap in the native spriteset graph', () => {
+    const Type = scope.Spriteset_Battle, originalName = Type.prototype.battleback1Name;
+    const load1 = scope.ImageManager.loadBattleback1, load2 = scope.ImageManager.loadBattleback2;
+    const first = new scope.Bitmap(32, 32), second = new scope.Bitmap(32, 32), requested = [];
+    Type.prototype.battleback1Name = function() { return 'Custom'; };
+    scope.ImageManager.loadBattleback1 = name => { requested.push(name); return first; };
+    scope.ImageManager.loadBattleback2 = () => second;
+    try {
+      const spriteset = new Type();
+      assert.equal(spriteset._back1Sprite.bitmap, first); assert.equal(spriteset._back2Sprite.bitmap, second);
+      assert.ok(requested.includes('Custom')); assert.equal(spriteset.battleback1Bitmap(), first);
+      assert.equal(spriteset.battlerSprites().length, scope.$gameTroop.members().length + scope.$gameParty.maxBattleMembers());
+      assert.equal(spriteset._battleField.children.includes(spriteset._back1Sprite), true);
+    } finally {
+      Type.prototype.battleback1Name = originalName; scope.ImageManager.loadBattleback1 = load1; scope.ImageManager.loadBattleback2 = load2;
+    }
   });
   await t.test('animation timing applies flashes and restores a hidden native target', () => {
     const parent = new scope.Sprite(), target = new scope.Sprite(new scope.Bitmap(20, 20)), animation = new scope.Sprite_Animation();
@@ -642,6 +660,32 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       sprite._colorTone[0]=40;assert.ok(tintCalls>1);assert.deepEqual(capture(),[255,0,255,255]);
       assert.equal(sprite.bitmap,bitmap);
     } finally {engine.dispose(textureSession);}
+  });
+  await t.test('map tilesets compare authored identity across native calls and reload replacements', () => {
+    const data = fixture([]);
+    data.maps[1].events = [null];
+    data.tilesets[1] = { flags: [0], tilesetNames: [] };
+    const mapSession = engine.create(data);
+    try {
+      engine.databaseInvoke(mapSession, 'publish', { tilesets: data.tilesets });
+      engine.attach(mapSession, { width: 32, height: 32, fontFile: 'font.ttf' });
+      const r = createScriptRuntime(engine, mapSession, { native }); r.installScenes();
+      r.scope.$dataMap = data.maps[1]; r.scope.$dataTilesets = data.tilesets;
+      engine.newGame(mapSession); engine.playerTransfer(mapSession, 'perform');
+      const set = new r.scope.Spriteset_Map();
+      const original = set.loadTileset; let loads = 0;
+      set.loadTileset = function() { ++loads; return original.call(this); };
+      for (let i = 0; i < 5; ++i) set.updateTileset();
+      assert.equal(loads, 0);
+      assert.equal(set._tileset, data.tilesets[1]);
+      data.tilesets[1] = { flags: [1], tilesetNames: [] };
+      set.updateTileset(); assert.equal(loads, 1);
+      assert.equal(set._tileset, data.tilesets[1]);
+      set.updateTileset(); assert.equal(loads, 1);
+      data.tilesets[1].flags[0] = 2;
+      set.updateTileset(); assert.equal(loads, 1, 'in-place edits preserve stock object identity');
+      set.loadTileset(); assert.equal(loads, 2, 'authored explicit reloads still execute');
+    } finally { engine.dispose(mapSession); }
   });
   await t.test('engine tilemap mutations control native map data, origin, dimensions and bitmap ownership', async () => {
     const mapData=fixture([]);mapData.system.startX=0;mapData.system.startY=0;mapData.maps[1].width=2;mapData.maps[1].height=1;
@@ -1867,6 +1911,11 @@ test('native scenes dispatch original methods and retain transferred sprite reso
         seen.setBattler(enemy); assert.equal(seen._homeX, 16); assert.equal(seen._homeY, 24);
         assert.deepEqual(capture(), [255, 0, 0, 255]);
         seen.startEffect('whiten'); assert.equal(seen.isEffecting(), true); assert.equal(seen._effectDuration, 16);
+        seen._effectDuration = 19; seen.updateBossCollapse(); assert.equal(seen._shake, 2);
+        assert.ok(seen.opacity < 255); seen.updateInstantCollapse();
+        assert.deepEqual(capture(), [0, 0, 0, 255], 'public collapse methods must affect native enemy drawing');
+        seen.startEffect('whiten');
+
         assert.throws(() => original.call(seen, scope.$gameActors.actor(1)), /requires an enemy battler/);
         assert.equal(seen._enemy, enemy, 'rejected native references must preserve aliases');
         const foreign = engine.create(fixture([]));
@@ -1941,6 +1990,13 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       for (let i = 0; i < 80; ++i) engine.step(balloonSession);
       assert.equal(retained.isPlaying(), false); assert.equal(retained.marker, marker);
       assert.equal(greenCount(), 0, 'finished effects must leave the native renderer');
+      const character = new runtime.scope.Sprite_Character(runtime.scope.$gamePlayer), parent = new runtime.scope.Sprite();
+      parent.addChild(character); runtime.scope.$gamePlayer.requestBalloon(2); character.setupBalloon();
+      const associated = character._balloonSprite;
+      assert.equal(associated, observed); assert.equal(associated.parent, parent);
+      character.endBalloon(); assert.equal(character._balloonSprite, null); assert.equal(associated.parent, null);
+      assert.equal(associated.isPlaying(), false); assert.equal(greenCount(), 0);
+
       retained.setup(2); retained.update(); assert.equal(retained._duration, 75);
       Balloon.prototype.updateFrame = function() { throw new Error('balloon override failed'); };
       assert.throws(() => retained.update(), /balloon override failed/);

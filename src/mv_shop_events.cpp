@@ -11,7 +11,7 @@ namespace {
 int itemBasePrice(const Value& database, int kind, int id) {
   if (kind < 0 || kind > 2) return 0;
   const auto& table = database[kind == 0 ? "items" : kind == 1 ? "weapons" : "armors"];
-  if (id < 0 || id >= static_cast<int>(table.array().size()) || table[id].null()) return 0;
+  if (id < 0 || id >= static_cast<int>(table.arrayLength()) || table[id].null()) return 0;
   return table[id]["price"].integer(0);
 }
 }  // namespace
@@ -131,7 +131,7 @@ bool Session::shopEventCommand(const EventCommand& entry, Interpreter& context) 
 
   const auto& p = entry.parameters;
   SceneManager::pushScene(*this, Scene::shop);
-  ui_.shopPurchaseOnly = p.array().size() > 4 ? p[4].boolean() : false;
+  ui_.shopPurchaseOnly = p.arrayLength() > 4 ? p[4].boolean() : false;
   ui_.shopGoods.clear();
 
   auto addGood = [&](const Value::Array& params) {

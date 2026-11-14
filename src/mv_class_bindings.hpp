@@ -74,7 +74,7 @@ template<class T> T bindingArgument(const Value& value) {
   else if constexpr (std::is_floating_point_v<T>) return static_cast<T>(value.number());
   else if constexpr (std::is_same_v<T, std::string>) return value.text();
   else if constexpr (std::is_same_v<T, std::vector<std::uint8_t>>) {
-    T result;result.reserve(value.array().size());for(const auto& item:value.array())result.push_back(static_cast<std::uint8_t>(item.integer()));return result;
+    T result;result.reserve(value.arrayLength());for(const auto& item:value.array())result.push_back(static_cast<std::uint8_t>(item.integer()));return result;
   }
   else if constexpr (std::is_same_v<T,core::AudioResponse>) {
     return {bindingArgument<std::vector<std::uint8_t>>(value["response"]),value["responseURL"].text(),value["status"].integer(200)};
@@ -94,7 +94,10 @@ template<class Result, class Function, class... Args> Value invokeBindingStatic(
 }
 template<class Get> BindingField bindingField(std::string name, Get get) {
   using T = std::remove_reference_t<std::invoke_result_t<Get, RuntimeBoundObject&>>;
-  return {std::move(name), [get](RuntimeBoundObject& object) { return Value(get(object)); },
+  return {std::move(name), [get](RuntimeBoundObject& object) {
+    if constexpr (std::is_same_v<T, Value>) return get(object).reference();
+    else return Value(get(object));
+  },
     [get](RuntimeBoundObject& object, const Value& value) { get(object) = bindingArgument<T>(value); }};
 }
 template<class Get> BindingField bindingPoint(std::string name, Get get) {

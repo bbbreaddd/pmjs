@@ -482,7 +482,7 @@ void WeatherSystem::update(int screenWidth, int screenHeight) {
 }
 
 int Sprite_Animation::durationFor(const Value& animation, int rate) {
-  return static_cast<int>(animation["frames"].array().size()) * std::max(1, rate) + 1;
+  return static_cast<int>(animation["frames"].arrayLength()) * std::max(1, rate) + 1;
 }
 
 int Sprite_Animation::frameAtAge(const Value& animation, std::uint64_t age, int delay, int rate) {
@@ -527,7 +527,7 @@ void Sprite_Animation::update() {
 int Sprite_Animation::currentFrameIndex() const {
   if (!animation) return -1;
   const int speed = std::max(1, rate);
-  return static_cast<int>((*animation)["frames"].array().size()) - (duration + speed - 1) / speed;
+  return static_cast<int>((*animation)["frames"].arrayLength()) - (duration + speed - 1) / speed;
 }
 
 std::vector<AnimationTiming> Sprite_Animation::timingsAtFrame(int frameIndex) const {
@@ -536,7 +536,7 @@ std::vector<AnimationTiming> Sprite_Animation::timingsAtFrame(int frameIndex) co
 
 std::vector<AnimationTiming> Sprite_Animation::timings(const Value& animation, int frame, int rate) {
   std::vector<AnimationTiming> result;
-  if (frame < 0 || frame >= static_cast<int>(animation["frames"].array().size())) return result;
+  if (frame < 0 || frame >= static_cast<int>(animation["frames"].arrayLength())) return result;
   for (const auto& entry : animation["timings"].array()) if (entry["frame"].integer() == frame) {
     AnimationTiming timing;
     timing.frame = frame;
@@ -551,7 +551,7 @@ std::vector<AnimationTiming> Sprite_Animation::timings(const Value& animation, i
 
 std::vector<Sprite_Animation::Cell> Sprite_Animation::cells(const Value& animation, int frame, bool mirror) {
   std::vector<Cell> result;
-  if (frame < 0 || frame >= static_cast<int>(animation["frames"].array().size())) return result;
+  if (frame < 0 || frame >= static_cast<int>(animation["frames"].arrayLength())) return result;
   const auto& data = animation["frames"][frame].array();
   for (std::size_t index = 0; index < std::min<std::size_t>(16, data.size()); ++index) {
     const auto& entry = data[index];

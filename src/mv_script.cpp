@@ -402,7 +402,7 @@ Value Session::invokeGameDataBase(const std::string& kind, const std::string& me
   if (kind == "selfSwitches") {
     if (method == "clear") { selfSwitches_.clear(); return Value::undefined(); }
     if (method == "onChange") { refreshNeeded_ = true; return Value::undefined(); }
-    if (arguments.empty() || arguments[0].array().size() != 3) throw std::invalid_argument("self switch key requires map, event and letter");
+    if (arguments.empty() || arguments[0].arrayLength() != 3) throw std::invalid_argument("self switch key requires map, event and letter");
     const auto key = selfKey(arguments[0][0].integer(), arguments[0][1].integer(), arguments[0][2].text());
     if (method == "value") { const auto found = selfSwitches_.find(key); return found != selfSwitches_.end() && found->second; }
     if (method != "setValue" || arguments.size() != 2) throw std::invalid_argument("self switch operation is not bound: " + method);
@@ -479,7 +479,7 @@ Value Session::invokeGameDataBase(const std::string& kind, const std::string& me
   }
   if (method != "setValue" || arguments.size() != 2) throw std::invalid_argument("game data operation is not bound: " + method);
   const auto& names = database_["system"][kind];
-  if (id <= 0 || (!names.null() && id >= static_cast<int>(names.array().size()))) return Value::undefined();
+  if (id <= 0 || (!names.null() && id >= static_cast<int>(names.arrayLength()))) return Value::undefined();
   auto value = arguments[1];
   if (kind == "variables") {
     if (const auto* number = std::get_if<double>(&value.data)) value = std::floor(*number);

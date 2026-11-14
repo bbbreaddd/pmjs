@@ -88,7 +88,7 @@ function installClassBindings(scope, bindings, session, options = {}) {
             return {response:Array.from(bytes),responseURL:value.responseURL||'',status:value.status??200};
           }
           if (method.argumentKinds?.[index] !== 'object') return value;
-          if (value === null) return null;
+          if (value == null) return null;
           const handle = models.get(value) || options.unwrap?.(value);
           if (!handle) throw new TypeError('Native object argument is not bound');
           return handle;

@@ -1835,18 +1835,18 @@ int Window_DebugRange::topId() const {
 }
 int Window_DebugRange::pageCount(int count) { return (std::max(0,count)+9)/10; }
 int Window_DebugRange::itemCount(const Session& session) {
-  return pageCount(static_cast<int>(session.database()["system"]["switches"].array().size())-1)+pageCount(static_cast<int>(session.database()["system"]["variables"].array().size())-1);
+  return pageCount(static_cast<int>(session.database()["system"]["switches"].arrayLength())-1)+pageCount(static_cast<int>(session.database()["system"]["variables"].arrayLength())-1);
 }
 std::string Window_DebugRange::modeFor(int index, int switchCount) { return index < pageCount(switchCount) ? "switch" : "variable"; }
 std::string Window_DebugRange::modeFor(const Session& session, int index) {
-  return modeFor(index,static_cast<int>(session.database()["system"]["switches"].array().size())-1);
+  return modeFor(index,static_cast<int>(session.database()["system"]["switches"].arrayLength())-1);
 }
 int Window_DebugRange::topIdFor(int index, int switchCount) {
   const int pages = pageCount(switchCount);
   return (index < pages ? index : index-pages)*10+1;
 }
 int Window_DebugRange::topIdFor(const Session& session, int index) {
-  return topIdFor(index,static_cast<int>(session.database()["system"]["switches"].array().size())-1);
+  return topIdFor(index,static_cast<int>(session.database()["system"]["switches"].arrayLength())-1);
 }
 std::string Window_DebugRange::labelFor(const Session& session, int index) {
   const int first = topIdFor(session,index);

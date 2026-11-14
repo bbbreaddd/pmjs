@@ -138,7 +138,7 @@ Value Session::runtimeCharacterCommand(const std::shared_ptr<RuntimeCharacter>& 
     if (found == events_.end()) throw std::runtime_error("event is no longer attached to the current map");
     if (!arguments.empty()) {
       const double index = arguments[0].number(-3);
-      const auto count = map()["events"][object->id]["pages"].array().size();
+      const auto count = map()["events"][object->id]["pages"].arrayLength();
       if (!std::isfinite(index) || index != std::floor(index) || index < -2 || index >= static_cast<double>(count))
         throw std::invalid_argument("event page index is outside its page range");
       found->page = static_cast<int>(index);

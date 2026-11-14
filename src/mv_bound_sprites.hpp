@@ -281,11 +281,11 @@ class NativeMapSpriteset : public NativeSpriteset {
     tilesetBitmaps.clear();
     if(!data.null()) {
       tilesetSource=&data["tilesets"];
-      tileset=data["tilesets"];
+      tileset=data["tilesets"].reference();
       for(const auto& sheet:tileset.array())tilesetBitmaps.push_back(modelBitmap("loadParserTileset",{sheet["image"]}));
     } else {
       tilesetSource=&session.database()["tilesets"][session.mapState().tilesetId];
-      tileset=session.database()["tilesets"][session.mapState().tilesetId];
+      tileset=session.database()["tilesets"][session.mapState().tilesetId].reference();
       for(const auto& name:tileset["tilesetNames"].array())tilesetBitmaps.push_back(modelBitmap("loadTileset",{name}));
     }
     if(auto layer=std::dynamic_pointer_cast<core::Tilemap>(tilemap)) {
@@ -327,7 +327,9 @@ class NativeMapSpriteset : public NativeSpriteset {
   virtual void updateTileset() {
     const auto& session=modelSession();const auto& data=session.database()["tiledMaps"][std::to_string(session.mapId())];
     const auto& current=data.null()?session.database()["tilesets"][session.mapState().tilesetId]:data["tilesets"];
-    if(&current!=tilesetSource)loadTileset();
+    const bool same = current.reader && tileset.reader ? current.reader->sameSource(*tileset.reader) :
+      !current.reader && !tileset.reader && &current == tilesetSource;
+    if(!same)loadTileset();
   }
   virtual void updateParallax() {
     if(!parallax)return;const auto& state=modelSession().mapState();

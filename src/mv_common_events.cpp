@@ -11,15 +11,15 @@ std::shared_ptr<RuntimeCommonEvent> Session::runtimeCommonEvent(int id) {
   runtimeCommonEvents_[id] = event;
   return event;
 }
-std::vector<std::shared_ptr<RuntimeCommonEvent>> Session::runtimeCommonEventObjects() {
-  std::vector<std::shared_ptr<RuntimeCommonEvent>> events;
-  if (mapId_ <= 0) return events;
-  for (const auto& source : database_["commonEvents"].array()) if (!source.null() && source["trigger"].integer() == 2) {
-    const auto event = runtimeCommonEvent(source["id"].integer());
-    if (!event->initialized) refreshRuntimeCommonEvent(event, "initialize");
-    events.push_back(event);
+std::vector<std::shared_ptr<RuntimeCommonEvent>> Session::runtimeCommonEventObjects(bool initialize) {
+  if (mapId_ <= 0) return {};
+  if (!mapCommonEventsReady_) {
+    mapCommonEventsReady_ = true;
+    for (const auto& source : database_["commonEvents"].array()) if (!source.null() && source["trigger"].integer() == 2)
+      mapCommonEvents_.push_back(runtimeCommonEvent(source["id"].integer()));
   }
-  return events;
+  if (initialize) for (const auto& event : mapCommonEvents_) if (!event->initialized) refreshRuntimeCommonEvent(event, "initialize");
+  return mapCommonEvents_;
 }
 void Session::setRuntimeCommonInterpreter(const std::shared_ptr<RuntimeCommonEvent>& event, const std::shared_ptr<RuntimeInterpreter>& interpreter) {
   std::shared_ptr<Interpreter> context;
@@ -45,9 +45,7 @@ void Session::refreshRuntimeCommonEvent(const std::shared_ptr<RuntimeCommonEvent
   } else setRuntimeCommonInterpreter(event, {});
 }
 void Session::refreshCommonEvents() {
-  for (const auto& source : database_["commonEvents"].array()) {
-    if (source.null() || source["trigger"].integer() != 2) continue;
-    const auto event = runtimeCommonEvent(source["id"].integer());
+  for (const auto& event : runtimeCommonEventObjects(false)) {
     refreshRuntimeCommonEvent(event, event->initialized ? "refresh" : "initialize");
   }
 }

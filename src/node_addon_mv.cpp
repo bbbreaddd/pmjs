@@ -228,6 +228,13 @@ struct DatabaseReader : mv::ValueReader {
     if (!result) throw std::runtime_error("database object is unavailable");
     return result;
   }
+  bool sameSource(const mv::ValueReader& other) const override {
+    const auto* source = dynamic_cast<const DatabaseReader*>(&other);
+    if (!source || source->env != env) return false;
+    bool same = false;
+    check(env, napi_strict_equals(env, object(), source->object(), &same), "cannot compare database sources");
+    return same;
+  }
   const mv::Value* retain(const std::string& key, napi_value value) const {
     auto owner = context();
     mv::Value current;
@@ -263,6 +270,12 @@ struct DatabaseReader : mv::ValueReader {
     return retain(key, value);
   }
   const mv::Value* element(std::size_t index) const override { return field(std::to_string(index)); }
+  std::size_t arrayLength() const override {
+    if (!isArray) return 0;
+    std::uint32_t length;
+    check(env, napi_get_array_length(env, object(), &length), "cannot read database length");
+    return length;
+  }
   const mv::Value::Array& array() const override {
     static const mv::Value::Array empty;
     if (!isArray) return empty;
@@ -425,7 +438,7 @@ void invokeTouchHandler(EngineSession& owner, const std::string& method, const m
   else if (method == "_onRightButtonDown") event.button = 2;
   event.deltaX = source["deltaX"].number(); event.deltaY = source["deltaY"].number();
   event.primary = source["isPrimary"].boolean();
-  event.touchCount = static_cast<int>(source["touches"].array().size());
+  event.touchCount = static_cast<int>(source["touches"].arrayLength());
   if (method == "_onPointerDown") event.touchCount = source["pointerType"].text() == "touch" ? 1 : 0;
   if (event.type == "touchstart" || event.type == "touchmove" || event.type == "touchend") {
     for (const auto& point : source["changedTouches"].array()) {
@@ -708,7 +721,7 @@ napi_value connectRuntime(napi_env env, napi_callback_info info) try {
     napi_valuetype type; check(owner.env, napi_typeof(owner.env, result, &type), "cannot inspect character position result");
     if (type == napi_undefined || type == napi_null) return {};
     const auto point = readValue(owner.env, result);
-    if (point.array().size() != 2) throw std::invalid_argument("character position override must return two coordinates");
+    if (point.arrayLength() != 2) throw std::invalid_argument("character position override must return two coordinates");
     const double x = point[0].number(), y = point[1].number();
     if (!std::isfinite(x) || !std::isfinite(y)) throw std::invalid_argument("character position override must return finite coordinates");
     return std::array<double, 2>{x, y};
@@ -746,6 +759,11 @@ napi_value connectRuntime(napi_env env, napi_callback_info info) try {
   hooks->requestImages = [&owner](const auto& list) { callRuntime(owner, "requestImages", {runtimeHandle(owner, list)}); };
   hooks->gameDataMutation = [&owner](const std::string& kind, const std::string& method, const mv::Value::Array& args) {
     return asBoolean(owner.env, callRuntime(owner, "gameDataMutation", {string(owner.env, kind), string(owner.env, method), writeValue(owner.env, args)}));
+  };
+  hooks->setupAutorunCommonEvent = [&owner]() -> std::optional<bool> {
+    const auto result = callRuntime(owner, "setupAutorunCommonEvent", {});
+    napi_valuetype type; check(owner.env, napi_typeof(owner.env, result, &type), "cannot inspect autorun query result");
+    return type == napi_undefined ? std::optional<bool>{} : std::optional<bool>{asBoolean(owner.env, result)};
   };
   hooks->resourceLoader=[&owner](const std::string& url,std::function<void()> retry,std::function<void()> resign,const std::optional<std::vector<int>>& intervals)->std::optional<std::function<void()>> {
     mv::Value::Array values;if(intervals)for(auto interval:*intervals)values.emplace_back(interval);
@@ -1756,7 +1774,9 @@ const std::vector<mv::ClassBinding>& bindingClasses() {
       BindingField{"_motionIndex", [battler](RuntimeBoundObject& object) { return Value(static_cast<int>(battler(object).motion)); },
         [battler](RuntimeBoundObject& object, const Value& value) { const int index = value.integer(); if (index < 0 || index > 17) throw std::invalid_argument("invalid battler motion"); battler(object).motion = static_cast<BattlerMotion>(index); }},
       BindingField{"opacity", [battler](RuntimeBoundObject& object) { return Value(battler(object).opacity * 255); },
-        [battlerObject](RuntimeBoundObject& object, const Value& value) { auto& owner = battlerObject(object); owner.state().opacity = static_cast<float>(value.number() / 255); owner.drawable->setOpacity(value.number()); }}
+        [battlerObject](RuntimeBoundObject& object, const Value& value) { auto& owner = battlerObject(object); const double opacity = std::clamp(value.number(), 0.0, 255.0); owner.state().opacity = static_cast<float>(opacity / 255); owner.drawable->setOpacity(opacity); }},
+      BindingField{"alpha", [battler](RuntimeBoundObject& object) { return Value(battler(object).opacity); },
+        [battlerObject](RuntimeBoundObject& object, const Value& value) { auto& owner = battlerObject(object); owner.state().opacity = static_cast<float>(value.number()); owner.drawable->alpha = value.number(); }}
     }, {
       setBattler,
       bindingMethod("setHome", battler, &Sprite_Battler::setHome),
@@ -1893,7 +1913,7 @@ napi_value invokeBoundStatic(napi_env env,napi_callback_info info) try {
   if (!binding) throw std::invalid_argument("native class is not bound");
   const auto name=asString(env,args[1]); const auto values=readValue(env,args[2]);
   for (const auto& method:binding->statics) if (method.name==name) {
-    if (!std::holds_alternative<mv::Value::Array>(values.data) || values.array().size()!=method.defaults.size()) throw std::invalid_argument("static argument count differs");
+    if (!std::holds_alternative<mv::Value::Array>(values.data) || values.arrayLength()!=method.defaults.size()) throw std::invalid_argument("static argument count differs");
     return writeValue(env,method.invoke(values.array()));
   }
   throw std::invalid_argument("native static method is not bound: "+name);
@@ -1977,7 +1997,7 @@ napi_value battlerArray(napi_env env, napi_callback_info info) try {
     if (args.size() == 3) {
       const auto value = readValue(env, args[2]);
       if (!std::holds_alternative<mv::Value::Array>(value.data)) throw std::invalid_argument("battler collection requires an array");
-      if (fixed && value.array().size() != data.size()) throw std::invalid_argument("battler parameter array must contain eight entries");
+      if (fixed && value.arrayLength() != data.size()) throw std::invalid_argument("battler parameter array must contain eight entries");
       std::vector<int> replacement;
       for (const auto& item : value.array()) replacement.push_back(item.integer());
       if constexpr (requires { data.resize(replacement.size()); }) data.resize(replacement.size());

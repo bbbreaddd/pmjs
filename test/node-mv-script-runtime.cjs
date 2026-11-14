@@ -1167,6 +1167,38 @@ test('live bootstrap database preserves authored objects through native initiali
   assert.equal(api.databaseInvoke(session, 'readMap', 1), database.maps[1]);
 });
 
+test('live variable and switch bounds read lengths without visiting array elements', t => {
+  const data = fixture([]), names = Array(2001).fill('');
+  Object.defineProperty(names, 1000, { configurable: true, get() { throw new Error('name element must not be visited'); } });
+  const session = api.create({}); t.after(() => api.dispose(session));
+  api.databaseInvoke(session, 'publish', { ...data, system: { ...data.system, variables: names, switches: names } });
+  const { scope } = createScriptRuntime(api, session);
+  scope.$gameVariables.setValue(1, 4); scope.$gameSwitches.setValue(1, true);
+  assert.equal(scope.$gameVariables.value(1), 4); assert.equal(scope.$gameSwitches.value(1), true);
+  names.length = 1;
+  scope.$gameVariables.setValue(1, 9); scope.$gameSwitches.setValue(1, false);
+  assert.equal(scope.$gameVariables.value(1), 4); assert.equal(scope.$gameSwitches.value(1), true);
+  names.length = 3;
+  scope.$gameVariables.setValue(1, 9); scope.$gameSwitches.setValue(1, false);
+  assert.equal(scope.$gameVariables.value(1), 9); assert.equal(scope.$gameSwitches.value(1), false);
+});
+
+test('Tiled collision validates live passage length without reading unrelated cells', t => {
+  const data = fixture([]), passage = [0, 0, 0];
+  Object.defineProperty(passage, 2, { configurable: true, get() { throw new Error('unrelated passage cell must not be visited'); } });
+  const session = api.create(data); t.after(() => api.dispose(session));
+  api.databaseInvoke(session, 'publish', { tiledMaps: { 1: { width: 3, height: 1, tilewidth: 48, tileheight: 48, passage } } });
+  const { scope } = createScriptRuntime(api, session); api.newGame(session);
+  scope.$gamePlayer.locate(0, 0); scope.$gamePlayer.moveStraight(6);
+  assert.equal(scope.$gamePlayer.x, 1);
+  scope.$gamePlayer.locate(1, 0); passage.length = 2;
+  assert.throws(() => scope.$gamePlayer.moveStraight(4), /tile collision data is unavailable/);
+  passage.length = 3; passage[1] = 2;
+  scope.$gamePlayer.moveStraight(4); assert.equal(scope.$gamePlayer.x, 1);
+  passage[1] = 0;
+  scope.$gamePlayer.moveStraight(4); assert.equal(scope.$gamePlayer.x, 0);
+});
+
 test('database bindings require named tables and preserve script-only metadata', t => {
   const session = api.create(fixture([]));
   t.after(() => api.dispose(session));
@@ -1353,6 +1385,59 @@ test('script-created interpreters and common events execute native commands with
   scope.$gameTemp.reserveCommonEvent(1); assert.equal(interpreter.setupReservedCommonEvent(), true);
   assert.equal(scope.$gameTemp.isCommonEventReserved(), false); interpreter.update();
   assert.equal(scope.$gameVariables.value(12), 18);
+});
+
+test('idle autorun queries preserve live definitions, priority, aliases and exception identity', t => {
+  const data = fixture([]); data.maps[1].events = [null];
+  const events = Array(2001).fill(null);
+  events[4] = { id: 4, trigger: 0, switchId: 1, list: [variable(12, 42), command(230, [30]), command(0)] };
+  events[5] = { id: 5, trigger: 1, switchId: 2, list: [variable(11, 23), command(230, [30]), command(0)] };
+  data.commonEvents = events;
+  const session = api.create(data); t.after(() => api.dispose(session));
+  api.databaseInvoke(session, 'publish', { commonEvents: events });
+  const runtime = createScriptRuntime(api, session), { scope } = runtime;
+  scope.$dataCommonEvents = events; api.newGame(session);
+  const failure = runtime.runScript('new Error("unvisited autorun entry")');
+  Object.defineProperty(events, 1500, { configurable: true, get() { throw failure; } });
+  const original = scope.Game_Map.prototype.setupAutorunCommonEvent;
+  let queries = 0, selected;
+  scope.Game_Map.prototype.setupAutorunCommonEvent = function() { ++queries; return original.call(this); };
+  const setup = scope.Game_Interpreter.prototype.setup;
+  scope.Game_Interpreter.prototype.setup = function(list, ...args) { selected = list; return setup.call(this, list, ...args); };
+  scope.$gameSwitches.setValue(2, true); api.step(session, {});
+  assert.equal(queries, 1); assert.equal(selected, events[5].list);
+  assert.equal(scope.$gameVariables.value(11), 23);
+  scope.$gameMap._interpreter.clear();
+  events[4] = { ...events[4], trigger: 1 };
+  scope.$gameSwitches.setValue(1, true); api.step(session, {});
+  assert.equal(selected, events[4].list); assert.equal(scope.$gameVariables.value(12), 42);
+  scope.$gameMap._interpreter.clear();
+  Object.defineProperty(events[4], 'trigger', { configurable: true, get() { throw failure; } });
+  assert.throws(() => api.step(session, {}), error => error === failure);
+});
+
+test('map parallel common events retain setup membership while refreshing live switch state', t => {
+  const data = fixture([]);
+  data.commonEvents = [null,
+    { id: 1, trigger: 2, switchId: 1, list: [variable(12, 18), command(230, [1]), command(0)] },
+    { id: 2, trigger: 0, switchId: 2, list: [command(0)] }];
+  const session = api.create(data); t.after(() => api.dispose(session));
+  api.databaseInvoke(session, 'publish', { commonEvents: data.commonEvents });
+  const { scope } = createScriptRuntime(api, session);
+  scope.$dataCommonEvents = data.commonEvents;
+  api.newGame(session);
+  const first = scope.$gameMap._commonEvents[0];
+  assert.equal(first._commonEventId, 1);
+  data.commonEvents[2].trigger = 2;
+  scope.$gameSwitches.setValue(1, true); api.step(session, {});
+  assert.equal(scope.$gameMap._commonEvents.length, 1);
+  assert.equal(scope.$gameMap._commonEvents[0], first);
+  assert.equal(scope.$gameVariables.value(12), 18);
+  scope.$gameSwitches.setValue(1, false); api.step(session, {});
+  assert.equal(first._interpreter, null);
+  data.commonEvents[1].trigger = 0;
+  scope.$gameMap.setup(1);
+  assert.deepEqual(Array.from(scope.$gameMap._commonEvents, event => event._commonEventId), [2]);
 });
 
 test('window tone events dispatch aliases and expose shared native tone values', t => {
@@ -1618,4 +1703,16 @@ test('replacing an unconfirmed action preserves earlier native command selection
   const replacement = new scope.Game_Action(actor); replacement.setSkill(2); replacement.setTarget(0);
   actor.setAction(1, replacement); assert.equal(scope.BattleManager.inputtingAction(), replacement);
   scope.BattleManager.selectNextCommand(); assert.equal(scope.BattleManager.isInputting(), false);
+});
+
+
+test('a retained action owns its original script subject across collection and a new game', { skip: typeof global.gc !== 'function' }, async t => {
+  const { session, scope } = create(t, []);
+  let action, subject;
+  (() => { const actor = scope.$gameActors.actor(1); subject = new WeakRef(actor); action = new scope.Game_Action(actor); })();
+  api.newGame(session);
+  for (let i = 0; i < 3; ++i) { await new Promise(resolve => setImmediate(resolve)); global.gc(); }
+  assert.ok(subject.deref(), 'retaining an action must retain its subject');
+  assert.equal(action.subject(), subject.deref());
+  assert.notEqual(action.subject(), scope.$gameActors.actor(1));
 });

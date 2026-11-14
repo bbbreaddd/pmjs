@@ -88,14 +88,14 @@ void SoundManager::preloadImportantSounds(Session& session) {
 
 bool SoundManager::loadSystemSound(Session& session, int index) {
   const auto& sounds = session.database()["system"]["sounds"];
-  if (index < 0 || index >= static_cast<int>(sounds.array().size())) return false;
+  if (index < 0 || index >= static_cast<int>(sounds.arrayLength())) return false;
   return !sounds[index].null() && !sounds[index]["name"].text().empty();
 }
 
 void SoundManager::playSystemSound(Session& session, int index) {
   if (session.dispatchManager("SoundManager", "playSystemSound", {index})) return;
   const auto& sounds = session.database()["system"]["sounds"];
-  if (index >= 0 && index < static_cast<int>(sounds.array().size())) {
+  if (index >= 0 && index < static_cast<int>(sounds.arrayLength())) {
     AudioManager::playSe(session, sounds[index]);
   }
 }

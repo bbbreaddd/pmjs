@@ -59,7 +59,7 @@ Value Session::runtimeBattlerCommand(const std::shared_ptr<RuntimeActor>& actor,
   value.name = source["name"].text(); value.nickname = source["nickname"].text(); value.profile = source["profile"].text();
   value.characterName = source["characterName"].text(); value.characterIndex = source["characterIndex"].integer();
   value.faceName = source["faceName"].text(); value.faceIndex = source["faceIndex"].integer(); value.battlerName = source["battlerName"].text();
-  const auto equipTypes = database_["system"]["equipTypes"].array().size();
+  const auto equipTypes = database_["system"]["equipTypes"].arrayLength();
   const std::size_t slotCount = equipTypes > 0 ? equipTypes - 1 : 0;
   value.equipKinds.assign(slotCount, 2);
   if (!value.equipKinds.empty()) value.equipKinds[0] = 1;

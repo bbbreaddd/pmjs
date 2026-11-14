@@ -105,7 +105,7 @@ Value Session::invokeScreenBase(const std::string& method, const Value::Array& a
   else if (method == "startFadeIn") { state["_fadeInDuration"] = argument(0); fadeOut_ = 0; }
   else if (method == "clearFade") { brightness_ = 255; fadeOut_ = 0; state["_fadeInDuration"] = 0; }
   else if (method == "startTint") {
-    if (argument(0).array().size() != 4) throw std::invalid_argument("screen tone requires four components");
+    if (argument(0).arrayLength() != 4) throw std::invalid_argument("screen tone requires four components");
     state["_toneTarget"] = argument(0); state["_toneDuration"] = argument(1);
     if (!argument(1).integer()) state["_tone"] = argument(0);
   } else if (method == "clearTone") { state["_tone"] = Array{0,0,0,0}; state["_toneTarget"] = Array{0,0,0,0}; state["_toneDuration"] = 0; }
@@ -291,7 +291,7 @@ void Session::invokePictureBase(const std::shared_ptr<RuntimePicture>& value, co
     if (arguments.size() != 1) throw std::invalid_argument("picture rotate requires one argument");
     picture["_rotationSpeed"] = arguments[0];
   } else if (method == "tint") {
-    if (arguments.size() != 2 || arguments[0].array().size() != 4) throw std::invalid_argument("picture tint requires four components and a duration");
+    if (arguments.size() != 2 || arguments[0].arrayLength() != 4) throw std::invalid_argument("picture tint requires four components and a duration");
     if (!value->tone) value->tone = std::make_shared<RuntimeTone>();
     value->toneTarget = makeTone(arguments[0]); picture["_toneDuration"] = arguments[1];
     if (!arguments[1].integer()) value->tone = makeTone(arguments[0]);

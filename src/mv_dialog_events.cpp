@@ -23,7 +23,7 @@ bool Session::dialogEventCommand(const EventCommand& entry, Interpreter& context
     }
     case 104: { // Select Item
       const int varId = p[0].integer();
-      const int itypeId = (p.array().size() > 1 && p[1].integer() != 0) ? p[1].integer() : 2;
+      const int itypeId = (p.arrayLength() > 1 && p[1].integer() != 0) ? p[1].integer() : 2;
       message_.itemVariableId = varId;
       message_.itemType = itypeId;
       message_.busy = true;

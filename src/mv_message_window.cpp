@@ -95,7 +95,7 @@ void Session::setupChoices(Interpreter& context, const Value& parameters) {
 void Session::setupChoicesBase(Interpreter& context, const Value& parameters) {
   if (!context.serial) context.serial = ++nextInterpreterSerial_;
   messageOwnerSerial_ = context.serial;
-  const int count = static_cast<int>(parameters[0].array().size());
+  const int count = static_cast<int>(parameters[0].arrayLength());
   const int cancel = parameters[1].integer() >= count ? -2 : parameters[1].integer();
   dispatchMessage("setChoices", {parameters[0], parameters[2], cancel});
   dispatchMessage("setChoiceBackground", {parameters[4]}); dispatchMessage("setChoicePositionType", {parameters[3].null() ? Value(2) : parameters[3]});

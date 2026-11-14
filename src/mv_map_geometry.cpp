@@ -17,7 +17,7 @@ void Presentation::clearMapGeometry(){stockTilemap_.clearGeometry();stockTilemap
 void Presentation::prepareMapGeometry(int firstX,int firstY,int lastX,int lastY) {
   if(stockMapRevision_!=session_.presentationRevision_||stockTileset_!=session_.mapState_.tilesetId||(!graphTilemap_&&graphTilemapId_)) {
     const auto& map=session_.map();std::vector<int> data;
-    data.reserve(map["data"].array().size());for(const auto& value:map["data"].array())data.push_back(value.integer());
+    data.reserve(map["data"].arrayLength());for(const auto& value:map["data"].array())data.push_back(value.integer());
     stockTilemap_.setData(map["width"].integer(),map["height"].integer(),std::move(data));
     stockTilemap_.flags.clear();for(const auto& flag:session_.database_["tilesets"][session_.mapState_.tilesetId]["flags"].array())stockTilemap_.flags.push_back(flag.integer());
     stockTilemap_.horizontalWrap=session_.loopHorizontal();stockTilemap_.verticalWrap=session_.loopVertical();
@@ -56,10 +56,10 @@ void Presentation::prepareMapGeometry(int firstX,int firstY,int lastX,int lastY)
     stockTilemap_.paintGeometry=[this](int firstX,int firstY,int lastX,int lastY)->std::optional<std::array<std::vector<core::Tilemap::TileRectangle>,2>> {
       const auto result=session_.runtimeHooks_->tilemapGeometry(firstX,firstY,lastX,lastY,stockTilemap_.tileWidth,stockTilemap_.tileHeight);
       if(!result)return {};
-      if(result->array().size()!=2)throw std::invalid_argument("tile drawing requires two layers");
+      if(result->arrayLength()!=2)throw std::invalid_argument("tile drawing requires two layers");
       std::array<std::vector<core::Tilemap::TileRectangle>,2> layers;
       for(int layer=0;layer<2;++layer)for(const auto& record:(*result)[layer].array()) {
-        if(record.array().size()!=9)throw std::invalid_argument("tile drawing requires nine rectangle fields");
+        if(record.arrayLength()!=9)throw std::invalid_argument("tile drawing requires nine rectangle fields");
         for(const auto& value:record.array())if(!std::isfinite(value.number()))throw std::invalid_argument("tile drawing rectangle must be finite");
         layers[layer].push_back({record[0].integer(),{record[1].number(),record[2].number(),record[5].number(),record[6].number()},
           {record[3].number(),record[4].number()},{record[7].number()*stockTilemap_.tileWidth,record[8].number()*stockTilemap_.tileHeight}});

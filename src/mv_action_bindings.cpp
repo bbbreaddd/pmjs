@@ -1,5 +1,6 @@
 #include "mv_engine.hpp"
 #include <algorithm>
+#include <limits>
 #include <stdexcept>
 
 namespace pmjs::mv {
@@ -105,7 +106,8 @@ void Session::fillBattlerActions(const std::shared_ptr<RuntimeActor>& owner) {
     else if (hasSpecialFlag(battler, 0) || restriction(battler) > 0) {
       action->value.id = 1;
       if (hasSpecialFlag(battler, 0)) {
-        double best = -1; auto skills = battlerSkills(battler); skills.insert(1);
+        action->value.id = 0;
+        double best = std::numeric_limits<double>::min(); auto skills = battlerSkills(battler); skills.insert(1);
         for (int id : skills) if (canUse(battler, database_["skills"][id])) {
           int target = -1; const double score = evaluateAutoAction(battler, database_["skills"][id], target);
           if (score > best) { best = score; action->value.id = id; action->value.target = target; }

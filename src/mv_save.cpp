@@ -126,7 +126,7 @@ Value Session::save(bool recordSave) {
   Object selfSwitches; for (const auto& [key, value] : selfSwitches_) if (value) selfSwitches[key] = value;
   Object items, weapons, armors;
   for (const auto& [key, count] : inventory_) if (count > 0) (key >= 200000 ? armors : key >= 100000 ? weapons : items)[std::to_string(key % 100000)] = count;
-  Array actors(database_["actors"].array().size());
+  Array actors(database_["actors"].arrayLength());
   for (const auto& [id, actor] : actors_) {
     Array equips; for (std::size_t slot = 0; slot < actor.equips.size(); ++slot) equips.emplace_back(item(actor.equips[slot], actor.equipKinds[slot] == 1 ? "weapon" : "armor"));
     Array actions;
@@ -148,7 +148,7 @@ Value Session::save(bool recordSave) {
   Array followers;
   for (std::size_t i = 1; i <= followers_.size(); ++i) { auto follower = character(followers_[i - 1], "Game_Follower"); auto& f = object(follower); f["_memberIndex"] = static_cast<int>(i); f["_through"] = true; followers.emplace_back(follower); }
   p["_followers"] = instance("Game_Followers", {{"_visible", followersVisible_}, {"_gathering", followersGathering_}, {"_data", followers}});
-  Array events(database_["maps"][std::to_string(mapId_)]["events"].array().size());
+  Array events(database_["maps"][std::to_string(mapId_)]["events"].arrayLength());
   for (const auto& event : events_) {
     auto value = character(event.character, "Game_Event"); auto& e = object(value);
     e["_mapId"] = mapId_; e["_eventId"] = event.id; e["_moveType"] = event.moveType; e["_trigger"] = event.trigger; e["_starting"] = event.starting; e["_erased"] = event.erased; e["_pageIndex"] = event.page;
@@ -285,7 +285,7 @@ void Session::load(const Value& contents) {
     }
     restored.interpreter_ = readInterpreter(contents["map"]["_interpreter"]);
   }
-  restored.commonInterpreters_.clear(); restored.runtimeCommonEvents_.clear();
+  restored.commonInterpreters_.clear(); restored.runtimeCommonEvents_.clear(); restored.mapCommonEvents_.clear(); restored.mapCommonEventsReady_ = false;
   if (!mapUpdated) for (const auto& common : contents["map"]["_commonEvents"].array()) {
     const int id = common["_commonEventId"].integer();
     if (!common["_interpreter"].null() && restored.database_["commonEvents"][id]["trigger"].integer() == 2)

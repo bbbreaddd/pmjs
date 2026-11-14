@@ -892,7 +892,7 @@ void setWindowModelForRuntime(napi_env env,napi_value object,RuntimeCore& runtim
 void startDisplayAnimation(napi_env env, napi_value object, RuntimeCore& runtime, const mv::Value& animation, bool mirror, int delay, int rate) {
   auto sprite = std::dynamic_pointer_cast<BoundSprite>(displayForRuntime(env, object, runtime));
   if (!sprite) throw std::invalid_argument("animation target must be a sprite");
-  for (int frame = 0; frame < static_cast<int>(animation["frames"].array().size()); ++frame)
+  for (int frame = 0; frame < static_cast<int>(animation["frames"].arrayLength()); ++frame)
     if (!mv::Sprite_Animation::cells(animation, frame, mirror).empty() || !mv::Sprite_Animation::timings(animation, frame).empty())
       throw std::runtime_error("display animation cells and timings are not bound");
   sprite->animations.push_back(std::make_shared<BoundSprite::Animation>(animation, mirror, delay, rate));
