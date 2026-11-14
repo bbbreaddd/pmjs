@@ -36,9 +36,9 @@ void Presentation::battleSprites() {
   std::vector<std::size_t> enemyOrder;
   enemyOrder.reserve(session_.battle_.enemies.size());
   for (std::size_t index = 0; index < session_.battle_.enemies.size(); ++index) enemyOrder.push_back(index);
-  const auto& troopMembers = session_.database_["troops"][session_.battle_.troopId]["members"];
   std::stable_sort(enemyOrder.begin(), enemyOrder.end(), [&](std::size_t a, std::size_t b) {
-    const double ay = troopMembers[a]["y"].number(), by = troopMembers[b]["y"].number();
+    const auto* as = session_.enemySprite(a); const auto* bs = session_.enemySprite(b);
+    const double ay = as ? as->homePosition.y : 0, by = bs ? bs->homePosition.y : 0;
     return ay != by ? ay < by : b < a;
   });
   for (std::size_t index : enemyOrder) {
@@ -60,8 +60,7 @@ void Presentation::battleSprites() {
     const auto& data = session_.database_["enemies"][enemy.id];
     if (data["battlerName"].text().empty()) continue;
     const auto source = image(std::string(sideView ? "img/sv_enemies/" : "img/enemies/")+data["battlerName"].text()+".png",data["battlerHue"].integer());
-    const auto& member = session_.database_["troops"][session_.battle_.troopId]["members"][index];
-    float x = member["x"].number() + effect->shake, y = member["y"].number();
+    float x = effect->homePosition.x + effect->offset.x + effect->shake, y = effect->homePosition.y + effect->offset.y;
     const float opacity = effect->opacity;
     const int height = effect->effectType == "bossCollapse" ? effect->effectDuration : source.height;
     const BlendMode blend = effect->blendMode == 1 ? BlendMode::additive : BlendMode::normal;
@@ -85,7 +84,12 @@ void Presentation::battleSprites() {
     if (!display.actorSpritesStarted || tick < display.actorSpriteTick) {
       display.stateOverlay = Sprite_StateOverlay{};
       display.weapon = Sprite_Weapon{};
-      display.actorSprite = Sprite_Actor{};
+      if (display.actorSprite) display.actorSprite->active = false;
+      display.actorSprite = std::make_shared<RuntimeActorSprite>();
+      display.actorSprite->active = true;
+      if (!session_.runtimeHooks_ || !session_.runtimeHooks_->actorSpriteHome ||
+          !session_.runtimeHooks_->actorSpriteHome(display.actorSprite, static_cast<int>(index)))
+        display.actorSprite->value.setActorHome(static_cast<int>(index));
       display.weaponStarted = 0;
       display.actorSpritesStarted = true;
       display.actorSpriteTick = tick;
@@ -97,11 +101,14 @@ void Presentation::battleSprites() {
         const auto elapsed = tick - display.actorSpriteTick;
         display.stateOverlay.advance(session_, elapsed);
         display.weapon.advance(elapsed);
+        for (std::uint64_t frame = 0; frame < elapsed && display.actorSprite->value.isMoving(); ++frame)
+          display.actorSprite->value.updateMove();
         display.actorSpriteTick = tick;
       }
     }
     if (actor.hidden || actor.escaped || actor.battlerName.empty() || session_.effectHidden(1,actor.id)) continue;
-    float x = 600+index*32, y = 280+index*48;
+    float x = display.actorSprite->value.homePosition.x + display.actorSprite->value.offset.x,
+      y = display.actorSprite->value.homePosition.y + display.actorSprite->value.offset.y;
     const bool inputting = session_.battle_.active && !session_.battle_.opening && !session_.battle_.wait && session_.ui_.category != 4 && session_.battle_.actorIndex == static_cast<int>(index);
     const int stateMotion = actor.states.empty() ? 0 : session_.database_["states"][actor.states.front()]["motion"].integer();
     const bool chanting = !inputting && (session_.battle_.actionStage > 0 || session_.battle_.turnEnding) &&
@@ -150,9 +157,10 @@ void Presentation::battleSprites() {
     }
     const auto shadow = image("img/system/Shadow2.png"); quad(shadow.handle,0,0,shadow.width,shadow.height,x-shadow.width/2.0F,y-2-shadow.height/2.0F,shadow.width,shadow.height,1);
     const auto source = image("img/sv_actors/"+actor.battlerName+".png");
-    display.actorSprite.setBattler(&actor);
-    display.actorSprite.synchronizeMotion(static_cast<BattlerMotion>(motion), tick - motionAge, tick, fallbackMotion);
-    const auto actorFrame = display.actorSprite.sourceFrame(source.width, source.height);
+    display.actorSprite->value.setBattler(&actor);
+    display.actorSprite->value.synchronizeMotion(static_cast<BattlerMotion>(motion), tick - motionAge, tick, fallbackMotion);
+    const auto actorFrame = display.actorSprite->value.sourceFrame(source.width, source.height);
+    display.actorSprite->value.setBattler(nullptr);
     const float w = actorFrame.width, h = actorFrame.height;
     std::array<float,4> color{}; if (selection(false,static_cast<int>(index)) && tick/15%2==0) color = {1,1,1,64.0F/255};
     const auto flash = session_.effectColor(1,actor.id); if (flash[3] > color[3]) color = flash;

@@ -318,6 +318,7 @@ void Session::load(const Value& contents) {
   restored.enemyBitmapHeightResolver_ = enemyBitmapHeightResolver_;
   restored.messageTextLayoutResolver_ = messageTextLayoutResolver_;
   restored.runtimeHooks_ = runtimeHooks_;
+  detachRuntimeEntities(true);
   *this = std::move(restored);
 }
 }

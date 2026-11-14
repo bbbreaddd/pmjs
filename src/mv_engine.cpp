@@ -12,14 +12,14 @@
 #include <stdexcept>
 
 namespace pmjs::mv {
+std::string Session::selfKey(int map, int event, const std::string& letter) {
+  return std::to_string(map) + "," + std::to_string(event) + "," + letter;
+}
 namespace {
 const Value empty = Value::undefined();
 const Value::Array emptyArray;
 int dx(int direction) { return direction == 6 ? 1 : direction == 4 ? -1 : 0; }
 int dy(int direction) { return direction == 2 ? 1 : direction == 8 ? -1 : 0; }
-std::string selfKey(int map, int event, const std::string& letter) {
-  return std::to_string(map) + "," + std::to_string(event) + "," + letter;
-}
 template<class Map> auto lookup(const Map& map, const typename Map::key_type& key) {
   const auto it = map.find(key);
   return it == map.end() ? typename Map::mapped_type{} : it->second;
@@ -75,9 +75,22 @@ void Session::setScreenSize(int width, int height) {
   screenWidth_ = width;
   screenHeight_ = height;
 }
+void Session::setDatabaseTables(Value tables) {
+  if (mapId_ != 0 || battle_.active) throw std::runtime_error("database tables must be published before game state initialization");
+  auto& root = std::get<Value::Object>(database_.data);
+  for (auto& [key,value] : std::get<Value::Object>(tables.data)) root[key] = std::move(value);
+  ++presentationRevision_;
+}
 const Value& Session::map() const { return database_["maps"][std::to_string(mapId_)]; }
+int Session::tileWidth() const {
+  return database_["tiledMaps"][std::to_string(mapId_)]["tilewidth"].integer(48);
+}
+int Session::tileHeight() const {
+  return database_["tiledMaps"][std::to_string(mapId_)]["tileheight"].integer(48);
+}
 
 void Session::newGame() {
+  detachRuntimeEntities(true);
   battleLog_.reset(); resetEnemySprites();
   choiceWindow_.reset(); numberWindow_.reset(); eventItemWindow_.reset();
   newGamePending_ = false; titleWindowOpenness_ = 255;
@@ -109,6 +122,7 @@ void Session::newGame() {
   interpreter_.waitingRoute.reset();
   DataManager::selectSavefileForNewGame(*this);
   const auto& system = database_["system"];
+  dispatchGameDataMutation("party", "initialize", {});
   for (const auto& id : system["partyMembers"].array()) { party_.push_back(id.integer()); initializeActor(id.integer()); }
   if (!party_.empty()) {
     const auto& actor = actors_.at(party_[0]);
@@ -142,8 +156,11 @@ void Session::transfer(int id, int x, int y, int direction) {
   player_.stopCount = 0;
   mapId_ = id; player_.x = x; player_.y = y; player_.realX = x; player_.realY = y;
   if (changedMap) {
+    detachRuntimeEntities(false);
+    if (cameraTarget_) cameraTarget_ = runtimeCharacter(-1);
     setupMapState(); commonInterpreters_.clear();
     events_.clear();
+    events_.reserve(map()["events"].array().size());
     for (const auto& data : map()["events"].array()) {
       if (data.null()) continue;
       Event event; event.id = data["id"].integer();
@@ -175,7 +192,8 @@ void Session::locatePlayer(double x, double y) {
 }
 
 void Session::centerPlayer() {
-  const double visibleX = screenWidth_ / 48.0, visibleY = screenHeight_ / 48.0;
+  if (cameraTarget_ && &cameraTarget_->value() != &player_) return;
+  const double visibleX = double(screenWidth_) / tileWidth(), visibleY = double(screenHeight_) / tileHeight();
   const double x = player_.realX - (visibleX - 1) / 2, y = player_.realY - (visibleY - 1) / 2;
   const double width = map()["width"].number(), height = map()["height"].number();
   const double endX = width - visibleX, endY = height - visibleY;
@@ -489,7 +507,12 @@ void Session::updateRoute(Character& c) {
       Interpreter context; context.mapId = mapId_;
       for (const auto& event : events_) if (&event.character == &c) context.eventId = event.id;
       context.scriptCharacter = &c == &player_ ? -1 : context.eventId;
-      executeNativeScript(parameters[0].text(), context); break;
+      if (runtimeHooks_ && runtimeHooks_->characterScript) {
+        const auto object = runtimeCharacter(*context.scriptCharacter);
+        if (!object) throw std::runtime_error("script movement target is not bound");
+        runtimeHooks_->characterScript(object, parameters[0].text());
+      } else executeNativeScript(parameters[0].text(), context);
+      break;
     }
     default: throw std::runtime_error("unsupported movement route command");
   }
@@ -557,9 +580,7 @@ void Session::operateVariable(int id, int operation, const Value& operand) {
       default: throw std::runtime_error("unsupported variable operation");
     }
   }
-  if (const auto* number = std::get_if<double>(&result.data)) result = std::floor(*number);
-  variables_[id] = std::move(result);
-  refreshNeeded_ = true;
+  dispatchGameDataMutation("variables", "setValue", {id, result});
 }
 
 void Session::gainItem(int kind, int id, double amount, bool includeEquipped) {
@@ -819,7 +840,7 @@ bool Session::command(const EventCommand& entry, Interpreter& context) {
       dispatchMessage("clear"); context.waitingMessage = true;
       setupChoices(context, p); return true;
     case 111: context.branches[indent] = condition(p, context); if (!context.branches[indent].boolean()) skipBranch(indent, context); return true;
-    case 121: for (int id = p[0].integer(); id <= p[1].integer(); ++id) switches_[id] = p[2].integer() == 0; refreshNeeded_ = true; return true;
+    case 121: for (int id = p[0].integer(); id <= p[1].integer(); ++id) dispatchGameDataMutation("switches", "setValue", {id, p[2].integer() == 0}); return true;
     case 122: {
       if (p[3].integer() == 2) {
         const double range = p[5].number() - p[4].number() + 1;
@@ -831,7 +852,7 @@ bool Session::command(const EventCommand& entry, Interpreter& context) {
       switch (p[3].integer()) {
         case 0: operand = p[4]; break;
         case 1: operand = variable(p[4].integer()); break;
-        case 4: operand = evaluateExpression(p[4].text()); break;
+        case 4: operand = runtimeHooks_ && runtimeHooks_->scriptValue ? runtimeHooks_->scriptValue(context.runtime, p[4].text()) : evaluateExpression(p[4].text()); break;
         case 3: operand = gameDataOperand(p[4].integer(), p[5].integer(), p[6].integer(), context); break;
         default: throw std::runtime_error("unsupported variable operand");
       }
@@ -840,9 +861,8 @@ bool Session::command(const EventCommand& entry, Interpreter& context) {
     }
     case 123: {
       if (context.eventId <= 0) return true;
-      const auto key = selfKey(context.mapId, context.eventId, p[0].text());
-      if (p[1].integer() == 0) selfSwitches_[key] = true; else selfSwitches_.erase(key);
-      refreshNeeded_ = true; return true;
+      dispatchGameDataMutation("selfSwitches", "setValue", {Value::Array{context.mapId, context.eventId, p[0]}, p[1].integer() == 0});
+      return true;
     }
     case 124:
       if (p[0].integer() == 0) { timerFrames_ = p[1].integer() * 60; timerWorking_ = true; }
@@ -1143,6 +1163,8 @@ Interpreter* Session::findRuntimeInterpreter(const std::shared_ptr<RuntimeInterp
 }
 std::set<std::uint64_t> Session::runtimeObjectIdentities() const {
   std::set<std::uint64_t> identities;
+  for (const auto& [id, weak] : runtimeCharacters_) { (void)id; if (const auto object = weak.lock()) identities.insert(object->identity); }
+  for (const auto& [id, weak] : runtimeActors_) { (void)id; if (const auto object = weak.lock()) identities.insert(object->identity); }
   for (const auto& picture : pictures_) if (picture) {
     identities.insert(picture->identity);
     if (picture->tone) identities.insert(picture->tone->identity);

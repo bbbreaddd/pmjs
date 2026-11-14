@@ -24,6 +24,15 @@ void Presentation::prepareMapGeometry(int firstX,int firstY,int lastX,int lastY)
     stockTilemap_.imageResolver=[this](int sheet){const auto name=session_.database_["tilesets"][session_.mapState_.tilesetId]["tilesetNames"][sheet].text();return name.empty()?ImageInfo{}:image("img/tilesets/"+name+".png");};
     stockMapRevision_=session_.presentationRevision_;stockTileset_=session_.mapState_.tilesetId;
   }
+  stockTilemap_.shadowGeometry = {};
+  if (session_.runtimeTileShadows_) stockTilemap_.shadowGeometry = [this](int bits,int x,int y) -> std::optional<std::vector<core::Rectangle>> {
+    if (!session_.runtimeHooks_ || !session_.runtimeHooks_->tileShadow) return {};
+    const auto custom = session_.runtimeHooks_->tileShadow(bits,x,y,stockTilemap_.tileWidth,stockTilemap_.tileHeight);
+    if (!custom) return {};
+    std::vector<core::Rectangle> rectangles;
+    for (const auto& rect : custom->array()) rectangles.push_back({rect[0].number(),rect[1].number(),rect[2].number(),rect[3].number()});
+    return rectangles;
+  };
   stockTilemap_.prepareGeometry(core_.renderer(),firstX,firstY,lastX,lastY);
 }
 void Presentation::queueMapGeometry(bool upper,int originX,int originY) {

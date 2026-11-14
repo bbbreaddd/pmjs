@@ -33,6 +33,9 @@ int Session::randomInt(int maximum) { return static_cast<int>(std::floor(random(
 void Session::initializeActor(int id) {
   const auto& source = database_["actors"][id];
   if (source.null()) throw std::invalid_argument("unknown actor " + std::to_string(id));
+  actors_.try_emplace(id); actors_.at(id).id = id;
+  const auto object = runtimeActor(id);
+  if (!runtimeHooks_ || !runtimeHooks_->actorLifecycle || !runtimeHooks_->actorLifecycle(object, "initMembers")) initializeActorMembers(object);
   Battler value; value.id = id; value.level = source["initialLevel"].integer(1); value.classId = source["classId"].integer();
   value.name = source["name"].text(); value.nickname = source["nickname"].text(); value.profile = source["profile"].text();
   value.characterName = source["characterName"].text(); value.characterIndex = source["characterIndex"].integer();
@@ -48,8 +51,7 @@ void Session::initializeActor(int id) {
   auto& result = actors_.at(id);
   releaseEquipment(result, true);
   result.exp[result.classId] = actorExpForLevel(result, result.level);
-  const auto& klass = database_["classes"][result.classId];
-  for (const auto& learning : klass["learnings"].array()) if (learning["level"].integer() <= result.level) result.skills.insert(learning["skillId"].integer());
+  if (!runtimeHooks_ || !runtimeHooks_->actorLifecycle || !runtimeHooks_->actorLifecycle(object, "initSkills")) initializeActorSkills(object);
   recover(result);
 }
 std::vector<const Value*> Session::traitObjects(const Battler& battler) const {
@@ -172,17 +174,29 @@ bool Session::canUse(const Battler& battler, const Value& item) const {
   return true;
 }
 
+double Session::actionRateBase(const std::string& method, const Battler& subject, const Battler& target, const Value& item) const {
+  const int hitType = item["hitType"].integer();
+  if (method == "itemHit") return item["successRate"].number(100) / 100 * (hitType == 1 ? trait(subject, 22, 0, false) : 1);
+  if (method == "itemEva") return hitType == 1 ? trait(target, 22, 1, false) : hitType == 2 ? trait(target, 22, 4, false) : 0;
+  throw std::invalid_argument("action rate is not bound: " + method);
+}
 void Session::apply(Battler& subject, Battler& target, const Value& item, Battler* drainTarget) {
   subject.result = {}; target.result = {};
   auto& result = target.result;
   result.used = canApply(target, item);
   result.physical = item["hitType"].integer() == 1;
   result.drain = item["damage"]["type"].integer() == 5 || item["damage"]["type"].integer() == 6;
-  const int hitType = item["hitType"].integer();
-  const double success = item["successRate"].number(100) / 100 * (hitType == 1 ? trait(subject, 22, 0, false) : 1);
+  auto rate = [&](const std::string& method) {
+    if (runtimeHooks_ && runtimeHooks_->actionRate) {
+      const auto result = runtimeHooks_->actionRate(method, runtimeBattler(subject), runtimeBattler(target), !item["itypeId"].null(), item["id"].integer());
+      if (result) return *result;
+    }
+    return actionRateBase(method, subject, target, item);
+  };
+  const double success = rate("itemHit");
   const bool missed = result.used && random() >= success;
   result.missed = missed;
-  const double evasion = hitType == 1 ? trait(target, 22, 1, false) : hitType == 2 ? trait(target, 22, 4, false) : 0;
+  const double evasion = rate("itemEva");
   const bool evaded = !missed && random() < evasion;
   result.evaded = evaded;
   if (!result.used || missed || evaded) return;
@@ -223,11 +237,12 @@ void Session::startBattle(int troop, bool canEscape, bool canLose, bool event) {
   if (mapSceneOnly()) throw std::runtime_error("battle is outside the map-scene contract");
   if (database_["troops"][troop].null()) throw std::invalid_argument("unknown troop");
   ++system_.battleCount;
+  detachRuntimeEnemies();
   battle_ = {}; resetEnemySprites(); battle_.active = true; battle_.troopId = troop; battle_.canEscape = canEscape; battle_.canLose = canLose; battle_.event = event;
   battleLog_ = std::make_shared<Window_BattleLog>(0,0,0,0);
   battleLog_->bindLines(battle_.log);
   for (const auto& member : database_["troops"][troop]["members"].array()) {
-    Battler enemy; enemy.enemy = true; enemy.id = member["enemyId"].integer(); enemy.hidden = member["hidden"].boolean();
+    Battler enemy; enemy.screenX = member["x"].number(); enemy.screenY = member["y"].number(); enemy.enemy = true; enemy.id = member["enemyId"].integer(); enemy.hidden = member["hidden"].boolean();
     enemy.originalName = database_["enemies"][enemy.id]["name"].text(); enemy.name = enemy.originalName;
     recover(enemy); battle_.enemies.push_back(enemy);
   }

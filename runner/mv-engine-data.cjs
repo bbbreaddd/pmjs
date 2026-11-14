@@ -5,6 +5,11 @@ const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { parsePluginManifest } = require('./plugin-manifest.cjs');
 
+const databaseFiles = ['Actors', 'Classes', 'Skills', 'Items', 'Weapons', 'Armors', 'Enemies', 'Troops', 'States',
+  'Animations', 'Tilesets', 'CommonEvents', 'System', 'MapInfos'].map(name => ({
+  name: '$data' + name, src: name + '.json', key: name[0].toLowerCase() + name.slice(1)
+}));
+
 const eventCodes = new Set([0, 101, 102, 103, 104, 105, 108, 111, 112, 113, 115, 117, 118, 119, 121, 122, 123, 124, 125, 126, 127, 128, 129, 132, 133, 134, 135, 136, 137, 138, 139, 140, 201, 202, 203, 204, 205, 206, 211, 212, 213, 214, 216, 217, 221, 222, 223, 224, 225, 230, 231, 232, 233, 234, 235, 236, 241, 242, 243, 244, 245, 246, 249, 250, 251, 261, 281, 282, 283, 284, 285, 301, 302, 303, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 331, 332, 333, 334, 335, 336, 337, 339, 340, 342, 351, 352, 353, 354, 355, 356, 401, 402, 403, 404, 405, 408, 411, 412, 413, 505, 601, 602, 603, 604, 605, 655]);
 const conditionTypes = new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
 const routeCodes = new Set(Array.from({ length: 46 }, (_, index) => index));
@@ -148,9 +153,7 @@ function loadGame(root) {
   if (!fontSource || !/^[A-Za-z0-9_.-]+\.(?:ttf|otf)$/i.test(fontSource[1])) throw new Error('fonts/gamefont.css: unsupported GameFont source');
   settings.fontFile = `fonts/${fontSource[1]}`;
   identities[settings.fontFile] = createHash('sha256').update(fs.readFileSync(path.join(root, settings.fontFile))).digest('hex');
-  for (const name of ['System', 'Actors', 'Classes', 'Skills', 'Items', 'Weapons', 'Armors', 'Enemies', 'Troops', 'States', 'Animations', 'Tilesets', 'CommonEvents', 'MapInfos']) {
-    database[name[0].toLowerCase() + name.slice(1)] = JSON.parse(read(`data/${name}.json`));
-  }
+  for (const file of databaseFiles) database[file.key] = JSON.parse(read('data/' + file.src));
   database.maps = {};
   for (const info of database.mapInfos.filter(Boolean)) {
     const file = `data/Map${String(info.id).padStart(3, '0')}.json`;
@@ -161,4 +164,4 @@ function loadGame(root) {
   return { database, settings, contract, identities, manifest, engineFamily };
 }
 
-module.exports = { loadGame, inspectDatabase, resolveBasicSettings, detectRpgMakerEngine };
+module.exports = { loadGame, inspectDatabase, resolveBasicSettings, detectRpgMakerEngine, databaseFiles };

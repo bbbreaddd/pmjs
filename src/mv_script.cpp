@@ -7,6 +7,129 @@
 #include <stdexcept>
 
 namespace pmjs::mv {
+void Session::dispatchGameDataMutation(const std::string& kind, const std::string& method, const Value::Array& arguments) {
+  if (!runtimeHooks_ || !runtimeHooks_->gameDataMutation || !runtimeHooks_->gameDataMutation(kind, method, arguments))
+    invokeGameDataBase(kind, method, arguments);
+}
+Value Session::invokeGameDataBase(const std::string& kind, const std::string& method, const Value::Array& arguments) {
+  if (kind == "screen") return invokeScreenBase(method, arguments);
+  if (kind == "map" && method == "invalidateTileShadows") { if (!arguments.empty()) runtimeTileShadows_ = arguments[0].boolean(); ++presentationRevision_; return Value::undefined(); }
+  if (kind == "map" && method == "cameraNormal") {
+    if (!arguments.empty()) {
+      if (arguments[0].boolean()) { cameraTarget_.reset(); savedCamera_.reset(); centerPlayer(); }
+      else if (!cameraTarget_) setCameraTarget(runtimeCharacter(-1), 800);
+    }
+    return !cameraTarget_;
+  }
+  if (kind == "system") {
+    if (method == "initialize") { system_ = {}; return Value::undefined(); }
+    bool* flag = nullptr; int* count = nullptr;
+    if (method == "saveEnabled") flag = &system_.saveEnabled;
+    else if (method == "menuEnabled") flag = &system_.menuEnabled;
+    else if (method == "encounterEnabled") flag = &system_.encounterEnabled;
+    else if (method == "formationEnabled") flag = &system_.formationEnabled;
+    else if (method == "battleCount") count = &system_.battleCount;
+    else if (method == "winCount") count = &system_.winCount;
+    else if (method == "escapeCount") count = &system_.escapeCount;
+    else if (method == "saveCount") count = &system_.saveCount;
+    if (flag) { if (!arguments.empty()) *flag = arguments[0].boolean(); return *flag; }
+    if (count) { if (!arguments.empty()) *count = arguments[0].integer(); return *count; }
+    throw std::invalid_argument("system operation is not bound: " + method);
+  }
+  if (kind == "temp") {
+    if (method == "initialize") { reservedCommonEvent_ = 0; destination_.reset(); return Value::undefined(); }
+    if (method == "reserveCommonEvent") { reservedCommonEvent_ = arguments.at(0).integer(); return Value::undefined(); }
+    if (method == "clearCommonEvent") { reservedCommonEvent_ = 0; return Value::undefined(); }
+    if (method == "commonEventId") return reservedCommonEvent_;
+    if (method == "isCommonEventReserved") return reservedCommonEvent_ > 0;
+    if (method == "setDestination") { destination_ = {arguments.at(0).integer(), arguments.at(1).integer()}; return Value::undefined(); }
+    if (method == "clearDestination") { destination_.reset(); return Value::undefined(); }
+    if (method == "isDestinationValid") return destination_.has_value();
+    if (method == "destinationX") return destination_ ? Value((*destination_)[0]) : Value();
+    if (method == "destinationY") return destination_ ? Value((*destination_)[1]) : Value();
+    throw std::invalid_argument("temporary data operation is not bound: " + method);
+  }
+  if (kind == "battle" && method == "isInputting") {
+    return battle_.active && !battle_.opening && !battle_.turnEnding && !battle_.aborting &&
+      battle_.wait == 0 && battle_.actionStage == 0 && !battle_.forcedExecuting &&
+      battle_.actorIndex < static_cast<int>(battleMemberCount());
+  }
+  if (kind == "party") {
+    if (method == "initialize") { inventory_.clear(); party_.clear(); gold_ = 0; steps_ = 0; return Value::undefined(); }
+    if (method == "members") { Value::Array ids; for (int id : partyMembers()) ids.emplace_back(id); return ids; }
+    if (method == "gold") return gold_;
+    if (method == "inBattle") return battle_.active;
+    throw std::invalid_argument("party operation is not bound: " + method);
+  }
+  if (kind == "inventory") {
+    if (arguments.empty()) throw std::invalid_argument("inventory category is required");
+    const int category = arguments[0].integer();
+    if (category < 0 || category > 2) throw std::invalid_argument("invalid inventory category");
+    const int offset = category * 100000;
+    const auto id = [&]() {
+      if (arguments.size() < 2 || arguments[1].integer() <= 0 || arguments[1].integer() >= 100000)
+        throw std::invalid_argument("invalid inventory item ID");
+      return arguments[1].integer() + offset;
+    };
+    if (method == "read") {
+      Value::Object result;
+      for (const auto& [key, count] : inventory_) if (key / 100000 == category) result[std::to_string(key % 100000)] = count;
+      return result;
+    }
+    if (method == "value") { const auto found = inventory_.find(id()); return found == inventory_.end() ? Value::undefined() : Value(found->second); }
+    if (method == "set") {
+      if (arguments.size() != 3 || !std::holds_alternative<double>(arguments[2].data) || !std::isfinite(arguments[2].number()) || arguments[2].number() < 0 || arguments[2].number() > 2147483647.0 || arguments[2].number() != arguments[2].integer())
+        throw std::invalid_argument("inventory count must be a nonnegative integer");
+      inventory_[id()] = arguments[2].integer(); refreshNeeded_ = true; return Value::undefined();
+    }
+    if (method == "delete") { inventory_.erase(id()); refreshNeeded_ = true; return Value::undefined(); }
+    if (method == "replace") {
+      if (arguments.size() != 2 || !std::holds_alternative<Value::Object>(arguments[1].data)) throw std::invalid_argument("inventory replacement must be a dictionary");
+      std::map<int, int> replacement;
+      for (const auto& [key, value] : std::get<Value::Object>(arguments[1].data)) {
+        std::size_t consumed = 0; const int item = std::stoi(key, &consumed);
+        if (consumed != key.size() || std::to_string(item) != key || item <= 0 || item >= 100000 || !std::holds_alternative<double>(value.data) || !std::isfinite(value.number()) || value.number() < 0 || value.number() > 2147483647.0 || value.number() != value.integer())
+          throw std::invalid_argument("invalid inventory dictionary entry");
+        replacement[item + offset] = value.integer();
+      }
+      std::erase_if(inventory_, [&](const auto& entry) { return entry.first / 100000 == category; });
+      inventory_.insert(replacement.begin(), replacement.end()); refreshNeeded_ = true; return Value::undefined();
+    }
+    throw std::invalid_argument("inventory operation is not bound: " + method);
+  }
+  if (kind == "selfSwitches") {
+    if (method == "clear") { selfSwitches_.clear(); return Value::undefined(); }
+    if (method == "onChange") { refreshNeeded_ = true; return Value::undefined(); }
+    if (arguments.empty() || arguments[0].array().size() != 3) throw std::invalid_argument("self switch key requires map, event and letter");
+    const auto key = selfKey(arguments[0][0].integer(), arguments[0][1].integer(), arguments[0][2].text());
+    if (method == "value") { const auto found = selfSwitches_.find(key); return found != selfSwitches_.end() && found->second; }
+    if (method != "setValue" || arguments.size() != 2) throw std::invalid_argument("self switch operation is not bound: " + method);
+    if (arguments[1].boolean()) selfSwitches_[key] = true; else selfSwitches_.erase(key);
+    dispatchGameDataMutation(kind, "onChange", {}); return Value::undefined();
+  }
+  if (kind != "variables" && kind != "switches") throw std::invalid_argument("game data store is not bound: " + kind);
+  if (method == "clear") { if (kind == "variables") variables_.clear(); else switches_.clear(); return Value::undefined(); }
+  if (method == "onChange") { refreshNeeded_ = true; return Value::undefined(); }
+  if (arguments.empty()) throw std::invalid_argument("game data access requires an ID");
+  const int id = arguments[0].integer();
+  if (method == "value") {
+    if (kind == "switches") { const auto found = switches_.find(id); return found != switches_.end() && found->second; }
+    const auto& value = variable(id);
+    if (std::holds_alternative<Value::Array>(value.data) || std::holds_alternative<Value::Object>(value.data))
+      throw std::runtime_error("object variable views are not bound");
+    return value;
+  }
+  if (method != "setValue" || arguments.size() != 2) throw std::invalid_argument("game data operation is not bound: " + method);
+  const auto& names = database_["system"][kind];
+  if (id <= 0 || (!names.null() && id >= static_cast<int>(names.array().size()))) return Value::undefined();
+  auto value = arguments[1];
+  if (kind == "variables") {
+    if (const auto* number = std::get_if<double>(&value.data)) value = std::floor(*number);
+    variables_[id] = std::move(value);
+  } else switches_[id] = value.boolean();
+  dispatchGameDataMutation(kind, "onChange", {});
+  return Value::undefined();
+}
 Value Session::imageRequests(const RuntimeCommandList& list) {
   Value::Array requests;
   const auto request = [&](const char* method, const Value& name, const Value& hue = Value(0)) {

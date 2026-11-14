@@ -55,38 +55,77 @@ std::array<double, 4> Session::screenFlashColor() const {
   const auto& color = screenEffects_["_flashColor"];
   return {color[0].number(), color[1].number(), color[2].number(), color[3].number()};
 }
+Value Session::invokeScreenBase(const std::string& method, const Value::Array& arguments) {
+  ensureScreenEffects(); auto& state = std::get<Object>(screenEffects_.data);
+  const auto argument = [&](std::size_t index) -> const Value& {
+    if (index >= arguments.size()) throw std::invalid_argument("missing screen argument");
+    return arguments[index];
+  };
+  const auto pictureCommand = [&](int code, Value::Array parameters) {
+    screenEventCommand({code, 0, parameters}, interpreter_); return Value::undefined();
+  };
+  if (method == "showPicture") return pictureCommand(231, {argument(0), argument(1), argument(2), 0,
+    argument(3), argument(4), argument(5), argument(6), argument(7), argument(8)});
+  if (method == "movePicture") return pictureCommand(232, {argument(0), 0, argument(1), 0,
+    argument(2), argument(3), argument(4), argument(5), argument(6), argument(7), argument(8), false});
+  if (method == "rotatePicture") return pictureCommand(233, {argument(0), argument(1)});
+  if (method == "tintPicture") return pictureCommand(234, {argument(0), argument(1), argument(2), false});
+  if (method == "erasePicture") return pictureCommand(235, {argument(0)});
+  if (method == "brightness") return brightness_;
+  if (method == "shake" || method == "zoomX" || method == "zoomY" || method == "zoomScale" || method == "weatherType" || method == "weatherPower") return state["_" + method];
+  if (method == "startFadeOut") { fadeOut_ = argument(0).integer(); state["_fadeInDuration"] = 0; }
+  else if (method == "startFadeIn") { state["_fadeInDuration"] = argument(0); fadeOut_ = 0; }
+  else if (method == "clearFade") { brightness_ = 255; fadeOut_ = 0; state["_fadeInDuration"] = 0; }
+  else if (method == "startTint") {
+    if (argument(0).array().size() != 4) throw std::invalid_argument("screen tone requires four components");
+    state["_toneTarget"] = argument(0); state["_toneDuration"] = argument(1);
+    if (!argument(1).integer()) state["_tone"] = argument(0);
+  } else if (method == "clearTone") { state["_tone"] = Array{0,0,0,0}; state["_toneTarget"] = Array{0,0,0,0}; state["_toneDuration"] = 0; }
+  else if (method == "startFlash") { state["_flashColor"] = argument(0); state["_flashDuration"] = argument(1); }
+  else if (method == "clearFlash") { state["_flashColor"] = Array{0,0,0,0}; state["_flashDuration"] = 0; }
+  else if (method == "startShake") { state["_shakePower"] = argument(0); state["_shakeSpeed"] = argument(1); state["_shakeDuration"] = argument(2); }
+  else if (method == "clearShake") { state["_shakePower"] = 0; state["_shakeSpeed"] = 0; state["_shakeDuration"] = 0; state["_shakeDirection"] = 1; state["_shake"] = 0; }
+  else if (method == "startZoom" || method == "setZoom") {
+    state["_zoomX"] = argument(0); state["_zoomY"] = argument(1); state["_zoomScaleTarget"] = argument(2);
+    if (method == "setZoom") { state["_zoomScale"] = argument(2); state["_zoomDuration"] = 0; } else state["_zoomDuration"] = argument(3);
+  } else if (method == "clearZoom") { state["_zoomX"] = 0; state["_zoomY"] = 0; state["_zoomScale"] = 1; state["_zoomScaleTarget"] = 1; state["_zoomDuration"] = 0; }
+  else if (method == "changeWeather") {
+    const auto& type = argument(0); const int duration = argument(2).integer();
+    if (type.text() != "none" || duration == 0) state["_weatherType"] = type;
+    state["_weatherPowerTarget"] = type.text() == "none" ? Value(0) : argument(1); state["_weatherDuration"] = duration;
+    if (!duration) state["_weatherPower"] = state["_weatherPowerTarget"];
+  } else if (method == "clearWeather") { state["_weatherType"] = "none"; state["_weatherPower"] = 0; state["_weatherPowerTarget"] = 0; state["_weatherDuration"] = 0; }
+  else throw std::invalid_argument("screen operation is not bound: " + method);
+  return Value::undefined();
+}
 bool Session::screenEventCommand(const EventCommand& entry, Interpreter& context) {
   if (screenEffects_.null()) screenEffects_ = initialScreen();
-  auto& state = std::get<Object>(screenEffects_.data);
   const auto& p = entry.parameters;
   const int code = entry.code;
   if (code == 221 || code == 222) {
     if (message_.busy) return false;
-    fadeOut_ = code == 221 ? 24 : 0; state["_fadeInDuration"] = code == 222 ? 24 : 0;
+    dispatchGameDataMutation("screen", code == 221 ? "startFadeOut" : "startFadeIn", {24});
     context.wait = 24; ++context.index; return false;
   }
   if (code == 223) {
-    state["_toneTarget"] = p[0]; state["_toneDuration"] = p[1];
-    if (!p[1].integer()) state["_tone"] = p[0];
+    dispatchGameDataMutation("screen", "startTint", {p[0], p[1]});
     if (p[2].boolean()) context.wait = p[1].integer();
     return true;
   }
   if (code == 224) {
-    state["_flashColor"] = p[0]; state["_flashDuration"] = p[1];
+    dispatchGameDataMutation("screen", "startFlash", {p[0], p[1]});
     if (p[2].boolean()) context.wait = p[1].integer();
     return true;
   }
   if (code == 225) {
-    state["_shakePower"] = p[0]; state["_shakeSpeed"] = p[1]; state["_shakeDuration"] = p[2];
+    dispatchGameDataMutation("screen", "startShake", {p[0], p[1], p[2]});
     if (p[3].boolean()) context.wait = p[2].integer();
     return true;
   }
   if (code == 236) {
     if (!battle_.active) {
-      const auto type = p[0].text(); const int duration = p[2].integer();
-      if (type != "none" || duration == 0) state["_weatherType"] = type;
-      state["_weatherPowerTarget"] = type == "none" ? Value(0) : p[1]; state["_weatherDuration"] = duration;
-      if (!duration) state["_weatherPower"] = state["_weatherPowerTarget"];
+      const int duration = p[2].integer();
+      dispatchGameDataMutation("screen", "changeWeather", {p[0], p[1], p[2]});
       if (p[3].boolean()) context.wait = duration;
     }
     return true;

@@ -13,6 +13,147 @@ function create(t, program) {
   return { session, scope: runtime.scope, step: () => api.step(session, {}) };
 }
 
+test('script variables and switches share native state and dispatch setter overrides', t => {
+  const { session, scope, step } = create(t, [variable(3, 4.8), command(355, [
+    'if ($gameVariables.value(3) !== 4) throw new Error("native variable not visible");\n' +
+    '$gameVariables.setValue(5, -1.2); $gameSwitches.setValue(3, true);'
+  ]), variable(6, 33)]);
+  const setter = scope.Game_Variables.prototype.setValue, onChange = scope.Game_Variables.prototype.onChange;
+  let writes = 0, changes = 0;
+  scope.Game_Variables.prototype.setValue = function(...args) { ++writes; return setter.apply(this, args); };
+  scope.Game_Variables.prototype.onChange = function() { ++changes; return onChange.call(this); };
+  step();
+  assert.equal(writes, 3); assert.equal(changes, 3);
+  assert.equal(scope.$gameVariables.value(5), -2);
+  assert.equal(api.snapshot(session).variables[6], 33);
+  assert.equal(api.snapshot(session).switches[3], true);
+  scope.$gameVariables.setValue(1000, 7); assert.equal(changes, 3);
+  assert.throws(() => scope.$gameVariables.setValue(8, []), /object variable assignment/);
+});
+
+test('screen and self-switch script methods operate on the native save state', t => {
+  const { session, scope, step } = create(t, [command(223, [[10, 20, 30, 0], 0, false]), command(355, [
+    '$gameScreen.startTint([40, 50, 60, 0], 0);\n' +
+    '$gameScreen.showPicture(1, "Sheet", 0, 3, 4, 100, 100, 255, 0);\n' +
+    '$gameSelfSwitches.setValue([1, 1, "A"], true);'
+  ])]);
+  const startTint = scope.Game_Screen.prototype.startTint;
+  let tints = 0;
+  scope.Game_Screen.prototype.startTint = function(...args) { ++tints; return startTint.apply(this, args); };
+  step();
+  assert.equal(tints, 2);
+  assert.equal(scope.$gameScreen.picture(1)._x, 3);
+  assert.equal(scope.$gameSelfSwitches.value([1, 1, 'A']), true);
+  const saved = api.save(session);
+  assert.deepEqual(saved.screen._tone, [40, 50, 60, 0]);
+  assert.equal(saved.selfSwitches._data['1,1,A'], true);
+});
+
+test('script variable operands evaluate with the current native interpreter', t => {
+  const { session, step } = create(t, [command(122, [7, 7, 0, 4, 'this._eventId']),
+    command(122, [8, 8, 0, 4, 'var local = $gameVariables.value(7); local + 6'])]);
+  step();
+  assert.equal(api.snapshot(session).variables[7], 1);
+  assert.equal(api.snapshot(session).variables[8], 7);
+});
+
+test('movement scripts dispatch on native characters and can retain a route command until arrival', t => {
+  const route = { list: [{ code: 45, parameters: ['approach'] }, { code: 0, parameters: [] }], repeat: false, skippable: false, wait: true };
+  const { scope, step } = create(t, [command(205, [-1, route])]);
+  scope.$gameMap.event(1).locate(3, 3);
+  const player = scope.$gamePlayer;
+  let calls = 0;
+  scope.Game_Character.prototype.processMoveRouteScriptCall = function(source) {
+    assert.equal(this, player); assert.equal(source, 'approach'); ++calls;
+    const direction = this.findDirectionTo(4, 1);
+    if (direction) { this.moveStraight(direction); assert.equal(this.isMoving(), true); }
+    if (this.x !== 4 || this.y !== 1) this._moveRouteIndex -= 1;
+    this.setMovementSuccess(true);
+  };
+  for (let i = 0; i < 80; ++i) step();
+  assert.equal(player.x, 4); assert.equal(calls, 3);
+  assert.equal(player.isMoving(), false); assert.equal(player.isDashing(), false);
+});
+
+test('ordinary movement scripts bind the character and preserve thrown exceptions', t => {
+  const route = { list: [{ code: 45, parameters: ['if (routeFailure) throw routeFailure; this.setDirection(6);'] }, { code: 0 }], repeat: false, skippable: false, wait: true };
+  const { scope, step } = create(t, [command(205, [-1, route])]);
+  const failure = new Error('route failure'); scope.routeFailure = failure;
+  assert.throws(step, error => error === failure);
+  assert.equal(scope.$gamePlayer._moveRouteIndex, 0);
+  scope.routeFailure = null;
+  for (let i = 0; i < 4; ++i) step();
+  assert.equal(scope.$gamePlayer.direction(), 6);
+});
+
+test('native actor skill initialization dispatches script extensions for initial and lazy actors', t => {
+  const session = api.create(fixture([])); t.after(() => api.dispose(session));
+  const { scope } = createScriptRuntime(api, session);
+  const initialize = scope.Game_Actor.prototype.initSkills;
+  let calls = 0;
+  scope.Game_Actor.prototype.initSkills = function() {
+    initialize.call(this); this.equipped = [0, 0, 0, 0]; ++calls;
+  };
+  api.newGame(session);
+  const actor = scope.$gameActors.actor(1);
+  assert.equal(calls, 1); assert.deepEqual(actor.equipped, [0, 0, 0, 0]);
+  actor.equipped[0] = 2;
+  assert.deepEqual(api.save(session).actors._data[1]._skills, [2]);
+  assert.equal(scope.$gameActors.actor(1), actor); assert.equal(actor.equipped[0], 2);
+  const second = scope.$gameActors.actor(2);
+  assert.equal(calls, 2); assert.deepEqual(second.equipped, [0, 0, 0, 0]);
+});
+
+test('party dictionaries expose native inventory and import category snapshots atomically', t => {
+  const { scope, step, session } = create(t, [command(126, [1, 0, 0, 3])]);
+  step();
+  const party = scope.$gameParty;
+  assert.equal(party._items[1], 3);
+  assert.deepEqual(Object.assign({}, party._items), { 1: 3 });
+  party._weapons = { 1: 2 }; party._items = { 1: 8 };
+  assert.equal(api.snapshot(session).inventory[1], 8);
+  assert.equal(api.snapshot(session).inventory[100001], 2);
+  party._items[1] = 4; assert.equal(api.snapshot(session).inventory[1], 4);
+  assert.throws(() => { party._items = { 1: 99, invalid: 2 }; });
+  assert.equal(party._items[1], 4);
+  delete party._items[1]; assert.equal(party._items[1], undefined);
+  assert.equal(Object.keys(party._items).length, 0);
+  assert.equal(party.members()[0], scope.$gameActors.actor(1));
+});
+
+test('party initialization overrides reset custom fields with new game', t => {
+  const session = api.create(fixture([])); t.after(() => api.dispose(session));
+  const { scope } = createScriptRuntime(api, session);
+  const original = scope.Game_Party.prototype.initialize;
+  let calls = 0;
+  scope.Game_Party.prototype.initialize = function() { original.call(this); this.worlds = {}; ++calls; };
+  api.newGame(session); scope.$gameParty.worlds[1] = 'retained';
+  api.newGame(session);
+  assert.equal(calls, 2); assert.deepEqual(scope.$gameParty.worlds, {});
+});
+
+test('native entity views stay live and retained views survive world replacement and disposal', t => {
+  const database = fixture([]); database.maps[2] = structuredClone(database.maps[1]);
+  const session = api.create(database); let disposed = false;
+  t.after(() => { if (!disposed) api.dispose(session); });
+  const { scope } = createScriptRuntime(api, session); api.newGame(session);
+  const player = scope.$gamePlayer, event = scope.$gameMap.event(1), actor = scope.$gameActors.actor(1);
+  assert.equal(actor, scope.$gameActors.actor(1)); assert.equal(scope.$gameActors.actor(999), null);
+  player.locate(2, 2); event.locate(4, 2); actor._hp = 6;
+  assert.equal(api.snapshot(session).player.x, 2); assert.equal(api.snapshot(session).actors[1].hp, 6);
+  api.playerTransfer(session, 'reserve', 2, 1, 1, 2, 2); api.playerTransfer(session, 'perform');
+  assert.equal(player, scope.$gamePlayer); assert.equal(player.x, 1);
+  assert.equal(event.x, 4); assert.notEqual(event, scope.$gameMap.event(1));
+  assert.equal(actor, scope.$gameActors.actor(1));
+  api.newGame(session);
+  assert.notEqual(player, scope.$gamePlayer); assert.notEqual(actor, scope.$gameActors.actor(1));
+  player._x = 4; actor._hp = 3;
+  assert.equal(scope.$gamePlayer.x, 1); assert.notEqual(scope.$gameActors.actor(1).hp, 3);
+  api.dispose(session); disposed = true;
+  assert.equal(event.x, 4); assert.equal(player.x, 4); assert.equal(actor.hp, 3);
+  assert.equal(actor.isStateAffected(1), false);
+});
+
 test('native frame dispatch reaches nested instance overrides and saved native originals once', t => {
   const { session, scope, step } = create(t, [show(), command(355, [
     'const p = $gameScreen.picture(1); p._rotationSpeed = 2; p.updateMove = function() { this._x += 3; };'
@@ -652,4 +793,101 @@ test('native script condition errors preserve identity and leave the command ret
   scope.conditionFailure = null;
   step();
   assert.equal(api.snapshot(session).variables[1], 7);
+});
+
+test('script Utils delegates native helpers and uses configured guest options', t => {
+  const session = api.create(fixture([]));
+  t.after(() => api.dispose(session));
+  const runtime = createScriptRuntime(api, session, { guestArguments: ['test&btest'] });
+  const { Utils } = runtime.scope;
+  assert.equal(Utils.RPGMAKER_NAME, 'MV');
+  assert.equal(Utils.RPGMAKER_VERSION, '1.6.1');
+  assert.equal(Utils.isOptionValid('test'), true);
+  assert.equal(Utils.isOptionValid('btest'), true);
+  assert.equal(Utils.isOptionValid('eventtest'), false);
+  assert.equal(Utils.rgbToCssColor(1.4, 2.6, 3), 'rgb(1,3,3)');
+  assert.equal(Utils.escapeHtml('<a & "b">'), '&lt;a &amp; &quot;b&quot;&gt;');
+  const first = Utils.generateRuntimeId();
+  assert.equal(Utils.generateRuntimeId(), first + 1);
+  runtime.scope.navigator = { userAgent: 'iPhone AppleWebKit Mobile Safari' };
+  assert.equal(Utils.isMobileDevice(), true);
+  assert.equal(Utils.isMobileSafari(), true);
+  assert.equal(Utils.isAndroidChrome(), false);
+});
+
+test('database publication validates the full payload before replacing native tables', t => {
+  const session = api.create(fixture([]));
+  t.after(() => api.dispose(session));
+  const before = api.databaseInvoke(session, 'read', 'actors');
+  assert.throws(() => api.databaseInvoke(session, 'publish', {
+    actors: [null, { name: 'Changed' }], invalid: { callback() {} }
+  }), /JSON values/);
+  assert.deepEqual(api.databaseInvoke(session, 'read', 'actors'), before);
+  api.newGame(session);
+  assert.throws(() => api.databaseInvoke(session, 'publish', { actors: [] }), /before game state initialization/);
+});
+
+test('temporary game state shares reservations and destinations with native state', t => {
+  const session = api.create(fixture([]));
+  t.after(() => api.dispose(session));
+  const runtime = createScriptRuntime(api, session, { guestArguments: ['test'] });
+  const { scope } = runtime;
+  runtime.runScript(`
+    var tempInitialize = Game_Temp.prototype.initialize;
+    Game_Temp.prototype.initialize = function() { tempInitialize.call(this); this.isManipulatingHud = false; };
+    $gameTemp.initialize();
+  `);
+  assert.equal(scope.$gameTemp.isPlaytest(), true);
+  assert.equal(scope.$gameTemp.isManipulatingHud, false);
+  scope.$dataCommonEvents = [null, { id: 1 }];
+  scope.$gameTemp.reserveCommonEvent(1);
+  assert.equal(api.gameDataInvoke(session, 'temp', 'commonEventId', []), 1);
+  assert.equal(scope.$gameTemp.reservedCommonEvent(), scope.$dataCommonEvents[1]);
+  scope.$gameTemp.clearCommonEvent();
+  assert.equal(scope.$gameTemp.isCommonEventReserved(), false);
+  scope.$gameTemp.setDestination(5, 7);
+  assert.equal(scope.$gameTemp.isDestinationValid(), true);
+  assert.equal(api.gameDataInvoke(session, 'temp', 'destinationX', []), 5);
+  assert.equal(scope.$gameTemp.destinationY(), 7);
+  scope.$gameTemp.initialize();
+  assert.equal(scope.$gameTemp.isDestinationValid(), false);
+  assert.equal(scope.$gameTemp.destinationX(), null);
+});
+
+test('native battle actions dispatch hit and evasion aliases with retained battler identity', t => {
+  const data = fixture([]);
+  data.skills[2] = { id: 2, stypeId: 1, hitType: 1, successRate: 100, scope: 1, occasion: 0,
+    damage: { type: 1, formula: '1', variance: 0, critical: false, elementId: 0 }, effects: [] };
+  data.classes[1].traits.push({ code: 22, dataId: 0, value: 0.5 });
+  data.enemies = [null, { name: 'Enemy', params: [100, 20, 10, 10, 10, 10, 10, 10], actions: [], traits: [{ code: 22, dataId: 1, value: 0.1 }] }];
+  data.troops = [null, { members: [{ enemyId: 1, x: 100, y: 100 }], pages: [] }];
+  const session = api.create(data); t.after(() => api.dispose(session));
+  const { scope } = createScriptRuntime(api, session); api.newGame(session);
+  scope.$dataSkills = data.skills; scope.$dataItems = data.items;
+  const hit = scope.Game_Action.prototype.itemHit, eva = scope.Game_Action.prototype.itemEva;
+  let enemy, calls = 0;
+  scope.Game_Action.prototype.itemHit = function(target) {
+    ++calls; enemy = target; this.checkedHit = true;
+    assert.equal(this.subject(), scope.$gameActors.actor(1));
+    assert.ok(target instanceof scope.Game_BattlerBase);
+    assert.equal(target.isEnemy(), true); assert.equal(target.isActor(), false);
+    assert.equal(hit.call(this, target), 0.5);
+    return 1;
+  };
+  scope.Game_Action.prototype.itemEva = function(target) {
+    assert.equal(target, enemy);
+    assert.equal(this.checkedHit, true);
+    assert.equal(eva.call(this, target), 0.1);
+    return 0;
+  };
+  api.setRandomStream(session, Array(1000).fill(0.5));
+  api.startBattle(session, 1, true, true); api.acknowledge(session);
+  for (let i = 0; i < 120 && !scope.BattleManager.isInputting(); ++i) api.step(session, {});
+  assert.equal(scope.BattleManager.isInputting(), true);
+  api.chooseAction(session, 0, 2, 0, false);
+  for (let i = 0; i < 120 && !calls; ++i) { api.acknowledge(session); api.step(session, {}); }
+  assert.equal(calls, 1);
+  const retainedHp = enemy.hp;
+  api.startBattle(session, 1, true, true);
+  assert.equal(enemy.hp, retainedHp, 'old enemy reference must retain its previous state');
 });

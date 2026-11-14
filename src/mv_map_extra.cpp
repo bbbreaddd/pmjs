@@ -109,6 +109,8 @@ int MapMechanics::terrainTag(const Session& session, int x, int y) {
 
 int MapMechanics::regionId(const Session& session, int x, int y) {
   if (x < 0 || y < 0 || x >= session.map()["width"].integer() || y >= session.map()["height"].integer()) return 0;
+  const auto& tiled = session.database()["tiledMaps"][std::to_string(session.mapId())];
+  if (!tiled.null()) return tiled["regions"][y * tiled["width"].integer() + x].integer();
   // Region layer is layer 5 in map data
   return getTileId(session, x, y, 5);
 }

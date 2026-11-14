@@ -184,6 +184,8 @@ napi_value cacheImage(napi_env env, napi_callback_info info) try {
     runtime->imageCache.reserve(key, 0, 0);
     auto* entry = runtime->imageCache.get(key);
     entry->bitmap = image.bitmap; entry->bitmapIdentity = mv::nextRuntimeIdentity(); entry->reservationId.reset();
+    entry->requestOnly = image.bitmap->isRequestOnly(); entry->ready = image.bitmap->isReady(); entry->error = image.bitmap->isError();
+    entry->pixelCount = static_cast<std::size_t>(image.bitmap->width) * image.bitmap->height;
   } else if (operation != "get") throw std::invalid_argument("image cache operation is not bound: " + operation);
   auto* entry = runtime->imageCache.get(key); if (!entry || !entry->bitmap) return null(env);
   auto result = moduleObject(env); napi_value identity;

@@ -1,10 +1,17 @@
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
+const { createRequire } = require('node:module');
 const { createScriptRuntime } = require('./mv-script-runtime.cjs');
+const { installDatabase } = require('./native-database.cjs');
+const { installStorage } = require('./native-storage.cjs');
 
 function installPlugins(runtime, gameRoot, manifest) {
   const scope = runtime.scope;
+  scope.require = createRequire(path.resolve(gameRoot, 'package.json'));
+  scope.process = process;
+  scope.Buffer = Buffer;
+  runtime.runScript('globalThis.window = globalThis; globalThis.global = globalThis;');
   const queue = [];
   let loading = false, scheduling = 0;
   function loadQueued() {
@@ -52,11 +59,18 @@ function installPlugins(runtime, gameRoot, manifest) {
   return manager;
 }
 
-function createPluginRuntime(engine, session, options) {
-  const runtime = createScriptRuntime(engine, session, { native: options.native });
+function createRuntimeBindings(engine, session, options) {
+  const runtime = createScriptRuntime(engine, session, { native: options.native, guestArguments: options.guestArguments });
   runtime.installScenes();
+  installDatabase(runtime, engine, session, options.gameRoot);
+  installStorage(runtime, options.native, options.storage);
+  return runtime;
+}
+
+function createPluginRuntime(engine, session, options) {
+  const runtime = createRuntimeBindings(engine, session, options);
   installPlugins(runtime, options.gameRoot, options.manifest);
   return runtime;
 }
 
-module.exports = { installPlugins, createPluginRuntime };
+module.exports = { installPlugins, createRuntimeBindings, createPluginRuntime };

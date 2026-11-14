@@ -27,8 +27,29 @@ function loadTiledMap(root, source) {
     if (Array.isArray(value)) return Object.fromEntries(value.map(item => [item.name, item.value]));
     return { ...value };
   }
-  const layers = (map.layers || []).map((layer, index) => {
+  const layers = (map.layers || []).flatMap((layer, index) => {
     const at = `${source}.layers[${index}]`;
+    if (layer.type === 'objectgroup') {
+      if (!Array.isArray(layer.objects)) throw new Error(`${at}: unsupported layer representation`);
+      const result = [], props = properties(layer.properties);
+      let current;
+      for (const [i, object] of layer.objects.entries()) {
+        if (object.visible === false) continue;
+        const x = object.x / map.tilewidth, y = (object.y - object.height) / map.tileheight;
+        if (!Number.isInteger(object.gid) || object.gid < 1 || object.gid > 0x1fffffff || object.rotation ||
+            object.width !== map.tilewidth || object.height !== map.tileheight || !Number.isInteger(x) || !Number.isInteger(y) ||
+            x < 0 || y < 0 || x >= map.width || y >= map.height || Object.keys(properties(object.properties)).length)
+          throw new Error(`${at}.objects[${i}]: unsupported tile object geometry or properties`);
+        const cell = y * map.width + x;
+        if (!current || current.data[cell]) {
+          current = { ...layer, type: 'tilelayer', width: map.width, height: map.height,
+            properties: { ...props, priority: props.priority || 1 }, data: Array(map.width * map.height).fill(0) };
+          delete current.objects; result.push(current);
+        }
+        current.data[cell] = object.gid;
+      }
+      return result;
+    }
     if (layer.type !== 'tilelayer' || layer.encoding || layer.compression || layer.chunks)
       throw new Error(`${at}: unsupported layer representation`);
     if (layer.width !== map.width || layer.height !== map.height ||
@@ -37,7 +58,8 @@ function loadTiledMap(root, source) {
     for (const [i, gid] of layer.data.entries())
       if (!Number.isInteger(gid) || gid < 0 || gid > 0x1fffffff)
         throw new Error(`${at}.data[${i}]: unsupported tile ID or flip flags`);
-    return { ...layer, properties: properties(layer.properties) };
+    const props = properties(layer.properties);
+    return [{ ...layer, visible: props.collision || props.regionId || props.toLevel ? false : layer.visible, properties: props }];
   });
   const tilesets = (map.tilesets || []).map((entry, index) => {
     const at = `${source}.tilesets[${index}]`;
@@ -69,6 +91,7 @@ function loadTiledMap(root, source) {
     if (gid && !tilesets.some(set => gid >= set.firstgid && gid < set.firstgid + set.tilecount))
       throw new Error(`${source}.layers[${index}].data[${i}]: unknown tile ID`);
   const passage = Array(map.width * map.height).fill(0);
+  const regions = Array(map.width * map.height).fill(0);
   const blocked = new Set();
   function arrowBits(value, at) {
     let bits = 0;
@@ -81,6 +104,15 @@ function loadTiledMap(root, source) {
   }
   for (const [index, layer] of layers.entries()) {
     const props = layer.properties, kind = props.collision, at = `${source}.layers[${index}]`;
+    if (props.regionId) {
+      if (Number(props.level || 0) !== 0) throw new Error(`${at}: unsupported region level`);
+      for (const [cell, gid] of layer.data.entries()) if (gid) {
+        const set = tilesets.find(set => gid >= set.firstgid && gid < set.firstgid + set.tilecount), id = gid - set.firstgid;
+        const tile = { ...set.tileproperties[id], ...set.tiles[id]?.properties };
+        regions[cell] = Number(props.regionId === 'tile-base' ? tile.regionId || 0 : props.regionId);
+        if (!Number.isInteger(regions[cell]) || regions[cell] < 0) throw new Error(`${at}: invalid region ID`);
+      }
+    }
     if (!kind) continue;
     if (!['full', 'tile-base', 'arrow'].includes(kind) || Number(props.level || 0) !== 0)
       throw new Error(`${at}: unsupported collision layout or level`);
@@ -97,6 +129,6 @@ function loadTiledMap(root, source) {
     }
   }
   for (const cell of blocked) passage[cell] = 15;
-  return { ...map, layers, tilesets, passage };
+  return { ...map, layers, tilesets, passage, regions };
 }
 module.exports = { loadTiledMap };

@@ -117,6 +117,7 @@ set(PMJS_RUNTIME_SOURCES
   src/mv_engine.cpp
   src/mv_expression.cpp
   src/mv_script.cpp
+  src/mv_script_entities.cpp
   src/mv_actor_events.cpp
   src/mv_enemy_events.cpp
   src/mv_common_events.cpp

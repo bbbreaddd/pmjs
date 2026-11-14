@@ -29,8 +29,12 @@ async function runNativeMv(options, hooks = {}) {
   const root = path.resolve(options.gameRoot);
   const saveRoot = path.resolve(options.saveRoot);
   const canonical = value => fs.existsSync(value) ? fs.realpathSync(value) : value;
-  if ([path.join(root, 'save'), path.join(path.dirname(root), 'save')].some(value => canonical(value) === canonical(saveRoot))) throw new Error('experimental engine requires a separate save directory');
+  if ([path.join(root, 'save'), path.join(path.dirname(root), 'save')].some(value => canonical(value) === canonical(saveRoot))) throw new Error('native-mv requires a separate save directory');
   const loaded = options.engineData ? loadSceneData(options.engineData) : loadGame(root), settings = loaded.settings;
+  const config = options.config ? JSON.parse(fs.readFileSync(options.config, 'utf8')) : {};
+  const patchRoot = fs.existsSync(path.join(__dirname, 'patches')) ? __dirname : path.dirname(__dirname);
+  const adapter = config.omori ? require(path.join(patchRoot, 'patches/omori/native-mv.cjs')) : null;
+  adapter?.prepareGame({ loaded, gameRoot: root, loadTiledMap: require('./tiled-map-data.cjs').loadTiledMap });
   const gameTitle = loaded.database.system.gameTitle;
   const native = require(path.resolve(options.addon));
   const compression = { compressToBase64: native.compression.compressLZString, decompressFromBase64: native.compression.decompressLZString };
@@ -49,6 +53,7 @@ async function runNativeMv(options, hooks = {}) {
   if (startup.cancelled || startup.preparation.cancelled) { native.runtime.quit(); return { code: 0 }; }
   const engine = native.mvEngine;
   const session = engine.create(loaded.database);
+  const database = loaded.database;
   loaded.database = null;
   try {
     engine.attach(session, settings);
@@ -59,13 +64,14 @@ async function runNativeMv(options, hooks = {}) {
     engine.configure(session, configuration);
     let configurationRevision = engine.storageStatus(session).configurationRevision;
     engine.setSaveMetadata(session, loadSaveMetadata(storage, compression));
-    const runtimeOptions = { engine, session, native, manifest: loaded.manifest, settings, storage, gameRoot: root };
+    const runtimeOptions = { engine, session, native, manifest: loaded.manifest, database, settings, storage, gameRoot: root, guestArguments: options.guestArguments,
+      createPluginRuntime: require('./native-plugins.cjs').createPluginRuntime };
     const scriptRuntime = hooks.installRuntime ? await hooks.installRuntime(runtimeOptions) :
-      loaded.manifest ? require('./native-plugins.cjs').createPluginRuntime(engine, session, runtimeOptions) : null;
+      adapter ? adapter.createRuntime(runtimeOptions) : loaded.manifest ? require('./native-plugins.cjs').createPluginRuntime(engine, session, runtimeOptions) : null;
     if (options.battleTest) engine.battleTest(session);
     else if (loaded.initialState) engine.load(session, loaded.initialState);
     else if (scriptRuntime?.start) scriptRuntime.start(); else engine.openTitle(session);
-    hooks.onSession?.({ engine, session, native });
+    hooks.onSession?.({ engine, session, native, scriptRuntime });
     console.log('[pmjs] engine=native-mv original_engine_scripts=0');
     hooks.stage?.('playing');
     let deadline = performance.now();
@@ -109,6 +115,7 @@ async function runNativeMv(options, hooks = {}) {
         native.swapFrame();
         const presentedAt = performance.now(); hooks.observeFrame?.(presentedAt - now, presentedAt);
       }
+      await new Promise(resolve => setImmediate(resolve));
     }
   } finally { engine.dispose(session); }
   return { code: 0 };

@@ -129,6 +129,14 @@ struct RuntimeHooks {
   std::function<bool(int)> choice;
   std::function<bool(const std::shared_ptr<RuntimeInterpreter>&, const std::string&, const Value::Array&)> interpreterControl;
   std::function<void(const std::shared_ptr<RuntimeInterpreter>&)> setupChoiceCallback;
+  std::function<bool(const std::string&, const std::string&, const Value::Array&)> gameDataMutation;
+  std::function<std::optional<Value>(int, int, int, int, int)> tileShadow;
+  std::function<std::optional<double>(const std::string&, const std::shared_ptr<RuntimeObject>&, const std::shared_ptr<RuntimeObject>&, bool, int)> actionRate;
+  std::function<Value(const std::shared_ptr<RuntimeInterpreter>&, const std::string&)> scriptValue;
+  std::function<void(const std::shared_ptr<RuntimeObject>&, const std::string&)> characterScript;
+  std::function<bool(const std::shared_ptr<RuntimeObject>&, const std::string&)> actorLifecycle;
+  std::function<bool(const std::shared_ptr<RuntimeObject>&, int)> actorSpriteHome;
+  std::function<bool(const std::shared_ptr<RuntimeObject>&, const std::shared_ptr<RuntimeObject>&)> enemySpriteBattler;
 };
 
 using FormulaResolver = std::function<double(const std::string&, const std::vector<double>&)>;
@@ -260,6 +268,7 @@ struct Battler {
   int characterIndex = 0, faceIndex = 0, classId = 1;
   std::map<int, double> exp;
   int id = 0, level = 1, hp = 0, mp = 0, tp = 0, lastTargetIndex = 0;
+  double screenX = 0, screenY = 0;
   bool enemy = false, hidden = false, guarding = false, escaped = false, plural = false;
   std::vector<int> equips, equipKinds, states;
   std::set<int> skills;
@@ -271,6 +280,16 @@ struct Battler {
   bool isAlive() const { return !hidden && std::find(states.begin(), states.end(), 1) == states.end(); }
   bool isDead() const { return !hidden && std::find(states.begin(), states.end(), 1) != states.end(); }
 };
+
+template<class State> struct RuntimeEntity : RuntimeObject {
+  State* attached = nullptr;
+  std::unique_ptr<State> retained;
+  int id = 0, mapId = 0;
+  State& value() const { return attached ? *attached : *retained; }
+  void detach() { if (attached) { retained = std::make_unique<State>(*attached); attached = nullptr; } }
+};
+using RuntimeCharacter = RuntimeEntity<Character>;
+using RuntimeActor = RuntimeEntity<Battler>;
 
 struct Action {
   bool enemy = false, item = false;
@@ -381,12 +400,22 @@ class Window_ChoiceList;
 class Window_NumberInput;
 class Window_EventItem;
 class Sprite_Enemy;
+struct RuntimeEnemySprite;
 
 class Session {
  public:
   explicit Session(Value database);
+  ~Session();
+  Session(Session&&) = default;
+  Session& operator=(Session&&) = default;
   void setRuntimeHooks(std::shared_ptr<RuntimeHooks> hooks) { runtimeHooks_ = std::move(hooks); }
   std::set<std::uint64_t> runtimeObjectIdentities() const;
+  std::shared_ptr<RuntimeCharacter> runtimeCharacter(int id);
+  std::shared_ptr<RuntimeActor> runtimeActor(int id);
+  void initializeActorSkills(const std::shared_ptr<RuntimeActor>& actor);
+  void initializeActorMembers(const std::shared_ptr<RuntimeActor>& actor);
+  Value runtimeCharacterCommand(const std::shared_ptr<RuntimeCharacter>& character, const std::string& method, const Value::Array& arguments);
+  void setCameraTarget(std::shared_ptr<RuntimeCharacter> target, double speed);
   std::shared_ptr<RuntimePicture> runtimePicture(int id) const;
   std::shared_ptr<RuntimePicture> createRuntimePicture(int slot = -1);
   bool ownsPictureSprite(const RuntimePicture& picture) const;
@@ -410,6 +439,9 @@ class Session {
   std::shared_ptr<RuntimeCommandList> messageChoices() const { return message_.choices.storage; }
   void invokeInterpreterControl(const std::shared_ptr<RuntimeInterpreter>& interpreter, const std::string& method, const Value::Array& arguments);
   double scriptRandom() { return random(); }
+  Value invokeGameDataBase(const std::string& kind, const std::string& method, const Value::Array& arguments);
+  Value invokeScreenBase(const std::string& method, const Value::Array& arguments);
+  void dispatchGameDataMutation(const std::string& kind, const std::string& method, const Value::Array& arguments);
   void setRuntimeWaitMode(const std::shared_ptr<RuntimeInterpreter>& interpreter, std::string mode);
   std::string runtimeWaitMode(const std::shared_ptr<RuntimeInterpreter>& interpreter);
   void newGame();
@@ -418,6 +450,8 @@ class Session {
   void acknowledge(int choice = -1);
   Value snapshot() const;
   int mapId() const { return mapId_; }
+  int tileWidth() const;
+  int tileHeight() const;
   void setMessageTextLayoutResolver(std::function<std::string(const std::string&, bool)> resolver) { messageTextLayoutResolver_ = std::move(resolver); }
   const MapState& mapState() const { return mapState_; }
   std::array<double, 4> screenTone() const;
@@ -426,7 +460,11 @@ class Session {
   const Character& player() const { return player_; }
   const std::vector<Event>& events() const { return events_; }
   const Message& message() const { return message_; }
+  std::shared_ptr<RuntimeActor> runtimeBattler(Battler& battler);
+  void detachRuntimeEnemies();
+  double actionRateBase(const std::string& method, const Battler& subject, const Battler& target, const Value& item) const;
   const Value& database() const { return database_; }
+  void setDatabaseTables(Value tables);
   const Value& map() const;
   int screenWidth() const { return screenWidth_; }
   int screenHeight() const { return screenHeight_; }
@@ -650,6 +688,7 @@ class Session {
   void skipBranch(int indent, Interpreter& context);
   bool condition(const Value& parameters, const Interpreter& context);
   const Value& variable(int id) const;
+  static std::string selfKey(int map, int event, const std::string& letter);
   void operateVariable(int id, int operation, const Value& operand);
   Value gameDataOperand(int type, int first, int second, const Interpreter& context);
   void gainItem(int kind, int id, double amount, bool includeEquipped);
@@ -682,6 +721,7 @@ class Session {
   std::shared_ptr<Window_NumberInput> numberWindow_;
   std::shared_ptr<Window_EventItem> eventItemWindow_;
   std::vector<std::shared_ptr<Sprite_Enemy>> enemySprites_;
+  std::map<std::size_t, std::weak_ptr<RuntimeEnemySprite>> runtimeEnemySprites_;
   std::function<int(const Battler&)> enemyBitmapHeightResolver_;
   void updateEnemySprites();
   void resetEnemySprites();
@@ -760,6 +800,14 @@ class Session {
   void centerPlayer();
   void locatePlayer(double x, double y);
   bool eventMovementAllowed_ = true;
+  std::map<int, std::weak_ptr<RuntimeCharacter>> runtimeCharacters_;
+  std::map<int, std::weak_ptr<RuntimeActor>> runtimeActors_;
+  std::map<int, std::weak_ptr<RuntimeActor>> runtimeEnemies_;
+  bool runtimeTileShadows_ = false;
+  std::shared_ptr<RuntimeCharacter> cameraTarget_;
+  double cameraSpeed_ = 800;
+  void detachRuntimeEntities(bool all);
+  std::array<double, 2> characterScreenPosition(const Character& character) const;
 };
 
 }  // namespace pmjs::mv

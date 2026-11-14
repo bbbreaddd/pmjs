@@ -12,7 +12,7 @@ struct BoundSprite : Sprite {
   struct Animation {
     mv::Value source;
     mv::Sprite_Animation state;
-    explicit Animation(const mv::Value& value, bool mirror, int delay) : source(value) { state.setup(&source, mirror, delay); }
+    explicit Animation(const mv::Value& value, bool mirror, int delay, int rate) : source(value) { state.setup(&source, mirror, delay); state.rate = rate; state.duration = mv::Sprite_Animation::durationFor(source, rate); }
   };
   std::vector<std::shared_ptr<Animation>> animations;
 };
@@ -30,7 +30,10 @@ struct DisplayServices {
   mv::ScriptSceneManager scenes;
   Input input;
   bool focused = true;
-  explicit DisplayServices(std::shared_ptr<State> value) : owner(std::move(value)) { bindRuntime(owner->core); }
+  explicit DisplayServices(std::shared_ptr<State> value) : owner(std::move(value)) {
+    if (boundRuntime() && boundRuntime() != &owner->core) throw std::runtime_error("display graphics services belong to another runtime");
+    bindRuntime(owner->core);
+  }
   ~DisplayServices() { scenes.scene.reset(); scenes.nextScene.reset(); unbindRuntime(owner->core); }
 };
 struct DisplayOwner { std::shared_ptr<DisplayServices> services; std::shared_ptr<Container> node; std::string kind; };
@@ -107,6 +110,9 @@ napi_value field(napi_env env, napi_callback_info info) try {
   auto sprite = std::dynamic_pointer_cast<Sprite>(owner.node);
   auto tiling = std::dynamic_pointer_cast<TilingSprite>(owner.node);
   auto window = std::dynamic_pointer_cast<BoundWindow>(owner.node);
+  if (auto layer = std::dynamic_pointer_cast<WindowLayer>(owner.node)) {
+    if (name == "width") scalar = &layer->width; else if (name == "height") scalar = &layer->height;
+  }
   auto scene = std::dynamic_pointer_cast<mv::ScriptScene>(owner.node);
   if (auto filter = std::dynamic_pointer_cast<BoundGlitchFilter>(owner.node)) {
     if (name == "slices") scalar = &filter->value->slices; else if (name == "offset") scalar = &filter->value->offset;
@@ -133,6 +139,8 @@ napi_value field(napi_env env, napi_callback_info info) try {
     else if (name == "active") flag = &window->active; else if (name == "opening") flag = &window->opening;
     else if (name == "closing") flag = &window->closing; else if (name == "index") integer = &window->model.index;
     else if (name == "topRow") integer = &window->model.topRow;
+    else if (name == "cursorFixed") flag = &window->model.cursorFixed;
+    else if (name == "cursorAll") flag = &window->model.cursorAll;
   }
   if (scene) {
     if (name == "active") flag = &scene->active; else if (name == "fadeDuration") integer = &scene->fadeDuration;
@@ -159,6 +167,17 @@ napi_value children(napi_env env, napi_callback_info info) try {
     check(env, napi_set_element(env, result, i, wrap(env, owner.services, owner.node->children[i])), "cannot list display child");
   return result;
 } catch (const std::exception& error) { return throwException(env, error); }
+napi_value callWindow(napi_env env, napi_value receiver, const char* name, std::vector<napi_value> arguments = {}) {
+  napi_value method, result;
+  check(env, napi_get_named_property(env, receiver, name, &method), "cannot read window method");
+  check(env, napi_call_function(env, receiver, method, arguments.size(), arguments.data(), &result), "window method failed");
+  return result;
+}
+bool windowBoolean(napi_env env, napi_value receiver, const char* name, std::vector<napi_value> arguments = {}) {
+  const auto value = callWindow(env, receiver, name, std::move(arguments));
+  napi_value converted; check(env, napi_coerce_to_bool(env, value, &converted), "cannot read window predicate");
+  return asBoolean(env, converted);
+}
 napi_value invoke(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info); if (args.size() < 2) throw std::invalid_argument("display operation requires handle and method");
   auto& owner = display(env, args[0]); const auto method = asString(env, args[1]); auto& node = *owner.node;
@@ -247,6 +266,70 @@ napi_value invoke(napi_env env, napi_callback_info info) try {
   else if (method == "addCommand" && window) {
     if (args.size() != 5) throw std::invalid_argument("command requires name, symbol and enabled flag");
     window->model.addCommand(asString(env, args[2]), asString(env, args[3]), asBoolean(env, args[4]));
+  } else if (method == "cursorMovable" && window) {
+    return boolean(env, mv::Window_Selectable::cursorMovable(asBoolean(env,args.at(2)), asBoolean(env,args.at(3)),
+      asBoolean(env,args.at(4)), asInt32(env,args.at(5))));
+  } else if (method == "ensureCursorVisible" && window) {
+    window->model.topRow = mv::Window_Selectable::visibleTopRow(window->model.index, window->model.topRow,
+      asInt32(env,args.at(2)), asInt32(env,args.at(3)), asInt32(env,args.at(4)));
+  } else if (method == "cursorStep" && window) {
+    const int count = asInt32(env,args.at(2)), columns = asInt32(env,args.at(3)), rows = asInt32(env,args.at(4));
+    const auto action = asString(env,args.at(5));
+    int nextIndex = window->model.index, nextTopRow = window->model.topRow;
+    if (action == "cursorPagedown" || action == "cursorPageup") {
+      mv::Window_Selectable::pageCursor(nextIndex, nextTopRow, count, columns, rows, action == "cursorPagedown");
+      window->model.topRow = nextTopRow;
+    }
+    else {
+      const int direction = action == "cursorDown" ? 2 : action == "cursorUp" ? 8 : action == "cursorRight" ? 6 : action == "cursorLeft" ? 4 : 0;
+      if (!direction) throw std::invalid_argument("unknown cursor action");
+      mv::Window_Selectable::moveCursor(nextIndex, nextTopRow, count, columns, rows, direction, asBoolean(env,args.at(6)));
+    }
+    return number(env,nextIndex);
+  } else if (method == "processCursorMove" && window) {
+    const auto self = args.at(2), source = args.at(3);
+    if (!windowBoolean(env,self,"isCursorMovable")) return undefined(env);
+    const auto repeated = [&](const char* key) { return windowBoolean(env,source,"isRepeated",{string(env,key)}); };
+    const auto triggered = [&](const char* key) { return windowBoolean(env,source,"isTriggered",{string(env,key)}); };
+    const bool down = repeated("down"), downTrigger = down && triggered("down");
+    const bool up = repeated("up"), upTrigger = up && triggered("up");
+    const bool right = repeated("right"), rightTrigger = right && triggered("right");
+    const bool left = repeated("left"), leftTrigger = left && triggered("left");
+    const bool pageDownHandled = windowBoolean(env,self,"isHandled",{string(env,"pagedown")});
+    const bool pageUpHandled = windowBoolean(env,self,"isHandled",{string(env,"pageup")});
+    const mv::Window_Selectable::CursorInput input{down,downTrigger,up,upTrigger,right,rightTrigger,left,leftTrigger,
+      !pageDownHandled && triggered("pagedown"),!pageUpHandled && triggered("pageup"),pageDownHandled,pageUpHandled};
+    static constexpr const char* methods[]{"cursorDown","cursorUp","cursorRight","cursorLeft","cursorPagedown","cursorPageup"};
+    mv::Window_Selectable::dispatchCursorMove(true,input,[&](auto action, bool wrap) {
+      callWindow(env,self,methods[static_cast<int>(action)],{boolean(env,wrap)});
+    });
+  } else if (method == "processHandling" && window) {
+    const auto self = args.at(2), input = args.at(3);
+    mv::Window_Selectable::dispatchHandling(windowBoolean(env,self,"isOpenAndActive"), [&](const char* action) {
+      if (std::string(action) == "ok") return windowBoolean(env,self,"isOkEnabled");
+      if (std::string(action) == "cancel") return windowBoolean(env,self,"isCancelEnabled");
+      return windowBoolean(env,self,"isHandled",{string(env,action)});
+    }, [&](const char* action) {
+      if (std::string(action) == "ok") return windowBoolean(env,self,"isOkTriggered");
+      if (std::string(action) == "cancel") return windowBoolean(env,self,"isCancelTriggered");
+      return windowBoolean(env,input,"isTriggered",{string(env,action)});
+    }, [&](const char* action) {
+      callWindow(env,self,std::string(action) == "ok" ? "processOk" : std::string(action) == "cancel" ? "processCancel" : std::string(action) == "pagedown" ? "processPagedown" : "processPageup");
+    });
+  } else if ((method == "processOk" || method == "processCancel" || method == "processPagedown" || method == "processPageup") && window) {
+    const auto self = args.at(2);
+    if (method == "processOk" && !windowBoolean(env,self,"isCurrentItemEnabled")) callWindow(env,self,"playBuzzerSound");
+    else {
+      if (method == "processOk") callWindow(env,self,"playOkSound");
+      else if (args.size() > 3) {
+        napi_valuetype type; check(env,napi_typeof(env,args[3],&type),"cannot inspect sound manager");
+        if (type != napi_undefined) callWindow(env,args[3],method == "processCancel" ? "playCancel" : "playCursor");
+      }
+      callWindow(env,self,"updateInputData"); callWindow(env,self,"deactivate");
+      if (method == "processOk") callWindow(env,self,"callOkHandler");
+      else if (method == "processCancel") callWindow(env,self,"callCancelHandler");
+      else callWindow(env,self,"callHandler",{string(env,method == "processPagedown" ? "pagedown" : "pageup")});
+    }
   } else if (method == "commandCount" && window) return number(env, window->model.maxItems());
   else if (method == "command" && window) {
     const int index = asInt32(env, args.at(2));
@@ -319,7 +402,8 @@ napi_value inputOperation(napi_env env, napi_callback_info info) try {
   }
   if (method == "update") {
     auto& platform = runtime->owner->platform; const bool focused = platform.windowFocused();
-    if (!focused && runtime->focused) input.clear(); runtime->focused = focused;
+    if (!focused && runtime->focused) input.clear();
+    runtime->focused = focused;
     if (focused) for (const auto& event : platform.keyEvents()) { if (event.down) input.keyDown(event.keyCode); else input.keyUp(event.keyCode); }
     std::vector<Gamepad> pads;
     for (const auto& source : platform.gamepads()) {
@@ -354,13 +438,13 @@ std::shared_ptr<mv::core::Container> displayForRuntime(napi_env env, napi_value 
   if (&value.services->owner->core != &runtime) throw std::invalid_argument("display belongs to another host");
   return value.node;
 }
-void startDisplayAnimation(napi_env env, napi_value object, RuntimeCore& runtime, const mv::Value& animation, bool mirror, int delay) {
+void startDisplayAnimation(napi_env env, napi_value object, RuntimeCore& runtime, const mv::Value& animation, bool mirror, int delay, int rate) {
   auto sprite = std::dynamic_pointer_cast<BoundSprite>(displayForRuntime(env, object, runtime));
   if (!sprite) throw std::invalid_argument("animation target must be a sprite");
   for (int frame = 0; frame < static_cast<int>(animation["frames"].array().size()); ++frame)
     if (!mv::Sprite_Animation::cells(animation, frame, mirror).empty() || !mv::Sprite_Animation::timings(animation, frame).empty())
       throw std::runtime_error("display animation cells and timings are not bound");
-  sprite->animations.push_back(std::make_shared<BoundSprite::Animation>(animation, mirror, delay));
+  sprite->animations.push_back(std::make_shared<BoundSprite::Animation>(animation, mirror, delay, rate));
 }
 void registerDisplayBindings(napi_env env, napi_value exports) {
   auto api = moduleObject(env);

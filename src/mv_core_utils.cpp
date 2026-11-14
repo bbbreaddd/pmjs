@@ -54,7 +54,7 @@ void Spriteset_Battle::update(const Session& session) {
 }
 
 bool DataManager::isBattleTest(const Session& session) {
-  return !session.database()["testTroopId"].null();
+  return session.battleTest_;
 }
 
 bool DataManager::isEventTest(const Session& session) {

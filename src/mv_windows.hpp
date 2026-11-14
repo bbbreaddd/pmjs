@@ -106,6 +106,17 @@ class Window_Base {
 
 class Window_Selectable : public Window_Base {
  public:
+  enum class CursorAction { Down, Up, Right, Left, PageDown, PageUp };
+  struct CursorInput {
+    bool downRepeated, downTriggered, upRepeated, upTriggered;
+    bool rightRepeated, rightTriggered, leftRepeated, leftTriggered;
+    bool pageDownTriggered, pageUpTriggered, pageDownHandled, pageUpHandled;
+  };
+  static bool cursorMovable(bool openAndActive, bool fixed, bool all, int itemCount);
+  static void dispatchCursorMove(bool movable, const CursorInput& input,
+    const std::function<void(CursorAction, bool)>& dispatch);
+  static void dispatchHandling(bool openAndActive, const std::function<bool(const char*)>& enabled,
+    const std::function<bool(const char*)>& triggered, const std::function<void(const char*)>& dispatch);
   int index = -1;
   int topRow = 0;
   int maxCols = 1;

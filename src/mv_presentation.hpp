@@ -159,7 +159,7 @@ class Presentation {
     Sprite_Weapon weapon;
     std::uint64_t actorSpriteTick = 0, weaponStarted = 0;
     bool actorSpritesStarted = false;
-    Sprite_Actor actorSprite;
+    std::shared_ptr<RuntimeActorSprite> actorSprite;
   };
   std::map<std::pair<bool,int>,BattlerDisplay> battlerDisplays_;
   void visualEffects();

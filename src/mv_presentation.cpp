@@ -1196,6 +1196,7 @@ void Presentation::menu() {
   }
 }
 void Presentation::clearBattleContents() {
+  for (auto& [key, display] : battlerDisplays_) { (void)key; if (display.actorSprite) display.actorSprite->active = false; }
   battlerDisplays_.clear();
   for (auto& contents : battleContents_) {
     if (contents.canvas) core_.canvases().release(contents.canvas);

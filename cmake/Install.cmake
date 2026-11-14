@@ -13,7 +13,7 @@ if(PMJS_ENABLE_SKIA65)
   install(FILES "${pmjs_skia65_library}" DESTINATION lib)
 endif()
 install(PROGRAMS bin/pmjs DESTINATION bin)
-install(DIRECTORY js runner profiles DESTINATION share/pmjs
+install(DIRECTORY js runner profiles patches DESTINATION share/pmjs
   FILES_MATCHING PATTERN "*.js" PATTERN "*.cjs" PATTERN "*.json" PATTERN "*.ttf" PATTERN "*.LICENSE")
 install(FILES tools/build-js-runtime.mjs tools/build-js-composition.mjs tools/game-inspect.mjs tools/achievement-discovery.mjs tools/game-bundle.mjs tools/pmjs.mjs
   tools/package-self-test.cjs DESTINATION share/pmjs/tools)

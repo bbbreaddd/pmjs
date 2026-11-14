@@ -125,8 +125,8 @@ void Session::setupMapState() {
   mapState_.parallaxZero = !mapState_.parallaxName.empty() && mapState_.parallaxName.front() == '!';
   mapState_.parallaxLoopX = data["parallaxLoopX"].boolean(); mapState_.parallaxLoopY = data["parallaxLoopY"].boolean();
   mapState_.parallaxSx = data["parallaxSx"].number(); mapState_.parallaxSy = data["parallaxSy"].number();
-  const double width = screenWidth_ / 48.0;
-  const double height = screenHeight_ / 48.0;
+  const double width = double(screenWidth_) / tileWidth();
+  const double height = double(screenHeight_) / tileHeight();
   const double endX = data["width"].number() - width, endY = data["height"].number() - height;
   mapState_.lastDisplayX = loopHorizontal() ? std::fmod(std::fmod(player_.realX - (width - 1) / 2, data["width"].number()) + data["width"].number(), data["width"].number()) : endX < 0 ? endX / 2 : std::clamp(player_.realX - (width - 1) / 2, 0.0, endX);
   mapState_.lastDisplayY = loopVertical() ? std::fmod(std::fmod(player_.realY - (height - 1) / 2, data["height"].number()) + data["height"].number(), data["height"].number()) : endY < 0 ? endY / 2 : std::clamp(player_.realY - (height - 1) / 2, 0.0, endY);
@@ -136,9 +136,23 @@ void Session::setupMapState() {
 }
 
 void Session::updateMapScroll() {
-  const double width = screenWidth_ / 48.0;
-  const double height = screenHeight_ / 48.0;
+  const double width = double(screenWidth_) / tileWidth();
+  const double height = double(screenHeight_) / tileHeight();
   const double endX = map()["width"].number() - width, endY = map()["height"].number() - height;
+  if (cameraTarget_) {
+    mapState_.scrollRest = 0;
+    const auto position = characterScreenPosition(cameraTarget_->value());
+    const auto scroll = [&](double point, double center) {
+      const double distance = std::abs(point - center) / cameraSpeed_;
+      return distance < .005 ? 0.0 : point < center ? -distance : distance;
+    };
+    (*savedCamera_)[0] += scroll(position[0], screenWidth_ / 2.0);
+    (*savedCamera_)[1] += scroll(position[1], screenHeight_ / 2.0);
+    if (loopHorizontal()) (*savedCamera_)[0] = std::fmod((*savedCamera_)[0] + map()["width"].number(), map()["width"].number());
+    else if (endX >= 0) (*savedCamera_)[0] = std::clamp((*savedCamera_)[0], 0.0, endX);
+    if (loopVertical()) (*savedCamera_)[1] = std::fmod((*savedCamera_)[1] + map()["height"].number(), map()["height"].number());
+    else if (endY >= 0) (*savedCamera_)[1] = std::clamp((*savedCamera_)[1], 0.0, endY);
+  }
   if (mapState_.scrollRest > 0) {
     if (!savedCamera_) savedCamera_ = std::array{mapState_.lastDisplayX, mapState_.lastDisplayY};
     const auto before = *savedCamera_;
@@ -155,8 +169,8 @@ void Session::updateMapScroll() {
 }
 
 void Session::updateMapDisplay() {
-  const double width = screenWidth_ / 48.0;
-  const double height = screenHeight_ / 48.0;
+  const double width = double(screenWidth_) / tileWidth();
+  const double height = double(screenHeight_) / tileHeight();
   const double endX = map()["width"].number() - width, endY = map()["height"].number() - height;
   const double displayX = savedCamera_ ? (*savedCamera_)[0] : endX < 0 ? endX / 2 : std::clamp(player_.realX - (width - 1) / 2, 0.0, endX);
   const double displayY = savedCamera_ ? (*savedCamera_)[1] : endY < 0 ? endY / 2 : std::clamp(player_.realY - (height - 1) / 2, 0.0, endY);

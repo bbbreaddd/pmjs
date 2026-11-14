@@ -584,6 +584,8 @@ void Session::requestEnemyEffect(std::size_t index, const std::string& effect) {
 }
 
 void Session::resetEnemySprites() {
+  for (const auto& [index, weak] : runtimeEnemySprites_) { (void)index; if (auto object = weak.lock()) object->active = false; }
+  runtimeEnemySprites_.clear();
   enemySprites_.clear();
 }
 
@@ -596,8 +598,11 @@ void Session::updateEnemySprites() {
     auto& sprite = *owner;
     if (sprite.initialized && sprite.lastUpdateTick == ticks_) continue;
     sprite.lastUpdateTick = ticks_;
-    sprite.setBattler(&enemy);
     if (!sprite.initialized) {
+      auto object = std::make_shared<RuntimeEnemySprite>(); object->value = owner; object->active = true;
+      auto battler = runtimeBattler(enemy); object->enemy = battler;
+      runtimeEnemySprites_[index] = object;
+      if (!runtimeHooks_ || !runtimeHooks_->enemySpriteBattler || !runtimeHooks_->enemySpriteBattler(object, battler)) object->setBattler(battler);
       sprite.initialized = true;
       sprite.appeared = enemy.isAlive() && !enemy.escaped;
       sprite.opacity = sprite.appeared ? 1 : 0;

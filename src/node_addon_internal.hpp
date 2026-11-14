@@ -28,7 +28,7 @@ namespace pmjs::addon {
 
 std::shared_ptr<mv::core::PixelBitmap> bitmapForRuntime(napi_env env, napi_value object, RuntimeCore& runtime);
 std::shared_ptr<mv::core::Container> displayForRuntime(napi_env env, napi_value object, RuntimeCore& runtime);
-void startDisplayAnimation(napi_env env, napi_value object, RuntimeCore& runtime, const mv::Value& animation, bool mirror, int delay);
+void startDisplayAnimation(napi_env env, napi_value object, RuntimeCore& runtime, const mv::Value& animation, bool mirror, int delay, int rate = 4);
 
 void trimPreparationMemory() noexcept;
 

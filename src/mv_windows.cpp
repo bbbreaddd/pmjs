@@ -414,7 +414,26 @@ Rect Window_Selectable::itemRectForText(int itemIndex) const {
 }
 
 bool Window_Selectable::isCursorMovable() const {
-  return visible && active && openness == 255 && !cursorFixed && !cursorAll && maxItems() > 0;
+  return cursorMovable(isOpenAndActive(), cursorFixed, cursorAll, maxItems());
+}
+bool Window_Selectable::cursorMovable(bool openAndActive, bool fixed, bool all, int itemCount) {
+  return openAndActive && !fixed && !all && itemCount > 0;
+}
+void Window_Selectable::dispatchCursorMove(bool movable, const CursorInput& input,
+    const std::function<void(CursorAction, bool)>& dispatch) {
+  if (!movable) return;
+  if (input.downRepeated) dispatch(CursorAction::Down, input.downTriggered);
+  if (input.upRepeated) dispatch(CursorAction::Up, input.upTriggered);
+  if (input.rightRepeated) dispatch(CursorAction::Right, input.rightTriggered);
+  if (input.leftRepeated) dispatch(CursorAction::Left, input.leftTriggered);
+  if (!input.pageDownHandled && input.pageDownTriggered) dispatch(CursorAction::PageDown, false);
+  if (!input.pageUpHandled && input.pageUpTriggered) dispatch(CursorAction::PageUp, false);
+}
+void Window_Selectable::dispatchHandling(bool openAndActive, const std::function<bool(const char*)>& enabled,
+    const std::function<bool(const char*)>& triggered, const std::function<void(const char*)>& dispatch) {
+  if (!openAndActive) return;
+  for (const char* action : {"ok", "cancel", "pagedown", "pageup"})
+    if (enabled(action) && triggered(action)) { dispatch(action); break; }
 }
 
 void Window_Selectable::cursorDown(bool wrap) {
@@ -445,13 +464,17 @@ void Window_Selectable::processCursorMove(bool downRep, bool downTrig, bool upRe
                                           bool rightRep, bool rightTrig, bool leftRep, bool leftTrig,
                                           bool pageDownTrig, bool pageUpTrig,
                                           bool pageDownHandled, bool pageUpHandled) {
-  if (!isCursorMovable()) return;
-  if (downRep) cursorDown(downTrig);
-  if (upRep) cursorUp(upTrig);
-  if (rightRep) cursorRight(rightTrig);
-  if (leftRep) cursorLeft(leftTrig);
-  if (!pageDownHandled && pageDownTrig) cursorPagedown();
-  if (!pageUpHandled && pageUpTrig) cursorPageup();
+  dispatchCursorMove(isCursorMovable(), {downRep, downTrig, upRep, upTrig, rightRep, rightTrig,
+    leftRep, leftTrig, pageDownTrig, pageUpTrig, pageDownHandled, pageUpHandled}, [&](CursorAction action, bool wrap) {
+    switch (action) {
+      case CursorAction::Down: cursorDown(wrap); break;
+      case CursorAction::Up: cursorUp(wrap); break;
+      case CursorAction::Right: cursorRight(wrap); break;
+      case CursorAction::Left: cursorLeft(wrap); break;
+      case CursorAction::PageDown: cursorPagedown(); break;
+      case CursorAction::PageUp: cursorPageup(); break;
+    }
+  });
 }
 
 void Window_Selectable::processWheel(double wheelY) {

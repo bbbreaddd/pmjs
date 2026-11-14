@@ -96,7 +96,7 @@ class Tilemap : public Container {
   void prepareGeometry(Renderer& renderer,int firstX,int firstY,int lastX,int lastY);
   void queueGeometry(Renderer& renderer,bool upper,const Matrix& transform,double opacity=1) const;
  private:
-  struct GeometryPart {std::uint32_t layer=0;int x=0,y=0;};
+  struct GeometryPart {std::uint32_t layer=0;double x=0,y=0,width=0,height=0;};
   std::vector<GeometryPart> lowerGeometry_;
   std::vector<std::uint32_t> upperGeometry_;
   std::array<int,4> geometryBounds_{};
@@ -112,6 +112,7 @@ class Tilemap : public Container {
   void drawAutotile(PixelBitmap& bitmap, int tileId, int dx, int dy) const;
   void drawTableEdge(PixelBitmap& bitmap, int tileId, int dx, int dy) const;
   void drawShadow(PixelBitmap& bitmap, int shadowBits, int dx, int dy) const;
+  std::function<std::optional<std::vector<Rectangle>>(int, int, int)> shadowGeometry;
   bool isHigherTile(int tileId) const;
   bool isTableTile(int tileId) const;
   virtual bool isOverpassPosition(int mx, int my) const;

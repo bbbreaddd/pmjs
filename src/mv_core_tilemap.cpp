@@ -88,7 +88,11 @@ void Tilemap::prepareGeometry(Renderer& renderer,int firstX,int firstY,int lastX
   const auto images=[&](int sheet){if(imageResolver)return imageResolver(sheet);if(bitmaps[sheet])if(auto image=bitmaps[sheet]->texture())return *image;return ImageInfo{};};
   const auto flush=[&](std::vector<TileLayerTile>& tiles,bool high){if(tiles.empty())return;const auto layer=renderer.createTileLayer(std::move(tiles));tiles.clear();if(!layer)throw std::runtime_error("cannot create core tile geometry");try{if(high)upperGeometry_.push_back(layer);else lowerGeometry_.push_back({layer,0,0});}catch(...){renderer.releaseTileLayer(layer);throw;}};
   try {for(int y=firstY;y<lastY;++y)for(int x=firstX;x<lastX;++x){computeTileLayers(x,y,lowIds,highIds);
-    for(int id:lowIds){if(id<0){flush(lower,false);for(int i=0;i<4;++i)if((-id)&(1<<i))lowerGeometry_.push_back({0,x*tileWidth+i%2*tileWidth/2,y*tileHeight+i/2*tileHeight/2});}else{if(lower.size()>65528)flush(lower,false);appendTileGeometry(lower,id,x*tileWidth,y*tileHeight,images);}}
+    for(int id:lowIds){if(id<0){flush(lower,false);
+      const auto custom = shadowGeometry ? shadowGeometry(-id,x*tileWidth,y*tileHeight) : std::optional<std::vector<Rectangle>>{};
+      if(custom) {for(const auto& rect:*custom)lowerGeometry_.push_back({0,rect.x,rect.y,rect.width,rect.height});}
+      else for(int i=0;i<4;++i)if((-id)&(1<<i))lowerGeometry_.push_back({0,double(x*tileWidth+i%2*tileWidth/2),double(y*tileHeight+i/2*tileHeight/2),tileWidth/2.0,tileHeight/2.0});
+    }else{if(lower.size()>65528)flush(lower,false);appendTileGeometry(lower,id,x*tileWidth,y*tileHeight,images);}}
     for(int id:highIds){if(upper.size()>65528)flush(upper,true);appendTileGeometry(upper,id,x*tileWidth,y*tileHeight,images);}}
     flush(lower,false);flush(upper,true);geometryBounds_=key;geometryRevision_=revision_;geometryReady_=true;
   }catch(...){clearGeometry();throw;}
@@ -96,7 +100,7 @@ void Tilemap::prepareGeometry(Renderer& renderer,int firstX,int firstY,int lastX
 void Tilemap::queueGeometry(Renderer& renderer,bool upper,const Matrix& world,double opacity)const {
   constexpr std::array<float,4> water{0,1,2,1};const std::array<float,2> animation{water[animationFrame%4],float(animationFrame%3)};
   const auto queue=[&](std::uint32_t layer){if(!renderer.queueTileLayer(layer,world,animation,float(opacity),0xffffff,BlendMode::normal,!smooth))throw std::runtime_error("cannot queue core tile geometry");};
-  if(upper)for(auto layer:upperGeometry_)queue(layer);else for(const auto& part:lowerGeometry_)if(part.layer)queue(part.layer);else{const auto first=renderer.queuedCommandCount();renderer.queueQuad(part.x,part.y,tileWidth/2.0F,tileHeight/2.0F,{0,0,0,float(opacity*.5)});renderer.transformQueuedCommands(first,world);}
+  if(upper)for(auto layer:upperGeometry_)queue(layer);else for(const auto& part:lowerGeometry_)if(part.layer)queue(part.layer);else{const auto first=renderer.queuedCommandCount();renderer.queueQuad(part.x,part.y,part.width,part.height,{0,0,0,float(opacity*.5)});renderer.transformQueuedCommands(first,world);}
 }
 void Tilemap::render(Renderer& renderer,const Matrix& parentWorld,double opacity) {
   if(!visible||!renderable||alpha<=0||tileWidth<=0||tileHeight<=0)return;for(const auto* bitmap:bitmaps)if(bitmap&&!bitmap->isReady())return;

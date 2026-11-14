@@ -34,6 +34,19 @@ test('rejects asset paths outside the declared game root', () => {
   const f=fixture();f.set.image='../../outside.png';f.write();
   assert.throws(()=>loadTiledMap(f.root,'maps/map.json'),/escapes game root/);
 });
+test('converts aligned tile objects without losing overlap order and hides region masks', () => {
+  const f = fixture();
+  const object = (gid, x) => ({ gid, x, y: 32, width: 32, height: 32, rotation: 0, visible: true });
+  f.map.layers = [{ type: 'objectgroup', properties: { zIndex: '3', priority: '1' }, objects: [object(1, 0), object(2, 32), object(2, 0)] },
+    { type: 'tilelayer', width: 2, height: 1, data: [0, 1], properties: { regionId: '8' } }];
+  f.write();
+  const data = loadTiledMap(f.root, 'maps/map.json');
+  assert.deepEqual(data.layers.slice(0, 2).map(layer => layer.data), [[1, 2], [2, 0]]);
+  assert.equal(data.layers[2].visible, false);
+  assert.deepEqual(data.regions, [0, 8]);
+  f.map.layers[0].objects[0].rotation = 30; f.write();
+  assert.throws(() => loadTiledMap(f.root, 'maps/map.json'), /objects\[0\].*unsupported tile object/);
+});
 
 test('normalizes legacy keyed tile animations', () => {
   const f=fixture();f.set.tiles={1:{animation:[{tileid:0,duration:100}]}};f.write();

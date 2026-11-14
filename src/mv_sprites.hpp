@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mv_engine.hpp"
+#include "mv_class_bindings.hpp"
 #include "mv_windows.hpp"
 #include <string>
 #include <vector>
@@ -125,6 +126,20 @@ class Sprite_Actor : public Sprite_Battler {
   std::uint64_t requestedAt_ = 0, motionStarted_ = 0, motionTick_ = 0;
 };
 
+struct RuntimeBattlerSprite : RuntimeBoundObject {
+  virtual Sprite_Battler& state() = 0;
+};
+struct RuntimeBaseBattlerSprite : RuntimeBattlerSprite {
+  Sprite_Battler value;
+  Sprite_Battler& state() override { return value; }
+  const char* bindingType() const override { return "Sprite_Battler"; }
+};
+struct RuntimeActorSprite : RuntimeBattlerSprite {
+  Sprite_Actor value;
+  Sprite_Battler& state() override { return value; }
+  const char* bindingType() const override { return "Sprite_Actor"; }
+};
+
 class Sprite_Enemy : public Sprite_Battler {
  public:
   int effectDuration = 0;
@@ -143,6 +158,18 @@ class Sprite_Enemy : public Sprite_Battler {
   void update() override;
   void advance(std::uint64_t ticks);
   bool isEffecting() const { return !effectType.empty(); }
+};
+
+struct RuntimeEnemySprite : RuntimeBattlerSprite {
+  std::shared_ptr<Sprite_Enemy> value = std::make_shared<Sprite_Enemy>();
+  std::shared_ptr<RuntimeActor> enemy;
+  Sprite_Battler& state() override { return *value; }
+  const char* bindingType() const override { return "Sprite_Enemy"; }
+  void setBattler(std::shared_ptr<RuntimeActor> battler) {
+    if (battler && !battler->value().enemy) throw std::invalid_argument("enemy sprite requires an enemy battler");
+    enemy = std::move(battler); value->setBattler(enemy ? &enemy->value() : nullptr);
+    if (enemy) value->setHome(enemy->value().screenX, enemy->value().screenY);
+  }
 };
 
 class Sprite_Balloon : public Sprite_Base {

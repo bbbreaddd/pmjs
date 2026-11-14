@@ -13,12 +13,13 @@ function game(files) {
   for (const [name, source] of Object.entries(files)) fs.writeFileSync(path.join(root, 'js/plugins', name + '.js'), source);
   return root;
 }
-const runtime = () => createScriptRuntime({ connectRuntime() {} }, {});
+const runtime = () => createScriptRuntime({ connectRuntime() {}, utilsInvoke(_session, name) { return name === 'RPGMAKER_NAME' ? 'MV' : '1.6.1'; } }, {});
 const plugin = (name, status = true, parameters = {}) => ({ name, status, parameters });
 
 test('native plugins execute once in enabled order with parameters and shared prototypes', () => {
   const root = game({
-    First: `var order = ['first']; var later = PluginManager.parameters('SECOND').setting;
+    First: `var nodeFiles = typeof require('node:fs').readFileSync; var guestWindow = window === globalThis;
+      var order = ['first']; var later = PluginManager.parameters('SECOND').setting;
       var originalWait = Game_Interpreter.prototype.wait;
       Game_Interpreter.prototype.wait = function(n) { return originalWait.call(this, n + 1); };
       PluginManager.loadScript('Extra.js');`,
@@ -30,6 +31,9 @@ test('native plugins execute once in enabled order with parameters and shared pr
   const manager = installPlugins(r, root, manifest);
   assert.deepEqual(Array.from(r.scope.order), ['first', 'second', 'extra']);
   assert.equal(r.scope.later, 'later');
+  assert.equal(r.scope.nodeFiles, 'function');
+  assert.equal(r.scope.guestWindow, true);
+  assert.equal(r.scope.process.versions.node, process.versions.node);
   assert.notEqual(r.scope.Game_Interpreter.prototype.wait, original);
   assert.deepEqual(Array.from(manager._scripts), ['First', 'Second']);
   manager.parameters('Second').setting = 'changed';
