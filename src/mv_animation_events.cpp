@@ -2,9 +2,9 @@
 
 namespace pmjs::mv {
 
-bool Session::animationEventCommand(const Value& entry, Interpreter& context) {
-  const int code = entry["code"].integer();
-  const auto& p = entry["parameters"];
+bool Session::animationEventCommand(const EventCommand& entry, Interpreter& context) {
+  const int code = entry.code;
+  const auto& p = entry.parameters;
 
   switch (code) {
     case 212: case 213: {

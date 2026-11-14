@@ -167,8 +167,29 @@ napi_value imageManagerOperation(napi_env env, napi_callback_info info) try {
   }
   check(env, napi_set_named_property(env, result, "identities", ids), "cannot set managed bitmap identities");
   check(env, napi_set_named_property(env, result, "ready", boolean(env, runtime->imageCache.isReady())), "cannot set image readiness");
+  check(env, napi_set_named_property(env, result, "requestCount", number(env, runtime->requests.queue.size())), "cannot set image request count");
   const auto* error = runtime->imageCache.getErrorBitmap();
-  check(env, napi_set_named_property(env, result, "error", error ? string(env, error->key) : null(env)), "cannot set image error");
+  check(env, napi_set_named_property(env, result, "error", error ? string(env, error->bitmap ? error->bitmap->url : error->key) : null(env)), "cannot set image error");
+  return result;
+} catch (const std::exception& error) { return throwException(env, error); }
+napi_value cacheImage(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info);
+  if (args.size() < 3 || args.size() > 4) throw std::invalid_argument("image cache requires runtime, operation, key and optional bitmap");
+  auto runtime = services(env, args[0]); const auto operation = asString(env, args[1]), key = asString(env, args[2]);
+  if (operation == "remove") { runtime->imageCache.items.erase(key); return undefined(env); }
+  if (operation == "add") {
+    if (args.size() != 4) throw std::invalid_argument("cache insertion requires bitmap");
+    auto& image = unwrapBitmap(env, args[3]);
+    if (image.services != runtime) throw std::invalid_argument("cached bitmap belongs to another runtime");
+    runtime->imageCache.reserve(key, 0, 0);
+    auto* entry = runtime->imageCache.get(key);
+    entry->bitmap = image.bitmap; entry->bitmapIdentity = mv::nextRuntimeIdentity(); entry->reservationId.reset();
+  } else if (operation != "get") throw std::invalid_argument("image cache operation is not bound: " + operation);
+  auto* entry = runtime->imageCache.get(key); if (!entry || !entry->bitmap) return null(env);
+  auto result = moduleObject(env); napi_value identity;
+  check(env, napi_create_bigint_uint64(env, entry->bitmapIdentity, &identity), "cannot identify cached bitmap");
+  check(env, napi_set_named_property(env, result, "identity", identity), "cannot set cached identity");
+  check(env, napi_set_named_property(env, result, "handle", wrapBitmap(env, runtime, entry->bitmap)), "cannot return cached bitmap");
   return result;
 } catch (const std::exception& error) { return throwException(env, error); }
 napi_value imagePath(napi_env env, napi_callback_info info) try {
@@ -298,6 +319,7 @@ void registerBitmapBindings(napi_env env, napi_value exports) {
   method(env,bindings,"invoke",bitmapOperation);
   method(env,bindings,"updateLoads",updateBitmapLoads);
   method(env,bindings,"managedImage",managedImage); method(env,bindings,"imageManager",imageManagerOperation);
+  method(env,bindings,"cacheImage",cacheImage);
   method(env,bindings,"imagePath",imagePath);
   method(env,bindings,"imageNameFlag",imageNameFlag);
   check(env,napi_set_named_property(env,exports,"mvBitmap",bindings),"cannot register bitmap API");

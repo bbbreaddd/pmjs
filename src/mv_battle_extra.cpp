@@ -276,7 +276,7 @@ void Session::actorWalk(Battler& actor) {
   actor.result = {};
   const auto flashDamage = [&]() {
     Interpreter context;
-    screenEventCommand(Value::Object{{"code", 224}, {"parameters", Value::Array{Value::Array{255, 0, 0, 128}, 8, false}}}, context);
+    screenEventCommand({224, 0, Value::Array{Value::Array{255, 0, 0, 128}, 8, false}}, context);
   };
   if (vehicleType_ != 2 && tileFlag(player_.x, player_.y, 256)) {
     const int maximum = database_["system"]["optFloorDeath"].boolean() ? actor.hp : std::max(actor.hp - 1, 0);

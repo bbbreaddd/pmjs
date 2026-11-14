@@ -109,6 +109,7 @@ set(PMJS_RUNTIME_SOURCES
   src/mv_core_types.cpp
   src/mv_core_graph.cpp
   src/mv_core_display.cpp
+  src/mv_script_scene.cpp
   src/mv_core_tilemap.cpp
   src/mv_core_weather.cpp
   src/mv_core_utils.cpp
@@ -208,6 +209,7 @@ endif()
 
 add_library(pmjs_native MODULE
   src/node_addon_bitmap.cpp
+  src/node_addon_display.cpp
   src/node_addon_mv.cpp
   src/node_addon.cpp
   src/node_addon_compression.cpp
@@ -265,6 +267,9 @@ if(BUILD_TESTING)
   add_test(NAME node-mv-image-manager COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-image-manager.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-mv-image-manager PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy" FIXTURES_REQUIRED pmjs_assets)
+  add_test(NAME node-mv-scenes COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-scenes.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
+  set_tests_properties(node-mv-scenes PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy" FIXTURES_REQUIRED pmjs_assets)
   add_test(NAME node-shadow-tiles COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-shadow-tiles.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-shadow-tiles PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy" FIXTURES_REQUIRED pmjs_assets)

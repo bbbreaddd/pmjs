@@ -44,10 +44,10 @@ void Session::changeActorExp(Battler& actor, double exp, bool show) {
   refreshBattler(actor);
 }
 
-bool Session::actorEventCommand(const Value& entry) {
-  const int code = entry["code"].integer();
+bool Session::actorEventCommand(const EventCommand& entry) {
+  const int code = entry.code;
   if (code == 319 || code == 320 || code == 321 || code == 322 || code == 324 || code == 325) {
-    const auto& p = entry["parameters"];
+    const auto& p = entry.parameters;
     const int id = p[0].integer();
     if (database_["actors"][id].null()) return true;
     if (!actors_.contains(id)) initializeActor(id);
@@ -80,7 +80,7 @@ bool Session::actorEventCommand(const Value& entry) {
     return true;
   }
   if (code != 311 && code != 312 && code != 313 && code != 315 && code != 316 && code != 317 && code != 326) return false;
-  const auto& p = entry["parameters"];
+  const auto& p = entry.parameters;
   const int actorId = p[0].integer() ? variable(p[1].integer()).integer() : p[1].integer();
   std::vector<int> selected;
   if (!actorId) selected = partyMembers();

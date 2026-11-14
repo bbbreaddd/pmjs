@@ -1,15 +1,26 @@
 'use strict';
 const { createBitmapClass, createImageManager, bitmapHandle } = require('./native-bitmap.cjs');
+const vm = require('node:vm');
+const { createSceneBindings } = require('./native-scenes.cjs');
 
 function createScriptRuntime(engine, session, options = {}) {
   const pictures = new WeakMap(), interpreters = new WeakMap(), sprites = new WeakMap(), frames = new WeakMap(), tones = new WeakMap();
   const registry = new Map(), roots = new Map(), spriteSlots = new Map(), scripts = new Map();
+  const conditions = new Map();
   const pictureChildren = [];
   const fields = ['_name', '_origin', '_x', '_y', '_scaleX', '_scaleY', '_opacity', '_blendMode',
     '_targetX', '_targetY', '_targetScaleX', '_targetScaleY', '_targetOpacity', '_duration',
     '_toneDuration', '_angle', '_rotationSpeed'];
   const defaults = Object.create(null);
   const collectionHandles = new WeakMap();
+  let GuestArray;
+  function decorateArray(array) {
+    Object.defineProperties(array, {
+      clone: { value() { return GuestArray.from(this); } },
+      contains: { value(value) { return this.indexOf(value) >= 0; } }
+    });
+    return array;
+  }
 
   function remember(object, handle, store) {
     if (store) store.set(object, handle);
@@ -44,7 +55,7 @@ function createScriptRuntime(engine, session, options = {}) {
     if (!handle) return null;
     const existing = registry.get(handle.identity)?.deref();
     if (existing) return existing;
-    const tone = [];
+    const tone = decorateArray([]);
     for (let i = 0; i < 4; ++i) Object.defineProperty(tone, i, {
       enumerable: true,
       get() { return engine.toneComponent(handle, i); },
@@ -82,7 +93,7 @@ function createScriptRuntime(engine, session, options = {}) {
       });
       return remember(object, handle, collectionHandles);
     }
-    const object = info.array ? [] : {}, children = new Map();
+    const object = info.array ? decorateArray([]) : {}, children = new Map();
     for (const key of info.keys) Object.defineProperty(object, key, {
       enumerable: true,
       get() {
@@ -190,15 +201,22 @@ function createScriptRuntime(engine, session, options = {}) {
     413, 601, 602, 603
   ];
   for (const method of ['executeCommand', ...commandCodes.map(code => 'command' + code)]) {
+    const code = method === 'executeCommand' ? null : Number(method.slice(7));
     Game_Interpreter.prototype[method] = nativeCommand[method] = function() {
       const handle = interpreters.get(this);
       if (!handle) throw new TypeError('Interpreter is not initialized');
-      return engine.interpreterCommandInvoke(session, handle, method);
+      return engine.interpreterCommandInvoke(session, handle, code);
     };
   }
   Game_Interpreter.prototype.setWaitMode = function(mode) { this._waitMode = mode; };
   Game_Interpreter.prototype.wait = function(duration) { this._waitCount = duration; };
   Game_Interpreter.prototype.eventId = function() { return this._eventId; };
+  const nativeControl = Object.create(null);
+  for (const method of ['jumpTo', 'setupChoices', 'setupNumInput', 'setupItemChoice']) {
+    Game_Interpreter.prototype[method] = nativeControl[method] = function(argument) {
+      return engine.interpreterControl(session, interpreters.get(this), method, [argument]);
+    };
+  }
   Game_Interpreter.prototype.isOnCurrentMap = function() { return this._mapId === scope.$gameMap.mapId(); };
   Game_Interpreter.prototype.currentCommand = function() { return this._list[this._index]; };
   Game_Interpreter.prototype.nextEventCode = function() { return this._list[this._index + 1]?.code || 0; };
@@ -216,12 +234,25 @@ function createScriptRuntime(engine, session, options = {}) {
   }
   function Game_Message() { throw new Error('Message construction is engine-owned'); }
   const nativeMessage = Object.create(null);
+  let choiceView = null;
   for (const method of ['clear', 'add', 'setFaceImage', 'setBackground', 'setPositionType', 'faceName', 'faceIndex',
     'background', 'positionType', 'hasText', 'isBusy', 'isChoice', 'isNumberInput', 'isItemChoice', 'isScrollMode',
-    'scrollSpeed', 'scrollNoFast', 'setScroll', 'allText']) {
-    Game_Message.prototype[method] = nativeMessage[method] = function(...args) { return engine.messageInvoke(session, method, args); };
+    'scrollSpeed', 'scrollNoFast', 'setScroll', 'allText', 'setChoices', 'setChoiceBackground', 'setChoicePositionType',
+    'choiceDefaultType', 'choiceCancelType', 'choiceBackground', 'choicePositionType']) {
+    Game_Message.prototype[method] = nativeMessage[method] = function(...args) {
+      const result = engine.messageInvoke(session, method, args);
+      if (method === 'clear') { this._choiceCallback = null; choiceView = null; }
+      return result;
+    };
   }
   const gameMessage = Object.create(Game_Message.prototype);
+  gameMessage._choiceCallback = null;
+  Game_Message.prototype.choices = function() { choiceView = wrapCollection(engine.messageChoices(session)); return choiceView; };
+  Object.defineProperty(gameMessage, '_choices', { configurable: true, enumerable: true, get() { return this.choices(); } });
+  Game_Message.prototype.setChoiceCallback = function(callback) { this._choiceCallback = callback; };
+  const nativeOnChoice = Game_Message.prototype.onChoice = function(index) {
+    if (this._choiceCallback) { this._choiceCallback(index); this._choiceCallback = null; }
+  };
   for (const field of ['_faceName', '_faceIndex', '_background', '_positionType', '_choiceBackground', '_choicePositionType']) {
     Object.defineProperty(gameMessage, field, {
       configurable: true, enumerable: true,
@@ -311,6 +342,14 @@ function createScriptRuntime(engine, session, options = {}) {
     scope.Bitmap = createBitmapClass(options.native);
     scope.ImageManager = createImageManager(options.native, scope.Bitmap);
   }
+  const context = vm.createContext(scope);
+  vm.runInContext(`Object.defineProperties(Array.prototype, {
+    clone: {value: function() {return this.slice(0);}},
+    contains: {value: function(value) {return this.indexOf(value) >= 0;}}
+  }); String.prototype.contains = function(value) {return this.indexOf(value) >= 0;};
+  Math.randomInt = function(max) {return Math.floor(max * Math.random());};`, context);
+  GuestArray = vm.runInContext('Array', context);
+  vm.runInContext('Math', context).random = () => engine.random(session);
   const callbacks = {
     command(handle, name) {
       const interpreter = wrapInterpreter(handle), method = interpreter[name];
@@ -322,9 +361,26 @@ function createScriptRuntime(engine, session, options = {}) {
       return Boolean(method.call(interpreter));
     },
     requestImages(list) { Game_Interpreter.requestImages(wrapCollection(list)); },
+    choice(index) {
+      if (gameMessage.onChoice === nativeOnChoice && !gameMessage._choiceCallback) return false;
+      gameMessage.onChoice(index); return true;
+    },
+    setupChoiceCallback(handle) {
+      const interpreter = wrapInterpreter(handle);
+      gameMessage.setChoiceCallback(index => { interpreter._branch[interpreter._indent] = index; });
+    },
+    interpreterControl(handle, method, args) {
+      const interpreter = wrapInterpreter(handle), fn = interpreter[method];
+      if (fn === nativeControl[method]) return false;
+      if (typeof fn !== 'function') throw new TypeError('Game_Interpreter.' + method + ' is not callable');
+      fn.apply(interpreter, args); return true;
+    },
     message(method, args) {
       const fn = gameMessage[method];
-      if (fn === nativeMessage[method]) return undefined;
+      if (fn === nativeMessage[method]) {
+        if (method === 'clear') { gameMessage._choiceCallback = null; choiceView = null; }
+        return undefined;
+      }
       if (typeof fn !== 'function') throw new TypeError('Game_Message.' + method + ' is not callable');
       const value = fn.apply(gameMessage, args);
       return method === 'isBusy' ? Boolean(value) : true;
@@ -364,10 +420,18 @@ function createScriptRuntime(engine, session, options = {}) {
       if (typeof interpreter[name] !== 'function') throw new TypeError('Game_Interpreter.' + name + ' is not callable');
       return Boolean(interpreter[name]());
     },
+    scriptCondition(handle, source) {
+      let fn = conditions.get(source);
+      if (!fn) {
+        fn = new vm.Script('(function() { return eval(' + JSON.stringify(source) + '); })', { filename: 'mv-event-condition.js' }).runInContext(context);
+        conditions.set(source, fn);
+      }
+      return Boolean(fn.call(wrapInterpreter(handle)));
+    },
     script(handle, source) {
       let fn = scripts.get(source);
       if (!fn) {
-        fn = new Function('scope', 'with (scope) { return function() {\n' + source + '\n}; }')(scope);
+        fn = new vm.Script('(function() {\n' + source + '\n})', { filename: 'mv-event-script.js' }).runInContext(context);
         scripts.set(source, fn);
       }
       fn.call(wrapInterpreter(handle));
@@ -386,7 +450,61 @@ function createScriptRuntime(engine, session, options = {}) {
     }
   };
   engine.connectRuntime(session, callbacks);
-  return { scope };
+  let scenes;
+  const result = {
+    scope,
+    runScript(source, filename = 'mv-plugin.js') { return new vm.Script(source, { filename }).runInContext(context); },
+    installScenes() {
+      if (!options.native) throw new Error('Scene bindings require native graphics services');
+      if (scenes) return scenes;
+      scenes = createSceneBindings(options.native, scope.Bitmap, scope.ImageManager, {
+        openTitle() { engine.openTitle(session); },
+        loadDatabase() { scope.DataManager.loadDatabase?.(); },
+        startAnimation(handle, id, mirror, delay) { engine.displayAnimation(session, handle, id, mirror, delay); },
+        performTransfer() { engine.playerTransfer(session, 'perform'); }
+      });
+      Object.assign(scope, scenes);
+      scope.AudioManager = {};
+      for (const method of ['playBgm', 'playBgs', 'playSe', 'playMe', 'stopBgm', 'stopBgs', 'stopMe', 'stopSe', 'fadeOutBgm', 'fadeOutBgs', 'fadeOutMe'])
+        scope.AudioManager[method] = (...args) => engine.managerInvoke(session, method, ...args);
+      scope.SoundManager = {};
+      for (const method of ['preloadImportantSounds', 'playBuzzer']) scope.SoundManager[method] = () => engine.managerInvoke(session, method);
+      scope.DataManager = { setupNewGame() { engine.newGame(session); } };
+      scope.$gamePlayer = {
+        reserveTransfer(mapId, x, y, direction = 0, fadeType = 0) { engine.playerTransfer(session, 'reserve', mapId, x, y, direction, fadeType); },
+        isTransferring() { return engine.playerTransfer(session, 'isTransferring'); },
+        performTransfer() { engine.playerTransfer(session, 'perform'); }
+      };
+      for (const method of ['isBattleTest', 'isEventTest', 'isAnySavefileExists']) scope.DataManager[method] = () => engine.managerInvoke(session, method);
+      scope.ConfigManager = {};
+      for (const field of ['alwaysDash', 'commandRemember', 'bgmVolume', 'bgsVolume', 'meVolume', 'seVolume']) Object.defineProperty(scope.ConfigManager, field, {
+        enumerable: true, configurable: true, get() { return engine.configuration(session)[field]; }, set(value) { engine.configure(session, { [field]: value }); }
+      });
+      for (const field of ['bgmVolume', 'bgsVolume', 'meVolume', 'seVolume']) Object.defineProperty(scope.AudioManager, field, {
+        enumerable: true, configurable: true,
+        get() { return engine.configuration(session)[field]; }, set(value) { engine.configure(session, { [field]: value }); }
+      });
+      function Window_TitleCommand() { this.initialize.apply(this, arguments); }
+      Window_TitleCommand.prototype = Object.create(scope.Window_Command.prototype);
+      Window_TitleCommand.prototype.constructor = Window_TitleCommand;
+      Window_TitleCommand.prototype.makeCommandList = function() {
+        for (const command of engine.managerInvoke(session, 'titleCommands')) this.addCommand(command.name, command.symbol, command.enabled);
+      };
+      Window_TitleCommand.initCommandPosition = () => engine.managerInvoke(session, 'initTitleCommandPosition');
+      scope.Window_TitleCommand = Window_TitleCommand;
+      result.start = () => scope.SceneManager.run(scope.Scene_Boot);
+      result.step = input => {
+        scope.SceneManager.update();
+        const scene = scope.SceneManager._scene;
+        const builtin = !scene || scene.constructor === scope.Scene_Title || scene instanceof scope.Scene_Map;
+        engine.scriptStage(session, builtin ? null : scope.SceneManager.stageHandle);
+        if (!builtin) return true;
+        return input === undefined ? engine.step(session) : engine.step(session, input);
+      };
+      return scenes;
+    }
+  };
+  return result;
 }
 
 module.exports = { createScriptRuntime };

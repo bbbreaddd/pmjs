@@ -29,14 +29,11 @@ double variableNumber(const Value& value){return core::numberValue(value);}
 std::string variableText(const Value& value){return core::stringValue(value);}
 bool strictEqual(const Value& left,const Value& right){return core::strictEquals(left,right);}
 std::u16string utf16(const std::string& text){const auto units=core::utf16Units(text);return {units.begin(),units.end()};}
-struct InterpreterOperation {
-  std::vector<std::shared_ptr<RuntimeInterpreter>>& stack;
-  InterpreterOperation(std::vector<std::shared_ptr<RuntimeInterpreter>>& operations, const std::shared_ptr<RuntimeInterpreter>& interpreter) : stack(operations) { stack.push_back(interpreter); }
-  ~InterpreterOperation() { stack.pop_back(); }
-};
 
 }
 
+InterpreterOperation::InterpreterOperation(std::vector<std::shared_ptr<RuntimeInterpreter>>& operations, const std::shared_ptr<RuntimeInterpreter>& interpreter) : stack(operations) { stack.push_back(interpreter); }
+InterpreterOperation::~InterpreterOperation() { stack.pop_back(); }
 const Value& Value::operator[](const std::string& key) const {
   const auto* object = std::get_if<Object>(&data);
   if (!object) return empty;
@@ -72,15 +69,6 @@ Session::Session(Value database)
   const auto kind = database_["sceneContract"]["kind"].text();
   if (!kind.empty() && kind != "map") throw std::invalid_argument("unsupported scene contract");
   if (!database_["plugins"].null()) PluginManager::setup(database_["plugins"]);
-  if (mapSceneOnly()) return;
-  std::map<std::string, double> fields;
-  for (const auto* side : {"a", "b"}) for (const auto* stat : {"mhp", "mmp", "atk", "def", "mat", "mdf", "agi", "luk"}) fields[std::string(side) + "." + stat] = 1;
-  for (const auto* collection : {"skills", "items"}) for (const auto& item : database_[collection].array()) {
-    if (item["damage"]["type"].integer() != 0) {
-      try { formula(item["damage"]["formula"].text(), fields, [](const auto&, const auto&) { return 0.0; }); }
-      catch (const std::exception& error) { throw std::invalid_argument(std::string(collection) + "[" + std::to_string(item["id"].integer()) + "] unsupported damage formula: " + error.what()); }
-    }
-  }
 }
 void Session::setScreenSize(int width, int height) {
   if (width <= 0 || height <= 0) throw std::invalid_argument("invalid screen dimensions");
@@ -132,6 +120,16 @@ void Session::newGame() {
   dispatchMessage("clear");
 }
 
+void Session::reservePlayerTransfer(int mapId, int x, int y, int direction, int fadeType) {
+  pendingTransfer_ = std::array<int, 5>{mapId, x, y, direction, fadeType};
+  transferFadeStarted_ = false;
+}
+void Session::performPlayerTransfer() {
+  if (!pendingTransfer_) return;
+  const auto target = *pendingTransfer_;
+  transfer(target[0], target[1], target[2], target[3]);
+  pendingTransfer_.reset(); transferFadeStarted_ = false;
+}
 void Session::transfer(int id, int x, int y, int direction) {
   const auto& target = database_["maps"][std::to_string(id)];
   if (target.null()) throw std::invalid_argument("map not loaded: " + std::to_string(id));
@@ -735,15 +733,18 @@ bool Session::condition(const Value& p, const Interpreter& context) {
     if (name == "shift") return currentInput_.dash;
     return currentInput_.direction == (name == "down" ? 2 : name == "left" ? 4 : name == "right" ? 6 : name == "up" ? 8 : 0) && currentInput_.direction != 0;
   }
-  if (p[0].integer() == 12) { const double value = evaluateExpression(p[1].text()); return value != 0 && !std::isnan(value); }
+  if (p[0].integer() == 12) {
+    if (runtimeHooks_ && runtimeHooks_->scriptCondition) return runtimeHooks_->scriptCondition(context.runtime, p[1].text());
+    const double value = evaluateExpression(p[1].text()); return value != 0 && !std::isnan(value);
+  }
   if (p[0].integer() == 13) return vehicleType_ == p[1].integer(); // in vehicle check
   throw std::runtime_error("unsupported conditional branch");
 }
 
-bool Session::command(const Value& entry, Interpreter& context) {
-  const int code = entry["code"].integer(), indent = entry["indent"].integer();
+bool Session::command(const EventCommand& entry, Interpreter& context) {
+  const int code = entry.code, indent = entry.indent;
   if (!context.serial) context.serial = ++nextInterpreterSerial_;
-  const auto& p = entry["parameters"];
+  const auto& p = entry.parameters;
   switch (code) {
     case 0: case 108: case 408: case 118: return true;
     case 112: return true;
@@ -806,7 +807,9 @@ bool Session::command(const Value& entry, Interpreter& context) {
         setupChoices(context, choices);
       } else if (context.index + 1 < static_cast<int>(context.list.size()) &&
                  (context.list[context.index + 1]["code"].integer() == 103 || context.list[context.index + 1]["code"].integer() == 104)) {
-        ++context.index; dialogEventCommand(context.list[context.index], context);
+        ++context.index;
+        dispatchInterpreterControl(context, context.list[context.index]["code"].integer() == 103 ? "setupNumInput" : "setupItemChoice",
+          {context.list[context.index]["parameters"]});
       }
       return true;
     }
@@ -979,6 +982,10 @@ bool Session::command(const Value& entry, Interpreter& context) {
       if (code == 103 || code == 104 || code == 105) {
         if (message_.busy) return false;
         messageOwnerSerial_ = context.serial;
+        if (code == 103 || code == 104) {
+          dispatchInterpreterControl(context, code == 103 ? "setupNumInput" : "setupItemChoice", {p});
+          context.waitingMessage = true; return true;
+        }
         if (dialogEventCommand(entry, context)) { context.waitingMessage = true; return true; }
       }
       if (dialogEventCommand(entry, context) || shopEventCommand(entry, context)) return true;
@@ -1085,29 +1092,35 @@ bool Session::executeCommandBase(Interpreter& context) {
   if (context.index >= static_cast<int>(context.list.size())) {
     dispatchInterpreterLifecycle(context, "terminate"); return true;
   }
-  const Value entry = context.list[context.index];
-  context.runtime->indent = entry["indent"].integer();
-  context.runtime->parameterList = context.list.storage;
+  const auto source = context.list.storage;
+  const EventCommand entry(context.list[context.index]);
+  context.runtime->indent = entry.indent;
+  context.runtime->parameterList = source;
   context.runtime->parameterIndex = context.index;
-  const std::string method = "command" + std::to_string(entry["code"].integer());
-  const auto scripted = entry["code"].integer() != 9000 && runtimeHooks_ && runtimeHooks_->command ?
-    runtimeHooks_->command(context.runtime, method) : std::optional<bool>{};
-  if (!(scripted ? *scripted : command(entry, context))) return false;
+  std::optional<bool> scripted;
+  if (entry.code != 9000 && runtimeHooks_ && runtimeHooks_->command)
+    scripted = runtimeHooks_->command(context.runtime, "command" + std::to_string(entry.code));
+  bool complete;
+  if (scripted) complete = *scripted;
+  else if (runtimeHooks_) {
+    const auto& object = context.runtime;
+    const Value parameters = object->parameterIndex < 0 ? object->parameterList->root :
+      object->parameterList->resolve({std::to_string(object->parameterIndex), "parameters"});
+    complete = command({entry.code, object->indent, parameters}, context);
+  } else complete = command(entry, context);
+  if (!complete) return false;
   ++context.index;
   return true;
 }
-bool Session::invokeInterpreterCommandBase(const std::shared_ptr<RuntimeInterpreter>& object, const std::string& method) {
+bool Session::invokeInterpreterCommandBase(const std::shared_ptr<RuntimeInterpreter>& object, std::optional<int> code) {
   auto* context = findRuntimeInterpreter(object);
   if (!context) throw std::runtime_error("interpreter is no longer attached to the session");
   InterpreterOperation operation(activeInterpreterOperations_, object);
-  if (method == "executeCommand") return executeCommandBase(*context);
-  if (!method.starts_with("command") || method.size() <= 7 ||
-      method.find_first_not_of("0123456789", 7) != std::string::npos)
-    throw std::invalid_argument("unknown native interpreter command method: " + method);
-  const int code = std::stoi(method.substr(7));
+  if (!code) return executeCommandBase(*context);
+  if (*code < 0) throw std::invalid_argument("native interpreter command code must be nonnegative");
   const Value parameters = object->parameterIndex < 0 ? object->parameterList->root :
     object->parameterList->resolve({std::to_string(object->parameterIndex), "parameters"});
-  return command(Value::Object{{"code", code}, {"indent", object->indent}, {"parameters", parameters}}, *context);
+  return command({*code, object->indent, parameters}, *context);
 }
 
 int Message::pageEnd() const {

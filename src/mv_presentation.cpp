@@ -193,8 +193,14 @@ void Presentation::mapPictures() {
     auto& sprite = *object->sprite;
     sprite.syncFromPicture(picture);
     if(!sprite.visible||sprite.opacity<=0)continue;
-    if (sprite.bitmap && !sprite.bitmap->isReady()) continue;
-    const auto source = sprite.bitmap ? *sprite.bitmap->texture() : image("img/pictures/"+sprite.pictureName+".png");
+    std::optional<ImageInfo> ownedImage;
+    if (sprite.bitmap) {
+      if (sprite.bitmap->isError()) throw std::runtime_error("Failed to load: " + sprite.bitmap->url);
+      if (!sprite.bitmap->isReady()) continue;
+      ownedImage = sprite.bitmap->texture();
+      if (!ownedImage) throw std::runtime_error("picture bitmap has no native texture");
+    }
+    const auto source = ownedImage ? *ownedImage : image("img/pictures/"+sprite.pictureName+".png");
     const auto& frame=picture["_frameData"]["frames"][picture["_frameData"]["frameIndex"].integer()];
     const double sx = sprite.sourceFrame ? (*sprite.sourceFrame)[0] : frame["x"].number();
     const double sy = sprite.sourceFrame ? (*sprite.sourceFrame)[1] : frame["y"].number();
@@ -561,7 +567,7 @@ double Presentation::messageTextWidth(bool face) const {
   const auto& style = settings_["messageStyle"];
   const auto padding = style["padding"].integer(18), inset = style["inset"].integer();
   const auto x = face ? 186 : inset + padding + style["textInset"].integer();
-  return core_.width() - inset * 2 - x - padding;
+  return core_.width() - inset - x - padding;
 }
 std::string Presentation::messageTextLayout(const std::string& source, bool face) {
   const auto& style = settings_["messageStyle"];
@@ -1597,6 +1603,7 @@ bool Presentation::renderFrame(const std::function<void()>& drawFrame) {
 }
 void Presentation::renderStage() {
   session_.uiHitTargets_.clear();
+  if (scriptStage_) { scriptStage_->render(core_.renderer()); return; }
   const int sceneId = static_cast<int>(session_.ui_.scene);
   if (sceneId != lastScene_ || session_.mapId_ != lastMap_ || session_.presentationRevision_ != lastPresentationRevision_) {
     coreWeather_.reset();

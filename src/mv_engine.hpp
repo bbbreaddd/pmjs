@@ -40,6 +40,13 @@ struct Value {
   bool null() const { return std::holds_alternative<std::monostate>(data) || isUndefined(); }
 };
 
+struct EventCommand {
+  int code, indent;
+  const Value& parameters;
+  EventCommand(int code, int indent, const Value& parameters) : code(code), indent(indent), parameters(parameters) {}
+  EventCommand(const Value& entry) : EventCommand(entry["code"].integer(), entry["indent"].integer(), entry["parameters"]) {}
+};
+
 class Sprite_Picture;
 std::uint64_t nextRuntimeIdentity();
 struct RuntimeObject {
@@ -102,6 +109,11 @@ struct RuntimeInterpreter : RuntimeObject {
   std::shared_ptr<RuntimeCommandList> parameterList = std::make_shared<RuntimeCommandList>();
   int parameterIndex = -1;
 };
+struct InterpreterOperation {
+  std::vector<std::shared_ptr<RuntimeInterpreter>>& stack;
+  InterpreterOperation(std::vector<std::shared_ptr<RuntimeInterpreter>>& operations, const std::shared_ptr<RuntimeInterpreter>& interpreter);
+  ~InterpreterOperation();
+};
 struct RuntimeHooks {
   std::function<bool(const std::shared_ptr<RuntimePicture>&, const std::string&, const Value::Array&)> picture;
   std::function<void(const std::shared_ptr<RuntimePicture>&)> sprite;
@@ -109,11 +121,14 @@ struct RuntimeHooks {
   std::function<std::optional<bool>(const std::shared_ptr<RuntimeInterpreter>&, const std::string&)> wait;
   std::function<std::optional<bool>(const std::shared_ptr<RuntimeInterpreter>&, const std::string&)> command;
   std::function<void(const std::shared_ptr<RuntimeInterpreter>&, const std::string&)> script;
+  std::function<bool(const std::shared_ptr<RuntimeInterpreter>&, const std::string&)> scriptCondition;
   std::function<bool(const std::shared_ptr<RuntimeInterpreter>&, const std::string&, const std::vector<std::string>&)> pluginCommand;
   std::function<bool(const std::shared_ptr<RuntimeInterpreter>&, const std::string&, const std::shared_ptr<RuntimeCommandList>&, int)> interpreterLifecycle;
   std::function<std::optional<bool>(const std::string&, const Value::Array&)> message;
   std::function<void(const std::shared_ptr<RuntimeCommandList>&)> requestImages;
   std::function<bool(int)> choice;
+  std::function<bool(const std::shared_ptr<RuntimeInterpreter>&, const std::string&, const Value::Array&)> interpreterControl;
+  std::function<void(const std::shared_ptr<RuntimeInterpreter>&)> setupChoiceCallback;
 };
 
 using FormulaResolver = std::function<double(const std::string&, const std::vector<double>&)>;
@@ -376,6 +391,9 @@ class Session {
   std::shared_ptr<RuntimePicture> createRuntimePicture(int slot = -1);
   bool ownsPictureSprite(const RuntimePicture& picture) const;
   bool inBattle() const { return battle_.active; }
+  bool playerTransferring() const { return pendingTransfer_.has_value(); }
+  void reservePlayerTransfer(int mapId, int x, int y, int direction, int fadeType);
+  void performPlayerTransfer();
   void dispatchPicture(const std::shared_ptr<RuntimePicture>& picture, const std::string& method, const Value::Array& arguments = {});
   void invokePictureBase(const std::shared_ptr<RuntimePicture>& picture, const std::string& method, const Value::Array& arguments = {});
   bool invokeWaitBase(const std::shared_ptr<RuntimeInterpreter>& interpreter);
@@ -385,7 +403,7 @@ class Session {
   void setRuntimeInterpreterList(const std::shared_ptr<RuntimeInterpreter>& interpreter, const std::shared_ptr<RuntimeCommandList>& list);
   void invokeInterpreterLifecycleBase(const std::shared_ptr<RuntimeInterpreter>& interpreter, const std::string& method,
     const std::shared_ptr<RuntimeCommandList>& list = {}, int eventId = 0);
-  bool invokeInterpreterCommandBase(const std::shared_ptr<RuntimeInterpreter>& interpreter, const std::string& method);
+  bool invokeInterpreterCommandBase(const std::shared_ptr<RuntimeInterpreter>& interpreter, std::optional<int> code);
   Value invokeMessageBase(const std::string& method, const Value::Array& arguments = {});
   Value runtimeMessageField(const std::string& field, const std::optional<Value>& value = {});
   Value imageRequests(const RuntimeCommandList& list);
@@ -416,6 +434,7 @@ class Session {
   bool mapSceneOnly() const { return database_["sceneContract"]["kind"].text() == "map"; }
   bool finished() const { return finished_; }
   void openTitle();
+  void initTitleCommandPosition() { lastTitleCommand_ = -1; }
   void openGameOver();
   void startBattle(int troop, bool canEscape, bool canLose, bool event = false);
   void buildBattleIntro();
@@ -542,7 +561,10 @@ class Session {
   void dispatchMessage(const std::string& method, const Value::Array& arguments = {});
   bool messageBusy();
   void setupChoices(Interpreter& interpreter, const Value& parameters);
+  void setupChoicesBase(Interpreter& interpreter, const Value& parameters);
   void jumpTo(Interpreter& interpreter, int index);
+  void jumpToBase(Interpreter& interpreter, int index);
+  void dispatchInterpreterControl(Interpreter& interpreter, const std::string& method, const Value::Array& arguments);
   void updateUi(const Input& input, bool ok, bool cancel, int direction);
   bool useItem(int id, int target, bool skill);
   bool useItemUntargeted(int id, bool skill);
@@ -589,22 +611,22 @@ class Session {
   bool updateWaitCountBase(Interpreter& context);
   bool updateWaitBase(Interpreter& context);
   Interpreter* findRuntimeInterpreter(const std::shared_ptr<RuntimeInterpreter>& interpreter);
-  bool command(const Value& entry, Interpreter& context);
+  bool command(const EventCommand& entry, Interpreter& context);
   bool executeCommandBase(Interpreter& context);
-  bool actorEventCommand(const Value& entry);
-  bool enemyEventCommand(const Value& entry);
+  bool actorEventCommand(const EventCommand& entry);
+  bool enemyEventCommand(const EventCommand& entry);
   double actorExpForLevel(const Battler& actor, int level) const;
   void changeActorExp(Battler& actor, double exp, bool show);
-  bool systemEventCommand(const Value& entry);
-  bool screenEventCommand(const Value& entry, Interpreter& context);
-  bool dialogEventCommand(const Value& entry, Interpreter& context);
-  bool shopEventCommand(const Value& entry, Interpreter& context);
-  bool vehicleEventCommand(const Value& entry, Interpreter& context);
-  bool animationEventCommand(const Value& entry, Interpreter& context);
+  bool systemEventCommand(const EventCommand& entry);
+  bool screenEventCommand(const EventCommand& entry, Interpreter& context);
+  bool dialogEventCommand(const EventCommand& entry, Interpreter& context);
+  bool shopEventCommand(const EventCommand& entry, Interpreter& context);
+  bool vehicleEventCommand(const EventCommand& entry, Interpreter& context);
+  bool animationEventCommand(const EventCommand& entry, Interpreter& context);
   void ensureScreenEffects();
   void updateScreenState();
   Value screenState() const;
-  bool characterEventCommand(const Value& entry, Interpreter& context);
+  bool characterEventCommand(const EventCommand& entry, Interpreter& context);
   void setupMapState();
   void updateMapState();
   void updateMapScroll();

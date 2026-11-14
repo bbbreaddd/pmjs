@@ -31,6 +31,15 @@ test('native image cache preserves identity, reservations, requests and retained
   await ready(sheet);
   assert.equal(manager.loadPicture('Sheet'), sheet);
   assert.equal(sheet.getPixel(0, 0), '#ff0000');
+  const authored = new Bitmap(4, 4); authored.fillAll('#0000ff');
+  manager._imageCache.add('authored', authored);
+  assert.equal(manager._imageCache.get('authored'), authored);
+  const nativeReady = manager._imageCache.isReady;
+  manager.isReady = () => nativeReady.call(manager._imageCache);
+  assert.equal(manager.isReady(), true);
+  delete manager._imageCache._items.authored;
+  assert.equal(manager._imageCache.get('authored'), null);
+  assert.equal(authored.getPixel(0, 0), '#0000ff');
   sheet.extension = { retained: true };
   manager.setCacheLimit(1);
   const other = manager.reservePicture('Other', 0, 'other');
@@ -65,7 +74,7 @@ test('native image cache preserves identity, reservations, requests and retained
   ]));
   t.after(() => engine.dispose(session));
   const { scope } = createScriptRuntime(engine, session, { native });
-  engine.newGame(session); engine.attach(session, { fontFile: 'font.ttf' }); engine.step(session, {});
+  engine.newGame(session); engine.attach(session, { fontFile: 'font.ttf', width: 640, height: 480, messageStyle: { wordWrapTags: true } }); engine.step(session, {});
   const owned = scope.ImageManager.loadPicture('Sheet');
   for (let i = 0; i < 100 && !owned.isReady(); i++) { scope.ImageManager.update(); await new Promise(resolve => setTimeout(resolve, 10)); }
   assert.equal(owned.isReady(), true);
@@ -84,4 +93,13 @@ test('native image cache preserves identity, reservations, requests and retained
   for (let i = 0; i < 21; i++) engine.step(session, {});
   assert.equal(sprite.bitmap, null);
   assert.equal(owned.getPixel(0, 0), '#00ff00');
+  const text = '<WordWrap>' + 'word '.repeat(60);
+  scope.$gameMessage.add(text);
+  for (let i = 0; i < 9; i++) engine.step(session, {});
+  const lines = engine.messageInvoke(session, 'layoutLines', []);
+  assert.ok(lines.length > 3);
+  assert.equal(lines.join(''), text.replace('<WordWrap>', ''));
+  const measure = new scope.Bitmap(1, 1); measure.fontSize = 28;
+  for (const line of lines) assert.ok(measure.measureTextWidth(line) <= 604);
+  assert.equal(scope.$gameMessage.allText(), text);
 });

@@ -278,6 +278,7 @@ class Renderer {
                  const std::array<float, 6>& transform,
                  const std::array<float, 2>& extent);
   void beginCompositionGroup();
+  void beginNoiseGlitch(double seed, double slices, double offset);
   void endCompositionGroup();
   void clearCompositionRect(float x,float y,float width,float height);
   void clipQueuedCommands(std::size_t first,const std::array<int,4>& bounds);

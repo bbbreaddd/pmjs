@@ -28,7 +28,10 @@ assert.throws(() => api.snapshot(second.player), /invalid engine session/);
 assert.equal(api.snapshot(second).player.x, 1);
 const cyclic = {}; cyclic.self = cyclic;
 assert.throws(() => api.create(cyclic), /nesting limit/);
-assert.throws(() => api.create({ ...fixture, skills: [null, { damage: { type: 1, formula: 'a.atk b.def' } }] }), /damage formula/);
+const unusedFormula = api.create({ ...fixture, skills: [null, { damage: { type: 1, formula: 'a.atk b.def' } }] });
+api.newGame(unusedFormula); api.step(unusedFormula, {});
+assert.equal(api.snapshot(unusedFormula).mapId, 1, 'unused formulas must not block startup');
+api.dispose(unusedFormula);
 api.dispose(second);
 const equipment = api.create({ ...fixture,
   actors: [null, { classId: 1, initialLevel: 1, equips: [0,1,1] }],

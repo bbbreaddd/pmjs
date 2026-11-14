@@ -59,9 +59,12 @@ async function runNativeMv(options, hooks = {}) {
     engine.configure(session, configuration);
     let configurationRevision = engine.storageStatus(session).configurationRevision;
     engine.setSaveMetadata(session, loadSaveMetadata(storage, compression));
-    await hooks.installRuntime?.({ engine, session, native });
+    const runtimeOptions = { engine, session, native, manifest: loaded.manifest, settings, storage, gameRoot: root };
+    const scriptRuntime = hooks.installRuntime ? await hooks.installRuntime(runtimeOptions) :
+      loaded.manifest ? require('./native-plugins.cjs').createPluginRuntime(engine, session, runtimeOptions) : null;
     if (options.battleTest) engine.battleTest(session);
-    else if (loaded.initialState) engine.load(session, loaded.initialState); else engine.openTitle(session);
+    else if (loaded.initialState) engine.load(session, loaded.initialState);
+    else if (scriptRuntime?.start) scriptRuntime.start(); else engine.openTitle(session);
     hooks.onSession?.({ engine, session, native });
     console.log('[pmjs] engine=native-mv original_engine_scripts=0');
     hooks.stage?.('playing');
@@ -73,7 +76,7 @@ async function runNativeMv(options, hooks = {}) {
       if (!timing.uncapped) deadline = Math.max(deadline + timing.renderPeriod, now - timing.renderPeriod * 4);
       const due = logicalClock.takeSteps(now);
       for (let step = 0; step < due; ++step) {
-        if (engine.step(session) === false) break gameLoop;
+        if ((scriptRuntime?.step ? scriptRuntime.step() : engine.step(session)) === false) break gameLoop;
         const request = engine.storageStatus(session);
         if (request.configurationRevision !== configurationRevision) {
           storage.writeText('config.rpgsave', compression.compressToBase64(JSON.stringify(engine.configuration(session))));

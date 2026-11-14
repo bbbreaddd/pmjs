@@ -49,9 +49,14 @@ Matrix Container::localTransform()const {
 }
 void Container::render(Renderer& renderer,const Matrix& parentWorld,double opacity) {
   if(!visible||!renderable||alpha<=0)return;
+  int filters = 0;
+  for (const auto& filter : glitchFilters) if (filter && filter->enabled && filter->slices > 0) {
+    renderer.beginNoiseGlitch(filter->seed, filter->slices, filter->offset); ++filters;
+  }
   const auto world=multiply(parentWorld,localTransform());const double worldAlpha=opacity*alpha;
   draw(renderer,world,worldAlpha);const auto count=children.size();
   for(std::size_t i=0;i<count&&i<children.size();++i){auto child=children[i];if(child)child->render(renderer,world,worldAlpha);}
+  while (filters-- > 0) renderer.endCompositionGroup();
 }
 Sprite::Sprite(){spriteId=displayId;}
 Sprite::~Sprite(){bitmapLifetime_.reset();}

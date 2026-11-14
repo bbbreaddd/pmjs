@@ -115,10 +115,10 @@ void Session::updateVehicles() {
   }
 }
 
-bool Session::vehicleEventCommand(const Value& entry, Interpreter& context) {
+bool Session::vehicleEventCommand(const EventCommand& entry, Interpreter& context) {
   (void)context;
-  const auto& p = entry["parameters"];
-  switch (entry["code"].integer()) {
+  const auto& p = entry.parameters;
+  switch (entry.code) {
     case 202: {
       const int index = p[0].integer();
       if (index < 0 || index >= 3) return true;

@@ -6,6 +6,7 @@
 #include "mv_core_utils.hpp"
 #include "mv_managers.hpp"
 #include "mv_sprites.hpp"
+#include "mv_windows.hpp"
 #include <cmath>
 
 namespace pmjs::addon {
@@ -74,6 +75,7 @@ struct EngineSession {
   std::shared_ptr<const int> runtimeOwner = std::make_shared<const int>(0);
   int runtimeCalls = 0;
   bool stepping = false;
+  bool touchPrepared = false;
   napi_env env = nullptr;
   napi_ref runtimeSelf = nullptr;
   std::map<std::uint64_t, RuntimeReference> runtimeReferences;
@@ -168,6 +170,93 @@ napi_value callRuntime(EngineSession& owner, const char* methodName, const std::
   check(env, napi_call_function(env, runtime, method, args.size(), args.data(), &result), "native MV script callback failed");
   return result;
 }
+void applyTouchEvent(EngineSession& owner, const std::string& method, const mv::Value& event) {
+  auto& platform = host(owner.env).platform;
+  const auto geometry = host(owner.env).core.renderer().presentationGeometry();
+  const auto drawable = platform.drawableSize();
+  const double ratioX = double(drawable.first) / std::max(1, platform.windowWidth());
+  const double ratioY = double(drawable.second) / std::max(1, platform.windowHeight());
+  const mv::core::Rectangle bounds{0,0,double(host(owner.env).core.width()),double(host(owner.env).core.height())};
+  const auto position = [&](const mv::Value& point) {
+    return std::array<double, 2>{
+      std::floor((point["pageX"].number() * ratioX - geometry.viewportX) * bounds.width / std::max(1, geometry.viewportWidth) + 0.5),
+      std::floor((point["pageY"].number() * ratioY - geometry.viewportY) * bounds.height / std::max(1, geometry.viewportHeight) + 0.5)};
+  };
+  const auto point = position(event); const auto x = point[0], y = point[1];
+  const double now = std::chrono::duration<double, std::milli>(std::chrono::system_clock::now().time_since_epoch()).count();
+  if (method == "_onLeftButtonDown") owner.touch.mouseDown(0, x, y, bounds.contains(x,y), now);
+  else if (method == "_onRightButtonDown") owner.touch.mouseDown(2, x, y, bounds.contains(x,y), now);
+  else if (method == "_onMiddleButtonDown") {}
+  else if (method == "_onMouseMove") owner.touch.mouseMove(x,y);
+  else if (method == "_onMouseUp") owner.touch.mouseUp(event["button"].integer(),x,y);
+  else if (method == "_onWheel") owner.touch.wheel(event["deltaX"].number(),event["deltaY"].number());
+  else if (method == "_onTouchStart") {
+    std::vector<std::array<double,2>> points;
+    for (const auto& touch : event["changedTouches"].array()) points.push_back(position(touch));
+    owner.touch.touchStart(points, static_cast<int>(event["touches"].array().size()), static_cast<int>(bounds.width), static_cast<int>(bounds.height), now);
+  } else if (method == "_onTouchMove" || method == "_onTouchEnd") {
+    for (const auto& touch : event["changedTouches"].array()) {
+      const auto p = position(touch);
+      if (method == "_onTouchMove") owner.touch.touchMove(p[0],p[1]); else owner.touch.touchEnd(p[0],p[1]);
+    }
+  } else if (method == "_onTouchCancel") owner.touch.touchCancel();
+  else if (method == "_onPointerDown") owner.touch.pointerDown(event["pointerType"].text() == "touch", event["isPrimary"].boolean(), x,y,bounds.contains(x,y));
+  else throw std::invalid_argument("touch event handler is not bound: " + method);
+}
+void updateTouchInput(EngineSession& owner) {
+  auto& platform = host(owner.env).platform;
+  const auto events = platform.pointerEvents(); platform.clearPointerEvents();
+  for (const auto& event : events) {
+    if (event.syntheticTouch) continue;
+    mv::Value::Array touches(static_cast<std::size_t>(std::max(0, event.touchCount)));
+    const mv::Value point = mv::Value::Object{{"pageX", event.x}, {"pageY", event.y}};
+    const mv::Value data = mv::Value::Object{{"type", event.type}, {"button", event.button}, {"buttons", static_cast<double>(event.buttons)},
+      {"pageX", event.x}, {"pageY", event.y}, {"clientX", event.x}, {"clientY", event.y},
+      {"deltaX", event.deltaX}, {"deltaY", event.deltaY}, {"changedTouches", mv::Value::Array{point}}, {"touches", touches},
+      {"pointerType", "touch"}, {"isPrimary", event.primary}};
+    if (owner.runtimeSelf) callRuntime(owner, "touchEvent", {writeValue(owner.env, data)});
+    else if (event.type == "mousedown") applyTouchEvent(owner, event.button == 0 ? "_onLeftButtonDown" : event.button == 2 ? "_onRightButtonDown" : "_onMiddleButtonDown", data);
+    else {
+      const std::map<std::string,std::string> handlers{{"mouseup","_onMouseUp"},{"mousemove","_onMouseMove"},{"wheel","_onWheel"},
+        {"touchstart","_onTouchStart"},{"touchmove","_onTouchMove"},{"touchend","_onTouchEnd"},{"touchcancel","_onTouchCancel"},{"pointerdown","_onPointerDown"}};
+      const auto found = handlers.find(event.type); if (found != handlers.end()) applyTouchEvent(owner, found->second, data);
+    }
+  }
+  if (owner.runtimeSelf) callRuntime(owner, "touchUpdate", {}); else owner.touch.update();
+  owner.touchPrepared = true;
+}
+napi_value updateTouch(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info, 1); auto& owner = session(env, args.at(0));
+  if (owner.runtimeCalls || owner.stepping) throw std::runtime_error("cannot poll touch input during a script callback or step");
+  updateTouchInput(owner); return undefined(env);
+} catch (const std::exception& error) { return throwException(env, error); }
+napi_value touchInvoke(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info);
+  if (args.size() < 2 || args.size() > 3) throw std::invalid_argument("touch operation requires session, method and optional event or value");
+  auto& owner = session(env, args[0]); auto& touch = owner.touch; const auto method = asString(env, args[1]);
+  if (method == "clear") touch.clear();
+  else if (method == "update") touch.update();
+  else if (method == "keyRepeatWait" || method == "keyRepeatInterval") {
+    auto& value = method == "keyRepeatWait" ? touch.keyRepeatWait : touch.keyRepeatInterval;
+    if (args.size() == 3) value = asNumber(env, args[2]); return number(env, value);
+  } else if (method == "x") return number(env,touch.x());
+  else if (method == "y") return number(env,touch.y());
+  else if (method == "wheelX") return number(env,touch.wheelX());
+  else if (method == "wheelY") return number(env,touch.wheelY());
+  else if (method == "date") return number(env,touch.date());
+  else if (method == "isPressed") return boolean(env,touch.isPressed());
+  else if (method == "isTriggered") return boolean(env,touch.isTriggered());
+  else if (method == "isCancelled") return boolean(env,touch.isCancelled());
+  else if (method == "isMoved") return boolean(env,touch.isMoved());
+  else if (method == "isReleased") return boolean(env,touch.isReleased());
+  else if (method == "isRepeated") return boolean(env,touch.isRepeated());
+  else if (method == "isLongPressed") return boolean(env,touch.isLongPressed());
+  else {
+    if (args.size() != 3) throw std::invalid_argument("touch event argument required");
+    applyTouchEvent(owner, method, readValue(env,args[2]));
+  }
+  return undefined(env);
+} catch (const std::exception& error) { return throwException(env, error); }
 void collectRuntime(EngineSession& owner) {
   if (!owner.runtimeSelf) return;
   const auto nativeObjects = owner.session->runtimeObjectIdentities();
@@ -218,6 +307,9 @@ napi_value connectRuntime(napi_env env, napi_callback_info info) try {
   hooks->script = [&owner](const auto& object, const std::string& source) {
     callRuntime(owner, "script", {runtimeHandle(owner, object), string(owner.env, source)});
   };
+  hooks->scriptCondition = [&owner](const auto& object, const std::string& source) {
+    return asBoolean(owner.env, callRuntime(owner, "scriptCondition", {runtimeHandle(owner, object), string(owner.env, source)}));
+  };
   hooks->pluginCommand = [&owner](const auto& object, const std::string& command, const std::vector<std::string>& args) {
     mv::Value::Array values;
     for (const auto& arg : args) values.emplace_back(arg);
@@ -234,6 +326,10 @@ napi_value connectRuntime(napi_env env, napi_callback_info info) try {
   };
   hooks->requestImages = [&owner](const auto& list) { callRuntime(owner, "requestImages", {runtimeHandle(owner, list)}); };
   hooks->choice = [&owner](int index) { return asBoolean(owner.env, callRuntime(owner, "choice", {number(owner.env, index)})); };
+  hooks->interpreterControl = [&owner](const auto& object, const std::string& method, const mv::Value::Array& args) {
+    return asBoolean(owner.env, callRuntime(owner, "interpreterControl", {runtimeHandle(owner, object), string(owner.env, method), writeValue(owner.env, args)}));
+  };
+  hooks->setupChoiceCallback = [&owner](const auto& object) { callRuntime(owner, "setupChoiceCallback", {runtimeHandle(owner, object)}); };
   owner.session->setRuntimeHooks(std::move(hooks));
   return undefined(env);
 } catch (const std::exception& error) { return throwException(env, error); }
@@ -313,7 +409,10 @@ napi_value interpreterCommandInvoke(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info, 3); auto& owner = session(env, args.at(0));
   requireRuntimeOwner(owner, args.at(1));
   RuntimeCallScope callScope(owner);
-  return boolean(env, owner.session->invokeInterpreterCommandBase(runtimeAs<mv::RuntimeInterpreter>(env, args.at(1)), asString(env, args.at(2))));
+  napi_valuetype type;
+  check(env, napi_typeof(env, args.at(2), &type), "cannot inspect command code");
+  const std::optional<int> code = type == napi_null ? std::nullopt : std::optional<int>{asInt32(env, args.at(2))};
+  return boolean(env, owner.session->invokeInterpreterCommandBase(runtimeAs<mv::RuntimeInterpreter>(env, args.at(1)), code));
 } catch (const std::exception& error) { return throwException(env, error); }
 napi_value interpreterCollection(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info, 3); auto& owner = session(env, args.at(0));
@@ -598,26 +697,7 @@ napi_value stepEngine(napi_env env, napi_callback_info info) {
       }
       const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
       value.input.update(pads, static_cast<double>(now));
-      const auto geometry = host(env).core.renderer().presentationGeometry();
-      const auto drawable = platform.drawableSize();
-      const double ratioX = double(drawable.first) / std::max(1, platform.windowWidth());
-      const double ratioY = double(drawable.second) / std::max(1, platform.windowHeight());
-      const mv::core::Rectangle bounds{0,0,double(host(env).core.width()),double(host(env).core.height())};
-      for (const auto& event : platform.pointerEvents()) {
-        if (event.syntheticTouch) continue;
-        const double x = std::floor((event.x * ratioX - geometry.viewportX) * bounds.width / std::max(1,geometry.viewportWidth) + 0.5);
-        const double y = std::floor((event.y * ratioY - geometry.viewportY) * bounds.height / std::max(1,geometry.viewportHeight) + 0.5);
-        if (event.type == "mousedown") value.touch.mouseDown(event.button,x,y,bounds.contains(x,y),static_cast<double>(now));
-        else if (event.type == "mouseup") value.touch.mouseUp(event.button,x,y);
-        else if (event.type == "mousemove") value.touch.mouseMove(x,y);
-        else if (event.type == "wheel") value.touch.wheel(event.deltaX,event.deltaY);
-        else if (event.type == "touchstart") value.touch.touchStart({{x,y}},event.touchCount,host(env).core.width(),host(env).core.height(),static_cast<double>(now));
-        else if (event.type == "touchmove") value.touch.touchMove(x,y);
-        else if (event.type == "touchend") value.touch.touchEnd(x,y);
-        else if (event.type == "touchcancel") value.touch.touchCancel();
-      }
-      platform.clearPointerEvents();
-      value.touch.update();
+      if (!value.touchPrepared) updateTouchInput(value);
       controls.touchX = value.touch.x(); controls.touchY = value.touch.y();
       controls.touchTriggered = value.touch.isTriggered(); controls.touchPressed = value.touch.isPressed(); controls.touchCancelled = value.touch.isCancelled();
       controls.touchRepeated = value.touch.isRepeated(); controls.touchLongPressed = value.touch.isLongPressed();
@@ -641,6 +721,7 @@ napi_value stepEngine(napi_env env, napi_callback_info info) {
       controls.repeatedDirection = value.input.isRepeated(direction) ? controls.direction : 0;
       controls.directionTriggered = controls.direction != 0 && value.input.isTriggered(direction);
     }
+    value.touchPrepared = false;
     if (controls.touchTriggered && controls.touchX && controls.touchY) mv::core::Graphics::onPointerDown(*controls.touchX,*controls.touchY);
     value.session->step(controls); collectRuntime(value); return boolean(env, !value.session->finished());
   } catch (const std::exception& error) { return throwException(env, error); }
@@ -698,6 +779,77 @@ napi_value render(napi_env env, napi_callback_info info) {
 napi_value openTitle(napi_env env, napi_callback_info info) {
   try { const auto args = arguments(env, info); if (args.size() != 1) throw std::invalid_argument("openTitle requires session"); session(env, args[0]).session->openTitle(); return undefined(env); }
   catch (const std::exception& error) { return throwException(env, error); }
+}
+napi_value scriptStage(napi_env env, napi_callback_info info) {
+  try {
+    const auto args = arguments(env, info);
+    if (args.size() != 2) throw std::invalid_argument("scriptStage requires session and display root or null");
+    auto& value = session(env, args[0]);
+    if (!value.presentation) throw std::runtime_error("presentation is not attached");
+    napi_valuetype type; check(env, napi_typeof(env, args[1], &type), "cannot inspect script stage");
+    value.presentation->setScriptStage(type == napi_null ? nullptr : displayForRuntime(env, args[1], value.owner->core));
+    return undefined(env);
+  } catch (const std::exception& error) { return throwException(env, error); }
+}
+napi_value playerTransfer(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info);
+  if (args.size() < 2) throw std::invalid_argument("player transfer requires session and operation");
+  auto& owner = session(env, args[0]); const auto operation = asString(env, args[1]);
+  if (operation == "isTransferring") return boolean(env, owner.session->playerTransferring());
+  if (operation == "reserve") {
+    if (args.size() != 7) throw std::invalid_argument("reserve transfer requires map, coordinates, direction and fade");
+    owner.session->reservePlayerTransfer(asInt32(env, args[2]), asInt32(env, args[3]), asInt32(env, args[4]), asInt32(env, args[5]), asInt32(env, args[6]));
+  } else if (operation == "perform") {
+    if (owner.runtimeCalls || owner.stepping) throw std::runtime_error("cannot perform a player transfer during a script callback or step");
+    owner.session->performPlayerTransfer();
+  } else throw std::invalid_argument("unknown player transfer operation: " + operation);
+  return undefined(env);
+} catch (const std::exception& error) { return throwException(env, error); }
+napi_value managerInvoke(napi_env env, napi_callback_info info) {
+  try {
+    const auto args = arguments(env, info);
+    if (args.size() < 2 || args.size() > 4) throw std::invalid_argument("manager operation requires session, method and optional arguments");
+    auto& value = *session(env, args[0]).session; const auto method = asString(env, args[1]);
+    const auto sound = args.size() > 2 ? readValue(env, args[2]) : mv::Value{};
+    const double position = args.size() > 3 ? asNumber(env, args[3]) : 0;
+    if (method == "playBgm") mv::AudioManager::playBgm(value, sound, position);
+    else if (method == "playBgs") mv::AudioManager::playBgs(value, sound, position);
+    else if (method == "playSe") mv::AudioManager::playSe(value, sound);
+    else if (method == "playMe") mv::AudioManager::playMe(value, sound);
+    else if (method == "stopBgm") mv::AudioManager::stopBgm(value);
+    else if (method == "stopBgs") mv::AudioManager::stopBgs(value);
+    else if (method == "stopMe") mv::AudioManager::stopMe(value);
+    else if (method == "stopSe") mv::AudioManager::stopSe(value);
+    else if (method == "fadeOutBgm") mv::AudioManager::fadeOutBgm(value, sound.number());
+    else if (method == "fadeOutBgs") mv::AudioManager::fadeOutBgs(value, sound.number());
+    else if (method == "fadeOutMe") mv::AudioManager::fadeOutMe(value, sound.number());
+    else if (method == "preloadImportantSounds") mv::SoundManager::preloadImportantSounds(value);
+    else if (method == "playBuzzer") mv::SoundManager::playBuzzer(value);
+    else if (method == "isBattleTest") return boolean(env, mv::DataManager::isBattleTest(value));
+    else if (method == "isEventTest") return boolean(env, mv::DataManager::isEventTest(value));
+    else if (method == "isAnySavefileExists") return boolean(env, mv::DataManager::isAnySavefileExists(value));
+    else if (method == "initTitleCommandPosition") value.initTitleCommandPosition();
+    else if (method == "titleCommands") {
+      mv::Value::Array commands;
+      for (const auto& command : mv::Window_TitleCommand::makeCommands(value))
+        commands.emplace_back(mv::Value::Object{{"name", command.name}, {"symbol", command.symbol}, {"enabled", command.enabled}});
+      return writeValue(env, commands);
+    }
+    else throw std::invalid_argument("manager method is not bound: " + method);
+    return undefined(env);
+  } catch (const std::exception& error) { return throwException(env, error); }
+}
+napi_value displayAnimation(napi_env env, napi_callback_info info) {
+  try {
+    const auto args = arguments(env, info);
+    if (args.size() != 5) throw std::invalid_argument("displayAnimation requires session, sprite, animation ID, mirror and delay");
+    auto& value = session(env, args[0]); const int id = asInt32(env, args[2]);
+    const auto& animation = value.session->database()["animations"][id];
+    if (animation.null()) throw std::invalid_argument("animation does not exist");
+    if (!value.owner) throw std::runtime_error("animation graphics services are not attached");
+    startDisplayAnimation(env, args[1], value.owner->core, animation, asBoolean(env, args[3]), asInt32(env, args[4]));
+    return undefined(env);
+  } catch (const std::exception& error) { return throwException(env, error); }
 }
 napi_value startBattle(napi_env env, napi_callback_info info) {
   try { const auto args = arguments(env, info); if (args.size() != 4) throw std::invalid_argument("startBattle requires session, troop, canEscape, canLose"); auto& owner = session(env, args[0]); if (owner.runtimeCalls) throw std::runtime_error("cannot replace battle state during a script callback"); owner.session->startBattle(asInt32(env, args[1]), asBoolean(env, args[2]), asBoolean(env, args[3])); return undefined(env); }
@@ -777,6 +929,12 @@ void registerMvEngineBindings(napi_env env, napi_value exports) {
   method(env, engine, "step", stepEngine); method(env, engine, "acknowledge", acknowledge);
   method(env, engine, "snapshot", snapshot); method(env, engine, "dispose", dispose);
   method(env, engine, "attach", attach); method(env, engine, "present", present); method(env, engine, "render", render); method(env, engine, "openTitle", openTitle);
+  method(env, engine, "scriptStage", scriptStage);
+  method(env, engine, "managerInvoke", managerInvoke);
+  method(env, engine, "displayAnimation", displayAnimation);
+  method(env, engine, "playerTransfer", playerTransfer);
+  method(env, engine, "updateTouch", updateTouch);
+  method(env, engine, "touchInvoke", touchInvoke);
   method(env, engine, "startBattle", startBattle); method(env, engine, "chooseAction", chooseAction); method(env, engine, "setRandomStream", randomStream);
   method(env, engine, "configure", configure); method(env, engine, "configuration", configuration);
   method(env, engine, "setSaveMetadata", setSaveMetadata);

@@ -22,10 +22,13 @@
 #include <vector>
 #include <utility>
 
-namespace pmjs::mv::core { class PixelBitmap; }
+namespace pmjs::mv::core { class PixelBitmap; class Container; }
+namespace pmjs::mv { struct Value; }
 namespace pmjs::addon {
 
 std::shared_ptr<mv::core::PixelBitmap> bitmapForRuntime(napi_env env, napi_value object, RuntimeCore& runtime);
+std::shared_ptr<mv::core::Container> displayForRuntime(napi_env env, napi_value object, RuntimeCore& runtime);
+void startDisplayAnimation(napi_env env, napi_value object, RuntimeCore& runtime, const mv::Value& animation, bool mirror, int delay);
 
 void trimPreparationMemory() noexcept;
 
@@ -148,6 +151,7 @@ void registerGraphicsBindings(napi_env env, napi_value exports);
 void registerResourceBindings(napi_env env, napi_value exports);
 void registerCanvasBindings(napi_env env, napi_value exports);
 void registerBitmapBindings(napi_env env, napi_value exports);
+void registerDisplayBindings(napi_env env, napi_value exports);
 void registerDialogBindings(napi_env env, napi_value exports);
 void registerMediaBindings(napi_env env, napi_value exports);
 void registerEffectBindings(napi_env env, napi_value exports);

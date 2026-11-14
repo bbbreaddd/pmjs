@@ -64,7 +64,7 @@ int main() {
     battleRoot["skills"] = Array{Value{}, Object{{"id", 1}, {"stypeId", 1}, {"occasion", 1}, {"scope", 1}}, Object{{"id", 2}, {"stypeId", 0}, {"occasion", 1}, {"scope", 11}}};
     battleRoot["enemies"] = Array{Value{}, Object{{"params", Array{100, 0, 1, 1, 1, 1, 1, 1}}, {"actions", Array{}}}};
     battleRoot["troops"] = Array{Value{}, Object{{"members", Array{Object{{"enemyId", 1}}}}}};
-    Session battle(battleData); battle.newGame(); battle.startBattle(1, false, false);
+    Session battle(battleData); battle.newGame(); battle.setRandomStream(std::vector<double>(64, 0.5)); battle.startBattle(1, false, false);
     require(battle.message().busy, "battle opening waits for enemy introduction");
     battle.acknowledge(); battle.step({});
     auto press = [&](pmjs::mv::Input input) { battle.step(input); battle.step({}); };
@@ -94,7 +94,7 @@ int main() {
     attack["damage"] = Object{{"type", 1}, {"formula", "100"}, {"variance", 0}};
     std::get<Object>(std::get<Array>(battleRoot["enemies"].data)[1].data)["dropItems"] = Array{Object{{"kind", 1}, {"dataId", 1}, {"denominator", 1}}};
     battleRoot["items"] = Array{Value{}, Object{{"name", "Potion"}}};
-    Session victory(battleData); victory.newGame(); victory.startBattle(1, true, false); victory.acknowledge(); victory.step({});
+    Session victory(battleData); victory.newGame(); victory.setRandomStream(std::vector<double>(64, 0.5)); victory.startBattle(1, true, false); victory.acknowledge(); victory.step({});
     victory.chooseAction(0, 1, 0);
     for (int tick = 0; tick < 1000 && victory.battle().active; ++tick) victory.step({});
     require(!victory.battle().active && victory.ui().scene == pmjs::mv::Scene::battle, "victory keeps battle visible until messages finish");

@@ -17,14 +17,14 @@ int enemyEventInt(double value, int minimum, int maximum) {
 }
 }
 
-bool Session::enemyEventCommand(const Value& entry) {
-  const int code = entry["code"].integer();
+bool Session::enemyEventCommand(const EventCommand& entry) {
+  const int code = entry.code;
   if (code == 340) {
     if (battle_.active) battle_.aborting = true;
     return true;
   }
   if (code == 339) {
-    const auto& p = entry["parameters"];
+    const auto& p = entry.parameters;
     if (p[0].integer() == 0) {
       if (p[1].integer() < 0) for (std::size_t index = 0; index < battle_.enemies.size(); ++index)
         forceBattleAction(true, static_cast<int>(index), p[2].integer(), p[3].integer());
@@ -37,7 +37,7 @@ bool Session::enemyEventCommand(const Value& entry) {
     return true;
   }
   if (code != 331 && code != 332 && code != 333 && code != 334 && code != 335 && code != 336 && code != 342) return false;
-  const auto& p = entry["parameters"];
+  const auto& p = entry.parameters;
   double amount = 0;
   if (code == 331 || code == 332 || code == 342) {
     const auto& operand = p[2].integer() ? variable(p[3].integer()) : p[3];

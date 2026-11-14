@@ -119,8 +119,8 @@ void Session::updateShop(bool ok, bool cancel, int direction, bool pageUp, bool 
   }
 }
 
-bool Session::shopEventCommand(const Value& entry, Interpreter& context) {
-  if (entry["code"].integer() != 302) return false;
+bool Session::shopEventCommand(const EventCommand& entry, Interpreter& context) {
+  if (entry.code != 302) return false;
   if (battle_.active) {
     while (context.index + 1 < static_cast<int>(context.list.size()) &&
            context.list[context.index + 1]["code"].integer() == 605) {
@@ -129,7 +129,7 @@ bool Session::shopEventCommand(const Value& entry, Interpreter& context) {
     return true;
   }
 
-  const auto& p = entry["parameters"];
+  const auto& p = entry.parameters;
   SceneManager::pushScene(*this, Scene::shop);
   ui_.shopPurchaseOnly = p.array().size() > 4 ? p[4].boolean() : false;
   ui_.shopGoods.clear();

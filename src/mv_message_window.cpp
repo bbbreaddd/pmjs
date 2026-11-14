@@ -46,7 +46,8 @@ Value Session::invokeMessageBase(const std::string& method, const Value::Array& 
   else if (method == "setBackground") message_.background = argument(0).integer();
   else if (method == "setPositionType") message_.position = argument(0).integer();
   else if (method == "setChoices") {
-    message_.choices = argument(0).array(); message_.defaultChoice = argument(1).integer(); message_.cancelChoice = argument(2).integer(); message_.busy = true;
+    message_.choices = argument(0).array(); message_.defaultChoice = argument(1).integer(); message_.cancelChoice = argument(2).integer();
+    message_.busy = !message_.lines.empty() || !message_.choices.empty() || message_.numberVariableId > 0 || message_.itemVariableId > 0;
   }
   else if (method == "setChoiceBackground") message_.choiceBackground = argument(0).integer();
   else if (method == "setChoicePositionType") message_.choicePosition = argument(0).integer();
@@ -76,6 +77,9 @@ Value Session::invokeMessageBase(const std::string& method, const Value::Array& 
   return Value::undefined();
 }
 void Session::setupChoices(Interpreter& context, const Value& parameters) {
+  dispatchInterpreterControl(context, "setupChoices", {parameters});
+}
+void Session::setupChoicesBase(Interpreter& context, const Value& parameters) {
   if (!context.serial) context.serial = ++nextInterpreterSerial_;
   messageOwnerSerial_ = context.serial;
   const int count = static_cast<int>(parameters[0].array().size());
@@ -83,8 +87,12 @@ void Session::setupChoices(Interpreter& context, const Value& parameters) {
   dispatchMessage("setChoices", {parameters[0], parameters[2], cancel});
   dispatchMessage("setChoiceBackground", {parameters[4]}); dispatchMessage("setChoicePositionType", {parameters[3].null() ? Value(2) : parameters[3]});
   message_.choiceIndent = context.runtime->indent;
+  if (runtimeHooks_ && runtimeHooks_->setupChoiceCallback) runtimeHooks_->setupChoiceCallback(context.runtime);
 }
 void Session::jumpTo(Interpreter& context, int index) {
+  dispatchInterpreterControl(context, "jumpTo", {index});
+}
+void Session::jumpToBase(Interpreter& context, int index) {
   if (index < 0 || index >= static_cast<int>(context.list.size()) || context.index < 0 || context.index >= static_cast<int>(context.list.size()))
     throw std::invalid_argument("jump target or current position is outside the command list");
   int indent = context.runtime->indent;
@@ -94,16 +102,22 @@ void Session::jumpTo(Interpreter& context, int index) {
   }
   context.index = index;
 }
+void Session::dispatchInterpreterControl(Interpreter& context, const std::string& method, const Value::Array& arguments) {
+  const auto object = context.runtime;
+  if (!runtimeHooks_ || !runtimeHooks_->interpreterControl || !runtimeHooks_->interpreterControl(object, method, arguments))
+    invokeInterpreterControl(object, method, arguments);
+}
 void Session::invokeInterpreterControl(const std::shared_ptr<RuntimeInterpreter>& object, const std::string& method, const Value::Array& args) {
+  InterpreterOperation operation(activeInterpreterOperations_, object);
   auto* context = findRuntimeInterpreter(object);
   if (!context) throw std::runtime_error("interpreter is no longer attached to the session");
   if (args.size() != 1) throw std::invalid_argument("interpreter control requires one argument");
-  if (method == "jumpTo") jumpTo(*context, args[0].integer());
-  else if (method == "setupChoices") setupChoices(*context, args[0]);
+  if (method == "jumpTo") jumpToBase(*context, args[0].integer());
+  else if (method == "setupChoices") setupChoicesBase(*context, args[0]);
   else if (method == "setupNumInput" || method == "setupItemChoice") {
     if (!context->serial) context->serial = ++nextInterpreterSerial_;
     messageOwnerSerial_ = context->serial;
-    dialogEventCommand(Value::Object{{"code", method == "setupNumInput" ? 103 : 104}, {"parameters", args[0]}}, *context);
+    dialogEventCommand({method == "setupNumInput" ? 103 : 104, 0, args[0]}, *context);
   } else throw std::invalid_argument("interpreter control is not bound: " + method);
 }
 bool Session::updateMessageText(bool ok, bool cancel) {

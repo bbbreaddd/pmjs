@@ -173,9 +173,9 @@ void Session::executeNativeScript(const std::string& source,Interpreter& context
     else if(name=="$gameScreen.startFadeOut") {fadeOut_=static_cast<int>(number(0));}
     else if(name=="$gameScreen.showPicture") {
       Value::Array p{static_cast<int>(number(0)),value(1),static_cast<int>(number(2)),0,value(3),value(4),value(5),value(6),value(7),value(8)};
-      screenEventCommand(Value::Object{{"code",231},{"parameters",p}},context);
+      screenEventCommand({231, 0, p},context);
     }
-    else if(name=="$gameScreen.erasePicture")screenEventCommand(Value::Object{{"code",235},{"parameters",Value::Array{value(0)}}},context);
+    else if(name=="$gameScreen.erasePicture")screenEventCommand({235, 0, Value::Array{value(0)}},context);
     else if(name=="SceneManager.goto"||name=="SceneManager.push") {
       if(args.empty())throw std::invalid_argument("missing native scene");
       const bool push = name == "SceneManager.push";

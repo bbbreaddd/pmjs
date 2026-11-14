@@ -11,6 +11,10 @@ struct SpriteFrame {
   Point pivot;
 };
 SpriteFrame spriteFrame(const Rectangle& requested,double bitmapWidth,double bitmapHeight);
+struct GlitchFilter {
+  double slices = 5, offset = 100, direction = 0, fillMode = 0, seed = 0;
+  bool enabled = true;
+};
 
 class Container {
  public:
@@ -24,6 +28,7 @@ class Container {
   bool visible=true,renderable=true,interactive=false;
   Container* parent=nullptr;
   std::vector<std::shared_ptr<Container>> children;
+  std::vector<std::shared_ptr<GlitchFilter>> glitchFilters;
   virtual ~Container();
   virtual void update();
   virtual void render(Renderer& renderer,const Matrix& world={1,0,0,1,0,0},double opacity=1);
@@ -151,6 +156,7 @@ class Sprite:public Container {
   virtual void setBitmap(std::shared_ptr<PixelBitmap> bitmap);
   std::shared_ptr<PixelBitmap> bitmap()const{return bitmap_;}
   void setFrame(double x,double y,double width,double height);
+  void refresh() { refreshFrameGeometry(); }
   Rectangle frame()const{return frame_;}
   double width()const{return frame_.width;}
   double height()const{return frame_.height;}
@@ -236,6 +242,7 @@ class Window:public Container {
   void move(double x,double y,double w,double h){position={x,y};width=w;height=h;}
   void setCursorRect(double x,double y,double w,double h){const auto value=[](double v){return std::isnan(v)?0.0:std::floor(v);};cursorRect={value(x),value(y),value(w),value(h)};}
   void addChildToBack(std::shared_ptr<Container> child);
+  void refreshAllParts() { back_.reset(); frameBitmap_.reset(); cursorBitmap_.reset(); skinKey_ = nullptr; cursorSkin_ = nullptr; }
   void setTone(double r,double g,double b){const auto value=[](double v){return std::isnan(v)?0.0:v;};tone={value(r),value(g),value(b)};}
   bool isOpen()const{return openness>=255;} bool isClosed()const{return openness<=0;}
   Rectangle openBounds()const;

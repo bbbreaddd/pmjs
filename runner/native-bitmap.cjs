@@ -154,6 +154,7 @@ function createBitmapClass(native, PIXI = null, fonts = null) {
     return invoke(this, 'gradientFillRect', x, y, width, height, first, second, Boolean(vertical));
   };
   Bitmap.prototype.drawText = function(text, x, y, maxWidth = 0x7fffffff, lineHeight, align = 'left') {
+    if (text === undefined) return;
     return invoke(this, 'drawText', String(text), x, y, maxWidth, lineHeight, align);
   };
   for (const name of ['blt', 'bltImage']) {
@@ -171,7 +172,7 @@ function createBitmapClass(native, PIXI = null, fonts = null) {
     Object.defineProperty(surface, 'bitmap', { value: bitmap });
     return surface;
   };
-  bitmapFactories.set(Bitmap, { runtime, handle(bitmap) { return entry(bitmap).handle; }, adopt(result) {
+  bitmapFactories.set(Bitmap, { runtime, handle(bitmap) { return entry(bitmap).handle; }, manage(bitmap) { entry(bitmap).managed = true; }, adopt(result) {
     const bitmap = Object.create(Bitmap.prototype);
     bitmap.initialize();
     const value = entry(bitmap); value.handle = result.handle; value.managed = true; value.revision++;
@@ -238,6 +239,27 @@ function createImageManager(native, Bitmap) {
     manager['request' + name] = function(filename, hue = 0) { return this.requestBitmap('img/' + folder + '/', filename, hue, smooth); };
   }
   manager._systemReservationId = 1;
+  manager._imageCache = {
+    get(key) {
+      const result = api.cacheImage(runtime, 'get', String(key));
+      if (!result) return null;
+      let bitmap = known.get(result.identity)?.deref();
+      if (!bitmap) { bitmap = factory.adopt(result); known.set(result.identity, new WeakRef(bitmap)); }
+      roots.set(result.identity, bitmap); return bitmap;
+    },
+    add(key, bitmap) {
+      const result = api.cacheImage(runtime, 'add', String(key), factory.handle(bitmap));
+      factory.manage(bitmap); known.set(result.identity, new WeakRef(bitmap)); roots.set(result.identity, bitmap);
+    },
+    isReady() { return api.imageManager(runtime, 'state').ready; },
+    releaseReservation(id) { manager.releaseReservation(id); }
+  };
+  manager._imageCache._items = new Proxy({}, {
+    get(target, key) { const bitmap = manager._imageCache.get(key); return bitmap ? { bitmap } : undefined; },
+    deleteProperty(target, key) { api.cacheImage(runtime, 'remove', String(key)); synchronize(api.imageManager(runtime, 'state')); return true; },
+    set() { throw new TypeError('Use ImageCache.add to replace an entry'); }
+  });
+  manager._requestQueue = { _queue: { get length() { return api.imageManager(runtime, 'state').requestCount; } } };
   manager.reserveSystem = function(filename, hue = 0, id) { return this.reserveBitmap('img/system/', filename, hue, false, id || this._systemReservationId); };
   factory.manager = manager;
   return manager;

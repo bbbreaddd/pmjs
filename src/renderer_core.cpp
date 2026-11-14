@@ -513,6 +513,14 @@ void Renderer::beginCompositionGroup() {
   command.filterKind=scene_packet::FilterKind::alpha;command.filterParameters[0]=1;command.color[3]=1;
   frame_.commands.push_back(command);sceneSubmittedThisFrame_=true;
 }
+void Renderer::beginNoiseGlitch(double seed, double slices, double offset) {
+  RenderCommand command; command.action = RenderCommand::Action::filterBegin;
+  command.filterKind = scene_packet::FilterKind::noiseGlitch;
+  command.filterParameters[1] = static_cast<float>(seed);
+  command.filterParameters[2] = static_cast<float>(std::max(0.0, slices));
+  command.filterParameters[3] = static_cast<float>(offset); command.color[3] = 1;
+  frame_.commands.push_back(command); sceneSubmittedThisFrame_ = true;
+}
 void Renderer::endCompositionGroup(){RenderCommand command;command.action=RenderCommand::Action::filterEnd;command.color[3]=1;frame_.commands.push_back(command);}
 void Renderer::clearCompositionRect(float x,float y,float width,float height){RenderCommand command;command.action=RenderCommand::Action::clearRect;command.clearRectangle={x,y,std::max(0.0F,width),std::max(0.0F,height)};frame_.commands.push_back(command);}
 void Renderer::clipQueuedCommands(std::size_t first,const std::array<int,4>& bounds) {

@@ -19,7 +19,9 @@ class Presentation {
   void render();
   bool renderFrame(const std::function<void()>& drawFrame);
   void captureAudioState();
+  void setScriptStage(std::shared_ptr<core::Container> stage) { scriptStage_ = std::move(stage); }
  private:
+  std::shared_ptr<core::Container> scriptStage_;
   void renderStage();
   ImageInfo image(const std::string& file, int hue = 0);
   void quad(ImageHandle handle, float sx, float sy, float sw, float sh, float x, float y, float width, float height, float alpha = 1);

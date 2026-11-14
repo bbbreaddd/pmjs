@@ -55,11 +55,11 @@ std::array<double, 4> Session::screenFlashColor() const {
   const auto& color = screenEffects_["_flashColor"];
   return {color[0].number(), color[1].number(), color[2].number(), color[3].number()};
 }
-bool Session::screenEventCommand(const Value& entry, Interpreter& context) {
+bool Session::screenEventCommand(const EventCommand& entry, Interpreter& context) {
   if (screenEffects_.null()) screenEffects_ = initialScreen();
   auto& state = std::get<Object>(screenEffects_.data);
-  const auto& p = entry["parameters"];
-  const int code = entry["code"].integer();
+  const auto& p = entry.parameters;
+  const int code = entry.code;
   if (code == 221 || code == 222) {
     if (message_.busy) return false;
     fadeOut_ = code == 221 ? 24 : 0; state["_fadeInDuration"] = code == 222 ? 24 : 0;

@@ -23,9 +23,9 @@ void Session::locateCharacter(Character& character, double x, double y) {
   else if (!character.moving()) character.bushDepth = 12;
 }
 
-bool Session::characterEventCommand(const Value& entry, Interpreter& context) {
-  const auto& p = entry["parameters"];
-  switch (entry["code"].integer()) {
+bool Session::characterEventCommand(const EventCommand& entry, Interpreter& context) {
+  const auto& p = entry.parameters;
+  switch (entry.code) {
     case 203: {
       if (battle_.active) return true;
       auto* target = routeCharacter(p[0].integer(), context);

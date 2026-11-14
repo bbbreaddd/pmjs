@@ -401,6 +401,46 @@ test('native show-text dispatches message overrides and exposes the same native 
   assert.equal(api.snapshot(session).variables[9], 42);
 });
 
+test('native choices expose retained live arrays and invoke the interpreter callback once', t => {
+  const { session, scope, step } = create(t, [command(102, [['Yes', 'No'], -2, 0, 2, 0]),
+    command(402, [0]), { ...variable(9, 1), indent: 1 }, command(402, [1]),
+    { ...variable(9, 2), indent: 1 }, command(404), command(230, [20])]);
+  step();
+  const choices = scope.$gameMessage.choices();
+  assert.equal(choices, scope.$gameMessage._choices);
+  assert.deepEqual(Array.from(choices.clone()), ['Yes', 'No']);
+  assert.equal(typeof scope.$gameMessage._choiceCallback, 'function');
+  api.acknowledge(session, 1);
+  assert.equal(scope.$gameMessage._choiceCallback, null);
+  assert.deepEqual(Array.from(choices), ['Yes', 'No']);
+  assert.deepEqual(Array.from(scope.$gameMessage.choices()), []);
+  step();
+  assert.equal(api.snapshot(session).variables[9], 2);
+});
+
+test('script choices jump the native interpreter through label callbacks', t => {
+  const { session, scope, step } = create(t, [command(356, ['Choices']), variable(9, 1), command(115),
+    command(118, ['Selected']), variable(9, 2), command(230, [20])]);
+  scope.Game_Interpreter.prototype.pluginCommand = function(name) {
+    if (name !== 'Choices') return;
+    scope.$gameMessage.setChoices(['Jump'], 0, -2);
+    scope.$gameMessage.setChoiceCallback(() => this.jumpTo(3));
+    this.setWaitMode('message');
+  };
+  step(); assert.equal(api.snapshot(session).variables[9], undefined);
+  api.acknowledge(session, 0); step();
+  assert.equal(api.snapshot(session).variables[9], 2);
+});
+
+test('event scripts use their own realm and share the native random stream', t => {
+  const { session, scope, step } = create(t, [command(355, ['isolatedValue = [1, 2].clone(); this.draw = Math.random();']), command(230, [20])]);
+  const before = api.snapshot(session).randomCalls;
+  step();
+  assert.equal(globalThis.isolatedValue, undefined);
+  assert.deepEqual(Array.from(scope.isolatedValue), [1, 2]);
+  assert.equal(api.snapshot(session).randomCalls, before + 1);
+});
+
 test('native-backed subclasses keep their identity and plugin initialization', t => {
   const { scope, step } = create(t, []);
   const base = scope.Game_Picture.prototype.initialize;
@@ -556,4 +596,60 @@ test('native command dispatch skips noncallable command methods', t => {
   step();
   assert.equal(api.snapshot(session).variables[1], undefined);
   assert.equal(api.snapshot(session).variables[2], undefined);
+});
+
+test('native command fallback reads prepared parameters after method lookup', t => {
+  const { scope, step, session } = create(t, [variable(1, 3), command(230, [8]), variable(2, 9)]);
+  const original = scope.Game_Interpreter.prototype.command122;
+  Object.defineProperty(scope.Game_Interpreter.prototype, 'command122', {
+    configurable: true,
+    get() {
+      if (this._index === 0) {
+        this._params[4] = 7;
+        this._index = 1;
+      }
+      return original;
+    }
+  });
+  step();
+  assert.equal(api.snapshot(session).variables[1], 7);
+  assert.equal(api.snapshot(session).variables[2], 9);
+});
+
+test('native script conditions use JavaScript truthiness and eval completion values', t => {
+  const sources = ['({})', '[]', '"0"', 'var value = 7; value', '0', '""', 'undefined', 'NaN'];
+  const program = sources.flatMap((source, index) => [
+    command(111, [12, source]), command(122, [index + 1, index + 1, 0, 0, 1], 1),
+    command(411), command(122, [index + 1, index + 1, 0, 0, 2], 1), command(412),
+  ]);
+  const { session, step } = create(t, program);
+  step();
+  const state = api.snapshot(session);
+  for (let index = 0; index < sources.length; ++index) assert.equal(state.variables[index + 1], index < 4 ? 1 : 2, sources[index]);
+});
+
+test('native script conditions bind the current interpreter and execute once', t => {
+  const { scope, step, session } = create(t, [
+    command(111, [12, 'this.eventId() === 1 && this._params[0] === 12 && ++conditionCalls === 1']),
+    command(122, [1, 1, 0, 0, 7], 1), command(412),
+  ]);
+  scope.conditionCalls = 0;
+  step();
+  assert.equal(scope.conditionCalls, 1);
+  assert.equal(api.snapshot(session).variables[1], 7);
+});
+
+test('native script condition errors preserve identity and leave the command retryable', t => {
+  const { scope, step, session } = create(t, [
+    command(111, [12, 'if (conditionFailure) throw conditionFailure; true']),
+    command(122, [1, 1, 0, 0, 7], 1), command(412),
+  ]);
+  const failure = new Error('condition failure');
+  scope.conditionFailure = failure;
+  assert.throws(step, error => error === failure);
+  assert.equal(api.snapshot(session).interpreter.index, 0);
+  assert.equal(api.snapshot(session).variables[1], undefined);
+  scope.conditionFailure = null;
+  step();
+  assert.equal(api.snapshot(session).variables[1], 7);
 });

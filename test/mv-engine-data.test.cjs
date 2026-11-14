@@ -1,7 +1,10 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { inspectDatabase, resolveBasicSettings } = require('../runner/mv-engine-data.cjs');
+const fs = require('node:fs');
+const path = require('node:path');
+const { temporaryDirectory } = require('./helpers/temp.cjs');
+const { loadGame, detectRpgMakerEngine, inspectDatabase, resolveBasicSettings } = require('../runner/mv-engine-data.cjs');
 const { parsePluginManifest } = require('../runner/plugin-manifest.cjs');
 
 function data() {
@@ -9,21 +12,18 @@ function data() {
     { id: 1, pages: [{ moveType: 0, trigger: 0, moveRoute: { list: [{ code: 0 }] }, list: [] }] }] } },
   commonEvents: [], troops: [], actors: [], classes: [], weapons: [], armors: [], states: [], skills: [], items: [], enemies: [] };
 }
-test('reports unsupported scripts inside events and forced movement with exact locations', () => {
+test('admits scripts inside events and forced movement', () => {
   const database = data();
   database.maps[1].events[1].pages[0].list = [{ code: 355, parameters: ['anything()'] },
     { code: 205, parameters: [-1, { list: [{ code: 45, parameters: ['anything()'] }] }] }];
   const result = inspectDatabase(database);
-  assert.deepEqual(result.issues, [
-    { location: 'Map001.json.events[1].pages[0].list[0]', reason: 'unsupported event command 355' },
-    { location: 'Map001.json.events[1].pages[0].list[1].parameters[1].list[0]', reason: 'unsupported movement command 45' },
-  ]);
+  assert.deepEqual(result.issues, []);
 });
-test('rejects executable conditions, variables and formulas before engine creation', () => {
+test('reports unsupported formulas without rejecting script conditions or variables', () => {
   const database = data();
   database.maps[1].events[1].pages[0].list = [{ code: 111, parameters: [12, 'anything()'] }, { code: 122, parameters: [1, 1, 0, 4, 'anything()'] }];
   database.skills = [null, { id: 1, damage: { type: 1, formula: 'a.atk; anything()' } }];
-  assert.equal(inspectDatabase(database).issues.length, 3);
+  assert.deepEqual(inspectDatabase(database).issues, [{ location: 'skills[1].damage.formula', reason: 'unsupported damage expression' }]);
 });
 test('accepts the arithmetic and condition forms without modifying caller data', () => {
   const database = data();
@@ -33,7 +33,7 @@ test('accepts the arithmetic and condition forms without modifying caller data',
   assert.deepEqual(database, original);
 });
 
-test('native engine manifest admission rejects extra executable content', () => {
+test('plugin manifest parser retains its optional literal-only mode', () => {
   assert.deepEqual(parsePluginManifest('// generated\nvar $plugins = [];', 'plugins', { literalOnly: true }).plugins, []);
   assert.throws(() => parsePluginManifest('var $plugins = []; extra();', 'plugins', { literalOnly: true }), /executable content/);
   assert.throws(() => parsePluginManifest('extra(); var $plugins = [];', 'plugins', { literalOnly: true }), /executable content/);
@@ -54,17 +54,17 @@ test('admits native control flow, inventory, conditions, variable operands and t
   assert.deepEqual(inspectDatabase(database).issues, []);
 });
 
-test('keeps unimplemented actor, timer and screen-coordinate forms outside admission', () => {
+test('reports unknown actor and screen-coordinate forms', () => {
   const database = data();
   database.maps[1].events[1].pages[0].list = [
-    { code: 111, parameters: [3, 60, 0] }, { code: 111, parameters: [4, 1, 1, 'Name'] },
-    { code: 122, parameters: [1, 1, 0, 3, 3, 1, 1] },
-    { code: 122, parameters: [1, 1, 0, 3, 5, -1, 3] },
-    { code: 122, parameters: [1, 1, 0, 3, 7, 5, 0] },
+    { code: 111, parameters: [999, 60, 0] }, { code: 111, parameters: [4, 1, 999, 'Name'] },
+    { code: 122, parameters: [1, 1, 0, 3, 3, 1, 12] },
+    { code: 122, parameters: [1, 1, 0, 3, 5, -1, 5] },
+    { code: 122, parameters: [1, 1, 0, 3, 7, 10, 0] },
   ];
   assert.deepEqual(inspectDatabase(database).issues.map(issue => issue.reason), [
-    'unsupported condition 3', 'unsupported actor condition 1', 'unsupported game-data operand 3:1',
-    'unsupported game-data operand 5:3', 'unsupported game-data operand 7:5',
+    'unsupported condition 999', 'unsupported actor condition 999', 'unsupported game-data operand 3:12',
+    'unsupported game-data operand 5:5', 'unsupported game-data operand 7:10',
   ]);
 });
 
@@ -119,4 +119,63 @@ test('resolves Community_Basic screen, cache, dash, rendering and window setting
   assert.throws(() => resolveBasicSettings({
     plugins: [{ name: 'Community_Basic', status: true, parameters: { screenWidth: '0' } }],
   }), /invalid dimensions/);
+});
+
+function gameFiles() {
+  const root = temporaryDirectory('mv-engine-admission-');
+  for (const folder of ['js', 'data', 'fonts']) fs.mkdirSync(path.join(root, folder));
+  fs.writeFileSync(path.join(root, 'js/rpg_core.js'), `
+    Utils.RPGMAKER_NAME = 'MV';
+    Tilemap.FLOOR_AUTOTILE_TABLE = [];
+    Tilemap.WALL_AUTOTILE_TABLE = [];
+    Tilemap.WATERFALL_AUTOTILE_TABLE = [];
+    customEngineChange();
+  `);
+  fs.writeFileSync(path.join(root, 'js/plugins.js'), 'var $plugins = [{"name":"CustomPlugin","status":true,"parameters":{}}];');
+  fs.writeFileSync(path.join(root, 'fonts/gamefont.css'), '@font-face { font-family: GameFont; src: url("game.ttf"); }');
+  fs.writeFileSync(path.join(root, 'fonts/game.ttf'), 'font-fixture');
+  const database = data();
+  database.system = { startMapId: 1 };
+  database.tilesets = []; database.animations = []; database.mapInfos = [null, { id: 1 }];
+  database.maps[1].events[1].pages[0].list = [{ code: 9999, parameters: [] }];
+  for (const [name, value] of Object.entries(database)) {
+    if (name === 'maps') continue;
+    fs.writeFileSync(path.join(root, 'data', name[0].toUpperCase() + name.slice(1) + '.json'), JSON.stringify(value));
+  }
+  fs.writeFileSync(path.join(root, 'data/Map001.json'), JSON.stringify(database.maps[1]));
+  return root;
+}
+
+test('loads modified MV without stock script identities or a plugin allowlist', () => {
+  const root = gameFiles();
+  const loaded = loadGame(root);
+  assert.equal(loaded.engineFamily, 'MV');
+  assert.equal(loaded.manifest.plugins[0].name, 'CustomPlugin');
+  assert.deepEqual(loaded.contract.issues, [{ location: 'Map001.json.events[1].pages[0].list[0]', reason: 'unsupported event command 9999' }]);
+  assert.equal(loaded.database.maps[1].events[1].pages[0].list[0].code, 9999);
+});
+
+test('unused map index entries do not require unshipped map files at startup', () => {
+  const root = gameFiles();
+  fs.writeFileSync(path.join(root, 'data/MapInfos.json'), JSON.stringify([null, { id: 1 }, { id: 2 }]));
+  const loaded = loadGame(root);
+  assert.ok(loaded.database.maps[1]);
+  assert.equal(Object.hasOwn(loaded.database.maps, 2), false);
+});
+
+test('detects MZ and reports that the native MV engine cannot execute it', () => {
+  const root = gameFiles();
+  fs.writeFileSync(path.join(root, 'js/rmmz_core.js'), "Utils.RPGMAKER_NAME = 'MZ';");
+  assert.equal(detectRpgMakerEngine(root), 'MZ');
+  assert.throws(() => loadGame(root), /native-mv does not support RPG Maker MZ/);
+});
+
+test('engine detection supports older MV without a name marker and rejects unknown input', () => {
+  const root = gameFiles();
+  fs.writeFileSync(path.join(root, 'js/rpg_core.js'), '// older MV core');
+  assert.equal(detectRpgMakerEngine(root), 'MV');
+  fs.writeFileSync(path.join(root, 'js/rpg_core.js'), "Utils.RPGMAKER_NAME = 'Other';");
+  assert.throws(() => detectRpgMakerEngine(root), /unrecognized RPG Maker engine/);
+  fs.unlinkSync(path.join(root, 'js/rpg_core.js'));
+  assert.throws(() => detectRpgMakerEngine(root), /cannot identify RPG Maker MV or MZ/);
 });

@@ -2,9 +2,9 @@
 #include "mv_core_utils.hpp"
 
 namespace pmjs::mv {
-bool Session::systemEventCommand(const Value& entry) {
-  const auto& parameters = entry["parameters"];
-  switch (entry["code"].integer()) {
+bool Session::systemEventCommand(const EventCommand& entry) {
+  const auto& parameters = entry.parameters;
+  switch (entry.code) {
     case 132: system_.battleBgm = parameters[0]; return true;
     case 133: system_.victoryMe = parameters[0]; return true;
     case 134: system_.saveEnabled = parameters[0].integer() != 0; return true;
