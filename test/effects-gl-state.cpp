@@ -1,5 +1,5 @@
-#include "effects.hpp"
-#include "media_service.hpp"
+#include "effects/effects.hpp"
+#include "media/media_service.hpp"
 #include <Effekseer.h>
 #include <SDL.h>
 #include <GLES3/gl3.h>

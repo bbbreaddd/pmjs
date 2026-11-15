@@ -1,4 +1,4 @@
-#include "log.hpp"
+#include "core/log.hpp"
 #include "platform.hpp"
 
 #include <SDL.h>

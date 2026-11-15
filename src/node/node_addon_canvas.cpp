@@ -1,6 +1,6 @@
 #include "node_addon_internal.hpp"
 #include <cmath>
-#include "checked_bounds.hpp"
+#include "core/checked_bounds.hpp"
 
 namespace pmjs::addon {
 napi_value createCanvas(napi_env env, napi_callback_info info) try {

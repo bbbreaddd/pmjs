@@ -1,6 +1,6 @@
 #pragma once
 
-#include "vfs.hpp"
+#include "platform/vfs.hpp"
 #include <array>
 #include <cstdint>
 #include <cmath>

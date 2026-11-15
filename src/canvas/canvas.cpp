@@ -1,6 +1,6 @@
-#include "log.hpp"
+#include "core/log.hpp"
 #include "canvas.hpp"
-#include "checked_bounds.hpp"
+#include "core/checked_bounds.hpp"
 #include "text_layout.hpp"
 #ifdef PMJS_HAS_SKIA65
 #include "skia65/pmjs_skia65.h"

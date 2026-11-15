@@ -1,6 +1,6 @@
-#include "log.hpp"
+#include "core/log.hpp"
 #include "runtime_core.hpp"
-#include "scene_packet.hpp"
+#include "graphics/scene_packet.hpp"
 
 #include <cstdlib>
 #include <utility>

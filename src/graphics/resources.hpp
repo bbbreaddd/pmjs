@@ -2,8 +2,8 @@
 
 #include "program_binary_cache.hpp"
 
-#include "image_storage.hpp"
-#include "memory_accounting.hpp"
+#include "assets/image_storage.hpp"
+#include "core/memory_accounting.hpp"
 
 #include <array>
 #include <atomic>

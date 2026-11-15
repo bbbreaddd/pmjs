@@ -1,9 +1,9 @@
-#include "renderer.hpp"
-#include "scene_packet.hpp"
+#include "graphics/renderer.hpp"
+#include "graphics/scene_packet.hpp"
 #include <png.h>
 #include <dlfcn.h>
-#include "renderer_identity_shader.hpp"
-#include "platform.hpp"
+#include "graphics/renderer_identity_shader.hpp"
+#include "platform/platform.hpp"
 #include <GLES3/gl3.h>
 #include <cassert>
 #include <iostream>

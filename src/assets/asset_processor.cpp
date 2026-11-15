@@ -1,7 +1,7 @@
 #include "asset_processor.hpp"
 #include "png_color.hpp"
 #include "astc_encoder.hpp"
-#include "checked_bounds.hpp"
+#include "core/checked_bounds.hpp"
 #include "prepared_page.hpp"
 #include "texture_artifact.hpp"
 

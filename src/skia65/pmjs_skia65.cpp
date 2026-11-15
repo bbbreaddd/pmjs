@@ -1,6 +1,6 @@
 #include "pmjs_skia65.h"
-#include "text_layout.hpp"
-#include "canvas_pixels.hpp"
+#include "canvas/text_layout.hpp"
+#include "canvas/canvas_pixels.hpp"
 
 #include "SkCanvas.h"
 #include "SkBlitter.h"

@@ -1,14 +1,14 @@
-#include "log.hpp"
+#include "core/log.hpp"
 #include "resources.hpp"
 #include "astc_texture.hpp"
 #include <SDL_video.h>
-#include "prepared_page.hpp"
-#include "texture_artifact.hpp"
-#include "file_identity.hpp"
-#include "checked_bounds.hpp"
-#include "png_recovery.hpp"
-#include "png_color.hpp"
-#include "psd_decoder.hpp"
+#include "assets/prepared_page.hpp"
+#include "assets/texture_artifact.hpp"
+#include "platform/file_identity.hpp"
+#include "core/checked_bounds.hpp"
+#include "assets/png_recovery.hpp"
+#include "assets/png_color.hpp"
+#include "assets/psd_decoder.hpp"
 
 #include <algorithm>
 #include <bit>

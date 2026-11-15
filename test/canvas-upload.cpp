@@ -1,4 +1,4 @@
-#include "canvas.hpp"
+#include "canvas/canvas.hpp"
 #include <EGL/egl.h>
 #include <SDL_video.h>
 #include <GLES3/gl3.h>

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "media_decoder.hpp"
-#include "resources.hpp"
+#include "media/media_decoder.hpp"
+#include "graphics/resources.hpp"
 
 #include <chrono>
 #include <condition_variable>

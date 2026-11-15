@@ -1,7 +1,7 @@
-#include "log.hpp"
+#include "core/log.hpp"
 #include <tuple>
 #include "node_addon_internal.hpp"
-#include "asset_processor.hpp"
+#include "assets/asset_processor.hpp"
 #include <cmath>
 #include <span>
 

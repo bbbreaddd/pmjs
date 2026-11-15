@@ -1,6 +1,6 @@
 #pragma once
 
-#include "resources.hpp"
+#include "graphics/resources.hpp"
 #include "canvas_pixels.hpp"
 #include "canvas_composite.hpp"
 #include "text_backend.hpp"

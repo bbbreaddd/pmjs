@@ -1,7 +1,7 @@
 #include "node_addon_internal.hpp"
 
 
-#include "dialog.hpp"
+#include "platform/dialog.hpp"
 
 namespace pmjs::addon {
 

@@ -1,7 +1,7 @@
-#include "asset_processor.hpp"
-#include "astc_texture.hpp"
-#include "platform.hpp"
-#include "resources.hpp"
+#include "assets/asset_processor.hpp"
+#include "graphics/astc_texture.hpp"
+#include "platform/platform.hpp"
+#include "graphics/resources.hpp"
 #include <GLES3/gl31.h>
 #include <algorithm>
 #include <array>

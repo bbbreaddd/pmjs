@@ -1,4 +1,4 @@
-#include "dialog.hpp"
+#include "platform/dialog.hpp"
 
 #include <SDL.h>
 
@@ -12,11 +12,11 @@
 #include <thread>
 #include <vector>
 
-#include "canvas.hpp"
-#include "platform.hpp"
-#include "renderer.hpp"
-#include "resources.hpp"
-#include "vfs.hpp"
+#include "canvas/canvas.hpp"
+#include "platform/platform.hpp"
+#include "graphics/renderer.hpp"
+#include "graphics/resources.hpp"
+#include "platform/vfs.hpp"
 
 namespace {
 

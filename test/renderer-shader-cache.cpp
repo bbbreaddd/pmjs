@@ -1,5 +1,5 @@
-#include "renderer.hpp"
-#include "renderer_identity_shader.hpp"
+#include "graphics/renderer.hpp"
+#include "graphics/renderer_identity_shader.hpp"
 #include <SDL.h>
 #include <GLES3/gl3.h>
 #include <array>

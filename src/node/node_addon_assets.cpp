@@ -1,9 +1,9 @@
 #include "node_addon_internal.hpp"
 #include <tuple>
-#include "asset_processor.hpp"
-#include "prepared_page.hpp"
-#include "tile_assets.hpp"
-#include "log.hpp"
+#include "assets/asset_processor.hpp"
+#include "assets/prepared_page.hpp"
+#include "assets/tile_assets.hpp"
+#include "core/log.hpp"
 
 #include <cmath>
 #include <cerrno>

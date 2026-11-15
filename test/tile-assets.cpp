@@ -1,4 +1,4 @@
-#include "tile_assets.hpp"
+#include "assets/tile_assets.hpp"
 #include <algorithm>
 #include <filesystem>
 #include <iostream>

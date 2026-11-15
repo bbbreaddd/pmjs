@@ -1,5 +1,5 @@
 #include "png_recovery.hpp"
-#include "checked_bounds.hpp"
+#include "core/checked_bounds.hpp"
 
 #include <algorithm>
 #include <array>

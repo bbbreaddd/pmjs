@@ -1,7 +1,7 @@
-#include "canvas_pixels.hpp"
+#include "canvas/canvas_pixels.hpp"
 #include "renderer.hpp"
 #ifdef PMJS_HAS_SKIA65
-#include "checked_bounds.hpp"
+#include "core/checked_bounds.hpp"
 #include "skia65/pmjs_skia65.h"
 #endif
 #include <GLES3/gl3.h>

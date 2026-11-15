@@ -1,5 +1,5 @@
-#include "text_backend.hpp"
-#include "canvas.hpp"
+#include "canvas/text_backend.hpp"
+#include "canvas/canvas.hpp"
 #include <cstdlib>
 #include <stdexcept>
 #include <string>

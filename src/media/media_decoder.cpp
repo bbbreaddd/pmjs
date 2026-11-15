@@ -1,5 +1,5 @@
 #include "media_decoder.hpp"
-#include "checked_bounds.hpp"
+#include "core/checked_bounds.hpp"
 
 extern "C" {
 #include <libavcodec/avcodec.h>

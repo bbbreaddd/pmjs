@@ -8,9 +8,9 @@
 #include <sstream>
 #include <stdexcept>
 
-#include "canvas.hpp"
+#include "canvas/canvas.hpp"
 #include "platform.hpp"
-#include "renderer.hpp"
+#include "graphics/renderer.hpp"
 #include "vfs.hpp"
 
 namespace pmjs {

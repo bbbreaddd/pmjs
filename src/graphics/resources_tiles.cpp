@@ -1,7 +1,7 @@
 #include "resources.hpp"
-#include "checked_bounds.hpp"
-#include "file_identity.hpp"
-#include "canvas_pixels.hpp"
+#include "core/checked_bounds.hpp"
+#include "platform/file_identity.hpp"
+#include "canvas/canvas_pixels.hpp"
 
 #include <algorithm>
 #include <cmath>

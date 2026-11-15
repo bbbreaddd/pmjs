@@ -1,6 +1,6 @@
 #include <SDL.h>
 
-#include "media_service.hpp"
+#include "media/media_service.hpp"
 extern "C" {
 #include <libavformat/avformat.h>
 }

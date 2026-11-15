@@ -159,7 +159,7 @@
       "license": "OFL-1.1",
       "notice": "js/pmjs-web/fallback-font.LICENSE"
     },
-    "src/unicode_default_ignorables.hpp": {
+    "src/canvas/unicode_default_ignorables.hpp": {
       "origin": "permissive",
       "source": "https://www.unicode.org/Public/16.0.0/ucd/DerivedCoreProperties.txt",
       "revision": "16.0.0",
@@ -397,7 +397,7 @@
       "license": "BSD-3-Clause",
       "notice": "third_party/v8.LICENSE"
     },
-    "src/renderer_identity_shader.hpp": {
+    "src/graphics/renderer_identity_shader.hpp": {
       "origin": "permissive",
       "source": "https://github.com/pixijs/pixi.js/tree/v4.5.4",
       "revision": "v4.5.4; color-matrix vertex and fragment shader contract",

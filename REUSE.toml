@@ -91,7 +91,7 @@ SPDX-FileCopyrightText = "1991-2017 Unicode, Inc. and others"
 SPDX-License-Identifier = "ICU"
 
 [[annotations]]
-path = ["src/unicode_default_ignorables.hpp", "third_party/unicode.LICENSE"]
+path = ["src/canvas/unicode_default_ignorables.hpp", "third_party/unicode.LICENSE"]
 precedence = "override"
 SPDX-FileCopyrightText = "1991-2024 Unicode, Inc."
 SPDX-License-Identifier = "Unicode-3.0"

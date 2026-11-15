@@ -2,7 +2,7 @@
 
 #include "resources.hpp"
 #include "scene_packet.hpp"
-#include "effects.hpp"
+#include "effects/effects.hpp"
 
 #include <array>
 #include <cstddef>

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "asset_processor.hpp"
-#include "resources.hpp"
+#include "graphics/resources.hpp"
 
 namespace pmjs {
 struct TileAssetInput {

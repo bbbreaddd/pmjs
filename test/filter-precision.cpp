@@ -1,4 +1,4 @@
-#include "renderer_shaders.hpp"
+#include "graphics/renderer_shaders.hpp"
 
 #include <cassert>
 #include <iostream>

@@ -1,4 +1,4 @@
-#include "node_addon_video.hpp"
+#include "node/node_addon_video.hpp"
 
 extern "C" {
 #include <libavformat/avformat.h>

@@ -106,31 +106,31 @@ include(cmake/Lz4.cmake)
 include(cmake/Astcenc.cmake)
 set(PMJS_RUNTIME_SOURCES
   src/runtime_core.cpp
-  src/platform.cpp
-  src/dialog.cpp
-  src/renderer_core.cpp
-  src/renderer_draw.cpp
-  src/renderer_custom_filters.cpp
-  src/program_binary_cache.cpp
-  src/renderer_programs.cpp
-  src/renderer_scene.cpp
-  src/resources.cpp
-  src/png_recovery.cpp
-  src/psd_decoder.cpp
-  src/resources_tiles.cpp
+  src/platform/platform.cpp
+  src/platform/dialog.cpp
+  src/graphics/renderer_core.cpp
+  src/graphics/renderer_draw.cpp
+  src/graphics/renderer_custom_filters.cpp
+  src/graphics/program_binary_cache.cpp
+  src/graphics/renderer_programs.cpp
+  src/graphics/renderer_scene.cpp
+  src/graphics/resources.cpp
+  src/assets/png_recovery.cpp
+  src/assets/psd_decoder.cpp
+  src/graphics/resources_tiles.cpp
   $<TARGET_OBJECTS:pmjs_asset_processor_objects>
   $<TARGET_OBJECTS:pmjs_prepared_page_objects>
-  src/tile_assets.cpp
-  src/canvas.cpp
-  src/canvas_composite.cpp
-  src/canvas_paint.cpp
-  src/text_backend.cpp
-  src/text_layout.cpp
+  src/assets/tile_assets.cpp
+  src/canvas/canvas.cpp
+  src/canvas/canvas_composite.cpp
+  src/canvas/canvas_paint.cpp
+  src/canvas/text_backend.cpp
+  src/canvas/text_layout.cpp
   $<TARGET_OBJECTS:pmjs_vfs_objects>
-  src/media_decoder.cpp
-  src/encrypted_audio_file.cpp
-  src/media_service.cpp
-  src/effects.cpp)
+  src/media/media_decoder.cpp
+  src/media/encrypted_audio_file.cpp
+  src/media/media_service.cpp
+  src/effects/effects.cpp)
 
 option(PMJS_ENABLE_WERROR "Treat compiler warnings as errors" OFF)
 option(PMJS_ENABLE_SANITIZERS "Build with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
@@ -141,12 +141,12 @@ if(PMJS_ENABLE_WERROR)
 endif()
 
 add_library(pmjs_vfs_objects OBJECT
-  src/vfs.cpp
-  src/file_identity.cpp)
-add_library(pmjs_prepared_page_objects OBJECT src/prepared_page.cpp src/image_storage.cpp src/texture_artifact.cpp)
+  src/platform/vfs.cpp
+  src/platform/file_identity.cpp)
+add_library(pmjs_prepared_page_objects OBJECT src/assets/prepared_page.cpp src/assets/image_storage.cpp src/assets/texture_artifact.cpp)
 add_library(pmjs_asset_processor_objects OBJECT
-  src/asset_processor.cpp
-  src/astc_encoder.cpp)
+  src/assets/asset_processor.cpp
+  src/assets/astc_encoder.cpp)
 
 foreach(PMJS_OBJECT_TARGET pmjs_vfs_objects pmjs_prepared_page_objects pmjs_asset_processor_objects)
   target_include_directories(${PMJS_OBJECT_TARGET} PRIVATE src)
@@ -169,24 +169,24 @@ if(PMJS_ENABLE_SKIA65)
 endif()
 
 add_library(pmjs_native MODULE
-  src/node_addon.cpp
-  src/node_addon_compression.cpp
-  src/node_addon_canvas.cpp
-  src/node_addon_dialog.cpp
-  src/node_addon_common.cpp
-  src/node_addon_entry.cpp
-  src/node_addon_effects.cpp
-  src/node_addon_graphics.cpp
-  src/node_addon_media.cpp
-  src/node_addon_video.cpp
-  src/node_addon_platform.cpp
-  src/node_addon_resources.cpp
-  src/node_addon_assets.cpp
-  src/node_addon_runtime.cpp)
+  src/node/node_addon.cpp
+  src/node/node_addon_compression.cpp
+  src/node/node_addon_canvas.cpp
+  src/node/node_addon_dialog.cpp
+  src/node/node_addon_common.cpp
+  src/node/node_addon_entry.cpp
+  src/node/node_addon_effects.cpp
+  src/node/node_addon_graphics.cpp
+  src/node/node_addon_media.cpp
+  src/node/node_addon_video.cpp
+  src/node/node_addon_platform.cpp
+  src/node/node_addon_resources.cpp
+  src/node/node_addon_assets.cpp
+  src/node/node_addon_runtime.cpp)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/third_party/effekseer.LICENSE" PMJS_EFFECTS_LICENSE)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/third_party/effekseer.LICENSE")
-configure_file(src/effects_license.hpp.in generated/effects_license.hpp @ONLY)
+configure_file(src/effects/effects_license.hpp.in generated/effects_license.hpp @ONLY)
 if(PMJS_ENABLE_SKIA65)
   target_compile_definitions(pmjs_native PRIVATE PMJS_HAS_SKIA65)
 endif()
@@ -339,7 +339,7 @@ if(BUILD_TESTING)
     target_compile_definitions(pmjs-text-backend-default-test PRIVATE
       PMJS_TEST_FONT="${CMAKE_CURRENT_SOURCE_DIR}/test/assets/text-shaping.ttf")
   endif()
-  add_executable(pmjs-text-backend-unavailable-test test/text-backend-unavailable.cpp src/text_backend.cpp)
+  add_executable(pmjs-text-backend-unavailable-test test/text-backend-unavailable.cpp src/canvas/text_backend.cpp)
   target_include_directories(pmjs-text-backend-unavailable-test PRIVATE src)
   add_test(NAME native-text-backend-unavailable COMMAND pmjs-text-backend-unavailable-test)
   add_test(NAME node-writable-filesystem COMMAND ${XVFB_RUN} -a ${CMAKE_COMMAND} -E env
@@ -414,7 +414,7 @@ if(BUILD_TESTING)
   target_include_directories(pmjs-media-decoder-test PRIVATE src)
   target_compile_options(pmjs-media-decoder-test PRIVATE -Wall -Wextra -Wpedantic)
   target_link_libraries(pmjs-media-decoder-test PRIVATE pmjs_runtime)
-  add_executable(pmjs-video-failure-test test/video-failure.cpp src/node_addon_video.cpp)
+  add_executable(pmjs-video-failure-test test/video-failure.cpp src/node/node_addon_video.cpp)
   target_include_directories(pmjs-video-failure-test PRIVATE src)
   target_compile_options(pmjs-video-failure-test PRIVATE -Wall -Wextra -Wpedantic)
   target_link_options(pmjs-video-failure-test PRIVATE "-Wl,--wrap=sws_scale" "-Wl,--wrap=av_read_frame")
@@ -442,7 +442,7 @@ if(BUILD_TESTING)
   target_include_directories(pmjs-audio-seek-test PRIVATE src)
   target_compile_options(pmjs-audio-seek-test PRIVATE -Wall -Wextra -Wpedantic)
   target_link_libraries(pmjs-audio-seek-test PRIVATE pmjs_runtime)
-  add_executable(pmjs-platform-input-test test/platform-input.cpp src/platform.cpp)
+  add_executable(pmjs-platform-input-test test/platform-input.cpp src/platform/platform.cpp)
   add_executable(pmjs-dialog-modal-test test/dialog-modal.cpp)
   target_include_directories(pmjs-dialog-modal-test PRIVATE src)
   target_compile_options(pmjs-dialog-modal-test PRIVATE -Wall -Wextra -Wpedantic)

@@ -31,7 +31,7 @@ file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/include/freetype-custom-confi
 include("${CMAKE_CURRENT_SOURCE_DIR}/pinned_sources.cmake")
 file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/icu-data.S" CONTENT
   ".section .rodata\n.balign 16\n.global icudt60_dat\n.hidden icudt60_dat\nicudt60_dat:\n.incbin \"${icu}/common/icudtl.dat\"\n.section .note.GNU-stack,\"\",@progbits\n" @ONLY)
-add_library(pmjs-skia65 SHARED pmjs_skia65.cpp ../text_layout.cpp
+add_library(pmjs-skia65 SHARED pmjs_skia65.cpp ../canvas/text_layout.cpp
   ${ftSources} ${hbSources} ${icuSources} "${CMAKE_CURRENT_BINARY_DIR}/icu-data.S")
 target_include_directories(pmjs-skia65 PRIVATE
   "${CMAKE_CURRENT_BINARY_DIR}/include" ..)

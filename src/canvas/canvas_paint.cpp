@@ -1,5 +1,5 @@
 #include "canvas.hpp"
-#include "checked_bounds.hpp"
+#include "core/checked_bounds.hpp"
 #ifdef PMJS_HAS_SKIA65
 #include "skia65/pmjs_skia65.h"
 #endif
