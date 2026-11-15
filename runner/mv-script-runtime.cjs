@@ -21,7 +21,7 @@ const { installBattleData } = require('./native-battle-data.cjs');
 const { installMapBindings } = require('./native-game-map.cjs');
 const { installActionBindings } = require('./native-actions.cjs');
 const { installTroopBindings } = require('./native-troop.cjs');
-const { installDataArray } = require('./native-data-arrays.cjs');
+const { installDataArray, createDataArrayView } = require('./native-data-arrays.cjs');
 
 function createScriptRuntime(engine, session, options = {}) {
   const pictures = new WeakMap(), interpreters = new WeakMap(), tones = new WeakMap(), commonEvents = new WeakMap();
@@ -47,6 +47,7 @@ function createScriptRuntime(engine, session, options = {}) {
     if (store) store.set(object, handle);
     registry.set(handle.identity, new WeakRef(object));
     roots.set(handle.identity, object);
+    if (store === characters) engine.attachPresentationCharacter?.(session, handle, object);
     return object;
   }
   function attachPicture(object, handle) {
@@ -90,6 +91,16 @@ function createScriptRuntime(engine, session, options = {}) {
     const existing = registry.get(handle.identity)?.deref();
     if (existing) return existing;
     const info = engine.collectionInfo(handle);
+    if (info.mutableArray) {
+      const invoke = (method, ...args) => {
+        if (method === 'dataLength') return engine.collectionField(session, handle, 'length', ...args);
+        if (method === 'dataKeys') return engine.collectionInfo(handle).keys;
+        if (method === 'rawHas') return engine.collectionInfo(handle).keys.includes(String(args[0]));
+        if (method === 'rawDelete') return engine.collectionDelete(session, handle, String(args[0]));
+        return engine.collectionField(session, handle, String(args[0]), ...args.slice(1));
+      };
+      return remember(createDataArrayView(invoke, values => GuestArray.from(values)), handle, collectionHandles);
+    }
     if (info.branch) {
       const numeric = key => typeof key === 'string' && /^(0|[1-9][0-9]*)$/.test(key);
       const object = new Proxy({}, {
@@ -344,6 +355,10 @@ function createScriptRuntime(engine, session, options = {}) {
   gameMessage._choiceCallback = null;
   Game_Message.prototype.choices = function() { choiceView = wrapCollection(engine.messageChoices(session)); return choiceView; };
   Object.defineProperty(gameMessage, '_choices', { configurable: true, enumerable: true, get() { return this.choices(); } });
+  Object.defineProperty(gameMessage, '_texts', { configurable: true, enumerable: true,
+    get() { return wrapCollection(engine.messageTexts(session)); },
+    set(value) { engine.messageField(session, '_texts', value); }
+  });
   Game_Message.prototype.setChoiceCallback = function(callback) { this._choiceCallback = callback; };
   const nativeOnChoice = Game_Message.prototype.onChoice = function(index) {
     if (this._choiceCallback) { this._choiceCallback(index); this._choiceCallback = null; }
@@ -386,6 +401,22 @@ function createScriptRuntime(engine, session, options = {}) {
     };
     Type.prototype.initialize = function() { this.clear(); };
     if (kind !== 'selfSwitches') installDataArray(Type.prototype, engine, session, kind, values => GuestArray.from(values));
+    else {
+      const invoke = (method, ...args) => engine.gameDataInvoke(session, kind, method, args);
+      const data = new Proxy({}, {
+        get(target, key, receiver) { return typeof key === 'string' && invoke('rawHas', key) ? invoke('rawValue', key) : Reflect.get(target, key, receiver); },
+        set(target, key, value) { if (typeof key === 'string') { invoke('rawSet', key, value); return true; } return Reflect.set(target, key, value); },
+        has(target, key) { return typeof key === 'string' && invoke('rawHas', key) || Reflect.has(target, key); },
+        deleteProperty(target, key) { if (typeof key === 'string') { invoke('rawDelete', key); return true; } return Reflect.deleteProperty(target, key); },
+        ownKeys(target) { return [...new Set([...invoke('dataKeys'), ...Reflect.ownKeys(target)])]; },
+        getOwnPropertyDescriptor(target, key) {
+          return typeof key === 'string' && invoke('rawHas', key) ? { configurable: true, enumerable: true, writable: true, value: invoke('rawValue', key) } : Reflect.getOwnPropertyDescriptor(target, key);
+        },
+        defineProperty() { throw new TypeError('Self switch data does not support custom descriptors'); },
+        preventExtensions() { return false; }
+      });
+      Object.defineProperty(Type.prototype, '_data', { configurable: true, get() { return data; }, set(value) { invoke('replaceData', value); } });
+    }
     const object = Object.create(Type.prototype);
     scope[name] = Type; scope['$game' + name.slice(5)] = object;
     gameDataDefaults.set(kind, defaults); gameDataStores.set(kind, object);
@@ -785,16 +816,18 @@ function createScriptRuntime(engine, session, options = {}) {
   for (const [index, type] of ['boat', 'ship', 'airship'].entries()) Game_Map.prototype[type] = function() { return this.vehicles()[index]; };
   Game_Map.prototype.vehicle = function(type) { return this.vehicles()[['boat', 'ship', 'airship'].indexOf(type)] || null; };
   const nativeCharacterQueries = installMapBindings(scope, engine, session, values => GuestArray.from(values), characters);
+  const nativeCharacterOccupancy = new Map([...nativeCharacterQueries.keys()].map(Type => [Type, Type.prototype.pos]));
   gameDataDefaults.get('system').setWindowTone = Game_System.prototype.setWindowTone;
   const nativeEventMethods = {};
   for (const method of ['setupPage', 'updateSelfMovement', 'setupPageSettings', 'start', 'lock', 'unlock', 'checkEventTriggerAuto', 'updateParallel']) Game_Event.prototype[method] = nativeEventMethods[method] = function() { return engine.characterCommand(session, characters.get(this), method, []); };
   const nativeCharacterUpdates = Object.fromEntries(['updateStop', 'updateMove', 'updateRoutineMove'].map(method => [method, Game_Character.prototype[method]]));
+  let nativeTiledReflectionGuard = null;
   const nativePlayerQueries = Object.fromEntries(['moveByInput', 'getInputDirection', 'canMove', 'executeMove', 'updateNonmoving'].map(method => [method, Game_Player.prototype[method]]));
   const nativePatternMethods = new Map([Game_CharacterBase, Game_Event].map(Type => [Type,
     Object.fromEntries(['updatePattern', 'maxPattern', 'hasStepAnime', 'resetPattern', 'setPattern'].map(method => [method, Type.prototype[method]]))]));
   const nativePageQueries = { findProperPageIndex: Game_Event.prototype.findProperPageIndex, meetsConditions: Game_Event.prototype.meetsConditions };
 
-  const nativeCharacterPosition = { screenX: Game_CharacterBase.prototype.screenX, screenY: Game_CharacterBase.prototype.screenY };
+  const nativeCharacterPosition = { screenX: Game_CharacterBase.prototype.screenX, screenY: Game_CharacterBase.prototype.screenY, screenZ: Game_CharacterBase.prototype.screenZ };
   Game_Map.prototype.camTargetSet = function(target, speed) {
     const handle = characters.get(target);
     if (!handle) throw new TypeError('Camera target must be a native character');
@@ -902,8 +935,8 @@ function createScriptRuntime(engine, session, options = {}) {
       finally { if (method === 'itemEva') rateAction = null; }
     },
     boundOverride(handle,method) {return classBindings?classBindings.overridden(handle,handle.bindingType,method):false;},
-    boundMethod(handle, method, args) {
-      return classBindings ? classBindings.dispatch(handle, handle.bindingType, method, args) : null;
+    boundMethod(handle, method, args, prototype) {
+      return classBindings ? classBindings.dispatch(handle, handle.bindingType, method, args, prototype) : null;
     },
     retainBoundObject(handle) { classBindings.wrap(handle, handle.bindingType); },
     boundListener(handle, token) { classBindings.deliver(handle, token); },
@@ -937,6 +970,11 @@ function createScriptRuntime(engine, session, options = {}) {
       classBindings.wrap(handle, 'Sprite_Actor').setBattler(scope.$gameParty.battleMembers()[index]);
       return classBindings.dispatch(handle, 'Sprite_Actor', 'setActorHome', [index]) !== null;
     },
+    characterZ(handle) {
+      const character = wrapRuntimeEntity(handle);
+      return character.screenZ === nativeCharacterPosition.screenZ ? undefined : character.screenZ();
+    },
+    presentationCharacter(handle) { return wrapRuntimeEntity(handle); },
     characterPosition(handle) {
       const character = wrapRuntimeEntity(handle);
       if (character.screenX === nativeCharacterPosition.screenX && character.screenY === nativeCharacterPosition.screenY) return undefined;
@@ -957,9 +995,18 @@ function createScriptRuntime(engine, session, options = {}) {
       if (scope.$gameTroop.meetsConditions === nativeTroopConditions) return undefined;
       return scope.$gameTroop.meetsConditions(page);
     },
+    characterMethod(handle, method, args) {
+      const character = wrapRuntimeEntity(handle), fn = character[method];
+      if (typeof fn !== 'function') return false;
+      fn.apply(character, args); return true;
+    },
     characterQuery(handle, method, args) {
       const Type = handle.entityId > 0 ? Game_Event : handle.entityId === -1 ? Game_Player : handle.entityId >= -7 && handle.entityId <= -5 ? Game_Vehicle : Game_Follower;
       const object = registry.get(handle.identity)?.deref() || Type.prototype;
+      if (method === 'pos') {
+        if (object.pos === nativeCharacterOccupancy.get(Type)) return null;
+        return { value: wrapRuntimeEntity(handle).pos(...args) };
+      }
       if (method === 'updateNonmoving' && scope.$gamePlayer.isMoving()) return null;
       if (method === 'moveByInput' || method === 'updateNonmoving') {
         const names = method === 'moveByInput' ? ['moveByInput', 'getInputDirection', 'canMove', 'executeMove'] : ['updateNonmoving'];
@@ -972,7 +1019,9 @@ function createScriptRuntime(engine, session, options = {}) {
     characterLifecycle(handle, method) {
       if (Object.hasOwn(nativeCharacterUpdates, method)) {
         const Type = handle.entityId > 0 ? Game_Event : handle.entityId === -1 ? Game_Player : Game_Character;
-        if ((registry.get(handle.identity)?.deref() || Type.prototype)[method] === nativeCharacterUpdates[method]) return false;
+        const object = registry.get(handle.identity)?.deref() || Type.prototype;
+        if (object[method] === nativeCharacterUpdates[method] &&
+            (method !== 'updateReflection' || nativeTiledReflectionGuard(object))) return false;
       }
       if (method === 'updatePattern') {
         const Type = handle.entityId > 0 ? Game_Event : handle.entityId === -1 ? Game_Player : handle.entityId >= -7 && handle.entityId <= -5 ? Game_Vehicle : Game_Follower;
@@ -1082,6 +1131,7 @@ function createScriptRuntime(engine, session, options = {}) {
       fn.apply(interpreter, args); return true;
     },
     message(method, args) {
+      if (method === 'window.scriptOwned') return !!scenes?.scriptMessages();
       const fn = gameMessage[method];
       if (fn === nativeMessage[method]) {
         if (method === 'clear') { gameMessage._choiceCallback = null; choiceView = null; }
@@ -1161,6 +1211,69 @@ function createScriptRuntime(engine, session, options = {}) {
   }
   const result = {
     scope,
+    displaySymbol() { return scenes.nativeDisplaySymbol; },
+    tiledCharacter(character, method, ...args) {
+      const handle = characters.get(character);
+      if (!handle) throw new TypeError('Tiled character operation requires a native character');
+      return engine.characterCommand(session, handle, method, args);
+    },
+    installTiledCharacters(mapMethods, initializeLevel) {
+      gameDataDefaults.get('map')._initializeMapLevel = initializeLevel;
+      const states = new WeakMap(), prototype = Game_CharacterBase.prototype;
+      const mapEntries = Object.entries(mapMethods), coordinates = ['_realX', '_realY'];
+      const coordinateGetters = coordinates.map(name => Object.getOwnPropertyDescriptor(prototype, name).get);
+      nativeTiledReflectionGuard = character => {
+        for (const [name, method] of mapEntries) if (scope.$gameMap[name] !== method) return false;
+        for (let index = 0; index < coordinates.length; ++index) {
+          const name = coordinates[index];
+          let matches = false;
+          for (let owner = character; owner; owner = Object.getPrototypeOf(owner)) {
+            const descriptor = Object.getOwnPropertyDescriptor(owner, name);
+            if (descriptor) { matches = descriptor.get === coordinateGetters[index]; break; }
+          }
+          if (!matches) return false;
+        }
+        return true;
+      };
+      function state(character) {
+        let value = states.get(character);
+        if (!value) {
+          value = { revision: engine.characterReflectionState(session, characters.get(character)), cachedRevision: -1, value: null };
+          states.set(character, value);
+        }
+        return value;
+      }
+      const descriptor = { configurable: true, enumerable: true,
+        get() {
+          const own = state(this);
+          if (own.cachedRevision !== own.revision[0]) {
+            own.value = engine.characterReflections(session, characters.get(this), GuestArray);
+            own.cachedRevision = own.revision[0];
+          }
+          return own.value;
+        },
+        set(value) {
+          const own = state(this);
+          engine.characterCommand(session, characters.get(this), 'reflections', [value]);
+          own.value = value; own.cachedRevision = own.revision[0];
+        }
+      };
+      Object.defineProperty(prototype, 'reflections', descriptor);
+      const initialize = prototype.initMembers;
+      prototype.initMembers = function() {
+        initialize.apply(this, arguments);
+        Object.defineProperty(this, 'reflections', descriptor);
+      };
+      for (const reference of registry.values()) {
+        const object = reference.deref();
+        if (object && characters.has(object)) Object.defineProperty(object, 'reflections', descriptor);
+      }
+      prototype.updateReflection = nativeCharacterUpdates.updateReflection = function() {
+        if (nativeTiledReflectionGuard(this)) return engine.characterCommand(session, characters.get(this), 'updateReflection', []);
+        this.reflections = scope.$gameMap.isOnReflection(this) ? scope.$gameMap.getReflections(this) : new GuestArray();
+      };
+      prototype.distancePerFrame = function() { return engine.characterCommand(session, characters.get(this), 'distancePerFrame', []); };
+    },
     runScript(source, filename = 'mv-plugin.js') { return new vm.Script(source, { filename }).runInContext(context); },
     installScenes() {
       if (!options.native) throw new Error('Scene bindings require native graphics services');
@@ -1338,16 +1451,31 @@ function createScriptRuntime(engine, session, options = {}) {
       function Window_TitleCommand() { this.initialize.apply(this, arguments); }
       Window_TitleCommand.prototype = Object.create(scope.Window_Command.prototype);
       Window_TitleCommand.prototype.constructor = Window_TitleCommand;
+      Window_TitleCommand.prototype.initialize = function() {
+        scope.Window_Command.prototype.initialize.call(this, 0, 0);
+        this.updatePlacement(); this.openness = 0; this.selectLast();
+      };
+      Window_TitleCommand.prototype.isContinueEnabled = function() { return scope.DataManager.isAnySavefileExists(); };
+      Window_TitleCommand.prototype.selectLast = function() {
+        if (Window_TitleCommand._lastCommandSymbol) this.selectSymbol(Window_TitleCommand._lastCommandSymbol);
+        else if (this.isContinueEnabled()) this.selectSymbol('continue');
+      };
+      Window_TitleCommand.prototype.processOk = function() {
+        Window_TitleCommand._lastCommandSymbol = this.currentSymbol();
+        scope.Window_Command.prototype.processOk.call(this);
+      };
       Window_TitleCommand.prototype.makeCommandList = function() {
         for (const command of engine.managerInvoke(session, 'titleCommands')) this.addCommand(command.name, command.symbol, command.enabled);
       };
       Window_TitleCommand.prototype.updatePlacement = function() {
         this.x = (scope.Graphics.boxWidth - this.width) / 2; this.y = scope.Graphics.boxHeight - this.height - 96;
       };
-      Window_TitleCommand.initCommandPosition = () => engine.managerInvoke(session, 'initTitleCommandPosition');
+      Window_TitleCommand._lastCommandSymbol = null;
+      Window_TitleCommand.initCommandPosition = () => { Window_TitleCommand._lastCommandSymbol = null; return engine.managerInvoke(session, 'initTitleCommandPosition'); };
       scope.Window_TitleCommand = Window_TitleCommand;
       result.start = () => scope.SceneManager.run(scope.Scene_Boot);
       result.step = input => {
+        engine.scriptFrame(session, 'begin');
         ++scriptFrameDepth;
         try {
           renderSubmitted=false;
@@ -1357,8 +1485,8 @@ function createScriptRuntime(engine, session, options = {}) {
           if (scope.SceneManager._stopped) return true;
           scope.SceneManager.ticker?.update(scope.performance?.now() ?? performance.now());
           scope.SceneManager.update(1);
-          scenes.updateFilters();
           const scene = scope.SceneManager._scene;
+          if (!renderSubmitted) scenes.updateFilters(scene);
           if (scope.SceneManager._exiting && !scene) return false;
           const builtin = !scene || scope.SceneManager.nativeDriven;
           if (!renderSubmitted) engine.scriptStage(session, builtin ? null : scope.SceneManager.stageHandle);
@@ -1366,7 +1494,10 @@ function createScriptRuntime(engine, session, options = {}) {
           const running = engine.step(session,input===undefined?scriptInput():input);
           scenes.prepareNativeRequest();
           return running;
-        } finally { --scriptFrameDepth; }
+        } finally {
+          try { engine.scriptFrame(session, 'end'); }
+          finally { --scriptFrameDepth; }
+        }
       };
       return scenes;
     }

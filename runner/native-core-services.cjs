@@ -12,7 +12,7 @@ function installCoreServices(runtime, engine) {
   if (scope.WindowLayer && scope.PIXI?.filters?.VoidFilter && !scope.WindowLayer.voidFilter)
     scope.WindowLayer.voidFilter = new scope.PIXI.filters.VoidFilter();
   if(scope.Image && scope.nativeImageFromResource) scope.Bitmap?.bindImages({ create: () => new scope.Image(), fromResource: scope.nativeImageFromResource });
-  if (scope.PIXI) scope.Bitmap?.bindPixi(scope.PIXI, scope.PMJS?.fonts);
+  scope.Bitmap?.bindPixi(scope.PIXI, scope.PMJS?.fonts);
   if (!scope.ResourceHandler) installCoreUtilities(runtime);
   if (scope.WebAudio && scope.EventTarget) installAudioElement(scope);
   if (scope.PIXI?.Point) {

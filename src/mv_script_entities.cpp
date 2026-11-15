@@ -1,4 +1,5 @@
 #include "mv_engine.hpp"
+#include "mv_tiled_map.hpp"
 #include "mv_core_utils.hpp"
 #include "mv_windows.hpp"
 #include "mv_sprites.hpp"
@@ -220,7 +221,9 @@ Value Session::runtimeCharacterCommand(const std::shared_ptr<RuntimeCharacter>& 
     return Value::undefined();
   }
   if (method=="isLandOk" && object->id<=-5 && object->id>=-7) return vehicleLandingOk(-object->id-5,arguments.at(0).integer(),arguments.at(1).integer(),arguments.at(2).integer());
-  if (method=="initMembers") { character = Character{}; return Value::undefined(); }
+  if (method=="initMembers") {
+    character = Character{};object->reflections=Value::Array{};++object->reflectionsRevision;return Value::undefined();
+  }
   if (method=="initPlayerMembers" && object->id == -1) {
     vehicleType_ = -1; vehicleGettingOn_ = false; vehicleGettingOff_ = false;
     playerDashing_ = false; playerNeedsMapReload_ = false; encounterCount_ = 0; pendingTransfer_.reset(); playerFadeType_ = 0;
@@ -235,6 +238,8 @@ Value Session::runtimeCharacterCommand(const std::shared_ptr<RuntimeCharacter>& 
   }
 
   if (method == "isDashing" && arguments.empty() && object->attached == &player_) return playerDashing_;
+  if(method=="distancePerFrame")return std::pow(2.0,character.moveSpeed+(&character==&player_ && playerDashing_ ? 1 : 0))/256*
+    (tiledEnabled_ ? tiledMapData(mapId_)["movementScale"].number(1) : 1);
   if (method == "findDirectionTo" && arguments.size() == 2) return findDirectionTo(character, arguments[0].integer(), arguments[1].integer());
   if (method == "refresh" && arguments.empty() && object->attached == &player_) { updatePlayerGraphic(); return Value::undefined(); }
   if (method == "isObjectCharacter") return character.tileId > 0 || ImageManager::isObjectCharacter(character.characterName);
@@ -242,7 +247,18 @@ Value Session::runtimeCharacterCommand(const std::shared_ptr<RuntimeCharacter>& 
   if (method == "screenZ") {
     int priority = 1;
     for (const auto& event : events_) if (&event.character == &character) { priority = event.priority; break; }
-    return priority * 2 + 1;
+    return tiledEnabled_ ? tiledCharacterZ_[std::clamp(priority,0,2)] : priority * 2 + 1;
+  }
+  if(method=="updateReflection") {
+    object->reflections=tiledMapLoaded_ ? tiledReflections(tiledMapData(mapId_)["reflectionAreas"],character.realX*tileWidth(),character.realY*tileHeight()) : Value(Value::Array{});
+    ++object->reflectionsRevision;return Value::undefined();
+  }
+  if(method=="reflections") {
+    if(!arguments.empty()) { object->reflections=arguments[0].reference();++object->reflectionsRevision; }
+    if(object->reflections.reader)return object->reflections.reference();
+    Value::Array result;
+    for(const auto& value:object->reflections.array())result.push_back(value.reference());
+    return result;
   }
   if ((method == "screenX" || method == "screenY") && arguments.empty()) return characterScreenPosition(character)[method == "screenX" ? 0 : 1];
   if (method == "jump" && arguments.size() == 2) { jumpCharacter(character, arguments[0].integer(), arguments[1].integer()); return Value::undefined(); }
@@ -299,6 +315,10 @@ std::array<double, 3> Session::runtimeMapShadow() const {
   const bool object = airship.character.characterName.find('!') < 2;
   return {std::floor(x * tw + tw / 2 + .5), std::floor(y * th + th - (object ? 0 : 6) + .5),
     255.0 * std::clamp(airship.altitude / 48.0F, 0.0F, 1.0F)};
+}
+int Session::runtimeCharacterScreenZ(const std::shared_ptr<RuntimeCharacter>& character) {
+  if(runtimeHooks_&&runtimeHooks_->characterZ)if(const auto value=runtimeHooks_->characterZ(character))return *value;
+  return runtimeCharacterCommand(character,"screenZ",{}).integer();
 }
 std::array<double, 2> Session::runtimeCharacterScreenPosition(const std::shared_ptr<RuntimeCharacter>& character) const {
   if (runtimeHooks_ && runtimeHooks_->characterPosition)

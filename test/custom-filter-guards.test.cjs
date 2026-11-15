@@ -6,6 +6,7 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 const { makeHarness } = require('./helpers/scene-encoder-harness.cjs');
+const { installFilterCompiler } = require('../runner/native-filter-compiler.cjs');
 
 function fixture() {
   const { sandbox, compatHits } = makeHarness();
@@ -78,6 +79,42 @@ test('a neutral window filter retains its authored isolation pass', () => {
   assert.equal(compilations(), 1);
   assert.equal(plans.length, 1);
   assert.equal(plans[0].passes.length, 1);
+});
+
+test('native full-screen window layers share isolation only for the stock copy filter', () => {
+  const { sandbox: scope } = fixture();
+  scope.PIXI.VERSION = '4.5.4';
+  scope.WindowLayer = class {};
+  scope.PMJS.rpgmaker = {};
+  scope.PMJS.config = {};
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-core/optimizations.js'), 'utf8'), scope);
+  scope.PIXI.filters.AlphaFilter.prototype.resolution = 1;
+  const filter = scope.WindowLayer.voidFilter = new scope.PIXI.filters.AlphaFilter();
+  const layer = new scope.WindowLayer();
+  layer.filterArea = { x: 0, y: 0, width: 32, height: 32 };
+  layer.worldTransform = { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 };
+  layer.children = [Object.assign(new scope.Window(), { _isWindow: true, visible: true, _openness: 128 })];
+  installFilterCompiler({ scope, runScript: code => vm.runInContext(code, scope) });
+  const compile = () => scope.PMJS.rpgmaker.nativeFilters.compile(layer, [filter]);
+  assert.equal(compile().length, 0);
+  for (const [object, property, value] of [
+    [filter, 'alpha', 0.5], [filter, 'resolution', 2], [filter, 'fragmentSrc', 'authored fragment'],
+    [filter, 'padding', 8], [filter, 'blendMode', 1],
+    [layer.filterArea, 'width', 31], [layer.worldTransform, 'tx', 0.25]
+  ]) {
+    const previous = object[property]; object[property] = value;
+    assert.equal(compile().length, 1, property + ' must retain its filter pass');
+    object[property] = previous;
+    assert.equal(compile().length, 0, property + ' restoration must reuse isolation');
+  }
+  layer.children.push({ _isWindow: true, visible: true });
+  assert.equal(compile().length, 1, 'mixed children retain their filter pass');
+  layer.children.pop();
+  const apply = filter.apply;
+  let applyCalls = 0;
+  filter.apply = function(manager, input, output, clear) { applyCalls++; apply.call(this, manager, input, output, clear); };
+  assert.equal(compile().length, 1, 'authored apply callbacks remain active');
+  assert.equal(applyCalls, 1);
 });
 
 test('authored areas and modified filters still resolve programs and report compilation failures', () => {

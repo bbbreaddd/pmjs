@@ -287,6 +287,8 @@ function createBitmapClass(native, PIXI = null, fonts = null, contextClass = () 
     family = String(family); source = String(source);
     api.loadFont(runtime, family, source);
     loadedFonts.set(family, source);
+    if (fonts && fonts.getRegisteredFaces()[family.toLowerCase()]?.path !== source)
+      fonts.registerFace(family, source, { fromGame: true });
   };
   Bitmap.surface = function(bitmap) {
     const surface = invoke(bitmap, 'surface');

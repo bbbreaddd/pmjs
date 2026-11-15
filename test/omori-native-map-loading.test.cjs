@@ -15,16 +15,24 @@ test('Tiled publication follows map readiness, replacement and maps without Tile
   const publications = [];
   let ready = false;
   function Spriteset_Map() {}
+  function Sprite_Character() {}
+  function Game_CharacterBase() {}
+  function Game_Map() {}
+  for (const name of ['isObjectCharacter','jumpHeight','shiftY','scrolledX','scrolledY']) Game_CharacterBase.prototype[name] = function() {};
+  for (const name of ['tileWidth','tileHeight','adjustX','adjustY','width','height','displayX','displayY',
+    'isLoopHorizontal','isLoopVertical','screenTileX','screenTileY']) Game_Map.prototype[name] = function() {};
+  Sprite_Character.prototype.updatePosition = function() {};
   Object.assign(Spriteset_Map.prototype, { createTilemap() {}, loadTileset() {}, updateTileset() {} });
-  const runtime = { scope: { Imported: { YED_Tiled: true }, Spriteset_Map, $dataMap: {} },
-    runScript() {}, mapDatabase: { requestedMapId: 42, isReady() { return ready; } } };
-  createRuntime({ gameRoot: root, session: {}, engine: { databaseInvoke(...args) { publications.push(args.slice(1)); } },
+  const runtime = { scope: { Imported: { YED_Tiled: true }, Spriteset_Map, Sprite_Character, Game_CharacterBase, Game_Map, DataManager: {}, $dataMap: {}, PMJS: { plugins: { onLoaded() {} } } },
+    displaySymbol() { return Symbol(); },
+    runScript() { return JSON.parse; }, mapDatabase: { requestedMapId: 42, isReady() { return ready; } } };
+  createRuntime({ gameRoot: root, session: {}, engine: { registerCharacterPresentation() {}, tiledInvoke() {}, databaseInvoke(...args) { publications.push(args.slice(1)); } },
     createPluginRuntime(engine, session, options) { options.beforePlugins(runtime); return runtime; } });
   assert.equal(runtime.mapDatabase.isReady(), false); assert.equal(publications.length, 0);
   ready = true;
   assert.equal(runtime.mapDatabase.isReady(), true);
   assert.equal(publications[0][0], 'publishTiledMap'); assert.equal(publications[0][1], 42);
-  assert.equal(publications[0][2].tilewidth, 24); assert.deepEqual(publications[0][2].passage, [0, 0, 0, 0]);
+  assert.equal(publications[0][2].tilewidth, 24); assert.deepEqual(publications[0][2].sourceLayers, []);
   runtime.mapDatabase.isReady(); assert.equal(publications.length, 1);
   runtime.scope.$dataMap = {};
   runtime.mapDatabase.isReady(); assert.equal(publications.length, 2);

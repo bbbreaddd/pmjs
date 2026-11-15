@@ -13,7 +13,16 @@ bool Session::messageBusy() {
   const auto scripted = runtimeHooks_ && runtimeHooks_->message ? runtimeHooks_->message("isBusy", {}) : std::optional<bool>{};
   return scripted ? *scripted : invokeMessageBase("isBusy").boolean();
 }
+void Session::messageTextsChanged(const std::shared_ptr<RuntimeCommandList>& storage) {
+  if (storage != message_.lines.storage) return;
+  message_.busy = !message_.lines.empty() || !message_.choices.empty() || message_.numberVariableId > 0 || message_.itemVariableId > 0;
+  message_.revealPrepared = false; message_.revealPage = -1;
+}
 Value Session::runtimeMessageField(const std::string& field, const std::optional<Value>& value) {
+  if (field == "_texts") {
+    if (value) { message_.lines = value->array(); messageTextsChanged(message_.lines.storage); }
+    return Value(message_.lines.values());
+  }
   bool* flag=field=="_showFast" ? &message_.showFast : field=="_lineShowFast" ? &message_.lineFast : field=="_pauseSkip" ? &message_.pauseSkip : nullptr;
   if (flag) { if (value) *flag=value->boolean(); return *flag; }
   if (field == "pause") { if (value) message_.textPaused = value->boolean(); return message_.textPaused; }

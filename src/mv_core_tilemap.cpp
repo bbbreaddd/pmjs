@@ -121,6 +121,7 @@ void Tilemap::queueGeometry(Renderer& renderer,bool upper,const Matrix& world,do
 }
 void Tilemap::sortChildren() {
   auto& sorted=children;
+  ++childrenRevision;
   if(!customChildOrder)std::stable_sort(sorted.begin(),sorted.end(),[](const auto& left,const auto& right){if(left->z!=right->z)return left->z<right->z;if(left->position.y!=right->position.y)return left->position.y<right->position.y;const auto* a=dynamic_cast<const Sprite*>(left.get());const auto* b=dynamic_cast<const Sprite*>(right.get());return (a?a->spriteId:double(left->displayId))<(b?b->spriteId:double(right->displayId));});
 }
 void Tilemap::render(Renderer& renderer,const Matrix& parentWorld,double opacity) {

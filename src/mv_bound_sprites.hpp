@@ -109,6 +109,7 @@ class CharacterSprite : public BoundSpriteContext {
   int tilesetId=0,tileId=0,loadedIndex=0;
   std::string loadedName;
   bool hiding=false;
+  bool reflection=false;
   bool mapRenderConsumed=false;
   void render(Renderer& renderer,const core::Matrix& world={1,0,0,1,0,0},double opacity=1) override { if (!mapRenderConsumed) core::Sprite::render(renderer,world,opacity); }
   explicit CharacterSprite(bool=false) {}
@@ -158,8 +159,12 @@ class CharacterSprite : public BoundSpriteContext {
   }
   virtual void updateCharacterFrame() {
     const auto image=bitmap(); if (!image) return;
-    const auto frame = isTile() ? state.sourceFrame(image->width,image->height,modelSession().tileWidth(),modelSession().tileHeight()) :
-      core::Rectangle{(characterBlockX()+characterPatternX())*patternWidth(), (characterBlockY()+characterPatternY())*patternHeight(), patternWidth(), patternHeight()};
+    core::Rectangle frame;
+    if (isTile()) frame = state.sourceFrame(image->width,image->height,modelSession().tileWidth(),modelSession().tileHeight());
+    else {
+      const double width = patternWidth(), height = patternHeight();
+      frame = {(characterBlockX()+characterPatternX())*width, (characterBlockY()+characterPatternY())*height, width, height};
+    }
     updateHalfBodySprites();
     if (state.bushDepth>0) {
       const double depth=std::min<double>(state.bushDepth,frame.height);
@@ -170,7 +175,25 @@ class CharacterSprite : public BoundSpriteContext {
   }
   virtual void updateTileFrame() { updateCharacterFrame(); }
   virtual void updateFrame() { if (isTile()) updateTileFrame(); else updateCharacterFrame(); }
-  virtual void updatePosition() { const auto point=modelSession().runtimeCharacterScreenPosition(character); position={point[0],point[1]}; z=character->value().tileId ? 1 : 3; }
+  virtual void initializeReflection() { reflection=true;visible=false; }
+  virtual void updateReflection() {
+    if(!character)return;
+    visible=character->reflections.arrayLength()>0;
+    const auto& area=character->reflections[0];if(area.null())return;
+    scale.y=core::numberValue(area["reflectionCast"])>0 ? -1 : 1;
+    setOpacity(area["reflectionOpacity"].boolean() ? core::numberValue(area["reflectionOpacity"]) : 255);
+  }
+  virtual void updatePosition() {
+    const auto area=reflection ? character->reflections[0].reference() : Value::undefined();
+    const auto point=modelSession().runtimeCharacterScreenPosition(character);position={point[0],point[1]};
+    z=modelSession().runtimeCharacterScreenZ(character);
+    if(!area.null()) {
+      const double cast=core::numberValue(area["reflectionCast"]);
+      position.y+=modelSession().tileHeight()*cast;
+      if(cast>0)position.y-=modelSession().tileHeight();
+      position.y+=core::numberValue(area["reflectionOffset"]);
+    }
+  }
   virtual void updateOther() { setOpacity(character->value().opacity); blendMode=static_cast<BlendMode>(std::clamp(character->value().blendMode,0,3)); updateVisibility(); }
   virtual void updateVisibility() { visible=character && !hiding && !character->value().transparent; }
   virtual void hide() { hiding=true; updateVisibility(); }
@@ -271,6 +294,7 @@ class NativeMapSpriteset : public NativeSpriteset {
   std::shared_ptr<core::Container> tilemap;
   std::shared_ptr<core::TilingSprite> parallax;
   std::shared_ptr<core::Sprite> shadowSprite,destinationSprite;
+  std::shared_ptr<core::Sprite> reflectionSurface;
   std::shared_ptr<core::Weather> weather;
   std::vector<std::shared_ptr<core::PixelBitmap>> tilesetBitmaps;
   Value tileset;
@@ -358,6 +382,11 @@ class NativeMapSpriteset : public NativeSpriteset {
     weather->width=modelSession().screenWidth(); weather->height=modelSession().screenHeight();
   }
   virtual void setMapLevel(int level) { mapGraph->level=level; }
+  virtual void updateHideOnLevel() { setMapLevel(modelSession().tiledLevel()); }
+  virtual void updateReflectionSurface() {
+    if(reflectionSurface)reflectionSurface->position={-modelSession().mapState().lastDisplayX*modelSession().tileWidth(),-modelSession().mapState().lastDisplayY*modelSession().tileHeight()};
+  }
+  virtual void createReflectionMask() {}
   void updateDestination() {
     if(!destinationSprite)return;auto& session=modelSession();
     const bool valid=session.invokeGameDataBase("temp","isDestinationValid",{}).boolean();destinationSprite->visible=valid;
@@ -366,7 +395,12 @@ class NativeMapSpriteset : public NativeSpriteset {
     destinationSprite->position={(session.invokeGameDataBase("map","adjustX",{x}).number()+0.5)*session.tileWidth(),(session.invokeGameDataBase("map","adjustY",{y}).number()+0.5)*session.tileHeight()};destinationSprite->alpha=destinationState.opacity;destinationSprite->scale={destinationState.scale.x,destinationState.scale.y};
   }
   void createLowerLayer() override { NativeSpriteset::createLowerLayer();createParallax();createTilemap();createCharacters();createShadow();createDestination();createWeather(); }
-  void update() override { NativeSpriteset::update();updateTileset();updateParallax();updateTilemap();updateShadow();updateWeather();updateDestination(); }
+  void update() override {
+    auto* bound=dynamic_cast<GeneratedRuntimeObject*>(this);
+    if(!bound||!bound->dispatchValue("update",{},"Spriteset_Base"))NativeSpriteset::update();
+    updateTileset();updateParallax();updateTilemap();updateShadow();updateWeather();updateDestination();
+    if(modelSession().usesTiledMapPlugin()){updateHideOnLevel();updateReflectionSurface();}
+  }
   auto mapLevelReader() const { auto state=mapGraph;return std::function<int()>([state]{return state->level;}); }
   auto characterRenderer() const {
     auto state=mapGraph;

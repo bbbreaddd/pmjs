@@ -2,7 +2,38 @@
 // RPG Maker MV behavior: Copyright (c) 2015 KADOKAWA CORPORATION./YOJI OJIMA.
 // MIT license: third_party/rpg-maker-mv.LICENSE.
 
-function installMessageWindow({ Window_Message, ImageManager, Input }, options) {
+function installMessageWindow({ Window_Message, Window_Base, ImageManager, Input }, options) {
+  Window_Message.prototype.update = function() {
+    if (!options.scriptMessageOwned(this)) { Window_Base.prototype.update.call(this); return; }
+    this.checkToNotClose();
+    Window_Base.prototype.update.call(this);
+    while (!this.isOpening() && !this.isClosing()) {
+      if (this.updateWait() || this.updateLoading() || this.updateInput() || this.updateMessage()) return;
+      if (this.canStart()) this.startMessage();
+      else { this.startInput(); return; }
+    }
+  };
+  Window_Message.prototype.checkToNotClose = function() { if (this.isClosing() && this.isOpen() && this.doesContinue()) this.open(); };
+  Window_Message.prototype.canStart = function() { return options.gameMessage().hasText() && !options.gameMessage().scrollMode(); };
+  Window_Message.prototype.processNewLine = function(state) {
+    this._lineShowFast = false; Window_Base.prototype.processNewLine.call(this, state);
+    if (this.needsNewPage(state)) this.startPause();
+  };
+  Window_Message.prototype.processNewPage = function(state) {
+    Window_Base.prototype.processNewPage.call(this, state);
+    if (state.text[state.index] === '\n') state.index++;
+    state.y = this.contents.height; this.startPause();
+  };
+  Window_Message.prototype.processEscapeCharacter = function(code, state) {
+    if (code === '$') this._goldWindow.open();
+    else if (code === '.') this.startWait(15);
+    else if (code === '|') this.startWait(60);
+    else if (code === '!') this.startPause();
+    else if (code === '>') this._lineShowFast = true;
+    else if (code === '<') this._lineShowFast = false;
+    else if (code === '^') this._pauseSkip = true;
+    else Window_Base.prototype.processEscapeCharacter.call(this, code, state);
+  };
   Window_Message.prototype.updateLoading = function() {
       if (this._faceBitmap) {
           if (this._faceBitmap.isReady()) {

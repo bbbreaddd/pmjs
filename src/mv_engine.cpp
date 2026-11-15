@@ -1,4 +1,5 @@
 #include "mv_engine.hpp"
+#include "mv_tiled_map.hpp"
 #include "mv_core_types.hpp"
 #include "mv_core_utils.hpp"
 #include "mv_managers.hpp"
@@ -121,7 +122,15 @@ void Session::setMapData(int id,Value data) {
 const Value& Session::mapData(int id) const { return id==runtimeMapId_ ? runtimeMapData_ : database_["maps"][std::to_string(id)]; }
 void Session::setTiledMapData(int id, Value data) {
   if (id < 0) throw std::invalid_argument("map id must not be negative");
+  tiledMapLoaded_=!data.null();
+  if(tiledEnabled_ && !data.null()) {
+    const auto source=tiledSources_.find(id);
+    auto compiled=compileTiledMap(source==tiledSources_.end()?data:source->second,tiledHalfTile_);
+    auto& fields=std::get<Value::Object>(data.data);
+    for(auto& [key,value]:std::get<Value::Object>(compiled.data))fields[key]=std::move(value);
+  }
   std::erase_if(runtimeTiledMaps_, [&](const auto& entry) { return entry.first != mapId_ && entry.first != id; });
+  std::erase_if(tiledSources_,[&](const auto& entry){return entry.first!=mapId_&&entry.first!=id;});
   runtimeTiledMaps_[id] = std::move(data);
   ++presentationRevision_;
 }
@@ -131,10 +140,12 @@ const Value& Session::tiledMapData(int id) const {
 }
 const Value& Session::map() const { return mapData(mapId_); }
 int Session::tileWidth() const {
-  return tiledMapData(mapId_)["tilewidth"].integer(48);
+  const auto& data=tiledMapData(mapId_);
+  return data[tiledEnabled_ ? "logicalTilewidth" : "tilewidth"].integer(48);
 }
 int Session::tileHeight() const {
-  return tiledMapData(mapId_)["tileheight"].integer(48);
+  const auto& data=tiledMapData(mapId_);
+  return data[tiledEnabled_ ? "logicalTileheight" : "tileheight"].integer(48);
 }
 
 void Session::prepareScriptScene(Ui state) {
@@ -265,6 +276,8 @@ void Session::autoplayMap() {
 void Session::setupMap(int id) {
   if (mapData(id).null()) throw std::invalid_argument("map not loaded: " + std::to_string(id));
   mapId_ = id;
+  tiledTableRoots_.clear();
+  if(tiledEnabled_ && !tiledMapData(id).null() && tiledMapData(id)["levels"].null())setTiledMapData(id,tiledMapData(id).snapshot());
   detachRuntimeEntities(false);
   if (cameraTarget_) cameraTarget_ = runtimeCharacter(-1);
   setupMapState(); commonInterpreters_.clear(); runtimeCommonEvents_.clear(); mapCommonEvents_.clear(); mapCommonEventsReady_ = false;
@@ -320,7 +333,7 @@ bool Session::pageEligible(const Value& page, int eventId) const {
   if (c["switch1Valid"].boolean() && !lookup(switches_, c["switch1Id"].integer())) return false;
   if (c["switch2Valid"].boolean() && !lookup(switches_, c["switch2Id"].integer())) return false;
   if (c["variableValid"].boolean() && variableNumber(lookup(variables_, c["variableId"].integer())) < c["variableValue"].number()) return false;
-  if (c["selfSwitchValid"].boolean() && !lookup(selfSwitches_, selfKey(mapId_, eventId, c["selfSwitchCh"].text()))) return false;
+  if (c["selfSwitchValid"].boolean() && !strictEqual(lookup(selfSwitches_, selfKey(mapId_, eventId, c["selfSwitchCh"].text())), true)) return false;
   if (c["itemValid"].boolean() && lookup(inventory_, c["itemId"].integer()) <= 0) return false;
   return !c["actorValid"].boolean() || std::find(party_.begin(), party_.end(), c["actorId"].integer()) != party_.end();
 }
@@ -378,9 +391,15 @@ void Session::setupEventPageSettings(Event& event) {
 bool Session::tilePassage(int x, int y, int bit) const {
   x = roundMapX(x); y = roundMapY(y);
   const auto& tiled = tiledMapData(mapId_);
-  if (!tiled.null()) {
-    const int width = tiled["width"].integer(), height = tiled["height"].integer();
+  if (!tiled.null() && (!tiledEnabled_||tiledMapLoaded_)) {
+    const int width = tiled[tiledEnabled_ ? "mapWidth" : "width"].integer(), height = tiled[tiledEnabled_ ? "mapHeight" : "height"].integer();
     if (x < 0 || y < 0 || x >= width || y >= height) return false;
+    if(tiledEnabled_) {
+      const int index=y*width+x;
+      const int arrow=(bit&1 ? 8 : 0)|(bit&2 ? 1 : 0)|(bit&4)|(bit&8 ? 2 : 0);
+      const auto& cell=tiledTable("collision",tiledLevel())[index];
+      return std::holds_alternative<double>(cell.data) && cell.number()==0 && (tiledTable("arrows",tiledLevel())[index].integer()&arrow)==arrow;
+    }
     if (tiled["passage"].arrayLength() != static_cast<std::size_t>(width * height))
       throw std::runtime_error("tile collision data is unavailable");
     return !(tiled["passage"][y * width + x].integer() & bit);
@@ -404,6 +423,13 @@ bool Session::tilePassage(int x, int y, int bit) const {
   return false;
 }
 
+bool Session::characterAt(const Character& character, int x, int y) const {
+  if (runtimeHooks_ && runtimeHooks_->characterQuery) {
+    const auto object = const_cast<Session*>(this)->runtimeCharacterFor(const_cast<Character&>(character));
+    if (object) if (const auto result = runtimeHooks_->characterQuery(object, "pos", {x, y})) return result->boolean();
+  }
+  return character.x == x && character.y == y;
+}
 bool Session::passable(int x, int y, int direction, const Character& character) const {
   if (runtimeHooks_ && runtimeHooks_->characterQuery) {
     const auto object = const_cast<Session*>(this)->runtimeCharacterFor(const_cast<Character&>(character));
@@ -426,7 +452,7 @@ bool Session::characterCollision(int x, int y, const Character& character) const
   }
   bool isEvent = false;
   for (const auto& event : events_) if (&event.character == &character) { isEvent = true; break; }
-  for (const auto& event : events_) if (event.page >= 0 && &event.character != &character && !event.character.through && (isEvent || event.priority == 1) && event.character.x == x && event.character.y == y) return true;
+  for (const auto& event : events_) if (event.page >= 0 && &event.character != &character && !event.character.through && (isEvent || event.priority == 1) && characterAt(event.character, x, y)) return true;
   for (const auto& event : events_) if (&event.character == &character && event.priority == 1) {
     if (!player_.through && player_.x == x && player_.y == y) return true;
     if (followersVisible_) for (std::size_t i = 0; i < followers_.size() && i + 1 < party_.size(); ++i)
@@ -535,15 +561,15 @@ void Session::updateCharacterMove(Character& c, bool dash) {
     c.realY = c.realY < c.y ? std::min(c.realY + distance, static_cast<double>(c.y)) : std::max(c.realY - distance, static_cast<double>(c.y));
 }
 void Session::updateCharacter(Character& c, bool dash, int idlePattern) {
-  const auto object = runtimeHooks_ && runtimeHooks_->characterLifecycle ? runtimeCharacterFor(c) : nullptr;
-  if (!c.moving() && c.jumpCount <= 0 && (!object || !runtimeHooks_->characterLifecycle(object, "updateStop"))) updateCharacterStop(c);
+  const auto object = tiledEnabled_ || (runtimeHooks_ && runtimeHooks_->characterLifecycle) ? runtimeCharacterFor(c) : nullptr;
+  if (!c.moving() && c.jumpCount <= 0 && (!runtimeHooks_ || !runtimeHooks_->characterLifecycle || !object || !runtimeHooks_->characterLifecycle(object, "updateStop"))) updateCharacterStop(c);
   if (c.jumpCount > 0) {
     --c.jumpCount;
     c.realX = (c.realX * c.jumpCount + c.x) / (c.jumpCount + 1.0);
     c.realY = (c.realY * c.jumpCount + c.y) / (c.jumpCount + 1.0);
     if (c.jumpCount == 0) { c.x = roundMapX(c.x); c.y = roundMapY(c.y); c.realX = c.x; c.realY = c.y; }
   } else if (c.moving()) {
-    if (!object || !runtimeHooks_->characterLifecycle(object, "updateMove")) updateCharacterMove(c, dash);
+    if (!runtimeHooks_ || !runtimeHooks_->characterLifecycle || !object || !runtimeHooks_->characterLifecycle(object, "updateMove")) updateCharacterMove(c, dash);
   }
   bool normal = &c != &vehicles_[2].character;
   for (const auto& event : events_) if (&event.character == &c) normal = event.priority == 1;
@@ -557,6 +583,8 @@ void Session::updateCharacter(Character& c, bool dash, int idlePattern) {
     if (!object || !runtimeHooks_->characterLifecycle(object, "updatePattern")) c.pattern = !c.stepAnime && c.stopCount > 0 ? idlePattern : (c.pattern + 1) % 4;
     c.animationCount = 0;
   }
+  if(tiledEnabled_ && object && (!runtimeHooks_ || !runtimeHooks_->characterLifecycle || !runtimeHooks_->characterLifecycle(object,"updateReflection")))
+    runtimeCharacterCommand(object,"updateReflection",{});
 }
 
 Character* Session::routeCharacter(int id, const Interpreter& context) {
@@ -685,7 +713,7 @@ void Session::startEvent(int x, int y, bool action) {
   if (vehicleType_ == 2) return;
   x = roundMapX(x); y = roundMapY(y);
   for (auto& e : events_) {
-    if (e.page >= 0 && e.character.x == x && e.character.y == y &&
+    if (e.page >= 0 && characterAt(e.character, x, y) &&
         ((action && e.trigger == 0) || (!action && (e.trigger == 1 || e.trigger == 2)))) {
       const bool samePosition = x == player_.x && y == player_.y;
       if (samePosition == (e.priority == 1)) continue;
@@ -849,7 +877,7 @@ bool Session::condition(const Value& p, const Interpreter& context) {
       switch (operation) { case 1: return a >= b; case 2: return a <= b; case 3: return a > b; case 4: return a < b; }
     }
   }
-  if (p[0].integer() == 2) return context.eventId > 0 && lookup(selfSwitches_, selfKey(context.mapId, context.eventId, p[1].text())) == (p[2].integer() == 0);
+  if (p[0].integer() == 2) return context.eventId > 0 && strictEqual(lookup(selfSwitches_, selfKey(context.mapId, context.eventId, p[1].text())), true) == (p[2].integer() == 0);
   if (p[0].integer() == 3) return timerWorking_ && (p[2].integer() == 0 ? std::floor(timerFrames_ / 60.0) >= p[1].number() : std::floor(timerFrames_ / 60.0) <= p[1].number());
   if (p[0].integer() == 4) {
     const int id = p[1].integer(), argument = p[3].integer();
@@ -1540,6 +1568,7 @@ void Session::acknowledge(int choice) {
   Window_Message::terminate(*this);
 }
 void Session::updateMessageWindow() {
+  if (scriptMessageWindow_) return;
   Window_Message::updateState(*this);
 }
 void Session::updateTimer() { dispatchGameDataMutation("timer","update",{true}); }
@@ -1591,6 +1620,7 @@ void Session::step(const Input& input, bool mapDestination, bool mapFastForward,
   if (mapSceneOnly() && !database_["sceneContract"]["interactiveInput"].boolean() && (input.direction || input.ok || input.cancel || input.dash || input.touchTriggered || input.destinationX || input.destinationY))
     throw std::runtime_error("map-scene session does not support interactive input");
   if (finished_ || resourcesStopped_ || scriptScenePrevious_) return;
+  scriptMessageWindow_ = runtimeHooks_ && runtimeHooks_->message && runtimeHooks_->message("window.scriptOwned", {}).value_or(false);
   currentInput_ = input;
   const bool sceneFadeComplete = sceneFadeDuration_ <= 0;
   ++ticks_;
@@ -1728,6 +1758,6 @@ Value Session::snapshot() const {
     for (int skill : actor.skills) skills.emplace_back(skill);
     actors[std::to_string(id)] = Value::Object{{"hp", actor.hp}, {"mp", actor.mp}, {"tp", actor.tp}, {"level", actor.level}, {"parameters", parameters}, {"states", states}, {"skills", skills}};
   }
-  return Value::Object{{"unsupportedAction", unsupportedAction_}, {"camera", savedCamera_ ? Value(Value::Array{(*savedCamera_)[0], (*savedCamera_)[1]}) : Value{}}, {"randomCalls", static_cast<double>(randomCalls_)}, {"battle", Value::Object{{"active", battle_.active}, {"turn", battle_.turn}, {"actorIndex", battle_.actorIndex}, {"wait", battle_.wait}, {"pending", static_cast<int>(battle_.actions.size())}, {"actionStage", battle_.actionStage}, {"enemies", enemies}}}, {"actors", actors}, {"scene", static_cast<int>(ui_.scene)}, {"ui", Value::Object{{"category", ui_.category}, {"cursor", ui_.cursor}, {"skillType", ui_.skillType}}}, {"storage", Value::Object{{"save", saveRequested_}, {"load", loadRequested_}, {"slot", ui_.cursor + 1}}}, {"ticks", static_cast<double>(ticks_)}, {"mapId", mapId_}, {"player", Value::Object{{"x", player_.x}, {"y", player_.y}, {"realX", player_.realX}, {"realY", player_.realY}, {"direction", player_.direction}, {"transparent", player_.transparent}}}, {"events", events}, {"switches", switches}, {"variables", variables}, {"selfSwitches", selfSwitches}, {"inventory", inventory}, {"party", party}, {"interpreter", Value::Object{{"mapId", interpreter_.mapId}, {"eventId", interpreter_.eventId}, {"index", interpreter_.index}, {"wait", interpreter_.wait}, {"running", interpreter_.running}}}, {"message", Value::Object{{"busy", message_.busy}, {"openness", message_.openness}, {"closing", message_.closing}, {"pauseIndex", static_cast<int>(message_.pauseIndex)}, {"age", messageAge_}, {"firstLine", message_.firstLine}, {"pageEnd", message_.pageEnd()}, {"lines", message_.lines}, {"choices", Value(message_.choices.values())}}}};
+  return Value::Object{{"unsupportedAction", unsupportedAction_}, {"camera", savedCamera_ ? Value(Value::Array{(*savedCamera_)[0], (*savedCamera_)[1]}) : Value{}}, {"randomCalls", static_cast<double>(randomCalls_)}, {"battle", Value::Object{{"active", battle_.active}, {"turn", battle_.turn}, {"actorIndex", battle_.actorIndex}, {"wait", battle_.wait}, {"pending", static_cast<int>(battle_.actions.size())}, {"actionStage", battle_.actionStage}, {"enemies", enemies}}}, {"actors", actors}, {"scene", static_cast<int>(ui_.scene)}, {"ui", Value::Object{{"category", ui_.category}, {"cursor", ui_.cursor}, {"skillType", ui_.skillType}}}, {"storage", Value::Object{{"save", saveRequested_}, {"load", loadRequested_}, {"slot", ui_.cursor + 1}}}, {"ticks", static_cast<double>(ticks_)}, {"mapId", mapId_}, {"player", Value::Object{{"x", player_.x}, {"y", player_.y}, {"realX", player_.realX}, {"realY", player_.realY}, {"direction", player_.direction}, {"transparent", player_.transparent}}}, {"events", events}, {"switches", switches}, {"variables", variables}, {"selfSwitches", selfSwitches}, {"inventory", inventory}, {"party", party}, {"interpreter", Value::Object{{"mapId", interpreter_.mapId}, {"eventId", interpreter_.eventId}, {"index", interpreter_.index}, {"wait", interpreter_.wait}, {"running", interpreter_.running}}}, {"message", Value::Object{{"busy", message_.busy}, {"openness", message_.openness}, {"closing", message_.closing}, {"pauseIndex", static_cast<int>(message_.pauseIndex)}, {"age", messageAge_}, {"firstLine", message_.firstLine}, {"pageEnd", message_.pageEnd()}, {"lines", Value(message_.lines.values())}, {"choices", Value(message_.choices.values())}}}};
 }
 }  // namespace pmjs::mv

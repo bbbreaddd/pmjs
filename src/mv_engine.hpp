@@ -90,6 +90,7 @@ struct RuntimePicture : RuntimeObject {
 struct RuntimeCommandView;
 struct RuntimeCommandList : RuntimeObject, std::enable_shared_from_this<RuntimeCommandList> {
   Value root = Value::Array{};
+  bool mutableArray = false;
   std::map<std::vector<std::string>, std::weak_ptr<RuntimeCommandView>> views;
   std::shared_ptr<RuntimeCommandView> view(const std::vector<std::string>& path);
   Value& resolve(const std::vector<std::string>& path);
@@ -103,6 +104,8 @@ struct RuntimeArray {
   std::shared_ptr<RuntimeCommandList> storage = std::make_shared<RuntimeCommandList>();
   RuntimeArray& operator=(Value::Array values) { storage = std::make_shared<RuntimeCommandList>(); storage->root = std::move(values); return *this; }
   void clear() { storage = std::make_shared<RuntimeCommandList>(); }
+  void push_back(Value value) { values().push_back(std::move(value)); }
+  void emplace_back(Value value) { values().push_back(std::move(value)); }
   Value::Array& values() { return std::get<Value::Array>(storage->root.data); }
   const Value::Array& values() const { return std::get<Value::Array>(storage->root.data); }
   operator Value::Array() const { return values(); }
@@ -178,11 +181,13 @@ struct RuntimeHooks {
   std::function<void(const std::shared_ptr<RuntimeObject>&, const std::string&)> characterScript;
   std::function<bool(const std::shared_ptr<RuntimeObject>&, const std::string&, const Value::Array&)> actorLifecycle;
   std::function<bool(const std::shared_ptr<RuntimeObject>&, const std::string&)> characterLifecycle;
+  std::function<bool(const std::shared_ptr<RuntimeObject>&, const std::string&, const Value::Array&)> characterMethod;
   std::function<std::optional<Value>(const std::shared_ptr<RuntimeObject>&, const std::string&, const Value::Array&)> characterQuery;
   std::function<std::optional<std::array<double, 2>>(const std::shared_ptr<RuntimeObject>&)> characterPosition;
+  std::function<std::optional<int>(const std::shared_ptr<RuntimeObject>&)> characterZ;
   std::function<bool(const std::shared_ptr<RuntimeObject>&, int)> actorSpriteHome;
   std::function<bool(const std::shared_ptr<RuntimeObject>&, const std::shared_ptr<RuntimeObject>&)> enemySpriteBattler;
-  std::function<std::optional<Value>(const std::shared_ptr<RuntimeObject>&, const std::string&, const Value::Array&)> boundMethod;
+  std::function<std::optional<Value>(const std::shared_ptr<RuntimeObject>&, const std::string&, const Value::Array&, const std::string&)> boundMethod;
   std::function<bool(const std::shared_ptr<RuntimeObject>&,const std::string&)> boundOverride;
   std::function<void(const std::shared_ptr<RuntimeObject>&, std::uint32_t)> boundListener;
   std::function<std::shared_ptr<core::WebAudio>(const std::string&, const std::string&)> audioBuffer;
@@ -283,7 +288,7 @@ struct Event {
 };
 
 struct Message {
-  Value::Array lines;
+  RuntimeArray lines;
   RuntimeArray choices;
   int defaultChoice = 0, cancelChoice = -1, choiceIndent = 0;
   int numberVariableId = 0, numberDigits = 0, itemVariableId = 0, itemType = 0;
@@ -350,7 +355,11 @@ template<class State> struct RuntimeEntity : RuntimeObject {
   State& value() const { return attached ? *attached : *retained; }
   void detach() { if (attached) { retained = std::make_unique<State>(*attached); attached = nullptr; } }
 };
-struct RuntimeCharacter : RuntimeEntity<Character> { int originalPattern = 1; };
+struct RuntimeCharacter : RuntimeEntity<Character> {
+  int originalPattern = 1;
+  Value reflections = Value::Array{};
+  double reflectionsRevision = 0;
+};
 using RuntimeActor = RuntimeEntity<Battler>;
 
 struct Action {
@@ -496,6 +505,7 @@ class Session {
   void initializeActorMembers(const std::shared_ptr<RuntimeActor>& actor);
   Value runtimeCharacterCommand(const std::shared_ptr<RuntimeCharacter>& character, const std::string& method, const Value::Array& arguments);
   std::array<double, 2> runtimeCharacterScreenPosition(const std::shared_ptr<RuntimeCharacter>& character) const;
+  int runtimeCharacterScreenZ(const std::shared_ptr<RuntimeCharacter>& character);
   std::array<double, 3> runtimeMapShadow() const;
   std::array<double, 2> runtimeMapAdjustedPosition(double x, double y) const;
   void setCameraTarget(std::shared_ptr<RuntimeCharacter> target, double speed);
@@ -523,6 +533,8 @@ class Session {
   Value runtimeMessageField(const std::string& field, const std::optional<Value>& value = {});
   Value imageRequests(const RuntimeCommandList& list);
   std::shared_ptr<RuntimeCommandList> messageChoices() const { return message_.choices.storage; }
+  std::shared_ptr<RuntimeCommandList> messageTexts() const { message_.lines.storage->mutableArray = true; return message_.lines.storage; }
+  void messageTextsChanged(const std::shared_ptr<RuntimeCommandList>& storage);
   void invokeInterpreterControl(const std::shared_ptr<RuntimeInterpreter>& interpreter, const std::string& method, const Value::Array& arguments);
   double scriptRandom() { return random(); }
   Value invokeGameDataBase(const std::string& kind, const std::string& method, const Value::Array& arguments);
@@ -544,6 +556,17 @@ class Session {
   int mapId() const { return mapId_; }
   int tileWidth() const;
   int tileHeight() const;
+  Value invokeTiled(const std::string& method, const Value::Array& arguments);
+  int tiledLevel() const;
+  bool usesTiledMapPlugin() const { return tiledEnabled_; }
+  const Value& tiledLevelData() const;
+  const Value& tiledTable(const std::string& name, int level) const;
+  const Value& tiledRoot(const std::string& name) const;
+  const Value& tiledSource() const;
+  bool tiledHalfTile() const { return tiledHalfTile_; }
+  bool dispatchTiledInitialize(int level) {
+    return runtimeHooks_&&runtimeHooks_->gameDataMutation&&runtimeHooks_->gameDataMutation("map","_initializeMapLevel",{level});
+  }
   void setMessageTextLayoutResolver(std::function<std::string(const std::string&, bool)> resolver) { messageTextLayoutResolver_ = std::move(resolver); }
   const MapState& mapState() const { return mapState_; }
   std::array<double, 4> screenTone() const;
@@ -754,6 +777,7 @@ class Session {
   void autoplayMap();
   void refresh();
   bool pageEligible(const Value& page, int eventId) const;
+  bool characterAt(const Character& character, int x, int y) const;
   bool passable(int x, int y, int direction, const Character& character) const;
   bool passableBase(int x, int y, int direction, const Character& character) const;
   bool characterMapPassable(int x, int y, int direction, const Character& character) const;
@@ -870,7 +894,8 @@ class Session {
   std::map<int, bool> switches_;
   std::map<int, Value> variables_;
   int switchDataLength_ = 0, variableDataLength_ = 0;
-  std::map<std::string, bool> selfSwitches_;
+  std::map<std::string, Value> selfSwitches_;
+  bool scriptMessageWindow_ = false;
   std::map<int, int> inventory_;
   std::vector<int> party_;
   std::map<int, Battler> actors_;
@@ -954,6 +979,12 @@ class Session {
   std::uint64_t presentationRevision_ = 0;
   int screenWidth_ = 816, screenHeight_ = 624;
   int mapId_ = 0;
+  bool tiledEnabled_ = false, tiledHalfTile_ = false;
+  bool tiledMapLoaded_ = false;
+  int tiledLevelVariable_ = 0, tiledCurrentLevel_ = 0;
+  std::array<int,3> tiledCharacterZ_{1,3,5};
+  std::map<std::string,Value> tiledTableRoots_;
+  std::map<int,Value> tiledSources_;
   bool refreshNeeded_ = true, previousOk_ = false, finished_ = false;
   int okAge_ = 0;
   bool playerDashing_ = false, battleTest_ = false, playerNeedsMapReload_ = false;

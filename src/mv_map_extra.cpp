@@ -44,7 +44,7 @@ bool MapMechanics::isPassable(const Session& session, int x, int y, int d) {
 std::vector<int> MapMechanics::eventsXy(const Session& session, int x, int y) {
   std::vector<int> out;
   for (const auto& ev : session.events()) {
-    if (ev.character.x == x && ev.character.y == y) {
+    if (session.characterAt(ev.character, x, y)) {
       out.push_back(ev.id);
     }
   }
@@ -54,7 +54,7 @@ std::vector<int> MapMechanics::eventsXy(const Session& session, int x, int y) {
 std::vector<int> MapMechanics::eventsXyNt(const Session& session, int x, int y) {
   std::vector<int> out;
   for (const auto& ev : session.events()) {
-    if (!ev.erased && !ev.character.through && ev.character.x == x && ev.character.y == y) {
+    if (!ev.erased && !ev.character.through && session.characterAt(ev.character, x, y)) {
       out.push_back(ev.id);
     }
   }
@@ -117,7 +117,7 @@ int MapMechanics::regionId(const Session& session, int x, int y) {
 
 int MapMechanics::eventIdAt(const Session& session, int x, int y) {
   for (const auto& ev : session.events()) {
-    if (ev.character.x == x && ev.character.y == y) return ev.id;
+    if (session.characterAt(ev.character, x, y)) return ev.id;
   }
   return 0;
 }

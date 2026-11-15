@@ -1,5 +1,6 @@
 #include "node_addon_internal.hpp"
 #include "node_addon_video.hpp"
+#include "bridge_trace.hpp"
 
 namespace pmjs::addon {
 
@@ -221,11 +222,24 @@ std::optional<pmjs::ImageHandle> resolveImage(State& value, std::uint32_t handle
   return value.core.resolveImage(handle);
 }
 
-void method(napi_env env, napi_value object, const char* name, napi_callback callback) {
+void method(napi_env env, napi_value object, const char* name, napi_callback callback,const char* file) {
+  struct Callback {napi_callback function;std::string label;bool control;};
+  auto* target=new Callback{callback,std::filesystem::path(file).filename().string()+":"+name,std::string(name)=="diagnosticBridgeTrace"};
   napi_value function;
-  check(env, napi_create_function(env, name, NAPI_AUTO_LENGTH, callback, nullptr, &function),
-        "cannot create native method");
-  check(env, napi_set_named_property(env, object, name, function), "cannot export method");
+  check(env,napi_create_function(env,name,NAPI_AUTO_LENGTH,[](napi_env environment,napi_callback_info info)->napi_value {
+    void* data=nullptr;std::size_t count=4;napi_value args[4];
+    napi_get_cb_info(environment,info,&count,args,nullptr,&data);
+    auto* own=static_cast<Callback*>(data);
+    if(!bridge_trace::active || own->control)return own->function(environment,info);
+    std::string label="entry:"+own->label;
+    for(std::size_t i=0;i<std::min(count,std::size_t(4));++i) {
+      napi_valuetype type;napi_typeof(environment,args[i],&type);
+      if(type==napi_string)label+=":"+asString(environment,args[i]);
+    }
+    bridge_trace::Scope trace(std::move(label));return own->function(environment,info);
+  },target,&function),"cannot create traced method");
+  check(env,napi_add_finalizer(env,function,target,[](napi_env,void* data,void*){delete static_cast<Callback*>(data);},nullptr,nullptr),"cannot retain traced callback");
+  check(env,napi_set_named_property(env,object,name,function),"cannot export traced method");
 }
 
 napi_value moduleObject(napi_env env) {

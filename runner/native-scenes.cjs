@@ -20,6 +20,7 @@ const { installScreenSprite } = require('./native-core-utilities.cjs');
 function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   const api = native.mvDisplay, runtime = api.open();
   const nodes = new WeakMap(), registry = new Map();
+  const nativeDisplaySymbol = Symbol('native display handle');
   const displayLists = new WeakMap();
   const nativeFilters = new WeakMap(), filterUpdates = new Set();
   let currentRoot = null, nextRoot = null;
@@ -55,6 +56,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   function attach(object, kind, existing = null) {
     if (nodes.has(object)) throw new Error('Display object is already initialized');
     const handle = existing || api.create(runtime, kind);
+    Object.defineProperty(object, nativeDisplaySymbol, { value: handle });
     options.initializeEvents?.(object);
     nodes.set(object, { handle, children: new Map(), parent: null, bitmaps: new Map(), points: new Map(), filters:null });
     registry.set(handle.identity, new WeakRef(object));
@@ -68,6 +70,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     if (existing) return existing;
     const types = { scene: Scene_Base, window: Window, windowLayer: WindowLayer, sprite: Sprite, tiling: TilingSprite, tilemap: TilemapDisplay, screen: ScreenSprite, tone: ToneSprite, container: Container, glitch: GlitchFilter };
     const object = Object.create(types[handle.kind].prototype);
+    Object.defineProperty(object, nativeDisplaySymbol, { value: handle });
     nodes.set(object, { handle, children: new Map(), parent: null, bitmaps: new Map(), points: new Map(), filters:null });
     registry.set(handle.identity, new WeakRef(object));
     options.initializeEvents?.(object); treeHooks(object,handle.kind);
@@ -89,20 +92,48 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     api.invoke(own.handle,'spriteBitmapAssignedHook',own.bitmapAssigned);
     const bitmap=api.invoke(own.handle,'bitmap');if(bitmap)own.bitmapAssigned(bitmap);
   }
+  function numericState(object) {
+    const own = entry(object);
+    return own.numericState ||= api.numericState(own.handle);
+  }
   function prop(type, name, field = name) {
     Object.defineProperty(type.prototype, name, {
       configurable: true, enumerable: true,
-      get() { return api.field(entry(this).handle, field); },
-      set(value) { api.field(entry(this).handle, field, value); }
+      get() {
+        if (field === 'x' || field === 'y') return numericState(this).position[field === 'x' ? 0 : 1];
+        if (field === 'rotation' || field === 'alpha') return numericState(this)[field][0];
+        if (field === 'visible' || field === 'renderable') return Boolean(numericState(this)[field][0]);
+        if (field === 'z') return numericState(this).z[0];
+        if (field === 'opacity' && entry(this).handle.kind !== 'window') return numericState(this).alpha[0] * 255;
+        return api.field(entry(this).handle, field);
+      },
+      set(value) {
+        const own = entry(this);
+        if (own.handle.kind !== 'window' && typeof value === 'number') {
+          if (field === 'x' || field === 'y') { numericState(this).position[field === 'x' ? 0 : 1] = value; return; }
+          if (field === 'rotation' || field === 'alpha' || field === 'z') { numericState(this)[field][0] = value; return; }
+          if (field === 'opacity') { numericState(this).alpha[0] = value < 0 ? 0 : value > 255 ? 1 : value / 255; return; }
+        }
+        if (own.handle.kind !== 'window' && typeof value === 'boolean' && (field === 'visible' || field === 'renderable')) {
+          numericState(this)[field][0] = value ? 1 : 0; return;
+        }
+        api.field(own.handle, field, value);
+      }
     });
   }
   function point(type, name, x, y) {
+    const shared = ['position', 'scale', 'pivot', 'skew', 'anchor', 'origin'].includes(name);
     Object.defineProperty(type.prototype, name, { configurable: true, get() {
       const value = entry(this);
       if (!value.points.has(name)) {
-        const handle = value.handle, point = Object.create(options.pointPrototype?.() || Object.prototype);
+        const handle = value.handle, view = shared ? numericState(this)[name] : null, point = Object.create(options.pointPrototype?.() || Object.prototype);
         for (const [key, field] of [['x', x], ['y', y]]) Object.defineProperty(point, key, {
-          enumerable: true, get() { return api.field(handle, field); }, set(value) { api.field(handle, field, value); }
+          enumerable: true,
+          get() { return shared ? view[key === 'x' ? 0 : 1] : api.field(handle, field); },
+          set(value) {
+            if (shared && handle.kind !== 'window' && typeof value === 'number') view[key === 'x' ? 0 : 1] = value;
+            else api.field(handle, field, value);
+          }
         });
         point.set = function(a = 0, b = a) { this.x = a; this.y = b; };
         value.points.set(name, point);
@@ -114,8 +145,10 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     Object.defineProperty(type.prototype, name, {
       configurable: true,
       get() {
-        const bitmap=wrapBitmapHandle(Bitmap,api.invoke(entry(this).handle,name));
-        entry(this).bitmaps.set(name,bitmap);return bitmap;
+        const own = entry(this);
+        if (name === 'bitmap' && own.bitmapAssigned) return own.bitmaps.get(name) || null;
+        const bitmap=wrapBitmapHandle(Bitmap,api.invoke(own.handle,name));
+        own.bitmaps.set(name,bitmap);return bitmap;
       },
       set(value) {
         if(this[name]===value)return;
@@ -130,7 +163,10 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     });
   }
   function children(object) {
-    const own = entry(object), snapshot = api.childSnapshot(own.handle, own.childSnapshot);
+    const own = entry(object), revision = numericState(object).childrenRevision[0];
+    if (own.childSnapshot && own.childRevision === revision) return own.childValues;
+    const snapshot = api.childSnapshot(own.handle, own.childSnapshot);
+    own.childRevision = revision;
     if (snapshot === own.childSnapshot) return own.childValues;
     const handles = snapshot.handles;
     const live = new Set();
@@ -159,7 +195,11 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   function TilemapDisplay() { throw new Error('Map tilemaps are created by the native spriteset'); }
   inherit(TilemapDisplay, Container);
   point(TilemapDisplay, 'origin', 'originX', 'originY');
-  Object.defineProperty(Container.prototype, 'parent', { get() {const own=entry(this);own.parent=wrap(api.invoke(own.handle,'parent'));return own.parent;} });
+  Object.defineProperty(Container.prototype, 'parent', { get() {
+    const own = entry(this), revision = numericState(this).parentRevision[0];
+    if (own.parentRevision !== revision) { own.parent = wrap(api.invoke(own.handle, 'parent')); own.parentRevision = revision; }
+    return own.parent;
+  } });
   Object.defineProperty(Container.prototype, 'children', { get() {
     const object = this, own = entry(object);
     if (!own.childArray) {
@@ -311,9 +351,11 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   Object.defineProperty(Container.prototype, 'worldTransform', { configurable: true, get() {
     const own=entry(this);
     if(own.handle.kind==='sprite'||own.handle.kind==='tiling') {const rendered=api.invoke(own.handle,'renderWorld');if(rendered)return options.matrix(rendered);}
-    const a = Math.cos(this.rotation + this.skew.y) * this.scale.x, b = Math.sin(this.rotation + this.skew.y) * this.scale.x;
-    const c = -Math.sin(this.rotation - this.skew.x) * this.scale.y, d = Math.cos(this.rotation - this.skew.x) * this.scale.y;
-    const tx = this.x - this.pivot.x * a - this.pivot.y * c, ty = this.y - this.pivot.x * b - this.pivot.y * d;
+    const rotation=this.rotation, skewY=this.skew.y, scaleX=this.scale.x, skewX=this.skew.x, scaleY=this.scale.y;
+    const a = Math.cos(rotation + skewY) * scaleX, b = Math.sin(rotation + skewY) * scaleX;
+    const c = -Math.sin(rotation - skewX) * scaleY, d = Math.cos(rotation - skewX) * scaleY;
+    const x=this.x, pivotX=this.pivot.x, pivotY=this.pivot.y, y=this.y;
+    const tx = x - pivotX * a - pivotY * c, ty = y - pivotX * b - pivotY * d;
     const parent = this.parent?.worldTransform;
     return options.matrix(parent ? [parent.a*a+parent.c*b,parent.b*a+parent.d*b,parent.a*c+parent.c*d,parent.b*c+parent.d*d,parent.a*tx+parent.c*ty+parent.tx,parent.b*tx+parent.d*ty+parent.ty] : [a,b,c,d,tx,ty]);
   } });
@@ -341,6 +383,9 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   };
   const filteredDisplays = new Set();
   function compileDisplayFilters(object) {
+    if (object instanceof WindowLayer && object.filterArea) {
+      for (const key of ['x', 'y', 'width', 'height']) object.filterArea[key] = object[key];
+    }
     const filters=entry(object).filters || [];
     const groups=options.compileFilters?.(object, filters);
     if(groups) {api.invoke(entry(object).handle,'filterGroups',groups);return true;}
@@ -357,12 +402,19 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     }
     return binding.handle;
   }
-  function updateFilters() {
+  function updateFilters(stage) {
     spriteRenderHooks.update();
     for (const weak of filteredDisplays) {
       const object=weak.deref();
       if(!object)filteredDisplays.delete(weak);
-      else if(!compileDisplayFilters(object))api.invoke(entry(object).handle,'filters',...(entry(object).filters||[]).map(filterHandle));
+      else {
+        if (stage) {
+          let ancestor = object;
+          while (ancestor && ancestor !== stage) ancestor = ancestor.parent;
+          if (!ancestor) continue;
+        }
+        if(!compileDisplayFilters(object))api.invoke(entry(object).handle,'filters',...(entry(object).filters||[]).map(filterHandle));
+      }
     }
     for (const binding of filterUpdates) {
       const filter=binding.source.deref();
@@ -913,7 +965,13 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   Window_Message.prototype.numVisibleRows = function() { return 4; };
   Window_Message.prototype.clearFlags = function() { options.messageWindow('clearFlags'); };
   Window_Message.prototype.terminateMessage = function() { this.close(); options.messageWindow('terminateMessage'); };
-  Window_Message.prototype.startInput = function() { return options.messageWindow('startInput'); };
+  Window_Message.prototype.startInput = function() {
+    if (!scriptMessages()) return options.messageWindow('startInput');
+    if (options.gameMessage().isChoice()) { this._choiceWindow.start(); return true; }
+    if (options.gameMessage().isNumberInput()) { this._numberWindow.start(); return true; }
+    if (options.gameMessage().isItemChoice()) { this._itemWindow.start(); return true; }
+    return false;
+  };
   for (const field of ['_showFast', '_lineShowFast', '_pauseSkip', '_waitCount', 'pause']) Object.defineProperty(Window_Message.prototype, field, {
     configurable: true, get() { return options.messageWindowField(field); }, set(value) { options.messageWindowField(field, value); }
   });
@@ -1431,7 +1489,29 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   nativeWindows.Window_EquipSlot.prototype.setItemWindow = function(window) { this._itemWindow = window; this.update(); };
   nativeWindows.Window_BattleActor.prototype.actor = function() { return options.gameParty().members()[this.index()]; };
   nativeWindows.Window_BattleEnemy.prototype.enemy = function() { return options.gameTroop().aliveMembers()[this.index()]; };
-  nativeWindows.Window_MapName.prototype.drawBackground = function(x, y, width, height) {
+  const mapName = nativeWindows.Window_MapName.prototype, initializeMapName = mapName.initialize;
+  mapName.initialize = function() {
+    initializeMapName.call(this);
+    this.opacity = 0; this.contentsOpacity = 0; this._showCount = 0; this.refresh();
+  };
+  mapName.update = function() {
+    Window_Base.prototype.update.call(this);
+    if (this._showCount > 0 && options.gameMap().isNameDisplayEnabled()) { this.updateFadeIn(); this._showCount--; }
+    else this.updateFadeOut();
+  };
+  mapName.updateFadeIn = function() { this.contentsOpacity += 16; };
+  mapName.updateFadeOut = function() { this.contentsOpacity -= 16; };
+  mapName.open = function() { this.refresh(); this._showCount = 150; };
+  mapName.close = function() { this._showCount = 0; };
+  mapName.refresh = function() {
+    this.contents.clear();
+    const name = options.gameMap().displayName();
+    if (name) {
+      const width = this.contentsWidth(); this.drawBackground(0, 0, width, this.lineHeight());
+      this.drawText(name, 0, 0, width, 'center');
+    }
+  };
+  mapName.drawBackground = function(x, y, width, height) {
       var color1 = this.dimColor1();
       var color2 = this.dimColor2();
       this.contents.gradientFillRect(x, y, width / 2, height, color2, color1);
@@ -1673,7 +1753,24 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   Scene_Boot.prototype.start = function() { Scene_Base.prototype.start.call(this); SceneManager.goto(Scene_Title); };
   function Scene_Title() { this.initialize.apply(this, arguments); }
   inherit(Scene_Title, Scene_Base);
-  Scene_Title.prototype.start = function() { Scene_Base.prototype.start.call(this); SceneManager.clearStack(); if (!sceneInfo.get(this)?.nativeRequested) options.openTitle?.(); };
+  Scene_Title.prototype.create = function() {
+    Scene_Base.prototype.create.call(this);
+    this.createBackground(); this.createForeground(); this.createWindowLayer(); this.createCommandWindow();
+  };
+  Scene_Title.prototype.start = function() {
+    Scene_Base.prototype.start.call(this); SceneManager.clearStack();
+    if (!sceneInfo.get(this)?.nativeRequested) options.openTitle?.();
+    this.centerSprite(this._backSprite1); this.centerSprite(this._backSprite2);
+    this.playTitleMusic(); this.startFadeIn(this.fadeSpeed(), false);
+  };
+  Scene_Title.prototype.update = function() {
+    if (!this.isBusy()) this._commandWindow.open();
+    Scene_Base.prototype.update.call(this);
+  };
+  Scene_Title.prototype.isBusy = function() { return this._commandWindow.isClosing() || Scene_Base.prototype.isBusy.call(this); };
+  Scene_Title.prototype.playTitleMusic = function() {
+    const audio = options.audioManager(); audio.playBgm(options.databaseObject('system').titleBgm); audio.stopBgs(); audio.stopMe();
+  };
   function Scene_Map() { this.initialize.apply(this, arguments); }
   inherit(Scene_Map, Scene_Base);
   Scene_Map.prototype.initialize = function() {
@@ -1956,11 +2053,18 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   function nativeDriven(scene) {
     if (!scene) return false;
     const kind = sceneInfo.get(scene)?.kind ?? kindOf(scene);
-    return kind >= 0 && (sceneInfo.get(scene)?.nativeRequested || scene.constructor === sceneClass(kind) || scene instanceof Scene_Map);
+    return kind > 0 && (sceneInfo.get(scene)?.nativeRequested || scene.constructor === sceneClass(kind) || scene instanceof Scene_Map);
   }
   function usesNativeInput(object) {
+    const message = SceneManager._scene?._messageWindow;
+    if (message && scriptMessages() && (object === message || message.subWindows().includes(object))) return false;
     while (object.parent) object = object.parent;
     return object === SceneManager._scene && nativeDriven(object);
+  }
+  function scriptMessages() {
+    const scene = SceneManager._scene, window = scene?._messageWindow;
+    if (!(scene instanceof Scene_Map) || !window || options.gameMessage().scrollMode()) return false;
+    return !!window._textState || window.openness > 0 || nativeMessageMethods.some(([name, original]) => window[name] !== original);
   }
   function prepareScene(scene) {
     const kind = kindOf(scene);
@@ -1968,7 +2072,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     if (!(acceptingNative && kind === requestedKind) && (kind >= 0 || (requestedKind !== null && requestedKind >= 0)))
       options.sceneControl?.('prepare', kind >= 0 ? kind : requestedKind);
   }
-  Bitmap.snap = stage => snapBitmap(Bitmap, entry(stage).handle);
+  Bitmap.snap = stage => { updateFilters(stage); return snapBitmap(Bitmap, entry(stage).handle); };
   function Graphics() { throw new Error('Graphics is a static class'); }
   Object.defineProperties(Graphics, Object.getOwnPropertyDescriptors({
     get frameCount() { return api.scene(runtime, 'frameCount'); },
@@ -2131,7 +2235,11 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
     return result;
   }
   installWindowTouch(Window_Selectable, options, usesNativeInput);
-  installMessageWindow({ Window_Message, ImageManager, Input }, options);
+  installMessageWindow({ Window_Message, Window_Base, ImageManager, Input }, { ...options,
+    scriptMessageOwned(window) { return SceneManager._scene?._messageWindow === window && scriptMessages(); }
+  });
+  const nativeMessageMethods = ['update', 'startMessage', 'newPage', 'convertEscapeCharacters', 'processEscapeCharacter', 'processNormalCharacter', 'drawMessageFace']
+    .map(name => [name, Window_Message.prototype[name]]);
   installBattleLog({ Window_BattleLog: nativeWindows.Window_BattleLog, Window_Base, Bitmap, Sprite, Graphics, Input }, options);
   function SceneManager() { throw new Error('SceneManager is a static class'); }
   Object.defineProperties(SceneManager, Object.getOwnPropertyDescriptors({
@@ -2168,8 +2276,8 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
       const next = type ? new type() : null;
       if (next && !(next instanceof Scene_Base)) throw new TypeError('Scene transition requires Scene_Base');
       nextRoot = next;
-      api.scene(runtime, 'goto', next ? entry(next).handle : null, dispatch);
       prepareScene(next);
+      api.scene(runtime, 'goto', next ? entry(next).handle : null, dispatch);
     },
     update(deltaTime = 1) {
       if (this._stopped) return;
@@ -2288,7 +2396,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
   });
   Object.assign(SceneManager, { _screenWidth: Graphics.width, _screenHeight: Graphics.height, _boxWidth: Graphics.boxWidth, _boxHeight: Graphics.boxHeight,
     _deltaTime: 1 / 60, _currentTime: 0, _accumulator: 0, _exiting: false, _previousClass: null, _backgroundBitmap: null });
-  return { bitmapFromSource, transformTexture(source, destination, x,y,width,height,rotation) { native.canvas.copyTransformedPixels(destination._canvas._ensureNativeCanvas().handle,source._canvas._ensureNativeCanvas().handle,x,y,width,height,rotation);destination._canvas._pmjsContentChanged(); }, setSpriteTexture(object, bitmap, frame, resolution=1) { api.invoke(entry(object).handle,'spriteTexture',bitmap ? bitmapHandle(Bitmap,bitmap) : null,...(frame ? [frame.x,frame.y,frame.width,frame.height,resolution] : [])); }, updateFilters, ...nativeWindows, Container, Stage, Sprite, Sprite_Button, Sprite_Base, Sprite_Animation, TilingSprite, ScreenSprite, ToneSprite, Window, WindowLayer, Window_Base, Window_Selectable, Window_Command, Window_MenuCommand, Window_Options, Window_Message,
+  return { scriptMessages, bitmapFromSource, transformTexture(source, destination, x,y,width,height,rotation) { native.canvas.copyTransformedPixels(destination._canvas._ensureNativeCanvas().handle,source._canvas._ensureNativeCanvas().handle,x,y,width,height,rotation);destination._canvas._pmjsContentChanged(); }, setSpriteTexture(object, bitmap, frame, resolution=1) { api.invoke(entry(object).handle,'spriteTexture',bitmap ? bitmapHandle(Bitmap,bitmap) : null,...(frame ? [frame.x,frame.y,frame.width,frame.height,resolution] : [])); }, updateFilters, ...nativeWindows, Container, Stage, Sprite, Sprite_Button, Sprite_Base, Sprite_Animation, TilingSprite, ScreenSprite, ToneSprite, Window, WindowLayer, Window_Base, Window_Selectable, Window_Command, Window_MenuCommand, Window_Options, Window_Message,
     Scene_Base, Scene_Battle, Scene_MenuBase, Scene_Menu, Scene_Options, Scene_Gameover, Scene_GameEnd, Scene_File, Scene_Load, Scene_Save, Scene_Equip, Scene_Status, Scene_Shop, Scene_Name, Scene_Debug, Scene_ItemBase, Scene_Item, Scene_Skill, Scene_Boot, Scene_Title, Scene_Map, SceneManager, Graphics, Input,
     GlitchFilter,
     prepareNativeRequest() {
@@ -2388,6 +2496,7 @@ function createSceneBindings(native, Bitmap, ImageManager, options = {}) {
       return fields.get(field);
     },
     displayHandle: object => entry(object).handle,
+    nativeDisplaySymbol,
     displayField(handle, field, ...value) {
       return wrap(options.boundDisplayField(handle, field, runtime, ...value.map(object => object == null ? null : entry(object).handle)));
     },

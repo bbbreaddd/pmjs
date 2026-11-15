@@ -10,9 +10,9 @@ bool GeneratedRuntimeObject::hasOverride(const std::string& method) {
 bool GeneratedRuntimeObject::dispatchOverride(const std::string& method) {
   return dispatchValue(method).has_value();
 }
-std::optional<Value> GeneratedRuntimeObject::dispatchValue(const std::string& method, const Value::Array& arguments) {
+std::optional<Value> GeneratedRuntimeObject::dispatchValue(const std::string& method, const Value::Array& arguments, const std::string& prototype) {
   const auto owner=hooks.lock();
-  return owner && owner->boundMethod ? owner->boundMethod(shared_from_this(),method,arguments) : std::optional<Value>{};
+  return owner && owner->boundMethod ? owner->boundMethod(shared_from_this(),method,arguments,prototype) : std::optional<Value>{};
 }
 void GeneratedRuntimeObject::listen(const BindingEvent& event, std::uint32_t token) {
   const auto weak=weak_from_this();

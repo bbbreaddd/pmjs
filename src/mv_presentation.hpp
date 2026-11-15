@@ -82,6 +82,7 @@ class Presentation {
     TileLayerTile tile;
     std::vector<std::pair<int, double>> frames;
     double duration = 0;
+    int tileAt(double updates) const;
     int columns = 0, frame = -1, nextFrame = -1;
   };
   struct TiledChunk {
@@ -91,7 +92,9 @@ class Presentation {
   };
   struct TiledDraw {
     TiledChunkKey key;
-    int z = 0, y = 0, priority = 0;
+    int z = 0;
+    double y = 0;
+    int priority = 0;
     std::size_t order = 0;
     float alpha = 1;
     bool sorted = false;
@@ -99,6 +102,10 @@ class Presentation {
   TiledChunk& tiledChunk(const Value& data, const TiledDraw& draw);
   void updateTiledAnimation(TiledChunk& chunk, int tileWidth, int tileHeight, double age);
   const Value* tiledGeometryData_ = nullptr;
+  bool tiledPaintReady_ = false;
+  std::weak_ptr<core::Tilemap> tiledTilemap_;
+  std::uint64_t tiledTilemapRevision_ = 0;
+  std::array<int, 2> tiledPaintOrigin_{};
   std::map<TiledChunkKey, TiledChunk> tiledChunks_;
   std::vector<std::array<int, 4>> tiledBounds_, tiledNextBounds_;
   std::vector<TiledDraw> tiledDraws_;

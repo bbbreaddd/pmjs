@@ -116,7 +116,7 @@ std::array<float, Size> floatArray(napi_env env,
   return result;
 }
 
-void method(napi_env env, napi_value object, const char* name, napi_callback callback);
+void method(napi_env env, napi_value object, const char* name, napi_callback callback,const char* file=__builtin_FILE());
 napi_value moduleObject(napi_env env);
 struct PreparationInstallReport {
   std::vector<std::string> accepted;

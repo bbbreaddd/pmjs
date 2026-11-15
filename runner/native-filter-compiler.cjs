@@ -29,10 +29,21 @@ function installFilterCompiler(runtime) {
     function nativeMaskWorldTransform(sprite) { return sprite.worldTransform; }
     ${managers}
     ${source}
+    function nativeWindowLayerSharesIsolation(node, filters) {
+      if (typeof WindowLayer !== 'function' || !(node instanceof WindowLayer) || filters.length !== 1) return false;
+      var filter = filters[0], area = node.filterArea;
+      if (filter !== WindowLayer.voidFilter || !nativeFilterCopiesPixels(filter) ||
+          nativeFilterNeedsAuthoredProgram(filter) || filter.resolution !== 1 || !area ||
+          area.x !== 0 || area.y !== 0 || area.width !== Graphics.width || area.height !== Graphics.height) return false;
+      var world = node.worldTransform;
+      return world.a === 1 && world.b === 0 && world.c === 0 && world.d === 1 && world.tx === 0 && world.ty === 0 &&
+        node.children.every(function(child) { return child instanceof Window && child._isWindow; });
+    }
     PMJS.rpgmaker.nativeFilters = {
       compile: function(node, filters) {
         var previous = nativeCustomFilterPlans; nativeCustomFilterPlans = [];
         try {
+          if (nativeWindowLayerSharesIsolation(node, filters)) return [];
           var result = nativeSceneFilter(node, filters);
           if (result.unsupported) throw new TypeError('Unsupported native filter program: ' + filters.map(function(filter) { return filter && filter.constructor.name; }).join(', '));
           var groups = result.groups || [];

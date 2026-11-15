@@ -1786,7 +1786,7 @@ void Presentation::renderStage() {
   if (scriptStage_) {
     core_.renderer().clearScene(0,0,0,1);
     scriptStage_->render(core_.renderer());
-    if(session_.ui_.scene==Scene::map) { prepareUiFrame(); message(); finishUiLayer(); finishSceneOverlays(); }
+    if(session_.ui_.scene==Scene::map) { prepareUiFrame(); if (!session_.scriptMessageWindow_) message(); finishUiLayer(); finishSceneOverlays(); }
     return;
   }
   prepareUiFrame();

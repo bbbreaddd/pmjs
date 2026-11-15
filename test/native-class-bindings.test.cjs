@@ -57,6 +57,59 @@ test('generated defaults support aliases and retain wrapper state while native m
   assert.equal(seen[0].value, 10, 'retired wrappers must retain native model access');
 });
 
+test('explicit prototype dispatch preserves parent aliases on a derived receiver', () => {
+  const { scope, bindings, bridge, session, initializations } = fixture();
+  const handle = bindings.create(session, 'NamedCounter'), calls = [];
+  scope.NamedCounter.prototype.add = function() { throw new Error('Derived method reentered'); };
+  assert.equal(bridge.dispatch(handle, 'NamedCounter', 'add', [1], 'Counter'), null);
+  assert.equal(initializations(), 0);
+  const original = scope.Counter.prototype.add;
+  scope.Counter.prototype.add = function(value) {
+    calls.push(this); return original.call(this, value * 2);
+  };
+  const firstAlias = scope.Counter.prototype.add;
+  scope.Counter.prototype.add = function(value) { return firstAlias.call(this, value + 1); };
+  assert.deepEqual(bridge.dispatch(handle, 'NamedCounter', 'add', [2], 'Counter'), { value: 6 });
+  assert.equal(calls[0], bridge.wrap(handle, 'NamedCounter'));
+  assert.equal(calls[0].value, 6);
+  const failure = new Error('Parent hook failed');
+  scope.Counter.prototype.add = function() { throw failure; };
+  assert.throws(() => bridge.dispatch(handle, 'NamedCounter', 'add', [1], 'Counter'), error => error === failure);
+  scope.Counter.prototype.add = original;
+  assert.equal(bridge.dispatch(handle, 'NamedCounter', 'add', [1], 'Counter'), null);
+});
+
+test('retained wrappers reuse activity until the sweep and reacquire native ownership afterward', () => {
+  const { bindings, bridge, session } = fixture();
+  const active = bindings.active; let checks = 0;
+  bindings.active = handle => { ++checks; return active(handle); };
+  const handle = bindings.create(session, 'NamedCounter'), object = bridge.wrap(handle, 'NamedCounter');
+  object.pluginState = 42;
+  for (let i = 0; i < 10; ++i) assert.equal(bridge.wrap(handle, 'NamedCounter'), object);
+  assert.equal(checks, 1);
+  handle.active = false;
+  assert.equal(bridge.wrap(handle, 'NamedCounter'), object);
+  assert.equal(checks, 1);
+  bridge.sweep(); assert.equal(checks, 2);
+  assert.equal(bridge.wrap(handle, 'NamedCounter'), object); assert.equal(checks, 3);
+  handle.active = true;
+  assert.equal(bridge.wrap(handle, 'NamedCounter'), object); assert.equal(checks, 4);
+  assert.equal(bridge.wrap(handle, 'NamedCounter').pluginState, 42); assert.equal(checks, 4);
+});
+
+test('default method lookup continues to observe late class and instance overrides', () => {
+  const { scope, bindings, bridge, session } = fixture();
+  const handle = bindings.create(session, 'NamedCounter'), object = bridge.wrap(handle, 'NamedCounter');
+  assert.equal(bridge.dispatch(handle, 'NamedCounter', 'add', [1]), null);
+  const original = scope.Counter.prototype.add;
+  scope.NamedCounter.prototype.add = function(value) { return original.call(this, value * 2); };
+  assert.deepEqual(bridge.dispatch(handle, 'NamedCounter', 'add', [2]), { value: 4 });
+  object.add = function(value) { return original.call(this, value * 3); };
+  assert.deepEqual(bridge.dispatch(handle, 'NamedCounter', 'add', [2]), { value: 10 });
+  delete object.add; delete scope.NamedCounter.prototype.add;
+  assert.equal(bridge.dispatch(handle, 'NamedCounter', 'add', [1]), null);
+});
+
 test('reference arguments and constructor aliases preserve the original script object', () => {
   const calls = [], target = {}, nativeTarget = {}, handles = new WeakMap([[target, nativeTarget]]);
   function External() {}

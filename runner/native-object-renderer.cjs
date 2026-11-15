@@ -37,7 +37,7 @@ function createObjectRenderer(bridge) {
     setObjectRenderer,
     flush() {this.currentRenderer?.flush?.();},
     clear() {bridge.clear();},
-    render(stage) {bridge.update();this._lastObjectRendered=stage;bridge.submit(stage);}
+    render(stage) {bridge.update(stage);this._lastObjectRendered=stage;bridge.submit(stage);}
   };
   for(const field of ['width','height'])Object.defineProperty(renderer,field,{enumerable:true,get() {return bridge.dimension(field);}});
   const originals=Object.entries(plugins), names=new Set(Object.keys(plugins));

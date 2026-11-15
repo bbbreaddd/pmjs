@@ -29,6 +29,7 @@ function installClassBindings(scope, bindings, session, options = {}) {
         if (!models.has(this)) {
           const handle = bindings.create(session, nativeType.name);
           models.set(this, handle); instances.set(handle.identity, new WeakRef(this));
+          if (description.name === 'Sprite_Character') bindings.attachCharacterView?.(session, handle, this);
           if (!options.initializeDisplay?.(this, handle)) parent.prototype.initialize?.apply(this, args);
         }
         if (nativeType.initializer) this[nativeType.initializer](...nativeType.constructorDefaults.map((value, index) => args[index] === undefined ? value : args[index]));
@@ -78,9 +79,10 @@ function installClassBindings(scope, bindings, session, options = {}) {
     const methods = new Map(); defaults.set(description.name, methods);
     for (const method of description.methods) {
       if (method.inherited) continue;
+      const convertsArguments = method.argumentKinds?.some(kind => kind === 'object' || kind === 'bytes' || kind === 'xhr');
       const forward = function(...args) {
         if (method.defaults?.length) args = method.defaults.map((value, index) => args[index] === undefined ? value : args[index]);
-        const nativeArgs = args.map((value, index) => {
+        const nativeArgs = convertsArguments ? args.map((value, index) => {
           if (method.argumentKinds?.[index] === 'bytes') return Array.from(value);
           if (method.argumentKinds?.[index] === 'xhr') {
             const response=value.response;
@@ -92,7 +94,7 @@ function installClassBindings(scope, bindings, session, options = {}) {
           const handle = models.get(value) || options.unwrap?.(value);
           if (!handle) throw new TypeError('Native object argument is not bound');
           return handle;
-        });
+        }) : args;
         const value = bindings.invoke(models.get(this), method.name, nativeArgs, description.name);
         for (const alias of method.aliases || []) this[alias.property] = args[alias.index];
         return value;
@@ -100,7 +102,7 @@ function installClassBindings(scope, bindings, session, options = {}) {
       Object.defineProperties(forward, { name: { value: method.name }, length: { value: method.arity } });
       Type.prototype[method.name] = forward; methods.set(method.name, forward);
       returnValues.set(forward, method.returnsValue !== false);
-      argumentKinds.set(forward,method.argumentKinds||[]);
+      if (convertsArguments) argumentKinds.set(forward,method.argumentKinds);
     }
     for (const event of description.events || []) Type.prototype[event] = function(listener) {
       if (typeof listener !== 'function') throw new TypeError('Listener must be a function');
@@ -114,13 +116,14 @@ function installClassBindings(scope, bindings, session, options = {}) {
       return bindings.invokeStatic(description.name, method.name, method.defaults.map((value, index) => args[index] === undefined ? value : args[index]));
     };
     if (!methods.has('initialize')) { methods.set('initialize', Type.prototype.initialize); returnValues.set(Type.prototype.initialize, false); }
+    for (const [name, method] of defaults.get(description.parent) || []) if (!methods.has(name)) methods.set(name, method);
     scope[description.name] = Type; installed.set(description.name, Type);
     return Type;
   }
   for (const description of descriptions) install(description);
   function original(type, method) {
-    for (let description = schemas.get(type); description; description = schemas.get(description.parent))
-      if (defaults.get(description.name)?.has(method)) return defaults.get(description.name).get(method);
+    const native = defaults.get(type)?.get(method);
+    if (native) return native;
     throw new Error('Native default is unavailable: ' + type + '.' + method);
   }
   function parentInitializerChanged(type) {
@@ -129,15 +132,17 @@ function installClassBindings(scope, bindings, session, options = {}) {
     return false;
   }
   function wrap(handle, type) {
-    let object = active.get(handle.identity) || instances.get(handle.identity)?.deref();
+    const retained = active.get(handle.identity);
+    let object = retained || instances.get(handle.identity)?.deref();
     if (!object) {
       object = Object.create(scope[type].prototype);
       let root = schemas.get(type);
       while (schemas.has(root.parent)) root = schemas.get(root.parent);
       models.set(object, handle); instances.set(handle.identity, new WeakRef(object));
+      if (type === 'Sprite_Character') bindings.attachCharacterView?.(session, handle, object);
       if (!options.initializeDisplay?.(object, handle)) scope[root.parent]?.prototype.initialize?.call(object);
     }
-    if (bindings.active(handle)) active.set(handle.identity, object);
+    if (!retained && bindings.active(handle)) active.set(handle.identity, object);
     return object;
   }
   function overridden(handle,type,method) {
@@ -155,16 +160,17 @@ function installClassBindings(scope, bindings, session, options = {}) {
       const callback = callbacks?.get(token); callbacks?.delete(token);
       if (callback) callback();
     },
-    dispatch(handle, type, method, args) {
-      const native = original(type, method);
-      if (!overridden(handle,type,method)) return null;
+    dispatch(handle, type, method, args, prototype) {
+      const native = original(prototype || type, method);
+      if (prototype ? scope[prototype].prototype[method] === native : !overridden(handle,type,method)) return null;
       const object = wrap(handle, type);
-      const values=typeof args==='function'?args():args,kinds=argumentKinds.get(native)||[];
-      const value = object[method](...values.map((value,index)=> {
+      const values=typeof args==='function'?args():args,kinds=argumentKinds.get(native);
+      const target = prototype ? scope[prototype].prototype[method] : object[method];
+      const value = target.apply(object, kinds ? values.map((value,index)=> {
         if(kinds[index]==='bytes')return options.bytes?options.bytes(value):new Uint8Array(value);
         if(kinds[index]==='xhr')return options.xhr?options.xhr(value):{...value,response:new Uint8Array(value.response).buffer};
         return value;
-      }));
+      }) : values);
       return { value: returnValues.get(native) ? value : undefined };
     },
     sweep() {

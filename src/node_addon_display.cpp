@@ -229,10 +229,45 @@ napi_value field(napi_env env, napi_callback_info info) try {
     if (args.size() == 3) { if (name == "width") sprite->setWidth(asNumber(env, args[2])); else sprite->setHeight(asNumber(env, args[2])); }
     return number(env, name == "width" ? sprite->width() : sprite->height());
   }
-  if (scalar) { if (args.size() == 3) { *scalar = asNumber(env, args[2]); if (window) { if(name=="openness")window->synchronizeSkinContainer(); window->synchronizeModel(); } } return number(env, *scalar); }
+  if (scalar) { if (args.size() == 3) {
+    const auto value = asNumber(env, args[2]);
+    *scalar = window && (name == "openness" || name == "opacity" || name == "backOpacity" || name == "contentsOpacity") ? std::clamp(value, 0.0, 255.0) : value;
+    if (window) { if(name=="openness")window->synchronizeSkinContainer(); window->synchronizeModel(); }
+  } return number(env, *scalar); }
   if (flag) { if (args.size() == 3) { *flag = asBoolean(env, args[2]); if (window) window->synchronizeModel(); } return boolean(env, *flag); }
   if (integer) { if (args.size() == 3) *integer = asInt32(env, args[2]); return number(env, *integer); }
   throw std::invalid_argument("display field is not bound: " + name);
+} catch (const std::exception& error) { return throwException(env, error); }
+napi_value numericState(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info);
+  if (args.size() != 1) throw std::invalid_argument("numeric state requires a display handle");
+  const auto& owner = display(env, args[0]);
+  auto result = moduleObject(env);
+  const auto expose = [&](const char* name, void* data, std::size_t length, napi_typedarray_type type = napi_float64_array, std::size_t elementSize = sizeof(double)) {
+    auto retained = std::make_unique<DisplayOwner>(owner);
+    napi_value buffer, view;
+    check(env, napi_create_external_arraybuffer(env, data, length * elementSize,
+      [](napi_env, void* , void* hint) { delete static_cast<DisplayOwner*>(hint); },
+      retained.get(), &buffer), "cannot expose display state");
+    retained.release();
+    check(env, napi_create_typedarray(env, type, length, buffer, 0, &view), "cannot view display state");
+    check(env, napi_set_named_property(env, result, name, view), "cannot name display state");
+  };
+  static_assert(sizeof(Point) == 2 * sizeof(double) && offsetof(Point, y) == sizeof(double));
+  auto& node = *owner.node;
+  expose("position", &node.position.x, 2); expose("scale", &node.scale.x, 2);
+  expose("pivot", &node.pivot.x, 2); expose("skew", &node.skew.x, 2);
+  expose("childrenRevision", &node.childrenRevision, 1); expose("parentRevision", &node.parentRevision, 1);
+  expose("rotation", &node.rotation, 1); expose("alpha", &node.alpha, 1);
+  static_assert(sizeof(bool) == 1 && sizeof(int) == 4);
+  expose("visible", &node.visible, 1, napi_uint8_array, sizeof(bool));
+  expose("renderable", &node.renderable, 1, napi_uint8_array, sizeof(bool));
+  expose("z", &node.z, 1, napi_int32_array, sizeof(int));
+  if (auto sprite = std::dynamic_pointer_cast<Sprite>(owner.node)) expose("anchor", &sprite->anchor.x, 2);
+  if (auto tiling = std::dynamic_pointer_cast<TilingSprite>(owner.node)) expose("origin", &tiling->origin.x, 2);
+  else if (auto tilemap = std::dynamic_pointer_cast<Tilemap>(owner.node)) expose("origin", &tilemap->origin.x, 2);
+  else if (auto window = std::dynamic_pointer_cast<BoundWindow>(owner.node)) expose("origin", &window->origin.x, 2);
+  return result;
 } catch (const std::exception& error) { return throwException(env, error); }
 napi_value children(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info); if (args.empty() || args.size() > 2) throw std::invalid_argument("children requires display handle and optional previous list");
@@ -564,9 +599,9 @@ napi_value invoke(napi_env env, napi_callback_info info) try {
       if (std::find(replacement.begin(),replacement.end(),child)==replacement.end()) node.removeChild(child.get());
     for (const auto& child:replacement) {
       if (child->parent && child->parent!=&node) child->parent->removeChild(child.get());
-      child->parent=&node;
+      if (child->parent != &node) { child->parent=&node; ++child->parentRevision; }
     }
-    node.children=std::move(replacement);
+    node.children=std::move(replacement); ++node.childrenRevision;
   } else if (method == "removeChildren") node.removeChildren();
   else if (method == "filters") {
     std::vector<std::shared_ptr<GlitchFilter>> filters;
@@ -956,7 +991,7 @@ void registerDisplayBindings(napi_env env, napi_value exports) {
   auto api = moduleObject(env);
   method(env, api, "open", open); method(env, api, "create", create); method(env, api, "field", field);
   method(env, api, "children", children); method(env, api, "childSnapshot", childSnapshot); method(env, api, "invoke", invoke); method(env, api, "scene", sceneOperation);
-  method(env, api, "input", inputOperation);
+  method(env, api, "input", inputOperation); method(env, api, "numericState", numericState);
   check(env, napi_set_named_property(env, exports, "mvDisplay", api), "cannot export display bindings");
 }
 }

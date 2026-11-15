@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const fs = require('node:fs'), path = require('node:path');
 const { temporaryDirectory } = require('./helpers/temp.cjs');
 const { png } = require('./helpers/png.cjs');
-const { fixture } = require('./helpers/mv-session-fixture.cjs');
+const { fixture, command, variable } = require('./helpers/mv-session-fixture.cjs');
 const { createScriptRuntime } = require('../runner/mv-script-runtime.cjs');
 const native = require(path.resolve(process.argv[2]));
 
@@ -198,11 +198,13 @@ test('native scenes dispatch original methods and retain transferred sprite reso
     const pattern = player.pattern(), direction = player.direction();
     try {
       player.setPattern(2); player.setDirection(6);
-      const width = sprite.patternWidth;
-      let calls = 0;
-      sprite.patternWidth = function() { ++calls; return width.call(this) + 8; };
+      const calls = [], methods = ['patternWidth', 'patternHeight', 'characterBlockX', 'characterPatternX', 'characterBlockY', 'characterPatternY'];
+      for (const name of methods) {
+        const original = sprite[name];
+        sprite[name] = function() { calls.push(name); return original.call(this) + (name === 'patternWidth' ? 8 : 0); };
+      }
       sprite.updateCharacterFrame();
-      assert.ok(calls > 0); assert.equal(sprite._frame.width, 20);
+      assert.deepEqual(calls, methods); assert.equal(sprite._frame.width, 20);
       assert.equal(sprite._frame.x, 100); assert.equal(sprite.characterPatternY(), 2);
     } finally { player.setPattern(pattern); player.setDirection(direction); }
     const scene = new scope.Scene_Base();
@@ -255,6 +257,44 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       assert.equal(scope.Window_BattleActor.prototype.processTouch, scope.Window_Selectable.prototype.processTouch);
       assert.equal(scope.Window_BattleEnemy.prototype.isTouchedInsideFrame, scope.Window_Selectable.prototype.isTouchedInsideFrame);
     } finally { touch.clear(); }
+  });
+  await t.test('custom message rendering runs script converters and waits for ordinary input', async () => {
+    const data = fixture([command(101, ['', 0, 0, 2]), command(401, ['\\M[demo]\\TEST[3]']), variable(13, 77)]);
+    const temporarySession = engine.create(data), dimensions = [scope.Graphics.width, scope.Graphics.height, scope.Graphics.boxWidth, scope.Graphics.boxHeight];
+    engine.attach(temporarySession, { width: 320, height: 240, fontFile: 'font.ttf' });
+    try {
+      const r = createScriptRuntime(engine, temporarySession, { native }); r.installScenes();
+      const s = r.scope, convert = s.Window_Base.prototype.convertEscapeCharacters, escape = s.Window_Message.prototype.processEscapeCharacter;
+      s.SceneManager.catchException = error => { throw error; };
+      s.Window_Base.prototype.convertEscapeCharacters = function(text) { return convert.call(this, text.replace('\\M[demo]', 'Ready')); };
+      let escapes = 0, seen;
+      s.Window_Message.prototype.processEscapeCharacter = function(code, state) {
+        if (code === 'TEST') { escapes++; s.$gameVariables.setValue(17, this.obtainEscapeParam(state)); }
+        else escape.call(this, code, state);
+      };
+      engine.newGame(temporarySession); s.SceneManager.run(s.Scene_Map);
+      let paused = false;
+      for (let frame = 0; frame < 250; frame++) {
+        r.step();
+        const window = s.SceneManager._scene?._messageWindow;
+        if (window?._textState) seen = window._textState.text;
+        if (window?.isOpen() && window.pause && window._waitCount === 0) { paused = true; break; }
+        await new Promise(resolve => setImmediate(resolve));
+      }
+      assert.equal(paused, true);
+      assert.ok(seen.startsWith('Ready')); assert.equal(seen.includes('M[demo]'), false);
+      assert.equal(escapes, 1); assert.equal(s.$gameVariables.value(17), 3);
+      assert.equal(s.$gameMessage.isBusy(), true); assert.equal(s.$gameVariables.value(13), 0);
+      s.Window_Base.prototype.convertEscapeCharacters = convert;
+      s.Window_Message.prototype.processEscapeCharacter = escape;
+      s.Input._onKeyDown({ keyCode: 13, preventDefault() {} }); r.step();
+      s.Input._onKeyUp({ keyCode: 13 });
+      for (let frame = 0; frame < 30 && s.$gameVariables.value(13) !== 77; frame++) r.step();
+      assert.equal(s.$gameVariables.value(13), 77);
+    } finally {
+      engine.dispose(temporarySession); scope.Graphics.initialize(dimensions[0], dimensions[1]);
+      scope.Graphics.boxWidth = dimensions[2]; scope.Graphics.boxHeight = dimensions[3];
+    }
   });
   await t.test('message helpers share native waits and clear the final input pause', () => {
     const message = new scope.Window_Message();
@@ -332,20 +372,109 @@ test('native scenes dispatch original methods and retain transferred sprite reso
   });
   await t.test('script frames pump image managers once and direct native calls still progress loads', () => {
     const temporarySession=engine.create(fixture([]));
+    let collections = 0;
+    const connect = engine.connectRuntime;
+    engine.connectRuntime = function(owner, callbacks) {
+      const collect = callbacks.collect;
+      callbacks.collect = function(...args) { ++collections; return collect(...args); };
+      return connect(owner, callbacks);
+    };
+    let r;
+    try { r = createScriptRuntime(engine, temporarySession, { native }); }
+    finally { engine.connectRuntime = connect; }
     try {
-      const r=createScriptRuntime(engine,temporarySession,{native});r.installScenes();engine.newGame(temporarySession);
+      engine.attach(temporarySession,{width:32,height:32,fontFile:'font.ttf'});
+      r.installScenes();engine.newGame(temporarySession);
       let updates=0;r.scope.ImageManager.update=()=>{++updates;};
       r.scope.SceneManager.update=()=>{
         r.scope.ImageManager.update();
         engine.mapScene(temporarySession,'destination',{});
         engine.mapScene(temporarySession,'sceneChange');
       };
-      r.step({});assert.equal(updates,1);
-      engine.mapScene(temporarySession,'destination',{});assert.equal(updates,2);
+      r.step({});assert.equal(updates,1);assert.equal(collections,1);
+      engine.mapScene(temporarySession,'destination',{});assert.equal(updates,2);assert.equal(collections,2);
       const sentinel=new Error('frame failure');r.scope.SceneManager.update=()=>{throw sentinel;};
       assert.throws(()=>r.step({}),error=>error===sentinel);
-      engine.mapScene(temporarySession,'destination',{});assert.equal(updates,3);
+      assert.equal(collections,3, 'failed frames still release frame bookkeeping');
+      engine.mapScene(temporarySession,'destination',{});assert.equal(updates,3);assert.equal(collections,4);
     } finally {engine.dispose(temporarySession);}
+  });
+  await t.test('submitted renders prepare filters once and retain render-time filter state', () => {
+    const temporarySession = engine.create(fixture([]));
+    engine.attach(temporarySession, { width: 32, height: 32, fontFile: 'font.ttf' });
+    try {
+      const r = createScriptRuntime(engine, temporarySession, { native }); r.installScenes();
+      const guest = r.scope, stage = new guest.Container(), filter = { value: 1 }, seen = [];
+      guest.PMJS = { rpgmaker: { nativeFilters: { compile(object) { if (object === stage) seen.push(filter.value); return []; } } } };
+      stage.filters = [filter]; seen.length = 0;
+      guest.SceneManager.update = function() { guest.Graphics.render(stage); filter.value = 2; };
+      r.step({});
+      assert.deepEqual(seen, [1], 'preparation observes the state submitted for rendering');
+      seen.length = 0;
+      guest.SceneManager.update = function() {};
+      r.step({});
+      assert.deepEqual(seen, [2], 'frames without a submitted render still prepare current filter state');
+    } finally { engine.dispose(temporarySession); }
+  });
+  await t.test('live display state preserves native changes, guest accessors and setter errors', () => {
+    const display = runtime.installScenes(), api = native.mvDisplay;
+    const node = new scope.Container(), handle = display.displayHandle(node);
+    node.position.set(3, 7); node.scale.set(2, 4);
+    assert.equal(api.field(handle, 'x'), 3);
+    assert.equal(api.field(handle, 'scaleY'), 4);
+    api.field(handle, 'x', 11); api.field(handle, 'scaleY', 5);
+    api.field(handle, 'visible', false); api.field(handle, 'z', -4);
+    assert.equal(node.x, 11); assert.equal(node.position.x, 11);
+    assert.equal(node.scale.y, 5); assert.equal(node.visible, false); assert.equal(node.z, -4);
+    for (const value of [-0, NaN, Infinity, -Infinity]) {
+      node.x = value; assert.ok(Object.is(api.field(handle, 'x'), value));
+    }
+    node.x = 11;
+    node.alpha = 0.25; node.rotation = -0.5; node.renderable = false;
+    assert.equal(api.field(handle, 'alpha'), 0.25);
+    assert.equal(api.field(handle, 'rotation'), -0.5);
+    assert.equal(api.field(handle, 'renderable'), false);
+    assert.throws(() => { node.x = '3'; }, /numeric/);
+    assert.throws(() => { node.visible = 1; }, /boolean/);
+    Object.defineProperty(node, 'x', { configurable: true, get() { return 29; } });
+    assert.equal(node.x, 29); assert.equal(node.position.x, 11);
+    const window = new scope.Window_Base(1, 2, 30, 30);
+    window.x = 9; window.position.y = 6; window.visible = false;
+    assert.equal(window.x, 9); assert.equal(window.y, 6); assert.equal(window.visible, false);
+  });
+  await t.test('sprite bitmap reads follow native replacement, clearing and load notifications', () => {
+    const api = native.mvDisplay, display = runtime.installScenes();
+    const sprite = new scope.Sprite(), handle = display.displayHandle(sprite);
+    const bitmaps = native.mvBitmap.open(), first = native.mvBitmap.create(bitmaps, 2, 3), second = native.mvBitmap.create(bitmaps, 4, 5);
+    let loads = 0;
+    const onLoad = sprite._onBitmapLoad;
+    sprite._onBitmapLoad = function(bitmap) { ++loads; onLoad.call(this, bitmap); };
+    api.invoke(handle, 'bitmap', first);
+    const original = sprite.bitmap;
+    assert.equal(original.width, 2); assert.equal(original.height, 3); assert.equal(loads, 1);
+    api.invoke(handle, 'bitmap', second);
+    assert.notEqual(sprite.bitmap, original); assert.equal(sprite.bitmap.width, 4); assert.equal(loads, 2);
+    api.invoke(handle, 'bitmap', null);
+    assert.equal(sprite.bitmap, null); assert.equal(loads, 2);
+    assert.equal(original.width, 2, 'replacement preserves externally retained bitmap state');
+  });
+  await t.test('numeric views retain native state after handle collection and removal', { skip: !global.gc }, async () => {
+    const api = native.mvDisplay, display = api.open(), parent = api.create(display, 'container');
+    let child = api.create(display, 'container');
+    api.invoke(parent, 'add', child);
+    const view = api.numericState(child), weak = new WeakRef(child);
+    child = null;
+    for (let cycle = 0; cycle < 4; ++cycle) { await new Promise(resolve => setImmediate(resolve)); global.gc(); }
+    assert.equal(weak.deref(), undefined);
+    view.position[0] = 17;
+    let revived = api.children(parent)[0];
+    assert.equal(api.field(revived, 'x'), 17);
+    api.field(revived, 'rotation', 0.75);
+    assert.equal(view.rotation[0], 0.75);
+    api.invoke(parent, 'remove', revived); revived = null;
+    for (let cycle = 0; cycle < 3; ++cycle) { await new Promise(resolve => setImmediate(resolve)); global.gc(); }
+    view.position[1] = -8;
+    assert.equal(view.position[0], 17); assert.equal(view.position[1], -8);
   });
   await t.test('native handle reuse remains weak and retained resources survive handle collection', {skip:!global.gc}, async () => {
     const api=native.mvDisplay, display=api.open(), graphics=native.mvBitmap.open();
@@ -367,6 +496,22 @@ test('native scenes dispatch original methods and retain transferred sprite reso
     api.invoke(sprite,'bitmap',null);
     assert.equal(native.mvBitmap.invoke(revived,'getPixel',0,0),'#ff0000');
     assert.equal(api.invoke(sprite,'bitmap'),null);
+  });
+  await t.test('world transforms observe native ancestor changes and live script getters', () => {
+    const root=new scope.Container(),parent=new scope.Container(),child=new scope.Container();
+    root.addChild(parent);parent.addChild(child);
+    root.x=10;root.y=20;root.rotation=Math.PI/2;
+    parent.x=3;parent.y=4;parent.scale.set(2,3);
+    child.x=5;child.y=6;child.pivot.set(1,2);
+    const check=(expected)=>{
+      const matrix=child.worldTransform;
+      for(const [field,value] of Object.entries(expected))assert.ok(Math.abs(matrix[field]-value)<1e-9,field);
+    };
+    check({a:0,b:2,c:-3,d:0,tx:-6,ty:31});
+    const bindings=runtime.installScenes();native.mvDisplay.field(bindings.displayHandle(parent),'x',8);
+    check({tx:-6,ty:36});
+    let x=9;Object.defineProperty(child,'x',{configurable:true,get(){return x;}});
+    check({tx:-6,ty:44});x=11;check({tx:-6,ty:48});
   });
   await t.test('unchanged child handles are reused and native reordering invalidates them', () => {
     const bindings = runtime.installScenes(), api = native.mvDisplay;
@@ -391,6 +536,28 @@ test('native scenes dispatch original methods and retain transferred sprite reso
     list.push(second);
     assert.equal(other.children.length, 0);
     assert.equal(list[1], second);
+  });
+  await t.test('hierarchy reads observe native mutations inside removal and update callbacks', () => {
+    const display = runtime.installScenes(), api = native.mvDisplay;
+    const parent = new scope.Container(), other = new scope.Container(), child = new scope.Container();
+    parent.addChild(child);
+    const list = parent.children;
+    assert.equal(child.parent, parent); assert.equal(list.length, 1);
+    const observed = [];
+    child.emit = function(event, previous) { if (event === 'removed') observed.push([previous, child.parent, list.length]); };
+    api.invoke(display.displayHandle(other), 'add', display.displayHandle(child));
+    assert.equal(observed.length, 1);
+    assert.deepEqual(observed[0], [parent, null, 0]);
+    assert.equal(child.parent, other);
+    assert.equal(other.children[0], child);
+    api.invoke(display.displayHandle(other), 'removeChildren');
+    assert.equal(child.parent, null); assert.equal(other.children.length, 0);
+    const first = new scope.Container(), second = new scope.Container();
+    parent.addChild(first, second);
+    first.update = function() { api.invoke(display.displayHandle(parent), 'remove', display.displayHandle(second)); };
+    let updated = false; second.update = () => { updated = true; };
+    parent.updateChildren();
+    assert.equal(updated, false); assert.equal(list.length, 1); assert.equal(second.parent, null);
   });
   await t.test('mutable children preserve array identity and change native ordering and snapshots', () => {
     const stage = new scope.Stage(), red = new scope.Sprite(new scope.Bitmap(32, 32)), green = new scope.Sprite(new scope.Bitmap(32, 32));
@@ -477,6 +644,22 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       aliased.addChild(sprite); first.addChild(aliased); first.removeChild(aliased);
       assert.equal(calls,2); assert.equal(aliased.children.length,0); assert.equal(sprite.parent,null);
     } finally { scope.WindowLayer.prototype.onRemoveAsAChild = original; }
+  });
+  await t.test('map name windows keep their frame hidden and fade the current map name', () => {
+    const map = scope.$gameMap, displayName = map.displayName, enabled = map.isNameDisplayEnabled;
+    map.displayName = () => 'Meadow'; map.isNameDisplayEnabled = () => true;
+    try {
+      const window = new scope.Window_MapName(), names = [];
+      assert.equal(window.opacity, 0); assert.equal(window.contentsOpacity, 0);
+      window.update(); assert.equal(window.contentsOpacity, 0);
+      window.drawText = text => names.push(text);
+      window.open(); assert.deepEqual(names, ['Meadow']);
+      for (let frame = 0; frame < 20; frame++) window.update();
+      assert.equal(window.contentsOpacity, 255);
+      window.close(); window.update(); assert.equal(window.contentsOpacity, 239);
+      for (let frame = 0; frame < 20; frame++) window.update();
+      assert.equal(window.contentsOpacity, 0); assert.equal(window.opacity, 0);
+    } finally { map.displayName = displayName; map.isNameDisplayEnabled = enabled; }
   });
   await t.test('window mask overrides and window classification control native overlap clearing', () => {
     const dimensions=['width','height','boxWidth','boxHeight'].map(name=>scope.Graphics[name]);
@@ -750,6 +933,41 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       assert.equal(sprite.bitmap,bitmap);
     } finally {engine.dispose(textureSession);}
   });
+  await t.test('native map updates enter current parent hooks without reentering derived aliases', () => {
+    const data = fixture([]); data.maps[1].events = [null];
+    const mapSession = engine.create(data);
+    try {
+      engine.attach(mapSession, { width: 32, height: 32, fontFile: 'font.ttf' });
+      const r = createScriptRuntime(engine, mapSession, { native }); r.installScenes();
+      engine.newGame(mapSession); engine.playerTransfer(mapSession, 'perform');
+      const { Spriteset_Base, Spriteset_Map, Sprite_Picture } = r.scope;
+      const set = new Spriteset_Map(), trace = [], effect = { enabled: true };
+      const child = new Sprite_Picture(1); child.update = () => trace.push('child'); set.addChild(child);
+      const mapUpdate = Spriteset_Map.prototype.update;
+      Spriteset_Map.prototype.update = function() {
+        trace.push('map-before'); mapUpdate.call(this); trace.push('map-after');
+      };
+      const tilesetUpdate = set.updateTileset;
+      set.updateTileset = function() { trace.push('tileset'); tilesetUpdate.call(this); };
+      const baseUpdate = Spriteset_Base.prototype.update;
+      Spriteset_Base.prototype.update = function() {
+        trace.push('base-before'); baseUpdate.call(this); effect.enabled = false; trace.push('base-after');
+      };
+      set.update();
+      assert.deepEqual(trace, ['map-before', 'base-before', 'child', 'base-after', 'tileset', 'map-after']);
+      assert.equal(effect.enabled, false);
+      const parentAlias = Spriteset_Base.prototype.update;
+      Spriteset_Base.prototype.update = function() { trace.push('outer'); parentAlias.call(this); };
+      trace.length = 0; set.update();
+      assert.deepEqual(trace, ['map-before', 'outer', 'base-before', 'child', 'base-after', 'tileset', 'map-after']);
+      const failure = new Error('Parent update failed');
+      Spriteset_Base.prototype.update = function() { throw failure; };
+      assert.throws(() => set.update(), error => error === failure);
+      Spriteset_Base.prototype.update = baseUpdate;
+      trace.length = 0; set.update();
+      assert.deepEqual(trace, ['map-before', 'child', 'tileset', 'map-after']);
+    } finally { engine.dispose(mapSession); }
+  });
   await t.test('map tilesets compare authored identity across native calls and reload replacements', () => {
     const data = fixture([]);
     data.maps[1].events = [null];
@@ -774,6 +992,79 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       data.tilesets[1].flags[0] = 2;
       set.updateTileset(); assert.equal(loads, 1, 'in-place edits preserve stock object identity');
       set.loadTileset(); assert.equal(loads, 2, 'authored explicit reloads still execute');
+    } finally { engine.dispose(mapSession); }
+  });
+  await t.test('Tiled repaints preserve object coordinates, live edits and update-count animation', async () => {
+    const mapData = fixture([]);
+    mapData.system.startX = mapData.system.startY = 0;
+    Object.assign(mapData.maps[1], { width: 2, height: 1, events: [null], data: Array(12).fill(0) });
+    const tiled = { width: 2, height: 1, tilewidth: 48, tileheight: 48, layers: [
+      { type: 'tilelayer', visible: true, properties: {}, data: [1, 0] },
+      { type: 'objectgroup', visible: true, properties: { zIndex: 3, priority: 0 }, objects: [
+        { gid: 2, visible: true, x: 3.5, y: 17.25, width: 80, height: 12, properties: { eventId: 2 } }
+      ] }
+    ], tilesets: [{ firstgid: 1, tilecount: 2, columns: 2, tilewidth: 48, tileheight: 48,
+      image: 'img/tilesets/Parity.png', tiles: {} }] };
+    mapData.tiledMaps = { 1: tiled };
+    const mapSession = engine.create(mapData);
+    try {
+      engine.attach(mapSession, { width: 32, height: 32, fontFile: 'font.ttf' });
+      const r = createScriptRuntime(engine, mapSession, { native }); r.installScenes();
+      r.scope.ImageManager.loadParserTileset = file => r.scope.ImageManager.loadTileset(path.basename(file, '.png'));
+      const guest = value => r.runScript('(' + JSON.stringify(value) + ')');
+      r.scope.$dataMap = guest(mapData.maps[1]);
+      r.scope.$dataTilesets = guest(mapData.tilesets);
+      const source = guest(tiled);
+      engine.tiledInvoke(mapSession, 'bindSource', [1, source]);
+      engine.tiledInvoke(mapSession, 'configure', [{ playerZ: 7 }]);
+      engine.newGame(mapSession); engine.playerTransfer(mapSession, 'perform');
+      r.scope.$gameMap.setDisplayPos(0, 0);
+      const scene = new r.scope.Scene_Map(); scene.createSpriteset();
+      const tilemap = scene._spriteset._tilemap;
+      for (let i = 0; i < 100 && !tilemap.bitmaps[0].isReady(); ++i) {
+        r.scope.ImageManager.update(); await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      assert.equal(tilemap.bitmaps[0].isReady(), true);
+      const capture = () => {
+        native.beginFrame(); r.scope.Graphics.render(scene); engine.present(mapSession); native.renderFrame();
+        return native.canvas.captureSceneRawPremultiplied();
+      };
+      const pixel = (pixels, x, y) => Array.from(pixels.subarray((y * 32 + x) * 4, (y * 32 + x) * 4 + 4));
+      let pixels = capture();
+      assert.deepEqual(pixel(pixels, 0, 0), [0, 0, 255, 255]);
+      assert.deepEqual(pixel(pixels, 4, 6), [255, 0, 0, 255], 'off-grid object uses authored top-left and ignores object scaling');
+      source.layers[1].objects[0].visible = false;
+      source.layers[0].data[0] = 2; tilemap.refresh();
+      pixels = capture();
+      assert.deepEqual(pixel(pixels, 0, 0), [255, 0, 0, 255], 'refresh observes the exposed source, not the published copy');
+      source.layers[0].offsetx = 4.5; tilemap.refresh();
+      pixels = capture();
+      assert.deepEqual(pixel(pixels, 0, 0), [0, 0, 0, 255], 'refresh observes fractional layer offsets');
+      assert.deepEqual(pixel(pixels, 5, 0), [255, 0, 0, 255]);
+      source.layers[0].offsetx = 0; source.layers[0].data[1] = 2;
+      r.scope.$gameMap.setDisplayPos(1, 0);
+      assert.deepEqual(pixel(capture(), 0, 0), [255, 0, 0, 255], 'camera repaint reads cells changed after publication');
+      r.scope.$gameMap.setDisplayPos(0, 0);
+      source.layers[0].visible = false; tilemap.refresh();
+      assert.deepEqual(pixel(capture(), 0, 0), [0, 0, 0, 255]);
+      source.layers[0].visible = true; source.layers[0].data[0] = 1;
+      source.tilesets[0].tiles['0'] = guest({ animation: [{ tileid: 0, duration: 75 }, { tileid: 1, duration: 75 }] });
+      tilemap.animationCount = 0; tilemap.refresh();
+      for (let update = 0; update <= 10; ++update) {
+        if (update) tilemap.update();
+        const expected = update >= 5 && update < 10 ? [255, 0, 0, 255] : [0, 0, 255, 255];
+        assert.deepEqual(pixel(capture(), 0, 0), expected, '75ms frames last five tilemap updates: ' + update);
+      }
+      assert.equal(engine.snapshot(mapSession).ticks, 0, 'animation follows tilemap updates independently of session ticks');
+      delete source.tilesets[0].tiles['0'];
+      source.layers[0].properties = guest({ zIndex: 7, priority: 1 });
+      const player = scene._spriteset._characterSprites.find(sprite => sprite._character === r.scope.$gamePlayer);
+      player.bitmap = new r.scope.Bitmap(48, 48); player.bitmap.fillAll('#00ff00');
+      player.setFrame(0, 0, 48, 48); player.anchor.set(0, 0); player.position.set(0, 0); player.z = 7; player.visible = true;
+      tilemap.refresh();
+      assert.deepEqual(pixel(capture(), 0, 0), [0, 0, 255, 255], 'priority tiles interleave at the configured player Z');
+      source.layers[0].properties.priority = 0; tilemap.refresh();
+      assert.deepEqual(pixel(capture(), 0, 0), [0, 255, 0, 255], 'ordinary layers remain below the character');
     } finally { engine.dispose(mapSession); }
   });
   await t.test('engine tilemap mutations control native map data, origin, dimensions and bitmap ownership', async () => {
@@ -1488,6 +1779,104 @@ test('native scenes dispatch original methods and retain transferred sprite reso
   second.update = () => { assert.throws(() => scope.SceneManager.update(), /already running/); };
   runtime.step();
   scope.SceneManager.catchException = catchException;
+  await t.test('configured game fonts are shared by native bitmaps and plugin canvas text', () => {
+    const { createRuntimeBindings } = require('../runner/native-plugins.cjs');
+    const { createStorage } = require('../runner/storage.cjs');
+    const temporarySession = engine.create(data);
+    const settings = { width: 32, height: 32, fontFile: 'font.ttf' };
+    engine.attach(temporarySession, settings);
+    try {
+      const r = createRuntimeBindings(engine, temporarySession, { native, gameRoot: root, settings, database: data,
+        storage: createStorage(path.join(root, 'font-save')) });
+      const guest = r.scope;
+      assert.equal(guest.PMJS.fonts.resolveDescriptor('18px GameFont').faces[0].path, 'font.ttf');
+      const bitmap = new guest.Bitmap(128, 32);
+      bitmap._drawTextOutline('Title', 0, 20, 128);
+      bitmap._drawTextBody('Title', 0, 20, 128);
+      assert.ok(bitmap.measureTextWidth('Title') > 0);
+      guest.Graphics.loadFont('menu-font', 'font.ttf');
+      assert.equal(guest.PMJS.fonts.resolveDescriptor('18px menu-font').faces[0].family, 'menu-font');
+      bitmap.fontFace = 'menu-font'; bitmap._drawTextBody('Menu', 0, 20, 128);
+      guest.PMJS.fonts.registerFace('styled', 'font.ttf', { style: 'italic', weight: 700 });
+      bitmap.fontFace = 'styled'; bitmap.measureTextWidth('Styled');
+      assert.equal(guest.PMJS.fonts.getRegisteredFaces().styled.weight, 700);
+    } finally { engine.dispose(temporarySession); }
+  });
+  await t.test('title creation invokes overridden layers and builds a usable command window', () => {
+    const title = new scope.Scene_Title(), calls = [];
+    for (const name of ['createBackground', 'createForeground', 'createWindowLayer', 'createCommandWindow']) {
+      const original = title[name];
+      title[name] = function(...args) { calls.push(name); return original.apply(this, args); };
+    }
+    const create = scope.Scene_Title.prototype.create;
+    title.create = function() { create.call(this); calls.push('plugin'); };
+    title.create();
+    assert.deepEqual(calls, ['createBackground', 'createForeground', 'createWindowLayer', 'createCommandWindow', 'plugin']);
+    assert.equal(title._commandWindow.parent, title._windowLayer);
+    assert.ok(title._commandWindow.maxItems() > 0);
+    assert.equal(title._commandWindow.openness, 0);
+    assert.equal(title._commandWindow.x, (scope.Graphics.boxWidth - title._commandWindow.width) / 2);
+    title._commandWindow.openness = 255; title._commandWindow.close(); assert.equal(title.isBusy(), true);
+    title._commandWindow.open(); title._commandWindow.openness = 255;
+    assert.equal(title.isBusy(), false);
+  });
+  await t.test('window filter compilation receives the current layer area', () => {
+    const previous = scope.PMJS;
+    const areas = [];
+    scope.PMJS = { rpgmaker: { nativeFilters: { compile(node) {
+      if (!(node instanceof scope.WindowLayer)) return [];
+      areas.push([node.filterArea.x, node.filterArea.y, node.filterArea.width, node.filterArea.height]);
+      return [];
+    } } } };
+    try {
+      const layer = new scope.WindowLayer();
+      layer.move(12, 20, 240, 180); layer.filters = [];
+      assert.deepEqual(areas.at(-1), [12, 20, 240, 180]);
+      layer.move(32, 40, 300, 200); layer.filters = [];
+      assert.deepEqual(areas.at(-1), [32, 40, 300, 200]);
+      const stage = new scope.Stage(), retained = new scope.WindowLayer();
+      stage.addChild(layer);
+      retained.move(1, 2, 3, 4); retained.filters = [];
+      areas.length = 0;
+      scope.Graphics.render(stage);
+      assert.deepEqual(areas, [[32, 40, 300, 200]], 'detached retained layers are not prepared');
+      retained.move(5, 6, 7, 8); stage.addChild(retained);
+      areas.length = 0; scope.Graphics.render(stage);
+      assert.deepEqual(areas, [[32, 40, 300, 200], [5, 6, 7, 8]], 'reattached layers use current bounds');
+      stage.removeChild(retained);
+      areas.length = 0; scope.Graphics.render(retained);
+      assert.deepEqual(areas, [[5, 6, 7, 8]], 'explicit rendering prepares a detached tree');
+      retained.move(9, 10, 11, 12);
+      areas.length = 0; scope.Bitmap.snap(retained);
+      assert.deepEqual(areas, [[9, 10, 11, 12]], 'snapshots prepare a retained tree on demand');
+      retained.filters = null;
+      layer.filters = null;
+    } finally { scope.PMJS = previous; }
+  });
+  await t.test('title rendering and keyboard navigation use the constructed display tree', async () => {
+    const temporarySession = engine.create(data);
+    engine.attach(temporarySession, { width: 32, height: 32, fontFile: 'font.ttf' });
+    try {
+      const r = createScriptRuntime(engine, temporarySession, { native }); r.installScenes();
+      const guest = r.scope, frames = [];
+      const render = guest.Graphics.render;
+      guest.Graphics.render = function(stage) { frames.push(stage); return render.call(this, stage); };
+      guest.SceneManager.run(guest.Scene_Title);
+      for (let frame = 0; frame < 150; ++frame) {
+        r.step();
+        if (guest.SceneManager.isCurrentSceneStarted() && !guest.SceneManager._scene.isBusy() && guest.SceneManager._scene._commandWindow.isOpen()) break;
+        await new Promise(resolve => setImmediate(resolve));
+      }
+      const title = guest.SceneManager._scene;
+      assert.equal(guest.SceneManager.isCurrentSceneStarted(), true);
+      assert.equal(guest.SceneManager.nativeDriven, false);
+      assert.equal(frames.at(-1), title);
+      const command = title._commandWindow, index = command.index();
+      guest.Input._onKeyDown({ keyCode: 40, preventDefault() {} }); r.step();
+      assert.equal(command.index(), (index + 1) % command.maxItems());
+      guest.Input._onKeyUp({ keyCode: 40 }); r.step();
+    } finally { engine.dispose(temporarySession); }
+  });
   await t.test('native transitions commit through script lifecycle, readiness and one scene stack', async () => {
     const data = fixture([]);
     data.system.versionId = 0;
@@ -1538,7 +1927,8 @@ test('native scenes dispatch original methods and retain transferred sprite reso
       scope.DataManager.setupNewGame();
       assert.equal(engine.snapshot(session).scene, 0, 'game object initialization does not change the active scene');
       for (let frame = 0; frame < 40; ++frame) { runtime.step({}); await new Promise(resolve => setImmediate(resolve)); }
-      runtime.step({ ok: true });
+      scope.Input._onKeyDown({ keyCode: 13, preventDefault() {} }); runtime.step({});
+      scope.Input._onKeyUp({ keyCode: 13 });
       for (let frame = 0; frame < 100 && !scope.SceneManager.isSceneChanging(); ++frame) { runtime.step({}); await new Promise(resolve => setImmediate(resolve)); }
       assert.equal(scope.SceneManager.isNextScene(scope.Scene_Map), true);
       const title = scope.SceneManager._scene, pendingTick = engine.snapshot(session).ticks;

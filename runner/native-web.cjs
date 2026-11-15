@@ -31,6 +31,7 @@ function installWeb(runtime, { native, storage, gameRoot, settings, config = {} 
     'pmjs-web/filesystem.js', 'pmjs-web/modules.js',
     'pmjs-rpgmaker/native-audio.js', 'pmjs-core/achievements.js', 'pmjs-core/steam.js', 'pmjs-plugins/greenworks/compat.js', 'pmjs-plugins/steamworks/compat.js'
   ]) runtime.runScript(fs.readFileSync(path.join(scripts, file), 'utf8'), file);
+  if (settings.fontFile) runtime.scope.PMJS.fonts.registerFace('GameFont', settings.fontFile, { fromGame: true });
   const html = fs.readFileSync(path.join(gameRoot, 'index.html'), 'utf8');
   for (const match of html.matchAll(/<script\b[^>]*\bsrc\s*=\s*(["'])(.*?)\1/gi)) {
     const file = match[2];

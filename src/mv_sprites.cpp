@@ -378,7 +378,7 @@ core::Rectangle Sprite_Balloon::sourceFrame(std::uint64_t age, int balloonId) {
 
 Value RuntimeBalloon::call(const std::string& method, const Value::Array& arguments) {
   if (auto binding = hooks.lock(); binding && binding->boundMethod)
-    if (auto result = binding->boundMethod(shared_from_this(), method, arguments)) return *result;
+    if (auto result = binding->boundMethod(shared_from_this(), method, arguments, {})) return *result;
   return invoke(method, arguments);
 }
 

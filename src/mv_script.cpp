@@ -69,6 +69,7 @@ Value Session::invokeGameDataBase(const std::string& kind, const std::string& me
     if (method == "initialize") { initializeMap(); return Value::undefined(); }
     if (method == "updateScroll") { updateMapScroll(); return Value::undefined(); }
     if (method == "regionId") {
+      if(tiledEnabled_ && !tiledMapData(mapId_).null())return invokeTiled("region",arguments);
       const int x = arguments.at(0).integer(), y = arguments.at(1).integer(), width = map()["width"].integer(), height = map()["height"].integer();
       return x >= 0 && y >= 0 && x < width && y < height ? map()["data"][(5 * height + y) * width + x].integer() : 0;
     }
@@ -114,7 +115,10 @@ Value Session::invokeGameDataBase(const std::string& kind, const std::string& me
       return tile >= 2048 ? (tile - 2048) / 48 : -1;
     }
     if (method == "tilesetId") return mapState_.tilesetId;
-    if (method == "width" || method == "height" || method == "displayName" || method == "encounterStep") return map()[method];
+    if (method == "width" || method == "height" || method == "displayName" || method == "encounterStep") {
+      if(tiledEnabled_ && !tiledMapData(mapId_).null() && (method=="width"||method=="height"))return invokeTiled(method,{});
+      return map()[method];
+    }
     if (method == "isLoopHorizontal") return loopHorizontal();
     if (method == "isLoopVertical") return loopVertical();
     if (method == "isEventRunning") return interpreter_.running;
@@ -432,9 +436,24 @@ Value Session::invokeGameDataBase(const std::string& kind, const std::string& me
   if (kind == "selfSwitches") {
     if (method == "clear") { selfSwitches_.clear(); return Value::undefined(); }
     if (method == "onChange") { refreshNeeded_ = true; return Value::undefined(); }
+    if (method == "dataKeys") { Value::Array keys; for (const auto& [key, value] : selfSwitches_) { (void)value; keys.emplace_back(key); } return keys; }
+    if (method == "replaceData") {
+      const auto& entries = std::get<Value::Object>(arguments.at(0).data);
+      std::map<std::string, Value> replacement;
+      for (const auto& [key, value] : entries) replacement.emplace(key, value.reference());
+      selfSwitches_ = std::move(replacement); return Value::undefined();
+    }
+    if (method == "rawValue" || method == "rawHas" || method == "rawSet" || method == "rawDelete") {
+      const auto key = arguments.at(0).text();
+      if (method == "rawHas") return selfSwitches_.contains(key);
+      if (method == "rawDelete") { selfSwitches_.erase(key); return Value::undefined(); }
+      if (method == "rawSet") { selfSwitches_[key] = arguments.at(1).reference(); return Value::undefined(); }
+      const auto found = selfSwitches_.find(key);
+      return found == selfSwitches_.end() ? Value::undefined() : found->second.reference();
+    }
     if (arguments.empty() || arguments[0].arrayLength() != 3) throw std::invalid_argument("self switch key requires map, event and letter");
     const auto key = selfKey(arguments[0][0].integer(), arguments[0][1].integer(), arguments[0][2].text());
-    if (method == "value") { const auto found = selfSwitches_.find(key); return found != selfSwitches_.end() && found->second; }
+    if (method == "value") { const auto found = selfSwitches_.find(key); return found != selfSwitches_.end() && std::holds_alternative<bool>(found->second.data) && found->second.boolean(); }
     if (method != "setValue" || arguments.size() != 2) throw std::invalid_argument("self switch operation is not bound: " + method);
     if (arguments[1].boolean()) selfSwitches_[key] = true; else selfSwitches_.erase(key);
     dispatchGameDataMutation(kind, "onChange", {}); return Value::undefined();
@@ -468,8 +487,8 @@ Value Session::invokeGameDataBase(const std::string& kind, const std::string& me
     for (const auto& [key,value] : std::get<Value::Object>(entries.data)) {
       std::size_t consumed; const int id = std::stoi(key,&consumed);
       if (consumed != key.size() || std::to_string(id) != key || id < 0 || id >= count) throw std::invalid_argument("invalid game data array index");
-      if (std::holds_alternative<Value::Array>(value.data) || std::holds_alternative<Value::Object>(value.data)) throw std::invalid_argument("object variable assignment is not bound");
-      replacement.emplace(id,value);
+      if (kind != "variables" && (std::holds_alternative<Value::Array>(value.data) || std::holds_alternative<Value::Object>(value.data))) throw std::invalid_argument("object switch assignment is not bound");
+      replacement.emplace(id,value.reference());
     }
     if (kind == "variables") variables_ = std::move(replacement);
     else { switches_.clear(); for (const auto& [id,value] : replacement) switches_[id] = value.boolean(); }
@@ -487,13 +506,12 @@ Value Session::invokeGameDataBase(const std::string& kind, const std::string& me
     }
     if (method == "rawSet") {
       const auto& value = arguments.at(1);
-      if (std::holds_alternative<Value::Array>(value.data) || std::holds_alternative<Value::Object>(value.data)) throw std::invalid_argument("object variable assignment is not bound");
-      if (kind == "variables") variables_[id] = value; else switches_[id] = value.boolean();
+      if (kind != "variables" && (std::holds_alternative<Value::Array>(value.data) || std::holds_alternative<Value::Object>(value.data))) throw std::invalid_argument("object switch assignment is not bound");
+      if (kind == "variables") variables_[id] = value.reference(); else switches_[id] = value.boolean();
       dataLength = std::max(dataLength,id + 1); return Value::undefined();
     }
     if (!exists) return Value::undefined();
-    const Value value = kind == "variables" ? variables_.at(id) : Value(switches_.at(id));
-    if (std::holds_alternative<Value::Array>(value.data) || std::holds_alternative<Value::Object>(value.data)) throw std::invalid_argument("object variable views are not bound");
+    Value value = kind == "variables" ? variables_.at(id).reference() : Value(switches_.at(id));
     return value;
   }
   if (method == "clear") { if (kind == "variables") variables_.clear(); else switches_.clear(); dataLength = 0; return Value::undefined(); }
@@ -503,14 +521,12 @@ Value Session::invokeGameDataBase(const std::string& kind, const std::string& me
   if (method == "value") {
     if (kind == "switches") { const auto found = switches_.find(id); return found != switches_.end() && found->second; }
     const auto& value = variable(id);
-    if (std::holds_alternative<Value::Array>(value.data) || std::holds_alternative<Value::Object>(value.data))
-      throw std::runtime_error("object variable views are not bound");
-    return value;
+    return value.reference();
   }
   if (method != "setValue" || arguments.size() != 2) throw std::invalid_argument("game data operation is not bound: " + method);
   const auto& names = database_["system"][kind];
   if (id <= 0 || (!names.null() && id >= static_cast<int>(names.arrayLength()))) return Value::undefined();
-  auto value = arguments[1];
+  auto value = arguments[1].reference();
   if (kind == "variables") {
     if (const auto* number = std::get_if<double>(&value.data)) value = std::floor(*number);
     variables_[id] = std::move(value);

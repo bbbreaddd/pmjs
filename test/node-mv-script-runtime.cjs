@@ -28,7 +28,9 @@ test('script variables and switches share native state and dispatch setter overr
   assert.equal(api.snapshot(session).variables[6], 33);
   assert.equal(api.snapshot(session).switches[3], true);
   scope.$gameVariables.setValue(1000, 7); assert.equal(changes, 3);
-  assert.throws(() => scope.$gameVariables.setValue(8, []), /object variable assignment/);
+  const array = [];
+  scope.$gameVariables.setValue(8, array);
+  assert.equal(scope.$gameVariables.value(8), array);
 });
 
 test('raw game-data arrays preserve sparse indexes and bypass setter callbacks', t => {
@@ -46,13 +48,62 @@ test('raw game-data arrays preserve sparse indexes and bypass setter callbacks',
   variables._data = [, , 9];
   assert.equal(variables._data.length, 3); assert.deepEqual(Object.keys(variables._data), ['2']);
   assert.equal(variables.value(4), 0); assert.equal(variables.value(2), 9);
-  assert.throws(() => { variables._data = [1, {}]; }, /object variable assignment/);
+  assert.throws(() => { variables._data = [1, Symbol()]; }, /JSON values/);
   assert.equal(variables.value(2), 9); assert.equal(variables._data.length, 3);
   switches.clear(); assert.equal(data.length, 0);
   assert.equal(Array.isArray(data), true);
   const before = variables._data.length;
   assert.throws(() => { variables._data.length = 1.5; }, /array length/);
   assert.equal(variables._data.length, before);
+});
+
+test('object variables retain live aliases through reads, replacement and save restoration', t => {
+  const { session, scope } = create(t, []), variables = scope.$gameVariables;
+  const array = [{ values: [1, 2] }], object = { list: array };
+  let changes = 0; scope.Game_Variables.prototype.onChange = () => { changes++; };
+  variables.setValue(8, array); variables.setValue(9, object);
+  assert.equal(variables.value(8), array); assert.equal(variables._data[8], array);
+  assert.equal(variables.value(9), object); assert.equal(variables.value(9).list, array);
+  array[0].values.push(3); object.flag = true;
+  assert.equal(changes, 2, 'mutating stored objects does not invoke the variable setter');
+  const saved = api.save(session);
+  assert.deepEqual(saved.variables._data[8], [{ values: [1, 2, 3] }]);
+  assert.equal(saved.variables._data[9].flag, true);
+  variables._data = [array, object];
+  assert.equal(variables._data[0], array); assert.equal(variables.value(1), object);
+  variables.clear(); array.push('retained');
+  assert.equal(array.length, 2, 'clearing variables does not destroy caller-owned objects');
+  assert.equal(saved.variables._data[8].length, 1, 'save contents are independent snapshots');
+  api.load(session, saved);
+  const restored = variables.value(8);
+  assert.notEqual(restored, array);
+  assert.equal(variables.value(8), restored); assert.equal(variables._data[8], restored);
+  restored[0].values.push(4);
+  assert.deepEqual(api.save(session).variables._data[8], [{ values: [1, 2, 3, 4] }]);
+  const raw = variables._data[9];
+  assert.equal(variables.value(9), raw);
+  raw.list.push(5);
+  assert.equal(api.save(session).variables._data[9].list.length, 2);
+});
+
+test('native collision and touch triggers honor event position overrides', t => {
+  for (const normalPriority of [true, false]) {
+    const data = fixture([variable(13, 42)]), source = data.maps[1].events[1];
+    source.x = 0; source.y = 0; source.pages[0].trigger = 1; source.pages[0].priorityType = normalPriority ? 1 : 0;
+    const session = api.create(data); t.after(() => api.dispose(session));
+    const { scope } = createScriptRuntime(api, session); api.newGame(session);
+    const original = scope.Game_Event.prototype.pos;
+    scope.Game_Event.prototype.pos = function(x, y) {
+      return this.eventId() === 1 ? y === 0 && x >= 0 && x < 5 : original.call(this, x, y);
+    };
+    const player = scope.$gamePlayer;
+    assert.equal(player.canPass(1, 1, 8), !normalPriority, 'expanded events preserve their collision priority');
+    if (!normalPriority) {
+      for (let frame = 0; frame < 40 && !scope.$gameVariables.value(13); frame++) api.step(session, { direction: 8 });
+      assert.equal(player.y, 0);
+      assert.equal(scope.$gameVariables.value(13), 42, 'touch starts within the expanded event footprint');
+    }
+  }
 });
 
 test('screen and self-switch script methods operate on the native save state', t => {
@@ -71,6 +122,29 @@ test('screen and self-switch script methods operate on the native save state', t
   const saved = api.save(session);
   assert.deepEqual(saved.screen._tone, [40, 50, 60, 0]);
   assert.equal(saved.selfSwitches._data['1,1,A'], true);
+});
+
+test('raw self-switch data preserves numeric self-variables and strict boolean switches', t => {
+  const { session, scope } = create(t, []), switches = scope.$gameSelfSwitches, data = switches._data;
+  const key = [1, 1, 'SELF VARIABLE 8'];
+  data[key] = 0; data['1,1,SELF VARIABLE 9'] = 4.5;
+  data['1,1,A'] = 1; assert.equal(switches.value([1, 1, 'A']), false);
+  switches.setValue([1, 1, 'A'], true); assert.equal(data['1,1,A'], true);
+  const array = [1, 2]; data['1,1,SELF VARIABLE 10'] = array;
+  assert.equal(data['1,1,SELF VARIABLE 10'], array); array.push(3);
+  const saved = api.save(session);
+  assert.equal(saved.selfSwitches._data[key], 0);
+  assert.equal(saved.selfSwitches._data['1,1,SELF VARIABLE 9'], 4.5);
+  assert.deepEqual(saved.selfSwitches._data['1,1,SELF VARIABLE 10'], [1, 2, 3]);
+  switches.clear(); assert.deepEqual(Object.keys(data), []);
+  api.load(session, saved);
+  assert.equal(data[key], 0); assert.equal(data['1,1,SELF VARIABLE 9'], 4.5);
+  const restored = data['1,1,SELF VARIABLE 10'];
+  assert.equal(data['1,1,SELF VARIABLE 10'], restored); restored.push(4);
+  assert.deepEqual(api.save(session).selfSwitches._data['1,1,SELF VARIABLE 10'], [1, 2, 3, 4]);
+  delete data['1,1,A']; assert.equal(switches.value([1, 1, 'A']), false);
+  switches._data = { '1,1,B': true };
+  assert.equal(switches.value([1, 1, 'B']), true); assert.equal(data[key], undefined);
 });
 
 test('script variable operands evaluate with the current native interpreter', t => {
@@ -879,6 +953,32 @@ test('native show-text dispatches message overrides and exposes the same native 
   api.acknowledge(session);
   for (let i = 0; i < 16 && api.snapshot(session).variables[9] === undefined; i++) step();
   assert.equal(api.snapshot(session).variables[9], 42);
+});
+
+test('message text arrays remain live and retained views survive clearing', t => {
+  const { session, scope } = create(t, []), message = scope.$gameMessage;
+  const texts = message._texts;
+  assert.equal(Array.isArray(texts), true);
+  message.add('first'); assert.equal(texts.length, 1);
+  message.add('second'); assert.equal(texts.length, 2);
+  assert.equal(message._texts, texts);
+  texts[0] = 'changed'; texts.push('third');
+  assert.equal(message.allText(), 'changed\nsecond\nthird');
+  assert.deepEqual(api.snapshot(session).message.lines, ['changed', 'second', 'third']);
+  texts.splice(1, 1);
+  assert.equal(message.allText(), 'changed\nthird');
+  assert.throws(() => { texts.length = 1.5; }, /array length/);
+  message.clear();
+  assert.notEqual(message._texts, texts);
+  assert.deepEqual(Array.from(texts), ['changed', 'third']);
+  texts.push('retained');
+  assert.equal(message.hasText(), false);
+  assert.equal(message.isBusy(), false);
+  message._texts = ['replacement'];
+  assert.equal(message.allText(), 'replacement');
+  message._texts.length = 0;
+  assert.equal(message.hasText(), false);
+  assert.equal(message.isBusy(), false);
 });
 
 test('native choices expose retained live arrays and invoke the interpreter callback once', t => {

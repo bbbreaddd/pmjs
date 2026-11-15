@@ -2,7 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-function loadTiledMap(root, source) {
+function loadTiledMap(root, source, mapData = null) {
   root = path.resolve(root);
   function relative(base, file) {
     const resolved = path.resolve(base, file);
@@ -15,7 +15,7 @@ function loadTiledMap(root, source) {
     try { return JSON.parse(fs.readFileSync(file.resolved, 'utf8')); }
     catch (error) { throw new Error(`${file.name}: ${error.message}`); }
   }
-  const file = relative(root, source), map = read(file);
+  const file = relative(root, source), map = mapData || read(file);
   if (map.orientation !== 'orthogonal' || map.renderorder !== 'right-down' || map.infinite)
     throw new Error(`${source}: unsupported map orientation or layout`);
   for (const field of ['width', 'height', 'tilewidth', 'tileheight'])
@@ -31,24 +31,14 @@ function loadTiledMap(root, source) {
     const at = `${source}.layers[${index}]`;
     if (layer.type === 'objectgroup') {
       if (!Array.isArray(layer.objects)) throw new Error(`${at}: unsupported layer representation`);
-      const result = [], props = properties(layer.properties);
-      let current;
       for (const [i, object] of layer.objects.entries()) {
-        if (object.visible === false) continue;
-        const x = object.x / map.tilewidth, y = (object.y - object.height) / map.tileheight;
-        if (!Number.isInteger(object.gid) || object.gid < 1 || object.gid > 0x1fffffff || object.rotation ||
-            object.width !== map.tilewidth || object.height !== map.tileheight || !Number.isInteger(x) || !Number.isInteger(y) ||
-            x < 0 || y < 0 || x >= map.width || y >= map.height || Object.keys(properties(object.properties)).length)
-          throw new Error(`${at}.objects[${i}]: unsupported tile object geometry or properties`);
-        const cell = y * map.width + x;
-        if (!current || current.data[cell]) {
-          current = { ...layer, type: 'tilelayer', width: map.width, height: map.height,
-            properties: { ...props, priority: props.priority || 1 }, data: Array(map.width * map.height).fill(0) };
-          delete current.objects; result.push(current);
-        }
-        current.data[cell] = object.gid;
+        if (!object.gid || object.visible === false) continue;
+        if (!Number.isInteger(object.gid) || object.gid < 1 || object.gid > 0x1fffffff ||
+            ![object.x, object.y, object.height].every(Number.isFinite))
+          throw new Error(`${at}.objects[${i}]: invalid tile object`);
       }
-      return result;
+      return [{ ...layer, properties: properties(layer.properties),
+        objects: layer.objects.map(object => ({ ...object, properties: properties(object.properties) })) }];
     }
     if (layer.type !== 'tilelayer' || layer.encoding || layer.compression || layer.chunks)
       throw new Error(`${at}: unsupported layer representation`);
@@ -59,7 +49,8 @@ function loadTiledMap(root, source) {
       if (!Number.isInteger(gid) || gid < 0 || gid > 0x1fffffff)
         throw new Error(`${at}.data[${i}]: unsupported tile ID or flip flags`);
     const props = properties(layer.properties);
-    return [{ ...layer, visible: props.collision || props.regionId || props.toLevel ? false : layer.visible, properties: props }];
+    return [{ ...layer, visible: props.collision || props.regionId || props.toLevel ||
+      props.reflectionSurface || props.reflectionCast ? false : layer.visible, properties: props }];
   });
   const tilesets = (map.tilesets || []).map((entry, index) => {
     const at = `${source}.tilesets[${index}]`;
@@ -87,48 +78,15 @@ function loadTiledMap(root, source) {
   for (let i = 1; i < tilesets.length; ++i)
     if (tilesets[i].firstgid < tilesets[i-1].firstgid + tilesets[i-1].tilecount)
       throw new Error(`${source}: overlapping tileset ranges`);
-  for (const [index, layer] of layers.entries()) for (const [i, gid] of layer.data.entries())
-    if (gid && !tilesets.some(set => gid >= set.firstgid && gid < set.firstgid + set.tilecount))
-      throw new Error(`${source}.layers[${index}].data[${i}]: unknown tile ID`);
-  const passage = Array(map.width * map.height).fill(0);
-  const regions = Array(map.width * map.height).fill(0);
-  const blocked = new Set();
-  function arrowBits(value, at) {
-    let bits = 0;
-    for (const direction of String(value).split('&').map(word => word.trim().toLowerCase())) {
-      const bit = { down: 1, left: 2, right: 4, up: 8 }[direction];
-      if (!bit) throw new Error(`${at}: unsupported collision direction ${direction}`);
-      bits ^= bit;
-    }
-    return bits;
-  }
   for (const [index, layer] of layers.entries()) {
-    const props = layer.properties, kind = props.collision, at = `${source}.layers[${index}]`;
-    if (props.regionId) {
-      if (Number(props.level || 0) !== 0) throw new Error(`${at}: unsupported region level`);
-      for (const [cell, gid] of layer.data.entries()) if (gid) {
-        const set = tilesets.find(set => gid >= set.firstgid && gid < set.firstgid + set.tilecount), id = gid - set.firstgid;
-        const tile = { ...set.tileproperties[id], ...set.tiles[id]?.properties };
-        regions[cell] = Number(props.regionId === 'tile-base' ? tile.regionId || 0 : props.regionId);
-        if (!Number.isInteger(regions[cell]) || regions[cell] < 0) throw new Error(`${at}: invalid region ID`);
-      }
-    }
-    if (!kind) continue;
-    if (!['full', 'tile-base', 'arrow'].includes(kind) || Number(props.level || 0) !== 0)
-      throw new Error(`${at}: unsupported collision layout or level`);
-    for (const [cell, gid] of layer.data.entries()) {
-      if (!gid) continue;
-      const set = tilesets.find(set => gid >= set.firstgid && gid < set.firstgid + set.tilecount);
-      const id = gid - set.firstgid;
-      const tile = { ...set.tileproperties[id], ...set.tiles[id]?.properties };
-      if (kind === 'full' || (kind === 'tile-base' && tile.collision === 'full')) blocked.add(cell);
-      else if (kind === 'tile-base' && tile.collision && tile.collision !== 'none')
-        throw new Error(`${at}.data[${cell}]: unsupported tile collision ${tile.collision}`);
-      const arrows = kind === 'tile-base' ? tile.arrowImpassable : kind === 'arrow' ? props.arrowImpassable : null;
-      if (arrows) passage[cell] ^= arrowBits(arrows, at);
-    }
+    const ids = layer.type === 'objectgroup' ? layer.objects.map(object => object.gid || 0) : layer.data;
+    for (const [i, gid] of ids.entries())
+      if (gid && !tilesets.some(set => gid >= set.firstgid && gid < set.firstgid + set.tilecount))
+        throw new Error(`${source}.layers[${index}].${layer.type === 'objectgroup' ? 'objects' : 'data'}[${i}]: unknown tile ID`);
   }
-  for (const cell of blocked) passage[cell] = 15;
-  return { ...map, layers, tilesets, passage, regions };
+  const sourceLayers = (map.layers || []).map(layer => ({ ...layer, properties: properties(layer.properties),
+    ...(layer.objects ? { objects: layer.objects.map(object => ({ ...object, properties: properties(object.properties) })) } : {}) }));
+  return { ...map, layers, sourceLayers, tilesets };
+
 }
 module.exports = { loadTiledMap };

@@ -25,6 +25,7 @@ class Container {
   Container& operator=(const Container&) = delete;
   int z=0;
   std::uint64_t displayId=0;
+  double childrenRevision=0, parentRevision=0;
   Point position, scale{1,1}, pivot, skew;
   double rotation=0,alpha=1;
   bool visible=true,renderable=true,interactive=false;

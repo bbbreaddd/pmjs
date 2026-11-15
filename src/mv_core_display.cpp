@@ -35,16 +35,18 @@ void Container::addChildAt(std::shared_ptr<Container> child,std::size_t index) {
   for(auto* p=this;p;p=p->parent)if(p==child.get())throw std::invalid_argument("cyclic display hierarchy");
   if(child->parent)child->parent->removeChild(child.get());
   index=std::min(index,children.size());child->parent=this;children.insert(children.begin()+index,child);
+  ++childrenRevision; ++child->parentRevision;
   const auto added=child->addedHook;if(added&&!destroyingDisplayTree)added(*this);
 }
 std::shared_ptr<Container> Container::removeChild(Container* child) {
   auto it=std::find_if(children.begin(),children.end(),[&](const auto& p){return p.get()==child;});if(it==children.end())return {};
-  auto result=*it;children.erase(it);result->parent=nullptr;result->notifyRemoved(*this);return result;
+  auto result=*it;children.erase(it);result->parent=nullptr;++childrenRevision;++result->parentRevision;result->notifyRemoved(*this);return result;
 }
 void Container::removeChildren() {
   auto removed=std::move(children);
   children.clear();
-  for(auto& child:removed)if(child)child->parent=nullptr;
+  if (!removed.empty()) ++childrenRevision;
+  for(auto& child:removed)if(child){child->parent=nullptr;++child->parentRevision;}
   for(auto& child:removed)if(child)child->notifyRemoved(*this);
 }
 void Container::notifyRemoved(Container& previousParent) {

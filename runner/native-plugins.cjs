@@ -9,7 +9,7 @@ const { installStorage } = require('./native-storage.cjs');
 const { installSaveManager } = require('./native-save-manager.cjs');
 const { installCoreServices } = require('./native-core-services.cjs');
 
-function installPlugins(runtime, gameRoot, manifest, beforePlugins) {
+function installPlugins(runtime, gameRoot, manifest, beforePlugins, nativePlugins = {}) {
   const scope = runtime.scope;
   if (!scope.require) {
     const gameRequire = createRequire(path.resolve(gameRoot, 'package.json'));
@@ -32,9 +32,11 @@ function installPlugins(runtime, gameRoot, manifest, beforePlugins) {
     try {
       while (queue.length) {
         const file = queue.shift();
+        const name = path.basename(file, '.js');
+        const implementation = Object.hasOwn(nativePlugins, name) ? nativePlugins[name] : null;
         try {
-          const source = fs.readFileSync(file, 'utf8');
-          const execute=() => {
+          const source = implementation ? null : fs.readFileSync(file, 'utf8');
+          const execute=implementation ? () => { implementation(runtime); manager._nativeScripts.push(name); } : () => {
             if (scope.pmjsExecuteScriptElement) {
               const script = scope.document.createElement('script');
               script.src = 'file:///game/' + path.relative(gameRoot, file).split(path.sep).join('/');
@@ -42,11 +44,11 @@ function installPlugins(runtime, gameRoot, manifest, beforePlugins) {
               scope.pmjsExecuteScriptElement(script);
             } else runtime.runScript(source, file);
           };
-          if (scope.PMJS?.plugins) scope.PMJS.plugins.execute(path.basename(file,'.js'),execute);
+          if (scope.PMJS?.plugins) scope.PMJS.plugins.execute(name,execute);
           else execute();
         }
         catch (error) {
-          if (error.code !== 'ENOENT' && error.code !== 'EACCES') throw error;
+          if (implementation || error.code !== 'ENOENT' && error.code !== 'EACCES') throw error;
           manager.onError({ target: { _url: file } });
         }
       }
@@ -57,6 +59,7 @@ function installPlugins(runtime, gameRoot, manifest, beforePlugins) {
   Object.assign(manager, {
     _path: 'js/plugins/',
     _scripts: runtime.runScript('[]'),
+    _nativeScripts: runtime.runScript('[]'),
     _parameters: runtime.runScript('({})'),
     _errorUrls: runtime.runScript('[]'),
     parameters(name) { return this._parameters[String(name).toLowerCase()] || runtime.runScript('({})'); },
@@ -111,7 +114,7 @@ function createRuntimeBindings(engine, session, options) {
 
 function createPluginRuntime(engine, session, options) {
   const runtime = createRuntimeBindings(engine, session, options);
-  installPlugins(runtime, options.gameRoot, options.manifest, options.beforePlugins);
+  installPlugins(runtime, options.gameRoot, options.manifest, options.beforePlugins, options.nativePlugins);
   return runtime;
 }
 

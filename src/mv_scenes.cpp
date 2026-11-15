@@ -246,6 +246,7 @@ void Session::updateUi(const Input& inputState, bool ok, bool cancel, int direct
   auto leaveMenuSubScene = [&] { if (SceneManager::hasPrevious(*this)) SceneManager::popScene(*this); else SceneManager::gotoScene(*this, Scene::menu); sound(2); };
   auto leaveEventScene = [&] { if (SceneManager::hasPrevious(*this)) SceneManager::popScene(*this); else SceneManager::gotoScene(*this, Scene::map); };
   if (message_.busy) {
+    if (scriptMessageWindow_) return;
     if (message_.scrolling) {
       if (Window_ScrollText::updateMessage(message_,inputState,*this)) { message_ = {}; messageAge_ = 0; }
       return;

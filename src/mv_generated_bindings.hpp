@@ -6,7 +6,7 @@ struct GeneratedRuntimeObject : RuntimeBoundObject, std::enable_shared_from_this
   std::weak_ptr<RuntimeHooks> hooks;
   bool dispatchOverride(const std::string& method);
   bool hasOverride(const std::string& method);
-  std::optional<Value> dispatchValue(const std::string& method, const Value::Array& arguments = {});
+  std::optional<Value> dispatchValue(const std::string& method, const Value::Array& arguments = {}, const std::string& prototype = {});
   void listen(const BindingEvent& event, std::uint32_t token);
   void clearListeners();
   std::shared_ptr<GeneratedRuntimeObject> nativeLease();

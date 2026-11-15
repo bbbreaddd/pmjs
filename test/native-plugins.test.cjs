@@ -55,6 +55,28 @@ test('native plugins execute once in enabled order with parameters and shared pr
   assert.equal(r.scope.order.length, 3);
 });
 
+test('native plugin implementations replace source loading at the manifest position', () => {
+  const root = game({ Later: 'order.push("later");', toString: 'order.push("source");' });
+  const r = runtime(); r.scope.order = r.runScript('[]');
+  const nativePlugins = { YED_Tiled(current) {
+    assert.equal(current, r);
+    assert.equal(current.scope.PluginManager.parameters('YED_Tiled').setting, 'native');
+    current.scope.order.push('native');
+  } };
+  const manager = installPlugins(r, root, { plugins: [plugin('YED_Tiled', true, { setting: 'native' }),
+    plugin('Later'), plugin('toString')] }, undefined, nativePlugins);
+  assert.deepEqual(Array.from(r.scope.order), ['native', 'later', 'source']);
+  assert.deepEqual(Array.from(manager._errorUrls), []);
+  assert.deepEqual(Array.from(manager._nativeScripts), ['YED_Tiled']);
+  assert.equal(fs.existsSync(path.join(root, 'js/plugins/YED_Tiled.js')), false);
+});
+
+test('native implementation errors preserve their resource failure instead of reporting a missing plugin', () => {
+  const r = runtime(), failure = Object.assign(new Error('native resource missing'), { code: 'ENOENT' });
+  assert.throws(() => installPlugins(r, game({}), { plugins: [plugin('Native')] }, undefined,
+    { Native() { throw failure; } }), error => error === failure);
+});
+
 test('native plugin failures stop startup and preserve the thrown error and source filename', () => {
   const root = game({ Bad: `throw pluginFailure;`, Later: `ranLater = true;` });
   const r = runtime(), failure = new Error('plugin failure');

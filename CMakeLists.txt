@@ -115,6 +115,8 @@ set(PMJS_RUNTIME_SOURCES
   src/mv_core_utils.cpp
   src/mv_core_audio_graphics.cpp
   src/mv_engine.cpp
+  src/mv_tiled_map.cpp
+  patches/omori/character-presentation.cpp
   src/mv_expression.cpp
   src/mv_script.cpp
   src/mv_script_entities.cpp
@@ -269,6 +271,8 @@ if(BUILD_TESTING)
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-script-runtime.cjs" $<TARGET_FILE:pmjs_native>)
   add_test(NAME node-mv-database COMMAND ${NODE_EXECUTABLE} --expose-gc
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-database.cjs" $<TARGET_FILE:pmjs_native>)
+  add_test(NAME node-mv-tiled COMMAND ${NODE_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-tiled.cjs" $<TARGET_FILE:pmjs_native>)
   add_test(NAME node-mv-battle-manager COMMAND ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-battle-manager.cjs" $<TARGET_FILE:pmjs_native>)
   add_test(NAME node-mv-save-manager COMMAND ${NODE_EXECUTABLE}
@@ -284,6 +288,9 @@ if(BUILD_TESTING)
   add_test(NAME node-mv-scenes COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-scenes.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-mv-scenes PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy" FIXTURES_REQUIRED pmjs_assets)
+  add_test(NAME node-mv-character-presentation COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE} --expose-gc
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-character-presentation.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
+  set_tests_properties(node-mv-character-presentation PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy" FIXTURES_REQUIRED pmjs_assets)
   add_test(NAME node-shadow-tiles COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-shadow-tiles.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-shadow-tiles PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy" FIXTURES_REQUIRED pmjs_assets)

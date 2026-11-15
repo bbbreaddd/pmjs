@@ -24,6 +24,28 @@ function setup(t, configure = () => {}) {
   return { session, scope, runtime, root };
 }
 
+test('saving a lazily published map preserves sparse live event slots', t => {
+  const data = fixture([]), map = data.maps[1];
+  map.events[4] = { ...map.events[1], id: 4, x: 2, y: 3 };
+  delete data.maps;
+  const session = api.create(data); t.after(() => api.dispose(session));
+  api.databaseInvoke(session, 'publishMap', 1, map);
+  api.newGame(session); api.playerTransfer(session, 'perform');
+  const saved = api.save(session);
+  assert.equal(saved.map._events.length, 5);
+  assert.equal(saved.map._events[1]._eventId, 1);
+  assert.equal(saved.map._events[2], null);
+  assert.equal(saved.map._events[3], null);
+  assert.equal(saved.map._events[4]._eventId, 4);
+  assert.equal(saved.map._events[4]._x, 2);
+  api.load(session, saved);
+  assert.deepEqual(api.save(session).map._events, saved.map._events);
+  map.events.length = 2;
+  const retained = api.save(session);
+  assert.equal(retained.map._events.length, 5);
+  assert.equal(retained.map._events[4]._eventId, 4);
+});
+
 test('native parameters read nested edits, array changes, record and table replacements', t => {
   const { session, scope, runtime, root } = setup(t);
   const hp = () => api.snapshot(session).actors[1].parameters[0];
@@ -161,4 +183,19 @@ test('replaced records and database-owned session cycles can be collected', asyn
   for (let cycle = 0; cycle < 3; ++cycle) { await new Promise(resolve => setImmediate(resolve)); global.gc(); }
   assert.equal(old.deref(), undefined);
   assert.equal(orphan.deref(), undefined, 'database references do not root a session through its own JavaScript graph');
+});
+
+test('frame-scoped readers observe edits and replacements before the frame ends', t => {
+  const { session, scope } = setup(t);
+  const hp = () => api.snapshot(session).actors[1].parameters[0];
+  api.scriptFrame(session, 'begin');
+  try {
+    assert.equal(hp(), 10);
+    scope.$dataClasses[1].params[0][1] = 31;
+    assert.equal(hp(), 31);
+    scope.$dataClasses[1] = { ...scope.$dataClasses[1], params: Array.from({ length: 8 }, () => [0, 77]) };
+    assert.equal(hp(), 77);
+  } finally { api.scriptFrame(session, 'end'); }
+  assert.equal(hp(), 77);
+  assert.throws(() => api.scriptFrame(session, 'end'), /not active/);
 });

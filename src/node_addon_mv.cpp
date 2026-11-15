@@ -1,5 +1,8 @@
 #include "node_addon_internal.hpp"
+#include "bridge_trace.hpp"
+#include <unordered_map>
 #include "mv_engine.hpp"
+#include "mv_tiled_map.hpp"
 #include "mv_presentation.hpp"
 #include "mv_core_input.hpp"
 #include "mv_core_types.hpp"
@@ -8,10 +11,13 @@
 #include "mv_sprites.hpp"
 #include "mv_generated_bindings.hpp"
 #include "mv_bound_sprites.hpp"
+#include "../patches/omori/character-presentation.hpp"
 #include "mv_windows.hpp"
 #include "mv_window_bindings.hpp"
 #include <cstring>
 #include <cmath>
+#include <string_view>
+#include <unordered_map>
 
 namespace pmjs::addon {
 namespace {
@@ -91,6 +97,9 @@ napi_value writeValue(napi_env env, const mv::Value& value) {
   }
   return result;
 }
+struct NativePresentationProgram;
+struct EngineSession;
+void collectCharacterPresentation(EngineSession&);
 struct EngineSession {
   struct RuntimeReference {
     napi_ref reference;
@@ -98,6 +107,7 @@ struct EngineSession {
   };
   std::shared_ptr<const int> runtimeOwner = std::make_shared<const int>(0);
   int runtimeCalls = 0, sceneCalls = 0;
+  unsigned scriptFrames = 0;
   std::uint64_t nextResourceLoader=0;
   bool stepping = false;
   bool touchPrepared = false;
@@ -107,7 +117,9 @@ struct EngineSession {
   napi_ref runtimeSelf = nullptr;
   std::map<std::uint64_t, RuntimeReference> runtimeReferences;
   std::shared_ptr<DatabaseGraph> database;
+  std::shared_ptr<NativePresentationProgram> characterPresentation;
   ~EngineSession() {
+    characterPresentation.reset();
     disconnectDatabase(database);
     if (session) session->setRuntimeHooks({});
     for (const auto& [id, ref] : runtimeReferences) { (void)id; napi_delete_reference(env, ref.reference); }
@@ -148,7 +160,7 @@ EngineSession& session(napi_env env, napi_value object) {
   EngineSession* value = nullptr;
   check(env, napi_unwrap(env, object, reinterpret_cast<void**>(&value)), "invalid engine session");
   if (!value || !value->session) throw std::runtime_error("engine session is disposed");
-  if (!value->stepping && !value->runtimeCalls && !value->sceneCalls) collectDatabase(value->database);
+  if (!value->stepping && !value->runtimeCalls && !value->sceneCalls && !value->scriptFrames) collectDatabase(value->database);
   return *value;
 }
 struct DatabaseGraph {
@@ -186,12 +198,13 @@ struct DatabaseReader : mv::ValueReader {
   napi_env env;
   napi_ref reference = nullptr;
   std::string identity;
-  bool isArray = false, overlay = false;
+  bool isArray = false, overlay = false, sourceRooted = true;
   std::shared_ptr<mv::ValueReader> fallback;
   mutable std::set<std::string> knownFields;
   mutable std::map<std::string, std::weak_ptr<mv::Value>> fields;
+  mutable std::map<std::string, std::shared_ptr<mv::Value>> borrowedFields;
   mutable std::weak_ptr<mv::Value::Array> items;
-  DatabaseReader(const std::shared_ptr<DatabaseGraph>& context, napi_value object, bool root) : graph(context), env(context->env), overlay(root) {
+  DatabaseReader(const std::shared_ptr<DatabaseGraph>& context, napi_value object, bool root, bool retainSource=true) : graph(context), env(context->env), overlay(root), sourceRooted(retainSource) {
     identity = std::to_string(++context->nextIdentity);
     check(env, napi_is_array(env, object, &isArray), "cannot inspect database collection");
     if (overlay) {
@@ -203,11 +216,11 @@ struct DatabaseReader : mv::ValueReader {
         knownFields.insert(asString(env, key));
       }
     }
-    check(env, napi_set_named_property(env, context->references(), identity.c_str(), object), "cannot retain database object");
+    if(sourceRooted)check(env, napi_set_named_property(env, context->references(), identity.c_str(), object), "cannot retain database object");
     check(env, napi_create_reference(env, object, 0, &reference), "cannot reference database object");
   }
   ~DatabaseReader() override {
-    if (const auto context = graph.lock()) {
+    if (const auto context = graph.lock(); context && sourceRooted) {
       napi_value roots = nullptr;
       if (napi_get_reference_value(env, context->roots, &roots) == napi_ok && roots) {
         napi_value key; bool removed;
@@ -239,15 +252,19 @@ struct DatabaseReader : mv::ValueReader {
     auto owner = context();
     mv::Value current;
     napi_valuetype type; check(env, napi_typeof(env, value, &type), "cannot inspect database value");
-    auto previous = fields[key].lock();
+    auto previous = sourceRooted ? fields[key].lock() : borrowedFields[key];
     if (type == napi_object) {
       if (previous && previous->reader) {
         const auto reader = std::dynamic_pointer_cast<DatabaseReader>(previous->reader);
         bool same = false;
-        if (reader) check(env, napi_strict_equals(env, reader->object(), value, &same), "cannot compare database objects");
+        if (reader) {
+          napi_value object=nullptr;
+          check(env,napi_get_reference_value(env,reader->reference,&object),"cannot retrieve cached database object");
+          if(object)check(env,napi_strict_equals(env,object,value,&same),"cannot compare database objects");
+        }
         if (same) return previous.get();
       }
-      auto reader = std::make_shared<DatabaseReader>(owner, value, false);
+      auto reader = std::make_shared<DatabaseReader>(owner, value, false, sourceRooted);
       current.data = reader->isArray ? mv::Value(mv::Value::Array{}).data : mv::Value(mv::Value::Object{}).data;
       current.reader = std::move(reader);
     } else {
@@ -255,10 +272,12 @@ struct DatabaseReader : mv::ValueReader {
       if (previous && sameDatabaseValue(*previous, current)) return previous.get();
     }
     auto result = owner->pin(std::make_shared<mv::Value>(std::move(current)));
-    fields[key] = result;
+    if(sourceRooted)fields[key] = result;
+    else borrowedFields[key] = result;
     return result.get();
   }
   const mv::Value* field(const std::string& key) const override {
+    bridge_trace::Scope trace("read:"+key);
     auto owner = context(); RuntimeCallScope call(*owner->owner);
     auto source = object();
     if (overlay) {
@@ -362,6 +381,7 @@ napi_value runtimeHandle(EngineSession& owner, const std::shared_ptr<mv::Runtime
   return result;
 }
 napi_value callRuntime(EngineSession& owner, const char* methodName, const std::vector<napi_value>& args) {
+  bridge_trace::Scope trace(std::string("callback:")+methodName);
   auto env = owner.env;
   RuntimeCallScope callScope(owner);
   napi_value self = nullptr, runtime, method, result;
@@ -546,6 +566,72 @@ napi_value touchInvoke(napi_env env, napi_callback_info info) try {
   }
   return undefined(env);
 } catch (const std::exception& error) { return throwException(env, error); }
+napi_value compileTiledMap(napi_env env, napi_callback_info info) try {
+  const auto args=arguments(env,info);
+  if(args.size()!=2)throw std::invalid_argument("tiled compilation requires map and half-tile mode");
+  return writeValue(env,mv::compileTiledMap(readValue(env,args[0]),asBoolean(env,args[1])));
+} catch(const std::exception& error) { return throwException(env,error); }
+napi_value tiledInvoke(napi_env env, napi_callback_info info) try {
+  const auto args=arguments(env,info);
+  if(args.size()!=3)throw std::invalid_argument("tiled operation requires session, method and arguments");
+  auto& owner=session(env,args[0]);RuntimeCallScope scope(owner);
+  const auto name=asString(env,args[1]);
+  std::uint32_t count;check(env,napi_get_array_length(env,args[2],&count),"cannot read tiled arguments");
+  const bool live=name=="bindReflections"||name=="bindTables"||name=="bindSource";
+  auto parameters=live ? mv::Value(mv::Value::Array(count)) : readValue(env,args[2]);
+  if(live) {
+    if(!owner.database)owner.database=std::make_shared<DatabaseGraph>(env,owner,args[0]);
+    const int index=name=="bindTables"||name=="bindSource" ? 1 : 0;
+    napi_value array;check(env,napi_get_element(env,args[2],index,&array),"cannot read tiled table");
+    auto& values=std::get<mv::Value::Array>(parameters.data);
+    for(int i=0;i<index;++i) { napi_value value;check(env,napi_get_element(env,args[2],i,&value),"cannot read tiled argument");values[i]=readValue(env,value); }
+    napi_valuetype type;check(env,napi_typeof(env,array,&type),"cannot inspect tiled binding");
+    if(type==napi_object || type==napi_function) {
+      values.at(index)=mv::Value(mv::Value::Array{});values.at(index).reader=std::make_shared<DatabaseReader>(owner.database,array,false);
+    } else values.at(index)=readValue(env,array);
+  }
+  return writeValue(env,owner.session->invokeTiled(name,parameters.array()));
+} catch(const std::exception& error) { return throwException(env,error); }
+napi_value tiledApply(napi_env env, napi_callback_info info) try {
+  const auto args=arguments(env,info);
+  if(args.size()!=4)throw std::invalid_argument("tiled update requires session, table, level and array factory");
+  auto& owner=session(env,args[0]);RuntimeCallScope scope(owner);
+  const auto method=asString(env,args[1]);
+  const auto root=[&](const std::string& name) {
+    const auto result=databaseObject(owner.session->tiledRoot(name));
+    if(!result)throw std::invalid_argument("tiled table is not bound: "+name);
+    return result;
+  };
+  const auto initialize=[&](int level,bool dispatch) {
+    if(dispatch&&owner.session->dispatchTiledInitialize(level))return;
+    const auto key=std::to_string(level);napi_value current,truth;
+    check(env,napi_get_named_property(env,root("collision"),key.c_str(),&current),"cannot read tiled level");
+    check(env,napi_coerce_to_bool(env,current,&truth),"cannot inspect tiled level");
+    if(asBoolean(env,truth))return;
+    const int size=owner.session->invokeTiled("width",{}).integer()*owner.session->invokeTiled("height",{}).integer();
+    for(const auto& [name,initial]:std::array<std::pair<const char*,int>,4>{{{"collision",0},{"arrows",15},{"regions",0},{"levelChanges",-1}}}) {
+      napi_value receiver,result;check(env,napi_get_global(env,&receiver),"cannot read array factory receiver");
+      napi_value values[]{number(env,size),number(env,initial)};
+      check(env,napi_call_function(env,receiver,args[3],2,values,&result),"cannot create tiled level table");
+      check(env,napi_set_named_property(env,root(name),key.c_str(),result),"cannot publish tiled level table");
+    }
+  };
+  if(method=="initialize")initialize(asInt32(env,args[2]),false);
+  else {
+    if(method!="collision"&&method!="arrows"&&method!="regions"&&method!="levelChanges")throw std::invalid_argument("unknown tiled update");
+    mv::visitTiledCells(owner.session->tiledSource(),owner.session->tiledHalfTile(),method,[&](int level,int index,int value) {
+      if(index<0) {initialize(level,true);return;}
+      napi_value table;check(env,napi_get_named_property(env,root(method),std::to_string(level).c_str(),&table),"cannot read tiled table");
+      if(method=="arrows") {
+        napi_value previous,converted;check(env,napi_get_element(env,table,index,&previous),"cannot read tiled arrow");
+        check(env,napi_coerce_to_number(env,previous,&converted),"cannot convert tiled arrow");
+        value^=asInt32(env,converted);
+      }
+      check(env,napi_set_element(env,table,index,number(env,value)),"cannot update tiled cell");
+    });
+  }
+  return undefined(env);
+} catch(const std::exception& error) {return throwException(env,error);}
 napi_value databaseInvoke(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info);
   if (args.size() < 2 || args.size() > 4) throw std::invalid_argument("database operation requires session, method and operation arguments");
@@ -622,6 +708,7 @@ napi_value utilsInvoke(napi_env env, napi_callback_info info) try {
   throw std::invalid_argument("utility method is not bound: " + method);
 } catch (const std::exception& error) { return throwException(env, error); }
 void collectRuntime(EngineSession& owner) {
+  collectCharacterPresentation(owner);
   if (!owner.runtimeSelf) return;
   const auto nativeObjects = owner.session->runtimeObjectIdentities();
   napi_value active = moduleObject(owner.env);
@@ -642,8 +729,34 @@ void collectRuntime(EngineSession& owner) {
   }
   callRuntime(owner, "collect", {active});
 }
+napi_value scriptFrame(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info);
+  if (args.size() != 2) throw std::invalid_argument("script frame requires session and phase");
+  auto& owner = session(env, args[0]);
+  const auto phase = asString(env, args[1]);
+  if (phase == "begin") ++owner.scriptFrames;
+  else if (phase == "end") {
+    if (!owner.scriptFrames) throw std::invalid_argument("script frame is not active");
+    if (--owner.scriptFrames == 0) {
+      struct ReleasePins {
+        std::shared_ptr<DatabaseGraph> database;
+        ~ReleasePins() { collectDatabase(database); }
+      } cleanup{owner.database};
+      collectRuntime(owner);
+    }
+  } else throw std::invalid_argument("unknown script frame phase");
+  return undefined(env);
+} catch (const std::exception& error) { return throwException(env, error); }
 void requireRuntimeOwner(EngineSession& owner, napi_value object);
 std::shared_ptr<mv::core::WebAudio> retainAudioBuffer(EngineSession& owner,napi_value value);
+struct PresentationDispatch {
+  bool handled=false;
+  std::optional<mv::Value> value;
+};
+PresentationDispatch dispatchCharacterPresentation(EngineSession&,const std::shared_ptr<mv::RuntimeBoundObject>&,const std::string&,const mv::Value::Array&);
+std::optional<bool> characterPresentationOverride(EngineSession&,const std::shared_ptr<mv::RuntimeBoundObject>&,const std::string&);
+std::optional<std::array<double,2>> nativeCharacterPosition(EngineSession&,const std::shared_ptr<mv::RuntimeCharacter>&);
+std::optional<int> nativeCharacterZ(EngineSession&,const std::shared_ptr<mv::RuntimeCharacter>&);
 napi_value connectRuntime(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info);
   if (args.size() != 2) throw std::invalid_argument("connectRuntime requires session and callbacks");
@@ -693,10 +806,16 @@ napi_value connectRuntime(napi_env env, napi_callback_info info) try {
     return asBoolean(owner.env, callRuntime(owner, "actorSpriteHome", {runtimeHandle(owner, object), number(owner.env, index)}));
   };
   hooks->boundOverride = [&owner](const auto& object,const std::string& method) {
+    if(const auto bound=std::dynamic_pointer_cast<mv::RuntimeBoundObject>(object))
+      if(const auto native=characterPresentationOverride(owner,bound,method))return *native;
     return asBoolean(owner.env,callRuntime(owner,"boundOverride",{runtimeHandle(owner,object),string(owner.env,method)}));
   };
-  hooks->boundMethod = [&owner](const auto& object, const std::string& method, const mv::Value::Array& arguments) -> std::optional<mv::Value> {
-    auto result = callRuntime(owner, "boundMethod", {runtimeHandle(owner, object), string(owner.env, method), writeValue(owner.env, arguments)});
+  hooks->boundMethod = [&owner](const auto& object, const std::string& method, const mv::Value::Array& arguments, const std::string& prototype) -> std::optional<mv::Value> {
+    if(const auto bound=std::dynamic_pointer_cast<mv::RuntimeBoundObject>(object); bound && prototype.empty()) {
+      auto native=dispatchCharacterPresentation(owner,bound,method,arguments);
+      if(native.handled)return std::move(native.value);
+    }
+    auto result = callRuntime(owner, "boundMethod", {runtimeHandle(owner, object), string(owner.env, method), writeValue(owner.env, arguments), string(owner.env, prototype)});
     napi_valuetype type; check(owner.env, napi_typeof(owner.env, result, &type), "cannot inspect method override");
     if (type == napi_null) return {};
     napi_value value; check(owner.env, napi_get_named_property(owner.env, result, "value", &value), "cannot read method result");
@@ -722,6 +841,8 @@ napi_value connectRuntime(napi_env env, napi_callback_info info) try {
     return readValue(owner.env,value);
   };
   hooks->characterPosition = [&owner](const auto& object) -> std::optional<std::array<double, 2>> {
+    if(const auto character=std::dynamic_pointer_cast<mv::RuntimeCharacter>(object))
+      if(const auto value=nativeCharacterPosition(owner,character))return value;
     const auto result = callRuntime(owner, "characterPosition", {runtimeHandle(owner, object)});
     napi_valuetype type; check(owner.env, napi_typeof(owner.env, result, &type), "cannot inspect character position result");
     if (type == napi_undefined || type == napi_null) return {};
@@ -739,6 +860,16 @@ napi_value connectRuntime(napi_env env, napi_callback_info info) try {
   };
   hooks->characterLifecycle = [&owner](const auto& object, const std::string& method) {
     return asBoolean(owner.env, callRuntime(owner, "characterLifecycle", {runtimeHandle(owner, object), string(owner.env, method)}));
+  };
+  hooks->characterZ = [&owner](const auto& object)->std::optional<int> {
+    if(const auto character=std::dynamic_pointer_cast<mv::RuntimeCharacter>(object))
+      if(const auto value=nativeCharacterZ(owner,character))return value;
+    const auto result=callRuntime(owner,"characterZ",{runtimeHandle(owner,object)});napi_valuetype type;
+    check(owner.env,napi_typeof(owner.env,result,&type),"cannot inspect character z");
+    return type==napi_undefined||type==napi_null ? std::nullopt : std::optional<int>(asInt32(owner.env,result));
+  };
+  hooks->characterMethod = [&owner](const auto& object, const std::string& method, const auto& values) {
+    return asBoolean(owner.env,callRuntime(owner,"characterMethod",{runtimeHandle(owner,object),string(owner.env,method),writeValue(owner.env,values)}));
   };
   hooks->actorLifecycle = [&owner](const auto& object, const std::string& method, const auto& values) {
     return asBoolean(owner.env, callRuntime(owner, "actorLifecycle", {runtimeHandle(owner, object), string(owner.env, method), writeValue(owner.env, values)}));
@@ -1245,6 +1376,10 @@ napi_value messageChoices(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info, 1); auto& owner = session(env, args.at(0));
   return runtimeHandle(owner, owner.session->messageChoices());
 } catch (const std::exception& error) { return throwException(env, error); }
+napi_value messageTexts(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info, 1); auto& owner = session(env, args.at(0));
+  return runtimeHandle(owner, owner.session->messageTexts());
+} catch (const std::exception& error) { return throwException(env, error); }
 napi_value interpreterOperand(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info, 5); auto& owner = session(env, args.at(0)); requireRuntimeOwner(owner, args.at(1));
   RuntimeCallScope callScope(owner);
@@ -1288,19 +1423,20 @@ napi_value collectionInfo(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info, 1);
   const auto object = runtimePayload(env, args.at(0)).object;
   mv::Value::Array keys;
-  bool array = false, branch = false;
+  bool array = false, branch = false, mutableArray = false;
   if (const auto branches = std::dynamic_pointer_cast<mv::RuntimeBranches>(object)) {
     branch = true;
     for (const auto& [key, value] : branches->values) { (void)value; keys.emplace_back(std::to_string(key)); }
   } else {
     const CommandCollection collection(object);
+    mutableArray = collection.list->mutableArray;
     const auto& value = collection.value();
     if (const auto items = std::get_if<mv::Value::Array>(&value.data)) {
       array = true;
       for (std::size_t i = 0; i < items->size(); ++i) keys.emplace_back(std::to_string(i));
     } else for (const auto& [key, item] : std::get<mv::Value::Object>(value.data)) { (void)item; keys.emplace_back(key); }
   }
-  return writeValue(env, mv::Value::Object{{"array", array}, {"branch", branch}, {"keys", std::move(keys)}});
+  return writeValue(env, mv::Value::Object{{"array", array}, {"branch", branch}, {"mutableArray", mutableArray}, {"keys", std::move(keys)}});
 } catch (const std::exception& error) { return throwException(env, error); }
 napi_value collectionField(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info);
@@ -1322,6 +1458,24 @@ napi_value collectionField(napi_env env, napi_callback_info info) try {
     return it == branches->values.end() ? undefined(env) : writeValue(env, it->second);
   }
   const CommandCollection collection(object);
+  if (collection.list->mutableArray) {
+    auto& items = std::get<mv::Value::Array>(collection.value().data);
+    if (key == "length") {
+      if (replacement) {
+        const double length = replacement->number(-1);
+        if (length < 0 || length > 2147483647 || length != std::floor(length)) throw std::invalid_argument("invalid collection array length");
+        items.resize(static_cast<std::size_t>(length), mv::Value::undefined());
+      }
+      if (replacement) owner.session->messageTextsChanged(collection.list);
+      return number(env, items.size());
+    }
+    const auto index = static_cast<std::size_t>(branchKey(key));
+    if (replacement) {
+      if (items.size() <= index) items.resize(index + 1, mv::Value::undefined());
+      items[index] = *replacement; owner.session->messageTextsChanged(collection.list);
+    }
+    return index < items.size() ? writeValue(env, items[index]) : undefined(env);
+  }
   auto path = collection.path; path.push_back(key);
   auto& value = collection.list->resolve(path);
   const bool container = std::holds_alternative<mv::Value::Array>(value.data) || std::holds_alternative<mv::Value::Object>(value.data);
@@ -1334,6 +1488,13 @@ napi_value collectionField(napi_env env, napi_callback_info info) try {
 napi_value collectionDelete(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info, 3); auto& owner = session(env, args.at(0));
   requireRuntimeOwner(owner, args.at(1));
+  const auto object = runtimePayload(env, args.at(1)).object;
+  if (auto list = std::dynamic_pointer_cast<mv::RuntimeCommandList>(object); list && list->mutableArray) {
+    auto& items = std::get<mv::Value::Array>(list->root.data);
+    const auto index = static_cast<std::size_t>(branchKey(asString(env, args.at(2))));
+    if (index < items.size()) items[index] = mv::Value::undefined();
+    owner.session->messageTextsChanged(list); return boolean(env, true);
+  }
   auto branches = runtimeAs<mv::RuntimeBranches>(env, args.at(1));
   branches->values.erase(branchKey(asString(env, args.at(2))));
   return boolean(env, true);
@@ -1507,7 +1668,7 @@ napi_value stepEngine(napi_env env, napi_callback_info info) {
       ~StepScope() { owner.session->deferScriptScene(); owner.stepping = false; owner.touchPrepared = false; }
     } stepScope(value);
     const auto controls = acquireEngineInput(env, value, args.size() == 2 ? args[1] : nullptr);
-    value.session->step(controls); value.session->deferScriptScene(); collectRuntime(value); return boolean(env, !value.session->finished());
+    value.session->step(controls); value.session->deferScriptScene(); if (!value.scriptFrames) collectRuntime(value); return boolean(env, !value.session->finished());
   } catch (const std::exception& error) { return throwException(env, error); }
 }
 napi_value mapScene(napi_env env, napi_callback_info info) {
@@ -1532,7 +1693,7 @@ napi_value mapScene(napi_env env, napi_callback_info info) {
       if (phase == "destination") value.session->updateMapSceneDestination(*value.mapSceneInput);
       else value.session->stepMapScene(*value.mapSceneInput);
     }
-    value.session->deferScriptScene(); collectRuntime(value);
+    value.session->deferScriptScene(); if (!value.scriptFrames) collectRuntime(value);
     return boolean(env, !value.session->finished());
   } catch (const std::exception& error) { return throwException(env, error); }
 }
@@ -1826,10 +1987,349 @@ const std::vector<mv::ClassBinding>& bindingClasses() {
   }();
   return classes;
 }
-const mv::ClassBinding* findBindingClass(const std::string& name) {
-  for (const auto& binding : bindingClasses()) if (binding.name == name) return &binding;
+const mv::ClassBinding* findBindingClass(std::string_view name) {
+  static const auto classes = [] {
+    std::unordered_map<std::string_view, const mv::ClassBinding*> result;
+    result.reserve(bindingClasses().size());
+    for (const auto& binding : bindingClasses()) result.emplace(binding.name, &binding);
+    return result;
+  }();
+  const auto found = classes.find(name);
+  return found == classes.end() ? nullptr : found->second;
+}
+struct PresentationReference {
+  napi_env env;
+  napi_ref reference=nullptr;
+  PresentationReference(napi_env value,napi_value object,std::uint32_t count=0):env(value) {
+    check(env,napi_create_reference(env,object,count,&reference),"cannot reference character presentation object");
+  }
+  ~PresentationReference() {napi_delete_reference(env,reference);}
+  napi_value get() const {
+    napi_value value=nullptr;check(env,napi_get_reference_value(env,reference,&value),"cannot retrieve character presentation object");return value;
+  }
+};
+struct NativePresentationDefinition;
+struct PresentationMethodCache {
+  std::shared_ptr<PresentationReference> function;
+  const NativePresentationDefinition* definition=nullptr;
+};
+struct NativePresentationDefinition {
+  std::string method,operation,bindingType,baseProperty;
+  const mv::BindingMethod* binding=nullptr;
+  mv::omori::CharacterPresentationQuery query=nullptr;
+  std::shared_ptr<PresentationReference> function,native,baseFunction,baseOwner;
+  mutable PresentationMethodCache baseCache;
+  mutable std::unordered_map<std::string,PresentationMethodCache> methods;
+};
+struct NativePresentationProgram {
+  struct View {std::weak_ptr<mv::RuntimeBoundObject> model;std::shared_ptr<PresentationReference> object;mv::Value receiver;};
+  bool enabled=false;
+  std::shared_ptr<PresentationReference> environment,displayKey;
+  std::vector<std::unique_ptr<NativePresentationDefinition>> definitions;
+  std::unordered_map<std::string,std::vector<const NativePresentationDefinition*>> methods;
+  std::unordered_map<std::uint64_t,View> views;
+  std::unordered_map<const mv::ValueReader*,std::weak_ptr<mv::RuntimeBoundObject>> receiverModels;
+  struct EntityView {std::weak_ptr<mv::RuntimeCharacter> model;std::shared_ptr<PresentationReference> object;mv::Value receiver;};
+  std::unordered_map<std::uint64_t,EntityView> entities;
+  std::unordered_map<std::string,PresentationMethodCache> boundMethods;
+  std::uint64_t nativeCalls=0,nativeFrames=0,scriptCalls=0;
+  mv::Value environmentData;
+};
+void collectCharacterPresentation(EngineSession& owner) {
+  if(!owner.characterPresentation)return;
+  auto& views=owner.characterPresentation->views;
+  for(auto i=views.begin();i!=views.end();)if(i->second.model.expired()) {
+    owner.characterPresentation->receiverModels.erase(i->second.receiver.reader.get());i=views.erase(i);
+  } else ++i;
+  auto& entities=owner.characterPresentation->entities;
+  for(auto i=entities.begin();i!=entities.end();)if(i->second.model.expired())i=entities.erase(i);else ++i;
+}
+napi_value presentationProperty(napi_env env,napi_value object,const std::string& name) {
+  bridge_trace::Scope trace("lookup:"+name);
+  napi_value value;check(env,napi_get_named_property(env,object,name.c_str(),&value),"cannot read character presentation property");return value;
+}
+mv::Value presentationValue(EngineSession& owner,napi_value value,bool retainSource=true) {
+  // Cached views borrow their JS owners instead of keeping the session alive.
+  napi_valuetype type;check(owner.env,napi_typeof(owner.env,value,&type),"cannot inspect character presentation value");
+  if(type!=napi_object)return readValue(owner.env,value);
+  if(!owner.database)throw std::runtime_error("character presentation requires a published database");
+  auto reader=std::make_shared<DatabaseReader>(owner.database,value,false,retainSource);
+  mv::Value result=reader->isArray ? mv::Value(mv::Value::Array{}) : mv::Value(mv::Value::Object{});
+  result.reader=std::move(reader);return result;
+}
+std::shared_ptr<mv::core::Container> presentationDisplay(EngineSession& owner,const mv::Value& receiver) {
+  auto& program=*owner.characterPresentation;
+  if(const auto found=program.receiverModels.find(receiver.reader.get());found!=program.receiverModels.end())
+    if(const auto model=found->second.lock())return model->displayObject();
+  const auto object=writeValue(owner.env,receiver);
+  const auto key=presentationProperty(owner.env,program.displayKey->get(),"key");
+  napi_value handle;check(owner.env,napi_get_property(owner.env,object,key,&handle),"cannot read presentation display handle");
+  napi_valuetype type;check(owner.env,napi_typeof(owner.env,handle,&type),"cannot inspect presentation display handle");
+  return type==napi_undefined ? nullptr : displayForRuntime(owner.env,handle,owner.owner->core);
+}
+mv::Value presentationEntity(EngineSession& owner,const std::shared_ptr<mv::RuntimeCharacter>& character) {
+  auto& entities=owner.characterPresentation->entities;
+  auto found=entities.find(character->identity);
+  if(found==entities.end() || !found->second.object->get()) {
+    callRuntime(owner,"presentationCharacter",{runtimeHandle(owner,character)});found=entities.find(character->identity);
+  }
+  if(found==entities.end())throw std::runtime_error("native character view is unavailable");
+  if(!found->second.receiver.reader)found->second.receiver=presentationValue(owner,found->second.object->get(),false);
+  return found->second.receiver.reference();
+}
+std::shared_ptr<mv::RuntimeCharacter> presentationEntityForValue(EngineSession& owner,const mv::Value& value) {
+  const auto key=presentationProperty(owner.env,owner.characterPresentation->displayKey->get(),"entityKey");
+  napi_value identity;check(owner.env,napi_get_property(owner.env,writeValue(owner.env,value),key,&identity),"cannot identify presentation character");
+  napi_valuetype type;check(owner.env,napi_typeof(owner.env,identity,&type),"cannot inspect presentation character identity");
+  if(type!=napi_number)return {};
+  const auto found=owner.characterPresentation->entities.find(static_cast<std::uint64_t>(asNumber(owner.env,identity)));
+  return found==owner.characterPresentation->entities.end() ? nullptr : found->second.model.lock();
+}
+void tagPresentationEntity(EngineSession& owner,napi_value object,std::uint64_t identity) {
+  const auto key=presentationProperty(owner.env,owner.characterPresentation->displayKey->get(),"entityKey");
+  const napi_property_descriptor field{nullptr,key,nullptr,nullptr,nullptr,number(owner.env,static_cast<double>(identity)),napi_default,nullptr};
+  check(owner.env,napi_define_properties(owner.env,object,1,&field),"cannot identify native presentation character");
+}
+const NativePresentationDefinition* presentationDefinition(EngineSession& owner,napi_value function,const std::string& method) {
+  auto& program=*owner.characterPresentation;
+  const auto found=program.methods.find(method);if(found==program.methods.end())return nullptr;
+  for(const auto* definition:found->second)for(const auto& reference:{definition->function,definition->native})if(reference) {
+    const auto candidate=reference->get();if(!candidate)continue;
+    bool same;check(owner.env,napi_strict_equals(owner.env,function,candidate,&same),"cannot compare presentation method identity");
+    if(same)return definition;
+  }
   return nullptr;
 }
+const NativePresentationDefinition* cachedPresentationDefinition(EngineSession& owner,napi_value function,const std::string& method,PresentationMethodCache& cache) {
+  if(cache.function)if(const auto previous=cache.function->get()) {
+    bool same;check(owner.env,napi_strict_equals(owner.env,function,previous,&same),"cannot compare cached presentation method");
+    if(same)return cache.definition;
+  }
+  napi_valuetype type;check(owner.env,napi_typeof(owner.env,function,&type),"cannot inspect presentation method");
+  if(type!=napi_function)return nullptr;
+  cache.definition=presentationDefinition(owner,function,method);
+  cache.function=std::make_shared<PresentationReference>(owner.env,function);return cache.definition;
+}
+mv::Value invokePresentationFunction(EngineSession&,const mv::Value&,napi_value,const std::string&,const mv::Value::Array&,PresentationMethodCache* = nullptr);
+struct NativeCharacterPresentationContext final : mv::omori::CharacterPresentationContext {
+  EngineSession& owner;
+  const NativePresentationDefinition& definition;
+  mv::CharacterSprite* characterSprite;
+  NativeCharacterPresentationContext(EngineSession& value,const mv::Value& object,const NativePresentationDefinition& method,
+      std::shared_ptr<mv::RuntimeCharacter> character,std::shared_ptr<mv::core::Container> node)
+    :CharacterPresentationContext(*value.session,object.reference(),std::move(character),value.characterPresentation->environmentData.reference(),std::move(node)),
+     owner(value),definition(method),characterSprite(dynamic_cast<mv::CharacterSprite*>(display.get())) {}
+  mv::Value characterData() override {
+    if(!characterSprite)return receiver["_character"].reference();
+    return characterSprite->character ? presentationEntity(owner,characterSprite->character) : mv::Value{};
+  }
+  mv::Value call(const mv::Value& target,const std::string& method,const mv::Value::Array& values) override {
+    const auto function=presentationProperty(owner.env,writeValue(owner.env,target),method);
+    return invokePresentationFunction(owner,target,function,method,values,&definition.methods[method]);
+  }
+  mv::Value base(const mv::Value::Array& values) override {
+    napi_value function=nullptr;
+    if(definition.baseOwner) {
+      const auto object=definition.baseOwner->get();if(!object)throw std::runtime_error("character presentation parent is unavailable");
+      function=presentationProperty(owner.env,object,definition.baseProperty);
+    } else if(definition.baseFunction)function=definition.baseFunction->get();
+    if(!function)throw std::runtime_error("character presentation parent method is unavailable");
+    return invokePresentationFunction(owner,receiver,function,definition.method,values,&definition.baseCache);
+  }
+  mv::Value construct(const std::string& name,const mv::Value::Array& values) override {
+    const auto constructors=presentationProperty(owner.env,owner.characterPresentation->environment->get(),"constructors");
+    const auto function=presentationProperty(owner.env,constructors,name);std::vector<napi_value> parameters;
+    for(const auto& value:values)parameters.push_back(writeValue(owner.env,value));
+    napi_value result;check(owner.env,napi_new_instance(owner.env,function,parameters.size(),parameters.data(),&result),"cannot construct character presentation object");
+    return presentationValue(owner,result);
+  }
+  void set(const mv::Value& target,const std::string& field,const mv::Value& value) override {
+    check(owner.env,napi_set_named_property(owner.env,writeValue(owner.env,target),field.c_str(),writeValue(owner.env,value)),"cannot set character presentation property");
+  }
+  void erase(const mv::Value& target,const std::string& field) override {
+    bool removed;check(owner.env,napi_delete_property(owner.env,writeValue(owner.env,target),string(owner.env,field),&removed),"cannot delete character presentation property");
+  }
+  std::shared_ptr<mv::core::Container> displayOf(const mv::Value& target) override {return presentationDisplay(owner,target);}
+};
+mv::Value invokePresentationDefinition(EngineSession& owner,const mv::Value& receiver,const NativePresentationDefinition& definition,const mv::Value::Array& arguments) {
+  bridge_trace::Scope trace("native:"+(definition.operation.empty() ? definition.bindingType+"."+definition.method : definition.operation));
+  auto& program=*owner.characterPresentation;
+  if(!definition.bindingType.empty()) {
+    const auto object=std::dynamic_pointer_cast<mv::RuntimeBoundObject>(presentationDisplay(owner,receiver));
+    if(!object)throw std::invalid_argument("native presentation method requires a bound sprite");
+    if(definition.binding) {
+      const auto& method=*definition.binding;
+      if(method.arity!=arguments.size())throw std::invalid_argument("native presentation method argument count differs");
+      mv::BindingArguments values;for(const auto& value:arguments)values.emplace_back(value.reference());
+      return method.invoke(*object,values);
+    }
+    throw std::invalid_argument("native presentation method is not bound: "+definition.method);
+  }
+  ++program.nativeCalls;if(definition.operation=="omori.chain")++program.nativeFrames;
+  if(definition.query)return definition.query(*owner.session,arguments);
+  const bool dataOperation=definition.operation.starts_with("character.") || definition.operation.starts_with("position.") || definition.operation.starts_with("map.");
+  const auto display=dataOperation ? nullptr : presentationDisplay(owner,receiver);
+  const bool entityOperation=definition.operation=="character.object" || definition.operation=="character.jump" || definition.operation=="character.screenZ";
+  const auto entity=entityOperation ? presentationEntityForValue(owner,receiver) : nullptr;
+  NativeCharacterPresentationContext context(owner,receiver,definition,entity,display);
+  return mv::omori::invokeCharacterPresentation(definition.operation,context,arguments);
+}
+mv::Value invokePresentationFunction(EngineSession& owner,const mv::Value& receiver,napi_value function,const std::string& method,const mv::Value::Array& arguments,PresentationMethodCache* cache) {
+  const auto* definition=cache ? cachedPresentationDefinition(owner,function,method,*cache) : presentationDefinition(owner,function,method);
+  if(definition)return invokePresentationDefinition(owner,receiver,*definition,arguments);
+  bridge_trace::Scope trace("fallback:"+method+"#"+std::to_string(bridge_trace::functionId(owner.env,function)));
+  ++owner.characterPresentation->scriptCalls;
+  std::vector<napi_value> values;for(const auto& value:arguments)values.push_back(writeValue(owner.env,value));
+  napi_value result;check(owner.env,napi_call_function(owner.env,writeValue(owner.env,receiver),function,values.size(),values.data(),&result),"character presentation override failed");
+  return presentationValue(owner,result);
+}
+std::optional<std::array<double,2>> nativeCharacterPosition(EngineSession& owner,const std::shared_ptr<mv::RuntimeCharacter>& character) {
+  if(!owner.characterPresentation || !owner.characterPresentation->enabled)return {};
+  const auto value=presentationEntity(owner,character);const auto object=writeValue(owner.env,value);
+  const auto x=presentationProperty(owner.env,object,"screenX"),y=presentationProperty(owner.env,object,"screenY");
+  auto& methods=owner.characterPresentation->boundMethods;
+  const auto* dx=cachedPresentationDefinition(owner,x,"screenX",methods["screenX"]);
+  if(!dx || !cachedPresentationDefinition(owner,y,"screenY",methods["screenY"]))return {};
+  const double sx=invokePresentationDefinition(owner,value,*dx,{}).number();
+  const auto currentY=presentationProperty(owner.env,object,"screenY");
+  const double sy=invokePresentationFunction(owner,value,currentY,"screenY",{},&methods["screenY"]).number();
+  if(!std::isfinite(sx)||!std::isfinite(sy))throw std::invalid_argument("character position override must return finite coordinates");
+  return std::array<double,2>{sx,sy};
+}
+std::optional<int> nativeCharacterZ(EngineSession& owner,const std::shared_ptr<mv::RuntimeCharacter>& character) {
+  if(!owner.characterPresentation || !owner.characterPresentation->enabled)return {};
+  const auto value=presentationEntity(owner,character);const auto function=presentationProperty(owner.env,writeValue(owner.env,value),"screenZ");
+  const auto* definition=cachedPresentationDefinition(owner,function,"screenZ",owner.characterPresentation->boundMethods["screenZ"]);
+  if(!definition)return {};
+  return invokePresentationDefinition(owner,value,*definition,{}).integer();
+}
+napi_value characterPresentationView(EngineSession& owner,const std::shared_ptr<mv::RuntimeBoundObject>& object) {
+  auto& program=*owner.characterPresentation;
+  if(const auto found=program.views.find(object->identity);found!=program.views.end())if(const auto value=found->second.object->get())return value;
+  callRuntime(owner,"retainBoundObject",{runtimeHandle(owner,object)});
+  const auto found=program.views.find(object->identity);
+  if(found==program.views.end())throw std::runtime_error("character presentation view was not attached");
+  const auto result=found->second.object->get();if(!result)throw std::runtime_error("character presentation view is unavailable");return result;
+}
+PresentationDispatch dispatchCharacterPresentation(EngineSession& owner,const std::shared_ptr<mv::RuntimeBoundObject>& object,const std::string& method,const mv::Value::Array& arguments) {
+  if(!owner.characterPresentation || !owner.characterPresentation->enabled || std::string_view(object->bindingType())!="Sprite_Character")return {};
+  const auto view=characterPresentationView(owner,object);const auto function=presentationProperty(owner.env,view,method);
+  const auto* definition=cachedPresentationDefinition(owner,function,method,owner.characterPresentation->boundMethods[method]);
+  if(!definition)return {};
+  if(!definition->bindingType.empty())return {true,{}};
+  auto& cached=owner.characterPresentation->views.at(object->identity).receiver;
+  if(!cached.reader) {
+    cached=presentationValue(owner,view,false);
+    owner.characterPresentation->receiverModels[cached.reader.get()]=object;
+  }
+  return {true,invokePresentationDefinition(owner,cached,*definition,arguments)};
+}
+std::optional<bool> characterPresentationOverride(EngineSession& owner,const std::shared_ptr<mv::RuntimeBoundObject>& object,const std::string& method) {
+  if(!owner.characterPresentation || !owner.characterPresentation->enabled || std::string_view(object->bindingType())!="Sprite_Character")return {};
+  const auto view=characterPresentationView(owner,object);
+  const auto* definition=cachedPresentationDefinition(owner,presentationProperty(owner.env,view,method),method,owner.characterPresentation->boundMethods[method]);
+  if(!definition)return {};
+  return definition->bindingType.empty();
+}
+napi_value attachCharacterView(napi_env env,napi_callback_info info) try {
+  const auto args=arguments(env,info);if(args.size()!=3)throw std::invalid_argument("character view requires session, model and object");
+  auto& owner=session(env,args[0]);requireRuntimeOwner(owner,args[1]);
+  const auto object=runtimeAs<mv::RuntimeBoundObject>(env,args[1]);
+  if(std::string_view(object->bindingType())!="Sprite_Character")throw std::invalid_argument("character view requires a character sprite");
+  if(!owner.characterPresentation)owner.characterPresentation=std::make_shared<NativePresentationProgram>();
+  if(const auto found=owner.characterPresentation->views.find(object->identity);found!=owner.characterPresentation->views.end())
+    owner.characterPresentation->receiverModels.erase(found->second.receiver.reader.get());
+  owner.characterPresentation->views[object->identity]={object,std::make_shared<PresentationReference>(env,args[2]),{}};return undefined(env);
+} catch(const std::exception& error) {return throwException(env,error);}
+napi_value attachPresentationCharacter(napi_env env,napi_callback_info info) try {
+  const auto args=arguments(env,info);if(args.size()!=3)throw std::invalid_argument("character attachment requires session, character and view");
+  auto& owner=session(env,args[0]);requireRuntimeOwner(owner,args[1]);const auto character=runtimeAs<mv::RuntimeCharacter>(env,args[1]);
+  if(!owner.characterPresentation)owner.characterPresentation=std::make_shared<NativePresentationProgram>();
+  owner.characterPresentation->entities[character->identity]={character,std::make_shared<PresentationReference>(env,args[2]),{}};
+  if(owner.characterPresentation->enabled)tagPresentationEntity(owner,args[2],character->identity);
+  return undefined(env);
+} catch(const std::exception& error) {return throwException(env,error);}
+napi_value registerCharacterPresentation(napi_env env,napi_callback_info info) try {
+  const auto args=arguments(env,info);if(args.size()!=5)throw std::invalid_argument("character presentation requires session, environment, display key, defaults and definitions");
+  auto& owner=session(env,args[0]);
+  if(!owner.characterPresentation)owner.characterPresentation=std::make_shared<NativePresentationProgram>();
+  auto& program=*owner.characterPresentation;if(program.enabled)throw std::runtime_error("character presentation is already registered");
+  program.environment=std::make_shared<PresentationReference>(env,args[1]);
+  auto holder=moduleObject(env);check(env,napi_set_named_property(env,holder,"key",args[2]),"cannot retain presentation display key");
+  napi_value entityKey;check(env,napi_create_symbol(env,string(env,"native presentation character"),&entityKey),"cannot create presentation character key");
+  check(env,napi_set_named_property(env,holder,"entityKey",entityKey),"cannot retain presentation character key");
+  program.displayKey=std::make_shared<PresentationReference>(env,holder,1);
+  program.environmentData=presentationValue(owner,args[1],false);
+  const auto reference=[env](napi_value object,const char* name) -> std::shared_ptr<PresentationReference> {
+    const auto value=presentationProperty(env,object,name);napi_valuetype type;check(env,napi_typeof(env,value,&type),"cannot inspect presentation reference");
+    return type==napi_undefined ? nullptr : std::make_shared<PresentationReference>(env,value);
+  };
+  for(int index=3;index<5;++index) {
+    std::uint32_t length;check(env,napi_get_array_length(env,args[index],&length),"cannot read presentation definitions");
+    for(std::uint32_t i=0;i<length;++i) {
+      napi_value value;check(env,napi_get_element(env,args[index],i,&value),"cannot read presentation definition");
+      NativePresentationDefinition definition;definition.method=asString(env,presentationProperty(env,value,"method"));
+      definition.function=reference(value,"function");if(!definition.function)throw std::invalid_argument("presentation definition requires a function");
+      if(index==3) {
+        definition.bindingType=asString(env,presentationProperty(env,value,"bindingType"));
+        if(const auto* binding=findBindingClass(definition.bindingType))
+          for(const auto& method:binding->methods)if(method.name==definition.method) {definition.binding=&method;break;}
+      }
+      else {
+        definition.operation=asString(env,presentationProperty(env,value,"operation"));
+        definition.query=mv::omori::findCharacterPresentationQuery(definition.operation);
+        if(!mv::omori::hasCharacterPresentationOperation(definition.operation))throw std::invalid_argument("unknown character presentation operation: "+definition.operation);
+        definition.native=reference(value,"native");
+        const auto base=presentationProperty(env,value,"base");napi_valuetype type;check(env,napi_typeof(env,base,&type),"cannot inspect presentation parent");
+        if(type==napi_object) {
+          definition.baseFunction=reference(base,"function");definition.baseOwner=reference(base,"owner");
+          if(definition.baseOwner)definition.baseProperty=asString(env,presentationProperty(env,base,"property"));
+        }
+      }
+      program.definitions.push_back(std::make_unique<NativePresentationDefinition>(std::move(definition)));
+      const auto* installed=program.definitions.back().get();program.methods[installed->method].push_back(installed);
+    }
+  }
+  // The JavaScript session owns the callable graph; native entries stay weak.
+  const auto graph=moduleObject(env);
+  check(env,napi_set_named_property(env,graph,"environment",args[1]),"cannot retain presentation environment");
+  check(env,napi_set_named_property(env,graph,"defaults",args[3]),"cannot retain presentation defaults");
+  check(env,napi_set_named_property(env,graph,"definitions",args[4]),"cannot retain presentation definitions");
+  check(env,napi_set_named_property(env,args[0],"__mvCharacterPresentation",graph),"cannot attach character presentation");
+  for(const auto& [identity,view]:program.entities)if(const auto object=view.object->get())tagPresentationEntity(owner,object,identity);
+  program.enabled=true;return undefined(env);
+} catch(const std::exception& error) {return throwException(env,error);}
+napi_value characterPresentationInvoke(napi_env env,napi_callback_info info) try {
+  const auto args=arguments(env,info);if(args.size()!=5)throw std::invalid_argument("presentation invocation requires session, receiver, function, method and arguments");
+  auto& owner=session(env,args[0]);RuntimeCallScope callScope(owner);
+  if(!owner.characterPresentation || !owner.characterPresentation->enabled)throw std::runtime_error("character presentation is not installed");
+  const auto* definition=presentationDefinition(owner,args[2],asString(env,args[3]));if(!definition)throw std::invalid_argument("presentation function is not registered");
+  const auto parameters=readValue(env,args[4]);
+  return writeValue(env,invokePresentationDefinition(owner,presentationValue(owner,args[1]),*definition,parameters.array()));
+} catch(const std::exception& error) {return throwException(env,error);}
+napi_value diagnosticBridgeTrace(napi_env env,napi_callback_info info) try {
+  const auto args=arguments(env,info);const auto command=asString(env,args.at(0));
+  if(command=="start") {bridge_trace::reset(env);bridge_trace::active=true;return undefined(env);}
+  bridge_trace::active=false;
+  mv::Value::Array rows;
+  for(const auto& [key,row]:bridge_trace::records) {
+    (void)key;rows.emplace_back(mv::Value::Object{{"parent",row.parent},{"name",row.name},{"calls",double(row.calls)},
+      {"inclusiveMs",row.inclusive},{"exclusiveMs",row.exclusive}});
+  }
+  auto result=writeValue(env,mv::Value::Object{{"records",std::move(rows)}});
+  napi_value functions;napi_create_array(env,&functions);
+  for(std::size_t i=0;i<bridge_trace::functions.size();++i) {
+    napi_value value;napi_get_reference_value(env,bridge_trace::functions[i],&value);napi_set_element(env,functions,i,value);
+  }
+  napi_set_named_property(env,result,"functions",functions);return result;
+} catch(const std::exception& error) {return throwException(env,error);}
+napi_value characterPresentationStats(napi_env env,napi_callback_info info) try {
+  const auto args=arguments(env,info);if(args.size()!=1)throw std::invalid_argument("presentation statistics require a session");
+  auto& owner=session(env,args[0]);if(!owner.characterPresentation)return writeValue(env,mv::Value::Object{{"installed",false}});
+  const auto& program=*owner.characterPresentation;
+  return writeValue(env,mv::Value::Object{{"installed",program.enabled},{"nativeCalls",static_cast<double>(program.nativeCalls)},
+    {"nativeFrames",static_cast<double>(program.nativeFrames)},{"scriptCalls",static_cast<double>(program.scriptCalls)}});
+} catch(const std::exception& error) {return throwException(env,error);}
 napi_value describeClassBindings(napi_env env, napi_callback_info) try {
   mv::Value::Array classes;
   for (const auto& binding : bindingClasses()) {
@@ -2047,12 +2547,54 @@ napi_value battlerArray(napi_env env, napi_callback_info info) try {
   }
   throw std::invalid_argument("battler array is not bound: " + field);
 } catch (const std::exception& error) { return throwException(env, error); }
+napi_value characterReflectionState(napi_env env, napi_callback_info info) try {
+  const auto args=arguments(env,info);
+  if(args.size()!=2)throw std::invalid_argument("reflection state requires session and character");
+  auto& owner=session(env,args[0]);requireRuntimeOwner(owner,args[1]);
+  const auto object=runtimeAs<mv::RuntimeCharacter>(env,args[1]);
+  auto retained=std::make_unique<std::shared_ptr<mv::RuntimeCharacter>>(object);
+  napi_value buffer,view;
+  check(env,napi_create_external_arraybuffer(env,&object->reflectionsRevision,sizeof(double),
+    [](napi_env,void*,void* data){delete static_cast<std::shared_ptr<mv::RuntimeCharacter>*>(data);},retained.get(),&buffer),"cannot expose reflection revision");
+  retained.release();
+  check(env,napi_create_typedarray(env,napi_float64_array,1,buffer,0,&view),"cannot view reflection revision");
+  return view;
+} catch(const std::exception& error) {return throwException(env,error);}
+napi_value characterReflections(napi_env env, napi_callback_info info) try {
+  const auto args=arguments(env,info);
+  if(args.size()!=3)throw std::invalid_argument("character reflections require session, character and array constructor");
+  auto& owner=session(env,args[0]);requireRuntimeOwner(owner,args[1]);RuntimeCallScope callScope(owner);
+  const auto object=runtimeAs<mv::RuntimeCharacter>(env,args[1]);
+  if(object->reflections.reader)return writeValue(env,object->reflections);
+  const auto& items=object->reflections.array();
+  napi_value array,length=number(env,items.size());
+  check(env,napi_new_instance(env,args[2],1,&length,&array),"cannot create character reflections");
+  for(std::size_t i=0;i<items.size();++i) {
+    const auto key=std::to_string(i);
+    const napi_property_descriptor field{key.c_str(),nullptr,nullptr,nullptr,nullptr,writeValue(env,items[i]),
+      static_cast<napi_property_attributes>(napi_writable|napi_enumerable|napi_configurable),nullptr};
+    check(env,napi_define_properties(env,array,1,&field),"cannot write character reflection");
+  }
+  if(!owner.database)owner.database=std::make_shared<DatabaseGraph>(env,owner,args[0]);
+  mv::Value value(mv::Value::Array{});
+  value.reader=std::make_shared<DatabaseReader>(owner.database,array,false);
+  object->reflections=std::move(value);++object->reflectionsRevision;
+  return array;
+} catch(const std::exception& error) {return throwException(env,error);}
 napi_value characterCommand(napi_env env, napi_callback_info info) try {
   const auto args = arguments(env, info);
   if (args.size() != 4) throw std::invalid_argument("characterCommand requires session, character, method and arguments");
   auto& owner = session(env, args[0]); requireRuntimeOwner(owner, args[1]); RuntimeCallScope callScope(owner);
   const auto object = runtimeAs<mv::RuntimeCharacter>(env, args[1]);
-  const auto method = asString(env, args[2]); const auto parameters = readValue(env, args[3]);
+  const auto method = asString(env, args[2]);
+  std::uint32_t count;check(env,napi_get_array_length(env,args[3],&count),"cannot read character arguments");
+  auto parameters=method=="reflections"&&count==1 ? mv::Value(mv::Value::Array(1)) : readValue(env,args[3]);
+  if(method=="reflections" && count==1) {
+    if(!owner.database)owner.database=std::make_shared<DatabaseGraph>(env,owner,args[0]);
+    napi_value array;check(env,napi_get_element(env,args[3],0,&array),"cannot read character reflections");
+    auto& value=std::get<mv::Value::Array>(parameters.data)[0];value=mv::Value(mv::Value::Array{});
+    value.reader=std::make_shared<DatabaseReader>(owner.database,array,false);
+  }
   if (method == "cameraTarget") owner.session->setCameraTarget(object, parameters[0].number());
   else return writeValue(env, owner.session->runtimeCharacterCommand(object, method, parameters.array()));
   return undefined(env);
@@ -2063,11 +2605,42 @@ napi_value gameDataInvoke(napi_env env, napi_callback_info info) try {
   auto& owner = session(env, args[0]); SceneTransitionScope transition(owner);
   RuntimeCallScope callScope(owner);
   const auto kind = asString(env, args[1]), method = asString(env, args[2]);
-  const auto parameters = readValue(env, args[3]);
-  if (kind == "variables" && method == "setValue" &&
-      (std::holds_alternative<mv::Value::Array>(parameters[1].data) || std::holds_alternative<mv::Value::Object>(parameters[1].data)))
-    throw std::invalid_argument("object variable assignment is not bound");
-  return writeValue(env, owner.session->invokeGameDataBase(kind, method, parameters.array()));
+  const auto variableValue = [&](napi_value value) {
+    napi_valuetype type; check(env, napi_typeof(env, value, &type), "cannot inspect variable value");
+    if (type != napi_object) return readValue(env, value);
+    if (!owner.database) owner.database = std::make_shared<DatabaseGraph>(env, owner, args[0]);
+    auto reader = std::make_shared<DatabaseReader>(owner.database, value, false);
+    mv::Value result;
+    result.data = reader->isArray ? mv::Value(mv::Value::Array{}).data : mv::Value(mv::Value::Object{}).data;
+    result.reader = std::move(reader); return result;
+  };
+  std::uint32_t length; check(env, napi_get_array_length(env, args[3], &length), "game data arguments must be an array");
+  mv::Value::Array parameters; parameters.reserve(length);
+  for (std::uint32_t index = 0; index < length; ++index) {
+    napi_value value; check(env, napi_get_element(env, args[3], index, &value), "cannot read game data argument");
+    if ((kind == "variables" || kind == "selfSwitches") && index == 1 && (method == "setValue" || method == "rawSet")) parameters.push_back(variableValue(value));
+    else if (method == "replaceData" && ((kind == "variables" && index == 1) || (kind == "selfSwitches" && index == 0))) {
+      napi_value keys; check(env, napi_get_property_names(env, value, &keys), "cannot read variable entries");
+      std::uint32_t count; check(env, napi_get_array_length(env, keys, &count), "cannot read variable entry count");
+      mv::Value::Object entries;
+      for (std::uint32_t entry = 0; entry < count; ++entry) {
+        napi_value key, item;
+        check(env, napi_get_element(env, keys, entry, &key), "cannot read variable key");
+        check(env, napi_get_property(env, value, key, &item), "cannot read variable entry");
+        entries.emplace(asString(env, key), variableValue(item));
+      }
+      parameters.emplace_back(std::move(entries));
+    } else parameters.push_back(readValue(env, value));
+  }
+  auto value = owner.session->invokeGameDataBase(kind, method, parameters);
+  auto result = writeValue(env, value);
+  if ((kind == "variables" || kind == "selfSwitches") && (method == "value" || method == "rawValue") && !value.reader &&
+      (std::holds_alternative<mv::Value::Array>(value.data) || std::holds_alternative<mv::Value::Object>(value.data))) {
+    mv::Value::Array replacement;
+    replacement.push_back(parameters.at(0).reference()); replacement.push_back(variableValue(result));
+    owner.session->invokeGameDataBase(kind, "rawSet", replacement);
+  }
+  return result;
 } catch (const std::exception& error) { return throwException(env, error); }
 napi_value managerInvoke(napi_env env, napi_callback_info info) {
   try {
@@ -2192,7 +2765,8 @@ napi_value completeStorage(napi_env env, napi_callback_info info) {
 }
 void registerMvEngineBindings(napi_env env, napi_value exports) {
   napi_value engine; check(env, napi_create_object(env, &engine), "cannot create engine API");
-  method(env, engine, "connectRuntime", connectRuntime);
+  method(env,engine,"diagnosticBridgeTrace",diagnosticBridgeTrace);
+  method(env, engine, "connectRuntime", connectRuntime); method(env, engine, "scriptFrame", scriptFrame);
   method(env,engine,"audioManager",audioManager);
   method(env,engine,"windowClasses",windowClasses); method(env,engine,"windowModel",windowModel);
   method(env, engine, "picture", runtimePicture); method(env, engine, "createPicture", createRuntimePicture);
@@ -2213,7 +2787,7 @@ void registerMvEngineBindings(napi_env env, napi_value exports) {
   method(env, engine, "messageInvoke", messageInvoke); method(env, engine, "messageField", messageField);
   method(env, engine, "coreService", coreService);
   method(env, engine, "imageRequests", imageRequests); method(env, engine, "commonEventList", commonEventList);
-  method(env, engine, "messageChoices", messageChoices); method(env, engine, "interpreterControl", interpreterControl); method(env, engine, "interpreterOperand", interpreterOperand);
+  method(env, engine, "messageChoices", messageChoices); method(env, engine, "messageTexts", messageTexts); method(env, engine, "interpreterControl", interpreterControl); method(env, engine, "interpreterOperand", interpreterOperand);
   method(env, engine, "random", scriptRandom);
   method(env, engine, "collectionInfo", collectionInfo); method(env, engine, "collectionField", collectionField); method(env, engine, "collectionDelete", collectionDelete);
   method(env, engine, "interpreterMode", interpreterMode); method(env, engine, "interpreterWaitBase", interpreterWaitBase);
@@ -2235,6 +2809,7 @@ void registerMvEngineBindings(napi_env env, napi_value exports) {
   method(env,classBindings,"display",boundDisplay);
   method(env,classBindings,"displayField",boundDisplayField); method(env,classBindings,"reference",boundReferenceField);
   method(env,classBindings,"listen",listenBoundObject); method(env,classBindings,"invokeStatic",invokeBoundStatic);
+  method(env,classBindings,"attachCharacterView",attachCharacterView);
   check(env,napi_set_named_property(env,engine,"classBindings",classBindings),"cannot export class bindings");
   method(env, engine, "actionRate", actionRate); method(env, engine, "actorState", actorState); method(env, engine, "actorInvoke", actorInvoke); method(env, engine, "characterCommand", characterCommand);
   method(env, engine, "battlerArray", battlerArray);
@@ -2244,6 +2819,15 @@ void registerMvEngineBindings(napi_env env, napi_value exports) {
   method(env, engine, "touchInvoke", touchInvoke);
   method(env, engine, "utilsInvoke", utilsInvoke);
   method(env, engine, "databaseInvoke", databaseInvoke);
+  method(env, engine, "compileTiledMap", compileTiledMap);
+  method(env, engine, "tiledInvoke", tiledInvoke);
+  method(env, engine, "tiledApply", tiledApply);
+  method(env, engine, "characterReflectionState", characterReflectionState);
+  method(env, engine, "characterReflections", characterReflections);
+  method(env, engine, "registerCharacterPresentation", registerCharacterPresentation);
+  method(env, engine, "characterPresentationInvoke", characterPresentationInvoke);
+  method(env, engine, "characterPresentationStats", characterPresentationStats);
+  method(env, engine, "attachPresentationCharacter", attachPresentationCharacter);
   method(env, engine, "startBattle", startBattle); method(env, engine, "chooseAction", chooseAction); method(env, engine, "setRandomStream", randomStream);
   method(env, engine, "configure", configure); method(env, engine, "configuration", configuration);
   method(env, engine, "setSaveMetadata", setSaveMetadata);

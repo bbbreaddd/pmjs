@@ -35,6 +35,7 @@ void Presentation::clearTiledGeometry() {
     if (chunk.animated) core_.renderer().releaseTileLayer(chunk.animated);
   }
   tiledChunks_.clear(); tiledDraws_.clear(); tiledBounds_.clear(); tiledNextBounds_.clear();
+  tiledPaintReady_ = false; tiledTilemap_.reset();
   tiledGeometryData_ = nullptr; tiledUse_ = 0; tiledGeometryRevision_ = 0;
 }
 
@@ -56,10 +57,8 @@ Presentation::TiledChunk& Presentation::tiledChunk(const Value& data, const Tile
   const int width = data["width"].integer(), tw = data["tilewidth"].integer(), th = data["tileheight"].integer();
   std::vector<TileLayerTile> stationary;
   std::vector<TiledAnimation> animations;
-  for (int x = column; x < (session_.loopHorizontal() ? column + chunkWidth : std::min(column + chunkWidth, width)); ++x) {
-    const int mapX = session_.roundMapX(x), mapY = session_.roundMapY(row);
-    const int gid = layer["data"][mapY * width + mapX].integer();
-    if (!gid) continue;
+  const auto append = [&](int gid, double x, double y) {
+    if (!gid) return;
     const Value* set = nullptr;
     for (const auto& candidate : data["tilesets"].array()) if (gid >= candidate["firstgid"].integer()) set = &candidate;
     if (!set) throw std::runtime_error("tile has no tileset");
@@ -68,7 +67,7 @@ Presentation::TiledChunk& Presentation::tiledChunk(const Value& data, const Tile
     const auto source = image((*set)["image"].text());
     TileLayerTile tile{source.handle,
       {float(id % columns * tw), float(id / columns * th), float(tw), float(th)},
-      {float(x * tw + layer["offsetx"].integer()), float(row * th + layer["offsety"].integer())}, {0, 0}};
+      {float(x + layer["offsetx"].number()), float(y + layer["offsety"].number())}, {0, 0}};
     const auto& sequence = (*set)["tiles"][std::to_string(id)]["animation"].array();
     if (sequence.empty()) stationary.push_back(tile);
     else {
@@ -77,12 +76,22 @@ Presentation::TiledChunk& Presentation::tiledChunk(const Value& data, const Tile
       for (const auto& frame : sequence) {
         const double duration = frame["duration"].number();
         if (duration <= 0) throw std::runtime_error("tile animation has an invalid duration");
-        animation.frames.emplace_back(frame["tileid"].integer(), duration);
-        animation.duration += duration;
+        animation.frames.emplace_back(frame["tileid"].integer(), std::ceil(duration * 60 / 1000));
+        animation.duration += std::ceil(duration * 60 / 1000);
       }
       animations.push_back(std::move(animation));
     }
+  };
+  if (layer["type"].text() == "objectgroup") {
+    const auto& object = layer["objects"][column];
+    append(object["gid"].integer(), object["x"].number(), object["y"].number() - object["height"].number());
+  } else {
+    for (int x = column; x < (session_.loopHorizontal() ? column + chunkWidth : std::min(column + chunkWidth, width)); ++x) {
+      const int mapX = session_.roundMapX(x), mapY = session_.roundMapY(row);
+      append(layer["data"][mapY * width + mapX].integer(), x * tw, row * th);
+    }
   }
+
   auto [found, inserted] = tiledChunks_.try_emplace(draw.key);
   (void)inserted;
   auto& chunk = found->second;
@@ -100,18 +109,21 @@ Presentation::TiledChunk& Presentation::tiledChunk(const Value& data, const Tile
   return chunk;
 }
 
+int Presentation::TiledAnimation::tileAt(double updates) const {
+  double remaining = std::fmod(updates, duration);
+  for (const auto& [id, ticks] : frames) {
+    remaining -= ticks;
+    if (remaining < 0) return id;
+  }
+  return frames.back().first;
+}
+
 void Presentation::updateTiledAnimation(TiledChunk& chunk, int tw, int th, double age) {
   if (chunk.animations.empty()) return;
   bool changed = !chunk.animated;
   for (auto& animation : chunk.animations) {
-    double remaining = std::fmod(age, animation.duration);
-    int id = animation.frames.back().first;
-    for (const auto& [candidate, duration] : animation.frames) {
-      id = candidate; remaining -= duration;
-      if (remaining < 0) break;
-    }
-    animation.nextFrame = id;
-    changed = changed || id != animation.frame;
+    animation.nextFrame = animation.tileAt(age);
+    changed = changed || animation.nextFrame != animation.frame;
   }
   if (!changed) return;
   std::vector<TileLayerTile> tiles;
@@ -130,23 +142,43 @@ void Presentation::updateTiledAnimation(TiledChunk& chunk, int tw, int th, doubl
   for (auto& animation : chunk.animations) animation.frame = animation.nextFrame;
 }
 
-void Presentation::tiledMap(const Value& data) {
-  if (tiledGeometryData_ != &data || tiledGeometryRevision_ != session_.presentationRevision_) {
-    clearTiledGeometry(); tiledGeometryData_ = &data; tiledGeometryRevision_ = session_.presentationRevision_;
+void Presentation::tiledMap(const Value& published) {
+  if (tiledGeometryData_ != &published || tiledGeometryRevision_ != session_.presentationRevision_) {
+    clearTiledGeometry(); tiledGeometryData_ = &published; tiledGeometryRevision_ = session_.presentationRevision_;
   }
-  const int width = data["width"].integer(), height = data["height"].integer();
-  const int tw = data["tilewidth"].integer(), th = data["tileheight"].integer();
+  const int width = published["width"].integer(), height = published["height"].integer();
+  const int tw = published["tilewidth"].integer(), th = published["tileheight"].integer();
   if (width <= 0 || height <= 0 || tw <= 0 || th <= 0) throw std::runtime_error("invalid tiled map dimensions");
   const double screenX = core_.width() / double(tw), screenY = core_.height() / double(th);
   cameraX_ = width < screenX ? (width - screenX) / 2 : std::clamp(session_.player_.realX - (screenX - 1) / 2, 0.0, width - screenX);
   cameraY_ = height < screenY ? (height - screenY) / 2 : std::clamp(session_.player_.realY - (screenY - 1) / 2, 0.0, height - screenY);
   if (session_.savedCamera_) { cameraX_ = (*session_.savedCamera_)[0]; cameraY_ = (*session_.savedCamera_)[1]; }
   const int ox = static_cast<int>(std::floor(cameraX_ * tw)), oy = static_cast<int>(std::floor(cameraY_ * th));
+  const std::array origin{static_cast<int>(std::floor(double(ox) / tw)), static_cast<int>(std::floor(double(oy) / th))};
+  const double age = graphTilemap_ ? graphTilemap_->animationCount : session_.ticks_ - sceneTickOrigin_;
+  bool animationChanged = false;
+  for (const auto& [key, chunk] : tiledChunks_) for (const auto& animation : chunk.animations)
+    animationChanged = animationChanged || animation.tileAt(age) != animation.frame;
+  const bool repaint = !tiledPaintReady_ || tiledPaintOrigin_ != origin ||
+    tiledTilemap_.lock() != graphTilemap_ || (graphTilemap_ && tiledTilemapRevision_ != graphTilemap_->revision_) || animationChanged;
+  if (repaint) {
+    clearTiledGeometry();
+    tiledGeometryData_ = &published; tiledGeometryRevision_ = session_.presentationRevision_;
+    tiledPaintReady_ = true; tiledPaintOrigin_ = origin;
+    tiledTilemap_ = graphTilemap_; tiledTilemapRevision_ = graphTilemap_ ? graphTilemap_->revision_ : 0;
+  }
+  const auto& data = session_.tiledSource();
   const auto& layers = data["layers"].array();
   auto& bounds = tiledNextBounds_;
   bounds.clear(); bounds.reserve(layers.size());
   for (const auto& layer : layers) {
-    if ((!layer["visible"].null() && !layer["visible"].boolean()) || hiddenOnLevel(layer,graphMapLevel_)) { bounds.push_back({}); continue; }
+    if (layer["type"].text() == "objectgroup") { bounds.push_back({0, 1, 0, 1}); continue; }
+    const auto& props = layer["properties"];
+    const bool metadata = props["collision"].boolean() || props["regionId"].boolean() || props["toLevel"].boolean() ||
+       props["reflectionSurface"].boolean() || props["reflectionCast"].boolean();
+    if (metadata || (!layer["visible"].null() && !layer["visible"].boolean()) || hiddenOnLevel(layer,graphMapLevel_)) {
+      bounds.push_back({}); continue;
+    }
     const int dx = layer["offsetx"].integer(), dy = layer["offsety"].integer();
     const int firstX = static_cast<int>(std::floor(double(ox - dx) / tw)), firstY = static_cast<int>(std::floor(double(oy - dy) / th));
     bounds.push_back({session_.loopHorizontal() ? firstX : std::max(0, firstX),
@@ -156,15 +188,27 @@ void Presentation::tiledMap(const Value& data) {
   }
   if (bounds != tiledBounds_) {
     tiledDraws_.clear(); tiledBounds_ = bounds;
-    for (std::size_t index = 0; index < layers.size(); ++index) {
+    for (const bool objects : {false, true}) for (std::size_t index = 0; index < layers.size(); ++index) {
       const auto& layer = layers[index]; const auto& area = bounds[index];
+      if ((layer["type"].text() == "objectgroup") != objects) continue;
       const int z = property(layer["properties"]["zIndex"]), priority = property(layer["properties"]["priority"]);
-      const bool sorted = z == 3 && priority > 0;
+      if (area == std::array<int, 4>{}) continue;
+      if (layer["type"].text() == "objectgroup") {
+        for (std::size_t objectIndex = 0; objectIndex < layer["objects"].array().size(); ++objectIndex) {
+          const auto& object = layer["objects"][objectIndex];
+          if (!object["gid"].integer() || !object["visible"].boolean()) continue;
+          tiledDraws_.push_back({{index, -1, static_cast<int>(objectIndex)}, z,
+            object["y"].number() - object["height"].number() + th + layer["offsety"].number(),
+            priority, tiledDraws_.size(), 1, true});
+        }
+        continue;
+      }
+      const bool sorted = z == session_.tiledCharacterZ_[1] && priority > 0;
       for (int row = area[2]; row < area[3]; ++row) {
         for (int column = static_cast<int>(std::floor(double(area[0]) / chunkWidth)) * chunkWidth; column < area[1]; column += chunkWidth) {
-          tiledDraws_.push_back({{index, row, column}, z, sorted ? (row + 1) * th + layer["offsety"].integer() : 0,
+          tiledDraws_.push_back({{index, row, column}, z, sorted ? (row + 1) * th + layer["offsety"].number() : 0,
             sorted ? priority : 0, tiledDraws_.size(),
-            static_cast<float>(layer["opacity"].number(1)), sorted});
+            1, sorted});
         }
       }
     }
@@ -179,7 +223,7 @@ void Presentation::tiledMap(const Value& data) {
   const auto actor = [&](const Character& value, int priority) {
     const bool object = value.characterName.find('!') < 2;
     const int y = static_cast<int>(std::floor(scrolledMapY(value.realY, cameraY_, th) * th + th - (object ? 0 : 6) + 0.5) + value.spriteOffsetY);
-    actors.push_back({priority * 2 + 1, static_cast<double>(y), order++, &value});
+    actors.push_back({session_.usesTiledMapPlugin() ? session_.tiledCharacterZ_[std::clamp(priority, 0, 2)] : priority * 2 + 1, static_cast<double>(y), order++, &value});
   };
   for (const auto& event : session_.events_) if (event.page >= 0) actor(event.character, event.priority);
   for (const auto& vehicle : session_.vehicles_) if (vehicle.mapId == session_.mapId_) actor(vehicle.character, vehicle.type == 2 ? vehicle.altitude > 0 ? 2 : 0 : 1);
@@ -197,7 +241,6 @@ void Presentation::tiledMap(const Value& data) {
   });
   const auto drawActor = [&](const Actor& value) { if(value.graph) value.graph->draw(core_.renderer(),{1,0,0,1,0,0},1); else if (value.character) character(*value.character, cameraX_, cameraY_); else mapShadow(); };
   std::size_t nextActor = 0;
-  const double age = (session_.ticks_ - sceneTickOrigin_) * 1000 / 60;
   for (const auto& draw : tiledDraws_) {
     const auto key = std::tuple(draw.z, draw.sorted ? draw.y - oy : 0, draw.priority, draw.order);
     while (nextActor < actors.size() && std::tuple(actors[nextActor].z, actors[nextActor].y, 0, actors[nextActor].order) < key)

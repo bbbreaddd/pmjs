@@ -123,7 +123,7 @@ Value Session::save(bool recordSave) {
   Array switches(switchDataLength_), variables(variableDataLength_);
   for (const auto& [id, value] : switches_) { if (switches.size() <= static_cast<std::size_t>(id)) switches.resize(id + 1); switches[id] = value; }
   for (const auto& [id, value] : variables_) { if (variables.size() <= static_cast<std::size_t>(id)) variables.resize(id + 1); variables[id] = value; }
-  Object selfSwitches; for (const auto& [key, value] : selfSwitches_) if (value) selfSwitches[key] = value;
+  Object selfSwitches; for (const auto& [key, value] : selfSwitches_) selfSwitches[key] = value;
   Object items, weapons, armors;
   for (const auto& [key, count] : inventory_) if (count > 0) (key >= 200000 ? armors : key >= 100000 ? weapons : items)[std::to_string(key % 100000)] = count;
   Array actors(database_["actors"].arrayLength());
@@ -148,11 +148,12 @@ Value Session::save(bool recordSave) {
   Array followers;
   for (std::size_t i = 1; i <= followers_.size(); ++i) { auto follower = character(followers_[i - 1], "Game_Follower"); auto& f = object(follower); f["_memberIndex"] = static_cast<int>(i); f["_through"] = true; followers.emplace_back(follower); }
   p["_followers"] = instance("Game_Followers", {{"_visible", followersVisible_}, {"_gathering", followersGathering_}, {"_data", followers}});
-  Array events(database_["maps"][std::to_string(mapId_)]["events"].arrayLength());
+  Array events(map()["events"].arrayLength());
   for (const auto& event : events_) {
     auto value = character(event.character, "Game_Event"); auto& e = object(value);
     e["_mapId"] = mapId_; e["_eventId"] = event.id; e["_moveType"] = event.moveType; e["_trigger"] = event.trigger; e["_starting"] = event.starting; e["_erased"] = event.erased; e["_pageIndex"] = event.page;
     e["_originalPattern"] = event.originalPattern; e["_originalDirection"] = event.originalDirection; e["_prelockDirection"] = event.prelockDirection; e["_locked"] = event.locked; e["_priorityType"] = event.priority; e["_interpreter"] = event.trigger == 4 ? writeInterpreter(event.parallel) : Value{};
+    if(events.size()<=static_cast<std::size_t>(event.id))events.resize(static_cast<std::size_t>(event.id)+1);
     events[event.id] = value;
   }
   Array commonEvents;
@@ -189,8 +190,15 @@ void Session::load(const Value& contents) {
   const int mapId = contents["map"]["_mapId"].integer();
   if (mapSceneOnly() && database_["sceneContract"]["mapId"].integer() != mapId)
     throw std::invalid_argument("save is outside the declared map-scene scope");
-  if (database_["maps"][std::to_string(mapId)].null()) throw std::invalid_argument("save refers to an unknown map");
+  if (mapData(mapId).null()) throw std::invalid_argument("save refers to an unknown map");
   Session restored(database_.reference());
+  restored.tiledEnabled_ = tiledEnabled_;
+  restored.tiledHalfTile_ = tiledHalfTile_;
+  restored.tiledMapLoaded_ = tiledMapLoaded_;
+  restored.tiledLevelVariable_ = tiledLevelVariable_;
+  restored.tiledCharacterZ_ = tiledCharacterZ_;
+  restored.runtimeTiledMaps_ = runtimeTiledMaps_;
+  restored.tiledSources_ = tiledSources_;
   restored.gameObjectsInitialized_ = true;
   restored.setScreenSize(screenWidth_, screenHeight_);
   restored.switches_.clear(); restored.variables_.clear(); restored.selfSwitches_.clear(); restored.inventory_.clear(); restored.party_.clear(); restored.actors_.clear();
@@ -199,7 +207,7 @@ void Session::load(const Value& contents) {
   const auto& variables = contents["variables"]["_data"].array();
   restored.switchDataLength_ = static_cast<int>(switches.size()); restored.variableDataLength_ = static_cast<int>(variables.size());
   for (std::size_t i = 0; i < variables.size(); ++i) if (!variables[i].null()) restored.variables_[i] = variables[i];
-  if (const auto* values = std::get_if<Object>(&contents["selfSwitches"]["_data"].data)) for (const auto& [key, value] : *values) restored.selfSwitches_[key] = value.boolean();
+  if (const auto* values = std::get_if<Object>(&contents["selfSwitches"]["_data"].data)) for (const auto& [key, value] : *values) restored.selfSwitches_[key] = value;
   for (const auto& member : contents["party"]["_actors"].array()) { const int id = member.integer(); restored.initializeActor(id); restored.party_.push_back(id); }
   for (const auto* category : {"_items", "_weapons", "_armors"}) {
     const int offset = std::string(category) == "_weapons" ? 100000 : std::string(category) == "_armors" ? 200000 : 0;
