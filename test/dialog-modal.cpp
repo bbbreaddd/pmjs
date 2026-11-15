@@ -2,6 +2,7 @@
 
 #include <SDL.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -133,9 +134,23 @@ int main() {
     releaseAll(platform);
   };
 
+  renderer.beginFrame();
+  renderer.queueQuad(0, 0, 816, 624, {0, 1, 0, 1});
+  renderer.render();
+  const auto sceneBeforeDialog = renderer.captureSceneRgba();
+  renderer.beginFrame();
+  renderer.queueQuad(0, 0, 816, 624, {0, 0, 1, 1});
+  const auto pendingCommands = renderer.commandCount();
   after({{400, SDL_KEYDOWN, SDLK_RETURN}});
   dialog.alert("hello");
-  check(true, "alert acknowledged");
+  check(renderer.captureSceneRgba() == sceneBeforeDialog,
+        "modal preserves the presented scene across multiple frames");
+  check(renderer.commandCount() == pendingCommands,
+        "modal preserves pending game commands");
+  renderer.render();
+  const auto resumedScene = renderer.captureSceneRgba();
+  check(resumedScene[0] == 0 && resumedScene[1] == 0 && resumedScene[2] == 255,
+        "pending game drawing resumes after the modal");
   sync(1);
 
   after({{400, SDL_KEYDOWN, SDLK_RETURN}});
@@ -219,6 +234,47 @@ int main() {
   }).detach();
   check(dialog.confirm("sure?") == false, "repeat press is not a fresh edge");
   sync(2);
+
+  platform.interceptWindowClose(true);
+  platform.takeWindowEvents();
+  afterQuit(100);
+  after({{800, SDL_KEYDOWN, SDLK_x}});
+  const auto closeStart = std::chrono::steady_clock::now();
+  check(!dialog.confirm("close request"), "intercepted close cancels confirmation");
+  const auto closeElapsed = std::chrono::steady_clock::now() - closeStart;
+  check(closeElapsed < std::chrono::milliseconds(600),
+        "intercepted close dismisses without waiting for fallback Escape");
+  const auto closeEvents = platform.takeWindowEvents();
+  check(std::any_of(closeEvents.begin(), closeEvents.end(),
+      [](const auto& event) { return event.type == "close"; }),
+        "modal preserves the intercepted close for its normal handler");
+  sync(2);
+  pushQuit();
+  check(!dialog.confirm("already queued close"), "queued close cancels at modal entry");
+  platform.takeWindowEvents();
+  platform.interceptWindowClose(false);
+
+  {
+    pmjs::Renderer smallRenderer(320, 240, images);
+    pmjs::Dialog smallDialog(platform, smallRenderer, canvases, vfs, 320, 240);
+    smallRenderer.beginFrame();
+    smallRenderer.queueQuad(0, 0, 320, 240, {0, 1, 0, 1});
+    smallRenderer.render();
+    std::string tenLines = "line";
+    for (int i = 1; i < 10; ++i) tenLines += "\nline";
+    after({{400, SDL_KEYDOWN, SDLK_RETURN}});
+    check(!smallDialog.confirm(tenLines), "small viewport confirmation stays usable");
+    const auto pixels = smallRenderer.captureDrawableRgba();
+    const auto pixel = [&](int x, int y, int red, int green, int blue) {
+      const auto at = static_cast<std::size_t>(y * 320 + x) * 4;
+      return pixels.at(at) == red && pixels.at(at + 1) == green && pixels.at(at + 2) == blue;
+    };
+    check(pixel(100, 16, 255, 255, 255) && pixel(100, 223, 255, 255, 255),
+          "ten-line modal fits vertically inside the small viewport");
+    check(pixel(85, 195, 58, 110, 165) && pixel(235, 195, 42, 46, 51),
+          "both small-viewport buttons remain inside the dialog surface");
+    sync(1);
+  }
 
   return failures == 0 ? 0 : 1;
 }

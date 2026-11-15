@@ -2343,6 +2343,23 @@ void Renderer::renderScene() {
 if (diagnostics_) ++stats_.frames;
 }
 
+void Renderer::presentModalOverlay(ImageHandle image) {
+  auto pendingFrame = std::move(frame_);
+  const bool pendingSubmission = sceneSubmittedThisFrame_;
+  frame_ = {};
+  sceneSubmittedThisFrame_ = false;
+  try {
+    render();
+  } catch (...) {
+    frame_ = std::move(pendingFrame);
+    sceneSubmittedThisFrame_ = pendingSubmission;
+    throw;
+  }
+  frame_ = std::move(pendingFrame);
+  sceneSubmittedThisFrame_ = pendingSubmission;
+  drawOverlay(image, {0, 0, static_cast<float>(width_), static_cast<float>(height_)}, 1);
+}
+
 void Renderer::presentToDrawable() {
   if (offscreenRender_) return;
   const bool hasPresentationLayers = presentationCanvasOpacity_ < 1.0F ||

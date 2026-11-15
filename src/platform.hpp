@@ -50,6 +50,7 @@ class Platform {
   std::pair<int, int> windowPosition() const;
   void windowCommand(const std::string& command, int x, int y);
   std::vector<WindowEvent> takeWindowEvents();
+  bool windowClosePending() const;
   void interceptWindowClose(bool enabled) { interceptWindowClose_ = enabled; }
   void setWindowTitle(const std::string& title);
   void setFullscreen(bool enabled);

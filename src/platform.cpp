@@ -541,6 +541,11 @@ void Platform::setTextInput(bool enabled) {
   else SDL_StopTextInput();
 }
 
+bool Platform::windowClosePending() const {
+  return std::any_of(windowEvents_.begin(), windowEvents_.end(),
+    [](const auto& event) { return event.type == "close"; });
+}
+
 bool Platform::pollEvents() {
   SDL_Event event;
   while (SDL_PollEvent(&event)) {

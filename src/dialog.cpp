@@ -3,9 +3,8 @@
 #include <SDL.h>
 
 #include <algorithm>
-#include <array>
 #include <cstddef>
-#include <iostream>
+#include <cmath>
 #include <sstream>
 #include <stdexcept>
 
@@ -94,7 +93,6 @@ bool Dialog::confirm(const std::string& message) {
 }
 
 Dialog::ModalGuard::~ModalGuard() {
-  renderer.discardCommandsFrom(baseCommands);
   dialog.releaseSurface();
 }
 
@@ -119,8 +117,12 @@ int Dialog::measureLine(const std::string& line,
 Dialog::Layout Dialog::buildLayout(const std::string& message, bool withCancel,
                                    const std::string& font) const {
   Layout layout;
+  const double scale = std::min({1.0, gameWidth_ / 400.0, gameHeight_ / 480.0});
+  if (scale <= 0) throw std::runtime_error("invalid dialog viewport");
+  layout.canvasWidth = static_cast<int>(std::ceil(gameWidth_ / scale));
+  layout.canvasHeight = static_cast<int>(std::ceil(gameHeight_ / scale));
   const int maxTextWidth =
-      std::min(560, gameWidth_ - 60) - kPadding * 2;
+      std::min(560, layout.canvasWidth - 60) - kPadding * 2;
   std::vector<std::string> wrapped;
   for (const std::string& raw : splitLines(message)) {
     std::string line;
@@ -169,12 +171,12 @@ Dialog::Layout Dialog::buildLayout(const std::string& message, bool withCancel,
   }
   layout.boxWidth =
       std::min(std::max(textWidth, buttonsWidth) + kPadding * 2,
-               gameWidth_ - 40);
+               layout.canvasWidth - 40);
   layout.boxHeight =
       kPadding * 3 + kButtonHeight +
       static_cast<int>(wrapped.size()) * kLineHeight;
-  layout.boxX = (gameWidth_ - layout.boxWidth) / 2;
-  layout.boxY = (gameHeight_ - layout.boxHeight) / 2;
+  layout.boxX = (layout.canvasWidth - layout.boxWidth) / 2;
+  layout.boxY = (layout.canvasHeight - layout.boxHeight) / 2;
   layout.textTop = kPadding;
 
   const int buttonsY =
@@ -192,7 +194,7 @@ Dialog::Layout Dialog::buildLayout(const std::string& message, bool withCancel,
 
 bool Dialog::ensureSurface(const Layout& layout) {
   if (!surfaceLive_) {
-    auto created = canvases_.create(layout.boxWidth, layout.boxHeight);
+    auto created = canvases_.create(layout.canvasWidth, layout.canvasHeight);
     if (!created) return false;
     surface_ = created->handle;
     surfaceLive_ = true;
@@ -202,33 +204,34 @@ bool Dialog::ensureSurface(const Layout& layout) {
 
 void Dialog::paint(const Layout& layout, int selected,
                    const std::string& font) {
-  canvases_.fillRect(surface_, 0, 0, layout.boxWidth, layout.boxHeight,
-                     kBoxColor);
+  canvases_.clear(surface_);
+  canvases_.fillRect(surface_, 0, 0, layout.canvasWidth, layout.canvasHeight,
+                     0x00000099U);
+  const auto fill = [&](int x, int y, int width, int height, std::uint32_t color) {
+    canvases_.fillRect(surface_, layout.boxX + x, layout.boxY + y, width, height, color);
+  };
+  fill(0, 0, layout.boxWidth, layout.boxHeight, kBoxColor);
   const int border = 2;
-  canvases_.fillRect(surface_, 0, 0, layout.boxWidth, border, kBorderColor);
-  canvases_.fillRect(surface_, 0, layout.boxHeight - border, layout.boxWidth,
-                     border, kBorderColor);
-  canvases_.fillRect(surface_, 0, 0, border, layout.boxHeight, kBorderColor);
-  canvases_.fillRect(surface_, layout.boxWidth - border, 0, border,
-                     layout.boxHeight, kBorderColor);
-  int y = layout.textTop + kFontSize;
+  fill(0, 0, layout.boxWidth, border, kBorderColor);
+  fill(0, layout.boxHeight - border, layout.boxWidth, border, kBorderColor);
+  fill(0, 0, border, layout.boxHeight, kBorderColor);
+  fill(layout.boxWidth - border, 0, border, layout.boxHeight, kBorderColor);
+  int y = layout.boxY + layout.textTop + kFontSize;
   for (const std::string& line : layout.lines) {
-    canvases_.drawText(surface_, font, line, kPadding, y, kFontSize,
+    canvases_.drawText(surface_, font, line, layout.boxX + kPadding, y, kFontSize,
                        kTextColor, 0);
     y += layout.lineHeight;
   }
   for (std::size_t i = 0; i < layout.buttons.size(); ++i) {
     const auto& button = layout.buttons[i];
-    const int localX = button.x - layout.boxX;
-    const int localY = button.y - layout.boxY;
-    canvases_.fillRect(surface_, localX, localY, button.width, button.height,
+    canvases_.fillRect(surface_, button.x, button.y, button.width, button.height,
                        static_cast<int>(i) == selected ? kButtonSelectedColor
                                                        : kButtonColor);
     const auto width = canvases_.measureText(font, button.label, kFontSize);
     const int labelWidth = width ? *width : 0;
     canvases_.drawText(surface_, font, button.label,
-                       localX + (button.width - labelWidth) / 2,
-                       localY + (kButtonHeight + kFontSize) / 2, kFontSize,
+                       button.x + (button.width - labelWidth) / 2,
+                       button.y + (kButtonHeight + kFontSize) / 2, kFontSize,
                        kTextColor, 0);
   }
 }
@@ -241,18 +244,20 @@ void Dialog::releaseSurface() {
 
 void Dialog::presentOverlay() {
   canvases_.uploadDirty();
-  renderer_.render();
+  const auto image = canvases_.imageHandle(surface_);
+  if (!image) throw std::runtime_error("dialog image unavailable");
+  renderer_.presentModalOverlay(*image);
   platform_.swap();
 }
 
 bool Dialog::armInput() {
-  if (!platform_.pollEvents()) return false;
+  if (!platform_.pollEvents() || platform_.windowClosePending()) return false;
   platform_.consumePressed();
   return true;
 }
 
 int Dialog::pollDecision(bool withCancel) {
-  if (!platform_.pollEvents()) return -3;
+  if (!platform_.pollEvents() || platform_.windowClosePending()) return -3;
   if (withCancel && (platform_.consumePress("left") ||
                      platform_.consumePress("right"))) {
     return -2;
@@ -273,13 +278,7 @@ int Dialog::runModal(const std::string& message, bool withCancel) {
     releaseSurface();
     throw std::runtime_error("dialog surface allocation failed");
   }
-  const std::array<float, 6> place = {
-    1.0F, 0.0F, 0.0F, 1.0F, static_cast<float>(layout.boxX),
-    static_cast<float>(layout.boxY)};
-  const std::array<float, 4> source = {0.0F, 0.0F,
-                                       static_cast<float>(layout.boxWidth),
-                                       static_cast<float>(layout.boxHeight)};
-  ModalGuard guard{*this, renderer_, renderer_.commandCount()};
+  ModalGuard guard{*this};
   int selected = withCancel ? 0 : static_cast<int>(layout.buttons.size()) - 1;
   int decision = armInput() ? -1 : -3;
   paint(layout, selected, *font);
@@ -293,15 +292,6 @@ int Dialog::runModal(const std::string& message, bool withCancel) {
     if (step == -4 || step == -3) {
       decision = (step == -4) ? selected : -3;
       break;
-    }
-    renderer_.discardCommandsFrom(guard.baseCommands);
-    renderer_.queueQuad(0.0F, 0.0F, static_cast<float>(gameWidth_),
-                        static_cast<float>(gameHeight_),
-                        {0.0F, 0.0F, 0.0F, 0.6F});
-    auto image = canvases_.imageHandle(surface_);
-    if (image) {
-      renderer_.queueImage(*image, place, source, 1.0F, 0xFFFFFFU,
-                           BlendMode::normal);
     }
     presentOverlay();
     if (platform_.swapInterval() == 0) SDL_Delay(16);

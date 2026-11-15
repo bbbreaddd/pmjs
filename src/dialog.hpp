@@ -28,6 +28,8 @@ class Dialog {
 
  private:
   struct Layout {
+    int canvasWidth = 0;
+    int canvasHeight = 0;
     int boxWidth = 0;
     int boxHeight = 0;
     int boxX = 0;
@@ -47,8 +49,6 @@ class Dialog {
 
   struct ModalGuard {
     Dialog& dialog;
-    Renderer& renderer;
-    std::size_t baseCommands;
     ~ModalGuard();
   };
 
