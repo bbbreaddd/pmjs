@@ -14,6 +14,62 @@ var nativeCustomFilterDefaultVertex = 'attribute vec2 aVertexPosition;\n' +
   'vTextureCoord=aTextureCoord;\n}';
 
 var nativeCustomFilterShaderCache = Object.create(null);
+// SHA-256 of vertex + NUL + fragment for Pixi 4 Gaussian kernels 5 through 15.
+var nativeZeroBlurSources = new Set([
+  '03546d16ab2a44ee7f29cd8bbf6094ff49c6982b8cb52057222229ed1a97fba1',
+  'bfaf5a71581290585329d1ed3b744e31a7a0053ac29ab94ee455030f32232f47',
+  '2df9891d282581f5c5767a45ecaa02fc5372f27d65497c0681a6c4d1a76f87b1',
+  'b9cca91539245d16d9c3c9e40ee9b890115006e4ed0c1e5e20361553e28cd684',
+  '613fa087ab18b95f469515e294ece27ebd12bf7341978606dd691a0b3e558179',
+  '8413ea6382f30265065de4aa1bd880f1fa882f5f2c5ad9dd93351dfb4d68f572',
+  'a42083b94c4209a5afba99cda3ba57ce78d8a9934131c85a9e2f9031167865ea',
+  '4719be45bd146a86dc7793177fc5a734ab95c19267ec04ae0ac80322388b77c6',
+  'c04ee31d9970d0ec0e12b600d3e320a90d69306a3cd0ebbf7c55c4634c599a7e',
+  'bcd9d3e1321eba26b02d559feea039887a4314b516a0063456a6e2d79f863620',
+  '80f3bb93f5363a3172db3741b1eba22dd4f3b96391f46e7d9e18e662d70b6770',
+  '4aac6c4dbef452a49b89edaa17bcc21f58b70149c77385fd32c4bf098b48d437'
+]);
+var nativeZeroBlurPrograms = new WeakSet();
+
+function nativeCollapseZeroBlurPasses(plan, copies, screenWidth, screenHeight) {
+  if (!copies || plan.frame[0] !== 0 || plan.frame[1] !== 0 ||
+      plan.frame[2] !== screenWidth || plan.frame[3] !== screenHeight ||
+      nativeSceneRootTransform !== nativeIdentityTransform || nativeSceneFilterResolution !== 1) return;
+  var removed = false;
+  for (var index = plan.passes.length - 2; index >= 0; index--) {
+    var pass = plan.passes[index], next = plan.passes[index + 1];
+    if (!copies.has(pass) || !copies.has(next) || pass.program !== next.program ||
+        !pass.clear || pass.output !== next.input || pass.input === next.output ||
+        plan.resolutions[pass.input] !== 1 || plan.resolutions[pass.output] !== 1 ||
+        plan.resolutions[next.output] !== 1) continue;
+    // A returned scratch target can still be sampled or blended into later.
+    var live = false;
+    for (var laterIndex = index + 2; laterIndex < plan.passes.length; laterIndex++) {
+      var later = plan.passes[laterIndex];
+      if (later.input === pass.output || later.samplers.some(function(sampler) {
+        return !sampler.image && sampler.target === pass.output;
+      }) || later.output === pass.output && !later.clear) {
+        live = true;
+        break;
+      }
+      if (later.output === pass.output) break;
+    }
+    if (live) continue;
+    next.input = pass.input;
+    plan.passes.splice(index, 1);
+    removed = true;
+  }
+  if (!removed) return;
+  var usedTargets = new Set([0, 1]);
+  plan.passes.forEach(function(pass) {
+    usedTargets.add(pass.input); usedTargets.add(pass.output);
+    pass.samplers.forEach(function(sampler) { if (!sampler.image) usedTargets.add(sampler.target); });
+  });
+  while (plan.resolutions.length > 2 && !usedTargets.has(plan.resolutions.length - 1)) {
+    plan.resolutions.pop();
+  }
+}
+
 function nativeResolveFilterProgram(filter) {
   var renderer = nativeSceneRenderer || globalThis.Graphics && Graphics._renderer;
   var context = renderer && renderer.CONTEXT_UID || 0;
@@ -32,6 +88,8 @@ function nativeResolveFilterProgram(filter) {
       program = NativeHost.render.createFilterProgram(fragment, vertex);
       nativeCustomFilterPrograms.set(key, program);
     }
+    if (program.uniforms.length === 1 && program.uniforms[0].name === 'strength' &&
+        nativeZeroBlurSources.has(PMJS.methods.fingerprint(key))) nativeZeroBlurPrograms.add(program);
     shader = { _pmjsFilterProgram: program,
       uniforms: Object.create(null),
       bind: function() { PMJS.compat.hit('renderer.shader-bind', 'direct filter shader'); },
@@ -79,6 +137,7 @@ function nativeRecordCustomFilter(filter, node, filters) {
   }
   var plan = { frame: [frame.x, frame.y, frame.width, frame.height],
     resolutions: [resolution, 1], passes: [] };
+  var zeroBlurPasses = null;
   var targets = [], pool = [];
   function target(index, targetResolution) {
     function pot(value) { value = Math.max(1, value | 0); var size = 1; while (size < value) size *= 2; return size; }
@@ -168,6 +227,12 @@ function nativeRecordCustomFilter(filter, node, filters) {
         }
       }
       plan.passes.push(pass);
+      if (nativeZeroBlurPrograms.has(program) && pass.blend === 0 && !pass.transform &&
+          !pass.uniformClasses && pass.uniforms.length === 1 && pass.uniforms[0] === 0 &&
+          !pass.samplers.length) {
+        if (!zeroBlurPasses) zeroBlurPasses = new Set();
+        zeroBlurPasses.add(pass);
+      }
     }
   };
   manager.freePotRenderTarget = manager.returnRenderTarget;
@@ -187,6 +252,7 @@ function nativeRecordCustomFilter(filter, node, filters) {
     else manager.applyFilter(currentFilter, flip, destination, !last);
     if (!last) { flop = flip; flip = destination; }
   }
+  nativeCollapseZeroBlurPasses(plan, zeroBlurPasses, screenWidth, screenHeight);
   var projection = nativeSceneRootTransform;
   if (projection !== nativeIdentityTransform && projection.b === 0 &&
       projection.c === 0 && projection.a > 0 && projection.a === projection.d &&
