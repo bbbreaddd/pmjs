@@ -783,12 +783,12 @@ std::vector<Platform::GamepadState> Platform::gamepads() const {
     const char* name = SDL_GameControllerName(controller);
     // Chromium identifies a standard-mapped pad with its vendor and product in the id;
     // games read those numbers to pick controller-specific glyphs.
-    char id[256];
-    std::snprintf(id, sizeof(id), "%s (STANDARD GAMEPAD Vendor: %04x Product: %04x)",
-                  name && *name ? name : "Game Controller",
+    char suffix[64];
+    std::snprintf(suffix, sizeof(suffix), " (STANDARD GAMEPAD Vendor: %04x Product: %04x)",
                   static_cast<unsigned>(SDL_GameControllerGetVendor(controller)),
                   static_cast<unsigned>(SDL_GameControllerGetProduct(controller)));
-    GamepadState pad{static_cast<int>(index), instance, true, id, {}, {}, {}};
+    GamepadState pad{static_cast<int>(index), instance, true,
+                    std::string(name && *name ? name : "Game Controller") + suffix, {}, {}, {}};
     if (!windowFocused_) {
       pad.axes = {0, 0, 0, 0};
       result.push_back(std::move(pad));
