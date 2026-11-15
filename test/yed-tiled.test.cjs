@@ -209,6 +209,20 @@ test('late method overrides bypass retained animation and retain ordinary guest 
   assert.deepEqual(operations, [['invalidate']]);
 });
 
+test('method validation preserves getter order and stops at the first changed method', () => {
+  const { Guest, operations } = fixture();
+  const map = new Guest(), update = map._updateAnim, reads = [];
+  for (const name of methodNames.slice(0, 3)) {
+    const value = name === methodNames[2] ? function replacement() {} : map[name];
+    Object.defineProperty(map, name, { get() { reads.push(name); return value; } });
+  }
+  Object.defineProperty(map, methodNames[3], { get() { assert.fail('must stop after the first mismatch'); } });
+  update.call(map);
+  assert.deepEqual(reads, methodNames.slice(0, 3));
+  assert.deepEqual(map.calls, ['_updateAnim']);
+  assert.deepEqual(operations, [['invalidate']]);
+});
+
 test('late prototype replacement invalidates the public map contract', () => {
   const { context, Guest } = fixture();
   assert.equal(context.PMJS.maps.tiledContract(), true);

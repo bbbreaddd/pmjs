@@ -99,7 +99,11 @@
     }
 
     function methodsUnchanged(instance) {
-      return names.every(function(name) { return instance[name] === effective[name]; });
+      for (var index = 0; index < names.length; index++) {
+        var name = names[index];
+        if (instance[name] !== effective[name]) return false;
+      }
+      return true;
     }
     function deactivate(instance, reason) {
       if (disabled.has(instance)) return;
