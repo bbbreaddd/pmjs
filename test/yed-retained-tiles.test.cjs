@@ -37,6 +37,32 @@ test('animation support ownership rejects replaced hooks without invoking access
   assert.equal(reads, 0);
 });
 
+test('map size validation preserves eager dimension reads before rejecting invalid sizes', () => {
+  const fields = ['_tileWidth', '_tileHeight', '_mapWidth', '_mapHeight', '_width', '_height'];
+  for (const invalid of [{ field: '_tileWidth', value: NaN }, { field: '_height', value: 0 }]) {
+    const { api, map } = fixture();
+    const reads = [];
+    for (const field of fields) {
+      const value = field === invalid.field ? invalid.value : map[field];
+      Object.defineProperty(map, field, { get() { reads.push(field); return value; } });
+    }
+    assert.equal(api.supported(map), false);
+    assert.deepEqual(reads, fields);
+  }
+});
+
+test('tileset size validation preserves eager reads and rejects invalid columns before later metadata', () => {
+  const { api, map } = fixture();
+  const set = map.tiledData.tilesets[0], reads = [];
+  for (const field of ['columns', 'tilewidth', 'tileheight']) {
+    const value = field === 'columns' ? 0 : set[field];
+    Object.defineProperty(set, field, { get() { reads.push(field); return value; } });
+  }
+  Object.defineProperty(set, 'firstgid', { get() { assert.fail('invalid dimensions must reject before firstgid'); } });
+  assert.equal(api.supported(map), false);
+  assert.deepEqual(reads, ['columns', 'tilewidth', 'tileheight']);
+});
+
 test('subcell movement retains submissions and visible mutation rebuilds', () => {
   const { api, map, rect } = fixture();
   assert.equal(api.prepare(map, 0, 0), true);

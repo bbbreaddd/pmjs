@@ -5,26 +5,31 @@
 
   function supported(map) {
     var data = map.tiledData;
-    return !!(data && (!data.orientation || data.orientation === 'orthogonal') && Array.isArray(data.layers) &&
+    if (!(data && (!data.orientation || data.orientation === 'orthogonal') && Array.isArray(data.layers) &&
       Array.isArray(data.tilesets) && Array.isArray(map._layers) &&
-      Array.isArray(map._priorityTiles) && Array.isArray(map.bitmaps) && !data.infinite &&
-      [map._tileWidth, map._tileHeight, map._mapWidth, map._mapHeight, map._width, map._height].every(function(value) { return Number.isFinite(value) && value > 0; }) &&
-      map._layers.every(function(layer) {
+      Array.isArray(map._priorityTiles) && Array.isArray(map.bitmaps) && !data.infinite)) return false;
+    var tileWidth = map._tileWidth, tileHeight = map._tileHeight;
+    var mapWidth = map._mapWidth, mapHeight = map._mapHeight, width = map._width, height = map._height;
+    if (!(Number.isFinite(tileWidth) && tileWidth > 0 && Number.isFinite(tileHeight) && tileHeight > 0 &&
+        Number.isFinite(mapWidth) && mapWidth > 0 && Number.isFinite(mapHeight) && mapHeight > 0 &&
+        Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0)) return false;
+    return map._layers.every(function(layer) {
         var rect = layer && layer.children && layer.children[0];
         return !!(layer && data.layers[layer.layerId] && rect && Array.isArray(rect.pointsBuf) &&
           Array.isArray(rect.textures) && typeof rect.addRect === 'function' && typeof layer.clear === 'function');
       }) &&
       data.tilesets.every(function(set) {
-        return set && [set.columns, set.tilewidth, set.tileheight].every(function(value) {
-          return Number.isFinite(value) && value > 0;
-        }) && Number.isFinite(set.firstgid) &&
+        if (!set) return false;
+        var columns = set.columns, tileWidth = set.tilewidth, tileHeight = set.tileheight;
+        return Number.isFinite(columns) && columns > 0 && Number.isFinite(tileWidth) && tileWidth > 0 &&
+          Number.isFinite(tileHeight) && tileHeight > 0 && Number.isFinite(set.firstgid) &&
           !set.margin && !set.spacing && (!Array.isArray(set.tiles) ||
             Object.keys(set.tiles).length === set.tiles.length && set.tiles.every(function(tile, index) { return tile && tile.id === index; }));
       }) && data.layers.every(function(layer) {
         return layer && !layer.chunks && !layer.layers &&
           (layer.type !== 'tilelayer' || Array.isArray(layer.data)) &&
           (layer.type !== 'objectgroup' || Array.isArray(layer.objects));
-      }));
+      });
   }
 
   function windowSize(map) {
