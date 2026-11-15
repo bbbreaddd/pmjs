@@ -149,6 +149,86 @@ test('incomplete preparation and malformed catalogs never authorize the fast pat
   assert.equal(await loadCatalog(options), null);
 });
 
+test('startup catalogs survive unrelated runner edits and explain incompatible versions and settings', async () => {
+  const f = fixture(), assets = f.options.native.assets;
+  assets.installPrepared = (entries, capture) => {
+    for (const entry of entries) if (capture) entry.pageIdentities = entry.descriptor.pages.map(() => 'page-id');
+    return entries.length;
+  };
+  assets.installPreparedCatalog = entries => entries.length;
+  assets.installDerivedCatalog = () => {};
+  assets.preparationVersion = { processor: 'fixture-v1' };
+  const options = { ...f.options, fastStartup: true };
+  const cold = await prepareGameAssets(options);
+  cold.releaseCacheLease();
+  assert.equal(cold.catalogSaved, true);
+
+  const runner = path.join(f.root, 'runner');
+  fs.cpSync(path.join(__dirname, '../runner'), runner, { recursive: true });
+  for (const name of ['asset-preparation.cjs', 'map-preparation.cjs', 'preparation-catalog.cjs'])
+    fs.appendFileSync(path.join(runner, name), '\n// Formatting-only change.\n');
+  const { loadCatalog: loadUpdatedCatalog } = require(path.join(runner, 'preparation-catalog.cjs'));
+  const warm = await loadUpdatedCatalog(options);
+  assert.ok(warm?.images.catalogHit, 'compatible code updates reuse the existing catalog');
+  warm.releaseCacheLease();
+  assert.equal(f.jobs.length, 1);
+
+  for (const [moduleName, revision, value, component] of [
+    ['asset-preparation.cjs', 'CACHE_VERSION', 999, 'imageFormat'],
+    ['map-demand.cjs', 'COMPILER_VERSION', 'fixture-map-compiler', 'mapCompiler'],
+  ]) {
+    const revisedRunner = path.join(f.root, component);
+    fs.cpSync(runner, revisedRunner, { recursive: true });
+    fs.appendFileSync(path.join(revisedRunner, moduleName), `\nmodule.exports.${revision} = ${JSON.stringify(value)};\n`);
+    const revised = require(path.join(revisedRunner, 'preparation-catalog.cjs'));
+    assert.equal(await revised.loadCatalog(options), null);
+    assert.ok(f.warnings.at(-1).includes('catalog signature changed: ' + component));
+  }
+
+  assert.equal(await loadUpdatedCatalog({ ...options, pageCodec: 'lz4' }), null);
+  assert.ok(f.warnings.at(-1).includes('catalog signature changed: pageCodec'));
+  assert.equal(await loadUpdatedCatalog({ ...options, processorIdentity: { processor: 'override' } }), null);
+  assert.ok(f.warnings.at(-1).includes('catalog signature changed: imageProcessor'));
+  assets.preparationVersion = { processor: 'fixture-v2' };
+  assert.equal(await loadUpdatedCatalog(options), null);
+  assert.ok(f.warnings.at(-1).includes('catalog signature changed: imageProcessor'));
+  assets.preparationVersion = { processor: 'fixture-v1' };
+  const restored = await loadUpdatedCatalog(options);
+  assert.ok(restored?.images.catalogHit);
+  restored.releaseCacheLease();
+
+  const filename = path.join(cold.root, 'startup-catalog.json');
+  const record = JSON.parse(fs.readFileSync(filename, 'utf8'));
+  record.version = 1;
+  record.data.signature = '0'.repeat(64);
+  record.checksum = hash(JSON.stringify(record.data));
+  fs.writeFileSync(filename, JSON.stringify(record));
+  assert.equal(await loadUpdatedCatalog(options), null);
+  assert.ok(f.warnings.at(-1).includes('catalog format version changed'));
+  assert.ok(fs.existsSync(cold.images.entries[0].directory), 'catalog rejection preserves prepared outputs');
+  const migrated = await prepareGameAssets(options);
+  migrated.releaseCacheLease();
+  assert.equal(migrated.catalogSaved, true);
+  assert.equal(migrated.images.generated, 0, 'catalog migration reuses compatible prepared outputs');
+  assert.equal(f.jobs.length, 1);
+});
+
+test('processor changes replace obsolete outputs rather than retaining a second cache configuration', async () => {
+  const f = fixture(), assets = f.options.native.assets;
+  assets.preparationVersion = { processor: 'fixture-v1' };
+  const first = await f.run();
+  const originalDirectory = first.images.entries[0].directory;
+  assets.preparationVersion = { processor: 'fixture-v2' };
+  const updated = await f.run();
+  assert.equal(updated.images.generated, 1);
+  assert.equal(fs.existsSync(originalDirectory), false);
+  assert.equal(Object.keys(updated.records).length, 1);
+  assert.equal(fs.existsSync(updated.images.entries[0].directory), true);
+  const warm = await f.run();
+  assert.equal(warm.images.generated, 0);
+  assert.equal(f.jobs.length, 2);
+});
+
 test('publication relocates only declared image, map and port output receipts', async t => {
   const f = fixture();
   const session = await openPreparation({ ...f.options });

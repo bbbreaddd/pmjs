@@ -813,4 +813,4 @@ async function prepareAssets(options) {
 }
 
 module.exports = { astcSettings, validLosslessPrefixes, pageHeaderMatches, prepareAssetsPhase, prepareAssets, validRecipes,
-  validDescriptor, validStorageDecision, automaticRecipe, PROCESSOR_IDENTITY };
+  validDescriptor, validStorageDecision, automaticRecipe, PROCESSOR_IDENTITY, CACHE_VERSION };

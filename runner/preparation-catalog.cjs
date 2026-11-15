@@ -7,6 +7,11 @@ const crypto = require('node:crypto');
 const { acquireLock, createLease } = require('./preparation-lifetime.cjs');
 const { createInvalidators } = require('./preparation-state.cjs');
 const { discoverAdapterProcessors, discoverBundledProcessors } = require('./port-preparation.cjs');
+const { CACHE_VERSION, PROCESSOR_IDENTITY } = require('./asset-preparation.cjs');
+const { COMPILER_VERSION } = require('./map-demand.cjs');
+
+// Bump when catalog contents or preparation decisions change incompatibly.
+const CATALOG_VERSION = 2;
 
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const rebuildMarker = 'runtime-settings/rebuild-assets';
@@ -15,17 +20,15 @@ const processorDiscovery = options => options.portDescriptors?.length ? [] :
 
 function signature(options) {
   const { native } = options;
-  const modules = ['asset-preparation.cjs', 'map-preparation.cjs', 'port-preparation.cjs',
-    'preparation.cjs', 'preparation-state.cjs', 'preparation-files.cjs', 'preparation-catalog.cjs',
-    'yed-sideview-recipes.cjs', 'file-overrides.cjs'];
-  return hash(JSON.stringify({ version: 1, modules: modules.map(name => hash(fs.readFileSync(path.join(__dirname, name)))),
-    imageProcessor: native.assets.preparationVersion, tileProcessor: native.assets.tilePreparationVersion,
+  return { imageFormat: CACHE_VERSION, mapCompiler: COMPILER_VERSION,
+    imageProcessor: options.processorIdentity || native.assets.preparationVersion || PROCESSOR_IDENTITY,
+    tileProcessor: native.assets.tilePreparationVersion,
     lz4: native.assets.preparationLz4Version, images: options.images, maps: options.maps,
     pageCodec: options.pageCodec, workspaceBytes: options.workspaceBytes, recipes: options.recipes,
     astc: options.astc, losslessPrefixes: options.losslessPrefixes, policyOverrides: options.policyOverrides,
     portableIndex: options.portableIndex, width: options.width, height: options.height,
     sourceRoots: options.sourceRoots, bundleRoot: options.bundleRoot, virtualFiles: options.virtualFiles,
-    portDescriptors: options.portDescriptors, adapters: options.adapters }));
+    portDescriptors: options.portDescriptors, adapters: options.adapters };
 }
 
 async function saveCatalog(options, session, result) {
@@ -54,7 +57,7 @@ async function saveCatalog(options, session, result) {
   const filename = path.join(session.root, 'startup-catalog.json');
   const temporary = filename + '.stage-' + crypto.randomBytes(6).toString('hex');
   try {
-    await fsp.writeFile(temporary, JSON.stringify({ version: 1, checksum: hash(serialized), data }), { flag: 'wx' });
+    await fsp.writeFile(temporary, JSON.stringify({ version: CATALOG_VERSION, checksum: hash(serialized), data }), { flag: 'wx' });
     await fsp.rename(temporary, filename);
     return true;
   } finally { await fsp.rm(temporary, { force: true }); }
@@ -73,19 +76,25 @@ async function loadCatalog(options) {
     releaseLock = await acquireLock(root, shouldCancel, () => {}, native.assets);
     if (!releaseLock) return null;
     const invalidations = await fsp.readdir(path.join(root, 'invalidations')).catch(error => error.code === 'ENOENT' ? [] : Promise.reject(error));
-    if (invalidations.some(name => /^[a-f0-9]{64}\.json$/.test(name))) return null;
+    if (invalidations.some(name => /^[a-f0-9]{64}\.json$/.test(name))) throw new Error('pending asset invalidation');
     const filename = path.join(root, 'startup-catalog.json');
-    if ((await fsp.stat(filename)).size > 48 * 1024 * 1024) return null;
+    if ((await fsp.stat(filename)).size > 48 * 1024 * 1024) throw new Error('catalog exceeds the memory budget');
     const record = JSON.parse(await fsp.readFile(filename, 'utf8'));
     const data = record.data;
-    if (record.version !== 1 || record.checksum !== hash(JSON.stringify(data)) || data.signature !== signature(options) ||
-        !['entries', 'derived', 'tiles', 'storage', 'audio', 'portArtifacts', 'keys'].every(key => Array.isArray(data[key])) ||
+    if (record.version !== CATALOG_VERSION) throw new Error('catalog format version changed');
+    if (record.checksum !== hash(JSON.stringify(data))) throw new Error('catalog checksum mismatch');
+    const expected = signature(options);
+    if (!data.signature || typeof data.signature !== 'object') throw new Error('missing catalog signature');
+    const changed = [...new Set([...Object.keys(data.signature), ...Object.keys(expected)])]
+      .filter(key => JSON.stringify(data.signature[key]) !== JSON.stringify(expected[key]));
+    if (changed.length) throw new Error('catalog signature changed: ' + changed.join(', '));
+    if (!['entries', 'derived', 'tiles', 'storage', 'audio', 'portArtifacts', 'keys'].every(key => Array.isArray(data[key])) ||
         !data.mapIndex || typeof data.mapIndex !== 'object' || !data.artifactHashes ||
         !Array.isArray(data.discoveredProcessors) || !data.processorHashes ||
-        JSON.stringify(data.discoveredProcessors) !== JSON.stringify(processorDiscovery(options))) return null;
+        JSON.stringify(data.discoveredProcessors) !== JSON.stringify(processorDiscovery(options))) throw new Error('catalog metadata or processor discovery changed');
     for (const [file, expected] of Object.entries(data.processorHashes))
-      if (hash(await fsp.readFile(file)) !== expected) return null;
-    if (data.portArtifacts.some(([id]) => !/^[a-f0-9]{64}$/.test(data.artifactHashes[id] || ''))) return null;
+      if (hash(await fsp.readFile(file)) !== expected) throw new Error('processor file changed: ' + file);
+    if (data.portArtifacts.some(([id]) => !/^[a-f0-9]{64}$/.test(data.artifactHashes[id] || ''))) throw new Error('missing artifact checksum');
     releaseLease = await createLease(root, data.keys);
     const derived = await native.assets.installDerivedCatalog(data.derived, false, true);
     if (derived?.rejected?.length) throw new Error('derived catalog rejected');
