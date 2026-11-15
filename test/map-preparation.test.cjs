@@ -21,6 +21,14 @@ function writeIndex(f, value) {
   state.checksum = crypto.createHash('sha256').update(JSON.stringify(state.data)).digest('hex');
   fs.writeFileSync(file, JSON.stringify(state));
 }
+
+test('unexpected tile installer responses fail preparation instead of inferring accepted entries', async () => {
+  const f = fixture();
+  f.native.assets.installTileSets = () => undefined;
+  const result = await prepareMaps(f);
+  assert.match(result.error, /invalid tile sets installation report/);
+  assert.equal(result.installed, 0);
+});
 test('map preparation retains truthy plugin status semantics without executing the manifest', async () => {
   const manifest = Buffer.from(`var $plugins = [
     {"name":"Truthy","status":1,"parameters":{"mode":"kept"}},

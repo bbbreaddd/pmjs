@@ -5,14 +5,14 @@ const fsp = fs.promises;
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { acquireLock, createLease } = require('./preparation-lifetime.cjs');
-const { createInvalidators } = require('./preparation-state.cjs');
+const { createInvalidators, installationReport } = require('./preparation-state.cjs');
 const { discoverAdapterProcessors, discoverBundledProcessors } = require('./port-preparation.cjs');
 const { CACHE_VERSION, PROCESSOR_IDENTITY } = require('./asset-preparation.cjs');
 const { COMPILER_VERSION } = require('./map-demand.cjs');
 const { fileIdentity } = require('./preparation-files.cjs');
 
 // Bump when catalog contents or preparation decisions change incompatibly.
-const CATALOG_VERSION = 4;
+const CATALOG_VERSION = 5;
 
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const rebuildMarker = 'runtime-settings/rebuild-assets';
@@ -119,15 +119,21 @@ async function loadCatalog(options) {
       }
     }
     releaseLease = await createLease(root, data.keys);
-    const derived = await native.assets.installDerivedCatalog(data.derived, false, true);
-    if (derived?.rejected?.length) throw new Error('derived catalog rejected');
-    const images = await native.assets.installPreparedCatalog(data.entries, false, true);
-    if (images?.rejected?.length || typeof images === 'number' && images !== data.entries.length) throw new Error('image catalog rejected');
-    if (native.assets.installImageStorage) await native.assets.installImageStorage(data.storage, true);
-    if (native.media?.installAudioViews && native.media.installAudioViews(data.audio) !== data.audio.length) throw new Error('audio catalog rejected');
+    const derived = installationReport(await native.assets.installDerivedCatalog(data.derived, false, true), 'derived catalog');
+    if (derived.rejected.length || derived.accepted.length !== data.derived.length) throw new Error('derived catalog rejected');
+    const images = installationReport(await native.assets.installPreparedCatalog(data.entries, false, true), 'image catalog');
+    if (images.rejected.length || images.accepted.length !== data.entries.length) throw new Error('image catalog rejected');
+    if (native.assets.installImageStorage) {
+      const storage = installationReport(await native.assets.installImageStorage(data.storage, true), 'image storage');
+      if (storage.rejected.length || storage.accepted.length !== data.storage.length) throw new Error('storage catalog rejected');
+    }
+    if (native.media?.installAudioViews) {
+      const audio = installationReport(native.media.installAudioViews(data.audio, true), 'audio views');
+      if (audio.rejected.length || audio.accepted.length !== data.audio.length) throw new Error('audio catalog rejected');
+    }
     if (options.maps) {
-      const tiles = await native.assets.installTileSetCatalog(data.tiles, false, true);
-      if (tiles?.rejected?.length || typeof tiles === 'number' && tiles !== data.tiles.length) throw new Error('tile catalog rejected');
+      const tiles = installationReport(await native.assets.installTileSetCatalog(data.tiles, false, true), 'tile catalog');
+      if (tiles.rejected.length || tiles.accepted.length !== data.tiles.length) throw new Error('tile catalog rejected');
       native.assets.preparedMapIndex = data.mapIndex;
     }
     const lease = releaseLease; releaseLease = null;

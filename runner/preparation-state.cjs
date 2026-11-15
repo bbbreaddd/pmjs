@@ -10,6 +10,11 @@ const installedLeases = new WeakMap();
 const maximumStateBytes = 48 * 1024 * 1024;
 const checksumText = value => crypto.createHash('sha256').update(value).digest('hex');
 const checksum = value => checksumText(JSON.stringify(value));
+function installationReport(value, operation) {
+  if (!value || !Array.isArray(value.accepted) || !Array.isArray(value.rejected))
+    throw new Error('invalid ' + operation + ' installation report');
+  return value;
+}
 const inside = (root, name) => {
   const relative = path.relative(root, path.resolve(name));
   if (!relative || relative.startsWith('..' + path.sep) || relative === '..' || path.isAbsolute(relative))
@@ -403,4 +408,4 @@ function createInvalidators(root, native, logger) {
   };
 }
 
-module.exports = { openPreparation, inventory, invalidateResults, invalidateCatalog, createInvalidators };
+module.exports = { openPreparation, inventory, invalidateResults, invalidateCatalog, createInvalidators, installationReport };

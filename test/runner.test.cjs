@@ -220,7 +220,7 @@ test('runner logs cold and validated warm preparation before boot and includes t
     Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==', 'base64'));
   const host = require(options.addon);
   host.assets.processImage = async () => null;
-  host.assets.installPrepared = () => 0;
+  host.assets.installPrepared = () => ({ accepted: [], rejected: [] });
   const lines = [];
   t.mock.method(console, 'log', line => lines.push(line));
   t.mock.method(console, 'warn', () => {});
@@ -257,7 +257,7 @@ test('normal shutdown waits for pending preparation invalidation persistence', a
     Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==', 'base64'));
   const host = require(options.addon);
   host.assets.processImage = () => null;
-  host.assets.installPrepared = () => 0;
+  host.assets.installPrepared = () => ({ accepted: [], rejected: [] });
   let reported = false, failuresConsumed = false;
   host.assets.consumePreparationInvalidations = () => reported ? 0 : (reported = true, 1);
   host.assets.consumePreparationFailures = () => (failuresConsumed = true, ['img/pictures/test.png']);
@@ -293,9 +293,9 @@ test('unnamed native invalidations discard the startup catalog before shutdown',
   options.mapPreparation = 'off';
   const host = require(options.addon);
   host.assets.processImage = async () => null;
-  host.assets.installPrepared = () => 0;
-  host.assets.installPreparedCatalog = () => 0;
-  host.assets.installDerivedCatalog = () => {};
+  host.assets.installPrepared = () => ({ accepted: [], rejected: [] });
+  host.assets.installPreparedCatalog = () => ({ accepted: [], rejected: [] });
+  host.assets.installDerivedCatalog = () => ({ accepted: [], rejected: [] });
   let booted = false, report = false;
   host.input.checkBoot = () => { booted = true; };
   host.pollEvents = () => !booted;
@@ -811,7 +811,7 @@ test('settings stays open while preparation completes and the guest starts', asy
   host.runtime.settingsOverlay = () => ({ hasFont: true });
   host.runtime.settingsPresent = visible => { if (visible) shown++; };
   host.assets.processImage = () => new Promise(resolve => setTimeout(() => resolve(null), 1100));
-  host.assets.installPrepared = () => {};
+  host.assets.installPrepared = () => ({ accepted: [], rejected: [] });
   try {
     await run(f);
     assert(shown > 0);

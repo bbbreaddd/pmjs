@@ -25,7 +25,7 @@ function fixture() {
       return { version: 1, width: 1, height: 1, pages: [{ path: 'page-0.png', width: 1, height: 1 }],
         cells: [{ rect: [0,0,1,1], crop: [0,0,1,1], page: 0, atlas: [0,0,1,1], fill: [0,0,0,0] }] };
     },
-    installPrepared(entries) { installed.splice(0, installed.length, ...entries); return entries.length; }
+    installPrepared(entries) { installed.splice(0, installed.length, ...entries); return { accepted: entries.map(entry => entry.source), rejected: [] }; }
   } };
   const options = { gameRoot, cacheRoot: path.join(root, 'cache'), native, pageCodec: 'png', maps: false,
     logger: { warn(message) { warnings.push(message); } } };
@@ -68,10 +68,10 @@ test('invalidation callbacks do not retain completed preparation or catalog payl
       const f = fixture(), native = f.options.native;
       native.assets.installPrepared = (entries, capture) => {
         for (const entry of entries) if (capture) entry.pageIdentities = entry.descriptor.pages.map(() => 'page-id');
-        return entries.length;
+        return { accepted: entries.map(entry => entry.source), rejected: [] };
       };
-      native.assets.installPreparedCatalog = entries => entries.length;
-      native.assets.installDerivedCatalog = () => {};
+      native.assets.installPreparedCatalog = entries => ({ accepted: entries.map(entry => entry.source), rejected: [] });
+      native.assets.installDerivedCatalog = () => ({ accepted: [], rejected: [] });
       const options = { ...f.options, fastStartup: true };
       let prepared = await prepareGameAssets(options);
       const records = new WeakRef(prepared.records), entries = new WeakRef(prepared.images.entries);
@@ -101,11 +101,11 @@ test('completed startup catalog restores without inventory, and invalidations fo
   const f = fixture(), assets = f.options.native.assets;
   assets.installPrepared = (entries, capture) => {
     for (const entry of entries) if (capture) entry.pageIdentities = entry.descriptor.pages.map(() => 'page-id');
-    return entries.length;
+    return { accepted: entries.map(entry => entry.source), rejected: [] };
   };
   let activated;
-  assets.installPreparedCatalog = entries => { activated = entries; return entries.length; };
-  assets.installDerivedCatalog = () => {};
+  assets.installPreparedCatalog = entries => { activated = entries; return { accepted: entries.map(entry => entry.source), rejected: [] }; };
+  assets.installDerivedCatalog = () => ({ accepted: [], rejected: [] });
   const options = { ...f.options, fastStartup: true };
   const cold = await prepareGameAssets(options);
   assert.equal(cold.catalogSaved, true);
@@ -116,6 +116,11 @@ test('completed startup catalog restores without inventory, and invalidations fo
   assert.ok(warm?.images.catalogHit);
   assert.equal(activated.length, 1);
   warm.releaseCacheLease();
+  const installCatalog = assets.installPreparedCatalog;
+  assets.installPreparedCatalog = () => undefined;
+  assert.equal(await loadCatalog(options), null, 'an invalid installer response cannot authorize the fast path');
+  assert.ok(f.warnings.at(-1).includes('invalid image catalog installation report'));
+  assets.installPreparedCatalog = installCatalog;
   assert.equal(await loadCatalog({ ...options, pageCodec: 'lz4' }), null, 'configuration changes reject the catalog');
   assert.equal(await loadCatalog({ ...options, virtualFiles: { overrides: { data: { '.json': '.pack' } } } }),
     null, 'file override changes reject the catalog');
@@ -137,8 +142,8 @@ test('completed startup catalog restores without inventory, and invalidations fo
 
 test('incomplete preparation and malformed catalogs never authorize the fast path', async () => {
   const f = fixture(), assets = f.options.native.assets;
-  assets.installPreparedCatalog = entries => entries.length;
-  assets.installDerivedCatalog = () => {};
+  assets.installPreparedCatalog = entries => ({ accepted: entries.map(entry => entry.source), rejected: [] });
+  assets.installDerivedCatalog = () => ({ accepted: [], rejected: [] });
   assets.processImage = async () => { throw new Error('processor failed'); };
   const options = { ...f.options, fastStartup: true };
   const failed = await prepareGameAssets(options);
@@ -153,10 +158,10 @@ test('catalogs retain unchanged image decode failures and retry changed, removed
   const f = fixture(), assets = f.options.native.assets, processImage = assets.processImage;
   assets.installPrepared = (entries, capture) => {
     for (const entry of entries) if (capture) entry.pageIdentities = entry.descriptor.pages.map(() => 'page-id');
-    return entries.length;
+    return { accepted: entries.map(entry => entry.source), rejected: [] };
   };
-  assets.installPreparedCatalog = entries => entries.length;
-  assets.installDerivedCatalog = () => {};
+  assets.installPreparedCatalog = entries => ({ accepted: entries.map(entry => entry.source), rejected: [] });
+  assets.installDerivedCatalog = () => ({ accepted: [], rejected: [] });
   const broken = path.join(f.gameRoot, 'img/pictures/broken.png');
   const removed = path.join(f.gameRoot, 'img/pictures/removed.png');
   fs.writeFileSync(broken, 'bad image'); fs.writeFileSync(removed, 'bad image');
@@ -201,10 +206,10 @@ test('startup catalogs survive unrelated runner edits and explain incompatible v
   const f = fixture(), assets = f.options.native.assets;
   assets.installPrepared = (entries, capture) => {
     for (const entry of entries) if (capture) entry.pageIdentities = entry.descriptor.pages.map(() => 'page-id');
-    return entries.length;
+    return { accepted: entries.map(entry => entry.source), rejected: [] };
   };
-  assets.installPreparedCatalog = entries => entries.length;
-  assets.installDerivedCatalog = () => {};
+  assets.installPreparedCatalog = entries => ({ accepted: entries.map(entry => entry.source), rejected: [] });
+  assets.installDerivedCatalog = () => ({ accepted: [], rejected: [] });
   assets.preparationVersion = { processor: 'fixture-v1' };
   const options = { ...f.options, fastStartup: true };
   const cold = await prepareGameAssets(options);

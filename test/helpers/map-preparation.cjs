@@ -34,7 +34,7 @@ function fixture(t) {
     async processTiles(inputs,stage){jobs++;fs.writeFileSync(path.join(stage,'tiles-0.png'),png(50,50,Buffer.alloc(50*50*4,73)));
       return {ordinaryBytes:inputs.length*512*512*4,version:1,halo:1,pages:[{path:'tiles-0.png',width:50,height:50}],sources:inputs.map(input=>({width:512,height:512,
         regions:input.rectangles.map(rect=>({rect,atlas:[1,1,rect[2],rect[3]],page:0}))}))};},
-    installTileSets(entries){installed=entries;return entries.length;}}};
+    installTileSets(entries){installed=entries;return {accepted:entries.map(entry=>entry.identity),rejected:[]};}}};
   return {gameRoot,cacheRoot:path.join(root,'cache'),native,logger:{warn(){}},map,
     get jobs(){return jobs;},get installed(){return installed;}};
 }

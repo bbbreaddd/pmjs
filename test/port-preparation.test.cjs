@@ -135,8 +135,8 @@ test('startup catalog tracks processor changes and repairs damaged artifacts whe
   const helper = path.join(f.root, 'support.cjs');
   fs.writeFileSync(helper, HELPER_TEXT);
   fs.writeFileSync(f.processor, MULTI_TEXT);
-  const assets = { ...preparationLocks(), installPreparedCatalog: entries => entries.length,
-    installDerivedCatalog() {} };
+  const assets = { ...preparationLocks(), installPreparedCatalog: entries => ({ accepted: entries.map(entry => entry.source), rejected: [] }),
+    installDerivedCatalog() { return { accepted: [], rejected: [] }; } };
   const options = { native: { assets }, gameRoot: f.game, cacheRoot: f.cache(), images: false, maps: false,
     adapters: [f.processor], logger: f.logger, fastStartup: true };
   let cold = await prepareGameAssets(options);
@@ -176,7 +176,7 @@ test('startup catalog tracks processor changes and repairs damaged artifacts whe
 test('processor discovery failures block catalogs until missing helpers are repaired', async () => {
   const f = fixture(); f.writeSources('active-input', 'declined-input');
   fs.writeFileSync(f.processor, MULTI_TEXT);
-  const assets = { ...preparationLocks(), installPreparedCatalog: entries => entries.length, installDerivedCatalog() {} };
+  const assets = { ...preparationLocks(), installPreparedCatalog: entries => ({ accepted: entries.map(entry => entry.source), rejected: [] }), installDerivedCatalog() { return { accepted: [], rejected: [] }; } };
   const options = { native: { assets }, gameRoot: f.game, cacheRoot: f.cache(), images: false, maps: false,
     adapters: [f.processor], logger: f.logger, fastStartup: true };
   const failed = await prepareGameAssets(options); failed.releaseCacheLease();
