@@ -75,6 +75,11 @@ function fixture(options = {}) {
     vm.runInContext(fs.readFileSync(path.join(runtime,'js',file+'.js'),'utf8'),context);
   }
 
+  if (options.realRetained) {
+    vm.runInContext(fs.readFileSync(path.join(runtime, 'js/pmjs-plugins/yed/retained-tiles.js'), 'utf8'), context);
+    const invalidate = context.PMJS.yedRetainedTiles.invalidate;
+    context.PMJS.yedRetainedTiles.invalidate = function(map) { operations.push(['invalidate']); return invalidate(map); };
+  }
   vm.runInContext(source, context);
   context.PMJS.plugins.execute('YED_Tiled', function() {});
   context.PMJS.phases.emit('afterGuestPlugins');
@@ -144,6 +149,64 @@ test('unsupported instance falls back without invoking retained producer', () =>
   assert.deepEqual(map.calls, ['updateTransform']);
   assert.deepEqual(operations, [['invalidate']]);
   assert.ok(warnings.every(line => line.includes('tilemap data or instance contract unsupported')));
+});
+
+test('retained animation data rejection restores the guest update before changing animation state', () => {
+  const { Guest, operations } = fixture({ realRetained: true });
+  const map = new Guest();
+  map._animDuration = { 1: 5 };
+  map._animFrame = { 1: 2 };
+  map._updateAnim();
+  assert.deepEqual(map.calls, ['_updateAnim']);
+  assert.deepEqual(map._animDuration, { 1: 5 });
+  assert.deepEqual(map._animFrame, { 1: 2 });
+  assert.deepEqual(operations, [['invalidate']]);
+  assert.equal(map._pmjsIndexedAnimation, false);
+  assert.equal(map._needsRepaint, true);
+});
+
+test('retained animation validates map data once per update', () => {
+  const { Guest } = fixture({ realRetained: true });
+  const map = Object.assign(new Guest(), { _layers: [], _priorityTiles: [], bitmaps: [],
+    _mapWidth: 10, _mapHeight: 10, _width: 160, _height: 160, _animDuration: {} });
+  let reads = 0;
+  Object.defineProperty(map, 'tiledData', { get() { reads++; return { layers: [], tilesets: [] }; } });
+  map._updateAnim();
+  assert.equal(reads, 1);
+  assert.deepEqual(map.calls, []);
+});
+
+test('a replaced retained animation callback keeps the outer support check', () => {
+  const { context, Guest, operations } = fixture({ realRetained: true });
+  let calls = 0;
+  context.PMJS.yedRetainedTiles.updateAnimation = function() { calls++; return true; };
+  const map = new Guest();
+  map._updateAnim();
+  assert.equal(calls, 0);
+  assert.deepEqual(map.calls, ['_updateAnim']);
+  assert.deepEqual(operations, [['invalidate']]);
+});
+
+test('a replaced support predicate remains authoritative for retained animation', () => {
+  const { context, Guest } = fixture({ realRetained: true });
+  let calls = 0;
+  context.PMJS.yedRetainedTiles.supported = function() { calls++; return false; };
+  const map = Object.assign(new Guest(), { tiledData: { layers: [], tilesets: [] },
+    _layers: [], _priorityTiles: [], bitmaps: [], _mapWidth: 10, _mapHeight: 10,
+    _width: 160, _height: 160, _animDuration: { 1: 5 }, _animFrame: { 1: 2 } });
+  map._updateAnim();
+  assert.equal(calls, 1);
+  assert.deepEqual(map.calls, ['_updateAnim']);
+  assert.deepEqual(map._animDuration, { 1: 5 });
+});
+
+test('late method overrides bypass retained animation and retain ordinary guest behavior', () => {
+  const { Guest, operations } = fixture();
+  const map = new Guest();
+  map._getAnimTileId = () => 42;
+  map._updateAnim();
+  assert.deepEqual(map.calls, ['_updateAnim']);
+  assert.deepEqual(operations, [['invalidate']]);
 });
 
 test('late prototype replacement invalidates the public map contract', () => {

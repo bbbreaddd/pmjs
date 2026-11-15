@@ -312,6 +312,12 @@
     return updatePositions(map, x, y);
   }
 
-  PMJS.yedRetainedTiles = { invalidate: function(map) { states.delete(map); }, supported: supported, paint: paint, prepare: prepare,
-    updatePositions: updatePositions, updateAnimation: updateAnimation, flushAnimation: flushAnimation };
+  var api = { invalidate: function(map) { states.delete(map); }, supported: supported, paint: paint, prepare: prepare,
+    updatePositions: updatePositions, updateAnimation: updateAnimation, flushAnimation: flushAnimation,
+    animationChecksSupport: function() {
+      var operation = Object.getOwnPropertyDescriptor(api, 'updateAnimation');
+      var predicate = Object.getOwnPropertyDescriptor(api, 'supported');
+      return !!(operation && operation.value === updateAnimation && predicate && predicate.value === supported);
+    } };
+  PMJS.yedRetainedTiles = api;
 })();

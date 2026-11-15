@@ -23,6 +23,20 @@ function fixture() {
   return { api: context.PMJS.yedRetainedTiles, map, rect, sprites };
 }
 
+test('animation support ownership rejects replaced hooks without invoking accessors', () => {
+  const { api } = fixture();
+  const operation = api.updateAnimation, predicate = api.supported;
+  assert.equal(api.animationChecksSupport(), true);
+  api.supported = () => false;
+  assert.equal(api.animationChecksSupport(), false);
+  api.supported = predicate;
+  let reads = 0;
+  Object.defineProperty(api, 'updateAnimation', { configurable: true,
+    get() { reads++; return operation; } });
+  assert.equal(api.animationChecksSupport(), false);
+  assert.equal(reads, 0);
+});
+
 test('subcell movement retains submissions and visible mutation rebuilds', () => {
   const { api, map, rect } = fixture();
   assert.equal(api.prepare(map, 0, 0), true);

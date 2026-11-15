@@ -90,6 +90,7 @@
     var effective = Object.assign({}, original);
     var disabled = new WeakSet();
     var retained = PMJS.yedRetainedTiles;
+    var animationChecksSupport = retained.animationChecksSupport;
     var painting = PMJS.optimizations.isEnabled(paintingId);
     var animation = painting && PMJS.optimizations.isEnabled(animationId);
     if (!painting && PMJS.optimizations.isEnabled(animationId)) {
@@ -112,17 +113,27 @@
       instance._pmjsChangedAnimKeys = null;
       retained.invalidate(instance);
     }
-    function eligible(instance) {
+    function methodsEligible(instance) {
       if (disabled.has(instance)) return false;
       if (!methodsUnchanged(instance)) {
         deactivate(instance, 'tilemap methods changed after installation');
         return false;
       }
+      return true;
+    }
+    function dataEligible(instance) {
       if (!retained.supported(instance)) {
         deactivate(instance, 'tilemap data or instance contract unsupported');
         return false;
       }
       return true;
+    }
+    function eligible(instance) {
+      return methodsEligible(instance) && dataEligible(instance);
+    }
+    function animationEligible(instance) {
+      return methodsEligible(instance) &&
+        (typeof animationChecksSupport === 'function' && animationChecksSupport() || dataEligible(instance));
     }
     function coordinates(instance) {
       var camera = instance.origin;
@@ -139,10 +150,11 @@
       instance._sortChildren();
       return true;
     }
-    function wrap(name, operation) {
+    function wrap(name, operation, check) {
       var guest = original[name];
+      check = check || eligible;
       var wrapped = function() {
-        if (!eligible(this)) return guest.apply(this, arguments);
+        if (!check(this)) return guest.apply(this, arguments);
         if (operation.apply(this, arguments) === false) {
           deactivate(this, 'retained tile operation rejected: ' + name);
           return guest.apply(this, arguments);
@@ -154,7 +166,7 @@
     if (painting) {
       wrap('_paintAllTiles', function(x, y) { return retained.paint(this, x, y); });
       wrap('_updateLayerPositions', function(x, y) { return retained.updatePositions(this, x, y); });
-      if (animation) wrap('_updateAnim', function() { return retained.updateAnimation(this); });
+      if (animation) wrap('_updateAnim', function() { return retained.updateAnimation(this); }, animationEligible);
       wrap('updateTransform', function() {
         if (!prepare(this)) return false;
         PIXI.Container.prototype.updateTransform.call(this);
