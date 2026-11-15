@@ -91,14 +91,16 @@
   }
 
   function capture(map, state) {
-    visit(map, state.x, state.y, function(value) { state.values.push(value); },
+    var cursor = 0, values = state.values;
+    visit(map, state.x, state.y, function(value) { values[cursor++] = value; },
       function(points) {
-        for (var index = 0; index < points.length; index++) state.values.push(points[index]);
+        for (var index = 0; index < points.length; index++) values[cursor++] = points[index];
       },
       function(target, layer, x, y, size) {
-        var values = readCells(target, layer, x, y, size);
-        for (var index = 0; index < values.length; index++) state.values.push(values[index]);
+        var cells = readCells(target, layer, x, y, size);
+        for (var index = 0; index < cells.length; index++) values[cursor++] = cells[index];
       });
+    values.length = cursor;
   }
 
   function cell(map, layer, x, y) {
@@ -250,7 +252,6 @@
       if (rect.parent) rect.parent.modificationMarker = 0;
     });
     state.generations = map._layers.map(function(item) { return item.children[0]._pmjsNativeGeneration || 0; });
-    state.values.length = 0;
     capture(map, state);
     map._pmjsChangedAnimKeys = null; map._needsAnimRepaint = false;
     return true;

@@ -14,7 +14,7 @@
         !PMJS.methods.matchesSource(prototype.clear,
         '1860d063bad8a58e030acf6a8915935e4ad02cade3ed624f057a1553be3ee614') ||
         !PMJS.methods.matchesSource(retained.flushAnimation,
-        '3ee6f5e91628cf55b7884ecae79ad3d3e96beb6f2872930acd5bf3f8117c18e0')) {
+        'dc59a01520e2211a3b0368eb331beed16c155524927a23e060ab4e374969914a')) {
       PMJS.optimizations.refuse(id, 'unrecognized tile writers');
       return;
     }
