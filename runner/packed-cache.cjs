@@ -90,21 +90,30 @@ async function packCache(root, assets, { maximumBytes = maximumPackBytes } = {})
     throw new Error('invalid prepared pack size');
   const token = assets.tryAcquirePreparationLock(root);
   if (!token) throw new Error('preparation cache is busy');
-  const created = [], originals = [], directories = new Set();
-  const syncDirectory = async () => {
-    const handle = await fsp.open(root, 'r');
+  const uncommitted = new Set();
+  const syncDirectory = async directory => {
+    const handle = await fsp.open(directory, 'r');
     try { await handle.sync(); } finally { await handle.close(); }
   };
-  let output, committed = false;
+  async function prunePacks(retained, syncBefore = false) {
+    const stale = (await fsp.readdir(root)).filter(name =>
+      (packName.test(name) && !retained.has(name)) || /^packed-images\.json\.stage-[a-f0-9]{16}$/.test(name));
+    if (!stale.length) return;
+    if (syncBefore) await syncDirectory(root);
+    for (const name of stale) await fsp.unlink(path.join(root, name));
+    await syncDirectory(root);
+  }
+  let output;
   try {
     const { retainLeases } = require('./preparation-lifetime.cjs');
     await retainLeases(root, new Set());
     if ((await fsp.readdir(root)).some(name => /^\.lease-\d+-[a-f0-9]+\.json$/.test(name)))
       throw new Error('preparation cache has live readers');
-    // Only verified state outputs are copied; an invalid old index can be replaced
-    // after ordinary preparation has regenerated the missing loose outputs.
-    const previous = await readPackedIndex(root).then(index => index.entries).catch(() => null);
-    const state = JSON.parse(await fsp.readFile(path.join(root, 'preparation-state.json'), 'utf8'));
+    assets.installPackedFiles?.([]);
+    const previous = await readPackedIndex(root).catch(() => ({ entries: new Map(), packs: [], invalid: true }));
+    const statePath = path.join(root, 'preparation-state.json');
+    if ((await fsp.stat(statePath)).size > 48 * 1024 * 1024) throw new Error('preparation state exceeds limit');
+    const state = JSON.parse(await fsp.readFile(statePath, 'utf8'));
     if (state.version !== 1 || state.checksum !== hash(JSON.stringify(state.data))) throw new Error('invalid preparation state');
     const pending = new Map();
     for (const [directory, record] of Object.entries(state.data.results))
@@ -113,73 +122,106 @@ async function packCache(root, assets, { maximumBytes = maximumPackBytes } = {})
         if (imageName.test(relative)) pending.set(relative, expected);
       }
     if (pending.size > maximumEntries) throw new Error('too many packed images');
-    const data = { packs: [], files: [] }, prefix = crypto.randomBytes(8).toString('hex');
-    let pack, used = 0, bytes = 0;
-    const finishPack = async () => {
-      if (!output) return;
-      await output.sync(); await output.close(); output = null;
-      const stat = await fsp.lstat(path.join(root, pack), { bigint: true });
-      data.packs.push({ name: pack, identity: identity(stat) });
-    };
-    const buffer = Buffer.alloc(256 * 1024);
+    const current = new Map([...previous.entries.values()].filter(item => pending.has(item.name))
+      .map(item => [item.name, { name: item.name, pack: path.basename(item.pack), offset: item.offset, size: item.size, hash: item.hash, header: item.header }]));
+    let packs = new Map(previous.packs.map(pack => [pack.name, pack]));
+    const loose = [], packed = new Map();
     for (const [name, expected] of [...pending].sort(([a], [b]) => a.localeCompare(b))) {
       const file = path.join(root, name);
-      let packed, input;
-      try { input = await fsp.open(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW); }
-      catch (error) {
-        if (error.code !== 'ENOENT' || !previous?.has(file)) throw error;
-        packed = previous.get(file);
-        input = await fsp.open(packed.pack, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      const stat = await fsp.lstat(file).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+      const old = stat ? null : previous.entries.get(file);
+      if (!stat && !old) throw new Error('prepared image is missing: ' + name);
+      const size = stat ? stat.size : old.size;
+      if ((stat && !stat.isFile()) || !size || size > maximumBytes) throw new Error('prepared image exceeds pack limit');
+      const item = { name, expected, file, size, old };
+      if (stat) loose.push(item);
+      else {
+        if (!packed.has(old.pack)) packed.set(old.pack, []);
+        packed.get(old.pack).push(item);
       }
-      try {
-        const stat = await input.stat({ bigint: true }), size = packed?.size ?? Number(stat.size);
-        if (!stat.isFile() || !size || size > maximumBytes) throw new Error('prepared image exceeds pack limit');
-        if (!output || used + size > maximumBytes) {
-          await finishPack(); pack = `pack-${prefix}-${data.packs.length}.pmpk`; used = 0;
-          const target = path.join(root, pack); output = await fsp.open(target, 'wx'); created.push(target);
-        }
-        const digest = crypto.createHash('sha256');
-        let offset = 0, header = Buffer.alloc(0);
-        while (offset < size) {
-          const { bytesRead } = await input.read(buffer, 0, Math.min(buffer.length, size - offset), (packed?.offset || 0) + offset);
-          if (!bytesRead) throw new Error('truncated prepared image');
-          const chunk = buffer.subarray(0, bytesRead);
-          if (header.length < 32) header = Buffer.concat([header, chunk.subarray(0, 32 - header.length)]);
-          digest.update(chunk); await output.writeFile(chunk); offset += bytesRead;
-        }
-        if (digest.digest('hex') !== expected || identity(stat) !== identity(await input.stat({ bigint: true })))
-          throw new Error('prepared image changed during packing');
-        data.files.push({ name, pack, offset: used, size, hash: expected, header: header.toString('base64') });
-        used += size; bytes += size;
-        if (!packed) { originals.push(file); directories.add(path.dirname(file)); }
-      } finally { await input.close(); }
     }
-    await finishPack();
-    const temporary = path.join(root, filename + '.stage-' + prefix); created.push(temporary);
-    const serialized = JSON.stringify({ version: 1, checksum: hash(JSON.stringify(data)), data });
-    if (Buffer.byteLength(serialized) > maximumIndexBytes) throw new Error('packed image index exceeds limit');
-    const handle = await fsp.open(temporary, 'wx');
-    try { await handle.writeFile(serialized); await handle.sync(); }
-    finally { await handle.close(); }
-    // Persist the pack names before publishing their index, then persist the
-    // index before removing either representation it replaces.
-    await syncDirectory();
-    await fsp.rename(temporary, path.join(root, filename)); committed = true;
-    await syncDirectory();
-    await fsp.rm(path.join(root, 'startup-catalog.json'), { force: true });
-    for (const file of originals) await fsp.unlink(file);
-    for (const directory of directories) await fsp.rmdir(directory).catch(error => { if (!['ENOTEMPTY', 'ENOENT'].includes(error.code)) throw error; });
-    const retained = new Set(data.packs.map(item => item.name));
-    for (const name of await fsp.readdir(root))
-      if ((packName.test(name) && !retained.has(name)) || /^packed-images\.json\.stage-[a-f0-9]{16}$/.test(name))
-        await fsp.unlink(path.join(root, name));
-    await syncDirectory();
-    return { files: data.files.length, packs: data.packs.length, bytes };
+    const batches = [];
+    let batch = [], batchBytes = 0;
+    for (const unit of [...loose.map(item => [item]), ...packed.values()]) {
+      const size = unit.reduce((sum, item) => sum + item.size, 0);
+      if (size > maximumPackBytes) throw new Error('prepared pack ranges exceed pack limit');
+      if (batchBytes + size > maximumBytes && batch.length) { batches.push(batch); batch = []; batchBytes = 0; }
+      batch.push(...unit); batchBytes += size;
+      if (batchBytes >= maximumBytes) { batches.push(batch); batch = []; batchBytes = 0; }
+    }
+    if (batch.length || !batches.length) batches.push(batch);
+    if (!previous.invalid) await prunePacks(new Set(previous.packs.map(pack => pack.name)), true);
+    const prefix = crypto.randomBytes(8).toString('hex'), buffer = Buffer.alloc(256 * 1024);
+    let sequence = 0;
+    for (const batch of batches) {
+      const replacements = [], originals = [], newPacks = [];
+      let pack, used = 0;
+      const finishPack = async () => {
+        if (!output) return;
+        await output.sync(); await output.close(); output = null;
+        const stat = await fsp.lstat(path.join(root, pack), { bigint: true });
+        newPacks.push({ name: pack, identity: identity(stat) });
+      };
+      for (const item of batch) {
+        const inputPath = item.old ? item.old.pack : item.file;
+        const input = await fsp.open(inputPath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+        try {
+          const stat = await input.stat({ bigint: true });
+          if (!stat.isFile() || (!item.old && Number(stat.size) !== item.size)) throw new Error('prepared image changed during packing');
+          if (!output || used + item.size > maximumBytes) {
+            await finishPack(); pack = `pack-${prefix}-${sequence++}.pmpk`; used = 0;
+            const target = path.join(root, pack); output = await fsp.open(target, 'wx'); uncommitted.add(target);
+          }
+          const digest = crypto.createHash('sha256');
+          let offset = 0, header = Buffer.alloc(0);
+          while (offset < item.size) {
+            const { bytesRead } = await input.read(buffer, 0, Math.min(buffer.length, item.size - offset), (item.old?.offset || 0) + offset);
+            if (!bytesRead) throw new Error('truncated prepared image');
+            const chunk = buffer.subarray(0, bytesRead);
+            if (header.length < 32) header = Buffer.concat([header, chunk.subarray(0, 32 - header.length)]);
+            digest.update(chunk); await output.writeFile(chunk); offset += bytesRead;
+          }
+          if (digest.digest('hex') !== item.expected || identity(stat) !== identity(await input.stat({ bigint: true })) ||
+              identity(stat) !== identity(await fsp.lstat(inputPath, { bigint: true })))
+            throw new Error('prepared image changed during packing');
+          replacements.push({ name: item.name, pack, offset: used, size: item.size, hash: item.expected, header: header.toString('base64') });
+          used += item.size;
+          if (!item.old) originals.push(item.file);
+        } finally { await input.close(); }
+      }
+      await finishPack();
+      for (const item of replacements) current.set(item.name, item);
+      for (const pack of newPacks) packs.set(pack.name, pack);
+      const retained = new Set([...current.values()].map(item => item.pack));
+      packs = new Map([...packs].filter(([name]) => retained.has(name)));
+      const data = { packs: [...packs.values()], files: [...current.values()] };
+      const serialized = JSON.stringify({ version: 1, checksum: hash(JSON.stringify(data)), data });
+      if (Buffer.byteLength(serialized) > maximumIndexBytes) throw new Error('packed image index exceeds limit');
+      const temporary = path.join(root, filename + '.stage-' + prefix); uncommitted.add(temporary);
+      const handle = await fsp.open(temporary, 'wx');
+      try { await handle.writeFile(serialized); await handle.sync(); }
+      finally { await handle.close(); }
+      await syncDirectory(root);
+      await fsp.rename(temporary, path.join(root, filename));
+      uncommitted.clear();
+      await syncDirectory(root);
+      await fsp.rm(path.join(root, 'startup-catalog.json'), { force: true });
+      const directories = new Set(originals.map(file => path.dirname(file)));
+      for (const file of originals) await fsp.unlink(file);
+      for (const directory of directories) {
+        await syncDirectory(directory);
+        await fsp.rmdir(directory).catch(error => { if (!['ENOTEMPTY', 'ENOENT'].includes(error.code)) throw error; });
+      }
+      for (const directory of new Set([...directories].map(directory => path.dirname(directory)))) await syncDirectory(directory);
+      await prunePacks(retained);
+    }
+    return { files: current.size, packs: packs.size, bytes: [...current.values()].reduce((sum, item) => sum + item.size, 0) };
   } finally {
-    try {
-      await output?.close();
-      if (!committed) for (const file of created) await fsp.rm(file, { force: true });
-    } finally { assets.releasePreparationLock(token); }
+    try { await output?.close(); }
+    finally {
+      try { for (const file of uncommitted) await fsp.rm(file, { force: true }); }
+      finally { assets.releasePreparationLock(token); }
+    }
   }
 }
 

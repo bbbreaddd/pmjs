@@ -696,6 +696,7 @@ napi_value installPackedFiles(napi_env env, napi_callback_info info) {
     std::uint32_t count = 0;
     check(env, napi_get_array_length(env, input, &count), "invalid packed image list");
     if (count > 100000) throw std::invalid_argument("too many packed images");
+    if (!count && !state) return number(env, 0);
     std::vector<ImageStore::PackedFile> files;
     files.reserve(count);
     for (std::uint32_t i = 0; i < count; ++i) {

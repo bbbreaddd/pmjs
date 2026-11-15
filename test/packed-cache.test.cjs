@@ -226,3 +226,121 @@ test('FUSE inode drift during mounting still rejects the mapping', async t => {
   assert.equal(await loadPackedCache(f.root, { assets: f.assets }, quiet), null);
   assert.deepEqual(f.assets.installed, []);
 });
+
+for (const repack of [false, true]) test((repack ? 'repacking' : 'conversion') + ' bounds temporary payload to one batch', async t => {
+  const f = fixture(), maximumBytes = 80;
+  if (repack) await packCache(f.root, f.assets, { maximumBytes });
+  function payloadBytes() {
+    let size = 0;
+    for (const file of f.originals.keys()) if (fs.existsSync(file)) size += fs.statSync(file).size;
+    for (const name of fs.readdirSync(f.root)) if (name.endsWith('.pmpk')) size += fs.statSync(path.join(f.root, name)).size;
+    return size;
+  }
+  const baseline = payloadBytes();
+  let peak = baseline, publications = 0;
+  const open = fs.promises.open.bind(fs.promises), rename = fs.promises.rename.bind(fs.promises);
+  t.mock.method(fs.promises, 'open', async (file, ...args) => {
+    const handle = await open(file, ...args);
+    if (!String(file).endsWith('.pmpk') || args[0] !== 'wx') return handle;
+    return { close: () => handle.close(), sync: () => handle.sync(), writeFile: async bytes => {
+      await handle.writeFile(bytes);
+      peak = Math.max(peak, payloadBytes());
+    } };
+  });
+  t.mock.method(fs.promises, 'rename', async (from, to) => {
+    await rename(from, to);
+    if (to === path.join(f.root, 'packed-images.json')) publications++;
+  });
+  assert.equal((await packCache(f.root, f.assets, { maximumBytes })).files, 3);
+  assert.equal(publications, 2);
+  assert.ok(peak <= baseline + maximumBytes, `temporary payload grew by ${peak - baseline} bytes`);
+  const entries = await loadPackedCache(f.root, { assets: f.assets }, quiet);
+  for (const entry of entries.values()) await inspectPacked(entry, true);
+  assert.equal(payloadBytes(), 114);
+});
+
+test('a later publication failure preserves completed batches and remaining loose inputs', async t => {
+  const f = fixture(), rename = fs.promises.rename.bind(fs.promises);
+  let publications = 0;
+  const failure = t.mock.method(fs.promises, 'rename', async (from, to) => {
+    if (to === path.join(f.root, 'packed-images.json') && ++publications === 2) throw new Error('later publication failed');
+    return rename(from, to);
+  });
+  await assert.rejects(packCache(f.root, f.assets, { maximumBytes: 80 }), /later publication failed/);
+  failure.mock.restore();
+  const entries = await loadPackedCache(f.root, { assets: f.assets }, quiet);
+  assert.equal(entries.size, 2);
+  for (const [name, original] of f.originals) {
+    if (entries.has(name)) {
+      await inspectPacked(entries.get(name), true);
+      assert.equal(fs.existsSync(name), false);
+    } else assert.deepEqual(fs.readFileSync(name), original);
+  }
+  assert.equal(fs.readdirSync(f.root).filter(name => name.endsWith('.pmpk')).length, 1);
+  assert.equal((await packCache(f.root, f.assets, { maximumBytes: 80 })).files, 3);
+  const retried = await loadPackedCache(f.root, { assets: f.assets }, quiet);
+  for (const entry of retried.values()) await inspectPacked(entry, true);
+});
+
+test('later repacking failure preserves unconverted old packs and completed replacements', async t => {
+  const f = fixture();
+  await packCache(f.root, f.assets, { maximumBytes: 80 });
+  const before = await loadPackedCache(f.root, { assets: f.assets }, quiet);
+  const oldPacks = new Set([...before.values()].map(item => item.pack));
+  const rename = fs.promises.rename.bind(fs.promises);
+  let publications = 0;
+  const failure = t.mock.method(fs.promises, 'rename', async (from, to) => {
+    if (to === path.join(f.root, 'packed-images.json') && ++publications === 2) throw new Error('later publication failed');
+    return rename(from, to);
+  });
+  await assert.rejects(packCache(f.root, f.assets, { maximumBytes: 80 }), /later publication failed/);
+  failure.mock.restore();
+  const entries = await loadPackedCache(f.root, { assets: f.assets }, quiet);
+  assert.equal(entries.size, 3);
+  assert.equal([...oldPacks].filter(file => fs.existsSync(file)).length, 1);
+  assert.equal(fs.readdirSync(f.root).filter(name => name.endsWith('.pmpk')).length, 2);
+  for (const entry of entries.values()) await inspectPacked(entry, true);
+  assert.equal((await packCache(f.root, f.assets, { maximumBytes: 80 })).files, 3);
+});
+
+test('splitting an old pack publishes all its replacement ranges before reclaiming it', async t => {
+  const f = fixture();
+  await packCache(f.root, f.assets);
+  const previous = await loadPackedCache(f.root, { assets: f.assets }, quiet);
+  const oldPack = previous.values().next().value.pack;
+  const rename = fs.promises.rename.bind(fs.promises);
+  let publications = 0;
+  t.mock.method(fs.promises, 'rename', async (from, to) => {
+    if (to === path.join(f.root, 'packed-images.json')) {
+      assert.equal(fs.existsSync(oldPack), true);
+      const record = JSON.parse(fs.readFileSync(from, 'utf8'));
+      assert.equal(record.data.files.length, 3);
+      assert.equal(record.data.packs.length, 3);
+      publications++;
+    }
+    return rename(from, to);
+  });
+  const result = await packCache(f.root, f.assets, { maximumBytes: 40 });
+  assert.equal(publications, 1);
+  assert.equal(result.packs, 3);
+  assert.equal(fs.existsSync(oldPack), false);
+  const current = await loadPackedCache(f.root, { assets: f.assets }, quiet);
+  for (const entry of current.values()) await inspectPacked(entry, true);
+});
+
+test('retry removes unreferenced crash output before staging another batch', async t => {
+  const f = fixture();
+  const orphan = path.join(f.root, 'pack-' + 'f'.repeat(16) + '-0.pmpk');
+  const staged = path.join(f.root, 'packed-images.json.stage-' + 'f'.repeat(16));
+  fs.writeFileSync(orphan, Buffer.alloc(80));
+  fs.writeFileSync(staged, 'interrupted index');
+  const open = fs.promises.open.bind(fs.promises);
+  t.mock.method(fs.promises, 'open', async (file, ...args) => {
+    if (String(file).endsWith('.pmpk') && args[0] === 'wx') {
+      assert.equal(fs.existsSync(orphan), false);
+      assert.equal(fs.existsSync(staged), false);
+    }
+    return open(file, ...args);
+  });
+  assert.equal((await packCache(f.root, f.assets, { maximumBytes: 80 })).files, 3);
+});

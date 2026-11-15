@@ -30,6 +30,8 @@ for (let i = 0; i < noise.length; i += 4) noise.set([i & 255, (i >>> 8) & 255, (
 fs.writeFileSync(path.join(root, 'dense.png'), png(257, 259, noise));
 for (const scenario of ['inode', 'range', 'checksum'])
   fs.writeFileSync(path.join(root, 'drift-' + scenario + '.png'), png(128, 128, smallPixels));
+for (let index = 0; index < 3; ++index)
+  fs.writeFileSync(path.join(root, 'incremental-' + index + '.png'), png(128, 128, smallPixels));
 test.before(() => native.initialize(settings));
 test.after(() => native.runtime.quit());
 
@@ -241,4 +243,66 @@ test('catalog pages tolerate pack inode drift only with matching ranges and veri
       } finally { native.images.release(image.handle); }
     }
   } finally { native.assets.installPackedFiles([]); }
+});
+
+test('installed converter supports initial and repeat batches without initializing a host', () => {
+  const cache = temporaryDirectory('packed-tool-'), relative = 'entries/' + 'b'.repeat(64);
+  fs.mkdirSync(path.join(cache, relative), { recursive: true });
+  const bytes = Buffer.alloc(40, 42);
+  fs.writeFileSync(path.join(cache, relative, 'page-0.pml4'), bytes);
+  const data = { files: {}, results: { [relative]: { outputs: { 'page-0.pml4': hash(bytes) } } }, indices: {}, failures: {} };
+  fs.writeFileSync(path.join(cache, 'preparation-state.json'), JSON.stringify({ version: 1, checksum: hash(JSON.stringify(data)), data }));
+  for (let attempt = 0; attempt < 2; ++attempt) {
+    const result = require('node:child_process').spawnSync(process.execPath,
+      [path.join(__dirname, '../tools/pack-prepared-cache.cjs'), path.resolve(process.argv[2]), cache], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).files, 1);
+    assert.equal(fs.readdirSync(cache).filter(name => name.endsWith('.pmpk')).length, 1);
+    const index = JSON.parse(fs.readFileSync(path.join(cache, 'packed-images.json'), 'utf8'));
+    const entry = index.data.files[0];
+    assert.deepEqual(fs.readFileSync(path.join(cache, entry.pack)).subarray(entry.offset, entry.offset + entry.size), bytes);
+  }
+});
+
+test('an interrupted conversion loads a mixture of packed and loose native pages', async t => {
+  const entries = [], results = {};
+  let pageBytes = 0;
+  for (let index = 0; index < 3; ++index) {
+    const source = 'incremental-' + index + '.png', relative = 'entries/' + String(index + 7).repeat(64);
+    const directory = path.join(root, relative);
+    fs.mkdirSync(directory, { recursive: true });
+    const descriptor = await native.assets.processImage(source, directory,
+      { grid: [1, 1], backdrop: [0, 0, 0, 0] }, path.join(root, source), null, { pageCodec: 'lz4' });
+    assert(descriptor && descriptor.pages.length === 1);
+    const outputs = Object.fromEntries(fs.readdirSync(directory).map(name => [name, hash(fs.readFileSync(path.join(directory, name)))]));
+    assert.equal(Object.keys(outputs).length, 1);
+    pageBytes = Math.max(pageBytes, fs.statSync(path.join(directory, descriptor.pages[0].path)).size);
+    results[relative] = { outputs };
+    entries.push({ source, directory, descriptor, sourceIdentity: native.assets.sourceIdentity(source),
+      pageHashes: descriptor.pages.map(page => outputs[page.path]) });
+  }
+  const data = { files: {}, results, indices: {}, failures: {} };
+  fs.writeFileSync(path.join(root, 'preparation-state.json'), JSON.stringify({ version: 1, checksum: hash(JSON.stringify(data)), data }));
+  const rename = fs.promises.rename.bind(fs.promises);
+  let publications = 0;
+  const failure = t.mock.method(fs.promises, 'rename', async (from, to) => {
+    if (to === path.join(root, 'packed-images.json') && ++publications === 2) throw new Error('interrupted batch');
+    return rename(from, to);
+  });
+  try {
+    await assert.rejects(packCache(root, native.assets, { maximumBytes: pageBytes * 2 }), /interrupted batch/);
+    failure.mock.restore();
+    const mapping = await loadPackedCache(root, native, { info() {}, warn(message) { assert.fail(message); } });
+    assert.equal(mapping.size, 2);
+    assert.equal(native.assets.installPrepared(entries), 3);
+    for (const entry of entries) {
+      const before = native.images.memory().preparedHits;
+      const image = await native.images.loadAsync(entry.source);
+      const ordinary = native.images.loadBytes(png(128, 128, smallPixels));
+      try {
+        assert.equal(native.images.memory().preparedHits - before, 1);
+        assert.deepEqual(canvasPixels(image), canvasPixels(ordinary));
+      } finally { native.images.release(image.handle); native.images.release(ordinary.handle); }
+    }
+  } finally { failure.mock.restore(); native.assets.installPackedFiles([]); }
 });
