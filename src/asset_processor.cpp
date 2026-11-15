@@ -155,7 +155,7 @@ class Workspace {
       owner->stats.liveWorkspaceBytes = owner->bytes_;
     }
   };
-  Workspace(std::size_t limit, AssetPreparationStats& stats) : stats(stats) {
+  Workspace(std::size_t limit, AssetPreparationStats& preparationStats) : stats(preparationStats) {
     allowance_ = limit ? availableAllowance() : 0;
     limit_ = std::min({limit, std::size_t{256U * 1024U * 1024U}, allowance_});
     stats.workspaceLimitBytes = limit_;
@@ -234,7 +234,7 @@ class PreparationSource {
     int next_ = 0;
     bool filling_ = false;
   };
-  PreparationSource(const std::filesystem::path& path, Workspace& workspace) : workspace(workspace), path_(path) {
+  PreparationSource(const std::filesystem::path& path, Workspace& sourceWorkspace) : workspace(sourceWorkspace), path_(path) {
     initial_ = open(); width = initial_->width; height = initial_->height;
     if (!checkedImageExtent(width, height, 16384)) throw AssetPreparationUnsupported("preparation image exceeds logical limits");
     const auto size = static_cast<std::uint64_t>(width) * height * 4;
@@ -1168,8 +1168,8 @@ static PreparedAsset prepareAssetCells(PreparationSource& source,
       const auto& cell = result.cells[index];
       const int localY = y - cell.rect[1];
       const auto* sourceRow = check.row.data() + static_cast<std::size_t>(cell.rect[0]) * 4;
-      const auto verifyFill = [&](int first, int last) {
-        for (int x = first; x < last; ++x)
+      const auto verifyFill = [&](int firstColumn, int last) {
+        for (int x = firstColumn; x < last; ++x)
           if (pixel(sourceRow + static_cast<std::size_t>(x) * 4) != cell.fill)
             throw std::runtime_error("prepared image reconstruction differs");
       };

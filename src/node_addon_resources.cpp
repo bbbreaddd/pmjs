@@ -1,4 +1,5 @@
 #include "log.hpp"
+#include <tuple>
 #include "node_addon_internal.hpp"
 #include "asset_processor.hpp"
 #include <cmath>
@@ -200,7 +201,7 @@ napi_value loadImageBytesAsync(napi_env env, napi_callback_info info) try {
     napi_delete_async_work(env, load->work);
     check(env, queued, "cannot queue image byte work");
   }
-  load.release();
+  std::ignore = load.release();
   return promise;
 } catch (const std::exception& error) {
   napi_throw_error(env, nullptr, error.what()); return nullptr;
@@ -247,7 +248,7 @@ void completeImageLoad(napi_env env, napi_status status, void* opaque) noexcept 
     // A caller may request CPU pixels after validation has already finished.
     if (status == napi_ok && load->prepared && load->retainCpuPixels && !load->prepareCpuPixels) {
       load->prepareCpuPixels = true;
-      if (queueImageWork(env, *load) == napi_ok) { load.release(); return; }
+      if (queueImageWork(env, *load) == napi_ok) { std::ignore = load.release(); return; }
       status = napi_generic_failure;
     }
     if (load->tileValidationFailed) owner->images.noteTileLoadFallback();
@@ -260,7 +261,7 @@ void completeImageLoad(napi_env env, napi_status status, void* opaque) noexcept 
     if (!installed && preparedAttempt) {
       // No view was published; retry the captured ordinary source for all callers.
       load->prepared.reset();
-      if (queueImageWork(env, *load) == napi_ok) { load.release(); return; }
+      if (queueImageWork(env, *load) == napi_ok) { std::ignore = load.release(); return; }
     }
     if (!installed) throw std::runtime_error("cannot install image");
     installedHandle = installed->handle;
@@ -349,7 +350,7 @@ napi_value queueImageLoad(napi_env env, const std::filesystem::path& path,
     check(env, queued, "cannot queue image work");
   }
   ++state->imageDecodeJobs;
-  load.release();
+  std::ignore = load.release();
   return promise;
 }
 

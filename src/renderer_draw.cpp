@@ -7,7 +7,6 @@
 #include <array>
 #include <cmath>
 #include <limits>
-#include <unordered_set>
 
 namespace pmjs {
 namespace {

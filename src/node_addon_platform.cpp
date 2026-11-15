@@ -1,4 +1,5 @@
 #include "node_addon_internal.hpp"
+#include <tuple>
 #include <cmath>
 #include <system_error>
 #include <cerrno>
@@ -110,7 +111,7 @@ napi_value wrapReader(napi_env env, std::shared_ptr<pmjs::FileReader> reader) {
   check(env, napi_wrap(env, result, owner.get(), [](napi_env, void* value, void*) {
     delete static_cast<ReaderOwner*>(value);
   }, nullptr, nullptr), "cannot attach file reader");
-  owner.release();
+  std::ignore = owner.release();
   return result;
 }
 void executeFileRead(napi_env, void* opaque) noexcept {
@@ -159,7 +160,7 @@ napi_value queueFileRead(napi_env env, std::unique_ptr<AsyncFileRead> load) {
     check(env, napi_create_async_work(env, nullptr, string(env, "pmjs.file.read"),
       executeFileRead, completeFileRead, load.get(), &load->work), "cannot create file work");
     check(env, napi_queue_async_work(env, load->work), "cannot queue file read");
-    load.release();
+    std::ignore = load.release();
   } catch (const std::exception& error) {
     rejectFileRead(env, load->deferred, error.what(), EIO);
   }

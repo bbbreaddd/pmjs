@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
-#include <iostream>
 #include <sstream>
 #include <stdexcept>
 
@@ -226,9 +225,9 @@ void Dialog::paint(const Layout& layout, int selected,
                                                        : kButtonColor);
     const auto width = canvases_.measureText(font, button.label, kFontSize);
     const int labelWidth = width ? *width : 0;
-    canvases_.drawText(surface_, font, button.label,
-                       localX + (button.width - labelWidth) / 2,
-                       localY + (kButtonHeight + kFontSize) / 2, kFontSize,
+    const int labelX = localX + (button.width - labelWidth) / 2;
+    const int labelY = localY + (kButtonHeight + kFontSize) / 2;
+    canvases_.drawText(surface_, font, button.label, labelX, labelY, kFontSize,
                        kTextColor, 0);
   }
 }

@@ -1,12 +1,11 @@
 #include "text_backend.hpp"
 #include "canvas.hpp"
-#include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstdlib>
-#include <list>
 #include <stdexcept>
 #ifdef PMJS_HAS_SKIA65
+#include <algorithm>
+#include <list>
 #include "skia65/pmjs_skia65.h"
 #include <dlfcn.h>
 #endif

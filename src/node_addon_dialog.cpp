@@ -1,6 +1,5 @@
 #include "node_addon_internal.hpp"
 
-#include <string>
 
 #include "dialog.hpp"
 

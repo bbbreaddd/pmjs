@@ -1,5 +1,7 @@
 #pragma once
+#ifdef PMJS_HAS_SKIA65
 #include "skia65/pmjs_skia65.h"
+#endif
 #include <png.h>
 
 namespace pmjs {

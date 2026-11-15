@@ -90,8 +90,9 @@ class GainAutomation {
       const auto outputFrame = firstFrame + frame;
       const double time = static_cast<double>(outputFrame) / 48000;
       if (frame == 0 || outputFrame % 128 == 0) {
+        const auto nextBlockFrame = (outputFrame / 128 + 1) * 128;
         automated_ = !events_.empty() && (events_.front().kind == Kind::linear ||
-          events_.front().time <= static_cast<double>((outputFrame / 128 + 1) * 128) / 48000);
+          events_.front().time <= static_cast<double>(nextBlockFrame) / 48000);
         if (automated_) prune(time);
         if (!processed_) lastGain_ = static_cast<float>(current_);
         dezipper_ = std::abs(lastGain_ - current_) >= 0.001F;

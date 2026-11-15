@@ -5,7 +5,6 @@
 #include <functional>
 #include <optional>
 #include <span>
-#include <string>
 
 namespace pmjs {
 constexpr std::size_t textureChunkLimit = 1024U * 1024U;

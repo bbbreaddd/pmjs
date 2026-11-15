@@ -3,7 +3,6 @@
 #include "scene_packet.hpp"
 
 #include <cstdlib>
-#include <iostream>
 #include <utility>
 #include <vector>
 

@@ -2,7 +2,6 @@
 #include "renderer.hpp"
 #include "renderer_shaders.hpp"
 #include "renderer_identity_shader.hpp"
-#include "scene_packet.hpp"
 #ifdef PMJS_HAS_SKIA65
 #include "skia65/pmjs_skia65.h"
 #endif
@@ -17,7 +16,6 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
-#include <unordered_set>
 #include <utility>
 
 namespace pmjs {

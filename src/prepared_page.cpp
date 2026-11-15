@@ -3,7 +3,6 @@
 #include <array>
 #include <algorithm>
 #include <bit>
-#include <numeric>
 #include <unordered_map>
 #include <cstring>
 #include <fstream>

@@ -6,7 +6,6 @@
 #include <array>
 #include <cmath>
 #include <numbers>
-#include <cstddef>
 #include <cstdint>
 #include "stream_pcm_buffer.hpp"
 #include <memory>

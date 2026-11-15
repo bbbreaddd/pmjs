@@ -80,7 +80,7 @@ for (const host of [native.fs, createStorage(directory)]) {
 
 function imageFixture(t) {
   const released = [], starts = [], byteStarts = [];
-  const context = vm.createContext({ PMJS: {}, console, performance, Blob, __pmjsBuiltinRequire: require,
+  const context = vm.createContext({ PMJS: { config: {} }, console, performance, Blob, __pmjsBuiltinRequire: require,
     NativeHost: { images: { ...native.images,
       loadAsync(...args) { starts.push(args[0]); return native.images.loadAsync(...args); },
       loadBytesAsync(...args) { byteStarts.push(args[0]); return native.images.loadBytesAsync(...args); } },

@@ -3784,14 +3784,14 @@ std::optional<CompactImageRegion> ImageStore::resolveCompactRegion(ImageHandle h
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
     for (std::size_t i = 0; i < unpack.size(); ++i) glPixelStorei(unpackNames[i], i == 0 ? 1 : 0);
     while (glGetError() != GL_NO_ERROR) {}
-    const auto upload = [](GLuint& texture, int width, int height, GLenum storage,
-                           GLenum format, GLenum type, GLenum filter, const void* pixels) {
+    const auto upload = [](GLuint& texture, int uploadWidth, int uploadHeight, GLenum storage,
+                           GLenum format, GLenum type, GLenum filter, const void* uploadPixels) {
       glGenTextures(1, &texture); glBindTexture(GL_TEXTURE_2D, texture);
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-      glTexImage2D(GL_TEXTURE_2D, 0, storage, width, height, 0, format, type, pixels);
+      glTexImage2D(GL_TEXTURE_2D, 0, storage, uploadWidth, uploadHeight, 0, format, type, uploadPixels);
     };
     GLuint atlas = 0;
     std::array<GLuint, 4> tables{};

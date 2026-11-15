@@ -1,4 +1,5 @@
 #include "log.hpp"
+#include <tuple>
 #include "node_addon_internal.hpp"
 #include "node_addon_video.hpp"
 
@@ -398,7 +399,7 @@ napi_value loadVideoAsync(napi_env env, napi_callback_info info) try {
     napi_delete_async_work(env, load->work);
     check(env, queued, "cannot queue video work");
   }
-  load.release();
+  std::ignore = load.release();
   return promise;
 } catch (const std::exception& error) {
   napi_throw_error(env, nullptr, error.what()); return nullptr;

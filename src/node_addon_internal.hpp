@@ -1,26 +1,21 @@
 #pragma once
 
 #include "runtime_core.hpp"
-#include "scene_packet.hpp"
 
 #include <node_api.h>
 
-#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
-#include <iostream>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <utility>
 
 namespace pmjs::addon {
 

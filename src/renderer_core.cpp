@@ -1,7 +1,7 @@
 #include "canvas_pixels.hpp"
 #include "renderer.hpp"
-#include "checked_bounds.hpp"
 #ifdef PMJS_HAS_SKIA65
+#include "checked_bounds.hpp"
 #include "skia65/pmjs_skia65.h"
 #endif
 #include <GLES3/gl3.h>
@@ -12,7 +12,6 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
-#include <unordered_set>
 
 namespace pmjs {
 namespace {

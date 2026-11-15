@@ -1,4 +1,5 @@
 #include "node_addon_internal.hpp"
+#include <tuple>
 #include <GLES3/gl3.h>
 #include <cmath>
 
@@ -272,7 +273,7 @@ napi_value createFilterPlan(napi_env env, napi_callback_info info) try {
   check(env, napi_wrap(env, result, owner.get(),
     [](napi_env, void* data, void*) { delete static_cast<FilterPlanOwner*>(data); },
     nullptr, nullptr), "cannot retain filter plan");
-  owner.release();
+  std::ignore = owner.release();
   return result;
 } catch (const std::exception& error) {
   napi_throw_error(env, nullptr, error.what()); return nullptr;

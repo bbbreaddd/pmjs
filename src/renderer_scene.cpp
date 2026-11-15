@@ -7,7 +7,6 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
-#include <stdexcept>
 
 namespace pmjs {
 

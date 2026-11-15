@@ -62,9 +62,10 @@ void Renderer::reduceConstantBlackGroups() {
     const float right = area[0] + area[2], bottom = area[1] + area[3];
     if (area[0] > 0 || area[1] > 0 || right < width_ || bottom < height_ ||
         !std::all_of(area.begin(), area.end(), [](float value) {
+          constexpr int minimum = std::numeric_limits<int>::min() / 4;
+          constexpr int maximum = std::numeric_limits<int>::max() / 4;
           return std::isfinite(value) && value == std::floor(value) &&
-            value >= std::numeric_limits<int>::min() / 4 &&
-            double(value) <= std::numeric_limits<int>::max() / 4;
+            value >= minimum && double(value) <= maximum;
         })) continue;
     const auto& backing = frame_.commands[begin + 1];
     if (backing.action != RenderCommand::Action::draw ||
@@ -117,13 +118,13 @@ void Renderer::reduceConstantBlackGroups() {
       const auto pixelsIn = [&](const auto& box) {
         double left = std::max(double(bounds[0]), double(box[0]));
         double top = std::max(double(bounds[1]), double(box[1]));
-        double right = std::min(double(bounds[2]), double(box[2]));
-        double bottom = std::min(double(bounds[3]), double(box[3]));
+        double clippedRight = std::min(double(bounds[2]), double(box[2]));
+        double clippedBottom = std::min(double(bounds[3]), double(box[3]));
         if (draw.clipped) {
           left = std::max(left, double(draw.clip[0])); top = std::max(top, double(draw.clip[1]));
-          right = std::min(right, double(draw.clip[2])); bottom = std::min(bottom, double(draw.clip[3]));
+          clippedRight = std::min(clippedRight, double(draw.clip[2])); clippedBottom = std::min(clippedBottom, double(draw.clip[3]));
         }
-        return std::max(0.0, right - left) * std::max(0.0, bottom - top);
+        return std::max(0.0, clippedRight - left) * std::max(0.0, clippedBottom - top);
       };
       sourcePixels += pixelsIn(std::array<float, 4>{area[0], area[1], right, bottom});
       for (auto border : borders) {

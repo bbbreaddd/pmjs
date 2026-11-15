@@ -1,4 +1,5 @@
 #include "node_addon_internal.hpp"
+#include <tuple>
 #include "asset_processor.hpp"
 #include "prepared_page.hpp"
 #include "tile_assets.hpp"
@@ -388,7 +389,7 @@ napi_value processImage(napi_env env, napi_callback_info info) try {
     "cannot create asset preparation work");
   const auto queued = napi_queue_async_work(env, work->work);
   if (queued != napi_ok) { napi_delete_async_work(env, work->work); check(env, queued, "cannot queue asset preparation"); }
-  work.release();
+  std::ignore = work.release();
   return promise;
 } catch (const std::exception& error) { napi_throw_error(env, nullptr, error.what()); return nullptr; }
 
@@ -403,7 +404,7 @@ napi_value classifyImageStorage(napi_env env, napi_callback_info info) try {
     completeAsset, work.get(), &work->work), "cannot create storage classification work");
   const auto queued = napi_queue_async_work(env, work->work);
   if (queued != napi_ok) { napi_delete_async_work(env, work->work); check(env, queued, "cannot queue storage classification"); }
-  work.release();
+  std::ignore = work.release();
   return promise;
 } catch (const std::exception& error) { napi_throw_error(env, nullptr, error.what()); return nullptr; }
 
@@ -586,7 +587,7 @@ napi_value processTiles(napi_env env, napi_callback_info info) try {
   check(env, napi_create_async_work(env, nullptr, string(env, "pmjs-tile-preparation"), executeTiles, completeTiles, work.get(), &work->work), "cannot create tile work");
   const auto status = napi_queue_async_work(env, work->work);
   if (status != napi_ok) { napi_delete_async_work(env, work->work); check(env, status, "cannot queue tile work"); }
-  work.release(); return promise;
+  std::ignore = work.release(); return promise;
 } catch (const std::exception& error) { napi_throw_error(env, nullptr, error.what()); return nullptr; }
 
 napi_value installTileSetsImpl(napi_env env, napi_callback_info info, bool catalog) try {

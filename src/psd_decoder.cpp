@@ -3,7 +3,6 @@
 
 #include <cstring>
 #include <memory>
-#include <limits>
 
 extern "C" {
 #include <libavcodec/avcodec.h>

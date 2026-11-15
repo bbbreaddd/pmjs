@@ -6,8 +6,6 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <deque>
-#include <iostream>
 #include <exception>
 #include <stdexcept>
 #include <mutex>
