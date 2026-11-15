@@ -184,8 +184,8 @@ def read_submission(directory):
         raise ValueError('gameinfo.xml releasedate must be a real calendar date') from error
     screenshot = _image(directory, 'screenshot', required=True)
     width, height = _image_dimensions(screenshot)
-    if width < 640 or height < 480 or width * 3 != height * 4:
-        raise ValueError('PortMaster screenshot must be 4:3 and at least 640x480')
+    if (width, height) != (640, 480):
+        raise ValueError('PortMaster screenshot must be exactly 640x480')
     cover = _image(directory, 'cover', required=False)
     expected_images = {'./' + portname + '/' + (cover or screenshot).name,
                        './' + portname + '/' + screenshot.name}
@@ -195,7 +195,32 @@ def read_submission(directory):
             'metadata': metadata, 'screenshot': screenshot, 'cover': cover}
 
 
-def stage_submission(destination, port, data, stage, info, notices, extra_notices):
+def _stage_image(source, destination, cover=False, compress=True):
+    if not cover and not compress:
+        shutil.copyfile(source, destination)
+        return
+    try:
+        from PIL import Image, ImageOps
+    except ImportError as error:
+        raise ValueError('Artwork packaging requires Pillow; install it with python3 -m pip install Pillow') from error
+    with Image.open(source) as image:
+        image.load()
+        if cover:
+            fitted = ImageOps.contain(image.convert('RGBA'), (640, 480), Image.Resampling.LANCZOS)
+            image = Image.new('RGB', (640, 480), 'black')
+            image.paste(fitted, ((640 - fitted.width) // 2, (480 - fitted.height) // 2), fitted)
+        if compress:
+            rgba = image.convert('RGBA')
+            if rgba.getextrema()[3] == (255, 255):
+                rgb = rgba.convert('RGB')
+                palette = rgb.quantize(colors=157, method=Image.Quantize.MEDIANCUT, kmeans=2)
+                image = rgb.quantize(palette=palette, dither=Image.Dither.FLOYDSTEINBERG)
+            else:
+                image = rgba.quantize(colors=157, method=Image.Quantize.FASTOCTREE)
+        image.save(destination, format='PNG', optimize=compress, compress_level=9 if compress else 0)
+
+
+def stage_submission(destination, port, data, stage, info, notices, extra_notices, compress_images=True):
     """Stage authored metadata at the selected package level."""
     architecture = {'arm64': 'aarch64', 'aarch64': 'aarch64',
                     'x64': 'x86_64', 'x86_64': 'x86_64'}.get(info['architecture'])
@@ -206,7 +231,7 @@ def stage_submission(destination, port, data, stage, info, notices, extra_notice
     shutil.copyfile(source / 'README.md', destination / 'README.md')
     for file in (data['screenshot'], data['cover']):
         if file:
-            shutil.copyfile(file, destination / file.name)
+            _stage_image(file, destination / file.name, cover=file == data['cover'], compress=compress_images)
     shutil.copyfile(source / 'gameinfo.xml', destination / 'gameinfo.xml')
     patches = source / 'patches'
     if patches.exists():

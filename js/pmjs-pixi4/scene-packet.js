@@ -516,6 +516,10 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
       Math.round(node.alpha * 255)]);
   }
   var filterGroups = filterPlan.groups || [];
+  if (kind === 0 && parentIndex !== 0xffffffff &&
+      (pipeType === 'container' || pipeType === 'sprite') &&
+      !nativeSceneEmission.aborted && !filterGroups.length &&
+      !(node.children && node.children.length)) return;
   var windowLayer = typeof WindowLayer === 'function' && node instanceof WindowLayer &&
     typeof node._maskWindow === 'function';
   if (windowLayer && !filterGroups.length && nativeWindowLayerHasContent(node)) {

@@ -6,7 +6,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { temporaryDirectory } = require('./helpers/temp.cjs');
 const { preparationLocks } = require('./helpers/preparation-lock.cjs');
-const { prepareGameAssets } = require('../runner/preparation.cjs');
+const { prepareGameAssets, summarizePreparation } = require('../runner/preparation.cjs');
 const { openPreparation } = require('../runner/preparation-state.cjs');
 const { loadCatalog } = require('../runner/preparation-catalog.cjs');
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==', 'base64');
@@ -25,7 +25,7 @@ function fixture() {
       return { version: 1, width: 1, height: 1, pages: [{ path: 'page-0.png', width: 1, height: 1 }],
         cells: [{ rect: [0,0,1,1], crop: [0,0,1,1], page: 0, atlas: [0,0,1,1], fill: [0,0,0,0] }] };
     },
-    installPrepared(entries) { installed.splice(0, installed.length, ...entries); return entries.length; }
+    installPrepared(entries) { installed.splice(0, installed.length, ...entries); return { accepted: entries.map(entry => entry.source), rejected: [] }; }
   } };
   const options = { gameRoot, cacheRoot: path.join(root, 'cache'), native, pageCodec: 'png', maps: false,
     logger: { warn(message) { warnings.push(message); } } };
@@ -33,15 +33,79 @@ function fixture() {
     async run(extra = {}) { const result = await prepareGameAssets({ ...options, ...extra }); result.releaseCacheLease?.(); return result; } };
 }
 
+test('gameplay preparation summaries preserve diagnostics without retaining activation payloads or callbacks', () => {
+  const index = { map: { source: 'map.json' } };
+  const data = { installed: 12, durationMs: 20, cancelled: false, invalidate() {},
+    entries: [{ descriptor: { cells: [1, 2, 3] } }], records: { retained: true },
+    maps: { durationMs: 10, installed: 3, entries: [index], index,
+      compilations: { large: [index] }, mapInputs: { map: index },
+      activation: { accepted: 3, rejected: [{ id: 'bad', reason: 'invalid' }] } },
+    validation: { hashedFiles: 4, hashCategories: { images: 200 } } };
+  const summary = summarizePreparation(data);
+  assert.equal(summary.durationMs, 20);
+  assert.equal(summary.cancelled, false);
+  assert.equal(summary.entriesCount, 1);
+  assert.equal(summary.maps.installed, 3);
+  assert.equal(summary.maps.activation.rejectedCount, 1);
+  assert.equal(summary.validation.hashCategories.images, 200);
+  for (const key of ['records', 'invalidate', 'entries']) assert.equal(summary[key], undefined);
+  for (const key of ['compilations', 'mapInputs', 'index', 'entries']) assert.equal(summary.maps[key], undefined);
+  data.maps.activation.accepted = 99;
+  assert.equal(summary.maps.activation.accepted, 3);
+});
+
+test('invalidation callbacks do not retain completed preparation or catalog payloads', () => {
+  const script = `
+    const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
+    const { temporaryDirectory } = require(${JSON.stringify(require.resolve('./helpers/temp.cjs'))});
+    const { preparationLocks } = require(${JSON.stringify(require.resolve('./helpers/preparation-lock.cjs'))});
+    const { prepareGameAssets } = require(${JSON.stringify(require.resolve('../runner/preparation.cjs'))});
+    const { loadCatalog } = require(${JSON.stringify(require.resolve('../runner/preparation-catalog.cjs'))});
+    const PNG = Buffer.from(${JSON.stringify(PNG.toString('base64'))}, 'base64');
+    const fixture = ${fixture.toString()};
+    async function collect() { for (let i = 0; i < 4; i++) { await new Promise(setImmediate); global.gc(); } }
+    async function main() {
+      const f = fixture(), native = f.options.native;
+      native.assets.installPrepared = (entries, capture) => {
+        for (const entry of entries) if (capture) entry.pageIdentities = entry.descriptor.pages.map(() => 'page-id');
+        return { accepted: entries.map(entry => entry.source), rejected: [] };
+      };
+      native.assets.installPreparedCatalog = entries => ({ accepted: entries.map(entry => entry.source), rejected: [] });
+      native.assets.installDerivedCatalog = () => ({ accepted: [], rejected: [] });
+      const options = { ...f.options, fastStartup: true };
+      let prepared = await prepareGameAssets(options);
+      const records = new WeakRef(prepared.records), entries = new WeakRef(prepared.images.entries);
+      const invalidate = prepared.invalidate, release = prepared.releaseCacheLease;
+      prepared = null; await collect();
+      assert.equal(records.deref(), undefined, 'callback retained preparation records');
+      assert.equal(entries.deref(), undefined, 'callback retained activation entries');
+      let warm = await loadCatalog(options);
+      assert.ok(warm.images.catalogHit);
+      const catalogEntries = new WeakRef(warm.images.entries);
+      const invalidateWarm = warm.invalidate, invalidateCatalog = warm.invalidateCatalog, releaseWarm = warm.releaseCacheLease;
+      warm = null; await collect();
+      assert.equal(catalogEntries.deref(), undefined, 'callback retained catalog entries');
+      await invalidate('img/pictures/a.png');
+      await invalidateWarm('img/pictures/a.png');
+      await invalidateCatalog();
+      assert.equal(await loadCatalog(options), null);
+      releaseWarm(); release();
+    }
+    main().catch(error => { console.error(error); process.exitCode = 1; });
+  `;
+  const result = require('node:child_process').spawnSync(process.execPath, ['--expose-gc', '-e', script], { encoding: 'utf8', timeout: 30000 });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
 test('completed startup catalog restores without inventory, and invalidations force preparation', async () => {
   const f = fixture(), assets = f.options.native.assets;
   assets.installPrepared = (entries, capture) => {
     for (const entry of entries) if (capture) entry.pageIdentities = entry.descriptor.pages.map(() => 'page-id');
-    return entries.length;
+    return { accepted: entries.map(entry => entry.source), rejected: [] };
   };
   let activated;
-  assets.installPreparedCatalog = entries => { activated = entries; return entries.length; };
-  assets.installDerivedCatalog = () => {};
+  assets.installPreparedCatalog = entries => { activated = entries; return { accepted: entries.map(entry => entry.source), rejected: [] }; };
+  assets.installDerivedCatalog = () => ({ accepted: [], rejected: [] });
   const options = { ...f.options, fastStartup: true };
   const cold = await prepareGameAssets(options);
   assert.equal(cold.catalogSaved, true);
@@ -52,7 +116,14 @@ test('completed startup catalog restores without inventory, and invalidations fo
   assert.ok(warm?.images.catalogHit);
   assert.equal(activated.length, 1);
   warm.releaseCacheLease();
+  const installCatalog = assets.installPreparedCatalog;
+  assets.installPreparedCatalog = () => undefined;
+  assert.equal(await loadCatalog(options), null, 'an invalid installer response cannot authorize the fast path');
+  assert.ok(f.warnings.at(-1).includes('invalid image catalog installation report'));
+  assets.installPreparedCatalog = installCatalog;
   assert.equal(await loadCatalog({ ...options, pageCodec: 'lz4' }), null, 'configuration changes reject the catalog');
+  assert.equal(await loadCatalog({ ...options, virtualFiles: { overrides: { data: { '.json': '.pack' } } } }),
+    null, 'file override changes reject the catalog');
   await warm.invalidate('img/pictures/a.png');
   assert.equal(await loadCatalog(options), null, 'observed failures force a fresh preparation');
   delete f.options.native.fs;
@@ -71,8 +142,8 @@ test('completed startup catalog restores without inventory, and invalidations fo
 
 test('incomplete preparation and malformed catalogs never authorize the fast path', async () => {
   const f = fixture(), assets = f.options.native.assets;
-  assets.installPreparedCatalog = entries => entries.length;
-  assets.installDerivedCatalog = () => {};
+  assets.installPreparedCatalog = entries => ({ accepted: entries.map(entry => entry.source), rejected: [] });
+  assets.installDerivedCatalog = () => ({ accepted: [], rejected: [] });
   assets.processImage = async () => { throw new Error('processor failed'); };
   const options = { ...f.options, fastStartup: true };
   const failed = await prepareGameAssets(options);
@@ -81,6 +152,136 @@ test('incomplete preparation and malformed catalogs never authorize the fast pat
   assert.equal(await loadCatalog(options), null);
   fs.writeFileSync(path.join(failed.root, 'startup-catalog.json'), '{invalid');
   assert.equal(await loadCatalog(options), null);
+});
+
+test('catalogs retain unchanged image decode failures and retry changed, removed or repaired sources', async () => {
+  const f = fixture(), assets = f.options.native.assets, processImage = assets.processImage;
+  assets.installPrepared = (entries, capture) => {
+    for (const entry of entries) if (capture) entry.pageIdentities = entry.descriptor.pages.map(() => 'page-id');
+    return { accepted: entries.map(entry => entry.source), rejected: [] };
+  };
+  assets.installPreparedCatalog = entries => ({ accepted: entries.map(entry => entry.source), rejected: [] });
+  assets.installDerivedCatalog = () => ({ accepted: [], rejected: [] });
+  const broken = path.join(f.gameRoot, 'img/pictures/broken.png');
+  const removed = path.join(f.gameRoot, 'img/pictures/removed.png');
+  fs.writeFileSync(broken, 'bad image'); fs.writeFileSync(removed, 'bad image');
+  let attempts = 0;
+  assets.processImage = async (source, ...args) => {
+    attempts++;
+    if (!fs.readFileSync(path.join(f.gameRoot, source)).equals(PNG))
+      throw Object.assign(new Error('invalid preparation PNG'), { code: 'PMJS_IMAGE_DECODE' });
+    return processImage(source, ...args);
+  };
+  const options = { ...f.options, fastStartup: true };
+  const cold = await f.run({ fastStartup: true });
+  assert.equal(cold.images.failedFiles, 2);
+  assert.equal(cold.catalogSaved, true);
+  const warm = await loadCatalog(options);
+  assert.ok(warm?.images.catalogHit);
+  assert.equal(warm.images.failedFiles, 2);
+  warm.releaseCacheLease();
+  assert.equal(attempts, 3, 'unchanged decode failures do not rerun preparation');
+  const stat = fs.statSync(broken);
+  fs.utimesSync(broken, stat.atime, new Date(stat.mtimeMs + 1000));
+  const metadataOnly = await loadCatalog(options);
+  assert.ok(metadataOnly?.images.catalogHit, 'identity changes recheck failed source bytes before invalidating');
+  metadataOnly.releaseCacheLease();
+  fs.appendFileSync(broken, 'changed');
+  assert.equal(await loadCatalog(options), null);
+  assert.equal((await f.run({ fastStartup: true })).catalogSaved, true);
+  fs.unlinkSync(removed);
+  assert.equal(await loadCatalog(options), null);
+  const fewer = await f.run({ fastStartup: true });
+  assert.equal(fewer.images.failedFiles, 1);
+  assert.equal(fewer.catalogSaved, true);
+  fs.writeFileSync(broken, PNG);
+  assert.equal(await loadCatalog(options), null);
+  const repaired = await f.run({ fastStartup: true });
+  assert.equal(repaired.images.failedFiles, 0);
+  assert.equal(repaired.images.installed, 2);
+  assert.equal(repaired.catalogSaved, true);
+});
+
+test('startup catalogs survive unrelated runner edits and explain incompatible versions and settings', async () => {
+  const f = fixture(), assets = f.options.native.assets;
+  assets.installPrepared = (entries, capture) => {
+    for (const entry of entries) if (capture) entry.pageIdentities = entry.descriptor.pages.map(() => 'page-id');
+    return { accepted: entries.map(entry => entry.source), rejected: [] };
+  };
+  assets.installPreparedCatalog = entries => ({ accepted: entries.map(entry => entry.source), rejected: [] });
+  assets.installDerivedCatalog = () => ({ accepted: [], rejected: [] });
+  assets.preparationVersion = { processor: 'fixture-v1' };
+  const options = { ...f.options, fastStartup: true };
+  const cold = await prepareGameAssets(options);
+  cold.releaseCacheLease();
+  assert.equal(cold.catalogSaved, true);
+
+  const runner = path.join(f.root, 'runner');
+  fs.cpSync(path.join(__dirname, '../runner'), runner, { recursive: true });
+  for (const name of ['asset-preparation.cjs', 'map-preparation.cjs', 'preparation-catalog.cjs'])
+    fs.appendFileSync(path.join(runner, name), '\n// Formatting-only change.\n');
+  const { loadCatalog: loadUpdatedCatalog } = require(path.join(runner, 'preparation-catalog.cjs'));
+  const warm = await loadUpdatedCatalog(options);
+  assert.ok(warm?.images.catalogHit, 'compatible code updates reuse the existing catalog');
+  warm.releaseCacheLease();
+  assert.equal(f.jobs.length, 1);
+
+  for (const [moduleName, revision, value, component] of [
+    ['asset-preparation.cjs', 'CACHE_VERSION', 999, 'imageFormat'],
+    ['map-demand.cjs', 'COMPILER_VERSION', 'fixture-map-compiler', 'mapCompiler'],
+  ]) {
+    const revisedRunner = path.join(f.root, component);
+    fs.cpSync(runner, revisedRunner, { recursive: true });
+    fs.appendFileSync(path.join(revisedRunner, moduleName), `\nmodule.exports.${revision} = ${JSON.stringify(value)};\n`);
+    const revised = require(path.join(revisedRunner, 'preparation-catalog.cjs'));
+    assert.equal(await revised.loadCatalog(options), null);
+    assert.ok(f.warnings.at(-1).includes('catalog signature changed: ' + component));
+  }
+
+  assert.equal(await loadUpdatedCatalog({ ...options, pageCodec: 'lz4' }), null);
+  assert.ok(f.warnings.at(-1).includes('catalog signature changed: pageCodec'));
+  assert.equal(await loadUpdatedCatalog({ ...options, processorIdentity: { processor: 'override' } }), null);
+  assert.ok(f.warnings.at(-1).includes('catalog signature changed: imageProcessor'));
+  assets.preparationVersion = { processor: 'fixture-v2' };
+  assert.equal(await loadUpdatedCatalog(options), null);
+  assert.ok(f.warnings.at(-1).includes('catalog signature changed: imageProcessor'));
+  assets.preparationVersion = { processor: 'fixture-v1' };
+  const restored = await loadUpdatedCatalog(options);
+  assert.ok(restored?.images.catalogHit);
+  restored.releaseCacheLease();
+
+  const filename = path.join(cold.root, 'startup-catalog.json');
+  const record = JSON.parse(fs.readFileSync(filename, 'utf8'));
+  record.version = 1;
+  record.data.signature = '0'.repeat(64);
+  record.checksum = hash(JSON.stringify(record.data));
+  fs.writeFileSync(filename, JSON.stringify(record));
+  assert.equal(await loadUpdatedCatalog(options), null);
+  assert.ok(f.warnings.at(-1).includes('catalog format version changed'));
+  assert.ok(fs.existsSync(cold.images.entries[0].directory), 'catalog rejection preserves prepared outputs');
+  const migrated = await prepareGameAssets(options);
+  migrated.releaseCacheLease();
+  assert.equal(migrated.catalogSaved, true);
+  assert.equal(migrated.images.generated, 0, 'catalog migration reuses compatible prepared outputs');
+  assert.equal(f.jobs.length, 1);
+});
+
+test('processor changes replace obsolete outputs rather than retaining a second cache configuration', async () => {
+  const f = fixture(), assets = f.options.native.assets;
+  assets.preparationVersion = { processor: 'fixture-v1' };
+  const first = await f.run();
+  const originalDirectory = first.images.entries[0].directory;
+  assets.preparationVersion = { processor: 'fixture-v2' };
+  const updated = await f.run();
+  assert.equal(updated.images.generated, 1);
+  assert.equal(fs.existsSync(originalDirectory), false);
+  assert.equal(Object.keys(updated.records).length, 1);
+  const state = JSON.parse(fs.readFileSync(path.join(updated.root, 'preparation-state.json')));
+  assert.ok(Object.keys(state.data.files).every(file => fs.existsSync(file)), 'obsolete output receipts are removed in images-only preparation');
+  assert.equal(fs.existsSync(updated.images.entries[0].directory), true);
+  const warm = await f.run();
+  assert.equal(warm.images.generated, 0);
+  assert.equal(f.jobs.length, 2);
 });
 
 test('publication relocates only declared image, map and port output receipts', async t => {

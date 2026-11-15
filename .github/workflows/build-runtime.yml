@@ -59,7 +59,7 @@ jobs:
             'tools/skia65/*.py', 'tools/skia65/*.json',
             'tools/effekseer.lock.json', 'tools/lz4.lock.json', 'tools/astcenc.lock.json',
             'cmake/toolchains/**', 'third_party/skia65-*', 'src/skia65/**',
-            'src/text_layout.*', 'src/canvas_pixels.hpp', 'src/unicode_default_ignorables.hpp') }}
+            'src/canvas/text_layout.*', 'src/canvas/canvas_pixels.hpp', 'src/canvas/unicode_default_ignorables.hpp') }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-arm64-v2-
 

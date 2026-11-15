@@ -14,7 +14,7 @@ def source_hashes(*, mask_test=False):
     files += [ROOT / "tools/llvm_tools.py"]
     files += sorted(file for file in (ROOT / "src/skia65").iterdir()
                     if file.is_file() and (mask_test or str(file.relative_to(ROOT)) not in TEST_SOURCES))
-    files += [ROOT / "src" / name for name in
+    files += [ROOT / "src/canvas" / name for name in
         ["text_layout.cpp", "text_layout.hpp", "canvas_pixels.hpp", "unicode_default_ignorables.hpp"]]
     return {str(file.relative_to(ROOT)): digest(file) for file in files}
 

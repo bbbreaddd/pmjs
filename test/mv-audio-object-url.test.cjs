@@ -15,6 +15,7 @@ function contextFor(decrypter, XMLHttpRequest, clock = Date, streaming = false, 
   const gainEvents = [];
   let gainValue = 1;
   const context = {
+    PMJS: { config: {} },
     Blob,
     URL: function URL() {},
     console, __pmjsBuiltinRequire: require,

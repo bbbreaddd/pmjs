@@ -1,5 +1,5 @@
-#include "encrypted_audio_file.hpp"
-#include "media_decoder.hpp"
+#include "media/encrypted_audio_file.hpp"
+#include "media/media_decoder.hpp"
 
 #include <algorithm>
 #include <array>

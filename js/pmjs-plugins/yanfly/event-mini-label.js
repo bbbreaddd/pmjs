@@ -11,14 +11,6 @@
 // transitions, classifier errors, and unrecognized method shapes all take
 // the original path.
 (function() {
-  if (typeof PMJS !== 'undefined' && PMJS.plugins &&
-      typeof PMJS.plugins.registerOptimization === 'function') {
-    PMJS.plugins.registerOptimization('YEP_EventMiniLabel', {
-      id: 'plugins.yanfly.event-mini-label',
-      owner: 'plugins/yanfly/event-mini-label',
-      fallback: 'construct Window_EventMiniLabel for every event without checking page tags'
-    });
-  }
 
   // Reviewed YEP_EventMiniLabel 1.12 constructor path.
   var KNOWN_BODY = ['4886f405db38cab6ea5d26fe71570958ee508727837a9211637356519451fe43'];
@@ -109,9 +101,11 @@
     return true;
   }
 
-  PMJS.plugins.onLoaded('YEP_EventMiniLabel',
-    'pmjs.adapter.yanfly-event-mini-label', function() {
-      PMJS.phases.on('afterGuestPlugins',
-        'pmjs.adapter.yanfly-event-mini-label', install);
-    });
+  PMJS.plugins.installOptimization('YEP_EventMiniLabel', {
+    id: 'plugins.yanfly.event-mini-label',
+    owner: 'plugins/yanfly/event-mini-label',
+    fallback: 'construct Window_EventMiniLabel for every event without checking page tags',
+    phaseKey: 'pmjs.adapter.yanfly-event-mini-label',
+    install: install
+  });
 })();

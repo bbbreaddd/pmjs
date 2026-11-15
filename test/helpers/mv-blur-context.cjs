@@ -2,10 +2,10 @@
 
 const { runModule } = require('./runtime-context.cjs');
 const vm = require('node:vm');
-const { blur } = require('./mv-reviewed-methods.cjs');
+const { blur, adjustTone, rotateHue } = require('./mv-reviewed-methods.cjs');
 const { createHostContext } = require('./mz-host-context.cjs');
 
-function createMvBlurContext(native, { stockBlur, disableOptimizations = [] } = {}) {
+function createMvBlurContext(native, { stockBlur, stockAdjustTone, stockRotateHue, disableOptimizations = [] } = {}) {
   const context = createHostContext(native, { graphics: false });
   context.PMJS_GAME_CONFIG = { disableOptimizations };
   for (const module of ['pmjs-core/config', 'pmjs-core/optimizations', 'pmjs-rpgmaker/lifecycle']) {
@@ -38,6 +38,8 @@ function createMvBlurContext(native, { stockBlur, disableOptimizations = [] } = 
       return width;
     };
     Bitmap.prototype.blur = ${stockBlur || blur.toString()};
+    Bitmap.prototype.adjustTone = ${stockAdjustTone || adjustTone.toString()};
+    Bitmap.prototype.rotateHue = ${stockRotateHue || rotateHue.toString()};
     function Sprite() {}
     function Graphics() {}
     function Input() {}

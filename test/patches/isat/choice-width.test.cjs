@@ -1,5 +1,7 @@
 'use strict';
 
+const { runOptimizationAdapter } = require('../../helpers/runtime-context.cjs');
+
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -76,7 +78,7 @@ function fixture({ enabled = true, unknown = false, translations = {} } = {}) {
     } } },
     phases: { on(_phase, _owner, callback) { install = callback; } } } });
   context.PMJS.isatMethodHash = require('./test-fixtures/method-hash.cjs')(context.__pmjsBuiltinRequire);
-  vm.runInContext(adapted, context); install();
+  runOptimizationAdapter(adapted, context); install();
   return { window: new Choice(), calls, originals, refusal };
 }
 

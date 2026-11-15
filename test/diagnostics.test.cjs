@@ -304,3 +304,19 @@ test('reclamation sampling shares bounded headroom accounting without detailed m
   assert.equal(state.availableBytes, 60 * MiB);
   assert.equal(state.rssBytes, 400 * MiB);
 });
+
+test('reclamation sampling includes process swap without reading memory mappings', () => {
+  const reader = { readFileSync(file) {
+    if (file === '/proc/meminfo') return 'MemAvailable: 80000 kB\n';
+    if (file === '/proc/123/status') return 'VmSwap: 64000 kB\n';
+    assert.doesNotMatch(file, /smaps/);
+    throw Error('ENOENT');
+  } };
+  const memoryUsage = () => assert.fail('full memoryUsage is unnecessary');
+  memoryUsage.rss = () => 400 * MiB;
+  const state = require('../runner/diagnostics.cjs').reclamationMemoryState({ reader,
+    processObject: { pid: 123, memoryUsage },
+    osObject: { totalmem: () => 1024 * MiB, freemem: () => 0 } });
+  assert.equal(state.swapBytes, 64000 * 1024);
+  assert.equal(state.rssBytes, 400 * MiB);
+});

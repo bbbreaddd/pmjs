@@ -1,5 +1,5 @@
-#include "asset_processor.hpp"
-#include "prepared_page.hpp"
+#include "assets/asset_processor.hpp"
+#include "assets/prepared_page.hpp"
 
 #include <algorithm>
 #include <cstdio>

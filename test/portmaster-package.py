@@ -20,7 +20,98 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / 'tools'))
 import runtime_artifact as artifacts
 import portmaster
-from portmaster_metadata import portname_from_title
+from portmaster_metadata import portname_from_title, _stage_image
+from PIL import Image
+
+
+class PortMasterArtwork(unittest.TestCase):
+    def setUp(self):
+        root = ROOT / '.cache/tests'
+        root.mkdir(parents=True, exist_ok=True)
+        temporary = tempfile.TemporaryDirectory(prefix='artwork-', dir=root)
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+
+    def test_cover_fits_without_cropping_and_preserves_sources(self):
+        for size, alpha in (((1280, 480), 255), ((320, 960), 255),
+                            ((640, 480), 255), ((640, 480), 128), ((640, 480), 0)):
+            with self.subTest(size=size, alpha=alpha):
+                source, target = self.root / 'source.png', self.root / 'cover.png'
+                Image.new('RGBA', size, (255, 0, 0, alpha)).save(source)
+                original = source.read_bytes()
+                _stage_image(source, target, cover=True)
+                self.assertEqual(source.read_bytes(), original)
+                with Image.open(target) as image:
+                    self.assertEqual(image.size, (640, 480))
+                    self.assertEqual(image.mode, 'P')
+                    image = image.convert('RGB')
+                    self.assertEqual(image.getpixel((320, 240)), (alpha, 0, 0))
+                    if size != (640, 480):
+                        self.assertEqual(image.getpixel((0, 0)), (0, 0, 0))
+                        self.assertEqual(image.getbbox(), (0, 120, 640, 360) if size[0] == 1280 else (240, 0, 400, 480))
+
+    def test_solid_screenshot_preserves_colours_and_dimensions_with_smaller_encoding(self):
+        source, target = self.root / 'source.png', self.root / 'screenshot.png'
+        Image.new('RGBA', (640, 480), (23, 45, 67, 128)).save(source, compress_level=0)
+        original = source.read_bytes()
+        _stage_image(source, target)
+        with Image.open(source) as before, Image.open(target) as after:
+            self.assertEqual(after.size, before.size)
+            self.assertEqual(after.convert('RGBA').tobytes(), before.convert('RGBA').tobytes())
+        self.assertLess(target.stat().st_size, source.stat().st_size)
+        self.assertEqual(source.read_bytes(), original)
+
+    def test_default_compression_reduces_palette_and_is_repeatable(self):
+        source, target = self.root / 'source.png', self.root / 'screenshot.png'
+        image = Image.new('RGB', (640, 480))
+        image.putdata([(x % 256, y % 256, (x * 3 + y) % 256)
+                       for y in range(480) for x in range(640)])
+        image.save(source, compress_level=0)
+        original = source.read_bytes()
+        _stage_image(source, target)
+        encoded = target.read_bytes()
+        with Image.open(target) as result:
+            self.assertEqual(result.mode, 'P')
+            self.assertLessEqual(len(result.getcolors()), 157)
+            self.assertEqual(result.size, image.size)
+            self.assertNotEqual(result.convert('RGB').tobytes(), image.tobytes())
+        self.assertLess(len(encoded), len(original))
+        _stage_image(source, target)
+        self.assertEqual(target.read_bytes(), encoded)
+        self.assertEqual(source.read_bytes(), original)
+
+    def test_transparent_screenshot_retains_alpha(self):
+        source, target = self.root / 'source.png', self.root / 'screenshot.png'
+        image = Image.new('RGBA', (640, 480), (200, 100, 50, 128))
+        image.putpixel((0, 0), (0, 0, 0, 0))
+        image.putpixel((1, 0), (255, 255, 255, 255))
+        image.save(source)
+        _stage_image(source, target)
+        with Image.open(target) as result:
+            alpha = result.convert('RGBA').getchannel('A')
+            self.assertEqual(alpha.getextrema(), (0, 255))
+            self.assertEqual(alpha.getpixel((320, 240)), 128)
+
+    def test_disabled_compression_copies_screenshot_and_still_fits_cover(self):
+        source, target = self.root / 'source.png', self.root / 'screenshot.png'
+        Image.new('RGB', (640, 480), 'red').save(source, compress_level=0)
+        original = source.read_bytes()
+        with patch.dict(sys.modules, {'PIL': None}):
+            _stage_image(source, target, compress=False)
+        self.assertEqual(target.read_bytes(), original)
+        Image.new('RGB', (320, 960), 'red').save(source)
+        original = source.read_bytes()
+        _stage_image(source, target, cover=True, compress=False)
+        with Image.open(target) as result:
+            self.assertEqual(result.size, (640, 480))
+            self.assertEqual(result.mode, 'RGB')
+            self.assertEqual(result.getbbox(), (240, 0, 400, 480))
+        self.assertEqual(source.read_bytes(), original)
+
+    def test_missing_pillow_has_installation_message(self):
+        with patch.dict(sys.modules, {'PIL': None}):
+            with self.assertRaisesRegex(ValueError, 'python3 -m pip install Pillow'):
+                _stage_image(self.root / 'source.png', self.root / 'target.png')
 
 
 class PortMasterPackage(unittest.TestCase):
@@ -162,6 +253,8 @@ class PortMasterPackage(unittest.TestCase):
         import zlib
         submission = self.root / 'minimalgame'
         submission.mkdir()
+        Image.new('RGB', (320, 960), 'red').save(submission / 'cover.png')
+        original_cover = (submission / 'cover.png').read_bytes()
         raw = b''.join(b'\x00' + b'\0' * (640 * 4) for _ in range(480))
         def chunk(kind, data):
             content = kind + data
@@ -169,6 +262,7 @@ class PortMasterPackage(unittest.TestCase):
         (submission / 'screenshot.png').write_bytes(
             b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', 640, 480, 8, 6, 0, 0, 0)) +
             chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b''))
+        original_screenshot = (submission / 'screenshot.png').read_bytes()
         (submission / 'README.md').write_text('## Notes\n\nThanks to the developer — and contributors.\n\n## Controls\n\n## Compile\n')
         (submission / 'gameinfo.xml').write_text('''<?xml version="1.0"?>
 <gameList><game><path>./Minimal Game.sh</path><name>Minimal Game</name>
@@ -216,6 +310,10 @@ class PortMasterPackage(unittest.TestCase):
                              extra_notices=(extra_notice,))
         with zipfile.ZipFile(output) as package:
             self.assertIsNone(package.testzip())
+            with Image.open(io.BytesIO(package.read('minimalgame/cover.png'))) as cover:
+                self.assertEqual(cover.size, (640, 480))
+            with Image.open(io.BytesIO(package.read('minimalgame/screenshot.png'))) as screenshot:
+                self.assertEqual(screenshot.size, (640, 480))
             names = package.namelist()
             for name in ('port.json', 'README.md', 'gameinfo.xml', 'screenshot.png'):
                 self.assertIn('minimalgame/' + name, names)
@@ -259,9 +357,33 @@ class PortMasterPackage(unittest.TestCase):
                 self.assertNotIn('minimalgame/' + name, names)
             self.assertNotIn('testing_thread.txt', names)
             self.assertEqual(package.getinfo('Minimal Game.sh').external_attr >> 16 & 0o777, 0o644)
+            with Image.open(io.BytesIO(package.read('cover.png'))) as cover:
+                self.assertEqual(cover.size, (640, 480))
+            with Image.open(io.BytesIO(package.read('screenshot.png'))) as screenshot:
+                self.assertEqual(screenshot.size, (640, 480))
+            self.assertEqual((submission / 'cover.png').read_bytes(), original_cover)
+            self.assertEqual((submission / 'screenshot.png').read_bytes(), original_screenshot)
             self.assertEqual(package.read('gameinfo.xml'), (submission / 'gameinfo.xml').read_bytes())
             self.assertIn('minimalgame/licenses/LICENSE.license.txt', names)
+        for layout in ('testing', 'pr'):
+            portmaster.portmaster(self.stage, self.bundle, output, submission=submission,
+                                 layout=layout, compress_images=False)
+            with zipfile.ZipFile(output) as package:
+                prefix = 'minimalgame/' if layout == 'testing' else ''
+                self.assertEqual(package.read(prefix + 'screenshot.png'), original_screenshot)
+                with Image.open(io.BytesIO(package.read(prefix + 'cover.png'))) as cover:
+                    self.assertEqual(cover.size, (640, 480))
+                    self.assertEqual(cover.mode, 'RGB')
         checksum = artifacts.digest(output)
+        for size in ((832, 624), (320, 240), (640, 481)):
+            with self.subTest(screenshot_size=size):
+                Image.new('RGB', size).save(submission / 'screenshot.png')
+                original = (submission / 'screenshot.png').read_bytes()
+                with self.assertRaisesRegex(ValueError, 'exactly 640x480'):
+                    portmaster.portmaster(self.stage, self.bundle, output, submission=submission, release=True)
+                self.assertEqual((submission / 'screenshot.png').read_bytes(), original)
+                self.assertEqual(artifacts.digest(output), checksum)
+        (submission / 'screenshot.png').write_bytes(original_screenshot)
         descriptor['attr']['arch'] = ['armhf']
         (submission / 'port.json').write_text(json.dumps(descriptor))
         with self.assertRaisesRegex(ValueError, 'architecture'):
@@ -567,7 +689,7 @@ fs.writeFileSync(file, JSON.stringify(descriptor));
         info.update(source={**info['source'], 'commit': '0' * 40})
         artifacts.write_json(self.stage / 'build-info.json', info)
         command = ['node', self.stage / 'share/pmjs/tools/pmjs.mjs', self.stage, 'package', bundle,
-                   '--runtime', self.stage, '--output', self.output]
+                   '--runtime', self.stage, '--output', self.output, '--no-image-compression']
         result = subprocess.run(command, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         checksum = artifacts.digest(self.output)
@@ -792,6 +914,69 @@ return "${MODULE_STATUS:-0}"
         self.assertEqual(events.count('finish:/firmware/lib'), int(expect_finish), events)
         self.assertEqual((self.port / 'saves/existing.rpgsave').read_text(), 'existing progress')
         return result
+
+    def test_shared_runtime_acquisition_mounting_and_failures(self):
+        runtime_dir = self.root / 'shared-runtime'
+        launcher = portmaster.launcher_script('minimalgame', 'pmjs_v1')
+        for location in ('/opt/system/Tools/PortMaster', '/opt/tools/PortMaster', '/roms/ports/PortMaster'):
+            launcher = launcher.replace(location, str(self.root / location.lstrip('/')))
+        launcher = launcher.replace('/tmp/${runtime}-minimalgame', str(runtime_dir))
+        self.launcher.write_text(launcher)
+        (self.control / 'libs').mkdir()
+        image = self.control / 'libs/pmjs_v1.squashfs'
+        harbourmaster = self.control / 'harbourmaster'
+        harbourmaster.write_text('''#!/bin/bash
+printf 'download:%s\\n' "$*" >> "$EVENTS"
+[ "${DOWNLOAD_STATUS:-0}" = 0 ] || exit 1
+touch "$XDG_DATA_HOME/PortMaster/libs/pmjs_v1.squashfs"
+''')
+        harbourmaster.chmod(0o755)
+        control_file = self.control / 'control.txt'
+        control_file.write_text(control_file.read_text().replace('return "${CONTROL_STATUS:-0}"', ':'))
+        with control_file.open('a') as control:
+            control.write('''
+pm_message() { printf 'message:%s\\n' "$1" >> "$EVENTS"; }
+sleep() { :; }
+mount() {
+  printf 'mount:%s\\n' "$*" >> "$EVENTS"
+  [ "${MOUNT_STATUS:-0}" = 0 ] && [ -f "$1" ] || return 1
+  cp -a "$FIXTURE_RUNTIME/." "$2/"
+}
+umount() { echo unmount >> "$EVENTS"; return 1; }
+''')
+        self.env.update(FIXTURE_RUNTIME=str(self.port / 'runtime'), ESUDO='')
+        self.env.pop('PM_CAN_MOUNT', None)
+        for mounting in (None, 'Y', 'N'):
+            for present in (True, False):
+                with self.subTest(mounting=mounting, present=present):
+                    if present:
+                        image.touch()
+                    else:
+                        image.unlink(missing_ok=True)
+                    values = {} if mounting is None else {'PM_CAN_MOUNT': mounting}
+                    result = self.run_launcher(NODE_STATUS='7', **values)
+                    self.assertEqual(result.returncode, 7, result.stderr)
+                    events = self.events.read_text()
+                    self.assertEqual(events.count('unmount\n'), 0 if mounting == 'N' else 2)
+                    self.assertEqual('download:' in events, not present)
+                    if not present:
+                        self.assertIn('download:--quiet --no-check runtime_check pmjs_v1.squashfs', events)
+                    self.assertTrue(self.capture.exists())
+        for failure in ('download', 'mount', 'harbourmaster'):
+            with self.subTest(failure=failure):
+                image.unlink(missing_ok=True)
+                if failure == 'harbourmaster':
+                    harbourmaster.unlink()
+                values = {'DOWNLOAD_STATUS': '1'} if failure == 'download' else {'MOUNT_STATUS': '1'}
+                result = self.run_launcher(expect_finish=False, **values)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertFalse(self.capture.exists())
+                events = self.events.read_text()
+                self.assertNotIn('platform:', events)
+                if failure == 'harbourmaster':
+                    self.assertIn('This port requires the latest PortMaster', events)
+                if failure != 'mount':
+                    self.assertNotIn('mount:', events)
 
     def test_firmware_modules_paths_and_inherited_settings(self):
         inherited = {'WAYLAND_DISPLAY': 'wayland-custom', 'DISPLAY': ':7',

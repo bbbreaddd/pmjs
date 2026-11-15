@@ -27,6 +27,15 @@ const SLIPPERY_QUERY_SHAPE = `function(mx, my) {
   return allowed && !$gameParty.inBattle() &&
     (membership || (region !== 0 && region === Yanfly.Param.SlipRegion));
 }`;
+const INLINE_QUERY_SHAPE = `function(mx, my) {
+  if ($gameParty.inBattle()) return false;
+  if (this.isValid(mx, my) && this.tileset()) {
+    if (Yanfly.Param.SlipRegion !== 0 && this.regionId(mx, my) === Yanfly.Param.SlipRegion) return true;
+    var tag = this.terrainTag(mx, my);
+    return this.tileset().slippery.contains(tag);
+  }
+  return false;
+}`;
 
 function makeHost({
   disableOptimizations = [],
@@ -37,6 +46,7 @@ function makeHost({
   isTiled = true,
   stockMap = null,
   autoActivate = true,
+  inlineTerrain = false,
 } = {}) {
   const calls = { regionId: 0, terrainTag: 0, isValid: 0, changeTileset: 0 };
   const context = {
@@ -96,15 +106,109 @@ function makeHost({
   );
   context.Array = vm.runInContext('Array', context);
 
-  vm.runInContext(pinSourceFingerprint(pinSourceFingerprint(moduleSource, 'KNOWN_CONTAINS',
+  let source = pinSourceFingerprint(pinSourceFingerprint(moduleSource, 'KNOWN_CONTAINS',
     context.Array.prototype.contains), 'KNOWN_SLIPPERY_QUERY',
-    vm.runInNewContext('(' + SLIPPERY_QUERY_SHAPE + ')')), context, { filename: 'slippery-tiles.js' });
+    vm.runInNewContext('(' + SLIPPERY_QUERY_SHAPE + ')'));
+  if (inlineTerrain) {
+    vm.runInContext(`
+      Game_Map.prototype.isSlippery = (${INLINE_QUERY_SHAPE});
+      Game_Map.prototype.tileId = function(x, y, z) { return this.tiles[z]; };
+      Game_Map.prototype.layeredTiles = function(x, y) {
+        var tiles = [];
+        for (var i = 0; i < 4; i++) tiles.push(this.tileId(x, y, 3 - i));
+        return tiles;
+      };
+      Game_Map.prototype.tilesetFlags = function() { return this.flags; };
+      Game_Map.prototype.terrainTag = function(x, y) {
+        if (this.isValid(x, y)) {
+          var flags = this.tilesetFlags(), tiles = this.layeredTiles(x, y);
+          for (var i = 0; i < tiles.length; i++) {
+            var tag = flags[tiles[i]] >> 12;
+            if (tag > 0) return tag;
+          }
+        }
+        return 0;
+      };
+    `, context);
+    for (const [key, method] of [['KNOWN_SLIPPERY_QUERY', 'isSlippery'],
+      ['KNOWN_TERRAIN_TAG', 'terrainTag'], ['KNOWN_LAYERED_TILES', 'layeredTiles'], ['KNOWN_TILE_ID', 'tileId']]) {
+      source = pinSourceFingerprint(source, key, context.Game_Map.prototype[method]);
+    }
+  }
+  context.referenceSlipperyQuery = context.Game_Map.prototype.isSlippery;
+  vm.runInContext(source, context, { filename: 'slippery-tiles.js' });
   if (autoActivate) {
     context.PMJS.plugins.execute('YEP_SlipperyTiles', function() {});
     context.PMJS.phases.emit('afterGuestPlugins');
   }
   return context;
 }
+
+test('live terrain specialization preserves eager tile reads and observes mutations', () => {
+  const c = makeHost({ inlineTerrain: true });
+  const map = new c.Game_Map();
+  map.tiles = [0, 1, 2, 3]; map.flags = [0, 2 << 12, 0, 3 << 12];
+  map._tileset.slippery.push(3);
+  assert.equal(c.Game_Map.prototype.__pmjsSlipperyTilesGuard, true);
+  const reads = [];
+  Object.defineProperty(map.tiles, 3, { get() { reads.push('tile3'); return 3; }, configurable: true });
+  Object.defineProperty(map.tiles, 0, { get() { reads.push('tile0'); return 0; }, configurable: true });
+  Object.defineProperty(map.flags, 3, { get() { reads.push('flag3'); return 3 << 12; }, configurable: true });
+  assert.equal(map.isSlippery(5, 0), true);
+  assert.deepEqual(reads, ['tile3', 'tile0', 'flag3']);
+  map._tileset.slippery.length = 0;
+  assert.equal(map.isSlippery(5, 0), false);
+  map._regions[0][5] = 10;
+  assert.equal(map.isSlippery(5, 0), true);
+  map._regions = [new Array(100).fill(0), new Array(100).fill(10)];
+  map.currentMapLevel = 0;
+  assert.equal(map.isSlippery(5, 0), false);
+  map.currentMapLevel = 1;
+  assert.equal(map.isSlippery(5, 0), true);
+  map.regionId = () => 0;
+  assert.equal(map.isSlippery(5, 0), false);
+  map.terrainTag = () => 7;
+  map._tileset.slippery.push(7);
+  assert.equal(map.isSlippery(5, 0), true);
+});
+
+test('customized terrain dependencies and array methods retain guest behavior', () => {
+  const c = makeHost({ inlineTerrain: true });
+  const map = new c.Game_Map();
+  map.tiles = [0, 1, 2, 3]; map.flags = [0, 2 << 12, 0, 3 << 12];
+  map._tileset.slippery.push(2);
+  map.layeredTiles = () => [1];
+  assert.equal(map.isSlippery(5, 0), true);
+  delete map.layeredTiles;
+  map.tileId = () => 1;
+  assert.equal(map.isSlippery(5, 0), true);
+  delete map.tileId;
+  vm.runInContext('Array.prototype.push = function() { this[this.length] = 1; return this.length; };', c);
+  assert.equal(map.isSlippery(5, 0), true);
+  c.Yanfly.Param.SlipRegion = 0;
+  assert.equal(map.isSlippery(5, 0), true);
+  c.$gameParty.inBattle = () => true;
+  assert.equal(map.isSlippery(5, 0), false);
+});
+
+test('terrain specialization matches the reference query for tile precedence and live flags', () => {
+  const c = makeHost({ inlineTerrain: true });
+  const map = new c.Game_Map();
+  map.tiles = [0, 1, 2, 3];
+  for (const flags of [[0, 0, 0, 0], [1, 0, 0, 0], [1, 2, 0, 0], [1, 2, 3, 4], [-1, 0, 0, -2]]) {
+    map.flags = flags.map(tag => tag << 12);
+    for (const tag of [0, 1, 2, 3, 4]) {
+      map._tileset.slippery.length = 0;
+      map._tileset.slippery.push(tag);
+      assert.equal(map.isSlippery(5, 0), c.referenceSlipperyQuery.call(map, 5, 0));
+    }
+  }
+  map.isValid = () => false;
+  assert.equal(map.isSlippery(5, 0), c.referenceSlipperyQuery.call(map, 5, 0));
+  map.isValid = () => true;
+  map._tileset = null;
+  assert.equal(map.isSlippery(5, 0), c.referenceSlipperyQuery.call(map, 5, 0));
+});
 
 test('registers plugins.yanfly.slippery-tiles optimization', () => {
   const context = makeHost({ slipRegion: 0 });
@@ -384,11 +488,11 @@ test('MV 1.6.1 and YEP Slippery Tiles 1.05 production recognition',
       }
     });
 
-    await t.test('authored region 10 refuses activation and retains the query', () => {
+    await t.test('authored region 10 activates the live query without caching region answers', () => {
       const { context: c, map, original } = integration();
       assert.equal(c.Yanfly.Param.SlipRegion, 10);
-      assert.equal(c.Game_Map.prototype.isSlippery, original);
-      assert.match(c.PMJS.optimizations.reason('plugins.yanfly.slippery-tiles'), /refused: slippery region/);
+      assert.notEqual(c.Game_Map.prototype.isSlippery, original);
+      assert.equal(c.PMJS.optimizations.reason('plugins.yanfly.slippery-tiles'), 'enabled');
       assert.equal(map.isSlippery(0, 0), false);
       vm.runInContext('$dataMap.data[20] = 10;', c);
       assert.equal(map.isSlippery(0, 0), true);

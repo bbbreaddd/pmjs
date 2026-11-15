@@ -48,6 +48,36 @@ test('classification rejects inputs changed during a decode and retries failed w
   assert.deepEqual(await classifier.classify(file), decision);
 });
 
+test('classification streams one checksum and reuses receipts for unchanged sources', async t => {
+  const root = temporaryDirectory('storage-receipts-'), source = path.join(root, 'image');
+  fs.writeFileSync(source, 'pixels');
+  let streams = 0, decodes = 0;
+  const stream = fs.createReadStream, read = fs.readFileSync;
+  t.mock.method(fs, 'createReadStream', (file, ...args) => {
+    if (file === source) streams++;
+    return stream(file, ...args);
+  });
+  t.mock.method(fs, 'readFileSync', (file, ...args) => {
+    assert.notEqual(file, source, 'classification must not buffer entire files to hash them');
+    return read(file, ...args);
+  });
+  const assets = { imageStorageVersion: 1, async classifyImageStorage() { decodes++; return decision; } };
+  const classifier = storageClassifier(assets, root);
+  await classifier.classify(source);
+  assert.equal(streams, 1);
+  await classifier.classify(source);
+  assert.equal(streams, 1, 'an unchanged repeated classification performs no extra content reads');
+  assert.equal(decodes, 1);
+  fs.writeFileSync(source, 'changed');
+  await classifier.classify(source);
+  assert.equal(streams, 2);
+  assert.equal(decodes, 2);
+  classifier.save();
+  await storageClassifier(assets, root).classify(source);
+  assert.equal(streams, 3, 'saved decisions are checked against the current source contents');
+  assert.equal(decodes, 2);
+});
+
 test('workers preserve order, bound concurrency and settle before reporting failure', async () => {
   let active = 0, peak = 0, finished = 0;
   const values = [0, 1, 2, 3, 4];

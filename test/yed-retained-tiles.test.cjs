@@ -48,6 +48,32 @@ test('animation patches only source coordinates without new geometry', () => {
   assert.equal(rect._pmjsNativeGeneration, 2);
 });
 
+test('camera changes and forced repaints publish current inputs before retaining the new window', () => {
+  const { api, map, rect } = fixture();
+  api.prepare(map, 0, 0);
+  map.tiledData.layers[0].data[1] = 1;
+  map.origin.x = 16;
+  assert.equal(api.prepare(map, 1, 0), true);
+  assert.equal(rect.pointsBuf[0], 0);
+  assert.equal(map._layers[0].position.x, 0);
+  const shifted = rect.pointsBuf.slice();
+  const painted = rect.calls;
+  api.prepare(map, 1, 0);
+  assert.equal(rect.calls, painted);
+  map._needsRepaint = true;
+  map.tiledData.layers[0].data[1] = 2;
+  api.prepare(map, 1, 0);
+  assert.equal(rect.pointsBuf[0], 16);
+  assert.notDeepEqual(rect.pointsBuf, shifted);
+  const repainted = rect.calls;
+  api.prepare(map, 1, 0);
+  assert.equal(rect.calls, repainted);
+  map.origin.x = 0;
+  api.prepare(map, 0, 0);
+  assert.equal(rect.pointsBuf[9], 16);
+  assert.equal(map._layers[0].position.x, 0);
+});
+
 test('object groups ignore group visibility and reuse a bounded active pool', () => {
   const { api, map, sprites } = fixture();
   map.tiledData.layers.push({ type: 'objectgroup', visible: false,

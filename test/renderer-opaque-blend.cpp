@@ -1,5 +1,5 @@
-#include "renderer.hpp"
-#include "resources.hpp"
+#include "graphics/renderer.hpp"
+#include "graphics/resources.hpp"
 
 #include <SDL.h>
 #include <GLES3/gl3.h>

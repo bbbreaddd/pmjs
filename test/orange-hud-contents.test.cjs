@@ -63,6 +63,9 @@ function fixture({ unknown = false } = {}) {
   };
   vm.createContext(realm);
   require('./helpers/runtime-context.cjs').runModule(realm, 'js/pmjs-core/methods.js');
+  const pluginHooks = { ...realm.PMJS.plugins };
+  require('./helpers/runtime-context.cjs').runModule(realm, 'js/pmjs-rpgmaker/plugins.js');
+  Object.assign(realm.PMJS.plugins, pluginHooks);
   vm.runInContext(source, realm);
   return { window: new Hud(), realm, calls, addons, Bitmap };
 }

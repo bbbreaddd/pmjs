@@ -1,6 +1,6 @@
-#include "platform.hpp"
-#include "renderer.hpp"
-#include "tile_assets.hpp"
+#include "platform/platform.hpp"
+#include "graphics/renderer.hpp"
+#include "assets/tile_assets.hpp"
 
 #include <GLES3/gl3.h>
 #include <algorithm>

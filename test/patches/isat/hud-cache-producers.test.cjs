@@ -1,5 +1,7 @@
 'use strict';
 
+const { runOptimizationAdapter } = require('../../helpers/runtime-context.cjs');
+
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -74,7 +76,7 @@ function setup({ qualified = true, enabled = true, dataVerified = true, badProdu
     var $dataBattleHUD = [];
   `, context);
   context.PMJS.isatMethodHash = require('./test-fixtures/method-hash.cjs')(context.__pmjsBuiltinRequire);
-  vm.runInContext(source, context);
+  runOptimizationAdapter(source, context);
   phase();
   function create() {
     const scene = new context.Scene_Map(); context.SceneManager._scene = scene;

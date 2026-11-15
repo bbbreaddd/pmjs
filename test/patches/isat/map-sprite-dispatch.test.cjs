@@ -1,4 +1,6 @@
 'use strict';
+
+const { runOptimizationAdapter } = require('../../helpers/runtime-context.cjs');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
@@ -20,7 +22,7 @@ const PMJS = {
     }
   }
 };
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../../../patches/isat/map-sprite-dispatch.js'), 'utf8'),
+runOptimizationAdapter(fs.readFileSync(path.join(__dirname, '../../../patches/isat/map-sprite-dispatch.js'), 'utf8'),
   { PMJS, Scene_Map, $gameMap: { mapId: () => map } });
 phases[0]();
 function enter(previous) {
@@ -82,7 +84,7 @@ function qualificationFixture(qualification = { verified: true }) {
       setStageRenderOptions(scene, value) { if (value) options.set(scene, { ...value }); else options.delete(scene); } }
   };
   const original = Scene_Map.prototype.createDisplayObjects;
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../../../patches/isat/map-sprite-dispatch.js'), 'utf8'),
+  runOptimizationAdapter(fs.readFileSync(path.join(__dirname, '../../../patches/isat/map-sprite-dispatch.js'), 'utf8'),
     { PMJS, Scene_Map, $gameMap: { mapId: () => 30 } });
   hooks.forEach(hook => hook());
   return { PMJS, Scene_Map, options, refusals, original };

@@ -62,6 +62,25 @@ test('font changes, coercion and custom host methods retain ordinary behavior', 
   assert.equal(replacements, 2);
 });
 
+test('installation preserves guest measurement replacements and reports refusal', () => {
+  for (const engine of ['mv', 'mz']) for (const target of ['guest', 'native']) {
+    let replacement;
+    const h = fixture(undefined, true, engine, realm => {
+      replacement = () => ({ width: 777 });
+      if (target === 'guest') realm.measureCanvasText = replacement;
+      else realm.NativeHost.canvas.measureTextMetrics = replacement;
+    });
+    assert.equal(h.context.measureText('AV').width, 777);
+    assert.equal(target === 'guest' ? h.realm.measureCanvasText : h.realm.NativeHost.canvas.measureTextMetrics, replacement);
+    assert.equal(h.realm.PMJS.web.canvas.textMeasurements, undefined);
+    const state = h.realm.PMJS.optimizations.dump().find(entry => entry.id === id);
+    assert.equal(state.enabled, false);
+    assert.equal(state.disabledBy, 'refusal');
+    assert.match(state.refusalReason, /text measurement/);
+    assert.equal(h.calls(), 0);
+  }
+});
+
 test('cached numeric formatting and text measurements activate together', () => {
   const fs = require('node:fs'), vm = require('node:vm');
   const { pinSourceFingerprint } = require('./helpers/reviewed-function-fixture.cjs');
@@ -69,13 +88,15 @@ test('cached numeric formatting and text measurements activate together', () => 
     vm.runInContext(`var Yanfly = { Param: { DigitGroup: true }, Util: {
       toGroup: function(value) { if (typeof value === 'string' || !Yanfly.Param.DigitGroup) return value; return value.toLocaleString('en'); }
     } };`, realm);
+    runModule(realm, 'js/pmjs-rpgmaker/plugins.js');
     realm.PMJS.plugins = {
+      ...realm.PMJS.plugins,
       registerOptimization(_plugin, definition) { realm.PMJS.optimizations.register(definition); },
       onLoaded(_plugin, _owner, callback) { callback(); }
     };
     const adapters = require('../profiles/plugin-adapters.json').adapters;
     const modules = adapters.find(adapter => adapter.plugins.includes('YEP_CoreEngine')).modules;
-    const module = 'js/pmjs-plugins/yanfly/core-number-format.js';
+    const module = 'js/pmjs-plugins/yanfly/core-engine.js';
     assert.ok(modules.includes(module));
     const source = fs.readFileSync(path.join(__dirname, '..', module), 'utf8');
     vm.runInContext(pinSourceFingerprint(source, 'expected', realm.Yanfly.Util.toGroup), realm);

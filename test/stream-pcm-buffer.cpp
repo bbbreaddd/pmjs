@@ -1,4 +1,4 @@
-#include "stream_pcm_buffer.hpp"
+#include "media/stream_pcm_buffer.hpp"
 
 #include <deque>
 #include <iostream>

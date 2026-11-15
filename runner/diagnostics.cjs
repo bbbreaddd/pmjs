@@ -222,7 +222,8 @@ function memoryHeadroom(reader, osObject) {
 }
 
 function reclamationMemoryState({ reader = fs, processObject = HOST_PROCESS, osObject = os } = {}) {
-  return { ...memoryHeadroom(reader, osObject), rssBytes: processObject.memoryUsage.rss() };
+  return { ...memoryHeadroom(reader, osObject), rssBytes: processObject.memoryUsage.rss(),
+    swapBytes: processMemoryDetails(processObject.pid, reader)?.swapBytes || 0 };
 }
 
 function memoryState({ reader = fs, processObject = HOST_PROCESS, osObject = os, detailed = false } = {}) {

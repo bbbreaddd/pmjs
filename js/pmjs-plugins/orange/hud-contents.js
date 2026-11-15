@@ -2,9 +2,7 @@
 
 (function() {
   var id = 'plugins.orange-hud.compact-contents';
-  PMJS.plugins.registerOptimization('OrangeHud', {
-    id: id, owner: 'pmjs-plugins/orange', fallback: 'authored HUD contents dimensions'
-  });
+
   function install() {
     if (!PMJS.optimizations.isEnabled(id) || typeof Window_OrangeHud !== 'function' ||
         typeof OrangeHudDefaultLine === 'undefined' || typeof OrangeHudVariableIcon === 'undefined') return;
@@ -115,7 +113,9 @@
     };
     PMJS.plugins.orangeHudContents = { diagnostics: function() { return Object.assign({}, stats); } };
   }
-  PMJS.plugins.onLoaded('OrangeHud', 'pmjs.adapter.orange-hud-contents', function() {
-    PMJS.phases.on('beforeBoot', 'pmjs.adapter.orange-hud-contents', install);
+  PMJS.plugins.installOptimization('OrangeHud', {
+    id: id, owner: 'pmjs-plugins/orange', fallback: 'authored HUD contents dimensions',
+    phaseKey: 'pmjs.adapter.orange-hud-contents', phase: 'beforeBoot',
+    install: install
   });
 })();

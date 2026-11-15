@@ -81,6 +81,46 @@ test('saved frame limit reaches the guest timing configuration at boot', async (
   await run(options);
 });
 
+test('filesystem replacements retain identity and restore host-scoped methods', async t => {
+  const previous = globalThis.PMJS;
+  t.after(() => { globalThis.PMJS = previous; });
+  const options = fixture(`
+    const assert = __pmjsBuiltinRequire('node:assert/strict');
+    const hostCalls = [];
+    globalThis.PMJS = { tasks: {
+      runHost(fn, receiver, args) { hostCalls.push(fn); return fn.apply(receiver, args); },
+      runFrame(fn) { return Promise.resolve(fn()); },
+      stop() {}
+    } };
+    NativeHost.storage.writeText('source.txt', 'source');
+    for (const service of [NativeHost.fs, NativeHost.storage]) {
+      hostCalls.length = 0;
+      const original = service.readText;
+      assert.equal(service.readText, original);
+      assert.equal(original('source.txt'), 'source');
+      const patched = function(name) { return original(name) + ' patched'; };
+      service.readText = patched;
+      assert.equal(service.readText, patched);
+      assert.equal(service.readText('source.txt'), 'source patched');
+      if (service.readText === patched) service.readText = original;
+      assert.equal(service.readText, original);
+      assert.equal(service.readText('source.txt'), 'source');
+      assert.equal(hostCalls.length, 3);
+      assert(!hostCalls.includes(patched));
+    }
+    globalThis.__pmjsTick = () => {};
+    globalThis.__pmjsRender = () => {};
+  `);
+  options.assetPreparation = 'off'; options.mapPreparation = 'off';
+  const host = require(options.addon);
+  host.fs.readText = function(name) {
+    assert.equal(this, host.fs);
+    assert.equal(name, 'source.txt');
+    return 'source';
+  };
+  await run(options);
+});
+
 test('settings captures controller input while game frames continue', async () => {
   const clock = require('node:perf_hooks').performance;
   const oldNow = Object.getOwnPropertyDescriptor(clock, 'now');
@@ -180,7 +220,7 @@ test('runner logs cold and validated warm preparation before boot and includes t
     Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==', 'base64'));
   const host = require(options.addon);
   host.assets.processImage = async () => null;
-  host.assets.installPrepared = () => 0;
+  host.assets.installPrepared = () => ({ accepted: [], rejected: [] });
   const lines = [];
   t.mock.method(console, 'log', line => lines.push(line));
   t.mock.method(console, 'warn', () => {});
@@ -217,7 +257,7 @@ test('normal shutdown waits for pending preparation invalidation persistence', a
     Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==', 'base64'));
   const host = require(options.addon);
   host.assets.processImage = () => null;
-  host.assets.installPrepared = () => 0;
+  host.assets.installPrepared = () => ({ accepted: [], rejected: [] });
   let reported = false, failuresConsumed = false;
   host.assets.consumePreparationInvalidations = () => reported ? 0 : (reported = true, 1);
   host.assets.consumePreparationFailures = () => (failuresConsumed = true, ['img/pictures/test.png']);
@@ -253,9 +293,9 @@ test('unnamed native invalidations discard the startup catalog before shutdown',
   options.mapPreparation = 'off';
   const host = require(options.addon);
   host.assets.processImage = async () => null;
-  host.assets.installPrepared = () => 0;
-  host.assets.installPreparedCatalog = () => 0;
-  host.assets.installDerivedCatalog = () => {};
+  host.assets.installPrepared = () => ({ accepted: [], rejected: [] });
+  host.assets.installPreparedCatalog = () => ({ accepted: [], rejected: [] });
+  host.assets.installDerivedCatalog = () => ({ accepted: [], rejected: [] });
   let booted = false, report = false;
   host.input.checkBoot = () => { booted = true; };
   host.pollEvents = () => !booted;
@@ -628,6 +668,7 @@ test('runner loads an explicit Greenworks module in the host before bootstrap', 
     if (NativeHost.greenworks.initAPI() !== false) throw new Error('changed backend result');
     globalThis.__pmjsTick=()=>{}; globalThis.__pmjsRender=()=>{};
   `);
+  options.assetPreparation = 'off'; options.mapPreparation = 'off';
   options.greenworksModule = path.join(options.gameRoot, 'greenworks.cjs');
   fs.writeFileSync(options.greenworksModule, `module.exports = {
     hostProcess: process === require('node:process'),
@@ -770,7 +811,7 @@ test('settings stays open while preparation completes and the guest starts', asy
   host.runtime.settingsOverlay = () => ({ hasFont: true });
   host.runtime.settingsPresent = visible => { if (visible) shown++; };
   host.assets.processImage = () => new Promise(resolve => setTimeout(() => resolve(null), 1100));
-  host.assets.installPrepared = () => {};
+  host.assets.installPrepared = () => ({ accepted: [], rejected: [] });
   try {
     await run(f);
     assert(shown > 0);
@@ -941,4 +982,17 @@ test('supervisor forwards termination to the active session without starting a r
     const result = await running;
     assert.equal(result.signal, 'SIGTERM'); assert.equal(launches, 1);
   } finally { watcher.close(); }
+});
+
+test('program cache uses the writable preparation root during native initialization', async () => {
+  for (const configured of [false, true]) {
+    const options = fixture('globalThis.__pmjsTick = () => {}; globalThis.__pmjsRender = () => {};');
+    options.assetPreparation = 'off'; options.mapPreparation = 'off';
+    if (configured) options.assetCacheRoot = path.join(options.saveRoot, 'custom-cache');
+    fs.appendFileSync(options.addon,
+      '\nmodule.exports.initialize = options => { module.exports.initialization = options; };');
+    await run(options);
+    assert.equal(require(options.addon).initialization.programCacheRoot,
+      path.join(options.assetCacheRoot || path.join(options.saveRoot, 'asset-cache'), 'programs'));
+  }
 });

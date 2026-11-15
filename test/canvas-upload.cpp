@@ -1,4 +1,4 @@
-#include "canvas.hpp"
+#include "canvas/canvas.hpp"
 #include <EGL/egl.h>
 #include <SDL_video.h>
 #include <GLES3/gl3.h>
@@ -317,6 +317,27 @@ int main() {
     assert(canvases.cpuBytes()==beforeCrop+3*3*4);
     assert(actual->rgba==canvases.readPixels(expected->handle,0,0,3,3)->rgba);
     for (auto handle : {view->handle,reference->handle,crop->handle,expected->handle}) assert(canvases.release(handle));
+  }
+  {
+    pmjs::ImageStore snapshotImages;
+    snapshotImages.setWarmBudgetBytes(0);
+    const std::array<uint8_t, 4> red{255,0,0,255}, blue{0,0,255,255};
+    const auto source = snapshotImages.createRgba(1,1,red.data(),true); assert(source);
+    std::vector<std::shared_ptr<pmjs::ImagePixelSnapshot>> retained;
+    for (int i=0;i<300;++i) retained.push_back(snapshotImages.deferPixelRead(source->handle,0,0,1,1));
+    for (size_t i=1;i<retained.size();i+=2) retained[i].reset();
+    for (int i=0;i<600;++i) assert(snapshotImages.deferPixelRead(source->handle,0,0,1,1));
+    assert(!snapshotImages.deferPixelRead(source->handle,1,0,1,1));
+    assert(snapshotImages.updateRgba(source->handle,blue.data()));
+    for (const auto& snapshot : retained) if (snapshot) {
+      assert(snapshot->pixels && snapshot->pixels->rgba==std::vector<uint8_t>(red.begin(),red.end()));
+    }
+    const auto next = snapshotImages.deferPixelRead(source->handle,0,0,1,1); assert(next);
+    assert(snapshotImages.updateRgba(source->handle,red.data()));
+    assert(next->pixels && next->pixels->rgba==std::vector<uint8_t>(blue.begin(),blue.end()));
+    assert(snapshotImages.release(source->handle));
+    assert(!snapshotImages.deferPixelRead(source->handle,0,0,1,1));
+    assert(retained.front()->pixels->rgba==std::vector<uint8_t>(red.begin(),red.end()));
   }
   {
     pmjs::ImageStore accountingImages;

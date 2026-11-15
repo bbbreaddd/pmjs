@@ -1,11 +1,12 @@
 'use strict';
 
 const hostProcess = process;
+const hostCollectGarbage = globalThis.gc;
 const { createSubprocesses } = require('./subprocess.cjs');
 const { installPromiseRejectionBridge } = require('./promise-rejections.cjs');
 const { reader: portArtifactReader } = require('./port-preparation.cjs');
 
-const { prepareGameAssets } = require('./preparation.cjs');
+const { prepareGameAssets, summarizePreparation } = require('./preparation.cjs');
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -165,6 +166,7 @@ async function prepareStartupAssets(options, native, settings) {
   const portableIndex = require('./asset-index.cjs').loadAssetIndex(options.assetIndex, native, options);
   const { loadCatalog, rebuildMarker } = require('./preparation-catalog.cjs');
   const preparationOptions = { gameRoot: options.gameRoot,
+    virtualFiles: options.virtualFiles,
     sourceRoots: [path.join(options.saveRoot, 'game-files', 'files')],
     cacheRoot: options.assetPreparation.cacheRoot, native, ...options.assetPreparation,
     images: options.assetPreparation.enabled, recipes: options.assetPreparation.recipes,
@@ -180,8 +182,8 @@ async function prepareStartupAssets(options, native, settings) {
       options.portArtifacts = Object.fromEntries(cached.portArtifacts);
       options.portArtifactHashes = cached.portArtifactHashes;
       console.log('[pmjs] using completed asset preparation catalog');
-      return { preparation: { ...cached.images, maps: cached.maps, releaseCacheLease: cached.releaseCacheLease,
-        invalidate: cached.invalidate }, cancelled: false, invalidate: cached.invalidate,
+      return { preparation: summarizePreparation({ ...cached.images, maps: cached.maps }),
+        cancelled: false, invalidate: cached.invalidate,
         invalidateCatalog: cached.invalidateCatalog };
     }
   }
@@ -242,7 +244,7 @@ async function prepareStartupAssets(options, native, settings) {
       showProgress();
     } catch (error) { failPreparation(error); }
   }, 16);
-  let preparation, invalidateCatalog, preparationStatus = 'failed', preparationThrew = false;
+  let preparation, invalidate, invalidateCatalog, preparationStatus = 'failed', preparationThrew = false;
   try {
     const all = await prepareGameAssets({ ...preparationOptions, shouldCancel: () => cancelled,
       onProgress: progress => {
@@ -280,9 +282,9 @@ async function prepareStartupAssets(options, native, settings) {
         imported: cacheOutcomes['reused-package'] || 0, invalidated: all.invalidated || 0 },
       commonRefusals
     }));
-    preparation = { ...(all.images || {}), maps: all.maps, cancelled: all.cancelled,
-      inventory: all.inventory, validation: all.validation, releaseCacheLease: all.releaseCacheLease,
-      invalidate: all.invalidate };
+    preparation = summarizePreparation({ ...(all.images || {}), maps: all.maps, cancelled: all.cancelled,
+      inventory: all.inventory, validation: all.validation });
+    invalidate = all.invalidate;
     options.portArtifacts = Object.fromEntries(all.portArtifacts);
     options.portArtifactHashes = all.portArtifactHashes || {};
     invalidateCatalog = all.invalidateCatalog;
@@ -306,7 +308,7 @@ async function prepareStartupAssets(options, native, settings) {
   }
   if (preparationFailed) throw preparationError;
   return { preparation, cancelled,
-    invalidate: preparation.invalidate, invalidateCatalog };
+    invalidate, invalidateCatalog };
 }
 
 async function runSession(input, diagnostics, setNative) {
@@ -344,6 +346,7 @@ async function runSession(input, diagnostics, setNative) {
   setNative(native);
   measureStartup('native-initialize', () => native.initialize({ gameRoot: options.gameRoot, assetRoot: options.assetRoot,
     width: options.width, height: options.height, windowTitle: options.title,
+    programCacheRoot: path.join(options.assetPreparation.cacheRoot, 'programs'),
     ...(options.imageWarmCacheBytes === undefined ? {} :
       { imageWarmCacheBytes: options.imageWarmCacheBytes }),
     preparedFrameCacheBytes: options.preparedFrameCacheBytes,
@@ -352,7 +355,8 @@ async function runSession(input, diagnostics, setNative) {
   diagnostics.stage('native-ready');
   const memoryReclaimer = createMemoryReclaimer({ native,
     readMemory: () => reclamationMemoryState({ processObject: hostProcess }),
-    readRss: () => hostProcess.memoryUsage.rss(), now: () => performance.now() });
+    now: () => performance.now(),
+    collectGarbage: hostCollectGarbage });
   const scan = native.runtime.vfsIndexStats?.();
   if (scan) console.log(`[pmjs] startup stage=vfs-index statistics=${JSON.stringify(scan)}`);
   console.log(`[pmjs] startup stage=host-initialized elapsed_ms=${(performance.now() - startupStarted).toFixed(1)}`);
@@ -410,14 +414,9 @@ async function runSession(input, diagnostics, setNative) {
       const startup = await prepareStartupAssets(options, native, settings);
       invalidatePreparation = startup.invalidate;
       invalidatePreparationCatalog = startup.invalidateCatalog;
-      const { entries, decryptedEntries, releaseCacheLease, invalidateCatalog, ...preparationStats } = startup.preparation;
-      if (preparationStats.maps) {
-        const { entries: mapEntries, ...mapStats } = preparationStats.maps;
-        preparationStats.maps = mapStats;
-      }
-      native.assets.preparationStats = preparationStats;
+      native.assets.preparationStats = startup.preparation;
       if (startup.cancelled || startup.preparation.cancelled) { native.runtime.quit(); return; }
-      memoryReclaimer.atBoundary('startup');
+      await memoryReclaimer.atBoundary('startup');
     } else if (native.assets && typeof native.assets.installPrepared === 'function') {
       native.assets.installPrepared([]);
       if (native.assets.installDecrypted) native.assets.installDecrypted([]);
@@ -483,20 +482,24 @@ async function runSession(input, diagnostics, setNative) {
         };
     function hostFilesystem(service) {
       const methods = new Map();
+      for (const name of Reflect.ownKeys(service)) {
+        const value = Reflect.get(service, name);
+        if (typeof value !== 'function' || methods.has(value)) continue;
+        methods.set(value, function(...args) {
+          const tasks = globalThis.PMJS && globalThis.PMJS.tasks;
+          return tasks ? tasks.runHost(value, service, args) : value.apply(service, args);
+        });
+      }
       return new Proxy(service, {
         get(target, name) {
           const value = Reflect.get(target, name);
-          if (typeof value !== 'function') return value;
-          if (!methods.has(value)) methods.set(value, function(...args) {
-            const tasks = globalThis.PMJS && globalThis.PMJS.tasks;
-            return tasks ? tasks.runHost(value, target, args) : value.apply(target, args);
-          });
-          return methods.get(value);
+          // Guest replacements must keep their identity for guarded restoration.
+          return methods.get(value) || value;
         }
       });
     }
     globalThis.NativeHost = { runtime: native.runtime, render: native.render,
-      plugins: native.plugins, mv: native.mv,
+      plugins: native.plugins, mv: native.mv, compression: native.compression,
       scene: native.scene, images: native.images, assets: native.assets, fs: hostFilesystem(native.fs),
       storage: hostFilesystem(native.storage), input: native.input, canvas: native.canvas,
       media: native.media, dialog: native.dialog, effects: native.effects,
@@ -608,10 +611,10 @@ async function runSession(input, diagnostics, setNative) {
             });
           };
           const complete = dispatcher ? dispatcher.runFrame(frame) : frame();
-          complete.then(() => {
+          complete.then(async () => {
             if (memoryReclaimer.pending) {
               // Engines without a boundary hook still get the critical-pressure trim.
-              memoryReclaimer.atBoundary(typeof globalThis.__pmjsMemoryReclamationBoundary === 'function' ?
+              await memoryReclaimer.atBoundary(typeof globalThis.__pmjsMemoryReclamationBoundary === 'function' ?
                 globalThis.__pmjsMemoryReclamationBoundary() : null);
             }
             // Sample one in eight frames: no extra clock read on the other seven.
@@ -624,7 +627,7 @@ async function runSession(input, diagnostics, setNative) {
               deadline = advanceDeadline(deadline, native.runtime.monotonicNow(), timing.renderPeriod);
             }
             schedule();
-          }, reject);
+          }).catch(reject);
         } catch (error) {
           reject(error);
         }

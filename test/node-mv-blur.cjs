@@ -71,8 +71,26 @@ try {
 
   const raw = canvas(1, 1), bytes = new Uint8Array([255, 2, 3, 0]);
   native.canvas.writePremultipliedPixels(raw.handle, 0, 0, 1, 1, bytes);
-  assert.equal(native.canvas.blurMv(raw.handle), false);
-  assert.deepEqual(read(raw), Array.from(bytes), 'unsupported raw content remains unchanged');
+  assert.equal(native.canvas.blurMv(raw.handle), true);
+  assert.deepEqual(read(raw), [0, 0, 0, 255], 'one-pixel source-over drops alpha-zero RGB');
+
+  const additive = canvas(1, 1);
+  native.canvas.writePremultipliedPixels(additive.handle, 0, 0, 1, 1, new Uint8Array([255, 120, 7, 1]));
+  assert.equal(native.canvas.blurMv(additive.handle), true);
+  assert.deepEqual(read(additive), referenceBlur([255, 120, 7, 1], 1, 1), 'nonzero-alpha additive content');
+
+  const rawSource = canvas(33, 3), expectedCopy = canvas(33, 3), queuedCopy = canvas(33, 3);
+  const mixed = new Uint8Array(33 * 3 * 4);
+  for (let i = 0; i < mixed.length; i += 4)
+    mixed.set([255, 120, 7, i % 12 ? 0 : 128], i);
+  native.canvas.writePremultipliedPixels(rawSource.handle, 0, 0, 33, 3, mixed);
+  native.canvas.drawImage(expectedCopy.handle, rawSource.handle, 0, 0, 33, 3, 0, 0, 33, 3, 1);
+  const originalCopy = read(expectedCopy);
+  native.canvas.drawImage(queuedCopy.handle, rawSource.handle, 0, 0, 33, 3, 0, 0, 33, 3, 1);
+  assert.equal(native.canvas.blurMv(rawSource.handle), true);
+  native.canvas.release(rawSource.handle);
+  handles.delete(rawSource.handle);
+  assert.deepEqual(read(queuedCopy), originalCopy, 'queued raw source snapshot survives blur and release');
 } finally {
   for (const handle of handles) native.canvas.release(handle);
   native.runtime.quit();

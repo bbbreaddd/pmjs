@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { validStorageDecision } = require('./asset-preparation.cjs');
+const { fileIdentity } = require('./preparation-files.cjs');
 
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 
@@ -19,15 +20,28 @@ function storageClassifier(assets, cacheRoot) {
     if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
   }
   const pending = new Map(), decisions = {};
+  const receipts = new Map();
+  async function checksumOf(source) {
+    const before = fileIdentity(await fs.promises.stat(source, { bigint: true }));
+    const receipt = receipts.get(source);
+    if (receipt?.identity === before) return receipt.hash;
+    const digest = crypto.createHash('sha256');
+    for await (const chunk of fs.createReadStream(source)) digest.update(chunk);
+    if (fileIdentity(await fs.promises.stat(source, { bigint: true })) !== before)
+      throw new Error('image changed during storage classification');
+    const checksum = digest.digest('hex');
+    receipts.set(source, { identity: before, hash: checksum });
+    return checksum;
+  }
   return {
     async classify(source) {
-      const checksum = hash(fs.readFileSync(source));
+      const checksum = await checksumOf(source);
       if (!pending.has(checksum)) {
         const work = (async () => {
           const storage = validStorageDecision(saved[checksum]) ? saved[checksum] :
             await assets.classifyImageStorage(source);
           if (!validStorageDecision(storage)) throw new Error('invalid image storage decision');
-          if (hash(fs.readFileSync(source)) !== checksum)
+          if (await checksumOf(source) !== checksum)
             throw new Error('image changed during storage classification');
           decisions[checksum] = storage;
           return storage;
@@ -36,7 +50,7 @@ function storageClassifier(assets, cacheRoot) {
         work.catch(() => pending.delete(checksum));
       }
       const storage = await pending.get(checksum);
-      if (hash(fs.readFileSync(source)) !== checksum)
+      if (await checksumOf(source) !== checksum)
         throw new Error('image changed during storage classification');
       return storage;
     },

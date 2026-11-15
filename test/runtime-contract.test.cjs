@@ -78,6 +78,17 @@ test('registered CommonJS requests are exact and cannot be replaced', () => {
   assert.equal(context.contract.registeredCommonJsModules['platform-api'], exports);
   assert.throws(() => context.contract.registerCommonJsModule('platform-api', {}),
     /already registered/);
+  for (const names of [['new-api', ''], ['new-api', 1], ['new-api', 'platform-api'], ['new-api', 'new-api'], []]) {
+    assert.throws(() => context.contract.registerCommonJsModule(names, {}));
+    assert.equal(Object.hasOwn(context.contract.registeredCommonJsModules, 'new-api'), false);
+    assert.equal(context.contract.registeredCommonJsModules['platform-api'], exports);
+  }
+  let reads = 0;
+  const aliases = ['stable-api'];
+  Object.defineProperty(aliases, 0, { get() { reads++; return reads === 1 ? 'stable-api' : ''; } });
+  context.contract.registerCommonJsModule(aliases, exports);
+  assert.equal(reads, 1);
+  assert.equal(context.contract.registeredCommonJsModules['stable-api'], exports);
 });
 
 test('MV image cache retrims completed loads without destroying bitmap backing', async () => {

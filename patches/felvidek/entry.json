@@ -1,7 +1,6 @@
 {
   "modules": [
     "database.js",
-    "collision-map.js",
-    "neutral-tone.js"
+    "collision-map.js"
   ]
 }

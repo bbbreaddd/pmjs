@@ -92,7 +92,11 @@ function fixture({ disabled = false, unknownCreate = false, unknownRemove = fals
     }, phases: { on(name, owner, callback) { phases.set(name, callback); } },
     optimizations: { isEnabled() { return !disabled; }, refuse(id, reason) { refusals.push(reason); } },
     compat: { observed(id, reason) { retained.push([id, reason]); } } } };
-  vm.runInNewContext(patched, context);
+  vm.createContext(context);
+  const pluginHooks = { ...context.PMJS.plugins };
+  require('./helpers/runtime-context.cjs').runModule(context, 'js/pmjs-rpgmaker/plugins.js');
+  Object.assign(context.PMJS.plugins, pluginHooks);
+  vm.runInContext(patched, context);
   return { counts, Message, Sprite, Bitmap, loaded, phases, refusals, retained, originalCreate, originalRemove,
     install() { loaded.get('SRD_ShakingText')(); phases.get('afterGuestPlugins')(); },
     glyph(message, text = 'A') { message.createShakingCharacter(text); return message._shakingSprites.at(-1); } };

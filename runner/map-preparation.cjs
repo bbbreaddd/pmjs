@@ -7,6 +7,8 @@ const crypto = require('node:crypto');
 const vm = require('node:vm');
 const { parsePluginManifest } = require('./plugin-manifest.cjs');
 const { performance } = require('node:perf_hooks');
+const { resolveFileOverride } = require('./file-overrides.cjs');
+const { installationReport } = require('./preparation-state.cjs');
 const { COMPILER_VERSION, mapContract, geometryEstimate, engineTilemap, compileRpgMap, compileTiledMap } = require('./map-demand.cjs');
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const identity = object => hash(JSON.stringify(object));
@@ -77,10 +79,14 @@ async function validateEntry(directory, key, files) {
   } catch (_) { return null; }
 }
 
-function gameInputs(native, files) {
+function gameInputs(native, files, virtualFiles) {
   if (!native.fs || typeof native.fs.readBytes !== 'function' || typeof native.fs.readDirectory !== 'function')
     throw new Error('game filesystem unavailable for map preparation');
+  function resolve(logical) {
+    return resolveFileOverride(logical, virtualFiles.overrides || {}, source => native.fs.exists(source)) || logical;
+  }
   function read(logical) {
+    logical = resolve(logical);
     const file = native.assets.sourcePath(logical), sourceIdentity = native.assets.sourceIdentity(logical);
     const contents = native.fs.readBytes(logical);
     if (!file || contents === null) throw new Error('missing game input '+logical);
@@ -93,6 +99,7 @@ function gameInputs(native, files) {
     return { bytes, dependency: { logical, file, sourceIdentity: capturedIdentity, hash: checked.hash } };
   }
   async function dependency(logical) {
+    logical = resolve(logical);
     const file = native.assets.sourcePath(logical);
     const sourceIdentity = native.assets.sourceIdentity(logical);
     if (!file || !sourceIdentity) throw new Error('missing game input ' + logical);
@@ -102,7 +109,7 @@ function gameInputs(native, files) {
       throw new Error('game input changed while hashing ' + logical);
     return { logical, file, sourceIdentity: capturedIdentity, hash: checked.hash };
   }
-  return { read, dependency, exists: logical => native.fs.exists(logical),
+  return { read, dependency, exists: logical => native.fs.exists(resolve(logical)),
     directory: logical => native.fs.readDirectory(logical) || [] };
 }
 async function engineContract(game, mz) {
@@ -131,6 +138,7 @@ async function resolveTiled(game, map) {
   return { map: clone, dependencies };
 }
 async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, height = 624,
+  virtualFiles = {},
   shouldCancel = () => false, onProgress = () => {}, logger = console, verifyRegions = false, verifyHashes = false,
   preparationContext = 'live', portableIndex = null, portableAssetRoot = null, session }) {
   if (!session) throw new Error('map preparation phase requires a preparation session');
@@ -190,7 +198,7 @@ async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, heig
       return result;
     }
     report('discover', '', 0, 0);
-    const game = gameInputs(native, files), mz = game.exists('js/rmmz_core.js');
+    const game = gameInputs(native, files, virtualFiles), mz = game.exists('js/rmmz_core.js');
     const systemInput = game.read('data/System.json'), sheetsInput = game.read('data/Tilesets.json');
     const system = JSON.parse(systemInput.bytes), sheets = JSON.parse(sheetsInput.bytes);
     const contract = await engineContract(game, mz);
@@ -500,8 +508,7 @@ async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, heig
         source.sourceIdentity = sourceDependencies.get(source.source).sourceIdentity;
       if (!offline) {
         report('install', '', data.length, data.length);
-        const installed = native.assets.installTileSets(entries, true, true);
-        result.activation = installed?.accepted ? installed : { accepted: entries.slice(0, installed).map(entry => entry.identity), rejected: [] };
+        result.activation = installationReport(native.assets.installTileSets(entries, true, true), 'tile sets');
         result.installed = result.activation.accepted.length;
         for (const [mapId, prepared] of Object.entries(result.index))
           if (!result.activation.accepted.includes(prepared.identity)) delete result.index[mapId];
