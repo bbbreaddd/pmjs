@@ -139,7 +139,7 @@ async function inspectPacked(item, verify) {
   return { hash: item.hash, size: item.size, header: Buffer.from(item.header, 'base64'), reused: !verify };
 }
 
-async function packCache(root, assets, { maximumBytes = maximumPackBytes, verifyHashes = false } = {}) {
+async function packCache(root, assets, { maximumBytes = maximumPackBytes, verifyHashes = false, compact = false } = {}) {
   root = await fsp.realpath(root);
   if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 32 || maximumBytes > maximumPackBytes)
     throw new Error('invalid prepared pack size');
@@ -193,7 +193,8 @@ async function packCache(root, assets, { maximumBytes = maximumPackBytes, verify
       if (!stat && !old) throw new Error('prepared image is missing: ' + name);
       const size = stat ? stat.size : old.size;
       if ((stat && !stat.isFile()) || !size || size > maximumBytes) throw new Error('prepared image exceeds pack limit');
-      if (stat && old?.hash === expected && old.size === size) {
+      if (stat && old?.hash === expected && old.size === size && !compact) {
+        await inspectPacked(old, true);
         await inspectPacked({ ...old, pack: file, offset: 0 }, true);
         duplicates.push(file);
       } else if (stat) old = null;
@@ -207,6 +208,7 @@ async function packCache(root, assets, { maximumBytes = maximumPackBytes, verify
     const indexedCounts = new Map();
     for (const item of previous.entries.values()) indexedCounts.set(item.pack, (indexedCounts.get(item.pack) || 0) + 1);
     for (const [packPath, items] of packed) {
+      if (compact) continue;
       const size = Number(packs.get(path.basename(packPath)).identity.split(':')[2]);
       let end = 0;
       const contiguous = items.slice().sort((a, b) => a.old.offset - b.old.offset).every(item => {
@@ -219,11 +221,16 @@ async function packCache(root, assets, { maximumBytes = maximumPackBytes, verify
       if (verifyHashes) for (const item of items) await inspectPacked(item.old, true);
       packed.delete(packPath);
     }
+    const units = [...loose.map(item => [item]), ...packed.values()];
+    for (const unit of units)
+      if (unit.reduce((sum, item) => sum + item.size, 0) > maximumPackBytes)
+        throw new Error('prepared pack ranges exceed pack limit');
+    const work = units.flat();
+    const positions = new Map(work.map((item, index) => [item.name, index]));
     const batches = [];
     let batch = [], batchBytes = 0;
-    for (const unit of [...loose.map(item => [item]), ...packed.values()]) {
+    for (const unit of compact ? work.map(item => [item]) : units) {
       const size = unit.reduce((sum, item) => sum + item.size, 0);
-      if (size > maximumPackBytes) throw new Error('prepared pack ranges exceed pack limit');
       if (batchBytes + size > maximumBytes && batch.length) { batches.push(batch); batch = []; batchBytes = 0; }
       batch.push(...unit); batchBytes += size;
       if (batchBytes >= maximumBytes) { batches.push(batch); batch = []; batchBytes = 0; }
@@ -235,7 +242,8 @@ async function packCache(root, assets, { maximumBytes = maximumPackBytes, verify
     if (!previous.invalid) await prunePacks(new Set([...previous.packs, ...(previous.damagedPacks || [])].map(pack => pack.name)), true);
     const prefix = crypto.randomBytes(8).toString('hex'), buffer = Buffer.alloc(256 * 1024);
     let sequence = 0;
-    for (const batch of batches) {
+    async function convertBatch(batch) {
+      const sourcePacks = new Set();
       const replacements = [], originals = [], newPacks = [];
       let pack, used = 0;
       const finishPack = async () => {
@@ -245,7 +253,9 @@ async function packCache(root, assets, { maximumBytes = maximumPackBytes, verify
         newPacks.push({ name: pack, identity: identity(stat) });
       };
       for (const item of batch) {
-        const inputPath = item.old ? item.old.pack : item.file;
+        const packedSource = item.old ? current.get(item.name) : null;
+        const inputPath = packedSource ? path.join(root, packedSource.pack) : item.file;
+        if (packedSource) sourcePacks.add(packedSource.pack);
         const input = await fsp.open(inputPath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
         try {
           const stat = await input.stat({ bigint: true });
@@ -257,7 +267,7 @@ async function packCache(root, assets, { maximumBytes = maximumPackBytes, verify
           const digest = crypto.createHash('sha256');
           let offset = 0, header = Buffer.alloc(0);
           while (offset < item.size) {
-            const { bytesRead } = await input.read(buffer, 0, Math.min(buffer.length, item.size - offset), (item.old?.offset || 0) + offset);
+            const { bytesRead } = await input.read(buffer, 0, Math.min(buffer.length, item.size - offset), (packedSource?.offset || 0) + offset);
             if (!bytesRead) throw new Error('truncated prepared image');
             const chunk = buffer.subarray(0, bytesRead);
             if (header.length < 32) header = Buffer.concat([header, chunk.subarray(0, 32 - header.length)]);
@@ -281,6 +291,15 @@ async function packCache(root, assets, { maximumBytes = maximumPackBytes, verify
       await fsp.rm(path.join(root, 'startup-catalog.json'), { force: true });
       await removeLooseFiles(originals);
       await prunePacks(retained);
+      return sourcePacks;
+    }
+    for (const batch of batches) {
+      const sources = await convertBatch(batch);
+      if (compact) for (const source of sources) {
+        const carry = [...current.values()].filter(item => item.pack === source)
+          .map(item => work[positions.get(item.name)]).sort((a, b) => positions.get(a.name) - positions.get(b.name));
+        if (carry.length) await convertBatch(carry);
+      }
     }
     if (duplicates.length) { await syncDirectory(root); await removeLooseFiles(duplicates); }
     return { files: current.size, packs: packs.size, bytes: [...current.values()].reduce((sum, item) => sum + item.size, 0) };

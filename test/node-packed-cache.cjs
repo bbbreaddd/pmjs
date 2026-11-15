@@ -72,8 +72,13 @@ test('packed prepared pages preserve async loads, texture uploads, pixels and li
     native.images.release(ordinary.handle);
     const packed = await packCache(root, native.assets);
     assert.equal(packed.files, Object.keys(outputs).length);
-    const mapping = await loadPackedCache(root, native, { info() {}, warn(message) { assert.fail(message); } });
+    let mapping = await loadPackedCache(root, native, { info() {}, warn(message) { assert.fail(message); } });
     assert.equal(mapping.size, packed.files);
+    const originalPacks = new Set([...mapping.values()].map(item => item.pack));
+    await packCache(root, native.assets, { compact: true });
+    mapping = await loadPackedCache(root, native, { info() {}, warn(message) { assert.fail(message); } });
+    assert.equal(mapping.size, packed.files);
+    assert([...mapping.values()].every(item => !originalPacks.has(item.pack)));
     assert.equal(native.assets.installPrepared([entry]), 1);
     const before = native.images.memory();
     const image = await native.images.loadAsync('sheet.png');
@@ -256,7 +261,8 @@ test('installed converter supports initial and repeat batches without initializi
   fs.writeFileSync(path.join(cache, relative, 'page-0.pml4'), bytes);
   const data = { files: {}, results: { [relative]: { outputs: { 'page-0.pml4': hash(bytes) } } }, indices: {}, failures: {} };
   fs.writeFileSync(path.join(cache, 'preparation-state.json'), JSON.stringify({ version: 1, checksum: hash(JSON.stringify(data)), data }));
-  for (const extra of [[], [], ['--verify-hashes']]) {
+  let previousPack;
+  for (const extra of [[], [], ['--verify-hashes'], ['--compact'], ['--verify-hashes', '--compact']]) {
     const result = require('node:child_process').spawnSync(process.execPath,
       [path.join(__dirname, '../tools/pack-prepared-cache.cjs'), path.resolve(process.argv[2]), cache, ...extra], { encoding: 'utf8' });
     assert.equal(result.status, 0, result.stderr);
@@ -264,6 +270,11 @@ test('installed converter supports initial and repeat batches without initializi
     assert.equal(fs.readdirSync(cache).filter(name => name.endsWith('.pmpk')).length, 1);
     const index = JSON.parse(fs.readFileSync(path.join(cache, 'packed-images.json'), 'utf8'));
     const entry = index.data.files[0];
+    if (previousPack) {
+      if (extra.includes('--compact')) assert.notEqual(entry.pack, previousPack);
+      else assert.equal(entry.pack, previousPack);
+    }
+    previousPack = entry.pack;
     assert.deepEqual(fs.readFileSync(path.join(cache, entry.pack)).subarray(entry.offset, entry.offset + entry.size), bytes);
   }
 });

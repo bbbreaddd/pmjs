@@ -38,6 +38,21 @@ async function fragmentedFixture() {
   return f;
 }
 
+async function compactionFixture() {
+  const f = fixture();
+  for (let index = 0; index < 6; ++index) {
+    const directory = 'entries/' + String(index).repeat(64), file = path.join(f.root, directory, 'page-0.pml4');
+    const bytes = Buffer.alloc(20, index + 1);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, bytes);
+    f.data.results[directory] = { outputs: { 'page-0.pml4': hash(bytes) } };
+    f.originals.set(file, bytes);
+  }
+  f.save();
+  await packCache(f.root, f.assets, { maximumBytes: 40 });
+  return f;
+}
+
 test('packing preserves exact ranged bytes, bounded packs, and verification headers', async () => {
   const f = fixture();
   const result = await packCache(f.root, f.assets, { maximumBytes: 80 });
@@ -472,4 +487,97 @@ test('explicit conversion verification reads all retained payloads and detects c
   corrupt = true;
   await assert.rejects(packCache(f.root, f.assets, { maximumBytes: 80, verifyHashes: true }), /checksum differs/);
   assert.deepEqual(fs.readFileSync(path.join(f.root, 'packed-images.json')), saved);
+});
+
+for (const compact of [false, true]) test((compact ? 'compaction rebuilds from' : 'duplicate cleanup protects') + ' a good loose copy when the pack is corrupt', async t => {
+  const f = fixture();
+  await packCache(f.root, f.assets);
+  const entries = await loadPackedCache(f.root, { assets: f.assets }, quiet);
+  const [file, bytes] = f.originals.entries().next().value;
+  const damagedPack = entries.get(file).pack;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, bytes);
+  const saved = fs.readFileSync(path.join(f.root, 'packed-images.json'));
+  const open = fs.promises.open.bind(fs.promises);
+  t.mock.method(fs.promises, 'open', async (name, ...args) => {
+    const handle = await open(name, ...args);
+    if (name !== damagedPack) return handle;
+    const read = handle.read.bind(handle);
+    handle.read = async (...input) => {
+      const result = await read(...input);
+      if (input[3] === 0 && result.bytesRead) result.buffer[0] ^= 1;
+      return result;
+    };
+    return handle;
+  });
+  if (compact) {
+    await packCache(f.root, f.assets, { compact: true });
+    const after = await loadPackedCache(f.root, { assets: f.assets }, quiet);
+    for (const entry of after.values()) await inspectPacked(entry, true);
+    assert.equal(fs.existsSync(file), false);
+  } else {
+    await assert.rejects(packCache(f.root, f.assets), /checksum differs/);
+    assert.deepEqual(fs.readFileSync(file), bytes);
+    assert.deepEqual(fs.readFileSync(path.join(f.root, 'packed-images.json')), saved);
+  }
+});
+
+test('explicit compaction consolidates healthy packs while ordinary conversion retains them', async () => {
+  const f = fixture();
+  await packCache(f.root, f.assets, { maximumBytes: 40 });
+  const saved = fs.readFileSync(path.join(f.root, 'packed-images.json'));
+  assert.equal((await packCache(f.root, f.assets, { maximumBytes: 80 })).packs, 3);
+  assert.deepEqual(fs.readFileSync(path.join(f.root, 'packed-images.json')), saved);
+  const result = await packCache(f.root, f.assets, { maximumBytes: 80, compact: true });
+  assert.equal(result.packs, 2);
+  assert.equal(result.bytes, 114);
+  const entries = await loadPackedCache(f.root, { assets: f.assets }, quiet);
+  for (const entry of entries.values()) await inspectPacked(entry, true);
+});
+
+test('cross-pack compaction consolidates entries within one pack of temporary payload', async t => {
+  const f = await compactionFixture();
+  const payloadBytes = () => fs.readdirSync(f.root).filter(name => name.endsWith('.pmpk'))
+    .reduce((sum, name) => sum + fs.statSync(path.join(f.root, name)).size, 0);
+  const baseline = payloadBytes();
+  let peak = baseline;
+  const open = fs.promises.open.bind(fs.promises);
+  t.mock.method(fs.promises, 'open', async (file, ...args) => {
+    const handle = await open(file, ...args);
+    if (!String(file).endsWith('.pmpk') || args[0] !== 'wx') return handle;
+    return { close: () => handle.close(), sync: () => handle.sync(), writeFile: async bytes => {
+      await handle.writeFile(bytes);
+      peak = Math.max(peak, payloadBytes());
+    } };
+  });
+  const result = await packCache(f.root, f.assets, { maximumBytes: 60, compact: true });
+  assert.equal(result.packs, 2);
+  assert.equal(result.bytes, 120);
+  assert.ok(peak <= baseline + 60, `extra payload reached ${peak - baseline} bytes`);
+  const entries = await loadPackedCache(f.root, { assets: f.assets }, quiet);
+  for (const entry of entries.values()) await inspectPacked(entry, true);
+});
+
+test('interrupted tail relocation retains readable data and completed output', async t => {
+  const f = await compactionFixture();
+  const before = JSON.parse(fs.readFileSync(path.join(f.root, 'packed-images.json'), 'utf8'));
+  const oldNames = new Set(before.data.packs.map(pack => pack.name));
+  const rename = fs.promises.rename.bind(fs.promises);
+  let publications = 0;
+  const failure = t.mock.method(fs.promises, 'rename', async (from, to) => {
+    if (to === path.join(f.root, 'packed-images.json') && ++publications === 2) throw new Error('tail publication failed');
+    return rename(from, to);
+  });
+  await assert.rejects(packCache(f.root, f.assets, { maximumBytes: 60, compact: true }), /tail publication failed/);
+  failure.mock.restore();
+  const entries = await loadPackedCache(f.root, { assets: f.assets }, quiet);
+  assert.equal(entries.size, 6);
+  for (const entry of entries.values()) await inspectPacked(entry, true);
+  const partial = JSON.parse(fs.readFileSync(path.join(f.root, 'packed-images.json'), 'utf8'));
+  const completed = partial.data.packs.find(pack => !oldNames.has(pack.name)).name;
+  await packCache(f.root, f.assets, { maximumBytes: 60 });
+  assert.equal(fs.existsSync(path.join(f.root, completed)), true);
+  assert.equal((await packCache(f.root, f.assets, { maximumBytes: 60, compact: true })).packs, 2);
+  const repaired = await loadPackedCache(f.root, { assets: f.assets }, quiet);
+  for (const entry of repaired.values()) await inspectPacked(entry, true);
 });
