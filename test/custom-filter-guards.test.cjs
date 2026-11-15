@@ -163,6 +163,35 @@ test('a late custom apply hook preserves a previously native filter chain', () =
   assert.deepEqual(compatHits, []);
 });
 
+test('zero blur preserves authored shaders, apply hooks and subclasses', () => {
+  for (const variant of ['fragment', 'apply', 'subclass']) {
+    const { sandbox, Filter, node, plans } = fixture();
+    class BlurFilter extends Filter {
+      constructor() { super(); this.blurX = 0; this.blurY = 0; }
+    }
+    sandbox.PIXI.filters.BlurFilter = BlurFilter;
+    let applications = 0;
+    class CustomBlur extends BlurFilter {
+      apply(manager, input, output, clear) {
+        applications++;
+        super.apply(manager, input, output, clear);
+      }
+    }
+    const filter = variant === 'subclass' ? new CustomBlur() : new BlurFilter();
+    if (variant === 'fragment') filter.fragmentSrc = 'visible custom fragment';
+    if (variant === 'apply') filter.apply = function(manager, input, output, clear) {
+      applications++;
+      manager.applyFilter(this, input, output, clear);
+    };
+    node.filterArea = { x: 0, y: 0, width: 32, height: 32 };
+    const result = sandbox.nativeSceneFilter(node, [filter]);
+    assert.equal(result.unsupported, false, variant);
+    assert.equal(plans.length, 1, variant);
+    assert.equal(plans[0].passes.length, 1, variant);
+    if (variant !== 'fragment') assert.equal(applications, 1, variant);
+  }
+});
+
 test('custom filter passes snapshot mutations and reuse the vertex/fragment program', () => {
   const { sandbox, Filter, node, plans, compilations } = fixture();
   const filter = new Filter();
