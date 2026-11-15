@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <cmath>
-#include <sstream>
 #include <stdexcept>
 
 #include "canvas.hpp"
@@ -40,12 +39,21 @@ const char* kFontCandidates[] = {
 std::vector<std::string> splitLines(const std::string& text) {
   std::vector<std::string> lines;
   std::string current;
-  for (char c : text) {
-    if (c == '\n') {
+  std::size_t column = 0;
+  for (std::size_t i = 0; i < text.size(); ++i) {
+    const char c = text[i];
+    if (c == '\n' || c == '\r') {
       lines.push_back(current);
       current.clear();
-    } else if (c != '\r') {
+      column = 0;
+      if (c == '\r' && i + 1 < text.size() && text[i + 1] == '\n') ++i;
+    } else if (c == '\t') {
+      const auto spaces = 8 - column % 8;
+      current.append(spaces, ' ');
+      column += spaces;
+    } else {
       current.push_back(c);
+      if ((static_cast<unsigned char>(c) & 0xC0U) != 0x80U) ++column;
     }
   }
   lines.push_back(current);
@@ -93,6 +101,8 @@ bool Dialog::confirm(const std::string& message) {
 }
 
 Dialog::ModalGuard::~ModalGuard() {
+  dialog.platform_.consumePressed();
+  dialog.platform_.clearPointerEvents();
   dialog.releaseSurface();
 }
 
@@ -100,10 +110,12 @@ std::optional<std::string> Dialog::resolveFont() const {
   // CanvasStore needs the VFS-resolved absolute path, not the game-relative
   // candidate: returning the unresolved string silently disables all text.
   if (!fontOverride_.empty()) {
-    if (auto resolved = vfs_.resolve(fontOverride_)) return resolved->string();
+    if (auto resolved = vfs_.resolve(fontOverride_); resolved && canvases_.canLoadFont(*resolved))
+      return resolved->string();
   }
   for (const char* candidate : kFontCandidates) {
-    if (auto resolved = vfs_.resolve(candidate)) return resolved->string();
+    if (auto resolved = vfs_.resolve(candidate); resolved && canvases_.canLoadFont(*resolved))
+      return resolved->string();
   }
   return std::nullopt;
 }
@@ -111,7 +123,8 @@ std::optional<std::string> Dialog::resolveFont() const {
 int Dialog::measureLine(const std::string& line,
                         const std::string& font) const {
   const auto width = canvases_.measureText(font, line, kFontSize);
-  return width ? *width : 0;
+  if (!width) throw std::runtime_error("dialog text measurement failed");
+  return static_cast<int>(std::ceil(*width));
 }
 
 Dialog::Layout Dialog::buildLayout(const std::string& message, bool withCancel,
@@ -126,34 +139,22 @@ Dialog::Layout Dialog::buildLayout(const std::string& message, bool withCancel,
   std::vector<std::string> wrapped;
   for (const std::string& raw : splitLines(message)) {
     std::string line;
-    std::istringstream words(raw);
-    std::string word;
-    bool sawWord = false;
-    while (words >> word) {
-      sawWord = true;
-      std::string next = line.empty() ? word : line + " " + word;
-      if (measureLine(next, font) <= maxTextWidth) {
-        line = next;
-        continue;
-      }
-      if (!line.empty()) wrapped.push_back(line);
-      line.clear();
-      if (measureLine(word, font) <= maxTextWidth) {
-        line = word;
-        continue;
-      }
-      std::string chunk;
-      for (const std::string& codepoint : splitCodepoints(word)) {
-        if (!chunk.empty() &&
-            measureLine(chunk + codepoint, font) > maxTextWidth) {
-          wrapped.push_back(chunk);
-          chunk.clear();
+    for (const std::string& codepoint : splitCodepoints(raw)) {
+      if (!line.empty() && measureLine(line + codepoint, font) > maxTextWidth) {
+        const auto lastSpace = line.find_last_of(' ');
+        const auto firstWord = line.find_first_not_of(' ');
+        if (lastSpace != std::string::npos && firstWord != std::string::npos &&
+            lastSpace >= firstWord) {
+          wrapped.push_back(line.substr(0, lastSpace + 1));
+          line.erase(0, lastSpace + 1);
+        } else {
+          wrapped.push_back(line);
+          line.clear();
         }
-        chunk += codepoint;
       }
-      line = chunk;
+      line += codepoint;
     }
-    if (!line.empty() || !sawWord) wrapped.push_back(line);
+    wrapped.push_back(line);
   }
   if (wrapped.size() > kMaxLines) {
     throw std::runtime_error(
@@ -251,13 +252,16 @@ void Dialog::presentOverlay() {
 }
 
 bool Dialog::armInput() {
-  if (!platform_.pollEvents() || platform_.windowClosePending()) return false;
+  const bool running = platform_.pollEvents();
   platform_.consumePressed();
-  return true;
+  platform_.clearPointerEvents();
+  return running && !platform_.windowClosePending();
 }
 
 int Dialog::pollDecision(bool withCancel) {
-  if (!platform_.pollEvents() || platform_.windowClosePending()) return -3;
+  const bool running = platform_.pollEvents();
+  platform_.clearPointerEvents();
+  if (!running || platform_.windowClosePending()) return -3;
   if (withCancel && (platform_.consumePress("left") ||
                      platform_.consumePress("right"))) {
     return -2;
@@ -296,7 +300,6 @@ int Dialog::runModal(const std::string& message, bool withCancel) {
     presentOverlay();
     if (platform_.swapInterval() == 0) SDL_Delay(16);
   }
-  platform_.consumePressed();
   if (!withCancel) return 1;
   constexpr int okButtonIndex = 1;
   return decision == okButtonIndex ? 1 : 0;

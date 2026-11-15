@@ -34,6 +34,15 @@ void pushKey(std::uint32_t type, SDL_Keycode key) {
   }
 }
 
+void pushPointer(std::uint32_t type) {
+  SDL_Event event{};
+  event.type = type;
+  event.button.button = SDL_BUTTON_LEFT;
+  event.button.x = 400;
+  event.button.y = 300;
+  if (SDL_PushEvent(&event) != 1) throw std::runtime_error("cannot push pointer input");
+}
+
 void pushKeyRepeat(SDL_Keycode key) {
   SDL_Event event{};
   event.type = SDL_KEYDOWN;
@@ -124,6 +133,7 @@ int main() {
   pmjs::ImageStore images;
   pmjs::CanvasStore canvases(images);
   pmjs::Renderer renderer(816, 624, images);
+  std::ofstream(root / "fonts" / "bad.ttf") << "not a font";
   pmjs::Vfs vfs(root);
   pmjs::Dialog dialog(platform, renderer, canvases, vfs, 816, 624);
 
@@ -253,6 +263,57 @@ int main() {
   check(!dialog.confirm("already queued close"), "queued close cancels at modal entry");
   platform.takeWindowEvents();
   platform.interceptWindowClose(false);
+
+  pushPointer(SDL_MOUSEBUTTONDOWN);
+  pushPointer(SDL_MOUSEBUTTONUP);
+  std::thread modalPointer([] {
+    SDL_Delay(100);
+    pushPointer(SDL_MOUSEBUTTONDOWN);
+    pushPointer(SDL_MOUSEBUTTONUP);
+    SDL_Delay(300);
+    pushKey(SDL_KEYDOWN, SDLK_RETURN);
+  });
+  dialog.alert("mouse isolation");
+  modalPointer.join();
+  check(platform.pointerEvents().empty(), "opening and modal mouse clicks do not reach the game");
+  releaseAll(platform);
+  pushPointer(SDL_MOUSEBUTTONDOWN);
+  pushPointer(SDL_MOUSEBUTTONUP);
+  platform.pollEvents();
+  check(platform.pointerEvents().size() == 2, "fresh mouse input works after dismissal");
+  platform.clearPointerEvents();
+
+  const auto captureAlert = [&](const std::string& message) {
+    after({{400, SDL_KEYDOWN, SDLK_RETURN}});
+    dialog.alert(message);
+    auto pixels = renderer.captureDrawableRgba();
+    sync(1);
+    return pixels;
+  };
+  const auto validFontPixels = captureAlert("visible text");
+  dialog.setFontOverride("fonts/bad.ttf");
+  check(captureAlert("visible text") == validFontPixels,
+        "invalid font override falls back to a usable candidate");
+  pmjs::Vfs invalidFontVfs(root / "fonts");
+  pmjs::Dialog invalidFontDialog(platform, renderer, canvases, invalidFontVfs, 816, 624);
+  invalidFontDialog.setFontOverride("bad.ttf");
+  afterQuit(400);
+  bool fontThrew = false;
+  try { invalidFontDialog.alert("no usable font"); }
+  catch (const std::runtime_error&) { fontThrew = true; }
+  check(fontThrew, "no usable typeface fails instead of showing an unlabeled modal");
+  sync(1);
+  dialog.setFontOverride("");
+
+  const auto lineFeedPixels = captureAlert("first\nsecond");
+  check(captureAlert("first\rsecond") == lineFeedPixels,
+        "carriage return preserves the explicit line break");
+  check(captureAlert("first\r\nsecond") == lineFeedPixels,
+        "CRLF produces one line break");
+  check(captureAlert("  first   second") != captureAlert("first second"),
+        "indentation and repeated spaces survive layout");
+  check(captureAlert("a\tb") == captureAlert("a       b"),
+        "tabs advance to eight-column stops");
 
   {
     pmjs::Renderer smallRenderer(320, 240, images);
