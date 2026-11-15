@@ -60,7 +60,7 @@ jobs:
         run: cmake --build --preset dev --parallel 4
       - name: Run native smoke suite
         if: github.event_name == 'pull_request'
-        run: ctest --preset dev -L '^(smoke|build)$' --no-tests=error --timeout 180 --output-junit "$GITHUB_WORKSPACE/build/dev/native-tests.xml"
+        run: ctest --preset dev -L '^(smoke|build)$' --parallel 2 --no-tests=error --timeout 180 --output-junit "$GITHUB_WORKSPACE/build/dev/native-tests.xml"
       - name: Run full native suite
         if: github.event_name != 'pull_request'
         run: ctest --preset dev -L '^(native|build)$' --no-tests=error --timeout 600 --output-junit "$GITHUB_WORKSPACE/build/dev/native-tests.xml"
