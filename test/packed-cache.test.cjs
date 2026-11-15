@@ -357,13 +357,14 @@ test('retry removes unreferenced crash output before staging another batch', asy
   assert.equal((await packCache(f.root, f.assets, { maximumBytes: 80 })).files, 3);
 });
 
-test('unchanged packs and their index are retained without output writes', async t => {
+test('unchanged conversion uses metadata without reading or rewriting payloads', async t => {
   const f = fixture();
   await packCache(f.root, f.assets, { maximumBytes: 80 });
   const before = fs.readFileSync(path.join(f.root, 'packed-images.json'));
   const open = fs.promises.open.bind(fs.promises);
   t.mock.method(fs.promises, 'open', async (file, ...args) => {
     assert.notEqual(args[0], 'wx', 'unchanged conversion must not stage pack or index output');
+    assert.equal(String(file).endsWith('.pmpk'), false, 'unchanged conversion must not open packed payloads');
     return open(file, ...args);
   });
   assert.equal((await packCache(f.root, f.assets, { maximumBytes: 80 })).files, 3);
@@ -445,4 +446,30 @@ test('an installation error without pack damage is reported and clears the mappi
   assert.equal(await loadPackedCache(f.root, { assets: f.assets }, { warn: message => warnings.push(message) }), null);
   assert.deepEqual(f.assets.installed, []);
   assert(warnings.some(message => message.includes('installation failed')));
+});
+
+test('explicit conversion verification reads all retained payloads and detects checksum failures', async t => {
+  const f = fixture();
+  await packCache(f.root, f.assets, { maximumBytes: 80 });
+  const saved = fs.readFileSync(path.join(f.root, 'packed-images.json'));
+  const open = fs.promises.open.bind(fs.promises);
+  let readBytes = 0, corrupt = false;
+  t.mock.method(fs.promises, 'open', async (file, ...args) => {
+    assert.notEqual(args[0], 'wx', 'verification of intact packs must not rewrite them');
+    const handle = await open(file, ...args);
+    if (!String(file).endsWith('.pmpk')) return handle;
+    const read = handle.read.bind(handle);
+    handle.read = async (...input) => {
+      const result = await read(...input);
+      readBytes += result.bytesRead;
+      if (corrupt && result.bytesRead) result.buffer[0] ^= 1;
+      return result;
+    };
+    return handle;
+  });
+  await packCache(f.root, f.assets, { maximumBytes: 80, verifyHashes: true });
+  assert.equal(readBytes, 114);
+  corrupt = true;
+  await assert.rejects(packCache(f.root, f.assets, { maximumBytes: 80, verifyHashes: true }), /checksum differs/);
+  assert.deepEqual(fs.readFileSync(path.join(f.root, 'packed-images.json')), saved);
 });

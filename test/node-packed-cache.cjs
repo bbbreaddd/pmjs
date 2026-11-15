@@ -256,9 +256,9 @@ test('installed converter supports initial and repeat batches without initializi
   fs.writeFileSync(path.join(cache, relative, 'page-0.pml4'), bytes);
   const data = { files: {}, results: { [relative]: { outputs: { 'page-0.pml4': hash(bytes) } } }, indices: {}, failures: {} };
   fs.writeFileSync(path.join(cache, 'preparation-state.json'), JSON.stringify({ version: 1, checksum: hash(JSON.stringify(data)), data }));
-  for (let attempt = 0; attempt < 2; ++attempt) {
+  for (const extra of [[], [], ['--verify-hashes']]) {
     const result = require('node:child_process').spawnSync(process.execPath,
-      [path.join(__dirname, '../tools/pack-prepared-cache.cjs'), path.resolve(process.argv[2]), cache], { encoding: 'utf8' });
+      [path.join(__dirname, '../tools/pack-prepared-cache.cjs'), path.resolve(process.argv[2]), cache, ...extra], { encoding: 'utf8' });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(JSON.parse(result.stdout).files, 1);
     assert.equal(fs.readdirSync(cache).filter(name => name.endsWith('.pmpk')).length, 1);

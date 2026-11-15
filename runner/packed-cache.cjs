@@ -139,7 +139,7 @@ async function inspectPacked(item, verify) {
   return { hash: item.hash, size: item.size, header: Buffer.from(item.header, 'base64'), reused: !verify };
 }
 
-async function packCache(root, assets, { maximumBytes = maximumPackBytes } = {}) {
+async function packCache(root, assets, { maximumBytes = maximumPackBytes, verifyHashes = false } = {}) {
   root = await fsp.realpath(root);
   if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 32 || maximumBytes > maximumPackBytes)
     throw new Error('invalid prepared pack size');
@@ -216,7 +216,7 @@ async function packCache(root, assets, { maximumBytes = maximumPackBytes } = {})
       });
       if (size > maximumBytes || indexedCounts.get(packPath) !== items.length || !contiguous || end !== size ||
           items.some(item => item.old.hash !== item.expected)) continue;
-      for (const item of items) await inspectPacked(item.old, true);
+      if (verifyHashes) for (const item of items) await inspectPacked(item.old, true);
       packed.delete(packPath);
     }
     const batches = [];
