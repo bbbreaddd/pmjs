@@ -9,9 +9,10 @@ const { createInvalidators } = require('./preparation-state.cjs');
 const { discoverAdapterProcessors, discoverBundledProcessors } = require('./port-preparation.cjs');
 const { CACHE_VERSION, PROCESSOR_IDENTITY } = require('./asset-preparation.cjs');
 const { COMPILER_VERSION } = require('./map-demand.cjs');
+const { fileIdentity } = require('./preparation-files.cjs');
 
 // Bump when catalog contents or preparation decisions change incompatibly.
-const CATALOG_VERSION = 2;
+const CATALOG_VERSION = 3;
 
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const rebuildMarker = 'runtime-settings/rebuild-assets';
@@ -33,8 +34,11 @@ function signature(options) {
 
 async function saveCatalog(options, session, result) {
   const images = result.images || {}, maps = result.maps || {};
+  const ordinaryFailures = images.ordinaryFailures || [];
+  const recordedFailures = new Set(ordinaryFailures.map(item => 'image:' + item.source));
   if ((options.verifyHashes && !options.forceRebuild) || result.cancelled || session.persistenceWarning || images.error || maps.error ||
-      images.failedFiles || images.installFailures || [...session.outcomes.values()].some(item => item.outcome === 'ordinary-failure')) return false;
+      (images.failedFiles || 0) !== ordinaryFailures.length || images.installFailures ||
+      [...session.outcomes.values()].some(item => item.outcome === 'ordinary-failure' && !recordedFailures.has(item.id))) return false;
   const entries = images.entries || [], derived = images.decryptedEntries || [], tiles = maps.entries || [];
   if (entries.some(entry => !Array.isArray(entry.pageIdentities)) || derived.some(entry => !entry.fileIdentity) ||
       tiles.some(entry => !Array.isArray(entry.pageIdentities) || !Array.isArray(entry.snapshotIdentities))) return false;
@@ -51,7 +55,7 @@ async function saveCatalog(options, session, result) {
   const artifactHashes = result.portArtifactHashes;
   if ([...result.portArtifacts.keys()].some(id => !/^[a-f0-9]{64}$/.test(artifactHashes[id] || ''))) return false;
   const data = { signature: signature(options), entries, derived, tiles, mapIndex: maps.index || {},
-    storage: images.storageEntries || [], audio: images.audioViewEntries || [],
+    storage: images.storageEntries || [], audio: images.audioViewEntries || [], ordinaryFailures,
     portArtifacts: [...result.portArtifacts], artifactHashes, discoveredProcessors, processorHashes, keys: [...keys] };
   const serialized = JSON.stringify(data);
   const filename = path.join(session.root, 'startup-catalog.json');
@@ -88,13 +92,32 @@ async function loadCatalog(options) {
     const changed = [...new Set([...Object.keys(data.signature), ...Object.keys(expected)])]
       .filter(key => JSON.stringify(data.signature[key]) !== JSON.stringify(expected[key]));
     if (changed.length) throw new Error('catalog signature changed: ' + changed.join(', '));
-    if (!['entries', 'derived', 'tiles', 'storage', 'audio', 'portArtifacts', 'keys'].every(key => Array.isArray(data[key])) ||
+    if (!['entries', 'derived', 'tiles', 'storage', 'audio', 'ordinaryFailures', 'portArtifacts', 'keys'].every(key => Array.isArray(data[key])) ||
         !data.mapIndex || typeof data.mapIndex !== 'object' || !data.artifactHashes ||
         !Array.isArray(data.discoveredProcessors) || !data.processorHashes ||
         JSON.stringify(data.discoveredProcessors) !== JSON.stringify(processorDiscovery(options))) throw new Error('catalog metadata or processor discovery changed');
     for (const [file, expected] of Object.entries(data.processorHashes))
       if (hash(await fsp.readFile(file)) !== expected) throw new Error('processor file changed: ' + file);
     if (data.portArtifacts.some(([id]) => !/^[a-f0-9]{64}$/.test(data.artifactHashes[id] || ''))) throw new Error('missing artifact checksum');
+    for (const failure of data.ordinaryFailures) {
+      if (!failure || typeof failure.source !== 'string' || typeof failure.reason !== 'string' ||
+          !Array.isArray(failure.dependencies) || !failure.dependencies.length)
+        throw new Error('invalid ordinary source failure');
+      for (const dependency of failure.dependencies) {
+        if (!dependency || !['source', 'file', 'identity', 'hash'].every(key => typeof dependency[key] === 'string') ||
+            !/^[a-f0-9]{64}$/.test(dependency.hash)) throw new Error('invalid ordinary failure dependency');
+        const file = native.assets.sourcePath ? native.assets.sourcePath(dependency.source) : path.join(gameRoot, dependency.source);
+        if (file !== dependency.file)
+          throw new Error('previously unprocessable source changed: ' + failure.source);
+        const current = fileIdentity(await fsp.stat(file, { bigint: true }));
+        if (current !== dependency.identity) {
+          const checksum = crypto.createHash('sha256');
+          for await (const chunk of fs.createReadStream(file)) checksum.update(chunk);
+          if (checksum.digest('hex') !== dependency.hash || fileIdentity(await fsp.stat(file, { bigint: true })) !== current)
+            throw new Error('previously unprocessable source changed: ' + failure.source);
+        }
+      }
+    }
     releaseLease = await createLease(root, data.keys);
     const derived = await native.assets.installDerivedCatalog(data.derived, false, true);
     if (derived?.rejected?.length) throw new Error('derived catalog rejected');
@@ -109,7 +132,8 @@ async function loadCatalog(options) {
     }
     const lease = releaseLease; releaseLease = null;
     return { images: { entries: data.entries, decryptedEntries: data.derived, storageEntries: data.storage,
-      installed: data.entries.length, catalogHit: true }, maps: { entries: data.tiles, index: data.mapIndex },
+      installed: data.entries.length, failedFiles: data.ordinaryFailures.length, fallback: data.ordinaryFailures.length,
+      ordinaryFailures: data.ordinaryFailures, catalogHit: true }, maps: { entries: data.tiles, index: data.mapIndex },
       portArtifacts: new Map(data.portArtifacts), portArtifactHashes: data.artifactHashes, releaseCacheLease: lease,
       ...createInvalidators(root, native, logger) };
   } catch (error) {

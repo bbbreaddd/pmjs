@@ -315,7 +315,9 @@ std::optional<std::string> audioViewPath(const std::string& input) {
 }
 
 napi_value installAudioViews(napi_env env, napi_callback_info info) try {
-  const auto args = arguments(env, info, 1);
+  const auto args = arguments(env, info, 2);
+  const bool detailed = args.size() > 1 && asBoolean(env, args[1]);
+  PreparationInstallReport report;
   auto& value = host(env);
   std::uint32_t count = 0;
   check(env, napi_get_array_length(env, args.at(0), &count), "audio views must be an array");
@@ -338,14 +340,15 @@ napi_value installAudioViews(napi_env env, napi_callback_info info) try {
     };
     for (std::size_t j = 0; j < key.size(); ++j) key[j] = static_cast<std::uint8_t>(digit(hex[j * 2]) * 16 + digit(hex[j * 2 + 1]));
     const auto file = value.vfs.resolve(*source);
-    if (!file) continue;
+    if (!file) { report.rejected.emplace_back(*source, "missing source"); continue; }
     try { EncryptedAudioFile checked(*file, key); }
-    catch (const std::exception&) { continue; }
+    catch (const std::exception& error) { report.rejected.emplace_back(*source, error.what()); continue; }
     if (!views.emplace(*logical, AudioView{*source, key}).second)
       throw std::runtime_error("duplicate audio view");
+    report.accepted.push_back(*source);
   }
   value.audioViews = std::move(views);
-  return number(env, value.audioViews.size());
+  return detailed ? report.result(env) : number(env, value.audioViews.size());
 } catch (const std::exception& error) {
   napi_throw_error(env, nullptr, error.what()); return nullptr;
 }

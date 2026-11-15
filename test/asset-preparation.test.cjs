@@ -216,6 +216,10 @@ test('a failed workspace upgrade keeps and installs the prior validated output',
   assert.equal(upgrade.installed, 1);
   assert.equal(upgrade.entries[0].directory, previousDirectory);
   assert.ok(fs.existsSync(path.join(previousDirectory, 'page-0.png')));
+  const { prepareGameAssets } = require('../runner/preparation.cjs');
+  const repeated = await prepareGameAssets({ ...f, workspaceBytes: 128 * 1024 * 1024 });
+  repeated.releaseCacheLease?.();
+  assert.equal(repeated.outcomeCounts['reused-local'], 1);
 });
 
 test('workspace-limited negative decisions are reconsidered when the budget increases', async () => {
@@ -439,6 +443,8 @@ test('full verification detects edits hidden by unchanged metadata', async t => 
 
 test('empty discovery reports install and successful completion without transformation', async () => {
   const f = fixture();
+  let storage = [{ source: f.source }];
+  f.native.assets.installImageStorage = entries => { storage = entries; };
   fs.unlinkSync(path.join(f.gameRoot, f.source));
   const progress = [];
   const result = await prepareAssets({ ...f, onProgress: value => progress.push(value) });
@@ -446,6 +452,7 @@ test('empty discovery reports install and successful completion without transfor
   assert.equal(result.total, 0);
   assert.equal(f.jobs, 0);
   assert.deepEqual(f.installs, [[]]);
+  assert.deepEqual(storage, []);
   assert.ok(progress.some(p => p.phase === 'install'));
 });
 
@@ -885,6 +892,37 @@ function encryptedFixture(engine = 'MZ') {
   };
   return { ...f, encrypt, audio, encryptedImage, encryptedAudio, systemFile, get jobs() { return f.jobs; }, get installs() { return f.installs; } };
 }
+
+test('image and audio preparation share their initial encryption settings read', async t => {
+  const f = encryptedFixture();
+  const readFile = fs.promises.readFile;
+  let reads = 0;
+  t.mock.method(fs.promises, 'readFile', async (file, ...args) => {
+    if (file === f.systemFile) reads++;
+    return readFile(file, ...args);
+  });
+  f.native.media = { installAudioViews: entries => entries.length };
+  const prepared = await prepareAssets(f);
+  assert.equal(prepared.error, undefined);
+  assert.equal(reads, 2, 'read once initially and once to detect changes before audio installation');
+});
+
+test('audio view rejection names the source and reason and prevents catalog publication', async () => {
+  const f = encryptedFixture();
+  fs.rmSync(path.join(f.gameRoot, 'img'), { recursive: true });
+  f.native.media = { installAudioViews(entries, detailed) {
+    assert.equal(detailed, true);
+    return { accepted: [], rejected: [{ id: entries[0].source, reason: 'invalid encrypted header' }] };
+  } };
+  const { prepareGameAssets } = require('../runner/preparation.cjs');
+  const result = await prepareGameAssets({ ...f, fastStartup: true });
+  result.releaseCacheLease?.();
+  assert.equal(result.images.audioViews, 0);
+  assert.equal(result.images.installFailures, 1);
+  assert.equal(result.catalogSaved, false);
+  assert.equal(result.outcomeCounts['ordinary-failure'], 1);
+  assert.ok(f.warnings.some(message => message.includes(f.encryptedAudio) && message.includes('invalid encrypted header')));
+});
 
 for (const engine of ['MV', 'MZ']) test(engine + ' audio views prepare without materializing or hashing the audio payload', async () => {
   const f = encryptedFixture(engine);

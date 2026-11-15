@@ -366,7 +366,6 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
     throw new Error('assetPreparation.workspaceBytes must be an integer from 0 to 268435456');
   const offline = preparationContext === 'offline';
   const audioViewSupport = !offline && typeof native?.media?.installAudioViews === 'function';
-  let audioSettings;
   const indexedImages = new Map();
   for (const record of portableIndex?.images || []) {
     const records = indexedImages.get(record.source);
@@ -378,7 +377,7 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
     fallback: 0, failedFiles: 0, installFailures: 0, prepared: 0, installed: 0, decrypted: 0, sourceBytes: 0, cacheBytes: 0,
     indexedNegative: 0, indexedLayoutAttempts: 0, indexedZeroPage: 0,
     indexedPageCopies: 0, unindexedProcessed: 0, processingMs: 0,
-    cancelled: false, entries: [], decryptedEntries: [], audioViewEntries: [], audioViews: 0, decisions: [], storageEntries: [], durationMs: 0 };
+    cancelled: false, entries: [], decryptedEntries: [], audioViewEntries: [], audioViews: 0, ordinaryFailures: [], decisions: [], storageEntries: [], durationMs: 0 };
 
 
   let terminalPhase = 'complete', activationStarted = false;
@@ -401,10 +400,6 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
   try {
     report('discover');
     if (cancelled()) return result;
-    if (audioViewSupport) {
-      audioSettings = await encryptionSettings(native, gameRoot, session.files);
-      if (audioSettings.error) throw audioSettings.error;
-    }
     validRecipes(recipes);
     if (pageCodec === 'lz4') {
       if (native.assets?.preparationWorkspaceVersion !== 1 || typeof native.assets?.preparationLz4Version !== 'string')
@@ -441,6 +436,7 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
       if (cancelled()) return result;
       if (!offline) {
         await native.assets.installPrepared([]);
+        await native.assets.installImageStorage?.([]);
         if (native.assets.installDecrypted) await native.assets.installDecrypted([]);
         if (audioViewSupport) native.media.installAudioViews([]);
       }
@@ -701,6 +697,7 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
                 ...(manifest.descriptor.textureArtifact ? { textureHash: manifest.outputs[manifest.descriptor.textureArtifact] } : {}),
                 ...(encrypted ? { decryptedFile: path.join(oldDirectory, manifest.decrypted) } : {}) });
             } else if (!manifest.decrypted) ++result.fallback;
+            session.outcome('image:' + source, outcome);
             logger.warn(`[pmjs] workspace improvement failed for ${source}; reusing prior prepared output: ${error.message}`);
           } catch (fallbackError) {
             session.outcome('image:' + source, 'ordinary-failure', fallbackError.message);
@@ -709,6 +706,19 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
             logger.warn(`[pmjs] asset preparation fallback ${source}: ${fallbackError.message}`);
           }
         } else {
+          if (error.code === 'PMJS_IMAGE_DECODE' && sourceHash) {
+            const file = sourceFile(native, gameRoot, source);
+            const checked = await files.inspect(file, 'source');
+            if (checked.hash === sourceHash) {
+              const dependencies = [{ source, file, identity: files.receipts[file].identity, hash: sourceHash }];
+              if (encrypted) {
+                const file = sourceFile(native, gameRoot, 'data/System.json');
+                if (await files.hash(file, 'settings') !== settings.hash) throw new Error('encryption settings changed during preparation');
+                dependencies.push({ source: 'data/System.json', file, identity: files.receipts[file].identity, hash: settings.hash });
+              }
+              result.ordinaryFailures.push({ source, reason: error.message, dependencies });
+            }
+          }
           session.outcome('image:' + source, 'ordinary-failure', error.message);
           result.fallback += 1;
           result.failedFiles += 1;
@@ -755,9 +765,14 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
       if (audioViewSupport) {
         const currentSettings = await encryptionSettings(native, gameRoot, session.files);
         if (currentSettings.error) throw currentSettings.error;
-        if (currentSettings.hash !== audioSettings.hash)
+        if (currentSettings.hash !== settings.hash)
           throw new Error('audio encryption settings changed during preparation');
-        result.audioViews = native.media.installAudioViews(result.audioViewEntries);
+        const audioReport = native.media.installAudioViews(result.audioViewEntries, true);
+        result.audioViews = audioReport?.accepted ? audioReport.accepted.length : audioReport;
+        for (const rejection of audioReport?.rejected || []) {
+          session.outcome('image:' + rejection.id, 'ordinary-failure', rejection.reason);
+          logger.warn(`[pmjs] audio preparation fallback ${rejection.id}: ${rejection.reason}`);
+        }
         result.fallback += result.audioViewEntries.length - result.audioViews;
         result.installFailures += result.audioViewEntries.length - result.audioViews;
       }

@@ -227,6 +227,7 @@ struct AssetWork {
   std::shared_ptr<ImageFileSource> storageSource;
   std::optional<ImageStorageDecision> storage;
   std::string error;
+  bool decodeFailure = false;
   bool unsupported = false;
 };
 std::uint32_t arrayLength(napi_env env, napi_value value, std::uint32_t limit);
@@ -252,11 +253,15 @@ void executeAsset(napi_env, void* opaque) noexcept {
     try {
       work.result = prepareAssetImage(sourcePath, work.staging,
         work.recipe, work.layout ? &*work.layout : nullptr, work.options);
-    } catch (const AssetPreparationDecodeError&) {
+    } catch (const AssetPreparationDecodeError& error) {
       // The ordinary loader also accepts signature-detected formats and recoverable PNGs.
       const auto source = ImageStore::openFile(sourcePath);
-      if (!source || !ImageStore::decodeFile(*source)) throw;
-      work.unsupported = true;
+      const auto bytes = source ? ImageStore::readCapturedBytes(*source) : std::nullopt;
+      if (!bytes) throw std::runtime_error("cannot read preparation source");
+      if (!ImageStore::decodeMemory(bytes->data(), bytes->size())) {
+        work.error = error.what();
+        work.decodeFailure = true;
+      } else work.unsupported = true;
     }
     struct stat current{};
     if (::fstat(work.sourceFd, &current) != 0 || current.st_size != work.snapshot.st_size ||
@@ -264,8 +269,8 @@ void executeAsset(napi_env, void* opaque) noexcept {
         current.st_ctim.tv_sec != work.snapshot.st_ctim.tv_sec || current.st_ctim.tv_nsec != work.snapshot.st_ctim.tv_nsec)
       throw std::runtime_error("asset source changed during preparation");
   } catch (const AssetPreparationUnsupported&) { work.unsupported = true; }
-  catch (const std::exception& error) { work.error = error.what(); }
-  catch (...) { work.error = "asset preparation failed"; }
+  catch (const std::exception& error) { work.error = error.what(); work.decodeFailure = false; }
+  catch (...) { work.error = "asset preparation failed"; work.decodeFailure = false; }
 }
 void completeAsset(napi_env env, napi_status status, void* opaque) {
   std::unique_ptr<AssetWork> work(static_cast<AssetWork*>(opaque));
@@ -286,6 +291,7 @@ void completeAsset(napi_env env, napi_status status, void* opaque) {
     napi_value result;
     napi_value message = string(env, error.what());
     napi_create_error(env, nullptr, message, &result);
+    if (work->decodeFailure && status == napi_ok) set(env, result, "code", string(env, "PMJS_IMAGE_DECODE"));
     napi_reject_deferred(env, work->deferred, result);
   }
   napi_delete_async_work(env, work->work);

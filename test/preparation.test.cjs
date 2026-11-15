@@ -149,6 +149,54 @@ test('incomplete preparation and malformed catalogs never authorize the fast pat
   assert.equal(await loadCatalog(options), null);
 });
 
+test('catalogs retain unchanged image decode failures and retry changed, removed or repaired sources', async () => {
+  const f = fixture(), assets = f.options.native.assets, processImage = assets.processImage;
+  assets.installPrepared = (entries, capture) => {
+    for (const entry of entries) if (capture) entry.pageIdentities = entry.descriptor.pages.map(() => 'page-id');
+    return entries.length;
+  };
+  assets.installPreparedCatalog = entries => entries.length;
+  assets.installDerivedCatalog = () => {};
+  const broken = path.join(f.gameRoot, 'img/pictures/broken.png');
+  const removed = path.join(f.gameRoot, 'img/pictures/removed.png');
+  fs.writeFileSync(broken, 'bad image'); fs.writeFileSync(removed, 'bad image');
+  let attempts = 0;
+  assets.processImage = async (source, ...args) => {
+    attempts++;
+    if (!fs.readFileSync(path.join(f.gameRoot, source)).equals(PNG))
+      throw Object.assign(new Error('invalid preparation PNG'), { code: 'PMJS_IMAGE_DECODE' });
+    return processImage(source, ...args);
+  };
+  const options = { ...f.options, fastStartup: true };
+  const cold = await f.run({ fastStartup: true });
+  assert.equal(cold.images.failedFiles, 2);
+  assert.equal(cold.catalogSaved, true);
+  const warm = await loadCatalog(options);
+  assert.ok(warm?.images.catalogHit);
+  assert.equal(warm.images.failedFiles, 2);
+  warm.releaseCacheLease();
+  assert.equal(attempts, 3, 'unchanged decode failures do not rerun preparation');
+  const stat = fs.statSync(broken);
+  fs.utimesSync(broken, stat.atime, new Date(stat.mtimeMs + 1000));
+  const metadataOnly = await loadCatalog(options);
+  assert.ok(metadataOnly?.images.catalogHit, 'identity changes recheck failed source bytes before invalidating');
+  metadataOnly.releaseCacheLease();
+  fs.appendFileSync(broken, 'changed');
+  assert.equal(await loadCatalog(options), null);
+  assert.equal((await f.run({ fastStartup: true })).catalogSaved, true);
+  fs.unlinkSync(removed);
+  assert.equal(await loadCatalog(options), null);
+  const fewer = await f.run({ fastStartup: true });
+  assert.equal(fewer.images.failedFiles, 1);
+  assert.equal(fewer.catalogSaved, true);
+  fs.writeFileSync(broken, PNG);
+  assert.equal(await loadCatalog(options), null);
+  const repaired = await f.run({ fastStartup: true });
+  assert.equal(repaired.images.failedFiles, 0);
+  assert.equal(repaired.images.installed, 2);
+  assert.equal(repaired.catalogSaved, true);
+});
+
 test('startup catalogs survive unrelated runner edits and explain incompatible versions and settings', async () => {
   const f = fixture(), assets = f.options.native.assets;
   assets.installPrepared = (entries, capture) => {
@@ -223,6 +271,8 @@ test('processor changes replace obsolete outputs rather than retaining a second 
   assert.equal(updated.images.generated, 1);
   assert.equal(fs.existsSync(originalDirectory), false);
   assert.equal(Object.keys(updated.records).length, 1);
+  const state = JSON.parse(fs.readFileSync(path.join(updated.root, 'preparation-state.json')));
+  assert.ok(Object.keys(state.data.files).every(file => fs.existsSync(file)), 'obsolete output receipts are removed in images-only preparation');
   assert.equal(fs.existsSync(updated.images.entries[0].directory), true);
   const warm = await f.run();
   assert.equal(warm.images.generated, 0);

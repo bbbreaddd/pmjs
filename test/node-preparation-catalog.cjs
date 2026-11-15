@@ -99,13 +99,34 @@ async function run() {
   fs.writeFileSync(path.join(gameRoot, broken), image.subarray(0, 40));
   const failed = await prepareGameAssets(options);
   assert.equal(failed.images.failedFiles, 1);
-  assert.equal(failed.catalogSaved, false);
+  assert.equal(failed.catalogSaved, true);
+  assert.equal(failed.images.ordinaryFailures[0].source, broken);
   failed.releaseCacheLease();
+  const failedWarm = await loadCatalog(options);
+  assert.ok(failedWarm?.images.catalogHit);
+  assert.equal(failedWarm.images.failedFiles, 1);
+  failedWarm.releaseCacheLease();
   fs.writeFileSync(path.join(gameRoot, broken), jpeg);
+  assert.equal(await loadCatalog(options), null, 'repaired images invalidate a recorded decode failure');
   const retried = await prepareGameAssets(options);
   assert.equal(retried.images.failedFiles, 0);
   assert.equal(retried.catalogSaved, true);
   retried.releaseCacheLease();
+  fs.writeFileSync(path.join(gameRoot, encryptedSource), Buffer.concat([
+    Buffer.from('5250474d560000000003010000000000', 'hex'), encrypted.subarray(0, 40) ]));
+  const encryptedFailure = await prepareGameAssets(options);
+  assert.equal(encryptedFailure.images.failedFiles, 1);
+  assert.equal(encryptedFailure.catalogSaved, true);
+  assert.deepEqual(encryptedFailure.images.ordinaryFailures[0].dependencies.map(item => item.source),
+    [encryptedSource, 'data/System.json']);
+  encryptedFailure.releaseCacheLease();
+  const encryptedWarm = await loadCatalog(options);
+  assert.ok(encryptedWarm?.images.catalogHit);
+  encryptedWarm.releaseCacheLease();
+  const systemFile = path.join(gameRoot, 'data/System.json');
+  const system = JSON.parse(fs.readFileSync(systemFile));
+  fs.writeFileSync(systemFile, JSON.stringify({ ...system, gameTitle: 'changed' }));
+  assert.equal(await loadCatalog(options), null, 'encrypted decode failures depend on encryption settings');
   console.log('native prepared image catalog restored successfully');
 }
 run().catch(error => { console.error(error); process.exitCode = 1; })

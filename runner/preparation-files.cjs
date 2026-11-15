@@ -8,6 +8,7 @@ const crypto = require('node:crypto');
 const HASH = /^[a-f0-9]{64}$/;
 const FUSE_SUPER_MAGIC = 0x65735546;
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
+const fileIdentity = stat => [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, stat.birthtimeNs].join(':');
 
 async function writeJson(file, value, flush = true) {
   const handle = await fsp.open(file, 'wx');
@@ -32,9 +33,7 @@ async function preparationFiles(session, verifyHashes = false) {
     session.data.files[file] = stored;
     return stored;
   }
-  function identity(stat) {
-    return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, stat.birthtimeNs].join(':');
-  }
+  const identity = fileIdentity;
   function matchesReceipt(receipt, signature, file, stat, allowInodeDrift) {
     if (!receipt || !HASH.test(receipt.hash)) return false;
     if (receipt.identity === signature) return true;
@@ -206,4 +205,4 @@ async function preparationFiles(session, verifyHashes = false) {
 
 }
 
-module.exports = { preparationFiles, writeJson };
+module.exports = { preparationFiles, writeJson, fileIdentity };
