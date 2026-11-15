@@ -2,12 +2,15 @@
   "name": "pmjs-native-runtime",
   "private": true,
   "scripts": {
-    "lint": "eslint js patches runner tools test example",
+    "lint": "eslint js patches runner tools test",
     "licensing": "node tools/check-provenance.cjs",
     "test": "node tools/test-js.cjs"
   },
   "devDependencies": {
     "eslint": "10.13.0",
     "globals": "16.3.0"
+  },
+  "engines": {
+    "node": "^22.13.0 || >=24.0.0"
   }
 }

@@ -29,12 +29,4 @@ export default [
     ],
     languageOptions: { globals: { ...globals.browser, __titleReadCanvas: 'readonly' } },
   },
-  {
-    files: ['example/**/*.js'],
-    languageOptions: {
-      ecmaVersion: 2022,
-      globals: { ...globals.node, NativeHost: 'readonly' },
-    },
-    rules: { ...safetyRules, 'no-undef': 'error' },
-  },
 ];

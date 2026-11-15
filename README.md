@@ -26,7 +26,7 @@ Run the JavaScript tests with:
 npm test
 ```
 
-For native and rendering tests, use a local Linux development build. You need a C++20 compiler, Node.js with Node-API 8 or newer headers, Xvfb, and development libraries for SDL2, EGL, OpenGL ES, libpng, libwebp, zlib, libjpeg, FreeType, HarfBuzz, and FFmpeg (avformat, avcodec, avutil, swresample, and swscale).
+For native and rendering tests, use a local Linux development build. You need a C++20 compiler, Node.js 22 (22.13 or newer) or 24+ with its development headers, Xvfb, and development libraries for SDL2, EGL, OpenGL ES, libpng, libwebp, zlib, libjpeg, FreeType, HarfBuzz, and FFmpeg (avformat, avcodec, avutil, swresample, and swscale).
 
 ```sh
 cmake --preset dev

@@ -16,7 +16,7 @@ The first build downloads and prepares the target compiler, libraries, and Node.
 
 Use `--jobs N` to set the number of parallel jobs or `--output PATH` to choose another output directory.
 
-To package the default ARM64 build, run `python3 tools/release.py package`. Use `--format squashfs` or `--format all` to include SquashFS
+To package the default ARM64 build, run `python3 tools/release.py package`. Use `--format squashfs` or `--format all` to include SquashFS (`sudo apt install squashfs-tools`).
 
 Game ZIP packaging with `tools/portmaster.py --submission` requires Pillow
 (`sudo apt install python3-pil` or `python3 -m pip install Pillow`). Packaging
@@ -40,7 +40,7 @@ docker buildx build --output type=local,dest=dist/pmjs-docker-arm64 .
 To build a tarball and matching source archive into an empty directory:
 
 ```bash
-docker buildx build --output type=local,dest=dist/pmjs-bin/
+docker buildx build --target artifacts --output type=local,dest=dist/pmjs-bin/ .
 ```
 
 To build a SquashFS image instead, add `--build-arg PMJS_PACKAGE_FORMAT=squashfs`. To build both formats, use `--build-arg PMJS_PACKAGE_FORMAT=all`.

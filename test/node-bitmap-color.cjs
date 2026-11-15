@@ -1,9 +1,7 @@
 'use strict';
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const { performance } = require('node:perf_hooks');
 const { createMvBlurContext } = require('./helpers/mv-blur-context.cjs');
-const stock = require('./helpers/mv-reviewed-methods.cjs');
 const native = require(path.resolve(process.argv[2]));
 native.initialize({ gameRoot: path.resolve(process.argv[3]), width: 32, height: 32, windowTitle: 'Bitmap color transforms' });
 const contexts = [false, true].map(disabled => {
@@ -64,26 +62,7 @@ try {
   assert.throws(()=>native.canvas.adjustTone(handles[0],Infinity,0,0), /non-finite/);
   assert.throws(()=>native.canvas.rotateHue(handles[0],NaN), /non-finite/);
   console.log(JSON.stringify({comparisons, exactPremultipliedBytes:true, ownership:true}));
-  if (process.argv.includes('--benchmark')) {
-    const results = [];
-    for (const [w,h] of [[64,64],[640,480],[1024,1024]]) {
-      const pair = contexts.map(c=>bitmap(c,w,h)), input=pixels(w,h);
-      for (const [name,args] of [['adjustTone',[17.5,-29.5,41]], ['rotateHue',[37]]]) {
-        const samples = [[],[]];
-        for (let sample=-30;sample<7;sample++) for (const arm of sample%2 ? [1,0]:[0,1]) {
-          const b=pair[arm];native.canvas.writePixels(handle(b),0,0,w,h,input);
-          const start=performance.now();
-          // The game runs in the host realm; VM global lookups would inflate the control.
-          if (arm === 1) stock[name].apply(b,args); else b[name](...args);
-          const ms=performance.now()-start;
-          if(sample>=0) samples[arm].push(ms);
-        }
-        const median=a=>a.slice().sort((a,b)=>a-b)[Math.floor(a.length/2)];
-        results.push({method:name,width:w,height:h,warmupCalls:30,nativeMs:median(samples[0]),stockMs:median(samples[1]),samples});
-      }
-    }
-    console.log('bitmap-color-benchmark '+JSON.stringify(results));
-  }
+
 } finally {
   for (const h of handles) native.canvas.release(h);
   native.runtime.quit();

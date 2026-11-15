@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PRESET="${PMJS_BUILD_PRESET:-runtime-x64}"
+PRESET="${PMJS_BUILD_PRESET:-dev}"
 configure=(--preset "$PRESET")
 build=(--build --preset "$PRESET")
 if [ -n "${PMJS_BUILD_DIR:-}" ]; then
