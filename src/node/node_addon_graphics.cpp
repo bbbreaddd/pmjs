@@ -461,7 +461,7 @@ pmjs::AlphaMode imageAlphaMode(napi_env env, napi_value options) {
   throw std::runtime_error("alphaMode must be straight or premultiplied");
 }
 
-napi_value createMeshResource(napi_env env, const std::vector<napi_value>& args,
+napi_value createMeshResource(napi_env env, std::span<const napi_value> args,
                             const pmjs::MeshMaterial& material) {
   State& value = host(env);
   const auto image = resolveImage(value, asUint32(env, args[0]));

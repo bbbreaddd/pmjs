@@ -10,7 +10,7 @@ test('optional allocator hooks do not disable collection of native resource owne
   for (const runtime of [{}, { allocatorStats: () => undefined, trimAllocator: () => undefined }]) {
     let collections = 0;
     const sample = () => ({ availableBytes: 80 * MiB, rssBytes: (500 - 20 * collections) * MiB });
-    const policy = createMemoryReclaimer({ native: { runtime, images: { memory: () => ({ pendingDecodeJobs: 0 }) } },
+    const policy = createMemoryReclaimer({ native: { runtime, images: { pendingDecodeJobs: () => 0 } },
       readMemory: sample, now: () => 0,
       collectGarbage() { collections++; }, settleFinalizers: async () => {},
       logger: { log() {}, warn(message) { assert.fail(message); } } });
@@ -177,7 +177,7 @@ test('real collection releases unreachable resource owners before trim and prese
           assert.equal(resources.get(1)[0], 1, 'live resource contents must survive');
           trimmed = true; return true;
         }
-      }, images: { memory: () => ({ pendingDecodeJobs: 0 }) } },
+      }, images: { pendingDecodeJobs: () => 0 } },
       readMemory: () => ({ availableBytes: 80 * 1024 * 1024, rssBytes: 500 * 1024 * 1024 }),
       now: () => 0, collectGarbage: global.gc,
       logger: { log() {}, warn(message) { throw new Error(message); } }
@@ -198,7 +198,7 @@ function fixture(options = {}) {
   const native = { runtime: {
     allocatorStats: () => ({ freeArenaBytes: f.free }),
     trimAllocator() { f.trims++; f.time += 56; f.rss -= f.recovery; return f.recovery > 0; }
-  }, images: { memory: () => ({ pendingDecodeJobs: f.jobs }) } };
+  }, images: { pendingDecodeJobs: () => f.jobs } };
   f.sample = () => ({ availableBytes: f.available, rssBytes: f.rss, swapBytes: f.swap });
   f.native = native;
   f.policy = createMemoryReclaimer({ native, readMemory: f.sample,
@@ -210,6 +210,7 @@ function fixture(options = {}) {
 
 test('startup reclaims once, preserving allocator/resource policy outside the call', () => {
   const f = fixture(); f.available = 500 * MiB;
+  f.native.images.memory = () => assert.fail('reclamation must not construct an image diagnostic report');
   const result = f.policy.atBoundary('startup');
   assert.equal(result.recoveredBytes, 150 * MiB);
   assert.equal(result.durationMs, 56);
@@ -347,7 +348,7 @@ test('critical trims need regrowth and a minimum interval', () => {
 test('emergency deferrals do not read memory every frame', () => {
   const f = fixture(); let reads = 0; const sample = f.sample;
   f.available = 80 * MiB; f.pressure(); f.time += 2000;
-  f.native.images.memory = () => ({ pendingDecodeJobs: f.jobs });
+  f.native.images.pendingDecodeJobs = () => f.jobs;
   const policy = createMemoryReclaimer({ native: f.native, readMemory: () => { reads++; return sample(); },
     now: () => f.time, logger: { log() {}, warn() {} } });
   policy.observe(sample()); policy.observe(sample()); f.time += 2000; f.jobs = 1;

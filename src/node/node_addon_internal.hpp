@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -72,8 +73,22 @@ napi_value boolean(napi_env env, bool input);
 napi_value number(napi_env env, double input);
 napi_value uint32(napi_env env, std::uint32_t input);
 napi_value string(napi_env env, const std::string& input);
-std::vector<napi_value> arguments(napi_env env, napi_callback_info info,
-                                  std::size_t limit = 20);
+class CallbackArguments {
+ public:
+  CallbackArguments(napi_env env, napi_callback_info info, std::size_t limit);
+  std::size_t size() const { return count_; }
+  bool empty() const { return count_ == 0; }
+  napi_value operator[](std::size_t index) const { return values_[index]; }
+  napi_value at(std::size_t index) const {
+    if (index >= count_) throw std::out_of_range("missing argument");
+    return values_[index];
+  }
+  operator std::span<const napi_value>() const { return {values_.data(), count_}; }
+ private:
+  std::array<napi_value, 20> values_{};
+  std::size_t count_ = 0;
+};
+CallbackArguments arguments(napi_env env, napi_callback_info info, std::size_t limit = 20);
 double asNumber(napi_env env, napi_value value);
 std::int32_t asInt32(napi_env env, napi_value value);
 std::uint32_t asUint32(napi_env env, napi_value value);
@@ -90,7 +105,7 @@ napi_value rendererStats(napi_env env, napi_callback_info info);
 
 template <std::size_t Size>
 std::array<float, Size> floatArray(napi_env env,
-                                   const std::vector<napi_value>& args,
+                                   std::span<const napi_value> args,
                                    std::size_t offset) {
   if (args.size() < offset + Size) throw std::runtime_error("missing arguments");
   std::array<float, Size> result{};

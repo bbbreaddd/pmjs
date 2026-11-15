@@ -7,7 +7,7 @@ namespace pmjs::addon {
 namespace {
 using Clock = std::chrono::steady_clock;
 
-bool browserVideoColor(napi_env env, const std::vector<napi_value>& args) {
+bool browserVideoColor(napi_env env, std::span<const napi_value> args) {
   if (args.size() < 2) return false;
   const auto profile = asString(env, args[1]);
   if (profile == "ffmpeg") return false;

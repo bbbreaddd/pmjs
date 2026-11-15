@@ -80,7 +80,7 @@ function createMemoryReclaimer({ native, readMemory, now, collectGarbage,
         // re-reading memory on every frame.
         if (emergency && !(before.availableBytes < CRITICAL_BYTES)) { criticalSince = null; return null; }
         const collectDuringDecode = Boolean(collectGarbage) && criticalReady && before.availableBytes < CRITICAL_BYTES;
-        if (native.images.memory(0).pendingDecodeJobs !== 0 && !collectDuringDecode) {
+        if (native.images.pendingDecodeJobs() !== 0 && !collectDuringDecode) {
           nextDecodeCheckAt = now() + SAMPLE_INTERVAL_MS;
           return null;
         }

@@ -23,10 +23,19 @@ fs.writeFileSync(path.join(directory, 'image.rpgmvp'), Buffer.concat([Buffer.all
 native.initialize({ gameRoot: directory, width: 32, height: 32, windowTitle: 'Async loading', imageWarmCacheBytes: 16 });
 test.after(() => native.runtime.quit());
 
+test('native callback arguments reject omissions and ignore excess arguments', () => {
+  assert.throws(() => native.canvas.create(1));
+  const image = native.canvas.create(1, 1, false, ...Array(30).fill(99));
+  assert.equal(image.width, 1);
+  assert.equal(image.height, 1);
+  native.canvas.release(image.handle);
+});
+
 test('critical collection preserves image decodes already in flight', async () => {
   const { createMemoryReclaimer } = require('../runner/memory-reclamation.cjs');
   const pending = Array.from({ length: 8 }, () => native.images.loadAsync('collection.png', true));
-  assert.ok(native.images.memory(0).pendingDecodeJobs > 0);
+  assert.ok(native.images.pendingDecodeJobs() > 0);
+  assert.equal(native.images.pendingDecodeJobs(), native.images.memory(0).pendingDecodeJobs);
   let time = 0, collected = false;
   const policy = createMemoryReclaimer({ native, now: () => time,
     readMemory: () => ({ availableBytes: 80 * 1024 * 1024, rssBytes: process.memoryUsage.rss() }),
@@ -41,6 +50,7 @@ test('critical collection preserves image decodes already in flight', async () =
   time = 2000;
   const reclamation = policy.atBoundary(null);
   const images = await Promise.all(pending);
+  assert.equal(native.images.pendingDecodeJobs(), 0);
   try {
     const result = await reclamation;
     assert.equal(collected, true);

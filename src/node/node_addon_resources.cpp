@@ -445,6 +445,12 @@ napi_value touchImage(napi_env env, napi_callback_info info) try {
   napi_throw_range_error(env, nullptr, error.what()); return nullptr;
 }
 
+napi_value pendingDecodeJobs(napi_env env, napi_callback_info) try {
+  return number(env, host(env).pendingImageLoads.size());
+} catch (const std::exception& error) {
+  return throwException(env, error);
+}
+
 napi_value imageMemory(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 1);
   auto& value = host(env);
@@ -708,6 +714,7 @@ void registerResourceBindings(napi_env env, napi_value exports) {
   method(env, images, "unpin", unpinImage);
   method(env, images, "touch", touchImage);
   method(env, images, "memory", imageMemory);
+  method(env, images, "pendingDecodeJobs", pendingDecodeJobs);
   method(env, images, "exportResident", exportResidentImage);
   napi_value assets = moduleObject(env);
   method(env, assets, "loadImage", loadAssetImage);
