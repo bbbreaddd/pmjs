@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { fileIdentity } = require('./preparation-files.cjs');
 
 const MAX_INPUT_BYTES = 128 * 1024 * 1024;
 const MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
@@ -13,6 +14,23 @@ const PROCESSOR_SUFFIX = '.pmjs-processor.cjs';
 const ID = /^[a-z][a-z0-9_-]{0,63}$/;
 const HASH = /^[a-f0-9]{64}$/;
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+
+async function readBounded(file, limit) {
+  const handle = await fs.promises.open(file, 'r');
+  try {
+    const before = await handle.stat({ bigint: true });
+    if (!before.isFile() || before.size > BigInt(limit)) throw new Error('port input exceeds preparation limit');
+    const bytes = Buffer.alloc(Number(before.size));
+    for (let offset = 0; offset < bytes.length;) {
+      const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, offset);
+      if (!bytesRead) throw new Error('port input changed while reading');
+      offset += bytesRead;
+    }
+    if (fileIdentity(before) !== fileIdentity(await handle.stat({ bigint: true })))
+      throw new Error('port input changed while reading');
+    return bytes;
+  } finally { await handle.close(); }
+}
 
 function relative(name) {
   return typeof name === 'string' && name.length > 0 && !name.includes('\\') &&
@@ -94,8 +112,20 @@ function selectedOutputs(processor, files, sourcePath, inspect) {
   const read = name => {
     if (!fileSet.has(name)) throw new Error('undeclared discovery source: ' + name);
     const filename = sourcePath(name);
-    if (fs.statSync(filename).size > MAX_INPUT_BYTES) throw new Error('oversized port input');
-    const bytes = fs.readFileSync(filename);
+    const descriptor = fs.openSync(filename, 'r');
+    let bytes;
+    try {
+      const before = fs.fstatSync(descriptor, { bigint: true });
+      if (!before.isFile() || before.size > BigInt(MAX_INPUT_BYTES)) throw new Error('oversized port input');
+      bytes = Buffer.alloc(Number(before.size));
+      for (let offset = 0; offset < bytes.length;) {
+        const count = fs.readSync(descriptor, bytes, offset, bytes.length - offset, offset);
+        if (!count) throw new Error('port discovery input changed while reading');
+        offset += count;
+      }
+      if (fileIdentity(before) !== fileIdentity(fs.fstatSync(descriptor, { bigint: true })))
+        throw new Error('port discovery input changed while reading');
+    } finally { fs.closeSync(descriptor); }
     inspect?.(name, filename, bytes);
     return bytes;
   };
@@ -205,10 +235,13 @@ function verifyPortDescriptor(bundleRoot, records, verifyOutputs = true) {
   }
   return names;
 }
-async function processorRecords({ bundleRoot, descriptors, adapters, logger, files }) {
+async function processorRecords({ bundleRoot, descriptors, adapters, logger, files, session }) {
   if (Array.isArray(descriptors) && descriptors.length) return descriptors.filter(desc => {
     const valid = desc && ID.test(desc.id) && relative(desc.processor);
-    if (!valid) logger.warn('[pmjs] invalid optional port processor declaration');
+    if (!valid) {
+      session.outcome('port:declaration', 'ordinary-failure', 'invalid optional port processor declaration');
+      logger.warn('[pmjs] invalid optional port processor declaration');
+    }
     return valid;
   });
   const filenames = [...discoverBundledProcessors(bundleRoot), ...discoverAdapterProcessors(adapters)];
@@ -223,7 +256,10 @@ async function processorRecords({ bundleRoot, descriptors, adapters, logger, fil
       }
       records.push({ id: processor.id, version: processor.version, sourceFile: filename,
         processorSha256: await files.hash(filename, 'processor'), files: helpers, outputs: [] });
-    } catch (error) { logger.warn(`[pmjs] ignoring invalid port processor ${filename}: ${error.message}`); }
+    } catch (error) {
+      session.outcome('port:' + filename, 'ordinary-failure', error.message);
+      logger.warn(`[pmjs] ignoring invalid port processor ${filename}: ${error.message}`);
+    }
   }
   return records;
 }
@@ -234,7 +270,7 @@ async function prepareForRun({ gameRoot, bundleRoot, descriptors, adapters = [],
   const resolved = new Map(), assets = session.native.assets, files = session.files;
   session.processorFiles = new Set();
   const sourcePath = logical => assets.sourcePath?.(logical) || fileInside(gameRoot, logical);
-  const records = await processorRecords({ bundleRoot, descriptors, adapters, logger, files });
+  const records = await processorRecords({ bundleRoot, descriptors, adapters, logger, files, session });
   for (const desc of records) {
     try {
       const processorFile = desc.sourceFile || fileInside(bundleRoot, desc.processor);
@@ -263,7 +299,9 @@ async function prepareForRun({ gameRoot, bundleRoot, descriptors, adapters = [],
         if (session.shouldCancel()) break;
         const id = desc.id + '/' + entry.id;
         try {
-          const input = sourcePath(entry.source), inputHash = await files.hash(input, 'port-input');
+          const input = sourcePath(entry.source);
+          if ((await fs.promises.stat(input)).size > MAX_INPUT_BYTES) throw new Error('port input exceeds preparation limit');
+          const inputHash = await files.hash(input, 'port-input');
           const key = hash(Buffer.from(JSON.stringify([identity, entry.id, entry.source, inputHash, discoveryInputs.map(input => [input.source, input.hash])])));
           let directory = session.directory('port/' + desc.id, key);
           let output = path.join(directory, 'data.pma1');
@@ -284,14 +322,13 @@ async function prepareForRun({ gameRoot, bundleRoot, descriptors, adapters = [],
               const candidate = fileInside(bundleRoot, packaged.file);
               if (await files.hash(candidate, 'package') !== packaged.sha256) throw new Error('packaged output checksum mismatch');
               {
-                const bytes = await fs.promises.readFile(candidate);
+                const bytes = await readBounded(candidate, MAX_OUTPUT_BYTES + 1024 * 1024);
                 if (!decompressArtifact || decompressArtifact(bytes)) { encoded = bytes; outcome = 'reused-package'; }
               }
             } catch (error) { logger.warn(`[pmjs] port preparation ${id}: packaged output unavailable: ${error.message}`); }
           }
           if (!encoded) {
-            const bytes = await fs.promises.readFile(input);
-            if (bytes.length > MAX_INPUT_BYTES) throw new Error('port input exceeds preparation limit');
+            const bytes = await readBounded(input, MAX_INPUT_BYTES);
             const value = entry.generate ? entry.generate(bytes) : processor.generate(bytes, { id: entry.id, source: entry.source });
             if (value === null) {
               const record = { id, key, source: entry.source, sourceHash: inputHash, processor: identity, dependencies, outcome: 'ordinary-choice', descriptor: null, outputs: {} };

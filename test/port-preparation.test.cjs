@@ -173,6 +173,65 @@ test('startup catalog tracks processor changes and repairs damaged artifacts whe
   assert.equal(await loadCatalog(options), null, 'a newly discovered processor requires preparation');
 });
 
+test('processor discovery failures block catalogs until missing helpers are repaired', async () => {
+  const f = fixture(); f.writeSources('active-input', 'declined-input');
+  fs.writeFileSync(f.processor, MULTI_TEXT);
+  const assets = { ...preparationLocks(), installPreparedCatalog: entries => entries.length, installDerivedCatalog() {} };
+  const options = { native: { assets }, gameRoot: f.game, cacheRoot: f.cache(), images: false, maps: false,
+    adapters: [f.processor], logger: f.logger, fastStartup: true };
+  const failed = await prepareGameAssets(options); failed.releaseCacheLease();
+  assert.equal(failed.catalogSaved, false);
+  assert.equal(failed.outcomeCounts['ordinary-failure'], 1);
+  assert.equal(await loadCatalog(options), null);
+  fs.writeFileSync(path.join(f.root, 'support.cjs'), HELPER_TEXT);
+  const repaired = await prepareGameAssets(options); repaired.releaseCacheLease();
+  assert.equal(repaired.catalogSaved, true);
+  assert.equal(reader(repaired.portArtifacts)('fixture-multi/composed').toString(), 'from-helper:active-input');
+  const warm = await loadCatalog(options);
+  assert.ok(warm);
+  warm.releaseCacheLease();
+});
+
+test('oversized processor inputs are rejected before hashing or reading their contents', async t => {
+  const f = fixture(); f.writeSources('active-input', 'declined-input');
+  const source = f.source(ACTIVE_SOURCE);
+  const descriptor = fs.openSync(source, 'r+');
+  try { fs.ftruncateSync(descriptor, 128 * 1024 * 1024 + 1); } finally { fs.closeSync(descriptor); }
+  const stream = fs.createReadStream;
+  t.mock.method(fs, 'createReadStream', (file, ...args) => {
+    assert.notEqual(file, source, 'the size limit must precede content hashing');
+    return stream(file, ...args);
+  });
+  const result = await run(f, undefined, { adapters: [f.processor] });
+  assert.equal(result.outcomeCounts['ordinary-failure'], 1);
+  assert.equal(result.portArtifacts.size, 0);
+  assert.ok(f.warnings.some(message => message.includes('port input exceeds preparation limit')));
+});
+
+test('processor input reads remain bounded if the file grows after hashing', async t => {
+  const f = fixture(); f.writeSources('active-input', 'declined-input');
+  const source = f.source(ACTIVE_SOURCE), size = fs.statSync(source).size;
+  const open = fs.promises.open;
+  let grew = false;
+  t.mock.method(fs.promises, 'open', async (file, ...args) => {
+    const handle = await open(file, ...args);
+    if (file === source) {
+      const read = handle.read.bind(handle);
+      handle.read = async (buffer, ...rest) => {
+        assert.equal(buffer.length, size);
+        if (!grew) { fs.appendFileSync(source, 'changed'); grew = true; }
+        return read(buffer, ...rest);
+      };
+    }
+    return handle;
+  });
+  const result = await run(f, undefined, { adapters: [f.processor] });
+  assert.equal(grew, true);
+  assert.equal(result.portArtifacts.size, 0);
+  assert.equal(result.outcomeCounts['ordinary-failure'], 1);
+  assert.ok(f.warnings.some(message => message.includes('port input changed while reading')));
+});
+
 test('processor cache identity includes source paths exposed to generate', async t => {
   const f = fixture(t);
   const processor = path.join(f.root, 'path-sensitive.pmjs-processor.cjs');

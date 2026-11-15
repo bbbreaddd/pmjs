@@ -494,7 +494,6 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
         recipe = policyOverrides.recipes && explicitRecipe ? explicitRecipe : policy.recipe || explicitRecipe;
         if (recipe) { recipe = { ...recipe, source: logicalSource, sourceHash }; validRecipes([recipe]); }
         if (!recipe && !encrypted) recipe = await automaticRecipe(file, logicalSource, sourceHash, checkedSource.header, frames);
-        if (recipe && recipe.sourceHash !== sourceHash) throw new Error('recipe source hash changed');
         const imageAstc = astcSettings(policyOverrides.astc ? astc : policy.astc || astc);
         const lossless = policyOverrides.losslessPrefixes
           ? losslessPrefixes.some(prefix => hasPathPrefix(logicalSource, prefix))

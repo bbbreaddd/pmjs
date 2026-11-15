@@ -12,7 +12,7 @@ const { COMPILER_VERSION } = require('./map-demand.cjs');
 const { fileIdentity } = require('./preparation-files.cjs');
 
 // Bump when catalog contents or preparation decisions change incompatibly.
-const CATALOG_VERSION = 3;
+const CATALOG_VERSION = 4;
 
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const rebuildMarker = 'runtime-settings/rebuild-assets';
