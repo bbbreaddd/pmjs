@@ -70,7 +70,7 @@ class BuildCommand(unittest.TestCase):
         example = self.root / 'example'
         example.mkdir()
         shutil.copy2(ROOT / 'example/run-game.sh', example / 'run-game.sh')
-        launcher = self.root / 'dist/pmjs/bin/pmjs'
+        launcher = self.root / 'dist/pmjs-arm64/bin/pmjs'
         launcher.parent.mkdir(parents=True)
         launcher.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
         launcher.chmod(0o755)
@@ -100,7 +100,7 @@ class BuildProvenance(unittest.TestCase):
             (self.root / name).write_text('fixture')
         (self.root / 'bin/pmjs').write_text('#!/bin/sh\nexit 0\n')
         for name in ('build-js-runtime.mjs', 'build-js-composition.mjs', 'game-inspect.mjs', 'achievement-discovery.mjs', 'game-bundle.mjs', 'pmjs.mjs',
-                     'package-self-test.cjs', 'portmaster.py', 'portmaster_metadata.py', 'verify-asset-index.cjs',
+                     'package-self-test.cjs', 'portmaster.py', 'portmaster_metadata.py', 'verify-asset-index.cjs', 'pack-prepared-cache.cjs',
                      'linux-arm64/audit-abi.py'):
             (self.root / 'tools' / name).parent.mkdir(parents=True, exist_ok=True)
             (self.root / 'tools' / name).write_text('// fixture\n')

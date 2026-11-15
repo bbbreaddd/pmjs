@@ -113,27 +113,32 @@ void verify(const std::filesystem::path& source, const std::filesystem::path& ou
     const auto offset = (static_cast<std::size_t>(y) * asset.width + x) * 4;
     return AssetColor{reference[offset], reference[offset + 1], reference[offset + 2], reference[offset + 3]};
   };
-  for (int y = 0; y < asset.height; ++y) for (int x = 0; x < asset.width; ++x) {
-    AssetColor actual{};
-    if (asset.uniform) actual = *asset.uniform;
-    else {
-      bool found = false;
-      for (const auto& cell : asset.cells) {
-        const int localX = x - cell.rect[0], localY = y - cell.rect[1];
-        if (localX < 0 || localY < 0 || localX >= cell.rect[2] || localY >= cell.rect[3]) continue;
-        require(!found); found = true;
-        actual = cell.fill;
-        if (cell.page >= 0 && localX >= cell.crop[0] && localY >= cell.crop[1] &&
-            localX - cell.crop[0] < cell.crop[2] && localY - cell.crop[1] < cell.crop[3]) {
-          const auto& page = asset.pages[cell.page];
-          const auto offset = (static_cast<std::size_t>(cell.atlas[1] + localY - cell.crop[1]) * page.width +
-            cell.atlas[0] + localX - cell.crop[0]) * 4;
-          std::copy_n(pages[cell.page].data() + offset, 4, actual.data());
-        }
-      }
-      require(found);
-    }
+  auto compare = [&](int x, int y, const AssetColor& actual) {
     if (actual != pixels(x, y)) throw std::runtime_error("fixture reconstruction mismatch at " + std::to_string(x) + "," + std::to_string(y));
+  };
+  if (asset.uniform) {
+    for (int y = 0; y < asset.height; ++y) for (int x = 0; x < asset.width; ++x)
+      compare(x, y, *asset.uniform);
+  } else {
+    std::vector<bool> covered(static_cast<std::size_t>(asset.width) * asset.height);
+    for (const auto& cell : asset.cells) {
+      for (int y = std::max(0, cell.rect[1]); y < std::min(asset.height, cell.rect[1] + cell.rect[3]); ++y)
+        for (int x = std::max(0, cell.rect[0]); x < std::min(asset.width, cell.rect[0] + cell.rect[2]); ++x) {
+          const auto position = static_cast<std::size_t>(y) * asset.width + x;
+          require(!covered[position]); covered[position] = true;
+          const int localX = x - cell.rect[0], localY = y - cell.rect[1];
+          AssetColor actual = cell.fill;
+          if (cell.page >= 0 && localX >= cell.crop[0] && localY >= cell.crop[1] &&
+              localX - cell.crop[0] < cell.crop[2] && localY - cell.crop[1] < cell.crop[3]) {
+            const auto& page = asset.pages[cell.page];
+            const auto offset = (static_cast<std::size_t>(cell.atlas[1] + localY - cell.crop[1]) * page.width +
+              cell.atlas[0] + localX - cell.crop[0]) * 4;
+            std::copy_n(pages[cell.page].data() + offset, 4, actual.data());
+          }
+          compare(x, y, actual);
+        }
+    }
+    require(std::all_of(covered.begin(), covered.end(), [](bool value) { return value; }));
   }
   for (const auto& cell : asset.cells) if (cell.page >= 0) {
     const auto& page = asset.pages[cell.page];
@@ -198,6 +203,18 @@ int main() {
       const auto* bytes = collisions[x / 8].data() + (x % 8 - 2) * 4;
       return AssetColor{bytes[0],bytes[1],bytes[2],bytes[3]};
     }, {2,1,pmjs::AssetRect{2,2,2,1},{}});
+    {
+      auto missing = result, overlapping = result, changed = result;
+      missing.cells.clear();
+      overlapping.cells.push_back(overlapping.cells.front());
+      changed.cells.front().fill[0] ^= 255;
+      for (const auto& damaged : {missing, overlapping, changed}) {
+        bool rejected = false;
+        try { verify(source, root / "output", damaged); }
+        catch (const std::runtime_error&) { rejected = true; }
+        require(rejected);
+      }
+    }
     require(result.cells[0].atlas != result.cells[1].atlas);
     for (const int shift : {0,1}) {
       auto overlapping = result;

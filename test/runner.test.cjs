@@ -789,7 +789,7 @@ test('preparation cancellation polls the host, waits for its worker and prevents
   assert.deepEqual(fs.readdirSync(path.join(f.saveRoot, 'asset-cache/preparation-v1', fs.readdirSync(path.join(f.saveRoot, 'asset-cache/preparation-v1'))[0], 'entries')), []);
 });
 
-test('settings stays open while preparation completes and the guest starts', async () => {
+test('settings stays open while preparation completes and the guest starts', { timeout: 10000 }, async t => {
   const clock = require('node:perf_hooks').performance;
   const oldNow = Object.getOwnPropertyDescriptor(clock, 'now');
   let now = 50000, shown = 0, guestBooted = false, cleared = 0;
@@ -799,7 +799,7 @@ test('settings stays open while preparation completes and the guest starts', asy
   fs.mkdirSync(path.join(f.gameRoot, 'img/pictures'), { recursive: true });
   fs.writeFileSync(path.join(f.gameRoot, 'img/pictures/test.png'), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
   const host = require(f.addon);
-  host.pollEvents = () => !guestBooted;
+  host.pollEvents = () => !guestBooted && !t.signal.aborted;
   host.input.snapshot = () => {
     now += 100;
     return { gamepads: [{ connected: true, instance: 1,
@@ -809,8 +809,15 @@ test('settings stays open while preparation completes and the guest starts', asy
   host.runtime.preparationProgress = value => { progressPresentations.push(value); };
   host.runtime.preparationClear = () => { cleared++; };
   host.runtime.settingsOverlay = () => ({ hasFont: true });
-  host.runtime.settingsPresent = visible => { if (visible) shown++; };
-  host.assets.processImage = () => new Promise(resolve => setTimeout(() => resolve(null), 1100));
+  let finishPreparation;
+  t.signal.addEventListener('abort', () => finishPreparation?.(null), { once: true });
+  host.runtime.settingsPresent = visible => {
+    if (visible) { shown++; finishPreparation?.(null); }
+  };
+  host.assets.processImage = () => new Promise(resolve => {
+    finishPreparation = resolve;
+    if (shown || t.signal.aborted) resolve(null);
+  });
   host.assets.installPrepared = () => ({ accepted: [], rejected: [] });
   try {
     await run(f);

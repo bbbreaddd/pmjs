@@ -339,9 +339,7 @@ async function main() {
         }
         const before = native.images.memory();
         const recovered = await native.images.loadAsync(name);
-        const started = performance.now();
         assertPixels(draw(recovered, 0, true), reference, 1);
-        const elapsedMs = performance.now() - started;
         const after = native.images.memory();
         assert.equal(after.textureArtifactFailures, before.textureArtifactFailures + 1);
         assert.equal(after.sourceTextureBuilds, before.sourceTextureBuilds + 1);
@@ -349,7 +347,7 @@ async function main() {
         assert.equal(native.images.memory().sourceTextureBuilds, after.sourceTextureBuilds);
         native.images.release(recovered.handle); clear();
         assert.equal(native.images.memory().cpuBytes, 0); assert.equal(native.images.memory().gpuBytes, 64);
-        results.push({ fault, repeat, elapsedMs, reason: after.textureArtifactFailureReason });
+        results.push({ fault, repeat, reason: after.textureArtifactFailureReason });
       }
       fs.writeFileSync(artifact, pristine); register();
       const retainedArtifact = await native.images.loadAsync(name);
