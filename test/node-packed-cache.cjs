@@ -28,8 +28,18 @@ const sparseSource = require('./helpers/sparse-palette.cjs').fixture(root, 257, 
 const noise = Buffer.alloc(257 * 259 * 4);
 for (let i = 0; i < noise.length; i += 4) noise.set([i & 255, (i >>> 8) & 255, (i >>> 16) & 255, 255], i);
 fs.writeFileSync(path.join(root, 'dense.png'), png(257, 259, noise));
+for (const scenario of ['inode', 'range', 'checksum'])
+  fs.writeFileSync(path.join(root, 'drift-' + scenario + '.png'), png(128, 128, smallPixels));
 test.before(() => native.initialize(settings));
 test.after(() => native.runtime.quit());
+
+function canvasPixels(info) {
+  const canvas = native.canvas.create(128, 128);
+  try {
+    native.canvas.drawImage(canvas.handle, info.handle, 0, 0, 128, 128, 0, 0, 128, 128, 1);
+    return Buffer.from(native.canvas.readPixels(canvas.handle, 0, 0, 128, 128));
+  } finally { native.canvas.release(canvas.handle); }
+}
 
 test('packed prepared pages preserve async loads, texture uploads, pixels and live ownership', async () => {
   try {
@@ -97,13 +107,6 @@ test('normal preparation reuses packed outputs without regenerating loose pages'
     const image = await native.images.loadAsync('img/pictures/test.png');
     assert.equal(image.width, 128);
     const ordinary = native.images.loadBytes(png(128, 128, pixels));
-    function canvasPixels(info) {
-      const canvas = native.canvas.create(128, 128);
-      try {
-        native.canvas.drawImage(canvas.handle, info.handle, 0, 0, 128, 128, 0, 0, 128, 128, 1);
-        return Buffer.from(native.canvas.readPixels(canvas.handle, 0, 0, 128, 128));
-      } finally { native.canvas.release(canvas.handle); }
-    }
     assert.deepEqual(canvasPixels(image), canvasPixels(ordinary));
     native.images.release(ordinary.handle); native.images.release(image.handle);
     assert(!fs.existsSync(path.join(second.images.entries[0].directory, second.images.entries[0].descriptor.pages[0].path)));
@@ -196,4 +199,46 @@ test('non-first sparse pages use their own packed header rather than the dense f
     for (const value of [image, reference]) if (value) native.images.release(value.handle);
     native.assets.installPackedFiles([]);
   }
+});
+
+test('catalog pages tolerate pack inode drift only with matching ranges and verified bytes', async () => {
+  const source = 'drift-inode.png', relative = 'entries/' + 'e'.repeat(64), directory = path.join(root, relative);
+  fs.mkdirSync(directory, { recursive: true });
+  const descriptor = await native.assets.processImage(source, directory,
+    { grid: [1, 1], backdrop: [0, 0, 0, 0] }, path.join(root, source), null, { pageCodec: 'lz4' });
+  assert(descriptor && descriptor.pages.length);
+  const outputs = Object.fromEntries(fs.readdirSync(directory).map(name => [name, hash(fs.readFileSync(path.join(directory, name)))]));
+  const data = { files: {}, results: { [relative]: { outputs } }, indices: {}, failures: {} };
+  fs.writeFileSync(path.join(root, 'preparation-state.json'), JSON.stringify({ version: 1, checksum: hash(JSON.stringify(data)), data }));
+  try {
+    await packCache(root, native.assets);
+    await loadPackedCache(root, native, { info() {}, warn(message) { assert.fail(message); } });
+    const entry = { source, directory, descriptor, sourceIdentity: native.assets.sourceIdentity(source),
+      pageHashes: descriptor.pages.map(page => outputs[page.path]) };
+    assert.equal(native.assets.installPrepared([entry], true), 1);
+    const identities = entry.pageIdentities.map(identity => {
+      const marker = identity.indexOf('\npacked:');
+      assert(marker > 0);
+      const fields = identity.slice(0, marker).split(':');
+      fields[fields.length - 6] = String(BigInt(fields[fields.length - 6]) + 1n);
+      return fields.join(':') + identity.slice(marker);
+    });
+    for (const scenario of ['inode', 'range', 'checksum']) {
+      const scenarioSource = 'drift-' + scenario + '.png';
+      const changed = { ...entry, source: scenarioSource, sourceIdentity: native.assets.sourceIdentity(scenarioSource),
+        pageIdentities: identities.slice(), pageHashes: entry.pageHashes.slice() };
+      if (scenario === 'range') changed.pageIdentities[0] = changed.pageIdentities[0].replace(
+        /\npacked:(\d+):/, (_, offset) => '\npacked:' + (Number(offset) + 1) + ':');
+      if (scenario === 'checksum') changed.pageHashes[0] = 'f'.repeat(64);
+      assert.equal(native.assets.installPreparedCatalog([changed]), 1);
+      const before = native.images.memory().preparedHits;
+      const image = await native.images.loadAsync(scenarioSource);
+      try {
+        assert.equal(native.images.memory().preparedHits - before, scenario === 'inode' ? 1 : 0, scenario);
+        const ordinary = native.images.loadBytes(png(128, 128, smallPixels));
+        try { assert.deepEqual(canvasPixels(image), canvasPixels(ordinary)); }
+        finally { native.images.release(ordinary.handle); }
+      } finally { native.images.release(image.handle); }
+    }
+  } finally { native.assets.installPackedFiles([]); }
 });

@@ -180,3 +180,49 @@ test('pack replacement during native mounting rejects stale index metadata and c
   assert.deepEqual(f.assets.installed, []);
   assert(warnings.some(message => message.includes('changed during mounting')));
 });
+
+for (const scenario of [
+  { name: 'FUSE inode drift', field: 'ino', type: 0x65735546, accepted: true },
+  { name: 'ordinary filesystem inode change', field: 'ino', type: 0xef53 },
+  { name: 'unknown filesystem inode change', field: 'ino', type: null },
+  { name: 'FUSE timestamp change', field: 'mtimeNs', type: 0x65735546 }
+]) test('packed index reuse: ' + scenario.name, async t => {
+  const f = fixture();
+  await packCache(f.root, f.assets);
+  const indexPath = path.join(f.root, 'packed-images.json'), saved = fs.readFileSync(indexPath);
+  const lstat = fs.promises.lstat.bind(fs.promises);
+  t.mock.method(fs.promises, 'lstat', async (file, ...args) => {
+    const stat = await lstat(file, ...args);
+    if (String(file).endsWith('.pmpk')) stat[scenario.field] += 1n;
+    return stat;
+  });
+  t.mock.method(fs, 'statfsSync', () => {
+    if (scenario.type === null) throw new Error('unavailable');
+    return { type: scenario.type };
+  });
+  const entries = await loadPackedCache(f.root, { assets: f.assets }, quiet);
+  if (scenario.accepted) {
+    assert.equal(entries.size, 3);
+    for (const entry of entries.values()) await inspectPacked(entry, true);
+  } else {
+    assert.equal(entries, null);
+    assert.deepEqual(f.assets.installed, []);
+  }
+  assert.deepEqual(fs.readFileSync(indexPath), saved, 'reading must not rewrite pack identities');
+});
+
+test('FUSE inode drift during mounting still rejects the mapping', async t => {
+  const f = fixture();
+  await packCache(f.root, f.assets);
+  const lstat = fs.promises.lstat.bind(fs.promises);
+  let drift = 1n;
+  t.mock.method(fs.promises, 'lstat', async (file, ...args) => {
+    const stat = await lstat(file, ...args);
+    if (String(file).endsWith('.pmpk')) stat.ino += drift;
+    return stat;
+  });
+  t.mock.method(fs, 'statfsSync', () => ({ type: 0x65735546 }));
+  f.assets.installPackedFiles = files => { f.assets.installed = files; drift++; };
+  assert.equal(await loadPackedCache(f.root, { assets: f.assets }, quiet), null);
+  assert.deepEqual(f.assets.installed, []);
+});

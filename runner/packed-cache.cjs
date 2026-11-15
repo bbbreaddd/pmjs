@@ -4,12 +4,13 @@ const fs = require('node:fs');
 const fsp = fs.promises;
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { fileIdentity, fileIdentityMatches } = require('./preparation-files.cjs');
 const maximumPackBytes = 64 * 1024 * 1024;
 const filename = 'packed-images.json';
 const maximumIndexBytes = 16 * 1024 * 1024;
 const maximumEntries = 100000;
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
-const identity = stat => [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, stat.birthtimeNs].join(':');
+const identity = fileIdentity;
 const imageName = /^entries\/[a-f0-9]{64}(?:-[a-f0-9]{12})?\/(?:page-\d+\.pml4|texture\.pmtx)$/;
 const packName = /^pack-[a-f0-9]{16}-\d+\.pmpk$/;
 
@@ -24,13 +25,14 @@ async function readPackedIndex(root) {
   if (record.version !== 1 || record.checksum !== hash(JSON.stringify(data)) ||
       !Array.isArray(data?.files) || data.files.length > maximumEntries || !Array.isArray(data.packs))
     throw new Error('invalid packed image index');
-  const packs = new Set();
+  const packs = new Set(), mountedPacks = [], filesystemTypes = new Map();
   for (const pack of data.packs) {
     if (!packName.test(pack.name) || packs.has(pack.name)) throw new Error('invalid prepared pack name');
     const stat = await fsp.lstat(path.join(root, pack.name), { bigint: true });
-    if (!stat.isFile() || stat.size > BigInt(maximumPackBytes) || identity(stat) !== pack.identity)
+    if (!stat.isFile() || stat.size > BigInt(maximumPackBytes) || !fileIdentityMatches(pack.identity, stat, path.join(root, pack.name), filesystemTypes))
       throw new Error('prepared pack changed');
     packs.add(pack.name);
+    mountedPacks.push({ name: pack.name, identity: identity(stat) });
   }
   const sizes = new Map(data.packs.map(pack => [pack.name, Number(pack.identity.split(':')[2])]));
   for (const item of data.files) {
@@ -44,7 +46,7 @@ async function readPackedIndex(root) {
     if (entries.has(file)) throw new Error('duplicate packed image path');
     entries.set(file, { ...item, path: file, pack: path.join(root, item.pack) });
   }
-  return { entries, packs: data.packs };
+  return { entries, packs: mountedPacks };
 }
 
 async function loadPackedCache(root, native, logger = console) {

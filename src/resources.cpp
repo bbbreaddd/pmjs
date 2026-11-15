@@ -447,6 +447,13 @@ ImageFileSource::~ImageFileSource() {
   if (descriptor_ >= 0 && !pack_) close(descriptor_);
 }
 
+bool ImageFileSource::inodeOnlyChangeFrom(const std::string& expected) const {
+  if (!pack_) return inodeOnlyChange(expected, key_);
+  const auto suffix = key_.substr(pack_->key_.size());
+  return expected.ends_with(suffix) &&
+    inodeOnlyChange(expected.substr(0, expected.size() - suffix.size()), pack_->key_);
+}
+
 bool ImageFileSource::unchanged() const {
   struct stat current{};
   return fstat(descriptor_, &current) == 0 && current.st_size == static_cast<off_t>(fileSize_) &&
@@ -2431,7 +2438,7 @@ std::shared_ptr<ImageStore::PreparedLoad> ImageStore::capturePrepared(
   for (const auto& page : prototype->pages) {
     auto file = page.source ? page.source : openPreparedFile(page.path);
     if (!file || (file->key() != page.identity &&
-        !(validContentHash(page.expectedHash) && inodeOnlyChange(page.identity, file->key())))) {
+        !(validContentHash(page.expectedHash) && file->inodeOnlyChangeFrom(page.identity)))) {
       preparationInvalidations_->fetch_or(1, std::memory_order_relaxed);
     preparationFailures_->record(source.path().string());
       return nullptr;

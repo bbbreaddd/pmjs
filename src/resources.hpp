@@ -175,6 +175,7 @@ class ImageFileSource {
   friend class ImageStore;
   ImageFileSource() = default;
   bool unchanged() const;
+  bool inodeOnlyChangeFrom(const std::string& expected) const;
   int descriptor_ = -1;
   std::size_t size_ = 0, offset_ = 0, fileSize_ = 0;
   std::shared_ptr<ImageFileSource> pack_;

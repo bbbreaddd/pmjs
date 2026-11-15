@@ -10,6 +10,20 @@ const FUSE_SUPER_MAGIC = 0x65735546;
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
 const fileIdentity = stat => [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, stat.birthtimeNs].join(':');
 
+function fileIdentityMatches(expected, stat, file, filesystemTypes = new Map()) {
+  if (expected === fileIdentity(stat)) return true;
+  if (!/^\d+(?::\d+){5}$/.test(expected || '')) return false;
+  const before = expected.split(':');
+  const after = fileIdentity(stat).split(':');
+  if (before.length !== 6 || before.some((value, index) => index !== 1 && value !== after[index])) return false;
+  if (!filesystemTypes.has(stat.dev)) {
+    let type;
+    try { type = fs.statfsSync(file).type; } catch (_) { type = null; }
+    filesystemTypes.set(stat.dev, type);
+  }
+  return filesystemTypes.get(stat.dev) === FUSE_SUPER_MAGIC;
+}
+
 async function writeJson(file, value, flush = true) {
   const handle = await fsp.open(file, 'wx');
   try {
@@ -37,16 +51,7 @@ async function preparationFiles(session, verifyHashes = false) {
   function matchesReceipt(receipt, signature, file, stat, allowInodeDrift) {
     if (!receipt || !HASH.test(receipt.hash)) return false;
     if (receipt.identity === signature) return true;
-    if (!allowInodeDrift || !/^\d+(?::\d+){5}$/.test(receipt.identity || '')) return false;
-    const before = receipt.identity.split(':');
-    const after = signature.split(':');
-    if (before.length !== 6 || before.some((value, index) => index !== 1 && value !== after[index])) return false;
-    if (!filesystemTypes.has(stat.dev)) {
-      let type;
-      try { type = fs.statfsSync(file).type; } catch (_) { type = null; }
-      filesystemTypes.set(stat.dev, type);
-    }
-    return filesystemTypes.get(stat.dev) === FUSE_SUPER_MAGIC;
+    return allowInodeDrift && fileIdentityMatches(receipt.identity, stat, file, filesystemTypes);
   }
   function containedGameFile(file) {
     return (session.sourceRoots || [session.gameRoot]).some(root => {
@@ -218,4 +223,4 @@ async function preparationFiles(session, verifyHashes = false) {
 
 }
 
-module.exports = { preparationFiles, writeJson, fileIdentity };
+module.exports = { preparationFiles, writeJson, fileIdentity, fileIdentityMatches };
