@@ -302,6 +302,8 @@ std::shared_ptr<ImageStore::TileLoad> ImageStore::captureTileLoad(
   load->sourceFile->descriptor_ = fcntl(source.descriptor_, F_DUPFD_CLOEXEC, 0);
   if (load->sourceFile->descriptor_ < 0) return nullptr;
   load->sourceFile->size_ = source.size_;
+  load->sourceFile->fileSize_ = source.fileSize_;
+  load->sourceFile->offset_ = source.offset_;
   load->sourceFile->modifiedSeconds_ = source.modifiedSeconds_;
   load->sourceFile->modifiedNanoseconds_ = source.modifiedNanoseconds_;
   load->sourceFile->path_ = source.path_;
