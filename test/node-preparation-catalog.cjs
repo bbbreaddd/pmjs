@@ -21,6 +21,8 @@ const image = png(128, 128, pixels);
 fs.writeFileSync(path.join(gameRoot, source), image);
 const jpeg = Buffer.from(fs.readFileSync(path.join(__dirname, 'assets/fixture.jpg.b64'), 'utf8'), 'base64');
 fs.writeFileSync(path.join(gameRoot, 'img/pictures/jpeg.png'), jpeg);
+const unusedBroken = 'img/pictures/unused-broken.png';
+fs.writeFileSync(path.join(gameRoot, unusedBroken), image.subarray(0, 40));
 const recovered = Buffer.from(image);
 for (let offset = 8; offset < recovered.length;) {
   const length = recovered.readUInt32BE(offset);
@@ -57,7 +59,8 @@ async function run() {
       sourceHash: crypto.createHash('sha256').update(image).digest('hex'),
       grid: [1, 1], backdrop: [0, 0, 0, 0] }] };
   const cold = await prepareGameAssets(options);
-  assert.equal(cold.images.failedFiles, 0);
+  assert.equal(cold.images.failedFiles, 1);
+  assert.equal(cold.images.ordinaryFailures[0].source, unusedBroken);
   assert.equal(cold.catalogSaved, true);
   assert.equal(cold.images.entries.length, 2);
   assert.equal(cold.images.decryptedEntries.length, 1);
@@ -70,6 +73,7 @@ async function run() {
   reused.releaseCacheLease();
   const warm = await loadCatalog(options);
   assert.ok(warm?.images.catalogHit);
+  assert.equal(warm.images.failedFiles, 1);
   assert.equal(warm.images.installed, 2);
   assert.ok(native.assets.hasDecrypted('img/pictures/secret.png'));
   for (const filename of ['jpeg.png', 'recovered.png']) {
@@ -95,6 +99,7 @@ async function run() {
   await invalidation;
   warm.releaseCacheLease();
   assert.equal(await loadCatalog(options), null);
+  fs.writeFileSync(path.join(gameRoot, unusedBroken), image);
   const broken = 'img/pictures/jpeg.png';
   fs.writeFileSync(path.join(gameRoot, broken), image.subarray(0, 40));
   const failed = await prepareGameAssets(options);
