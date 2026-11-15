@@ -85,6 +85,31 @@ for (let i = 0; i < 4; i++) {
   assert.equal(mixed.after.rendererTargetCacheBytes, 3 * 32 * 32 * 4);
   assert.equal(mixed.after.rendererTargetBytes, 32 * 32 * 8 + 3 * (32 * 32 + 16 * 16) * 4);
 }
+const cycles = [
+  [[large, 32, 24], [plan(16, 8), 16, 8], [plan(8, 16), 8, 16], [small, 16, 12]],
+  [[1024, 512], [512, 128], [512, 8], [64, 32]].map(([width, height]) =>
+    [plan(width, height), width, height]),
+];
+for (const cycle of cycles) {
+  for (const [filter] of cycle) render([filter]);
+  const beforeCycle = native.render.stats();
+  for (const [filter, width, height] of cycle) {
+    assert.deepEqual(render([filter]).actual, clipped(width, height));
+  }
+  const afterCycle = native.render.stats();
+  assert.equal(afterCycle.rendererTargetCreates - beforeCycle.rendererTargetCreates, 0,
+    'warmed size cycle must not allocate');
+  assert.equal(afterCycle.rendererTargetDestroys - beforeCycle.rendererTargetDestroys, 0,
+    'warmed size cycle must not evict');
+}
+const beforeCapacity = native.render.stats();
+for (const width of [1, 2, 4, 8, 16, 32]) {
+  for (const height of [1, 2, 4, 8, 16, 32]) {
+    assert.deepEqual(render([plan(width, height)]).actual, clipped(width, height));
+  }
+}
+assert.ok(native.render.stats().rendererTargetCacheEvictions > beforeCapacity.rendererTargetCacheEvictions,
+  'many small sizes must respect the cache entry limit');
 // Eleven displaced 4-MiB backings exceed the shared 32-MiB cache budget.
 const pressureLarge = plan(1024, 1024, 11), pressureSmall = plan(16, 12, 11);
 const beforePressure = native.render.stats();
