@@ -234,7 +234,7 @@ napi_value createFilterPlan(napi_env env, napi_callback_info info) try {
       if (binding.wrap != GL_CLAMP_TO_EDGE && binding.wrap != GL_REPEAT && binding.wrap != GL_MIRRORED_REPEAT)
         throw std::invalid_argument("invalid filter sampler wrap mode");
       if (binding.image) {
-        const auto image = resolveImage(value, binding.image);
+        const auto image = value.core.resolveImage(binding.image);
         if (!image) throw std::invalid_argument("invalid filter sampler image");
         binding.image = *image;
       } else if (binding.target >= plan->resolutions.size() || binding.target == 1 ||
@@ -367,7 +367,7 @@ napi_value drawImage(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 14);
   if (args.size() < 13) throw std::runtime_error("image requires render arguments");
   State& value = host(env);
-  auto image = resolveImage(value, asUint32(env, args[0]));
+  auto image = value.core.resolveImage(asUint32(env, args[0]));
   bool ok = image && value.renderer.queueImage(*image, floatArray<6>(env, args, 1),
     floatArray<4>(env, args, 7), static_cast<float>(asNumber(env, args[11])),
     asUint32(env, args[12]), args.size() > 13
@@ -432,7 +432,7 @@ napi_value createTileLayer(napi_env env, napi_callback_info info) try {
   std::vector<pmjs::ImageHandle> images;
   images.reserve(handles.size());
   for (const auto handle : handles) {
-    auto image = resolveImage(value, handle);
+    auto image = value.core.resolveImage(handle);
     if (!image) throw std::runtime_error("invalid tile image");
     images.push_back(*image);
   }
@@ -463,7 +463,7 @@ pmjs::AlphaMode imageAlphaMode(napi_env env, napi_value options) {
 napi_value createMeshResource(napi_env env, const std::vector<napi_value>& args,
                             const pmjs::MeshMaterial& material) {
   State& value = host(env);
-  const auto image = resolveImage(value, asUint32(env, args[0]));
+  const auto image = value.core.resolveImage(asUint32(env, args[0]));
   if (!image) throw std::runtime_error("invalid mesh image");
   const auto mesh = value.renderer.createMesh(*image, floatVector(env, args[1]),
     numericVector<double>(env, args[2]), uintVector(env, args[3]), asUint32(env, args[4]) == 0, material);

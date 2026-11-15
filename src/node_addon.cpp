@@ -2,10 +2,6 @@
 
 namespace pmjs::addon {
 
-void registerCompressionBindings(napi_env env, napi_value exports);
-void registerAssetMethods(napi_env env, napi_value exports);
-void registerPreparedAssetBindings(napi_env env, napi_value exports);
-
 napi_value init(napi_env env, napi_value exports) {
   registerRuntimeBindings(env, exports);
   registerCompressionBindings(env, exports);
@@ -22,3 +18,5 @@ napi_value init(napi_env env, napi_value exports) {
 }
 
 }  // namespace pmjs::addon
+
+NAPI_MODULE(NODE_GYP_MODULE_NAME, pmjs::addon::init)

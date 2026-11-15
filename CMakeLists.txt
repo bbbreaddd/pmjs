@@ -174,7 +174,6 @@ add_library(pmjs_native MODULE
   src/node_addon_canvas.cpp
   src/node_addon_dialog.cpp
   src/node_addon_common.cpp
-  src/node_addon_entry.cpp
   src/node_addon_effects.cpp
   src/node_addon_graphics.cpp
   src/node_addon_media.cpp
