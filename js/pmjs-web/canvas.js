@@ -1968,114 +1968,6 @@ function canvasIsUntransformedSourceOver(context) {
 var mvBlurCanvasMethods = ['drawImage', 'fillRect', 'save', 'restore'].map(function(name) {
   return { name: name, method: CanvasContext2D.prototype[name] };
 });
-// The stock MV blur sums nine "lighter" drawImage calls at globalAlpha 1/9, and how the rasterizer
-// rounds each scaled sample differs by platform (Skia65 x86 vs arm64). Measure it once through the
-// very same Canvas operations -- a black fill, then one 1:1 "lighter" drawImage at 1/9 of a row of
-// every value per channel -- and hand the native blur that table, so it reproduces this
-// platform's stock result exactly. A failed measurement keeps the stock blur.
-var mvBlurScale;
-function mvBlurScaleTable() {
-  if (mvBlurScale !== undefined) return mvBlurScale;
-  mvBlurScale = null;
-  var source = null, target = null;
-  try {
-    source = document.createElement('canvas');
-    target = document.createElement('canvas');
-    source.width = target.width = 256;
-    source.height = target.height = 3;
-    var rows = new Uint8Array(256 * 3 * 4);
-    for (var channel = 0; channel < 3; channel++) for (var value = 0; value < 256; value++) {
-      var offset = (channel * 256 + value) * 4;
-      rows[offset + channel] = value;
-      rows[offset + 3] = 255;
-    }
-    NativeHost.canvas.writePremultipliedPixels(source._ensureNativeCanvas().handle, 0, 0, 256, 3, rows);
-    source._pmjsContentChanged();
-    var context = target.getContext('2d');
-    context.fillStyle = 'black';
-    context.fillRect(0, 0, 256, 3);
-    context.globalCompositeOperation = 'lighter';
-    context.globalAlpha = 1 / 9;
-    context.drawImage(source, 0, 0, 256, 3, 0, 0, 256, 3);
-    var measured = NativeHost.canvas.readPremultipliedPixels(target._ensureNativeCanvas().handle, 0, 0, 256, 3);
-    var table = new Uint8Array(768);
-    for (channel = 0; channel < 3; channel++) for (value = 0; value < 256; value++) {
-      table[channel * 256 + value] = measured[(channel * 256 + value) * 4 + channel];
-    }
-    mvBlurScale = table;
-  } catch (error) {
-    mvBlurScale = null;
-  } finally {
-    if (source && source._releaseNativeCanvas) source._releaseNativeCanvas();
-    if (target && target._releaseNativeCanvas) target._releaseNativeCanvas();
-  }
-  return mvBlurScale;
-}
-// The stock blur's padded copy is a source-over drawImage onto a transparent canvas. For
-// alpha-zero pixels with nonzero RGB the rasterizer's result depends on its batching: it copies a
-// span in batches of K pixels from the span start, skips a batch whose pixels all have zero alpha,
-// and drops alpha-zero pixels one by one in the tail. Measure K once: draw rows of every span
-// length 1-64 at x=1 (as the stock blur does) with varied sparse nonzero-alpha pixels, and accept
-// the one K in 1-64 that predicts every surviving pixel. Anything else yields 0 and such content
-// keeps the stock blur.
-var mvBlurLanes;
-function mvBlurLanePattern(row, span, index) {
-  // Nonzero alpha at a sparse, row-dependent subset of positions (some batches have none).
-  var period = row < 64 ? 11 : 29;
-  return (index * 7 + span * 5 + row) % period === 0;
-}
-function mvBlurLaneWidth() {
-  if (mvBlurLanes !== undefined) return mvBlurLanes;
-  mvBlurLanes = 0;
-  var source = null, target = null, longest = 64, rows = 128;
-  try {
-    source = document.createElement('canvas');
-    target = document.createElement('canvas');
-    source.width = longest; source.height = rows;
-    target.width = longest + 2; target.height = rows;
-    var bytes = new Uint8Array(longest * rows * 4);
-    for (var row = 0; row < rows; row++) {
-      var span = row % longest + 1;
-      for (var i = 0; i < span; i++) {
-        var offset = (row * longest + i) * 4;
-        if (mvBlurLanePattern(row, span, i)) {
-          bytes[offset] = bytes[offset + 1] = bytes[offset + 2] = 1; bytes[offset + 3] = 1 + (i % 254);
-        } else {
-          bytes[offset] = bytes[offset + 1] = bytes[offset + 2] = 255;
-        }
-      }
-    }
-    NativeHost.canvas.writePremultipliedPixels(source._ensureNativeCanvas().handle, 0, 0, longest, rows, bytes);
-    source._pmjsContentChanged();
-    var context = target.getContext('2d');
-    for (row = 0; row < rows; row++) {
-      context.drawImage(source, 0, row, row % longest + 1, 1, 1, row, row % longest + 1, 1);
-    }
-    var pixels = NativeHost.canvas.readPremultipliedPixels(target._ensureNativeCanvas().handle, 0, 0, longest + 2, rows);
-    for (var lanes = 1; lanes <= longest && !mvBlurLanes; lanes++) {
-      var matches = true;
-      for (row = 0; row < rows && matches; row++) {
-        span = row % longest + 1;
-        var full = Math.floor(span / lanes) * lanes;
-        for (i = 0; i < span && matches; i++) {
-          if (mvBlurLanePattern(row, span, i)) continue;
-          var batch = Math.floor(i / lanes) * lanes, batchHasAlpha = false;
-          for (var j = batch; j < batch + lanes && j < span; j++) if (mvBlurLanePattern(row, span, j)) batchHasAlpha = true;
-          var expected = lanes > 1 && i < full && batchHasAlpha;
-          var alive = pixels[(row * (longest + 2) + 1 + i) * 4] !== 0;
-          matches = alive === expected;
-        }
-      }
-      if (matches) mvBlurLanes = lanes;
-    }
-  } catch (error) {
-    mvBlurLanes = 0;
-  } finally {
-    if (source && source._releaseNativeCanvas) source._releaseNativeCanvas();
-    if (target && target._releaseNativeCanvas) target._releaseNativeCanvas();
-  }
-  return mvBlurLanes;
-}
 var bitmapPixelMethods = ['getImageData', 'putImageData'].map(function(name) {
   return { name: name, method: CanvasContext2D.prototype[name] };
 });
@@ -2116,19 +2008,13 @@ Object.assign(PMJS.web.canvas, {
   blur: function(canvas) {
     NativeHost.canvas.blur(canvas._ensureNativeCanvas().handle);
   },
-  // The measured per-sample scale the native MV blur uses (R, G, B x 256), or null.
-  mvBlurScale: function() { return mvBlurScaleTable(); },
-  // The measured source-over batch width for alpha-zero RGB (0: such content keeps the stock blur).
-  mvBlurLaneWidth: function() { return mvBlurLaneWidth(); },
   blurMv: function(context) {
     if (!canvasIsUntransformedSourceOver(context) || context.globalAlpha !== 1 ||
         typeof NativeHost.canvas.blurMv !== 'function' ||
         !mvBlurCanvasMethods.every(function(entry) {
           return context[entry.name] === entry.method;
         })) return false;
-    var scale = mvBlurScaleTable();
-    if (!scale) return false;
-    return NativeHost.canvas.blurMv(context.canvas._ensureNativeCanvas().handle, scale, mvBlurLaneWidth());
+    return NativeHost.canvas.blurMv(context.canvas._ensureNativeCanvas().handle);
   },
   adjustTone: function(context, red, green, blue) {
     if (typeof NativeHost.canvas.adjustTone !== 'function' || !context ||

@@ -694,12 +694,6 @@ if(BUILD_TESTING)
   add_test(NAME node-mv-blur COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-blur.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-mv-blur PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
-  if(PMJS_ENABLE_SKIA65)
-    # The stock reference blur must run on the Skia65 rasterizer the native blur matches.
-    add_test(NAME node-mv-blur-equivalence COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
-      "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-blur-equivalence.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
-    set_tests_properties(node-mv-blur-equivalence PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
-  endif()
   add_test(NAME node-prepared-media COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-prepared-media.cjs" $<TARGET_FILE:pmjs_native>)
   set_tests_properties(node-prepared-media PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")

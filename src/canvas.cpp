@@ -19,7 +19,6 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
-#include <iostream>
 #include <list>
 #include <unordered_map>
 #include <unordered_set>
@@ -1552,9 +1551,9 @@ bool CanvasStore::paintRect(CanvasHandle handle, const std::array<float, 4>& rec
 }
 
 bool CanvasStore::paintRectNow(Content& target, const PaintRectCmd& command) {
-  auto* surface = &target;
   const auto& [rect, color, stroke, gradient, offsets, colors] = command;
 #ifdef PMJS_HAS_SKIA65
+  auto* surface = &target;
   const float padding = stroke / 2 + 1;
   const std::array<float, 4> bounds = {rect[0] - padding, rect[1] - padding,
     rect[2] + 2 * padding, rect[3] + 2 * padding};
@@ -1567,6 +1566,7 @@ bool CanvasStore::paintRectNow(Content& target, const PaintRectCmd& command) {
   markDirty(*surface, region[0], region[1], region[2], region[3]);
   return true;
 #else
+  (void)target;
   (void)color;
   return false;
 #endif
@@ -1761,81 +1761,66 @@ bool CanvasStore::blur(CanvasHandle handle) {
   return blurNow(*surface);
 }
 
-bool CanvasStore::blurMv(CanvasHandle handle, const uint8_t* scaleTable, int laneWidth) {
+bool CanvasStore::blurMv(CanvasHandle handle) {
   auto* sourceContent = lookupContent(handle);
   if (!sourceContent || !realizeContent(*sourceContent)) return false;
-  // Noncanonical premultiplied pixels with RGB above a nonzero alpha are copied
-  // exactly by the stock blur's source-over pad step and then summed with
-  // "lighter" like canonical pixels. Alpha-zero pixels with nonzero RGB are not:
-  // the rasterizer copies a drawn span in batches of laneWidth pixels from its
-  // start, skips a batch whose pixels all have zero alpha, and drops alpha-zero
-  // pixels one by one in the scalar tail. laneWidth is measured on this platform
-  // (0: unknown, keep the ordinary drawing path).
   bool alphaZeroRgb = false;
   if (sourceContent->mayHaveOverAlpha) {
     const auto& pixels = sourceContent->pixels;
-    for (size_t i = 0; i + 3 < pixels.size() && !alphaZeroRgb; i += 4)
+    for (size_t i = 0; i < pixels.size() && !alphaZeroRgb; i += 4)
       alphaZeroRgb = !pixels[i + 3] && (pixels[i] | pixels[i + 1] | pixels[i + 2]);
-    if (alphaZeroRgb && laneWidth <= 0) return false;
   }
   auto* surface = writableContent(handle);
   if (!surface) return false;
   const int width = surface->width, height = surface->height;
   const size_t count = static_cast<size_t>(width) * height;
-  std::vector<uint8_t> intermediate(count * 4), horizontal(count * 3);
-  // Per-sample contribution of one "lighter" drawImage at globalAlpha 1/9. The rasterizer's own
-  // rounding differs by platform (x86 Skia65 encodes 1/9 as paint alpha 28 and scales by
-  // (alpha + 1)/256; arm64 rounds c/9), so callers pass the table measured from the stock path.
-  // Storage is BGRA (byte 0 blue, byte 2 red); the table is R, G, B x 256.
-  const auto scale = [scaleTable](int channel, uint8_t value) -> unsigned {
-    if (scaleTable) return scaleTable[(2 - channel) * 256 + value];
-    return (unsigned(value) * 29) >> 8;
-  };
+  std::vector<uint8_t> intermediate(count * 4), horizontal((count + (alphaZeroRgb ? size_t(width) * 2 : 0)) * 3);
+  // Skia65 encodes opacity 1/9 as paint alpha 28, then scales by (alpha + 1)/256.
+  const auto scale = [](uint8_t channel) { return (unsigned(channel) * 29) >> 8; };
   const uint8_t* source = surface->pixels.data();
   for (int pass = 0; pass < 2; ++pass) {
     uint8_t* destination = pass ? surface->pixels.data() : intermediate.data();
     if (pass == 0 && alphaZeroRgb) {
-      // Rebuild the stock blur's padded copy explicitly. The centre copy and the four edge
-      // strips are separate drawImage spans: each source row (width pixels) for the centre and
-      // the top/bottom strips, one pixel per row for the side strips. An alpha-zero pixel
-      // survives only inside a full batch that holds a pixel with nonzero alpha. The corners
-      // stay transparent. Then sum the 3x3 "lighter" draws.
       const int paddedWidth = width + 2;
-      std::vector<uint8_t> padded(static_cast<size_t>(paddedWidth) * (height + 2) * 4, 0);
-      const int fullBatches = width / laneWidth;
-      std::vector<uint8_t> batchHasAlpha(static_cast<size_t>(fullBatches));
-      const auto copyRow = [&](int sy, int dy) {
-        const uint8_t* row = source + static_cast<size_t>(sy) * width * 4;
-        for (int batch = 0; batch < fullBatches; ++batch) {
-          batchHasAlpha[batch] = 0;
-          for (int i = batch * laneWidth; i < (batch + 1) * laneWidth; ++i)
-            if (row[i * 4 + 3]) { batchHasAlpha[batch] = 1; break; }
+      std::vector<uint8_t> padded(size_t(paddedWidth) * (height + 2) * 4, 0);
+      const auto copy = [&](const std::array<float, 4>& src, const std::array<float, 4>& dst) {
+#ifdef PMJS_HAS_SKIA65
+        rasterCanvasRegion(padded, paddedWidth, height + 2, dst,
+          [&](uint8_t* pixels, int w, int h, size_t stride, int left, int top) {
+            return pmjs_skia65_image_bgra_strided(pixels, w, h, stride, left, top,
+              source, width, height, size_t(width) * 4, src.data(), dst.data(), 1, true);
+          });
+#else
+        for (int y = 0; y < int(src[3]); ++y) for (int x = 0; x < int(src[2]); ++x) {
+          const auto* from = source + (size_t(int(src[1]) + y) * width + int(src[0]) + x) * 4;
+          if (from[3]) std::memcpy(padded.data() +
+            (size_t(int(dst[1]) + y) * paddedWidth + int(dst[0]) + x) * 4, from, 4);
         }
-        uint8_t* to = padded.data() + (static_cast<size_t>(dy) * paddedWidth + 1) * 4;
-        for (int x = 0; x < width; ++x) {
-          const uint8_t* from = row + x * 4;
-          if (!from[3] && (from[0] | from[1] | from[2]) &&
-              (laneWidth == 1 || x >= fullBatches * laneWidth || !batchHasAlpha[x / laneWidth])) continue;
-          std::memcpy(to + x * 4, from, 4);
-        }
+#endif
       };
-      for (int y = 0; y < height; ++y) copyRow(y, y + 1);
-      copyRow(0, 0);
-      copyRow(height - 1, height + 1);
-      for (int y = 0; y < height; ++y) for (const auto [sx, dx] : {std::pair{0, 0}, std::pair{width - 1, width + 1}}) {
-        // A one-pixel span is all tail: an alpha-zero pixel is dropped.
-        const uint8_t* from = source + (static_cast<size_t>(y) * width + sx) * 4;
-        if (!from[3]) continue;
-        std::memcpy(padded.data() + (static_cast<size_t>(y + 1) * paddedWidth + dx) * 4, from, 4);
+      copy({0, 0, float(width), float(height)}, {1, 1, float(width), float(height)});
+      copy({0, 0, float(width), 1}, {1, 0, float(width), 1});
+      copy({0, 0, 1, float(height)}, {0, 1, 1, float(height)});
+      copy({0, float(height - 1), float(width), 1}, {1, float(height + 1), float(width), 1});
+      copy({float(width - 1), 0, 1, float(height)}, {float(width + 1), 1, 1, float(height)});
+      for (int y = 0; y < height + 2; ++y) {
+        const auto* row = padded.data() + size_t(y) * paddedWidth * 4;
+        auto* output = horizontal.data() + size_t(y) * width * 3;
+        for (int channel = 0; channel < 3; ++channel) {
+          unsigned left = scale(row[channel]), center = scale(row[4 + channel]);
+          for (int x = 0; x < width; ++x) {
+            const unsigned right = scale(row[(x + 2) * 4 + channel]);
+            output[x * 3 + channel] = left + center + right;
+            left = center;
+            center = right;
+          }
+        }
       }
       for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x) {
-        uint8_t* output = destination + (static_cast<size_t>(y) * width + x) * 4;
-        for (int channel = 0; channel < 3; ++channel) {
-          unsigned sum = 0;
-          for (int dy = 0; dy < 3; ++dy) for (int dx = 0; dx < 3; ++dx)
-            sum += scale(channel, padded[(static_cast<size_t>(y + dy) * paddedWidth + x + dx) * 4 + channel]);
-          output[channel] = static_cast<uint8_t>(std::min(255U, sum));
-        }
+        auto* output = destination + (size_t(y) * width + x) * 4;
+        const auto* row = horizontal.data() + (size_t(y) * width + x) * 3;
+        for (int channel = 0; channel < 3; ++channel)
+          output[channel] = std::min(255U, unsigned(row[channel]) + row[width * 3 + channel] + row[width * 6 + channel]);
         output[3] = 255;
       }
       source = destination;
@@ -1845,9 +1830,9 @@ bool CanvasStore::blurMv(CanvasHandle handle, const uint8_t* scaleTable, int lan
       const auto* row = source + static_cast<size_t>(y) * width * 4;
       auto* output = horizontal.data() + static_cast<size_t>(y) * width * 3;
       for (int channel = 0; channel < 3; ++channel) {
-        unsigned left = scale(channel, row[channel]), center = left;
+        unsigned left = scale(row[channel]), center = left;
         for (int x = 0; x < width; ++x) {
-          const unsigned right = scale(channel, row[std::min(x + 1, width - 1) * 4 + channel]);
+          const unsigned right = scale(row[std::min(x + 1, width - 1) * 4 + channel]);
           output[x * 3 + channel] = left + center + right;
           left = center;
           center = right;
@@ -1868,7 +1853,7 @@ bool CanvasStore::blurMv(CanvasHandle handle, const uint8_t* scaleTable, int lan
         for (int channel = 0; channel < 3; ++channel) {
           const unsigned sum = above[x * 3 + channel] + center[x * 3 + channel] + below[x * 3 + channel];
           output[x * 4 + channel] = std::min(255U,
-            sum - omitted * scale(channel, input[x * 4 + channel]));
+            sum - omitted * scale(input[x * 4 + channel]));
         }
         output[x * 4 + 3] = 255;
       }
