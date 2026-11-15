@@ -5,7 +5,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const test = require('node:test');
 const { temporaryDirectory } = require('./helpers/temp.cjs');
-const { packCache, loadPackedCache, inspectPacked } = require('../runner/packed-cache.cjs');
+const { packCache, loadPackedCache, inspectPacked, repairPackedCache } = require('../runner/packed-cache.cjs');
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const quiet = { warn() {}, info() {} };
 function fixture() {
@@ -24,6 +24,20 @@ function fixture() {
     releasePreparationLock() { locked = false; }, installPackedFiles(files) { this.installed = files; } };
   return { root, data, originals, assets, save };
 }
+async function fragmentedFixture() {
+  const f = fixture();
+  for (const [directory, record] of Object.entries(f.data.results)) {
+    const bytes = fs.readFileSync(path.join(f.root, directory, 'page-0.pml4'));
+    fs.writeFileSync(path.join(f.root, directory, 'page-1.pml4'), bytes);
+    record.outputs['page-1.pml4'] = hash(bytes);
+  }
+  f.save();
+  await packCache(f.root, f.assets, { maximumBytes: 80 });
+  for (const record of Object.values(f.data.results)) delete record.outputs['page-1.pml4'];
+  f.save();
+  return f;
+}
+
 test('packing preserves exact ranged bytes, bounded packs, and verification headers', async () => {
   const f = fixture();
   const result = await packCache(f.root, f.assets, { maximumBytes: 80 });
@@ -91,7 +105,7 @@ test('failed index publication preserves the previous readable pack and supports
   const f = fixture(); await packCache(f.root, f.assets);
   const before = fs.readFileSync(path.join(f.root, 'packed-images.json'));
   const rename = t.mock.method(fs.promises, 'rename', async () => { throw new Error('publication failed'); });
-  await assert.rejects(packCache(f.root, f.assets), /publication failed/);
+  await assert.rejects(packCache(f.root, f.assets, { maximumBytes: 80 }), /publication failed/);
   rename.mock.restore();
   assert.deepEqual(fs.readFileSync(path.join(f.root, 'packed-images.json')), before);
   const entries = await loadPackedCache(f.root, { assets: f.assets }, quiet);
@@ -228,8 +242,7 @@ test('FUSE inode drift during mounting still rejects the mapping', async t => {
 });
 
 for (const repack of [false, true]) test((repack ? 'repacking' : 'conversion') + ' bounds temporary payload to one batch', async t => {
-  const f = fixture(), maximumBytes = 80;
-  if (repack) await packCache(f.root, f.assets, { maximumBytes });
+  const f = repack ? await fragmentedFixture() : fixture(), maximumBytes = 80;
   function payloadBytes() {
     let size = 0;
     for (const file of f.originals.keys()) if (fs.existsSync(file)) size += fs.statSync(file).size;
@@ -283,8 +296,7 @@ test('a later publication failure preserves completed batches and remaining loos
 });
 
 test('later repacking failure preserves unconverted old packs and completed replacements', async t => {
-  const f = fixture();
-  await packCache(f.root, f.assets, { maximumBytes: 80 });
+  const f = await fragmentedFixture();
   const before = await loadPackedCache(f.root, { assets: f.assets }, quiet);
   const oldPacks = new Set([...before.values()].map(item => item.pack));
   const rename = fs.promises.rename.bind(fs.promises);
@@ -343,4 +355,94 @@ test('retry removes unreferenced crash output before staging another batch', asy
     return open(file, ...args);
   });
   assert.equal((await packCache(f.root, f.assets, { maximumBytes: 80 })).files, 3);
+});
+
+test('unchanged packs and their index are retained without output writes', async t => {
+  const f = fixture();
+  await packCache(f.root, f.assets, { maximumBytes: 80 });
+  const before = fs.readFileSync(path.join(f.root, 'packed-images.json'));
+  const open = fs.promises.open.bind(fs.promises);
+  t.mock.method(fs.promises, 'open', async (file, ...args) => {
+    assert.notEqual(args[0], 'wx', 'unchanged conversion must not stage pack or index output');
+    return open(file, ...args);
+  });
+  assert.equal((await packCache(f.root, f.assets, { maximumBytes: 80 })).files, 3);
+  assert.deepEqual(fs.readFileSync(path.join(f.root, 'packed-images.json')), before);
+});
+
+test('retry retains completed packs while converting only remaining loose files', async t => {
+  const f = fixture(), rename = fs.promises.rename.bind(fs.promises);
+  let publications = 0;
+  const failure = t.mock.method(fs.promises, 'rename', async (from, to) => {
+    if (to === path.join(f.root, 'packed-images.json') && ++publications === 2) throw new Error('interrupted');
+    return rename(from, to);
+  });
+  await assert.rejects(packCache(f.root, f.assets, { maximumBytes: 80 }), /interrupted/);
+  failure.mock.restore();
+  const completed = JSON.parse(fs.readFileSync(path.join(f.root, 'packed-images.json'), 'utf8')).data.packs[0].name;
+  const open = fs.promises.open.bind(fs.promises);
+  let written = 0;
+  t.mock.method(fs.promises, 'open', async (file, ...args) => {
+    const handle = await open(file, ...args);
+    if (!String(file).endsWith('.pmpk') || args[0] !== 'wx') return handle;
+    return { close: () => handle.close(), sync: () => handle.sync(), writeFile: async bytes => {
+      written += bytes.length; await handle.writeFile(bytes);
+    } };
+  });
+  await packCache(f.root, f.assets, { maximumBytes: 80 });
+  assert.equal(written, 39);
+  assert.equal(fs.existsSync(path.join(f.root, completed)), true);
+});
+
+for (const damage of ['missing', 'modified']) test('one ' + damage + ' pack preserves healthy mappings and repairs its index', async t => {
+  const f = fixture();
+  await packCache(f.root, f.assets, { maximumBytes: 80 });
+  const indexPath = path.join(f.root, 'packed-images.json'), saved = fs.readFileSync(indexPath);
+  const index = JSON.parse(saved), broken = path.join(f.root, index.data.packs[1].name);
+  if (damage === 'missing') fs.unlinkSync(broken);
+  else fs.appendFileSync(broken, 'damaged');
+  const entries = await loadPackedCache(f.root, { assets: f.assets }, quiet);
+  assert.equal(entries.size, 2);
+  assert.equal(entries.damagedPacks.length, 1);
+  assert.equal(f.assets.installed.length, 2);
+  for (const entry of entries.values()) await inspectPacked(entry, true);
+  const failure = t.mock.method(fs.promises, 'rename', async () => { throw new Error('repair interrupted'); });
+  await assert.rejects(repairPackedCache(f.root, entries), /repair interrupted/);
+  failure.mock.restore();
+  assert.deepEqual(fs.readFileSync(indexPath), saved);
+  await repairPackedCache(f.root, entries);
+  const repaired = await loadPackedCache(f.root, { assets: f.assets }, quiet);
+  assert.equal(repaired.size, 2);
+  assert.equal(repaired.damagedPacks.length, 0);
+});
+
+test('pack damage during mounting preserves other packs', async () => {
+  const f = fixture();
+  await packCache(f.root, f.assets, { maximumBytes: 80 });
+  const index = JSON.parse(fs.readFileSync(path.join(f.root, 'packed-images.json'), 'utf8'));
+  let damaged = false;
+  f.assets.installPackedFiles = files => {
+    f.assets.installed = files;
+    if (!damaged && files.length) {
+      damaged = true;
+      fs.unlinkSync(path.join(f.root, index.data.packs[1].name));
+      throw new Error('cannot open prepared pack');
+    }
+  };
+  const entries = await loadPackedCache(f.root, { assets: f.assets }, quiet);
+  assert.equal(entries.size, 2);
+  assert.equal(f.assets.installed.length, 2);
+});
+
+test('an installation error without pack damage is reported and clears the mapping', async () => {
+  const f = fixture();
+  await packCache(f.root, f.assets);
+  const warnings = [];
+  f.assets.installPackedFiles = files => {
+    if (files.length) throw new Error('installation failed');
+    f.assets.installed = files;
+  };
+  assert.equal(await loadPackedCache(f.root, { assets: f.assets }, { warn: message => warnings.push(message) }), null);
+  assert.deepEqual(f.assets.installed, []);
+  assert(warnings.some(message => message.includes('installation failed')));
 });

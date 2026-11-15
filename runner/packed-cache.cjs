@@ -18,21 +18,24 @@ async function readPackedIndex(root) {
   const entries = new Map(), file = path.join(root, filename);
   let stat;
   try { stat = await fsp.stat(file); }
-  catch (error) { if (error.code === 'ENOENT') return { entries, packs: [] }; throw error; }
+  catch (error) { if (error.code === 'ENOENT') return { entries, packs: [], damagedPacks: [] }; throw error; }
   if (stat.size > maximumIndexBytes) throw new Error('packed image index exceeds limit');
   const record = JSON.parse(await fsp.readFile(file, 'utf8'));
   const data = record.data;
   if (record.version !== 1 || record.checksum !== hash(JSON.stringify(data)) ||
       !Array.isArray(data?.files) || data.files.length > maximumEntries || !Array.isArray(data.packs))
     throw new Error('invalid packed image index');
-  const packs = new Set(), mountedPacks = [], filesystemTypes = new Map();
+  const packs = new Set(), mountedPacks = [], damagedPacks = [], filesystemTypes = new Map();
   for (const pack of data.packs) {
-    if (!packName.test(pack.name) || packs.has(pack.name)) throw new Error('invalid prepared pack name');
-    const stat = await fsp.lstat(path.join(root, pack.name), { bigint: true });
-    if (!stat.isFile() || stat.size > BigInt(maximumPackBytes) || !fileIdentityMatches(pack.identity, stat, path.join(root, pack.name), filesystemTypes))
-      throw new Error('prepared pack changed');
+    if (!packName.test(pack.name) || packs.has(pack.name) || !/^\d+(?::\d+){5}$/.test(pack.identity || '') ||
+        Number(pack.identity.split(':')[2]) > maximumPackBytes) throw new Error('invalid prepared pack metadata');
     packs.add(pack.name);
-    mountedPacks.push({ name: pack.name, identity: identity(stat) });
+    try {
+      const stat = await fsp.lstat(path.join(root, pack.name), { bigint: true });
+      if (!stat.isFile() || !fileIdentityMatches(pack.identity, stat, path.join(root, pack.name), filesystemTypes))
+        throw new Error('prepared pack changed');
+      mountedPacks.push({ name: pack.name, identity: identity(stat) });
+    } catch (error) { damagedPacks.push({ name: pack.name, reason: error.message }); }
   }
   const sizes = new Map(data.packs.map(pack => [pack.name, Number(pack.identity.split(':')[2])]));
   for (const item of data.files) {
@@ -46,17 +49,40 @@ async function readPackedIndex(root) {
     if (entries.has(file)) throw new Error('duplicate packed image path');
     entries.set(file, { ...item, path: file, pack: path.join(root, item.pack) });
   }
-  return { entries, packs: mountedPacks };
+  const damagedNames = new Set(damagedPacks.map(pack => pack.name));
+  for (const [file, entry] of entries) if (damagedNames.has(path.basename(entry.pack))) entries.delete(file);
+  return { entries, packs: mountedPacks, damagedPacks };
 }
 
 async function loadPackedCache(root, native, logger = console) {
   try {
-    const { entries, packs } = await readPackedIndex(root);
+    const { entries, packs, damagedPacks } = await readPackedIndex(root);
+    if (!entries.size && damagedPacks.length) throw new Error(damagedPacks[0].reason);
     if (entries.size && typeof native.assets.installPackedFiles !== 'function') throw new Error('packed image reader unavailable');
-    native.assets.installPackedFiles?.([...entries.values()]);
-    for (const pack of packs)
-      if (identity(await fsp.lstat(path.join(root, pack.name), { bigint: true })) !== pack.identity)
-        throw new Error('prepared pack changed during mounting');
+    let remaining = packs;
+    for (;;) {
+      let installError;
+      try { native.assets.installPackedFiles?.([...entries.values()]); }
+      catch (error) { installError = error; }
+      const changed = [];
+      for (const pack of remaining) {
+        const stat = await fsp.lstat(path.join(root, pack.name), { bigint: true }).catch(() => null);
+        if (!stat || identity(stat) !== pack.identity)
+          changed.push({ name: pack.name, reason: 'prepared pack changed during mounting' });
+      }
+      if (!changed.length) {
+        if (installError) throw installError;
+        break;
+      }
+      const names = new Set(changed.map(pack => pack.name));
+      for (const [file, entry] of entries) if (names.has(path.basename(entry.pack))) entries.delete(file);
+      damagedPacks.push(...changed);
+      remaining = remaining.filter(pack => !names.has(pack.name));
+      if (!entries.size) throw new Error(changed[0].reason);
+    }
+    entries.packIdentities = remaining;
+    entries.damagedPacks = damagedPacks;
+    for (const pack of damagedPacks) logger.warn('[pmjs] packed images unavailable in ' + pack.name + ': ' + pack.reason);
     if (entries.size) logger.info?.(`[pmjs] packed images files=${entries.size} packs=${new Set([...entries.values()].map(item => item.pack)).size}`);
     return entries;
   } catch (error) {
@@ -64,6 +90,35 @@ async function loadPackedCache(root, native, logger = console) {
     native.assets.installPackedFiles?.([]);
     return null;
   }
+}
+
+async function repairPackedCache(root, entries) {
+  if (!entries?.damagedPacks?.length) return;
+  const data = { packs: entries.packIdentities, files: [...entries.values()].map(item => ({
+    name: item.name, pack: path.basename(item.pack), offset: item.offset, size: item.size, hash: item.hash, header: item.header
+  })) };
+  await publishPackedIndex(root, data);
+  entries.damagedPacks = [];
+}
+
+async function syncDirectory(directory) {
+  const handle = await fsp.open(directory, 'r');
+  try { await handle.sync(); } finally { await handle.close(); }
+}
+
+async function publishPackedIndex(root, data, onPublished) {
+  const serialized = JSON.stringify({ version: 1, checksum: hash(JSON.stringify(data)), data });
+  if (Buffer.byteLength(serialized) > maximumIndexBytes) throw new Error('packed image index exceeds limit');
+  const temporary = path.join(root, filename + '.stage-' + crypto.randomBytes(8).toString('hex'));
+  try {
+    const handle = await fsp.open(temporary, 'wx');
+    try { await handle.writeFile(serialized); await handle.sync(); }
+    finally { await handle.close(); }
+    await syncDirectory(root);
+    await fsp.rename(temporary, path.join(root, filename));
+    onPublished?.();
+    await syncDirectory(root);
+  } finally { await fsp.rm(temporary, { force: true }); }
 }
 
 async function inspectPacked(item, verify) {
@@ -91,10 +146,6 @@ async function packCache(root, assets, { maximumBytes = maximumPackBytes } = {})
   const token = assets.tryAcquirePreparationLock(root);
   if (!token) throw new Error('preparation cache is busy');
   const uncommitted = new Set();
-  const syncDirectory = async directory => {
-    const handle = await fsp.open(directory, 'r');
-    try { await handle.sync(); } finally { await handle.close(); }
-  };
   async function prunePacks(retained, syncBefore = false) {
     const stale = (await fsp.readdir(root)).filter(name =>
       (packName.test(name) && !retained.has(name)) || /^packed-images\.json\.stage-[a-f0-9]{16}$/.test(name));
@@ -102,6 +153,15 @@ async function packCache(root, assets, { maximumBytes = maximumPackBytes } = {})
     if (syncBefore) await syncDirectory(root);
     for (const name of stale) await fsp.unlink(path.join(root, name));
     await syncDirectory(root);
+  }
+  async function removeLooseFiles(files) {
+    const directories = new Set(files.map(file => path.dirname(file)));
+    for (const file of files) await fsp.unlink(file);
+    for (const directory of directories) {
+      await syncDirectory(directory);
+      await fsp.rmdir(directory).catch(error => { if (!['ENOTEMPTY', 'ENOENT'].includes(error.code)) throw error; });
+    }
+    for (const directory of new Set([...directories].map(directory => path.dirname(directory)))) await syncDirectory(directory);
   }
   let output;
   try {
@@ -125,20 +185,39 @@ async function packCache(root, assets, { maximumBytes = maximumPackBytes } = {})
     const current = new Map([...previous.entries.values()].filter(item => pending.has(item.name))
       .map(item => [item.name, { name: item.name, pack: path.basename(item.pack), offset: item.offset, size: item.size, hash: item.hash, header: item.header }]));
     let packs = new Map(previous.packs.map(pack => [pack.name, pack]));
-    const loose = [], packed = new Map();
+    const loose = [], packed = new Map(), duplicates = [];
     for (const [name, expected] of [...pending].sort(([a], [b]) => a.localeCompare(b))) {
       const file = path.join(root, name);
       const stat = await fsp.lstat(file).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
-      const old = stat ? null : previous.entries.get(file);
+      let old = previous.entries.get(file);
       if (!stat && !old) throw new Error('prepared image is missing: ' + name);
       const size = stat ? stat.size : old.size;
       if ((stat && !stat.isFile()) || !size || size > maximumBytes) throw new Error('prepared image exceeds pack limit');
+      if (stat && old?.hash === expected && old.size === size) {
+        await inspectPacked({ ...old, pack: file, offset: 0 }, true);
+        duplicates.push(file);
+      } else if (stat) old = null;
       const item = { name, expected, file, size, old };
-      if (stat) loose.push(item);
+      if (!old) loose.push(item);
       else {
         if (!packed.has(old.pack)) packed.set(old.pack, []);
         packed.get(old.pack).push(item);
       }
+    }
+    const indexedCounts = new Map();
+    for (const item of previous.entries.values()) indexedCounts.set(item.pack, (indexedCounts.get(item.pack) || 0) + 1);
+    for (const [packPath, items] of packed) {
+      const size = Number(packs.get(path.basename(packPath)).identity.split(':')[2]);
+      let end = 0;
+      const contiguous = items.slice().sort((a, b) => a.old.offset - b.old.offset).every(item => {
+        const matches = item.old.offset === end;
+        end += item.size;
+        return matches;
+      });
+      if (size > maximumBytes || indexedCounts.get(packPath) !== items.length || !contiguous || end !== size ||
+          items.some(item => item.old.hash !== item.expected)) continue;
+      for (const item of items) await inspectPacked(item.old, true);
+      packed.delete(packPath);
     }
     const batches = [];
     let batch = [], batchBytes = 0;
@@ -149,8 +228,11 @@ async function packCache(root, assets, { maximumBytes = maximumPackBytes } = {})
       batch.push(...unit); batchBytes += size;
       if (batchBytes >= maximumBytes) { batches.push(batch); batch = []; batchBytes = 0; }
     }
-    if (batch.length || !batches.length) batches.push(batch);
-    if (!previous.invalid) await prunePacks(new Set(previous.packs.map(pack => pack.name)), true);
+    const retainedBefore = new Set([...current.values()].map(item => item.pack));
+    const metadataChanged = previous.invalid || previous.damagedPacks?.length ||
+      previous.entries.size !== current.size || previous.packs.length !== retainedBefore.size;
+    if (batch.length || (!batches.length && metadataChanged)) batches.push(batch);
+    if (!previous.invalid) await prunePacks(new Set([...previous.packs, ...(previous.damagedPacks || [])].map(pack => pack.name)), true);
     const prefix = crypto.randomBytes(8).toString('hex'), buffer = Buffer.alloc(256 * 1024);
     let sequence = 0;
     for (const batch of batches) {
@@ -195,26 +277,12 @@ async function packCache(root, assets, { maximumBytes = maximumPackBytes } = {})
       const retained = new Set([...current.values()].map(item => item.pack));
       packs = new Map([...packs].filter(([name]) => retained.has(name)));
       const data = { packs: [...packs.values()], files: [...current.values()] };
-      const serialized = JSON.stringify({ version: 1, checksum: hash(JSON.stringify(data)), data });
-      if (Buffer.byteLength(serialized) > maximumIndexBytes) throw new Error('packed image index exceeds limit');
-      const temporary = path.join(root, filename + '.stage-' + prefix); uncommitted.add(temporary);
-      const handle = await fsp.open(temporary, 'wx');
-      try { await handle.writeFile(serialized); await handle.sync(); }
-      finally { await handle.close(); }
-      await syncDirectory(root);
-      await fsp.rename(temporary, path.join(root, filename));
-      uncommitted.clear();
-      await syncDirectory(root);
+      await publishPackedIndex(root, data, () => uncommitted.clear());
       await fsp.rm(path.join(root, 'startup-catalog.json'), { force: true });
-      const directories = new Set(originals.map(file => path.dirname(file)));
-      for (const file of originals) await fsp.unlink(file);
-      for (const directory of directories) {
-        await syncDirectory(directory);
-        await fsp.rmdir(directory).catch(error => { if (!['ENOTEMPTY', 'ENOENT'].includes(error.code)) throw error; });
-      }
-      for (const directory of new Set([...directories].map(directory => path.dirname(directory)))) await syncDirectory(directory);
+      await removeLooseFiles(originals);
       await prunePacks(retained);
     }
+    if (duplicates.length) { await syncDirectory(root); await removeLooseFiles(duplicates); }
     return { files: current.size, packs: packs.size, bytes: [...current.values()].reduce((sum, item) => sum + item.size, 0) };
   } finally {
     try { await output?.close(); }
@@ -225,4 +293,4 @@ async function packCache(root, assets, { maximumBytes = maximumPackBytes } = {})
   }
 }
 
-module.exports = { loadPackedCache, inspectPacked, packCache };
+module.exports = { loadPackedCache, inspectPacked, packCache, repairPackedCache };

@@ -121,7 +121,7 @@ async function loadCatalog(options) {
     }
     if (options.images === false) native.assets.installPackedFiles?.([]);
     const packed = options.images === false ? new Map() : await require('./packed-cache.cjs').loadPackedCache(root, native, logger);
-    if (packed === null || data.packedImages !== (packed.size > 0)) throw new Error('packed image catalog changed');
+    if (packed === null || packed.damagedPacks?.length || data.packedImages !== (packed.size > 0)) throw new Error('packed image catalog changed');
     releaseLease = await createLease(root, data.keys);
     const derived = installationReport(await native.assets.installDerivedCatalog(data.derived, false, true), 'derived catalog');
     if (derived.rejected.length || derived.accepted.length !== data.derived.length) throw new Error('derived catalog rejected');

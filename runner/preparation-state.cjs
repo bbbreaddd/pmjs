@@ -274,6 +274,8 @@ async function openPreparation({ gameRoot, cacheRoot, native, verifyHashes = fal
         try {
           if (session.packedFiles === null && session.phaseStates.get('images') === 'completed')
             await fsp.rename(path.join(root, 'packed-images.json'), path.join(root, 'packed-images.invalid.json'));
+          else if (session.phaseStates.get('images') === 'completed')
+            await require('./packed-cache.cjs').repairPackedCache(root, session.packedFiles);
           await retainLeases(root, retained);
           async function prune(directory, nested = false) {
             for (const entry of await fsp.readdir(directory, { withFileTypes: true }).catch(error => {

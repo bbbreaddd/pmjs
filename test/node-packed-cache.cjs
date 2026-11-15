@@ -32,6 +32,8 @@ for (const scenario of ['inode', 'range', 'checksum'])
   fs.writeFileSync(path.join(root, 'drift-' + scenario + '.png'), png(128, 128, smallPixels));
 for (let index = 0; index < 3; ++index)
   fs.writeFileSync(path.join(root, 'incremental-' + index + '.png'), png(128, 128, smallPixels));
+for (const damage of ['missing', 'modified']) for (let index = 0; index < 3; ++index)
+  fs.writeFileSync(path.join(root, 'img', 'pictures', 'recovery-' + damage + '-' + index + '.png'), png(128, 128, smallPixels));
 test.before(() => native.initialize(settings));
 test.after(() => native.runtime.quit());
 
@@ -95,7 +97,9 @@ test('normal preparation reuses packed outputs without regenerating loose pages'
   const { prepareGameAssets } = require('../runner/preparation.cjs');
   const pixels = smallPixels;
   try {
-    const options = { gameRoot: root, cacheRoot: path.join(root, 'cache'), native, maps: false,
+    const scopedNative = { ...native, fs: { ...native.fs,
+      inventory: () => native.fs.inventory().filter(source => !source.startsWith('img/pictures/recovery-')) } };
+    const options = { gameRoot: root, cacheRoot: path.join(root, 'cache'), native: scopedNative, maps: false,
       pageCodec: 'lz4', fastStartup: true, logger: { info() {}, warn() {} } };
     const first = await prepareGameAssets(options);
     assert.equal(first.images.installed, 1);
@@ -305,4 +309,53 @@ test('an interrupted conversion loads a mixture of packed and loose native pages
       } finally { native.images.release(image.handle); native.images.release(ordinary.handle); }
     }
   } finally { failure.mock.restore(); native.assets.installPackedFiles([]); }
+});
+
+for (const damage of ['missing', 'modified']) test('preparation regenerates only assets in a ' + damage + ' pack', async () => {
+  const { prepareGameAssets } = require('../runner/preparation.cjs');
+  const { loadCatalog } = require('../runner/preparation-catalog.cjs');
+  const prefix = 'img/pictures/recovery-' + damage + '-';
+  const scopedNative = { ...native, fs: { ...native.fs,
+    inventory: () => native.fs.inventory().filter(source => source.startsWith(prefix)) } };
+  const options = { gameRoot: root, cacheRoot: path.join(root, 'selective-' + damage), native: scopedNative,
+    maps: false, pageCodec: 'lz4', fastStartup: true, logger: { info() {}, warn() {} } };
+  try {
+    const first = await prepareGameAssets(options);
+    assert.equal(first.images.installed, 3);
+    first.releaseCacheLease();
+    const maximumBytes = Math.max(...first.images.entries.map(entry =>
+      fs.statSync(path.join(entry.directory, entry.descriptor.pages[0].path)).size)) * 2;
+    await packCache(first.root, native.assets, { maximumBytes });
+    const warm = await prepareGameAssets(options);
+    assert.equal(warm.images.generated, 0);
+    warm.releaseCacheLease();
+    const indexPath = path.join(first.root, 'packed-images.json');
+    const before = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+    assert.equal(before.data.packs.length, 2);
+    const healthyPack = before.data.packs[0].name, broken = path.join(first.root, before.data.packs[1].name);
+    if (damage === 'missing') fs.unlinkSync(broken);
+    else fs.appendFileSync(broken, 'damaged');
+    assert.equal(await loadCatalog(options), null);
+    assert.equal(native.images.memory().packedFileCount, 2);
+    const repaired = await prepareGameAssets(options);
+    assert.equal(repaired.images.generated, 1);
+    assert.equal(repaired.images.hits, 2);
+    assert.equal(repaired.images.installed, 3);
+    assert.equal(repaired.catalogSaved, true);
+    repaired.releaseCacheLease();
+    const after = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+    assert.deepEqual(after.data.packs.map(pack => pack.name), [healthyPack]);
+    assert.equal(after.data.files.length, 2);
+    for (let launch = 0; launch < 2; ++launch) {
+      const catalog = await loadCatalog(options);
+      assert(catalog?.images.catalogHit);
+      catalog.releaseCacheLease();
+    }
+    for (let index = 0; index < 3; ++index) {
+      const image = await native.images.loadAsync(prefix + index + '.png');
+      const ordinary = native.images.loadBytes(png(128, 128, smallPixels));
+      try { assert.deepEqual(canvasPixels(image), canvasPixels(ordinary)); }
+      finally { native.images.release(image.handle); native.images.release(ordinary.handle); }
+    }
+  } finally { native.assets.installPackedFiles([]); }
 });
