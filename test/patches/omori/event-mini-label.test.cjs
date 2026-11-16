@@ -8,12 +8,12 @@ const { createHash } = require('node:crypto');
 const { pinSourceFingerprint } = require('../../helpers/reviewed-function-fixture.cjs');
 const root = path.resolve(__dirname, '../../..');
 function delayedSetup() {
-  calls.original++;
+  globalThis.calls.original++;
   if (this.parent && this._labelDelay === undefined) this._labelDelay = this.parent.getChildIndex(this);
   if (this._labelDelay > 0) {
     var previous = this._labelDelay; this._labelDelay -= 1; return previous;
   }
-  if (!this._miniLabel) { calls.constructed++; this._miniLabel = { _text:'created' }; }
+  if (!this._miniLabel) { globalThis.calls.constructed++; this._miniLabel = { _text:'created' }; }
   return 'guest-result';
 }
 function fixture({ qualified = true, enabled = true, predecessorChanged = false, labelChanged = false } = {}) {
