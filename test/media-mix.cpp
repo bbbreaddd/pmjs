@@ -1,5 +1,5 @@
-#include "media_mix.hpp"
-#include "effects_audio.hpp"
+#include "media/media_mix.hpp"
+#include "effects/effects_audio.hpp"
 
 #include <cmath>
 #include <string_view>

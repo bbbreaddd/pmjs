@@ -2,12 +2,11 @@
 
 (function() {
   var id = 'plugins.srd.shaking-text-disposal';
-  PMJS.plugins.registerOptimization('SRD_ShakingText', {
-    id: id, owner: 'pmjs-plugins/srd', fallback: 'authored glyph removal and finalization'
-  });
 
-  PMJS.plugins.onLoaded('SRD_ShakingText', 'pmjs.adapter.srd-shaking-text', function() {
-    PMJS.phases.on('afterGuestPlugins', 'pmjs.adapter.srd-shaking-text', function() {
+  PMJS.plugins.installOptimization('SRD_ShakingText', {
+    id: id, owner: 'pmjs-plugins/srd', fallback: 'authored glyph removal and finalization',
+    phaseKey: 'pmjs.adapter.srd-shaking-text',
+    install: function() {
       if (!PMJS.optimizations.isEnabled(id)) return;
       var prototype = typeof Window_Message !== 'undefined' && Window_Message.prototype;
       var create = prototype && prototype.createShakingCharacter;
@@ -93,6 +92,6 @@
       }
       prototype.createShakingCharacter = createGlyph;
       prototype.removeShakingSprites = removeGlyphs;
-    });
+    }
   });
 })();

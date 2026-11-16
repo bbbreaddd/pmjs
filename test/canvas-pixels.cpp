@@ -1,4 +1,4 @@
-#include "canvas_pixels.hpp"
+#include "canvas/canvas_pixels.hpp"
 #include <array>
 #include <cassert>
 #include <stdexcept>

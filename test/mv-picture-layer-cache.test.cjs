@@ -211,3 +211,26 @@ test('unsupported foreground producers remain live and failed prefix capture res
   assert.equal(f.cache.diagnostics().active,false);
   assert.equal(f.cache.diagnostics().failures,1);
 });
+
+test('an appearing picture retains only the settled prefix and layer changes reset every prefix',()=>{
+  const f=fixture();
+  for(let i=0;i<100;i++) {
+    const slot=new f.layer.constructor(); slot.visible=false;
+    f.layer.children.push(slot);
+  }
+  for(let i=0;i<8;i++) f.frame();
+  assert.equal(f.cache.diagnostics().active,false);
+  const picture=f.layer.children[52];
+  picture.texture={...f.layer.children[0].texture,_frame:{x:0,y:0,width:32,height:48}};
+  picture.visible=true;
+  f.frame();
+  assert.equal(f.cache.diagnostics().cachedChildren,52);
+  assert.equal(f.cache.tail(f.layer)[0],picture);
+  f.renderer.roundPixels=true;
+  for(let i=0;i<8;i++) {
+    f.frame();
+    assert.equal(f.cache.diagnostics().active,false);
+  }
+  f.frame();
+  assert.equal(f.cache.diagnostics().cachedChildren,102);
+});

@@ -128,6 +128,26 @@
       return matchesReviewedSource(source, expected, false);
     },
 
+    optimize: function(definition) {
+      var def = definition;
+      var original = def.getTarget()[def.method];
+      if (typeof original !== 'function') return;
+      function activate() {
+        if (!PMJS.optimizations.isEnabled(def.id)) return;
+        var target = def.getTarget();
+        if (!PMJS.methods.matchesSource(original, def.recognized) || target[def.method] !== original) {
+          PMJS.optimizations.refuse(def.id, def.refusalReason);
+          return;
+        }
+        // Optional installation preserves non-throwing rejection of a locked method.
+        Reflect.set(target, def.method, def.replace(original));
+      }
+      PMJS.optimizations.install({
+        id: def.id, owner: def.owner, fallback: def.fallback,
+        phaseKey: def.phaseKey, install: activate
+      });
+    },
+
     wrap: function(definition) { return register(definition, 'wrap'); },
     own: function(definition) { return register(definition, 'own'); },
 

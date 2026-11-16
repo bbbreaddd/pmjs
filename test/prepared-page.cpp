@@ -1,5 +1,5 @@
-#include "prepared_page.hpp"
-#include "texture_artifact.hpp"
+#include "assets/prepared_page.hpp"
+#include "assets/texture_artifact.hpp"
 #include <bit>
 
 #include <algorithm>

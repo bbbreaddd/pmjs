@@ -45,15 +45,16 @@ test('idle canvases expire sooner while image textures retain their existing idl
   assert.deepEqual(h.removed, [canvas, image]);
 });
 
-test('recently used canvases and render textures stay tracked across frequent cleanup checks', () => {
+test('recently used canvases stay tracked while idle render textures lose cache ownership', () => {
   const h = fixture();
   const canvas = h.add(), target = h.add(); target._glRenderTargets = {};
   for (let i = 0; i < 20; i++) { canvas.touched = h.gc.count; h.advance(60); }
-  assert.deepEqual(h.removed, []);
-  assert.deepEqual(h.manager._managedTextures, [canvas, target]);
+  assert.deepEqual(h.removed, [target]);
+  assert.deepEqual(h.manager._managedTextures, [canvas]);
   h.advance(180);
-  assert.deepEqual(h.removed, [canvas]);
-  assert.deepEqual(h.manager._managedTextures, [target]);
+  assert.deepEqual(h.removed, [target, canvas]);
+  assert.deepEqual(h.manager._managedTextures, []);
+  assert.deepEqual(target.source.pixels, [10, 20, 30, 255]);
 });
 
 test('manual mode suppresses automatic checks but explicit cleanup still expires only idle resources', () => {

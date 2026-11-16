@@ -177,11 +177,11 @@ export function loadAdapterRegistry(registryPath) {
 
 // Resolve registry adapters against enabled plugin names. Returns the
 // modules to include, in registry order, with the match reason attached.
-export function resolveAdapters(adapters, enabledNames) {
-  const enabled = new Set(enabledNames.map(name => pluginIdentity(name)));
+export function resolveAdapters(adapters, enabledNames, engine = 'mv') {
+  const enabled = new Set(enabledNames.map(name => pluginIdentity(name, engine)));
   return adapters
     .flatMap(entry => {
-      const plugin = entry.plugins.find(name => enabled.has(pluginIdentity(name)));
+      const plugin = entry.plugins.find(name => enabled.has(pluginIdentity(name, engine)));
       return plugin ? [{ plugin, modules: entry.modules }] : [];
     });
 }
@@ -207,9 +207,9 @@ export function inspectGame(gameDir, registryPath) {
   }
   const ambiguous = new Set(collisions.map(names => pluginIdentity(names[0], engine.engine)));
   const selectable = manifest.enabled.filter(name => !ambiguous.has(pluginIdentity(name, engine.engine)));
-  const matched = resolveAdapters(registry, selectable);
+  const matched = resolveAdapters(registry, selectable, engine.engine);
   const unknown = manifest.enabled.filter(name =>
-    !registry.some(entry => entry.plugins.some(plugin => pluginIdentity(plugin) === pluginIdentity(name))));
+    !registry.some(entry => entry.plugins.some(plugin => pluginIdentity(plugin, engine.engine) === pluginIdentity(name, engine.engine))));
   return {
     gameDir: absolute,
     engine: engine.engine,

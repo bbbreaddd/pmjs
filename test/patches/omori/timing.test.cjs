@@ -1,5 +1,7 @@
 'use strict';
 
+const { runOptimizationAdapter } = require('../../helpers/runtime-context.cjs');
+
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const test = require('node:test');
@@ -33,7 +35,7 @@ function fixture({ enabled = true, qualified = true, resume = true, lateChange =
       }
     }
   };
-  vm.runInNewContext(source, context);
+  runOptimizationAdapter(source, context);
   hooks.get('afterGuestPlugins')();
   if (lateChange) manager.determineRepeatNumber = () => 9;
   for (const wrapper of wrappers) {

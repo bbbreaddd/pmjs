@@ -1,5 +1,5 @@
-#include "platform.hpp"
-#include "resources.hpp"
+#include "platform/platform.hpp"
+#include "graphics/resources.hpp"
 #include <filesystem>
 #include <iostream>
 #include <new>

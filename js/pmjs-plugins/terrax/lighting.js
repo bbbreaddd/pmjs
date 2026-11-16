@@ -8,13 +8,18 @@
 // Gates the GPU recorder plus mask-sprite pooling; disabled means stock
 // Terrax Canvas _updateMask and light-sprite handling.
 (function() {
-  if (typeof PMJS !== 'undefined' && PMJS.plugins &&
-      typeof PMJS.plugins.registerOptimization === 'function') {
-    PMJS.plugins.registerOptimization('Terrax_Lighting', {
-      id: 'terrax.native-lighting',
-      owner: 'plugins/terrax/lighting',
-      fallback: 'ordinary Terrax Canvas _updateMask and stock light-sprite handling'
-    });
+  function createPrimitiveRecorder(bitmap, onFallback) {
+    if (!bitmap || !PMJS.web || !PMJS.web.canvas) return null;
+    var recorder = PMJS.web.canvas.createPrimitiveRecorder(bitmap._canvas, onFallback);
+    if (!recorder) return null;
+    var originalDestroy = bitmap.destroy;
+    bitmap.destroy = function() {
+      recorder.destroy();
+      if (typeof originalDestroy === 'function') {
+        return originalDestroy.apply(this, arguments);
+      }
+    };
+    return recorder;
   }
 
   // Match complete reviewed implementations. Formatting changes and guest
@@ -59,10 +64,9 @@
     }
     function installGpuLightRecorder(lightmask) {
       var bitmap = lightmask._maskBitmap;
-      var recorder = PMJS.mv && PMJS.mv.bitmap &&
-        PMJS.mv.bitmap.createPrimitiveRecorder(bitmap, function(reason, detail) {
-          PMJS.optimizations.reportFallback('terrax.native-lighting', reason, detail);
-        });
+      var recorder = createPrimitiveRecorder(bitmap, function(reason, detail) {
+        PMJS.optimizations.reportFallback('terrax.native-lighting', reason, detail);
+      });
       if (!recorder) {
         PMJS.optimizations.reportFallback('terrax.native-lighting',
           'lightmask primitive recorder unavailable');
@@ -123,6 +127,11 @@
     return true;
   }
 
-  PMJS.phases.on('afterGuestPlugins', 'pmjs.adapter.terrax-lighting',
-    installTerraxLightingFastPaths);
+  PMJS.plugins.installOptimization('Terrax_Lighting', {
+    id: 'terrax.native-lighting',
+    owner: 'plugins/terrax/lighting',
+    fallback: 'ordinary Terrax Canvas _updateMask and stock light-sprite handling',
+    phaseKey: 'pmjs.adapter.terrax-lighting', order: 'module',
+    install: installTerraxLightingFastPaths
+  });
 })();

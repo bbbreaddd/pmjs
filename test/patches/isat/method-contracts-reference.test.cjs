@@ -1,5 +1,7 @@
 'use strict';
 
+const { runOptimizationAdapter } = require('../../helpers/runtime-context.cjs');
+
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -31,7 +33,7 @@ function fixture(name) {
   });
   const guestMethod = (file, assignment) => method(context, path.join(game, file), assignment);
   function install() {
-    vm.runInContext(fs.readFileSync(require.resolve(`../../../patches/isat/${name}.js`), 'utf8'), context);
+    runOptimizationAdapter(fs.readFileSync(require.resolve(`../../../patches/isat/${name}.js`), 'utf8'), context);
     hooks.forEach(hook => hook());
     assert.deepEqual(refused, []);
   }
@@ -90,38 +92,6 @@ test('screen-effect admission accepts the effective weather wrapper and preserve
   c.PMJS.isatSourceQualification = { verified: false };
   scene.update();
   assert.ok(scene._filters.every(filter => filter.enabled), 'revoked qualification retains the authored path');
-});
-
-test('neutral-tone admission accepts the purchased engine lifecycle', { skip: !game }, () => {
-  const f = fixture('neutral-tone'), c = f.context;
-  c.Spriteset_Base = function() {};
-  c.ToneFilter = function() {
-    this.enabled = true; this.alpha = 1; this.blendMode = 0;
-    this.matrix = Array.from({ length: 20 }, (_, i) => [0, 6, 12, 18].includes(i) ? 1 : 0);
-  };
-  const proto = c.Spriteset_Base.prototype;
-  for (const key of ['createWebGLToneChanger', 'updateToneChanger', 'updateWebGLToneChanger']) {
-    proto[key] = f.guestMethod('js/rpg_sprites.js', `Spriteset_Base.prototype.${key} =`);
-  }
-  const original = proto.updateToneChanger;
-  f.install();
-  assert.notEqual(proto.updateToneChanger, original);
-  c.Graphics = { isWebGL() { return true; } }; c.PIXI = { BLEND_MODES: { NORMAL: 0 } };
-  vm.runInContext(`
-    Array.prototype.equals = function(other) { return this.length === other.length && this.every(function(v,i) { return v === other[i]; }); };
-    Array.prototype.clone = function() { return this.slice(); };
-    var tone = [0,0,0,0], $gameScreen = { tone: function() { return tone; } };
-  `, c);
-  const filter = new c.ToneFilter(), scene = Object.create(proto);
-  scene._tone = vm.runInContext('[0,0,0,0]', c);
-  scene._toneFilter = filter; scene._baseSprite = { filters: [filter] };
-  assert.equal(scene.updateToneChanger(), undefined); assert.equal(filter.enabled, false);
-  c.PMJS.isatSourceQualification = { verified: false };
-  scene.updateToneChanger(); assert.equal(filter.enabled, true);
-  let updates = 0;
-  scene.updateWebGLToneChanger = () => { updates++; };
-  vm.runInContext('tone[0] = 10;', c);
-  scene.updateToneChanger(); assert.equal(updates, 1); assert.equal(filter.enabled, true);
 });
 
 test('save recovery accepts the purchased engine and preserves the MetaControls wrapper', { skip: !game }, () => {

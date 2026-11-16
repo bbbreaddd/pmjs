@@ -8,6 +8,21 @@ const crypto = require('node:crypto');
 const HASH = /^[a-f0-9]{64}$/;
 const FUSE_SUPER_MAGIC = 0x65735546;
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
+const fileIdentity = stat => [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, stat.birthtimeNs].join(':');
+
+function fileIdentityMatches(expected, stat, file, filesystemTypes = new Map()) {
+  if (expected === fileIdentity(stat)) return true;
+  if (!/^\d+(?::\d+){5}$/.test(expected || '')) return false;
+  const before = expected.split(':');
+  const after = fileIdentity(stat).split(':');
+  if (before.length !== 6 || before.some((value, index) => index !== 1 && value !== after[index])) return false;
+  if (!filesystemTypes.has(stat.dev)) {
+    let type;
+    try { type = fs.statfsSync(file).type; } catch (_) { type = null; }
+    filesystemTypes.set(stat.dev, type);
+  }
+  return filesystemTypes.get(stat.dev) === FUSE_SUPER_MAGIC;
+}
 
 async function writeJson(file, value, flush = true) {
   const handle = await fsp.open(file, 'wx');
@@ -32,22 +47,11 @@ async function preparationFiles(session, verifyHashes = false) {
     session.data.files[file] = stored;
     return stored;
   }
-  function identity(stat) {
-    return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, stat.birthtimeNs].join(':');
-  }
+  const identity = fileIdentity;
   function matchesReceipt(receipt, signature, file, stat, allowInodeDrift) {
     if (!receipt || !HASH.test(receipt.hash)) return false;
     if (receipt.identity === signature) return true;
-    if (!allowInodeDrift || !/^\d+(?::\d+){5}$/.test(receipt.identity || '')) return false;
-    const before = receipt.identity.split(':');
-    const after = signature.split(':');
-    if (before.length !== 6 || before.some((value, index) => index !== 1 && value !== after[index])) return false;
-    if (!filesystemTypes.has(stat.dev)) {
-      let type;
-      try { type = fs.statfsSync(file).type; } catch (_) { type = null; }
-      filesystemTypes.set(stat.dev, type);
-    }
-    return filesystemTypes.get(stat.dev) === FUSE_SUPER_MAGIC;
+    return allowInodeDrift && fileIdentityMatches(receipt.identity, stat, file, filesystemTypes);
   }
   function containedGameFile(file) {
     return (session.sourceRoots || [session.gameRoot]).some(root => {
@@ -68,6 +72,16 @@ async function preparationFiles(session, verifyHashes = false) {
   }
   async function inspect(file, category = 'other') {
     file = path.resolve(file);
+    const packed = session.packedFiles?.get(file);
+    if (packed) {
+      const checked = await require('./packed-cache.cjs').inspectPacked(packed, verifyHashes);
+      if (checked.reused) ++stats.reusedFiles;
+      else {
+        ++stats.hashedFiles; stats.hashedBytes += checked.size;
+        stats.hashedBytesByCategory[category] = (stats.hashedBytesByCategory[category] || 0) + checked.size;
+      }
+      return checked;
+    }
     const inspected = await inspectPath(file), actual = inspected.file, before = inspected.stat;
     if (!before.isFile()) throw new Error('preparation input is not a regular file');
     const signature = identity(before);
@@ -120,6 +134,9 @@ async function preparationFiles(session, verifyHashes = false) {
     saveReceipt(file, { identity: receipt?.identity || signature, hash: checksum, header: header.toString('base64') });
     known.set(signature, { hash: checksum, header });
     return { hash: checksum, size: bytes.length, header };
+  }
+  async function size(file) {
+    return session.packedFiles?.get(path.resolve(file))?.size ?? (await fsp.stat(file)).size;
   }
   async function hash(file, category) { return (await inspect(file, category)).hash; }
   async function copyVerified(source, target, expectedHash, category = 'import') {
@@ -200,10 +217,10 @@ async function preparationFiles(session, verifyHashes = false) {
     }
     await session.checkpoint();
   }
-  return { hash, inspect, inspectSync, copyVerified, publish, validatedManifest, validateOutputs, save, stats, receipts: files,
+  return { hash, inspect, inspectSync, size, copyVerified, publish, validatedManifest, validateOutputs, save, stats, receipts: files,
     writeManifest: session.writeManifest,
     publishManifest: session.publishManifest };
 
 }
 
-module.exports = { preparationFiles, writeJson };
+module.exports = { preparationFiles, writeJson, fileIdentity, fileIdentityMatches };

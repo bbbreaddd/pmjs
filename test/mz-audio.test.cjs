@@ -52,7 +52,7 @@ function contextFor(options) {
   Request.prototype.send = function() {};
   const context = {
     console, __pmjsBuiltinRequire: require,
-    PMJS: { tasks: {
+    PMJS: { config: {}, tasks: {
       enqueue(callback, options) {
         if (stopped) { options.discard(); return false; }
         tasks.push({ callback, options });

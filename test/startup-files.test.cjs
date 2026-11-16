@@ -75,6 +75,7 @@ test('composition identity follows plugin parser changes and ignores documentati
   }
   const parser = path.join(share, 'runner/plugin-manifest.cjs');
   fs.copyFileSync(path.join(__dirname, '../runner/plugin-manifest.cjs'), parser);
+  fs.copyFileSync(path.join(__dirname, '../runner/file-overrides.cjs'), path.join(share, 'runner/file-overrides.cjs'));
   const game = path.join(root, 'game');
   fs.mkdirSync(path.join(game, 'js/libs'), { recursive: true });
   fs.writeFileSync(path.join(game, 'js/libs/pixi.js'), 'PIXI.VERSION = "4.5.4";');

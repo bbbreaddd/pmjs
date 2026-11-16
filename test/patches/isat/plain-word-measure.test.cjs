@@ -1,5 +1,7 @@
 'use strict';
 
+const { runOptimizationAdapter } = require('../../helpers/runtime-context.cjs');
+
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -59,7 +61,7 @@ function setup({ enabled = true, translated, failure, qualified = true, unknown 
     ['c646ad77520444a09cd56800d5c701be21662de32604ccbc39979725b5046f91', context.SRD.TranslationEngine.translate]
   ]) adapted = adapted.replace(expected, methodHash(method));
   if (unknown) WindowBase.prototype.textWidthExCheck = function() { calls.push(['authored']); return 17; };
-  vm.runInContext(adapted, context);
+  runOptimizationAdapter(adapted, context);
   assert.equal(phases[0].phase, 'afterPlugins');
   phases[0].callback();
   return { window: new WindowBase(), calls, fallback, context };

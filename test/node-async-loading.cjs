@@ -15,12 +15,56 @@ fs.writeFileSync(path.join(directory, 'bytes.bin'), bytes);
 fs.mkdirSync(path.join(directory, 'folder'));
 const imageBytes = png(1, 1, Buffer.from([255, 0, 0, 255]));
 fs.writeFileSync(path.join(directory, 'image.png'), imageBytes);
+fs.writeFileSync(path.join(directory, 'collection.png'), imageBytes);
 const key = Buffer.from('00112233445566778899aabbccddeeff', 'hex');
 const encrypted = Buffer.from(imageBytes);
 for (let i = 0; i < 16; i++) encrypted[i] ^= key[i];
 fs.writeFileSync(path.join(directory, 'image.rpgmvp'), Buffer.concat([Buffer.alloc(16), encrypted]));
 native.initialize({ gameRoot: directory, width: 32, height: 32, windowTitle: 'Async loading', imageWarmCacheBytes: 16 });
 test.after(() => native.runtime.quit());
+
+test('native callback arguments reject omissions and ignore excess arguments', () => {
+  assert.throws(() => native.canvas.create(1));
+  const image = native.canvas.create(1, 1, false, ...Array(30).fill(99));
+  assert.equal(image.width, 1);
+  assert.equal(image.height, 1);
+  native.canvas.release(image.handle);
+});
+
+test('critical collection preserves image decodes already in flight', async () => {
+  const { createMemoryReclaimer } = require('../runner/memory-reclamation.cjs');
+  const pending = Array.from({ length: 8 }, () => native.images.loadAsync('collection.png', true));
+  assert.ok(native.images.pendingDecodeJobs() > 0);
+  assert.equal(native.images.pendingDecodeJobs(), native.images.memory(0).pendingDecodeJobs);
+  let time = 0, collected = false;
+  const policy = createMemoryReclaimer({ native, now: () => time,
+    readMemory: () => ({ availableBytes: 80 * 1024 * 1024, rssBytes: process.memoryUsage.rss() }),
+    collectGarbage() {
+      assert.ok(native.images.memory(0).pendingDecodeJobs > 0);
+      global.gc(); collected = true;
+    },
+    logger: { log() {}, warn(message) { assert.fail(message); } }
+  });
+  policy.observe({ availableBytes: 80 * 1024 * 1024, rssBytes: process.memoryUsage.rss() });
+  policy.observe({ availableBytes: 80 * 1024 * 1024, rssBytes: process.memoryUsage.rss() });
+  time = 2000;
+  const reclamation = policy.atBoundary(null);
+  const images = await Promise.all(pending);
+  assert.equal(native.images.pendingDecodeJobs(), 0);
+  try {
+    const result = await reclamation;
+    assert.equal(collected, true);
+    assert.equal(result.boundary, 'critical-pressure');
+    for (const image of images) {
+      const canvas = native.canvas.create(1, 1);
+      try {
+        native.canvas.drawImage(canvas.handle, image.handle, 0, 0, 1, 1, 0, 0, 1, 1, 1);
+        assert.deepEqual(Buffer.from(native.canvas.readPixels(canvas.handle, 0, 0, 1, 1)),
+          Buffer.from([255, 0, 0, 255]));
+      } finally { native.canvas.release(canvas.handle); }
+    }
+  } finally { images.forEach(image => native.images.release(image.handle)); }
+});
 
 for (const host of [native.fs, createStorage(directory)]) {
   test('asynchronous bytes and bounded reads, backend=' + (host === native.fs ? 'vfs' : 'storage'), async () => {
@@ -46,7 +90,7 @@ for (const host of [native.fs, createStorage(directory)]) {
 
 function imageFixture(t) {
   const released = [], starts = [], byteStarts = [];
-  const context = vm.createContext({ PMJS: {}, console, performance, Blob, __pmjsBuiltinRequire: require,
+  const context = vm.createContext({ PMJS: { config: {} }, console, performance, Blob, __pmjsBuiltinRequire: require,
     NativeHost: { images: { ...native.images,
       loadAsync(...args) { starts.push(args[0]); return native.images.loadAsync(...args); },
       loadBytesAsync(...args) { byteStarts.push(args[0]); return native.images.loadBytesAsync(...args); } },

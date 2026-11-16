@@ -103,6 +103,32 @@ test('reusing a bound texture refreshes its age and backing before automatic col
   renderer.destroy();
 });
 
+test('idle render textures preserve shared canvas contents and can be rebound after cache eviction', () => {
+  const [renderer] = createRenderers();
+  const base = createBaseTexture();
+  const pixels = Uint8Array.from([20, 40, 60, 255]);
+  const source = { _nativeCanvas: { handle: 43 }, pixels };
+  const target = { destroy() { assert.fail('cache eviction must not destroy the render target'); } };
+  base.source = base.__pmjsRenderCanvas = source;
+  base._glRenderTargets = { [renderer.CONTEXT_UID]: target };
+  const sibling = { baseTexture: base };
+  renderer.bindTexture(base);
+  const backing = base._glTextures[renderer.CONTEXT_UID];
+  renderer.textureGC.maxIdle = 1;
+  renderer.textureGC.count += 2;
+  renderer.textureGC.run();
+  assert.equal(renderer.textureManager.managedTextures.includes(base), false);
+  assert.equal(renderer.textureManager._managedTextureSet.has(base), false);
+  assert.equal(backing.texture, null);
+  assert.equal(base._glRenderTargets[renderer.CONTEXT_UID], target);
+  assert.equal(sibling.baseTexture.__pmjsRenderCanvas, source);
+  assert.deepEqual(source.pixels, Uint8Array.from([20, 40, 60, 255]));
+  renderer.bindTexture(sibling.baseTexture);
+  assert.equal(base._glTextures[renderer.CONTEXT_UID].texture.handle, 43);
+  assert.equal(renderer.textureManager.managedTextures.includes(base), true);
+  renderer.destroy();
+});
+
 test('direct filter target and GL application APIs reject unsupported calls', () => {
   const [renderer] = createRenderers();
   for (const name of ['getRenderTarget', 'getPotRenderTarget', 'returnRenderTarget',

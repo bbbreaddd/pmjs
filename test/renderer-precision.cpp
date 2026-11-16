@@ -1,4 +1,4 @@
-#include "renderer.hpp"
+#include "graphics/renderer.hpp"
 #include <SDL.h>
 #include <GLES3/gl3.h>
 #include <array>

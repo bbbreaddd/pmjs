@@ -1,6 +1,6 @@
-#include "platform.hpp"
-#include "prepared_page.hpp"
-#include "resources.hpp"
+#include "platform/platform.hpp"
+#include "assets/prepared_page.hpp"
+#include "graphics/resources.hpp"
 
 #include <algorithm>
 #include <array>

@@ -1,26 +1,16 @@
 'use strict';
 
-(function() {
-  var id = 'plugins.yanfly.enemy-atb-refresh';
-  PMJS.plugins.registerOptimization('YEP_X_VisualATBGauge', {
-    id: id, owner: 'pmjs-plugins/yanfly',
-    fallback: 'authored enemy ATB gauge refresh checks'
-  });
-
-  function install() {
-    if (!PMJS.optimizations.isEnabled(id)) return;
-    var prototype = globalThis.Window_EnemyVisualATB && Window_EnemyVisualATB.prototype;
-    var original = prototype && prototype.updateATBPosition;
-    if (typeof original !== 'function') {
-      PMJS.optimizations.refuse(id, 'enemy ATB gauge method unavailable');
-      return;
-    }
-    if (!PMJS.methods.matchesSource(original, '58c487e44dfefa99c48880d7e7c1e6984e1f020c09cad4d226f4b7031a21005b')) {
-      PMJS.optimizations.refuse(id, 'unrecognized enemy ATB gauge method composition');
-      return;
-    }
-
-    prototype.updateATBPosition = function() {
+PMJS.plugins.optimizeMethod({
+  plugin: 'YEP_X_VisualATBGauge', id: 'plugins.yanfly.enemy-atb-refresh',
+  owner: 'pmjs-plugins/yanfly', fallback: 'authored enemy ATB gauge refresh checks',
+  phaseKey: 'pmjs.adapter.yanfly-visual-atb',
+  getTarget: function() { return globalThis.Window_EnemyVisualATB && Window_EnemyVisualATB.prototype; },
+  method: 'updateATBPosition',
+  recognized: '58c487e44dfefa99c48880d7e7c1e6984e1f020c09cad4d226f4b7031a21005b',
+  unavailableReason: 'enemy ATB gauge method unavailable',
+  refusalReason: 'unrecognized enemy ATB gauge method composition',
+  replace: function() {
+    return function() {
       if (!this._battler) return;
       var speed = this._battler.atbSpeed();
       var charge = this._battler.atbCharge();
@@ -32,8 +22,4 @@
       }
     };
   }
-
-  PMJS.plugins.onLoaded('YEP_X_VisualATBGauge', 'pmjs.adapter.yanfly-visual-atb', function() {
-    PMJS.phases.on('afterGuestPlugins', 'pmjs.adapter.yanfly-visual-atb', install);
-  });
-})();
+});

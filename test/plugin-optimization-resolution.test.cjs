@@ -5,11 +5,12 @@ const test = require('node:test');
 const { loadPmjsRuntime, runModule } = require('./helpers/runtime-context.cjs');
 
 const adapters = [
+  ['yanfly/core-engine', 'YEP_CoreEngine', ['plugins.yanfly.core-native-text', 'plugins.yanfly.core-number-format']],
   ['yanfly/message-core', 'YEP_MessageCore', ['plugins.yanfly.message-word-wrap-measure']],
   ['yanfly/event-mini-label', 'YEP_EventMiniLabel', ['plugins.yanfly.event-mini-label']],
   ['yanfly/slippery-tiles', 'YEP_SlipperyTiles', ['plugins.yanfly.slippery-tiles']],
   ['yanfly/visual-atb-gauge', 'YEP_X_VisualATBGauge', ['plugins.yanfly.enemy-atb-refresh']],
-  ['yed/tiled', 'YED_Tiled', ['tilemap.yed-indexed-paint-loops', 'tilemap.yed-indexed-animation']],
+  ['yed/tiled', 'YED_Tiled', ['tilemap.yed-indexed-paint-loops', 'tilemap.yed-indexed-animation', 'tilemap.yed-reflection-sprites']],
   ['olivia/horror-effects', 'Olivia_HorrorEffects', ['plugins.olivia.horror-effects']],
   ['terrax/lighting', 'Terrax_Lighting', ['terrax.native-lighting']],
 ];

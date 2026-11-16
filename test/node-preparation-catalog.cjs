@@ -19,6 +19,25 @@ for (let y = 48; y < 64; ++y) for (let x = 48; x < 64; ++x)
   pixels.set([x * 3, y * 3, x + y, 255], (y * 128 + x) * 4);
 const image = png(128, 128, pixels);
 fs.writeFileSync(path.join(gameRoot, source), image);
+const jpeg = Buffer.from(fs.readFileSync(path.join(__dirname, 'assets/fixture.jpg.b64'), 'utf8'), 'base64');
+fs.writeFileSync(path.join(gameRoot, 'img/pictures/jpeg.png'), jpeg);
+const unusedBroken = 'img/pictures/unused-broken.png';
+fs.writeFileSync(path.join(gameRoot, unusedBroken), image.subarray(0, 40));
+const recovered = Buffer.from(image);
+for (let offset = 8; offset < recovered.length;) {
+  const length = recovered.readUInt32BE(offset);
+  if (recovered.toString('ascii', offset + 4, offset + 8) === 'IDAT') {
+    recovered[offset + 8 + length - 1] ^= 1;
+    let crc = 0xffffffff;
+    for (const byte of recovered.subarray(offset + 4, offset + 8 + length)) {
+      crc ^= byte;
+      for (let bit = 0; bit < 8; ++bit) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+    }
+    recovered.writeUInt32BE((crc ^ 0xffffffff) >>> 0, offset + 8 + length);
+  }
+  offset += length + 12;
+}
+fs.writeFileSync(path.join(gameRoot, 'img/pictures/recovered.png'), recovered);
 const encryptionKey = Buffer.from('00112233445566778899aabbccddeeff', 'hex');
 const encrypted = Buffer.from(image);
 for (let i = 0; i < 16; ++i) encrypted[i] ^= encryptionKey[i];
@@ -40,16 +59,29 @@ async function run() {
       sourceHash: crypto.createHash('sha256').update(image).digest('hex'),
       grid: [1, 1], backdrop: [0, 0, 0, 0] }] };
   const cold = await prepareGameAssets(options);
+  assert.equal(cold.images.failedFiles, 1);
+  assert.equal(cold.images.ordinaryFailures[0].source, unusedBroken);
   assert.equal(cold.catalogSaved, true);
   assert.equal(cold.images.entries.length, 2);
   assert.equal(cold.images.decryptedEntries.length, 1);
   assert.ok(cold.images.decryptedEntries[0].fileIdentity);
   assert.ok(cold.images.entries[0].pageIdentities.length);
   cold.releaseCacheLease();
+  const reused = await prepareGameAssets(options);
+  assert.equal(reused.images.negativeHits, 2);
+  assert.equal(reused.images.generated, 0);
+  reused.releaseCacheLease();
   const warm = await loadCatalog(options);
   assert.ok(warm?.images.catalogHit);
+  assert.equal(warm.images.failedFiles, 1);
   assert.equal(warm.images.installed, 2);
   assert.ok(native.assets.hasDecrypted('img/pictures/secret.png'));
+  for (const filename of ['jpeg.png', 'recovered.png']) {
+    const loaded = native.images.load('img/pictures/' + filename);
+    assert.ok(loaded.handle);
+    assert.ok(loaded.width > 0 && loaded.height > 0);
+    native.images.release(loaded.handle);
+  }
   native.assets.consumePreparationInvalidations();
   native.assets.consumePreparationFailures();
   fs.unlinkSync(warm.images.decryptedEntries[0].file);
@@ -67,6 +99,39 @@ async function run() {
   await invalidation;
   warm.releaseCacheLease();
   assert.equal(await loadCatalog(options), null);
+  fs.writeFileSync(path.join(gameRoot, unusedBroken), image);
+  const broken = 'img/pictures/jpeg.png';
+  fs.writeFileSync(path.join(gameRoot, broken), image.subarray(0, 40));
+  const failed = await prepareGameAssets(options);
+  assert.equal(failed.images.failedFiles, 1);
+  assert.equal(failed.catalogSaved, true);
+  assert.equal(failed.images.ordinaryFailures[0].source, broken);
+  failed.releaseCacheLease();
+  const failedWarm = await loadCatalog(options);
+  assert.ok(failedWarm?.images.catalogHit);
+  assert.equal(failedWarm.images.failedFiles, 1);
+  failedWarm.releaseCacheLease();
+  fs.writeFileSync(path.join(gameRoot, broken), jpeg);
+  assert.equal(await loadCatalog(options), null, 'repaired images invalidate a recorded decode failure');
+  const retried = await prepareGameAssets(options);
+  assert.equal(retried.images.failedFiles, 0);
+  assert.equal(retried.catalogSaved, true);
+  retried.releaseCacheLease();
+  fs.writeFileSync(path.join(gameRoot, encryptedSource), Buffer.concat([
+    Buffer.from('5250474d560000000003010000000000', 'hex'), encrypted.subarray(0, 40) ]));
+  const encryptedFailure = await prepareGameAssets(options);
+  assert.equal(encryptedFailure.images.failedFiles, 1);
+  assert.equal(encryptedFailure.catalogSaved, true);
+  assert.deepEqual(encryptedFailure.images.ordinaryFailures[0].dependencies.map(item => item.source),
+    [encryptedSource, 'data/System.json']);
+  encryptedFailure.releaseCacheLease();
+  const encryptedWarm = await loadCatalog(options);
+  assert.ok(encryptedWarm?.images.catalogHit);
+  encryptedWarm.releaseCacheLease();
+  const systemFile = path.join(gameRoot, 'data/System.json');
+  const system = JSON.parse(fs.readFileSync(systemFile));
+  fs.writeFileSync(systemFile, JSON.stringify({ ...system, gameTitle: 'changed' }));
+  assert.equal(await loadCatalog(options), null, 'encrypted decode failures depend on encryption settings');
   console.log('native prepared image catalog restored successfully');
 }
 run().catch(error => { console.error(error); process.exitCode = 1; })

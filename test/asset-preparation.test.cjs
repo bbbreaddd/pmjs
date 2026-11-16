@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const test = require('node:test');
-const { prepareAssets, validDescriptor, automaticRecipe } = require('../runner/asset-preparation.cjs');
+const { prepareAssets, validDescriptor, automaticRecipe, pageHeaderMatches } = require('../runner/asset-preparation.cjs');
 const { acquireLock } = require('../runner/preparation-lifetime.cjs');
 const { validate } = require('../runner/index.cjs');
 const { parse } = require('../runner/cli.cjs');
@@ -14,6 +14,17 @@ const { preparationLocks } = require('./helpers/preparation-lock.cjs');
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==', 'base64');
 
+test('lossless page validation rejects short headers before reading their fields', () => {
+  const page = { path: 'page-0.pml4', width: 1, height: 1 };
+  const header = Buffer.alloc(32);
+  header.write('PML4');
+  [1, 1, 1, 4, 1].forEach((value, index) => header.writeUInt32LE(value, 4 + index * 4));
+  assert.equal(pageHeaderMatches(header, page, 33), true);
+  assert.equal(pageHeaderMatches(null, page, 33), false);
+  for (const length of [0, 4, 8, 20, 31]) assert.equal(pageHeaderMatches(header.subarray(0, length), page, 33), false);
+  assert.equal(pageHeaderMatches(PNG.subarray(0, 24), { path: 'page-0.png', width: 1, height: 1 }, PNG.length), true);
+  assert.equal(pageHeaderMatches(PNG.subarray(0, 23), { path: 'page-0.png', width: 1, height: 1 }, PNG.length), false);
+});
 
 function fixture() {
   const root = temporaryDirectory('pmjs-preparation-');
@@ -29,12 +40,28 @@ function fixture() {
     return { version: 1, width: 1, height: 1, pages: [{ path: 'page-0.png', width: 1, height: 1 }],
       cells: [{ rect: [0, 0, 1, 1], crop: [0, 0, 1, 1], fill: [0, 0, 0, 0], page: 0, atlas: [0, 0, 1, 1] }] };
   };
-  const native = { assets: { ...preparationLocks(), processImage, installPrepared(entries) { installs.push(entries); } } };
+  const native = { assets: { ...preparationLocks(), processImage, installPrepared(entries) { installs.push(entries); return { accepted: entries.map(entry => entry.source), rejected: [] }; } } };
   const warnings = [];
   return { root, gameRoot, source, native, pageCodec: 'png', cacheRoot: path.join(root, 'cache'),
     logger: { warn(message) { warnings.push(message); } }, warnings,
     get jobs() { return jobs; }, get installs() { return installs; } };
 }
+test('short PNG recipe headers use ordinary decode fallback without dimension read errors', async () => {
+  for (const length of [8, 16, 23]) {
+    const f = fixture();
+    const source = PNG.subarray(0, length);
+    fs.writeFileSync(path.join(f.gameRoot, f.source), source);
+    let calls = 0;
+    f.native.assets.processImage = async () => { calls++; throw new Error('decoder rejected short PNG'); };
+    const recipes = [{ source: f.source, sourceHash: crypto.createHash('sha256').update(source).digest('hex'), grid: [1, 1] }];
+    const result = await prepareAssets({ ...f, recipes });
+    assert.equal(calls, 1);
+    assert.equal(result.fallback, 1);
+    assert.ok(f.warnings.some(message => message.includes('decoder rejected short PNG')));
+    assert.equal(f.warnings.some(message => /out.of.range|bounds|offset/i.test(message)), false);
+  }
+});
+
 test('missing encryption configuration remains ordinary unencrypted preparation', async () => {
   const f = fixture();
   const result = await prepareAssets(f);
@@ -189,7 +216,47 @@ test('a failed workspace upgrade keeps and installs the prior validated output',
   assert.equal(upgrade.installed, 1);
   assert.equal(upgrade.entries[0].directory, previousDirectory);
   assert.ok(fs.existsSync(path.join(previousDirectory, 'page-0.png')));
+  const { prepareGameAssets } = require('../runner/preparation.cjs');
+  const repeated = await prepareGameAssets({ ...f, workspaceBytes: 128 * 1024 * 1024 });
+  repeated.releaseCacheLease?.();
+  assert.equal(repeated.outcomeCounts['reused-local'], 1);
 });
+
+test('workspace recovery retains packaged source and page storage metadata', async () => {
+  const f = fixture(), processImage = f.native.assets.processImage;
+  f.native.assets.preparationWorkspaceVersion = 1;
+  f.native.assets.processImage = async (...args) => ({ ...await processImage(...args), workspaceConstrained: true });
+  const first = await prepareAssets({ ...f, workspaceBytes: 0 });
+  const storage = { version: 1, width: 1, height: 1, channels: 4, paletteBits: 0,
+    source: [0, 1, 2, 3], swizzle: [0, 1, 2, 3] };
+  const descriptor = { ...first.entries[0].descriptor, workspaceConstrained: false,
+    pages: first.entries[0].descriptor.pages.map(page => ({ ...page, storage })) };
+  const checksum = crypto.createHash('sha256').update(PNG).digest('hex');
+  const portableIndex = { images: [{ source: f.source, sourceHash: checksum, recipe: null,
+    encryptionSettingsSha256: null, descriptor, storage,
+    outputs: [{ path: 'assets/images/' + path.basename(first.entries[0].directory) + '/page-0.png', hash: checksum }] }] };
+  let installedStorage;
+  f.native.assets.installImageStorage = entries => {
+    installedStorage = entries;
+    return { accepted: entries.map(entry => entry.source), rejected: [] };
+  };
+  f.native.assets.processImage = async () => { throw new Error('simulated allocation failure'); };
+  const recovered = await prepareAssets({ ...f, workspaceBytes: 128 * 1024 * 1024, portableIndex });
+  assert.equal(recovered.error, undefined);
+  assert.equal(recovered.installed, 1);
+  assert.equal(recovered.entries[0].directory, first.entries[0].directory);
+  assert.deepEqual(installedStorage[0].storage, storage);
+  assert.deepEqual(recovered.entries[0].descriptor.pages[0].storage, storage);
+});
+
+for (const value of [undefined, 0, {}, { accepted: [], rejected: null }])
+  test('unexpected image installer response fails preparation: ' + JSON.stringify(value), async () => {
+    const f = fixture();
+    f.native.assets.installPrepared = () => value;
+    const result = await prepareAssets(f);
+    assert.match(result.error, /invalid prepared images installation report/);
+    assert.equal(result.installed, 0);
+  });
 
 test('workspace-limited negative decisions are reconsidered when the budget increases', async () => {
   const f = fixture(), processImage = f.native.assets.processImage;
@@ -255,8 +322,8 @@ test('explicit runtime policies override portable defaults and change the effect
 test('default LZ4 replaces PNG preparation, reuses warm pages and permits explicit PNG selection', async () => {
   const f = fixture(), original = f.native.assets.processImage;
   const { pageCodec, ...defaults } = f;
-  f.native.assets.installPreparedCatalog = entries => entries.length;
-  f.native.assets.installDerivedCatalog = () => {};
+  f.native.assets.installPreparedCatalog = entries => ({ accepted: entries.map(entry => entry.source), rejected: [] });
+  f.native.assets.installDerivedCatalog = () => ({ accepted: [], rejected: [] });
   const png = await prepareAssets(f);
   const pngFile = manifests(f)[0];
   const pngKey = readManifest(f, pngFile).key;
@@ -412,6 +479,8 @@ test('full verification detects edits hidden by unchanged metadata', async t => 
 
 test('empty discovery reports install and successful completion without transformation', async () => {
   const f = fixture();
+  let storage = [{ source: f.source }];
+  f.native.assets.installImageStorage = entries => { storage = entries; return { accepted: entries.map(entry => entry.source), rejected: [] }; };
   fs.unlinkSync(path.join(f.gameRoot, f.source));
   const progress = [];
   const result = await prepareAssets({ ...f, onProgress: value => progress.push(value) });
@@ -419,6 +488,7 @@ test('empty discovery reports install and successful completion without transfor
   assert.equal(result.total, 0);
   assert.equal(f.jobs, 0);
   assert.deepEqual(f.installs, [[]]);
+  assert.deepEqual(storage, []);
   assert.ok(progress.some(p => p.phase === 'install'));
 });
 
@@ -718,7 +788,7 @@ test('runner resolves default cache, config-relative recipes and explicit CLI ov
 
 test('partial installation is counted separately from ordinary unprepared assets', async () => {
   const f = fixture();
-  f.native.assets.installPrepared = () => 0;
+  f.native.assets.installPrepared = entries => ({ accepted: [], rejected: entries.map(entry => ({ id: entry.source, reason: 'fixture rejection' })) });
   const partial = await prepareAssets(f);
   assert.equal(partial.prepared, 1);
   assert.equal(partial.installed, 0);
@@ -855,17 +925,49 @@ function encryptedFixture(engine = 'MZ') {
   };
   assets.installDecrypted = entries => {
     aliases = new Map(entries.map(entry => [entry.logicalSource, { ...entry, fileIdentity: id(entry.file) }]));
+    return { accepted: entries.map(entry => entry.source), rejected: [] };
   };
   return { ...f, encrypt, audio, encryptedImage, encryptedAudio, systemFile, get jobs() { return f.jobs; }, get installs() { return f.installs; } };
 }
+
+test('image and audio preparation share their initial encryption settings read', async t => {
+  const f = encryptedFixture();
+  const readFile = fs.promises.readFile;
+  let reads = 0;
+  t.mock.method(fs.promises, 'readFile', async (file, ...args) => {
+    if (file === f.systemFile) reads++;
+    return readFile(file, ...args);
+  });
+  f.native.media = { installAudioViews: entries => ({ accepted: entries.map(entry => entry.source), rejected: [] }) };
+  const prepared = await prepareAssets(f);
+  assert.equal(prepared.error, undefined);
+  assert.equal(reads, 2, 'read once initially and once to detect changes before audio installation');
+});
+
+test('audio view rejection names the source and reason and prevents catalog publication', async () => {
+  const f = encryptedFixture();
+  fs.rmSync(path.join(f.gameRoot, 'img'), { recursive: true });
+  f.native.media = { installAudioViews(entries, detailed) {
+    assert.equal(detailed, true);
+    return { accepted: [], rejected: [{ id: entries[0].source, reason: 'invalid encrypted header' }] };
+  } };
+  const { prepareGameAssets } = require('../runner/preparation.cjs');
+  const result = await prepareGameAssets({ ...f, fastStartup: true });
+  result.releaseCacheLease?.();
+  assert.equal(result.images.audioViews, 0);
+  assert.equal(result.images.installFailures, 1);
+  assert.equal(result.catalogSaved, false);
+  assert.equal(result.outcomeCounts['ordinary-failure'], 1);
+  assert.ok(f.warnings.some(message => message.includes(f.encryptedAudio) && message.includes('invalid encrypted header')));
+});
 
 for (const engine of ['MV', 'MZ']) test(engine + ' audio views prepare without materializing or hashing the audio payload', async () => {
   const f = encryptedFixture(engine);
   fs.rmSync(path.join(f.gameRoot, 'img'), { recursive: true });
   const installed = [];
-  f.native.media = { installAudioViews(entries) { installed.push(entries); return entries.length; } };
-  f.native.assets.installPreparedCatalog = () => 0;
-  f.native.assets.installDerivedCatalog = () => {};
+  f.native.media = { installAudioViews(entries) { installed.push(entries); return { accepted: entries.map(entry => entry.source), rejected: [] }; } };
+  f.native.assets.installPreparedCatalog = () => ({ accepted: [], rejected: [] });
+  f.native.assets.installDerivedCatalog = () => ({ accepted: [], rejected: [] });
   const cold = await prepareAssets(f);
   assert.equal(cold.error, undefined);
   assert.equal(cold.total, 1);
@@ -892,7 +994,7 @@ test('uppercase Audio inventory paths retain encrypted audio view preparation', 
   f.encryptedAudio = f.encryptedAudio.replace(/^audio\//, 'Audio/');
   fs.rmSync(path.join(f.gameRoot, 'img'), { recursive: true });
   const installed = [];
-  f.native.media = { installAudioViews(entries) { installed.push(entries); return entries.length; } };
+  f.native.media = { installAudioViews(entries) { installed.push(entries); return { accepted: entries.map(entry => entry.source), rejected: [] }; } };
   const result = await prepareAssets(f);
   assert.equal(result.audioViews, 1);
   assert.equal(installed.at(-1)[0].source, f.encryptedAudio);
@@ -904,8 +1006,8 @@ for (const engine of ['MV', 'MZ']) test(engine + ' default audio views replace m
   assert.equal(legacy.decrypted, 2);
   const oldAudio = legacy.decryptedEntries.find(entry => entry.source === f.encryptedAudio).file;
   let views = [];
-  f.native.media = { installAudioViews(entries) { views = entries; return entries.length; } };
-  f.native.assets.installPreparedCatalog = entries => entries.length;
+  f.native.media = { installAudioViews(entries) { views = entries; return { accepted: entries.map(entry => entry.source), rejected: [] }; } };
+  f.native.assets.installPreparedCatalog = entries => ({ accepted: entries.map(entry => entry.source), rejected: [] });
   f.native.assets.installDerivedCatalog = entries => f.native.assets.installDecrypted(entries);
   const upgraded = await prepareAssets(f);
   assert.equal(upgraded.error, undefined);
@@ -930,7 +1032,7 @@ test('audio view registrations and counts clear after installation failure or ca
     const f = encryptedFixture();
     fs.rmSync(path.join(f.gameRoot, 'img'), { recursive: true });
     let views = [], cancel = false;
-    f.native.media = { installAudioViews(entries) { views = entries; return entries.length; } };
+    f.native.media = { installAudioViews(entries) { views = entries; return { accepted: entries.map(entry => entry.source), rejected: [] }; } };
     if (fail) f.native.assets.installPrepared = () => { throw new Error('install failed'); };
     const result = await prepareAssets({ ...f, shouldCancel: () => cancel,
       onProgress(progress) { if (!fail && progress.phase === 'cleanup') cancel = true; } });
@@ -945,7 +1047,7 @@ test('audio view preparation retains a mapping when a plaintext original takes p
   const f = encryptedFixture();
   fs.rmSync(path.join(f.gameRoot, 'img'), { recursive: true });
   fs.writeFileSync(path.join(f.gameRoot, 'audio/bgm/theme.ogg'), f.audio);
-  f.native.media = { installAudioViews(entries) { return entries.length; } };
+  f.native.media = { installAudioViews(entries) { return { accepted: entries.map(entry => entry.source), rejected: [] }; } };
   const result = await prepareAssets(f);
   assert.equal(result.audioViews, 1);
   assert.equal(result.decrypted, 0);
@@ -1198,8 +1300,8 @@ function sideviewFixture(f = fixture(), encrypted = false) {
 
 test('sideview metadata changes invalidate saved decisions and disabling the plugin restores standard grids', async () => {
   const f = sideviewFixture();
-  f.native.assets.installPreparedCatalog = entries => entries.length;
-  f.native.assets.installDerivedCatalog = () => {};
+  f.native.assets.installPreparedCatalog = entries => ({ accepted: entries.map(entry => entry.source), rejected: [] });
+  f.native.assets.installDerivedCatalog = () => ({ accepted: [], rejected: [] });
   const cold = await prepareAssets(f);
   assert.deepEqual(f.observed, [[4, 6]]);
   const warm = await prepareAssets(f);
@@ -1470,11 +1572,11 @@ test('ASTC descriptors validate padded block payloads through the cache and func
 test('storage decisions bind to source hashes and survive saved-state reuse', async () => {
   const f = fixture();
   f.native.assets.sourceIdentity = () => 'current-source';
-  f.native.assets.installPrepared = entries => entries.length;
-  f.native.assets.installPreparedCatalog = entries => entries.length;
-  f.native.assets.installDerivedCatalog = () => {};
+  f.native.assets.installPrepared = entries => ({ accepted: entries.map(entry => entry.source), rejected: [] });
+  f.native.assets.installPreparedCatalog = entries => ({ accepted: entries.map(entry => entry.source), rejected: [] });
+  f.native.assets.installDerivedCatalog = () => ({ accepted: [], rejected: [] });
   let installed = [];
-  f.native.assets.installImageStorage = entries => { installed = entries; return entries.length; };
+  f.native.assets.installImageStorage = entries => { installed = entries; return { accepted: entries.map(entry => entry.source), rejected: [] }; };
   const storage = { version: 1, width: 1280, height: 720, channels: 4,
     paletteBits: 8, source: [0, 1, 2, 3], swizzle: [0, 1, 2, 3] };
   const portableIndex = { negativeHints: [f.source], images: [{
@@ -1496,7 +1598,7 @@ test('storage decisions bind to source hashes and survive saved-state reuse', as
   let rejectCatalog = true;
   f.native.assets.installImageStorage = entries => {
     if (entries.length && rejectCatalog) { rejectCatalog = false; return 0; }
-    installed = entries; return entries.length;
+    installed = entries; return { accepted: entries.map(entry => entry.source), rejected: [] };
   };
   const changed = await prepareAssets({ ...f, portableIndex });
   assert.equal(changed.error, undefined);
@@ -1507,7 +1609,7 @@ test('storage decisions bind to source hashes and survive saved-state reuse', as
 for (const engine of ['MV', 'MZ']) test(engine + ' storage decisions bind to the installed plaintext image', async () => {
   const f = encryptedFixture(engine);
   let installed;
-  f.native.assets.installImageStorage = entries => { installed = entries; return entries.length; };
+  f.native.assets.installImageStorage = entries => { installed = entries; return { accepted: entries.map(entry => entry.source), rejected: [] }; };
   const storage = { version: 1, width: 1, height: 1, channels: 4,
     paletteBits: 0, source: [0, 1, 2, 3], swizzle: [0, 1, 2, 3] };
   const portableIndex = { images: [{

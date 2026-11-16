@@ -4,8 +4,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { runModule } = require('./helpers/runtime-context.cjs');
 
-function setup() {
+function setup({ character = false } = {}) {
   let releases = 0;
   function Bitmap(url, ready = false) {
     this._url = url;
@@ -65,8 +66,34 @@ function setup() {
       }
     }
   });
+  function Game_CharacterBase() {
+    this._pattern = 1; this._direction = 2; this._characterIndex = 0;
+  }
+  Game_CharacterBase.prototype.pattern = function() { return this._pattern < 3 ? this._pattern : 1; };
+  Game_CharacterBase.prototype.direction = function() { return this._direction; };
+  Game_CharacterBase.prototype.characterIndex = function() { return this._characterIndex; };
+  function Sprite_Character() {
+    Sprite.call(this);
+    this._character = new Game_CharacterBase();
+    this._tileId = 0; this._bushDepth = 0; this._isBigCharacter = false; this.halfBodyUpdates = 0;
+  }
+  Sprite_Character.prototype = Object.create(Sprite.prototype);
+  Sprite_Character.prototype.patternWidth = function() { return this.bitmap.width / (this._isBigCharacter ? 3 : 12); };
+  Sprite_Character.prototype.patternHeight = function() { return this.bitmap.height / (this._isBigCharacter ? 4 : 8); };
+  Sprite_Character.prototype.characterBlockX = function() { return this._isBigCharacter ? 0 : this._character.characterIndex() % 4 * 3; };
+  Sprite_Character.prototype.characterBlockY = function() { return this._isBigCharacter ? 0 : Math.floor(this._character.characterIndex() / 4) * 4; };
+  Sprite_Character.prototype.characterPatternX = function() { return this._character.pattern(); };
+  Sprite_Character.prototype.characterPatternY = function() { return (this._character.direction() - 2) / 2; };
+  Sprite_Character.prototype.updateHalfBodySprites = function() { this.halfBodyUpdates++; };
+  Sprite_Character.prototype.updateCharacterFrame = function() {
+    const width = this.patternWidth(), height = this.patternHeight();
+    const x = (this.characterBlockX() + this.characterPatternX()) * width;
+    const y = (this.characterBlockY() + this.characterPatternY()) * height;
+    this.updateHalfBodySprites();
+    this.setFrame(x, y, width, height);
+  };
   const observations = [];
-  const context = vm.createContext({ __pmjsBuiltinRequire: require, Bitmap, Sprite, PMJS: { config: {},
+  const context = vm.createContext({ __pmjsBuiltinRequire: require, Bitmap, Sprite, Sprite_Character, Game_CharacterBase, PMJS: { config: {},
     compat: { observed: (...args) => observations.push(args) },
     optimizations: { register() {}, isEnabled() { return false; } } },
     NativeHost: { runtime: { loadScript() {} }, images: {
@@ -77,10 +104,22 @@ function setup() {
     releaseNativeResource() { releases++; },
     Graphics: function() {}, Input: function() {} });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-web/filesystem.js'), 'utf8'), context);
+  const optimizationHooks = { ...context.PMJS.optimizations };
+  context.PMJS.config ||= {};
+  require('./helpers/runtime-context.cjs').runModule(context, 'js/pmjs-core/optimizations.js');
+  Object.assign(context.PMJS.optimizations, optimizationHooks);
+  runModule(context, 'js/pmjs-core/methods.js');
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-mv/bitmap.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-pixi4/bitmap-presentation.js'), 'utf8'), context);
+  if (character) {
+    const matchesSource = context.PMJS.methods.matchesSource;
+    const fixtureMethods = new Set([...Object.values(Sprite_Character.prototype), ...Object.values(Game_CharacterBase.prototype)]);
+    context.PMJS.methods.matchesSource = method => fixtureMethods.has(method);
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-mv/character-presentation.js'), 'utf8'), context);
+    context.PMJS.methods.matchesSource = matchesSource;
+  }
   const old = new Bitmap('sheet.png', true);
-  const sprite = new Sprite();
+  const sprite = character ? new Sprite_Character() : new Sprite();
   sprite.bitmap = old;
   sprite.setFrame(0, 0, 48, 96);
   return { Bitmap, sprite, old, context, presentation: context.PMJS.pixi4.bitmapPresentation,
@@ -106,6 +145,41 @@ test('same-sheet reload keeps pixels visible and swaps with the live animation f
     sprite.texture.frame.width, sprite.texture.frame.height], [192, 96, 48, 96]);
   assert.equal(presentation.get(sprite), null);
   assert.equal(releases(), 1);
+});
+
+test('character reload animates retained pixels without changing guest readiness or frame', () => {
+  const { Bitmap, sprite, presentation, releases } = setup({ character: true });
+  sprite.bitmap = new Bitmap('sheet.png');
+  sprite._character._pattern = 2;
+  sprite._character._direction = 6;
+  sprite.updateCharacterFrame();
+  assert.equal(sprite.halfBodyUpdates, 1);
+  assert.equal(sprite.bitmap.isReady(), false);
+  assert.deepEqual([sprite._frame.x, sprite._frame.y, sprite._frame.width, sprite._frame.height], [0, 0, 0, 0]);
+  assert.deepEqual(JSON.parse(JSON.stringify(presentation.get(sprite).texture.frame)),
+    { x: 96, y: 192, width: 48, height: 96 });
+  sprite.setFrame(0, 0, 0, 0);
+  assert.equal(presentation.get(sprite).texture.frame.width, 0, 'an authored empty frame hides retained pixels');
+  sprite.updateCharacterFrame();
+  sprite.bitmap.finish();
+  sprite.updateCharacterFrame();
+  assert.equal(sprite.halfBodyUpdates, 3);
+  assert.deepEqual([sprite._frame.x, sprite._frame.y, sprite._frame.width, sprite._frame.height], [96, 192, 48, 96]);
+  assert.equal(presentation.get(sprite), null);
+  assert.equal(releases(), 1);
+});
+
+test('character presentation leaves custom geometry and first loads to the original update', () => {
+  for (const mode of ['custom', 'first']) {
+    const { Bitmap, sprite, presentation } = setup({ character: true });
+    if (mode === 'first') sprite.bitmap = null;
+    sprite.bitmap = new Bitmap('sheet.png');
+    if (mode === 'custom') sprite.characterPatternX = () => 7;
+    sprite.updateCharacterFrame();
+    assert.equal(sprite.halfBodyUpdates, 1);
+    assert.equal(presentation.get(sprite)?.texture.frame.width || 0, 0);
+    assert.equal(sprite.bitmap.isReady(), false);
+  }
 });
 
 test('superseding assignments and clears prevent stale reloads from taking over', () => {

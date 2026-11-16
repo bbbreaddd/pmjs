@@ -1,7 +1,7 @@
-#include "asset_processor.hpp"
-#include "platform.hpp"
-#include "renderer.hpp"
-#include "resources.hpp"
+#include "assets/asset_processor.hpp"
+#include "platform/platform.hpp"
+#include "graphics/renderer.hpp"
+#include "graphics/resources.hpp"
 
 #include <GLES3/gl3.h>
 #include <dlfcn.h>

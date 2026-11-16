@@ -1,5 +1,7 @@
 'use strict';
 
+const { runOptimizationAdapter } = require('../../helpers/runtime-context.cjs');
+
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const test = require('node:test');
@@ -97,7 +99,7 @@ function harness({ enabled = true, guestCache = false, emitter = true } = {}) {
     PMJS: { plugins: { registerOptimization(name, definition) { assert.equal(name, 'GTP_OmoriFixes'); assert.equal(definition.id, 'port.omori.menu-background-cache'); } },
       optimizations: { isEnabled: () => enabled }, phases: { on(name, id, callback) { phases.set(name, callback); } },
       pixi4: { renderStageToCanvas() { events.push('canvas capture'); return 'canvas'; } } } };
-  vm.runInNewContext(fs.readFileSync(require.resolve('../../../patches/omori/menu-background.js'), 'utf8'), context);
+  runOptimizationAdapter(fs.readFileSync(require.resolve('../../../patches/omori/menu-background.js'), 'utf8'), context);
   phases.get('afterGuestPlugins')();
   return { ...context, renderer, source, bitmap, events };
 }

@@ -1,6 +1,6 @@
-#include "platform.hpp"
-#include "renderer.hpp"
-#include "resources.hpp"
+#include "platform/platform.hpp"
+#include "graphics/renderer.hpp"
+#include "graphics/resources.hpp"
 
 #include <GLES3/gl3.h>
 #include <dlfcn.h>
@@ -18,6 +18,8 @@ bool failFramebuffer = false;
 int failFramebufferStatusOn = 0;
 bool failTextureAllocation = false;
 bool failFramebufferAllocation = false;
+int failStorageAllocations = 0;
+bool storageOutOfMemory = false;
 int failShaderCompilationOn = 0;
 bool recordAllocations = false;
 std::vector<GLuint> textures, framebuffers, renderbuffers;
@@ -33,6 +35,27 @@ GLenum glCheckFramebufferStatus(GLenum target) {
   static const auto real = reinterpret_cast<GLenum (*)(GLenum)>(dlsym(RTLD_NEXT, "glCheckFramebufferStatus"));
   assert(real);
   return real(target);
+}
+void glTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei width,
+                  GLsizei height, GLint border, GLenum format, GLenum type, const void* pixels) {
+  if (failStorageAllocations > 0) {
+    --failStorageAllocations;
+    storageOutOfMemory = true;
+    return;
+  }
+  static const auto real = reinterpret_cast<void (*)(GLenum, GLint, GLint, GLsizei,
+    GLsizei, GLint, GLenum, GLenum, const void*)>(dlsym(RTLD_NEXT, "glTexImage2D"));
+  assert(real);
+  real(target, level, internalFormat, width, height, border, format, type, pixels);
+}
+GLenum glGetError() {
+  if (storageOutOfMemory) {
+    storageOutOfMemory = false;
+    return GL_OUT_OF_MEMORY;
+  }
+  static const auto real = reinterpret_cast<GLenum (*)()>(dlsym(RTLD_NEXT, "glGetError"));
+  assert(real);
+  return real();
 }
 void glGetShaderiv(GLuint shader, GLenum pname, GLint* params) {
   static const auto real = reinterpret_cast<void (*)(GLuint, GLenum, GLint*)>(dlsym(RTLD_NEXT, "glGetShaderiv"));
@@ -157,13 +180,13 @@ int main() {
     const auto largePixels = render(large.second);
     const auto smallPixels = render(small.second);
     const auto beforeFailure = renderer.stats();
-    for (auto* failure : {&failFramebuffer, &failTextureAllocation, &failFramebufferAllocation}) {
-      *failure = true;
+    {
+      failFramebuffer = true;
       bool failed = false;
       try { render(other.second); }
       catch (const std::runtime_error&) { failed = true; }
       catch (const std::bad_alloc&) { failed = true; }
-      assert(failed && !*failure);
+      assert(failed && !failFramebuffer);
       assert(renderer.stats().rendererTargetBytes == beforeFailure.rendererTargetBytes);
       assert(renderer.stats().rendererTargetCacheBytes == beforeFailure.rendererTargetCacheBytes);
       assert(glGetError() == GL_NO_ERROR);
@@ -179,6 +202,58 @@ int main() {
     assert(renderer.stats().rendererTargetCacheBytes <= 32U * 1024U * 1024U);
     assert(renderer.stats().rendererTargetCacheEvictions > 0);
     assert(glGetError() == GL_NO_ERROR);
+    const auto clippedPixels = [&](int width, int height) {
+      std::vector<std::uint8_t> expected(pixels.size(), 0);
+      for (std::size_t index = 3; index < expected.size(); index += 4) expected[index] = 255;
+      for (int y = 0; y < height; ++y)
+        std::fill_n(expected.begin() + y * 32 * 4, width * 4, 255);
+      return expected;
+    };
+    int side = 2;
+    for (auto* failure : {&failTextureAllocation, &failFramebufferAllocation}) {
+      render(large.second);
+      render(small.second);
+      const auto before = renderer.stats();
+      const int width = side++;
+      const auto recovery = plan(width, 1);
+      *failure = true;
+      assert(render(recovery.second) == clippedPixels(width, 1));
+      assert(!*failure);
+      assert(renderer.stats().rendererTargetCacheEvictions > before.rendererTargetCacheEvictions);
+      assert(render(large.second) == largePixels);
+      assert(render(small.second) == smallPixels);
+      assert(glGetError() == GL_NO_ERROR);
+    }
+    for (const int failures : {1, 2}) {
+      render(large.second);
+      render(small.second);
+      const int width = side++;
+      const auto recovery = plan(width, 2);
+      const auto before = renderer.stats();
+      assert(before.rendererTargetCacheBytes > 0);
+      failStorageAllocations = failures;
+      bool failed = false;
+      try { assert(render(recovery.second) == clippedPixels(width, 2)); }
+      catch (const std::bad_alloc&) { failed = true; }
+      assert(failed == (failures == 2) && failStorageAllocations == 0);
+      assert(renderer.stats().rendererTargetCacheEvictions > before.rendererTargetCacheEvictions);
+      if (failed) {
+        assert(renderer.stats().rendererTargetCacheBytes == 0);
+        assert(renderer.stats().rendererTargetBytes ==
+          before.rendererTargetBytes - before.rendererTargetCacheBytes);
+        const auto noCache = plan(7, 3);
+        failStorageAllocations = 1;
+        failed = false;
+        try { render(noCache.second); }
+        catch (const std::bad_alloc&) { failed = true; }
+        assert(failed && failStorageAllocations == 0);
+        assert(renderer.stats().rendererTargetBytes ==
+          before.rendererTargetBytes - before.rendererTargetCacheBytes);
+      }
+      assert(render(small.second) == smallPixels);
+      assert(render(large.second) == largePixels);
+      assert(glGetError() == GL_NO_ERROR);
+    }
   }
   recordAllocations = false;
   assert(!textures.empty() && !framebuffers.empty());

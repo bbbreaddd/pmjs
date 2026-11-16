@@ -33,7 +33,12 @@ function fixture({ rounded = false, batch = true, unknown = false, native = fals
       calls.batches.push(Array.from(rectangles)); return batch;
     } } }
   } };
-  vm.runInNewContext(source, realm); phases.forEach(f => f());
+  vm.createContext(realm);
+  const optimizationHooks = { ...realm.PMJS.optimizations };
+  realm.PMJS.config ||= {};
+  require('./helpers/runtime-context.cjs').runModule(realm, 'js/pmjs-core/optimizations.js');
+  Object.assign(realm.PMJS.optimizations, optimizationHooks);
+  vm.runInContext(source, realm); phases.forEach(f => f());
   const window = new Window();
   Object.assign(window, { _width: 99.8, _height: 80.7, _windowskin: { width:192, height:96, _canvas:{} },
     _windowFrameSprite: { setFrame(...args) { calls.frame=args; } } });

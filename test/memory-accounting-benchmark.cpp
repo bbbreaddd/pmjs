@@ -1,5 +1,5 @@
-#include "canvas.hpp"
-#include "platform.hpp"
+#include "canvas/canvas.hpp"
+#include "platform/platform.hpp"
 
 #include <array>
 #include <chrono>

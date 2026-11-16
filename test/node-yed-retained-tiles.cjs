@@ -2,13 +2,13 @@
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
+const { temporaryDirectory } = require('./helpers/temp.cjs');
 const path = require('node:path');
 const vm = require('node:vm');
 const crypto = require('node:crypto');
 const { performance } = require('node:perf_hooks');
 const native = require(path.resolve(process.argv[2]));
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-retained-tiles-'));
+const root = temporaryDirectory('pmjs-retained-tiles-');
 native.initialize({ gameRoot: root, width: 32, height: 32, windowTitle: 'retained tiles' });
 const atlas = native.canvas.create(64, 16);
 const pixels = new Uint8Array(64 * 16 * 4);
@@ -39,6 +39,8 @@ const rect = { pointsBuf: [], textures: [{ baseTexture: { source: { _nativeImage
   addRect(texture, sx, sy, dx, dy, width, height) {
     this.pointsBuf.push(sx, sy, dx, dy, width, height, 0, 0, texture);
   } };
+context.PMJS.pixi4.tilePointRevision = (target, points) =>
+  target === rect && points === rect.pointsBuf ? rect._pmjsNativeGeneration || 0 : -1;
 const layer = { layerId: 0, children: [rect], position: {}, clear() {
   rect.pointsBuf.length = 0; rect._pmjsNativeGeneration = (rect._pmjsNativeGeneration || 0) + 1;
 } };

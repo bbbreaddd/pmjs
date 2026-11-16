@@ -410,11 +410,16 @@ function tileAnimationOffset(layer) {
 }
 
 function nativeTilePointsUnchanged(layer, points) {
+  var revision = PMJS.pixi4.tilePointRevision ? PMJS.pixi4.tilePointRevision(layer, points) : -1;
+  if (revision >= 0 && layer._pmjsNativeTrackedPoints === points &&
+      layer._pmjsNativePointRevision === revision) return true;
   var snapshot = layer._pmjsNativePointSnapshot;
   if (!snapshot || snapshot.length !== points.length) return false;
   for (var index = 0; index < points.length; index++) {
     if (snapshot[index] !== points[index]) return false;
   }
+  layer._pmjsNativeTrackedPoints = revision >= 0 ? points : null;
+  layer._pmjsNativePointRevision = revision;
   return true;
 }
 
@@ -470,6 +475,8 @@ function ensureNativeRectTileLayer(layer) {
       var nativeLayer = NativeHost.render.createTileLayer(transferredPoints, handles);
       pmjsAdoptNativeGeometry(layer, 'tile', nativeLayer);
       layer._pmjsNativePointSnapshot = usePersistentCache ? points.slice() : null;
+      layer._pmjsNativeTrackedPoints = points;
+      layer._pmjsNativePointRevision = PMJS.pixi4.tilePointRevision ? PMJS.pixi4.tilePointRevision(layer, points) : -1;
       layer._pmjsNativeCompiledGeneration = generation;
       layer._pmjsNativeTextureSignature = textureSignature;
     }

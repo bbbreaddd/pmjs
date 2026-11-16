@@ -1,4 +1,6 @@
 'use strict';
+
+const { runOptimizationAdapter } = require('../../helpers/runtime-context.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
@@ -21,7 +23,7 @@ function fixture(verified = true) {
       }
     }
   };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../../../patches/isat/battle-sprite-dispatch.js'), 'utf8'),
+  runOptimizationAdapter(fs.readFileSync(path.join(__dirname, '../../../patches/isat/battle-sprite-dispatch.js'), 'utf8'),
     { PMJS, Scene_Battle, $gameTroop: troop });
   phases.forEach(fn => fn());
   return { PMJS, Scene_Battle, options, troop };

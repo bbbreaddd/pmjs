@@ -10,6 +10,11 @@ const installedLeases = new WeakMap();
 const maximumStateBytes = 48 * 1024 * 1024;
 const checksumText = value => crypto.createHash('sha256').update(value).digest('hex');
 const checksum = value => checksumText(JSON.stringify(value));
+function installationReport(value, operation) {
+  if (!value || !Array.isArray(value.accepted) || !Array.isArray(value.rejected))
+    throw new Error('invalid ' + operation + ' installation report');
+  return value;
+}
 const inside = (root, name) => {
   const relative = path.relative(root, path.resolve(name));
   if (!relative || relative.startsWith('..' + path.sep) || relative === '..' || path.isAbsolute(relative))
@@ -93,7 +98,7 @@ async function reclaimLegacyOutputs(cacheRoot, assets, logger) {
   }
 }
 
-async function openPreparation({ gameRoot, cacheRoot, native, verifyHashes = false,
+async function openPreparation({ gameRoot, cacheRoot, native, verifyHashes = false, images = true,
   shouldCancel = () => false, onProgress = () => {}, logger = console, offline = false, sourceRoots = [] }) {
   gameRoot = await fsp.realpath(gameRoot);
   sourceRoots = [gameRoot, ...await Promise.all(sourceRoots.map(root => fsp.realpath(root).catch(() => null)))].filter(Boolean);
@@ -248,12 +253,16 @@ async function openPreparation({ gameRoot, cacheRoot, native, verifyHashes = fal
         for (const [file, receipt] of Object.entries(session.files.receipts)) {
           if (data.files[file] !== receipt) { data.files[file] = receipt; stateDirty = true; }
         }
-        // Partial sessions do not visit every phase's files. Prune receipts only
-        // after both image and map preparation complete.
-        if (session.phaseStates.get('images') === 'completed' && session.phaseStates.get('maps') === 'completed')
-          for (const file of Object.keys(data.files)) if (!session.files.receipts[file]) {
+        for (const file of Object.keys(data.files)) if (!session.files.receipts[file]) {
+          const relative = path.relative(root, file).split(path.sep).join('/');
+          const owner = relative.startsWith('entries/') ? 'images' : relative.startsWith('maps/') ? 'maps' :
+            relative.startsWith('port/') ? 'port' : null;
+          const complete = owner ? session.phaseStates.get(owner) === 'completed' :
+            session.phaseStates.get('images') === 'completed' && session.phaseStates.get('maps') === 'completed';
+          if (complete) {
             delete data.files[file]; stateDirty = true;
           }
+        }
         const committed = await session.checkpoint();
         if (!offline) {
           const previousLease = installedLeases.get(native.assets);
@@ -263,6 +272,10 @@ async function openPreparation({ gameRoot, cacheRoot, native, verifyHashes = fal
         }
         if (!committed) return;
         try {
+          if (session.packedFiles === null && session.phaseStates.get('images') === 'completed')
+            await fsp.rename(path.join(root, 'packed-images.json'), path.join(root, 'packed-images.invalid.json'));
+          else if (session.phaseStates.get('images') === 'completed')
+            await require('./packed-cache.cjs').repairPackedCache(root, session.packedFiles);
           await retainLeases(root, retained);
           async function prune(directory, nested = false) {
             for (const entry of await fsp.readdir(directory, { withFileTypes: true }).catch(error => {
@@ -286,6 +299,8 @@ async function openPreparation({ gameRoot, cacheRoot, native, verifyHashes = fal
         finally { releaseLock(); }
       }
     };
+    if (images === false) native.assets.installPackedFiles?.([]);
+    session.packedFiles = images === false ? new Map() : await require('./packed-cache.cjs').loadPackedCache(root, native, logger);
     session.files = await preparationFiles(session, verifyHashes);
     const started = performance.now();
     session.inventory = await inventory(path.resolve(gameRoot), native, path.dirname(root));
@@ -391,4 +406,12 @@ async function applyPendingInvalidations({ root, native, logger = console }) {
   } catch (error) { logger.warn('[pmjs] cannot apply preparation invalidations: ' + error.message); }
 }
 
-module.exports = { openPreparation, inventory, invalidateResults, invalidateCatalog };
+function createInvalidators(root, native, logger) {
+  return {
+    invalidate: source => invalidateResults({ root, native,
+      sources: Array.isArray(source) ? source : [source], logger }),
+    invalidateCatalog: () => invalidateCatalog({ root, native }),
+  };
+}
+
+module.exports = { openPreparation, inventory, invalidateResults, invalidateCatalog, createInvalidators, installationReport };
