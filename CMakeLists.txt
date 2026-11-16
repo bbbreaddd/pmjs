@@ -551,6 +551,7 @@ if(BUILD_TESTING)
     node-uniform-inline-matrix
     node-filter-coordinates
     node-filter-input
+    node-filter-target-pool
     node-bitmap-region-batching
     node-bitmap-region-flash
     node-mv-bitmap-filtering

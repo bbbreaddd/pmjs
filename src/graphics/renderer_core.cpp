@@ -302,23 +302,6 @@ bool Renderer::ensureFilterTarget(RenderTarget& target, int width, int height) {
   glGetIntegerv(GL_TEXTURE_BINDING_2D, &savedTexture);
   glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &savedRead);
   glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &savedDraw);
-  RenderTarget replacement;
-  if (reused) {
-    replacement = cached->target;
-    stats_.rendererTargetCacheBytes -= targetStorageBytes(replacement);
-    *cached = {};
-    if (diagnostics_) ++stats_.rendererTargetCacheHits;
-  } else {
-    ensureTarget(replacement, width, height);
-  }
-  std::swap(target, replacement);
-  if (replacement.texture && static_cast<GLuint>(savedTexture) == replacement.texture)
-    savedTexture = static_cast<GLint>(target.texture);
-  if (replacement.framebuffer && static_cast<GLuint>(savedRead) == replacement.framebuffer)
-    savedRead = static_cast<GLint>(target.framebuffer);
-  if (replacement.framebuffer && static_cast<GLuint>(savedDraw) == replacement.framebuffer)
-    savedDraw = static_cast<GLint>(target.framebuffer);
-
   const auto evict = [&](CachedFilterTarget& entry) {
     if (static_cast<GLuint>(savedTexture) == entry.target.texture) savedTexture = 0;
     if (static_cast<GLuint>(savedRead) == entry.target.framebuffer) savedRead = 0;
@@ -328,6 +311,32 @@ bool Renderer::ensureFilterTarget(RenderTarget& target, int width, int height) {
     entry.lastUse = 0;
     if (diagnostics_) ++stats_.rendererTargetCacheEvictions;
   };
+  RenderTarget replacement;
+  if (reused) {
+    replacement = cached->target;
+    stats_.rendererTargetCacheBytes -= targetStorageBytes(replacement);
+    *cached = {};
+    if (diagnostics_) ++stats_.rendererTargetCacheHits;
+  } else {
+    try {
+      ensureTarget(replacement, width, height);
+    } catch (const std::bad_alloc&) {
+      if (!stats_.rendererTargetCacheBytes) throw;
+      for (auto& entry : filterTargetCache_) {
+        if (entry.target.texture) evict(entry);
+      }
+      glFinish();
+      ensureTarget(replacement, width, height);
+    }
+  }
+  std::swap(target, replacement);
+  if (replacement.texture && static_cast<GLuint>(savedTexture) == replacement.texture)
+    savedTexture = static_cast<GLint>(target.texture);
+  if (replacement.framebuffer && static_cast<GLuint>(savedRead) == replacement.framebuffer)
+    savedRead = static_cast<GLint>(target.framebuffer);
+  if (replacement.framebuffer && static_cast<GLuint>(savedDraw) == replacement.framebuffer)
+    savedDraw = static_cast<GLint>(target.framebuffer);
+
   const auto bytes = targetStorageBytes(replacement);
   if (replacement.texture && !replacement.depth && bytes <= filterTargetCacheBudget) {
     while (stats_.rendererTargetCacheBytes + bytes > filterTargetCacheBudget) {

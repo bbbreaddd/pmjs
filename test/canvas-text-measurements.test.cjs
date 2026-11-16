@@ -7,9 +7,10 @@ const { runModule } = require('./helpers/runtime-context.cjs');
 const id = 'web.text-measurement-cache';
 
 function fixture(native, enabled = true, engine = 'mv', beforeActivation) {
-  let calls = 0;
+  let calls = 0, widthCalls = 0;
   native = native || { runtime: { env: () => '' }, canvas: {
     create: (width, height) => ({ handle: 1, width, height }), release() {},
+    measureText(_paths, text, size) { widthCalls++; return size + text.length; },
     measureTextMetrics(_paths, text, size) { calls++; return { width: size + text.length }; }
   } };
   const realm = createHostContext(native, { graphics: false });
@@ -29,6 +30,7 @@ function fixture(native, enabled = true, engine = 'mv', beforeActivation) {
   canvas.width = 256; canvas.height = 64;
   const context = canvas.getContext('2d'); context.font = '24px GameFont';
   return { realm, canvas, context, calls: () => calls,
+    widthCalls: () => widthCalls,
     stats: () => realm.PMJS.web.canvas.textMeasurements.diagnostics() };
 }
 
@@ -137,12 +139,65 @@ test('cached and ordinary native metrics and pixels match across fonts and basel
         context.font = font; context.textAlign = align; context.textBaseline = baseline;
         const metrics = context.measureText('AVATAR office'), repeat = context.measureText('AVATAR office');
         assert.deepEqual(repeat, metrics);
-        context.clearRect(0, 0, 256, 64); context.fillStyle = '#627fbd'; context.fillText('AVATAR office', 128, 30);
+        context.clearRect(0, 0, 256, 64); context.fillStyle = '#627fbd';
+        context.strokeStyle = '#1a2b3c'; context.lineWidth = 2;
+        context.strokeText('AVATAR office', 128, 30, 40);
+        context.fillText('AVATAR office', 128, 30, 40);
         return { metrics: JSON.stringify(metrics), pixels: native.canvas.readPremultipliedPixels(h.canvas._ensureNativeCanvas().handle, 0, 0, 256, 64) };
       });
       assert.deepEqual(frames[1], frames[0], JSON.stringify({ font, align, baseline })); comparisons++;
     }
   assert.equal(comparisons, 27); assert.ok(realms[1].stats().hits > 0);
+  assert.ok(realms[1].stats().widthHits > 0);
   realms.forEach(h => h.canvas._releaseNativeCanvas());
   assert.equal(native.canvas.memory().liveCount, 0);
+});
+
+
+test('width cache preserves font changes, bounded storage and native replacements', () => {
+  const h = fixture();
+  const width = (text, font = '24px GameFont') => h.realm.PMJS.web.canvas.measureTextWidth(text, font);
+  assert.equal(width('AV'), 26); assert.equal(width('AV'), 26);
+  assert.equal(h.widthCalls(), 1); assert.equal(h.stats().widthHits, 1);
+  assert.equal(width('AV', '25px GameFont'), 27);
+  h.realm.PMJS.fonts.registerFace('GameFont', 'other.ttf'); width('AV');
+  assert.equal(h.widthCalls(), 3);
+  width('x'.repeat(257)); width('x'.repeat(257));
+  assert.equal(h.widthCalls(), 5);
+  for (let i = 0; i < 513; i++) width(String(i));
+  assert.equal(h.stats().widthEntries, 512);
+  width('AV'); assert.equal(h.widthCalls(), 519);
+  let replacements = 0;
+  h.realm.NativeHost.canvas.measureText = () => { replacements++; return 0; };
+  assert.equal(width('AV'), 0); assert.equal(width('AV'), 0);
+  assert.equal(replacements, 2);
+  const disabled = fixture(undefined, false);
+  disabled.realm.PMJS.web.canvas.measureTextWidth('AV', '24px GameFont');
+  disabled.realm.PMJS.web.canvas.measureTextWidth('AV', '24px GameFont');
+  assert.equal(disabled.widthCalls(), 2);
+});
+
+test('width cache keeps zero results and retries non-finite results', () => {
+  let calls = 0;
+  const native = { runtime: { env: () => '' }, canvas: {
+    create: (width, height) => ({ handle: 1, width, height }), release() {},
+    measureText(_paths, text) { calls++; return text === 'invalid' ? NaN : 0; },
+    measureTextMetrics() { return { width: 0 }; }
+  } };
+  const h = fixture(native);
+  const width = text => h.realm.PMJS.web.canvas.measureTextWidth(text, '24px GameFont');
+  assert.equal(width(''), 0); assert.equal(width(''), 0); assert.equal(calls, 1);
+  assert.ok(Number.isNaN(width('invalid'))); assert.ok(Number.isNaN(width('invalid')));
+  assert.equal(calls, 3);
+});
+
+test('installation preserves custom width helpers and native width methods', () => {
+  for (const target of ['guest', 'native']) {
+    const h = fixture(undefined, true, 'mv', realm => {
+      if (target === 'guest') realm.measureCanvasTextWidth = () => 777;
+      else realm.NativeHost.canvas.measureText = () => 777;
+    });
+    assert.equal(h.realm.PMJS.web.canvas.measureTextWidth('AV', '24px GameFont'), 777);
+    assert.equal(h.realm.PMJS.web.canvas.textMeasurements, undefined);
+  }
 });
