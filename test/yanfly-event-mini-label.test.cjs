@@ -258,3 +258,13 @@ test('page lookup failures and non-Error exceptions preserve guest construction 
   assert.match(context.warnings[0], /event page lookup failed \(event lookup failed\)/);
   assert.match(context.warnings[1], /event page classification failed/);
 });
+
+test('classifying blank labels leaves the guest sprite layout unchanged', () => {
+  const context = makeHost();
+  const { sprite } = eventSprite(context, { id:'plain' });
+  const keys = Reflect.ownKeys(sprite);
+  sprite.setupMiniLabel();
+  sprite.setupMiniLabel();
+  assert.deepEqual(Reflect.ownKeys(sprite), keys);
+  assert.equal(context.calls.constructed, 0);
+});

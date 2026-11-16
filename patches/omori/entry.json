@@ -5,6 +5,7 @@
     "timing.js",
     "search-limit.js",
     "tile-point-revisions.js",
-    "autorun-index.js"
+    "autorun-index.js",
+    "event-mini-label.js"
   ]
 }

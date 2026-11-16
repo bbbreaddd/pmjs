@@ -36,17 +36,17 @@
     return false;
   }
 
-  function classify(character) {
+  function classify(character, owner, detect) {
     try {
-      return defaultPageHasMiniLabel(character);
+      return detect(character);
     } catch (error) {
-      PMJS.optimizations.reportFallback('plugins.yanfly.event-mini-label',
+      PMJS.optimizations.reportFallback(owner,
         'event page classification failed', error);
       return null;
     }
   }
 
-  function pageKey(character) {
+  function pageKey(character, owner) {
     try {
       if (!character || typeof character.event !== 'function' ||
           typeof character.page !== 'function') return undefined;
@@ -54,11 +54,35 @@
       if (!event || !Array.isArray(event.pages)) return undefined;
       return event.pages[character._pageIndex];
     } catch (error) {
-      PMJS.optimizations.reportFallback('plugins.yanfly.event-mini-label',
+      PMJS.optimizations.reportFallback(owner,
         'event page lookup failed', error);
       return undefined;
     }
   }
+
+  function guardSetup(original, owner, detect, keyFor) {
+    detect = detect || defaultPageHasMiniLabel;
+    var states = new WeakMap();
+    return function() {
+      if (!this._miniLabel) {
+        var key = keyFor ? keyFor.call(this, this._character) : pageKey(this._character, owner);
+        if (key !== undefined) {
+          var state = states.get(this);
+          if (!state || state.key !== key) {
+            var tagged = classify(this._character, owner, detect);
+            if (tagged === null) return original.apply(this, arguments);
+            state = { key: key, tagged: tagged };
+            states.set(this, state);
+          }
+          if (state.tagged === false) return;
+        }
+      }
+      return original.apply(this, arguments);
+    };
+  }
+
+  PMJS.rpgmaker = PMJS.rpgmaker || {};
+  PMJS.rpgmaker.eventMiniLabel = { guardSetup: guardSetup };
 
   function install() {
     if (!PMJS.optimizations.isEnabled('plugins.yanfly.event-mini-label')) return false;
@@ -79,21 +103,7 @@
 
     var original = spriteProto.setupMiniLabel;
 
-    spriteProto.setupMiniLabel = function() {
-      if (!this._miniLabel) {
-        var key = pageKey(this._character);
-        if (key !== undefined) {
-          var state = this._pmjsMiniLabelState;
-          if (!state || state.key !== key) {
-            var tagged = classify(this._character);
-            if (tagged === null) return original.apply(this, arguments);
-            state = this._pmjsMiniLabelState = { key: key, tagged: tagged };
-          }
-          if (state.tagged === false) return;
-        }
-      }
-      return original.apply(this, arguments);
-    };
+    spriteProto.setupMiniLabel = guardSetup(original, 'plugins.yanfly.event-mini-label');
 
     spriteProto.setupMiniLabel._pmjsMiniLabelCacheGuard = true;
     spriteProto.__pmjsMiniLabelCache = true;
