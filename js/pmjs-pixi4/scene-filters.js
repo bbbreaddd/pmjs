@@ -333,6 +333,25 @@ function nativeWindowLayerHasContent(node) {
   return false;
 }
 
+// Parameter-only shortcuts apply to native translations, not authored programs.
+function nativeFilterIsIdentity(filter) {
+  var BlurFilter = PIXI.filters && PIXI.filters.BlurFilter;
+  if (nativeFilterMatches(filter, BlurFilter, 'BlurFilter')) {
+    var blurX = filter.blurX !== undefined ? filter.blurX : filter.blur;
+    var blurY = filter.blurY !== undefined ? filter.blurY : filter.blur;
+    return Number(blurX) === 0 && Number(blurY) === 0;
+  }
+  var ZoomBlurFilter = PIXI.filters && PIXI.filters.ZoomBlurFilter;
+  if (ZoomBlurFilter && filter instanceof ZoomBlurFilter) {
+    return Number(filter.strength) === 0;
+  }
+  var AdvancedBloomFilter = PIXI.filters && PIXI.filters.AdvancedBloomFilter;
+  if (AdvancedBloomFilter && filter instanceof AdvancedBloomFilter) {
+    return Number(filter.bloomScale) === 0 && Number(filter.brightness) === 1;
+  }
+  return false;
+}
+
 function nativeSceneFilter(node, activeFilters) {
   if (!activeFilters.length) {
     return { blur: 0, groups: [], unsupported: false };
@@ -368,7 +387,9 @@ function nativeSceneFilter(node, activeFilters) {
         return filter && filter.enabled !== false && filter.fragmentSrc &&
           (node.filterArea || nativeFilterNeedsAuthoredProgram(filter));
       })) {
-    var actualFilters = activeFilters.filter(function(filter) { return filter && filter.enabled !== false; });
+    var actualFilters = activeFilters.filter(function(filter) {
+      return filter && filter.enabled !== false;
+    });
     if (actualFilters.length) {
       try {
         var actualGroup = nativeRecordCustomFilter(actualFilters[0], node, actualFilters);
@@ -412,6 +433,7 @@ function nativeSceneFilter(node, activeFilters) {
     if (!filter || filter.enabled === false) return false;
     if (typeof WindowLayer === 'function' && node instanceof WindowLayer &&
         filter === WindowLayer.voidFilter) return true;
+    if (nativeFilterIsIdentity(filter)) return false;
     if (AlphaFilter && filter instanceof AlphaFilter) {
       var filterAlpha = filter.alpha === undefined && filter.uniforms ?
         filter.uniforms.uAlpha : filter.alpha;
