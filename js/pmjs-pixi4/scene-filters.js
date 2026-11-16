@@ -333,10 +333,7 @@ function nativeWindowLayerHasContent(node) {
   return false;
 }
 
-// Effect plugins often leave filters on their container at strength 0 so a
-// later animation can ramp them up. The custom-filter path would still run
-// every pass each frame (a zero-strength BlurFilter is two directions times its
-// quality, e.g. eight passes at quality 4), so leave identity filters out.
+// Parameter-only shortcuts apply to native translations, not authored programs.
 function nativeFilterIsIdentity(filter) {
   var BlurFilter = PIXI.filters && PIXI.filters.BlurFilter;
   if (nativeFilterMatches(filter, BlurFilter, 'BlurFilter')) {
@@ -391,7 +388,7 @@ function nativeSceneFilter(node, activeFilters) {
           (node.filterArea || nativeFilterNeedsAuthoredProgram(filter));
       })) {
     var actualFilters = activeFilters.filter(function(filter) {
-      return filter && filter.enabled !== false && !nativeFilterIsIdentity(filter);
+      return filter && filter.enabled !== false;
     });
     if (actualFilters.length) {
       try {
