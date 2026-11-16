@@ -9,6 +9,7 @@ if(PMJS_LINUX_ARM64_BUILD)
 endif()
 
 install(TARGETS pmjs_native LIBRARY DESTINATION lib COMPONENT native-addon)
+install(FILES js/pmjs-web/fallback-font.LICENSE DESTINATION lib COMPONENT native-addon)
 if(PMJS_ENABLE_SKIA65)
   install(FILES "${pmjs_skia65_library}" DESTINATION lib)
 endif()

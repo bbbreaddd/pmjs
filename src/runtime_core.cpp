@@ -14,7 +14,7 @@ RuntimeCore::RuntimeCore(const std::filesystem::path& root, int width, int heigh
     : width_(width), height_(height), platform_(width, height, title), images_(programCacheRoot),
       canvases_(images_), renderer_(width, height, images_), vfs_(root),
       media_(root),
-      dialog_(platform_, renderer_, canvases_, vfs_, width, height), effects_(vfs_, media_) {
+      dialog_(platform_, renderer_, canvases_, vfs_), effects_(vfs_, media_) {
   renderer_.setEffects(&effects_);
 }
 

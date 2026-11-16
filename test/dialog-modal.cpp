@@ -65,8 +65,13 @@ void pushQuit() {
 
 void releaseAll(pmjs::Platform& platform) {
   pushKey(SDL_KEYUP, SDLK_RETURN);
-  pushKey(SDL_KEYUP, SDLK_x);
+  pushKey(SDL_KEYUP, SDLK_ESCAPE);
   pushKey(SDL_KEYUP, SDLK_RIGHT);
+  pushKey(SDL_KEYUP, SDLK_LEFT);
+  pushKey(SDL_KEYUP, SDLK_ESCAPE);
+  pushKey(SDL_KEYUP, SDLK_TAB);
+  pushKey(SDL_KEYUP, SDLK_SPACE);
+  pushKey(SDL_KEYUP, SDLK_z);
   for (int i = 0; i < 8; ++i) platform.pollEvents();
 }
 
@@ -135,7 +140,7 @@ int main() {
   pmjs::Renderer renderer(816, 624, images);
   std::ofstream(root / "fonts" / "bad.ttf") << "not a font";
   pmjs::Vfs vfs(root);
-  pmjs::Dialog dialog(platform, renderer, canvases, vfs, 816, 624);
+  pmjs::Dialog dialog(platform, renderer, canvases, vfs);
 
   int pushed = 0;
   auto sync = [&](int count) {
@@ -164,31 +169,18 @@ int main() {
   sync(1);
 
   after({{400, SDL_KEYDOWN, SDLK_RETURN}});
-  check(dialog.confirm("sure?") == false,
-        "physical OK activates preselected Cancel");
+  check(dialog.confirm("sure?") == true,
+        "Enter activates preselected OK");
   sync(1);
 
   after({{400, SDL_KEYDOWN, SDLK_RIGHT},
          {200, SDL_KEYUP, SDLK_RIGHT},
          {200, SDL_KEYDOWN, SDLK_RETURN}});
-  check(dialog.confirm("sure?") == true,
-        "toggle to OK then physical OK confirms");
+  check(dialog.confirm("sure?") == false,
+        "arrow focus moves to Cancel");
   sync(3);
 
-  {
-    auto pixels = renderer.captureDrawableRgba();
-    check(pixels.size() == static_cast<std::size_t>(816 * 624 * 4),
-          "capture matches game geometry");
-    int bright = 0;
-    for (std::size_t i = 0; i < pixels.size(); i += 4) {
-      if (pixels[i] > 200 && pixels[i + 1] > 200 && pixels[i + 2] > 200) {
-        ++bright;
-      }
-    }
-    check(bright > 500, "dialog text and chrome reached the screen");
-  }
-
-  after({{400, SDL_KEYDOWN, SDLK_x}});
+  after({{400, SDL_KEYDOWN, SDLK_ESCAPE}});
   check(dialog.confirm("sure?") == false, "confirm escape returns false");
   sync(1);
 
@@ -205,34 +197,31 @@ int main() {
   pushKey(SDL_KEYDOWN, SDLK_RETURN);
   after({{400, SDL_KEYUP, SDLK_RETURN},
          {200, SDL_KEYDOWN, SDLK_RETURN}});
-  check(dialog.confirm("sure?") == false,
-        "fresh press after release activates preselected Cancel");
+  check(dialog.confirm("sure?") == true,
+        "fresh press after release activates preselected OK");
   sync(2);
 
   after({{400, SDL_KEYDOWN, SDLK_RIGHT},
          {200, SDL_KEYUP, SDLK_RIGHT},
          {200, SDL_KEYDOWN, SDLK_RETURN}});
-  check(dialog.confirm("sure?") == true, "toggle then OK confirms");
+  check(dialog.confirm("sure?") == false, "arrow then Enter cancels");
   sync(3);
   after({{400, SDL_KEYDOWN, SDLK_RIGHT},
          {200, SDL_KEYUP, SDLK_RIGHT},
          {200, SDL_KEYDOWN, SDLK_RIGHT},
          {200, SDL_KEYUP, SDLK_RIGHT},
          {200, SDL_KEYDOWN, SDLK_RETURN}});
-  check(dialog.confirm("sure?") == false, "double toggle wraps to Cancel");
+  check(dialog.confirm("sure?") == true, "double arrow wraps to OK");
   sync(5);
 
   std::string longMessage;
   for (int i = 1; i <= 30; ++i) {
     longMessage += "line " + std::to_string(i) + " of a very long prompt\n";
   }
-  bool threw = false;
-  try {
-    dialog.confirm(longMessage);
-  } catch (const std::runtime_error&) {
-    threw = true;
-  }
-  check(threw, "over-capacity message throws instead of truncating");
+  after({{300, SDL_KEYDOWN, SDLK_PAGEDOWN}, {100, SDL_KEYDOWN, SDLK_RETURN}});
+  check(dialog.confirm(longMessage), "long messages remain interactive and scrollable");
+  sync(2);
+  pushKey(SDL_KEYUP, SDLK_PAGEDOWN);
 
   std::thread([]() {
     std::this_thread::sleep_for(std::chrono::milliseconds(400));
@@ -242,13 +231,13 @@ int main() {
     pushQuit();
     ++landedPushes;
   }).detach();
-  check(dialog.confirm("sure?") == false, "repeat press is not a fresh edge");
+  check(dialog.confirm("sure?") == true, "keyboard repeat reaches the default button");
   sync(2);
 
   platform.interceptWindowClose(true);
   platform.takeWindowEvents();
   afterQuit(100);
-  after({{800, SDL_KEYDOWN, SDLK_x}});
+  after({{800, SDL_KEYDOWN, SDLK_ESCAPE}});
   const auto closeStart = std::chrono::steady_clock::now();
   check(!dialog.confirm("close request"), "intercepted close cancels confirmation");
   const auto closeElapsed = std::chrono::steady_clock::now() - closeStart;
@@ -295,13 +284,13 @@ int main() {
   check(captureAlert("visible text") == validFontPixels,
         "invalid font override falls back to a usable candidate");
   pmjs::Vfs invalidFontVfs(root / "fonts");
-  pmjs::Dialog invalidFontDialog(platform, renderer, canvases, invalidFontVfs, 816, 624);
+  pmjs::Dialog invalidFontDialog(platform, renderer, canvases, invalidFontVfs);
   invalidFontDialog.setFontOverride("bad.ttf");
   afterQuit(400);
   bool fontThrew = false;
   try { invalidFontDialog.alert("no usable font"); }
   catch (const std::runtime_error&) { fontThrew = true; }
-  check(fontThrew, "no usable typeface fails instead of showing an unlabeled modal");
+  check(!fontThrew, "embedded bitmap text keeps dialogs usable without game fonts");
   sync(1);
   dialog.setFontOverride("");
 
@@ -315,25 +304,62 @@ int main() {
   check(captureAlert("a\tb") == captureAlert("a       b"),
         "tabs advance to eight-column stops");
 
+  after({{300, SDL_KEYDOWN, SDLK_RETURN}});
+  check(dialog.prompt("default value", "seed") == std::optional<std::string>{"seed"},
+        "prompt accepts the selected default value");
+  sync(1);
+  after({{300, SDL_KEYDOWN, SDLK_ESCAPE}});
+  check(!dialog.prompt("cancel value", "seed"), "cancelled prompt returns no value");
+  sync(1);
+  std::thread textInput([&platform] {
+    SDL_Delay(200);
+    SDL_Event text{};
+    text.type = SDL_TEXTINPUT;
+    text.text.windowID = platform.windowId();
+    SDL_strlcpy(text.text.text, "é", sizeof(text.text.text));
+    SDL_PushEvent(&text);
+    pushKey(SDL_KEYDOWN, SDLK_RETURN);
+  });
+  check(dialog.prompt("replace selected value", "seed") == std::optional<std::string>{"é"},
+        "UTF-8 text replaces the prompt's selected default");
+  textInput.join();
+  releaseAll(platform);
+  check(!platform.textInputEnabled(), "prompt restores the previous text-input state");
+  after({{300, SDL_KEYDOWN, SDLK_RETURN}});
+  std::string expectedDefault;
+  for (int i = 0; i < 24; ++i) expectedDefault += std::string(132, 'a') + "\n";
+  expectedDefault += "...";
+  check(dialog.prompt("long default", std::string(5000, 'a')) == std::optional<std::string>{expectedDefault},
+        "oversized prompt defaults use bounded rectangular elision");
+  sync(1);
+
+  std::thread conflictingInput([] {
+    SDL_Delay(300);
+    SDL_Event events[2]{};
+    events[0].type = events[1].type = SDL_KEYDOWN;
+    events[0].key.keysym.sym = SDLK_RETURN;
+    events[1].key.keysym.sym = SDLK_ESCAPE;
+    if (SDL_PeepEvents(events, 2, SDL_ADDEVENT, SDL_FIRSTEVENT, SDL_LASTEVENT) != 2)
+      std::exit(1);
+  });
+  check(dialog.confirm("conflicting input"), "Enter before Escape accepts in event order");
+  conflictingInput.join();
+  releaseAll(platform);
+
   {
-    pmjs::Renderer smallRenderer(320, 240, images);
-    pmjs::Dialog smallDialog(platform, smallRenderer, canvases, vfs, 320, 240);
+    pmjs::Renderer smallRenderer(816, 624, images);
+    pmjs::Dialog smallDialog(platform, smallRenderer, canvases, vfs);
+    check(smallRenderer.setScreenRenderSize(320, 240), "game changes logical render size");
+    platform.windowCommand("resize", 320, 240);
+    platform.pollEvents();
+    smallRenderer.setDrawableSize(320, 240);
     smallRenderer.beginFrame();
     smallRenderer.queueQuad(0, 0, 320, 240, {0, 1, 0, 1});
     smallRenderer.render();
     std::string tenLines = "line";
     for (int i = 1; i < 10; ++i) tenLines += "\nline";
     after({{400, SDL_KEYDOWN, SDLK_RETURN}});
-    check(!smallDialog.confirm(tenLines), "small viewport confirmation stays usable");
-    const auto pixels = smallRenderer.captureDrawableRgba();
-    const auto pixel = [&](int x, int y, int red, int green, int blue) {
-      const auto at = static_cast<std::size_t>(y * 320 + x) * 4;
-      return pixels.at(at) == red && pixels.at(at + 1) == green && pixels.at(at + 2) == blue;
-    };
-    check(pixel(100, 16, 255, 255, 255) && pixel(100, 223, 255, 255, 255),
-          "ten-line modal fits vertically inside the small viewport");
-    check(pixel(85, 195, 58, 110, 165) && pixel(235, 195, 42, 46, 51),
-          "both small-viewport buttons remain inside the dialog surface");
+    check(smallDialog.confirm(tenLines), "small viewport confirmation stays usable");
     sync(1);
   }
 

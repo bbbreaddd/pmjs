@@ -136,9 +136,40 @@ test('shared observed hook records evidence without verbose mode', () => {
   assert.equal(logged.length, 0);
 });
 
-test('prompt stays undefined in interactive mode', () => {
-  const { context } = makeContext({ dialog: { setFont: () => {} } });
-  assert.equal(vm.runInContext('typeof prompt', context), 'undefined');
+test('interactive prompt delegates converted arguments and preserves empty acceptance and cancellation', () => {
+  const seen = [];
+  const { context } = makeContext({ dialog: { prompt: (message, value) => {
+    seen.push([message, value]); return message === 'cancel' ? null : value;
+  } } });
+  assert.equal(vm.runInContext('prompt()', context), '');
+  assert.equal(vm.runInContext('prompt("message", null)', context), 'null');
+  assert.equal(vm.runInContext('prompt("cancel", "seed")', context), null);
+  assert.deepEqual(seen, [['', ''], ['message', 'null'], ['cancel', 'seed']]);
+});
+
+test('dialog WebIDL conversions happen once, reject Symbols, and distinguish alert undefined', () => {
+  const seen = [];
+  const { context } = makeContext({ dialog: { alert: value => seen.push(value),
+    confirm: value => { seen.push(value); return true; }, prompt: (message, value) => value } });
+  assert.equal(vm.runInContext(`(() => {
+    let calls = 0; confirm({ toString() { calls++; return 'once'; } }); return calls;
+  })()`, context), 1);
+  vm.runInContext('alert(); alert(undefined); confirm(undefined)', context);
+  assert.deepEqual(seen, ['once', '', 'undefined', '']);
+  for (const expression of ['alert(Symbol())', 'confirm(Symbol())', 'prompt("x", Symbol())']) {
+    assert.throws(() => vm.runInContext(expression, context), /TypeError/);
+  }
+  assert.deepEqual(Array.from(vm.runInContext('[alert.length, confirm.length, prompt.length]', context)), [0, 0, 0]);
+});
+
+test('dialog operations are non-constructible and reject non-window receivers', () => {
+  const { context } = makeContext({ dialog: { alert: () => assert.fail('must not reach host'),
+    confirm: () => assert.fail('must not reach host'), prompt: () => assert.fail('must not reach host') } });
+  for (const name of ['alert', 'confirm', 'prompt']) {
+    assert.equal(vm.runInContext(`typeof ${name}.prototype`, context), 'undefined');
+    assert.throws(() => vm.runInContext(`Reflect.construct(${name}, [])`, context), /TypeError/);
+    assert.throws(() => vm.runInContext(`${name}.call({}, 'message')`, context), /Illegal invocation/);
+  }
 });
 
 test('no NativeHost.dialog leaves globals untouched', () => {

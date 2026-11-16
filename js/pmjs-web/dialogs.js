@@ -5,6 +5,8 @@
     return;
   }
 
+  var nativeString = String;
+  var nativeTypeError = TypeError;
   var mode = 'interactive';
   try {
     var configured = NativeHost.runtime.env('PMJS_DIALOG_MODE');
@@ -25,7 +27,7 @@
   }
 
   function noteDialogHit(capability, message) {
-    PMJS.compat.observed(capability, String(message).slice(0, 160));
+    PMJS.compat.observed(capability, message.slice(0, 160));
   }
 
   try {
@@ -51,47 +53,41 @@
     }
   } catch (_) {}
 
-  function strictDialog(capability) {
-    return function(message) {
-      noteDialogHit(capability, message);
-      throw new Error('unsupported native capability: ' + capability);
-    };
+  function domString(value) {
+    if (typeof value === 'symbol') throw new nativeTypeError('Cannot convert a Symbol value to a string');
+    return nativeString(value);
   }
 
-  function dialogMessage(value) {
-    return value === undefined ? '' : String(value);
+  function observe(capability, message) {
+    noteDialogHit(capability, message);
+    if (mode === 'strict') throw new Error('unsupported native capability: ' + capability);
   }
 
-  if (mode === 'strict') {
-    globalThis.alert = strictDialog('browser.dialog.alert');
-    globalThis.confirm = strictDialog('browser.dialog.confirm');
-    globalThis.prompt = strictDialog('browser.dialog.prompt');
-    return;
+  function checkReceiver(receiver) {
+    if (receiver !== globalThis) throw new nativeTypeError('Illegal invocation');
   }
 
-  if (mode === 'headless') {
-    globalThis.alert = function(message) {
-      noteDialogHit('browser.dialog.alert', message);
-    };
-    globalThis.confirm = function(message) {
-      noteDialogHit('browser.dialog.confirm', message);
-      return headlessAnswers.confirm;
-    };
-    globalThis.prompt = function(message, defaultValue) {
-      noteDialogHit('browser.dialog.prompt', message);
-      return (typeof headlessAnswers.prompt === 'undefined' ||
-        headlessAnswers.prompt === null) ? null :
-        String(headlessAnswers.prompt);
-    };
-    return;
-  }
-
-  globalThis.alert = function(message) {
-    noteDialogHit('browser.dialog.alert', message);
-    NativeHost.dialog.alert(dialogMessage(message));
-  };
-  globalThis.confirm = function(message) {
-    noteDialogHit('browser.dialog.confirm', message);
-    return !!NativeHost.dialog.confirm(dialogMessage(message));
-  };
+  var dialogs = { alert() {
+    checkReceiver(this);
+    var message = arguments.length ? domString(arguments[0]) : '';
+    observe('browser.dialog.alert', message);
+    if (mode !== 'headless') NativeHost.dialog.alert(message);
+  }, confirm() {
+    checkReceiver(this);
+    var message = arguments[0] === undefined ? '' : domString(arguments[0]);
+    observe('browser.dialog.confirm', message);
+    return mode === 'headless' ? headlessAnswers.confirm : !!NativeHost.dialog.confirm(message);
+  }, prompt() {
+    checkReceiver(this);
+    var message = arguments[0] === undefined ? '' : domString(arguments[0]);
+    var defaultValue = arguments[1] === undefined ? '' : domString(arguments[1]);
+    observe('browser.dialog.prompt', message);
+    if (mode === 'headless') {
+      return headlessAnswers.prompt == null ? null : String(headlessAnswers.prompt);
+    }
+    return NativeHost.dialog.prompt(message, defaultValue);
+  } };
+  globalThis.alert = dialogs.alert;
+  globalThis.confirm = dialogs.confirm;
+  globalThis.prompt = dialogs.prompt;
 })();

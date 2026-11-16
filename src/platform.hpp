@@ -34,6 +34,7 @@ class Platform {
   const std::vector<KeyEvent>& keyEvents() const { return keyEvents_; }
   void clearKeyEvents() { keyEvents_.clear(); }
   void setTextInput(bool enabled);
+  bool textInputEnabled() const { return textInputEnabled_; }
   const std::vector<PointerEvent>& pointerEvents() const { return pointerEvents_; }
   void clearPointerEvents() { pointerEvents_.clear(); }
   std::vector<GamepadState> gamepads() const;

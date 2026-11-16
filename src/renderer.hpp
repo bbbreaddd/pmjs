@@ -13,6 +13,7 @@
 #include <unordered_map>
 #include <vector>
 #include <variant>
+#include <utility>
 
 namespace pmjs {
 
@@ -264,6 +265,7 @@ class Renderer {
   bool setRuntimeOverlay(ImageHandle image);
   bool setRenderTargetSize(int width, int height);
   bool setScreenRenderSize(int width, int height);
+  std::pair<int, int> screenRenderSize() const { return {width_, height_}; }
   void setDrawableSize(int width, int height);
   PresentationGeometry presentationGeometry() const { return presentation_; }
   void setPresentScaleMode(PresentScaleMode mode);
