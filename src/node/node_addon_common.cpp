@@ -214,10 +214,6 @@ napi_value imageInfo(napi_env env, std::uint32_t handle, int width, int height) 
   return result;
 }
 
-std::optional<pmjs::ImageHandle> resolveImage(State& value, std::uint32_t handle) {
-  return value.core.resolveImage(handle);
-}
-
 void method(napi_env env, napi_value object, const char* name, napi_callback callback) {
   napi_value function;
   check(env, napi_create_function(env, name, NAPI_AUTO_LENGTH, callback, nullptr, &function),

@@ -156,8 +156,19 @@ target_link_libraries(pmjs_vfs_objects PRIVATE PkgConfig::AVUTIL)
 target_link_libraries(pmjs_prepared_page_objects PRIVATE pmjs_lz4 PkgConfig::ZLIB PkgConfig::AVUTIL)
 target_link_libraries(pmjs_asset_processor_objects PRIVATE PkgConfig::PNG pmjs_astcenc)
 
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/js/pmjs-web/fallback-font.js" PMJS_FALLBACK_FONT_SOURCE)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/js/pmjs-web/fallback-font.js")
+string(REGEX MATCH "var glyphs = \\[([^;]+)\\];" PMJS_FALLBACK_GLYPH_MATCH "${PMJS_FALLBACK_FONT_SOURCE}")
+if(NOT PMJS_FALLBACK_GLYPH_MATCH)
+  message(FATAL_ERROR "Fallback font glyph table is missing")
+endif()
+string(REPLACE "[" "{" PMJS_FALLBACK_GLYPHS "${CMAKE_MATCH_1}")
+string(REPLACE "]" "}" PMJS_FALLBACK_GLYPHS "${PMJS_FALLBACK_GLYPHS}")
+configure_file(src/fallback_font.hpp.in generated/fallback_font.hpp @ONLY)
+
 add_library(pmjs_runtime STATIC ${PMJS_RUNTIME_SOURCES})
-target_include_directories(pmjs_runtime PUBLIC src)
+target_include_directories(pmjs_runtime PUBLIC src PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_compile_options(pmjs_runtime PRIVATE ${PMJS_BASE_COMPILE_OPTIONS})
 target_link_libraries(pmjs_runtime PUBLIC ${PMJS_PLATFORM_LIBS} PkgConfig::PNG PkgConfig::WEBP PkgConfig::ZLIB pmjs_lz4 pmjs_astcenc
   PkgConfig::JPEG PkgConfig::FREETYPE PkgConfig::HARFBUZZ ${PMJS_MEDIA_LIBS} EffekseerRendererGL m dl pthread)
@@ -174,7 +185,6 @@ add_library(pmjs_native MODULE
   src/node/node_addon_canvas.cpp
   src/node/node_addon_dialog.cpp
   src/node/node_addon_common.cpp
-  src/node/node_addon_entry.cpp
   src/node/node_addon_effects.cpp
   src/node/node_addon_graphics.cpp
   src/node/node_addon_media.cpp
@@ -447,7 +457,7 @@ if(BUILD_TESTING)
   target_link_libraries(pmjs-dialog-modal-test PRIVATE pmjs_runtime)
   add_test(NAME native-dialog-modal COMMAND
     ${XVFB_RUN} -a $<TARGET_FILE:pmjs-dialog-modal-test>)
-  set_tests_properties(native-dialog-modal PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
+  set_tests_properties(native-dialog-modal PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;PMJS_WINDOW_SIZE=816x624")
   target_include_directories(pmjs-platform-input-test PRIVATE src)
   target_compile_options(pmjs-platform-input-test PRIVATE -Wall -Wextra -Wpedantic)
   target_link_libraries(pmjs-platform-input-test PRIVATE ${PMJS_PLATFORM_LIBS})

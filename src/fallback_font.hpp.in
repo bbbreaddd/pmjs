@@ -1,0 +1,8 @@
+// SPDX-FileCopyrightText: 2010 Google Corporation; 2012 Red Hat, Inc.
+// SPDX-License-Identifier: OFL-1.1
+#pragma once
+#include <cstdint>
+namespace pmjs::detail {
+inline constexpr std::uint16_t fallbackGlyphs[][16] = {@PMJS_FALLBACK_GLYPHS@};
+static_assert(sizeof(fallbackGlyphs) / sizeof(fallbackGlyphs[0]) == 95);
+}

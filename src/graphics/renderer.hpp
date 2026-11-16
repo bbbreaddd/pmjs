@@ -13,6 +13,7 @@
 #include <unordered_map>
 #include <vector>
 #include <variant>
+#include <utility>
 
 namespace pmjs {
 
@@ -264,6 +265,7 @@ class Renderer {
   bool setRuntimeOverlay(ImageHandle image);
   bool setRenderTargetSize(int width, int height);
   bool setScreenRenderSize(int width, int height);
+  std::pair<int, int> screenRenderSize() const { return {width_, height_}; }
   void setDrawableSize(int width, int height);
   PresentationGeometry presentationGeometry() const { return presentation_; }
   void setPresentScaleMode(PresentScaleMode mode);
@@ -309,6 +311,7 @@ class Renderer {
   void render();
   void renderScene();
   void presentToDrawable();
+  void presentModalOverlay(ImageHandle image);
   void drawPresentationOverlay();
   void drawOverlay(ImageHandle image, const std::array<float, 4>& rect, float opacity, bool fullDrawable = false);
   void finish();
@@ -324,7 +327,6 @@ class Renderer {
   std::size_t renderTargetBytes() const;
   std::size_t tileGeometryGpuBytes() const;
   std::size_t tileGeometryCpuBytes() const;
-  // Public for the modal overlay: snapshot, draw, discard back.
   std::size_t commandCount() const;
   void discardCommandsFrom(std::size_t first);
 

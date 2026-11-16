@@ -100,7 +100,6 @@ bool hasProperty(napi_env env, napi_value object, const char* name);
 State& host(napi_env env);
 void syncExternalMemory(napi_env env);
 napi_value imageInfo(napi_env env, std::uint32_t handle, int width, int height);
-std::optional<pmjs::ImageHandle> resolveImage(State& value, std::uint32_t handle);
 napi_value rendererStats(napi_env env, napi_callback_info info);
 
 template <std::size_t Size>
@@ -147,6 +146,9 @@ struct PreparationInstallReport {
   }
 };
 
+void registerCompressionBindings(napi_env env, napi_value exports);
+void registerAssetMethods(napi_env env, napi_value exports);
+void registerPreparedAssetBindings(napi_env env, napi_value exports);
 void registerRuntimeBindings(napi_env env, napi_value exports);
 void registerPlatformBindings(napi_env env, napi_value exports);
 void registerGraphicsBindings(napi_env env, napi_value exports);

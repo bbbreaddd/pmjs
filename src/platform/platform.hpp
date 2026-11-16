@@ -34,6 +34,7 @@ class Platform {
   const std::vector<KeyEvent>& keyEvents() const { return keyEvents_; }
   void clearKeyEvents() { keyEvents_.clear(); }
   void setTextInput(bool enabled);
+  bool textInputEnabled() const { return textInputEnabled_; }
   const std::vector<PointerEvent>& pointerEvents() const { return pointerEvents_; }
   void clearPointerEvents() { pointerEvents_.clear(); }
   std::vector<GamepadState> gamepads() const;
@@ -50,6 +51,7 @@ class Platform {
   std::pair<int, int> windowPosition() const;
   void windowCommand(const std::string& command, int x, int y);
   std::vector<WindowEvent> takeWindowEvents();
+  bool windowClosePending() const;
   void interceptWindowClose(bool enabled) { interceptWindowClose_ = enabled; }
   void setWindowTitle(const std::string& title);
   void setFullscreen(bool enabled);
