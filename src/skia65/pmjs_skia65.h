@@ -67,6 +67,25 @@ PMJS_SKIA65_API int pmjs_skia65_path_coverage(const float* points,
   const float transform[6],
   float stroke, int cap, int join, float miter_limit, int antialias, int even_odd,
   int left, int top, int width, int height, uint8_t* coverage);
+typedef struct {
+  int kind, composite, clear;
+  uint32_t color;
+  float alpha, geometry[6], transform[6];
+  const float* offsets;
+  const uint32_t* colors;
+  size_t count;
+  const float* clip_points;
+  const uint32_t* clip_sizes;
+  const uint32_t* clip_counts;
+  const uint8_t* clip_even_odd;
+  size_t clip_count;
+} pmjs_skia65_path_style;
+PMJS_SKIA65_API int pmjs_skia65_path_bgra(const float* points,
+  const uint32_t* sizes, const uint8_t* closed, size_t count,
+  const float* commands, size_t command_count, const float* dash, size_t dash_count, float dash_offset,
+  const float transform[6],
+  float stroke, int cap, int join, float miter_limit, int antialias, int even_odd,
+  int left, int top, int width, int height, uint8_t* pixels, size_t row_bytes, const pmjs_skia65_path_style* style);
 PMJS_SKIA65_API int pmjs_skia65_shadow_bgra(const uint8_t* source, int source_width, int source_height,
   float x, float y, float blur, uint32_t color, int geometry_mask, uint8_t* pixels, int width, int height);
 /* RGBA8: fill coverage, first stroke, packed two-bit span rules, second stroke. */

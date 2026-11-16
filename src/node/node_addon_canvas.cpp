@@ -6,7 +6,7 @@ namespace pmjs::addon {
 napi_value createCanvas(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 3);
   const auto width = asInt32(env, args.at(0)), height = asInt32(env, args.at(1));
-  if (!checkedImageExtent(width, height)) throw std::range_error("invalid canvas dimensions");
+  if (!checkedImageExtent(width, height, CanvasStore::maxDimension)) throw std::range_error("invalid canvas dimensions");
   auto canvas = host(env).canvases.create(width, height, args.size() > 2 && asBoolean(env, args.at(2)));
   if (!canvas) throw std::runtime_error("cannot create canvas");
   return imageInfo(env, canvas->handle, canvas->width, canvas->height);

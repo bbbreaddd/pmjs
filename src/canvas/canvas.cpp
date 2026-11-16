@@ -1378,7 +1378,7 @@ CanvasStore::Content* CanvasStore::writableContent(CanvasHandle handle) {
 }
 
 std::optional<CanvasInfo> CanvasStore::create(int width, int height, bool opaque) {
-  const auto extent = checkedImageExtent(width, height);
+  const auto extent = checkedImageExtent(width, height, maxDimension);
   if (!extent) return std::nullopt;
   std::size_t index = 0;
   while (index < surfaces_.size() && surfaces_[index].live) ++index;
@@ -1399,7 +1399,7 @@ std::optional<CanvasInfo> CanvasStore::create(int width, int height, bool opaque
 
 std::optional<CanvasInfo> CanvasStore::createPixels(
     int width, int height, std::vector<std::uint8_t> pixels, PixelEncoding encoding) {
-  const auto extent = checkedImageExtent(width, height);
+  const auto extent = checkedImageExtent(width, height, maxDimension);
   if (!extent || pixels.size() != extent->rgbaBytes) return std::nullopt;
   const auto canvas = create(width, height);
   if (!canvas) return std::nullopt;
@@ -1451,6 +1451,18 @@ bool CanvasStore::fillRadialGradient(
         offset < previousOffset) return false;
     previousOffset = offset;
   }
+#ifdef PMJS_HAS_SKIA65
+  CanvasPathPaint request;
+  request.paths = {{{double(x), double(y)}, {double(x) + width, double(y)},
+    {double(x) + width, double(y) + height}, {double(x), double(y) + height}}};
+  request.closed = {1};
+  request.paint.kind = CanvasPaint::Kind::radial;
+  request.paint.geometry = {centerX, centerY, innerRadius, centerX, centerY, outerRadius};
+  request.paint.offsets.assign(offsets.begin(), offsets.end());
+  request.paint.colors = colors;
+  request.composite = additive ? CanvasComposite::lighter : CanvasComposite::sourceOver;
+  return paintPath(handle, request);
+#endif
   if (surface->state == ContentState::Deferred && !realizeContent(*surface)) return false;
   const int left = std::clamp(x, 0, surface->width);
   const int top = std::clamp(y, 0, surface->height);
@@ -1655,21 +1667,21 @@ void CanvasStore::markDirty(Content& surface, int x, int y, int width,
 void CanvasStore::blendPixel(Content& surface, int x, int y, std::uint32_t rgba,
                              std::uint8_t coverage) {
   if (x < 0 || y < 0 || x >= surface.width || y >= surface.height) return;
-  const unsigned alpha = importCanvasChannel(rgba & 255, coverage);
+  const unsigned alpha = paintCanvasChannel(rgba & 255, coverage);
   if (!alpha) return;
   auto* pixel = surface.pixels.data() + (static_cast<size_t>(y) * surface.width + x) * 4;
-  compositeCanvasPixel(pixel, {double(importCanvasChannel(rgba >> 24, alpha)),
-    double(importCanvasChannel((rgba >> 16) & 255, alpha)),
-    double(importCanvasChannel((rgba >> 8) & 255, alpha)), double(alpha)}, CanvasComposite::sourceOver, true);
+  compositeCanvasPixel(pixel, {double(paintCanvasChannel(rgba >> 24, alpha)),
+    double(paintCanvasChannel((rgba >> 16) & 255, alpha)),
+    double(paintCanvasChannel((rgba >> 8) & 255, alpha)), double(alpha)}, CanvasComposite::sourceOver, true);
 }
 
 void CanvasStore::blendPixelAdditive(Content& surface, int x, int y, std::uint32_t rgba) {
   if (x < 0 || y < 0 || x >= surface.width || y >= surface.height) return;
   auto* pixel = surface.pixels.data() + (static_cast<size_t>(y) * surface.width + x) * 4;
   const unsigned alpha = rgba & 255;
-  compositeCanvasPixel(pixel, {double(importCanvasChannel(rgba >> 24, alpha)),
-    double(importCanvasChannel((rgba >> 16) & 255, alpha)),
-    double(importCanvasChannel((rgba >> 8) & 255, alpha)), double(alpha)}, CanvasComposite::lighter);
+  compositeCanvasPixel(pixel, {double(paintCanvasChannel(rgba >> 24, alpha)),
+    double(paintCanvasChannel((rgba >> 16) & 255, alpha)),
+    double(paintCanvasChannel((rgba >> 8) & 255, alpha)), double(alpha)}, CanvasComposite::lighter);
 }
 
 bool CanvasStore::drawText(CanvasHandle handle,
@@ -1740,8 +1752,9 @@ std::optional<std::uint32_t> CanvasStore::pixel(CanvasHandle handle,
   const std::size_t offset =
     (static_cast<std::size_t>(y) * surface->width + x) * 4U;
   uint8_t rgba[4];
-  convertPixel(surface->pixels.data() + offset, PixelEncoding::PremultipliedBGRA8,
-               rgba, PixelEncoding::StraightRGBA8);
+  if (surface->opaque) exportOpaqueCanvasPixel(surface->pixels.data() + offset, rgba);
+  else convertPixel(surface->pixels.data() + offset, PixelEncoding::PremultipliedBGRA8,
+    rgba, PixelEncoding::StraightRGBA8);
   return (uint32_t(rgba[0]) << 24U) | (uint32_t(rgba[1]) << 16U) |
     (uint32_t(rgba[2]) << 8U) | rgba[3];
 }
@@ -1869,7 +1882,7 @@ std::optional<ImagePixels> CanvasStore::readPixels(CanvasHandle handle, int x,
                                                    int y, int width,
                                                    int height, PixelEncoding encoding) {
   auto* surface = lookupContent(handle);
-  const auto extent = checkedImageExtent(width, height);
+  const auto extent = checkedImageExtent(width, height, maxDimension);
   if (!surface || !extent) {
     return std::nullopt;
   }
@@ -1890,8 +1903,10 @@ std::optional<ImagePixels> CanvasStore::readPixels(CanvasHandle handle, int x,
         (static_cast<std::size_t>(sourceY) * surface->width + sourceX) * 4U;
       const std::size_t destinationOffset =
         (static_cast<std::size_t>(row) * width + column) * 4U;
-      convertPixel(surface->pixels.data() + sourceOffset, PixelEncoding::PremultipliedBGRA8,
-                   result.rgba.data() + destinationOffset, encoding);
+      if (surface->opaque && encoding == PixelEncoding::StraightRGBA8)
+        exportOpaqueCanvasPixel(surface->pixels.data() + sourceOffset, result.rgba.data() + destinationOffset);
+      else convertPixel(surface->pixels.data() + sourceOffset, PixelEncoding::PremultipliedBGRA8,
+        result.rgba.data() + destinationOffset, encoding);
     }
   }
   return result;
@@ -2003,8 +2018,11 @@ bool CanvasStore::writePixels(CanvasHandle handle, int x, int y, int width,
       (static_cast<std::size_t>(destinationY) * surface->width +
        destinationX) * 4U;
     for (int64_t column = 0; column < count; ++column) {
-      convertPixel(pixels.data() + sourceOffset + column * 4, encoding,
-        surface->pixels.data() + destinationOffset + column * 4, PixelEncoding::PremultipliedBGRA8);
+      const auto* input = pixels.data() + sourceOffset + column * 4;
+      const auto imported = surface->opaque && encoding == PixelEncoding::StraightRGBA8 && !input[3] ?
+        PixelEncoding::PremultipliedRGBA8 : encoding;
+      convertPixel(input, imported, surface->pixels.data() + destinationOffset + column * 4,
+        PixelEncoding::PremultipliedBGRA8);
       const auto* pixel = surface->pixels.data() + destinationOffset + column * 4;
       if (pixel[0] > pixel[3] || pixel[1] > pixel[3] || pixel[2] > pixel[3]) surface->mayHaveOverAlpha = true;
     }

@@ -72,3 +72,15 @@ test('linear and radial factories inherit extensions from the shared gradient pr
     assert.throws(() => gradient.addColorStop(0.5, 'invalid'), /Invalid color/);
   }
 });
+
+test('portable radial sampling chooses a circle with a nonnegative radius', () => {
+  const context = vm.createContext({ NativeHost: { runtime: { env: () => '' } } });
+  vm.runInContext(source, context);
+  const drawing = new context.CanvasContext2D({});
+  const gradient = drawing.createRadialGradient(0, 0, 0, 1, 0, 2);
+  gradient.addColorStop(0, 'red'); gradient.addColorStop(1, 'blue');
+  assert.equal(context.canvasStyleRgba(gradient, 1.5, 0, 1), 0x800080ff);
+  const cone = drawing.createRadialGradient(0, 0, 1, 4, 0, 1);
+  cone.addColorStop(0, 'red'); cone.addColorStop(1, 'blue');
+  assert.equal(context.canvasStyleRgba(cone, 0, 3, 1), 0);
+});

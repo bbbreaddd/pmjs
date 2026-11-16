@@ -14,6 +14,45 @@ function canvasRegressionFixtures() {
       return result.concat(pixels.slice(offset, offset + 4));
     }, []) : pixels;
   }
+  record('paint/translucent-solid', function(ctx) {
+    ctx.fillStyle = 'rgba(39,83,171,0.43)'; ctx.fillRect(0, 0, 8, 8);
+  });
+  ['solid', 'radial', 'linear'].forEach(function(kind) {
+    record('paint/fractional-' + kind, function(ctx) {
+      var style = 'rgba(31,117,229,0.63)';
+      if (kind !== 'solid') {
+        style = kind === 'radial' ? ctx.createRadialGradient(2, 2, 0.2, 4, 4, 5) :
+          ctx.createLinearGradient(0, 0, 7, 6);
+        style.addColorStop(0, 'rgba(255,0,0,0.2)');
+        style.addColorStop(0.4, 'rgba(0,255,0,0.7)'); style.addColorStop(1, 'blue');
+      }
+      ctx.fillStyle = style; ctx.fillRect(0.25, 0.6, 6.3, 5.9);
+    });
+  });
+  record('paint/concentric-radial', function(ctx) {
+    var gradient = ctx.createRadialGradient(4, 4, 0, 4, 4, 5);
+    gradient.addColorStop(0, 'red'); gradient.addColorStop(1, 'blue');
+    ctx.fillStyle = gradient; ctx.fillRect(0, 0, 8, 8);
+  });
+  ['identical', 'shrinking', 'cone'].forEach(function(kind) {
+    record('paint/radial-' + kind, function(ctx) {
+      ctx.fillStyle = 'red'; ctx.fillRect(0, 0, 8, 8);
+      var g = kind === 'identical' ? ctx.createRadialGradient(4, 4, 2, 4, 4, 2) :
+        kind === 'shrinking' ? ctx.createRadialGradient(4, 4, 5, 2, 2, 0.2) :
+        ctx.createRadialGradient(1, 4, 1, 5, 4, 1);
+      g.addColorStop(0, 'white'); g.addColorStop(1, 'blue');
+      ctx.fillStyle = g; ctx.fillRect(0, 0, 8, 8);
+    });
+  });
+  record('path/open-rectangle-stroke', function(ctx) {
+    ctx.strokeStyle = 'white'; ctx.lineWidth = 1.5;
+    ctx.moveTo(1, 1); ctx.lineTo(6, 1); ctx.lineTo(6, 6); ctx.lineTo(1, 6); ctx.lineTo(1, 1);
+    ctx.stroke();
+  });
+  record('clip/triangle-edges', function(ctx) {
+    ctx.beginPath(); ctx.moveTo(0.3, 0.7); ctx.lineTo(7.2, 1.4); ctx.lineTo(2.6, 7.3);
+    ctx.closePath(); ctx.clip(); ctx.fillStyle = 'red'; ctx.fillRect(0, 0, 8, 8);
+  });
   [['left', -4, 0, 8, 8], ['top', 0, -4, 8, 8], ['negative', 4, 8, -8, -8],
     ['full', -4, -4, 12, 12]].forEach(function(rect) {
     record('clear/' + rect[0], function(ctx) {

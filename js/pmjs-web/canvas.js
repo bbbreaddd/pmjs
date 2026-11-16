@@ -592,22 +592,22 @@ function canvasStyleRgba(style, x, y, alpha, transform) {
     var centerDx = style.x1 - style.x0, centerDy = style.y1 - style.y0;
     var radiusDelta = style.r1 - style.r0;
     var pointX = x - style.x0, pointY = y - style.y0;
-    if (Math.abs(centerDx) < 0.000001 && Math.abs(centerDy) < 0.000001) {
-      amount = radiusDelta ?
-        (Math.sqrt(pointX * pointX + pointY * pointY) - style.r0) / radiusDelta : 0;
+    var quadraticA = centerDx * centerDx + centerDy * centerDy - radiusDelta * radiusDelta;
+    var quadraticB = -2 * (pointX * centerDx + pointY * centerDy + style.r0 * radiusDelta);
+    var quadraticC = pointX * pointX + pointY * pointY - style.r0 * style.r0;
+    if (quadraticA === 0) {
+      if (quadraticB === 0) return 0;
+      amount = -quadraticC / quadraticB;
+      if (style.r0 + amount * radiusDelta < 0) return 0;
     } else {
-      var quadraticA = centerDx * centerDx + centerDy * centerDy -
-        radiusDelta * radiusDelta;
-      var quadraticB = -2 * (pointX * centerDx + pointY * centerDy +
-        style.r0 * radiusDelta);
-      var quadraticC = pointX * pointX + pointY * pointY - style.r0 * style.r0;
       var discriminant = quadraticB * quadraticB - 4 * quadraticA * quadraticC;
-      if (discriminant < 0) amount = 0;
-      else if (Math.abs(quadraticA) < 0.000001) {
-        amount = Math.abs(quadraticB) < 0.000001 ? 0 : -quadraticC / quadraticB;
-      } else {
-        amount = (-quadraticB + Math.sqrt(discriminant)) / (2 * quadraticA);
-      }
+      if (discriminant < 0) return 0;
+      var first = (-quadraticB - Math.sqrt(discriminant)) / (2 * quadraticA);
+      var second = (-quadraticB + Math.sqrt(discriminant)) / (2 * quadraticA);
+      var firstValid = style.r0 + first * radiusDelta >= 0;
+      var secondValid = style.r0 + second * radiusDelta >= 0;
+      if (!firstValid && !secondValid) return 0;
+      amount = firstValid ? (secondValid ? Math.max(first, second) : first) : second;
     }
   } else {
     var dx = style.x1 - style.x0, dy = style.y1 - style.y0;

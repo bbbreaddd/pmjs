@@ -121,6 +121,7 @@ struct CanvasAffineImage {
 
 class CanvasStore {
  public:
+  static constexpr int maxDimension = 32767;
   explicit CanvasStore(ImageStore& images);
   ~CanvasStore();
 
@@ -294,7 +295,7 @@ class CanvasStore {
     ContentState state = ContentState::Deferred;
     // Authoritative top-down premultiplied BGRA8; shared versions detach before writes.
     std::vector<std::uint8_t> pixels;
-    // Conservative hint: raw premultiplied input can violate RGB <= alpha.
+    // Conservative hint: raw pixel transport can violate RGB <= alpha.
     bool mayHaveOverAlpha = false;
     // Whole CPU content only; GPU equality is checked separately before eliding uploads.
     bool knownAllZero = false;

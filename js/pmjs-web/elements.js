@@ -165,6 +165,7 @@ CanvasElement.prototype.getContext = function(type, options) {
     if (!this._context2d) {
       this._context2d = new CanvasContext2D(this);
       this._context2d._alpha = !options || options.alpha === undefined || !!options.alpha;
+      if (!this._context2d._alpha && this._nativeCanvas) this._releaseNativeCanvas();
     }
     return this._context2d;
   }

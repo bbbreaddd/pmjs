@@ -405,3 +405,27 @@ test('portable curves and clipping materialize geometry once and preserve clip s
   assert.ok(context._clipPaths[1].paths[0].length > 10);
   assert.equal(JSON.stringify(context._clipPaths[0]), clip);
 });
+
+test('first context options apply after an earlier serialization allocated backing', () => {
+  const { realm } = harness();
+  const created = [], released = [];
+  realm.NativeHost.canvas.create = (width, height, opaque) => {
+    created.push({ width, height, opaque }); return { handle: created.length };
+  };
+  realm.NativeHost.canvas.encodePng = () => new Uint8Array();
+  realm.releaseNativeResource = resource => { if (resource) released.push(resource.handle); };
+  const canvas = new realm.CanvasElement(); canvas.width = canvas.height = 1;
+  canvas.toDataURL();
+  const context = canvas.getContext('2d', { alpha: false });
+  canvas._ensureNativeCanvas();
+  assert.deepEqual(created.map(value => value.opaque), [false, true]);
+  assert.deepEqual(released, [1]);
+  assert.equal(canvas.getContext('2d', { alpha: true }), context);
+  assert.equal(context._alpha, false);
+  const transparent = new realm.CanvasElement();
+  transparent.toDataURL();
+  const backing = transparent._nativeCanvas;
+  transparent.getContext('2d');
+  assert.equal(transparent._nativeCanvas, backing);
+  assert.deepEqual(released, [1]);
+});

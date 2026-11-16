@@ -16,6 +16,31 @@ const create = (w, h) => { const c = native.canvas.create(w, h); handles.push(c.
 const read = (c, w = c.width, h = c.height) => Buffer.from(native.canvas.readPremultipliedPixels(c.handle, 0, 0, w, h));
 const skia = native.canvas.glyphStats().backend === 'skia65';
 try {
+  const opaque = native.canvas.create(1, 1, true);
+  handles.push(opaque.handle);
+  native.canvas.writePixels(opaque.handle, 0, 0, 1, 1, new Uint8Array([255, 37, 19, 0]));
+  assert.deepEqual(Array.from(native.canvas.readPixels(opaque.handle, 0, 0, 1, 1)), [255, 37, 19, 0]);
+  assert.equal(native.canvas.pixel(opaque.handle, 0, 0), 0xff251300);
+  const opaqueCopy = create(1, 1);
+  native.canvas.drawImage(opaqueCopy.handle, opaque.handle, 0, 0, 1, 1, 0, 0, 1, 1, 1);
+  native.canvas.fillRect(opaque.handle, 0, 0, 1, 1, 0x0000ff80);
+  assert.deepEqual(Array.from(native.canvas.readPixels(opaque.handle, 0, 0, 1, 1)), [253, 36, 17, 128]);
+  assert.deepEqual(Array.from(native.canvas.readPixels(opaqueCopy.handle, 0, 0, 1, 1)), [0, 0, 0, 0]);
+  for (const width of [8193, 12000]) {
+    const wide = native.canvas.create(width, 1);
+    native.canvas.fillRect(wide.handle, width - 1, 0, 1, 1, 0xff0000ff);
+    const region = native.canvas.readPixels(wide.handle, 0, 0, width, 1);
+    if (region.length !== width * 4 || region[region.length - 4] !== 255 || region[region.length - 1] !== 255)
+      throw new Error('wide Canvas pixels were truncated');
+    native.canvas.release(wide.handle);
+  }
+  assert.throws(() => native.canvas.create(32768, 1), RangeError);
+  assert.throws(() => native.canvas.create(32767, 32767), RangeError);
+  const tiny = native.canvas.create(1, 1);
+  const wideRead = native.canvas.readPixels(tiny.handle, 0, 0, 8193, 1);
+  if (wideRead.length !== 8193 * 4 || wideRead.some(value => value !== 0))
+    throw new Error('out-of-bounds wide read must be transparent');
+  native.canvas.release(tiny.handle);
   const all = create(256, 256), input = new Uint8Array(256 * 256 * 4);
   for (let alpha = 0; alpha < 256; alpha++) for (let color = 0; color < 256; color++)
     input.set([color, color, color, alpha], (alpha * 256 + color) * 4);

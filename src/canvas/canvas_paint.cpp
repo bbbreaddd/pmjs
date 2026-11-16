@@ -130,15 +130,22 @@ std::array<double, 4> samplePaint(const CanvasPaint& paint, double x, double y) 
       amount = (px * dx + py * dy) / length;
     } else {
       const double dr = g[5] - g[2];
-      if (std::abs(dx) < 0.000001 && std::abs(dy) < 0.000001) {
-        amount = dr ? (std::hypot(px, py) - g[2]) / dr : 0;
+      const double a = dx * dx + dy * dy - dr * dr;
+      const double b = -2 * (px * dx + py * dy + g[2] * dr);
+      const double c = px * px + py * py - g[2] * g[2];
+      if (a == 0) {
+        if (b == 0) return {};
+        amount = -c / b;
+        if (g[2] + amount * dr < 0) return {};
       } else {
-        const double a = dx * dx + dy * dy - dr * dr;
-        const double b = -2 * (px * dx + py * dy + g[2] * dr);
-        const double c = px * px + py * py - g[2] * g[2];
         const double discriminant = b * b - 4 * a * c;
-        if (discriminant >= 0) amount = std::abs(a) < 0.000001 ?
-          (std::abs(b) < 0.000001 ? 0 : -c / b) : (-b + std::sqrt(discriminant)) / (2 * a);
+        if (discriminant < 0) return {};
+        const double first = (-b - std::sqrt(discriminant)) / (2 * a);
+        const double second = (-b + std::sqrt(discriminant)) / (2 * a);
+        const bool firstValid = g[2] + first * dr >= 0;
+        const bool secondValid = g[2] + second * dr >= 0;
+        if (!firstValid && !secondValid) return {};
+        amount = firstValid ? (secondValid ? std::max(first, second) : first) : second;
       }
     }
     if (!std::isfinite(amount)) return {};
@@ -155,9 +162,11 @@ std::array<double, 4> samplePaint(const CanvasPaint& paint, double x, double y) 
     }
   }
   const unsigned alpha = color & 255;
-  return {double(importCanvasChannel(color >> 24, alpha)),
-          double(importCanvasChannel((color >> 16) & 255, alpha)),
-          double(importCanvasChannel((color >> 8) & 255, alpha)), double(alpha)};
+  const auto channel = [&](unsigned value) {
+    return double(paint.kind == CanvasPaint::Kind::solid ?
+      paintCanvasChannel(value, alpha) : importCanvasChannel(value, alpha));
+  };
+  return {channel(color >> 24), channel((color >> 16) & 255), channel((color >> 8) & 255), double(alpha)};
 }
 }
 
@@ -323,6 +332,42 @@ bool CanvasStore::paintPath(CanvasHandle handle, const CanvasPathPaint& request)
   const int bottom = std::clamp(std::ceil(maxY + padding), 0.0, double(surface->height));
   const bool unbounded = !request.clear && canvasCompositeClearsOutside(request.composite);
   if ((right <= left || bottom <= top) && !unbounded) return true;
+  if (request.paint.kind != CanvasPaint::Kind::pattern && !(surface->opaque && unbounded)) {
+    pmjs_skia65_path_style style{};
+    style.kind = static_cast<int>(request.paint.kind);
+    style.color = request.paint.color;
+    style.alpha = request.alpha;
+    style.composite = static_cast<int>(request.composite);
+    style.clear = request.clear;
+    std::copy(request.paint.geometry.begin(), request.paint.geometry.end(), style.geometry);
+    std::copy(request.paint.transform.begin(), request.paint.transform.end(), style.transform);
+    std::vector<float> offsets(request.paint.offsets.begin(), request.paint.offsets.end());
+    style.offsets = offsets.data(); style.colors = request.paint.colors.data(); style.count = offsets.size();
+    std::vector<float> clipPoints;
+    std::vector<uint32_t> clipSizes, clipCounts;
+    std::vector<uint8_t> clipRules;
+    for (const auto& clip : request.clips) {
+      clipCounts.push_back(clip.paths.size()); clipRules.push_back(clip.evenOdd);
+      for (const auto& path : clip.paths) {
+        clipSizes.push_back(path.size());
+        for (const auto& point : path) { clipPoints.push_back(point[0]); clipPoints.push_back(point[1]); }
+      }
+    }
+    style.clip_points = clipPoints.data(); style.clip_sizes = clipSizes.data();
+    style.clip_counts = clipCounts.data(); style.clip_even_odd = clipRules.data(); style.clip_count = clipCounts.size();
+    surface = writableContent(handle);
+    if (!surface || !realizeContent(*surface)) throw std::runtime_error("Canvas path realization failed");
+    const int x0 = unbounded ? 0 : left & ~3, y0 = unbounded ? 0 : top & ~3;
+    const int x1 = unbounded ? surface->width : right, y1 = unbounded ? surface->height : bottom;
+    if (x1 <= x0 || y1 <= y0) return true;
+    if (!pmjs_skia65_path_bgra(points.data(), sizes.data(), request.closed.data(), sizes.size(),
+        request.commands.data(), request.commands.size(), request.dash.data(), request.dash.size(), request.dashOffset,
+        t.data(), request.stroke, request.cap, request.join, request.miterLimit, !request.clear, request.evenOdd,
+        x0, y0, x1 - x0, y1 - y0, surface->pixels.data() + (size_t(y0) * surface->width + x0) * 4,
+        size_t(surface->width) * 4, &style)) throw std::runtime_error("Canvas path painting failed");
+    markDirty(*surface, x0, y0, x1 - x0, y1 - y0);
+    return true;
+  }
   std::vector<uint8_t> coverage;
   if (right > left && bottom > top) {
     coverage.resize(size_t(right - left) * (bottom - top));
@@ -409,8 +454,8 @@ bool CanvasStore::paintShadow(CanvasHandle handle, CanvasHandle sourceHandle, do
     const double paintAlpha = !geometryMask ? 1 :
       samplePaint(state.paint, column + 0.5 - x, row + 0.5 - y)[3] / 255;
     compositeCanvasPixel(surface->pixels.data() + offset,
-      {p[2] * state.alpha * paintAlpha, p[1] * state.alpha * paintAlpha,
-       p[0] * state.alpha * paintAlpha, p[3] * state.alpha * paintAlpha}, state.composite, true);
+      {std::round(p[2] * state.alpha * paintAlpha), std::round(p[1] * state.alpha * paintAlpha),
+       std::round(p[0] * state.alpha * paintAlpha), std::round(p[3] * state.alpha * paintAlpha)}, state.composite, true);
     const auto* destination = surface->pixels.data() + offset;
     if (destination[0] > destination[3] || destination[1] > destination[3] || destination[2] > destination[3])
       surface->mayHaveOverAlpha = true;

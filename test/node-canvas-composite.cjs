@@ -416,7 +416,7 @@ try {
     paths: [[[1, 1], [6, 1]]], closed: [], transform: [1, 0, 0, 1, 0, 0],
     paint: { kind: 'solid', color: 0xffffffff }, globalAlpha: 1, composite: 'copy',
     clips: [], stroke: 2, cap: 0, join: 0, miterLimit: 10, clear: false
-  }), RangeError);
+  }), { name: 'TypeError', message: 'invalid Canvas path paint' });
   assert.throws(() => native.canvas.drawAffineImage(handle, handle, {
     geometry: [0, 0, 8, 8, 0, 0, 8, 8], transform: [1, NaN, 0, 1, 0, 0],
     globalAlpha: 1, composite: 'copy', clips: [], smoothing: true

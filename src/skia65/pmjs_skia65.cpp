@@ -428,12 +428,12 @@ int pmjs_skia65_circle_coverage(float x, float y, float radius,
   return 1;
 } catch (...) { return 0; }
 
-int pmjs_skia65_path_coverage(const float* points,
+static int pathRaster(const float* points,
     const uint32_t* sizes, const uint8_t* closed, size_t count,
     const float* commands, size_t command_count, const float* dash, size_t dash_count, float dash_offset,
     const float transform[6],
     float stroke, int cap, int join, float miter_limit, int antialias, int even_odd,
-    int left, int top, int width, int height, uint8_t* coverage) try {
+    int left, int top, int width, int height, uint8_t* coverage, size_t row_bytes, const pmjs_skia65_path_style* style) try {
   if (!points || !sizes || !closed || !transform || !coverage || width <= 0 || height <= 0) return 0;
   SkPath path;
   if (even_odd) path.setFillType(SkPath::kEvenOdd_FillType);
@@ -487,6 +487,84 @@ int pmjs_skia65_path_coverage(const float* points,
     paint.setStrokeMiter(miter_limit);
     if (dash_count) paint.setPathEffect(SkDashPathEffect::Make(dash, static_cast<int>(dash_count), dash_offset));
   }
+  if (style) {
+    if (row_bytes < size_t(width) * 4 || row_bytes > SIZE_MAX / size_t(height)) return 0;
+    auto surface = SkSurface::MakeRasterDirect(SkImageInfo::MakeN32Premul(width, height), coverage, row_bytes);
+    if (!surface) return 0;
+    auto* canvas = surface->getCanvas();
+    canvas->translate(-left, -top);
+    size_t point = 0, subpath = 0;
+    for (size_t i = 0; i < style->clip_count; ++i) {
+      SkPath clip;
+      if (style->clip_even_odd[i]) clip.setFillType(SkPath::kEvenOdd_FillType);
+      for (uint32_t j = 0; j < style->clip_counts[i]; ++j) {
+        const auto n = style->clip_sizes[subpath++];
+        if (!n) continue;
+        clip.moveTo(style->clip_points[point], style->clip_points[point + 1]); point += 2;
+        for (uint32_t k = 1; k < n; ++k) {
+          clip.lineTo(style->clip_points[point], style->clip_points[point + 1]); point += 2;
+        }
+        clip.close();
+      }
+      canvas->clipPath(clip, SkClipOp::kIntersect, true);
+    }
+    const SkBlendMode modes[] = {SkBlendMode::kSrcOver, SkBlendMode::kSrcIn, SkBlendMode::kSrcOut,
+      SkBlendMode::kSrcATop, SkBlendMode::kDstOver, SkBlendMode::kDstIn, SkBlendMode::kDstOut,
+      SkBlendMode::kDstATop, SkBlendMode::kPlus, SkBlendMode::kSrc, SkBlendMode::kXor,
+      SkBlendMode::kMultiply, SkBlendMode::kScreen, SkBlendMode::kOverlay, SkBlendMode::kDarken,
+      SkBlendMode::kLighten, SkBlendMode::kColorDodge, SkBlendMode::kColorBurn,
+      SkBlendMode::kHardLight, SkBlendMode::kSoftLight, SkBlendMode::kDifference,
+      SkBlendMode::kExclusion, SkBlendMode::kHue, SkBlendMode::kSaturation,
+      SkBlendMode::kColor, SkBlendMode::kLuminosity};
+    if (style->composite < 0 || style->composite >= int(sizeof(modes) / sizeof(*modes))) return 0;
+    const auto mode = modes[style->composite];
+    const bool unbounded = !style->clear && (mode == SkBlendMode::kSrc || mode == SkBlendMode::kSrcIn ||
+      mode == SkBlendMode::kSrcOut || mode == SkBlendMode::kDstIn || mode == SkBlendMode::kDstATop);
+    if (unbounded) {
+      SkPaint layer; layer.setBlendMode(mode);
+      canvas->saveLayer(nullptr, &layer);
+    }
+    paint.setBlendMode(style->clear ? SkBlendMode::kClear : unbounded ? SkBlendMode::kSrcOver : mode);
+    paint.setColor((style->color >> 8) | (style->color << 24));
+    if (style->kind) {
+      const auto* g = style->geometry;
+      const bool emptyRadial = style->kind == 2 && g[0] == g[3] && g[1] == g[4] && g[2] == g[5];
+      if (!style->count || emptyRadial) {
+        paint.setColor(SK_ColorTRANSPARENT);
+      } else {
+        std::vector<SkColor> colors;
+        for (size_t i = 0; i < style->count; ++i) colors.push_back((style->colors[i] >> 8) | (style->colors[i] << 24));
+        SkMatrix local;
+        const auto* t = style->transform;
+        local.setAll(t[0], t[2], t[4], t[1], t[3], t[5], 0, 0, 1);
+        if (stroke > 0) {
+          SkMatrix inverse;
+          if (!matrix.invert(&inverse)) return 0;
+          local.postConcat(inverse);
+        }
+        sk_sp<SkShader> shader;
+        if (style->kind == 1) {
+          const SkPoint points[] = {{g[0], g[1]}, {g[3], g[4]}};
+          shader = SkGradientShader::MakeLinear(points, colors.data(), style->offsets,
+            style->count, SkShader::kClamp_TileMode, 0, &local);
+        } else {
+          shader = SkGradientShader::MakeTwoPointConical({g[0], g[1]}, g[2], {g[3], g[4]}, g[5],
+            colors.data(), style->offsets, style->count, SkShader::kClamp_TileMode, 0, &local);
+        }
+        if (!shader) return 0;
+        paint.setColor(SK_ColorBLACK);
+        paint.setShader(shader);
+        paint.setDither(true);
+      }
+    }
+    paint.setAlpha(std::round(paint.getAlpha() * style->alpha));
+    if (stroke > 0) canvas->concat(matrix);
+    SkRect rect;
+    if (!stroke && mode != SkBlendMode::kSrc && path.isRect(&rect)) canvas->drawRect(rect, paint);
+    else canvas->drawPath(path, paint);
+    if (unbounded) canvas->restore();
+    return 1;
+  }
   // Stroke coverage depends on the raster format; retain the color raster for strokes.
   std::vector<uint8_t> pixels;
   sk_sp<SkSurface> surface;
@@ -504,6 +582,28 @@ int pmjs_skia65_path_coverage(const float* points,
   if (stroke > 0) for (size_t i = 0; i < static_cast<size_t>(width) * height; ++i) coverage[i] = pixels[i * 4 + 3];
   return 1;
 } catch (...) { return 0; }
+
+int pmjs_skia65_path_coverage(const float* points,
+    const uint32_t* sizes, const uint8_t* closed, size_t count,
+    const float* commands, size_t command_count, const float* dash, size_t dash_count, float dash_offset,
+    const float transform[6],
+    float stroke, int cap, int join, float miter_limit, int antialias, int even_odd,
+    int left, int top, int width, int height, uint8_t* coverage) {
+  return pathRaster(points, sizes, closed, count, commands, command_count, dash, dash_count, dash_offset,
+    transform, stroke, cap, join, miter_limit, antialias, even_odd,
+    left, top, width, height, coverage, 0, nullptr);
+}
+
+int pmjs_skia65_path_bgra(const float* points,
+    const uint32_t* sizes, const uint8_t* closed, size_t count,
+    const float* commands, size_t command_count, const float* dash, size_t dash_count, float dash_offset,
+    const float transform[6],
+    float stroke, int cap, int join, float miter_limit, int antialias, int even_odd,
+    int left, int top, int width, int height, uint8_t* pixels, size_t row_bytes, const pmjs_skia65_path_style* style) {
+  return pathRaster(points, sizes, closed, count, commands, command_count, dash, dash_count, dash_offset,
+    transform, stroke, cap, join, miter_limit, antialias, even_odd,
+    left, top, width, height, pixels, row_bytes, style);
+}
 
 int pmjs_skia65_shadow_bgra(const uint8_t* source, int source_width, int source_height,
     float x, float y, float blur, uint32_t color, int geometry_mask, uint8_t* pixels, int width, int height) try {

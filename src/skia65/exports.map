@@ -9,6 +9,7 @@ PMJS_SKIA65_2 {
     pmjs_skia65_image_premul_rgba_strided;
     pmjs_skia65_circle_coverage;
     pmjs_skia65_path_coverage;
+    pmjs_skia65_path_bgra;
     pmjs_skia65_shadow_bgra;
     pmjs_skia65_triangle_coverage;
     pmjs_skia65_polygon_coverage;

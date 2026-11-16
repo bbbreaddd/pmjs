@@ -33,6 +33,9 @@ using ConstPixelView = BasicPixelView<const std::uint8_t>;
 inline constexpr std::uint8_t importCanvasChannel(unsigned color, unsigned alpha) {
   return (color * alpha + 127) / 255;
 }
+inline constexpr std::uint8_t paintCanvasChannel(unsigned color, unsigned alpha) {
+  return color * (alpha + 1) >> 8;
+}
 inline constexpr auto canvasReciprocals = [] {
   std::array<std::uint32_t, 256> values{};
   for (unsigned alpha = 1; alpha < 256; ++alpha)
@@ -59,6 +62,14 @@ inline void convertPixel(const std::uint8_t* source, PixelEncoding from,
   destination[1] = channel(green);
   destination[to == PixelEncoding::PremultipliedBGRA8 ? 0 : 2] = channel(blue);
   destination[3] = alpha;
+}
+// Opaque raster readback retains hidden RGB and byte overflow.
+inline void exportOpaqueCanvasPixel(const std::uint8_t* bgra, std::uint8_t* rgba) {
+  for (unsigned channel = 0; channel < 3; ++channel) {
+    rgba[channel] = bgra[3] ?
+      (std::uint64_t(canvasReciprocals[bgra[3]]) * bgra[2 - channel] + (1U << 23)) >> 24 : bgra[2 - channel];
+  }
+  rgba[3] = bgra[3];
 }
 inline void convertPixels(ConstPixelView source, PixelView destination) {
   if (source.width != destination.width || source.height != destination.height)
