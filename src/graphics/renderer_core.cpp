@@ -290,32 +290,18 @@ void Renderer::ensureTarget(RenderTarget& target, int width, int height) {
   if (!complete) throw std::runtime_error("renderer framebuffer is incomplete");
 }
 
-bool Renderer::ensureFilterTarget(RenderTarget& target, int width, int height, std::size_t slot) {
+bool Renderer::ensureFilterTarget(RenderTarget& target, int width, int height) {
   if (target.texture && target.width == width && target.height == height) return true;
-  auto& cached = filterTargetCache_[slot];
-  const bool reused = cached.target.texture && !cached.target.depth &&
-      cached.target.width == width && cached.target.height == height;
+  auto cached = std::find_if(filterTargetCache_.begin(), filterTargetCache_.end(),
+    [width, height](const auto& entry) {
+      return entry.target.texture && !entry.target.depth &&
+        entry.target.width == width && entry.target.height == height;
+    });
+  const bool reused = cached != filterTargetCache_.end();
   GLint savedTexture = 0, savedRead = 0, savedDraw = 0;
   glGetIntegerv(GL_TEXTURE_BINDING_2D, &savedTexture);
   glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &savedRead);
   glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &savedDraw);
-  RenderTarget replacement;
-  if (reused) {
-    replacement = cached.target;
-    stats_.rendererTargetCacheBytes -= targetStorageBytes(replacement);
-    cached = {};
-    if (diagnostics_) ++stats_.rendererTargetCacheHits;
-  } else {
-    ensureTarget(replacement, width, height);
-  }
-  std::swap(target, replacement);
-  if (replacement.texture && static_cast<GLuint>(savedTexture) == replacement.texture)
-    savedTexture = static_cast<GLint>(target.texture);
-  if (replacement.framebuffer && static_cast<GLuint>(savedRead) == replacement.framebuffer)
-    savedRead = static_cast<GLint>(target.framebuffer);
-  if (replacement.framebuffer && static_cast<GLuint>(savedDraw) == replacement.framebuffer)
-    savedDraw = static_cast<GLint>(target.framebuffer);
-
   const auto evict = [&](CachedFilterTarget& entry) {
     if (static_cast<GLuint>(savedTexture) == entry.target.texture) savedTexture = 0;
     if (static_cast<GLuint>(savedRead) == entry.target.framebuffer) savedRead = 0;
@@ -325,7 +311,32 @@ bool Renderer::ensureFilterTarget(RenderTarget& target, int width, int height, s
     entry.lastUse = 0;
     if (diagnostics_) ++stats_.rendererTargetCacheEvictions;
   };
-  if (cached.target.texture) evict(cached);
+  RenderTarget replacement;
+  if (reused) {
+    replacement = cached->target;
+    stats_.rendererTargetCacheBytes -= targetStorageBytes(replacement);
+    *cached = {};
+    if (diagnostics_) ++stats_.rendererTargetCacheHits;
+  } else {
+    try {
+      ensureTarget(replacement, width, height);
+    } catch (const std::bad_alloc&) {
+      if (!stats_.rendererTargetCacheBytes) throw;
+      for (auto& entry : filterTargetCache_) {
+        if (entry.target.texture) evict(entry);
+      }
+      glFinish();
+      ensureTarget(replacement, width, height);
+    }
+  }
+  std::swap(target, replacement);
+  if (replacement.texture && static_cast<GLuint>(savedTexture) == replacement.texture)
+    savedTexture = static_cast<GLint>(target.texture);
+  if (replacement.framebuffer && static_cast<GLuint>(savedRead) == replacement.framebuffer)
+    savedRead = static_cast<GLint>(target.framebuffer);
+  if (replacement.framebuffer && static_cast<GLuint>(savedDraw) == replacement.framebuffer)
+    savedDraw = static_cast<GLint>(target.framebuffer);
+
   const auto bytes = targetStorageBytes(replacement);
   if (replacement.texture && !replacement.depth && bytes <= filterTargetCacheBudget) {
     while (stats_.rendererTargetCacheBytes + bytes > filterTargetCacheBudget) {
@@ -336,8 +347,15 @@ bool Renderer::ensureFilterTarget(RenderTarget& target, int width, int height, s
         });
       evict(*oldest);
     }
-    cached.target = replacement;
-    cached.lastUse = ++filterTargetCacheClock_;
+    auto available = std::find_if(filterTargetCache_.begin(), filterTargetCache_.end(),
+      [](const auto& entry) { return !entry.target.texture; });
+    if (available == filterTargetCache_.end()) {
+      available = std::min_element(filterTargetCache_.begin(), filterTargetCache_.end(),
+        [](const auto& left, const auto& right) { return left.lastUse < right.lastUse; });
+      evict(*available);
+    }
+    available->target = replacement;
+    available->lastUse = ++filterTargetCacheClock_;
     stats_.rendererTargetCacheBytes += bytes;
   } else {
     destroyTarget(replacement);

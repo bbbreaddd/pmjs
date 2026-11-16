@@ -1207,8 +1207,7 @@ void Renderer::renderScene() {
       if (!reuseFilterContent && diagnostics_) ++stats_.filterTargetAcquires;
       const bool reused = !reuseFilterContent && ensureFilterTarget(groupTargets_[filterDepth],
         operation.command->customFilterPlan ? pot(targetWidth) : targetWidth,
-        operation.command->customFilterPlan ? pot(targetHeight) : targetHeight,
-        customFilterTargetCapacity + filterDepth);
+        operation.command->customFilterPlan ? pot(targetHeight) : targetHeight);
       if (diagnostics_ && reused) ++stats_.filterTargetReuses;
       std::array<int, 4> boundedRect{};
       const bool bounded = !operation.command->customFilterPlan && filterBoundsRect(operation.command, &boundedRect);

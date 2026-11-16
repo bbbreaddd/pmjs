@@ -462,7 +462,7 @@ class Renderer {
   PrimitiveSurfaceResource* lookupPrimitiveSurface(PrimitiveSurfaceHandle handle);
   void resizeTargets(int width, int height);
   void ensureTarget(RenderTarget& target, int width, int height);
-  bool ensureFilterTarget(RenderTarget& target, int width, int height, std::size_t slot);
+  bool ensureFilterTarget(RenderTarget& target, int width, int height);
   static std::size_t targetStorageBytes(const RenderTarget& target);
   void ensureDepthBuffer(RenderTarget& target);
   void destroyTarget(RenderTarget& target);
