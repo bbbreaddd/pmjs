@@ -112,6 +112,7 @@ function CanvasElement() {
   this.screencanvas = false;
   this._context2d = null;
   this._nativeCanvas = null;
+  this._renderImage = null;
 }
 
 CanvasElement.prototype = Object.create(GenericElement.prototype);
@@ -124,8 +125,17 @@ CanvasElement.prototype._pmjsContentChanged = function() {
 CanvasElement.prototype._releaseNativeCanvas = function() {
   if (this._pmjsPrimitiveContent) this._pmjsPrimitiveContent.reset();
   releaseNativeResource(this._nativeCanvas, 'canvas');
-  this._nativeCanvas = null;
+  releaseNativeResource(this._renderImage, 'image');
+  this._nativeCanvas = this._renderImage = null;
   this._pmjsContentChanged();
+};
+CanvasElement.prototype._setRenderImage = function(image) {
+  var owned = trackNativeResource(image, 'image');
+  this._releaseNativeCanvas();
+  this._renderImage = owned;
+};
+CanvasElement.prototype._pmjsNativeTextureSource = function() {
+  return this._nativeImage || this._renderImage || this._nativeCanvas;
 };
 CanvasElement.prototype._ensureNativeCanvas = function() {
   if (this._pmjsPrimitiveContent) this._pmjsPrimitiveContent.materialize();
@@ -135,6 +145,12 @@ CanvasElement.prototype._ensureNativeCanvas = function() {
     this._nativeCanvas = trackNativeResource(
       NativeHost.canvas.create(width, height, !!(this._context2d && this._context2d._alpha === false)),
       'canvas');
+  }
+  if (this._renderImage) {
+    NativeHost.canvas.drawImage(this._nativeCanvas.handle, this._renderImage.handle,
+      0, 0, this.width, this.height, 0, 0, this.width, this.height, 1, false);
+    releaseNativeResource(this._renderImage, 'image');
+    this._renderImage = null;
   }
   return this._nativeCanvas;
 };

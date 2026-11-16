@@ -223,7 +223,8 @@ var nativeMaterializationStats = {
 function nativeTextureSource(source) {
   if (!source) return null;
   if (typeof source._pmjsNativeTextureSource === 'function') {
-    return source._pmjsNativeTextureSource();
+    var current = source._pmjsNativeTextureSource();
+    if (current) return current;
   }
   if (source._nativeImage) return source._nativeImage;
   if (source._nativeCanvas) return source._nativeCanvas;

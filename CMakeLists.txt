@@ -660,6 +660,14 @@ if(BUILD_TESTING)
     set_tests_properties(node-prepared-linear-palette-${mode} PROPERTIES ENVIRONMENT
       "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
   endforeach()
+  set(PMJS_TEST_PIXI4_SOURCE "" CACHE FILEPATH "Pixi 4 source for RenderTexture pixel validation")
+  if(PMJS_TEST_PIXI4_SOURCE)
+    add_test(NAME node-pixi4-render-texture COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/node-pixi4-render-texture.cjs" $<TARGET_FILE:pmjs_native>
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/assets" "${PMJS_TEST_PIXI4_SOURCE}")
+    set_tests_properties(node-pixi4-render-texture PROPERTIES ENVIRONMENT
+      "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy;PMJS_WINDOW_SIZE=32x24")
+  endif()
   add_test(NAME node-resident-images COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-resident-images.cjs" $<TARGET_FILE:pmjs_native>)
   set_tests_properties(node-resident-images PROPERTIES ENVIRONMENT

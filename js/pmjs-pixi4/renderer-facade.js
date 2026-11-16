@@ -384,13 +384,15 @@ function createNativePixiRenderer(width, height, options) {
               renderOwner._activeRenderTarget.transform = transform || null;
               NativeHost.render.setRenderTargetSize(targetWidth, targetHeight);
               if (!shouldClear) {
-                NativeHost.render.image(target._ensureNativeCanvas().handle,
+                var previous = target._pmjsNativeTextureSource() || target._ensureNativeCanvas();
+                NativeHost.render.image(previous.handle,
                   1, 0, 0, 1, 0, 0, 0, 0, targetWidth, targetHeight,
                   1, 0xffffff, 0);
               }
             });
-          NativeHost.render.renderToCanvas(target._ensureNativeCanvas().handle);
-          target._pmjsContentChanged();
+          target._setRenderImage(NativeHost.render.renderToImage(targetWidth, targetHeight,
+            { alphaMode: 'premultiplied' }));
+          base.__pmjsPremultiplied = true;
           this.textureGC.update();
           if (typeof this.emit === 'function') this.emit('postrender');
           return;

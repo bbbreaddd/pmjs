@@ -1169,10 +1169,12 @@ std::optional<ImageInfo> Renderer::renderToImage(int width, int height, AlphaMod
   const int savedWidth = width_, savedHeight = height_;
   const auto savedClearColor = clearColor_;
   const bool savedOffscreenRender = offscreenRender_;
+  const bool savedClearBeforeRender = clearBeforeRender_;
   try {
     width_ = width;
     height_ = height;
     offscreenRender_ = true;
+    clearBeforeRender_ = true;
     clearColor_ = {0, 0, 0, 0};
     render();
     auto image = images_.createRenderTarget(width_, height_, alphaMode == AlphaMode::premultiplied);
@@ -1220,6 +1222,7 @@ std::optional<ImageInfo> Renderer::renderToImage(int width, int height, AlphaMod
       throw std::runtime_error("cannot normalize GPU render image");
     }
     offscreenRender_ = savedOffscreenRender;
+    clearBeforeRender_ = savedClearBeforeRender;
     clearColor_ = savedClearColor;
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glEnable(GL_BLEND);
@@ -1230,6 +1233,7 @@ std::optional<ImageInfo> Renderer::renderToImage(int width, int height, AlphaMod
     width_ = savedWidth;
     height_ = savedHeight;
     offscreenRender_ = savedOffscreenRender;
+    clearBeforeRender_ = savedClearBeforeRender;
     clearColor_ = savedClearColor;
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glEnable(GL_BLEND);
