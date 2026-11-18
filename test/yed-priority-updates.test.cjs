@@ -42,6 +42,9 @@ function fixture({ disabled = false, unknown = false, install = true } = {}) {
     Sprite_Base.prototype.update = function() {
       Sprite.prototype.update.call(this); this.updateVisibility(); this.updateAnimationSprites();
     };
+    Sprite_Base.prototype.startAnimation = function(animation) {
+      this.parent.addChild(animation); this._animationSprites.push(animation);
+    };
     function Tilemap() {
       this.animationCount = 0; this.animationFrame = 0; this.touches = 0;
       this._priorityTiles = [new Sprite_Base(), new Sprite_Base()];
@@ -59,6 +62,19 @@ function fixture({ disabled = false, unknown = false, install = true } = {}) {
   vm.runInContext(fs.readFileSync(require.resolve('../js/pmjs-plugins/yed/priority-updates.js'), 'utf8'), context);
   if (install) callbacks[0]();
   return { context, map: new context.Tilemap(), original };
+}
+
+function parkPool(context, map) {
+  context.PIXI = { Container: class {
+    constructor() { this.children = []; }
+    addChild(child) { if (child.parent) child.parent.removeChild(child); this.children.push(child); child.parent = this; }
+    removeChild(child) { this.children.splice(this.children.indexOf(child), 1); child.parent = null; }
+  } };
+  map.addChild = context.PIXI.Container.prototype.addChild;
+  map.removeChild = context.PIXI.Container.prototype.removeChild;
+  for (const child of map.children) child.parent = map;
+  vm.runInContext(fs.readFileSync(require.resolve('../js/pmjs-plugins/yed/retained-tiles.js'), 'utf8'), context);
+  context.PMJS.yedRetainedTiles.deferPriorityTiles(map);
 }
 
 test('inactive priority sprites retain state, children and bitmap servicing', () => {
@@ -125,4 +141,60 @@ test('unknown compositions and disabled painting do not replace update', () => {
     assert.equal(context.Tilemap.prototype.update, original);
     assert.equal(context.PMJS.yedPriorityUpdates.diagnostics().installed, false);
   }
+});
+
+test('only reviewed inactive pool callbacks can be parked', () => {
+  const { context, map } = fixture();
+  const child = map.children[0], api = context.PMJS.yedPriorityUpdates;
+  assert.equal(api.canDefer(child), true);
+  child.updateAnimationSprites = () => {};
+  assert.equal(api.canDefer(child), false);
+  delete child.updateAnimationSprites;
+  child._animationSprites.push({ ticks: 0 });
+  assert.equal(api.canDefer(child), false);
+  child._animationSprites.length = 0;
+  context.Olivia.HorrorEffects.___Sprite_update___ = () => {};
+  assert.equal(api.canDefer(child), false);
+});
+
+test('later shared callback changes restore a parked pool before ordinary traversal', () => {
+  const { context, map } = fixture();
+  parkPool(context, map);
+  assert.equal(map.children.length, 1);
+  assert.equal(map.children[0].children.length, 2);
+  let callbacks = 0;
+  context.Sprite_Base.prototype.updateAnimationSprites = () => callbacks++;
+  map.update();
+  assert.equal(callbacks, 2);
+  assert.ok(map._priorityTiles.every(sprite => sprite.parent === map));
+  map.update(); assert.equal(callbacks, 4);
+});
+
+test('later per-instance callbacks and effects restore only affected parked sprites', () => {
+ for(const kind of ['callback','animation','child','source','effect']) {
+  const { context, map } = fixture();
+  parkPool(context, map);
+  const child=map._priorityTiles[0],other=map._priorityTiles[1];let callbacks=0;
+  if(kind==='callback')child.updateAnimationSprites=()=>callbacks++;
+  if(kind==='animation')child._animationSprites.push({ticks:0});
+  if(kind==='child')child.children.push({update(){callbacks++;}});
+  if(kind==='source')child._horrorFiltersSource={};
+  if(kind==='effect')child._horrorFilters.noiseFilter={};
+  map.update();
+  assert.equal(child.parent,map,kind);
+  assert.notEqual(other.parent,map,kind);
+  if(kind==='callback'||kind==='child')assert.equal(callbacks,1,kind);
+  if(kind==='animation')assert.equal(child._animationSprites[0].ticks,1);
+  if(kind==='source')assert.equal(child.sourceUpdates,1);
+  if(kind==='effect')assert.equal(child.noiseUpdates,1);
+ }
+});
+
+test('an animation started on a parked sprite uses its visible tilemap parent', () => {
+ const {context,map}=fixture();
+ parkPool(context, map);
+ const child=map._priorityTiles[0],animation={ticks:0};
+ child.startAnimation(animation);
+ assert.equal(child.parent,map);
+ assert.equal(animation.parent,map);
 });

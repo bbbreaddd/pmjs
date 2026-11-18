@@ -537,6 +537,7 @@ if(BUILD_TESTING)
     node-scene
     node-resident-scenery-tiles
     node-image-storage-index
+    node-image-preparation-only
     node-prepared-palette-metadata
     node-preparation-install
     node-sprite-byte-precision

@@ -7,6 +7,7 @@
   var KNOWN_SLIPPERY_QUERY = ['425386319071765fdcb4f7874c65eb031dbe13f651098a84b1e1ff633505ccbe'];
   var KNOWN_TERRAIN_TAG = 'c486790fa3a2b6c29178f7ba022359887fbb889cc1e5c0288e57cde42241ea57';
   var KNOWN_LAYERED_TILES = '3022b0dfce3d969db2d6bce417c7054c35790aff4d352c7f0be77d7e7b5564d8';
+  var KNOWN_TILESET_FLAGS = '5d06ceb950ca2bd749025c9bd0f6cedc55303c744b8a647e45bf6c211a834bd6';
   var KNOWN_TILE_ID = '2ac59a6abab4d58c850ce7c6875d13a0248b7e888ae81c868bee5f17b8adf753';
 
   function install() {
@@ -38,6 +39,8 @@
     var terrainTag = mapProto.terrainTag;
     var layeredTiles = mapProto.layeredTiles;
     var tileId = mapProto.tileId;
+    var tilesetFlags = mapProto.tilesetFlags;
+    var ordinaryFlags = PMJS.methods.matchesSource(tilesetFlags, KNOWN_TILESET_FLAGS);
     var nativePush = Array.prototype.push;
     var inlineTerrain = PMJS.methods.matchesSource(terrainTag, KNOWN_TERRAIN_TAG) &&
       PMJS.methods.matchesSource(layeredTiles, KNOWN_LAYERED_TILES) &&
@@ -50,12 +53,22 @@
       return false;
     }
 
+    PMJS.plugins.slipperyTiles = { emptyTerrainQueries:0 };
     mapProto.isSlippery = function(mx, my) {
       if (inlineTerrain && Yanfly.Param.SlipRegion !== 0) {
         if ($gameParty.inBattle()) return false;
         if (!this.isValid(mx, my) || !this.tileset()) return false;
         if (Yanfly.Param.SlipRegion !== 0 &&
             this.regionId(mx, my) === Yanfly.Param.SlipRegion) return true;
+        var slipTiles = this.tileset().slippery;
+        if (ordinaryFlags && this.tilesetFlags === tilesetFlags &&
+            Array.isArray(slipTiles) && slipTiles.length === 0 &&
+            slipTiles.contains === stockContains && slipTiles.indexOf === nativeIndexOf &&
+            Array.prototype.indexOf === nativeIndexOf && Array.prototype.push === nativePush &&
+            this.terrainTag === terrainTag && this.layeredTiles === layeredTiles && this.tileId === tileId) {
+          PMJS.plugins.slipperyTiles.emptyTerrainQueries++;
+          return false;
+        }
         var tagId;
         if (this.terrainTag === terrainTag) {
           tagId = 0;

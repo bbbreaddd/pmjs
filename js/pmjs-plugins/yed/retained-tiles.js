@@ -2,6 +2,38 @@
 
 (function() {
   var states = new WeakMap();
+  var deferredPriorities = new WeakMap(), priorityHolders = new WeakMap();
+  function deferPriorityTiles(map) {
+    for (var sprite of map._priorityTiles) {
+      if (sprite.parent !== map || sprite.layerId !== -1 || !sprite._hiding ||
+          !PMJS.yedPriorityUpdates || !PMJS.yedPriorityUpdates.canDefer(sprite)) continue;
+      var holder = priorityHolders.get(map);
+      if (!holder) {
+        holder = new PIXI.Container(); holder.visible = false;
+        map.addChild(holder); priorityHolders.set(map, holder);
+      }
+      holder.addChild(sprite);
+      sprite.visible = false;
+      deferredPriorities.set(sprite, holder);
+    }
+  }
+  function activatePriorityTile(map, sprite) {
+    var holder = sprite && deferredPriorities.get(sprite);
+    if (!holder) return;
+    deferredPriorities.delete(sprite);
+    if (sprite.parent === holder) map.addChild(sprite);
+  }
+  function wakePriorityTile(sprite) {
+    var holder = deferredPriorities.get(sprite);
+    if (holder && holder.parent) activatePriorityTile(holder.parent, sprite);
+  }
+  function restorePriorityTiles(map, keepDeferred) {
+    var holder = priorityHolders.get(map);
+    if (!holder || !holder.children.length || !Array.isArray(map._priorityTiles)) return;
+    for (var sprite of map._priorityTiles) {
+      if (sprite.parent === holder && (!keepDeferred || !keepDeferred(sprite))) activatePriorityTile(map, sprite);
+    }
+  }
 
   function supported(map) {
     var data = map.tiledData;
@@ -191,6 +223,7 @@
         sprite.priority = map._getPriority(record.layerId);
         sprite.z = sprite.zIndex = map._getZIndex(record.layerId);
         sprite.show();
+        activatePriorityTile(map, sprite);
       } else {
         record.offset = record.rect.pointsBuf.length;
         record.rect.addRect(material.texture, uv[0], uv[1], record.dx, record.dy,
@@ -205,6 +238,7 @@
     for (var tail = active; tail < map._priorityTiles.length; tail++) {
       map._priorityTiles[tail].hide(); map._priorityTiles[tail].layerId = -1;
     }
+    deferPriorityTiles(map);
     map._priorityTilesCount = map._priorityTiles.length;
     map._pmjsChangedAnimKeys = null; map._needsAnimRepaint = false;
     map._lastStartX = x; map._lastStartY = y; map._needsRepaint = false;
@@ -318,7 +352,8 @@
     return updatePositions(map, x, y);
   }
 
-  var api = { invalidate: function(map) { states.delete(map); }, supported: supported, paint: paint, prepare: prepare,
+  var api = { deferPriorityTiles: deferPriorityTiles, activatePriorityTile: activatePriorityTile,
+    wakePriorityTile: wakePriorityTile, restorePriorityTiles: restorePriorityTiles, invalidate: function(map) { states.delete(map); }, supported: supported, paint: paint, prepare: prepare,
     updatePositions: updatePositions, updateAnimation: updateAnimation, flushAnimation: flushAnimation,
     animationChecksSupport: function() {
       var operation = Object.getOwnPropertyDescriptor(api, 'updateAnimation');

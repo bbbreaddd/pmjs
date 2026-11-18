@@ -531,7 +531,7 @@ async function runSupervised(prepare, { worker = path.join(__dirname, 'session.c
             !/(^|:)glibc\.malloc\.mmap_threshold=/.test(environment.GLIBC_TUNABLES || ''))
           environment.MALLOC_MMAP_THRESHOLD_ = '1048576';
         child = active = fork(worker, [], { stdio: ['inherit', 'pipe', 'pipe', 'ipc'], env: environment,
-          execArgv: [...process.execArgv, '--expose-gc'] });
+          execArgv: ['--no-memory-reducer', ...process.execArgv, '--expose-gc'] });
         workerCgroup = workerCgroupDirectory(child.pid);
         oomBefore = oomCounter(fs, workerCgroup);
         lastOomCount = oomBefore;

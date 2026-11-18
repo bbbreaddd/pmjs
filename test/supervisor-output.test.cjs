@@ -8,21 +8,29 @@ const { once } = require('node:events');
 const test = require('node:test');
 const { temporaryDirectory } = require('./helpers/temp.cjs');
 
-test('session workers expose collection without requiring launcher flags', async () => {
-  const directory = temporaryDirectory('supervisor-collection-');
-  const worker = path.join(directory, 'worker.cjs');
-  const resultFile = path.join(directory, 'collection.json');
-  fs.writeFileSync(worker, `
-    process.once('message', () => {
-      require('node:fs').writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({ gc: typeof global.gc }));
-      process.send({ type: 'pmjs-session-complete', reload: false }, () => process.exit(0));
-    });
-  `);
-  const { runSupervised } = require('../runner/supervisor.cjs');
-  const result = await runSupervised({ saveRoot: path.join(directory, 'saves') }, { worker });
-  assert.equal(result.code, 0);
-  assert.equal(JSON.parse(fs.readFileSync(resultFile, 'utf8')).gc, 'function');
-});
+for (const explicitReducer of [false, true]) {
+  test('session workers retain collection and ' + (explicitReducer ? 'honor explicit reducer flags' : 'avoid background memory reduction'), async t => {
+    const originalArgs = process.execArgv;
+    t.after(() => { process.execArgv = originalArgs; });
+    if (explicitReducer) process.execArgv = [...originalArgs, '--memory-reducer'];
+    const directory = temporaryDirectory('supervisor-collection-');
+    const worker = path.join(directory, 'worker.cjs');
+    const resultFile = path.join(directory, 'collection.json');
+    fs.writeFileSync(worker, `
+      process.once('message', () => {
+        require('node:fs').writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({gc:typeof global.gc,args:process.execArgv}));
+        process.send({ type:'pmjs-session-complete',reload:false }, () => process.exit(0));
+      });
+    `);
+    const { runSupervised } = require('../runner/supervisor.cjs');
+    const result = await runSupervised({ saveRoot:path.join(directory, 'saves') }, { worker });
+    assert.equal(result.code, 0);
+    const child = JSON.parse(fs.readFileSync(resultFile, 'utf8'));
+    assert.equal(child.gc, 'function');
+    assert.equal(child.args[0], '--no-memory-reducer');
+    if (explicitReducer) assert.ok(child.args.lastIndexOf('--memory-reducer') > 0);
+  });
+}
 
 for (const stream of ['stdout', 'stderr']) {
   test(`a broken ${stream} reader preserves worker logs across reloads`, async () => {

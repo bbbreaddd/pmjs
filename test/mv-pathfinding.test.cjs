@@ -67,3 +67,31 @@ test('a proved pure search stops at the distance bound while an unproved search 
   const second=h.realm.PMJS.mv.pathfinding.diagnostics();
   assert.equal(second.finalized,1);assert.ok(second.expanded-first.expanded>first.expanded);
 });
+
+test('reachable nearby goals avoid the pure-search world validation', () => {
+  const h = fixture();
+  h.realm.PMJS.mv.pathfinding.isPureSearch = () => { throw new Error('Unnecessary world validation'); };
+  assert.equal(h.character.findDirectionTo(4, 1), 6);
+  const stats = h.realm.PMJS.mv.pathfinding.diagnostics();
+  assert.equal(stats.purityChecks, 0);
+  assert.ok(stats.reachableGoals > 0);
+});
+
+test('occupied-goal shortcut follows a failed ordinary step and retains first-step choices', () => {
+  for (const occupied of [false, true]) {
+    const candidate = fixture(), reference = fixture();
+    for (const h of [candidate, reference]) {
+      h.map.blocked.add('4,1');
+      h.character.isThrough = h.character.isDebugThrough = () => false;
+      h.character.isCollidedWithCharacters = () => occupied;
+    }
+    const calls = [];
+    const pass = candidate.character.passable;
+    candidate.character.passable = function(x, y, d) { calls.push('pass'); return pass.call(this, x, y, d); };
+    candidate.realm.PMJS.mv.pathfinding.isPureSearch = () => { calls.push('proof'); return true; };
+    reference.realm.PMJS.mv.pathfinding.isPureSearch = () => false;
+    assert.equal(candidate.character.findDirectionTo(4, 1), reference.character.findDirectionTo(4, 1));
+    assert.equal(calls[calls.indexOf('proof') - 1], 'pass');
+    assert.equal(candidate.realm.PMJS.mv.pathfinding.diagnostics().blockedGoals, occupied ? 1 : 0);
+  }
+});

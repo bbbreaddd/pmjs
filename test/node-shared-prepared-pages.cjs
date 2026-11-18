@@ -85,8 +85,8 @@ test('different prepared source paths share storage and retain independent snaps
     assert.deepEqual(direct(first), expectedDirect);
     for (let effect = 0; effect < 3; ++effect) assert.deepEqual(packet(first, effect), expectedEffects[effect]);
     const shared = native.images.memory();
-    assert.equal(shared.gpuBytes - loaded.gpuBytes, width * height * 2 * 2,
-      'NPOT fallback must allocate one straight and one premultiplied RG8 image');
+    assert.equal(shared.gpuBytes - loaded.gpuBytes, width * height * 4 * 2,
+      'NPOT fallback shares straight and premultiplied RGBA images');
     assert.deepEqual(direct(second), expectedDirect);
     for (let effect = 0; effect < 3; ++effect) assert.deepEqual(packet(second, effect), expectedEffects[effect]);
     assert.equal(native.images.memory().textureUploadBytes, shared.textureUploadBytes,

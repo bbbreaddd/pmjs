@@ -1,40 +1,8 @@
 'use strict';
 const assert=require('node:assert/strict');
 const test=require('node:test');
-const fs=require('node:fs');
-const vm=require('node:vm');
 const crypto=require('node:crypto');
-const {loadPmjsRuntime}=require('./helpers/runtime-context.cjs');
-const source=fs.readFileSync(require.resolve('../js/pmjs-rpgmaker/map-images.js'),'utf8');
-function fixture({ reviewed = false, mz = false, lineEnding = '\n', unknown = false } = {}) {
-  const definitions=[],loads=[];
-  function Tilemap() {} function ShaderTilemap() {} function Bitmap() {}
-  const producerSource = 'function(tileId) {\n  return tileId + 1;\n}';
-  const producer = vm.runInNewContext('(' + producerSource.replace(/\n/g, lineEnding) + ')');
-  for(const name of ['_addNormalTile','_addAutotile','_addTableEdge','_drawNormalTile','_drawAutotile','_drawTableEdge','_isTableTile']) Tilemap.prototype[name]=producer;
-  for(const name of ['_drawNormalTile','_drawAutotile','_drawTableEdge']) ShaderTilemap.prototype[name]=producer;
-  if (unknown) Tilemap.prototype._isTableTile = function() { return false; };
-  const PMJS=loadPmjsRuntime({ __pmjsBuiltinRequire: require }, ['js/pmjs-core/methods.js']).PMJS;
-  PMJS.images={};
-  PMJS.methods.wrap=definition=>definitions.push(definition);
-  const ImageManager={loadTileset(url,hue){loads.push({url,hue,context:PMJS.images.preparedTileSet});return {};},
-    loadParserTileset(url,hue){loads.push({url,hue,context:PMJS.images.preparedTileSet});return {};},_generateCacheKey(url,hue){return url+':'+hue;}};
-  Bitmap.prototype._requestImage=function(){loads.push({context:PMJS.images.preparedTileSet,retry:true});};
-  const data={tilesets:[{firstgid:1}],layers:[{data:[1,2]}]};
-  const index={1:{renderer:'tiled',identity:'set-a',contractHash:crypto.createHash('sha256').update(JSON.stringify(data)).digest('hex')}};
-  const context={PMJS,NativeHost:{assets:{mapPreparationEnabled:true,preparedMapIndex:index}},ImageManager,
-    Tilemap,ShaderTilemap:mz?undefined:ShaderTilemap,Bitmap,$dataMap:{},$gameMap:{mapId:()=>1,tiledData:data,isTiledMap:()=>true},
-    __pmjsBuiltinRequire:require};
-  const adapter = reviewed ? source.replace(/'[a-f0-9]{64}'/g,
-    "'" + crypto.createHash('sha256').update(producerSource).digest('hex') + "'") : source;
-  vm.runInNewContext(adapter,context);
-  for(const definition of definitions) {
-    const target=definition.getTarget();if(typeof target[definition.method]==='function')
-      target[definition.method]=definition.wrap(target[definition.method]);
-  }
-  PMJS.maps.tiledContract=()=>true;
-  return {context,PMJS,loads,ImageManager,Bitmap,data,index};
-}
+const {fixture}=require('./helpers/map-image-context.cjs');
 test('reviewed tile loads preserve public names, isolate cache identities and restore nested context',()=>{
   const f=fixture();f.PMJS.images.preparedTileSet='outer';
   const bitmap=f.ImageManager.loadParserTileset('Sheet',0);
@@ -132,3 +100,48 @@ for (const mz of [false, true]) {
     assert.equal(f.PMJS.maps.stats.reasons['unreviewed-tile-producers'], 1);
   });
 }
+
+test('one parser batch validates once and preserves image scopes, target ownership and unused sheets',()=>{
+ const f=fixture();let checks=0;f.PMJS.maps.tiledContract=()=>{checks++;return true;};
+ f.index[1].sources=['img/tilesets/Used.png'];f.PMJS.images.preparedTileSet='caller';
+ const names=['../img/tilesets/Used.png','../img/tilesets/Unused.png','../img/tilesets/Used.png'];
+ const tail={retained:true},bitmaps=[null,null,null,tail];
+ f.PMJS.maps.loadParserTilesets(names,bitmaps);
+ assert.equal(checks,1);assert.equal(f.PMJS.images.preparedTileSet,'caller');
+ assert.deepEqual(f.loads.map(x=>x.context),['set-a','','set-a']);assert.equal(bitmaps[0]._pmjsPreparedTileSet,'set-a');
+ assert.equal(bitmaps[1]._pmjsPreparedTileSet,undefined);assert.equal(bitmaps[3],tail);
+ assert.deepEqual(names,['../img/tilesets/Used.png','../img/tilesets/Unused.png','../img/tilesets/Used.png']);
+});
+test('each new parser batch observes map edits and refuses stale prepared content',()=>{
+ const f=fixture(),bitmaps=[];f.PMJS.maps.loadParserTilesets(['Used.png'],bitmaps);
+ f.data.layers[0].data[0]=99;f.PMJS.maps.loadParserTilesets(['Used.png'],bitmaps);
+ assert.equal(f.loads.at(-1).context,'');assert.equal(bitmaps[0]._pmjsPreparedTileSet,undefined);
+ assert.equal(f.PMJS.maps.stats.reasons['tiled-content-changed'],1);
+});
+test('parser overrides keep their ordinary per-image callbacks and mutation checks',()=>{
+ const f=fixture(),original=f.ImageManager.loadParserTileset;let callbacks=0;
+ f.ImageManager.loadParserTileset=function(){if(++callbacks===2)f.data.layers[0].data[0]=99;return original.apply(this,arguments);};
+ f.PMJS.maps.loadParserTilesets(['A.png','B.png'],[]);
+ assert.equal(callbacks,2);assert.deepEqual(f.loads.map(x=>x.context),['set-a','']);
+});
+test('parser batch exceptions retain earlier results and restore outer preparation scope',()=>{
+ const f=fixture({onParserLoad(name){if(name==='Broken.png')throw new Error('decode failed');return {};}});
+ const untouched={},bitmaps=[null,untouched];f.PMJS.images.preparedTileSet='caller';
+ assert.throws(()=>f.PMJS.maps.loadParserTilesets(['Good.png','Broken.png'],bitmaps),/decode failed/);
+ assert.equal(bitmaps[0]._pmjsPreparedTileSet,'set-a');assert.equal(bitmaps[1],untouched);
+ assert.equal(f.PMJS.images.preparedTileSet,'caller');
+});
+
+test('empty parser batches do not validate or disturb an existing bitmap array',()=>{
+ const f=fixture(),sentinel={},bitmaps=[sentinel];
+ f.PMJS.maps.tiledContract=()=>{throw new Error('No image selection required');};
+ f.PMJS.maps.loadParserTilesets([],bitmaps);assert.deepEqual(bitmaps,[sentinel]);assert.equal(f.loads.length,0);
+});
+test('nested parser batches restore the outer image selection after unused-source loads',()=>{
+ let f;f=fixture({onParserLoad(name){if(name==='Used.png'){
+  f.PMJS.maps.loadParserTilesets(['Unused.png'],[]);assert.equal(f.PMJS.images.preparedTileSet,'set-a');
+ }return {};}});
+ f.index[1].sources=['img/tilesets/Used.png'];f.PMJS.images.preparedTileSet='caller';
+ f.PMJS.maps.loadParserTilesets(['Used.png'],[]);
+ assert.deepEqual(f.loads.map(x=>x.context),['set-a','']);assert.equal(f.PMJS.images.preparedTileSet,'caller');
+});

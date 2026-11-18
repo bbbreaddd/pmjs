@@ -6,6 +6,12 @@
     "search-limit.js",
     "tile-point-revisions.js",
     "autorun-index.js",
-    "event-mini-label.js"
+    "event-mini-label.js",
+    "update-scheduler.js",
+    "empty-character-sprites.js",
+    "tileset-loading.js",
+    "mirror-variable.js",
+    "empty-picture-sprites.js",
+    "follower-actor.js"
   ]
 }

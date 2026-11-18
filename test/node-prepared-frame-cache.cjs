@@ -85,95 +85,38 @@ function readFrame(image, frame = 0) {
 
 async function main() {
   const image = await prepare('initial', colors);
-  assert.deepEqual([image.width, image.height], [96, 24], 'logical sheet dimensions changed');
+  assert.deepEqual([image.width, image.height], [96, 24]);
   const originalPixels = readFrame(image);
   const originalTranslucent = readFrame(image, 1);
-  const translucentOffset = (12 * 32 + 16) * 4;
-  assert.deepEqual(Array.from(originalTranslucent.subarray(translucentOffset, translucentOffset + 4)),
-    colors[1], 'CPU pixels must remain straight alpha');
   const before = native.images.memory();
   assert.equal(before.preparedFrameCacheBudget, disabled ? 0 : defaultBudget ? 33554432 : budget);
-  const first = render(image, [0]);
-  assertCenters(first, [0], colors);
-  const loaded = native.images.memory();
-  if (disabled) {
-    assert.equal(loaded.preparedFrameCacheBytes, 0);
-    assert.equal(loaded.preparedFrameCacheMisses, before.preparedFrameCacheMisses);
-    assert.equal(loaded.preparedMaterializations, before.preparedMaterializations,
-      'disabled frame caching must draw prepared pages without expanding the sheet');
-    native.images.release(image.handle);
-    return;
+  for (const frames of [[0], [0, 1, 2, 0], [2, 1, 0]]) {
+    assertCenters(render(image, frames), frames, colors);
   }
-  assert.ok(loaded.preparedFrameCacheMisses > before.preparedFrameCacheMisses);
-  assert.ok(loaded.preparedFrameCacheBytes > 0);
-  assert.ok(loaded.preparedFrameCacheBytes <= loaded.preparedFrameCacheBudget);
-  assert.equal(loaded.preparedMaterializations, before.preparedMaterializations,
-    'linear NPOT sprite reconstructed the full sheet');
-  assertCenters(render(image, [0]), [0], colors);
-  const repeated = native.images.memory();
-  assert.ok(repeated.preparedFrameCacheHits > loaded.preparedFrameCacheHits);
-  assert.equal(repeated.textureUploadBytes, loaded.textureUploadBytes,
-    'cached frame uploaded its pixels again');
-  if (defaultBudget) {
-    native.images.release(image.handle);
-    native.beginFrame();
-    assert.equal(native.images.memory().preparedFrameCacheBytes, 0);
-    return;
-  }
-
-  // Four queued draws exceed a one-frame cache, but every queued texture
-  // must stay alive until the renderer consumes the complete scene.
-  assertCenters(render(image, [0, 1, 2, 0]), [0, 1, 2, 0], colors);
-  const evicted = native.images.memory();
-  assert.ok(evicted.preparedFrameCacheEvictions > repeated.preparedFrameCacheEvictions);
-  assert.ok(evicted.preparedFrameCacheBytes <= budget);
-  assert.ok(evicted.preparedFrameResidentBytes > evicted.preparedFrameCacheBytes);
-  assert.equal(evicted.preparedFrameEvictedBytes,
-    evicted.preparedFrameResidentBytes - evicted.preparedFrameCacheBytes);
   const batch = Array.from({ length: 31 }, (_, index) => index % 3);
   assertCenters(render(image, batch, { overlap: true }), [0], colors);
-  const peak = native.images.memory();
-  assert.ok(peak.preparedFrameResidentBytes > 20 * budget,
-    'physical accounting omitted textures evicted during the submitted batch');
-  assert.ok(peak.preparedFramePeakResidentBytes >= peak.preparedFrameResidentBytes);
-  assert.ok(peak.preparedFrameCacheBytes <= budget);
-  assertCenters(render(image, [2]), [2], colors);
-  const settled = native.images.memory();
-  assert.equal(settled.preparedFrameResidentBytes, settled.preparedFrameCacheBytes);
-  assert.equal(settled.preparedFrameEvictedBytes, 0);
-
-  assert.equal(evicted.preparedMaterializations, before.preparedMaterializations);
-  assertCenters(render(image, [2, 1, 0]), [2, 1, 0], colors);
   assertCenters(render(image, [1], { fractional: true }), [1], colors);
-  assert.equal(native.images.memory().preparedMaterializations, before.preparedMaterializations,
-    'fractional source coordinates reconstructed the logical sheet');
-  assert.deepEqual(readFrame(image), originalPixels,
-    'frame caching changed the pixels read through the original image');
-  assert.deepEqual(readFrame(image, 1), originalTranslucent,
-    'premultiplied frame textures changed raw straight-alpha pixels');
+  const warm = native.images.memory();
+  assertCenters(render(image, [1], { fractional: true }), [1], colors);
+  const after = native.images.memory();
+  assert.equal(after.textureUploadBytes, warm.textureUploadBytes);
+  for (const key of ['preparedFrameCacheBytes', 'preparedFrameResidentBytes',
+    'preparedFrameCacheMisses', 'preparedFrameConversions', 'sourceTextureBuilds']) {
+    assert.equal(after[key], 0, key);
+  }
+  assert.deepEqual(readFrame(image), originalPixels);
+  assert.deepEqual(readFrame(image, 1), originalTranslucent);
   native.images.release(image.handle);
   native.beginFrame();
-  assert.equal(native.images.memory().preparedFrameCacheBytes, 0,
-    'releasing the source retained cached frame textures');
-  assert.equal(native.images.memory().preparedFrameResidentBytes, 0);
-
-  // Reloading the same logical source after release must not reuse a frame
-  // from the previous image, even if native image slots are recycled.
   const replacementColors = [[223, 181, 19, 255], colors[1], colors[2]];
   const replacement = await prepare('replacement', replacementColors);
   assertCenters(render(replacement, [0]), [0], replacementColors);
-  assert.equal(native.images.memory().preparedMaterializations, before.preparedMaterializations);
-  const beforeMipmaps = native.images.memory();
   assertCenters(render(replacement, [0], { flags: 1 << 16 }), [0], replacementColors);
-  const mipmaps = native.images.memory();
-  assert.ok(mipmaps.preparedMaterializations > beforeMipmaps.preparedMaterializations,
-    'mipmapped draws must retain full-sheet sampling');
-  assert.equal(mipmaps.preparedFrameCacheMisses, beforeMipmaps.preparedFrameCacheMisses,
-    'mipmap fallback constructed an approximate frame texture');
+  assert.equal(native.images.memory().preparedFrameConversions, 0);
   native.images.release(replacement.handle);
 }
 
-test(`prepared frame cache ${disabled ? 'disabled' : defaultBudget ? 'default' : 'enabled'}`, async () => {
+test(`prepared sprite fallback ${disabled ? 'disabled' : defaultBudget ? 'default' : 'enabled'}`, async () => {
   try { await main(); }
   finally { native.runtime.quit(); }
 });

@@ -52,12 +52,11 @@ function fixture({ qualified = true, enabled = true, predecessorChanged = false,
   sprite.parent={getChildIndex(){calls.indexReads++;return 3;}};
   return {sprite,model,pages,calls,refused,original,context};
 }
-test('blank labels skip construction after preserving the complete authored delay',()=>{
-  const f=fixture();assert.deepEqual([f.sprite.setupMiniLabel(),f.sprite.setupMiniLabel(),f.sprite.setupMiniLabel()],[3,2,1]);
-  assert.equal(f.sprite._labelDelay,0);assert.equal(f.calls.constructed,0);
+test('events without labels on any page bypass delayed setup entirely',()=>{
+  const f=fixture();
   for(let i=0;i<100;i++)f.sprite.setupMiniLabel();
-  assert.equal(f.sprite._miniLabel,undefined);assert.equal(f.calls.original,3);
-  assert.equal(f.calls.indexReads,1);assert.equal(f.calls.listReads,1);
+  assert.equal(f.sprite._labelDelay,undefined);assert.equal(f.sprite._miniLabel,undefined);
+  assert.equal(f.calls.original,0);assert.equal(f.calls.indexReads,0);assert.equal(f.calls.listReads,0);
 });
 test('text labels construct on the same tick and through the original method',()=>{
   const f=fixture();f.pages[0].list=[{code:108,parameters:['<Mini Label: Shop>']}];
@@ -87,5 +86,22 @@ test('non-event characters skip their permanently empty windows',()=>{
   const f=fixture();f.sprite._character={};
   for(let i=0;i<10;i++)f.sprite.setupMiniLabel();
   assert.equal(f.calls.constructed,0);
-  assert.equal(f.calls.indexReads,1);
+  assert.equal(f.calls.indexReads,0);
+});
+
+test('a potentially labeled later page keeps the original delay and can become active before it expires',()=>{
+ const f=fixture();f.pages.push({list:[{code:108,parameters:['<Mini Label: Shop>']}]});
+ assert.equal(f.sprite.setupMiniLabel(),3);f.model._pageIndex=1;
+ assert.equal(f.sprite.setupMiniLabel(),2);assert.equal(f.sprite.setupMiniLabel(),1);
+ assert.equal(f.calls.constructed,0);assert.equal(f.sprite.setupMiniLabel(),'guest-result');
+ assert.equal(f.calls.constructed,1);
+});
+
+test('reusing an unlabeled sprite before construction reclassifies the new character',()=>{
+ const f=fixture();f.sprite.setupMiniLabel();
+ const list=[{code:108,parameters:['<Mini Label: Shop>']}];
+ const pages=[{list}];
+ f.sprite._character={_eventId:2,_pageIndex:0,event:()=>({pages}),page:()=>pages[0],list:()=>list};
+ for(let i=0;i<4;i++)f.sprite.setupMiniLabel();
+ assert.equal(f.calls.constructed,1);
 });

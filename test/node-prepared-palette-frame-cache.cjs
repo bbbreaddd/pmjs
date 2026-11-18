@@ -50,8 +50,9 @@ native.initialize({ gameRoot: root, width: 112, height: 96, windowTitle: 'Palett
         assert.ok(maximum <= 2, `crop ${crop}, nearest=${nearest}, packed=${packed}: delta ${maximum}`);
       }
       const warm = native.images.memory();
-      assert.ok(warm.preparedFrameCacheMisses > before.preparedFrameCacheMisses,
-        'large nearest or whole-image sprite did not enter the shared cache');
+      assert.equal(warm.preparedFrameCacheMisses, 0);
+      assert.equal(warm.preparedFrameConversions, 0);
+      assert.equal(warm.sourceTextureBuilds, 0);
       for (let repeat = 0; repeat < 3; repeat++) draw(image, crop, true, false);
       const after = native.images.memory();
       assert.equal(after.preparedFrameConversions, warm.preparedFrameConversions);

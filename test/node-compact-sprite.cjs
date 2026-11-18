@@ -87,11 +87,10 @@ test('compact prepared sprites match full textures through filters, fades and cl
     const memory = native.images.memory(100);
     const owner = memory.largest.find(entry => entry.handle === compact.handle);
     assert.ok(owner, 'prepared sprite owner must remain observable');
-    const pot = value => 2 ** Math.ceil(Math.log2(value));
-    const pageBytes = descriptor.pages.reduce((total, page) => total + pot(page.width) * pot(page.height), 0);
-    assert.equal(owner.gpuBytes, pageBytes + 8 * (width + height),
-      'prepared sprites must retain one padded R8 page and four sampling tables');
-    assert.equal(memory.preparedFrameCacheMisses, 0, 'compact sampling must bypass frame reconstruction');
+    assert.equal(owner.palette, false);
+    assert.equal(memory.preparedFrameCacheMisses, 0);
+    assert.equal(memory.preparedFrameConversions, 0);
+    assert.equal(memory.sourceTextureBuilds, 0);
     context.diagnostic(JSON.stringify({ comparisons, compact: owner }));
     native.images.release(compact.handle);
     native.images.release(original.handle);

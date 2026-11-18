@@ -61,10 +61,9 @@ test('large prepared frames fit by trimming only zero exterior pixels', async ()
       }
     }
     const after = native.images.memory();
-    assert.equal(after.preparedMaterializations, before.preparedMaterializations,
-      'transparent or compressed frames exceeded the budget and expanded the sheet');
-    assert.ok(after.preparedFrameCacheHits > before.preparedFrameCacheHits);
-    assert.ok(after.preparedFrameCacheBytes <= 4096);
+    assert.equal(after.preparedFrameConversions, 0);
+    assert.equal(after.preparedFrameCacheBytes, 0);
+    assert.equal(after.sourceTextureBuilds, 0);
   } finally {
     if (original) native.images.release(original.handle);
     if (prepared) native.images.release(prepared.handle);

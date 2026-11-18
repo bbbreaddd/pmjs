@@ -7,7 +7,7 @@ const { temporaryDirectory } = require('./helpers/temp.cjs');
 const { fixture, preparePair, spritePacket, drawPacket } = require('./helpers/sparse-palette.cjs');
 const native = require(path.resolve(process.argv[2]));
 
-test('offline sparse palettes preserve pixels, ownership, and dense fallback', async () => {
+test('prepared images preserve pixels and ownership without GPU palettes', async () => {
   const root = temporaryDirectory('sparse-palette-');
   const source = fixture(root, 257, 259);
   native.initialize({ gameRoot: root, width: 64, height: 48, windowTitle: 'Sparse palette', imageWarmCacheBytes: 0 });
@@ -28,11 +28,8 @@ test('offline sparse palettes preserve pixels, ownership, and dense fallback', a
     }
     native.beginFrame();
     const sparseOwner = owner(pair.sparse), denseOwner = owner(pair.dense);
-    assert.equal(sparseOwner.paletteSparse, true);
-    assert.equal(denseOwner.paletteSparse, false);
-    assert.ok(sparseOwner.gpuBytes <= denseOwner.gpuBytes * 0.85, 'lookup overhead erased sparse savings');
-    assert.equal(sparseOwner.fullTextureResident, false);
-    assert.ok(sparseOwner.cpuBytes < 128 * 1024, 'GPU upload retained packed planes or expanded RGBA');
+    assert.equal(sparseOwner.palette, false);
+    assert.equal(denseOwner.palette, false);
     const uploads = native.images.memory().textureUploadBytes;
     draw(pair.sparse); draw(pair.sparse);
     assert.equal(native.images.memory().textureUploadBytes, uploads, 'stable sparse draw reuploaded its planes');
@@ -45,7 +42,7 @@ test('offline sparse palettes preserve pixels, ownership, and dense fallback', a
       native.canvas.clear(canvas.handle);
       native.canvas.drawImage(canvas.handle, reference.handle, 31, 31, 9, 3, 0, 0, 9, 3, 1);
       assert.deepEqual(pixels, Buffer.from(native.canvas.readPixels(canvas.handle, 0, 0, 9, 3)));
-      assert.equal(owner(pair.sparse).paletteSparse, true, 'pixel read promoted GPU backing');
+      assert.equal(owner(pair.sparse).palette, false, 'pixel reads do not create palette storage');
     } finally { native.canvas.release(canvas.handle); }
 
     const alias = await native.images.loadAsync('sparse.png');

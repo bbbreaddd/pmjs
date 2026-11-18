@@ -250,6 +250,8 @@ function nativePreparedWorldRecord(node, nodeIndex, forcedAlpha) {
   nativeSceneMetadata[nodeIndex * nativeSceneMetadataStride + 5] |= 524288;
 }
 
+var nativeSceneEmptySpriteBinding = {};
+
 function nativePlainSpriteBinding(node) {
   if (nativeSceneNodeRejected(node, null) || node.children && node.children.length ||
       node._cacheAsBitmap || PMJS.pixi4.bitmapPresentation && PMJS.pixi4.bitmapPresentation.has(node) ||
@@ -276,10 +278,13 @@ function nativePlainSpriteBinding(node) {
     texture.baseTexture === node._tintTexture;
   var tone = node._colorTone;
   var blend = node._blendColor;
-  if (!nativeImage || !frame || frame.width <= 0 || frame.height <= 0 ||
+  if (!nativeImage || !frame ||
       rotation % 2 || cpuTinted ||
       tone && (tone[0] || tone[1] || tone[2] || tone[3]) ||
       blend && blend[3] > 0) return null;
+  if (frame.width <= 0 || frame.height <= 0) {
+    return nativeSceneTransformsPrepared ? nativeSceneEmptySpriteBinding : null;
+  }
   var anchor = node.anchor || { x: 0, y: 0 };
   var original = texture.orig || frame;
   var trim = texture.trim;
@@ -767,16 +772,18 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
           PMJS.optimizations.isEnabled('scene.plain-sprite-segment')) {
         var segment = [];
         var segmentIndex = index;
+        var emptyBindings = 0;
         while (segmentIndex < childLimit &&
             nativeSceneTraversesChild(kind, node, node.children[segmentIndex])) {
           if (nativeSceneSkipsChild(node.children[segmentIndex])) { segmentIndex++; continue; }
           var binding = nativePlainSpriteBinding(node.children[segmentIndex]);
           if (!binding) break;
-          segment.push(binding);
+          if (binding === nativeSceneEmptySpriteBinding) emptyBindings++;
+          else segment.push(binding);
           segmentIndex++;
         }
-        if (segment.length >= 4) {
-          writeNativePlainSpriteSegment(segment, nodeIndex);
+        if (segment.length >= 4 || emptyBindings) {
+          if (segment.length) writeNativePlainSpriteSegment(segment, nodeIndex);
           index = segmentIndex - 1;
           continue;
         }

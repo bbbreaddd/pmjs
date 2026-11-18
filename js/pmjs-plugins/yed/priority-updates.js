@@ -3,6 +3,7 @@
 (function() {
   var stats = { skipped: 0, ordinary: 0 };
   var installed = false;
+  var canDefer = function() { return false; };
   function install() {
     if (installed) return true;
     if (!PMJS.optimizations.isEnabled('tilemap.yed-indexed-paint-loops') ||
@@ -25,6 +26,28 @@
     if (!PMJS.methods.matchesSource(original, '2eeca0f4f55a476574b190fb2617db7f37a2a38df7657325ce551dc3e92164e7') ||
         !methods.every(function(entry) { return PMJS.methods.matchesSource(entry[0][entry[1]], entry[2]); })) return false;
     methods.forEach(function(entry) { entry[3] = entry[0][entry[1]]; });
+    function idle(child) {
+      var filters = child._horrorFilters;
+      return child.layerId === -1 && child._hiding === true && child.visible === false &&
+        child.children && child.children.length === 0 &&
+        Array.isArray(child._animationSprites) && child._animationSprites.length === 0 &&
+        !child._horrorFiltersSource && (!filters || !filters.noiseFilter && !filters.glitchFilter && !filters.tvFilter) &&
+        child.update === methods[0][3] && child.updateVisibility === methods[1][3] &&
+        child.updateAnimationSprites === methods[2][3] && child.synchronizeHorrorFiltersWithSource === methods[4][3] &&
+        child.updateHorrorEffects === methods[5][3] && child.updateHorrorNoise === methods[6][3] &&
+        child.updateHorrorGlitch === methods[7][3] && child.updateHorrorTV === methods[8][3];
+    }
+    canDefer = function(child) {
+      return globalThis.Olivia && Olivia.HorrorEffects === methods[9][0] &&
+        methods.every(function(entry) { return entry[0][entry[1]] === entry[3]; }) && idle(child);
+    };
+    var startAnimation = base.startAnimation;
+    if (typeof startAnimation === 'function') {
+      base.startAnimation = function() {
+        if (PMJS.yedRetainedTiles) PMJS.yedRetainedTiles.wakePriorityTile(this);
+        return startAnimation.apply(this, arguments);
+      };
+    }
     var pools = new WeakMap();
     Tilemap.prototype.update = function() {
       var pool = this._priorityTiles;
@@ -33,8 +56,10 @@
           !globalThis.Olivia || Olivia.HorrorEffects !== methods[9][0] ||
           !PMJS.optimizations.isEnabled('tilemap.yed-indexed-paint-loops') ||
           !methods.every(function(entry) { return entry[0][entry[1]] === entry[3]; })) {
+        if (PMJS.yedRetainedTiles) PMJS.yedRetainedTiles.restorePriorityTiles(this);
         return original.apply(this, arguments);
       }
+      if (PMJS.yedRetainedTiles) PMJS.yedRetainedTiles.restorePriorityTiles(this, idle);
       var entry = pools.get(pool);
       if (!entry || entry.length !== pool.length) {
         var members = new WeakSet();
@@ -50,15 +75,7 @@
       for (var index = 0; index < count; index++) {
         var child = this.children[index];
         if (!child) continue;
-        var filters = child._horrorFilters;
-        if (entry.members.has(child) && child.layerId === -1 && child._hiding === true && child.visible === false &&
-            child.children && child.children.length === 0 &&
-            Array.isArray(child._animationSprites) && child._animationSprites.length === 0 &&
-            !child._horrorFiltersSource && (!filters || !filters.noiseFilter && !filters.glitchFilter && !filters.tvFilter) &&
-            child.update === methods[0][3] && child.updateVisibility === methods[1][3] &&
-            child.updateAnimationSprites === methods[2][3] && child.synchronizeHorrorFiltersWithSource === methods[4][3] &&
-            child.updateHorrorEffects === methods[5][3] && child.updateHorrorNoise === methods[6][3] &&
-            child.updateHorrorGlitch === methods[7][3] && child.updateHorrorTV === methods[8][3]) {
+        if (entry.members.has(child) && idle(child)) {
           stats.skipped++;
         } else if (child.update) { stats.ordinary++; child.update(); }
       }
@@ -70,7 +87,7 @@
     installed = true;
     return true;
   }
-  PMJS.yedPriorityUpdates = { install: install, diagnostics: function() {
+  PMJS.yedPriorityUpdates = { install: install, canDefer: function(child) { return canDefer(child); }, diagnostics: function() {
     return { installed: installed, skipped: stats.skipped, ordinary: stats.ordinary };
   } };
   PMJS.phases.on('beforeBoot', 'pmjs.yed-priority-updates', install);
