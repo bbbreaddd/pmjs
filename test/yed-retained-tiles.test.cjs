@@ -4,8 +4,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-function fixture() {
+function fixture(tracked = false) {
   const context = { PMJS: {}, $gameMap: { currentMapLevel: 0 } };
+  if (tracked) context.PMJS.pixi4 = { tilePointRevision(rect, points) { return points === rect.pointsBuf ? rect._pmjsNativeGeneration || 0 : -1; } };
   vm.runInNewContext(fs.readFileSync(require.resolve('../js/pmjs-plugins/yed/retained-tiles.js'), 'utf8'), context);
   const rect = { pointsBuf: [], textures: [{}], calls: 0,
     addRect(...values) { this.calls++; this.pointsBuf.push(values[1], values[2], ...values.slice(3), 0, 0, values[0]); } };
@@ -272,4 +273,77 @@ test('windows over map edges compare the cells they show, with and without wrapp
   map.tiledData.layers[0].data[3] = 1;
   api.prepare(map, -1, 0);
   assert.ok(rect.calls > wrapped);
+});
+
+test('tracked ordinary scrolling retains overlap with canonical geometry through reversals and diagonals', () => {
+  const a = fixture(true), b = fixture();
+  for (const f of [a,b]) {
+    f.map._mapWidth = f.map._mapHeight = 6;
+    f.map.tiledData.layers[0].data = Array.from({length:36}, (_,i)=>i%2+1);
+  }
+  const points = a.rect.pointsBuf;
+  for (const [x,y] of [[0,0],[1,0],[2,1],[1,0],[0,0],[-1,0],[-1,-1],[0,0]]) {
+    for (const f of [a,b]) {
+      f.map.origin.x=x*16;f.map.origin.y=y*16;
+      assert.equal(f.api.prepare(f.map,x,y),true);
+    }
+    assert.deepEqual(a.rect.pointsBuf,b.rect.pointsBuf);
+    assert.equal(a.rect.pointsBuf,points);
+    assert.deepEqual(a.map._layers[0].position,b.map._layers[0].position);
+  }
+  assert.ok(a.rect.calls < b.rect.calls);
+});
+
+test('scroll reuse observes live inputs and preserves mixed priority/object assignments', () => {
+  const a = fixture(true), b = fixture();
+  for (const f of [a,b]) {
+    f.map._mapWidth=f.map._mapHeight=6;
+    f.map.tiledData.layers[0].data=Array(36).fill(1);
+    f.map.tiledData.layers.push({type:'objectgroup',objects:[{gid:2,visible:true,x:8,y:20,height:16}]});
+    f.map.horizontalWrap=f.map.verticalWrap=true;
+  }
+  const mutations=[()=>{},()=>{},f=>{f.map.tiledData.layers[0].data[7]=2;},
+    f=>{f.rect.pointsBuf[0]=99;},f=>{f.map._needsRepaint=true;},
+    f=>{f.map._isPriorityTile=()=>true;},f=>{f.map._isPriorityTile=()=>false;}];
+  for(let i=0;i<mutations.length;i++) {
+    for(const f of [a,b]) {mutations[i](f);f.api.prepare(f.map,i%2,i%2);}
+    assert.deepEqual(a.rect.pointsBuf,b.rect.pointsBuf);
+    const sprites=f=>f.sprites.map(s=>[s.layerId,s.origX,s.origY,s.visible,s.frame]);
+    assert.deepEqual(sprites(a),sprites(b));
+    assert.equal(a.map._pmjsActivePriorityTileCount,b.map._pmjsActivePriorityTileCount);
+  }
+});
+
+test('scroll reuse handles new layers, replacement rectangles and animated inputs', () => {
+  const a=fixture(true), b=fixture();
+  for(const f of [a,b]) {
+    f.api.prepare(f.map,0,0);
+    const rect={pointsBuf:[],textures:[{}],calls:0,addRect:f.rect.addRect};
+    f.map.tiledData.layers.push({type:'tilelayer',visible:true,data:[2,1,2,1],properties:{}});
+    f.map._layers.push({layerId:1,children:[rect],position:{},clear(){rect.pointsBuf.length=0;rect._pmjsNativeGeneration=(rect._pmjsNativeGeneration||0)+1;}});
+  }
+  for(const f of [a,b]) {
+    const rect={pointsBuf:[],textures:[{}],calls:0,addRect:f.rect.addRect};
+    f.map._layers[0].children[0]=rect;
+    f.map._layers[0].clear=function(){rect.pointsBuf.length=0;rect._pmjsNativeGeneration=(rect._pmjsNativeGeneration||0)+1;};
+  }
+  for(const [x,y] of [[1,0],[0,0],[1,1],[0,0]]) {
+    for(const f of [a,b]) {f.api.prepare(f.map,x,y);f.api.updateAnimation(f.map);f.api.prepare(f.map,x,y);}
+    assert.deepEqual(a.map._layers.map(l=>l.children[0].pointsBuf),b.map._layers.map(l=>l.children[0].pointsBuf));
+  }
+});
+
+test('rejected entering cells do not corrupt reusable overlap', () => {
+  const a=fixture(true), b=fixture();
+  for(const f of [a,b]) {
+    f.map._mapWidth=3;f.map.tiledData.layers[0].data=[1,2,1,2,1,2];
+    f.api.prepare(f.map,0,0);
+    const before=f.rect.pointsBuf.slice();
+    f.map.tiledData.layers[0].data[2]=0x80000001;
+    assert.equal(f.api.prepare(f.map,1,0),false);
+    assert.deepEqual(f.rect.pointsBuf,before);
+    f.map.tiledData.layers[0].data[2]=1;
+    assert.equal(f.api.prepare(f.map,1,0),true);
+  }
+  assert.deepEqual(a.rect.pointsBuf,b.rect.pointsBuf);
 });

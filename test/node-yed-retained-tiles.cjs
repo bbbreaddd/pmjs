@@ -26,7 +26,21 @@ try {
       assert.equal(scene.uploads, frame + 1, 'warm camera movement must reuse native geometry');
     }
   }
-  console.log(JSON.stringify({ pixelComparisons: 9, uploads: scene.uploads }));
+  for (const [x,y] of [[1,0],[1,1],[0,1],[0,0],[-1,0],[-1,-1],[0,0]]) {
+    map.origin.x=x*16;map.origin.y=y*16;
+    api.prepare(map,x,y);
+    const expected=[];
+    for(let row=0;row<2;row++)for(let col=0;col<2;col++) {
+      const cx=x+col,cy=y+row;
+      if(cx<0||cx>=2||cy<0||cy>=2)continue;
+      expected.push(cx===0 ? 32 : 16,0,col*16,row*16,16,16,0,0,0);
+    }
+    const candidate=render(context.ensureNativeRectTileLayer(rect),0);
+    const reference=native.render.createTileLayer(new Float32Array(expected),[atlas.handle]);
+    assert.equal(candidate,render(reference,0),'tile-window crossings preserve pixels');
+    native.render.releaseTileLayer(reference);
+  }
+  console.log(JSON.stringify({ pixelComparisons: 16, uploads: scene.uploads }));
 } finally {
   scene.dispose();
   fs.rmSync(root, { recursive: true, force: true });

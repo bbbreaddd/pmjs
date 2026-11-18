@@ -136,9 +136,18 @@
 
   function paint(map, x, y) {
     if (!supported(map)) return false;
-    var state = { x: x, y: y, values: [], records: [], materials: [], dependencies: Object.create(null), generations: [] };
-    var size = windowSize(map), candidates = [], materials = Object.create(null);
-    function collect(gid, layerId, rect, dx, dy, priority) {
+    var previous = states.get(map), size = windowSize(map);
+    var revision = PMJS.pixi4 && PMJS.pixi4.tilePointRevision;
+    var reuse = previous && previous.grid && revision && !map._needsRepaint &&
+      previous.columns === size[0] && previous.rows === size[1] &&
+      (x !== previous.x || y !== previous.y) && Math.abs(x - previous.x) <= 1 && Math.abs(y - previous.y) <= 1 &&
+      map._layers.every(function(layer) {
+        var rect = layer.children[0];
+        return !rect.pointsBuf.length || revision(rect, rect.pointsBuf) >= 0;
+      });
+    var state = { x: x, y: y, values: [], records: [], materials: [], dependencies: Object.create(null), generations: [], grid: revision ? [] : null, columns: size[0], rows: size[1] };
+    var candidates = [], materials = Object.create(null);
+    function collect(gid, layerId, rect, dx, dy, priority, retained) {
       if (!gid) return true;
       if (!Number.isInteger(gid) || gid < 0 || gid >= 0x10000000) return false;
       var material = materials[gid];
@@ -149,19 +158,35 @@
         material.uv = source(map, material);
         state.materials.push(material);
       }
-      candidates.push({ material: material,
-        layerId: layerId, rect: rect, dx: dx, dy: dy, priority: priority });
+      if (retained) candidates.push({ record: retained, material: material, dx: dx, dy: dy,
+        reused: material.set.tilewidth === material.set.tileheight });
+      else {
+        var record = { material: material, layerId: layerId, rect: rect, dx: dx, dy: dy, priority: priority };
+        if (state.grid) record.gid = gid;
+        candidates.push(record);
+      }
       return true;
     }
     for (var i = 0; i < map._layers.length; i++) {
       var layer = map._layers[i], meta = map.tiledData.layers[layer.layerId];
       if (!meta || !layer.children[0] || typeof layer.children[0].addRect !== 'function') return false;
+      var grid = state.grid && (state.grid[i] = new Array(size[0] * size[1]));
       if (meta.type !== 'tilelayer' || !meta.visible) continue;
       for (var row = 0; row < size[1]; row++) {
         for (var column = 0; column < size[0]; column++) {
-          if (!collect(cell(map, meta, x + column, y + row), layer.layerId,
-            layer.children[0], column * map._tileWidth, row * map._tileHeight,
-            map._isPriorityTile(layer.layerId))) return false;
+          var gid = cell(map, meta, x + column, y + row), priority = map._isPriorityTile(layer.layerId);
+          var retained = null;
+          if (reuse && previous.grid[i] && !priority) {
+            var oldX = column + x - previous.x, oldY = row + y - previous.y;
+            if (oldX >= 0 && oldX < size[0] && oldY >= 0 && oldY < size[1]) {
+              retained = previous.grid[i][oldY * size[0] + oldX];
+              if (retained && (retained.gid !== gid || retained.layerId !== layer.layerId || retained.rect !== layer.children[0])) retained = null;
+            }
+          }
+          var count = candidates.length;
+          if (!collect(gid, layer.layerId, layer.children[0], column * map._tileWidth,
+            row * map._tileHeight, priority, retained)) return false;
+          if (grid && !priority && candidates.length !== count) grid[row * size[0] + column] = candidates[count].record || candidates[count];
         }
       }
     }
@@ -176,8 +201,9 @@
     }
     map._layers.forEach(function(item) { item.clear(); });
     var active = 0;
-    candidates.forEach(function(record) {
-      var material = record.material, uv = material.uv, set = material.set;
+    candidates.forEach(function(candidate) {
+      var record = candidate.record || candidate, material = candidate.material, uv = material.uv, set = material.set;
+      record.material = material; record.dx = candidate.dx; record.dy = candidate.dy;
       if (record.priority) {
         var sprite = map._priorityTiles[active];
         if (!sprite) return;
@@ -193,7 +219,14 @@
         sprite.show();
       } else {
         record.offset = record.rect.pointsBuf.length;
-        record.rect.addRect(material.texture, uv[0], uv[1], record.dx, record.dy,
+        if (candidate.reused) {
+          var points = record.rect.pointsBuf, offset = record.offset;
+          points[offset] = uv[0]; points[offset + 1] = uv[1];
+          points[offset + 2] = record.dx; points[offset + 3] = record.dy;
+          points[offset + 4] = set.tilewidth; points[offset + 5] = set.tileheight;
+          points[offset + 6] = 0; points[offset + 7] = 0; points[offset + 8] = material.texture;
+          record.rect._pmjsNativeGeneration = (record.rect._pmjsNativeGeneration || 0) + 1;
+        } else record.rect.addRect(material.texture, uv[0], uv[1], record.dx, record.dy,
           set.tilewidth, set.tileheight);
         record.length = record.rect.pointsBuf.length - record.offset;
       }
