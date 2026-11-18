@@ -106,14 +106,16 @@ std::size_t textureTexelBytes(TextureFormat f) {
   return 0;
 }
 std::optional<PreparedTexture> makePreparedTexture(const ImagePixels& pixels, const ImageStorageDecision* known,
-                                                  std::size_t retainedLimit) {
+                                                  std::size_t retainedLimit, bool allowPalettes) {
   const auto classified = known ? *known : classifyImageStorage(pixels);
-  if (classified.paletteBits == 16) {
-    if (auto page = makeSparsePalettePage(pixels.width, pixels.height, pixels.rgba)) return sparse(std::move(*page));
-  }
-  if (auto result = dense(pixels, classified); result && validLayout(result->layout)) return result;
-  if (auto page = makeSparsePalettePage(pixels.width, pixels.height, pixels.rgba, 262144)) {
-    if (page->indexBytes == 3 && page->gpuBytes()+page->colors.size()*3 < pixels.rgba.size()) return sparse(std::move(*page));
+  if (allowPalettes) {
+    if (classified.paletteBits == 16) {
+      if (auto page = makeSparsePalettePage(pixels.width, pixels.height, pixels.rgba)) return sparse(std::move(*page));
+    }
+    if (auto result = dense(pixels, classified); result && validLayout(result->layout)) return result;
+    if (auto page = makeSparsePalettePage(pixels.width, pixels.height, pixels.rgba, 262144)) {
+      if (page->indexBytes == 3 && page->gpuBytes()+page->colors.size()*3 < pixels.rgba.size()) return sparse(std::move(*page));
+    }
   }
   auto channel = makeChannelBlockPage(pixels.width, pixels.height, pixels.rgba, retainedLimit);
   if (!channel) return {};

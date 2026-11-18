@@ -28,14 +28,14 @@ test('prepared page palette metadata survives direct and catalog installs', asyn
     fs.writeFileSync(path.join(root, mode + '-' + item.name + '.png'), item.image.bytes);
     fs.mkdirSync(path.join(root, mode + '-' + item.name));
   }
-  native.initialize({ gameRoot: root, width: 64, height: 48,
+  native.initialize({ imagePalettization: true, gameRoot: root, width: 64, height: 48,
     windowTitle: 'Prepared palette metadata', imageWarmCacheBytes: 0 });
   try {
     for (const mode of ['direct', 'catalog']) for (const item of cases) {
       await t.test(mode + '/' + item.name, async () => {
         const source = mode + '-' + item.name + '.png', directory = path.join(root, mode + '-' + item.name);
         const descriptor = await native.assets.processImage(source, directory,
-          { grid: [1, 1], backdrop: [0, 0, 0, 0] }, path.join(root, source), null, { pageCodec: 'lz4' });
+          { grid: [1, 1], backdrop: [0, 0, 0, 0] }, path.join(root, source), null, { pageCodec: 'lz4', allowPalettes: true });
         assert.ok(descriptor.pages.length > 0);
         const entry = { source, directory, descriptor,
           sourceIdentity: native.assets.sourceIdentity(source) };

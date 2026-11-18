@@ -1042,7 +1042,7 @@ std::optional<ImageInfo> ImageStore::createDecoded(const ImagePixels& pixels,
 }
 
 std::shared_ptr<ImageStore::PaletteBacking> ImageStore::makePalette(const ImagePixels& pixels, const ImageStorageDecision* decision) {
-  if (decision && !decision->paletteBits) return {};
+  if (!palettizationEnabled_ || (decision && !decision->paletteBits)) return {};
   const auto channels = decision ? 4 : imageStorage(pixels).channels;
   if (channels == 1) return {};
   const std::size_t colorLimit = decision ? (decision->paletteBits == 8 ? 256 : 65536) :
@@ -1096,6 +1096,7 @@ std::shared_ptr<ImageStore::PaletteBacking> ImageStore::makePalette(const ImageP
 }
 
 std::shared_ptr<ImageStore::PaletteBacking> ImageStore::makeSparsePalette(const SparsePalettePage& page, bool sparseAllowed) {
+  if (!palettizationEnabled_) return {};
   if ((page.packed && (!page.blocks.empty() || !page.residual.empty())) ||
       (!sparseAllowed && page.indexBytes != 2)) return {};
   auto result = std::make_shared<PaletteBacking>();
@@ -1148,6 +1149,7 @@ std::shared_ptr<ImageStore::PaletteBacking> ImageStore::makeSparsePalette(const 
 }
 
 bool ImageStore::hasPaletteStorage(ImageHandle handle) const {
+  if (!palettizationEnabled_) return false;
   const auto info = inspect(handle);
   if (!info) return false;
   const auto& slot = slots_[(handle & indexMask) - 1U];
@@ -1197,7 +1199,9 @@ bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
   } else if (!backing.descriptor.textureArtifact.empty()) {
     ++textureArtifactFailures_; textureArtifactFailureReason_ = "missing";
   }
+  if (layout && layout->kind != TextureKind::Channels && !palettizationEnabled_) layout.reset();
   auto upload = [&](const TextureLayout& l, bool artifact) {
+    if (l.kind != TextureKind::Channels && !palettizationEnabled_) return false;
     if (l.kind == TextureKind::Channels && !compactSamplingEnabled_) return false;
     struct UnpackState {
       std::array<GLenum,4> names{GL_UNPACK_ALIGNMENT,GL_UNPACK_ROW_LENGTH,GL_UNPACK_SKIP_ROWS,GL_UNPACK_SKIP_PIXELS};
@@ -1221,7 +1225,10 @@ bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
       std::vector<GLuint> ids;
       ~Textures() { glDeleteTextures(ids.size(), ids.data()); }
     } textures;
-    textures.ids.resize(l.planes.size());
+    const auto paletteKey = artifact && validContentHash(backing.textureHash) && l.kind != TextureKind::Channels
+      ? "source:" + backing.textureHash : std::string{};
+    auto sharedPalette = paletteKey.empty() ? std::shared_ptr<PaletteBacking>{} : preparedPalettes_[paletteKey].lock();
+    if (!sharedPalette) textures.ids.resize(l.planes.size());
     auto palette = std::make_shared<PaletteBacking>(); palette->owner = this;
     std::size_t bytes = 0;
     const auto formats = [](TextureFormat f) -> std::array<GLenum,3> {
@@ -1235,7 +1242,7 @@ bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
       return {};
     };
     while (glGetError() != GL_NO_ERROR) {}
-    for (std::size_t i = 0; i < l.planes.size(); ++i) {
+    for (std::size_t i = 0; !sharedPalette && i < l.planes.size(); ++i) {
       const auto& p = l.planes[i]; const auto f = formats(p.format);
       glGenTextures(1,&textures.ids[i]); glBindTexture(GL_TEXTURE_2D,textures.ids[i]);
       glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
@@ -1248,6 +1255,7 @@ bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
       bytes += std::size_t(p.width)*p.height*textureTexelBytes(p.format);
     }
     const auto consume = [&](std::size_t i, const TextureChunk& c, std::span<const std::uint8_t> data) {
+      if (sharedPalette) return true;
       const auto& p = l.planes[i]; const auto f = formats(p.format);
       glBindTexture(GL_TEXTURE_2D,textures.ids[i]);
       glTexSubImage2D(GL_TEXTURE_2D,0,0,c.y,p.width,c.rows,f[1],f[2],data.data());
@@ -1275,7 +1283,10 @@ bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
         if (!consume(i,TextureChunk{0,l.planes[i].height},built->bytes[i])) return false;
       }
     }
-    if (l.kind == TextureKind::Channels) {
+    if (sharedPalette) {
+      slot.palette = std::move(sharedPalette);
+      ++preparedSharedTextureHits_;
+    } else if (l.kind == TextureKind::Channels) {
       backing.channelAtlas = textures.ids[0]; backing.channelTable = textures.ids[1];
       backing.channelHeight = l.planes[0].height; backing.channelChecked = true;
       backing.gpuBytes += bytes; ++blockTextureUploads_;
@@ -1285,6 +1296,7 @@ bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
       palette->height = l.planes[1].height; palette->bytes = bytes;
       if (textures.ids.size() == 4) { palette->blocks = textures.ids[2]; palette->residual = textures.ids[3]; }
       slot.palette = std::move(palette);
+      if (!paletteKey.empty()) preparedPalettes_[paletteKey] = slot.palette;
     }
     textureCreates_ += textures.ids.size(); textureEpoch_ += textures.ids.size();
     std::fill(textures.ids.begin(),textures.ids.end(),0);
@@ -1301,13 +1313,14 @@ bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
   if (!pixels) return false;
   const auto* decision = storageDecision(slot.cacheKey);
   if (decision && (decision->width != slot.width || decision->height != slot.height)) decision = nullptr;
-  built = makePreparedTexture(*pixels,decision);
+  built = makePreparedTexture(*pixels,decision,0,palettizationEnabled_);
   return built && upload(built->layout,false);
 } catch (const std::bad_alloc&) {
   ++textureArtifactFailures_; textureArtifactFailureReason_ = "allocation"; return false;
 }
 
 std::optional<PaletteImageRegion> ImageStore::resolvePaletteImage(ImageHandle handle, bool premultiplied) {
+  if (!palettizationEnabled_) return std::nullopt;
   auto info = inspect(handle);
   if (!info) return std::nullopt;
   auto& slot = slots_[(handle & indexMask) - 1U];
@@ -1541,6 +1554,8 @@ std::size_t ImageStore::warmBytes() const {
       if (owner) shared(owner.get(), owner->bytes + owner->mipmapBytes);
     };
     texture(slot.sharedTexture); texture(slot.sharedPremultipliedTexture);
+    if (slot.palette) shared(slot.palette.get(), slot.palette->bytes + slot.palette->colors.capacity());
+    if (slot.retiredPalette) shared(slot.retiredPalette.get(), slot.retiredPalette->bytes + slot.retiredPalette->colors.capacity());
     if (slot.prepared) {
       for (const auto& page : slot.prepared->pages) {
         if (page.pixels) shared(page.pixels.get(), page.pixels->rgba.capacity());
@@ -2697,6 +2712,20 @@ std::size_t ImageStore::preparedPageTextureBytes() const {
 }
 
 void ImageStore::trimPreparedPageTextures() {
+  // Submission is complete here; cached full frames no longer need their recovery copies.
+  for (auto& slot : slots_) {
+    if (!slot.live || !slot.prepared || !slot.palette) continue;
+    const auto owner = slot.prepared.get();
+    const bool fullFrame = std::any_of(preparedFrames_.begin(), preparedFrames_.end(), [&](const auto& frame) {
+      return frame.owner == owner && frame.source == std::array<int,4>{0,0,slot.width,slot.height};
+    });
+    if (!fullFrame) continue;
+    for (auto& page : slot.prepared->pages) {
+      page.texture = page.premultipliedTexture = 0;
+      page.sharedTexture.reset(); page.sharedPremultipliedTexture.reset();
+      page.setPixels({}); page.setSparse({});
+    }
+  }
   auto bytes = preparedPageTextureBytes();
   if (bytes <= preparedPageCacheBudget) return;
   std::vector<PreparedBacking::Page*> pages;
@@ -3048,6 +3077,7 @@ std::optional<ImageInfo> ImageStore::preparedPage(Slot& slot, std::size_t index,
   auto& backing = *slot.prepared;
   auto& page = backing.pages[index];
   page.lastGpuUse = ++preparedFrameClock_;
+  if (view && !palettizationEnabled_) return std::nullopt;
   if (view) {
     const bool sparse = page.sparseFormat || preparedSparsePage(backing, index);
     const bool indexed = page.indexedFormat;

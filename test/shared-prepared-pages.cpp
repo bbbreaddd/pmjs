@@ -274,7 +274,7 @@ int main() {
         blocks.release(image->handle); blocks.update();
         require(blocks.cpuBytes() == 0 && blocks.gpuBytes() == 0, "block storage outlived its owner");
       }
-      pmjs::ImageStore images;
+      pmjs::ImageStore images; images.setPalettizationEnabled(true);
       images.setWarmBudgetBytes(0); images.setPreparedFrameCacheBudget(0);
       install(images, indexed);
       const auto loaded = images.loadPng(indexed.source);

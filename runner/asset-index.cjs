@@ -276,6 +276,7 @@ async function generateAssetIndex({ root, gameRoot, options, output, includeAsse
     for (const decision of images.decisions) if (imageWarnings.has(decision)) warnings.push(imageWarnings.get(decision));
     const index = { schema: 3, kind: 'pmjs-asset-index',
       sections: { imageStorage: 1, images: 1, mapCompilation: 1, tileOutputs: 1 },
+      allowPalettes: options.assetPreparation.allowPalettes ?? false,
       pageCodec: options.assetPreparation.pageCodec,
       pageCodecVersion: options.assetPreparation.pageCodec === 'lz4' ? nativeAddon.assets.preparationLz4Version : null,
       losslessPrefixes: options.assetPreparation.losslessPrefixes || [],
@@ -292,7 +293,7 @@ async function generateAssetIndex({ root, gameRoot, options, output, includeAsse
           recipe.source.toLowerCase().replace(/\.(png_|rpgmvp)$/i, '.png') === logicalSource);
         const allowAstc = astc.enabled && !lossless;
         return { source, settings: { astc, lossless, ...(recipe ? { recipe } : {}) },
-          calculated: { ...calculated, resolvedSettings: { allowAstc,
+          calculated: { ...calculated, resolvedSettings: { allowPalettes: options.assetPreparation.allowPalettes ?? false, allowAstc,
             astcQuality: allowAstc ? astc.quality : null, pageCodec: options.assetPreparation.pageCodec,
             ...(calculated.workspaceConstrained || calculated.descriptor?.workspaceConstrained
               ? { workspaceBytes: options.assetPreparation.workspaceBytes } : {}) } } };
@@ -348,7 +349,7 @@ function loadAssetIndex(file, native, options) {
           if (!rest.resolvedSettings) {
             const astc = astcSettings(index.astc);
             const allowAstc = astc.enabled && !(index.losslessPrefixes || []).some(prefix => matchesPrefix(record.source, prefix));
-            rest.resolvedSettings = { allowAstc, astcQuality: allowAstc ? astc.quality : null, pageCodec: index.pageCodec || 'png' };
+            rest.resolvedSettings = { allowPalettes: index.allowPalettes ?? true, allowAstc, astcQuality: allowAstc ? astc.quality : null, pageCodec: index.pageCodec || 'png' };
           }
           return index.sections?.imageStorage === 1 && index.imageStorageVersion === native.assets.imageStorageVersion &&
             index.imageStorageVersion === 1 && validStorageDecision(storage) ? { ...rest, storage } : rest;

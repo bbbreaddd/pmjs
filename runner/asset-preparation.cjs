@@ -352,6 +352,7 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
   shouldCancel = () => false, logger = console, verifyHashes = false,
   workspaceBytes = 256 * 1024 * 1024,
   pageCodec = 'lz4',
+  allowPalettes = false,
   losslessPrefixes,
   astc,
   preparationContext = 'live',
@@ -546,14 +547,14 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
           ? losslessPrefixes.some(prefix => hasPathPrefix(logicalSource, prefix))
           : policy.lossless ?? losslessPrefixes.some(prefix => hasPathPrefix(logicalSource, prefix));
         const allowAstc = imageAstc.enabled && !lossless;
-        const key = identity({ version: CACHE_VERSION, processorIdentity, sourceHash, source, recipe: recipe || null, allowAstc,
+        const key = identity({ version: CACHE_VERSION, processorIdentity, sourceHash, source, recipe: recipe || null, allowAstc, allowPalettes,
           automaticRecipes: { version: automaticRecipes.version, frame: frames.get(logicalSource.toLowerCase()) },
           astcQuality: allowAstc ? imageAstc.quality : null,
           ...(encrypted ? { encryption: { version: 1, settingsHash: settings.hash }, characterLayout: 'mz-standard-v1' } : {}) });
         const findIndexed = () => !session.repairSources.has(source) && indexedImages.get(source)?.find(record => {
           const constrained = record.workspaceConstrained === true || record.descriptor?.workspaceConstrained === true;
           const cachedWorkspaceBytes = record.resolvedSettings?.workspaceBytes;
-          const resolvedSettings = { allowAstc, astcQuality: allowAstc ? imageAstc.quality : null, pageCodec,
+          const resolvedSettings = { allowPalettes, allowAstc, astcQuality: allowAstc ? imageAstc.quality : null, pageCodec,
             ...(constrained ? { workspaceBytes: cachedWorkspaceBytes } : {}) };
           return record.sourceHash === sourceHash && identity(record.recipe) === identity(recipe || null) &&
           record.encryptionSettingsSha256 === (encrypted ? settings.hash : null) &&
@@ -638,7 +639,7 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
               try {
                 descriptor = await native.assets.processImage(source, stage, recipe || null,
                   input, ...(native.assets.preparationWorkspaceVersion === 1
-                    ? [indexed ? indexed.descriptor : null, { workspaceBytes, allowAstc, astcQuality: imageAstc.quality, ...(pageCodec === 'lz4' ? { pageCodec } : {}) }]
+                    ? [indexed ? indexed.descriptor : null, { workspaceBytes, allowPalettes, allowAstc, astcQuality: imageAstc.quality, ...(pageCodec === 'lz4' ? { pageCodec } : {}) }]
                     : indexed ? [indexed.descriptor] : []));
                 if (descriptor?.resultVersion === 1 && descriptor.workspaceConstrained === true && descriptor.descriptor === null) {
                   processorWorkspaceConstrained = true;

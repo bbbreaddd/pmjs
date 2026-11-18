@@ -144,7 +144,7 @@ test('first preparation installs logical backing; unchanged launch reuses verifi
   const processImage = f.native.assets.processImage;
   f.native.assets.preparationWorkspaceVersion = 1;
   f.native.assets.processImage = async (...args) => {
-    assert.deepEqual(args[5], { workspaceBytes: 256 * 1024 * 1024, allowAstc: false, astcQuality: 'medium' });
+    assert.deepEqual(args[5], { workspaceBytes: 256 * 1024 * 1024, allowPalettes: false, allowAstc: false, astcQuality: 'medium' });
     return processImage(...args);
   };
   const progress = [];
@@ -171,12 +171,24 @@ test('first preparation installs logical backing; unchanged launch reuses verifi
   assert.ok(warmProgress.some(p => p.phase === 'validate' && p.source === f.source && p.completed === 1 && p.hits === 1));
 });
 
+test('palette policy partitions preparation caches and reaches the processor', async () => {
+  const f = fixture(), original = f.native.assets.processImage, policies = [];
+  f.native.assets.preparationWorkspaceVersion = 1;
+  f.native.assets.processImage = async (...args) => { policies.push(args[5].allowPalettes); return original(...args); };
+  assert.equal((await prepareAssets(f)).generated, 1);
+  assert.equal((await prepareAssets(f)).hits, 1);
+  assert.equal((await prepareAssets({ ...f, allowPalettes: true })).generated, 1);
+  assert.equal((await prepareAssets({ ...f, allowPalettes: true })).hits, 1);
+  assert.equal((await prepareAssets(f)).generated, 1);
+  assert.deepEqual(policies, [false, true, false]);
+});
+
 test('workspace limits reach capable processors without invalidating cached output', async () => {
   const f = fixture(), original = f.native.assets.processImage;
   f.native.assets.preparationWorkspaceVersion = 1;
   f.native.assets.processImage = async (...args) => {
     assert.equal(args[4], null);
-    assert.deepEqual(args[5], { workspaceBytes: 0, allowAstc: false, astcQuality: 'medium' });
+    assert.deepEqual(args[5], { workspaceBytes: 0, allowPalettes: false, allowAstc: false, astcQuality: 'medium' });
     return original(...args);
   };
   const cold = await prepareAssets({ ...f, workspaceBytes: 0 });
@@ -283,7 +295,7 @@ test('portable constrained layouts generated with a larger budget remain reusabl
   const portableIndex = { images: [{ source: f.source,
     sourceHash: crypto.createHash('sha256').update(PNG).digest('hex'), recipe: null,
     encryptionSettingsSha256: null, descriptor, outputs: [],
-    resolvedSettings: { allowAstc: false, astcQuality: null, pageCodec: 'png', workspaceBytes: 0 } }] };
+    resolvedSettings: { allowPalettes: false, allowAstc: false, astcQuality: null, pageCodec: 'png', workspaceBytes: 0 } }] };
   await prepareAssets({ ...f, workspaceBytes: 0, portableIndex });
   assert.equal(layouts[0], descriptor);
 });

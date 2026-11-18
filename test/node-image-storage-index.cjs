@@ -19,7 +19,7 @@ fs.symlinkSync(addon, path.join(runtime, 'lib/pmjs_native.node'));
 fs.mkdirSync(path.join(gameRoot, 'img/pictures'), { recursive: true });
 fs.mkdirSync(output);
 const options = { width: 32, height: 24, assetPreparation: {
-  enabled: true, pageCodec: 'png', maps: false, recipes: [], losslessPrefixes: [],
+  enabled: true, allowPalettes: true, pageCodec: 'png', maps: false, recipes: [], losslessPrefixes: [],
   astc: { enabled: false, quality: 'medium' }, workspaceBytes: 128 * 1024 * 1024
 } };
 const fixtures = [
@@ -89,10 +89,10 @@ const handles = [];
         assert.ok(record.descriptor.pages.every(p => p.storage?.pixelFactsVersion === 1));
       }
     }
-    native.initialize({ gameRoot, width: 32, height: 24, windowTitle: 'Image storage index', imageWarmCacheBytes: 0 });
+    native.initialize({ imagePalettization: true, gameRoot, width: 32, height: 24, windowTitle: 'Image storage index', imageWarmCacheBytes: 0 });
     initialized = true;
     const preparation = { gameRoot, cacheRoot, native, portableIndex: index,
-      pageCodec: 'png', recipes: options.assetPreparation.recipes, workspaceBytes: options.assetPreparation.workspaceBytes };
+      allowPalettes: true, pageCodec: 'png', recipes: options.assetPreparation.recipes, workspaceBytes: options.assetPreparation.workspaceBytes };
     const cold = await prepareAssets(preparation);
     assert.equal(cold.error, undefined);
     assert.equal(cold.storageEntries.length, fixtures.length);

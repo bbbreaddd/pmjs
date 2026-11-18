@@ -13,6 +13,7 @@ function resolveDefaults(input) {
   let preparedFrameCacheBytes = input.preparedFrameCacheBytes;
   let preparedCompactSampling = input.preparedCompactSampling;
   let preparedCropUploads = input.preparedCropUploads;
+  let imagePalettization = input.imagePalettization;
   let preparationFonts = [];
   let virtualFiles = input.virtualFiles;
   let configDirectory = process.cwd();
@@ -42,6 +43,7 @@ function resolveDefaults(input) {
     if (preparedFrameCacheBytes === undefined) preparedFrameCacheBytes = cfg.preparedFrameCacheBytes;
     if (preparedCompactSampling === undefined) preparedCompactSampling = cfg.preparedCompactSampling;
     if (preparedCropUploads === undefined) preparedCropUploads = cfg.preparedCropUploads;
+    if (imagePalettization === undefined) imagePalettization = cfg.imagePalettization;
   }
 
   if (input.gameRoot) {
@@ -117,7 +119,7 @@ function resolveDefaults(input) {
   }
   assetPreparation.recipes = validRecipes(assetPreparation.recipes || []);
   return { ...input, width, height, title, assetPreparation, assetPolicyOverrides: policyOverrides, preparationFonts, virtualFiles,
-    preparedFrameCacheBytes, preparedCompactSampling, preparedCropUploads };
+    preparedFrameCacheBytes, preparedCompactSampling, preparedCropUploads, imagePalettization };
 }
 
 function validate(input) {
@@ -150,7 +152,7 @@ function validate(input) {
       !Number.isSafeInteger(preparedFrameCacheBytes) || preparedFrameCacheBytes < 0) {
     throw new Error('preparedFrameCacheBytes must be a non-negative safe integer');
   }
-  for (const name of ['preparedCompactSampling', 'preparedCropUploads']) {
+  for (const name of ['preparedCompactSampling', 'preparedCropUploads', 'imagePalettization']) {
     if (options[name] !== undefined && typeof options[name] !== 'boolean') {
       throw new Error(`${name} must be a boolean`);
     }
@@ -168,7 +170,8 @@ function validate(input) {
     bootstrap: path.resolve(options.bootstrap),
     saveRoot: path.resolve(options.saveRoot),
     assetRoot: options.assetRoot ? path.resolve(options.assetRoot) : '',
-    assetPreparation: { ...options.assetPreparation,
+    imagePalettization: options.imagePalettization ?? false,
+    assetPreparation: { ...options.assetPreparation, allowPalettes: options.imagePalettization ?? false,
       cacheRoot: options.assetPreparation.cacheRoot || path.join(path.resolve(options.saveRoot), 'asset-cache') },
     ...(imageWarmCacheBytes === undefined ? {} : { imageWarmCacheBytes }),
     preparedFrameCacheBytes,

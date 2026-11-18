@@ -22,7 +22,7 @@ async function preparePair(native, root) {
   fs.mkdirSync(sparseDirectory); fs.mkdirSync(denseDirectory);
   const recipe = { grid: [1, 1], backdrop: [0, 0, 0, 0] };
   const sparse = await native.assets.processImage('sparse.png', sparseDirectory, recipe,
-    path.join(root, 'sparse.png'), null, { pageCodec: 'lz4' });
+    path.join(root, 'sparse.png'), null, { pageCodec: 'lz4', allowPalettes: true });
   assert.ok(sparse && sparse.pages.length === 1);
   const header = fs.readFileSync(path.join(sparseDirectory, sparse.pages[0].path));
   assert.equal(header.readUInt32LE(4), 2, 'fixture did not activate offline sparse encoding');

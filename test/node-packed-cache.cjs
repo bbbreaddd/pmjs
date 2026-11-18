@@ -34,7 +34,7 @@ for (let index = 0; index < 3; ++index)
   fs.writeFileSync(path.join(root, 'incremental-' + index + '.png'), png(128, 128, smallPixels));
 for (const damage of ['missing', 'modified']) for (let index = 0; index < 3; ++index)
   fs.writeFileSync(path.join(root, 'img', 'pictures', 'recovery-' + damage + '-' + index + '.png'), png(128, 128, smallPixels));
-test.before(() => native.initialize(settings));
+test.before(() => native.initialize({ ...settings, imagePalettization: true }));
 test.after(() => native.runtime.quit());
 
 function canvasPixels(info) {
@@ -48,7 +48,7 @@ function canvasPixels(info) {
 test('packed prepared pages preserve async loads, texture uploads, pixels and live ownership', async () => {
   try {
     const descriptor = await native.assets.processImage('sheet.png', directory,
-      { grid: [3, 2], framePages: true, backdrop: [0, 0, 0, 0] }, path.join(root, 'sheet.png'), undefined, { pageCodec: 'lz4' });
+      { grid: [3, 2], framePages: true, backdrop: [0, 0, 0, 0] }, path.join(root, 'sheet.png'), undefined, { pageCodec: 'lz4', allowPalettes: true });
     assert(descriptor && descriptor.pages.length);
     assert.equal(descriptor.textureArtifact, 'texture.pmtx');
     const outputs = Object.fromEntries(fs.readdirSync(directory).map(name => [name, hash(fs.readFileSync(path.join(directory, name)))]));
@@ -105,7 +105,7 @@ test('normal preparation reuses packed outputs without regenerating loose pages'
     const scopedNative = { ...native, fs: { ...native.fs,
       inventory: () => native.fs.inventory().filter(source => !source.startsWith('img/pictures/recovery-')) } };
     const options = { gameRoot: root, cacheRoot: path.join(root, 'cache'), native: scopedNative, maps: false,
-      pageCodec: 'lz4', fastStartup: true, logger: { info() {}, warn() {} } };
+      pageCodec: 'lz4', allowPalettes: true, fastStartup: true, logger: { info() {}, warn() {} } };
     const first = await prepareGameAssets(options);
     assert.equal(first.images.installed, 1);
     first.releaseCacheLease();
@@ -184,7 +184,7 @@ test('non-first sparse pages use their own packed header rather than the dense f
     const relative = 'entries/' + String(index + 5).repeat(64), directory = path.join(root, relative);
     fs.mkdirSync(directory, { recursive: true });
     const descriptor = await native.assets.processImage(name, directory, { grid: [1, 1], backdrop: [0, 0, 0, 0] },
-      path.join(root, name), null, { pageCodec: 'lz4' });
+      path.join(root, name), null, { pageCodec: 'lz4', allowPalettes: true });
     assert(descriptor && descriptor.pages.length === 1);
     const page = fs.readFileSync(path.join(directory, descriptor.pages[0].path));
     assert.equal(page.readUInt32LE(4), index === 0 ? 1 : 2);
@@ -216,7 +216,7 @@ test('catalog pages tolerate pack inode drift only with matching ranges and veri
   const source = 'drift-inode.png', relative = 'entries/' + 'e'.repeat(64), directory = path.join(root, relative);
   fs.mkdirSync(directory, { recursive: true });
   const descriptor = await native.assets.processImage(source, directory,
-    { grid: [1, 1], backdrop: [0, 0, 0, 0] }, path.join(root, source), null, { pageCodec: 'lz4' });
+    { grid: [1, 1], backdrop: [0, 0, 0, 0] }, path.join(root, source), null, { pageCodec: 'lz4', allowPalettes: true });
   assert(descriptor && descriptor.pages.length);
   const outputs = Object.fromEntries(fs.readdirSync(directory).map(name => [name, hash(fs.readFileSync(path.join(directory, name)))]));
   const data = { files: {}, results: { [relative]: { outputs } }, indices: {}, failures: {} };
@@ -287,7 +287,7 @@ test('an interrupted conversion loads a mixture of packed and loose native pages
     const directory = path.join(root, relative);
     fs.mkdirSync(directory, { recursive: true });
     const descriptor = await native.assets.processImage(source, directory,
-      { grid: [1, 1], backdrop: [0, 0, 0, 0] }, path.join(root, source), null, { pageCodec: 'lz4' });
+      { grid: [1, 1], backdrop: [0, 0, 0, 0] }, path.join(root, source), null, { pageCodec: 'lz4', allowPalettes: true });
     assert(descriptor && descriptor.pages.length === 1);
     const outputs = Object.fromEntries(fs.readdirSync(directory).map(name => [name, hash(fs.readFileSync(path.join(directory, name)))]));
     assert.equal(Object.keys(outputs).length, 1);
@@ -329,7 +329,7 @@ for (const damage of ['missing', 'modified']) test('preparation regenerates only
   const scopedNative = { ...native, fs: { ...native.fs,
     inventory: () => native.fs.inventory().filter(source => source.startsWith(prefix)) } };
   const options = { gameRoot: root, cacheRoot: path.join(root, 'selective-' + damage), native: scopedNative,
-    maps: false, pageCodec: 'lz4', fastStartup: true, logger: { info() {}, warn() {} } };
+    maps: false, pageCodec: 'lz4', allowPalettes: true, fastStartup: true, logger: { info() {}, warn() {} } };
   try {
     const first = await prepareGameAssets(options);
     assert.equal(first.images.installed, 3);

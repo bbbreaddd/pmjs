@@ -583,7 +583,7 @@ std::vector<std::uint8_t> renderPage(PreparationSource& source, const PreparedAs
 }
 
 void emitLayout(PreparationSource& source, const std::filesystem::path& staging, PreparedAsset& asset,
-                const AssetRecipe& recipe, bool lz4Pages) {
+                const AssetRecipe& recipe, bool lz4Pages, bool allowPalettes) {
   if (asset.uniform) {
     auto rows = source.rows();
     for (int y = 0; y < source.height; ++y) {
@@ -638,7 +638,7 @@ void emitLayout(PreparationSource& source, const std::filesystem::path& staging,
     page.path.replace_extension(lz4Pages ? ".pml4" : ".png");
     if (lz4Pages) {
       std::uint64_t retained = 0;
-      writeLz4Page(staging / page.path, page.width, page.height, bytes, true, &retained);
+      writeLz4Page(staging / page.path, page.width, page.height, bytes, allowPalettes, &retained);
       asset.ordinaryRetainedBytes += retained;
       ++source.workspace.stats.lz4Encodes;
     } else {
@@ -1204,7 +1204,7 @@ static PreparedAsset prepareAssetCells(PreparationSource& source,
 
 namespace {
 void emitTexture(PreparationSource& source, const std::filesystem::path& staging,
-                 PreparedAsset& asset, const AssetRecipe& recipe) {
+                 PreparedAsset& asset, const AssetRecipe& recipe, bool allowPalettes) {
   asset.textureArtifact.clear();
   const bool automatic = !recipe.framePages;
   if ((automatic && (std::max(asset.ordinaryRetainedBytes, std::uint64_t(source.width)*source.height*4) < 4U*1024U*1024U ||
@@ -1233,7 +1233,7 @@ void emitTexture(PreparationSource& source, const std::filesystem::path& staging
     if (automatic && !asset.cells.empty() && std::all_of(asset.cells.begin(), asset.cells.end(),
         [](const auto& cell) { return cell.fill != AssetColor{}; }))
       asset.ordinaryRetainedBytes += std::uint64_t(source.width)*source.height*imageChannelStorage(pixels).channels;
-    auto texture = makePreparedTexture(pixels, &classified, automatic ? asset.ordinaryRetainedBytes : 0);
+    auto texture = makePreparedTexture(pixels, &classified, automatic ? asset.ordinaryRetainedBytes : 0, allowPalettes);
     if (!texture) return;
     std::uint64_t retained = 0;
     for (const auto& plane : texture->layout.planes)
@@ -1310,8 +1310,8 @@ PreparedAsset prepareAssetImage(const std::filesystem::path& path,
     try {
       validateLayout(source, recipe, *layout);
       auto result = *layout;
-      emitLayout(source, staging, result, recipe, options.lz4Pages);
-      emitTexture(source, staging, result, recipe);
+      emitLayout(source, staging, result, recipe, options.lz4Pages, options.allowPalettes);
+      emitTexture(source, staging, result, recipe, options.allowPalettes);
       return result;
     }
     catch (const AssetPreparationUnsupported&) {}
@@ -1399,8 +1399,8 @@ PreparedAsset prepareAssetImage(const std::filesystem::path& path,
         cell.crop[2] + 2 * selected->halo, cell.crop[3] + 2 * selected->halo});
     }
   }
-  if (!selected->uniform) emitLayout(source, staging, *selected, recipe, options.lz4Pages);
-  emitTexture(source, staging, *selected, recipe);
+  if (!selected->uniform) emitLayout(source, staging, *selected, recipe, options.lz4Pages, options.allowPalettes);
+  emitTexture(source, staging, *selected, recipe, options.allowPalettes);
   return std::move(*selected);
 }
 }

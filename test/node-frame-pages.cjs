@@ -61,7 +61,7 @@ const sparseFixtures = [true, false].map(extended => {
   fs.writeFileSync(file, bytes);
   sparseFixtures.push({ name, pixels, bytes, file, extended: false, planar: true });
 }
-native.initialize({ gameRoot: root, width: 320, height: 280, windowTitle: 'frame pages',
+native.initialize({ imagePalettization: true, gameRoot: root, width: 320, height: 280, windowTitle: 'frame pages',
   imageWarmCacheBytes: 0, preparedFrameCacheBytes: 8 * 1024 * 1024 });
 const schema = native.scene.schema;
 function draw(image, frame, whole = false, effect = false, boundary = false, nearest = false, transform) {
@@ -100,8 +100,8 @@ function assertPixels(actual, expected, tolerance = 0) {
 async function main() {
   const directory = path.join(root, 'normal'), framesDirectory = path.join(root, 'frames');
   fs.mkdirSync(directory); fs.mkdirSync(framesDirectory);
-  const normal = await native.assets.processImage('sheet.png', directory, { grid: [4, 3] }, path.join(root, 'sheet.png'), null, { pageCodec });
-  const frames = await native.assets.processImage('sheet.png', framesDirectory, { grid: [4, 3], framePages: true }, path.join(root, 'sheet.png'), null, { pageCodec });
+  const normal = await native.assets.processImage('sheet.png', directory, { grid: [4, 3] }, path.join(root, 'sheet.png'), null, { pageCodec, allowPalettes: true });
+  const frames = await native.assets.processImage('sheet.png', framesDirectory, { grid: [4, 3], framePages: true }, path.join(root, 'sheet.png'), null, { pageCodec, allowPalettes: true });
   assert.equal(frames.framePages, true);
   assert.equal(frames.pages.length, 12);
   assert.deepEqual(frames.cells.map(c => [c.rect, c.crop, c.fill]), normal.cells.map(c => [c.rect, c.crop, c.fill]));
@@ -182,7 +182,7 @@ async function main() {
   assert.equal(native.images.memory().gpuBytes, 64);
   const edgeDirectory = path.join(root, 'edge'); fs.mkdirSync(edgeDirectory);
   const edgeDescriptor = await native.assets.processImage('edge.png', edgeDirectory,
-    { grid: [4, 3], framePages: true }, path.join(root, 'edge.png'), null, { pageCodec });
+    { grid: [4, 3], framePages: true }, path.join(root, 'edge.png'), null, { pageCodec, allowPalettes: true });
   for (const page of edgeDescriptor.pages) page.storage = await native.assets.classifyImageStorage(path.join(edgeDirectory, page.path));
   const edgeIdentity = native.assets.sourceIdentity('edge.png');
   const edgeStorage = await native.assets.classifyImageStorage(path.join(root, 'edge.png'));
@@ -206,7 +206,7 @@ async function main() {
   if (!palette) for (const { name, pixels: sparsePixels, bytes: sparseBytes, file: sparseFile, extended, planar, sparse16 } of sparseFixtures) {
     const sparseDirectory = path.join(root, name + '-prepared'); fs.mkdirSync(sparseDirectory);
     const sparseDescriptor = await native.assets.processImage(name, sparseDirectory,
-      { source: name, grid: [4, 3], framePages: true }, sparseFile, null, { pageCodec });
+      { source: name, grid: [4, 3], framePages: true }, sparseFile, null, { pageCodec, allowPalettes: true });
     const sparseIdentity = native.assets.sourceIdentity(name);
     const sparseStorage = await native.assets.classifyImageStorage(sparseFile);
     assert.equal(sparseStorage.paletteBits, sparse16 ? 16 : 0);
@@ -365,7 +365,7 @@ async function main() {
       fs.writeFileSync(replacementFile, png(width, height, replacementPixels));
       const replacementDirectory = path.join(root, 'replacement-prepared'); fs.mkdirSync(replacementDirectory);
       const replacement = await native.assets.processImage('replacement.png', replacementDirectory,
-        { grid: [4, 3], framePages: true }, replacementFile, null, { pageCodec });
+        { grid: [4, 3], framePages: true }, replacementFile, null, { pageCodec, allowPalettes: true });
       assert.equal(replacement.textureArtifact, 'texture.pmtx');
       fs.copyFileSync(path.join(replacementDirectory, replacement.textureArtifact), artifact);
       register();

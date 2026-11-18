@@ -752,6 +752,7 @@ int main() {
     require(rejectedTall);
     pmjs::AssetPreparationOptions automaticOptions;
     automaticOptions.lz4Pages = true;
+    automaticOptions.allowPalettes = true;
     for (const bool lz4 : {false, true}) {
       write(source, 2048, 2048, [lz4](int x, int y) {
         if (!lz4 && (x >= 1024 || y >= 1024)) return AssetColor{};

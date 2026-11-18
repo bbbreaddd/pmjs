@@ -350,6 +350,7 @@ async function runSession(input, diagnostics, setNative) {
     ...(options.imageWarmCacheBytes === undefined ? {} :
       { imageWarmCacheBytes: options.imageWarmCacheBytes }),
     preparedFrameCacheBytes: options.preparedFrameCacheBytes,
+    imagePalettization: options.imagePalettization,
     preparedCompactSampling: options.preparedCompactSampling,
     preparedCropUploads: options.preparedCropUploads }));
   diagnostics.stage('native-ready');

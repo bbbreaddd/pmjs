@@ -66,6 +66,7 @@ struct AssetPreparationOptions {
   std::size_t workspaceBytes = 256U * 1024U * 1024U;
   AssetPreparationStats* statistics = nullptr;
   bool lz4Pages = false;
+  bool allowPalettes = false;
   bool allowAstc = false;
   std::string astcQuality = "medium";
 };

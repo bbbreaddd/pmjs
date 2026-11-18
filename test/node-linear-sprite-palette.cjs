@@ -5,7 +5,7 @@ const path = require('node:path');
 const { png } = require('./helpers/png.cjs');
 const { spritePacket, drawPacket } = require('./helpers/sparse-palette.cjs');
 const native = require(path.resolve(process.argv[2]));
-native.initialize({ gameRoot: __dirname, width: 8, height: 8,
+native.initialize({ imagePalettization: true, gameRoot: __dirname, width: 8, height: 8,
   windowTitle: 'Linear sprite storage', imageWarmCacheBytes: 0 });
 const pixels = Buffer.alloc(64 * 64 * 4);
 for (let i = 0; i < 64 * 64; i++) pixels.set([253, 253, 253, i === 66 ? 255 : 0], i * 4);

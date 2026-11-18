@@ -25,7 +25,7 @@ function signature(options) {
     imageProcessor: options.processorIdentity || native.assets.preparationVersion || PROCESSOR_IDENTITY,
     tileProcessor: native.assets.tilePreparationVersion,
     lz4: native.assets.preparationLz4Version, images: options.images, maps: options.maps,
-    pageCodec: options.pageCodec, workspaceBytes: options.workspaceBytes, recipes: options.recipes,
+    allowPalettes: options.allowPalettes ?? false, pageCodec: options.pageCodec, workspaceBytes: options.workspaceBytes, recipes: options.recipes,
     astc: options.astc, losslessPrefixes: options.losslessPrefixes, policyOverrides: options.policyOverrides,
     portableIndex: options.portableIndex, width: options.width, height: options.height,
     sourceRoots: options.sourceRoots, bundleRoot: options.bundleRoot, virtualFiles: options.virtualFiles,

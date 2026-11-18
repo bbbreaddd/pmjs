@@ -384,6 +384,25 @@ test('prepared rendering controls are independent and enabled by default', async
   assert.equal(initialized.preparedCompactSampling, true);
   assert.equal(initialized.preparedCropUploads, false);
 });
+test('image palettization defaults off and passes explicit opt-in to rendering and preparation', async () => {
+  const options = fixture('globalThis.__pmjsTick=()=>{}; globalThis.__pmjsRender=()=>{};');
+  options.assetPreparation = 'off';
+  assert.equal(validate(options).imagePalettization, false);
+  assert.equal(validate(options).assetPreparation.allowPalettes, false);
+  assert.throws(() => validate({ ...options, imagePalettization: 'true' }), /must be a boolean/);
+  const config = path.join(options.gameRoot, 'palette-config.json');
+  fs.writeFileSync(config, JSON.stringify({ imagePalettization: true }));
+  assert.equal(validate({ ...options, config }).imagePalettization, true);
+  assert.equal(validate({ ...options, config }).assetPreparation.allowPalettes, true);
+  assert.equal(validate({ ...options, config, imagePalettization: false }).imagePalettization, false);
+  const host = require(options.addon);
+  let initialized;
+  host.initialize = value => { initialized = value; };
+  await run(options);
+  assert.equal(initialized.imagePalettization, false);
+  await run({ ...options, config });
+  assert.equal(initialized.imagePalettization, true);
+});
 test('validation rejects missing paths and invalid dimensions', () => {
   assert.throws(() => validate({}), /addon is required/);
   assert.throws(() => validate({ addon:'a', gameRoot:'g', bootstrap:'b', saveRoot:'s', width:0, height:1 }), /width/);

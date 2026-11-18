@@ -375,6 +375,8 @@ napi_value processImage(napi_env env, napi_callback_info info) try {
     if (codec != "png" && codec != "lz4") throw std::runtime_error("pageCodec must be png or lz4");
     work->options.lz4Pages = codec == "lz4";
   }
+  if (args.size() > 5 && hasProperty(env, args[5], "allowPalettes"))
+    work->options.allowPalettes = asBoolean(env, property(env, args[5], "allowPalettes"));
   if (args.size() > 5 && hasProperty(env, args[5], "allowAstc"))
     work->options.allowAstc = asBoolean(env, property(env, args[5], "allowAstc"));
   if (args.size() > 5 && hasProperty(env, args[5], "astcQuality")) {

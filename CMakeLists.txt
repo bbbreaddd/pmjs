@@ -617,6 +617,10 @@ if(BUILD_TESTING)
     set_tests_properties(node-prepared-animation-pressure-${PMJS_FRAME_BUDGET} PROPERTIES
       ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
   endforeach()
+  add_test(NAME node-prepared-palette-warm-aliases COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-prepared-palette-frame-cache.cjs" $<TARGET_FILE:pmjs_native> --warm-aliases)
+  set_tests_properties(node-prepared-palette-warm-aliases PROPERTIES
+    ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
   add_test(NAME node-prepared-frame-cache COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-prepared-frame-cache.cjs" $<TARGET_FILE:pmjs_native>
     "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
@@ -635,7 +639,9 @@ if(BUILD_TESTING)
     PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
   add_test(NAME node-sparse-palette COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-sparse-palette.cjs" $<TARGET_FILE:pmjs_native>)
-  set_tests_properties(node-sparse-palette PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
+  add_test(NAME node-sparse-palette-disabled COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-sparse-palette.cjs" $<TARGET_FILE:pmjs_native> --disabled)
+  set_tests_properties(node-sparse-palette node-sparse-palette-disabled PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
   add_test(NAME node-prepared-frame-effects COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-prepared-frame-effects.cjs" $<TARGET_FILE:pmjs_native>)
   add_test(NAME node-large-prepared-frame COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}

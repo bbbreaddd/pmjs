@@ -226,7 +226,9 @@ int main() {
         else if (variant == 4) { p[0]=x%251; p[1]=y%251; p[2]=(x+y)%251; p[3]=(x/8+y/8)%3 ? 96+x%8*19 : 0; }
         else { p[0]=color; p[1]=color>>8; p[2]=color>>16; p[3]=color%255; }
       }
-      auto texture = pmjs::makePreparedTexture(pixels, nullptr, variant == 6 ? pixels.rgba.size()*2 : 0);
+      auto texture = pmjs::makePreparedTexture(pixels, nullptr, variant == 6 ? pixels.rgba.size()*2 : 0, true);
+      auto withoutPalettes = pmjs::makePreparedTexture(pixels);
+      require(!withoutPalettes || withoutPalettes->layout.kind == pmjs::TextureKind::Channels);
       require(texture.has_value());
       auto unsupported = *texture; unsupported.layout.height = 16385;
       bool unsupportedRejected = false;

@@ -31,7 +31,7 @@ struct PreparedTexture {
 using TextureReader = std::function<bool(std::size_t, std::span<std::uint8_t>)>;
 using TextureUpload = std::function<bool(std::size_t, const TextureChunk&, std::span<const std::uint8_t>)>;
 std::optional<PreparedTexture> makePreparedTexture(const ImagePixels& pixels, const ImageStorageDecision* decision = nullptr,
-                                                 std::size_t retainedLimit = 0);
+                                                 std::size_t retainedLimit = 0, bool allowPalettes = false);
 void writeTextureArtifact(const std::filesystem::path& path, const PreparedTexture& texture);
 std::optional<TextureLayout> readTextureLayout(const TextureReader& read, std::size_t fileBytes);
 bool readTextureChunks(const TextureReader& read, const TextureLayout& layout, const TextureUpload& upload,

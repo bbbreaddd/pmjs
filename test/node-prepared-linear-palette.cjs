@@ -23,7 +23,7 @@ for (let i = 0; i < sheetPixels.length; i += 4) {
 fs.writeFileSync(path.join(root, 'sheet.png'), png(192, 64, sheetPixels));
 const fractional = fractionalFixture();
 const whole = wholeFixture();
-native.initialize({ gameRoot: root, width: 96, height: 80, windowTitle: 'Prepared linear palette', imageWarmCacheBytes: 0,
+native.initialize({ imagePalettization: true, gameRoot: root, width: 96, height: 80, windowTitle: 'Prepared linear palette', imageWarmCacheBytes: 0,
   ...(budget === null ? {} : { preparedFrameCacheBytes: budget }) });
 let reference, prepared;
 function fractionalFixture() {
@@ -40,7 +40,7 @@ async function fractionalFrameSampling() {
   const { width, height, bytes, source } = fractional;
   const directory = path.join(root, 'fractional'); fs.mkdirSync(directory);
   const descriptor = await native.assets.processImage(source, directory, { grid: [2, 2], framePages: true },
-    path.join(root, source), null, { pageCodec: 'lz4' });
+    path.join(root, source), null, { pageCodec: 'lz4', allowPalettes: true });
   assert.ok(descriptor.textureArtifact);
   assert.equal(native.assets.installPrepared([{ source, directory, descriptor,
     sourceIdentity: native.assets.sourceIdentity(source) }]), 1);

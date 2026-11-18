@@ -2,15 +2,18 @@
 
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const fs = require('node:fs');
 const test = require('node:test');
 const { temporaryDirectory } = require('./helpers/temp.cjs');
 const { fixture, preparePair, spritePacket, drawPacket } = require('./helpers/sparse-palette.cjs');
 const native = require(path.resolve(process.argv[2]));
+const disabled = process.argv.includes('--disabled');
 
 test('offline sparse palettes preserve pixels, ownership, and dense fallback', async () => {
   const root = temporaryDirectory('sparse-palette-');
   const source = fixture(root, 257, 259);
-  native.initialize({ gameRoot: root, width: 64, height: 48, windowTitle: 'Sparse palette', imageWarmCacheBytes: 0 });
+  if (disabled) fs.writeFileSync(path.join(root, 'artifact.png'), source.bytes);
+  native.initialize({ ...(disabled ? {} : { imagePalettization: true }), gameRoot: root, width: 64, height: 48, windowTitle: 'Sparse palette', imageWarmCacheBytes: 0 });
   let pair, reference;
   const owner = image => native.images.memory(100).largest.find(entry => entry.handle === image.handle);
   const draw = (image, options) => drawPacket(native, spritePacket(native, image, options));
@@ -25,6 +28,31 @@ test('offline sparse palettes preserve pixels, ownership, and dense fallback', a
         assert.deepEqual(draw(pair.sparse, { crop, ...effect }), draw(reference, { crop, ...effect }));
         assert.deepEqual(draw(pair.dense, { crop, ...effect }), draw(reference, { crop, ...effect }));
       }
+    }
+    if (disabled) {
+      const rawDirectory = path.join(root, 'raw'); fs.mkdirSync(rawDirectory);
+      const raw = await native.assets.processImage('sparse.png', rawDirectory,
+        { grid: [1, 1], backdrop: [0, 0, 0, 0] }, path.join(root, 'sparse.png'), null, { pageCodec: 'lz4' });
+      assert.equal(fs.readFileSync(path.join(rawDirectory, raw.pages[0].path)).readUInt32LE(4), 1);
+      const artifactDirectory = path.join(root, 'artifact'); fs.mkdirSync(artifactDirectory);
+      const artifact = await native.assets.processImage('artifact.png', artifactDirectory,
+        { grid: [1, 1], framePages: true }, path.join(root, 'artifact.png'), null,
+        { pageCodec: 'lz4', allowPalettes: true });
+      assert.ok(artifact.textureArtifact, 'fixture must contain an old palette texture artifact');
+      assert.notEqual(fs.readFileSync(path.join(artifactDirectory, artifact.textureArtifact)).readUInt32LE(8), 5);
+      native.assets.installPrepared([{ source: 'artifact.png', directory: artifactDirectory,
+        descriptor: artifact, sourceIdentity: native.assets.sourceIdentity('artifact.png') }]);
+      const image = await native.images.loadAsync('artifact.png');
+      try {
+        assert.deepEqual(draw(image), draw(reference));
+        assert.equal(owner(image).palette, false, 'old texture artifact bypassed the default policy');
+      } finally { native.images.release(image.handle); }
+      for (const image of [pair.sparse, pair.dense]) {
+        draw(image, { nearest: false });
+        assert.equal(owner(image).palette, false, 'cached palette bypassed the default policy');
+        assert.equal(owner(image).paletteSparse, false);
+      }
+      return;
     }
     native.beginFrame();
     const sparseOwner = owner(pair.sparse), denseOwner = owner(pair.dense);
