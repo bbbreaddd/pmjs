@@ -23,7 +23,7 @@ try {
   native.render.setClearColor(0, 0, 0, 0);
   const expected = drawPacket(native, packet(reference, true));
   assert.equal(owner(reference).palette, false, 'control must use ordinary texture filtering');
-  assert.equal(owner(indexed).palette, true, 'candidate must start indexed');
+  assert.equal(owner(indexed).palette, false, 'images use ordinary texture storage');
   const actual = drawPacket(native, packet(indexed));
   let differingBytes = 0, maxByteDelta = 0;
   for (let i = 0; i < actual.length; i++) {
@@ -32,7 +32,7 @@ try {
     maxByteDelta = Math.max(maxByteDelta, delta);
   }
   assert.ok(maxByteDelta <= 1, 'decoded palette interpolation exceeded one byte of rounding');
-  assert.equal(owner(indexed).palette, true, 'linear draw must retain indexed storage');
+  assert.equal(owner(indexed).palette, false, 'linear drawing does not create indexed storage');
   console.log(JSON.stringify({ differingBytes, maxByteDelta }));
   const uploads = native.images.memory().textureUploadBytes;
   assert.deepEqual(drawPacket(native, packet(indexed)), actual);

@@ -131,7 +131,7 @@ function makeHost({
       };
     `, context);
     for (const [key, method] of [['KNOWN_SLIPPERY_QUERY', 'isSlippery'],
-      ['KNOWN_TERRAIN_TAG', 'terrainTag'], ['KNOWN_LAYERED_TILES', 'layeredTiles'], ['KNOWN_TILE_ID', 'tileId']]) {
+      ['KNOWN_TERRAIN_TAG', 'terrainTag'], ['KNOWN_LAYERED_TILES', 'layeredTiles'], ['KNOWN_TILE_ID', 'tileId'], ['KNOWN_TILESET_FLAGS', 'tilesetFlags']]) {
       source = pinSourceFingerprint(source, key, context.Game_Map.prototype[method]);
     }
   }
@@ -505,3 +505,61 @@ test('MV 1.6.1 and YEP Slippery Tiles 1.05 production recognition',
       assert.equal(map.isSlippery(0, 0), 'custom');
     });
   });
+
+test('empty terrain tags avoid tile reads while slippery regions and later tags remain live',()=>{
+  const c=makeHost({inlineTerrain:true}),map=new c.Game_Map();let reads=0;
+  map.tiles=[0,1,2,3];map.flags=[0,0,0,3<<12];
+  Object.defineProperty(map.tiles,3,{get(){reads++;return 3;}});
+  assert.equal(map.isSlippery(5,0),false);assert.equal(reads,0);
+  assert.equal(c.PMJS.plugins.slipperyTiles.emptyTerrainQueries,1);
+  map._regions[0][5]=10;assert.equal(map.isSlippery(5,0),true);assert.equal(reads,0);
+  map._regions[0][5]=0;map._tileset.slippery.push(3);
+  assert.equal(map.isSlippery(5,0),true);assert.ok(reads>0);
+  map._tileset.slippery.length=0;map._tileset.slippery.contains=function(){return true;};
+  assert.equal(map.isSlippery(5,0),true);
+});
+
+test('empty terrain shortcut preserves array-specific membership overrides',()=>{
+  const c=makeHost({inlineTerrain:true}),map=new c.Game_Map();
+  map.tiles=[0,0,0,0];map.flags=[0];
+  map._tileset.slippery.indexOf=function(){return 0;};
+  assert.equal(c.referenceSlipperyQuery.call(map,5,0),true);
+  assert.equal(map.isSlippery(5,0),true);
+  assert.equal(c.PMJS.plugins.slipperyTiles.emptyTerrainQueries,0);
+});
+
+test('empty terrain shortcut preserves overridden terrain producers',()=>{
+  for(const [name,value] of [['terrainTag',0],['layeredTiles',[]],['tileId',0]]){
+    const c=makeHost({inlineTerrain:true}),map=new c.Game_Map();let calls=0;
+    map.tiles=[0,0,0,0];map.flags=[0];
+    map[name]=function(){calls++;return value;};
+    const expected=c.referenceSlipperyQuery.call(map,5,0),expectedCalls=calls;
+    calls=0;
+    assert.equal(map.isSlippery(5,0),expected,name);
+    assert.equal(calls,expectedCalls,name);
+    assert.ok(calls>0,name);
+    assert.equal(c.PMJS.plugins.slipperyTiles.emptyTerrainQueries,0,name);
+  }
+});
+
+test('overridden flags producers can update slippery membership before the query',()=>{
+  const values=[];
+  for(const candidate of [false,true]){
+    const c=makeHost({inlineTerrain:true}),map=new c.Game_Map();let calls=0;
+    map.tiles=[0,0,0,0];map.flags=[3<<12];
+    map.tilesetFlags=function(){calls++;this._tileset.slippery.push(3);return this.flags;};
+    values.push(candidate?map.isSlippery(5,0):c.referenceSlipperyQuery.call(map,5,0));
+    assert.equal(calls,1);
+  }
+  assert.deepEqual(values,[true,true]);
+});
+
+test('flags producers customized before installation do not qualify for empty-terrain skipping',()=>{
+  const c=makeHost({inlineTerrain:true,autoActivate:false});
+  c.Game_Map.prototype.tilesetFlags=function(){this._tileset.slippery.push(3);return this.flags;};
+  c.PMJS.plugins.execute('YEP_SlipperyTiles',function(){});
+  c.PMJS.phases.emit('afterGuestPlugins');
+  const map=new c.Game_Map();map.tiles=[0,0,0,0];map.flags=[3<<12];
+  assert.equal(map.isSlippery(5,0),true);
+  assert.equal(c.PMJS.plugins.slipperyTiles.emptyTerrainQueries,0);
+});

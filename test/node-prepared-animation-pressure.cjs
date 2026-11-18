@@ -51,7 +51,7 @@ native.images.memory();
   const warm=native.images.memory();
   for(let i=0;i<144;i++){frame(i%24,!!(i%2));frame((i+7)%24,!!(i%2),other);}
   const after=native.images.memory();
-  assert.equal(after.renderReadbacks,0,'prepared drawing must not read back any GPU texture');
+  assert.equal(after.renderReadbacks,warm.renderReadbacks,'warm drawing must not read back GPU textures');
   assert.equal(after.paletteReadbacks,0,'drawing must not read the palette back from the GPU');
   assert.equal(after.preparedFrameConversions,warm.preparedFrameConversions,'warm cycles must not repeatedly convert evicted frames');
   assert.equal(after.preparedFrameCacheMisses,warm.preparedFrameCacheMisses);
@@ -59,10 +59,8 @@ native.images.memory();
   assert.equal(after.textureUploadBytes,warm.textureUploadBytes);
   assert.ok(after.preparedFrameCacheBytes<=budget);
   assert.ok(after.preparedPageTextureBytes<=32*1024*1024);
-  if(budget>=3536&&budget<24*3536) {
-   assert.ok(after.preparedFrameCacheEvictions>0,'fixture did not create cache pressure');
-   assert.ok(after.preparedFrameCacheEvictions<=34,'cache admission did not stop under repeated pressure');
-  }
+  assert.equal(after.preparedFrameConversions,0,'drawing must not convert prepared frames');
+  assert.equal(after.preparedFrameCacheEvictions,0,'disabled conversion cache must stay empty');
  } finally {
   if(image)native.images.release(image.handle);if(other)native.images.release(other.handle);if(reference)native.canvas.release(reference.handle);
   native.beginFrame();assert.equal(native.images.memory().preparedFrameCacheBytes,0);

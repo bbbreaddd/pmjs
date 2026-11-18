@@ -38,6 +38,17 @@ function fixture(options = {}) {
   Guest.prototype = Object.fromEntries(methodNames.map(name => [name,
     new Function('this.calls.push(' + JSON.stringify(name) + ');')]));
   Guest.prototype.constructor = Guest;
+  if (options.deferredPool) {
+    Guest.prototype._createPriorityTiles = function() {
+      this._priorityTiles = [{ layerId: -1, _hiding: true }, { layerId: -1, _hiding: true }];
+      this.children = this._priorityTiles.slice();
+      for (const child of this.children) child.parent = this;
+      this._priorityTilesCount = 0;
+    };
+    Guest.prototype.removeChild = function(child) { this.children.splice(this.children.indexOf(child), 1); child.parent = null; };
+    Guest.prototype.addChild = function(child) { this.children.push(child); child.parent = this; };
+    Guest.prototype._paintPriorityTile = function() { this._priorityTiles[this._priorityTilesCount++].layerId = 0; };
+  }
   const original = { ...Guest.prototype };
   Object.setPrototypeOf(Guest.prototype, { updateTransform: original.updateTransform });
   delete Guest.prototype.updateTransform;
@@ -55,13 +66,14 @@ function fixture(options = {}) {
     __pmjsBuiltinRequire: require, TiledTilemap: Guest,
     Spriteset_Map: function() {}, Game_CharacterBase: function() {}, Game_Map: function() {}, PIXI: { Container: { prototype: {
       updateTransform() { this.calls.push('container'); }
-    } } }, PMJS: { maps: {}, yedRetainedTiles: {
+    } } }, PMJS: { maps: {}, yedPriorityUpdates: { canDefer: () => true }, yedRetainedTiles: {
       supported(map) { return map.supported !== false; },
       prepare(map, x, y) { operations.push(['prepare', x, y]); return options.fail !== 'prepare'; },
       paint(map, x, y) { operations.push(['paint', x, y]); return options.fail !== 'paint'; },
       updatePositions(map, x, y) { operations.push(['positions', x, y]); return true; },
       updateAnimation() { operations.push(['animation']); return true; },
       flushAnimation() { operations.push(['flush']); return true; },
+      restorePriorityTiles(map) { map.poolRestored = true; },
       invalidate() { operations.push(['invalidate']); }
     } } };
   context.Spriteset_Map.prototype.loadTileset = function() {
@@ -91,7 +103,7 @@ const animation = 'tilemap.yed-indexed-animation';
 
 test('reviewed guest producers remain unchanged while retained entry points activate', () => {
   const { Guest, original, operations } = fixture();
-  for (const name of ['_paintTile','_paintPriorityTile','_paintTilesLayer','_paintObjectLayers']) {
+  for (const name of ['_paintTile','_paintTilesLayer','_paintObjectLayers']) {
     assert.equal(Guest.prototype[name], original[name]);
   }
   const map = new Guest();
@@ -310,6 +322,7 @@ test('native preparation hook returns false for unsupported instance', () => {
   const { Guest, operations } = fixture();
   const map = new Guest(); map.supported = false;
   assert.equal(map._pmjsPrepareTiles(), false);
+  assert.equal(map.poolRestored, true);
   assert.deepEqual(operations, [['invalidate']]);
   assert.deepEqual(map.calls, []);
 });
@@ -322,4 +335,23 @@ test('qualification reports the specific changed method without splitting eligib
     assert.equal(record.refusalReason, 'unrecognized tile preparation composition');
     assert.equal(record.refusalDetail, 'TiledTilemap._updateAnimFrames');
   }
+});
+
+test('deferred priority sprites join ordinary painting and restore before unsupported fallback', () => {
+  const { Guest, context } = fixture({ deferredPool: true, realRetained: true });
+  context.PIXI.Container = class { constructor() { this.children = []; }
+    addChild(s) { if (s.parent) s.parent.removeChild(s); this.children.push(s); s.parent = this; }
+    removeChild(s) { this.children.splice(this.children.indexOf(s), 1); s.parent = null; } };
+  Guest.prototype.addChild = context.PIXI.Container.prototype.addChild;
+  const map = new Guest(); map._createPriorityTiles();
+  context.PMJS.yedRetainedTiles.deferPriorityTiles(map);
+  const holder = map.children[0];
+  assert.equal(holder.visible, false);
+  const first = map._priorityTiles[0], second = map._priorityTiles[1];
+  map._paintPriorityTile();
+  assert.deepEqual(map.children, [holder, first]);
+  assert.equal(first.parent, map);
+  assert.equal(second.parent, holder);
+  assert.equal(map._pmjsPrepareTiles(), false);
+  assert.deepEqual(map.children, [holder, first, second]);
 });

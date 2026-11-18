@@ -4,6 +4,7 @@
   var methods = PMJS.methods;
   var reviewedBitmapLoad = ImageManager.loadBitmapFromUrl;
   var crypto = globalThis.__pmjsBuiltinRequire('crypto');
+  var parserLoader, parserEntry;
   var mz = typeof ShaderTilemap === 'undefined';
   var contracts = [{ target: Tilemap.prototype, methods: mz ? {
     _addNormalTile: '43c23024b34b5d1dcf800f5e90b4fbdff32e3fdf6112c1a406c59e7703934dc0',
@@ -61,22 +62,48 @@
   // Maps load every tileset they name, including ones no tile uses (Tiled maps commonly list
   // shared sheets). Those images are not in the prepared set, so loading them in its scope only
   // reached the native "source changed" check and discarded the catalog. Load them unscoped.
-  function selectedFor(source) {
-    var identity = selected();
+  function sourceIdentity(identity, source, entry) {
     if (!identity) return '';
-    var entry = NativeHost.assets.preparedMapIndex[$gameMap.mapId()];
     if (source && Array.isArray(entry.sources) && entry.sources.indexOf(source) < 0) {
       stats.unscoped++;
       return '';
     }
     return identity;
   }
+  function selectedFor(source) {
+    var identity = selected();
+    return sourceIdentity(identity, source, identity && NativeHost.assets.preparedMapIndex[$gameMap.mapId()]);
+  }
+  function parserSource(filename) {
+    return filename ? 'img/tilesets/'+String(filename).split('/').pop() : '';
+  }
+  function parserImage(receiver, args, identity) {
+    if (identity) stats.selected++;
+    return scope(identity, function() {
+      var bitmap = parserLoader.apply(receiver, args);
+      if (bitmap && identity) bitmap._pmjsPreparedTileSet = identity;
+      return bitmap;
+    });
+  }
+  function loadParserTilesets(filenames, bitmaps) {
+    if (!filenames.length) return;
+    if (ImageManager.loadParserTileset !== parserEntry) {
+      filenames.forEach(function(filename, index) { bitmaps[index] = ImageManager.loadParserTileset(filename, 0); });
+      return;
+    }
+    var identity = selected();
+    var entry = identity && NativeHost.assets.preparedMapIndex[$gameMap.mapId()];
+    var identities = filenames.map(function(filename) { return sourceIdentity(identity, parserSource(filename), entry); });
+    filenames.forEach(function(filename, index) {
+      bitmaps[index] = parserImage(ImageManager, [filename, 0], identities[index]);
+    });
+  }
   function scope(identity, callback) {
     var previous = PMJS.images.preparedTileSet;
     PMJS.images.preparedTileSet = identity;
     try { return callback(); } finally { PMJS.images.preparedTileSet = previous; }
   }
-  PMJS.maps = { selected: selected, scope: scope, stats: stats };
+  PMJS.maps = { selected: selected, scope: scope, stats: stats, loadParserTilesets:loadParserTilesets };
   methods.wrap({ key: 'ImageManager.loadTileset', id: 'pmjs.map-image-context',
     getTarget: function() { return ImageManager; }, method: 'loadTileset',
     wrap: function(original) {
@@ -95,17 +122,11 @@
   methods.wrap({ key: 'ImageManager.loadParserTileset', id: 'pmjs.map-tiled-image-context',
     getTarget: function() { return ImageManager; }, method: 'loadParserTileset',
     wrap: function(original) {
-      return function(filename, hue) {
-        // YED_Tiled loads 'img/tilesets/' plus the last path segment; the compiler names sources alike.
-        var self = this, args = arguments;
-        var identity = hue ? '' : selectedFor(filename ? 'img/tilesets/'+String(filename).split('/').pop() : '');
-        if (identity) stats.selected++;
-        return scope(identity, function() {
-          var bitmap = original.apply(self, args);
-          if (bitmap && identity) bitmap._pmjsPreparedTileSet = identity;
-          return bitmap;
-        });
+      parserLoader = original;
+      parserEntry = function(filename, hue) {
+        return parserImage(this, arguments, hue ? '' : selectedFor(parserSource(filename)));
       };
+      return parserEntry;
     }
   });
   if (!mz) methods.wrap({ key: 'ImageManager._generateCacheKey', id: 'pmjs.map-image-cache-key',

@@ -24,8 +24,11 @@
       if (!event || !Array.isArray(event.pages) ||
           !event.pages[character._pageIndex]) return false;
     }
+    return listHasMiniLabel(character.list() || []);
+  }
+
+  function listHasMiniLabel(list) {
     var expression = /<(?:MINI WINDOW|MINI LABEL):[ ](.+)>/i;
-    var list = character.list() || [];
     for (var i = 0; i < list.length; i++) {
       var command = list[i];
       if ((command.code === 108 || command.code === 408) &&
@@ -82,7 +85,7 @@
   }
 
   PMJS.rpgmaker = PMJS.rpgmaker || {};
-  PMJS.rpgmaker.eventMiniLabel = { guardSetup: guardSetup };
+  PMJS.rpgmaker.eventMiniLabel = { guardSetup: guardSetup, listHasMiniLabel:listHasMiniLabel };
 
   function install() {
     if (!PMJS.optimizations.isEnabled('plugins.yanfly.event-mini-label')) return false;

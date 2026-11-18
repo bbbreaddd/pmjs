@@ -20,7 +20,7 @@ try {
   for (const nearest of [false, true]) for (const clamped of [false, true]) for (const offset of [-1.25, 0, 3.375]) {
     const indexed = native.images.loadBytes(bytes);
     try {
-      assert.equal(owner(indexed).palette, true, 'fixture must start indexed');
+      assert.equal(owner(indexed).palette, false, 'images use ordinary texture storage');
       function packet(image) {
         const p = spritePacket(native, image, { nearest, crop: [0.25, 0.5, 48, 36], scale: 0.875 });
         p.metadata[0] = 2;
@@ -31,9 +31,8 @@ try {
       }
       assert.deepEqual(drawPacket(native, packet(indexed)), drawPacket(native, packet(reference)),
         'tiling pixels differ from independent ordinary RGBA backing');
-      assert.equal(owner(indexed).palette, nearest, 'only nearest tiling keeps indexed backing');
-      if (!nearest) assert.equal(owner(indexed).gpuBytes, 64 * 64 * 2,
-        'linear fallback must retain compact grayscale-alpha storage');
+      assert.equal(owner(indexed).palette, false, 'tiling does not create indexed storage');
+      assert.ok(owner(indexed).gpuBytes >= 64 * 64 * 4, 'ordinary RGBA storage');
       const uploads = native.images.memory().textureUploadBytes;
       drawPacket(native, packet(indexed));
       assert.equal(native.images.memory().textureUploadBytes, uploads, 'stable tiling must not upload again');

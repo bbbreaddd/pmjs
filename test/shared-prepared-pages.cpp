@@ -219,7 +219,7 @@ int main() {
         require(region && alias && region->image.texture == alias->image.texture &&
           images.textureUploadBytes() == uploads,"identical sprite pages did not share physical storage");
       }
-      require(images.gpuBytes() == 2U*29*27*2,"sprite-page GPU accounting duplicated shared alpha representations");
+      require(images.gpuBytes() == 2U*29*27*4,"sprite-page GPU accounting duplicated shared alpha representations");
       pixels(images,first->handle,spriteA.pixels); pixels(images,second->handle,spriteB.pixels);
       const auto surviving = images.resolveSpriteRegion(second->handle,0,0,64,64,false)->image.texture;
       require(images.release(first->handle),"sprite-page owner release failed"); images.update();
@@ -262,43 +262,32 @@ int main() {
         blocks.setWarmBudgetBytes(0);
         require(blocks.installPrepared(indexed.source, indexed.directory, descriptor), "block fixture install failed");
         const auto image = blocks.loadPng(indexed.source);
-        require(image && blocks.resolveBlockRegion(image->handle, false), "indexed block upload failed");
-        require(blocks.cpuBytes() < std::size_t(pageWidth) * pageHeight * 4,
-          "block upload retained expanded indexed pixels");
+        require(image.has_value(), "legacy indexed block fixture failed to load");
+        require(!blocks.resolveBlockRegion(image->handle, false),
+          "legacy indexed page selected runtime block conversion");
+        require(blocks.lookup(image->handle).has_value(), "legacy indexed block fallback unavailable");
+        require(blocks.readPixelsRegion(image->handle, 0, 0, width, height)->rgba == indexed.pixels,
+          "legacy indexed block fallback changed pixels");
         const auto decodes = blocks.preparedPageDecodes();
         const auto uploads = blocks.textureUploadBytes();
-        require(blocks.readPixelsRegion(image->handle, 0, 0, width, height)->rgba == indexed.pixels,
-          "block upload lost reconstructible CPU pixels");
-        require(blocks.resolveBlockRegion(image->handle, false) && blocks.preparedPageDecodes() == decodes &&
-          blocks.textureUploadBytes() == uploads, "repeated block use decoded or uploaded pixels");
+        require(blocks.lookup(image->handle).has_value() && blocks.preparedPageDecodes() == decodes &&
+          blocks.textureUploadBytes() == uploads, "repeated fallback use decoded or uploaded pixels");
         blocks.release(image->handle); blocks.update();
         require(blocks.cpuBytes() == 0 && blocks.gpuBytes() == 0, "block storage outlived its owner");
       }
-      pmjs::ImageStore images; images.setPalettizationEnabled(true);
+      pmjs::ImageStore images;
       images.setWarmBudgetBytes(0); images.setPreparedFrameCacheBudget(0);
       install(images, indexed);
       const auto loaded = images.loadPng(indexed.source);
       require(loaded.has_value(), "indexed prepared page failed to load");
       const auto region = images.resolveSpriteRegion(loaded->handle, 0, 0, width, height, false, true, true);
-      if (grayscale) {
-        require(!region, "opaque grayscale page selected palette sampling");
-        const auto ordinary = images.lookup(loaded->handle);
-        require(ordinary && images.gpuBytes() == std::size_t(width) * height,
-          "opaque grayscale fallback did not retain single-channel storage");
-        require(images.cpuBytes() < std::size_t(pageWidth) * pageHeight * 4,
-          "grayscale upload retained expanded indexed pages");
-      } else {
-        require(region && region->paletteTable != 0, "indexed palette region unavailable");
-        require(images.gpuBytes() == std::size_t(pageWidth) * pageHeight + 1024,
-          "indexed palette GPU accounting is incorrect");
-      }
+      require(!region, "legacy indexed page selected runtime palette sampling");
+      require(images.lookup(loaded->handle).has_value(), "legacy indexed page has no ordinary texture");
       const auto decodes = images.preparedPageDecodes();
       const auto uploads = images.textureUploadBytes();
       for (int frame = 0; frame < 8; ++frame) {
         const auto repeated = images.resolveSpriteRegion(loaded->handle, 0, 0, width, height, false, true, true);
-        require(grayscale ? !repeated : repeated && repeated->image.texture == region->image.texture &&
-          repeated->paletteTable == region->paletteTable,
-          "repeated indexed palette view changed its backing");
+        require(!repeated, "legacy indexed page selected runtime palette sampling on reuse");
       }
       require(images.preparedPageDecodes() == decodes,
         "repeated indexed palette view decoded an already resident page");
@@ -377,25 +366,20 @@ int main() {
       install(images,blockA); install(images,blockB);
       const auto first = images.loadPng(blockA.source), second = images.loadPng(blockB.source);
       require(first && second,"block sharing fixtures failed to load");
-      const auto region = images.resolveBlockRegion(first->handle,false);
+      require(!images.resolveBlockRegion(first->handle,false) &&
+        !images.resolveBlockRegion(second->handle,false), "ordinary pages selected runtime block conversion");
+      const auto region = images.resolveSpriteRegion(first->handle,0,0,64,64,false);
       const auto creates = images.textureCreates(), uploads = images.textureUploadBytes();
-      const auto alias = images.resolveBlockRegion(second->handle,false);
-      require(region && alias && region->image.texture == alias->image.texture && region->table != alias->table,
-        "block owners must share the atlas and retain separate lookup tables");
-      require(images.textureCreates() == creates+1 && images.textureUploadBytes() == uploads+8,
-        "second block owner uploaded more than its private two-entry table");
-      require(images.gpuBytes() == 70U*70*2+2*8,"shared block atlas GPU accounting is incorrect");
-      const auto spriteRegion = images.resolveSpriteRegion(first->handle,0,0,64,64,false);
-      require(spriteRegion && spriteRegion->image.texture == region->image.texture,
-        "block and sprite consumers did not reuse the same physical page");
-      const auto entries = images.memoryEntries();
-      const auto owner = std::find_if(entries.begin(),entries.end(),[&](const auto& entry) { return entry.handle == first->handle; });
-      require(owner != entries.end() && owner->gpuBytes == 70U*70*2+8,
-        "one logical owner counted its shared page and block atlas twice");
+      const auto alias = images.resolveSpriteRegion(second->handle,0,0,64,64,false);
+      require(region && alias && region->image.texture == alias->image.texture,
+        "ordinary block fallback owners did not share their sprite page");
+      require(images.textureCreates() == creates && images.textureUploadBytes() == uploads,
+        "second fallback owner duplicated its shared sprite page");
+      require(images.gpuBytes() == 70U*70*4,"shared fallback page GPU accounting is incorrect");
       pixels(images,first->handle,blockA.pixels); pixels(images,second->handle,blockB.pixels);
       require(images.release(first->handle),"first block owner release failed"); images.update();
-      require(glIsTexture(alias->image.texture) && glIsTexture(alias->table),"first release invalidated the surviving block owner");
-      require(images.gpuBytes() == 70U*70*2+8,"first block release did not reclaim only its private table");
+      require(glIsTexture(alias->image.texture),"first release invalidated the surviving fallback owner");
+      require(images.gpuBytes() == 70U*70*4,"first release changed shared fallback storage");
       require(images.release(second->handle),"last block owner release failed"); images.update();
       require(images.gpuBytes() == 0 && images.cpuBytes() == 0,"block resources survived their last owner");
     }

@@ -2570,6 +2570,65 @@ test('empty leaves retain transform servicing and reappear when they gain conten
     [0xffffffff, 0, 1, 0, 0]);
 });
 
+test('empty sprite leaves do not split prepared sprite segments or alter their packets', () => {
+  const harness = preparedHarness(), { sandbox, sprite } = harness;
+  const root = new sandbox.PIXI.Container();
+  for (let index = 0; index < 6; index++) {
+    const visible = sprite(16 + index, 24 + index);
+    visible.x = index * 7; visible.y = index * 3; visible.alpha = 0.5;
+    root.addChild(visible);
+    const empty = sprite(); empty.texture.frame.width = 0;
+    root.addChild(empty);
+  }
+  let skips = 0;
+  const original = sandbox.nativePlainSpriteBinding;
+  sandbox.nativePlainSpriteBinding = function(node) {
+    const binding = original(node);
+    if (binding === sandbox.nativeSceneEmptySpriteBinding) skips++;
+    return binding;
+  };
+  sandbox.renderNativeStage(root);
+  const segmented = harness.submitted.at(-1);
+  assert.equal(skips, 6);
+  sandbox.PMJS.optimizations.isEnabled = id => id !== 'scene.plain-sprite-segment';
+  sandbox.renderNativeStage(root);
+  assert.deepEqual(harness.submitted.at(-1), segmented);
+});
+
+test('empty sprite segment probes retain transformed leaves and new graphics', () => {
+  const harness = preparedHarness(), { sandbox, sprite, makeTexture } = harness;
+  const root = new sandbox.PIXI.Container(), empty = sprite();
+  empty.texture.frame.width = 0;
+  root.addChild(empty);
+  for (let index = 0; index < 5; index++) root.addChild(sprite());
+  let transforms = 0;
+  const original = empty.updateTransform;
+  empty.updateTransform = function() { transforms++; return original.call(this); };
+  sandbox.renderNativeStage(root);
+  assert.equal(transforms, 1);
+  assert.equal(harness.submitted.at(-1).count, 6);
+  empty.texture = makeTexture(32, 32);
+  sandbox.renderNativeStage(root);
+  assert.equal(transforms, 2);
+  assert.equal(harness.submitted.at(-1).count, 7);
+});
+
+test('empty sprite segments cannot conceal render hooks or advanced effects', () => {
+  const harness = preparedHarness(), { sandbox, sprite } = harness;
+  const root = new sandbox.PIXI.Container();
+  for (let index = 0; index < 6; index++) root.addChild(sprite());
+  const empty = root.children[2]; empty.texture.frame.width = 0;
+  empty._renderWebGL = function() {};
+  assert.throws(() => sandbox.renderNativeStage(root), /render.render-method/);
+  delete empty._renderWebGL;
+  empty._filters = [new sandbox.PIXI.filters.BlurFilter(4, 1)];
+  sandbox.renderNativeStage(root);
+  const segmented = harness.submitted.at(-1);
+  sandbox.PMJS.optimizations.isEnabled = id => id !== 'scene.plain-sprite-segment';
+  sandbox.renderNativeStage(root);
+  assert.deepEqual(harness.submitted.at(-1), segmented);
+});
+
 test('empty filtered containers retain their filter scope', () => {
   const harness = makeHarness(), { sandbox } = harness;
   const root = new sandbox.PIXI.Container(), empty = new sandbox.PIXI.Container();

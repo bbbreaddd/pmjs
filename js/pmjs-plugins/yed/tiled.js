@@ -110,6 +110,7 @@
       PMJS.optimizations.reportFallback(paintingId, reason);
       if (animation) PMJS.optimizations.reportFallback(animationId, reason);
       disabled.add(instance);
+      retained.restorePriorityTiles(instance);
       instance._pmjsIndexedAnimation = false;
       instance._pmjsIndexedPaintLoops = false;
       instance._needsRepaint = true;
@@ -168,6 +169,12 @@
       prototype[name] = effective[name] = wrapped;
     }
     if (painting) {
+      prototype._paintPriorityTile = effective._paintPriorityTile = function() {
+        var index = this._priorityTilesCount;
+        var result = original._paintPriorityTile.apply(this, arguments);
+        if (this._priorityTilesCount > index) retained.activatePriorityTile(this, this._priorityTiles[index]);
+        return result;
+      };
       wrap('_paintAllTiles', function(x, y) { return retained.paint(this, x, y); });
       wrap('_updateLayerPositions', function(x, y) { return retained.updatePositions(this, x, y); });
       if (animation) wrap('_updateAnim', function() { return retained.updateAnimation(this); }, animationEligible);

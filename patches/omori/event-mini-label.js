@@ -37,10 +37,19 @@
       var guarded = labels.guardSetup(original, id, null, function(character) {
         return character && typeof character === 'object' ? this : undefined;
       });
-      prototype.setupMiniLabel = function() {
+      var delayed = function() {
         if (!this._miniLabel && !(this._labelDelay <= 0)) return original.apply(this, arguments);
         return guarded.apply(this, arguments);
       };
+      prototype.setupMiniLabel = labels.guardSetup(delayed, id, function(character) {
+        if (!character || typeof character.event !== 'function') return false;
+        var data = character.event();
+        return !data || !Array.isArray(data.pages) || data.pages.some(function(page) {
+          return labels.listHasMiniLabel(page.list || []);
+        });
+      }, function(character) {
+        return character && typeof character === 'object' ? character : undefined;
+      });
     }
   });
 })();

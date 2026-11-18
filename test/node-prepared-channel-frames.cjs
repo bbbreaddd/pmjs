@@ -54,12 +54,9 @@ native.initialize({ gameRoot: root, width: 280, height: 280, windowTitle: 'Prepa
     assert.equal(after.textureUploadBytes, warm.textureUploadBytes);
     assert.equal(after.preparedPageDecodes, warm.preparedPageDecodes);
     assert.equal(after.renderReadbacks, baseline.renderReadbacks);
-    if (budget >= 3 * 258 * 258 * 4) {
-      assert.ok(after.preparedFrameCacheHits > warm.preparedFrameCacheHits);
-      assert.equal(after.preparedFrameCacheEvictions, baseline.preparedFrameCacheEvictions);
-    } else if (budget >= 258 * 258 * 4) {
-      assert.ok(after.preparedFrameCacheEvictions > baseline.preparedFrameCacheEvictions);
-    } else assert.equal(after.preparedFrameCacheMisses, baseline.preparedFrameCacheMisses);
+    assert.equal(after.preparedFrameCacheMisses, 0);
+    assert.equal(after.preparedFrameConversions, 0);
+    assert.equal(after.sourceTextureBuilds, 0);
   } finally {
     for (const owner of [image, original, retained]) if (owner) native.images.release(owner.handle);
     native.beginFrame();

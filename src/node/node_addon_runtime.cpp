@@ -133,8 +133,6 @@ napi_value initialize(napi_env env, napi_callback_info info) try {
     assetRoot, title, imageWarmCacheBytes,
     hasProperty(env, options, "programCacheRoot") ? asString(env, property(env, options, "programCacheRoot")) : "");
   state->images.setPreparedFrameCacheBudget(preparedFrameCacheBytes);
-  state->images.setPalettizationEnabled(hasProperty(env, options, "imagePalettization") &&
-    asBoolean(env, property(env, options, "imagePalettization")));
   state->images.setCompactSamplingEnabled(compactSampling);
   state->images.setPreparedCropUploadsEnabled(cropUploads);
   return undefined(env);

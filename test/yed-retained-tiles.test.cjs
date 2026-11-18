@@ -4,8 +4,14 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
+class Container {
+  constructor() { this.children = []; }
+  addChild(child) { if (child.parent) child.parent.removeChild(child); this.children.push(child); child.parent = this; }
+  removeChild(child) { this.children.splice(this.children.indexOf(child), 1); child.parent = null; }
+  destroy(options) { if (options.children) for (const child of this.children.slice()) child.destroy(options); this.destroyed = true; }
+}
 function fixture(tracked = false) {
-  const context = { PMJS: {}, $gameMap: { currentMapLevel: 0 } };
+  const context = { PIXI: { Container }, PMJS: { yedPriorityUpdates: { canDefer: () => true } }, $gameMap: { currentMapLevel: 0 } };
   if (tracked) context.PMJS.pixi4 = { tilePointRevision(rect, points) { return points === rect.pointsBuf ? rect._pmjsNativeGeneration || 0 : -1; } };
   vm.runInNewContext(fs.readFileSync(require.resolve('../js/pmjs-plugins/yed/retained-tiles.js'), 'utf8'), context);
   const rect = { pointsBuf: [], textures: [{}], calls: 0,
@@ -21,6 +27,9 @@ function fixture(tracked = false) {
     _getTextureId() { return 0; }, _getAnimTileId(texture, id) { return id === 0 ? this._animFrame[0] : id; },
     _getPriority() { return 1; }, _getZIndex() { return 3; }, _isPriorityTile() { return false; },
     _updateAnimFrames() { this._animDuration[0] = 2; }, hideOnLevel() {} };
+  map.children = sprites.slice();
+  map.addChild = Container.prototype.addChild; map.removeChild = Container.prototype.removeChild;
+  for (const sprite of sprites) sprite.parent = map;
   return { api: context.PMJS.yedRetainedTiles, map, rect, sprites };
 }
 
@@ -346,4 +355,47 @@ test('rejected entering cells do not corrupt reusable overlap', () => {
     assert.equal(f.api.prepare(f.map,1,0),true);
   }
   assert.deepEqual(a.rect.pointsBuf,b.rect.pointsBuf);
+});
+
+test('unused priority pool stays outside traversal and repaints park retired slots', () => {
+  const { api, map, sprites } = fixture();
+  map.children = sprites.slice();
+  for (const sprite of sprites) Object.assign(sprite, { parent: map, layerId: -1, _hiding: true, visible: true });
+  api.deferPriorityTiles(map);
+  const holder = map.children[0];
+  assert.equal(holder.visible, false);
+  assert.deepEqual(holder.children, sprites);
+  assert.deepEqual(map._priorityTiles, sprites);
+  assert.ok(sprites.every(sprite => sprite.visible === false));
+  map.tiledData.layers.push({ type: 'objectgroup', objects: [{ gid: 1, visible: true, x: 10, y: 20, height: 16 }] });
+  assert.equal(api.prepare(map, 0, 0), true);
+  assert.deepEqual(map.children, [holder, sprites[0]]);
+  assert.equal(sprites[0].parent, map);
+  assert.equal(sprites[0].x, 18);
+  map.tiledData.layers[1].objects.length = 0;
+  api.invalidate(map); api.prepare(map, 0, 0);
+  assert.equal(sprites[0].visible, false);
+  assert.deepEqual(map.children, [holder]);
+  api.restorePriorityTiles(map);
+  assert.deepEqual(map.children, [holder, ...sprites]);
+});
+
+test('deferred pool restoration preserves ownership transferred to another parent', () => {
+  const { api, map, sprites } = fixture();
+  for (const sprite of sprites) Object.assign(sprite, { parent: map, layerId: -1, _hiding: true });
+  api.deferPriorityTiles(map);
+  const other = {}; sprites[0].parent = other;
+  api.restorePriorityTiles(map);
+  assert.equal(sprites[0].parent, other);
+  assert.equal(sprites[1].parent, map);
+});
+
+test('parked priority sprites remain owned by recursive tilemap destruction', () => {
+  const { api, map, sprites } = fixture();
+  for (const sprite of sprites) Object.assign(sprite, { layerId: -1, _hiding: true,
+    destroy() { this.destroyed = true; } });
+  api.deferPriorityTiles(map);
+  assert.equal(map.children.length, 1);
+  Container.prototype.destroy.call(map, { children: true });
+  assert.ok(sprites.every(sprite => sprite.destroyed));
 });

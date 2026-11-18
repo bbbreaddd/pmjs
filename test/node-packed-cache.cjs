@@ -205,7 +205,7 @@ test('non-first sparse pages use their own packed header rather than the dense f
     const draw = image => drawPacket(native, spritePacket(native, image, { crop: [31, 31, 64, 48] }));
     assert.deepEqual(draw(image), draw(reference));
     const owner = native.images.memory(100).largest.find(entry => entry.handle === image.handle);
-    assert.equal(owner.paletteSparse, true, 'a non-first v2 page must retain sparse backing');
+    assert.equal(owner.palette, false, 'a non-first v2 page decodes into ordinary texture storage');
   } finally {
     for (const value of [image, reference]) if (value) native.images.release(value.handle);
     native.assets.installPackedFiles([]);

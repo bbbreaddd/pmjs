@@ -59,13 +59,9 @@ test('prepared page palette metadata survives direct and catalog installs', asyn
           const after = native.images.memory();
           console.log(JSON.stringify({ mode, fixture: item.name, gpuBytes: owner().gpuBytes,
             cpuBytes: owner().cpuBytes, reconstructions: after.preparedRegionReads - before.preparedRegionReads }));
-          if (item.bits) {
-            assert.equal(owner().palette, true, 'indexed page lost its palette storage decision');
-            if (item.bits === 16) {
-              assert.equal(owner().paletteSparse, true, 'sparse page reconstructed a dense backing');
-              assert.equal(after.preparedRegionReads, before.preparedRegionReads);
-            }
-          }
+          assert.equal(owner().palette, false);
+          assert.equal(after.sourceTextureBuilds, 0);
+          assert.equal(after.preparedFrameConversions, 0);
           const steady = native.images.memory();
           draw(prepared); draw(prepared);
           const repeated = native.images.memory();

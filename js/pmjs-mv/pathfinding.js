@@ -30,7 +30,7 @@
   var ordinaryPass = globalThis.Game_CharacterBase && Game_CharacterBase.prototype.canPass;
   var valid = globalThis.Game_Map && Game_Map.prototype.isValid;
   if (!PMJS.methods.matchesSource(valid, ["e487e7663ad7cd409dd438999f2cc98afc81af6402e3d4a6d47e930ee719149e", "2cf19d9703caeaed1463afffd690e44303a523a2d8b3494c9c00ac657ace1f9b"])) valid = null;
-  var stats = { calls: 0, accelerated: 0, fallback: 0, expanded: 0, finalized: 0, blockedGoals: 0 };
+  var stats = { calls: 0, accelerated: 0, fallback: 0, expanded: 0, finalized: 0, blockedGoals: 0, purityChecks: 0, reachableGoals: 0 };
   PMJS.mv = PMJS.mv || {};
   PMJS.mv.pathfinding = { diagnostics: function() { return Object.assign({}, stats); } };
   PMJS.optimizations.register({ id: id, owner: 'pmjs-mv', fallback: 'original findDirectionTo' });
@@ -101,7 +101,7 @@
           var minimumDistance = Number.isInteger(limit) && limit >= 0 && Number.isInteger(goalX) && Number.isInteger(goalY) &&
             goalX >= 0 && goalX < width && goalY >= 0 && goalY < height ? Math.max(0, f[start] - limit) : -1;
           var pureSearch = null;
-          while (open.length) {
+          search: while (open.length) {
             var at = 0;
             for (var i = 1; i < open.length; i++) if (f[open[i]] < f[open[at]]) at = i;
             var current = open[at]; open.splice(at,1); expanded++;
@@ -110,16 +110,13 @@
             if (x1 === goalX && y1 === goalY) { best = current; break; }
             var remaining = f[current] - g1;
             // A settled path attaining a proved distance bound cannot be improved.
-            if (current === best && minimumDistance >= 0 &&
-                (remaining === 1 || minimumDistance > 0 && remaining === minimumDistance)) {
-              if (pureSearch === null) pureSearch = typeof PMJS.mv.pathfinding.isPureSearch === 'function' &&
-                PMJS.mv.pathfinding.isPureSearch(this, map, limit);
-              if (pureSearch) {
-                if (minimumDistance > 0 && remaining === minimumDistance) { stats.finalized++; break; }
-                if (!this.isThrough() && !this.isDebugThrough() && this.isCollidedWithCharacters(goalX, goalY)) {
-                  stats.blockedGoals++; stats.finalized++; break;
-                }
+            if (current === best && minimumDistance > 0 && remaining === minimumDistance) {
+              if (pureSearch === null) {
+                stats.purityChecks++;
+                pureSearch = typeof PMJS.mv.pathfinding.isPureSearch === 'function' &&
+                  PMJS.mv.pathfinding.isPureSearch(this, map, limit);
               }
+              if (pureSearch) { stats.finalized++; break; }
             }
             if (g1 >= limit) continue;
             for (var j = 0; j < 4; j++) {
@@ -136,7 +133,22 @@
               }
               var position = y2 * width + x2;
               if (closed[position] === stamp) continue;
-              if (!this.canPass(x1, y1, direction)) continue;
+              if (!this.canPass(x1, y1, direction)) {
+                if (current === best && minimumDistance === 0 && remaining === 1 &&
+                    x2 === goalX && y2 === goalY) {
+                  if (pureSearch === null) {
+                    stats.purityChecks++;
+                    pureSearch = typeof PMJS.mv.pathfinding.isPureSearch === 'function' &&
+                      PMJS.mv.pathfinding.isPureSearch(this, map, limit);
+                  }
+                  if (pureSearch && !this.isThrough() && !this.isDebugThrough() &&
+                      this.isCollidedWithCharacters(goalX, goalY)) {
+                    stats.blockedGoals++; stats.finalized++; break search;
+                  }
+                }
+                continue;
+              }
+              if (x2 === goalX && y2 === goalY) stats.reachableGoals++;
               var g2 = g1 + 1, neighbor = position;
               if (seen[neighbor] !== stamp || g2 < g[neighbor]) {
                 if (seen[neighbor] !== stamp) {

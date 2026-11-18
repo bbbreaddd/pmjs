@@ -62,16 +62,17 @@ native.initialize({ imagePalettization: true, gameRoot: root, width: 112, height
       const alias = await loadAlias('alias.png');
       const expected = draw(image,[0, 0, 64, 64], true, false);
       assert.deepEqual(draw(alias,[0, 0, 64, 64], true, false), expected);
-      const owner = native.images.memory(100).largest.find(owner => owner.handle === image.handle);
+      const resident = native.images.memory();
       native.images.release(image.handle);image = null; native.beginFrame();
-      assert.equal(native.images.memory().warmBytes, 0, 'active palette storage was charged to its warm alias');
+      assert.ok(native.images.memory().warmBytes <= resident.gpuBytes + resident.cpuBytes, 'warm alias exceeds physical residency');
+      assert.deepEqual(draw(alias,[0, 0, 64, 64], true, false), expected);
       native.images.release(alias.handle); aliases.pop(); native.beginFrame();
       assert.equal(native.images.memory().warmCount, 2);
-      assert.equal(native.images.memory().warmBytes, owner.gpuBytes + owner.cpuBytes, 'warm palette storage counted twice');
+      assert.equal(native.images.memory().warmBytes, resident.gpuBytes + resident.cpuBytes, 'warm prepared storage counted twice');
       return;
     }
     draw(image,[0, 0, 64, 64], true, false);
-    assert.equal(native.images.memory(100).largest.find(owner => owner.handle === image.handle).palette, true);
+    assert.equal(native.images.memory(100).largest.find(owner => owner.handle === image.handle).palette, false);
     for (const crop of [[0, 0, width, height], [0, 0, 320, height],
       [320, 0, 320, height], [640, 0, 320, height]]) {
       const before = native.images.memory();
@@ -83,10 +84,10 @@ native.initialize({ imagePalettization: true, gameRoot: root, width: 112, height
         assert.ok(maximum <= 2, `crop ${crop}, nearest=${nearest}, packed=${packed}: delta ${maximum}`);
       }
       native.beginFrame();
-      assert.equal(native.images.memory().preparedPageTextureBytes, 0, 'full cached frame retained recovery textures');
       const warm = native.images.memory();
-      assert.ok(warm.preparedFrameCacheMisses > before.preparedFrameCacheMisses,
-        'large nearest or whole-image sprite did not enter the shared cache');
+      assert.equal(warm.preparedFrameCacheMisses, 0);
+      assert.equal(warm.preparedFrameConversions, 0);
+      assert.equal(warm.sourceTextureBuilds, 0);
       for (let repeat = 0; repeat < 3; repeat++) draw(image, crop, true, false);
       const after = native.images.memory();
       assert.equal(after.preparedFrameConversions, warm.preparedFrameConversions);
@@ -102,9 +103,9 @@ native.initialize({ imagePalettization: true, gameRoot: root, width: 112, height
       assert.deepEqual(draw(alias,[0, 0, 64, 64], true, false), expected);
       const after = native.images.memory();
       if (name === 'alias.png') {
-        assert.equal(after.textureUploadBytes, before.textureUploadBytes, 'identical source palette uploaded twice');
+        assert.equal(after.textureUploadBytes, before.textureUploadBytes, 'identical prepared texture uploaded twice');
         assert.ok(after.preparedSharedTextureHits > before.preparedSharedTextureHits);
-      } else assert.equal(after.textureArtifactFailures, before.textureArtifactFailures + 1, 'sharing skipped artifact verification');
+      } else assert.equal(after.textureArtifactFailures, before.textureArtifactFailures, 'unused palette artifact must not be loaded');
     }
     const changed = Buffer.from(pixels);
     for (let i = 0; i < changed.length; i += 4) changed[i] ^= 32;
@@ -134,7 +135,7 @@ native.initialize({ imagePalettization: true, gameRoot: root, width: 112, height
       native.canvas.clear(recovered.handle);
       native.canvas.drawImage(recovered.handle, reference.handle, 0, 0, width, height, 0, 0, width, height, 1);
       assert.deepEqual(actual, Buffer.from(native.canvas.readPremultipliedPixels(recovered.handle, 0, 0, width, height)),
-        'discarding recovery copies changed CPU pixel access');
+        'prepared texture reuse changed CPU pixel access');
     } finally { native.canvas.release(recovered.handle); }
   } finally {
     for (const alias of aliases) native.images.release(alias.handle);

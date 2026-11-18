@@ -112,8 +112,8 @@ const handles = [];
       native.renderScene();
       const memory = native.images.memory(100);
       const owner = memory.largest.find(owner => owner.handle === image.handle);
-      assert.equal(owner.paletteIndexBits, f.bits);
-      assert.ok(memory.storageDecisionHits > before, 'draw consumes the precomputed decision');
+      assert.equal(owner.paletteIndexBits, 0);
+      assert.equal(memory.sourceTextureBuilds, 0);
     }
     for (const f of fixtures.filter(f => !f.name.startsWith('palette'))) {
       const image = native.images.load(f.source);

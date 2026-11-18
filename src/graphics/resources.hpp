@@ -306,7 +306,6 @@ class ImageStore {
   std::size_t preparedFrameResidentBytes() const { return preparedFrameResidentBytes_; }
   std::size_t preparedFrameEvictedBytes() const { return preparedFrameResidentBytes_ - preparedFrameBytes_; }
   std::size_t preparedFramePeakResidentBytes() const { return preparedFramePeakResidentBytes_; }
-  void setPalettizationEnabled(bool enabled) { palettizationEnabled_ = enabled; }
   void setCompactSamplingEnabled(bool enabled) { compactSamplingEnabled_ = enabled; }
   void setPreparedCropUploadsEnabled(bool enabled) { preparedCropUploadsEnabled_ = enabled; }
   std::uint64_t compactUploadFailures() const { return compactUploadFailures_; }
@@ -443,7 +442,6 @@ class ImageStore {
       std::size_t bytes, ImageChannelStorage storage);
   std::string preparedTextureKey(PreparedBacking& backing, bool premultiplied);
 
-  std::optional<ImageInfo> convertPreparedFrame(ImageHandle handle, const std::array<int, 4>& storage, bool premultiplied);
   std::uint32_t preparedCopyProgram_ = 0, preparedCopyVao_ = 0;
   std::uint64_t preparedFrameConversions_ = 0, preparedFrameBypasses_ = 0;
   mutable std::uint64_t paletteReadbacks_ = 0;
@@ -463,7 +461,6 @@ class ImageStore {
   std::size_t preparedFrameBudgetBytes_ = defaultPreparedFrameCacheBytes;
   std::size_t preparedFrameBytes_ = 0;
   std::size_t preparedFrameResidentBytes_ = 0, preparedFramePeakResidentBytes_ = 0;
-  bool palettizationEnabled_ = false;
   bool compactSamplingEnabled_ = true, preparedCropUploadsEnabled_ = true;
   std::uint64_t compactUploadFailures_ = 0, compactTextureUploads_ = 0;
   std::uint64_t preparedCropUploads_ = 0, preparedCropUploadBytes_ = 0;
@@ -580,8 +577,6 @@ class ImageStore {
   std::unordered_map<std::string, ImageStorageDecision> storageDecisions_;
   std::uint64_t storageDecisionHits_ = 0;
   const ImageStorageDecision* storageDecision(const std::string& key) const;
-  std::shared_ptr<PaletteBacking> makePalette(const ImagePixels& pixels,
-      const ImageStorageDecision* decision = nullptr);
   std::optional<ImagePixels> readPalettePixels(const Slot& slot, std::optional<std::array<int, 4>> region = std::nullopt) const;
   bool materializePalette(Slot& slot);
   std::size_t paletteGpuBytes(const Slot& slot) const;
@@ -592,7 +587,6 @@ class ImageStore {
   void clearRetiredTextures(Slot& slot);
   bool supportsAstc() const;
   mutable std::optional<bool> astcSupported_;
-  std::optional<std::size_t> uploadPreparedCrops(Slot& slot, std::uint32_t& texture);
   static ImagePixels* preparedPixels(PreparedBacking& backing, std::size_t page, bool* acquired = nullptr);
   static std::optional<ImagePixels> readPreparedRegion(PreparedBacking& backing,
       int x, int y, int width, int height, bool* acquired = nullptr);
@@ -602,7 +596,6 @@ class ImageStore {
   std::optional<ImageInfo> preparedPage(Slot& slot, std::size_t page, bool premultiplied,
       PaletteImageRegion* paletteView = nullptr, bool sparseAllowed = false);
   std::uint32_t paletteTable(PaletteBacking& palette, bool premultiplied);
-  std::shared_ptr<PaletteBacking> makeSparsePalette(const SparsePalettePage& page, bool sparseAllowed);
   static bool preparedSparsePage(PreparedBacking& backing, std::size_t index);
   static ImageHandle makeHandle(std::size_t index, std::uint16_t generation);
   void markUsed(Slot& slot);
