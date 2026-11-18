@@ -618,6 +618,10 @@ if(BUILD_TESTING)
     set_tests_properties(node-prepared-animation-pressure-${PMJS_FRAME_BUDGET} PROPERTIES
       ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
   endforeach()
+  add_test(NAME node-image-preparation-only-palettes COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-image-preparation-only.cjs" $<TARGET_FILE:pmjs_native> --palettes)
+  set_tests_properties(node-image-preparation-only-palettes PROPERTIES
+    ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
   add_test(NAME node-prepared-palette-warm-aliases COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-prepared-palette-frame-cache.cjs" $<TARGET_FILE:pmjs_native> --warm-aliases)
   set_tests_properties(node-prepared-palette-warm-aliases PROPERTIES

@@ -1027,7 +1027,11 @@ std::optional<ImageInfo> ImageStore::createDecoded(const ImagePixels& pixels,
   return createImage(pixels.width, pixels.height, pixels.rgba.data(), false, {}, {}, decision);
 }
 
-bool ImageStore::hasPaletteStorage(ImageHandle) const { return false; }
+bool ImageStore::hasPaletteStorage(ImageHandle handle) const {
+  if (!palettizationEnabled_ || !inspect(handle)) return false;
+  const auto& slot = slots_[(handle & indexMask) - 1U];
+  return bool(slot.palette);
+}
 
 bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
   auto& slot = slots_[(handle & indexMask)-1U];
@@ -1069,7 +1073,7 @@ bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
     ++textureArtifactFailures_; textureArtifactFailureReason_ = "missing";
   }
   auto upload = [&](const TextureLayout& l, bool artifact) {
-    if (l.kind != TextureKind::Channels || !compactSamplingEnabled_) return false;
+    if (l.kind == TextureKind::Channels ? !compactSamplingEnabled_ : !palettizationEnabled_) return false;
     struct UnpackState {
       std::array<GLenum,4> names{GL_UNPACK_ALIGNMENT,GL_UNPACK_ROW_LENGTH,GL_UNPACK_SKIP_ROWS,GL_UNPACK_SKIP_PIXELS};
       std::array<GLint,4> values{};
@@ -1092,7 +1096,12 @@ bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
       std::vector<GLuint> ids;
       ~Textures() { glDeleteTextures(ids.size(), ids.data()); }
     } textures;
-    textures.ids.resize(l.planes.size());
+    const auto paletteKey = validContentHash(backing.textureHash) && l.kind != TextureKind::Channels
+      ? "source:" + backing.textureHash : std::string{};
+    auto sharedPalette = paletteKey.empty() ? std::shared_ptr<PaletteBacking>{} : preparedPalettes_[paletteKey].lock();
+    if (!sharedPalette) textures.ids.resize(l.planes.size());
+    auto palette = !sharedPalette && l.kind != TextureKind::Channels ? std::make_shared<PaletteBacking>() : nullptr;
+    if (palette) palette->owner = this;
     std::size_t bytes = 0;
     const auto formats = [](TextureFormat f) -> std::array<GLenum,3> {
       switch(f) {
@@ -1105,7 +1114,7 @@ bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
       return {};
     };
     while (glGetError() != GL_NO_ERROR) {}
-    for (std::size_t i = 0; i < l.planes.size(); ++i) {
+    for (std::size_t i = 0; !sharedPalette && i < l.planes.size(); ++i) {
       const auto& p = l.planes[i]; const auto f = formats(p.format);
       glGenTextures(1,&textures.ids[i]); glBindTexture(GL_TEXTURE_2D,textures.ids[i]);
       glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
@@ -1118,10 +1127,12 @@ bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
       bytes += std::size_t(p.width)*p.height*textureTexelBytes(p.format);
     }
     const auto consume = [&](std::size_t i, const TextureChunk& c, std::span<const std::uint8_t> data) {
+      if (sharedPalette) return true;
       const auto& p = l.planes[i]; const auto f = formats(p.format);
       glBindTexture(GL_TEXTURE_2D,textures.ids[i]);
       glTexSubImage2D(GL_TEXTURE_2D,0,0,c.y,p.width,c.rows,f[1],f[2],data.data());
       if (glGetError()!=GL_NO_ERROR) return false;
+      if (palette && i == 1) palette->colors.insert(palette->colors.end(), data.begin(), data.end());
       return true;
     };
     if (artifact) {
@@ -1135,16 +1146,29 @@ bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
         if (hashedBytes != source->size_ || hash != backing.textureHash) return false;
       }
     }
-    backing.channelAtlas = textures.ids[0]; backing.channelTable = textures.ids[1];
-    backing.channelHeight = l.planes[0].height; backing.channelChecked = true;
-    backing.gpuBytes += bytes; ++blockTextureUploads_;
+    if (sharedPalette) {
+      slot.palette = std::move(sharedPalette);
+      ++preparedSharedTextureHits_;
+    } else if (l.kind == TextureKind::Channels) {
+      backing.channelAtlas = textures.ids[0]; backing.channelTable = textures.ids[1];
+      backing.channelHeight = l.planes[0].height; backing.channelChecked = true;
+      backing.gpuBytes += bytes; ++blockTextureUploads_;
+    } else {
+      palette->indices = textures.ids[0]; palette->table = textures.ids[1];
+      palette->indexChannels = l.kind == TextureKind::Dense8 ? 1 : l.kind == TextureKind::Sparse24 ? 3 : 2;
+      palette->height = l.planes[1].height; palette->bytes = bytes;
+      palette->cpuCharge.setOwned(cpuMemory_, palette->colors.capacity());
+      if (textures.ids.size() == 4) { palette->blocks = textures.ids[2]; palette->residual = textures.ids[3]; }
+      slot.palette = std::move(palette);
+      if (!paletteKey.empty()) preparedPalettes_[paletteKey] = slot.palette;
+    }
     textureCreates_ += textures.ids.size(); textureEpoch_ += textures.ids.size();
     std::fill(textures.ids.begin(),textures.ids.end(),0);
     gpuBytes_ += bytes; peakGpuBytes_ = std::max(peakGpuBytes_,gpuBytes_); textureUploadBytes_ += bytes;
     for (auto& p : backing.pages) { p.setPixels({}); p.setSparse({}); }
     return true;
   };
-  if (layout && layout->kind != TextureKind::Channels) return false;
+  if (layout && layout->kind != TextureKind::Channels && !palettizationEnabled_) return false;
   if (layout) {
     if (upload(*layout,true)) { ++textureArtifactLoads_; return true; }
     ++textureArtifactFailures_; textureArtifactFailureReason_ = "chunk-or-upload";
@@ -1154,15 +1178,21 @@ bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
   ++textureArtifactFailures_; textureArtifactFailureReason_ = "allocation"; return false;
 }
 
-std::optional<PaletteImageRegion> ImageStore::resolvePaletteImage(ImageHandle handle, bool) {
-  if (!inspect(handle)) return std::nullopt;
+std::optional<PaletteImageRegion> ImageStore::resolvePaletteImage(ImageHandle handle, bool premultiplied) {
+  auto info = inspect(handle);
+  if (!info) return std::nullopt;
   auto& slot = slots_[(handle & indexMask) - 1U];
   if (!slot.paletteChecked && !slot.texture && !slot.astc) {
     // Prepared channel-block artifacts share this lazy source-realization entry point.
     realizeSourceTexture(handle);
     slot.paletteChecked = true;
   }
-  return std::nullopt;
+  if (!slot.palette || !palettizationEnabled_) return std::nullopt;
+  const auto table = paletteTable(*slot.palette, premultiplied);
+  if (!table) return std::nullopt;
+  info->texture = slot.palette->indices;
+  info->premultiplied = premultiplied;
+  return PaletteImageRegion{*info, table, slot.palette->blocks, slot.palette->residual};
 }
 
 std::uint32_t ImageStore::paletteTable(PaletteBacking& palette, bool premultiplied) {
@@ -1359,6 +1389,8 @@ std::size_t ImageStore::warmBytes() const {
       if (owner) shared(owner.get(), owner->bytes + owner->mipmapBytes);
     };
     texture(slot.sharedTexture); texture(slot.sharedPremultipliedTexture);
+    if (slot.palette) shared(slot.palette.get(), slot.palette->bytes + slot.palette->colors.capacity());
+    if (slot.retiredPalette) shared(slot.retiredPalette.get(), slot.retiredPalette->bytes + slot.retiredPalette->colors.capacity());
     if (slot.prepared) {
       for (const auto& page : slot.prepared->pages) {
         if (page.pixels) shared(page.pixels.get(), page.pixels->rgba.capacity());

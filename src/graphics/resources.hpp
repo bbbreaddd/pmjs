@@ -306,6 +306,7 @@ class ImageStore {
   std::size_t preparedFrameResidentBytes() const { return preparedFrameResidentBytes_; }
   std::size_t preparedFrameEvictedBytes() const { return preparedFrameResidentBytes_ - preparedFrameBytes_; }
   std::size_t preparedFramePeakResidentBytes() const { return preparedFramePeakResidentBytes_; }
+  void setPalettizationEnabled(bool enabled) { palettizationEnabled_ = enabled; }
   void setCompactSamplingEnabled(bool enabled) { compactSamplingEnabled_ = enabled; }
   void setPreparedCropUploadsEnabled(bool enabled) { preparedCropUploadsEnabled_ = enabled; }
   std::uint64_t compactUploadFailures() const { return compactUploadFailures_; }
@@ -461,6 +462,7 @@ class ImageStore {
   std::size_t preparedFrameBudgetBytes_ = defaultPreparedFrameCacheBytes;
   std::size_t preparedFrameBytes_ = 0;
   std::size_t preparedFrameResidentBytes_ = 0, preparedFramePeakResidentBytes_ = 0;
+  bool palettizationEnabled_ = false;
   bool compactSamplingEnabled_ = true, preparedCropUploadsEnabled_ = true;
   std::uint64_t compactUploadFailures_ = 0, compactTextureUploads_ = 0;
   std::uint64_t preparedCropUploads_ = 0, preparedCropUploadBytes_ = 0;

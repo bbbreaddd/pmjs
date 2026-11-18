@@ -62,17 +62,17 @@ native.initialize({ imagePalettization: true, gameRoot: root, width: 112, height
       const alias = await loadAlias('alias.png');
       const expected = draw(image,[0, 0, 64, 64], true, false);
       assert.deepEqual(draw(alias,[0, 0, 64, 64], true, false), expected);
-      const resident = native.images.memory();
+      const owner = native.images.memory(100).largest.find(owner => owner.handle === image.handle);
       native.images.release(image.handle);image = null; native.beginFrame();
-      assert.ok(native.images.memory().warmBytes <= resident.gpuBytes + resident.cpuBytes, 'warm alias exceeds physical residency');
+      assert.equal(native.images.memory().warmBytes, 0, 'active palette storage was charged to its warm alias');
       assert.deepEqual(draw(alias,[0, 0, 64, 64], true, false), expected);
       native.images.release(alias.handle); aliases.pop(); native.beginFrame();
       assert.equal(native.images.memory().warmCount, 2);
-      assert.equal(native.images.memory().warmBytes, resident.gpuBytes + resident.cpuBytes, 'warm prepared storage counted twice');
+      assert.equal(native.images.memory().warmBytes, owner.gpuBytes + owner.cpuBytes, 'warm prepared storage counted twice');
       return;
     }
     draw(image,[0, 0, 64, 64], true, false);
-    assert.equal(native.images.memory(100).largest.find(owner => owner.handle === image.handle).palette, false);
+    assert.equal(native.images.memory(100).largest.find(owner => owner.handle === image.handle).palette, true);
     for (const crop of [[0, 0, width, height], [0, 0, 320, height],
       [320, 0, 320, height], [640, 0, 320, height]]) {
       const before = native.images.memory();
@@ -97,6 +97,9 @@ native.initialize({ imagePalettization: true, gameRoot: root, width: 112, height
       assert.ok(after.preparedFrameCacheBytes <= after.preparedFrameCacheBudget);
     }
     const expected = draw(image,[0, 0, 64, 64], true, false);
+    const conversionState = native.images.memory();
+    assert.equal(conversionState.sourceTextureBuilds, 0);
+    assert.equal(conversionState.preparedFrameConversions, 0);
     for (const name of ['alias.png', 'corrupt.png']) {
       const alias = await loadAlias(name, name === 'corrupt.png');
       const before = native.images.memory();
@@ -105,7 +108,7 @@ native.initialize({ imagePalettization: true, gameRoot: root, width: 112, height
       if (name === 'alias.png') {
         assert.equal(after.textureUploadBytes, before.textureUploadBytes, 'identical prepared texture uploaded twice');
         assert.ok(after.preparedSharedTextureHits > before.preparedSharedTextureHits);
-      } else assert.equal(after.textureArtifactFailures, before.textureArtifactFailures, 'unused palette artifact must not be loaded');
+      } else assert.equal(after.textureArtifactFailures, before.textureArtifactFailures + 1, 'sharing skipped artifact verification');
     }
     const changed = Buffer.from(pixels);
     for (let i = 0; i < changed.length; i += 4) changed[i] ^= 32;
