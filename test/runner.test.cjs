@@ -384,6 +384,16 @@ test('prepared rendering controls are independent and enabled by default', async
   assert.equal(initialized.preparedCompactSampling, true);
   assert.equal(initialized.preparedCropUploads, false);
 });
+test('memory reducer configuration preserves the default and accepts an input override', () => {
+  const options = fixture('');
+  assert.equal(resolveDefaults(options).memoryReducer, undefined);
+  const config = path.join(options.gameRoot, 'memory-config.json');
+  fs.writeFileSync(config, JSON.stringify({ memoryReducer: false }));
+  assert.equal(validate({ ...options, config }).memoryReducer, false);
+  assert.equal(validate({ ...options, config, memoryReducer: true }).memoryReducer, true);
+  assert.throws(() => resolveDefaults({ ...options, memoryReducer: 'false' }), /memoryReducer must be a boolean/);
+});
+
 test('image palettization defaults off and passes explicit opt-in to rendering and preparation', async () => {
   const options = fixture('globalThis.__pmjsTick=()=>{}; globalThis.__pmjsRender=()=>{};');
   options.assetPreparation = 'off';

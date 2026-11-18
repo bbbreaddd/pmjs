@@ -24,8 +24,8 @@ int main() try {
   auto source=pmjs::ImageStore::openFile(root/"source.png");require(source != nullptr);
   const std::vector<pmjs::AssetRect> rectangles{{0,0,32,32},{32,32,32,32},{8,8,16,16},{96,96,32,32}};
   pmjs::ImagePixels gray{2,1,{20,20,20,255,80,80,80,255}};
-  require(pmjs::ImageStore::decodedStorageBytes(gray)==2);
-  gray.rgba[7]=97;require(pmjs::ImageStore::decodedStorageBytes(gray)==4);
+  require(pmjs::ImageStore::decodedStorageBytes(gray)==8);
+  gray.rgba[7]=97;require(pmjs::ImageStore::decodedStorageBytes(gray)==8);
   require(pmjs::ImageStore::decodedStorageBytes(original)==original.rgba.size());
   const auto prepared = pmjs::prepareTileAssets({{std::shared_ptr<pmjs::ImageFileSource>(std::move(source)),rectangles}},root);
   require(prepared.sources.size()==1 && !prepared.pages.empty());

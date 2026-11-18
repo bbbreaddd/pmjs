@@ -8,8 +8,12 @@ const { once } = require('node:events');
 const test = require('node:test');
 const { temporaryDirectory } = require('./helpers/temp.cjs');
 
-for (const explicitReducer of [false, true]) {
-  test('session workers retain collection and ' + (explicitReducer ? 'honor explicit reducer flags' : 'avoid background memory reduction'), async t => {
+for (const { name, configured, explicitReducer } of [
+  { name: 'use the V8 default', configured: false, explicitReducer: false },
+  { name: 'honor configured reducer policy', configured: true, explicitReducer: false },
+  { name: 'honor explicit reducer flags', configured: true, explicitReducer: true }
+]) {
+  test('session workers retain collection and ' + name, async t => {
     const originalArgs = process.execArgv;
     t.after(() => { process.execArgv = originalArgs; });
     if (explicitReducer) process.execArgv = [...originalArgs, '--memory-reducer'];
@@ -23,11 +27,17 @@ for (const explicitReducer of [false, true]) {
       });
     `);
     const { runSupervised } = require('../runner/supervisor.cjs');
-    const result = await runSupervised({ saveRoot:path.join(directory, 'saves') }, { worker });
+    const options = { saveRoot: path.join(directory, 'saves') };
+    if (configured) {
+      options.config = path.join(directory, 'config.json');
+      fs.writeFileSync(options.config, JSON.stringify({ memoryReducer: false }));
+    }
+    const result = await runSupervised(options, { worker });
     assert.equal(result.code, 0);
     const child = JSON.parse(fs.readFileSync(resultFile, 'utf8'));
     assert.equal(child.gc, 'function');
-    assert.equal(child.args[0], '--no-memory-reducer');
+    if (configured) assert.equal(child.args[0], '--no-memory-reducer');
+    else assert.ok(!child.args.includes('--no-memory-reducer'));
     if (explicitReducer) assert.ok(child.args.lastIndexOf('--memory-reducer') > 0);
   });
 }

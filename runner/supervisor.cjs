@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { fork } = require('node:child_process');
 const { performance } = require('node:perf_hooks');
+const { resolveDefaults } = require('./config.cjs');
 const { MEMORY_PRESSURE_BYTES, processMappingDetails, parseProcessStatus } = require('./diagnostics.cjs');
 
 const terminalStates = new WeakMap();
@@ -312,6 +313,7 @@ async function runSupervised(prepare, { worker = path.join(__dirname, 'session.c
     for (;;) {
       const options = typeof prepare === 'function' ? await prepare() : prepare;
       if (signal) return { code: null, signal };
+      const { memoryReducer } = resolveDefaults(options);
       const log = openSessionLog(options, ++sequence);
       const limiter = createOutputLimiter(log);
       let workerCgroup = null;
@@ -531,7 +533,7 @@ async function runSupervised(prepare, { worker = path.join(__dirname, 'session.c
             !/(^|:)glibc\.malloc\.mmap_threshold=/.test(environment.GLIBC_TUNABLES || ''))
           environment.MALLOC_MMAP_THRESHOLD_ = '1048576';
         child = active = fork(worker, [], { stdio: ['inherit', 'pipe', 'pipe', 'ipc'], env: environment,
-          execArgv: ['--no-memory-reducer', ...process.execArgv, '--expose-gc'] });
+          execArgv: [...(memoryReducer === false ? ['--no-memory-reducer'] : []), ...process.execArgv, '--expose-gc'] });
         workerCgroup = workerCgroupDirectory(child.pid);
         oomBefore = oomCounter(fs, workerCgroup);
         lastOomCount = oomBefore;

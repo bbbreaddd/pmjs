@@ -5,11 +5,11 @@ process.env.UV_THREADPOOL_SIZE = '1';
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
-const os = require('node:os');
+const { temporaryDirectory } = require('./helpers/temp.cjs');
 const path = require('node:path');
 const { png } = require('./helpers/png.cjs');
 const native = require(path.resolve(process.argv[2]));
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pmjs-tiles-'));
+const root = temporaryDirectory('pmjs-tiles-');
 const pixels = Buffer.alloc(512*512*4);
 for (let y = 0; y < 512; ++y) for (let x = 0; x < 512; ++x)
   pixels.set([(x*37+y*3)%256,(y*17+x)%256,(x+y*31)%256, (x+y)%3 ? 255 : 97],(y*512+x)*4);
@@ -61,6 +61,13 @@ for (const [index,source] of paddedSources.entries()) {
   }
   fs.writeFileSync(path.join(root,`expected-${index}.png`),png(32,32,expectedPixels));
 }
+const grayPixels = Buffer.alloc(128 * 128 * 4);
+for (let i = 0; i < grayPixels.length; i += 4) {
+  const gray = i / 4 % 256;
+  grayPixels.set([gray, gray, gray, 255], i);
+}
+const grayFile = path.join(root, 'gray.png'), grayDirectory = path.join(root, 'gray-tiles');
+fs.writeFileSync(grayFile, png(128, 128, grayPixels)); fs.mkdirSync(grayDirectory);
 native.initialize({gameRoot:root,width:128,height:96,windowTitle:'prepared tiles',imageWarmCacheBytes:0});
 const schema = native.scene.schema;
 function frame(image, source, transform, nearest, offset = [0,0], animation = [0,0], options = {}) {
@@ -95,6 +102,14 @@ function assertPixelBytes(actual, expected, label) {
     `${Array.from(actual.subarray(first, first + 4))} versus ${Array.from(expected.subarray(first, first + 4))}`);
 }
 async function main() {
+  const gray = native.images.load('gray.png');
+  try {
+    const packed = await native.assets.processTiles([{ file: grayFile, rectangles: [[0, 0, 8, 8]] }], grayDirectory);
+    const owner = native.images.memory(100).largest.find(image => image.handle === gray.handle);
+    assert.equal(owner.gpuBytes, grayPixels.length);
+    assert.equal(packed.ordinaryBytes, owner.gpuBytes, 'packing admission must use actual ordinary GPU storage');
+  } finally { native.images.release(gray.handle); }
+
   const rectangles = [[0,0,32,32],[32,0,32,32],[64,0,32,32],[480,480,32,32],[0,0,16,16],[16,16,16,16]];
   const directory = path.join(root,'set'); fs.mkdirSync(directory);
   const descriptor = await native.assets.processTiles([{file:path.join(root,'snapshot.png'),rectangles}],directory);

@@ -14,6 +14,7 @@ function resolveDefaults(input) {
   let preparedCompactSampling = input.preparedCompactSampling;
   let preparedCropUploads = input.preparedCropUploads;
   let imagePalettization = input.imagePalettization;
+  let memoryReducer = input.memoryReducer;
   let preparationFonts = [];
   let virtualFiles = input.virtualFiles;
   let configDirectory = process.cwd();
@@ -44,6 +45,7 @@ function resolveDefaults(input) {
     if (preparedCompactSampling === undefined) preparedCompactSampling = cfg.preparedCompactSampling;
     if (preparedCropUploads === undefined) preparedCropUploads = cfg.preparedCropUploads;
     if (imagePalettization === undefined) imagePalettization = cfg.imagePalettization;
+    if (memoryReducer === undefined) memoryReducer = cfg.memoryReducer;
   }
 
   if (input.gameRoot) {
@@ -118,8 +120,11 @@ function resolveDefaults(input) {
     assetPreparation.recipes = JSON.parse(fs.readFileSync(assetPreparation.recipes, 'utf8'));
   }
   assetPreparation.recipes = validRecipes(assetPreparation.recipes || []);
+  if (memoryReducer !== undefined && typeof memoryReducer !== 'boolean') {
+    throw new Error('memoryReducer must be a boolean');
+  }
   return { ...input, width, height, title, assetPreparation, assetPolicyOverrides: policyOverrides, preparationFonts, virtualFiles,
-    preparedFrameCacheBytes, preparedCompactSampling, preparedCropUploads, imagePalettization };
+    preparedFrameCacheBytes, preparedCompactSampling, preparedCropUploads, imagePalettization, memoryReducer };
 }
 
 function validate(input) {

@@ -735,9 +735,9 @@ void registerAssetMethods(napi_env env, napi_value exports) {
   method(env, assets, "installTileSetCatalog", installTileSetCatalog);
   method(env, property(env, exports, "images"), "tileSlot", tileSlot);
 #ifdef PMJS_HAS_SKIA65
-  set(env, assets, "tilePreparationVersion", string(env, "lossless-tile-sets-v4-skia65"));
+  set(env, assets, "tilePreparationVersion", string(env, "lossless-tile-sets-v5-rgba-skia65"));
 #else
-  set(env, assets, "tilePreparationVersion", string(env, "lossless-tile-sets-v4-unmanaged"));
+  set(env, assets, "tilePreparationVersion", string(env, "lossless-tile-sets-v5-rgba-unmanaged"));
 #endif
   const auto version = moduleObject(env);
 #ifdef PMJS_HAS_SKIA65

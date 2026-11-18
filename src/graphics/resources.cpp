@@ -103,7 +103,6 @@ ImageChannelStorage grayscaleStorage(int channels) {
   return {};
 }
 
-ImageChannelStorage imageStorage(const ImagePixels& pixels) { return imageChannelStorage(pixels); }
 
 std::uint32_t uploadTexture(int width, int height, const void* rgba, ImageChannelStorage storage,
                             std::uint32_t texture = 0, bool packed = false) {
@@ -985,7 +984,7 @@ std::optional<ImageInfo> ImageStore::createRgba(int width, int height,
 }
 
 std::size_t ImageStore::decodedStorageBytes(const ImagePixels& pixels) {
-  return pixels.rgba.size()/4*imageStorage(pixels).channels;
+  return pixels.rgba.size();
 }
 
 ImageStorageDecision ImageStore::classifyStorage(const ImagePixels& pixels) { return classifyImageStorage(pixels); }
