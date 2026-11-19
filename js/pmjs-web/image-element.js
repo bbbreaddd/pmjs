@@ -65,10 +65,7 @@ function loadSource(url, encryption) {
           var blob = typeof globalThis.pmjsResolveObjectURL === 'function'
             ? globalThis.pmjsResolveObjectURL(source) : null;
           if (!blob) throw new Error('object URL is unavailable');
-          return blob.arrayBuffer().then(function(buffer) {
-            if (!current() || PMJS.tasks.stopped) return null;
-            return NativeHost.images.loadBytesAsync(buffer, PMJS.images.shouldRetainPixels(source));
-          });
+          return PMJS.images.loadBlob(blob, PMJS.images.shouldRetainPixels(source), current);
         }
         var path = decodeResourceUrlPath(source)
           .replace(/^file:\/\/\/game\//, '')

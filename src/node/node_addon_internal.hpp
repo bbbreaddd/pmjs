@@ -55,6 +55,7 @@ struct State {
   pmjs::CanvasHandle settingsSurface = 0;
   std::unordered_map<std::uint32_t, std::unique_ptr<Video>> videos;
   std::unordered_map<std::string, AsyncImageLoad*> pendingImageLoads;
+  std::size_t pendingImageMemoryLoads = 0;
   std::uint64_t imageDecodeJobs = 0;
   std::uint64_t imageDecodeRequestsCoalesced = 0;
   std::uint32_t nextVideo = 1;

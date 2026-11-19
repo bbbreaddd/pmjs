@@ -2049,6 +2049,19 @@ bool ImageStore::endUse(ImageHandle handle) {
   return true;
 }
 
+void ImageStore::releaseReconstructibleCpuCaches() {
+  for (auto& slot : slots_) {
+    if (!slot.live || !slot.prepared || slot.pins ||
+        slot.inFlight.load(std::memory_order_acquire) != 0) continue;
+    setCachedPixels(slot, std::nullopt);
+    slot.cpuPixelFrames = 0;
+    for (auto& page : slot.prepared->pages) {
+      page.setPixels({});
+      page.setSparse({});
+    }
+  }
+}
+
 void ImageStore::update() {
   for (const auto handle : activePreparedFrames_) endUse(handle);
   activePreparedFrames_.clear();

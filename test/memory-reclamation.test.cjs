@@ -6,6 +6,18 @@ const { spawnSync } = require('node:child_process');
 const { createMemoryReclaimer } = require('../runner/memory-reclamation.cjs');
 const MiB = 1024 * 1024;
 
+test('pressure drops reconstructible CPU caches after finalizers and before allocator trimming', async () => {
+  const order = [];
+  const f = fixture({ collectGarbage() { order.push('collect'); },
+    settleFinalizers: async () => { order.push('finalizers'); } });
+  f.native.images.releaseCpuCaches = () => order.push('caches');
+  const trim = f.native.runtime.trimAllocator;
+  f.native.runtime.trimAllocator = () => { order.push('trim'); return trim(); };
+  f.pressure();
+  await f.policy.atBoundary('scene-fade');
+  assert.deepEqual(order, ['collect', 'finalizers', 'caches', 'trim']);
+});
+
 test('optional allocator hooks do not disable collection of native resource owners', async () => {
   for (const runtime of [{}, { allocatorStats: () => undefined, trimAllocator: () => undefined }]) {
     let collections = 0;

@@ -125,6 +125,13 @@ struct AsyncImageLoad {
 napi_status queueImageWork(napi_env env, AsyncImageLoad& load);
 
 struct AsyncImageMemoryLoad {
+  std::weak_ptr<State> owner;
+  bool counted = false;
+  ~AsyncImageMemoryLoad() {
+    if (counted) {
+      if (auto value = owner.lock()) --value->pendingImageMemoryLoads;
+    }
+  }
   napi_env env = nullptr;
   napi_async_work work = nullptr;
   napi_deferred deferred = nullptr;
@@ -160,10 +167,10 @@ void rejectImageLoads(napi_env env, std::span<const napi_deferred> deferreds,
 
 void completeImageMemoryLoad(napi_env env, napi_status status, void* opaque) noexcept {
   std::unique_ptr<AsyncImageMemoryLoad> load(static_cast<AsyncImageMemoryLoad*>(opaque));
-  const auto owner = state;
+  const auto owner = load->owner.lock();
   pmjs::ImageHandle installedHandle = 0;
   try {
-    if (status != napi_ok || !load->pixels || !owner)
+    if (status != napi_ok || !load->pixels || !owner || owner != state)
       throw std::runtime_error("cannot decode image bytes");
     auto installed = owner->images.installDecodedMemory(
       std::move(*load->pixels), load->retainCpuPixels);
@@ -184,6 +191,8 @@ void completeImageMemoryLoad(napi_env env, napi_status status, void* opaque) noe
 napi_value loadImageBytesAsync(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 2);
   auto load = std::make_unique<AsyncImageMemoryLoad>();
+  host(env);
+  load->owner = state;
   load->env = env;
   load->bytes = encodedImageBytes(env, args.at(0));
   load->retainCpuPixels = args.size() > 1 && asBoolean(env, args.at(1));
@@ -201,6 +210,9 @@ napi_value loadImageBytesAsync(napi_env env, napi_callback_info info) try {
     napi_delete_async_work(env, load->work);
     check(env, queued, "cannot queue image byte work");
   }
+  ++state->pendingImageMemoryLoads;
+  load->counted = true;
+  ++state->imageDecodeJobs;
   std::ignore = load.release();
   return promise;
 } catch (const std::exception& error) {
@@ -445,8 +457,17 @@ napi_value touchImage(napi_env env, napi_callback_info info) try {
   napi_throw_range_error(env, nullptr, error.what()); return nullptr;
 }
 
+napi_value releaseCpuCaches(napi_env env, napi_callback_info) try {
+  host(env).images.releaseReconstructibleCpuCaches();
+  syncExternalMemory(env);
+  return undefined(env);
+} catch (const std::exception& error) {
+  return throwException(env, error);
+}
+
 napi_value pendingDecodeJobs(napi_env env, napi_callback_info) try {
-  return number(env, host(env).pendingImageLoads.size());
+  const auto& value = host(env);
+  return number(env, value.pendingImageLoads.size() + value.pendingImageMemoryLoads);
 } catch (const std::exception& error) {
   return throwException(env, error);
 }
@@ -511,7 +532,7 @@ napi_value imageMemory(napi_env env, napi_callback_info info) try {
   setProperty(result, "textureUploadBytes",
     number(env, images.textureUploadBytes()));
   setProperty(result, "pendingDecodeJobs",
-    number(env, value.pendingImageLoads.size()));
+    number(env, value.pendingImageLoads.size() + value.pendingImageMemoryLoads));
   setProperty(result, "decodeJobs",
     number(env, value.imageDecodeJobs));
   setProperty(result, "coalescedRequests",
@@ -715,6 +736,7 @@ void registerResourceBindings(napi_env env, napi_value exports) {
   method(env, images, "touch", touchImage);
   method(env, images, "memory", imageMemory);
   method(env, images, "pendingDecodeJobs", pendingDecodeJobs);
+  method(env, images, "releaseCpuCaches", releaseCpuCaches);
   method(env, images, "exportResident", exportResidentImage);
   napi_value assets = moduleObject(env);
   method(env, assets, "loadImage", loadAssetImage);

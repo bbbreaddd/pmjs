@@ -327,6 +327,7 @@ class ImageStore {
   std::uint64_t preparedFrameCacheHits() const { return preparedFrameHits_; }
   std::vector<std::array<float,4>> preparedSpriteParts(ImageHandle handle, const std::array<float,4>& source) const;
   void trimPreparedPageTextures();
+  void releaseReconstructibleCpuCaches();
   std::size_t preparedPageTextureBytes() const;
   std::uint64_t preparedFrameConversions() const { return preparedFrameConversions_; }
   double preparedFrameConversionMs() const { return preparedFrameConversionMs_; }

@@ -51,6 +51,51 @@ function settle() {
   return new Promise(resolve => setImmediate(resolve));
 }
 
+test('blob loading waits for byte budget before creating buffers and recovers after failure', async () => {
+  const decoded = [], materialized = [];
+  const context = imageContext(buffer => new Promise((resolve, reject) => {
+    decoded.push({ resolve, reject, buffer });
+  }));
+  function load(size, id) {
+    return context.PMJS.images.loadBlob({ size: size * 1024 * 1024,
+      arrayBuffer() { materialized.push(id); return Promise.resolve(new ArrayBuffer(1)); }
+    }, false, () => true);
+  }
+  const first = load(40, 'first');
+  const failed = assert.rejects(first, /decode failed/);
+  const second = load(32, 'second');
+  const third = load(1, 'third');
+  await settle();
+  assert.deepEqual(materialized, ['first']);
+  decoded[0].reject(new Error('decode failed'));
+  await failed; await settle();
+  assert.deepEqual(materialized, ['first', 'second', 'third']);
+  decoded[1].resolve({ handle: 1 }); decoded[2].resolve({ handle: 2 });
+  await Promise.all([second, third]);
+  await assert.rejects(load(65, 'oversized'), /64 MiB/);
+  assert.deepEqual(materialized, ['first', 'second', 'third'], 'oversized blobs never allocate a buffer');
+});
+
+test('blob loading bounds concurrent decodes and skips superseded queued images', async () => {
+  const decoded = [];
+  const context = imageContext(() => new Promise(resolve => decoded.push(resolve)));
+  const url = context.URL.createObjectURL(new Blob(['image']));
+  const images = Array.from({ length: 4 }, () => new context.Image());
+  images.forEach(image => { image.src = url; });
+  await context.PMJS.tasks.idle(); await settle();
+  assert.equal(decoded.length, 2);
+  images[2].src = '';
+  decoded[0]({ handle: 1, width: 2, height: 2 });
+  await settle();
+  assert.equal(decoded.length, 3, 'the canceled third image does not start a decode');
+  decoded[1]({ handle: 2, width: 2, height: 2 });
+  decoded[2]({ handle: 3, width: 2, height: 2 });
+  await settle(); await context.PMJS.tasks.idle();
+  assert.equal(images[2].naturalWidth, 0);
+  assert.equal(images[3].naturalWidth, 2);
+  assert.equal(context.PMJS.images.pendingLoads, 0);
+});
+
 test('encrypted file images retain logical pixel policy and discard superseded native handles', async () => {
   const calls=[],released=[];let resolveLoad;
   const context=imageContext(()=>{throw new Error('byte loader used');});

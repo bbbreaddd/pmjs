@@ -98,6 +98,7 @@ function createMemoryReclaimer({ native, readMemory, now, collectGarbage,
         retryAfter = nextAttemptAt;
         const started = now();
         const finish = gcMs => {
+          if (!startup) native.images.releaseCpuCaches?.();
           const allocator = native.runtime.allocatorStats?.();
           if (!allocator && !collectGarbage) { disabled = true; return null; }
           let released = allocator?.freeArenaBytes >= 32 * MiB ? native.runtime.trimAllocator?.() : false;
