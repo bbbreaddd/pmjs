@@ -65,7 +65,7 @@ test('published loader output is isolated, repairs cache corruption and refreshe
 
 test('invalid native output cannot publish a partial layer', async () => {
   const f = fixture(); f.install(); f.prepare();
-  await assert.rejects(f.native.runtime.oneLoader.publish([{ path: '../escape', bytes: Buffer.from('bad') }]), /invalid OneLoader output path/);
+  await assert.rejects(f.native.runtime.oneLoader.publish([{ path: '../escape', bytes: Buffer.from('bad') }]), /invalid prepared game file path/);
   assert.deepEqual(f.mounts, []);
   assert.deepEqual(fs.readdirSync(path.join(f.options.assetPreparation.cacheRoot, 'oneloader')), []);
 });

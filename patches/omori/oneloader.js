@@ -42,20 +42,14 @@
           } else {
             var bytes = Buffer.from(await _vfs_resolve_file(logical));
             yield { path: logical, bytes: bytes };
-            var steam = logical.match(/\.(kel|hero|omori|aubrey|pluto)$/i);
-            var asset = logical.match(/\.(rpgmvp|rpgmvo|rpgmvm)$/i);
-            if (steam) {
-              var extension = /^(hero|pluto)$/i.test(steam[1]) ? '.yaml' : /^omori$/i.test(steam[1]) ? '.js' : '.json';
-              yield { path: logical.slice(0, -steam[0].length) + extension, bytes: _modloader_encryption.decrypt(bytes) };
-            } else if (asset) {
-              var suffix = /^rpgmvp$/i.test(asset[1]) ? '.png' : /^rpgmvo$/i.test(asset[1]) ? '.ogg' : '.m4a';
-              yield { path: logical.slice(0, -asset[0].length) + suffix, bytes: _modloader_encryption.decryptAsset(Buffer.from(bytes)) };
-            }
           }
         }
       }
       function adapt(path) {
-        if (path === 'modloader/lib/rollup.js') {
+        if (path === 'modloader/encryption.js' && NativeHost.runtime.omoriFiles) {
+          _modloader_encryption.decrypt = NativeHost.runtime.omoriFiles.decodeText;
+          _modloader_encryption.decryptAsset = NativeHost.runtime.omoriFiles.decodeMedia;
+        } else if (path === 'modloader/lib/rollup.js') {
           window._loadRollup = async function() { return (await host.importModule('modloader/lib/rollup.browser.js')).rollup; };
         } else if (path === 'modloader/lib/imagediff2.js') {
           var original = wasm_bindgen;

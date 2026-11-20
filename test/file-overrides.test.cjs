@@ -96,3 +96,29 @@ test('file selection preserves opaque bytes independently of their extension', t
   assert.deepEqual(c.fsModule.readFileSync('/game/data/Example.json'), encoded);
   assert.deepEqual(c.fsModule.readFileSync('/game/data/Example.pack'), encoded);
 });
+
+test('registered game files decode filesystem, fetch and XHR reads while saves bypass the codec', async t => {
+  const { context: c, files } = fixture(t);
+  files.set('data/example.pack', 'opaque transport');
+  const reads = [];
+  c.NativeHost.runtime.gameFiles = {
+    resolve(name) { return name === 'data/Missing.yaml' ? 'data/Example.pack' : name; },
+    readBytes(name) { reads.push(name); return Buffer.from('{"decoded":true}'); },
+    async readBytesAsync(name) { return this.readBytes(name); }
+  };
+  assert.equal(c.fsModule.existsSync('data/Missing.yaml'), true);
+  assert.equal(JSON.parse(c.fsModule.readFileSync('data/Missing.yaml', 'utf8')).decoded, true);
+  assert.equal((await (await c.fetch('data/Missing.yaml')).json()).decoded, true);
+  for (const async of [false, true]) for (const binary of [false, true]) {
+    const xhr = new c.XMLHttpRequest();
+    const done = new Promise((resolve, reject) => { xhr.onload = resolve; xhr.onerror = reject; });
+    xhr.open('GET', 'data/Missing.yaml', async);
+    if (binary) xhr.responseType = 'arraybuffer';
+    xhr.send(); await done;
+    assert.equal(JSON.parse(binary ? Buffer.from(xhr.response).toString() : xhr.responseText).decoded, true);
+  }
+  c.NativeHost.storage = { readBytes: () => Buffer.from('save bytes'), readBytesAsync: async () => Buffer.from('save bytes') };
+  assert.equal(c.fsModule.readFileSync('/save/file.json', 'utf8'), 'save bytes');
+  assert.equal(await new Promise((resolve, reject) => c.fsModule.readFile('/save/file.json', 'utf8', (error, data) => error ? reject(error) : resolve(data))), 'save bytes');
+  assert.equal(reads.length, 6);
+});

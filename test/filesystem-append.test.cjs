@@ -79,7 +79,7 @@ test('fetch and XMLHttpRequest share aliases while preserving URL decoding', asy
   context.PMJS.config.virtualFiles = { extensionAliases: { '.json': '.dat' } };
   context.NativeHost.fs = {
     readBytesAsync(file) { reads.push(file); return Promise.resolve(Buffer.from('{}')); },
-    readText(file) { reads.push(file); return '{}'; }
+    readBytes(file) { reads.push(file); return Buffer.from('{}'); }
   };
   for (const module of ['scheduler', 'events', 'requests']) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-web', module + '.js'), 'utf8'), context);
@@ -108,7 +108,7 @@ test('XHR resolves runtime file URLs to real filesystem paths in both modes', as
   context.PMJS.config.virtualFiles = { extensionAliases: { '.json': '.dat' } };
   const read = file => { reads.push(file); return file === 'data/a b.dat' ? '{"found":true}' : null; };
   context.NativeHost.fs = {
-    readText: read,
+    readBytes: file => { const text = read(file); return text === null ? null : Buffer.from(text); },
     readBytesAsync: file => { const text = read(file); return Promise.resolve(text === null ? null : Buffer.from(text)); }
   };
   for (const module of ['scheduler', 'events', 'requests']) {
@@ -134,7 +134,6 @@ test('map filename fallback preserves reads, responses and events in both XHR mo
   let available;
   const read = file => { reads.push(file); return file === available ? '{"found":true}' : null; };
   context.NativeHost.fs = {
-    readText: read,
     readBytes: file => { const value = read(file); return value === null ? null : Buffer.from(value); },
     readBytesAsync: file => Promise.resolve(context.NativeHost.fs.readBytes(file))
   };
@@ -178,7 +177,7 @@ test('an aborted map read cannot retry or overwrite a reused XHR', async t => {
       reads.push(file);
       return new Promise(resolve => { resolveRead = resolve; notifyStarted(); });
     },
-    readText(file) { reads.push(file); return 'replacement'; }
+    readBytes(file) { reads.push(file); return Buffer.from('replacement'); }
   };
   for (const module of ['scheduler', 'events', 'requests'])
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-web', module + '.js'), 'utf8'), context);

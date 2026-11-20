@@ -48,6 +48,7 @@ test('virtual file aliases are configured data', () => {
   const end = source.indexOf('\nfunction fsReadContents(');
   const context = {
     __pmjsBuiltinRequire: require,
+    NativeHost: { runtime: {} },
     PMJS: { config: { virtualFiles: {
       extensionAliases: { '.alias': '.json' },
       directoryEntryAliases: { locale: { '.json': '.LANG' } },

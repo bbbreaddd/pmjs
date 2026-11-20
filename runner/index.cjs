@@ -442,7 +442,7 @@ async function runSession(input, diagnostics, setNative) {
       return tasks ? tasks.runGuest('browser', evaluate) : evaluate();
     }
     native.runtime.loadScript = relative => {
-      const source = native.fs.readText(relative);
+      const source = native.runtime.readGameScript ? native.runtime.readGameScript(relative) : native.fs.readText(relative);
       if (source === null) throw new Error(`cannot load script: ${relative}`);
       return executeScript(source, path.join(options.gameRoot, relative));
     };

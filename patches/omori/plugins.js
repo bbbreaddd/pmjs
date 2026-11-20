@@ -7,7 +7,7 @@
       throw new Error('OMORI encryption key file must contain 32 hexadecimal characters');
     }
     encryptionKey = encryptionKey.trim();
-    PMJS.phases.on('beforePlugins', 'port.omori.encrypted-plugins', function() {
+    if (!NativeHost.runtime.omoriFiles) PMJS.phases.on('beforePlugins', 'port.omori.encrypted-plugins', function() {
       var ordinaryLoad = PluginManager.loadScript;
       PluginManager.loadScript = function(name) {
           var source = (this._path + name).replace(/\.js$/i, '.OMORI');
@@ -31,7 +31,8 @@
   PMJS.plugins.onLoaded('GTP_CoreUpdates', 'port.omori.decrypt', function() {
     if (globalThis.Encryption) {
       if (encryptionKey) Encryption._key = encryptionKey;
-      else Encryption.decrypt = decryptIdentity();
+      if (NativeHost.runtime.omoriFiles) Encryption.decrypt = NativeHost.runtime.omoriFiles.decodeText;
+      else if (!encryptionKey) Encryption.decrypt = decryptIdentity();
     }
   });
 
@@ -72,6 +73,9 @@
     id: 'port.omori.decrypt',
     getTarget: function() { return globalThis.Encryption || null; },
     method: 'decrypt',
-    replace: function(original) { return encryptionKey ? original : decryptIdentity(); }
+    replace: function(original) {
+      if (NativeHost.runtime.omoriFiles) return NativeHost.runtime.omoriFiles.decodeText;
+      return encryptionKey ? original : decryptIdentity();
+    }
   });
 })();

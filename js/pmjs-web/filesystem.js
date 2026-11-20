@@ -22,12 +22,28 @@ function gameReadPath(path) {
     var overridden = resolveFileOverride(resolved, files.overrides, function(candidate) {
       return NativeHost.fs.exists(candidate);
     });
-    if (overridden !== null) return overridden;
+    if (overridden !== null) return resolveGameFile(overridden);
   }
   var extension = pathModule.extname(resolved);
   var replacement = (files.extensionAliases || {})[extension.toLowerCase()];
-  return replacement === undefined
-    ? resolved : resolved.slice(0, -extension.length) + replacement;
+  return resolveGameFile(replacement === undefined
+    ? resolved : resolved.slice(0, -extension.length) + replacement);
+}
+
+function resolveGameFile(path) {
+  var files = NativeHost.runtime && NativeHost.runtime.gameFiles;
+  return files && files.resolve(path) || path;
+}
+
+function readGameBytes(path) {
+  var files = NativeHost.runtime && NativeHost.runtime.gameFiles;
+  return files ? files.readBytes(path) : NativeHost.fs.readBytes(path);
+}
+
+function readGameBytesAsync(path) {
+  var files = NativeHost.runtime && NativeHost.runtime.gameFiles;
+  return files ? files.readBytesAsync(path)
+    : NativeHost.fs.readBytesAsync(path);
 }
 
 function gameDirectoryEntries(path, entries) {
@@ -99,7 +115,7 @@ function fsReadContents(path, options) {
   var writable = writablePath(path);
   var host = writable !== null && NativeHost.storage ? NativeHost.storage : NativeHost.fs;
   var resolved = writable !== null && NativeHost.storage ? writable : gameReadPath(path);
-  var result = host.readBytes(resolved);
+  var result = host === NativeHost.fs ? readGameBytes(resolved) : host.readBytes(resolved);
   return fsDecodeContents(path, options, result);
 }
 
@@ -107,7 +123,7 @@ function fsReadContentsAsync(path, options) {
   var writable = writablePath(path);
   var host = writable !== null && NativeHost.storage ? NativeHost.storage : NativeHost.fs;
   var resolved = writable !== null && NativeHost.storage ? writable : gameReadPath(path);
-  return host.readBytesAsync(resolved).then(function(result) {
+  return (host === NativeHost.fs ? readGameBytesAsync(resolved) : host.readBytesAsync(resolved)).then(function(result) {
     return fsDecodeContents(path, options, result);
   });
 }

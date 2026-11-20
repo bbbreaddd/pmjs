@@ -48,7 +48,7 @@ globalThis.fetch = function(url) {
       }, { errorMode: 'event' });
     }
     PMJS.tasks.enqueue(function() {
-      Promise.resolve().then(function() { return NativeHost.fs.readBytesAsync(path); }).then(
+      Promise.resolve().then(function() { return readGameBytesAsync(path); }).then(
         function(bytes) { deliver(bytes, null); }, function(error) { deliver(null, error); });
     });
   });
@@ -137,12 +137,12 @@ XMLHttpRequest.prototype.send = function() {
     var contents = null;
     try {
       var path = requestPath();
-      contents = binary ? NativeHost.fs.readBytes(path) : NativeHost.fs.readText(path);
+      contents = readGameBytes(path);
       var fallback = contents === null && requestMapFallbackPath(path);
       if (fallback) {
-        contents = binary ? NativeHost.fs.readBytes(fallback) : NativeHost.fs.readText(fallback);
+        contents = readGameBytes(fallback);
       }
-      if (contents !== null && binary) contents = requestArrayBuffer(contents);
+      if (contents !== null) contents = binary ? requestArrayBuffer(contents) : new TextDecoder().decode(contents);
     } catch (_) { contents = null; }
     request._sent = false;
     request.status = contents === null ? 404 : 200;
@@ -198,10 +198,10 @@ XMLHttpRequest.prototype.send = function() {
     if (!current()) return;
     Promise.resolve().then(function() {
       var path = requestPath();
-      return NativeHost.fs.readBytesAsync(path).then(function(bytes) {
+      return readGameBytesAsync(path).then(function(bytes) {
         var fallback = current() && bytes === null && requestMapFallbackPath(path);
         if (fallback) {
-          return NativeHost.fs.readBytesAsync(fallback);
+          return readGameBytesAsync(fallback);
         }
         return bytes;
       });

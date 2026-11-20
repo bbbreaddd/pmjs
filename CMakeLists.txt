@@ -594,6 +594,7 @@ if(BUILD_TESTING)
     node-preparation-progress
     node-image-coalesce
     node-readonly-overlay
+    node-omori-v1-compatibility
     node-image-retention
     node-image-warm-cache
     node-image-no-warm-cache

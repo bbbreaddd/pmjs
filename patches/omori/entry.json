@@ -1,5 +1,6 @@
 {
   "modules": [
+    "v1-compatibility.js",
     "oneloader.js",
     "plugins.js",
     "menu-background.js",

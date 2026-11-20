@@ -76,7 +76,7 @@ test('keyed encrypted plugins execute while the data decryptor stays original', 
   const loaded=new Map(),phases=new Map(),methods=[];
   const context={Buffer,__pmjsBuiltinRequire:require,Encryption:{decrypt:contents=>contents},
     document:{createElement:()=>({})},PluginManager:{_path:'js/plugins/',loadScript(){this.ordinary=(this.ordinary||0)+1;}},
-    NativeHost:{fs:{readText:()=>key,exists:name=>name==='js/plugins/Example.OMORI',readBytes:()=>bytes}},
+    NativeHost:{runtime:{},fs:{readText:()=>key,exists:name=>name==='js/plugins/Example.OMORI',readBytes:()=>bytes}},
     PMJS:{config:{omori:{encryptionKeyFile:'private-key'}},
       plugins:{onLoaded:(name,owner,fn)=>loaded.set(name,fn)},phases:{on:(name,owner,fn)=>phases.set(name,fn)},methods:{own:definition=>methods.push(definition)}}};
   context.pmjsExecuteScriptElement=script=>vm.runInContext(script.textContent,realm);
