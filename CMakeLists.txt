@@ -593,6 +593,7 @@ if(BUILD_TESTING)
     # Resources and preparation
     node-preparation-progress
     node-image-coalesce
+    node-readonly-overlay
     node-image-retention
     node-image-warm-cache
     node-image-no-warm-cache

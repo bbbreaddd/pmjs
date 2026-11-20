@@ -7,6 +7,7 @@ const { installPromiseRejectionBridge } = require('./promise-rejections.cjs');
 const { reader: portArtifactReader } = require('./port-preparation.cjs');
 
 const { prepareGameAssets, summarizePreparation } = require('./preparation.cjs');
+const { prepareGameFiles } = require('./game-preparation.cjs');
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -167,7 +168,7 @@ async function prepareStartupAssets(options, native, settings) {
   const { loadCatalog, rebuildMarker } = require('./preparation-catalog.cjs');
   const preparationOptions = { gameRoot: options.gameRoot,
     virtualFiles: options.virtualFiles,
-    sourceRoots: [path.join(options.saveRoot, 'game-files', 'files')],
+    sourceRoots: [...(options.preparedGameRoots || []), path.join(options.saveRoot, 'game-files', 'files')],
     cacheRoot: options.assetPreparation.cacheRoot, native, ...options.assetPreparation,
     images: options.assetPreparation.enabled, recipes: options.assetPreparation.recipes,
     policyOverrides: options.assetPolicyOverrides, portableIndex,
@@ -410,6 +411,7 @@ async function runSession(input, diagnostics, setNative) {
     settings = createSettings({ native,
       fonts: options.preparationFonts, storage: native.storage, width: options.width, height: options.height });
     native.fs = createGameFilesystem(native.fs, path.join(options.saveRoot, 'game-files'));
+    options.preparedGameRoots = prepareGameFiles(options, native);
     if (options.assetPreparation.enabled || options.portDescriptors?.length || options.preparationAdapters?.length) {
       diagnostics.stage('asset-preparation');
       const startup = await prepareStartupAssets(options, native, settings);
@@ -422,6 +424,14 @@ async function runSession(input, diagnostics, setNative) {
       native.assets.installPrepared([]);
       if (native.assets.installDecrypted) native.assets.installDecrypted([]);
     }
+    native.runtime.refreshAssets = async roots => {
+      options.preparedGameRoots = roots;
+      const startup = await prepareStartupAssets(options, native, settings);
+      invalidatePreparation = startup.invalidate;
+      invalidatePreparationCatalog = startup.invalidateCatalog;
+      native.assets.preparationStats = startup.preparation;
+      if (startup.cancelled || startup.preparation.cancelled) throw new Error('asset preparation cancelled');
+    };
     native.assets.mapPreparationEnabled = options.assetPreparation.maps;
     console.log(`[pmjs] map preparation=${options.assetPreparation.maps ? "on" : "off"}`);
     native.runtime.now = () => performance.now();
@@ -547,6 +557,8 @@ async function runSession(input, diagnostics, setNative) {
       }
     });
 
+    let startupError;
+    if (globalThis.__pmjsStartup) globalThis.__pmjsStartup.catch(error => { startupError = error; });
     if (reloadRequested) return { reload: true };
     let deadline = timing.uncapped ? 0 : native.runtime.monotonicNow() + timing.renderPeriod;
     console.log(`[pmjs] timing logic_hz=${timing.logicHz} ` +
@@ -575,6 +587,7 @@ async function runSession(input, diagnostics, setNative) {
         frameHandle = undefined;
         if (dispatcher && dispatcher.stopped) return;
         try {
+          if (startupError) throw startupError;
           flushPreparationInvalidations();
           if (!native.pollEvents()) { flushPreparationInvalidations(true); resolve(); return; }
           let windowState;

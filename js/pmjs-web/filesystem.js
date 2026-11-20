@@ -423,6 +423,55 @@ var fsModule = {
   }
 };
 
+var fsDescriptors = new Map(), nextFsDescriptor = 3;
+function fsDescriptor(fd) {
+  var handle = fsDescriptors.get(fd);
+  if (!handle) throw Object.assign(new Error('bad file descriptor: ' + fd), { code: 'EBADF' });
+  return handle;
+}
+fsModule.openSync = function(path, flags, mode) {
+  var writable = writablePath(path), host = writable !== null ? NativeHost.storage : NativeHost.fs;
+  if (!host || !host.openFile) throw Object.assign(new Error('file descriptors unavailable: ' + path), { code: 'ENOSYS' });
+  var handle = host.openFile(writable !== null ? writable : gameReadPath(path), flags, mode);
+  var fd = nextFsDescriptor++; fsDescriptors.set(fd, handle); return fd;
+};
+fsModule.closeSync = function(fd) {
+  var handle = fsDescriptor(fd);
+  try { handle.close(); } finally { fsDescriptors.delete(fd); }
+};
+fsModule.readSync = function(fd, buffer, offset, length, position) { return fsDescriptor(fd).read(buffer, offset, length, position); };
+fsModule.writeSync = function(fd) { return fsDescriptor(fd).write.apply(null, Array.prototype.slice.call(arguments, 1)); };
+fsModule.fstatSync = function(fd, options) { return fsDescriptor(fd).stat(options); };
+fsModule.fsyncSync = function(fd) { return fsDescriptor(fd).sync(); };
+fsModule.open = function(path, flags, mode, callback) {
+  if (typeof mode === 'function') { callback = mode; mode = undefined; }
+  var result, error = null;
+  try { result = fsModule.openSync(path, flags, mode); } catch (caught) { error = caught; }
+  deliverNodeCallback(function() { callback(error, result); });
+};
+['close', 'fstat', 'fsync'].forEach(function(method) {
+  fsModule[method] = function(fd, options, callback) {
+    if (typeof options === 'function') { callback = options; options = undefined; }
+    var result, error = null;
+    try { result = fsModule[method + 'Sync'](fd, options); } catch (caught) { error = caught; }
+    deliverNodeCallback(function() { callback(error, result); });
+  };
+});
+fsModule.read = function(fd, buffer, offset, length, position, callback) {
+  var count, error = null;
+  try { count = fsModule.readSync(fd, buffer, offset, length, position); } catch (caught) { error = caught; }
+  deliverNodeCallback(function() { callback(error, count, buffer); });
+};
+fsModule.write = function(fd) {
+  var args = Array.prototype.slice.call(arguments, 1), callback = args.pop(), count, error = null;
+  try { count = fsModule.writeSync.apply(null, [fd].concat(args)); } catch (caught) { error = caught; }
+  deliverNodeCallback(function() { callback(error, count, args[0]); });
+};
+if (PMJS.tasks && typeof PMJS.tasks.onStop === 'function') PMJS.tasks.onStop(function() {
+  for (var handle of fsDescriptors.values()) handle.close();
+  fsDescriptors.clear();
+});
+
 function fsMetadata(method, path, options) {
   var writable = writablePath(path);
   var host = writable !== null ? NativeHost.storage : NativeHost.fs;

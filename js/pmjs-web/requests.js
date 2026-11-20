@@ -26,6 +26,11 @@ function localFetchResponse(target, bytes) {
 
 globalThis.fetch = function(url) {
   if (url === '') return Promise.resolve(localFetchResponse('', new Uint8Array(0)));
+  if (typeof pmjsIsObjectURL === 'function' && pmjsIsObjectURL(url)) {
+    var blob = pmjsResolveObjectURL(url);
+    return blob ? blob.arrayBuffer().then(function(bytes) { return localFetchResponse(String(url), bytes); })
+      : Promise.reject(new TypeError('object URL is unavailable: ' + url));
+  }
   return new Promise(function(resolve, reject) {
     var target = String(url);
     if (/^[a-z][a-z0-9+.-]*:\/\//i.test(target) && !/^file:/i.test(target)) {

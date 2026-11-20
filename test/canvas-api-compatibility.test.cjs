@@ -429,3 +429,24 @@ test('first context options apply after an earlier serialization allocated backi
   assert.equal(transparent._nativeCanvas, backing);
   assert.deepEqual(released, [1]);
 });
+
+
+test('toBlob snapshots encoded bytes and reports MIME fallback asynchronously', async () => {
+  const { realm, canvas } = harness(), tasks = [];
+  realm.Blob = Blob;
+  realm.PMJS = { tasks: { enqueue: callback => tasks.push(callback) } };
+  const bytes = Uint8Array.from([1, 2, 3]);
+  realm.NativeHost.canvas.encodePng = () => bytes;
+  let result;
+  canvas.toBlob(blob => { result = blob; }, 'unsupported/type');
+  assert.equal(result, undefined);
+  bytes.fill(0);
+  tasks.shift()();
+  assert.equal(result.type, 'image/png');
+  assert.deepEqual([...new Uint8Array(await result.arrayBuffer())], [1, 2, 3]);
+  canvas.width = 0;
+  canvas.toBlob(blob => { result = blob; });
+  tasks.shift()();
+  assert.equal(result, null);
+  assert.throws(() => canvas.toBlob(null), { name: 'TypeError' });
+});

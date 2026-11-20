@@ -2,6 +2,7 @@
 #include "platform/file_identity.hpp"
 
 #include <chrono>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -93,6 +94,40 @@ int main() try {
   write(overlay / "files" / "created.bin", std::string("\0\x7f\x80\xff", 4));
   // Marker names are fixed-length hashes; the contents hold the normalized path.
   write(overlay / "deleted" / std::string(64, 'a'), "data/system.alias");
+  const auto modRoot = fixture.path() / "mod-layer";
+  std::filesystem::create_directories(modRoot / "data");
+  std::filesystem::create_directories(modRoot / "new-directory");
+  write(modRoot / "data/System.json", "mod-system");
+  write(modRoot / "new-directory/Added.txt", "added");
+  pmjs::Vfs layered(root);
+  layered.mountReadOnlyOverlay(modRoot);
+  require(layered.readText("DATA/system.JSON") == "mod-system", "read-only replacement not selected");
+  require(layered.readText("new-directory/added.txt") == "added", "read-only addition not selected");
+  require(layered.readDirectory("new-directory") == std::vector<std::string>{"Added.txt"},
+          "read-only directory missing from merged view");
+  const auto layeredInventory = layered.inventory();
+  require(std::find(layeredInventory.begin(), layeredInventory.end(), "new-directory/Added.txt") != layeredInventory.end(),
+          "read-only addition missing from inventory");
+  layered.mountWritableOverlay(overlay);
+  require(layered.readText("data/system.json") == "replacement", "player overlay must override read-only layer");
+  require(!layered.exists("data/system.alias"), "player deletion must hide lower layers");
+  const auto blockedRoot = fixture.path() / "blocked-layer";
+  std::filesystem::create_directories(blockedRoot);
+  write(blockedRoot / "data", "file replaces directory");
+  pmjs::Vfs blocked(root);
+  blocked.mountReadOnlyOverlay(blockedRoot);
+  require(!blocked.exists("data/System.json") && !blocked.resolvePath("data/System.json"),
+          "read-only file must hide lower descendants");
+  require(!blocked.isDirectory("data") && !blocked.readDirectory("data"),
+          "read-only file exposed lower directory");
+  auto priorLayer = blocked;
+  blocked.mountReadOnlyOverlay(modRoot);
+  require(blocked.readText("data/System.json") == "mod-system" && priorLayer.readText("data") == "file replaces directory",
+          "mount publication changed retained VFS snapshot");
+  try { blocked.mountReadOnlyOverlay(fixture.path() / "missing-layer"); }
+  catch (const std::filesystem::filesystem_error&) {}
+  require(blocked.readText("data/System.json") == "mod-system", "failed mount replaced the current layer");
+
   vfs.mountWritableOverlay(overlay);
   require(vfs.readText("DATA/System.json") == "replacement", "overlay did not replace base");
   require(vfs.readText("created.bin")->size() == 4, "binary overlay read lost bytes");

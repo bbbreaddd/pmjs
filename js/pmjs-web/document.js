@@ -65,6 +65,9 @@ documentTarget.getElementsByTagName = function(tagName) {
   return results;
 };
 
+documentTarget.querySelectorAll = GenericElement.prototype.querySelectorAll;
+documentTarget.querySelector = GenericElement.prototype.querySelector;
+
 function CSSFontFaceRule(text) {
   this.cssText = text;
   this.type = 5;

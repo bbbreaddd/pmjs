@@ -17,6 +17,7 @@ function resolveDefaults(input) {
   let memoryReducer = input.memoryReducer;
   let preparationFonts = [];
   let virtualFiles = input.virtualFiles;
+  let gamePreparation = input.gamePreparation;
   let configDirectory = process.cwd();
 
   if (input.config) {
@@ -36,6 +37,7 @@ function resolveDefaults(input) {
     }
     assertDisableOptimizationsShape(cfg.disableOptimizations, configPath);
     if (virtualFiles === undefined) virtualFiles = cfg.virtualFiles;
+    if (gamePreparation === undefined) gamePreparation = cfg.gamePreparation;
     configDirectory = path.dirname(configPath);
     if (cfg.assetPreparation !== undefined) {
       assetPreparation = cfg.assetPreparation;
@@ -123,7 +125,7 @@ function resolveDefaults(input) {
   if (memoryReducer !== undefined && typeof memoryReducer !== 'boolean') {
     throw new Error('memoryReducer must be a boolean');
   }
-  return { ...input, width, height, title, assetPreparation, assetPolicyOverrides: policyOverrides, preparationFonts, virtualFiles,
+  return { ...input, width, height, title, assetPreparation, assetPolicyOverrides: policyOverrides, preparationFonts, virtualFiles, gamePreparation,
     preparedFrameCacheBytes, preparedCompactSampling, preparedCropUploads, imagePalettization, memoryReducer };
 }
 

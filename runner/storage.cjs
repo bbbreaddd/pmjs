@@ -6,6 +6,26 @@ const hostProcess = process;
 const { createHash } = require('node:crypto');
 const readerFinalizer = new FinalizationRegistry(descriptor => fs.closeSync(descriptor));
 
+function fileHandle(filename, flags, mode, changed = () => {}) {
+  let descriptor = fs.openSync(filename, flags, mode);
+  const token = {};
+  function current() {
+    if (descriptor === undefined) throw Object.assign(new Error('file is closed'), { code: 'EBADF' });
+    return descriptor;
+  }
+  const handle = {
+    read(...args) { return fs.readSync(current(), ...args); },
+    write(...args) { const count = fs.writeSync(current(), ...args); changed(); return count; },
+    stat(options) { return fs.fstatSync(current(), options); },
+    sync() { fs.fsyncSync(current()); },
+    close() {
+      const fd = current(); descriptor = undefined; readerFinalizer.unregister(token); fs.closeSync(fd);
+    }
+  };
+  readerFinalizer.register(handle, descriptor, token);
+  return handle;
+}
+
 function syncDirectory(directory) {
   const descriptor = fs.openSync(directory, 'r');
   try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
@@ -68,6 +88,12 @@ function createStorage(root) {
       if (relative !== '' && relative !== '.') return resolve(relative);
       checkContained(saveRoot);
       return saveRoot;
+    },
+    openFile(relative, flags, mode) {
+      const filename = this.resolvePath(relative);
+      const writing = typeof flags === 'number' ? flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_APPEND) : /[wa+]/.test(flags);
+      if (writing) ++mutationGeneration;
+      return fileHandle(filename, flags, mode, () => { ++mutationGeneration; });
     },
     stat(relative, options) { return fs.statSync(this.resolvePath(relative), options); },
     lstat(relative, options) { return fs.lstatSync(this.resolvePath(relative), options); },
@@ -380,6 +406,23 @@ function createGameFilesystem(host, root) {
     return value;
   }
   return Object.assign(host, {
+    openFile(relative, flags, mode) {
+      const name = normalize(relative);
+      const writing = typeof flags === 'number' ? flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_APPEND) : /[wa+]/.test(flags);
+      if (!writing) return fileHandle(resolvedPath(name), flags, mode);
+      return mutate([name], () => {
+        const exists = host.exists(name), exclusive = typeof flags === 'number' ? flags & fs.constants.O_EXCL : flags.includes('x');
+        if (exists && exclusive) throw error('EEXIST', name);
+        if (exists && host.isDirectory(name)) throw error('EISDIR', name);
+        const truncate = typeof flags === 'number' ? flags & fs.constants.O_TRUNC : flags.startsWith('w');
+        const create = typeof flags === 'number' ? flags & fs.constants.O_CREAT : /^[wa]/.test(flags);
+        if (!exists && !create) throw error('ENOENT', name);
+        parents(name);
+        const target = files.resolvePath(path.relative(path.join(overlayRoot, 'files'), physical(name)));
+        if (exists && !truncate && !fs.existsSync(target)) fs.copyFileSync(resolvedPath(name), target);
+        return fileHandle(target, flags, mode, () => mutate([name], () => {}));
+      });
+    },
     stat(relative, options) { return fs.statSync(resolvedPath(relative), options); },
     lstat(relative, options) { return fs.lstatSync(resolvedPath(relative), options); },
     access(relative, mode) {

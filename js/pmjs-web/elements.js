@@ -187,16 +187,29 @@ CanvasElement.prototype.getContext = function(type, options) {
   }
   return null;
 };
-CanvasElement.prototype.toDataURL = function(type, quality) {
-  if (!this.width || !this.height) return 'data:,';
+function encodeCanvasElement(canvas, type, quality) {
   type = type === undefined ? 'image/png' : String(type).toLowerCase();
-  var handle = this._ensureNativeCanvas().handle;
+  var handle = canvas._ensureNativeCanvas().handle;
   var suppliedQuality = typeof quality === 'number' && quality >= 0 && quality <= 1;
   var bytes;
   if (type === 'image/jpeg') bytes = NativeHost.canvas.encodeJpeg(handle, suppliedQuality ? quality : 0.92);
   else if (type === 'image/webp') bytes = NativeHost.canvas.encodeWebP(handle, suppliedQuality ? quality : 0.8);
   else { type = 'image/png'; bytes = NativeHost.canvas.encodePng(handle); }
-  return 'data:' + type + ';base64,' + base64Bytes(bytes);
+  return { type: type, bytes: bytes };
+}
+CanvasElement.prototype.toDataURL = function(type, quality) {
+  if (!this.width || !this.height) return 'data:,';
+  var encoded = encodeCanvasElement(this, type, quality);
+  return 'data:' + encoded.type + ';base64,' + base64Bytes(encoded.bytes);
+};
+CanvasElement.prototype.toBlob = function(callback, type, quality) {
+  if (typeof callback !== 'function') throw new TypeError('toBlob requires a callback');
+  var blob = null;
+  if (this.width && this.height) {
+    var encoded = encodeCanvasElement(this, type, quality);
+    blob = new Blob([encoded.bytes], { type: encoded.type });
+  }
+  PMJS.tasks.enqueue(function() { callback(blob); });
 };
 CanvasElement.prototype.getBoundingClientRect = function() {
   if (this._pmjsNativePresentation && NativeHost.render && NativeHost.render.presentation) {
@@ -292,6 +305,61 @@ GenericElement.prototype.getElementsByTagName = function(tagName) {
   results.item = function(index) { return this[index] || null; };
   return results;
 };
+
+function matchesElementSelector(element, selector) {
+  var rest = selector, tag = rest.match(/^(\*|[a-z][\w-]*)/i);
+  if (tag) { if (tag[1] !== '*' && element.tagName !== tag[1].toUpperCase()) return false; rest = rest.slice(tag[0].length); }
+  while (rest) {
+    var token = rest.match(/^([#.])([\w-]+)/);
+    if (token) {
+      if (token[1] === '#' ? element.id !== token[2] : !String(element.className || '').split(/\s+/).includes(token[2])) return false;
+    } else {
+      token = rest.match(/^\[([\w-]+)(?:\s*(=|\^=|\$=|\*=)\s*(?:"([^"]*)"|'([^']*)'|([^\]\s]+)))?\s*\]/);
+      if (!token) throw new SyntaxError('unsupported selector: ' + selector);
+      var actual = element.getAttribute(token[1]), expected = token[3] !== undefined ? token[3] : token[4] !== undefined ? token[4] : token[5];
+      if (actual === null || token[2] === '=' && actual !== expected || token[2] === '^=' && !actual.startsWith(expected) ||
+          token[2] === '$=' && !actual.endsWith(expected) || token[2] === '*=' && !actual.includes(expected)) return false;
+    }
+    rest = rest.slice(token[0].length);
+  }
+  return true;
+}
+GenericElement.prototype.querySelectorAll = function(selector) {
+  var groups = String(selector).split(',').map(function(group) { return group.trim(); });
+  if (groups.some(function(group) { return !group; })) throw new SyntaxError('empty selector');
+  return this.getElementsByTagName('*').filter(function(element) {
+    return groups.some(function(group) { return matchesElementSelector(element, group); });
+  });
+};
+GenericElement.prototype.querySelector = function(selector) { return this.querySelectorAll(selector)[0] || null; };
+
+function decodeElementText(text) {
+  return String(text).replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, function(_, entity) {
+    if (entity[0] === '#') return String.fromCodePoint(parseInt(entity.slice(entity[1].toLowerCase() === 'x' ? 2 : 1), entity[1].toLowerCase() === 'x' ? 16 : 10));
+    return { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }[entity.toLowerCase()];
+  });
+}
+function setElementHtml(element, html) {
+  element.textContent = '';
+  if (!String(html).includes('<')) { element.textContent = decodeElementText(html); return; }
+  var stack = [element], tokens = String(html).match(/<!--[\s\S]*?-->|<\/?[a-z][^>]*>|[^<]+|</gi) || [];
+  for (var token of tokens) {
+    if (token.startsWith('<!--')) continue;
+    var closing = token.match(/^<\/([\w-]+)/);
+    if (closing) {
+      for (var depth = stack.length - 1; depth > 0; depth--) if (stack[depth].tagName === closing[1].toUpperCase()) { stack.length = depth; break; }
+    } else {
+      var opening = token.match(/^<([\w-]+)([\s\S]*?)\/?\s*>$/);
+      if (!opening) { stack[stack.length - 1].appendChild(new TextNode(decodeElementText(token))); continue; }
+      var child = document.createElement(opening[1]);
+      if (child instanceof ScriptElement) child._started = true;
+      for (var attribute of opening[2].matchAll(/([^\s=/'"]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g))
+        child.setAttribute(attribute[1], decodeElementText(attribute[2] || attribute[3] || attribute[4] || ''));
+      stack[stack.length - 1].appendChild(child);
+      if (!/^(area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)$/i.test(opening[1]) && !token.endsWith('/>')) stack.push(child);
+    }
+  }
+}
 GenericElement.prototype.getBoundingClientRect = function() {
   var left = parseFloat(this.style.left) || 0, top = parseFloat(this.style.top) || 0;
   var width = parseFloat(this.style.width) || 0, height = parseFloat(this.style.height) || 0;
@@ -337,8 +405,7 @@ Object.defineProperties(GenericElement.prototype, {
         this.children.map(function(child) { return child.outerHTML || ''; }).join('');
     },
     set: function(value) {
-      this.textContent = '';
-      this._innerHTML = value === null ? '' : String(value);
+      setElementHtml(this, value === null ? '' : String(value));
     }
   },
   outerHTML: {

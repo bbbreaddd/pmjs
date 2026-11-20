@@ -228,6 +228,14 @@ napi_value updateWritableOverlay(napi_env env, napi_callback_info info) try {
   napi_throw_error(env, nullptr, error.what()); return nullptr;
 }
 
+napi_value mountReadOnlyOverlay(napi_env env, napi_callback_info info) try {
+  auto args = arguments(env, info, 1);
+  host(env).vfs.mountReadOnlyOverlay(asString(env, args.at(0)));
+  return undefined(env);
+} catch (const std::exception& error) {
+  napi_throw_error(env, nullptr, error.what()); return nullptr;
+}
+
 napi_value mountWritableOverlay(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 1);
   host(env).vfs.mountWritableOverlay(asString(env, args.at(0)));
@@ -405,6 +413,7 @@ napi_value inputConsumePressed(napi_env env, napi_callback_info) try {
 void registerPlatformBindings(napi_env env, napi_value exports) {
   napi_value fs = moduleObject(env);
   method(env, fs, "mountWritableOverlay", mountWritableOverlay);
+  method(env, fs, "mountReadOnlyOverlay", mountReadOnlyOverlay);
   method(env, fs, "updateWritableOverlay", updateWritableOverlay);
   method(env, fs, "readText", readText);
   method(env, fs, "readBytes", readBytes);

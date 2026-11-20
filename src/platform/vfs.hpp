@@ -49,6 +49,7 @@ class Vfs {
 
   bool consumeDerivedInvalidation() { return derivedInvalidated_->exchange(false, std::memory_order_relaxed); }
 
+  void mountReadOnlyOverlay(const std::filesystem::path& root);
   void mountWritableOverlay(const std::filesystem::path& root);
   void updateWritableOverlay(const std::vector<std::string>& paths,
                              const std::vector<std::string>& deletionMarkers);
@@ -66,6 +67,7 @@ class Vfs {
   const ScanStats& scanStats() const { return scanStats_; }
 
  private:
+  bool hasFileAncestor(const std::string& key) const;
   static std::optional<std::string> normalize(const std::string& path);
   std::optional<std::filesystem::path> resolveOriginal(const std::string& path) const;
   void indexPath(const std::filesystem::path& path);
@@ -79,6 +81,7 @@ class Vfs {
   };
   std::shared_ptr<std::atomic<bool>> derivedInvalidated_ = std::make_shared<std::atomic<bool>>(false);
   std::shared_ptr<const Overlay> overlay_;
+  std::shared_ptr<const Vfs> readOnly_;
   std::shared_ptr<const std::unordered_map<std::string, DerivedFile>> derived_;
   std::filesystem::path root_;
   ScanStats scanStats_;

@@ -347,3 +347,22 @@ test('removing an image source attribute cancels its pending load', async () => 
   for (const task of queued) await task();
   assert.equal(calls, 0);
 });
+
+
+test('HTML fragments create queryable descendants and preserve replacement semantics', () => {
+  const { c } = setup();
+  const parent = c.document.createElement('div');
+  parent.innerHTML = '<section class="panel"><h2 data-ol="status">Hello &amp; goodbye</h2><input id="value" data-mode="hello"></section>';
+  c.document.body.appendChild(parent);
+  const status = parent.querySelector('[data-ol=status]');
+  assert.equal(status.textContent, 'Hello & goodbye');
+  assert.equal(parent.querySelector('section.panel').tagName, 'SECTION');
+  assert.equal(c.document.querySelector('#value').getAttribute('data-mode'), 'hello');
+  assert.equal(parent.querySelectorAll('[data-mode^="he"]').length, 1);
+  assert.equal(parent.querySelectorAll('h2, input').length, 2);
+  status.textContent = 'Updated';
+  assert.equal(parent.querySelector('h2').textContent, 'Updated');
+  parent.innerHTML = 'replacement';
+  assert.equal(parent.querySelector('[data-ol=status]'), null);
+  assert.equal(parent.textContent, 'replacement');
+});

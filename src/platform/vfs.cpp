@@ -167,6 +167,20 @@ bool Vfs::Overlay::hides(const std::string& key) const {
   return false;
 }
 
+bool Vfs::hasFileAncestor(const std::string& key) const {
+  auto prefix = key;
+  while (prefix.find('/') != std::string::npos) {
+    prefix.resize(prefix.rfind('/'));
+    if (files_.contains(prefix)) return true;
+  }
+  return false;
+}
+
+void Vfs::mountReadOnlyOverlay(const std::filesystem::path& root) {
+  auto files = std::make_shared<const Vfs>(root);
+  std::atomic_store(&readOnly_, std::move(files));
+}
+
 void Vfs::mountWritableOverlay(const std::filesystem::path& root) {
   auto overlay = std::make_shared<Overlay>();
   overlay->files = std::make_shared<Vfs>(root / "files");
@@ -294,6 +308,8 @@ std::optional<std::filesystem::path> Vfs::resolveDerived(const std::string& path
   if (found == index->end()) return std::nullopt;
   if (const auto original = resolveOriginal(path)) return original;
   if (isDirectory(path)) return std::nullopt;
+  const auto readOnly = std::atomic_load(&readOnly_);
+  if (readOnly && readOnly->hasFileAncestor(*key)) return std::nullopt;
   const auto overlay = std::atomic_load(&overlay_);
   if (overlay && overlay->hides(*key)) return std::nullopt;
   if (overlay) {
@@ -335,6 +351,11 @@ std::optional<std::filesystem::path> Vfs::resolvePath(const std::string& path) c
       if (overlay->files->files_.contains(prefix)) return std::nullopt;
     }
   }
+  const auto readOnly = std::atomic_load(&readOnly_);
+  if (readOnly) {
+    if (auto selected = readOnly->resolvePath(path)) return selected;
+    if (readOnly->hasFileAncestor(*key)) return std::nullopt;
+  }
   const auto directory = directories_.find(*key);
   return directory == directories_.end() ? std::nullopt :
     std::optional<std::filesystem::path>{directory->second};
@@ -352,6 +373,11 @@ std::optional<std::filesystem::path> Vfs::resolveOriginal(const std::string& pat
     }
     if (overlay->files->exists(*key)) return overlay->files->resolve(*key);
     if (overlay->hides(*key)) return std::nullopt;
+  }
+  const auto readOnly = std::atomic_load(&readOnly_);
+  if (readOnly) {
+    if (readOnly->exists(*key)) return readOnly->resolve(*key);
+    if (readOnly->hasFileAncestor(*key)) return std::nullopt;
   }
   const auto found = files_.find(*key);
   if (found == files_.end()) return std::nullopt;
@@ -402,6 +428,12 @@ std::optional<std::vector<std::string>> Vfs::readDirectory(const std::string& pa
     if (root) add(root_);
     else if (base != directories_.end()) add(base->second);
   }
+  const auto readOnly = std::atomic_load(&readOnly_);
+  if (readOnly) {
+    const auto directory = readOnly->directories_.find(*key);
+    if (root) add(readOnly->root());
+    else if (directory != readOnly->directories_.end()) add(directory->second);
+  }
   if (overlay) {
     const auto directory = overlay->files->directories_.find(*key);
     if (root) add(overlay->files->root());
@@ -433,6 +465,8 @@ std::vector<std::string> Vfs::inventory() const {
     }
   };
   collect(*this);
+  const auto readOnly = std::atomic_load(&readOnly_);
+  if (readOnly) collect(*readOnly);
   if (overlay) collect(*overlay->files);
   std::vector<std::string> result;
   result.reserve(files.size());
@@ -455,7 +489,7 @@ bool Vfs::exists(const std::string& path) const {
     if (overlay->files->exists(*key)) return true;
     if (overlay->hides(*key)) return false;
   }
-  return files_.contains(*key) || directories_.contains(*key) || resolveDerived(path).has_value();
+  return isDirectory(path) || resolve(path).has_value();
 }
 
 bool Vfs::isDirectory(const std::string& path) const {
@@ -471,6 +505,11 @@ bool Vfs::isDirectory(const std::string& path) const {
     }
     if (overlay->files->exists(*key)) return overlay->files->isDirectory(*key);
     if (overlay->hides(*key)) return false;
+  }
+  const auto readOnly = std::atomic_load(&readOnly_);
+  if (readOnly) {
+    if (readOnly->exists(*key)) return readOnly->isDirectory(*key);
+    if (readOnly->hasFileAncestor(*key)) return false;
   }
   return directories_.contains(*key);
 }
