@@ -14,6 +14,8 @@ function fixture() {
   }
   const mounts = [], native = { runtime: {}, fs: {
     exists: name => fs.existsSync(path.join(gameRoot, name)),
+    readDirectory: name => fs.readdirSync(path.join(gameRoot, name)),
+    isDirectory: name => fs.statSync(path.join(gameRoot, name)).isDirectory(),
     readBytes(name) {
       const mounted = mounts.length && path.join(mounts.at(-1), name);
       return fs.readFileSync(mounted && fs.existsSync(mounted) ? mounted : path.join(gameRoot, name));
@@ -114,6 +116,43 @@ function guestFixture(early, patch = '', argv = []) {
   vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../patches/omori/oneloader.js'), 'utf8'), context);
   return { ...f, scope, start: () => scope.PMJS.rpgmaker.start() };
 }
+
+test('mod qualification pins hooks and loader code while normalizing randomized plugin identities', async () => {
+  const source = `globalThis.$modLoader = { knownMods: new Map([['helper', {json: {id:'helper',version:'1',_flags:['randomize_plugin_name']},plugins:['js/plugins/'+randomPlugin+'.js']}]]),
+    $execScripts: {pre_window_onload:[{req:false,data:hookBody}]}, overlayFS:{}, $runScripts:async()=>{} };
+    _modLoader_install_debugger_vfs().then(_start_game);`;
+  async function qualify(randomPlugin, hookBody = 'known hook', dependency = '', metadata = {}, data = '', target = 'data/CommonEvents.json') {
+    const f = guestFixture(source);
+    f.scope.__pmjsBuiltinRequire = require;
+    f.scope.readGameBytes = name => f.native.fs.readBytes(name);
+    f.scope.resolveGameFile = name => f.native.runtime.gameFiles.resolve(name) || name;
+    f.scope.$plugins = [];
+    Object.assign(f.scope, { randomPlugin, hookBody });
+    if (dependency) f.write('modloader/dependency.js', dependency);
+    await f.start();
+    if (data) {
+      f.write('data/CommonEvents.json', data);
+      f.scope.$modLoader.knownMods.get('helper').files = [{injectionPoint:target}];
+    }
+    Object.assign(f.scope.$modLoader.knownMods.get('helper').json, metadata);
+    return { ...f, identity: f.scope.PMJS.omori.modSourceIdentity() };
+  }
+  const first = await qualify('random-first'), second = await qualify('random-second');
+  assert.equal(first.identity.digest, second.identity.digest);
+  assert.equal(first.identity.pluginNames['random-first'], '@helper/0');
+  assert.equal(second.identity.pluginNames['random-second'], '@helper/0');
+  assert.notEqual((await qualify('random-first', 'changed hook')).identity.digest, first.identity.digest);
+  assert.notEqual((await qualify('random-first', 'known hook', 'changed loader')).identity.digest, first.identity.digest);
+  assert.notEqual((await qualify('random-first', 'known hook', '', {version:'2'})).identity.digest, first.identity.digest);
+  await assert.rejects(qualify('random-first', 'known hook', '', {asyncExec:[{file:'early.js',runat:'when_discovered'}]}), /discovery hooks/);
+  assert.notEqual((await qualify('random-first', 'known hook', '', {}, '[null]')).identity.digest,
+    (await qualify('random-first', 'known hook', '', {}, '[null,{"trigger":1}]')).identity.digest);
+  assert.equal((await qualify('random-first', 'known hook', '', {}, '[null]')).identity.digest,
+    (await qualify('random-first', 'known hook', '', {}, '[null]', 'data/CommonEvents.KEL')).identity.digest);
+  first.scope.$modLoader.$execScripts.pre_window_onload.push({req:false,data:'late hook'});
+  await first.scope.$modLoader.$runScripts('pre_window_onload', {});
+  assert.equal(first.identity.valid, false);
+});
 
 test('test-mode startup preserves loader flags and avoids duplicate test arguments', async () => {
   for (const args of [['--no-mods', '--trace-vfs'], ['test', '--dump-overlay']]) {

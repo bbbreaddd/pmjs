@@ -1,6 +1,67 @@
 ;(function() {
   var host = NativeHost.runtime.oneLoader;
   if (!host) return;
+  PMJS.omori = PMJS.omori || {};
+  var qualifiedSources;
+  function hookSources() {
+    var mods = Array.from($modLoader.knownMods.keys()).sort().map(function(id) {
+      var mod = $modLoader.knownMods.get(id);
+      if ((mod.json.asyncExec || []).some(function(script) { return script.runat === 'when_discovered'; }))
+        throw new Error('discovery hooks are not qualified');
+      return [id, mod.json];
+    });
+    var hooks = Object.keys($modLoader.$execScripts).sort().map(function(place) {
+      return [place, $modLoader.$execScripts[place].map(function(script) { return [!!script.req, script.data]; })];
+    });
+    return JSON.stringify([mods, hooks]);
+  }
+  PMJS.omori.modSourceIdentity = function() {
+    if (!globalThis.$modLoader || !$modLoader.knownMods) return null;
+    if (qualifiedSources) return qualifiedSources;
+    var hash = __pmjsBuiltinRequire('node:crypto').createHash('sha256');
+    function add(name, input) {
+      var bytes = Buffer.from(input);
+      hash.update(JSON.stringify([name, bytes.length]) + '\n').update(bytes);
+    }
+    function directory(prefix) {
+      NativeHost.fs.readDirectory(prefix).sort().forEach(function(name) {
+        var file = prefix + '/' + name;
+        if (NativeHost.fs.isDirectory(file)) directory(file);
+        else if (/\.(?:[cm]?js|wasm)$/i.test(name)) {
+          var bytes = readGameBytes(file);
+          add(file, /\.wasm$/i.test(name) ? bytes : Buffer.from(bytes).toString('utf8').replace(/\r\n/g, '\n'));
+        }
+      });
+    }
+    directory('modloader');
+    add('index-scripts', JSON.stringify(host.scripts));
+    var hooks = hookSources(), names = Object.create(null);
+    add('mod-hooks', hooks);
+    for (var [id, mod] of $modLoader.knownMods) {
+      if ((mod.json._flags || []).includes('randomize_plugin_name'))
+        mod.plugins.forEach(function(file, index) {
+          var name = file.replace(/\\/g, '/').split('/').pop().replace(/\.(?:js|omori)$/i, '');
+          names[name] = '@' + id + '/' + index;
+        });
+    }
+    var activePlugins = new Set($plugins.filter(function(plugin) { return plugin.status; })
+      .map(function(plugin) { return ('js/plugins/' + plugin.name + '.js').toLowerCase(); }));
+    var sources = new Map();
+    for (var entry of $modLoader.knownMods.values()) {
+      for (var file of entry.files || []) {
+        var target = resolveGameFile(file.injectionPoint);
+        if (!/\.(?:[cm]?js|omori|json|kel|aubrey|ya?ml|hero|pluto|html|txt|wasm)$/i.test(target) || activePlugins.has(target.toLowerCase())) continue;
+        var stem = target.split('/').pop().replace(/\.(?:js|omori)$/i, '');
+        sources.set(names[stem] ? '@plugin/' + names[stem] : target, target);
+      }
+    }
+    Array.from(sources.keys()).sort().forEach(function(name) {
+      var file = sources.get(name), bytes = readGameBytes(file);
+      add('mod-file/' + name, /\.wasm$/i.test(file) ? bytes : Buffer.from(bytes).toString('utf8').replace(/\r\n/g, '\n'));
+    });
+    qualifiedSources = { digest: hash.digest('hex'), pluginNames: names, hooks: hooks, valid: true };
+    return qualifiedSources;
+  };
   PMJS.rpgmaker = PMJS.rpgmaker || {};
   PMJS.rpgmaker.start = function() {
     return new Promise(function(resolve, reject) {
@@ -70,6 +131,10 @@
             installed = true;
             var runScripts = $modLoader.$runScripts;
             $modLoader.$runScripts = function(place, params) {
+              if (qualifiedSources && qualifiedSources.valid) {
+                try { qualifiedSources.valid = hookSources() === qualifiedSources.hooks; }
+                catch (_) { qualifiedSources.valid = false; }
+              }
               var result = Promise.resolve(runScripts.call(this, place, params)).then(function() { return synchronize(); });
               if (place === 'pre_plugin_injection') pluginInjection = result;
               return result;
