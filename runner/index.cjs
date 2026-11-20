@@ -441,9 +441,10 @@ async function runSession(input, diagnostics, setNative) {
       const tasks = globalThis.PMJS && globalThis.PMJS.tasks;
       return tasks ? tasks.runGuest('browser', evaluate) : evaluate();
     }
-    native.runtime.loadScript = relative => {
-      const source = native.runtime.readGameScript ? native.runtime.readGameScript(relative) : native.fs.readText(relative);
+    native.runtime.loadScript = (relative, transformSource) => {
+      let source = native.runtime.readGameScript ? native.runtime.readGameScript(relative) : native.fs.readText(relative);
       if (source === null) throw new Error(`cannot load script: ${relative}`);
+      if (transformSource) source = transformSource(source);
       return executeScript(source, path.join(options.gameRoot, relative));
     };
     native.runtime.runScript = source => executeScript(String(source), 'inline-script.js');

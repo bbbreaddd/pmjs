@@ -68,6 +68,33 @@ function writeAddon(root, polls = [true, false]) {
   return addon;
 }
 
+test('script transforms use effective virtual source and retain the script filename', async () => {
+  const options = fixture(`
+    (function() {
+    const assert = __pmjsBuiltinRequire('node:assert/strict');
+    NativeHost.runtime.readGameScript = name => {
+      assert.equal(name, 'virtual-plugin.js');
+      return 'throw new Error("before transform");';
+    };
+    assert.throws(() => NativeHost.runtime.loadScript('virtual-plugin.js', source =>
+      source.replace('before transform', 'after transform')), error => {
+      assert.equal(error.message, 'after transform');
+      assert.ok(error.stack.includes('virtual-plugin.js'));
+      assert.ok(!error.stack.includes('inline-script.js'));
+      return true;
+    });
+    NativeHost.runtime.readGameScript = () => null;
+    assert.throws(() => NativeHost.runtime.loadScript('missing.js', () => {
+      assert.fail('missing source must not be transformed');
+    }), /cannot load script: missing.js/);
+    globalThis.__pmjsTick = () => {};
+    globalThis.__pmjsRender = () => {};
+    })();
+  `);
+  options.assetPreparation = 'off'; options.mapPreparation = 'off';
+  await run(options);
+});
+
 test('saved frame limit reaches the guest timing configuration at boot', async () => {
   const options = fixture(`
     if (__pmjsTimingConfig.renderHz !== 30) throw new Error('saved limit not applied');

@@ -260,23 +260,36 @@
     loadScript: function(name, path, load) {
       var listeners = (interceptors[key(name)] || []).slice();
       var context = { name: name, path: path };
-      function next(index) {
-        if (index === listeners.length) return atStage('guest-script', load);
+      function next(index, transforms) {
+        if (index === listeners.length) {
+          if (!transforms.length) return atStage('guest-script', load);
+          return atStage('guest-script', function() {
+            return load(function(source) {
+              for (var i = transforms.length - 1; i >= 0; i--) {
+                source = atStage('load-interceptor', function() { return transforms[i](source); });
+              }
+              return source;
+            });
+          });
+        }
         var listener = listeners[index], continued = false, active = true;
         try {
           return atStage('load-interceptor', function() {
-            return listener.callback(function() {
+            return listener.callback(function(transformSource) {
               if (!active) throw new Error('Plugin load interceptor ' + listener.owner +
                 ' called next() after returning for ' + name);
               if (continued) throw new Error('Plugin load interceptor ' + listener.owner +
                 ' called next() twice for ' + name);
+              if (transformSource !== undefined && typeof transformSource !== 'function') {
+                throw new TypeError('Plugin source transform must be a function');
+              }
               continued = true;
-              return next(index + 1);
+              return next(index + 1, transformSource ? transforms.concat(transformSource) : transforms);
             }, context);
           });
         } finally { active = false; }
       }
-      return next(0);
+      return next(0, []);
     },
 
     execute: function(name, load) {

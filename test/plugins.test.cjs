@@ -558,6 +558,33 @@ test('load interceptors preserve ordering, nested loads, results and disposal', 
   }
 });
 
+test('source transforms compose from the inner loader outward and distinguish adapter failures', () => {
+  for (const failure of [null, 'transform', 'guest']) {
+    const ctx = loadPmjsRuntime({ console: { error() {} } }), plugins = ctx.PMJS.plugins;
+    const calls = [], error = Error('failed');
+    plugins.interceptLoad('Guest', 'outer', next => next(source => {
+      calls.push('outer:' + source);
+      if (failure === 'transform') throw error;
+      return source + '-outer';
+    }));
+    plugins.interceptLoad('Guest', 'inner', next => next(source => {
+      calls.push('inner:' + source);
+      return source + '-inner';
+    }));
+    const load = () => plugins.execute('Guest', () => plugins.loadScript('Guest', 'Guest.js', transform => {
+      const source = transform('effective');
+      if (failure === 'guest') throw error;
+      return source;
+    }));
+    if (failure) {
+      assert.throws(load, value => value === error);
+      assert.equal(plugins.dump().guest[0].failureStage,
+        failure === 'transform' ? 'load-interceptor' : 'guest-script');
+    } else assert.equal(load(), true);
+    assert.deepEqual(calls, ['inner:effective', 'outer:effective-inner']);
+  }
+});
+
 test('loading cleanup runs in reverse order before success and preserves primary failures', () => {
   for (const phase of ['load', 'loading', 'cleanup']) {
     const ctx = loadPmjsRuntime({ console: { error() {} } }), plugins = ctx.PMJS.plugins;

@@ -7,8 +7,8 @@
 
     PluginManager.loadScript = function(filename) {
       var path = 'js/plugins/' + filename + '.js';
-      return PMJS.plugins.loadScript(filename, path, function() {
-        return NativeHost.runtime.loadScript(path);
+      return PMJS.plugins.loadScript(filename, path, function(transformSource) {
+        return NativeHost.runtime.loadScript(path, transformSource);
       });
     };
 

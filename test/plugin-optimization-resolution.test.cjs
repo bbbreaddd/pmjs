@@ -8,6 +8,7 @@ const adapters = [
   ['yanfly/core-engine', 'YEP_CoreEngine', ['plugins.yanfly.core-native-text', 'plugins.yanfly.core-number-format']],
   ['yanfly/message-core', 'YEP_MessageCore', ['plugins.yanfly.message-word-wrap-measure']],
   ['yanfly/event-mini-label', 'YEP_EventMiniLabel', ['plugins.yanfly.event-mini-label']],
+  ['yanfly/event-copier', 'YEP_EventCopier', ['plugins.yanfly.event-copier-preload']],
   ['yanfly/slippery-tiles', 'YEP_SlipperyTiles', ['plugins.yanfly.slippery-tiles']],
   ['yanfly/visual-atb-gauge', 'YEP_X_VisualATBGauge', ['plugins.yanfly.enemy-atb-refresh']],
   ['yed/tiled', 'YED_Tiled', ['tilemap.yed-indexed-paint-loops', 'tilemap.yed-indexed-animation', 'tilemap.yed-reflection-sprites']],
