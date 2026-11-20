@@ -63,6 +63,23 @@ function makeHarness(videoResource, runtimeEnv) {
   return { context, calls, telemetry };
 }
 
+test('paused seek polls until the target is decoded without resuming playback', async () => {
+  const { context } = makeHarness();
+  const video = context.document.createElement('video'), calls = [];
+  video.src = 'movies/Opening.mp4';
+  await context.PMJS.tasks.idle();
+  context.NativeHost.media.updateVideo = (handle, time, pausedSeek) => {
+    calls.push([handle, time, pausedSeek]);
+    return calls.length === 2;
+  };
+  video.currentTime = 3;
+  assert.equal(context.PMJS.web.video.update(), 1);
+  assert.equal(context.PMJS.web.video.update(), 0);
+  assert.equal(context.PMJS.web.video.update(), 0);
+  assert.deepEqual(calls, [[10, 3, true], [10, 3, true]]);
+  assert.equal(video.paused, true);
+});
+
 test('unknown-duration playback ends only after native EOF and releases event waits', async () => {
   const { context } = makeHarness();
   const video = context.document.createElement('video');

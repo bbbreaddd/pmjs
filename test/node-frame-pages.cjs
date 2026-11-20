@@ -235,7 +235,9 @@ async function main() {
       const artifactOwner = native.images.memory(20).largest.find(entry => entry.handle === sparsePrepared.handle);
       const channelBlocks = native.images.memory().blockTextureUploads > blocksBefore;
       assert.ok(artifactOwner);
-      assert.equal(artifactOwner.palette, false);
+      assert.ok(artifactOwner.palette || channelBlocks, `${name} must use its prepared texture artifact`);
+      const firstDraw = native.images.memory();
+      assert.equal(firstDraw.textureArtifactLoads, artifactBefore.textureArtifactLoads + 1);
       for (let frame = 0; frame < 12; ++frame) for (const nearest of [false, true]) {
         assertPixels(draw(sparsePrepared, frame, false, false, false, nearest),
           draw(sparseOriginal, frame, false, false, false, nearest), nearest ? 0 : 1);
@@ -247,7 +249,7 @@ async function main() {
       }
       assertPixels(draw(sparsePrepared, 0, true), draw(sparseOriginal, 0, true), 1);
       const artifactAfter = native.images.memory();
-      assert.equal(artifactAfter.textureArtifactLoads, artifactBefore.textureArtifactLoads + (channelBlocks ? 1 : 0));
+      assert.equal(artifactAfter.textureArtifactLoads, firstDraw.textureArtifactLoads);
       draw(sparsePrepared, 0, true);
       assert.equal(native.images.memory().preparedPageDecodes, artifactAfter.preparedPageDecodes,
         'repeated draws must reuse the resident fallback texture');
@@ -256,8 +258,8 @@ async function main() {
       assert.ok(artifactAfter.textureArtifactStagingBytes <= 1024 * 1024);
       const owner = native.images.memory(20).largest.find(entry => entry.handle === sparsePrepared.handle);
       assert.ok(owner);
-      assert.equal(owner.paletteSparse, false);
-      assert.equal(owner.paletteIndexBits, 0);
+      if (extended) assert.equal(artifactOwner.paletteSparse, true);
+      if (sparse16) assert.equal(artifactOwner.paletteIndexBits, 16);
       if (planar) assert.ok(channelBlocks);
       if (channelBlocks) {
         assert.equal(owner.sceneryFullMaterialized, false);

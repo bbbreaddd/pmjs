@@ -90,6 +90,10 @@ Object.defineProperty(VideoElement.prototype, 'currentTime', {
   set: function(value) {
     this._currentTime = Math.max(0, Number(value) || 0);
     this._startOffset = this._currentTime; this._startedAt = performance.now();
+    if (this.paused && this._media) {
+      this._pausedSeek = this.duration > 0 ? Math.min(this._currentTime, this.duration) : this._currentTime;
+      if (nativeVideos.indexOf(this) < 0) nativeVideos.push(this);
+    }
     if (!this.paused && this._audio) NativeHost.media.playAudio(
       this._audio.handle, false, this._currentTime);
   }
@@ -133,6 +137,7 @@ VideoElement.prototype._releaseMedia = function() {
   this.readyState = this.HAVE_NOTHING;
   this.duration = 0; this.videoWidth = 0; this.videoHeight = 0;
   this._currentTime = 0; this._startOffset = 0; this._decodedTime = undefined;
+  this._pausedSeek = undefined;
   this.paused = true; this.ended = false;
   var index = nativeVideos.indexOf(this);
   if (index >= 0) nativeVideos.splice(index, 1);
@@ -297,6 +302,7 @@ VideoElement.prototype._startPlayback = function() {
     return;
   }
   if (this.ended) this._currentTime = 0;
+  this._pausedSeek = undefined;
   this.paused = false; this.ended = false; this._startOffset = this._currentTime;
   this._startedAt = performance.now();
   // The video timeline owns looping; shorter audio must not wrap independently.
@@ -316,11 +322,23 @@ VideoElement.prototype.pause = function() {
   this._currentTime = this.currentTime; this.paused = true;
   if (this._audio) NativeHost.media.stopAudio(this._audio.handle);
   var index = nativeVideos.indexOf(this);
-  if (index >= 0) nativeVideos.splice(index, 1);
+  if (index >= 0 && this._pausedSeek === undefined) nativeVideos.splice(index, 1);
   this.dispatchEvent({ type: 'pause', target: this });
 };
 VideoElement.prototype._update = function() {
-  if (this.paused || !this._media) return false;
+  if (!this._media) return false;
+  if (this.paused) {
+    if (this._pausedSeek === undefined) return false;
+    try {
+      if (!NativeHost.media.updateVideo(this._media.handle, this._pausedSeek, true)) return true;
+      this._decodedTime = undefined;
+      this._pausedSeek = undefined;
+    } catch (error) {
+      this._pausedSeek = undefined;
+      this.dispatchEvent({ type: 'error', target: this, error: error });
+    }
+    return this._pausedSeek !== undefined || (!this.paused && !!this._media);
+  }
   var time = this.currentTime;
   if (this.duration > 0 && time >= this.duration) {
     if (this.loop) { this.currentTime = time % this.duration; time = this.currentTime; }

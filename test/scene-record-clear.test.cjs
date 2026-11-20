@@ -18,7 +18,7 @@ function makeHost(bulkClear) {
       this.worldAlpha = 1;
       this.transform = { worldTransform: { identity() {} } };
     } },
-    PMJS: { optimizations: { register() {}, isEnabled: id =>
+    PMJS: { optimizations: { register() {}, refuse() {}, isEnabled: id =>
       (id === 'scene.record-bulk-clear' ? bulkClear : true) } },
     NativeHost: { scene: { packetVersion: 30,
       schema: { version: 30, metadataStride: 7,

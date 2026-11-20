@@ -85,8 +85,8 @@ async function main() {
       const directory = temporaryDirectory('jpeg-preparation-');
       const source = path.join(directory, name), output = path.join(directory, 'prepared');
       fs.writeFileSync(source, bytes);
-      await assert.rejects(native.assets.processImage(name, output, { grid: [1, 1] }, source),
-        /invalid preparation PNG/, 'the PNG-only preparation API must reject JPEG without publishing output');
+      assert.equal(await native.assets.processImage(name, output, { grid: [1, 1] }, source), null,
+        'a decodable JPEG must fall back to ordinary loading without publishing PNG preparation output');
       assert.ok(!fs.existsSync(output) || fs.readdirSync(output).length === 0);
     }
     native.canvas.release(target.handle);

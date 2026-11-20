@@ -86,7 +86,8 @@ int main(int argc, char** argv) try {
     try { video.request(0.0); } catch (...) { /* Failure may precede the first request. */ }
     awaitFailure([&]() {
       try {
-        require(!video.take(), "failed worker published a frame");
+        bool completed = false;
+        require(!video.take(0.0, completed), "failed worker published a frame");
         return false;
       } catch (const std::bad_alloc&) {
         require(fault == 3, "worker changed its exception type");
@@ -106,7 +107,7 @@ int main(int argc, char** argv) try {
   }
   pmjs::addon::Video healthy(std::make_unique<pmjs::VideoDecoderSession>(argv[1]), false);
   healthy.request(0.0);
-  awaitFailure([&]() { return healthy.take().has_value(); });
+  awaitFailure([&]() { bool completed = false; return healthy.take(0.0, completed).has_value() && completed; });
   std::cout << "video conversion and worker failures preserve errors and independent playback\n";
   return 0;
 } catch (const std::exception& error) {

@@ -769,22 +769,11 @@ void Renderer::renderScene() {
     const bool derivedEligible = frameEligible && derivedSampling && !command.appliesSpriteColor;
     const bool wholeSource = logicalInfo && command.source[0] == 0 && command.source[1] == 0 &&
       command.source[2] == logicalInfo->width && command.source[3] == logicalInfo->height;
-    const bool cacheLargePalette = frameEligible && paletteEligible &&
-      double(command.source[2]) * command.source[3] >= 256.0 * 256.0 &&
-      images_.hasPaletteStorage(command.image);
-    auto derived = cacheLargePalette ? images_.resolvePreparedFrameRegion(command.image,
-      command.source[0], command.source[1], command.source[2], command.source[3],
-      command.pixiSpritePacking && !command.premultipliedSpriteTexture, true, true) :
-      std::optional<SpriteImageRegion>{};
-    if (!derived) derived = !command.nearest && frameEligible && paletteEligible &&
+    auto derived = !command.nearest && frameEligible && paletteEligible &&
       images_.hasPaletteStorage(command.image) ? images_.resolveSpriteRegion(command.image,
         command.source[0], command.source[1], command.source[2], command.source[3],
         command.pixiSpritePacking && !command.premultipliedSpriteTexture, wholeSource) :
       std::optional<SpriteImageRegion>{};
-    if (!derived && !command.nearest && frameEligible && paletteEligible && images_.hasPaletteStorage(command.image))
-      derived = images_.resolvePreparedFrameRegion(command.image,
-        command.source[0], command.source[1], command.source[2], command.source[3],
-        command.pixiSpritePacking && !command.premultipliedSpriteTexture, true);
     if (!derived && frameEligible && paletteEligible)
       derived = images_.resolveSpriteRegion(command.image,
         command.source[0], command.source[1], command.source[2], command.source[3],
@@ -792,22 +781,9 @@ void Renderer::renderScene() {
     auto palette = !derived && paletteEligible ? images_.resolvePaletteImage(command.image,
       command.atlasTilingSampling || (command.pixiSpritePacking && !command.premultipliedSpriteTexture)) :
       std::optional<PaletteImageRegion>{};
-    if (!command.nearest && frameEligible && (palette || (derived && derived->paletteTable))) {
-      auto filtered = images_.resolvePreparedFrameRegion(command.image,
-        command.source[0], command.source[1], command.source[2], command.source[3],
-        command.pixiSpritePacking && !command.premultipliedSpriteTexture, true);
-      if (filtered) { derived = std::move(filtered); palette.reset(); }
-    }
-    auto block = !palette && !derived && frameEligible ? images_.resolveBlockRegion(command.image,
+    const auto block = !palette && !derived && frameEligible ? images_.resolveBlockRegion(command.image,
       command.pixiSpritePacking && !command.premultipliedSpriteTexture) :
       std::optional<BlockImageRegion>{};
-    if (block && block->planar && !command.nearest && !wholeSource &&
-        double(command.source[2]) * command.source[3] >= 256.0 * 256.0) {
-      derived = images_.resolvePreparedFrameRegion(command.image,
-        command.source[0], command.source[1], command.source[2], command.source[3],
-        command.pixiSpritePacking && !command.premultipliedSpriteTexture, false, true);
-      if (derived) block.reset();
-    }
     if (!palette && !block && !derived && derivedEligible) derived = images_.resolveSpriteRegion(command.image,
       command.source[0], command.source[1], command.source[2], command.source[3],
       command.pixiSpritePacking && !command.premultipliedSpriteTexture);
@@ -829,10 +805,6 @@ void Renderer::renderScene() {
     const auto compact = compactEligible ? images_.resolveCompactRegion(command.image,
       command.source[0], command.source[1], command.source[2], command.source[3]) :
       std::optional<CompactImageRegion>{};
-    if (!palette && !block && !derived && !compact && frameEligible)
-      derived = images_.resolvePreparedFrameRegion(command.image,
-        command.source[0], command.source[1], command.source[2], command.source[3],
-        command.pixiSpritePacking && !command.premultipliedSpriteTexture);
     if (!palette && !block && !derived && !compact && images_.hasPreparedBacking(command.image)) {
       const char* reason = derivedEligible ? "unsupported-crop" :
         command.primitive != RenderCommand::Primitive::sprite ? "non-sprite" :

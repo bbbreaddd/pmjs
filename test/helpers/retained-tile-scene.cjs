@@ -17,7 +17,7 @@ function createRetainedTileScene(native) {
     constructor() { this.transform = { worldTransform: { identity() {} } }; }
   }
   const context = vm.createContext({ PIXI: { Container }, PMJS: {
-    optimizations: { register() {}, isEnabled() { return true; } }
+    optimizations: { register() {}, refuse() {}, isEnabled() { return true; } }
   }, NativeHost: { render: {
     createTileLayer(points, handles) {
       const handle = native.render.createTileLayer(points, handles);

@@ -3,14 +3,14 @@
 (function() {
   PMJS.mv = PMJS.mv || {};
   PMJS.mv.createUpdateSchedule = function(options) {
-    var records = new WeakMap(), owners = new Map(), pending = [], mutations = [], aborted = [];
+    var records = new WeakMap(), owners = new Map(), pending = [], ordered = [], mutations = [], aborted = [];
     var tick = 0, cursor = -1, running = false, diagnosticAt = 0, diagnostics = options.diagnostics ? new Map() : null;
     var stats = { registered: 0, updates: 0, notifications: 0, ticks: 0 };
-    function position(id) {
-      var low = 0, high = pending.length;
+    function position(id, list = pending) {
+      var low = 0, high = list.length;
       while (low < high) {
         var middle = (low + high) >>> 1;
-        if (pending[middle].id < id) low = middle + 1;
+        if (list[middle].id < id) low = middle + 1;
         else high = middle;
       }
       return low;
@@ -40,6 +40,7 @@
       record.retired = true;
       var index = position(record.id);
       if (pending[index] === record) pending.splice(index, 1);
+      if (options.needsUpdate) ordered.splice(position(record.id, ordered), 1);
       owners.delete(record.id);
       records.delete(object);
       if (diagnostics) diagnostics.delete(record);
@@ -62,6 +63,7 @@
       var record = { object: object, id: id, at: tick, queued: false, processing: false };
       owners.set(id, record);
       records.set(object, record);
+      if (options.needsUpdate) ordered.splice(position(id, ordered), 0, record);
       stats.registered++;
       record.synchronize = function() { if (!record.retired) synchronize(record, completed(record)); };
       record.wake = function() {
@@ -106,10 +108,14 @@
         if (running) throw new Error('Reentrant event update schedule');
         running = true; cursor = -1; tick++; stats.ticks++;
         try {
-          for (;;) {
-            var index = position(cursor + 1), record = pending[index];
+          for (var next = 0;;) {
+            var record = options.needsUpdate ? ordered[next++] : pending[position(cursor + 1)];
             if (!record) break;
             cursor = record.id;
+            if (!record.queued) {
+              if (!options.needsUpdate(record.object)) continue;
+              activate(record);
+            }
             synchronize(record, tick - 1);
             record.at = tick;
             record.nextTick = false;

@@ -41,8 +41,34 @@ function installOmoriFiles(context, host) {
   const files = createGameFiles({ native: { fs: host }, read: name => host.readBytes(name) });
   context.NativeHost.fs = host;
   context.NativeHost.runtime = { gameFiles: { resolve: files.resolve, remove: files.remove, rename: files.rename,
+    needsDecodedRead: files.needsDecodedRead, readBytesAsync: files.readAsync,
     readBytes: name => files.exists(name) ? files.read(name) : null } };
 }
+
+test('OMORI descriptors and stream ranges see the decoded bytes even after replacement', async t => {
+  const f = fixture(t);
+  const key = 'a'.repeat(32), iv = Buffer.alloc(16, 17);
+  const cipher = require('node:crypto').createCipheriv('aes-256-ctr', key, iv);
+  const text = '{"name":"René"}';
+  f.host.writeBytes('main.key', Buffer.from(key));
+  f.host.writeBytes('data/Secret.KEL', Buffer.concat([iv, cipher.update(text), cipher.final()]));
+  const { createGameFiles } = require('../patches/omori/game-files.cjs');
+  const files = createGameFiles({ native: { fs: f.host }, configuration: { omori: { encryptionKeyFile: 'main.key' } },
+    read: name => Buffer.from(f.host.readBytes(name)), readAsync: name => f.host.readBytesAsync(name) });
+  f.context.NativeHost.runtime = { gameFiles: { resolve: files.resolve, needsDecodedRead: files.needsDecodedRead,
+    readBytes: files.read, readBytesAsync: files.readAsync } };
+  const name = '/game/data/Secret.json';
+  const fd = f.guest.openSync(name, 'r'), buffer = Buffer.alloc(64);
+  assert.equal(f.guest.fstatSync(fd).size, Buffer.byteLength(text));
+  const stream = f.guest.createReadStream(name, { start: 9, end: 13, encoding: 'utf8', highWaterMark: 1 });
+  stream.on('open', () => f.guest.writeFileSync(name, '{"name":"other"}'));
+  let output = '';
+  for await (const chunk of stream) output += chunk;
+  assert.equal(output, 'René');
+  assert.equal(buffer.toString('utf8', 0, f.guest.readSync(fd, buffer, 0, buffer.length, null)), text);
+  f.guest.closeSync(fd);
+  assert.equal(f.guest.readFileSync(name, 'utf8'), '{"name":"other"}');
+});
 
 test('deleting a logical OMORI file hides every encrypted/plain variant across remounts', t => {
   const f = fixture(t); installOmoriFiles(f.context, f.host);

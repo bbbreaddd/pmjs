@@ -132,6 +132,30 @@ test('child output listener exceptions use the guest Node dispatcher', async t =
   assert.deepEqual(nodeErrors, [listenerError]);
 });
 
+test('spawned output is bounded while paused, resumes intact, and can be abandoned at shutdown', async t => {
+  const tasks = guestTasks([]);
+  const service = createSubprocesses({ tasks: () => tasks, resolveDirectory: () => process.cwd() });
+  t.after(async () => { await service.stop(); tasks.stop(); });
+  const size = 8 * 1024 * 1024;
+  const launch = () => service.api.spawn(process.execPath,
+    ['-e', `process.stdout.write(Buffer.alloc(${size}, 37));`]);
+  const child = launch();
+  const closed = new Promise((resolve, reject) => { child.once('close', resolve); child.once('error', reject); });
+  await new Promise(resolve => child.stdout.once('readable', resolve));
+  await tasks.idle();
+  assert.ok(child.stdout.writableLength <= child.stdout.writableHighWaterMark * 2);
+  let total = 0;
+  for await (const bytes of child.stdout) {
+    assert.equal(bytes[0], 37);
+    total += bytes.length;
+  }
+  assert.equal(await closed, 0);
+  assert.equal(total, size);
+  const abandoned = launch();
+  await new Promise(resolve => abandoned.stdout.once('readable', resolve));
+  await service.stop();
+});
+
 test('child stdin preserves backpressure, payload, and Node callback/event delivery', async t => {
   const nodeErrors = [], tasks = guestTasks(nodeErrors);
   const service = createSubprocesses({ tasks: () => tasks,

@@ -72,6 +72,7 @@
         state = { events: map._events, commonUpdates: 0 };
         var models = PMJS.mv.createUpdateSchedule({
           active: active,
+          needsUpdate: function(event) { return event.update !== composedUpdate; },
           reasons: reasons,
           diagnostics: diagnosticsEnabled,
           counters: [

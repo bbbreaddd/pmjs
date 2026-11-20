@@ -42,8 +42,9 @@ assert(settingsText > 30, 'settings overlay must draw readable text');
 native.runtime.settingsPresent(false);
 assert.ok(native.canvas.memory().liveBytes - canvasBytesBefore <= window.width * window.height * 4,
   'preparation text must fit the physical display without oversized supersampling');
-const before = native.render.stats().frames - 1;
+const before = native.render.stats().frames;
 const started = performance.now();
+native.runtime.preparationProgress({ completed: 0, total: 1000, force: true });
 for (let completed = 0; completed < 1000; ++completed)
   native.runtime.preparationProgress({ completed, total: 1000 });
 native.runtime.preparationProgress({ completed: 1000, total: 1000 });

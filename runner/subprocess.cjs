@@ -119,12 +119,12 @@ function createStdinBoundary(input, tasks) {
 function createSubprocesses({ tasks, resolveDirectory, openExternal }) {
   const children = new Set();
   let stopping = false;
-  function enqueue(callback, errorMode = 'event') { tasks().enqueue(callback, { errorMode }); }
+  function enqueue(callback, errorMode = 'event') { return tasks().enqueue(callback, { errorMode }); }
   function optionsFor(options) {
     if (stopping) throw Object.assign(new Error('session has terminated'), { code: 'ERR_RUNTIME_STOPPED' });
     return { ...options, detached: true, cwd: resolveDirectory(options && options.cwd || '/game') };
   }
-  function wrap(child, callbackHandlesErrors = false) {
+  function wrap(child, callbackHandlesErrors = false, bufferedOutput = false) {
     children.add(child);
     const emitter = new EventEmitter();
     const result = typeof tasks().wrapNodeEmitter === 'function'
@@ -139,9 +139,23 @@ function createSubprocesses({ tasks, resolveDirectory, openExternal }) {
       const outputTarget = new PassThrough();
       result[name] = typeof tasks().wrapNodeEmitter === 'function'
         ? tasks().wrapNodeEmitter(outputTarget, ['emit', 'write', 'read']) : outputTarget;
-      child[name].on('data', data => enqueue(() => outputTarget.write(data)));
-      child[name].on('end', () => enqueue(() => outputTarget.end()));
-      child[name].on('error', error => enqueue(() => outputTarget.destroy(error)));
+      const source = child[name];
+      if (!bufferedOutput) {
+        outputTarget.on('drain', () => source.resume());
+        outputTarget.on('close', () => source.destroy());
+      }
+      source.on('data', data => {
+        // Bound both the guest stream and the queue of pending scheduler deliveries.
+        if (!bufferedOutput) source.pause();
+        if (enqueue(() => {
+          if (outputTarget.destroyed) return;
+          let accepted;
+          try { accepted = outputTarget.write(data); }
+          finally { if (!bufferedOutput && accepted !== false && !outputTarget.destroyed) source.resume(); }
+        }) === false && !bufferedOutput) source.destroy();
+      });
+      source.on('end', () => enqueue(() => outputTarget.end()));
+      source.on('error', error => enqueue(() => outputTarget.destroy(error)));
     }
     for (const name of ['spawn', 'error', 'exit', 'close']) child.on(name, (...args) => {
       if (name === 'close') children.delete(child);
@@ -174,7 +188,7 @@ function createSubprocesses({ tasks, resolveDirectory, openExternal }) {
       return result;
     }
     return wrap(childProcess.exec(command, resolvedOptions, typeof callback === 'function'
-      ? (error, stdout, stderr) => enqueue(() => callback(error, stdout, stderr), 'uncaught') : undefined), typeof callback === 'function');
+      ? (error, stdout, stderr) => enqueue(() => callback(error, stdout, stderr), 'uncaught') : undefined), typeof callback === 'function', true);
   }
   return {
     api: {
@@ -183,7 +197,7 @@ function createSubprocesses({ tasks, resolveDirectory, openExternal }) {
         if (!Array.isArray(args)) { callback = options; options = args; args = []; }
         if (typeof options === 'function') { callback = options; options = {}; }
         return wrap(childProcess.execFile(file, args, optionsFor(options), typeof callback === 'function'
-          ? (error, stdout, stderr) => enqueue(() => callback(error, stdout, stderr), 'uncaught') : undefined), typeof callback === 'function');
+          ? (error, stdout, stderr) => enqueue(() => callback(error, stdout, stderr), 'uncaught') : undefined), typeof callback === 'function', true);
       },
       spawn(file, args, options) {
         if (!Array.isArray(args)) { options = args; args = []; }
@@ -201,6 +215,8 @@ function createSubprocesses({ tasks, resolveDirectory, openExternal }) {
         const force = hostTimers.setTimeout(() => signal('SIGKILL'), 500);
         child.once('close', () => { hostTimers.clearTimeout(force); resolve(); });
         signal('SIGTERM');
+        child.stdout?.destroy();
+        child.stderr?.destroy();
       })));
     }
   };

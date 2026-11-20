@@ -46,6 +46,11 @@ function readGameBytesAsync(path) {
     : NativeHost.fs.readBytesAsync(path);
 }
 
+function needsDecodedGameRead(path) {
+  var files = NativeHost.runtime && NativeHost.runtime.gameFiles;
+  return files && files.needsDecodedRead && files.needsDecodedRead(path);
+}
+
 function gameDirectoryEntries(path, entries) {
   var aliases = PMJS.config.virtualFiles &&
     PMJS.config.virtualFiles.directoryEntryAliases || {};
@@ -162,6 +167,16 @@ function fsReaderStopListener(reader) {
   });
 }
 
+function bufferedStreamReader(contents, offset) {
+  if (contents === null) return null;
+  var bytes = Buffer.from(contents);
+  return { readAsync: function(size) {
+    var chunk = bytes.subarray(offset, offset + size);
+    offset += chunk.length;
+    return Promise.resolve(chunk);
+  }, close: function() { bytes = null; } };
+}
+
 function FsReadStream(path, options) {
   options = typeof options === 'string' ? { encoding: options } : options || {};
   var start = options.start === undefined ? 0 : options.start;
@@ -232,14 +247,13 @@ function FsReadStream(path, options) {
       var writable = writablePath(path);
       var host = writable !== null && NativeHost.storage ? NativeHost.storage : NativeHost.fs;
       var resolved = writable !== null && NativeHost.storage ? writable : gameReadPath(path);
-      return host.openReadAsync(resolved, start).then(function(opened) {
+      var opening = host === NativeHost.fs && needsDecodedGameRead(resolved)
+        ? readGameBytesAsync(resolved).then(function(bytes) { return bufferedStreamReader(bytes, start); })
+        : host.openReadAsync(resolved, start);
+      return opening.then(function(opened) {
         var missingFiles = PMJS.config.missingTextFiles || {};
         if (!opened && writable !== null && Object.prototype.hasOwnProperty.call(missingFiles, writable)) {
-          var bytes = Buffer.from(String(missingFiles[writable]), 'utf8'), offset = start;
-          opened = { readAsync: function(size) {
-            var chunk = bytes.subarray(offset, offset + size); offset += chunk.length;
-            return Promise.resolve(chunk);
-          }, close: function() { bytes = null; } };
+          opened = bufferedStreamReader(Buffer.from(String(missingFiles[writable]), 'utf8'), start);
         }
         if (!opened) {
           var error = new Error('ENOENT: ' + path); error.code = 'ENOENT'; throw error;
@@ -312,7 +326,11 @@ var fsModule = {
       ? Buffer.from(contents.buffer, contents.byteOffset, contents.byteLength)
       : Buffer.from(String(contents), encoding || 'utf8');
     var resolved = writable !== null ? writable : gameReadPath(path);
-    if (typeof host.writeBytes === 'function') host.writeBytes(resolved, bytes, { flag: flag || 'w' });
+    if (typeof host.writeBytes === 'function') host.writeBytes(resolved, bytes, {
+      flag: flag || 'w',
+      readPrevious: flag === 'a' && writable === null && needsDecodedGameRead(resolved)
+        ? function() { return readGameBytes(resolved); } : undefined
+    });
     else if (writable !== null && (flag || 'w') === 'w' && typeof contents === 'string' && (!encoding || encoding === 'utf8')) {
       host.writeText(resolved, contents);
     } else throw new Error('filesystem byte writes are unavailable');
@@ -324,6 +342,8 @@ var fsModule = {
     deliverNodeCallback(function() { if (callback) return callback(error); });
   },
   appendFileSync: function(path, contents, options) {
+    var flag = typeof options === 'object' && options && options.flag !== undefined ? options.flag : 'a';
+    if (flag !== 'a') return fsModule.writeFileSync(path, contents, options);
     var encoding = typeof options === 'string' ? options : options && options.encoding;
     var bytes = ArrayBuffer.isView(contents)
       ? Buffer.from(contents.buffer, contents.byteOffset, contents.byteLength)
@@ -450,10 +470,47 @@ function fsDescriptor(fd) {
   if (!handle) throw Object.assign(new Error('bad file descriptor: ' + fd), { code: 'EBADF' });
   return handle;
 }
+function decodedFileHandle(raw, name) {
+  var bytes, position = 0;
+  try {
+    if (!raw.stat().isFile()) return raw;
+    var contents = readGameBytes(name);
+    if (contents === null) throw Object.assign(new Error('ENOENT: ' + name), { code: 'ENOENT' });
+    bytes = Buffer.from(contents);
+  } catch (error) { raw.close(); throw error; }
+  return {
+    read: function(buffer, offset, length, at) {
+      if (offset && typeof offset === 'object') {
+        at = offset.position; length = offset.length; offset = offset.offset;
+      }
+      var target = Buffer.from(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+      offset = offset === undefined ? 0 : offset;
+      length = length === undefined ? target.length - offset : length;
+      var sequential = at == null || at === -1;
+      at = sequential ? position : Number(at);
+      if (![offset, length, at].every(Number.isSafeInteger) || offset < 0 || length < 0 ||
+          at < 0 || offset + length > target.length) throw new RangeError('invalid file read range');
+      var count = bytes.copy(target, offset, Math.min(at, bytes.length), Math.min(at + length, bytes.length));
+      if (sequential) position += count;
+      return count;
+    },
+    write: function() { throw Object.assign(new Error('file is read-only'), { code: 'EBADF' }); },
+    stat: function(options) {
+      var result = raw.stat(options);
+      result.size = typeof result.size === 'bigint' ? BigInt(bytes.length) : bytes.length;
+      return result;
+    },
+    sync: function() { raw.sync(); },
+    close: function() { bytes = null; raw.close(); }
+  };
+}
 fsModule.openSync = function(path, flags, mode) {
   var writable = writablePath(path), host = writable !== null ? NativeHost.storage : NativeHost.fs;
   if (!host || !host.openFile) throw Object.assign(new Error('file descriptors unavailable: ' + path), { code: 'ENOSYS' });
-  var handle = host.openFile(writable !== null ? writable : gameReadPath(path), flags, mode);
+  var resolved = writable !== null ? writable : gameReadPath(path);
+  var readOnly = flags === undefined || flags === 'r' || flags === 'rs' || flags === 'sr' || flags === 0;
+  var handle = host.openFile(resolved, flags, mode);
+  if (writable === null && readOnly && needsDecodedGameRead(resolved)) handle = decodedFileHandle(handle, resolved);
   var fd = nextFsDescriptor++; fsDescriptors.set(fd, handle); return fd;
 };
 fsModule.closeSync = function(fd) {

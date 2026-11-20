@@ -88,11 +88,11 @@ class BuildProvenance(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix='pmjs build provenance ', dir=temporary_root)
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        for directory in ('src', 'cmake', 'tools', 'third_party', 'docs', 'js', 'runner', 'profiles', 'bin', 'test', 'dependencies'):
-            (self.root / directory).mkdir()
+        for directory in ('src', 'cmake', 'tools', 'third_party', 'docs', 'js/pmjs-web', 'runner', 'profiles', 'patches', 'bin', 'test', 'dependencies'):
+            (self.root / directory).mkdir(parents=True)
         for source in ('tools/release.py', 'tools/runtime_artifact.py', 'tools/dependencies.py', 'tools/llvm_tools.py',
                        'cmake/Install.cmake', 'cmake/InstallMetadata.cmake.in',
-                       'cmake/build-config.json.in'):
+                       'cmake/build-config.json.in', 'js/pmjs-web/fallback-font.LICENSE'):
             shutil.copy2(ROOT / source, self.root / source)
         for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md', 'third_party/effekseer.LICENSE',
                      'third_party/effekseer-mz.patch', 'tools/effekseer.lock.json',

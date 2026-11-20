@@ -350,24 +350,26 @@ test('CLI parses the documented options including --config', () => {
   assert.equal(value.preparedFrameCacheBytes, 2097152);
   assert.equal(value.greenworksModule, 'steam/greenworks.js');
 });
-test('prepared frame cache validates its budget and resolves configuration and environment', () => {
+test('prepared page split threshold accepts the legacy configuration and environment', () => {
   const options = fixture('');
   const previous = process.env.PMJS_PREPARED_FRAME_CACHE_BYTES;
   try {
     delete process.env.PMJS_PREPARED_FRAME_CACHE_BYTES;
-    assert.equal(validate(options).preparedFrameCacheBytes, 33554432);
+    assert.equal(validate(options).preparedPageSplitThresholdBytes, 33554432);
     for (const budget of [-1, 0.5, Infinity, NaN, Number.MAX_SAFE_INTEGER + 1,
       'invalid', null, true, {}]) {
       assert.throws(() => validate({ ...options, preparedFrameCacheBytes: budget }),
         /preparedFrameCacheBytes must be a non-negative safe integer/);
     }
     process.env.PMJS_PREPARED_FRAME_CACHE_BYTES = '2097152';
-    assert.equal(validate(options).preparedFrameCacheBytes, 2097152);
+    assert.equal(validate(options).preparedPageSplitThresholdBytes, 2097152);
     assert.equal(validate({ ...options, preparedFrameCacheBytes: 0 }).preparedFrameCacheBytes, 0);
     const config = path.join(options.gameRoot, 'config.json');
     fs.writeFileSync(config, JSON.stringify({ preparedFrameCacheBytes: 4194304 }));
     assert.equal(validate({ ...options, config }).preparedFrameCacheBytes, 4194304);
     assert.equal(validate({ ...options, config, preparedFrameCacheBytes: 0 }).preparedFrameCacheBytes, 0);
+    assert.equal(validate({ ...options, config, preparedPageSplitThresholdBytes: 8192 }).preparedPageSplitThresholdBytes, 8192);
+    assert.throws(() => validate({ ...options, preparedPageSplitThresholdBytes: -1 }), /preparedPageSplitThresholdBytes/);
     process.env.PMJS_PREPARED_FRAME_CACHE_BYTES = '-1';
     assert.throws(() => validate(options), /preparedFrameCacheBytes/);
   } finally {
@@ -375,7 +377,7 @@ test('prepared frame cache validates its budget and resolves configuration and e
     else process.env.PMJS_PREPARED_FRAME_CACHE_BYTES = previous;
   }
 });
-test('runner forwards the prepared frame cache budget to native initialization', async () => {
+test('runner forwards the prepared page split threshold to native initialization', async () => {
   const options = fixture('globalThis.__pmjsTick=()=>{}; globalThis.__pmjsRender=()=>{};');
   options.assetPreparation = 'off';
   options.preparedFrameCacheBytes = 2097152;
@@ -383,10 +385,10 @@ test('runner forwards the prepared frame cache budget to native initialization',
   let initialized;
   host.initialize = value => { initialized = value; };
   await run(options);
-  assert.equal(initialized.preparedFrameCacheBytes, 2097152);
+  assert.equal(initialized.preparedPageSplitThresholdBytes, 2097152);
   delete options.preparedFrameCacheBytes;
   await run(options);
-  assert.equal(initialized.preparedFrameCacheBytes, 33554432);
+  assert.equal(initialized.preparedPageSplitThresholdBytes, 33554432);
 });
 test('prepared rendering controls are independent and enabled by default', async () => {
   const options = fixture('globalThis.__pmjsTick=()=>{}; globalThis.__pmjsRender=()=>{};');

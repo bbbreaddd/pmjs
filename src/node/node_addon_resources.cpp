@@ -584,6 +584,7 @@ napi_value imageMemory(napi_env env, napi_callback_info info) try {
   setProperty(result, "preparedSharedTextureHits", number(env, images.preparedSharedTextureHits()));
   setProperty(result, "preparedRegionReads", number(env, images.preparedRegionReads()));
   setProperty(result, "preparedFrameCacheBudget", number(env, images.preparedFrameCacheBudget()));
+  setProperty(result, "preparedPageSplitThresholdBytes", number(env, images.preparedPageSplitThresholdBytes()));
   setProperty(result, "preparedFrameCacheBytes", number(env, images.preparedFrameCacheBytes()));
   setProperty(result, "preparedFrameCacheHits", number(env, images.preparedFrameCacheHits()));
   setProperty(result, "preparedPageTextureBytes", number(env, images.preparedPageTextureBytes()));

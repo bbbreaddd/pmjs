@@ -11,6 +11,7 @@ function resolveDefaults(input) {
   let assetPreparation = {};
   let configAssetPreparation = {};
   let preparedFrameCacheBytes = input.preparedFrameCacheBytes;
+  let preparedPageSplitThresholdBytes = input.preparedPageSplitThresholdBytes;
   let preparedCompactSampling = input.preparedCompactSampling;
   let preparedCropUploads = input.preparedCropUploads;
   let imagePalettization = input.imagePalettization;
@@ -44,6 +45,7 @@ function resolveDefaults(input) {
       configAssetPreparation = cfg.assetPreparation;
     }
     if (preparedFrameCacheBytes === undefined) preparedFrameCacheBytes = cfg.preparedFrameCacheBytes;
+    if (preparedPageSplitThresholdBytes === undefined) preparedPageSplitThresholdBytes = cfg.preparedPageSplitThresholdBytes;
     if (preparedCompactSampling === undefined) preparedCompactSampling = cfg.preparedCompactSampling;
     if (preparedCropUploads === undefined) preparedCropUploads = cfg.preparedCropUploads;
     if (imagePalettization === undefined) imagePalettization = cfg.imagePalettization;
@@ -126,7 +128,7 @@ function resolveDefaults(input) {
     throw new Error('memoryReducer must be a boolean');
   }
   return { ...input, width, height, title, assetPreparation, assetPolicyOverrides: policyOverrides, preparationFonts, virtualFiles, gamePreparation,
-    preparedFrameCacheBytes, preparedCompactSampling, preparedCropUploads, imagePalettization, memoryReducer };
+    preparedFrameCacheBytes, preparedPageSplitThresholdBytes, preparedCompactSampling, preparedCropUploads, imagePalettization, memoryReducer };
 }
 
 function validate(input) {
@@ -159,6 +161,10 @@ function validate(input) {
       !Number.isSafeInteger(preparedFrameCacheBytes) || preparedFrameCacheBytes < 0) {
     throw new Error('preparedFrameCacheBytes must be a non-negative safe integer');
   }
+  const splitBytes = options.preparedPageSplitThresholdBytes;
+  if (splitBytes !== undefined && (!Number.isSafeInteger(splitBytes) || splitBytes < 0)) {
+    throw new Error('preparedPageSplitThresholdBytes must be a non-negative safe integer');
+  }
   for (const name of ['preparedCompactSampling', 'preparedCropUploads', 'imagePalettization']) {
     if (options[name] !== undefined && typeof options[name] !== 'boolean') {
       throw new Error(`${name} must be a boolean`);
@@ -182,6 +188,7 @@ function validate(input) {
       cacheRoot: options.assetPreparation.cacheRoot || path.join(path.resolve(options.saveRoot), 'asset-cache') },
     ...(imageWarmCacheBytes === undefined ? {} : { imageWarmCacheBytes }),
     preparedFrameCacheBytes,
+    preparedPageSplitThresholdBytes: splitBytes ?? preparedFrameCacheBytes,
     preparedCompactSampling: options.preparedCompactSampling ?? true,
     preparedCropUploads: options.preparedCropUploads ?? true,
     title: options.title,

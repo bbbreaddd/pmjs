@@ -107,17 +107,19 @@ napi_value initialize(napi_env env, napi_callback_info info) try {
     imageWarmCacheBytes = static_cast<std::size_t>(configured);
   }
   std::size_t preparedFrameCacheBytes = pmjs::ImageStore::defaultPreparedFrameCacheBytes;
-  if (hasProperty(env, options, "preparedFrameCacheBytes")) {
+  const char* pageSplitOption = hasProperty(env, options, "preparedPageSplitThresholdBytes")
+    ? "preparedPageSplitThresholdBytes" : "preparedFrameCacheBytes";
+  if (hasProperty(env, options, pageSplitOption)) {
     constexpr double maxSafeInteger = 9007199254740991.0;
     const double maxCacheBytes = std::min(maxSafeInteger,
       static_cast<double>(std::numeric_limits<std::size_t>::max()));
     const double configured = asNumber(env, property(env, options,
-      "preparedFrameCacheBytes"));
+      pageSplitOption));
     if (!std::isfinite(configured) || configured < 0 ||
         std::floor(configured) != configured ||
         configured > maxCacheBytes) {
       throw std::runtime_error(
-        "preparedFrameCacheBytes must be a non-negative safe integer");
+        std::string(pageSplitOption) + " must be a non-negative safe integer");
     }
     preparedFrameCacheBytes = static_cast<std::size_t>(configured);
   }

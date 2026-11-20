@@ -90,21 +90,13 @@ int main() {
     for(std::size_t i=0;i<original.size();i+=4) {
       original[i]=original[i+1]=original[i+2]=37; original[i+3]=255;
     }
-    std::array<std::vector<std::uint8_t>,2> expectedPages;
-    for(std::size_t index=0;index<expectedPages.size();++index) {
+    for(std::size_t index=0;index<descriptor.pages.size();++index) {
       std::vector<std::uint8_t> page(7*7*4);
-      expectedPages[index].resize(8*8*4);
-      for(std::size_t i=0;i<expectedPages[index].size();i+=4) {
-        expectedPages[index][i]=expectedPages[index][i+1]=expectedPages[index][i+2]=37;
-        expectedPages[index][i+3]=255;
-      }
       const auto& cell=descriptor.cells[index];
       for(int y=0;y<cell.crop[3];++y) for(int x=0;x<cell.crop[2];++x) {
         const auto gray=static_cast<std::uint8_t>(61+x*17+y*23);
         const auto offset=(static_cast<std::size_t>(cell.atlas[1]+y)*7+cell.atlas[0]+x)*4;
         page[offset]=page[offset+1]=page[offset+2]=gray; page[offset+3]=255;
-        auto* expected=expectedPages[index].data()+(static_cast<std::size_t>(cell.atlas[1]+y)*8+cell.atlas[0]+x)*4;
-        expected[0]=expected[1]=expected[2]=gray; expected[3]=255;
         auto* logical=original.data()+
           (static_cast<std::size_t>(cell.rect[1]+cell.crop[1]+y)*48+cell.rect[0]+cell.crop[0]+x)*4;
         logical[0]=logical[1]=logical[2]=gray; logical[3]=255;
@@ -117,48 +109,23 @@ int main() {
     auto image=images.loadPng(root/"compact-source.png");
     require(image.has_value(),"compact image load failed");
     for(int tick=0;tick<61;++tick) images.update();
-    const auto first=images.resolveCompactRegion(image->handle,0,0,16,12);
-    require(first && first->contentBounds==std::array<float,4>{2,3,4,5} &&
-      first->atlasOffset==std::array<float,2>{-1,-2} && first->logicalWidth==48 && first->logicalHeight==12,
-      "compact logical bounds changed");
-    require(readGpu(first->image)==expectedPages[0],"compact page lost exact crop or fill pixels");
-    const auto creates=images.textureCreates(),uploads=images.textureUploadBytes();
-    require(images.resolveCompactRegion(image->handle,1,1,12,8).has_value() &&
-      images.textureCreates()==creates && images.textureUploadBytes()==uploads && images.preparedPageDecodes()==2,
-      "compact reuse uploaded or decoded again");
-    const auto second=images.resolveCompactRegion(image->handle,16,0,16,12);
-    require(second && second->indexX==first->indexX && second->indexY==first->indexY &&
-      second->phaseX==first->phaseX && second->phaseY==first->phaseY && readGpu(second->image)==expectedPages[1],
-      "compact pages did not share exact lookup tables");
-    require(images.textureCreates()==6 && images.gpuBytes()==608 && images.textureUploadBytes()==608 &&
-      images.preparedRegionReads()==0 && images.preparedMaterializations()==0 && images.inspect(image->handle)->texture==0,
-      "compact realization expanded logical backing or changed accounting");
-    require(!images.resolveCompactRegion(image->handle,32,0,16,12) &&
-      !images.resolveCompactRegion(image->handle,15,0,2,12),"empty or cross-cell compact crop escaped fallback");
-    require(images.readPixelsRegion(image->handle,0,0,48,12)->rgba==original,"compact upload modified CPU content");
-    const std::array<GLuint,6> textures{first->image.texture,second->image.texture,
-      first->indexX,first->indexY,first->phaseX,first->phaseY};
-    require(images.beginUse(image->handle),"compact in-flight use failed");
+    const auto full = images.lookup(image->handle);
+    require(full && readGpu(*full) == original, "fallback lost crop or fill pixels");
+    const auto uploads = images.textureUploadBytes();
+    require(images.lookup(image->handle)->texture == full->texture && images.textureUploadBytes() == uploads,
+      "fallback uploaded twice");
+    require(images.beginUse(image->handle),"fallback in-flight use failed");
     images.release(image->handle); images.setWarmBudgetBytes(0); images.update();
-    for(const auto texture:textures) require(glIsTexture(texture),"compact resources died while in flight");
+    require(glIsTexture(full->texture), "fallback texture died while in flight");
     images.endUse(image->handle); images.update();
-    for(const auto texture:textures) require(!glIsTexture(texture),"compact resources outlived owner");
-    require(images.gpuBytes()==0 && images.cpuBytes()==0,"compact ownership accounting leaked");
+    require(!glIsTexture(full->texture) && images.gpuBytes()==0 && images.cpuBytes()==0,
+      "fallback texture outlived owner");
     image=images.loadPng(root/"compact-source.png");
-    const auto beforeMutation=images.resolveCompactRegion(image->handle,0,0,16,12);
-    require(beforeMutation.has_value(),"compact reacquisition failed");
     const std::vector<std::uint8_t> replacement(original.size(),255);
     require(images.updateRgba(image->handle,replacement.data()) && !images.hasPreparedBacking(image->handle) &&
-      !images.resolveCompactRegion(image->handle,0,0,16,12) && !glIsTexture(beforeMutation->indexX) &&
-      readGpu(*images.lookup(image->handle))==replacement,"compact mutation retained stale resources or pixels");
+      readGpu(*images.lookup(image->handle))==replacement,"mutation retained stale prepared pixels");
     images.release(image->handle); images.update();
-    require(images.gpuBytes()==0 && images.cpuBytes()==0,"compact mutation accounting leaked");
-    descriptor.cells[0].crop[0]=1;
-    require(images.installPrepared(root/"compact-source.png",root,descriptor),"border compact preparation failed");
-    image=images.loadPng(root/"compact-source.png");
-    require(image && !images.resolveCompactRegion(image->handle,0,0,16,12) && images.gpuBytes()==0,
-      "border content escaped compact fallback");
-    images.release(image->handle); images.update();
+    require(images.gpuBytes()==0 && images.cpuBytes()==0,"mutation accounting leaked");
   }
   for (int codec = 0; codec < 3; ++codec) for (int variant = 0; variant < 6; ++variant) {
     pmjs::ImageStore images;
@@ -254,8 +221,8 @@ int main() {
               images.textureUploadBytes()==uploads,"resident crop backing uploaded twice");
     }
     if(variant==0) {
-      require(images.gpuBytes()==2*24*8 && images.textureUploadBytes()==2*(9+8),"crop allocation or upload accounting failed");
-      require(images.preparedRegionReads()==0 && images.preparedPageDecodes()==2,"crop realization expanded CPU image or repeated page decode");
+      require(images.gpuBytes()==2*24*8*4 && images.textureUploadBytes()==2*24*8*4,"fallback allocation or upload accounting failed");
+      require(images.preparedPageDecodes()==2,"fallback repeated page decode");
       require(images.readPixelsRegion(image->handle,0,0,24,8)->rgba==original,"crop upload changed straight CPU pixels");
       std::vector<std::uint8_t> replacement(24*8*4);
       for(std::size_t i=0;i<replacement.size();i+=4) {
@@ -295,7 +262,7 @@ int main() {
           expected[i+channel]=(expected[i+channel]*expected[i+3]+127)/255;
       require(region && readGpu(region->image)==expected,"grayscale prepared page changed RGBA bytes");
     }
-    require(images.gpuBytes()==2*10*6*(opaque ? 1 : 2),"grayscale page lost compact backing");
+    require(images.gpuBytes()==2*10*6*4,"grayscale page allocation differs");
     require(images.readPixelsRegion(image->handle,0,0,8,4)->rgba==original,
             "premultiplied page upload modified retained straight pixels");
     const auto full=images.lookupPremultiplied(image->handle);

@@ -34,7 +34,8 @@ function draw(image, source, effect = 0, scale = 1) {
 
 test('large prepared frames fit by trimming only zero exterior pixels', async () => {
   native.initialize({ gameRoot: root, width: 180, height: 180,
-    windowTitle: 'large prepared frames', preparedFrameCacheBytes: 4096 });
+    windowTitle: 'large prepared frames', preparedPageSplitThresholdBytes: 4096 });
+  assert.equal(native.images.memory().preparedPageSplitThresholdBytes, 4096);
   native.render.setClearColor(0.1, 0.2, 0.3, 1);
   let original, prepared;
   try {

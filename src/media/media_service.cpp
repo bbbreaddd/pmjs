@@ -565,7 +565,7 @@ bool MediaService::fade(std::uint32_t handle, float from, float to,
   voice->mix.absoluteGainEnvelope = absolute;
   const double frames = duration * 48000;
   voice->mix.gainStep = frames > 0 ? (voice->mix.targetGain - voice->mix.gain) / frames : 0;
-  if (frames <= 0) { voice->mix.gain = voice->mix.targetGain;
+  if (frames <= 0 || voice->mix.gain == voice->mix.targetGain) { voice->mix.gain = voice->mix.targetGain;
     if (stopWhenFinished && voice->mix.gain <= 0) voice->mix.playing = false; }
   return true;
 }

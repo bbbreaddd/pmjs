@@ -151,6 +151,16 @@ test('an explicit notification during dispatch preserves a following turn', () =
   assert.equal(run(context, 'a.calls'), 3);
 });
 
+test('an earlier event can override a sleeper before its turn without an explicit wake', () => {
+  const context = fixture();
+  run(context, `new Scene_Map().start();$gameMap.updateEvents();
+    a.update=function(){ b.update=function(){ this.calls++; }; };
+    $gameMap.updateEvents();$gameMap.updateEvents();`);
+  assert.equal(run(context, 'b.calls'), 3);
+  run(context, 'delete a.update; delete b.update; $gameMap.updateEvents(); $gameMap.updateEvents();');
+  assert.equal(run(context, 'b.calls'), 4);
+});
+
 test('checkStop observes elapsed idle ticks without waking an event',()=>{
  const context=fixture();
  run(context,'new Scene_Map().start();for(var i=0;i<20;i++)$gameMap.updateEvents();');

@@ -35,32 +35,12 @@ function bitmap(ready = false) {
   };
 }
 
-test('map readiness waits for every requested copy template before event initialization', () => {
-  const templates = [];
-  templates[1] = null; templates[8] = null;
-  let map = null, checks = 0, error = null;
-  const DataManager = { isMapLoaded() {
-    checks++;
-    if (error) throw error;
-    return !!map;
-  } };
-  const h = adapter('yanfly/event-copier', { DataManager, Yanfly: { PreloadedMaps: templates } });
+test('unqualified Event Copier implementations keep their own map readiness behavior', () => {
+  const isMapLoaded = () => true;
+  const DataManager = { isMapLoaded };
+  const h = adapter('yanfly/event-copier', { DataManager, Yanfly: { PreloadedMaps: [null] } });
   h.install();
-  assert.equal(DataManager.isMapLoaded(), false);
-  map = { events: [{ copyMap: 1, copyEvent: 2 }] };
-  assert.equal(DataManager.isMapLoaded(), false);
-  templates[8] = { events: [] };
-  assert.equal(DataManager.isMapLoaded(), false);
-  templates[1] = { events: [null, null, { trigger: 3, pages: [{ commands: ['barrier'] }] }] };
-  assert.equal(DataManager.isMapLoaded(), true);
-  const events = map.events.map(event => templates[event.copyMap].events[event.copyEvent]);
-  assert.equal(events[0].trigger, 3);
-  assert.deepEqual(events[0].pages[0].commands, ['barrier']);
-  templates[9] = null;
-  assert.equal(DataManager.isMapLoaded(), false);
-  error = new Error('failed template request');
-  assert.throws(() => DataManager.isMapLoaded(), value => value === error);
-  assert.equal(checks, 6);
+  assert.equal(DataManager.isMapLoaded, isMapLoaded);
 });
 
 function bustFixture() {

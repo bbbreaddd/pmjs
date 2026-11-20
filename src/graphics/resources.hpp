@@ -296,16 +296,13 @@ class ImageStore {
   const std::unordered_map<std::string, std::uint64_t>& sceneryBackingRejections() const {
     return sceneryBackingRejections_;
   }
-  // Frame textures use ordinary sampling with approximate filtering.
-  std::optional<SpriteImageRegion> resolvePreparedFrameRegion(
-      ImageHandle handle, float x, float y, float width, float height,
-      bool premultiplied = true, bool linearPalette = false, bool cacheSource = false);
   void setPreparedFrameCacheBudget(std::size_t bytes);
+  std::size_t preparedPageSplitThresholdBytes() const { return preparedFrameBudgetBytes_; }
   std::size_t preparedFrameCacheBudget() const { return preparedFrameBudgetBytes_; }
-  std::size_t preparedFrameCacheBytes() const { return preparedFrameBytes_; }
-  std::size_t preparedFrameResidentBytes() const { return preparedFrameResidentBytes_; }
-  std::size_t preparedFrameEvictedBytes() const { return preparedFrameResidentBytes_ - preparedFrameBytes_; }
-  std::size_t preparedFramePeakResidentBytes() const { return preparedFramePeakResidentBytes_; }
+  std::size_t preparedFrameCacheBytes() const { return 0; }
+  std::size_t preparedFrameResidentBytes() const { return 0; }
+  std::size_t preparedFrameEvictedBytes() const { return 0; }
+  std::size_t preparedFramePeakResidentBytes() const { return 0; }
   void setPalettizationEnabled(bool enabled) { palettizationEnabled_ = enabled; }
   void setCompactSamplingEnabled(bool enabled) { compactSamplingEnabled_ = enabled; }
   void setPreparedCropUploadsEnabled(bool enabled) { preparedCropUploadsEnabled_ = enabled; }
@@ -335,8 +332,8 @@ class ImageStore {
   std::uint64_t renderReadbacks() const { return renderReadbacks_; }
   std::uint64_t preparedFrameUploadBytes() const { return preparedFrameUploadBytes_; }
   std::uint64_t paletteReadbacks() const { return paletteReadbacks_; }
-  std::uint64_t preparedFrameCacheMisses() const { return preparedFrameMisses_; }
-  std::uint64_t preparedFrameCacheEvictions() const { return preparedFrameEvictions_; }
+  std::uint64_t preparedFrameCacheMisses() const { return 0; }
+  std::uint64_t preparedFrameCacheEvictions() const { return 0; }
   std::optional<CompactImageRegion> resolveCompactRegion(
       ImageHandle handle, float x, float y, float width, float height);
   std::optional<ImagePixels> readPixelsRegion(ImageHandle handle,
@@ -448,30 +445,15 @@ class ImageStore {
   std::uint64_t preparedFrameConversions_ = 0, preparedFrameBypasses_ = 0;
   mutable std::uint64_t paletteReadbacks_ = 0;
   double preparedFrameConversionMs_ = 0;
-  struct PreparedFrame {
-    const PreparedBacking* owner;
-    std::array<int, 4> source;
-    std::array<int, 4> storage;
-    ImageHandle image;
-    bool premultiplied;
-    std::size_t bytes;
-    std::uint64_t lastUsed;
-  };
-  std::vector<PreparedFrame> preparedFrames_;
   // Keep evicted textures alive until all queued draws from this frame finish.
   std::vector<ImageHandle> activePreparedFrames_;
   std::size_t preparedFrameBudgetBytes_ = defaultPreparedFrameCacheBytes;
-  std::size_t preparedFrameBytes_ = 0;
-  std::size_t preparedFrameResidentBytes_ = 0, preparedFramePeakResidentBytes_ = 0;
   bool palettizationEnabled_ = false;
   bool compactSamplingEnabled_ = true, preparedCropUploadsEnabled_ = true;
   std::uint64_t compactUploadFailures_ = 0, compactTextureUploads_ = 0;
   std::uint64_t preparedCropUploads_ = 0, preparedCropUploadBytes_ = 0;
   std::uint64_t blockTextureUploads_ = 0, blockUploadFailures_ = 0, blockRegions_ = 0;
   std::uint64_t preparedFrameClock_ = 0, preparedFrameHits_ = 0;
-  std::uint64_t preparedFrameMisses_ = 0, preparedFrameEvictions_ = 0;
-  void clearPreparedFrames(const PreparedBacking* owner);
-  void trimPreparedFrames(std::size_t targetBytes);
   struct TilePrototype;
   struct TileCatalog;
   struct TilePages;
@@ -500,7 +482,6 @@ class ImageStore {
     bool opaque = false;
     std::uint32_t texture = 0;
     std::shared_ptr<SharedTexture> sharedTexture, sharedPremultipliedTexture;
-    std::size_t preparedFrameBytes = 0;
     std::shared_ptr<PreparedBacking> prepared;
     std::shared_ptr<TileBacking> tiles;
     int width = 0;

@@ -461,7 +461,7 @@ function createGameFilesystem(host, root) {
         }
         if ((flag === 'wx' || flag === 'ax') && host.exists(name)) throw error('EEXIST', name);
         if (flag === 'a') {
-          const previous = host.readBytes(name);
+          const previous = options.readPrevious ? options.readPrevious() : host.readBytes(name);
           files.writeBytes(destination, previous === null
             ? contents : Buffer.concat([Buffer.from(previous), Buffer.from(contents)]));
         } else {

@@ -103,6 +103,24 @@ ImageChannelStorage grayscaleStorage(int channels) {
   return {};
 }
 
+struct UnpackState {
+  static constexpr std::array<GLenum, 4> names{GL_UNPACK_ALIGNMENT, GL_UNPACK_ROW_LENGTH,
+    GL_UNPACK_SKIP_ROWS, GL_UNPACK_SKIP_PIXELS};
+  std::array<GLint, names.size()> values{};
+  GLint binding = 0, buffer = 0;
+  UnpackState() {
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &binding);
+    glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &buffer);
+    for (std::size_t i = 0; i < names.size(); ++i) glGetIntegerv(names[i], &values[i]);
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+    for (std::size_t i = 0; i < names.size(); ++i) glPixelStorei(names[i], i == 0 ? 1 : 0);
+  }
+  ~UnpackState() {
+    glBindTexture(GL_TEXTURE_2D, binding);
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, buffer);
+    for (std::size_t i = 0; i < names.size(); ++i) glPixelStorei(names[i], values[i]);
+  }
+};
 
 std::uint32_t uploadTexture(int width, int height, const void* rgba, ImageChannelStorage storage,
                             std::uint32_t texture = 0, bool packed = false) {
@@ -620,8 +638,6 @@ struct ImageStore::PreparedBacking {
   std::vector<Page> pages;
   std::vector<ImageHandle> cellImages;
   std::vector<std::size_t> recentCells;
-  std::vector<std::array<int,4>> evictedFrames;
-  bool frameCacheDisabled = false;
   std::size_t gpuBytes = 0;
   std::optional<bool> compactEligible;
   bool compactRealizationFailed = false;
@@ -1073,22 +1089,7 @@ bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
   }
   auto upload = [&](const TextureLayout& l, bool artifact) {
     if (l.kind == TextureKind::Channels ? !compactSamplingEnabled_ : !palettizationEnabled_) return false;
-    struct UnpackState {
-      std::array<GLenum,4> names{GL_UNPACK_ALIGNMENT,GL_UNPACK_ROW_LENGTH,GL_UNPACK_SKIP_ROWS,GL_UNPACK_SKIP_PIXELS};
-      std::array<GLint,4> values{};
-      GLint binding = 0, buffer = 0;
-      UnpackState() {
-        glGetIntegerv(GL_TEXTURE_BINDING_2D,&binding);
-        glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING,&buffer);
-        for (std::size_t i=0;i<names.size();++i) glGetIntegerv(names[i],&values[i]);
-        glBindBuffer(GL_PIXEL_UNPACK_BUFFER,0);
-        for (std::size_t i=0;i<names.size();++i) glPixelStorei(names[i],i == 0 ? 1 : 0);
-      }
-      ~UnpackState() {
-        glBindTexture(GL_TEXTURE_2D,binding); glBindBuffer(GL_PIXEL_UNPACK_BUFFER,buffer);
-        for (std::size_t i=0;i<names.size();++i) glPixelStorei(names[i],values[i]);
-      }
-    } unpack;
+    const UnpackState unpack;
     GLint maximum = 0; glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maximum);
     for (const auto& p : l.planes) if (p.width > unsigned(maximum) || p.height > unsigned(maximum)) return false;
     struct Textures {
@@ -1350,8 +1351,6 @@ std::size_t ImageStore::residentBytes(const Slot& slot) const {
   std::size_t ownedCells = 0;
   if (slot.prepared) for (const auto image : slot.prepared->cellImages)
     if (inspect(image)) ownedCells += residentBytes(slots_[(image & indexMask)-1U]);
-  if (slot.prepared) for (const auto& frame : preparedFrames_)
-    if (frame.owner == slot.prepared.get()) ownedCells += frame.bytes;
   const auto sharedMipBytes = (slot.sharedTexture ? slot.sharedTexture->mipmapBytes : 0U) +
       (slot.sharedPremultipliedTexture ? slot.sharedPremultipliedTexture->mipmapBytes : 0U);
   if (slot.prepared) {
@@ -1962,9 +1961,6 @@ void ImageStore::destroySlot(std::size_t index) {
   clearRetiredTextures(slot);
   slot.palette.reset();
   slot.paletteChecked = false;
-  preparedFrameResidentBytes_ -= slot.preparedFrameBytes;
-  slot.preparedFrameBytes = 0;
-  if (slot.prepared) clearPreparedFrames(slot.prepared.get());
   pixelReads_.erase(makeHandle(index, slot.generation));
   slot.astc.reset();
   slot.sceneryFullMaterialized = false;
@@ -2118,7 +2114,6 @@ void ImageStore::clearPrepared(Slot& slot) {
   if (slot.tiles) ++textureEpoch_;
   slot.tiles.reset();
   if (!slot.prepared) return;
-  clearPreparedFrames(slot.prepared.get());
   if (slot.prepared->compactTables[0] || std::any_of(slot.prepared->blockTextures.begin(),
       slot.prepared->blockTextures.end(), [](const auto& textures) { return textures.atlas || textures.table; })) ++textureEpoch_;
   slot.prepared->clearBlockTextures();
@@ -2531,7 +2526,7 @@ std::vector<std::array<float,4>> ImageStore::preparedSpriteParts(ImageHandle han
   const auto& backing = *slot.prepared;
   const double bytes = (std::ceil(source[2])+2*backing.descriptor.halo+1)*
     (std::ceil(source[3])+2*backing.descriptor.halo+1)*4;
-  if (!backing.frameCacheDisabled && bytes<=preparedFrameBudgetBytes_) return {};
+  if (bytes <= preparedPageSplitThresholdBytes()) return {};
   std::vector<std::array<float,4>> parts;
   double area = 0;
   for (const auto& cell : backing.descriptor.cells) {
@@ -3047,40 +3042,8 @@ std::optional<SpriteImageRegion> ImageStore::resolveSpriteRegion(ImageHandle han
   return std::nullopt;
 }
 
-void ImageStore::trimPreparedFrames(std::size_t targetBytes) {
-  while (preparedFrameBytes_ > targetBytes && !preparedFrames_.empty()) {
-    const auto oldest = std::min_element(preparedFrames_.begin(), preparedFrames_.end(),
-      [](const auto& a, const auto& b) { return a.lastUsed < b.lastUsed; });
-    const auto image = oldest->image;
-    auto& backing = *const_cast<PreparedBacking*>(oldest->owner);
-    if (backing.evictedFrames.size() == 16) backing.frameCacheDisabled = true;
-    else backing.evictedFrames.push_back(oldest->source);
-    preparedFrameBytes_ -= oldest->bytes;
-    preparedFrames_.erase(oldest);
-    ++preparedFrameEvictions_;
-    release(image);
-  }
-}
-
 void ImageStore::setPreparedFrameCacheBudget(std::size_t bytes) {
   preparedFrameBudgetBytes_ = bytes;
-  trimPreparedFrames(bytes);
-}
-
-void ImageStore::clearPreparedFrames(const PreparedBacking* owner) {
-  for (auto it = preparedFrames_.begin(); it != preparedFrames_.end();) {
-    if (it->owner != owner) { ++it; continue; }
-    const auto image = it->image;
-    preparedFrameBytes_ -= it->bytes;
-    it = preparedFrames_.erase(it);
-    release(image);
-  }
-}
-
-
-std::optional<SpriteImageRegion> ImageStore::resolvePreparedFrameRegion(ImageHandle,
-    float, float, float, float, bool, bool, bool) {
-  return std::nullopt;
 }
 
 std::optional<BlockImageRegion> ImageStore::resolveBlockRegion(ImageHandle handle, bool premultiplied) {
@@ -3127,6 +3090,7 @@ bool ImageStore::materialize(Slot& slot, bool premultiplied) {
   std::size_t slotIndex = 0; while (slotIndex < slots_.size() && &slots_[slotIndex] != &slot) ++slotIndex;
   const auto handle = makeHandle(slotIndex, slot.generation);
   {
+    const UnpackState unpack;
     while (glGetError() != GL_NO_ERROR) {}
     glGenTextures(1, &texture); glBindTexture(GL_TEXTURE_2D, texture);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);

@@ -39,6 +39,16 @@ test('append propagates direct write failures without erasing existing data', ()
   assert.equal(storage.readText('log'), 'retained');
 });
 
+test('explicit truncate and exclusive creation flags replace the default append mode', () => {
+  const { storage, guest } = fixture();
+  guest.writeFileSync('/save/log', 'old');
+  guest.appendFileSync('/save/log', 'new', { flag: 'w' });
+  assert.throws(() => guest.appendFileSync('/save/log', 'duplicate', { flag: 'ax' }), { code: 'EEXIST' });
+  assert.equal(storage.readText('log'), 'new');
+  guest.appendFileSync('/save/first', 'first write', { flag: 'wx' });
+  assert.equal(storage.readText('first'), 'first write');
+});
+
 test('append avoids reading existing save files and preserves virtual initial contents', () => {
   const { storage, guest, context } = fixture();
   guest.writeFileSync('/save/existing', 'large existing value');

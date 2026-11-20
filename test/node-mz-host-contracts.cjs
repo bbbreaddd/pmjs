@@ -61,7 +61,7 @@ try {
     const overlay = presented();
     assert.notDeepEqual(overlay, before, 'error must be visible while the game ticker is stopped');
     assert.match(g._errorPrinter.innerHTML, /LoadingError/);
-    assert.equal(g._errorPrinter.children.length, 1);
+    assert.equal(g._errorPrinter.children.filter(child => child.id === 'retryButton').length, 1);
     if (input === 'keyboard') c.document.dispatchEvent({ type: 'keydown', keyCode: 13, preventDefault() {} });
     if (input === 'pointer') send([pointer('mousedown', 32, 16), pointer('mouseup', 32, 16)]);
     if (input === 'controller') c.__pmjsReceiveInput({ gamepads: [{ buttonsPressed: [0], buttonsDown: [0], buttonsReleased: [], axes: [0, 0, 0, 0] }] });

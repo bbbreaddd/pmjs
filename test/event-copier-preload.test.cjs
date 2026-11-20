@@ -11,17 +11,19 @@ const patch = fs.readFileSync(require.resolve('../js/pmjs-plugins/yanfly/event-c
 const plugin = `
 var scriptAtLoad = document.currentScript.src;
 Number.prototype.clamp = function(min, max) { return Math.min(Math.max(this, min), max); };
-var Yanfly = { PreloadedMaps: [], loadMapData: function(mapId) {
+var Yanfly = { PreloadedMaps: [] };
+Yanfly.loadMapData = function(mapId) {
   mapId = mapId.clamp(1, 999);
   if (Yanfly.PreloadedMaps[mapId]) return;
   Yanfly.PreloadedMaps[mapId] = null;
-  return read(mapId, function(err, data) {
-    if (err) throw err;
+  var fs = { readFile: read };
+  return fs.readFile(mapId, (err, data) => {
     Yanfly.PreloadedMaps[mapId] = JSON.parse(data);
   });
-}, SetupParameters: function() {
+};
+Yanfly.SetupParameters = function() {
   for (var i = 0; i < ids.length; i++) Yanfly.loadMapData(ids[i]);
-} };
+};
 var originalLoad = Yanfly.loadMapData;
 Yanfly.SetupParameters();
 `;
@@ -74,9 +76,11 @@ test('startup reads and parses each template map once and retains pending readin
   assert.deepEqual(h.requests.map(request => request.id), [2, 3]);
   assert.equal(h.context.Yanfly.PreloadedMaps[2], null);
   assert.equal(h.context.Yanfly.PreloadedMaps[3], null);
+  assert.equal(h.context.DataManager.isMapLoaded(), false);
   for (const request of h.requests) request.callback(null, JSON.stringify({ id: request.id, events: [null, { id: 1 }] }));
   assert.equal(h.context.Yanfly.PreloadedMaps[2].events[1].id, 1);
   assert.equal(h.context.Yanfly.PreloadedMaps[3].id, 3);
+  assert.equal(h.context.DataManager.isMapLoaded(), true);
   assert.equal(h.context.Yanfly.loadMapData, h.context.originalLoad);
   h.context.Yanfly.loadMapData(2);
   assert.equal(h.requests.length, 2);
@@ -98,14 +102,16 @@ test('MZ forwards source transforms through its normal plugin and script loaders
   assert.equal(h.context.laterLoaded, true);
 });
 
-test('read failures and invalid JSON propagate and do not leave a request guard installed', () => {
-  const h = fixture(); h.load();
+test('asynchronous read and parse failures surface from map readiness even with deduplication disabled', () => {
   const failure = new Error('read failed');
-  assert.throws(() => h.requests[0].callback(failure), error => error === failure);
-  assert.throws(() => h.requests[1].callback(null, 'invalid JSON'), { name: 'SyntaxError' });
-  assert.equal(h.context.Yanfly.loadMapData, h.context.originalLoad);
-  h.context.Yanfly.loadMapData(2);
-  assert.equal(h.requests.length, 3);
+  for (const [enabled, error, data] of [[true, failure, null], [false, null, 'invalid JSON']]) {
+    const h = fixture({ enabled }); h.load();
+    h.requests[0].callback(error, data);
+    assert.throws(() => h.context.DataManager.isMapLoaded(), caught =>
+      /Cannot load Event Copier template map 2/.test(caught.message) &&
+      (error ? caught.cause === error : caught.cause.name === 'SyntaxError'));
+    assert.equal(h.context.Yanfly.loadMapData, h.context.originalLoad);
+  }
   const thrown = fixture({ syncError: failure });
   thrown.load();
   assert.equal(thrown.reported[0], failure);

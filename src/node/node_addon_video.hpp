@@ -16,7 +16,7 @@ struct Video {
   ~Video();
   void request(double targetTime);
   void resetForSeek();
-  std::optional<pmjs::VideoFrame> take();
+  std::optional<pmjs::VideoFrame> take(double targetTime, bool& completed);
   bool ended(double timestamp);
   pmjs::VideoDecodeStats workerStats();
   double workerQueueMs();
@@ -31,7 +31,7 @@ struct Video {
   std::unique_ptr<pmjs::VideoDecoderSession> decoder;
   std::mutex mutex;
   std::condition_variable condition;
-  std::optional<double> requested;
+  std::optional<double> requested, completedTarget;
   std::chrono::steady_clock::time_point requestedAt;
   std::optional<pmjs::VideoFrame> ready;
   std::exception_ptr failure;

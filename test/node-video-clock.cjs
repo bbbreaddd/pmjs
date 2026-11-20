@@ -36,9 +36,9 @@ async function main() {
         calls.push({ loop, time });
         return native.media.playAudio(handle, loop, time);
       },
-      updateVideo(handle, time) {
+      updateVideo(handle, time, waitForFrame = false) {
         targets.push(time);
-        return native.media.updateVideo(handle, time);
+        return native.media.updateVideo(handle, time, waitForFrame);
       },
     } },
     performance: { now: () => now },
@@ -56,6 +56,14 @@ async function main() {
   let ended = 0;
   video.dispatchEvent = event => { if (event.type === 'ended') ++ended; };
   try {
+    video.currentTime = video.duration * 0.75;
+    assert.equal(context.PMJS.web.video.update(), 1);
+    const seekDeadline = performance.now() + 2000;
+    while (context.PMJS.web.video.update() && performance.now() < seekDeadline) await delay(10);
+    assert.equal(context.PMJS.web.video.update(), 0);
+    assert.ok(native.media.updateVideo(resource.handle, video.currentTime) > 0, 'paused seek uploads a frame');
+    assert.equal(video.paused, true);
+    video._currentTime = 0;
     native.media.setAudioSuspended(audio.handle, true);
     await video.play();
     const seek = resource.duration / 2;
