@@ -370,7 +370,10 @@ var fsModule = {
     if (!host) throw new Error('EACCES: ' + path);
     if (!fsModule.existsSync(path)) throw Object.assign(new Error('ENOENT: ' + path), { code: 'ENOENT' });
     if (fsModule.statSync(path).isDirectory()) throw Object.assign(new Error('EISDIR: ' + path), { code: 'EISDIR' });
-    host.remove(writable !== null ? writable : gameReadPath(path));
+    var files = NativeHost.runtime && NativeHost.runtime.gameFiles;
+    var resolved = writable !== null ? writable : gameReadPath(path);
+    if (writable === null && files && typeof files.remove === 'function') files.remove(resolved);
+    else host.remove(resolved);
   },
   unlink: function(path, callback) {
     var error = null;
@@ -386,7 +389,9 @@ var fsModule = {
       throw error;
     }
     var host = source !== null ? NativeHost.storage : NativeHost.fs;
-    host.rename(source !== null ? source : gameReadPath(from),
+    var files = NativeHost.runtime && NativeHost.runtime.gameFiles;
+    if (source === null && files && typeof files.rename === 'function') files.rename(gameReadPath(from), gameReadPath(to));
+    else host.rename(source !== null ? source : gameReadPath(from),
       destination !== null ? destination : gameReadPath(to));
   },
   rename: function(from, to, callback) {

@@ -86,7 +86,7 @@
       }
       try {
         var options = PMJS.config.omori || {};
-        if (options.decrypted) {
+        if (options.decrypted || nw.App.argv.indexOf('test') >= 0) {
           nw.App.argv = ['test'].concat(nw.App.argv.filter(function(argument) { return argument !== 'test'; }));
           var virtualFiles = PMJS.config.virtualFiles = PMJS.config.virtualFiles || {};
           virtualFiles.extensionAliases = Object.assign({}, virtualFiles.extensionAliases,
@@ -96,7 +96,11 @@
           delete languages['.yaml'];
           virtualFiles.directoryEntryAliases.languages = languages;
         }
-        else if (!nw.App.argv.length && options.encryptionKeyFile) nw.App.argv = ['--' + NativeHost.fs.readText(options.encryptionKeyFile).trim()];
+        else {
+          var keyArgument = nw.App.argv.find(function(argument) { return /^(?:--)?[a-f0-9]{32}$/i.test(argument); });
+          if (!keyArgument) keyArgument = '--' + NativeHost.runtime.omoriFiles.getEncryptionKey();
+          nw.App.argv = [keyArgument].concat(nw.App.argv.filter(function(argument) { return argument !== keyArgument; }));
+        }
         for (var script of host.scripts) {
           if (script.path) { NativeHost.runtime.loadScript(script.path); adapt(script.path); }
           else if (script.source.trim()) NativeHost.runtime.runScript(script.source);

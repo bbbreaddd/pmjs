@@ -123,6 +123,30 @@ test('test-mode startup preserves loader flags and avoids duplicate test argumen
   }
 });
 
+test('encrypted startup obtains the shared game key and preserves loader flags', async () => {
+  const key = 'a'.repeat(32), explicit = '--' + 'b'.repeat(32);
+  for (const args of [[], ['--no-mods'], ['--trace-vfs', explicit]]) {
+    const f = guestFixture('globalThis.receivedArguments = nw.App.argv.slice(); _start_game();', '', args);
+    f.scope.PMJS.config.omori.decrypted = false;
+    f.write('js/main.js', 'const key = "' + key + '";');
+    await f.start();
+    assert.deepEqual(Array.from(f.scope.receivedArguments), args.includes(explicit)
+      ? [explicit, '--trace-vfs'] : ['--' + key, ...args]);
+  }
+  const f = guestFixture('globalThis.receivedArguments = nw.App.argv.slice(); _start_game();');
+  f.scope.PMJS.config.omori.decrypted = false;
+  f.write('runtime-config.json', JSON.stringify({ omori: { encryptionKeyFile: 'key.txt' } }));
+  f.options.config = path.join(f.gameRoot, 'runtime-config.json');
+  f.write('key.txt', key + '\n');
+  f.prepare();
+  await f.start();
+  assert.equal(f.scope.receivedArguments[0], '--' + key);
+  const testMode = guestFixture('globalThis.receivedArguments = nw.App.argv.slice(); _start_game();', '', ['--no-mods', 'test']);
+  testMode.scope.PMJS.config.omori.decrypted = false;
+  await testMode.start();
+  assert.deepEqual(Array.from(testMode.scope.receivedArguments), ['test', '--no-mods']);
+});
+
 test('async injection hooks finish before plugin setup and failures reject startup', async () => {
   for (const fail of [false, true]) {
     const f = guestFixture(`

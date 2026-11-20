@@ -201,7 +201,7 @@ NativeAudioVoice.prototype.fetchEncrypted = function(encryptedPath, decryptFn) {
       if (request.status >= 400) throw new Error('HTTP status ' + request.status);
       var bytes = decryptFn(request.response);
       if (generation !== this.loadGeneration) return;
-      this.loadBytes(bytes, generation, { resourcePath: encryptedPath });
+      this.loadBytes(bytes, generation, { resourcePath: resolveGameFile(encryptedPath) });
     } catch (error) {
       this.failLoad(encryptedPath, error, generation);
     }

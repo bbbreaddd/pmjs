@@ -46,12 +46,26 @@ function createGameFiles({ native, read, readAsync = async name => read(name), c
     }
     return bytes;
   }
-  function source(name) {
+  function candidates(name) {
     const logical = canonical(name);
     const suffix = path.extname(logical).toLowerCase();
     const variants = Object.keys(extensions).filter(extension => extensions[extension] === suffix)
       .map(extension => logical.slice(0, -suffix.length) + (/^\.(kel|aubrey|hero|pluto|omori)$/.test(extension) ? extension.toUpperCase() : extension));
-    return [logical, ...variants].find(candidate => native.fs.exists(candidate));
+    return [logical, ...variants];
+  }
+  function source(name) {
+    return candidates(name).find(candidate => native.fs.exists(candidate));
+  }
+  function remove(name) {
+    for (const candidate of candidates(name)) {
+      if (native.fs.exists(candidate)) native.fs.remove(candidate);
+    }
+  }
+  function rename(from, to) {
+    const input = source(from) || canonical(from), output = source(to) || canonical(to);
+    native.fs.rename(input, output);
+    const fold = name => canonical(name).replace(/[A-Z]/g, letter => letter.toLowerCase());
+    if (fold(from) !== fold(to)) remove(from);
   }
   function get(name) {
     const file = source(name);
@@ -76,7 +90,8 @@ function createGameFiles({ native, read, readAsync = async name => read(name), c
       dispose() { output.dispose(); }
     };
   }
-  return { read: get, readAsync: getAsync, resolve: source, exists: name => !!source(name), createLayer: layer,
+  return { read: get, readAsync: getAsync, resolve: source, remove, rename, getEncryptionKey: key,
+    exists: name => !!source(name), createLayer: layer,
     decodeText: bytes => decode('text.yaml', bytes), decodeMedia: bytes => decode('image.png', bytes) };
 }
 module.exports = { createGameFiles };

@@ -14,6 +14,9 @@ const gameRoot = path.join(base, 'game');
 fs.mkdirSync(path.join(gameRoot, 'data'), { recursive: true });
 fs.writeFileSync(path.join(gameRoot, 'data/Original.txt'), 'original');
 fs.writeFileSync(path.join(gameRoot, 'data/Keep.txt'), 'keep');
+fs.mkdirSync(path.join(gameRoot, 'aliases'));
+fs.writeFileSync(path.join(gameRoot, 'aliases/Alias.json'), '{"value":"replacement"}');
+fs.writeFileSync(path.join(gameRoot, 'aliases/Alias.KEL'), '{"value":"original"}');
 native.initialize({ gameRoot, width: 32, height: 32, windowTitle: 'Writable filesystem' });
 test.after(() => { native.runtime.quit(); fs.rmSync(base, { recursive: true, force: true }); });
 
@@ -32,6 +35,39 @@ function fixture(t) {
   return { root, gameRoot, overlay, host, context, guest: context.fsModule,
     restart() { return createGameFilesystem(native.fs, overlay); } };
 }
+
+function installOmoriFiles(context, host) {
+  const { createGameFiles } = require('../patches/omori/game-files.cjs');
+  const files = createGameFiles({ native: { fs: host }, read: name => host.readBytes(name) });
+  context.NativeHost.fs = host;
+  context.NativeHost.runtime = { gameFiles: { resolve: files.resolve, remove: files.remove, rename: files.rename,
+    readBytes: name => files.exists(name) ? files.read(name) : null } };
+}
+
+test('deleting a logical OMORI file hides every encrypted/plain variant across remounts', t => {
+  const f = fixture(t); installOmoriFiles(f.context, f.host);
+  assert.equal(f.guest.readFileSync('/game/aliases/Alias.KEL', 'utf8'), '{"value":"replacement"}');
+  f.guest.unlinkSync('/game/aliases/Alias.json');
+  installOmoriFiles(f.context, f.restart());
+  for (const name of ['Alias.json', 'Alias.KEL']) {
+    assert.equal(f.guest.existsSync('/game/aliases/' + name), false);
+    assert.throws(() => f.guest.readFileSync('/game/aliases/' + name), { code: 'ENOENT' });
+  }
+  assert.equal(fs.readFileSync(path.join(gameRoot, 'aliases/Alias.KEL'), 'utf8'), '{"value":"original"}');
+  f.guest.writeFileSync('/game/aliases/Alias.json', '{"value":"new"}');
+  assert.equal(f.guest.readFileSync('/game/aliases/Alias.KEL', 'utf8'), '{"value":"new"}');
+});
+
+test('renaming a logical OMORI file does not expose its old encrypted counterpart', t => {
+  const f = fixture(t); installOmoriFiles(f.context, f.host);
+  f.guest.renameSync('/game/aliases/Alias.KEL', '/game/aliases/Moved.KEL');
+  installOmoriFiles(f.context, f.restart());
+  assert.equal(f.guest.existsSync('/game/aliases/Alias.json'), false);
+  assert.equal(f.guest.existsSync('/game/aliases/Alias.KEL'), false);
+  assert.equal(f.guest.readFileSync('/game/aliases/Moved.json', 'utf8'), '{"value":"replacement"}');
+  f.guest.renameSync('/game/aliases/Moved.json', '/game/aliases/moved.KEL');
+  assert.equal(f.guest.readFileSync('/game/aliases/Moved.json', 'utf8'), '{"value":"replacement"}');
+});
 
 test('native readers capture originals and overlays and close descriptors', t => {
   const { host } = fixture(t), files = () => fs.readdirSync('/proc/self/fd').length;

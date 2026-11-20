@@ -108,10 +108,14 @@ function prepare({ native, files }) {
   native.runtime.omoriBackports = {};
   const sheet = 'img/characters/' + sheetName + '.png';
   const data = 'data/Map466.json', map = 'maps/map466.json', atlas = 'img/tilesets/DW_NeighborsRoom.png';
-  let bedroom;
-  if (!files.exists(sheet) && [data, map, atlas].every(name => files.exists(name))) {
-    bedroom = restoreBedroom(JSON.parse(files.read(data)), JSON.parse(files.read(map)));
+  const hasSheet = files.exists(sheet), hasAtlas = files.exists(atlas);
+  let bedroom, mapData;
+  if (files.exists(data)) mapData = JSON.parse(files.read(data));
+  if (mapData && files.exists(map) && (hasSheet || hasAtlas)) {
+    bedroom = restoreBedroom(mapData, JSON.parse(files.read(map)));
   }
+  const needsSheet = !hasSheet && hasAtlas && (bedroom || mapData?.events?.some(event =>
+    event?.pages?.some(page => page.image?.characterName === sheetName)));
   const circlePath = 'data/Map343.json';
   const circle = files.exists(circlePath) ? restoreSummoningCircle(JSON.parse(files.read(circlePath))) : null;
   const systemPath = 'languages/en/System.yaml';
@@ -120,18 +124,18 @@ function prepare({ native, files }) {
     yaml = require(native.fs.resolvePath('js/libs/js-yaml-master/index.js'));
     system = restoreGeneralOptions(yaml.safeLoad(files.read(systemPath).toString('utf8')));
   }
-  if (!bedroom && !circle && !system) return null;
+  if (!bedroom && !needsSheet && !circle && !system) return null;
   const output = files.createLayer('omori-v1');
   try {
     if (bedroom) {
       output.write(data, Buffer.from(JSON.stringify(bedroom.map)));
       output.write(map, Buffer.from(JSON.stringify(bedroom.tiled)));
-      output.write(sheet, makeSheet(native, files.read(atlas)));
     }
+    if (needsSheet) output.write(sheet, makeSheet(native, files.read(atlas)));
     if (circle) output.write(circlePath, Buffer.from(JSON.stringify(circle)));
     if (system) output.write(systemPath, Buffer.from(yaml.dump(system)));
     const result = output.finish();
-    if (bedroom) native.runtime.omoriBackports.sleepingCharacters = true;
+    if (bedroom || needsSheet) native.runtime.omoriBackports.sleepingCharacters = true;
     if (circle) native.runtime.omoriBackports.summoningCircleGuard = true;
     if (system) native.runtime.omoriBackports.generalOptionsSchema = true;
     return result;

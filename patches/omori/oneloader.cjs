@@ -6,7 +6,8 @@ function prepare(options) {
   const { native, read } = options;
   const files = createGameFiles(options);
   native.runtime.omoriFiles = files;
-  native.runtime.gameFiles = { resolve: files.resolve, readBytesAsync: files.readAsync, readBytes: name => files.exists(name) ? files.read(name) : null };
+  native.runtime.gameFiles = { resolve: files.resolve, remove: files.remove, rename: files.rename,
+    readBytesAsync: files.readAsync, readBytes: name => files.exists(name) ? files.read(name) : null };
   native.runtime.readGameScript = name => {
     if (!files.exists(name)) return null;
     let source = files.read(name).toString('utf8');

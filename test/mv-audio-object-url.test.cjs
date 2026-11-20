@@ -315,6 +315,31 @@ test('MV WebAudio delegates encrypted audio to the MV Decrypter', async () => {
   assert.equal(objectUrlsCreated, 0, 'MV decrypted bytes should go directly to native audio');
 });
 
+test('MV encrypted audio identifies the actual source selected by the game file adapter', () => {
+  const requests = [];
+  function Request() {
+    this.status = 200;
+    this.response = Uint8Array.of(1, 2).buffer;
+    requests.push(this);
+  }
+  Request.prototype.open = function(_method, path) { this.path = path; };
+  Request.prototype.send = function() {};
+  const context = contextFor({ hasEncryptedAudio: true,
+    extToEncryptExt: path => path.replace(/\.ogg$/, '.rpgmvo'),
+    decryptArrayBuffer: bytes => bytes }, Request);
+  const resolved = [];
+  context.NativeHost.runtime = { gameFiles: { resolve(path) {
+    resolved.push(path);
+    return 'audio/se/voice.ogg';
+  } } };
+  const audio = new context.WebAudio('audio/se/voice.ogg');
+  requests[0].onload();
+  assert.equal(requests[0].path, 'audio/se/voice.rpgmvo');
+  assert.deepEqual(resolved, ['audio/se/voice.rpgmvo']);
+  assert.equal(context.loadedOptions[0].resourcePath, 'audio/se/voice.ogg');
+  assert.equal(audio.isReady(), true);
+});
+
 test('MV prepared audio loads its logical path and invalidated cache entries use guest decryption', async () => {
   let cached = true;
   const requests = [];

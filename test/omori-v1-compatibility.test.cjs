@@ -55,6 +55,38 @@ test('backport detection is available before mod loading without claiming a game
   assert.deepEqual(Object.keys(scope.PMJS.omori), ['backports']);
 });
 
+test('existing sleeping-character artwork does not suppress the bedroom map backport', () => {
+  const room = bedroom(), written = new Map(), native = { runtime: {} };
+  const input = new Map([
+    ['data/Map466.json', Buffer.from(JSON.stringify(room.map))],
+    ['maps/map466.json', Buffer.from(JSON.stringify(room.tiled))],
+    ['img/characters/$DW_SleepingChars.png', Buffer.from('custom sleeping characters')]
+  ]);
+  const files = { exists: name => input.has(name), read: name => input.get(name),
+    createLayer: () => ({ write(name, bytes) { written.set(name, bytes); },
+      finish() { return { root: 'prepared' }; }, dispose() {} }) };
+  assert.equal(prepare({ native, files }).root, 'prepared');
+  assert.equal(JSON.parse(written.get('data/Map466.json')).events[78].pages[0].image.characterName, '$DW_SleepingChars');
+  assert.equal(JSON.parse(written.get('maps/map466.json')).layers[0].data[16 * 33 + 14], 0);
+  assert.equal(written.has('img/characters/$DW_SleepingChars.png'), false);
+  assert.equal(native.runtime.omoriBackports.sleepingCharacters, true);
+});
+
+test('a missing sleeping-character sheet is restored without rewriting an existing event map', () => {
+  const room = bedroom(), modern = restoreBedroom(room.map, room.tiled), written = new Map();
+  const input = new Map([
+    ['data/Map466.json', Buffer.from(JSON.stringify(modern.map))],
+    ['maps/map466.json', Buffer.from(JSON.stringify(modern.tiled))],
+    ['img/tilesets/DW_NeighborsRoom.png', Buffer.from('tileset')]
+  ]);
+  const native = { runtime: {}, images: { loadBytes: () => ({ handle: 1, width: 512, height: 512 }), release() {} },
+    canvas: { create: () => ({ handle: 2 }), drawImage() {}, encodePng: () => Buffer.from('sheet'), release() {} } };
+  prepare({ native, files: { exists: name => input.has(name), read: name => input.get(name),
+    createLayer: () => ({ write(name, bytes) { written.set(name, bytes); }, finish: () => ({}), dispose() {} }) } });
+  assert.deepEqual([...written.keys()], ['img/characters/$DW_SleepingChars.png']);
+  assert.equal(native.runtime.omoriBackports.sleepingCharacters, true);
+});
+
 test('shared game-file reads accept mixed contents independently of their extensions', () => {
   const crypto = require('node:crypto');
   const { createGameFiles } = require('../patches/omori/game-files.cjs');
