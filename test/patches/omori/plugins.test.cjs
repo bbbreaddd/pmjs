@@ -90,3 +90,54 @@ test('keyed encrypted plugins execute while the data decryptor stays original', 
   context.NativeHost.fs.readText=()=> 'invalid';assert.throws(()=>vm.runInContext(source,realm),/32 hexadecimal/);
   context.NativeHost.fs.readText=()=>null;assert.throws(()=>vm.runInContext(source,realm),/32 hexadecimal/);
 });
+
+test('OMORI asset decryption accepts both encrypted bytes and already-decoded request bytes', () => {
+  const { createGameFiles } = require('../../../patches/omori/game-files.cjs');
+  const key = Buffer.alloc(16, 7), plain = Buffer.from('OggS synthetic audio payload');
+  const body = Buffer.from(plain); for (let i = 0; i < 16; i++) body[i] ^= key[i];
+  const encrypted = Buffer.concat([Buffer.from('5250474d560000000003010000000000', 'hex'), body]);
+  const files = createGameFiles({ native: { fs: { exists: name => name === 'data/System.json' } },
+    read: () => Buffer.from(JSON.stringify({ encryptionKey: key.toString('hex') })) });
+  const methods = [];
+  const context = { NativeHost: { runtime: { omoriFiles: files } }, Decrypter: {},
+    PMJS: { config: {}, plugins: { onLoaded() {} }, phases: { on() {} }, methods: { own: method => methods.push(method) } } };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../../../patches/omori/plugins.js'), 'utf8'), context);
+  const definition = methods.find(method => method.method === 'decryptArrayBuffer');
+  assert.equal(definition.getTarget(), context.Decrypter);
+  const decrypt = definition.replace(() => { throw new Error('raw-only decoder'); });
+  assert.deepEqual(Buffer.from(decrypt(encrypted)), plain);
+  assert.deepEqual(Buffer.from(decrypt(plain)), plain);
+  context.NativeHost.runtime.omoriFiles = null;
+  const ordinary = () => {};
+  assert.equal(definition.replace(ordinary), ordinary);
+});
+
+test('Photo Album Extended exports the decoded picture without decrypting it twice', () => {
+  const bytes = Buffer.from('PNG fixture bytes'), reads = [], writes = [], methods = [];
+  const legacy = function() { const decryptRPGMV = () => { throw new Error('duplicate decryption'); }; return decryptRPGMV('img/pictures/nowyouknow.rpgmvp'); };
+  const context = { saveNowYouKnow: legacy,
+    NativeHost: { runtime: { omoriFiles: { read(name) { reads.push(name); return bytes; } } } },
+    require: name => { assert.equal(name, 'fs'); return { writeFileSync: (name, data) => writes.push([name, data]) }; },
+    PMJS: { config: {}, plugins: { onLoaded() {} }, phases: { on() {} }, methods: { own: definition => methods.push(definition) } } };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../../../patches/omori/plugins.js'), 'utf8'), context);
+  context.window = context;
+  const definition = methods.find(method => method.method === 'saveNowYouKnow');
+  definition.replace(legacy)();
+  assert.deepEqual(reads, ['img/pictures/nowyouknow.png']);
+  assert.deepEqual(writes, [['nowyouknow.png', bytes]]);
+  const unrelated = () => 7;
+  assert.equal(definition.replace(unrelated), unrelated);
+});
+
+test('Actual Turn Order uses descending speed, preserves ties and excludes unavailable actors', () => {
+  const members = [20, 90, 50, 50, 100, 300].map((agi, id) => ({ agi, isAlive: () => id !== 4, isBattleMember: () => id !== 5 }));
+  const methods = [], ordinary = () => [0];
+  const context = { $gameParty: { members: () => members }, BattleManager: {}, NativeHost: { runtime: {} },
+    PMJS: { config: {}, plugins: { onLoaded() {} }, phases: { on() {} }, methods: { own: definition => methods.push(definition) } } };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../../../patches/omori/plugins.js'), 'utf8'), context);
+  const definition = methods.find(method => method.method === 'getActorInputOrder');
+  const legacy = function() { return [[0, 20], [1, 90]].sort((a, b) => b[1] > a[1]); };
+  assert.deepEqual(Array.from(definition.replace(legacy)()), [1, 2, 3, 0]);
+  assert.deepEqual(members.map(actor => actor.agi), [20, 90, 50, 50, 100, 300]);
+  assert.equal(definition.replace(ordinary), ordinary);
+});

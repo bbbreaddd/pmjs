@@ -78,4 +78,46 @@
       return encryptionKey ? original : decryptIdentity();
     }
   });
+  PMJS.methods.own({
+    key: 'Decrypter.decryptArrayBuffer',
+    id: 'port.omori.decrypt-assets',
+    getTarget: function() { return globalThis.Decrypter || null; },
+    method: 'decryptArrayBuffer',
+    replace: function(original) {
+      var files = NativeHost.runtime.omoriFiles;
+      if (!files) return original;
+      return function(input) {
+        var bytes = files.decodeMedia(input);
+        return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+      };
+    }
+  });
+  PMJS.methods.own({
+    key: 'saveNowYouKnow',
+    id: 'port.omori.photo-album-export',
+    getTarget: function() { return typeof globalThis.saveNowYouKnow === 'function' ? globalThis : null; },
+    method: 'saveNowYouKnow',
+    replace: function(original) {
+      var files = NativeHost.runtime.omoriFiles;
+      if (!files || !String(original).includes('nowyouknow.rpgmvp') || !String(original).includes('decryptRPGMV')) return original;
+      return function() {
+        window.require('fs').writeFileSync('nowyouknow.png', files.read('img/pictures/nowyouknow.png'));
+      };
+    }
+  });
+  PMJS.methods.own({
+    key: 'BattleManager.getActorInputOrder',
+    id: 'port.omori.actual-turn-order',
+    getTarget: function() { return typeof BattleManager === 'undefined' ? null : BattleManager; },
+    method: 'getActorInputOrder',
+    replace: function(original) {
+      if (!/\.sort\s*\(\s*\(\s*a\s*,\s*b\s*\)\s*=>\s*b\s*\[\s*1\s*\]\s*>\s*a\s*\[\s*1\s*\]\s*\)/.test(String(original))) return original;
+      return function() {
+        return $gameParty.members().map(function(actor, index) { return { actor: actor, index: index }; })
+          .filter(function(member) { return member.actor.isAlive() && member.actor.isBattleMember(); })
+          .sort(function(a, b) { return b.actor.agi - a.actor.agi; })
+          .map(function(member) { return member.index; });
+      };
+    }
+  });
 })();

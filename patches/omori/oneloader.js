@@ -30,13 +30,17 @@
           pmjsMvInitializePlugins();
           pmjsMvLoadEntrypoint();
           if (globalThis.$modLoader && $modLoader.$runScripts) await $modLoader.$runScripts('pre_window_onload', {});
+          if (globalThis.$modLoader && $modLoader.isInTestMode && $modLoader.knownMods && $modLoader.knownMods.has('oneloader') && !$modLoader.config._autoUpdater) {
+            $modLoader.config._autoUpdater = { askedYet: false, check: 'deny', lastCheck: Date.now(),
+              lastCheckVersion: $modLoader.knownMods.get('oneloader').json.version };
+          }
           pmjsMvStart();
           resolve();
         } catch (error) { reject(error); }
       }
       async function* files(directory, prefix) {
         for (var name of Object.keys(directory)) {
-          var entry = directory[name], logical = prefix + name;
+          var entry = directory[name], logical = prefix + (entry.ogName || name);
           if (entry.type === 'dir') {
             yield* files(entry.children, logical + '/');
           } else {
@@ -59,6 +63,8 @@
           };
           Object.assign(initialize, original);
           wasm_bindgen = initialize;
+        } else if (path === 'modloader/vfs_node.js') {
+          _modLoader_install_node_vfs = async function() {};
         } else if (path === 'modloader/vfs_web.js') {
           _modLoader_install_debugger_vfs = async function() {
             installed = true;
@@ -85,6 +91,10 @@
           var virtualFiles = PMJS.config.virtualFiles = PMJS.config.virtualFiles || {};
           virtualFiles.extensionAliases = Object.assign({}, virtualFiles.extensionAliases,
             { '.rpgmvp': '.png', '.rpgmvo': '.ogg', '.rpgmvm': '.m4a' });
+          virtualFiles.directoryEntryAliases = Object.assign({}, virtualFiles.directoryEntryAliases);
+          var languages = Object.assign({}, virtualFiles.directoryEntryAliases.languages, { '.hero': '.yaml' });
+          delete languages['.yaml'];
+          virtualFiles.directoryEntryAliases.languages = languages;
         }
         else if (!nw.App.argv.length && options.encryptionKeyFile) nw.App.argv = ['--' + NativeHost.fs.readText(options.encryptionKeyFile).trim()];
         for (var script of host.scripts) {

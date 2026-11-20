@@ -74,7 +74,8 @@ test('native startup executes installed scripts and installed plugin patching', 
   const events = [], scripts = {
     'modloader/start_game.js': 'function _start_game() { throw new Error("browser startup used"); }',
     'modloader/vfs_web.js': 'function _modLoader_install_debugger_vfs() { throw new Error("Chromium required"); }',
-    'modloader/early_loader.js': 'globalThis.$modLoader = { overlayFS: {}, $runScripts: async name => events.push(name) }; _modLoader_install_debugger_vfs().then(_start_game);',
+    'modloader/vfs_node.js': 'async function _modLoader_install_node_vfs() { throw new Error("duplicate filesystem"); }',
+    'modloader/early_loader.js': 'globalThis.$modLoader = { overlayFS: {}, $runScripts: async name => events.push(name) }; _modLoader_install_node_vfs().then(_modLoader_install_debugger_vfs).then(_start_game);',
     'modloader/patchplugins.js': 'events.push("installed parameter patcher");'
   };
   const scope = { events, PMJS: { config: { omori: { decrypted: true } } }, nw: { App: { argv: [] } },
@@ -175,4 +176,53 @@ test('late hook files and font stylesheets reach native reads before the next st
   await f.start();
   await f.scope.$modLoader.$runScripts('after_startup', {});
   assert.equal(f.native.fs.readText('late.txt'), null);
+});
+
+test('overlay publication replaces ASCII case variants and preserves Unicode names', async () => {
+  const f = fixture(); f.install(); f.prepare();
+  const root = await f.native.runtime.oneLoader.publish([
+    { path: 'img/Characters/$DW_SleepingChars.png', bytes: Buffer.from('backport') },
+    { path: 'IMG/characters/$dw_sleepingchars.png', bytes: Buffer.from('mod') },
+    { path: 'img/characters/É.png', bytes: Buffer.from('upper accent') },
+    { path: 'img/characters/é.png', bytes: Buffer.from('lower accent') }
+  ]);
+  assert.deepEqual(fs.readdirSync(root), ['img']);
+  assert.deepEqual(fs.readdirSync(path.join(root, 'img')), ['Characters']);
+  const directory = path.join(root, 'img/Characters');
+  assert.deepEqual(fs.readdirSync(directory).sort(), ['$DW_SleepingChars.png', 'É.png', 'é.png']);
+  assert.equal(fs.readFileSync(path.join(directory, '$DW_SleepingChars.png'), 'utf8'), 'mod');
+  assert.equal(fs.readFileSync(path.join(directory, 'É.png'), 'utf8'), 'upper accent');
+  assert.equal(fs.readFileSync(path.join(directory, 'é.png'), 'utf8'), 'lower accent');
+});
+
+test('plaintext loader mode exposes canonical YAML names for encrypted and mixed language files', async () => {
+  const f = guestFixture('globalThis.$modLoader = { overlayFS: {}, $runScripts: async () => {} }; _modLoader_install_debugger_vfs().then(_start_game);');
+  f.scope.PMJS.config.virtualFiles = { directoryEntryAliases: { languages: { '.yaml': '.HERO', '.custom': '.yaml' } } };
+  await f.scope.PMJS.rpgmaker.start();
+  assert.deepEqual(JSON.parse(JSON.stringify(f.scope.PMJS.config.virtualFiles.directoryEntryAliases.languages)), { '.custom': '.yaml', '.hero': '.yaml' });
+});
+
+test('installed encryption constructors receive the same content-aware decoder as later reads', () => {
+  const f = fixture(); f.install();
+  f.write('modloader/encryption.js', 'window._modloader_encryption = new (class Encryption { constructor() { this.system = JSON.parse(this.decrypt(require("fs").readFileSync("data/System.KEL")).toString()); } decrypt() { throw new Error("raw-only decoder"); } })();');
+  f.prepare();
+  const scope = { NativeHost: f.native, require: () => ({ readFileSync: () => Buffer.from('{"encryptionKey":"fixture"}') }) };
+  scope.window = scope;
+  vm.runInNewContext(f.native.runtime.readGameScript('modloader/encryption.js'), scope);
+  assert.equal(scope._modloader_encryption.system.encryptionKey, 'fixture');
+});
+
+test('publication preserves authored language filenames rather than folded lookup keys', async () => {
+  const f = guestFixture('globalThis.$modLoader = { overlayFS: { languages: { type: "dir", ogName: "Languages", children: { en: { type: "dir", children: { "system.hero": { ogName: "System.HERO" } } } } } }, $runScripts: async () => {} }; function _vfs_resolve_file() { return Buffer.from("confirm: OK"); } _modLoader_install_debugger_vfs().then(_start_game);');
+  await f.start();
+  assert.equal(fs.readFileSync(path.join(f.mounts.at(-1), 'Languages/en/System.yaml'), 'utf8'), 'confirm: OK');
+});
+
+test('test-mode assistant menus receive updater defaults without overwriting saved preferences', async () => {
+  const source = 'globalThis.$modLoader = { isInTestMode: true, knownMods: new Map([["oneloader", {json:{version:"1.5"}}]]), config: {}, overlayFS: {}, $runScripts: async () => {} }; _modLoader_install_debugger_vfs().then(_start_game);';
+  const f = guestFixture(source); await f.start();
+  assert.equal(f.scope.$modLoader.config._autoUpdater.check, 'deny');
+  assert.equal(f.scope.$modLoader.config._autoUpdater.lastCheckVersion, '1.5');
+  const g = guestFixture(source.replace('config: {}', 'config: {_autoUpdater:{check:"allow"}}')); await g.start();
+  assert.equal(g.scope.$modLoader.config._autoUpdater.check, 'allow');
 });

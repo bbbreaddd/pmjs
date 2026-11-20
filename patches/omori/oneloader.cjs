@@ -7,7 +7,14 @@ function prepare(options) {
   const files = createGameFiles(options);
   native.runtime.omoriFiles = files;
   native.runtime.gameFiles = { resolve: files.resolve, readBytesAsync: files.readAsync, readBytes: name => files.exists(name) ? files.read(name) : null };
-  native.runtime.readGameScript = name => files.exists(name) ? files.read(name).toString('utf8') : null;
+  native.runtime.readGameScript = name => {
+    if (!files.exists(name)) return null;
+    let source = files.read(name).toString('utf8');
+    if (name === 'modloader/encryption.js') source = source.replace(
+      /(class\s+Encryption\s*\{\s*constructor\s*\([^)]*\)\s*\{)/,
+      '$1\nthis.decrypt = NativeHost.runtime.omoriFiles.decodeText;\n');
+    return source;
+  };
   const backport = compatibility.prepare({ native, files });
   delete native.runtime.oneLoader;
   if (!native.fs.exists('modloader/early_loader.js')) return backport;

@@ -40,10 +40,17 @@ class GameFileLayer {
     fs.mkdirSync(this.parent, { recursive: true });
     this.staging = fs.mkdtempSync(path.join(this.parent, '.build-'));
     this.outputs = new Map();
+    this.spellings = new Map();
   }
   write(name, input) {
     if (typeof name !== 'string' || !name || path.isAbsolute(name) || name.includes('\\') || name.includes('\0') ||
         name.split('/').some(part => !part || part === '.' || part === '..')) throw new Error('invalid prepared game file path');
+    let prefix = '';
+    name = name.split('/').map(part => {
+      prefix += '/' + part.replace(/[A-Z]/g, letter => letter.toLowerCase());
+      if (!this.spellings.has(prefix)) this.spellings.set(prefix, part);
+      return this.spellings.get(prefix);
+    }).join('/');
     const file = path.join(this.staging, name), bytes = Buffer.from(input);
     fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, bytes);
     this.outputs.set(name, { hash: hash(bytes) });

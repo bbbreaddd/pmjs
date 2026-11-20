@@ -47,7 +47,7 @@ test('modern or independently modified bedrooms are not rewritten', () => {
 
 test('backport detection is available before mod loading without claiming a game version', () => {
   const modules = JSON.parse(fs.readFileSync(path.join(__dirname, '../patches/omori/entry.json'))).modules;
-  const scope = { PMJS: {}, NativeHost: { runtime: { omoriBackports: { sleepingCharacters: true } } } };
+  const scope = { PMJS: { plugins: { onLoading() {}, onLoaded() {} } }, NativeHost: { runtime: { omoriBackports: { sleepingCharacters: true } } } };
   const context = vm.createContext(scope);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../patches/omori', modules[0]), 'utf8'), context);
   assert.equal(scope.PMJS.omori.backports.sleepingCharacters, true);
@@ -90,11 +90,48 @@ test('shared game-file reads accept mixed contents independently of their extens
 
 test('original main declarations remain local while installed loader globals coexist', () => {
   const source = 'const crypto = {}; const key = "' + 'a'.repeat(32) + '"; PluginManager=class extends PluginManager {}; globalThis.started = true;';
-  const context = vm.createContext({ PMJS: {}, PluginManager: class {}, NativeHost: { runtime: { readGameScript: () => source } } });
+  const context = vm.createContext({ PMJS: { plugins: { onLoading() {}, onLoaded() {} } }, PluginManager: class {}, NativeHost: { runtime: { readGameScript: () => source } } });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../patches/omori/v1-compatibility.js'), 'utf8'), context);
   vm.runInContext('const crypto = "loader";', context);
   vm.runInContext(context.NativeHost.runtime.readGameScript('js/main.js'), context);
   assert.equal(context.started, true);
   assert.equal(vm.runInContext('crypto', context), 'loader');
   assert.equal(context.NativeHost.runtime.readGameScript('js/other.js'), source);
+});
+
+test('summoning-circle guard preserves the exit sequence and adds the conditional skip target', () => {
+  const { restoreSummoningCircle } = require('../patches/omori/v1-compatibility.cjs');
+  const list = Array.from({ length: 61 }, () => ({ code: 230, indent: 0, parameters: [20] }));
+  list[0] = { code: 356, indent: 0, parameters: ['AddChoice XX_GENERAL.message_4 Label1'] };
+  list[57] = { code: 118, indent: 0, parameters: ['Label2'] };
+  list[59] = { code: 356, indent: 0, parameters: ['ShowMessage dreamworld_extras_doomtomb.message_512'] };
+  list[60] = { code: 0, indent: 0, parameters: [] };
+  const map = { width: 32, height: 53, events: Array(11).fill(null) };
+  map.events[10] = { pages: Array.from({ length: 7 }, () => ({ list: [] })) };
+  map.events[10].pages[6].list = list;
+  const before = JSON.stringify(map), result = restoreSummoningCircle(map);
+  assert.equal(JSON.stringify(map), before);
+  const restored = result.events[10].pages[6].list;
+  assert.equal(restored.length, 73);
+  assert.deepEqual(restored[0], { code: 111, indent: 0, parameters: [1, 111, 0, 1, 1] });
+  assert.deepEqual(restored[8], { code: 119, indent: 1, parameters: ['end'] });
+  assert.deepEqual(restored[71], { code: 118, indent: 0, parameters: ['end'] });
+  assert.deepEqual(restored.slice(11, 71), list.slice(0, 60));
+  assert.equal(restoreSummoningCircle(result), null);
+  map.events[10].pages[6].list[59].parameters[0] = 'different exit';
+  assert.equal(restoreSummoningCircle(map), null);
+});
+
+test('general-options schema inserts text skip without changing other language data', () => {
+  const { restoreGeneralOptions } = require('../patches/omori/v1-compatibility.cjs');
+  const general = Object.fromEntries(['screenResolution', 'fullScreen', 'gamepadTips', 'battleLogSpeed', 'alwaysDash'].map(key => [key, { text: key }]));
+  const system = { plugins: { optionsMenu: { general, buttonHints: { confirm: 'OK' } } } };
+  const before = JSON.stringify(system), result = restoreGeneralOptions(system);
+  assert.equal(JSON.stringify(system), before);
+  assert.deepEqual(Object.keys(result.plugins.optionsMenu.general), ['screenResolution', 'fullScreen', 'gamepadTips', 'textSkip', 'battleLogSpeed', 'alwaysDash']);
+  assert.deepEqual(result.plugins.optionsMenu.buttonHints, { confirm: 'OK', cancel: 'CANCEL' });
+  assert.deepEqual(result.plugins.optionsMenu.general.battleLogSpeed, general.battleLogSpeed);
+  assert.equal(restoreGeneralOptions(result), null);
+  general.custom = {};
+  assert.equal(restoreGeneralOptions(system), null);
 });

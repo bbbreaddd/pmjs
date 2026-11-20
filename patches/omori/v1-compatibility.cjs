@@ -61,22 +61,80 @@ function makeSheet(native, bytes) {
     native.images.release(image.handle);
   }
 }
+function restoreSummoningCircle(map) {
+  const list = map.events?.[10]?.pages?.[6]?.list;
+  if (map.width !== 32 || map.height !== 53 || list?.length !== 61 ||
+      list[0]?.code !== 356 || list[0].parameters?.[0] !== 'AddChoice XX_GENERAL.message_4 Label1' ||
+      list[57]?.code !== 118 || list[57].parameters?.[0] !== 'Label2' ||
+      list[59]?.code !== 356 || list[59].parameters?.[0] !== 'ShowMessage dreamworld_extras_doomtomb.message_512' ||
+      list[60]?.code !== 0) return null;
+  map = JSON.parse(JSON.stringify(map));
+  const command = (code, indent, parameters) => ({ code, indent, parameters });
+  const route = [
+    { code: 45, parameters: ['Fuku_Plugins.EventTremble.start(this._eventId,1,1);'], indent: null },
+    { code: 15, parameters: [30], indent: null },
+    { code: 45, parameters: ['Fuku_Plugins.EventTremble.stop(this._eventId)'], indent: null }
+  ];
+  map.events[10].pages[6].list = [
+    command(111, 0, [1, 111, 0, 1, 1]),
+    command(356, 1, ['StopEventMovement']),
+    command(205, 1, [0, { list: [...route, { code: 0 }], repeat: false, skippable: false, wait: false }]),
+    ...route.map(step => command(505, 1, [step])),
+    command(356, 1, ['ShowMessage XX_MELON.message_184']),
+    command(356, 1, ['AllowEventMovement']),
+    command(119, 1, ['end']), command(0, 1, []), command(412, 0, []),
+    ...map.events[10].pages[6].list.slice(0, -1), command(118, 0, ['end']), command(0, 0, [])
+  ];
+  return map;
+}
+function restoreGeneralOptions(system) {
+  const general = system.plugins?.optionsMenu?.general;
+  const expected = ['screenResolution', 'fullScreen', 'gamepadTips', 'battleLogSpeed', 'alwaysDash'];
+  if (!general || JSON.stringify(Object.keys(general)) !== JSON.stringify(expected)) return null;
+  system = JSON.parse(JSON.stringify(system));
+  const options = {};
+  for (const key of expected) {
+    if (key === 'battleLogSpeed') options.textSkip = {
+      text: 'TEXT SKIP', options: ['ON', 'OFF'],
+      help: 'Fast-forward text by pressing or holding CONFIRM or CANCEL.', boolIndex: true, spacing: 80
+    };
+    options[key] = system.plugins.optionsMenu.general[key];
+  }
+  system.plugins.optionsMenu.general = options;
+  system.plugins.optionsMenu.buttonHints = Object.assign({ confirm: 'CONFIRM', cancel: 'CANCEL' }, system.plugins.optionsMenu.buttonHints);
+  return system;
+}
 function prepare({ native, files }) {
   native.runtime.omoriBackports = {};
   const sheet = 'img/characters/' + sheetName + '.png';
-  if (files.exists(sheet)) return null;
   const data = 'data/Map466.json', map = 'maps/map466.json', atlas = 'img/tilesets/DW_NeighborsRoom.png';
-  if (![data, map, atlas].every(name => files.exists(name))) return null;
-  const restored = restoreBedroom(JSON.parse(files.read(data)), JSON.parse(files.read(map)));
-  if (!restored) return null;
+  let bedroom;
+  if (!files.exists(sheet) && [data, map, atlas].every(name => files.exists(name))) {
+    bedroom = restoreBedroom(JSON.parse(files.read(data)), JSON.parse(files.read(map)));
+  }
+  const circlePath = 'data/Map343.json';
+  const circle = files.exists(circlePath) ? restoreSummoningCircle(JSON.parse(files.read(circlePath))) : null;
+  const systemPath = 'languages/en/System.yaml';
+  let system, yaml;
+  if (files.exists(systemPath)) {
+    yaml = require(native.fs.resolvePath('js/libs/js-yaml-master/index.js'));
+    system = restoreGeneralOptions(yaml.safeLoad(files.read(systemPath).toString('utf8')));
+  }
+  if (!bedroom && !circle && !system) return null;
   const output = files.createLayer('omori-v1');
   try {
-    output.write(data, Buffer.from(JSON.stringify(restored.map)));
-    output.write(map, Buffer.from(JSON.stringify(restored.tiled)));
-    output.write(sheet, makeSheet(native, files.read(atlas)));
+    if (bedroom) {
+      output.write(data, Buffer.from(JSON.stringify(bedroom.map)));
+      output.write(map, Buffer.from(JSON.stringify(bedroom.tiled)));
+      output.write(sheet, makeSheet(native, files.read(atlas)));
+    }
+    if (circle) output.write(circlePath, Buffer.from(JSON.stringify(circle)));
+    if (system) output.write(systemPath, Buffer.from(yaml.dump(system)));
     const result = output.finish();
-    native.runtime.omoriBackports.sleepingCharacters = true;
+    if (bedroom) native.runtime.omoriBackports.sleepingCharacters = true;
+    if (circle) native.runtime.omoriBackports.summoningCircleGuard = true;
+    if (system) native.runtime.omoriBackports.generalOptionsSchema = true;
     return result;
   } finally { output.dispose(); }
 }
-module.exports = { prepare, restoreBedroom };
+module.exports = { prepare, restoreBedroom, restoreSummoningCircle, restoreGeneralOptions };

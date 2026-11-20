@@ -62,7 +62,7 @@ async function main() {
       assert.deepEqual(new Uint8Array(native.canvas.readPixels(canvas.handle, 0, 0, 96, 256)), expected);
     } finally { native.canvas.release(canvas.handle); native.images.release(image.handle); }
     const replacement = png(1, 1, Uint8Array.from([255, 0, 0, 255]));
-    await native.runtime.oneLoader.publish([{ path: 'img/characters/$DW_SleepingChars.png', bytes: replacement }]);
+    await native.runtime.oneLoader.publish([{ path: 'IMG/characters/$dw_sleepingchars.png', bytes: replacement }]);
     assert.deepEqual(Buffer.from(native.fs.readBytes('img/characters/$DW_SleepingChars.png')), replacement);
     assert.deepEqual(JSON.parse(native.fs.readText('data/Map466.json')), restored);
     await native.runtime.oneLoader.publish([]);
