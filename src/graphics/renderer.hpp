@@ -139,6 +139,7 @@ struct PresentationGeometry {
 };
 
 struct RendererStats {
+  std::uint64_t duplicateSpriteDrawsSkipped = 0;
   static constexpr std::size_t filterKindCount =
     static_cast<std::size_t>(scene_packet::FilterKind::custom) + 1;
   std::uint64_t frames = 0;
@@ -324,6 +325,7 @@ class Renderer {
   std::optional<ImageInfo> renderToImage(int width, int height, AlphaMode alphaMode = AlphaMode::straight);
   const RendererStats& stats() const { return stats_; }
   bool diagnosticsEnabled() const { return diagnostics_; }
+  void setDuplicateSpriteCulling(bool enabled) { duplicateSpriteCulling_ = enabled; }
   std::size_t renderTargetBytes() const;
   std::size_t tileGeometryGpuBytes() const;
   std::size_t tileGeometryCpuBytes() const;
@@ -525,6 +527,7 @@ class Renderer {
   std::vector<float> vertices_;
   RendererStats stats_;
   bool diagnostics_ = false;
+  bool duplicateSpriteCulling_ = true;
   std::vector<FilterContentBounds> filterBounds_;
   bool filterBoundsEnabled_ = true;
   std::uint32_t program_ = 0;

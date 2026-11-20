@@ -1809,6 +1809,41 @@ std::optional<bool> ImageStore::isOpaque(ImageHandle handle) {
   return opaque;
 }
 
+std::optional<bool> ImageStore::hasBinaryAlpha(ImageHandle handle) {
+  const auto revision = contentRevision(handle);
+  if (!revision) return std::nullopt;
+  const auto index = (handle & indexMask) - 1U;
+  if (slots_[index].renderTarget || slots_[index].astc || slots_[index].compressedBytes || slots_[index].prepared) return false;
+  if (slots_[index].binaryAlphaRevision == *revision) return slots_[index].binaryAlpha;
+  const auto info = inspect(handle);
+  constexpr std::size_t maxProofBytes = 4U * 1024U * 1024U;
+  if (std::size_t(info->width) * info->height > maxProofBytes / 4U) return std::nullopt;
+  std::optional<ImagePixels> snapshot;
+  const auto* pixels = slots_[index].cachedPixels ? &*slots_[index].cachedPixels : nullptr;
+  if (!pixels) {
+    try { snapshot = readPixelsRegion(handle, 0, 0, info->width, info->height); }
+    catch (const std::exception&) { snapshot.reset(); }
+    if (snapshot) pixels = &*snapshot;
+  }
+  if (!pixels) {
+    slots_[index].binaryAlpha.reset();
+    slots_[index].binaryAlphaRevision = *revision;
+    return std::nullopt;
+  }
+  bool binary = true;
+  // Zero-alpha RGB must also be zero for premultiplied draws to be transparent.
+  for (std::size_t i = 0; i < pixels->rgba.size(); i += 4) {
+    const auto* pixel = pixels->rgba.data() + i;
+    if (pixel[3] != 255 && (pixel[3] != 0 || pixel[0] || pixel[1] || pixel[2])) {
+      binary = false;
+      break;
+    }
+  }
+  slots_[index].binaryAlpha = binary;
+  slots_[index].binaryAlphaRevision = *revision;
+  return binary;
+}
+
 bool ImageStore::isRenderTarget(ImageHandle handle) const {
   if (!inspect(handle)) return false;
   return slots_[(handle & indexMask) - 1U].renderTarget;

@@ -1,6 +1,13 @@
 'use strict';
 
 (function() {
+  if (globalThis.PMJS && PMJS.optimizations && typeof PMJS.optimizations.register === 'function') {
+    PMJS.optimizations.register({ id: 'scene.duplicate-sprites', owner: 'pmjs-render',
+      fallback: 'draw every repeated sprite command' });
+    if (typeof NativeHost.render.setDuplicateSpriteCulling !== 'function') {
+      PMJS.optimizations.refuse('scene.duplicate-sprites', 'native sprite culling unavailable');
+    }
+  }
   function createRenderer(options) {
     options = Object.assign({
       width: 800,

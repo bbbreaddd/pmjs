@@ -340,6 +340,12 @@ if(BUILD_TESTING)
     target_link_options(pmjs-renderer-opaque-blend-test PRIVATE "-Wl,--wrap=glDrawArrays")
     add_test(NAME native-renderer-opaque-blend COMMAND ${XVFB_RUN} -a $<TARGET_FILE:pmjs-renderer-opaque-blend-test>)
     set_tests_properties(native-renderer-opaque-blend PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
+    add_executable(pmjs-renderer-duplicate-sprites-test test/renderer-duplicate-sprites.cpp)
+    target_link_libraries(pmjs-renderer-duplicate-sprites-test PRIVATE pmjs_runtime)
+    target_compile_options(pmjs-renderer-duplicate-sprites-test PRIVATE -UNDEBUG)
+    target_link_options(pmjs-renderer-duplicate-sprites-test PRIVATE "-Wl,--wrap=glReadPixels")
+    add_test(NAME native-renderer-duplicate-sprites COMMAND ${XVFB_RUN} -a $<TARGET_FILE:pmjs-renderer-duplicate-sprites-test>)
+    set_tests_properties(native-renderer-duplicate-sprites PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy;PMJS_GRAPHICS_DIAGNOSTICS=1")
   endif()
   if(PMJS_ENABLE_SKIA65)
     pmjs_add_cpp_test(pmjs-text-backend-default-test native-text-backend-default test/text-backend-default.cpp)
@@ -680,6 +686,11 @@ if(BUILD_TESTING)
       "${CMAKE_CURRENT_SOURCE_DIR}/test/assets" "${PMJS_TEST_PIXI4_SOURCE}")
     set_tests_properties(node-pixi4-render-texture PROPERTIES ENVIRONMENT
       "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy;PMJS_WINDOW_SIZE=32x24")
+    add_test(NAME node-duplicate-sprites COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/node-duplicate-sprites.cjs" $<TARGET_FILE:pmjs_native>
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/assets" "${PMJS_TEST_PIXI4_SOURCE}")
+    set_tests_properties(node-duplicate-sprites PROPERTIES ENVIRONMENT
+      "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy;PMJS_WINDOW_SIZE=32x24;PMJS_GRAPHICS_DIAGNOSTICS=1")
   endif()
   add_test(NAME node-resident-images COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-resident-images.cjs" $<TARGET_FILE:pmjs_native>)

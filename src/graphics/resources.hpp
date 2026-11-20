@@ -273,6 +273,7 @@ class ImageStore {
       std::shared_ptr<PreparedLoad> load, bool retainCpuPixels);
   std::optional<ImageInfo> inspect(ImageHandle handle) const;
   std::optional<bool> isOpaque(ImageHandle handle);
+  std::optional<bool> hasBinaryAlpha(ImageHandle handle);
   bool hasCpuPixels(ImageHandle handle) const;
   std::optional<SpriteImageRegion> resolveSpriteRegion(
       ImageHandle handle, float x, float y, float width, float height,
@@ -479,6 +480,8 @@ class ImageStore {
     std::uint16_t generation = 1;
     std::uint64_t contentRevision = 0;
     std::uint64_t opacityRevision = 0;
+    std::uint64_t binaryAlphaRevision = 0;
+    std::optional<bool> binaryAlpha;
     bool opaque = false;
     std::uint32_t texture = 0;
     std::shared_ptr<SharedTexture> sharedTexture, sharedPremultipliedTexture;

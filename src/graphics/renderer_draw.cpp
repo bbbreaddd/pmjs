@@ -10,6 +10,48 @@
 
 namespace pmjs {
 namespace {
+bool duplicateSprite(const RenderCommand& left, const RenderCommand& right, ImageStore& images,
+                     bool unscaledProjection) {
+  const auto baseMipLevel = [&](const RenderCommand& command) {
+    if (!command.mipmap) return true;
+    if (!unscaledProjection || command.roundPixels || command.textureRotation) return false;
+    const auto info = images.inspect(command.image);
+    if (!info || command.source != std::array<float, 4>{0, 0, float(info->width), float(info->height)}) return false;
+    float width, height;
+    if (command.spriteWorldVertices) {
+      const auto& p = command.spriteVertices;
+      if (p[0][1] != p[1][1] || p[1][0] != p[2][0] || p[2][1] != p[3][1] || p[3][0] != p[0][0]) return false;
+      width = p[1][0] - p[0][0]; height = p[3][1] - p[0][1];
+    } else {
+      if (command.transform[1] != 0 || command.transform[2] != 0) return false;
+      width = command.transform[0] * command.destination[0];
+      height = command.transform[3] * command.destination[1];
+    }
+    return width >= info->width && height >= info->height;
+  };
+  const auto eligible = [&](const RenderCommand& command) {
+    return command.action == RenderCommand::Action::draw &&
+      command.primitive == RenderCommand::Primitive::sprite && command.image &&
+      command.blendMode == BlendMode::normal && command.color[3] == 1 && command.nearest &&
+      baseMipLevel(command) && !command.repeat && !command.maskImage && command.blur == 0 &&
+      !command.appliesColorMatrix && !command.appliesSpriteColor &&
+      !command.appliesMeshPostTintOverlay && !command.clampedTilingSampling &&
+      !command.atlasTilingSampling && !command.standaloneBitmapRegion;
+  };
+  return eligible(left) && eligible(right) && left.image == right.image &&
+    left.transform == right.transform && left.source == right.source &&
+    left.destination == right.destination && left.color == right.color &&
+    left.clipped == right.clipped && (!left.clipped || left.clip == right.clip) &&
+    left.pixiSpritePacking == right.pixiSpritePacking &&
+    left.premultipliedSpriteTexture == right.premultipliedSpriteTexture &&
+    left.packedSpriteColor == right.packedSpriteColor && left.floatSpriteUv == right.floatSpriteUv &&
+    left.spriteWorldVertices == right.spriteWorldVertices &&
+    (!left.spriteWorldVertices || left.spriteVertices == right.spriteVertices) &&
+    left.textureRotation == right.textureRotation && left.roundPixels == right.roundPixels &&
+    left.mipmap == right.mipmap &&
+    images.hasBinaryAlpha(right.image).value_or(false);
+}
+
 float packSpriteUv(double coordinate) {
   double packed = std::fmod(std::trunc(coordinate * 65535.0), 65536.0);
   if (packed < 0) packed += 65536.0;
@@ -646,8 +688,27 @@ void Renderer::renderScene() {
       drawCommands.emplace_back(i,&tile);
     }
   }
+  const RenderCommand* previousDraw = nullptr;
+  std::size_t previousVertexCount = 0;
+  std::size_t duplicateFilterDepth = 0;
   for (const auto& [commandIndex, commandPointer] : drawCommands) {
     const RenderCommand& command = *commandPointer;
+    if (command.action != RenderCommand::Action::draw) {
+      previousDraw = nullptr;
+      if (command.action == RenderCommand::Action::filterBegin) ++duplicateFilterDepth;
+      else if (command.action == RenderCommand::Action::filterEnd && duplicateFilterDepth) --duplicateFilterDepth;
+    } else {
+      if (previousDraw && vertices_.size() == previousVertexCount) previousDraw = nullptr;
+      if (duplicateSpriteCulling_ && !duplicateFilterDepth && previousDraw &&
+          duplicateSprite(*previousDraw, command, images_,
+            sceneProjection_ == std::array<float, 6>{1, 0, 0, 1, 0, 0} &&
+            queueWidth_ == width_ && queueHeight_ == height_)) {
+        if (diagnostics_) ++stats_.duplicateSpriteDrawsSkipped;
+        continue;
+      }
+      previousDraw = &command;
+      previousVertexCount = vertices_.size();
+    }
     if (hasFilterGroups && inlineFilterBoundary[commandIndex]) continue;
     const auto* inlineMatrix = hasFilterGroups ? inlineFilterMatrix[commandIndex] : nullptr;
     if (command.action != RenderCommand::Action::draw) {

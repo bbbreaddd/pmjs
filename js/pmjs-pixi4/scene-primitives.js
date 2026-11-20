@@ -9,6 +9,11 @@ if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
   PMJS.optimizations.register({ id: 'scene.record-bulk-clear',
     owner: 'pmjs-pixi4',
     fallback: 'explicit zero loop over record tail slots' });
+  PMJS.optimizations.register({ id: 'scene.duplicate-sprites', owner: 'pmjs-render',
+    fallback: 'draw every repeated sprite command' });
+  if (typeof NativeHost.render.setDuplicateSpriteCulling !== 'function') {
+    PMJS.optimizations.refuse('scene.duplicate-sprites', 'native sprite culling unavailable');
+  }
   PMJS.optimizations.register({ id: 'scene.tiling-texture-cache',
     owner: 'pmjs-pixi4',
     fallback: 're-rasterize the tiling source canvas on every use' });

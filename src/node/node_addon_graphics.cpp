@@ -103,6 +103,14 @@ napi_value setClearBeforeRender(napi_env env, napi_callback_info info) try {
   napi_throw_type_error(env, nullptr, error.what()); return nullptr;
 }
 
+napi_value setDuplicateSpriteCulling(napi_env env, napi_callback_info info) try {
+  auto args = arguments(env, info, 1);
+  host(env).renderer.setDuplicateSpriteCulling(asBoolean(env, args.at(0)));
+  return undefined(env);
+} catch (const std::exception& error) {
+  napi_throw_type_error(env, nullptr, error.what()); return nullptr;
+}
+
 napi_value setSceneProjection(napi_env env, napi_callback_info info) try {
   auto args = arguments(env, info, 1);
   const auto values = floatVector(env, args.at(0));
@@ -794,6 +802,7 @@ void registerGraphicsBindings(napi_env env, napi_value exports) {
   method(env, render, "clearScene", clearScene);
   method(env, render, "setPresentationViewport", setPresentationViewport);
   method(env, render, "setClearBeforeRender", setClearBeforeRender);
+  method(env, render, "setDuplicateSpriteCulling", setDuplicateSpriteCulling);
   method(env, render, "setSceneProjection", setSceneProjection);
   method(env, render, "configurePixiFragmentPrecision", configurePixiFragmentPrecision);
   method(env, render, "createFilterProgram", createFilterProgram);

@@ -932,6 +932,9 @@ function submitNativeScene(stage, backgroundColor = null) {
     throw new Error('native scene was not rendered: scene service unavailable');
   }
   try {
+    if (typeof NativeHost.render.setDuplicateSpriteCulling === 'function') {
+      NativeHost.render.setDuplicateSpriteCulling(PMJS.optimizations.isEnabled('scene.duplicate-sprites'));
+    }
     NativeHost.scene.submit(packet.version, packet.metadata,
       packet.values, packet.count);
   } catch (error) {

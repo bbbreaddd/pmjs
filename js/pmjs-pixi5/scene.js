@@ -599,6 +599,10 @@
     }
     writeNode(stage, rootParent);
     NativeHost.render.setSceneProjection(projection || [1, 0, 0, 1, 0, 0]);
+    if (typeof NativeHost.render.setDuplicateSpriteCulling === 'function' &&
+        globalThis.PMJS && PMJS.optimizations) {
+      NativeHost.render.setDuplicateSpriteCulling(PMJS.optimizations.isEnabled('scene.duplicate-sprites'));
+    }
     if (NativeHost.scene.submit(packetVersion, metadata, values, count) === false) {
       throw new Error('native Pixi 5 scene submission rejected');
     }
