@@ -42,10 +42,11 @@ async function writeState(handle, current, serializedData) {
   await handle.writeFile('}\n');
 }
 
-async function inventory(gameRoot, native, cacheRoot) {
+async function inventory(gameRoot, native, cacheRoot, sourceRoots = []) {
   if (native.fs?.inventory) return native.fs.inventory().filter(source => {
     const physical = native.assets.sourcePath(source);
-    return physical && !path.resolve(physical).startsWith(cacheRoot + path.sep);
+    return physical && (!path.resolve(physical).startsWith(cacheRoot + path.sep) ||
+      sourceRoots.some(root => path.resolve(physical).startsWith(root + path.sep)));
   }).sort((a,b) => a.localeCompare(b, 'en'));
   const files = [];
   async function visit(logical) {
@@ -303,7 +304,7 @@ async function openPreparation({ gameRoot, cacheRoot, native, verifyHashes = fal
     session.packedFiles = images === false ? new Map() : await require('./packed-cache.cjs').loadPackedCache(root, native, logger);
     session.files = await preparationFiles(session, verifyHashes);
     const started = performance.now();
-    session.inventory = await inventory(path.resolve(gameRoot), native, path.dirname(root));
+    session.inventory = await inventory(path.resolve(gameRoot), native, path.dirname(root), sourceRoots);
     session.inventoryMs = performance.now() - started;
     session.retain = async keys => retainLeases(root, keys);
     return session;

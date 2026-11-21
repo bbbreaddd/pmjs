@@ -51,6 +51,7 @@ async function main() {
     const roots = prepareGameFiles({ gamePreparation: 'patches/omori/oneloader.cjs',
       assetPreparation: { cacheRoot: path.join(root, 'cache') } }, native);
     assert.equal(roots.length, 1);
+    assert.equal(JSON.parse(native.fs.readText('data/System.json')).encryptionKey, assetKey.toString('hex'));
     assert.equal(native.runtime.omoriBackports.sleepingCharacters, true);
     const restored = JSON.parse(native.fs.readText('data/Map466.json'));
     assert.deepEqual(JSON.parse(native.runtime.omoriFiles.read('data/Map466.KEL')), restored);
@@ -66,6 +67,7 @@ async function main() {
     assert.deepEqual(Buffer.from(native.fs.readBytes('img/characters/$DW_SleepingChars.png')), replacement);
     assert.deepEqual(JSON.parse(native.fs.readText('data/Map466.json')), restored);
     await native.runtime.oneLoader.publish([]);
+    assert.equal(JSON.parse(native.fs.readText('data/System.json')).encryptionKey, assetKey.toString('hex'));
     assert.notDeepEqual(Buffer.from(native.fs.readBytes('img/characters/$DW_SleepingChars.png')), replacement);
     assert.equal(JSON.parse(decode(fs.readFileSync(path.join(gameRoot, 'data/Map466.KEL')))).events[78], null);
     const plain = { 'data/Map466.json': Buffer.from(JSON.stringify(room.map)), 'maps/map466.json': Buffer.from(JSON.stringify(room.tiled)),

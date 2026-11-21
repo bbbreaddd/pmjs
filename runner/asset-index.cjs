@@ -36,6 +36,7 @@ function offlineFilesystem(gameRoot, derived) {
   const root = fs.realpathSync(gameRoot);
   const files = new Map(), directories = new Map();
   const derivedFiles = new Map();
+  const overlays = new Map();
   const normalize = logical => {
     if (typeof logical !== 'string' || logical.includes('\0') || path.posix.isAbsolute(logical)) return null;
     const normalized = path.posix.normalize(logical);
@@ -86,6 +87,7 @@ function offlineFilesystem(gameRoot, derived) {
     }
   };
   scan(root);
+  const sourceDirectories = new Map(directories);
   for (const [logical, file] of derived) {
     const key = normalize(logical);
     if (!key) continue;
@@ -95,6 +97,7 @@ function offlineFilesystem(gameRoot, derived) {
   const resolve = logical => {
     const key = normalize(logical);
     if (!key) return null;
+    if (overlays.has(key)) return overlays.get(key).directory ? null : overlays.get(key).file;
     if (files.has(key)) return files.get(key);
     if (directories.has(key)) return null;
     return derivedFiles.get(key)?.file || null;
@@ -124,6 +127,24 @@ function offlineFilesystem(gameRoot, derived) {
     exists,
     isDirectory: logical => directory(logical) !== null,
     readBytes: logical => { const source = resolve(logical); return source ? fs.readFileSync(source) : null; },
+    resolvePath: resolve,
+    mountReadOnlyOverlay: overlay => {
+      overlays.clear();
+      directories.clear();
+      for (const [name, directory] of sourceDirectories) directories.set(name, directory);
+      function visit(directory, prefix = '') {
+        for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+          const logical = prefix + entry.name, physical = path.join(directory, entry.name);
+          if (entry.isDirectory()) {
+            if (!directories.has(normalize(logical))) directories.set(normalize(logical), physical);
+            overlays.set(normalize(logical), { logical, file: physical, directory: true });
+            visit(physical, logical + '/');
+          } else if (entry.isFile()) overlays.set(normalize(logical), { logical, file: physical, directory: false });
+          else throw new Error('prepared game overlays must contain regular files and directories');
+        }
+      }
+      visit(overlay);
+    },
     readDirectory: logical => {
       const source = directory(logical);
       if (!source) return null;
@@ -140,6 +161,11 @@ function offlineFilesystem(gameRoot, derived) {
         const slash = key.lastIndexOf('/');
         const entryParent = slash < 0 ? '' : key.slice(0, slash);
         if (entryParent === parent && resolve(entry.logical) !== null)
+          entries.set(key, path.posix.basename(entry.logical));
+      }
+      for (const [key, entry] of overlays) {
+        const slash = key.lastIndexOf('/');
+        if ((slash < 0 ? '' : key.slice(0, slash)) === parent)
           entries.set(key, path.posix.basename(entry.logical));
       }
       return [...entries.values()].sort();
@@ -182,22 +208,25 @@ async function generateAssetIndex({ root, gameRoot, options, output, includeAsse
   fs.mkdirSync(lockRoot, { recursive: true });
   const derived = new Map();
   const filesystem = offlineFilesystem(gameRoot, derived);
-  const native = { assets: Object.assign(Object.create(nativeAddon.assets), filesystem.assets), fs: filesystem.fs };
+  const native = { runtime: {}, assets: Object.assign(Object.create(nativeAddon.assets), filesystem.assets), fs: filesystem.fs };
   const warnings = [];
   const logger = { warn: message => warnings.push(message) };
   const release = await acquireLock(lockRoot, shouldCancel, () => {}, nativeAddon.assets, 3600000);
   if (!release) throw new Error('asset indexing cancelled');
   try {
+    const { prepareGameFiles } = require('./game-preparation.cjs');
+    const sourceRoots = prepareGameFiles({ ...options, gameRoot, assetPreparation: { ...options.assetPreparation, cacheRoot } }, native, 'prepareAssetIndex');
     const prepared = await prepareGameAssets({ gameRoot, cacheRoot, native,
       ...options.assetPreparation, images: options.assetPreparation.enabled,
       maps: options.assetPreparation.enabled && options.assetPreparation.maps,
-      preparationContext: 'offline', verifyHashes: true, logger, shouldCancel,
+      preparationContext: 'offline', verifyHashes: true, logger, shouldCancel, sourceRoots,
       width: options.width, height: options.height, bundleRoot: output, portDescriptors });
     const images = prepared.images || { total: 0, prepared: 0, decisions: [], entries: [], decryptedEntries: [] };
     let maps = prepared.maps || null;
     if (prepared.cancelled) throw new Error('asset preparation cancelled');
-    if (images.error) warnings.push('[pmjs] image index incomplete: ' + images.error);
-    if (maps?.error) { warnings.push('[pmjs] map index unavailable: ' + maps.error); maps = null; }
+    if (images.error || images.failedFiles > 0)
+      throw new Error('asset index incomplete: ' + (images.error || `${images.failedFiles} asset preparation failures`));
+    if (maps?.error) throw new Error('map index unavailable: ' + maps.error);
     for (const desc of portDescriptors) {
       desc.outputs = [];
       for (const record of Object.values(prepared.records || {})) {

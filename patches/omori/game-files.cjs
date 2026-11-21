@@ -18,10 +18,10 @@ function createGameFiles({ native, read, readAsync = async name => read(name), c
     }
     return steamKey;
   }
-  function plainText(bytes, name) {
+  function plainText(bytes, name, validateJson = true) {
     try {
       const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-      if (/\.json$/i.test(name)) JSON.parse(text);
+      if (validateJson && /\.json$/i.test(name)) JSON.parse(text);
       return !text.includes('\0');
     } catch { return false; }
   }
@@ -41,7 +41,7 @@ function createGameFiles({ native, read, readAsync = async name => read(name), c
       if (bytes.length < 16) throw new Error('truncated OMORI game file: ' + logical);
       const cipher = crypto.createDecipheriv('aes-256-ctr', key(), bytes.subarray(0, 16));
       const body = Buffer.concat([cipher.update(bytes.subarray(16)), cipher.final()]);
-      if (!plainText(body, logical)) throw new Error('cannot decode OMORI game file: ' + logical);
+      if (!plainText(body, logical, false)) throw new Error('cannot decode OMORI game file: ' + logical);
       return body;
     }
     return bytes;

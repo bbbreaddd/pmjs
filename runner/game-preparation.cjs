@@ -67,7 +67,7 @@ class GameFileLayer {
   dispose() { fs.rmSync(this.staging, { recursive: true, force: true }); }
 }
 
-function prepareGameFiles(options, native) {
+function prepareGameFiles(options, native, phase = 'prepare') {
   if (!options.gamePreparation) return [];
   const root = fs.existsSync(path.join(__dirname, 'patches')) ? __dirname : path.resolve(__dirname, '..');
   const declaration = options.gamePreparation;
@@ -75,7 +75,9 @@ function prepareGameFiles(options, native) {
     throw new Error('gamePreparation must name a runtime .cjs module');
   const filename = fs.realpathSync(path.resolve(root, declaration));
   if (!filename.startsWith(root + path.sep)) throw new Error('gamePreparation must be inside the runtime');
-  const result = require(filename).prepare({ native, gameRoot: options.gameRoot, saveRoot: options.saveRoot,
+  const prepare = require(filename)[phase];
+  if (phase === 'prepareAssetIndex' && typeof prepare !== 'function') return [];
+  const result = prepare({ native, gameRoot: options.gameRoot, saveRoot: options.saveRoot,
     cacheRoot: options.assetPreparation.cacheRoot,
     configuration: options.config ? JSON.parse(fs.readFileSync(options.config, 'utf8')) : {},
     createLayer(name) { return new GameFileLayer(options.assetPreparation.cacheRoot, name); },

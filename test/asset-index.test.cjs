@@ -30,7 +30,8 @@ test('generated map indexes omit local source metadata without changing cached d
   const descriptor = Object.freeze({ version: 1, halo: 1,
     pages: [{ path: 'tiles-0.png', width: 50, height: 50 }], sources: Object.freeze([source]) });
   const preparation = require('../runner/preparation.cjs');
-  t.mock.method(preparation, 'prepareGameAssets', async () => ({ maps: {
+  let failure = false;
+  t.mock.method(preparation, 'prepareGameAssets', async () => failure ? { images: { failedFiles: 1 } } : ({ maps: {
     selected: 1, index: { 1: { identity: 'map-1' } }, entries: [{ identity: 'map-1', directory: root,
       descriptor, outputs: [{ path: 'tiles-0.png', hash: checksum }] }] } }));
   const modulePath = require.resolve('../runner/asset-index.cjs');
@@ -48,6 +49,9 @@ test('generated map indexes omit local source metadata without changing cached d
   assert.deepEqual(index.maps.entries[0].outputs,
     [{ path: 'assets/maps/map-1/tiles-0.png', hash: checksum }]);
   assert.equal(fs.readFileSync(path.join(output, index.maps.entries[0].outputs[0].path), 'utf8'), 'prepared page');
+  failure = true;
+  await assert.rejects(generateAssetIndex({ root, gameRoot, output, includeAssets: false,
+    options: { width: 816, height: 624, assetPreparation: { enabled: true, maps: true } } }), /asset index incomplete/);
 });
 
 function fixture() {
@@ -266,4 +270,66 @@ test('portable settings survive incompatible calculated image data', () => {
   const loaded = f.load();
   assert.deepEqual(loaded.images, []);
   assert.deepEqual(loaded.policies['img/pictures/a.png'], settings);
+});
+
+test('game preparation supplies the same metadata to offline indexing and live reads', () => {
+  const { prepareGameFiles } = require('../runner/game-preparation.cjs');
+  const root = temporaryDirectory('prepared-index-metadata-');
+  const gameRoot = path.join(root, 'game'), cacheRoot = path.join(root, 'cache');
+  fs.mkdirSync(path.join(gameRoot, 'data'), { recursive: true });
+  fs.mkdirSync(path.join(gameRoot, 'img'));
+  fs.mkdirSync(path.join(gameRoot, 'js'));
+  fs.mkdirSync(path.join(gameRoot, 'maps'));
+  const key = 'a'.repeat(32), iv = Buffer.alloc(16, 9);
+  fs.writeFileSync(path.join(gameRoot, 'js/main.js'), `const key = '${key}';`);
+  const contents = Buffer.from('{"hasEncryptedImages":true}');
+  const encrypt = bytes => {
+    const cipher = crypto.createCipheriv('aes-256-ctr', key, iv);
+    return Buffer.concat([iv, cipher.update(bytes), cipher.final()]);
+  };
+  const original = encrypt(contents);
+  const malformed = '{"name":"embedded\nnewline"}';
+  fs.writeFileSync(path.join(gameRoot, 'maps/Bad.AUBREY'), encrypt(Buffer.from(malformed)));
+  fs.writeFileSync(path.join(gameRoot, 'data/System.KEL'), original);
+  fs.writeFileSync(path.join(gameRoot, 'data/Map001.KEL'), '{"tilesetId":1}');
+  fs.writeFileSync(path.join(gameRoot, 'img/original.rpgmvp'), 'original media');
+  const options = { gameRoot, gamePreparation: 'patches/omori/oneloader.cjs', assetPreparation: { cacheRoot } };
+  for (const phase of ['prepareAssetIndex', 'prepare']) {
+    const offline = offlineFilesystem(gameRoot, new Map());
+    const native = { runtime: {}, ...offline };
+    const roots = prepareGameFiles(options, native, phase);
+    assert.equal(roots.length, 1);
+    assert.equal(native.fs.readBytes('data/System.json').toString(), contents.toString());
+    assert.deepEqual(native.fs.readBytes('data/System.KEL'), original);
+    assert.equal(native.runtime.gameFiles.resolve('data/System.KEL'), 'data/System.json');
+    assert.equal(native.fs.readBytes('img/original.rpgmvp').toString(), 'original media');
+    assert.equal(native.fs.readBytes('maps/Bad.json').toString(), malformed);
+    assert.throws(() => JSON.parse(native.fs.readBytes('maps/Bad.json')), SyntaxError);
+    assert.ok(native.fs.readDirectory('data').includes('Map001.json'));
+    assert.ok(native.assets.sourcePath('data/System.json').startsWith(roots[0] + path.sep));
+    assert.deepEqual(fs.readFileSync(path.join(gameRoot, 'data/System.KEL')), original);
+  }
+});
+
+test('offline overlays preserve spelling, merge new directories and leave source files intact', () => {
+  const root = temporaryDirectory('offline-overlay-');
+  const game = path.join(root, 'game'), overlay = path.join(root, 'overlay');
+  fs.mkdirSync(game);
+  fs.mkdirSync(path.join(overlay, 'New'), { recursive: true });
+  fs.writeFileSync(path.join(game, 'Existing.json'), 'original');
+  fs.writeFileSync(path.join(overlay, 'Existing.json'), 'prepared');
+  fs.writeFileSync(path.join(overlay, 'New/Map001.json'), 'map');
+  const offline = offlineFilesystem(game, new Map());
+  offline.fs.mountReadOnlyOverlay(overlay);
+  assert.equal(offline.fs.readBytes('existing.JSON').toString(), 'prepared');
+  assert.deepEqual(offline.fs.readDirectory('.'), ['Existing.json', 'New']);
+  assert.deepEqual(offline.fs.readDirectory('new'), ['Map001.json']);
+  assert.equal(offline.fs.readBytes('new/map001.JSON').toString(), 'map');
+  assert.equal(fs.readFileSync(path.join(game, 'Existing.json'), 'utf8'), 'original');
+  const replacement = path.join(root, 'replacement'); fs.mkdirSync(replacement);
+  fs.writeFileSync(path.join(replacement, 'Second.json'), 'second');
+  offline.fs.mountReadOnlyOverlay(replacement);
+  assert.deepEqual(offline.fs.readDirectory('.'), ['Existing.json', 'Second.json']);
+  assert.equal(offline.fs.isDirectory('New'), false);
+  assert.equal(offline.fs.readBytes('Existing.json').toString(), 'original');
 });

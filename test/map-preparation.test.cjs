@@ -127,6 +127,16 @@ test('enabled plugin dependencies are stream-hashed without loading plugin sourc
   assert.ok(!reads.includes('js/plugins/LargePlugin.js'));
 });
 
+test('prepared game-file resolution takes precedence over declared map aliases', async t => {
+  const f = fixture(t);
+  f.virtualFiles = { overrides: { data: { '.json': '.pack' } } };
+  fs.writeFileSync(path.join(f.gameRoot, 'data/Map001.pack'), 'invalid base map');
+  f.native.runtime = { gameFiles: { resolve: logical => f.native.fs.exists(logical) ? logical : null } };
+  assert.equal((await prepareMaps(f)).selected, 1);
+  fs.writeFileSync(path.join(f.gameRoot, 'data/Map001.pack'), 'changed unused alias');
+  assert.equal((await prepareMaps(f)).hits, 1);
+});
+
 test('map and plugin overrides are selected and their actual files invalidate preparation', async t => {
   const f = fixture(t);
   f.virtualFiles = { overrides: { data: { '.json': '.pack' }, 'js/plugins': { '.js': '.mod' } } };

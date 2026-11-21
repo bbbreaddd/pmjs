@@ -1716,3 +1716,19 @@ test('logical image limits allow tall sources without enlarging physical pages',
   assert.equal(validDescriptor({ ...descriptor, width: 2048 }), true, '128 MiB is inclusive');
   assert.equal(validDescriptor({ ...descriptor, width: 2049 }), false, 'decoded size bound is independent of dimension bound');
 });
+
+test('encrypted media keeps JPEG and MP3 content despite PNG and OGG filename extensions', async () => {
+  for (const signature of [Buffer.from('ID3'), Buffer.from([0xff, 0xfb, 0x90, 0x44])]) {
+    const f = encryptedFixture('MV');
+    const image = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe1]), Buffer.alloc(28)]);
+    const audio = Buffer.concat([signature, Buffer.alloc(32)]);
+    fs.writeFileSync(path.join(f.gameRoot, f.encryptedImage), f.encrypt(image));
+    fs.writeFileSync(path.join(f.gameRoot, f.encryptedAudio), f.encrypt(audio));
+    f.native.assets.processImage = async () => null;
+    const result = await prepareAssets(f);
+    assert.equal(result.failedFiles, 0);
+    assert.equal(result.decryptedEntries.length, 2);
+    assert.deepEqual(fs.readFileSync(result.decryptedEntries.find(entry => entry.source === f.encryptedImage).file), image);
+    assert.deepEqual(fs.readFileSync(result.decryptedEntries.find(entry => entry.source === f.encryptedAudio).file), audio);
+  }
+});

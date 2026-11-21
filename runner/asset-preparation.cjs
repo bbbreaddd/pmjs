@@ -98,9 +98,12 @@ async function encryptionSettings(native, gameRoot, files) {
   }
 }
 function mediaHeader(bytes, extension) {
-  if (extension === '.png') return bytes.subarray(0, 8).equals(PNG);
+  if (extension === '.png') return bytes.subarray(0, 8).equals(PNG) ||
+    bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
   if (extension === '.ogg') return bytes.subarray(0, 4).toString() === 'OggS' ||
-    (bytes.subarray(0, 4).toString() === 'RIFF' && bytes.subarray(8, 12).toString() === 'WAVE');
+    (bytes.subarray(0, 4).toString() === 'RIFF' && bytes.subarray(8, 12).toString() === 'WAVE') ||
+    bytes.subarray(0, 3).toString() === 'ID3' ||
+    bytes.length >= 4 && bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0 && (bytes[1] & 0x06) !== 0;
   return extension === '.m4a' && bytes.subarray(4, 8).toString() === 'ftyp';
 }
 function pageHeaderMatches(header, page, size) {

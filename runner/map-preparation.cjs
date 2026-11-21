@@ -83,6 +83,8 @@ function gameInputs(native, files, virtualFiles) {
   if (!native.fs || typeof native.fs.readBytes !== 'function' || typeof native.fs.readDirectory !== 'function')
     throw new Error('game filesystem unavailable for map preparation');
   function resolve(logical) {
+    const prepared = native.runtime?.gameFiles?.resolve?.(logical);
+    if (prepared) return prepared;
     return resolveFileOverride(logical, virtualFiles.overrides || {}, source => native.fs.exists(source)) || logical;
   }
   function read(logical) {

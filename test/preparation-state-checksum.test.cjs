@@ -75,3 +75,17 @@ test('canonical shape does not bypass invalid checksum rejection', async () => {
   try { assert.equal(session.data.indices.marker, undefined); }
   finally { await session.close(); }
 });
+
+test('inventory includes declared prepared sources while excluding generated cache outputs', async () => {
+  const { inventory } = require('../runner/preparation-state.cjs');
+  const root = temporaryDirectory('prepared-source-inventory-');
+  const game = path.join(root, 'game'), cache = path.join(root, 'cache');
+  const metadata = path.join(cache, 'metadata');
+  const sources = new Map([
+    ['data/System.json', path.join(metadata, 'data/System.json')],
+    ['img/source.png', path.join(game, 'img/source.png')],
+    ['img/cached.png', path.join(cache, 'entries/cached.png')]
+  ]);
+  const native = { fs: { inventory: () => [...sources.keys()] }, assets: { sourcePath: name => sources.get(name) } };
+  assert.deepEqual(await inventory(game, native, cache, [game, metadata]), ['data/System.json', 'img/source.png']);
+});
