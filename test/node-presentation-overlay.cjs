@@ -143,3 +143,23 @@ check(pixel(4, 4), [255, 255, 255, 255]);
 assert.equal(native.images.memory().liveCount, initialImages,
   'clearing presentation releases its retained image');
 console.log('Rectangle presentation: pixels, retention, snapshots, stacking, clipping and ownership pass');
+
+const { createFpsCounter } = require('../runner/fps-counter.cjs');
+const counter = createFpsCounter(native, { SceneManager: { updateScene() {} } });
+const counterImages = native.images.memory().liveCount;
+counter.frame(true, 0);
+frame();
+check(pixel(10, 10), [51, 51, 51, 255]);
+let glyphPixels = 0;
+for (let y = 16; y < 30; y += 2) for (let x = 16; x < 128; x += 2)
+  if (pixel(x, y).slice(0, 3).every(channel => channel > 240)) ++glyphPixels;
+assert(glyphPixels > 5, 'counter text is visible without game fonts');
+const counterUploads = native.images.memory().textureUploadBytes;
+counter.frame(true, 250);
+assert.equal(native.images.memory().textureUploadBytes, counterUploads, 'counter reuses its texture between samples');
+counter.frame(false, 300);
+frame();
+check(pixel(10, 10), [255, 255, 255, 255]);
+counter.dispose();
+assert.equal(native.images.memory().liveCount, counterImages, 'counter releases its canvas and presentation image');
+console.log('FPS counter: font-free text, retained overlay, hide and disposal pass');

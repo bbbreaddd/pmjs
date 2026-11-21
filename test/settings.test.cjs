@@ -21,7 +21,7 @@ test('asset rebuild request is saved and acknowledged from the menu', async () =
   const storage = { readText: () => null, async writeTextAsync(name, value) { writes.push([name, value]); } };
   const settings = createSettings({ native, storage });
   settings.update(input([16, 0], [0]));
-  for (let i = 0; i < 3; ++i) settings.update(input([13], [13]));
+  for (let i = 0; i < 4; ++i) settings.update(input([13], [13]));
   settings.update(input([0], [0]));
   await settings.waitForSave();
   settings.draw();
@@ -84,7 +84,7 @@ test('opens with Home and A, applies settings, and saves once on exit', async ()
   s.update(input([14], [14]));
   s.update(input([0], [0]));
   await s.waitForSave();
-  assert.deepEqual(JSON.parse(f.saved()), { scale: 'fit', frameRate: 30 });
+  assert.deepEqual(JSON.parse(f.saved()), { scale: 'fit', frameRate: 30, fpsCounter: false });
   assert.equal(f.writes(), 1);
   assert.equal(s.isOpen(), false);
   assert.equal(s.update(input([0])), false);
@@ -111,6 +111,10 @@ test('integer scaling and frame limit persist and restore defaults', () => {
   assert.equal(f.writes(), 0);
   s.update(input([13], [13]));
   s.update(input([0], [0]));
+  assert.equal(s.fpsCounter(), true);
+  s.update(input([13], [13]));
+  s.update(input([0], [0]));
+  assert.equal(s.fpsCounter(), false);
   assert.equal(f.mode(), 'default');
   assert.equal(s.frameRate(), null);
   assert.equal(f.writes(), 0);
@@ -270,4 +274,18 @@ test('a key released while the menu is open can be pressed immediately after clo
   const after = filter({ keysDown: [65], keysPressed: [65], keyEvents: [key], gamepads: [] }, false);
   assert.deepEqual(after.keysDown, [65]);
   assert.deepEqual(after.keyEvents, [key]);
+});
+
+test('FPS counter toggles immediately and persists on exit', async () => {
+  const f = fixture(null), s = f.settings;
+  assert.equal(s.fpsCounter(), false);
+  s.update(input([16, 0], [0]));
+  s.update(input([13], [13])); s.update(input([13], [13]));
+  s.update(input([15], [15])); s.draw();
+  assert.equal(s.fpsCounter(), true);
+  assert.equal(f.overlay().rows[2].value, 'On');
+  s.update(input([9], [9])); s.update(input([15], [15])); s.update(input([0], [0]));
+  await s.waitForSave();
+  assert.equal(fixture(f.saved()).settings.fpsCounter(), true);
+  assert.equal(fixture('{"fpsCounter":"true"}').settings.fpsCounter(), false);
 });

@@ -21,6 +21,7 @@ const hostTimers = require('node:timers');
 const { createDiagnostics, reclamationMemoryState } = require('./diagnostics.cjs');
 const { createMemoryReclaimer } = require('./memory-reclamation.cjs');
 const { createSettings, createInputFilter } = require('./settings.cjs');
+const { createFpsCounter } = require('./fps-counter.cjs');
 
 function sendSupervisorHeartbeat(processHandle, heartbeat) {
   if (!processHandle || typeof processHandle.send !== 'function' || !processHandle.connected) return false;
@@ -365,7 +366,7 @@ async function runSession(input, diagnostics, setNative) {
   console.log(`[pmjs] startup stage=host-initialized elapsed_ms=${(performance.now() - startupStarted).toFixed(1)}`);
   let pendingInvalidations = 0, retryInvalidationAt = 0;
   let invalidatePreparation, invalidatePreparationCatalog;
-  let dispatcher, settings;
+  let dispatcher, settings, fpsCounter;
   let removePromiseRejectionBridge;
   let subprocesses, reloadRequested = false, finishSession;
   let cancelFrameSchedule = () => {};
@@ -567,6 +568,7 @@ async function runSession(input, diagnostics, setNative) {
       (timing.uncapped ? 'render_hz=uncapped' : `render_hz=${timing.renderHz}`));
     diagnostics.stage('playing');
     console.log(`[pmjs] ready size=${options.width}x${options.height} startup_ms=${(performance.now() - startupStarted).toFixed(1)}`);
+    fpsCounter = createFpsCounter(native);
     let diagnosticsFrameIndex = 0;
     const filterInput = createInputFilter();
     await new Promise((resolve, reject) => {
@@ -623,6 +625,7 @@ async function runSession(input, diagnostics, setNative) {
               native.renderFrame();
               if (globalThis.__pmjsAfterPresent) globalThis.__pmjsAfterPresent();
               native.swapFrame();
+              fpsCounter.frame(settings.fpsCounter(), native.runtime.monotonicNow());
               flushPreparationInvalidations();
             });
           };
@@ -660,6 +663,7 @@ async function runSession(input, diagnostics, setNative) {
     try { native.runtime.quit(); } catch (_) {}
     throw error;
   } finally {
+    if (fpsCounter) fpsCounter.dispose();
     if (settings) await settings.waitForSave();
     if (removePromiseRejectionBridge) removePromiseRejectionBridge();
     cancelFrameSchedule();

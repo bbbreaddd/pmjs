@@ -9,14 +9,15 @@ let fallbackText;
 const entries = [
   { id: 'scale', label: 'Scaling', values: ['default', 'fit', 'integer', 'crop', 'stretch'] },
   { id: 'frameRate', label: 'Frame-rate limit', values: [null, 30, 60, 120] },
+  { id: 'fpsCounter', label: 'FPS counter' },
   { id: 'reset', label: 'Restore defaults' },
   { id: 'rebuild', label: 'Rebuild assets next launch' }
 ];
 
 function createSettings({ native, fonts, storage }) {
-  let scale = 'default', frameRate = null, active = false, waitingForRelease = false;
+  let scale = 'default', frameRate = null, fpsCounter = false, active = false, waitingForRelease = false;
   let selected = 0, error = false, dirty = true, confirming = false, confirmYes = false;
-  let savedScale = scale, savedRate = frameRate, saving = null;
+  let savedScale = scale, savedRate = frameRate, savedCounter = fpsCounter, saving = null;
   let rebuildRequested = false;
   try {
     const saved = JSON.parse(storage.readText(file));
@@ -25,7 +26,8 @@ function createSettings({ native, fonts, storage }) {
       native.render.setPresentScaleMode(scale);
     }
     if (saved && [30, 60, 120].includes(saved.frameRate)) frameRate = saved.frameRate;
-    savedScale = scale; savedRate = frameRate;
+    fpsCounter = saved?.fpsCounter === true;
+    savedScale = scale; savedRate = frameRate; savedCounter = fpsCounter;
   } catch (error) {
     if (!(error instanceof SyntaxError)) console.warn('[pmjs] cannot read runtime settings:', error.message);
   }
@@ -52,10 +54,10 @@ function createSettings({ native, fonts, storage }) {
       if (pressed.includes(1) || pressed.includes(9)) {
         confirming = false; dirty = true;
       } else if (pressed.includes(0)) {
-        if (confirmYes && (scale !== savedScale || frameRate !== savedRate)) {
-          saving = storage.writeTextAsync(file, JSON.stringify({ scale, frameRate }))
+        if (confirmYes && (scale !== savedScale || frameRate !== savedRate || fpsCounter !== savedCounter)) {
+          saving = storage.writeTextAsync(file, JSON.stringify({ scale, frameRate, fpsCounter }))
             .then(() => {
-              savedScale = scale; savedRate = frameRate;
+              savedScale = scale; savedRate = frameRate; savedCounter = fpsCounter;
               active = false; waitingForRelease = true; confirming = false;
             }, failure => {
               error = true; confirming = false;
@@ -85,6 +87,7 @@ function createSettings({ native, fonts, storage }) {
       } else if (entries[selected].id === 'frameRate') {
         const values = entries[selected].values;
         nextRate = values[(values.indexOf(frameRate) + direction + values.length) % values.length];
+      } else if (entries[selected].id === 'fpsCounter') { fpsCounter = !fpsCounter;
       } else if (entries[selected].id === 'rebuild' && pressed.includes(0)) {
         saving = storage.writeTextAsync(rebuildMarker, require('node:crypto').randomBytes(16).toString('hex')).then(() => {
           rebuildRequested = true; error = false;
@@ -94,7 +97,7 @@ function createSettings({ native, fonts, storage }) {
         }).finally(() => { saving = null; dirty = true; });
         dirty = true;
         return true;
-      } else if (entries[selected].id === 'reset' && pressed.includes(0)) { nextScale = 'default'; nextRate = null; }
+      } else if (entries[selected].id === 'reset' && pressed.includes(0)) { nextScale = 'default'; nextRate = null; fpsCounter = false; }
       else return true;
       if (nextScale !== scale) native.render.setPresentScaleMode(nextScale);
       scale = nextScale; frameRate = nextRate; error = false;
@@ -106,7 +109,8 @@ function createSettings({ native, fonts, storage }) {
     if (!dirty) return;
     const scaleLabel = { default: 'Default', fit: 'Keep aspect ratio', integer: 'Integer', crop: 'Crop to fill', stretch: 'Stretch' }[scale];
     const rows = entries.map(entry => ({ label: entry.label, value: entry.id === 'scale' ? scaleLabel :
-      entry.id === 'frameRate' ? (frameRate ? frameRate + ' FPS' : 'Default') : '' }));
+      entry.id === 'frameRate' ? (frameRate ? frameRate + ' FPS' : 'Default') :
+      entry.id === 'fpsCounter' ? (fpsCounter ? 'On' : 'Off') : '' }));
     const title = 'Settings', question = 'Exit Settings?', yes = 'Yes', no = 'No';
     const footer = confirming ? [saving ? 'Saving...' : 'Left / Right: Choose', saving ? '' : 'A: Select    B: Cancel'] :
       ['D-pad: Move    A: Select', error ? 'Save failed. Try again.' :
@@ -145,7 +149,7 @@ function createSettings({ native, fonts, storage }) {
   let visible = false;
   function show() { draw(); visible = true; }
   function hide() { native.runtime.settingsPresent(false); visible = false; }
-  return { update, isOpen: () => active, isVisible: () => visible, frameRate: () => frameRate,
+  return { update, isOpen: () => active, isVisible: () => visible, frameRate: () => frameRate, fpsCounter: () => fpsCounter,
     draw: show, waitForSave: () => saving, hide };
 }
 
