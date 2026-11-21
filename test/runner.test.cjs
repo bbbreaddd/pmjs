@@ -964,6 +964,28 @@ test('CLI preserves guest arguments after the separator', () => {
   assert.deepEqual(options.guestArguments, ['test', '--custom', 'value']);
 });
 
+test('runner uses configured launch arguments unless the command line replaces them', async () => {
+  const options = fixture('globalThis.__pmjsTick=()=>{}; globalThis.__pmjsRender=()=>{};');
+  options.assetPreparation = 'off';
+  options.config = path.join(options.gameRoot, 'config.json');
+  fs.writeFileSync(options.config, JSON.stringify({ launchArguments: ['--example', 'value with spaces'] }));
+  await run(options);
+  assert.deepEqual(require(options.addon).runtime.arguments, ['--example', 'value with spaces']);
+  const cli = parse(['--', '--replacement']);
+  assert.deepEqual(resolveDefaults({ ...options, ...cli }).guestArguments, ['--replacement']);
+  assert.deepEqual(resolveDefaults({ ...options, ...parse(['--']) }).guestArguments, []);
+  assert.deepEqual(resolveDefaults({ ...options, ...parse([]) }).guestArguments, ['--example', 'value with spaces']);
+});
+
+test('launch arguments require an array of strings', () => {
+  const options = fixture('');
+  options.config = path.join(options.gameRoot, 'config.json');
+  for (const launchArguments of ['--example', null, [42]]) {
+    fs.writeFileSync(options.config, JSON.stringify({ launchArguments }));
+    assert.throws(() => resolveDefaults(options), /launchArguments must be an array of strings/);
+  }
+});
+
 test('supervisor reloads into fresh processes, rechecks scripts and preserves saved state', async () => {
   const { runSupervised } = require('../runner/supervisor.cjs');
   const options = fixture('');

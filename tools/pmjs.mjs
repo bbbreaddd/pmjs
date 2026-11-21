@@ -24,7 +24,7 @@ const share = path.join(root, 'share/pmjs');
 const info = JSON.parse(fs.readFileSync(path.join(root, 'build-info.json'), 'utf8'));
 const args = process.argv.slice(3);
 const guestDelimiter = args.indexOf('--');
-const guestArguments = guestDelimiter < 0 ? [] : args.splice(guestDelimiter).slice(1);
+const guestArguments = guestDelimiter < 0 ? undefined : args.splice(guestDelimiter).slice(1);
 
 const first = args.shift();
 const buildInfo = `PMJS${info.buildId ? ` build=${info.buildId}` : ''} ` +

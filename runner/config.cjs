@@ -19,6 +19,7 @@ function resolveDefaults(input) {
   let preparationFonts = [];
   let virtualFiles = input.virtualFiles;
   let gamePreparation = input.gamePreparation;
+  let guestArguments = input.guestArguments;
   let configDirectory = process.cwd();
 
   if (input.config) {
@@ -39,6 +40,7 @@ function resolveDefaults(input) {
     assertDisableOptimizationsShape(cfg.disableOptimizations, configPath);
     if (virtualFiles === undefined) virtualFiles = cfg.virtualFiles;
     if (gamePreparation === undefined) gamePreparation = cfg.gamePreparation;
+    if (guestArguments === undefined) guestArguments = cfg.launchArguments;
     configDirectory = path.dirname(configPath);
     if (cfg.assetPreparation !== undefined) {
       assetPreparation = cfg.assetPreparation;
@@ -127,7 +129,12 @@ function resolveDefaults(input) {
   if (memoryReducer !== undefined && typeof memoryReducer !== 'boolean') {
     throw new Error('memoryReducer must be a boolean');
   }
+  if (guestArguments === undefined) guestArguments = [];
+  if (!Array.isArray(guestArguments) || guestArguments.some(argument => typeof argument !== 'string')) {
+    throw new Error('launchArguments must be an array of strings');
+  }
   return { ...input, width, height, title, assetPreparation, assetPolicyOverrides: policyOverrides, preparationFonts, virtualFiles, gamePreparation,
+    guestArguments: guestArguments.slice(),
     preparedFrameCacheBytes, preparedPageSplitThresholdBytes, preparedCompactSampling, preparedCropUploads, imagePalettization, memoryReducer };
 }
 
