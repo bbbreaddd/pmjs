@@ -33,6 +33,14 @@ bool validContentHash(const std::string& hash) {
   });
 }
 
+bool contentDigestMatches(std::span<const std::uint8_t, 32> digest, const std::string& expected) {
+  if (expected.size() != digest.size() * 2) return false;
+  constexpr char hex[] = "0123456789abcdef";
+  for (std::size_t i = 0; i < digest.size(); ++i)
+    if (expected[i * 2] != hex[digest[i] >> 4] || expected[i * 2 + 1] != hex[digest[i] & 15]) return false;
+  return true;
+}
+
 bool contentHashMatches(std::span<const std::uint8_t> bytes, const std::string& expected) {
   if (!validContentHash(expected)) return false;
   auto* context = av_sha_alloc();
@@ -42,10 +50,7 @@ bool contentHashMatches(std::span<const std::uint8_t> bytes, const std::string& 
   std::array<std::uint8_t, 32> digest{};
   av_sha_final(context, digest.data());
   av_free(context);
-  constexpr char hex[] = "0123456789abcdef";
-  for (std::size_t i = 0; i < digest.size(); ++i)
-    if (expected[i * 2] != hex[digest[i] >> 4] || expected[i * 2 + 1] != hex[digest[i] & 15]) return false;
-  return true;
+  return contentDigestMatches(digest, expected);
 }
 
 std::optional<std::string> identityWithoutInode(const std::string& key) {
@@ -97,9 +102,6 @@ bool fileContentMatches(const std::filesystem::path& path, const std::string& id
   struct stat named{};
   if (::stat(path.c_str(), &named) != 0 || named.st_dev != after.st_dev || named.st_ino != after.st_ino) return false;
   std::array<std::uint8_t, 32> digest{}; av_sha_final(context, digest.data());
-  constexpr char hex[] = "0123456789abcdef";
-  for (std::size_t i = 0; i < digest.size(); ++i)
-    if (expectedHash[i*2] != hex[digest[i] >> 4] || expectedHash[i*2+1] != hex[digest[i] & 15]) return false;
-  return true;
+  return contentDigestMatches(digest, expectedHash);
 }
 }

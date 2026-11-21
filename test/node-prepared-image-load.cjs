@@ -84,6 +84,8 @@ async function main() {
   const inodeScenarios = ['source', 'page', 'source-hash', 'page-hash', 'metadata', 'legacy', 'held'];
   const inodeFixtures = new Map(inodeScenarios.map(scenario => [scenario, fixture('inode:' + scenario)]));
   const coldRecovery = fixture('cold-inode');
+  const sharedOrdinary = fixture('ordinary-shared-page');
+  const sharedVerified = fixture('verified-shared-page');
   const rehydrationFixtures = [fixture('legacy-rehydration'), fixture('hashed-rehydration')];
   const lazy = fixture('lazy');
   const retainedFixtures = [fixture('cpu'), fixture('coalesced-cpu')];
@@ -260,6 +262,29 @@ async function main() {
   assertPixels(recovered, coldRecovery.pixels);
   assert.equal(entry(recovered).gpuBytes, 0);
   native.images.release(recovered.handle);
+  {
+    const records = [sharedOrdinary, sharedVerified].map(value => ({
+      ...value,
+      sourceIdentity: native.assets.sourceIdentity(value.source),
+      pageHashes: [hashFile(path.join(value.directory, 'page-0.png'))]
+    }));
+    assert.equal(native.assets.installPrepared(records, true), 2);
+    records[1].pageIdentities[0] = changedField(records[1].pageIdentities[0], 6);
+    assert.equal(native.assets.installPreparedCatalog(records), 2);
+    native.assets.consumePreparationInvalidations();
+    const ordinary = await native.images.loadAsync(sharedOrdinary.source);
+    const before = native.images.memory();
+    const verified = await native.images.loadAsync(sharedVerified.source);
+    const after = native.images.memory();
+    assert.notEqual(ordinary.handle, verified.handle);
+    assert.equal(entry(verified).gpuBytes, 0, 'verified inode drift must keep prepared backing');
+    assert.equal(after.preparedPageDecodes, before.preparedPageDecodes, 'verified page decoded instead of sharing');
+    assert.ok(after.preparedSharedPageHits > before.preparedSharedPageHits);
+    assert.equal(native.assets.consumePreparationInvalidations(), 0);
+    native.images.release(ordinary.handle);
+    assertPixels(verified, sharedVerified.pixels);
+    native.images.release(verified.handle);
+  }
   for (const scenario of inodeScenarios) {
     const prepared = inodeFixtures.get(scenario);
     const pagePath = path.join(prepared.directory, 'page-0.png');

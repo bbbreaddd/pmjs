@@ -535,7 +535,7 @@ std::shared_ptr<ImageFileSource> ImageStore::openPreparedFile(const std::filesys
 }
 
 namespace {
-std::string preparedDigest(const void* data, std::size_t size) {
+std::string preparedDigest(const void* data, std::size_t size, const std::string* expectedHash = nullptr) {
   auto* sha = av_sha_alloc();
   if (!sha) throw std::bad_alloc();
   std::array<std::uint8_t, 32> digest{};
@@ -543,7 +543,15 @@ std::string preparedDigest(const void* data, std::size_t size) {
   av_sha_update(sha, static_cast<const std::uint8_t*>(data), size);
   av_sha_final(sha, digest.data());
   av_free(sha);
+  if (expectedHash && !contentDigestMatches(digest, *expectedHash)) return {};
   return std::string(reinterpret_cast<const char*>(digest.data()), digest.size());
+}
+
+std::string preparedPageKey(std::span<const std::uint8_t> bytes, int width, int height,
+                            const std::string* expectedHash) {
+  auto digest = preparedDigest(bytes.data(), bytes.size(), expectedHash);
+  if (!digest.empty()) digest += std::to_string(width) + ":" + std::to_string(height);
+  return digest;
 }
 }
 
@@ -2813,9 +2821,10 @@ bool ImageStore::preparedSparsePage(PreparedBacking& backing, std::size_t index)
       pread(page.source->descriptor_, header.data(), header.size(), page.source->offset_) != ssize_t(header.size()) ||
       std::memcmp(header.data(), "PML4", 4) || (header[4] != 2 && header[4] != 3)) return false;
   const auto bytes = readCapturedBytes(*page.source);
-  if (!bytes || (page.verifyHash && !contentHashMatches(*bytes, page.expectedHash))) return false;
+  if (!bytes) return false;
   const auto& d = backing.descriptor.pages[index];
-  const auto key = preparedDigest(bytes->data(), bytes->size()) + std::to_string(d.width) + ":" + std::to_string(d.height);
+  const auto key = preparedPageKey(*bytes, d.width, d.height, page.verifyHash ? &page.expectedHash : nullptr);
+  if (key.empty()) return false;
   {
     std::lock_guard lock(backing.pool->mutex);
     auto& entry = backing.pool->pages[key];
@@ -2891,10 +2900,10 @@ ImagePixels* ImageStore::preparedPixels(PreparedBacking& backing, std::size_t in
         offset += static_cast<std::size_t>(count);
       }
       if (!source.unchanged()) return nullptr;
-      if (page.verifyHash && !contentHashMatches(encoded, page.expectedHash)) return nullptr;
+      const auto key = preparedPageKey(encoded, dimensions.width, dimensions.height,
+          page.verifyHash ? &page.expectedHash : nullptr);
+      if (key.empty()) return nullptr;
       page.verifyHash = false;
-      const auto key = preparedDigest(encoded.data(), encoded.size()) +
-          std::to_string(dimensions.width) + ":" + std::to_string(dimensions.height);
       {
         std::lock_guard lock(backing.pool->mutex);
         auto& entry = backing.pool->pages[key];

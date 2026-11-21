@@ -11,6 +11,7 @@ std::string fileIdentity(const std::filesystem::path& canonicalPath, const struc
 std::string fileIdentity(const std::filesystem::path& path);
 bool validContentHash(const std::string& hash);
 bool inodeOnlyChange(const std::string& expected, const std::string& actual);
+bool contentDigestMatches(std::span<const std::uint8_t, 32> digest, const std::string& expected);
 bool contentHashMatches(std::span<const std::uint8_t> bytes, const std::string& expected);
 // Hash the opened object and reject path replacement or mutation during verification.
 bool fileContentMatches(const std::filesystem::path& path, const std::string& identity,
