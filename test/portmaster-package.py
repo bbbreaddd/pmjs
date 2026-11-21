@@ -147,7 +147,7 @@ class PortMasterPackage(unittest.TestCase):
                             *flags], input=source, text=True, check=True)
         share = self.stage / 'share/pmjs'
         share.mkdir(parents=True)
-        for directory in ('js', 'runner', 'profiles'):
+        for directory in ('js', 'runner', 'profiles', 'patches'):
             shutil.copytree(ROOT / directory, share / directory)
         (share / 'tools').mkdir()
         for file in ('build-js-runtime.mjs', 'build-js-composition.mjs', 'game-inspect.mjs', 'achievement-discovery.mjs', 'game-bundle.mjs',
@@ -216,6 +216,9 @@ class PortMasterPackage(unittest.TestCase):
                                  for name in names))
             self.assertIn('minimalgame/pmjs.json', names)
             self.assertIn('minimalgame/runtime/share/pmjs/tools/pmjs.mjs', names)
+            for module in ('oneloader.cjs', 'game-files.cjs', 'v1-compatibility.cjs'):
+                self.assertEqual(package.read('minimalgame/runtime/share/pmjs/patches/omori/' + module),
+                                 (ROOT / 'patches/omori' / module).read_bytes())
             self.assertIn('minimalgame/runtime/build-info.json', names)
             packaged_info = json.loads(package.read('minimalgame/runtime/build-info.json'))
             self.assertEqual(packaged_info['buildId'], 'build-package-fixture')
@@ -409,7 +412,8 @@ class PortMasterPackage(unittest.TestCase):
             self.assertEqual(self.output.read_bytes(), b'existing archive')
 
     def test_adapter_configuration_and_mz(self):
-        adapter = self.root / 'adapter.js'
+        adapter = self.root / 'adapters/adapter.js'
+        adapter.parent.mkdir()
         adapter.write_text('globalThis.adapterRegistered = true;')
         config = self.root / 'config.json'
         config.write_text('{"display":{"width":960,"height":720}}')
