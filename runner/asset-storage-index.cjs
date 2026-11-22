@@ -8,7 +8,7 @@ const { fileIdentity } = require('./preparation-files.cjs');
 
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 
-function storageClassifier(assets, cacheRoot) {
+function storageClassifier(assets, cacheRoot, verifiedFiles = {}) {
   const version = assets.imageStorageVersion;
   const file = path.join(cacheRoot, 'image-storage.json');
   let saved = {};
@@ -25,6 +25,11 @@ function storageClassifier(assets, cacheRoot) {
     const before = fileIdentity(await fs.promises.stat(source, { bigint: true }));
     const receipt = receipts.get(source);
     if (receipt?.identity === before) return receipt.hash;
+    const verified = verifiedFiles[source];
+    if (verified?.identity === before && /^[a-f0-9]{64}$/.test(verified.hash)) {
+      receipts.set(source, { identity: before, hash: verified.hash });
+      return verified.hash;
+    }
     const digest = crypto.createHash('sha256');
     for await (const chunk of fs.createReadStream(source)) digest.update(chunk);
     if (fileIdentity(await fs.promises.stat(source, { bigint: true })) !== before)
@@ -34,6 +39,7 @@ function storageClassifier(assets, cacheRoot) {
     return checksum;
   }
   return {
+    hash: checksumOf,
     async classify(source) {
       const checksum = await checksumOf(source);
       if (!pending.has(checksum)) {

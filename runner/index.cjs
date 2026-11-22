@@ -165,15 +165,17 @@ async function prepareStartupAssets(options, native, settings) {
   console.log(`[pmjs] preparation event=start workspace_bytes=${options.assetPreparation.workspaceBytes} ` +
     `processor=${JSON.stringify(native.assets.preparationVersion || null)} ` +
     `lz4_version=${JSON.stringify(native.assets.preparationLz4Version || null)}`);
-  const portableIndex = require('./asset-index.cjs').loadAssetIndex(options.assetIndex, native, options);
+  const { readAssetIndex, loadAssetIndex } = require('./asset-index.cjs');
+  let indexed = readAssetIndex(options.assetIndex);
   const { loadCatalog, rebuildMarker } = require('./preparation-catalog.cjs');
   const preparationOptions = { gameRoot: options.gameRoot,
     virtualFiles: options.virtualFiles,
     sourceRoots: [...(options.preparedGameRoots || []), path.join(options.saveRoot, 'game-files', 'files')],
     cacheRoot: options.assetPreparation.cacheRoot, native, ...options.assetPreparation,
     images: options.assetPreparation.enabled, recipes: options.assetPreparation.recipes,
-    policyOverrides: options.assetPolicyOverrides, portableIndex,
-    portableAssetRoot: portableIndex && path.dirname(options.assetIndex),
+    policyOverrides: options.assetPolicyOverrides, portableIndex: null,
+    portableIndexIdentity: indexed?.identity || null,
+    portableAssetRoot: indexed && path.dirname(options.assetIndex),
     bundleRoot: options.bundleRoot, portDescriptors: options.portDescriptors, adapters: options.preparationAdapters,
     width: options.width, height: options.height, fastStartup: true };
   const rebuildRequest = native.storage.readText(rebuildMarker);
@@ -189,6 +191,9 @@ async function prepareStartupAssets(options, native, settings) {
         invalidateCatalog: cached.invalidateCatalog };
     }
   }
+  preparationOptions.portableIndex = indexed ? loadAssetIndex(options.assetIndex, native, options, indexed.contents) : null;
+  indexed = null;
+  if (!preparationOptions.portableIndex) preparationOptions.portableAssetRoot = null;
   let cancelled = false;
   let preparationFailed = false;
   let preparationError;

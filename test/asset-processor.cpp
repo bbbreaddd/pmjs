@@ -825,6 +825,7 @@ int main() {
       {}, &*automaticReference, automaticOptions);
     automaticOptions.statistics = nullptr;
     require(constrainedStats.indexedLayouts == 1);
+    require(constrainedStats.sourceDecodes == 1 && constrainedStats.workspaceConstrained);
     require(!constrainedReplay.framePages && constrainedReplay.textureArtifact.empty());
     require(constrainedReplay.textureRetainedBytes == 0);
     verify(source, root / "automatic-constrained-replay", constrainedReplay);

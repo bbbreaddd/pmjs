@@ -9,6 +9,8 @@ const { prepareGameAssets } = require('./preparation.cjs');
 const { COMPILER_VERSION } = require('./map-demand.cjs');
 const { acquireLock } = require('./preparation-lifetime.cjs');
 const { storageClassifier, mapStorageInputs } = require('./asset-storage-index.cjs');
+const { fileIdentity } = require('./preparation-files.cjs');
+const { discoverBundledProcessors } = require('./port-preparation.cjs');
 
 const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 const identity = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -174,7 +176,7 @@ function offlineFilesystem(gameRoot, derived) {
   return { assets, fs: game };
 }
 
-function portableMaps(result, includeAssets, output) {
+async function portableMaps(result, includeAssets, output, classifier) {
   const mapInputs = Object.fromEntries(Object.entries(result.mapInputs || {}).map(([name, entry]) =>
     [name, { ...entry, dependencies: entry.dependencies.map(({ logical, hash }) => ({ logical, hash })) }]));
   const entries = [];
@@ -183,16 +185,17 @@ function portableMaps(result, includeAssets, output) {
     const directory = entry.directory;
     const manifest = entry;
     if (!validTileDescriptor(manifest.descriptor)) throw new Error('invalid generated map descriptor');
-    const pages = manifest.outputs.map(page => {
+    const pages = [];
+    for (const page of manifest.outputs) {
       const source = path.join(directory, page.path);
-      if (hash(source) !== page.hash) throw new Error('generated map page changed');
+      if (await classifier.hash(source) !== page.hash) throw new Error('generated map page changed');
       const relative = path.posix.join('assets/maps', selected.identity, page.path);
       if (includeAssets) {
         fs.mkdirSync(path.dirname(path.join(output, relative)), { recursive: true });
         fs.copyFileSync(source, path.join(output, relative));
       }
-      return { ...page, path: relative };
-    });
+      pages.push({ ...page, path: relative });
+    }
     const descriptor = { ...manifest.descriptor,
       sources: manifest.descriptor.sources.map(({ snapshot, sourceIdentity, ...source }) => source) };
     entries.push({ mapId: Number(mapId), identity: selected.identity,
@@ -218,6 +221,7 @@ async function generateAssetIndex({ root, gameRoot, options, output, includeAsse
     const sourceRoots = prepareGameFiles({ ...options, gameRoot, assetPreparation: { ...options.assetPreparation, cacheRoot } }, native, 'prepareAssetIndex');
     const prepared = await prepareGameAssets({ gameRoot, cacheRoot, native,
       ...options.assetPreparation, images: options.assetPreparation.enabled,
+      materializeAudio: portDescriptors.length > 0 || discoverBundledProcessors(output).length > 0,
       maps: options.assetPreparation.enabled && options.assetPreparation.maps,
       preparationContext: 'offline', verifyHashes: true, logger, shouldCancel, sourceRoots,
       virtualFiles: options.virtualFiles,
@@ -250,7 +254,7 @@ async function generateAssetIndex({ root, gameRoot, options, output, includeAsse
     if (nativeAddon.assets.imageStorageVersion !== 1 || typeof nativeAddon.assets.classifyImageStorage !== 'function')
       throw new Error('image storage indexing requires a current host runtime');
     const decryptedInputs = new Map(images.decryptedEntries.map(entry => [entry.source, entry.file]));
-    const classifier = storageClassifier(nativeAddon.assets, cacheRoot);
+    const classifier = storageClassifier(nativeAddon.assets, cacheRoot, prepared.fileReceipts);
     const imageWarnings = new Map();
     const imageRecords = await mapStorageInputs(images.decisions, async decision => {
       if (shouldCancel()) throw new Error('image storage indexing cancelled');
@@ -259,17 +263,18 @@ async function generateAssetIndex({ root, gameRoot, options, output, includeAsse
       const decrypted = imageEntries.get(decision.source.replace(/\.(png_|rpgmvp)$/i, '.png'));
       // Either source spelling can match; retain the first entry in preparation order.
       const entry = (!original || decrypted && decrypted.index < original.index ? decrypted : original)?.entry;
-      const outputs = Object.entries(decision.outputs).map(([name, checksum]) => {
+      const outputs = [];
+      for (const [name, checksum] of Object.entries(decision.outputs)) {
         if (!entry) throw new Error('missing generated image entry');
         const source = path.join(entry.directory, name);
-        if (hash(source) !== checksum) throw new Error('generated image page changed');
+        if (await classifier.hash(source) !== checksum) throw new Error('generated image page changed');
         const relative = path.posix.join('assets/images', path.basename(entry.directory), name);
         if (includeAssets) {
           fs.mkdirSync(path.dirname(path.join(output, relative)), { recursive: true });
           fs.copyFileSync(source, path.join(output, relative));
         }
-        return { path: relative, hash: checksum };
-      });
+        outputs.push({ path: relative, hash: checksum });
+      }
       let storage;
       const transformsPixels = decision.recipe?.crop ||
         decision.recipe?.backdrop?.some(channel => channel !== 0);
@@ -279,7 +284,7 @@ async function generateAssetIndex({ root, gameRoot, options, output, includeAsse
           storage = await classifier.classify(
             decryptedInputs.get(decision.source) || filesystem.assets.sourcePath(decision.source));
           if (!validStorageDecision(storage)) throw new Error('invalid storage decision');
-          if (hash(filesystem.assets.sourcePath(decision.source)) !== decision.sourceHash)
+          if (await classifier.hash(filesystem.assets.sourcePath(decision.source)) !== decision.sourceHash)
             throw new Error('image source changed during storage classification');
         } catch (error) {
           storage = undefined;
@@ -295,7 +300,7 @@ async function generateAssetIndex({ root, gameRoot, options, output, includeAsse
           if (!validStorageDecision(pageStorage) || pageStorage.width !== page.width || pageStorage.height !== page.height)
             throw new Error('invalid prepared page storage decision');
           const expected = decision.outputs[page.path];
-          if (hash(path.join(entry.directory, page.path)) !== expected) throw new Error('prepared page changed during classification');
+          if (await classifier.hash(path.join(entry.directory, page.path)) !== expected) throw new Error('prepared page changed during classification');
           pages.push({ ...page, storage: pageStorage });
         }
         descriptor = { ...descriptor, pages };
@@ -327,7 +332,7 @@ async function generateAssetIndex({ root, gameRoot, options, output, includeAsse
             astcQuality: allowAstc ? astc.quality : null, pageCodec: options.assetPreparation.pageCodec,
             ...(calculated.workspaceConstrained || calculated.descriptor?.workspaceConstrained
               ? { workspaceBytes: options.assetPreparation.workspaceBytes } : {}) } } };
-      }), maps: maps && portableMaps(maps, includeAssets, output) };
+      }), maps: maps && await portableMaps(maps, includeAssets, output, classifier) };
     if (writeIndex) fs.writeFileSync(path.join(output, 'asset-index.json'), JSON.stringify(index) + '\n');
     return { images: images.total, preparedImages: images.prepared,
       maps: maps?.selected || 0, warnings: warnings.slice(0, 3), warningCount: warnings.length };
@@ -337,10 +342,22 @@ async function generateAssetIndex({ root, gameRoot, options, output, includeAsse
   }
 }
 
-function loadAssetIndex(file, native, options) {
+function readAssetIndex(file) {
   try {
-    if (!file || fs.statSync(file).size > 64 * 1024 * 1024) return null;
-    const index = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!file) return null;
+    const before = fs.statSync(file, { bigint: true });
+    if (before.size > 64n * 1024n * 1024n) return null;
+    const contents = fs.readFileSync(file);
+    if (fileIdentity(before) !== fileIdentity(fs.statSync(file, { bigint: true }))) return null;
+    return { contents, identity: { loader: 1, sha256: crypto.createHash('sha256').update(contents).digest('hex') } };
+  } catch { return null; }
+}
+
+function loadAssetIndex(file, native, options, contents) {
+  try {
+    contents ??= readAssetIndex(file)?.contents;
+    if (!contents) return null;
+    const index = JSON.parse(contents);
     if (![1, 2, 3].includes(index.schema) || index.kind !== 'pmjs-asset-index') return null;
     const policies = {};
     if (index.schema === 3 && Array.isArray(index.images)) {
@@ -413,4 +430,4 @@ function assetIndexArtifacts(index) {
   return outputs.map(({ path: file, hash }) => ({ path: file, hash }));
 }
 
-module.exports = { generateAssetIndex, loadAssetIndex, offlineFilesystem, assetIndexArtifacts };
+module.exports = { generateAssetIndex, readAssetIndex, loadAssetIndex, offlineFilesystem, assetIndexArtifacts };

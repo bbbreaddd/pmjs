@@ -55,13 +55,20 @@ native.initialize({ gameRoot, width: 64, height: 64, windowTitle: 'catalog test'
 
 async function run() {
   const options = { gameRoot, cacheRoot: path.join(root, 'cache'), native, maps: false,
-    fastStartup: true, pageCodec: 'png', adapters: [processor], recipes: [{ source,
+    fastStartup: true, pageCodec: 'png', adapters: [processor],
+    portableIndex: { images: [], policies: {} }, portableIndexIdentity: { loader: 1, sha256: 'a'.repeat(64) }, recipes: [{ source,
       sourceHash: crypto.createHash('sha256').update(image).digest('hex'),
       grid: [1, 1], backdrop: [0, 0, 0, 0] }] };
   const cold = await prepareGameAssets(options);
   assert.equal(cold.images.failedFiles, 1);
   assert.equal(cold.images.ordinaryFailures[0].source, unusedBroken);
   assert.equal(cold.catalogSaved, true);
+  const catalog = JSON.parse(fs.readFileSync(path.join(cold.root, 'startup-catalog.json')));
+  assert.deepEqual(catalog.data.signature.portableIndex, options.portableIndexIdentity);
+  assert.equal(await loadCatalog({ ...options, portableIndexIdentity: { loader: 1, sha256: 'b'.repeat(64) } }), null);
+  const changedStorage = { ...native, assets: Object.assign(Object.create(native.assets),
+    { imageStorageVersion: native.assets.imageStorageVersion + 1 }) };
+  assert.equal(await loadCatalog({ ...options, native: changedStorage }), null);
   assert.equal(cold.images.entries.length, 2);
   assert.equal(cold.images.decryptedEntries.length, 1);
   assert.ok(cold.images.decryptedEntries[0].fileIdentity);

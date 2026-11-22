@@ -64,15 +64,23 @@ ImageStorageDecision classifyImageStorage(const ImagePixels& pixels) {
   for (std::size_t i = 0; i < pixels.rgba.size(); i += 4) {
     result.opaque &= pixels.rgba[i+3] == 255;
     result.allZero &= !(pixels.rgba[i] || pixels.rgba[i+1] || pixels.rgba[i+2] || pixels.rgba[i+3]);
+    if (!result.opaque && !result.allZero) break;
   }
   if (result.channels.channels == 1) return result;
   const std::size_t limit = result.channels.channels == 2 ? 256 : 65536;
   std::unordered_set<std::uint32_t> colors;
-  for (std::size_t i = 0; i < pixels.rgba.size(); i += 4) {
+  for (std::size_t i = 0; i < pixels.rgba.size();) {
     std::uint32_t key;
     std::memcpy(&key, pixels.rgba.data() + i, 4);
     colors.insert(key);
     if (colors.size() > limit) return result;
+    do {
+      i += 4;
+      if (i == pixels.rgba.size()) break;
+      std::uint32_t next;
+      std::memcpy(&next, pixels.rgba.data() + i, 4);
+      if (next != key) break;
+    } while (true);
   }
   const int bits = colors.size() <= 256 ? 8 : 16;
   if (pixels.rgba.size()/4*(result.channels.channels - bits/8) <=

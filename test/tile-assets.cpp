@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <source_location>
 #include <unistd.h>
+#include <png.h>
 
 namespace {
 void require(bool value, std::source_location location = std::source_location::current()) {
@@ -74,7 +75,12 @@ int main() try {
     const auto at=static_cast<std::size_t>(y*3000+x)*4;
     large.rgba[at]=x%251;large.rgba[at+1]=y%241;large.rgba[at+2]=(x/100+y/100)%256;large.rgba[at+3]=255;
   }
-  pmjs::writePreparedPng(root/"large.png",3000,1500,large.rgba);
+  // Source compression must not depend on the prepared-output encoding policy.
+  png_image sourceImage{};
+  sourceImage.version = PNG_IMAGE_VERSION;
+  sourceImage.width = 3000; sourceImage.height = 1500; sourceImage.format = PNG_FORMAT_RGBA;
+  require(png_image_write_to_file(&sourceImage, (root/"large.png").c_str(), 0, large.rgba.data(), 0, nullptr));
+  png_image_free(&sourceImage);
   auto largeFile=pmjs::ImageStore::openFile(root/"large.png");
   std::vector<pmjs::TileAssetInput> demands{{std::shared_ptr<pmjs::ImageFileSource>(std::move(largeFile)),{{0,0,1500,1500},{1500,0,1500,1500}}}};
   require(!pmjs::ImageStore::decodeFile(*demands[0].source, 1024));

@@ -79,7 +79,8 @@ async function validateEntry(directory, key, files) {
   } catch (_) { return null; }
 }
 
-function gameInputs(native, files, virtualFiles) {
+function gameInputs(native, files, virtualFiles, verifyHashes = false) {
+  const parsedInputs = new Map();
   if (!native.fs || typeof native.fs.readBytes !== 'function' || typeof native.fs.readDirectory !== 'function')
     throw new Error('game filesystem unavailable for map preparation');
   function resolve(logical) {
@@ -88,7 +89,9 @@ function gameInputs(native, files, virtualFiles) {
     return resolveFileOverride(logical, virtualFiles.overrides || {}, source => native.fs.exists(source)) || logical;
   }
   function read(logical) {
-    logical = resolve(logical);
+    return readResolved(resolve(logical));
+  }
+  function readResolved(logical) {
     const file = native.assets.sourcePath(logical), sourceIdentity = native.assets.sourceIdentity(logical);
     const contents = native.fs.readBytes(logical);
     if (!file || contents === null) throw new Error('missing game input '+logical);
@@ -101,6 +104,26 @@ function gameInputs(native, files, virtualFiles) {
     const decoded = native.runtime?.gameFiles?.decode?.(logical, bytes) ?? bytes;
     return { bytes: Buffer.from(decoded), dependency: { logical, file, sourceIdentity: capturedIdentity, hash: checked.hash } };
   }
+  function readJson(logical) {
+    logical = resolve(logical);
+    const file = native.assets.sourcePath(logical), sourceIdentity = native.assets.sourceIdentity(logical);
+    const cached = parsedInputs.get(file);
+    if (!verifyHashes && sourceIdentity && cached && cached.dependency.sourceIdentity === sourceIdentity &&
+        native.assets.sourcePath(logical) === file && native.assets.sourceIdentity(logical) === sourceIdentity)
+      return { value: cached.value, dependency: { ...cached.dependency, logical } };
+    const { bytes, dependency } = readResolved(logical), value = JSON.parse(bytes);
+    if (!verifyHashes) {
+      const pending = [value];
+      while (pending.length) {
+        const item = pending.pop();
+        if (!item || typeof item !== 'object') continue;
+        for (const child of Object.values(item)) if (child && typeof child === 'object') pending.push(child);
+        Object.freeze(item);
+      }
+      parsedInputs.set(dependency.file, { value, dependency });
+    }
+    return { value, dependency: { ...dependency } };
+  }
   async function dependency(logical) {
     logical = resolve(logical);
     const file = native.assets.sourcePath(logical);
@@ -112,7 +135,7 @@ function gameInputs(native, files, virtualFiles) {
       throw new Error('game input changed while hashing ' + logical);
     return { logical, file, sourceIdentity: capturedIdentity, hash: checked.hash };
   }
-  return { read, dependency, resolve, dependencies: native.runtime?.gameFiles?.dependencies,
+  return { read, readJson, dependency, resolve, dependencies: native.runtime?.gameFiles?.dependencies,
     exists: logical => native.fs.exists(resolve(logical)),
     directory: logical => native.fs.readDirectory(logical) || [] };
 }
@@ -134,13 +157,13 @@ async function engineContract(game, mz) {
     identity: { engine: engine.dependency.hash, plugins: pluginIdentities } };
 }
 async function resolveTiled(game, map) {
-  const clone = structuredClone(map), dependencies = [];
-  for (const tileset of clone.tilesets || []) if (tileset.source) {
-    const { bytes, dependency } = game.read('maps/'+path.posix.basename(tileset.source.replaceAll('\\', '/')));
+  const dependencies = [];
+  for (const tileset of map.tilesets || []) if (tileset.source) {
+    const { value, dependency } = game.readJson('maps/'+path.posix.basename(tileset.source.replaceAll('\\', '/')));
     dependencies.push(dependency);
-    Object.assign(tileset, JSON.parse(bytes));
+    Object.assign(tileset, value);
   }
-  return { map: clone, dependencies };
+  return { map, dependencies };
 }
 async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, height = 624,
   virtualFiles = {},
@@ -204,7 +227,7 @@ async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, heig
       return result;
     }
     report('discover', '', 0, 0);
-    const game = gameInputs(native, files, virtualFiles), mz = game.exists('js/rmmz_core.js');
+    const game = gameInputs(native, files, virtualFiles, verifyHashes), mz = game.exists('js/rmmz_core.js');
     const systemInput = game.read('data/System.json'), sheetsInput = game.read('data/Tilesets.json');
     const system = JSON.parse(systemInput.bytes), sheets = JSON.parse(sheetsInput.bytes);
     const contract = await engineContract(game, mz);

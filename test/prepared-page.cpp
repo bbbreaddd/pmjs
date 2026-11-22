@@ -36,6 +36,26 @@ int main() {
   const auto root = std::filesystem::temp_directory_path() / ("pmjs-lz4-test-" + std::to_string(getpid()));
   std::filesystem::create_directories(root);
   try {
+    for (const int count : {256, 257, 65536, 65537}) {
+      pmjs::ImagePixels pixels{2048, 256, std::vector<std::uint8_t>(2048 * 256 * 4)};
+      for (std::size_t i = 0; i < pixels.rgba.size() / 4; ++i) {
+        const auto color = i * count / (pixels.rgba.size() / 4);
+        pixels.rgba[i * 4] = color;
+        pixels.rgba[i * 4 + 1] = (color >> 8) ^ (color * 31);
+        pixels.rgba[i * 4 + 2] = (color >> 16) ^ (color * 17);
+        pixels.rgba[i * 4 + 3] = 255;
+      }
+      const auto opaque = pmjs::classifyImageStorage(pixels);
+      require(opaque.hasPixelFacts && opaque.opaque && !opaque.allZero);
+      require(opaque.paletteBits == (count == 256 ? 8 : count <= 65536 ? 16 : 0));
+      pixels.rgba.back() = 0;
+      const auto transparentTail = pmjs::classifyImageStorage(pixels);
+      require(!transparentTail.opaque && !transparentTail.allZero);
+      require(transparentTail.paletteBits == (count < 256 ? 8 : count < 65536 ? 16 : 0));
+    }
+    pmjs::ImagePixels emptyPixels{128, 128, std::vector<std::uint8_t>(128 * 128 * 4)};
+    const auto emptyStorage = pmjs::classifyImageStorage(emptyPixels);
+    require(emptyStorage.hasPixelFacts && emptyStorage.allZero && !emptyStorage.opaque);
     const std::vector<std::uint8_t> artifact{'P','M','C','O','L','1',0,0,1,2,3,4,5,6,7,8};
     auto packedArtifact = pmjs::compressLz4Artifact(artifact);
     require(pmjs::decompressLz4Artifact(packedArtifact, artifact.size()) == artifact);

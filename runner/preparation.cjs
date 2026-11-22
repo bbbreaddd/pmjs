@@ -95,6 +95,7 @@ async function prepareGameAssets(options) {
       }
     }
     result.records = session.data.results;
+    if (preparationContext === 'offline') result.fileReceipts = session.files.receipts;
     result.portArtifactHashes ||= {};
     result.outcomes = [...session.outcomes.values()];
     result.invalidated = session.invalidated;

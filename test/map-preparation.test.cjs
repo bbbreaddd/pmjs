@@ -534,6 +534,70 @@ test('map inputs use the game VFS for case folding, external definitions and dep
   assert.equal(restored.maps[0].renderer,'mv');
   assert.equal(restored.compilationHits,0);assert.deepEqual(restored.index,ordinary.index);
 });
+test('shared Tiled definitions reuse one body read per phase and strict verification rereads each map', async t => {
+  const f = fixture(t);
+  f.width = 48; f.height = 48;
+  fs.mkdirSync(path.join(f.gameRoot, 'maps'));
+  const tiled = { width: 2, height: 1, tilewidth: 48, tileheight: 48,
+    tilesets: [{ firstgid: 1, source: 'external.json' }],
+    layers: [{ type: 'tilelayer', width: 2, height: 1, data: [1, 0] }] };
+  fs.copyFileSync(path.join(f.gameRoot, 'data/Map001.json'), path.join(f.gameRoot, 'data/Map002.json'));
+  for (const id of [1, 2]) fs.writeFileSync(path.join(f.gameRoot, `maps/Map${id}.json`), JSON.stringify(tiled));
+  const external = path.join(f.gameRoot, 'maps/external.json');
+  const definition = { image: 'B.png', columns: 10, tilewidth: 48, tileheight: 48 };
+  fs.writeFileSync(external, JSON.stringify(definition));
+  const read = f.native.fs.readBytes;
+  let reads = 0, mutate = false;
+  f.native.fs.readBytes = source => {
+    if (source.toLowerCase() === 'maps/external.json') reads++;
+    if (mutate && source.toLowerCase() === 'maps/map2.json') {
+      fs.writeFileSync(external, JSON.stringify({ ...definition, image: 'C.png' }));
+      mutate = false;
+    }
+    return read(source);
+  };
+  const first = await prepareMaps(f);
+  assert.equal(first.selected, 2);
+  assert.equal(reads, 1);
+  reads = 0;
+  const strict = await prepareMaps({ ...f, cacheRoot: path.join(f.cacheRoot, 'strict'), verifyHashes: true });
+  assert.equal(strict.selected, 2);
+  assert.equal(reads, 2);
+  reads = 0;
+  mutate = true;
+  const changed = await prepareMaps({ ...f, cacheRoot: path.join(f.cacheRoot, 'changed') });
+  assert.equal(changed.selected, 2);
+  assert.equal(reads, 2);
+  assert.equal(f.installed.find(entry => entry.identity === changed.index[2].identity).descriptor.sources[0].source, 'img/tilesets/C.png');
+});
+
+test('cached Tiled definition aliases resolve once even when overrides form a chain', async t => {
+  const f = fixture(t);
+  f.width = 48; f.height = 48;
+  fs.mkdirSync(path.join(f.gameRoot, 'maps'));
+  fs.writeFileSync(path.join(f.gameRoot, 'maps/Map1.json'), JSON.stringify({ width: 1, height: 1, tilewidth: 48, tileheight: 48,
+    tilesets: [{ firstgid: 1, source: 'external.json' }], layers: [{ type: 'tilelayer', width: 1, height: 1, data: [1] }] }));
+  fs.writeFileSync(path.join(f.gameRoot, 'maps/external.pack'), JSON.stringify({ image: 'B.png', columns: 10, tilewidth: 48, tileheight: 48 }));
+  fs.writeFileSync(path.join(f.gameRoot, 'maps/external.other'), JSON.stringify({ image: 'C.png', columns: 10, tilewidth: 48, tileheight: 48 }));
+  const resolved = [];
+  const reads = [], read = f.native.fs.readBytes;
+  f.native.fs.readBytes = source => {
+    if (source.startsWith('maps/external')) reads.push(source);
+    return read(source);
+  };
+  f.native.runtime = { gameFiles: { resolve(source) {
+    if (source.startsWith('maps/external')) {
+      resolved.push(source);
+      return source.endsWith('.json') ? 'maps/external.pack' : 'maps/external.other';
+    }
+    return source;
+  } } };
+  const result = await prepareMaps(f);
+  assert.equal(result.error, undefined);
+  assert.equal(resolved[0], 'maps/external.json');
+  assert.deepEqual(reads, ['maps/external.pack']);
+});
+
 test('runner map override validates values and the master switch disables maps',t=>{
   const f = fixture(t);
   const input = { addon: __filename, bootstrap: __filename, gameRoot: f.gameRoot, saveRoot: f.cacheRoot };

@@ -12,7 +12,7 @@ const { COMPILER_VERSION } = require('./map-demand.cjs');
 const { fileIdentity } = require('./preparation-files.cjs');
 
 // Bump when catalog contents or preparation decisions change incompatibly.
-const CATALOG_VERSION = 6;
+const CATALOG_VERSION = 7;
 
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const rebuildMarker = 'runtime-settings/rebuild-assets';
@@ -27,7 +27,8 @@ function signature(options) {
     lz4: native.assets.preparationLz4Version, images: options.images, maps: options.maps,
     allowPalettes: options.allowPalettes ?? false, pageCodec: options.pageCodec, workspaceBytes: options.workspaceBytes, recipes: options.recipes,
     astc: options.astc, losslessPrefixes: options.losslessPrefixes, policyOverrides: options.policyOverrides,
-    portableIndex: options.portableIndex, width: options.width, height: options.height,
+    portableIndex: options.portableIndexIdentity ?? (options.portableIndex ? hash(JSON.stringify(options.portableIndex)) : null),
+    imageStorageVersion: native.assets.imageStorageVersion, width: options.width, height: options.height,
     sourceRoots: options.sourceRoots, bundleRoot: options.bundleRoot, virtualFiles: options.virtualFiles,
     portDescriptors: options.portDescriptors, adapters: options.adapters };
 }

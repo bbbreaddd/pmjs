@@ -359,6 +359,7 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
   losslessPrefixes,
   astc,
   preparationContext = 'live',
+  materializeAudio = true,
   portableIndex = null, portableAssetRoot = null, policyOverrides = null,
   processorIdentity = (native && native.assets && native.assets.preparationVersion) || PROCESSOR_IDENTITY, session }) {
   if (!session) throw new Error('asset preparation phase requires a preparation session');
@@ -537,6 +538,22 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
         sourceHash = checkedSource.hash;
         if (sourceIdentity !== undefined && native.assets.sourceIdentity(source) !== sourceIdentity) throw new Error('source changed while hashing');
         result.sourceBytes += checkedSource.size;
+        if (offline && !materializeAudio && encrypted && hasPathPrefix(source, 'audio/')) {
+          const prefix = Buffer.from(checkedSource.header || []);
+          if (prefix.length < 32 || !prefix.subarray(0, 16).equals(ENCRYPTED_HEADER))
+            throw new Error('invalid encrypted audio header');
+          for (let i = 0; i < 16; ++i) prefix[16 + i] ^= settings.key[i];
+          if (!mediaHeader(prefix.subarray(16), extension))
+            throw new Error('decrypted media signature does not match encryption settings');
+          settings.sourceIdentity = await refreshIdentity('data/System.json', settings.hash, settings.sourceIdentity);
+          sourceIdentity = await refreshIdentity(source, sourceHash, sourceIdentity);
+          result.decisions.push({ source, sourceHash, recipe: null, encryptionSettingsSha256: settings.hash,
+            descriptor: null, workspaceConstrained: false, outputs: {} });
+          session.outcome('image:' + source, 'ordinary-choice');
+          result.completed++;
+          report('audio-index', source);
+          continue;
+        }
         const policy = portableIndex?.policies?.[source] || {};
         if (typeof policy !== 'object' || Array.isArray(policy) ||
             policy.lossless !== undefined && typeof policy.lossless !== 'boolean') throw new Error('invalid image policy');

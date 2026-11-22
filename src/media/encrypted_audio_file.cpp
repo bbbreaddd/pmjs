@@ -32,7 +32,9 @@ EncryptedAudioFile::EncryptedAudioFile(const std::filesystem::path& path, AudioE
       throw std::runtime_error("invalid encrypted audio signature");
     for (std::size_t i = 0; i < key_.size(); ++i) header[16 + i] ^= key_[i];
     const auto* bytes = header.data() + 16;
-    if (std::memcmp(bytes, "OggS", 4) && std::memcmp(bytes + 4, "ftyp", 4) &&
+    const bool mp3 = !std::memcmp(bytes, "ID3", 3) ||
+      (bytes[0] == 0xff && (bytes[1] & 0xe0) == 0xe0 && (bytes[1] & 0x06) != 0);
+    if (!mp3 && std::memcmp(bytes, "OggS", 4) && std::memcmp(bytes + 4, "ftyp", 4) &&
         (std::memcmp(bytes, "RIFF", 4) || std::memcmp(bytes + 8, "WAVE", 4)))
       throw std::runtime_error("encrypted audio key or media header is invalid");
     descriptor_ = descriptor;

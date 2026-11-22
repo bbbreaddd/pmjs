@@ -390,6 +390,7 @@ void writePng(const std::filesystem::path& path, int width, int height,
   }
   png_image image{};
   image.version = PNG_IMAGE_VERSION;
+  image.flags |= PNG_IMAGE_FLAG_FAST;
   image.width = static_cast<png_uint_32>(width);
   image.height = static_cast<png_uint_32>(height);
   image.format = indexed ? PNG_FORMAT_RGBA_COLORMAP : PNG_FORMAT_RGBA;
@@ -1213,6 +1214,10 @@ void emitTexture(PreparationSource& source, const std::filesystem::path& staging
       asset.width != source.width || asset.height != source.height || source.width > 16384 || source.height > 16384) return;
   source.releaseCache();
   const auto size = std::size_t(source.width)*source.height*4;
+  if (size * 3 + 32U*1024U*1024U > source.workspace.stats.workspaceLimitBytes) {
+    source.workspace.stats.workspaceConstrained = true;
+    return;
+  }
   // Reserve input, output, dictionary overhead and chunk encoding scratch together.
   auto reservation = source.workspace.retain(size + 8U*1024U*1024U, false);
   if (!reservation) return;

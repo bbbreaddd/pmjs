@@ -6,9 +6,36 @@ const path = require('node:path');
 const test = require('node:test');
 const { temporaryDirectory } = require('./helpers/temp.cjs');
 const { storageClassifier, mapStorageInputs } = require('../runner/asset-storage-index.cjs');
+const { fileIdentity } = require('../runner/preparation-files.cjs');
+const crypto = require('node:crypto');
 
 const decision = { version: 1, width: 1, height: 1, channels: 4, paletteBits: 0,
   source: [0, 1, 2, 3], swizzle: [0, 1, 2, 3] };
+
+test('producer receipts avoid repeated hashing without allowing stale classifications', async t => {
+  const root = temporaryDirectory('storage-producer-'), source = path.join(root, 'image');
+  fs.writeFileSync(source, 'pixels');
+  const receipt = { identity: fileIdentity(fs.statSync(source, { bigint: true })),
+    hash: crypto.createHash('sha256').update('pixels').digest('hex') };
+  const verified = { [source]: { ...receipt } };
+  let streams = 0, decodes = 0;
+  const stream = fs.createReadStream;
+  t.mock.method(fs, 'createReadStream', (...args) => { streams++; return stream(...args); });
+  const assets = { imageStorageVersion: 1, async classifyImageStorage() { decodes++; return decision; } };
+  const classifier = storageClassifier(assets, root, verified);
+  await classifier.classify(source);
+  assert.equal(await classifier.hash(source), receipt.hash);
+  assert.equal(streams, 0);
+  fs.writeFileSync(source, 'changed pixels');
+  await classifier.classify(source);
+  assert.equal(streams, 1);
+  assert.equal(decodes, 2);
+  assert.deepEqual(verified[source], receipt);
+  assets.classifyImageStorage = async () => { fs.writeFileSync(source, 'changed during decode'); return decision; };
+  const fresh = { [source]: { identity: fileIdentity(fs.statSync(source, { bigint: true })),
+    hash: crypto.createHash('sha256').update('changed pixels').digest('hex') } };
+  await assert.rejects(storageClassifier(assets, root, fresh).classify(source), /image changed/);
+});
 
 test('classification coalesces identical content and reuses only intact versioned decisions', async () => {
   const root = temporaryDirectory('storage-index-');

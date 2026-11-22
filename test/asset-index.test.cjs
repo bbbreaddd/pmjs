@@ -7,7 +7,7 @@ const { execFileSync } = require('node:child_process');
 const crypto = require('node:crypto');
 const test = require('node:test');
 const { temporaryDirectory } = require('./helpers/temp.cjs');
-const { loadAssetIndex, offlineFilesystem, assetIndexArtifacts } = require('../runner/asset-index.cjs');
+const { readAssetIndex, loadAssetIndex, offlineFilesystem, assetIndexArtifacts } = require('../runner/asset-index.cjs');
 const { COMPILER_VERSION } = require('../runner/map-demand.cjs');
 const identity = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
@@ -66,8 +66,73 @@ function fixture() {
     maps: { compiler: COMPILER_VERSION, compilations: { key: 'compilation' }, mapInputs: { name: 'contract' },
       entries: [{ identity: 'entry', outputs: [] }] } };
   const load = () => { fs.writeFileSync(file, JSON.stringify(index)); return loadAssetIndex(file, native, options); };
-  return { index, native, options, load };
+  return { index, native, options, load, file };
 }
+
+for (const consumer of [false, true]) test(`offline audio indexing ${consumer ? 'materializes for a consumer' : 'keeps metadata without payload copies'}`, async t => {
+  const root = temporaryDirectory('audio-index-'), gameRoot = path.join(root, 'game'), output = path.join(root, 'bundle');
+  for (const directory of ['game/audio/bgm', 'game/data', 'lib', 'bundle']) fs.mkdirSync(path.join(root, directory), { recursive: true });
+  const addon = path.join(root, 'lib/pmjs_native.node');
+  fs.writeFileSync(addon, '');
+  const { preparationLocks } = require('./helpers/preparation-lock.cjs');
+  require.cache[addon] = { exports: { assets: { ...preparationLocks(), imageStorageVersion: 1,
+    processImage() { throw new Error('audio must not process an image'); },
+    classifyImageStorage() { throw new Error('audio has no image storage'); } } } };
+  t.after(() => { delete require.cache[addon]; });
+  const key = Buffer.from('00112233445566778899aabbccddeeff', 'hex');
+  const plain = Buffer.alloc(128, 73); plain.write('OggS');
+  const encoded = Buffer.concat([Buffer.from('5250474d560000000003010000000000', 'hex'), plain]);
+  for (let i = 0; i < 16; ++i) encoded[16 + i] ^= key[i];
+  fs.writeFileSync(path.join(gameRoot, 'audio/bgm/a.rpgmvo'), encoded);
+  fs.writeFileSync(path.join(gameRoot, 'data/System.json'), JSON.stringify({ hasEncryptedAudio: true, encryptionKey: key.toString('hex') }));
+  const processor = path.join(output, 'preparation/probe.pmjs-processor.cjs');
+  if (consumer) {
+    fs.mkdirSync(path.dirname(processor));
+    fs.writeFileSync(processor, `module.exports={id:'probe',version:1,calls:0,outputs:[{id:'audio',source:'audio/bgm/a.ogg',generate(bytes){
+      if(bytes.toString('ascii',0,4)!=='OggS')throw new Error('expected plaintext audio');module.exports.calls++;return null;}}]};`);
+  }
+  const cacheRoot = path.join(root, 'cache');
+  const { generateAssetIndex } = require('../runner/asset-index.cjs');
+  const result = await generateAssetIndex({ root, gameRoot, output, cacheRoot, includeAssets: false,
+    options: { width: 64, height: 64, assetPreparation: { enabled: true, maps: false, recipes: [], pageCodec: 'png' } } });
+  assert.equal(result.warningCount, 0);
+  const index = JSON.parse(fs.readFileSync(path.join(output, 'asset-index.json')));
+  assert.equal(index.images.length, 1);
+  assert.equal(index.images[0].calculated.sourceHash, crypto.createHash('sha256').update(encoded).digest('hex'));
+  assert.deepEqual(index.images[0].calculated.outputs, []);
+  const plaintext = fs.readdirSync(cacheRoot, { recursive: true }).filter(name => name.endsWith('source.ogg'));
+  assert.equal(plaintext.length, consumer ? 1 : 0);
+  if (consumer) assert.equal(require(processor).calls, 1);
+});
+
+test('index identity and deferred interpretation use the same captured bytes', () => {
+  const f = fixture();
+  const expected = f.load();
+  const captured = readAssetIndex(f.file);
+  assert.equal(captured.identity.loader, 1);
+  assert.equal(captured.identity.sha256, crypto.createHash('sha256').update(captured.contents).digest('hex'));
+  fs.writeFileSync(f.file, 'invalid replacement');
+  assert.deepEqual(loadAssetIndex(f.file, f.native, f.options, captured.contents), expected);
+  assert.notDeepEqual(readAssetIndex(f.file).identity, captured.identity);
+  assert.equal(loadAssetIndex(f.file, f.native, f.options), null);
+});
+
+test('index capture rejects changed, missing and oversized inputs', t => {
+  const f = fixture();
+  f.load();
+  const read = fs.readFileSync;
+  const mocked = t.mock.method(fs, 'readFileSync', (file, ...args) => {
+    const bytes = read(file, ...args);
+    if (file === f.file) fs.appendFileSync(file, ' ');
+    return bytes;
+  });
+  assert.equal(readAssetIndex(f.file), null);
+  mocked.mock.restore();
+  fs.truncateSync(f.file, 64 * 1024 * 1024 + 1);
+  assert.equal(readAssetIndex(f.file), null);
+  fs.unlinkSync(f.file);
+  assert.equal(readAssetIndex(f.file), null);
+});
 
 test('portable index reuses independent sections across configuration, viewport and processor changes', () => {
   const f = fixture();

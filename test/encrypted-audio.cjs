@@ -15,12 +15,17 @@ wav.writeUInt16LE(4, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.
 for (let i = 44; i < wav.length; i += 2) wav.writeInt16LE(Math.round(Math.sin(i / 30) * 4000), i);
 const ogg = Buffer.from(fs.readFileSync(path.join(__dirname, 'assets/empty-packet.ogg.b64'), 'utf8'), 'base64');
 const m4a = Buffer.from(fs.readFileSync(path.join(__dirname, 'assets/short-audio.m4a.b64'), 'utf8'), 'base64');
-const files = [wav, ogg, m4a].map((plain, index) => {
+const mp3 = Buffer.from(fs.readFileSync(path.join(__dirname, 'assets/short-audio.mp3.b64'), 'utf8'), 'base64');
+assert.equal(mp3.toString('ascii', 0, 3), 'ID3');
+const tagSize = ((mp3[6] & 127) << 21) | ((mp3[7] & 127) << 14) | ((mp3[8] & 127) << 7) | (mp3[9] & 127);
+const mpegFrames = mp3.subarray(10 + tagSize);
+assert.equal(mpegFrames[0], 255);
+const files = [wav, ogg, m4a, mp3, mpegFrames].map((plain, index) => {
   const output = Buffer.concat([Buffer.from('5250474d560000000003010000000000', 'hex'), plain]);
   for (let i = 0; i < 16; ++i) output[16 + i] ^= key[i];
   const file = path.join(root, index + '.ogg_'); fs.writeFileSync(file, output); return file;
 });
 const result = spawnSync(process.argv[2], files, { input: key.toString('hex'), encoding: 'utf8' });
 assert.equal(result.status, 0, result.stderr);
-assert.equal(JSON.parse(result.stdout).files, 3);
+assert.equal(JSON.parse(result.stdout).files, 5);
 console.log(result.stdout.trim());
