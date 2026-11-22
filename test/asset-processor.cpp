@@ -8,6 +8,7 @@
 #include <functional>
 #include <future>
 #include <iostream>
+#include <iterator>
 #include <source_location>
 #include <stdexcept>
 #include <string>
@@ -753,6 +754,13 @@ int main() {
     pmjs::AssetPreparationOptions automaticOptions;
     automaticOptions.lz4Pages = true;
     automaticOptions.allowPalettes = true;
+    std::optional<pmjs::PreparedAsset> automaticReference;
+    const auto sameFile = [](const auto& firstPath, const auto& secondPath) {
+      std::ifstream first(firstPath, std::ios::binary), second(secondPath, std::ios::binary);
+      require(first && second);
+      using It = std::istreambuf_iterator<char>;
+      return std::equal(It(first), It(), It(second), It());
+    };
     for (const bool lz4 : {false, true}) {
       write(source, 2048, 2048, [lz4](int x, int y) {
         if (!lz4 && (x >= 1024 || y >= 1024)) return AssetColor{};
@@ -765,6 +773,20 @@ int main() {
       require(automatic.framePages && automatic.textureArtifact == "texture.pmtx");
       require(automatic.textureRetainedBytes < automatic.ordinaryRetainedBytes);
       verify(source, directory, automatic);
+      pmjs::AssetPreparationStats replayStats;
+      automaticOptions.statistics = &replayStats;
+      const auto replayDirectory = root / (lz4 ? "automatic-lz4-replay" : "automatic-png-replay");
+      const auto replay = pmjs::prepareAssetImage(source, replayDirectory, {}, &automatic, automaticOptions);
+      automaticOptions.statistics = nullptr;
+      require(replayStats.indexedLayouts == 1);
+      require(replay.framePages && replay.textureArtifact == automatic.textureArtifact);
+      require(replay.ordinaryRetainedBytes == automatic.ordinaryRetainedBytes);
+      require(replay.textureRetainedBytes == automatic.textureRetainedBytes);
+      require(sameFile(directory / automatic.textureArtifact, replayDirectory / replay.textureArtifact));
+      for (const auto& page : automatic.pages)
+        require(sameFile(directory / page.path, replayDirectory / page.path));
+      verify(source, replayDirectory, replay);
+      if (lz4) automaticReference = automatic;
     }
     // Nonzero hidden-RGB fills in multiple cells can require source reconstruction.
     for (const bool mixed : {false, true}) {
@@ -797,6 +819,15 @@ int main() {
     const auto constrained = pmjs::prepareAssetImage(source, root / "automatic-constrained", {}, nullptr, automaticOptions);
     require(!constrained.framePages && constrained.textureArtifact.empty());
     verify(source, root / "automatic-constrained", constrained);
+    pmjs::AssetPreparationStats constrainedStats;
+    automaticOptions.statistics = &constrainedStats;
+    const auto constrainedReplay = pmjs::prepareAssetImage(source, root / "automatic-constrained-replay",
+      {}, &*automaticReference, automaticOptions);
+    automaticOptions.statistics = nullptr;
+    require(constrainedStats.indexedLayouts == 1);
+    require(!constrainedReplay.framePages && constrainedReplay.textureArtifact.empty());
+    require(constrainedReplay.textureRetainedBytes == 0);
+    verify(source, root / "automatic-constrained-replay", constrainedReplay);
     write(source, 8192, 4096, [](int x,int y) { return x == 4000 && y == 3000 ? AssetColor{31,41,51,61} : AssetColor{}; });
     result = pmjs::prepareAssetImage(source, root / "large");
     require(result.width == 8192 && result.height == 4096 && result.halo == 10);

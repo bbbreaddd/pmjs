@@ -829,13 +829,12 @@ test('source metadata snapshots accompany install and detect changes during hash
 });
 
 test('ordinary preparation reads a stable source once and still hashes each generated page', async t => {
-  const f = fixture(), createReadStream = fs.createReadStream;
+  const f = fixture(), open = fs.promises.open;
   const reads = [];
-  fs.createReadStream = function(file, ...args) {
-    reads.push(String(file));
-    return createReadStream.call(this, file, ...args);
-  };
-  t.after(() => { fs.createReadStream = createReadStream; });
+  t.mock.method(fs.promises, 'open', async function(file, flags, ...args) {
+    if (flags === 'r') reads.push(String(file));
+    return open.call(this, file, flags, ...args);
+  });
   const result = await prepareAssets(f);
   assert.equal(result.installed, 1);
   assert.equal(reads.filter(file => file === path.join(f.gameRoot, f.source)).length, 1);

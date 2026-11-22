@@ -1306,12 +1306,16 @@ PreparedAsset prepareAssetImage(const std::filesystem::path& path,
   Workspace workspace(options.workspaceBytes, stats);
   PreparationSource source(path, workspace);
   if (!recipe.framePages) if (auto astc = prepareAstc(source, staging, recipe, options)) return *astc;
-  if (layout && layout->compression.empty() && layout->framePages == recipe.framePages) {
+  if (layout && layout->compression.empty() &&
+      (layout->framePages == recipe.framePages || (!recipe.framePages && !layout->textureArtifact.empty()))) {
     try {
       validateLayout(source, recipe, *layout);
       auto result = *layout;
+      result.framePages = recipe.framePages;
+      result.textureRetainedBytes = 0;
       emitLayout(source, staging, result, recipe, options.lz4Pages, options.allowPalettes);
       emitTexture(source, staging, result, recipe, options.allowPalettes);
+      ++stats.indexedLayouts;
       return result;
     }
     catch (const AssetPreparationUnsupported&) {}

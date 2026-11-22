@@ -322,6 +322,10 @@ napi_value processImage(napi_env env, napi_callback_info info) try {
     PreparedAsset layout;
     if (hasProperty(env, value, "framePages"))
       check(env, napi_get_value_bool(env, property(env, value, "framePages"), &layout.framePages), "invalid frame pages layout");
+    if (hasProperty(env, value, "textureArtifact")) {
+      layout.textureArtifact = asString(env, property(env, value, "textureArtifact"));
+      if (layout.textureArtifact != "texture.pmtx") throw std::invalid_argument("invalid indexed texture artifact");
+    }
     if (integer(env, property(env, value, "version")) != 1)
       throw std::runtime_error("unsupported indexed image layout");
     layout.width = integer(env, property(env, value, "width"));

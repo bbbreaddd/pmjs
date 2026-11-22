@@ -10,6 +10,41 @@ const { preparationFiles } = require('../runner/preparation-files.cjs');
 const copyFiles = () => preparationFiles({ data: { files: {} }, checkpoint: async () => {} });
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 
+test('concurrent verification owns its read buffers and returned headers survive reuse', async () => {
+  const root = temporaryDirectory('concurrent-verification-'), files = await copyFiles();
+  const sources = [73, 84, 105].map((value, index) => {
+    const name = path.join(root, String(index)), bytes = Buffer.alloc(700 * 1024, value);
+    fs.writeFileSync(name, bytes);
+    return { name, bytes };
+  });
+  const checked = await Promise.all(sources.slice(0, 2).map(source => files.inspect(source.name)));
+  await files.inspect(sources[2].name);
+  checked.forEach((result, index) => {
+    assert.equal(result.hash, hash(sources[index].bytes));
+    assert.deepEqual(result.header, sources[index].bytes.subarray(0, 32));
+    assert.ok(result.header.buffer.byteLength < sources[index].bytes.length);
+  });
+});
+
+test('failed reads do not publish receipts and a subsequent verification succeeds', async t => {
+  const root = temporaryDirectory('failed-verification-'), source = path.join(root, 'source');
+  const bytes = Buffer.alloc(700 * 1024, 73);
+  fs.writeFileSync(source, bytes);
+  const files = await copyFiles(), open = fs.promises.open;
+  let interrupt = true;
+  t.mock.method(fs.promises, 'open', async (...args) => {
+    const handle = await open(...args), read = handle.read.bind(handle);
+    handle.read = async (...values) => {
+      if (interrupt) { interrupt = false; throw new Error('read interrupted'); }
+      return read(...values);
+    };
+    return handle;
+  });
+  await assert.rejects(files.inspect(source), /read interrupted/);
+  assert.deepEqual(files.receipts, {});
+  assert.equal((await files.inspect(source)).hash, hash(bytes));
+});
+
 test('synchronous verification retains an owned small header rather than the source buffer', async () => {
   const root = temporaryDirectory('verified-header-'), source = path.join(root, 'source');
   const bytes = Buffer.alloc(4 * 1024 * 1024, 73);

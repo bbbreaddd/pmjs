@@ -56,6 +56,7 @@ struct PreparedAsset {
 };
 struct AssetPreparationStats {
   std::uint64_t sourceDecodes = 0, sourceCacheHits = 0;
+  std::uint64_t indexedLayouts = 0;
   std::uint64_t pngEncodes = 0, encodedPixels = 0;
   std::uint64_t lz4Encodes = 0;
   std::uint64_t temporaryFiles = 0, spillBytesWritten = 0, spillBytesRead = 0;
