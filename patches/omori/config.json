@@ -1,0 +1,16 @@
+{
+  "gamePreparation": "patches/omori/oneloader.cjs",
+  "title": "OMORI",
+  "fonts": {
+    "OMORI_GAME": "fonts/OMORI_GAME.ttf",
+    "OMORI_GAME2": "fonts/OMORI_GAME2.ttf",
+    "NotoSans_Regular": "fonts/NotoSans_Regular.ttf"
+  },
+  "steam": {
+    "provider": "portable",
+    "appId": 1150690
+  },
+  "missingTextFiles": {
+    "OMORI/CUTSCENE.json": "{}"
+  }
+}

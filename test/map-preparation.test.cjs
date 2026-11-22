@@ -341,6 +341,61 @@ test('a thrown map phase retains cached results and recovers on the next launch'
   assert.equal(f.jobs, 1);
 });
 
+test('portable map calculations validate encrypted inputs without decoding unchanged maps', async t => {
+  const f = fixture(t), key = 'a'.repeat(32), decoded = [];
+  const { createGameFiles } = require('../patches/omori/game-files.cjs');
+  fs.writeFileSync(path.join(f.gameRoot, 'key.txt'), key);
+  const encrypt = map => {
+    const iv = Buffer.alloc(16, 9), cipher = crypto.createCipheriv('aes-256-ctr', key, iv);
+    return Buffer.concat([iv, cipher.update(JSON.stringify(map)), cipher.final()]);
+  };
+  fs.unlinkSync(path.join(f.gameRoot, 'data/Map001.json'));
+  const source = path.join(f.gameRoot, 'data/Map001.KEL');
+  fs.writeFileSync(source, encrypt(f.map));
+  let reader = createGameFiles({ native: f.native,
+    read: name => f.native.fs.readBytes(name), configuration: { omori: { encryptionKeyFile: 'key.txt' } } });
+  f.native.runtime = { gameFiles: { ...reader,
+    decode(name, bytes) { decoded.push(name); return reader.decode(name, bytes); } } };
+  const cold = await prepareMaps(f);
+  assert.equal(cold.selected, 1);
+  assert.ok(cold.mapInputs['Map001.json'].dependencies.some(input => input.logical === 'data/Map001.KEL'));
+  const portableIndex = { compiler: readIndex(f).compiler, compilations: cold.compilations,
+    mapInputs: Object.fromEntries(Object.entries(cold.mapInputs).map(([name, input]) =>
+      [name, { ...input, dependencies: input.dependencies.map(({ logical, hash }) => ({ logical, hash })) }])) };
+  decoded.length = 0;
+  const recipient = await prepareMaps({ ...f, cacheRoot: path.join(f.cacheRoot, 'recipient'), portableIndex });
+  assert.equal(recipient.selected, 1);
+  assert.equal(recipient.compilationHits, 1);
+  assert.ok(!decoded.includes('data/Map001.KEL'));
+  const legacyIndex = structuredClone(portableIndex);
+  legacyIndex.mapInputs['Map001.json'].dependencies[0].logical = 'data/Map001.json';
+  decoded.length = 0;
+  const legacy = await prepareMaps({ ...f, cacheRoot: path.join(f.cacheRoot, 'legacy'), portableIndex: legacyIndex });
+  assert.ok(decoded.includes('data/Map001.KEL'));
+  assert.deepEqual(legacy.index, recipient.index);
+  fs.writeFileSync(path.join(f.gameRoot, 'data/Map001.json'),
+    JSON.stringify({ ...f.map, events: [{ pages: [{ image: { tileId: 2 } }] }] }));
+  decoded.length = 0;
+  const overlay = await prepareMaps({ ...f, cacheRoot: path.join(f.cacheRoot, 'overlay'), portableIndex });
+  assert.equal(overlay.compilationHits, 0);
+  assert.ok(decoded.includes('data/Map001.json'));
+  assert.notEqual(overlay.index[1].identity, recipient.index[1].identity);
+  fs.unlinkSync(path.join(f.gameRoot, 'data/Map001.json'));
+  fs.writeFileSync(source, encrypt({ ...f.map, events: [{ pages: [{ image: { tileId: 2 } }] }] }));
+  decoded.length = 0;
+  const changed = await prepareMaps({ ...f, cacheRoot: path.join(f.cacheRoot, 'changed'), portableIndex });
+  assert.equal(changed.selected, 1);
+  assert.equal(changed.compilationHits, 0);
+  assert.ok(decoded.includes('data/Map001.KEL'));
+  assert.notEqual(changed.index[1].identity, recipient.index[1].identity);
+  fs.writeFileSync(path.join(f.gameRoot, 'key.txt'), 'b'.repeat(32));
+  reader = createGameFiles({ native: f.native,
+    read: name => f.native.fs.readBytes(name), configuration: { omori: { encryptionKeyFile: 'key.txt' } } });
+  const wrongKey = await prepareMaps({ ...f, cacheRoot: path.join(f.cacheRoot, 'wrong-key'), portableIndex });
+  assert.equal(wrongKey.compilationHits, 0);
+  assert.equal(wrongKey.selected, 0);
+});
+
 test('portable map metadata and atlas pages are checked against recipient inputs',async t=>{
   const f=fixture(t),cold=await prepareMaps(f);
   assert.equal(cold.selected,1);

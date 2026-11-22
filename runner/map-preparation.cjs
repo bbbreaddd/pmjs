@@ -98,7 +98,8 @@ function gameInputs(native, files, virtualFiles) {
       throw new Error('game input changed while reading '+logical);
     const checked = files.inspectSync(file, bytes, 'map-input');
     if (native.assets.sourceIdentity(logical) !== capturedIdentity) throw new Error('game input changed while recording '+logical);
-    return { bytes, dependency: { logical, file, sourceIdentity: capturedIdentity, hash: checked.hash } };
+    const decoded = native.runtime?.gameFiles?.decode?.(logical, bytes) ?? bytes;
+    return { bytes: Buffer.from(decoded), dependency: { logical, file, sourceIdentity: capturedIdentity, hash: checked.hash } };
   }
   async function dependency(logical) {
     logical = resolve(logical);
@@ -111,7 +112,8 @@ function gameInputs(native, files, virtualFiles) {
       throw new Error('game input changed while hashing ' + logical);
     return { logical, file, sourceIdentity: capturedIdentity, hash: checked.hash };
   }
-  return { read, dependency, exists: logical => native.fs.exists(resolve(logical)),
+  return { read, dependency, resolve, dependencies: native.runtime?.gameFiles?.dependencies,
+    exists: logical => native.fs.exists(resolve(logical)),
     directory: logical => native.fs.readDirectory(logical) || [] };
 }
 async function engineContract(game, mz) {
@@ -127,6 +129,7 @@ async function engineContract(game, mz) {
     dependencies.push(dependency);
     pluginIdentities.push({ name: plugin.name, parameters: plugin.parameters, hash: dependency.hash });
   }
+  for (const logical of game.dependencies || []) dependencies.push(await game.dependency(logical));
   return { Tilemap: engineTilemap(source, mz), dependencies,
     identity: { engine: engine.dependency.hash, plugins: pluginIdentities } };
 }
@@ -190,7 +193,8 @@ async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, heig
         (!offline && typeof native.assets.installTileSets !== 'function'))
       throw new Error('tile preparation unavailable in this addon');
 
-    const data = session.inventory.filter(file => /^data\/Map\d+\.json$/i.test(file)).map(file => file.slice(5)).sort();
+    const data = [...new Set(session.inventory.map(file => native.runtime?.gameFiles?.canonical?.(file) || file)
+      .filter(file => /^data\/Map\d+\.json$/i.test(file)).map(file => file.slice(5)))].sort();
     result.total = data.length;
     if (!data.length) {
       if (!offline) { native.assets.installTileSets([]); native.assets.preparedMapIndex = {}; }
@@ -208,6 +212,8 @@ async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, heig
     const checkedDependencies = new Map();
     async function validateDependencies(dependencies) {
       for (const dependency of dependencies) {
+        if (dependency.logical && game.resolve(dependency.logical) !== dependency.logical)
+          throw new Error('map dependency binding changed during preparation: '+dependency.logical);
         const before = dependency.logical && native.assets.sourceIdentity(dependency.logical);
         const checked = checkedDependencies.get(dependency.file);
         if (!verifyHashes && checked && checked.hash === dependency.hash &&
@@ -240,6 +246,7 @@ async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, heig
         for (const dependency of entry.dependencies) {
           if (typeof dependency.logical !== 'string' || dependency.logical.includes('..') ||
               dependency.logical.startsWith('/') || !HASH.test(dependency.hash)) break;
+          if (game.resolve(dependency.logical) !== dependency.logical) break;
           const file = native.assets.sourcePath(dependency.logical);
           if (!file || await digest(file).catch(() => null) !== dependency.hash) break;
           dependencies.push({ logical: dependency.logical, file,
@@ -266,7 +273,7 @@ async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, heig
       if (!Array.isArray(cached.dependencies) || !cached.dependencies.length) return null;
       const dependencies = [];
       for (const input of cached.dependencies) {
-        if (typeof input.logical !== 'string' || !HASH.test(input.hash)) return null;
+        if (typeof input.logical !== 'string' || !HASH.test(input.hash) || game.resolve(input.logical) !== input.logical) return null;
         const file = native.assets.sourcePath(input.logical);
         const sourceIdentity = native.assets.sourceIdentity(input.logical);
         if (!file || file !== input.file || await digest(file) !== input.hash ||

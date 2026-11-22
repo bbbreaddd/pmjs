@@ -75,6 +75,12 @@ def main():
         build_name += "-" + args.build_type.lower()
     build_dir = ROOT / "build" / build_name
     configuration = ["-DCMAKE_BUILD_TYPE=" + args.build_type] if args.build_type else []
+    if args.target == "local":
+        component = Path(os.environ.get("PMJS_SKIA65_COMPONENT_DIR") or ROOT / ".cache/components/x64").resolve()
+        run(sys.executable, ROOT / "tools/skia65/build.py", "--arch", "x64",
+            "--output", component, "--jobs", args.jobs, "--reuse")
+        configuration.extend(["-DPMJS_ENABLE_SKIA65=ON", "-DPMJS_BUILD_SKIA65_COMPONENT=OFF",
+                              "-DPMJS_SKIA65_COMPONENT_DIR=" + str(component)])
     run("cmake", "--preset", preset, "-B", build_dir, "-DBUILD_TESTING=OFF", *configuration, env=env)
     run("cmake", "--build", build_dir, "--target", "pmjs_native",
         "--parallel", args.jobs, env=env)

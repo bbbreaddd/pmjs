@@ -1310,6 +1310,28 @@ function sideviewFixture(f = fixture(), encrypted = false) {
   return { ...f, source, diskSource, png, plugin, writePlugin, writeSize, observed };
 }
 
+test('sideview recipes read encrypted game metadata without plaintext database copies', async () => {
+  const f = sideviewFixture(), key = 'a'.repeat(32), iv = Buffer.alloc(16, 7);
+  const database = path.join(f.gameRoot, 'data/Enemies.json');
+  const cipher = crypto.createCipheriv('aes-256-ctr', key, iv);
+  fs.writeFileSync(path.join(f.gameRoot, 'data/Enemies.KEL'),
+    Buffer.concat([iv, cipher.update(fs.readFileSync(database)), cipher.final()]));
+  fs.unlinkSync(database);
+  fs.writeFileSync(path.join(f.gameRoot, 'js/main.js'), 'const key = "' + key + '";');
+  f.native.fs = {
+    exists: name => fs.existsSync(path.join(f.gameRoot, name)),
+    readBytes: name => fs.existsSync(path.join(f.gameRoot, name)) ? fs.readFileSync(path.join(f.gameRoot, name)) : null
+  };
+  f.native.runtime = { gameFiles: require('../patches/omori/game-files.cjs').createGameFiles({
+    native: f.native, read: name => f.native.fs.readBytes(name) }) };
+  const result = await prepareAssets(f);
+  assert.equal(result.failedFiles, 0);
+  assert.deepEqual(f.observed, [[4, 6]]);
+  assert.equal(fs.existsSync(database), false);
+  assert.deepEqual(f.warnings, []);
+  result.releaseCacheLease();
+});
+
 test('sideview metadata changes invalidate saved decisions and disabling the plugin restores standard grids', async () => {
   const f = sideviewFixture();
   f.native.assets.installPreparedCatalog = entries => ({ accepted: entries.map(entry => entry.source), rejected: [] });

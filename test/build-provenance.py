@@ -25,6 +25,27 @@ class BuildCommand(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
 
+    def test_local_build_uses_verified_skia_component(self):
+        commands = []
+
+        def run(*args, **kwargs):
+            commands.append(args)
+            if args[0] == 'cmake':
+                raise RuntimeError('configuration recorded')
+
+        component = self.root / 'text component'
+        with mock.patch.object(sys, 'argv', ['build.py', '--output', str(self.root / 'install')]), \
+                mock.patch.object(build_command, 'require'), \
+                mock.patch.object(build_command.subprocess, 'run', return_value=mock.Mock(returncode=0)), \
+                mock.patch.object(build_command, 'run', side_effect=run), \
+                mock.patch.dict(os.environ, {'PMJS_SKIA65_COMPONENT_DIR': str(component)}):
+            with self.assertRaisesRegex(RuntimeError, 'configuration recorded'):
+                build_command.main()
+        self.assertIn(ROOT / 'tools/skia65/build.py', commands[0])
+        self.assertIn('--reuse', commands[0])
+        self.assertIn('-DPMJS_ENABLE_SKIA65=ON', commands[1])
+        self.assertIn('-DPMJS_SKIA65_COMPONENT_DIR=' + str(component), commands[1])
+
     def test_output_symlinks_are_rejected_before_building(self):
         for existing in (True, False):
             with self.subTest(existing=existing):

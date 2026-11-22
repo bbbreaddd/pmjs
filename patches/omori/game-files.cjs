@@ -91,6 +91,7 @@ function createGameFiles({ native, read, readAsync = async name => read(name), c
     };
   }
   return { read: get, readAsync: getAsync, resolve: source, remove, rename, getEncryptionKey: key,
+    canonical, decode, dependencies: [configuration.omori?.encryptionKeyFile || 'js/main.js'],
     needsDecodedRead: name => /\.(?:json|yaml|js|png|ogg|m4a)$/i.test(canonical(name)),
     exists: name => !!source(name), createLayer: layer,
     decodeText: bytes => decode('text.yaml', bytes), decodeMedia: bytes => decode('image.png', bytes) };

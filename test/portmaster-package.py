@@ -544,6 +544,19 @@ class PortMasterPackage(unittest.TestCase):
             portmaster.portmaster(self.stage, self.bundle, self.output, **kwargs)
         self.assertEqual(self.output.read_bytes(), before)
 
+    def test_bundle_rejects_index_color_management_mismatching_target(self):
+        bundle = self.create_bundle()
+        index_file = bundle / 'asset-index.json'
+        index_file.write_text(json.dumps({'schema': 1, 'kind': 'pmjs-asset-index',
+                                         'processor': {'colorManagement': 'none'}, 'images': [], 'maps': None}))
+        descriptor_file = bundle / 'pmjs.json'
+        descriptor = json.loads(descriptor_file.read_text())
+        descriptor.update(assetIndex='asset-index.json', assetIndexSha256=artifacts.digest(index_file))
+        descriptor_file.write_text(json.dumps(descriptor))
+        with self.assertRaisesRegex(ValueError, 'color management differs'):
+            portmaster.checked_bundle(bundle, {'skia65': 'ON'})
+        self.assertEqual(portmaster.checked_bundle(bundle, {'skia65': 'OFF'})['assetIndex'], 'asset-index.json')
+
     def test_bundle_rejects_extra_files_and_carries_declared_generated_pages(self):
         bundle = self.create_bundle()
         extra = bundle / 'unexpected-game-file.png'

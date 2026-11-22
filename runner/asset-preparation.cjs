@@ -421,8 +421,10 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
 
     const discoveredFrames = await yedSideviewFrames(async source => {
       if (native.fs?.readBytes) {
-        const bytes = native.fs.readBytes(source);
-        return bytes === null ? null : Buffer.from(bytes);
+        const reader = native.runtime?.gameFiles;
+        const logical = reader?.resolve?.(source) || source;
+        const bytes = native.fs.readBytes(logical);
+        return bytes === null ? null : Buffer.from(reader?.decode?.(logical, bytes) ?? bytes);
       }
       const file = typeof native.assets.sourcePath === 'function'
         ? native.assets.sourcePath(source) : path.join(gameRoot, source);

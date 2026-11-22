@@ -303,9 +303,12 @@ test('game preparation supplies the same metadata to offline indexing and live r
     assert.deepEqual(native.fs.readBytes('data/System.KEL'), original);
     assert.equal(native.runtime.gameFiles.resolve('data/System.KEL'), 'data/System.json');
     assert.equal(native.fs.readBytes('img/original.rpgmvp').toString(), 'original media');
-    assert.equal(native.fs.readBytes('maps/Bad.json').toString(), malformed);
-    assert.throws(() => JSON.parse(native.fs.readBytes('maps/Bad.json')), SyntaxError);
-    assert.ok(native.fs.readDirectory('data').includes('Map001.json'));
+    const input = native.runtime.gameFiles.resolve('maps/Bad.json');
+    const decoded = native.runtime.gameFiles.decode(input, native.fs.readBytes(input));
+    assert.equal(decoded.toString(), malformed);
+    assert.throws(() => JSON.parse(decoded), SyntaxError);
+    assert.ok(!native.fs.readDirectory('data').includes('Map001.json'));
+    assert.equal(native.runtime.gameFiles.canonical('data/Map001.KEL'), 'data/Map001.json');
     assert.ok(native.assets.sourcePath('data/System.json').startsWith(roots[0] + path.sep));
     assert.deepEqual(fs.readFileSync(path.join(gameRoot, 'data/System.KEL')), original);
   }

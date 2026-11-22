@@ -34,6 +34,26 @@ test('OneLoader integration is inactive without an installed loader', () => {
   assert.deepEqual(f.prepare(), []); assert.equal(f.native.runtime.oneLoader, undefined);
 });
 
+test('encrypted startup prepares settings without eagerly decoding maps or plugins', () => {
+  const f = fixture(), crypto = require('node:crypto'), key = 'a'.repeat(32);
+  const encrypt = text => {
+    const iv = Buffer.alloc(16, 7), cipher = crypto.createCipheriv('aes-256-ctr', key, iv);
+    return Buffer.concat([iv, cipher.update(text), cipher.final()]);
+  };
+  f.write('js/main.js', 'const key = "' + key + '";');
+  f.write('data/System.KEL', encrypt('{"encryptionKey":"media-key"}'));
+  f.write('data/Map001.KEL', encrypt('{"events":[]}'));
+  f.write('data/Map999.KEL', 'unreadable unused map');
+  f.write('js/plugins/Example.OMORI', encrypt('globalThis.example = true;'));
+  const roots = f.prepare();
+  assert.deepEqual(fs.readdirSync(path.join(roots[0], 'data')), ['System.json']);
+  assert.equal(fs.existsSync(path.join(roots[0], 'js')), false);
+  assert.equal(f.native.runtime.readGameScript('js/plugins/Example.js'), 'globalThis.example = true;');
+  assert.equal(f.native.runtime.gameFiles.canonical('data/Map001.KEL'), 'data/Map001.json');
+  assert.equal(Buffer.from(f.native.runtime.gameFiles.readBytes('data/Map001.json')).toString(), '{"events":[]}');
+  assert.throws(() => JSON.parse(Buffer.from(f.native.runtime.gameFiles.readBytes('data/Map999.json')).toString()));
+});
+
 test('installed index supplies script order and user-provided modules', async () => {
   const f = fixture(); f.install('<script>globalThis.installed = true;</script><script src="./custom.js"></script><script src="modloader/early_loader.js"></script>');
   f.write('custom.js', 'export const source = "user installation";');

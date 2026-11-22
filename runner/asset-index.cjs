@@ -220,6 +220,7 @@ async function generateAssetIndex({ root, gameRoot, options, output, includeAsse
       ...options.assetPreparation, images: options.assetPreparation.enabled,
       maps: options.assetPreparation.enabled && options.assetPreparation.maps,
       preparationContext: 'offline', verifyHashes: true, logger, shouldCancel, sourceRoots,
+      virtualFiles: options.virtualFiles,
       width: options.width, height: options.height, bundleRoot: output, portDescriptors });
     const images = prepared.images || { total: 0, prepared: 0, decisions: [], entries: [], decryptedEntries: [] };
     let maps = prepared.maps || null;

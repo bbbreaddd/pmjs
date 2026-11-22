@@ -107,7 +107,7 @@ def write_zip(directory, output, epoch):
                         shutil.copyfileobj(source, destination, length=1024 * 1024)
 
 
-def checked_bundle(bundle):
+def checked_bundle(bundle, runtime_info=None):
     actual = set()
     for file in bundle.rglob('*'):
         if file.is_symlink():
@@ -237,6 +237,12 @@ def checked_bundle(bundle):
         index_file = bundle / descriptor['assetIndex']
         if digest(index_file) != descriptor.get('assetIndexSha256'):
             raise ValueError('Bundle asset index checksum differs from pmjs.json')
+        index = json.loads(index_file.read_text())
+        color_management = index.get('processor', {}).get('colorManagement')
+        if runtime_info is not None and color_management is not None:
+            expected_color = 'skia65' if runtime_info['skia65'] == 'ON' else 'none'
+            if color_management != expected_color:
+                raise ValueError('Asset index color management differs from the target runtime')
         verifier = Path(__file__).with_name('verify-asset-index.cjs')
         try:
             result = subprocess.run(['node', verifier, index_file], check=True, capture_output=True, text=True)
@@ -297,7 +303,7 @@ def portmaster(stage, bundle, output, name=None, strip=None, extra_notices=(), s
         payload = workspace / 'payload'
         staged_bundle = workspace / 'staged-bundle'
         shutil.copytree(bundle, staged_bundle, symlinks=True)
-        descriptor = checked_bundle(staged_bundle)
+        descriptor = checked_bundle(staged_bundle, original_info)
         if name is None:
             name = submission_details['launcher'][:-3] if submission_details else descriptor.get('title')
         if not isinstance(name, str) or not name.strip() or re.search(r'[/\\\x00-\x1f]', name) or name.strip() in ('.', '..'):

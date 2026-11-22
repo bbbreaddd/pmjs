@@ -7,21 +7,9 @@ const { createGameFiles } = require('./game-files.cjs');
 function writeMetadata(options, write) {
   const { native } = options;
   const files = createGameFiles(options);
-  native.runtime.gameFiles = { resolve: files.resolve };
-  function visit(directory) {
-    for (const name of native.fs.readDirectory(directory || '.') || []) {
-      const source = directory ? directory + '/' + name : name;
-      if (native.fs.isDirectory(source)) visit(source);
-      else if (/^(?:data|maps|js\/plugins)\//i.test(source) && /\.(?:KEL|AUBREY|OMORI)$/i.test(source)) {
-        const extension = /\.OMORI$/i.test(source) ? '.js' : '.json';
-        const logical = source.replace(/\.[^.]+$/, extension);
-        const bytes = files.read(source);
-        write(logical, bytes);
-      }
-    }
-  }
-  for (const directory of ['data', 'maps', 'js/plugins'])
-    if (native.fs.exists(directory) && native.fs.isDirectory(directory)) visit(directory);
+  native.runtime.gameFiles = { resolve: files.resolve, canonical: files.canonical,
+    decode: files.decode, dependencies: files.dependencies };
+  if (files.exists('data/System.json')) write('data/System.json', files.read('data/System.json'));
 }
 
 function prepareMetadata(options) {
@@ -49,6 +37,7 @@ function prepare(options) {
   const files = createGameFiles(options);
   native.runtime.omoriFiles = files;
   native.runtime.gameFiles = { resolve: files.resolve, remove: files.remove, rename: files.rename,
+    canonical: files.canonical, decode: files.decode, dependencies: files.dependencies,
     needsDecodedRead: files.needsDecodedRead,
     readBytesAsync: files.readAsync, readBytes: name => files.exists(name) ? files.read(name) : null };
   native.runtime.readGameScript = name => {

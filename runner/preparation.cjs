@@ -60,7 +60,7 @@ async function prepareGameAssets(options) {
       ...options, session, onProgress }));
     if (preparationContext === 'offline')
       for (const entry of result.images?.decryptedEntries || []) native.assets.addDerived?.(entry.logicalSource, entry.file);
-    if (!shouldCancel() && options.maps && (session.inventory.some(file => /^data\/Map\d+\.json$/i.test(file)) || session.data.indices.maps))
+    if (!shouldCancel() && options.maps && (session.inventory.some(file => /^data\/Map\d+\.json$/i.test(native.runtime?.gameFiles?.canonical?.(file) || file)) || session.data.indices.maps))
       result.maps = await phase('maps', onProgress => prepareMapsPhase({ ...options, session, onProgress,
         portableIndex: options.portableIndex?.maps }));
     if (!shouldCancel() && (options.portDescriptors?.length || options.adapters?.length || options.bundleRoot))
