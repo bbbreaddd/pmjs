@@ -258,6 +258,12 @@ int main() {
       require(int(texture->layout.kind) == std::min(variant+1,5));
       const auto file = root / "texture.pmtx";
       pmjs::writeTextureArtifact(file,*texture);
+      if (variant == 0 && std::filesystem::exists("/dev/full")) {
+        bool writeFailed = false;
+        try { pmjs::writeTextureArtifact("/dev/full", *texture); }
+        catch (const std::runtime_error&) { writeFailed = true; }
+        require(writeFailed);
+      }
       std::ifstream in(file,std::ios::binary);
       std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(in)),{});
       const pmjs::TextureReader read = [&](std::size_t at, std::span<std::uint8_t> out) {
@@ -316,6 +322,12 @@ int main() {
     try { pmjs::writeLz4Page(root / "missing" / "page", 1, 1, std::vector<std::uint8_t>(4)); }
     catch (const std::runtime_error&) { refused = true; }
     require(refused);
+    if (std::filesystem::exists("/dev/full")) {
+      refused = false;
+      try { pmjs::writeLz4Page("/dev/full", 1, 1, std::vector<std::uint8_t>(4)); }
+      catch (const std::runtime_error&) { refused = true; }
+      require(refused);
+    }
     std::filesystem::remove_all(root);
   } catch (const std::exception& error) {
     std::filesystem::remove_all(root); std::cerr << error.what() << '\n'; return 1;

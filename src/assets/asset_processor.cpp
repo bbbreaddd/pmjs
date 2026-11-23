@@ -55,6 +55,7 @@ class PngRows {
   explicit PngRows(const std::filesystem::path& path) {
     file_ = std::fopen(path.c_str(), "rb");
     if (!file_) throw std::runtime_error("cannot open preparation source");
+    std::setvbuf(file_, fileBuffer_.data(), _IOFBF, fileBuffer_.size());
     png_ = png_create_read_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
     info_ = png_ ? png_create_info_struct(png_) : nullptr;
     if (!info_) { close(); throw std::runtime_error("cannot create PNG reader"); }
@@ -97,6 +98,7 @@ class PngRows {
     png_ = nullptr; info_ = nullptr; file_ = nullptr;
   }
   ImageColorTransform transform_;
+  std::array<char, 64U * 1024U> fileBuffer_;
   FILE* file_ = nullptr;
   png_structp png_ = nullptr;
   png_infop info_ = nullptr;

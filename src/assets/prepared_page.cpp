@@ -5,7 +5,8 @@
 #include <bit>
 #include <unordered_map>
 #include <cstring>
-#include <fstream>
+#include <cstdio>
+#include <memory>
 #include <stdexcept>
 #include <lz4.h>
 #include <zlib.h>
@@ -101,11 +102,11 @@ void writeLz4Page(const std::filesystem::path& path, int width, int height,
   put(header, 4, sparse ? (sparse->packed ? 3 : 2) : 1); put(header, 8, width); put(header, 12, height);
   put(header, 16, rgba.size()); put(header, 20, length);
   put(header, 24, checksum(rgba)); put(header, 28, checksum(std::span(header).first(28)));
-  std::ofstream file(path, std::ios::binary | std::ios::trunc);
-  file.write(reinterpret_cast<const char*>(header.data()), header.size());
-  file.write(compressed.data(), length);
-  file.close();
-  if (!file) throw std::runtime_error("cannot write LZ4 page");
+  std::unique_ptr<FILE, int(*)(FILE*)> file(std::fopen(path.c_str(), "wb"), &std::fclose);
+  if (!file || std::fwrite(header.data(), 1, header.size(), file.get()) != header.size() ||
+      std::fwrite(compressed.data(), 1, length, file.get()) != static_cast<std::size_t>(length))
+    throw std::runtime_error("cannot write LZ4 page");
+  if (std::fclose(file.release()) != 0) throw std::runtime_error("cannot write LZ4 page");
 }
 std::optional<PreparedPagePixels> readLz4Page(std::span<const std::uint8_t> encoded,
                                            std::size_t maxDecodedBytes) {

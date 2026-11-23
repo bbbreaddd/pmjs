@@ -3,7 +3,8 @@
 #include <algorithm>
 #include <bit>
 #include <cstring>
-#include <fstream>
+#include <cstdio>
+#include <memory>
 #include <stdexcept>
 #include <unordered_map>
 #include <lz4.h>
@@ -133,8 +134,9 @@ void writeTextureArtifact(const std::filesystem::path& path, const PreparedTextu
   std::vector<std::uint8_t> header(32+l.planes.size()*16+chunks*64);
   std::memcpy(header.data(), "PMTX", 4); put(header, 4, 1); put(header, 8, std::uint32_t(l.kind));
   put(header, 12, l.width); put(header, 16, l.height); put(header, 20, l.planes.size()); put(header, 24, chunks);
-  std::ofstream file(path, std::ios::binary | std::ios::trunc);
-  file.seekp(header.size());
+  std::unique_ptr<FILE, int(*)(FILE*)> file(std::fopen(path.c_str(), "wb"), &std::fclose);
+  if (!file || std::fseek(file.get(), static_cast<long>(header.size()), SEEK_SET) != 0)
+    throw std::runtime_error("texture artifact write failed");
   std::size_t record = 32+l.planes.size()*16, offset = header.size();
   for (std::size_t i = 0; i < l.planes.size(); ++i) {
     const auto& p = l.planes[i]; const auto stride = p.width*textureTexelBytes(p.format);
@@ -150,11 +152,15 @@ void writeTextureArtifact(const std::filesystem::path& path, const PreparedTextu
       put(header, record, y); put(header, record+4, n); put(header, record+8, offset);
       put(header, record+12, size); put(header, record+16, raw.size());
       const auto hash = digest(raw); std::copy(hash.begin(), hash.end(), header.begin()+record+20);
-      file.write(reinterpret_cast<const char*>(encoded.data()), size); offset += size; record += 64;
+      if (std::fwrite(encoded.data(), 1, size, file.get()) != static_cast<std::size_t>(size))
+        throw std::runtime_error("texture artifact write failed");
+      offset += size; record += 64;
     }
   }
-  file.seekp(0); file.write(reinterpret_cast<const char*>(header.data()), header.size()); file.close();
-  if (!file) throw std::runtime_error("texture artifact write failed");
+  if (std::fseek(file.get(), 0, SEEK_SET) != 0 ||
+      std::fwrite(header.data(), 1, header.size(), file.get()) != header.size())
+    throw std::runtime_error("texture artifact write failed");
+  if (std::fclose(file.release()) != 0) throw std::runtime_error("texture artifact write failed");
 }
 std::optional<TextureLayout> readTextureLayout(const TextureReader& read, std::size_t fileBytes) {
   std::array<std::uint8_t, 32> h{};
