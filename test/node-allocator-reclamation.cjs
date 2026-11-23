@@ -12,7 +12,6 @@ const pixelsBefore = native.canvas.readPixels(canvas.handle, 0, 0, 16, 16);
 native.beginFrame();
 native.render.quad(0, 0, 16, 16, 0, 1, 0, 1);
 const image = native.render.renderToImage(16, 16);
-// Initialize diagnostic backing storage before comparing live resource counts.
 native.images.release(native.images.fallbackImage().handle);
 native.canvas.memory();
 const imagesBefore = native.images.memory(0), canvasBefore = native.canvas.memory();
