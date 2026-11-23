@@ -830,15 +830,11 @@ void Renderer::renderScene() {
     const bool derivedEligible = frameEligible && derivedSampling && !command.appliesSpriteColor;
     const bool wholeSource = logicalInfo && command.source[0] == 0 && command.source[1] == 0 &&
       command.source[2] == logicalInfo->width && command.source[3] == logicalInfo->height;
-    auto derived = !command.nearest && frameEligible && paletteEligible &&
+    auto derived = !wholeSource && !command.nearest && frameEligible && paletteEligible &&
       images_.hasPaletteStorage(command.image) ? images_.resolveSpriteRegion(command.image,
         command.source[0], command.source[1], command.source[2], command.source[3],
-        command.pixiSpritePacking && !command.premultipliedSpriteTexture, wholeSource) :
+        command.pixiSpritePacking && !command.premultipliedSpriteTexture) :
       std::optional<SpriteImageRegion>{};
-    if (!derived && frameEligible && paletteEligible)
-      derived = images_.resolveSpriteRegion(command.image,
-        command.source[0], command.source[1], command.source[2], command.source[3],
-        command.pixiSpritePacking && !command.premultipliedSpriteTexture, true, command.nearest && !command.repeat);
     auto palette = !derived && paletteEligible ? images_.resolvePaletteImage(command.image,
       command.atlasTilingSampling || (command.pixiSpritePacking && !command.premultipliedSpriteTexture)) :
       std::optional<PaletteImageRegion>{};

@@ -148,7 +148,6 @@ try {
   const sceneryTexture = new c.PIXI.Texture(sceneryBase,
     { x: 0, y: 0, width: 3240, height: 3240 });
   const sceneryStage = new c.PIXI.Container();
-  const beforeScenery = native.images.memory(100);
   native.render.setPresentationLayers(0, sceneryImage.handle, 0, 0, 0);
   native.render.setPresentationLayers(0, 0, 0, 0, 0);
   const afterFullFallback = native.images.memory(100);
@@ -166,8 +165,6 @@ try {
   sceneryStage.filterArea = null;
   native.beginFrame(); renderer.render(sceneryStage); native.renderScene();
   const afterScenery = native.images.memory(100);
-  assert.equal(afterScenery.sceneryWindowUploads, beforeScenery.sceneryWindowUploads,
-    'clamped non-power-of-two TilingSprites do not create scrolling windows');
   assert.equal(afterScenery.sceneryFullFallbacks, afterFullFallback.sceneryFullFallbacks,
     'later draws reuse the full resident texture');
   assert.ok(afterScenery.gpuBytes - afterFullFallback.gpuBytes < 10 * 1024 * 1024,
@@ -202,9 +199,6 @@ try {
   scenerySpriteStage.filterArea = null;
   native.beginFrame(); renderer.render(scenerySpriteStage); native.renderScene();
   const afterSpriteWindow = native.images.memory(100);
-  assert.equal(afterSpriteWindow.sceneryWindowUploads + afterSpriteWindow.sceneryWindowHits,
-    beforeSpriteWindow.sceneryWindowUploads + beforeSpriteWindow.sceneryWindowHits,
-    'axis-aligned Sprites with authored world vertices retain the full texture');
   assert.equal(afterSpriteWindow.sceneryFullFallbacks, beforeSpriteWindow.sceneryFullFallbacks,
     'world-vertex drawing reuses resident storage');
   const windowedSpritePixels = Buffer.from(native.canvas.captureSceneRawPremultiplied());

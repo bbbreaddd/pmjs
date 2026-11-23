@@ -106,7 +106,7 @@ napi_value initialize(napi_env env, napi_callback_info info) try {
     }
     imageWarmCacheBytes = static_cast<std::size_t>(configured);
   }
-  std::size_t preparedFrameCacheBytes = pmjs::ImageStore::defaultPreparedFrameCacheBytes;
+  std::size_t preparedPageSplitThresholdBytes = pmjs::ImageStore::defaultPreparedPageSplitThresholdBytes;
   const char* pageSplitOption = hasProperty(env, options, "preparedPageSplitThresholdBytes")
     ? "preparedPageSplitThresholdBytes" : "preparedFrameCacheBytes";
   if (hasProperty(env, options, pageSplitOption)) {
@@ -121,7 +121,7 @@ napi_value initialize(napi_env env, napi_callback_info info) try {
       throw std::runtime_error(
         std::string(pageSplitOption) + " must be a non-negative safe integer");
     }
-    preparedFrameCacheBytes = static_cast<std::size_t>(configured);
+    preparedPageSplitThresholdBytes = static_cast<std::size_t>(configured);
   }
   const auto imageOption = [&](const char* name) {
     return !hasProperty(env, options, name) || asBoolean(env, property(env, options, name));
@@ -134,7 +134,7 @@ napi_value initialize(napi_env env, napi_callback_info info) try {
     asString(env, property(env, options, "gameRoot")), width, height,
     assetRoot, title, imageWarmCacheBytes,
     hasProperty(env, options, "programCacheRoot") ? asString(env, property(env, options, "programCacheRoot")) : "");
-  state->images.setPreparedFrameCacheBudget(preparedFrameCacheBytes);
+  state->images.setPreparedPageSplitThresholdBytes(preparedPageSplitThresholdBytes);
   state->images.setPalettizationEnabled(hasProperty(env, options, "imagePalettization") &&
     asBoolean(env, property(env, options, "imagePalettization")));
   state->images.setCompactSamplingEnabled(compactSampling);

@@ -453,6 +453,7 @@ class Renderer {
   bool filterBoundsRegions(
       const RenderCommand* filterBegin,
       std::vector<std::array<int, 4>>* regions) const;
+  void releaseTileLayerResource(TileLayerResource& resource);
   void destroyTileLayer(std::uint32_t handle);
   void queryFilterProgramUniforms();
   TileProgramUniforms queryTileProgramUniforms(std::uint32_t program);

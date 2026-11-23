@@ -96,9 +96,17 @@ function offlineFilesystem(gameRoot, derived) {
     if (derivedFiles.has(key)) throw new Error('case-insensitive derived path collision: ' + logical);
     derivedFiles.set(key, { logical, file });
   }
+  const masked = key => {
+    let slash = key.lastIndexOf('/');
+    while (slash >= 0) {
+      if (overlays.get(key.slice(0, slash))?.directory === false) return true;
+      slash = key.lastIndexOf('/', slash - 1);
+    }
+    return false;
+  };
   const resolve = logical => {
     const key = normalize(logical);
-    if (!key) return null;
+    if (!key || masked(key)) return null;
     if (overlays.has(key)) return overlays.get(key).directory ? null : overlays.get(key).file;
     if (files.has(key)) return files.get(key);
     if (directories.has(key)) return null;
@@ -107,7 +115,8 @@ function offlineFilesystem(gameRoot, derived) {
   const directory = logical => {
     if (!logical || logical === '.') return root;
     const key = normalize(logical);
-    return key ? directories.get(key) || null : null;
+    return key && !masked(key) && overlays.get(key)?.directory !== false ?
+      directories.get(key) || null : null;
   };
   const exists = logical => resolve(logical) !== null || directory(logical) !== null;
   const assets = {
@@ -131,21 +140,29 @@ function offlineFilesystem(gameRoot, derived) {
     readBytes: logical => { const source = resolve(logical); return source ? fs.readFileSync(source) : null; },
     resolvePath: resolve,
     mountReadOnlyOverlay: overlay => {
-      overlays.clear();
-      directories.clear();
-      for (const [name, directory] of sourceDirectories) directories.set(name, directory);
+      const nextOverlays = new Map(), nextDirectories = new Map(sourceDirectories);
       function visit(directory, prefix = '') {
         for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
           const logical = prefix + entry.name, physical = path.join(directory, entry.name);
+          if (!entry.isDirectory() && !entry.isFile())
+            throw new Error('prepared game overlays must contain regular files and directories');
+          const key = normalize(logical), previous = nextOverlays.get(key);
+          if (previous) {
+            if (previous.directory || entry.isDirectory() || !identicalFiles(previous.file, physical))
+              throw new Error('case-insensitive path collision: ' + previous.file + ' and ' + physical);
+            if (previous.file < physical) continue;
+          }
+          nextOverlays.set(key, { logical, file: physical, directory: entry.isDirectory() });
           if (entry.isDirectory()) {
-            if (!directories.has(normalize(logical))) directories.set(normalize(logical), physical);
-            overlays.set(normalize(logical), { logical, file: physical, directory: true });
+            if (!nextDirectories.has(key)) nextDirectories.set(key, physical);
             visit(physical, logical + '/');
-          } else if (entry.isFile()) overlays.set(normalize(logical), { logical, file: physical, directory: false });
-          else throw new Error('prepared game overlays must contain regular files and directories');
+          }
         }
       }
       visit(overlay);
+      overlays.clear(); directories.clear();
+      for (const [key, entry] of nextOverlays) overlays.set(key, entry);
+      for (const [key, physical] of nextDirectories) directories.set(key, physical);
     },
     readDirectory: logical => {
       const source = directory(logical);

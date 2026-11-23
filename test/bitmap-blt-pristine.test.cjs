@@ -426,3 +426,31 @@ test('a failed native pixel query propagates without a second readback', () => {
   assert.throws(() => bitmap.getAlphaPixel(0, 0), caught => caught === error);
   assert.deepEqual(hits, []);
 });
+
+test('window frames recognize the installed Bitmap wrapper by ownership', () => {
+  const { context, Bitmap, PMJS } = setupEnvironment();
+  const owned = PMJS.mv.bitmap.blt;
+  assert.equal(owned.installed, Bitmap.prototype.blt);
+  assert.equal(owned.predecessor, context._Bitmap_blt);
+  let ordinary = 0, batches = 0;
+  function Window() {}
+  const frame = Window.prototype._refreshFrame = () => { ordinary++; };
+  const dirty = Bitmap.prototype._setDirty;
+  context.Window = Window;
+  PMJS.methods.matchesSource = (fn, hashes) =>
+    fn === frame && hashes[0].startsWith('304170') ||
+    fn === dirty && hashes[0].startsWith('4e5d20') ||
+    fn === owned.predecessor && hashes[0].startsWith('d62410');
+  PMJS.web.canvas.drawImageBatch = () => { batches++; return true; };
+  vm.runInContext(fs.readFileSync(path.join(runtimeRoot, 'js/pmjs-mv/window-frame.js'), 'utf8'), context);
+  const window = new Window();
+  Object.assign(window, { _width: 100, _height: 80,
+    _windowskin: { width: 192, height: 96, _canvas: {} }, _windowFrameSprite: { setFrame() {} } });
+  window._refreshFrame();
+  assert.equal(batches, 1);
+  assert.equal(ordinary, 0);
+  Bitmap.prototype.blt = function() {};
+  window._refreshFrame();
+  assert.equal(batches, 1);
+  assert.equal(ordinary, 1);
+});

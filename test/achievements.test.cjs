@@ -24,6 +24,10 @@ function harness(initial, catalog) {
     NativeHost: { storage: {
       readText: name => files.has(name) ? files.get(name) : null,
       readBytes: name => files.has(name) ? Buffer.from(files.get(name)) : null,
+      stat(name) {
+        if (!files.has(name)) throw Object.assign(new Error('missing file'), { code: 'ENOENT' });
+        return { size: Buffer.byteLength(files.get(name)) };
+      },
       readDirectory: directory => [...new Set([...files.keys()].filter(name => name.startsWith(directory + '/')).map(name => name.slice(directory.length + 1).split('/')[0]))],
       isDirectory: directory => [...files.keys()].some(name => name.startsWith(directory + '/')),
       remove: name => files.delete(name),
@@ -493,4 +497,16 @@ test('OrangeGreenworks preserves an unfamiliar storeStats implementation and rep
   assert.equal(h.context.Hudell.OrangeGreenworks.storeStats, original);
   assert.equal(original(), 'custom stats');
   assert.deepEqual(hits, [['plugins.orange-greenworks.store-stats', 'unrecognized OrangeGreenworks.storeStats']]);
+});
+
+test('cloud metadata and quota checks do not read file payloads', () => {
+  const h = harness({ 'steam-cloud/files/one': 'abc', 'steam-cloud/files/two': '12345' });
+  h.context.NativeHost.storage.readBytes = () => assert.fail('metadata read a payload');
+  const cloud = h.context.pmjsSteam.cloud;
+  assert.deepEqual(JSON.parse(JSON.stringify(cloud.files())), [{ name: 'one', size: 3 }, { name: 'two', size: 5 }]);
+  assert.equal(cloud.quota()[1], String(1024 * 1024 * 1024 - 8));
+  cloud.write('one', 'x');
+  assert.equal(cloud.files()[0].size, 1);
+  cloud.remove('one');
+  assert.throws(() => cloud.remove('one'), { code: 'ENOENT' });
 });

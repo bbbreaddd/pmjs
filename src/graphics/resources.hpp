@@ -190,7 +190,7 @@ class ImageFileSource {
 class ImageStore {
  public:
   static constexpr std::size_t defaultWarmBudgetBytes = 32U * 1024U * 1024U;
-  static constexpr std::size_t defaultPreparedFrameCacheBytes = 32U * 1024U * 1024U;
+  static constexpr std::size_t defaultPreparedPageSplitThresholdBytes = 32U * 1024U * 1024U;
   static constexpr std::size_t warmEntryLimit = 256;
   static constexpr std::size_t warmFileLimit = 128;
   // Bounds retained successful inode-only content verifications.
@@ -277,33 +277,12 @@ class ImageStore {
   bool hasCpuPixels(ImageHandle handle) const;
   std::optional<SpriteImageRegion> resolveSpriteRegion(
       ImageHandle handle, float x, float y, float width, float height,
-      bool premultiplied = true, bool paletteOnly = false, bool sparseAllowed = false);
+      bool premultiplied = true);
   std::optional<PaletteImageRegion> resolvePaletteImage(ImageHandle handle, bool premultiplied);
   bool hasPaletteStorage(ImageHandle handle) const;
-  std::uint64_t sceneryWindowHits() const { return sceneryWindowHits_; }
-  std::uint64_t sceneryWindowUploads() const { return sceneryWindowUploads_; }
   std::uint64_t sceneryFullFallbacks() const { return sceneryFullFallbacks_; }
-  std::uint64_t sceneryScrollWindows() const { return sceneryScrollWindows_; }
-  std::uint64_t sceneryScrollCopyBytes() const { return sceneryScrollCopyBytes_; }
-  std::uint64_t sceneryScrollUploadBytes() const { return sceneryScrollUploadBytes_; }
-  std::uint64_t sceneryScrollFallbacks() const { return sceneryScrollFallbacks_; }
-  std::uint64_t sceneryWindowReadMicros() const { return sceneryWindowReadMicros_; }
-  std::uint64_t sceneryWindowPremultiplyMicros() const { return sceneryWindowPremultiplyMicros_; }
-  std::uint64_t sceneryWindowCreateMicros() const { return sceneryWindowCreateMicros_; }
-  void noteSceneryWindowRejection(ImageHandle handle, const char* reason);
-  const std::unordered_map<std::string, std::uint64_t>& sceneryWindowRejections() const {
-    return sceneryWindowRejections_;
-  }
-  const std::unordered_map<std::string, std::uint64_t>& sceneryBackingRejections() const {
-    return sceneryBackingRejections_;
-  }
-  void setPreparedFrameCacheBudget(std::size_t bytes);
-  std::size_t preparedPageSplitThresholdBytes() const { return preparedFrameBudgetBytes_; }
-  std::size_t preparedFrameCacheBudget() const { return preparedFrameBudgetBytes_; }
-  std::size_t preparedFrameCacheBytes() const { return 0; }
-  std::size_t preparedFrameResidentBytes() const { return 0; }
-  std::size_t preparedFrameEvictedBytes() const { return 0; }
-  std::size_t preparedFramePeakResidentBytes() const { return 0; }
+  void setPreparedPageSplitThresholdBytes(std::size_t bytes);
+  std::size_t preparedPageSplitThresholdBytes() const { return preparedPageSplitThresholdBytes_; }
   void setPalettizationEnabled(bool enabled) { palettizationEnabled_ = enabled; }
   void setCompactSamplingEnabled(bool enabled) { compactSamplingEnabled_ = enabled; }
   void setPreparedCropUploadsEnabled(bool enabled) { preparedCropUploadsEnabled_ = enabled; }
@@ -322,19 +301,12 @@ class ImageStore {
   std::optional<BlockImageRegion> resolveBlockRegion(ImageHandle handle,
       bool premultiplied = true);
 
-  std::uint64_t preparedFrameCacheHits() const { return preparedFrameHits_; }
   std::vector<std::array<float,4>> preparedSpriteParts(ImageHandle handle, const std::array<float,4>& source) const;
   void trimPreparedPageTextures();
   void releaseReconstructibleCpuCaches();
   std::size_t preparedPageTextureBytes() const;
-  std::uint64_t preparedFrameConversions() const { return preparedFrameConversions_; }
-  double preparedFrameConversionMs() const { return preparedFrameConversionMs_; }
-  std::uint64_t preparedFrameCacheBypasses() const { return preparedFrameBypasses_; }
   std::uint64_t renderReadbacks() const { return renderReadbacks_; }
-  std::uint64_t preparedFrameUploadBytes() const { return preparedFrameUploadBytes_; }
   std::uint64_t paletteReadbacks() const { return paletteReadbacks_; }
-  std::uint64_t preparedFrameCacheMisses() const { return 0; }
-  std::uint64_t preparedFrameCacheEvictions() const { return 0; }
   std::optional<CompactImageRegion> resolveCompactRegion(
       ImageHandle handle, float x, float y, float width, float height);
   std::optional<ImagePixels> readPixelsRegion(ImageHandle handle,
@@ -379,6 +351,7 @@ class ImageStore {
   std::optional<ImageInfo> lookupPremultiplied(ImageHandle handle,
       const char* caller = "image-lookup");
   ImageHandle fallbackHandle();
+  ImageHandle existingFallbackHandle() const { return fallbackHandle_; }
   std::optional<ImageInfo> acquireFallback();
   std::uint64_t fallbackUses() const { return fallbackUses_; }
   std::size_t fallbackReferences() const;
@@ -417,7 +390,6 @@ class ImageStore {
   friend class Renderer;
   bool rendering_ = false;
   mutable std::uint64_t renderReadbacks_ = 0;
-  std::uint64_t preparedFrameUploadBytes_ = 0;
   std::optional<ImagePixels> readTexturePixels(const ImageInfo& image, ImageChannelStorage storage = {},
       std::optional<std::array<int,4>> region = std::nullopt) const;
   struct PixelReads {
@@ -442,19 +414,16 @@ class ImageStore {
       std::size_t bytes, ImageChannelStorage storage);
   std::string preparedTextureKey(PreparedBacking& backing, bool premultiplied);
 
-  std::uint32_t preparedCopyProgram_ = 0, preparedCopyVao_ = 0;
-  std::uint64_t preparedFrameConversions_ = 0, preparedFrameBypasses_ = 0;
   mutable std::uint64_t paletteReadbacks_ = 0;
-  double preparedFrameConversionMs_ = 0;
   // Keep evicted textures alive until all queued draws from this frame finish.
   std::vector<ImageHandle> activePreparedFrames_;
-  std::size_t preparedFrameBudgetBytes_ = defaultPreparedFrameCacheBytes;
+  std::size_t preparedPageSplitThresholdBytes_ = defaultPreparedPageSplitThresholdBytes;
   bool palettizationEnabled_ = false;
   bool compactSamplingEnabled_ = true, preparedCropUploadsEnabled_ = true;
   std::uint64_t compactUploadFailures_ = 0, compactTextureUploads_ = 0;
   std::uint64_t preparedCropUploads_ = 0, preparedCropUploadBytes_ = 0;
   std::uint64_t blockTextureUploads_ = 0, blockUploadFailures_ = 0, blockRegions_ = 0;
-  std::uint64_t preparedFrameClock_ = 0, preparedFrameHits_ = 0;
+  std::uint64_t preparedFrameClock_ = 0;
   struct TilePrototype;
   struct TileCatalog;
   struct TilePages;
@@ -548,14 +517,7 @@ class ImageStore {
   mutable std::size_t tileVerificationCacheEstimatedBytes_ = 0;
   std::shared_ptr<ImageFileSource> captureTileFile(const std::filesystem::path& path) const;
   std::uint64_t tileHits_ = 0, tileRegions_ = 0, tileMaterializations_ = 0;
-  std::uint64_t sceneryWindowHits_ = 0;
-  std::uint64_t sceneryWindowUploads_ = 0, sceneryFullFallbacks_ = 0;
-  std::uint64_t sceneryScrollWindows_ = 0, sceneryScrollCopyBytes_ = 0;
-  std::uint64_t sceneryScrollUploadBytes_ = 0, sceneryScrollFallbacks_ = 0;
-  std::uint64_t sceneryWindowReadMicros_ = 0, sceneryWindowCreateMicros_ = 0;
-  std::uint64_t sceneryWindowPremultiplyMicros_ = 0;
-  std::unordered_map<std::string, std::uint64_t> sceneryWindowRejections_;
-  std::unordered_map<std::string, std::uint64_t> sceneryBackingRejections_;
+  std::uint64_t sceneryFullFallbacks_ = 0;
   std::uint64_t tilePageDecodes_ = 0, tilePageUploads_ = 0;
   std::unordered_map<std::string, std::uint64_t> tileFallbacks_, tileRegionSets_;
   void clearPrepared(Slot& slot);
@@ -580,8 +542,7 @@ class ImageStore {
   static bool readPreparedRegionInto(PreparedBacking& backing, int x, int y,
       int width, int height, ImagePixels& destination, int destinationX,
       int destinationY, bool* acquired = nullptr);
-  std::optional<ImageInfo> preparedPage(Slot& slot, std::size_t page, bool premultiplied,
-      PaletteImageRegion* paletteView = nullptr, bool sparseAllowed = false);
+  std::optional<ImageInfo> preparedPage(Slot& slot, std::size_t page, bool premultiplied);
   std::uint32_t paletteTable(PaletteBacking& palette, bool premultiplied);
   static bool preparedSparsePage(PreparedBacking& backing, std::size_t index);
   static ImageHandle makeHandle(std::size_t index, std::uint16_t generation);

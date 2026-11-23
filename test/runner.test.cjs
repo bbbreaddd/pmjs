@@ -363,11 +363,11 @@ test('prepared page split threshold accepts the legacy configuration and environ
     }
     process.env.PMJS_PREPARED_FRAME_CACHE_BYTES = '2097152';
     assert.equal(validate(options).preparedPageSplitThresholdBytes, 2097152);
-    assert.equal(validate({ ...options, preparedFrameCacheBytes: 0 }).preparedFrameCacheBytes, 0);
+    assert.equal(validate({ ...options, preparedFrameCacheBytes: 0 }).preparedPageSplitThresholdBytes, 0);
     const config = path.join(options.gameRoot, 'config.json');
     fs.writeFileSync(config, JSON.stringify({ preparedFrameCacheBytes: 4194304 }));
-    assert.equal(validate({ ...options, config }).preparedFrameCacheBytes, 4194304);
-    assert.equal(validate({ ...options, config, preparedFrameCacheBytes: 0 }).preparedFrameCacheBytes, 0);
+    assert.equal(validate({ ...options, config }).preparedPageSplitThresholdBytes, 4194304);
+    assert.equal(validate({ ...options, config, preparedFrameCacheBytes: 0 }).preparedPageSplitThresholdBytes, 0);
     assert.equal(validate({ ...options, config, preparedPageSplitThresholdBytes: 8192 }).preparedPageSplitThresholdBytes, 8192);
     assert.throws(() => validate({ ...options, preparedPageSplitThresholdBytes: -1 }), /preparedPageSplitThresholdBytes/);
     process.env.PMJS_PREPARED_FRAME_CACHE_BYTES = '-1';

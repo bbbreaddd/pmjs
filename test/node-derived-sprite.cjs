@@ -47,8 +47,7 @@ for (const [name, width, height, grid, backdrop] of [
 native.initialize({ gameRoot: root, assetRoot: '', width: 128, height: 96, windowTitle: 'derived sprite pixels', preparedFrameCacheBytes: 0 });
 native.render.setClearColor(0.08, 0.15, 0.2, 1);
 const schema = native.scene.schema;
-// Initialize diagnostic fallback storage before measuring image realization.
-native.images.memory();
+native.images.release(native.images.fallbackImage().handle);
 
 function frame(image, source, transform, nearest, alpha = 1, blend = 0, extraFlags = 0, projection) {
   const tint = extraFlags & (1 << 11) ?

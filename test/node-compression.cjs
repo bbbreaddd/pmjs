@@ -1,5 +1,6 @@
 'use strict';
 const assert = require('node:assert/strict');
+const test = require('node:test');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
@@ -7,25 +8,31 @@ const { loadPmjsRuntime, runModule } = require('./helpers/runtime-context.cjs');
 const native = require(path.resolve(process.argv[2]));
 const codec = native.compression;
 
-// Vectors from the legacy 16-bit-word Base64 codec.
-for (const [text, encoded] of [
-  ['', 'QAA='], ['hello', 'BYUwNmD2QAA='], ['こんにちは', 'soMmSGTWDIhgyPYMQAA='],
-  ['\u0000\ud800\udfff\uffff', 'ACAA3P/7j//0AA=='], ['abcabcabcabc', 'IYIwxqHpQAA=']
-]) {
-  assert.equal(codec.compressLZString(text), encoded);
-  assert.equal(codec.decompressLZString(encoded), text);
-  assert.equal(codec.decompressLZString('\n' + encoded + ' !'), text);
-}
-assert.equal(codec.decompressLZString(''), null);
-for (const input of [null, undefined, 1, {}, []]) {
-  assert.throws(() => codec.compressLZString(input));
-  assert.throws(() => codec.decompressLZString(input));
-}
 const allUnits = Array.from({ length: 65536 }, (_, i) => String.fromCharCode(i)).join('');
-assert.equal(codec.decompressLZString(codec.compressLZString(allUnits)), allUnits);
-assert.equal(codec.decompressLZString(codec.compressLZString('a'.repeat(100000))), 'a'.repeat(100000));
 
-if (process.env.PMJS_LZ_STRING_REFERENCE) {
+test('fixed legacy compression vectors and native round trips', () => {
+  // Vectors from the legacy 16-bit-word Base64 codec.
+  for (const [text, encoded] of [
+    ['', 'QAA='], ['hello', 'BYUwNmD2QAA='], ['こんにちは', 'soMmSGTWDIhgyPYMQAA='],
+    ['\u0000\ud800\udfff\uffff', 'ACAA3P/7j//0AA=='], ['abcabcabcabc', 'IYIwxqHpQAA=']
+  ]) {
+    assert.equal(codec.compressLZString(text), encoded);
+    assert.equal(codec.decompressLZString(encoded), text);
+    assert.equal(codec.decompressLZString('\n' + encoded + ' !'), text);
+  }
+  assert.equal(codec.decompressLZString(''), null);
+  for (const input of [null, undefined, 1, {}, []]) {
+    assert.throws(() => codec.compressLZString(input));
+    assert.throws(() => codec.decompressLZString(input));
+  }
+  assert.equal(codec.decompressLZString(codec.compressLZString(allUnits)), allUnits);
+  assert.equal(codec.decompressLZString(codec.compressLZString('a'.repeat(100000))), 'a'.repeat(100000));
+
+});
+
+test('historical interoperability, malformed inputs and guest integration', {
+  skip: process.env.PMJS_LZ_STRING_REFERENCE ? false : 'PMJS_LZ_STRING_REFERENCE is unset'
+}, () => {
   const reference = fs.readFileSync(process.env.PMJS_LZ_STRING_REFERENCE, 'utf8');
   const lz = vm.runInNewContext(reference + '; LZString');
   let seed = 12345;
@@ -84,5 +91,4 @@ if (process.env.PMJS_LZ_STRING_REFERENCE) {
   ctx.LZString.decompressFromBase64 = () => 'custom';
   assert.equal(ctx.StorageManager.loadFromLocalFile(1), 'custom');
   assert.equal(decompressions, 1);
-}
-console.log('LZString compression compatibility passed');
+});

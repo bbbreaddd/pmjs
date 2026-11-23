@@ -153,6 +153,7 @@ if (typeof _Bitmap_blt === 'function') {
     }
     return _Bitmap_blt.apply(this, arguments);
   };
+  PMJS.mv.bitmap.blt = { installed: Bitmap.prototype.blt, predecessor: _Bitmap_blt };
 }
 
 // MV text uses native draw only when the stock MV text pipeline is recognized

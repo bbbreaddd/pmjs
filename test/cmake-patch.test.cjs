@@ -16,7 +16,7 @@ function fixture() {
   fs.writeFileSync(path.join(upstream, 'CMakeLists.txt'),
     'add_library(Effekseer STATIC dummy.c)\nadd_library(EffekseerRendererGL STATIC dummy.c)\n');
   const archive = path.join(root, 'upstream.tar');
-  assert.equal(spawnSync('cmake', ['-E', 'tar', 'cf', archive, 'upstream'], { cwd: root }).status, 0);
+  succeeds(spawnSync('cmake', ['-E', 'tar', 'cf', archive, 'upstream'], { cwd: root, encoding: 'utf8' }));
   const sha = createHash('sha256').update(fs.readFileSync(archive)).digest('hex');
   const module = fs.readFileSync(path.resolve(__dirname, '../cmake/Effekseer.cmake'), 'utf8');
   fs.mkdirSync(path.join(root, 'tools'));
@@ -37,6 +37,7 @@ function fixture() {
 }
 
 function succeeds(result) {
+  assert.ifError(result.error);
   assert.equal(result.status, 0, result.stdout + result.stderr);
 }
 

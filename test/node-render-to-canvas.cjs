@@ -115,7 +115,7 @@ try {
   // Packed Pixi colors can have RGB=128 with alpha=127. A straight-alpha
   // readback cannot round-trip those texels; retained target images must do so.
   // Memory diagnostics lazily create the pinned fallback image.
-  native.images.memory(0);
+  native.images.release(native.images.fallbackImage().handle);
   const liveImagesBeforeCapture = native.images.memory(0).liveCount;
   source = native.canvas.create(1, 1);
   captureTarget = native.canvas.create(2, 1);

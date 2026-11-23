@@ -34,8 +34,13 @@ jobs:
       - run: python3 test/portmaster-package.py
 
   native:
+    env:
+      PMJS_SKIA65_COMPONENT_DIR: ${{ github.workspace }}/.cache/components/x64
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 90
+    strategy:
+      matrix:
+        preset: [dev, dev-skia]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install native test dependencies
@@ -49,44 +54,57 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
+      - name: Restore host Skia dependencies
+        if: matrix.preset == 'dev-skia'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .cache/skia65
+            .cache/components/x64
+          key: ${{ runner.os }}-${{ runner.arch }}-skia65-${{ hashFiles('tools/skia65/**', 'tools/llvm_tools.py', 'third_party/skia65-*', 'src/skia65/**', 'src/canvas/text_layout.*', 'src/canvas/canvas_pixels.hpp', 'src/canvas/unicode_default_ignorables.hpp') }}
+      - name: Prepare host Skia component
+        if: matrix.preset == 'dev-skia'
+        run: python3 tools/skia65/build.py --arch x64 --output .cache/components/x64 --jobs 4 --reuse
       - name: Configure native tests
         id: native-configure
-        run: cmake --preset dev
+        run: cmake --preset ${{ matrix.preset }}
       - name: Build native smoke suite
-        if: github.event_name == 'pull_request'
-        run: cmake --build --preset dev --target pmjs-native-smoke --parallel 4
+        if: github.event_name == 'pull_request' && matrix.preset == 'dev'
+        run: cmake --build --preset ${{ matrix.preset }} --target pmjs-native-smoke --parallel 4
       - name: Build full native suite
-        if: github.event_name != 'pull_request'
-        run: cmake --build --preset dev --parallel 4
+        if: github.event_name != 'pull_request' || matrix.preset == 'dev-skia'
+        run: cmake --build --preset ${{ matrix.preset }} --parallel 4
       - name: Run native smoke suite
-        if: github.event_name == 'pull_request'
-        run: ctest --preset dev -L '^(smoke|build)$' --parallel 2 --no-tests=error --timeout 180 --output-junit "$GITHUB_WORKSPACE/build/dev/native-tests.xml"
+        if: github.event_name == 'pull_request' && matrix.preset == 'dev'
+        run: ctest --preset ${{ matrix.preset }} -L '^(smoke|build)$' --parallel 2 --no-tests=error --timeout 180 --output-junit "$GITHUB_WORKSPACE/build/${{ matrix.preset }}/native-tests.xml"
       - name: Run full native suite
-        if: github.event_name != 'pull_request'
-        run: ctest --preset dev -L '^(native|build)$' --no-tests=error --timeout 600 --output-junit "$GITHUB_WORKSPACE/build/dev/native-tests.xml"
+        if: github.event_name != 'pull_request' || matrix.preset == 'dev-skia'
+        run: ctest --preset ${{ matrix.preset }} -L '^(native|build)$' --no-tests=error --timeout 600 --output-junit "$GITHUB_WORKSPACE/build/${{ matrix.preset }}/native-tests.xml"
       - name: Verify coverage integration
         env:
-          PMJS_TEST_BUILD_DIR: build/dev
+          PMJS_TEST_BUILD_DIR: build/${{ matrix.preset }}
         run: python3 tools/test_coverage_test.py
       - name: Summarize native coverage
         if: always() && steps.native-configure.outcome == 'success'
         run: |
-          python3 tools/test_coverage.py build/dev > build/dev/test-coverage.md
-          cat build/dev/test-coverage.md >> "$GITHUB_STEP_SUMMARY"
+          python3 tools/test_coverage.py build/${{ matrix.preset }} > build/${{ matrix.preset }}/test-coverage.md
+          cat build/${{ matrix.preset }}/test-coverage.md >> "$GITHUB_STEP_SUMMARY"
       - name: Save native test results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: native-test-results
+          name: native-test-results-${{ matrix.preset }}
           path: |
-            build/dev/native-tests.xml
-            build/dev/test-coverage.md
-            build/dev/Testing/Temporary/LastTest.log
+            build/${{ matrix.preset }}/native-tests.xml
+            build/${{ matrix.preset }}/test-coverage.md
+            build/${{ matrix.preset }}/Testing/Temporary/LastTest.log
           if-no-files-found: warn
       - name: Verify relocated runtime graphics
         run: |
-          cmake --install build/dev --prefix "$PWD/dist/runtime-host" --component native-addon
-          cmake --install build/dev --prefix "$PWD/dist/runtime-host" --component runtime
-          python3 tools/release.py manifest --stage dist/runtime-host --build build/dev --source .
+          cmake --install build/${{ matrix.preset }} --prefix "$PWD/dist/runtime-host" --component native-addon
+          cmake --install build/${{ matrix.preset }} --prefix "$PWD/dist/runtime-host" --component runtime
+          python3 tools/release.py manifest --stage dist/runtime-host --build build/${{ matrix.preset }} --source .
           python3 tools/release.py verify --stage dist/runtime-host \
             --report dist/verification-host.json --graphics --xvfb
+      - name: Verify installed runtime integration
+        run: LIBGL_ALWAYS_SOFTWARE=1 SDL_AUDIODRIVER=dummy xvfb-run -a node test/release-workflow.cjs dist/runtime-host build/${{ matrix.preset }}

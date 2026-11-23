@@ -242,7 +242,7 @@ test('supervisor memory snapshot captures separate V8 and native allocation cate
       runtime: { allocatorStats: () => ({ arenaBytes: 100 * MiB, freeArenaBytes: 60 * MiB }) },
       images: { memory(limit) { imageLimits.push(limit); return {
         liveCount: 20, cpuBytes: 25 * MiB, gpuBytes: 40 * MiB,
-        preparedFrameCacheBytes: 2 * MiB,
+        preparedPageTextureBytes: 2 * MiB,
         ...(limit === 5 ? { largest: [{ path: 'img/picture/large.png', width: 2048, height: 2048,
           cpuBytes: 16 * MiB, gpuBytes: 16 * MiB, references: 2, pins: 0 }] } : {})
       }; } },

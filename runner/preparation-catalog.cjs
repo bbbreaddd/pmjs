@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const fsp = fs.promises;
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { acquireLock, createLease } = require('./preparation-lifetime.cjs');
+const { acquireLock, adoptInstalledLease } = require('./preparation-lifetime.cjs');
 const { createInvalidators, installationReport } = require('./preparation-state.cjs');
 const { discoverAdapterProcessors, discoverBundledProcessors } = require('./port-preparation.cjs');
 const { CACHE_VERSION, PROCESSOR_IDENTITY } = require('./asset-preparation.cjs');
@@ -73,7 +73,7 @@ async function loadCatalog(options) {
   if (options.verifyHashes || options.verifyRegions || typeof native.assets.installPreparedCatalog !== 'function' ||
       typeof native.assets.installDerivedCatalog !== 'function' ||
       (options.maps && typeof native.assets.installTileSetCatalog !== 'function')) return null;
-  let releaseLock, releaseLease;
+  let releaseLock;
   try {
     const gameRoot = await fsp.realpath(options.gameRoot);
     const cacheRoot = await fsp.realpath(options.cacheRoot);
@@ -123,7 +123,7 @@ async function loadCatalog(options) {
     if (options.images === false) native.assets.installPackedFiles?.([]);
     const packed = options.images === false ? new Map() : await require('./packed-cache.cjs').loadPackedCache(root, native, logger);
     if (packed === null || packed.damagedPacks?.length || data.packedImages !== (packed.size > 0)) throw new Error('packed image catalog changed');
-    releaseLease = await createLease(root, data.keys);
+    const releaseLease = await adoptInstalledLease(native.assets, root, data.keys);
     const derived = installationReport(await native.assets.installDerivedCatalog(data.derived, false, true), 'derived catalog');
     if (derived.rejected.length || derived.accepted.length !== data.derived.length) throw new Error('derived catalog rejected');
     const images = installationReport(await native.assets.installPreparedCatalog(data.entries, false, true), 'image catalog');
@@ -141,7 +141,7 @@ async function loadCatalog(options) {
       if (tiles.rejected.length || tiles.accepted.length !== data.tiles.length) throw new Error('tile catalog rejected');
       native.assets.preparedMapIndex = data.mapIndex;
     }
-    const lease = releaseLease; releaseLease = null;
+    const lease = releaseLease;
     return { images: { entries: data.entries, decryptedEntries: data.derived, storageEntries: data.storage,
       installed: data.entries.length, failedFiles: data.ordinaryFailures.length, fallback: data.ordinaryFailures.length,
       ordinaryFailures: data.ordinaryFailures, catalogHit: true }, maps: { entries: data.tiles, index: data.mapIndex },
@@ -150,7 +150,7 @@ async function loadCatalog(options) {
   } catch (error) {
     if (error.code !== 'ENOENT') logger.warn('[pmjs] startup catalog unavailable; preparing assets: ' + error.message);
     return null;
-  } finally { releaseLease?.(); releaseLock?.(); }
+  } finally { releaseLock?.(); }
 }
 
 module.exports = { loadCatalog, saveCatalog, rebuildMarker };

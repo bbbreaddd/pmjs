@@ -11,6 +11,7 @@
   var interceptors = Object.create(null);
   var finished = false;
   var bootError = null;
+  var bootFailed = false;
   var activeAttempt = null;
   var optimizationRequirements = [];
 
@@ -129,7 +130,7 @@
   }
 
   function boot(installManagerHooks, afterPlugins) {
-    if (bootError) throw bootError;
+    if (bootFailed) throw bootError;
     try {
       installManagerHooks();
       PMJS.phases.emit('beforePlugins');
@@ -147,6 +148,7 @@
       if (typeof nativeBootPhase === 'function') nativeBootPhase('plugins-loaded');
     } catch (error) {
       bootError = error;
+      bootFailed = true;
       throw error;
     }
   }
@@ -178,7 +180,7 @@
     optimizeMethod: function(definition) {
       var def = definition;
       PMJS.plugins.installOptimization(def.plugin, {
-        id: def.id, owner: def.owner, fallback: def.fallback, phaseKey: def.phaseKey,
+        id: def.id, owner: def.owner, fallback: def.fallback, phaseKey: def.phaseKey, requiresInstallation: true,
         install: function() {
           if (!PMJS.optimizations.isEnabled(def.id)) return;
           var target = def.getTarget();
@@ -191,7 +193,13 @@
             PMJS.optimizations.refuse(def.id, def.refusalReason);
             return;
           }
-          target[def.method] = def.replace(original);
+          try {
+            PMJS.methods.assign(target, def.method, def.replace(original), true);
+            PMJS.optimizations.markInstalled(def.id);
+          } catch (error) {
+            PMJS.optimizations.refuse(def.id, 'method installation failed');
+            throw error;
+          }
         }
       });
     },

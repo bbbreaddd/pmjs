@@ -4,9 +4,8 @@ const fs = require('node:fs');
 const fsp = fs.promises;
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { acquireLock, createLease, retainLeases } = require('./preparation-lifetime.cjs');
+const { acquireLock, adoptInstalledLease, retainLeases } = require('./preparation-lifetime.cjs');
 const { preparationFiles, writeJson } = require('./preparation-files.cjs');
-const installedLeases = new WeakMap();
 const maximumStateBytes = 48 * 1024 * 1024;
 const checksumText = value => crypto.createHash('sha256').update(value).digest('hex');
 const checksum = value => checksumText(JSON.stringify(value));
@@ -266,10 +265,7 @@ async function openPreparation({ gameRoot, cacheRoot, native, verifyHashes = fal
         }
         const committed = await session.checkpoint();
         if (!offline) {
-          const previousLease = installedLeases.get(native.assets);
-          session.releaseLease = await createLease(root, [...retained]);
-          installedLeases.set(native.assets, session.releaseLease);
-          previousLease?.();
+          session.releaseLease = await adoptInstalledLease(native.assets, root, retained);
         }
         if (!committed) return;
         try {

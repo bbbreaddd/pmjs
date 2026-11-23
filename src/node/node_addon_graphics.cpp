@@ -410,7 +410,7 @@ std::vector<Number> numericVector(napi_env env, napi_value input) {
   std::vector<Number> result;
   result.reserve(length);
   for (std::uint32_t index = 0; index < length; ++index) {
-    napi_value item; napi_get_element(env, input, index, &item);
+    napi_value item; check(env, napi_get_element(env, input, index, &item), "cannot read array element");
     result.push_back(static_cast<Number>(asNumber(env, item)));
   }
   return result;
@@ -426,7 +426,7 @@ std::vector<std::uint32_t> uintVector(napi_env env, napi_value input) {
   std::vector<std::uint32_t> result;
   result.reserve(length);
   for (std::uint32_t index = 0; index < length; ++index) {
-    napi_value item; napi_get_element(env, input, index, &item);
+    napi_value item; check(env, napi_get_element(env, input, index, &item), "cannot read array element");
     result.push_back(asUint32(env, item));
   }
   return result;
@@ -448,8 +448,11 @@ napi_value createTileLayer(napi_env env, napi_callback_info info) try {
   std::vector<pmjs::TileLayerTile> tiles;
   tiles.reserve(points.size() / 9U);
   for (std::size_t index = 0; index < points.size(); index += 9) {
-    auto texture = static_cast<std::size_t>(points[index + 8]);
-    if (texture >= images.size()) throw std::runtime_error("invalid texture index");
+    const double textureIndex = points[index + 8];
+    if (!std::isfinite(textureIndex) || textureIndex < 0 ||
+        textureIndex != std::floor(textureIndex) || textureIndex >= images.size())
+      throw std::runtime_error("invalid texture index");
+    const auto texture = static_cast<std::size_t>(textureIndex);
     tiles.push_back({images[texture], {points[index], points[index + 1], points[index + 4], points[index + 5]},
       {points[index + 2], points[index + 3]}, {points[index + 6], points[index + 7]}});
   }

@@ -11,7 +11,7 @@
       owner = 'anonymous';
     }
     if (typeof callback !== 'function') return;
-    if (failures[name]) throw failures[name];
+    if (Object.hasOwn(failures, name)) throw failures[name];
     if (fired[name]) {
       try { callback(); } catch (error) {
         console.error('[pmjs] error running late phase ' + name +
@@ -27,7 +27,7 @@
   }
 
   function emit(name) {
-    if (failures[name]) throw failures[name];
+    if (Object.hasOwn(failures, name)) throw failures[name];
     if (fired[name]) return false;
     fired[name] = true;
     var entries = registry[name] || [];

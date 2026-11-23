@@ -17,8 +17,7 @@ for (let y=0;y<48;y++) for(let x=0;x<4096;x++) {
 const sourceBytes=png(4096,48,pixels);
 for(const name of ['sheet.png','other.png'])fs.writeFileSync(path.join(root,name),sourceBytes);
 native.initialize({gameRoot:root,width:100,height:60,windowTitle:'Animation cache pressure',imageWarmCacheBytes:0,preparedFrameCacheBytes:budget});
-// The first memory query creates the diagnostic fallback texture.
-native.images.memory();
+native.images.release(native.images.fallbackImage().handle);
 (async()=>{
  let image,other,reference;
  try {
@@ -53,17 +52,12 @@ native.images.memory();
   const after=native.images.memory();
   assert.equal(after.renderReadbacks,warm.renderReadbacks,'warm drawing must not read back GPU textures');
   assert.equal(after.paletteReadbacks,0,'drawing must not read the palette back from the GPU');
-  assert.equal(after.preparedFrameConversions,warm.preparedFrameConversions,'warm cycles must not repeatedly convert evicted frames');
-  assert.equal(after.preparedFrameCacheMisses,warm.preparedFrameCacheMisses);
   assert.equal(after.preparedPageDecodes,warm.preparedPageDecodes);
   assert.equal(after.textureUploadBytes,warm.textureUploadBytes);
-  assert.ok(after.preparedFrameCacheBytes<=budget);
   assert.ok(after.preparedPageTextureBytes<=32*1024*1024);
-  assert.equal(after.preparedFrameConversions,0,'drawing must not convert prepared frames');
-  assert.equal(after.preparedFrameCacheEvictions,0,'disabled conversion cache must stay empty');
  } finally {
   if(image)native.images.release(image.handle);if(other)native.images.release(other.handle);if(reference)native.canvas.release(reference.handle);
-  native.beginFrame();assert.equal(native.images.memory().preparedFrameCacheBytes,0);
+  native.beginFrame();
   native.runtime.quit();
  }
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -124,7 +124,8 @@ PMJS.optimizations = {
       (pmjsOptimizationConfigDisabled[id] ? 'configuration' : null);
     pmjsOptimizationStates[id] = { enabled: disabledBy === null,
       disabledBy: disabledBy, owner: definition.owner,
-      fallback: definition.fallback, fallbackReasons: Object.create(null) };
+      fallback: definition.fallback, fallbackReasons: Object.create(null),
+      installed: definition.requiresInstallation ? false : undefined };
   },
   install: function(definition) {
     PMJS.optimizations.register(definition);
@@ -133,6 +134,9 @@ PMJS.optimizations = {
     } else {
       definition.install();
     }
+  },
+  markInstalled: function(id) {
+    pmjsOptimizationState(id).installed = true;
   },
   isEnabled: function(id) {
     return pmjsOptimizationState(id).enabled;
@@ -190,6 +194,7 @@ PMJS.optimizations = {
       var state = pmjsOptimizationStates[id];
       return { id: id, owner: state.owner, fallback: state.fallback,
         enabled: state.enabled, disabledBy: state.disabledBy,
+        ...(state.installed === undefined ? {} : { installed: state.installed }),
         refusalReason: state.refusalReason || null,
         refusalDetail: state.refusalDetail || null,
         fallbackReasons: Object.keys(state.fallbackReasons),

@@ -38,9 +38,20 @@ class GameFileLayer {
   constructor(cacheRoot, name) {
     this.parent = path.join(cacheRoot, name);
     fs.mkdirSync(this.parent, { recursive: true });
-    this.staging = fs.mkdtempSync(path.join(this.parent, '.build-'));
     this.outputs = new Map();
+    this.previous = new Map();
+    const current = path.join(this.parent, 'current.json');
+    try {
+      const manifest = JSON.parse(fs.readFileSync(current, 'utf8'));
+      if (manifest && /^[a-f0-9]{64}$/.test(manifest.fingerprint) &&
+          Array.isArray(manifest.outputs) && manifest.outputs.every(entry =>
+            Array.isArray(entry) && entry.length === 2 && typeof entry[0] === 'string' && /^[a-f0-9]{64}$/.test(entry[1]))) {
+        this.previousRoot = path.join(this.parent, manifest.fingerprint);
+        for (const [name, checksum] of manifest.outputs) this.previous.set(name, checksum);
+      }
+    } catch (error) { if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error; }
     this.spellings = new Map();
+    this.staging = fs.mkdtempSync(path.join(this.parent, '.build-'));
   }
   write(name, input) {
     if (typeof name !== 'string' || !name || path.isAbsolute(name) || name.includes('\\') || name.includes('\0') ||
@@ -52,16 +63,41 @@ class GameFileLayer {
       return this.spellings.get(prefix);
     }).join('/');
     const file = path.join(this.staging, name), bytes = Buffer.from(input);
-    fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, bytes);
-    this.outputs.set(name, { hash: hash(bytes) });
+    const checksum = hash(bytes);
+    const previous = this.previousRoot && path.join(this.previousRoot, name);
+    let reusable = false;
+    if (this.previous.get(name) === checksum) {
+      try {
+        reusable = fs.lstatSync(previous).isFile() &&
+          fileHash(previous, Buffer.allocUnsafe(64 * 1024)) === checksum;
+      } catch (error) { if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error; }
+    }
+    if (!reusable) {
+      fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, bytes);
+    } else {
+      fs.rmSync(file, { force: true });
+    }
+    this.outputs.set(name, { hash: checksum, previous: reusable ? previous : null });
   }
   finish() {
     const fingerprint = hash(JSON.stringify([...this.outputs].sort(([a], [b]) => a.localeCompare(b)).map(([name, output]) => [name, output.hash])));
     const root = path.join(this.parent, fingerprint);
     const valid = validCache(root, this.outputs, Buffer.allocUnsafe(64 * 1024));
     if (!valid) {
+      for (const [name, output] of this.outputs) if (output.previous) {
+        const file = path.join(this.staging, name);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.copyFileSync(output.previous, file);
+      }
+      if (!validCache(this.staging, this.outputs, Buffer.allocUnsafe(64 * 1024)))
+        throw new Error('prepared game layer changed during publication');
       fs.rmSync(root, { recursive: true, force: true }); fs.renameSync(this.staging, root);
     }
+    const manifest = path.join(this.parent, path.basename(this.staging) + '.json');
+    try {
+      fs.writeFileSync(manifest, JSON.stringify({ fingerprint, outputs: [...this.outputs].map(([name, output]) => [name, output.hash]) }));
+      fs.renameSync(manifest, path.join(this.parent, 'current.json'));
+    } finally { fs.rmSync(manifest, { force: true }); }
     return { root, changed: !valid };
   }
   dispose() { fs.rmSync(this.staging, { recursive: true, force: true }); }

@@ -47,6 +47,30 @@ async function createLease(cacheRoot, keys) {
   }
   return release;
 }
+const installedLeases = new WeakMap();
+async function adoptInstalledLease(assets, root, keys) {
+  let owner = installedLeases.get(assets);
+  if (!owner) {
+    owner = new Map();
+    installedLeases.set(assets, owner);
+  }
+  const previous = owner.get(root);
+  const retained = new Set(previous?.keys);
+  for (const key of keys) retained.add(key);
+  if (!previous || retained.size !== previous.keys.size) {
+    const release = await createLease(root, [...retained]);
+    owner.set(root, { keys: retained, release });
+    previous?.release();
+  }
+  // Installed catalogs may leave lazy readers in live image slots. Only the
+  // asset-store owner, after stopping those readers, can release their files.
+  return function releaseInstalledLeases() {
+    for (const lease of owner.values()) lease.release();
+    owner.clear();
+    if (installedLeases.get(assets) === owner) installedLeases.delete(assets);
+  };
+}
+
 async function retainLeases(cacheRoot, retained) {
   for (const filename of await fsp.readdir(cacheRoot)) {
     if (!/^\.lease-\d+-[a-f0-9]+\.json$/.test(filename)) continue;
@@ -75,4 +99,4 @@ async function acquireLock(cacheRoot, cancelled, onWait, assets, waitMillisecond
   }
 }
 
-module.exports = { acquireLock, createLease, retainLeases };
+module.exports = { acquireLock, createLease, adoptInstalledLease, retainLeases };

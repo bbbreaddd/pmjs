@@ -110,7 +110,6 @@ test('block sprites share GPU storage across frames, effects and retained owners
         'disabled compact sampling must not upload a block backing');
       assert.equal(after.blockRegions, baseline.blockRegions,
         'disabled compact sampling must not resolve block regions');
-      assert.equal(after.preparedFrameCacheMisses, 0);
       assert.equal(after.sourceTextureBuilds, 0);
       render([]);
       native.images.release(derived.handle);
@@ -146,7 +145,6 @@ test('block sprites share GPU storage across frames, effects and retained owners
       const after = native.images.memory();
       assert.equal(after.blockTextureUploads, first.blockTextureUploads, 'changing frames must reuse atlas and table');
       assert.equal(after.textureUploadBytes, first.textureUploadBytes, 'animation or effects must not upload frame pixels');
-      assert.equal(after.preparedFrameCacheMisses, before.preparedFrameCacheMisses, 'eligible block sprites must bypass frame reconstruction');
       assert.equal(after.sourceTextureBuilds, 0);
     }
     // Direct image commands use straight sampling; packet sprites use premultiplied sampling.

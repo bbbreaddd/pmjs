@@ -24,14 +24,26 @@ try {
     get geometry() { throw getterError; }
   }), error => error === getterError);
 
+  const unallocated = native.images.memory();
+  assert.equal(unallocated.fallbackHandle, 0);
+  assert.equal(native.images.memory().textureCreates, unallocated.textureCreates);
   const image = native.images.load('fixture.png');
+  for (const index of [NaN, Infinity, -Infinity, -1, 0.5, 1, 1e30]) {
+    assert.throws(() => native.render.createTileLayer([0, 0, 0, 0, 4, 4, 0, 0, index], [image.handle]), /invalid texture index/);
+  }
+  for (const position of ['points', 'handles']) {
+    const error = new Error('array getter');
+    const values = [0];
+    Object.defineProperty(values, 0, { get() { throw error; } });
+    assert.throws(() => native.render.createTileLayer(position === 'points' ? values : [],
+      position === 'handles' ? values : []), caught => caught === error);
+  }
   const directory = native.fs.readDirectory('.');
   assert.ok(directory.includes('fixture.png'));
   assert.ok(directory.every(name => typeof name === 'string'));
   assert.throws(() => native.fs.readDirectory('missing-directory'), /cannot read directory/);
   const memory = native.images.memory(100);
   assert.equal(typeof memory.tileHits, 'number');
-  assert.equal(typeof memory.sceneryWindowRejections, 'object');
   assert.equal(typeof memory.preparedFallbacks, 'object');
   const entry = memory.largest.find(item => item.handle === image.handle);
   assert.equal(entry.width, image.width);

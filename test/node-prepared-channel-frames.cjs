@@ -49,19 +49,13 @@ native.initialize({ gameRoot: root, width: 280, height: 280, windowTitle: 'Prepa
     const after = native.images.memory();
     assert.ok(after.blockTextureUploads > baseline.blockTextureUploads);
     assert.equal(after.preparedMaterializations, baseline.preparedMaterializations);
-    assert.ok(after.preparedFrameCacheBytes <= budget);
-    assert.equal(after.preparedFrameCacheMisses, warm.preparedFrameCacheMisses);
     assert.equal(after.textureUploadBytes, warm.textureUploadBytes);
     assert.equal(after.preparedPageDecodes, warm.preparedPageDecodes);
     assert.equal(after.renderReadbacks, baseline.renderReadbacks);
-    assert.equal(after.preparedFrameCacheMisses, 0);
-    assert.equal(after.preparedFrameConversions, 0);
     assert.equal(after.sourceTextureBuilds, 0);
   } finally {
     for (const owner of [image, original, retained]) if (owner) native.images.release(owner.handle);
     native.beginFrame();
-    assert.equal(native.images.memory().preparedFrameCacheBytes, 0);
-    assert.equal(native.images.memory().preparedFrameResidentBytes, 0);
     native.runtime.quit();
   }
 })().catch(error => { console.error(error); process.exitCode = 1; });

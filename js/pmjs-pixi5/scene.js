@@ -574,7 +574,7 @@
     });
   }
 
-  function render(stage, backgroundColor, resolution, size, renderer, skipUpdateTransform, projection, prepared) {
+  function encode(stage, backgroundColor, resolution, size, renderer, skipUpdateTransform, projection, prepared) {
     if (!skipUpdateTransform && typeof stage.updateTransform === 'function') {
       var previousParent = stage.parent;
       stage.parent = stage._tempDisplayObjectParent;
@@ -605,6 +605,35 @@
     }
     if (NativeHost.scene.submit(packetVersion, metadata, values, count) === false) {
       throw new Error('native Pixi 5 scene submission rejected');
+    }
+  }
+
+  var encodingDepth = 0;
+  function render() {
+    var previous = encodingDepth ? {
+      capacity: capacity, metadata: metadata, values: values, count: count,
+      renderResolution: renderResolution, renderOwner: renderOwner, viewport: viewport,
+      filterTargets: filterTargets, preparedSprites: preparedSprites,
+      renderStage: renderStage, skipTransformUpdate: skipTransformUpdate
+    } : null;
+    encodingDepth++;
+    try {
+      if (previous) {
+        capacity = 512;
+        metadata = new Uint32Array(capacity * metadataStride);
+        values = new Float32Array(capacity * valueStride);
+      }
+      return encode.apply(this, arguments);
+    }
+    finally {
+      encodingDepth--;
+      if (previous) {
+        capacity = previous.capacity; metadata = previous.metadata; values = previous.values;
+        count = previous.count; renderResolution = previous.renderResolution;
+        renderOwner = previous.renderOwner; viewport = previous.viewport;
+        filterTargets = previous.filterTargets; preparedSprites = previous.preparedSprites;
+        renderStage = previous.renderStage; skipTransformUpdate = previous.skipTransformUpdate;
+      }
     }
   }
 

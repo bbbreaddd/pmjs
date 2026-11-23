@@ -6,7 +6,7 @@ const native = require(path.resolve(process.argv[2]));
 native.initialize({ gameRoot: path.resolve(process.argv[3]), assetRoot: '',
   width: 64, height: 64, windowTitle: 'Video load failure' });
 
-native.images.memory();
+native.images.release(native.images.fallbackImage().handle);
 const before = native.images.memory();
 assert.throws(() => native.media.loadVideo('video-matrix-601.ts'), /Resource temporarily unavailable/);
 const after = native.images.memory();

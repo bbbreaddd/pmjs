@@ -63,6 +63,8 @@ async function run() {
   assert.equal(cold.images.failedFiles, 1);
   assert.equal(cold.images.ordinaryFailures[0].source, unusedBroken);
   assert.equal(cold.catalogSaved, true);
+  const leaseFiles = () => fs.readdirSync(cold.root).filter(name => /^\.lease-/.test(name));
+  assert.equal(leaseFiles().length, 1);
   const catalog = JSON.parse(fs.readFileSync(path.join(cold.root, 'startup-catalog.json')));
   assert.deepEqual(catalog.data.signature.portableIndex, options.portableIndexIdentity);
   assert.equal(await loadCatalog({ ...options, portableIndexIdentity: { loader: 1, sha256: 'b'.repeat(64) } }), null);
@@ -73,13 +75,15 @@ async function run() {
   assert.equal(cold.images.decryptedEntries.length, 1);
   assert.ok(cold.images.decryptedEntries[0].fileIdentity);
   assert.ok(cold.images.entries[0].pageIdentities.length);
-  cold.releaseCacheLease();
   const reused = await prepareGameAssets(options);
   assert.equal(reused.images.negativeHits, 2);
   assert.equal(reused.images.generated, 0);
-  reused.releaseCacheLease();
   const warm = await loadCatalog(options);
   assert.ok(warm?.images.catalogHit);
+  assert.equal(leaseFiles().length, 1);
+  const warmAgain = await loadCatalog(options);
+  assert.ok(warmAgain?.images.catalogHit);
+  assert.equal(leaseFiles().length, 1);
   assert.equal(warm.images.failedFiles, 1);
   assert.equal(warm.images.installed, 2);
   assert.ok(native.assets.hasDecrypted('img/pictures/secret.png'));
@@ -105,6 +109,7 @@ async function run() {
     onInvalid: id => { invalidation = warm.invalidate(id); } })('fixture/data'), null);
   await invalidation;
   warm.releaseCacheLease();
+  assert.equal(leaseFiles().length, 0);
   assert.equal(await loadCatalog(options), null);
   fs.writeFileSync(path.join(gameRoot, unusedBroken), image);
   const broken = 'img/pictures/jpeg.png';

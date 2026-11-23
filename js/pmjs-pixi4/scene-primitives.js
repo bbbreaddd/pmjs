@@ -36,8 +36,6 @@ if (typeof PMJS !== 'undefined' && PMJS.optimizations &&
 var nativeTransformParent = new PIXI.Container();
 nativeTransformParent.worldAlpha = 1;
 nativeTransformParent.transform.worldTransform.identity();
-var nativeScreenOverlays = [];
-var nativeTileRects = 0;
 var nativeTileRebuilds = 0;
 var nativeBlankTileCanvas = null;
 var nativeRetainedMeshes = new WeakMap();

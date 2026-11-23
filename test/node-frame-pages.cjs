@@ -63,6 +63,7 @@ const sparseFixtures = [true, false].map(extended => {
 }
 native.initialize({ imagePalettization: true, gameRoot: root, width: 320, height: 280, windowTitle: 'frame pages',
   imageWarmCacheBytes: 0, preparedFrameCacheBytes: 8 * 1024 * 1024 });
+native.images.release(native.images.fallbackImage().handle);
 const schema = native.scene.schema;
 function draw(image, frame, whole = false, effect = false, boundary = false, nearest = false, transform) {
   const rect = whole ? [0, 0, width, height] : [frame % 4 * cellWidth, Math.floor(frame / 4) * cellHeight, cellWidth, cellHeight];
@@ -138,18 +139,15 @@ async function main() {
       const owner = state.largest.find(entry => entry.handle === retained.handle);
       assert.ok(owner && (owner.fullTextureResident || state.blockRegions > blocksBeforeRetained),
         'zero-fill pages must preserve logical-source sampling');
-      assert.equal(state.preparedFrameCacheBytes, 0);
     }
     assertPixels(draw(retained, frame, false, true), expected[frame][1], 1);
     const memory = native.images.memory();
     assert.ok(memory.cpuBytes <= totalPageBytes, `decoded pages exceeded their total size: ${memory.cpuBytes}`);
     if (palette) {
+      assert.ok(memory.gpuBytes <= totalPageBytes * 2 + 64,
+        'GPU storage exceeded page textures and the fallback image');
       assert.ok(memory.preparedPageTextureBytes <= totalPageBytes * 2,
         'straight and premultiplied pages exceeded their total size');
-      assert.ok(memory.preparedFrameCacheBytes <= memory.preparedFrameCacheBudget,
-        'reconstructed cell textures exceeded the frame cache budget');
-      assert.ok(memory.gpuBytes <= totalPageBytes * 2 + memory.preparedFrameCacheBytes + 64,
-        'GPU storage exceeded page textures, reconstructed frames and the fallback image');
     }
   }
   const nearestReference = native.images.loadBytes(png(width, height, pixels));
@@ -273,13 +271,12 @@ async function main() {
         const warm = native.images.memory();
         for (const frame of [0, 5, 11]) draw(sparsePrepared, frame);
         const reused = native.images.memory();
-        assert.equal(reused.preparedFrameConversions, 0);
         assert.equal(reused.preparedPageDecodes, warm.preparedPageDecodes);
         assert.equal(reused.textureUploadBytes, warm.textureUploadBytes);
       }
       const recoveryBytes = sparseDescriptor.pages.reduce((bytes, page) => bytes + page.width * page.height * 4, 0);
       assert.ok(owner.cpuBytes <= recoveryBytes);
-      assert.ok(owner.gpuBytes <= sparsePixels.length + recoveryBytes * 2 + artifactAfter.preparedFrameCacheBudget);
+      assert.ok(owner.gpuBytes <= sparsePixels.length + recoveryBytes * 2 + artifactAfter.preparedPageSplitThresholdBytes);
       const canvas = native.canvas.create(width, height);
       const referenceCanvas = native.canvas.create(width, height);
       const recoveryPath = sparse16 ? path.join(sparseDirectory, sparseDescriptor.pages[0].path) : null;

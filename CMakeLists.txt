@@ -225,6 +225,12 @@ if(BUILD_TESTING)
   find_program(XVFB_RUN xvfb-run REQUIRED)
   find_program(NODE_EXECUTABLE node REQUIRED)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  function(pmjs_add_asset_test)
+    cmake_parse_arguments(TEST "" "NAME" "COMMAND" ${ARGN})
+    add_test(NAME ${TEST_NAME} COMMAND ${TEST_COMMAND})
+    set_tests_properties(${TEST_NAME} PROPERTIES FIXTURES_REQUIRED pmjs_assets)
+  endfunction()
+
   add_test(NAME build-sdk-cache COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/sdk-cache.py")
   add_test(NAME build-node-sdk COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/node-sdk.py")
   add_test(NAME build-arm64-abi COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/arm64-abi.py")
@@ -287,9 +293,9 @@ if(BUILD_TESTING)
     ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
   add_executable(pmjs-astc-images-test test/astc-images.cpp)
   target_link_libraries(pmjs-astc-images-test PRIVATE pmjs_runtime)
-  add_test(NAME native-astc-images COMMAND ${XVFB_RUN} -a $<TARGET_FILE:pmjs-astc-images-test> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
+  pmjs_add_asset_test(NAME native-astc-images COMMAND ${XVFB_RUN} -a $<TARGET_FILE:pmjs-astc-images-test> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(native-astc-images PROPERTIES FIXTURES_REQUIRED pmjs_assets ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
-  add_test(NAME native-astc-fallback COMMAND ${XVFB_RUN} -a $<TARGET_FILE:pmjs-astc-images-test> "${CMAKE_CURRENT_BINARY_DIR}/test-assets" --unsupported)
+  pmjs_add_asset_test(NAME native-astc-fallback COMMAND ${XVFB_RUN} -a $<TARGET_FILE:pmjs-astc-images-test> "${CMAKE_CURRENT_BINARY_DIR}/test-assets" --unsupported)
   set_tests_properties(native-astc-fallback PROPERTIES FIXTURES_REQUIRED pmjs_assets ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy;MESA_GLES_VERSION_OVERRIDE=3.0;MESA_EXTENSION_OVERRIDE=-GL_KHR_texture_compression_astc_ldr -GL_KHR_texture_compression_astc_hdr")
   add_executable(pmjs-grayscale-images-test test/grayscale-images.cpp)
   target_compile_options(pmjs-grayscale-images-test PRIVATE -Wall -Wextra -Wpedantic)
@@ -412,11 +418,11 @@ if(BUILD_TESTING)
   target_include_directories(pmjs-effects-gl-state-test PRIVATE src)
   target_compile_options(pmjs-effects-gl-state-test PRIVATE -Wall -Wextra -Wpedantic)
   target_link_libraries(pmjs-effects-gl-state-test PRIVATE pmjs_runtime Effekseer)
-  add_test(NAME native-effects-gl-state COMMAND ${XVFB_RUN} -a $<TARGET_FILE:pmjs-effects-gl-state-test>
+  pmjs_add_asset_test(NAME native-effects-gl-state COMMAND ${XVFB_RUN} -a $<TARGET_FILE:pmjs-effects-gl-state-test>
     "${CMAKE_CURRENT_BINARY_DIR}/test-assets" 3)
   set_tests_properties(native-effects-gl-state PROPERTIES
     ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1" RESOURCE_LOCK pmjs_effect_fixtures)
-  add_test(NAME native-effects-gl-state-es2 COMMAND ${XVFB_RUN} -a $<TARGET_FILE:pmjs-effects-gl-state-test>
+  pmjs_add_asset_test(NAME native-effects-gl-state-es2 COMMAND ${XVFB_RUN} -a $<TARGET_FILE:pmjs-effects-gl-state-test>
     "${CMAKE_CURRENT_BINARY_DIR}/test-assets" 2)
   set_tests_properties(native-effects-gl-state-es2 PROPERTIES
     ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;MESA_GLES_VERSION_OVERRIDE=2.0" RESOURCE_LOCK pmjs_effect_fixtures)
@@ -448,7 +454,7 @@ if(BUILD_TESTING)
   target_include_directories(pmjs-image-install-failure-test PRIVATE src)
   target_link_libraries(pmjs-image-install-failure-test PRIVATE pmjs_runtime)
   target_link_options(pmjs-image-install-failure-test PRIVATE "-Wl,--wrap=_Znwm")
-  add_test(NAME native-image-install-failure COMMAND ${XVFB_RUN} -a
+  pmjs_add_asset_test(NAME native-image-install-failure COMMAND ${XVFB_RUN} -a
     $<TARGET_FILE:pmjs-image-install-failure-test> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(native-image-install-failure PROPERTIES
     FIXTURES_REQUIRED pmjs_assets ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
@@ -489,7 +495,7 @@ if(BUILD_TESTING)
       "${CMAKE_CURRENT_SOURCE_DIR}/${PMJS_JS_TEST}")
   endforeach()
   set_tests_properties(js-text-layout-reference js-pixi-filter-boundary-reference
-    PROPERTIES ENVIRONMENT "PMJS_NATIVE_ADDON=$<TARGET_FILE:pmjs_native>;PMJS_TEST_ASSET_ROOT=${CMAKE_CURRENT_BINARY_DIR}/test-assets")
+    PROPERTIES FIXTURES_REQUIRED pmjs_assets ENVIRONMENT "PMJS_NATIVE_ADDON=$<TARGET_FILE:pmjs_native>;PMJS_TEST_ASSET_ROOT=${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   add_custom_target(pmjs-test-fixtures
     COMMAND "${NODE_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/prepare-fixtures.cjs"
       "${CMAKE_CURRENT_BINARY_DIR}/test-assets"
@@ -497,32 +503,32 @@ if(BUILD_TESTING)
   add_test(NAME test-fixtures COMMAND "${NODE_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/test/prepare-fixtures.cjs" "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(test-fixtures PROPERTIES FIXTURES_SETUP pmjs_assets LABELS setup)
-  add_test(NAME native-media-decoder COMMAND pmjs-media-decoder-test
+  pmjs_add_asset_test(NAME native-media-decoder COMMAND pmjs-media-decoder-test
     "${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture-video.mp4"
     "${CMAKE_CURRENT_BINARY_DIR}/test-assets/empty-packet.ogg")
-  add_test(NAME native-video-failure COMMAND pmjs-video-failure-test
+  pmjs_add_asset_test(NAME native-video-failure COMMAND pmjs-video-failure-test
     "${CMAKE_CURRENT_BINARY_DIR}/test-assets/fixture-video.mp4")
   set_tests_properties(native-video-failure PROPERTIES FIXTURES_REQUIRED pmjs_assets)
-  add_test(NAME node-video-load-failure COMMAND ${XVFB_RUN} -a "${CMAKE_COMMAND}" -E env
+  pmjs_add_asset_test(NAME node-video-load-failure COMMAND ${XVFB_RUN} -a "${CMAKE_COMMAND}" -E env
     "LD_PRELOAD=$<TARGET_FILE:pmjs-video-load-fault>" "LIBGL_ALWAYS_SOFTWARE=1" "SDL_AUDIODRIVER=dummy"
     ${NODE_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/test/node-video-load-failure.cjs"
     $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
-  add_test(NAME native-audio-seek COMMAND pmjs-audio-seek-test
+  pmjs_add_asset_test(NAME native-audio-seek COMMAND pmjs-audio-seek-test
     "${CMAKE_CURRENT_BINARY_DIR}/test-assets/short-audio.flac")
-  add_test(NAME native-audio-failure COMMAND pmjs-audio-failure-test
+  pmjs_add_asset_test(NAME native-audio-failure COMMAND pmjs-audio-failure-test
     "${CMAKE_CURRENT_BINARY_DIR}/test-assets/short-audio.flac")
   set_tests_properties(native-audio-failure PROPERTIES FIXTURES_REQUIRED pmjs_assets TIMEOUT 15)
-  add_test(NAME node-image-load-failure COMMAND ${XVFB_RUN} -a "${CMAKE_COMMAND}" -E env
+  pmjs_add_asset_test(NAME node-image-load-failure COMMAND ${XVFB_RUN} -a "${CMAKE_COMMAND}" -E env
     "LD_PRELOAD=$<TARGET_FILE:pmjs-image-load-fault>" "LIBGL_ALWAYS_SOFTWARE=1" "SDL_AUDIODRIVER=dummy"
     ${NODE_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/test/node-image-load-failure.cjs"
     $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-image-load-failure PROPERTIES TIMEOUT 20)
-  add_test(NAME node-video-eof COMMAND ${XVFB_RUN} -a "${CMAKE_COMMAND}" -E env
+  pmjs_add_asset_test(NAME node-video-eof COMMAND ${XVFB_RUN} -a "${CMAKE_COMMAND}" -E env
     "LIBGL_ALWAYS_SOFTWARE=1" "SDL_AUDIODRIVER=dummy"
     ${NODE_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/test/node-video-eof.cjs"
     $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-video-eof PROPERTIES TIMEOUT 10)
-  add_test(NAME node-video-clock COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+  pmjs_add_asset_test(NAME node-video-clock COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-video-clock.cjs"
     $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-video-clock PROPERTIES TIMEOUT 10
@@ -621,7 +627,7 @@ if(BUILD_TESTING)
     if(NOT PMJS_ENABLE_SKIA65 AND PMJS_NODE_TEST STREQUAL "node-mz-canvas-pixels")
       continue()
     endif()
-    add_test(NAME ${PMJS_NODE_TEST} COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+    pmjs_add_asset_test(NAME ${PMJS_NODE_TEST} COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
       "${CMAKE_CURRENT_SOURCE_DIR}/test/${PMJS_NODE_TEST}.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
     set_tests_properties(${PMJS_NODE_TEST} PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
   endforeach()
@@ -639,17 +645,17 @@ if(BUILD_TESTING)
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-prepared-palette-frame-cache.cjs" $<TARGET_FILE:pmjs_native> --warm-aliases)
   set_tests_properties(node-prepared-palette-warm-aliases PROPERTIES
     ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
-  add_test(NAME node-prepared-frame-cache COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+  pmjs_add_asset_test(NAME node-prepared-frame-cache COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-prepared-frame-cache.cjs" $<TARGET_FILE:pmjs_native>
     "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   add_test(NAME node-prepared-palette-frame-cache COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-prepared-palette-frame-cache.cjs" $<TARGET_FILE:pmjs_native>)
   set_tests_properties(node-prepared-palette-frame-cache PROPERTIES
     ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
-  add_test(NAME node-prepared-frame-cache-disabled COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+  pmjs_add_asset_test(NAME node-prepared-frame-cache-disabled COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-prepared-frame-cache.cjs" $<TARGET_FILE:pmjs_native>
     "${CMAKE_CURRENT_BINARY_DIR}/test-assets" --disabled)
-  add_test(NAME node-prepared-frame-cache-default COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+  pmjs_add_asset_test(NAME node-prepared-frame-cache-default COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-prepared-frame-cache.cjs" $<TARGET_FILE:pmjs_native>
     "${CMAKE_CURRENT_BINARY_DIR}/test-assets" --default)
   set_tests_properties(node-prepared-frame-cache node-prepared-frame-cache-disabled
@@ -721,7 +727,7 @@ if(BUILD_TESTING)
   endforeach()
   add_test(NAME node-block-sprite-disabled COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-block-sprite.cjs" $<TARGET_FILE:pmjs_native> --disabled)
-  add_test(NAME node-identity-filter-shader-full-resolution COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+  pmjs_add_asset_test(NAME node-identity-filter-shader-full-resolution COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-identity-filter-shader.cjs" $<TARGET_FILE:pmjs_native>
     "${CMAKE_CURRENT_BINARY_DIR}/test-assets" 816x624)
   set_tests_properties(node-presentation-byte-precision PROPERTIES ENVIRONMENT
@@ -731,21 +737,21 @@ if(BUILD_TESTING)
     node-compact-sprite-legacy-index node-compact-sprite-multi-row node-identity-filter-shader-full-resolution
     node-derived-sprite node-compact-sprite node-uniform-inline-matrix node-audio-bytes
     PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
-  add_test(NAME node-pixi4-tiling-pixels COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+  pmjs_add_asset_test(NAME node-pixi4-tiling-pixels COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-pixi4-tiling-pixels.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-pixi4-tiling-pixels PROPERTIES ENVIRONMENT
     "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy;PMJS_WINDOW_SIZE=32x24")
   if(PMJS_ENABLE_SKIA65)
-    add_test(NAME node-canvas-composite COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+    pmjs_add_asset_test(NAME node-canvas-composite COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
       "${CMAKE_CURRENT_SOURCE_DIR}/test/node-canvas-composite.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
     set_tests_properties(node-canvas-composite PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
   endif()
-  add_test(NAME node-bitmap-color COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+  pmjs_add_asset_test(NAME node-bitmap-color COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-bitmap-color.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-bitmap-color PROPERTIES
     ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy"
     FIXTURES_REQUIRED pmjs_assets)
-  add_test(NAME node-mv-blur COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+  pmjs_add_asset_test(NAME node-mv-blur COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-mv-blur.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-mv-blur PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
   add_test(NAME node-prepared-media COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
@@ -775,12 +781,18 @@ if(BUILD_TESTING)
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-failed-tile-ownership.cjs" $<TARGET_FILE:pmjs_native> --quit-pending)
   set_tests_properties(node-failed-tile-ownership node-failed-tile-ownership-quit PROPERTIES
     TIMEOUT 90 ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy;UV_THREADPOOL_SIZE=1")
-  add_test(NAME node-custom-filters COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE} --expose-gc
+  pmjs_add_asset_test(NAME node-custom-filters COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE} --expose-gc
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-custom-filters.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-custom-filters PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
-  add_test(NAME node-filter-target-cache COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+  pmjs_add_asset_test(NAME node-filter-target-cache COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-filter-target-cache.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-filter-target-cache PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
+  add_executable(pmjs-renderer-construction-test test/renderer-construction.cpp)
+  target_link_libraries(pmjs-renderer-construction-test PRIVATE pmjs_runtime)
+  target_compile_options(pmjs-renderer-construction-test PRIVATE -UNDEBUG)
+  add_test(NAME native-renderer-construction COMMAND ${XVFB_RUN} -a $<TARGET_FILE:pmjs-renderer-construction-test>)
+  set_tests_properties(native-renderer-construction PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
+
   add_executable(pmjs-filter-target-lifetime-test test/filter-target-lifetime.cpp)
   target_link_libraries(pmjs-filter-target-lifetime-test PRIVATE pmjs_runtime)
   target_compile_options(pmjs-filter-target-lifetime-test PRIVATE -UNDEBUG)
@@ -795,7 +807,7 @@ if(BUILD_TESTING)
     target_link_libraries(pmjs-skia65-strided-test PRIVATE pmjs_skia65)
     add_test(NAME native-skia65-strided COMMAND pmjs-skia65-strided-test)
     foreach(PMJS_SKIA_TEST IN ITEMS node-skia65-text node-skia65-canvas node-skia65-cache node-skia65-primitives node-bitmap-text node-canvas-deferred-paints)
-      add_test(NAME ${PMJS_SKIA_TEST} COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+      pmjs_add_asset_test(NAME ${PMJS_SKIA_TEST} COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
         "${CMAKE_CURRENT_SOURCE_DIR}/test/${PMJS_SKIA_TEST}.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
       set_tests_properties(${PMJS_SKIA_TEST} PROPERTIES ENVIRONMENT
         "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy;PMJS_TEXT_BACKEND=skia65")
@@ -803,21 +815,21 @@ if(BUILD_TESTING)
   endif()
   set_tests_properties(node-tone-boundary-pixels PROPERTIES ENVIRONMENT
     "LIBGL_ALWAYS_SOFTWARE=1;PMJS_WINDOW_SIZE=64x64")
-  add_test(NAME node-filter-bounds-fullscreen COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+  pmjs_add_asset_test(NAME node-filter-bounds-fullscreen COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-filter-bounds.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-filter-bounds-fullscreen PROPERTIES ENVIRONMENT
     "LIBGL_ALWAYS_SOFTWARE=1;PMJS_FILTER_BOUNDS=0")
-  add_test(NAME node-pixi-precision COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+  pmjs_add_asset_test(NAME node-pixi-precision COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-pixi-precision.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-pixi-precision PROPERTIES ENVIRONMENT
     "LIBGL_ALWAYS_SOFTWARE=1")
-  add_test(NAME node-multitexture-sprite-pixels COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+  pmjs_add_asset_test(NAME node-multitexture-sprite-pixels COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-multitexture-sprite-pixels.cjs"
     $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-multitexture-sprite-pixels PROPERTIES ENVIRONMENT
     "LIBGL_ALWAYS_SOFTWARE=1")
   function(pmjs_add_presentation_test name game window scale expect)
-    add_test(NAME ${name} COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+    pmjs_add_asset_test(NAME ${name} COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
       "${CMAKE_CURRENT_SOURCE_DIR}/test/node-presentation.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
     set_tests_properties(${name} PROPERTIES ENVIRONMENT
       "LIBGL_ALWAYS_SOFTWARE=1;PMJS_TEST_GAME=${game};PMJS_WINDOW_SIZE=${window};PMJS_PRESENT_SCALE=${scale};PMJS_TEST_EXPECT=${expect}")
@@ -828,13 +840,13 @@ if(BUILD_TESTING)
   pmjs_add_presentation_test(node-presentation-integer-upscale 320x240 640x480 "integer" "640,480,0,0,nearest,0")
   pmjs_add_presentation_test(node-presentation-display 64x64 "" "" "auto")
   pmjs_add_presentation_test(node-presentation-awkward 500x333 640x480 "" "640,426,0,27,linear,1")
-  add_test(NAME node-presentation-scaling COMMAND ${XVFB_RUN} -a -s "-screen 0 640x480x24" ${NODE_EXECUTABLE}
+  pmjs_add_asset_test(NAME node-presentation-scaling COMMAND ${XVFB_RUN} -a -s "-screen 0 640x480x24" ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-presentation-scaling.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-presentation-scaling PROPERTIES ENVIRONMENT
     "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy;PMJS_WINDOW_SIZE=640x480")
 
   foreach(PMJS_OVERLAY_WINDOW IN ITEMS 192x96 384x240 96x48)
-    add_test(NAME node-presentation-overlay-${PMJS_OVERLAY_WINDOW}
+    pmjs_add_asset_test(NAME node-presentation-overlay-${PMJS_OVERLAY_WINDOW}
       COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
       "${CMAKE_CURRENT_SOURCE_DIR}/test/node-presentation-overlay.cjs"
       $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
@@ -842,12 +854,12 @@ if(BUILD_TESTING)
       ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy;PMJS_WINDOW_SIZE=${PMJS_OVERLAY_WINDOW}")
   endforeach()
 
-  add_test(NAME node-presentation-pixels COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+  pmjs_add_asset_test(NAME node-presentation-pixels COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-presentation-pixels.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-presentation-pixels PROPERTIES ENVIRONMENT
     "LIBGL_ALWAYS_SOFTWARE=1;PMJS_TEST_GAME=816x624;PMJS_WINDOW_SIZE=640x480")
   foreach(PMJS_ORIENTATION_WINDOW IN ITEMS 32x24 53x47)
-    add_test(NAME node-presentation-orientation-${PMJS_ORIENTATION_WINDOW}
+    pmjs_add_asset_test(NAME node-presentation-orientation-${PMJS_ORIENTATION_WINDOW}
       COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
       "${CMAKE_CURRENT_SOURCE_DIR}/test/node-presentation-orientation.cjs"
       $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
@@ -855,14 +867,14 @@ if(BUILD_TESTING)
       PROPERTIES ENVIRONMENT
       "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy;PMJS_WINDOW_SIZE=${PMJS_ORIENTATION_WINDOW}")
   endforeach()
-  add_test(NAME node-presentation-orientation-816x624
+  pmjs_add_asset_test(NAME node-presentation-orientation-816x624
     COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-presentation-orientation.cjs"
     $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   set_tests_properties(node-presentation-orientation-816x624 PROPERTIES ENVIRONMENT
     "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy;PMJS_TEST_GAME=816x624;PMJS_WINDOW_SIZE=816x624")
   foreach(PMJS_EFFECT_TEST node-effects node-mz-effects node-mz-effect-pixels)
-    add_test(NAME ${PMJS_EFFECT_TEST} COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+    pmjs_add_asset_test(NAME ${PMJS_EFFECT_TEST} COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
       "${CMAKE_CURRENT_SOURCE_DIR}/test/${PMJS_EFFECT_TEST}.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
     set_tests_properties(${PMJS_EFFECT_TEST} PROPERTIES
       ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy;PMJS_WINDOW_SIZE=64x64")
@@ -878,13 +890,6 @@ if(BUILD_TESTING)
       set_tests_properties(${pmjs_test} PROPERTIES LABELS js)
     else()
       set_tests_properties(${pmjs_test} PROPERTIES LABELS native)
-      if(pmjs_test MATCHES "^node-" AND
-          NOT pmjs_test MATCHES "^node-(writable-filesystem|async-loading|preparation-lock|sparse-palette|prepared-frame-effects|large-prepared-frame|block-sprite(-legacy-index|-disabled)?|compact-sprite-legacy-index|packed-cache)$")
-        set_tests_properties(${pmjs_test} PROPERTIES FIXTURES_REQUIRED pmjs_assets)
-      elseif(pmjs_test MATCHES "^native-(media-decoder|audio-seek|effects-gl-state(-es2)?)$" OR
-          pmjs_test MATCHES "^js-(text-layout-reference|pixi-filter-boundary-reference)$")
-        set_tests_properties(${pmjs_test} PROPERTIES FIXTURES_REQUIRED pmjs_assets)
-      endif()
     endif()
   endforeach()
   set_property(TEST

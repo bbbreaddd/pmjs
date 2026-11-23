@@ -88,8 +88,6 @@ test('compact prepared sprites match full textures through filters, fades and cl
     const owner = memory.largest.find(entry => entry.handle === compact.handle);
     assert.ok(owner, 'prepared sprite owner must remain observable');
     assert.equal(owner.palette, false);
-    assert.equal(memory.preparedFrameCacheMisses, 0);
-    assert.equal(memory.preparedFrameConversions, 0);
     assert.equal(memory.sourceTextureBuilds, 0);
     context.diagnostic(JSON.stringify({ comparisons, compact: owner }));
     native.images.release(compact.handle);

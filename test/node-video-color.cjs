@@ -32,7 +32,7 @@ async function seek(video, time, expected) {
   throw new Error('Video seek timed out');
 }
 async function main() {
-  native.images.memory();
+  native.images.release(native.images.fallbackImage().handle);
   const before = native.images.memory().liveCount;
   const video = await native.media.loadVideoAsync('video-color.webm', 'chromium65');
   assert.equal(native.images.memory().liveCount, before + 1, 'Movie needs only one image');

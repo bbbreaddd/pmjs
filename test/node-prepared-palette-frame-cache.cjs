@@ -85,21 +85,15 @@ native.initialize({ imagePalettization: true, gameRoot: root, width: 112, height
       }
       native.beginFrame();
       const warm = native.images.memory();
-      assert.equal(warm.preparedFrameCacheMisses, 0);
-      assert.equal(warm.preparedFrameConversions, 0);
       assert.equal(warm.sourceTextureBuilds, 0);
       for (let repeat = 0; repeat < 3; repeat++) draw(image, crop, true, false);
       const after = native.images.memory();
-      assert.equal(after.preparedFrameConversions, warm.preparedFrameConversions);
-      assert.equal(after.preparedFrameCacheMisses, warm.preparedFrameCacheMisses);
       assert.equal(after.textureUploadBytes, warm.textureUploadBytes);
       assert.equal(after.renderReadbacks, 0);
-      assert.ok(after.preparedFrameCacheBytes <= after.preparedFrameCacheBudget);
     }
     const expected = draw(image,[0, 0, 64, 64], true, false);
     const conversionState = native.images.memory();
     assert.equal(conversionState.sourceTextureBuilds, 0);
-    assert.equal(conversionState.preparedFrameConversions, 0);
     for (const name of ['alias.png', 'corrupt.png']) {
       const alias = await loadAlias(name, name === 'corrupt.png');
       const before = native.images.memory();
@@ -145,7 +139,6 @@ native.initialize({ imagePalettization: true, gameRoot: root, width: 112, height
     if (reference) native.canvas.release(reference.handle);
     if (image) native.images.release(image.handle);
     native.beginFrame();
-    assert.equal(native.images.memory().preparedFrameCacheBytes, 0);
     native.runtime.quit(); fs.rmSync(root, { recursive: true, force: true });
   }
 })().catch(error => { console.error(error); process.exitCode = 1; });

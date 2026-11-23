@@ -85,13 +85,17 @@
         })) throw new TypeError('invalid Steam cloud filename');
     return 'steam-cloud/files/' + name.replace(/\\/g, '/');
   }
+  function cloudStat(name) {
+    try { return storage.stat(name); }
+    catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  }
   function cloudFiles() {
     var result = [];
     function visit(directory, prefix) {
       (storage.readDirectory(directory) || []).forEach(function(name) {
         var relative = directory + '/' + name;
         if (storage.isDirectory(relative)) visit(relative, prefix + name + '/');
-        else result.push({ name: prefix + name, size: storage.readBytes(relative).byteLength });
+        else result.push({ name: prefix + name, size: storage.stat(relative).size });
       });
     }
     visit('steam-cloud/files', '');
@@ -128,9 +132,9 @@
       write: function(name, contents) {
         if (!cloudState().enabled) throw unavailable('Cloud files');
         var target = cloudPath(name), text = String(contents);
-        var old = storage.readBytes(target);
+        var old = cloudStat(target);
         var used = cloudFiles().reduce(function(total, file) { return total + file.size; }, 0);
-        if (used - (old ? old.byteLength : 0) + Buffer.byteLength(text) > quota) {
+        if (used - (old ? old.size : 0) + Buffer.byteLength(text) > quota) {
           throw Object.assign(new Error('Local cloud quota exceeded'), { code: 'ENOSPC' });
         }
         storage.writeText(target, text);
@@ -138,7 +142,7 @@
       remove: function(name) {
         if (!cloudState().enabled) throw unavailable('Cloud files');
         var target = cloudPath(name);
-        if (storage.readBytes(target) === null) throw Object.assign(new Error('Cloud file not found: ' + name), { code: 'ENOENT' });
+        if (cloudStat(target) === null) throw Object.assign(new Error('Cloud file not found: ' + name), { code: 'ENOENT' });
         storage.remove(target);
       },
       files: cloudFiles,

@@ -103,7 +103,7 @@ int main() {
     {
       pmjs::ImageStore images;
       images.setWarmBudgetBytes(0);
-      images.setPreparedFrameCacheBudget(0);
+      images.setPreparedPageSplitThresholdBytes(0);
       install(images,a); install(images,b);
       auto sourceA = pmjs::ImageStore::openFile(a.source), sourceB = pmjs::ImageStore::openFile(b.source);
       require(sourceA && sourceB && sourceA->key() != sourceB->key(),"distinct sources must retain independent identities");
@@ -178,7 +178,7 @@ int main() {
     }
     {
       pmjs::ImageStore images;
-      images.setWarmBudgetBytes(0); images.setPreparedFrameCacheBudget(0);
+      images.setWarmBudgetBytes(0); images.setPreparedPageSplitThresholdBytes(0);
       install(images,a); install(images,b); install(images,shifted); install(images,hidden);
       install(images,potA); install(images,potB);
       const auto first = images.loadPng(a.source), second = images.loadPng(b.source);
@@ -276,18 +276,16 @@ int main() {
         require(blocks.cpuBytes() == 0 && blocks.gpuBytes() == 0, "block storage outlived its owner");
       }
       pmjs::ImageStore images;
-      images.setWarmBudgetBytes(0); images.setPreparedFrameCacheBudget(0);
+      images.setWarmBudgetBytes(0); images.setPreparedPageSplitThresholdBytes(0);
       install(images, indexed);
       const auto loaded = images.loadPng(indexed.source);
       require(loaded.has_value(), "indexed prepared page failed to load");
-      const auto region = images.resolveSpriteRegion(loaded->handle, 0, 0, width, height, false, true, true);
-      require(!region, "legacy indexed page selected runtime palette sampling");
+
       require(images.lookup(loaded->handle).has_value(), "legacy indexed page has no ordinary texture");
       const auto decodes = images.preparedPageDecodes();
       const auto uploads = images.textureUploadBytes();
       for (int frame = 0; frame < 8; ++frame) {
-        const auto repeated = images.resolveSpriteRegion(loaded->handle, 0, 0, width, height, false, true, true);
-        require(!repeated, "legacy indexed page selected runtime palette sampling on reuse");
+        require(images.lookup(loaded->handle).has_value(), "legacy indexed source lost its resident texture");
       }
       require(images.preparedPageDecodes() == decodes,
         "repeated indexed palette view decoded an already resident page");

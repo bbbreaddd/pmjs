@@ -105,7 +105,7 @@ async function main() {
   let comparisons = 0;
   const storage = [];
   // Diagnostic fallback storage is independent of the sources measured below.
-  native.images.memory();
+  native.images.release(native.images.fallbackImage().handle);
   for (const [name, imageWidth, imageHeight, rgba] of uniformFixtures) {
     const { ordinary, prepared, descriptor } = await fixture(name, imageWidth, imageHeight);
     assert.deepEqual(descriptor.uniform, rgba);

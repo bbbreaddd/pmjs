@@ -44,7 +44,6 @@ int main(int argc, char** argv) try {
   auto image = images.loadPng(source);
   require(bool(image), "prepared ASTC image load failed");
   if (argc == 3) {
-    require(images.sceneryWindowUploads() == 0, "unsupported ASTC must not create scenery windows");
     const auto* fallbackPixels = images.readPixels(image->handle);
     require(fallbackPixels && fallbackPixels->rgba == original, "unsupported ASTC fallback must preserve authored pixels");
     const auto entries = images.memoryEntries();
@@ -57,7 +56,6 @@ int main(int argc, char** argv) try {
   auto entries = images.memoryEntries();
   const auto owner = std::find_if(entries.begin(), entries.end(), [&](const auto& e) { return e.handle == image->handle; });
   require(owner != entries.end() && owner->astc && owner->cpuBytes == 0 && owner->gpuBytes == pmjs::astc4x4Bytes(width, height), "ASTC storage must include edge block padding without retaining pixels");
-  require(images.sceneryWindowUploads() == 0, "full ASTC images should not create scenery windows");
   GLint compressed = 0; glBindTexture(GL_TEXTURE_2D, premultiplied->texture);
   glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_COMPRESSED, &compressed);
   require(compressed == GL_TRUE, "compressed texture upload did not activate");

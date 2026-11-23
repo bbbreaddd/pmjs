@@ -12,6 +12,8 @@ const temporary = temporaryDirectory('pmjs-release-contract-');
 try {
   let stage = path.join(temporary, 'relocated runtime');
   fs.cpSync(path.resolve(process.argv[2]), stage, { recursive: true });
+  const sourceRecord = path.resolve(process.argv[2]) + '.release.json';
+  if (fs.existsSync(sourceRecord)) fs.copyFileSync(sourceRecord, stage + '.release.json');
   const game = path.join(temporary, 'game with spaces');
   const state = path.join(temporary, 'prepared state');
   fs.mkdirSync(path.join(game, 'js/libs'), { recursive: true });
@@ -84,7 +86,8 @@ try {
   assert.equal(buildInfo.status, 0, buildInfo.stdout + buildInfo.stderr);
   assert.match(buildInfo.stdout, /^PMJS /);
   const infoFile = path.join(stage, 'build-info.json');
-  const installedInfo = JSON.parse(fs.readFileSync(infoFile));
+  const installedInfoBytes = fs.readFileSync(infoFile);
+  const installedInfo = JSON.parse(installedInfoBytes);
   if (installedInfo.buildId) assert.ok(buildInfo.stdout.includes(`build=${installedInfo.buildId}`));
   fs.writeFileSync(infoFile, JSON.stringify({ ...installedInfo, buildId: undefined }));
   assert.equal(cli('--build-info').stdout.includes('build='), false, 'older packages without a build ID still work');
@@ -348,6 +351,7 @@ try {
   assert.equal(crypto.createHash('sha256').update(fs.readFileSync(bootstrap)).digest('hex'),
     JSON.parse(fs.readFileSync(path.join(state, 'prepared.json'))).bootstrapSha256,
     'damaged bootstrap is regenerated');
+  fs.writeFileSync(infoFile, installedInfoBytes);
   if (!installedInfo.files && !installedInfo.payloadSha256) {
     const plainLoad = cli('self-test');
     assert.equal(plainLoad.status, 0, plainLoad.stdout + plainLoad.stderr);

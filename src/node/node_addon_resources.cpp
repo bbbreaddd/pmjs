@@ -538,7 +538,7 @@ napi_value imageMemory(napi_env env, napi_callback_info info) try {
   setProperty(result, "coalescedRequests",
     number(env, value.imageDecodeRequestsCoalesced));
   setProperty(result, "fallbackHandle",
-    uint32(env, images.fallbackHandle()));
+    uint32(env, images.existingFallbackHandle()));
   setProperty(result, "fallbackReferences",
     number(env, images.fallbackReferences()));
   setProperty(result, "fallbackUses",
@@ -557,48 +557,15 @@ napi_value imageMemory(napi_env env, napi_callback_info info) try {
   setProperty(result, "preparedHits", number(env, images.preparedHits()));
   setProperty(result, "preparedRegions", number(env, images.preparedRegions()));
   setProperty(result, "preparedMaterializations", number(env, images.preparedMaterializations()));
-  setProperty(result, "sceneryWindowHits", number(env, images.sceneryWindowHits()));
-  setProperty(result, "sceneryWindowUploads", number(env, images.sceneryWindowUploads()));
-  setProperty(result, "sceneryScrollWindows", number(env, images.sceneryScrollWindows()));
-  setProperty(result, "sceneryScrollCopyBytes", number(env, images.sceneryScrollCopyBytes()));
-  setProperty(result, "sceneryScrollUploadBytes", number(env, images.sceneryScrollUploadBytes()));
-  setProperty(result, "sceneryScrollFallbacks", number(env, images.sceneryScrollFallbacks()));
   setProperty(result, "sceneryFullFallbacks", number(env, images.sceneryFullFallbacks()));
-  setProperty(result, "sceneryWindowReadMicros", number(env, images.sceneryWindowReadMicros()));
-  setProperty(result, "sceneryWindowPremultiplyMicros", number(env, images.sceneryWindowPremultiplyMicros()));
-  setProperty(result, "sceneryWindowCreateMicros", number(env, images.sceneryWindowCreateMicros()));
-  napi_value sceneryWindowRejections;
-  check(env, napi_create_object(env, &sceneryWindowRejections),
-    "cannot create scenery window rejection counts");
-  for (const auto& [reason, count] : images.sceneryWindowRejections())
-    setProperty(sceneryWindowRejections, reason.c_str(), number(env, count));
-  setProperty(result, "sceneryWindowRejections", sceneryWindowRejections);
-  napi_value sceneryBackingRejections;
-  check(env, napi_create_object(env, &sceneryBackingRejections),
-    "cannot create scenery backing rejection counts");
-  for (const auto& [reason, count] : images.sceneryBackingRejections())
-    setProperty(sceneryBackingRejections, reason.c_str(), number(env, count));
-  setProperty(result, "sceneryBackingRejections", sceneryBackingRejections);
   setProperty(result, "preparedPageDecodes", number(env, images.preparedPageDecodes()));
   setProperty(result, "preparedSharedPageHits", number(env, images.preparedSharedPageHits()));
   setProperty(result, "preparedSharedTextureHits", number(env, images.preparedSharedTextureHits()));
   setProperty(result, "preparedRegionReads", number(env, images.preparedRegionReads()));
-  setProperty(result, "preparedFrameCacheBudget", number(env, images.preparedFrameCacheBudget()));
   setProperty(result, "preparedPageSplitThresholdBytes", number(env, images.preparedPageSplitThresholdBytes()));
-  setProperty(result, "preparedFrameCacheBytes", number(env, images.preparedFrameCacheBytes()));
-  setProperty(result, "preparedFrameCacheHits", number(env, images.preparedFrameCacheHits()));
   setProperty(result, "preparedPageTextureBytes", number(env, images.preparedPageTextureBytes()));
-  setProperty(result, "preparedFrameConversions", number(env, images.preparedFrameConversions()));
-  setProperty(result, "preparedFrameConversionMs", number(env, images.preparedFrameConversionMs()));
-  setProperty(result, "preparedFrameCacheBypasses", number(env, images.preparedFrameCacheBypasses()));
   setProperty(result, "renderReadbacks", number(env, images.renderReadbacks()));
-  setProperty(result, "preparedFrameUploadBytes", number(env, images.preparedFrameUploadBytes()));
   setProperty(result, "paletteReadbacks", number(env, images.paletteReadbacks()));
-  setProperty(result, "preparedFrameCacheMisses", number(env, images.preparedFrameCacheMisses()));
-  setProperty(result, "preparedFrameCacheEvictions", number(env, images.preparedFrameCacheEvictions()));
-  setProperty(result, "preparedFrameResidentBytes", number(env, images.preparedFrameResidentBytes()));
-  setProperty(result, "preparedFrameEvictedBytes", number(env, images.preparedFrameEvictedBytes()));
-  setProperty(result, "preparedFramePeakResidentBytes", number(env, images.preparedFramePeakResidentBytes()));
   setProperty(result, "compactUploadFailures", number(env, images.compactUploadFailures()));
   setProperty(result, "compactTextureUploads", number(env, images.compactTextureUploads()));
   setProperty(result, "preparedCropUploads", number(env, images.preparedCropUploads()));

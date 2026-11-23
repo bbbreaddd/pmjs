@@ -358,7 +358,7 @@ test('guest OS identity queries reach Node while filesystem paths remain virtual
       return {
         hostname: () => hostOs.hostname(),
         userInfo: options => hostOs.userInfo(options),
-        networkInterfaces: () => (network = hostOs.networkInterfaces())
+        networkInterfaces: () => (network = { fixture: [{ address: '192.0.2.1', family: 'IPv4' }] })
       };
     }
   });

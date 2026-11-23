@@ -34,7 +34,9 @@ test('optimization waits for guest plugins and captures the original fallback', 
   };
   ctx.PMJS.methods.optimize(definition);
   assert.equal(target.run, original);
+  assert.equal(ctx.PMJS.optimizations.dump()[0].installed, false);
   activate();
+  assert.equal(ctx.PMJS.optimizations.dump()[0].installed, true);
   assert.equal(captured, original);
   assert.equal(target.run(3), 14);
   assert.deepEqual([...ctx.PMJS.methods.dump()], []);
@@ -89,5 +91,20 @@ test('builder and assignment errors propagate without changing the method', () =
     ctx.PMJS.methods.optimize(definition);
     assert.throws(activate, caught => caught === error);
     assert.equal(target.run, original);
+  }
+});
+
+test('locked and ignored assignments refuse optional activation', () => {
+  for (const accessor of [false, true]) {
+    const { ctx, target, original, definition, activate } = fixture();
+    Object.defineProperty(target, 'run', accessor ? {
+      get() { return original; }, set() {}
+    } : { value: original, writable: false });
+    ctx.PMJS.methods.optimize(definition);
+    activate();
+    assert.equal(target.run, original);
+    assert.equal(ctx.PMJS.optimizations.isEnabled(definition.id), false);
+    assert.equal(ctx.PMJS.optimizations.dump()[0].installed, false);
+    assert.match(ctx.PMJS.optimizations.reason(definition.id), /installation rejected/);
   }
 });

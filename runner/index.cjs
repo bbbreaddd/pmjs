@@ -356,7 +356,6 @@ async function runSession(input, diagnostics, setNative) {
     programCacheRoot: path.join(options.assetPreparation.cacheRoot, 'programs'),
     ...(options.imageWarmCacheBytes === undefined ? {} :
       { imageWarmCacheBytes: options.imageWarmCacheBytes }),
-    preparedFrameCacheBytes: options.preparedFrameCacheBytes,
     preparedPageSplitThresholdBytes: options.preparedPageSplitThresholdBytes,
     imagePalettization: options.imagePalettization,
     preparedCompactSampling: options.preparedCompactSampling,

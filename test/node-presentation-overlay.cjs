@@ -6,7 +6,7 @@ const path = require('node:path');
 const native = require(path.resolve(process.argv[2]));
 native.initialize({ gameRoot: path.resolve(process.argv[3]), width: 192, height: 96,
   windowTitle: 'rectangle presentation' });
-native.images.memory();
+native.images.release(native.images.fallbackImage().handle);
 const initialImages = native.images.memory().liveCount;
 const overlay = native.canvas.create(8, 8);
 const upper = native.canvas.create(192, 96);

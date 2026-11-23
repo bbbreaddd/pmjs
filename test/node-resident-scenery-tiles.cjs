@@ -66,7 +66,6 @@ async function main() {
     parallax.tilePosition.y = -624;
     stage.addChild(parallax);
 
-    const before = native.images.memory();
     native.beginFrame();
     renderer.render(stage);
     native.renderScene();
@@ -74,8 +73,6 @@ async function main() {
     const owners = native.images.memory(100).largest;
     const owner = owners.find(entry => entry.handle === image.handle);
     assert.ok(owner.fullTextureResident, 'large tiling images remain fully resident');
-    assert.equal(after.sceneryWindowUploads, before.sceneryWindowUploads,
-      'large images no longer create scrolling windows');
     assert.deepEqual(Array.from(native.canvas.captureSceneRawPremultiplied().subarray(0, 4)),
       [255, 255, 255, 255], 'full-resident scenery preserves source pixels');
     for (const position of [-1321, -1824, 0, -2049]) {
@@ -87,7 +84,6 @@ async function main() {
         [255, 255, 255, 255], 'scrolling preserves full-resident pixels');
     }
     const scrolled = native.images.memory();
-    assert.equal(scrolled.sceneryWindowUploads, before.sceneryWindowUploads);
     assert.equal(scrolled.textureUploadBytes, after.textureUploadBytes,
       'scrolling a resident texture never replaces or uploads a window');
   } finally {

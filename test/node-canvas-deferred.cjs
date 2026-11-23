@@ -12,8 +12,7 @@ native.initialize({
   windowTitle: 'deferred canvas test',
 });
 
-// The first memory query creates the diagnostic fallback texture.
-native.images.memory(0);
+native.images.release(native.images.fallbackImage().handle);
 
 // 1. Creation should be deferred: liveCount = 1, liveBytes = 0, cpuPixelBytes = 0
 const c1 = native.canvas.create(100, 100);

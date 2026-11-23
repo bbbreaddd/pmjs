@@ -26,7 +26,7 @@ async function waitForTextureUpdate(video, previousUpdates, timeoutMs = 5000) {
 async function main() {
   let video, scene, drawable, upperCanvas, sameFrameUpper, sceneUnderUpperCanvas, drawableWithUpperCanvas, resizedUpperCanvas, resizedUpperShot, compositorVideo;
   try {
-    native.images.memory();
+    native.images.release(native.images.fallbackImage().handle);
     const imagesBefore = native.images.memory();
     const canvasesBefore = native.canvas.memory();
     video = await native.media.loadVideoAsync('fixture-video.mp4');

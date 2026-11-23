@@ -163,35 +163,25 @@ async function classifiedSheet() {
     native.render.setClearColor(0.1, 0.2, 0.3, 0.6);
     const memory = () => native.images.memory(100);
     drawPacket(native, spritePacket(native, prepared, { crop: [0, 0, 64, 48] }));
-    assert.equal(memory().preparedFrameCacheMisses, 0, 'nearest sprites retain the indexed path');
     for (const scale of [0.98, 1.25]) for (const crop of [[0, 0, 64, 48], [0.25, 0.5, 60.5, 44.5]]) {
       const options = { nearest: false, scale, crop };
       const expected = drawPacket(native, spritePacket(native, reference, { ...options, premultiplied: true }));
       const actual = drawPacket(native, spritePacket(native, prepared, options));
-      if (budget === null && scale === 0.98 && crop[0] === 0)
-        assert.ok(memory().preparedFrameCacheBytes < 64 * 48 * 2,
-          'converted frames must trim zero margins while retaining the filter halo');
       let maximum = 0;
       for (let i = 0; i < actual.length; i++) maximum = Math.max(maximum, Math.abs(actual[i] - expected[i]));
       assert.ok(maximum <= 1, `ordinary filtering rounding exceeded one byte: ${maximum}`);
     }
     if (budget !== null) {
-      assert.equal(memory().preparedFrameCacheMisses, 0);
-      assert.equal(memory().preparedFrameCacheBytes, 0);
       await classifiedSheet();
       await wholeSourceSampling();
       return;
     }
-    assert.equal(memory().preparedFrameCacheMisses, 0, 'single-cell linear frames draw their prepared page directly');
     const packet = spritePacket(native, prepared, { nearest: false, crop: [0, 0, 64, 48] });
-    const first = drawPacket(native, packet), uploads = memory().textureUploadBytes, hits = memory().preparedRegions;
+    const first = drawPacket(native, packet), uploads = memory().textureUploadBytes;
     assert.deepEqual(drawPacket(native, packet), first);
-    assert.equal(memory().preparedFrameConversions, 0);
     assert.equal(memory().paletteReadbacks, 0);
     assert.equal(memory().textureUploadBytes, uploads);
-    assert.ok(memory().preparedFrameCacheBytes <= memory().preparedFrameCacheBudget);
     native.images.release(prepared.handle); prepared = null; native.beginFrame();
-    assert.equal(memory().preparedFrameCacheBytes, 0, 'source release must clear converted frames');
     for (let i = 0; i < pixels.length; i += 4) if (pixels[i + 3])
       pixels[i] = pixels[i + 1] = pixels[i + 2] = (pixels[i] + 47) % 256;
     fs.writeFileSync(path.join(root, 'source.png'), png(64, 48, pixels));

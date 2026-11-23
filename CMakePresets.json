@@ -35,6 +35,15 @@
       }
     },
     {
+      "name": "dev-skia",
+      "inherits": "dev",
+      "displayName": "Native tests with Skia65",
+      "cacheVariables": {
+        "PMJS_ENABLE_SKIA65": "ON",
+        "PMJS_SKIA65_COMPONENT_DIR": "$env{PMJS_SKIA65_COMPONENT_DIR}"
+      }
+    },
+    {
       "name": "runtime-x64",
       "inherits": "base",
       "displayName": "x64 runtime with prepared Skia65",
@@ -77,6 +86,10 @@
     {
       "name": "linux-arm64",
       "configurePreset": "linux-arm64"
+    },
+    {
+      "name": "dev-skia",
+      "configurePreset": "dev-skia"
     }
   ],
   "testPresets": [
@@ -93,6 +106,16 @@
     {
       "name": "dev-asan",
       "configurePreset": "dev-asan",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "dev-skia",
+      "configurePreset": "dev-skia",
       "output": {
         "outputOnFailure": true
       },

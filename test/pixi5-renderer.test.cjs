@@ -794,3 +794,33 @@ test('Pixi 5 rejects missing required native capabilities before submitting', ()
     }
   }
 });
+
+test('nested scene encoding restores the outer packet and state after success or failure', () => {
+  for (const fail of [false, true]) {
+    const fixture = createContext(), c = fixture.context;
+    runModule(c, 'js/pmjs-pixi5/scene.js');
+    runModule(c, 'js/pmjs-pixi5/renderer.js');
+    const app = new c.PIXI.Application({ width: 32, height: 24 });
+    const sprite = handle => new c.PIXI.Sprite({
+      baseTexture: { resource: { source: { _nativeImage: { handle } } }, resolution: 1 },
+      frame: { x: 0, y: 0, width: 4, height: 4 }, orig: { width: 4, height: 4 }, rotate: 0
+    });
+    const first = sprite(42), second = sprite(43), inner = new c.PIXI.Container();
+    inner.addChild(sprite(99));
+    const error = new Error('nested callback');
+    if (fail) inner.children[0].calculateVertices = () => { throw error; };
+    first.calculateVertices = () => {
+      if (fail) assert.throws(() => app.renderer.render(inner), caught => caught === error);
+      else app.renderer.render(inner);
+    };
+    app.stage.addChild(first); app.stage.addChild(second);
+    app.render();
+    const outer = fixture.submissions.at(-1);
+    const resources = Array.from({ length: outer.count }, (_, index) => packetNode(outer, index).resource).filter(Boolean);
+    assert.deepEqual(resources, [42, 43]);
+    assert.equal(outer.count, 4);
+    first.calculateVertices = () => {};
+    app.render();
+    assert.equal(fixture.submissions.at(-1).count, 4);
+  }
+});

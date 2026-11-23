@@ -61,7 +61,6 @@ test('prepared page palette metadata survives direct and catalog installs', asyn
             cpuBytes: owner().cpuBytes, reconstructions: after.preparedRegionReads - before.preparedRegionReads }));
           assert.equal(owner().palette, false);
           assert.equal(after.sourceTextureBuilds, 0);
-          assert.equal(after.preparedFrameConversions, 0);
           const steady = native.images.memory();
           draw(prepared); draw(prepared);
           const repeated = native.images.memory();

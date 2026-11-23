@@ -56,7 +56,7 @@ async function run() {
       const uploads = native.images.memory().textureUploadBytes;
       repeat();
       assert.equal(native.images.memory().textureUploadBytes, uploads);
-      for (const key of ['sourceTextureBuilds', 'preparedFrameConversions', 'preparedFrameCacheMisses']) {
+      for (const key of ['sourceTextureBuilds']) {
         assert.equal(state[key], 0, key);
       }
       if (artifact !== 'valid') assert.ok(state.textureArtifactFailures > 0);

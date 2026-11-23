@@ -60,6 +60,15 @@
     return def.id;
   }
 
+  function assign(target, method, replacement, required) {
+    if (typeof replacement !== 'function') fail('replacement is not a function');
+    if (required) target[method] = replacement;
+    else if (!Reflect.set(target, method, replacement)) return false;
+    if (target[method] === replacement) return true;
+    if (required) fail('replacement did not become the effective method');
+    return false;
+  }
+
   function installRecord(record) {
     try {
       var target = targetOf(record);
@@ -73,10 +82,7 @@
       if (typeof replacement !== 'function') {
         fail(record.id + ' did not return a function');
       }
-      target[record.method] = replacement;
-      if (target[record.method] !== replacement) {
-        fail(record.id + ' replacement did not become the effective method');
-      }
+      assign(target, record.method, replacement, true);
       record.state = 'installed';
       record.reason = 'installed';
     } catch (error) {
@@ -117,6 +123,7 @@
   globalThis.PMJS = globalThis.PMJS || {};
   PMJS.methods = {
     sourceOf: sourceOf,
+    assign: assign,
     fingerprint: fingerprint,
 
     matchesSource: function(fn, expected) {
@@ -140,11 +147,20 @@
           return;
         }
         // Optional installation preserves non-throwing rejection of a locked method.
-        Reflect.set(target, def.method, def.replace(original));
+        try {
+          if (!assign(target, def.method, def.replace(original), false)) {
+            PMJS.optimizations.refuse(def.id, 'method installation rejected');
+            return;
+          }
+          PMJS.optimizations.markInstalled(def.id);
+        } catch (error) {
+          PMJS.optimizations.refuse(def.id, 'method installation failed');
+          throw error;
+        }
       }
       PMJS.optimizations.install({
         id: def.id, owner: def.owner, fallback: def.fallback,
-        phaseKey: def.phaseKey, install: activate
+        phaseKey: def.phaseKey, requiresInstallation: true, install: activate
       });
     },
 

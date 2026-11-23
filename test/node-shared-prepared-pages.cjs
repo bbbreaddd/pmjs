@@ -38,7 +38,7 @@ test('different prepared source paths share storage and retain independent snaps
   try {
     native.render.setClearColor(0.08, 0.15, 0.2, 0.6);
     const schema = native.scene.schema;
-    native.images.memory();
+    native.images.release(native.images.fallbackImage().handle);
     const emptyMemory = native.images.memory();
     function packet(image, effect = 0) {
       const values = new Float32Array(schema.valueStride);

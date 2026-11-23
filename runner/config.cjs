@@ -181,7 +181,7 @@ function validate(input) {
       (typeof options.greenworksModule !== 'string' || !options.greenworksModule)) {
     throw new Error('greenworksModule must be a nonempty host module path');
   }
-  return {
+  const validated = {
     ...options,
     ...(options.greenworksModule === undefined ? {} :
       { greenworksModule: path.resolve(options.greenworksModule) }),
@@ -194,12 +194,13 @@ function validate(input) {
     assetPreparation: { ...options.assetPreparation, allowPalettes: options.imagePalettization ?? false,
       cacheRoot: options.assetPreparation.cacheRoot || path.join(path.resolve(options.saveRoot), 'asset-cache') },
     ...(imageWarmCacheBytes === undefined ? {} : { imageWarmCacheBytes }),
-    preparedFrameCacheBytes,
     preparedPageSplitThresholdBytes: splitBytes ?? preparedFrameCacheBytes,
     preparedCompactSampling: options.preparedCompactSampling ?? true,
     preparedCropUploads: options.preparedCropUploads ?? true,
     title: options.title,
   };
+  delete validated.preparedFrameCacheBytes;
+  return validated;
 }
 
 

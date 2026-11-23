@@ -772,8 +772,6 @@ ImageStore::ImageStore(std::filesystem::path programCacheRoot)
 }
 
 ImageStore::~ImageStore() {
-  if (preparedCopyProgram_) glDeleteProgram(preparedCopyProgram_);
-  if (preparedCopyVao_) glDeleteVertexArrays(1, &preparedCopyVao_);
   *alive_ = false;
   for (auto& slot : slots_) {
     if (slot.live) {
@@ -2942,12 +2940,10 @@ ImagePixels* ImageStore::preparedPixels(PreparedBacking& backing, std::size_t in
   return &*page.pixels;
 }
 
-std::optional<ImageInfo> ImageStore::preparedPage(Slot& slot, std::size_t index, bool premultiplied,
-    PaletteImageRegion* view, bool /* sparseAllowed */) {
+std::optional<ImageInfo> ImageStore::preparedPage(Slot& slot, std::size_t index, bool premultiplied) {
   auto& backing = *slot.prepared;
   auto& page = backing.pages[index];
   page.lastGpuUse = ++preparedFrameClock_;
-  if (view) return std::nullopt;
   auto& texture = premultiplied ? page.premultipliedTexture : page.texture;
   auto& shared = premultiplied ? page.sharedPremultipliedTexture : page.sharedTexture;
   if (!texture) {
@@ -2999,18 +2995,16 @@ std::optional<ImageInfo> ImageStore::preparedPage(Slot& slot, std::size_t index,
 }
 
 std::optional<SpriteImageRegion> ImageStore::resolveSpriteRegion(ImageHandle handle,
-    float x, float y, float width, float height, bool premultiplied, bool paletteOnly, bool sparseAllowed) {
+    float x, float y, float width, float height, bool premultiplied) {
   auto info = inspect(handle);
   if (!info || width <= 0 || height <= 0 || !std::isfinite(x) || !std::isfinite(y) ||
       !std::isfinite(width) || !std::isfinite(height) || x < 0 || y < 0 ||
       x + width > info->width || y + height > info->height) return std::nullopt;
   auto& slot = slots_[(handle & indexMask) - 1U];
-  if (slot.tiles && paletteOnly) return std::nullopt;
   if (slot.tiles) return resolveTileRegion(slot, x, y, width, height, premultiplied);
   if (!slot.prepared) return std::nullopt;
   auto& backing = *slot.prepared;
   if (backing.requiresSourceSampling()) return std::nullopt;
-  if (backing.descriptor.uniform && paletteOnly) return std::nullopt;
   if (backing.descriptor.uniform) {
     auto& image = backing.cellImages.back();
     if (!image) {
@@ -3027,18 +3021,16 @@ std::optional<SpriteImageRegion> ImageStore::resolveSpriteRegion(ImageHandle han
     const auto& cell = backing.descriptor.cells[i]; const auto& r = cell.rect;
     if (x < r[0] || y < r[1] || x + width > r[0] + r[2] || y + height > r[1] + r[3]) continue;
     const bool zero = std::all_of(cell.fill.begin(), cell.fill.end(), [](std::uint8_t v) { return v == 0; });
-    if (zero && cell.crop[2] && cell.crop[3] && (!backing.descriptor.framePages || paletteOnly)) {
-      PaletteImageRegion palette;
-      auto physical = preparedPage(slot, cell.page, premultiplied, paletteOnly ? &palette : nullptr, sparseAllowed);
+    if (zero && cell.crop[2] && cell.crop[3] && !backing.descriptor.framePages) {
+      auto physical = preparedPage(slot, cell.page, premultiplied);
       if (!physical) return std::nullopt;
       ++preparedRegions_;
       return SpriteImageRegion{*physical,
         {static_cast<float>(r[0] + cell.crop[0]), static_cast<float>(r[1] + cell.crop[1]),
          static_cast<float>(cell.crop[2]), static_cast<float>(cell.crop[3])},
         {static_cast<float>(cell.atlas[0]), static_cast<float>(cell.atlas[1]),
-         static_cast<float>(cell.atlas[2]), static_cast<float>(cell.atlas[3])}, info->width, info->height, backing.descriptor.halo, palette.table, palette.blocks, palette.residual};
+         static_cast<float>(cell.atlas[2]), static_cast<float>(cell.atlas[3])}, info->width, info->height, backing.descriptor.halo};
     }
-    if (paletteOnly) return std::nullopt;
     if (backing.descriptor.framePages) {
       auto& recent = backing.recentCells;
       std::erase(recent, i);
@@ -3086,8 +3078,8 @@ std::optional<SpriteImageRegion> ImageStore::resolveSpriteRegion(ImageHandle han
   return std::nullopt;
 }
 
-void ImageStore::setPreparedFrameCacheBudget(std::size_t bytes) {
-  preparedFrameBudgetBytes_ = bytes;
+void ImageStore::setPreparedPageSplitThresholdBytes(std::size_t bytes) {
+  preparedPageSplitThresholdBytes_ = bytes;
 }
 
 std::optional<BlockImageRegion> ImageStore::resolveBlockRegion(ImageHandle handle, bool premultiplied) {

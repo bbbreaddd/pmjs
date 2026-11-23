@@ -564,13 +564,13 @@ test('an img cache root scans originals and excludes owned entries through a gam
   assert.equal(f.jobs, 1);
 });
 
-test('source and processor identities invalidate individual entries and remove superseded output', async () => {
+test('source and processor identities invalidate entries while live stores retain prior generations', async () => {
   const f = fixture();
   await prepareAssets(f);
   const old = path.dirname(manifests(f)[0]);
   fs.appendFileSync(path.join(f.gameRoot, f.source), 'new source bytes');
   assert.equal((await prepareAssets(f)).generated, 1);
-  assert.equal(fs.existsSync(old), false);
+  assert.equal(fs.existsSync(old), true, 'prior lazy readers remain protected');
   assert.equal((await prepareAssets({ ...f, processorIdentity: { processor: 'next' } })).generated, 1);
   assert.equal(f.jobs, 3);
   assert.equal(manifests(f).length, 1);
@@ -1026,7 +1026,7 @@ for (const engine of ['MV', 'MZ']) test(engine + ' default audio views replace m
   assert.equal(upgraded.decrypted, 1);
   assert.equal(upgraded.installed, 1);
   assert.equal(upgraded.audioViews, 1);
-  assert.equal(fs.existsSync(oldAudio), false, 'unreferenced duplicate audio is removed');
+  assert.equal(fs.existsSync(oldAudio), true, 'prior audio readers remain protected until asset-store teardown');
   assert.equal(views[0].source, f.encryptedAudio);
   const warm = await prepareAssets(f);
   assert.equal(warm.validation.hashedFiles, 0);

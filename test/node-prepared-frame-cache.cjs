@@ -89,7 +89,7 @@ async function main() {
   const originalPixels = readFrame(image);
   const originalTranslucent = readFrame(image, 1);
   const before = native.images.memory();
-  assert.equal(before.preparedFrameCacheBudget, disabled ? 0 : defaultBudget ? 33554432 : budget);
+  assert.equal(before.preparedPageSplitThresholdBytes, disabled ? 0 : defaultBudget ? 33554432 : budget);
   for (const frames of [[0], [0, 1, 2, 0], [2, 1, 0]]) {
     assertCenters(render(image, frames), frames, colors);
   }
@@ -100,8 +100,7 @@ async function main() {
   assertCenters(render(image, [1], { fractional: true }), [1], colors);
   const after = native.images.memory();
   assert.equal(after.textureUploadBytes, warm.textureUploadBytes);
-  for (const key of ['preparedFrameCacheBytes', 'preparedFrameResidentBytes',
-    'preparedFrameCacheMisses', 'preparedFrameConversions', 'sourceTextureBuilds']) {
+  for (const key of ['preparedPageTextureBytes', 'sourceTextureBuilds']) {
     assert.equal(after[key], 0, key);
   }
   assert.deepEqual(readFrame(image), originalPixels);
@@ -112,7 +111,6 @@ async function main() {
   const replacement = await prepare('replacement', replacementColors);
   assertCenters(render(replacement, [0]), [0], replacementColors);
   assertCenters(render(replacement, [0], { flags: 1 << 16 }), [0], replacementColors);
-  assert.equal(native.images.memory().preparedFrameConversions, 0);
   native.images.release(replacement.handle);
 }
 

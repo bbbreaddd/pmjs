@@ -788,3 +788,19 @@ for (const engine of ['mv', 'mz']) {
       [entry.name, i < 3, i < 3 ? 'loaded' : 'disabled']));
   });
 }
+
+for (const value of [0, false, null, undefined, '']) {
+  test('lifecycle and plugin boot preserve thrown ' + String(value), () => {
+    const ctx = loadPmjsRuntime({ console: { error() {} } });
+    const throwsValue = fn => assert.throws(fn, error => Object.is(error, value));
+    ctx.PMJS.phases.on('fixture', () => { throw value; });
+    throwsValue(() => ctx.PMJS.phases.emit('fixture'));
+    throwsValue(() => ctx.PMJS.phases.emit('fixture'));
+    throwsValue(() => ctx.PMJS.phases.on('fixture', () => assert.fail('late listener ran')));
+    let attempts = 0;
+    const boot = () => ctx.pmjsInitializeRpgMakerPlugins(() => { attempts++; throw value; });
+    throwsValue(boot);
+    throwsValue(boot);
+    assert.equal(attempts, 1);
+  });
+}

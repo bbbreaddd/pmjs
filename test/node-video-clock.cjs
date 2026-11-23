@@ -21,7 +21,7 @@ function shortAudio() {
 async function main() {
   native.initialize({ gameRoot: path.resolve(process.argv[3]), width: 32, height: 32,
     windowTitle: 'video clock' });
-  native.images.memory();
+  native.images.release(native.images.fallbackImage().handle);
   const beforeImages = native.images.memory();
   const beforeAudio = native.media.audioStats();
   const resource = await native.media.loadVideoAsync('fixture-video.mp4');

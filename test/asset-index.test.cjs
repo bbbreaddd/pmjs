@@ -401,3 +401,24 @@ test('offline overlays preserve spelling, merge new directories and leave source
   assert.equal(offline.fs.isDirectory('New'), false);
   assert.equal(offline.fs.readBytes('Existing.json').toString(), 'original');
 });
+
+test('offline overlays mask base and derived descendants when a directory becomes a file', () => {
+  const root = temporaryDirectory('overlay-masking-');
+  const game = path.join(root, 'game'), overlay = path.join(root, 'overlay');
+  fs.mkdirSync(path.join(game, 'data'), { recursive: true });
+  fs.mkdirSync(overlay);
+  fs.writeFileSync(path.join(game, 'data/System.json'), 'base');
+  fs.writeFileSync(path.join(overlay, 'DATA'), 'replacement');
+  const native = offlineFilesystem(game, new Map([['data/Derived.json', path.join(game, 'data/System.json')]]));
+  native.fs.mountReadOnlyOverlay(overlay);
+  assert.equal(native.fs.isDirectory('data'), false);
+  assert.equal(native.fs.exists('data/System.json'), false);
+  assert.equal(native.fs.readBytes('data/System.json'), null);
+  assert.equal(native.fs.readDirectory('data'), null);
+  assert.equal(native.assets.sourcePath('data/Derived.json'), null);
+  assert.equal(native.fs.readBytes('data').toString(), 'replacement');
+  assert.deepEqual(native.fs.readDirectory('.'), ['DATA']);
+  assert.throws(() => native.fs.mountReadOnlyOverlay(path.join(root, 'missing')));
+  assert.equal(native.fs.readBytes('data').toString(), 'replacement');
+  assert.equal(native.fs.exists('data/System.json'), false);
+});

@@ -19,7 +19,6 @@ function writeNativeSceneRectTileLayer(node, parentIndex) {
   var animation = tileAnimationOffset(layerParent);
   nativeSceneValues[layerValues + 15] = animation[0];
   nativeSceneValues[layerValues + 16] = animation[1];
-  nativeTileRects += node.pointsBuf.length / 9;
 }
 
 function nativeSceneTraversesChild(kind, node, child) {
@@ -516,10 +515,6 @@ function writeNativeSceneNode(node, parentIndex, forcedClip, forcedMask,
   var tilingResolution = nativeSceneEmission.tilingResolution;
   var sampledBaseTexture = nativeSceneEmission.sampledBaseTexture;
 
-  if (kind === 3) {
-    nativeScreenOverlays.push([node._red || 0, node._green || 0, node._blue || 0,
-      Math.round(node.alpha * 255)]);
-  }
   var filterGroups = filterPlan.groups || [];
   if (kind === 0 && parentIndex !== 0xffffffff &&
       (pipeType === 'container' || pipeType === 'sprite') &&
@@ -959,16 +954,6 @@ function submitNativeScene(stage, backgroundColor = null) {
   return true;
 }
 
-function collectNativeTilemaps(node, output) {
-  if (!node) return output;
-  if (node instanceof Tilemap) output.push(node);
-  var children = node.children || [];
-  for (var index = 0; index < children.length; index++) {
-    collectNativeTilemaps(children[index], output);
-  }
-  return output;
-}
-
 function renderNativeStage(stage, rootTransform, filterResolution, roundPixels,
     skipUpdateTransform, backgroundColor = null, options = {}, bindTarget) {
   var previousContext = {
@@ -980,11 +965,6 @@ function renderNativeStage(stage, rootTransform, filterResolution, roundPixels,
   var parentWorld = nativeTransformParent.transform.worldTransform;
   var previousParentWorld = { a: parentWorld.a, b: parentWorld.b, c: parentWorld.c,
     d: parentWorld.d, tx: parentWorld.tx, ty: parentWorld.ty };
-  var enclosingOverlays = nativeSceneEncodingDepth ? nativeScreenOverlays : null;
-  var enclosingTileRects = nativeTileRects;
-  if (enclosingOverlays) nativeScreenOverlays = [];
-  nativeScreenOverlays.length = 0;
-  nativeTileRects = 0;
   var localTransforms = !skipUpdateTransform && options.worldState === 'local';
   var parent = stage.parent;
   var parentReplaced = !skipUpdateTransform;
@@ -1006,14 +986,9 @@ function renderNativeStage(stage, rootTransform, filterResolution, roundPixels,
     nativeTransformParent.transform._worldID++;
   }
   parentWorld.identity();
-  var map = globalThis.$gameMap;
-  var cameraX = map && map._displayX;
-  var cameraY = map && map._displayY;
-  var newStage = renderNativeStage._stage !== stage;
   var renderHitsBefore = nativeRenderHitCount();
   try {
     if (NativeHost.scene) {
-      if (newStage) renderNativeStage._tilemaps = collectNativeTilemaps(stage, []);
       var plan = !skipUpdateTransform && !localTransforms && options.worldState !== 'pixi' &&
         pmjsPixiRenderPreflight.transformPlan(stage);
       nativeSceneUsePixiWorldState = !!skipUpdateTransform || !localTransforms &&
@@ -1052,10 +1027,6 @@ function renderNativeStage(stage, rootTransform, filterResolution, roundPixels,
     nativeSceneRoundPixels = previousContext.roundPixels;
     nativeScenePlainSpriteSegments = previousContext.plainSpriteSegments;
     nativeSceneRenderer = previousContext.renderer;
-    if (enclosingOverlays) {
-      nativeScreenOverlays = enclosingOverlays;
-      nativeTileRects = enclosingTileRects;
-    }
     if (parentWorld.a !== previousParentWorld.a || parentWorld.b !== previousParentWorld.b ||
         parentWorld.c !== previousParentWorld.c || parentWorld.d !== previousParentWorld.d ||
         parentWorld.tx !== previousParentWorld.tx || parentWorld.ty !== previousParentWorld.ty) {
@@ -1069,7 +1040,4 @@ function renderNativeStage(stage, rootTransform, filterResolution, roundPixels,
   if (nativeRenderHitCount() > renderHitsBefore) {
     renderNativeStage._framesDegraded = (renderNativeStage._framesDegraded || 0) + 1;
   }
-  renderNativeStage._stage = stage;
-  renderNativeStage._cameraX = cameraX;
-  renderNativeStage._cameraY = cameraY;
 }

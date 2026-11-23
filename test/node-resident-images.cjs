@@ -14,7 +14,7 @@ async function main() {
   native.initialize({ gameRoot: root, width: 32, height: 32, windowTitle: 'resident images', imageWarmCacheBytes: 1 });
   const ordinary = await native.images.loadAsync('image.png', true);
   fs.renameSync(source, source + '.hidden');
-  native.images.memory();
+  native.images.release(native.images.fallbackImage().handle);
   const before = native.images.memory(100);
   const views = native.images.exportResident(ordinary.handle, path.join(root, 'ordinary'));
   assert.ok(views.some(view => view.kind === 'cpu-rgba'));
@@ -51,7 +51,7 @@ async function main() {
   assert.ok(pages.some(page => page.file && /gpu|page|frame/.test(page.kind)));
   const after = native.images.memory();
   for (const key of ['cpuBytes', 'gpuBytes', 'preparedPageDecodes', 'preparedMaterializations',
-    'textureCreates', 'preparedFrameCacheBytes']) assert.equal(after[key], state[key], key);
+    'textureCreates', 'preparedPageTextureBytes']) assert.equal(after[key], state[key], key);
   native.images.release(prepared.handle);
   console.log('resident image export passed');
 }

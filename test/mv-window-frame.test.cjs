@@ -23,8 +23,7 @@ function fixture({ rounded = false, batch = true, unknown = false, native = fals
     phases: { on(_phase, _id, callback) { phases.push(callback); } },
     methods: { matchesSource(fn, hashes) {
       // Independent fixture functions stand in for already qualified engine bodies.
-      return fn === nativeBlt && typeof hashes === 'string' && hashes.startsWith('68ab7') ||
-        fn === frame && hashes[0].startsWith('304170') ||
+      return fn === frame && hashes[0].startsWith('304170') ||
         fn === blt && hashes[0].startsWith('d62410') ||
         fn === roundBlt && hashes[0].startsWith('8b54c7') ||
         fn === dirty && hashes[0].startsWith('4e5d20');
@@ -33,6 +32,7 @@ function fixture({ rounded = false, batch = true, unknown = false, native = fals
       calls.batches.push(Array.from(rectangles)); return batch;
     } } }
   } };
+  realm.PMJS.mv = { bitmap: { blt: { installed: nativeBlt, predecessor: blt } } };
   vm.createContext(realm);
   const optimizationHooks = { ...realm.PMJS.optimizations };
   realm.PMJS.config ||= {};

@@ -86,7 +86,6 @@ test('prepared frames preserve sprite color effects and packed-UV fallback', asy
           `${effect.name}: blend=${blend}, alpha=${alpha}, nearest=${nearest}`);
       }
     }
-    assert.equal(native.images.memory().preparedFrameConversions, 0);
     // Colored frame edges need neighboring source pixels from the halo.
     for (const packedUv of [false, true]) for (const tone of [[0, 0, 0, 0], [0.1, 0, 0, 0.3]]) {
       const options = { frame: 1, scaled: true, packedUv, tone };
@@ -99,8 +98,6 @@ test('prepared frames preserve sprite color effects and packed-UV fallback', asy
           `lower sheet row: packed=${packedUv}, nearest=${nearest}, tone=${tone}`);
       }
     const cached = native.images.memory(100);
-    assert.equal(cached.preparedFrameConversions, 0);
-    assert.equal(cached.preparedFrameCacheBytes, 0);
     assert.equal(cached.sourceTextureBuilds, 0);
     const options = { frame: 1, flash: [1, 1, 1, 0.25] };
     draw(prepared, options);
@@ -127,9 +124,6 @@ test('prepared frames preserve sprite color effects and packed-UV fallback', asy
       compare(draw(oversizedPrepared, oversizedOptions), draw(oversizedOriginal, oversizedOptions),
         `zero exterior after frame trimming: tone=${tone}`);
     }
-    const afterOversized = native.images.memory();
-    assert.equal(afterOversized.preparedFrameConversions, 0);
-    assert.equal(afterOversized.preparedFrameCacheBytes, 0);
   } finally {
     if (original) native.images.release(original.handle);
     if (prepared) native.images.release(prepared.handle);
