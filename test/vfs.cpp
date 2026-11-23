@@ -297,6 +297,28 @@ int main() try {
   try { pmjs::Vfs collision(collisionFixture.path()); }
   catch (const std::runtime_error&) { rejectedCollision = true; }
   require(rejectedCollision, "directory aliases must remain ambiguous");
+
+  TemporaryDirectory bulkFixture("bulk");
+  write(bulkFixture.path() / "empty.bin", "");
+  std::string largeText(300U * 1024U, '\0');
+  for (std::size_t i = 0; i < largeText.size(); ++i) {
+    largeText[i] = static_cast<char>((i * 131U + 17U) & 0xffU);
+  }
+  write(bulkFixture.path() / "large.bin", largeText);
+  pmjs::Vfs bulkVfs(bulkFixture.path());
+  require(!bulkVfs.readBytes("missing.bin").has_value(), "missing file readBytes must return nullopt");
+  require(!bulkVfs.readText("missing.bin").has_value(), "missing file readText must return nullopt");
+  const auto emptyBytes = bulkVfs.readBytes("empty.bin");
+  const auto emptyText = bulkVfs.readText("empty.bin");
+  require(emptyBytes && emptyBytes->empty(), "empty file readBytes failed");
+  require(emptyText && emptyText->empty(), "empty file readText failed");
+  const auto largeBytes = bulkVfs.readBytes("large.bin");
+  const auto largeReadText = bulkVfs.readText("large.bin");
+  require(largeBytes && largeBytes->size() == largeText.size() &&
+          std::equal(largeBytes->begin(), largeBytes->end(),
+                     reinterpret_cast<const std::uint8_t*>(largeText.data())),
+          "large binary readBytes mismatch");
+  require(largeReadText && *largeReadText == largeText, "large binary readText mismatch");
   return 0;
 } catch (const std::exception& error) {
   std::cerr << error.what() << '\n';

@@ -41,6 +41,43 @@ bool isContainedBy(const std::filesystem::path& root,
   return !relative.is_absolute();
 }
 
+struct UniqueFd {
+  explicit UniqueFd(int value) noexcept : fd(value) {}
+  ~UniqueFd() { if (fd >= 0) ::close(fd); }
+  UniqueFd(const UniqueFd&) = delete;
+  UniqueFd& operator=(const UniqueFd&) = delete;
+  int fd = -1;
+};
+
+template <typename Buffer>
+std::optional<Buffer> readAllFile(const std::filesystem::path& path) {
+  UniqueFd descriptor(::open(path.c_str(), O_RDONLY | O_CLOEXEC));
+  if (descriptor.fd < 0) return std::nullopt;
+  struct stat info{};
+  if (::fstat(descriptor.fd, &info) != 0 || !S_ISREG(info.st_mode) || info.st_size < 0) {
+    return std::nullopt;
+  }
+  const auto fileSize = static_cast<std::uint64_t>(info.st_size);
+  if (fileSize > std::numeric_limits<std::size_t>::max()) return std::nullopt;
+  const auto size = static_cast<std::size_t>(fileSize);
+  Buffer contents;
+  if (size > contents.max_size()) return std::nullopt;
+  contents.resize(size);
+  std::size_t done = 0;
+  while (done < size) {
+    const auto chunk = std::min<std::size_t>(
+      size - done, static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
+    const ssize_t count = ::read(descriptor.fd, contents.data() + done, chunk);
+    if (count < 0) {
+      if (errno == EINTR) continue;
+      return std::nullopt;
+    }
+    if (count == 0) return std::nullopt;
+    done += static_cast<std::size_t>(count);
+  }
+  return contents;
+}
+
 }  // namespace
 
 FileReader::~FileReader() { close(); }
@@ -386,27 +423,12 @@ std::optional<std::filesystem::path> Vfs::resolveOriginal(const std::string& pat
 
 std::optional<std::string> Vfs::readText(const std::string& path) const {
   const auto resolved = resolve(path);
-  if (!resolved) return std::nullopt;
-  std::ifstream input(*resolved, std::ios::binary);
-  if (!input) return std::nullopt;
-  std::ostringstream contents;
-  contents << input.rdbuf();
-  return contents.str();
+  return resolved ? readAllFile<std::string>(*resolved) : std::nullopt;
 }
 
 std::optional<std::vector<std::uint8_t>> Vfs::readBytes(const std::string& path) const {
   const auto resolved = resolve(path);
-  if (!resolved) return std::nullopt;
-  std::ifstream input(*resolved, std::ios::binary | std::ios::ate);
-  if (!input) return std::nullopt;
-  const auto length = input.tellg();
-  if (length < 0) return std::nullopt;
-  std::vector<std::uint8_t> contents(static_cast<std::size_t>(length));
-  input.seekg(0);
-  if (!contents.empty() && !input.read(reinterpret_cast<char*>(contents.data()), length)) {
-    return std::nullopt;
-  }
-  return contents;
+  return resolved ? readAllFile<std::vector<std::uint8_t>>(*resolved) : std::nullopt;
 }
 
 std::optional<std::vector<std::string>> Vfs::readDirectory(const std::string& path) const {
