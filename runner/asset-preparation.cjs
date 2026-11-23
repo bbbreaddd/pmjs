@@ -5,7 +5,6 @@ const fsp = fs.promises;
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { performance } = require('node:perf_hooks');
-const { pipeline } = require('node:stream/promises');
 const { yedSideviewFrames } = require('./yed-sideview-recipes.cjs');
 const { installationReport } = require('./preparation-state.cjs');
 
@@ -130,7 +129,7 @@ function pageHeaderMatches(header, page, size) {
   return header.length >= 24 && header.subarray(0, 8).equals(PNG) &&
     header.readUInt32BE(16) === page.width && header.readUInt32BE(20) === page.height;
 }
-async function decryptFile(file, output, key, extension) {
+async function decryptFile(file, output, key, extension, files, sourceSize) {
   const handle = await fsp.open(file, 'r');
   const prefix = Buffer.alloc(32);
   try { if ((await handle.read(prefix, 0, 32, 0)).bytesRead !== 32) throw new Error('encrypted asset is truncated'); }
@@ -139,8 +138,11 @@ async function decryptFile(file, output, key, extension) {
   const body = prefix.subarray(16);
   for (let i = 0; i < 16; ++i) body[i] ^= key[i];
   if (!mediaHeader(body, extension)) throw new Error('decrypted media signature does not match encryption settings');
-  await fsp.writeFile(output, body, { flag: 'wx' });
-  await pipeline(fs.createReadStream(file, { start: 32 }), fs.createWriteStream(output, { flags: 'a' }));
+  async function* chunks() {
+    yield body;
+    yield* fs.createReadStream(file, { start: 32 });
+  }
+  await files.writeVerified(output, chunks(), { expectedSize: sourceSize - 16, category: 'other' });
 }
 async function automaticRecipe(file, source, sourceHash, header, frames = new Map()) {
   let grid;
@@ -612,7 +614,7 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
             let input = file;
             if (decrypted) {
               input = path.join(stage, decrypted);
-              await decryptFile(file, input, settings.key, extension);
+              await decryptFile(file, input, settings.key, extension, files, checkedSource.size);
               if (!recipe) recipe = await automaticRecipe(input, logicalSource, sourceHash, undefined, frames);
               indexed = findIndexed();
             }

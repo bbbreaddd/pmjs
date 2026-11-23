@@ -152,44 +152,60 @@ async function preparationFiles(session, verifyHashes = false) {
     return session.packedFiles?.get(path.resolve(file))?.size ?? (await fsp.stat(file)).size;
   }
   async function hash(file, category) { return (await inspect(file, category)).hash; }
-  async function copyVerified(source, target, expectedHash, category = 'import') {
-    if (!HASH.test(expectedHash)) throw new Error('invalid expected copy checksum');
-    const input = await fsp.open(source, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  async function writeVerified(target, chunks, { expectedHash, expectedSize, category = 'output' } = {}) {
+    if (expectedHash !== undefined && !HASH.test(expectedHash)) throw new Error('invalid expected output checksum');
     let output, created = false;
     try {
-      const before = await input.stat({ bigint: true });
-      if (!before.isFile()) throw new Error('copy input is not a regular file');
       output = await fsp.open(target, 'wx'); created = true;
-      const hasher = crypto.createHash('sha256'), buffer = Buffer.alloc(256 * 1024);
+      const hasher = crypto.createHash('sha256');
       let header = Buffer.alloc(0), size = 0;
-      for (;;) {
-        const { bytesRead } = await input.read(buffer, 0, buffer.length, null);
-        if (!bytesRead) break;
-        const chunk = buffer.subarray(0, bytesRead);
-        hasher.update(chunk); size += bytesRead;
+      for await (const chunk of chunks) {
+        size += chunk.length;
+        if (expectedSize !== undefined && size > expectedSize) throw new Error('output size differs');
+        hasher.update(chunk);
         if (header.length < 32) header = Buffer.concat([header, chunk.subarray(0, 32 - header.length)]);
         await output.writeFile(chunk);
       }
       ++stats.hashedFiles; stats.hashedBytes += size;
       stats.hashedBytesByCategory[category] = (stats.hashedBytesByCategory[category] || 0) + size;
       const checksum = hasher.digest('hex');
-      if (checksum !== expectedHash) throw new Error('copied input checksum differs');
-      if (identity(before) !== identity(await input.stat({ bigint: true })) ||
-          identity(before) !== identity(await fsp.lstat(source, { bigint: true })))
-        throw new Error('copy input changed while copying');
+      if (expectedHash !== undefined && checksum !== expectedHash) throw new Error('copied input checksum differs');
+      if (expectedSize !== undefined && size !== expectedSize) throw new Error('output size differs');
       const written = await output.stat({ bigint: true });
+      await output.close(); output = undefined;
       if (!written.isFile() || Number(written.size) !== size ||
           identity(written) !== identity(await fsp.lstat(target, { bigint: true })))
-        throw new Error('copy output changed while copying');
+        throw new Error('output changed while writing');
       const signature = identity(written);
       saveReceipt(path.resolve(target), { identity: signature, hash: checksum });
       known.set(signature, { hash: checksum, header });
-      ++stats.copiedFiles; stats.copiedBytes += size;
       return { hash: checksum, header, size };
     } catch (error) {
       if (created) await fsp.rm(target, { force: true });
       throw error;
-    } finally { try { await output?.close(); } finally { await input.close(); } }
+    } finally { await output?.close(); }
+  }
+  async function copyVerified(source, target, expectedHash, category = 'import') {
+    if (!HASH.test(expectedHash)) throw new Error('invalid expected copy checksum');
+    const input = await fsp.open(source, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try {
+      const before = await input.stat({ bigint: true });
+      if (!before.isFile()) throw new Error('copy input is not a regular file');
+      async function* chunks() {
+        const buffer = Buffer.alloc(256 * 1024);
+        for (;;) {
+          const { bytesRead } = await input.read(buffer, 0, buffer.length, null);
+          if (!bytesRead) break;
+          yield buffer.subarray(0, bytesRead);
+        }
+        if (identity(before) !== identity(await input.stat({ bigint: true })) ||
+            identity(before) !== identity(await fsp.lstat(source, { bigint: true })))
+          throw new Error('copy input changed while copying');
+      }
+      const checked = await writeVerified(target, chunks(), { expectedHash, expectedSize: Number(before.size), category });
+      ++stats.copiedFiles; stats.copiedBytes += checked.size;
+      return checked;
+    } finally { await input.close(); }
   }
   async function publish(source, target) {
     const from = path.resolve(source), to = path.resolve(target), receipt = files[from];
@@ -230,7 +246,7 @@ async function preparationFiles(session, verifyHashes = false) {
     }
     await session.checkpoint();
   }
-  return { hash, inspect, inspectSync, size, copyVerified, publish, validatedManifest, validateOutputs, save, stats, receipts: files,
+  return { hash, inspect, inspectSync, size, writeVerified, copyVerified, publish, validatedManifest, validateOutputs, save, stats, receipts: files,
     writeManifest: session.writeManifest,
     publishManifest: session.publishManifest };
 

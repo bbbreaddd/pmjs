@@ -10,6 +10,61 @@ const { preparationFiles } = require('../runner/preparation-files.cjs');
 const copyFiles = () => preparationFiles({ data: { files: {} }, checkpoint: async () => {} });
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 
+test('verified writes hash streamed bytes once and retain an owned header', async () => {
+  const root = temporaryDirectory('verified-write-'), file = path.join(root, 'output');
+  const files = await copyFiles(), chunk = Buffer.alloc(300 * 1024, 73);
+  const expected = Buffer.concat([chunk, Buffer.alloc(chunk.length, 84)]);
+  async function* chunks() { yield chunk; chunk.fill(84); yield chunk; chunk.fill(0); }
+  const checked = await files.writeVerified(file, chunks(), { expectedSize: expected.length });
+  assert.equal(checked.hash, hash(expected));
+  assert.deepEqual(fs.readFileSync(file), expected);
+  assert.deepEqual(checked.header, Buffer.alloc(32, 73));
+  assert.equal((await files.inspect(file)).reused, true);
+  assert.equal(files.stats.hashedBytes, expected.length);
+  fs.appendFileSync(file, 'changed');
+  assert.notEqual(await files.hash(file), checked.hash);
+});
+
+for (const mode of ['producer', 'size', 'close', 'replacement'])
+test('verified write refuses ' + mode + ' failure without publishing a receipt', async t => {
+  const root = temporaryDirectory('failed-verified-write-'), file = path.join(root, 'output');
+  const files = await copyFiles(), open = fs.promises.open;
+  if (mode === 'close' || mode === 'replacement') t.mock.method(fs.promises, 'open', async (...args) => {
+    const handle = await open(...args);
+    if (args[0] !== file || args[1] !== 'wx') return handle;
+    if (mode === 'close') {
+      const close = handle.close.bind(handle);
+      let fail = true;
+      handle.close = async () => { await close(); if (fail) { fail = false; throw new Error('close interrupted'); } };
+    } else {
+      const write = handle.writeFile.bind(handle);
+      handle.writeFile = async (...values) => {
+        await write(...values);
+        fs.writeFileSync(file + '.replacement', 'replacement');
+        fs.renameSync(file + '.replacement', file);
+      };
+    }
+    return handle;
+  });
+  async function* chunks() {
+    yield Buffer.from('original');
+    if (mode === 'producer') throw new Error('producer interrupted');
+  }
+  await assert.rejects(files.writeVerified(file, chunks(), { expectedSize: mode === 'size' ? 7 : 8 }),
+    /interrupted|differs|changed/);
+  assert.equal(fs.existsSync(file), false);
+  assert.deepEqual(files.receipts, {});
+});
+
+test('verified writes preserve an existing destination', async () => {
+  const root = temporaryDirectory('existing-verified-write-'), file = path.join(root, 'output');
+  fs.writeFileSync(file, 'original');
+  const files = await copyFiles();
+  await assert.rejects(files.writeVerified(file, [Buffer.from('replacement')]), /EEXIST/);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'original');
+  assert.deepEqual(files.receipts, {});
+});
+
 test('concurrent verification owns its read buffers and returned headers survive reuse', async () => {
   const root = temporaryDirectory('concurrent-verification-'), files = await copyFiles();
   const sources = [73, 84, 105].map((value, index) => {
