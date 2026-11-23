@@ -619,6 +619,8 @@ napi_value canvasMemory(napi_env env, napi_callback_info) try {
     number(env, canvases.deferredCommandCount())), "cannot set deferred command count");
   check(env, napi_set_named_property(env, result, "deferredCommandBytes",
     number(env, canvases.deferredCommandBytes())), "cannot set deferred command bytes");
+  check(env, napi_set_named_property(env, result, "rasterCacheHits",
+    number(env, canvases.rasterCacheHits())), "cannot set raster cache hits");
   check(env, napi_set_named_property(env, result, "textBackend",
     string(env, canvases.textBackendName())), "cannot set text backend");
   if (std::string(canvases.textBackendName()) == "skia65") {

@@ -198,6 +198,7 @@ class CanvasStore {
   std::optional<ImageHandle> prepareImage(CanvasHandle handle);
   void uploadDirty();
   std::size_t cpuBytes() const;
+  std::uint64_t rasterCacheHits() const { return rasterCacheHits_; }
   std::size_t capacityBytes() const;
   std::size_t liveCount() const { return liveCount_; }
   std::size_t peakCpuBytes() const { return peakCpuBytes_; }
@@ -281,7 +282,7 @@ class CanvasStore {
     Realized  // CPU pixels are current.
   };
 
-  struct Content {
+  struct Content : std::enable_shared_from_this<Content> {
     explicit Content(CanvasStore& owner);
     ~Content();
     Content(const Content&) = delete;
@@ -290,6 +291,7 @@ class CanvasStore {
     std::vector<std::uint8_t> takePixels();
 
     CanvasStore& owner;
+    std::uint64_t revision = 0;
     int width = 0;
     int height = 0;
     ContentState state = ContentState::Deferred;
@@ -324,7 +326,7 @@ class CanvasStore {
   Content* lookupContent(CanvasHandle handle) const;
   Content* writableContent(CanvasHandle handle);
   bool transformColor(CanvasHandle handle, bool hue, double red, double green, double blue);
-  bool realizeContent(Content& surface);
+  bool realizeContent(Content& surface, bool allowRasterCache = false);
   bool uploadSurface(Surface& surface);
   void discardCommands(Content& surface);
   void retainSnapshot(const CanvasCommand& command);
@@ -363,6 +365,23 @@ class CanvasStore {
   std::shared_ptr<MemoryLedger> snapshotMemory_ = std::make_shared<MemoryLedger>();
   std::size_t pixelBytes_ = 0;
   std::vector<Surface> surfaces_;
+  struct CachedCanvasDraw {
+    std::weak_ptr<Content> source;
+    std::uint64_t revision;
+    std::array<float, 9> geometry;
+    bool smoothing;
+  };
+  struct RasterCacheEntry {
+    int width = 0, height = 0;
+    bool opaque = false;
+    std::vector<CachedCanvasDraw> draws;
+    std::weak_ptr<Content> result;
+    std::uint64_t revision = 0;
+  };
+  // Weak keys/results do not retain source canvases or their raster buffers.
+  std::array<RasterCacheEntry, 4> rasterCache_;
+  std::size_t nextRasterCache_ = 0;
+  std::uint64_t rasterCacheHits_ = 0;
   std::size_t liveCount_ = 0;
   std::size_t peakCpuBytes_ = 0;
   std::uint64_t imageViewRegionReads_ = 0;

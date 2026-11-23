@@ -416,5 +416,70 @@ int main() {
     }
     assert(canvases.release(large->handle));assert(canvases.release(source->handle));
   }
+  {
+    pmjs::ImageStore localImages;
+    pmjs::CanvasStore local(localImages);
+    const auto source=local.create(2,2), first=local.create(64,64), second=local.create(64,64);
+    assert(source && first && second && first->handle!=second->handle);
+    assert(local.fillRect(source->handle,0,0,2,2,0xff0000ff));
+    const auto draw=[&](pmjs::CanvasHandle target, float alpha=1, bool smoothing=false) {
+      assert(local.drawImage(target,source->handle,0,0,2,2,0,0,64,64,alpha,smoothing));
+      assert(local.drawImage(target,source->handle,0,0,1,1,0,0,1,1,1,false));
+    };
+    draw(first->handle);
+    const auto commands=local.deferredCommandCount();
+    draw(second->handle);
+    assert(local.deferredCommandCount()==commands+2);
+    // A source edit detaches its snapshot; both recorded draws retain the old pixels.
+    assert(local.fillRect(source->handle,0,0,2,2,0x0000ffff));
+    const auto red=local.readPixels(first->handle,0,0,64,64);assert(red);
+    assert(local.readPixels(second->handle,0,0,64,64)->rgba==red->rgba);
+    assert(local.rasterCacheHits()==1);
+    // A realized destination edit must not change the independently retained handle.
+    assert(local.fillRect(first->handle,0,0,64,64,0x00ff00ff));
+    assert(local.readPixels(second->handle,0,0,64,64)->rgba==red->rgba);
+    assert(local.release(first->handle));
+    assert(local.readPixels(second->handle,0,0,64,64)->rgba==red->rgba);
+    const auto blue=local.create(64,64), copy=local.create(64,64), different=local.create(64,64);
+    assert(blue && copy && different);
+    draw(blue->handle);draw(copy->handle);
+    // Mutating a still-deferred shared destination also detaches its command list.
+    assert(local.fillRect(copy->handle,0,0,64,64,0x00ff00ff));
+    const auto bluePixels=local.readPixels(blue->handle,0,0,64,64);assert(bluePixels);
+    assert(bluePixels->rgba!=red->rgba);
+    assert(local.readPixels(copy->handle,0,0,64,64)->rgba!=bluePixels->rgba);
+    draw(different->handle,0.5F,true);
+    assert(local.readPixels(different->handle,0,0,64,64)->rgba!=bluePixels->rgba);
+    for (auto handle : {source->handle,second->handle,blue->handle,copy->handle,different->handle})
+      assert(local.release(handle));
+    assert(local.cpuBytes()==0 && local.deferredCommandCount()==0);
+  }
+  {
+    pmjs::ImageStore localImages;
+    pmjs::CanvasStore local(localImages);
+    const auto source=local.create(1,1);assert(source);
+    assert(local.fillRect(source->handle,0,0,1,1,0xff0000ff));
+    const auto render=[&]() {
+      const auto target=local.create(64,64);assert(target);
+      assert(local.drawImage(target->handle,source->handle,0,0,1,1,0,0,64,64,1,false));
+      return *target;
+    };
+    const auto first=render();
+    const auto red=local.readPixels(first.handle,0,0,64,64);assert(red);
+    assert(local.fillRect(first.handle,0,0,64,64,0x00ff00ff));
+    const auto second=render();
+    assert(local.readPixels(second.handle,0,0,64,64)->rgba==red->rgba);
+    assert(local.rasterCacheHits()==0); // The cached result was edited in place.
+    assert(local.fillRect(source->handle,0,0,1,1,0x0000ffff));
+    const auto third=render();
+    assert(local.readPixels(third.handle,0,0,64,64)->rgba!=red->rgba);
+    assert(local.rasterCacheHits()==0); // The same source object now has a new version.
+    const auto fourth=render();
+    assert(local.readPixels(fourth.handle,0,0,64,64)->rgba==local.readPixels(third.handle,0,0,64,64)->rgba);
+    assert(local.rasterCacheHits()==1);
+    for(auto handle:{source->handle,first.handle,second.handle,third.handle,fourth.handle})
+      assert(local.release(handle));
+    assert(local.cpuBytes()==0);
+  }
   std::cout << "[canvas-upload] exact RGBA premultiplied transfers, region bounds and failed-upload retry agree\n";
 }

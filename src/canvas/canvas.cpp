@@ -1152,9 +1152,58 @@ bool CanvasStore::blurNow(Content& surface) {
   return true;
 }
 
-bool CanvasStore::realizeContent(Content& surface) {
+bool CanvasStore::realizeContent(Content& surface, bool allowRasterCache) {
   if (surface.state == ContentState::Realized) return true;
   if (surface.state == ContentState::Realizing) return false;
+
+  const auto geometry = [](const DrawImageCmd& draw) {
+    return std::array<float, 9>{draw.sourceX, draw.sourceY, draw.sourceWidth, draw.sourceHeight,
+      draw.destinationX, draw.destinationY, draw.destinationWidth, draw.destinationHeight, draw.alpha};
+  };
+  const auto area = static_cast<std::int64_t>(surface.width) * surface.height;
+  // Write operations may realize old commands before changing pixels. Only
+  // completed public reads may publish a reusable raster result.
+  const bool cacheable = allowRasterCache && area >= 4096 && area <= 262144 &&
+    !surface.commands.empty() && surface.commands.size() <= 256 &&
+    !surface.weak_from_this().expired() &&
+    std::all_of(surface.commands.begin(), surface.commands.end(), [](const auto& command) {
+      const auto* draw = std::get_if<DrawImageCmd>(&command);
+      return draw && draw->canvas && !draw->source && !draw->snapshot;
+    });
+  if (cacheable) for (auto& entry : rasterCache_) {
+    const auto result = entry.result.lock();
+    if (!result || result->state != ContentState::Realized || result->revision != entry.revision ||
+        entry.width != surface.width || entry.height != surface.height || entry.opaque != surface.opaque ||
+        entry.draws.size() != surface.commands.size()) continue;
+    const bool equal = std::equal(surface.commands.begin(), surface.commands.end(), entry.draws.begin(),
+      [&](const auto& command, const CachedCanvasDraw& cached) {
+        const auto& draw = std::get<DrawImageCmd>(command);
+        return draw.canvas == cached.source.lock() && draw.canvas->revision == cached.revision &&
+          geometry(draw) == cached.geometry && draw.smoothing == cached.smoothing;
+      });
+    if (!equal) continue;
+    // Copy into independently owned storage; guest bitmaps and drawing callbacks
+    // remain distinct even when their exact native raster result is reusable.
+    surface.setPixels(result->pixels);
+    surface.mayHaveOverAlpha = result->mayHaveOverAlpha;
+    surface.knownAllZero = result->knownAllZero;
+    surface.state = ContentState::Realized;
+    discardCommands(surface);
+    surface.dirtyX0 = surface.dirtyY0 = surface.dirtyX1 = surface.dirtyY1 = 0;
+    entry.result = surface.weak_from_this(); entry.revision = surface.revision;
+    ++rasterCacheHits_;
+    peakCpuBytes_ = std::max(peakCpuBytes_, cpuBytes());
+    return true;
+  }
+
+  std::vector<CachedCanvasDraw> cacheKey;
+  if (cacheable) {
+    cacheKey.reserve(surface.commands.size());
+    for (const auto& command : surface.commands) {
+      const auto& draw = std::get<DrawImageCmd>(command);
+      cacheKey.push_back({draw.canvas, draw.canvas->revision, geometry(draw), draw.smoothing});
+    }
+  }
 
   // Publish CPU content only after every command succeeds. Pending commands
   // keep their image references on failure, so replay can be retried safely.
@@ -1206,18 +1255,24 @@ bool CanvasStore::realizeContent(Content& surface) {
   discardCommands(surface);
   surface.dirtyX0 = surface.dirtyY0 = 0;
   surface.dirtyX1 = surface.dirtyY1 = 0;
+  if (!cacheKey.empty()) {
+    auto& entry = rasterCache_[nextRasterCache_];
+    entry = {surface.width, surface.height, surface.opaque, std::move(cacheKey),
+      surface.weak_from_this(), surface.revision};
+    nextRasterCache_ = (nextRasterCache_ + 1) % rasterCache_.size();
+  }
   peakCpuBytes_ = std::max(peakCpuBytes_, cpuBytes());
   return true;
 }
 
 bool CanvasStore::realize(CanvasHandle handle) {
   auto* surface = lookupContent(handle);
-  return surface && realizeContent(*surface);
+  return surface && realizeContent(*surface, true);
 }
 
 std::optional<ImageHandle> CanvasStore::prepareImage(CanvasHandle handle) {
   auto* surface = lookup(handle);
-  if (!surface || !realizeContent(*surface->content) || !uploadSurface(*surface)) {
+  if (!surface || !realizeContent(*surface->content, true) || !uploadSurface(*surface)) {
     return std::nullopt;
   }
   return surface->image;
@@ -1374,6 +1429,7 @@ CanvasStore::Content* CanvasStore::writableContent(CanvasHandle handle) {
     surface->content = std::move(copy);
     peakCpuBytes_ = std::max(peakCpuBytes_, cpuBytes());
   }
+  ++surface->content->revision;
   return surface->content.get();
 }
 
@@ -1650,6 +1706,7 @@ void CanvasStore::markDirty(Content& surface, int x, int y, int width,
   const int y1 = static_cast<int>(std::clamp<std::int64_t>(
     static_cast<std::int64_t>(y) + height, 0, surface.height));
   if (x1 <= x0 || y1 <= y0) return;
+  ++surface.revision;
   surface.knownAllZero = false;
   if (surface.dirtyX1 <= surface.dirtyX0 || surface.dirtyY1 <= surface.dirtyY0) {
     surface.dirtyX0 = x0;
@@ -1743,7 +1800,7 @@ std::optional<std::uint32_t> CanvasStore::pixel(CanvasHandle handle,
                                                 int x, int y) {
   auto* surface = lookupContent(handle);
   if (!surface) return std::nullopt;
-  if (surface->state == ContentState::Deferred && !realizeContent(*surface)) {
+  if (surface->state == ContentState::Deferred && !realizeContent(*surface, true)) {
     return std::nullopt;
   }
   if (x < 0 || y < 0 || x >= surface->width || y >= surface->height) {
@@ -1886,7 +1943,7 @@ std::optional<ImagePixels> CanvasStore::readPixels(CanvasHandle handle, int x,
   if (!surface || !extent) {
     return std::nullopt;
   }
-  if (surface->state == ContentState::Deferred && !realizeContent(*surface)) {
+  if (surface->state == ContentState::Deferred && !realizeContent(*surface, true)) {
     return std::nullopt;
   }
   ImagePixels result;
@@ -2102,6 +2159,7 @@ bool CanvasStore::release(CanvasHandle handle) {
     (surface->generation + 1U) & generationMask);
   if (surface->generation == 0) surface->generation = 1;
   --liveCount_;
+  for (auto& entry : rasterCache_) if (entry.result.expired()) entry = {};
   return true;
 }
 
@@ -2154,11 +2212,14 @@ void CanvasStore::uploadDirty() {
 }
 
 std::size_t CanvasStore::cpuBytes() const {
-  return pixelBytes_ + snapshotMemory_->bytes();
+  std::size_t cacheBytes = 0;
+  for (const auto& entry : rasterCache_) cacheBytes += entry.draws.size() * sizeof(CachedCanvasDraw);
+  return pixelBytes_ + snapshotMemory_->bytes() + cacheBytes;
 }
 
 std::size_t CanvasStore::capacityBytes() const {
   std::size_t result = 0;
+  for (const auto& entry : rasterCache_) result += entry.draws.capacity() * sizeof(CachedCanvasDraw);
   std::unordered_set<const ImagePixelSnapshot*> snapshots;
   for (const auto* content : contents_) {
     result += content->pixels.capacity();
