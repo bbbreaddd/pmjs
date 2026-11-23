@@ -42,7 +42,24 @@
         "-DZLIB_COMPAT=ON",
         "-DZLIB_ENABLE_TESTS=OFF"
       ],
-      "dependencies": []
+      "dependencies": [],
+      "patches": [
+        [
+          "cmake/detect-intrinsics.cmake",
+          "-march=armv8-a+crc+simd",
+          "-mcpu=generic+crc+neon"
+        ],
+        [
+          "cmake/detect-intrinsics.cmake",
+          "-march=armv8-a+crc",
+          "-mcpu=generic+crc"
+        ],
+        [
+          "cmake/detect-intrinsics.cmake",
+          "-march=armv8-a+simd",
+          "-mcpu=generic+neon"
+        ]
+      ]
     },
     "png": {
       "options": [

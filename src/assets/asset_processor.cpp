@@ -1,4 +1,5 @@
 #include "asset_processor.hpp"
+#include "color_hash.hpp"
 #include "png_color.hpp"
 #include "astc_encoder.hpp"
 #include "core/checked_bounds.hpp"
@@ -24,6 +25,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <lz4.h>
 #include <zlib.h>
 #include <utility>
 #include <png.h>
@@ -200,25 +202,100 @@ class Workspace {
 
 class PreparationSource {
  public:
+  struct CompressedCache {
+    struct Block {
+      std::size_t slab = 0;
+      std::size_t offset = 0;
+      int compressedBytes = 0;
+      int rows = 0;
+    };
+    int rowsPerBlock = 0;
+    std::size_t rowBytes = 0;
+    std::size_t maxBlockBytes = 0;
+    std::vector<std::shared_ptr<Workspace::Buffer>> slabs;
+    std::vector<Block> blocks;
+  };
   class Rows {
    public:
     explicit Rows(PreparationSource& source) : width(source.width), height(source.height), source_(source) {
-      if (source.ready_) { cache_ = source.cache_; ++source.workspace.stats.sourceCacheHits; }
-      else {
-        png_ = source.initial_ ? std::move(source.initial_) : source.open();
-        if (png_->width != width || png_->height != height) throw std::runtime_error("preparation source dimensions changed");
+      if (source.ready_) {
+        cache_ = source.cache_;
+        ++source.workspace.stats.sourceCacheHits;
+      } else if (source.compressedCache_) {
+        decompressScratch_ = source.workspace.retain(source.compressedCache_->maxBlockBytes);
+        if (decompressScratch_) {
+          compressed_ = source.compressedCache_;
+          ++source.workspace.stats.sourceCacheHits;
+        } else {
+          openPng();
+        }
+      } else {
+        openPng();
         filling_ = !!source.cache_;
+        if (!filling_ && !source.compressedAttempted_ && source.rowsPerBlock_ > 0 &&
+            source.rowsPerBlock_ < height) {
+          source.compressedAttempted_ = true;
+          const auto rowBytes = static_cast<std::size_t>(width) * 4;
+          const auto maxBlockBytes = static_cast<std::size_t>(source.rowsPerBlock_) * rowBytes;
+          const auto maxCompBytes = static_cast<std::size_t>(
+            LZ4_compressBound(static_cast<int>(maxBlockBytes)));
+          rawScratch_ = source.workspace.retain(maxBlockBytes);
+          compScratch_ = source.workspace.retain(maxCompBytes);
+          if (rawScratch_ && compScratch_) {
+            fillingCompressed_ = std::make_shared<CompressedCache>();
+            fillingCompressed_->rowsPerBlock = source.rowsPerBlock_;
+            fillingCompressed_->rowBytes = rowBytes;
+            fillingCompressed_->maxBlockBytes = maxBlockBytes;
+          } else {
+            rawScratch_.reset();
+            compScratch_.reset();
+          }
+        }
       }
     }
-    ~Rows() { if (filling_) source_.cache_.reset(); }
+    ~Rows() {
+      if (filling_) source_.cache_.reset();
+      abandonCompressedFill();
+    }
     Rows(const Rows&) = delete;
     Rows& operator=(const Rows&) = delete;
     void read() {
       if (next_ >= height) throw std::runtime_error("preparation row exceeds source");
-      if (cache_) row = {cache_->bytes.get() + static_cast<std::size_t>(next_) * width * 4, static_cast<std::size_t>(width) * 4};
-      else {
-        png_->read(); row = png_->row;
-        if (filling_) std::memcpy(source_.cache_->bytes.get() + static_cast<std::size_t>(next_) * width * 4, row.data(), row.size());
+      if (cache_) {
+        row = {cache_->bytes.get() + static_cast<std::size_t>(next_) * width * 4,
+               static_cast<std::size_t>(width) * 4};
+      } else if (compressed_) {
+        const auto blockIndex = static_cast<std::size_t>(next_ / compressed_->rowsPerBlock);
+        const auto rowInBlock = next_ % compressed_->rowsPerBlock;
+        if (blockIndex != loadedBlock_) {
+          const auto& block = compressed_->blocks[blockIndex];
+          const int expected = block.rows * static_cast<int>(compressed_->rowBytes);
+          const auto* encoded = reinterpret_cast<const char*>(
+            compressed_->slabs[block.slab]->bytes.get() + block.offset);
+          if (LZ4_decompress_safe(encoded, reinterpret_cast<char*>(decompressScratch_->bytes.get()),
+                                  block.compressedBytes, expected) != expected) {
+            throw std::runtime_error("corrupt compressed preparation source");
+          }
+          loadedBlock_ = blockIndex;
+        }
+        row = {decompressScratch_->bytes.get() +
+                 static_cast<std::size_t>(rowInBlock) * compressed_->rowBytes,
+               compressed_->rowBytes};
+      } else {
+        png_->read();
+        row = png_->row;
+        if (filling_) {
+          std::memcpy(source_.cache_->bytes.get() + static_cast<std::size_t>(next_) * width * 4,
+                      row.data(), row.size());
+        } else if (fillingCompressed_) {
+          std::memcpy(rawScratch_->bytes.get() +
+                        static_cast<std::size_t>(pendingRows_) * fillingCompressed_->rowBytes,
+                      row.data(), row.size());
+          ++pendingRows_;
+          if (pendingRows_ == fillingCompressed_->rowsPerBlock || next_ + 1 == height) {
+            flushCompressedBlock();
+          }
+        }
       }
       ++next_;
     }
@@ -226,24 +303,101 @@ class PreparationSource {
       if (next_ != height) throw std::runtime_error("incomplete preparation source");
       if (png_) png_->finish();
       if (filling_) { source_.ready_ = true; filling_ = false; }
+      if (fillingCompressed_) {
+        rawScratch_.reset();
+        compScratch_.reset();
+        if (!fillingCompressed_->blocks.empty()) {
+          source_.compressedCache_ = std::move(fillingCompressed_);
+        } else {
+          fillingCompressed_.reset();
+        }
+      }
     }
     int width, height;
     std::span<const std::uint8_t> row;
    private:
+    void openPng() {
+      png_ = source_.initial_ ? std::move(source_.initial_) : source_.open();
+      if (png_->width != width || png_->height != height) {
+        throw std::runtime_error("preparation source dimensions changed");
+      }
+    }
+    void abandonCompressedFill() {
+      rawScratch_.reset();
+      compScratch_.reset();
+      fillingCompressed_.reset();
+      pendingRows_ = 0;
+      slabOffset_ = 0;
+      compressedBytes_ = 0;
+    }
+    void flushCompressedBlock() {
+      const int rawBytes = pendingRows_ * static_cast<int>(fillingCompressed_->rowBytes);
+      const int compressedSize = LZ4_compress_default(
+        reinterpret_cast<const char*>(rawScratch_->bytes.get()),
+        reinterpret_cast<char*>(compScratch_->bytes.get()),
+        rawBytes, static_cast<int>(compScratch_->size));
+      if (compressedSize <= 0 ||
+          compressedBytes_ + static_cast<std::size_t>(compressedSize) >= source_.rawBytes_) {
+        abandonCompressedFill();
+        return;
+      }
+      const auto needed = static_cast<std::size_t>(compressedSize);
+      if (fillingCompressed_->slabs.empty() ||
+          slabOffset_ + needed > fillingCompressed_->slabs.back()->size) {
+        const auto slabBytes = std::max<std::size_t>(512U * 1024U, compScratch_->size);
+        auto slab = source_.workspace.retain(slabBytes);
+        if (!slab) {
+          abandonCompressedFill();
+          return;
+        }
+        fillingCompressed_->slabs.push_back(std::move(slab));
+        slabOffset_ = 0;
+      }
+      auto& slab = fillingCompressed_->slabs.back();
+      std::memcpy(slab->bytes.get() + slabOffset_, compScratch_->bytes.get(), needed);
+      fillingCompressed_->blocks.push_back({
+        fillingCompressed_->slabs.size() - 1, slabOffset_, compressedSize, pendingRows_});
+      slabOffset_ += needed;
+      compressedBytes_ += needed;
+      pendingRows_ = 0;
+    }
     PreparationSource& source_;
     std::unique_ptr<PngRows> png_;
     std::shared_ptr<Workspace::Buffer> cache_;
+    std::shared_ptr<const CompressedCache> compressed_;
+    std::shared_ptr<Workspace::Buffer> decompressScratch_;
+    std::shared_ptr<CompressedCache> fillingCompressed_;
+    std::shared_ptr<Workspace::Buffer> rawScratch_;
+    std::shared_ptr<Workspace::Buffer> compScratch_;
+    std::size_t loadedBlock_ = SIZE_MAX;
+    std::size_t slabOffset_ = 0;
+    std::size_t compressedBytes_ = 0;
+    int pendingRows_ = 0;
     int next_ = 0;
     bool filling_ = false;
   };
-  PreparationSource(const std::filesystem::path& path, Workspace& sourceWorkspace) : workspace(sourceWorkspace), path_(path) {
+  PreparationSource(const std::filesystem::path& path, Workspace& sourceWorkspace)
+      : workspace(sourceWorkspace), path_(path) {
     initial_ = open(); width = initial_->width; height = initial_->height;
-    if (!checkedImageExtent(width, height, 16384)) throw AssetPreparationUnsupported("preparation image exceeds logical limits");
+    if (!checkedImageExtent(width, height, 16384)) {
+      throw AssetPreparationUnsupported("preparation image exceeds logical limits");
+    }
     const auto size = static_cast<std::uint64_t>(width) * height * 4;
-    if (size <= SIZE_MAX) cache_ = workspace.retain(static_cast<std::size_t>(size));
+    if (size <= SIZE_MAX) {
+      rawBytes_ = static_cast<std::size_t>(size);
+      cache_ = workspace.retain(rawBytes_);
+      if (!cache_ && height > 1) {
+        const auto rowBytes = static_cast<std::size_t>(width) * 4;
+        if (rowBytes <= static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+          constexpr std::size_t targetBlockBytes = 256U * 1024U;
+          rowsPerBlock_ = std::clamp<int>(
+            static_cast<int>(std::max<std::size_t>(1, targetBlockBytes / rowBytes)), 1, height);
+        }
+      }
+    }
   }
   Rows rows() { return Rows(*this); }
-  void releaseCache() { cache_.reset(); ready_ = false; }
+  void releaseCache() { cache_.reset(); ready_ = false; compressedCache_.reset(); }
   Workspace& workspace;
   int width = 0, height = 0;
  private:
@@ -254,7 +408,11 @@ class PreparationSource {
   std::filesystem::path path_;
   std::unique_ptr<PngRows> initial_;
   std::shared_ptr<Workspace::Buffer> cache_;
+  std::shared_ptr<const CompressedCache> compressedCache_;
+  std::size_t rawBytes_ = 0;
+  int rowsPerBlock_ = 0;
   bool ready_ = false;
+  bool compressedAttempted_ = false;
 };
 
 class TileStore {
@@ -366,7 +524,7 @@ bool inside(int x, int y, const AssetRect& rect) {
 }
 void writePng(const std::filesystem::path& path, int width, int height,
               const std::vector<std::uint8_t>& bytes) {
-  std::unordered_map<std::uint32_t, std::uint8_t> colors;
+  std::unordered_map<std::uint32_t, std::uint8_t, ColorHash> colors;
   colors.reserve(256);
   std::array<std::uint8_t, 1024> palette{};
   auto colorKey = [](const std::uint8_t* rgba) {
@@ -470,7 +628,7 @@ std::vector<AssetColor> modalFills(PreparationSource& source, const AssetRecipe&
     throw AssetPreparationUnsupported("preparation grid must divide the source exactly");
   const int cellWidth = input.width / recipe.columns, cellHeight = input.height / recipe.rows;
   std::vector<AssetColor> fills(static_cast<std::size_t>(recipe.columns) * recipe.rows);
-  using ColorCounts = std::unordered_map<std::uint32_t, std::uint64_t>;
+  using ColorCounts = std::unordered_map<std::uint32_t, std::uint64_t, ColorHash>;
   std::vector<ColorCounts> histograms(recipe.columns);
   std::vector<bool> overflow(recipe.columns);
   std::size_t distinctColors = 0;

@@ -154,7 +154,7 @@ foreach(PMJS_OBJECT_TARGET pmjs_vfs_objects pmjs_prepared_page_objects pmjs_asse
 endforeach()
 target_link_libraries(pmjs_vfs_objects PRIVATE PkgConfig::AVUTIL)
 target_link_libraries(pmjs_prepared_page_objects PRIVATE pmjs_lz4 PkgConfig::ZLIB PkgConfig::AVUTIL)
-target_link_libraries(pmjs_asset_processor_objects PRIVATE PkgConfig::PNG pmjs_astcenc)
+target_link_libraries(pmjs_asset_processor_objects PRIVATE PkgConfig::PNG PkgConfig::ZLIB pmjs_lz4 pmjs_astcenc)
 
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/js/pmjs-web/fallback-font.js" PMJS_FALLBACK_FONT_SOURCE)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
@@ -253,6 +253,11 @@ if(BUILD_TESTING)
   pmjs_add_cpp_test(pmjs-prepared-page-test native-prepared-page test/prepared-page.cpp
     $<TARGET_OBJECTS:pmjs_prepared_page_objects>)
   target_link_libraries(pmjs-prepared-page-test PRIVATE pmjs_lz4 PkgConfig::ZLIB PkgConfig::AVUTIL)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
+    pmjs_add_cpp_test(pmjs-prepared-page-no-sha2-test native-prepared-page-no-sha2
+      test/prepared-page.cpp test/helpers/without-arm-sha2.cpp $<TARGET_OBJECTS:pmjs_prepared_page_objects>)
+    target_link_libraries(pmjs-prepared-page-no-sha2-test PRIVATE pmjs_lz4 PkgConfig::ZLIB PkgConfig::AVUTIL ${CMAKE_DL_LIBS})
+  endif()
   target_link_libraries(pmjs-asset-processor-test PRIVATE PkgConfig::PNG PkgConfig::ZLIB PkgConfig::AVUTIL pmjs_lz4 pmjs_astcenc pthread)
   if(PMJS_ENABLE_SKIA65)
     target_compile_definitions(pmjs-asset-processor-test PRIVATE PMJS_HAS_SKIA65)

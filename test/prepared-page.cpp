@@ -11,6 +11,10 @@
 #include <unistd.h>
 #include <zlib.h>
 #include <lz4.h>
+extern "C" {
+#include <libavutil/sha.h>
+#include <libavutil/mem.h>
+}
 
 namespace {
 void require(bool value, const std::source_location& location = std::source_location::current()) {
@@ -20,6 +24,22 @@ void put(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint32_t val
   for (int i = 0; i < 4; ++i) bytes[offset + i] = static_cast<std::uint8_t>(value >> (8 * i));
 }
 void headerChecksum(std::vector<std::uint8_t>& bytes) { put(bytes, 28, crc32(0, bytes.data(), 28)); }
+std::array<std::uint8_t, 32> referenceDigest(std::span<const std::uint8_t> bytes) {
+  auto* sha = av_sha_alloc();
+  require(sha != nullptr);
+  require(av_sha_init(sha, 256) == 0);
+  av_sha_update(sha, bytes.data(), bytes.size());
+  std::array<std::uint8_t, 32> digest{};
+  av_sha_final(sha, digest.data());
+  av_free(sha);
+  return digest;
+}
+std::string hexDigest(const std::array<std::uint8_t, 32>& digest) {
+  constexpr char digits[] = "0123456789abcdef";
+  std::string result;
+  for (auto byte : digest) { result += digits[byte >> 4]; result += digits[byte & 15]; }
+  return result;
+}
 void checkRows(const pmjs::SparsePalettePage& page, const std::vector<std::uint8_t>& rgba) {
   for (int y : {0, 7, 8, page.height - 1}) for (int x : {0, 7, 31, page.width - 17}) {
     const int count = std::min(17, page.width - x);
@@ -271,6 +291,14 @@ int main() {
         std::copy_n(bytes.begin()+at,out.size(),out.begin()); return true;
       };
       auto layout = pmjs::readTextureLayout(read,bytes.size()); require(layout.has_value());
+      for (std::size_t i = 0; i < layout->planes.size(); ++i) {
+        const auto& plane = layout->planes[i];
+        const auto stride = plane.width * pmjs::textureTexelBytes(plane.format);
+        for (const auto& chunk : plane.chunks) {
+          const auto raw = std::span(texture->bytes[i]).subspan(chunk.y * stride, chunk.decoded);
+          require(chunk.hash == referenceDigest(raw));
+        }
+      }
       std::vector<std::vector<std::uint8_t>> decoded(texture->bytes.size());
       std::size_t peak = 0;
       require(pmjs::readTextureChunks(read,*layout,[&](auto i,const auto&,auto data) {
@@ -313,6 +341,38 @@ int main() {
       bytes=corrupt;
       put(bytes,32+layout->planes.size()*16+8,0);
       require(!pmjs::readTextureLayout(read,bytes.size()));
+    }
+    // Fixed SHA-256 answers check padding boundaries independently of the native reader.
+    for (const auto& [length, expected] : std::vector<std::pair<int, std::string>>{
+      {1, "4a64a107f0cb32536e5bce6c98c393db21cca7f4ea187ba8c4dca8b51d4ea80a"},
+      {3, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
+      {55, "59aaae80b8e7958f5757b4ac9274f1fd57ec0dc7aa8349319102316781b92006"},
+      {56, "dca902d31487ffab357ce36cc5abc6947fbb69127ec04c468ba5687268c4bf7c"},
+      {63, "b8e655e9e7ad413b96f0a371eb1d6db71dcca27f4eee35892517cbe4bfaa6f9a"},
+      {64, "e5146be62accc56709594cb45c651b361df94f622cbb09b91ea3ca7a2060bd53"},
+      {65, "4b6c6774f0cbcd776a90e187b9494e04ca880c0afe3ea1c5cad51c8bbcb41f74"},
+      {127, "b4f5398bf618d741f2ab0f6e2fcde06f4949c20d476b5f6e1d4bf8618bc8973a"},
+      {128, "ed045c7c319e0c9286e1dea21c80bfd4a08eca43e02e13ee8a7a2c8b4b2baec9"},
+      {129, "d6f2fca0407b3f98c9ce29ae92a6cdf489506450fdbb29172f6b18987bc685db"},
+    }) {
+      pmjs::PreparedTexture texture;
+      texture.layout = {length, 1, pmjs::TextureKind::Dense8,
+        {{static_cast<std::uint32_t>(length), 1, pmjs::TextureFormat::R8, {}},
+         {256, 1, pmjs::TextureFormat::RGBA8, {}}}};
+      texture.bytes = {std::vector<std::uint8_t>(length), std::vector<std::uint8_t>(1024)};
+      for (int i = 0; i < length; ++i) texture.bytes[0][i] = (i * 131 + 17) & 255;
+      if (length == 3) texture.bytes[0] = {'a', 'b', 'c'};
+      const auto file = root / "known-digest.pmtx";
+      pmjs::writeTextureArtifact(file, texture);
+      std::ifstream input(file, std::ios::binary);
+      const std::vector<std::uint8_t> encoded{std::istreambuf_iterator<char>(input), {}};
+      const auto layout = pmjs::readTextureLayout([&](std::size_t offset, std::span<std::uint8_t> bytes) {
+        if (offset > encoded.size() || bytes.size() > encoded.size() - offset) return false;
+        std::copy_n(encoded.begin() + offset, bytes.size(), bytes.begin());
+        return true;
+      }, encoded.size());
+      require(layout.has_value());
+      require(hexDigest(layout->planes[0].chunks[0].hash) == expected);
     }
     bool refused = false;
     try { pmjs::writeLz4Page(root / "invalid", 2049, 1, {}); }

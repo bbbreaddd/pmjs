@@ -834,6 +834,52 @@ int main() {
     require(result.width == 8192 && result.height == 4096 && result.halo == 10);
     require(result.cells[0].crop == pmjs::AssetRect({4000,3000,1,1}));
     require(result.pages[0].width == 21 && result.pages[0].height == 21);
+
+    // Compressed source cache recovers single-decode multi-pass preparation when raw RGBA exceeds workspace.
+    write(source, 2048, 2048, [](int x, int y) {
+      const int lx = x % 512, ly = y % 512;
+      if (lx < 64 || lx >= 448 || ly < 64 || ly >= 448) return AssetColor{11, 22, 33, 0};
+      return AssetColor{100, static_cast<std::uint8_t>((lx + ly) & 0xff), static_cast<std::uint8_t>((lx * 3) % 251), 255};
+    });
+    const pmjs::AssetRecipe compressedRecipe{4, 4, std::nullopt, {}};
+    pmjs::AssetPreparationStats fullStats, compressedStats;
+    const auto fullPrepared = pmjs::prepareAssetImage(
+      source, root / "compressed-full", compressedRecipe, nullptr, {64U * 1024U * 1024U, &fullStats});
+    const auto compressedPrepared = pmjs::prepareAssetImage(
+      source, root / "compressed-fallback", compressedRecipe, nullptr, {4U * 1024U * 1024U, &compressedStats});
+    verify(source, root / "compressed-fallback", compressedPrepared);
+    require(fullStats.sourceDecodes == 1);
+    require(compressedStats.sourceDecodes == 1 && compressedStats.sourceCacheHits > 0);
+    require(compressedStats.peakWorkspaceBytes <= 4U * 1024U * 1024U && compressedStats.liveWorkspaceBytes == 0);
+    require(compressedPrepared.pages.size() == fullPrepared.pages.size());
+    for (std::size_t i = 0; i < fullPrepared.pages.size(); ++i) {
+      require(sameFile(root / "compressed-full" / fullPrepared.pages[i].path,
+                       root / "compressed-fallback" / compressedPrepared.pages[i].path));
+    }
+
+    // Incompressible noise cleanly abandons compressed caching without breaking preparation or workspace limits.
+    write(source, 1024, 1024, [](int x, int y) {
+      if (x % 512 < 32 || x % 512 >= 480 || y % 512 < 32 || y % 512 >= 480) return AssetColor{};
+      std::uint32_t v = static_cast<std::uint32_t>(y * 1024 + x) * 2654435761U;
+      v ^= v >> 13; v *= 0x85ebca6bU; v ^= v >> 16;
+      return AssetColor{static_cast<std::uint8_t>(v), static_cast<std::uint8_t>(v >> 8),
+        static_cast<std::uint8_t>(v >> 16), 255};
+    });
+    pmjs::AssetPreparationStats noiseStats;
+    const auto noisePrepared = pmjs::prepareAssetImage(
+      source, root / "compressed-noise", {2, 2, std::nullopt, {}}, nullptr, {2U * 1024U * 1024U, &noiseStats});
+    verify(source, root / "compressed-noise", noisePrepared);
+    require(noiseStats.sourceDecodes > 1);
+    require(noiseStats.peakWorkspaceBytes <= 2U * 1024U * 1024U && noiseStats.liveWorkspaceBytes == 0);
+
+    // Same-red palette colors preserve exact indexed output.
+    result = check(128, 128, [](int x, int y) {
+      if (x < 32 || x >= 64 || y < 32 || y >= 64) return AssetColor{};
+      const int idx = ((y - 32) * 32 + (x - 32)) % 255;
+      return AssetColor{100, static_cast<std::uint8_t>(idx), static_cast<std::uint8_t>((idx * 7) & 0xff), 255};
+    });
+    require(result.pages.size() == 1 && colorType(root / "output" / result.pages[0].path) == PNG_COLOR_TYPE_PALETTE);
+
     std::filesystem::remove_all(root);
     std::cout << "asset processor: exact RGBA, padding, dedup, halo, decoder parity and oversized streaming passed\n";
   } catch (...) { std::filesystem::remove_all(root); throw; }
