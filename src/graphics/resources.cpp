@@ -989,7 +989,7 @@ const ImagePixels* ImageStore::readPixels(ImageHandle handle) const {
   if (slot.astc && !const_cast<ImageStore*>(this)->promoteAstc(slot)) return nullptr;
   if (slot.cachedPixels) {
     if (slot.prepared && slot.retainCpuPixels) slot.cpuPixelFrames = retainedCpuIdleFrames;
-    else if (!slot.retainCpuPixels && !slot.cacheKey.empty()) slot.cpuPixelFrames = 60;
+    else if (!slot.retainCpuPixels) slot.cpuPixelFrames = 60;
     return &*slot.cachedPixels;
   }
   if (slot.cacheKey.empty() && !slot.palette && !slot.tiles) return nullptr;
@@ -1001,8 +1001,9 @@ const ImagePixels* ImageStore::readPixels(ImageHandle handle) const {
 }
 
 std::optional<ImageInfo> ImageStore::createRgba(int width, int height,
-                                                 const void* pixels, bool premultiplied) {
-  return createImage(width, height, pixels, premultiplied, {});
+                                                 const void* pixels, bool premultiplied,
+                                                 std::optional<bool> knownOpaque) {
+  return createImage(width, height, pixels, premultiplied, {}, {}, nullptr, knownOpaque);
 }
 
 std::size_t ImageStore::decodedStorageBytes(const ImagePixels& pixels) {
@@ -1287,7 +1288,8 @@ std::size_t ImageStore::paletteCpuBytes(const Slot& slot) const {
 
 std::optional<ImageInfo> ImageStore::createImage(int width, int height,
     const void* pixels, bool premultiplied, ImageChannelStorage storage,
-    std::shared_ptr<PaletteBacking> palette, const ImageStorageDecision* decision) {
+    std::shared_ptr<PaletteBacking> palette, const ImageStorageDecision* decision,
+    std::optional<bool> knownOpaque) {
   const int channels = storage.channels;
   const auto extent = checkedImageExtent(width, height, 16384);
   if (!extent) return std::nullopt;
@@ -1331,6 +1333,9 @@ std::optional<ImageInfo> ImageStore::createImage(int width, int height,
   slot.knownAllZero = pixels && (decision && decision->hasPixelFacts ? decision->allZero : allZeroRgba(pixels, width, height, width));
   if (decision && decision->hasPixelFacts) {
     slot.opaque = decision->opaque;
+    slot.opacityRevision = slot.contentRevision;
+  } else if (pixels && !palette && knownOpaque) {
+    slot.opaque = *knownOpaque;
     slot.opacityRevision = slot.contentRevision;
   }
   slot.live = true;
@@ -1514,7 +1519,8 @@ std::vector<ImageMemoryEntry> ImageStore::memoryEntries() const {
   return result;
 }
 
-bool ImageStore::updateRgba(ImageHandle handle, const void* pixels) {
+bool ImageStore::updateRgba(ImageHandle handle, const void* pixels,
+                            std::optional<bool> knownOpaque) {
   const auto info = lookup(handle);
   if (!info || !pixels) return false;
   if (!preservePixelReads(handle)) return false;
@@ -1541,6 +1547,10 @@ bool ImageStore::updateRgba(ImageHandle handle, const void* pixels) {
         slot.cachedPixels->rgba.size(), slot.cachedPixels->rgba.data());
     slot.knownAllZero = !slot.gpuOnly && !slot.renderTarget &&
         allZeroRgba(pixels, info->width, info->height, info->width);
+    if (knownOpaque && !slot.gpuOnly && !slot.renderTarget) {
+      slot.opaque = *knownOpaque;
+      slot.opacityRevision = slot.contentRevision;
+    }
     slots_[(handle & indexMask) - 1U].mipmapsReady = false;
     ++textureFullUpdates_;
     if (!compact) textureUploadBytes_ += static_cast<std::uint64_t>(info->width) *
@@ -1790,15 +1800,24 @@ std::optional<std::uint64_t> ImageStore::contentRevision(ImageHandle handle) con
   return slot.contentRevision;
 }
 
-std::optional<bool> ImageStore::isOpaque(ImageHandle handle) {
+std::optional<bool> ImageStore::isOpaque(ImageHandle handle, bool allowExternalStorage) {
   const auto revision = contentRevision(handle);
   if (!revision) return std::nullopt;
   const auto index = (handle & indexMask) - 1U;
   // Render targets retain an alpha channel regardless of their current pixels.
   if (slots_[index].renderTarget) return false;
+  if (!allowExternalStorage &&
+      (slots_[index].astc || slots_[index].compressedBytes || slots_[index].prepared)) {
+    return false;
+  }
   if (slots_[index].opacityRevision == *revision)
     return slots_[index].opaque;
   const auto info = inspect(handle);
+  constexpr std::size_t maxProofBytes = 4U * 1024U * 1024U;
+  if (!allowExternalStorage &&
+      std::size_t(info->width) * info->height > maxProofBytes / 4U) {
+    return std::nullopt;
+  }
   std::optional<ImagePixels> snapshot;
   const auto* pixels = readPixels(handle);
   if (!pixels) {

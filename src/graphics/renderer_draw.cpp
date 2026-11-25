@@ -92,9 +92,8 @@ std::size_t coveredPrefix(const FramePacket& frame, ImageStore& images, int widt
     const auto image = images.inspect(command.image);
     if (!image || command.source != std::array<float, 4>{0, 0, float(image->width), float(image->height)}) continue;
     if (command.mipmap && (width < image->width || height < image->height)) continue;
-    // Binary-alpha proof excludes compressed and prepared storage.
-    if (images.hasBinaryAlpha(command.image).value_or(false) &&
-        images.isOpaque(command.image).value_or(false)) return index - 1;
+    // Uncached fallback opacity excludes compressed and prepared storage.
+    if (images.isOpaque(command.image, false).value_or(false)) return index - 1;
   }
   return 0;
 }

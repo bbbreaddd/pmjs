@@ -40,6 +40,7 @@ struct VideoFrame {
   double timestamp = 0.0;
   std::vector<std::uint8_t> rgba;
   std::shared_ptr<const VideoYuv420> browser420;
+  bool opaque = false;
 };
 
 struct VideoDecodeStats {

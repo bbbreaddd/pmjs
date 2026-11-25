@@ -194,6 +194,49 @@ int main() {
     draw();renderer.renderScene();
     assert(renderer.stats().coveredCommandsSkipped-before==1);
     assert(renderer.tileGeometryGpuBytes()==geometryBefore);
+    const auto knownVideo=images.createRgba(2,2,pixels.data(),false,true);assert(knownVideo);
+    const auto knownReadbacks=images.renderReadbacks();
+    for(int f=0;f<70;++f) {
+      assert(images.updateRgba(knownVideo->handle,pixels.data(),true));
+      renderer.beginFrame();before=renderer.stats().coveredCommandsSkipped;
+      renderer.queueQuad(0,0,16,16,{0,0,1,1});
+      assert(renderer.queueImage(knownVideo->handle,{8,0,0,8,0,0},{0,0,2,2},1,0xffffff,pmjs::BlendMode::normal));
+      renderer.renderScene();
+      assert(renderer.stats().coveredCommandsSkipped-before==1);
+    }
+    assert(images.renderReadbacks()==knownReadbacks);
+    assert(images.updateRgba(knownVideo->handle,pixels.data(),false));
+    renderer.beginFrame();before=renderer.stats().coveredCommandsSkipped;
+    renderer.queueQuad(0,0,16,16,{0,0,1,1});
+    assert(renderer.queueImage(knownVideo->handle,{8,0,0,8,0,0},{0,0,2,2},1,0xffffff,pmjs::BlendMode::normal));
+    renderer.renderScene();
+    assert(renderer.stats().coveredCommandsSkipped-before==0);
+    assert(images.renderReadbacks()==knownReadbacks);
+    assert(images.release(knownVideo->handle));
+    const auto uncached=images.createRgba(2,2,pixels.data());assert(uncached);
+    const auto uncachedReadbacksBefore=images.renderReadbacks();
+    for(int f=0;f<70;++f) {
+      assert(images.updateRgba(uncached->handle,pixels.data()));
+      renderer.beginFrame();before=renderer.stats().coveredCommandsSkipped;
+      renderer.queueQuad(0,0,16,16,{0,0,1,1});
+      assert(renderer.queueImage(uncached->handle,{8,0,0,8,0,0},{0,0,2,2},1,0xffffff,pmjs::BlendMode::normal));
+      renderer.renderScene();
+      assert(renderer.stats().coveredCommandsSkipped-before==1);
+    }
+    assert(images.renderReadbacks()==uncachedReadbacksBefore+1);
+    assert(images.release(uncached->handle));
+    std::vector<std::uint8_t> oversizedPixels(1025*1024*4,255);
+    const auto oversizedUncached=images.createRgba(1025,1024,oversizedPixels.data());assert(oversizedUncached);
+    assert(!images.isOpaque(oversizedUncached->handle,false).has_value());
+    assert(images.release(oversizedUncached->handle));
+    const auto oversizedKnown=images.createRgba(1025,1024,oversizedPixels.data(),false,true);assert(oversizedKnown);
+    assert(images.isOpaque(oversizedKnown->handle,false)==true);
+    renderer.beginFrame();before=renderer.stats().coveredCommandsSkipped;
+    renderer.queueQuad(0,0,16,16,{0,0,1,1});
+    assert(renderer.queueImage(oversizedKnown->handle,{16.0F/1025,0,0,16.0F/1024,0,0},{0,0,1025,1024},1,0xffffff,pmjs::BlendMode::normal));
+    renderer.renderScene();
+    assert(renderer.stats().coveredCommandsSkipped-before==1);
+    assert(images.release(oversizedKnown->handle));
     assert(renderer.releaseTileLayer(outsideMesh));
   }
   SDL_GL_DeleteContext(context); SDL_DestroyWindow(window); SDL_Quit();

@@ -211,7 +211,7 @@ void completeVideoLoad(napi_env env, napi_status status, void* opaque) {
   try {
     if (!value) throw std::runtime_error("native host is not initialized");
     const auto image = value->images.createRgba(load->firstFrame->width,
-        load->firstFrame->height, load->firstFrame->rgba.data());
+        load->firstFrame->height, load->firstFrame->rgba.data(), false, load->firstFrame->opaque);
     if (!image) throw std::runtime_error("cannot allocate video texture");
     imageHandle = image->handle;
     auto video = std::make_unique<Video>(std::move(load->video), load->telemetryEnabled);
@@ -548,7 +548,7 @@ napi_value loadVideo(napi_env env, napi_callback_info info) try {
   auto frame = decoder->frame(0.0, &error);
   if (!frame) throw std::runtime_error(error.empty() ? "video decode failed" : error);
   const auto image = value.images.createRgba(frame->width, frame->height,
-                                              frame->rgba.data());
+                                              frame->rgba.data(), false, frame->opaque);
   if (!image) throw std::runtime_error("cannot allocate video texture");
   std::uint32_t handle = 0;
   bool stored = false;
@@ -609,16 +609,18 @@ napi_value updateVideo(napi_env env, napi_callback_info info) try {
         throw std::runtime_error("video frame dimensions changed or pixel buffer is incomplete");
       }
       const auto started = video.telemetryEnabled ? Clock::now() : Clock::time_point{};
-      if (!value.images.updateRgba(video.image, frame->rgba.data()))
+      if (!value.images.updateRgba(video.image, frame->rgba.data(), frame->opaque))
         throw std::runtime_error("video texture update failed");
       video.browser420 = std::move(frame->browser420);
       if (video.canvasImage) {
         const std::uint8_t* pixels = frame->rgba.data();
+        bool canvasOpaque = frame->opaque;
         if (video.browser420) {
           video.browser420->convert(video.canvasRgba, true);
           pixels = video.canvasRgba.data();
+          canvasOpaque = true;
         }
-        if (!value.images.updateRgba(video.canvasImage, pixels))
+        if (!value.images.updateRgba(video.canvasImage, pixels, canvasOpaque))
           throw std::runtime_error("video canvas texture update failed");
       }
       if (video.telemetryEnabled) {
@@ -666,7 +668,7 @@ napi_value videoCanvasImage(napi_env env, napi_callback_info info) try {
   if (!video.canvasImage) {
     video.browser420->convert(video.canvasRgba, true);
     const auto image = value.images.createRgba(video.browser420->width,
-      video.browser420->height, video.canvasRgba.data());
+      video.browser420->height, video.canvasRgba.data(), false, true);
     if (!image) throw std::runtime_error("cannot allocate video canvas texture");
     video.canvasImage = image->handle;
     syncExternalMemory(env);
