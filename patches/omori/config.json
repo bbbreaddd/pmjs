@@ -1,4 +1,5 @@
 {
+  "launchArguments": [],
   "gamePreparation": "patches/omori/oneloader.cjs",
   "title": "OMORI",
   "fonts": {

@@ -94,7 +94,7 @@ export async function createBundle({ root, share, game, output, config, manifest
       fs.copyFileSync(file, target, fs.constants.COPYFILE_EXCL);
       return name;
     };
-    const configName = copy(config, 'config.json');
+    let configName = copy(config, 'config.json');
     if (configName) {
       const original = JSON.parse(fs.readFileSync(config, 'utf8'));
       if (original?.assetPreparation && typeof original.assetPreparation === 'object') {
@@ -106,6 +106,9 @@ export async function createBundle({ root, share, game, output, config, manifest
         delete original.assetPreparation.cacheRoot;
         fs.writeFileSync(path.join(stage, configName), JSON.stringify(original, null, 2) + '\n');
       }
+    } else {
+      configName = 'config.json';
+      fs.writeFileSync(path.join(stage, configName), JSON.stringify({ launchArguments: [] }, null, 2) + '\n');
     }
     const manifestName = copy(manifest, 'plugin-selection.json');
     fs.mkdirSync(path.join(stage, 'patches'));
