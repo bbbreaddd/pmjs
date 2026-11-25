@@ -52,6 +52,53 @@ bool duplicateSprite(const RenderCommand& left, const RenderCommand& right, Imag
     images.hasBinaryAlpha(right.image).value_or(false);
 }
 
+std::size_t coveredPrefix(const FramePacket& frame, ImageStore& images, int width, int height) {
+  for (const auto& command : frame.commands) {
+    if (command.action == RenderCommand::Action::clearRect ||
+        command.primitive == RenderCommand::Primitive::effect ||
+        command.primitive == RenderCommand::Primitive::mesh) return 0;
+  }
+  std::size_t depth = 0;
+  for (std::size_t index = frame.commands.size(); index > 1; --index) {
+    const auto& command = frame.commands[index - 1];
+    if (command.action == RenderCommand::Action::filterEnd) { ++depth; continue; }
+    if (command.action == RenderCommand::Action::filterBegin) {
+      if (!depth) return 0;
+      --depth; continue;
+    }
+    if (depth) continue;
+    if (command.primitive != RenderCommand::Primitive::sprite ||
+        command.blendMode != BlendMode::normal || command.color[3] != 1 ||
+        command.maskImage || command.blur != 0 || command.appliesColorMatrix ||
+        command.appliesSpriteColor || command.appliesMeshPostTintOverlay ||
+        command.repeat || (command.mipmap && !command.nearest) || command.textureRotation ||
+        command.clampedTilingSampling || command.atlasTilingSampling ||
+        command.standaloneBitmapRegion) continue;
+    if (command.clipped && (command.clip[0] > 0 || command.clip[1] > 0 ||
+        command.clip[2] < width || command.clip[3] < height)) continue;
+    const auto point = [&](float x, float y, std::size_t corner) {
+      const auto& t = command.transform;
+      auto p = command.spriteWorldVertices ? command.spriteVertices[corner] :
+        std::array<float, 2>{t[0] * x + t[2] * y + t[4], t[1] * x + t[3] * y + t[5]};
+      if (command.roundPixels) { p[0] = std::floor(p[0]); p[1] = std::floor(p[1]); }
+      return p;
+    };
+    const auto p0 = point(0, 0, 0), p1 = point(command.destination[0], 0, 1);
+    const auto p2 = point(command.destination[0], command.destination[1], 2);
+    const auto p3 = point(0, command.destination[1], 3);
+    if (p0 != std::array<float, 2>{0, 0} || p1 != std::array<float, 2>{float(width), 0} ||
+        p2 != std::array<float, 2>{float(width), float(height)} ||
+        p3 != std::array<float, 2>{0, float(height)}) continue;
+    const auto image = images.inspect(command.image);
+    if (!image || command.source != std::array<float, 4>{0, 0, float(image->width), float(image->height)}) continue;
+    if (command.mipmap && (width < image->width || height < image->height)) continue;
+    // Binary-alpha proof excludes compressed and prepared storage.
+    if (images.hasBinaryAlpha(command.image).value_or(false) &&
+        images.isOpaque(command.image).value_or(false)) return index - 1;
+  }
+  return 0;
+}
+
 float packSpriteUv(double coordinate) {
   double packed = std::fmod(std::trunc(coordinate * 65535.0), 65536.0);
   if (packed < 0) packed += 65536.0;
@@ -647,7 +694,10 @@ void Renderer::renderScene() {
   std::deque<RenderCommand> splitCommands;
   std::unordered_map<const RenderCommand*,std::array<float,4>> splitUvs;
   std::vector<std::pair<std::size_t,const RenderCommand*>> drawCommands;
-  for (std::size_t i=0;i<frame_.commands.size();++i) {
+  const std::size_t firstDraw = sceneProjection_ == std::array<float, 6>{1, 0, 0, 1, 0, 0} &&
+    queueWidth_ == width_ && queueHeight_ == height_ ? coveredPrefix(frame_, images_, width_, height_) : 0;
+  if (diagnostics_) stats_.coveredCommandsSkipped += firstDraw;
+  for (std::size_t i=firstDraw;i<frame_.commands.size();++i) {
     const auto& original = frame_.commands[i];
     const bool eligible = original.action==RenderCommand::Action::draw &&
       original.primitive==RenderCommand::Primitive::sprite && !original.nearest &&

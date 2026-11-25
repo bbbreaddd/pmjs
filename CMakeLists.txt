@@ -345,6 +345,11 @@ if(BUILD_TESTING)
     target_link_options(pmjs-renderer-precision-test PRIVATE "-Wl,--wrap=glLinkProgram")
     add_test(NAME native-renderer-precision COMMAND ${XVFB_RUN} -a $<TARGET_FILE:pmjs-renderer-precision-test>)
     set_tests_properties(native-renderer-precision PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
+    add_executable(pmjs-renderer-video-coverage-test test/renderer-video-coverage.cpp)
+    target_link_libraries(pmjs-renderer-video-coverage-test PRIVATE pmjs_runtime)
+    target_compile_options(pmjs-renderer-video-coverage-test PRIVATE -UNDEBUG)
+    add_test(NAME native-renderer-video-coverage COMMAND ${XVFB_RUN} -a $<TARGET_FILE:pmjs-renderer-video-coverage-test>)
+    set_tests_properties(native-renderer-video-coverage PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy;PMJS_GRAPHICS_DIAGNOSTICS=1")
     add_executable(pmjs-renderer-opaque-blend-test test/renderer-opaque-blend.cpp)
     target_link_libraries(pmjs-renderer-opaque-blend-test PRIVATE pmjs_runtime)
     target_compile_options(pmjs-renderer-opaque-blend-test PRIVATE -UNDEBUG)
@@ -697,10 +702,23 @@ if(BUILD_TESTING)
       "${CMAKE_CURRENT_SOURCE_DIR}/test/assets" "${PMJS_TEST_PIXI4_SOURCE}")
     set_tests_properties(node-pixi4-render-texture PROPERTIES ENVIRONMENT
       "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy;PMJS_WINDOW_SIZE=32x24")
+    add_test(NAME node-video-coverage COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/node-video-coverage.cjs" $<TARGET_FILE:pmjs_native>
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/assets" "${PMJS_TEST_PIXI4_SOURCE}")
+    set_tests_properties(node-video-coverage PROPERTIES ENVIRONMENT
+      "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy;PMJS_WINDOW_SIZE=32x24;PMJS_GRAPHICS_DIAGNOSTICS=1")
     add_test(NAME node-duplicate-sprites COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
       "${CMAKE_CURRENT_SOURCE_DIR}/test/node-duplicate-sprites.cjs" $<TARGET_FILE:pmjs_native>
       "${CMAKE_CURRENT_SOURCE_DIR}/test/assets" "${PMJS_TEST_PIXI4_SOURCE}")
     set_tests_properties(node-duplicate-sprites PROPERTIES ENVIRONMENT
+      "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy;PMJS_WINDOW_SIZE=32x24;PMJS_GRAPHICS_DIAGNOSTICS=1")
+  endif()
+  set(PMJS_TEST_PIXI5_SOURCE "" CACHE FILEPATH "Pixi 5 source for rendering contract validation")
+  if(PMJS_TEST_PIXI5_SOURCE)
+    add_test(NAME node-video-coverage-pixi5 COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/node-video-coverage.cjs" $<TARGET_FILE:pmjs_native>
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/assets" "${PMJS_TEST_PIXI5_SOURCE}")
+    set_tests_properties(node-video-coverage-pixi5 PROPERTIES ENVIRONMENT
       "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy;PMJS_WINDOW_SIZE=32x24;PMJS_GRAPHICS_DIAGNOSTICS=1")
   endif()
   add_test(NAME node-resident-images COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}

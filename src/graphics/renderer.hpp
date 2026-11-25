@@ -140,6 +140,7 @@ struct PresentationGeometry {
 
 struct RendererStats {
   std::uint64_t duplicateSpriteDrawsSkipped = 0;
+  std::uint64_t coveredCommandsSkipped = 0;
   static constexpr std::size_t filterKindCount =
     static_cast<std::size_t>(scene_packet::FilterKind::custom) + 1;
   std::uint64_t frames = 0;

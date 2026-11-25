@@ -591,6 +591,8 @@ napi_value rendererStats(napi_env env, napi_callback_info) try {
     number(env, static_cast<double>(stats.retainedFrames))), "cannot set renderer retained frames");
   check(env, napi_set_named_property(env, result, "commands",
     number(env, static_cast<double>(stats.commands))), "cannot set renderer commands");
+  check(env, napi_set_named_property(env, result, "coveredCommandsSkipped",
+    number(env, static_cast<double>(stats.coveredCommandsSkipped))), "cannot set covered commands");
   check(env, napi_set_named_property(env, result, "duplicateSpriteDrawsSkipped",
     number(env, static_cast<double>(stats.duplicateSpriteDrawsSkipped))), "cannot set duplicate sprite draws");
   check(env, napi_set_named_property(env, result, "drawCalls",

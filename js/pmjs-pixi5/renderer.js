@@ -72,6 +72,8 @@
       },
       render: function(stage, renderTexture, clear, transform, skipUpdateTransform) {
         if (!stage) return;
+        this.renderingToScreen = !renderTexture;
+        if (typeof this.emit === 'function') this.emit('prerender');
         var prepared = PMJS.pixi5.prepareRender(this, stage,
           !!(renderTexture || transform || skipUpdateTransform));
         var shouldClear = clear === undefined ? this.clearBeforeRender : !!clear;
@@ -98,6 +100,7 @@
           } finally {
             NativeHost.render.setScreenRenderSize(this.width, this.height);
           }
+          if (typeof this.emit === 'function') this.emit('postrender');
           return;
         }
         NativeHost.render.setScreenRenderSize(this.width, this.height);
@@ -109,6 +112,7 @@
         globalThis.pmjsPixi5RenderScene(stage, background, this.resolution, this.screen, this,
           skipUpdateTransform, projection, prepared);
         NativeHost.render.setClearBeforeRender(shouldClear);
+        if (typeof this.emit === 'function') this.emit('postrender');
       },
       resize: function(width, height) {
         this.screen.width = Math.max(0, Number(width) || 0);
@@ -151,6 +155,10 @@
         return capture;
       }
     };
+    if (PIXI.utils && typeof PIXI.utils.EventEmitter === 'function') {
+      PIXI.utils.EventEmitter.call(renderer);
+      Object.setPrototypeOf(renderer, NativeRenderer.prototype);
+    }
     renderer.resize(options.width, options.height);
     return renderer;
   }
