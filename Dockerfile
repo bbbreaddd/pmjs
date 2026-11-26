@@ -2,7 +2,7 @@
 FROM debian:13-slim AS build-environment
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 cmake ninja-build git pkg-config make dpkg-dev binutils llvm-19 ca-certificates squashfs-tools \
+    python3 cmake ninja-build git pkg-config make dpkg-dev binutils llvm-19 ca-certificates squashfs-tools ccache \
     && rm -rf /var/lib/apt/lists/*
 
 FROM build-environment AS build

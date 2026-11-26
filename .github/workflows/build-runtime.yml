@@ -16,7 +16,6 @@ jobs:
     uses: ./.github/workflows/checks.yml
 
   build:
-    needs: checks
     name: Build Linux ARM64 runtime
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -76,6 +75,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-arm64-v1-
 
+      - name: Restore ARM64 compiler cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/ccache/arm64
+          key: ${{ runner.os }}-${{ runner.arch }}-ccache-arm64-v1-${{ hashFiles('tools/linux-arm64/sdk-recipes.json', 'tools/linux-arm64/sdk-packages.json', 'tools/linux-arm64/prepare-sdk.py', 'cmake/toolchains/portable-arm64.cmake') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-ccache-arm64-v1-${{ hashFiles('tools/linux-arm64/sdk-recipes.json', 'tools/linux-arm64/sdk-packages.json', 'tools/linux-arm64/prepare-sdk.py', 'cmake/toolchains/portable-arm64.cmake') }}-
+
       - name: Build and package runtime
         run: |
           source_archive="pmjs-ffmpeg-sources-${GITHUB_SHA:0:7}.tar.gz"
@@ -83,8 +90,9 @@ jobs:
           docker run --rm --user "$(id -u):$(id -g)" \
             --volume "$PWD:$PWD" --workdir "$PWD" \
             --env HOME=/tmp --env PMJS_BUILD_ID --env PMJS_PACKAGE_FORMAT=all \
+            --env CCACHE_DIR="$PWD/.cache/ccache/arm64" --env CCACHE_MAXSIZE=500M --env CCACHE_COMPILERCHECK=content \
             --env PMJS_SOURCES_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$PMJS_BUILD_ID/$source_archive" \
-            pmjs-build-environment sh -ec './build.sh --target arm64 --jobs 2; python3 tools/release.py package'
+            pmjs-build-environment sh -ec 'ccache --zero-stats; ./build.sh --target arm64 --jobs 2; ccache --show-stats; python3 tools/release.py package'
 
       - name: Save build files
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -103,7 +111,7 @@ jobs:
 
   release:
     name: Publish release
-    needs: build
+    needs: [checks, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

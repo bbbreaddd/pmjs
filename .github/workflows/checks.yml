@@ -36,6 +36,9 @@ jobs:
   native:
     env:
       PMJS_SKIA65_COMPONENT_DIR: ${{ github.workspace }}/.cache/components/x64
+      CCACHE_DIR: ${{ github.workspace }}/.cache/ccache/host-${{ matrix.preset }}
+      CCACHE_MAXSIZE: 500M
+      CCACHE_COMPILERCHECK: content
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     strategy:
@@ -46,7 +49,7 @@ jobs:
       - name: Install native test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build pkg-config python3 clang-20 llvm-20 \
+          sudo apt-get install -y cmake ninja-build pkg-config python3 clang-20 llvm-20 ccache \
             libnode-dev libsdl2-dev libegl1-mesa-dev libgles2-mesa-dev \
             libpng-dev libwebp-dev zlib1g-dev libjpeg-dev libfreetype-dev libharfbuzz-dev \
             libavformat-dev libavcodec-dev libavutil-dev libswresample-dev libswscale-dev \
@@ -65,21 +68,32 @@ jobs:
       - name: Prepare host Skia component
         if: matrix.preset == 'dev-skia'
         run: python3 tools/skia65/build.py --arch x64 --output .cache/components/x64 --jobs 4 --reuse
+      - name: Restore host compiler cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ runner.os }}-${{ runner.arch }}-ccache-host-${{ matrix.preset }}-v1-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-ccache-host-${{ matrix.preset }}-v1-
+      - name: Reset compiler cache statistics
+        run: ccache --zero-stats
       - name: Configure native tests
         id: native-configure
-        run: cmake --preset ${{ matrix.preset }}
+        run: cmake --preset ${{ matrix.preset }} -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
       - name: Build native smoke suite
         if: github.event_name == 'pull_request' && matrix.preset == 'dev'
         run: cmake --build --preset ${{ matrix.preset }} --target pmjs-native-smoke --parallel 4
       - name: Build full native suite
         if: github.event_name != 'pull_request' || matrix.preset == 'dev-skia'
         run: cmake --build --preset ${{ matrix.preset }} --parallel 4
+      - name: Show compiler cache statistics
+        run: ccache --show-stats
       - name: Run native smoke suite
         if: github.event_name == 'pull_request' && matrix.preset == 'dev'
         run: ctest --preset ${{ matrix.preset }} -L '^(smoke|build)$' --parallel 2 --no-tests=error --timeout 180 --output-junit "$GITHUB_WORKSPACE/build/${{ matrix.preset }}/native-tests.xml"
       - name: Run full native suite
         if: github.event_name != 'pull_request' || matrix.preset == 'dev-skia'
-        run: ctest --preset ${{ matrix.preset }} -L '^(native|build)$' --no-tests=error --timeout 600 --output-junit "$GITHUB_WORKSPACE/build/${{ matrix.preset }}/native-tests.xml"
+        run: ctest --preset ${{ matrix.preset }} -L '^(native|build)$' --parallel 2 --no-tests=error --timeout 600 --output-junit "$GITHUB_WORKSPACE/build/${{ matrix.preset }}/native-tests.xml"
       - name: Verify coverage integration
         env:
           PMJS_TEST_BUILD_DIR: build/${{ matrix.preset }}
