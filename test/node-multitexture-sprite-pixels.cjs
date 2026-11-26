@@ -6,8 +6,10 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const native = require(path.resolve(process.argv[2]));
 
-const width = 16;
-const height = 16;
+const width = 32;
+const height = 32;
+const spriteSize = 16;
+const step = 4;
 native.initialize({
   gameRoot: path.resolve(process.argv[3]),
   assetRoot: '',
@@ -25,10 +27,10 @@ const colors = [
   [255, 255, 0, 255],
 ];
 const images = colors.map((color) => {
-  const image = native.canvas.create(width, height);
-  const pixels = new Uint8Array(width * height * 4);
+  const image = native.canvas.create(spriteSize, spriteSize);
+  const pixels = new Uint8Array(spriteSize * spriteSize * 4);
   for (let offset = 0; offset < pixels.length; offset += 4) pixels.set(color, offset);
-  native.canvas.writePixels(image.handle, 0, 0, width, height, pixels);
+  native.canvas.writePixels(image.handle, 0, 0, spriteSize, spriteSize, pixels);
   return image;
 });
 
@@ -41,10 +43,11 @@ try {
       metadata.set([1, noParent, image.handle, 0xffffff, 0, 0, 0],
         index * schema.metadataStride);
 
+      const origin = index * step;
       const offset = index * schema.valueStride;
-      values.set([1, 0, 0, 1, 0, 0, 1], offset);
-      values.set([0, 0, width, height], offset + 9);
-      values.set([width, height], offset + 13);
+      values.set([1, 0, 0, 1, origin, origin, 1], offset);
+      values.set([0, 0, spriteSize, spriteSize], offset + 9);
+      values.set([spriteSize, spriteSize], offset + 13);
     }
 
     const before = native.render.stats();
@@ -60,9 +63,12 @@ try {
 
     const frame = native.canvas.captureScene();
     try {
-      const pixel = native.canvas.readPixels(frame.handle, 8, 8, 1, 1);
-      assert.deepEqual(Array.from(pixel), colors[(rotation + images.length - 1) % images.length],
-        `sampler slot rotation ${rotation} should preserve sprite order`);
+      for (let index = 0; index < images.length; index++) {
+        const sample = index * step + 1;
+        const pixel = native.canvas.readPixels(frame.handle, sample, sample, 1, 1);
+        assert.deepEqual(Array.from(pixel), colors[(index + rotation) % images.length],
+          `sampler slot rotation ${rotation} sprite ${index} should preserve texture and order`);
+      }
     } finally {
       native.canvas.release(frame.handle);
     }

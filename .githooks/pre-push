@@ -9,3 +9,9 @@ npm ci
 npm run lint
 npm run licensing
 npm test
+
+if [ ! -f build/dev/build.ninja ]; then
+  cmake --preset dev
+fi
+cmake --build --preset dev --parallel 4
+ctest --preset dev -L '^(native|build)$' --no-tests=error --timeout 600
