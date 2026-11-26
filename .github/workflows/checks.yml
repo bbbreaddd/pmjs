@@ -93,7 +93,19 @@ jobs:
         run: ctest --preset ${{ matrix.preset }} -L '^(smoke|build)$' --parallel 2 --no-tests=error --timeout 180 --output-junit "$GITHUB_WORKSPACE/build/${{ matrix.preset }}/native-tests.xml"
       - name: Run full native suite
         if: github.event_name != 'pull_request' || matrix.preset == 'dev-skia'
-        run: ctest --preset ${{ matrix.preset }} -L '^(native|build)$' --parallel 2 --no-tests=error --timeout 600 --output-junit "$GITHUB_WORKSPACE/build/${{ matrix.preset }}/native-tests.xml"
+        env:
+          PMJS_CI_PRESET: ${{ matrix.preset }}
+          PMJS_CI_EVENT: ${{ github.event_name }}
+        run: |
+          labels='^(native|build)$'
+          exclude=()
+          if [[ "$PMJS_CI_PRESET" == dev-skia ]]; then
+            labels='^native$'
+            if [[ "$PMJS_CI_EVENT" != pull_request ]]; then
+              exclude=(-LE '^backend-independent$')
+            fi
+          fi
+          ctest --preset "$PMJS_CI_PRESET" -L "$labels" "${exclude[@]}" --parallel 2 --no-tests=error --timeout 600 --output-junit "$GITHUB_WORKSPACE/build/$PMJS_CI_PRESET/native-tests.xml"
       - name: Verify coverage integration
         env:
           PMJS_TEST_BUILD_DIR: build/${{ matrix.preset }}

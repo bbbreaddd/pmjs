@@ -302,6 +302,16 @@ async function main() {
     if (planar) {
       const artifact = path.join(sparseDirectory, sparseDescriptor.textureArtifact);
       const pristine = fs.readFileSync(artifact);
+      if (pageCodec === 'png') {
+        const alternateDirectory = path.join(root, 'artifact-codec-parity');
+        fs.mkdirSync(alternateDirectory);
+        const alternate = await native.assets.processImage(name, alternateDirectory,
+          { source: name, grid: [4, 3], framePages: true }, sparseFile, null,
+          { pageCodec: 'lz4', allowPalettes: true });
+        assert.equal(alternate.textureArtifact, sparseDescriptor.textureArtifact);
+        assert.deepEqual(alternate.cells, sparseDescriptor.cells);
+        assert.deepEqual(fs.readFileSync(path.join(alternateDirectory, alternate.textureArtifact)), pristine);
+      }
       const register = () => assert.equal(native.assets.installPrepared([{ source: name,
         sourceIdentity: sparseIdentity, directory: sparseDirectory, descriptor: sparseDescriptor, pageHashes,
         textureHash: crypto.createHash('sha256').update(pristine).digest('hex') }]), 1);
@@ -326,7 +336,8 @@ async function main() {
       const descriptorCount = () => fs.existsSync('/proc/self/fd') ? fs.readdirSync('/proc/self/fd').length : null;
       const initialDescriptors = descriptorCount();
       const results = [];
-      for (const fault of ['header', 'truncated', 'last-chunk', 'missing']) for (let repeat = 0; repeat < 3; ++repeat) {
+      const faults = pageCodec === 'png' ? ['header', 'truncated', 'last-chunk', 'missing'] : ['last-chunk'];
+      for (const fault of faults) for (let repeat = 0; repeat < (pageCodec === 'png' ? 3 : 1); ++repeat) {
         fs.writeFileSync(artifact, pristine);
         if (fault === 'missing') fs.unlinkSync(artifact);
         register();
@@ -348,35 +359,37 @@ async function main() {
         assert.equal(native.images.memory().cpuBytes, 0); assert.equal(native.images.memory().gpuBytes, 64);
         results.push({ fault, repeat, reason: after.textureArtifactFailureReason });
       }
-      fs.writeFileSync(artifact, pristine); register();
-      const retainedArtifact = await native.images.loadAsync(name);
-      fs.renameSync(artifact, artifact + '.retained');
-      fs.writeFileSync(artifact, Buffer.alloc(32));
-      const before = native.images.memory();
-      assertPixels(draw(retainedArtifact, 0, true), reference, 1);
-      assert.equal(native.images.memory().textureArtifactLoads, before.textureArtifactLoads + 1);
-      assert.equal(native.images.memory().sourceTextureBuilds, before.sourceTextureBuilds);
-      native.images.release(retainedArtifact.handle); clear();
-      fs.unlinkSync(artifact); fs.renameSync(artifact + '.retained', artifact); register();
-      const replacementPixels = Buffer.from(sparsePixels);
-      for (let i = 0; i < replacementPixels.length; i += 4) replacementPixels[i] ^= 32;
-      const replacementFile = path.join(root, 'replacement.png');
-      fs.writeFileSync(replacementFile, png(width, height, replacementPixels));
-      const replacementDirectory = path.join(root, 'replacement-prepared'); fs.mkdirSync(replacementDirectory);
-      const replacement = await native.assets.processImage('replacement.png', replacementDirectory,
-        { grid: [4, 3], framePages: true }, replacementFile, null, { pageCodec, allowPalettes: true });
-      assert.equal(replacement.textureArtifact, 'texture.pmtx');
-      fs.copyFileSync(path.join(replacementDirectory, replacement.textureArtifact), artifact);
-      register();
-      const beforeSwap = native.images.memory();
-      const substituted = await native.images.loadAsync(name);
-      assertPixels(draw(substituted, 0, true), reference, 1);
-      assert.equal(native.images.memory().textureArtifactFailures, beforeSwap.textureArtifactFailures + 1);
-      assert.equal(native.images.memory().sourceTextureBuilds, beforeSwap.sourceTextureBuilds);
-      native.images.release(substituted.handle); clear();
+      if (pageCodec === 'png') {
+        fs.writeFileSync(artifact, pristine); register();
+        const retainedArtifact = await native.images.loadAsync(name);
+        fs.renameSync(artifact, artifact + '.retained');
+        fs.writeFileSync(artifact, Buffer.alloc(32));
+        const before = native.images.memory();
+        assertPixels(draw(retainedArtifact, 0, true), reference, 1);
+        assert.equal(native.images.memory().textureArtifactLoads, before.textureArtifactLoads + 1);
+        assert.equal(native.images.memory().sourceTextureBuilds, before.sourceTextureBuilds);
+        native.images.release(retainedArtifact.handle); clear();
+        fs.unlinkSync(artifact); fs.renameSync(artifact + '.retained', artifact); register();
+        const replacementPixels = Buffer.from(sparsePixels);
+        for (let i = 0; i < replacementPixels.length; i += 4) replacementPixels[i] ^= 32;
+        const replacementFile = path.join(root, 'replacement.png');
+        fs.writeFileSync(replacementFile, png(width, height, replacementPixels));
+        const replacementDirectory = path.join(root, 'replacement-prepared'); fs.mkdirSync(replacementDirectory);
+        const replacement = await native.assets.processImage('replacement.png', replacementDirectory,
+          { grid: [4, 3], framePages: true }, replacementFile, null, { pageCodec, allowPalettes: true });
+        assert.equal(replacement.textureArtifact, 'texture.pmtx');
+        fs.copyFileSync(path.join(replacementDirectory, replacement.textureArtifact), artifact);
+        register();
+        const beforeSwap = native.images.memory();
+        const substituted = await native.images.loadAsync(name);
+        assertPixels(draw(substituted, 0, true), reference, 1);
+        assert.equal(native.images.memory().textureArtifactFailures, beforeSwap.textureArtifactFailures + 1);
+        assert.equal(native.images.memory().sourceTextureBuilds, beforeSwap.sourceTextureBuilds);
+        native.images.release(substituted.handle); clear();
+      }
       fs.writeFileSync(artifact, pristine); register();
       if (initialDescriptors !== null) assert.equal(descriptorCount(), initialDescriptors);
-      console.log('artifact fault and retained-file trials: ' + JSON.stringify(results));
+      console.log('artifact fault trials: ' + JSON.stringify(results));
     }
   }
   console.log('frame pages: exact rendering, four-page residency, retained owner, fallback and release pass');

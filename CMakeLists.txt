@@ -911,6 +911,10 @@ if(BUILD_TESTING)
     endif()
   endforeach()
   set_property(TEST
+    native-log native-checked-bounds native-filter-precision
+    native-audio-mix-unit native-stream-pcm-buffer native-prepared-page
+    APPEND PROPERTY LABELS backend-independent)
+  set_property(TEST
     native-yanfly-core-text native-srd-shaking-text native-filter-target-lifetime
     native-vfs native-canvas-pixels native-canvas-upload node-packed-cache
     node-pixi-precision node-filter-bounds node-render-to-canvas node-binding-errors
