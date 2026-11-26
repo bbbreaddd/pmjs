@@ -283,6 +283,14 @@ def build_component(sdk, name, spec, recipe, jobs):
     return publish(sdk, name, stage)
 
 
+def clean_work(sdk, name):
+    work = sdk / "work"
+    shutil.rmtree(work / (name + "-install"), ignore_errors=True)
+    shutil.rmtree(work / (name + "-build"), ignore_errors=True)
+    if name == "ffmpeg":
+        shutil.rmtree(work / name, ignore_errors=True)
+
+
 def prepare_locked(sdk, jobs, explain=False, verify=False):
     spec = json.loads((ROOT / "sdk-recipes.json").read_text())
     desired = recipes(sdk, spec)
@@ -307,6 +315,7 @@ def prepare_locked(sdk, jobs, explain=False, verify=False):
             if not explain:
                 files = build_component(sdk, name, spec, recipe, jobs)
                 complete(sdk, name, recipe, files)
+                clean_work(sdk, name)
         else:
             print(f"SDK {name}: unchanged", flush=True)
         print(f"SDK {name}: {(time.monotonic() - started):.2f}s", flush=True)

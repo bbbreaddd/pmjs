@@ -128,6 +128,32 @@ class SdkCache(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'changed revision'):
             self.builder.prepare_locked(self.sdk, 2, verify=True)
 
+    def test_prepare_cleans_disposable_work_while_keeping_reusable_source(self):
+        zlib_recipe, _ = self.archive('zlib', {
+            'LICENSE': 'fixture license', 'fixture.c': 'int value(void) { return 42; }',
+            'CMakeLists.txt': 'cmake_minimum_required(VERSION 3.20)\nproject(fixture C)\n'
+                              'add_library(fixture SHARED fixture.c)\ninstall(TARGETS fixture LIBRARY DESTINATION lib)\n',
+        })
+        configure = '#!' + sys.executable + '\n' + '''import sys
+from pathlib import Path
+args = dict(arg[2:].split('=', 1) for arg in sys.argv[1:] if '=' in arg)
+Path('Makefile').write_text("all:\\ninstall:\\n\\tmkdir -p $(DESTDIR)" + args['prefix'] + "/lib\\n")
+'''
+        ffmpeg_recipe, _ = self.archive('ffmpeg', {'LICENSE': 'fixture license', 'configure': configure})
+        recipes = {'zlib': zlib_recipe, 'ffmpeg': ffmpeg_recipe}
+
+        with patch.object(self.builder, 'recipes', return_value=recipes), \
+                patch.object(self.builder, 'sdk_metadata', return_value={}):
+            self.builder.prepare_locked(self.sdk, 2)
+
+        work = self.sdk / 'work'
+        for name in recipes:
+            self.assertFalse((work / (name + '-install')).exists())
+            self.assertFalse((work / (name + '-build')).exists())
+        self.assertFalse((work / 'ffmpeg').exists())
+        self.assertTrue((work / 'zlib/zlib/fixture.c').exists())
+        self.assertEqual(self.value(self.sdk / 'prefix/lib/libfixture.so'), 42)
+
     def test_compiler_and_dependency_changes_discard_cmake_cache(self):
         recipe, archive = self.archive('zlib', {
             'LICENSE': 'fixture license', 'fixture.c': 'int value(void) { return 42; }',
