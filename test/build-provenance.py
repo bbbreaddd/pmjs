@@ -138,6 +138,8 @@ class BuildProvenance(unittest.TestCase):
             'target_compile_definitions(pmjs_native PRIVATE FIXTURE_OPTION=1)\n')
         (self.root / 'CMakeLists.txt').write_text('''cmake_minimum_required(VERSION 3.20)
 project(fixture VERSION 0.1.0 LANGUAGES C CXX)
+# GNU linker depfiles can contain unescaped spaces in library paths.
+set(CMAKE_LINK_DEPENDS_USE_LINKER FALSE)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 add_library(pmjs_runtime STATIC src/runtime.cpp)
 add_library(Effekseer STATIC EXCLUDE_FROM_ALL src/runtime.cpp)
@@ -225,6 +227,9 @@ include(cmake/Install.cmake)
         self.assertNotEqual(old['source']['sourceSha256'], new['source']['sourceSha256'])
         self.assertNotIn('share/pmjs/docs/using.md', new['files'])
         self.assertIn('share/pmjs/js/module.js', new['files'])
+        self.provider(2)
+        self.assertIn('Linking', self.compile().stdout)
+        self.assertNotIn('Linking', self.compile().stdout)
 
     def test_installation_cmake_changes_do_not_relink_native_code(self):
         addon = self.build / 'pmjs_native.node'
