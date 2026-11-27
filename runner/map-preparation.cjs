@@ -335,8 +335,10 @@ async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, heig
           dependencies = [input.dependency];
           const map = JSON.parse(input.bytes);
           if (tiled) {
-            const tiledInput = game.read(tiledFile), resolved = await resolveTiled(game, JSON.parse(tiledInput.bytes));
-            dependencies.push(tiledInput.dependency, ...resolved.dependencies);
+            const tiledInput = game.read(tiledFile);
+            dependencies.push(tiledInput.dependency);
+            const resolved = await resolveTiled(game, JSON.parse(tiledInput.bytes));
+            dependencies.push(...resolved.dependencies);
             compile = () => compileTiledMap(resolved.map);
             visualContract = () => resolved.map;
           } else {
