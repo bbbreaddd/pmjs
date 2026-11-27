@@ -1350,7 +1350,16 @@ void Renderer::renderScene() {
       glViewport(0, 0, static_cast<int>(rasterFrame[2] * rasterResolution), static_cast<int>(rasterFrame[3] * rasterResolution));
       ensurePixiPrograms();
       const bool displacementFilter =
-        filter.filterKind == scene_packet::FilterKind::displacement;
+        filter.filterKind == scene_packet::FilterKind::displacement &&
+        displacement_.program != 0;
+      const auto ensureLinearFilter = [&](std::uint32_t texture) {
+        if (const auto nearest = textureNearestState_.find(texture);
+            nearest == textureNearestState_.end() || nearest->second) {
+          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+          textureNearestState_[texture] = false;
+        }
+      };
       const std::uint32_t compositeProgram =
         displacementFilter ? displacement_.program : program_;
       glUseProgram(compositeProgram);
@@ -1363,12 +1372,7 @@ void Renderer::renderScene() {
       glBindVertexArray(vertexArray_);
       glActiveTexture(GL_TEXTURE0);
       glBindTexture(GL_TEXTURE_2D, groupTargets_[filterDepth].texture);
-      if (const auto nearest = textureNearestState_.find(groupTargets_[filterDepth].texture);
-          nearest == textureNearestState_.end() || nearest->second) {
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        textureNearestState_[groupTargets_[filterDepth].texture] = false;
-      }
+      ensureLinearFilter(groupTargets_[filterDepth].texture);
       glUniform2f(displacementFilter ? displacement_.textureSize : textureSizeUniform_,
                   static_cast<float>(width_) / filter.filterResolution,
                   static_cast<float>(height_) / filter.filterResolution);
@@ -1477,21 +1481,22 @@ void Renderer::renderScene() {
         if (!displacement) continue;
         glActiveTexture(GL_TEXTURE2);
         glBindTexture(GL_TEXTURE_2D, displacement->texture);
-        if (const auto nearest = textureNearestState_.find(displacement->texture);
-            nearest == textureNearestState_.end() || nearest->second) {
-          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-          textureNearestState_[displacement->texture] = false;
-        }
+        ensureLinearFilter(displacement->texture);
         if (const auto repeat = textureRepeatState_.find(displacement->texture);
             repeat == textureRepeatState_.end() || !repeat->second) {
           glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
           glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
           textureRepeatState_[displacement->texture] = true;
         }
-        glUniform4fv(displacement_.bounds, 1,
+        if (!displacementFilter) {
+          glUniform1f(blurUniform_, 0);
+          glUniform2f(blurDirectionUniform_, 0, 0);
+          glUniform1i(displacementImageUniform_, 2);
+          glUniform1i(displacementEnabledUniform_, 1);
+        }
+        glUniform4fv(displacementFilter ? displacement_.bounds : displacementBoundsUniform_, 1,
                      filter.filterParameters.data());
-        glUniform2fv(displacement_.scale, 1,
+        glUniform2fv(displacementFilter ? displacement_.scale : displacementScaleUniform_, 1,
                      filter.filterParameters.data() + 4);
         glActiveTexture(GL_TEXTURE0);
       } else if (filter.filterKind == scene_packet::FilterKind::alphaMask) {
@@ -1792,14 +1797,12 @@ void Renderer::renderScene() {
         continue;
       }
 
-      glUniform1i(filterTargetYDownUniform_, targetYDown);
-      glUniform1i(filterImageYDownUniform_, sourceYDown);
+      glUniform1i(displacementFilter ? displacement_.targetYDown : filterTargetYDownUniform_, targetYDown);
+      glUniform1i(displacementFilter ? displacement_.imageYDown : filterImageYDownUniform_, sourceYDown);
       glBindFramebuffer(GL_FRAMEBUFFER, filterDepth == 0 ? rootFramebuffer :
                         groupTargets_[filterDepth - 1].framebuffer);
       glBindTexture(GL_TEXTURE_2D, compositeTexture);
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-      textureNearestState_[compositeTexture] = false;
+      ensureLinearFilter(compositeTexture);
       if (filter.filterKind == scene_packet::FilterKind::blur) {
         glUniform2f(blurDirectionUniform_, 0, 1);
       }

@@ -2120,42 +2120,21 @@ inline std::string plainBitmapRegionFragmentSource() {
   return source;
 }
 inline std::string directSpriteColorFragmentSource() {
-  return R"(#version 300 es
-  precision mediump float;
-  uniform highp sampler2D image;
-  uniform bool pixiSpritePacking, texturePremultiplied;
-  uniform bool clampedTilingSampling, atlasTilingSampling;
-  uniform highp vec4 tilingAtlasMapping, tilingAtlasBounds;
-  uniform highp vec2 imageDimensions;
-  uniform vec4 spriteColorTone, spriteBlendColor;
-  in highp vec2 vertexUv;
-  in highp vec4 vertexColor;
-  out highp vec4 outputColor;
-  void main() {
-    highp vec2 coord = vertexUv;
-    if (clampedTilingSampling) {
-      highp vec2 margin = vec2(0.5) / imageDimensions;
-      coord = coord + ceil(-coord);
-      if (atlasTilingSampling) {
-        coord = clamp(coord * tilingAtlasMapping.xy + tilingAtlasMapping.zw,
-          tilingAtlasBounds.xy, tilingAtlasBounds.zw);
-      } else coord = clamp(coord, margin, vec2(1.0) - margin);
-    }
-    highp vec4 sampleColor = texture(image, coord);
-    if (texturePremultiplied && sampleColor.a > 0.0) sampleColor.rgb /= sampleColor.a;
-    if (sampleColor.a > 0.0) {
-      vec3 straightColor = sampleColor.rgb;
-      float gray = dot(straightColor, vec3(0.299, 0.587, 0.114));
-      straightColor = mix(straightColor, vec3(gray), spriteColorTone.a);
-      straightColor = clamp(straightColor + spriteColorTone.rgb, 0.0, 1.0);
-      if (all(equal(spriteColorTone, vec4(0.0)))) {
-        straightColor = sampleColor.rgb * sampleColor.a;
-      }
-      sampleColor.rgb = mix(straightColor, spriteBlendColor.rgb, spriteBlendColor.a);
-    }
-    outputColor = sampleColor * vertexColor;
-    outputColor.rgb *= pixiSpritePacking ? sampleColor.a : outputColor.a;
+  std::string source(spriteEffectFragmentSource);
+  source.replace(source.find("highp vec4 sampleBlockImage(highp vec2 coordinate);"),
+    std::string("highp vec4 sampleBlockImage(highp vec2 coordinate);").size(),
+    "highp vec4 sampleBlockImage(highp vec2 coordinate) { return vec4(0.0); }");
+  for (const auto& replacement : {
+      std::pair{"uniform int paletteImage;", "const int paletteImage = 0;"},
+      std::pair{"uniform bool standaloneBitmapRegion;", "const bool standaloneBitmapRegion = false;"},
+      std::pair{"uniform bool derivedImage;", "const bool derivedImage = false;"},
+      std::pair{"uniform float blurRadius;", "const float blurRadius = 0.0;"},
+      std::pair{"uniform bool maskEnabled;", "const bool maskEnabled = false;"},
+      std::pair{"uniform bool spriteColorEnabled;", "const bool spriteColorEnabled = true;"},
+      std::pair{"uniform bool colorMatrixEnabled;", "const bool colorMatrixEnabled = false;"}}) {
+    source.replace(source.find(replacement.first), std::string(replacement.first).size(), replacement.second);
   }
-)";
+  source.insert(source.find("uniform bool nearestSampling;"), "const bool blockImage = false;\n");
+  return source;
 }
 }  // namespace pmjs::renderer_shaders

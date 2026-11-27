@@ -414,7 +414,12 @@ void Renderer::createPixiPrograms(const std::string& precision) {
   GLuint canvasTriangleBitmap = 0;
   try {
     filter = linkPixiProgram(vertexSource, fragmentSource);
-    displacement = linkPixiProgram(vertexSource, displacementFragmentSource);
+    try {
+      displacement = linkPixiProgram(vertexSource, displacementFragmentSource);
+    } catch (const std::exception& error) {
+      displacement = 0;
+      Log(LogLevel::Warning) << "[pmjs-renderer] displacement shader unavailable: " << error.what();
+    }
     simple = linkPixiProgram(vertexSource, simpleFragmentSource);
     multiTextureSprite = linkPixiProgram(vertexSource,
       multiTextureSpriteFragmentSource);
@@ -480,15 +485,20 @@ void Renderer::createPixiPrograms(const std::string& precision) {
   if (canvasTriangleBitmapProgram_) glDeleteProgram(canvasTriangleBitmapProgram_);
   program_ = filter;
   displacement_.program = displacement;
-  displacement_.targetYDown = glGetUniformLocation(displacement, "targetYDown");
-  displacement_.imageYDown = glGetUniformLocation(displacement, "imageYDown");
-  displacement_.textureSize = glGetUniformLocation(displacement, "imageDimensions");
-  displacement_.displacementImage = glGetUniformLocation(displacement, "displacementImage");
-  displacement_.bounds = glGetUniformLocation(displacement, "displacementBounds");
-  displacement_.scale = glGetUniformLocation(displacement, "displacementScale");
-  glUseProgram(displacement);
-  glUniform1i(glGetUniformLocation(displacement, "image"), 0);
-  glUniform1i(displacement_.displacementImage, 2);
+  if (displacement) {
+    displacement_.targetYDown = glGetUniformLocation(displacement, "targetYDown");
+    displacement_.imageYDown = glGetUniformLocation(displacement, "imageYDown");
+    displacement_.textureSize = glGetUniformLocation(displacement, "imageDimensions");
+    displacement_.displacementImage = glGetUniformLocation(displacement, "displacementImage");
+    displacement_.bounds = glGetUniformLocation(displacement, "displacementBounds");
+    displacement_.scale = glGetUniformLocation(displacement, "displacementScale");
+    glUseProgram(displacement);
+    glUniform1i(glGetUniformLocation(displacement, "image"), 0);
+    glUniform1i(displacement_.displacementImage, 2);
+  } else {
+    displacement_.targetYDown = displacement_.imageYDown = displacement_.textureSize = -1;
+    displacement_.displacementImage = displacement_.bounds = displacement_.scale = -1;
+  }
   simpleProgram_ = simple;
   multiTextureSprite_.program = multiTextureSprite;
   multiTextureSprite_.projection = glGetUniformLocation(multiTextureSprite, "spriteProjection");
