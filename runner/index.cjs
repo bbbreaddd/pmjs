@@ -168,9 +168,12 @@ async function prepareStartupAssets(options, native, settings) {
   const { readAssetIndex, loadAssetIndex } = require('./asset-index.cjs');
   let indexed = readAssetIndex(options.assetIndex);
   const { loadCatalog, rebuildMarker } = require('./preparation-catalog.cjs');
+  const saveFilesRoot = path.join(options.saveRoot, 'game-files', 'files');
+  const sourceRoots = [...(options.preparedGameRoots || [])];
+  if (fs.existsSync(saveFilesRoot)) sourceRoots.push(saveFilesRoot);
   const preparationOptions = { gameRoot: options.gameRoot,
     virtualFiles: options.virtualFiles,
-    sourceRoots: [...(options.preparedGameRoots || []), path.join(options.saveRoot, 'game-files', 'files')],
+    sourceRoots,
     cacheRoot: options.assetPreparation.cacheRoot, native, ...options.assetPreparation,
     images: options.assetPreparation.enabled, recipes: options.assetPreparation.recipes,
     policyOverrides: options.assetPolicyOverrides, portableIndex: null,
