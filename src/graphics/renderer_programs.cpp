@@ -404,6 +404,7 @@ void Renderer::createPixiPrograms(const std::string& precision) {
     return linkProgram(vertex, source.c_str());
   };
   GLuint filter = 0;
+  GLuint displacement = 0;
   GLuint simple = 0;
   GLuint multiTextureSprite = 0;
   GLuint compact = 0, compactFill = 0;
@@ -413,6 +414,7 @@ void Renderer::createPixiPrograms(const std::string& precision) {
   GLuint canvasTriangleBitmap = 0;
   try {
     filter = linkPixiProgram(vertexSource, fragmentSource);
+    displacement = linkPixiProgram(vertexSource, displacementFragmentSource);
     simple = linkPixiProgram(vertexSource, simpleFragmentSource);
     multiTextureSprite = linkPixiProgram(vertexSource,
       multiTextureSpriteFragmentSource);
@@ -451,6 +453,7 @@ void Renderer::createPixiPrograms(const std::string& precision) {
     canvasTriangleBitmap = linkPixiProgram(tileVertexSource, bitmapSource.c_str());
   } catch (...) {
     if (filter) glDeleteProgram(filter);
+    if (displacement) glDeleteProgram(displacement);
     if (simple) glDeleteProgram(simple);
     if (multiTextureSprite) glDeleteProgram(multiTextureSprite);
     if (compact) glDeleteProgram(compact);
@@ -464,6 +467,7 @@ void Renderer::createPixiPrograms(const std::string& precision) {
     throw;
   }
   if (program_) glDeleteProgram(program_);
+  if (displacement_.program) glDeleteProgram(displacement_.program);
   if (simpleProgram_) glDeleteProgram(simpleProgram_);
   if (multiTextureSprite_.program) glDeleteProgram(multiTextureSprite_.program);
   if (compactSprite_.program) glDeleteProgram(compactSprite_.program);
@@ -475,6 +479,16 @@ void Renderer::createPixiPrograms(const std::string& precision) {
   if (meshPostTintOverlayProgram_) glDeleteProgram(meshPostTintOverlayProgram_);
   if (canvasTriangleBitmapProgram_) glDeleteProgram(canvasTriangleBitmapProgram_);
   program_ = filter;
+  displacement_.program = displacement;
+  displacement_.targetYDown = glGetUniformLocation(displacement, "targetYDown");
+  displacement_.imageYDown = glGetUniformLocation(displacement, "imageYDown");
+  displacement_.textureSize = glGetUniformLocation(displacement, "imageDimensions");
+  displacement_.displacementImage = glGetUniformLocation(displacement, "displacementImage");
+  displacement_.bounds = glGetUniformLocation(displacement, "displacementBounds");
+  displacement_.scale = glGetUniformLocation(displacement, "displacementScale");
+  glUseProgram(displacement);
+  glUniform1i(glGetUniformLocation(displacement, "image"), 0);
+  glUniform1i(displacement_.displacementImage, 2);
   simpleProgram_ = simple;
   multiTextureSprite_.program = multiTextureSprite;
   multiTextureSprite_.projection = glGetUniformLocation(multiTextureSprite, "spriteProjection");
@@ -821,6 +835,7 @@ void Renderer::releaseResources(bool constructorFailure) {
   if (vertexBuffer_) glDeleteBuffers(1, &vertexBuffer_);
   if (vertexArray_) glDeleteVertexArrays(1, &vertexArray_);
   if (program_) glDeleteProgram(program_);
+  if (displacement_.program) glDeleteProgram(displacement_.program);
   if (simpleProgram_) glDeleteProgram(simpleProgram_);
   if (multiTextureSprite_.program) glDeleteProgram(multiTextureSprite_.program);
   if (compactSprite_.program) glDeleteProgram(compactSprite_.program);

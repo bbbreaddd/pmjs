@@ -961,6 +961,25 @@ constexpr const char* fragmentSource = R"(#version 300 es
     if (!premultipliedInput) outputColor.rgb *= outputColor.a;
   }
 )";
+constexpr const char* displacementFragmentSource = R"(#version 300 es
+  precision mediump float;
+  uniform sampler2D image, displacementImage;
+  uniform bool imageYDown;
+  uniform vec2 imageDimensions, displacementScale;
+  uniform vec4 displacementBounds;
+  in vec2 vertexUv;
+  in vec4 vertexColor, vertexUvClamp;
+  out vec4 outputColor;
+  void main() {
+    vec2 maskUv = (vertexUv * imageDimensions - displacementBounds.xy) /
+      displacementBounds.zw;
+    vec2 displacement = texture(displacementImage, maskUv).rg - vec2(0.5);
+    vec2 sampleUv = clamp(vertexUv + displacement * displacementScale /
+      imageDimensions, vertexUvClamp.xy, vertexUvClamp.zw);
+    outputColor = texture(image, vec2(sampleUv.x,
+      imageYDown ? 1.0 - sampleUv.y : sampleUv.y)) * vertexColor;
+  }
+)";
 
 inline std::string pixiFragmentSourceWithPrecision(const char* base,
                                                   const std::string& precision) {
@@ -1098,6 +1117,7 @@ constexpr const char* blockSpriteSamplingSource = R"(
       if (blockNearest) return vec4(channelBlockTexel(ivec2(floor(coordinate)))) / 255.0;
       highp vec2 position = roundEven((coordinate - vec2(0.5)) * 256.0) / 256.0;
       highp ivec2 pixel = ivec2(floor(position)), weight = ivec2(fract(position) * 256.0);
+      if (all(equal(weight, ivec2(0)))) return vec4(channelBlockTexel(pixel)) / 255.0;
       highp ivec4 a = channelBlockTexel(pixel), b = channelBlockTexel(pixel + ivec2(1, 0));
       highp ivec4 c = channelBlockTexel(pixel + ivec2(0, 1)), d = channelBlockTexel(pixel + ivec2(1));
       highp ivec4 top = a * (256 - weight.x) + b * weight.x;
@@ -2100,21 +2120,42 @@ inline std::string plainBitmapRegionFragmentSource() {
   return source;
 }
 inline std::string directSpriteColorFragmentSource() {
-  std::string source(spriteEffectFragmentSource);
-  source.replace(source.find("highp vec4 sampleBlockImage(highp vec2 coordinate);"),
-    std::string("highp vec4 sampleBlockImage(highp vec2 coordinate);").size(),
-    "highp vec4 sampleBlockImage(highp vec2 coordinate) { return vec4(0.0); }");
-  for (const auto& replacement : {
-      std::pair{"uniform int paletteImage;", "const int paletteImage = 0;"},
-      std::pair{"uniform bool standaloneBitmapRegion;", "const bool standaloneBitmapRegion = false;"},
-      std::pair{"uniform bool derivedImage;", "const bool derivedImage = false;"},
-      std::pair{"uniform float blurRadius;", "const float blurRadius = 0.0;"},
-      std::pair{"uniform bool maskEnabled;", "const bool maskEnabled = false;"},
-      std::pair{"uniform bool spriteColorEnabled;", "const bool spriteColorEnabled = true;"},
-      std::pair{"uniform bool colorMatrixEnabled;", "const bool colorMatrixEnabled = false;"}}) {
-    source.replace(source.find(replacement.first), std::string(replacement.first).size(), replacement.second);
+  return R"(#version 300 es
+  precision mediump float;
+  uniform highp sampler2D image;
+  uniform bool pixiSpritePacking, texturePremultiplied;
+  uniform bool clampedTilingSampling, atlasTilingSampling;
+  uniform highp vec4 tilingAtlasMapping, tilingAtlasBounds;
+  uniform highp vec2 imageDimensions;
+  uniform vec4 spriteColorTone, spriteBlendColor;
+  in highp vec2 vertexUv;
+  in highp vec4 vertexColor;
+  out highp vec4 outputColor;
+  void main() {
+    highp vec2 coord = vertexUv;
+    if (clampedTilingSampling) {
+      highp vec2 margin = vec2(0.5) / imageDimensions;
+      coord = coord + ceil(-coord);
+      if (atlasTilingSampling) {
+        coord = clamp(coord * tilingAtlasMapping.xy + tilingAtlasMapping.zw,
+          tilingAtlasBounds.xy, tilingAtlasBounds.zw);
+      } else coord = clamp(coord, margin, vec2(1.0) - margin);
+    }
+    highp vec4 sampleColor = texture(image, coord);
+    if (texturePremultiplied && sampleColor.a > 0.0) sampleColor.rgb /= sampleColor.a;
+    if (sampleColor.a > 0.0) {
+      vec3 straightColor = sampleColor.rgb;
+      float gray = dot(straightColor, vec3(0.299, 0.587, 0.114));
+      straightColor = mix(straightColor, vec3(gray), spriteColorTone.a);
+      straightColor = clamp(straightColor + spriteColorTone.rgb, 0.0, 1.0);
+      if (all(equal(spriteColorTone, vec4(0.0)))) {
+        straightColor = sampleColor.rgb * sampleColor.a;
+      }
+      sampleColor.rgb = mix(straightColor, spriteBlendColor.rgb, spriteBlendColor.a);
+    }
+    outputColor = sampleColor * vertexColor;
+    outputColor.rgb *= pixiSpritePacking ? sampleColor.a : outputColor.a;
   }
-  source.insert(source.find("uniform bool nearestSampling;"), "const bool blockImage = false;\n");
-  return source;
+)";
 }
 }  // namespace pmjs::renderer_shaders

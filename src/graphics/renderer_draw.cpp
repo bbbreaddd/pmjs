@@ -1349,29 +1349,38 @@ void Renderer::renderScene() {
       }
       glViewport(0, 0, static_cast<int>(rasterFrame[2] * rasterResolution), static_cast<int>(rasterFrame[3] * rasterResolution));
       ensurePixiPrograms();
-      glUseProgram(program_);
-      projectTarget(program_);
-      activeProgram = program_;
-      glUniform1i(filterTargetYDownUniform_, 0);
+      const bool displacementFilter =
+        filter.filterKind == scene_packet::FilterKind::displacement;
+      const std::uint32_t compositeProgram =
+        displacementFilter ? displacement_.program : program_;
+      glUseProgram(compositeProgram);
+      projectTarget(compositeProgram);
+      activeProgram = compositeProgram;
+      glUniform1i(displacementFilter ? displacement_.targetYDown : filterTargetYDownUniform_, 0);
       // Authored filter content projects downward; internal passes project upward.
       bool sourceYDown = true;
-      glUniform1i(filterImageYDownUniform_, sourceYDown);
+      glUniform1i(displacementFilter ? displacement_.imageYDown : filterImageYDownUniform_, sourceYDown);
       glBindVertexArray(vertexArray_);
       glActiveTexture(GL_TEXTURE0);
       glBindTexture(GL_TEXTURE_2D, groupTargets_[filterDepth].texture);
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-      textureNearestState_[groupTargets_[filterDepth].texture] = false;
-      glUniform2f(textureSizeUniform_,
+      if (const auto nearest = textureNearestState_.find(groupTargets_[filterDepth].texture);
+          nearest == textureNearestState_.end() || nearest->second) {
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        textureNearestState_[groupTargets_[filterDepth].texture] = false;
+      }
+      glUniform2f(displacementFilter ? displacement_.textureSize : textureSizeUniform_,
                   static_cast<float>(width_) / filter.filterResolution,
                   static_cast<float>(height_) / filter.filterResolution);
-      glUniform1i(maskEnabledUniform_, 0);
-      glUniform1i(colorMatrixEnabledUniform_, 0);
-      glUniform1i(spriteColorEnabledUniform_, 0);
-      glUniform1i(displacementEnabledUniform_, 0);
-      glUniform1i(noiseGlitchEnabledUniform_, 0);
-      glUniform1i(pixiFilterKindUniform_, 0);
-      glUniform1i(premultipliedInputUniform_, 1);
+      if (!displacementFilter) {
+        glUniform1i(maskEnabledUniform_, 0);
+        glUniform1i(colorMatrixEnabledUniform_, 0);
+        glUniform1i(spriteColorEnabledUniform_, 0);
+        glUniform1i(displacementEnabledUniform_, 0);
+        glUniform1i(noiseGlitchEnabledUniform_, 0);
+        glUniform1i(pixiFilterKindUniform_, 0);
+        glUniform1i(premultipliedInputUniform_, 1);
+      }
 
       const bool pictureBlend =
         filter.filterKind == scene_packet::FilterKind::pictureBlend;
@@ -1464,24 +1473,26 @@ void Renderer::renderScene() {
         }
         compositeTexture = sourceTexture;
       } else if (filter.filterKind == scene_packet::FilterKind::displacement) {
-        glUniform1f(blurUniform_, 0);
-        glUniform2f(blurDirectionUniform_, 0, 0);
         const auto displacement = images_.lookup(filter.image);
         if (!displacement) continue;
         glActiveTexture(GL_TEXTURE2);
         glBindTexture(GL_TEXTURE_2D, displacement->texture);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-        textureNearestState_[displacement->texture] = false;
-        textureRepeatState_[displacement->texture] = true;
-        glUniform1i(displacementImageUniform_, 2);
-        glUniform4fv(displacementBoundsUniform_, 1,
+        if (const auto nearest = textureNearestState_.find(displacement->texture);
+            nearest == textureNearestState_.end() || nearest->second) {
+          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+          textureNearestState_[displacement->texture] = false;
+        }
+        if (const auto repeat = textureRepeatState_.find(displacement->texture);
+            repeat == textureRepeatState_.end() || !repeat->second) {
+          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+          textureRepeatState_[displacement->texture] = true;
+        }
+        glUniform4fv(displacement_.bounds, 1,
                      filter.filterParameters.data());
-        glUniform2fv(displacementScaleUniform_, 1,
+        glUniform2fv(displacement_.scale, 1,
                      filter.filterParameters.data() + 4);
-        glUniform1i(displacementEnabledUniform_, 1);
         glActiveTexture(GL_TEXTURE0);
       } else if (filter.filterKind == scene_packet::FilterKind::alphaMask) {
         glUniform1f(blurUniform_, 0);
@@ -1835,13 +1846,15 @@ void Renderer::renderScene() {
         }
       }
       if (pictureBlend) glEnable(GL_BLEND);
-      glUniform1i(displacementEnabledUniform_, 0);
-      glUniform1i(noiseGlitchEnabledUniform_, 0);
-      glUniform1i(pixiFilterKindUniform_, 0);
-      glUniform1i(premultipliedInputUniform_, 1);
-      glUniform1i(maskEnabledUniform_, 0);
-      glUniform1i(colorMatrixEnabledUniform_, 0);
-      glUniform1i(spriteColorEnabledUniform_, 0);
+      if (!displacementFilter) {
+        glUniform1i(displacementEnabledUniform_, 0);
+        glUniform1i(noiseGlitchEnabledUniform_, 0);
+        glUniform1i(pixiFilterKindUniform_, 0);
+        glUniform1i(premultipliedInputUniform_, 1);
+        glUniform1i(maskEnabledUniform_, 0);
+        glUniform1i(colorMatrixEnabledUniform_, 0);
+        glUniform1i(spriteColorEnabledUniform_, 0);
+      }
       applyBlendMode(activeBlend);
       continue;
     }

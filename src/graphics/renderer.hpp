@@ -533,6 +533,11 @@ class Renderer {
   std::vector<FilterContentBounds> filterBounds_;
   bool filterBoundsEnabled_ = true;
   std::uint32_t program_ = 0;
+  struct {
+    std::uint32_t program = 0;
+    int targetYDown = -1, imageYDown = -1, textureSize = -1;
+    int displacementImage = -1, bounds = -1, scale = -1;
+  } displacement_;
   std::uint32_t simpleProgram_ = 0;
   struct CompactSpriteProgram {
     std::uint32_t program = 0;
