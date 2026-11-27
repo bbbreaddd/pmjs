@@ -200,7 +200,8 @@ Renderer::Renderer(int width, int height, ImageStore& images)
   bitmapRegion_.program = linkProgram(bitmapRegionVertexSource().c_str(), withBlockSpriteSampling(bitmapRegionFragmentSource()).c_str());
   plainBitmapRegion_.program = linkProgram(bitmapRegionVertexSource().c_str(), plainBitmapRegionFragmentSource().c_str());
   directSprite_.program = linkProgram(vertexSource, directSpriteFragmentSource);
-  for (auto* entry : {&spriteEffect_, &bitmapRegion_, &plainBitmapRegion_, &directSprite_}) {
+  directSpriteColor_.program = linkProgram(vertexSource, directSpriteColorFragmentSource().c_str());
+  for (auto* entry : {&spriteEffect_, &bitmapRegion_, &plainBitmapRegion_, &directSprite_, &directSpriteColor_}) {
     auto& effect = *entry;
     effect.targetYDown = glGetUniformLocation(effect.program, "targetYDown");
     effect.vertices = glGetUniformLocation(effect.program, "spriteWorldVertices");
@@ -830,6 +831,7 @@ void Renderer::releaseResources(bool constructorFailure) {
   if (bitmapRegion_.program) glDeleteProgram(bitmapRegion_.program);
   if (plainBitmapRegion_.program) glDeleteProgram(plainBitmapRegion_.program);
   if (directSprite_.program) glDeleteProgram(directSprite_.program);
+  if (directSpriteColor_.program) glDeleteProgram(directSpriteColor_.program);
   if (tileProgram_) glDeleteProgram(tileProgram_);
   if (fourTileProgram_) glDeleteProgram(fourTileProgram_);
   if (nearestTileProgram_) glDeleteProgram(nearestTileProgram_);

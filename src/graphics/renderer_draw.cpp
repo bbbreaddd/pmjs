@@ -2206,8 +2206,12 @@ void Renderer::renderScene() {
       !operation.appliesSpriteColor && !operation.standaloneBitmapRegion &&
       operation.inlineMatrix == nullptr;
     // Keep ordinary sampling separate from the larger decoding programs.
-    const bool directSprite = unfilteredSprite && !operation.derivedImage && !operation.block &&
+    const bool directEligible = operation.blur <= 0 && operation.maskImage == 0 &&
+      !operation.standaloneBitmapRegion && operation.inlineMatrix == nullptr &&
+      !operation.derivedImage && !operation.block &&
       (!operation.paletteTable || (operation.nearest && !operation.paletteBlocks));
+    const bool directSprite = directEligible && !operation.appliesSpriteColor;
+    const bool directSpriteColor = directEligible && !operation.paletteTable && operation.appliesSpriteColor;
     const bool simpleSprite = unfilteredSprite && !directSprite;
     if (operation.multiTextureSprite && operation.textureCount > 1) {
       ensurePixiPrograms();
@@ -2256,7 +2260,9 @@ void Renderer::renderScene() {
       !operation.appliesSpriteColor && operation.premultipliedSpriteTexture &&
       !operation.derivedImage && !operation.paletteTable && !operation.block &&
       !operation.maskImage && !operation.inlineMatrix;
-    const auto& spriteEffect = directSprite ? directSprite_ : plainRegion ? plainBitmapRegion_ :
+    const auto& spriteEffect = directSprite ? directSprite_ :
+      directSpriteColor ? directSpriteColor_ :
+      plainRegion ? plainBitmapRegion_ :
       operation.standaloneBitmapRegion && operation.blur <= 0 &&
         !operation.appliesSpriteColor ? bitmapRegion_ : spriteEffect_;
     if (simpleSprite) ensurePixiPrograms();

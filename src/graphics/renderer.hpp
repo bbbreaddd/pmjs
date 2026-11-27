@@ -594,7 +594,7 @@ class Renderer {
     int matrix = -1;
     int matrixAlpha = -1;
   };
-  SpriteEffectProgram spriteEffect_, bitmapRegion_, directSprite_;
+  SpriteEffectProgram spriteEffect_, bitmapRegion_, directSprite_, directSpriteColor_;
   SpriteEffectProgram plainBitmapRegion_;
   std::uint32_t clearTriangleProgram_ = 0;
   int clearTrianglePointsUniform_ = -1;

@@ -2099,4 +2099,22 @@ inline std::string plainBitmapRegionFragmentSource() {
     "#define PMJS_PLAIN_BITMAP_REGION\n");
   return source;
 }
+inline std::string directSpriteColorFragmentSource() {
+  std::string source(spriteEffectFragmentSource);
+  source.replace(source.find("highp vec4 sampleBlockImage(highp vec2 coordinate);"),
+    std::string("highp vec4 sampleBlockImage(highp vec2 coordinate);").size(),
+    "highp vec4 sampleBlockImage(highp vec2 coordinate) { return vec4(0.0); }");
+  for (const auto& replacement : {
+      std::pair{"uniform int paletteImage;", "const int paletteImage = 0;"},
+      std::pair{"uniform bool standaloneBitmapRegion;", "const bool standaloneBitmapRegion = false;"},
+      std::pair{"uniform bool derivedImage;", "const bool derivedImage = false;"},
+      std::pair{"uniform float blurRadius;", "const float blurRadius = 0.0;"},
+      std::pair{"uniform bool maskEnabled;", "const bool maskEnabled = false;"},
+      std::pair{"uniform bool spriteColorEnabled;", "const bool spriteColorEnabled = true;"},
+      std::pair{"uniform bool colorMatrixEnabled;", "const bool colorMatrixEnabled = false;"}}) {
+    source.replace(source.find(replacement.first), std::string(replacement.first).size(), replacement.second);
+  }
+  source.insert(source.find("uniform bool nearestSampling;"), "const bool blockImage = false;\n");
+  return source;
+}
 }  // namespace pmjs::renderer_shaders
