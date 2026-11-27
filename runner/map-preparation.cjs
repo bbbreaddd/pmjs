@@ -180,7 +180,7 @@ async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, heig
   const started = performance.now(), root = path.join(cacheRoot, 'maps');
   const result = { enabled: true, selected: 0, refused: 0, generated: 0, hits: 0, negativeHits: 0,
     installed: 0, compilationHits: 0, indexedCopies: 0, nativePacks: 0, earlyRefusals: 0, processingMs: 0,
-    verifiedRegions: 0, identityRefreshes: 0, snapshotBytes: 0, additionalSnapshotBytes: 0, pageBytes: 0, durationMs: 0, cancelled: false, maps: [], index: {} };
+    verifiedRegions: 0, identityRefreshes: 0, snapshotBytes: 0, additionalSnapshotBytes: 0, pageBytes: 0, durationMs: 0, cancelled: false, maps: [], index: {}, ordinaryFailures: [] };
   const files = session.files;
   const digest = file => files.hash(file, 'map-input');
   const entries = [], keys = [], snapshots = new Map(), sourceDependencies = new Map();
@@ -310,11 +310,11 @@ async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, heig
       const filename = data[index], mapId = Number(filename.match(/\d+/)[0]);
       report('compile', filename, index, data.length);
       let declined = false;
-      let stage, row = { mapId, filename, selected: false };
+      let stage, dependencies, row = { mapId, filename, selected: false };
       try {
         const tiledFile = 'maps/Map'+mapId+'.json';
         const tiled = game.exists(tiledFile), cachedInputs = previousInputs[filename];
-        let dependencies, demand, compile, visualContract, cachedEntryKey, cachedEntrySources;
+        let demand, compile, visualContract, cachedEntryKey, cachedEntrySources;
         const compilationKey = inputs => identity({ compiler: COMPILER_VERSION, processor: native.assets.tilePreparationVersion,
           compilation: true, dependencies: [...sharedDependencies,...inputs].map(input=>input.hash), width, height });
         if (!recompileMapInputs.has(filename) && cachedInputs && cachedInputs.tiled === tiled) {
@@ -332,8 +332,8 @@ async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, heig
         }
         if (!demand) {
           const input = game.read('data/'+filename);
-          const map = JSON.parse(input.bytes);
           dependencies = [input.dependency];
+          const map = JSON.parse(input.bytes);
           if (tiled) {
             const tiledInput = game.read(tiledFile), resolved = await resolveTiled(game, JSON.parse(tiledInput.bytes));
             dependencies.push(tiledInput.dependency, ...resolved.dependencies);
@@ -525,6 +525,15 @@ async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, heig
       } catch (error) {
         row.reason = error.message; ++result.refused;
         session.outcome('map:' + filename, declined ? 'ordinary-choice' : 'ordinary-failure', error.message);
+        if (!declined && dependencies?.length) {
+          const failureDependencies = dependencies
+            .filter(dep => dep && typeof dep.logical === 'string' && typeof dep.file === 'string' &&
+              HASH.test(dep.hash || '') && typeof (files.receipts[dep.file]?.identity || dep.sourceIdentity) === 'string')
+            .map(dep => ({ source: dep.logical, file: dep.file,
+              identity: files.receipts[dep.file]?.identity || dep.sourceIdentity, hash: dep.hash }));
+          if (failureDependencies.length === dependencies.length)
+            result.ordinaryFailures.push({ source: filename, reason: error.message, dependencies: failureDependencies });
+        }
         logger.warn('[pmjs] map preparation ordinary '+filename+': '+error.message);
       } finally {
         if (stage) await fsp.rm(stage, { recursive: true, force: true });

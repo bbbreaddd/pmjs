@@ -44,9 +44,18 @@ for (let i = 0; i < 16; ++i) encrypted[i] ^= encryptionKey[i];
 const encryptedSource = 'img/pictures/secret.png_';
 fs.writeFileSync(path.join(gameRoot, encryptedSource), Buffer.concat([
   Buffer.from('5250474d560000000003010000000000', 'hex'), encrypted ]));
+fs.mkdirSync(path.join(gameRoot, 'js'), { recursive: true });
+fs.writeFileSync(path.join(gameRoot, 'js/rpg_core.js'),
+  '\nfunction Tilemap() {}\nTilemap.prototype._drawNormalTile = function() {};\n' +
+  'Tilemap.prototype._drawAutotile = function() {};\nTilemap.prototype._drawTableEdge = function() {};\n' +
+  '\nfunction ShaderTilemap() {}\n');
 fs.mkdirSync(path.join(gameRoot, 'data'), { recursive: true });
 fs.writeFileSync(path.join(gameRoot, 'data/System.json'), JSON.stringify({
   hasEncryptedImages: true, encryptionKey: encryptionKey.toString('hex') }));
+fs.writeFileSync(path.join(gameRoot, 'data/Tilesets.json'), JSON.stringify([null, {
+  id: 1, tilesetNames: ['', '', '', '', '', '', '', '', ''], flags: [] }]));
+const brokenMap = path.join(gameRoot, 'data/Map001.json');
+fs.writeFileSync(brokenMap, JSON.stringify({ tilesetId: 1, width: 1, height: 1, data: [0, 0, 0, 0, 0, 0] }));
 const processorDir = path.join(root, 'processors');
 fs.mkdirSync(processorDir);
 const processor = path.join(processorDir, 'fixture.pmjs-processor.cjs');
@@ -144,6 +153,24 @@ async function run() {
   const system = JSON.parse(fs.readFileSync(systemFile));
   fs.writeFileSync(systemFile, JSON.stringify({ ...system, gameTitle: 'changed' }));
   assert.equal(await loadCatalog(options), null, 'encrypted decode failures depend on encryption settings');
+  fs.writeFileSync(path.join(gameRoot, encryptedSource), Buffer.concat([
+    Buffer.from('5250474d560000000003010000000000', 'hex'), encrypted ]));
+  fs.writeFileSync(brokenMap, '{"bad": "\n"}');
+  const mapOptions = { ...options, maps: true, width: 64, height: 64 };
+  const mapFailure = await prepareGameAssets(mapOptions);
+  assert.equal(mapFailure.catalogSaved, true);
+  assert.equal(mapFailure.images.failedFiles, 0);
+  assert.equal(mapFailure.maps.ordinaryFailures.length, 1);
+  assert.equal(mapFailure.maps.ordinaryFailures[0].source, 'Map001.json');
+  assert.deepEqual(mapFailure.maps.ordinaryFailures[0].dependencies.map(item => item.source), ['data/Map001.json']);
+  mapFailure.releaseCacheLease();
+  const mapWarm = await loadCatalog(mapOptions);
+  assert.ok(mapWarm?.images.catalogHit);
+  assert.equal(mapWarm.images.failedFiles, 0);
+  assert.equal(mapWarm.maps.ordinaryFailures.length, 1);
+  mapWarm.releaseCacheLease();
+  fs.writeFileSync(brokenMap, JSON.stringify({ tilesetId: 1, width: 1, height: 1, data: [0, 0, 0, 0, 0, 0] }));
+  assert.equal(await loadCatalog(mapOptions), null, 'repaired maps invalidate a recorded map failure');
   console.log('native prepared image catalog restored successfully');
 }
 run().catch(error => { console.error(error); process.exitCode = 1; })

@@ -35,10 +35,15 @@ function signature(options) {
 
 async function saveCatalog(options, session, result) {
   const images = result.images || {}, maps = result.maps || {};
-  const ordinaryFailures = images.ordinaryFailures || [];
-  const recordedFailures = new Set(ordinaryFailures.map(item => 'image:' + item.source));
+  const imageFailures = images.ordinaryFailures || [];
+  const mapFailures = maps.ordinaryFailures || [];
+  const ordinaryFailures = [
+    ...imageFailures.map(item => ({ ...item, id: 'image:' + item.source })),
+    ...mapFailures.map(item => ({ ...item, id: 'map:' + item.source }))
+  ];
+  const recordedFailures = new Set(ordinaryFailures.map(item => item.id));
   if ((options.verifyHashes && !options.forceRebuild) || result.cancelled || session.persistenceWarning || images.error || maps.error ||
-      (images.failedFiles || 0) !== ordinaryFailures.length || images.installFailures ||
+      (images.failedFiles || 0) !== imageFailures.length || images.installFailures ||
       [...session.outcomes.values()].some(item => item.outcome === 'ordinary-failure' && !recordedFailures.has(item.id))) return false;
   const entries = images.entries || [], derived = images.decryptedEntries || [], tiles = maps.entries || [];
   if (entries.some(entry => !Array.isArray(entry.pageIdentities)) || derived.some(entry => !entry.fileIdentity) ||
@@ -142,9 +147,11 @@ async function loadCatalog(options) {
       native.assets.preparedMapIndex = data.mapIndex;
     }
     const lease = releaseLease;
+    const imageFailures = data.ordinaryFailures.filter(item => !item.id || item.id.startsWith('image:'));
     return { images: { entries: data.entries, decryptedEntries: data.derived, storageEntries: data.storage,
-      installed: data.entries.length, failedFiles: data.ordinaryFailures.length, fallback: data.ordinaryFailures.length,
-      ordinaryFailures: data.ordinaryFailures, catalogHit: true }, maps: { entries: data.tiles, index: data.mapIndex },
+      installed: data.entries.length, failedFiles: imageFailures.length, fallback: imageFailures.length,
+      ordinaryFailures: imageFailures, catalogHit: true }, maps: { entries: data.tiles, index: data.mapIndex,
+      ordinaryFailures: data.ordinaryFailures.filter(item => item.id?.startsWith('map:')) },
       portArtifacts: new Map(data.portArtifacts), portArtifactHashes: data.artifactHashes, releaseCacheLease: lease,
       ...createInvalidators(root, native, logger) };
   } catch (error) {
