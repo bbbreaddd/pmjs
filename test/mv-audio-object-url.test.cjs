@@ -848,3 +848,60 @@ for (const outcome of ['reviewed', 'unknown', 'failed']) {
     assert.equal(context.helperLoads.at(-1), 'stbvorbis_stream.js');
   });
 }
+
+
+test('direct MV audio construction infers recognized folders and preserves explicit intent', () => {
+  const context = contextFor({ hasEncryptedAudio: false });
+  const intents = [];
+  context.NativeHost.media.loadAudio = (_path, options) => {
+    intents.push(options.intent);
+    return { handle: intents.length, duration: 1 };
+  };
+  for (const url of ['audio/se/tone.ogg', './audio/bgm/tone.ogg',
+    'file:///game/audio/bgs/tone.ogg', 'audio/me/tone.ogg', 'custom/se/tone.ogg']) {
+    new context.WebAudio(url);
+  }
+  new context.WebAudio('audio/se/tone.ogg', 'music');
+  new context.WebAudio('audio/se/tone.ogg', 'unknown');
+  context.AudioManager._path = 'custom/';
+  new context.WebAudio('custom/se/tone.ogg');
+  assert.deepEqual(intents, ['effect', 'music', 'ambient', 'jingle', 'unknown', 'music', 'unknown', 'effect']);
+});
+
+test('OMORI cache accounting evicts native-backed sounds without destroying retained buffers', () => {
+  const context = contextFor({ hasEncryptedAudio: false }, undefined, Date, true);
+  let next = 0;
+  context.NativeHost.media.loadAudio = () => ({ handle: ++next, duration: 1 });
+  runModule(context, 'patches/omori/plugins.js');
+  vm.runInContext(`WebAudio.prototype.bufferSize = function() {
+    return this._buffer ? this._buffer.length : null;
+};`, context);
+  const buffers = Array.from({ length: 119 }, (_, i) => new context.WebAudio('audio/se/tone'+i+'.ogg'));
+  assert.equal(buffers.every(buffer => buffer.bufferSize() === null), true);
+  context.installStreamingPlugin();
+  vm.runInContext('WebAudio = class extends WebAudio {};', context);
+  context.PMJS.methods.install();
+  assert.equal(new context.WebAudio('audio/se/later.ogg').bufferSize(), 384000);
+  assert.deepEqual(context.compatHits, []);
+  let remaining = 20000000;
+  const cache = buffers.filter(buffer => {
+    if (remaining <= 0) return false;
+    remaining -= buffer.bufferSize();
+    return true;
+  });
+  assert.equal(cache.length, 53);
+  assert.equal(buffers[118].isReady(), true);
+  assert.deepEqual(context.released, [], 'evicting membership must not release externally retained voices');
+  buffers[118].clear();
+  assert.equal(buffers[118].bufferSize(), 0);
+});
+
+test('OMORI preserves unrecognized guest audio accounting', () => {
+  const context = contextFor({ hasEncryptedAudio: false }, undefined, Date, true);
+  runModule(context, 'patches/omori/plugins.js');
+  const custom = function() { return 123; };
+  context.WebAudio.prototype.bufferSize = custom;
+  context.PMJS.methods.install();
+  assert.equal(context.WebAudio.prototype.bufferSize, custom);
+  assert.deepEqual(context.compatHits, [['omori.audio-cache-size', 'unrecognized audio cache accounting']]);
+});

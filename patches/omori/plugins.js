@@ -24,6 +24,22 @@
       };
     });
   }
+  var nativeBufferSize = typeof MvNativeWebAudio !== 'undefined' && MvNativeWebAudio.prototype.bufferSize;
+  if (nativeBufferSize) PMJS.methods.own({
+    key: 'WebAudio.prototype.bufferSize', id: 'port.omori.audio-cache-size',
+    getTarget: function() { return MvNativeWebAudio.prototype; },
+    method: 'bufferSize',
+    replace: function(original) {
+      if (original === nativeBufferSize) return original;
+      if (!PMJS.methods.matchesSource(original,
+          '88ea258eb2c2ce3d2ac48916de659d1080e2552e27ccd1360bd799d9c8b09295')) {
+        PMJS.compat.hit('omori.audio-cache-size', 'unrecognized audio cache accounting');
+        return original;
+      }
+      return nativeBufferSize;
+    }
+  });
+
   function decryptIdentity() {
     return function(contents) { return contents; };
   }

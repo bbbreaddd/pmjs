@@ -2,6 +2,13 @@ var pmjsAudio = PMJS.rpgmaker.audio;
 
 function MvNativeWebAudio(url, intent) {
   this._url = String(url || '');
+  if (intent === undefined) {
+    var directory = typeof AudioManager !== 'undefined' && AudioManager._path || 'audio/';
+    var root = pmjsAudio.resolvePath(directory).replace(/\/$/, '') + '/';
+    var source = pmjsAudio.resolvePath(this._url);
+    intent = source.indexOf(root) === 0
+      ? pmjsAudio.intentForFolder(source.slice(root.length).split('/')[0]) : 'unknown';
+  }
   this._gainAutomation = pmjsAudio.createGain(1);
   this._voice = pmjsAudio.createVoice(intent, {
     equalPowerPan: true, gainAutomation: this._gainAutomation
