@@ -309,3 +309,15 @@ test('test-mode assistant menus receive updater defaults without overwriting sav
   const g = guestFixture(source.replace('config: {}', 'config: {_autoUpdater:{check:"allow"}}')); await g.start();
   assert.equal(g.scope.$modLoader.config._autoUpdater.check, 'allow');
 });
+
+test('plaintext non-JSON .json files pass through without failing AES decryption', () => {
+  const f = fixture();
+  f.write('js/main.js', 'const key = "' + 'a'.repeat(32) + '";');
+  f.write('mods/example/data/Quests.json', 'quests:\n  Aubergine:\n    world: 1\n');
+  f.write('mods/example/data/Short.json', 'short: 1\n');
+  f.prepare();
+  assert.equal(Buffer.from(f.native.runtime.gameFiles.readBytes('mods/example/data/Quests.json')).toString(), 'quests:\n  Aubergine:\n    world: 1\n');
+  assert.equal(Buffer.from(f.native.runtime.gameFiles.readBytes('mods/example/data/Short.json')).toString(), 'short: 1\n');
+  assert.throws(() => f.native.runtime.gameFiles.decode('data/Broken.KEL', Buffer.alloc(32, 0xff)), /cannot decode OMORI game file/);
+  assert.throws(() => f.native.runtime.gameFiles.decode('data/Tiny.KEL', Buffer.from([0xff, 0xfe, 0xfd])), /truncated OMORI game file/);
+});

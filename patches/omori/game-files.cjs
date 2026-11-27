@@ -38,11 +38,17 @@ function createGameFiles({ native, read, readAsync = async name => read(name), c
       return body;
     }
     if (/\.(json|yaml|js)$/i.test(logical) && !plainText(bytes, logical)) {
-      if (bytes.length < 16) throw new Error('truncated OMORI game file: ' + logical);
-      const cipher = crypto.createDecipheriv('aes-256-ctr', key(), bytes.subarray(0, 16));
-      const body = Buffer.concat([cipher.update(bytes.subarray(16)), cipher.final()]);
-      if (!plainText(body, logical, false)) throw new Error('cannot decode OMORI game file: ' + logical);
-      return body;
+      if (bytes.length >= 16) {
+        try {
+          const cipher = crypto.createDecipheriv('aes-256-ctr', key(), bytes.subarray(0, 16));
+          const body = Buffer.concat([cipher.update(bytes.subarray(16)), cipher.final()]);
+          if (plainText(body, logical, false)) return body;
+        } catch (error) {
+          if (!plainText(bytes, logical, false)) throw error;
+        }
+      }
+      if (plainText(bytes, logical, false)) return bytes;
+      throw new Error((bytes.length < 16 ? 'truncated OMORI game file: ' : 'cannot decode OMORI game file: ') + logical);
     }
     return bytes;
   }
