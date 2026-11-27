@@ -6,7 +6,7 @@ const vm = require('node:vm');
 const path = require('node:path');
 const { createFpsCounter } = require('../runner/fps-counter.cjs');
 
-function fixture() {
+function fixture(createCounter = createFpsCounter) {
   const overlays = [], fills = [];
   let created = 0, released = 0;
   const original = function(value) { return this.value + value; };
@@ -15,7 +15,7 @@ function fixture() {
     create() { ++created; return { handle: 7 }; }, release(handle) { assert.equal(handle, 7); ++released; },
     clearRect() { fills.length = 0; }, fillRect(...args) { fills.push(args); }
   }, render: { setPresentationOverlay(...args) { overlays.push(args); } } };
-  const counter = createFpsCounter(native, globals);
+  const counter = createCounter(native, globals);
   function expectLabels(labels) {
     const expected = [[7, 0, 0, 136, 56, 0x000000cc]], scope = {};
     vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-web/fallback-font.js'), 'utf8'), scope);
@@ -45,6 +45,39 @@ test('counter is idle while disabled and measures presentation and logic cadence
   f.counter.dispose();
   assert.equal(f.released(), 1);
   assert.equal(f.globals.SceneManager.updateScene, f.original);
+});
+
+test('flattened runtime loads fallback text for the counter and fontless settings', () => {
+  const { temporaryDirectory } = require('./helpers/temp.cjs');
+  const { createRequire } = require('node:module');
+  const root = temporaryDirectory('fallback-font-layout-');
+  fs.mkdirSync(path.join(root, 'js/pmjs-web'), { recursive: true });
+  fs.copyFileSync(path.join(__dirname, '../js/pmjs-web/fallback-font.js'),
+    path.join(root, 'js/pmjs-web/fallback-font.js'));
+  function load(name) {
+    const filename = path.join(__dirname, '../runner', name);
+    const module = { exports: {} };
+    vm.runInNewContext(fs.readFileSync(filename, 'utf8'),
+      { module, exports: module.exports, require: createRequire(filename), __dirname: root });
+    return module.exports;
+  }
+  const f = fixture(load('fps-counter.cjs').createFpsCounter);
+  f.counter.frame(true, 0);
+  f.expectLabels(['FPS ...', 'LOGIC ...']);
+  f.counter.dispose();
+  let pixels, presented = false;
+  const native = { render: { setPresentScaleMode() {} }, canvas: {
+    readPixels: () => new Uint8Array(128 * 32 * 4),
+    writePixels(handle, x, y, width, height, value) { pixels = value; }
+  }, runtime: {
+    settingsOverlay: () => ({ hasFont: false, canvas: 1, width: 128, height: 32,
+      lines: [{ x: 0, y: 0, pixel: 1, text: 'Settings' }] }),
+    settingsPresent(value) { presented = value; }
+  } };
+  const settings = load('settings.cjs').createSettings({ native, storage: { readText: () => null } });
+  settings.draw();
+  assert.equal(presented, true);
+  assert(pixels.some(value => value !== 0));
 });
 
 test('hiding clears the overlay once and re-enabling starts a fresh sample', () => {

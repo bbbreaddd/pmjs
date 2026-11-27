@@ -34,7 +34,8 @@ function createFpsCounter(native, globals = globalThis) {
     if (!canvas) {
       canvas = native.canvas.create(136, 56);
       const scope = {};
-      vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-web/fallback-font.js'), 'utf8'), scope);
+      const root = fs.existsSync(path.join(__dirname, 'js')) ? __dirname : path.resolve(__dirname, '..');
+      vm.runInNewContext(fs.readFileSync(path.join(root, 'js/pmjs-web/fallback-font.js'), 'utf8'), scope);
       fallbackText = scope.PMJS.web.fallbackText;
     }
     native.canvas.clearRect(canvas.handle, 0, 0, 136, 56);

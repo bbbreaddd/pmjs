@@ -119,7 +119,8 @@ function createSettings({ native, fonts, storage }) {
     if (overlay.hasFont) { native.runtime.settingsPresent(true); dirty = false; return; }
     if (!fallbackText) {
       const scope = {};
-      vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../js/pmjs-web/fallback-font.js'), 'utf8'), scope);
+      const root = fs.existsSync(path.join(__dirname, 'js')) ? __dirname : path.resolve(__dirname, '..');
+      vm.runInNewContext(fs.readFileSync(path.join(root, 'js/pmjs-web/fallback-font.js'), 'utf8'), scope);
       fallbackText = scope.PMJS.web.fallbackText;
     }
     const rasterWidth = overlay.width, rasterHeight = overlay.height;
