@@ -562,7 +562,10 @@ napi_value renderScene(napi_env env, napi_callback_info) try {
 
 napi_value swapFrame(napi_env env, napi_callback_info) try {
   State& value = host(env);
+  const auto start = std::chrono::steady_clock::now();
   value.platform.swap();
+  value.frameSwapMs = std::chrono::duration<double, std::milli>(
+    std::chrono::steady_clock::now() - start).count();
   return undefined(env);
 } catch (const std::exception& error) {
   return throwException(env, error);
@@ -582,6 +585,8 @@ napi_value rendererStats(napi_env env, napi_callback_info) try {
     number(env, host(env).frameDrawMs)), "cannot set frame draw time");
   check(env, napi_set_named_property(env, frameCosts, "memoryMs",
     number(env, host(env).frameMemoryMs)), "cannot set frame memory time");
+  check(env, napi_set_named_property(env, frameCosts, "swapMs",
+    number(env, host(env).frameSwapMs)), "cannot set frame swap time");
   check(env, napi_set_named_property(env, result, "frameCosts", frameCosts), "cannot set frame costs");
   check(env, napi_set_named_property(env, result, "diagnostics",
     boolean(env, host(env).renderer.diagnosticsEnabled())), "cannot set renderer diagnostics state");
