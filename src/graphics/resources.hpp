@@ -86,6 +86,7 @@ struct PreparedImageDescriptor {
   std::string compression;
   std::filesystem::path textureArtifact;
   bool framePages = false;
+  bool safeLinearTrimmedSampling = false;
 };
 
 struct PreparedTileRegion {
@@ -277,7 +278,7 @@ class ImageStore {
   bool hasCpuPixels(ImageHandle handle) const;
   std::optional<SpriteImageRegion> resolveSpriteRegion(
       ImageHandle handle, float x, float y, float width, float height,
-      bool premultiplied = true);
+      bool premultiplied = true, bool requireSafeLinearSampling = false);
   std::optional<PaletteImageRegion> resolvePaletteImage(ImageHandle handle, bool premultiplied);
   bool hasPaletteStorage(ImageHandle handle) const;
   std::uint64_t sceneryFullFallbacks() const { return sceneryFullFallbacks_; }

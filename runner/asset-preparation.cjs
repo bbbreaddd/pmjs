@@ -249,6 +249,7 @@ function validDescriptor(d) {
   if (d.halo !== undefined && (!Number.isInteger(d.halo) || d.halo < 1 || d.halo > 2048)) return false;
   if (d.textureArtifact !== undefined && (d.textureArtifact !== 'texture.pmtx' || d.framePages !== true || d.uniform !== undefined || d.compression !== undefined)) return false;
   if (d.framePages !== undefined && typeof d.framePages !== 'boolean') return false;
+  if (d.safeLinearTrimmedSampling !== undefined && typeof d.safeLinearTrimmedSampling !== 'boolean') return false;
   if (d.compactEligible !== undefined && typeof d.compactEligible !== 'boolean') return false;
   if (d.blockChannels !== undefined && (!d.blockGrid || ![0, 1, 2].includes(d.blockChannels))) return false;
   if (d.blockGrid !== undefined) {

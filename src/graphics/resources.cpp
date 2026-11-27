@@ -3014,13 +3014,16 @@ std::optional<ImageInfo> ImageStore::preparedPage(Slot& slot, std::size_t index,
 }
 
 std::optional<SpriteImageRegion> ImageStore::resolveSpriteRegion(ImageHandle handle,
-    float x, float y, float width, float height, bool premultiplied) {
+    float x, float y, float width, float height, bool premultiplied, bool requireSafeLinearSampling) {
   auto info = inspect(handle);
   if (!info || width <= 0 || height <= 0 || !std::isfinite(x) || !std::isfinite(y) ||
       !std::isfinite(width) || !std::isfinite(height) || x < 0 || y < 0 ||
       x + width > info->width || y + height > info->height) return std::nullopt;
   auto& slot = slots_[(handle & indexMask) - 1U];
-  if (slot.tiles) return resolveTileRegion(slot, x, y, width, height, premultiplied);
+  if (slot.tiles) {
+    if (requireSafeLinearSampling) return std::nullopt;
+    return resolveTileRegion(slot, x, y, width, height, premultiplied);
+  }
   if (!slot.prepared) return std::nullopt;
   auto& backing = *slot.prepared;
   if (backing.requiresSourceSampling()) return std::nullopt;
@@ -3036,10 +3039,28 @@ std::optional<SpriteImageRegion> ImageStore::resolveSpriteRegion(ImageHandle han
     ++preparedRegions_;
     return SpriteImageRegion{*physical, {x,y,width,height}, {0,0,1,1}, info->width, info->height};
   }
+  if (requireSafeLinearSampling &&
+      (!backing.descriptor.safeLinearTrimmedSampling || backing.descriptor.framePages ||
+       backing.descriptor.halo < 2)) {
+    return std::nullopt;
+  }
   for (std::size_t i = 0; i < backing.descriptor.cells.size(); ++i) {
     const auto& cell = backing.descriptor.cells[i]; const auto& r = cell.rect;
     if (x < r[0] || y < r[1] || x + width > r[0] + r[2] || y + height > r[1] + r[3]) continue;
     const bool zero = std::all_of(cell.fill.begin(), cell.fill.end(), [](std::uint8_t v) { return v == 0; });
+    if (zero && (!cell.crop[2] || !cell.crop[3]) && !backing.descriptor.framePages) {
+      auto& image = backing.cellImages.back();
+      if (!image) {
+        static constexpr std::array<std::uint8_t, 4> transparent{0, 0, 0, 0};
+        auto created = createRgba(1, 1, transparent.data());
+        if (!created) return std::nullopt;
+        image = created->handle;
+      }
+      auto physical = premultiplied ? lookupPremultiplied(image) : lookup(image);
+      if (!physical) return std::nullopt;
+      ++preparedRegions_;
+      return SpriteImageRegion{*physical, {x,y,width,height}, {0,0,1,1}, info->width, info->height};
+    }
     if (zero && cell.crop[2] && cell.crop[3] && !backing.descriptor.framePages) {
       auto physical = preparedPage(slot, cell.page, premultiplied);
       if (!physical) return std::nullopt;
@@ -3050,6 +3071,7 @@ std::optional<SpriteImageRegion> ImageStore::resolveSpriteRegion(ImageHandle han
         {static_cast<float>(cell.atlas[0]), static_cast<float>(cell.atlas[1]),
          static_cast<float>(cell.atlas[2]), static_cast<float>(cell.atlas[3])}, info->width, info->height, backing.descriptor.halo};
     }
+    if (requireSafeLinearSampling) return std::nullopt;
     if (backing.descriptor.framePages) {
       auto& recent = backing.recentCells;
       std::erase(recent, i);

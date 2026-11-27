@@ -1099,11 +1099,24 @@ constexpr const char* blockSpriteSamplingSource = R"(
     highp uvec4 entries = texelFetch(blockTable, pixel / 8, 0);
     highp ivec4 color;
     highp uint width = uint(textureSize(image, 0).x);
-    for (int channel = 0; channel < 4; ++channel) {
+    highp uint offset = uint((pixel.y & 7) * 8 + (pixel.x & 7));
+    if (blockPlanar == 2) {
+      highp uint entry = entries[3];
+      if ((entry & 2147483648u) != 0u) color[3] = int(entry & 255u);
+      else {
+        highp uint address = entry + offset;
+        highp uint texel = address / 4u;
+        highp vec4 bytes = texelFetch(image, ivec2(texel % width, texel / width), 0);
+        color[3] = int(floor(bytes[int(address % 4u)] * 255.0 + 0.5));
+      }
+      if (color[3] == 0) return ivec4(0);
+    }
+    int limit = blockPlanar == 2 ? 3 : 4;
+    for (int channel = 0; channel < limit; ++channel) {
       highp uint entry = entries[channel];
       if ((entry & 2147483648u) != 0u) color[channel] = int(entry & 255u);
       else {
-        highp uint address = entry + uint((pixel.y % 8) * 8 + pixel.x % 8);
+        highp uint address = entry + offset;
         highp uint texel = address / 4u;
         highp vec4 bytes = texelFetch(image, ivec2(texel % width, texel / width), 0);
         color[channel] = int(floor(bytes[int(address % 4u)] * 255.0 + 0.5));
@@ -1118,6 +1131,14 @@ constexpr const char* blockSpriteSamplingSource = R"(
       highp vec2 position = roundEven((coordinate - vec2(0.5)) * 256.0) / 256.0;
       highp ivec2 pixel = ivec2(floor(position)), weight = ivec2(fract(position) * 256.0);
       if (all(equal(weight, ivec2(0)))) return vec4(channelBlockTexel(pixel)) / 255.0;
+      if (weight.y == 0) {
+        highp ivec4 a = channelBlockTexel(pixel), b = channelBlockTexel(pixel + ivec2(1, 0));
+        return vec4((a * (256 - weight.x) + b * weight.x + 128) / 256) / 255.0;
+      }
+      if (weight.x == 0) {
+        highp ivec4 a = channelBlockTexel(pixel), c = channelBlockTexel(pixel + ivec2(0, 1));
+        return vec4((a * (256 - weight.y) + c * weight.y + 128) / 256) / 255.0;
+      }
       highp ivec4 a = channelBlockTexel(pixel), b = channelBlockTexel(pixel + ivec2(1, 0));
       highp ivec4 c = channelBlockTexel(pixel + ivec2(0, 1)), d = channelBlockTexel(pixel + ivec2(1));
       highp ivec4 top = a * (256 - weight.x) + b * weight.x;
@@ -1273,6 +1294,13 @@ constexpr const char* simpleFragmentSource = R"(#version 300 es
         highp vec2 pixel = clamp(floor(coord * imageDimensions), vec2(0.0), imageDimensions - vec2(1.0));
         highp ivec2 address = derivedUvTransform.x == 0.0 ? ivec2(0) : ivec2(pixel + derivedAtlasOffset);
         sampleColor = paletteImage != 0 ? paletteColor((vec2(address) + vec2(0.5)) / vec2(textureSize(image, 0))) : texelFetch(image, address, 0);
+      } else if (paletteImage == 0 && derivedUvTransform.x > 0.0) {
+        highp vec2 position = roundEven((coord * imageDimensions - vec2(0.5)) * 256.0) / 256.0;
+        position = clamp(position, vec2(0.0), imageDimensions - vec2(1.0));
+        position = clamp(position, derivedSampleBounds.xy * imageDimensions,
+          derivedSampleBounds.zw * imageDimensions - vec2(2.0));
+        sampleColor = texture(image,
+          (position + derivedAtlasOffset + vec2(0.5)) / vec2(textureSize(image, 0)));
       } else {
         highp vec2 atlasCoord = coord * derivedUvTransform.xy + derivedUvTransform.zw;
         sampleColor = paletteImage != 0 ? samplePalette(atlasCoord) : texture(image, atlasCoord);
@@ -1519,13 +1547,16 @@ constexpr const char* spriteEffectFragmentSource = R"(#version 300 es
   highp vec4 spriteTexel(highp vec2 pixel) {
     highp vec2 address = clamp(pixel, spriteFrame.xy, spriteFrame.zw);
     if (derivedImage) {
-      // Trimmed transparent margins must not read neighboring atlas cells.
-      highp vec2 coord = (address + vec2(0.5)) / imageDimensions;
-      if (any(lessThan(coord, derivedSampleBounds.xy)) ||
-          any(greaterThan(coord, derivedSampleBounds.zw))) return vec4(0.0);
-      address += derivedAtlasOffset;
-      if (any(lessThan(address, vec2(0.0))) ||
-          any(greaterThanEqual(address, vec2(textureSize(image, 0))))) return vec4(0.0);
+      if (derivedUvTransform.x == 0.0) address = vec2(0.0);
+      else {
+        // Trimmed transparent margins must not read neighboring atlas cells.
+        highp vec2 coord = (address + vec2(0.5)) / imageDimensions;
+        if (any(lessThan(coord, derivedSampleBounds.xy)) ||
+            any(greaterThan(coord, derivedSampleBounds.zw))) return vec4(0.0);
+        address += derivedAtlasOffset;
+        if (any(lessThan(address, vec2(0.0))) ||
+            any(greaterThanEqual(address, vec2(textureSize(image, 0))))) return vec4(0.0);
+      }
     }
     highp vec4 texel = blockImage ? sampleBlockImage(address + vec2(0.5)) :
       paletteImage != 0 ? paletteColor((address + vec2(0.5)) / vec2(textureSize(image, 0))) :

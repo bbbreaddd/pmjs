@@ -52,6 +52,7 @@ struct PreparedAsset {
   std::string compression;
   std::filesystem::path textureArtifact;
   bool framePages = false;
+  bool safeLinearTrimmedSampling = false;
   std::uint64_t ordinaryRetainedBytes = 0, textureRetainedBytes = 0;
 };
 struct AssetPreparationStats {

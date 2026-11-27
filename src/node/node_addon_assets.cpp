@@ -171,6 +171,7 @@ napi_value descriptor(napi_env env, const PreparedAsset& asset, bool workspaceCo
   if (asset.textureRetainedBytes) set(env, result, "textureRetainedBytes", number(env, asset.textureRetainedBytes));
   if (!asset.compression.empty()) set(env, result, "compression", string(env, asset.compression));
   if (asset.framePages) set(env, result, "framePages", boolean(env, true));
+  if (asset.safeLinearTrimmedSampling) set(env, result, "safeLinearTrimmedSampling", boolean(env, true));
   if (!asset.textureArtifact.empty()) set(env, result, "textureArtifact", string(env, asset.textureArtifact.string()));
   if (asset.uniform) set(env, result, "uniform", arrayValue(env, *asset.uniform));
   if (asset.blockGrid) set(env, result, "blockGrid", arrayValue(env, *asset.blockGrid));
@@ -322,6 +323,9 @@ napi_value processImage(napi_env env, napi_callback_info info) try {
     PreparedAsset layout;
     if (hasProperty(env, value, "framePages"))
       check(env, napi_get_value_bool(env, property(env, value, "framePages"), &layout.framePages), "invalid frame pages layout");
+    if (hasProperty(env, value, "safeLinearTrimmedSampling"))
+      check(env, napi_get_value_bool(env, property(env, value, "safeLinearTrimmedSampling"), &layout.safeLinearTrimmedSampling),
+        "invalid safe linear trimmed sampling layout");
     if (hasProperty(env, value, "textureArtifact")) {
       layout.textureArtifact = asString(env, property(env, value, "textureArtifact"));
       if (layout.textureArtifact != "texture.pmtx") throw std::invalid_argument("invalid indexed texture artifact");
@@ -749,7 +753,7 @@ void registerAssetMethods(napi_env env, napi_value exports) {
 #else
   set(env, version, "colorManagement", string(env, "none"));
 #endif
-  set(env, version, "processor", string(env, "images-v24-auto-texture-chunks-astcenc4.7"));
+  set(env, version, "processor", string(env, "images-v25-auto-texture-chunks-astcenc4.7"));
   set(env, version, "decoder", string(env, std::string("libpng-") + png_get_libpng_ver(nullptr) + "-rgba8-color-v2"));
   set(env, version, "pageSize", number(env, 2048));
   set(env, assets, "preparationVersion", version);

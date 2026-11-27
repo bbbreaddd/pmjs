@@ -100,9 +100,8 @@ async function main() {
   assertCenters(render(image, [1], { fractional: true }), [1], colors);
   const after = native.images.memory();
   assert.equal(after.textureUploadBytes, warm.textureUploadBytes);
-  for (const key of ['preparedPageTextureBytes', 'sourceTextureBuilds']) {
-    assert.equal(after[key], 0, key);
-  }
+  assert.equal(after.sourceTextureBuilds, 0, 'sourceTextureBuilds');
+  if (!disabled) assert.equal(after.preparedPageTextureBytes, 0, 'preparedPageTextureBytes');
   assert.deepEqual(readFrame(image), originalPixels);
   assert.deepEqual(readFrame(image, 1), originalTranslucent);
   native.images.release(image.handle);

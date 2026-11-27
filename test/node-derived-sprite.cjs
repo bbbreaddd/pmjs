@@ -211,8 +211,11 @@ async function main() {
         'non-power-of-two nearest sampling must use compatible backing');
     }
     assert.ok(after.preparedFallbacks.mipmaps > 0, 'mipmaps did not use compatible backing');
-    if (!fixture.uniform) assert.ok(after.preparedFallbacks['linear-sampling'] > 0,
-      'nonuniform linear sampling must use compatible backing');
+    if (!fixture.uniform && fixture.name.startsWith('opaque')) {
+      assert.ok((after.preparedFallbacks['linear-sampling'] || 0) +
+        (after.preparedFallbacks['unsupported-crop'] || 0) > 0,
+      'nonuniform linear sampling without transparent halo must use compatible backing');
+    }
     for (const blend of [1, 2, 3]) {
       assert.deepEqual(frame(derived, sources[0], transforms[0], true, 0.63, blend),
         frame(original, sources[0], transforms[0], true, 0.63, blend));

@@ -680,15 +680,67 @@ std::vector<AssetColor> modalFills(PreparationSource& source, const AssetRecipe&
   return fills;
 }
 std::vector<std::uint8_t> renderPage(PreparationSource& source, const PreparedAsset& asset,
-                                    int pageIndex, bool verifyFills, const AssetRecipe* recipe = nullptr) {
+                                    int pageIndex, bool verifyFills, const AssetRecipe* recipe = nullptr,
+                                    bool* safeLinearOut = nullptr) {
   const int width = pageIndex >= 0 ? asset.pages[pageIndex].width : 0;
   const int height = pageIndex >= 0 ? asset.pages[pageIndex].height : 0;
   std::vector<std::uint8_t> bytes(static_cast<std::size_t>(width) * height * 4);
   std::vector<std::uint8_t> written(static_cast<std::size_t>(width) * height);
+  bool safeLinear = verifyFills && !asset.uniform && !asset.pages.empty() && !asset.cells.empty() &&
+    asset.halo >= 2 && (!recipe || (!recipe->crop && recipe->backdrop == AssetColor{})) &&
+    asset.width == source.width && asset.height == source.height &&
+    std::all_of(asset.cells.begin(), asset.cells.end(), [](const auto& cell) {
+      return cell.fill == AssetColor{} && (!cell.crop[2] || !cell.crop[3] || cell.page >= 0);
+    });
   auto rows = source.rows();
   for (int y = 0; y < source.height; ++y) {
     rows.read();
+    const auto isZeroSpan = [&](int x0, int x1) {
+      for (int x = x0; x <= x1; ++x) {
+        if (pixel(rows.row.data() + static_cast<std::size_t>(std::clamp(x, 0, source.width - 1)) * 4) != AssetColor{})
+          return false;
+      }
+      return true;
+    };
     for (const auto& cell : asset.cells) {
+      if (safeLinear) {
+        const int rLeft = cell.rect[0] - asset.halo;
+        const int rRight = cell.rect[0] + cell.rect[2] + asset.halo - 1;
+        const int rTop = cell.rect[1] - asset.halo;
+        const int rBottom = cell.rect[1] + cell.rect[3] + asset.halo - 1;
+        const bool inRectHaloY = (y >= rTop && y <= rBottom) ||
+          (y == 0 && rTop < 0) || (y == source.height - 1 && rBottom >= source.height);
+        if (inRectHaloY) {
+          if (!cell.crop[2] || !cell.crop[3]) {
+            if (!isZeroSpan(rLeft, rRight)) safeLinear = false;
+          } else {
+            if (y < cell.rect[1] || y >= cell.rect[1] + cell.rect[3]) {
+              if (!isZeroSpan(rLeft, rRight)) safeLinear = false;
+            } else {
+              if (!isZeroSpan(rLeft, cell.rect[0] - 1) ||
+                  !isZeroSpan(cell.rect[0] + cell.rect[2], rRight)) safeLinear = false;
+            }
+          }
+        }
+        if (safeLinear && cell.crop[2] && cell.crop[3]) {
+          const int cLeft = cell.rect[0] + cell.crop[0] - asset.halo;
+          const int cTop = cell.rect[1] + cell.crop[1] - asset.halo;
+          const int cRight = cLeft + cell.crop[2] + 2 * asset.halo - 1;
+          const int cBottom = cTop + cell.crop[3] + 2 * asset.halo - 1;
+          const bool onOuterY =
+            y == std::clamp(cTop, 0, source.height - 1) ||
+            y == std::clamp(cTop + 1, 0, source.height - 1) ||
+            y == std::clamp(cBottom - 1, 0, source.height - 1) ||
+            y == std::clamp(cBottom, 0, source.height - 1);
+          const bool inCropHaloY = (y >= cTop && y <= cBottom) ||
+            (y == 0 && cTop < 0) || (y == source.height - 1 && cBottom >= source.height);
+          if (onOuterY) {
+            if (!isZeroSpan(cLeft, cRight)) safeLinear = false;
+          } else if (inCropHaloY) {
+            if (!isZeroSpan(cLeft, cLeft + 1) || !isZeroSpan(cRight - 1, cRight)) safeLinear = false;
+          }
+        }
+      }
       const int localY = y - cell.rect[1];
       if (verifyFills && localY >= 0 && localY < cell.rect[3]) {
         for (int x = 0; x < cell.rect[2]; ++x) {
@@ -740,6 +792,7 @@ std::vector<std::uint8_t> renderPage(PreparationSource& source, const PreparedAs
     }
   }
   rows.finish();
+  if (safeLinearOut) *safeLinearOut = safeLinear;
   return bytes;
 }
 
@@ -772,7 +825,8 @@ void emitLayout(PreparationSource& source, const std::filesystem::path& staging,
   asset.ordinaryRetainedBytes = 0;
   for (std::size_t index = 0; index < asset.pages.size(); ++index) {
     auto& page = asset.pages[index];
-    auto bytes = renderPage(source, asset, static_cast<int>(index), index == 0, &recipe);
+    auto bytes = renderPage(source, asset, static_cast<int>(index), index == 0, &recipe,
+      index == 0 ? &asset.safeLinearTrimmedSampling : nullptr);
     // No more source rows are needed for this emission. Keep encoding scratch
     // from overlapping the cached decode; a failed replay can reopen the source.
     if (index + 1 == asset.pages.size()) source.releaseCache();
@@ -1410,6 +1464,14 @@ void emitTexture(PreparationSource& source, const std::filesystem::path& staging
         (texture->layout.kind == TextureKind::Dense8 || texture->layout.kind == TextureKind::Dense16))
       asset.ordinaryRetainedBytes = retained;
     if (automatic && retained >= asset.ordinaryRetainedBytes) return;
+    if (automatic && asset.safeLinearTrimmedSampling && !asset.pages.empty()) {
+      const std::uint64_t fullBytes = static_cast<std::uint64_t>(source.width) * source.height * 4U;
+      if (asset.ordinaryRetainedBytes <= retained * 3U / 2U ||
+          (asset.ordinaryRetainedBytes <= fullBytes * 3U / 4U &&
+           asset.ordinaryRetainedBytes - retained <= 12ULL * 1024U * 1024U)) {
+        return;
+      }
+    }
     writeTextureArtifact(staging / "texture.pmtx", *texture);
     asset.framePages = true;
     asset.textureArtifact = "texture.pmtx";

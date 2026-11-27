@@ -868,7 +868,8 @@ void Renderer::renderScene() {
     const bool exactNearestDimensions = logicalInfo && logicalInfo->width > 0 &&
       logicalInfo->height > 0 && (logicalInfo->width & (logicalInfo->width - 1)) == 0 &&
       (logicalInfo->height & (logicalInfo->height - 1)) == 0;
-    const bool derivedSampling = uniformPrepared || (command.nearest && exactNearestDimensions);
+    const bool derivedSampling = uniformPrepared || !command.nearest ||
+      (command.nearest && exactNearestDimensions);
     const bool frameEligible = command.primitive == RenderCommand::Primitive::sprite &&
       !command.repeat && !command.mipmap && !command.clampedTilingSampling &&
       !command.appliesColorMatrix &&
@@ -876,7 +877,7 @@ void Renderer::renderScene() {
       command.blur <= 0 && command.maskImage == 0 && command.textureRotation == 0 &&
       // A constant texture needs no UV remapping in the inline effect sampler.
       (inlineMatrix == nullptr || uniformPrepared);
-    const bool derivedEligible = frameEligible && derivedSampling && !command.appliesSpriteColor;
+    const bool derivedEligible = frameEligible && derivedSampling && (!command.appliesSpriteColor || !command.nearest);
     const bool wholeSource = logicalInfo && command.source[0] == 0 && command.source[1] == 0 &&
       command.source[2] == logicalInfo->width && command.source[3] == logicalInfo->height;
     auto derived = !wholeSource && !command.nearest && frameEligible && paletteEligible &&
@@ -890,9 +891,12 @@ void Renderer::renderScene() {
     const auto block = !palette && !derived && frameEligible ? images_.resolveBlockRegion(command.image,
       command.pixiSpritePacking && !command.premultipliedSpriteTexture) :
       std::optional<BlockImageRegion>{};
-    if (!palette && !block && !derived && derivedEligible) derived = images_.resolveSpriteRegion(command.image,
-      command.source[0], command.source[1], command.source[2], command.source[3],
-      command.pixiSpritePacking && !command.premultipliedSpriteTexture);
+    if (!palette && !block && !derived && derivedEligible) {
+      derived = images_.resolveSpriteRegion(command.image,
+        command.source[0], command.source[1], command.source[2], command.source[3],
+        command.pixiSpritePacking && !command.premultipliedSpriteTexture,
+        !command.nearest && !uniformPrepared);
+    }
     const std::uint32_t paletteTable = palette ? palette->table : derived ? derived->paletteTable : 0U;
     const std::uint32_t paletteBlocks = palette ? palette->blocks : derived ? derived->paletteBlocks : 0U,
       paletteResidual = palette ? palette->residual : derived ? derived->paletteResidual : 0U;

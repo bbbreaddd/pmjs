@@ -771,6 +771,9 @@ napi_value installPreparedAssetsImpl(napi_env env, napi_callback_info info, bool
       if (hasProperty(env, object, "textureArtifact")) descriptor.textureArtifact = asString(env, property(env, object, "textureArtifact"));
       if (hasProperty(env, object, "framePages"))
         check(env, napi_get_value_bool(env, property(env, object, "framePages"), &descriptor.framePages), "invalid frame pages descriptor");
+      if (hasProperty(env, object, "safeLinearTrimmedSampling"))
+        check(env, napi_get_value_bool(env, property(env, object, "safeLinearTrimmedSampling"),
+          &descriptor.safeLinearTrimmedSampling), "invalid safe linear trimmed sampling descriptor");
       descriptor.version = asInt32(env, property(env, object, "version"));
       if (hasProperty(env, object, "compression")) descriptor.compression = asString(env, property(env, object, "compression"));
       descriptor.width = asInt32(env, property(env, object, "width"));
