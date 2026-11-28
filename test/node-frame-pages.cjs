@@ -132,12 +132,13 @@ async function main() {
   const totalPageBytes = frames.pages.reduce((bytes, page) => bytes + page.width * page.height * 4, 0);
   assert.ok(native.images.memory().cpuBytes <= maxPageBytes * 4);
   const blocksBeforeRetained = native.images.memory().blockRegions;
+  const regionsBeforeRetained = native.images.memory().preparedRegions;
   for (let repeat = 0; repeat < 2; ++repeat) for (let frame = 0; frame < 12; ++frame) {
     assertPixels(draw(retained, frame), expected[frame][0], 1);
     if (!palette && repeat === 0 && frame === 0) {
       const state = native.images.memory(20);
       const owner = state.largest.find(entry => entry.handle === retained.handle);
-      assert.ok(owner && (owner.fullTextureResident || state.blockRegions > blocksBeforeRetained),
+      assert.ok(owner && (owner.fullTextureResident || state.blockRegions > blocksBeforeRetained || state.preparedRegions > regionsBeforeRetained),
         'zero-fill pages must preserve logical-source sampling');
     }
     assertPixels(draw(retained, frame, false, true), expected[frame][1], 1);

@@ -100,12 +100,6 @@ int main() {
       const std::vector<std::uint8_t> encoded(std::istreambuf_iterator<char>(input), {});
       const auto decoded = pmjs::readLz4Page(encoded, rgba.size());
       require(decoded && decoded->width == width && decoded->height == height && decoded->rgba == rgba);
-      require(!pmjs::makeChannelBlockPage(width, height, rgba));
-      if (rgba.size() >= 256U*1024U) {
-        const auto retained = pmjs::makeChannelBlockPage(width, height, rgba, rgba.size()*2);
-        require(retained && retained->pixels().rgba == rgba);
-        require(!pmjs::makeChannelBlockPage(width, height, rgba, retained->gpuBytes()));
-      }
       require(!pmjs::readLz4Page(encoded, rgba.size() - 1));
       for (const auto offset : {0U,4U,8U,12U,16U,20U,24U,28U}) {
         auto damaged = encoded; damaged[offset] ^= 1;
@@ -135,9 +129,6 @@ int main() {
         rgba[at] = x % 251; rgba[at + 1] = y % 251;
         rgba[at + 2] = (x + y) % 251; rgba[at + 3] = (x / 8 + y / 8) % 2 ? 0 : 255;
       }
-      const auto channel = pmjs::makeChannelBlockPage(width, height, rgba);
-      require(channel && channel->pixels().rgba == rgba && channel->gpuBytes() < rgba.size());
-      require(channel->bytes.size() < std::size_t(width) * height);
     }
     {
       const int width = 1051, height = 1027;
@@ -268,14 +259,19 @@ int main() {
       }
       auto texture = pmjs::makePreparedTexture(pixels, nullptr, variant == 6 ? pixels.rgba.size()*2 : 0, true);
       auto withoutPalettes = pmjs::makePreparedTexture(pixels);
-      require(!withoutPalettes || withoutPalettes->layout.kind == pmjs::TextureKind::Channels);
-      require(texture.has_value());
+      require(!withoutPalettes || withoutPalettes->layout.kind == pmjs::TextureKind::FilteredTiles);
+      if (variant >= 4) {
+        if (!texture) continue;
+        require(texture->layout.kind == pmjs::TextureKind::FilteredTiles);
+      } else {
+        require(texture.has_value());
+        require(int(texture->layout.kind) == variant + 1);
+      }
       auto unsupported = *texture; unsupported.layout.height = 16385;
       bool unsupportedRejected = false;
       try { pmjs::writeTextureArtifact(root / "unsupported.pmtx",unsupported); }
       catch(const std::invalid_argument&) { unsupportedRejected = true; }
       require(unsupportedRejected);
-      require(int(texture->layout.kind) == std::min(variant+1,5));
       const auto file = root / "texture.pmtx";
       pmjs::writeTextureArtifact(file,*texture);
       if (variant == 0 && std::filesystem::exists("/dev/full")) {
@@ -305,15 +301,7 @@ int main() {
         decoded[i].insert(decoded[i].end(),data.begin(),data.end()); return true;
       },peak));
       require(decoded == texture->bytes && peak <= pmjs::textureChunkLimit);
-      if (variant >= 4) {
-        pmjs::ChannelBlockPage p; p.width=pixels.width; p.height=pixels.height;
-        p.bytes=decoded[0]; p.blocks.resize(decoded[1].size()/16);
-        for (std::size_t i=0;i<p.blocks.size();++i) for(int j=0;j<4;++j) {
-          unsigned v=0;for(int k=0;k<4;++k)v|=unsigned(decoded[1][i*16+j*4+k])<<(8*k);
-          p.blocks[i][j]=v;
-        }
-        require(p.pixels().rgba == pixels.rgba);
-      } else {
+      if (variant < 4) {
         for (std::size_t i=0;i<pixels.rgba.size()/4;++i) {
           unsigned index=decoded[0][i];
           if(variant==1) index=unsigned(decoded[0][i*2])|(unsigned(decoded[0][i*2+1])<<8);

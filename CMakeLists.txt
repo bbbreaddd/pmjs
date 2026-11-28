@@ -675,12 +675,6 @@ if(BUILD_TESTING)
   add_test(NAME node-trimmed-atlas COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-trimmed-atlas.cjs" $<TARGET_FILE:pmjs_native>)
   set_tests_properties(node-trimmed-atlas PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
-  foreach(budget 0 64 300000 1048576)
-    add_test(NAME node-prepared-channel-frames-${budget} COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
-      "${CMAKE_CURRENT_SOURCE_DIR}/test/node-prepared-channel-frames.cjs" $<TARGET_FILE:pmjs_native> ${budget})
-    set_tests_properties(node-prepared-channel-frames-${budget} PROPERTIES ENVIRONMENT
-      "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
-  endforeach()
   add_test(NAME node-block-sprite-legacy-index COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/node-block-sprite.cjs" $<TARGET_FILE:pmjs_native> --legacy-index)
   add_test(NAME node-compact-sprite-legacy-index COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}

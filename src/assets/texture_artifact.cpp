@@ -222,9 +222,6 @@ bool validLayout(const TextureLayout& l) {
   for (const auto& p : l.planes)
     if (!p.width || !p.height || p.width > 8192 || p.height > 8192 || !textureTexelBytes(p.format)) return false;
   const auto& a = l.planes[0]; const auto& b = l.planes[1];
-  if (kind == TextureKind::Channels)
-    return a.width == 2048 && a.format == TextureFormat::RGBA8 && b.width == std::uint32_t((l.width+7)/8) &&
-      b.height == std::uint32_t((l.height+7)/8) && b.format == TextureFormat::RGBA32UI;
   if (a.width != std::uint32_t(l.width) || a.height != std::uint32_t(l.height) ||
       a.format != (kind == TextureKind::Dense16 ? TextureFormat::RG8 : TextureFormat::R8) ||
       b.width != 256 || b.height > (kind == TextureKind::Sparse24 ? 1024U : kind == TextureKind::Dense8 ? 1U : 256U) ||
@@ -550,18 +547,6 @@ std::optional<PreparedTexture> replayFilteredTilePage(int width, int height,
   return out;
 }
 
-std::optional<PreparedTexture> replayChannelBlockTexture(int width, int height,
-    std::span<const std::uint8_t> rgba, const ChannelBlockPlan& plan, std::size_t retainedLimit) {
-  auto channel = replayChannelBlockPage(width, height, rgba, plan, retainedLimit);
-  if (!channel) return {};
-  PreparedTexture out;
-  out.layout = {width, height, TextureKind::Channels, {}};
-  const int h = static_cast<int>((channel->bytes.size() + 8191) / 8192);
-  plane(out, 2048, h, TextureFormat::RGBA8, std::move(channel->bytes));
-  plane(out, (width + 7) / 8, (height + 7) / 8, TextureFormat::RGBA32UI, words(channel->blocks));
-  return out;
-}
-
 std::optional<PreparedTexture> makePreparedTexture(const ImagePixels& pixels, const ImageStorageDecision* known,
                                                   std::size_t retainedLimit, bool allowPalettes,
                                                   std::optional<TextureKind> preferredKind,
@@ -572,17 +557,7 @@ std::optional<PreparedTexture> makePreparedTexture(const ImagePixels& pixels, co
   auto accepted = [&](const PreparedTexture& candidate) -> bool {
     return !accept || accept(candidate);
   };
-  auto finishChannels = [&](std::optional<ChannelBlockPage> channel) -> std::optional<PreparedTexture> {
-    if (!channel) return {};
-    PreparedTexture out; out.layout = {pixels.width, pixels.height, TextureKind::Channels, {}};
-    const int height = (channel->bytes.size()+8191)/8192;
-    plane(out, 2048, height, TextureFormat::RGBA8, std::move(channel->bytes));
-    plane(out, (pixels.width+7)/8, (pixels.height+7)/8, TextureFormat::RGBA32UI, words(channel->blocks));
-    out.channelBlockPlan = std::move(channel->plan);
-    if (!accepted(out)) return {};
-    return out;
-  };
-  bool triedFiltered = false, triedChannels = false;
+  bool triedFiltered = false;
   if (preferredKind) {
     if (*preferredKind == TextureKind::FilteredTiles) {
       triedFiltered = true;
@@ -594,10 +569,6 @@ std::optional<PreparedTexture> makePreparedTexture(const ImagePixels& pixels, co
       if (auto result = makeFilteredTilePage(pixels.width, pixels.height, pixels.rgba, retainedLimit, exportFilteredTilePlan)) {
         if (accepted(*result)) return result;
       }
-    } else if (*preferredKind == TextureKind::Channels) {
-      triedChannels = true;
-      if (auto result = finishChannels(makeChannelBlockPage(pixels.width, pixels.height, pixels.rgba, retainedLimit, exportFilteredTilePlan)))
-        return result;
     } else if (allowPalettes) {
       if (*preferredKind == TextureKind::Sparse16 && classified.paletteBits == 16) {
         if (auto page = makeSparsePalettePage(pixels.width, pixels.height, pixels.rgba)) {
@@ -635,21 +606,8 @@ std::optional<PreparedTexture> makePreparedTexture(const ImagePixels& pixels, co
     }
   }
   auto filtered = triedFiltered ? std::nullopt : makeFilteredTilePage(pixels.width, pixels.height, pixels.rgba, retainedLimit, exportFilteredTilePlan);
-  auto channel = triedChannels ? std::nullopt : makeChannelBlockPage(pixels.width, pixels.height, pixels.rgba, retainedLimit, exportFilteredTilePlan);
-  std::optional<PreparedTexture> channelOut = finishChannels(std::move(channel));
-  if (filtered && accepted(*filtered)) {
-    std::size_t filteredBytes = 0;
-    for (const auto& b : filtered->bytes) filteredBytes += b.size();
-    std::size_t channelBytes = SIZE_MAX;
-    if (channelOut) {
-      channelBytes = 0;
-      for (const auto& b : channelOut->bytes) channelBytes += b.size();
-    }
-    const bool acceptablePremium = filteredBytes <= channelBytes * 5U / 4U && filteredBytes <= channelBytes + 1024ULL * 1024U;
-    if (!channelOut || acceptablePremium)
-      return filtered;
-  }
-  return channelOut;
+  if (filtered && accepted(*filtered)) return filtered;
+  return std::nullopt;
 }
 void writeTextureArtifact(const std::filesystem::path& path, const PreparedTexture& texture) {
   auto l = texture.layout;

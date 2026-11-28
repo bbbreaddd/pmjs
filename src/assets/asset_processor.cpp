@@ -1537,7 +1537,6 @@ std::optional<TextureKind> planToKind(TexturePlan plan) {
     case TexturePlan::Dense16: return TextureKind::Dense16;
     case TexturePlan::Sparse16: return TextureKind::Sparse16;
     case TexturePlan::Sparse24: return TextureKind::Sparse24;
-    case TexturePlan::Channels: return TextureKind::Channels;
     case TexturePlan::FilteredTiles: return TextureKind::FilteredTiles;
     default: return std::nullopt;
   }
@@ -1549,7 +1548,6 @@ TexturePlan kindToPlan(TextureKind kind) {
     case TextureKind::Dense16: return TexturePlan::Dense16;
     case TextureKind::Sparse16: return TexturePlan::Sparse16;
     case TextureKind::Sparse24: return TexturePlan::Sparse24;
-    case TextureKind::Channels: return TexturePlan::Channels;
     case TextureKind::FilteredTiles: return TexturePlan::FilteredTiles;
   }
   return TexturePlan::Unknown;
@@ -1573,13 +1571,11 @@ void emitTexture(PreparationSource& source, const std::filesystem::path& staging
       asset.width != source.width || asset.height != source.height || source.width > 16384 || source.height > 16384) {
     asset.texturePlan = TexturePlan::None;
     asset.filteredTilePlan.reset();
-    asset.channelBlockPlan.reset();
     return;
   }
   source.releaseCache();
   const auto size = std::size_t(source.width)*source.height*4;
   const bool hasFilteredReplay = incomingPlan == TexturePlan::FilteredTiles && asset.filteredTilePlan.has_value();
-  const bool hasChannelReplay = incomingPlan == TexturePlan::Channels && asset.channelBlockPlan.has_value();
   std::size_t replayReserve = 0;
   if (hasFilteredReplay) {
     const auto& p = *asset.filteredTilePlan;
@@ -1591,25 +1587,16 @@ void emitTexture(PreparationSource& source, const std::filesystem::path& staging
     const std::size_t atlasBytes = atlasW * atlasH * 4U;
     const std::size_t tableBytes = p.table.size() * 4U;
     replayReserve = atlasBytes + tableBytes + 8U * 1024U * 1024U;
-  } else if (hasChannelReplay) {
-    const auto& p = *asset.channelBlockPlan;
-    const std::size_t cols = static_cast<std::size_t>((p.width + 7) / 8);
-    const std::size_t rows = static_cast<std::size_t>((p.height + 7) / 8);
-    const std::size_t dictBytes = static_cast<std::size_t>(p.uniqueCount) * 64U;
-    const std::size_t blocksBytes = cols * rows * 16U;
-    replayReserve = dictBytes + blocksBytes + 8U * 1024U * 1024U;
   }
-  const bool hasPlanReplay = hasFilteredReplay || hasChannelReplay;
-  const std::size_t minRequired = hasPlanReplay ? (size + replayReserve + 8U * 1024U * 1024U) : (size * 3 + 32U * 1024U * 1024U);
+  const std::size_t minRequired = hasFilteredReplay ? (size + replayReserve + 8U * 1024U * 1024U) : (size * 3 + 32U * 1024U * 1024U);
   if (minRequired > source.workspace.stats.workspaceLimitBytes) {
     source.workspace.stats.workspaceConstrained = true;
     asset.filteredTilePlan.reset();
-    asset.channelBlockPlan.reset();
     return;
   }
   // Reserve input, output, dictionary overhead and chunk encoding scratch together.
   auto reservation = source.workspace.retain(size + 8U*1024U*1024U, false);
-  if (!reservation) { asset.filteredTilePlan.reset(); asset.channelBlockPlan.reset(); return; }
+  if (!reservation) { asset.filteredTilePlan.reset(); return; }
   try {
     ImagePixels pixels{source.width, source.height, std::vector<std::uint8_t>(size)};
     auto rows = source.rows();
@@ -1633,8 +1620,7 @@ void emitTexture(PreparationSource& source, const std::filesystem::path& staging
       std::uint64_t retained = 0;
       for (const auto& plane : candidate.layout.planes)
         retained += std::uint64_t(plane.width)*plane.height*textureTexelBytes(plane.format);
-      if (candidate.layout.kind != TextureKind::Channels &&
-          candidate.layout.kind != TextureKind::FilteredTiles) retained += candidate.bytes[1].size()*2;
+      if (candidate.layout.kind != TextureKind::FilteredTiles) retained += candidate.bytes[1].size()*2;
       retainedOut = retained;
       auto ordinaryBytes = asset.ordinaryRetainedBytes;
       if (automatic && asset.pages.empty() &&
@@ -1670,18 +1656,9 @@ void emitTexture(PreparationSource& source, const std::filesystem::path& staging
         }
       }
       if (!texture) encoding.reset();
-    } else if (hasChannelReplay) {
-      encoding = source.workspace.retain(replayReserve, false, false);
-      if (encoding) {
-        if (auto replayed = replayChannelBlockTexture(pixels.width, pixels.height, pixels.rgba, *asset.channelBlockPlan, retainedLimit)) {
-          if (passesAdmission(*replayed, retained)) texture = std::move(replayed);
-        }
-      }
-      if (!texture) encoding.reset();
     }
     if (!texture) {
       asset.filteredTilePlan.reset();
-      asset.channelBlockPlan.reset();
       if (size * 3 + 32U * 1024U * 1024U > source.workspace.stats.workspaceLimitBytes) {
         source.workspace.stats.workspaceConstrained = true;
         return;
@@ -1696,7 +1673,7 @@ void emitTexture(PreparationSource& source, const std::filesystem::path& staging
           return true;
         });
     }
-    if (!texture) { asset.texturePlan = TexturePlan::None; asset.filteredTilePlan.reset(); asset.channelBlockPlan.reset(); return; }
+    if (!texture) { asset.texturePlan = TexturePlan::None; asset.filteredTilePlan.reset(); return; }
     asset.textureRetainedBytes = retained;
     if (automatic && asset.pages.empty() &&
         (texture->layout.kind == TextureKind::Dense8 || texture->layout.kind == TextureKind::Dense16))
@@ -1707,20 +1684,16 @@ void emitTexture(PreparationSource& source, const std::filesystem::path& staging
     asset.texturePlan = kindToPlan(texture->layout.kind);
     if (!exportFilteredTilePlan) {
       asset.filteredTilePlan.reset();
-      asset.channelBlockPlan.reset();
     } else {
       if (texture->filteredTilePlan) asset.filteredTilePlan = std::move(texture->filteredTilePlan);
-      if (texture->channelBlockPlan) asset.channelBlockPlan = std::move(texture->channelBlockPlan);
     }
   } catch (const std::invalid_argument&) {
     asset.filteredTilePlan.reset();
-    asset.channelBlockPlan.reset();
     std::filesystem::remove(staging / "texture.pmtx");
   } catch (const std::bad_alloc&) {
     source.workspace.stats.workspaceConstrained = true;
     asset.texturePlan = TexturePlan::Unknown;
     asset.filteredTilePlan.reset();
-    asset.channelBlockPlan.reset();
     std::filesystem::remove(staging / "texture.pmtx");
   }
 }

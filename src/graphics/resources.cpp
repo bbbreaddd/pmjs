@@ -1121,7 +1121,7 @@ bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
     ++textureArtifactFailures_; textureArtifactFailureReason_ = "missing";
   }
   auto upload = [&](const TextureLayout& l, bool artifact) {
-    const bool blockKind = l.kind == TextureKind::Channels || l.kind == TextureKind::FilteredTiles;
+    const bool blockKind = l.kind == TextureKind::FilteredTiles;
     if (blockKind ? !compactSamplingEnabled_ : !palettizationEnabled_) return false;
     const UnpackState unpack;
     GLint maximum = 0; glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maximum);
@@ -1185,10 +1185,6 @@ bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
     if (sharedPalette) {
       slot.palette = std::move(sharedPalette);
       ++preparedSharedTextureHits_;
-    } else if (l.kind == TextureKind::Channels) {
-      backing.channelAtlas = textures.ids[0]; backing.channelTable = textures.ids[1];
-      backing.channelHeight = l.planes[0].height; backing.channelChecked = true;
-      backing.gpuBytes += bytes; ++blockTextureUploads_;
     } else if (l.kind == TextureKind::FilteredTiles) {
       backing.channelAtlas = textures.ids[0]; backing.channelTable = textures.ids[1];
       backing.channelHeight = l.planes[0].height;
@@ -1211,7 +1207,7 @@ bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
     for (auto& p : backing.pages) { p.setPixels({}); p.setSparse({}); }
     return true;
   };
-  if (layout && layout->kind != TextureKind::Channels && layout->kind != TextureKind::FilteredTiles && !palettizationEnabled_) return false;
+  if (layout && layout->kind != TextureKind::FilteredTiles && !palettizationEnabled_) return false;
   if (layout) {
     if (upload(*layout,true)) { ++textureArtifactLoads_; return true; }
     ++textureArtifactFailures_; textureArtifactFailureReason_ = "chunk-or-upload";
@@ -1226,7 +1222,7 @@ std::optional<PaletteImageRegion> ImageStore::resolvePaletteImage(ImageHandle ha
   if (!info) return std::nullopt;
   auto& slot = slots_[(handle & indexMask) - 1U];
   if (!slot.paletteChecked && !slot.texture && !slot.astc) {
-    // Prepared channel-block artifacts share this lazy source-realization entry point.
+    // Prepared filtered-tile artifacts share this lazy source-realization entry point.
     realizeSourceTexture(handle);
     slot.paletteChecked = true;
   }
@@ -2797,7 +2793,7 @@ bool readTextureArtifactRegion(const std::filesystem::path& path, int x, int y,
     return std::fread(out.data(), 1, out.size(), file.get()) == out.size();
   };
   const auto layout = readTextureLayout(reader, static_cast<std::size_t>(fileSize));
-  if (!layout || (layout->kind != TextureKind::Channels && layout->kind != TextureKind::FilteredTiles))
+  if (!layout || layout->kind != TextureKind::FilteredTiles)
     return false;
   if (x < 0 || y < 0 || width <= 0 || height <= 0 ||
       x + width > layout->width || y + height > layout->height) return false;
@@ -2818,28 +2814,6 @@ bool readTextureArtifactRegion(const std::filesystem::path& path, int x, int y,
   };
   if (!readTextureChunks(reader, *layout, consume, staging)) return false;
   const auto dstStride = static_cast<std::size_t>(destination.width) * 4U;
-  if (layout->kind == TextureKind::Channels) {
-    const int cols = (layout->width + 7) / 8;
-    const auto* table = reinterpret_cast<const std::uint32_t*>(plane1.data());
-    for (int row = 0; row < height; ++row) {
-      const int sy = y + row;
-      const int by = sy / 8, ly = sy % 8;
-      auto* dstRow = destination.rgba.data() + static_cast<std::size_t>(destinationY + row) * dstStride +
-        static_cast<std::size_t>(destinationX) * 4U;
-      for (int col = 0; col < width; ++col) {
-        const int sx = x + col;
-        const int bx = sx / 8, lx = sx % 8;
-        const std::size_t blockOffset = (static_cast<std::size_t>(by) * cols + bx) * 4U;
-        for (int c = 0; c < 4; ++c) {
-          const std::uint32_t entry = table[blockOffset + c];
-          dstRow[col * 4 + c] = (entry & 0x80000000U)
-            ? static_cast<std::uint8_t>(entry & 0xFFU)
-            : plane0[entry + static_cast<std::size_t>(ly) * 8U + lx];
-        }
-      }
-    }
-    return true;
-  }
   const int cols = (layout->width + 15) / 16;
   const int atlasW = static_cast<int>(layout->planes[0].width);
   const auto* table = reinterpret_cast<const std::uint32_t*>(plane1.data());
@@ -3180,7 +3154,7 @@ std::optional<SpriteImageRegion> ImageStore::resolveSpriteRegion(ImageHandle han
   }
   if (!slot.prepared) return std::nullopt;
   auto& backing = *slot.prepared;
-  const bool blockBacked = !backing.texturePath.empty() && backing.requiresSourceSampling();
+  const bool blockBacked = !slot.palette && !backing.texturePath.empty() && backing.requiresSourceSampling();
   if (!blockBacked && backing.requiresSourceSampling()) return std::nullopt;
   if (blockBacked && backing.descriptor.cells.empty()) return std::nullopt;
   if (backing.descriptor.uniform) {
@@ -3233,8 +3207,9 @@ std::optional<SpriteImageRegion> ImageStore::resolveSpriteRegion(ImageHandle han
     const int halo = backing.descriptor.halo;
     const auto extent = checkedImageExtent(r[2] + 2 * halo, r[3] + 2 * halo);
     if (!extent) return std::nullopt;
-    if (blockBacked && extent->rgbaBytes > maxBlockRegionCacheBytes) return std::nullopt;
-    if (blockBacked) {
+    const bool useGlobalBlockCache = blockBacked && !backing.descriptor.framePages;
+    if (useGlobalBlockCache && extent->rgbaBytes > maxBlockRegionCacheBytes) return std::nullopt;
+    if (useGlobalBlockCache) {
       auto& image = backing.cellImages[i];
       if (!image) {
         while (blockRegionCacheBytes_ + extent->rgbaBytes > maxBlockRegionCacheBytes) {
@@ -3295,7 +3270,7 @@ std::optional<SpriteImageRegion> ImageStore::resolveSpriteRegion(ImageHandle han
           child.cachedPixels.reset();
         }
       }
-      if (blockBacked) {
+      if (useGlobalBlockCache) {
         recentBlockRegions_.push_back({handle, i, image, extent->rgbaBytes});
         blockRegionCacheBytes_ += extent->rgbaBytes;
       }

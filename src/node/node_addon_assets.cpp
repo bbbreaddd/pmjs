@@ -221,7 +221,6 @@ napi_value descriptor(napi_env env, const PreparedAsset& asset, bool workspaceCo
     case TexturePlan::Dense16: set(env, result, "texturePlan", string(env, "dense16")); break;
     case TexturePlan::Sparse16: set(env, result, "texturePlan", string(env, "sparse16")); break;
     case TexturePlan::Sparse24: set(env, result, "texturePlan", string(env, "sparse24")); break;
-    case TexturePlan::Channels: set(env, result, "texturePlan", string(env, "channels")); break;
     case TexturePlan::FilteredTiles: set(env, result, "texturePlan", string(env, "filteredTiles")); break;
     case TexturePlan::Unknown: break;
   }
@@ -245,20 +244,6 @@ napi_value descriptor(napi_env env, const PreparedAsset& asset, bool workspaceCo
       set(env, planObj, "rgCount", number(env, p.rgCount));
       set(env, planObj, "data", string(env, base64Encode(compressed)));
       set(env, result, "filteredTilePlan", planObj);
-    }
-  }
-  if (asset.channelBlockPlan) {
-    const auto& p = *asset.channelBlockPlan;
-    uLongf compSize = compressBound(static_cast<uLong>(p.stream.size()));
-    std::vector<std::uint8_t> compressed(compSize);
-    if (compress2(compressed.data(), &compSize, p.stream.data(), static_cast<uLong>(p.stream.size()), Z_DEFAULT_COMPRESSION) == Z_OK) {
-      compressed.resize(compSize);
-      auto planObj = moduleObject(env);
-      set(env, planObj, "width", number(env, p.width));
-      set(env, planObj, "height", number(env, p.height));
-      set(env, planObj, "uniqueCount", number(env, p.uniqueCount));
-      set(env, planObj, "data", string(env, base64Encode(compressed)));
-      set(env, result, "channelBlockPlan", planObj);
     }
   }
   if (asset.uniform) set(env, result, "uniform", arrayValue(env, *asset.uniform));
@@ -451,7 +436,6 @@ napi_value processImage(napi_env env, napi_callback_info info) try {
       else if (plan == "dense16") layout.texturePlan = TexturePlan::Dense16;
       else if (plan == "sparse16") layout.texturePlan = TexturePlan::Sparse16;
       else if (plan == "sparse24") layout.texturePlan = TexturePlan::Sparse24;
-      else if (plan == "channels") layout.texturePlan = TexturePlan::Channels;
       else if (plan == "filteredTiles") layout.texturePlan = TexturePlan::FilteredTiles;
       else throw std::invalid_argument("invalid indexed texture plan");
     }
@@ -483,49 +467,6 @@ napi_value processImage(napi_env env, napi_callback_info info) try {
                 if (repCount) std::memcpy(plan.repIndices.data(), raw.data(), repCount * 4);
                 if (tableCount) std::memcpy(plan.table.data(), raw.data() + repCount * 4, tableCount * 4);
                 layout.filteredTilePlan = std::move(plan);
-              }
-            }
-          }
-        }
-      }
-    }
-    if (hasProperty(env, value, "channelBlockPlan")) {
-      const auto pObj = property(env, value, "channelBlockPlan");
-      ChannelBlockPlan plan;
-      plan.width = integer(env, property(env, pObj, "width"));
-      plan.height = integer(env, property(env, pObj, "height"));
-      plan.uniqueCount = static_cast<std::uint32_t>(integer(env, property(env, pObj, "uniqueCount")));
-      if (plan.width > 0 && plan.height > 0 && plan.width <= 16384 && plan.height <= 16384 &&
-          plan.uniqueCount > 0) {
-        const auto cols = static_cast<std::size_t>((plan.width + 7) / 8);
-        const auto rows = static_cast<std::size_t>((plan.height + 7) / 8);
-        const std::size_t totalEntries = cols * rows * 4U;
-        if (plan.uniqueCount <= totalEntries && totalEntries <= 64U * 1024U * 1024U) {
-          const auto data = asString(env, property(env, pObj, "data"));
-          const std::size_t maxRaw = totalEntries * 5U;
-          const std::size_t maxB64 = ((compressBound(static_cast<uLong>(maxRaw)) + 2U) / 3U) * 4U + 64U;
-          if (!data.empty() && data.size() <= maxB64) {
-            if (auto compressed = base64Decode(data)) {
-              z_stream strm{};
-              if (inflateInit(&strm) == Z_OK) {
-                strm.next_in = compressed->data();
-                strm.avail_in = static_cast<uInt>(compressed->size());
-                std::vector<std::uint8_t> raw;
-                std::array<std::uint8_t, 32768> buf{};
-                int ret = Z_OK;
-                while (ret == Z_OK) {
-                  strm.next_out = buf.data();
-                  strm.avail_out = static_cast<uInt>(buf.size());
-                  ret = inflate(&strm, Z_NO_FLUSH);
-                  const std::size_t produced = buf.size() - strm.avail_out;
-                  if (raw.size() + produced > maxRaw) { ret = Z_MEM_ERROR; break; }
-                  raw.insert(raw.end(), buf.data(), buf.data() + produced);
-                }
-                inflateEnd(&strm);
-                if (ret == Z_STREAM_END && !raw.empty()) {
-                  plan.stream = std::move(raw);
-                  layout.channelBlockPlan = std::move(plan);
-                }
               }
             }
           }

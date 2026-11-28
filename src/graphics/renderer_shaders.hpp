@@ -1094,36 +1094,6 @@ constexpr const char* blockSpriteSamplingSource = R"(
   uniform highp ivec3 blockGrid;
   uniform highp int blockTableWidth;
   uniform int blockPlanar;
-  highp ivec4 channelBlockTexel(highp ivec2 pixel) {
-    pixel = clamp(pixel, ivec2(0), ivec2(imageDimensions) - ivec2(1));
-    highp uvec4 entries = texelFetch(blockTable, pixel / 8, 0);
-    highp ivec4 color;
-    highp uint offset = uint((pixel.y & 7) * 8 + (pixel.x & 7));
-    if (blockPlanar == 2) {
-      highp uint entry = entries[3];
-      if ((entry & 2147483648u) != 0u) color[3] = int(entry & 255u);
-      else {
-        highp uint address = entry + offset;
-        highp uint texel = address >> 2u;
-        highp vec4 bytes = texelFetch(image, ivec2(texel & 2047u, texel >> 11u), 0);
-        color[3] = int(floor(bytes[int(address & 3u)] * 255.0 + 0.5));
-      }
-      if (color[3] == 0) return ivec4(0);
-    }
-    int limit = blockPlanar == 2 ? 3 : 4;
-    for (int channel = 0; channel < limit; ++channel) {
-      highp uint entry = entries[channel];
-      if ((entry & 2147483648u) != 0u) color[channel] = int(entry & 255u);
-      else {
-        highp uint address = entry + offset;
-        highp uint texel = address >> 2u;
-        highp vec4 bytes = texelFetch(image, ivec2(texel & 2047u, texel >> 11u), 0);
-        color[channel] = int(floor(bytes[int(address & 3u)] * 255.0 + 0.5));
-      }
-    }
-    if (blockPlanar == 2) color.rgb = (color.rgb * color.a + 127) / 255;
-    return color;
-  }
   highp vec4 sampleBlockImage(highp vec2 coordinate) {
     if (blockPlanar >= 8) {
       highp vec2 position = blockNearest
@@ -1140,25 +1110,6 @@ constexpr const char* blockSpriteSamplingSource = R"(
       if (mode == 1u) return s;
       if (mode <= 5u) return vec4(vec3(s[int(mode - 2u)]), 1.0);
       return mode == 6u ? vec4(s.rrr, s.g) : vec4(s.bbb, s.a);
-    }
-    if (blockPlanar != 0) {
-      if (blockNearest) return vec4(channelBlockTexel(ivec2(floor(coordinate)))) / 255.0;
-      highp vec2 position = roundEven((coordinate - vec2(0.5)) * 256.0) / 256.0;
-      highp ivec2 pixel = ivec2(floor(position)), weight = ivec2(fract(position) * 256.0);
-      if (all(equal(weight, ivec2(0)))) return vec4(channelBlockTexel(pixel)) / 255.0;
-      if (weight.y == 0) {
-        highp ivec4 a = channelBlockTexel(pixel), b = channelBlockTexel(pixel + ivec2(1, 0));
-        return vec4((a * (256 - weight.x) + b * weight.x + 128) / 256) / 255.0;
-      }
-      if (weight.x == 0) {
-        highp ivec4 a = channelBlockTexel(pixel), c = channelBlockTexel(pixel + ivec2(0, 1));
-        return vec4((a * (256 - weight.y) + c * weight.y + 128) / 256) / 255.0;
-      }
-      highp ivec4 a = channelBlockTexel(pixel), b = channelBlockTexel(pixel + ivec2(1, 0));
-      highp ivec4 c = channelBlockTexel(pixel + ivec2(0, 1)), d = channelBlockTexel(pixel + ivec2(1));
-      highp ivec4 top = a * (256 - weight.x) + b * weight.x;
-      highp ivec4 bottom = c * (256 - weight.x) + d * weight.x;
-      return vec4((top * (256 - weight.y) + bottom * weight.y + 32768) / 65536) / 255.0;
     }
     highp vec2 position = clamp(coordinate, vec2(0.5), imageDimensions - vec2(0.5));
     highp ivec2 pixel = ivec2(floor(position));

@@ -495,9 +495,8 @@ function loadAssetIndex(file, native, options, contents) {
             }
           }
           if (!imageNegativeCompatible && rest.descriptor &&
-              (rest.descriptor.texturePlan !== undefined || rest.descriptor.filteredTilePlan !== undefined ||
-               rest.descriptor.channelBlockPlan !== undefined)) {
-            const { texturePlan: _, filteredTilePlan: __, channelBlockPlan: ___, ...descriptorRest } = rest.descriptor;
+              (rest.descriptor.texturePlan !== undefined || rest.descriptor.filteredTilePlan !== undefined)) {
+            const { texturePlan: _, filteredTilePlan: __, ...descriptorRest } = rest.descriptor;
             rest.descriptor = descriptorRest;
           }
           return [imageStorageCompatible && validStorageDecision(storage) ? { ...rest, storage } : rest];

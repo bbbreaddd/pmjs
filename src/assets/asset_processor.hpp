@@ -41,7 +41,7 @@ struct PreparedAssetPage {
   int width = 0;
   int height = 0;
 };
-enum class TexturePlan { Unknown = 0, None, Dense8, Dense16, Sparse16, Sparse24, Channels, FilteredTiles };
+enum class TexturePlan { Unknown = 0, None, Dense8, Dense16, Sparse16, Sparse24, FilteredTiles = 7 };
 
 struct PreparedAsset {
   int width = 0;
@@ -57,7 +57,6 @@ struct PreparedAsset {
   std::filesystem::path textureArtifact;
   TexturePlan texturePlan = TexturePlan::Unknown;
   std::optional<FilteredTilePlan> filteredTilePlan;
-  std::optional<ChannelBlockPlan> channelBlockPlan;
   bool framePages = false;
   bool safeLinearTrimmedSampling = false;
   std::uint64_t ordinaryRetainedBytes = 0, textureRetainedBytes = 0;

@@ -265,7 +265,7 @@ function validDescriptor(d) {
   if (d.uniform !== undefined && !rgba(d.uniform)) return false;
   if (d.halo !== undefined && (!Number.isInteger(d.halo) || d.halo < 1 || d.halo > 2048)) return false;
   if (d.textureArtifact !== undefined && (d.textureArtifact !== 'texture.pmtx' || d.framePages !== true || d.uniform !== undefined || d.compression !== undefined)) return false;
-  if (d.texturePlan !== undefined && !['none', 'dense8', 'dense16', 'sparse16', 'sparse24', 'channels', 'filteredTiles'].includes(d.texturePlan)) return false;
+  if (d.texturePlan !== undefined && !['none', 'dense8', 'dense16', 'sparse16', 'sparse24', 'filteredTiles'].includes(d.texturePlan)) return false;
   if (d.filteredTilePlan !== undefined) {
     const p = d.filteredTilePlan;
     if (!p || typeof p !== 'object' || !Number.isSafeInteger(p.width) || !Number.isSafeInteger(p.height) ||
@@ -274,13 +274,6 @@ function validDescriptor(d) {
         !Number.isSafeInteger(p.rCount) || p.rCount < 0 ||
         !Number.isSafeInteger(p.rgCount) || p.rgCount < 0 ||
         typeof p.data !== 'string' || !p.data.length) return false;
-  }
-  if (d.channelBlockPlan !== undefined) {
-    const p = d.channelBlockPlan;
-    if (!p || typeof p !== 'object' || !Number.isSafeInteger(p.width) || !Number.isSafeInteger(p.height) ||
-        p.width !== d.width || p.height !== d.height ||
-        !Number.isSafeInteger(p.uniqueCount) || p.uniqueCount < 1 ||
-        typeof p.data !== 'string' || !p.data.length || p.data.length > 16 * 1024 * 1024) return false;
   }
   if (d.framePages !== undefined && typeof d.framePages !== 'boolean') return false;
   if (d.safeLinearTrimmedSampling !== undefined && typeof d.safeLinearTrimmedSampling !== 'boolean') return false;

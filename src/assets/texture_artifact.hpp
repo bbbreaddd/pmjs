@@ -10,7 +10,7 @@
 namespace pmjs {
 constexpr std::size_t textureChunkLimit = 1024U * 1024U;
 enum class TextureFormat : std::uint32_t { R8 = 1, RG8, RGBA8, RGB32UI, RGBA32UI, R32UI };
-enum class TextureKind : std::uint32_t { Dense8 = 1, Dense16, Sparse16, Sparse24, Channels, FilteredTiles };
+enum class TextureKind : std::uint32_t { Dense8 = 1, Dense16, Sparse16, Sparse24, FilteredTiles = 6 };
 struct TextureChunk {
   std::uint32_t y = 0, rows = 0, offset = 0, encoded = 0, decoded = 0;
   std::array<std::uint8_t, 32> hash{};
@@ -35,14 +35,11 @@ struct PreparedTexture {
   TextureLayout layout;
   std::vector<std::vector<std::uint8_t>> bytes;
   std::optional<FilteredTilePlan> filteredTilePlan;
-  std::optional<ChannelBlockPlan> channelBlockPlan;
 };
 using TextureReader = std::function<bool(std::size_t, std::span<std::uint8_t>)>;
 using TextureUpload = std::function<bool(std::size_t, const TextureChunk&, std::span<const std::uint8_t>)>;
 std::optional<PreparedTexture> replayFilteredTilePage(int width, int height,
     std::span<const std::uint8_t> rgba, const FilteredTilePlan& plan, std::size_t retainedLimit = 0);
-std::optional<PreparedTexture> replayChannelBlockTexture(int width, int height,
-    std::span<const std::uint8_t> rgba, const ChannelBlockPlan& plan, std::size_t retainedLimit = 0);
 std::optional<PreparedTexture> makePreparedTexture(const ImagePixels& pixels, const ImageStorageDecision* decision = nullptr,
                                                  std::size_t retainedLimit = 0, bool allowPalettes = false,
                                                  std::optional<TextureKind> preferredKind = std::nullopt,
