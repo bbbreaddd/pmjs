@@ -1,14 +1,11 @@
 'use strict';
 
-const { runOptimizationAdapter } = require('../../helpers/runtime-context.cjs');
+const { loadPmjsRuntime, runModule } = require('../../helpers/runtime-context.cjs');
 
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const test = require('node:test');
-const vm = require('node:vm');
 
 function harness({ enabled = true, guestCache = false, emitter = true } = {}) {
-  const phases = new Map();
   const events = [];
   const textureCache = {};
   function transform(node) {
@@ -93,14 +90,20 @@ function harness({ enabled = true, guestCache = false, emitter = true } = {}) {
       events.push('render');
       return 'rendered';
     }, generateTextureGpu() { events.push('gpu capture'); return 'texture'; } };
-  const context = { Sprite, Scene_Menu, Scene_OmoMenuBase, Graphics: { width: 640, height: 480, _renderer: renderer },
+  const context = loadPmjsRuntime({
+    console: { log() {}, error() {} },
+    PMJS_GAME_CONFIG: enabled ? {} : { disableOptimizations: ['port.omori.menu-background-cache'] },
+    Sprite, Scene_Menu, Scene_OmoMenuBase, Graphics: { width: 640, height: 480, _renderer: renderer },
     PIXI: { filters: { BlurFilter }, BLEND_MODES: { NORMAL: 0 }, utils: { TextureCache: textureCache } },
     pmjsPixiRenderPreflight: { unsupportedMethod(sprite) { return sprite.customRender ? '_renderWebGL' : null; } },
-    PMJS: { plugins: { registerOptimization(name, definition) { assert.equal(name, 'GTP_OmoriFixes'); assert.equal(definition.id, 'port.omori.menu-background-cache'); } },
-      optimizations: { isEnabled: () => enabled }, phases: { on(name, id, callback) { phases.set(name, callback); } },
-      pixi4: { renderStageToCanvas() { events.push('canvas capture'); return 'canvas'; } } } };
-  runOptimizationAdapter(fs.readFileSync(require.resolve('../../../patches/omori/menu-background.js'), 'utf8'), context);
-  phases.get('afterGuestPlugins')();
+  });
+  context.PMJS.pixi4 = { renderStageToCanvas() { events.push('canvas capture'); return 'canvas'; } };
+  runModule(context, 'patches/omori/menu-background.js');
+  context.PMJS.plugins.snapshotEffectiveManifest([{ name: 'GTP_OmoriFixes', status: true }]);
+  context.PMJS.plugins.execute('GTP_OmoriFixes', () => {});
+  context.PMJS.plugins.finish();
+  context.PMJS.phases.emit('afterGuestPlugins');
+  context.PMJS.optimizations.finalize();
   return { ...context, renderer, source, bitmap, events };
 }
 

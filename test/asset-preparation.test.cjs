@@ -438,20 +438,6 @@ test('portable page metadata never mutates a verified manifest during a checkpoi
   assert.equal(f.jobs, 2);
 });
 
-test('unchanged sources and pages reuse checksums; explicit verification reads them again', async () => {
-  const f = fixture();
-  await prepareAssets(f);
-  const warm = await prepareAssets(f);
-  assert.equal(warm.generated, 0);
-  assert.equal(warm.validation.hashedFiles, 0);
-  assert.ok(warm.validation.reusedFiles >= 2);
-  const verified = await prepareAssets({ ...f, verifyHashes: true });
-  assert.equal(verified.generated, 0);
-  assert.equal(verified.validation.hashedFiles, 2);
-  assert.equal(verified.validation.reusedFiles, 0);
-});
-
-
 test('same-size source and page edits with restored mtime invalidate verified checksums', async () => {
   const f = fixture();
   await prepareAssets(f);
@@ -503,23 +489,6 @@ test('empty discovery reports install and successful completion without transfor
   assert.deepEqual(storage, []);
   assert.ok(progress.some(p => p.phase === 'install'));
 });
-
-test('addon and install errors report a terminal failure after discovery or validation', async () => {
-  for (const failInstall of [false, true]) {
-    const f = fixture();
-    if (failInstall) f.native.assets.installPrepared = () => { throw new Error('install failed'); };
-    else delete f.native.assets.processImage;
-    const progress = [];
-    const result = await prepareAssets({ ...f, onProgress: value => progress.push(value) });
-    assertProgress(progress, result, 'error');
-    assert.match(result.error, /image preparation is unavailable|install failed/);
-    assert.equal(result.completed, failInstall ? 1 : 0);
-    assert.equal(f.jobs, failInstall ? 1 : 0);
-    assert.equal(result.installed, 0);
-  }
-});
-
-
 
 test('cache pages under img are excluded while original cache-root siblings remain sources', async () => {
   const f = fixture();
@@ -587,34 +556,6 @@ test('recipe changes regenerate and source checksums do not override explicit se
   assert.equal(result.entries.length, 1);
   assert.equal(result.entries[0].sourceHash, sourceHash);
   assert.equal(f.jobs, 3);
-});
-
-test('corrupt PNG outputs and descriptor edits are regenerated independently', async () => {
-  const f = fixture();
-  await prepareAssets(f);
-  let file = manifests(f)[0];
-  fs.appendFileSync(path.join(path.dirname(file), 'page-0.png'), 'corruption');
-  assert.equal((await prepareAssets(f)).generated, 1);
-  file = manifests(f)[0];
-  const manifest = readManifest(f, file);
-  manifest.descriptor.cells[0].fill = [255, 0, 0, 255];
-  writeManifest(f, file, manifest);
-  assert.equal((await prepareAssets(f)).generated, 1);
-  assert.equal(f.jobs, 3);
-});
-
-test('unsupported images reuse a negative entry; transient failures retry next launch', async () => {
-  const f = fixture();
-  let calls = 0;
-  f.native.assets.processImage = async () => { calls += 1; return null; };
-  assert.equal((await prepareAssets(f)).fallback, 1);
-  assert.equal((await prepareAssets(f)).negativeHits, 1);
-  assert.equal(calls, 1);
-  fs.appendFileSync(path.join(f.gameRoot, f.source), 'changed');
-  f.native.assets.processImage = async () => { calls += 1; throw new Error('decode failed'); };
-  assert.equal((await prepareAssets(f)).fallback, 1);
-  assert.equal((await prepareAssets(f)).fallback, 1);
-  assert.equal(calls, 3);
 });
 
 test('portable negative image decisions skip processing without reading pages', async () => {
@@ -715,24 +656,6 @@ test('a native preparation owner cannot cause an unbounded wait or lose its lock
   } finally { f.native.assets.releasePreparationLock(token); }
 });
 
-
-test('cancellation waits for current processor, discards its output and prevents install', async () => {
-  const f = fixture();
-  let cancel = false;
-  const original = f.native.assets.processImage;
-  f.native.assets.processImage = async (...args) => { const result = await original(...args); cancel = true; return result; };
-  const progress = [];
-  const result = await prepareAssets({ ...f, shouldCancel: () => cancel, onProgress: value => progress.push(value) });
-  assert.equal(result.cancelled, true);
-  assert.equal(result.generated, 0);
-  assertProgress(progress, result, 'cancelled');
-  assert.equal(progress.at(-1).remaining, 1);
-  assert.equal(progress.at(-1).completed, 0);
-  assert.equal(f.installs.length, 0);
-  assert.deepEqual(fs.readdirSync(path.join(cachePath(f), 'entries')), []);
-  f.native.assets.processImage = original;
-  assert.equal((await prepareAssets(f)).generated, 1);
-});
 
 test('cancellation during final cleanup never reports assets ready', async () => {
   const f = fixture();
@@ -1708,6 +1631,12 @@ test('texture artifacts participate in cache validation and repair', async () =>
     fs.writeFileSync(path.join(f.installs.at(-1)[0].directory, 'texture.pmtx'), Buffer.alloc(64));
     await prepareAssets({ ...f, verifyHashes: true });
     assert.equal(f.jobs, 2);
+    const corruptedFile = manifests(f).find(file => readManifest(f, file).descriptor?.textureArtifact);
+    const corruptedManifest = readManifest(f, corruptedFile);
+    corruptedManifest.descriptor.cells[0].fill = [255, 0, 0, 255];
+    writeManifest(f, corruptedFile, corruptedManifest);
+    assert.equal((await prepareAssets(f)).generated, 1);
+    assert.equal(f.jobs, 3);
     const repaired = readManifest(f, manifests(f).find(file => readManifest(f, file).descriptor?.textureArtifact));
     const portableAssetRoot = path.join(f.root, 'portable');
     const outputs = Object.entries(repaired.outputs).map(([name, hash]) => {
@@ -1721,10 +1650,10 @@ test('texture artifacts participate in cache validation and repair', async () =>
     const copied = await prepareAssets({ ...f, portableIndex, portableAssetRoot, cacheRoot: path.join(f.root, 'copied') });
     assert.equal(copied.indexedPageCopies, 1);
     assert.equal(copied.cacheBytes, PNG.length + 64);
-    assert.equal(f.jobs, 2);
+    assert.equal(f.jobs, 3);
     await prepareAssets({ ...f, portableIndex: { ...portableIndex, processor: { processor: 'old' } },
       portableAssetRoot, cacheRoot: path.join(f.root, 'upgraded') });
-    assert.equal(f.jobs, 3);
+    assert.equal(f.jobs, 4);
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 

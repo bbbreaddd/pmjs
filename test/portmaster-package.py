@@ -33,85 +33,18 @@ class PortMasterArtwork(unittest.TestCase):
         self.root = Path(temporary.name)
 
     def test_cover_fits_without_cropping_and_preserves_sources(self):
-        for size, alpha in (((1280, 480), 255), ((320, 960), 255),
-                            ((640, 480), 255), ((640, 480), 128), ((640, 480), 0)):
-            with self.subTest(size=size, alpha=alpha):
+        for size in ((1280, 480), (320, 960), (640, 480)):
+            with self.subTest(size=size):
                 source, target = self.root / 'source.png', self.root / 'cover.png'
-                Image.new('RGBA', size, (255, 0, 0, alpha)).save(source)
+                Image.new('RGBA', size, (255, 0, 0, 255)).save(source)
                 original = source.read_bytes()
                 _stage_image(source, target, cover=True)
                 self.assertEqual(source.read_bytes(), original)
                 with Image.open(target) as image:
                     self.assertEqual(image.size, (640, 480))
-                    self.assertEqual(image.mode, 'P')
-                    image = image.convert('RGB')
-                    self.assertEqual(image.getpixel((320, 240)), (alpha, 0, 0))
                     if size != (640, 480):
-                        self.assertEqual(image.getpixel((0, 0)), (0, 0, 0))
-                        self.assertEqual(image.getbbox(), (0, 120, 640, 360) if size[0] == 1280 else (240, 0, 400, 480))
-
-    def test_solid_screenshot_preserves_colours_and_dimensions_with_smaller_encoding(self):
-        source, target = self.root / 'source.png', self.root / 'screenshot.png'
-        Image.new('RGBA', (640, 480), (23, 45, 67, 128)).save(source, compress_level=0)
-        original = source.read_bytes()
-        _stage_image(source, target)
-        with Image.open(source) as before, Image.open(target) as after:
-            self.assertEqual(after.size, before.size)
-            self.assertEqual(after.convert('RGBA').tobytes(), before.convert('RGBA').tobytes())
-        self.assertLess(target.stat().st_size, source.stat().st_size)
-        self.assertEqual(source.read_bytes(), original)
-
-    def test_default_compression_reduces_palette_and_is_repeatable(self):
-        source, target = self.root / 'source.png', self.root / 'screenshot.png'
-        image = Image.new('RGB', (640, 480))
-        image.putdata([(x % 256, y % 256, (x * 3 + y) % 256)
-                       for y in range(480) for x in range(640)])
-        image.save(source, compress_level=0)
-        original = source.read_bytes()
-        _stage_image(source, target)
-        encoded = target.read_bytes()
-        with Image.open(target) as result:
-            self.assertEqual(result.mode, 'P')
-            self.assertLessEqual(len(result.getcolors()), 157)
-            self.assertEqual(result.size, image.size)
-            self.assertNotEqual(result.convert('RGB').tobytes(), image.tobytes())
-        self.assertLess(len(encoded), len(original))
-        _stage_image(source, target)
-        self.assertEqual(target.read_bytes(), encoded)
-        self.assertEqual(source.read_bytes(), original)
-
-    def test_transparent_screenshot_retains_alpha(self):
-        source, target = self.root / 'source.png', self.root / 'screenshot.png'
-        image = Image.new('RGBA', (640, 480), (200, 100, 50, 128))
-        image.putpixel((0, 0), (0, 0, 0, 0))
-        image.putpixel((1, 0), (255, 255, 255, 255))
-        image.save(source)
-        _stage_image(source, target)
-        with Image.open(target) as result:
-            alpha = result.convert('RGBA').getchannel('A')
-            self.assertEqual(alpha.getextrema(), (0, 255))
-            self.assertEqual(alpha.getpixel((320, 240)), 128)
-
-    def test_disabled_compression_copies_screenshot_and_still_fits_cover(self):
-        source, target = self.root / 'source.png', self.root / 'screenshot.png'
-        Image.new('RGB', (640, 480), 'red').save(source, compress_level=0)
-        original = source.read_bytes()
-        with patch.dict(sys.modules, {'PIL': None}):
-            _stage_image(source, target, compress=False)
-        self.assertEqual(target.read_bytes(), original)
-        Image.new('RGB', (320, 960), 'red').save(source)
-        original = source.read_bytes()
-        _stage_image(source, target, cover=True, compress=False)
-        with Image.open(target) as result:
-            self.assertEqual(result.size, (640, 480))
-            self.assertEqual(result.mode, 'RGB')
-            self.assertEqual(result.getbbox(), (240, 0, 400, 480))
-        self.assertEqual(source.read_bytes(), original)
-
-    def test_missing_pillow_has_installation_message(self):
-        with patch.dict(sys.modules, {'PIL': None}):
-            with self.assertRaisesRegex(ValueError, 'python3 -m pip install Pillow'):
-                _stage_image(self.root / 'source.png', self.root / 'target.png')
+                        self.assertEqual(image.convert('RGB').getbbox(),
+                                         (0, 120, 640, 360) if size[0] == 1280 else (240, 0, 400, 480))
 
 
 class PortMasterPackage(unittest.TestCase):

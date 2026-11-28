@@ -1,14 +1,17 @@
 'use strict';
 
-const { runOptimizationAdapter } = require('../../helpers/runtime-context.cjs');
+const { loadPmjsRuntime } = require('../../helpers/runtime-context.cjs');
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, '../../../patches/isat/loop-recovery.js'), 'utf8');
 function fixture(enabled = true, altered = false) {
- const hooks = {}, warnings = [];
- const context = vm.createContext({console: {warn: x => warnings.push(x)},
-  PMJS: {isatSourceQualification: {verified:true}, optimizations: {register() {}, isEnabled: () => enabled, refuse: (...args) => warnings.push(args)},
-   phases: {on(name,owner,fn) {hooks[name] = fn;}}}});
+ const warnings = [];
+ const context = loadPmjsRuntime({
+  console: { log() {}, error() {}, warn: x => warnings.push(x) },
+  PMJS_GAME_CONFIG: enabled ? {} : { disableOptimizations: ['isat.loop-recovery'] },
+  __pmjsBuiltinRequire: require,
+ });
+ context.PMJS.isatSourceQualification = { verified: true };
  vm.runInContext(`function Game_Actor(id) {this._actorId=id;this._classId=1;this._level=1;this._exp={1:0};this._hp=10;this._mp=4;this._states=[];this._skills=[];this.refreshes=0;this.recoveries=0;}
  var Olivia={AntiPlayerStress:{LevelFullHp:true,LevelFullMp:true}};
  Object.defineProperty(Game_Actor.prototype,'mhp',{get:function(){return this._level*10;}});
@@ -67,14 +70,14 @@ function fixture(enabled = true, altered = false) {
  var $dataCommonEvents={105:event}, variables={1:1,2:2};
  var $gameVariables={value:function(id){return variables[id];}},target=new Game_Actor(2),requested=44;
  var interpreter=new Game_Interpreter();`,context);
- context.__pmjsBuiltinRequire = require;
- require('../../helpers/runtime-context.cjs').runModule(context, 'js/pmjs-core/methods.js');
  const patched = source.replace(/methodMatches\(([^,]+), '([a-f0-9]+)'\)/g, (text, expression, digest) => {
    const method = vm.runInContext(expression.replace(/^actor\./, 'Game_Actor.prototype.').replace(/^stress\./, 'Olivia.AntiPlayerStress.'), context);
    return text.replace(digest, context.PMJS.methods.fingerprint(context.PMJS.methods.sourceOf(method)));
  });
  if(altered) vm.runInContext('Game_Actor.prototype.levelUp=function(){this._level++;};',context);
- runOptimizationAdapter(patched,context);hooks.afterGuestPlugins();
+ new vm.Script(patched).runInContext(context);
+ context.PMJS.phases.emit('afterGuestPlugins');
+ context.PMJS.optimizations.finalize();
  return {context,warnings,run: code => vm.runInContext(code,context)};
 }
 function state(f) {return JSON.parse(f.run('JSON.stringify({level:target._level,exp:target.currentExp(),hp:target._hp,mp:target._mp,skills:target._skills,states:target._states})'));}

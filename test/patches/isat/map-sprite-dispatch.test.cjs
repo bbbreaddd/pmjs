@@ -1,30 +1,28 @@
 'use strict';
 
-const { runOptimizationAdapter } = require('../../helpers/runtime-context.cjs');
-const fs = require('node:fs');
-const vm = require('node:vm');
+const { loadPmjsRuntime, runModule } = require('../../helpers/runtime-context.cjs');
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const path = require('node:path');
 test('map sprite policy preserves prior values, external edits and scene reuse', () => {
-const phases = [], options = new WeakMap();
+const options = new WeakMap();
 let map = 30, calls = 0;
 class Scene_Map { createDisplayObjects() { calls++; return 'created'; } }
-const PMJS = {
-  isatSourceQualification: { verified: true },
-  optimizations: { register() {}, isEnabled() { return true; } },
-  phases: { on(_phase, _id, callback) { phases.push(callback); } },
-  pixi4: {
-    getStageRenderOptions: scene => options.get(scene),
-    setStageRenderOptions(scene, value) {
-      if (value && value.worldState !== 'pixi' && value.worldState !== 'native') throw new TypeError('worldState required');
-      if (value) options.set(scene, { ...value }); else options.delete(scene);
-    }
+const context = loadPmjsRuntime({
+  console: { log() {}, error() {} },
+  Scene_Map, $gameMap: { mapId: () => map },
+});
+const PMJS = context.PMJS;
+PMJS.isatSourceQualification = { verified: true };
+PMJS.pixi4 = {
+  getStageRenderOptions: scene => options.get(scene),
+  setStageRenderOptions(scene, value) {
+    if (value && value.worldState !== 'pixi' && value.worldState !== 'native') throw new TypeError('worldState required');
+    if (value) options.set(scene, { ...value }); else options.delete(scene);
   }
 };
-runOptimizationAdapter(fs.readFileSync(path.join(__dirname, '../../../patches/isat/map-sprite-dispatch.js'), 'utf8'),
-  { PMJS, Scene_Map, $gameMap: { mapId: () => map } });
-phases[0]();
+runModule(context, 'patches/isat/map-sprite-dispatch.js');
+PMJS.phases.emit('afterGuestPlugins');
+PMJS.optimizations.finalize();
 function enter(previous) {
   const scene = new Scene_Map();
   if (previous) PMJS.pixi4.setStageRenderOptions(scene, previous);
@@ -71,22 +69,29 @@ assert.deepEqual(options.get(fresh), { worldState: 'pixi', plainSpriteSegments: 
 });
 
 function qualificationFixture(qualification = { verified: true }) {
-  const options = new WeakMap(), hooks = [], refusals = [];
+  const options = new WeakMap();
   class Scene_Map {
     createDisplayObjects() { return 'created'; }
     update() { return 'updated'; }
     terminate() { return 'terminated'; }
   }
-  const PMJS = { isatSourceQualification: qualification,
-    phases: { on(_phase, _id, hook) { hooks.push(hook); } },
-    optimizations: { register() {}, isEnabled: () => true, refuse(_id, reason) { refusals.push(reason); } },
-    pixi4: { getStageRenderOptions: scene => options.get(scene),
-      setStageRenderOptions(scene, value) { if (value) options.set(scene, { ...value }); else options.delete(scene); } }
+  const context = loadPmjsRuntime({
+    console: { log() {}, error() {} },
+    Scene_Map, $gameMap: { mapId: () => 30 },
+  });
+  const PMJS = context.PMJS;
+  if (qualification !== undefined) PMJS.isatSourceQualification = qualification;
+  PMJS.pixi4 = {
+    getStageRenderOptions: scene => options.get(scene),
+    setStageRenderOptions(scene, value) { if (value) options.set(scene, { ...value }); else options.delete(scene); },
   };
   const original = Scene_Map.prototype.createDisplayObjects;
-  runOptimizationAdapter(fs.readFileSync(path.join(__dirname, '../../../patches/isat/map-sprite-dispatch.js'), 'utf8'),
-    { PMJS, Scene_Map, $gameMap: { mapId: () => 30 } });
-  hooks.forEach(hook => hook());
+  runModule(context, 'patches/isat/map-sprite-dispatch.js');
+  PMJS.phases.emit('afterGuestPlugins');
+  PMJS.phases.emit('afterPlugins');
+  PMJS.methods.install();
+  PMJS.optimizations.finalize();
+  const refusals = Array.from(PMJS.optimizations.dump()).filter(entry => entry.refusalReason).map(entry => entry.refusalReason);
   return { PMJS, Scene_Map, options, refusals, original };
 }
 

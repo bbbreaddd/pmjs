@@ -1,6 +1,6 @@
 'use strict';
 
-const { runOptimizationAdapter } = require('../../helpers/runtime-context.cjs');
+const { loadPmjsRuntime } = require('../../helpers/runtime-context.cjs');
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -14,9 +14,12 @@ const emptyBattleDataDigest = '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873
 
 function setup({ qualified = true, enabled = true, dataVerified = true, badProducer = false,
   withBattle = false, badBattleProducer = false, badBattleData = false, unreadableBattleData = false } = {}) {
-  const stages = new WeakMap(), refused = [], read = [];
-  let phase;
-  const context = vm.createContext({
+  const stages = new WeakMap(), read = [];
+  const context = loadPmjsRuntime({
+    console: { log() {}, error() {} },
+    PMJS_GAME_CONFIG: enabled ? {} : {
+      disableOptimizations: ['isat.dormont-bitmap-cache-producers'],
+    },
     __pmjsBuiltinRequire() { return { createHash() { return { update(text) {
       return { digest() {
         if (text === '[]') return emptyBattleDataDigest;
@@ -29,22 +32,19 @@ function setup({ qualified = true, enabled = true, dataVerified = true, badProdu
       if (file === 'data/BattleHUD.json' && withBattle && !unreadableBattleData) return badBattleData ? '[{}]' : '[]';
       throw Error('unexpected or unreadable data source');
     } } },
-    PMJS: { isatSourceQualification: Object.freeze({ verified: qualified, dormontDataVerified: dataVerified }),
-      optimizations: { register() {}, isEnabled() { return enabled; }, refuse(id, reason) { refused.push({ id, reason }); } },
-      phases: { on(name, _owner, callback) { assert.equal(name, 'afterGuestPlugins'); phase = callback; } },
-      pixi4: {
-        getStageRenderOptions(stage) { return stages.get(stage); },
-        setStageRenderOptions(stage, options) {
-          if (!options) { stages.delete(stage); return; }
-          options = { ...options };
-          if (options.bitmapCacheProducers) options.bitmapCacheProducers = {
-            ...options.bitmapCacheProducers, nodes: options.bitmapCacheProducers.nodes.slice()
-          };
-          stages.set(stage, options);
-        }
-      }
-    }
   });
+  context.PMJS.isatSourceQualification = Object.freeze({ verified: qualified, dormontDataVerified: dataVerified });
+  context.PMJS.pixi4 = {
+    getStageRenderOptions(stage) { return stages.get(stage); },
+    setStageRenderOptions(stage, options) {
+      if (!options) { stages.delete(stage); return; }
+      options = { ...options };
+      if (options.bitmapCacheProducers) options.bitmapCacheProducers = {
+        ...options.bitmapCacheProducers, nodes: options.bitmapCacheProducers.nodes.slice()
+      };
+      stages.set(stage, options);
+    }
+  };
   vm.runInContext(`
     function MapHUD() { this.children = []; }
     MapHUD.prototype.updateVisibility = function() {};
@@ -76,8 +76,14 @@ function setup({ qualified = true, enabled = true, dataVerified = true, badProdu
     var $dataBattleHUD = [];
   `, context);
   context.PMJS.isatMethodHash = require('./test-fixtures/method-hash.cjs')(context.__pmjsBuiltinRequire);
-  runOptimizationAdapter(source, context);
-  phase();
+  new vm.Script(source).runInContext(context);
+  context.PMJS.phases.emit('afterGuestPlugins');
+  context.PMJS.phases.emit('afterPlugins');
+  context.PMJS.methods.install();
+  context.PMJS.optimizations.finalize();
+  const refused = Array.from(context.PMJS.optimizations.dump())
+    .filter(entry => entry.refusalReason)
+    .map(({ id, refusalReason }) => ({ id, reason: refusalReason }));
   function create() {
     const scene = new context.Scene_Map(); context.SceneManager._scene = scene;
     assert.equal(scene.createDisplayObjects(), 'created'); return scene;

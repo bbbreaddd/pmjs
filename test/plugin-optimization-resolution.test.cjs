@@ -16,48 +16,64 @@ const adapters = [
   ['terrax/lighting', 'Terrax_Lighting', ['terrax.native-lighting']],
 ];
 
-for (const [adapter, plugin, ids] of adapters) {
-  for (const state of ['unloaded', 'failed', 'disabled', 'not discovered']) {
-    test(adapter + ' refuses an unavailable guest: ' + state, () => {
-      const ctx = loadPmjsRuntime({ console: { log() {}, error() {} } });
-      runModule(ctx, 'js/pmjs-plugins/' + adapter + '.js');
-      ctx.PMJS.plugins.snapshotEffectiveManifest(state === 'not discovered'
-        ? [] : [{ name: plugin, status: state !== 'disabled' }]);
-      if (state === 'failed') {
-        assert.throws(() => ctx.PMJS.plugins.execute(plugin,
-          () => { throw new Error('guest load failed'); }), /guest load failed/);
-      }
-      ctx.PMJS.plugins.finish();
-      ctx.PMJS.phases.emit('afterGuestPlugins');
-      ctx.PMJS.optimizations.finalize();
-      for (const id of ids) {
-        assert.equal(ctx.PMJS.optimizations.isEnabled(id), false);
-        assert.match(ctx.PMJS.optimizations.reason(id),
-          new RegExp('required guest plugin .* unavailable: ' + state));
-      }
+for (const state of ['unloaded', 'failed', 'disabled', 'not discovered']) {
+  test('shared plugin policy refuses an unavailable guest: ' + state, () => {
+    const ctx = loadPmjsRuntime({ console: { log() {}, error() {} } });
+    ctx.PMJS.plugins.registerOptimization('TestGuest', {
+      id: 'test.guest', owner: 'test', fallback: 'original',
     });
-  }
+    ctx.PMJS.plugins.snapshotEffectiveManifest(state === 'not discovered'
+      ? [] : [{ name: 'TestGuest', status: state !== 'disabled' }]);
+    if (state === 'failed') {
+      assert.throws(() => ctx.PMJS.plugins.execute('TestGuest',
+        () => { throw new Error('guest load failed'); }), /guest load failed/);
+    }
+    ctx.PMJS.plugins.finish();
+    ctx.PMJS.optimizations.finalize();
+    assert.equal(ctx.PMJS.optimizations.isEnabled('test.guest'), false);
+    assert.match(ctx.PMJS.optimizations.reason('test.guest'),
+      new RegExp('required guest plugin .* unavailable: ' + state));
+  });
+}
 
-  for (const policy of ['configuration', 'PMJS_DISABLE_OPT']) {
-    test(adapter + ' preserves disable policy when the guest is unavailable: ' + policy, () => {
-      const ctx = loadPmjsRuntime({
-        console: { log() {}, error() {} },
-        PMJS_GAME_CONFIG: policy === 'configuration' ? { disableOptimizations: ids } : {},
-        NativeHost: { runtime: { env(name) {
-          return policy === 'PMJS_DISABLE_OPT' && name === 'PMJS_DISABLE_OPT'
-            ? ids.join(',') : undefined;
-        } } },
-      });
-      runModule(ctx, 'js/pmjs-plugins/' + adapter + '.js');
-      ctx.PMJS.plugins.snapshotEffectiveManifest([]);
-      ctx.PMJS.plugins.finish();
-      ctx.PMJS.phases.emit('afterGuestPlugins');
-      ctx.PMJS.optimizations.finalize();
-      for (const id of ids) {
-        assert.equal(ctx.PMJS.optimizations.reason(id), 'disabled by ' + policy);
-      }
+for (const policy of ['configuration', 'PMJS_DISABLE_OPT']) {
+  test('shared plugin policy preserves disable policy when the guest is unavailable: ' + policy, () => {
+    const ctx = loadPmjsRuntime({
+      console: { log() {}, error() {} },
+      PMJS_GAME_CONFIG: policy === 'configuration' ? { disableOptimizations: ['test.guest'] } : {},
+      NativeHost: { runtime: { env: name => policy === 'PMJS_DISABLE_OPT' && name === 'PMJS_DISABLE_OPT' ? 'test.guest' : undefined } },
     });
-  }
+    ctx.PMJS.plugins.registerOptimization('TestGuest', {
+      id: 'test.guest', owner: 'test', fallback: 'original',
+    });
+    ctx.PMJS.plugins.snapshotEffectiveManifest([]);
+    ctx.PMJS.plugins.finish();
+    ctx.PMJS.optimizations.finalize();
+    assert.equal(ctx.PMJS.optimizations.reason('test.guest'), 'disabled by ' + policy);
+  });
+}
+
+for (const [adapter, plugin, ids] of adapters) {
+  test(adapter + ' registers its guest dependency with the shared optimization registry', () => {
+    const unavailable = loadPmjsRuntime({ console: { log() {}, error() {} } });
+    runModule(unavailable, 'js/pmjs-plugins/' + adapter + '.js');
+    unavailable.PMJS.plugins.snapshotEffectiveManifest([]);
+    unavailable.PMJS.plugins.finish();
+    unavailable.PMJS.optimizations.finalize();
+
+    const available = loadPmjsRuntime({ console: { log() {}, error() {} } });
+    runModule(available, 'js/pmjs-plugins/' + adapter + '.js');
+    available.PMJS.plugins.snapshotEffectiveManifest([{ name: plugin, status: true }]);
+    available.PMJS.plugins.execute(plugin, () => {});
+    available.PMJS.plugins.finish();
+    available.PMJS.optimizations.finalize();
+
+    for (const id of ids) {
+      assert.equal(unavailable.PMJS.optimizations.isEnabled(id), false);
+      assert.match(unavailable.PMJS.optimizations.reason(id), /required guest plugin .* unavailable/);
+      assert.equal(available.PMJS.optimizations.isEnabled(id), true);
+    }
+  });
 }
 
 test('successful guest resolution preserves enabled state and normalizes plugin names', () => {

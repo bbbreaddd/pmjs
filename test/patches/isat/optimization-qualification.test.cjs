@@ -1,26 +1,30 @@
 'use strict';
 
-const { runOptimizationAdapter } = require('../../helpers/runtime-context.cjs');
+const { loadPmjsRuntime, runModule } = require('../../helpers/runtime-context.cjs');
 
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const test = require('node:test');
-const vm = require('node:vm');
 const methodHash = require('./test-fixtures/method-hash.cjs')();
 
 for (const name of ['choice-width', 'static-events', 'blank-characters', 'loop-recovery',
   'plain-word-measure', 'screen-effects']) {
   test(`${name} requires successful source qualification before inspecting methods`, () => {
     for (const qualification of [undefined, { verified: false }]) {
-      const hooks = [], refused = [];
-      const context = { Bitmap: function() {}, PMJS: {
-        isatSourceQualification: qualification,
-        isatMethodHash() { throw Error('must qualify sources first'); },
-        optimizations: { register() {}, isEnabled() { return true; }, refuse(...args) { refused.push(args); } },
-        phases: { on(_phase, _id, callback) { hooks.push(callback); } }
-      } };
-      runOptimizationAdapter(fs.readFileSync(require.resolve(`../../../patches/isat/${name}.js`), 'utf8'), context);
-      for (const hook of hooks) hook();
+      const context = loadPmjsRuntime({
+        console: { log() {}, error() {} },
+        Bitmap: function() {},
+      });
+      if (qualification !== undefined) context.PMJS.isatSourceQualification = qualification;
+      context.PMJS.isatMethodHash = () => { throw Error('must qualify sources first'); };
+      runModule(context, `patches/isat/${name}.js`);
+      context.PMJS.phases.emit('beforeBoot');
+      context.PMJS.phases.emit('afterGuestPlugins');
+      context.PMJS.phases.emit('afterPlugins');
+      context.PMJS.methods.install();
+      context.PMJS.optimizations.finalize();
+      const refused = context.PMJS.optimizations.dump()
+        .filter(entry => entry.refusalReason)
+        .map(entry => [entry.id, entry.refusalReason]);
       assert.equal(refused.length, 1);
       assert.match(refused[0][1], /unqualified/);
     }
@@ -37,14 +41,20 @@ test('screen-effects refuses method lookalikes and retains authored side effects
   };
   Spriteset.prototype.updateScreenEffects = Spriteset.prototype.createScreenEffectFilters;
   Spriteset.prototype.update = function() { calls++; };
-  const originals = { ...Spriteset.prototype }, hooks = [], refused = [];
-  runOptimizationAdapter(fs.readFileSync(require.resolve('../../../patches/isat/screen-effects.js'), 'utf8'), {
+  const originals = { ...Spriteset.prototype };
+  const context = loadPmjsRuntime({
+    console: { log() {}, error() {} },
     Spriteset_Base: Spriteset,
-    PMJS: { isatSourceQualification: { verified: true }, isatMethodHash: methodHash,
-      optimizations: { register() {}, isEnabled() { return true; }, refuse(...args) { refused.push(args); } },
-      phases: { on(_phase, _id, callback) { hooks.push(callback); } } }
   });
-  hooks.forEach(hook => hook());
+  context.PMJS.isatSourceQualification = { verified: true };
+  context.PMJS.isatMethodHash = methodHash;
+  runModule(context, 'patches/isat/screen-effects.js');
+  context.PMJS.phases.emit('beforeBoot');
+  context.PMJS.phases.emit('afterGuestPlugins');
+  context.PMJS.phases.emit('afterPlugins');
+  context.PMJS.methods.install();
+  context.PMJS.optimizations.finalize();
+  const refused = context.PMJS.optimizations.dump().filter(entry => entry.refusalReason);
   assert.equal(refused.length, 1);
   assert.deepEqual({ ...Spriteset.prototype }, originals);
   const spriteset = new Spriteset();

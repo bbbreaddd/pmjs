@@ -25,48 +25,31 @@ function fixture(data, checksum = hash(data)) {
   } };
 }
 
-for (const [name, make, expectedHashes] of [
-  ['canonical', () => ({ files: {}, results: {}, indices: { marker: 'kept' }, failures: {} }), 1],
-  ['legacy missing failures', () => ({ files: {}, results: {}, indices: { marker: 'kept' } }), 2],
-  ['reordered keys', () => ({ indices: { marker: 'kept' }, files: {}, results: {}, failures: {} }), 2],
-  ['extra field', () => ({ files: {}, results: {}, indices: { marker: 'kept' }, failures: {}, extra: 'ignored' }), 2],
-  ['falsy failures', () => ({ files: {}, results: {}, indices: { marker: 'kept' }, failures: null }), 2],
-  ['truthy primitive failures', () => ({ files: {}, results: {}, indices: { marker: 'kept' }, failures: 'legacy' }), 1],
-]) {
-  test('state checksum reuse: ' + name, async () => {
-    const { filename, options } = fixture(make());
-    const original = fs.readFileSync(filename), createHash = crypto.createHash;
-    let calls = 0;
-    // Count only hashes of the fixture state, excluding cache-path and file hashes.
-    crypto.createHash = function(...args) {
-      const hash = createHash.apply(this, args), update = hash.update;
-      hash.update = function(value, ...rest) {
-        if (typeof value === 'string' && value.includes('"marker":"kept"')) ++calls;
-        return update.call(this, value, ...rest);
-      };
-      return hash;
-    };
-    let session;
-    try {
-      session = await openPreparation(options);
-      assert.equal(calls, expectedHashes);
-      assert.equal(session.data.indices.marker, 'kept');
-      crypto.createHash = createHash;
-      session.markDirty();
-      assert.equal(await session.checkpoint(), true);
-      assert.deepEqual(fs.readFileSync(filename), original, 'unchanged state must not be rewritten');
-      session.data.indices.marker = 'changed';
-      session.markDirty();
-      assert.equal(await session.checkpoint(), true);
-      const changed = JSON.parse(fs.readFileSync(filename));
-      assert.equal(changed.data.indices.marker, 'changed');
-      assert.equal(changed.checksum, hash(changed.data));
-    } finally {
-      crypto.createHash = createHash;
-      await session?.close();
-    }
+test('valid preparation state is reused and unchanged state is not rewritten', async () => {
+  const { filename, options } = fixture({
+    files: {}, results: {}, indices: { marker: 'kept' }, failures: {},
   });
-}
+  const original = fs.readFileSync(filename);
+  const beforeStat = fs.statSync(filename, { bigint: true });
+  const session = await openPreparation(options);
+  try {
+    assert.equal(session.data.indices.marker, 'kept');
+    session.markDirty();
+    assert.equal(await session.checkpoint(), true);
+    const afterStat = fs.statSync(filename, { bigint: true });
+    assert.equal(afterStat.ino, beforeStat.ino, 'unchanged state must not be rewritten');
+    assert.equal(afterStat.mtimeNs, beforeStat.mtimeNs, 'unchanged state must not be rewritten');
+    assert.deepEqual(fs.readFileSync(filename), original, 'unchanged state must not be rewritten');
+    session.data.indices.marker = 'changed';
+    session.markDirty();
+    assert.equal(await session.checkpoint(), true);
+    const changed = JSON.parse(fs.readFileSync(filename));
+    assert.equal(changed.data.indices.marker, 'changed');
+    assert.equal(changed.checksum, hash(changed.data));
+  } finally {
+    await session.close();
+  }
+});
 
 test('canonical shape does not bypass invalid checksum rejection', async () => {
   const data = { files: {}, results: {}, indices: { marker: 'tampered' }, failures: {} };

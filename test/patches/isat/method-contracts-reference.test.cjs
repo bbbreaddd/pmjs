@@ -1,6 +1,6 @@
 'use strict';
 
-const { runOptimizationAdapter } = require('../../helpers/runtime-context.cjs');
+const { loadPmjsRuntime, runModule } = require('../../helpers/runtime-context.cjs');
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -25,17 +25,18 @@ function method(context, file, assignment) {
 }
 
 function fixture(name) {
-  const hooks = [], refused = [];
-  const context = vm.createContext({
-    PMJS: { isatSourceQualification: { verified: true }, isatMethodHash: methodHash,
-      optimizations: { register() {}, isEnabled() { return true; }, refuse(...args) { refused.push(args); } },
-      phases: { on(_phase, _id, callback) { hooks.push(callback); } } }
-  });
+  const context = loadPmjsRuntime({ console: { log() {}, error() {} } });
+  context.PMJS.isatSourceQualification = { verified: true };
+  context.PMJS.isatMethodHash = methodHash;
   const guestMethod = (file, assignment) => method(context, path.join(game, file), assignment);
   function install() {
-    runOptimizationAdapter(fs.readFileSync(require.resolve(`../../../patches/isat/${name}.js`), 'utf8'), context);
-    hooks.forEach(hook => hook());
-    assert.deepEqual(refused, []);
+    runModule(context, `patches/isat/${name}.js`);
+    context.PMJS.phases.emit('beforeBoot');
+    context.PMJS.phases.emit('afterGuestPlugins');
+    context.PMJS.phases.emit('afterPlugins');
+    context.PMJS.methods.install();
+    context.PMJS.optimizations.finalize();
+    assert.deepEqual(Array.from(context.PMJS.optimizations.dump()).filter(entry => entry.refusalReason), []);
   }
   return { context, guestMethod, install };
 }

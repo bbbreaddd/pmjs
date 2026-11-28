@@ -1,32 +1,30 @@
 'use strict';
 
-const { runOptimizationAdapter } = require('../../helpers/runtime-context.cjs');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
+const { loadPmjsRuntime, runModule } = require('../../helpers/runtime-context.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
 function fixture(verified = true) {
-  const phases = [], options = new WeakMap(), troop = { _troopId: 26 };
+  const options = new WeakMap(), troop = { _troopId: 26 };
   class Scene_Battle {
     createDisplayObjects() { this.created = (this.created || 0) + 1; return 'created'; }
     terminate() { this.terminated = true; return 'terminated'; }
   }
-  const PMJS = { isatSourceQualification: { verified },
-    optimizations: { register() {}, isEnabled: () => true, refuse() {} },
-    phases: { on(_phase, _id, fn) { phases.push(fn); } },
-    pixi4: {
-      getStageRenderOptions: scene => options.get(scene),
-      setStageRenderOptions(scene, value) {
-        if (value) options.set(scene, { ...value }); else options.delete(scene);
-      }
+  const context = loadPmjsRuntime({
+    console: { log() {}, error() {} },
+    Scene_Battle, $gameTroop: troop,
+  });
+  context.PMJS.isatSourceQualification = { verified };
+  context.PMJS.pixi4 = {
+    getStageRenderOptions: scene => options.get(scene),
+    setStageRenderOptions(scene, value) {
+      if (value) options.set(scene, { ...value }); else options.delete(scene);
     }
   };
-  runOptimizationAdapter(fs.readFileSync(path.join(__dirname, '../../../patches/isat/battle-sprite-dispatch.js'), 'utf8'),
-    { PMJS, Scene_Battle, $gameTroop: troop });
-  phases.forEach(fn => fn());
-  return { PMJS, Scene_Battle, options, troop };
+  runModule(context, 'patches/isat/battle-sprite-dispatch.js');
+  context.PMJS.phases.emit('afterGuestPlugins');
+  context.PMJS.optimizations.finalize();
+  return { PMJS: context.PMJS, Scene_Battle, options, troop };
 }
 
 test('Bourdon uses ordinary Pixi preparation and generic sprite encoding, preserving scene ownership', () => {

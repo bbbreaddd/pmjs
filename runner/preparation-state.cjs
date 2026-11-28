@@ -117,11 +117,10 @@ async function openPreparation({ gameRoot, cacheRoot, native, verifyHashes = fal
     try {
       const record = await readState(filename);
       if (record.version === 1 && record.checksum === checksum(record.data) &&
-          record.data && ['files', 'results', 'indices'].every(key => record.data[key] &&
+          record.data && ['files', 'results', 'indices', 'failures'].every(key => record.data[key] &&
             typeof record.data[key] === 'object' && !Array.isArray(record.data[key]))) {
         saved = record.data;
-        // Reuse only when normalization below preserves the exact JSON key order and values.
-        if (saved.failures && Object.keys(saved).join(',') === 'files,results,indices,failures')
+        if (Object.keys(saved).join(',') === 'files,results,indices,failures')
           verifiedChecksum = record.checksum;
       }
     } catch (error) {

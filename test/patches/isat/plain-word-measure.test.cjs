@@ -1,6 +1,6 @@
 'use strict';
 
-const { runOptimizationAdapter } = require('../../helpers/runtime-context.cjs');
+const { loadPmjsRuntime } = require('../../helpers/runtime-context.cjs');
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -12,7 +12,6 @@ const methodHash = require('./test-fixtures/method-hash.cjs')();
 const source = fs.readFileSync(path.join(__dirname, '../../../patches/isat/plain-word-measure.js'), 'utf8');
 
 function setup({ enabled = true, translated, failure, qualified = true, unknown = false } = {}) {
-  const phases = [];
   const calls = [];
   function WindowBase() {
     this._wordWrap = true;
@@ -34,7 +33,9 @@ function setup({ enabled = true, translated, failure, qualified = true, unknown 
     restoreCurrentWindowSettings() { this.contents.fontFace = this.savedFont; calls.push(['restore']); },
     clearCurrentWindowSettings() { delete this.savedFont; calls.push(['clear']); }
   };
-  const context = vm.createContext({
+  const context = loadPmjsRuntime({
+    console: { log() {}, error() {} },
+    PMJS_GAME_CONFIG: enabled ? {} : { disableOptimizations: ['isat.plain-word-measure'] },
     Window_Base: WindowBase,
     VictorEngine: { ControlText: { textWidth(character) {
       calls.push(['width', character, this.contents.fontFace,
@@ -46,14 +47,9 @@ function setup({ enabled = true, translated, failure, qualified = true, unknown 
       calls.push(['translate', text]);
       return translated === undefined ? text : translated;
     } } },
-    PMJS: {
-      isatSourceQualification: qualified === null ? undefined : { verified: qualified },
-      isatMethodHash: methodHash,
-      optimizations: { register() {}, isEnabled() { return enabled; }, refuse() {} },
-      phases: { on(phase, _id, callback) { phases.push({ phase, callback }); } },
-
-    }
   });
+  if (qualified !== null) context.PMJS.isatSourceQualification = { verified: qualified };
+  context.PMJS.isatMethodHash = methodHash;
   let adapted = source;
   for (const [expected, method] of [
     ['804a24c50bf504ffbd22f3ace97615df230de185b62142f81724943769ced5e5', fallback],
@@ -61,9 +57,9 @@ function setup({ enabled = true, translated, failure, qualified = true, unknown 
     ['c646ad77520444a09cd56800d5c701be21662de32604ccbc39979725b5046f91', context.SRD.TranslationEngine.translate]
   ]) adapted = adapted.replace(expected, methodHash(method));
   if (unknown) WindowBase.prototype.textWidthExCheck = function() { calls.push(['authored']); return 17; };
-  runOptimizationAdapter(adapted, context);
-  assert.equal(phases[0].phase, 'afterPlugins');
-  phases[0].callback();
+  new vm.Script(adapted).runInContext(context);
+  context.PMJS.phases.emit('afterPlugins');
+  context.PMJS.optimizations.finalize();
   return { window: new WindowBase(), calls, fallback, context };
 }
 

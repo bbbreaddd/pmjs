@@ -33,19 +33,4 @@ function loadPmjsRuntime(extra = {}, modules = [
   return context;
 }
 
-function runOptimizationAdapter(source, context) {
-  if (!vm.isContext(context)) vm.createContext(context);
-  context.PMJS.config ||= {};
-  for (const [namespace, method, module] of [
-    ['optimizations', 'install', 'js/pmjs-core/optimizations.js'],
-    ['plugins', 'installOptimization', 'js/pmjs-rpgmaker/plugins.js']
-  ]) {
-    if (typeof context.PMJS[namespace]?.[method] === 'function') continue;
-    const overrides = { ...context.PMJS[namespace] };
-    runModule(context, module);
-    Object.assign(context.PMJS[namespace], overrides);
-  }
-  return new vm.Script(source).runInContext(context);
-}
-
-module.exports = { loadPmjsRuntime, runModule, runOptimizationAdapter };
+module.exports = { loadPmjsRuntime, runModule };

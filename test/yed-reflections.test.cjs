@@ -1,11 +1,9 @@
 'use strict';
 
-const { runOptimizationAdapter } = require('./helpers/runtime-context.cjs');
+const { loadPmjsRuntime, runModule } = require('./helpers/runtime-context.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const vm = require('node:vm');
-const fs = require('node:fs');
-function fixture(recognized = true, surfaces = []) {
+function fixture(recognized = true, surfaces = [], enabled = true) {
   class Container {
     constructor() { this.children = []; this.visible = true; }
     addChild(child) { if (child.parent) child.parent.removeChild(child); this.children.push(child); child.parent = this; }
@@ -30,19 +28,31 @@ function fixture(recognized = true, surfaces = []) {
     }
     update() { this._tilemap.children.slice().forEach(sprite => sprite.update()); }
   }
-  let enabled = true, refused = false;
   const known = new Set([Spriteset.prototype.createCharacters, Character.prototype.updateReflection,
     Map.prototype.isOnReflection, Reflection.prototype.update, Reflection.prototype.updateReflect,
     Reflection.prototype.updatePosition]);
-  const context = { PIXI: {Container}, Spriteset_Map: Spriteset, Game_CharacterBase: Character,
-    Game_Map: Map, $gameMap: new Map(), PMJS: {plugins: {registerOptimization() {}, onLoaded(plugin, id, fn) { fn(); }},
-      phases: {on(phase, id, fn) { fn(); }}, methods: {wrap() {}, matchesSource: fn => recognized && known.has(fn)},
-      optimizations: {isEnabled: () => enabled, refuse() { refused = true; }} } };
-  runOptimizationAdapter(fs.readFileSync(require.resolve('../js/pmjs-plugins/yed/tiled.js'), 'utf8'), context);
+  const context = loadPmjsRuntime({
+    console: { log() {}, error() {} },
+    PMJS_GAME_CONFIG: enabled ? {} : { disableOptimizations: ['tilemap.yed-reflection-sprites'] },
+    PIXI: { Container }, Spriteset_Map: Spriteset, Game_CharacterBase: Character,
+    Game_Map: Map, $gameMap: new Map(),
+  });
+  context.PMJS.methods.matchesSource = fn => recognized && known.has(fn);
+  runModule(context, 'js/pmjs-plugins/yed/tiled.js');
+  context.PMJS.plugins.snapshotEffectiveManifest([{ name: 'YED_Tiled', status: true }]);
+  context.PMJS.plugins.execute('YED_Tiled', () => {});
+  context.PMJS.plugins.finish();
+  context.PMJS.phases.emit('afterGuestPlugins');
+  context.PMJS.phases.emit('afterPlugins');
+  context.PMJS.methods.install();
+  context.PMJS.optimizations.finalize();
   context.$gameMap._reflection = surfaces;
   const scene = new Spriteset();
   assert.equal(scene.createCharacters(), 'created');
-  return {scene, context, disable() { enabled = false; }, refused: () => refused};
+  return {
+    scene, context,
+    refused: () => !context.PMJS.optimizations.isEnabled('tilemap.yed-reflection-sprites'),
+  };
 }
 test('empty maps retain reflection ownership without updating duplicate sprites', () => {
   const h = fixture(), s = h.scene, members = s._characterSprites;
@@ -60,8 +70,9 @@ test('live reflection changes restore the same sprites before their next update'
   assert.equal(mirror.parent, s._tilemap); assert.equal(mirror.ticks, 1); assert.equal(mirror.visible, true);
   h.context.$gameMap._reflection.length = 0; s.update();
   assert.equal(mirror.ticks, 1); assert.equal(mirror.parent.visible, false);
-  h.disable(); s.update();
-  assert.equal(mirror.parent, s._tilemap); assert.equal(mirror.ticks, 2); assert.equal(mirror.visible, false);
+  const disabled = fixture(true, [], false), dm = disabled.scene._characterSprites[1];
+  disabled.scene.update();
+  assert.equal(dm.parent, disabled.scene._tilemap); assert.equal(dm.ticks, 1);
 });
 test('maps with reflection areas keep ordinary reflection updates from creation', () => {
   const h = fixture(true, [{}]), s = h.scene, mirror = s._characterSprites[1];

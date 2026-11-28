@@ -1,15 +1,12 @@
 'use strict';
 
-const { runOptimizationAdapter } = require('../../helpers/runtime-context.cjs');
+const { loadPmjsRuntime, runModule } = require('../../helpers/runtime-context.cjs');
 
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const test = require('node:test');
-const vm = require('node:vm');
-const source = fs.readFileSync(require.resolve('../../../patches/omori/timing.js'), 'utf8');
 
 function fixture({ enabled = true, qualified = true, resume = true, lateChange = false } = {}) {
-  const hooks = new Map(), wrappers = [], refusals = [], fallbackCalls = [];
+  const fallbackCalls = [];
   let now = 0;
   function guestRepeat() { fallbackCalls.push({ receiver: this, args: [...arguments] }); return 7; }
   const manager = {
@@ -17,31 +14,26 @@ function fixture({ enabled = true, qualified = true, resume = true, lateChange =
     resume(value) { this.resumed = value; return value; },
   };
   if (!resume) delete manager.resume;
-  const context = {
+  const context = loadPmjsRuntime({
+    console: { log() {}, error() {} },
+    PMJS_GAME_CONFIG: enabled ? {} : { disableOptimizations: ['omori.logic-timing'] },
     SceneManager: manager, performance: { now: () => now },
-    PMJS: {
-      plugins: { registerOptimization(name, definition) {
-        assert.equal(name, 'GTP_OmoriFixes');
-        assert.equal(definition.id, 'omori.logic-timing');
-      } },
-      optimizations: { isEnabled: () => enabled, refuse(id, reason) { refusals.push(reason); } },
-      phases: { on(name, id, callback) { hooks.set(name, callback); } },
-      methods: {
-        matchesSource(fn, accepted) {
-          assert.equal(accepted.length, 1);
-          return qualified && fn === guestRepeat;
-        },
-        wrap(definition) { wrappers.push(definition); }
-      }
-    }
+  });
+  context.PMJS.methods.matchesSource = (fn, accepted) => {
+    assert.equal(accepted.length, 1);
+    return qualified && fn === guestRepeat;
   };
-  runOptimizationAdapter(source, context);
-  hooks.get('afterGuestPlugins')();
+  runModule(context, 'patches/omori/timing.js');
+  context.PMJS.plugins.snapshotEffectiveManifest([{ name: 'GTP_OmoriFixes', status: true }]);
+  context.PMJS.plugins.execute('GTP_OmoriFixes', () => {});
+  context.PMJS.plugins.finish();
+  context.PMJS.phases.emit('afterGuestPlugins');
   if (lateChange) manager.determineRepeatNumber = () => 9;
-  for (const wrapper of wrappers) {
-    const target = wrapper.getTarget();
-    target[wrapper.method] = wrapper.wrap(target[wrapper.method]);
-  }
+  context.PMJS.methods.install();
+  context.PMJS.optimizations.finalize();
+  const refusals = context.PMJS.optimizations.dump()
+    .filter(entry => entry.refusalReason)
+    .map(entry => entry.refusalReason);
   return { manager, guestRepeat, refusals, fallbackCalls,
     step(delta, elapsed = delta * 1000 / 60) {
       now += elapsed;

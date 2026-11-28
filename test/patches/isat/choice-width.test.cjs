@@ -1,6 +1,6 @@
 'use strict';
 
-const { runOptimizationAdapter } = require('../../helpers/runtime-context.cjs');
+const { loadPmjsRuntime } = require('../../helpers/runtime-context.cjs');
 
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
@@ -15,7 +15,6 @@ const fingerprints = ['42c171dd2639b68d99e87494939375b500fc6a5978e2c36579225cafc
 
 function fixture({ enabled = true, unknown = false, translations = {} } = {}) {
   const calls = { widths: 0, raster: 0, fonts: 0, conversions: 0, bounds: 0 };
-  let install, refusal;
   class Bitmap {
     constructor() {
       this.height = 72; this.fontSize = 28; this.outlineWidth = 4;
@@ -69,16 +68,25 @@ function fixture({ enabled = true, unknown = false, translations = {} } = {}) {
       .update(originals[i].toString()).digest('hex'));
   }
   if (unknown) Choice.prototype.maxChoiceWidth = function() { return 42; };
-  const context = vm.createContext({ Bitmap, Window_ChoiceList: Choice, __pmjsBuiltinRequire: require,
-    PMJS: { isatSourceQualification: { verified: true }, optimizations: { register() {}, isEnabled() { return enabled; },
-      refuse(_id, reason) { refusal = reason; } },
-    web: { canvas: { supportsNativeText(context) {
-      return context.globalCompositeOperation === 'source-over' &&
-        context._transform.join(',') === '1,0,0,1,0,0';
-    } } },
-    phases: { on(_phase, _owner, callback) { install = callback; } } } });
+  const context = loadPmjsRuntime({
+    console: { log() {}, error() {} },
+    PMJS_GAME_CONFIG: enabled ? {} : { disableOptimizations: ['isat.choice-width-measure'] },
+    Bitmap, Window_ChoiceList: Choice, __pmjsBuiltinRequire: require,
+  });
+  context.PMJS.isatSourceQualification = { verified: true };
   context.PMJS.isatMethodHash = require('./test-fixtures/method-hash.cjs')(context.__pmjsBuiltinRequire);
-  runOptimizationAdapter(adapted, context); install();
+  context.PMJS.web = { ...context.PMJS.web, canvas: { supportsNativeText(ctx) {
+    return ctx.globalCompositeOperation === 'source-over' &&
+      ctx._transform.join(',') === '1,0,0,1,0,0';
+  } } };
+  new vm.Script(adapted).runInContext(context);
+  context.PMJS.phases.emit('beforeBoot');
+  context.PMJS.phases.emit('afterGuestPlugins');
+  context.PMJS.phases.emit('afterPlugins');
+  context.PMJS.methods.install();
+  context.PMJS.optimizations.finalize();
+  const refusal = context.PMJS.optimizations.isEnabled('isat.choice-width-measure')
+    ? undefined : context.PMJS.optimizations.reason('isat.choice-width-measure');
   return { window: new Choice(), calls, originals, refusal };
 }
 

@@ -1,6 +1,6 @@
 'use strict';
 
-const { runOptimizationAdapter } = require('../../helpers/runtime-context.cjs');
+const { loadPmjsRuntime } = require('../../helpers/runtime-context.cjs');
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -11,21 +11,12 @@ const vm = require('node:vm');
 const adapter = fs.readFileSync(path.join(__dirname, '../../../patches/isat/battle-status-icons.js'), 'utf8');
 
 function setup({ recognized = true, qualification = { verified: true }, extraWork = false } = {}) {
-  let afterPlugins;
-  let refusal;
-  const context = {
-    PMJS: {
-      ...(qualification ? { isatSourceQualification: qualification } : {}),
-      optimizations: {
-        register() {},
-        isEnabled() { return true; },
-        refuse(_id, reason) { refusal = reason; }
-      },
-      phases: { on(_phase, _id, callback) { afterPlugins = callback; } }
-    }
-  };
+  const context = loadPmjsRuntime({
+    console: { log() {}, error() {} },
+    __pmjsBuiltinRequire: require,
+  });
   context.globalThis = context;
-  vm.createContext(context);
+  if (qualification) context.PMJS.isatSourceQualification = qualification;
   vm.runInContext(`
     function Window_BattleStatusUpgrade(actor) {
       this._actor = actor;
@@ -51,16 +42,19 @@ function setup({ recognized = true, qualification = { verified: true }, extraWor
       this._checkForRefresh.push([actor.allIcons(), "actor.allIcons()"]);
     };
   `, context);
-  context.__pmjsBuiltinRequire = require;
-  require('../../helpers/runtime-context.cjs').runModule(context, 'js/pmjs-core/methods.js');
   const hash = method => context.PMJS.methods.fingerprint(context.PMJS.methods.sourceOf(method));
   const source = adapter
     .replace('ffd96184669de4d75cdbcd5ba90ccca6f0c5fa033941f1d020eead313f466154', hash(context.Window_BattleStatusUpgrade.prototype.updateRefreshes))
     .replace('5079c41aea8d86f452570edc42bfd1d5463dca629bf0e68eb3dafc34578ee1d1', hash(context.Window_BattleStatusUpgrade.prototype.drawActorIconsScale));
   if (!recognized) context.Window_BattleStatusUpgrade.prototype.drawActorIconsScale = function() {};
   const original = context.Window_BattleStatusUpgrade.prototype.updateRefreshes;
-  runOptimizationAdapter(source, context);
-  afterPlugins();
+  new vm.Script(source).runInContext(context);
+  context.PMJS.phases.emit('afterGuestPlugins');
+  context.PMJS.phases.emit('afterPlugins');
+  context.PMJS.methods.install();
+  context.PMJS.optimizations.finalize();
+  const refusal = context.PMJS.optimizations.dump()
+    .find(entry => entry.id === 'isat.battle-status-icons')?.refusalReason ?? undefined;
   return { context, original, refusal };
 }
 
