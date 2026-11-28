@@ -532,3 +532,12 @@ test('audio-free video cycles and loop-off end retain prior wall-clock semantics
   near(h.video.currentTime, 6);
   assert.equal(h.calls.filter(call => call[0] === 'play').length, 0);
 });
+
+test('repeated play while already playing does not restart audio or dispatch extra play', async () => {
+  const h = setup();
+  h.video.loop = true;
+  await h.start();
+  await h.video.play();
+  assert.equal(h.calls.filter(call => call[0] === 'play').length, 1);
+  assert.equal(h.calls.filter(call => call[0] === 'event' && call[1] === 'play').length, 1);
+});

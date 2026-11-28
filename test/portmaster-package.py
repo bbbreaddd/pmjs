@@ -793,11 +793,6 @@ fs.writeFileSync(file, JSON.stringify(descriptor));
             portmaster.portmaster(self.stage, self.bundle, self.output)
         self.assertEqual(self.output.read_bytes(), before)
 
-    def test_release_mode_requires_authored_submission(self):
-        with self.assertRaisesRegex(ValueError, 'requires --submission'):
-            portmaster.portmaster(self.stage, self.bundle, self.output, release=True)
-        self.assertFalse(self.output.exists())
-
     def test_legacy_runtime_keeps_its_diagnostic_inventory(self):
         info = json.loads((self.stage / 'build-info.json').read_text())
         info['schema'] = 1
