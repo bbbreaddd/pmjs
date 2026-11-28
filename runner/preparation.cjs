@@ -23,13 +23,54 @@ async function prepareGameAssets(options) {
   }
   if (!session) return { cancelled: true, images: { cancelled: true }, portArtifacts: new Map() };
   const result = { cancelled: false, root: session.root, portArtifacts: new Map() };
+  const canonical = file => native.runtime?.gameFiles?.canonical?.(file) || file;
+  const imagesEnabled = options.images !== false;
+  const mapFilesCount = options.maps
+    ? new Set(session.inventory.map(canonical).filter(file => /^data\/Map\d+\.json$/i.test(file))).size
+    : 0;
+  const mapsEnabled = Boolean(options.maps && (mapFilesCount > 0 || session.data.indices.maps));
+  const audioViewSupport = preparationContext !== 'offline' && typeof native?.media?.installAudioViews === 'function';
+  let imagesWorkTotal = imagesEnabled
+    ? session.inventory.filter(source => /^img\/.+\.(png|png_|rpgmvp)$/i.test(source) ||
+        (!audioViewSupport && /^audio\/.+\.(ogg_|m4a_|rpgmvo|rpgmvm)$/i.test(source))).length
+    : 0;
+  let imagesWorkDone = 0;
+  let mapsTotal = mapFilesCount;
+  let mapsDone = 0;
+  const stageCount = (imagesEnabled ? 1 : 0) + (mapsEnabled ? 1 : 0);
+  const withOverall = (name, progress) => {
+    if (name === 'images') {
+      if (progress.workTotal > 0) {
+        imagesWorkTotal = progress.workTotal;
+        imagesWorkDone = progress.workCompleted || 0;
+      } else if (progress.total > 0) {
+        imagesWorkTotal = progress.total;
+        imagesWorkDone = progress.completed || 0;
+      }
+    } else if (name === 'maps') {
+      imagesWorkDone = imagesWorkTotal;
+      if (progress.total > 0) {
+        mapsTotal = progress.total;
+        mapsDone = progress.completed || 0;
+      }
+    }
+    if (name !== 'images' && name !== 'maps') return { ...progress, stage: name };
+    return {
+      ...progress,
+      stage: name,
+      stageIndex: name === 'images' ? 1 : (imagesEnabled ? 2 : 1),
+      stageCount,
+      overallCompleted: imagesWorkDone + mapsDone,
+      overallTotal: imagesWorkTotal + mapsTotal
+    };
+  };
   const phase = async (name, run) => {
     session.startPhase(name);
-    onProgress({ stage: name, phase: 'start', source: '', completed: 0, total: 0 });
+    onProgress(withOverall(name, { phase: 'start', source: '', completed: 0, total: 0 }));
     let value;
     try {
       for (let attempt = 0; attempt < 2; ++attempt) {
-        value = await run(progress => onProgress({ ...progress, stage: name }));
+        value = await run(progress => onProgress(withOverall(name, progress)));
         const rejected = value?.activation?.rejected || [];
         for (const item of rejected) {
           logger.warn(`[pmjs] preparation ${name}/${item.id}: ${item.reason}; using original if repair fails`);

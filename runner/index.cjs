@@ -43,57 +43,145 @@ function progressClock(milliseconds) {
   return `${minutes}:${String(seconds % 60).padStart(2, '0')}`;
 }
 
+const RATE_WINDOW_MS = 10000;
+const MAX_RATE_WINDOW_MS = 30000;
+
 function stageKeyOf(phase) {
   return typeof phase === 'string' && phase.startsWith('map-') ? 'maps' : 'assets';
 }
 
+function rateBucketOf(phase) {
+  if (phase === 'audio-view' || phase === 'audio-index') return 'audio';
+  if (phase === 'validate' || phase === 'prepare' || phase === 'ready') return 'images';
+  if (phase === 'map-validate' || phase === 'map-compile' || phase === 'map-pack') return 'maps';
+  return null;
+}
+
 function stageProgress(current, elapsedMs, stageBaseline) {
   const stage = stageKeyOf(current.phase);
-  if (!stageBaseline || stageBaseline.key !== stage) {
-    stageBaseline = { key: stage, completed: current.completed || 0, elapsedMs };
+  const bucket = rateBucketOf(current.phase);
+  const workDone = current.workTotal > 0
+    ? (current.workCompleted ?? 0)
+    : (current.completed || 0);
+  if (!bucket) {
+    if (stageBaseline && stageBaseline.stage !== stage) stageBaseline = null;
+    return {
+      baseline: stageBaseline,
+      progress: {
+        ...current,
+        elapsedMs,
+        ...(stageBaseline ? {
+          stageElapsedMs: Math.max(0, elapsedMs - stageBaseline.startedMs),
+          stageCompleted: stageBaseline.startedCompleted,
+          recentRate: stageBaseline.lastRate ?? null
+        } : {})
+      }
+    };
   }
-  return { baseline: stageBaseline, progress: { ...current, elapsedMs,
-    stageElapsedMs: Math.max(0, elapsedMs - stageBaseline.elapsedMs),
-    stageCompleted: stageBaseline.completed } };
+  if (!stageBaseline || stageBaseline.bucket !== bucket) {
+    stageBaseline = {
+      stage,
+      bucket,
+      startedMs: elapsedMs,
+      startedCompleted: workDone,
+      samples: [{ elapsedMs, completed: workDone }],
+      lastRate: null
+    };
+  } else {
+    const samples = stageBaseline.samples;
+    const last = samples[samples.length - 1];
+    if (elapsedMs > last.elapsedMs) {
+      samples.push({ elapsedMs, completed: workDone });
+    } else {
+      last.completed = Math.max(last.completed, workDone);
+    }
+    const cutoff = elapsedMs - RATE_WINDOW_MS;
+    const maxCutoff = elapsedMs - MAX_RATE_WINDOW_MS;
+    while (samples.length > 2 && samples[1].elapsedMs <= cutoff &&
+           (workDone > samples[1].completed || samples[0].elapsedMs < maxCutoff)) {
+      samples.shift();
+    }
+  }
+  const anchor = stageBaseline.samples[0];
+  const windowDone = Math.max(0, workDone - anchor.completed);
+  const windowTime = Math.max(0, elapsedMs - anchor.elapsedMs);
+  const recentRate = windowTime > 0 && windowDone > 0 ? windowDone * 1000 / windowTime : null;
+  stageBaseline.lastRate = recentRate;
+  return {
+    baseline: stageBaseline,
+    progress: {
+      ...current,
+      elapsedMs,
+      stageElapsedMs: Math.max(0, elapsedMs - stageBaseline.startedMs),
+      stageCompleted: stageBaseline.startedCompleted,
+      recentRate
+    }
+  };
 }
 
 function progressLines(progress) {
-  const { phase, source = '', completed = 0, total = 0, generated = 0,
-    hits = 0, fallback = 0, elapsedMs = 0, stageElapsedMs, stageCompleted } = progress;
-  const mapStage = stageKeyOf(phase) === 'maps';
+  const { phase, stage, source = '', completed = 0, total = 0, generated = 0,
+    hits = 0, fallback = 0, elapsedMs = 0, stageElapsedMs, stageCompleted,
+    workCompleted, workTotal, stageIndex, stageCount, overallCompleted, overallTotal, recentRate } = progress;
+  const mapStage = stage === 'maps' || stageKeyOf(phase) === 'maps';
   const titles = {
     discover: 'Finding game assets', wait: 'Waiting for asset cache',
     validate: 'Checking cached assets', prepare: 'Preparing new assets',
     'audio-view': 'Preparing audio',
+    'map-discover': 'Finding maps',
     'map-wait': 'Waiting for map cache', 'map-compile': 'Compiling maps',
     'map-pack': 'Packing maps', 'map-validate': 'Checking cached maps',
     ready: 'Checking game assets', install: 'Finishing asset preparation',
     cleanup: 'Finishing asset preparation', complete: 'Assets ready',
     cancelled: 'Asset preparation cancelled', error: 'Continuing with original assets',
   };
+  const useWorkCounts = workTotal > 0;
+  const stageDone = useWorkCounts ? (workCompleted ?? 0) : completed;
+  const stageTotal = useWorkCounts ? workTotal : total;
+  const remaining = Math.max(0, stageTotal - stageDone);
+  const hasOverall = stageCount > 1 && overallTotal > 0;
+  const barDone = hasOverall ? (overallCompleted || 0) : stageDone;
+  const barTotal = hasOverall ? overallTotal : stageTotal;
+  const pct = barTotal > 0 ? Math.floor(barDone * 100 / barTotal) : (progress.terminal && phase === 'complete' ? 100 : 0);
+
   const hasStageBaseline = stageElapsedMs !== undefined && stageCompleted !== undefined;
-  const stageDone = hasStageBaseline ? Math.max(0, completed - stageCompleted) : completed;
+  const rateDone = hasStageBaseline ? Math.max(0, stageDone - stageCompleted) : stageDone;
   const stageTime = hasStageBaseline ? stageElapsedMs : elapsedMs;
-  const rate = stageTime > 0 && stageDone > 0 ? stageDone * 1000 / stageTime : null;
-  const remaining = Math.max(0, total - completed);
+  const rate = recentRate !== undefined
+    ? recentRate
+    : (stageTime > 0 && rateDone > 0 ? rateDone * 1000 / stageTime : null);
+
   const working = phase === 'validate' || phase === 'prepare' ||
     phase === 'map-compile' || phase === 'map-pack' || phase === 'map-validate';
   const unit = mapStage ? 'maps/s' : 'files/s';
+  let statusLine;
+  if (phase === 'discover' || phase === 'start') {
+    statusLine = mapStage ? 'Counting maps...' : 'Counting files...';
+  } else if (phase === 'map-discover') {
+    statusLine = 'Counting maps...';
+  } else if (phase === 'audio-view' || phase === 'audio-index') {
+    statusLine = hasOverall
+      ? `Audio: ${completed} files  |  Overall: ${pct}%`
+      : `${completed} / ${total} audio files`;
+  } else if (hasOverall) {
+    statusLine = `${mapStage ? 'Maps' : 'Assets'} (${stageIndex}/${stageCount}): ${stageDone} / ${stageTotal} (${remaining} left)  |  Overall: ${pct}%`;
+  } else {
+    statusLine = `${stageDone} / ${stageTotal} done (${pct}%)  |  ${remaining} left`;
+  }
   const lines = [titles[phase] || (mapStage ? 'Preparing maps' : 'Preparing game assets'),
-    phase === 'discover' ? 'Counting files...' :
-      `${completed} / ${total} done (${total ? Math.floor(completed * 100 / total) : 100}%)  |  ${remaining} left`,
+    statusLine,
     source ? `Current file: ${source.replace(/[\r\n\t]/g, ' ')}` : '',
     mapStage ? `Maps: ${generated} new, ${hits} reused  |  Skipped: ${fallback}`
       : `Cache: ${generated} new, ${hits} reused  |  Originals: ${fallback}`,
-    `Elapsed: ${progressClock(elapsedMs)}  |  Average: ${rate === null ? 'estimating...' : `${rate.toFixed(1)} ${unit}`}`];
-  if (!progress.terminal && total && remaining && rate !== null && stageDone >= 3 &&
+    `Elapsed: ${progressClock(elapsedMs)}  |  Speed: ${rate === null ? 'estimating...' : `${rate.toFixed(1)} ${unit}`}`];
+  if (!progress.terminal && stageTotal && remaining && rate !== null && rateDone >= 3 &&
       (phase === 'ready' || working)) {
     lines.push(`Estimated time left: ${progressClock(remaining * 1000 / rate)}`);
   } else if (phase === 'prepare') {
     lines.push('Large files can take longer. Original files are preserved.');
   } else if (phase === 'wait' || phase === 'map-wait') {
     lines.push('Another launch is preparing this cache.');
-  } else if (phase === 'discover' || phase === 'validate' || phase === 'map-validate') {
+  } else if (phase === 'discover' || phase === 'map-discover' || phase === 'validate' || phase === 'map-validate') {
     lines.push('Existing prepared assets are reused when unchanged.');
   } else if (phase === 'install' || phase === 'cleanup') {
     lines.push('All files checked; finishing up...');
@@ -240,8 +328,13 @@ async function prepareStartupAssets(options, native, settings) {
     const stepped = stageProgress(current, elapsedMs, stageBaseline);
     stageBaseline = stepped.baseline;
     const progress = stepped.progress;
-    native.runtime.preparationProgress({ ...progress, force, present, lines: progressLines(progress),
-      fonts: options.preparationFonts });
+    const hasOverall = progress.stageCount > 1 && progress.overallTotal > 0;
+    const barCompleted = hasOverall ? (progress.overallCompleted || 0)
+      : (progress.workTotal > 0 ? (progress.workCompleted ?? 0) : (progress.completed || 0));
+    const barTotal = hasOverall ? progress.overallTotal
+      : (progress.workTotal > 0 ? progress.workTotal : (progress.total || 0));
+    native.runtime.preparationProgress({ ...progress, completed: barCompleted, total: barTotal,
+      force, present, lines: progressLines(progress), fonts: options.preparationFonts });
   };
   showProgress();
   let activeLog;

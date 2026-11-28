@@ -436,9 +436,12 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
 
 
   let terminalPhase = 'complete', activationStarted = false;
+  let workTotal = 0, workCompleted = 0;
+  const isAudioViewSource = source => audioViewSupport && hasPathPrefix(source, 'audio/') && decryptedSource(source) !== null;
   const report = (phase, source = '', terminal = false) => onProgress({
     phase, source, terminal, completed: result.completed, total: result.total,
-    remaining: result.total - result.completed, generated: result.generated, hits: result.hits,
+    remaining: result.total - result.completed, workCompleted, workTotal,
+    generated: result.generated, hits: result.hits,
     fallback: result.fallback, sourceBytes: result.sourceBytes, elapsedMs: performance.now() - started
   });
   async function clearIndexes() {
@@ -485,6 +488,7 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
     const sources = session.inventory.filter(source => safeSource(source) || decryptedSource(source));
     const settings = await encryptionSettings(native, gameRoot, session.files);
     result.total = sources.length;
+    workTotal = sources.filter(source => !isAudioViewSource(source)).length;
     if (settings.error) throw settings.error;
     report('discover');
     if (cancelled()) return result;
@@ -598,6 +602,7 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
             descriptor: null, workspaceConstrained: false, outputs: {} });
           session.outcome('image:' + source, 'ordinary-choice');
           result.completed++;
+          workCompleted++;
           report('audio-index', source);
           continue;
         }
@@ -814,6 +819,7 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
         if (stage) await fsp.rm(stage, { recursive: true, force: true });
       }
       result.completed += 1;
+      workCompleted += 1;
       report(sourcePhase, source);
     }
     if (!cancelled()) {
