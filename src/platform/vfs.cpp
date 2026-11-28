@@ -280,11 +280,22 @@ std::string Vfs::fileIdentity(const std::filesystem::path& path) {
 }
 
 namespace {
-bool matchesDependency(const std::filesystem::path& path, std::string& expected, const std::string& hash) {
+bool matchesDependency(const std::filesystem::path& path, std::string& expected, const std::string& hash,
+    std::mutex* cacheMutex = nullptr, std::unordered_map<std::string, std::string>* cache = nullptr) {
   const auto actual = pmjs::fileIdentity(path);
   if (actual.empty()) return false;
   if (actual == expected) return true;
-  if (!inodeOnlyChange(expected, actual) || !fileContentMatches(path, actual, hash)) return false;
+  if (!inodeOnlyChange(expected, actual)) return false;
+  const auto cacheKey = actual + '\0' + hash;
+  if (cacheMutex && cache) {
+    std::lock_guard lock(*cacheMutex);
+    if (cache->contains(cacheKey)) { expected = actual; return true; }
+  }
+  if (!fileContentMatches(path, actual, hash)) return false;
+  if (cacheMutex && cache) {
+    std::lock_guard lock(*cacheMutex);
+    cache->emplace(cacheKey, actual);
+  }
   expected = actual;
   return true;
 }
@@ -359,13 +370,26 @@ std::optional<std::filesystem::path> Vfs::resolveDerived(const std::string& path
   const auto& entry = found->second;
   std::lock_guard lock(*entry.identityMutex);
   const auto source = resolveOriginal(entry.source), settings = resolveOriginal(entry.settings);
-  if (!source || !settings || !matchesDependency(*source, entry.sourceIdentity, entry.sourceHash) ||
-      !matchesDependency(*settings, entry.settingsIdentity, entry.settingsHash) ||
-      !matchesDependency(entry.file, entry.fileIdentity, entry.fileHash)) {
+  if (!source || !settings ||
+      !matchesDependency(*source, entry.sourceIdentity, entry.sourceHash,
+          &derivedState_->mutex, &derivedState_->verifiedDependencies) ||
+      !matchesDependency(*settings, entry.settingsIdentity, entry.settingsHash,
+          &derivedState_->mutex, &derivedState_->verifiedDependencies) ||
+      !matchesDependency(entry.file, entry.fileIdentity, entry.fileHash,
+          &derivedState_->mutex, &derivedState_->verifiedDependencies)) {
     derivedInvalidated_->store(true, std::memory_order_relaxed);
+    std::lock_guard stateLock(derivedState_->mutex);
+    derivedState_->invalidationSources.push_back(entry.source);
     return std::nullopt;
   }
   return entry.file;
+}
+
+std::vector<std::string> Vfs::consumeDerivedInvalidationSources() {
+  std::lock_guard lock(derivedState_->mutex);
+  std::vector<std::string> out;
+  out.swap(derivedState_->invalidationSources);
+  return out;
 }
 
 std::optional<std::filesystem::path> Vfs::resolve(const std::string& path) const {

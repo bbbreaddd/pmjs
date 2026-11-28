@@ -326,10 +326,14 @@ async function invalidateResults({ root, native, sources, logger = console }) {
   finally { release(); }
 }
 
-async function invalidateCatalog({ root, native }) {
+async function invalidateCatalog({ root, native, logger = console }) {
   const release = await acquireLock(root, () => false, () => {}, native.assets);
-  try { await fsp.rm(path.join(root, 'startup-catalog.json'), { force: true }); }
-  finally { release(); }
+  const catalogPath = path.join(root, 'startup-catalog.json');
+  try {
+    const existed = fs.existsSync(catalogPath);
+    await fsp.rm(catalogPath, { force: true });
+    if (existed) logger.warn('[pmjs] startup catalog invalidated');
+  } finally { release(); }
 }
 
 // The caller holds the preparation lock; full state work stays before guest execution.
@@ -407,7 +411,7 @@ function createInvalidators(root, native, logger) {
   return {
     invalidate: source => invalidateResults({ root, native,
       sources: Array.isArray(source) ? source : [source], logger }),
-    invalidateCatalog: () => invalidateCatalog({ root, native }),
+    invalidateCatalog: () => invalidateCatalog({ root, native, logger }),
   };
 }
 

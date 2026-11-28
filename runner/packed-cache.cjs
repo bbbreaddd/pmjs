@@ -14,6 +14,24 @@ const identity = fileIdentity;
 const imageName = /^entries\/[a-f0-9]{64}(?:-[a-f0-9]{12})?\/(?:page-\d+\.pml4|texture\.pmtx)$/;
 const packName = /^pack-[a-f0-9]{16}-\d+\.pmpk$/;
 
+async function hashFile(file, expectedSize) {
+  const handle = await fsp.open(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+    const before = await handle.stat({ bigint: true });
+    if (!before.isFile() || Number(before.size) !== expectedSize) return null;
+    const digest = crypto.createHash('sha256'), buffer = Buffer.alloc(256 * 1024);
+    for (let offset = 0; offset < expectedSize;) {
+      const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, expectedSize - offset), offset);
+      if (!bytesRead) return null;
+      digest.update(buffer.subarray(0, bytesRead));
+      offset += bytesRead;
+    }
+    const after = await handle.stat({ bigint: true });
+    if (identity(before) !== identity(after)) return null;
+    return { stat: after, hash: digest.digest('hex') };
+  } finally { await handle.close(); }
+}
+
 async function readPackedIndex(root) {
   const entries = new Map(), file = path.join(root, filename);
   let stat;
@@ -31,10 +49,18 @@ async function readPackedIndex(root) {
         Number(pack.identity.split(':')[2]) > maximumPackBytes) throw new Error('invalid prepared pack metadata');
     packs.add(pack.name);
     try {
-      const stat = await fsp.lstat(path.join(root, pack.name), { bigint: true });
-      if (!stat.isFile() || !fileIdentityMatches(pack.identity, stat, path.join(root, pack.name), filesystemTypes))
-        throw new Error('prepared pack changed');
-      mountedPacks.push({ name: pack.name, identity: identity(stat) });
+      const packPath = path.join(root, pack.name);
+      let stat = await fsp.lstat(packPath, { bigint: true });
+      if (!stat.isFile()) throw new Error('prepared pack changed');
+      if (!fileIdentityMatches(pack.identity, stat, packPath, filesystemTypes)) {
+        const expectedSize = Number(pack.identity.split(':')[2]);
+        const verified = /^[a-f0-9]{64}$/.test(pack.hash || '') && Number(stat.size) === expectedSize
+          ? await hashFile(packPath, expectedSize) : null;
+        if (!verified || verified.hash !== pack.hash || identity(verified.stat) !== identity(await fsp.lstat(packPath, { bigint: true })))
+          throw new Error('prepared pack changed');
+        stat = verified.stat;
+      }
+      mountedPacks.push({ name: pack.name, identity: identity(stat), ...(pack.hash ? { hash: pack.hash } : {}) });
     } catch (error) { damagedPacks.push({ name: pack.name, reason: error.message }); }
   }
   const sizes = new Map(data.packs.map(pack => [pack.name, Number(pack.identity.split(':')[2])]));
@@ -249,8 +275,10 @@ async function packCache(root, assets, { maximumBytes = maximumPackBytes, verify
       const finishPack = async () => {
         if (!output) return;
         await output.sync(); await output.close(); output = null;
-        const stat = await fsp.lstat(path.join(root, pack), { bigint: true });
-        newPacks.push({ name: pack, identity: identity(stat) });
+        const packPath = path.join(root, pack);
+        const stat = await fsp.lstat(packPath, { bigint: true });
+        const verified = await hashFile(packPath, Number(stat.size));
+        newPacks.push({ name: pack, identity: identity(verified ? verified.stat : stat), ...(verified ? { hash: verified.hash } : {}) });
       };
       for (const item of batch) {
         const packedSource = item.old ? current.get(item.name) : null;

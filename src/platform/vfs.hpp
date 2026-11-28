@@ -48,6 +48,7 @@ class Vfs {
   std::optional<std::filesystem::path> resolveDerived(const std::string& path) const;
 
   bool consumeDerivedInvalidation() { return derivedInvalidated_->exchange(false, std::memory_order_relaxed); }
+  std::vector<std::string> consumeDerivedInvalidationSources();
 
   void mountReadOnlyOverlay(const std::filesystem::path& root);
   void mountWritableOverlay(const std::filesystem::path& root);
@@ -80,6 +81,12 @@ class Vfs {
     bool hides(const std::string& key) const;
   };
   std::shared_ptr<std::atomic<bool>> derivedInvalidated_ = std::make_shared<std::atomic<bool>>(false);
+  struct DerivedState {
+    std::mutex mutex;
+    std::unordered_map<std::string, std::string> verifiedDependencies;
+    std::vector<std::string> invalidationSources;
+  };
+  std::shared_ptr<DerivedState> derivedState_ = std::make_shared<DerivedState>();
   std::shared_ptr<const Overlay> overlay_;
   std::shared_ptr<const Vfs> readOnly_;
   std::shared_ptr<const std::unordered_map<std::string, DerivedFile>> derived_;

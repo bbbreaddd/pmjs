@@ -65,7 +65,7 @@ std::optional<std::string> identityWithoutInode(const std::string& key) {
           [](char c) { return c >= '0' && c <= '9'; })) return std::nullopt;
     end = separator;
   }
-  return key.substr(0, separators[5]) + key.substr(separators[4]);
+  return key.substr(0, separators[6]) + key.substr(separators[4]);
 }
 
 bool inodeOnlyChange(const std::string& expected, const std::string& actual) {

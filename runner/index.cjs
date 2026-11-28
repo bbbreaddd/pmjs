@@ -401,6 +401,7 @@ async function runSession(input, diagnostics, setNative) {
     if (typeof native.assets.consumePreparationInvalidations === 'function')
       pendingInvalidations |= native.assets.consumePreparationInvalidations();
     if (!pendingInvalidations || (!force && performance.now() < retryInvalidationAt)) return;
+    console.warn('[pmjs] preparation invalidation queued');
     if (invalidatePreparationCatalog) {
       let write;
       write = Promise.resolve().then(() => invalidatePreparationCatalog())

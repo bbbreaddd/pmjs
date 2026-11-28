@@ -690,7 +690,12 @@ napi_value consumePreparationFailures(napi_env env, napi_callback_info) try {
 napi_value consumePreparationInvalidations(napi_env env, napi_callback_info) try {
   auto& value = host(env);
   auto flags = value.images.consumePreparationInvalidations();
-  if (value.vfs.consumeDerivedInvalidation()) flags |= 3;
+  const auto derived = value.vfs.consumeDerivedInvalidationSources();
+  if (value.vfs.consumeDerivedInvalidation() || !derived.empty()) {
+    flags |= 3;
+    for (const auto& source : derived)
+      std::fprintf(stderr, "[pmjs] derived invalidation source=%s\n", source.c_str());
+  }
   return number(env, flags);
 } catch (const std::exception& error) { napi_throw_error(env, nullptr, error.what()); return nullptr; }
 napi_value tileSlot(napi_env env, napi_callback_info info) try {
