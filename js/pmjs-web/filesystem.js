@@ -290,6 +290,12 @@ function warnMissingReadFileCallback() {
   }
 }
 
+function ensureAsyncCallback(callback) {
+  if (typeof callback === 'function') return callback;
+  warnMissingReadFileCallback();
+  return function(error) { if (error) throw error; };
+}
+
 var fsModule = {
   existsSync: function(path) {
     var writable = writablePath(path);
@@ -302,10 +308,7 @@ var fsModule = {
   },
   readFile: function(path, options, callback) {
     if (typeof options === 'function') { callback = options; options = undefined; }
-    if (typeof callback !== 'function') {
-      warnMissingReadFileCallback();
-      callback = function(error) { if (error) throw error; };
-    }
+    callback = ensureAsyncCallback(callback);
     PMJS.tasks.enqueue(function() {
       Promise.resolve().then(function() { return fsReadContentsAsync(path, options); }).then(
         function(result) { deliverNodeCallback(function() { return callback(null, result); }); },
@@ -337,9 +340,10 @@ var fsModule = {
   },
   writeFile: function(path, contents, options, callback) {
     if (typeof options === 'function') { callback = options; options = undefined; }
+    callback = ensureAsyncCallback(callback);
     var error = null;
     try { fsModule.writeFileSync(path, contents, options); } catch (caught) { error = caught; }
-    deliverNodeCallback(function() { if (callback) return callback(error); });
+    deliverNodeCallback(function() { return callback(error); });
   },
   appendFileSync: function(path, contents, options) {
     var flag = typeof options === 'object' && options && options.flag !== undefined ? options.flag : 'a';
@@ -380,9 +384,10 @@ var fsModule = {
   },
   mkdir: function(path, options, callback) {
     if (typeof options === 'function') { callback = options; options = undefined; }
+    callback = ensureAsyncCallback(callback);
     var result, error = null;
     try { result = fsModule.mkdirSync(path, options); } catch (caught) { error = caught; }
-    deliverNodeCallback(function() { if (callback) return callback(error, result); });
+    deliverNodeCallback(function() { return callback(error, result); });
   },
   unlinkSync: function(path) {
     var writable = writablePath(path);
@@ -396,9 +401,10 @@ var fsModule = {
     else host.remove(resolved);
   },
   unlink: function(path, callback) {
+    callback = ensureAsyncCallback(callback);
     var error = null;
     try { fsModule.unlinkSync(path); } catch (caught) { error = caught; }
-    deliverNodeCallback(function() { if (callback) return callback(error); });
+    deliverNodeCallback(function() { return callback(error); });
   },
   renameSync: function(from, to) {
     var source = writablePath(from);
@@ -415,9 +421,10 @@ var fsModule = {
       destination !== null ? destination : gameReadPath(to));
   },
   rename: function(from, to, callback) {
+    callback = ensureAsyncCallback(callback);
     var error = null;
     try { fsModule.renameSync(from, to); } catch (caught) { error = caught; }
-    deliverNodeCallback(function() { if (callback) return callback(error); });
+    deliverNodeCallback(function() { return callback(error); });
   },
   readdirSync: function(path, options) {
     if (!fsModule.statSync(path).isDirectory()) throw Object.assign(new Error('ENOTDIR: ' + path),

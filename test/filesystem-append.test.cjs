@@ -290,3 +290,37 @@ test('fetch reads Blob object URLs and rejects revoked URLs', async t => {
   context.URL.revokeObjectURL(url);
   await assert.rejects(context.fetch(url), /object URL is unavailable/);
 });
+
+test('async fs rename, unlink, writeFile and mkdir without a callback surface errors instead of swallowing them', async () => {
+  const { guest, context } = fixture();
+  const warnings = [], delivered = [];
+  context.process = {
+    emit(event, payload) {
+      if (event === 'warning') { warnings.push(payload.code); return true; }
+      return false;
+    }
+  };
+  context.PMJS.tasks = { enqueue: fn => delivered.push(fn) };
+  guest.rename('/save/missing', '/save/target');
+  assert.deepEqual(warnings, ['DEP0013']);
+  assert.equal(delivered.length, 1);
+  assert.throws(() => delivered[0](), { code: 'ENOENT' });
+
+  guest.unlink('/save/missing');
+  assert.equal(delivered.length, 2);
+  assert.throws(() => delivered[1](), { code: 'ENOENT' });
+
+  guest.writeFile('/game/readonly.txt', 'data');
+  assert.equal(delivered.length, 3);
+  assert.throws(() => delivered[2]());
+
+  guest.mkdir('/save');
+  assert.equal(delivered.length, 4);
+  assert.throws(() => delivered[3](), { code: 'EEXIST' });
+
+  guest.writeFile('/save/ok.txt', 'hello');
+  guest.rename('/save/ok.txt', '/save/moved.txt');
+  assert.doesNotThrow(() => delivered[4]());
+  assert.doesNotThrow(() => delivered[5]());
+  assert.equal(guest.readFileSync('/save/moved.txt', 'utf8'), 'hello');
+});
