@@ -46,7 +46,7 @@ std::optional<PreparedTexture> makePreparedTexture(const ImagePixels& pixels, co
                                                  const FilteredTilePlan* filteredPlan = nullptr,
                                                  bool exportFilteredTilePlan = false,
                                                  std::function<bool(const PreparedTexture&)> accept = {});
-void writeTextureArtifact(const std::filesystem::path& path, const PreparedTexture& texture);
+std::uint64_t writeTextureArtifact(const std::filesystem::path& path, const PreparedTexture& texture);
 std::optional<TextureLayout> readTextureLayout(const TextureReader& read, std::size_t fileBytes);
 bool readTextureChunks(const TextureReader& read, const TextureLayout& layout, const TextureUpload& upload,
                        std::size_t& peakDecoded);

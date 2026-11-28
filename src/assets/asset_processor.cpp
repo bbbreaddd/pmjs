@@ -932,13 +932,17 @@ void emitLayout(PreparationSource& source, const std::filesystem::path& staging,
     page.path.replace_extension(lz4Pages ? ".pml4" : ".png");
     if (lz4Pages) {
       std::uint64_t retained = 0;
-      writeLz4Page(staging / page.path, page.width, page.height, bytes, allowPalettes, &retained);
+      const auto written = writeLz4Page(staging / page.path, page.width, page.height, bytes, allowPalettes, &retained);
       asset.ordinaryRetainedBytes += retained;
       ++source.workspace.stats.lz4Encodes;
+      source.workspace.stats.lz4BytesWritten += written;
     } else {
       writePng(staging / page.path, page.width, page.height, bytes);
       asset.ordinaryRetainedBytes += std::uint64_t(page.width)*page.height*5;
       ++source.workspace.stats.pngEncodes;
+      std::error_code ec;
+      const auto pngSize = std::filesystem::file_size(staging / page.path, ec);
+      if (!ec) source.workspace.stats.pngBytesWritten += pngSize;
     }
     source.workspace.stats.encodedPixels += static_cast<std::uint64_t>(page.width) * page.height;
   }
@@ -1605,9 +1609,12 @@ void emitTexture(PreparationSource& source, const std::filesystem::path& staging
       std::memcpy(pixels.rgba.data()+std::size_t(y)*source.width*4, rows.row.data(), rows.row.size());
     }
     rows.finish();
-    auto classified = (knownStorage && knownStorage->width == source.width && knownStorage->height == source.height)
-      ? *knownStorage
-      : classifyImageStorage(pixels);
+    ImageStorageDecision classified;
+    if (knownStorage && knownStorage->width == source.width && knownStorage->height == source.height) {
+      classified = *knownStorage;
+    } else {
+      classified = classifyImageStorage(pixels);
+    }
     const bool boundedPalette = classified.paletteBits && source.width <= 8192 && source.height <= 8192;
     // Nonzero fills may require reconstructed cells or a full-source texture.
     // Keep mixed layouts conservative: a zero-fill first draw can use only its atlas.
@@ -1678,7 +1685,12 @@ void emitTexture(PreparationSource& source, const std::filesystem::path& staging
     if (automatic && asset.pages.empty() &&
         (texture->layout.kind == TextureKind::Dense8 || texture->layout.kind == TextureKind::Dense16))
       asset.ordinaryRetainedBytes = retained;
-    writeTextureArtifact(staging / "texture.pmtx", *texture);
+    const auto pmtxSize = writeTextureArtifact(staging / "texture.pmtx", *texture);
+    if (texture->layout.kind == TextureKind::FilteredTiles) {
+      source.workspace.stats.filteredTileBytesWritten += pmtxSize;
+    } else {
+      source.workspace.stats.paletteBytesWritten += pmtxSize;
+    }
     asset.framePages = true;
     asset.textureArtifact = "texture.pmtx";
     asset.texturePlan = kindToPlan(texture->layout.kind);
@@ -1755,10 +1767,14 @@ PreparedAsset prepareAssetImage(const std::filesystem::path& path,
       auto result = *layout;
       result.framePages = recipe.framePages;
       result.textureRetainedBytes = 0;
+      const auto ordinaryBefore = stats.lz4BytesWritten + stats.pngBytesWritten;
       emitLayout(source, staging, result, recipe, options.lz4Pages, options.allowPalettes);
       emitTexture(source, staging, result, recipe, options.allowPalettes,
                   options.knownStorage ? &*options.knownStorage : nullptr,
                   options.exportFilteredTilePlan);
+      if (!result.textureArtifact.empty()) {
+        stats.ordinaryBytesForTextureAssets += (stats.lz4BytesWritten + stats.pngBytesWritten) - ordinaryBefore;
+      }
       ++stats.indexedLayouts;
       return result;
     }
@@ -1845,10 +1861,14 @@ PreparedAsset prepareAssetImage(const std::filesystem::path& path,
         cell.crop[2] + 2 * selected->halo, cell.crop[3] + 2 * selected->halo});
     }
   }
+  const auto ordinaryBefore = stats.lz4BytesWritten + stats.pngBytesWritten;
   if (!selected->uniform) emitLayout(source, staging, *selected, recipe, options.lz4Pages, options.allowPalettes);
   emitTexture(source, staging, *selected, recipe, options.allowPalettes,
               options.knownStorage ? &*options.knownStorage : nullptr,
               options.exportFilteredTilePlan);
+  if (!selected->textureArtifact.empty()) {
+    stats.ordinaryBytesForTextureAssets += (stats.lz4BytesWritten + stats.pngBytesWritten) - ordinaryBefore;
+  }
   return std::move(*selected);
 }
 }

@@ -373,10 +373,34 @@ void executeAsset(napi_env, void* opaque) noexcept {
   catch (const std::exception& error) { work.error = error.what(); work.decodeFailure = false; }
   catch (...) { work.error = "asset preparation failed"; work.decodeFailure = false; }
 }
+AssetPreparationStats& globalPreparationProfile() {
+  static AssetPreparationStats profile;
+  return profile;
+}
 void completeAsset(napi_env env, napi_status status, void* opaque) {
   std::unique_ptr<AssetWork> work(static_cast<AssetWork*>(opaque));
   try {
     if (status != napi_ok) throw std::runtime_error("asset preparation cancelled");
+    if (!work->storageSource) {
+      auto& total = globalPreparationProfile();
+      const auto& s = work->statistics;
+      total.sourceDecodes += s.sourceDecodes;
+      total.sourceCacheHits += s.sourceCacheHits;
+      total.indexedLayouts += s.indexedLayouts;
+      total.pngEncodes += s.pngEncodes;
+      total.encodedPixels += s.encodedPixels;
+      total.lz4Encodes += s.lz4Encodes;
+      total.lz4BytesWritten += s.lz4BytesWritten;
+      total.pngBytesWritten += s.pngBytesWritten;
+      total.paletteBytesWritten += s.paletteBytesWritten;
+      total.filteredTileBytesWritten += s.filteredTileBytesWritten;
+      total.ordinaryBytesForTextureAssets += s.ordinaryBytesForTextureAssets;
+      total.temporaryFiles += s.temporaryFiles;
+      total.spillBytesWritten += s.spillBytesWritten;
+      total.spillBytesRead += s.spillBytesRead;
+      total.peakWorkspaceBytes = std::max(total.peakWorkspaceBytes, s.peakWorkspaceBytes);
+      if (s.workspaceConstrained) total.workspaceConstrained = true;
+    }
     if (!work->error.empty()) throw std::runtime_error(work->error);
     check(env, napi_resolve_deferred(env, work->deferred,
       work->storage ? storageDescriptor(env, *work->storage) :
@@ -936,6 +960,31 @@ napi_value installPackedFiles(napi_env env, napi_callback_info info) {
     return number(env, count);
   } catch (const std::exception& error) { napi_throw_error(env, nullptr, error.what()); return nullptr; }
 }
+napi_value preparationProfile(napi_env env, napi_callback_info info) try {
+  const auto args = arguments(env, info, 1);
+  const bool reset = !args.empty() && asBoolean(env, args[0]);
+  auto& stats = globalPreparationProfile();
+  const auto result = moduleObject(env);
+  set(env, result, "sourceDecodes", number(env, static_cast<double>(stats.sourceDecodes)));
+  set(env, result, "sourceCacheHits", number(env, static_cast<double>(stats.sourceCacheHits)));
+  set(env, result, "indexedLayouts", number(env, static_cast<double>(stats.indexedLayouts)));
+  set(env, result, "pngEncodes", number(env, static_cast<double>(stats.pngEncodes)));
+  set(env, result, "encodedPixels", number(env, static_cast<double>(stats.encodedPixels)));
+  set(env, result, "lz4Encodes", number(env, static_cast<double>(stats.lz4Encodes)));
+  set(env, result, "lz4BytesWritten", number(env, static_cast<double>(stats.lz4BytesWritten)));
+  set(env, result, "pngBytesWritten", number(env, static_cast<double>(stats.pngBytesWritten)));
+  set(env, result, "paletteBytesWritten", number(env, static_cast<double>(stats.paletteBytesWritten)));
+  set(env, result, "filteredTileBytesWritten", number(env, static_cast<double>(stats.filteredTileBytesWritten)));
+  set(env, result, "ordinaryBytesForTextureAssets", number(env, static_cast<double>(stats.ordinaryBytesForTextureAssets)));
+  set(env, result, "temporaryFiles", number(env, static_cast<double>(stats.temporaryFiles)));
+  set(env, result, "spillBytesWritten", number(env, static_cast<double>(stats.spillBytesWritten)));
+  set(env, result, "spillBytesRead", number(env, static_cast<double>(stats.spillBytesRead)));
+  set(env, result, "peakWorkspaceBytes", number(env, static_cast<double>(stats.peakWorkspaceBytes)));
+  set(env, result, "workspaceConstrained", boolean(env, stats.workspaceConstrained));
+  if (reset) stats = {};
+  return result;
+} catch (const std::exception& error) { return throwException(env, error); }
+
 void registerAssetMethods(napi_env env, napi_value exports) {
   const auto assets = property(env, exports, "assets");
   method(env, assets, "compressPortArtifact", compressPortArtifact);
@@ -945,6 +994,7 @@ void registerAssetMethods(napi_env env, napi_value exports) {
   method(env, assets, "consumePreparationInvalidations", consumePreparationInvalidations);
   method(env, assets, "consumePreparationFailures", consumePreparationFailures);
   method(env, assets, "processImage", processImage);
+  method(env, assets, "preparationProfile", preparationProfile);
   method(env, assets, "installPackedFiles", installPackedFiles);
   method(env, assets, "classifyImageStorage", classifyImageStorage);
   method(env, assets, "installImageStorage", installImageStorage);

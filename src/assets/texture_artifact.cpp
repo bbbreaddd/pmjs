@@ -266,16 +266,32 @@ std::optional<PreparedTexture> makeFilteredTilePage(int width, int height,
   for (int ty = 0; ty < rows; ++ty) {
     for (int tx = 0; tx < cols; ++tx) {
       bool allZero = true, gray = true, opaque = true;
-      for (int ly = 0; ly < stride; ++ly) {
-        const int sy = std::clamp(ty * tileSize - 1 + ly, 0, height - 1);
-        for (int lx = 0; lx < stride; ++lx) {
-          const int sx = std::clamp(tx * tileSize - 1 + lx, 0, width - 1);
-          const auto* src = premul.data() + (static_cast<std::size_t>(sy) * width + sx) * 4;
-          auto* dst = patch.data() + (static_cast<std::size_t>(ly) * stride + lx) * 4;
-          std::memcpy(dst, src, 4);
-          allZero &= (src[0] | src[1] | src[2] | src[3]) == 0;
-          gray &= src[0] == src[1] && src[1] == src[2];
-          opaque &= src[3] == 255;
+      const int x0 = tx * tileSize - 1;
+      const int y0 = ty * tileSize - 1;
+      if (x0 >= 0 && y0 >= 0 && x0 + stride <= width && y0 + stride <= height) {
+        for (int ly = 0; ly < stride; ++ly) {
+          const auto* srcRow = premul.data() + (static_cast<std::size_t>(y0 + ly) * width + x0) * 4;
+          auto* dstRow = patch.data() + static_cast<std::size_t>(ly) * stride * 4;
+          std::memcpy(dstRow, srcRow, static_cast<std::size_t>(stride) * 4);
+          for (int lx = 0; lx < stride; ++lx) {
+            const auto* src = srcRow + lx * 4;
+            allZero &= (src[0] | src[1] | src[2] | src[3]) == 0;
+            gray &= src[0] == src[1] && src[1] == src[2];
+            opaque &= src[3] == 255;
+          }
+        }
+      } else {
+        for (int ly = 0; ly < stride; ++ly) {
+          const int sy = std::clamp(y0 + ly, 0, height - 1);
+          for (int lx = 0; lx < stride; ++lx) {
+            const int sx = std::clamp(x0 + lx, 0, width - 1);
+            const auto* src = premul.data() + (static_cast<std::size_t>(sy) * width + sx) * 4;
+            auto* dst = patch.data() + (static_cast<std::size_t>(ly) * stride + lx) * 4;
+            std::memcpy(dst, src, 4);
+            allZero &= (src[0] | src[1] | src[2] | src[3]) == 0;
+            gray &= src[0] == src[1] && src[1] == src[2];
+            opaque &= src[3] == 255;
+          }
         }
       }
       if (allZero) continue;
@@ -292,7 +308,16 @@ std::optional<PreparedTexture> makeFilteredTilePage(int width, int height,
         }
       }
       std::uint64_t h = 14695981039346656037ULL;
-      for (const auto b : packed) h = (h ^ b) * 1099511628211ULL;
+      std::size_t offset = 0;
+      for (; offset + 8 <= packed.size(); offset += 8) {
+        std::uint64_t word = 0;
+        std::memcpy(&word, packed.data() + offset, 8);
+        h = (h ^ word) * 1099511628211ULL;
+        h ^= h >> 32;
+      }
+      for (; offset < packed.size(); ++offset) {
+        h = (h ^ packed[offset]) * 1099511628211ULL;
+      }
       auto& bucket = pool.byHash[h];
       std::uint32_t tileIdx = UINT32_MAX;
       for (const auto idx : bucket) {
@@ -609,7 +634,7 @@ std::optional<PreparedTexture> makePreparedTexture(const ImagePixels& pixels, co
   if (filtered && accepted(*filtered)) return filtered;
   return std::nullopt;
 }
-void writeTextureArtifact(const std::filesystem::path& path, const PreparedTexture& texture) {
+std::uint64_t writeTextureArtifact(const std::filesystem::path& path, const PreparedTexture& texture) {
   auto l = texture.layout;
   if (!validLayout(l) || texture.bytes.size() != l.planes.size()) throw std::invalid_argument("invalid texture artifact");
   std::size_t chunks = 0;
@@ -644,6 +669,7 @@ void writeTextureArtifact(const std::filesystem::path& path, const PreparedTextu
       std::fwrite(header.data(), 1, header.size(), file.get()) != header.size())
     throw std::runtime_error("texture artifact write failed");
   if (std::fclose(file.release()) != 0) throw std::runtime_error("texture artifact write failed");
+  return static_cast<std::uint64_t>(offset);
 }
 std::optional<TextureLayout> readTextureLayout(const TextureReader& read, std::size_t fileBytes) {
   std::array<std::uint8_t, 32> h{};

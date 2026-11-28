@@ -577,6 +577,12 @@ napi_value imageMemory(napi_env env, napi_callback_info info) try {
   setProperty(result, "textureArtifactFailures", number(env, images.textureArtifactFailures()));
   setProperty(result, "textureArtifactStagingBytes", number(env, images.textureArtifactStagingBytes()));
   setProperty(result, "sourceTextureBuilds", number(env, images.sourceTextureBuilds()));
+  setProperty(result, "pmtxOrdinaryValidationReads", number(env, images.pmtxOrdinaryValidationReads()));
+  setProperty(result, "pmtxOrdinaryGpuUploads", number(env, images.pmtxOrdinaryGpuUploads()));
+  setProperty(result, "pmtxOrdinaryCpuRegionReads", number(env, images.pmtxOrdinaryCpuRegionReads()));
+  setProperty(result, "pmtxFullSourceReconstructions", number(env, images.pmtxFullSourceReconstructions()));
+  setProperty(result, "pmtxFallbackRequests", number(env, images.pmtxFallbackRequests()));
+  setProperty(result, "pmtxGpuFrameReconstructions", number(env, images.pmtxGpuFrameReconstructions()));
   setProperty(result, "textureArtifactFailureReason", string(env, images.textureArtifactFailureReason()));
   napi_value preparedFallbacks;
   check(env, napi_create_object(env, &preparedFallbacks), "cannot create prepared fallback counts");

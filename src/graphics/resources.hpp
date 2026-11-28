@@ -298,6 +298,12 @@ class ImageStore {
   std::uint64_t textureArtifactFailures() const { return textureArtifactFailures_; }
   std::size_t textureArtifactStagingBytes() const { return textureArtifactStagingBytes_; }
   std::uint64_t sourceTextureBuilds() const { return sourceTextureBuilds_; }
+  std::uint64_t pmtxOrdinaryValidationReads() const { return pmtxOrdinaryValidationReads_; }
+  std::uint64_t pmtxOrdinaryGpuUploads() const { return pmtxOrdinaryGpuUploads_; }
+  std::uint64_t pmtxOrdinaryCpuRegionReads() const { return pmtxOrdinaryCpuRegionReads_; }
+  std::uint64_t pmtxFullSourceReconstructions() const { return pmtxFullSourceReconstructions_; }
+  std::uint64_t pmtxFallbackRequests() const { return pmtxFallbackRequests_; }
+  std::uint64_t pmtxGpuFrameReconstructions() const { return pmtxGpuFrameReconstructions_; }
   const std::string& textureArtifactFailureReason() const { return textureArtifactFailureReason_; }
   std::uint64_t blockRegions() const { return blockRegions_; }
   std::optional<BlockImageRegion> resolveBlockRegion(ImageHandle handle,
@@ -407,6 +413,17 @@ class ImageStore {
   struct PreparedBacking;
   bool realizeSourceTexture(ImageHandle handle);
   std::uint64_t textureArtifactLoads_ = 0, textureArtifactFailures_ = 0, sourceTextureBuilds_ = 0;
+  std::uint64_t pmtxOrdinaryValidationReads_ = 0, pmtxOrdinaryGpuUploads_ = 0;
+  mutable std::uint64_t pmtxOrdinaryCpuRegionReads_ = 0;
+  std::uint64_t pmtxFullSourceReconstructions_ = 0, pmtxFallbackRequests_ = 0;
+  std::uint64_t pmtxGpuFrameReconstructions_ = 0;
+  std::uint32_t filteredTileProgram_ = 0, filteredTileFbo_ = 0, filteredTileVao_ = 0;
+  int filteredTileOriginLoc_ = -1, filteredTileHaloLoc_ = -1, filteredTileSourceLoc_ = -1;
+  bool filteredTileReconstructorFailed_ = false;
+  bool ensureFilteredTileReconstructor();
+  std::optional<ImageInfo> reconstructFilteredTileFrameOnGpu(
+      std::uint32_t atlasTex, std::uint32_t tableTex, int sourceWidth, int sourceHeight,
+      int originX, int originY, int halo, int outWidth, int outHeight);
   std::size_t textureArtifactStagingBytes_ = 0;
   std::string textureArtifactFailureReason_;
   ProgramBinaryCache programCache_;

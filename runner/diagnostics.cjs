@@ -317,7 +317,15 @@ function createDiagnostics({ logger = console, getNative = () => null,
         peakGpuBytes: info.peakGpuBytes, cpuBytes: info.cpuBytes,
         tileMetadataBytes: info.tileMetadataBytes, warmBytes: info.warmBytes,
         pinnedBytes: info.pinnedBytes, pendingDecodeJobs: info.pendingDecodeJobs,
-        preparedPageTextureBytes: info.preparedPageTextureBytes };
+        preparedPageTextureBytes: info.preparedPageTextureBytes,
+        textureArtifactLoads: info.textureArtifactLoads,
+        blockTextureUploads: info.blockTextureUploads,
+        blockRegions: info.blockRegions,
+        pmtxOrdinaryValidationReads: info.pmtxOrdinaryValidationReads,
+        pmtxOrdinaryGpuUploads: info.pmtxOrdinaryGpuUploads,
+        pmtxOrdinaryCpuRegionReads: info.pmtxOrdinaryCpuRegionReads,
+        pmtxFullSourceReconstructions: info.pmtxFullSourceReconstructions,
+        pmtxFallbackRequests: info.pmtxFallbackRequests };
       if (includeLargestImages) extra.images.largest = Array.isArray(info.largest) ? info.largest.slice(0, 5).map(image => ({
           path: image.path, width: image.width, height: image.height,
           gpuBytes: image.gpuBytes, cpuBytes: image.cpuBytes,

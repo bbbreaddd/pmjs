@@ -43,8 +43,8 @@ unsigned paletteIndex(const SparsePalettePage& page, std::size_t pixel) {
   return index;
 }
 }
-void writeLz4Page(const std::filesystem::path& path, int width, int height,
-                  std::span<const std::uint8_t> rgba, bool sparsePalette, std::uint64_t* retainedBytes) {
+std::uint64_t writeLz4Page(const std::filesystem::path& path, int width, int height,
+                           std::span<const std::uint8_t> rgba, bool sparsePalette, std::uint64_t* retainedBytes) {
   if (width <= 0 || height <= 0 || width > static_cast<int>(maximumExtent) ||
       height > static_cast<int>(maximumExtent) || rgba.size() != static_cast<std::size_t>(width) * height * 4)
     throw std::runtime_error("invalid LZ4 page extent");
@@ -107,6 +107,7 @@ void writeLz4Page(const std::filesystem::path& path, int width, int height,
       std::fwrite(compressed.data(), 1, length, file.get()) != static_cast<std::size_t>(length))
     throw std::runtime_error("cannot write LZ4 page");
   if (std::fclose(file.release()) != 0) throw std::runtime_error("cannot write LZ4 page");
+  return static_cast<std::uint64_t>(header.size()) + static_cast<std::uint64_t>(length);
 }
 std::optional<PreparedPagePixels> readLz4Page(std::span<const std::uint8_t> encoded,
                                            std::size_t maxDecodedBytes) {

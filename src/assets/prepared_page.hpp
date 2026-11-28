@@ -27,9 +27,9 @@ struct PreparedPagePixels {
   int width = 0, height = 0;
   std::vector<std::uint8_t> rgba;
 };
-void writeLz4Page(const std::filesystem::path& path, int width, int height,
-                  std::span<const std::uint8_t> rgba, bool sparsePalette = false,
-                  std::uint64_t* retainedBytes = nullptr);
+std::uint64_t writeLz4Page(const std::filesystem::path& path, int width, int height,
+                           std::span<const std::uint8_t> rgba, bool sparsePalette = false,
+                           std::uint64_t* retainedBytes = nullptr);
 std::optional<PreparedPagePixels> readLz4Page(std::span<const std::uint8_t> encoded,
                                            std::size_t maxDecodedBytes);
 // Extended color tables are in-memory only; encoded pages retain sixteen-bit indices.

@@ -66,6 +66,9 @@ struct AssetPreparationStats {
   std::uint64_t indexedLayouts = 0;
   std::uint64_t pngEncodes = 0, encodedPixels = 0;
   std::uint64_t lz4Encodes = 0;
+  std::uint64_t lz4BytesWritten = 0, pngBytesWritten = 0;
+  std::uint64_t paletteBytesWritten = 0, filteredTileBytesWritten = 0;
+  std::uint64_t ordinaryBytesForTextureAssets = 0;
   std::uint64_t temporaryFiles = 0, spillBytesWritten = 0, spillBytesRead = 0;
   std::size_t workspaceLimitBytes = 0, peakWorkspaceBytes = 0, liveWorkspaceBytes = 0;
   bool workspaceConstrained = false;

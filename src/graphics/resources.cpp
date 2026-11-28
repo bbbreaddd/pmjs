@@ -650,6 +650,7 @@ struct ImageStore::PreparedBacking {
   };
   PreparedImageDescriptor descriptor;
   std::shared_ptr<ImageFileSource> textureSource;
+  std::shared_ptr<ImageFileSource> originalSource;
   std::filesystem::path texturePath;
   std::string textureHash;
   bool textureChecked = false;
@@ -803,6 +804,9 @@ ImageStore::~ImageStore() {
       slot.prepared.reset();
     }
   }
+  if (filteredTileProgram_) { glDeleteProgram(filteredTileProgram_); filteredTileProgram_ = 0; }
+  if (filteredTileFbo_) { glDeleteFramebuffers(1, &filteredTileFbo_); filteredTileFbo_ = 0; }
+  if (filteredTileVao_) { glDeleteVertexArrays(1, &filteredTileVao_); filteredTileVao_ = 0; }
 }
 
 ImageHandle ImageStore::fallbackHandle() {
@@ -1265,6 +1269,7 @@ std::uint32_t ImageStore::paletteTable(PaletteBacking& palette, bool premultipli
 std::optional<ImagePixels> ImageStore::readPalettePixels(const Slot& slot, std::optional<std::array<int, 4>> region) const {
   if (slot.prepared) {
     const auto r = region.value_or(std::array<int,4>{0,0,slot.width,slot.height});
+    if (!slot.prepared->pages.empty() && !slot.prepared->texturePath.empty()) ++pmtxOrdinaryCpuRegionReads_;
     bool acquired = false;
     auto pixels = readPreparedRegion(*slot.prepared,r[0],r[1],r[2],r[3],&acquired);
     if (acquired) trimPreparedPages();
@@ -2371,7 +2376,8 @@ std::shared_ptr<ImageStore::PreparedLoad> ImageStore::capturePrepared(
   backing.descriptor = prototype->descriptor;
   backing.sourceIdentity = source.key();
   backing.sourceHash = prototype->sourceHash;
-  if (backing.descriptor.compression == "astc-4x4") {
+  if (backing.descriptor.compression == "astc-4x4" ||
+      (prototype->pages.empty() && !prototype->texturePath.empty())) {
     load->original.reset(new ImageFileSource());
     auto& captured = *load->original;
     captured.descriptor_ = fcntl(source.descriptor_, F_DUPFD_CLOEXEC, 0);
@@ -2380,6 +2386,7 @@ std::shared_ptr<ImageStore::PreparedLoad> ImageStore::capturePrepared(
     captured.offset_ = source.offset_; captured.modifiedSeconds_ = source.modifiedSeconds_;
     captured.modifiedNanoseconds_ = source.modifiedNanoseconds_;
     captured.path_ = source.path_; captured.key_ = source.key_; captured.encryptionKey_ = source.encryptionKey_;
+    backing.originalSource = load->original;
   }
   if (prototype->sourceIdentity != source.key()) {
     load->sourceToVerify.reset(new ImageFileSource());
@@ -2442,6 +2449,7 @@ bool ImageStore::validatePrepared(PreparedLoad& load, bool retainCpu) {
       validContentHash(backing.textureHash) && std::all_of(backing.pages.begin(), backing.pages.end(),
         [](const auto& page) { return validContentHash(page.expectedHash); });
     for (std::size_t i = 0; i < backing.pages.size(); ++i) {
+      if (!backing.texturePath.empty()) ++pmtxOrdinaryValidationReads_;
       if (deferRecovery) {
         auto& page = backing.pages[i];
         const auto bytes = page.source ? readCapturedBytes(*page.source) : std::nullopt;
@@ -2464,7 +2472,10 @@ bool ImageStore::validatePrepared(PreparedLoad& load, bool retainCpu) {
   }
   if (retainCpu && !load.pixels &&
       checkedImageExtent(backing.descriptor.width, backing.descriptor.height, 16384)) {
-    load.pixels = backing.descriptor.compression == "astc-4x4" ?
+    if (!backing.texturePath.empty() && backing.descriptor.compression != "astc-4x4")
+      ++pmtxFullSourceReconstructions_;
+    load.pixels = (backing.descriptor.compression == "astc-4x4" ||
+                   (backing.pages.empty() && !backing.texturePath.empty())) ?
       (load.original ? decodeFile(*load.original) : std::nullopt) :
       readPreparedRegion(backing, 0, 0, backing.descriptor.width, backing.descriptor.height);
     for (auto& page : backing.pages) page.setPixels({});
@@ -2763,6 +2774,7 @@ std::optional<ImagePixels> ImageStore::readPixelsRegion(ImageHandle handle,
     return result;
   }
   ++preparedRegionReads_;
+  if (!slot.prepared->pages.empty() && !slot.prepared->texturePath.empty()) ++pmtxOrdinaryCpuRegionReads_;
   bool acquired = false;
   auto result = readPreparedRegion(*slot.prepared, x, y, width, height, &acquired);
   if (acquired) trimPreparedPages();
@@ -2896,6 +2908,23 @@ bool ImageStore::readPreparedRegionInto(PreparedBacking& backing, int x, int y,
     return true;
   }
   if (backing.pages.empty() && !backing.texturePath.empty()) {
+    if (backing.originalSource) {
+      auto decoded = decodeFile(*backing.originalSource);
+      if (!decoded || decoded->width != backing.descriptor.width || decoded->height != backing.descriptor.height)
+        return false;
+      const auto srcStride = static_cast<std::size_t>(decoded->width) * 4U;
+      const auto dstStride = static_cast<std::size_t>(destination.width) * 4U;
+      const auto rowBytes = static_cast<std::size_t>(width) * 4U;
+      for (int row = 0; row < height; ++row) {
+        std::memcpy(
+          destination.rgba.data() + static_cast<std::size_t>(destinationY + row) * dstStride +
+            static_cast<std::size_t>(destinationX) * 4U,
+          decoded->rgba.data() + static_cast<std::size_t>(y + row) * srcStride +
+            static_cast<std::size_t>(x) * 4U,
+          rowBytes);
+      }
+      return true;
+    }
     return readTextureArtifactRegion(backing.texturePath, x, y, width, height, destination, destinationX, destinationY);
   }
   for (const auto& cell : backing.descriptor.cells) {
@@ -3094,6 +3123,7 @@ std::optional<ImageInfo> ImageStore::preparedPage(Slot& slot, std::size_t index,
   auto& texture = premultiplied ? page.premultipliedTexture : page.texture;
   auto& shared = premultiplied ? page.sharedPremultipliedTexture : page.sharedTexture;
   if (!texture) {
+    if (!backing.texturePath.empty()) ++pmtxOrdinaryGpuUploads_;
     bool acquired = false;
     const auto* decoded = preparedPixels(backing, index, &acquired);
     if (!decoded) return std::nullopt;
@@ -3247,6 +3277,40 @@ std::optional<SpriteImageRegion> ImageStore::resolveSpriteRegion(ImageHandle han
       recent.push_back(i);
     }
     auto& image = backing.cellImages[i];
+    if (image && !premultiplied) {
+      const auto childIdx = (image & indexMask) - 1U;
+      if (childIdx < slots_.size() && slots_[childIdx].live && slots_[childIdx].premultiplied) {
+        if (std::find(activePreparedFrames_.begin(), activePreparedFrames_.end(), image) != activePreparedFrames_.end())
+          return std::nullopt;
+        if (useGlobalBlockCache) {
+          std::erase_if(recentBlockRegions_, [&](const BlockRegionEntry& entry) {
+            if (entry.region == image) { blockRegionCacheBytes_ -= entry.bytes; return true; }
+            return false;
+          });
+        } else if (backing.descriptor.framePages) {
+          std::erase(backing.recentCells, i);
+        }
+        release(image);
+        image = 0;
+      }
+    }
+    if (!image) {
+      if (premultiplied && blockBacked && compactSamplingEnabled_) {
+        if (!backing.channelAtlas) realizeSourceTexture(handle);
+        if (backing.filteredTileSize == 16 && backing.channelAtlas && backing.channelTable) {
+          if (auto gpuFrame = reconstructFilteredTileFrameOnGpu(
+                  backing.channelAtlas, backing.channelTable, info->width, info->height,
+                  r[0], r[1], halo, extent->width, extent->height)) {
+            image = gpuFrame->handle;
+            ++pmtxGpuFrameReconstructions_;
+            if (useGlobalBlockCache) {
+              recentBlockRegions_.push_back({handle, i, image, extent->rgbaBytes});
+              blockRegionCacheBytes_ += extent->rgbaBytes;
+            }
+          }
+        }
+      }
+    }
     if (!image) {
       const int left = std::max(0, r[0]-halo), top = std::max(0, r[1]-halo);
       const int right = std::min(info->width, r[0]+r[2]+halo), bottom = std::min(info->height, r[1]+r[3]+halo);
@@ -3295,15 +3359,206 @@ void ImageStore::setPreparedPageSplitThresholdBytes(std::size_t bytes) {
   preparedPageSplitThresholdBytes_ = bytes;
 }
 
+bool ImageStore::ensureFilteredTileReconstructor() {
+  if (filteredTileReconstructorFailed_) return false;
+  if (filteredTileProgram_ && filteredTileFbo_ && filteredTileVao_) return true;
+  static constexpr const char* vsSource = R"(#version 300 es
+void main() {
+  vec2 pos = vec2((gl_VertexID == 1) ? 3.0 : -1.0, (gl_VertexID == 2) ? 3.0 : -1.0);
+  gl_Position = vec4(pos, 0.0, 1.0);
+}
+)";
+  static constexpr const char* fsSource = R"(#version 300 es
+precision highp float;
+precision highp int;
+precision highp usampler2D;
+uniform sampler2D uAtlas;
+uniform usampler2D uTable;
+uniform ivec2 uOrigin;
+uniform int uHalo;
+uniform ivec2 uSourceSize;
+out vec4 fragColor;
+void main() {
+  ivec2 outCoord = ivec2(gl_FragCoord.xy);
+  int sx = clamp(uOrigin.x + outCoord.x - uHalo, 0, uSourceSize.x - 1);
+  int sy = clamp(uOrigin.y + outCoord.y - uHalo, 0, uSourceSize.y - 1);
+  int tx = sx / 16;
+  int ty = sy / 16;
+  int lx = sx - tx * 16;
+  int ly = sy - ty * 16;
+  uint entry = texelFetch(uTable, ivec2(tx, ty), 0).r;
+  if (entry == 0u) {
+    fragColor = vec4(0.0);
+    return;
+  }
+  uint mode = entry >> 28u;
+  int oy = int((entry >> 12u) & 0xFFFFu) - 1;
+  int ox = int(entry & 0xFFFu) - 1;
+  vec4 texel = texelFetch(uAtlas, ivec2(ox + 1 + lx, oy + 1 + ly), 0);
+  if (mode == 1u) {
+    fragColor = texel;
+  } else if (mode >= 6u) {
+    uint ch = (mode - 6u) * 2u;
+    float v = ch == 0u ? texel.r : texel.b;
+    float a = ch == 0u ? texel.g : texel.a;
+    fragColor = vec4(v, v, v, a);
+  } else {
+    uint ch = mode - 2u;
+    float v = ch == 0u ? texel.r : (ch == 1u ? texel.g : (ch == 2u ? texel.b : texel.a));
+    fragColor = vec4(v, v, v, 1.0);
+  }
+}
+)";
+  auto compile = [](GLenum type, const char* src) -> GLuint {
+    GLuint s = glCreateShader(type);
+    if (!s) return 0;
+    glShaderSource(s, 1, &src, nullptr);
+    glCompileShader(s);
+    GLint ok = 0;
+    glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
+    if (!ok) { glDeleteShader(s); return 0; }
+    return s;
+  };
+  GLuint vs = compile(GL_VERTEX_SHADER, vsSource);
+  GLuint fs = compile(GL_FRAGMENT_SHADER, fsSource);
+  if (!vs || !fs) {
+    if (vs) glDeleteShader(vs);
+    if (fs) glDeleteShader(fs);
+    filteredTileReconstructorFailed_ = true;
+    return false;
+  }
+  GLuint prog = glCreateProgram();
+  glAttachShader(prog, vs);
+  glAttachShader(prog, fs);
+  glLinkProgram(prog);
+  glDeleteShader(vs);
+  glDeleteShader(fs);
+  GLint linked = 0;
+  glGetProgramiv(prog, GL_LINK_STATUS, &linked);
+  if (!linked) {
+    glDeleteProgram(prog);
+    filteredTileReconstructorFailed_ = true;
+    return false;
+  }
+  glUseProgram(prog);
+  const GLint atlasLoc = glGetUniformLocation(prog, "uAtlas");
+  const GLint tableLoc = glGetUniformLocation(prog, "uTable");
+  if (atlasLoc >= 0) glUniform1i(atlasLoc, 0);
+  if (tableLoc >= 0) glUniform1i(tableLoc, 1);
+  filteredTileOriginLoc_ = glGetUniformLocation(prog, "uOrigin");
+  filteredTileHaloLoc_ = glGetUniformLocation(prog, "uHalo");
+  filteredTileSourceLoc_ = glGetUniformLocation(prog, "uSourceSize");
+  filteredTileProgram_ = prog;
+  if (!filteredTileFbo_) glGenFramebuffers(1, &filteredTileFbo_);
+  if (!filteredTileVao_) glGenVertexArrays(1, &filteredTileVao_);
+  return filteredTileProgram_ && filteredTileFbo_ && filteredTileVao_;
+}
+
+std::optional<ImageInfo> ImageStore::reconstructFilteredTileFrameOnGpu(
+    std::uint32_t atlasTex, std::uint32_t tableTex, int sourceWidth, int sourceHeight,
+    int originX, int originY, int halo, int outWidth, int outHeight) {
+  GLint prevProgram = 0, prevDrawFbo = 0, prevReadFbo = 0, prevVao = 0, prevActiveTex = 0;
+  GLint prevTex0 = 0, prevTex1 = 0, prevViewport[4]{};
+  GLboolean prevBlend = glIsEnabled(GL_BLEND);
+  GLboolean prevScissor = glIsEnabled(GL_SCISSOR_TEST);
+  GLboolean prevDepth = glIsEnabled(GL_DEPTH_TEST);
+  GLboolean prevStencil = glIsEnabled(GL_STENCIL_TEST);
+  GLboolean prevCull = glIsEnabled(GL_CULL_FACE);
+  GLboolean prevDither = glIsEnabled(GL_DITHER);
+  GLboolean prevColorMask[4]{};
+  glGetIntegerv(GL_CURRENT_PROGRAM, &prevProgram);
+  glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDrawFbo);
+  glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevReadFbo);
+  glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVao);
+  glGetIntegerv(GL_ACTIVE_TEXTURE, &prevActiveTex);
+  glGetIntegerv(GL_VIEWPORT, prevViewport);
+  glGetBooleanv(GL_COLOR_WRITEMASK, prevColorMask);
+  glActiveTexture(GL_TEXTURE0);
+  glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTex0);
+  glActiveTexture(GL_TEXTURE1);
+  glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTex1);
+
+  const auto restore = [&]() {
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(prevTex1));
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(prevTex0));
+    glActiveTexture(static_cast<GLenum>(prevActiveTex));
+    glBindVertexArray(static_cast<GLuint>(prevVao));
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(prevDrawFbo));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(prevReadFbo));
+    glUseProgram(static_cast<GLuint>(prevProgram));
+    glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
+    glColorMask(prevColorMask[0], prevColorMask[1], prevColorMask[2], prevColorMask[3]);
+    if (prevBlend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+    if (prevScissor) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
+    if (prevDepth) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+    if (prevStencil) glEnable(GL_STENCIL_TEST); else glDisable(GL_STENCIL_TEST);
+    if (prevCull) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
+    if (prevDither) glEnable(GL_DITHER); else glDisable(GL_DITHER);
+  };
+
+  if (!ensureFilteredTileReconstructor()) { restore(); return std::nullopt; }
+  auto created = createRenderTarget(outWidth, outHeight, true);
+  if (!created) { restore(); return std::nullopt; }
+
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, filteredTileFbo_);
+  glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, created->texture, 0);
+  if (glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+    restore();
+    release(created->handle);
+    return std::nullopt;
+  }
+
+  glDisable(GL_BLEND);
+  glDisable(GL_SCISSOR_TEST);
+  glDisable(GL_DEPTH_TEST);
+  glDisable(GL_STENCIL_TEST);
+  glDisable(GL_CULL_FACE);
+  glDisable(GL_DITHER);
+  glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+  glViewport(0, 0, outWidth, outHeight);
+  glUseProgram(filteredTileProgram_);
+  if (filteredTileOriginLoc_ >= 0) glUniform2i(filteredTileOriginLoc_, originX, originY);
+  if (filteredTileHaloLoc_ >= 0) glUniform1i(filteredTileHaloLoc_, halo);
+  if (filteredTileSourceLoc_ >= 0) glUniform2i(filteredTileSourceLoc_, sourceWidth, sourceHeight);
+  glActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, atlasTex);
+  glActiveTexture(GL_TEXTURE1);
+  glBindTexture(GL_TEXTURE_2D, tableTex);
+  glBindVertexArray(filteredTileVao_);
+  while (glGetError() != GL_NO_ERROR) {}
+  glDrawArrays(GL_TRIANGLES, 0, 3);
+  const bool drawOk = glGetError() == GL_NO_ERROR;
+  glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+  restore();
+  if (!drawOk) {
+    release(created->handle);
+    return std::nullopt;
+  }
+  return created;
+}
+
 std::optional<BlockImageRegion> ImageStore::resolveBlockRegion(ImageHandle handle, bool premultiplied) {
-  if (!compactSamplingEnabled_) return std::nullopt;
   const auto logical = inspect(handle);
   if (!logical) return std::nullopt;
   auto& slot = slots_[(handle & indexMask)-1U];
   if (!slot.prepared || slot.tiles) return std::nullopt;
   auto& backing = *slot.prepared;
-  if (!backing.requiresSourceSampling()) return std::nullopt;
-  if (backing.filteredTileSize >= 8 && backing.channelAtlas && (premultiplied || slot.premultiplied)) {
+  if (!compactSamplingEnabled_) {
+    if (!backing.texturePath.empty()) ++pmtxFallbackRequests_;
+    return std::nullopt;
+  }
+  if (!backing.requiresSourceSampling()) {
+    if (!backing.texturePath.empty()) ++pmtxFallbackRequests_;
+    return std::nullopt;
+  }
+  if (backing.filteredTileSize >= 8 && backing.channelAtlas) {
+    if (!(premultiplied || slot.premultiplied)) {
+      ++pmtxFallbackRequests_;
+      return std::nullopt;
+    }
     ++blockRegions_;
     return BlockImageRegion{{0, backing.filteredTileWidth, backing.channelHeight,
         backing.channelAtlas, true, false}, backing.channelTable,
@@ -3312,7 +3567,10 @@ std::optional<BlockImageRegion> ImageStore::resolveBlockRegion(ImageHandle handl
        (logical->height + backing.filteredTileSize - 1) / backing.filteredTileSize},
       logical->width, logical->height, backing.filteredTileSize};
   }
-  if (!backing.channelAtlas) return std::nullopt;
+  if (!backing.channelAtlas) {
+    if (!backing.texturePath.empty()) ++pmtxFallbackRequests_;
+    return std::nullopt;
+  }
   ++blockRegions_;
   return BlockImageRegion{{0, 2048, backing.channelHeight, backing.channelAtlas,
       premultiplied || slot.premultiplied, false}, backing.channelTable,
