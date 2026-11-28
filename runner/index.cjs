@@ -547,13 +547,19 @@ async function runSession(input, diagnostics, setNative) {
       native.assets.installPrepared([]);
       if (native.assets.installDecrypted) native.assets.installDecrypted([]);
     }
+    let refreshingAssets = false;
     native.runtime.refreshAssets = async roots => {
-      options.preparedGameRoots = roots;
-      const startup = await prepareStartupAssets(options, native, settings);
-      invalidatePreparation = startup.invalidate;
-      invalidatePreparationCatalog = startup.invalidateCatalog;
-      native.assets.preparationStats = startup.preparation;
-      if (startup.cancelled || startup.preparation.cancelled) throw new Error('asset preparation cancelled');
+      refreshingAssets = true;
+      try {
+        options.preparedGameRoots = roots;
+        const startup = await prepareStartupAssets(options, native, settings);
+        invalidatePreparation = startup.invalidate;
+        invalidatePreparationCatalog = startup.invalidateCatalog;
+        native.assets.preparationStats = startup.preparation;
+        if (startup.cancelled || startup.preparation.cancelled) throw new Error('asset preparation cancelled');
+      } finally {
+        refreshingAssets = false;
+      }
     };
     native.assets.mapPreparationEnabled = options.assetPreparation.maps;
     console.log(`[pmjs] map preparation=${options.assetPreparation.maps ? "on" : "off"}`);
@@ -711,6 +717,7 @@ async function runSession(input, diagnostics, setNative) {
       function tick() {
         frameHandle = undefined;
         if (dispatcher && dispatcher.stopped) return;
+        if (refreshingAssets) { schedule(); return; }
         try {
           if (startupError) throw startupError;
           flushPreparationInvalidations();
