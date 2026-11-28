@@ -2,6 +2,8 @@
   "launchArguments": [],
   "gamePreparation": "patches/omori/oneloader.cjs",
   "title": "OMORI",
+  "imageCacheMaxPixels": 16777216,
+  "preparedFrameCacheBytes": 8388608,
   "fonts": {
     "OMORI_GAME": "fonts/OMORI_GAME.ttf",
     "OMORI_GAME2": "fonts/OMORI_GAME2.ttf",
