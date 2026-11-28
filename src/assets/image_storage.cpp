@@ -58,6 +58,7 @@ ImageChannelStorage imageChannelStorage(const ImagePixels& pixels) {
 
 ImageStorageDecision classifyImageStorage(const ImagePixels& pixels) {
   ImageStorageDecision result{pixels.width, pixels.height, 0, imageChannelStorage(pixels)};
+  result.sourceChannels = result.channels.channels;
   result.hasPixelFacts = true;
   result.opaque = true;
   result.allZero = true;

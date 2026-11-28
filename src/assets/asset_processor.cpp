@@ -7,6 +7,7 @@
 #include "texture_artifact.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cerrno>
 #include <chrono>
 #include <fcntl.h>
@@ -641,64 +642,35 @@ std::vector<PreparedAssetPage> packTiles(std::vector<Tile>& tiles,
   }
   return pack(bestWidth, true);
 }
-std::vector<AssetColor> modalFills(PreparationSource& source, const AssetRecipe& recipe) {
-  auto input = source.rows();
-  if (recipe.columns <= 0 || recipe.rows <= 0 || recipe.columns > 4096 ||
-      recipe.rows > 4096 / recipe.columns || input.width % recipe.columns || input.height % recipe.rows)
-    throw AssetPreparationUnsupported("preparation grid must divide the source exactly");
-  const int cellWidth = input.width / recipe.columns, cellHeight = input.height / recipe.rows;
-  std::vector<AssetColor> fills(static_cast<std::size_t>(recipe.columns) * recipe.rows);
-  using ColorCounts = std::unordered_map<std::uint32_t, std::uint64_t, ColorHash>;
-  std::vector<ColorCounts> histograms(recipe.columns);
-  std::vector<bool> overflow(recipe.columns);
-  std::size_t distinctColors = 0;
-  for (int y = 0; y < input.height; ++y) {
-    input.read();
-    const bool perimeterRow = y % cellHeight == 0 || y % cellHeight == cellHeight - 1;
-    for (int column = 0; column < recipe.columns; ++column) {
-      if (overflow[column]) continue;
-      auto& histogram = histograms[column];
-      const auto* row = input.row.data() + static_cast<std::size_t>(column) * cellWidth * 4;
-      // Interior colors must not exhaust the background probe's bounded histogram.
-      for (int x = 0; x < cellWidth;) {
-        std::uint32_t word;
-        std::memcpy(&word, row + static_cast<std::size_t>(x) * 4, 4);
-        int end = x + 1;
-        for (; perimeterRow && end < cellWidth; ++end) {
-          std::uint32_t next;
-          std::memcpy(&next, row + static_cast<std::size_t>(end) * 4, 4);
-          if (next != word) break;
-        }
-        const auto count = static_cast<std::uint64_t>(end - x);
-        x = perimeterRow ? end : (x == 0 && cellWidth > 1 ? cellWidth - 1 : cellWidth);
-        const auto found = histogram.find(word);
-        if (found != histogram.end()) { found->second += count; continue; }
-        // High-color cells keep the ordinary fill; bound the entire active grid row.
-        if (histogram.size() == 4096 || distinctColors == 65536) {
-          distinctColors -= histogram.size();
-          ColorCounts{}.swap(histogram); overflow[column] = true; break;
-        }
-        histogram.emplace(word, count); ++distinctColors;
-      }
-    }
-    if ((y + 1) % cellHeight) continue;
-    for (int column = 0; column < recipe.columns; ++column) {
-      if (!overflow[column]) {
-        auto& fill = fills[static_cast<std::size_t>(y / cellHeight) * recipe.columns + column];
-        std::uint64_t largest = 0;
-        for (const auto& [word, count] : histograms[column]) {
-          AssetColor rgba;
-          std::memcpy(rgba.data(), &word, 4);
-          if (count > largest || (count == largest && rgba < fill)) { fill = rgba; largest = count; }
-        }
-      }
-      ColorCounts{}.swap(histograms[column]); overflow[column] = false;
-    }
-    distinctColors = 0;
+struct PerimeterSample {
+  std::array<std::uint32_t, 8> colors{};
+  int count = 0;
+
+  void add(const std::uint8_t* row, int x) {
+    assert(count < 8);
+    std::uint32_t word = 0;
+    std::memcpy(&word, row + static_cast<std::size_t>(x) * 4, 4);
+    colors[static_cast<std::size_t>(count++)] = word;
   }
-  input.finish();
-  return fills;
-}
+
+  AssetColor modal() const {
+    AssetColor fill{};
+    int bestCount = 0;
+    for (int i = 0; i < count; ++i) {
+      int matches = 0;
+      for (int j = 0; j < count; ++j) {
+        if (colors[static_cast<std::size_t>(j)] == colors[static_cast<std::size_t>(i)]) ++matches;
+      }
+      AssetColor rgba{};
+      std::memcpy(rgba.data(), &colors[static_cast<std::size_t>(i)], 4);
+      if (matches > bestCount || (matches == bestCount && rgba < fill)) {
+        fill = rgba;
+        bestCount = matches;
+      }
+    }
+    return fill;
+  }
+};
 std::vector<std::uint8_t> renderPage(PreparationSource& source, const PreparedAsset& asset,
                                     int pageIndex, bool verifyFills, const AssetRecipe* recipe = nullptr,
                                     bool* safeLinearOut = nullptr) {
@@ -1274,7 +1246,8 @@ void writePreparedPng(const std::filesystem::path& path, int width, int height,
 static PreparedAsset prepareAssetCells(PreparationSource& source,
                                       const std::filesystem::path& staging,
                                       const AssetRecipe& recipe,
-                                      const std::vector<AssetColor>& fills = {}) {
+                                      const std::vector<AssetColor>& fills = {},
+                                      std::vector<AssetColor>* modalFillsOut = nullptr) {
   auto input = source.rows();
   PreparedAsset result;
   result.width = input.width; result.height = input.height;
@@ -1297,6 +1270,12 @@ static PreparedAsset prepareAssetCells(PreparationSource& source,
     cell.fill = recipe.crop ? recipe.backdrop : fills.empty() ? AssetColor{} : fills[index];
     cell.crop = {cellWidth, cellHeight, 0, 0};
   }
+  std::vector<PerimeterSample> samples(modalFillsOut ? static_cast<std::size_t>(recipe.columns) : 0);
+  if (modalFillsOut) modalFillsOut->assign(count, AssetColor{});
+  const int midX = cellWidth / 2;
+  const int rightX = cellWidth - 1;
+  const int midY = cellHeight / 2;
+  const int bottomY = cellHeight - 1;
   bool allUniform = true;
   AssetColor first{};
   for (int y = 0; y < input.height; ++y) {
@@ -1304,9 +1283,29 @@ static PreparedAsset prepareAssetCells(PreparationSource& source,
     if (y == 0) first = pixel(input.row.data());
     const auto rowIndex = static_cast<std::size_t>(y / cellHeight) * recipe.columns;
     const int localY = y % cellHeight;
+    const bool sampleTop = modalFillsOut && localY == 0;
+    const bool sampleMid = modalFillsOut && localY == midY;
+    const bool sampleBottom = modalFillsOut && localY == bottomY;
     for (int column = 0; column < recipe.columns; ++column) {
       auto& cell = result.cells[rowIndex + column];
       const auto* row = input.row.data() + static_cast<std::size_t>(cell.rect[0]) * 4;
+      if (sampleTop || sampleMid || sampleBottom) {
+        auto& sample = samples[static_cast<std::size_t>(column)];
+        if (sampleTop) {
+          sample.add(row, 0);
+          if (midX > 0 && midX < rightX) sample.add(row, midX);
+          if (rightX > 0) sample.add(row, rightX);
+        }
+        if (sampleMid && !sampleTop && !sampleBottom) {
+          sample.add(row, 0);
+          if (rightX > 0) sample.add(row, rightX);
+        }
+        if (sampleBottom && !sampleTop) {
+          sample.add(row, 0);
+          if (midX > 0 && midX < rightX) sample.add(row, midX);
+          if (rightX > 0) sample.add(row, rightX);
+        }
+      }
       int left = 0, right = cellWidth;
       while (left < right && pixel(row + static_cast<std::size_t>(left) * 4) == cell.fill) ++left;
       while (right > left && pixel(row + static_cast<std::size_t>(right - 1) * 4) == cell.fill) --right;
@@ -1329,6 +1328,13 @@ static PreparedAsset prepareAssetCells(PreparationSource& source,
         cell.crop[0] = std::min(cell.crop[0], left);
         cell.crop[2] = end - cell.crop[0];
         cell.crop[3] = localY - cell.crop[1] + 1;
+      }
+    }
+    if (modalFillsOut && (y + 1) % cellHeight == 0) {
+      for (int column = 0; column < recipe.columns; ++column) {
+        auto& sample = samples[static_cast<std::size_t>(column)];
+        (*modalFillsOut)[rowIndex + static_cast<std::size_t>(column)] = sample.modal();
+        sample.count = 0;
       }
     }
   }
@@ -1471,7 +1477,7 @@ void emitTexture(PreparationSource& source, const std::filesystem::path& staging
     // Keep mixed layouts conservative: a zero-fill first draw can use only its atlas.
     if (automatic && !asset.cells.empty() && std::all_of(asset.cells.begin(), asset.cells.end(),
         [](const auto& cell) { return cell.fill != AssetColor{}; }))
-      asset.ordinaryRetainedBytes += std::uint64_t(source.width)*source.height*imageChannelStorage(pixels).channels;
+      asset.ordinaryRetainedBytes += std::uint64_t(source.width)*source.height*classified.sourceChannels;
     auto texture = makePreparedTexture(pixels, &classified, automatic ? asset.ordinaryRetainedBytes : 0, allowPalettes);
     if (!texture) return;
     std::uint64_t retained = 0;
@@ -1610,12 +1616,10 @@ PreparedAsset prepareAssetImage(const std::filesystem::path& path,
     if (recipe.crop) selected = prepareAssetCells(source, staging, recipe);
     else {
       std::exception_ptr unsupported;
-      try { selected = prepareAssetCells(source, staging, recipe); }
+      std::vector<AssetColor> fills;
+      try { selected = prepareAssetCells(source, staging, recipe, {}, &fills); }
       catch (const AssetPreparationUnsupported&) { unsupported = std::current_exception(); }
       if (selected && selected->uniform) return *selected;
-      std::vector<AssetColor> fills;
-      if (selected) optionalPreparation([&] { fills = modalFills(source, recipe); });
-      else fills = modalFills(source, recipe);
       if (std::any_of(fills.begin(), fills.end(), [](const auto& fill) { return fill != AssetColor{}; })) {
         const auto tryModal = [&] {
           std::optional<PreparedAsset> candidate;

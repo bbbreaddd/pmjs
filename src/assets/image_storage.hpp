@@ -20,6 +20,7 @@ struct ImageChannelStorage {
 struct ImageStorageDecision {
   int width = 0, height = 0, paletteBits = 0;
   ImageChannelStorage channels;
+  int sourceChannels = 4;
   bool hasPixelFacts = false, opaque = false, allZero = false;
 };
 
