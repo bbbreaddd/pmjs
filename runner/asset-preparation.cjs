@@ -129,6 +129,22 @@ function pageHeaderMatches(header, page, size) {
   return header.length >= 24 && header.subarray(0, 8).equals(PNG) &&
     header.readUInt32BE(16) === page.width && header.readUInt32BE(20) === page.height;
 }
+async function readEncryptedMediaHeader(file, checkedHeader, key) {
+  let prefix = Buffer.from(checkedHeader || []);
+  if (prefix.length < 40) {
+    const handle = await fsp.open(file, 'r');
+    prefix = Buffer.alloc(40);
+    try {
+      const { bytesRead } = await handle.read(prefix, 0, 40, 0);
+      prefix = prefix.subarray(0, bytesRead);
+    } finally { await handle.close(); }
+  }
+  if (prefix.length < 32 || !prefix.subarray(0, 16).equals(ENCRYPTED_HEADER))
+    throw new Error('invalid encrypted asset header');
+  const body = Buffer.from(prefix.subarray(16));
+  for (let i = 0; i < 16; ++i) body[i] ^= key[i];
+  return body;
+}
 async function decryptFile(file, output, key, extension, files, sourceSize) {
   const handle = await fsp.open(file, 'r');
   const prefix = Buffer.alloc(32);
@@ -512,8 +528,9 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
       async function acceptManifest(directory, manifest) {
         let cacheBytes = 0, storageEntry, decision, decryptedEntry, imageEntry;
         sourceIdentity = await refreshIdentity(source, sourceHash, sourceIdentity);
+        const entrySource = manifest.decrypted || !encrypted ? logicalSource : source;
         if (validStorageDecision(indexed?.storage))
-          storageEntry = { source: logicalSource, sourceIdentity,
+          storageEntry = { source: entrySource, sourceIdentity,
             backingHash: manifest.decrypted ? manifest.outputs[manifest.decrypted] : sourceHash, storage: indexed.storage };
         if (offline) decision = { source, sourceHash, recipe: recipe || null,
           encryptionSettingsSha256: encrypted ? settings.hash : null,
@@ -538,11 +555,11 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
         }
         if (installDescriptor) {
           for (const page of descriptorOutputs(installDescriptor)) cacheBytes += await files.size(path.join(directory, page.path));
-          imageEntry = { source: logicalSource, directory, descriptor: installDescriptor, sourceHash, sourceIdentity,
+          imageEntry = { source: entrySource, directory, descriptor: installDescriptor, sourceHash, sourceIdentity,
             backingHash: manifest.decrypted ? manifest.outputs[manifest.decrypted] : sourceHash,
             pageHashes: installDescriptor.pages.map(page => manifest.outputs[page.path]),
             ...(installDescriptor.textureArtifact ? { textureHash: manifest.outputs[installDescriptor.textureArtifact] } : {}),
-            ...(encrypted ? { decryptedFile: path.join(directory, manifest.decrypted) } : {}) };
+            ...(manifest.decrypted ? { decryptedFile: path.join(directory, manifest.decrypted) } : {}) };
         }
         result.cacheBytes += cacheBytes;
         if (storageEntry) result.storageEntries.push(storageEntry);
@@ -600,7 +617,17 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
         const explicitRecipe = recipeMap.get(logicalSource.toLowerCase());
         recipe = policyOverrides.recipes && explicitRecipe ? explicitRecipe : policy.recipe || explicitRecipe;
         if (recipe) { recipe = { ...recipe, source: logicalSource, sourceHash }; validRecipes([recipe]); }
-        if (!recipe && !encrypted) recipe = await automaticRecipe(file, logicalSource, sourceHash, checkedSource.header, frames);
+        let decryptedHeader;
+        let validEncryptedPng = false;
+        if (encrypted && extension === '.png') {
+          decryptedHeader = await readEncryptedMediaHeader(file, checkedSource.header, settings.key);
+          validEncryptedPng = mediaHeader(decryptedHeader, '.png');
+          if (!recipe && validEncryptedPng)
+            recipe = await automaticRecipe(file, logicalSource, sourceHash, decryptedHeader, frames);
+        } else if (!recipe && !encrypted) {
+          recipe = await automaticRecipe(file, logicalSource, sourceHash, checkedSource.header, frames);
+        }
+        const directEncryptedImage = native.assets.encryptedImagePreparation === true && encrypted && extension === '.png' && validEncryptedPng;
         const imageAstc = astcSettings(policyOverrides.astc ? astc : policy.astc || astc);
         const lossless = policyOverrides.losslessPrefixes
           ? losslessPrefixes.some(prefix => hasPathPrefix(logicalSource, prefix))
@@ -609,7 +636,8 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
         const key = identity({ version: CACHE_VERSION, processorIdentity, sourceHash, source, recipe: recipe || null, allowAstc, allowPalettes,
           automaticRecipes: { version: automaticRecipes.version, frame: frames.get(logicalSource.toLowerCase()) },
           astcQuality: allowAstc ? imageAstc.quality : null,
-          ...(encrypted ? { encryption: { version: 1, settingsHash: settings.hash }, characterLayout: 'mz-standard-v1' } : {}) });
+          ...(encrypted ? { encryption: { version: 1, settingsHash: settings.hash }, characterLayout: 'mz-standard-v1',
+            ...(directEncryptedImage ? { encryptedView: 1 } : {}) } : {}) });
         const findIndexed = () => !session.repairSources.has(source) && indexedImages.get(source)?.find(record => {
           const constrained = record.workspaceConstrained === true || record.descriptor?.workspaceConstrained === true;
           const cachedWorkspaceBytes = record.resolvedSettings?.workspaceBytes;
@@ -625,7 +653,7 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
           (record.descriptor === null && (portableIndex?.imageNegativeCompatible !== false) && Array.isArray(record.outputs) && !record.outputs.length ||
             record.descriptor && validDescriptor(record.descriptor));
         });
-        indexed = encrypted ? null : findIndexed();
+        indexed = findIndexed();
         {
           directory = session.directory('entries', key);
           let missReason = null;
@@ -637,7 +665,7 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
             manifest = null;
             missReason = 'workspace-upgrade';
           }
-          if (manifest && encrypted && manifest.decrypted !== 'source' + extension) {
+          if (manifest && encrypted && !directEncryptedImage && manifest.decrypted !== 'source' + extension) {
             manifest = null;
             missReason = 'key-changed-unknown';
           }
@@ -645,7 +673,7 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
             result.cacheMissReasons[missReason] = (result.cacheMissReasons[missReason] || 0) + 1;
           }
           if (manifest) {
-            if (encrypted && extension === '.png' && !recipe)
+            if (encrypted && extension === '.png' && !recipe && manifest.decrypted)
               recipe = await automaticRecipe(path.join(directory, manifest.decrypted), logicalSource, sourceHash, undefined, frames);
             result.hits += 1;
             outcome = manifest.descriptor ? 'reused-local' : 'ordinary-choice';
@@ -656,7 +684,7 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
             report('prepare', source);
             if (cancelled()) break;
             stage = await fsp.mkdtemp(path.join(cacheRoot, 'entries', '.stage-'));
-            const decrypted = encrypted ? 'source' + extension : undefined;
+            const decrypted = encrypted && !directEncryptedImage ? 'source' + extension : undefined;
             let input = file;
             if (decrypted) {
               input = path.join(stage, decrypted);
@@ -694,7 +722,7 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
               }
             }
             if (recipe && (recipeMap.has(logicalSource.toLowerCase()) || policy.recipe)) {
-              const header = (await files.inspect(input, 'source')).header;
+              const header = directEncryptedImage ? decryptedHeader : (await files.inspect(input, 'source')).header;
               if (header?.length >= 24 && header.subarray(0, 8).equals(PNG)) {
                 const width = header.readUInt32BE(16), height = header.readUInt32BE(20);
                 const [columns, rows] = recipe.grid;
@@ -710,7 +738,7 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
               try {
                 descriptor = await native.assets.processImage(source, stage, recipe || null,
                   input, ...(native.assets.preparationWorkspaceVersion === 1
-                    ? [indexed ? indexed.descriptor : null, { workspaceBytes, allowPalettes, allowAstc, astcQuality: imageAstc.quality, ...(pageCodec === 'lz4' ? { pageCodec } : {}), ...(indexed?.storage ? { storage: indexed.storage } : {}), ...(preparationContext === 'offline' ? { exportFilteredTilePlan: true } : {}) }]
+                    ? [indexed ? indexed.descriptor : null, { workspaceBytes, allowPalettes, allowAstc, astcQuality: imageAstc.quality, ...(pageCodec === 'lz4' ? { pageCodec } : {}), ...(indexed?.storage ? { storage: indexed.storage } : {}), ...(preparationContext === 'offline' ? { exportFilteredTilePlan: true } : {}), ...(directEncryptedImage ? { encryptionKey: settings.key } : {}) }]
                     : indexed ? [indexed.descriptor] : []));
                 if (descriptor?.resultVersion === 1 && descriptor.workspaceConstrained === true && descriptor.descriptor === null) {
                   processorWorkspaceConstrained = true;
@@ -893,4 +921,4 @@ async function prepareAssets(options) {
 }
 
 module.exports = { astcSettings, validLosslessPrefixes, pageHeaderMatches, prepareAssetsPhase, prepareAssets, validRecipes,
-  validDescriptor, validStorageDecision, automaticRecipe, PROCESSOR_IDENTITY, CACHE_VERSION };
+  validDescriptor, validStorageDecision, automaticRecipe, decryptFile, PROCESSOR_IDENTITY, CACHE_VERSION };

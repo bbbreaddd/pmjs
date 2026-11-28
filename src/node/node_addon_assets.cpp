@@ -304,6 +304,30 @@ napi_value storageDescriptor(napi_env env, const ImageStorageDecision& decision)
   }
   return value;
 }
+std::array<std::uint8_t, 16> parseEncryptionKey(napi_env env, napi_value value) {
+  bool isTyped = false;
+  check(env, napi_is_typedarray(env, value, &isTyped), "cannot inspect encryptionKey");
+  std::array<std::uint8_t, 16> key{};
+  if (isTyped) {
+    napi_typedarray_type type{};
+    std::size_t length = 0;
+    void* data = nullptr;
+    check(env, napi_get_typedarray_info(env, value, &type, &length, &data, nullptr, nullptr), "cannot read encryptionKey");
+    if (type != napi_uint8_array || length != 16) throw std::invalid_argument("encryptionKey must be 16 bytes");
+    std::memcpy(key.data(), data, 16);
+    return key;
+  }
+  const auto hex = asString(env, value);
+  if (hex.size() != 32) throw std::invalid_argument("encryptionKey must be 32 hex characters");
+  auto nibble = [](char ch) -> int {
+    if (ch >= '0' && ch <= '9') return ch - '0';
+    if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+    if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+    throw std::invalid_argument("encryptionKey must be hexadecimal");
+  };
+  for (std::size_t i = 0; i < 16; ++i) key[i] = static_cast<std::uint8_t>((nibble(hex[i * 2]) << 4) | nibble(hex[i * 2 + 1]));
+  return key;
+}
 struct AssetWork {
   ~AssetWork() { if (sourceFd >= 0) ::close(sourceFd); }
   napi_async_work work = nullptr;
@@ -609,6 +633,9 @@ napi_value processImage(napi_env env, napi_callback_info info) try {
     if (work->options.astcQuality != "fast" && work->options.astcQuality != "medium" && work->options.astcQuality != "thorough")
       throw std::invalid_argument("ASTC quality must be fast, medium or thorough");
   }
+  if (args.size() > 5 && hasProperty(env, args[5], "encryptionKey")) {
+    work->options.encryptionKey = parseEncryptionKey(env, property(env, args[5], "encryptionKey"));
+  }
   napi_value promise;
   check(env, napi_create_promise(env, &work->deferred, &promise), "cannot create asset preparation promise");
   const auto name = string(env, "pmjs-asset-preparation");
@@ -792,7 +819,10 @@ napi_value startTileWork(napi_env env, napi_callback_info info, bool replay) try
     const auto input = element(env, args[0], i); TileAssetInput source;
     const std::filesystem::path file = asString(env, property(env, input, "file"));
     if (!file.is_absolute()) throw std::runtime_error("tile source must be absolute");
-    source.source = ImageStore::openFile(file);
+    std::optional<ImageEncryptionKey> key;
+    if (hasProperty(env, input, "encryptionKey"))
+      key = parseEncryptionKey(env, property(env, input, "encryptionKey"));
+    source.source = ImageStore::openFile(file, key);
     if (!source.source) throw std::runtime_error("cannot open tile source");
     if (hasProperty(env, input, "sourceHash")) source.sourceHash = asString(env, property(env, input, "sourceHash"));
     const auto rectangles = property(env, input, "rectangles");
@@ -1002,5 +1032,6 @@ void registerAssetMethods(napi_env env, napi_value exports) {
   set(env, assets, "preparationVersion", version);
   set(env, assets, "preparationWorkspaceVersion", number(env, 1));
   set(env, assets, "preparationLz4Version", string(env, "lz4-1.10.0-indexed-palette-v3"));
+  set(env, assets, "encryptedImagePreparation", boolean(env, true));
 }
 }

@@ -203,13 +203,33 @@ async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, heig
     verifiedRegions: 0, identityRefreshes: 0, snapshotBytes: 0, additionalSnapshotBytes: 0, pageBytes: 0, durationMs: 0, cancelled: false, maps: [], index: {}, negativeDecisions: [], ordinaryFailures: [], refusalReasons: {} };
   const files = session.files;
   const digest = file => files.hash(file, 'map-input');
-  const entries = [], keys = [], snapshots = new Map(), sourceDependencies = new Map();
+  const entries = [], keys = [], snapshots = new Map(), snapshotHashes = new Map(), sourceDependencies = new Map();
   async function captureSnapshot(input) {
     let snapshot = snapshots.get(input.sourceHash);
-    if (snapshot) return snapshot;
+    if (snapshot) {
+      input.snapshotHash = snapshotHashes.get(input.sourceHash) || input.sourceHash;
+      return snapshot;
+    }
     // Existing decrypted cache files already provide leased, immutable bytes.
-    if (path.resolve(input.file).startsWith(path.resolve(cacheRoot, 'entries')+path.sep)) snapshot = input.file;
-    else {
+    if (!input.encrypted && path.resolve(input.file).startsWith(path.resolve(cacheRoot, 'entries')+path.sep)) {
+      snapshot = input.file;
+      snapshotHashes.set(input.sourceHash, input.sourceHash);
+    } else if (input.encrypted) {
+      const temporary = path.join(root, 'sources', '.stage-'+crypto.randomBytes(6).toString('hex')+'.png');
+      await fsp.mkdir(path.dirname(temporary), { recursive: true });
+      try {
+        const size = (await fsp.stat(input.file)).size;
+        await require('./asset-preparation.cjs').decryptFile(input.file, temporary, input.encryptionKey, '.png', files, size);
+        const decryptedHash = await digest(temporary);
+        snapshot = path.join(root, 'sources', decryptedHash+'.png');
+        if (await digest(snapshot).catch(() => null) !== decryptedHash) {
+          await files.publish(temporary, snapshot);
+          await digest(snapshot);
+          result.additionalSnapshotBytes += (await fsp.stat(snapshot)).size;
+        }
+        snapshotHashes.set(input.sourceHash, decryptedHash);
+      } finally { await fsp.rm(temporary, { force: true }); }
+    } else {
       snapshot = path.join(root, 'sources', input.sourceHash+'.png');
       if (await digest(snapshot).catch(() => null) !== input.sourceHash) {
         const temporary = snapshot+'.stage-'+crypto.randomBytes(6).toString('hex');
@@ -220,9 +240,11 @@ async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, heig
         } finally { await fsp.rm(temporary, { force: true }); }
         result.additionalSnapshotBytes += (await fsp.stat(snapshot)).size;
       }
+      snapshotHashes.set(input.sourceHash, input.sourceHash);
     }
     snapshots.set(input.sourceHash, snapshot);
     result.snapshotBytes += (await fsp.stat(snapshot)).size;
+    input.snapshotHash = snapshotHashes.get(input.sourceHash);
     return snapshot;
   }
   function report(phase, source, completed, total) {
@@ -250,6 +272,8 @@ async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, heig
     const game = gameInputs(native, files, virtualFiles, verifyHashes), mz = game.exists('js/rmmz_core.js');
     const systemInput = game.read('data/System.json'), sheetsInput = game.read('data/Tilesets.json');
     const system = JSON.parse(systemInput.bytes), sheets = JSON.parse(sheetsInput.bytes);
+    const encryptionKey = system.hasEncryptedImages && typeof system.encryptionKey === 'string' &&
+      /^[a-f0-9]{32}$/i.test(system.encryptionKey) ? Buffer.from(system.encryptionKey, 'hex') : null;
     const contract = await engineContract(game, mz);
     const sharedDependencies = [...contract.dependencies, systemInput.dependency, sheetsInput.dependency];
     const checkedDependencies = new Map();
@@ -462,17 +486,26 @@ async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, heig
         for (const input of demand.sources) {
           let dependency = sourceDependencies.get(input.source);
           if (!dependency || verifyHashes) {
-            const file = native.assets.sourcePath(input.source);
-            if (!file) { inputs.push({ ...input, file: null, sourceHash: null }); continue; }
-            const sourceIdentity = native.assets.sourceIdentity(input.source);
-            if (!dependency || dependency.sourceIdentity !== sourceIdentity || dependency.file !== file) {
-              dependency = { logical: input.source, file, sourceIdentity, hash: await digest(file) };
-              sourceDependencies.set(input.source, dependency);
+            let resolvedSource = input.source;
+            let file = native.assets.sourcePath(resolvedSource);
+            let encrypted = false;
+            if (!file && encryptionKey && /\.png$/i.test(input.source)) {
+              const candidate = input.source.replace(/\.png$/i, mz ? '.png_' : '.rpgmvp');
+              const candidateFile = native.assets.sourcePath(candidate);
+              if (candidateFile) { resolvedSource = candidate; file = candidateFile; encrypted = true; }
             }
-            if (native.assets.sourceIdentity(input.source) !== sourceIdentity) throw new Error('tile source changed while hashing');
+            if (!file) { inputs.push({ ...input, file: null, sourceHash: null }); continue; }
+            const sourceIdentity = native.assets.sourceIdentity(resolvedSource);
+            if (!dependency || dependency.sourceIdentity !== sourceIdentity || dependency.file !== file) {
+              dependency = { logical: resolvedSource, file, sourceIdentity, hash: await digest(file), encrypted };
+              sourceDependencies.set(input.source, dependency);
+              if (resolvedSource !== input.source) sourceDependencies.set(resolvedSource, dependency);
+            }
+            if (native.assets.sourceIdentity(resolvedSource) !== sourceIdentity) throw new Error('tile source changed while hashing');
           }
-          const { file, sourceIdentity, hash: sourceHash } = dependency;
-          inputs.push({ ...input, file, sourceHash, sourceIdentity });
+          const { logical: resolvedSource, file, sourceIdentity, hash: sourceHash, encrypted } = dependency;
+          inputs.push({ ...input, resolvedSource, file, sourceHash, sourceIdentity,
+            ...(encrypted ? { encrypted: true, encryptionKey } : {}) });
         }
         const merged = new Map();
         for (const input of inputs) {
@@ -611,7 +644,8 @@ async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, heig
         // Validated output hashes let native loads accept unchanged pages whose inode was renumbered.
         for (const page of descriptor.pages) page.hash = manifest.outputs.find(output => output.path === page.path).hash;
         descriptor.sources.forEach((source, i) => Object.assign(source, {
-          source: inputs[i].source, snapshot: inputs[i].snapshot, sourceHash: inputs[i].sourceHash, sourceIdentity: inputs[i].sourceIdentity }));
+          source: inputs[i].resolvedSource || inputs[i].source, snapshot: inputs[i].snapshot,
+          sourceHash: inputs[i].snapshotHash || inputs[i].sourceHash, sourceIdentity: inputs[i].sourceIdentity }));
         entries.push({ identity: key, directory, descriptor, outputs: manifest.outputs });
         result.index[mapId] = { identity: key, renderer: demand.renderer, contractHash: demand.contractHash,
           sources: inputs.map(input => input.source),

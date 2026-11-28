@@ -55,10 +55,27 @@ bool optionalPreparation(Work&& work) {
 
 class PngRows {
  public:
-  explicit PngRows(const std::filesystem::path& path) {
+  explicit PngRows(const std::filesystem::path& path,
+                   std::optional<std::array<std::uint8_t, 16>> encryptionKey = std::nullopt) {
     file_ = std::fopen(path.c_str(), "rb");
     if (!file_) throw std::runtime_error("cannot open preparation source");
     std::setvbuf(file_, fileBuffer_.data(), _IOFBF, fileBuffer_.size());
+    if (encryptionKey) {
+      std::array<std::uint8_t, 32> prefix{};
+      if (std::fread(prefix.data(), 1, prefix.size(), file_) != prefix.size()) {
+        close();
+        throw AssetPreparationDecodeError("truncated encrypted preparation PNG");
+      }
+      static constexpr std::array<std::uint8_t, 16> signature{
+        0x52, 0x50, 0x47, 0x4d, 0x56, 0x00, 0x00, 0x00,
+        0x00, 0x03, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00};
+      if (!std::equal(signature.begin(), signature.end(), prefix.begin())) {
+        close();
+        throw AssetPreparationDecodeError("invalid encrypted preparation PNG header");
+      }
+      for (std::size_t i = 0; i < header_.size(); ++i) header_[i] = prefix[16 + i] ^ (*encryptionKey)[i];
+      encrypted_ = true;
+    }
     png_ = png_create_read_struct(PNG_LIBPNG_VER_STRING, error_, onPngError, onPngWarning);
     info_ = png_ ? png_create_info_struct(png_) : nullptr;
     if (!info_) { close(); throw std::runtime_error("cannot create PNG reader"); }
@@ -68,7 +85,8 @@ class PngRows {
       throw AssetPreparationDecodeError("invalid preparation PNG" + detail);
     }
     png_set_chunk_malloc_max(png_, 1024U * 1024U);
-    png_init_io(png_, file_);
+    if (encrypted_) png_set_read_fn(png_, this, readEncryptedBytes);
+    else png_init_io(png_, file_);
     png_read_info(png_, info_);
     const auto w = png_get_image_width(png_, info_);
     const auto h = png_get_image_height(png_, info_);
@@ -114,6 +132,20 @@ class PngRows {
     png_longjmp(png, 1);
   }
   static void onPngWarning(png_structp, png_const_charp) {}
+  static void readEncryptedBytes(png_structp png, png_bytep out, png_size_t count) {
+    auto* self = static_cast<PngRows*>(png_get_io_ptr(png));
+    std::size_t done = 0;
+    if (self->headerOffset_ < self->header_.size()) {
+      const auto take = std::min<std::size_t>(count, self->header_.size() - self->headerOffset_);
+      std::memcpy(out, self->header_.data() + self->headerOffset_, take);
+      self->headerOffset_ += take;
+      done += take;
+    }
+    if (done < count) {
+      done += std::fread(out + done, 1, count - done, self->file_);
+    }
+    if (done != count) png_error(png, "unexpected end of encrypted PNG");
+  }
   void close() {
     if (png_) png_destroy_read_struct(&png_, info_ ? &info_ : nullptr, nullptr);
     if (file_) std::fclose(file_);
@@ -122,6 +154,9 @@ class PngRows {
   char error_[128] = {};
   ImageColorTransform transform_;
   std::array<char, 64U * 1024U> fileBuffer_;
+  std::array<std::uint8_t, 16> header_{};
+  std::size_t headerOffset_ = 0;
+  bool encrypted_ = false;
   FILE* file_ = nullptr;
   png_structp png_ = nullptr;
   png_infop info_ = nullptr;
@@ -398,8 +433,9 @@ class PreparationSource {
     int next_ = 0;
     bool filling_ = false;
   };
-  PreparationSource(const std::filesystem::path& path, Workspace& sourceWorkspace)
-      : workspace(sourceWorkspace), path_(path) {
+  PreparationSource(const std::filesystem::path& path, Workspace& sourceWorkspace,
+                    std::optional<std::array<std::uint8_t, 16>> encryptionKey = std::nullopt)
+      : workspace(sourceWorkspace), path_(path), encryptionKey_(encryptionKey) {
     initial_ = open(); width = initial_->width; height = initial_->height;
     if (!checkedImageExtent(width, height, 16384)) {
       throw AssetPreparationUnsupported("preparation image exceeds logical limits");
@@ -425,9 +461,10 @@ class PreparationSource {
  private:
   std::unique_ptr<PngRows> open() {
     ++workspace.stats.sourceDecodes;
-    return std::make_unique<PngRows>(path_);
+    return std::make_unique<PngRows>(path_, encryptionKey_);
   }
   std::filesystem::path path_;
+  std::optional<std::array<std::uint8_t, 16>> encryptionKey_;
   std::unique_ptr<PngRows> initial_;
   std::shared_ptr<Workspace::Buffer> cache_;
   std::shared_ptr<const CompressedCache> compressedCache_;
@@ -1736,7 +1773,7 @@ PreparedAsset prepareAssetImage(const std::filesystem::path& path,
   auto& stats = options.statistics ? *options.statistics : localStats;
   stats = {};
   Workspace workspace(options.workspaceBytes, stats);
-  PreparationSource source(path, workspace);
+  PreparationSource source(path, workspace, options.encryptionKey);
   if (!recipe.framePages) if (auto astc = prepareAstc(source, staging, recipe, options)) return *astc;
   if (layout && layout->compression.empty() &&
       (layout->framePages == recipe.framePages || (!recipe.framePages && !layout->textureArtifact.empty()))) {

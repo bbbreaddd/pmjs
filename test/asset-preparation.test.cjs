@@ -1880,3 +1880,49 @@ test('PMTX channelBlockPlan replays identical texture.pmtx and falls back on for
   assert.equal(fallback.texturePlan, 'channels');
   assert.deepEqual(fs.readFileSync(path.join(stage3, 'texture.pmtx')), fs.readFileSync(path.join(stage1, 'texture.pmtx')));
 });
+
+test('encryptedImagePreparation processes encrypted PNGs directly without materializing decrypted files', async t => {
+  const addonPath = [process.env.PMJS_NATIVE_ADDON, path.resolve(__dirname, '../build/dev/pmjs_native.node'), path.resolve(__dirname, '../build/pmjs_native.node')]
+    .find(candidate => candidate && fs.existsSync(candidate));
+  if (!addonPath) return t.skip('pmjs_native.node not built');
+  const addon = require(addonPath);
+  assert.equal(addon.assets.encryptedImagePreparation, true);
+  const f = encryptedFixture('MV');
+  fs.rmSync(path.join(f.gameRoot, 'audio'), { recursive: true });
+  const { png } = require('./helpers/png.cjs');
+  const width = 256, height = 256;
+  const rgba = Buffer.alloc(width * height * 4, 0);
+  for (let y = 0; y < 64; ++y) {
+    for (let x = 0; x < 64; ++x) {
+      const i = (y * width + x) * 4;
+      rgba[i] = (x * 7) & 255; rgba[i + 1] = (y * 11) & 255; rgba[i + 2] = 180; rgba[i + 3] = 255;
+    }
+  }
+  const plainPng = png(width, height, rgba);
+  const plainFile = path.join(f.root, 'plain.png');
+  fs.writeFileSync(plainFile, plainPng);
+  fs.writeFileSync(path.join(f.gameRoot, f.encryptedImage), f.encrypt(plainPng));
+
+  const plainStage = path.join(f.root, 'plain-stage');
+  const encStage = path.join(f.root, 'enc-stage');
+  fs.mkdirSync(plainStage, { recursive: true });
+  fs.mkdirSync(encStage, { recursive: true });
+  const plainDesc = await addon.assets.processImage('img/pictures/hero.png', plainStage, { grid: [1, 1], framePages: false }, plainFile, null, {});
+  const encDesc = await addon.assets.processImage(f.encryptedImage, encStage, { grid: [1, 1], framePages: false }, path.join(f.gameRoot, f.encryptedImage), null, { encryptionKey: Buffer.from('00112233445566778899aabbccddeeff', 'hex') });
+  assert.deepEqual(encDesc, plainDesc);
+  assert.deepEqual(fs.readFileSync(path.join(encStage, 'page-0.png')), fs.readFileSync(path.join(plainStage, 'page-0.png')));
+
+  f.native.assets.encryptedImagePreparation = true;
+  f.native.assets.preparationWorkspaceVersion = addon.assets.preparationWorkspaceVersion;
+  f.native.assets.preparationLz4Version = addon.assets.preparationLz4Version;
+  f.native.assets.processImage = addon.assets.processImage;
+  const result = await prepareAssets(f);
+  assert.equal(result.error, undefined);
+  assert.equal(result.failedFiles, 0);
+  assert.equal(result.decrypted, 0);
+  assert.equal(result.decryptedEntries.length, 0);
+  assert.equal(result.entries.length, 1);
+  assert.equal(result.entries[0].source, f.encryptedImage);
+  assert.equal(result.entries[0].decryptedFile, undefined);
+  assert.equal(validDescriptor(result.entries[0].descriptor), true);
+});

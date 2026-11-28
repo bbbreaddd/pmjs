@@ -80,6 +80,7 @@ struct AssetPreparationOptions {
   bool exportFilteredTilePlan = false;
   std::string astcQuality = "medium";
   std::optional<ImageStorageDecision> knownStorage;
+  std::optional<std::array<std::uint8_t, 16>> encryptionKey;
 };
 void writePreparedPng(const std::filesystem::path& path, int width, int height,
                       const std::vector<std::uint8_t>& bytes);
