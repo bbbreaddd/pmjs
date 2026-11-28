@@ -635,3 +635,208 @@ test('expected map preparation refusals are aggregated without per-map warnings'
   assert.equal(result.refusalReasons['no-visual-tile-demand'], 1);
   assert.equal(warnings.length, 0);
 });
+
+test('metadata-only portable map index replays tile atlases without repacking', async t => {
+  const addonPath = [process.env.PMJS_NATIVE_ADDON, path.resolve(__dirname, '../build/dev/pmjs_native.node'), path.resolve(__dirname, '../build/pmjs_native.node')]
+    .find(candidate => candidate && fs.existsSync(candidate));
+  const f = fixture(t);
+  if (addonPath) {
+    const addon = require(addonPath);
+    f.native.assets.processTiles = addon.assets.processTiles;
+    f.native.assets.replayTiles = addon.assets.replayTiles;
+  } else {
+    f.native.assets.replayTiles = async (inputs, stage, layout) => {
+      if (layout.sources[0].regions[0].atlas[0] > 2048) {
+        throw Object.assign(new Error('invalid indexed tile region bounds'), { code: 'PMJS_TILE_UNSUPPORTED' });
+      }
+      fs.writeFileSync(path.join(stage, 'tiles-0.png'), png(50, 50, Buffer.alloc(50 * 50 * 4, 73)));
+      return { ...layout, ordinaryBytes: inputs.length * 512 * 512 * 4, pageBytes: 50 * 50 * 4 };
+    };
+  }
+  const cold = await prepareMaps(f);
+  assert.equal(cold.selected, 1);
+  const mapIdentity = Object.values(cold.index)[0].identity;
+  const entryDirectory = path.join(cachePath(f), 'maps/entries', mapIdentity);
+  const state = JSON.parse(fs.readFileSync(path.join(cachePath(f), 'preparation-state.json')));
+  const manifest = state.data.results[path.relative(cachePath(f), entryDirectory).split(path.sep).join('/')];
+  const portableIndex = {
+    compiler: manifest.compiler,
+    compilations: cold.compilations,
+    mapInputs: Object.fromEntries(Object.entries(cold.mapInputs).map(([name, input]) =>
+      [name, { ...input, dependencies: input.dependencies.map(({ logical, hash }) => ({ logical, hash })) }])),
+    entries: [{ identity: mapIdentity, descriptor: manifest.descriptor, outputs: [] }]
+  };
+  const replayCacheRoot = temporaryDirectory('pmjs-map-replay-');
+  const replayed = await prepareMaps({
+    ...f,
+    cacheRoot: replayCacheRoot,
+    portableIndex
+  });
+  assert.equal(replayed.selected, 1);
+  assert.equal(replayed.indexedReplays, 1);
+  assert.equal(replayed.nativePacks, 0);
+  if (addonPath) {
+    const replayDir = path.join(cachePath({ ...f, cacheRoot: replayCacheRoot }), 'maps/entries', mapIdentity);
+    assert.deepEqual(
+      fs.readFileSync(path.join(replayDir, 'tiles-0.png')),
+      fs.readFileSync(path.join(entryDirectory, 'tiles-0.png'))
+    );
+  }
+
+  const badDescriptor = structuredClone(manifest.descriptor);
+  badDescriptor.sources[0].regions[0].atlas = [99999, 99999, 48, 48];
+  const fallback = await prepareMaps({
+    ...f,
+    cacheRoot: temporaryDirectory('pmjs-map-replay-fallback-'),
+    portableIndex: { ...portableIndex, entries: [{ identity: mapIdentity, descriptor: badDescriptor, outputs: [] }] }
+  });
+  assert.equal(fallback.selected, 1);
+  assert.equal(fallback.indexedReplays, 0);
+  assert.equal(fallback.nativePacks, 1);
+});
+
+test('portable negative map decisions skip repacking when inputs and contract match', async t => {
+  const f = fixture(t);
+  let packCalls = 0;
+  f.native.assets.processTiles = async () => {
+    packCalls++;
+    throw Object.assign(new Error('tile rectangle cannot be packed exactly'), { code: 'PMJS_TILE_UNSUPPORTED' });
+  };
+  const cold = await prepareMaps(f);
+  assert.equal(cold.selected, 0);
+  assert.equal(cold.refused, 1);
+  assert.equal(packCalls, 1);
+  assert.equal(cold.negativeDecisions.length, 1);
+  assert.equal(cold.negativeDecisions[0].outcome, 'ordinary-choice');
+
+  packCalls = 0;
+  const recipient = await prepareMaps({
+    ...f,
+    cacheRoot: temporaryDirectory('pmjs-map-negative-recipient-'),
+    portableIndex: {
+      compiler: cold.compilations ? require('../runner/map-demand.cjs').COMPILER_VERSION : undefined,
+      compilations: cold.compilations,
+      mapInputs: Object.fromEntries(Object.entries(cold.mapInputs).map(([name, input]) =>
+        [name, { ...input, dependencies: input.dependencies.map(({ logical, hash }) => ({ logical, hash })) }])),
+      entries: [],
+      negativeEntries: cold.negativeDecisions
+    }
+  });
+  assert.equal(recipient.selected, 0);
+  assert.equal(recipient.refused, 1);
+  assert.equal(recipient.indexedNegative, 1);
+  assert.equal(packCalls, 0);
+});
+
+test('portable preparationOrder controls map execution order and deduplicates shared dependency checks', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.gameRoot, 'data/Map002.json'), JSON.stringify({
+    width: 2, height: 1, tilesetId: 1, data: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], events: []
+  }));
+  const cold = await prepareMaps(f);
+  assert.equal(cold.selected, 2);
+
+  const executionOrder = [];
+  const originalReplay = f.native.assets.processTiles;
+  const resolveCalls = new Map();
+  const originalSourcePath = f.native.assets.sourcePath;
+  const g = {
+    ...f,
+    cacheRoot: temporaryDirectory('pmjs-map-order-'),
+    native: {
+      ...f.native,
+      assets: {
+        ...f.native.assets,
+        sourcePath(logical) {
+          resolveCalls.set(logical, (resolveCalls.get(logical) || 0) + 1);
+          return originalSourcePath(logical);
+        },
+        async processTiles(inputs, stage) {
+          return originalReplay(inputs, stage);
+        }
+      }
+    },
+    onProgress(event) {
+      if (event.phase === 'map-compile' && event.source) executionOrder.push(event.source);
+    },
+    portableIndex: {
+      compiler: require('../runner/map-demand.cjs').COMPILER_VERSION,
+      compilations: cold.compilations,
+      mapInputs: Object.fromEntries(Object.entries(cold.mapInputs).map(([name, input]) =>
+        [name, { ...input, dependencies: input.dependencies.map(({ logical, hash }) => ({ logical, hash })) }])),
+      entries: [],
+      preparationOrder: [2, 1]
+    }
+  };
+  const ordered = await prepareMaps(g);
+  assert.equal(ordered.selected, 2);
+  assert.deepEqual(executionOrder, ['Map002.json', 'Map001.json']);
+  assert.deepEqual(ordered.maps.map(m => m.mapId), [1, 2]);
+  assert.ok(resolveCalls.get('data/Tilesets.json') <= 4, 'shared dependency lookup count stays bounded across maps');
+});
+
+test('native tile replay rejects conflicting overlaps, releases tile cache, and excludes budget refusals', async t => {
+  const addonPath = [process.env.PMJS_NATIVE_ADDON, path.resolve(__dirname, '../build/dev/pmjs_native.node'), path.resolve(__dirname, '../build/pmjs_native.node')]
+    .find(candidate => candidate && fs.existsSync(candidate));
+  if (!addonPath) return;
+  const addon = require(addonPath);
+  const f = fixture(t);
+  f.native.assets.processTiles = addon.assets.processTiles;
+  f.native.assets.replayTiles = addon.assets.replayTiles;
+  f.native.assets.releaseTileCache = addon.assets.releaseTileCache;
+
+  // Give Map001 two tilesets with distinct pixels so overlapping them in replay must fail.
+  const red = png(512, 512, Buffer.alloc(512 * 512 * 4, 10));
+  const blue = png(512, 512, Buffer.alloc(512 * 512 * 4, 200));
+  fs.writeFileSync(path.join(f.gameRoot, 'img/tilesets/B.png'), red);
+  fs.writeFileSync(path.join(f.gameRoot, 'img/tilesets/C.png'), blue);
+  fs.writeFileSync(path.join(f.gameRoot, 'data/Map001.json'), JSON.stringify({
+    width: 2, height: 1, tilesetId: 1, data: [1, 2048, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], events: []
+  }));
+  const cold = await prepareMaps(f);
+  assert.equal(cold.selected, 1);
+  assert.equal(addon.assets.tileCacheLiveBytes(), 0, 'tile cache must be released after preparation');
+
+  // Direct native replayTiles conflict check: two distinct source rectangles mapped to the same atlas slot.
+  const split = Buffer.alloc(512 * 512 * 4, 10);
+  for (let y = 0; y < 64; ++y) {
+    for (let x = 48; x < 112; ++x) {
+      const off = (y * 512 + x) * 4;
+      split[off] = 200; split[off + 1] = 200; split[off + 2] = 200; split[off + 3] = 255;
+    }
+  }
+  const splitFile = path.join(f.gameRoot, 'img/tilesets/B.png');
+  fs.writeFileSync(splitFile, png(512, 512, split));
+  const stageDir = temporaryDirectory('pmjs-conflict-stage-');
+  await assert.rejects(
+    addon.assets.replayTiles(
+      [{ file: splitFile, rectangles: [[0, 0, 48, 48], [48, 0, 48, 48]] }],
+      stageDir,
+      {
+        version: 1,
+        halo: 10,
+        pages: [{ path: 'tiles-0.png', width: 128, height: 128 }],
+        sources: [{
+          width: 512,
+          height: 512,
+          regions: [
+            { rect: [0, 0, 48, 48], atlas: [10, 10, 48, 48], page: 0 },
+            { rect: [48, 0, 48, 48], atlas: [10, 10, 48, 48], page: 0 }
+          ]
+        }]
+      }
+    ),
+    err => err.code === 'PMJS_TILE_UNSUPPORTED' && /conflicting overlapping placements/.test(err.message)
+  );
+  addon.assets.releaseTileCache();
+  assert.equal(addon.assets.tileCacheLiveBytes(), 0);
+
+  // Budget refusal must not be exported as a portable negative decision.
+  const budgetFixture = fixture(t);
+  budgetFixture.native.assets.processTiles = async () => {
+    throw Object.assign(new Error('tile packing exceeds the working storage budget'), { code: 'PMJS_TILE_UNSUPPORTED' });
+  };
+  const budgetRefused = await prepareMaps(budgetFixture);
+  assert.equal(budgetRefused.refused, 1);
+  assert.deepEqual(budgetRefused.negativeDecisions, []);
+});

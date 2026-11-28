@@ -31,7 +31,7 @@ function regularRelative(root, name) {
   return file;
 }
 
-export function readBundle(directory) {
+export function readBundle(directory, { verifyAssetIndex = true } = {}) {
   const root = fs.realpathSync(directory);
   const descriptor = JSON.parse(fs.readFileSync(path.join(root, 'pmjs.json'), 'utf8'));
   const patches = descriptor.patches ?? descriptor.adapters;
@@ -53,7 +53,7 @@ export function readBundle(directory) {
   if (descriptor.assetIndex && /^[a-zA-Z0-9_-]+\.json$/.test(descriptor.assetIndex)) {
     try {
       const candidate = regularRelative(root, descriptor.assetIndex);
-      if (sha256(candidate) === descriptor.assetIndexSha256) assetIndex = candidate;
+      if (!verifyAssetIndex || sha256(candidate) === descriptor.assetIndexSha256) assetIndex = candidate;
     } catch (_) {}
   }
   if (typeof descriptor.game !== 'string' || path.isAbsolute(descriptor.game) ||

@@ -162,7 +162,12 @@ test('recipe, codec and section versions only invalidate the affected index sect
     else if (field === 'pageCodec') f.options.assetPreparation.pageCodec = 'png';
     else f.index.sections[field] = 99;
     const loaded = f.load();
-    if (['recipes', 'pageCodec', 'losslessPrefixes', 'astc', 'astcQuality', 'images'].includes(field)) {
+    if (field === 'pageCodec') {
+      assert.equal(loaded.imageOutputsCompatible, false);
+      assert.equal(loaded.images.length, 1);
+      assert.deepEqual(loaded.images[0].outputs, []);
+      assert.equal(loaded.maps.entries.length, 1);
+    } else if (['recipes', 'losslessPrefixes', 'astc', 'astcQuality', 'images'].includes(field)) {
       assert.deepEqual(loaded.images, []); assert.equal(loaded.maps.entries.length, 1);
     } else if (field === 'mapCompilation') assert.equal(loaded.maps, null);
     else if (field === 'tileOutputs') assert.deepEqual(loaded.maps.entries, []);
@@ -211,21 +216,77 @@ test('storage decisions require their own supported version and valid layout', (
   assert.equal(f.load().images.length, 1, 'bad storage metadata does not discard preparation layout');
 });
 
-test('LZ4 container versions invalidate image outputs without discarding independent sections', () => {
+test('LZ4 container versions invalidate image outputs without discarding layouts or independent sections', () => {
   const f = fixture();
+  f.index.images[0].descriptor = { width: 16, height: 16, halo: 2, uniform: false, cells: [], pages: [] };
   assert.equal(f.load().images.length, 1);
+  assert.equal(f.load().imageOutputsCompatible, true);
   for (const version of [undefined, 'rgba-v1', 'future-v3']) {
     f.index.pageCodecVersion = version;
     const loaded = f.load();
-    assert.deepEqual(loaded.images, []);
+    assert.equal(loaded.imageOutputsCompatible, false);
+    assert.equal(loaded.images.length, 1);
+    assert.deepEqual(loaded.images[0].outputs, []);
     assert.equal(loaded.maps.entries.length, 1);
     assert.deepEqual(loaded.negativeHints, f.index.negativeHints);
   }
   f.index.pageCodecVersion = f.native.assets.preparationLz4Version;
-  assert.equal(f.load().images.length, 1);
+  const restored = f.load();
+  assert.equal(restored.imageOutputsCompatible, true);
+  assert.equal(restored.images.length, 1);
   f.index.pageCodec = f.options.assetPreparation.pageCodec = 'png';
   delete f.index.pageCodecVersion;
-  assert.equal(f.load().images.length, 1, 'PNG outputs do not depend on the LZ4 container');
+  assert.equal(f.load().imageOutputsCompatible, true, 'PNG outputs do not depend on the LZ4 container');
+});
+
+test('processor version bumps preserve positive layouts and storage when decoder, colorManagement, and pageSize match', () => {
+  const f = fixture();
+  const baseVersion = { colorManagement: 'skia65', processor: 'images-v24', decoder: 'libpng-1.6-rgba8-color-v2', pageSize: 2048 };
+  f.index.processor = { ...baseVersion };
+  f.native.assets.preparationVersion = { ...baseVersion, processor: 'images-v26' };
+  f.index.sections.imageStorage = 1;
+  f.index.imageStorageVersion = f.native.assets.imageStorageVersion = 1;
+  const storage = { version: 1, width: 16, height: 16, channels: 4, paletteBits: 8, source: [0, 1, 2, 3], swizzle: [0, 1, 2, 3] };
+  f.index.images = [
+    { source: 'img/pictures/pos.png', descriptor: { width: 16, height: 16, halo: 2, uniform: false, cells: [], pages: [] }, storage, outputs: [{ path: 'a.pml4', hash: 'a'.repeat(64) }] },
+    { source: 'img/pictures/neg.png', descriptor: null, outputs: [] }
+  ];
+  const loaded = f.load();
+  assert.equal(loaded.imageOutputsCompatible, false);
+  assert.equal(loaded.imageNegativeCompatible, false);
+  assert.equal(loaded.images.length, 1);
+  assert.equal(loaded.images[0].source, 'img/pictures/pos.png');
+  assert.deepEqual(loaded.images[0].outputs, []);
+  assert.deepEqual(loaded.images[0].storage, storage);
+
+  f.native.assets.preparationVersion = { ...baseVersion, processor: 'images-v26', decoder: 'libpng-1.6-rgba8-color-v3' };
+  const decoderChanged = f.load();
+  assert.deepEqual(decoderChanged.images, []);
+});
+
+test('PMTX texturePlan and filteredTilePlan respect processor and pageCodec compatibility', () => {
+  const f = fixture();
+  const baseVersion = { colorManagement: 'skia65', processor: 'images-v26', decoder: 'libpng-1.6-rgba8-color-v2', pageSize: 2048 };
+  f.index.processor = { ...baseVersion };
+  f.native.assets.preparationVersion = { ...baseVersion };
+  f.index.images = [
+    { source: 'img/pictures/pmtx.png', descriptor: { width: 16, height: 16, halo: 2, uniform: false, cells: [], pages: [], texturePlan: 'filteredTiles', filteredTilePlan: { width: 16, height: 16, rgbaCount: 1, rCount: 0, rgCount: 0, data: 'AA==' } }, outputs: [] },
+    { source: 'img/pictures/none.png', descriptor: { width: 16, height: 16, halo: 2, uniform: false, cells: [], pages: [], texturePlan: 'none' }, outputs: [] }
+  ];
+
+  // Page codec version mismatch strips negative texturePlan: 'none' but preserves layout.
+  f.index.pageCodecVersion = 'old-lz4-v1';
+  const codecChanged = f.load();
+  assert.equal(codecChanged.images[1].descriptor.texturePlan, undefined);
+  assert.equal(codecChanged.images[0].descriptor.texturePlan, 'filteredTiles');
+
+  // Processor bump strips both positive texturePlan and filteredTilePlan.
+  f.index.pageCodecVersion = f.native.assets.preparationLz4Version;
+  f.native.assets.preparationVersion = { ...baseVersion, processor: 'images-v27' };
+  const procChanged = f.load();
+  assert.equal(procChanged.images[0].descriptor.texturePlan, undefined);
+  assert.equal(procChanged.images[0].descriptor.filteredTilePlan, undefined);
+  assert.equal(procChanged.images[1].descriptor.texturePlan, undefined);
 });
 
 test('offline asset lookup follows native VFS case folding and rejects path collisions', () => {

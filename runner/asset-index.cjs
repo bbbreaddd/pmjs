@@ -193,6 +193,63 @@ function offlineFilesystem(gameRoot, derived) {
   return { assets, fs: game };
 }
 
+function orderMapIds(entries, budgetBytes = 32 * 1024 * 1024) {
+  const remaining = entries
+    .filter(entry => Number.isSafeInteger(entry?.mapId) && Array.isArray(entry?.descriptor?.sources))
+    .map(entry => {
+      const tilesets = new Map();
+      let totalBytes = 0;
+      for (const s of entry.descriptor.sources) {
+        const key = s.sourceHash || s.source;
+        if (!key || tilesets.has(key)) continue;
+        const bytes = Number.isSafeInteger(s.width) && Number.isSafeInteger(s.height) && s.width > 0 && s.height > 0
+          ? s.width * s.height * 4 : 0;
+        tilesets.set(key, bytes);
+        totalBytes += bytes;
+      }
+      return { mapId: entry.mapId, tilesets, totalBytes };
+    });
+  const order = [];
+  const lru = new Map();
+  let usedBytes = 0;
+  while (remaining.length) {
+    let bestIndex = 0;
+    let bestMiss = Infinity, bestHit = -1, bestTotal = Infinity, bestId = Infinity;
+    for (let i = 0; i < remaining.length; ++i) {
+      const item = remaining[i];
+      let missBytes = 0, hitBytes = 0;
+      for (const [key, bytes] of item.tilesets) {
+        if (lru.has(key)) hitBytes += bytes;
+        else missBytes += bytes;
+      }
+      if (missBytes < bestMiss ||
+          (missBytes === bestMiss && (hitBytes > bestHit ||
+            (hitBytes === bestHit && (item.totalBytes < bestTotal ||
+              (item.totalBytes === bestTotal && item.mapId < bestId)))))) {
+        bestIndex = i; bestMiss = missBytes; bestHit = hitBytes;
+        bestTotal = item.totalBytes; bestId = item.mapId;
+      }
+    }
+    const [chosen] = remaining.splice(bestIndex, 1);
+    order.push(chosen.mapId);
+    for (const [key, bytes] of chosen.tilesets) {
+      if (lru.has(key)) {
+        lru.delete(key);
+        lru.set(key, bytes);
+      } else if (bytes <= budgetBytes) {
+        while (usedBytes + bytes > budgetBytes && lru.size) {
+          const [victimKey, victimBytes] = lru.entries().next().value;
+          lru.delete(victimKey);
+          usedBytes -= victimBytes;
+        }
+        lru.set(key, bytes);
+        usedBytes += bytes;
+      }
+    }
+  }
+  return order;
+}
+
 async function portableMaps(result, includeAssets, output, classifier) {
   const mapInputs = Object.fromEntries(Object.entries(result.mapInputs || {}).map(([name, entry]) =>
     [name, { ...entry, dependencies: entry.dependencies.map(({ logical, hash }) => ({ logical, hash })) }]));
@@ -218,7 +275,9 @@ async function portableMaps(result, includeAssets, output, classifier) {
     entries.push({ mapId: Number(mapId), identity: selected.identity,
       descriptor, outputs: pages, estimates: manifest.estimates });
   }
-  return { compiler: COMPILER_VERSION, compilations: result.compilations || {}, mapInputs, entries };
+  const negativeEntries = Array.isArray(result.negativeDecisions) ? result.negativeDecisions : [];
+  const preparationOrder = orderMapIds(entries);
+  return { compiler: COMPILER_VERSION, compilations: result.compilations || {}, mapInputs, entries, negativeEntries, preparationOrder };
 }
 
 async function generateAssetIndex({ root, gameRoot, options, output, includeAssets, portDescriptors = [], includePortAssets = false, writeIndex = true, shouldCancel = () => false, cacheRoot: reusableCache }) {
@@ -393,35 +452,61 @@ function loadAssetIndex(file, native, options, contents) {
         policies[recipe.source] = { ...policies[recipe.source], recipe };
     }
     const legacy = index.schema === 1;
-    const imageCompatible = (legacy || index.sections?.images === 1) &&
+    const baseImages = (legacy || index.sections?.images === 1) &&
       Array.isArray(index.images) && index.images.length <= 100000 &&
-      JSON.stringify(index.processor) === JSON.stringify(native.assets.preparationVersion) &&
       (index.schema === 3 || index.recipesIdentity === identity(options.assetPreparation.recipes) &&
         JSON.stringify(index.losslessPrefixes || []) === JSON.stringify(options.assetPreparation.losslessPrefixes || []) &&
-        JSON.stringify(astcSettings(index.astc)) === JSON.stringify(astcSettings(options.assetPreparation.astc))) &&
-      (legacy || index.pageCodec === options.assetPreparation.pageCodec) &&
-      (legacy || index.pageCodec !== 'lz4' || typeof native.assets.preparationLz4Version === 'string' &&
-        index.pageCodecVersion === native.assets.preparationLz4Version);
+        JSON.stringify(astcSettings(index.astc)) === JSON.stringify(astcSettings(options.assetPreparation.astc)));
+    const procA = index.processor, procB = native.assets.preparationVersion;
+    const processorExact = JSON.stringify(procA) === JSON.stringify(procB);
+    const decoderCompatible = processorExact || Boolean(
+      procA && procB && typeof procA.decoder === 'string' && procA.decoder === procB.decoder &&
+      typeof procA.colorManagement === 'string' && procA.colorManagement === procB.colorManagement &&
+      Number.isSafeInteger(procA.pageSize) && procA.pageSize === procB.pageSize);
+    const pageCodecCompatible = (legacy || index.pageCodec === options.assetPreparation.pageCodec) &&
+      (legacy || index.pageCodec !== 'lz4' || (typeof native.assets.preparationLz4Version === 'string' &&
+        index.pageCodecVersion === native.assets.preparationLz4Version));
+    const imageCompatible = baseImages && decoderCompatible;
+    const imageOutputsCompatible = imageCompatible && processorExact && pageCodecCompatible;
+    const imageNegativeCompatible = imageCompatible && processorExact;
+    const imageStorageCompatible = index.sections?.imageStorage === 1 &&
+      index.imageStorageVersion === native.assets.imageStorageVersion &&
+      index.imageStorageVersion === 1 && decoderCompatible;
     const compilationCompatible = (legacy || index.sections?.mapCompilation === 1) &&
       index.maps?.compiler === COMPILER_VERSION;
     const tilesCompatible = (legacy || index.sections?.tileOutputs === 1) &&
       index.tileProcessor === native.assets.tilePreparationVersion &&
       index.width === options.width && index.height === options.height;
-    return { ...index, policies, images: imageCompatible ? index.images.filter(record => record && typeof record.source === 'string')
-        .map(record => {
+    return { ...index, policies, imageOutputsCompatible, imageNegativeCompatible,
+      images: imageCompatible ? index.images.filter(record => record && typeof record.source === 'string')
+        .flatMap(record => {
           const { storage, ...rest } = record;
+          if (rest.descriptor === null && !imageNegativeCompatible) return [];
           if (!rest.resolvedSettings) {
             const astc = astcSettings(index.astc);
             const allowAstc = astc.enabled && !(index.losslessPrefixes || []).some(prefix => matchesPrefix(record.source, prefix));
             rest.resolvedSettings = { allowPalettes: index.allowPalettes ?? true, allowAstc, astcQuality: allowAstc ? astc.quality : null, pageCodec: index.pageCodec || 'png' };
           }
-          return index.sections?.imageStorage === 1 && index.imageStorageVersion === native.assets.imageStorageVersion &&
-            index.imageStorageVersion === 1 && validStorageDecision(storage) ? { ...rest, storage } : rest;
+          if (!imageOutputsCompatible) {
+            rest.outputs = [];
+            if (rest.descriptor?.texturePlan === 'none') {
+              const { texturePlan: _, ...descriptorRest } = rest.descriptor;
+              rest.descriptor = descriptorRest;
+            }
+          }
+          if (!imageNegativeCompatible && rest.descriptor &&
+              (rest.descriptor.texturePlan !== undefined || rest.descriptor.filteredTilePlan !== undefined ||
+               rest.descriptor.channelBlockPlan !== undefined)) {
+            const { texturePlan: _, filteredTilePlan: __, channelBlockPlan: ___, ...descriptorRest } = rest.descriptor;
+            rest.descriptor = descriptorRest;
+          }
+          return [imageStorageCompatible && validStorageDecision(storage) ? { ...rest, storage } : rest];
         }) : [],
       negativeHints: !legacy && index.sections?.negativeHints === 1 &&
         Array.isArray(index.negativeHints) && index.negativeHints.length <= 100000 ? index.negativeHints : [],
       maps: compilationCompatible ? { ...index.maps,
-        entries: tilesCompatible && Array.isArray(index.maps.entries) ? index.maps.entries : [] } : null };
+        entries: tilesCompatible && Array.isArray(index.maps.entries) ? index.maps.entries : [],
+        negativeEntries: tilesCompatible && Array.isArray(index.maps.negativeEntries) ? index.maps.negativeEntries : [] } : null };
   } catch { return null; }
 }
 

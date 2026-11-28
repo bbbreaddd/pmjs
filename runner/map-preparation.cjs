@@ -165,6 +165,13 @@ async function resolveTiled(game, map) {
   }
   return { map, dependencies };
 }
+function isPortableNegativeReason(reason) {
+  return reason === 'no visual tile demand' ||
+    reason === 'no compact tile demand' ||
+    reason === 'packed allocations and geometry are not smaller' ||
+    reason === 'tile rectangle cannot be packed exactly';
+}
+
 function mapRefusalReasonKey(reason) {
   if (reason === 'no visual tile demand') return 'no-visual-tile-demand';
   if (reason === 'packed allocations and geometry are not smaller') return 'not-smaller';
@@ -182,14 +189,18 @@ async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, heig
   cacheRoot = session.root;
   if (!['live', 'offline'].includes(preparationContext)) throw new Error('invalid preparation context');
   const offline = preparationContext === 'offline';
-  const indexedMaps = new Map();
+  const indexedMaps = new Map(), indexedNegativeMaps = new Map();
   for (const entry of portableIndex?.entries || []) {
     if (!indexedMaps.has(entry.identity)) indexedMaps.set(entry.identity, entry);
   }
+  for (const entry of portableIndex?.negativeEntries || []) {
+    if (entry && typeof entry.identity === 'string' && !indexedNegativeMaps.has(entry.identity))
+      indexedNegativeMaps.set(entry.identity, entry);
+  }
   const started = performance.now(), root = path.join(cacheRoot, 'maps');
   const result = { enabled: true, selected: 0, refused: 0, generated: 0, hits: 0, negativeHits: 0,
-    installed: 0, compilationHits: 0, indexedCopies: 0, nativePacks: 0, earlyRefusals: 0, processingMs: 0,
-    verifiedRegions: 0, identityRefreshes: 0, snapshotBytes: 0, additionalSnapshotBytes: 0, pageBytes: 0, durationMs: 0, cancelled: false, maps: [], index: {}, ordinaryFailures: [], refusalReasons: {} };
+    installed: 0, compilationHits: 0, indexedCopies: 0, indexedReplays: 0, indexedNegative: 0, nativePacks: 0, earlyRefusals: 0, processingMs: 0,
+    verifiedRegions: 0, identityRefreshes: 0, snapshotBytes: 0, additionalSnapshotBytes: 0, pageBytes: 0, durationMs: 0, cancelled: false, maps: [], index: {}, negativeDecisions: [], ordinaryFailures: [], refusalReasons: {} };
   const files = session.files;
   const digest = file => files.hash(file, 'map-input');
   const entries = [], keys = [], snapshots = new Map(), sourceDependencies = new Map();
@@ -272,17 +283,32 @@ async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, heig
         portableIndex.compilations && typeof portableIndex.compilations === 'object' &&
         portableIndex.mapInputs && typeof portableIndex.mapInputs === 'object') {
       const rebound = {};
+      const reboundDependencies = new Map();
       for (const [name, entry] of Object.entries(portableIndex.mapInputs)) {
         if (!/^Map\d+\.json$/i.test(name) || !Array.isArray(entry?.dependencies)) continue;
         const dependencies = [];
         for (const dependency of entry.dependencies) {
           if (typeof dependency.logical !== 'string' || dependency.logical.includes('..') ||
               dependency.logical.startsWith('/') || !HASH.test(dependency.hash)) break;
-          if (game.resolve(dependency.logical) !== dependency.logical) break;
-          const file = native.assets.sourcePath(dependency.logical);
-          if (!file || await digest(file).catch(() => null) !== dependency.hash) break;
-          dependencies.push({ logical: dependency.logical, file,
-            sourceIdentity: native.assets.sourceIdentity(dependency.logical), hash: dependency.hash });
+          const cacheKey = dependency.logical + '\0' + dependency.hash;
+          let resolved = reboundDependencies.get(cacheKey);
+          if (resolved === undefined) {
+            if (game.resolve(dependency.logical) !== dependency.logical) {
+              reboundDependencies.set(cacheKey, null);
+              break;
+            }
+            const file = native.assets.sourcePath(dependency.logical);
+            if (!file || await digest(file).catch(() => null) !== dependency.hash) {
+              reboundDependencies.set(cacheKey, null);
+              break;
+            }
+            resolved = { logical: dependency.logical, file,
+              sourceIdentity: native.assets.sourceIdentity(dependency.logical), hash: dependency.hash };
+            reboundDependencies.set(cacheKey, resolved);
+          } else if (resolved === null) {
+            break;
+          }
+          dependencies.push({ ...resolved });
         }
         if (dependencies.length === entry.dependencies.length)
           rebound[name] = { ...entry, dependencies };
@@ -301,23 +327,52 @@ async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, heig
     const previousCompilations = previousCompilationsValid ? previousIndex.compilations : {};
     const previousInputs = previousInputsValid ? previousIndex.mapInputs : {};
     const compilations = {}, mapInputs = {};
+    const validatedDependencies = new Map();
     async function unchangedDependencies(cached) {
       if (!Array.isArray(cached.dependencies) || !cached.dependencies.length) return null;
       const dependencies = [];
       for (const input of cached.dependencies) {
-        if (typeof input.logical !== 'string' || !HASH.test(input.hash) || game.resolve(input.logical) !== input.logical) return null;
-        const file = native.assets.sourcePath(input.logical);
-        const sourceIdentity = native.assets.sourceIdentity(input.logical);
-        if (!file || file !== input.file || await digest(file) !== input.hash ||
-            native.assets.sourceIdentity(input.logical) !== sourceIdentity) return null;
-        dependencies.push({ logical: input.logical, file, sourceIdentity, hash: input.hash });
+        if (typeof input.logical !== 'string' || !HASH.test(input.hash)) return null;
+        const cacheKey = input.logical + '\0' + input.hash + '\0' + (input.file || '');
+        let validated = !verifyHashes ? validatedDependencies.get(cacheKey) : undefined;
+        if (validated === undefined) {
+          if (game.resolve(input.logical) !== input.logical) {
+            if (!verifyHashes) validatedDependencies.set(cacheKey, null);
+            return null;
+          }
+          const file = native.assets.sourcePath(input.logical);
+          const sourceIdentity = native.assets.sourceIdentity(input.logical);
+          if (!file || file !== input.file || await digest(file) !== input.hash ||
+              native.assets.sourceIdentity(input.logical) !== sourceIdentity) {
+            if (!verifyHashes) validatedDependencies.set(cacheKey, null);
+            return null;
+          }
+          validated = { logical: input.logical, file, sourceIdentity, hash: input.hash };
+          if (!verifyHashes) validatedDependencies.set(cacheKey, validated);
+        } else if (validated === null) {
+          return null;
+        }
+        dependencies.push({ ...validated });
       }
       return dependencies;
     }
-    for (let index = 0; index < data.length; ++index) {
+    const orderedData = Array.isArray(portableIndex?.preparationOrder) && portableIndex.preparationOrder.length
+      ? (() => {
+          const rank = new Map();
+          portableIndex.preparationOrder.forEach((id, i) => {
+            if (Number.isSafeInteger(id) && !rank.has(id)) rank.set(id, i);
+          });
+          return data.map((filename, originalIndex) => ({
+            filename,
+            originalIndex,
+            rank: rank.get(Number(filename.match(/\d+/)[0])) ?? (portableIndex.preparationOrder.length + originalIndex)
+          })).sort((a, b) => a.rank - b.rank || a.originalIndex - b.originalIndex).map(item => item.filename);
+        })()
+      : data;
+    for (let index = 0; index < orderedData.length; ++index) {
       if (shouldCancel()) { result.cancelled = true; break; }
-      const filename = data[index], mapId = Number(filename.match(/\d+/)[0]);
-      report('compile', filename, index, data.length);
+      const filename = orderedData[index], mapId = Number(filename.match(/\d+/)[0]);
+      report('compile', filename, index, orderedData.length);
       let declined = false;
       let stage, dependencies, row = { mapId, filename, selected: false };
       try {
@@ -459,31 +514,51 @@ async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, heig
             reason = 'packed allocations and geometry are not smaller';
             ++result.earlyRefusals;
           }
-          if (!reason && !session.repairSources.has(key) && portableAssetRoot && Array.isArray(portableIndex?.entries)) {
-            const indexed = indexedMaps.get(key);
-            if (indexed && validTileDescriptor(indexed.descriptor) &&
-                indexed.descriptor.sources.length === inputs.length &&
-                indexed.outputs?.length === indexed.descriptor.pages.length) {
-              try {
-                for (let i = 0; i < indexed.outputs.length; ++i) {
-                  const page = indexed.outputs[i], expected = indexed.descriptor.pages[i];
-                  if (!/^assets\/maps\/[a-f0-9]{64}\/tiles-\d+\.png$/.test(page.path) ||
-                      path.basename(page.path) !== expected.path || !HASH.test(page.hash))
-                    throw new Error('invalid indexed map page');
-                  const source = path.join(portableAssetRoot, page.path);
-                  const checked = await files.copyVerified(source, path.join(stage, expected.path), page.hash, 'map-import');
-                  const header = checked.header;
-                  if (header.length < 24 || header.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a' ||
-                      header.readUInt32BE(16) !== expected.width || header.readUInt32BE(20) !== expected.height)
-                    throw new Error('indexed map page header differs');
-                }
-                descriptor = indexed.descriptor;
-                ++result.indexedCopies; outcome = 'reused-package';
-              } catch (_) {
-                for (const page of indexed.descriptor.pages)
-                  await fsp.rm(path.join(stage, page.path), { force: true });
-              }
+          if (!reason && !session.repairSources.has(key)) {
+            const negative = indexedNegativeMaps.get(key);
+            if (negative && negative.outcome === 'ordinary-choice' && isPortableNegativeReason(negative.reason)) {
+              reason = negative.reason;
+              ++result.indexedNegative;
             }
+          }
+          const indexed = Array.isArray(portableIndex?.entries) ? indexedMaps.get(key) : null;
+          if (!reason && !session.repairSources.has(key) && portableAssetRoot && indexed &&
+              validTileDescriptor(indexed.descriptor) &&
+              indexed.descriptor.sources.length === inputs.length &&
+              indexed.outputs?.length === indexed.descriptor.pages.length) {
+            try {
+              for (let i = 0; i < indexed.outputs.length; ++i) {
+                const page = indexed.outputs[i], expected = indexed.descriptor.pages[i];
+                if (!/^assets\/maps\/[a-f0-9]{64}\/tiles-\d+\.png$/.test(page.path) ||
+                    path.basename(page.path) !== expected.path || !HASH.test(page.hash))
+                  throw new Error('invalid indexed map page');
+                const source = path.join(portableAssetRoot, page.path);
+                const checked = await files.copyVerified(source, path.join(stage, expected.path), page.hash, 'map-import');
+                const header = checked.header;
+                if (header.length < 24 || header.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a' ||
+                    header.readUInt32BE(16) !== expected.width || header.readUInt32BE(20) !== expected.height)
+                  throw new Error('indexed map page header differs');
+              }
+              descriptor = indexed.descriptor;
+              ++result.indexedCopies; outcome = 'reused-package';
+            } catch (_) {
+              for (const page of indexed.descriptor.pages)
+                await fsp.rm(path.join(stage, page.path), { force: true });
+            }
+          }
+          if (!reason && !descriptor && !session.repairSources.has(key) && indexed &&
+              validTileDescriptor(indexed.descriptor) &&
+              indexed.descriptor.sources.length === inputs.length &&
+              typeof native.assets.replayTiles === 'function') {
+            const processingStarted = performance.now();
+            try {
+              descriptor = await native.assets.replayTiles(inputs, stage, indexed.descriptor);
+              ++result.indexedReplays;
+            } catch (error) {
+              if (error.code !== 'PMJS_TILE_UNSUPPORTED') throw error;
+              for (const page of indexed.descriptor.pages)
+                await fsp.rm(path.join(stage, page.path), { force: true });
+            } finally { result.processingMs += performance.now() - processingStarted; }
           }
           if (!reason && !descriptor) {
             const processingStarted = performance.now();
@@ -518,7 +593,18 @@ async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, heig
         }
         await validateDependencies([...dependencies, ...inputs.map(input => sourceDependencies.get(input.source)).filter(Boolean)]);
         Object.assign(row, manifest.estimates);
-        if (!manifest.descriptor) { declined = true; throw new Error(manifest.reason); }
+        if (!manifest.descriptor) {
+          declined = true;
+          if (manifest.outcome === 'ordinary-choice' && isPortableNegativeReason(manifest.reason)) {
+            result.negativeDecisions.push({
+              mapId: Number(mapId),
+              identity: key,
+              outcome: 'ordinary-choice',
+              reason: manifest.reason
+            });
+          }
+          throw new Error(manifest.reason);
+        }
         for (const input of inputs) input.snapshot = await captureSnapshot(input);
         if (verifyRegions) result.verifiedRegions += await native.assets.processTiles(inputs, directory, manifest.descriptor);
         const descriptor = structuredClone(manifest.descriptor);
@@ -559,6 +645,7 @@ async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, heig
       report('validate', filename, index+1, data.length);
     }
     if (!result.cancelled) {
+      result.maps.sort((a, b) => a.mapId - b.mapId);
       await validateDependencies(sharedDependencies);
       report('validate', '', data.length, data.length);
       await files.save();
@@ -601,6 +688,7 @@ async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, heig
     result.refused += result.selected; result.selected = result.installed = 0; result.index = {};
     logger.warn('[pmjs] map preparation unavailable: '+error.message);
   } finally {
+    native.assets?.releaseTileCache?.();
     result.durationMs = performance.now()-started;
   }
   return result;

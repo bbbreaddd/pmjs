@@ -821,3 +821,56 @@ test('runtime compression and lossless settings override packaged defaults', asy
   assert.equal(valid.images.installed, 1);
   assert.equal(settings[0].allowAstc, true);
 });
+
+test('warm startup catalog skips reading and hashing unchanged portable asset index', async t => {
+  const { prepareStartupAssets } = require('../runner/index.cjs');
+  const f = fixture(), assets = f.options.native.assets;
+  assets.installPrepared = (entries, capture) => {
+    for (const entry of entries) if (capture) entry.pageIdentities = entry.descriptor.pages.map(() => 'page-id');
+    return { accepted: entries.map(entry => entry.source), rejected: [] };
+  };
+  assets.installPreparedCatalog = entries => ({ accepted: entries.map(entry => entry.source), rejected: [] });
+  assets.installDerivedCatalog = () => ({ accepted: [], rejected: [] });
+  f.options.native.storage = { readText: () => null, writeText: () => {}, remove: () => {} };
+  f.options.native.runtime = { memory: { snapshot: () => null } };
+  f.options.native.pollEvents = () => true;
+  const indexFile = path.join(f.root, 'asset-index.json');
+  fs.writeFileSync(indexFile, JSON.stringify({
+    schema: 3, kind: 'pmjs-asset-index', sections: { images: 1 },
+    processor: assets.preparationVersion, pageCodec: 'png', pageCodecVersion: null,
+    images: [], maps: null
+  }));
+  const runOptions = {
+    gameRoot: f.gameRoot,
+    saveRoot: path.join(f.root, 'save'),
+    assetIndex: indexFile,
+    width: 816,
+    height: 624,
+    assetPreparation: {
+      enabled: true,
+      cacheRoot: f.options.cacheRoot,
+      recipes: [],
+      pageCodec: 'png',
+      workspaceBytes: 64 * 1024 * 1024,
+      maps: false
+    }
+  };
+  const cold = await prepareStartupAssets(runOptions, f.options.native, null);
+  assert.equal(cold.cancelled, false);
+  assert.ok(fs.existsSync(path.join(f.options.cacheRoot, 'asset-index-receipt.json')));
+
+  let indexReads = 0;
+  const origOpenSync = fs.openSync;
+  const origReadFileSync = fs.readFileSync;
+  t.mock.method(fs, 'openSync', (file, ...rest) => {
+    if (path.resolve(String(file)) === path.resolve(indexFile)) indexReads++;
+    return origOpenSync(file, ...rest);
+  });
+  t.mock.method(fs, 'readFileSync', (file, ...rest) => {
+    if (path.resolve(String(file)) === path.resolve(indexFile)) indexReads++;
+    return origReadFileSync(file, ...rest);
+  });
+  const warm = await prepareStartupAssets(runOptions, f.options.native, null);
+  assert.equal(warm.cancelled, false);
+  assert.equal(indexReads, 0);
+});

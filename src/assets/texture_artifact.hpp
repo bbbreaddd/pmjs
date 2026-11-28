@@ -1,5 +1,6 @@
 #pragma once
 #include "image_storage.hpp"
+#include "prepared_page.hpp"
 #include <array>
 #include <filesystem>
 #include <functional>
@@ -24,14 +25,30 @@ struct TextureLayout {
   TextureKind kind = TextureKind::Dense8;
   std::vector<TexturePlane> planes;
 };
+struct FilteredTilePlan {
+  int width = 0, height = 0;
+  std::uint32_t rgbaCount = 0, rCount = 0, rgCount = 0;
+  std::vector<std::uint32_t> repIndices;
+  std::vector<std::uint32_t> table;
+};
 struct PreparedTexture {
   TextureLayout layout;
   std::vector<std::vector<std::uint8_t>> bytes;
+  std::optional<FilteredTilePlan> filteredTilePlan;
+  std::optional<ChannelBlockPlan> channelBlockPlan;
 };
 using TextureReader = std::function<bool(std::size_t, std::span<std::uint8_t>)>;
 using TextureUpload = std::function<bool(std::size_t, const TextureChunk&, std::span<const std::uint8_t>)>;
+std::optional<PreparedTexture> replayFilteredTilePage(int width, int height,
+    std::span<const std::uint8_t> rgba, const FilteredTilePlan& plan, std::size_t retainedLimit = 0);
+std::optional<PreparedTexture> replayChannelBlockTexture(int width, int height,
+    std::span<const std::uint8_t> rgba, const ChannelBlockPlan& plan, std::size_t retainedLimit = 0);
 std::optional<PreparedTexture> makePreparedTexture(const ImagePixels& pixels, const ImageStorageDecision* decision = nullptr,
-                                                 std::size_t retainedLimit = 0, bool allowPalettes = false);
+                                                 std::size_t retainedLimit = 0, bool allowPalettes = false,
+                                                 std::optional<TextureKind> preferredKind = std::nullopt,
+                                                 const FilteredTilePlan* filteredPlan = nullptr,
+                                                 bool exportFilteredTilePlan = false,
+                                                 std::function<bool(const PreparedTexture&)> accept = {});
 void writeTextureArtifact(const std::filesystem::path& path, const PreparedTexture& texture);
 std::optional<TextureLayout> readTextureLayout(const TextureReader& read, std::size_t fileBytes);
 bool readTextureChunks(const TextureReader& read, const TextureLayout& layout, const TextureUpload& upload,

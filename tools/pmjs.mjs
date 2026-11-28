@@ -196,7 +196,7 @@ async function main() {
     options = parse(args, ['--game', '--state', '--save-root', '--asset-cache-root', '--config', '--manifest', '--patch', '--adapter']);
   } else if (!first || first.startsWith('--')) {
     if (first) throw new Error(`unknown command: ${first}`);
-    if (fs.existsSync(path.join(process.cwd(), 'pmjs.json'))) bundle = readBundle(process.cwd());
+    if (fs.existsSync(path.join(process.cwd(), 'pmjs.json'))) bundle = readBundle(process.cwd(), { verifyAssetIndex: false });
     else {
       try { gameDirectory(process.cwd()); } catch { console.log(help); return; }
     }
@@ -205,7 +205,7 @@ async function main() {
   } else {
     command = 'run';
     options = parse(args, ['--state', '--save-root', '--asset-cache-root', '--game', '--config', '--manifest', '--patch', '--adapter'], false);
-    if (fs.existsSync(path.join(path.resolve(first), 'pmjs.json'))) bundle = readBundle(first);
+    if (fs.existsSync(path.join(path.resolve(first), 'pmjs.json'))) bundle = readBundle(first, { verifyAssetIndex: false });
     if (!bundle || !options['--game']) options['--game'] = first;
   }
   if (bundle) {
@@ -230,6 +230,11 @@ async function main() {
     (command === 'run' && previous?.game === game && Array.isArray(previous.adapters) ? previous.adapters : []);
   verification = startupFiles(path.join(state, 'bootstrap-files.json'), buildInfoSha256,
     process.env.PMJS_VERIFY_BOOTSTRAP === '1' || command === 'prepare');
+  if (bundle?.assetIndex) {
+    try {
+      if (verification.hash(bundle.assetIndex) !== bundle.descriptor.assetIndexSha256) bundle.assetIndex = null;
+    } catch (_) { bundle.assetIndex = null; }
+  }
   const context = { game, state, packageSha256: buildInfoSha256,
     runtimeIdentity: runtimeIdentity('cache-lookup'), config, manifest, adapters,
     inputs: gameInputs(game, config, manifest, adapters, 'cache-lookup') };

@@ -1,4 +1,5 @@
 #include "node_addon_internal.hpp"
+#include <zlib.h>
 #include <tuple>
 #include "assets/asset_processor.hpp"
 #include "assets/prepared_page.hpp"
@@ -161,6 +162,47 @@ napi_value arrayValue(napi_env env, const std::array<T, Size>& values) {
       "cannot write prepared asset array");
   return result;
 }
+std::string base64Encode(std::span<const std::uint8_t> bytes) {
+  static constexpr char kAlphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  std::string out;
+  out.reserve(((bytes.size() + 2) / 3) * 4);
+  for (std::size_t i = 0; i < bytes.size(); i += 3) {
+    const std::uint32_t b0 = bytes[i];
+    const std::uint32_t b1 = i + 1 < bytes.size() ? bytes[i + 1] : 0;
+    const std::uint32_t b2 = i + 2 < bytes.size() ? bytes[i + 2] : 0;
+    const std::uint32_t v = (b0 << 16) | (b1 << 8) | b2;
+    out.push_back(kAlphabet[(v >> 18) & 63]);
+    out.push_back(kAlphabet[(v >> 12) & 63]);
+    out.push_back(i + 1 < bytes.size() ? kAlphabet[(v >> 6) & 63] : '=');
+    out.push_back(i + 2 < bytes.size() ? kAlphabet[v & 63] : '=');
+  }
+  return out;
+}
+
+std::optional<std::vector<std::uint8_t>> base64Decode(std::string_view input) {
+  if (input.size() % 4 != 0) return std::nullopt;
+  auto val = [](char c) -> int {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+  };
+  std::vector<std::uint8_t> out;
+  out.reserve((input.size() / 4) * 3);
+  for (std::size_t i = 0; i < input.size(); i += 4) {
+    const int a = val(input[i]), b = val(input[i + 1]);
+    const int c = input[i + 2] == '=' ? -2 : val(input[i + 2]);
+    const int d = input[i + 3] == '=' ? -2 : val(input[i + 3]);
+    if (a < 0 || b < 0 || c == -1 || d == -1) return std::nullopt;
+    out.push_back(static_cast<std::uint8_t>((a << 2) | (b >> 4)));
+    if (c >= 0) out.push_back(static_cast<std::uint8_t>(((b & 15) << 4) | (c >> 2)));
+    if (d >= 0) out.push_back(static_cast<std::uint8_t>(((c & 3) << 6) | d));
+  }
+  return out;
+}
+
 napi_value descriptor(napi_env env, const PreparedAsset& asset, bool workspaceConstrained = false) {
   auto result = moduleObject(env);
   set(env, result, "version", number(env, 1));
@@ -173,6 +215,52 @@ napi_value descriptor(napi_env env, const PreparedAsset& asset, bool workspaceCo
   if (asset.framePages) set(env, result, "framePages", boolean(env, true));
   if (asset.safeLinearTrimmedSampling) set(env, result, "safeLinearTrimmedSampling", boolean(env, true));
   if (!asset.textureArtifact.empty()) set(env, result, "textureArtifact", string(env, asset.textureArtifact.string()));
+  switch (asset.texturePlan) {
+    case TexturePlan::None: set(env, result, "texturePlan", string(env, "none")); break;
+    case TexturePlan::Dense8: set(env, result, "texturePlan", string(env, "dense8")); break;
+    case TexturePlan::Dense16: set(env, result, "texturePlan", string(env, "dense16")); break;
+    case TexturePlan::Sparse16: set(env, result, "texturePlan", string(env, "sparse16")); break;
+    case TexturePlan::Sparse24: set(env, result, "texturePlan", string(env, "sparse24")); break;
+    case TexturePlan::Channels: set(env, result, "texturePlan", string(env, "channels")); break;
+    case TexturePlan::FilteredTiles: set(env, result, "texturePlan", string(env, "filteredTiles")); break;
+    case TexturePlan::Unknown: break;
+  }
+  if (asset.filteredTilePlan) {
+    const auto& p = *asset.filteredTilePlan;
+    const std::size_t wordsCount = p.repIndices.size() + p.table.size();
+    std::vector<std::uint8_t> raw(wordsCount * 4);
+    if (!p.repIndices.empty())
+      std::memcpy(raw.data(), p.repIndices.data(), p.repIndices.size() * 4);
+    if (!p.table.empty())
+      std::memcpy(raw.data() + p.repIndices.size() * 4, p.table.data(), p.table.size() * 4);
+    uLongf compSize = compressBound(static_cast<uLong>(raw.size()));
+    std::vector<std::uint8_t> compressed(compSize);
+    if (compress2(compressed.data(), &compSize, raw.data(), static_cast<uLong>(raw.size()), Z_DEFAULT_COMPRESSION) == Z_OK) {
+      compressed.resize(compSize);
+      auto planObj = moduleObject(env);
+      set(env, planObj, "width", number(env, p.width));
+      set(env, planObj, "height", number(env, p.height));
+      set(env, planObj, "rgbaCount", number(env, p.rgbaCount));
+      set(env, planObj, "rCount", number(env, p.rCount));
+      set(env, planObj, "rgCount", number(env, p.rgCount));
+      set(env, planObj, "data", string(env, base64Encode(compressed)));
+      set(env, result, "filteredTilePlan", planObj);
+    }
+  }
+  if (asset.channelBlockPlan) {
+    const auto& p = *asset.channelBlockPlan;
+    uLongf compSize = compressBound(static_cast<uLong>(p.stream.size()));
+    std::vector<std::uint8_t> compressed(compSize);
+    if (compress2(compressed.data(), &compSize, p.stream.data(), static_cast<uLong>(p.stream.size()), Z_DEFAULT_COMPRESSION) == Z_OK) {
+      compressed.resize(compSize);
+      auto planObj = moduleObject(env);
+      set(env, planObj, "width", number(env, p.width));
+      set(env, planObj, "height", number(env, p.height));
+      set(env, planObj, "uniqueCount", number(env, p.uniqueCount));
+      set(env, planObj, "data", string(env, base64Encode(compressed)));
+      set(env, result, "channelBlockPlan", planObj);
+    }
+  }
   if (asset.uniform) set(env, result, "uniform", arrayValue(env, *asset.uniform));
   if (asset.blockGrid) set(env, result, "blockGrid", arrayValue(env, *asset.blockGrid));
   if (asset.blockChannels) set(env, result, "blockChannels", number(env, *asset.blockChannels));
@@ -205,6 +293,8 @@ napi_value storageDescriptor(napi_env env, const ImageStorageDecision& decision)
   set(env, value, "height", number(env, decision.height));
   set(env, value, "paletteBits", number(env, decision.paletteBits));
   set(env, value, "channels", number(env, decision.channels.channels));
+  if (decision.sourceChannels > 0)
+    set(env, value, "sourceChannels", number(env, decision.sourceChannels));
   set(env, value, "source", arrayValue(env, decision.channels.source));
   set(env, value, "swizzle", arrayValue(env, decision.channels.swizzle));
   if (decision.hasPixelFacts) {
@@ -330,6 +420,94 @@ napi_value processImage(napi_env env, napi_callback_info info) try {
       layout.textureArtifact = asString(env, property(env, value, "textureArtifact"));
       if (layout.textureArtifact != "texture.pmtx") throw std::invalid_argument("invalid indexed texture artifact");
     }
+    if (hasProperty(env, value, "texturePlan")) {
+      const auto plan = asString(env, property(env, value, "texturePlan"));
+      if (plan == "none") layout.texturePlan = TexturePlan::None;
+      else if (plan == "dense8") layout.texturePlan = TexturePlan::Dense8;
+      else if (plan == "dense16") layout.texturePlan = TexturePlan::Dense16;
+      else if (plan == "sparse16") layout.texturePlan = TexturePlan::Sparse16;
+      else if (plan == "sparse24") layout.texturePlan = TexturePlan::Sparse24;
+      else if (plan == "channels") layout.texturePlan = TexturePlan::Channels;
+      else if (plan == "filteredTiles") layout.texturePlan = TexturePlan::FilteredTiles;
+      else throw std::invalid_argument("invalid indexed texture plan");
+    }
+    if (hasProperty(env, value, "filteredTilePlan")) {
+      const auto pObj = property(env, value, "filteredTilePlan");
+      FilteredTilePlan plan;
+      plan.width = integer(env, property(env, pObj, "width"));
+      plan.height = integer(env, property(env, pObj, "height"));
+      plan.rgbaCount = static_cast<std::uint32_t>(integer(env, property(env, pObj, "rgbaCount")));
+      plan.rCount = static_cast<std::uint32_t>(integer(env, property(env, pObj, "rCount")));
+      plan.rgCount = static_cast<std::uint32_t>(integer(env, property(env, pObj, "rgCount")));
+      if (plan.width > 0 && plan.height > 0 && plan.width <= 16384 && plan.height <= 16384) {
+        const auto cols = static_cast<std::size_t>((plan.width + 15) / 16);
+        const auto rows = static_cast<std::size_t>((plan.height + 15) / 16);
+        const std::size_t repCount = static_cast<std::size_t>(plan.rgbaCount) + plan.rgCount + plan.rCount;
+        const std::size_t tableCount = cols * rows;
+        if (repCount <= tableCount && tableCount <= 1024U * 1024U) {
+          const auto data = asString(env, property(env, pObj, "data"));
+          const std::size_t expectedBytes = (repCount + tableCount) * 4;
+          const std::size_t maxB64 = ((compressBound(static_cast<uLong>(expectedBytes)) + 2U) / 3U) * 4U + 64U;
+          if (!data.empty() && data.size() <= maxB64) {
+            if (auto compressed = base64Decode(data)) {
+              uLongf rawSize = static_cast<uLongf>(expectedBytes);
+              std::vector<std::uint8_t> raw(rawSize);
+              if (uncompress(raw.data(), &rawSize, compressed->data(), static_cast<uLong>(compressed->size())) == Z_OK &&
+                  rawSize == expectedBytes) {
+                plan.repIndices.resize(repCount);
+                plan.table.resize(tableCount);
+                if (repCount) std::memcpy(plan.repIndices.data(), raw.data(), repCount * 4);
+                if (tableCount) std::memcpy(plan.table.data(), raw.data() + repCount * 4, tableCount * 4);
+                layout.filteredTilePlan = std::move(plan);
+              }
+            }
+          }
+        }
+      }
+    }
+    if (hasProperty(env, value, "channelBlockPlan")) {
+      const auto pObj = property(env, value, "channelBlockPlan");
+      ChannelBlockPlan plan;
+      plan.width = integer(env, property(env, pObj, "width"));
+      plan.height = integer(env, property(env, pObj, "height"));
+      plan.uniqueCount = static_cast<std::uint32_t>(integer(env, property(env, pObj, "uniqueCount")));
+      if (plan.width > 0 && plan.height > 0 && plan.width <= 16384 && plan.height <= 16384 &&
+          plan.uniqueCount > 0) {
+        const auto cols = static_cast<std::size_t>((plan.width + 7) / 8);
+        const auto rows = static_cast<std::size_t>((plan.height + 7) / 8);
+        const std::size_t totalEntries = cols * rows * 4U;
+        if (plan.uniqueCount <= totalEntries && totalEntries <= 64U * 1024U * 1024U) {
+          const auto data = asString(env, property(env, pObj, "data"));
+          const std::size_t maxRaw = totalEntries * 5U;
+          const std::size_t maxB64 = ((compressBound(static_cast<uLong>(maxRaw)) + 2U) / 3U) * 4U + 64U;
+          if (!data.empty() && data.size() <= maxB64) {
+            if (auto compressed = base64Decode(data)) {
+              z_stream strm{};
+              if (inflateInit(&strm) == Z_OK) {
+                strm.next_in = compressed->data();
+                strm.avail_in = static_cast<uInt>(compressed->size());
+                std::vector<std::uint8_t> raw;
+                std::array<std::uint8_t, 32768> buf{};
+                int ret = Z_OK;
+                while (ret == Z_OK) {
+                  strm.next_out = buf.data();
+                  strm.avail_out = static_cast<uInt>(buf.size());
+                  ret = inflate(&strm, Z_NO_FLUSH);
+                  const std::size_t produced = buf.size() - strm.avail_out;
+                  if (raw.size() + produced > maxRaw) { ret = Z_MEM_ERROR; break; }
+                  raw.insert(raw.end(), buf.data(), buf.data() + produced);
+                }
+                inflateEnd(&strm);
+                if (ret == Z_STREAM_END && !raw.empty()) {
+                  plan.stream = std::move(raw);
+                  layout.channelBlockPlan = std::move(plan);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
     if (integer(env, property(env, value, "version")) != 1)
       throw std::runtime_error("unsupported indexed image layout");
     layout.width = integer(env, property(env, value, "width"));
@@ -387,6 +565,45 @@ napi_value processImage(napi_env env, napi_callback_info info) try {
     work->options.allowPalettes = asBoolean(env, property(env, args[5], "allowPalettes"));
   if (args.size() > 5 && hasProperty(env, args[5], "allowAstc"))
     work->options.allowAstc = asBoolean(env, property(env, args[5], "allowAstc"));
+  if (args.size() > 5 && hasProperty(env, args[5], "exportFilteredTilePlan"))
+    work->options.exportFilteredTilePlan = asBoolean(env, property(env, args[5], "exportFilteredTilePlan"));
+  if (args.size() > 5 && hasProperty(env, args[5], "storage")) {
+    const auto s = property(env, args[5], "storage");
+    napi_valuetype storageType = napi_undefined;
+    check(env, napi_typeof(env, s, &storageType), "cannot inspect storage decision");
+    if (storageType == napi_object && integer(env, property(env, s, "version")) == 1) {
+      ImageStorageDecision decision;
+      decision.width = integer(env, property(env, s, "width"));
+      decision.height = integer(env, property(env, s, "height"));
+      decision.paletteBits = integer(env, property(env, s, "paletteBits"));
+      decision.channels.channels = integer(env, property(env, s, "channels"));
+      if (hasProperty(env, s, "sourceChannels")) {
+        decision.sourceChannels = integer(env, property(env, s, "sourceChannels"));
+      } else {
+        decision.sourceChannels = decision.paletteBits == 0 ? decision.channels.channels : 0;
+      }
+      if (hasProperty(env, s, "pixelFactsVersion") && integer(env, property(env, s, "pixelFactsVersion")) == 1 &&
+          hasProperty(env, s, "opaque") && hasProperty(env, s, "allZero")) {
+        decision.hasPixelFacts = true;
+        decision.opaque = asBoolean(env, property(env, s, "opaque"));
+        decision.allZero = asBoolean(env, property(env, s, "allZero"));
+      }
+      const auto srcArr = integers<4>(env, property(env, s, "source"));
+      const auto swzArr = integers<4>(env, property(env, s, "swizzle"));
+      bool validChannels = (decision.sourceChannels == 0 || decision.sourceChannels == 1 ||
+        decision.sourceChannels == 2 || decision.sourceChannels == 4);
+      for (int i = 0; i < 4; ++i) {
+        if (srcArr[i] < 0 || srcArr[i] > 3 || swzArr[i] < 0 || swzArr[i] > 5) validChannels = false;
+        decision.channels.source[i] = static_cast<std::uint8_t>(srcArr[i]);
+        decision.channels.swizzle[i] = static_cast<std::uint8_t>(swzArr[i]);
+      }
+      if (validChannels && decision.width > 0 && decision.height > 0 &&
+          (decision.paletteBits == 0 || decision.paletteBits == 8 || decision.paletteBits == 16) &&
+          (decision.channels.channels == 1 || decision.channels.channels == 2 || decision.channels.channels == 4)) {
+        work->options.knownStorage = decision;
+      }
+    }
+  }
   if (args.size() > 5 && hasProperty(env, args[5], "astcQuality")) {
     work->options.astcQuality = asString(env, property(env, args[5], "astcQuality"));
     if (work->options.astcQuality != "fast" && work->options.astcQuality != "medium" && work->options.astcQuality != "thorough")
@@ -483,6 +700,7 @@ struct TileWork {
   std::size_t verifiedRegions = 0;
   std::string error;
   bool unsupported = false;
+  bool replay = false;
 };
 napi_value tileDescriptor(napi_env env, const PreparedTileAssets& asset) {
   auto result = moduleObject(env);
@@ -516,23 +734,35 @@ napi_value tileDescriptor(napi_env env, const PreparedTileAssets& asset) {
   set(env, result, "sources", sources); set(env, result, "pages", pages);
   return result;
 }
+TileDecodeCache& sessionTileCache() {
+  static TileDecodeCache cache;
+  return cache;
+}
 void executeTiles(napi_env, void* opaque) noexcept {
   PreparationMemoryRelease release;
   auto& work = *static_cast<TileWork*>(opaque);
   try {
-    if (work.expected) work.verifiedRegions = verifyTileAssets(work.inputs, *work.expected, work.staging);
-    else work.result = prepareTileAssets(work.inputs, work.staging);
+    if (work.replay) work.result = replayTileAssets(work.inputs, *work.expected, work.staging, &sessionTileCache());
+    else if (work.expected) work.verifiedRegions = verifyTileAssets(work.inputs, *work.expected, work.staging);
+    else work.result = prepareTileAssets(work.inputs, work.staging, &sessionTileCache());
   }
   catch (const AssetPreparationUnsupported& error) { work.error = error.what(); work.unsupported = true; }
   catch (const std::exception& error) { work.error = error.what(); }
   catch (...) { work.error = "tile preparation failed"; }
+}
+napi_value releaseTileCache(napi_env env, napi_callback_info) {
+  sessionTileCache().clear();
+  return number(env, 0);
+}
+napi_value tileCacheLiveBytes(napi_env env, napi_callback_info) {
+  return number(env, sessionTileCache().liveBytes());
 }
 void completeTiles(napi_env env, napi_status status, void* opaque) {
   std::unique_ptr<TileWork> work(static_cast<TileWork*>(opaque));
   try {
     if (status != napi_ok) throw std::runtime_error("tile preparation cancelled");
     if (!work->error.empty()) throw std::runtime_error(work->error);
-    check(env, napi_resolve_deferred(env, work->deferred, work->expected ? number(env, work->verifiedRegions) : tileDescriptor(env, *work->result)), "cannot resolve tile preparation");
+    check(env, napi_resolve_deferred(env, work->deferred, work->expected && !work->replay ? number(env, work->verifiedRegions) : tileDescriptor(env, *work->result)), "cannot resolve tile preparation");
   } catch (const std::exception& error) {
     napi_value rejection;
     napi_create_error(env, nullptr, string(env, error.what()), &rejection);
@@ -554,8 +784,9 @@ napi_value element(napi_env env, napi_value value, std::uint32_t index) {
   check(env, napi_get_element(env, value, index, &item), "cannot read tile array element");
   return item;
 }
-napi_value processTiles(napi_env env, napi_callback_info info) try {
+napi_value startTileWork(napi_env env, napi_callback_info info, bool replay) try {
   auto args = arguments(env, info, 3); auto work = std::make_unique<TileWork>();
+  work->replay = replay;
   const auto count = arrayLength(env, args.at(0), 512);
   for (std::uint32_t i = 0; i < count; ++i) {
     const auto input = element(env, args[0], i); TileAssetInput source;
@@ -563,6 +794,7 @@ napi_value processTiles(napi_env env, napi_callback_info info) try {
     if (!file.is_absolute()) throw std::runtime_error("tile source must be absolute");
     source.source = ImageStore::openFile(file);
     if (!source.source) throw std::runtime_error("cannot open tile source");
+    if (hasProperty(env, input, "sourceHash")) source.sourceHash = asString(env, property(env, input, "sourceHash"));
     const auto rectangles = property(env, input, "rectangles");
     const auto length = arrayLength(env, rectangles, 65536);
     for (std::uint32_t j = 0; j < length; ++j) source.rectangles.push_back(integers<4>(env, element(env, rectangles, j)));
@@ -570,6 +802,7 @@ napi_value processTiles(napi_env env, napi_callback_info info) try {
   }
   work->staging = asString(env, args.at(1));
   if (!work->staging.is_absolute()) throw std::runtime_error("tile staging directory must be absolute");
+  if (replay && args.size() <= 2) throw std::runtime_error("tile replay requires a layout descriptor");
   if (args.size() > 2) {
     PreparedTileAssets expected;
     auto d = args[2]; expected.halo = integer(env, property(env, d, "halo"));
@@ -599,6 +832,8 @@ napi_value processTiles(napi_env env, napi_callback_info info) try {
   if (status != napi_ok) { napi_delete_async_work(env, work->work); check(env, status, "cannot queue tile work"); }
   std::ignore = work.release(); return promise;
 } catch (const std::exception& error) { napi_throw_error(env, nullptr, error.what()); return nullptr; }
+napi_value processTiles(napi_env env, napi_callback_info info) { return startTileWork(env, info, false); }
+napi_value replayTiles(napi_env env, napi_callback_info info) { return startTileWork(env, info, true); }
 
 napi_value installTileSetsImpl(napi_env env, napi_callback_info info, bool catalog) try {
   const auto args = arguments(env, info, 3);
@@ -744,6 +979,9 @@ void registerAssetMethods(napi_env env, napi_value exports) {
   method(env, assets, "installImageStorage", installImageStorage);
   set(env, assets, "imageStorageVersion", number(env, 1));
   method(env, assets, "processTiles", processTiles);
+  method(env, assets, "replayTiles", replayTiles);
+  method(env, assets, "releaseTileCache", releaseTileCache);
+  method(env, assets, "tileCacheLiveBytes", tileCacheLiveBytes);
   method(env, assets, "installTileSets", installTileSets);
   method(env, assets, "installTileSetCatalog", installTileSetCatalog);
   method(env, property(env, exports, "images"), "tileSlot", tileSlot);
@@ -758,7 +996,7 @@ void registerAssetMethods(napi_env env, napi_value exports) {
 #else
   set(env, version, "colorManagement", string(env, "none"));
 #endif
-  set(env, version, "processor", string(env, "images-v26-auto-texture-chunks-astcenc4.7"));
+  set(env, version, "processor", string(env, "images-v27-auto-texture-chunks-astcenc4.7"));
   set(env, version, "decoder", string(env, std::string("libpng-") + png_get_libpng_ver(nullptr) + "-rgba8-color-v2"));
   set(env, version, "pageSize", number(env, 2048));
   set(env, assets, "preparationVersion", version);

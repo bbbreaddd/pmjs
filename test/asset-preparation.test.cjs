@@ -1762,3 +1762,121 @@ test('asset preparation records cache miss reasons without extra filesystem work
   const warm = await prepareAssets(f);
   assert.deepEqual(warm.cacheMissReasons, {});
 });
+
+test('PMTX filteredTilePlan replays identical texture.pmtx and falls back on corrupt plan', async t => {
+  const addonPath = [process.env.PMJS_NATIVE_ADDON, path.resolve(__dirname, '../build/dev/pmjs_native.node'), path.resolve(__dirname, '../build/pmjs_native.node')]
+    .find(candidate => candidate && fs.existsSync(candidate));
+  if (!addonPath) return t.skip('pmjs_native.node not built');
+  const addon = require(addonPath);
+  const root = temporaryDirectory('pmjs-filtered-plan-');
+  const input = path.join(root, 'sparse.png');
+  const width = 1024, height = 1024;
+  const rgba = Buffer.alloc(width * height * 4, 0);
+  // Populate hidden nonzero RGB with alpha=0 in an empty tile to verify alpha-only empty checks.
+  for (let y = 128; y < 144; ++y) {
+    for (let x = 128; x < 144; ++x) {
+      const i = (y * width + x) * 4;
+      rgba[i] = 255; rgba[i + 1] = 128; rgba[i + 2] = 64; rgba[i + 3] = 0;
+    }
+  }
+  // Populate a few non-zero 16x16 tiles (colored + gray) so FilteredTiles wins over Channels.
+  for (let y = 0; y < 32; ++y) {
+    for (let x = 0; x < 32; ++x) {
+      const i = (y * width + x) * 4;
+      rgba[i] = (x * 7) & 255; rgba[i + 1] = (y * 11) & 255; rgba[i + 2] = 128; rgba[i + 3] = 255;
+    }
+  }
+  for (let y = 512; y < 544; ++y) {
+    for (let x = 512; x < 544; ++x) {
+      const i = (y * width + x) * 4;
+      rgba[i] = 90; rgba[i + 1] = 90; rgba[i + 2] = 90; rgba[i + 3] = 255;
+    }
+  }
+  const { png } = require('./helpers/png.cjs');
+  fs.writeFileSync(input, png(width, height, rgba));
+  const stage1 = path.join(root, 'stage1'), stage2 = path.join(root, 'stage2'), stage3 = path.join(root, 'stage3');
+  for (const dir of [stage1, stage2, stage3]) fs.mkdirSync(dir, { recursive: true });
+  const cold = await addon.assets.processImage('img/pictures/sparse.png', stage1, { grid: [1, 1], framePages: true }, input, null, { allowPalettes: false, exportFilteredTilePlan: true });
+  assert.equal(cold.textureArtifact, 'texture.pmtx');
+  assert.equal(cold.texturePlan, 'filteredTiles');
+  assert.ok(cold.filteredTilePlan && typeof cold.filteredTilePlan.data === 'string');
+  assert.equal(validDescriptor(cold), true);
+
+  // Live replay omits filteredTilePlan from the output descriptor while producing identical texture.pmtx.
+  const replayed = await addon.assets.processImage('img/pictures/sparse.png', stage2, { grid: [1, 1], framePages: true }, input, cold, { allowPalettes: false });
+  assert.equal(replayed.texturePlan, 'filteredTiles');
+  assert.equal(replayed.filteredTilePlan, undefined);
+  assert.deepEqual(fs.readFileSync(path.join(stage2, 'texture.pmtx')), fs.readFileSync(path.join(stage1, 'texture.pmtx')));
+
+  // Semantically forged but structurally valid plan (non-empty tile marked empty) must be rejected and fall back.
+  const zlib = require('node:zlib');
+  const rawPlan = Buffer.from(zlib.inflateSync(Buffer.from(cold.filteredTilePlan.data, 'base64')));
+  const repCount = cold.filteredTilePlan.rgbaCount + cold.filteredTilePlan.rgCount + cold.filteredTilePlan.rCount;
+  const tableOffset = repCount * 4;
+  // Tile (0,0) is non-empty; zero its table entry out to forge an omitted tile.
+  rawPlan.writeUInt32LE(0, tableOffset);
+  const forged = structuredClone(cold);
+  forged.filteredTilePlan.data = zlib.deflateSync(rawPlan).toString('base64');
+  const stage4 = path.join(root, 'stage4');
+  fs.mkdirSync(stage4, { recursive: true });
+  const forgedFallback = await addon.assets.processImage('img/pictures/sparse.png', stage4, { grid: [1, 1], framePages: true }, input, forged, { allowPalettes: false });
+  assert.equal(forgedFallback.texturePlan, 'filteredTiles');
+  assert.deepEqual(fs.readFileSync(path.join(stage4, 'texture.pmtx')), fs.readFileSync(path.join(stage1, 'texture.pmtx')));
+
+  const corrupt = structuredClone(cold);
+  corrupt.filteredTilePlan.data = 'AAAA';
+  const fallback = await addon.assets.processImage('img/pictures/sparse.png', stage3, { grid: [1, 1], framePages: true }, input, corrupt, { allowPalettes: false });
+  assert.equal(fallback.texturePlan, 'filteredTiles');
+  assert.deepEqual(fs.readFileSync(path.join(stage3, 'texture.pmtx')), fs.readFileSync(path.join(stage1, 'texture.pmtx')));
+});
+
+test('PMTX channelBlockPlan replays identical texture.pmtx and falls back on forged plan', async t => {
+  const addonPath = [process.env.PMJS_NATIVE_ADDON, path.resolve(__dirname, '../build/dev/pmjs_native.node'), path.resolve(__dirname, '../build/pmjs_native.node')]
+    .find(candidate => candidate && fs.existsSync(candidate));
+  if (!addonPath) return t.skip('pmjs_native.node not built');
+  const addon = require(addonPath);
+  const root = temporaryDirectory('pmjs-channel-plan-');
+  const input = path.join(root, 'channels.png');
+  const width = 1024, height = 1024;
+  // Top 256 rows (x < 900): dense non-uniform blocks; 256..899 (x < 900): distinct uniform 8x8 blocks; margin: transparent.
+  const rgba = Buffer.alloc(width * height * 4, 0);
+  for (let y = 0; y < 900; ++y) {
+    for (let x = 0; x < 900; ++x) {
+      const i = (y * width + x) * 4;
+      if (y < 256) {
+        rgba[i] = (x * 13 + y * 7) & 255;
+        rgba[i + 1] = (x * 5 + y * 17) & 255;
+        rgba[i + 2] = (x * 3 + y * 11) & 255;
+      } else {
+        const bx = x >> 3, by = y >> 3;
+        rgba[i] = (bx * 3 + by * 5) & 255;
+        rgba[i + 1] = (bx * 7 + by * 2) & 255;
+        rgba[i + 2] = (bx * 11 + by * 13) & 255;
+      }
+      rgba[i + 3] = 255;
+    }
+  }
+  const { png } = require('./helpers/png.cjs');
+  fs.writeFileSync(input, png(width, height, rgba));
+  const stage1 = path.join(root, 'stage1'), stage2 = path.join(root, 'stage2'), stage3 = path.join(root, 'stage3');
+  for (const dir of [stage1, stage2, stage3]) fs.mkdirSync(dir, { recursive: true });
+
+  const cold = await addon.assets.processImage('img/pictures/channels.png', stage1, { grid: [1, 1], framePages: true }, input, null, { allowPalettes: false, exportFilteredTilePlan: true });
+  assert.equal(cold.textureArtifact, 'texture.pmtx');
+  assert.equal(cold.texturePlan, 'channels');
+  assert.ok(cold.channelBlockPlan && typeof cold.channelBlockPlan.data === 'string');
+  assert.equal(validDescriptor(cold), true);
+
+  const replayed = await addon.assets.processImage('img/pictures/channels.png', stage2, { grid: [1, 1], framePages: true }, input, cold, { allowPalettes: false });
+  assert.equal(replayed.texturePlan, 'channels');
+  assert.equal(replayed.channelBlockPlan, undefined);
+  assert.deepEqual(fs.readFileSync(path.join(stage2, 'texture.pmtx')), fs.readFileSync(path.join(stage1, 'texture.pmtx')));
+
+  // Corrupt the stream (mark first non-uniform block as uniform) and verify fallback produces identical output.
+  const zlib = require('node:zlib');
+  const forged = structuredClone(cold);
+  forged.channelBlockPlan.data = zlib.deflateSync(Buffer.from([0x00])).toString('base64');
+  const fallback = await addon.assets.processImage('img/pictures/channels.png', stage3, { grid: [1, 1], framePages: true }, input, forged, { allowPalettes: false });
+  assert.equal(fallback.texturePlan, 'channels');
+  assert.deepEqual(fs.readFileSync(path.join(stage3, 'texture.pmtx')), fs.readFileSync(path.join(stage1, 'texture.pmtx')));
+});

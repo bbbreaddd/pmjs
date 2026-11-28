@@ -222,6 +222,7 @@ function validStorageDecision(value) {
   return value && value.version === 1 &&
     [value.width, value.height].every(n => Number.isSafeInteger(n) && n > 0 && n <= 16384) &&
     [0, 8, 16].includes(value.paletteBits) && [1, 2, 4].includes(value.channels) &&
+    (value.sourceChannels === undefined || [1, 2, 4].includes(value.sourceChannels)) &&
     Array.isArray(value.source) && value.source.length === 4 &&
     value.source.every(n => Number.isInteger(n) && n >= 0 && n < 4) &&
     Array.isArray(value.swizzle) && value.swizzle.length === 4 &&
@@ -248,6 +249,23 @@ function validDescriptor(d) {
   if (d.uniform !== undefined && !rgba(d.uniform)) return false;
   if (d.halo !== undefined && (!Number.isInteger(d.halo) || d.halo < 1 || d.halo > 2048)) return false;
   if (d.textureArtifact !== undefined && (d.textureArtifact !== 'texture.pmtx' || d.framePages !== true || d.uniform !== undefined || d.compression !== undefined)) return false;
+  if (d.texturePlan !== undefined && !['none', 'dense8', 'dense16', 'sparse16', 'sparse24', 'channels', 'filteredTiles'].includes(d.texturePlan)) return false;
+  if (d.filteredTilePlan !== undefined) {
+    const p = d.filteredTilePlan;
+    if (!p || typeof p !== 'object' || !Number.isSafeInteger(p.width) || !Number.isSafeInteger(p.height) ||
+        p.width !== d.width || p.height !== d.height ||
+        !Number.isSafeInteger(p.rgbaCount) || p.rgbaCount < 0 ||
+        !Number.isSafeInteger(p.rCount) || p.rCount < 0 ||
+        !Number.isSafeInteger(p.rgCount) || p.rgCount < 0 ||
+        typeof p.data !== 'string' || !p.data.length) return false;
+  }
+  if (d.channelBlockPlan !== undefined) {
+    const p = d.channelBlockPlan;
+    if (!p || typeof p !== 'object' || !Number.isSafeInteger(p.width) || !Number.isSafeInteger(p.height) ||
+        p.width !== d.width || p.height !== d.height ||
+        !Number.isSafeInteger(p.uniqueCount) || p.uniqueCount < 1 ||
+        typeof p.data !== 'string' || !p.data.length || p.data.length > 16 * 1024 * 1024) return false;
+  }
   if (d.framePages !== undefined && typeof d.framePages !== 'boolean') return false;
   if (d.safeLinearTrimmedSampling !== undefined && typeof d.safeLinearTrimmedSampling !== 'boolean') return false;
   if (d.compactEligible !== undefined && typeof d.compactEligible !== 'boolean') return false;
@@ -600,8 +618,11 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
           return record.sourceHash === sourceHash && identity(record.recipe) === identity(recipe || null) &&
           record.encryptionSettingsSha256 === (encrypted ? settings.hash : null) &&
           (!constrained || Number.isSafeInteger(cachedWorkspaceBytes) && cachedWorkspaceBytes >= workspaceBytes) &&
-          (!record.resolvedSettings || identity(record.resolvedSettings) === identity(resolvedSettings)) &&
-          (record.descriptor === null && Array.isArray(record.outputs) && !record.outputs.length ||
+          (!record.resolvedSettings || (
+            record.resolvedSettings.allowPalettes === resolvedSettings.allowPalettes &&
+            record.resolvedSettings.allowAstc === resolvedSettings.allowAstc &&
+            record.resolvedSettings.astcQuality === resolvedSettings.astcQuality)) &&
+          (record.descriptor === null && (portableIndex?.imageNegativeCompatible !== false) && Array.isArray(record.outputs) && !record.outputs.length ||
             record.descriptor && validDescriptor(record.descriptor));
         });
         indexed = encrypted ? null : findIndexed();
@@ -647,7 +668,8 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
             let descriptor = null, copied = false, processorWorkspaceConstrained = false;
             const indexedFallback = indexed?.descriptor === null;
             if (indexedFallback) ++result.indexedNegative;
-            if (indexed?.descriptor && (indexed.descriptor.compression === 'astc-4x4' || indexed.descriptor.pages.every(p => p.path.endsWith(pageCodec === 'lz4' ? '.pml4' : '.png'))) &&
+            if (indexed?.descriptor && portableIndex?.imageOutputsCompatible !== false &&
+                (indexed.descriptor.compression === 'astc-4x4' || indexed.descriptor.pages.every(p => p.path.endsWith(pageCodec === 'lz4' ? '.pml4' : '.png'))) &&
                 (!indexed.descriptor.framePages || !native.assets.preparationVersion ||
                   identity(portableIndex?.processor) === identity(native.assets.preparationVersion)) &&
                 portableAssetRoot && Array.isArray(indexed.outputs) &&
@@ -688,7 +710,7 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
               try {
                 descriptor = await native.assets.processImage(source, stage, recipe || null,
                   input, ...(native.assets.preparationWorkspaceVersion === 1
-                    ? [indexed ? indexed.descriptor : null, { workspaceBytes, allowPalettes, allowAstc, astcQuality: imageAstc.quality, ...(pageCodec === 'lz4' ? { pageCodec } : {}) }]
+                    ? [indexed ? indexed.descriptor : null, { workspaceBytes, allowPalettes, allowAstc, astcQuality: imageAstc.quality, ...(pageCodec === 'lz4' ? { pageCodec } : {}), ...(indexed?.storage ? { storage: indexed.storage } : {}), ...(preparationContext === 'offline' ? { exportFilteredTilePlan: true } : {}) }]
                     : indexed ? [indexed.descriptor] : []));
                 if (descriptor?.resultVersion === 1 && descriptor.workspaceConstrained === true && descriptor.descriptor === null) {
                   processorWorkspaceConstrained = true;

@@ -66,7 +66,7 @@ async function main() {
   assert.ok(cold.entries[0].descriptor.pages.every(page => page.path.endsWith(pageCodec === 'lz4' ? '.pml4' : '.png')));
   assert.throws(() => native.assets.processImage(imageSource, path.join(root, 'invalid-codec'), null,
     path.join(gameRoot, imageSource), null, { pageCodec: 'lz4hc3' }), /pageCodec must be png or lz4/);
-  assert.equal(native.assets.preparationVersion.processor, 'images-v26-auto-texture-chunks-astcenc4.7');
+  assert.equal(native.assets.preparationVersion.processor, 'images-v27-auto-texture-chunks-astcenc4.7');
   assert.equal(cold.decrypted, 3);
   const partial = native.assets.installDecrypted([{ ...cold.decryptedEntries[0], source: 'invalid', fileHash: 'bad' }, ...cold.decryptedEntries], false, true);
   assert.equal(partial.accepted.length, 3);

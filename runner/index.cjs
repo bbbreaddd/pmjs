@@ -166,26 +166,42 @@ async function prepareStartupAssets(options, native, settings) {
     `processor=${JSON.stringify(native.assets.preparationVersion || null)} ` +
     `lz4_version=${JSON.stringify(native.assets.preparationLz4Version || null)}`);
   const { readAssetIndex, loadAssetIndex } = require('./asset-index.cjs');
-  let indexed = readAssetIndex(options.assetIndex);
+  const { startupFiles } = require('./startup-files.cjs');
   const { loadCatalog, rebuildMarker } = require('./preparation-catalog.cjs');
   const saveFilesRoot = path.join(options.saveRoot, 'game-files', 'files');
   const sourceRoots = [...(options.preparedGameRoots || [])];
   if (fs.existsSync(saveFilesRoot)) sourceRoots.push(saveFilesRoot);
+  const rebuildRequest = native.storage.readText(rebuildMarker);
+  let indexReceipts = null;
+  let portableIndexIdentity = null;
+  if (options.assetIndex) {
+    try {
+      const stat = fs.statSync(options.assetIndex, { bigint: true });
+      if (stat.isFile() && stat.size <= 64n * 1024n * 1024n) {
+        indexReceipts = startupFiles(
+          path.join(options.assetPreparation.cacheRoot, 'asset-index-receipt.json'),
+          1,
+          Boolean(rebuildRequest)
+        );
+        portableIndexIdentity = { loader: 1, sha256: indexReceipts.hash(options.assetIndex) };
+      }
+    } catch { /* Missing or unreadable portable index; readAssetIndex handles fallback. */ }
+  }
   const preparationOptions = { gameRoot: options.gameRoot,
     virtualFiles: options.virtualFiles,
     sourceRoots,
     cacheRoot: options.assetPreparation.cacheRoot, native, ...options.assetPreparation,
     images: options.assetPreparation.enabled, recipes: options.assetPreparation.recipes,
     policyOverrides: options.assetPolicyOverrides, portableIndex: null,
-    portableIndexIdentity: indexed?.identity || null,
-    portableAssetRoot: indexed && path.dirname(options.assetIndex),
+    portableIndexIdentity,
+    portableAssetRoot: portableIndexIdentity && path.dirname(options.assetIndex),
     bundleRoot: options.bundleRoot, portDescriptors: options.portDescriptors, adapters: options.preparationAdapters,
     width: options.width, height: options.height, fastStartup: true };
-  const rebuildRequest = native.storage.readText(rebuildMarker);
   if (rebuildRequest) { preparationOptions.verifyHashes = true; preparationOptions.forceRebuild = true; }
   if (!rebuildRequest) {
     const cached = await loadCatalog(preparationOptions);
     if (cached) {
+      try { indexReceipts?.save(); } catch {}
       options.portArtifacts = Object.fromEntries(cached.portArtifacts);
       options.portArtifactHashes = cached.portArtifactHashes;
       console.log('[pmjs] using completed asset preparation catalog');
@@ -194,6 +210,10 @@ async function prepareStartupAssets(options, native, settings) {
         invalidateCatalog: cached.invalidateCatalog };
     }
   }
+  let indexed = readAssetIndex(options.assetIndex);
+  try { indexReceipts?.save(); } catch {}
+  preparationOptions.portableIndexIdentity = indexed?.identity || null;
+  preparationOptions.portableAssetRoot = indexed ? path.dirname(options.assetIndex) : null;
   preparationOptions.portableIndex = indexed ? loadAssetIndex(options.assetIndex, native, options, indexed.contents) : null;
   indexed = null;
   if (!preparationOptions.portableIndex) preparationOptions.portableAssetRoot = null;
@@ -708,5 +728,5 @@ async function run(input, hooks = {}) {
   }
 }
 
-module.exports = { run, createPreparationLog, validate, resolveDefaults, progressLines, stageProgress, stageKeyOf, parseTimingConfig, resolveSwapDefault, advanceDeadline,
+module.exports = { run, prepareStartupAssets, createPreparationLog, validate, resolveDefaults, progressLines, stageProgress, stageKeyOf, parseTimingConfig, resolveSwapDefault, advanceDeadline,
   sendSupervisorHeartbeat, PMJS_MV_LOGIC_HZ, PMJS_SUPPORTED_RENDER_HZ };

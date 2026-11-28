@@ -27,15 +27,25 @@ struct PreparedPagePixels {
   int width = 0, height = 0;
   std::vector<std::uint8_t> rgba;
 };
+struct ChannelBlockPlan {
+  int width = 0, height = 0;
+  std::uint32_t uniqueCount = 0;
+  std::vector<std::uint8_t> stream;
+};
 struct ChannelBlockPage {
   int width = 0, height = 0;
   std::vector<std::array<std::uint32_t, 4>> blocks;
   std::vector<std::uint8_t> bytes;
+  std::optional<ChannelBlockPlan> plan;
   std::size_t gpuBytes() const;
   PreparedPagePixels pixels() const;
 };
 std::optional<ChannelBlockPage> makeChannelBlockPage(int width, int height,
-    std::span<const std::uint8_t> rgba, std::size_t retainedLimit = 0);
+    std::span<const std::uint8_t> rgba, std::size_t retainedLimit = 0,
+    bool exportPlan = false);
+std::optional<ChannelBlockPage> replayChannelBlockPage(int width, int height,
+    std::span<const std::uint8_t> rgba, const ChannelBlockPlan& plan,
+    std::size_t retainedLimit = 0);
 void writeLz4Page(const std::filesystem::path& path, int width, int height,
                   std::span<const std::uint8_t> rgba, bool sparsePalette = false,
                   std::uint64_t* retainedBytes = nullptr);

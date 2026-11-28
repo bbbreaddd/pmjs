@@ -185,23 +185,24 @@ class Workspace {
     limit_ = std::min({limit, std::size_t{256U * 1024U * 1024U}, allowance_});
     stats.workspaceLimitBytes = limit_;
   }
-  std::shared_ptr<Buffer> retain(std::size_t size, bool allocate = true) {
+  std::shared_ptr<Buffer> retain(std::size_t size, bool allocate = true, bool markConstrained = true) {
     if (!size) return {};
-    if (size > limit_) { stats.workspaceConstrained = true; return {}; }
+    if (size > limit_) { if (markConstrained) stats.workspaceConstrained = true; return {}; }
     const auto now = std::chrono::steady_clock::now();
     if (size >= 8U * 1024U * 1024U || now - checked_ >= std::chrono::milliseconds(250)) {
       allowance_ = availableAllowance(); checked_ = now;
     }
     std::shared_ptr<Buffer> buffer;
     try { buffer = std::make_shared<Buffer>(); }
-    catch (const std::bad_alloc&) { stats.workspaceConstrained = true; return {}; }
+    catch (const std::bad_alloc&) { if (markConstrained) stats.workspaceConstrained = true; return {}; }
     std::lock_guard lock(mutex_);
     // The cap covers simultaneous preparation jobs, not just each worker.
     if (processBytes_ > limit_ || size > limit_ - processBytes_ || size > allowance_) {
-      stats.workspaceConstrained = true; return {};
+      if (markConstrained) stats.workspaceConstrained = true;
+      return {};
     }
     std::unique_ptr<std::uint8_t[]> bytes(allocate ? new (std::nothrow) std::uint8_t[size] : nullptr);
-    if (allocate && !bytes) { stats.workspaceConstrained = true; return {}; }
+    if (allocate && !bytes) { if (markConstrained) stats.workspaceConstrained = true; return {}; }
     buffer->owner = this; buffer->bytes = std::move(bytes); buffer->size = size;
     processBytes_ += size; bytes_ += size;
     stats.liveWorkspaceBytes = bytes_;
@@ -671,22 +672,50 @@ struct PerimeterSample {
     return fill;
   }
 };
-std::vector<std::uint8_t> renderPage(PreparationSource& source, const PreparedAsset& asset,
-                                    int pageIndex, bool verifyFills, const AssetRecipe* recipe = nullptr,
-                                    bool* safeLinearOut = nullptr) {
-  const int width = pageIndex >= 0 ? asset.pages[pageIndex].width : 0;
-  const int height = pageIndex >= 0 ? asset.pages[pageIndex].height : 0;
-  std::vector<std::uint8_t> bytes(static_cast<std::size_t>(width) * height * 4);
-  std::vector<std::uint8_t> written(static_cast<std::size_t>(width) * height);
+std::vector<std::vector<std::uint8_t>> renderPages(PreparationSource& source, const PreparedAsset& asset,
+                                                   const std::vector<int>& pageIndices, bool verifyFills,
+                                                   const AssetRecipe* recipe = nullptr,
+                                                   bool* safeLinearOut = nullptr) {
+  std::vector<std::vector<std::uint8_t>> pageBytes(pageIndices.size());
+  std::vector<std::vector<std::uint8_t>> pageWritten(pageIndices.size());
+  std::vector<int> pageSlot(asset.pages.size(), -1);
+  for (std::size_t slot = 0; slot < pageIndices.size(); ++slot) {
+    const int pageIndex = pageIndices[slot];
+    if (pageIndex < 0) continue;
+    pageSlot[pageIndex] = static_cast<int>(slot);
+    const auto pixels = static_cast<std::size_t>(asset.pages[pageIndex].width) * asset.pages[pageIndex].height;
+    pageBytes[slot].resize(pixels * 4);
+    pageWritten[slot].resize(pixels);
+  }
   bool safeLinear = verifyFills && !asset.uniform && !asset.pages.empty() && !asset.cells.empty() &&
     asset.halo >= 2 && (!recipe || (!recipe->crop && recipe->backdrop == AssetColor{})) &&
     asset.width == source.width && asset.height == source.height &&
     std::all_of(asset.cells.begin(), asset.cells.end(), [](const auto& cell) {
       return cell.fill == AssetColor{} && (!cell.crop[2] || !cell.crop[3] || cell.page >= 0);
     });
+  struct CellSpan { int minY, maxY; std::size_t index; };
+  std::vector<CellSpan> spans;
+  spans.reserve(asset.cells.size());
+  for (std::size_t i = 0; i < asset.cells.size(); ++i) {
+    const auto& cell = asset.cells[i];
+    const int minY = std::clamp(cell.rect[1] - asset.halo, 0, source.height - 1);
+    const int maxY = std::clamp(cell.rect[1] + cell.rect[3] + asset.halo - 1, 0, source.height - 1);
+    spans.push_back({minY, maxY, i});
+  }
+  std::sort(spans.begin(), spans.end(), [](const CellSpan& a, const CellSpan& b) {
+    return a.minY < b.minY;
+  });
+  std::size_t nextSpan = 0;
+  std::vector<CellSpan> active;
   auto rows = source.rows();
   for (int y = 0; y < source.height; ++y) {
     rows.read();
+    while (nextSpan < spans.size() && spans[nextSpan].minY <= y) {
+      if (spans[nextSpan].maxY >= y) active.push_back(spans[nextSpan]);
+      ++nextSpan;
+    }
+    active.erase(std::remove_if(active.begin(), active.end(), [y](const CellSpan& s) { return s.maxY < y; }),
+                 active.end());
     const auto isZeroSpan = [&](int x0, int x1) {
       for (int x = x0; x <= x1; ++x) {
         if (pixel(rows.row.data() + static_cast<std::size_t>(std::clamp(x, 0, source.width - 1)) * 4) != AssetColor{})
@@ -694,7 +723,8 @@ std::vector<std::uint8_t> renderPage(PreparationSource& source, const PreparedAs
       }
       return true;
     };
-    for (const auto& cell : asset.cells) {
+    for (const auto& span : active) {
+      const auto& cell = asset.cells[span.index];
       if (safeLinear) {
         const int rLeft = cell.rect[0] - asset.halo;
         const int rRight = cell.rect[0] + cell.rect[2] + asset.halo - 1;
@@ -749,7 +779,12 @@ std::vector<std::uint8_t> renderPage(PreparationSource& source, const PreparedAs
           if (pixel(rows.row.data() + static_cast<std::size_t>(std::clamp(x, 0, source.width - 1)) * 4) != cell.fill)
             throw AssetPreparationUnsupported("indexed uniform block border differs");
       }
-      if (!cell.crop[2] || cell.page != pageIndex) continue;
+      if (!cell.crop[2] || cell.page < 0 || static_cast<std::size_t>(cell.page) >= pageSlot.size()) continue;
+      const int slot = pageSlot[cell.page];
+      if (slot < 0) continue;
+      const int width = asset.pages[cell.page].width;
+      auto& bytes = pageBytes[slot];
+      auto& written = pageWritten[slot];
       const int top = cell.rect[1] + cell.crop[1] - asset.halo;
       const int paddedHeight = cell.crop[3] + asset.halo * 2;
       if (y < std::max(0, top) || y > std::min(source.height - 1, top + paddedHeight - 1)) continue;
@@ -785,7 +820,7 @@ std::vector<std::uint8_t> renderPage(PreparationSource& source, const PreparedAs
   }
   rows.finish();
   if (safeLinearOut) *safeLinearOut = safeLinear;
-  return bytes;
+  return pageBytes;
 }
 
 void emitLayout(PreparationSource& source, const std::filesystem::path& staging, PreparedAsset& asset,
@@ -799,7 +834,7 @@ void emitLayout(PreparationSource& source, const std::filesystem::path& staging,
           throw AssetPreparationUnsupported("indexed uniform color differs");
     }
     rows.finish();
-  } else if (asset.pages.empty()) renderPage(source, asset, -1, true, &recipe);
+  } else if (asset.pages.empty()) renderPages(source, asset, {-1}, true, &recipe);
   const bool classifyCompact = !asset.compactEligible.has_value();
   const bool classifyBlocks = !asset.blockChannels.has_value();
   if (classifyCompact && !asset.uniform && !asset.cells.empty()) {
@@ -815,13 +850,28 @@ void emitLayout(PreparationSource& source, const std::filesystem::path& staging,
   }
   if (!asset.pages.empty()) std::filesystem::create_directories(staging);
   asset.ordinaryRetainedBytes = 0;
+  std::size_t totalPageBufferBytes = 0;
+  for (const auto& page : asset.pages)
+    totalPageBufferBytes += static_cast<std::size_t>(page.width) * page.height * 5;
+  std::vector<std::vector<std::uint8_t>> multiPages;
+  auto multiReservation = (asset.pages.size() > 1 && totalPageBufferBytes <= 32U * 1024U * 1024U)
+    ? source.workspace.retain(totalPageBufferBytes, false, false)
+    : decltype(source.workspace.retain(0, false, false)){};
+  if (multiReservation) {
+    std::vector<int> allIndices(asset.pages.size());
+    for (std::size_t i = 0; i < asset.pages.size(); ++i) allIndices[i] = static_cast<int>(i);
+    multiPages = renderPages(source, asset, allIndices, true, &recipe, &asset.safeLinearTrimmedSampling);
+    source.releaseCache();
+  }
   for (std::size_t index = 0; index < asset.pages.size(); ++index) {
     auto& page = asset.pages[index];
-    auto bytes = renderPage(source, asset, static_cast<int>(index), index == 0, &recipe,
-      index == 0 ? &asset.safeLinearTrimmedSampling : nullptr);
+    auto bytes = !multiPages.empty()
+      ? std::move(multiPages[index])
+      : std::move(renderPages(source, asset, {static_cast<int>(index)}, index == 0, &recipe,
+          index == 0 ? &asset.safeLinearTrimmedSampling : nullptr)[0]);
     // No more source rows are needed for this emission. Keep encoding scratch
     // from overlapping the cached decode; a failed replay can reopen the source.
-    if (index + 1 == asset.pages.size()) source.releaseCache();
+    if (multiPages.empty() && index + 1 == asset.pages.size()) source.releaseCache();
     if (classifyCompact && asset.compactEligible.value_or(false)) {
       for (const auto& cell : asset.cells) {
         if (cell.page != static_cast<int>(index) || !cell.crop[2]) continue;
@@ -878,7 +928,7 @@ std::optional<PreparedAsset> sharedInteriorLayout(PreparationSource& source, con
   if (pageBytes > pixelBudget) return std::nullopt;
   std::vector<std::vector<std::uint8_t>> pages;
   for (std::size_t index = 0; index < asset.pages.size(); ++index)
-    pages.push_back(renderPage(source, asset, static_cast<int>(index), false));
+    pages.push_back(std::move(renderPages(source, asset, {static_cast<int>(index)}, false)[0]));
   struct Region { int page; AssetRect rect; };
   const auto regionRow = [&](const Region& region, int y) {
     return pages[region.page].data() + (static_cast<std::size_t>(region.rect[1] + y) *
@@ -1444,23 +1494,85 @@ static PreparedAsset prepareAssetCells(PreparationSource& source,
 }
 
 namespace {
+std::optional<TextureKind> planToKind(TexturePlan plan) {
+  switch (plan) {
+    case TexturePlan::Dense8: return TextureKind::Dense8;
+    case TexturePlan::Dense16: return TextureKind::Dense16;
+    case TexturePlan::Sparse16: return TextureKind::Sparse16;
+    case TexturePlan::Sparse24: return TextureKind::Sparse24;
+    case TexturePlan::Channels: return TextureKind::Channels;
+    case TexturePlan::FilteredTiles: return TextureKind::FilteredTiles;
+    default: return std::nullopt;
+  }
+}
+
+TexturePlan kindToPlan(TextureKind kind) {
+  switch (kind) {
+    case TextureKind::Dense8: return TexturePlan::Dense8;
+    case TextureKind::Dense16: return TexturePlan::Dense16;
+    case TextureKind::Sparse16: return TexturePlan::Sparse16;
+    case TextureKind::Sparse24: return TexturePlan::Sparse24;
+    case TextureKind::Channels: return TexturePlan::Channels;
+    case TextureKind::FilteredTiles: return TexturePlan::FilteredTiles;
+  }
+  return TexturePlan::Unknown;
+}
+
 void emitTexture(PreparationSource& source, const std::filesystem::path& staging,
-                 PreparedAsset& asset, const AssetRecipe& recipe, bool allowPalettes) {
+                 PreparedAsset& asset, const AssetRecipe& recipe, bool allowPalettes,
+                 const ImageStorageDecision* knownStorage = nullptr,
+                 bool exportFilteredTilePlan = false) {
+  const TexturePlan incomingPlan = asset.texturePlan;
   asset.textureArtifact.clear();
+  if (incomingPlan == TexturePlan::None) {
+    asset.texturePlan = TexturePlan::None;
+    return;
+  }
+  asset.texturePlan = TexturePlan::Unknown;
   const bool automatic = !recipe.framePages;
   if ((automatic && (std::max(asset.ordinaryRetainedBytes, std::uint64_t(source.width)*source.height*4) < 4U*1024U*1024U ||
       (asset.blockGrid && asset.blockChannels.value_or(0) > 0) || asset.compactEligible.value_or(false))) ||
       asset.uniform || recipe.crop || recipe.backdrop != AssetColor{} ||
-      asset.width != source.width || asset.height != source.height || source.width > 16384 || source.height > 16384) return;
+      asset.width != source.width || asset.height != source.height || source.width > 16384 || source.height > 16384) {
+    asset.texturePlan = TexturePlan::None;
+    asset.filteredTilePlan.reset();
+    asset.channelBlockPlan.reset();
+    return;
+  }
   source.releaseCache();
   const auto size = std::size_t(source.width)*source.height*4;
-  if (size * 3 + 32U*1024U*1024U > source.workspace.stats.workspaceLimitBytes) {
+  const bool hasFilteredReplay = incomingPlan == TexturePlan::FilteredTiles && asset.filteredTilePlan.has_value();
+  const bool hasChannelReplay = incomingPlan == TexturePlan::Channels && asset.channelBlockPlan.has_value();
+  std::size_t replayReserve = 0;
+  if (hasFilteredReplay) {
+    const auto& p = *asset.filteredTilePlan;
+    const std::size_t slots = static_cast<std::size_t>(p.rgbaCount) + (p.rgCount + 1ULL) / 2 + (p.rCount + 3ULL) / 4;
+    constexpr std::size_t stride = 18;
+    constexpr std::size_t perRow = 4096 / stride;
+    const std::size_t atlasW = slots ? std::min(slots, perRow) * stride : 1;
+    const std::size_t atlasH = slots ? ((slots + perRow - 1) / perRow) * stride : 1;
+    const std::size_t atlasBytes = atlasW * atlasH * 4U;
+    const std::size_t tableBytes = p.table.size() * 4U;
+    replayReserve = atlasBytes + tableBytes + 8U * 1024U * 1024U;
+  } else if (hasChannelReplay) {
+    const auto& p = *asset.channelBlockPlan;
+    const std::size_t cols = static_cast<std::size_t>((p.width + 7) / 8);
+    const std::size_t rows = static_cast<std::size_t>((p.height + 7) / 8);
+    const std::size_t dictBytes = static_cast<std::size_t>(p.uniqueCount) * 64U;
+    const std::size_t blocksBytes = cols * rows * 16U;
+    replayReserve = dictBytes + blocksBytes + 8U * 1024U * 1024U;
+  }
+  const bool hasPlanReplay = hasFilteredReplay || hasChannelReplay;
+  const std::size_t minRequired = hasPlanReplay ? (size + replayReserve + 8U * 1024U * 1024U) : (size * 3 + 32U * 1024U * 1024U);
+  if (minRequired > source.workspace.stats.workspaceLimitBytes) {
     source.workspace.stats.workspaceConstrained = true;
+    asset.filteredTilePlan.reset();
+    asset.channelBlockPlan.reset();
     return;
   }
   // Reserve input, output, dictionary overhead and chunk encoding scratch together.
   auto reservation = source.workspace.retain(size + 8U*1024U*1024U, false);
-  if (!reservation) return;
+  if (!reservation) { asset.filteredTilePlan.reset(); asset.channelBlockPlan.reset(); return; }
   try {
     ImagePixels pixels{source.width, source.height, std::vector<std::uint8_t>(size)};
     auto rows = source.rows();
@@ -1469,52 +1581,109 @@ void emitTexture(PreparationSource& source, const std::filesystem::path& staging
       std::memcpy(pixels.rgba.data()+std::size_t(y)*source.width*4, rows.row.data(), rows.row.size());
     }
     rows.finish();
-    const auto classified = classifyImageStorage(pixels);
+    auto classified = (knownStorage && knownStorage->width == source.width && knownStorage->height == source.height)
+      ? *knownStorage
+      : classifyImageStorage(pixels);
     const bool boundedPalette = classified.paletteBits && source.width <= 8192 && source.height <= 8192;
-    auto encoding = source.workspace.retain(size*(boundedPalette ? 2 : 3) + 24U*1024U*1024U, false);
-    if (!encoding) return;
     // Nonzero fills may require reconstructed cells or a full-source texture.
     // Keep mixed layouts conservative: a zero-fill first draw can use only its atlas.
     if (automatic && !asset.cells.empty() && std::all_of(asset.cells.begin(), asset.cells.end(),
-        [](const auto& cell) { return cell.fill != AssetColor{}; }))
-      asset.ordinaryRetainedBytes += std::uint64_t(source.width)*source.height*classified.sourceChannels;
-    auto texture = makePreparedTexture(pixels, &classified, automatic ? asset.ordinaryRetainedBytes : 0, allowPalettes);
-    if (!texture) return;
+        [](const auto& cell) { return cell.fill != AssetColor{}; })) {
+      const int channels = classified.sourceChannels > 0 ? classified.sourceChannels : imageChannelStorage(pixels).channels;
+      asset.ordinaryRetainedBytes += std::uint64_t(source.width)*source.height*channels;
+    }
+    auto passesAdmission = [&](const PreparedTexture& candidate, std::uint64_t& retainedOut) -> bool {
+      std::uint64_t retained = 0;
+      for (const auto& plane : candidate.layout.planes)
+        retained += std::uint64_t(plane.width)*plane.height*textureTexelBytes(plane.format);
+      if (candidate.layout.kind != TextureKind::Channels &&
+          candidate.layout.kind != TextureKind::FilteredTiles) retained += candidate.bytes[1].size()*2;
+      retainedOut = retained;
+      auto ordinaryBytes = asset.ordinaryRetainedBytes;
+      if (automatic && asset.pages.empty() &&
+          (candidate.layout.kind == TextureKind::Dense8 || candidate.layout.kind == TextureKind::Dense16))
+        ordinaryBytes = retained;
+      if (automatic && retained >= ordinaryBytes) return false;
+      if (automatic && classified.channels.channels <= 2) {
+        const std::uint64_t compactSourceBytes =
+          static_cast<std::uint64_t>(source.width) * source.height * classified.channels.channels;
+        if (compactSourceBytes <= retained * 3U / 2U ||
+            (compactSourceBytes <= 8ULL * 1024U * 1024U &&
+             compactSourceBytes <= retained + 4ULL * 1024U * 1024U))
+          return false;
+      }
+      if (automatic && asset.safeLinearTrimmedSampling && !asset.pages.empty()) {
+        const std::uint64_t fullBytes = static_cast<std::uint64_t>(source.width) * source.height * 4U;
+        if (ordinaryBytes <= retained * 3U / 2U ||
+            (ordinaryBytes <= fullBytes * 3U / 4U &&
+             ordinaryBytes - retained <= 12ULL * 1024U * 1024U))
+          return false;
+      }
+      return true;
+    };
+    const auto retainedLimit = automatic ? asset.ordinaryRetainedBytes : 0;
+    std::optional<PreparedTexture> texture;
+    decltype(source.workspace.retain(0, false)) encoding;
     std::uint64_t retained = 0;
-    for (const auto& plane : texture->layout.planes)
-      retained += std::uint64_t(plane.width)*plane.height*textureTexelBytes(plane.format);
-    if (texture->layout.kind != TextureKind::Channels &&
-        texture->layout.kind != TextureKind::FilteredTiles) retained += texture->bytes[1].size()*2;
+    if (hasFilteredReplay) {
+      encoding = source.workspace.retain(replayReserve, false, false);
+      if (encoding) {
+        if (auto replayed = replayFilteredTilePage(pixels.width, pixels.height, pixels.rgba, *asset.filteredTilePlan, retainedLimit)) {
+          if (passesAdmission(*replayed, retained)) texture = std::move(replayed);
+        }
+      }
+      if (!texture) encoding.reset();
+    } else if (hasChannelReplay) {
+      encoding = source.workspace.retain(replayReserve, false, false);
+      if (encoding) {
+        if (auto replayed = replayChannelBlockTexture(pixels.width, pixels.height, pixels.rgba, *asset.channelBlockPlan, retainedLimit)) {
+          if (passesAdmission(*replayed, retained)) texture = std::move(replayed);
+        }
+      }
+      if (!texture) encoding.reset();
+    }
+    if (!texture) {
+      asset.filteredTilePlan.reset();
+      asset.channelBlockPlan.reset();
+      if (size * 3 + 32U * 1024U * 1024U > source.workspace.stats.workspaceLimitBytes) {
+        source.workspace.stats.workspaceConstrained = true;
+        return;
+      }
+      encoding = source.workspace.retain(size*(boundedPalette ? 2 : 3) + 24U*1024U*1024U, false);
+      if (!encoding) return;
+      texture = makePreparedTexture(pixels, &classified, retainedLimit, allowPalettes, planToKind(incomingPlan), nullptr, exportFilteredTilePlan,
+        [&](const PreparedTexture& candidate) {
+          std::uint64_t candRetained = 0;
+          if (!passesAdmission(candidate, candRetained)) return false;
+          retained = candRetained;
+          return true;
+        });
+    }
+    if (!texture) { asset.texturePlan = TexturePlan::None; asset.filteredTilePlan.reset(); asset.channelBlockPlan.reset(); return; }
     asset.textureRetainedBytes = retained;
-    // Fill-only layouts already realize the same dense palette without recovery pages.
     if (automatic && asset.pages.empty() &&
         (texture->layout.kind == TextureKind::Dense8 || texture->layout.kind == TextureKind::Dense16))
       asset.ordinaryRetainedBytes = retained;
-    if (automatic && retained >= asset.ordinaryRetainedBytes) return;
-    if (automatic && classified.channels.channels <= 2) {
-      const std::uint64_t compactSourceBytes =
-        static_cast<std::uint64_t>(source.width) * source.height * classified.channels.channels;
-      if (compactSourceBytes <= retained * 3U / 2U ||
-          (compactSourceBytes <= 8ULL * 1024U * 1024U &&
-           compactSourceBytes <= retained + 4ULL * 1024U * 1024U)) {
-        return;
-      }
-    }
-    if (automatic && asset.safeLinearTrimmedSampling && !asset.pages.empty()) {
-      const std::uint64_t fullBytes = static_cast<std::uint64_t>(source.width) * source.height * 4U;
-      if (asset.ordinaryRetainedBytes <= retained * 3U / 2U ||
-          (asset.ordinaryRetainedBytes <= fullBytes * 3U / 4U &&
-           asset.ordinaryRetainedBytes - retained <= 12ULL * 1024U * 1024U)) {
-        return;
-      }
-    }
     writeTextureArtifact(staging / "texture.pmtx", *texture);
     asset.framePages = true;
     asset.textureArtifact = "texture.pmtx";
+    asset.texturePlan = kindToPlan(texture->layout.kind);
+    if (!exportFilteredTilePlan) {
+      asset.filteredTilePlan.reset();
+      asset.channelBlockPlan.reset();
+    } else {
+      if (texture->filteredTilePlan) asset.filteredTilePlan = std::move(texture->filteredTilePlan);
+      if (texture->channelBlockPlan) asset.channelBlockPlan = std::move(texture->channelBlockPlan);
+    }
   } catch (const std::invalid_argument&) {
+    asset.filteredTilePlan.reset();
+    asset.channelBlockPlan.reset();
     std::filesystem::remove(staging / "texture.pmtx");
   } catch (const std::bad_alloc&) {
     source.workspace.stats.workspaceConstrained = true;
+    asset.texturePlan = TexturePlan::Unknown;
+    asset.filteredTilePlan.reset();
+    asset.channelBlockPlan.reset();
     std::filesystem::remove(staging / "texture.pmtx");
   }
 }
@@ -1577,7 +1746,9 @@ PreparedAsset prepareAssetImage(const std::filesystem::path& path,
       result.framePages = recipe.framePages;
       result.textureRetainedBytes = 0;
       emitLayout(source, staging, result, recipe, options.lz4Pages, options.allowPalettes);
-      emitTexture(source, staging, result, recipe, options.allowPalettes);
+      emitTexture(source, staging, result, recipe, options.allowPalettes,
+                  options.knownStorage ? &*options.knownStorage : nullptr,
+                  options.exportFilteredTilePlan);
       ++stats.indexedLayouts;
       return result;
     }
@@ -1665,7 +1836,9 @@ PreparedAsset prepareAssetImage(const std::filesystem::path& path,
     }
   }
   if (!selected->uniform) emitLayout(source, staging, *selected, recipe, options.lz4Pages, options.allowPalettes);
-  emitTexture(source, staging, *selected, recipe, options.allowPalettes);
+  emitTexture(source, staging, *selected, recipe, options.allowPalettes,
+              options.knownStorage ? &*options.knownStorage : nullptr,
+              options.exportFilteredTilePlan);
   return std::move(*selected);
 }
 }

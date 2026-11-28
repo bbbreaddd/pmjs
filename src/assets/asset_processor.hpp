@@ -1,5 +1,7 @@
 #pragma once
 
+#include "image_storage.hpp"
+#include "texture_artifact.hpp"
 #include <array>
 #include <cstdint>
 #include <cstddef>
@@ -39,6 +41,8 @@ struct PreparedAssetPage {
   int width = 0;
   int height = 0;
 };
+enum class TexturePlan { Unknown = 0, None, Dense8, Dense16, Sparse16, Sparse24, Channels, FilteredTiles };
+
 struct PreparedAsset {
   int width = 0;
   int height = 0;
@@ -51,6 +55,9 @@ struct PreparedAsset {
   std::vector<PreparedAssetPage> pages;
   std::string compression;
   std::filesystem::path textureArtifact;
+  TexturePlan texturePlan = TexturePlan::Unknown;
+  std::optional<FilteredTilePlan> filteredTilePlan;
+  std::optional<ChannelBlockPlan> channelBlockPlan;
   bool framePages = false;
   bool safeLinearTrimmedSampling = false;
   std::uint64_t ordinaryRetainedBytes = 0, textureRetainedBytes = 0;
@@ -70,7 +77,9 @@ struct AssetPreparationOptions {
   bool lz4Pages = false;
   bool allowPalettes = false;
   bool allowAstc = false;
+  bool exportFilteredTilePlan = false;
   std::string astcQuality = "medium";
+  std::optional<ImageStorageDecision> knownStorage;
 };
 void writePreparedPng(const std::filesystem::path& path, int width, int height,
                       const std::vector<std::uint8_t>& bytes);
