@@ -8,8 +8,8 @@
 
 namespace pmjs {
 constexpr std::size_t textureChunkLimit = 1024U * 1024U;
-enum class TextureFormat : std::uint32_t { R8 = 1, RG8, RGBA8, RGB32UI, RGBA32UI };
-enum class TextureKind : std::uint32_t { Dense8 = 1, Dense16, Sparse16, Sparse24, Channels };
+enum class TextureFormat : std::uint32_t { R8 = 1, RG8, RGBA8, RGB32UI, RGBA32UI, R32UI };
+enum class TextureKind : std::uint32_t { Dense8 = 1, Dense16, Sparse16, Sparse24, Channels, FilteredTiles };
 struct TextureChunk {
   std::uint32_t y = 0, rows = 0, offset = 0, encoded = 0, decoded = 0;
   std::array<std::uint8_t, 32> hash{};

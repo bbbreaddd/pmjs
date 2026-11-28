@@ -1457,13 +1457,23 @@ void emitTexture(PreparationSource& source, const std::filesystem::path& staging
     std::uint64_t retained = 0;
     for (const auto& plane : texture->layout.planes)
       retained += std::uint64_t(plane.width)*plane.height*textureTexelBytes(plane.format);
-    if (texture->layout.kind != TextureKind::Channels) retained += texture->bytes[1].size()*2;
+    if (texture->layout.kind != TextureKind::Channels &&
+        texture->layout.kind != TextureKind::FilteredTiles) retained += texture->bytes[1].size()*2;
     asset.textureRetainedBytes = retained;
     // Fill-only layouts already realize the same dense palette without recovery pages.
     if (automatic && asset.pages.empty() &&
         (texture->layout.kind == TextureKind::Dense8 || texture->layout.kind == TextureKind::Dense16))
       asset.ordinaryRetainedBytes = retained;
     if (automatic && retained >= asset.ordinaryRetainedBytes) return;
+    if (automatic && classified.channels.channels <= 2) {
+      const std::uint64_t compactSourceBytes =
+        static_cast<std::uint64_t>(source.width) * source.height * classified.channels.channels;
+      if (compactSourceBytes <= retained * 3U / 2U ||
+          (compactSourceBytes <= 8ULL * 1024U * 1024U &&
+           compactSourceBytes <= retained + 4ULL * 1024U * 1024U)) {
+        return;
+      }
+    }
     if (automatic && asset.safeLinearTrimmedSampling && !asset.pages.empty()) {
       const std::uint64_t fullBytes = static_cast<std::uint64_t>(source.width) * source.height * 4U;
       if (asset.ordinaryRetainedBytes <= retained * 3U / 2U ||

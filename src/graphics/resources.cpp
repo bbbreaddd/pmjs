@@ -659,6 +659,7 @@ struct ImageStore::PreparedBacking {
   std::uint32_t channelAtlas = 0, channelTable = 0;
   int channelHeight = 0;
   bool channelChecked = false;
+  int filteredTileWidth = 0, filteredTileSize = 0;
   std::optional<bool> blockEligible;
   bool blockRealizationFailed = false;
 
@@ -679,6 +680,7 @@ struct ImageStore::PreparedBacking {
   void clearBlockTextures() {
     glDeleteTextures(1, &channelAtlas); glDeleteTextures(1, &channelTable);
     channelAtlas = channelTable = 0;
+    filteredTileWidth = filteredTileSize = 0;
     for (auto& textures : blockTextures) {
       if (!textures.sharedAtlas) glDeleteTextures(1, &textures.atlas);
       glDeleteTextures(1, &textures.table);
@@ -1095,7 +1097,8 @@ bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
     ++textureArtifactFailures_; textureArtifactFailureReason_ = "missing";
   }
   auto upload = [&](const TextureLayout& l, bool artifact) {
-    if (l.kind == TextureKind::Channels ? !compactSamplingEnabled_ : !palettizationEnabled_) return false;
+    const bool blockKind = l.kind == TextureKind::Channels || l.kind == TextureKind::FilteredTiles;
+    if (blockKind ? !compactSamplingEnabled_ : !palettizationEnabled_) return false;
     const UnpackState unpack;
     GLint maximum = 0; glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maximum);
     for (const auto& p : l.planes) if (p.width > unsigned(maximum) || p.height > unsigned(maximum)) return false;
@@ -1103,11 +1106,11 @@ bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
       std::vector<GLuint> ids;
       ~Textures() { glDeleteTextures(ids.size(), ids.data()); }
     } textures;
-    const auto paletteKey = validContentHash(backing.textureHash) && l.kind != TextureKind::Channels
+    const auto paletteKey = validContentHash(backing.textureHash) && !blockKind
       ? "source:" + backing.textureHash : std::string{};
     auto sharedPalette = paletteKey.empty() ? std::shared_ptr<PaletteBacking>{} : preparedPalettes_[paletteKey].lock();
     if (!sharedPalette) textures.ids.resize(l.planes.size());
-    auto palette = !sharedPalette && l.kind != TextureKind::Channels ? std::make_shared<PaletteBacking>() : nullptr;
+    auto palette = !sharedPalette && !blockKind ? std::make_shared<PaletteBacking>() : nullptr;
     if (palette) palette->owner = this;
     std::size_t bytes = 0;
     const auto formats = [](TextureFormat f) -> std::array<GLenum,3> {
@@ -1117,15 +1120,17 @@ bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
         case TextureFormat::RGBA8:return {GL_RGBA8,GL_RGBA,GL_UNSIGNED_BYTE};
         case TextureFormat::RGB32UI:return {GL_RGB32UI,GL_RGB_INTEGER,GL_UNSIGNED_INT};
         case TextureFormat::RGBA32UI:return {GL_RGBA32UI,GL_RGBA_INTEGER,GL_UNSIGNED_INT};
+        case TextureFormat::R32UI:return {GL_R32UI,GL_RED_INTEGER,GL_UNSIGNED_INT};
       }
       return {};
     };
     while (glGetError() != GL_NO_ERROR) {}
     for (std::size_t i = 0; !sharedPalette && i < l.planes.size(); ++i) {
       const auto& p = l.planes[i]; const auto f = formats(p.format);
+      const bool poolTex = l.kind == TextureKind::FilteredTiles && i == 0;
       glGenTextures(1,&textures.ids[i]); glBindTexture(GL_TEXTURE_2D,textures.ids[i]);
-      glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
-      glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+      glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,poolTex ? GL_LINEAR : GL_NEAREST);
+      glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,poolTex ? GL_LINEAR : GL_NEAREST);
       glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
       glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
       glPixelStorei(GL_UNPACK_ALIGNMENT,1);
@@ -1160,6 +1165,13 @@ bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
       backing.channelAtlas = textures.ids[0]; backing.channelTable = textures.ids[1];
       backing.channelHeight = l.planes[0].height; backing.channelChecked = true;
       backing.gpuBytes += bytes; ++blockTextureUploads_;
+    } else if (l.kind == TextureKind::FilteredTiles) {
+      backing.channelAtlas = textures.ids[0]; backing.channelTable = textures.ids[1];
+      backing.channelHeight = l.planes[0].height;
+      backing.filteredTileWidth = l.planes[0].width;
+      backing.filteredTileSize = 16;
+      backing.channelChecked = true;
+      backing.gpuBytes += bytes; ++blockTextureUploads_;
     } else {
       palette->indices = textures.ids[0]; palette->table = textures.ids[1];
       palette->indexChannels = l.kind == TextureKind::Dense8 ? 1 : l.kind == TextureKind::Sparse24 ? 3 : 2;
@@ -1175,7 +1187,7 @@ bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
     for (auto& p : backing.pages) { p.setPixels({}); p.setSparse({}); }
     return true;
   };
-  if (layout && layout->kind != TextureKind::Channels && !palettizationEnabled_) return false;
+  if (layout && layout->kind != TextureKind::Channels && layout->kind != TextureKind::FilteredTiles && !palettizationEnabled_) return false;
   if (layout) {
     if (upload(*layout,true)) { ++textureArtifactLoads_; return true; }
     ++textureArtifactFailures_; textureArtifactFailureReason_ = "chunk-or-upload";
@@ -3130,7 +3142,17 @@ std::optional<BlockImageRegion> ImageStore::resolveBlockRegion(ImageHandle handl
   auto& slot = slots_[(handle & indexMask)-1U];
   if (!slot.prepared || slot.tiles) return std::nullopt;
   auto& backing = *slot.prepared;
-  if (!backing.requiresSourceSampling() || !backing.channelAtlas) return std::nullopt;
+  if (!backing.requiresSourceSampling()) return std::nullopt;
+  if (backing.filteredTileSize >= 8 && backing.channelAtlas && (premultiplied || slot.premultiplied)) {
+    ++blockRegions_;
+    return BlockImageRegion{{0, backing.filteredTileWidth, backing.channelHeight,
+        backing.channelAtlas, true, false}, backing.channelTable,
+      {backing.filteredTileSize, logical->width, logical->height},
+      {(logical->width + backing.filteredTileSize - 1) / backing.filteredTileSize,
+       (logical->height + backing.filteredTileSize - 1) / backing.filteredTileSize},
+      logical->width, logical->height, backing.filteredTileSize};
+  }
+  if (!backing.channelAtlas) return std::nullopt;
   ++blockRegions_;
   return BlockImageRegion{{0, 2048, backing.channelHeight, backing.channelAtlas,
       premultiplied || slot.premultiplied, false}, backing.channelTable,
@@ -3163,7 +3185,8 @@ bool ImageStore::materialize(Slot& slot, bool premultiplied) {
   if (!extent || slot.width > maxTexture || slot.height > maxTexture) {
     ++preparedFallbacks_["full-texture-limit"]; return false;
   }
-  slot.storage = {};
+  const bool hadTexture = slot.texture || slot.premultipliedTexture;
+  if (!hadTexture) slot.storage = {};
   std::size_t slotIndex = 0; while (slotIndex < slots_.size() && &slots_[slotIndex] != &slot) ++slotIndex;
   const auto handle = makeHandle(slotIndex, slot.generation);
   {
@@ -3185,8 +3208,13 @@ bool ImageStore::materialize(Slot& slot, bool premultiplied) {
       auto pixels = readPixelsRegion(handle, 0, 0, slot.width, slot.height);
       ok = ok && pixels.has_value();
       if (ok) {
+        if (!hadTexture) slot.storage = imageChannelStorage(*pixels);
         preparePixels(*pixels);
         texture = uploadTexture(slot.width, slot.height, pixels->rgba.data(), slot.storage, texture);
+        if (!texture && !hadTexture && slot.storage.channels != 4) {
+          slot.storage = {};
+          texture = uploadTexture(slot.width, slot.height, pixels->rgba.data(), slot.storage);
+        }
         ok = texture != 0;
       }
     } else {

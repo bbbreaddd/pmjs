@@ -209,7 +209,14 @@ PreparedTexture sparse(SparsePalettePage page) {
 bool validLayout(const TextureLayout& l) {
   if (l.width <= 0 || l.height <= 0 || l.width > 16384 || l.height > 16384) return false;
   const auto kind = l.kind;
-  if (kind < TextureKind::Dense8 || kind > TextureKind::Channels) return false;
+  if (kind < TextureKind::Dense8 || kind > TextureKind::FilteredTiles) return false;
+  if (kind == TextureKind::FilteredTiles) {
+    return l.planes.size() == 2U &&
+      l.planes[0].format == TextureFormat::RGBA8 && l.planes[0].width <= 4096 && l.planes[0].height <= 4096 &&
+      l.planes[1].format == TextureFormat::R32UI &&
+      l.planes[1].width == std::uint32_t((l.width + 15) / 16) &&
+      l.planes[1].height == std::uint32_t((l.height + 15) / 16);
+  }
   const bool sp = kind == TextureKind::Sparse16 || kind == TextureKind::Sparse24;
   if (l.planes.size() != (sp ? 4U : 2U)) return false;
   for (const auto& p : l.planes)
@@ -231,8 +238,144 @@ bool validLayout(const TextureLayout& l) {
 }
 std::size_t textureTexelBytes(TextureFormat f) {
   switch(f) { case TextureFormat::R8:return 1; case TextureFormat::RG8:return 2; case TextureFormat::RGBA8:return 4;
-    case TextureFormat::RGB32UI:return 12; case TextureFormat::RGBA32UI:return 16; }
+    case TextureFormat::RGB32UI:return 12; case TextureFormat::RGBA32UI:return 16; case TextureFormat::R32UI:return 4; }
   return 0;
+}
+namespace {
+std::optional<PreparedTexture> makeFilteredTilePage(int width, int height,
+    std::span<const std::uint8_t> rgba, std::size_t retainedLimit) {
+  if (width <= 0 || height <= 0 || width > 16384 || height > 16384) return std::nullopt;
+  constexpr int tileSize = 16;
+  constexpr int stride = tileSize + 2;
+  constexpr int perRow = 4096 / stride;
+  const int cols = (width + tileSize - 1) / tileSize;
+  const int rows = (height + tileSize - 1) / tileSize;
+  std::vector<std::uint8_t> premul(rgba.size());
+  for (std::size_t i = 0; i < rgba.size(); i += 4) {
+    const int a = rgba[i + 3];
+    for (int c = 0; c < 3; ++c) premul[i + c] = static_cast<std::uint8_t>((rgba[i + c] * a + 127) / 255);
+    premul[i + 3] = static_cast<std::uint8_t>(a);
+  }
+  struct PoolState {
+    int bpp = 4;
+    std::vector<std::vector<std::uint8_t>> tiles;
+    std::unordered_map<std::uint64_t, std::vector<std::uint32_t>> byHash;
+  };
+  std::array<PoolState, 3> state{{{4, {}, {}}, {1, {}, {}}, {2, {}, {}}}};
+  struct TileRef { int pool = -1; std::uint32_t index = 0; };
+  std::vector<TileRef> refs(static_cast<std::size_t>(cols) * rows);
+  std::vector<std::uint8_t> patch(static_cast<std::size_t>(stride) * stride * 4);
+  for (int ty = 0; ty < rows; ++ty) {
+    for (int tx = 0; tx < cols; ++tx) {
+      bool allZero = true, gray = true, opaque = true;
+      for (int ly = 0; ly < stride; ++ly) {
+        const int sy = std::clamp(ty * tileSize - 1 + ly, 0, height - 1);
+        for (int lx = 0; lx < stride; ++lx) {
+          const int sx = std::clamp(tx * tileSize - 1 + lx, 0, width - 1);
+          const auto* src = premul.data() + (static_cast<std::size_t>(sy) * width + sx) * 4;
+          auto* dst = patch.data() + (static_cast<std::size_t>(ly) * stride + lx) * 4;
+          std::memcpy(dst, src, 4);
+          allZero &= (src[0] | src[1] | src[2] | src[3]) == 0;
+          gray &= src[0] == src[1] && src[1] == src[2];
+          opaque &= src[3] == 255;
+        }
+      }
+      if (allZero) continue;
+      const int poolIdx = gray ? (opaque ? 1 : 2) : 0;
+      auto& pool = state[poolIdx];
+      std::vector<std::uint8_t> packed(static_cast<std::size_t>(stride) * stride * pool.bpp);
+      if (pool.bpp == 4) packed.assign(patch.begin(), patch.end());
+      else if (pool.bpp == 1) {
+        for (std::size_t i = 0; i < packed.size(); ++i) packed[i] = patch[i * 4];
+      } else {
+        for (std::size_t i = 0; i < packed.size() / 2; ++i) {
+          packed[i * 2] = patch[i * 4];
+          packed[i * 2 + 1] = patch[i * 4 + 3];
+        }
+      }
+      std::uint64_t h = 14695981039346656037ULL;
+      for (const auto b : packed) h = (h ^ b) * 1099511628211ULL;
+      auto& bucket = pool.byHash[h];
+      std::uint32_t tileIdx = UINT32_MAX;
+      for (const auto idx : bucket) {
+        if (std::memcmp(pool.tiles[idx].data(), packed.data(), packed.size()) == 0) {
+          tileIdx = idx; break;
+        }
+      }
+      if (tileIdx == UINT32_MAX) {
+        tileIdx = static_cast<std::uint32_t>(pool.tiles.size());
+        pool.tiles.push_back(std::move(packed));
+        bucket.push_back(tileIdx);
+      }
+      refs[static_cast<std::size_t>(ty) * cols + tx] = {poolIdx, tileIdx};
+    }
+  }
+  const int rgbaSlots = static_cast<int>(state[0].tiles.size());
+  const int rgSlots = (static_cast<int>(state[2].tiles.size()) + 1) / 2;
+  const int rSlots = (static_cast<int>(state[1].tiles.size()) + 3) / 4;
+  const int totalSlots = rgbaSlots + rgSlots + rSlots;
+  const int atlasW = totalSlots == 0 ? 1 : std::min(totalSlots, perRow) * stride;
+  const int atlasH = totalSlots == 0 ? 1 : ((totalSlots + perRow - 1) / perRow) * stride;
+  if (atlasH > 4096) return std::nullopt;
+  const std::size_t tableBytesCount = static_cast<std::size_t>(cols) * rows * 4U;
+  const std::size_t atlasBytesCount = static_cast<std::size_t>(atlasW) * atlasH * 4U;
+  if (retainedLimit > 0 && atlasBytesCount + tableBytesCount >= retainedLimit) return std::nullopt;
+  std::vector<std::uint8_t> atlas(atlasBytesCount, 0);
+  const auto slotOrigin = [&](int slot) -> std::array<int, 2> {
+    return {(slot % perRow) * stride, (slot / perRow) * stride};
+  };
+  for (int i = 0; i < rgbaSlots; ++i) {
+    const auto [ox, oy] = slotOrigin(i);
+    for (int ly = 0; ly < stride; ++ly) {
+      std::memcpy(atlas.data() + (static_cast<std::size_t>(oy + ly) * atlasW + ox) * 4,
+        state[0].tiles[i].data() + static_cast<std::size_t>(ly) * stride * 4, stride * 4);
+    }
+  }
+  for (std::size_t i = 0; i < state[2].tiles.size(); ++i) {
+    const int slot = rgbaSlots + static_cast<int>(i / 2);
+    const int chanOffset = static_cast<int>((i % 2) * 2);
+    const auto [ox, oy] = slotOrigin(slot);
+    for (int ly = 0; ly < stride; ++ly) {
+      for (int lx = 0; lx < stride; ++lx) {
+        const std::size_t src = (static_cast<std::size_t>(ly) * stride + lx) * 2;
+        const std::size_t dst = (static_cast<std::size_t>(oy + ly) * atlasW + ox + lx) * 4 + chanOffset;
+        atlas[dst] = state[2].tiles[i][src];
+        atlas[dst + 1] = state[2].tiles[i][src + 1];
+      }
+    }
+  }
+  for (std::size_t i = 0; i < state[1].tiles.size(); ++i) {
+    const int slot = rgbaSlots + rgSlots + static_cast<int>(i / 4);
+    const int chan = static_cast<int>(i % 4);
+    const auto [ox, oy] = slotOrigin(slot);
+    for (int ly = 0; ly < stride; ++ly) {
+      for (int lx = 0; lx < stride; ++lx) {
+        const std::size_t src = static_cast<std::size_t>(ly) * stride + lx;
+        const std::size_t dst = (static_cast<std::size_t>(oy + ly) * atlasW + ox + lx) * 4 + chan;
+        atlas[dst] = state[1].tiles[i][src];
+      }
+    }
+  }
+  std::vector<std::uint32_t> table(static_cast<std::size_t>(cols) * rows, 0);
+  for (std::size_t i = 0; i < refs.size(); ++i) {
+    const auto& r = refs[i];
+    if (r.pool < 0) continue;
+    int slot = 0;
+    std::uint32_t mode = 1;
+    if (r.pool == 0) { slot = static_cast<int>(r.index); mode = 1; }
+    else if (r.pool == 2) { slot = rgbaSlots + static_cast<int>(r.index / 2); mode = 6U + (r.index & 1U); }
+    else { slot = rgbaSlots + rgSlots + static_cast<int>(r.index / 4); mode = 2U + (r.index & 3U); }
+    const auto [ox, oy] = slotOrigin(slot);
+    table[i] = (mode << 28U) | (static_cast<std::uint32_t>(oy + 1) << 12U) | static_cast<std::uint32_t>(ox + 1);
+  }
+  PreparedTexture out;
+  out.layout = {width, height, TextureKind::FilteredTiles, {}};
+  plane(out, atlasW, atlasH, TextureFormat::RGBA8, std::move(atlas));
+  std::vector<std::uint8_t> tableBytes(tableBytesCount);
+  std::memcpy(tableBytes.data(), table.data(), tableBytesCount);
+  plane(out, cols, rows, TextureFormat::R32UI, std::move(tableBytes));
+  return out;
+}
 }
 std::optional<PreparedTexture> makePreparedTexture(const ImagePixels& pixels, const ImageStorageDecision* known,
                                                   std::size_t retainedLimit, bool allowPalettes) {
@@ -246,7 +389,15 @@ std::optional<PreparedTexture> makePreparedTexture(const ImagePixels& pixels, co
       if (page->indexBytes == 3 && page->gpuBytes()+page->colors.size()*3 < pixels.rgba.size()) return sparse(std::move(*page));
     }
   }
+  auto filtered = makeFilteredTilePage(pixels.width, pixels.height, pixels.rgba, retainedLimit);
   auto channel = makeChannelBlockPage(pixels.width, pixels.height, pixels.rgba, retainedLimit);
+  if (filtered) {
+    std::size_t filteredBytes = 0;
+    for (const auto& b : filtered->bytes) filteredBytes += b.size();
+    const std::size_t channelBytes = channel ? channel->bytes.size() + channel->blocks.size() * 16U : SIZE_MAX;
+    if (!channel || filteredBytes <= channelBytes * 7U / 5U || filteredBytes <= channelBytes + 4ULL * 1024U * 1024U)
+      return filtered;
+  }
   if (!channel) return {};
   PreparedTexture out; out.layout = {pixels.width, pixels.height, TextureKind::Channels, {}};
   const int height = (channel->bytes.size()+8191)/8192;

@@ -753,7 +753,7 @@ void registerAssetMethods(napi_env env, napi_value exports) {
 #else
   set(env, version, "colorManagement", string(env, "none"));
 #endif
-  set(env, version, "processor", string(env, "images-v25-auto-texture-chunks-astcenc4.7"));
+  set(env, version, "processor", string(env, "images-v26-auto-texture-chunks-astcenc4.7"));
   set(env, version, "decoder", string(env, std::string("libpng-") + png_get_libpng_ver(nullptr) + "-rgba8-color-v2"));
   set(env, version, "pageSize", number(env, 2048));
   set(env, assets, "preparationVersion", version);
