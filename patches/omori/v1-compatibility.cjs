@@ -104,8 +104,27 @@ function restoreGeneralOptions(system) {
   system.plugins.optionsMenu.buttonHints = Object.assign({ confirm: 'CONFIRM', cancel: 'CANCEL' }, system.plugins.optionsMenu.buttonHints);
   return system;
 }
-function prepare({ native, files }) {
-  native.runtime.omoriBackports = {};
+const dataBackportKeys = ['sleepingCharacters', 'summoningCircleGuard', 'generalOptionsSchema'];
+function asciiLower(name) {
+  return String(name).replace(/[A-Z]/g, letter => letter.toLowerCase());
+}
+const watchedPaths = [
+  'data/Map343.json',
+  'data/Map466.json',
+  'maps/map466.json',
+  'img/characters/' + sheetName + '.png',
+  'img/tilesets/DW_NeighborsRoom.png',
+  'languages/en/System.yaml'
+];
+const watchedKeys = new Set(watchedPaths.map(asciiLower));
+const sixGeneralOptions = ['screenResolution', 'fullScreen', 'gamepadTips', 'textSkip', 'battleLogSpeed', 'alwaysDash'];
+function hasCompatibleGeneralOptions(system) {
+  const general = system?.plugins?.optionsMenu?.general;
+  return !!general && JSON.stringify(Object.keys(general)) === JSON.stringify(sixGeneralOptions);
+}
+function evaluate({ native, files }) {
+  const backports = {};
+  const outputs = new Map();
   const sheet = 'img/characters/' + sheetName + '.png';
   const data = 'data/Map466.json', map = 'maps/map466.json', atlas = 'img/tilesets/DW_NeighborsRoom.png';
   const hasSheet = files.exists(sheet), hasAtlas = files.exists(atlas);
@@ -116,29 +135,62 @@ function prepare({ native, files }) {
   }
   const needsSheet = !hasSheet && hasAtlas && (bedroom || mapData?.events?.some(event =>
     event?.pages?.some(page => page.image?.characterName === sheetName)));
+  if (bedroom) {
+    outputs.set(data, Buffer.from(JSON.stringify(bedroom.map)));
+    outputs.set(map, Buffer.from(JSON.stringify(bedroom.tiled)));
+  }
+  if (needsSheet) outputs.set(sheet, makeSheet(native, files.read(atlas)));
+  if (bedroom || needsSheet) backports.sleepingCharacters = true;
+
   const circlePath = 'data/Map343.json';
   const circle = files.exists(circlePath) ? restoreSummoningCircle(JSON.parse(files.read(circlePath))) : null;
-  const systemPath = 'languages/en/System.yaml';
-  let system, yaml;
-  if (files.exists(systemPath)) {
-    yaml = require(native.fs.resolvePath('js/libs/js-yaml-master/index.js'));
-    system = restoreGeneralOptions(yaml.safeLoad(files.read(systemPath).toString('utf8')));
+  if (circle) {
+    outputs.set(circlePath, Buffer.from(JSON.stringify(circle)));
+    backports.summoningCircleGuard = true;
   }
-  if (!bedroom && !needsSheet && !circle && !system) return null;
+
+  const systemPath = 'languages/en/System.yaml';
+  if (files.exists(systemPath) && native.fs?.exists?.('js/libs/js-yaml-master/index.js') &&
+      typeof native.fs?.resolvePath === 'function') {
+    const yaml = require(native.fs.resolvePath('js/libs/js-yaml-master/index.js'));
+    const parsed = yaml.safeLoad(files.read(systemPath).toString('utf8'));
+    const system = restoreGeneralOptions(parsed);
+    if (system) {
+      outputs.set(systemPath, Buffer.from(yaml.dump(system)));
+      backports.generalOptionsSchema = true;
+    } else if (hasCompatibleGeneralOptions(parsed)) {
+      backports.generalOptionsSchema = true;
+    }
+  }
+  return { files: outputs, backports };
+}
+function applyDataBackports(native, backports) {
+  const next = { ...(native.runtime.omoriBackports || {}) };
+  for (const key of dataBackportKeys) delete next[key];
+  Object.assign(next, backports);
+  native.runtime.omoriBackports = next;
+}
+function prepare({ native, files }) {
+  const evaluated = evaluate({ native, files });
+  if (!evaluated.files.size) {
+    applyDataBackports(native, evaluated.backports);
+    return null;
+  }
   const output = files.createLayer('omori-v1');
   try {
-    if (bedroom) {
-      output.write(data, Buffer.from(JSON.stringify(bedroom.map)));
-      output.write(map, Buffer.from(JSON.stringify(bedroom.tiled)));
-    }
-    if (needsSheet) output.write(sheet, makeSheet(native, files.read(atlas)));
-    if (circle) output.write(circlePath, Buffer.from(JSON.stringify(circle)));
-    if (system) output.write(systemPath, Buffer.from(yaml.dump(system)));
+    for (const [name, bytes] of evaluated.files) output.write(name, bytes);
     const result = output.finish();
-    if (bedroom || needsSheet) native.runtime.omoriBackports.sleepingCharacters = true;
-    if (circle) native.runtime.omoriBackports.summoningCircleGuard = true;
-    if (system) native.runtime.omoriBackports.generalOptionsSchema = true;
+    applyDataBackports(native, evaluated.backports);
     return result;
   } finally { output.dispose(); }
 }
-module.exports = { prepare, restoreBedroom, restoreSummoningCircle, restoreGeneralOptions };
+module.exports = {
+  prepare,
+  evaluate,
+  applyDataBackports,
+  restoreBedroom,
+  restoreSummoningCircle,
+  restoreGeneralOptions,
+  watchedPaths,
+  watchedKeys
+};

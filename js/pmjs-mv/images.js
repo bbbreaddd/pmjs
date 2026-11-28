@@ -164,7 +164,9 @@ PMJS.mv.bitmap.requestImageFile = pmjsBitmapRequestImageWrap()(Bitmap.prototype.
           .replace(/^file:\/\/\/game\//, '').replace(/^\.\//, '');
         var prepared = NativeHost.assets && typeof NativeHost.assets.hasDecrypted === 'function' &&
           NativeHost.assets.hasDecrypted(path);
-        var key = !prepared && typeof url === 'string' && /\.png$/.test(url) && nativeKey(this);
+        var plaintextOverride = !prepared && NativeHost.fs && typeof NativeHost.fs.exists === 'function' &&
+          NativeHost.fs.exists(path);
+        var key = !prepared && !plaintextOverride && typeof url === 'string' && /\.png$/.test(url) && nativeKey(this);
         if (!prepared && (!key || !PMJS.images.loadEncrypted ||
             !(bitmap._image instanceof NativeImage) || typeof NativeHost.images.loadEncryptedAsync !== 'function'))
           return guestDecrypt.apply(this, arguments);

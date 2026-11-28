@@ -70,6 +70,7 @@
       function synchronize() {
         publication = publication.then(async function() {
           if (installed) await host.publish(files($modLoader.overlayFS, ''));
+          if (PMJS.omori && typeof PMJS.omori.syncBackports === 'function') PMJS.omori.syncBackports();
           if (PMJS.fonts) {
             var stylesheet = NativeHost.fs.readText('fonts/gamefont.css');
             if (stylesheet !== null && stylesheet !== lastStylesheet) {
@@ -165,6 +166,11 @@
           var keyArgument = nw.App.argv.find(function(argument) { return /^(?:--)?[a-f0-9]{32}$/i.test(argument); });
           if (!keyArgument) keyArgument = '--' + NativeHost.runtime.omoriFiles.getEncryptionKey();
           nw.App.argv = [keyArgument].concat(nw.App.argv.filter(function(argument) { return argument !== keyArgument; }));
+          var virtualFiles = PMJS.config.virtualFiles = PMJS.config.virtualFiles || {};
+          virtualFiles.directoryEntryAliases = Object.assign({}, virtualFiles.directoryEntryAliases);
+          var languages = Object.assign({}, virtualFiles.directoryEntryAliases.languages,
+            { '.hero': '.HERO', '.yaml': '.HERO', '.yml': '.HERO' });
+          virtualFiles.directoryEntryAliases.languages = languages;
         }
         for (var script of host.scripts) {
           if (script.path) { NativeHost.runtime.loadScript(script.path); adapt(script.path); }

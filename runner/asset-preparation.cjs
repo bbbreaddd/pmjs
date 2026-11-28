@@ -485,7 +485,17 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
     const frames = new Map([...discoveredFrames].map(([source, frame]) => [source.toLowerCase(), frame]));
     const automaticRecipes = { version: 1, sideview: [...frames].sort(([a], [b]) => a.localeCompare(b)) };
     report('discover');
-    const sources = session.inventory.filter(source => safeSource(source) || decryptedSource(source));
+    const inventorySources = session.inventory.filter(source => safeSource(source) || decryptedSource(source));
+    const sourceSet = new Set(inventorySources);
+    const resolveGameFile = native.runtime?.gameFiles?.resolve;
+    const sources = typeof resolveGameFile === 'function'
+      ? inventorySources.filter(source => {
+          const logical = decryptedSource(source);
+          if (!logical || !sourceSet.has(logical)) return true;
+          const resolved = resolveGameFile(source);
+          return !resolved || resolved === source;
+        })
+      : inventorySources;
     const settings = await encryptionSettings(native, gameRoot, session.files);
     result.total = sources.length;
     workTotal = sources.filter(source => !isAudioViewSource(source)).length;

@@ -1,6 +1,11 @@
 ;(function() {
   PMJS.omori = PMJS.omori || {};
-  PMJS.omori.backports = Object.freeze(Object.assign({}, NativeHost.runtime.omoriBackports));
+  function syncBackports() {
+    PMJS.omori.backports = Object.freeze(Object.assign({}, NativeHost.runtime.omoriBackports));
+    return PMJS.omori.backports;
+  }
+  Object.defineProperty(PMJS.omori, 'syncBackports', { value: syncBackports, configurable: true });
+  syncBackports();
   var readScript = NativeHost.runtime.readGameScript;
   if (readScript) NativeHost.runtime.readGameScript = function(name) {
     var source = readScript(name);
@@ -11,7 +16,7 @@
   function applied(name) {
     NativeHost.runtime.omoriBackports = Object.assign({}, NativeHost.runtime.omoriBackports);
     NativeHost.runtime.omoriBackports[name] = true;
-    PMJS.omori.backports = Object.freeze(Object.assign({}, NativeHost.runtime.omoriBackports));
+    syncBackports();
   }
   var textHandler, configHandler, beforeText;
   function textSkipReady() { if (textHandler && configHandler) applied('textSkip'); }
@@ -31,6 +36,7 @@
   PMJS.plugins.onLoaded('Omori BASE', 'port.omori.v1.config', function() {
     if (!PMJS.omori.backports.generalOptionsSchema) return;
     var make = ConfigManager.makeData, apply = ConfigManager.applyData, restore = ConfigManager.restoreDefaultConfig;
+    if (String(make).includes('textSkip') && String(apply).includes('textSkip')) return;
     if (ConfigManager.textSkip === undefined) ConfigManager.textSkip = false;
     ConfigManager.makeData = function() {
       return Object.assign({}, make.apply(this, arguments), { textSkip: !!this.textSkip });
@@ -50,6 +56,7 @@
   PMJS.plugins.onLoaded('Omori Main Menu - Scene Options', 'port.omori.v1.options', function() {
     if (!PMJS.omori.backports.generalOptionsSchema) return;
     var original = Window_OmoMenuOptionsGeneral.prototype.processOptionCommand;
+    if (String(original).includes('textSkip')) return;
     Window_OmoMenuOptionsGeneral.prototype.processOptionCommand = function() {
       var index = this.index(), choice = this._optionsList[index].index;
       if (index < 3) {

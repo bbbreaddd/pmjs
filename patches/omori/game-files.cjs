@@ -4,7 +4,7 @@ const path = require('node:path').posix;
 const { TextDecoder } = require('node:util');
 const header = Buffer.from('5250474d560000000003010000000000', 'hex');
 const extensions = { '.kel': '.json', '.aubrey': '.json', '.hero': '.yaml', '.pluto': '.yaml',
-  '.omori': '.js', '.rpgmvp': '.png', '.rpgmvo': '.ogg', '.rpgmvm': '.m4a' };
+  '.yml': '.yaml', '.omori': '.js', '.rpgmvp': '.png', '.rpgmvo': '.ogg', '.rpgmvm': '.m4a' };
 function normalize(name) { return path.normalize(String(name).replace(/\\/g, '/').replace(/^\/game\//, '')); }
 function canonical(name) { return normalize(name).replace(/\.[^/.]+$/, extension => extensions[extension.toLowerCase()] || extension); }
 function createGameFiles({ native, read, readAsync = async name => read(name), createLayer, configuration = {} }) {

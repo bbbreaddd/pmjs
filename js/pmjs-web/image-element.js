@@ -123,6 +123,8 @@ Object.defineProperty(NativeImage.prototype, 'src', {
 PMJS.images.loadEncrypted = function(image, url, key, logicalPath) {
   if (!image || typeof url !== 'string' || !url || Object.getPrototypeOf(image) !== NativeImage.prototype ||
       Object.prototype.hasOwnProperty.call(image, 'src') || typeof NativeHost.images.loadEncryptedAsync !== 'function') return false;
+  if (logicalPath && NativeHost.fs && typeof NativeHost.fs.exists === 'function' &&
+      NativeHost.fs.exists(logicalPath)) return false;
   loadSource.call(image, url, { key: key, logicalPath: logicalPath });
   return true;
 };
