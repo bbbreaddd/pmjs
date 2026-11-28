@@ -67,9 +67,9 @@ async function main() {
   assert.throws(() => native.assets.processImage(imageSource, path.join(root, 'invalid-codec'), null,
     path.join(gameRoot, imageSource), null, { pageCodec: 'lz4hc3' }), /pageCodec must be png or lz4/);
   assert.equal(native.assets.preparationVersion.processor, 'images-v27-auto-texture-chunks-astcenc4.7');
-  assert.equal(cold.decrypted, 3);
+  assert.equal(cold.decrypted, 2);
   const partial = native.assets.installDecrypted([{ ...cold.decryptedEntries[0], source: 'invalid', fileHash: 'bad' }, ...cold.decryptedEntries], false, true);
-  assert.equal(partial.accepted.length, 3);
+  assert.equal(partial.accepted.length, 2);
   assert.equal(partial.rejected.length, 1);
   assert.equal(partial.rejected[0].id, 'invalid');
   assert.equal(cold.installed, pageCodec === 'lz4' ? 2 : 1);
@@ -84,7 +84,7 @@ async function main() {
   assert.equal(cold.entries[0].descriptor.cells.length, 12, 'all character cells retained');
   assert.deepEqual(Buffer.from(native.fs.readBytes('audio/bgm/tone.ogg')), wav);
   const original = native.images.loadBytes(imageBytes);
-  const prepared = await native.images.loadAsync('img/characters/!$actor.png');
+  const prepared = await native.images.loadEncryptedAsync(imageSource, key.toString('hex'));
   assert.deepEqual([prepared.width, prepared.height], [width, height]);
   const canvas = native.canvas.create(width, height);
   native.canvas.drawImage(canvas.handle, original.handle, 0, 0, width, height, 0, 0, width, height, 1);
@@ -103,7 +103,7 @@ async function main() {
   assert.equal(warm.generated, 0);
   assert.equal(warm.hits, 4);
   assert.equal(warm.negativeHits, pageCodec === 'lz4' ? 0 : 1);
-  assert.equal(warm.decrypted, 3);
+  assert.equal(warm.decrypted, 2);
   native.assets.installDecrypted(warm.decryptedEntries, true);
   const drifted = warm.decryptedEntries.map(entry => {
     const drift = identity => { if (!identity) return identity; const parts = identity.split(':'); parts[parts.length - 6] = String(BigInt(parts[parts.length - 6]) + 1n); return parts.join(':'); };
@@ -130,8 +130,10 @@ async function main() {
   native.assets.consumePreparationInvalidations();
   assert.equal(native.assets.hasDecrypted('audio/bgm/tone.ogg'), false);
   assert.equal(native.assets.consumePreparationInvalidations(), 3, 'changed encryption settings invalidate affected prepared resources');
-  assert.equal(native.assets.hasDecrypted('img/characters/!$actor.png'), true,
+  const replacementAfter = await native.images.loadAsync('img/characters/!$actor.png');
+  assert.deepEqual([replacementAfter.width, replacementAfter.height], [2, 2],
     'explicit plaintext replacements remain readable independently of encryption settings');
+  native.images.release(replacementAfter.handle);
   fs.rmSync(options.cacheRoot, { recursive: true, force: true });
   for (let frame = 0; frame < 61; ++frame) native.beginFrame();
   native.canvas.clear(canvas.handle);

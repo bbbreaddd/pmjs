@@ -281,6 +281,7 @@ class ImageStore {
       bool premultiplied = true, bool requireSafeLinearSampling = false);
   std::optional<PaletteImageRegion> resolvePaletteImage(ImageHandle handle, bool premultiplied);
   bool hasPaletteStorage(ImageHandle handle) const;
+  bool hasBlockStorage(ImageHandle handle) const;
   std::uint64_t sceneryFullFallbacks() const { return sceneryFullFallbacks_; }
   void setPreparedPageSplitThresholdBytes(std::size_t bytes);
   std::size_t preparedPageSplitThresholdBytes() const { return preparedPageSplitThresholdBytes_; }
@@ -562,6 +563,15 @@ class ImageStore {
   bool detachSharedTexture(Slot& slot);
   bool promoteToRgba(Slot& slot, const void* replacement = nullptr);
   std::deque<Slot> slots_;
+  struct BlockRegionEntry {
+    ImageHandle parent = 0;
+    std::size_t cell = 0;
+    ImageHandle region = 0;
+    std::size_t bytes = 0;
+  };
+  static constexpr std::size_t maxBlockRegionCacheBytes = 8U * 1024U * 1024U;
+  std::vector<BlockRegionEntry> recentBlockRegions_;
+  std::size_t blockRegionCacheBytes_ = 0;
   std::unordered_map<std::string, ImageHandle> pathCache_;
   std::shared_ptr<PreparationFailures> preparationFailures_ = std::make_shared<PreparationFailures>();
   std::shared_ptr<std::atomic<unsigned>> preparationInvalidations_ = std::make_shared<std::atomic<unsigned>>(0);

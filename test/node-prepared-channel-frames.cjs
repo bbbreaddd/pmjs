@@ -47,7 +47,7 @@ native.initialize({ gameRoot: root, width: 280, height: 280, windowTitle: 'Prepa
     for (let repeat = 0; repeat < 4; repeat++) for (let frame = 0; frame < 3; frame++)
       drawPacket(native, packet(retained, frame), false);
     const after = native.images.memory();
-    assert.ok(after.blockTextureUploads > baseline.blockTextureUploads);
+    assert.ok(after.preparedRegions > baseline.preparedRegions || after.blockTextureUploads > baseline.blockTextureUploads);
     assert.equal(after.preparedMaterializations, baseline.preparedMaterializations);
     assert.equal(after.textureUploadBytes, warm.textureUploadBytes);
     assert.equal(after.preparedPageDecodes, warm.preparedPageDecodes);

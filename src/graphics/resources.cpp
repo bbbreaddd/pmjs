@@ -1074,6 +1074,13 @@ bool ImageStore::hasPaletteStorage(ImageHandle handle) const {
   return bool(slot.palette);
 }
 
+bool ImageStore::hasBlockStorage(ImageHandle handle) const {
+  if (!compactSamplingEnabled_ || !inspect(handle)) return false;
+  const auto& slot = slots_[(handle & indexMask) - 1U];
+  return slot.prepared && !slot.tiles && !slot.palette &&
+    !slot.prepared->texturePath.empty() && slot.prepared->requiresSourceSampling();
+}
+
 bool ImageStore::realizeSourceTexture(ImageHandle handle) try {
   auto& slot = slots_[(handle & indexMask)-1U];
   if (!slot.prepared || !slot.prepared->requiresSourceSampling() || slot.texture || slot.premultipliedTexture) return false;
@@ -1835,12 +1842,12 @@ std::optional<bool> ImageStore::isOpaque(ImageHandle handle, bool allowExternalS
   const auto index = (handle & indexMask) - 1U;
   // Render targets retain an alpha channel regardless of their current pixels.
   if (slots_[index].renderTarget) return false;
+  if (slots_[index].opacityRevision == *revision)
+    return slots_[index].opaque;
   if (!allowExternalStorage &&
       (slots_[index].astc || slots_[index].compressedBytes || slots_[index].prepared)) {
     return false;
   }
-  if (slots_[index].opacityRevision == *revision)
-    return slots_[index].opaque;
   const auto info = inspect(handle);
   constexpr std::size_t maxProofBytes = 4U * 1024U * 1024U;
   if (!allowExternalStorage &&
@@ -2212,7 +2219,18 @@ void ImageStore::clearPrepared(Slot& slot) {
     if (!page.sharedTexture && page.texture) glDeleteTextures(1, &page.texture);
   }
   gpuBytes_ -= slot.prepared->gpuBytes;
-  for (const auto image : slot.prepared->cellImages) if (image) release(image);
+  for (const auto image : slot.prepared->cellImages) {
+    if (!image) continue;
+    for (auto it = recentBlockRegions_.begin(); it != recentBlockRegions_.end();) {
+      if (it->region == image) {
+        blockRegionCacheBytes_ -= it->bytes;
+        it = recentBlockRegions_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    release(image);
+  }
   slot.prepared.reset();
 }
 
@@ -2765,6 +2783,110 @@ std::optional<ImagePixels> ImageStore::readPreparedRegion(PreparedBacking& backi
   return result;
 }
 
+namespace {
+bool readTextureArtifactRegion(const std::filesystem::path& path, int x, int y,
+    int width, int height, ImagePixels& destination, int destinationX, int destinationY) {
+  std::unique_ptr<FILE, int(*)(FILE*)> file(std::fopen(path.c_str(), "rb"), &std::fclose);
+  if (!file || std::fseek(file.get(), 0, SEEK_END) != 0) return false;
+  const long fileSize = std::ftell(file.get());
+  if (fileSize <= 0) return false;
+  const TextureReader reader = [&](std::size_t offset, std::span<std::uint8_t> out) -> bool {
+    if (offset > static_cast<std::size_t>(fileSize) || out.size() > static_cast<std::size_t>(fileSize) - offset)
+      return false;
+    if (std::fseek(file.get(), static_cast<long>(offset), SEEK_SET) != 0) return false;
+    return std::fread(out.data(), 1, out.size(), file.get()) == out.size();
+  };
+  const auto layout = readTextureLayout(reader, static_cast<std::size_t>(fileSize));
+  if (!layout || (layout->kind != TextureKind::Channels && layout->kind != TextureKind::FilteredTiles))
+    return false;
+  if (x < 0 || y < 0 || width <= 0 || height <= 0 ||
+      x + width > layout->width || y + height > layout->height) return false;
+  std::vector<std::uint8_t> plane0, plane1;
+  plane0.resize(static_cast<std::size_t>(layout->planes[0].width) * layout->planes[0].height *
+    textureTexelBytes(layout->planes[0].format));
+  plane1.resize(static_cast<std::size_t>(layout->planes[1].width) * layout->planes[1].height *
+    textureTexelBytes(layout->planes[1].format));
+  std::size_t staging = 0;
+  const auto consume = [&](std::size_t planeIndex, const TextureChunk& chunk, std::span<const std::uint8_t> data) {
+    auto& target = planeIndex == 0 ? plane0 : plane1;
+    const auto stride = static_cast<std::size_t>(layout->planes[planeIndex].width) *
+      textureTexelBytes(layout->planes[planeIndex].format);
+    const auto offset = static_cast<std::size_t>(chunk.y) * stride;
+    if (offset + data.size() > target.size()) return false;
+    std::memcpy(target.data() + offset, data.data(), data.size());
+    return true;
+  };
+  if (!readTextureChunks(reader, *layout, consume, staging)) return false;
+  const auto dstStride = static_cast<std::size_t>(destination.width) * 4U;
+  if (layout->kind == TextureKind::Channels) {
+    const int cols = (layout->width + 7) / 8;
+    const auto* table = reinterpret_cast<const std::uint32_t*>(plane1.data());
+    for (int row = 0; row < height; ++row) {
+      const int sy = y + row;
+      const int by = sy / 8, ly = sy % 8;
+      auto* dstRow = destination.rgba.data() + static_cast<std::size_t>(destinationY + row) * dstStride +
+        static_cast<std::size_t>(destinationX) * 4U;
+      for (int col = 0; col < width; ++col) {
+        const int sx = x + col;
+        const int bx = sx / 8, lx = sx % 8;
+        const std::size_t blockOffset = (static_cast<std::size_t>(by) * cols + bx) * 4U;
+        for (int c = 0; c < 4; ++c) {
+          const std::uint32_t entry = table[blockOffset + c];
+          dstRow[col * 4 + c] = (entry & 0x80000000U)
+            ? static_cast<std::uint8_t>(entry & 0xFFU)
+            : plane0[entry + static_cast<std::size_t>(ly) * 8U + lx];
+        }
+      }
+    }
+    return true;
+  }
+  const int cols = (layout->width + 15) / 16;
+  const int atlasW = static_cast<int>(layout->planes[0].width);
+  const auto* table = reinterpret_cast<const std::uint32_t*>(plane1.data());
+  auto unpremul = [](std::uint8_t v, std::uint8_t a) -> std::uint8_t {
+    if (a == 0) return 0;
+    if (a == 255) return v;
+    return static_cast<std::uint8_t>(std::min<int>(255, (int(v) * 255 + a / 2) / a));
+  };
+  for (int row = 0; row < height; ++row) {
+    const int sy = y + row;
+    const int ty = sy / 16, ly = sy % 16;
+    auto* dstRow = destination.rgba.data() + static_cast<std::size_t>(destinationY + row) * dstStride +
+      static_cast<std::size_t>(destinationX) * 4U;
+    for (int col = 0; col < width; ++col) {
+      const int sx = x + col;
+      const int tx = sx / 16, lx = sx % 16;
+      const std::uint32_t entry = table[static_cast<std::size_t>(ty) * cols + tx];
+      if (entry == 0) {
+        std::memset(dstRow + col * 4, 0, 4);
+        continue;
+      }
+      const std::uint32_t mode = entry >> 28U;
+      const int oy = static_cast<int>((entry >> 12U) & 0xFFFFU) - 1;
+      const int ox = static_cast<int>(entry & 0xFFFU) - 1;
+      const std::size_t src = (static_cast<std::size_t>(oy + 1 + ly) * atlasW + (ox + 1 + lx)) * 4U;
+      if (mode == 1) {
+        const std::uint8_t a = plane0[src + 3];
+        dstRow[col * 4] = unpremul(plane0[src], a);
+        dstRow[col * 4 + 1] = unpremul(plane0[src + 1], a);
+        dstRow[col * 4 + 2] = unpremul(plane0[src + 2], a);
+        dstRow[col * 4 + 3] = a;
+      } else if (mode >= 6) {
+        const int ch = static_cast<int>((mode - 6U) * 2U);
+        const std::uint8_t a = plane0[src + ch + 1];
+        const std::uint8_t v = unpremul(plane0[src + ch], a);
+        dstRow[col * 4] = v; dstRow[col * 4 + 1] = v; dstRow[col * 4 + 2] = v; dstRow[col * 4 + 3] = a;
+      } else {
+        const int ch = static_cast<int>(mode - 2U);
+        const std::uint8_t v = plane0[src + ch];
+        dstRow[col * 4] = v; dstRow[col * 4 + 1] = v; dstRow[col * 4 + 2] = v; dstRow[col * 4 + 3] = 255;
+      }
+    }
+  }
+  return true;
+}
+}  // namespace
+
 bool ImageStore::readPreparedRegionInto(PreparedBacking& backing, int x, int y,
     int width, int height, ImagePixels& destination, int destinationX,
     int destinationY, bool* acquired) {
@@ -2798,6 +2920,9 @@ bool ImageStore::readPreparedRegionInto(PreparedBacking& backing, int x, int y,
   if (backing.descriptor.uniform) {
     fillRectangle(x, y, x + width, y + height, *backing.descriptor.uniform);
     return true;
+  }
+  if (backing.pages.empty() && !backing.texturePath.empty()) {
+    return readTextureArtifactRegion(backing.texturePath, x, y, width, height, destination, destinationX, destinationY);
   }
   for (const auto& cell : backing.descriptor.cells) {
     const int left = std::max(x, cell.rect[0]), top = std::max(y, cell.rect[1]);
@@ -3055,7 +3180,9 @@ std::optional<SpriteImageRegion> ImageStore::resolveSpriteRegion(ImageHandle han
   }
   if (!slot.prepared) return std::nullopt;
   auto& backing = *slot.prepared;
-  if (backing.requiresSourceSampling()) return std::nullopt;
+  const bool blockBacked = !backing.texturePath.empty() && backing.requiresSourceSampling();
+  if (!blockBacked && backing.requiresSourceSampling()) return std::nullopt;
+  if (blockBacked && backing.descriptor.cells.empty()) return std::nullopt;
   if (backing.descriptor.uniform) {
     auto& image = backing.cellImages.back();
     if (!image) {
@@ -3101,7 +3228,39 @@ std::optional<SpriteImageRegion> ImageStore::resolveSpriteRegion(ImageHandle han
          static_cast<float>(cell.atlas[2]), static_cast<float>(cell.atlas[3])}, info->width, info->height, backing.descriptor.halo};
     }
     if (requireSafeLinearSampling) return std::nullopt;
-    if (backing.descriptor.framePages) {
+    if (blockBacked && backing.descriptor.cells.size() <= 1 &&
+        r[2] == info->width && r[3] == info->height) return std::nullopt;
+    const int halo = backing.descriptor.halo;
+    const auto extent = checkedImageExtent(r[2] + 2 * halo, r[3] + 2 * halo);
+    if (!extent) return std::nullopt;
+    if (blockBacked && extent->rgbaBytes > maxBlockRegionCacheBytes) return std::nullopt;
+    if (blockBacked) {
+      auto& image = backing.cellImages[i];
+      if (!image) {
+        while (blockRegionCacheBytes_ + extent->rgbaBytes > maxBlockRegionCacheBytes) {
+          auto victim = std::find_if(recentBlockRegions_.begin(), recentBlockRegions_.end(),
+            [&](const BlockRegionEntry& entry) {
+              return std::find(activePreparedFrames_.begin(), activePreparedFrames_.end(), entry.region) ==
+                activePreparedFrames_.end();
+            });
+          if (victim == recentBlockRegions_.end()) return std::nullopt;
+          const auto victimParent = (victim->parent & indexMask) - 1U;
+          if (victimParent < slots_.size() && slots_[victimParent].live && slots_[victimParent].prepared &&
+              victim->cell < slots_[victimParent].prepared->cellImages.size() &&
+              slots_[victimParent].prepared->cellImages[victim->cell] == victim->region) {
+            slots_[victimParent].prepared->cellImages[victim->cell] = 0;
+          }
+          release(victim->region);
+          blockRegionCacheBytes_ -= victim->bytes;
+          recentBlockRegions_.erase(victim);
+        }
+      } else {
+        std::erase_if(recentBlockRegions_, [&](const BlockRegionEntry& entry) {
+          return entry.region == image;
+        });
+        recentBlockRegions_.push_back({handle, i, image, extent->rgbaBytes});
+      }
+    } else if (backing.descriptor.framePages) {
       auto& recent = backing.recentCells;
       std::erase(recent, i);
       while (recent.size() >= 4) {
@@ -3114,9 +3273,6 @@ std::optional<SpriteImageRegion> ImageStore::resolveSpriteRegion(ImageHandle han
     }
     auto& image = backing.cellImages[i];
     if (!image) {
-      const int halo = backing.descriptor.halo;
-      const auto extent = checkedImageExtent(r[2]+2*halo, r[3]+2*halo);
-      if (!extent) return std::nullopt;
       const int left = std::max(0, r[0]-halo), top = std::max(0, r[1]-halo);
       const int right = std::min(info->width, r[0]+r[2]+halo), bottom = std::min(info->height, r[1]+r[3]+halo);
       auto content = readPixelsRegion(handle, left, top, right-left, bottom-top);
@@ -3131,6 +3287,18 @@ std::optional<SpriteImageRegion> ImageStore::resolveSpriteRegion(ImageHandle han
       auto created = createDecoded(pixels);
       if (!created) return std::nullopt;
       image = created->handle;
+      if (premultiplied) {
+        auto& child = slots_[(image & indexMask) - 1U];
+        if (!child.premultipliedTexture && !child.cachedPixels) {
+          child.cachedPixels = std::move(pixels);
+          std::ignore = lookupPremultiplied(image);
+          child.cachedPixels.reset();
+        }
+      }
+      if (blockBacked) {
+        recentBlockRegions_.push_back({handle, i, image, extent->rgbaBytes});
+        blockRegionCacheBytes_ += extent->rgbaBytes;
+      }
     }
     if (backing.descriptor.framePages &&
         std::find(activePreparedFrames_.begin(), activePreparedFrames_.end(), image) == activePreparedFrames_.end()) {

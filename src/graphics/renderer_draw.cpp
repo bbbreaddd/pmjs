@@ -90,8 +90,11 @@ std::size_t coveredPrefix(const FramePacket& frame, ImageStore& images, int widt
         p2 != std::array<float, 2>{float(width), float(height)} ||
         p3 != std::array<float, 2>{0, float(height)}) continue;
     const auto image = images.inspect(command.image);
-    if (!image || command.source != std::array<float, 4>{0, 0, float(image->width), float(image->height)}) continue;
-    if (command.mipmap && (width < image->width || height < image->height)) continue;
+    if (!image || command.source[2] <= 0 || command.source[3] <= 0 ||
+        command.source[0] < 0 || command.source[1] < 0 ||
+        command.source[0] + command.source[2] > float(image->width) ||
+        command.source[1] + command.source[3] > float(image->height)) continue;
+    if (command.mipmap && (width < command.source[2] || height < command.source[3])) continue;
     // Uncached fallback opacity excludes compressed and prepared storage.
     if (images.isOpaque(command.image, false).value_or(false)) return index - 1;
   }
@@ -880,8 +883,9 @@ void Renderer::renderScene() {
     const bool derivedEligible = frameEligible && derivedSampling && (!command.appliesSpriteColor || !command.nearest);
     const bool wholeSource = logicalInfo && command.source[0] == 0 && command.source[1] == 0 &&
       command.source[2] == logicalInfo->width && command.source[3] == logicalInfo->height;
-    auto derived = !wholeSource && !command.nearest && frameEligible && paletteEligible &&
-      images_.hasPaletteStorage(command.image) ? images_.resolveSpriteRegion(command.image,
+    auto derived = !wholeSource && !command.nearest && frameEligible &&
+      ((paletteEligible && images_.hasPaletteStorage(command.image)) ||
+       images_.hasBlockStorage(command.image)) ? images_.resolveSpriteRegion(command.image,
         command.source[0], command.source[1], command.source[2], command.source[3],
         command.pixiSpritePacking && !command.premultipliedSpriteTexture) :
       std::optional<SpriteImageRegion>{};
