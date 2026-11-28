@@ -240,6 +240,7 @@ test('startup catalogs survive unrelated runner edits and explain incompatible v
 
   assert.equal(await loadUpdatedCatalog({ ...options, pageCodec: 'lz4' }), null);
   assert.ok(f.warnings.at(-1).includes('catalog signature changed: pageCodec'));
+  assert.ok(f.warnings.at(-1).includes('pageCodec:'));
   assert.equal(await loadUpdatedCatalog({ ...options, processorIdentity: { processor: 'override' } }), null);
   assert.ok(f.warnings.at(-1).includes('catalog signature changed: imageProcessor'));
   assets.preparationVersion = { processor: 'fixture-v2' };

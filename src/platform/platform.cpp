@@ -42,8 +42,13 @@ bool environmentFlag(const char* name) {
   return text == "1" || text == "true" || text == "on" || text == "yes";
 }
 
-void printLoadedLibraries() {
-  if (!environmentFlag("PMJS_GRAPHICS_DIAGNOSTICS")) return;
+bool platformDiagnosticsEnabled() {
+  return environmentFlag("PMJS_PLATFORM_DIAGNOSTICS") ||
+         environmentFlag("PMJS_GRAPHICS_DIAGNOSTICS");
+}
+
+void printLoadedLibraries(bool force = false) {
+  if (!force && !platformDiagnosticsEnabled()) return;
   dl_iterate_phdr([](dl_phdr_info* info, std::size_t, void*) {
     const std::string name = info->dlpi_name ? info->dlpi_name : "";
     if (name.find(".so") != std::string::npos || name.find(".node") != std::string::npos)
@@ -301,7 +306,7 @@ Platform::Platform(int width, int height, std::string title) {
       exitHotkeys_.push_back(button);
     }
   }
-  if (environmentFlag("PMJS_GRAPHICS_DIAGNOSTICS")) {
+  if (platformDiagnosticsEnabled()) {
     SDL_version compiled{}, runtime{};
     SDL_VERSION(&compiled);
     SDL_GetVersion(&runtime);
@@ -330,7 +335,7 @@ Platform::Platform(int width, int height, std::string title) {
     const bool linked = dladdr(symbol, &info) && info.dli_fname;
     if (!inherited && linked) pinned = SDL_setenv(name, info.dli_fname, 0) == 0;
     const char* origin = inherited ? "environment" : pinned ? "pinned by PMJS" : "default";
-    if (environmentFlag("PMJS_GRAPHICS_DIAGNOSTICS")) {
+    if (platformDiagnosticsEnabled()) {
       Log() << "[pmjs-platform] requested_driver " << name << "=\""
             << (std::getenv(name) ? std::getenv(name) : "default") << "\" origin=\"" << origin
             << "\" linked_symbol_provider=\"" << (linked ? info.dli_fname : "unknown") << "\"\n";
@@ -343,7 +348,7 @@ Platform::Platform(int width, int height, std::string title) {
   Log() << "[pmjs-platform] stage=sdl-init begin\n";
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_AUDIO) != 0) {
     const std::string error = SDL_GetError();
-    printLoadedLibraries();
+    printLoadedLibraries(true);
     Log(LogLevel::Error) << "[pmjs-platform] stage=sdl-init failed: " << error << '\n';
     SDL_Quit();
     throw std::runtime_error("SDL_Init failed: " + error);
@@ -420,7 +425,7 @@ Platform::Platform(int width, int height, std::string title) {
     window_ = nullptr;
   }
   if (!context_) {
-    printLoadedLibraries();
+    printLoadedLibraries(true);
     SDL_Quit();
     throw std::runtime_error(creationErrors);
   }
@@ -434,7 +439,7 @@ Platform::Platform(int width, int height, std::string title) {
   glGetIntegerv(GL_MAJOR_VERSION, &contextMajor);
   const auto* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
   if (contextMajor < 3 || !version || std::string(version).rfind("OpenGL ES ", 0) != 0) {
-    printLoadedLibraries();
+    printLoadedLibraries(true);
     SDL_GL_DeleteContext(context_);
     context_ = nullptr;
     SDL_DestroyWindow(window_);
@@ -452,7 +457,7 @@ Platform::Platform(int width, int height, std::string title) {
   const int swapResult = SDL_GL_SetSwapInterval(requestedSwapInterval_);
   swapIntervalAccepted_ = swapResult == 0;
   swapInterval_ = SDL_GL_GetSwapInterval();
-  if (environmentFlag("PMJS_GRAPHICS_DIAGNOSTICS")) {
+  if (platformDiagnosticsEnabled()) {
     {
       Log message;
       message << "[pmjs] swap_interval requested=" << requestedSwapInterval_
@@ -468,11 +473,18 @@ Platform::Platform(int width, int height, std::string title) {
     Log(LogLevel::Warning) << "[pmjs] SDL reports swap interval " << swapInterval_
               << " instead of requested " << requestedSwapInterval_ << '\n';
   }
-  printLoadedLibraries();
-  printGraphicsDiagnostics();
+  if (platformDiagnosticsEnabled()) printGraphicsDiagnostics();
   const auto* renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+  GLint contextMinor = 0;
+  glGetIntegerv(GL_MINOR_VERSION, &contextMinor);
   Log() << "[pmjs] graphics hardware renderer=\"" << (renderer ? renderer : "unknown")
-        << "\" software=" << (softwareRenderer(renderer) ? "yes" : "no") << '\n';
+        << "\" driver=" << (SDL_GetCurrentVideoDriver() ? SDL_GetCurrentVideoDriver() : "unknown")
+        << " gles=" << contextMajor << '.' << contextMinor
+        << " window=" << windowWidth_ << 'x' << windowHeight_
+        << " drawable=" << drawable.first << 'x' << drawable.second
+        << " swap_interval=" << swapInterval_
+        << " requested_swap_interval=" << requestedSwapInterval_
+        << " software=" << (softwareRenderer(renderer) ? "yes" : "no") << '\n';
   if (environmentFlag("PMJS_REQUIRE_HARDWARE_GL") && softwareRenderer(renderer)) {
     SDL_GL_DeleteContext(context_);
     context_ = nullptr;
@@ -954,7 +966,7 @@ void Platform::printGraphicsDiagnostics() const {
   glGetShaderPrecisionFormat(GL_FRAGMENT_SHADER, GL_HIGH_FLOAT, precisionRange, &precisionBits);
   Log() << "[pmjs-gpu] fragment_highp_bits=" << precisionBits
             << " fragment_highp_range=" << precisionRange[0] << ',' << precisionRange[1] << '\n';
-  printLoadedLibraries();
+  printLoadedLibraries(true);
 }
 
 }  // namespace pmjs

@@ -622,3 +622,16 @@ test('metadata changes with identical VFS backing bytes refresh installation ide
     fs.appendFileSync(path.join(g.gameRoot,'data/Map001.json'),' ');return descriptor;};
   const changed=await prepareMaps(g);assert.equal(changed.selected,0);assert.match(changed.maps[0].reason,/map dependency changed.*Map001/);
 });
+
+test('expected map preparation refusals are aggregated without per-map warnings', async t => {
+  const f = fixture(t);
+  const warnings = [];
+  f.logger = { info: () => {}, warn: message => warnings.push(message), error: () => {} };
+  fs.writeFileSync(path.join(f.gameRoot, 'data/Map001.json'), JSON.stringify({
+    width: 1, height: 1, tilesetId: 1, data: [0, 0, 0, 0, 0, 0]
+  }));
+  const result = await prepareMaps(f);
+  assert.equal(result.selected, 0);
+  assert.equal(result.refusalReasons['no-visual-tile-demand'], 1);
+  assert.equal(warnings.length, 0);
+});

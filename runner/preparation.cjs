@@ -105,8 +105,12 @@ async function prepareGameAssets(options) {
     result.inventory = { files: session.inventory.length, durationMs: session.inventoryMs };
     result.releaseCacheLease = session.releaseLease;
     Object.assign(result, createInvalidators(session.root, native, logger));
+    const refusalReasons = result.maps?.refusalReasons && Object.keys(result.maps.refusalReasons).length
+      ? ` refusalReasons=${JSON.stringify(result.maps.refusalReasons)}` : '';
+    const cacheMissReasons = result.images?.cacheMissReasons && Object.keys(result.images.cacheMissReasons).length
+      ? ` cacheMissReasons=${JSON.stringify(result.images.cacheMissReasons)}` : '';
     logger.info?.(`[pmjs] preparation inventory=${result.inventory.files} scan_ms=${result.inventory.durationMs.toFixed(1)} ` +
-      `outcomes=${JSON.stringify(result.outcomeCounts)} hashed_files=${result.validation.hashedFiles} hashed_bytes=${result.validation.hashedBytes} reused_files=${result.validation.reusedFiles}`);
+      `outcomes=${JSON.stringify(result.outcomeCounts)}${refusalReasons}${cacheMissReasons} hashed_files=${result.validation.hashedFiles} hashed_bytes=${result.validation.hashedBytes} reused_files=${result.validation.reusedFiles}`);
     return result;
   } catch (error) {
     logger.warn('[pmjs] preparation unavailable: ' + error.message);

@@ -165,6 +165,15 @@ async function resolveTiled(game, map) {
   }
   return { map, dependencies };
 }
+function mapRefusalReasonKey(reason) {
+  if (reason === 'no visual tile demand') return 'no-visual-tile-demand';
+  if (reason === 'packed allocations and geometry are not smaller') return 'not-smaller';
+  if (typeof reason !== 'string' || !reason) return 'declined';
+  if (reason.startsWith('missing tile source ')) return 'missing-tile-source';
+  if (/^[a-z0-9 -]{1,48}$/i.test(reason)) return reason.toLowerCase().replace(/\s+/g, '-');
+  return 'unsupported-or-declined';
+}
+
 async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, height = 624,
   virtualFiles = {},
   shouldCancel = () => false, onProgress = () => {}, logger = console, verifyRegions = false, verifyHashes = false,
@@ -180,7 +189,7 @@ async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, heig
   const started = performance.now(), root = path.join(cacheRoot, 'maps');
   const result = { enabled: true, selected: 0, refused: 0, generated: 0, hits: 0, negativeHits: 0,
     installed: 0, compilationHits: 0, indexedCopies: 0, nativePacks: 0, earlyRefusals: 0, processingMs: 0,
-    verifiedRegions: 0, identityRefreshes: 0, snapshotBytes: 0, additionalSnapshotBytes: 0, pageBytes: 0, durationMs: 0, cancelled: false, maps: [], index: {}, ordinaryFailures: [] };
+    verifiedRegions: 0, identityRefreshes: 0, snapshotBytes: 0, additionalSnapshotBytes: 0, pageBytes: 0, durationMs: 0, cancelled: false, maps: [], index: {}, ordinaryFailures: [], refusalReasons: {} };
   const files = session.files;
   const digest = file => files.hash(file, 'map-input');
   const entries = [], keys = [], snapshots = new Map(), sourceDependencies = new Map();
@@ -526,17 +535,23 @@ async function prepareMapsPhase({ gameRoot, cacheRoot, native, width = 816, heig
         for (const page of descriptor.pages) result.pageBytes += (await fsp.stat(path.join(directory, page.path))).size;
       } catch (error) {
         row.reason = error.message; ++result.refused;
-        session.outcome('map:' + filename, declined ? 'ordinary-choice' : 'ordinary-failure', error.message);
-        if (!declined && dependencies?.length) {
-          const failureDependencies = dependencies
-            .filter(dep => dep && typeof dep.logical === 'string' && typeof dep.file === 'string' &&
-              HASH.test(dep.hash || '') && typeof (files.receipts[dep.file]?.identity || dep.sourceIdentity) === 'string')
-            .map(dep => ({ source: dep.logical, file: dep.file,
-              identity: files.receipts[dep.file]?.identity || dep.sourceIdentity, hash: dep.hash }));
-          if (failureDependencies.length === dependencies.length)
-            result.ordinaryFailures.push({ source: filename, reason: error.message, dependencies: failureDependencies });
+        if (declined) {
+          const reasonKey = mapRefusalReasonKey(error.message);
+          result.refusalReasons[reasonKey] = (result.refusalReasons[reasonKey] || 0) + 1;
+          session.outcome('map:' + filename, 'ordinary-choice', reasonKey);
+        } else {
+          session.outcome('map:' + filename, 'ordinary-failure', error.message);
+          if (dependencies?.length) {
+            const failureDependencies = dependencies
+              .filter(dep => dep && typeof dep.logical === 'string' && typeof dep.file === 'string' &&
+                HASH.test(dep.hash || '') && typeof (files.receipts[dep.file]?.identity || dep.sourceIdentity) === 'string')
+              .map(dep => ({ source: dep.logical, file: dep.file,
+                identity: files.receipts[dep.file]?.identity || dep.sourceIdentity, hash: dep.hash }));
+            if (failureDependencies.length === dependencies.length)
+              result.ordinaryFailures.push({ source: filename, reason: error.message, dependencies: failureDependencies });
+          }
+          logger.warn('[pmjs] map preparation ordinary ' + filename + ': ' + error.message);
         }
-        logger.warn('[pmjs] map preparation ordinary '+filename+': '+error.message);
       } finally {
         if (stage) await fsp.rm(stage, { recursive: true, force: true });
         result.maps.push(row);

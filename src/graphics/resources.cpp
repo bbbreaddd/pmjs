@@ -181,7 +181,8 @@ std::uint32_t uploadTexture(int width, int height, const void* rgba, ImageChanne
 }
 
 std::optional<ImagePixels> decodePngFromMemory(const void *data, std::size_t size,
-                                               std::size_t maxDecodedBytes = 128U * 1024U * 1024U) {
+                                               std::size_t maxDecodedBytes = 128U * 1024U * 1024U,
+                                               std::string* errorOut = nullptr) {
   if (!data || size < 8)
     return std::nullopt;
   struct Input {
@@ -191,6 +192,7 @@ std::optional<ImagePixels> decodePngFromMemory(const void *data, std::size_t siz
   struct State {
     png_structp png = nullptr;
     png_infop info = nullptr;
+    char error[128] = {};
     ~State() { if (png) png_destroy_read_struct(&png, info ? &info : nullptr, nullptr); }
     Input input;
     ImageColorTransform transform;
@@ -200,7 +202,14 @@ std::optional<ImagePixels> decodePngFromMemory(const void *data, std::size_t siz
   const auto state = std::make_unique<State>();
   auto& png = state->png;
   auto& info = state->info;
-  png = png_create_read_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
+  auto onPngError = [](png_structp reader, png_const_charp message) {
+    if (auto* buffer = static_cast<char*>(png_get_error_ptr(reader))) {
+      std::snprintf(buffer, 128, "%s", message ? message : "libpng error");
+    }
+    png_longjmp(reader, 1);
+  };
+  auto onPngWarning = [](png_structp, png_const_charp) {};
+  png = png_create_read_struct(PNG_LIBPNG_VER_STRING, state->error, onPngError, onPngWarning);
   info = png ? png_create_info_struct(png) : nullptr;
   if (!info) return std::nullopt;
   state->input = {static_cast<const unsigned char *>(data), size, 0};
@@ -208,6 +217,7 @@ std::optional<ImagePixels> decodePngFromMemory(const void *data, std::size_t siz
   auto &result = state->result;
   auto &rows = state->rows;
   if (setjmp(png_jmpbuf(png))) {
+    if (errorOut && state->error[0]) *errorOut = state->error;
     return std::nullopt;
   }
   png_set_chunk_malloc_max(png, 1024U * 1024U);
@@ -341,7 +351,7 @@ std::optional<ImagePixels> decodeJpegFromMemory(const void* data, std::size_t si
 }
 
 std::optional<ImagePixels> decodeMemory(const void* data, std::size_t size,
-    std::size_t maxDecodedBytes = 128U*1024U*1024U) {
+    std::size_t maxDecodedBytes = 128U*1024U*1024U, std::string* errorOut = nullptr) {
   if (!data || size < 4) return std::nullopt;
   const auto* bytes = static_cast<const std::uint8_t*>(data);
   if (std::memcmp(bytes, "PML4", 4) == 0) {
@@ -350,7 +360,7 @@ std::optional<ImagePixels> decodeMemory(const void* data, std::size_t size,
     return ImagePixels{pixels->width, pixels->height, std::move(pixels->rgba)};
   }
   if (size >= 8 && png_sig_cmp(bytes, 0, 8) == 0) {
-    if (auto pixels = decodePngFromMemory(data, size, maxDecodedBytes)) return pixels;
+    if (auto pixels = decodePngFromMemory(data, size, maxDecodedBytes, errorOut)) return pixels;
   }
   if (size >= 3 && bytes[0] == 0xff && bytes[1] == 0xd8 && bytes[2] == 0xff) {
     return decodeJpegFromMemory(data, size, maxDecodedBytes);
@@ -387,7 +397,7 @@ std::optional<ImagePixels> decodeMemory(const void* data, std::size_t size,
   }
   if (size >= 6 && std::memcmp(bytes, "8BPS\0\1", 6) == 0) return decodePsdFromMemory(data, size, maxDecodedBytes);
   if (auto recovered = recoverPngBytes({bytes, size}, maxDecodedBytes))
-    return decodePngFromMemory(recovered->data(), recovered->size(), maxDecodedBytes);
+    return decodePngFromMemory(recovered->data(), recovered->size(), maxDecodedBytes, errorOut);
   return std::nullopt;
 }
 
@@ -866,8 +876,15 @@ std::optional<std::vector<std::uint8_t>> ImageStore::readCapturedBytes(const Ima
 
 std::optional<ImagePixels> ImageStore::decodeFile(const ImageFileSource& source, std::size_t maxDecodedBytes) {
   const auto bytes = readCapturedBytes(source);
+  if (!bytes) return std::nullopt;
   const auto offset = source.encryptionKey_ ? 16U : 0U;
-  return bytes ? pmjs::decodeMemory(bytes->data() + offset, bytes->size() - offset, maxDecodedBytes) : std::nullopt;
+  std::string error;
+  auto pixels = pmjs::decodeMemory(bytes->data() + offset, bytes->size() - offset, maxDecodedBytes, &error);
+  if (!pixels && !error.empty()) {
+    Log(LogLevel::Warning) << "[pmjs-images] decode-failed source=\"" << source.key()
+                           << "\" decoder=png reason=\"" << error << "\"\n";
+  }
+  return pixels;
 }
 
 std::optional<ImageInfo> ImageStore::loadPng(const std::filesystem::path& path,

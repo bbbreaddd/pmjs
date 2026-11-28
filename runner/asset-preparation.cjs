@@ -340,18 +340,34 @@ async function validatePreparedOutputs(directory, manifest, files, reused = fals
     return pageHeaderMatches(header, page, checked.size);
   });
 }
-async function cachedEntry(directory, key, sourceHash, files) {
+async function cachedEntry(directory, key, sourceHash, files, onMiss) {
+  let missReason = null;
   try {
-    return await files.validatedManifest(directory, async (manifest, reused) => {
-      if (!manifest || manifest.version !== CACHE_VERSION || manifest.key !== key || manifest.sourceHash !== sourceHash ||
-          manifest.descriptorHash !== identity(manifest.descriptor)) return false;
-      if (manifest.decrypted !== undefined && !/^source\.(png|ogg|m4a)$/.test(manifest.decrypted)) return false;
-      if (manifest.descriptor !== null && !validDescriptor(manifest.descriptor)) return false;
+    const entry = await files.validatedManifest(directory, async (manifest, reused) => {
+      if (!manifest) { missReason = 'missing-entry'; return false; }
+      if (manifest.version !== CACHE_VERSION) { missReason = 'format-changed'; return false; }
+      if (manifest.key !== key) { missReason = 'key-changed-unknown'; return false; }
+      if (manifest.sourceHash !== sourceHash) { missReason = 'source-changed'; return false; }
+      if (manifest.descriptorHash !== identity(manifest.descriptor)) { missReason = 'descriptor-invalid'; return false; }
+      if (manifest.decrypted !== undefined && !/^source\.(png|ogg|m4a)$/.test(manifest.decrypted)) { missReason = 'descriptor-invalid'; return false; }
+      if (manifest.descriptor !== null && !validDescriptor(manifest.descriptor)) { missReason = 'descriptor-invalid'; return false; }
       const pages = descriptorOutputs(manifest.descriptor);
-      if (!manifest.outputs || Object.keys(manifest.outputs).length !== pages.length + (manifest.decrypted ? 1 : 0)) return false;
-      return validatePreparedOutputs(directory, manifest, files, reused);
+      if (!manifest.outputs || Object.keys(manifest.outputs).length !== pages.length + (manifest.decrypted ? 1 : 0)) {
+        missReason = 'output-missing';
+        return false;
+      }
+      if (!await validatePreparedOutputs(directory, manifest, files, reused)) {
+        missReason = 'output-invalid';
+        return false;
+      }
+      return true;
     });
-  } catch (_) { return null; }
+    if (!entry && onMiss) onMiss(missReason || 'missing-entry');
+    return entry;
+  } catch (error) {
+    if (onMiss) onMiss(missReason || (error?.code === 'ENOENT' ? 'missing-entry' : 'descriptor-invalid'));
+    return null;
+  }
 }
 
 async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProgress = () => {},
@@ -388,7 +404,7 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
   const result = { enabled: true, total: 0, completed: 0, generated: 0, hits: 0, negativeHits: 0,
     fallback: 0, failedFiles: 0, installFailures: 0, prepared: 0, installed: 0, decrypted: 0, sourceBytes: 0, cacheBytes: 0,
     indexedNegative: 0, indexedLayoutAttempts: 0, indexedZeroPage: 0,
-    indexedPageCopies: 0, unindexedProcessed: 0, processingMs: 0,
+    indexedPageCopies: 0, unindexedProcessed: 0, processingMs: 0, cacheMissReasons: {},
     cancelled: false, entries: [], decryptedEntries: [], audioViewEntries: [], audioViews: 0, ordinaryFailures: [], decisions: [], storageEntries: [], durationMs: 0 };
 
 
@@ -591,14 +607,22 @@ async function prepareAssetsPhase({ gameRoot, cacheRoot, recipes, native, onProg
         indexed = encrypted ? null : findIndexed();
         {
           directory = session.directory('entries', key);
-          let manifest = await cachedEntry(directory, key, sourceHash, files);
+          let missReason = null;
+          let manifest = await cachedEntry(directory, key, sourceHash, files, reason => { missReason = reason; });
           if (manifest?.workspaceConstrained && workspaceBytes > (manifest.workspaceBytes || 0)) {
             fallbackEntry = { directory, manifest };
             session.touch(directory);
             directory = session.newDirectory('entries', key);
             manifest = null;
+            missReason = 'workspace-upgrade';
           }
-          if (manifest && encrypted && manifest.decrypted !== 'source' + extension) manifest = null;
+          if (manifest && encrypted && manifest.decrypted !== 'source' + extension) {
+            manifest = null;
+            missReason = 'key-changed-unknown';
+          }
+          if (!manifest && missReason) {
+            result.cacheMissReasons[missReason] = (result.cacheMissReasons[missReason] || 0) + 1;
+          }
           if (manifest) {
             if (encrypted && extension === '.png' && !recipe)
               recipe = await automaticRecipe(path.join(directory, manifest.decrypted), logicalSource, sourceHash, undefined, frames);

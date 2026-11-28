@@ -1753,3 +1753,12 @@ test('encrypted media keeps JPEG and MP3 content despite PNG and OGG filename ex
     assert.deepEqual(fs.readFileSync(result.decryptedEntries.find(entry => entry.source === f.encryptedAudio).file), audio);
   }
 });
+
+test('asset preparation records cache miss reasons without extra filesystem work', async () => {
+  const f = encryptedFixture('MV');
+  fs.writeFileSync(path.join(f.gameRoot, f.encryptedImage), f.encrypt(PNG));
+  const cold = await prepareAssets(f);
+  assert.ok(cold.cacheMissReasons['missing-entry'] >= 1);
+  const warm = await prepareAssets(f);
+  assert.deepEqual(warm.cacheMissReasons, {});
+});

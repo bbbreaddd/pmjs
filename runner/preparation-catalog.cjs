@@ -117,7 +117,35 @@ async function loadCatalog(options) {
     if (!data.signature || typeof data.signature !== 'object') throw new Error('missing catalog signature');
     const changed = [...new Set([...Object.keys(data.signature), ...Object.keys(expected)])]
       .filter(key => JSON.stringify(data.signature[key]) !== JSON.stringify(expected[key]));
-    if (changed.length) throw new Error('catalog signature changed: ' + changed.join(', '));
+    if (changed.length) {
+      const safeFields = new Set([
+        'imageFormat', 'mapCompiler', 'imageProcessor', 'tileProcessor', 'lz4',
+        'images', 'maps', 'allowPalettes', 'pageCodec', 'workspaceBytes',
+        'width', 'height', 'imageStorageVersion', 'sourceRoots', 'bundleRoot'
+      ]);
+      const formatBound = value => {
+        const text = JSON.stringify(value);
+        if (text === undefined) return 'undefined';
+        return text.length > 80 ? text.slice(0, 77) + '...' : text;
+      };
+      const details = [];
+      for (const key of changed) {
+        if (!safeFields.has(key)) continue;
+        const prev = data.signature[key];
+        const next = expected[key];
+        if (key === 'sourceRoots' && Array.isArray(prev) && Array.isArray(next)) {
+          const prevSet = new Set(prev);
+          const nextSet = new Set(next);
+          const removed = prev.filter(item => !nextSet.has(item)).slice(0, 3);
+          const added = next.filter(item => !prevSet.has(item)).slice(0, 3);
+          details.push(`sourceRoots(removed=${JSON.stringify(removed)},added=${JSON.stringify(added)})`);
+        } else {
+          details.push(`${key}:${formatBound(prev)}->${formatBound(next)}`);
+        }
+      }
+      const suffix = details.length ? ` (${details.join('; ')})` : '';
+      throw new Error('catalog signature changed: ' + changed.join(', ') + suffix);
+    }
     if (typeof data.packedImages !== 'boolean') throw new Error('invalid packed image catalog state');
     if (!['entries', 'derived', 'tiles', 'storage', 'audio', 'ordinaryFailures', 'portArtifacts', 'keys'].every(key => Array.isArray(data[key])) ||
         !data.mapIndex || typeof data.mapIndex !== 'object' || !data.artifactHashes ||
