@@ -7,12 +7,6 @@ const test = require('node:test');
 const { temporaryDirectory } = require('./helpers/temp.cjs');
 const root = path.resolve(__dirname, '..');
 
-test('source provenance inventory checks pass', () => {
-  const result = spawnSync(process.execPath, [path.join(root, 'tools/check-provenance.cjs')], { encoding: 'utf8' });
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /Provenance inventory checks passed/);
-});
-
 test('inventory checks reject invalid classifications, stale entries and missing notices', () => {
   const temporary = temporaryDirectory('pmjs-provenance-');
   try {

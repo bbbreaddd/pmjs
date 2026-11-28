@@ -87,12 +87,16 @@ for (const host of [false, true]) {
   });
 }
 
-test('browser event listeners mark returned Promises for browser rejection reporting', t => {
+test('browser event listeners and properties track returned Promises and cancellation', t => {
   const context = fixture(t), target = new context.EventTarget();
-  const returned = Promise.resolve('handled later');
-  target.addEventListener('click', () => returned);
+  const listener = Promise.resolve('listener'), property = Promise.resolve('property');
+  target.addEventListener('click', () => listener);
+  target.onclick = () => property;
   target.dispatchEvent({ type: 'click' });
-  assert.equal(context.PMJS.tasks.guestPromiseOrigin(returned), 'browser');
+  assert.equal(context.PMJS.tasks.guestPromiseOrigin(listener), 'browser');
+  assert.equal(context.PMJS.tasks.guestPromiseOrigin(property), 'browser');
+  target.oncancel = () => false;
+  assert.equal(target.dispatchEvent({ type: 'cancel', preventDefault() { this.defaultPrevented = true; } }), false);
 });
 
 test('host dispatch observes removal in a listener microtask', async t => {

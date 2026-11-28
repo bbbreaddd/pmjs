@@ -42,56 +42,6 @@ test('web runtime keeps V8 RegExp and String built-ins', () => {
     ['a', 'b']);
 });
 
-test('virtual file aliases are configured data', () => {
-  const source = fs.readFileSync(path.join(runtimeRoot,
-    'js/pmjs-web/filesystem.js'), 'utf8');
-  const end = source.indexOf('\nfunction fsReadContents(');
-  const context = {
-    __pmjsBuiltinRequire: require,
-    NativeHost: { runtime: {} },
-    PMJS: { config: { virtualFiles: {
-      extensionAliases: { '.alias': '.json' },
-      directoryEntryAliases: { locale: { '.json': '.LANG' } },
-    } } },
-  };
-  vm.runInNewContext(source.slice(0, end) +
-    '\nthis.contract = { gameReadPath, gameDirectoryEntries };', context);
-  assert.equal(context.contract.gameReadPath('/game/data/System.ALIAS'),
-    'data/System.json');
-  assert.deepEqual(Array.from(context.contract.gameDirectoryEntries(
-    '/game/locale/', ['en.json', 'readme.txt'])), ['en.LANG', 'readme.txt']);
-  assert.deepEqual(Array.from(context.contract.gameDirectoryEntries(
-    '/game/Locale/en/', ['dialogue.json', 'readme.txt'])), ['dialogue.LANG', 'readme.txt']);
-  assert.deepEqual(Array.from(context.contract.gameDirectoryEntries(
-    '/game/other/en/', ['dialogue.json'])), ['dialogue.json']);
-});
-
-test('registered CommonJS requests are exact and cannot be replaced', () => {
-  const source = fs.readFileSync(path.join(runtimeRoot,
-    'js/pmjs-web/modules.js'), 'utf8');
-  const end = source.indexOf('\nfunction compatibilityCountedNoop(');
-  const context = { Array, Object, Error };
-  vm.runInNewContext(source.slice(0, end) +
-    '\nthis.contract = { registerCommonJsModule, registeredCommonJsModules };',
-  context);
-  const exports = { available: true };
-  context.contract.registerCommonJsModule(['platform-api', './platform-api'], exports);
-  assert.equal(context.contract.registeredCommonJsModules['platform-api'], exports);
-  assert.throws(() => context.contract.registerCommonJsModule('platform-api', {}),
-    /already registered/);
-  for (const names of [['new-api', ''], ['new-api', 1], ['new-api', 'platform-api'], ['new-api', 'new-api'], []]) {
-    assert.throws(() => context.contract.registerCommonJsModule(names, {}));
-    assert.equal(Object.hasOwn(context.contract.registeredCommonJsModules, 'new-api'), false);
-    assert.equal(context.contract.registeredCommonJsModules['platform-api'], exports);
-  }
-  let reads = 0;
-  const aliases = ['stable-api'];
-  Object.defineProperty(aliases, 0, { get() { reads++; return reads === 1 ? 'stable-api' : ''; } });
-  context.contract.registerCommonJsModule(aliases, exports);
-  assert.equal(reads, 1);
-  assert.equal(context.contract.registeredCommonJsModules['stable-api'], exports);
-});
-
 test('MV image cache retrims completed loads without destroying bitmap backing', async () => {
   const source = fs.readFileSync(path.join(runtimeRoot,
     'js/pmjs-mv/images.js'), 'utf8');

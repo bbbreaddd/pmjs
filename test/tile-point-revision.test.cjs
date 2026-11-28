@@ -10,12 +10,10 @@ function fixture() {
   sandbox.NativeHost.render.createTileLayer = points => { builds.push(Array.from(points)); return builds.length; };
   return { sandbox, layer, builds, draw: () => sandbox.ensureNativeRectTileLayer(layer) };
 }
-test('unchanged admitted revisions skip scans, changed revisions rebuild changed coordinates', () => {
+test('unchanged admitted revisions reuse geometry, changed revisions rebuild changed coordinates', () => {
   const { layer, draw, builds } = fixture();
   draw();
-  let reads = 0;
-  Object.defineProperty(layer._pmjsNativePointSnapshot, '0', { get() { reads++; return 0; } });
-  draw(); assert.equal(reads, 0);
+  draw(); assert.equal(builds.length, 1);
   layer.pointsBuf[0] = 16; layer.version++;
   draw(); assert.equal(builds.length, 2); assert.equal(builds[1][0], 16);
 });

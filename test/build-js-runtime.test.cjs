@@ -466,10 +466,8 @@ test('portable indexes preserve resolved options and processor identities with o
     assert.deepEqual(indexes[1], indexes[0], 'processor identities, recipes and records must be identical');
   });
 
-test('ISAT inventory remains explicit and preserves adapter order', () => {
-  const output = path.join(temporaryDirectory('pmjs-isat-composition-'), 'bootstrap.js');
-  const inventory = path.join(runtimeRoot, 'patches/isat/entry.json');
-  const modules = require(inventory).modules.map(module => path.resolve(path.dirname(inventory), module));
+test('game patch inventories remain explicit and preserve adapter order', () => {
+  const output = path.join(temporaryDirectory('pmjs-adapter-composition-'), 'bootstrap.js');
   function build(adapters) {
     childProcess.execFileSync(process.execPath, [tool, '--profile', 'mv',
       ...adapters.flatMap(file => ['--adapter', file]), '--output', output]);
@@ -478,16 +476,17 @@ test('ISAT inventory remains explicit and preserves adapter order', () => {
     return [...bundle.matchAll(/^\/\/ BEGIN (.+)$/gm)].map(match => match[1]);
   }
   const baseline = build([]);
-  const allNames = modules.map(file => path.basename(file));
-  assert.ok(baseline.every(name => !allNames.includes(name)));
-  assert.equal(new Set(modules).size, modules.length);
-  modules.forEach(file => assert.ok(fs.statSync(file).isFile()));
-  const included = build(modules);
-  const names = modules.map(file => path.basename(file));
-  const positions = names.map(file => included.indexOf(file));
-  assert.ok(positions.every((value, index) => value >= 0 && (!index || value > positions[index - 1])));
-  assert.ok(positions.at(-1) < included.indexOf('js/pmjs-mv/bootstrap.js'));
-  assert.deepEqual(included.filter(name => !baseline.includes(name)), names);
+  for (const game of ['isat', 'omori', 'felvidek']) {
+    const inventory = path.join(runtimeRoot, 'patches', game, 'entry.json');
+    const modules = require(inventory).modules.map(module => path.resolve(path.dirname(inventory), module));
+    const names = modules.map(file => path.basename(file));
+    assert.ok(baseline.every(name => !names.includes(name)), game);
+    assert.equal(new Set(modules).size, modules.length, game);
+    modules.forEach(file => assert.ok(fs.statSync(file).isFile()));
+    const included = build(modules);
+    assert.deepEqual(included.filter(name => !baseline.includes(name)), names, game);
+    assert.ok(included.indexOf(names.at(-1)) < included.indexOf('js/pmjs-mv/bootstrap.js'), game);
+  }
 });
 
 

@@ -3,6 +3,7 @@
 process.env.PMJS_GRAPHICS_DIAGNOSTICS = '1';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
 const { matrix, colors, cases } = require('./filter-boundary-cases.cjs');
 
@@ -19,6 +20,24 @@ native.render.setClearColor(0, 0, 0, 0);
 
 const schema = native.scene.schema;
 const noParent = 0xffffffff;
+const reference = JSON.parse(fs.readFileSync(path.join(__dirname, 'assets/reference/pixi-filter-boundary.json'), 'utf8'));
+assert.equal(reference.version, '4.8.9');
+const compared = new Set();
+
+function compareReference(name, deferred, materialized) {
+  const expected = reference.cases[name];
+  assert.ok(expected, 'missing reference case: ' + name);
+  for (const [label, result] of [['deferred', deferred], ['materialized', materialized]]) {
+    const rgb = result.drawableCenter.slice(0, 3);
+    assert.ok(rgb.every((value, index) => Math.abs(value - expected[index]) <= 3),
+      name + ' ' + label + ' drawable: ' + rgb + ' expected ' + expected);
+    const scene = result.sceneCenter;
+    const premultiplied = scene.slice(0, 3).map(value => Math.round(value * scene[3] / 255));
+    assert.ok(premultiplied.every((value, index) => Math.abs(value - expected[index]) <= 3),
+      name + ' ' + label + ' scene: ' + premultiplied + ' expected ' + expected);
+  }
+  compared.add(name);
+}
 
 function canvas(rgba, width = size, height = size) {
   const image = native.canvas.create(width, height);
@@ -153,6 +172,7 @@ for (const item of cases) {
       }
     }
     console.log(`${item.name}: scene delta ${maxDelta}, drawable delta ${drawableDelta}`);
+    compareReference(item.name, deferred, materialized);
     if (process.env.PMJS_TONE_BOUNDARY_JSON) {
       console.log('PMJS_TONE_BOUNDARY_RESULT=' + JSON.stringify({
         name: item.name,
@@ -188,6 +208,7 @@ const inlineDrawableDelta = Math.max(...inline.drawableCenter.slice(0, 3)
 assert.ok(inlineDrawableDelta <= 2,
   `inline color matrix drawable delta ${inlineDrawableDelta}`);
 console.log(`inline color matrix: scene delta ${inlineDelta}, drawable delta ${inlineDrawableDelta}, pixel ${inline.drawableCenter}`);
+compareReference('inline color matrix', inline, separate);
 if (process.env.PMJS_TONE_BOUNDARY_JSON) {
   console.log('PMJS_TONE_BOUNDARY_RESULT=' + JSON.stringify({
     name: 'inline color matrix',
@@ -216,6 +237,9 @@ for (let index = 0; index < multiSpriteInline.pixels.length; index++) {
 assert.ok(multiSpriteDelta <= 2,
   `multi-sprite inline color matrix pixel delta ${multiSpriteDelta}`);
 console.log(`multi-sprite inline color matrix pixel delta ${multiSpriteDelta}`);
+
+assert.equal(compared.size, cases.length + 1);
+assert.deepEqual([...compared].sort(), Object.keys(reference.cases).sort());
 
 native.canvas.release(backdrop.handle);
 native.canvas.release(foreground.handle);

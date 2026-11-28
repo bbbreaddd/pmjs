@@ -491,16 +491,12 @@ if(BUILD_TESTING)
   set_tests_properties(native-input PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
   file(GLOB PMJS_JS_TESTS CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/test/*.test.cjs")
-  list(FILTER PMJS_JS_TESTS EXCLUDE REGEX
-    "^test/(canvas-ellipse|canvas-gradients|canvas-invalid-state|canvas-content-revision)\\.test\\.cjs$")
   list(SORT PMJS_JS_TESTS)
   foreach(PMJS_JS_TEST IN LISTS PMJS_JS_TESTS)
     get_filename_component(PMJS_TEST_NAME "${PMJS_JS_TEST}" NAME_WE)
     add_test(NAME "js-${PMJS_TEST_NAME}" COMMAND ${NODE_EXECUTABLE} --test
       "${CMAKE_CURRENT_SOURCE_DIR}/${PMJS_JS_TEST}")
   endforeach()
-  set_tests_properties(js-text-layout-reference js-pixi-filter-boundary-reference
-    PROPERTIES FIXTURES_REQUIRED pmjs_assets ENVIRONMENT "PMJS_NATIVE_ADDON=$<TARGET_FILE:pmjs_native>;PMJS_TEST_ASSET_ROOT=${CMAKE_CURRENT_BINARY_DIR}/test-assets")
   add_custom_target(pmjs-test-fixtures
     COMMAND "${NODE_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/prepare-fixtures.cjs"
       "${CMAKE_CURRENT_BINARY_DIR}/test-assets"
@@ -607,7 +603,6 @@ if(BUILD_TESTING)
     node-canvas-radial-gradient
     node-mz-canvas-pixels
     node-glyph-cache
-    node-text-layout
     node-text-layout-cache
     node-text-upload
     node-freetype-facade
@@ -819,6 +814,14 @@ if(BUILD_TESTING)
   target_compile_options(pmjs-filter-target-lifetime-test PRIVATE -UNDEBUG)
   add_test(NAME native-filter-target-lifetime COMMAND ${XVFB_RUN} -a $<TARGET_FILE:pmjs-filter-target-lifetime-test>)
   set_tests_properties(native-filter-target-lifetime PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;SDL_AUDIODRIVER=dummy")
+  pmjs_add_asset_test(NAME node-text-layout COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/node-text-layout.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets" --reference)
+  set_tests_properties(node-text-layout PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;PMJS_TEXT_BACKEND=freetype")
+  if(PMJS_ENABLE_SKIA65)
+    pmjs_add_asset_test(NAME node-text-layout-skia65 COMMAND ${XVFB_RUN} -a ${NODE_EXECUTABLE}
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/node-text-layout.cjs" $<TARGET_FILE:pmjs_native> "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
+    set_tests_properties(node-text-layout-skia65 PROPERTIES ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;PMJS_TEXT_BACKEND=skia65")
+  endif()
   set_tests_properties(node-glyph-cache node-text-layout-cache PROPERTIES ENVIRONMENT
     "LIBGL_ALWAYS_SOFTWARE=1;PMJS_TEXT_BACKEND=freetype")
   if(PMJS_ENABLE_SKIA65)
@@ -907,7 +910,7 @@ if(BUILD_TESTING)
     endif()
     if(pmjs_test MATCHES "^build-")
       set_tests_properties(${pmjs_test} PROPERTIES LABELS build)
-    elseif(pmjs_test MATCHES "^js-" AND NOT pmjs_test MATCHES "^js-(text-layout-reference|pixi-filter-boundary-reference)$")
+    elseif(pmjs_test MATCHES "^js-")
       set_tests_properties(${pmjs_test} PROPERTIES LABELS js)
     else()
       set_tests_properties(${pmjs_test} PROPERTIES LABELS native)

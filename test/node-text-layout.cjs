@@ -1,6 +1,8 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const crypto = require('node:crypto');
 const path = require('node:path');
 const native = require(path.resolve(process.argv[2]));
 native.initialize({ gameRoot: path.resolve(process.argv[3]), assetRoot: '',
@@ -89,9 +91,36 @@ for (const text of ['AV', 'ffi', 'e\u0301', 'AéB', 'سلام']) {
 }
 const cases = ['X', 'X\u200E', '\u200F', '\u061C', 'A\u200DB', 'A\u200CB',
   '❤\uFE0F', 'é', 'e\u0301', 'AV', 'ffi', 'A\nB', 'AéB', 'سلام', 'ل\u200Cا'];
-if (process.argv.includes('--report')) {
-  console.log(JSON.stringify(Object.fromEntries(cases.map(text =>
-    [text, { ...metrics(text), inkBounds: inkBounds(draw(text)) }]))));
+if (process.argv.includes('--reference') || process.argv.includes('--report')) {
+  const actual = Object.fromEntries(cases.map(text =>
+    [text, { ...metrics(text), inkBounds: inkBounds(draw(text)) }]));
+  if (process.argv.includes('--reference')) {
+    const fixture = JSON.parse(fs.readFileSync(
+      path.join(__dirname, 'assets/reference/text-layout.json'), 'utf8'));
+    const font = fs.readFileSync(path.join(process.argv[3], 'text-shaping.ttf'));
+    assert.equal(crypto.createHash('sha256').update(font).digest('hex'), fixture.fontSha256,
+      'reference metrics require the same explicit font');
+    const reference = fixture.cases;
+    assert.deepEqual(Object.keys(actual), Object.keys(reference));
+    for (const [text, metrics] of Object.entries(reference)) {
+      // Native shaping uses 26.6 positions; browser design metrics keep finer precision.
+      assert.ok(Math.abs(actual[text].width - metrics.width) <= 0.125,
+        `${JSON.stringify(text)} width: native ${actual[text].width}, browser ${metrics.width}`);
+      for (const key of ['actualBoundingBoxLeft', 'actualBoundingBoxRight',
+        'actualBoundingBoxAscent', 'actualBoundingBoxDescent']) {
+        // FreeType's native hinter and Chromium's rasterizer differ by up to 2px
+        // on this font's precomposed accent, independently of shaping.
+        assert.ok(Math.abs(actual[text][key] - metrics[key]) <= 2,
+          `${JSON.stringify(text)} ${key}: native ${actual[text][key]}, browser ${metrics[key]}`);
+      }
+      for (let i = 0; i < 4; i++) {
+        assert.ok(Math.abs(actual[text].inkBounds[i] - metrics.inkBounds[i]) <= 2,
+          `${JSON.stringify(text)} ink bounds: native ${actual[text].inkBounds[i]}, browser ${metrics.inkBounds[i]}`);
+      }
+    }
+    console.log(`[text-reference] ${fixture.browser}; contained explicit-font fixture`);
+  }
+  if (process.argv.includes('--report')) console.log(JSON.stringify(actual));
 } else {
   console.log('[pmjs-text-layout] preparation, shaping, fallback and pixels passed');
 }

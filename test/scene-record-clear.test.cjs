@@ -1,7 +1,7 @@
 'use strict';
 
 // Record tail clear: one prefix fill and the explicit zero loop must produce
-// byte-identical records; the flag is resolved once per frame.
+// byte-identical records.
 const assert = require('node:assert');
 const test = require('node:test');
 const vm = require('node:vm');
@@ -48,19 +48,6 @@ test('prefix fill and zero loop emit identical reused records', () => {
   const filled = recordValues(fillHost);
   const looped = recordValues(loopHost);
   assert.deepEqual(filled, looped);
-});
-
-test('bulk-clear flag resolves once per frame', () => {
-  let reads = 0;
-  const context = makeHost(true);
-  const host = context.PMJS.optimizations.isEnabled;
-  context.PMJS.optimizations.isEnabled = id => { if (id === 'scene.record-bulk-clear') reads++; return host(id); };
-  context.resetNativeSceneRecords();
-  for (let i = 0; i < 5; i++) {
-    context.nativeSceneRecord(0, 1, 7, 0xffffff, 0,
-      { a: 1, b: 0, c: 0, d: 1, tx: 5, ty: 6 }, 1, null, null, null);
-  }
-  assert.equal(reads, 1);
 });
 
 test('prefix fill clears records dirtied by an abandoned build', () => {

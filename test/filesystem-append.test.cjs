@@ -15,6 +15,25 @@ function fixture() {
   return { root, storage, guest: context.fsModule, context };
 }
 
+test('write flags preserve exclusive-create and append across sync, callback and Promise paths', async () => {
+  const { storage, guest, context } = fixture();
+  context.PMJS.tasks = { enqueue(callback) { callback(); } };
+  guest.writeFileSync('/save/exclusive', 'original');
+  assert.throws(() => guest.writeFileSync('/save/exclusive', 'changed', { flag: 'wx' }), { code: 'EEXIST' });
+  assert.equal(storage.readText('exclusive'), 'original');
+  guest.writeFileSync('/save/append', 'first');
+  guest.writeFileSync('/save/append', 'second', { flag: 'a' });
+  assert.equal(storage.readText('append'), 'firstsecond');
+  await guest.promises.writeFile('/save/callback', 'left');
+  await guest.promises.writeFile('/save/callback', 'right', { flag: 'a' });
+  assert.equal(storage.readText('callback'), 'leftright');
+  await new Promise(resolve => guest.writeFile('/save/exclusive', 'changed', { flag: 'wx' }, error => {
+    assert.equal(error?.code, 'EEXIST'); resolve();
+  }));
+  assert.equal(storage.readText('exclusive'), 'original');
+  assert.throws(() => guest.writeFileSync('/save/exclusive', 'changed', { flag: 'wat' }), { code: 'EINVAL' });
+});
+
 test('append creates missing files and preserves bytes across encoded and binary appends', () => {
   const { root, storage, guest } = fixture();
   const reference = path.join(root, 'reference');

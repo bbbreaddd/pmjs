@@ -9,6 +9,34 @@ const { loadPmjsRuntime, runModule } = require('./helpers/runtime-context.cjs');
 const { createStorage, createGameFilesystem } = require('../runner/storage.cjs');
 const { temporaryDirectory } = require('./helpers/temp.cjs');
 
+test('localStorage v2 namespace avoids legacy collisions and clears both namespaces', () => {
+  const root = temporaryDirectory('pmjs-storage-keys-');
+  const storage = createStorage(root);
+  fs.mkdirSync(path.join(root, 'web-storage'));
+  fs.writeFileSync(path.join(root, 'web-storage', 'legacy'), 'old');
+  fs.writeFileSync(path.join(root, 'web-storage', 'k-a'), 'legacy key k-a');
+  fs.writeFileSync(path.join(root, 'web-storage', 'a'), 'legacy key a');
+  const context = vm.createContext({ NativeHost: { storage } });
+  runModule(context, 'js/pmjs-web/storage.js');
+  const keys = ['', '.', '..', '雪', 'ordinary'];
+  keys.forEach((key, index) => context.localStorage.setItem(key, String(index)));
+  assert.deepEqual(keys.map(key => context.localStorage.getItem(key)), ['0', '1', '2', '3', '4']);
+  assert.equal(context.localStorage.getItem('legacy'), 'old');
+  assert.equal(storage.readText('web-storage-v2/k-'), '0');
+  assert.equal(storage.readText('web-storage-v2/k-.'), '1');
+  assert.equal(context.localStorage.getItem('a'), 'legacy key a');
+  assert.equal(context.localStorage.getItem('k-a'), 'legacy key k-a');
+  context.localStorage.setItem('a', 'new a');
+  assert.equal(context.localStorage.getItem('a'), 'new a');
+  assert.equal(context.localStorage.getItem('k-a'), 'legacy key k-a');
+  context.localStorage.clear();
+  assert.equal(storage.readText('web-storage-v2/k-ordinary'), null);
+  assert.equal(storage.readText('web-storage/legacy'), null);
+  context.sessionStorage.setItem('', 'session');
+  assert.equal(context.sessionStorage.key(0), '');
+  assert.equal(context.sessionStorage.key(1), null);
+});
+
 test('storage writes atomically and rejects paths outside its root', () => {
   const root = temporaryDirectory('pmjs-storage-');
   const storage = createStorage(root);

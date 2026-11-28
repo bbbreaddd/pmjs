@@ -70,6 +70,7 @@ test('desktop identity, manifest, arguments and CommonJS packages agree before p
   assert.equal(c.require.resolve('library'), result.file);
   assert.equal(c.require('./cycle/a').b, true);
   assert.equal(c.require('events'), require('events'));
+  for (const name of ['zlib', 'node:zlib']) assert.equal(c.require(name), require('node:zlib'));
   assert.equal(c.require('node:fs'), c.require('fs'));
   assert.equal(c.require('nw.gui'), c.nw);
   assert.equal(c.nw.App.manifest.name, 'test-game');
@@ -83,6 +84,45 @@ test('desktop identity, manifest, arguments and CommonJS packages agree before p
   assert.throws(() => c.require('./broken'), /broken module/);
   h.game.writeText('broken.js', 'module.exports = 99;');
   assert.equal(c.require('./broken'), 99);
+});
+
+test('virtual file aliases use configured extensions through guest filesystem APIs', () => {
+  const { context: c, game } = desktop();
+  c.PMJS.config.virtualFiles = {
+    extensionAliases: { '.alias': '.json' },
+    directoryEntryAliases: { locale: { '.json': '.LANG' } },
+  };
+  game.writeText('data/System.json', 'system');
+  game.writeText('locale/en.json', '{}');
+  game.writeText('locale/readme.txt', '');
+  game.writeText('Locale/en/dialogue.json', '{}');
+  game.writeText('Locale/en/readme.txt', '');
+  game.writeText('other/en/dialogue.json', '{}');
+  const guest = c.require('fs');
+  assert.equal(guest.readFileSync('/game/data/System.ALIAS', 'utf8'), 'system');
+  assert.deepEqual(Array.from(guest.readdirSync('/game/locale/')).sort(), ['en.LANG', 'readme.txt']);
+  assert.deepEqual(Array.from(guest.readdirSync('/game/Locale/en/')).sort(), ['dialogue.LANG', 'readme.txt']);
+  assert.deepEqual(Array.from(guest.readdirSync('/game/other/en/')), ['dialogue.json']);
+});
+
+test('registered CommonJS requests are exact and cannot be replaced', () => {
+  const { context: c } = desktop();
+  const exports = { available: true };
+  c.registerCommonJsModule(['platform-api', './platform-api'], exports);
+  assert.equal(c.require('platform-api'), exports);
+  assert.equal(c.require('./platform-api'), exports);
+  assert.throws(() => c.registerCommonJsModule('platform-api', {}), /already registered/);
+  for (const names of [['new-api', ''], ['new-api', 1], ['new-api', 'platform-api'], ['new-api', 'new-api'], []]) {
+    assert.throws(() => c.registerCommonJsModule(names, {}));
+    assert.throws(() => c.require('new-api'), { code: 'MODULE_NOT_FOUND' });
+    assert.equal(c.require('platform-api'), exports);
+  }
+  let reads = 0;
+  const aliases = ['stable-api'];
+  Object.defineProperty(aliases, 0, { get() { reads++; return reads === 1 ? 'stable-api' : ''; } });
+  c.registerCommonJsModule(aliases, exports);
+  assert.equal(reads, 1);
+  assert.equal(c.require('stable-api'), exports);
 });
 
 test('filesystem metadata, directory operations, callback and Promise results preserve errors', async () => {
