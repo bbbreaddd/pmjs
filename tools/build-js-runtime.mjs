@@ -146,8 +146,42 @@ for (const item of rawModules) {
   bundleItems.push({ label: item.module, module: item.module, file: item.file, baseDir: root });
 }
 
-function buildBundle() {
-  return bundleItems.map(item => {
+const VLQ_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+function encodeVlq(value) {
+  let vlq = value < 0 ? ((-value) << 1) | 1 : value << 1;
+  let encoded = '';
+  do {
+    let digit = vlq & 31;
+    vlq >>>= 5;
+    if (vlq > 0) digit |= 32;
+    encoded += VLQ_CHARS[digit];
+  } while (vlq > 0);
+  return encoded;
+}
+
+function writeAtomic(filePath, content) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const temporary = `${filePath}.tmp-${process.pid}`;
+  try {
+    fs.writeFileSync(temporary, content, { flag: 'wx' });
+    fs.renameSync(temporary, filePath);
+  } finally {
+    try { fs.unlinkSync(temporary); } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+  }
+}
+
+function buildBundle(outputFile) {
+  const sources = [];
+  const mappingLines = [];
+  const chunks = [];
+  let prevSource = 0;
+  let prevOrigLine = 0;
+
+  for (let index = 0; index < bundleItems.length; index++) {
+    const item = bundleItems[index];
     let source;
     if (item.inlineSource) {
       source = item.inlineSource;
@@ -157,11 +191,48 @@ function buildBundle() {
       const fileResolved = path.resolve(item.baseDir, item.module);
       source = fs.readFileSync(fileResolved, 'utf8');
     }
-    return `// BEGIN ${item.label}\n${source.trimEnd()}\n// END ${item.label}\n`;
-  }).join('\n');
+    const trimmed = source.trimEnd();
+    const lines = trimmed.split('\n');
+    chunks.push(`// BEGIN ${item.label}\n${trimmed}\n// END ${item.label}\n`);
+    mappingLines.push(''); // // BEGIN ...
+    if (item.inlineSource) {
+      for (let line = 0; line < lines.length; line++) mappingLines.push('');
+    } else {
+      const sourceIndex = sources.length;
+      sources.push(item.label);
+      for (let line = 0; line < lines.length; line++) {
+        const segment = encodeVlq(0) +
+          encodeVlq(sourceIndex - prevSource) +
+          encodeVlq(line - prevOrigLine) +
+          encodeVlq(0);
+        prevSource = sourceIndex;
+        prevOrigLine = line;
+        mappingLines.push(segment);
+      }
+    }
+    mappingLines.push(''); // // END ...
+    if (index < bundleItems.length - 1) mappingLines.push(''); // join('\n') blank line
+  }
+
+  let code = chunks.join('\n');
+  const mapFile = outputFile ? `${path.basename(outputFile)}.map` : null;
+  if (mapFile) {
+    code += `\n//# sourceMappingURL=${mapFile}\n`;
+    mappingLines.push('', '');
+  }
+  const sourceMap = {
+    version: 3,
+    file: outputFile ? path.basename(outputFile) : 'core-bootstrap.js',
+    sources,
+    names: [],
+    mappings: mappingLines.join(';'),
+  };
+  return { code, sourceMap };
 }
 
-const bundle = buildBundle();
+const { code: bundle, sourceMap } = buildBundle(output);
+const mapOutput = output ? `${output}.map` : null;
+const mapContent = JSON.stringify(sourceMap) + '\n';
 if (printModules) {
   printBuildReport();
   console.log(JSON.stringify(rawModules.map(item => ({
@@ -176,23 +247,17 @@ if (check) {
     process.exit(2);
   }
   const current = fs.existsSync(output) ? fs.readFileSync(output, 'utf8') : '';
-  if (current !== bundle) {
+  const currentMap = fs.existsSync(mapOutput) ? fs.readFileSync(mapOutput, 'utf8') : '';
+  if (current !== bundle || currentMap !== mapContent) {
     console.error(`${path.relative(root, output)} is out of date`);
     process.exitCode = 1;
   }
-} else if (fs.existsSync(output) && fs.readFileSync(output, 'utf8') === bundle) {
+} else if (fs.existsSync(output) && fs.readFileSync(output, 'utf8') === bundle &&
+    fs.existsSync(mapOutput) && fs.readFileSync(mapOutput, 'utf8') === mapContent) {
   console.log(`unchanged ${path.relative(process.cwd(), output)}`);
 } else {
-  fs.mkdirSync(path.dirname(output), { recursive: true });
-  const temporary = `${output}.tmp-${process.pid}`;
-  try {
-    fs.writeFileSync(temporary, bundle, { flag: 'wx' });
-    fs.renameSync(temporary, output);
-  } finally {
-    try { fs.unlinkSync(temporary); } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-    }
-  }
+  writeAtomic(output, bundle);
+  writeAtomic(mapOutput, mapContent);
   console.log(`generated ${path.relative(process.cwd(), output)} from ${bundleItems.length} modules`);
   printBuildReport();
 }

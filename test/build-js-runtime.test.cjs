@@ -536,3 +536,33 @@ for (const [plugin, module] of [
     assert.equal(await selected({ adapters: { mode: 'auto', exclude: [plugin] } }), false);
   });
 }
+
+test('bundle writes a valid V3 source map mapping lines back to source modules', () => {
+  const { SourceMap } = require('node:module');
+  const root = temporaryDirectory('pmjs-sourcemap-');
+  const out = path.join(root, 'core-bootstrap.js');
+  const args = [tool, '--profile', 'mv', '--output', out];
+  childProcess.execFileSync(process.execPath, args, { cwd: root });
+  const code = fs.readFileSync(out, 'utf8');
+  const mapPath = `${out}.map`;
+  assert.ok(fs.existsSync(mapPath));
+  assert.match(code, /\/\/# sourceMappingURL=core-bootstrap\.js\.map\n$/);
+  const rawMap = JSON.parse(fs.readFileSync(mapPath, 'utf8'));
+  assert.equal(rawMap.version, 3);
+  assert.equal(rawMap.file, 'core-bootstrap.js');
+  const sm = new SourceMap(rawMap);
+  const lines = code.split('\n');
+  for (const mod of ['js/pmjs-core/config.js', 'js/pmjs-mv/bootstrap.js']) {
+    const beginIdx = lines.indexOf(`// BEGIN ${mod}`);
+    assert.ok(beginIdx >= 0, `missing BEGIN marker for ${mod}`);
+    const entry = sm.findEntry(beginIdx + 1, 0);
+    assert.equal(entry.originalSource, mod);
+    assert.equal(entry.originalLine, 0);
+    const modLines = fs.readFileSync(path.join(runtimeRoot, mod), 'utf8').trimEnd().split('\n');
+    const lastEntry = sm.findEntry(beginIdx + modLines.length, 0);
+    assert.equal(lastEntry.originalSource, mod);
+    assert.equal(lastEntry.originalLine, modLines.length - 1);
+  }
+  fs.unlinkSync(mapPath);
+  assert.throws(() => childProcess.execFileSync(process.execPath, [...args, '--check'], { cwd: root, stdio: 'pipe' }));
+});
