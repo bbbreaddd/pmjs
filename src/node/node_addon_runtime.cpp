@@ -680,6 +680,9 @@ napi_value rendererStats(napi_env env, napi_callback_info) try {
   check(env, napi_set_named_property(env, result, "filterTargetClears",
     number(env, static_cast<double>(stats.filterTargetClears))),
     "cannot set filter target clears");
+  check(env, napi_set_named_property(env, result, "clearRectsSkipped",
+    number(env, static_cast<double>(stats.clearRectsSkipped))),
+    "cannot set skipped rectangle clears");
   check(env, napi_set_named_property(env, result, "filterBoundedApplications",
     number(env, static_cast<double>(stats.filterBoundedApplications))),
     "cannot set bounded filter applications");

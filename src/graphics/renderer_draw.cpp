@@ -1249,11 +1249,16 @@ void Renderer::renderScene() {
       filterRegions{};
   applyBlendMode(activeBlend);
   bool reuseFilterContent = false;
+  bool emptyRootIsolation = false;
   for (const auto& operation : operations) {
     if (reuseFilterContent && (operation.action == RenderCommand::Action::draw ||
         operation.action == RenderCommand::Action::clearRect)) continue;
     if (operation.action == RenderCommand::Action::clearRect) {
       if (filterDepth == 0) throw std::logic_error("rectangle clear requires an isolated target");
+      if (filterDepth == 1 && emptyRootIsolation) {
+        if (diagnostics_) ++stats_.clearRectsSkipped;
+        continue;
+      }
       const auto& rectangle = operation.command->clearRectangle;
       const float left = std::max(0.0F, rectangle[0] - rasterFrame[0]);
       const float top = std::max(0.0F, rectangle[1] - rasterFrame[1]);
@@ -1276,6 +1281,7 @@ void Renderer::renderScene() {
       continue;
     }
     if (operation.action == RenderCommand::Action::filterBegin) {
+      emptyRootIsolation = false;
       const auto cacheKey = filterIntermediateKey(*operation.command);
       reuseFilterContent = !cacheKey.empty() && filterIntermediateTarget_.texture &&
         filterIntermediateSignature_ == cacheKey;
@@ -1328,16 +1334,38 @@ void Renderer::renderScene() {
         glDisable(GL_SCISSOR_TEST);
         scissorActive = false;
       }
+      bool fullSurfaceCleared = false;
       if (!reuseFilterContent) {
         glClear(GL_COLOR_BUFFER_BIT);
+        fullSurfaceCleared = true;
         if (diagnostics_) ++stats_.filterTargetClears;
       }
+      const bool identityProjection =
+        sceneProjection_ == std::array<float, 6>{1, 0, 0, 1, 0, 0};
+      const bool sceneSizedFrame =
+        rasterFrame == std::array<float, 4>{0, 0, static_cast<float>(width_), static_cast<float>(height_)};
+      emptyRootIsolation =
+        fullSurfaceCleared &&
+        filterDepth == 0 &&
+        !offscreenRender_ &&
+        identityProjection &&
+        !operation.command->customFilterPlan &&
+        operation.command->filterKind == scene_packet::FilterKind::alpha &&
+        operation.command->filterParameters[0] == 1.0F &&
+        operation.command->blendMode == BlendMode::normal &&
+        operation.command->filterResolution == 1.0F &&
+        rasterResolution == 1.0F &&
+        sceneSizedFrame &&
+        !reuseFilterContent &&
+        !bounded &&
+        !scissorActive;
       activeBlend = BlendMode::normal;
       applyBlendMode(activeBlend);
       ++filterDepth;
       continue;
     }
     if (operation.action == RenderCommand::Action::filterEnd) {
+      emptyRootIsolation = false;
       reuseFilterContent = false;
       --filterDepth;
       targetYDown = offscreenRender_ || filterDepth > 0;
@@ -1869,6 +1897,7 @@ void Renderer::renderScene() {
       applyBlendMode(activeBlend);
       continue;
     }
+    emptyRootIsolation = false;
     // Tone target swaps and effect blits can write beyond a group's raster viewport.
     if (operation.matrixCommand || operation.primitive == RenderCommand::Primitive::effect) {
       std::fill_n(groupPaddingKnownZero.begin(), filterDepth, false);

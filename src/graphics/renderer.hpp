@@ -167,6 +167,7 @@ struct RendererStats {
   std::uint64_t rendererTargetCacheHits = 0;
   std::uint64_t rendererTargetCacheEvictions = 0;
   std::uint64_t filterTargetClears = 0;
+  std::uint64_t clearRectsSkipped = 0;
 
   std::uint64_t filterBoundedApplications = 0;
   std::uint64_t framebufferChecks = 0;

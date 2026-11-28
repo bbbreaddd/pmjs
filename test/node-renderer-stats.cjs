@@ -153,3 +153,35 @@ const afterMaskReuse = native.render.stats();
 assert.equal(afterMaskReuse.filterTargetReuses - beforeMaskReuse.filterTargetReuses, 1);
 assert.equal(afterMaskReuse.rendererTargetCreates, beforeMaskReuse.rendererTargetCreates);
 assert.equal(afterMaskReuse.rendererTargetDestroys, beforeMaskReuse.rendererTargetDestroys);
+
+// Leading rectangle clears inside an empty root identity isolation group are skipped,
+// while clears after the first draw still execute.
+const clearElisionMetadata = new Uint32Array([
+  6, 0xffffffff, 0, 0xffffff, 20, 0, 0,
+  10, 0xffffffff, 0, 0xffffff, 0, 0, 0,
+  10, 0xffffffff, 0, 0xffffff, 0, 0, 0,
+  1, 0xffffffff, image.handle, 0xffffff, 0, 0, 0,
+  10, 0xffffffff, 0, 0xffffff, 0, 0, 0,
+  ...end
+]);
+const clearElisionValues = new Float32Array(stride * 6);
+for (let index = 0; index < 6; index++) {
+  clearElisionValues.set([1, 0, 0, 1, 0, 0, 1], index * stride);
+}
+clearElisionValues[7] = 1;
+clearElisionValues.set([0, 0], stride + 7);
+clearElisionValues.set([0, 0, 1, 1], stride + 9);
+clearElisionValues.set([8, 8], stride + 13);
+clearElisionValues.set([8, 8], stride * 2 + 7);
+clearElisionValues.set([0, 0, 1, 1], stride * 2 + 9);
+clearElisionValues.set([8, 8], stride * 2 + 13);
+clearElisionValues.set([0, 0, 2, 2], stride * 3 + 9);
+clearElisionValues.set([2, 2], stride * 3 + 13);
+clearElisionValues.set([0, 0], stride * 4 + 7);
+clearElisionValues.set([0, 0, 1, 1], stride * 4 + 9);
+clearElisionValues.set([2, 2], stride * 4 + 13);
+native.beginFrame();
+native.scene.submit(native.scene.packetVersion, clearElisionMetadata, clearElisionValues, 6);
+native.renderFrame();
+const afterClearElision = native.render.stats();
+assert.equal(afterClearElision.clearRectsSkipped - afterMaskReuse.clearRectsSkipped, 2);
